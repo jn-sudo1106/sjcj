@@ -1,0 +1,267 @@
+<script setup lang="ts">
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { dataApi, type DataTableMeta, type DataRow } from '../../api'
+import { useUiStore } from '../../stores/ui'
+
+const ui = useUiStore()
+
+const tables = ref<DataTableMeta[]>([])
+const activeTable = ref('')
+const rows = ref<DataRow[]>([])
+const selected = ref<DataRow | null>(null)
+const stats = reactive({ tables: 0, rows: 0, chars: 0, review: 0 })
+const sql = ref('')
+const tab = ref<'data' | 'schema'>('data')
+
+const currentTable = computed(() => tables.value.find((t) => t.tableId === activeTable.value) ?? null)
+
+async function selectTable(id: string) {
+  activeTable.value = id
+  tab.value = 'data'
+  rows.value = await dataApi.rows(id)
+  selected.value = rows.value[0] ?? null
+}
+
+function runSql() {
+  const fields = currentTable.value?.fields.map((f) => f.prop) ?? []
+  const used = Array.from(sql.value.matchAll(/([a-zA-Z_][a-zA-Z0-9_]*)\s*(=|>|<|>=|<=|like|LIKE)/g)).map((m) => m[1])
+  const bad = used.filter((u) => !fields.includes(u))
+  if (bad.length) {
+    ElMessage.warning(`字段不在白名单或不存在：${bad.join('、')}（可切换「表结构」查看可用字段）`)
+    return
+  }
+  ElMessage.success(sql.value.trim() ? '条件已应用（演示环境，返回 mock 结果）' : '已清空条件')
+}
+
+function acceptMeta(s: string) {
+  if (s === 'accepted') return { cls: 'ok', text: '已验收' }
+  if (s === 'pending') return { cls: 'warn', text: '待复核' }
+  return { cls: 'err', text: '已驳回' }
+}
+function parseMeta(s?: string) {
+  if (s === 'parsed') return { cls: 'ok', text: '已解析' }
+  if (s === 'failed') return { cls: 'err', text: '解析失败' }
+  return { cls: 'muted', text: '无附件' }
+}
+
+onMounted(async () => {
+  tables.value = await dataApi.tables()
+  Object.assign(stats, await dataApi.dataStats())
+  if (tables.value[0]) await selectTable(tables.value[0].tableId)
+  ui.registerAction('导出结果', () => ElMessage.info('导出结果：演示环境占位'))
+  ui.registerAction('新建查询视图', () => ElMessage.info('新建查询视图：演示环境占位'))
+})
+onUnmounted(() => ui.clearActions())
+</script>
+
+<template>
+  <div class="dv-layout">
+    <!-- 表列表 -->
+    <div class="rc-card dv-tables">
+      <div class="rc-card-head">
+        <div>
+          <div class="rc-card-title">数据表</div>
+          <div class="rc-card-sub">落表验收对象</div>
+        </div>
+      </div>
+      <div class="rc-tree dv-tables-scroll">
+        <div
+          v-for="t in tables"
+          :key="t.tableId"
+          class="rc-tree-row"
+          :class="{ active: activeTable === t.tableId }"
+          @click="selectTable(t.tableId)"
+        >
+          <span>{{ t.tableName.split('.').pop() }}</span>
+          <span class="rc-count">{{ t.rowCount.toLocaleString() }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 数据 / 表结构 -->
+    <div class="rc-card dv-main">
+      <div class="rc-metric-grid dv-kpis">
+        <div class="rc-metric"><span>可查看数据表</span><b>{{ stats.tables }}</b></div>
+        <div class="rc-metric"><span>当前筛选记录</span><b>{{ rows.length }}</b></div>
+        <div class="rc-metric"><span>附件解析文本字数</span><b>{{ stats.chars.toLocaleString() }}</b></div>
+        <div class="rc-metric"><span>待复核记录</span><b class="danger">{{ stats.review }}</b></div>
+      </div>
+
+      <div class="rc-toolbar wrap">
+        <div class="rc-tabs dv-tabs">
+          <span class="rc-tab-link" :class="{ active: tab === 'data' }" @click="tab = 'data'">实体数据</span>
+          <span class="rc-tab-link" :class="{ active: tab === 'schema' }" @click="tab = 'schema'">表结构</span>
+        </div>
+        <span class="dv-spacer" />
+        <el-input v-model="sql" placeholder="SQL 条件，如 pub_date = '2026-06-19'（字段需在白名单）" style="width: 320px" />
+        <button class="rc-btn" type="button" @click="runSql">执行</button>
+        <button class="rc-btn" type="button" @click="sql = ''">清空</button>
+      </div>
+
+      <div class="rc-table-scroll dv-table">
+        <table v-if="tab === 'data'" class="rc-data-table">
+          <thead>
+            <tr>
+              <th style="width: 130px">数据 ID</th>
+              <th>标题 · 文件</th>
+              <th>字段摘要</th>
+              <th style="width: 100px">来源</th>
+              <th style="width: 92px">验收状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in rows" :key="r.dataId" :class="{ active: selected?.dataId === r.dataId }" @click="selected = r">
+              <td>{{ r.dataId }}</td>
+              <td>
+                <button class="dv-name" type="button">{{ r.title }}</button>
+                <span v-if="r.fileType && r.fileType !== '-'" class="dv-file">{{ r.fileType.toUpperCase() }}</span>
+              </td>
+              <td class="muted">{{ r.summary }}</td>
+              <td>{{ r.sourceId }}</td>
+              <td><span class="rc-status" :class="acceptMeta(r.acceptState).cls">{{ acceptMeta(r.acceptState).text }}</span></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <table v-else class="rc-data-table">
+          <thead>
+            <tr>
+              <th style="width: 150px">字段</th>
+              <th style="width: 90px">类型</th>
+              <th>说明</th>
+              <th>样例值</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="f in currentTable?.fields || []" :key="f.prop">
+              <td>{{ f.prop }}</td>
+              <td>{{ f.type }}</td>
+              <td>{{ f.desc }}</td>
+              <td class="muted">{{ f.sample || '—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 列值详情 -->
+    <div class="rc-card dv-detail">
+      <div class="rc-card-head">
+        <div class="rc-card-title">列值详情</div>
+      </div>
+      <div v-if="selected" class="rc-detail">
+        <div class="dv-d-title">{{ selected.title }}</div>
+        <div class="dv-d-sub muted">{{ selected.dataId }}</div>
+
+        <div class="dv-section">关联指针</div>
+        <dl class="rc-kv">
+          <dt>source_id</dt><dd>{{ selected.sourceId }}</dd>
+          <dt>config_id</dt><dd>{{ selected.configId || '—' }}</dd>
+          <dt>task_id</dt><dd>{{ selected.taskId || '—' }}</dd>
+          <dt>run_id</dt><dd>{{ selected.runId || '—' }}</dd>
+        </dl>
+
+        <div class="dv-section">原始文件</div>
+        <dl class="rc-kv">
+          <dt>类型</dt><dd>{{ selected.fileType && selected.fileType !== '-' ? selected.fileType.toUpperCase() : '无附件' }}</dd>
+          <dt>解析状态</dt>
+          <dd><span class="rc-status" :class="parseMeta(selected.parseState).cls">{{ parseMeta(selected.parseState).text }}</span></dd>
+        </dl>
+        <button
+          class="rc-btn dv-view"
+          type="button"
+          :disabled="!selected.fileType || selected.fileType === '-'"
+          @click="ElMessage.info('查看原文：演示环境占位（HTML / PDF 归档）')"
+        >
+          查看原文
+        </button>
+        <div class="rc-mini-card">落表验收：核对 source/config/task/run 指针是否一致，确认数据真实落表。</div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.dv-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) 320px;
+  gap: 12px;
+}
+.dv-tables, .dv-main, .dv-detail {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 168px);
+  min-height: 560px;
+}
+.dv-tables-scroll {
+  flex: 1;
+  overflow: auto;
+}
+.rc-tree-row {
+  cursor: pointer;
+}
+.dv-kpis {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--rc-border-soft);
+}
+.dv-tabs {
+  border-bottom: 0;
+  padding: 0;
+  min-height: auto;
+}
+.dv-spacer {
+  flex: 1;
+}
+.dv-table {
+  flex: 1;
+}
+.rc-data-table tbody tr {
+  cursor: pointer;
+}
+.dv-name {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--rc-primary-ink);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.dv-file {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--rc-indigo-bg);
+  color: var(--rc-indigo);
+  font-size: 11px;
+  font-weight: 600;
+}
+.dv-d-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--rc-text);
+}
+.dv-d-sub {
+  margin: 4px 0 4px;
+  font-size: 12px;
+}
+.dv-section {
+  margin: 16px 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--rc-text);
+}
+.dv-view {
+  margin-top: 12px;
+}
+
+@media (max-width: 1240px) {
+  .dv-layout {
+    grid-template-columns: 1fr;
+  }
+  .dv-tables, .dv-main, .dv-detail {
+    height: auto;
+  }
+}
+</style>

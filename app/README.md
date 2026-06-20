@@ -1,0 +1,78 @@
+# 采集配置中心 · 前端工程
+
+数据采集平台的独立重构前端，品牌「万维数据采集中心」。全程 mock 数据，不直连后端；进入二期真接入时仅替换 `src/api` 数据适配层（`VITE_API_MODE=http`），界面与类型零改动。
+
+## 技术栈
+
+Vue 3 + Vite + TypeScript + Element Plus + Pinia + vue-router。流程画布为**自绘 SVG**（非第三方画布库），以精确控制节点 / 连线 / 插入点 / 拖拽重排。
+
+## 命令
+
+```bash
+npm install
+npm run dev       # 开发服务器
+npm run build     # 类型检查(vue-tsc) + 生产构建
+npm run preview   # 预览构建产物
+npm run test      # 单元测试(Vitest)
+npm run lint      # ESLint 检查（lint:fix 自动修复）
+npm run format    # Prettier 格式化
+npm run deploy    # 隔离部署（见下「部署」）
+```
+
+## 目录结构
+
+```
+app/
+├─ src/
+│  ├─ api/                类型化接口层（方法名 = 真实 /v1 端点）
+│  │  ├─ endpoints.ts       端点契约清单（147 条 + danger 标记，单一事实源）
+│  │  ├─ client.ts          请求封装：VITE_API_MODE=mock|http 切换 + 未实现端点 fallback
+│  │  ├─ index.ts           各域 API（source/config/entry/param/rule/metric/data/run/monitor/item/workbench）
+│  │  ├─ types.ts           领域模型 TS 类型
+│  │  └─ mock/              按域分文件 mock（sources/configs/entries/params/rules/metrics/dataview/runs/monitor/workbench）
+│  ├─ components/         通用组件（CountUp、PanePlaceholder）
+│  ├─ design/             设计令牌 tokens.css（全局工具类 + Element Plus 主题对齐）
+│  ├─ layouts/            AppShell：顶部系统栏 + 分组导航 + 模块标题区 + 工作台摘要
+│  ├─ router/             7 模块路由（懒加载）+ 导航元数据 tabs.ts
+│  ├─ stores/             Pinia：flow（画布）/ ui（模块动作总线）
+│  └─ views/              7 个业务模块（FlowCanvas / CollectAssets / RuleAssets / MetricCenter / DataView / RunRecords / Monitor）
+├─ scripts/deploy-static.cjs   隔离部署脚本
+├─ docs/组件与接口规格.md       组件 / 接口 / 设计系统规格
+└─ src/**/*.test.ts            Vitest 用例（求值器 / 端点契约 / store）
+```
+
+## 里程碑
+
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| P0 | 脚手架 + 设计令牌 + 独立外壳 + 7 模块路由 + mock 骨架 | ✅ |
+| M1 | 流程画布（自绘 SVG：节点库 / 插入点 / 右键菜单 / 拖拽重排 / 节点详情 / 连线子步骤） | ✅ |
+| M2 | 采集资产（分类树 + 源表 + 详情抽屉 + 新建源向导 + 批量 + 写类二次确认） | ✅ |
+| M3 | 规则资产（规则组 / 表达式 / 测试集 / 发布门禁 + 内嵌函数求值器） | ✅ |
+| M4 | 指标中心 / 数据查看 / 运行记录 / 监控工具 | ✅ |
+| M5a | 采集资产四 tab（源/配置/实体/参数）+ 源详情 26 字段 + 凭据脱敏 + 行内菜单 + 批量导入 | ✅ |
+| M5b | 端点契约 147 条 + mock fallback + 组件规格文档 + 旧原型归档 | ✅ |
+| 打磨 | 画布右侧数据驱动联动、节点库搜索、画布拖拽重排、工作台摘要接数 | ✅ |
+| 工程化 | Vitest(17 例) + ESLint/Prettier + CI + 代码分割 + sjcj 隔离部署 | ✅ |
+
+## 数据契约（mock-first）
+
+- `endpoints.ts` 收录 147 个端点（按 14 域 + 本系统自有），方法名 = 真实 `/v1` 路径。
+- 默认 `VITE_API_MODE=mock`：查 `mock/` 注册表；未实现专属 mock 的契约端点由 `client.ts` fallback（分页 → 空列表、写类 → 占位回执）。
+- 切 `VITE_API_MODE=http` + `VITE_API_BASE` 即接真实后端，界面与类型零改动。
+- 写类 / 高危端点登记在 `DANGER_ENDPOINTS`（从契约 `danger` 派生），UI 统一二次确认占位、不落库。
+
+## 部署（sjcj 子路径隔离）
+
+对齐 `../设计稿/部署方案_隔离.md`：部署到 WAN 公网入口下的隔离子路径 `/sjcj/`，不占端口、不起常驻服务、不写 WAN 目录。
+
+```bash
+npm run deploy                                      # 本地构建（VITE_BASE=/sjcj/）+ 打印发布命令
+SJCJ_REMOTE_HOST=user@47.120.11.60 npm run deploy  # 构建 + rsync 到 /home/leo/sjcj/public
+```
+
+脚本含安全保护：拒绝根路径 / 多层路径 / WAN 目录 / git 未提交·未推送·未同步。访问：`http://47.120.11.60:2806/sjcj/#/canvas`。
+
+## 边界
+
+全程 mock；写类 / 高危（发抓取 / 发配置 / 启停 / 删除 / 批量 / 清缓存 / 清队列）首期只读、灰显或二次确认占位；登录凭据只存引用（CredentialRef）不存明文。设计口径见 `../设计稿/`，组件 / 接口规格见 `docs/组件与接口规格.md`。

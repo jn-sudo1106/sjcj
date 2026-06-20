@@ -1,0 +1,13 @@
+# OS / 编辑器
+.DS_Store
+*.local
+*.log
+
+# Claude / 本地配置
+.claude/
+
+# 依赖与构建产物
+node_modules/
+dist/
+app/node_modules/
+app/dist/
