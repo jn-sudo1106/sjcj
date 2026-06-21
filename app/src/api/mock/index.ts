@@ -23,6 +23,7 @@ import { mockDataTables, mockDataRows, mockDataStats } from './dataview'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats } from './monitor'
 import { mockWorkbenchSummary } from './workbench'
+import { mockFlowSave, mockFlowLoad, mockFlowList } from './flows'
 import { mockConfigPaged, mockConfigDetail } from './configs'
 import { mockEntryPaged, mockEntryDetail } from './entries'
 import { mockParamPaged, mockParamDetail, mockGenValues } from './params'
@@ -111,4 +112,9 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
 
   // 工作台（首页摘要）
   'workbench/summary': mockWorkbenchSummary,
+
+  // 流程定义持久化
+  'flow/save': mockFlowSave,
+  'flow/load': mockFlowLoad,
+  'flow/list': mockFlowList,
 }

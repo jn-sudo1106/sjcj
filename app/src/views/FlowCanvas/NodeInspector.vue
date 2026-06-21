@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
-import type { CollectConfig } from './flowModel'
+import { SNATCH_TYPES, type CollectConfig } from './flowModel'
 import {
   entryApi, paramApi, configApi, sourceApi, ruleApi,
   type EntryType, type Param, type Config, type CredentialRef, type RuleGroup, type Rule, type SharedConfig,
@@ -26,7 +26,6 @@ const STEPS: [string, string, string, string][] = [
 const NODE_TABS: [string, string][] = [
   ['base', '基础'], ['inmap', '输入映射'], ['params', '参数'], ['output', '产物'], ['run', '试跑'],
 ]
-const SNATCH_TYPES = ['[90] - 网页抓取', '[95] - 文件下载', '[150] - OCR识别', '[155] - AI提取', '[170] - Python抓取']
 const WEEKDAYS: [number, string][] = [[1, '周一'], [2, '周二'], [3, '周三'], [4, '周四'], [5, '周五'], [6, '周六'], [7, '周日']]
 
 // 资产联动数据

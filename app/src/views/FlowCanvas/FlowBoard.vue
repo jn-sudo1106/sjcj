@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { useFlowStore } from '../../stores/flow'
+import { useRuntimeStore } from '../../stores/runtime'
+import { flowApi } from '../../api'
 import {
   MODAL_TEMPLATES,
   compactSub,
@@ -12,7 +15,17 @@ import {
 } from './flowModel'
 
 const flow = useFlowStore()
+const runtime = useRuntimeStore()
+const router = useRouter()
 const flowEl = ref<HTMLElement | null>(null)
+const flows = ref<{ id: string; name: string; updatedAt: string }[]>([])
+async function loadFlows() {
+  flows.value = await flowApi.flowList()
+}
+async function switchFlow(id: string) {
+  const def = await flowApi.flowLoad(id)
+  if (def) flow.load(def)
+}
 
 const menu = reactive<{ show: boolean; x: number; y: number; nodeId: string | null; afterId: string }>({
   show: false, x: 0, y: 0, nodeId: null, afterId: 'start',
@@ -26,7 +39,12 @@ function nodeClasses(id: string, cfg: NodeConfig) {
     nodeClassFor(cfg),
     cfg.disabled ? 'disabled-node' : '',
     flow.activeKind === 'node' && flow.selectedId === id ? 'active' : '',
+    runtime.nodeStates[id] ? `run-${runtime.nodeStates[id]}` : '',
   ]
+}
+function runText(id: string) {
+  const s = runtime.nodeStates[id]
+  return s === 'L' ? '处理中' : s === 'C' ? '完成' : s === 'E' ? '失败' : ''
 }
 function footFor(cfg: NodeConfig) {
   const left = cfg.disabled ? '已停用' : cfg.collect ? '待配置' : cfg.planned ? '规划中' : '草稿'
@@ -142,7 +160,10 @@ function confirmModal() {
 function onWindowClick() {
   if (menu.show) closeMenu()
 }
-onMounted(() => window.addEventListener('click', onWindowClick))
+onMounted(() => {
+  window.addEventListener('click', onWindowClick)
+  loadFlows()
+})
 onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 </script>
 
@@ -150,15 +171,21 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
   <main class="rc-canvas" @contextmenu="onPaneMenu" @click="closeMenu">
     <div class="rc-canvas-head">
       <div>
-        <div class="rc-canvas-title">公告规则链路 · draft-0.3</div>
+        <div class="rc-canvas-title">{{ flow.flowName }} · draft-0.3</div>
         <div class="rc-canvas-sub">网页抓取（数据中心四步）→ 文件解析/清洗 → 规则处理 → 落表 → 指标引用</div>
       </div>
-      <span class="rc-status ok">草稿已保存</span>
       <span class="rc-status warn">落表由数据中心完成</span>
       <div class="rc-canvas-actions">
-        <button class="rc-btn" type="button">从模板新建 ▾</button>
-        <button class="rc-btn" type="button">版本 draft-0.3 ▾</button>
-        <button class="rc-btn" type="button">运行记录</button>
+        <el-dropdown trigger="click" @command="switchFlow" @visible-change="(v: boolean) => v && loadFlows()">
+          <button class="rc-btn" type="button">切换流程 ▾</button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-for="f in flows" :key="f.id" :command="f.id">{{ f.name }} · {{ f.updatedAt }}</el-dropdown-item>
+              <el-dropdown-item v-if="!flows.length" disabled>暂无已保存流程</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <button class="rc-btn" type="button" @click="router.push('/runs')">运行记录</button>
       </div>
     </div>
 
@@ -214,7 +241,8 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
           @click.stop="onNodeClick(n.id)"
           @contextmenu="onNodeMenu($event, n.id)"
         >
-          <span v-if="n.cfg.disabled" class="rc-node-plan">已停用</span>
+          <span v-if="runtime.nodeStates[n.id]" class="rc-run-badge" :class="runtime.nodeStates[n.id]">{{ runText(n.id) }}</span>
+          <span v-else-if="n.cfg.disabled" class="rc-node-plan">已停用</span>
           <span v-else-if="n.cfg.planned" class="rc-node-plan">规划中</span>
 
           <div class="rc-node-top">
@@ -355,6 +383,13 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 .rc-node-title { font-size: 13px; font-weight: 700; color: var(--rc-text); }
 .rc-node-type { margin-top: 1px; font-size: 10px; color: var(--rc-faint); }
 .rc-node-plan { position: absolute; top: 8px; right: 8px; font-size: 9px; color: var(--rc-faint); border: 1px solid var(--rc-border); background: #f8fafc; border-radius: 5px; padding: 1px 5px; }
+.rc-run-badge { position: absolute; top: 8px; right: 8px; font-size: 9px; font-weight: 700; border-radius: 5px; padding: 1px 6px; }
+.rc-run-badge.L { background: var(--rc-primary-bg); color: var(--rc-primary); }
+.rc-run-badge.C { background: var(--rc-ok-bg); color: var(--rc-ok); }
+.rc-run-badge.E { background: var(--rc-error-bg); color: var(--rc-error); }
+.rc-flow-node.run-L { border-color: var(--rc-primary); box-shadow: 0 0 0 2px #dbeafe; }
+.rc-flow-node.run-C { border-color: #86efac; }
+.rc-flow-node.run-E { border-color: #fca5a5; }
 .rc-node-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; color: var(--rc-muted); font-size: 10px; }
 .rc-node-brief { margin-top: 8px; color: var(--rc-muted); font-size: 10px; line-height: 1.45; }
 .rc-node-brief b { color: #334155; font-weight: 700; }

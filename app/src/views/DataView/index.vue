@@ -3,8 +3,10 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { dataApi, type DataTableMeta, type DataRow } from '../../api'
 import { useUiStore } from '../../stores/ui'
+import { useRuntimeStore } from '../../stores/runtime'
 
 const ui = useUiStore()
+const runtime = useRuntimeStore()
 
 const tables = ref<DataTableMeta[]>([])
 const activeTable = ref('')
@@ -15,12 +17,14 @@ const sql = ref('')
 const tab = ref<'data' | 'schema'>('data')
 
 const currentTable = computed(() => tables.value.find((t) => t.tableId === activeTable.value) ?? null)
+// 试跑落表数据（runtime）叠加在 mock 之上
+const displayRows = computed(() => [...(runtime.dataByTable[activeTable.value] ?? []), ...rows.value])
 
 async function selectTable(id: string) {
   activeTable.value = id
   tab.value = 'data'
   rows.value = await dataApi.rows(id)
-  selected.value = rows.value[0] ?? null
+  selected.value = displayRows.value[0] ?? null
 }
 
 function runSql() {
@@ -83,7 +87,7 @@ onUnmounted(() => ui.clearActions())
     <div class="rc-card dv-main">
       <div class="rc-metric-grid dv-kpis">
         <div class="rc-metric"><span>可查看数据表</span><b>{{ stats.tables }}</b></div>
-        <div class="rc-metric"><span>当前筛选记录</span><b>{{ rows.length }}</b></div>
+        <div class="rc-metric"><span>当前筛选记录</span><b>{{ displayRows.length }}</b></div>
         <div class="rc-metric"><span>附件解析文本字数</span><b>{{ stats.chars.toLocaleString() }}</b></div>
         <div class="rc-metric"><span>待复核记录</span><b class="danger">{{ stats.review }}</b></div>
       </div>
@@ -111,7 +115,7 @@ onUnmounted(() => ui.clearActions())
             </tr>
           </thead>
           <tbody>
-            <tr v-for="r in rows" :key="r.dataId" :class="{ active: selected?.dataId === r.dataId }" @click="selected = r">
+            <tr v-for="r in displayRows" :key="r.dataId" :class="{ active: selected?.dataId === r.dataId }" @click="selected = r">
               <td>{{ r.dataId }}</td>
               <td>
                 <button class="dv-name" type="button">{{ r.title }}</button>

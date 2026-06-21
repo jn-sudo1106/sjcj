@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { runApi, type RunRow, type RunNode } from '../../api'
 import { useUiStore } from '../../stores/ui'
+import { useRuntimeStore } from '../../stores/runtime'
 
 const ui = useUiStore()
+const runtime = useRuntimeStore()
 
-const runs = ref<RunRow[]>([])
+const mockRuns = ref<RunRow[]>([])
+const runs = computed(() => [...runtime.runs, ...mockRuns.value]) // 试跑产生的 run 叠加在 mock 之上
 const selected = ref<RunRow | null>(null)
 const nodes = ref<RunNode[]>([])
 const nodesLoading = ref(false)
@@ -17,7 +20,7 @@ async function selectRun(r: RunRow) {
   nodes.value = []
   nodesLoading.value = true
   try {
-    nodes.value = await runApi.runNodes(r.runId)
+    nodes.value = runtime.runNodes[r.runId] ?? (await runApi.runNodes(r.runId))
   } finally {
     nodesLoading.value = false
   }
@@ -31,7 +34,7 @@ function stMeta(s: string) {
 }
 
 onMounted(async () => {
-  runs.value = await runApi.runs()
+  mockRuns.value = await runApi.runs()
   Object.assign(stats, await runApi.runStats())
   const first = runs.value.find((r) => r.state === 'C') ?? runs.value[0]
   if (first) await selectRun(first)

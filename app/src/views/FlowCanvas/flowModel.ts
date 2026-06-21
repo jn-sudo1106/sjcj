@@ -55,7 +55,7 @@ export const NODE_CONFIGS: Record<string, NodeConfig> = {
     params: [['page', 'sequence', '1..20'], ['publish_date', 'date', '$CUR_DATA,-1,yyyy-MM-dd']],
     output: [['detail_url', 'url', '详情页子步骤入口'], ['title', 'string', '公告标题'], ['publish_time', 'date', '发布时间']],
     collectCfg: {
-      snatchType: '[90] 网页抓取', url: 'https://example.com/announcements?page=${page}', sourceName: '交易所公告列表 - A 股',
+      snatchType: '[90] - 网页抓取', url: 'https://example.com/announcements?page=${page}', sourceName: '交易所公告列表 - A 股',
       category: '/公告/交易所/列表', dirId: '9009245', useProxy: false, resume: true, tags: '公告, A股, 列表页',
       configMode: 'new', configId: '81909', outputTable: '2101001', inputParams: ['p-date'],
       isDetail: false, isLogin: false, needLogin: false, loginUrl: '', account: '', credentialRef: '',
@@ -70,7 +70,7 @@ export const NODE_CONFIGS: Record<string, NodeConfig> = {
     params: [['detail_url', 'from parent', '列表页输出'], ['retry', 'number', '2']],
     output: [['content', 'longtext', '正文'], ['attachments', 'json', '附件列表'], ['source_file', 'url', '原始文件']],
     collectCfg: {
-      snatchType: '[90] 网页抓取', url: 'https://example.com/detail/${detail_url}', sourceName: '公告详情抓取',
+      snatchType: '[90] - 网页抓取', url: 'https://example.com/detail/${detail_url}', sourceName: '公告详情抓取',
       category: '/公告/交易所/详情', dirId: '9009245', useProxy: false, resume: true, tags: '公告, 详情页',
       configMode: 'existing', configId: '81908', outputTable: '2101001', inputParams: [],
       isDetail: true, isLogin: true, needLogin: true, loginUrl: 'https://example.com/login', account: 'research_***', credentialRef: 'cred-zfb',
@@ -210,6 +210,27 @@ export interface EdgeConfig {
   enabled: boolean
 }
 
+/** 旁路分支种子（决定旁路节点纵向锚点与连线两端） */
+export interface BranchSeed {
+  id: string
+  side: 'left' | 'right'
+  rowAnchor: string
+  edgeFrom: string
+  edgeTo: string
+}
+
+/** 流程定义（可序列化，用于保存 / 加载 / 多流程切换） */
+export interface FlowDef {
+  id: string
+  name: string
+  version: string
+  main: string[]
+  branches: BranchSeed[]
+  configs: Record<string, NodeConfig>
+  edges: Record<string, EdgeConfig>
+  updatedAt: string
+}
+
 export const EDGE_CONFIGS: Record<string, EdgeConfig> = {
   'web-list': {
     title: '列表 → 详情 · 步骤编排', sub: '子步骤 81909-详情 (39368)', status: '已启用',
@@ -258,6 +279,18 @@ export const TEMPLATE_TO_NODE: Record<string, string> = {
   alert: 'alert', decision: 'decision', parallel: 'parallel', custom: 'custom',
 }
 
+// 抓取类型选项（统一来源；NodeInspector 与种子配置共用）
+export const SNATCH_TYPES = ['[90] - 网页抓取', '[95] - 文件下载', '[150] - OCR 识别', '[155] - AI 提取', '[170] - Python 抓取']
+
+// 模板 → 默认抓取类型（新插入采集节点用）
+export const TEMPLATE_TO_SNATCH: Record<string, string> = {
+  web: '[90] - 网页抓取',
+  file: '[95] - 文件下载',
+  python: '[170] - Python 抓取',
+  ocr: '[150] - OCR 识别',
+  ai: '[155] - AI 提取',
+}
+
 // 左侧节点库分组
 export type Pill = 'p1' | 'p2' | 'plan'
 export interface LibItem { template: string; code: string; name: string; desc: string; pill: Pill; planned?: boolean }
@@ -304,6 +337,12 @@ export const MODAL_TEMPLATES: { template: string; name: string }[] = [
   { template: 'ocr', name: 'OCR 识别' }, { template: 'ai', name: 'AI 提取' }, { template: 'python', name: 'Python 抓取' },
   { template: 'mail', name: '提取数据发邮件' }, { template: 'alert', name: '异常告警' }, { template: 'custom', name: '自定义节点' },
 ]
+
+// 模板 → 节点类型名（新插入节点的默认节点名称 / 源名称）
+export const TEMPLATE_TO_NAME: Record<string, string> = {
+  ...Object.fromEntries(LIB_GROUPS.flatMap((g) => g.items.map((it) => [it.template, it.name]))),
+  ...Object.fromEntries(MODAL_TEMPLATES.map((t) => [t.template, t.name])),
+}
 
 // ---------- 辅助函数（移植自原型） ----------
 export function compactSub(sub: string): string {

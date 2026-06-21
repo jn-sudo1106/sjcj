@@ -4,6 +4,8 @@ import {
   NODE_CONFIGS,
   EDGE_CONFIGS,
   TEMPLATE_TO_NODE,
+  TEMPLATE_TO_NAME,
+  TEMPLATE_TO_SNATCH,
   defaultEdgeConfig,
   cloneConfig,
   isDecision,
@@ -11,6 +13,8 @@ import {
   type NodeConfig,
   type EdgeConfig,
   type CollectConfig,
+  type BranchSeed,
+  type FlowDef,
 } from '../views/FlowCanvas/flowModel'
 
 // 画布布局常量（对齐原型：节点宽 210、居中 x=320、终端宽 150）
@@ -24,14 +28,6 @@ const GAP = 30
 const SIDE_OFFSET = 215 // 旁路节点相对主链左移/右移量 → 左列 x=0，右列 x=430
 
 export const TERMINALS: Record<string, string> = { start: '开始', end: '完成 / 发布候选' }
-
-interface BranchSeed {
-  id: string
-  side: 'left' | 'right'
-  rowAnchor: string // 决定纵向位置的主链节点
-  edgeFrom: string
-  edgeTo: string
-}
 
 export interface PlacedPos { top: number; left: number; height: number }
 export interface PlacedNode { id: string; cfg: NodeConfig; pos: PlacedPos; branch: boolean; side?: 'left' | 'right' }
@@ -50,6 +46,8 @@ export const useFlowStore = defineStore('flow', () => {
     { id: 'mail', side: 'right', rowAnchor: 'ai-extract', edgeFrom: 'web-detail', edgeTo: 'mail' },
   ])
 
+  const flowId = ref('flow-default')
+  const flowName = ref('公告规则采集链路_v3')
   const selectedId = ref<string>('web-list')
   const selectedEdgeFrom = ref<string | null>(null)
   const activeKind = ref<'node' | 'edge'>('node')
@@ -175,6 +173,19 @@ export const useFlowStore = defineStore('flow', () => {
     const cfg = cloneConfig(NODE_CONFIGS[srcKey])
     if (template === 'decision') cfg.kind = 'decision'
     if (template === 'parallel') cfg.kind = 'parallel'
+    // 新插入节点：名称取节点类型名，不继承种子模板的具体标题
+    const typeName = TEMPLATE_TO_NAME[template]
+    if (typeName) cfg.title = typeName
+    // 采集类节点：源名称默认 = 节点名称，抓取类型 = 节点类型；其余具体配置清空待填
+    if (cfg.collectCfg) {
+      cfg.collectCfg.sourceName = cfg.title
+      cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[template] ?? cfg.collectCfg.snatchType
+      cfg.collectCfg.url = ''
+      cfg.collectCfg.configId = ''
+      cfg.collectCfg.outputTable = ''
+      cfg.collectCfg.inputParams = []
+      cfg.collectCfg.tags = ''
+    }
     const id = `${srcKey}-${seq++}`
     configs[id] = cfg
     const idx = main.value.indexOf(prevId)
@@ -279,8 +290,38 @@ export const useFlowStore = defineStore('flow', () => {
     if (e) e.context.splice(index, 1)
   }
 
+  // ---- 流程定义 序列化 / 加载 ----
+  function serialize(): FlowDef {
+    return {
+      id: flowId.value,
+      name: flowName.value,
+      version: 'draft-0.3',
+      main: [...main.value],
+      branches: JSON.parse(JSON.stringify(branches)) as BranchSeed[],
+      configs: JSON.parse(JSON.stringify(configs)) as Record<string, NodeConfig>,
+      edges: JSON.parse(JSON.stringify(edges)) as Record<string, EdgeConfig>,
+      updatedAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
+    }
+  }
+  function load(def: FlowDef) {
+    flowId.value = def.id
+    flowName.value = def.name
+    Object.keys(configs).forEach((k) => delete configs[k])
+    Object.assign(configs, JSON.parse(JSON.stringify(def.configs)))
+    Object.keys(edges).forEach((k) => delete edges[k])
+    Object.assign(edges, JSON.parse(JSON.stringify(def.edges)))
+    branches.splice(0, branches.length, ...(JSON.parse(JSON.stringify(def.branches)) as BranchSeed[]))
+    main.value = [...def.main]
+    const first = main.value.find((m) => !isTerm(m))
+    if (first) select(first)
+  }
+  function setFlowName(name: string) {
+    flowName.value = name || '未命名流程'
+  }
+
   return {
     configs, edges, main, branches,
+    flowId, flowName,
     selectedId, selectedEdgeFrom, activeKind, activeTab,
     layout, selectedNode, selectedEdge,
     isTerm,
@@ -288,5 +329,6 @@ export const useFlowStore = defineStore('flow', () => {
     insertAfter, duplicate, move, moveTo, toggleDisabled, remove, setTitle,
     patchCollect, setBaseRow, setFieldRow,
     setEdgeRow, setEdgeOutcols, setEdgeEnabled, addEdgeContext, removeEdgeContext,
+    serialize, load, setFlowName,
   }
 })
