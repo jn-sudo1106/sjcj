@@ -25,16 +25,16 @@ npm run deploy    # 隔离部署（见下「部署」）
 app/
 ├─ src/
 │  ├─ api/                类型化接口层（方法名 = 真实 /v1 端点）
-│  │  ├─ endpoints.ts       端点契约清单（147 条 + danger 标记，单一事实源）
+│  │  ├─ endpoints.ts       端点契约清单（150 条 + danger 标记，单一事实源）
 │  │  ├─ client.ts          请求封装：VITE_API_MODE=mock|http 切换 + 未实现端点 fallback
 │  │  ├─ index.ts           各域 API（source/config/entry/param/rule/metric/data/run/monitor/item/workbench）
 │  │  ├─ types.ts           领域模型 TS 类型
-│  │  └─ mock/              按域分文件 mock（sources/configs/entries/params/rules/metrics/dataview/runs/monitor/workbench）
+│  │  └─ mock/              按域分文件 mock（sources/configs/entries/params/rules/metrics/dataview/runs/monitor/workbench/flows）
 │  ├─ components/         通用组件（CountUp、PanePlaceholder）
 │  ├─ design/             设计令牌 tokens.css（全局工具类 + Element Plus 主题对齐）
 │  ├─ layouts/            AppShell：顶部系统栏 + 分组导航 + 模块标题区 + 工作台摘要
 │  ├─ router/             7 模块路由（懒加载）+ 导航元数据 tabs.ts
-│  ├─ stores/             Pinia：flow（画布）/ ui（模块动作总线）
+│  ├─ stores/             Pinia：flow（画布）/ runtime（试跑运行时）/ ui（模块动作总线）
 │  └─ views/              7 个业务模块（FlowCanvas / CollectAssets / RuleAssets / MetricCenter / DataView / RunRecords / Monitor）
 ├─ scripts/deploy-static.cjs   隔离部署脚本
 ├─ docs/组件与接口规格.md       组件 / 接口 / 设计系统规格
@@ -54,10 +54,11 @@ app/
 | M5b | 端点契约 147 条 + mock fallback + 组件规格文档 + 旧原型归档 | ✅ |
 | 打磨 | 画布右侧数据驱动联动、节点库搜索、画布拖拽重排、工作台摘要接数 | ✅ |
 | 工程化 | Vitest(17 例) + ESLint/Prettier + CI + 代码分割 + sjcj 隔离部署 | ✅ |
+| 流程闭环 | 流程持久化（FlowDef + localStorage）+ mock 试跑闭环（试跑 → 节点 L→C → 运行记录 → 数据查看，run_id 贯穿） | ✅ |
 
 ## 数据契约（mock-first）
 
-- `endpoints.ts` 收录 147 个端点（按 14 域 + 本系统自有），方法名 = 真实 `/v1` 路径。
+- `endpoints.ts` 收录 150 个端点（按 14 域 + 本系统自有），方法名 = 真实 `/v1` 路径。
 - 默认 `VITE_API_MODE=mock`：查 `mock/` 注册表；未实现专属 mock 的契约端点由 `client.ts` fallback（分页 → 空列表、写类 → 占位回执）。
 - 切 `VITE_API_MODE=http` + `VITE_API_BASE` 即接真实后端，界面与类型零改动。
 - 写类 / 高危端点登记在 `DANGER_ENDPOINTS`（从契约 `danger` 派生），UI 统一二次确认占位、不落库。
