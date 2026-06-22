@@ -88,7 +88,7 @@ const navIcons: Record<string, Component> = {
             <path d="M28 10 L28 23 L16 30 L16 17 Z" fill="url(#brandg)" />
           </svg>
         </span>
-        <strong>万维数据采集中心</strong>
+        <strong>万微数据采集中心</strong>
       </div>
       <div class="rc-global-search">
         <el-icon><Search /></el-icon>
@@ -128,7 +128,7 @@ const navIcons: Record<string, Component> = {
         <div class="rc-module-head">
           <div>
             <div class="rc-bc">
-              <span>万维数据采集中心</span>
+              <span>万微数据采集中心</span>
               <span>/</span>
               <span>{{ current.label }}</span>
             </div>
