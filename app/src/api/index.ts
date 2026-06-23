@@ -5,7 +5,7 @@ import type {
   Dataset, Measure, DataTableMeta, DataRow, RunRow, RunNode, HealthCard, MqQueue, SyncRow, AlarmRow,
   Config, EntryType, Param, CredentialRef, SourceLog, TaskInst, WorkbenchSummary,
 } from './types'
-import type { FlowDef } from '../views/FlowCanvas/flowModel'
+import type { FlowDef, FlowRecommendation } from '../views/FlowCanvas/flowModel'
 
 export * from './types'
 export { isDanger, DANGER_ENDPOINTS } from './client'
@@ -126,6 +126,8 @@ export const flowApi = {
   flowSave: (def: FlowDef) => request<Ack>('flow/save', { def }),
   flowLoad: (id: string) => request<FlowDef | null>('flow/load', { id }),
   flowList: () => request<{ id: string; name: string; updatedAt: string }[]>('flow/list'),
+  flowRecommend: (prompt: string, intent?: string) =>
+    request<FlowRecommendation>('flow/recommend', { prompt, intent }),
 }
 
 // 子步骤（流程画布连线 = item/next）。未实现专属 mock，由 client fallback 回执。

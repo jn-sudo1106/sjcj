@@ -20,6 +20,11 @@ async function onSave() {
   ElMessage.success(res?.message || '流程已保存')
 }
 async function onPublish() {
+  const errs = flow.validateFlow()
+  if (errs.length) {
+    ElMessage.warning(`发布前请修正：${errs[0]}${errs.length > 1 ? ` 等 ${errs.length} 项` : ''}`)
+    return
+  }
   await flowApi.flowSave(flow.serialize())
   ElMessage.success('已保存并标记为发布候选（演示）')
 }

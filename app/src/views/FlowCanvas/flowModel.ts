@@ -389,3 +389,149 @@ export function nodeClassFor(cfg: NodeConfig): string {
 export function cloneConfig(cfg: NodeConfig): NodeConfig {
   return JSON.parse(JSON.stringify(cfg))
 }
+
+// ---------- 新建流程 / 初始化画布（M5.5） ----------
+
+const nowStamp = (): string => new Date().toISOString().slice(0, 16).replace('T', ' ')
+
+/** 空白流程：仅 开始 → 完成，供从零编排 */
+export function makeBlankFlow(): FlowDef {
+  return {
+    id: `flow-${Date.now()}`,
+    name: '未命名流程',
+    version: 'draft-0.1',
+    main: ['start', 'end'],
+    branches: [],
+    configs: {},
+    edges: {},
+    updatedAt: nowStamp(),
+  }
+}
+
+/** 标准链路模板（= 原种子 Demo：公告规则采集，固定节点 id 供子步骤 / 测试引用） */
+export function makeStandardFlow(): FlowDef {
+  const configs: Record<string, NodeConfig> = {}
+  ;['web-list', 'web-detail', 'ai-extract', 'rule', 'check', 'mail'].forEach((k) => {
+    configs[k] = cloneConfig(NODE_CONFIGS[k])
+  })
+  return {
+    id: 'flow-default',
+    name: '公告规则采集链路_v3',
+    version: 'draft-0.3',
+    main: ['start', 'web-list', 'web-detail', 'ai-extract', 'rule', 'end'],
+    branches: [
+      { id: 'check', side: 'left', rowAnchor: 'ai-extract', edgeFrom: 'check', edgeTo: 'rule' },
+      { id: 'mail', side: 'right', rowAnchor: 'ai-extract', edgeFrom: 'web-detail', edgeTo: 'mail' },
+    ],
+    configs,
+    edges: { 'web-list': JSON.parse(JSON.stringify(EDGE_CONFIGS['web-list'])) },
+    updatedAt: nowStamp(),
+  }
+}
+
+// 预置意图链路构造器：按模板序列克隆节点、清空采集占位（与 store.insertAfter 同口径）
+let presetSeq = 1
+interface StepSpec {
+  template: string
+  name?: string
+  patch?: Partial<CollectConfig>
+}
+function buildFlow(name: string, steps: StepSpec[]): FlowDef {
+  const main: string[] = ['start']
+  const configs: Record<string, NodeConfig> = {}
+  steps.forEach((s) => {
+    const srcKey = TEMPLATE_TO_NODE[s.template] || 'web-list'
+    const cfg = cloneConfig(NODE_CONFIGS[srcKey])
+    if (s.template === 'decision') cfg.kind = 'decision'
+    if (s.template === 'parallel') cfg.kind = 'parallel'
+    cfg.title = s.name || TEMPLATE_TO_NAME[s.template] || cfg.title
+    if (cfg.collectCfg) {
+      cfg.collectCfg.sourceName = cfg.title
+      cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[s.template] ?? cfg.collectCfg.snatchType
+      cfg.collectCfg.url = ''
+      cfg.collectCfg.configId = ''
+      cfg.collectCfg.outputTable = ''
+      cfg.collectCfg.inputParams = []
+      cfg.collectCfg.tags = ''
+      if (s.patch) Object.assign(cfg.collectCfg, s.patch)
+    }
+    const id = `${srcKey}-p${presetSeq++}`
+    configs[id] = cfg
+    main.push(id)
+  })
+  main.push('end')
+  return {
+    id: `flow-${Date.now()}-${presetSeq}`,
+    name,
+    version: 'draft-0.1',
+    main,
+    branches: [],
+    configs,
+    edges: {},
+    updatedAt: nowStamp(),
+  }
+}
+
+export interface PresetIntent {
+  key: string
+  label: string
+  keywords: string[]
+  rationale: string
+  build: () => FlowDef
+}
+
+/** 预置意图 → 链路（首期种子，可扩展）。智能体首期按关键词匹配，二期换真 LLM。 */
+export const PRESET_INTENTS: PresetIntent[] = [
+  {
+    key: 'web-public',
+    label: '公共网页抓取',
+    keywords: ['公共', '网页', '网站', '抓取', '爬', 'web', '页面', '列表'],
+    rationale: '识别为「公共网页数据抓取」：先抓列表页拿到详情链接，再抓详情正文，清洗字段后落表。',
+    build: () =>
+      buildFlow('公共网页抓取链路', [
+        { template: 'web', name: '网页抓取（列表）' },
+        { template: 'web', name: '网页抓取（详情）' },
+        { template: 'clean', name: '字段清洗' },
+        { template: 'output', name: '落表输出' },
+      ]),
+  },
+  {
+    key: 'web-login',
+    label: '登录站点抓取',
+    keywords: ['登录', '登陆', '账号', '凭据', 'cookie', '会员'],
+    rationale: '识别为「登录态站点抓取」：列表页需登录，抓详情后清洗落表；登录凭据在节点登录配置里只存引用。',
+    build: () =>
+      buildFlow('登录站点抓取链路', [
+        { template: 'web', name: '网页抓取（列表·需登录）', patch: { needLogin: true } },
+        { template: 'web', name: '网页抓取（详情）' },
+        { template: 'clean', name: '字段清洗' },
+        { template: 'output', name: '落表输出' },
+      ]),
+  },
+  {
+    key: 'file-parse',
+    label: '文件下载解析',
+    keywords: ['文件', '下载', 'pdf', 'word', 'excel', '附件', '解析', '报告'],
+    rationale: '识别为「文件下载解析」：下载文件 → 解析 → 字段抽取 → 落表。',
+    build: () =>
+      buildFlow('文件下载解析链路', [
+        { template: 'file', name: '文件下载' },
+        { template: 'parse', name: '文件解析' },
+        { template: 'map', name: '字段抽取' },
+        { template: 'output', name: '落表输出' },
+      ]),
+  },
+  {
+    key: 'announcement',
+    label: '公告规则采集',
+    keywords: ['公告', '规则', '交易所', '投研', '标准'],
+    rationale: '识别为「公告规则采集」：套用标准链路（列表→详情→AI 提取→规则处理），含质量校验 / 告警旁路。',
+    build: () => makeStandardFlow(),
+  },
+]
+
+export interface FlowRecommendation {
+  flow: FlowDef
+  rationale: string
+  alternatives: { intent: string; name: string }[]
+}

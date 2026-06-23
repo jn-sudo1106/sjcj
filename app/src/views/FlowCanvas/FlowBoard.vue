@@ -13,11 +13,13 @@ import {
   nodeClassFor,
   type NodeConfig,
 } from './flowModel'
+import NewFlowDialog from './NewFlowDialog.vue'
 
 const flow = useFlowStore()
 const runtime = useRuntimeStore()
 const router = useRouter()
 const flowEl = ref<HTMLElement | null>(null)
+const showNewFlow = ref(false)
 const flows = ref<{ id: string; name: string; updatedAt: string }[]>([])
 async function loadFlows() {
   flows.value = await flowApi.flowList()
@@ -176,6 +178,7 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
       </div>
       <span class="rc-status warn">落表由数据中心完成</span>
       <div class="rc-canvas-actions">
+        <button class="rc-btn primary" type="button" @click="showNewFlow = true">＋ 新建流程</button>
         <el-dropdown trigger="click" @command="switchFlow" @visible-change="(v: boolean) => v && loadFlows()">
           <button class="rc-btn" type="button">切换流程 ▾</button>
           <template #dropdown>
@@ -195,6 +198,13 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
           <path v-for="(e, i) in flow.layout.mainEdges" :key="'m' + i" class="rc-edge" :class="{ rule: e.rule }" :d="e.d" />
           <path v-for="(e, i) in flow.layout.branchEdges" :key="'b' + i" class="rc-edge" :d="e.d" />
         </svg>
+
+        <!-- 空白画布引导卡（无业务节点时） -->
+        <div v-if="!flow.layout.nodes.length" class="rc-empty-cta">
+          <div class="rc-empty-cta-title">空白流程画布</div>
+          <div class="rc-empty-cta-sub">描述你的采集需求，让智能体帮你生成初始流程；或从空白开始，自行从左侧节点库拖入节点。</div>
+          <button class="rc-btn primary" type="button" @click="showNewFlow = true">＋ 新建 / 智能生成</button>
+        </div>
 
         <!-- 终端 -->
         <div
@@ -337,6 +347,8 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
         </div>
       </div>
     </div>
+    <!-- 新建流程 · 对话式挑选器 -->
+    <NewFlowDialog v-model:open="showNewFlow" />
   </main>
 </template>
 
@@ -356,6 +368,11 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 .rc-edge.rule { stroke: #60a5fa; stroke-dasharray: 5 4; }
 
 .rc-term { position: absolute; width: 150px; height: 34px; border: 1px solid var(--rc-border); border-radius: 18px; background: #fff; color: var(--rc-text-2); display: flex; align-items: center; justify-content: center; font-weight: 600; box-shadow: 0 2px 8px -5px rgba(15, 23, 42, 0.2); }
+
+.rc-empty-cta { position: absolute; left: 50%; top: 168px; transform: translateX(-50%); width: 340px; padding: 20px; text-align: center; border: 1px dashed #bfdbfe; border-radius: 12px; background: rgba(255, 255, 255, 0.92); box-shadow: 0 10px 30px -18px rgba(37, 99, 235, 0.5); }
+.rc-empty-cta-title { font-size: 14px; font-weight: 800; color: var(--rc-text); }
+.rc-empty-cta-sub { margin: 7px 0 14px; font-size: 11px; line-height: 1.6; color: var(--rc-muted); }
+.rc-empty-cta .rc-btn { height: 34px; padding: 0 14px; font-size: 13px; }
 
 .rc-drop-slot { position: absolute; left: 300px; z-index: 20; width: 40px; height: 22px; transform: translateY(-50%); display: flex; align-items: center; justify-content: center; border: 1px solid #bfdbfe; background: #fff; color: var(--rc-primary); border-radius: 999px; font-size: 17px; line-height: 1; opacity: 0.62; cursor: pointer; box-shadow: 0 4px 12px -9px rgba(37, 99, 235, 0.8); transition: opacity 0.12s, transform 0.12s, border-color 0.12s, background 0.12s; }
 .rc-drop-slot::before, .rc-drop-slot::after { content: ''; position: absolute; top: 50%; width: 86px; height: 1px; background: #bfdbfe; pointer-events: none; }

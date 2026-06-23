@@ -9,13 +9,13 @@ import {
 } from '../../api'
 
 const flow = useFlowStore()
-const cfg = computed(() => flow.selectedNode!)
+const cfg = computed(() => flow.selectedNode)
 const id = computed(() => flow.selectedId)
 const tab = computed(() => flow.activeTab)
-const cc = computed(() => cfg.value.collectCfg)
+const cc = computed(() => cfg.value?.collectCfg)
 
-const statusText = computed(() => (cfg.value.disabled ? '已停用' : cfg.value.status))
-const statusClass = computed(() => (cfg.value.disabled || cfg.value.planned ? 'warn' : 'ok'))
+const statusText = computed(() => (cfg.value?.disabled ? '已停用' : (cfg.value?.status ?? '')))
+const statusClass = computed(() => (cfg.value?.disabled || cfg.value?.planned ? 'warn' : 'ok'))
 
 const STEPS: [string, string, string, string][] = [
   ['source', '1', '源配置', '抓取类型、源 URL、源名称'],
@@ -36,7 +36,7 @@ const cred = ref<CredentialRef | null>(null)
 const ruleGroups = ref<RuleGroup[]>([])
 const rules = ref<Rule[]>([])
 const sharedCfgs = ref<SharedConfig[]>([])
-const isRule = computed(() => /规则/.test(cfg.value.title))
+const isRule = computed(() => /规则/.test(cfg.value?.title ?? ''))
 
 onMounted(async () => {
   tables.value = (await entryApi.entryPaged({ size: 100 })).list
@@ -110,21 +110,22 @@ function onSaveDraft() {
   ElMessage.success('节点配置草稿已保存（演示，编辑已实时写入画布）')
 }
 function onSubmit() {
-  confirmDanger('提交创建源', `将创建源「${cc.value?.sourceName || cfg.value.title}」及其配置，是否继续？`, () =>
+  confirmDanger('提交创建源', `将创建源「${cc.value?.sourceName || cfg.value?.title}」及其配置，是否继续？`, () =>
     sourceApi.generateConfig(id.value),
   )
 }
 function onTrial() {
-  if (cfg.value.planned) {
+  if (cfg.value?.planned) {
     ElMessage.info('规划中节点：待执行器就绪后可试跑')
     return
   }
-  confirmDanger('执行试跑', `将对「${cfg.value.title}」发起一次试跑抓取，是否继续？`, () => sourceApi.sendSnatch([id.value]))
+  confirmDanger('执行试跑', `将对「${cfg.value?.title}」发起一次试跑抓取，是否继续？`, () => sourceApi.sendSnatch([id.value]))
 }
 </script>
 
 <template>
   <div class="rc-inspector">
+    <template v-if="cfg">
     <div class="rc-insp-head">
       <div>
         <div class="rc-insp-title">{{ cfg.title }}</div>
@@ -357,6 +358,19 @@ function onTrial() {
         </template>
       </template>
     </div>
+    </template>
+
+    <template v-else>
+      <div class="rc-insp-head">
+        <div>
+          <div class="rc-insp-title">未选择节点</div>
+          <div class="rc-insp-sub">点击画布节点查看 / 编辑配置</div>
+        </div>
+      </div>
+      <div class="rc-inspector-body">
+        <div class="rc-help">当前画布为空或未选择节点。用顶部「＋ 新建流程」智能生成，或从左侧节点库拖入节点。</div>
+      </div>
+    </template>
   </div>
 </template>
 

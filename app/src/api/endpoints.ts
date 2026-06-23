@@ -160,11 +160,12 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'file/fileProcess', desc: '文件后续处理', danger: true },
   { path: 'file/fileJsonPaged', desc: '原始 JSON 分页' },
 
-  /* ── flow 流程模板（目标 1 / 收录 4，含本系统流程持久化） ── */
+  /* ── flow 流程模板（目标 1 / 收录 5，含本系统流程持久化） ── */
   { path: 'flow/templateCode', desc: '流程模板编码' },
   { path: 'flow/save', desc: '保存流程定义', impl: true },
   { path: 'flow/load', desc: '加载流程定义', impl: true },
   { path: 'flow/list', desc: '流程列表', impl: true },
+  { path: 'flow/recommend', desc: '流程推荐（mock 意图匹配 / 二期 LLM 生成）', impl: true },
 
   /* ── comm 导出（目标 1 / 收录 1） ── */
   { path: 'comm/export', desc: '导出' },

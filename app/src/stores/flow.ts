@@ -2,7 +2,6 @@ import { computed, reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
 import {
   NODE_CONFIGS,
-  EDGE_CONFIGS,
   TEMPLATE_TO_NODE,
   TEMPLATE_TO_NAME,
   TEMPLATE_TO_SNATCH,
@@ -10,6 +9,8 @@ import {
   cloneConfig,
   isDecision,
   isParallel,
+  makeBlankFlow,
+  makeStandardFlow,
   type NodeConfig,
   type EdgeConfig,
   type CollectConfig,
@@ -40,25 +41,17 @@ export const useFlowStore = defineStore('flow', () => {
   // ---- 状态 ----
   const configs = reactive<Record<string, NodeConfig>>({})
   const edges = reactive<Record<string, EdgeConfig>>({})
-  const main = ref<string[]>(['start', 'web-list', 'web-detail', 'ai-extract', 'rule', 'end'])
-  const branches = reactive<BranchSeed[]>([
-    { id: 'check', side: 'left', rowAnchor: 'ai-extract', edgeFrom: 'check', edgeTo: 'rule' },
-    { id: 'mail', side: 'right', rowAnchor: 'ai-extract', edgeFrom: 'web-detail', edgeTo: 'mail' },
-  ])
+  // 默认空白画布（M5.5）：首次进入为干净的 开始 → 完成；标准链路 / 预置意图经「＋ 新建流程」载入
+  const main = ref<string[]>(['start', 'end'])
+  const branches = reactive<BranchSeed[]>([])
 
   const flowId = ref('flow-default')
-  const flowName = ref('公告规则采集链路_v3')
-  const selectedId = ref<string>('web-list')
+  const flowName = ref('未命名流程')
+  const selectedId = ref<string>('')
   const selectedEdgeFrom = ref<string | null>(null)
   const activeKind = ref<'node' | 'edge'>('node')
-  const activeTab = ref<string>('source')
+  const activeTab = ref<string>('base')
   let seq = 1
-
-  // 种子配置（深拷贝，便于就地编辑）
-  ;['web-list', 'web-detail', 'ai-extract', 'rule', 'check', 'mail'].forEach((k) => {
-    configs[k] = cloneConfig(NODE_CONFIGS[k])
-  })
-  edges['web-list'] = JSON.parse(JSON.stringify(EDGE_CONFIGS['web-list']))
 
   // ---- 工具 ----
   function isTerm(id: string) {
@@ -314,9 +307,34 @@ export const useFlowStore = defineStore('flow', () => {
     main.value = [...def.main]
     const first = main.value.find((m) => !isTerm(m))
     if (first) select(first)
+    else {
+      selectedId.value = ''
+      selectedEdgeFrom.value = null
+      activeKind.value = 'node'
+    }
   }
   function setFlowName(name: string) {
     flowName.value = name || '未命名流程'
+  }
+
+  // 新建流程：空白（开始→完成）或标准链路模板（= 公告规则采集 Demo）
+  function newFlow(kind: 'blank' | 'standard' = 'blank') {
+    load(kind === 'standard' ? makeStandardFlow() : makeBlankFlow())
+  }
+
+  // 发布门禁（M5.5 极简版）：空链路 / 采集节点缺 URL·输出表 不可发布
+  function validateFlow(def?: FlowDef): string[] {
+    const d = def ?? serialize()
+    const errs: string[] = []
+    const nodeIds = d.main.filter((idv) => !isTerm(idv))
+    if (!nodeIds.length) errs.push('流程为空：至少添加一个节点')
+    nodeIds.forEach((nid) => {
+      const c = d.configs[nid]
+      if (!c?.collectCfg) return
+      if (!c.collectCfg.url) errs.push(`「${c.title}」缺少源 URL`)
+      if (!c.collectCfg.outputTable) errs.push(`「${c.title}」缺少输出表`)
+    })
+    return errs
   }
 
   return {
@@ -329,6 +347,6 @@ export const useFlowStore = defineStore('flow', () => {
     insertAfter, duplicate, move, moveTo, toggleDisabled, remove, setTitle,
     patchCollect, setBaseRow, setFieldRow,
     setEdgeRow, setEdgeOutcols, setEdgeEnabled, addEdgeContext, removeEdgeContext,
-    serialize, load, setFlowName,
+    serialize, load, setFlowName, newFlow, validateFlow,
   }
 })

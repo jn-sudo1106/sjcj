@@ -23,7 +23,7 @@ import { mockDataTables, mockDataRows, mockDataStats } from './dataview'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats } from './monitor'
 import { mockWorkbenchSummary } from './workbench'
-import { mockFlowSave, mockFlowLoad, mockFlowList } from './flows'
+import { mockFlowSave, mockFlowLoad, mockFlowList, mockFlowRecommend } from './flows'
 import { mockConfigPaged, mockConfigDetail } from './configs'
 import { mockEntryPaged, mockEntryDetail } from './entries'
 import { mockParamPaged, mockParamDetail, mockGenValues } from './params'
@@ -117,4 +117,5 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'flow/save': mockFlowSave,
   'flow/load': mockFlowLoad,
   'flow/list': mockFlowList,
+  'flow/recommend': mockFlowRecommend,
 }
