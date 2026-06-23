@@ -65,14 +65,27 @@ app/
 
 ## 部署（sjcj 子路径隔离）
 
-对齐 `../设计稿/部署方案_隔离.md`：部署到 WAN 公网入口下的隔离子路径 `/sjcj/`，不占端口、不起常驻服务、不写 WAN 目录。
+对齐 `../设计稿/部署方案_隔离.md`：作为 WAN 公网入口下的隔离子路径 `/sjcj/` 托管 —— 不占端口、不起常驻服务，sjcj 侧只写 `/home/leo/sjcj/public`、**绝不写 WAN 目录**。已上线：**http://47.120.11.60:2806/sjcj/#/canvas**（WAN 原入口 `…/#deep-research` 不受影响）。部署分两部分：
+
+### ① sjcj 静态产物（反复部署）
 
 ```bash
-npm run deploy                                      # 本地构建（VITE_BASE=/sjcj/）+ 打印发布命令
-SJCJ_REMOTE_HOST=user@47.120.11.60 npm run deploy  # 构建 + rsync 到 /home/leo/sjcj/public
+npm run deploy   # 构建（VITE_BASE=/sjcj/）+ git 守卫；未设 SJCJ_REMOTE_HOST 时只本地构建并打印发布命令
 ```
 
-脚本含安全保护：拒绝根路径 / 多层路径 / WAN 目录 / git 未提交·未推送·未同步。访问：`http://47.120.11.60:2806/sjcj/#/canvas`。
+实际服务器 SSH 为**密码登录**（`leo@47.120.11.60`，端口 `5031`；凭据见 wan 项目 `deploy.js`），与脚本默认的免密 rsync 不同，故产物用手动 rsync 发布（本机需 `sshpass`）：
+
+```bash
+SSHPASS='<password>' rsync -az --delete \
+  -e "sshpass -e ssh -p 5031 -o StrictHostKeyChecking=accept-new" \
+  dist/ leo@47.120.11.60:/home/leo/sjcj/public/
+```
+
+`scripts/deploy-static.cjs` 的安全保护：拒绝根路径 / 多层路径 / WAN 目录 / git 未提交·未推送·未同步。
+
+### ② WAN 静态路由（一次性，属 wan 项目）
+
+公网访问由 WAN 的 `server.js` 中 `/sjcj/` 路由（`resolveSjcjPath` → `/home/leo/sjcj/public`，无斜杠 302、未命中回落 `index.html`）托管。该路由是 wan 项目 `server.js` 的一次性纯增量改动（非 `/sjcj/` 请求行为不变），由 wan 自身的 `node deploy.js` 上线，并需在 **wan 仓库提交**，否则整树重部署会丢。sjcj 侧不直接改 / 重启 WAN。
 
 ## 边界
 
