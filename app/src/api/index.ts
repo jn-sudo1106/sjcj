@@ -4,6 +4,7 @@ import type {
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
   Dataset, Measure, DataTableMeta, DataRow, RunRow, RunNode, HealthCard, MqQueue, SyncRow, AlarmRow,
   Config, EntryType, Param, CredentialRef, SourceLog, TaskInst, WorkbenchSummary,
+  OverviewSummary, TrendPoint,
 } from './types'
 import type { FlowDef, FlowRecommendation } from '../views/FlowCanvas/flowModel'
 
@@ -119,6 +120,12 @@ export const paramApi = {
 // 工作台摘要（首页）
 export const workbenchApi = {
   summary: () => request<WorkbenchSummary[]>('workbench/summary'),
+}
+
+// 采集资产总览（首页驾驶舱）
+export const overviewApi = {
+  summary: () => request<OverviewSummary>('overview/summary'),
+  trend: (days = 30) => request<TrendPoint[]>('overview/trend', { days }),
 }
 
 // 流程定义持久化（流程画布保存 / 加载 / 多流程）

@@ -1,13 +1,14 @@
-// 7 个业务模块元数据 — 路由与独立系统导航共用，口径同《采集配置中心_开发方案.md》信息架构。
+// 首页 + 7 个业务模块元数据 — 路由与独立系统导航共用，口径同《采集配置中心_开发方案.md》信息架构。
 export interface TabMeta {
   key: string
   path: string
   label: string
   desc: string
-  group: 'workbench' | 'assets' | 'ops' | 'tools'
+  group: 'home' | 'workbench' | 'assets' | 'ops' | 'tools'
 }
 
 export const TABS: TabMeta[] = [
+  { key: 'overview', path: '/overview', label: '采集资产总览', desc: 'KPI、采集生态、趋势、占比、异常下钻', group: 'home' },
   { key: 'canvas', path: '/canvas', label: '流程画布', desc: '单条链路、节点、子步骤、试跑、发布', group: 'workbench' },
   { key: 'collect', path: '/collect', label: '采集资产', desc: '源、配置、表、参数、批量操作', group: 'assets' },
   { key: 'rules', path: '/rules', label: '规则资产', desc: '规则组、表达式、测试集、发布门禁', group: 'assets' },

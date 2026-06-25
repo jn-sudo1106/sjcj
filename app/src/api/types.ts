@@ -363,3 +363,63 @@ export interface WorkbenchSummary {
   hint: string
   tone: string
 }
+
+/* ---------------- 采集资产总览（首页驾驶舱） ---------------- */
+
+/** 总览 KPI —— 采集资产四类口径 + 运行 / 告警纳入 */
+export interface OverviewKpi {
+  sources: number // 采集源总数
+  configs: number // 采集配置数
+  tables: number // 实体表数
+  params: number // 参数数
+  successRate: string // 综合成功率，如 '98.6%'
+  errorSources: number // 异常源数
+  runningRuns: number // 运行中链路（纳入运行）
+  alarms: number // 未恢复告警（纳入告警）
+  newAssets7: number // 近 7 日新增资产
+}
+
+/** 占比 / 分布通用切片（环形、柱状共用） */
+export interface OverviewSlice {
+  label: string
+  value: number
+  tone?: 'primary' | 'cyan' | 'indigo' | 'amber' | 'ok' | 'err' | 'muted'
+}
+
+/** 重点采集源行 */
+export interface OverviewTopSource {
+  sourceId: string
+  name: string
+  category: string
+  state: RunState | string
+  dataCount: number
+  lastSuccessAt?: string
+}
+
+/** 异常 / 待确认条目（可下钻到采集资产源列表） */
+export interface OverviewException {
+  sourceId: string
+  name: string
+  kind: 'error' | 'external' | 'disabled' | 'alarm'
+  text: string
+  at?: string
+}
+
+/** 总览聚合返回（一次拉全，减少首屏请求） */
+export interface OverviewSummary {
+  kpi: OverviewKpi
+  ecosystem: { sources: number; configs: number; tables: number; params: number }
+  byCategory: OverviewSlice[] // 资产类型占比
+  byCycle: OverviewSlice[] // 采集周期分布
+  byState: OverviewSlice[] // 运行状态分布
+  topSources: OverviewTopSource[]
+  exceptions: OverviewException[]
+  updatedAt: string // 总览更新时间
+}
+
+/** 采集任务趋势点 */
+export interface TrendPoint {
+  date: string // MM-DD
+  snatch: number // 抓取量
+  success: number // 成功量
+}

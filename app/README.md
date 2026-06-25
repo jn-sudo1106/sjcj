@@ -1,6 +1,6 @@
 # 采集配置中心 · 前端工程
 
-数据采集平台的独立重构前端，品牌「万微数据采集中心」。全程 mock 数据，不直连后端；进入二期真接入时仅替换 `src/api` 数据适配层（`VITE_API_MODE=http`），界面与类型零改动。
+数据采集平台的独立重构前端，品牌「万微数据采集中心」。当前默认进入一级首页「采集资产总览」，再下钻到流程画布、采集资产、规则、指标、运行与监控等 7 个业务模块。全程 mock 数据，不直连后端；进入二期真接入时仅替换 `src/api` 数据适配层（`VITE_API_MODE=http`），界面与类型零改动。
 
 ## 技术栈
 
@@ -27,15 +27,15 @@ app/
 │  ├─ api/                类型化接口层（方法名 = 真实 /v1 端点）
 │  │  ├─ endpoints.ts       端点契约清单（150 条 + danger 标记，单一事实源）
 │  │  ├─ client.ts          请求封装：VITE_API_MODE=mock|http 切换 + 未实现端点 fallback
-│  │  ├─ index.ts           各域 API（source/config/entry/param/rule/metric/data/run/monitor/item/workbench）
+│  │  ├─ index.ts           各域 API（overview/source/config/entry/param/rule/metric/data/run/monitor/item/workbench）
 │  │  ├─ types.ts           领域模型 TS 类型
-│  │  └─ mock/              按域分文件 mock（sources/configs/entries/params/rules/metrics/dataview/runs/monitor/workbench/flows）
+│  │  └─ mock/              按域分文件 mock（overview/sources/configs/entries/params/rules/metrics/dataview/runs/monitor/workbench/flows）
 │  ├─ components/         通用组件（CountUp、PanePlaceholder）
 │  ├─ design/             设计令牌 tokens.css（全局工具类 + Element Plus 主题对齐）
-│  ├─ layouts/            AppShell：顶部系统栏 + 分组导航 + 模块标题区 + 工作台摘要
-│  ├─ router/             7 模块路由（懒加载）+ 导航元数据 tabs.ts
+│  ├─ layouts/            AppShell：顶部系统栏 + 一级首页 + 分组导航 + 模块标题区
+│  ├─ router/             首页 + 7 业务模块路由（懒加载）+ 导航元数据 tabs.ts
 │  ├─ stores/             Pinia：flow（画布）/ runtime（试跑运行时）/ ui（模块动作总线）
-│  └─ views/              7 个业务模块（FlowCanvas / CollectAssets / RuleAssets / MetricCenter / DataView / RunRecords / Monitor）
+│  └─ views/              Overview 首页 + 7 个业务模块（FlowCanvas / CollectAssets / RuleAssets / MetricCenter / DataView / RunRecords / Monitor）
 ├─ scripts/deploy-static.cjs   隔离部署脚本
 ├─ docs/组件与接口规格.md       组件 / 接口 / 设计系统规格
 └─ src/**/*.test.ts            Vitest 用例（求值器 / 端点契约 / store）
@@ -55,6 +55,7 @@ app/
 | 打磨 | 画布右侧数据驱动联动、节点库搜索、画布拖拽重排、工作台摘要接数 | ✅ |
 | 工程化 | Vitest(17 例) + ESLint/Prettier + CI + 代码分割 + sjcj 隔离部署 | ✅ |
 | 流程闭环 | 流程持久化（FlowDef + localStorage）+ mock 试跑闭环（试跑 → 节点 L→C → 运行记录 → 数据查看，run_id 贯穿） | ✅ |
+| 首页总览 | `/overview` 一级首页：KPI、采集资产全景、任务趋势柱状图、二级资产类型分布、运行动态、告警和采集周期分布 | ✅ |
 
 ## 数据契约（mock-first）
 
@@ -65,7 +66,7 @@ app/
 
 ## 部署（sjcj 子路径隔离）
 
-对齐 `../设计稿/部署方案_隔离.md`：作为 WAN 公网入口下的隔离子路径 `/sjcj/` 托管 —— 不占端口、不起常驻服务，sjcj 侧只写 `/home/leo/sjcj/public`、**绝不写 WAN 目录**。已上线：**http://47.120.11.60:2806/sjcj/#/canvas**（WAN 原入口 `…/#deep-research` 不受影响）。部署分两部分：
+对齐 `../设计稿/部署方案_隔离.md`：作为 WAN 公网入口下的隔离子路径 `/sjcj/` 托管 —— 不占端口、不起常驻服务，sjcj 侧只写 `/home/leo/sjcj/public`、**绝不写 WAN 目录**。当前默认入口为 **http://47.120.11.60:2806/sjcj/#/overview**，流程画布仍可通过 `#/canvas` 直接访问（WAN 原入口 `…/#deep-research` 不受影响）。部署分两部分：
 
 ### ① sjcj 静态产物（反复部署）
 

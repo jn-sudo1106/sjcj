@@ -193,6 +193,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'monitor/alarmPaged', desc: '告警列表', impl: true },
   { path: 'monitor/stats', desc: '监控 KPI', impl: true },
   { path: 'workbench/summary', desc: '工作台摘要', impl: true },
+  // 采集资产总览（首页驾驶舱，服务层聚合）
+  { path: 'overview/summary', desc: '采集资产总览聚合（KPI / 生态 / 占比 / Top / 异常）', impl: true },
+  { path: 'overview/trend', desc: '采集任务趋势（近 N 天抓取量 / 成功量）', impl: true },
 ]
 
 /** 所有契约端点路径（fallback 判定用） */

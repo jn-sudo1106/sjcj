@@ -1,6 +1,6 @@
 # 万微数据采集中心
 
-数据采集平台的独立重构前端系统。本仓库包含前端工程与设计文档两部分。
+数据采集平台的独立重构前端系统。本仓库包含前端工程与设计文档两部分。当前默认入口为一级首页「采集资产总览」，再下钻到 7 个业务模块。
 
 ## 目录
 
@@ -30,6 +30,6 @@ npm run dev        # http://localhost:5173
 ## 概览
 
 - 全程 mock，二期真接入只换 `app/src/api` 适配层（界面零改动）
-- 7 业务模块：流程画布 / 采集资产 / 规则资产 / 指标中心 / 数据查看 / 运行记录 / 监控工具
+- 首页 + 7 业务模块：首页总览 / 流程画布 / 采集资产 / 规则资产 / 指标中心 / 数据查看 / 运行记录 / 监控工具
 - 质量：Vitest 单元测试 + ESLint + CI（[.github/workflows/ci.yml](.github/workflows/ci.yml)）
-- 部署：`app/scripts/deploy-static.cjs`，隔离到公网 `/sjcj/` 子路径，访问 `http://47.120.11.60:2806/sjcj/#/canvas`
+- 部署：`app/scripts/deploy-static.cjs`，隔离到公网 `/sjcj/` 子路径，默认访问 `http://47.120.11.60:2806/sjcj/#/overview`

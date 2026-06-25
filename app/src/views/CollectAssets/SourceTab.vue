@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { sourceApi, type Source, type SourceCategory, type Step, type SourceLog, type TaskInst } from '../../api'
@@ -9,6 +10,10 @@ import SourceDetailDrawer from './SourceDetailDrawer.vue'
 import NewSourceWizard from './NewSourceWizard.vue'
 
 const ui = useUiStore()
+const route = useRoute()
+
+// 总览页下钻：?state=E / disabled 预置筛选
+const VALID_STATES = ['all', 'C', 'E', 'L', 'disabled']
 
 // ---- 分类 / 统计 ----
 const categories = ref<SourceCategory[]>([])
@@ -270,6 +275,8 @@ function onWizardSubmit() {
 
 // ---- 顶部模块按钮接线 ----
 onMounted(() => {
+  const qs = String(route.query.state ?? '')
+  if (VALID_STATES.includes(qs)) stateFilter.value = qs
   loadCategories()
   loadStats()
   loadList()

@@ -10,6 +10,7 @@ import {
   Files,
   Histogram,
   Monitor,
+  Odometer,
   QuestionFilled,
   Search,
   Upload,
@@ -21,15 +22,17 @@ import { TABS } from '../router/tabs'
 import CountUp from '../components/CountUp.vue'
 import { useUiStore } from '../stores/ui'
 import { workbenchApi, type WorkbenchSummary } from '../api'
+import companyLogo from '../assets/brand/company-logo.png'
 
 const route = useRoute()
 const router = useRouter()
 const ui = useUiStore()
-const activeKey = computed(() => route.path.split('/')[1] || 'canvas')
+const activeKey = computed(() => route.path.split('/')[1] || 'overview')
 const current = computed(() => TABS.find((t) => t.key === activeKey.value) ?? TABS[0])
 const isCanvas = computed(() => activeKey.value === 'canvas')
 
 const groupLabels = {
+  home: '首页',
   workbench: '编排工作台',
   assets: '资产管理',
   ops: '运行与验收',
@@ -45,6 +48,7 @@ const navGroups = computed(() =>
 )
 
 const pageActions: Record<string, string[]> = {
+  overview: ['刷新', '导出'],
   canvas: ['保存草稿', '试跑', '发布'],
   collect: ['批量导入', '批量操作', '新建采集源'],
   rules: ['新建规则组', '导入规则', '发布校验'],
@@ -61,6 +65,7 @@ onMounted(async () => {
 })
 
 const navIcons: Record<string, Component> = {
+  overview: Odometer,
   canvas: Connection,
   collect: Box,
   rules: Document,
@@ -76,17 +81,7 @@ const navIcons: Record<string, Component> = {
     <header class="rc-topbar">
       <div class="rc-brand">
         <span class="rc-brand-mark">
-          <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">
-            <defs>
-              <linearGradient id="brandg" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0" stop-color="#3b82f6" />
-                <stop offset="1" stop-color="#06b6d4" />
-              </linearGradient>
-            </defs>
-            <path d="M16 3 L28 10 L16 17 L4 10 Z" fill="#2563eb" />
-            <path d="M4 10 L16 17 L16 30 L4 23 Z" fill="#1d4ed8" />
-            <path d="M28 10 L28 23 L16 30 L16 17 Z" fill="url(#brandg)" />
-          </svg>
+          <img :src="companyLogo" alt="" />
         </span>
         <strong>万微数据采集中心</strong>
       </div>
@@ -246,6 +241,13 @@ const navIcons: Record<string, Component> = {
   width: 32px;
   height: 32px;
   flex: none;
+}
+
+.rc-brand-mark img {
+  display: block;
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
 }
 
 .rc-brand-mark::before {
@@ -621,23 +623,94 @@ const navIcons: Record<string, Component> = {
 }
 
 @media (max-width: 980px) {
+  .rc-app {
+    grid-template-rows: auto 1fr;
+    height: auto;
+    min-height: 100vh;
+    overflow: auto;
+  }
+
   .rc-topbar {
     height: auto;
     padding: 12px;
+    flex-wrap: wrap;
+  }
+
+  .rc-brand {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .rc-global-search {
+    order: 3;
+    width: 100%;
+    max-width: none;
+  }
+
+  .rc-top-actions {
+    flex: none;
   }
 
   .rc-shell {
     grid-template-columns: 1fr;
+    overflow: visible;
   }
 
   .rc-sidenav {
     position: static;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    height: auto;
     min-height: auto;
     max-height: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--rc-border);
+  }
+
+  .rc-main {
+    overflow: visible;
+    padding: 18px 16px;
   }
 
   .rc-summary-strip {
     grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .rc-brand strong {
+    font-size: 14px;
+  }
+
+  .rc-user span:not(.rc-avatar) {
+    display: none;
+  }
+
+  .rc-sidenav {
+    padding: 12px;
+  }
+
+  .rc-nav-group + .rc-nav-group {
+    margin-top: 12px;
+  }
+
+  .rc-nav-title {
+    margin-top: 10px;
+  }
+
+  .rc-module-head {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .rc-module-actions {
+    justify-content: flex-start;
+    padding-top: 0;
+  }
+
+  .rc-summary-strip {
+    grid-template-columns: 1fr;
   }
 }
 </style>
