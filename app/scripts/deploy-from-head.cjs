@@ -36,7 +36,8 @@ function runFile(cmd, args, opts = {}) {
 }
 
 function inherit(cmd, args, opts = {}) {
-  const res = spawnSync(cmd, args, { stdio: 'inherit', ...opts })
+  const isWin = process.platform === 'win32'
+  const res = spawnSync(cmd, args, { stdio: 'inherit', shell: isWin, ...opts })
   if (res.status !== 0) die(`${cmd} ${args.join(' ')} 失败`)
 }
 
