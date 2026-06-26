@@ -93,14 +93,15 @@ function archiveRef(root, tmp) {
 }
 
 function build(appDir) {
+  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
   if (!cfg.skipInstall) {
     console.log('→ 安装依赖（npm ci）')
-    inherit('npm', ['ci'], { cwd: appDir })
+    inherit(npm, ['ci'], { cwd: appDir })
   } else {
     console.log('⚠ 已跳过 npm ci（SJCJ_SKIP_NPM_CI=1）')
   }
   console.log(`→ 构建（VITE_BASE=${cfg.publicPath}）`)
-  inherit('npm', ['run', 'build'], { cwd: appDir, env: { ...process.env, VITE_BASE: cfg.publicPath } })
+  inherit(npm, ['run', 'build'], { cwd: appDir, env: { ...process.env, VITE_BASE: cfg.publicPath } })
   ok('构建完成')
 }
 
