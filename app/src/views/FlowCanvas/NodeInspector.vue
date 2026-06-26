@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
-import { SNATCH_TYPES, type CollectConfig } from './flowModel'
+import { SNATCH_TYPES, WEB_KIND_OPTIONS, type CollectConfig, type WebKind } from './flowModel'
 import {
   entryApi, paramApi, configApi, sourceApi, ruleApi,
   type EntryType, type Param, type Config, type CredentialRef, type RuleGroup, type Rule, type SharedConfig,
@@ -66,6 +66,15 @@ function setCC(key: string, e: Event) {
   const t = e.target as HTMLInputElement
   const val: string | boolean = t.type === 'checkbox' ? t.checked : t.value
   flow.patchCollect(id.value, { [key]: val } as Partial<CollectConfig>)
+}
+function setWebKind(kind: WebKind) {
+  flow.patchCollect(id.value, { webKind: kind })
+}
+function onWebKind(e: Event) {
+  setWebKind((e.target as HTMLSelectElement).value as WebKind)
+}
+function toggleDetail(e: Event) {
+  flow.patchCollect(id.value, { isDetail: (e.target as HTMLInputElement).checked })
 }
 function addParam(e: Event) {
   const sel = e.target as HTMLSelectElement
@@ -153,9 +162,16 @@ function onTrial() {
         <!-- 步骤 1 源配置 -->
         <template v-if="tab === 'source'">
           <div class="rc-field"><label>节点名称</label><input class="rc-input" :value="cfg.title" @input="onTitle" /></div>
-          <div class="rc-field"><label>抓取类型</label>
+          <div class="rc-field"><label>抓取类型 / 执行器</label>
             <select class="rc-select" :value="cc.snatchType" @change="setCC('snatchType', $event)">
               <option v-for="t in SNATCH_TYPES" :key="t" :value="t">{{ t }}</option>
+            </select>
+          </div>
+          <div class="rc-field"><label>网页类型</label>
+            <select class="rc-select" :value="cc.webKind" @change="onWebKind">
+              <option v-for="kind in WEB_KIND_OPTIONS" :key="kind.value" :value="kind.value">
+                {{ kind.label }} · {{ kind.desc }}
+              </option>
             </select>
           </div>
           <div class="rc-field"><label>源 URL</label>
@@ -221,7 +237,7 @@ function onTrial() {
           </div>
           <div class="rc-field"><label>新建模板选项</label>
             <div class="rc-checks">
-              <label class="rc-check"><input type="checkbox" :checked="cc.isDetail" @change="setCC('isDetail', $event)" /> 详情类数据</label>
+              <label class="rc-check"><input type="checkbox" :checked="cc.isDetail" @change="toggleDetail" /> 详情类数据</label>
               <label class="rc-check"><input type="checkbox" :checked="cc.isLogin" @change="setCC('isLogin', $event)" /> 设本配置为登陆类</label>
             </div>
           </div>
@@ -389,6 +405,7 @@ function onTrial() {
 .rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }
 .rc-input, .rc-select { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; }
 .rc-input:focus, .rc-select:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
+.rc-help-inline { margin-top: 5px; color: var(--rc-muted); font-size: 11px; line-height: 1.4; }
 .rc-input.slim { height: 30px; padding: 0 9px; }
 .rc-input.cron { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .rc-input-group { display: flex; align-items: stretch; width: 100%; }

@@ -35,6 +35,29 @@ describe('flow store 编辑动作', () => {
     expect(f.configs['web-list'].collectCfg?.url).toBe('http://new.example')
   })
 
+  it('网页抓取节点细分为列表页、详情页、文件附件页', () => {
+    expect(f.configs['web-list'].collectCfg?.webKind).toBe('list')
+    expect(f.configs['web-detail'].collectCfg?.webKind).toBe('detail')
+
+    f.insertAfter('web-detail', 'web')
+    const inserted = f.selectedId
+    expect(f.configs[inserted].collectCfg?.webKind).toBe('list')
+
+    f.patchCollect(inserted, { webKind: 'detail' })
+    expect(f.configs[inserted].collectCfg?.isDetail).toBe(true)
+
+    f.patchCollect(inserted, { webKind: 'attachment' })
+    expect(f.configs[inserted].collectCfg?.isDetail).toBe(false)
+  })
+
+  it('附件页取消详情类标记时仍保留附件类型', () => {
+    f.patchCollect('web-detail', { webKind: 'attachment' })
+    f.patchCollect('web-detail', { isDetail: false })
+
+    expect(f.configs['web-detail'].collectCfg?.webKind).toBe('attachment')
+    expect(f.configs['web-detail'].collectCfg?.isDetail).toBe(false)
+  })
+
   it('setEdgeRow 改子步骤字段', () => {
     f.setEdgeRow('web-list', 0, '新适用源')
     expect(f.edges['web-list'].rows[0][1]).toBe('新适用源')
@@ -103,6 +126,9 @@ describe('flow/recommend 意图匹配（M5.5）', () => {
   it('按 intent 直选「文件下载解析」', () => {
     const r = mockFlowRecommend({ intent: 'file-parse' })
     expect(r.flow.name).toContain('文件下载解析')
+    const fileNodeId = r.flow.main.find((id) => id.includes('web-detail'))
+    expect(fileNodeId).toBeTruthy()
+    expect(r.flow.configs[fileNodeId!].collectCfg?.webKind).toBe('attachment')
   })
 
   it('未命中 → 空白流程兜底', () => {

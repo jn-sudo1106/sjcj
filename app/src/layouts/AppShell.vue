@@ -478,10 +478,12 @@ const navIcons: Record<string, Component> = {
 }
 
 .rc-main {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   padding: 20px 24px;
-  overflow: auto;
+  overflow: hidden;
   background: transparent;
 }
 
@@ -619,7 +621,10 @@ const navIcons: Record<string, Component> = {
 }
 
 .rc-pane {
+  flex: 1;
   min-width: 0;
+  min-height: 0;
+  overflow: auto;
 }
 
 @media (max-width: 980px) {

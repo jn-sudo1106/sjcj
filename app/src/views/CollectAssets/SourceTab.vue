@@ -12,8 +12,8 @@ import NewSourceWizard from './NewSourceWizard.vue'
 const ui = useUiStore()
 const route = useRoute()
 
-// 总览页下钻：?state=E / disabled 预置筛选
-const VALID_STATES = ['all', 'C', 'E', 'L', 'disabled']
+// 总览页下钻：?state=E / external / disabled 预置筛选
+const VALID_STATES = ['all', 'C', 'E', 'L', 'external', 'disabled']
 
 // ---- 分类 / 统计 ----
 const categories = ref<SourceCategory[]>([])
@@ -316,6 +316,7 @@ onUnmounted(() => ui.clearActions())
           <el-option label="成功" value="C" />
           <el-option label="出错" value="E" />
           <el-option label="运行中" value="L" />
+          <el-option label="外部变更" value="external" />
           <el-option label="已停用" value="disabled" />
         </el-select>
         <el-select v-model="cycleFilter" style="width: 120px">

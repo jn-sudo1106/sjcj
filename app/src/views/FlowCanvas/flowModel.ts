@@ -19,9 +19,12 @@ export interface NodeConfig {
   collectCfg?: CollectConfig
 }
 
+export type WebKind = 'list' | 'detail' | 'attachment'
+
 /** 采集类节点的可编辑配置（源 / 表 / 登录 / 定时四区，对齐新建源四步与源详情） */
 export interface CollectConfig {
   snatchType: string
+  webKind: WebKind
   url: string
   sourceName: string
   category: string
@@ -56,6 +59,7 @@ export const NODE_CONFIGS: Record<string, NodeConfig> = {
     output: [['detail_url', 'url', '详情页子步骤入口'], ['title', 'string', '公告标题'], ['publish_time', 'date', '发布时间']],
     collectCfg: {
       snatchType: '[90] - 网页抓取', url: 'https://example.com/announcements?page=${page}', sourceName: '交易所公告列表 - A 股',
+      webKind: 'list',
       category: '/公告/交易所/列表', dirId: '9009245', useProxy: false, resume: true, tags: '公告, A股, 列表页',
       configMode: 'new', configId: '81909', outputTable: '2101001', inputParams: ['p-date'],
       isDetail: false, isLogin: false, needLogin: false, loginUrl: '', account: '', credentialRef: '',
@@ -71,6 +75,7 @@ export const NODE_CONFIGS: Record<string, NodeConfig> = {
     output: [['content', 'longtext', '正文'], ['attachments', 'json', '附件列表'], ['source_file', 'url', '原始文件']],
     collectCfg: {
       snatchType: '[90] - 网页抓取', url: 'https://example.com/detail/${detail_url}', sourceName: '公告详情抓取',
+      webKind: 'detail',
       category: '/公告/交易所/详情', dirId: '9009245', useProxy: false, resume: true, tags: '公告, 详情页',
       configMode: 'existing', configId: '81908', outputTable: '2101001', inputParams: [],
       isDetail: true, isLogin: true, needLogin: true, loginUrl: 'https://example.com/login', account: 'research_***', credentialRef: 'cred-zfb',
@@ -282,6 +287,12 @@ export const TEMPLATE_TO_NODE: Record<string, string> = {
 // 抓取类型选项（统一来源；NodeInspector 与种子配置共用）
 export const SNATCH_TYPES = ['[90] - 网页抓取', '[95] - 文件下载', '[150] - OCR 识别', '[155] - AI 提取', '[170] - Python 抓取']
 
+export const WEB_KIND_OPTIONS: { value: WebKind; label: string; desc: string }[] = [
+  { value: 'list', label: '列表页', desc: '分页、搜索结果、列表入口' },
+  { value: 'detail', label: '详情页', desc: '正文、详情字段、附件入口' },
+  { value: 'attachment', label: '文件附件页', desc: 'PDF、Word、Excel、图片' },
+]
+
 // 模板 → 默认抓取类型（新插入采集节点用）
 export const TEMPLATE_TO_SNATCH: Record<string, string> = {
   web: '[90] - 网页抓取',
@@ -489,8 +500,8 @@ export const PRESET_INTENTS: PresetIntent[] = [
     rationale: '识别为「公共网页数据抓取」：先抓列表页拿到详情链接，再抓详情正文，清洗字段后落表。',
     build: () =>
       buildFlow('公共网页抓取链路', [
-        { template: 'web', name: '网页抓取（列表）' },
-        { template: 'web', name: '网页抓取（详情）' },
+        { template: 'web', name: '网页抓取（列表）', patch: { webKind: 'list', isDetail: false } },
+        { template: 'web', name: '网页抓取（详情）', patch: { webKind: 'detail', isDetail: true } },
         { template: 'clean', name: '字段清洗' },
         { template: 'output', name: '落表输出' },
       ]),
@@ -502,8 +513,8 @@ export const PRESET_INTENTS: PresetIntent[] = [
     rationale: '识别为「登录态站点抓取」：列表页需登录，抓详情后清洗落表；登录凭据在节点登录配置里只存引用。',
     build: () =>
       buildFlow('登录站点抓取链路', [
-        { template: 'web', name: '网页抓取（列表·需登录）', patch: { needLogin: true } },
-        { template: 'web', name: '网页抓取（详情）' },
+        { template: 'web', name: '网页抓取（列表·需登录）', patch: { webKind: 'list', isDetail: false, needLogin: true } },
+        { template: 'web', name: '网页抓取（详情）', patch: { webKind: 'detail', isDetail: true } },
         { template: 'clean', name: '字段清洗' },
         { template: 'output', name: '落表输出' },
       ]),
@@ -515,7 +526,7 @@ export const PRESET_INTENTS: PresetIntent[] = [
     rationale: '识别为「文件下载解析」：下载文件 → 解析 → 字段抽取 → 落表。',
     build: () =>
       buildFlow('文件下载解析链路', [
-        { template: 'file', name: '文件下载' },
+        { template: 'file', name: '文件下载', patch: { webKind: 'attachment', isDetail: false, snatchType: '[95] - 文件下载' } },
         { template: 'parse', name: '文件解析' },
         { template: 'map', name: '字段抽取' },
         { template: 'output', name: '落表输出' },

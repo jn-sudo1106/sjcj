@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, type Component } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Bell, Box, CircleCheck, Document, Files, Refresh } from '@element-plus/icons-vue'
+import { Bell, Box, CircleCheck, Document, Files } from '@element-plus/icons-vue'
 import { overviewApi, type OverviewSummary, type TrendPoint } from '../../api'
 import { useUiStore } from '../../stores/ui'
 import CountUp from '../../components/CountUp.vue'
@@ -17,6 +17,7 @@ const data = ref<OverviewSummary | null>(null)
 const trend = ref<TrendPoint[]>([])
 const days = ref(7)
 const loading = ref(false)
+const loadError = ref('')
 
 async function loadSummary() {
   data.value = await overviewApi.summary()
@@ -28,8 +29,11 @@ async function loadTrend() {
 
 async function loadAll() {
   loading.value = true
+  loadError.value = ''
   try {
     await Promise.all([loadSummary(), loadTrend()])
+  } catch (e) {
+    loadError.value = e instanceof Error ? e.message : '数据加载失败，请稍后重试'
   } finally {
     loading.value = false
   }
@@ -110,12 +114,20 @@ const runtimeRows = computed(() =>
 const alertCards = computed(() => {
   const exceptions = data.value?.exceptions ?? []
   return [
-    { label: '紧急', value: exceptions.filter((e) => e.kind === 'error').length, cls: 'urgent' },
-    { label: '重要', value: exceptions.filter((e) => e.kind === 'external').length || data.value?.kpi.alarms || 0, cls: 'major' },
-    { label: '一般', value: exceptions.filter((e) => e.kind === 'disabled').length || data.value?.kpi.errorSources || 0, cls: 'normal' },
-    { label: '提示', value: data.value?.kpi.runningRuns ?? 0, cls: 'info' },
+    { label: '紧急', value: exceptions.filter((e) => e.kind === 'error').length, cls: 'urgent', level: 'error' },
+    { label: '重要', value: exceptions.filter((e) => e.kind === 'external').length || data.value?.kpi.alarms || 0, cls: 'major', level: 'external' },
+    { label: '一般', value: exceptions.filter((e) => e.kind === 'disabled').length || data.value?.kpi.errorSources || 0, cls: 'normal', level: 'disabled' },
+    { label: '提示', value: data.value?.kpi.runningRuns ?? 0, cls: 'info', level: 'running' },
   ]
 })
+
+function onAlert(level: string) {
+  if (level === 'error') return goCollect('E')
+  if (level === 'external') return goCollect('external')
+  if (level === 'disabled') return goCollect('disabled')
+  if (level === 'running') return router.push({ path: '/runs', query: { state: 'L' } })
+  return router.push('/tools')
+}
 
 onMounted(async () => {
   await loadAll()
@@ -131,11 +143,18 @@ onUnmounted(() => ui.clearActions())
 
 <template>
   <div v-loading="loading" class="ov">
+    <div v-if="loadError" class="ov-empty">
+      <div class="ov-empty-icon">!</div>
+      <div class="ov-empty-title">加载失败</div>
+      <div class="ov-empty-text">{{ loadError }}</div>
+      <button class="ov-empty-btn" type="button" @click="loadAll">重新加载</button>
+    </div>
+
+    <template v-else-if="data">
     <div class="ov-intro">
       <div>实时掌握采集资产运行态势，提升数据采集稳定性与治理效率。</div>
       <div class="ov-fresh">
         <span>数据更新时间：{{ updatedAt }}</span>
-        <button type="button" @click="loadAll"><el-icon><Refresh /></el-icon>刷新</button>
       </div>
     </div>
 
@@ -146,6 +165,7 @@ onUnmounted(() => ui.clearActions())
         class="ov-kpi"
         :class="[k.tone, { clickable: !!k.to }]"
         type="button"
+        :aria-label="`${k.label}：${k.value}${k.unit ?? ''}`"
         @click="k.to?.()"
       >
         <span class="ov-kpi-copy">
@@ -247,7 +267,7 @@ onUnmounted(() => ui.clearActions())
             <button class="ov-more" type="button" @click="goCollect('E')">查看更多 ›</button>
           </div>
           <div class="ov-alerts">
-            <button v-for="a in alertCards" :key="a.label" class="ov-alert" :class="a.cls" type="button" @click="router.push('/tools')">
+            <button v-for="a in alertCards" :key="a.label" class="ov-alert" :class="a.cls" type="button" :aria-label="`${a.label}告警 ${a.value} 条`" @click="onAlert(a.level)">
               <span>{{ a.label }}</span>
               <b>{{ a.value }}</b>
             </button>
@@ -281,6 +301,7 @@ onUnmounted(() => ui.clearActions())
         <div v-if="!(data?.exceptions ?? []).length" class="ov-ex-empty muted">暂无异常，采集资产健康</div>
       </div>
     </div>
+    </template>
   </div>
 </template>
 
@@ -291,8 +312,8 @@ onUnmounted(() => ui.clearActions())
   display: flex;
   flex-direction: column;
   gap: 12px;
-  height: calc(100vh - 168px);
-  min-height: 720px;
+  height: 100%;
+  min-height: 0;
   overflow: auto;
   padding-right: 2px;
 }
@@ -308,6 +329,10 @@ onUnmounted(() => ui.clearActions())
   gap: 14px;
   color: #334155;
   font-size: 13px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.04) 0%, rgba(6, 182, 212, 0.04) 100%);
+  border: 1px solid rgba(37, 99, 235, 0.06);
 }
 
 .ov-fresh {
@@ -319,20 +344,6 @@ onUnmounted(() => ui.clearActions())
   white-space: nowrap;
 }
 
-.ov-fresh button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 32px;
-  padding: 0 12px;
-  border: 1px solid #dbe3ee;
-  border-radius: 6px;
-  background: #fff;
-  color: #334155;
-  font-weight: 700;
-  cursor: pointer;
-}
-
 .ov-kpis {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -340,6 +351,7 @@ onUnmounted(() => ui.clearActions())
 }
 
 .ov-kpi {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -352,7 +364,41 @@ onUnmounted(() => ui.clearActions())
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
   text-align: left;
   cursor: default;
+  overflow: hidden;
+  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+  animation: ov-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
+
+.ov-kpi::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #2563eb, #06b6d4);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.ov-kpi.ok::before {
+  background: linear-gradient(90deg, #22c55e, #06b6d4);
+}
+
+.ov-kpi.err::before {
+  background: linear-gradient(90deg, #ef4444, #f97316);
+}
+
+.ov-kpi.indigo::before {
+  background: linear-gradient(90deg, #7c3aed, #2563eb);
+}
+
+.ov-kpi:nth-child(1) { animation-delay: 0.04s; }
+.ov-kpi:nth-child(2) { animation-delay: 0.08s; }
+.ov-kpi:nth-child(3) { animation-delay: 0.12s; }
+.ov-kpi:nth-child(4) { animation-delay: 0.16s; }
+.ov-kpi:nth-child(5) { animation-delay: 0.20s; }
+.ov-kpi:nth-child(6) { animation-delay: 0.24s; }
 
 .ov-kpi.clickable {
   cursor: pointer;
@@ -360,8 +406,12 @@ onUnmounted(() => ui.clearActions())
 
 .ov-kpi.clickable:hover {
   border-color: #bfdbfe;
-  box-shadow: 0 12px 30px rgba(37, 99, 235, 0.1);
-  transform: translateY(-1px);
+  box-shadow: 0 12px 30px rgba(37, 99, 235, 0.12), 0 0 0 1px rgba(37, 99, 235, 0.08);
+  transform: translateY(-3px);
+}
+
+.ov-kpi.clickable:hover::before {
+  opacity: 1;
 }
 
 .ov-kpi-copy {
@@ -417,6 +467,12 @@ onUnmounted(() => ui.clearActions())
   color: #2563eb;
   background: #eff6ff;
   font-size: 28px;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.ov-kpi.clickable:hover .ov-kpi-icon {
+  transform: scale(1.08);
+  box-shadow: 0 4px 16px rgba(37, 99, 235, 0.18);
 }
 
 .ov-kpi.ok .ov-kpi-icon {
@@ -439,6 +495,7 @@ onUnmounted(() => ui.clearActions())
   grid-template-columns: var(--ov-grid-columns);
   gap: 12px;
   align-items: stretch;
+  animation: ov-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) 0.28s both;
 }
 
 .ov-bottom-grid {
@@ -446,6 +503,7 @@ onUnmounted(() => ui.clearActions())
   grid-template-columns: var(--ov-grid-columns);
   gap: 12px;
   align-items: stretch;
+  animation: ov-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) 0.38s both;
 }
 
 .ov-side-stack {
@@ -520,6 +578,12 @@ onUnmounted(() => ui.clearActions())
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
+  transition: color 0.15s ease, opacity 0.15s ease;
+}
+
+.ov-more:hover {
+  color: #1d4ed8;
+  opacity: 0.85;
 }
 
 .ov-src-name {
@@ -579,6 +643,7 @@ onUnmounted(() => ui.clearActions())
 
 .ov-live-dot.run {
   color: #2563eb;
+  animation: ov-dot-pulse 1.8s ease-in-out infinite;
 }
 
 .ov-live-time {
@@ -624,6 +689,12 @@ onUnmounted(() => ui.clearActions())
   border-radius: 8px;
   background: #f8fbff;
   cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.25s ease, border-color 0.2s ease;
+}
+
+.ov-alert:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
 }
 
 .ov-alert span {
@@ -700,6 +771,90 @@ onUnmounted(() => ui.clearActions())
   padding: 28px 8px;
   text-align: center;
   font-size: 12px;
+}
+
+@keyframes ov-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ov-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 60px 20px;
+  text-align: center;
+}
+
+.ov-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #fef2f2;
+  color: #ef4444;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.ov-empty-title {
+  margin-top: 8px;
+  color: #0f1e46;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.ov-empty-text {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.ov-empty-btn {
+  margin-top: 12px;
+  height: 34px;
+  padding: 0 20px;
+  border: 1px solid #2563eb;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.ov-empty-btn:hover {
+  background: #1d4ed8;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.2);
+}
+
+.ov .rc-card {
+  transition: box-shadow 0.25s ease, border-color 0.25s ease;
+}
+
+.ov .rc-card:hover {
+  border-color: #cfe0fb;
+  box-shadow: 0 12px 32px rgba(37, 99, 235, 0.08);
+}
+
+@keyframes ov-dot-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.15);
+  }
 }
 
 @media (max-width: 1480px) {

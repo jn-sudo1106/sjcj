@@ -141,6 +141,7 @@ function matches(s: Source, p?: Record<string, unknown>): boolean {
   const state = String(p.state ?? '')
   if (state && state !== 'all') {
     if (state === 'disabled') { if (!s.disabled) return false }
+    else if (state === 'external') { if (!s.externalChanged) return false }
     else if (s.disabled || s.state !== state) return false
   }
   if (p.alarm === true && !s.alarm) return false

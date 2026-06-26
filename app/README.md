@@ -17,6 +17,7 @@ npm run test      # 单元测试(Vitest)
 npm run lint      # ESLint 检查（lint:fix 自动修复）
 npm run format    # Prettier 格式化
 npm run deploy    # 隔离部署（见下「部署」）
+npm run deploy:head # 从已提交 HEAD 导出干净副本部署
 ```
 
 ## 目录结构
@@ -73,6 +74,14 @@ app/
 ```bash
 npm run deploy   # 构建（VITE_BASE=/sjcj/）+ git 守卫；未设 SJCJ_REMOTE_HOST 时只本地构建并打印发布命令
 ```
+
+多人同时改代码时，推荐从仓库根目录使用一键部署入口：
+
+```bash
+node deploy.js
+```
+
+该入口调用 `scripts/deploy-from-head.cjs`，只部署已提交的 `HEAD`，不会把当前工作区未提交改动、设计稿或临时文件带到服务器。默认目标为 `leo@47.120.11.60:/home/leo/sjcj/public/`，SSH 端口 `5031`。如需密码登录，在本机通过 `SSHPASS` 环境变量提供，不要写入仓库。
 
 实际服务器 SSH 为**密码登录**（`leo@47.120.11.60`，端口 `5031`；凭据见 wan 项目 `deploy.js`），与脚本默认的免密 rsync 不同，故产物用手动 rsync 发布（本机需 `sshpass`）：
 

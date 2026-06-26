@@ -250,7 +250,12 @@ export const useFlowStore = defineStore('flow', () => {
   // ---- 节点字段编辑 ----
   function patchCollect(id: string, patch: Partial<CollectConfig>) {
     const c = configs[id]
-    if (c?.collectCfg) Object.assign(c.collectCfg, patch)
+    if (!c?.collectCfg) return
+    const next = { ...patch }
+    if (next.webKind) next.isDetail = next.webKind === 'detail'
+    else if (next.isDetail) next.webKind = 'detail'
+    else if (next.isDetail === false && c.collectCfg.webKind === 'detail') next.webKind = 'list'
+    Object.assign(c.collectCfg, next)
   }
   function setBaseRow(id: string, index: number, value: string) {
     const c = configs[id]

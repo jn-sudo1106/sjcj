@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { runApi, type RunRow, type RunNode } from '../../api'
 import { useUiStore } from '../../stores/ui'
@@ -7,6 +8,7 @@ import { useRuntimeStore } from '../../stores/runtime'
 
 const ui = useUiStore()
 const runtime = useRuntimeStore()
+const route = useRoute()
 
 const mockRuns = ref<RunRow[]>([])
 const runs = computed(() => [...runtime.runs, ...mockRuns.value]) // 试跑产生的 run 叠加在 mock 之上
@@ -36,7 +38,10 @@ function stMeta(s: string) {
 onMounted(async () => {
   mockRuns.value = await runApi.runs()
   Object.assign(stats, await runApi.runStats())
-  const first = runs.value.find((r) => r.state === 'C') ?? runs.value[0]
+  const queryState = Array.isArray(route.query.state) ? route.query.state[0] : route.query.state
+  const first = (queryState ? runs.value.find((r) => r.state === queryState) : null)
+    ?? runs.value.find((r) => r.state === 'C')
+    ?? runs.value[0]
   if (first) await selectRun(first)
   ui.registerAction('导出记录', () => ElMessage.info('导出记录：演示环境占位'))
 })

@@ -32,4 +32,4 @@ npm run dev        # http://localhost:5173
 - 全程 mock，二期真接入只换 `app/src/api` 适配层（界面零改动）
 - 首页 + 7 业务模块：首页总览 / 流程画布 / 采集资产 / 规则资产 / 指标中心 / 数据查看 / 运行记录 / 监控工具
 - 质量：Vitest 单元测试 + ESLint + CI（[.github/workflows/ci.yml](.github/workflows/ci.yml)）
-- 部署：`app/scripts/deploy-static.cjs`，隔离到公网 `/sjcj/` 子路径，默认访问 `http://47.120.11.60:2806/sjcj/#/overview`
+- 部署：`node deploy.js` 可从已提交的 `HEAD` 导出干净副本并发布到公网 `/sjcj/` 子路径；默认访问 `http://47.120.11.60:2806/sjcj/#/overview`
