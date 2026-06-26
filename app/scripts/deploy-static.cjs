@@ -14,8 +14,9 @@ const cfg = {
   remotePath: process.env.SJCJ_REMOTE_PATH || '/home/leo/sjcj',
   publicPath: process.env.SJCJ_PUBLIC_PATH || '/sjcj/',
   wanPort: process.env.SJCJ_WAN_LOCAL_PORT || '806',
+  sshPort: process.env.SJCJ_SSH_PORT || '5031',
   viteBase: process.env.VITE_BASE || '/sjcj/',
-  remoteHost: process.env.SJCJ_REMOTE_HOST || '', // 形如 user@47.120.11.60；为空则只本地构建并打印发布命令
+  remoteHost: (process.env.SJCJ_REMOTE_HOST || '').trim(), // trim 防止 cmd set 尾部空格
   skipGitCheck: process.env.SJCJ_SKIP_GIT_CHECK === '1',
 }
 
@@ -58,20 +59,34 @@ function buildDist() {
   ok('构建完成 → dist/')
 }
 
-// 4) 发布到隔离目录（rsync）
+// 4) 发布到隔离目录（rsync 优先，无 rsync 时降级 scp）
 function deploy() {
-  const dist = path.join(__dirname, '..', 'dist') + '/'
+  const dist = path.join(__dirname, '..', 'dist')
   const target = `${cfg.remotePath}/public`
   if (!cfg.remoteHost) {
     console.log(`\nℹ 未设置 SJCJ_REMOTE_HOST，已仅完成本地构建。`)
-    console.log(`  手动发布：rsync -az --delete "${dist}" <user@host>:${target}/`)
+    console.log(`  设置后重新运行：set SJCJ_REMOTE_HOST=leo@47.120.11.60`)
     console.log(`  发布后访问：http://47.120.11.60:2806${cfg.publicPath}#/canvas`)
     return
   }
-  console.log(`→ rsync 到 ${cfg.remoteHost}:${target}`)
-  execSync(`rsync -az --delete "${dist}" "${cfg.remoteHost}:${target}/"`, { stdio: 'inherit' })
+  // 检测 rsync
+  let hasRsync = false
+  try { execSync('rsync --version', { stdio: 'ignore' }); hasRsync = true } catch { /* noop */ }
+
+  if (hasRsync) {
+    const distSlash = dist + '/'
+    console.log(`→ rsync 到 ${cfg.remoteHost}:${target}`)
+    execSync(`rsync -az --delete -e "ssh -p ${cfg.sshPort}" "${distSlash}" "${cfg.remoteHost}:${target}/"`, { stdio: 'inherit' })
+  } else {
+    console.log(`⚠ rsync 不可用，改用 scp（Windows OpenSSH）`)
+    console.log(`→ scp 到 ${cfg.remoteHost}:${target}`)
+    // 先 ssh 清空并重建目录，再 scp 上传
+    execSync(`ssh -p ${cfg.sshPort} -o StrictHostKeyChecking=accept-new ${cfg.remoteHost} "rm -rf '${target}' && mkdir -p '${target}'"`, { stdio: 'inherit' })
+    execSync(`scp -P ${cfg.sshPort} -o StrictHostKeyChecking=accept-new -r "${dist}/." "${cfg.remoteHost}:${target}/"`, { stdio: 'inherit' })
+  }
   ok(`已发布到 ${cfg.remoteHost}:${target}（公网 ${cfg.publicPath} 下）`)
 }
+
 
 console.log('=== sjcj 静态部署（隔离方案）===')
 guardConfig()
