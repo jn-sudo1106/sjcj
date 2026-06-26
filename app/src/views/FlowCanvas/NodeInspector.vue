@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
-import { SNATCH_TYPES, WEB_KIND_OPTIONS, type CollectConfig, type WebKind } from './flowModel'
+import { WEB_KIND_OPTIONS, type CollectConfig, type WebKind } from './flowModel'
 import {
   entryApi, paramApi, configApi, sourceApi, ruleApi,
   type EntryType, type Param, type Config, type CredentialRef, type RuleGroup, type Rule, type SharedConfig,
