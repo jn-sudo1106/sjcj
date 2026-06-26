@@ -20,7 +20,6 @@ const form = reactive({
   name: '',
   url: '',
   snatchType: 'list',
-  category: '/基金类/支付宝评论',
   cycle: '每日',
   mainTable: '',
   dedupKey: '',
@@ -75,14 +74,7 @@ function submit() {
             <el-option label="文件下载" value="file" />
           </el-select>
         </el-form-item>
-        <el-form-item label="源分类">
-          <el-select v-model="form.category" style="width: 100%">
-            <el-option label="基金类 / 支付宝评论" value="/基金类/支付宝评论" />
-            <el-option label="基金类 / 天天基金" value="/基金类/天天基金" />
-            <el-option label="股票类 / 公告" value="/股票类/公告" />
-            <el-option label="舆情类 / 微博" value="/舆情类/微博" />
-          </el-select>
-        </el-form-item>
+
         <el-form-item label="采集周期">
           <el-select v-model="form.cycle" style="width: 100%">
             <el-option v-for="c in ['实时', '每日', '每周', '每月']" :key="c" :label="c" :value="c" />
@@ -123,7 +115,7 @@ function submit() {
           <dt>源名称</dt><dd>{{ form.name || '—' }}</dd>
           <dt>源 URL</dt><dd>{{ form.url || '—' }}</dd>
           <dt>抓取类型</dt><dd>{{ form.snatchType }}</dd>
-          <dt>源分类</dt><dd>{{ form.category }}</dd>
+
           <dt>采集周期</dt><dd>{{ form.cycle }}</dd>
           <dt>输出主表</dt><dd>{{ form.mainTable || '—' }}</dd>
           <dt>去重键</dt><dd>{{ form.dedupKey || '—' }}</dd>

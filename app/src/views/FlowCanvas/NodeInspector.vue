@@ -18,7 +18,7 @@ const statusText = computed(() => (cfg.value?.disabled ? '已停用' : (cfg.valu
 const statusClass = computed(() => (cfg.value?.disabled || cfg.value?.planned ? 'warn' : 'ok'))
 
 const STEPS: [string, string, string, string][] = [
-  ['source', '1', '源配置', '抓取类型、源 URL、源名称'],
+  ['source', '1', '源配置', '源 URL、源名称'],
   ['table', '2', '表配置', '输出表、字段、去重键'],
   ['login', '3', '登录配置', '登陆 URL、账号、密码'],
   ['finish', '4', '完成', '提交确认'],
@@ -162,10 +162,13 @@ function onTrial() {
         <!-- 步骤 1 源配置 -->
         <template v-if="tab === 'source'">
           <div class="rc-field"><label>节点名称</label><input class="rc-input" :value="cfg.title" @input="onTitle" /></div>
-          <div class="rc-field"><label>抓取类型 / 执行器</label>
-            <select class="rc-select" :value="cc.snatchType" @change="setCC('snatchType', $event)">
-              <option v-for="t in SNATCH_TYPES" :key="t" :value="t">{{ t }}</option>
-            </select>
+          <div class="rc-field"><label>源 URL</label>
+            <div class="rc-input-group">
+              <input class="rc-input" :value="cc.url" @input="setCC('url', $event)" />
+              <button class="rc-input-action" type="button" title="复制" @click="ElMessage.info('复制链接（演示）')">复制</button>
+              <button class="rc-input-action" type="button" title="打开" @click="ElMessage.info('打开链接（演示）')">↗</button>
+            </div>
+
           </div>
           <div class="rc-field"><label>网页类型</label>
             <select class="rc-select" :value="cc.webKind" @change="onWebKind">
@@ -173,14 +176,6 @@ function onTrial() {
                 {{ kind.label }} · {{ kind.desc }}
               </option>
             </select>
-          </div>
-          <div class="rc-field"><label>源 URL</label>
-            <div class="rc-input-group">
-              <input class="rc-input" :value="cc.url" @input="setCC('url', $event)" />
-              <button class="rc-input-action" type="button" title="复制" @click="ElMessage.info('复制链接（演示）')">复制</button>
-              <button class="rc-input-action" type="button" title="打开" @click="ElMessage.info('打开链接（演示）')">↗</button>
-            </div>
-            <div class="rc-file-upload"><span>上传本地文件进行配置</span><button class="rc-btn" type="button" @click="ElMessage.info('上传本地文件进行配置（演示占位）')">选择文件</button></div>
           </div>
           <div class="rc-field"><label>源名称</label><input class="rc-input" :value="cc.sourceName" @input="setCC('sourceName', $event)" /></div>
           <div class="rc-field"><label>源分类</label>
