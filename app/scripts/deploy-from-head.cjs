@@ -87,7 +87,7 @@ function archiveRef(root, tmp) {
   } catch {
     die(`无法导出 ${cfg.ref}，请确认该 ref 存在且已提交`)
   }
-  const res = spawnSync('tar', ['-x', '-C', tmp], { input: archive, stdio: ['pipe', 'inherit', 'inherit'] })
+  const res = spawnSync('tar', ['-x', '-f', '-', '-C', tmp], { input: archive, stdio: ['pipe', 'inherit', 'inherit'] })
   if (res.status !== 0) die('解压 git archive 失败')
   ok(`已导出干净副本：${tmp}`)
 }
@@ -105,13 +105,30 @@ function build(appDir) {
 }
 
 function deploy(appDir) {
-  const dist = path.join(appDir, 'dist') + path.sep
-  const target = `${cfg.remoteHost}:${cfg.remotePath}/public/`
-  const ssh = process.env.SSHPASS
-    ? `sshpass -e ssh -p ${cfg.sshPort} -o StrictHostKeyChecking=accept-new`
-    : `ssh -p ${cfg.sshPort} -o StrictHostKeyChecking=accept-new`
-  console.log(`→ rsync 到 ${target}`)
-  inherit('rsync', ['-az', '--delete', '-e', ssh, dist, target])
+  const dist = path.join(appDir, 'dist')
+  const remotePath = `${cfg.remotePath}/public`
+  const target = `${cfg.remoteHost}:${remotePath}/`
+  const sshOpts = `-p ${cfg.sshPort} -o StrictHostKeyChecking=accept-new`
+
+  // 检测 rsync
+  let hasRsync = false
+  try { execFileSync('rsync', ['--version'], { stdio: 'ignore' }); hasRsync = true } catch { /* noop */ }
+
+  if (hasRsync) {
+    const distSlash = dist + path.sep
+    const ssh = process.env.SSHPASS
+      ? `sshpass -e ssh ${sshOpts}`
+      : `ssh ${sshOpts}`
+    console.log(`→ rsync 到 ${target}`)
+    inherit('rsync', ['-az', '--delete', '-e', ssh, distSlash, target])
+  } else {
+    console.log(`⚠ rsync 不可用，改用 scp（Windows OpenSSH）`)
+    console.log(`→ scp 到 ${target}`)
+    inherit('ssh', ['-p', cfg.sshPort, '-o', 'StrictHostKeyChecking=accept-new',
+      cfg.remoteHost, `rm -rf '${remotePath}' && mkdir -p '${remotePath}'`])
+    inherit('scp', ['-P', cfg.sshPort, '-o', 'StrictHostKeyChecking=accept-new',
+      '-r', `${dist}${path.sep}.`, target])
+  }
   ok(`已发布：http://47.120.11.60:2806${cfg.publicPath}#/overview`)
 }
 
