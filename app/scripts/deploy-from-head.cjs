@@ -106,44 +106,119 @@ function build(appDir) {
   ok('构建完成')
 }
 
-function deploy(appDir) {
+const sshCfg = {
+  host: '47.120.11.60',
+  port: parseInt(cfg.sshPort, 10),
+  username: 'leo',
+  password: 'mcafee123',
+  readyTimeout: 15000,
+  hostVerifier: () => true,
+}
+
+function sshExec(conn, cmd) {
+  return new Promise((resolve, reject) => {
+    conn.exec(cmd, (err, stream) => {
+      if (err) return reject(err)
+      let out = ''
+      stream.on('data', d => { out += d })
+      stream.stderr.on('data', d => process.stderr.write(d))
+      stream.on('close', code => code === 0 ? resolve(out) : reject(new Error(`exit ${code}: ${cmd}`)))
+    })
+  })
+}
+
+function sftpUploadDir(sftp, localDir, remoteDir) {
+  return new Promise((resolve, reject) => {
+    const tasks = []
+    function walk(local, remote) {
+      const entries = fs.readdirSync(local, { withFileTypes: true })
+      for (const e of entries) {
+        const lp = path.join(local, e.name)
+        const rp = remote + '/' + e.name
+        if (e.isDirectory()) {
+          tasks.push({ type: 'dir', remote: rp })
+          walk(lp, rp)
+        } else {
+          tasks.push({ type: 'file', local: lp, remote: rp })
+        }
+      }
+    }
+    tasks.push({ type: 'dir', remote: remoteDir })
+    walk(localDir, remoteDir)
+
+    let i = 0
+    let fileCount = 0
+    const total = tasks.filter(t => t.type === 'file').length
+    function next() {
+      if (i >= tasks.length) return resolve(fileCount)
+      const t = tasks[i++]
+      if (t.type === 'dir') {
+        sftp.mkdir(t.remote, err => {
+          // ignore EEXIST
+          next()
+        })
+      } else {
+        sftp.fastPut(t.local, t.remote, err => {
+          if (err) return reject(new Error(`上传失败 ${t.remote}: ${err.message}`))
+          fileCount++
+          if (fileCount % 10 === 0 || fileCount === total) {
+            process.stdout.write(`\r  已上传 ${fileCount}/${total} 个文件`)
+          }
+          next()
+        })
+      }
+    }
+    next()
+  })
+}
+
+async function deploy(appDir) {
   const dist = path.join(appDir, 'dist')
   const remotePath = `${cfg.remotePath}/public`
-  const target = `${cfg.remoteHost}:${remotePath}/`
-  const sshOpts = `-p ${cfg.sshPort} -o StrictHostKeyChecking=accept-new`
 
-  // 检测 rsync
-  let hasRsync = false
-  try { execFileSync('rsync', ['--version'], { stdio: 'ignore' }); hasRsync = true } catch { /* noop */ }
+  console.log(`→ 通过 ssh2 连接 ${sshCfg.host}:${sshCfg.port}`)
 
-  if (hasRsync) {
-    const distSlash = dist + path.sep
-    const ssh = process.env.SSHPASS
-      ? `sshpass -e ssh ${sshOpts}`
-      : `ssh ${sshOpts}`
-    console.log(`→ rsync 到 ${target}`)
-    inherit('rsync', ['-az', '--delete', '-e', ssh, distSlash, target])
-  } else {
-    console.log(`⚠ rsync 不可用，改用 scp（Windows OpenSSH）`)
-    console.log(`→ scp 到 ${target}`)
-    inherit('ssh', ['-p', cfg.sshPort, '-o', 'StrictHostKeyChecking=accept-new',
-      cfg.remoteHost, `rm -rf '${remotePath}' && mkdir -p '${remotePath}'`])
-    inherit('scp', ['-P', cfg.sshPort, '-o', 'StrictHostKeyChecking=accept-new',
-      '-r', `${dist}${path.sep}.`, target])
-  }
+  const { Client } = require('ssh2')
+  const conn = new Client()
+
+  await new Promise((resolve, reject) => {
+    conn.on('ready', resolve)
+    conn.on('error', reject)
+    conn.connect(sshCfg)
+  })
+  ok('SSH 连接成功')
+
+  // 清空并重建目录
+  console.log(`→ 清理远端目录 ${remotePath}`)
+  await sshExec(conn, `rm -rf '${remotePath}' && mkdir -p '${remotePath}'`)
+
+  // SFTP 上传
+  console.log(`→ SFTP 上传 dist/ → ${remotePath}`)
+  const sftp = await new Promise((resolve, reject) => {
+    conn.sftp((err, s) => err ? reject(err) : resolve(s))
+  })
+  const count = await sftpUploadDir(sftp, dist, remotePath)
+  console.log(`\n`)
+  ok(`已上传 ${count} 个文件`)
+
+  conn.end()
   ok(`已发布：http://47.120.11.60:2806${cfg.publicPath}#/overview`)
 }
 
-console.log('=== sjcj HEAD 一键部署 ===')
-guardConfig()
-const root = repoRoot()
-warnGitState(root)
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sjcj-deploy-'))
-try {
-  archiveRef(root, tmp)
-  build(path.join(tmp, 'app'))
-  deploy(path.join(tmp, 'app'))
-} finally {
-  if (cfg.keepWorkdir) console.log(`ℹ 保留临时目录：${tmp}`)
-  else fs.rmSync(tmp, { recursive: true, force: true })
+async function main() {
+  console.log('=== sjcj HEAD 一键部署 ===')
+  guardConfig()
+  const root = repoRoot()
+  warnGitState(root)
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sjcj-deploy-'))
+  try {
+    archiveRef(root, tmp)
+    build(path.join(tmp, 'app'))
+    await deploy(path.join(tmp, 'app'))
+  } finally {
+    if (cfg.keepWorkdir) console.log(`ℹ 保留临时目录：${tmp}`)
+    else fs.rmSync(tmp, { recursive: true, force: true })
+  }
 }
+
+main().catch(e => { console.error(`\n✗ 部署失败：${e.message}`); process.exit(1) })
