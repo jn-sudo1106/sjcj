@@ -308,36 +308,50 @@ export interface LibItem { template: string; code: string; name: string; desc: s
 export interface LibGroup { title: string; items: LibItem[] }
 
 export const LIB_GROUPS: LibGroup[] = [
-  { title: '采集类', items: [
-    { template: 'web', code: '90', name: '网页抓取', desc: '源 URL、配置、子步骤', pill: 'p1' },
-    { template: 'file', code: '95', name: '文件下载', desc: '附件、原始文件、入库', pill: 'p1' },
-    { template: 'python', code: '170', name: 'Python 抓取', desc: '青龙脚本、待确认权限', pill: 'p2' },
-  ] },
-  { title: '解析结构化类', items: [
-    { template: 'parse', code: 'PARSE', name: '文件解析', desc: 'PDF/Word/Excel/图片解析', pill: 'p1' },
-    { template: 'ocr', code: '150', name: 'OCR 识别', desc: '待执行器确认', pill: 'plan', planned: true },
-    { template: 'ai', code: '155', name: 'AI 提取', desc: '待执行器确认', pill: 'plan', planned: true },
-    { template: 'map', code: 'MAP', name: '字段抽取 / 结构化映射', desc: '文本字段到目标 schema', pill: 'p1' },
-  ] },
-  { title: '清洗类', items: [
-    { template: 'clean', code: 'CLEAN', name: '字段清洗 / 格式转换', desc: '函数工具、空值、单位、日期', pill: 'p1' },
-    { template: 'dedupe', code: 'DEDUP', name: '去重处理', desc: '去重字段、重复策略', pill: 'p1' },
-  ] },
-  { title: '校验类', items: [
-    { template: 'check', code: '300', name: '完整性 / 阈值校验', desc: '质量门禁、异常流转', pill: 'p1' },
-  ] },
-  { title: '规则类', items: [
-    { template: 'rule', code: 'RULE', name: '规则处理', desc: '规则组、表达式、配置', pill: 'p1' },
-    { template: 'rule-trace', code: 'TRACE', name: '规则 Trace', desc: '命中、过滤、失败原因', pill: 'p1' },
-  ] },
-  { title: '输出类', items: [
-    { template: 'output', code: 'TABLE', name: '落表输出', desc: '输出表、schema、去重键', pill: 'p1' },
-    { template: 'metric', code: 'M', name: '指标引用', desc: '跳转指标中心，不编辑口径', pill: 'p1' },
-  ] },
-  { title: '通知类', items: [
-    { template: 'mail', code: '400', name: '提取数据发邮件', desc: '待执行器确认', pill: 'plan', planned: true },
-    { template: 'alert', code: 'ALERT', name: '异常告警', desc: '失败、阻断、恢复通知', pill: 'p2', planned: true },
-  ] },
+  {
+    title: '采集类', items: [
+      { template: 'web', code: '90', name: '网页抓取', desc: '源 URL、配置、子步骤', pill: 'p1' },
+      { template: 'file', code: '95', name: '文件下载', desc: '附件、原始文件、入库', pill: 'p1' },
+      { template: 'python', code: '170', name: 'Python 抓取', desc: '青龙脚本、待确认权限', pill: 'p2' },
+    ]
+  },
+  {
+    title: '解析结构化', items: [
+      { template: 'parse', code: 'PARSE', name: '文件解析', desc: 'PDF/Word/Excel/图片解析', pill: 'p1' },
+      { template: 'ocr', code: '150', name: 'OCR 识别', desc: '待执行器确认', pill: 'plan', planned: true },
+      { template: 'ai', code: '155', name: 'AI 提取', desc: '待执行器确认', pill: 'plan', planned: true },
+      { template: 'map', code: 'MAP', name: '字段抽取 / 结构化映射', desc: '文本字段到目标 schema', pill: 'p1' },
+    ]
+  },
+  {
+    title: '数据清洗', items: [
+      { template: 'clean', code: 'CLEAN', name: '字段清洗 / 格式转换', desc: '函数工具、空值、单位、日期', pill: 'p1' },
+      { template: 'dedupe', code: 'DEDUP', name: '去重处理', desc: '去重字段、重复策略', pill: 'p1' },
+    ]
+  },
+  {
+    title: '数据校验', items: [
+      { template: 'check', code: '300', name: '完整性 / 阈值校验', desc: '质量门禁、异常流转', pill: 'p1' },
+    ]
+  },
+  {
+    title: '规则类', items: [
+      { template: 'rule', code: 'RULE', name: '规则处理', desc: '规则组、表达式、配置', pill: 'p1' },
+      { template: 'rule-trace', code: 'TRACE', name: '规则 Trace', desc: '命中、过滤、失败原因', pill: 'p1' },
+    ]
+  },
+  {
+    title: '输出类', items: [
+      { template: 'output', code: 'TABLE', name: '落表输出', desc: '输出表、schema、去重键', pill: 'p1' },
+      { template: 'metric', code: 'M', name: '指标引用', desc: '跳转指标中心，不编辑口径', pill: 'p1' },
+    ]
+  },
+  {
+    title: '通知类', items: [
+      { template: 'mail', code: '400', name: '提取数据发邮件', desc: '待执行器确认', pill: 'plan', planned: true },
+      { template: 'alert', code: 'ALERT', name: '异常告警', desc: '失败、阻断、恢复通知', pill: 'p2', planned: true },
+    ]
+  },
 ]
 
 // 新建节点弹窗里的模板选项
@@ -422,9 +436,9 @@ export function makeBlankFlow(): FlowDef {
 /** 标准链路模板（= 原种子 Demo：公告规则采集，固定节点 id 供子步骤 / 测试引用） */
 export function makeStandardFlow(): FlowDef {
   const configs: Record<string, NodeConfig> = {}
-  ;['web-list', 'web-detail', 'ai-extract', 'rule', 'check', 'mail'].forEach((k) => {
-    configs[k] = cloneConfig(NODE_CONFIGS[k])
-  })
+    ;['web-list', 'web-detail', 'ai-extract', 'rule', 'check', 'mail'].forEach((k) => {
+      configs[k] = cloneConfig(NODE_CONFIGS[k])
+    })
   return {
     id: 'flow-default',
     name: '公告规则采集链路_v3',

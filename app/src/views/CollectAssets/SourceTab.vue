@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { sourceApi, type Source, type SourceCategory, type Step, type SourceLog, type TaskInst } from '../../api'
 import { useUiStore } from '../../stores/ui'
+import { useFlowStore } from '../../stores/flow'
 import CategoryTree from './CategoryTree.vue'
 import SourceDetailDrawer from './SourceDetailDrawer.vue'
-import NewSourceWizard from './NewSourceWizard.vue'
 
 const ui = useUiStore()
 const route = useRoute()
+const router = useRouter()
+const flow = useFlowStore()
 
 // 总览页下钻：?state=E / external / disabled 预置筛选
 const VALID_STATES = ['all', 'C', 'E', 'L', 'external', 'disabled']
@@ -41,7 +43,6 @@ const detail = reactive<{ visible: boolean; source: Source | null; steps: Step[]
   steps: [],
   loading: false,
 })
-const wizardVisible = ref(false)
 
 // ---- 日志 / 任务 / 批量导入弹窗 ----
 const logDlg = reactive<{ visible: boolean; rows: SourceLog[]; name: string }>({ visible: false, rows: [], name: '' })
@@ -266,11 +267,9 @@ async function submitImport() {
   importDlg.visible = false
 }
 
-function openWizard() {
-  wizardVisible.value = true
-}
-function onWizardSubmit() {
-  ElMessage.success('新建源草稿已记录（演示环境，未写入后端）')
+function openNewFlowCanvas() {
+  flow.newFlow('blank')
+  router.push('/canvas')
 }
 
 // ---- 顶部模块按钮接线 ----
@@ -280,7 +279,7 @@ onMounted(() => {
   loadCategories()
   loadStats()
   loadList()
-  ui.registerAction('新建采集源', openWizard)
+  ui.registerAction('新建采集源', openNewFlowCanvas)
   ui.registerAction('批量导入', onBatchImport)
   ui.registerAction('批量操作', () => {
     if (requireSelection()) ElMessage.info('已选源可在列表上方批量工具条中操作')
@@ -467,7 +466,6 @@ onUnmounted(() => ui.clearActions())
     @copy="onDrawerCopy"
     @toggle-enable="onDrawerToggle"
   />
-  <NewSourceWizard v-model:visible="wizardVisible" @submit="onWizardSubmit" />
 
   <!-- 源日志弹窗 -->
   <el-dialog v-model="logDlg.visible" :title="`源日志 · ${logDlg.name}`" width="640px">
