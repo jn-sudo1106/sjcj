@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useRuntimeStore } from '../../stores/runtime'
 import { flowApi } from '../../api'
+import CanvasHeader from './CanvasHeader.vue'
 import {
   MODAL_TEMPLATES,
-  compactSub,
   iconFor,
   isDecision,
   isParallel,
@@ -24,10 +25,39 @@ const flows = ref<{ id: string; name: string; updatedAt: string }[]>([])
 async function loadFlows() {
   flows.value = await flowApi.flowList()
 }
-async function switchFlow(id: string) {
-  const def = await flowApi.flowLoad(id)
+// 切换 / 新建流程前若当前画布有未保存改动，二次确认，避免静默覆盖
+async function confirmDiscardIfDirty(): Promise<boolean> {
+  if (!flow.dirty) return true
+  try {
+    await ElMessageBox.confirm('当前流程有未保存的改动，切换后将丢失，是否继续？', '未保存改动', {
+      type: 'warning',
+      confirmButtonText: '放弃改动并继续',
+      cancelButtonText: '取消',
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+async function onFlowMenu(cmd: string) {
+  if (cmd === '__new__') {
+    // 只是打开对话框，尚未覆盖画布，真正的覆盖发生在对话框内「应用到画布 / 从空白开始」，那里再确认
+    showNewFlow.value = true
+    return
+  }
+  if (!(await confirmDiscardIfDirty())) return
+  const def = await flowApi.flowLoad(cmd)
   if (def) flow.load(def)
 }
+async function generateWebFlow() {
+  try {
+    const rec = await flowApi.flowRecommend('', 'web-public')
+    flow.load(rec.flow)
+  } catch {
+    flow.newFlow('blank')
+  }
+}
+
 
 const menu = reactive<{ show: boolean; x: number; y: number; nodeId: string | null; afterId: string }>({
   show: false, x: 0, y: 0, nodeId: null, afterId: 'start',
@@ -36,6 +66,14 @@ const modal = reactive<{ show: boolean; afterId: string; kind: 'node' | 'decisio
   show: false, afterId: 'start', kind: 'node', template: 'web',
 })
 
+// 连线表关系标注（Phase 4.2）：有输入/输出表绑定时在步骤标签下方显示 tableId 关系
+function edgeTableTag(fromId: string): string {
+  const e = flow.edges[fromId]
+  if (!e) return ''
+  const { inputTableId: inp, outputTableId: out } = e
+  if (!inp && !out) return ''
+  return `${inp || '?'} → ${out || '?'}`
+}
 function nodeClasses(id: string, cfg: NodeConfig) {
   return [
     nodeClassFor(cfg),
@@ -49,9 +87,23 @@ function runText(id: string) {
   return s === 'L' ? '处理中' : s === 'C' ? '完成' : s === 'E' ? '失败' : ''
 }
 function footFor(cfg: NodeConfig) {
-  const left = cfg.disabled ? '已停用' : cfg.collect ? '待配置' : cfg.planned ? '规划中' : '草稿'
+  // 采集节点是否已配置：URL + 输出表 都填了就视为已配置
+  const configured = !!(cfg.collectCfg?.url && cfg.collectCfg?.outputTable)
+  const left = cfg.disabled
+    ? '已停用'
+    : cfg.collect
+      ? configured
+        ? cfg.status || '可试跑'
+        : '待配置'
+      : cfg.planned
+        ? '规划中'
+        : '草稿'
   const right = cfg.disabled ? '不参与运行' : cfg.collect ? '源配置' : '待试跑'
-  return { left, right, warn: cfg.disabled }
+  return { left, right, warn: cfg.disabled || (cfg.collect && !configured) }
+}
+function footClass(cfg: NodeConfig) {
+  const foot = footFor(cfg)
+  return { warn: foot.warn, ok: foot.left === '可试跑' }
 }
 
 // ---- 拖放 ----
@@ -171,20 +223,21 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 
 <template>
   <main class="rc-canvas" @contextmenu="onPaneMenu" @click="closeMenu">
-    <div class="rc-canvas-head">
+    <CanvasHeader v-if="flow.sourceCtx" />
+    <div v-else class="rc-canvas-head">
       <div>
         <div class="rc-canvas-title">{{ flow.flowName }} · draft-0.3</div>
         <div class="rc-canvas-sub">网页抓取（数据中心四步）→ 文件解析/清洗 → 规则处理 → 落表 → 指标引用</div>
       </div>
       <span class="rc-status warn">落表由数据中心完成</span>
       <div class="rc-canvas-actions">
-        <button class="rc-btn primary" type="button" @click="showNewFlow = true">＋ 新建流程</button>
-        <el-dropdown trigger="click" @command="switchFlow" @visible-change="(v: boolean) => v && loadFlows()">
-          <button class="rc-btn" type="button">切换流程 ▾</button>
+        <el-dropdown trigger="click" @command="onFlowMenu" @visible-change="(v: boolean) => v && loadFlows()">
+          <button class="rc-btn primary" type="button">切换 / 新建 ▾</button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item v-for="f in flows" :key="f.id" :command="f.id">{{ f.name }} · {{ f.updatedAt }}</el-dropdown-item>
-              <el-dropdown-item v-if="!flows.length" disabled>暂无已保存流程</el-dropdown-item>
+              <el-dropdown-item command="__new__">＋ 智能生成新流程</el-dropdown-item>
+              <el-dropdown-item v-for="(f, i) in flows" :key="f.id" :command="f.id" :divided="i === 0">{{ f.name }} · {{ f.updatedAt }}</el-dropdown-item>
+              <el-dropdown-item v-if="!flows.length" disabled divided>暂无已保存流程</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -202,8 +255,8 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
         <!-- 空白画布引导卡（无业务节点时） -->
         <div v-if="!flow.layout.nodes.length" class="rc-empty-cta">
           <div class="rc-empty-cta-title">空白流程画布</div>
-          <div class="rc-empty-cta-sub">描述你的采集需求，让智能体帮你生成初始流程；或从空白开始，自行从左侧节点库拖入节点。</div>
-          <button class="rc-btn primary" type="button" @click="showNewFlow = true">＋ 新建 / 智能生成</button>
+          <div class="rc-empty-cta-sub">一键生成网页抓取初始流程：列表抓取 → 详情抓取 → 清洗落表，进入后逐节点完善配置。</div>
+          <button class="rc-btn primary" type="button" @click="generateWebFlow">生成网页抓取流程</button>
         </div>
 
         <!-- 终端 -->
@@ -237,6 +290,11 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
           type="button"
           @click.stop="flow.selectEdge(e.fromId)"
         >{{ e.label }}</button>
+        <div
+          v-if="edgeTableTag(e.fromId)"
+          class="rc-edge-table-tag"
+          :style="{ left: e.lx + 'px', top: (e.ly + 15) + 'px' }"
+        >{{ edgeTableTag(e.fromId) }}</div>
         </template>
 
         <!-- 节点 -->
@@ -259,7 +317,6 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
             <div class="rc-node-icon">{{ iconFor(n.cfg) }}</div>
             <div>
               <div class="rc-node-title">{{ n.cfg.title }}</div>
-              <div class="rc-node-type">{{ compactSub(n.cfg.sub) }}</div>
             </div>
           </div>
 
@@ -275,7 +332,7 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
           </template>
           <template v-else>
             <div class="rc-node-foot">
-              <span class="rc-chip" :class="{ warn: footFor(n.cfg).warn }">{{ footFor(n.cfg).left }}</span>
+              <span class="rc-chip" :class="footClass(n.cfg)">{{ footFor(n.cfg).left }}</span>
               <span>{{ footFor(n.cfg).right }}</span>
             </div>
           </template>
@@ -383,6 +440,7 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 .rc-edge-label { position: absolute; transform: translate(-50%, -50%); padding: 3px 8px; border: 1px solid #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); border-radius: 999px; font-size: 10px; white-space: nowrap; cursor: pointer; z-index: 21; }
 .rc-edge-label:hover { border-color: #60a5fa; background: #dbeafe; }
 .rc-edge-label.active { border-color: var(--rc-primary); box-shadow: 0 0 0 2px #dbeafe; }
+.rc-edge-table-tag { position: absolute; transform: translate(-50%, 0); font-size: 9px; color: var(--rc-faint); font-family: var(--rc-mono, monospace); white-space: nowrap; pointer-events: none; z-index: 21; }
 
 .rc-flow-node { position: absolute; width: 210px; min-height: 74px; padding: 10px 12px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; box-shadow: 0 3px 12px -8px rgba(15, 23, 42, 0.28); cursor: pointer; transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s; }
 .rc-flow-node:hover { transform: translateY(-1px); border-color: #bfdbfe; }
@@ -398,7 +456,6 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 .rc-node-top { display: flex; align-items: center; gap: 8px; }
 .rc-node-icon { width: 30px; height: 30px; border-radius: 7px; background: var(--rc-primary-bg); color: var(--rc-primary-ink); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; flex: none; }
 .rc-node-title { font-size: 13px; font-weight: 700; color: var(--rc-text); }
-.rc-node-type { margin-top: 1px; font-size: 10px; color: var(--rc-faint); }
 .rc-node-plan { position: absolute; top: 8px; right: 8px; font-size: 9px; color: var(--rc-faint); border: 1px solid var(--rc-border); background: #f8fafc; border-radius: 5px; padding: 1px 5px; }
 .rc-run-badge { position: absolute; top: 8px; right: 8px; font-size: 9px; font-weight: 700; border-radius: 5px; padding: 1px 6px; }
 .rc-run-badge.L { background: var(--rc-primary-bg); color: var(--rc-primary); }
@@ -417,6 +474,7 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 .parallel-node .rc-node-icon { background: #e2e8f0; color: #334155; }
 .parallel-node .rc-node-path { border-color: #cbd5e1; background: #fff; color: var(--rc-text-2); }
 .rc-chip { padding: 1px 6px; border-radius: 5px; background: #f1f5f9; color: var(--rc-muted); }
+.rc-chip.ok { background: var(--rc-ok-bg); color: var(--rc-ok); }
 .rc-chip.warn { background: var(--rc-warn-bg); color: var(--rc-warn); }
 
 .rc-node-menu { position: fixed; z-index: 80; min-width: 174px; background: #fff; border: 1px solid var(--rc-border); border-radius: 8px; box-shadow: 0 16px 34px -16px rgba(15, 23, 42, 0.36); padding: 4px; }

@@ -2,7 +2,7 @@ import { request } from './client'
 import type {
   Paged, Source, SourceCategory, Step, Ack, PageQuery,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
-  Dataset, Measure, DataTableMeta, DataRow, RunRow, RunNode, HealthCard, MqQueue, SyncRow, AlarmRow,
+  Dataset, Measure, DataTableMeta, DataRow, RowQuery, RunRow, RunNode, HealthCard, MqQueue, SyncRow, AlarmRow,
   Config, EntryType, Param, CredentialRef, SourceLog, TaskInst, WorkbenchSummary,
   OverviewSummary, TrendPoint,
 } from './types'
@@ -66,7 +66,13 @@ export const metricApi = {
 export const dataApi = {
   tables: () => request<DataTableMeta[]>('data/tablePaged'),
   rows: (tableId: string) => request<DataRow[]>('data/rowPaged', { tableId }),
+  // 结果视图：按表 + 多条件 + 分页（独立端点，避免影响 /data 全局数据页）
+  rowQueryPaged: (q: RowQuery) => request<Paged<DataRow>>('data/rowQueryPaged', q),
+  tableMeta: (tableId: string) => request<DataTableMeta | null>('data/tableMeta', { tableId }),
   dataStats: () => request<{ tables: number; rows: number; chars: number; review: number }>('data/stats'),
+  // 结果视图行编辑（Phase 4.4）
+  rowUpdate: (tableId: string, dataId: string, values: Record<string, unknown>) =>
+    request<{ message?: string; row?: DataRow }>('data/rowUpdate', { tableId, dataId, values }),
 }
 
 // 运行记录（M4）
@@ -103,6 +109,8 @@ export const configApi = {
 export const entryApi = {
   entryPaged: (p?: PageQuery) => request<Paged<EntryType>>('config/entryTypePagedView', p),
   entryDetail: (tableId: string) => request<EntryType>('config/entryType', { tableId }),
+  // 新建 / 编辑表（按 tableId upsert，无则新建并返回 tableId）
+  entrySave: (entry: EntryType) => request<{ tableId: string; message?: string }>('config/saveEntryType', { entry }),
   rebuildTable: (tableId: string) => request<Ack>('config/rebuildTable', { tableId }),
   rebuildIndex: (tableId: string) => request<Ack>('config/rebuildIndex', { tableId }),
   modifyEntryType: (tableId: string) => request<Ack>('config/modifyEntryType', { tableId }),

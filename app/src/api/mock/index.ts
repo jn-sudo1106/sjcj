@@ -19,14 +19,14 @@ import {
   mockEvaluate,
 } from './rules'
 import { mockDatasets, mockMeasures, mockMetricStats } from './metrics'
-import { mockDataTables, mockDataRows, mockDataStats } from './dataview'
+import { mockDataTables, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate } from './dataview'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats } from './monitor'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
 import { mockFlowSave, mockFlowLoad, mockFlowList, mockFlowRecommend } from './flows'
 import { mockConfigPaged, mockConfigDetail } from './configs'
-import { mockEntryPaged, mockEntryDetail } from './entries'
+import { mockEntryPaged, mockEntryDetail, mockSaveEntryType } from './entries'
 import { mockParamPaged, mockParamDetail, mockGenValues } from './params'
 
 // mock 注册表：key = 真实 /v1 端点路径，value = 处理函数。
@@ -67,6 +67,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   // 采集资产 · 实体表（M5）
   'config/entryTypePagedView': mockEntryPaged,
   'config/entryType': mockEntryDetail,
+  'config/saveEntryType': mockSaveEntryType,
   'config/rebuildTable': mockAck,
   'config/rebuildIndex': mockAck,
   'config/modifyEntryType': mockAck,
@@ -98,6 +99,9 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'data/tablePaged': mockDataTables,
   'data/rowPaged': mockDataRows,
   'data/stats': mockDataStats,
+  'data/rowQueryPaged': mockDataRowQueryPaged,
+  'data/tableMeta': mockDataTableMeta,
+  'data/rowUpdate': mockDataRowUpdate,
 
   // 运行记录（M4）
   'run/runPaged': mockRuns,

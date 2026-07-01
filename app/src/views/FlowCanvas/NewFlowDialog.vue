@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { flowApi } from '../../api'
 import { PRESET_INTENTS, type FlowRecommendation } from './flowModel'
@@ -21,6 +21,7 @@ watch(
       prompt.value = ''
       result.value = null
       loading.value = false
+      recommend('web-public')
     }
   },
 )
@@ -45,15 +46,31 @@ async function recommend(intent?: string) {
   }
 }
 
-function adopt() {
+// 覆盖画布前若有未保存改动，二次确认（B3）
+async function confirmDiscardIfDirty(): Promise<boolean> {
+  if (!flow.dirty) return true
+  try {
+    await ElMessageBox.confirm('当前流程有未保存的改动，继续将丢失，是否继续？', '未保存改动', {
+      type: 'warning',
+      confirmButtonText: '放弃改动并继续',
+      cancelButtonText: '取消',
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+async function adopt() {
   if (!result.value) return
+  if (!(await confirmDiscardIfDirty())) return
   flow.load(result.value.flow)
-  ElMessage.success(`已采用「${result.value.flow.name}」，可在右侧逐节点完善配置`)
+  ElMessage.success(`已应用「${result.value.flow.name}」，可在右侧逐节点完善配置`)
   close()
 }
-function startBlank() {
+async function startBlank() {
+  if (!(await confirmDiscardIfDirty())) return
   flow.newFlow('blank')
-  ElMessage.success('已新建空白流程')
+  ElMessage.success('已从空白画布开始，可从左侧节点库拖入节点或点击插入点新建')
   close()
 }
 function close() {
@@ -65,7 +82,7 @@ function close() {
   <div v-if="open" class="rc-node-modal-backdrop show" @click.self="close">
     <div class="rc-node-modal" role="dialog" aria-modal="true">
       <div class="rc-node-modal-head">
-        <div class="rc-node-modal-title">新建流程 · 描述你的采集需求</div>
+        <div class="rc-node-modal-title">编辑流程 · 调整当前采集需求</div>
         <button class="rc-node-modal-close" type="button" aria-label="关闭" @click="close">×</button>
       </div>
 
@@ -123,8 +140,9 @@ function close() {
       </div>
 
       <div class="rc-node-modal-foot">
+        <button class="rc-btn" type="button" @click="close">取消</button>
         <button class="rc-btn" type="button" @click="startBlank">从空白开始</button>
-        <button class="rc-btn primary" type="button" :disabled="!result" @click="adopt">采用此流程</button>
+        <button class="rc-btn primary" type="button" :disabled="!result" @click="adopt">应用到画布</button>
       </div>
     </div>
   </div>

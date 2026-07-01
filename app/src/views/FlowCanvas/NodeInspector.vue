@@ -1,14 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
-import { WEB_KIND_OPTIONS, type CollectConfig, type WebKind } from './flowModel'
+import { useRuntimeStore } from '../../stores/runtime'
+import { CONFIG_STRATEGY_OPTIONS, WEB_KIND_OPTIONS, type CollectConfig, type NodeConfig, type WebKind } from './flowModel'
 import {
-  entryApi, paramApi, configApi, sourceApi, ruleApi,
+  entryApi, paramApi, configApi, sourceApi, ruleApi, dataApi,
   type EntryType, type Param, type Config, type CredentialRef, type RuleGroup, type Rule, type SharedConfig,
+  type DataTableMeta, type DataRow,
 } from '../../api'
+import DataGrid from './DataGrid.vue'
+import TableEditDialog from './TableEditDialog.vue'
+import TableDataDialog from './TableDataDialog.vue'
 
 const flow = useFlowStore()
+const runtime = useRuntimeStore()
 const cfg = computed(() => flow.selectedNode)
 const id = computed(() => flow.selectedId)
 const tab = computed(() => flow.activeTab)
@@ -17,11 +23,11 @@ const cc = computed(() => cfg.value?.collectCfg)
 const statusText = computed(() => (cfg.value?.disabled ? '已停用' : (cfg.value?.status ?? '')))
 const statusClass = computed(() => (cfg.value?.disabled || cfg.value?.planned ? 'warn' : 'ok'))
 
-const STEPS: [string, string, string, string][] = [
-  ['source', '1', '源配置', '源 URL、源名称'],
-  ['table', '2', '表配置', '输出表、字段、去重键'],
-  ['login', '3', '登录配置', '登陆 URL、账号、密码'],
-  ['finish', '4', '完成', '提交确认'],
+const STEPS: [string, string, string][] = [
+  ['source', '1', '源配置'],
+  ['table', '2', '表配置'],
+  ['login', '3', '登录配置'],
+  ['finish', '4', '完成'],
 ]
 const NODE_TABS: [string, string][] = [
   ['base', '基础'], ['inmap', '输入映射'], ['params', '参数'], ['output', '产物'], ['run', '试跑'],
@@ -55,6 +61,98 @@ watch(
 )
 
 const selectedTable = computed(() => tables.value.find((t) => t.tableId === cc.value?.outputTable) ?? null)
+
+// ---- 输入映射「来源」下拉建议（Phase 3.1）：取主链路上一个节点的产物字段 ----
+const prevNode = computed<NodeConfig | undefined>(() => {
+  const idx = flow.main.indexOf(id.value)
+  for (let i = idx - 1; i >= 0; i--) {
+    const pid = flow.main[i]
+    if (pid === 'start') return undefined
+    const c = flow.configs[pid]
+    if (c) return c
+  }
+  return undefined
+})
+const inmapSourceOptions = computed(() => {
+  const p = prevNode.value
+  if (!p) return []
+  return p.output.map((row) => `← ${p.title}.${row[0]}`)
+})
+function onTripleCell(field: 'inmap' | 'params' | 'output', i: number, col: 0 | 1 | 2, e: Event) {
+  flow.setTripleCell(id.value, field, i, col, (e.target as HTMLInputElement).value)
+}
+
+// ---- 数据表编辑弹窗（T2）----
+const tableDlg = reactive<{ open: boolean; tableId: string }>({ open: false, tableId: '' })
+function openNewTable() {
+  tableDlg.tableId = ''
+  tableDlg.open = true
+}
+function openEditTable() {
+  if (!cc.value?.outputTable) {
+    ElMessage.info('请先选择一个输出表，或点「＋」新建')
+    return
+  }
+  tableDlg.tableId = cc.value.outputTable
+  tableDlg.open = true
+}
+async function onTableSaved(tableId: string) {
+  tables.value = (await entryApi.entryPaged({ size: 100 })).list
+  if (id.value) flow.patchCollect(id.value, { outputTable: tableId })
+  loadPreview()
+}
+
+// 查看全部数据弹窗
+const dataDlg = reactive<{ open: boolean }>({ open: false })
+function openDataDialog() {
+  if (!cc.value?.outputTable) return
+  dataDlg.open = true
+}
+
+// ---- 表配置内联数据预览（Phase 5 / 方案 A）----
+const previewMeta = ref<DataTableMeta | null>(null)
+const previewRows = ref<DataRow[]>([])
+const previewLoading = ref(false)
+const mergedPreviewRows = computed<DataRow[]>(() => {
+  const tid = cc.value?.outputTable
+  const trial = (tid && runtime.dataByTable[tid]) || []
+  // 试跑产出叠在最前
+  return [...trial, ...previewRows.value]
+})
+async function loadPreview() {
+  const tid = cc.value?.outputTable
+  if (!tid) {
+    previewMeta.value = null
+    previewRows.value = []
+    return
+  }
+  previewLoading.value = true
+  try {
+    // schema 优先取实体表（编排者常用），退而求 dataApi 表元
+    const entry = selectedTable.value
+    if (entry) {
+      previewMeta.value = {
+        tableId: entry.tableId,
+        tableName: entry.tableName,
+        rowCount: entry.rowCount ?? 0,
+        fields: entry.fields.map((f) => ({ prop: f.prop, type: f.type, desc: f.desc, sample: '' })),
+      }
+    } else {
+      previewMeta.value = await dataApi.tableMeta(tid)
+    }
+    const res = await dataApi.rowQueryPaged({ tableId: tid, page: 1, size: 5 })
+    previewRows.value = res?.list ?? []
+  } finally {
+    previewLoading.value = false
+  }
+}
+watch(
+  () => [cc.value?.outputTable, tab.value, id.value] as const,
+  ([tid, tb]) => {
+    if (tb === 'table' && tid) loadPreview()
+  },
+  { immediate: true },
+)
 function paramName(pid: string) {
   return params.value.find((p) => p.paramId === pid)?.name ?? pid
 }
@@ -96,10 +194,10 @@ const confirmRows = computed<[string, string][]>(() => {
   const c = cc.value
   if (!c) return []
   return [
-    ['将创建源', c.sourceName || '—'],
+    ['节点名称', cfg.value?.title || c.sourceName || '—'],
     ['源 URL', c.url || '—'],
     ['输出表', selectedTable.value ? selectedTable.value.tableName : c.outputTable || '—'],
-    ['配置方式', c.configMode === 'new' ? '新建配置' : `使用已有 ${c.configId}`],
+    ['配置方式', c.configMode === 'new' ? `新建配置 · ${c.configName || '未命名'}（${c.configStrategy}）` : `使用已有 ${c.configId}`],
     ['登录', c.needLogin ? '要求登陆' : '免登录'],
     ['定时', c.cron || '—'],
     ['源分类', c.category || '—'],
@@ -119,16 +217,27 @@ function onSaveDraft() {
   ElMessage.success('节点配置草稿已保存（演示，编辑已实时写入画布）')
 }
 function onSubmit() {
-  confirmDanger('提交创建源', `将创建源「${cc.value?.sourceName || cfg.value?.title}」及其配置，是否继续？`, () =>
+  const name = cfg.value?.title || cc.value?.sourceName || '当前节点'
+  confirmDanger('保存节点配置', `将「${name}」的配置保存到当前流程，是否继续？（整条流程发布后才成为采集源）`, () =>
     sourceApi.generateConfig(id.value),
   )
 }
+// 单节点试跑：走 runtime 真闭环（画布该节点 L→C + 按其 outputTable 落表），与顶部整链试跑一致
 function onTrial() {
   if (cfg.value?.planned) {
     ElMessage.info('规划中节点：待执行器就绪后可试跑')
     return
   }
-  confirmDanger('执行试跑', `将对「${cfg.value?.title}」发起一次试跑抓取，是否继续？`, () => sourceApi.sendSnatch([id.value]))
+  if (runtime.running) {
+    ElMessage.warning('已有试跑正在进行，请稍候')
+    return
+  }
+  const runId = runtime.trialNode(flow.serialize(), id.value)
+  if (!runId) {
+    ElMessage.warning('该节点当前不可试跑（已停用，或采集节点缺 URL / 输出表）')
+    return
+  }
+  ElMessage.success(`已发起「${cfg.value?.title}」单节点试跑 ${runId}，画布状态流转中 → 运行记录 / 数据查看`)
 }
 </script>
 
@@ -155,7 +264,7 @@ function onTrial() {
             :class="{ active: tab === s[0] }"
             @click="flow.setActiveTab(s[0])"
           >
-            <b>{{ s[1] }} {{ s[2] }}</b><span>{{ s[3] }}</span>
+            <b>{{ s[1] }} {{ s[2] }}</b>
           </button>
         </div>
 
@@ -225,11 +334,20 @@ function onTrial() {
               <button type="button" :class="{ active: cc.configMode === 'existing' }" @click="flow.patchCollect(id, { configMode: 'existing' })">使用已有配置</button>
             </div>
           </div>
-          <div class="rc-field"><label>使用配置</label>
+          <div v-if="cc.configMode === 'existing'" class="rc-field"><label>使用配置</label>
             <select class="rc-select" :value="cc.configId" @change="setCC('configId', $event)">
               <option v-for="c in configs" :key="c.configId" :value="c.configId">{{ c.configId }} · {{ c.name }}</option>
             </select>
           </div>
+          <template v-else>
+            <div class="rc-field"><label>配置名称</label><input class="rc-input" :value="cc.configName" @input="setCC('configName', $event)" placeholder="例如：交易所公告列表配置" /></div>
+            <div class="rc-field"><label>Topic</label><input class="rc-input" :value="cc.configTopic" @input="setCC('configTopic', $event)" placeholder="例如：announcement.list" /></div>
+            <div class="rc-field"><label>运行策略</label>
+              <select class="rc-select" :value="cc.configStrategy" @change="setCC('configStrategy', $event)">
+                <option v-for="s in CONFIG_STRATEGY_OPTIONS" :key="s" :value="s">{{ s }}</option>
+              </select>
+            </div>
+          </template>
           <div class="rc-field"><label>新建模板选项</label>
             <div class="rc-checks">
               <label class="rc-check"><input type="checkbox" :checked="cc.isDetail" @change="toggleDetail" /> 详情类数据</label>
@@ -241,8 +359,8 @@ function onTrial() {
               <select class="rc-select grow" :value="cc.outputTable" @change="setCC('outputTable', $event)">
                 <option v-for="t in tables" :key="t.tableId" :value="t.tableId">{{ t.tableId }} · {{ t.tableName }}</option>
               </select>
-              <button class="rc-icon-btn" type="button" title="查看表详情" @click="ElMessage.info('查看表详情（演示）')">?</button>
-              <button class="rc-icon-btn" type="button" title="新建表" @click="ElMessage.info('新建表（演示占位）')">＋</button>
+              <button class="rc-icon-btn" type="button" title="查看 / 编辑表" @click="openEditTable">?</button>
+              <button class="rc-icon-btn" type="button" title="新建表" @click="openNewTable">＋</button>
             </div>
           </div>
           <div class="rc-field"><label>输入参数[多选]</label>
@@ -266,6 +384,26 @@ function onTrial() {
               <tbody><tr v-for="f in selectedTable.fields" :key="f.prop"><td>{{ f.prop }}</td><td>{{ f.desc }}</td><td>{{ f.dedup ? '✓' : '—' }}</td></tr></tbody>
             </table>
           </div>
+
+          <!-- 数据预览：未绑表 / 已绑表 / 试跑叠加 三态 -->
+          <div class="ni-preview">
+            <div class="ni-preview-head">
+              <b>数据预览</b>
+              <span v-if="cc.outputTable && runtime.dataByTable[cc.outputTable]?.length" class="ni-preview-tag">含试跑样例</span>
+              <button v-if="cc.outputTable" class="ni-preview-more" type="button" @click="openDataDialog">查看全部 ›</button>
+            </div>
+            <div v-if="!cc.outputTable" class="ni-preview-empty">
+              请先在上方选择或创建输出表，确定后将在此查看该表的字段与样例数据。
+            </div>
+            <DataGrid
+              v-else
+              compact
+              :meta="previewMeta"
+              :rows="mergedPreviewRows"
+              :loading="previewLoading"
+            />
+          </div>
+
           <div class="rc-actions-row"><button class="rc-btn primary" type="button" @click="flow.setActiveTab('login')">下一步</button><button class="rc-btn" type="button" @click="flow.setActiveTab('source')">上一步</button></div>
         </template>
 
@@ -293,9 +431,9 @@ function onTrial() {
         <!-- 步骤 4 完成 -->
         <template v-else>
           <div class="rc-confirm-card">
-            <div class="rc-confirm-title">提交确认</div>
+            <div class="rc-confirm-title">节点配置确认</div>
             <div class="rc-list"><div v-for="r in confirmRows" :key="r[0]" class="rc-list-row"><b>{{ r[0] }}</b><span>{{ r[1] }}</span></div></div>
-            <div class="rc-confirm-actions"><button class="rc-btn primary" type="button" @click="onSubmit">提交</button><button class="rc-btn" type="button" @click="onSaveDraft">保存草稿</button><button class="rc-btn" type="button" @click="flow.setActiveTab('login')">上一步</button></div>
+            <div class="rc-confirm-actions"><button class="rc-btn primary" type="button" @click="onSubmit">保存节点</button><button class="rc-btn" type="button" @click="onTrial">试跑此节点</button><button class="rc-btn" type="button" @click="onSaveDraft">保存草稿</button><button class="rc-btn" type="button" @click="flow.setActiveTab('login')">上一步</button></div>
           </div>
         </template>
       </template>
@@ -335,26 +473,59 @@ function onTrial() {
         </template>
 
         <template v-else-if="tab === 'inmap'">
-          <table class="rc-mini-table">
-            <thead><tr><th>目标入参</th><th>来源</th><th>说明</th></tr></thead>
-            <tbody><tr v-for="row in cfg.inmap" :key="row[0]"><td>{{ row[0] }}</td><td>{{ row[1] }}</td><td>{{ row[2] }}</td></tr></tbody>
+          <table class="rc-mini-table rc-edit-table">
+            <thead><tr><th>目标入参</th><th>来源</th><th>说明</th><th></th></tr></thead>
+            <tbody>
+              <tr v-for="(row, i) in cfg.inmap" :key="i">
+                <td><input class="rc-cell-input" :value="row[0]" @input="onTripleCell('inmap', i, 0, $event)" /></td>
+                <td><input class="rc-cell-input" list="ni-inmap-src" :value="row[1]" @input="onTripleCell('inmap', i, 1, $event)" /></td>
+                <td><input class="rc-cell-input" :value="row[2]" @input="onTripleCell('inmap', i, 2, $event)" /></td>
+                <td><button class="rc-row-del" type="button" title="删除该行" @click="flow.removeTripleRow(id, 'inmap', i)">✕</button></td>
+              </tr>
+            </tbody>
           </table>
-          <div class="rc-help">把上游节点输出字段映射到本节点入参（对应采集平台“上一步属性”、AI 提取“输出映射”）。← 表示取自上游。</div>
+          <datalist id="ni-inmap-src">
+            <option v-for="opt in inmapSourceOptions" :key="opt" :value="opt" />
+          </datalist>
+          <button class="rc-btn" type="button" @click="flow.addTripleRow(id, 'inmap')">+ 添加行</button>
+          <div class="rc-help">把上游节点输出字段映射到本节点入参（对应采集平台“上一步属性”、AI 提取“输出映射”）。← 表示取自上游；「来源」输入框下拉建议取自上一节点的产物字段。</div>
         </template>
 
         <template v-else-if="tab === 'params'">
-          <table class="rc-mini-table">
-            <thead><tr><th>字段/参数</th><th>类型</th><th>说明</th></tr></thead>
-            <tbody><tr v-for="row in cfg.params" :key="row[0]"><td>{{ row[0] }}</td><td>{{ row[1] }}</td><td>{{ row[2] }}</td></tr></tbody>
+          <table class="rc-mini-table rc-edit-table">
+            <thead><tr><th>字段/参数</th><th>类型</th><th>说明</th><th></th></tr></thead>
+            <tbody>
+              <tr v-for="(row, i) in cfg.params" :key="i">
+                <td><input class="rc-cell-input" :value="row[0]" @input="onTripleCell('params', i, 0, $event)" /></td>
+                <td><input class="rc-cell-input" :value="row[1]" @input="onTripleCell('params', i, 1, $event)" /></td>
+                <td><input class="rc-cell-input" :value="row[2]" @input="onTripleCell('params', i, 2, $event)" /></td>
+                <td><button class="rc-row-del" type="button" title="删除该行" @click="flow.removeTripleRow(id, 'params', i)">✕</button></td>
+              </tr>
+            </tbody>
           </table>
+          <button class="rc-btn" type="button" @click="flow.addTripleRow(id, 'params')">+ 添加行</button>
           <div class="rc-help">参数来自采集平台列表、日期或序列；发任务时弹出填写，并进入运行记录供审计与重跑。</div>
         </template>
 
         <template v-else-if="tab === 'output'">
-          <table class="rc-mini-table">
-            <thead><tr><th>产物</th><th>类型</th><th>说明</th></tr></thead>
-            <tbody><tr v-for="row in cfg.output" :key="row[0]"><td>{{ row[0] }}</td><td>{{ row[1] }}</td><td>{{ row[2] }}</td></tr></tbody>
+          <div class="rc-field"><label>落表绑定（可选，选定后可在结果视图查看该节点数据）</label>
+            <select class="rc-select" :value="cfg.outputTable ?? ''" @change="flow.setOutputTable(id, ($event.target as HTMLSelectElement).value)">
+              <option value="">不绑定输出表</option>
+              <option v-for="t in tables" :key="t.tableId" :value="t.tableId">{{ t.tableId }} · {{ t.tableName }}</option>
+            </select>
+          </div>
+          <table class="rc-mini-table rc-edit-table">
+            <thead><tr><th>产物</th><th>类型</th><th>说明</th><th></th></tr></thead>
+            <tbody>
+              <tr v-for="(row, i) in cfg.output" :key="i">
+                <td><input class="rc-cell-input" :value="row[0]" @input="onTripleCell('output', i, 0, $event)" /></td>
+                <td><input class="rc-cell-input" :value="row[1]" @input="onTripleCell('output', i, 1, $event)" /></td>
+                <td><input class="rc-cell-input" :value="row[2]" @input="onTripleCell('output', i, 2, $event)" /></td>
+                <td><button class="rc-row-del" type="button" title="删除该行" @click="flow.removeTripleRow(id, 'output', i)">✕</button></td>
+              </tr>
+            </tbody>
           </table>
+          <button class="rc-btn" type="button" @click="flow.addTripleRow(id, 'output')">+ 添加行</button>
           <div class="rc-help">输出进入实体表/原始文件/规则 Trace/邮件审计，经 run_id 供 Skill Run 追溯。</div>
         </template>
 
@@ -382,6 +553,14 @@ function onTrial() {
         <div class="rc-help">当前画布为空或未选择节点。用顶部「＋ 新建流程」智能生成，或从左侧节点库拖入节点。</div>
       </div>
     </template>
+
+    <TableEditDialog v-model:open="tableDlg.open" :table-id="tableDlg.tableId" @saved="onTableSaved" />
+    <TableDataDialog
+      v-model:open="dataDlg.open"
+      :table-id="cc?.outputTable || ''"
+      :source-id="flow.sourceCtx?.sourceId"
+      :title="`查看全部数据 · ${selectedTable?.tableName || cc?.outputTable || ''}`"
+    />
   </div>
 </template>
 
@@ -414,6 +593,13 @@ function onTrial() {
 .rc-icon-btn:hover { background: var(--rc-primary-bg); }
 .rc-actions-row { display: flex; gap: 8px; margin-top: 12px; }
 .rc-actions-row .rc-btn { height: 32px; padding: 0 11px; font-size: 12px; }
+.ni-preview { margin-top: 12px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; overflow: hidden; display: flex; flex-direction: column; max-height: 280px; }
+.ni-preview-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--rc-border-soft); background: #f8fafc; }
+.ni-preview-head b { font-size: 12px; color: var(--rc-text); }
+.ni-preview-tag { padding: 1px 7px; font-size: 10px; border-radius: 999px; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.ni-preview-more { margin-left: auto; border: 0; background: transparent; color: var(--rc-primary); font-size: 11px; font-weight: 600; cursor: pointer; }
+.ni-preview-more:hover { color: var(--rc-primary-ink); }
+.ni-preview-empty { padding: 18px 12px; color: var(--rc-faint); font-size: 12px; text-align: center; line-height: 1.6; }
 
 .rc-checks { display: flex; gap: 16px; padding: 4px 0; }
 .rc-check { display: inline-flex; align-items: center; gap: 6px; color: var(--rc-text-2); font-size: 12px; cursor: pointer; }
@@ -449,6 +635,12 @@ function onTrial() {
 .rc-mini-table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .rc-mini-table th { text-align: left; color: var(--rc-muted); font-weight: 600; padding: 6px 5px; border-bottom: 1px solid #eef2f7; }
 .rc-mini-table td { padding: 7px 5px; border-bottom: 1px solid var(--rc-border-soft); color: var(--rc-text-2); }
+.rc-edit-table th:last-child, .rc-edit-table td:last-child { width: 26px; padding: 4px 2px; }
+.rc-cell-input { width: 100%; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--rc-text-2); font-size: 11px; padding: 4px 5px; outline: none; }
+.rc-cell-input:hover { border-color: #dbe3ee; }
+.rc-cell-input:focus { border-color: #60a5fa; background: #fff; box-shadow: 0 0 0 2px #dbeafe; }
+.rc-row-del { width: 20px; height: 20px; border: 0; background: transparent; color: var(--rc-faint); font-size: 12px; cursor: pointer; border-radius: 4px; }
+.rc-row-del:hover { background: var(--rc-error-bg); color: #b91c1c; }
 
 .rc-tagchips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
 .rc-tagchip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 3px 7px; border-radius: 6px; border: 1px solid #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }

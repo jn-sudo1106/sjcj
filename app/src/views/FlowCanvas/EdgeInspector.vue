@@ -1,13 +1,22 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
-import { itemApi } from '../../api'
+import { entryApi, itemApi, type EntryType } from '../../api'
 
 const flow = useFlowStore()
 const edge = computed(() => flow.selectedEdge!)
 const fromId = computed(() => flow.selectedEdgeFrom ?? '')
 const newCtx = ref('')
+
+// 步骤输入表 / 步骤输出表在 rows 里的行号（对齐 EDGE_CONFIGS / defaultEdgeConfig 的字段顺序）
+const INPUT_TABLE_ROW = 1
+const OUTPUT_TABLE_ROW = 4
+
+const tables = ref<EntryType[]>([])
+onMounted(async () => {
+  tables.value = (await entryApi.entryPaged({ size: 100 })).list
+})
 
 function addCtx() {
   const v = newCtx.value.trim()
@@ -18,8 +27,24 @@ function addCtx() {
 function onRow(i: number, e: Event) {
   flow.setEdgeRow(fromId.value, i, (e.target as HTMLInputElement).value)
 }
-function onOutcols(e: Event) {
-  flow.setEdgeOutcols(fromId.value, (e.target as HTMLInputElement).value)
+function onTableSelect(field: 'inputTableId' | 'outputTableId', e: Event) {
+  const tableId = (e.target as HTMLSelectElement).value
+  const t = tables.value.find((x) => x.tableId === tableId)
+  flow.setEdgeTable(fromId.value, field, tableId, t ? `[${t.tableId}] ${t.tableName}` : '')
+}
+// 出参列候选字段：优先取步骤输出表，未选输出表则退而取输入表
+const outcolFields = computed(() => {
+  const tid = edge.value.outputTableId || edge.value.inputTableId
+  return tables.value.find((t) => t.tableId === tid)?.fields ?? []
+})
+function outcolLabel(prop: string) {
+  const f = outcolFields.value.find((x) => x.prop === prop)
+  return f ? `${f.prop} · ${f.desc}` : prop
+}
+function addOutcol(e: Event) {
+  const sel = e.target as HTMLSelectElement
+  if (sel.value) flow.toggleEdgeOutcol(fromId.value, sel.value)
+  sel.value = ''
 }
 async function onEnable(e: Event) {
   const enabled = (e.target as HTMLSelectElement).value === '启用'
@@ -55,7 +80,16 @@ async function save() {
     <div class="rc-inspector-body">
       <div v-for="(row, i) in edge.rows" :key="row[0]" class="rc-field">
         <label>{{ row[0] }}</label>
-        <input class="rc-input" :value="row[1]" @input="onRow(i, $event)" />
+        <select
+          v-if="i === INPUT_TABLE_ROW || i === OUTPUT_TABLE_ROW"
+          class="rc-select"
+          :value="(i === INPUT_TABLE_ROW ? edge.inputTableId : edge.outputTableId) ?? ''"
+          @change="onTableSelect(i === INPUT_TABLE_ROW ? 'inputTableId' : 'outputTableId', $event)"
+        >
+          <option value="">未选择（沿用左侧文本：{{ row[1] }}）</option>
+          <option v-for="t in tables" :key="t.tableId" :value="t.tableId">{{ t.tableId }} · {{ t.tableName }}</option>
+        </select>
+        <input v-else class="rc-input" :value="row[1]" @input="onRow(i, $event)" />
       </div>
 
       <div class="rc-field">
@@ -67,7 +101,16 @@ async function save() {
         <input v-model="newCtx" class="rc-input ctx-add" placeholder="新增映射，如 K1 标题 → title，回车添加" @keyup.enter="addCtx" />
       </div>
 
-      <div class="rc-field"><label>出参列</label><input class="rc-input" :value="edge.outcols" @input="onOutcols" /></div>
+      <div class="rc-field"><label>出参列（从步骤输出表字段中选择，未选输出表时取输入表）</label>
+        <select class="rc-select" value="" @change="addOutcol">
+          <option value="">选择字段</option>
+          <option v-for="f in outcolFields" :key="f.prop" :value="f.prop" :disabled="edge.outcols.includes(f.prop)">{{ f.prop }} · {{ f.desc }}</option>
+        </select>
+        <div v-if="edge.outcols.length" class="rc-tagchips">
+          <span v-for="p in edge.outcols" :key="p" class="rc-tagchip">{{ outcolLabel(p) }} <i @click="flow.toggleEdgeOutcol(fromId, p)">✕</i></span>
+        </div>
+        <span v-else class="rc-empty-hint">{{ outcolFields.length ? '未选择出参列' : '先选择步骤输入/输出表后再选字段' }}</span>
+      </div>
 
       <div class="rc-field"><label>启停</label>
         <select class="rc-select" :value="edge.enabled ? '启用' : '停用'" @change="onEnable">

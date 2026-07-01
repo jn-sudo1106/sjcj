@@ -61,3 +61,19 @@ export function mockEntryPaged(params?: Record<string, unknown>): Paged<EntryTyp
 export function mockEntryDetail(params?: Record<string, unknown>): EntryType {
   return ENTRIES.find((e) => e.tableId === String(params?.tableId)) ?? ENTRIES[0]
 }
+
+// 新建 / 编辑表：按 tableId upsert，无 tableId 视为新建（内存 session 持久化）
+let entrySeq = 1
+export function mockSaveEntryType(params?: Record<string, unknown>): { tableId: string; message?: string } {
+  const entry = params?.entry as EntryType | undefined
+  if (!entry) return { tableId: '', message: '缺少表数据' }
+  const now = new Date().toISOString().slice(0, 16).replace('T', ' ')
+  if (entry.tableId && ENTRIES.some((e) => e.tableId === entry.tableId)) {
+    const idx = ENTRIES.findIndex((e) => e.tableId === entry.tableId)
+    ENTRIES[idx] = { ...ENTRIES[idx], ...entry, updatedAt: now }
+    return { tableId: entry.tableId, message: '表已更新（演示）' }
+  }
+  const tableId = entry.tableId || `T${Date.now().toString().slice(-6)}${entrySeq++}`
+  ENTRIES.unshift({ ...entry, tableId, rowCount: entry.rowCount ?? 0, updatedAt: now })
+  return { tableId, message: '表已创建（演示）' }
+}

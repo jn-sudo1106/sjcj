@@ -17,9 +17,18 @@ export const useRuntimeStore = defineStore('runtime', () => {
 
   const now = () => new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-')
 
-  function trial(def: FlowDef): string {
-    const ids = def.main.filter((id) => id !== 'start' && id !== 'end' && def.configs[id])
-    if (!ids.length) return ''
+  // 单节点可试跑判定：已停用 / 规划中（待执行器）/ 采集节点缺 URL 或输出表（待配置）均不可试跑，
+  // 与画布 footFor 的「已停用/规划中/待配置」文案保持一致，避免误导为已跑通。
+  function isRunnable(def: FlowDef, id: string): boolean {
+    if (id === 'start' || id === 'end') return false
+    const c = def.configs[id]
+    if (!c || c.disabled || c.planned) return false
+    if (c.collectCfg && !(c.collectCfg.url && c.collectCfg.outputTable)) return false
+    return true
+  }
+
+  // 试跑运行器：给定一组已校验通过的节点 id，跑一次 L→C 流转 + 落表。整链试跑与单节点试跑共用。
+  function runTrial(def: FlowDef, ids: string[]): string {
     const runId = `RUN-TRIAL-${String(trialSeq++).padStart(2, '0')}`
     running.value = true
     lastRunId.value = runId
@@ -55,7 +64,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
             run.state = 'C'
             run.finishedAt = now()
             run.ruleHits = Math.floor(Math.random() * 8) + 4
-            generateData(def, runId)
+            generateData(def, runId, ids)
             running.value = false
           }
         },
@@ -65,27 +74,49 @@ export const useRuntimeStore = defineStore('runtime', () => {
     return runId
   }
 
-  // 落表：生成进入「数据查看」的实体数据（演示落到公告明细表 t-notice）
-  function generateData(def: FlowDef, runId: string) {
-    const collectId = def.main.find((id) => def.configs[id]?.collect)
-    const cfg = collectId ? def.configs[collectId] : undefined
-    const table = 't-notice'
-    const rows: DataRow[] = [
-      {
-        dataId: `${runId}-001`,
-        title: `试跑落表 · ${cfg?.collectCfg?.sourceName ?? '网页抓取'}`,
-        summary: `来自流程「${def.name}」`,
-        sourceId: cfg?.collectCfg?.configId ?? '—',
-        configId: cfg?.collectCfg?.configId,
-        taskId: `TK-${runId}`,
-        runId,
-        acceptState: 'pending',
-        fileType: 'html',
-        parseState: 'parsed',
-      },
-    ]
-    dataByTable[table] = [...rows, ...(dataByTable[table] ?? [])]
+  // 整链试跑：跑主链上所有可试跑节点
+  function trial(def: FlowDef): string {
+    if (running.value) return ''
+    const ids = def.main.filter((id) => isRunnable(def, id))
+    if (!ids.length) return ''
+    return runTrial(def, ids)
   }
 
-  return { runs, runNodes, nodeStates, dataByTable, lastRunId, running, trial }
+  // 单节点试跑：只跑当前节点（同样走真闭环 L→C + 落表），返回 '' 表示不可试跑或已有试跑在进行
+  function trialNode(def: FlowDef, nodeId: string): string {
+    if (running.value) return ''
+    if (!isRunnable(def, nodeId)) return ''
+    return runTrial(def, [nodeId])
+  }
+
+  // 落表：生成进入「数据查看」的实体数据，落到每个参与节点自己配置的输出表（不再写死 t-notice）
+  function generateData(def: FlowDef, runId: string, ids: string[]) {
+    const outputTables = new Set<string>()
+    ids.forEach((id) => {
+      const table = def.configs[id]?.collectCfg?.outputTable || def.configs[id]?.outputTable
+      if (table) outputTables.add(table)
+    })
+    if (!outputTables.size) outputTables.add('t-notice')
+
+    outputTables.forEach((table, i) => {
+      const cfg = ids.map((id) => def.configs[id]).find((c) => (c?.collectCfg?.outputTable || c?.outputTable) === table)
+      const rows: DataRow[] = [
+        {
+          dataId: `${runId}-${String(i + 1).padStart(3, '0')}`,
+          title: `试跑落表 · ${cfg?.collectCfg?.sourceName ?? cfg?.title ?? '网页抓取'}`,
+          summary: `来自流程「${def.name}」`,
+          sourceId: cfg?.collectCfg?.configId ?? '—',
+          configId: cfg?.collectCfg?.configId,
+          taskId: `TK-${runId}`,
+          runId,
+          acceptState: 'pending',
+          fileType: 'html',
+          parseState: 'parsed',
+        },
+      ]
+      dataByTable[table] = [...rows, ...(dataByTable[table] ?? [])]
+    })
+  }
+
+  return { runs, runNodes, nodeStates, dataByTable, lastRunId, running, trial, trialNode }
 })

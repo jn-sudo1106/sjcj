@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, type Component } from 'vue'
+import { computed, type Component } from 'vue'
 import {
   Bell,
   Box,
@@ -19,17 +19,24 @@ import {
 } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { TABS } from '../router/tabs'
-import CountUp from '../components/CountUp.vue'
 import { useUiStore } from '../stores/ui'
-import { workbenchApi, type WorkbenchSummary } from '../api'
+import { useFlowStore } from '../stores/flow'
 import companyLogo from '../assets/brand/company-logo.png'
 
 const route = useRoute()
 const router = useRouter()
 const ui = useUiStore()
-const activeKey = computed(() => route.path.split('/')[1] || 'overview')
+const flow = useFlowStore()
+// 源详情画布（/canvas?sourceId=X）逻辑上属于「采集资产」子页，侧栏高亮采集资产
+const activeKey = computed(() => {
+  const seg = route.path.split('/')[1] || 'overview'
+  if (seg === 'canvas' && (route.query.sourceId || flow.sourceCtx)) return 'collect'
+  return seg
+})
 const current = computed(() => TABS.find((t) => t.key === activeKey.value) ?? TABS[0])
-const isCanvas = computed(() => activeKey.value === 'canvas')
+// 源详情画布的标题与面包屑：采集资产 / 源名
+const isSourceCanvas = computed(() => activeKey.value === 'collect' && route.path.startsWith('/canvas'))
+const sourceCrumb = computed(() => flow.sourceCtx?.name || '源详情')
 
 const groupLabels = {
   home: '首页',
@@ -48,7 +55,7 @@ const navGroups = computed(() =>
 )
 
 const pageActions: Record<string, string[]> = {
-  overview: ['刷新', '导出'],
+  overview: ['刷新', '导出', '新建采集源'],
   canvas: ['保存草稿', '试跑', '发布'],
   collect: ['批量导入', '批量操作', '新建采集源'],
   rules: ['新建规则组', '导入规则', '发布校验'],
@@ -57,12 +64,9 @@ const pageActions: Record<string, string[]> = {
   runs: ['导出记录'],
   tools: ['刷新', '导出报表'],
 }
-const activeActions = computed(() => pageActions[activeKey.value] ?? pageActions.canvas)
-
-const summaries = ref<WorkbenchSummary[]>([])
-onMounted(async () => {
-  summaries.value = await workbenchApi.summary()
-})
+// 页面动作按真实路由段取，而不是侧栏高亮键（源详情画布仍要 保存/试跑/发布）
+const actionKey = computed(() => route.path.split('/')[1] || 'overview')
+const activeActions = computed(() => pageActions[actionKey.value] ?? pageActions.canvas)
 
 const navIcons: Record<string, Component> = {
   overview: Odometer,
@@ -83,7 +87,7 @@ const navIcons: Record<string, Component> = {
         <span class="rc-brand-mark">
           <img :src="companyLogo" alt="" />
         </span>
-        <strong>万微数据采集中心</strong>
+        <strong>青龙智能采集中心</strong>
       </div>
       <div class="rc-global-search">
         <el-icon><Search /></el-icon>
@@ -123,11 +127,15 @@ const navIcons: Record<string, Component> = {
         <div class="rc-module-head">
           <div>
             <div class="rc-bc">
-              <span>万微数据采集中心</span>
+              <span>青龙智能采集中心</span>
               <span>/</span>
               <span>{{ current.label }}</span>
+              <template v-if="isSourceCanvas">
+                <span>/</span>
+                <span>{{ sourceCrumb }}</span>
+              </template>
             </div>
-            <h1>{{ current.label }}</h1>
+            <h1>{{ isSourceCanvas ? sourceCrumb : current.label }}</h1>
           </div>
           <div class="rc-module-actions">
             <button
@@ -143,18 +151,6 @@ const navIcons: Record<string, Component> = {
               <el-icon v-else><Files /></el-icon>
               {{ action }}
             </button>
-          </div>
-        </div>
-
-        <div v-if="isCanvas" class="rc-summary-strip" aria-label="工作台摘要">
-          <div v-for="item in summaries" :key="item.label" class="rc-summary-item">
-            <div>
-              <span class="rc-summary-label">{{ item.label }}</span>
-              <strong v-if="item.title" class="rc-summary-title">{{ item.title }}</strong>
-              <span v-else class="rc-summary-number"><b><CountUp :value="Number(item.value)" /></b>{{ item.hint }}</span>
-              <span v-if="item.title" class="rc-summary-hint">{{ item.hint }}</span>
-            </div>
-            <span class="rc-summary-icon" :class="item.tone"><el-icon><Files /></el-icon></span>
           </div>
         </div>
 
@@ -548,78 +544,6 @@ const navIcons: Record<string, Component> = {
   box-shadow: 0 8px 18px rgba(37, 99, 235, 0.16);
 }
 
-.rc-summary-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  margin: 4px 0 12px;
-}
-
-.rc-summary-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 64px;
-  padding: 12px 18px;
-  border: 1px solid var(--rc-border);
-  border-radius: var(--rc-radius);
-  background: #fff;
-  box-shadow: var(--rc-shadow);
-}
-
-.rc-summary-label {
-  display: block;
-  margin-bottom: 6px;
-  color: var(--rc-muted);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.rc-summary-title {
-  display: block;
-  color: var(--rc-text);
-  font-size: 13px;
-}
-
-.rc-summary-hint {
-  display: block;
-  margin-top: 3px;
-  color: var(--rc-muted);
-  font-size: 12px;
-}
-
-.rc-summary-number {
-  color: var(--rc-text-2);
-  font-size: 13px;
-}
-
-.rc-summary-number b {
-  margin-right: 4px;
-  color: var(--rc-text);
-  font-size: 20px;
-}
-
-.rc-summary-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: var(--rc-primary-bg);
-  color: var(--rc-primary);
-}
-
-.rc-summary-icon.error {
-  background: var(--rc-error-bg);
-  color: var(--rc-error);
-}
-
-.rc-summary-icon.warn {
-  background: var(--rc-warn-bg);
-  color: #f97316;
-}
-
 .rc-pane {
   flex: 1;
   min-width: 0;
@@ -677,10 +601,6 @@ const navIcons: Record<string, Component> = {
     overflow: visible;
     padding: 18px 16px;
   }
-
-  .rc-summary-strip {
-    grid-template-columns: 1fr 1fr;
-  }
 }
 
 @media (max-width: 560px) {
@@ -712,10 +632,6 @@ const navIcons: Record<string, Component> = {
   .rc-module-actions {
     justify-content: flex-start;
     padding-top: 0;
-  }
-
-  .rc-summary-strip {
-    grid-template-columns: 1fr;
   }
 }
 </style>

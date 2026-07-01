@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
-import { sourceApi, type Source, type SourceCategory, type Step, type SourceLog, type TaskInst } from '../../api'
+import { sourceApi, flowApi, type Source, type SourceCategory, type Step, type SourceLog, type TaskInst } from '../../api'
 import { useUiStore } from '../../stores/ui'
 import { useFlowStore } from '../../stores/flow'
 import CategoryTree from './CategoryTree.vue'
@@ -132,6 +132,10 @@ function statusMeta(s: Source) {
 }
 function catLeaf(s: Source) {
   return s.categoryPath?.split('/').filter(Boolean).pop() || '—'
+}
+
+function openSourceCanvas(s: Source) {
+  router.push({ path: '/canvas', query: { sourceId: s.sourceId } })
 }
 
 // ---- 详情 ----
@@ -267,8 +271,13 @@ async function submitImport() {
   importDlg.visible = false
 }
 
-function openNewFlowCanvas() {
-  flow.newFlow('blank')
+async function openNewFlowCanvas() {
+  try {
+    const rec = await flowApi.flowRecommend('', 'web-public')
+    flow.load(rec.flow)
+  } catch {
+    flow.newFlow('blank')
+  }
   router.push('/canvas')
 }
 
@@ -384,7 +393,7 @@ onUnmounted(() => ui.clearActions())
               <td><el-checkbox :model-value="selectedIds.includes(s.sourceId)" @change="toggleRow(s.sourceId)" /></td>
               <td>
                 <div class="ca-src">
-                  <button class="ca-src-name" type="button" @click="openDetail(s)">{{ s.name }}</button>
+                  <button class="ca-src-name" type="button" @click="openSourceCanvas(s)">{{ s.name }}</button>
                   <span v-if="s.externalChanged" class="ca-flag">外部变更</span>
                 </div>
                 <div class="muted">{{ s.sourceId }} · {{ s.url }}</div>

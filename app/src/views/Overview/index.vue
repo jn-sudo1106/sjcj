@@ -3,8 +3,9 @@ import { computed, onMounted, onUnmounted, ref, type Component } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Bell, Box, CircleCheck, Document, Files } from '@element-plus/icons-vue'
-import { overviewApi, type OverviewSummary, type TrendPoint } from '../../api'
+import { overviewApi, flowApi, type OverviewSummary, type TrendPoint } from '../../api'
 import { useUiStore } from '../../stores/ui'
+import { useFlowStore } from '../../stores/flow'
 import CountUp from '../../components/CountUp.vue'
 import DonutChart from '../../components/charts/DonutChart.vue'
 import TrendBars from '../../components/charts/TrendBars.vue'
@@ -12,6 +13,7 @@ import AssetFlow from '../../components/charts/AssetFlow.vue'
 
 const router = useRouter()
 const ui = useUiStore()
+const flow = useFlowStore()
 
 const data = ref<OverviewSummary | null>(null)
 const trend = ref<TrendPoint[]>([])
@@ -48,25 +50,12 @@ function goCollect(state?: string) {
   router.push({ path: '/collect', query: state ? { state } : {} })
 }
 
-function onException(kind: string) {
-  if (kind === 'error') return goCollect('E')
-  if (kind === 'disabled') return goCollect('disabled')
-  return goCollect()
-}
-
 function stateMeta(s: string) {
   if (s === 'D') return { cls: 'muted', text: '已停用' }
   if (s === 'C') return { cls: 'ok', text: '在线' }
   if (s === 'E') return { cls: 'err', text: '异常' }
   if (s === 'L') return { cls: 'run', text: '运行中' }
   return { cls: 'muted', text: '-' }
-}
-
-const exKindMeta: Record<string, { cls: string; text: string }> = {
-  error: { cls: 'err', text: '出错' },
-  external: { cls: 'warn', text: '待确认' },
-  disabled: { cls: 'muted', text: '停用' },
-  alarm: { cls: 'warn', text: '告警' },
 }
 
 interface Kpi {
@@ -136,6 +125,15 @@ onMounted(async () => {
     ElMessage.success('已刷新采集资产总览')
   })
   ui.registerAction('导出', () => ElMessage.info('导出总览：演示环境占位'))
+  ui.registerAction('新建采集源', async () => {
+    try {
+      const rec = await flowApi.flowRecommend('', 'web-public')
+      flow.load(rec.flow)
+    } catch {
+      flow.newFlow('blank')
+    }
+    router.push('/canvas')
+  })
 })
 
 onUnmounted(() => ui.clearActions())
@@ -284,23 +282,6 @@ onUnmounted(() => ui.clearActions())
       </div>
     </div>
 
-    <div class="rc-card ov-ex-card">
-      <div class="rc-card-head">
-        <div class="rc-card-title">异常 &amp; 待确认</div>
-        <button class="ov-more" type="button" @click="goCollect('E')">去处理 ›</button>
-      </div>
-      <div class="ov-ex">
-        <button v-for="e in data?.exceptions ?? []" :key="e.sourceId" class="ov-ex-row" type="button" @click="onException(e.kind)">
-          <span class="rc-status" :class="exKindMeta[e.kind].cls">{{ exKindMeta[e.kind].text }}</span>
-          <span class="ov-ex-main">
-            <span class="ov-ex-name">{{ e.name }}</span>
-            <span class="ov-ex-text">{{ e.text }}</span>
-          </span>
-          <span class="muted ov-ex-at">{{ e.at || '' }}</span>
-        </button>
-        <div v-if="!(data?.exceptions ?? []).length" class="ov-ex-empty muted">暂无异常，采集资产健康</div>
-      </div>
-    </div>
     </template>
   </div>
 </template>
@@ -657,8 +638,7 @@ onUnmounted(() => ui.clearActions())
   flex-direction: column;
 }
 
-.ov-live-copy b,
-.ov-ex-name {
+.ov-live-copy b {
   overflow: hidden;
   color: #1e293b;
   font-size: 12px;
@@ -666,8 +646,7 @@ onUnmounted(() => ui.clearActions())
   white-space: nowrap;
 }
 
-.ov-live-copy small,
-.ov-ex-text {
+.ov-live-copy small {
   overflow: hidden;
   margin-top: 2px;
   color: #64748b;
@@ -731,46 +710,6 @@ onUnmounted(() => ui.clearActions())
   border-color: #bfdbfe;
   color: #2563eb;
   background: #eff6ff;
-}
-
-.ov-ex-card {
-  display: none;
-}
-
-.ov-ex {
-  display: flex;
-  flex-direction: column;
-  padding: 6px 8px 10px;
-}
-
-.ov-ex-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-}
-
-.ov-ex-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.ov-ex-at {
-  flex: none;
-  font-size: 11px;
-}
-
-.ov-ex-empty {
-  padding: 28px 8px;
-  text-align: center;
-  font-size: 12px;
 }
 
 @keyframes ov-rise {

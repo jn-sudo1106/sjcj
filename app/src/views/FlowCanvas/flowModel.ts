@@ -17,6 +17,8 @@ export interface NodeConfig {
   params: [string, string, string][]
   output: [string, string, string][]
   collectCfg?: CollectConfig
+  /** 非采集类节点的产物落表绑定（采集类沿用 collectCfg.outputTable，二者不重复） */
+  outputTable?: string
 }
 
 export type WebKind = 'list' | 'detail' | 'attachment'
@@ -34,6 +36,9 @@ export interface CollectConfig {
   tags: string
   configMode: 'new' | 'existing'
   configId: string
+  configName: string
+  configTopic: string
+  configStrategy: string
   outputTable: string
   inputParams: string[]
   isDetail: boolean
@@ -61,7 +66,7 @@ export const NODE_CONFIGS: Record<string, NodeConfig> = {
       snatchType: '[90] - 网页抓取', url: 'https://example.com/announcements?page=${page}', sourceName: '交易所公告列表 - A 股',
       webKind: 'list',
       category: '/公告/交易所/列表', dirId: '9009245', useProxy: false, resume: true, tags: '公告, A股, 列表页',
-      configMode: 'new', configId: '81909', outputTable: '2101001', inputParams: ['p-date'],
+      configMode: 'new', configId: '81909', configName: '交易所公告列表配置', configTopic: 'announcement.list', configStrategy: '增量', outputTable: '2101001', inputParams: ['p-date'],
       isDetail: false, isLogin: false, needLogin: false, loginUrl: '', account: '', credentialRef: '',
       scheduleType: '交易日定时', scheduleTime: '08:30', weekdays: [1, 2, 3, 4, 5], cron: '30 8 * * 1-5',
     },
@@ -77,7 +82,7 @@ export const NODE_CONFIGS: Record<string, NodeConfig> = {
       snatchType: '[90] - 网页抓取', url: 'https://example.com/detail/${detail_url}', sourceName: '公告详情抓取',
       webKind: 'detail',
       category: '/公告/交易所/详情', dirId: '9009245', useProxy: false, resume: true, tags: '公告, 详情页',
-      configMode: 'existing', configId: '81908', outputTable: '2101001', inputParams: [],
+      configMode: 'existing', configId: '81908', configName: '', configTopic: '', configStrategy: '增量', outputTable: '2101001', inputParams: [],
       isDetail: true, isLogin: true, needLogin: true, loginUrl: 'https://example.com/login', account: 'research_***', credentialRef: 'cred-zfb',
       scheduleType: '每天', scheduleTime: '09:00', weekdays: [1, 2, 3, 4, 5, 6, 7], cron: '0 9 * * *',
     },
@@ -153,6 +158,7 @@ export const NODE_CONFIGS: Record<string, NodeConfig> = {
     inmap: [['unique_rows', '← 去重处理.unique_rows', '待写入数据'], ['quality_score', '← 校验.quality_score', '质量分']],
     params: [['entry_type_id', 'number', '2102157'], ['write_mode', 'enum', 'upsert']],
     output: [['data_id', 'string', '数据中心数据 ID'], ['entry_type_id', 'number', '输出表 ID'], ['write_status', 'enum', 'C/E']],
+    outputTable: '2102157',
   },
   metric: {
     title: '指标引用', sub: '输出类 · 指标中心引用', status: 'P1 · 跳转指标中心', planned: false,
@@ -211,8 +217,12 @@ export interface EdgeConfig {
   status: string
   rows: [string, string][]
   context: string[]
-  outcols: string
+  /** 出参列：步骤输出表字段的多选（字段 prop 列表），来源见 outputTableId 对应实体表 */
+  outcols: string[]
   enabled: boolean
+  /** 步骤输入/输出表的实体表绑定（对应 rows[1]/rows[4] 的结构化版本，二者选中时同步 rows 文本） */
+  inputTableId?: string
+  outputTableId?: string
 }
 
 /** 旁路分支种子（决定旁路节点纵向锚点与连线两端） */
@@ -251,8 +261,9 @@ export const EDGE_CONFIGS: Record<string, EdgeConfig> = {
       ['失败动作', '跳过并记录'],
     ],
     context: ['K1 标题 → title', 'K2 正文 → content'],
-    outcols: '（请选择列）',
+    outcols: [],
     enabled: true,
+    inputTableId: '2102157',
   },
 }
 
@@ -271,7 +282,7 @@ export function defaultEdgeConfig(): EdgeConfig {
       ['失败动作', '跳过并记录'],
     ],
     context: [],
-    outcols: '（请选择列）',
+    outcols: [],
     enabled: true,
   }
 }
@@ -290,8 +301,11 @@ export const SNATCH_TYPES = ['[90] - 网页抓取', '[95] - 文件下载', '[150
 export const WEB_KIND_OPTIONS: { value: WebKind; label: string; desc: string }[] = [
   { value: 'list', label: '列表页', desc: '分页、搜索结果、列表入口' },
   { value: 'detail', label: '详情页', desc: '正文、详情字段、附件入口' },
-  { value: 'attachment', label: '文件附件页', desc: 'PDF、Word、Excel、图片' },
+  { value: 'attachment', label: '文件附件页', desc: '文件下载、附件直链入口' },
 ]
+
+// 新建配置：运行策略下拉选项
+export const CONFIG_STRATEGY_OPTIONS = ['增量', '全量', '按需触发']
 
 // 模板 → 默认抓取类型（新插入采集节点用）
 export const TEMPLATE_TO_SNATCH: Record<string, string> = {

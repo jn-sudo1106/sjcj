@@ -77,7 +77,9 @@ export interface Config {
 /** 实体/表 EntryType */
 export interface EntryType {
   tableId: string
-  tableName: string // 如 sense_data.TB_ZFB_COMMENT
+  tableName: string // 如 sense_data.TB_ZFB_COMMENT（物理表名）
+  name?: string // 表显示名（业务名）
+  remark?: string // 备注
   fields: EntryField[]
   rowCount?: number
   sourceId?: string
@@ -88,7 +90,7 @@ export interface EntryType {
 export interface EntryField {
   prop: string // 属性(api json key)，如 feed_id-K1
   desc: string // 中文描述
-  type: 'string' | 'text' | 'longtext' | 'url'
+  type: 'string' | 'text' | 'longtext' | 'url' | 'number' | 'date' | 'json'
   required: boolean
   width?: number
   preprocess?: string // 预处理清洗函数
@@ -265,6 +267,19 @@ export interface DataRow {
   acceptState: 'accepted' | 'pending' | 'rejected' // 验收状态
   fileType?: 'html' | 'pdf' | 'json' | '-'
   parseState?: 'parsed' | 'failed' | 'none'
+  parentId?: string // 父数据 ID（详情解析等子步骤反推列表）
+  state?: string // 处理状态：C 完成 / E 出错 / L 处理中
+  values?: Record<string, unknown> // 动态列值（按表 schema 的 fields[].prop 索引）
+}
+
+/** 结果视图查询入参 */
+export interface RowQuery extends PageQuery {
+  tableId: string
+  sourceId?: string
+  dataId?: string
+  parentId?: string
+  state?: string
+  sql?: string
 }
 
 /* ---------------- M4 运行记录 ---------------- */
