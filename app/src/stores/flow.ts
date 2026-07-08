@@ -5,19 +5,34 @@ import {
   TEMPLATE_TO_NODE,
   TEMPLATE_TO_NAME,
   TEMPLATE_TO_SNATCH,
-  defaultEdgeConfig,
   cloneConfig,
   isDecision,
   isParallel,
+  isDataNode,
+  nodeOutputTable,
+  effectiveInputTable,
+  isFirstMainNode,
   makeBlankFlow,
   makeStandardFlow,
+  buildHorizontalLayout,
+  buildSourceSeed,
+  emptyTripleRow,
+  makeDefaultRuleOrchestration,
+  normalizeNodeConfigs,
+  setTripleValue,
+  TERMINALS,
   type NodeConfig,
-  type EdgeConfig,
   type CollectConfig,
+  type OutputAdvanced,
+  type ConditionGroup,
+  type TaskConfig,
+  type TripleField,
   type BranchSeed,
   type FlowDef,
 } from '../views/FlowCanvas/flowModel'
-import type { Source, Step } from '../api'
+import type { RuleOrchestration, Source, Site, Step } from '../api'
+
+export { TERMINALS }
 
 // 画布布局常量（对齐原型：节点宽 210、居中 x=320、终端宽 150）
 const CENTER = 320
@@ -29,25 +44,16 @@ const LOGIC_H = 140
 const GAP = 30
 const SIDE_OFFSET = 215 // 旁路节点相对主链左移/右移量 → 左列 x=0，右列 x=430
 
-export const TERMINALS: Record<string, string> = { start: '开始', end: '完成 / 发布候选' }
-
 export interface PlacedPos { top: number; left: number; height: number }
 export interface PlacedNode { id: string; cfg: NodeConfig; pos: PlacedPos; branch: boolean; side?: 'left' | 'right' }
 export interface PlacedTerm { id: string; label: string; pos: PlacedPos }
 export interface DropSlot { afterId: string; top: number }
-export interface MainEdge { fromId: string; toId: string; d: string; rule: boolean; hasStep: boolean; label: string; lx: number; ly: number }
+export interface MainEdge { fromId: string; toId: string; d: string; rule: boolean; lx: number; ly: number }
 export interface BranchEdge { d: string }
-
-// 横向布局（结果视图节点条用）
-export interface HPlacedPos { left: number; top: number; width: number; height: number }
-export interface HPlacedNode { id: string; cfg: NodeConfig; pos: HPlacedPos; branch: boolean }
-export interface HPlacedTerm { id: string; label: string; pos: HPlacedPos }
-export interface HEdge { d: string; rule: boolean }
 
 export const useFlowStore = defineStore('flow', () => {
   // ---- 状态 ----
   const configs = reactive<Record<string, NodeConfig>>({})
-  const edges = reactive<Record<string, EdgeConfig>>({})
   // 默认空白画布（M5.5）：首次进入为干净的 开始 → 完成；标准链路 / 预置意图经「＋ 新建流程」载入
   const main = ref<string[]>(['start', 'end'])
   const branches = reactive<BranchSeed[]>([])
@@ -55,9 +61,13 @@ export const useFlowStore = defineStore('flow', () => {
   const flowId = ref('flow-default')
   const flowName = ref('未命名流程')
   const sourceCtx = ref<Source | null>(null)
+  // 源级配置（0706 优化·源/节点配置分层）：sourceCtx 保留作只读上下文（是否绑定持久化源，驱动 UI 的「源模式」），
+  // sourceCfg 是可编辑副本，供源信息编辑抽屉读写；load() 统一从 FlowDef.source 灌入，二者内容随加载同步、写入路径各自独立。
+  const sourceCfg = ref<Source | null>(null)
+  // 网站态上下文（0707 优化·Phase4）：与 sourceCtx 互斥——画布当前编排对象要么是某个子源（sourceCtx），
+  // 要么是某个网站的统一流程模板（siteCtx），二者不会同时非空。网站模板不实际运行，没有 sourceCfg 概念。
+  const siteCtx = ref<Site | null>(null)
   const selectedId = ref<string>('')
-  const selectedEdgeFrom = ref<string | null>(null)
-  const activeKind = ref<'node' | 'edge'>('node')
   const activeTab = ref<string>('base')
   let seq = 1
 
@@ -121,14 +131,11 @@ export const useFlowStore = defineStore('flow', () => {
       const aBottom = mainPos[a].top + mainPos[a].height
       const bTop = mainPos[b].top
       slots.push({ afterId: a, top: (aBottom + bTop) / 2 })
-      const stepCfg = edges[a]
       mainEdges.push({
         fromId: a,
         toId: b,
         d: `M${CENTER} ${aBottom} L${CENTER} ${bTop}`,
         rule: Boolean(configs[b] && /规则/.test(configs[b].title)),
-        hasStep: Boolean(stepCfg),
-        label: stepCfg ? `⚙ ${stepCfg.title.split(' ')[0]}` : '',
         lx: CENTER + 118,
         ly: (aBottom + bTop) / 2,
       })
@@ -154,106 +161,41 @@ export const useFlowStore = defineStore('flow', () => {
     return { nodes, terminals, slots, mainEdges, branchEdges, totalHeight }
   })
 
-  // ---- 横向布局：供结果视图顶部节点条使用 ----
-  const horizontalLayout = computed(() => {
-    const HNODE_W = 132
-    const HNODE_H = 60
-    const HTERM_W = 92
-    const HTERM_H = 30
-    const HGAP = 22
-    const HBRANCH_DY = 86 // 旁路相对主链上下偏移
-    const PAD_X = 16
-    const PAD_Y = 10
-    // 主链顶对齐：仅当有"上方旁路"时才在主链上方留空，否则贴顶；下方旁路向下扩展高度
-    const hasAbove = branches.some((b) => b.side === 'left')
-    const hasBelow = branches.some((b) => b.side === 'right')
-    const axisY = (hasAbove ? HBRANCH_DY : PAD_Y) + HNODE_H / 2
-
-    const mainPos: Record<string, HPlacedPos> = {}
-    let x = PAD_X
-    main.value.forEach((id) => {
-      const isT = isTerm(id)
-      const w = isT ? HTERM_W : HNODE_W
-      const h = isT ? HTERM_H : HNODE_H
-      mainPos[id] = { left: x, top: axisY - h / 2, width: w, height: h }
-      x += w + HGAP
-    })
-    const totalWidth = Math.max(640, x + PAD_X - HGAP)
-    const totalHeight = (hasBelow ? axisY + HBRANCH_DY + HNODE_H / 2 : axisY + HNODE_H / 2) + PAD_Y
-
-    const branchPos: Record<string, HPlacedPos> = {}
-    branches.forEach((b) => {
-      const anchor = mainPos[b.rowAnchor]
-      if (!anchor || !configs[b.id]) return
-      branchPos[b.id] = {
-        left: anchor.left,
-        top: b.side === 'left' ? axisY - HBRANCH_DY - HNODE_H / 2 : axisY + HBRANCH_DY - HNODE_H / 2,
-        width: HNODE_W,
-        height: HNODE_H,
-      }
-    })
-
-    const nodes: HPlacedNode[] = []
-    const terminals: HPlacedTerm[] = []
-    main.value.forEach((id) => {
-      if (isTerm(id)) terminals.push({ id, label: TERMINALS[id], pos: mainPos[id] })
-      else if (configs[id]) nodes.push({ id, cfg: configs[id], pos: mainPos[id], branch: false })
-    })
-    branches.forEach((b) => {
-      if (branchPos[b.id] && configs[b.id]) nodes.push({ id: b.id, cfg: configs[b.id], pos: branchPos[b.id], branch: true })
-    })
-
-    // 主链横向连线
-    const mainEdges: HEdge[] = []
-    for (let i = 0; i < main.value.length - 1; i++) {
-      const a = mainPos[main.value[i]]
-      const b = mainPos[main.value[i + 1]]
-      if (!a || !b) continue
-      mainEdges.push({
-        d: `M${a.left + a.width} ${axisY} L${b.left} ${axisY}`,
-        rule: Boolean(configs[main.value[i + 1]] && /规则/.test(configs[main.value[i + 1]].title)),
-      })
-    }
-
-    // 旁路 bezier
-    const branchEdges: HEdge[] = []
-    branches.forEach((b) => {
-      const bp = branchPos[b.id]
-      const mainEnd = b.edgeFrom === b.id ? b.edgeTo : b.edgeFrom
-      const mp = mainPos[mainEnd]
-      if (!bp || !mp) return
-      const bx = bp.left + bp.width / 2
-      const by = b.side === 'left' ? bp.top + bp.height : bp.top
-      const mx = mp.left + mp.width / 2
-      const my = axisY
-      branchEdges.push({ d: `M${mx} ${my} C${mx} ${(my + by) / 2} ${bx} ${(my + by) / 2} ${bx} ${by}`, rule: false })
-    })
-
-    return { nodes, terminals, mainEdges, branchEdges, totalWidth, totalHeight, axisY }
-  })
+  // ---- 横向布局：供结果视图顶部节点条使用（纯函数版见 flowModel.buildHorizontalLayout，分屏对比 Phase 5 复用同一算法） ----
+  const horizontalLayout = computed(() => buildHorizontalLayout(main.value, branches, configs))
 
   // ---- 选择 ----
   function select(id: string) {
-    activeKind.value = 'node'
     selectedId.value = id
-    selectedEdgeFrom.value = null
-    const cfg = configs[id]
-    activeTab.value = cfg?.collect ? 'source' : 'base'
-  }
-  function selectEdge(fromId: string) {
-    if (!edges[fromId]) edges[fromId] = defaultEdgeConfig()
-    activeKind.value = 'edge'
-    selectedEdgeFrom.value = fromId
-    activeTab.value = 'edge'
+    // 顶层 Tab 不再按节点类型派生步骤/子页（0706 调整4：去步进器，四 Tab 统一为 config/task/table/ai）
+    activeTab.value = 'config'
   }
   function setActiveTab(tab: string) {
     activeTab.value = tab
   }
 
   const selectedNode = computed<NodeConfig | undefined>(() => configs[selectedId.value])
-  const selectedEdge = computed<EdgeConfig | undefined>(() =>
-    selectedEdgeFrom.value ? edges[selectedEdgeFrom.value] : undefined,
-  )
+
+  // 从 fromId 起沿主链向上找最近一个有输出表的节点（含 fromId 自身）
+  function upstreamOutputTable(fromId: string): string {
+    const idx = main.value.indexOf(fromId)
+    for (let i = idx; i >= 0; i--) {
+      const c = configs[main.value[i]]
+      if (c) {
+        const t = nodeOutputTable(c)
+        if (t) return t
+      }
+    }
+    return ''
+  }
+
+  // 节点有效输入表 / 是否主链首节点（0701 问题五）：委托 flowModel 纯函数，供 UI 与 validateFlow 共用
+  function effectiveInputTableFor(id: string): string {
+    return effectiveInputTable(main.value, branches, configs, id)
+  }
+  function isFirstMainNodeId(id: string): boolean {
+    return isFirstMainNode(main.value, configs, id)
+  }
 
   // ---- 编辑动作 ----
   function insertAfter(prevId: string, template: string) {
@@ -264,26 +206,22 @@ export const useFlowStore = defineStore('flow', () => {
     // 新插入节点：名称取节点类型名，不继承种子模板的具体标题
     const typeName = TEMPLATE_TO_NAME[template]
     if (typeName) cfg.title = typeName
-    // 采集类节点：源名称默认 = 节点名称，抓取类型 = 节点类型；其余具体配置清空待填
+    // 采集类节点：抓取类型 = 节点类型；其余具体配置清空待填（源级字段不在节点上，见 sourceCfg）
     if (cfg.collectCfg) {
-      cfg.collectCfg.sourceName = cfg.title
       cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[template] ?? cfg.collectCfg.snatchType
       cfg.collectCfg.url = ''
-      cfg.collectCfg.configId = ''
       cfg.collectCfg.outputTable = ''
       cfg.collectCfg.inputParams = []
-      cfg.collectCfg.tags = ''
+    }
+    // 非采集数据类节点：默认继承上游节点的输出表（0701 问题二，Q1/Q2 口径：处理类步骤与上游同表）
+    if (!cfg.collectCfg && isDataNode(cfg) && !cfg.outputTable) {
+      cfg.outputTable = upstreamOutputTable(prevId)
     }
     const id = `${srcKey}-${seq++}`
     configs[id] = cfg
     const idx = main.value.indexOf(prevId)
     const at = idx < 0 ? main.value.length - 1 : idx + 1
     main.value.splice(at, 0, id)
-    // 原 prev→next 的子步骤配置归属新的 new→next
-    if (edges[prevId]) {
-      edges[id] = edges[prevId]
-      delete edges[prevId]
-    }
     select(id)
     touch()
     return id
@@ -333,7 +271,6 @@ export const useFlowStore = defineStore('flow', () => {
     const idx = main.value.indexOf(id)
     if (idx >= 0) {
       main.value.splice(idx, 1)
-      delete edges[id]
     } else {
       const bi = branches.findIndex((b) => b.id === id)
       if (bi >= 0) branches.splice(bi, 1)
@@ -375,18 +312,64 @@ export const useFlowStore = defineStore('flow', () => {
     if (c) c.outputTable = tableId
     touch()
   }
+  // 非采集节点输入表（0701 问题五）：空字符串 = 清空覆盖，回到自动继承上游输出表
+  function setInputTable(id: string, tableId: string) {
+    const c = configs[id]
+    if (c) c.inputTable = tableId
+    touch()
+  }
+  // 节点任务队列（0706 调整4：队列归属统一收在 taskCfg，采集/非采集节点共用同一份任务配置）
+  function setTaskQueue(id: string, value: string) {
+    patchTaskConfig(id, { queue: value })
+  }
+  // 任务级配置整体读写（队列/URL规则/拼接逻辑/触发条件，0706 调整4「任务配置」独立 Tab）
+  function patchTaskConfig(id: string, patch: Partial<TaskConfig>) {
+    const c = configs[id]
+    if (!c) return
+    c.taskCfg = { queue: '', urlRule: '', joinLogic: '', ...c.taskCfg, ...patch }
+    touch()
+  }
+  // 节点进入条件（0701 问题十·方案B；0706 升级为多字段条件组）：undefined = 不限制
+  function setEntryCondition(id: string, cond: ConditionGroup | undefined) {
+    const c = configs[id]
+    if (c) c.entryCondition = cond
+    touch()
+  }
+  // 源级配置整体读写（0706 优化·源/节点配置分层）：首次编辑时懒创建草稿，供新建/空白流程也能编辑源信息
+  function patchSource(patch: Partial<Source>) {
+    if (!sourceCfg.value) {
+      sourceCfg.value = { sourceId: '', name: '', url: '', configId: '', mainTable: '', owner: '', state: 'C' }
+    }
+    Object.assign(sourceCfg.value, patch)
+    touch()
+  }
+  // 产物高级配置（原「落表输出」节点能力，全节点通用；0701 问题四）
+  function patchOutputAdvanced(id: string, patch: Partial<OutputAdvanced>) {
+    const c = configs[id]
+    if (!c) return
+    c.outputAdvanced = { writeMode: 'upsert', dedupeKey: '', failPolicy: '阻断并记录', ...c.outputAdvanced, ...patch }
+    touch()
+  }
 
-  // ---- inmap / params / output 三列表格行级编辑（Phase 3）----
-  type TripleField = 'inmap' | 'params' | 'output'
+  function patchRuleConfig(id: string, patch: Partial<RuleOrchestration>) {
+    const c = configs[id]
+    if (!c) return
+    c.ruleCfg = { ...makeDefaultRuleOrchestration(), ...c.ruleCfg, ...patch }
+    touch()
+  }
+
+  // ---- inmap / params / output 三列表格行级编辑（0707 Phase 7A：对象结构，保留旧 API 名称）----
   function setTripleCell(id: string, field: TripleField, rowIndex: number, colIndex: 0 | 1 | 2, value: string) {
     const c = configs[id]
     const row = c?.[field]?.[rowIndex]
-    if (row) row[colIndex] = value
+    if (row) setTripleValue(field, row, colIndex, value)
     touch()
   }
   function addTripleRow(id: string, field: TripleField) {
     const c = configs[id]
-    if (c) (c[field] as [string, string, string][]).push(['', '', ''])
+    if (!c) return
+    if (field === 'inmap') c.inmap.push(emptyTripleRow(field) as never)
+    else c[field].push(emptyTripleRow(field) as never)
     touch()
   }
   function removeTripleRow(id: string, field: TripleField, rowIndex: number) {
@@ -395,46 +378,6 @@ export const useFlowStore = defineStore('flow', () => {
     touch()
   }
 
-  // ---- 连线（子步骤）编辑 ----
-  function setEdgeRow(fromId: string, index: number, value: string) {
-    const e = edges[fromId]
-    if (e && e.rows[index]) e.rows[index][1] = value
-    touch()
-  }
-  // 出参列多选（Phase 4.1）：勾选/取消勾选步骤输出表的某个字段
-  function toggleEdgeOutcol(fromId: string, prop: string) {
-    const e = edges[fromId]
-    if (!e) return
-    const idx = e.outcols.indexOf(prop)
-    if (idx >= 0) e.outcols.splice(idx, 1)
-    else e.outcols.push(prop)
-    touch()
-  }
-  // 选中实体表时同步 rows 文本（向后兼容旧的自由文本展示）；清空选择时不覆盖已有文本。
-  function setEdgeTable(fromId: string, field: 'inputTableId' | 'outputTableId', tableId: string, label: string) {
-    const e = edges[fromId]
-    if (!e) return
-    const rowIndex = field === 'inputTableId' ? 1 : 4
-    if (field === 'inputTableId') e.inputTableId = tableId || undefined
-    else e.outputTableId = tableId || undefined
-    if (tableId && e.rows[rowIndex]) e.rows[rowIndex][1] = label
-    touch()
-  }
-  function setEdgeEnabled(fromId: string, value: boolean) {
-    const e = edges[fromId]
-    if (e) e.enabled = value
-    touch()
-  }
-  function addEdgeContext(fromId: string, value: string) {
-    const e = edges[fromId]
-    if (e && value) e.context.push(value)
-    touch()
-  }
-  function removeEdgeContext(fromId: string, index: number) {
-    const e = edges[fromId]
-    if (e) e.context.splice(index, 1)
-    touch()
-  }
 
   // ---- 流程定义 序列化 / 加载 ----
   function serialize(): FlowDef {
@@ -445,25 +388,22 @@ export const useFlowStore = defineStore('flow', () => {
       main: [...main.value],
       branches: JSON.parse(JSON.stringify(branches)) as BranchSeed[],
       configs: JSON.parse(JSON.stringify(configs)) as Record<string, NodeConfig>,
-      edges: JSON.parse(JSON.stringify(edges)) as Record<string, EdgeConfig>,
       updatedAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
+      source: sourceCfg.value ? (JSON.parse(JSON.stringify(sourceCfg.value)) as Source) : undefined,
     }
   }
   function load(def: FlowDef) {
     flowId.value = def.id
     flowName.value = def.name
     Object.keys(configs).forEach((k) => delete configs[k])
-    Object.assign(configs, JSON.parse(JSON.stringify(def.configs)))
-    Object.keys(edges).forEach((k) => delete edges[k])
-    Object.assign(edges, JSON.parse(JSON.stringify(def.edges)))
+    Object.assign(configs, normalizeNodeConfigs(JSON.parse(JSON.stringify(def.configs)) as Record<string, NodeConfig>))
     branches.splice(0, branches.length, ...(JSON.parse(JSON.stringify(def.branches)) as BranchSeed[]))
     main.value = [...def.main]
+    sourceCfg.value = def.source ? (JSON.parse(JSON.stringify(def.source)) as Source) : null
     const first = main.value.find((m) => !isTerm(m))
     if (first) select(first)
     else {
       selectedId.value = ''
-      selectedEdgeFrom.value = null
-      activeKind.value = 'node'
     }
     dirty.value = false
   }
@@ -478,85 +418,123 @@ export const useFlowStore = defineStore('flow', () => {
     load(kind === 'standard' ? makeStandardFlow() : makeBlankFlow())
   }
 
-  // 源 → 画布：把源的子步骤编译为画布节点（首步当列表，其余当详情）
-  function loadFromSource(source: Source, steps: Step[]) {
-    sourceCtx.value = source
-    const seedConfigs: Record<string, NodeConfig> = {}
-    const seedMain: string[] = ['start']
-    steps.forEach((step, i) => {
-      const templateKey = i === 0 ? 'web-list' : 'web-detail'
-      const cfg = cloneConfig(NODE_CONFIGS[templateKey])
-      cfg.title = step.name || (i === 0 ? '列表抓取' : '详情解析')
-      if (cfg.collectCfg) {
-        cfg.collectCfg.sourceName = source.name
-        cfg.collectCfg.url = source.url
-        cfg.collectCfg.outputTable = step.outputTable || source.mainTable || ''
-        cfg.collectCfg.configId = step.configId || source.configId
-        cfg.collectCfg.tags = source.tags?.join(', ') || ''
-        cfg.collectCfg.category = source.categoryPath || ''
-        cfg.collectCfg.dirId = source.dirId || ''
-        cfg.collectCfg.resume = source.resume ?? cfg.collectCfg.resume
-        cfg.collectCfg.credentialRef = source.credentialRef || ''
-        cfg.collectCfg.needLogin = Boolean(source.credentialRef)
-        cfg.collectCfg.isLogin = Boolean(source.credentialRef)
-      }
-      cfg.disabled = !step.enabled
-      seedConfigs[step.stepId] = cfg
-      seedMain.push(step.stepId)
-    })
-    seedMain.push('end')
-    // 演示：名字含「规则」的源追加一个旁路「规则处理」节点（非数据节点，结果视图下不可点）
-    const branchSeeds: BranchSeed[] = []
-    if (/规则/.test(source.name) && steps.length > 0) {
-      const lastStepId = steps[steps.length - 1].stepId
-      const ruleId = `${source.sourceId}-rule-demo`
-      const ruleCfg = cloneConfig(NODE_CONFIGS.rule)
-      ruleCfg.title = '规则处理'
-      delete ruleCfg.collectCfg
-      seedConfigs[ruleId] = ruleCfg
-      branchSeeds.push({ id: ruleId, side: 'right', rowAnchor: lastStepId, edgeFrom: lastStepId, edgeTo: ruleId })
+  // 源 → 画布：把源的子步骤编译为画布节点（首步当列表，其余当详情）。
+  // 种子构造用纯函数 buildSourceSeed（flowModel.ts），分屏对比 Phase 5 的第二栏独立复用同一构造逻辑，不经过本 store。
+  // persistedDef（0707 优化·Phase4）：调用方若已查到该源自己保存过的 FlowDef（含网站同步覆盖写入的），
+  // 优先加载它而不是重新按 Step 拼一份通用模板——否则子源单独改过的流程 / 网站同步覆盖的结果重进画布都会被冲掉。
+  function loadFromSource(source: Source, steps: Step[], persistedDef?: FlowDef | null) {
+    // 存克隆而非引用（0706 Phase4 修复）：mock 按引用返回内部数据，若 sourceCtx 与之共享对象，
+    // mock 侧的原始变更会绕过响应式代理静默改值，导致后续同值代理赋值不触发更新、摘要头保存后不刷新
+    siteCtx.value = null
+    sourceCtx.value = JSON.parse(JSON.stringify(source)) as Source
+    // needLogin 未显式设置时按是否已绑登录凭据回填（与旧行为对齐：有凭据引用即视为登录态源）
+    const sourceForCfg: Source = { ...source, needLogin: source.needLogin ?? Boolean(source.credentialRef) }
+    if (persistedDef) {
+      load({ ...persistedDef, id: source.sourceId, source: sourceForCfg })
+      return
     }
+    const seed = buildSourceSeed(source, steps)
     load({
       id: source.sourceId,
       name: source.name,
       version: `source-v${source.version ?? 1}`,
-      main: seedMain,
-      branches: branchSeeds,
-      configs: seedConfigs,
-      edges: {},
+      main: seed.main,
+      branches: seed.branches,
+      configs: seed.configs,
       updatedAt: source.updatedAt || '',
+      source: sourceForCfg,
     })
   }
   function clearSourceCtx() {
     sourceCtx.value = null
+    sourceCfg.value = null
   }
 
-  // 发布门禁（M5.5 极简版）：空链路 / 采集节点缺 URL·输出表 不可发布
+  // 网站态：加载/新建网站统一流程模板（0707 优化·Phase4）。def 为空 = 该网站还没保存过模板，起一个空白流程。
+  // 模板落库沿用既有 flow/save·load 契约，id = `site:${siteId}`（画布保存按钮天然写对地方，不必新增专属持久化）。
+  function startSiteFlow(site: Site, def?: FlowDef | null) {
+    sourceCtx.value = null
+    sourceCfg.value = null
+    siteCtx.value = JSON.parse(JSON.stringify(site)) as Site
+    load(
+      def ?? {
+        id: `site:${site.siteId}`,
+        name: site.name,
+        version: 'site-v1',
+        main: ['start', 'end'],
+        branches: [],
+        configs: {},
+        updatedAt: '',
+      },
+    )
+  }
+  function clearSiteCtx() {
+    siteCtx.value = null
+  }
+
+  // 空白模板 → 有源草稿画布（0707 Phase3.1）：过闸创建后用户先进入编排工作区，
+  // 再手工用「+」添加步骤，或用空白画布引导卡「智能生成流程」；不自动塞首节点，sourceCtx/sourceCfg 只提供源上下文和摘要头编辑入口。
+  function startDraftSource(source: Source) {
+    const draft = JSON.parse(JSON.stringify(source)) as Source
+    siteCtx.value = null
+    sourceCtx.value = draft
+    load({
+      id: source.sourceId,
+      name: source.name || '未命名采集源',
+      version: 'draft-0.1',
+      main: ['start', 'end'],
+      branches: [],
+      configs: {},
+      updatedAt: source.updatedAt || '',
+      source: draft,
+    })
+    sourceCtx.value = draft
+  }
+
+  // 发布门禁：空链路 / 采集节点缺 URL·输出表 / 数据类节点缺输出表 不可发布。
+  // 数据类口径（0701 问题二/四）：逻辑控制（决策/分头）与通知类（邮件/告警）、指标引用不产数据行，不要求输出表。
+  // 输入表口径（0701 问题五）：从第 2 个数据节点起，输入表为空且无上游可继承（含自动继承）则拦截；首节点无需输入表。
+  // 主链 + 旁路节点走同一套校验（0701 问题三 B 旁路节点也参与门禁）。
   function validateFlow(def?: FlowDef): string[] {
     const d = def ?? serialize()
     const errs: string[] = []
-    const nodeIds = d.main.filter((idv) => !isTerm(idv))
-    if (!nodeIds.length) errs.push('流程为空：至少添加一个节点')
-    nodeIds.forEach((nid) => {
+    const mainIds = d.main.filter((idv) => !isTerm(idv))
+    const branchIds = d.branches.map((b) => b.id).filter((id) => !isTerm(id))
+    if (!mainIds.length) errs.push('流程为空：至少添加一个节点')
+    const allIds = [...mainIds, ...branchIds]
+    allIds.forEach((nid) => {
       const c = d.configs[nid]
-      if (!c?.collectCfg) return
-      if (!c.collectCfg.url) errs.push(`「${c.title}」缺少源 URL`)
-      if (!c.collectCfg.outputTable) errs.push(`「${c.title}」缺少输出表`)
+      if (!c) return
+      if (c.collectCfg) {
+        if (!c.collectCfg.url) errs.push(`「${c.title}」缺少源 URL`)
+        if (!c.collectCfg.outputTable) errs.push(`「${c.title}」缺少输出表`)
+      } else if (!c.disabled && isDataNode(c) && !c.outputTable) {
+        errs.push(`「${c.title}」缺少输出表`)
+      }
+      if (
+        !c.disabled &&
+        isDataNode(c) &&
+        !isFirstMainNode(d.main, d.configs, nid) &&
+        !effectiveInputTable(d.main, d.branches, d.configs, nid)
+      ) {
+        errs.push(`「${c.title}」缺少输入表`)
+      }
     })
     return errs
   }
 
   return {
-    configs, edges, main, branches,
-    flowId, flowName, sourceCtx, dirty,
-    selectedId, selectedEdgeFrom, activeKind, activeTab,
-    layout, horizontalLayout, selectedNode, selectedEdge,
+    configs, main, branches,
+    flowId, flowName, sourceCtx, sourceCfg, siteCtx, dirty,
+    selectedId, activeTab,
+    layout, horizontalLayout, selectedNode,
     isTerm,
-    select, selectEdge, setActiveTab,
+    effectiveInputTableFor, isFirstMainNodeId,
+    select, setActiveTab,
     insertAfter, duplicate, move, moveTo, toggleDisabled, remove, setTitle,
-    patchCollect, setBaseRow, setFieldRow, setOutputTable,
+    patchCollect, setBaseRow, setFieldRow, setOutputTable, setInputTable, setTaskQueue, patchTaskConfig, setEntryCondition, patchOutputAdvanced, patchSource,
+    patchRuleConfig,
     setTripleCell, addTripleRow, removeTripleRow,
-    setEdgeRow, toggleEdgeOutcol, setEdgeEnabled, setEdgeTable, addEdgeContext, removeEdgeContext,
-    serialize, load, setFlowName, newFlow, loadFromSource, clearSourceCtx, validateFlow, markSaved,
+    serialize, load, setFlowName, newFlow, loadFromSource, startDraftSource, clearSourceCtx, startSiteFlow, clearSiteCtx, validateFlow, markSaved,
   }
 })

@@ -1,4 +1,5 @@
 import type { DataTableMeta, DataRow, Paged } from '../types'
+import { SOURCES } from './sources'
 
 const TABLES: DataTableMeta[] = [
   {
@@ -250,10 +251,14 @@ export function mockDataRowQueryPaged(params?: Record<string, unknown>): Paged<D
   const state = String(params?.state ?? '').trim()
   const sourceId = String(params?.sourceId ?? '').trim()
   const sql = String(params?.sql ?? '').trim()
+  // 网站粒度查询（0707 优化·Phase5）：圈定该网站下全部子源；sourceId 再在此范围内进一步收窄
+  const siteId = String(params?.siteId ?? '').trim()
+  const siteSourceIds = siteId ? new Set(SOURCES.filter((s) => s.siteId === siteId).map((s) => s.sourceId)) : null
   const filtered = all.filter((r) => {
     if (dataId && !r.dataId.includes(dataId)) return false
     if (parentId && r.parentId !== parentId) return false
     if (state && r.state !== state) return false
+    if (siteSourceIds && !siteSourceIds.has(r.sourceId)) return false
     if (sourceId && r.sourceId !== sourceId) return false
     if (sql && !JSON.stringify(r.values ?? {}).includes(sql)) return false
     return true

@@ -1,5 +1,11 @@
-import { describe, it, expect } from 'vitest'
-import { mockEvaluate } from './rules'
+import { describe, expect, it } from 'vitest'
+import {
+  mockEvaluate,
+  mockRuleOrchestrationGenerate,
+  mockRuleOrchestrationPaged,
+  mockRuleOrchestrationSave,
+  mockRuleOrchestrationTest,
+} from './rules'
 
 describe('mockEvaluate 函数求值器', () => {
   it('IF 比较命中 THEN', () => {
@@ -33,5 +39,38 @@ describe('mockEvaluate 函数求值器', () => {
   it('非法 JSON context 返回错误', () => {
     const r = mockEvaluate({ expr: 'IF(n > 0, "a", "b")', context: '{ bad json' })
     expect(r.ok).toBe(false)
+  })
+})
+
+describe('规则编排 mock（0707 Phase 9）', () => {
+  it('支持列表、生成、测试、保存闭环', () => {
+    const list = mockRuleOrchestrationPaged({ size: 10 })
+    expect(list.list.length).toBeGreaterThan(0)
+    expect(list.list[0]).toHaveProperty('ruleId')
+
+    const generated = mockRuleOrchestrationGenerate({
+      describe: '正文 content 包含地产时加标签房地产',
+      systemPrompt: '返回 JSON',
+    })
+    expect(generated.script).toContain('def main')
+    expect(generated.scriptPath).toContain('/rules/generated/')
+
+    const tested = mockRuleOrchestrationTest({
+      script: generated.script,
+      params: { content: '某地产公司发布重大事项公告' },
+    })
+    expect(tested).toMatchObject({
+      success: true,
+      result: { tags: ['房地产'] },
+    })
+
+    const saved = mockRuleOrchestrationSave({
+      mode: 'new',
+      describe: '正文 content 包含地产时加标签房地产',
+      script: generated.script,
+      scriptPath: generated.scriptPath,
+    })
+    expect(saved.ruleId).toMatch(/^orch-/)
+    expect(saved.scriptPath).toBe(generated.scriptPath)
   })
 })

@@ -3,13 +3,57 @@ import { computed, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
-import { dataApi, type DataTableMeta, type DataRow } from '../../api'
-import { iconFor } from './flowModel'
+import { useWorkspaceStore } from '../../stores/workspace'
+import { dataApi, siteApi, flowApi, sourceApi, type DataTableMeta, type DataRow, type Source } from '../../api'
+import { buildHorizontalLayout, buildSourceSeed, iconFor, nodeOutputTable, pickFinalMainNodeId, type HorizontalLayout } from './flowModel'
 import CanvasHeader from './CanvasHeader.vue'
 import DataGrid from './DataGrid.vue'
 
 const flow = useFlowStore()
+const ws = useWorkspaceStore()
 const router = useRouter()
+
+// 网站粒度上下文（0707 优化·Phase5）：无论画布当前停在网站模板还是某个子源，数据视图都站在网站粒度；
+// 没有 siteId 的历史/草稿源退回原单源行为（1:1+fallback）。tabKey 对应页签条 key（源 id 或 `site:xxx` 伪 id）。
+const siteId = computed(() => flow.sourceCtx?.siteId || flow.siteCtx?.siteId || '')
+const tabKey = computed(() => ws.activeSourceId)
+
+// 源筛选（可搜索下拉）：选项来自网站下全部子源；从子源画布进入时预选该子源，网站模板进入则不预选（=全部子源聚合）
+const siteChildren = ref<Source[]>([])
+const sourceNames = computed<Record<string, string>>(() =>
+  Object.fromEntries(siteChildren.value.map((s) => [s.sourceId, s.name])),
+)
+async function loadSiteChildren() {
+  siteChildren.value = siteId.value ? await siteApi.siteSources(siteId.value) : []
+}
+
+// 节点条：网站粒度优先取网站统一流程模板；模板未保存时，用站内第一个子源的实际步骤推导末端结果集入口。
+// 查询仍按 siteId 聚合全部子源，不预选单个子源。
+const templateLayout = ref<HorizontalLayout | null>(null)
+async function loadTemplateLayout() {
+  if (!siteId.value) {
+    templateLayout.value = null
+    return
+  }
+  const def = await flowApi.flowLoad(`site:${siteId.value}`)
+  if (def) {
+    templateLayout.value = buildHorizontalLayout(def.main, def.branches, def.configs)
+    return
+  }
+  const children = siteChildren.value.length ? siteChildren.value : await siteApi.siteSources(siteId.value)
+  const first = children[0]
+  if (!first) {
+    templateLayout.value = null
+    return
+  }
+  const steps = await sourceApi.sourceSteps(first.sourceId)
+  const seed = buildSourceSeed(first, steps)
+  templateLayout.value = buildHorizontalLayout(seed.main, seed.branches, seed.configs)
+}
+watch(siteId, () => {
+  loadSiteChildren()
+  loadTemplateLayout()
+}, { immediate: true })
 
 // 横向流程图节点：把 horizontalLayout 的节点投射为带"是否数据节点"标记
 interface BarNode {
@@ -20,8 +64,10 @@ interface BarNode {
   selectable: boolean
   pos: { left: number; top: number; width: number; height: number }
   branch: boolean
+  /** 主链末端数据节点 = 流程最终结果落表（优化 0701 问题二） */
+  final: boolean
 }
-const hlayout = computed(() => flow.horizontalLayout)
+const hlayout = computed(() => templateLayout.value ?? flow.horizontalLayout)
 
 // 节点条高度：默认跟随 layout 计算结果；用户可拖动分隔条调整
 const barHeight = ref<number | null>(null)
@@ -55,9 +101,11 @@ function onResizeStart(e: MouseEvent) {
   window.addEventListener('mouseup', onResizeEnd)
 }
 onBeforeUnmount(onResizeEnd)
-const bar = computed<BarNode[]>(() =>
-  hlayout.value.nodes.map((n) => {
-    const table = n.cfg.collectCfg?.outputTable || n.cfg.outputTable || ''
+const bar = computed<BarNode[]>(() => {
+  const nodes = hlayout.value.nodes
+  const finalId = pickFinalMainNodeId(nodes)
+  return nodes.map((n) => {
+    const table = nodeOutputTable(n.cfg)
     return {
       id: n.id,
       title: n.cfg.title,
@@ -66,24 +114,42 @@ const bar = computed<BarNode[]>(() =>
       selectable: !!table,
       pos: n.pos,
       branch: n.branch,
+      final: n.id === finalId,
     }
-  }),
-)
+  })
+})
 const dataNodes = computed(() => bar.value.filter((n) => n.selectable))
 const selectedNodeId = ref<string>('')
 const page = ref(1)
+const filters = reactive({ dataId: '', parentId: '', state: '', sql: '', sourceFilter: '' })
 
-// 默认选首个数据节点；切换 sourceId 后旧节点 id 不在新流程里时也重置，避免表格变空
+// 默认选末端数据节点（最终结果表）；有页签快照（0701 问题三）时优先恢复快照里的节点/过滤/页码。
+// 切换页签后旧节点 id 不在新流程里时也重置，避免表格变空。
 watch(
   dataNodes,
   (nodes) => {
     if (!nodes.some((n) => n.id === selectedNodeId.value)) {
-      selectedNodeId.value = nodes[0]?.id ?? ''
-      page.value = 1
+      const snap = ws.snapshotOf(tabKey.value)
+      const snapId = snap?.selectedNodeId && nodes.some((n) => n.id === snap.selectedNodeId) ? snap.selectedNodeId : ''
+      selectedNodeId.value = snapId || ((nodes.find((n) => n.final) ?? nodes[0])?.id ?? '')
+      if (snapId) {
+        page.value = snap?.page ?? 1
+        if (snap?.filters) Object.assign(filters, snap.filters)
+      } else {
+        page.value = 1
+        // 从子源画布进入时预选该子源（0707 优化·Phase5 A8）；网站模板进入不预选，默认聚合全部子源
+        filters.sourceFilter = flow.sourceCtx?.sourceId ?? ''
+      }
     }
   },
   { immediate: true },
 )
+
+// 浏览状态实时写入页签快照，切页签/刷新后恢复
+watch([selectedNodeId, page, () => ({ ...filters })], () => {
+  const key = tabKey.value
+  if (key) ws.saveSnapshot(key, { selectedNodeId: selectedNodeId.value, page: page.value, filters: { ...filters } })
+})
 const selectedTable = computed(() => bar.value.find((n) => n.id === selectedNodeId.value)?.outputTable ?? '')
 
 function pickNode(n: BarNode) {
@@ -96,7 +162,6 @@ const meta = ref<DataTableMeta | null>(null)
 const rows = ref<DataRow[]>([])
 const total = ref(0)
 const loading = ref(false)
-const filters = reactive({ dataId: '', parentId: '', state: '', sql: '' })
 const size = 20
 
 async function loadData() {
@@ -108,19 +173,25 @@ async function loadData() {
   }
   loading.value = true
   try {
-    meta.value = await dataApi.tableMeta(selectedTable.value)
-    const res = await dataApi.rowQueryPaged({
-      tableId: selectedTable.value,
-      sourceId: flow.sourceCtx?.sourceId ?? '',
-      dataId: filters.dataId || undefined,
-      parentId: filters.parentId || undefined,
-      state: filters.state || undefined,
-      sql: filters.sql || undefined,
-      page: page.value,
-      size,
-    })
-    rows.value = res?.list ?? []
-    total.value = res?.total ?? 0
+    const [metaRes, dataRes] = await Promise.all([
+      dataApi.tableMeta(selectedTable.value),
+      dataApi.rowQueryPaged({
+        tableId: selectedTable.value,
+        // 网站粒度（0707 优化·Phase5）：有 siteId 时圈定全站子源，源筛选下拉再进一步收窄；
+        // 没有 siteId 的历史/草稿源退回原单源行为（强制当前源，1:1+fallback）。
+        siteId: siteId.value || undefined,
+        sourceId: siteId.value ? (filters.sourceFilter || undefined) : (flow.sourceCtx?.sourceId || undefined),
+        dataId: filters.dataId || undefined,
+        parentId: filters.parentId || undefined,
+        state: filters.state || undefined,
+        sql: filters.sql || undefined,
+        page: page.value,
+        size,
+      }),
+    ])
+    meta.value = metaRes
+    rows.value = dataRes?.list ?? []
+    total.value = dataRes?.total ?? 0
   } finally {
     loading.value = false
   }
@@ -137,6 +208,7 @@ function clearFilters() {
   filters.parentId = ''
   filters.state = ''
   filters.sql = ''
+  filters.sourceFilter = ''
   runQuery()
 }
 function prevPage() {
@@ -243,6 +315,7 @@ async function saveEdit() {
             <span class="rv-node-title">{{ n.title }}</span>
             <span class="rv-node-sub">{{ n.outputTable || '无输出表' }}</span>
           </span>
+          <span v-if="n.final" class="rv-node-final">最终结果</span>
         </button>
       </div>
       <div v-if="!bar.length" class="rv-bar-empty">当前流程没有可查看数据的节点</div>
@@ -252,6 +325,17 @@ async function saveEdit() {
     </div>
 
     <div class="rv-filters">
+      <el-select
+        v-if="siteId"
+        v-model="filters.sourceFilter"
+        class="rv-source-select"
+        placeholder="全部子源"
+        filterable
+        clearable
+        @change="runQuery"
+      >
+        <el-option v-for="s in siteChildren" :key="s.sourceId" :label="s.name" :value="s.sourceId" />
+      </el-select>
       <input v-model="filters.dataId" class="rv-input" placeholder="数据 ID" @keyup.enter="runQuery" />
       <input v-model="filters.parentId" class="rv-input" placeholder="父 ID" @keyup.enter="runQuery" />
       <select v-model="filters.state" class="rv-input">
@@ -278,6 +362,7 @@ async function saveEdit() {
       :rows="rows"
       :loading="loading"
       :selected-id="detail.row?.dataId"
+      :source-names="siteId ? sourceNames : undefined"
       @row-click="onRowClick"
       @row-action="onRowAction"
     />
@@ -292,7 +377,10 @@ async function saveEdit() {
         <div class="rv-d-head">
           <div>
             <div class="rv-d-title">{{ detail.row.title }}</div>
-            <div class="rv-d-sub">数据 ID {{ detail.row.dataId }}</div>
+            <div class="rv-d-sub">
+              数据 ID {{ detail.row.dataId }}
+              <template v-if="siteId">· 所属源 {{ sourceNames[detail.row.sourceId] || detail.row.sourceId }}</template>
+            </div>
           </div>
           <button class="rc-btn ghost" type="button" @click="detail.visible = false">关闭</button>
         </div>
@@ -349,12 +437,15 @@ async function saveEdit() {
 .rv-node.on .rv-node-title { color: var(--rc-primary-ink); }
 .rv-node-sub { font-size: 10px; color: var(--rc-faint); font-family: var(--rc-mono, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rv-node.on .rv-node-sub { color: var(--rc-primary); }
+.rv-node-final { position: absolute; top: -8px; right: 8px; font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 5px; background: var(--rc-ok-bg); color: var(--rc-ok); border: 1px solid currentColor; line-height: 1.4; }
 
 .rv-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; }
 .rv-input { height: 28px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; font-size: 12px; outline: none; min-width: 110px; background: #fff; }
 .rv-input.flex { flex: 1; min-width: 200px; font-family: var(--rc-mono, monospace); }
 .rv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .rv-filters .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }
+.rv-source-select { width: 180px; flex: none; }
+.rv-source-select :deep(.el-select__wrapper) { min-height: 28px; }
 
 .rv-tablehead { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; }
 .rv-tablename { font-family: var(--rc-mono, monospace); font-size: 12px; color: var(--rc-text-2); }

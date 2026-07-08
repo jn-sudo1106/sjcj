@@ -1,8 +1,9 @@
 import { request } from './client'
 import type {
-  Paged, Source, SourceCategory, Step, Ack, PageQuery,
+  Paged, Source, Site, SourceCategory, Step, Ack, PageQuery,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
-  Dataset, Measure, DataTableMeta, DataRow, RowQuery, RunRow, RunNode, HealthCard, MqQueue, SyncRow, AlarmRow,
+  RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestResult,
+  Dataset, Measure, DataTableMeta, DataRow, RowQuery, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   Config, EntryType, Param, CredentialRef, SourceLog, TaskInst, WorkbenchSummary,
   OverviewSummary, TrendPoint,
 } from './types'
@@ -34,6 +35,31 @@ export const sourceApi = {
   changeFreqTag: (sourceIds: string[], freqTag: string) => request<Ack>('source/changeFreqTag', { sourceIds, freqTag }),
   markVerified: (sourceIds: string[], verified: string) => request<Ack>('source/markVerified', { sourceIds, verified }),
   generateConfig: (sourceId: string) => request<Ack>('source/generateConfig', { sourceId }),
+
+  // 新建采集源两段式闸门（0706 优化·Phase3）
+  sourceCreate: (source: Source) => request<{ ok: boolean; message?: string; sourceId?: string }>('source/createSource', { source }),
+  sourceCopy: (fromId: string) => request<Source | null>('source/sourceCopy', { sourceId: fromId }),
+  // 源信息编辑抽屉 + 任务视图（0706 优化·Phase4）
+  sourceUpdate: (source: Source) => request<Ack>('source/updateSource', { source }),
+  sourceNodeRuns: (sourceId: string) => request<NodeRunStat[]>('source/nodeRunStats', { sourceId }),
+}
+
+// 网站—子源父子模型（0707 优化·Phase2）：网站=统一流程模板+批量工具（不运行），子源=运行实体
+export const siteApi = {
+  sitePaged: (p?: PageQuery) => request<Paged<Site>>('site/sitePaged', p),
+  siteDetail: (siteId: string) => request<Site | null>('site/siteDetail', { siteId }),
+  siteCreate: (site: Omit<Site, 'sourceCount' | 'errorCount'>, sources: Source[]) =>
+    request<{ ok: boolean; message?: string; siteId?: string }>('site/createSite', { site, sources }),
+  siteSources: (siteId: string) => request<Source[]>('site/sourcesOfSite', { siteId }),
+  sourceAdd: (siteId: string, source: Source) =>
+    request<{ ok: boolean; message?: string; sourceId?: string }>('site/addSource', { siteId, source }),
+  sourceRemove: (siteId: string, sourceId: string) => request<Ack>('site/removeSource', { siteId, sourceId }),
+  // 危险端点：整条流程覆盖所选子源，UI 走二次确认 + 多选列表
+  siteSyncFlow: (siteId: string, sourceIds: string[]) => request<Ack>('site/syncFlow', { siteId, sourceIds }),
+  // 任务视图网站化（0707 优化·Phase5）：队列汇总 + 展开明细，sourceId 可选收窄到单个子源
+  siteQueueStats: (siteId: string, sourceId?: string) => request<QueueStat[]>('site/queueStats', { siteId, sourceId }),
+  queueTaskPaged: (q: { siteId: string; queue: string; sourceId?: string; state?: string; page?: number; size?: number }) =>
+    request<Paged<TaskInst>>('site/queueTaskPaged', q),
 }
 
 // 规则资产（M3）
@@ -48,6 +74,13 @@ export const ruleApi = {
   sharedConfigs: () => request<SharedConfig[]>('rule/sharedConfigPaged'),
   testCases: (ruleId: string) => request<RuleTestCase[]>('rule/testCasePaged', { ruleId }),
   evaluate: (expr: string, context: string) => request<EvalResult>('rule/evaluate', { expr, context }),
+  orchestrationPaged: (p?: PageQuery) => request<Paged<RuleOrchestrationItem>>('rule/orchestrationPaged', p),
+  orchestrationGenerate: (describe: string, systemPrompt?: string) =>
+    request<RuleOrchestrationGenerateResult>('rule/orchestrationGenerate', { describe, systemPrompt }),
+  orchestrationTest: (script: string, params: Record<string, unknown>) =>
+    request<RuleOrchestrationTestResult>('rule/orchestrationTest', { script, params }),
+  orchestrationSave: (ruleCfg: RuleOrchestration) =>
+    request<RuleOrchestrationSaveResult>('rule/orchestrationSave', { ruleCfg }),
 
   // 写类 / 重操作：mock 仅回执，UI 二次确认占位
   publishRule: (ruleId: string) => request<Ack>('rule/publish', { ruleId }),
@@ -143,6 +176,9 @@ export const flowApi = {
   flowList: () => request<{ id: string; name: string; updatedAt: string }[]>('flow/list'),
   flowRecommend: (prompt: string, intent?: string) =>
     request<FlowRecommendation>('flow/recommend', { prompt, intent }),
+  // 节点级 AI 对话（0701 问题八）：mock 关键词回复，二期换真 LLM BFF，签名不变
+  nodeAiChat: (params: { nodeId: string; question: string; nodeTitle: string; outputTable?: string; disabled?: boolean }) =>
+    request<{ reply: string }>('flow/nodeAiChat', params),
 }
 
 // 子步骤（流程画布连线 = item/next）。未实现专属 mock，由 client fallback 回执。

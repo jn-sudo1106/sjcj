@@ -6,6 +6,7 @@ import {
   type PresetIntent,
 } from '../../views/FlowCanvas/flowModel'
 import type { Ack } from '../types'
+import { setSourceDetached } from './sources'
 
 // 流程定义持久化 mock —— 存浏览器 localStorage（真接入时换 flow/* 后端端点，界面零改动）。
 const INDEX_KEY = 'sjcj.flows.index'
@@ -32,6 +33,8 @@ export function mockFlowSave(params?: Record<string, unknown>): Ack {
   const idx = readIndex().filter((f) => f.id !== def.id)
   idx.unshift({ id: def.id, name: def.name, updatedAt: def.updatedAt })
   localStorage.setItem(INDEX_KEY, JSON.stringify(idx))
+  // 网站统一流程模板（id = site:xxx）不算"某个子源保存了自己的流程"，其余 id 若命中某个站内子源则标记脱离（0707 优化·Phase2）
+  if (!def.id.startsWith('site:')) setSourceDetached(def.id, true)
   return { ok: true, message: '流程已保存（本地）' }
 }
 
@@ -71,4 +74,34 @@ export function mockFlowRecommend(params?: Record<string, unknown>): FlowRecomme
     }
   }
   return { flow: hit.build(), rationale: hit.rationale, alternatives: altsExcept(hit) }
+}
+
+// 节点级 AI 对话（0701 问题八）：mock 关键词匹配给出解释/建议型回复；二期换真 LLM BFF，签名不变、界面零改动。
+export function mockNodeAiChat(params?: Record<string, unknown>): { reply: string } {
+  const question = String(params?.question ?? '').toLowerCase()
+  const nodeTitle = String(params?.nodeTitle ?? '当前节点')
+  const outputTable = String(params?.outputTable ?? '')
+  const disabled = Boolean(params?.disabled)
+
+  if (disabled) {
+    return { reply: `「${nodeTitle}」当前已停止，流经它的数据不会被处理。右上角状态切回"运行"后再试。` }
+  }
+  if (/失败|报错|error|异常/.test(question)) {
+    return {
+      reply: `「${nodeTitle}」常见的试跑失败原因：① 采集节点缺源 URL 或输出表；② 上游节点没有产出数据；③ 依赖的规则组/表达式未启用。可先在"表配置" Tab 确认输入/输出表是否都已就绪。`,
+    }
+  }
+  if (/队列|queue/.test(question)) {
+    return { reply: '任务队列标明本步骤的任务从哪个队列拉取；留空时默认沿用所选配置的 topic，可在"表配置" Tab 手动覆盖。' }
+  }
+  if (/配置|字段|参数/.test(question)) {
+    return {
+      reply: outputTable
+        ? `「${nodeTitle}」当前落表 ${outputTable}，配置项集中在"节点配置"（这个节点怎么跑）与"表配置"（数据从哪来到哪去）两个 Tab，具体想了解哪个字段？`
+        : `「${nodeTitle}」还没有绑定输出表，建议先在"表配置" Tab 选择或新建一张表。`,
+    }
+  }
+  return {
+    reply: `我是「${nodeTitle}」的节点助手（演示）：可以问我"为什么试跑失败""这个节点的配置是什么""任务队列怎么填"。真实 LLM 接入后会给出更具体的建议。`,
+  }
 }

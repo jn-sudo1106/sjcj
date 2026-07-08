@@ -1,0 +1,21 @@
+// @vitest-environment jsdom
+import { describe, expect, it } from 'vitest'
+import { TABS } from './tabs'
+import { router } from './index'
+
+describe('Phase 3.1 画布入口退役', () => {
+  it('侧栏不再暴露独立流程画布菜单', () => {
+    expect(TABS.some((t) => t.key === 'canvas' || t.label === '流程画布')).toBe(false)
+    expect(TABS.some((t) => t.group === 'workbench')).toBe(false)
+  })
+
+  it('裸 /canvas 重定向到采集资产，仅 sourceId/mode=new 可进入画布', () => {
+    const canvas = router.options.routes.find((r) => r.path === '/canvas')
+    expect(canvas?.beforeEnter).toBeTypeOf('function')
+    const beforeEnter = canvas?.beforeEnter as (to: { query: Record<string, unknown> }) => unknown
+
+    expect(beforeEnter({ query: {} })).toEqual('/collect')
+    expect(beforeEnter({ query: { sourceId: '391007768' } })).toBe(true)
+    expect(beforeEnter({ query: { mode: 'new' } })).toBe(true)
+  })
+})

@@ -4,7 +4,6 @@ import {
   Bell,
   Box,
   Clock,
-  Connection,
   DataAnalysis,
   Document,
   Files,
@@ -27,16 +26,16 @@ const route = useRoute()
 const router = useRouter()
 const ui = useUiStore()
 const flow = useFlowStore()
-// 源详情画布（/canvas?sourceId=X）逻辑上属于「采集资产」子页，侧栏高亮采集资产
+// 源详情 / 新建源画布（/canvas?sourceId=X 或 /canvas?mode=new）逻辑上属于「采集资产」子页，侧栏高亮采集资产
 const activeKey = computed(() => {
   const seg = route.path.split('/')[1] || 'overview'
-  if (seg === 'canvas' && (route.query.sourceId || flow.sourceCtx)) return 'collect'
+  if (seg === 'canvas') return 'collect'
   return seg
 })
 const current = computed(() => TABS.find((t) => t.key === activeKey.value) ?? TABS[0])
-// 源详情画布的标题与面包屑：采集资产 / 源名
+// 源详情 / 新建采集画布的标题与面包屑：采集资产 / 源名或新建采集
 const isSourceCanvas = computed(() => activeKey.value === 'collect' && route.path.startsWith('/canvas'))
-const sourceCrumb = computed(() => flow.sourceCtx?.name || '源详情')
+const sourceCrumb = computed(() => (route.query.mode === 'new' ? '新建采集' : (flow.sourceCtx?.name || flow.siteCtx?.name || '源详情')))
 
 const groupLabels = {
   home: '首页',
@@ -51,13 +50,13 @@ const navGroups = computed(() =>
     key,
     label,
     items: TABS.filter((t) => t.group === key),
-  })),
+  })).filter((g) => g.items.length > 0),
 )
 
 const pageActions: Record<string, string[]> = {
-  overview: ['刷新', '导出', '新建采集源'],
-  canvas: ['保存草稿', '试跑', '发布'],
-  collect: ['批量导入', '批量操作', '新建采集源'],
+  overview: ['刷新', '导出', '新建采集'],
+  canvas: ['保存', '试跑', '发布'],
+  collect: ['批量导入', '批量操作', '新建采集'],
   rules: ['新建规则组', '导入规则', '发布校验'],
   metrics: ['新建指标', '批量维护', '口径校验'],
   data: ['导出结果', '新建查询视图'],
@@ -66,11 +65,17 @@ const pageActions: Record<string, string[]> = {
 }
 // 页面动作按真实路由段取，而不是侧栏高亮键（源详情画布仍要 保存/试跑/发布）
 const actionKey = computed(() => route.path.split('/')[1] || 'overview')
-const activeActions = computed(() => pageActions[actionKey.value] ?? pageActions.canvas)
+const isGateCanvas = computed(() => route.path.startsWith('/canvas') && route.query.mode === 'new')
+// 网站态（0707 优化·Phase4）：网站是流程模板，不实际运行，顶部动作收窄为仅「保存」（试跑/发布隐藏）
+const isSiteCanvas = computed(() => route.path.startsWith('/canvas') && !!flow.siteCtx)
+const activeActions = computed(() => {
+  if (isGateCanvas.value) return []
+  if (isSiteCanvas.value) return ['保存']
+  return pageActions[actionKey.value] ?? pageActions.canvas
+})
 
 const navIcons: Record<string, Component> = {
   overview: Odometer,
-  canvas: Connection,
   collect: Box,
   rules: Document,
   metrics: Histogram,

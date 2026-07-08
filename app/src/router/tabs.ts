@@ -9,7 +9,6 @@ export interface TabMeta {
 
 export const TABS: TabMeta[] = [
   { key: 'overview', path: '/overview', label: '采集资产总览', desc: 'KPI、采集生态、趋势、占比、异常下钻', group: 'home' },
-  { key: 'canvas', path: '/canvas', label: '流程画布', desc: '单条链路、节点、子步骤、试跑、发布', group: 'workbench' },
   { key: 'collect', path: '/collect', label: '采集资产', desc: '源、配置、表、参数、批量操作', group: 'assets' },
   { key: 'rules', path: '/rules', label: '规则资产', desc: '规则组、表达式、测试集、发布门禁', group: 'assets' },
   { key: 'metrics', path: '/metrics', label: '指标中心', desc: '指标数据集、指标定义、口径维护', group: 'assets' },

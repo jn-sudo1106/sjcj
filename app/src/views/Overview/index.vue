@@ -3,9 +3,8 @@ import { computed, onMounted, onUnmounted, ref, type Component } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Bell, Box, CircleCheck, Document, Files } from '@element-plus/icons-vue'
-import { overviewApi, flowApi, type OverviewSummary, type TrendPoint } from '../../api'
+import { overviewApi, type OverviewSummary, type TrendPoint } from '../../api'
 import { useUiStore } from '../../stores/ui'
-import { useFlowStore } from '../../stores/flow'
 import CountUp from '../../components/CountUp.vue'
 import DonutChart from '../../components/charts/DonutChart.vue'
 import TrendBars from '../../components/charts/TrendBars.vue'
@@ -13,7 +12,6 @@ import AssetFlow from '../../components/charts/AssetFlow.vue'
 
 const router = useRouter()
 const ui = useUiStore()
-const flow = useFlowStore()
 
 const data = ref<OverviewSummary | null>(null)
 const trend = ref<TrendPoint[]>([])
@@ -125,14 +123,8 @@ onMounted(async () => {
     ElMessage.success('已刷新采集资产总览')
   })
   ui.registerAction('导出', () => ElMessage.info('导出总览：演示环境占位'))
-  ui.registerAction('新建采集源', async () => {
-    try {
-      const rec = await flowApi.flowRecommend('', 'web-public')
-      flow.load(rec.flow)
-    } catch {
-      flow.newFlow('blank')
-    }
-    router.push('/canvas')
+  ui.registerAction('新建采集', () => {
+    router.push({ path: '/canvas', query: { mode: 'new' } })
   })
 })
 

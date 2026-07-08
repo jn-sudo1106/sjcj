@@ -1,4 +1,16 @@
-import type { Paged, Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult } from '../types'
+import type {
+  Paged,
+  Rule,
+  RuleGroup,
+  SharedConfig,
+  RuleTestCase,
+  EvalResult,
+  RuleOrchestration,
+  RuleOrchestrationGenerateResult,
+  RuleOrchestrationItem,
+  RuleOrchestrationSaveResult,
+  RuleOrchestrationTestResult,
+} from '../types'
 
 // ---------------- 规则组 / 规则 / 共享配置 ----------------
 const GROUPS: Omit<RuleGroup, 'count'>[] = [
@@ -14,6 +26,38 @@ const SHARED: SharedConfig[] = [
   { id: 'sc-vip', name: 'VIP 等级表', desc: '用户等级枚举' },
   { id: 'sc-region', name: '地域映射', desc: '省市区域字典' },
   { id: 'sc-keywords', name: '公告关键词库', desc: '公告类型关键词' },
+]
+
+let orchestrationSeq = 3
+
+const REAL_ESTATE_SCRIPT = `def main(content):
+    tags = []
+    if "地产" in content:
+        tags.append("房地产")
+    return {"tags": tags}`
+
+const ORCHESTRATIONS: RuleOrchestrationItem[] = [
+  {
+    ruleId: 'orch-real-estate',
+    name: '地产公告打标',
+    describe: '正文 content 包含地产二字时，在 tags 字段返回房地产标签。',
+    script: REAL_ESTATE_SCRIPT,
+    scriptPath: '/rules/generated/orch-real-estate.py',
+    enabled: true,
+    createdAt: '2026-07-07 16:30',
+  },
+  {
+    ruleId: 'orch-spam-filter',
+    name: '推广内容过滤',
+    describe: '正文 content 包含广告、推广等词时，返回 action=drop。',
+    script: `def main(content):
+    if "广告" in content or "推广" in content:
+        return {"action": "drop"}
+    return {"action": "keep"}`,
+    scriptPath: '/rules/generated/orch-spam-filter.py',
+    enabled: true,
+    createdAt: '2026-07-07 17:10',
+  },
 ]
 
 const RULES: Rule[] = [
@@ -278,4 +322,66 @@ export function mockEvaluate(params?: Record<string, unknown>): EvalResult {
   } catch (e) {
     return { ok: false, error: (e as Error).message, trace }
   }
+}
+
+function matchesOrchestration(item: RuleOrchestrationItem, p?: Record<string, unknown>): boolean {
+  if (!p) return true
+  const kw = String(p.keyword ?? '').trim().toLowerCase()
+  if (!kw) return true
+  return [item.ruleId, item.name, item.describe].some((f) => f.toLowerCase().includes(kw))
+}
+
+function makeRuleScript(describe: string): string {
+  if (/地产|房地产/.test(describe)) return REAL_ESTATE_SCRIPT
+  return `def main(content):
+    return {"tags": [], "matched": bool(content)}`
+}
+
+export function mockRuleOrchestrationPaged(params?: Record<string, unknown>): Paged<RuleOrchestrationItem> {
+  const filtered = ORCHESTRATIONS.filter((item) => matchesOrchestration(item, params))
+  const page = Number(params?.page ?? 1)
+  const size = Number(params?.size ?? 20)
+  const start = (page - 1) * size
+  return { total: filtered.length, list: filtered.slice(start, start + size) }
+}
+
+export function mockRuleOrchestrationGenerate(params?: Record<string, unknown>): RuleOrchestrationGenerateResult {
+  const describe = String(params?.describe ?? '').trim()
+  const id = `orch-draft-${Date.now()}`
+  return {
+    script: makeRuleScript(describe),
+    scriptPath: `/rules/generated/${id}.py`,
+  }
+}
+
+export function mockRuleOrchestrationTest(params?: Record<string, unknown>): RuleOrchestrationTestResult {
+  const script = String(params?.script ?? '').trim()
+  if (!script) return { success: false, error: '脚本为空', executionTime: 0 }
+  const rawParams = (params?.params ?? {}) as Record<string, unknown>
+  const content = String(rawParams.content ?? '')
+  const tags = /地产/.test(content) ? ['房地产'] : []
+  return {
+    success: true,
+    result: { tags },
+    executionTime: 18,
+  }
+}
+
+export function mockRuleOrchestrationSave(params?: Record<string, unknown>): RuleOrchestrationSaveResult {
+  const cfg = ((params?.ruleCfg ?? params) || {}) as RuleOrchestration
+  const existing = cfg.ruleId ? ORCHESTRATIONS.find((item) => item.ruleId === cfg.ruleId) : undefined
+  const ruleId = existing?.ruleId ?? `orch-${orchestrationSeq++}`
+  const scriptPath = cfg.scriptPath || `/rules/generated/${ruleId}.py`
+  const item: RuleOrchestrationItem = {
+    ruleId,
+    name: cfg.name || `规则编排 ${ruleId}`,
+    describe: cfg.describe || '',
+    script: cfg.script || '',
+    scriptPath,
+    enabled: cfg.enabled ?? true,
+    createdAt: existing?.createdAt ?? '2026-07-08 13:30',
+  }
+  if (existing) Object.assign(existing, item)
+  else ORCHESTRATIONS.unshift(item)
+  return { ruleId, scriptPath, message: '规则脚本已保存（演示）' }
 }

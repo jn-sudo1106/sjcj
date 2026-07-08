@@ -56,6 +56,40 @@ export interface Source {
   color?: string // 颜色标识
   freqTag?: string // 频率标识：日度 / 周度 / 月度 / 旬度 / 季度 / 单次
   verified?: 'normal' | 'abnormal' | 'none' // 人工核验状态
+  // ---- 网站—子源父子模型（0707 优化·Phase2）：网站=流程模板+批量工具（不运行），子源=运行实体 ----
+  siteId?: string // 所属网站；未分组的历史/草稿源可为空
+  detached?: boolean // 子源流程已脱离网站统一模板（保存过自定义流程）；网站同步覆盖后重置为 false
+  // ---- 源级配置（0706 优化·源/节点配置分层）：整条流程共享，编辑入口 = 源信息头编辑抽屉 / 新建源第一步 ----
+  useProxy?: boolean // 是否使用代理
+  needLogin?: boolean // 是否要求登陆（与 credentialRef 解耦：可先开关，后续再绑凭据）
+  loginUrl?: string // 登陆 URL
+  account?: string // 登陆用户名
+  configMode?: 'new' | 'existing' // 选用配置：新建 / 使用已有
+  configName?: string // 新建配置名称（configMode='new' 时）
+  configTopic?: string // 新建配置 Topic（队列 fallback 提示用）
+  configStrategy?: string // 新建配置运行策略：增量/全量/按需触发
+  scheduleType?: string // 定时策略类型（作用于首节点，见设计方案 §0.3）
+  scheduleTime?: string // 定时时间点
+  weekdays?: number[] // 定时星期（1=周一...7=周日）
+  cron?: string // cron 表达式
+}
+
+/** 网站 Site（0707 优化·Phase2）：父级，统一流程模板 + 批量工具，本身不实际采集运行；下辖多个子源（Source.siteId） */
+export interface Site {
+  siteId: string
+  name: string
+  category: string
+  categoryPath?: string
+  dirId?: string
+  tags?: string[]
+  owner: string
+  sourceCount: number // 子源数（含站内所有子源，聚合统计）
+  errorCount: number // 子源中出错（state='E'）的数量，供卡片红点 / 状态筛选
+  updatedAt?: string
+  // ---- 站级聚合展示字段（0707 采集资产表格样式：网站行直接带列值，均从子源聚合派生） ----
+  dataCount?: number // 子源数据量合计
+  cycle?: string // 子源中最常见的采集周期
+  lastTaskAt?: string // 子源最近任务时间（同步状态列的时间戳）
 }
 
 /** 配置 Config(configId) */
@@ -108,6 +142,23 @@ export interface Param {
   usedBy?: number // 被多少配置引用
   owner?: string
   updatedAt?: string
+}
+
+/** 节点粒度运行统计（0706 Phase4·任务视图=运行视图，0707 Phase5 起该形态退役，仅内部聚合用） */
+export interface NodeRunStat {
+  nodeId: string
+  queue?: string // 队列归属（后端口径；前端本地 taskCfg.queue 优先）
+  totalTasks: number // 总任务数
+  processedTasks: number // 已处理数
+  state?: RunState // 运行状态；缺省视为空闲
+}
+
+/** 队列粒度运行统计（0707 优化·Phase5·任务视图网站化）：网站下全部子源节点按队列去重聚合 */
+export interface QueueStat {
+  queue: string
+  totalTasks: number
+  processedTasks: number
+  state?: RunState // 队列内任一 E → E；任一 L → L；否则有任务视为 C，无任务缺省
 }
 
 /** 子步骤 Step（item/next）— 连线详情字段 */
@@ -223,6 +274,47 @@ export interface EvalResult {
   error?: string
 }
 
+/** 规则编排列表项（规则引擎 rule-orchestration） */
+export interface RuleOrchestrationItem {
+  ruleId: string
+  name: string
+  describe: string
+  script: string
+  scriptPath: string
+  enabled: boolean
+  createdAt: string
+}
+
+/** 规则处理节点绑定的编排配置 */
+export interface RuleOrchestration {
+  mode: 'ref' | 'new'
+  ruleId?: string
+  name?: string
+  describe: string
+  systemPrompt?: string
+  script?: string
+  scriptPath?: string
+  enabled?: boolean
+}
+
+export interface RuleOrchestrationGenerateResult {
+  script: string
+  scriptPath: string
+}
+
+export interface RuleOrchestrationTestResult {
+  success: boolean
+  result?: Record<string, unknown>
+  error?: string
+  executionTime: number
+}
+
+export interface RuleOrchestrationSaveResult {
+  ruleId: string
+  scriptPath: string
+  message?: string
+}
+
 /* ---------------- M4 指标中心 ---------------- */
 
 /** 指标数据集（dataset 层） */
@@ -276,6 +368,8 @@ export interface DataRow {
 export interface RowQuery extends PageQuery {
   tableId: string
   sourceId?: string
+  /** 网站粒度查询（0707 优化·Phase5）：圈定该网站下全部子源；与 sourceId 同传时 sourceId 在此范围内进一步收窄 */
+  siteId?: string
   dataId?: string
   parentId?: string
   state?: string

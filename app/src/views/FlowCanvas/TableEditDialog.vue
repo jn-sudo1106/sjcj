@@ -32,7 +32,6 @@ const loading = ref(false)
 const touched = ref(false)
 
 const isEdit = computed(() => !!props.tableId)
-const dedupCols = computed(() => form.fields.filter((f) => f.dedup).map((f) => f.dbColumn).join(', ') || '—')
 const tableNameError = computed(() => (touched.value && !form.tableName.trim() ? '表名必填' : ''))
 
 // prop "feed_id-K1" → { code: 'feed_id', dbColumn: 'K1' }
@@ -167,10 +166,6 @@ function notImpl(label: string) {
           <div v-if="tableNameError" class="ted-err">{{ tableNameError }}</div>
         </div>
         <div class="ted-field">
-          <label>去重列</label>
-          <input :value="dedupCols" class="ted-input" readonly />
-        </div>
-        <div class="ted-field">
           <label>备注</label>
           <input v-model="form.remark" class="ted-input" placeholder="可选" />
         </div>
@@ -208,9 +203,9 @@ function notImpl(label: string) {
               <th>展示名</th>
               <th style="width:110px">类型</th>
               <th style="width:96px">校验</th>
+              <th style="width:120px">预处理</th>
+              <th style="width:56px">去重</th>
               <th style="width:80px">列宽</th>
-              <th>预处理</th>
-              <th style="width:52px">去重</th>
               <th style="width:44px"></th>
             </tr>
           </thead>
@@ -226,9 +221,9 @@ function notImpl(label: string) {
                 </select>
               </td>
               <td><select class="ted-cell" disabled><option>-不校验-</option></select></td>
+              <td><input v-model="f.preprocess" class="ted-cell" placeholder="如 trim" /></td>
+              <td class="center"><input v-model="f.dedup" type="checkbox" class="ted-check" /></td>
               <td><input v-model.number="f.width" type="number" class="ted-cell" /></td>
-              <td><input v-model="f.preprocess" class="ted-cell" /></td>
-              <td class="center"><input v-model="f.dedup" type="checkbox" /></td>
               <td class="center"><button class="ted-del" type="button" title="删除" @click="removeField(i)">✕</button></td>
             </tr>
           </tbody>
@@ -246,7 +241,7 @@ function notImpl(label: string) {
 
 <style scoped>
 .ted { display: flex; flex-direction: column; gap: 14px; }
-.ted-meta { display: grid; grid-template-columns: repeat(4, 1fr) auto; gap: 12px 16px; align-items: end; }
+.ted-meta { display: grid; grid-template-columns: repeat(3, 1fr) auto; gap: 12px 16px; align-items: end; }
 .ted-meta2 { display: flex; gap: 16px; align-items: end; }
 .ted-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .ted-field.sm { width: 130px; flex: none; }
@@ -270,6 +265,7 @@ function notImpl(label: string) {
 .ted-cell { width: 100%; height: 28px; padding: 0 8px; border: 1px solid var(--rc-border); border-radius: 5px; font-size: 12px; outline: none; background: #fff; box-sizing: border-box; }
 .ted-cell:focus { border-color: #60a5fa; }
 .ted-cell[disabled] { background: #f8fafc; color: var(--rc-faint); }
+.ted-check { width: 16px; height: 16px; margin: 0; vertical-align: middle; accent-color: var(--rc-primary); }
 .ted-del { width: 24px; height: 24px; border: 0; background: transparent; color: var(--rc-faint); cursor: pointer; border-radius: 5px; font-size: 13px; }
 .ted-del:hover { background: #fef2f2; color: #ef4444; }
 .ted-addrow { width: 100%; height: 36px; border: 0; border-top: 1px solid var(--rc-border-soft); background: #fbfdff; color: var(--rc-primary); font-size: 12px; cursor: pointer; }

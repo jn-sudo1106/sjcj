@@ -1,7 +1,7 @@
 import { reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { RunRow, RunNode, DataRow } from '../api'
-import type { FlowDef } from '../views/FlowCanvas/flowModel'
+import { isDataNode, nodeOutputTable, type FlowDef } from '../views/FlowCanvas/flowModel'
 
 // 运行时 store —— 试跑（mock）产生的运行数据的单一来源。
 // 画布节点态、运行记录、数据查看三页都读它，与静态 mock 叠加，形成「试跑→run→落表」闭环。
@@ -17,13 +17,17 @@ export const useRuntimeStore = defineStore('runtime', () => {
 
   const now = () => new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-')
 
-  // 单节点可试跑判定：已停用 / 规划中（待执行器）/ 采集节点缺 URL 或输出表（待配置）均不可试跑，
-  // 与画布 footFor 的「已停用/规划中/待配置」文案保持一致，避免误导为已跑通。
+  // 单节点可试跑判定：已停止 / 规划中（待执行器）/ 采集节点缺 URL 或输出表（待配置）/
+  // 非采集数据节点缺输出表均不可试跑，与画布 footFor 的「已停止/规划中/待配置」文案保持一致，避免误导为已跑通。
   function isRunnable(def: FlowDef, id: string): boolean {
     if (id === 'start' || id === 'end') return false
     const c = def.configs[id]
     if (!c || c.disabled || c.planned) return false
-    if (c.collectCfg && !(c.collectCfg.url && c.collectCfg.outputTable)) return false
+    if (c.collectCfg) {
+      if (!(c.collectCfg.url && c.collectCfg.outputTable)) return false
+    } else if (isDataNode(c) && !nodeOutputTable(c)) {
+      return false
+    }
     return true
   }
 
@@ -43,8 +47,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
         nodeId: id,
         name: cfg?.title ?? id,
         state: 'L',
-        input: cfg?.collectCfg?.url ?? cfg?.inmap?.[0]?.[0] ?? '-',
-        output: cfg?.collectCfg?.outputTable ?? cfg?.output?.[0]?.[0] ?? '-',
+        input: cfg?.collectCfg?.url ?? cfg?.inmap?.[0]?.name ?? '-',
+        output: cfg?.collectCfg?.outputTable ?? cfg?.output?.[0]?.name ?? '-',
         failAction: '重试3次后告警',
         extTaskId: `TK-${runId}`,
         extTraceId: /规则/.test(cfg?.title ?? '') ? `TRACE-${runId}` : '-',
@@ -93,20 +97,21 @@ export const useRuntimeStore = defineStore('runtime', () => {
   function generateData(def: FlowDef, runId: string, ids: string[]) {
     const outputTables = new Set<string>()
     ids.forEach((id) => {
-      const table = def.configs[id]?.collectCfg?.outputTable || def.configs[id]?.outputTable
+      const c = def.configs[id]
+      const table = c ? nodeOutputTable(c) : ''
       if (table) outputTables.add(table)
     })
     if (!outputTables.size) outputTables.add('t-notice')
 
     outputTables.forEach((table, i) => {
-      const cfg = ids.map((id) => def.configs[id]).find((c) => (c?.collectCfg?.outputTable || c?.outputTable) === table)
+      const cfg = ids.map((id) => def.configs[id]).find((c) => c && nodeOutputTable(c) === table)
       const rows: DataRow[] = [
         {
           dataId: `${runId}-${String(i + 1).padStart(3, '0')}`,
-          title: `试跑落表 · ${cfg?.collectCfg?.sourceName ?? cfg?.title ?? '网页抓取'}`,
+          title: `试跑落表 · ${def.source?.name ?? cfg?.title ?? '网页抓取'}`,
           summary: `来自流程「${def.name}」`,
-          sourceId: cfg?.collectCfg?.configId ?? '—',
-          configId: cfg?.collectCfg?.configId,
+          sourceId: def.source?.configId ?? '—',
+          configId: def.source?.configId,
           taskId: `TK-${runId}`,
           runId,
           acceptState: 'pending',

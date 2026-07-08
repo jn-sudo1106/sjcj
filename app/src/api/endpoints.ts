@@ -19,10 +19,15 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/stats', desc: '源 KPI 统计', impl: true },
   { path: 'source/logPaged', desc: '源操作日志', impl: true },
   { path: 'source/credentialDetail', desc: '登录凭据引用（脱敏）', impl: true },
-  { path: 'source/updateSource', desc: '编辑源', danger: true },
+  { path: 'source/updateSource', desc: '编辑源', danger: true, impl: true },
   { path: 'source/updateSourceSimple', desc: '简单编辑源', danger: true },
   { path: 'source/deleteSource', desc: '删除源', danger: true, impl: true },
   { path: 'source/copySource', desc: '复制派生源', danger: true, impl: true },
+  // 0706 优化·Phase3 新增（前端新流程，非 142 逆向清单原有项）：新建采集源两段式闸门
+  { path: 'source/createSource', desc: '新建源（闸门创建，含 ID 查重）', impl: true },
+  { path: 'source/sourceCopy', desc: '从现有源复制预填（模板复用，不落库）', impl: true },
+  // 0706 优化·Phase4 新增：任务视图 = 节点粒度运行记录（队列/总任务数/已处理数/状态）
+  { path: 'source/nodeRunStats', desc: '源的节点粒度运行统计', impl: true },
   { path: 'source/changeSourceEnable', desc: '启用 / 停用源', danger: true, impl: true },
   { path: 'source/sendSnatch', desc: '发抓取', danger: true, impl: true },
   { path: 'source/sendSnatchWithParam', desc: '带参发抓取', danger: true },
@@ -167,6 +172,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'flow/load', desc: '加载流程定义', impl: true },
   { path: 'flow/list', desc: '流程列表', impl: true },
   { path: 'flow/recommend', desc: '流程推荐（mock 意图匹配 / 二期 LLM 生成）', impl: true },
+  { path: 'flow/nodeAiChat', desc: '节点级 AI 对话（mock 关键词回复 / 二期 LLM，0701 问题八）', impl: true },
 
   /* ── comm 导出（目标 1 / 收录 1） ── */
   { path: 'comm/export', desc: '导出' },
@@ -180,6 +186,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'rule/sharedConfigPaged', desc: '共享配置', impl: true },
   { path: 'rule/testCasePaged', desc: '测试集', impl: true },
   { path: 'rule/evaluate', desc: '函数测试器求值', impl: true },
+  { path: 'rule/orchestrationPaged', desc: '规则编排列表', impl: true },
+  { path: 'rule/orchestrationGenerate', desc: '规则编排生成脚本', impl: true },
+  { path: 'rule/orchestrationTest', desc: '规则编排测试脚本', impl: true },
+  { path: 'rule/orchestrationSave', desc: '规则编排保存脚本', danger: true, impl: true },
   { path: 'rule/publish', desc: '发布规则', danger: true, impl: true },
   { path: 'rule/runBatchTest', desc: '跑批测', impl: true },
   // 运行记录 / 数据查看 / 监控（服务层聚合）
@@ -200,6 +210,17 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 采集资产总览（首页驾驶舱，服务层聚合）
   { path: 'overview/summary', desc: '采集资产总览聚合（KPI / 生态 / 占比 / Top / 异常）', impl: true },
   { path: 'overview/trend', desc: '采集任务趋势（近 N 天抓取量 / 成功量）', impl: true },
+
+  // 网站—子源父子模型（0707 优化·Phase2 新增：前端新概念，非 142 逆向清单原有项）
+  { path: 'site/sitePaged', desc: '网站分页列表（含 sourceCount / errorCount 汇总）', impl: true },
+  { path: 'site/siteDetail', desc: '网站详情', impl: true },
+  { path: 'site/createSite', desc: '新建采集：网站 + 首批子源', impl: true },
+  { path: 'site/sourcesOfSite', desc: '网站下的子源列表', impl: true },
+  { path: 'site/addSource', desc: '网站下新增子源（默认继承统一流程）', impl: true },
+  { path: 'site/removeSource', desc: '网站下移除子源', danger: true, impl: true },
+  { path: 'site/syncFlow', desc: '网站统一流程同步覆盖到所选子源', danger: true, impl: true },
+  { path: 'site/queueStats', desc: '网站粒度队列汇总（0707 Phase5 任务视图网站化）', impl: true },
+  { path: 'site/queueTaskPaged', desc: '队列任务明细分页', impl: true },
 ]
 
 /** 所有契约端点路径（fallback 判定用） */

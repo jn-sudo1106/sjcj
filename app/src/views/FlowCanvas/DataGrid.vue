@@ -9,8 +9,14 @@ const props = defineProps<{
   selectedId?: string
   compact?: boolean
   hideActions?: boolean
+  /** 网站粒度数据视图「所属源」列（0707 优化·Phase5）：传入才渲染，id → 名称映射 */
+  sourceNames?: Record<string, string>
 }>()
 const showActions = computed(() => !props.compact && !props.hideActions)
+const showSourceCol = computed(() => !!props.sourceNames)
+function sourceLabel(row: DataRow): string {
+  return props.sourceNames?.[row.sourceId] ?? row.sourceId
+}
 const emit = defineEmits<{
   (e: 'row-click', row: DataRow): void
   (e: 'row-action', row: DataRow, cmd: string): void
@@ -66,6 +72,7 @@ function stateMeta(s?: string) {
       <table class="dg-table">
         <thead>
           <tr>
+            <th v-if="showSourceCol" style="width:140px">所属源</th>
             <th v-for="f in visibleCols" :key="f.prop" :style="{ minWidth: compact ? '96px' : '110px' }">{{ f.prop }}</th>
             <th v-if="!compact" style="width:64px">状态</th>
             <th v-if="showActions" style="width:80px">操作</th>
@@ -73,6 +80,7 @@ function stateMeta(s?: string) {
         </thead>
         <tbody>
           <tr v-for="r in rows" :key="r.dataId" :class="{ active: selectedId === r.dataId }" @click="emit('row-click', r)">
+            <td v-if="showSourceCol" :title="sourceLabel(r)">{{ sourceLabel(r) }}</td>
             <td v-for="f in visibleCols" :key="f.prop" :title="cellText(r, f.prop)">{{ cellText(r, f.prop) }}</td>
             <td v-if="!compact"><span class="rc-status" :class="stateMeta(r.state).cls">{{ stateMeta(r.state).text }}</span></td>
             <td v-if="showActions" class="dg-actions" @click.stop>
@@ -88,7 +96,7 @@ function stateMeta(s?: string) {
             </td>
           </tr>
           <tr v-if="!rows.length && !loading">
-            <td :colspan="visibleCols.length + (compact ? 0 : 1) + (showActions ? 1 : 0)" class="dg-empty-cell">无符合条件的数据</td>
+            <td :colspan="visibleCols.length + (compact ? 0 : 1) + (showActions ? 1 : 0) + (showSourceCol ? 1 : 0)" class="dg-empty-cell">无符合条件的数据</td>
           </tr>
         </tbody>
       </table>

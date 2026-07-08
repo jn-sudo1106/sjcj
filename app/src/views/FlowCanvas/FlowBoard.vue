@@ -1,60 +1,90 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useRuntimeStore } from '../../stores/runtime'
-import { flowApi } from '../../api'
+import { useUiStore } from '../../stores/ui'
+import { useWorkspaceStore, MAX_SOURCE_TABS } from '../../stores/workspace'
+import { flowApi, sourceApi, siteApi, type Source } from '../../api'
 import CanvasHeader from './CanvasHeader.vue'
+import AddNodePopover from './AddNodePopover.vue'
+import SiteSourceSwitcher from './SiteSourceSwitcher.vue'
 import {
-  MODAL_TEMPLATES,
   iconFor,
+  isDataNode,
   isDecision,
   isParallel,
   nodeClassFor,
+  nodeOutputTable,
+  nodeEntryCondition,
+  conditionGroupLabel,
   type NodeConfig,
 } from './flowModel'
-import NewFlowDialog from './NewFlowDialog.vue'
 
 const flow = useFlowStore()
 const runtime = useRuntimeStore()
+const ui = useUiStore()
 const router = useRouter()
+const ws = useWorkspaceStore()
 const flowEl = ref<HTMLElement | null>(null)
-const showNewFlow = ref(false)
-const flows = ref<{ id: string; name: string; updatedAt: string }[]>([])
-async function loadFlows() {
-  flows.value = await flowApi.flowList()
-}
-// 切换 / 新建流程前若当前画布有未保存改动，二次确认，避免静默覆盖
+const canvasScrollEl = ref<HTMLElement | null>(null)
+
+// 编排对象切换器（0707 优化·Phase4）：只在当前源/网站归属某网站时出现；网站态用 'site' 作为激活态标识
+const switcherSiteId = computed(() => flow.siteCtx?.siteId || flow.sourceCtx?.siteId || '')
+const switcherActiveKey = computed(() => (flow.siteCtx ? 'site' : (flow.sourceCtx?.sourceId ?? '')))
 async function confirmDiscardIfDirty(): Promise<boolean> {
   if (!flow.dirty) return true
   try {
-    await ElMessageBox.confirm('当前流程有未保存的改动，切换后将丢失，是否继续？', '未保存改动', {
-      type: 'warning',
-      confirmButtonText: '放弃改动并继续',
-      cancelButtonText: '取消',
+    await ElMessageBox.confirm('当前画布有未保存的改动，切换将丢弃，是否继续？', '切换编排对象', {
+      type: 'warning', confirmButtonText: '切换', cancelButtonText: '取消',
     })
     return true
   } catch {
     return false
   }
 }
-async function onFlowMenu(cmd: string) {
-  if (cmd === '__new__') {
-    // 只是打开对话框，尚未覆盖画布，真正的覆盖发生在对话框内「应用到画布 / 从空白开始」，那里再确认
-    showNewFlow.value = true
-    return
-  }
+async function onSwitchTarget(target: 'site' | Source) {
   if (!(await confirmDiscardIfDirty())) return
-  const def = await flowApi.flowLoad(cmd)
-  if (def) flow.load(def)
+  if (target === 'site') {
+    const siteId = switcherSiteId.value
+    if (!siteId) return
+    const [site, def] = await Promise.all([siteApi.siteDetail(siteId), flowApi.flowLoad(`site:${siteId}`)])
+    if (!site) return
+    flow.startSiteFlow(site, def)
+    ws.open(`site:${siteId}`, site.name)
+    router.replace({ path: '/canvas', query: { siteId } })
+  } else {
+    const [source, steps, persistedDef] = await Promise.all([
+      sourceApi.sourceDetail(target.sourceId),
+      sourceApi.sourceSteps(target.sourceId),
+      flowApi.flowLoad(target.sourceId),
+    ])
+    if (!source) return
+    flow.loadFromSource(source, steps ?? [], persistedDef)
+    if (!ws.open(source.sourceId, source.name)) {
+      ElMessage.warning(`最多同时打开 ${MAX_SOURCE_TABS} 个源页签，请先关闭部分页签`)
+    }
+    router.replace({ path: '/canvas', query: { sourceId: source.sourceId } })
+  }
 }
+function onSwitchAdded(s: Source) {
+  onSwitchTarget(s)
+}
+
 async function generateWebFlow() {
+  const source = flow.sourceCfg ? JSON.parse(JSON.stringify(flow.sourceCfg)) : undefined
   try {
     const rec = await flowApi.flowRecommend('', 'web-public')
-    flow.load(rec.flow)
+    flow.load({
+      ...rec.flow,
+      id: source?.sourceId ?? rec.flow.id,
+      name: source?.name ?? rec.flow.name,
+      source,
+    })
   } catch {
-    flow.newFlow('blank')
+    if (source) flow.startDraftSource(source)
+    else flow.newFlow('blank')
   }
 }
 
@@ -62,23 +92,30 @@ async function generateWebFlow() {
 const menu = reactive<{ show: boolean; x: number; y: number; nodeId: string | null; afterId: string }>({
   show: false, x: 0, y: 0, nodeId: null, afterId: 'start',
 })
-const modal = reactive<{ show: boolean; afterId: string; kind: 'node' | 'decision' | 'parallel'; template: string }>({
-  show: false, afterId: 'start', kind: 'node', template: 'web',
+const addPop = reactive<{ show: boolean; x: number; y: number; afterId: string }>({
+  show: false, x: 0, y: 0, afterId: 'start',
 })
 
-// 连线表关系标注（Phase 4.2）：有输入/输出表绑定时在步骤标签下方显示 tableId 关系
-function edgeTableTag(fromId: string): string {
-  const e = flow.edges[fromId]
-  if (!e) return ''
-  const { inputTableId: inp, outputTableId: out } = e
-  if (!inp && !out) return ''
-  return `${inp || '?'} → ${out || '?'}`
+// 连线表关系标注（Phase 4.2；0701 问题五升级；0707 连线配置撤掉后纯读节点级数据）：
+// 输出表 → 输入表（全节点落库 + 输入表自动继承后，链路血缘天然可标注）
+function edgeTableTag(fromId: string, toId: string): string {
+  const fromCfg = flow.configs[fromId]
+  const toCfg = flow.configs[toId]
+  const out = fromCfg ? nodeOutputTable(fromCfg) : ''
+  const inp = toCfg ? flow.effectiveInputTableFor(toId) : ''
+  if (!out && !inp) return ''
+  return `${out || '?'} → ${inp || '?'}`
+}
+// 连线自动挂条件标签（0701 问题十·方案B）：显示下游节点的进入条件——"只满足条件的行才进入下游"
+function edgeConditionTag(toId: string): string {
+  const toCfg = flow.configs[toId]
+  return toCfg ? conditionGroupLabel(nodeEntryCondition(toCfg)) : ''
 }
 function nodeClasses(id: string, cfg: NodeConfig) {
   return [
     nodeClassFor(cfg),
     cfg.disabled ? 'disabled-node' : '',
-    flow.activeKind === 'node' && flow.selectedId === id ? 'active' : '',
+    flow.selectedId === id ? 'active' : '',
     runtime.nodeStates[id] ? `run-${runtime.nodeStates[id]}` : '',
   ]
 }
@@ -86,24 +123,38 @@ function runText(id: string) {
   const s = runtime.nodeStates[id]
   return s === 'L' ? '处理中' : s === 'C' ? '完成' : s === 'E' ? '失败' : ''
 }
+// 节点运行状态语义（0703 问题九）：待配置 → 运行 ↔ 停止；"运行"即业务口中"配置完成、点启动进入运行"的状态，
+// "停止"即"数据在此节点不处理"——均为纯文案层，disabled 字段名/序列化结构不变。
+// 与 runtime.isRunnable 同源判定：数据类节点（采集或非采集）只要输出表位都视为「待配置」。
 function footFor(cfg: NodeConfig) {
-  // 采集节点是否已配置：URL + 输出表 都填了就视为已配置
-  const configured = !!(cfg.collectCfg?.url && cfg.collectCfg?.outputTable)
+  const configured = cfg.collectCfg
+    ? !!(cfg.collectCfg.url && cfg.collectCfg.outputTable)
+    : isDataNode(cfg) && !!nodeOutputTable(cfg)
   const left = cfg.disabled
-    ? '已停用'
-    : cfg.collect
-      ? configured
-        ? cfg.status || '可试跑'
+    ? '已停止'
+    : cfg.planned
+      ? '规划中'
+      : cfg.collect || isDataNode(cfg)
+        ? configured
+          ? cfg.status || '运行'
+          : '待配置'
         : '待配置'
-      : cfg.planned
-        ? '规划中'
-        : '草稿'
-  const right = cfg.disabled ? '不参与运行' : cfg.collect ? '源配置' : '待试跑'
-  return { left, right, warn: cfg.disabled || (cfg.collect && !configured) }
+  const right = cfg.disabled
+    ? '数据在此节点不处理'
+    : cfg.collect
+      ? '源配置'
+      : isDataNode(cfg)
+        ? '待试跑'
+        : '待配置'
+  return {
+    left,
+    right,
+    warn: cfg.disabled || ((cfg.collect || isDataNode(cfg)) && !configured),
+  }
 }
 function footClass(cfg: NodeConfig) {
   const foot = footFor(cfg)
-  return { warn: foot.warn, ok: foot.left === '可试跑' }
+  return { warn: foot.warn, ok: foot.left === '运行' }
 }
 
 // ---- 拖放 ----
@@ -181,11 +232,11 @@ function closeMenu() {
 function menuAction(action: string) {
   const id = menu.nodeId
   const after = id ?? menu.afterId
+  const x = menu.x
+  const y = menu.y
   closeMenu()
   if (action === 'config' && id) flow.select(id)
-  else if (action === 'insert-node') openModal(after, 'node')
-  else if (action === 'insert-decision') openModal(after, 'decision')
-  else if (action === 'insert-parallel') openModal(after, 'parallel')
+  else if (action === 'insert-node') openAddPopover(x, y, after)
   else if (action === 'copy' && id) flow.duplicate(id)
   else if (action === 'move-up' && id) flow.move(id, -1)
   else if (action === 'move-down' && id) flow.move(id, 1)
@@ -193,59 +244,57 @@ function menuAction(action: string) {
   else if (action === 'delete' && id) flow.remove(id)
 }
 
-// ---- 新建节点弹窗 ----
-function openModal(afterId: string, kind: 'node' | 'decision' | 'parallel') {
-  modal.show = true
-  modal.afterId = afterId
-  modal.kind = kind
-  if (kind === 'node') modal.template = modal.template || 'web'
+// ---- 添加节点浮层（0707 优化·Phase1，参照 Dify：锚定弹层 + 搜索 + 分组，点选即插） ----
+function openAddPopover(x: number, y: number, afterId: string) {
+  addPop.show = true
+  addPop.x = x
+  addPop.y = y
+  addPop.afterId = afterId
 }
-function pickTemplate(t: string) {
-  modal.kind = 'node'
-  modal.template = t
+function closeAddPopover() {
+  addPop.show = false
 }
-function confirmModal() {
-  const template = modal.kind === 'decision' ? 'decision' : modal.kind === 'parallel' ? 'parallel' : modal.template
-  flow.insertAfter(modal.afterId, template)
-  modal.show = false
+function onPickNode(template: string) {
+  flow.insertAfter(addPop.afterId, template)
+  closeAddPopover()
 }
 
-// 点击画布外任意处关闭右键菜单
+// 点击画布外任意处关闭右键菜单 / 添加节点浮层
 function onWindowClick() {
   if (menu.show) closeMenu()
+  if (addPop.show) closeAddPopover()
 }
 onMounted(() => {
   window.addEventListener('click', onWindowClick)
-  loadFlows()
 })
 onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
+
+// 展开配置区后画布变窄，固定宽度的 .rc-flow 可能超出可视区域（0703 反馈）：
+// 展开宽度维持原样，改为把画布滚动条居中，保证默认就能看到节点，而不是贴左露一半
+watch(
+  () => ui.inspectorExpanded,
+  async (expanded) => {
+    if (!expanded) return
+    await nextTick()
+    const el = canvasScrollEl.value
+    if (!el) return
+    el.scrollLeft = Math.max(0, (el.scrollWidth - el.clientWidth) / 2)
+  },
+)
 </script>
 
 <template>
   <main class="rc-canvas" @contextmenu="onPaneMenu" @click="closeMenu">
-    <CanvasHeader v-if="flow.sourceCtx" />
-    <div v-else class="rc-canvas-head">
-      <div>
-        <div class="rc-canvas-title">{{ flow.flowName }} · draft-0.3</div>
-        <div class="rc-canvas-sub">网页抓取（数据中心四步）→ 文件解析/清洗 → 规则处理 → 落表 → 指标引用</div>
-      </div>
-      <span class="rc-status warn">落表由数据中心完成</span>
-      <div class="rc-canvas-actions">
-        <el-dropdown trigger="click" @command="onFlowMenu" @visible-change="(v: boolean) => v && loadFlows()">
-          <button class="rc-btn primary" type="button">切换 / 新建 ▾</button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="__new__">＋ 智能生成新流程</el-dropdown-item>
-              <el-dropdown-item v-for="(f, i) in flows" :key="f.id" :command="f.id" :divided="i === 0">{{ f.name }} · {{ f.updatedAt }}</el-dropdown-item>
-              <el-dropdown-item v-if="!flows.length" disabled divided>暂无已保存流程</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-        <button class="rc-btn" type="button" @click="router.push('/runs')">运行记录</button>
-      </div>
-    </div>
+    <CanvasHeader v-if="flow.sourceCtx || flow.siteCtx" />
+    <SiteSourceSwitcher
+      v-if="switcherSiteId"
+      :site-id="switcherSiteId"
+      :active-key="switcherActiveKey"
+      @pick="onSwitchTarget"
+      @added="onSwitchAdded"
+    />
 
-    <div class="rc-canvas-scroll" @dragover="onDragOver" @drop="onDrop">
+    <div ref="canvasScrollEl" class="rc-canvas-scroll" @dragover="onDragOver" @drop="onDrop">
       <div ref="flowEl" class="rc-flow" :style="{ height: flow.layout.totalHeight + 'px' }">
         <svg :width="640" :height="flow.layout.totalHeight" :viewBox="`0 0 640 ${flow.layout.totalHeight}`" aria-hidden="true">
           <path v-for="(e, i) in flow.layout.mainEdges" :key="'m' + i" class="rc-edge" :class="{ rule: e.rule }" :d="e.d" />
@@ -254,9 +303,9 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 
         <!-- 空白画布引导卡（无业务节点时） -->
         <div v-if="!flow.layout.nodes.length" class="rc-empty-cta">
-          <div class="rc-empty-cta-title">空白流程画布</div>
-          <div class="rc-empty-cta-sub">一键生成网页抓取初始流程：列表抓取 → 详情抓取 → 清洗落表，进入后逐节点完善配置。</div>
-          <button class="rc-btn primary" type="button" @click="generateWebFlow">生成网页抓取流程</button>
+          <div class="rc-empty-cta-title">空白编排画布</div>
+          <div class="rc-empty-cta-sub">可以用「＋」手工添加步骤，也可以先智能生成网页抓取初始流程，再逐节点调整配置。</div>
+          <button class="rc-btn primary" type="button" @click="generateWebFlow">智能生成流程</button>
         </div>
 
         <!-- 终端 -->
@@ -275,26 +324,23 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
           type="button"
           :style="{ top: s.top + 'px' }"
           aria-label="插入节点"
-          @click.stop="openModal(s.afterId, 'node')"
+          @click.stop="openAddPopover($event.clientX, $event.clientY, s.afterId)"
           @dragover="onDragOver"
           @drop="onSlotDrop($event, s.afterId)"
         >＋</button>
 
-        <!-- 连线步骤标签 -->
+        <!-- 连线血缘标注（0707 撤掉连线独立配置后，连线纯视觉连接，仅保留只读的表/条件标注） -->
         <template v-for="(e, i) in flow.layout.mainEdges" :key="'l' + i">
-        <button
-          v-if="e.hasStep"
-          class="rc-edge-label"
-          :class="{ active: flow.activeKind === 'edge' && flow.selectedEdgeFrom === e.fromId }"
-          :style="{ left: e.lx + 'px', top: e.ly + 'px' }"
-          type="button"
-          @click.stop="flow.selectEdge(e.fromId)"
-        >{{ e.label }}</button>
         <div
-          v-if="edgeTableTag(e.fromId)"
+          v-if="edgeTableTag(e.fromId, e.toId)"
           class="rc-edge-table-tag"
-          :style="{ left: e.lx + 'px', top: (e.ly + 15) + 'px' }"
-        >{{ edgeTableTag(e.fromId) }}</div>
+          :style="{ left: e.lx + 'px', top: e.ly + 'px' }"
+        >{{ edgeTableTag(e.fromId, e.toId) }}</div>
+        <div
+          v-if="edgeConditionTag(e.toId)"
+          class="rc-edge-cond-tag"
+          :style="{ left: e.lx + 'px', top: (e.ly + 14) + 'px' }"
+        >{{ edgeConditionTag(e.toId) }}</div>
         </template>
 
         <!-- 节点 -->
@@ -310,7 +356,7 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
           @contextmenu="onNodeMenu($event, n.id)"
         >
           <span v-if="runtime.nodeStates[n.id]" class="rc-run-badge" :class="runtime.nodeStates[n.id]">{{ runText(n.id) }}</span>
-          <span v-else-if="n.cfg.disabled" class="rc-node-plan">已停用</span>
+          <span v-else-if="n.cfg.disabled" class="rc-node-plan">已停止</span>
           <span v-else-if="n.cfg.planned" class="rc-node-plan">规划中</span>
 
           <div class="rc-node-top">
@@ -331,6 +377,7 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
             <div class="rc-node-foot"><span class="rc-chip">静态保留</span><span>{{ n.cfg.base[3]?.[1] || '待编排' }}</span></div>
           </template>
           <template v-else>
+            <div v-if="nodeOutputTable(n.cfg)" class="rc-node-table" :title="`输出表 ${nodeOutputTable(n.cfg)}`">⊞ {{ nodeOutputTable(n.cfg) }}</div>
             <div class="rc-node-foot">
               <span class="rc-chip" :class="footClass(n.cfg)">{{ footFor(n.cfg).left }}</span>
               <span>{{ footFor(n.cfg).right }}</span>
@@ -344,68 +391,22 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
     <div v-if="menu.show" class="rc-node-menu" :style="{ left: menu.x + 'px', top: menu.y + 'px' }" @click.stop>
       <template v-if="menu.nodeId">
         <button type="button" @click="menuAction('config')">配置节点</button>
-        <button type="button" @click="menuAction('insert-node')">加入节点</button>
-        <button type="button" @click="menuAction('insert-decision')">加入决策</button>
-        <button type="button" @click="menuAction('insert-parallel')">分头处理</button>
+        <button type="button" @click="menuAction('insert-node')">添加节点</button>
         <div class="sep" />
         <button type="button" @click="menuAction('copy')">复制节点</button>
         <button type="button" @click="menuAction('move-up')">上移</button>
         <button type="button" @click="menuAction('move-down')">下移</button>
-        <button type="button" @click="menuAction('toggle')">启用 / 停用</button>
+        <button type="button" @click="menuAction('toggle')">运行 / 停止</button>
         <div class="sep" />
         <button class="danger" type="button" @click="menuAction('delete')">删除节点</button>
       </template>
       <template v-else>
-        <button type="button" @click="menuAction('insert-node')">加入节点</button>
-        <button type="button" @click="menuAction('insert-decision')">加入决策</button>
-        <button type="button" @click="menuAction('insert-parallel')">分头处理</button>
+        <button type="button" @click="menuAction('insert-node')">添加节点</button>
       </template>
     </div>
 
-    <!-- 新建节点弹窗 -->
-    <div v-if="modal.show" class="rc-node-modal-backdrop show" @click.self="modal.show = false">
-      <div class="rc-node-modal" role="dialog" aria-modal="true">
-        <div class="rc-node-modal-head">
-          <div class="rc-node-modal-title">新建节点</div>
-          <button class="rc-node-modal-close" type="button" aria-label="关闭" @click="modal.show = false">×</button>
-        </div>
-        <div class="rc-node-modal-body">
-          <div class="rc-node-modal-label">选择节点类型</div>
-          <div class="rc-node-kind-grid">
-            <button class="rc-node-kind" :class="{ active: modal.kind === 'node' }" type="button" @click="modal.kind = 'node'">
-              <span class="ico">N</span><b>加入节点</b><span>一个需要执行或配置的采集节点</span>
-            </button>
-            <button class="rc-node-kind" :class="{ active: modal.kind === 'decision' }" type="button" @click="modal.kind = 'decision'">
-              <span class="ico">IF</span><b>加入决策</b><span>按条件选择其中一条路径</span>
-            </button>
-            <button class="rc-node-kind" :class="{ active: modal.kind === 'parallel' }" type="button" @click="modal.kind = 'parallel'">
-              <span class="ico">↱</span><b>分头处理</b><span>多条路径处理后汇合</span>
-            </button>
-          </div>
-          <div class="rc-node-modal-label">
-            节点模板
-            <span v-if="modal.kind === 'decision'" class="rc-modal-hint">（决策节点使用默认结构）</span>
-            <span v-else-if="modal.kind === 'parallel'" class="rc-modal-hint">（分头处理使用默认结构）</span>
-          </div>
-          <div class="rc-node-template-grid" :class="{ dim: modal.kind !== 'node' }">
-            <button
-              v-for="t in MODAL_TEMPLATES"
-              :key="t.template"
-              class="rc-node-choice"
-              :class="{ active: modal.kind === 'node' && modal.template === t.template }"
-              type="button"
-              @click="pickTemplate(t.template)"
-            >{{ t.name }}</button>
-          </div>
-        </div>
-        <div class="rc-node-modal-foot">
-          <button class="rc-btn" type="button" @click="modal.show = false">取消</button>
-          <button class="rc-btn primary" type="button" @click="confirmModal">确认</button>
-        </div>
-      </div>
-    </div>
-    <!-- 新建流程 · 对话式挑选器 -->
-    <NewFlowDialog v-model:open="showNewFlow" />
+    <!-- 添加节点浮层（0707 优化·Phase1，参照 Dify：锚定弹层 + 搜索 + 分组，点选即插，含「逻辑」分组承接决策/分头） -->
+    <AddNodePopover v-if="addPop.show" :x="addPop.x" :y="addPop.y" @pick="onPickNode" @close="closeAddPopover" />
   </main>
 </template>
 
@@ -437,10 +438,8 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 .rc-drop-slot::after { left: 42px; }
 .rc-drop-slot:hover { opacity: 1; border-color: var(--rc-primary); background: var(--rc-primary-bg); transform: translateY(-50%) scale(1.08); }
 
-.rc-edge-label { position: absolute; transform: translate(-50%, -50%); padding: 3px 8px; border: 1px solid #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); border-radius: 999px; font-size: 10px; white-space: nowrap; cursor: pointer; z-index: 21; }
-.rc-edge-label:hover { border-color: #60a5fa; background: #dbeafe; }
-.rc-edge-label.active { border-color: var(--rc-primary); box-shadow: 0 0 0 2px #dbeafe; }
 .rc-edge-table-tag { position: absolute; transform: translate(-50%, 0); font-size: 9px; color: var(--rc-faint); font-family: var(--rc-mono, monospace); white-space: nowrap; pointer-events: none; z-index: 21; }
+.rc-edge-cond-tag { position: absolute; transform: translate(-50%, 0); font-size: 9px; color: #b45309; white-space: nowrap; pointer-events: none; z-index: 21; }
 
 .rc-flow-node { position: absolute; width: 210px; min-height: 74px; padding: 10px 12px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; box-shadow: 0 3px 12px -8px rgba(15, 23, 42, 0.28); cursor: pointer; transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s; }
 .rc-flow-node:hover { transform: translateY(-1px); border-color: #bfdbfe; }
@@ -465,6 +464,7 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 .rc-flow-node.run-C { border-color: #86efac; }
 .rc-flow-node.run-E { border-color: #fca5a5; }
 .rc-node-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; color: var(--rc-muted); font-size: 10px; }
+.rc-node-table { margin-top: 6px; font-size: 10px; color: var(--rc-faint); font-family: var(--rc-mono, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-node-brief { margin-top: 8px; color: var(--rc-muted); font-size: 10px; line-height: 1.45; }
 .rc-node-brief b { color: #334155; font-weight: 700; }
 .rc-node-paths { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
@@ -482,26 +482,4 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 .rc-node-menu button:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rc-node-menu button.danger:hover { background: var(--rc-error-bg); color: #b91c1c; }
 .rc-node-menu .sep { height: 1px; background: var(--rc-border-soft); margin: 4px 0; }
-
-.rc-node-modal-backdrop { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, 0.28); padding: 24px; }
-.rc-node-modal { width: min(640px, calc(100vw - 48px)); background: #fff; border: 1px solid var(--rc-border); border-radius: 12px; box-shadow: 0 24px 64px -22px rgba(15, 23, 42, 0.45); overflow: hidden; }
-.rc-node-modal-head { height: 52px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid var(--rc-border-soft); }
-.rc-node-modal-title { font-size: 14px; font-weight: 800; color: var(--rc-text); }
-.rc-node-modal-close { width: 30px; height: 30px; border: 0; background: transparent; color: var(--rc-faint); font-size: 22px; font-weight: 700; cursor: pointer; border-radius: 7px; }
-.rc-node-modal-close:hover { background: #f8fafc; color: var(--rc-text-2); }
-.rc-node-modal-body { padding: 16px; }
-.rc-node-modal-label { font-size: 11px; font-weight: 700; color: var(--rc-muted); margin-bottom: 8px; }
-.rc-modal-hint { font-weight: 500; color: var(--rc-faint); margin-left: 4px; }
-.rc-node-kind-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
-.rc-node-kind { min-height: 76px; border: 1px solid var(--rc-border); background: #fff; border-radius: 8px; padding: 10px; text-align: center; cursor: pointer; color: var(--rc-text-2); }
-.rc-node-kind b { display: block; color: var(--rc-text); font-size: 13px; margin-top: 5px; }
-.rc-node-kind span { display: block; font-size: 10px; color: var(--rc-faint); margin-top: 4px; }
-.rc-node-kind.active { border-color: #60a5fa; background: var(--rc-primary-bg); box-shadow: 0 0 0 1px #bfdbfe inset; }
-.rc-node-kind .ico { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; background: #f1f5f9; color: var(--rc-primary); font-size: 11px; font-weight: 900; }
-.rc-node-template-grid { display: flex; flex-wrap: wrap; gap: 7px; }
-.rc-node-template-grid.dim { opacity: 0.38; pointer-events: none; }
-.rc-node-choice { height: 30px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--rc-border); background: #fff; border-radius: 7px; padding: 0 10px; color: #334155; font-size: 12px; cursor: pointer; }
-.rc-node-choice:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
-.rc-node-choice.active { border-color: #60a5fa; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
-.rc-node-modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--rc-border-soft); background: #fbfdff; }
 </style>

@@ -8,6 +8,10 @@ import {
   mockSourceLogs,
   mockSourceTasks,
   mockAck,
+  mockSourceCreate,
+  mockSourceCopy,
+  mockSourceUpdate,
+  mockSourceNodeRuns,
 } from './sources'
 import {
   mockRuleGroups,
@@ -17,6 +21,10 @@ import {
   mockSharedConfigs,
   mockRuleTestCases,
   mockEvaluate,
+  mockRuleOrchestrationPaged,
+  mockRuleOrchestrationGenerate,
+  mockRuleOrchestrationTest,
+  mockRuleOrchestrationSave,
 } from './rules'
 import { mockDatasets, mockMeasures, mockMetricStats } from './metrics'
 import { mockDataTables, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate } from './dataview'
@@ -24,7 +32,18 @@ import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats } from './monitor'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
-import { mockFlowSave, mockFlowLoad, mockFlowList, mockFlowRecommend } from './flows'
+import { mockFlowSave, mockFlowLoad, mockFlowList, mockFlowRecommend, mockNodeAiChat } from './flows'
+import {
+  mockSitePaged,
+  mockSiteDetail,
+  mockSiteCreate,
+  mockSiteSourcesOf,
+  mockSiteSourceAdd,
+  mockSiteSourceRemove,
+  mockSiteSyncFlow,
+  mockSiteQueueStats,
+  mockQueueTaskPaged,
+} from './sites'
 import { mockConfigPaged, mockConfigDetail } from './configs'
 import { mockEntryPaged, mockEntryDetail, mockSaveEntryType } from './entries'
 import { mockParamPaged, mockParamDetail, mockGenValues } from './params'
@@ -40,6 +59,10 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'item/next/nextConfigPaged': mockSourceSteps,
   'source/changeSourceEnable': mockAck,
   'source/copySource': mockAck,
+  'source/createSource': mockSourceCreate,
+  'source/sourceCopy': mockSourceCopy,
+  'source/updateSource': mockSourceUpdate,
+  'source/nodeRunStats': mockSourceNodeRuns,
   'source/sendSnatch': mockAck,
   'source/deleteSource': mockAck,
   // 采集资产 · 源（M5 补充）
@@ -87,6 +110,10 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'rule/sharedConfigPaged': mockSharedConfigs,
   'rule/testCasePaged': mockRuleTestCases,
   'rule/evaluate': mockEvaluate,
+  'rule/orchestrationPaged': mockRuleOrchestrationPaged,
+  'rule/orchestrationGenerate': mockRuleOrchestrationGenerate,
+  'rule/orchestrationTest': mockRuleOrchestrationTest,
+  'rule/orchestrationSave': mockRuleOrchestrationSave,
   'rule/publish': mockAck,
   'rule/runBatchTest': mockAck,
 
@@ -127,4 +154,16 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'flow/load': mockFlowLoad,
   'flow/list': mockFlowList,
   'flow/recommend': mockFlowRecommend,
+  'flow/nodeAiChat': mockNodeAiChat,
+
+  // 网站—子源父子模型（0707 优化·Phase2）
+  'site/sitePaged': mockSitePaged,
+  'site/siteDetail': mockSiteDetail,
+  'site/createSite': mockSiteCreate,
+  'site/sourcesOfSite': mockSiteSourcesOf,
+  'site/addSource': mockSiteSourceAdd,
+  'site/removeSource': mockSiteSourceRemove,
+  'site/syncFlow': mockSiteSyncFlow,
+  'site/queueStats': mockSiteQueueStats,
+  'site/queueTaskPaged': mockQueueTaskPaged,
 }
