@@ -4,10 +4,17 @@ import { configApi, sourceApi, type Config, type CredentialRef, type Source } fr
 
 // 源基础信息表单（0706 优化·Phase3）：新建源闸门段与 Phase4 源信息编辑抽屉共用同一份字段与交互。
 // 必填区（源ID/名称/分类）始终展示；URL 为选填（0707 微调）；标签/代理/选用配置/登录/定时等源级选填项收在「更多设置」折叠区默认收起。
-const props = defineProps<{ modelValue: Source; sourceIdEditable?: boolean }>()
+// 0707 优化·补：showIdentity=false 时隐藏源ID/源名称/源URL（这三个是逐子源填的，不适合当"默认值"复用）——
+// 供"新建采集"闸门的「子源默认设置」区复用同一套字段（分类/标签/代理/选用配置/登录/定时），批量套给本批子源。
+// withDefaults 显式给 showIdentity 兜底 true：Vue 对 TS 字面量声明的可选 boolean prop 有个隐藏规则——
+// 不传时运行时直接落 false（不是 undefined），`showIdentity !== false` 这种判断式不显式兜底会全线误判为"隐藏"。
+const props = withDefaults(
+  defineProps<{ modelValue: Source; sourceIdEditable?: boolean; showIdentity?: boolean; defaultOpen?: boolean }>(),
+  { showIdentity: true, defaultOpen: false },
+)
 const emit = defineEmits<{ 'update:modelValue': [v: Source] }>()
 
-const moreOpen = ref(false)
+const moreOpen = ref(!!props.defaultOpen)
 const configs = ref<Config[]>([])
 const cred = ref<CredentialRef | null>(null)
 const WEEKDAYS: [number, string][] = [[1, '周一'], [2, '周二'], [3, '周三'], [4, '周四'], [5, '周五'], [6, '周六'], [7, '周日']]
@@ -52,35 +59,37 @@ function pickDir(dir: (typeof DIR_OPTIONS)[number]) {
 
 <template>
   <div class="sbf">
-    <div class="rc-field"><label>源 ID{{ sourceIdEditable === false ? '' : '（创建后不可修改）' }}</label>
-      <input class="rc-input" :disabled="sourceIdEditable === false" :value="modelValue.sourceId" @input="onInput('sourceId', $event)" placeholder="必填" />
-    </div>
-    <div class="rc-field"><label>源名称</label><input class="rc-input" :value="modelValue.name" @input="onInput('name', $event)" placeholder="必填" /></div>
-    <div class="rc-field"><label>源 URL</label><input class="rc-input" :value="modelValue.url" @input="onInput('url', $event)" placeholder="选填" /></div>
-    <div class="rc-field"><label>分类</label>
-      <div class="rc-dir-picker">
-        <div class="rc-dir-top">
-          <input class="rc-input slim" :value="modelValue.dirId" @input="onInput('dirId', $event)" placeholder="目录 ID" />
-          <input class="rc-input slim" :value="modelValue.category" @input="onInput('category', $event)" placeholder="目录名（必填）" />
-        </div>
-        <div class="rc-dir-tree">
-          <button
-            v-for="dir in DIR_OPTIONS"
-            :key="dir.dirId"
-            type="button"
-            class="rc-dir-node"
-            :class="{ active: modelValue.dirId === dir.dirId }"
-            @click="pickDir(dir)"
-          >{{ dir.label }}</button>
+    <template v-if="showIdentity">
+      <div class="rc-field"><label>源 ID{{ sourceIdEditable === false ? '' : '（创建后不可修改）' }}</label>
+        <input class="rc-input" :disabled="sourceIdEditable === false" :value="modelValue.sourceId" @input="onInput('sourceId', $event)" placeholder="必填" />
+      </div>
+      <div class="rc-field"><label>源名称</label><input class="rc-input" :value="modelValue.name" @input="onInput('name', $event)" placeholder="必填" /></div>
+      <div class="rc-field"><label>源 URL</label><input class="rc-input" :value="modelValue.url" @input="onInput('url', $event)" placeholder="选填" /></div>
+      <div class="rc-field"><label>分类</label>
+        <div class="rc-dir-picker">
+          <div class="rc-dir-top">
+            <input class="rc-input slim" :value="modelValue.dirId" @input="onInput('dirId', $event)" placeholder="目录 ID" />
+            <input class="rc-input slim" :value="modelValue.category" @input="onInput('category', $event)" placeholder="目录名（必填）" />
+          </div>
+          <div class="rc-dir-tree">
+            <button
+              v-for="dir in DIR_OPTIONS"
+              :key="dir.dirId"
+              type="button"
+              class="rc-dir-node"
+              :class="{ active: modelValue.dirId === dir.dirId }"
+              @click="pickDir(dir)"
+            >{{ dir.label }}</button>
+          </div>
         </div>
       </div>
-    </div>
+    </template>
 
     <button class="sbf-more-toggle" type="button" @click="moreOpen = !moreOpen">
-      {{ moreOpen ? '▾' : '▸' }} 更多设置（标签 / 代理 / 选用配置 / 登录 / 定时）
+      {{ moreOpen ? '▾' : '▸' }} 更多设置（{{ showIdentity ? '标签 / ' : '' }}代理 / 选用配置 / 登录 / 定时）
     </button>
     <div v-if="moreOpen" class="sbf-more-body">
-      <div class="rc-field"><label>标签</label><input class="rc-input" :value="(modelValue.tags ?? []).join(', ')" @input="onTagsChange" /></div>
+      <div v-if="showIdentity" class="rc-field"><label>标签</label><input class="rc-input" :value="(modelValue.tags ?? []).join(', ')" @input="onTagsChange" /></div>
       <div class="rc-field"><label>核心参数</label>
         <div class="rc-checks">
           <label class="rc-check"><input type="checkbox" :checked="modelValue.useProxy" @change="onCheck('useProxy', $event)" /> 使用代理</label>

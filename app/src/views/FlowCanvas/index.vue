@@ -14,6 +14,7 @@ import SourceTabsBar from './SourceTabsBar.vue'
 import CompareSplit from './CompareSplit.vue'
 import TaskView from './TaskView.vue'
 import SyncSourcesDialog from './SyncSourcesDialog.vue'
+import SourceBasicForm from './SourceBasicForm.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -37,10 +38,12 @@ watch(
   { immediate: true },
 )
 
-// ---- 新建采集闸门（0707 优化·Phase3）：先填网站基础信息 + 首批子源清单，过闸后进入首个子源的编排画布。
-// 网站本身是流程模板 + 批量工具、不实际运行（详见设计方案 §0.2 A5）；网站粒度的统一流程画布经 Phase4 的
-// 编排对象切换器（SiteSourceSwitcher，挂在 FlowBoard 内 CanvasHeader 下方）可达，过闸落地到第一个子源
-// 只是入口选择，创建后随时能用切换器跳回网站模板编辑。
+// ---- 新建采集闸门（0707 优化·Phase3 → §5.7 改口径）：先填网站基础信息 + 首批子源清单，过闸进入网站统一流程画布。
+// §5.7 推翻 §5.5 的"落地范围收窄（落到第一个子源）"——Phase4 的 siteCtx / 切换器 / 同步弹窗就绪后，回正到方案 B：
+// - 单一权威方向（模板→子源同步），不引入子源互相复制，detached 语义干净（A+C 同步根基，详见 §5.7 理由 1）；
+// - 新建瞬间所有子源空白、视角天然就是模板，不需额外"传染"步骤（理由 2）；
+// - 想验证时切换器一键切子源试跑，试跑入口仍在切换器旁（理由 3）；
+// - 引导文案（FlowBoard 空白卡）与同步成功提示（SyncSourcesDialog）配套改文案，详见 §5.7 落地口径。
 const isGate = computed(() => route.query.mode === 'new')
 const GATE_CATEGORY_OPTIONS = [
   { value: '基金类', label: '基金类', categoryPath: '/基金类' },
@@ -53,13 +56,15 @@ function suggestId(prefix: string): string {
 function categoryPathOf(category: string): string {
   return GATE_CATEGORY_OPTIONS.find((opt) => opt.value === category)?.categoryPath ?? `/${category}`
 }
-function blankSiteDraft(): Omit<Site, 'sourceCount' | 'errorCount'> {
+function blankSiteDraft(): Site {
   return {
     siteId: suggestId('site-'),
     name: '',
     category: GATE_CATEGORY_OPTIONS[0].value,
     categoryPath: GATE_CATEGORY_OPTIONS[0].categoryPath,
     owner: 'admin',
+    sourceCount: 0,
+    errorCount: 0,
     tags: [],
   }
 }
@@ -69,13 +74,23 @@ function blankRow(): GateChildRow {
 }
 const gateSite = ref(blankSiteDraft())
 const gateRows = ref<GateChildRow[]>([blankRow()])
+// 子源默认设置（0707 优化·补）：目录/标签/代理/选用配置/登录/定时等源级字段过去只能创建后逐个进编辑抽屉补，
+// 批量新建场景下很重——这里复用 SourceBasicForm（隐藏源ID/名称/URL，那三项在上面 gateRows 逐行填），
+// 创建时把这份默认值套给本批全部子源，每个子源生成后在编辑抽屉里仍可单独覆盖。
+function blankSourceDefaults(): Source {
+  return { sourceId: '', name: '', url: '', configId: '', mainTable: '', owner: 'admin', state: 'C' }
+}
+const gateSourceDefaults = ref<Source>(blankSourceDefaults())
 const gateTagsInput = computed({
   get: () => (gateSite.value.tags ?? []).join(', '),
   set: (v: string) => { gateSite.value.tags = v.split(',').map((s) => s.trim()).filter(Boolean) },
 })
 const gateTemplateId = ref('')
 const gateTemplates = ref<Site[]>([])
-let skipNextSourceLoad = false
+// §5.7 创建后跳转防重载：onCreateAndEnter 已 eager 载入默认骨架（避免新 URL 下短暂渲染旧 store 状态的闪烁），
+// 紧跟的 router.replace 会触发 route watcher 再跑一次 enterFromRoute -> loadSiteFlow -> startSiteFlow（查无存档，
+// 重新生成同一份骨架，幂等但多余两次 mock 调用）。置此 flag 在跳转前，watcher 顶置检查并清除，跳过这一次冗余重载。
+let skipRouteReload = false
 async function loadGateTemplates() {
   gateTemplates.value = (await siteApi.sitePaged({ size: 50 })).list
 }
@@ -112,21 +127,24 @@ async function onCreateAndEnter() {
     ElMessage.warning('请至少填写一个子源名称')
     return
   }
+  // 子源默认设置（目录/标签/代理/选用配置/登录/定时）套给本批全部子源，各自仍可创建后单独覆盖
   const sources: Source[] = rows.map((r) => ({
-    sourceId: r.sourceId, name: r.name, url: r.url, configId: '', mainTable: '', owner: site.owner || 'admin', state: 'C',
+    ...gateSourceDefaults.value,
+    sourceId: r.sourceId, name: r.name, url: r.url, mainTable: '', owner: site.owner || 'admin', state: 'C',
   }))
-  const res = await siteApi.siteCreate(site, sources)
+  const siteForCreate: Site = { ...site, sourceCount: sources.length, errorCount: sources.filter((s) => s.state === 'E').length }
+  const res = await siteApi.siteCreate(siteForCreate, sources)
   if (!res?.ok) {
     ElMessage.warning(res?.message || '创建失败，请重试')
     return
   }
-  const first = sources[0]
-  skipNextSourceLoad = true
-  flow.startDraftSource(first)
-  ws.open(first.sourceId, first.name)
-  await router.replace({ path: '/canvas', query: { sourceId: first.sourceId } })
+  // §5.7：过闸进入网站统一流程画布（方案 B），不再落第一个子源；详见文件头注释。
+  flow.startSiteFlow(siteForCreate)
+  ws.open(`site:${siteForCreate.siteId}`, siteForCreate.name)
+  skipRouteReload = true // eager 已载入骨架，watcher 这次跳过冗余重载（见文件上方 skipRouteReload 声明）
+  await router.replace({ path: '/canvas', query: { siteId: siteForCreate.siteId } })
   registerCanvasActions()
-  ElMessage.success(`网站「${site.name}」已创建（${sources.length} 个子源），进入「${first.name}」编排`)
+  ElMessage.success(`网站「${siteForCreate.name}」已创建（${sources.length} 个子源），请编排全站统一流程，保存后可一键同步到全部子源`)
 }
 // ---- 配置区宽度（优化 0701 问题一）：拖拽分隔条调宽 + 一键展开 ----
 const inspWidth = computed(() => `${ui.inspectorWidth ?? (flow.sourceCtx || flow.siteCtx ? 480 : 372)}px`)
@@ -241,6 +259,7 @@ onMounted(async () => {
   if (isGate.value) {
     gateSite.value = blankSiteDraft()
     gateRows.value = [blankRow()]
+    gateSourceDefaults.value = blankSourceDefaults()
     gateTemplateId.value = ''
     loadGateTemplates()
     registerCanvasActions()
@@ -253,12 +272,12 @@ onMounted(async () => {
 watch(
   () => [route.query.sourceId, route.query.siteId] as const,
   async ([sid, stid], prev) => {
-    if (isGate.value) return
-    if (prev && sid === prev[0] && stid === prev[1]) return
-    if (skipNextSourceLoad) {
-      skipNextSourceLoad = false
+    if (skipRouteReload) {
+      skipRouteReload = false
       return
     }
+    if (isGate.value) return
+    if (prev && sid === prev[0] && stid === prev[1]) return
     await enterFromRoute()
   },
 )
@@ -267,6 +286,7 @@ watch(isGate, (v) => {
   if (v) {
     gateSite.value = blankSiteDraft()
     gateRows.value = [blankRow()]
+    gateSourceDefaults.value = blankSourceDefaults()
     gateTemplateId.value = ''
     loadGateTemplates()
     registerCanvasActions()
@@ -308,6 +328,9 @@ onUnmounted(() => {
         <button class="rc-btn" type="button" :disabled="gateRows.length <= 1" @click="removeGateRow(i)">移除</button>
       </div>
       <button class="rc-btn" type="button" @click="addGateRow">＋ 添加子源</button>
+
+      <div class="rc-gate-rows-title">子源默认设置（可选，套用到本批全部子源，创建后各子源仍可单独覆盖）</div>
+      <SourceBasicForm v-model="gateSourceDefaults" :show-identity="false" />
 
       <div class="rc-gate-actions">
         <button class="rc-btn" type="button" @click="onCancelGate">取消</button>

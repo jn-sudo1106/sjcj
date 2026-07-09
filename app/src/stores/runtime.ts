@@ -78,10 +78,18 @@ export const useRuntimeStore = defineStore('runtime', () => {
     return runId
   }
 
-  // 整链试跑：跑主链上所有可试跑节点
+  // 整链试跑：跑主链上所有可试跑节点 + 决策/分头分支段 chain 内可试跑节点（0707 优化·Phase6）
   function trial(def: FlowDef): string {
     if (running.value) return ''
     const ids = def.main.filter((id) => isRunnable(def, id))
+    // 0707 Phase6：chain 内节点也参与试跑（按声明顺序追加）
+    for (const bg of def.branchGroups ?? []) {
+      for (const b of bg.branches) {
+        for (const nid of b.chain) {
+          if (isRunnable(def, nid) && !ids.includes(nid)) ids.push(nid)
+        }
+      }
+    }
     if (!ids.length) return ''
     return runTrial(def, ids)
   }

@@ -34,7 +34,10 @@ async function confirmSync() {
     return
   }
   const res = await siteApi.siteSyncFlow(props.siteId, ids)
-  ElMessage.success(res?.message || `已同步到 ${ids.length} 个子源（演示）`)
+  // §5.7：成功提示附加「可切换到具体子源试跑验证」——这是同步完该做什么的产品引导，不该依赖 mock/后端 message 自带，
+  // 也不该只走 fallback（mock 总是返回自己的 message）。统一在末尾追加：剥掉 message 末尾标点避免「。。，」叠标点。
+  const base = (res?.message || `已同步到 ${ids.length} 个子源（演示）`).replace(/[。.；;，,]\s*$/, '')
+  ElMessage.success(`${base}，可切换到具体子源试跑验证`)
   emit('close')
 }
 function skip() {

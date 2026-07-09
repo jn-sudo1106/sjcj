@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Grid, List, Refresh, Edit, CopyDocument } from '@element-plus/icons-vue'
+import { Search, Grid, List, Refresh, Edit, CopyDocument, Operation } from '@element-plus/icons-vue'
 import { sourceApi, siteApi, type Source, type Site, type SourceCategory, type SourceLog, type TaskInst } from '../../api'
 import { useUiStore } from '../../stores/ui'
 import { useWorkspaceStore, MAX_SOURCE_TABS } from '../../stores/workspace'
@@ -89,9 +89,8 @@ function resetAndLoad() {
   selectedIds.value = []
   loadList()
 }
-function refreshAll() {
-  loadList()
-  loadStats()
+async function refreshAll() {
+  await Promise.all([loadList(), loadStats()])
 }
 
 let kwTimer: ReturnType<typeof setTimeout> | undefined
@@ -148,6 +147,10 @@ function expandAll() {
 }
 function collapseAll() {
   expanded.value = new Set()
+}
+function onTableExpandCommand(cmd: string) {
+  if (cmd === 'expand') expandAll()
+  if (cmd === 'collapse') collapseAll()
 }
 
 // ---- 多选（子源级；网站行 checkbox = 该站全部子源，未展开也可选，先懒加载再勾） ----
@@ -293,9 +296,29 @@ function onOperate(cmd: string) {
     schedule: '批量定时', modify: '批量改配置',
   }
   if (cmd === 'delete') return onBatchDelete()
+  // 0707 Review #1/#2 修复：
+  // - success：改走专用端点 changeToSuccess（此前误用 changeSourceEnable 把源禁用）；
+  // - enable/disable：changeSourceEnable 是单源签名、无批量端点，前端循环调（此前只传 selectedIds[0] 漏掉其余选中源）；
+  // - schedule/modify：已是数组端点，保持原样。
+  if (cmd === 'success' || cmd === 'enable' || cmd === 'disable') {
+    return confirmDanger(`${map[cmd]}（${selectedIds.value.length} 个源）`, `确认对选中源执行「${map[cmd]}」？`, async () => {
+      let failed = 0
+      for (const id of selectedIds.value) {
+        const r = cmd === 'success'
+          ? await sourceApi.changeToSuccess(id)
+          : await sourceApi.changeSourceEnable(id, cmd !== 'enable')
+        if (!r?.ok) failed++
+      }
+      await loadList()
+      await loadStats()
+      return failed
+        ? { message: `已处理 ${selectedIds.value.length - failed} 个、失败 ${failed} 个（演示）` }
+        : { message: `已对 ${selectedIds.value.length} 个源执行「${map[cmd]}」（演示）` }
+    })
+  }
   confirmDanger(`${map[cmd]}（${selectedIds.value.length} 个源）`, `确认对选中源执行「${map[cmd]}」？`, () =>
     cmd === 'modify'
-      ? sourceApi.batchModifyConfig(selectedIds.value, '—')
+      ? sourceApi.batchModifyConfig(selectedIds.value, '-')
       : cmd === 'schedule'
         ? sourceApi.batchSchedule(selectedIds.value)
         : sourceApi.changeSourceEnable(selectedIds.value[0], cmd !== 'enable'),
@@ -315,9 +338,20 @@ function onBatchImport() {
   importDlg.visible = true
 }
 async function submitImport() {
-  const res = await sourceApi.batchImport(importDlg.template, importDlg.lines)
+  // 0707 Review #3 修复：透传 deep/dir（此前两字段收集后丢弃）；导入后刷新列表 + 标签/分类下拉（此前不刷新看不到新增条目）。
+  const res = await sourceApi.batchImport(importDlg.template, importDlg.lines, {
+    deep: importDlg.deep,
+    dir: importDlg.dir,
+  })
+  if (!res?.ok) {
+    ElMessage.warning(res?.message || '导入失败，请检查模板源 / 行格式')
+    return
+  }
   ElMessage.success(res?.message || '批量导入已提交（演示）')
   importDlg.visible = false
+  await refreshAll()
+  loadTagOptions()
+  loadCategories()
 }
 
 // 新建采集（0707 优化·Phase3）：跳画布新建闸门段，先填网站基础信息 + 首批子源再进流程编排。
@@ -386,7 +420,6 @@ onUnmounted(() => ui.clearActions())
         <button class="ca-view-btn" :class="{ active: view === 'card' }" type="button" title="卡片视图" @click="setView('card')"><el-icon :size="14"><Grid /></el-icon>卡片</button>
         <button class="ca-view-btn" :class="{ active: view === 'table' }" type="button" title="表格视图" @click="setView('table')"><el-icon :size="14"><List /></el-icon>表格</button>
       </div>
-      <span class="ca-count">共 {{ total }} 个网站</span>
       <button class="ca-refresh" type="button" title="刷新" @click="refreshAll"><el-icon :size="14"><Refresh /></el-icon></button>
     </div>
 
@@ -430,10 +463,6 @@ onUnmounted(() => ui.clearActions())
 
     <!-- 表格视图：网站行带聚合列，展开后子源行；勾选作用到子源级 -->
     <div v-else v-loading="loading" class="rc-card ca-table-card">
-      <div class="ca-table-ops">
-        <el-button text size="small" @click="expandAll">展开全部</el-button>
-        <el-button text size="small" @click="collapseAll">收起全部</el-button>
-      </div>
       <div class="rc-table-scroll">
         <table class="rc-data-table ca-table">
           <thead>
@@ -448,7 +477,20 @@ onUnmounted(() => ui.clearActions())
               <th style="width: 104px">数据量</th>
               <th style="width: 88px">责任人</th>
               <th style="width: 140px">最近修改</th>
-              <th style="width: 110px">操作</th>
+              <th style="width: 110px">
+                <div class="ca-th-actions">
+                  <span>操作</span>
+                  <el-dropdown trigger="click" @command="onTableExpandCommand">
+                    <button class="ca-expand-menu" type="button" title="展开/收起" aria-label="展开/收起"><el-icon :size="14"><Operation /></el-icon></button>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item command="expand">展开全部</el-dropdown-item>
+                        <el-dropdown-item command="collapse">收起全部</el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </div>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -718,7 +760,6 @@ onUnmounted(() => ui.clearActions())
 }
 .ca-view-btn:hover { color: var(--rc-primary-ink); }
 .ca-view-btn.active { color: var(--rc-primary); font-weight: 700; background: #fff; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06); }
-.ca-count { color: var(--rc-muted); font-size: 12px; white-space: nowrap; }
 .ca-refresh {
   width: 34px;
   height: 34px;
@@ -752,8 +793,22 @@ onUnmounted(() => ui.clearActions())
 
 /* ---- 表格视图 ---- */
 .ca-table-card { display: flex; flex-direction: column; overflow: hidden; }
-.ca-table-ops { display: flex; gap: 2px; padding: 8px 12px 0; }
 .ca-table th { white-space: nowrap; }
+.ca-th-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.ca-expand-menu {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--rc-border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--rc-text-2);
+  cursor: pointer;
+}
+.ca-expand-menu:hover { border-color: #bfdbfe; color: var(--rc-primary-ink); background: #f8fbff; }
 .ca-site-row td { padding-top: 12px; padding-bottom: 12px; border-top: 1px solid var(--rc-border-soft); }
 .ca-child-row { background: #fbfdff; }
 .ca-child-row td { padding-top: 8px; padding-bottom: 8px; }

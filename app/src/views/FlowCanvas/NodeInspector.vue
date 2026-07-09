@@ -5,11 +5,12 @@ import { useFlowStore } from '../../stores/flow'
 import { useRuntimeStore } from '../../stores/runtime'
 import { useUiStore } from '../../stores/ui'
 import {
-  WEB_KIND_OPTIONS, nodeEntryCondition, nodeTaskQueue,
+  WEB_KIND_OPTIONS, decisionOrParallelKind, fieldOptionsFromTableOrOutput, nodeEntryCondition, nodeTaskQueue,
   makeDefaultRuleOrchestration,
   type CollectConfig, type ConditionGroup, type NodeConfig, type TaskParam, type TripleField, type WebKind,
 } from './flowModel'
 import ConditionRow from './ConditionRow.vue'
+import BranchEditor from './BranchEditor.vue'
 import {
   entryApi, configApi, sourceApi, ruleApi,
   type EntryType, type Config, type RuleGroup, type Rule, type SharedConfig,
@@ -29,9 +30,13 @@ const cc = computed(() => cfg.value?.collectCfg)
 const statusText = computed(() => (cfg.value?.disabled ? '已停止' : (cfg.value?.status ?? '')))
 const statusClass = computed(() => (cfg.value?.disabled || cfg.value?.planned ? 'warn' : 'ok'))
 
-// 顶层四 Tab（0706 调整4 · 0707 微调）：节点配置 / 表配置 / 任务配置 / AI 对话；flow.activeTab 直接就是当前 Tab，
-// 不再像旧版那样从「步骤/子Tab」派生——步进器与非采集类的四子页均已拆除、合并为单屏滚动。
-const TOP_TABS: [string, string][] = [['config', '节点配置'], ['table', '表配置'], ['task', '任务配置'], ['ai', 'AI 对话']]
+// 顶层 Tab（0706 调整4 · 0707 微调 · Phase6 决策/分头）：普通节点 = 节点配置/表配置/任务配置/AI 对话 四 Tab；
+// 决策/分头节点不产表也不需要任务/AI 编排，只显示「分支配置」一个 Tab 承载 BranchEditor
+const isDecisionOrParallel = computed(() => !!cfg.value && decisionOrParallelKind(cfg.value) !== undefined)
+const TOP_TABS = computed<[string, string][]>(() => {
+  if (isDecisionOrParallel.value) return [['config', '分支配置']]
+  return [['config', '节点配置'], ['table', '表配置'], ['task', '任务配置'], ['ai', 'AI 对话']]
+})
 
 // 资产联动数据
 const tables = ref<EntryType[]>([])
@@ -109,20 +114,6 @@ function removeTaskParam(index: number) {
   patchTaskParams(taskParams.value.filter((_, i) => i !== index))
 }
 
-// 进入条件（0701 问题十·方案B；0706 升级为条件组）：字段下拉取有效输入表（自动继承或显式覆盖）的 schema；
-// 首节点没有输入表，改取本节点输出表——首节点输出表即下一节点的输入表，效果等价于在下一节点设同样条件。
-// 字段清单同时供「任务 URL 来源字段」下拉复用（0707 任务触发条件并入节点进入条件后取消独立维护）。
-const entryCondition = computed<ConditionGroup | undefined>(() => (cfg.value ? nodeEntryCondition(cfg.value) : undefined))
-const entryConditionFields = computed(() => {
-  const tid = isFirstDataNode.value ? nodeTableId.value : (ownInputTable.value || effectiveInputTableId.value)
-  return tables.value.find((t) => t.tableId === tid)?.fields.map((f) => ({ prop: f.prop, desc: f.desc })) ?? []
-})
-function onEntryConditionChange(cond: ConditionGroup | undefined) {
-  if (cc.value) flow.patchCollect(id.value, { entryCondition: cond })
-  else flow.setEntryCondition(id.value, cond)
-}
-
-// ---- 输入映射「来源」下拉建议（Phase 3.1）：取主链路上一个节点的产物字段 ----
 const prevNode = computed<NodeConfig | undefined>(() => {
   const idx = flow.main.indexOf(id.value)
   for (let i = idx - 1; i >= 0; i--) {
@@ -133,6 +124,21 @@ const prevNode = computed<NodeConfig | undefined>(() => {
   }
   return undefined
 })
+
+// 输入表 schema 字段清单：字段下拉取有效输入表（自动继承或显式覆盖）的 schema；
+// 首节点没有输入表，改取本节点输出表——首节点输出表即下一节点的输入表，效果等价于在下一节点设同样条件。
+// 若继承的是上游子步骤临时表，实体表清单可能查不到 schema，此时回退到上游节点 output 产物字段。
+// 该清单复用于「进入条件」「任务 URL 来源字段」与「任务参数」的字段下拉。
+const inputTableFields = computed(() => {
+  const tid = isFirstDataNode.value ? nodeTableId.value : (ownInputTable.value || effectiveInputTableId.value)
+  return fieldOptionsFromTableOrOutput(tid, tables.value, isFirstDataNode.value ? cfg.value?.output : prevNode.value?.output)
+})
+const entryCondition = computed<ConditionGroup | undefined>(() => (cfg.value ? nodeEntryCondition(cfg.value) : undefined))
+function onEntryConditionChange(cond: ConditionGroup | undefined) {
+  flow.setEntryCondition(id.value, cond)
+}
+
+// ---- 输入映射「来源」下拉建议（Phase 3.1）：取主链路上一个节点的产物字段 ----
 const inmapSourceOptions = computed(() => {
   const p = prevNode.value
   if (!p) return []
@@ -361,7 +367,7 @@ function onTrial() {
             <option v-for="t in tables" :key="t.tableId" :value="t.tableId">{{ t.tableId }} · {{ t.tableName }}</option>
           </select>
         </div>
-        <ConditionRow v-if="!isFirstDataNode" :condition="entryCondition" :fields="entryConditionFields" @change="onEntryConditionChange" />
+        <ConditionRow v-if="!isFirstDataNode" :condition="entryCondition" :fields="inputTableFields" @change="onEntryConditionChange" />
         <div class="rc-field"><label>输出表</label>
           <select class="rc-select" :value="nodeTableId" @change="onOutputTableChange">
             <option v-if="!cc" value="" disabled>请选择输出表</option>
@@ -377,7 +383,7 @@ function onTrial() {
           <div class="rc-field"><label>任务 URL 来源字段</label>
             <select class="rc-select" :value="cfg.taskCfg?.urlSourceField ?? ''" @change="onTaskUrlSourceFieldChange">
               <option value="">选择字段（上一步属性）</option>
-              <option v-for="f in entryConditionFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
+              <option v-for="f in inputTableFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
             </select>
           </div>
           <div class="rc-field"><label>任务 URL 规则</label>
@@ -392,7 +398,7 @@ function onTrial() {
             <input class="rc-input" :value="p.name" placeholder="参数名，如 detailUrl" @input="updateTaskParam(i, 'name', ($event.target as HTMLInputElement).value)" />
             <select class="rc-select" :value="p.field" @change="updateTaskParam(i, 'field', ($event.target as HTMLSelectElement).value)">
               <option value="">选择字段</option>
-              <option v-for="f in entryConditionFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
+              <option v-for="f in inputTableFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
             </select>
             <button class="rc-row-del ni-task-param-remove" type="button" title="删除该参数" @click="removeTaskParam(i)">✕</button>
           </div>
@@ -402,7 +408,7 @@ function onTrial() {
       </template>
 
       <template v-else-if="tab === 'table'">
-        <!-- 表配置：仅保留输出表入口，表结构通过「查看/编辑表」查看维护 -->
+        <!-- 表配置：保留输出表管理入口，表结构通过「查看/编辑表」查看维护 -->
         <div class="rc-field"><label>输出表{{ cc ? '' : '（本节点处理结果落此表，默认继承上游节点；结果视图可查数据）' }}</label>
           <div class="rc-input-group">
             <select class="rc-select grow" :value="nodeTableId" @change="onOutputTableChange">
@@ -434,8 +440,11 @@ function onTrial() {
 
       </template>
 
-      <!-- 节点配置：单屏纵向分组，无步进器 / 无子 Tab（0706 调整4） -->
+      <!-- 节点配置：单屏纵向分组，无步进器 / 无子 Tab（0706 调整4）；
+           决策/分头节点直接交给 BranchEditor 接管（0707 优化·Phase6） -->
       <template v-else>
+        <BranchEditor v-if="isDecisionOrParallel && id" :owner-id="id" :key="id" />
+        <template v-else>
         <div class="rc-field"><label>节点名称</label><input class="rc-input" :value="cfg.title" @input="onTitle" /></div>
 
         <div class="rc-readonly-hint ni-source-hint">源级配置（名称/分类/代理/登录/定时/选用配置）在顶部摘要头「编辑」中修改，各节点共享同一份。</div>
@@ -600,6 +609,7 @@ function onTrial() {
             <div class="rc-list-row"><b>最近结果</b><span>成功 8 / 失败 1 / 待复核 1</span></div>
           </div>
           <div class="rc-actions-row"><button class="rc-btn" type="button" @click="ElMessage.info('查看日志（演示占位）')">查看日志</button></div>
+        </template>
         </template>
       </template>
 

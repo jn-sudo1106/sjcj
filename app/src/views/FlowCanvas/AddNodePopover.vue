@@ -4,7 +4,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { LIB_GROUPS, type LibItem } from './flowModel'
 
-const props = defineProps<{ x: number; y: number }>()
+const props = defineProps<{ x: number; y: number; hideLogicGroup?: boolean }>()
 const emit = defineEmits<{ pick: [template: string]; close: [] }>()
 
 const keyword = ref('')
@@ -13,8 +13,10 @@ const popEl = ref<HTMLElement | null>(null)
 
 const filteredGroups = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
-  if (!kw) return LIB_GROUPS
-  return LIB_GROUPS
+  // 0707 优化·Phase6：分支内添加场景隐藏「逻辑」分组（防嵌套分支：chain 内不允许再开 FlowBranchGroup）
+  const groups = props.hideLogicGroup ? LIB_GROUPS.filter((g) => g.title !== '逻辑') : LIB_GROUPS
+  if (!kw) return groups
+  return groups
     .map((g) => ({ ...g, items: g.items.filter((it) => it.name.toLowerCase().includes(kw) || it.desc.toLowerCase().includes(kw)) }))
     .filter((g) => g.items.length)
 })

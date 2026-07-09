@@ -17,8 +17,6 @@ import {
   isParallel,
   nodeClassFor,
   nodeOutputTable,
-  nodeEntryCondition,
-  conditionGroupLabel,
   type NodeConfig,
 } from './flowModel'
 
@@ -92,8 +90,10 @@ async function generateWebFlow() {
 const menu = reactive<{ show: boolean; x: number; y: number; nodeId: string | null; afterId: string }>({
   show: false, x: 0, y: 0, nodeId: null, afterId: 'start',
 })
-const addPop = reactive<{ show: boolean; x: number; y: number; afterId: string }>({
-  show: false, x: 0, y: 0, afterId: 'start',
+// 0707 优化·Phase6·补：addPop 扩展 branch 模式（ownerId/branchId），供 fan-out 分支列「+」复用同一浮层，
+// hideLogicGroup 防止分支内嵌套开新的决策/分头（chain 不支持嵌套分支）。
+const addPop = reactive<{ show: boolean; x: number; y: number; afterId: string; branch: { ownerId: string; branchId: string } | null }>({
+  show: false, x: 0, y: 0, afterId: 'start', branch: null,
 })
 
 // 连线表关系标注（Phase 4.2；0701 问题五升级；0707 连线配置撤掉后纯读节点级数据）：
@@ -106,11 +106,8 @@ function edgeTableTag(fromId: string, toId: string): string {
   if (!out && !inp) return ''
   return `${out || '?'} → ${inp || '?'}`
 }
-// 连线自动挂条件标签（0701 问题十·方案B）：显示下游节点的进入条件——"只满足条件的行才进入下游"
-function edgeConditionTag(toId: string): string {
-  const toCfg = flow.configs[toId]
-  return toCfg ? conditionGroupLabel(nodeEntryCondition(toCfg)) : ''
-}
+// 0707 优化·Phase6：节点级「进入条件」已退役（统一收进决策节点的 FlowBranchGroup 分支条件）；连线条件标签退役，仅保留表血缘标签。
+// 原 edgeConditionTag() 函数删除；分支条件摘要标签将在 6.4 阶段重做为分支连线标签。
 function nodeClasses(id: string, cfg: NodeConfig) {
   return [
     nodeClassFor(cfg),
@@ -250,12 +247,21 @@ function openAddPopover(x: number, y: number, afterId: string) {
   addPop.x = x
   addPop.y = y
   addPop.afterId = afterId
+  addPop.branch = null
+}
+// 0707 优化·Phase6·补：fan-out 分支列「+」——挂进分支 chain 末尾，而非主链
+function openBranchAddPopover(x: number, y: number, ownerId: string, branchId: string) {
+  addPop.show = true
+  addPop.x = x
+  addPop.y = y
+  addPop.branch = { ownerId, branchId }
 }
 function closeAddPopover() {
   addPop.show = false
 }
 function onPickNode(template: string) {
-  flow.insertAfter(addPop.afterId, template)
+  if (addPop.branch) flow.addNodeToBranch(addPop.branch.ownerId, addPop.branch.branchId, template)
+  else flow.insertAfter(addPop.afterId, template)
   closeAddPopover()
 }
 
@@ -299,12 +305,20 @@ watch(
         <svg :width="640" :height="flow.layout.totalHeight" :viewBox="`0 0 640 ${flow.layout.totalHeight}`" aria-hidden="true">
           <path v-for="(e, i) in flow.layout.mainEdges" :key="'m' + i" class="rc-edge" :class="{ rule: e.rule }" :d="e.d" />
           <path v-for="(e, i) in flow.layout.branchEdges" :key="'b' + i" class="rc-edge" :d="e.d" />
+          <!-- 0707 优化·Phase6：决策/分头节点的 fan-out 分支连线 -->
+          <path v-for="(e, i) in flow.layout.fanOutEdges" :key="'f' + i" class="rc-edge fan-out" :d="e.d" />
         </svg>
 
-        <!-- 空白画布引导卡（无业务节点时） -->
+        <!-- 空白画布引导卡（无业务节点时；§5.7：网站模板与子源走不同文案，引导用户各司其职） -->
         <div v-if="!flow.layout.nodes.length" class="rc-empty-cta">
-          <div class="rc-empty-cta-title">空白编排画布</div>
-          <div class="rc-empty-cta-sub">可以用「＋」手工添加步骤，也可以先智能生成网页抓取初始流程，再逐节点调整配置。</div>
+          <template v-if="flow.siteCtx">
+            <div class="rc-empty-cta-title">网站统一流程 · 空白模板</div>
+            <div class="rc-empty-cta-sub">这里编排的是全站统一流程，保存后可一键同步到全部子源；想验证试跑时，用顶部切换器切到具体子源即可。</div>
+          </template>
+          <template v-else>
+            <div class="rc-empty-cta-title">空白编排画布</div>
+            <div class="rc-empty-cta-sub">可以用「＋」手工添加步骤，也可以先智能生成网页抓取初始流程，再逐节点调整配置。</div>
+          </template>
           <button class="rc-btn primary" type="button" @click="generateWebFlow">智能生成流程</button>
         </div>
 
@@ -329,18 +343,34 @@ watch(
           @drop="onSlotDrop($event, s.afterId)"
         >＋</button>
 
-        <!-- 连线血缘标注（0707 撤掉连线独立配置后，连线纯视觉连接，仅保留只读的表/条件标注） -->
+        <!-- 连线血缘标注（0707 撤掉连线独立配置后，连线纯视觉连接，仅保留只读的表血缘标注；条件标签退役，见上方注释） -->
         <template v-for="(e, i) in flow.layout.mainEdges" :key="'l' + i">
         <div
           v-if="edgeTableTag(e.fromId, e.toId)"
           class="rc-edge-table-tag"
           :style="{ left: e.lx + 'px', top: e.ly + 'px' }"
         >{{ edgeTableTag(e.fromId, e.toId) }}</div>
-        <div
-          v-if="edgeConditionTag(e.toId)"
-          class="rc-edge-cond-tag"
-          :style="{ left: e.lx + 'px', top: (e.ly + 14) + 'px' }"
-        >{{ edgeConditionTag(e.toId) }}</div>
+        </template>
+
+        <!-- 0707 优化·Phase6：决策/分头节点的 fan-out 分支列标签（分支名 + 条件摘要） -->
+        <template v-for="(col, ownerId) in flow.layout.fanOutColMeta" :key="'col-' + ownerId">
+          <template v-for="br in col.branches" :key="'coltag-' + br.id">
+            <div
+              class="rc-fanout-col-tag"
+              :style="{ left: (br.colX - 60) + 'px', top: (br.top - 16) + 'px' }"
+            >
+              <b>{{ br.label }}</b>
+              <span v-if="br.condLabel" class="rc-fanout-col-cond">{{ br.condLabel }}</span>
+            </div>
+            <!-- 0707 优化·Phase6·补：分支内添加节点入口——挂到 chain 末尾（不支持中间插入，与 moveInBranch 按钮化范围一致） -->
+            <button
+              class="rc-branch-add-slot"
+              type="button"
+              :style="{ left: (br.colX - 12) + 'px', top: (br.top + br.height + 6) + 'px' }"
+              :title="`在「${br.label}」分支内添加节点`"
+              @click.stop="openBranchAddPopover($event.clientX, $event.clientY, String(ownerId), br.id)"
+            >＋</button>
+          </template>
         </template>
 
         <!-- 节点 -->
@@ -406,7 +436,14 @@ watch(
     </div>
 
     <!-- 添加节点浮层（0707 优化·Phase1，参照 Dify：锚定弹层 + 搜索 + 分组，点选即插，含「逻辑」分组承接决策/分头） -->
-    <AddNodePopover v-if="addPop.show" :x="addPop.x" :y="addPop.y" @pick="onPickNode" @close="closeAddPopover" />
+    <AddNodePopover
+      v-if="addPop.show"
+      :x="addPop.x"
+      :y="addPop.y"
+      :hide-logic-group="!!addPop.branch"
+      @pick="onPickNode"
+      @close="closeAddPopover"
+    />
   </main>
 </template>
 
@@ -424,6 +461,11 @@ watch(
 .rc-flow svg { position: absolute; inset: 0; pointer-events: none; }
 .rc-edge { fill: none; stroke: #cbd5e1; stroke-width: 1.6; }
 .rc-edge.rule { stroke: #60a5fa; stroke-dasharray: 5 4; }
+.rc-edge.fan-out { stroke: #f59e0b; stroke-width: 1.6; stroke-dasharray: 4 3; }
+.rc-fanout-col-tag { position: absolute; width: 120px; text-align: center; font-size: 10px; color: var(--rc-text-2); background: #fff7ed; border: 1px solid #fde68a; border-radius: 5px; padding: 2px 6px; pointer-events: none; z-index: 22; line-height: 1.3; }
+.rc-fanout-col-cond { display: block; font-size: 9px; color: #92400e; font-weight: 400; margin-top: 2px; }
+.rc-branch-add-slot { position: absolute; z-index: 20; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border: 1px dashed #fbbf24; background: #fffbeb; color: #b45309; border-radius: 999px; font-size: 15px; line-height: 1; opacity: 0.75; cursor: pointer; transition: opacity 0.12s, transform 0.12s; }
+.rc-branch-add-slot:hover { opacity: 1; transform: scale(1.08); background: #fef3c7; }
 
 .rc-term { position: absolute; width: 150px; height: 34px; border: 1px solid var(--rc-border); border-radius: 18px; background: #fff; color: var(--rc-text-2); display: flex; align-items: center; justify-content: center; font-weight: 600; box-shadow: 0 2px 8px -5px rgba(15, 23, 42, 0.2); }
 

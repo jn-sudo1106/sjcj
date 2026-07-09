@@ -23,13 +23,18 @@ export const sourceApi = {
   // 写类 / 高危端点：首期 mock 仅回执，UI 统一二次确认占位（呼应权威方案读写边界）。
   changeSourceEnable: (sourceId: string, disabled: boolean) =>
     request<Ack>('source/changeSourceEnable', { sourceId, disabled }),
+  // 改为成功状态（0707 Review #1 修复：端点已登记但此前未封装，SourceTab 曾误用 changeSourceEnable）。
+  // 注：endpoints.ts:54 只登记 path 无参数契约，按单源封装；批量场景由调用方循环（见 SourceTab.onOperate）。
+  changeToSuccess: (sourceId: string) => request<Ack>('source/changeToSuccess', { sourceId }),
   copySource: (sourceId: string) => request<Ack>('source/copySource', { sourceId }),
   sendSnatch: (sourceIds: string[]) => request<Ack>('source/sendSnatch', { sourceIds }),
   deleteSource: (sourceIds: string[]) => request<Ack>('source/deleteSource', { sourceIds }),
   sourceLogs: (sourceId: string) => request<SourceLog[]>('source/logPaged', { sourceId }),
   sourceTasks: (sourceId: string) => request<TaskInst[]>('task/topTaskPaged', { sourceId }),
   credentialRef: (refId: string) => request<CredentialRef | null>('source/credentialDetail', { refId }),
-  batchImport: (template: string, lines: string) => request<Ack>('source/batchImport', { template, lines }),
+  // 批量导入（0707 Review #3 修复：deep/dir 此前被前端丢弃，现透传）。
+  batchImport: (template: string, lines: string, opts?: { deep?: boolean; dir?: string }) =>
+    request<Ack>('source/batchImport', { template, lines, deep: opts?.deep ?? false, dir: opts?.dir ?? '' }),
   batchModifyConfig: (sourceIds: string[], configId: string) => request<Ack>('source/batchModifyConfig', { sourceIds, configId }),
   batchSchedule: (sourceIds: string[]) => request<Ack>('source/createJobs', { sourceIds }),
   changeFreqTag: (sourceIds: string[], freqTag: string) => request<Ack>('source/changeFreqTag', { sourceIds, freqTag }),

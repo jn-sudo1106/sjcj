@@ -249,6 +249,65 @@ export function mockSourceSteps(params?: Record<string, unknown>): Step[] {
   ]
 }
 
+// 启用 / 停用源（0707 Review #2 修复：原 mockAck 不落库，演示环境看不出启用/停用效果）：
+// 真改 SOURCES.disabled + 本地持久化（沿用 mockSourceUpdate 的 overrides/created 双写口径），与真实后端按 payload 禁用一致。
+export function mockChangeSourceEnable(params?: Record<string, unknown>): Ack {
+  const sourceId = String(params?.sourceId ?? '')
+  const disabled = Boolean(params?.disabled)
+  const s = SOURCES.find((x) => x.sourceId === sourceId)
+  if (!s) return { ok: false, message: `源「${sourceId}」不存在` }
+  s.disabled = disabled
+  persistUpdatedOverride(sourceId, { disabled })
+  return { ok: true, message: disabled ? '已停用（本地演示）' : '已启用（本地演示）' }
+}
+// 改为成功状态（0707 Review #1 修复：端点 source/changeToSuccess 此前未封装、未注册，SourceTab 误用 changeSourceEnable）：
+// 真改 SOURCES.state='C' + 清告警 + 本地持久化。
+export function mockChangeToSuccess(params?: Record<string, unknown>): Ack {
+  const sourceId = String(params?.sourceId ?? '')
+  const s = SOURCES.find((x) => x.sourceId === sourceId)
+  if (!s) return { ok: false, message: `源「${sourceId}」不存在` }
+  s.state = 'C'
+  s.alarm = false
+  persistUpdatedOverride(sourceId, { state: 'C', alarm: false })
+  return { ok: true, message: '已标记为成功（本地演示）' }
+}
+
+// 模板源批量导入（0707 Review #3 修复：原 mockAck 不落库 + deep/dir 字段被前端丢弃）：
+// 以 template 源为底板，按 lines（每行 "名称;url"）逐条派生新源，真落库到 SOURCES + created 持久化。
+// deep=true 时为每行生成独立配置副本（演示口径：configId 加行号后缀）；dir 覆盖分类路径。
+export function mockBatchImport(params?: Record<string, unknown>): Ack {
+  const template = String(params?.template ?? '').trim()
+  const lines = String(params?.lines ?? '').trim()
+  const deep = Boolean(params?.deep)
+  const dir = String(params?.dir ?? '').trim()
+  if (!template) return { ok: false, message: '请填写模板源 ID' }
+  const tpl = SOURCES.find((s) => s.sourceId === template || s.name === template)
+  if (!tpl) return { ok: false, message: `模板源「${template}」不存在` }
+  const rows = lines.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  if (!rows.length) return { ok: false, message: '请至少填写一行「名称;url」' }
+  const created: Source[] = []
+  rows.forEach((row, i) => {
+    const [name, url] = row.split(';').map((x) => (x ?? '').trim())
+    const newId = `${tpl.sourceId}-imp${Date.now().toString().slice(-6)}${i}`
+    const base: Source = {
+      ...tpl,
+      sourceId: newId,
+      name: name || `${tpl.name}-派生${i + 1}`,
+      url: url || tpl.url,
+      disabled: false,
+      state: 'C',
+      alarm: false,
+      updatedAt: undefined,
+    }
+    if (dir) base.categoryPath = dir
+    if (deep) base.configId = `${tpl.configId || ''}-d${i + 1}`
+    created.push(base)
+    SOURCES.push(base)
+  })
+  persistCreatedSources([...created, ...readCreatedSources()])
+  return { ok: true, message: `已导入 ${created.length} 个源（本地演示）` }
+}
+
 // 写类 / 高危端点：首期 mock 仅回执，不落库；UI 走二次确认占位。
 export function mockAck(): Ack {
   return { ok: true, demo: true, message: '演示环境：操作已记录，未实际执行写入' }

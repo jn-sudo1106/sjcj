@@ -1,7 +1,7 @@
 // 流程画布数据模型 —— 忠实移植自静态原型 prototypes/collect-config-center.html
 // 节点配置、连线（子步骤）配置、节点模板与图标/样式辅助函数均与原型口径一致。
 
-import type { RuleOrchestration, Source, Step } from '../../api'
+import type { RuleOrchestration, Site, Source, Step } from '../../api'
 
 export type NodeKind = 'node' | 'decision' | 'parallel'
 export type TripleField = 'inmap' | 'params' | 'output'
@@ -17,6 +17,22 @@ export interface FieldDef {
   name: string
   type: string
   desc: string
+}
+
+export interface FieldOption {
+  prop: string
+  desc: string
+}
+
+type FieldOptionTable = {
+  tableId: string
+  fields: FieldOption[]
+}
+
+export function fieldOptionsFromTableOrOutput(tableId: string, tables: FieldOptionTable[], fallbackOutput: FieldDef[] = []): FieldOption[] {
+  const table = tables.find((t) => t.tableId === tableId)
+  if (table) return table.fields.map((f) => ({ prop: f.prop, desc: f.desc }))
+  return fallbackOutput.map((f) => ({ prop: f.name, desc: f.desc || f.type }))
 }
 
 export interface NodeConfig {
@@ -39,10 +55,10 @@ export interface NodeConfig {
   outputAdvanced?: OutputAdvanced
   /** 非采集类节点的输入表（采集类沿用 collectCfg.inputTable）；空 = 自动继承上游节点输出表，显式设置即覆盖（0701 问题五） */
   inputTable?: string
+  /** 节点进入条件：语义为本节点只处理满足条件的输入表行 */
+  entryCondition?: ConditionGroup
   /** 任务级配置（队列/URL规则/拼接逻辑/触发条件），采集与非采集节点共用同一处（0706 调整4·任务配置独立化） */
   taskCfg?: TaskConfig
-  /** 节点进入条件（采集类沿用 collectCfg.entryCondition，0701 问题十·方案B；0706 升级为多字段组合） */
-  entryCondition?: ConditionGroup
   /** 规则处理节点编排配置（0707 Phase 9：规则引擎 rule-orchestration） */
   ruleCfg?: RuleOrchestration
 }
@@ -65,10 +81,15 @@ export interface EntryCondition {
   value: string
 }
 
-/** 条件组：多字段组合逻辑（0706 优化·主题二「条件表达式统一规范」），叶子沿用 EntryCondition */
+/** 条件组：多字段组合逻辑（0706 优化·主题二「条件表达式统一规范」），叶子沿用 EntryCondition。
+ *  0707 优化·补：结构化字段选择表达不了跨字段比较/函数调用等复杂逻辑，加表达式模式兜底（1:1 对应 Step.condition 契约）；
+ *  mode 缺省 = 'fields'（旧数据无此字段，兼容读取，0701 问题五同款 1:1+fallback 口径）；两种模式二选一，不混用。 */
 export interface ConditionGroup {
+  mode?: 'fields' | 'expr'
   logic: 'AND' | 'OR'
   items: EntryCondition[]
+  /** mode === 'expr' 时的原始表达式字符串；不做语法校验，透传存储 */
+  expr?: string
 }
 
 export interface OutputAdvanced {
@@ -104,7 +125,7 @@ export interface CollectConfig {
   outputTable: string
   /** 输入表：空 = 自动继承上游节点输出表，显式设置即覆盖（0701 问题五） */
   inputTable: string
-  /** 进入条件：空 = 不限制；设置后本步骤只处理满足条件的行（0701 问题十·方案B） */
+  /** 节点进入条件：语义为本采集步骤只处理满足条件的输入表行 */
   entryCondition?: ConditionGroup
   inputParams: string[]
   isDetail: boolean
@@ -297,6 +318,29 @@ export interface BranchSeed {
   edgeTo: string
 }
 
+/** 决策/分头节点的分支段（0707 优化·Phase6）：
+ *  - 决策：数据行按 IF→ELIF→…→ELSE 顺序匹配，命中哪条走哪条子链（单路，A3）；
+ *  - 分头：全部分支无条件并行走（多路）；
+ *  - 汇合：分支段统一在主链 owner 的下一个节点收拢；不需要汇合的流程把决策放主链末端即可（汇合点 = 完成端），模型不用分叉出第二种形态（Q1）；
+ *  - chain 内不允许再开新的 FlowBranchGroup（不支持嵌套分支），AddNodePopover 在「分支内添加」场景隐藏「逻辑」分组防误入。
+ */
+export interface FlowBranch {
+  id: string
+  /** 分支名（用户可编辑；如 "IF 命中"、"ELIF-n"、"ELSE 兜底"、"路径A"） */
+  label: string
+  /** 决策：按序匹配首个命中即走；undefined = ELSE 默认分支（必为最后一条）。分头节点忽略。 */
+  condition?: ConditionGroup
+  /** 分支内节点 id 序列；可为空（=直接到汇合点）。chain 内节点仍归 configs 所有，不重复存配置。 */
+  chain: string[]
+}
+
+export interface FlowBranchGroup {
+  /** 决策/分头节点 id；同一 FlowDef 内唯一 */
+  ownerId: string
+  /** 决策 ≥2（含 ELSE，ELSE.condition 为 undefined）；分头 ≥2（condition 忽略） */
+  branches: FlowBranch[]
+}
+
 /** 流程定义（可序列化，用于保存 / 加载 / 多流程切换） */
 export interface FlowDef {
   id: string
@@ -308,6 +352,8 @@ export interface FlowDef {
   updatedAt: string
   /** 源级配置（0706 优化·源/节点配置分层）：未绑定源的草稿流程（空白/预置意图）为 undefined */
   source?: Source
+  /** 决策/分头节点的分支段（散开→汇合，0707 优化·Phase6）；未配置 = 未声明分支 */
+  branchGroups?: FlowBranchGroup[]
 }
 
 // 0707 澄清：连线（子步骤）不再是独立配置对象——原来挂在连线上的字段本来就该是下游节点自己的配置，
@@ -441,7 +487,12 @@ export function nodeTaskQueue(cfg: NodeConfig): string {
   return cfg.taskCfg?.queue || ''
 }
 
-/** 条件操作符文案（0701 问题十·方案B） */
+/** 节点进入条件统一读取口径：采集类取 collectCfg.entryCondition，非采集类取 cfg.entryCondition */
+export function nodeEntryCondition(cfg: NodeConfig): ConditionGroup | undefined {
+  return cfg.collectCfg?.entryCondition ?? cfg.entryCondition
+}
+
+/** 条件操作符文案（0701 问题十·方案B；0707 优化·Phase6 起仅给分支条件用） */
 export const CONDITION_OP_OPTIONS: { value: ConditionOp; label: string }[] = [
   { value: 'contains', label: '包含' },
   { value: 'eq', label: '等于' },
@@ -451,27 +502,31 @@ export const CONDITION_OP_OPTIONS: { value: ConditionOp; label: string }[] = [
   { value: 'notEmpty', label: '非空' },
 ]
 
-/** 节点进入条件统一读取口径（0701 问题十·方案B）：采集类取 collectCfg.entryCondition，其余取 cfg.entryCondition */
-export function nodeEntryCondition(cfg: NodeConfig): ConditionGroup | undefined {
-  return cfg.collectCfg?.entryCondition ?? cfg.entryCondition
-}
-
-/** 单条件展示文案，如「标题 包含 "证券"」；fieldDesc 传字段中文名，缺省退回字段 prop */
-export function entryConditionLabel(cond: EntryCondition | undefined, fieldDesc?: string): string {
+/** 单条件展示文案（0707 优化·Phase6 重构为内部 helper）：「标题 包含 "证券"」；fieldDesc 传字段中文名，缺省退回字段 prop。
+ *  仅 conditionGroupLabel 内部使用；外部请走 conditionGroupLabel。 */
+function entryConditionLabel(cond: EntryCondition | undefined, fieldDesc?: string): string {
   if (!cond || !cond.field) return ''
   const fieldLabel = fieldDesc || cond.field
   const opLabel = CONDITION_OP_OPTIONS.find((o) => o.value === cond.op)?.label ?? cond.op
   return cond.op === 'notEmpty' ? `${fieldLabel} 非空` : `${fieldLabel} ${opLabel} "${cond.value}"`
 }
 
-/** 条件组展示文案（0706 优化·主题二）：多条件按 AND/OR 拼接，如「标题 包含 "证券" 且 金额 大于 "100"」 */
+/** 条件组展示文案（0706 优化·主题二）：多条件按 AND/OR 拼接，如「标题 包含 "证券" 且 金额 大于 "100"」。 */
 export function conditionGroupLabel(group: ConditionGroup | undefined, fieldDescOf?: (field: string) => string | undefined): string {
-  if (!group || !group.items.length) return ''
+  if (!group) return ''
+  if (group.mode === 'expr') return group.expr?.trim() ?? ''
+  if (!group.items.length) return ''
   const sep = group.logic === 'OR' ? ' 或 ' : ' 且 '
   return group.items
     .map((c) => entryConditionLabel(c, fieldDescOf?.(c.field)))
     .filter(Boolean)
     .join(sep)
+}
+
+/** 条件组是否已配置（供校验/UI 判空共用）：表达式模式看 expr 非空，字段模式看 items 非空 */
+export function conditionGroupIsSet(group: ConditionGroup | undefined): boolean {
+  if (!group) return false
+  return group.mode === 'expr' ? !!group.expr?.trim() : group.items.length > 0
 }
 
 /** 数据类节点 = "每个节点都落库"口径的适用范围；逻辑控制（决策/分头）与通知类（邮件/告警）、指标引用不产数据行，不要求输出表 */
@@ -492,6 +547,14 @@ export function pickFinalMainNodeId(
 
 export function isParallel(cfg: NodeConfig): boolean {
   return cfg.kind === 'parallel' || /分头|多路径并行/.test(cfg.title + cfg.sub)
+}
+
+/** 决策/分头节点判定（0707 优化·Phase6）：复用 isDecision/isParallel 口径，给 NodeInspector 顶层 Tab 分流
+ *  与 BranchEditor 渲染入口共用，避免两处各写文案正则导致口径漂移（此前 NodeInspector 把「分头」当决策识别，且漏「多路径并行」）。 */
+export function decisionOrParallelKind(cfg: NodeConfig): 'decision' | 'parallel' | undefined {
+  if (isDecision(cfg)) return 'decision'
+  if (isParallel(cfg)) return 'parallel'
+  return undefined
 }
 
 export function iconFor(cfg: NodeConfig): string {
@@ -587,11 +650,13 @@ export interface HorizontalLayout {
   axisY: number
 }
 
-/** 结果视图顶部节点条布局（纯函数版，从 flow store 的 horizontalLayout 计算逻辑提取，二者算法一致） */
+/** 结果视图顶部节点条布局（纯函数版，从 flow store 的 horizontalLayout 计算逻辑提取，二者算法一致）
+ *  0707 优化·Phase6：扩展支持 FlowBranchGroup 决策/分头节点的分支列（chain 节点平铺在 owner 节点下方一行） */
 export function buildHorizontalLayout(
   main: string[],
   branches: BranchSeed[],
   configs: Record<string, NodeConfig>,
+  branchGroups: FlowBranchGroup[] = [],
 ): HorizontalLayout {
   const HNODE_W = 132
   const HNODE_H = 60
@@ -667,7 +732,48 @@ export function buildHorizontalLayout(
     branchEdges.push({ d: `M${mx} ${my} C${mx} ${(my + by) / 2} ${bx} ${(my + by) / 2} ${bx} ${by}`, rule: false })
   })
 
-  return { nodes, terminals, mainEdges, branchEdges, totalWidth, totalHeight, axisY }
+  // 0707 优化·Phase6：决策/分头节点的 chain 内节点平铺在 owner 节点下方一行（简化版分支列支持，
+  // 跟 BranchSeed 旁路挂靠共用同一行 y=axisY+HBRANCH_DY，横向间距固定；ResultView 节点条 / CompareResultPane 随动）
+  // 多个 owner 的 chain 节点共用 y 行，横向从 owner.left 顺次排列；空 chain 跳过
+  const hbranchGroupByOwner: Record<string, FlowBranchGroup> = {}
+  for (const g of branchGroups) hbranchGroupByOwner[g.ownerId] = g
+  let chainDx = 0
+  let chainHasAny = false
+  // 先确定是否有 chain 节点，决定是否需要往下扩展 totalHeight
+  for (const id of main) {
+    const g = hbranchGroupByOwner[id]
+    if (!g) continue
+    for (const b of g.branches) {
+      if (b.chain.length) { chainHasAny = true; break }
+    }
+    if (chainHasAny) break
+  }
+  const chainYTop = axisY + HBRANCH_DY - HNODE_H / 2
+  for (const id of main) {
+    const g = hbranchGroupByOwner[id]
+    if (!g) continue
+    let cx = mainPos[id] ? mainPos[id].left : 0
+    for (const b of g.branches) {
+      for (const nid of b.chain) {
+        if (!configs[nid]) continue
+        const existing = nodes.find((n) => n.id === nid)
+        if (existing) continue
+        nodes.push({ id: nid, cfg: configs[nid], pos: { left: cx, top: chainYTop, width: HNODE_W, height: HNODE_H }, branch: true })
+        cx += HNODE_W + HGAP
+        chainDx = Math.max(chainDx, cx)
+      }
+    }
+  }
+
+  return {
+    nodes,
+    terminals,
+    mainEdges,
+    branchEdges,
+    totalWidth: Math.max(totalWidth, chainDx + PAD_X),
+    totalHeight: chainHasAny ? chainYTop + HNODE_H + PAD_Y : totalHeight,
+    axisY,
+  }
 }
 
 export interface SourceSeed { main: string[]; branches: BranchSeed[]; configs: Record<string, NodeConfig> }
@@ -687,12 +793,16 @@ function upstreamOutputTableOf(main: string[], configs: Record<string, NodeConfi
 /**
  * 节点有效输入表（0701 问题五）：显式设置优先；否则主链节点继承上一个有输出表的节点，
  * 旁路节点继承锚点节点；均无则空（即"无上游可继承"，通常只发生在主链首节点）。
+ * 0707 优化·Phase6 补：决策/分头分支 chain 内节点继承同分支内前一个有输出表的节点；
+ * chain 内均无则继承 owner 节点"流入"的表——owner 是决策/分头逻辑节点，本身不产表，
+ * 递归取 owner 的 effectiveInputTable（= 流入 owner 的上游数据），而非 owner 自己的输出表（恒为空）。
  */
 export function effectiveInputTable(
   main: string[],
   branches: BranchSeed[],
   configs: Record<string, NodeConfig>,
   id: string,
+  branchGroups: FlowBranchGroup[] = [],
 ): string {
   const c = configs[id]
   if (!c) return ''
@@ -704,6 +814,17 @@ export function effectiveInputTable(
   if (branch) {
     const anchor = configs[branch.rowAnchor]
     return anchor ? nodeOutputTable(anchor) : ''
+  }
+  for (const bg of branchGroups) {
+    for (const b of bg.branches) {
+      const ci = b.chain.indexOf(id)
+      if (ci < 0) continue
+      for (let i = ci - 1; i >= 0; i--) {
+        const t = configs[b.chain[i]] ? nodeOutputTable(configs[b.chain[i]]) : ''
+        if (t) return t
+      }
+      return effectiveInputTable(main, branches, configs, bg.ownerId, branchGroups)
+    }
   }
   return ''
 }
@@ -753,6 +874,32 @@ export function buildSourceSeed(source: Source, steps: Step[]): SourceSeed {
     main.splice(main.indexOf(firstStep.stepId) + 1, 0, ruleId)
   }
   return { main, branches: [], configs }
+}
+
+/**
+ * 网站统一流程模板的默认起始骨架（0707 优化·补）：网站从未编排过时，画布不该比它自己的子源还空——
+ * 任意子源哪怕从没保存过流程，loadFromSource 也会经 buildSourceSeed 兜底出「列表抓取→详情解析」两节点
+ * （mockSourceSteps 对任何已知 sourceId 都返回这两步默认骨架）；但网站模板此前落空 def 时纯粹是
+ * main:['start','end']，一个节点都没有，跟"网站模板是批量编排起点，子源在此基础上调整"的产品语义相反。
+ * 这里给一份等价的默认两节点骨架，未持久化（虚拟态，用户改动后保存才真正落盘），
+ * startSiteFlow 在 flowApi.flowLoad 查无网站模板存档时用它兜底，取代原来的纯空白。
+ */
+export function makeSiteBlankTemplate(site: Site): FlowDef {
+  const list = cloneConfig(NODE_CONFIGS['web-list'])
+  list.title = '列表抓取'
+  if (list.collectCfg) { list.collectCfg.url = ''; list.collectCfg.outputTable = '' }
+  const detail = cloneConfig(NODE_CONFIGS['web-detail'])
+  detail.title = '详情解析'
+  if (detail.collectCfg) { detail.collectCfg.url = ''; detail.collectCfg.outputTable = ''; detail.collectCfg.inputTable = '' }
+  return {
+    id: `site:${site.siteId}`,
+    name: site.name,
+    version: 'site-v1',
+    main: ['start', 'web-list', 'web-detail', 'end'],
+    branches: [],
+    configs: { 'web-list': list, 'web-detail': detail },
+    updatedAt: '',
+  }
 }
 
 // ---------- 新建流程 / 初始化画布（M5.5） ----------

@@ -53,11 +53,12 @@ describe('最新方案 UI 入口收口', () => {
     const configHeaderSection = nodeInspector.slice(configStart, nodeInspector.indexOf('<!-- 输入映射', configStart))
 
     expect(taskSection).toContain('<div class="rc-field"><label>输入表</label>')
-    expect(taskSection).toContain('<ConditionRow v-if="!isFirstDataNode"')
     expect(taskSection).toContain('<div class="rc-field"><label>输出表</label>')
     expect(taskSection).toContain('@change="onOutputTableChange"')
     expect(taskSection).not.toContain('openEditTable')
     expect(taskSection).not.toContain('openNewTable')
+    expect(taskSection).toContain('<ConditionRow v-if="!isFirstDataNode"')
+    expect(taskSection).toContain('@change="onEntryConditionChange"')
 
     expect(tableSection).toContain('查看/编辑表')
     expect(tableSection).toContain('新建表')
@@ -86,6 +87,15 @@ describe('最新方案 UI 入口收口', () => {
     expect(sourceTab).toContain('{{ (site.dataCount ?? 0).toLocaleString() }} 条')
   })
 
+  it('采集资产表格展开收起入口收进表头右侧', () => {
+    expect(sourceTab).not.toContain('class="ca-table-ops"')
+    expect(sourceTab).not.toContain('共 {{ total }} 个网站')
+    expect(sourceTab).toContain('class="ca-expand-menu"')
+    expect(sourceTab).toContain('title="展开/收起"')
+    expect(sourceTab).toContain('<el-icon :size="14"><Operation /></el-icon>')
+    expect(sourceTab).not.toContain('>展开/收起⌄</button>')
+  })
+
   it('网站数据视图无模板时用子源步骤生成可查看节点', () => {
     expect(resultView).toContain('buildSourceSeed')
     expect(resultView).toContain('sourceApi.sourceSteps(first.sourceId)')
@@ -97,6 +107,11 @@ describe('最新方案 UI 入口收口', () => {
     expect(flowCanvas).toContain("category: GATE_CATEGORY_OPTIONS[0].value")
     expect(flowCanvas).toContain('<select class="rc-select" v-model="gateSite.category"')
     expect(flowCanvas).not.toContain('<div class="rc-field"><label>分类</label><input class="rc-input" v-model="gateSite.category"')
+  })
+
+  it('新建采集的子源默认设置更多配置默认收起', () => {
+    expect(flowCanvas).toContain('<SourceBasicForm v-model="gateSourceDefaults" :show-identity="false" />')
+    expect(flowCanvas).not.toContain(':default-open="true"')
   })
 
   it('采集节点配置不再展示输入映射和输入参数', () => {

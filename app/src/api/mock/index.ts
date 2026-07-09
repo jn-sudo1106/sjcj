@@ -12,6 +12,9 @@ import {
   mockSourceCopy,
   mockSourceUpdate,
   mockSourceNodeRuns,
+  mockChangeSourceEnable,
+  mockChangeToSuccess,
+  mockBatchImport,
 } from './sources'
 import {
   mockRuleGroups,
@@ -57,7 +60,8 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'source/categoryTree': mockSourceCategories,
   'source/stats': mockSourceStats,
   'item/next/nextConfigPaged': mockSourceSteps,
-  'source/changeSourceEnable': mockAck,
+  'source/changeSourceEnable': mockChangeSourceEnable,
+  'source/changeToSuccess': mockChangeToSuccess,
   'source/copySource': mockAck,
   'source/createSource': mockSourceCreate,
   'source/sourceCopy': mockSourceCopy,
@@ -69,7 +73,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'source/logPaged': mockSourceLogs,
   'task/topTaskPaged': mockSourceTasks,
   'source/credentialDetail': mockCredentialRef,
-  'source/batchImport': mockAck,
+  'source/batchImport': mockBatchImport,
   'source/batchModifyConfig': mockAck,
   'source/createJobs': mockAck,
   'source/changeFreqTag': mockAck,
