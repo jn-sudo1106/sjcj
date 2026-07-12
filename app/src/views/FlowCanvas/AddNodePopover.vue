@@ -84,7 +84,7 @@ onMounted(() => {
           @click="pick(it)"
           @mouseenter="activeIndex = flatItems.indexOf(it)"
         >
-          <span class="anp-item-icon">{{ it.code }}</span>
+          <span class="anp-item-icon">{{ it.badge ?? it.code }}</span>
           <span class="anp-item-text">
             <b>{{ it.name }}</b>
             <span>{{ it.desc }}</span>

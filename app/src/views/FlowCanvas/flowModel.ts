@@ -2,6 +2,7 @@
 // 节点配置、连线（子步骤）配置、节点模板与图标/样式辅助函数均与原型口径一致。
 
 import type { RuleOrchestration, Site, Source, Step } from '../../api'
+import { extractUrlParamIds } from './urlParams'
 
 export type NodeKind = 'node' | 'decision' | 'parallel'
 export type TripleField = 'inmap' | 'params' | 'output'
@@ -99,23 +100,69 @@ export interface OutputAdvanced {
   failPolicy: string
 }
 
-/** 任务级配置（0706 优化·调整4）：队列归属、任务 URL 规则、拼接逻辑、任务触发条件，独立于节点处理逻辑 */
-export interface TaskParam {
-  name: string
-  field: string
-}
-
+/** 任务级配置（0706 优化·调整4；0710 瘦身：拼接逻辑/任务参数无后端 Step 契约字段且与 URL 规则重叠，已删）：
+ * 队列归属、任务 URL 来源字段/规则，独立于节点处理逻辑 */
 export interface TaskConfig {
   queue: string
   /** 任务 URL 来源字段：从输入表 schema 中选择，供 urlRule 拼接引用（0707 补齐，原属于连线配置的"任务 URL 来源字段"） */
   urlSourceField?: string
   urlRule: string
-  joinLogic: string
-  /** 任务多参数：参数名由用户自定义，值从输入表字段取（0707 Phase 7B） */
-  params?: TaskParam[]
 }
 
 export type WebKind = 'list' | 'detail' | 'attachment'
+
+/** 采集节点类型（0711 R7/R8：新增"浏览器抓取"/"公众号抓取"两个独立固定产物类型节点）。
+ *  旧节点没有这个字段，用 inferCollectorKind() 从 snatchType/webKind 推导，不强制迁移数据。 */
+export type CollectorKind = 'web' | 'browser_html' | 'wechat_official_html' | 'app' | 'file_download' | 'python'
+
+/** 采集节点能力描述：固定产物类型节点的表/队列不可编辑，UI 与 store 双重防线都据此判断（0711 T5） */
+export interface CollectorCapability {
+  kind: CollectorKind
+  label: string
+  artifactType: 'structured' | 'html' | 'file'
+  outputMode: 'selectable' | 'fixed'
+  /** outputMode === 'fixed' 时的固定输出表（mock 环境直接给定值；真实环境应由后端按能力键解析，此处简化不做二次抽象） */
+  fixedOutputTable?: string
+  queueMode: 'editable' | 'fixed'
+  /** queueMode === 'fixed' 时的固定队列名 */
+  fixedQueue?: string
+  supportsProxy: boolean
+  supportsResume: boolean
+  supportsLogin: boolean
+  supportsUrlParams: boolean
+}
+
+export const COLLECTOR_CAPABILITIES: Record<CollectorKind, CollectorCapability> = {
+  web: { kind: 'web', label: '网页抓取', artifactType: 'structured', outputMode: 'selectable', queueMode: 'editable', supportsProxy: true, supportsResume: true, supportsLogin: true, supportsUrlParams: true },
+  browser_html: {
+    kind: 'browser_html', label: '浏览器抓取', artifactType: 'html', outputMode: 'fixed', fixedOutputTable: 'raw_html_browser',
+    queueMode: 'fixed', fixedQueue: 'browser_html_collect', supportsProxy: true, supportsResume: true, supportsLogin: true, supportsUrlParams: true,
+  },
+  wechat_official_html: {
+    kind: 'wechat_official_html', label: '公众号抓取', artifactType: 'html', outputMode: 'fixed', fixedOutputTable: 'raw_html_wechat_official',
+    queueMode: 'fixed', fixedQueue: 'wechat_official_html_collect', supportsProxy: true, supportsResume: true, supportsLogin: true, supportsUrlParams: true,
+  },
+  app: { kind: 'app', label: 'APP 抓取', artifactType: 'structured', outputMode: 'selectable', queueMode: 'editable', supportsProxy: false, supportsResume: false, supportsLogin: true, supportsUrlParams: false },
+  file_download: { kind: 'file_download', label: '文件下载', artifactType: 'file', outputMode: 'selectable', queueMode: 'editable', supportsProxy: false, supportsResume: true, supportsLogin: false, supportsUrlParams: false },
+  python: { kind: 'python', label: 'Python 抓取', artifactType: 'structured', outputMode: 'selectable', queueMode: 'editable', supportsProxy: false, supportsResume: false, supportsLogin: false, supportsUrlParams: false },
+}
+
+/** 从旧字段推导采集类型（1:1+fallback，0701 问题五同款口径）：显式 collectorKind 优先，否则按 snatchType 特征推断 */
+export function inferCollectorKind(cc?: CollectConfig): CollectorKind {
+  if (cc?.collectorKind) return cc.collectorKind
+  const st = cc?.snatchType || ''
+  if (/BROWSER/.test(st)) return 'browser_html'
+  if (/WECHAT/.test(st)) return 'wechat_official_html'
+  if (/\[170\]/.test(st)) return 'python'
+  if (/\[95\]/.test(st)) return cc?.webKind === 'attachment' ? 'file_download' : 'app'
+  return 'web'
+}
+
+/** 节点的采集能力描述；非采集节点（无 collectCfg）返回 undefined */
+export function collectorCapabilityOf(cfg: NodeConfig): CollectorCapability | undefined {
+  if (!cfg.collectCfg) return undefined
+  return COLLECTOR_CAPABILITIES[inferCollectorKind(cfg.collectCfg)]
+}
 
 /** 采集类节点的可编辑配置（0706 优化·源/节点配置分层后瘦身：源级字段迁至 Source，见 api/types.ts） */
 export interface CollectConfig {
@@ -129,7 +176,32 @@ export interface CollectConfig {
   entryCondition?: ConditionGroup
   inputParams: string[]
   isDetail: boolean
+  /** 采集节点类型（0711 R7/R8）：缺省时用 inferCollectorKind() 推导，不强制迁移旧数据 */
+  collectorKind?: CollectorKind
+  /** URL 参数绑定的参数 id 列表（0711 R9：源 URL 支持 $PARAM$_id 占位符）；与旧的 inputParams 是两个不同概念，互不覆盖。
+   *  实际引用的参数 id 已经写死在 URL 的 $PARAM$_id token 里，这个列表是从 url 解析出的缓存/展示用途，不是"选择绑定哪个参数"。 */
+  urlParamRefs?: string[]
+  /** 每个参数 id 对应的选定取值（0711-B 拍板⑧：子源级可覆盖）——本字段随 collectCfg 一起活在"这个子源自己的 FlowDef"里，
+   *  天然就是子源级：模板同步下发时所有子源起初相同，之后各子源独立编辑互不影响，和 url 字段完全同一套落点逻辑。
+   *  缺省 = 用参数候选值列表的第一个值作为预览/试跑取值。 */
+  urlParamValues?: Record<string, string>
+  /** 运行设置（0711 R5：代理/断点续爬/登录从 Source 级迁到节点级，各节点可独立配置）。
+   *  缺省 undefined 时由 NodeInspector 读一次 Source 同名旧字段做展示兜底（1:1+fallback），
+   *  用户在本节点显式改过后才写入这里；Source 上的旧字段保留只读、不再新写入。 */
+  useProxy?: boolean
+  resume?: boolean
+  needLogin?: boolean
+  loginUrl?: string
+  account?: string
+  credentialRef?: string
+  /** 定时策略只作用于首个采集节点；历史 Source/TaskConfig 同名字段在 load 时迁入。 */
+  scheduleType?: string
+  scheduleTime?: string
+  weekdays?: number[]
+  cron?: string
 }
+
+export type CollectorSchedule = Pick<CollectConfig, 'scheduleType' | 'scheduleTime' | 'weekdays' | 'cron'>
 
 export const DEFAULT_RULE_SYSTEM_PROMPT = '生成 Python 规则脚本：入口为 def main(content)，返回 JSON 对象；只做文本判断，不访问外部网络或文件。'
 
@@ -159,7 +231,7 @@ const NODE_CONFIG_SEEDS = {
       outputTable: '2101001', inputTable: '', inputParams: ['p-date'],
       isDetail: false,
     },
-    taskCfg: { queue: 'announcement.list', urlRule: '', joinLogic: '' },
+    taskCfg: { queue: 'announcement.list', urlRule: '' },
   },
   'web-detail': {
     title: '公告详情抓取', sub: '[90] 网页抓取 · 子步骤产物', status: '运行', planned: false, collect: true,
@@ -174,7 +246,7 @@ const NODE_CONFIG_SEEDS = {
       outputTable: '2101001', inputTable: '2101001', inputParams: [],
       isDetail: true,
     },
-    taskCfg: { queue: '', urlSourceField: 'file_url-K4', urlRule: '$VAL$', joinLogic: '' },
+    taskCfg: { queue: '', urlSourceField: 'file_url-K4', urlRule: '$VAL$' },
   },
   'app-collect': {
     title: 'APP 抓取', sub: '[95] APP 抓取 · 移动端接口', status: '待配置', planned: false, collect: true,
@@ -189,7 +261,41 @@ const NODE_CONFIG_SEEDS = {
       outputTable: '', inputTable: '', inputParams: [],
       isDetail: false,
     },
-    taskCfg: { queue: 'app.collect', urlRule: '', joinLogic: '', params: [] },
+    taskCfg: { queue: 'app.collect', urlRule: '' },
+  },
+  // 0711 R7：浏览器抓取——渲染并保存 HTML 文件，输出表/队列固定（先做成与网页抓取同构，仅能力键+固定值不同）
+  'browser-html-collect': {
+    title: '浏览器抓取', sub: '[BROWSER] 浏览器抓取 · 源配置', status: '待配置', planned: false, collect: true,
+    base: [['源 URL', 'https://example.com'], ['源名称', '浏览器抓取源'], ['产物', 'HTML 文件（固定输出表）'], ['定时策略', '30 8 * * 1-5']],
+    fields: [['使用代理', '否'], ['断点续爬', '开启'], ['本次使用配置', '待选择'], ['源标签', '']],
+    inmap: [],
+    params: [],
+    output: [['html_file', 'file', '渲染后的 HTML 文件']],
+    collectCfg: {
+      snatchType: '[BROWSER] - 浏览器抓取', url: 'https://example.com',
+      webKind: 'list',
+      outputTable: COLLECTOR_CAPABILITIES.browser_html.fixedOutputTable ?? '', inputTable: '', inputParams: [],
+      isDetail: false,
+      collectorKind: 'browser_html',
+    },
+    taskCfg: { queue: COLLECTOR_CAPABILITIES.browser_html.fixedQueue ?? '', urlRule: '' },
+  },
+  // 0711 R8：公众号抓取——同构于浏览器抓取，仅固定表/队列取另一组能力键
+  'wechat-html-collect': {
+    title: '公众号抓取', sub: '[WECHAT] 公众号抓取 · 源配置', status: '待配置', planned: false, collect: true,
+    base: [['源 URL', 'https://mp.weixin.qq.com/s/xxx'], ['源名称', '公众号抓取源'], ['产物', 'HTML 文件（固定输出表）'], ['定时策略', '30 8 * * 1-5']],
+    fields: [['使用代理', '否'], ['断点续爬', '开启'], ['本次使用配置', '待选择'], ['源标签', '']],
+    inmap: [],
+    params: [],
+    output: [['html_file', 'file', '公众号页面 HTML 文件']],
+    collectCfg: {
+      snatchType: '[WECHAT] - 公众号抓取', url: 'https://mp.weixin.qq.com/s/xxx',
+      webKind: 'list',
+      outputTable: COLLECTOR_CAPABILITIES.wechat_official_html.fixedOutputTable ?? '', inputTable: '', inputParams: [],
+      isDetail: false,
+      collectorKind: 'wechat_official_html',
+    },
+    taskCfg: { queue: COLLECTOR_CAPABILITIES.wechat_official_html.fixedQueue ?? '', urlRule: '' },
   },
   'file-parse': {
     title: '文件解析', sub: '文件解析类 · PDF/Word/Excel/图片', status: '建议补充 · P1', planned: false,
@@ -368,6 +474,8 @@ export const TEMPLATE_TO_NODE: Record<string, string> = {
   ai: 'ai-extract', map: 'field-map', clean: 'clean', dedupe: 'dedupe', check: 'check',
   rule: 'rule', 'rule-trace': 'rule', metric: 'metric', mail: 'mail',
   alert: 'alert', decision: 'decision', parallel: 'parallel', custom: 'custom',
+  // 0711 R7/R8：两个独立的固定产物类型采集节点
+  'browser-html': 'browser-html-collect', 'wechat-html': 'wechat-html-collect',
 }
 
 // 抓取类型选项（统一来源；NodeInspector 与种子配置共用）
@@ -390,11 +498,13 @@ export const TEMPLATE_TO_SNATCH: Record<string, string> = {
   python: '[170] - Python 抓取',
   ocr: '[150] - OCR 识别',
   ai: '[155] - AI 提取',
+  'browser-html': '[BROWSER] - 浏览器抓取',
+  'wechat-html': '[WECHAT] - 公众号抓取',
 }
 
 // 左侧节点库分组
 export type Pill = 'p1' | 'p2' | 'plan'
-export interface LibItem { template: string; code: string; name: string; desc: string; pill: Pill; planned?: boolean }
+export interface LibItem { template: string; code: string; badge?: string; name: string; desc: string; pill: Pill; planned?: boolean }
 export interface LibGroup { title: string; items: LibItem[] }
 
 export const LIB_GROUPS: LibGroup[] = [
@@ -404,20 +514,23 @@ export const LIB_GROUPS: LibGroup[] = [
       { template: 'app', code: '95', name: 'APP 抓取', desc: '包名、接口地址、移动端参数', pill: 'p1' },
       { template: 'file', code: '95', name: '文件下载', desc: '附件、原始文件、入库', pill: 'p1' },
       { template: 'python', code: '170', name: 'Python 抓取', desc: '青龙脚本、待确认权限', pill: 'p2' },
+      // 0711 R7/R8：抓 HTML 文件，输出表/队列固定，不可编辑
+      { template: 'browser-html', code: 'BROWSER', badge: '180', name: '浏览器抓取', desc: '渲染并保存 HTML，固定表/队列', pill: 'p1' },
+      { template: 'wechat-html', code: 'WECHAT', badge: '185', name: '公众号抓取', desc: '公众号页面采集，固定表/队列', pill: 'p1' },
     ]
   },
   {
     title: '解析结构化', items: [
-      { template: 'parse', code: 'PARSE', name: '文件解析', desc: 'PDF/Word/Excel/图片解析', pill: 'p1' },
+      { template: 'parse', code: 'PARSE', badge: '200', name: '文件解析', desc: 'PDF/Word/Excel/图片解析', pill: 'p1' },
       { template: 'ocr', code: '150', name: 'OCR 识别', desc: '待执行器确认', pill: 'plan', planned: true },
       { template: 'ai', code: '155', name: 'AI 提取', desc: '待执行器确认', pill: 'plan', planned: true },
-      { template: 'map', code: 'MAP', name: '字段抽取 / 结构化映射', desc: '文本字段到目标 schema', pill: 'p1' },
+      { template: 'map', code: 'MAP', badge: '205', name: '字段抽取 / 结构化映射', desc: '文本字段到目标 schema', pill: 'p1' },
     ]
   },
   {
     title: '数据清洗', items: [
-      { template: 'clean', code: 'CLEAN', name: '字段清洗 / 格式转换', desc: '函数工具、空值、单位、日期', pill: 'p1' },
-      { template: 'dedupe', code: 'DEDUP', name: '去重处理', desc: '去重字段、重复策略', pill: 'p1' },
+      { template: 'clean', code: 'CLEAN', badge: '210', name: '字段清洗 / 格式转换', desc: '函数工具、空值、单位、日期', pill: 'p1' },
+      { template: 'dedupe', code: 'DEDUP', badge: '215', name: '去重处理', desc: '去重字段、重复策略', pill: 'p1' },
     ]
   },
   {
@@ -428,26 +541,26 @@ export const LIB_GROUPS: LibGroup[] = [
   {
     // 0707 优化·Phase1：决策/分头处理从右键菜单单独入口收进添加节点浮层的「逻辑」分组（参照 Dify）
     title: '逻辑', items: [
-      { template: 'decision', code: 'IF', name: '决策分支', desc: '按条件路由到下一个节点，命中一条走一条', pill: 'p1' },
-      { template: 'parallel', code: 'PAR', name: '分头处理', desc: '多条路径无条件并行执行', pill: 'p1' },
+      { template: 'decision', code: 'IF', badge: '310', name: '决策分支', desc: '按条件路由到下一个节点，命中一条走一条', pill: 'p1' },
+      { template: 'parallel', code: 'PAR', badge: '315', name: '分头处理', desc: '多条路径无条件并行执行', pill: 'p1' },
     ]
   },
   {
     title: '规则类', items: [
-      { template: 'rule', code: 'RULE', name: '规则处理', desc: '规则组、表达式、配置', pill: 'p1' },
-      { template: 'rule-trace', code: 'TRACE', name: '规则 Trace', desc: '命中、过滤、失败原因', pill: 'p1' },
+      { template: 'rule', code: 'RULE', badge: '320', name: '规则处理', desc: '规则组、表达式、配置', pill: 'p1' },
+      { template: 'rule-trace', code: 'TRACE', badge: '325', name: '规则 Trace', desc: '命中、过滤、失败原因', pill: 'p1' },
     ]
   },
   {
     // 「落表输出」已并入每个节点的产物 Tab（0701 问题四），分组由"输出类"更名"引用类"
     title: '引用类', items: [
-      { template: 'metric', code: 'M', name: '指标引用', desc: '跳转指标中心，不编辑口径', pill: 'p1' },
+      { template: 'metric', code: 'M', badge: '350', name: '指标引用', desc: '跳转指标中心，不编辑口径', pill: 'p1' },
     ]
   },
   {
     title: '通知类', items: [
       { template: 'mail', code: '400', name: '提取数据发邮件', desc: '待执行器确认', pill: 'plan', planned: true },
-      { template: 'alert', code: 'ALERT', name: '异常告警', desc: '失败、阻断、恢复通知', pill: 'p2', planned: true },
+      { template: 'alert', code: 'ALERT', badge: '405', name: '异常告警', desc: '失败、阻断、恢复通知', pill: 'p2', planned: true },
     ]
   },
   {
@@ -565,6 +678,8 @@ export function iconFor(cfg: NodeConfig): string {
   if (sub.indexOf('[155]') >= 0) return '155'
   if (sub.indexOf('[300]') >= 0) return '300'
   if (sub.indexOf('[400]') >= 0) return '400'
+  if (sub.indexOf('[BROWSER]') >= 0) return 'BROWSER'
+  if (sub.indexOf('[WECHAT]') >= 0) return 'WECHAT'
   if (isDecision(cfg)) return 'IF'
   if (isParallel(cfg)) return 'PAR'
   if (/规则/.test(cfg.title)) return 'R'
@@ -616,6 +731,10 @@ export function setTripleValue(field: TripleField, row: InputMapping | FieldDef,
 
 export function normalizeNodeConfig(cfg: NodeConfig | NodeConfigSeed): NodeConfig {
   const next = JSON.parse(JSON.stringify(cfg)) as NodeConfigSeed
+  if (next.collectCfg && !next.collectCfg.urlParamRefs?.length) {
+    // 旧流程只有 URL token；加载时迁移为显式节点绑定，保存后不再依赖隐式推导。
+    next.collectCfg.urlParamRefs = extractUrlParamIds(next.collectCfg.url)
+  }
   return {
     ...next,
     inmap: (next.inmap ?? []).map(normalizeInputMapping),
@@ -877,14 +996,28 @@ export function buildSourceSeed(source: Source, steps: Step[]): SourceSeed {
 }
 
 /**
- * 网站统一流程模板的默认起始骨架（0707 优化·补）：网站从未编排过时，画布不该比它自己的子源还空——
- * 任意子源哪怕从没保存过流程，loadFromSource 也会经 buildSourceSeed 兜底出「列表抓取→详情解析」两节点
- * （mockSourceSteps 对任何已知 sourceId 都返回这两步默认骨架）；但网站模板此前落空 def 时纯粹是
- * main:['start','end']，一个节点都没有，跟"网站模板是批量编排起点，子源在此基础上调整"的产品语义相反。
- * 这里给一份等价的默认两节点骨架，未持久化（虚拟态，用户改动后保存才真正落盘），
- * startSiteFlow 在 flowApi.flowLoad 查无网站模板存档时用它兜底，取代原来的纯空白。
+ * 网站统一流程的空白模板（0710 回退 0707 优化·补的"默认两节点骨架"）：新建/从未编排过的网站
+ * 进画布应落在空白引导卡模式（§5.7 文案 + 「智能生成流程」按需生成），而不是预置「列表抓取→详情解析」——
+ * 预置骨架让用户误以为流程"已经获取到了"。id 固定 `site:${siteId}`，保证引导卡生成/保存都落对存档位。
  */
 export function makeSiteBlankTemplate(site: Site): FlowDef {
+  return {
+    id: `site:${site.siteId}`,
+    name: site.name,
+    version: 'site-v1',
+    main: ['start', 'end'],
+    branches: [],
+    configs: {},
+    updatedAt: '',
+  }
+}
+
+/**
+ * 种子演示网站的默认模板骨架（0710）：存量演示网站模拟"后端已有统一流程模板"，
+ * mockFlowLoad 对种子网站查无存档时用它兜底（虚拟态，保存后才真正落盘）；
+ * 用户新建的网站不走这里，进画布是空白引导卡模式（见 makeSiteBlankTemplate）。
+ */
+export function makeSiteSeedTemplate(siteId: string, name: string): FlowDef {
   const list = cloneConfig(NODE_CONFIGS['web-list'])
   list.title = '列表抓取'
   if (list.collectCfg) { list.collectCfg.url = ''; list.collectCfg.outputTable = '' }
@@ -892,8 +1025,8 @@ export function makeSiteBlankTemplate(site: Site): FlowDef {
   detail.title = '详情解析'
   if (detail.collectCfg) { detail.collectCfg.url = ''; detail.collectCfg.outputTable = ''; detail.collectCfg.inputTable = '' }
   return {
-    id: `site:${site.siteId}`,
-    name: site.name,
+    id: `site:${siteId}`,
+    name,
     version: 'site-v1',
     main: ['start', 'web-list', 'web-detail', 'end'],
     branches: [],

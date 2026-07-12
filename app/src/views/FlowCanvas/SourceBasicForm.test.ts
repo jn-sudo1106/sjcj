@@ -35,4 +35,16 @@ describe('SourceBasicForm', () => {
     const expanded = mount(SourceBasicForm, { props: { modelValue: blankSource(), defaultOpen: true } })
     expect(expanded.find('.sbf-more-body').exists()).toBe(true)
   })
+
+  // 0711 R5：代理/断点续爬/登录/凭据迁到节点级 CollectorSettings，SourceBasicForm 不再展示这些字段
+  it('不再展示代理/断点续爬/登录/凭据（已迁到节点级 CollectorSettings）', () => {
+    const wrapper = mount(SourceBasicForm, { props: { modelValue: blankSource(), defaultOpen: true } })
+    const text = wrapper.text()
+    expect(text).not.toContain('使用代理')
+    expect(text).not.toContain('断点续爬')
+    expect(text).not.toContain('是否要求登陆')
+    expect(text).not.toContain('登录凭据')
+    expect(wrapper.find('.sbf-more-toggle').text()).not.toContain('代理')
+    expect(wrapper.find('.sbf-more-toggle').text()).not.toContain('登录')
+  })
 })

@@ -17,7 +17,10 @@ async function loadFlow(sourceId: string) {
   loadingFlow.value = true
   try {
     const [source, steps] = await Promise.all([sourceApi.sourceDetail(sourceId), sourceApi.sourceSteps(sourceId)])
-    if (!source) return
+    if (!source) {
+      loadingFlow.value = false
+      return
+    }
     const seed = buildSourceSeed(source as Source, steps ?? [])
     localMain.value = seed.main
     localConfigs.value = seed.configs

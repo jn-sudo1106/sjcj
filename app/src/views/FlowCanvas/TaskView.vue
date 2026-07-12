@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useRuntimeStore } from '../../stores/runtime'
 import { siteApi, type QueueStat, type Source, type TaskInst } from '../../api'
@@ -15,11 +16,16 @@ const router = useRouter()
 
 const siteId = computed(() => flow.sourceCtx?.siteId || flow.siteCtx?.siteId || '')
 
-// 源筛选：从子源画布进入时预选该子源；网站模板进入不预选（=全部子源聚合）
+// 任务视图无源概念（0710 会议 C2）：只跟队列绑定，站在网站粒度聚合，不提供源筛选；
+// siteChildren 仅用于明细行把 sourceId 翻译成名称展示
 const siteChildren = ref<Source[]>([])
-const sourceFilter = ref(flow.sourceCtx?.sourceId ?? '')
 async function loadSiteChildren() {
-  siteChildren.value = siteId.value ? await siteApi.siteSources(siteId.value) : []
+  try {
+    siteChildren.value = siteId.value ? await siteApi.siteSources(siteId.value) : []
+  } catch (e) {
+    ElMessage.warning('加载子源列表失败')
+    siteChildren.value = []
+  }
 }
 
 // 队列汇总（第一层）
@@ -32,17 +38,15 @@ async function loadQueueStats() {
   }
   loadingQueues.value = true
   try {
-    queueStats.value = await siteApi.siteQueueStats(siteId.value, sourceFilter.value || undefined)
+    queueStats.value = await siteApi.siteQueueStats(siteId.value)
+  } catch (e) {
+    ElMessage.warning('加载队列统计失败')
+    queueStats.value = []
   } finally {
     loadingQueues.value = false
   }
 }
 watch(siteId, () => { loadSiteChildren(); loadQueueStats() }, { immediate: true })
-watch(sourceFilter, () => {
-  loadQueueStats()
-  expanded.value = new Set()
-  Object.keys(detail).forEach((k) => delete detail[k])
-})
 
 // 试跑实时态上卷到队列（0707 §7.2）：当前画布节点若有实时状态，其所属队列的汇总状态优先展示实时值。
 // 队列名解析必须跟 mock 的 mockSourceNodeRuns 同一套 fallback（节点自己的 taskCfg.queue → 源 configTopic → queue_配置ID），
@@ -91,13 +95,16 @@ async function loadDetail(queue: string) {
     const res = await siteApi.queueTaskPaged({
       siteId: siteId.value,
       queue,
-      sourceId: sourceFilter.value || undefined,
       state: d.stateFilter || undefined,
       page: d.page,
       size: DETAIL_SIZE,
     })
     d.rows = res?.list ?? []
     d.total = res?.total ?? 0
+  } catch (e) {
+    ElMessage.warning('加载队列明细失败')
+    d.rows = []
+    d.total = 0
   } finally {
     d.loading = false
   }
@@ -158,9 +165,7 @@ function goTaskConfig(t: TaskInst) {
       <div v-if="!siteId" class="tv-empty-row">该源未归属任何网站，任务视图暂不可用。</div>
       <template v-else>
         <div class="tv-filters">
-          <el-select v-model="sourceFilter" class="tv-source-select" placeholder="全部子源" filterable clearable>
-            <el-option v-for="s in siteChildren" :key="s.sourceId" :label="s.name" :value="s.sourceId" />
-          </el-select>
+          <span class="muted">任务视图按队列聚合网站下全部子源，无源筛选（0710 会议口径）</span>
           <span class="tv-spacer" />
           <span class="muted">{{ rows.length }} 个队列</span>
         </div>
@@ -253,8 +258,6 @@ function goTaskConfig(t: TaskInst) {
 .tv-shell { background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; height: 100%; display: flex; flex-direction: column; }
 .tv-body { flex: 1; overflow: auto; padding: 12px; }
 .tv-filters { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-.tv-source-select { width: 200px; }
-.tv-source-select :deep(.el-select__wrapper) { min-height: 30px; }
 .tv-spacer { flex: 1; }
 .muted { color: var(--rc-faint); font-size: 12px; }
 

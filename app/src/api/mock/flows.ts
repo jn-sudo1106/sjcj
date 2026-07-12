@@ -1,12 +1,14 @@
 import {
   PRESET_INTENTS,
   makeBlankFlow,
+  makeSiteSeedTemplate,
   type FlowDef,
   type FlowRecommendation,
   type PresetIntent,
 } from '../../views/FlowCanvas/flowModel'
 import type { Ack } from '../types'
 import { setSourceDetached } from './sources'
+import { SITE_SEEDS } from './sites'
 
 // 流程定义持久化 mock —— 存浏览器 localStorage（真接入时换 flow/* 后端端点，界面零改动）。
 const INDEX_KEY = 'sjcj.flows.index'
@@ -39,8 +41,16 @@ export function mockFlowSave(params?: Record<string, unknown>): Ack {
 }
 
 export function mockFlowLoad(params?: Record<string, unknown>): FlowDef | null {
-  const raw = localStorage.getItem(PREFIX + String(params?.id ?? ''))
-  return raw ? (JSON.parse(raw) as FlowDef) : null
+  const id = String(params?.id ?? '')
+  const raw = localStorage.getItem(PREFIX + id)
+  if (raw) return JSON.parse(raw) as FlowDef
+  // 种子演示网站模拟"后端已有统一流程模板"（0710）：查无存档时兜底默认两节点骨架；
+  // 用户新建的网站（不在 SITE_SEEDS 里）返回 null → 画布走空白引导卡模式。
+  if (id.startsWith('site:')) {
+    const seed = SITE_SEEDS.find((s) => `site:${s.siteId}` === id)
+    if (seed) return makeSiteSeedTemplate(seed.siteId, seed.name)
+  }
+  return null
 }
 
 export function mockFlowList(): FlowMeta[] {

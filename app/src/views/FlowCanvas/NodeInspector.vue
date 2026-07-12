@@ -2,17 +2,18 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
-import { useRuntimeStore } from '../../stores/runtime'
 import { useUiStore } from '../../stores/ui'
 import {
   WEB_KIND_OPTIONS, decisionOrParallelKind, fieldOptionsFromTableOrOutput, nodeEntryCondition, nodeTaskQueue,
-  makeDefaultRuleOrchestration,
-  type CollectConfig, type ConditionGroup, type NodeConfig, type TaskParam, type TripleField, type WebKind,
+  makeDefaultRuleOrchestration, collectorCapabilityOf,
+  type CollectConfig, type ConditionGroup, type NodeConfig, type TripleField, type WebKind,
 } from './flowModel'
 import ConditionRow from './ConditionRow.vue'
 import BranchEditor from './BranchEditor.vue'
+import CollectorSettings, { type CollectorRuntimeSettings } from './CollectorSettings.vue'
+import UrlParamEditor from './UrlParamEditor.vue'
 import {
-  entryApi, configApi, sourceApi, ruleApi,
+  entryApi, configApi, ruleApi,
   type EntryType, type Config, type RuleGroup, type Rule, type SharedConfig,
   type RuleOrchestration, type RuleOrchestrationItem, type RuleOrchestrationTestResult,
 } from '../../api'
@@ -20,7 +21,6 @@ import TableEditDialog from './TableEditDialog.vue'
 import NodeAiChat from './NodeAiChat.vue'
 
 const flow = useFlowStore()
-const runtime = useRuntimeStore()
 const ui = useUiStore()
 const cfg = computed(() => flow.selectedNode)
 const id = computed(() => flow.selectedId)
@@ -48,13 +48,48 @@ const ruleOrchestrations = ref<RuleOrchestrationItem[]>([])
 const isRule = computed(() => /规则/.test(cfg.value?.title ?? ''))
 
 onMounted(async () => {
-  tables.value = (await entryApi.entryPaged({ size: 100 })).list
-  configs.value = (await configApi.configPaged({ size: 100 })).list
-  ruleGroups.value = await ruleApi.ruleGroups()
-  rules.value = (await ruleApi.rulePaged({ size: 100 })).list
-  sharedCfgs.value = await ruleApi.sharedConfigs()
-  ruleOrchestrations.value = (await ruleApi.orchestrationPaged({ size: 100 })).list
+  await Promise.allSettled([
+    entryApi.entryPaged({ size: 100 }).then(r => tables.value = r.list),
+    configApi.configPaged({ size: 100 }).then(r => configs.value = r.list),
+    ruleApi.ruleGroups().then(r => ruleGroups.value = r),
+    ruleApi.rulePaged({ size: 100 }).then(r => rules.value = r.list),
+    ruleApi.sharedConfigs().then(r => sharedCfgs.value = r),
+    ruleApi.orchestrationPaged({ size: 100 }).then(r => ruleOrchestrations.value = r.list)
+  ])
 })
+
+// 采集节点运行设置（0711 R5）：代理/断点续爬/登录迁到节点级；缺省读一次 Source 同名旧字段兜底展示（1:1+fallback）
+const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
+const runtimeSettings = computed<CollectorRuntimeSettings>(() => {
+  const s = flow.sourceCfg
+  return {
+    useProxy: cc.value?.useProxy ?? s?.useProxy,
+    resume: cc.value?.resume ?? s?.resume,
+    needLogin: cc.value?.needLogin ?? s?.needLogin,
+    loginUrl: cc.value?.loginUrl ?? s?.loginUrl,
+    account: cc.value?.account ?? s?.account,
+    credentialRef: cc.value?.credentialRef ?? s?.credentialRef,
+    scheduleType: cc.value?.scheduleType ?? s?.scheduleType,
+    scheduleTime: cc.value?.scheduleTime ?? s?.scheduleTime,
+    weekdays: cc.value?.weekdays ?? s?.weekdays,
+    cron: cc.value?.cron ?? s?.cron,
+  }
+})
+function onRuntimeSettingsChange(patch: Partial<CollectorRuntimeSettings>) {
+  flow.patchCollect(id.value, patch)
+}
+// URL 参数：节点绑定关系与子源级取值覆盖分开保存。
+function onUrlParamRefsChange(refs: string[]) {
+  flow.patchCollect(id.value, { urlParamRefs: refs })
+}
+function onUrlParamValuesChange(values: Record<string, string>) {
+  flow.patchCollect(id.value, { urlParamValues: values })
+}
+function onInsertParamToken(paramId: string) {
+  if (!cc.value || cc.value.url.includes(`$PARAM$_${paramId}`)) return
+  const separator = cc.value.url.includes('?') ? '&' : '?'
+  flow.patchCollect(id.value, { url: `${cc.value.url}${separator}param_${paramId}=$PARAM$_${paramId}` })
+}
 
 // 当前节点输出表（统一口径：采集类取 collectCfg.outputTable，非采集类取 cfg.outputTable）
 const nodeTableId = computed(() => cc.value?.outputTable || cfg.value?.outputTable || '')
@@ -96,23 +131,7 @@ function onTaskUrlSourceFieldChange(e: Event) {
 function onTaskUrlRuleChange(e: Event) {
   flow.patchTaskConfig(id.value, { urlRule: (e.target as HTMLInputElement).value })
 }
-function onTaskJoinLogicChange(e: Event) {
-  flow.patchTaskConfig(id.value, { joinLogic: (e.target as HTMLInputElement).value })
-}
-const taskParams = computed<TaskParam[]>(() => cfg.value?.taskCfg?.params ?? [])
-function patchTaskParams(params: TaskParam[]) {
-  flow.patchTaskConfig(id.value, { params })
-}
-function addTaskParam() {
-  patchTaskParams([...taskParams.value, { name: '', field: '' }])
-}
-function updateTaskParam(index: number, key: keyof TaskParam, value: string) {
-  const next = taskParams.value.map((p, i) => (i === index ? { ...p, [key]: value } : p))
-  patchTaskParams(next)
-}
-function removeTaskParam(index: number) {
-  patchTaskParams(taskParams.value.filter((_, i) => i !== index))
-}
+const isFirstCollectorNode = computed(() => !!cc.value && flow.main.find((nodeId) => !!flow.configs[nodeId]?.collectCfg) === id.value)
 
 const prevNode = computed<NodeConfig | undefined>(() => {
   const idx = flow.main.indexOf(id.value)
@@ -128,7 +147,7 @@ const prevNode = computed<NodeConfig | undefined>(() => {
 // 输入表 schema 字段清单：字段下拉取有效输入表（自动继承或显式覆盖）的 schema；
 // 首节点没有输入表，改取本节点输出表——首节点输出表即下一节点的输入表，效果等价于在下一节点设同样条件。
 // 若继承的是上游子步骤临时表，实体表清单可能查不到 schema，此时回退到上游节点 output 产物字段。
-// 该清单复用于「进入条件」「任务 URL 来源字段」与「任务参数」的字段下拉。
+// 该清单复用于「进入条件」与「任务 URL 来源字段」的字段下拉。
 const inputTableFields = computed(() => {
   const tid = isFirstDataNode.value ? nodeTableId.value : (ownInputTable.value || effectiveInputTableId.value)
   return fieldOptionsFromTableOrOutput(tid, tables.value, isFirstDataNode.value ? cfg.value?.output : prevNode.value?.output)
@@ -288,38 +307,6 @@ function onAppPackageChange(e: Event) {
 function onWebKind(e: Event) {
   flow.patchCollect(id.value, { webKind: (e.target as HTMLSelectElement).value as WebKind })
 }
-async function confirmDanger(title: string, body: string, run: () => Promise<{ message?: string }>) {
-  try {
-    await ElMessageBox.confirm(body, title, { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '取消' })
-  } catch {
-    return
-  }
-  const res = await run()
-  ElMessage.success(res?.message || '操作已提交（演示）')
-}
-function onSubmit() {
-  const name = cfg.value?.title || flow.sourceCfg?.name || '当前节点'
-  confirmDanger('保存节点配置', `将「${name}」的配置保存到当前流程，是否继续？（整条流程发布后才成为采集源）`, () =>
-    sourceApi.generateConfig(id.value),
-  )
-}
-// 单节点试跑：走 runtime 真闭环（画布该节点 L→C + 按其 outputTable 落表），与顶部整链试跑一致
-function onTrial() {
-  if (cfg.value?.planned) {
-    ElMessage.info('规划中节点：待执行器就绪后可试跑')
-    return
-  }
-  if (runtime.running) {
-    ElMessage.warning('已有试跑正在进行，请稍候')
-    return
-  }
-  const runId = runtime.trialNode(flow.serialize(), id.value)
-  if (!runId) {
-    ElMessage.warning('该节点当前不可试跑（已停止，或采集节点缺 URL / 输出表）')
-    return
-  }
-  ElMessage.success(`已发起「${cfg.value?.title}」单节点试跑 ${runId}，画布状态流转中 → 运行记录 / 数据查看`)
-}
 </script>
 
 <template>
@@ -337,6 +324,11 @@ function onTrial() {
           :title="ui.inspectorExpanded ? '还原配置区宽度' : '展开配置区，便于编辑表配置'"
           @click="ui.toggleInspectorExpanded()"
         >{{ ui.inspectorExpanded ? '⊟ 还原' : '⛶ 展开' }}</button>
+        <!-- 节点启停开关（0710 会议 D5）：停用=数据流经此节点时跳过不处理；逐节点验证通过后全开再定时跑 -->
+        <label class="ni-enable-switch" :title="cfg.disabled ? '节点已停用：数据在此节点不处理，点击启用' : '节点运行中：点击停用（数据将跳过此节点）'">
+          <input type="checkbox" :checked="!cfg.disabled" @change="flow.setNodeDisabled(id, !($event.target as HTMLInputElement).checked)" />
+          <span>{{ cfg.disabled ? '已停用' : '启用中' }}</span>
+        </label>
         <span class="rc-status" :class="statusClass">{{ statusText }}</span>
       </div>
     </div>
@@ -368,18 +360,25 @@ function onTrial() {
           </select>
         </div>
         <ConditionRow v-if="!isFirstDataNode" :condition="entryCondition" :fields="inputTableFields" @change="onEntryConditionChange" />
-        <div class="rc-field"><label>输出表</label>
-          <select class="rc-select" :value="nodeTableId" @change="onOutputTableChange">
+        <div class="rc-field"><label>输出表{{ nodeCapability?.outputMode === 'fixed' ? `（固定 · ${nodeCapability.label}）` : '' }}</label>
+          <select class="rc-select" :value="nodeTableId" :disabled="nodeCapability?.outputMode === 'fixed'" @change="onOutputTableChange">
             <option v-if="!cc" value="" disabled>请选择输出表</option>
             <option v-if="nodeTableId && !tables.some((t) => t.tableId === nodeTableId)" :value="nodeTableId">{{ nodeTableId }}（来自源步骤）</option>
             <option v-for="t in tables" :key="t.tableId" :value="t.tableId">{{ t.tableId }} · {{ t.tableName }}</option>
           </select>
         </div>
 
+        <!-- 队列归属对首节点同样展示（0710 会议 D1：首节点无输入表但有队列，未填时保存/试跑自动写入默认队列名） -->
+        <div class="rc-field"><label>队列归属{{ nodeCapability?.queueMode === 'fixed' ? `（固定 · ${nodeCapability.label}）` : '' }}</label>
+          <input
+            class="rc-input"
+            :value="ownTaskQueue"
+            :disabled="nodeCapability?.queueMode === 'fixed'"
+            :placeholder="taskQueueFallback ? `自动 · ${taskQueueFallback}` : '手动填写队列名'"
+            @input="onTaskQueueChange"
+          />
+        </div>
         <template v-if="!isFirstDataNode">
-          <div class="rc-field"><label>队列归属</label>
-            <input class="rc-input" :value="ownTaskQueue" :placeholder="taskQueueFallback ? `自动 · ${taskQueueFallback}` : '手动填写队列名'" @input="onTaskQueueChange" />
-          </div>
           <div class="rc-field"><label>任务 URL 来源字段</label>
             <select class="rc-select" :value="cfg.taskCfg?.urlSourceField ?? ''" @change="onTaskUrlSourceFieldChange">
               <option value="">选择字段（上一步属性）</option>
@@ -389,29 +388,14 @@ function onTrial() {
           <div class="rc-field"><label>任务 URL 规则</label>
             <input class="rc-input" :value="cfg.taskCfg?.urlRule ?? ''" placeholder="如 $VAL$（默认从来源字段取值，支持动态函数）" @input="onTaskUrlRuleChange" />
           </div>
-          <div class="rc-field"><label>任务拼接逻辑</label>
-            <input class="rc-input" :value="cfg.taskCfg?.joinLogic ?? ''" placeholder="如按字段拼接分页 / 详情参数" @input="onTaskJoinLogicChange" />
-          </div>
-          <div class="ni-section-title">任务参数</div>
-          <div v-if="!taskParams.length" class="rc-readonly-hint">未配置任务参数；需要多个字段参与发任务时可添加。</div>
-          <div v-for="(p, i) in taskParams" :key="i" class="ni-task-param-row">
-            <input class="rc-input" :value="p.name" placeholder="参数名，如 detailUrl" @input="updateTaskParam(i, 'name', ($event.target as HTMLInputElement).value)" />
-            <select class="rc-select" :value="p.field" @change="updateTaskParam(i, 'field', ($event.target as HTMLSelectElement).value)">
-              <option value="">选择字段</option>
-              <option v-for="f in inputTableFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
-            </select>
-            <button class="rc-row-del ni-task-param-remove" type="button" title="删除该参数" @click="removeTaskParam(i)">✕</button>
-          </div>
-          <button class="rc-btn" type="button" @click="addTaskParam">+ 添加任务参数</button>
-          <div class="rc-help">参数名用于 URL 规则或拼接逻辑；参数值从输入表字段逐行取值。</div>
         </template>
       </template>
 
       <template v-else-if="tab === 'table'">
         <!-- 表配置：保留输出表管理入口，表结构通过「查看/编辑表」查看维护 -->
-        <div class="rc-field"><label>输出表{{ cc ? '' : '（本节点处理结果落此表，默认继承上游节点；结果视图可查数据）' }}</label>
+        <div class="rc-field"><label>输出表{{ nodeCapability?.outputMode === 'fixed' ? `（固定 · ${nodeCapability.label}，不可更改）` : (cc ? '' : '（本节点处理结果落此表，默认继承上游节点；结果视图可查数据）') }}</label>
           <div class="rc-input-group">
-            <select class="rc-select grow" :value="nodeTableId" @change="onOutputTableChange">
+            <select class="rc-select grow" :value="nodeTableId" :disabled="nodeCapability?.outputMode === 'fixed'" @change="onOutputTableChange">
               <option v-if="!cc" value="" disabled>请选择输出表</option>
               <!-- 源步骤回填的表可能不在实体表清单里，补一个当前值选项避免下拉显示为空 -->
               <option v-if="nodeTableId && !tables.some((t) => t.tableId === nodeTableId)" :value="nodeTableId">{{ nodeTableId }}（来自源步骤）</option>
@@ -447,8 +431,6 @@ function onTrial() {
         <template v-else>
         <div class="rc-field"><label>节点名称</label><input class="rc-input" :value="cfg.title" @input="onTitle" /></div>
 
-        <div class="rc-readonly-hint ni-source-hint">源级配置（名称/分类/代理/登录/定时/选用配置）在顶部摘要头「编辑」中修改，各节点共享同一份。</div>
-
         <!-- 采集类专属：源 URL / 网页类型（详情状态由网页类型自动推导） -->
         <template v-if="cc">
           <div v-if="isAppCollect" class="rc-field"><label>APP 包名</label>
@@ -468,6 +450,19 @@ function onTrial() {
               </option>
             </select>
           </div>
+          <!-- 参数配置：节点绑定全局参数，URL token 只标识参数插入位置。 -->
+          <UrlParamEditor
+            v-if="nodeCapability?.supportsUrlParams"
+            :url="cc.url"
+            :param-refs="cc.urlParamRefs ?? []"
+            :param-values="cc.urlParamValues ?? {}"
+            :warn-fragment="nodeCapability?.kind === 'web'"
+            @update:param-refs="onUrlParamRefsChange"
+            @update:param-values="onUrlParamValuesChange"
+            @insert-token="onInsertParamToken"
+          />
+          <!-- 运行设置（0711 R5）：代理/断点续爬/登录，节点级配置、默认折叠 -->
+          <CollectorSettings :model-value="runtimeSettings" :capability="nodeCapability" :show-schedule="isFirstCollectorNode" @update:model-value="onRuntimeSettingsChange" />
         </template>
 
         <!-- 输入映射：只保留给处理/规则/AI 等非采集节点，采集节点避免与源配置和表配置重复 -->
@@ -613,11 +608,8 @@ function onTrial() {
         </template>
       </template>
 
-      <!-- 常驻操作栏（0703 反馈）：保存/试跑不再只挂在"节点配置"里，四个顶层 Tab 下都看得到 -->
-      <div class="rc-insp-footer">
-        <button v-if="cc" class="rc-btn primary" type="button" @click="onSubmit">保存节点</button>
-        <button class="rc-btn" :class="{ primary: !cc }" type="button" :disabled="cfg.planned" @click="onTrial">试跑此节点</button>
-      </div>
+      <!-- 常驻操作栏已整体移除（0710 会议 C3+D3）：保存收敛到顶部唯一入口；试跑收敛为顶部整链试跑（保存后可用），
+           "是否子节点/单节点试跑"这类散落的发起入口按会议结论不再保留 -->
     </div>
     </template>
 
@@ -640,6 +632,8 @@ function onTrial() {
 <style scoped>
 .rc-inspector { background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; height: 100%; min-height: 0; display: flex; flex-direction: column; }
 .rc-insp-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 42px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); }
+.ni-enable-switch { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--rc-text-2); cursor: pointer; white-space: nowrap; }
+.ni-enable-switch input { cursor: pointer; }
 .rc-insp-title { font-weight: 700; color: var(--rc-text); font-size: 13px; }
 .rc-insp-sub { color: var(--rc-faint); font-size: 10px; margin-top: 1px; }
 .rc-insp-head-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
@@ -648,14 +642,9 @@ function onTrial() {
 .ni-adv-toggle:hover { color: var(--rc-primary-ink); }
 .ni-adv-body { margin-top: 8px; }
 .ni-section-title { margin: 16px 0 8px; padding-top: 12px; border-top: 1px dashed var(--rc-border-soft); color: var(--rc-muted); font-size: 12px; font-weight: 700; }
-.ni-source-hint { margin-bottom: 10px; line-height: 1.6; }
-.ni-task-param-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) 24px; gap: 6px; align-items: center; margin-bottom: 6px; }
-.ni-task-param-remove { justify-self: center; }
 .rc-insp-expand { border: 1px solid #d5e2f2; background: #fff; color: var(--rc-text-2); border-radius: 6px; font-size: 11px; padding: 3px 8px; cursor: pointer; white-space: nowrap; }
 .rc-insp-expand:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rc-inspector-body { padding: 12px; overflow: auto; flex: 1 1 auto; min-height: 0; }
-.rc-insp-footer { display: flex; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--rc-border-soft); }
-.rc-insp-footer .rc-btn { height: 32px; padding: 0 11px; font-size: 12px; }
 
 /* 顶层四 Tab（0706 调整4 · 0707 微调：节点配置 / 表配置 / 任务配置 / AI 对话） */
 .rc-top-tabs { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--rc-border); border-radius: 9px; background: #f1f5f9; margin-bottom: 12px; }
@@ -669,8 +658,6 @@ function onTrial() {
 .rc-input:focus, .rc-select:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .rc-textarea { min-height: 74px; resize: vertical; line-height: 1.5; }
 .rc-help-inline { margin-top: 5px; color: var(--rc-muted); font-size: 11px; line-height: 1.4; }
-.rc-input.slim { height: 30px; padding: 0 9px; }
-.rc-input.cron { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .rc-input-group { display: flex; align-items: stretch; width: 100%; }
 .rc-input-group .rc-input { border-radius: 7px 0 0 7px; }
 .rc-input-group .rc-select.grow { border-radius: 7px 0 0 7px; flex: 1; }
@@ -701,13 +688,6 @@ function onTrial() {
 .rc-dir-tree { max-height: 104px; overflow: auto; padding: 6px 8px; color: var(--rc-text-2); font-size: 11px; line-height: 1.9; }
 .rc-dir-node.active { color: var(--rc-primary-ink); font-weight: 700; }
 
-.rc-scheduler { border: 1px solid #dbe3ee; border-radius: 8px; background: #fff; overflow: hidden; }
-.rc-scheduler-head { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px; border-bottom: 1px solid #eef2f7; background: #fbfdff; }
-.rc-weekdays { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; padding: 8px; }
-.rc-day { display: flex; align-items: center; justify-content: center; height: 26px; border: 1px solid var(--rc-border); border-radius: 6px; color: var(--rc-muted); background: #fff; font-size: 10px; cursor: pointer; }
-.rc-day.active { border-color: #93c5fd; background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-weight: 700; }
-.rc-cron-preview { display: flex; align-items: center; gap: 8px; padding: 8px; border-top: 1px solid #eef2f7; background: #fff; }
-.rc-cron-preview span { color: var(--rc-muted); font-size: 11px; flex: none; }
 
 .rc-mini-table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .rc-mini-table th { text-align: left; color: var(--rc-muted); font-weight: 600; padding: 6px 5px; border-bottom: 1px solid #eef2f7; }

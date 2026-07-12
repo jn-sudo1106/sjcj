@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { mockSitePaged, mockSiteDetail, mockSiteCreate, mockSiteSourcesOf, mockSiteSourceAdd, mockSiteSourceRemove, mockSiteSyncFlow } from './sites'
+import { mockSitePaged, mockSiteDetail, mockSiteCreate, mockSiteSourcesOf, mockSiteSourceAdd, mockSiteImportSources, mockSiteSourceRemove, mockSiteSyncFlow } from './sites'
 import { mockSourceDetail, mockSourcePaged } from './sources'
 import { mockFlowSave, mockFlowLoad } from './flows'
 
@@ -27,13 +27,25 @@ describe('网站—子源模型（0707 优化·Phase2）· 汇总统计', () => 
     expect(mockSiteDetail({ siteId: 'ghost-site' })).toBeNull()
   })
 
+  it('sitePaged：sort 在分页前生效（0710 修复跨页排序），缺省按最近修改倒序', () => {
+    const all = mockSitePaged({ size: 999, sort: 'name' }).list.map((s) => s.name)
+    expect([...all].sort((a, b) => a.localeCompare(b, 'zh'))).toEqual(all)
+    // 跨页口径：第 2 页首项应是全量名称序的第 size+1 位，而不是"取该页再排序"
+    const size = 3
+    const page2 = mockSitePaged({ size, page: 2, sort: 'name' }).list.map((s) => s.name)
+    expect(page2[0]).toBe(all[size])
+
+    const byUpdated = mockSitePaged({ size: 999 }).list.map((s) => s.updatedAt || '')
+    expect([...byUpdated].sort((a, b) => b.localeCompare(a))).toEqual(byUpdated)
+  })
+
   it('sourcesOfSite：语言演示子源并入通用 SOURCES（按 sourceId 各处可查，不再触发 SOURCES[0] 兜底误加载）', () => {
     const langSources = mockSiteSourcesOf({ siteId: 'site-lang-demo' })
     expect(langSources.length).toBe(24)
     expect(langSources.every((s) => s.siteId === 'site-lang-demo')).toBe(true)
     // 并入 SOURCES 后：sourceDetail 能查到真实记录（不是兜底 SOURCES[0]），sourcePaged 里也能看到
     const one = langSources[0]
-    expect(mockSourceDetail({ sourceId: one.sourceId }).sourceId).toBe(one.sourceId)
+    expect(mockSourceDetail({ sourceId: one.sourceId })!.sourceId).toBe(one.sourceId)
     expect(mockSourcePaged({ keyword: one.sourceId, size: 10 }).list.some((s) => s.sourceId === one.sourceId)).toBe(true)
   })
 })
@@ -53,7 +65,7 @@ describe('「新建采集」建网站 + 首批子源', () => {
     })
     expect(ok.ok).toBe(true)
     expect(mockSiteDetail({ siteId: 'site-test-new' })?.sourceCount).toBe(2)
-    expect(mockSourceDetail({ sourceId: 'site-test-new-s1' }).siteId).toBe('site-test-new')
+    expect(mockSourceDetail({ sourceId: 'site-test-new-s1' })!.siteId).toBe('site-test-new')
   })
 })
 
@@ -71,30 +83,78 @@ describe('网站下增删子源', () => {
   it('sourceRemove：子源不属于该网站时报错', () => {
     expect(mockSiteSourceRemove({ siteId: 'site-notice', sourceId: '600036' }).ok).toBe(false)
   })
+
+  it('sourceAdd inherit=false（0710 会议 B5）：不复制模板流程，流程从空白开始且不算 detached', () => {
+    // site-quote 是种子站，flowLoad 有虚拟默认模板可继承——正好用来区分两档行为
+    const inheritRes = mockSiteSourceAdd({
+      siteId: 'site-quote',
+      source: { sourceId: 'sq-inherit', name: '继承子源', url: '', configId: '', mainTable: '', owner: 't', state: 'C' },
+    })
+    expect(inheritRes.ok).toBe(true)
+    expect(mockFlowLoad({ id: 'sq-inherit' })).not.toBeNull() // 缺省继承：拿到模板流程副本
+
+    const blankRes = mockSiteSourceAdd({
+      siteId: 'site-quote',
+      inherit: false,
+      source: { sourceId: 'sq-blank', name: '空白子源', url: '', configId: '', mainTable: '', owner: 't', state: 'C' },
+    })
+    expect(blankRes.ok).toBe(true)
+    expect(mockFlowLoad({ id: 'sq-blank' })).toBeNull() // 不继承：无流程存档，空白画布起步
+    expect(mockSourceDetail({ sourceId: 'sq-blank' })!.detached).toBeFalsy() // 从未跟随模板 ≠ 已单独调整
+  })
+})
+
+describe('按网站批量导入子源（0710 会议 A5）', () => {
+  it('importSources：解析「名称;URL」多行，空行/缺名称行跳过，导入后站内可查', () => {
+    const before = mockSiteSourcesOf({ siteId: 'site-quote' }).length
+    const res = mockSiteImportSources({
+      siteId: 'site-quote',
+      lines: '导入子源甲;https://example.com/a\n\n导入子源乙\n;https://example.com/no-name\n',
+    })
+    expect(res.ok).toBe(true)
+    expect(res.added).toBe(2) // 甲（带 URL）+ 乙（无 URL 也允许）
+    expect(res.skipped).toBe(1) // 只有 URL 没名称的行跳过；纯空行不计
+    const after = mockSiteSourcesOf({ siteId: 'site-quote' })
+    expect(after.length).toBe(before + 2)
+    expect(after.some((s) => s.name === '导入子源甲' && s.url === 'https://example.com/a')).toBe(true)
+    expect(after.filter((s) => s.name.startsWith('导入子源')).every((s) => s.siteId === 'site-quote')).toBe(true)
+  })
+
+  it('importSources：网站不存在或无有效行时报错', () => {
+    expect(mockSiteImportSources({ siteId: 'ghost-site', lines: 'x;y' }).ok).toBe(false)
+    expect(mockSiteImportSources({ siteId: 'site-quote', lines: '\n;\n' }).ok).toBe(false)
+  })
 })
 
 describe('网站统一流程同步（A+C：detached 标记 + 多选同步覆盖）', () => {
   it('子源单独保存流程后 detached=true；网站同步覆盖后复位 detached=false', () => {
-    expect(mockSourceDetail({ sourceId: '600519' }).detached).toBeFalsy()
+    expect(mockSourceDetail({ sourceId: '600519' })!.detached).toBeFalsy()
 
     mockFlowSave({ def: { id: '600519', name: '自定义调整', version: 'v1', main: [], branches: [], configs: {}, updatedAt: '' } })
-    expect(mockSourceDetail({ sourceId: '600519' }).detached).toBe(true)
+    expect(mockSourceDetail({ sourceId: '600519' })!.detached).toBe(true)
 
     mockFlowSave({ def: { id: 'site:site-notice', name: '网站统一流程', version: 'v1', main: ['start', 'end'], branches: [], configs: {}, updatedAt: '' } })
     // 网站模板本身保存不应误标任何子源脱离
-    expect(mockSourceDetail({ sourceId: '000001' }).detached).toBeFalsy()
+    expect(mockSourceDetail({ sourceId: '000001' })!.detached).toBeFalsy()
 
     const sync = mockSiteSyncFlow({ siteId: 'site-notice', sourceIds: ['600519'] })
     expect(sync.ok).toBe(true)
-    expect(mockSourceDetail({ sourceId: '600519' }).detached).toBe(false)
+    expect(mockSourceDetail({ sourceId: '600519' })!.detached).toBe(false)
     expect(mockFlowLoad({ id: '600519' })?.name).toBe('网站统一流程')
     // 只覆盖勾选的子源：000001 未被选中，流程与 detached 均不受影响
     expect(mockFlowLoad({ id: '000001' })).toBeNull()
-    expect(mockSourceDetail({ sourceId: '000001' }).detached).toBeFalsy()
+    expect(mockSourceDetail({ sourceId: '000001' })!.detached).toBeFalsy()
   })
 
-  it('网站没有统一流程模板时同步报错', () => {
-    const res = mockSiteSyncFlow({ siteId: 'site-quote', sourceIds: ['600036'] })
+  it('网站没有统一流程模板时同步报错（种子网站有虚拟默认模板，须用非种子网站验证，0710）', () => {
+    const res = mockSiteSyncFlow({ siteId: 'site-user-created', sourceIds: ['600036'] })
     expect(res.ok).toBe(false)
+  })
+
+  it('种子演示网站查无存档时 flowLoad 兜底默认骨架；非种子网站返回 null（0710）', () => {
+    const seedDef = mockFlowLoad({ id: 'site:site-quote' })
+    expect(seedDef?.main).toEqual(['start', 'web-list', 'web-detail', 'end'])
+    expect(seedDef?.name).toBe('行情快照采集')
+    expect(mockFlowLoad({ id: 'site:site-user-created' })).toBeNull()
   })
 })

@@ -3,9 +3,8 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Grid, List, Refresh, Edit, CopyDocument, Operation } from '@element-plus/icons-vue'
-import { sourceApi, siteApi, type Source, type Site, type SourceCategory, type SourceLog, type TaskInst } from '../../api'
+import { sourceApi, siteApi, type Source, type Site, type SourceCategory } from '../../api'
 import { useUiStore } from '../../stores/ui'
-import { useWorkspaceStore, MAX_SOURCE_TABS } from '../../stores/workspace'
 import SiteCardGrid from './SiteCardGrid.vue'
 import { siteIcon } from './siteVisual'
 
@@ -41,18 +40,8 @@ const childrenCache = reactive<Record<string, Source[]>>({})
 const childrenLoading = reactive<Record<string, boolean>>({})
 const selectedIds = ref<string[]>([])
 
-// ---- 日志 / 任务 / 批量导入弹窗 ----
-const logDlg = reactive<{ visible: boolean; rows: SourceLog[]; name: string }>({ visible: false, rows: [], name: '' })
-const taskDlg = reactive<{ visible: boolean; rows: TaskInst[]; name: string }>({ visible: false, rows: [], name: '' })
-const importDlg = reactive({ visible: false, template: '', deep: false, dir: '', lines: '' })
-
 // ---- 加载 ----
-function applySort(list: Site[]): Site[] {
-  const arr = [...list]
-  if (sortBy.value === 'name') arr.sort((a, b) => a.name.localeCompare(b.name, 'zh'))
-  else arr.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
-  return arr
-}
+// 排序交给 sitePaged 的 sort 参数在分页前做（0710 修复：原 applySort 只对当前页排序，跨页顺序错）
 async function loadList() {
   loading.value = true
   try {
@@ -61,27 +50,46 @@ async function loadList() {
       keyword: keyword.value,
       tag: tagFilter.value,
       state: stateFilter.value,
+      sort: sortBy.value,
       page: page.value,
       size: size.value,
     })
-    sites.value = applySort(res.list)
+    sites.value = res.list
     total.value = res.total
     expanded.value = new Set()
+  } catch (e) {
+    ElMessage.warning('加载网站列表失败')
+    sites.value = []
+    total.value = 0
   } finally {
     loading.value = false
   }
 }
 async function loadCategories() {
-  categories.value = await sourceApi.sourceCategories()
+  try {
+    categories.value = await sourceApi.sourceCategories()
+  } catch (e) {
+    ElMessage.warning('加载分类失败')
+    categories.value = []
+  }
 }
 async function loadStats() {
-  Object.assign(stats, await sourceApi.sourceStats())
+  try {
+    Object.assign(stats, await sourceApi.sourceStats())
+  } catch (e) {
+    ElMessage.warning('加载统计失败')
+  }
 }
 async function loadTagOptions() {
-  const res = await siteApi.sitePaged({ size: 999 })
-  const set = new Set<string>()
-  res.list.forEach((s) => (s.tags ?? []).forEach((t) => set.add(t)))
-  allTags.value = [...set].sort()
+  try {
+    const res = await siteApi.sitePaged({ size: 999 })
+    const set = new Set<string>()
+    res.list.forEach((s) => (s.tags ?? []).forEach((t) => set.add(t)))
+    allTags.value = [...set].sort()
+  } catch (e) {
+    ElMessage.warning('加载标签选项失败')
+    allTags.value = []
+  }
 }
 
 function resetAndLoad() {
@@ -196,34 +204,16 @@ function statusMeta(s: Source) {
   if (s.state === 'L') return { cls: 'run', text: '运行中' }
   return { cls: 'muted', text: '未知' }
 }
-// 站级同步状态（0707 表格样式）：无异常=成功；部分异常=部分成功；全异常=失败
-function siteSync(site: Site): { cls: string; text: string } {
-  if (!site.sourceCount) return { cls: 'muted', text: '—' }
-  if (site.errorCount === 0) return { cls: 'ok', text: '成功' }
-  if (site.errorCount < site.sourceCount) return { cls: 'warn', text: '部分成功' }
-  return { cls: 'err', text: '失败' }
-}
+// 页签网站化（0710 会议 B3）：入口只推路由，页签注册统一收口在画布加载（index.vue）——
+// 点子源名会落到所属网站页签并在侧栏定位到该子源，无 siteId 的历史草稿源仍开独立页签
 function openSourceCanvas(s: Source, view?: 'data' | 'task') {
-  // 源详情多页签（0701 问题三）：入口先登记页签（已开则激活），超限提示先关闭
-  const ws = useWorkspaceStore()
-  if (!ws.open(s.sourceId, s.name)) {
-    ElMessage.warning(`最多同时打开 ${MAX_SOURCE_TABS} 个源页签，请先关闭部分页签`)
-    return
-  }
-  const snap = ws.snapshotOf(s.sourceId)
-  const targetView = view ?? (snap?.view === 'data' || snap?.view === 'task' ? snap.view : undefined)
-  router.push({ path: '/canvas', query: { sourceId: s.sourceId, ...(targetView ? { view: targetView } : {}) } })
+  router.push({ path: '/canvas', query: { sourceId: s.sourceId, ...(view ? { view } : {}) } })
 }
 function openSourceData(s: Source) {
   openSourceCanvas(s, 'data')
 }
 // 网站行「编辑」→ 进入网站统一流程模板画布（0707 优化·Phase4）
 function openSiteCanvas(site: Site, view?: 'data') {
-  const ws = useWorkspaceStore()
-  if (!ws.open(`site:${site.siteId}`, site.name)) {
-    ElMessage.warning(`最多同时打开 ${MAX_SOURCE_TABS} 个源页签，请先关闭部分页签`)
-    return
-  }
   router.push({ path: '/canvas', query: { siteId: site.siteId, ...(view ? { view } : {}) } })
 }
 function openSiteData(site: Site) {
@@ -248,25 +238,20 @@ async function confirmDanger(title: string, body: string, run: () => Promise<{ m
   ElMessage.success(res?.message || '操作已提交（演示）')
 }
 
-function onCopy(s: Source) {
-  confirmDanger('复制派生源', `将基于「${s.name}」复制派生一个新源，是否继续？`, () => sourceApi.copySource(s.sourceId))
+// ---- 子源行内操作（0710 会议 A3）：只留发抓取 + 停用/启用，复制派生/记录已按会议结论移除 ----
+function onRowSnatch(s: Source) {
+  confirmDanger('发抓取', `将向子源「${s.name}」下发抓取任务，是否继续？`, () => sourceApi.sendSnatch([s.sourceId]))
 }
-
-// ---- 行内「记录」下拉 ----
-async function onRecord(cmd: string, s: Source) {
-  if (cmd === 'log') {
-    logDlg.name = s.name
-    logDlg.rows = await sourceApi.sourceLogs(s.sourceId)
-    logDlg.visible = true
-    return
-  }
-  if (cmd === 'task') {
-    taskDlg.name = s.name
-    taskDlg.rows = await sourceApi.sourceTasks(s.sourceId)
-    taskDlg.visible = true
-    return
-  }
-  ElMessage.info('原始文件：演示环境占位')
+function onRowToggle(s: Source) {
+  const willDisable = !s.disabled
+  confirmDanger(willDisable ? '停用子源' : '启用子源', `确认${willDisable ? '停用' : '启用'}子源「${s.name}」？`, async () => {
+    const res = await sourceApi.changeSourceEnable(s.sourceId, willDisable)
+    if (res?.ok) {
+      s.disabled = willDisable
+      loadStats()
+    }
+    return res
+  })
 }
 
 // ---- 批量 ----
@@ -334,26 +319,6 @@ function onMonitor(cmd: string) {
   confirmDanger(verb, `确认对选中源执行「${verb}」？`, () => sourceApi.markVerified(selectedIds.value, cmd))
 }
 
-function onBatchImport() {
-  importDlg.visible = true
-}
-async function submitImport() {
-  // 0707 Review #3 修复：透传 deep/dir（此前两字段收集后丢弃）；导入后刷新列表 + 标签/分类下拉（此前不刷新看不到新增条目）。
-  const res = await sourceApi.batchImport(importDlg.template, importDlg.lines, {
-    deep: importDlg.deep,
-    dir: importDlg.dir,
-  })
-  if (!res?.ok) {
-    ElMessage.warning(res?.message || '导入失败，请检查模板源 / 行格式')
-    return
-  }
-  ElMessage.success(res?.message || '批量导入已提交（演示）')
-  importDlg.visible = false
-  await refreshAll()
-  loadTagOptions()
-  loadCategories()
-}
-
 // 新建采集（0707 优化·Phase3）：跳画布新建闸门段，先填网站基础信息 + 首批子源再进流程编排。
 function openNewFlowCanvas() {
   router.push({ path: '/canvas', query: { mode: 'new' } })
@@ -368,10 +333,6 @@ onMounted(() => {
   loadTagOptions()
   loadList()
   ui.registerAction('新建采集', openNewFlowCanvas)
-  ui.registerAction('批量导入', onBatchImport)
-  ui.registerAction('批量操作', () => {
-    if (requireSelection()) ElMessage.info('已选源可在列表上方批量工具条中操作')
-  })
 })
 onUnmounted(() => ui.clearActions())
 </script>
@@ -473,7 +434,6 @@ onUnmounted(() => ui.clearActions())
               </th>
               <th>源</th>
               <th style="width: 96px">定时</th>
-              <th style="width: 150px">同步状态</th>
               <th style="width: 104px">数据量</th>
               <th style="width: 88px">责任人</th>
               <th style="width: 140px">最近修改</th>
@@ -519,10 +479,6 @@ onUnmounted(() => ui.clearActions())
                   <div class="ca-cell-sub">定时运行</div>
                 </td>
                 <td>
-                  <div class="ca-cell-main"><span class="ca-sync-dot" :class="siteSync(site).cls" />{{ siteSync(site).text }}</div>
-                  <div class="ca-cell-sub">{{ site.lastTaskAt?.slice(0, 16) || '—' }}</div>
-                </td>
-                <td>
                   <button class="ca-count-link" type="button" title="查看该网站全部子源数据" @click="openSiteData(site)">
                     {{ (site.dataCount ?? 0).toLocaleString() }} 条
                   </button>
@@ -537,23 +493,21 @@ onUnmounted(() => ui.clearActions())
                 </td>
               </tr>
               <template v-if="expanded.has(site.siteId)">
-                <tr v-if="childrenLoading[site.siteId]"><td colspan="9" class="ca-empty-row">加载中…</td></tr>
-                <tr v-else-if="!(childrenCache[site.siteId] ?? []).length"><td colspan="9" class="ca-empty-row">该网站暂无子源</td></tr>
+                <tr v-if="childrenLoading[site.siteId]"><td colspan="8" class="ca-empty-row">加载中…</td></tr>
+                <tr v-else-if="!(childrenCache[site.siteId] ?? []).length"><td colspan="8" class="ca-empty-row">该网站暂无子源</td></tr>
                 <tr v-for="s in (childrenCache[site.siteId] ?? [])" :key="s.sourceId" class="ca-child-row" :class="{ active: selectedIds.includes(s.sourceId) }">
                   <td></td>
                   <td><el-checkbox :model-value="selectedIds.includes(s.sourceId)" @change="toggleRow(s.sourceId)" /></td>
                   <td>
                     <div class="ca-src">
                       <button class="ca-src-name" type="button" @click="openSourceCanvas(s)">{{ s.name }}</button>
+                      <span class="rc-status" :class="statusMeta(s).cls">{{ statusMeta(s).text }}</span>
+                      <span v-if="s.alarm" class="rc-status warn">告警</span>
                       <span v-if="s.externalChanged" class="ca-flag">外部变更</span>
                     </div>
                     <div class="ca-cell-sub">{{ s.sourceId }} · {{ s.url }}</div>
                   </td>
                   <td><div class="ca-cell-main">{{ s.cycle || '—' }}</div></td>
-                  <td>
-                    <span class="rc-status" :class="statusMeta(s).cls">{{ statusMeta(s).text }}</span>
-                    <span v-if="s.alarm" class="rc-status warn ca-alarm">告警</span>
-                  </td>
                   <td>
                     <button class="ca-count-link" type="button" @click="openSourceData(s)">
                       {{ (s.dataCount ?? 0).toLocaleString() }} 条
@@ -562,17 +516,10 @@ onUnmounted(() => ui.clearActions())
                   <td><div class="ca-cell-main">{{ s.owner }}</div></td>
                   <td><div class="ca-cell-main soft">{{ s.updatedAt || s.lastTaskAt?.slice(0, 16) || '—' }}</div></td>
                   <td>
-                    <el-dropdown trigger="click" @command="(c: string) => onRecord(c, s)">
-                      <el-button link type="primary" size="small">记录 ▾</el-button>
-                      <template #dropdown>
-                        <el-dropdown-menu>
-                          <el-dropdown-item command="log">运行日志</el-dropdown-item>
-                          <el-dropdown-item command="task">任务实例</el-dropdown-item>
-                          <el-dropdown-item command="file">原始文件</el-dropdown-item>
-                        </el-dropdown-menu>
-                      </template>
-                    </el-dropdown>
-                    <el-button link type="primary" size="small" @click="onCopy(s)">复制源</el-button>
+                    <el-button link type="primary" size="small" @click="onRowSnatch(s)">发抓取</el-button>
+                    <el-button link :type="s.disabled ? 'primary' : 'danger'" size="small" @click="onRowToggle(s)">
+                      {{ s.disabled ? '启用' : '停用' }}
+                    </el-button>
                   </td>
                 </tr>
               </template>
@@ -583,10 +530,9 @@ onUnmounted(() => ui.clearActions())
         <!-- 空态 -->
         <div v-if="!loading && !sites.length" class="ca-empty">
           <div class="ca-empty-title">没有匹配的网站</div>
-          <div class="muted">调整筛选条件，或返回全部网站 / 批量导入模板源。</div>
+          <div class="muted">调整筛选条件，或返回全部网站；批量导入子源请进入具体网站详情操作。</div>
           <div class="ca-empty-actions">
             <button class="rc-btn" type="button" @click="clearFilters">清空筛选 / 返回全部网站</button>
-            <button class="rc-btn primary" type="button" @click="onBatchImport">批量导入</button>
           </div>
         </div>
       </div>
@@ -621,64 +567,6 @@ onUnmounted(() => ui.clearActions())
       />
     </div>
   </div>
-
-  <!-- 源日志弹窗 -->
-  <el-dialog v-model="logDlg.visible" :title="`源日志 · ${logDlg.name}`" width="640px">
-    <table class="rc-data-table">
-      <thead>
-        <tr><th>动作 ID</th><th>动作</th><th>结果</th><th>备注</th><th>时间</th></tr>
-      </thead>
-      <tbody>
-        <tr v-for="l in logDlg.rows" :key="l.logId">
-          <td>{{ l.logId }}</td><td>{{ l.action }}</td>
-          <td><span class="rc-status ok">{{ l.result }}</span></td>
-          <td>{{ l.remark }}</td><td>{{ l.at }}</td>
-        </tr>
-      </tbody>
-    </table>
-  </el-dialog>
-
-  <!-- 任务实例弹窗 -->
-  <el-dialog v-model="taskDlg.visible" :title="`任务实例 · ${taskDlg.name}`" width="760px">
-    <table class="rc-data-table">
-      <thead>
-        <tr><th>任务 ID</th><th>状态</th><th>类型</th><th>执行节点</th><th>主题</th><th>更新时间</th><th>操作</th></tr>
-      </thead>
-      <tbody>
-        <tr v-for="t in taskDlg.rows" :key="t.taskId">
-          <td>{{ t.taskId }}</td>
-          <td><span class="rc-status" :class="statusMeta({ state: t.state } as Source).cls">{{ t.state }}</span></td>
-          <td>{{ t.typeName }}</td><td>{{ t.node }}</td><td>{{ t.topic }}</td><td>{{ t.updatedAt }}</td>
-          <td>
-            <el-button link type="danger" size="small" @click="ElMessage.info('重发：演示环境占位，高危需审批')">重发</el-button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-  </el-dialog>
-
-  <!-- 模板源批量导入弹窗 -->
-  <el-dialog v-model="importDlg.visible" title="批量导入（模板源）" width="640px">
-    <el-form label-width="92px" label-position="right">
-      <el-form-item label="模板源">
-        <el-input v-model="importDlg.template" placeholder="301287174-004432-南方中证申万有色金属ETF联接A" />
-      </el-form-item>
-      <el-form-item label="深度复制">
-        <el-switch v-model="importDlg.deep" />
-        <span class="muted ca-imp-hint">如开启，则会自动为多行数据生成多个配置</span>
-      </el-form-item>
-      <el-form-item label="目标目录">
-        <el-input v-model="importDlg.dir" placeholder="目录 ID / 目录名" />
-      </el-form-item>
-      <el-form-item label="名称;URL">
-        <el-input v-model="importDlg.lines" type="textarea" :rows="5" placeholder="名称与 URL 分割符；例：名称;url" />
-      </el-form-item>
-    </el-form>
-    <template #footer>
-      <el-button @click="importDlg.visible = false">取消</el-button>
-      <el-button type="primary" @click="submitImport">确定</el-button>
-    </template>
-  </el-dialog>
 </template>
 
 <style scoped>
@@ -865,11 +753,6 @@ onUnmounted(() => ui.clearActions())
 .ca-cell-main { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--rc-text); white-space: nowrap; }
 .ca-cell-main.soft { color: var(--rc-text-2); }
 .ca-cell-sub { font-size: 10px; color: var(--rc-faint); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 320px; }
-.ca-sync-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; }
-.ca-sync-dot.ok { background: var(--rc-ok); }
-.ca-sync-dot.warn { background: #f59e0b; }
-.ca-sync-dot.err { background: var(--rc-error); }
-.ca-sync-dot.muted { background: var(--rc-faint); }
 .ca-site-ops { display: flex; gap: 4px; }
 .ca-op-btn {
   width: 26px;
@@ -906,7 +789,6 @@ onUnmounted(() => ui.clearActions())
   font-size: 11px;
   font-weight: 600;
 }
-.ca-alarm { margin-left: 6px; }
 .ca-count-link {
   padding: 0;
   border: 0;
@@ -932,7 +814,6 @@ onUnmounted(() => ui.clearActions())
 .ca-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--rc-border-soft); }
 .ca-pager.card-mode { border-top: 0; padding: 0; }
 .ca-pager-total { margin-right: auto; color: var(--rc-muted); font-size: 12px; }
-.ca-imp-hint { margin-left: 10px; font-size: 12px; }
 
 @media (max-width: 1240px) {
   .ca-toolbar { flex-wrap: wrap; }

@@ -3,6 +3,7 @@ import { onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { paramApi, type Param } from '../../api'
+import ParamEditorDrawer from '../FlowCanvas/ParamEditorDrawer.vue'
 
 const list = ref<Param[]>([])
 const total = ref(0)
@@ -17,6 +18,7 @@ const drawer = reactive<{ visible: boolean; param: Param | null; preview: string
   preview: [],
   previewing: false,
 })
+const editor = reactive<{ visible: boolean; param: Param | null }>({ visible: false, param: null })
 
 async function load() {
   loading.value = true
@@ -37,9 +39,15 @@ onMounted(load)
 
 function kindMeta(k: string) {
   if (k === 'list') return { cls: 'ok', text: '列表' }
-  if (k === 'date') return { cls: 'run', text: '动态日期' }
-  return { cls: 'warn', text: '序列' }
+  if (k === 'date') return { cls: 'run', text: '日期' }
+  if (k === 'sequence') return { cls: 'warn', text: '序列' }
+  if (k === 'date_sequence') return { cls: 'run', text: '日期序列' }
+  return { cls: 'warn', text: '数据库' }
 }
+
+function openCreate() { editor.param = null; editor.visible = true }
+function openEdit(param: Param) { editor.param = param; editor.visible = true }
+async function onParamSaved() { await load() }
 
 async function openDetail(p: Param) {
   drawer.param = p
@@ -74,12 +82,14 @@ async function onAddValues() {
       <el-select v-model="kindFilter" style="width: 130px">
         <el-option label="全部类型" value="all" />
         <el-option label="列表" value="list" />
-        <el-option label="动态日期" value="date" />
+        <el-option label="日期" value="date" />
         <el-option label="序列" value="sequence" />
+        <el-option label="日期序列" value="date_sequence" />
+        <el-option label="数据库" value="database" />
       </el-select>
       <span class="pt-spacer" />
       <span class="muted">共 {{ total }} 个参数</span>
-      <button class="rc-btn primary" type="button" @click="ElMessage.info('新建参数：演示环境占位')">新建参数</button>
+      <button class="rc-btn primary" type="button" @click="openCreate">新建参数</button>
     </div>
 
     <div v-loading="loading" class="rc-table-scroll pt-table">
@@ -88,8 +98,10 @@ async function onAddValues() {
           <tr>
             <th style="width: 120px">参数 ID</th>
             <th>名称</th>
+            <th style="width: 90px">分组</th>
             <th style="width: 96px">类型</th>
             <th>预览</th>
+            <th style="width: 110px">默认值</th>
             <th style="width: 70px">引用</th>
             <th style="width: 100px">责任人</th>
             <th style="width: 120px">操作</th>
@@ -99,14 +111,17 @@ async function onAddValues() {
           <tr v-for="p in list" :key="p.paramId">
             <td>{{ p.paramId }}</td>
             <td><button class="pt-name" type="button" @click="openDetail(p)">{{ p.name }}</button></td>
+            <td>{{ p.group || '—' }}</td>
             <td><span class="rc-status" :class="kindMeta(p.kind).cls">{{ kindMeta(p.kind).text }}</span></td>
             <td class="muted pt-prev">
-              {{ p.kind === 'list' ? (p.values || []).join('、') : p.kind === 'date' ? p.dateExpr : p.seq ? `${p.seq.start}~${p.seq.end} / ${p.seq.step}` : '—' }}
+              {{ p.kind === 'list' || p.kind === 'database' ? (p.values || []).join('、') : p.kind === 'date' ? p.dateExpr : p.kind === 'date_sequence' ? `${p.dateExpr} · ${p.seq?.start}~${p.seq?.end} / ${p.seq?.step}` : p.seq ? `${p.seq.start}~${p.seq.end} / ${p.seq.step}` : '—' }}
             </td>
+            <td>{{ p.defaultValue || '—' }}</td>
             <td>{{ p.usedBy ?? 0 }}</td>
             <td>{{ p.owner || '—' }}</td>
             <td>
               <el-button link type="primary" size="small" @click="openDetail(p)">详情</el-button>
+              <el-button link type="primary" size="small" @click="openEdit(p)">编辑</el-button>
             </td>
           </tr>
         </tbody>
@@ -139,15 +154,18 @@ async function onAddValues() {
 
       <dl class="rc-kv">
         <dt>被引用</dt><dd>{{ drawer.param.usedBy ?? 0 }} 个配置</dd>
+        <dt>分组</dt><dd>{{ drawer.param.group || '—' }}</dd>
+        <dt>默认值</dt><dd>{{ drawer.param.defaultValue || '—' }}</dd>
         <dt>责任人</dt><dd>{{ drawer.param.owner || '—' }}</dd>
         <dt>更新时间</dt><dd>{{ drawer.param.updatedAt || '—' }}</dd>
       </dl>
 
       <div class="pt-section">定义</div>
-      <div v-if="drawer.param.kind === 'list'" class="pt-tags">
+      <div v-if="drawer.param.kind === 'list' || drawer.param.kind === 'database'" class="pt-tags">
         <el-tag v-for="v in drawer.param.values || []" :key="v" size="small" effect="plain">{{ v }}</el-tag>
       </div>
       <div v-else-if="drawer.param.kind === 'date'" class="rc-code-box">{{ drawer.param.dateExpr }}</div>
+      <div v-else-if="drawer.param.kind === 'date_sequence'" class="rc-code-box">{{ drawer.param.dateExpr }} · {{ drawer.param.seq?.start }}~{{ drawer.param.seq?.end }} / {{ drawer.param.seq?.step }}</div>
       <div v-else-if="drawer.param.seq" class="rc-code-box">start={{ drawer.param.seq.start }} end={{ drawer.param.seq.end }} step={{ drawer.param.seq.step }}</div>
 
       <div class="pt-section">生成值预览</div>
@@ -161,6 +179,7 @@ async function onAddValues() {
       </div>
     </div>
   </el-drawer>
+  <ParamEditorDrawer v-model="editor.visible" :param="editor.param" @saved="onParamSaved" />
 </template>
 
 <style scoped>

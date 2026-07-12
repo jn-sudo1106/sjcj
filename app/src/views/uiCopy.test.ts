@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import sourceTab from './CollectAssets/SourceTab.vue?raw'
+import collectAssetsIndex from './CollectAssets/index.vue?raw'
 import flowCanvas from './FlowCanvas/index.vue?raw'
 import nodeInspector from './FlowCanvas/NodeInspector.vue?raw'
+import canvasHeader from './FlowCanvas/CanvasHeader.vue?raw'
+import sourceBasicForm from './FlowCanvas/SourceBasicForm.vue?raw'
+import collectorSettings from './FlowCanvas/CollectorSettings.vue?raw'
 import resultView from './FlowCanvas/ResultView.vue?raw'
+import siteSourceSwitcher from './FlowCanvas/SiteSourceSwitcher.vue?raw'
 import tableDialog from './FlowCanvas/TableEditDialog.vue?raw'
 
 describe('最新方案 UI 入口收口', () => {
@@ -53,7 +58,8 @@ describe('最新方案 UI 入口收口', () => {
     const configHeaderSection = nodeInspector.slice(configStart, nodeInspector.indexOf('<!-- 输入映射', configStart))
 
     expect(taskSection).toContain('<div class="rc-field"><label>输入表</label>')
-    expect(taskSection).toContain('<div class="rc-field"><label>输出表</label>')
+    // 0711 T5：输出表标签加了"固定 · xxx"能力提示，断言改为容错拼接文本而非固定死字符串
+    expect(taskSection).toContain('<div class="rc-field"><label>输出表{{ nodeCapability?.outputMode')
     expect(taskSection).toContain('@change="onOutputTableChange"')
     expect(taskSection).not.toContain('openEditTable')
     expect(taskSection).not.toContain('openNewTable')
@@ -102,16 +108,24 @@ describe('最新方案 UI 入口收口', () => {
     expect(resultView).toContain('templateLayout.value = buildHorizontalLayout(seed.main, seed.branches, seed.configs)')
   })
 
-  it('新建采集分类使用下拉并有默认分类', () => {
-    expect(flowCanvas).toContain('GATE_CATEGORY_OPTIONS')
-    expect(flowCanvas).toContain("category: GATE_CATEGORY_OPTIONS[0].value")
-    expect(flowCanvas).toContain('<select class="rc-select" v-model="gateSite.category"')
-    expect(flowCanvas).not.toContain('<div class="rc-field"><label>分类</label><input class="rc-input" v-model="gateSite.category"')
+  it('新建采集分类使用可搜索的目录树', () => {
+    expect(flowCanvas).toContain('CategoryTreePicker')
+    expect(flowCanvas).toContain('<CategoryTreePicker v-model="gateCategory" />')
+    expect(flowCanvas).not.toContain('GATE_CATEGORY_OPTIONS')
+    expect(flowCanvas).not.toContain('<select class="rc-select" v-model="gateSite.category"')
   })
 
-  it('新建采集的子源默认设置更多配置默认收起', () => {
-    expect(flowCanvas).toContain('<SourceBasicForm v-model="gateSourceDefaults" :show-identity="false" />')
-    expect(flowCanvas).not.toContain(':default-open="true"')
+  it('新建采集删除标签字段和子源默认设置整块', () => {
+    expect(flowCanvas).not.toContain('gateSourceDefaults')
+    expect(flowCanvas).not.toContain('gateTagsInput')
+    expect(flowCanvas).not.toContain('<SourceBasicForm')
+    expect(flowCanvas).not.toContain('<div class="rc-field"><label>标签</label>')
+  })
+
+  it('新建采集首个子源名称跟随网站名称，手动改过后停止跟随', () => {
+    expect(flowCanvas).toContain('firstSourceNameTouched')
+    expect(flowCanvas).toContain("if (!firstSourceNameTouched.value && gateRows.value[0]) gateRows.value[0].name = name")
+    expect(flowCanvas).toContain('@input="i === 0 && (firstSourceNameTouched = true)"')
   })
 
   it('采集节点配置不再展示输入映射和输入参数', () => {
@@ -120,11 +134,52 @@ describe('最新方案 UI 入口收口', () => {
     expect(nodeInspector).not.toContain('采集/非采集节点统一显示')
   })
 
-  it('节点配置支持 APP 入口字段与任务多参数', () => {
+  it('节点配置支持 APP 入口字段；任务参数/拼接逻辑已瘦身移除（0710：无后端 Step 契约字段，与 URL 规则重叠）', () => {
     expect(nodeInspector).toContain('APP 包名')
     expect(nodeInspector).toContain('collectUrlLabel')
-    expect(nodeInspector).toContain('任务参数')
-    expect(nodeInspector).toContain('添加任务参数')
+    expect(nodeInspector).not.toContain('任务参数')
+    expect(nodeInspector).not.toContain('任务拼接逻辑')
+  })
+
+  it('子源信息只从顶部编辑，定时策略收在首节点运行设置', () => {
+    const taskStart = nodeInspector.indexOf("<template v-else-if=\"tab === 'task'\">")
+    const tableStart = nodeInspector.indexOf("<template v-else-if=\"tab === 'table'\">")
+    const taskSection = nodeInspector.slice(taskStart, tableStart)
+
+    expect(nodeInspector).not.toContain('子源信息（各节点共享）')
+    expect(canvasHeader).toContain('<button class="rc-btn" type="button" @click="openEdit">编辑</button>')
+    expect(sourceBasicForm).not.toContain('定时策略（仅作用于首节点）')
+    expect(sourceBasicForm).not.toContain('选用配置 / 定时')
+    expect(taskSection).not.toContain('<TaskScheduleSettings')
+    expect(collectorSettings).toContain('<TaskScheduleSettings v-if="showSchedule"')
+  })
+
+  it('采集资产页顶部批量导入/批量操作入口收口，批量导入迁进网站详情子源侧栏（0711 R12）', () => {
+    // 顶部动作注册只留「新建采集」
+    expect(sourceTab).not.toContain("ui.registerAction('批量导入'")
+    expect(sourceTab).not.toContain("ui.registerAction('批量操作'")
+    expect(sourceTab).toContain("ui.registerAction('新建采集'")
+    expect(sourceTab).not.toContain('<el-dialog v-model="importDlg.visible"')
+    expect(sourceTab).not.toContain('importDlg')
+    expect(sourceTab).not.toContain('批量导入</button>')
+
+    // 表格勾选后的上下文批量工具条继续保留（发抓取/操作类/监控类/批量删除）
+    expect(sourceTab).toContain('class="ca-batchbar"')
+    expect(sourceTab).toContain('@click="onBatchSnatch"')
+    expect(sourceTab).toContain('@click="onBatchDelete"')
+
+    // 批量导入迁进网站详情子源侧栏，siteId 已定，不再需要目标网站下拉
+    expect(siteSourceSwitcher).toContain('siteApi.siteImportSources(props.siteId, importDlg.lines)')
+    expect(siteSourceSwitcher).toContain('批量导入')
+
+    // 一级「参数列表」页签保留（0711-B 拍板：撤销原稿删除），ParamTab 不删
+    expect(collectAssetsIndex).toContain("import ParamTab from './ParamTab.vue'")
+    expect(collectAssetsIndex).toContain("{ key: 'param', label: '参数列表' }")
+  })
+
+  it('采集资产页不重复渲染网站工作区页签', () => {
+    expect(collectAssetsIndex).not.toContain("import SourceTabsBar from '../FlowCanvas/SourceTabsBar.vue'")
+    expect(collectAssetsIndex).not.toContain('<SourceTabsBar')
   })
 
   it('规则节点使用规则编排面板', () => {

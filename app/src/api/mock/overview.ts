@@ -3,10 +3,15 @@ import type {
   OverviewSlice,
   OverviewTopSource,
   OverviewException,
+  OverviewPanorama,
+  OverviewPanoramaNode,
   TrendPoint,
   Source,
+  SourceCategory,
+  Site,
 } from '../types'
 import { mockSourcePaged, mockSourceStats, mockSourceCategories } from './sources'
+import { mockSitePaged } from './sites'
 import { mockConfigPaged } from './configs'
 import { mockEntryPaged } from './entries'
 import { mockParamPaged } from './params'
@@ -18,6 +23,46 @@ import { mockAlarms } from './monitor'
 
 function allSources(): Source[] {
   return mockSourcePaged({ size: 999 }).list
+}
+
+function panoramaNode(id: string, label: string, sites: Site[]): OverviewPanoramaNode {
+  return {
+    id,
+    label,
+    total: sites.length,
+    sourceCount: sites.reduce((sum, site) => sum + site.sourceCount, 0),
+    error: sites.filter((site) => site.errorCount > 0).length,
+  }
+}
+
+export function buildWebsitePanorama(sites: Site[], categories: SourceCategory[]): OverviewPanorama {
+  const branches = categories.map((category) => {
+    const branchSites = sites.filter((site) => site.categoryPath?.startsWith(category.id))
+    const children = (category.children ?? []).map((child) =>
+      panoramaNode(child.id, child.name, branchSites.filter((site) => site.categoryPath?.startsWith(child.id))),
+    )
+    const uncategorized = branchSites.filter(
+      (site) => !(category.children ?? []).some((child) => site.categoryPath?.startsWith(child.id)),
+    )
+    if (uncategorized.length) {
+      children.push(panoramaNode(`${category.id}/__unclassified__`, '未细分', uncategorized))
+    }
+    return {
+      ...panoramaNode(category.id, category.name, branchSites),
+      children,
+    }
+  })
+  const unclassified = sites.filter(
+    (site) => !categories.some((category) => site.categoryPath?.startsWith(category.id)),
+  ).length
+
+  return {
+    total: sites.length,
+    sourceCount: sites.reduce((sum, site) => sum + site.sourceCount, 0),
+    error: sites.filter((site) => site.errorCount > 0).length,
+    unclassified,
+    branches,
+  }
 }
 
 function sliceByCategory(): OverviewSlice[] {
@@ -91,6 +136,8 @@ function nowText(): string {
 
 export function mockOverviewSummary(): OverviewSummary {
   const sources = allSources()
+  const sites = mockSitePaged({ size: 999 }).list
+  const categories = mockSourceCategories()
   const srcStats = mockSourceStats()
   const configs = mockConfigPaged({ size: 999 }).total
   const tables = mockEntryPaged({ size: 999 }).total
@@ -117,6 +164,7 @@ export function mockOverviewSummary(): OverviewSummary {
       newAssets7,
     },
     ecosystem: { sources: srcStats.total, configs, tables, params },
+    panorama: buildWebsitePanorama(sites, categories),
     byCategory: sliceByCategory(),
     byCycle: sliceByCycle(sources),
     byState: sliceByState(sources),

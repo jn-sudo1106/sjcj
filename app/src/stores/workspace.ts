@@ -13,8 +13,10 @@ export interface SourceTab {
 }
 
 export interface SourceTabSnapshot {
-  /** 源详情三视图（0706 Phase4）：流程（默认）/ 数据 / 任务（=节点粒度运行记录，0707 澄清不单设"运行"） */
-  view?: 'flow' | 'data' | 'task'
+  /** 源详情视图（0706 Phase4；0711 R11 加文件）：流程（默认）/ 数据 / 文件（仅子源态）/ 任务（仅网站态） */
+  view?: 'flow' | 'data' | 'file' | 'task'
+  /** 网站页签内当前停留的编排对象（0710 会议 B3）：'site' = 统一流程模板，否则为子源 sourceId；激活页签时恢复 */
+  activeKey?: string
   selectedNodeId?: string
   filters?: { dataId: string; parentId: string; state: string; sql: string; sourceFilter?: string }
   page?: number
@@ -50,9 +52,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const tabs = ref<SourceTab[]>(persisted.tabs)
   const activeSourceId = ref<string>(persisted.activeSourceId)
   const snapshots = reactive<Record<string, SourceTabSnapshot>>(persisted.snapshots)
-  // 分屏对比（0701 问题三 · 方案 C）：非空 = 正在把 activeSourceId（左栏）与该 sourceId（右栏）并排对比。
+  // 分屏对比（0701 问题三 · 方案 C；0710 会议 B4 与页签解耦）：compareLeftId（左栏）/ compareSourceId（右栏）
+  // 都是真实 sourceId，不要求对应已打开的页签——右栏按 id 直接加载，入口在子源侧栏（同站 ⇔ + 全局选择器）。
   // 属临时查看态，不做 sessionStorage 持久化（刷新即退出对比，回到单栏）。
   const compareSourceId = ref<string>('')
+  const compareLeftId = ref<string>('')
 
   let persistTimer: ReturnType<typeof setTimeout> | null = null
   watch(
@@ -94,23 +98,27 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (activeSourceId.value === sourceId) {
       const next = tabs.value[idx] ?? tabs.value[idx - 1]
       activeSourceId.value = next?.sourceId ?? ''
-    }
-    // 对比态失效则自动退出：右栏源被关闭，或左右两栏因页签变动指向了同一个源
-    if (compareSourceId.value && (compareSourceId.value === activeSourceId.value || !tabs.value.some((t) => t.sourceId === compareSourceId.value))) {
-      compareSourceId.value = ''
+      // 关闭活动页签即离开当前对比上下文（0710 会议 B4：对比与页签解耦，仅此场景联动退出）
+      exitCompare()
     }
     return activeSourceId.value
   }
 
-  /** 进入分屏对比：与 sourceId 必须是不同的、已打开的页签；成功返回 true */
-  function enterCompare(sourceId: string): boolean {
-    if (!sourceId || sourceId === activeSourceId.value) return false
-    if (!tabs.value.some((t) => t.sourceId === sourceId)) return false
-    compareSourceId.value = sourceId
+  /**
+   * 进入分屏对比（0710 会议 B4）：left/right 均为真实 sourceId（不能是 `site:` 伪 id），不要求已打开页签。
+   * rightId 必填；leftId 缺省沿用当前 compareLeftId（对比中切换右栏的场景）。成功返回 true。
+   */
+  function enterCompare(rightId: string, leftId?: string): boolean {
+    const left = leftId ?? compareLeftId.value
+    if (!rightId || !left || rightId === left) return false
+    if (rightId.startsWith('site:') || left.startsWith('site:')) return false
+    compareLeftId.value = left
+    compareSourceId.value = rightId
     return true
   }
   function exitCompare() {
     compareSourceId.value = ''
+    compareLeftId.value = ''
   }
 
   function saveSnapshot(sourceId: string, patch: SourceTabSnapshot) {
@@ -122,5 +130,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return snapshots[sourceId]
   }
 
-  return { tabs, activeSourceId, snapshots, compareSourceId, open, activate, close, saveSnapshot, snapshotOf, enterCompare, exitCompare }
+  return { tabs, activeSourceId, snapshots, compareSourceId, compareLeftId, open, activate, close, saveSnapshot, snapshotOf, enterCompare, exitCompare }
 })

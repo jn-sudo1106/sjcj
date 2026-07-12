@@ -5,7 +5,8 @@ import { mockFlowLoad, mockFlowSave } from './flows'
 // 网站—子源父子模型 mock（0707 优化·Phase2）：网站 = 统一流程模板 + 批量工具（不实际运行），
 // 子源（语言/变体）= 真正的采集运行实体。网站统一流程复用既有 flow/save·load 契约，id = `site:${siteId}`。
 
-const SITE_SEEDS: Omit<Site, 'sourceCount' | 'errorCount'>[] = [
+// export 给 flows.ts 的 mockFlowLoad：种子演示网站查无模板存档时兜底默认骨架（0710，与用户新建网站区分）
+export const SITE_SEEDS: Omit<Site, 'sourceCount' | 'errorCount'>[] = [
   { siteId: 'site-zfb', name: '支付宝评论采集', category: '基金类', categoryPath: '/基金类/支付宝评论', owner: 'dev_zhonghe', tags: ['基金', '支付宝'], updatedAt: '2026-06-18 17:42' },
   { siteId: 'site-ttfund', name: '天天基金采集', category: '基金类', categoryPath: '/基金类/天天基金', owner: 'dev_liang', tags: ['基金', '天天基金'], updatedAt: '2026-06-19 06:33' },
   { siteId: 'site-notice', name: '股票公告采集', category: '股票类', categoryPath: '/股票类/公告', owner: 'dev_zhonghe', tags: ['公告'], updatedAt: '2026-06-19 07:01' },
@@ -107,6 +108,10 @@ function matches(site: Site, p?: Record<string, unknown>): boolean {
 
 export function mockSitePaged(params?: Record<string, unknown>): Paged<Site> {
   const filtered = allSites().map(withAggregate).filter((s) => matches(s, params))
+  // 排序在分页前做（0710：原来前端对分页后的单页结果排序，跨页顺序是错的）；缺省按最近修改倒序
+  const sort = String(params?.sort ?? 'updated')
+  if (sort === 'name') filtered.sort((a, b) => a.name.localeCompare(b.name, 'zh'))
+  else filtered.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
   const page = Number(params?.page ?? 1)
   const size = Number(params?.size ?? 20)
   const start = (page - 1) * size
@@ -138,13 +143,16 @@ export function mockSiteSourcesOf(params?: Record<string, unknown>): Source[] {
   return sourcesOfSite(String(params?.siteId ?? ''))
 }
 
-// 网站下新增子源：默认继承网站统一流程（若已存在），写法与 source/createSource 一致，仅补 siteId 归属。
+// 网站下新增子源：inherit=true（缺省）时继承网站统一流程（若已存在），写法与 source/createSource 一致，仅补 siteId 归属。
+// inherit=false（0710 会议 B5）：只建名称/URL，流程从空白开始；该子源从未跟随过模板，不算 detached，
+// 后续网站保存的同步对它照常生效。
 export function mockSiteSourceAdd(params?: Record<string, unknown>): { ok: boolean; message?: string; sourceId?: string } {
   const siteId = String(params?.siteId ?? '')
   const source = params?.source as Source | undefined
+  const inherit = params?.inherit !== false
   if (!siteId || !source) return { ok: false, message: '缺少网站或子源信息' }
   const res = mockSourceCreate({ source: { ...source, siteId } })
-  if (res.ok && res.sourceId) {
+  if (res.ok && res.sourceId && inherit) {
     const siteFlow = mockFlowLoad({ id: `site:${siteId}` })
     if (siteFlow) {
       mockFlowSave({ def: { ...siteFlow, id: res.sourceId, name: source.name || siteFlow.name } })
@@ -153,6 +161,40 @@ export function mockSiteSourceAdd(params?: Record<string, unknown>): { ok: boole
     }
   }
   return res
+}
+
+// 按网站批量导入子源（0710 会议 A5）：一行一条「名称;URL」（URL 可省略），空行/缺名称行跳过；
+// 复用 mockSiteSourceAdd 走同一条创建 + 模板继承路径，不另起炉灶。
+export function mockSiteImportSources(params?: Record<string, unknown>): { ok: boolean; message?: string; added?: number; skipped?: number } {
+  const siteId = String(params?.siteId ?? '')
+  const lines = String(params?.lines ?? '')
+  if (!siteId) return { ok: false, message: '缺少目标网站' }
+  if (!allSites().some((s) => s.siteId === siteId)) return { ok: false, message: `网站「${siteId}」不存在` }
+  const rows = lines.split(/\r?\n/).map((l) => l.trim())
+  let added = 0
+  let skipped = 0
+  const stamp = Date.now().toString(36)
+  rows.forEach((row, i) => {
+    if (!row) return
+    const [name, url = ''] = row.split(/[;；]/).map((v) => v.trim())
+    if (!name) {
+      skipped++
+      return
+    }
+    const res = mockSiteSourceAdd({
+      siteId,
+      source: {
+        sourceId: `${siteId}-imp-${stamp}-${i + 1}`,
+        name, url, configId: '', mainTable: '',
+        owner: allSites().find((s) => s.siteId === siteId)?.owner || 'admin',
+        state: 'C',
+      },
+    })
+    if (res.ok) added++
+    else skipped++
+  })
+  if (!added) return { ok: false, message: '没有可导入的行，请检查「名称;URL」格式' }
+  return { ok: true, added, skipped, message: `已导入 ${added} 条子源${skipped ? `、跳过 ${skipped} 条` : ''}（本地演示）` }
 }
 
 // 网站下移除子源（危险端点）：仅从通用 SOURCES 摘除（语言演示数据是只读种子，不支持移除）。

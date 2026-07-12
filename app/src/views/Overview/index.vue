@@ -48,6 +48,10 @@ function goCollect(state?: string) {
   router.push({ path: '/collect', query: state ? { state } : {} })
 }
 
+function goCollectCategory(category: string) {
+  router.push({ path: '/collect', query: category ? { category } : {} })
+}
+
 function stateMeta(s: string) {
   if (s === 'D') return { cls: 'muted', text: '已停用' }
   if (s === 'C') return { cls: 'ok', text: '在线' }
@@ -70,7 +74,7 @@ interface Kpi {
 }
 
 const activeSources = computed(() =>
-  (data.value?.byState ?? []).filter((s) => s.label !== '已停用').reduce((a, b) => a + b.value, 0),
+  (data.value?.byState ?? []).filter((slice) => slice.label !== '已停用').reduce((sum, slice) => sum + slice.value, 0),
 )
 
 const latestTaskCount = computed(() => trend.value.at(-1)?.snatch ?? 0)
@@ -79,7 +83,7 @@ const displayKpis = computed<Kpi[]>(() => {
   if (!k) return []
   return [
     { key: 'sources', label: '采集资产总数', value: k.sources, numeric: true, delta: '3.2%', trend: 'up', icon: Box, tone: 'primary', to: () => goCollect() },
-    { key: 'active', label: '在线采集源', value: activeSources.value, numeric: true, delta: '5.6%', trend: 'up', icon: CircleCheck, tone: 'ok', to: () => goCollect() },
+    { key: 'active', label: '启用采集源', value: activeSources.value, numeric: true, delta: '5.6%', trend: 'up', icon: CircleCheck, tone: 'ok', to: () => goCollect() },
     { key: 'today', label: '今日采集任务', value: latestTaskCount.value, numeric: true, delta: '12.7%', trend: 'up', icon: Document, tone: 'primary', to: () => router.push('/runs') },
     { key: 'rate', label: '成功率', value: k.successRate, numeric: false, delta: '0.42%', trend: 'up', icon: CircleCheck, tone: 'primary' },
     { key: 'alarms', label: '告警数量', value: k.alarms, numeric: true, unit: '条', delta: '20.0%', trend: 'down', icon: Bell, tone: 'err', to: () => router.push('/tools') },
@@ -174,9 +178,14 @@ onUnmounted(() => ui.clearActions())
     <div class="ov-top-grid">
       <div class="rc-card ov-eco-card">
         <div class="rc-card-head">
-          <div class="rc-card-title">采集资产全景</div>
+          <div class="rc-card-title">采集网站全景</div>
+          <div class="ov-eco-meta">
+            <span class="website"><i />{{ data.panorama.total }} 网站</span>
+            <span class="error"><i />{{ data.panorama.error }} 异常</span>
+            <button class="ov-more" type="button" @click="goCollect()">查看全部 ›</button>
+          </div>
         </div>
-        <AssetFlow v-if="data" :ecosystem="data.ecosystem" />
+        <AssetFlow v-if="data" :panorama="data.panorama" @select="goCollectCategory" />
       </div>
 
       <div class="rc-card">
@@ -515,6 +524,40 @@ onUnmounted(() => ui.clearActions())
 
 .ov-eco-card {
   min-height: 274px;
+}
+
+.ov-eco-meta,
+.ov-eco-meta span {
+  display: inline-flex;
+  align-items: center;
+}
+
+.ov-eco-meta {
+  gap: 12px;
+  color: #64748b;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.ov-eco-meta span {
+  gap: 5px;
+  font-weight: 700;
+}
+
+.ov-eco-meta i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.ov-eco-meta .website {
+  color: #2563eb;
+}
+
+.ov-eco-meta .error {
+  color: #dc2626;
 }
 
 .ov-seg {

@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { sourceApi, type Source } from '../../api'
 import SourceBasicForm from './SourceBasicForm.vue'
+import { PRESET_INTENTS } from './flowModel'
 
 const flow = useFlowStore()
 const route = useRoute()
@@ -12,7 +13,7 @@ const router = useRouter()
 
 const src = computed(() => flow.sourceCtx)
 const site = computed(() => flow.siteCtx)
-const view = computed(() => (route.query.view === 'data' ? 'data' : route.query.view === 'task' ? 'task' : 'flow'))
+const view = computed(() => (route.query.view === 'data' ? 'data' : route.query.view === 'task' ? 'task' : route.query.view === 'file' ? 'file' : 'flow'))
 // 网站态摘要行（0707 优化·Phase4）：网站是流程模板，没有 state/URL 等运行态字段，展示与源不同的一组元数据
 const siteMetaLine = computed(() => {
   const s = site.value
@@ -56,7 +57,7 @@ const metaLine = computed(() => {
 function backToList() {
   router.push('/collect')
 }
-function switchView(target: 'flow' | 'data' | 'task') {
+function switchView(target: 'flow' | 'data' | 'task' | 'file') {
   if (view.value === target) return
   const query = { ...route.query }
   if (target === 'flow') delete query.view
@@ -64,7 +65,8 @@ function switchView(target: 'flow' | 'data' | 'task') {
   router.push({ path: '/canvas', query })
 }
 
-// ---- 源信息编辑抽屉（0706 Phase4·调整6）：摘要头是唯一源级配置编辑入口，抽屉复用 SourceBasicForm ----
+// ---- 子源信息编辑抽屉（0706 Phase4·调整6，0710 随网站-子源模型改叫"子源信息"）：
+// 编辑收口在画布顶部摘要头，避免在每个节点配置中重复展示子源字段。
 const editOpen = ref(false)
 const editDraft = ref<Source | null>(null)
 function openEdit() {
@@ -77,12 +79,12 @@ async function saveEdit() {
   const d = editDraft.value
   if (!d) return
   if (!d.name || !d.category) {
-    ElMessage.warning('源名称 / 分类为必填')
+    ElMessage.warning('子源名称 / 分类为必填')
     return
   }
   try {
     // updateSource 属危险端点，沿用二次确认约定
-    await ElMessageBox.confirm(`将保存源「${d.name}」的基础信息，是否继续？`, '保存源信息', {
+    await ElMessageBox.confirm(`将保存子源「${d.name}」的基础信息，是否继续？`, '保存子源信息', {
       type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消',
     })
   } catch {
@@ -93,23 +95,18 @@ async function saveEdit() {
     ElMessage.warning(res?.message || '保存失败，请重试')
     return
   }
-  // 同步回画布上下文：摘要头（sourceCtx）与流程序列化层（sourceCfg）都吃到最新值
-  if (flow.sourceCtx) Object.assign(flow.sourceCtx, d)
+  // 同步回画布上下文：摘要头（sourceCtx）与流程序列化层（sourceCfg）都吃到最新值。
+  // 统一走 store action（0712 review m15）：不允许组件直接 Object.assign(flow.sourceCtx, ...) 绕过 action 层。
+  flow.patchSourceCtx(d)
   flow.patchSource(d)
   editOpen.value = false
-  ElMessage.success(res?.message || '源信息已保存')
+  ElMessage.success(res?.message || '子源信息已保存')
 }
 async function srcSnatch() {
   const s = src.value
   if (!s) return
   const res = await sourceApi.sendSnatch([s.sourceId])
   ElMessage.success(res?.message || '已发起抓取（演示）')
-}
-async function srcCopy() {
-  const s = src.value
-  if (!s) return
-  const res = await sourceApi.copySource(s.sourceId)
-  ElMessage.success(res?.message || '已复制派生（演示）')
 }
 async function srcToggle() {
   const s = src.value
@@ -128,6 +125,22 @@ async function srcToggle() {
   ElMessage.success(res?.message || `已${willDisable ? '停用' : '启用'}（演示）`)
   s.disabled = willDisable
 }
+
+function onSwitchFlow(command: string) {
+  if (!command) return
+  if (command === '__new_blank__') {
+    flow.newFlow('blank')
+    ElMessage.success('已新建空白流程')
+    return
+  }
+  const preset = PRESET_INTENTS.find((p) => p.key === command)
+  if (preset) {
+    flow.load(preset.build())
+    ElMessage.success(`已应用模板：${preset.label}`)
+  } else {
+    ElMessage.info(`模拟加载：${command}`)
+  }
+}
 </script>
 
 <template>
@@ -136,7 +149,10 @@ async function srcToggle() {
     <div class="ch-switcher">
       <button class="ch-seg" :class="{ on: view === 'flow' }" type="button" @click="switchView('flow')">流程视图</button>
       <button class="ch-seg" :class="{ on: view === 'data' }" type="button" @click="switchView('data')">数据视图</button>
-      <button class="ch-seg" :class="{ on: view === 'task' }" type="button" @click="switchView('task')">任务视图</button>
+      <!-- 文件视图只挂子源层（0711 R11）：用户口径"文件视图只有源才有"，网站态不提供入口 -->
+      <button v-if="src" class="ch-seg" :class="{ on: view === 'file' }" type="button" @click="switchView('file')">文件视图</button>
+      <!-- 任务视图只挂网站层（0710 会议 C2）：无源概念、跟队列绑定，子源态不提供入口 -->
+      <button v-if="!src" class="ch-seg" :class="{ on: view === 'task' }" type="button" @click="switchView('task')">任务视图</button>
     </div>
 
     <template v-if="src">
@@ -150,12 +166,20 @@ async function srcToggle() {
       </div>
       <div class="ch-actions">
         <button class="rc-btn" type="button" @click="openEdit">编辑</button>
+        <el-dropdown trigger="click" @command="onSwitchFlow">
+          <button class="rc-btn" style="margin-right: 8px;" type="button">
+            切换流程 ▾
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-for="p in PRESET_INTENTS" :key="p.key" :command="p.key">{{ p.label }}</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <button class="rc-btn" type="button" @click="srcSnatch">发起抓取</button>
-        <button class="rc-btn" type="button" @click="srcCopy">复制派生</button>
         <button class="rc-btn" :class="{ danger: !src.disabled }" type="button" @click="srcToggle">
           {{ src.disabled ? '启用' : '停用' }}
         </button>
-        <button class="rc-btn" type="button" @click="router.push('/runs')">运行记录</button>
       </div>
     </template>
     <template v-else-if="site">
@@ -167,12 +191,22 @@ async function srcToggle() {
         <div class="ch-sub">{{ siteMetaLine }}</div>
       </div>
       <div class="ch-actions">
+        <el-dropdown trigger="click" @command="onSwitchFlow">
+          <button class="rc-btn" style="margin-right: 12px;" type="button">
+            切换流程 ▾
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-for="p in PRESET_INTENTS" :key="p.key" :command="p.key">{{ p.label }}</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <span class="ch-site-hint">网站不实际运行；保存后可选择同步覆盖到子源</span>
       </div>
     </template>
 
-    <!-- 源信息编辑抽屉（0706 Phase4）：源级配置的唯一编辑入口，任意视图下经摘要头可达 -->
-    <el-drawer v-if="src" v-model="editOpen" title="编辑源信息" size="480px" :append-to-body="true">
+    <!-- 子源信息编辑抽屉（0706 Phase4；0710 改名）：编辑入口收口在摘要头。 -->
+    <el-drawer v-if="src" v-model="editOpen" title="编辑子源信息" size="480px" :append-to-body="true">
       <SourceBasicForm v-if="editDraft" v-model="editDraft" :source-id-editable="false" />
       <template #footer>
         <div class="ch-drawer-foot">

@@ -42,6 +42,7 @@ import {
   mockSiteCreate,
   mockSiteSourcesOf,
   mockSiteSourceAdd,
+  mockSiteImportSources,
   mockSiteSourceRemove,
   mockSiteSyncFlow,
   mockSiteQueueStats,
@@ -49,7 +50,8 @@ import {
 } from './sites'
 import { mockConfigPaged, mockConfigDetail } from './configs'
 import { mockEntryPaged, mockEntryDetail, mockSaveEntryType } from './entries'
-import { mockParamPaged, mockParamDetail, mockGenValues } from './params'
+import { mockParamPaged, mockParamDetail, mockParamCreate, mockParamUpdate, mockGenValues } from './params'
+import { mockFilePaged, mockFileStats } from './files'
 
 // mock 注册表：key = 真实 /v1 端点路径，value = 处理函数。
 // 真接入时这张表整体被 http 请求取代，端点字符串不变。
@@ -103,8 +105,13 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'config/paramPaged': mockParamPaged,
   'config/paramDetail': mockParamDetail,
   'config/genValues': mockGenValues,
+  'config/param-add': mockParamCreate,
   'config/addParamValues': mockAck,
-  'config/updateParam': mockAck,
+  'config/updateParam': mockParamUpdate,
+
+  // 原始文件（0711 R11）
+  'file/filePaged': mockFilePaged,
+  'file/fileStats': mockFileStats,
 
   // 规则资产（M3）
   'rule/groupTree': mockRuleGroups,
@@ -166,6 +173,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'site/createSite': mockSiteCreate,
   'site/sourcesOfSite': mockSiteSourcesOf,
   'site/addSource': mockSiteSourceAdd,
+  'site/importSources': mockSiteImportSources,
   'site/removeSource': mockSiteSourceRemove,
   'site/syncFlow': mockSiteSyncFlow,
   'site/queueStats': mockSiteQueueStats,

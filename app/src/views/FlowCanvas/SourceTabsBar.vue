@@ -15,28 +15,21 @@ const route = useRoute()
 // 当前是否停在源列表页（页签条只挂在 /collect 与 /canvas 源详情两处）
 const onList = computed(() => !route.path.startsWith('/canvas'))
 
-// 网站伪页签（0707 优化·Phase4）：页签条不改数据结构，站直接复用 sourceId 字段存 `site:${siteId}`，
-// 靠这个前缀区分——网站模板不支持分屏对比（右栏加载逻辑按真实源 id 查，站没有对应数据）。
+// 网站页签（0710 会议 B3：页签条收窄为网站粒度）：页签条不改数据结构，站复用 sourceId 字段存 `site:${siteId}`，
+// 靠前缀区分；无 siteId 的历史草稿源仍是独立源页签。对比入口已迁到子源侧栏（B4），页签条只留"对比中"指示。
 function isSiteTab(id: string): boolean {
   return id.startsWith('site:')
 }
 
-// 分屏对比入口（0701 问题三 · 方案 C）：只在源详情且已开 ≥2 个可参与对比的页签时可用
-const canCompare = computed(() => !onList.value && !isSiteTab(ws.activeSourceId) && compareTargets.value.length > 0)
-const compareTargets = computed(() => ws.tabs.filter((t) => t.sourceId !== ws.activeSourceId && !isSiteTab(t.sourceId)))
-function onCompareSelect(e: Event) {
-  const v = (e.target as HTMLSelectElement).value
-  if (v) ws.enterCompare(v)
-  ;(e.target as HTMLSelectElement).value = ''
-}
-
 function navTo(key: string) {
-  if (isSiteTab(key)) {
-    router.push({ path: '/canvas', query: { siteId: key.slice(5) } })
-    return
-  }
   const snap = ws.snapshotOf(key)
   const view = snap?.view === 'data' || snap?.view === 'task' ? { view: snap.view } : {}
+  if (isSiteTab(key)) {
+    // 恢复页签内上次停留的编排对象：子源 → ?sourceId，模板/未知 → ?siteId
+    const sub = snap?.activeKey && snap.activeKey !== 'site' ? snap.activeKey : ''
+    router.push({ path: '/canvas', query: sub ? { sourceId: sub, ...view } : { siteId: key.slice(5), ...view } })
+    return
+  }
   router.push({ path: '/canvas', query: { sourceId: key, ...view } })
 }
 
@@ -100,10 +93,10 @@ async function onCloseAll() {
       type="button"
       role="tab"
       :aria-selected="onList"
-      title="返回源列表"
+      title="返回网站列表"
       @click="goList"
     >
-      <span class="rc-src-tab-name">源列表</span>
+      <span class="rc-src-tab-name">网站列表</span>
     </button>
     <button
       v-for="t in ws.tabs"
@@ -125,10 +118,6 @@ async function onCloseAll() {
     <span v-if="ws.compareSourceId" class="rc-src-compare-on">
       对比中 · <button type="button" class="rc-src-compare-exit" @click="ws.exitCompare()">退出</button>
     </span>
-    <select v-else-if="canCompare" class="rc-src-compare-select" value="" title="与当前页并排对比" @change="onCompareSelect">
-      <option value="" disabled>⇔ 并排对比</option>
-      <option v-for="t in compareTargets" :key="t.sourceId" :value="t.sourceId">{{ t.name }}</option>
-    </select>
   </div>
 </template>
 
@@ -152,8 +141,6 @@ async function onCloseAll() {
 .rc-src-clear { flex: none; border: 0; background: transparent; color: var(--rc-muted); font-size: 11px; cursor: pointer; padding: 2px 4px; border-radius: 5px; }
 .rc-src-clear:hover { color: var(--rc-error); background: var(--rc-error-bg, #fee2e2); }
 .rc-src-tabs-spacer { flex: 1; }
-.rc-src-compare-select { flex: none; height: 26px; padding: 0 8px; border: 1px solid var(--rc-border); border-radius: 6px; font-size: 11px; color: var(--rc-text-2); background: #fff; outline: none; cursor: pointer; }
-.rc-src-compare-select:hover { border-color: #bfdbfe; color: var(--rc-primary-ink); }
 .rc-src-compare-on { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--rc-primary-ink); }
 .rc-src-compare-exit { border: 0; background: transparent; color: var(--rc-primary); font-size: 11px; font-weight: 700; cursor: pointer; padding: 0; text-decoration: underline; }
 </style>

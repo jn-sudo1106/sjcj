@@ -23,6 +23,7 @@ import {
   makeDefaultRuleOrchestration,
   normalizeNodeConfigs,
   setTripleValue,
+  collectorCapabilityOf,
   TERMINALS,
   type NodeConfig,
   type CollectConfig,
@@ -35,6 +36,7 @@ import {
   type FlowBranchGroup,
   type FlowDef,
 } from '../views/FlowCanvas/flowModel'
+import { extractUrlParamIds, hasFragmentParams } from '../views/FlowCanvas/urlParams'
 import type { RuleOrchestration, Source, Site, Step } from '../api'
 
 export { TERMINALS }
@@ -85,7 +87,7 @@ export const useFlowStore = defineStore('flow', () => {
   // 要么是某个网站的统一流程模板（siteCtx），二者不会同时非空。网站模板不实际运行，没有 sourceCfg 概念。
   const siteCtx = ref<Site | null>(null)
   const selectedId = ref<string>('')
-  const activeTab = ref<string>('base')
+  const activeTab = ref<string>('config')
   let seq = 1
 
   // ---- 未保存改动标记（B3）：load() 时清零，其余编辑动作调用 touch() 置脏 ----
@@ -366,7 +368,9 @@ export const useFlowStore = defineStore('flow', () => {
     if (cfg.collectCfg) {
       cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[template] ?? cfg.collectCfg.snatchType
       cfg.collectCfg.url = ''
-      cfg.collectCfg.outputTable = ''
+      // 固定产物类型节点（0711 T2/T5：浏览器抓取/公众号抓取）的输出表由能力键决定，不随插入清空
+      const cap = collectorCapabilityOf(cfg)
+      cfg.collectCfg.outputTable = cap?.outputMode === 'fixed' ? (cap.fixedOutputTable ?? '') : ''
       cfg.collectCfg.inputParams = []
     }
     // 非采集数据类节点：默认继承上游节点的输出表（0701 问题二，Q1/Q2 口径：处理类步骤与上游同表）
@@ -417,7 +421,9 @@ export const useFlowStore = defineStore('flow', () => {
     if (cfg.collectCfg) {
       cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[template] ?? cfg.collectCfg.snatchType
       cfg.collectCfg.url = ''
-      cfg.collectCfg.outputTable = ''
+      // 固定产物类型节点（0711 T2/T5：浏览器抓取/公众号抓取）的输出表由能力键决定，不随插入清空
+      const cap = collectorCapabilityOf(cfg)
+      cfg.collectCfg.outputTable = cap?.outputMode === 'fixed' ? (cap.fixedOutputTable ?? '') : ''
       cfg.collectCfg.inputParams = []
     }
     if (!cfg.collectCfg && isDataNode(cfg) && !cfg.outputTable) {
@@ -499,6 +505,13 @@ export const useFlowStore = defineStore('flow', () => {
   }
 
   // ---- 节点字段编辑 ----
+  /** 节点启停（0710 会议 D5）：停用 = 数据流经此节点时跳过不处理；序列化随 NodeConfig.disabled 全量带出 */
+  function setNodeDisabled(id: string, disabled: boolean) {
+    const c = configs[id]
+    if (!c) return
+    c.disabled = disabled
+    touch()
+  }
   function patchCollect(id: string, patch: Partial<CollectConfig>) {
     const c = configs[id]
     if (!c?.collectCfg) return
@@ -506,6 +519,11 @@ export const useFlowStore = defineStore('flow', () => {
     if (next.webKind) next.isDetail = next.webKind === 'detail'
     else if (next.isDetail) next.webKind = 'detail'
     else if (next.isDetail === false && c.collectCfg.webKind === 'detail') next.webKind = 'list'
+    // 固定产物类型节点的输出表不可覆盖（0711 T5：UI 只读不是唯一防线，store 写函数也要挡）
+    if ('outputTable' in next) {
+      const cap = collectorCapabilityOf(c)
+      if (cap?.outputMode === 'fixed') next.outputTable = cap.fixedOutputTable ?? c.collectCfg.outputTable
+    }
     Object.assign(c.collectCfg, next)
     touch()
   }
@@ -542,11 +560,17 @@ export const useFlowStore = defineStore('flow', () => {
   function setTaskQueue(id: string, value: string) {
     patchTaskConfig(id, { queue: value })
   }
-  // 任务级配置整体读写（队列/URL规则/拼接逻辑/触发条件，0706 调整4「任务配置」独立 Tab）
+  // 任务级配置整体读写（队列/URL来源字段/URL规则，0706 调整4「任务配置」独立 Tab；0710 瘦身删拼接逻辑/任务参数）
   function patchTaskConfig(id: string, patch: Partial<TaskConfig>) {
     const c = configs[id]
     if (!c) return
-    c.taskCfg = { queue: '', urlRule: '', joinLogic: '', ...c.taskCfg, ...patch }
+    const next = { ...patch }
+    // 固定产物类型节点的队列不可覆盖（0711 T5，与 patchCollect 的输出表防线同一口径）
+    if ('queue' in next) {
+      const cap = collectorCapabilityOf(c)
+      if (cap?.queueMode === 'fixed') next.queue = cap.fixedQueue ?? c.taskCfg?.queue ?? ''
+    }
+    c.taskCfg = { queue: '', urlRule: '', ...c.taskCfg, ...next }
     touch()
   }
 
@@ -763,13 +787,26 @@ export const useFlowStore = defineStore('flow', () => {
 
   // ---- 流程定义 序列化 / 加载 ----
   function serialize(): FlowDef {
+    // 队列归属默认值（0710 会议 D1）：数据节点未填队列时序列化自动写入——
+    // 所选配置 topic → queue_配置ID → {siteId|流程ID}_main，与 TaskView/mock 的队列名 fallback 同一口径；
+    // 只写序列化副本不回写内存 store（UI 未填时仍显示"自动 · xxx"占位，存档/试跑拿到的是有效队列名）。
+    const defaultQueue =
+      sourceCfg.value?.configTopic ||
+      (sourceCfg.value?.configId ? `queue_${sourceCfg.value.configId}` : '') ||
+      `${siteCtx.value?.siteId || sourceCtx.value?.siteId || flowId.value}_main`
+    const outConfigs = JSON.parse(JSON.stringify(configs)) as Record<string, NodeConfig>
+    Object.values(outConfigs).forEach((c) => {
+      if (!isDataNode(c)) return
+      if (!c.taskCfg) c.taskCfg = { queue: '', urlRule: '' }
+      if (!c.taskCfg.queue) c.taskCfg.queue = defaultQueue
+    })
     return {
       id: flowId.value,
       name: flowName.value,
       version: 'draft-0.3',
       main: [...main.value],
       branches: JSON.parse(JSON.stringify(branches)) as BranchSeed[],
-      configs: JSON.parse(JSON.stringify(configs)) as Record<string, NodeConfig>,
+      configs: outConfigs,
       updatedAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
       source: sourceCfg.value ? (JSON.parse(JSON.stringify(sourceCfg.value)) as Source) : undefined,
       // 0707 优化·Phase6：分支段（决策/分头）写入 FlowDef；空数组也写出，便于读取侧判空。
@@ -784,13 +821,39 @@ export const useFlowStore = defineStore('flow', () => {
     branches.splice(0, branches.length, ...(JSON.parse(JSON.stringify(def.branches)) as BranchSeed[]))
     main.value = [...def.main]
     sourceCfg.value = def.source ? (JSON.parse(JSON.stringify(def.source)) as Source) : null
+    // 历史版本把定时策略放在 Source；迁入首节点任务配置，之后不再在子源信息里保存。
+    const firstNodeId = main.value.find((nodeId) => !!configs[nodeId]?.collectCfg)
+    const legacySchedule = sourceCfg.value
+    if (firstNodeId && legacySchedule && configs[firstNodeId].collectCfg) {
+      const firstCollect = configs[firstNodeId].collectCfg
+      const firstTask = configs[firstNodeId].taskCfg as (TaskConfig & { scheduleType?: string; scheduleTime?: string; weekdays?: number[]; cron?: string }) | undefined
+      firstCollect.scheduleType = legacySchedule.scheduleType ?? firstTask?.scheduleType ?? firstCollect.scheduleType
+      firstCollect.scheduleTime = legacySchedule.scheduleTime ?? firstTask?.scheduleTime ?? firstCollect.scheduleTime
+      firstCollect.weekdays = legacySchedule.weekdays ?? firstTask?.weekdays ?? firstCollect.weekdays
+      firstCollect.cron = legacySchedule.cron ?? firstTask?.cron ?? firstCollect.cron
+      delete legacySchedule.scheduleType
+      delete legacySchedule.scheduleTime
+      delete legacySchedule.weekdays
+      delete legacySchedule.cron
+      if (firstTask) {
+        delete firstTask.scheduleType
+        delete firstTask.scheduleTime
+        delete firstTask.weekdays
+        delete firstTask.cron
+      }
+    }
     // 0707 优化·Phase6：分支段加载；旧 FlowDef 不带 branchGroups 视为空数组。
     branchGroups.splice(0, branchGroups.length, ...((JSON.parse(JSON.stringify(def.branchGroups ?? [])) as FlowBranchGroup[])))
+
+    seq = Math.max(1, ...Object.keys(configs).map((k) => Number(/-(\d+)$/.exec(k)?.[1]) || 0)) + 1
+    branchSeq = Math.max(1, ...branchGroups.flatMap((g) => g.branches.map((b) => Number(/-(?:b|elif|if|else)-(\d+)$/.exec(b.id)?.[1]) || 0))) + 1
+
     const first = main.value.find((m) => !isTerm(m))
     if (first) select(first)
     else {
       selectedId.value = ''
     }
+    activeTab.value = 'config'
     dirty.value = false
   }
   function setFlowName(name: string) {
@@ -798,9 +861,24 @@ export const useFlowStore = defineStore('flow', () => {
     touch()
   }
 
+  function resetAllContext() {
+    sourceCtx.value = null
+    sourceCfg.value = null
+    siteCtx.value = null
+  }
+
+  // 源级上下文唯一写入口（0712 review m15）：源信息头（sourceCtx）与流程序列化层（sourceCfg）
+  // 都吃同一份 patch，避免组件直接 Object.assign(flow.sourceCtx, ...) 绕过 action 层。
+  // 序列化时只走 sourceCfg，所以 sourceCtx 的"只读上下文"语义在这里被打破为"双写但下游只读 sourceCfg"——
+  // 这是 0706 优化·源/节点配置分层 的设计：写路径集中，serialize 走 sourceCfg 副本即可。
+  function patchSourceCtx(patch: Partial<Source>) {
+    if (!sourceCtx.value) return
+    sourceCtx.value = { ...sourceCtx.value, ...patch }
+  }
+
   // 新建流程：空白（开始→完成）或标准链路模板（= 公告规则采集 Demo）
   function newFlow(kind: 'blank' | 'standard' = 'blank') {
-    sourceCtx.value = null
+    resetAllContext()
     load(kind === 'standard' ? makeStandardFlow() : makeBlankFlow())
   }
 
@@ -811,7 +889,7 @@ export const useFlowStore = defineStore('flow', () => {
   function loadFromSource(source: Source, steps: Step[], persistedDef?: FlowDef | null) {
     // 存克隆而非引用（0706 Phase4 修复）：mock 按引用返回内部数据，若 sourceCtx 与之共享对象，
     // mock 侧的原始变更会绕过响应式代理静默改值，导致后续同值代理赋值不触发更新、摘要头保存后不刷新
-    siteCtx.value = null
+    resetAllContext()
     sourceCtx.value = JSON.parse(JSON.stringify(source)) as Source
     // needLogin 未显式设置时按是否已绑登录凭据回填（与旧行为对齐：有凭据引用即视为登录态源）
     const sourceForCfg: Source = { ...source, needLogin: source.needLogin ?? Boolean(source.credentialRef) }
@@ -839,10 +917,10 @@ export const useFlowStore = defineStore('flow', () => {
   // 网站态：加载/新建网站统一流程模板（0707 优化·Phase4）。def 为空 = 该网站还没保存过模板，起一个空白流程。
   // 模板落库沿用既有 flow/save·load 契约，id = `site:${siteId}`（画布保存按钮天然写对地方，不必新增专属持久化）。
   function startSiteFlow(site: Site, def?: FlowDef | null) {
-    sourceCtx.value = null
-    sourceCfg.value = null
+    resetAllContext()
     siteCtx.value = JSON.parse(JSON.stringify(site)) as Site
     load(def ?? makeSiteBlankTemplate(site))
+    activeTab.value = 'config'
   }
   function clearSiteCtx() {
     siteCtx.value = null
@@ -894,6 +972,17 @@ export const useFlowStore = defineStore('flow', () => {
       if (c.collectCfg) {
         if (!c.collectCfg.url) errs.push(`「${c.title}」缺少源 URL`)
         if (!c.collectCfg.outputTable) errs.push(`「${c.title}」缺少输出表`)
+        // URL 参数校验（纯同步、不查参数库）：token 必须显式绑定到当前节点，随后才能配置子源取值覆盖。
+        const cap = collectorCapabilityOf(c)
+        if (cap?.kind === 'web' && hasFragmentParams(c.collectCfg.url)) {
+          errs.push(`「${c.title}」URL 参数写在 # 片段里，普通网页抓取读不到，请改用浏览器抓取节点`)
+        }
+        const paramIds = extractUrlParamIds(c.collectCfg.url)
+        const refs = c.collectCfg.urlParamRefs ?? []
+        const unbound = paramIds.filter((pid) => !refs.includes(pid))
+        if (unbound.length) errs.push(`「${c.title}」URL 参数 ${unbound.join('、')} 尚未绑定到参数配置`)
+        const unresolved = paramIds.filter((pid) => refs.includes(pid) && !c.collectCfg?.urlParamValues?.[pid])
+        if (unresolved.length) errs.push(`「${c.title}」URL 参数 ${unresolved.join('、')} 还没有选定取值`)
       } else if (!c.disabled && isDataNode(c) && !c.outputTable) {
         errs.push(`「${c.title}」缺少输出表`)
       }
@@ -942,7 +1031,7 @@ export const useFlowStore = defineStore('flow', () => {
     effectiveInputTableFor, isFirstMainNodeId,
     select, setActiveTab,
     insertAfter, addNodeToBranch, duplicate, move, moveTo, toggleDisabled, remove, setTitle,
-    patchCollect, setBaseRow, setFieldRow, setOutputTable, setInputTable, setEntryCondition, setTaskQueue, patchTaskConfig, patchOutputAdvanced, patchSource,
+    setNodeDisabled, patchCollect, setBaseRow, setFieldRow, setOutputTable, setInputTable, setEntryCondition, setTaskQueue, patchTaskConfig, patchOutputAdvanced, patchSource, patchSourceCtx,
     patchRuleConfig,
     setTripleCell, addTripleRow, removeTripleRow,
     // 0707 优化·Phase6：决策/分头分支段操作

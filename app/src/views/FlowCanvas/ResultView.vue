@@ -27,8 +27,9 @@ async function loadSiteChildren() {
   siteChildren.value = siteId.value ? await siteApi.siteSources(siteId.value) : []
 }
 
-// 节点条：网站粒度优先取网站统一流程模板；模板未保存时，用站内第一个子源的实际步骤推导末端结果集入口。
-// 查询仍按 siteId 聚合全部子源，不预选单个子源。
+// 节点条：网站粒度优先取网站统一流程模板；模板未保存或模板节点没绑任何输出表时（种子网站的虚拟模板
+// 刻意不带表，0710 空白引导口径——数据视图关心"哪里有数据"，无表模板查不出任何行），
+// 退回用站内第一个子源的实际步骤推导末端结果集入口。查询仍按 siteId 聚合全部子源。
 const templateLayout = ref<HorizontalLayout | null>(null)
 async function loadTemplateLayout() {
   if (!siteId.value) {
@@ -36,7 +37,7 @@ async function loadTemplateLayout() {
     return
   }
   const def = await flowApi.flowLoad(`site:${siteId.value}`)
-  if (def) {
+  if (def && Object.values(def.configs).some((c) => nodeOutputTable(c))) {
     templateLayout.value = buildHorizontalLayout(def.main, def.branches, def.configs)
     return
   }
@@ -121,7 +122,8 @@ const bar = computed<BarNode[]>(() => {
 const dataNodes = computed(() => bar.value.filter((n) => n.selectable))
 const selectedNodeId = ref<string>('')
 const page = ref(1)
-const filters = reactive({ dataId: '', parentId: '', state: '', sql: '', sourceFilter: '' })
+// 数据范围由页面级子源侧栏选中态决定（0710 会议 C4 = 第 7 条同一侧栏）：子源态看该子源、网站态看全站，不再自建源筛选
+const filters = reactive({ dataId: '', parentId: '', state: '', sql: '' })
 
 // 默认选末端数据节点（最终结果表）；有页签快照（0701 问题三）时优先恢复快照里的节点/过滤/页码。
 // 切换页签后旧节点 id 不在新流程里时也重置，避免表格变空。
@@ -134,11 +136,13 @@ watch(
       selectedNodeId.value = snapId || ((nodes.find((n) => n.final) ?? nodes[0])?.id ?? '')
       if (snapId) {
         page.value = snap?.page ?? 1
-        if (snap?.filters) Object.assign(filters, snap.filters)
+        if (snap?.filters) {
+          // 旧快照可能残留 sourceFilter 字段（0710 会议 C4 已删源筛选），只回填仍存在的键
+          const { dataId, parentId, state, sql } = snap.filters
+          Object.assign(filters, { dataId, parentId, state, sql })
+        }
       } else {
         page.value = 1
-        // 从子源画布进入时预选该子源（0707 优化·Phase5 A8）；网站模板进入不预选，默认聚合全部子源
-        filters.sourceFilter = flow.sourceCtx?.sourceId ?? ''
       }
     }
   },
@@ -177,10 +181,9 @@ async function loadData() {
       dataApi.tableMeta(selectedTable.value),
       dataApi.rowQueryPaged({
         tableId: selectedTable.value,
-        // 网站粒度（0707 优化·Phase5）：有 siteId 时圈定全站子源，源筛选下拉再进一步收窄；
-        // 没有 siteId 的历史/草稿源退回原单源行为（强制当前源，1:1+fallback）。
+        // 数据范围跟随侧栏选中态（0710 会议 C4）：停在子源上=该子源数据，停在网站上=全站聚合
         siteId: siteId.value || undefined,
-        sourceId: siteId.value ? (filters.sourceFilter || undefined) : (flow.sourceCtx?.sourceId || undefined),
+        sourceId: flow.sourceCtx?.sourceId || undefined,
         dataId: filters.dataId || undefined,
         parentId: filters.parentId || undefined,
         state: filters.state || undefined,
@@ -208,7 +211,6 @@ function clearFilters() {
   filters.parentId = ''
   filters.state = ''
   filters.sql = ''
-  filters.sourceFilter = ''
   runQuery()
 }
 function prevPage() {
@@ -325,17 +327,6 @@ async function saveEdit() {
     </div>
 
     <div class="rv-filters">
-      <el-select
-        v-if="siteId"
-        v-model="filters.sourceFilter"
-        class="rv-source-select"
-        placeholder="全部子源"
-        filterable
-        clearable
-        @change="runQuery"
-      >
-        <el-option v-for="s in siteChildren" :key="s.sourceId" :label="s.name" :value="s.sourceId" />
-      </el-select>
       <input v-model="filters.dataId" class="rv-input" placeholder="数据 ID" @keyup.enter="runQuery" />
       <input v-model="filters.parentId" class="rv-input" placeholder="父 ID" @keyup.enter="runQuery" />
       <select v-model="filters.state" class="rv-input">
@@ -444,8 +435,6 @@ async function saveEdit() {
 .rv-input.flex { flex: 1; min-width: 200px; font-family: var(--rc-mono, monospace); }
 .rv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .rv-filters .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }
-.rv-source-select { width: 180px; flex: none; }
-.rv-source-select :deep(.el-select__wrapper) { min-height: 28px; }
 
 .rv-tablehead { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; }
 .rv-tablename { font-family: var(--rc-mono, monospace); font-size: 12px; color: var(--rc-text-2); }

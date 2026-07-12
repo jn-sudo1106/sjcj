@@ -208,8 +208,8 @@ export function mockSourcePaged(params?: Record<string, unknown>): Paged<Source>
   return { total: filtered.length, list: filtered.slice(start, start + size) }
 }
 
-export function mockSourceDetail(params?: Record<string, unknown>): Source {
-  return SOURCES.find((s) => s.sourceId === String(params?.sourceId)) ?? SOURCES[0]
+export function mockSourceDetail(params?: Record<string, unknown>): Source | null {
+  return SOURCES.find((s) => s.sourceId === String(params?.sourceId)) ?? null
 }
 
 export function mockSourceCategories(): SourceCategory[] {
@@ -231,10 +231,13 @@ export function mockSourceStats(): { total: number; error: number; externalChang
 }
 
 // 子步骤（连线详情字段口径）— 详情抽屉「子步骤」分页。
+// 用户新建的源（created 持久化里的）没有真实步骤，返回空 → 画布走空白引导卡模式（0710：新建源不预置骨架）；
+// 演示种子源保持默认两步骨架，模拟"后端已有配置的存量源"。
 export function mockSourceSteps(params?: Record<string, unknown>): Step[] {
   const sourceId = String(params?.sourceId ?? '')
   const src = SOURCES.find((s) => s.sourceId === sourceId)
   if (!src) return []
+  if (readCreatedSources().some((c) => c.sourceId === sourceId)) return []
   return [
     {
       stepId: `${sourceId}-s1`, sourceId, name: '列表抓取', inputTable: '-',
@@ -376,7 +379,7 @@ export function mockSourceNodeRuns(params?: Record<string, unknown>): NodeRunSta
   const s2Total = Math.floor(total * 0.8)
   const queue = src.configTopic || (src.configId ? `queue_${src.configId}` : '')
   return [
-    { nodeId: `${sourceId}-s1`, queue, totalTasks: total, processedTasks: Math.min(done, total), state: src.state as NodeRunStat['state'] },
+    { nodeId: `${sourceId}-s1`, queue, totalTasks: total, processedTasks: Math.min(done, total), state: src.disabled ? undefined : (src.state as NodeRunStat['state']) },
     { nodeId: `${sourceId}-s2`, queue: queue ? `${queue}.detail` : '', totalTasks: s2Total, processedTasks: Math.min(Math.floor(done * 0.8), s2Total), state: src.disabled ? undefined : (src.state as NodeRunStat['state']) },
   ]
 }

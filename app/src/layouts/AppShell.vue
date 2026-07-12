@@ -55,15 +55,17 @@ const navGroups = computed(() =>
 
 const pageActions: Record<string, string[]> = {
   overview: ['刷新', '导出', '新建采集'],
-  canvas: ['保存', '试跑', '发布'],
-  collect: ['批量导入', '批量操作', '新建采集'],
+  canvas: ['保存', '试跑'],
+  // 0711 R12：批量导入/批量操作已迁进网站详情子源侧栏，顶部只留"新建采集"（AppShell 顶部按钮按路由硬编码，
+  // 与页面是否 ui.registerAction 无关——同款坑 0707 Phase3 记录过，改动入口必须两处一起改）
+  collect: ['新建采集'],
   rules: ['新建规则组', '导入规则', '发布校验'],
   metrics: ['新建指标', '批量维护', '口径校验'],
   data: ['导出结果', '新建查询视图'],
   runs: ['导出记录'],
   tools: ['刷新', '导出报表'],
 }
-// 页面动作按真实路由段取，而不是侧栏高亮键（源详情画布仍要 保存/试跑/发布）
+// 页面动作按真实路由段取，而不是侧栏高亮键（源详情画布仍要 保存/试跑；"发布"已按 0710 会议 C3 删除）
 const actionKey = computed(() => route.path.split('/')[1] || 'overview')
 const isGateCanvas = computed(() => route.path.startsWith('/canvas') && route.query.mode === 'new')
 // 网站态（0707 优化·Phase4）：网站是流程模板，不实际运行，顶部动作收窄为仅「保存」（试跑/发布隐藏）
@@ -149,6 +151,8 @@ const navIcons: Record<string, Component> = {
               type="button"
               class="rc-action-btn"
               :class="{ primary: index === activeActions.length - 1 }"
+              :disabled="action === '试跑' && flow.dirty"
+              :title="action === '试跑' && flow.dirty ? '画布有未保存的改动，先保存流程配置再试跑' : undefined"
               @click="ui.fireAction(action)"
             >
               <el-icon v-if="action.includes('试跑')"><VideoPlay /></el-icon>

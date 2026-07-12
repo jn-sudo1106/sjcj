@@ -4,14 +4,11 @@
 // 子源可能很多（0707 会后澄清）：chips 只显示前几个，其余收进「+N」浮层，浮层内可搜索。
 import { computed, onBeforeUnmount, onMounted, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
 import { siteApi, type Site, type Source } from '../../api'
-import { useWorkspaceStore, MAX_SOURCE_TABS } from '../../stores/workspace'
 import { siteIcon } from './siteVisual'
 
 const props = defineProps<{ sites: Site[] }>()
 const router = useRouter()
-const ws = useWorkspaceStore()
 
 const CHIP_LIMIT = 4
 const childrenCache = reactive<Record<string, Source[]>>({})
@@ -23,20 +20,20 @@ async function ensureChildren(siteId: string) {
 onMounted(() => props.sites.forEach((s) => ensureChildren(s.siteId)))
 watch(() => props.sites, (list) => list.forEach((s) => ensureChildren(s.siteId)))
 
+// 页签网站化（0710 会议 B3）：入口只推路由，页签注册统一收口在画布加载（index.vue）
 function openSource(s: Source) {
-  if (!ws.open(s.sourceId, s.name)) {
-    ElMessage.warning(`最多同时打开 ${MAX_SOURCE_TABS} 个源页签，请先关闭部分页签`)
-    return
-  }
   router.push({ path: '/canvas', query: { sourceId: s.sourceId } })
 }
-// 卡片主体点击 → 进入网站统一流程模板（0707 优化·Phase4，页签复用 sourceId 字段存 `site:${siteId}` 伪 id）
+// 卡片主体点击 → 进入网站统一流程模板（0707 优化·Phase4）
 function openSite(site: Site) {
-  if (!ws.open(`site:${site.siteId}`, site.name)) {
-    ElMessage.warning(`最多同时打开 ${MAX_SOURCE_TABS} 个源页签，请先关闭部分页签`)
-    return
-  }
   router.push({ path: '/canvas', query: { siteId: site.siteId } })
+}
+// 卡片底部直达入口（0710 会议 A4）：数据量→数据视图，任务→任务视图（任务视图只挂网站层）
+function openSiteData(site: Site) {
+  router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data' } })
+}
+function openSiteTask(site: Site) {
+  router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'task' } })
 }
 function isErr(s: Source): boolean {
   return !s.disabled && s.state === 'E'
@@ -107,10 +104,16 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
         <span v-for="t in site.tags" :key="t" class="scg-tag">{{ t }}</span>
       </div>
 
+      <!-- 底部行（0710 会议 A4）：数据量点进数据视图 + 任务视图直达入口（会议：任务视图只挂网站层） -->
       <div class="scg-foot">
         <span class="scg-foot-count">{{ site.sourceCount }} 个源</span>
         <span class="scg-foot-sep" />
-        <span v-if="site.updatedAt">编辑于 {{ site.updatedAt }}</span>
+        <button class="scg-foot-link" type="button" title="查看该网站数据视图" @click.stop="openSiteData(site)">
+          数据 {{ (site.dataCount ?? 0).toLocaleString() }} 条
+        </button>
+        <span class="scg-foot-sep" />
+        <span v-if="site.updatedAt" class="scg-foot-date" :title="`编辑于 ${site.updatedAt}`">编辑于 {{ site.updatedAt.slice(0, 10) }}</span>
+        <button class="scg-foot-task" type="button" title="查看该网站任务视图" @click.stop="openSiteTask(site)">任务</button>
       </div>
     </div>
 
@@ -193,9 +196,27 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 .scg-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; color: #b45309; background: #fef3c7; border-radius: 5px; padding: 2px 7px; }
 .scg-tag::before { content: ''; width: 6px; height: 6px; border-radius: 2px; background: #f59e0b; }
 
-.scg-foot { display: flex; align-items: center; gap: 10px; margin-top: 13px; padding-top: 10px; border-top: 1px solid var(--rc-border-soft); font-size: 11px; color: var(--rc-faint); }
-.scg-foot-count { color: var(--rc-muted); font-weight: 600; }
-.scg-foot-sep { width: 1px; height: 12px; background: var(--rc-border-soft); }
+/* 底部行钉在卡片底边（margin-top:auto），各卡等高对齐；所有项禁止换行，日期可缩略 */
+.scg-foot { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--rc-border-soft); font-size: 11px; color: var(--rc-faint); min-width: 0; }
+.scg-foot-count { flex: none; color: var(--rc-muted); font-weight: 600; white-space: nowrap; }
+.scg-foot-sep { flex: none; width: 1px; height: 12px; background: var(--rc-border-soft); }
+.scg-foot-link { flex: none; padding: 0; border: 0; background: transparent; color: var(--rc-primary-ink); font-size: 11px; cursor: pointer; white-space: nowrap; }
+.scg-foot-link:hover { text-decoration: underline; }
+.scg-foot-date { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scg-foot-task {
+  flex: none;
+  margin-left: auto;
+  height: 22px;
+  padding: 0 10px;
+  border: 1px solid var(--rc-border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--rc-text-2);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.scg-foot-task:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 
 .scg-empty-state { grid-column: 1 / -1; text-align: center; padding: 48px 16px; color: var(--rc-faint); font-size: 12px; background: #fff; border: 1px solid var(--rc-border); border-radius: 12px; }
 

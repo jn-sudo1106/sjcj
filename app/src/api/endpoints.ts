@@ -84,7 +84,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/paramDetail', desc: '参数详情', impl: true },
   { path: 'config/genValues', desc: '生成参数值预览', impl: true },
   { path: 'config/addParamValues', desc: '新增参数值', danger: true, impl: true },
-  { path: 'config/param-add', desc: '新增参数', danger: true },
+  { path: 'config/param-add', desc: '新增参数（0711 R9：URL 参数编辑器发现参数不存在时创建）', danger: true, impl: true },
   { path: 'config/updateParam', desc: '修改参数', danger: true, impl: true },
   { path: 'config/param-copy', desc: '复制参数', danger: true },
   { path: 'config/logPaged', desc: '配置操作日志' },
@@ -162,7 +162,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'mq/check/changeEnable', desc: '启停队列检查', danger: true },
 
   /* ── file 原始文件 / JSON（目标 3 / 收录 3） ── */
-  { path: 'file/filePaged', desc: '原始文件分页' },
+  { path: 'file/filePaged', desc: '原始文件分页（0711 R11 文件视图落地，仅子源态查询）', impl: true },
+  { path: 'file/fileStats', desc: '原始文件统计：总数/总大小/失败数/最近生成时间（0711 R11 新增，非逆向清单原有项）', impl: true },
   { path: 'file/fileProcess', desc: '文件后续处理', danger: true },
   { path: 'file/fileJsonPaged', desc: '原始 JSON 分页' },
 
@@ -217,6 +218,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'site/createSite', desc: '新建采集：网站 + 首批子源', impl: true },
   { path: 'site/sourcesOfSite', desc: '网站下的子源列表', impl: true },
   { path: 'site/addSource', desc: '网站下新增子源（默认继承统一流程）', impl: true },
+  { path: 'site/importSources', desc: '按网站批量导入子源，一行一条「名称;URL」（0710 会议批次）', impl: true },
   { path: 'site/removeSource', desc: '网站下移除子源', danger: true, impl: true },
   { path: 'site/syncFlow', desc: '网站统一流程同步覆盖到所选子源', danger: true, impl: true },
   { path: 'site/queueStats', desc: '网站粒度队列汇总（0707 Phase5 任务视图网站化）', impl: true },

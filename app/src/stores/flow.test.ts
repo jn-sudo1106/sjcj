@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useFlowStore } from './flow'
 import { mockFlowRecommend, mockNodeAiChat } from '../api/mock/flows'
-import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput } from '../views/FlowCanvas/flowModel'
+import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES } from '../views/FlowCanvas/flowModel'
 
 describe('flow store 编辑动作', () => {
   let f: ReturnType<typeof useFlowStore>
@@ -66,6 +66,120 @@ describe('flow store 编辑动作', () => {
 
 })
 
+describe('两个独立采集节点 + 能力模型（0711 R7/R8）', () => {
+  let f: ReturnType<typeof useFlowStore>
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    f = useFlowStore()
+    f.newFlow('standard')
+  })
+
+  it('节点库存在浏览器抓取/公众号抓取，且能插入主链并解析出各自的固定能力', () => {
+    const flat = LIB_GROUPS.flatMap((g) => g.items)
+    expect(flat.some((i) => i.template === 'browser-html')).toBe(true)
+    expect(flat.some((i) => i.template === 'wechat-html')).toBe(true)
+    expect(TEMPLATE_TO_NODE['browser-html']).toBe('browser-html-collect')
+    expect(TEMPLATE_TO_NODE['wechat-html']).toBe('wechat-html-collect')
+
+    f.insertAfter('web-list', 'browser-html')
+    f.insertAfter('web-list', 'wechat-html')
+    const browserId = f.main.find((id) => f.configs[id]?.collectCfg?.collectorKind === 'browser_html')!
+    const wechatId = f.main.find((id) => f.configs[id]?.collectCfg?.collectorKind === 'wechat_official_html')!
+    expect(browserId).toBeTruthy()
+    expect(wechatId).toBeTruthy()
+
+    const browserCap = collectorCapabilityOf(f.configs[browserId])!
+    const wechatCap = collectorCapabilityOf(f.configs[wechatId])!
+    expect(browserCap.outputMode).toBe('fixed')
+    expect(wechatCap.outputMode).toBe('fixed')
+    // 固定输出表/队列必须不同（两个独立节点，各自的能力键不同）
+    expect(browserCap.fixedOutputTable).not.toBe(wechatCap.fixedOutputTable)
+    expect(browserCap.fixedQueue).not.toBe(wechatCap.fixedQueue)
+    // 种子配置里 outputTable/queue 已按能力预置好
+    expect(f.configs[browserId].collectCfg?.outputTable).toBe(browserCap.fixedOutputTable)
+    expect(f.configs[wechatId].taskCfg?.queue).toBe(wechatCap.fixedQueue)
+  })
+
+  it('inferCollectorKind：旧节点（无 collectorKind 字段）按 snatchType 正确推导', () => {
+    expect(inferCollectorKind(NODE_CONFIGS['web-list'].collectCfg)).toBe('web')
+    expect(inferCollectorKind(NODE_CONFIGS['app-collect'].collectCfg)).toBe('app')
+    expect(inferCollectorKind(undefined)).toBe('web')
+  })
+
+  it('两个新节点先做成同构（0711-B 拍板）：除能力键外字段结构一致', () => {
+    const browser = NODE_CONFIGS['browser-html-collect']
+    const wechat = NODE_CONFIGS['wechat-html-collect']
+    expect(Object.keys(browser.collectCfg!).sort()).toEqual(Object.keys(wechat.collectCfg!).sort())
+    expect(browser.base.map((r) => r[0])).toEqual(wechat.base.map((r) => r[0]))
+  })
+
+  it('COLLECTOR_CAPABILITIES 覆盖全部 CollectorKind，浏览器/公众号支持代理与登录（供 T3 折叠区判断）', () => {
+    expect(COLLECTOR_CAPABILITIES.browser_html.supportsProxy).toBe(true)
+    expect(COLLECTOR_CAPABILITIES.browser_html.supportsLogin).toBe(true)
+    expect(COLLECTOR_CAPABILITIES.wechat_official_html.supportsProxy).toBe(true)
+  })
+
+  it('固定产物节点：patchCollect 无法覆盖输出表，store 层是第二道防线（0711 T5）', () => {
+    const browserId = f.insertAfter('web-list', 'browser-html')
+    const cap = collectorCapabilityOf(f.configs[browserId])!
+    f.patchCollect(browserId, { outputTable: 'attacker_table' })
+    expect(f.configs[browserId].collectCfg?.outputTable).toBe(cap.fixedOutputTable)
+    // 未涉及 outputTable 的 patch 不受影响，正常写入
+    f.patchCollect(browserId, { url: 'https://new.example.com' })
+    expect(f.configs[browserId].collectCfg?.url).toBe('https://new.example.com')
+    expect(f.configs[browserId].collectCfg?.outputTable).toBe(cap.fixedOutputTable)
+  })
+
+  it('固定产物节点：patchTaskConfig/setTaskQueue 无法覆盖队列（0711 T5）', () => {
+    const wechatId = f.insertAfter('web-list', 'wechat-html')
+    const cap = collectorCapabilityOf(f.configs[wechatId])!
+    f.setTaskQueue(wechatId, 'attacker_queue')
+    expect(f.configs[wechatId].taskCfg?.queue).toBe(cap.fixedQueue)
+  })
+
+  it('普通网页抓取节点（queueMode: editable）：队列/输出表可正常编辑，不受固定防线影响', () => {
+    const webId = f.insertAfter('web-list', 'web')
+    f.patchCollect(webId, { outputTable: 'custom_table_1' })
+    f.setTaskQueue(webId, 'custom_queue_1')
+    expect(f.configs[webId].collectCfg?.outputTable).toBe('custom_table_1')
+    expect(f.configs[webId].taskCfg?.queue).toBe('custom_queue_1')
+  })
+})
+
+describe('队列默认值 + 节点启停（0710 会议 D1/D5）', () => {
+  let f: ReturnType<typeof useFlowStore>
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    f = useFlowStore()
+    f.newFlow('standard')
+  })
+
+  it('serialize：数据节点未填队列时自动写入默认队列名（不回写内存 store）', () => {
+    const dataNodeId = f.main.find((id) => id === 'web-list')!
+    f.setTaskQueue(dataNodeId, '')
+    const def = f.serialize()
+    const q = def.configs[dataNodeId].taskCfg?.queue
+    expect(q).toBeTruthy()
+    expect(q!.endsWith('_main') || q!.startsWith('queue_') || q!.length > 0).toBe(true)
+    // 显式填过的队列不被覆盖
+    f.setTaskQueue(dataNodeId, 'my_custom_queue')
+    expect(f.serialize().configs[dataNodeId].taskCfg?.queue).toBe('my_custom_queue')
+    // 内存 store 不被 serialize 污染：清空后 store 内仍为空
+    f.setTaskQueue(dataNodeId, '')
+    f.serialize()
+    expect(f.configs[dataNodeId].taskCfg?.queue ?? '').toBe('')
+  })
+
+  it('setNodeDisabled：启停写入 disabled 并随序列化带出', () => {
+    f.setNodeDisabled('web-list', true)
+    expect(f.configs['web-list'].disabled).toBe(true)
+    expect(f.dirty).toBe(true)
+    expect(f.serialize().configs['web-list'].disabled).toBe(true)
+    f.setNodeDisabled('web-list', false)
+    expect(f.configs['web-list'].disabled).toBe(false)
+  })
+})
+
 describe('flow store 新建 / 校验（M5.5）', () => {
   let f: ReturnType<typeof useFlowStore>
   beforeEach(() => {
@@ -106,6 +220,63 @@ describe('flow store 新建 / 校验（M5.5）', () => {
     f.load(snap)
     expect(f.main).toEqual(snap.main)
     expect(Object.keys(f.configs).sort()).toEqual(Object.keys(snap.configs).sort())
+  })
+
+  it('加载历史子源定时策略时迁到首节点运行配置', () => {
+    f.newFlow('standard')
+    const legacy = f.serialize()
+    const source = legacy.source!
+    source.scheduleType = '每周'
+    source.scheduleTime = '09:30'
+    source.weekdays = [1, 3, 5]
+    source.cron = '0 30 9 * * 1,3,5'
+
+    f.load(legacy)
+
+    const collect = f.configs['web-list'].collectCfg!
+    expect(collect.scheduleType).toBe('每周')
+    expect(collect.scheduleTime).toBe('09:30')
+    expect(collect.weekdays).toEqual([1, 3, 5])
+    expect(collect.cron).toBe('0 30 9 * * 1,3,5')
+    const legacyTask = f.configs['web-list'].taskCfg as { scheduleType?: string } | undefined
+    expect(legacyTask?.scheduleType).toBeUndefined()
+    expect(f.sourceCfg?.scheduleType).toBeUndefined()
+  })
+
+  // 0711 R9：URL 参数校验（同步、不查参数库）
+  it('validateFlow：普通网页抓取的 URL 参数写在 # 片段里时报错，提示改用浏览器抓取', () => {
+    f.newFlow('blank')
+    const id = f.insertAfter('start', 'web')
+    f.patchCollect(id, { url: 'https://x.com/a#p=$PARAM$_1036', outputTable: 't1' })
+    const errs = f.validateFlow()
+    expect(errs.some((e) => e.includes('#') && e.includes('浏览器抓取'))).toBe(true)
+  })
+
+  it('validateFlow：浏览器抓取节点的 fragment 参数不报错（能读 fragment）', () => {
+    f.newFlow('blank')
+    const id = f.insertAfter('start', 'browser-html')
+    f.patchCollect(id, { url: 'https://x.com/a#p=$PARAM$_1036', urlParamValues: { '1036': 'SUV' } })
+    const errs = f.validateFlow()
+    expect(errs.some((e) => e.includes('片段'))).toBe(false)
+  })
+
+  it('validateFlow：URL 引用的参数未选取值时报错；选完后不再报错', () => {
+    f.newFlow('blank')
+    const id = f.insertAfter('start', 'web')
+    f.patchCollect(id, { url: 'https://x.com?s=$PARAM$_1036', outputTable: 't1', urlParamRefs: ['1036'] })
+    expect(f.validateFlow().some((e) => e.includes('1036') && e.includes('取值'))).toBe(true)
+    f.patchCollect(id, { urlParamValues: { '1036': 'SUV' } })
+    expect(f.validateFlow().some((e) => e.includes('1036') && e.includes('取值'))).toBe(false)
+  })
+
+  it('validateFlow：URL token 必须先绑定到节点参数配置', () => {
+    f.newFlow('blank')
+    const id = f.insertAfter('start', 'web')
+    f.patchCollect(id, { url: 'https://x.com?s=$PARAM$_1036', outputTable: 't1', urlParamValues: { '1036': 'SUV' } })
+    expect(f.validateFlow().some((e) => e.includes('1036') && e.includes('未绑定'))).toBe(true)
+
+    f.patchCollect(id, { urlParamRefs: ['1036'] })
+    expect(f.validateFlow().some((e) => e.includes('1036') && e.includes('未绑定'))).toBe(false)
   })
 })
 
@@ -181,20 +352,6 @@ describe('节点输入表 + 任务队列（优化 0701 问题五）', () => {
     f.setTaskQueue('web-detail', 'my_queue')
     expect(f.configs['web-detail'].collectCfg?.inputTable).toBe('888888')
     expect(f.configs['web-detail'].taskCfg?.queue).toBe('my_queue')
-  })
-
-  it('任务配置支持多个命名参数并可序列化往返', () => {
-    const params = [
-      { name: 'detailUrl', field: 'detail_url' },
-      { name: 'publishDate', field: 'publish_time' },
-    ]
-
-    f.patchTaskConfig('web-detail', { params })
-    const snap = f.serialize()
-    f.newFlow('blank')
-    f.load(JSON.parse(JSON.stringify(snap)))
-
-    expect(f.configs['web-detail'].taskCfg?.params).toEqual(params)
   })
 
   it('输入表字段选项：实体表缺失时回退到上游产物字段', () => {
@@ -726,13 +883,13 @@ describe('源级配置分层（0706 优化·源/节点配置分层）', () => {
     expect(Object.keys(f.configs)).toEqual([])
   })
 
-  it('startSiteFlow：无存档时兜底默认两节点骨架（列表抓取→详情解析），不再是纯空白（0707 优化·补）', () => {
+  it('startSiteFlow：无存档时为空白画布（0710 回退默认骨架，走空白引导卡模式），id 落 site: 存档位', () => {
     f.startSiteFlow({ siteId: 'site-x', name: '测试网站', category: '测试类', owner: 'admin', sourceCount: 0, errorCount: 0 })
 
     expect(f.siteCtx?.siteId).toBe('site-x')
-    expect(f.main).toEqual(['start', 'web-list', 'web-detail', 'end'])
-    expect(f.configs['web-list'].title).toBe('列表抓取')
-    expect(f.configs['web-detail'].title).toBe('详情解析')
+    expect(f.flowId).toBe('site:site-x')
+    expect(f.main).toEqual(['start', 'end'])
+    expect(Object.keys(f.configs)).toEqual([])
   })
 
   it('startSiteFlow：有存档时优先用存档，不走默认骨架', () => {

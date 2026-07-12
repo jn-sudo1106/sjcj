@@ -1,15 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useRuntimeStore } from '../../stores/runtime'
 import { useUiStore } from '../../stores/ui'
-import { useWorkspaceStore, MAX_SOURCE_TABS } from '../../stores/workspace'
-import { flowApi, sourceApi, siteApi, type Source } from '../../api'
+import { flowApi } from '../../api'
 import CanvasHeader from './CanvasHeader.vue'
 import AddNodePopover from './AddNodePopover.vue'
-import SiteSourceSwitcher from './SiteSourceSwitcher.vue'
 import {
   iconFor,
   isDataNode,
@@ -23,66 +20,26 @@ import {
 const flow = useFlowStore()
 const runtime = useRuntimeStore()
 const ui = useUiStore()
-const router = useRouter()
-const ws = useWorkspaceStore()
 const flowEl = ref<HTMLElement | null>(null)
 const canvasScrollEl = ref<HTMLElement | null>(null)
 
-// 编排对象切换器（0707 优化·Phase4）：只在当前源/网站归属某网站时出现；网站态用 'site' 作为激活态标识
-const switcherSiteId = computed(() => flow.siteCtx?.siteId || flow.sourceCtx?.siteId || '')
-const switcherActiveKey = computed(() => (flow.siteCtx ? 'site' : (flow.sourceCtx?.sourceId ?? '')))
-async function confirmDiscardIfDirty(): Promise<boolean> {
-  if (!flow.dirty) return true
-  try {
-    await ElMessageBox.confirm('当前画布有未保存的改动，切换将丢弃，是否继续？', '切换编排对象', {
-      type: 'warning', confirmButtonText: '切换', cancelButtonText: '取消',
-    })
-    return true
-  } catch {
-    return false
-  }
-}
-async function onSwitchTarget(target: 'site' | Source) {
-  if (!(await confirmDiscardIfDirty())) return
-  if (target === 'site') {
-    const siteId = switcherSiteId.value
-    if (!siteId) return
-    const [site, def] = await Promise.all([siteApi.siteDetail(siteId), flowApi.flowLoad(`site:${siteId}`)])
-    if (!site) return
-    flow.startSiteFlow(site, def)
-    ws.open(`site:${siteId}`, site.name)
-    router.replace({ path: '/canvas', query: { siteId } })
-  } else {
-    const [source, steps, persistedDef] = await Promise.all([
-      sourceApi.sourceDetail(target.sourceId),
-      sourceApi.sourceSteps(target.sourceId),
-      flowApi.flowLoad(target.sourceId),
-    ])
-    if (!source) return
-    flow.loadFromSource(source, steps ?? [], persistedDef)
-    if (!ws.open(source.sourceId, source.name)) {
-      ElMessage.warning(`最多同时打开 ${MAX_SOURCE_TABS} 个源页签，请先关闭部分页签`)
-    }
-    router.replace({ path: '/canvas', query: { sourceId: source.sourceId } })
-  }
-}
-function onSwitchAdded(s: Source) {
-  onSwitchTarget(s)
-}
+// 编排对象切换器已升级为页面级子源侧栏（0710 会议 B1），组件与接线整体迁至 index.vue
 
 async function generateWebFlow() {
   const source = flow.sourceCfg ? JSON.parse(JSON.stringify(flow.sourceCfg)) : undefined
+  // 网站态（0710：空白模板不再预置骨架，引导卡生成成为网站态的入口）：生成结果保持 `site:` 存档位和网站名，
+  // 否则保存会写到推荐流程的随机 id 下，网站模板存档丢失
+  const site = flow.siteCtx
   try {
     const rec = await flowApi.flowRecommend('', 'web-public')
     flow.load({
       ...rec.flow,
-      id: source?.sourceId ?? rec.flow.id,
-      name: source?.name ?? rec.flow.name,
+      id: source?.sourceId ?? (site ? `site:${site.siteId}` : rec.flow.id),
+      name: source?.name ?? site?.name ?? rec.flow.name,
       source,
     })
   } catch {
-    if (source) flow.startDraftSource(source)
-    else flow.newFlow('blank')
+    ElMessage.error('推荐接口异常')
   }
 }
 
@@ -292,13 +249,6 @@ watch(
 <template>
   <main class="rc-canvas" @contextmenu="onPaneMenu" @click="closeMenu">
     <CanvasHeader v-if="flow.sourceCtx || flow.siteCtx" />
-    <SiteSourceSwitcher
-      v-if="switcherSiteId"
-      :site-id="switcherSiteId"
-      :active-key="switcherActiveKey"
-      @pick="onSwitchTarget"
-      @added="onSwitchAdded"
-    />
 
     <div ref="canvasScrollEl" class="rc-canvas-scroll" @dragover="onDragOver" @drop="onDrop">
       <div ref="flowEl" class="rc-flow" :style="{ height: flow.layout.totalHeight + 'px' }">

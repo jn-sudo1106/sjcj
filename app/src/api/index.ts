@@ -4,8 +4,8 @@ import type {
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestResult,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
-  Config, EntryType, Param, CredentialRef, SourceLog, TaskInst, WorkbenchSummary,
-  OverviewSummary, TrendPoint,
+  Config, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, WorkbenchSummary,
+  OverviewSummary, TrendPoint, RawFile, RawFileQuery, RawFileStats,
 } from './types'
 import type { FlowDef, FlowRecommendation } from '../views/FlowCanvas/flowModel'
 
@@ -15,7 +15,7 @@ export { isDanger, DANGER_ENDPOINTS } from './client'
 // 类型化接口：每个方法一一对应一个真实 /v1 端点。后续按 142 个端点逐域补全。
 export const sourceApi = {
   sourcePaged: (p?: PageQuery) => request<Paged<Source>>('source/sourcePaged', p),
-  sourceDetail: (sourceId: string) => request<Source>('source/sourceDetail', { sourceId }),
+  sourceDetail: (sourceId: string) => request<Source | null>('source/sourceDetail', { sourceId }),
   sourceCategories: () => request<SourceCategory[]>('source/categoryTree'),
   sourceStats: () => request<{ total: number; error: number; externalChanged: number; disabled: number }>('source/stats'),
   sourceSteps: (sourceId: string) => request<Step[]>('item/next/nextConfigPaged', { sourceId }),
@@ -56,9 +56,13 @@ export const siteApi = {
   siteCreate: (site: Omit<Site, 'sourceCount' | 'errorCount'>, sources: Source[]) =>
     request<{ ok: boolean; message?: string; siteId?: string }>('site/createSite', { site, sources }),
   siteSources: (siteId: string) => request<Source[]>('site/sourcesOfSite', { siteId }),
-  sourceAdd: (siteId: string, source: Source) =>
-    request<{ ok: boolean; message?: string; sourceId?: string }>('site/addSource', { siteId, source }),
+  // inherit（0710 会议 B5）：是否同步网站信息（统一流程模板 + 网站默认设置），缺省 true 保持旧行为
+  sourceAdd: (siteId: string, source: Source, inherit = true) =>
+    request<{ ok: boolean; message?: string; sourceId?: string }>('site/addSource', { siteId, source, inherit }),
   sourceRemove: (siteId: string, sourceId: string) => request<Ack>('site/removeSource', { siteId, sourceId }),
+  // 按网站批量导入子源（0710 会议 A5）：一行一条「名称;URL」，导入的子源继承网站统一流程
+  siteImportSources: (siteId: string, lines: string) =>
+    request<{ ok: boolean; message?: string; added?: number; skipped?: number }>('site/importSources', { siteId, lines }),
   // 危险端点：整条流程覆盖所选子源，UI 走二次确认 + 多选列表
   siteSyncFlow: (siteId: string, sourceIds: string[]) => request<Ack>('site/syncFlow', { siteId, sourceIds }),
   // 任务视图网站化（0707 优化·Phase5）：队列汇总 + 展开明细，sourceId 可选收窄到单个子源
@@ -157,10 +161,20 @@ export const entryApi = {
 // 参数列表（M5 采集资产）
 export const paramApi = {
   paramPaged: (p?: PageQuery) => request<Paged<Param>>('config/paramPaged', p),
-  paramDetail: (paramId: string) => request<Param>('config/paramDetail', { paramId }),
+  // 0711 R9：找不到返回 null（而不是静默兜底成别的参数），供 URL 参数编辑器判断"是否需要引导创建"
+  paramDetail: (paramId: string) => request<Param | null>('config/paramDetail', { paramId }),
   genValues: (paramId: string) => request<string[]>('config/genValues', { paramId }),
   addParamValues: (paramId: string) => request<Ack>('config/addParamValues', { paramId }),
   updateParam: (paramId: string) => request<Ack>('config/updateParam', { paramId }),
+  // 0711 R9：URL 参数编辑器发现 URL 引用的参数 id 不存在时，就地创建
+  paramCreate: (param: ParamInput) => request<{ ok: boolean; message?: string; param?: Param }>('config/param-add', { param }),
+  paramUpdate: (param: Param) => request<{ ok: boolean; message?: string; param?: Param }>('config/updateParam', { param }),
+}
+
+// 原始文件（0711 R11：文件视图，仅子源态使用）
+export const fileApi = {
+  filePaged: (q: RawFileQuery) => request<Paged<RawFile>>('file/filePaged', q),
+  fileStats: (sourceId: string) => request<RawFileStats>('file/fileStats', { sourceId }),
 }
 
 // 工作台摘要（首页）

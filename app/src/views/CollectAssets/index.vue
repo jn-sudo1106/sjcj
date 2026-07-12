@@ -4,10 +4,9 @@ import SourceTab from './SourceTab.vue'
 import ConfigTab from './ConfigTab.vue'
 import EntryTab from './EntryTab.vue'
 import ParamTab from './ParamTab.vue'
-import SourceTabsBar from '../FlowCanvas/SourceTabsBar.vue'
 
 const TABS: { key: string; label: string }[] = [
-  { key: 'source', label: '源列表' },
+  { key: 'source', label: '网站列表' },
   { key: 'config', label: '配置列表' },
   { key: 'entry', label: '表 ID 列表' },
   { key: 'param', label: '参数列表' },
@@ -29,8 +28,6 @@ const active = ref('source')
         {{ t.label }}
       </span>
     </div>
-    <!-- 源详情工作区页签条：挂在功能页签下方、仅「源列表」页签下显示（0702 追加优化） -->
-    <SourceTabsBar v-if="active === 'source'" />
     <component :is="comps[active]" :key="active" />
   </div>
 </template>

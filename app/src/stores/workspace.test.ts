@@ -51,6 +51,12 @@ describe('workspace 源详情多页签（优化 0701 问题三）', () => {
     expect(ws.snapshotOf('s1')?.view).toBe('task')
   })
 
+  it('saveSnapshot：文件视图（0711 R11）同样可记忆恢复', () => {
+    ws.open('s1', '源一')
+    ws.saveSnapshot('s1', { view: 'file' })
+    expect(ws.snapshotOf('s1')?.view).toBe('file')
+  })
+
   it('saveSnapshot 合并保存，close 后清理快照', () => {
     ws.open('s1', '源一')
     ws.saveSnapshot('s1', { view: 'data', page: 3 })
@@ -77,49 +83,44 @@ describe('workspace 源详情多页签（优化 0701 问题三）', () => {
   })
 })
 
-describe('workspace 分屏对比（优化 0701 问题三 · 方案 C）', () => {
+describe('workspace 分屏对比（0710 会议 B4：与页签解耦，左右均为真实 sourceId）', () => {
   let ws: ReturnType<typeof useWorkspaceStore>
   beforeEach(() => {
     sessionStorage.clear()
     setActivePinia(createPinia())
     ws = useWorkspaceStore()
-    ws.open('s1', '源一')
-    ws.open('s2', '源二')
-    ws.open('s3', '源三')
-    ws.activate('s1')
   })
 
-  it('enterCompare：与活动页签不同且已打开才成功', () => {
-    expect(ws.enterCompare('s1')).toBe(false) // 不能对比自己
-    expect(ws.enterCompare('ghost')).toBe(false) // 未打开的源
+  it('enterCompare：左右为不同真实子源即可，不要求已打开页签；site: 伪 id 被拒', () => {
+    expect(ws.enterCompare('s2')).toBe(false) // 尚无左栏
+    expect(ws.enterCompare('s2', 's2')).toBe(false) // 不能对比自己
+    expect(ws.enterCompare('s2', 'site:a')).toBe(false) // 网站伪 id 不参与对比
+    expect(ws.enterCompare('site:a', 's1')).toBe(false)
     expect(ws.compareSourceId).toBe('')
-    expect(ws.enterCompare('s2')).toBe(true)
+    expect(ws.enterCompare('s2', 's1')).toBe(true) // s1/s2 均未开页签，跨站直接按 id 对比
+    expect(ws.compareLeftId).toBe('s1')
     expect(ws.compareSourceId).toBe('s2')
+    // 对比中只换右栏：缺省沿用现有左栏
+    expect(ws.enterCompare('s3')).toBe(true)
+    expect(ws.compareLeftId).toBe('s1')
+    expect(ws.compareSourceId).toBe('s3')
   })
 
-  it('exitCompare：清空对比态', () => {
-    ws.enterCompare('s2')
+  it('exitCompare：左右栏一并清空', () => {
+    ws.enterCompare('s2', 's1')
     ws.exitCompare()
     expect(ws.compareSourceId).toBe('')
+    expect(ws.compareLeftId).toBe('')
   })
 
-  it('close：关闭右栏源自动退出对比', () => {
-    ws.enterCompare('s2')
-    ws.close('s2')
-    expect(ws.compareSourceId).toBe('')
-  })
-
-  it('close：关闭活动页签导致左右栏重合时自动退出对比', () => {
-    ws.enterCompare('s2')
-    // 关闭活动页签 s1 → 按"右邻优先"策略下一个活动应为 s2，与对比目标重合，需退出对比
-    ws.close('s1')
-    expect(ws.activeSourceId).toBe('s2')
-    expect(ws.compareSourceId).toBe('')
-  })
-
-  it('close：关闭与对比无关的页签不影响对比态', () => {
-    ws.enterCompare('s2')
-    ws.close('s3')
+  it('close：关闭活动页签退出对比；关闭非活动页签不影响对比态', () => {
+    ws.open('site:a', '站A')
+    ws.open('draft-1', '草稿源') // 活动页签
+    ws.enterCompare('s2', 's1')
+    ws.close('site:a') // 非活动
     expect(ws.compareSourceId).toBe('s2')
+    ws.close('draft-1') // 活动页签关闭 = 离开对比上下文
+    expect(ws.compareSourceId).toBe('')
+    expect(ws.compareLeftId).toBe('')
   })
 })

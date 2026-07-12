@@ -567,6 +567,14 @@ textarea {
   transform: translateX(130%);
 }
 
+/* 顶部动作按钮禁用态（0710 会议 D3：试跑未保存时禁用） */
+.rc-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 /* 运行中状态点：呼吸脉冲 */
 .rc-status.run::before {
   animation: rc-dot-pulse 1.6s ease-in-out infinite;

@@ -51,6 +51,7 @@ export interface Source {
   coreParam?: string // 核心参数
   lastUrl?: string // 上次 URL
   dirId?: string // 目录 ID
+  /** @deprecated 节点级缺省值；已双轨至 CollectConfig.credentialRef */
   credentialRef?: string // 登录凭据引用（CredentialRef.refId，不存明文）
   updatedAt?: string // 更新时间
   color?: string // 颜色标识
@@ -60,18 +61,23 @@ export interface Source {
   siteId?: string // 所属网站；未分组的历史/草稿源可为空
   detached?: boolean // 子源流程已脱离网站统一模板（保存过自定义流程）；网站同步覆盖后重置为 false
   // ---- 源级配置（0706 优化·源/节点配置分层）：整条流程共享，编辑入口 = 源信息头编辑抽屉 / 新建源第一步 ----
+  /** @deprecated 节点级缺省值；已双轨至 CollectConfig.useProxy */
   useProxy?: boolean // 是否使用代理
+  /** @deprecated 节点级缺省值；已双轨至 CollectConfig.needLogin */
   needLogin?: boolean // 是否要求登陆（与 credentialRef 解耦：可先开关，后续再绑凭据）
+  /** @deprecated 节点级缺省值；已双轨至 CollectConfig.loginUrl */
   loginUrl?: string // 登陆 URL
+  /** @deprecated 节点级缺省值；已双轨至 CollectConfig.account */
   account?: string // 登陆用户名
   configMode?: 'new' | 'existing' // 选用配置：新建 / 使用已有
   configName?: string // 新建配置名称（configMode='new' 时）
   configTopic?: string // 新建配置 Topic（队列 fallback 提示用）
   configStrategy?: string // 新建配置运行策略：增量/全量/按需触发
-  scheduleType?: string // 定时策略类型（作用于首节点，见设计方案 §0.3）
-  scheduleTime?: string // 定时时间点
-  weekdays?: number[] // 定时星期（1=周一...7=周日）
-  cron?: string // cron 表达式
+  /** @deprecated 历史调度字段；读取流程时迁入首节点 TaskConfig，不再新写入。 */
+  scheduleType?: string
+  scheduleTime?: string
+  weekdays?: number[]
+  cron?: string
 }
 
 /** 网站 Site（0707 优化·Phase2）：父级，统一流程模板 + 批量工具，本身不实际采集运行；下辖多个子源（Source.siteId） */
@@ -131,17 +137,55 @@ export interface EntryField {
   dedup?: boolean // 去重列
 }
 
-/** 参数 Parameter — 三类：列表 / 动态日期 / 序列 */
+/** 参数来源类型：与原系统参数列表一致。 */
+export type ParamKind = 'list' | 'date' | 'sequence' | 'date_sequence' | 'database'
+
+/** 参数定义：全局管理，节点只保存 paramId 绑定关系。 */
 export interface Param {
   paramId: string
   name: string
-  kind: 'list' | 'date' | 'sequence'
-  values?: string[] // 列表
-  dateExpr?: string // $CUR_DATA,偏移,格式
+  group?: string
+  kind: ParamKind
+  values?: string[] // 列表或数据库预览值
+  defaultValue?: string
+  dateExpr?: string // $CUR_DATE,偏移,格式
   seq?: { start: number; end: number; step: number }
+  databaseQuery?: string
   usedBy?: number // 被多少配置引用
   owner?: string
   updatedAt?: string
+}
+
+export type ParamInput = Omit<Param, 'paramId' | 'usedBy' | 'updatedAt'> & { paramId?: string }
+
+/** 原始文件（0711 R11：文件视图，仅子源态展示——"文件视图只有源才有"） */
+export interface RawFile {
+  fileId: string
+  sourceId: string
+  nodeId: string
+  fileName: string
+  contentType: string
+  size: number
+  state: 'C' | 'E'
+  createdAt: string
+  viewUrl?: string
+  downloadUrl?: string
+}
+
+export interface RawFileQuery extends PageQuery {
+  sourceId: string
+  nodeId?: string
+  contentType?: string
+  state?: '' | 'C' | 'E'
+  dateFrom?: string
+  dateTo?: string
+}
+
+export interface RawFileStats {
+  total: number
+  totalSize: number
+  failed: number
+  latestCreatedAt?: string
 }
 
 /** 节点粒度运行统计（0706 Phase4·任务视图=运行视图，0707 Phase5 起该形态退役，仅内部聚合用） */
@@ -514,10 +558,34 @@ export interface OverviewException {
   at?: string
 }
 
+/** 采集网站全景节点 —— 与采集资产分类树使用同一 categoryPath 口径 */
+export interface OverviewPanoramaNode {
+  id: string
+  label: string
+  total: number // 网站数
+  sourceCount: number // 网站下子源数
+  error: number // 含异常子源的网站数
+}
+
+/** 一级分类节点，children 为当前分类树的二级分支 */
+export interface OverviewPanoramaBranch extends OverviewPanoramaNode {
+  children: OverviewPanoramaNode[]
+}
+
+/** 采集网站全景聚合 */
+export interface OverviewPanorama {
+  total: number // 网站总数
+  sourceCount: number // 子源总数
+  error: number // 异常网站数
+  unclassified: number // 未进入任何一级分类的网站数
+  branches: OverviewPanoramaBranch[]
+}
+
 /** 总览聚合返回（一次拉全，减少首屏请求） */
 export interface OverviewSummary {
   kpi: OverviewKpi
   ecosystem: { sources: number; configs: number; tables: number; params: number }
+  panorama: OverviewPanorama
   byCategory: OverviewSlice[] // 资产类型占比
   byCycle: OverviewSlice[] // 采集周期分布
   byState: OverviewSlice[] // 运行状态分布

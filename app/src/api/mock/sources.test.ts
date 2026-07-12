@@ -20,9 +20,9 @@ describe('新建 / 编辑源（0706 Phase3/4）', () => {
 
   it('updateSource：真写回 SOURCES，sourceDetail 可见变更；未知源报错', () => {
     const before = mockSourceDetail({ sourceId: '391007768' })
-    const res = mockSourceUpdate({ source: { ...before, tags: ['A', 'B'] } })
+    const res = mockSourceUpdate({ source: { ...before!, tags: ['A', 'B'] } })
     expect(res.ok).toBe(true)
-    expect(mockSourceDetail({ sourceId: '391007768' }).tags).toEqual(['A', 'B'])
+    expect(mockSourceDetail({ sourceId: '391007768' })!.tags).toEqual(['A', 'B'])
     expect(mockSourceUpdate({ source: { sourceId: 'ghost-404', name: '', url: '', configId: '', mainTable: '', owner: '', state: 'C' } }).ok).toBe(false)
   })
 })
