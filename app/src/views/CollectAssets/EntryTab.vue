@@ -105,9 +105,8 @@ function onRebuildIndex(e: EntryType) {
         @size-change="onSize"
       />
     </div>
-  </div>
 
-  <el-drawer v-model="drawer.visible" :with-header="false" size="560px">
+  <el-drawer v-model="drawer.visible" :with-header="false" size="560px" append-to-body>
     <div v-if="drawer.entry" class="et-d">
       <div class="et-d-title">实体编辑器</div>
       <div class="et-d-sub muted">{{ drawer.entry.tableName }} · 表 ID {{ drawer.entry.tableId }} · {{ (drawer.entry.rowCount ?? 0).toLocaleString() }} 行</div>
@@ -138,6 +137,7 @@ function onRebuildIndex(e: EntryType) {
       </div>
     </div>
   </el-drawer>
+  </div>
 </template>
 
 <style scoped>

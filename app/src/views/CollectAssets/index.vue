@@ -16,29 +16,61 @@ const active = ref('source')
 </script>
 
 <template>
-  <div>
-    <div class="rc-tabs ca-tabs">
-      <span
-        v-for="t in TABS"
-        :key="t.key"
-        class="rc-tab-link"
-        :class="{ active: active === t.key }"
-        @click="active = t.key"
-      >
-        {{ t.label }}
-      </span>
+  <div class="ca-page-wrap">
+    <div class="ca-tabs-wrap">
+      <div class="ca-tabs-inner">
+        <button
+          v-for="t in TABS"
+          :key="t.key"
+          class="ca-tab-link"
+          :class="{ active: active === t.key }"
+          @click="active = t.key"
+        >
+          {{ t.label }}
+        </button>
+      </div>
     </div>
-    <component :is="comps[active]" :key="active" />
+    <div class="ca-content">
+      <transition name="fade-slide" mode="out-in">
+        <component :is="comps[active]" :key="active" />
+      </transition>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.ca-tabs {
-  margin-bottom: 12px;
-  background: var(--rc-surface);
-  border: 1px solid var(--rc-border);
-  border-radius: var(--rc-radius);
-  padding: 0 16px;
-  box-shadow: var(--rc-shadow);
+.ca-page-wrap { display: flex; flex-direction: column; gap: 12px; height: 100%; }
+.ca-tabs-wrap { display: flex; justify-content: flex-start; }
+.ca-content { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.ca-tabs-inner {
+  display: inline-flex;
+  padding: 4px;
+  background: #f1f5f9;
+  border-radius: 10px;
+  gap: 4px;
 }
+.ca-tab-link {
+  border: 0;
+  background: transparent;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.ca-tab-link:hover { color: #0f172a; }
+.ca-tab-link.active {
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.fade-slide-enter-from { opacity: 0; transform: translateY(8px); }
+.fade-slide-leave-to { opacity: 0; transform: translateY(-8px); }
 </style>

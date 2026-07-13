@@ -198,11 +198,11 @@ async function toggleSite(siteId: string) {
 
 // ---- 展示辅助 ----
 function statusMeta(s: Source) {
-  if (s.disabled) return { cls: 'muted', text: '已停用' }
-  if (s.state === 'C') return { cls: 'ok', text: '成功' }
-  if (s.state === 'E') return { cls: 'err', text: '出错' }
-  if (s.state === 'L') return { cls: 'run', text: '运行中' }
-  return { cls: 'muted', text: '未知' }
+  if (s.disabled) return { type: 'info', text: '已停用' }
+  if (s.state === 'C') return { type: 'success', text: '成功' }
+  if (s.state === 'E') return { type: 'danger', text: '出错' }
+  if (s.state === 'L') return { type: 'primary', text: '运行中' }
+  return { type: 'info', text: '未知' }
 }
 // 页签网站化（0710 会议 B3）：入口只推路由，页签注册统一收口在画布加载（index.vue）——
 // 点子源名会落到所属网站页签并在侧栏定位到该子源，无 siteId 的历史草稿源仍开独立页签
@@ -349,32 +349,32 @@ onUnmounted(() => ui.clearActions())
         class="ca-search"
         @input="onKeywordInput"
       />
-      <select v-model="categoryFilter" class="ca-select" @change="resetAndLoad">
-        <option value="">全部分类</option>
+      <el-select v-model="categoryFilter" placeholder="全部分类" style="width: 150px" clearable @change="resetAndLoad">
+        <el-option label="全部分类" value="" />
         <template v-for="g in categories" :key="g.id">
-          <option :value="g.id">{{ g.name }}（{{ g.count }}）</option>
-          <option v-for="c in g.children" :key="c.id" :value="c.id">　└ {{ c.name }}（{{ c.count }}）</option>
+          <el-option :label="`${g.name}（${g.count}）`" :value="g.id" />
+          <el-option v-for="c in g.children" :key="c.id" :label="`　└ ${c.name}（${c.count}）`" :value="c.id" />
         </template>
-      </select>
-      <select v-model="tagFilter" class="ca-select" @change="resetAndLoad">
-        <option value="">全部标签</option>
-        <option v-for="t in allTags" :key="t" :value="t">{{ t }}</option>
-      </select>
-      <select v-model="stateFilter" class="ca-select" @change="resetAndLoad">
-        <option value="all">全部状态</option>
-        <option value="error">有异常子源</option>
-      </select>
-      <select v-model="sortBy" class="ca-select" @change="loadList">
-        <option value="updated">最近修改</option>
-        <option value="name">名称</option>
-      </select>
+      </el-select>
+      <el-select v-model="tagFilter" placeholder="全部标签" style="width: 130px" clearable @change="resetAndLoad">
+        <el-option label="全部标签" value="" />
+        <el-option v-for="t in allTags" :key="t" :label="t" :value="t" />
+      </el-select>
+      <el-select v-model="stateFilter" placeholder="全部状态" style="width: 130px" clearable @change="resetAndLoad">
+        <el-option label="全部状态" value="all" />
+        <el-option label="有异常子源" value="error" />
+      </el-select>
+      <el-select v-model="sortBy" style="width: 120px" @change="loadList">
+        <el-option label="最近修改" value="updated" />
+        <el-option label="名称" value="name" />
+      </el-select>
       <el-button v-if="hasFilter" text class="ca-clear-filter" @click="clearFilters">清空</el-button>
       <div class="ca-stats">
-        <span>网站 <b>{{ total }}</b></span>
-        <span>源 <b>{{ stats.total }}</b></span>
-        <span>异常 <b class="danger">{{ stats.error }}</b></span>
-        <span>待确认 <b class="warn">{{ stats.externalChanged }}</b></span>
-        <span>停用 <b>{{ stats.disabled }}</b></span>
+        <el-tag type="info" effect="plain" class="stat-tag">网站 <b>{{ total }}</b></el-tag>
+        <el-tag type="info" effect="plain" class="stat-tag">源 <b>{{ stats.total }}</b></el-tag>
+        <el-tag v-if="stats.error > 0" type="danger" class="stat-tag">异常 <b>{{ stats.error }}</b></el-tag>
+        <el-tag v-if="stats.externalChanged > 0" type="warning" class="stat-tag">待确认 <b>{{ stats.externalChanged }}</b></el-tag>
+        <el-tag v-if="stats.disabled > 0" type="info" effect="plain" class="stat-tag">停用 <b>{{ stats.disabled }}</b></el-tag>
       </div>
       <span class="ca-spacer" />
       <div class="ca-view-toggle">
@@ -385,37 +385,39 @@ onUnmounted(() => ui.clearActions())
     </div>
 
     <!-- 批量工具条（选中时出现，仅表格视图会产生选中） -->
-    <div v-if="selectedIds.length" class="ca-batchbar">
-      <span>已选 <b>{{ selectedIds.length }}</b> 个源</span>
-      <button class="rc-btn" type="button" @click="onBatchSnatch">发抓取</button>
-      <el-dropdown trigger="click" @command="onOperate">
-        <button class="rc-btn" type="button">操作类 ▾</button>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <el-dropdown-item command="success">改为成功状态</el-dropdown-item>
-            <el-dropdown-item command="enable">启用</el-dropdown-item>
-            <el-dropdown-item command="disable">禁用</el-dropdown-item>
-            <el-dropdown-item command="schedule" divided>批量定时</el-dropdown-item>
-            <el-dropdown-item command="modify">批量改配置</el-dropdown-item>
-            <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
-      <el-dropdown trigger="click" @command="onMonitor">
-        <button class="rc-btn" type="button">监控类 ▾</button>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <el-dropdown-item command="freq-日度">频率：日度</el-dropdown-item>
-            <el-dropdown-item command="freq-周度">频率：周度</el-dropdown-item>
-            <el-dropdown-item command="freq-月度">频率：月度</el-dropdown-item>
-            <el-dropdown-item command="normal" divided>人工核验已正常</el-dropdown-item>
-            <el-dropdown-item command="abnormal">人工标为异常</el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
-      <button class="rc-btn danger" type="button" @click="onBatchDelete">批量删除</button>
-      <el-button text @click="selectedIds = []">清空选择</el-button>
-    </div>
+    <transition name="slide-up">
+      <div v-if="selectedIds.length" class="ca-batchbar">
+        <span>已选 <b>{{ selectedIds.length }}</b> 个源</span>
+        <button class="rc-btn" type="button" @click="onBatchSnatch">发抓取</button>
+        <el-dropdown trigger="click" @command="onOperate">
+          <button class="rc-btn" type="button">操作类 ▾</button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="success">改为成功状态</el-dropdown-item>
+              <el-dropdown-item command="enable">启用</el-dropdown-item>
+              <el-dropdown-item command="disable">禁用</el-dropdown-item>
+              <el-dropdown-item command="schedule" divided>批量定时</el-dropdown-item>
+              <el-dropdown-item command="modify">批量改配置</el-dropdown-item>
+              <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <el-dropdown trigger="click" @command="onMonitor">
+          <button class="rc-btn" type="button">监控类 ▾</button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="freq-日度">频率：日度</el-dropdown-item>
+              <el-dropdown-item command="freq-周度">频率：周度</el-dropdown-item>
+              <el-dropdown-item command="freq-月度">频率：月度</el-dropdown-item>
+              <el-dropdown-item command="normal" divided>人工核验已正常</el-dropdown-item>
+              <el-dropdown-item command="abnormal">人工标为异常</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <button class="rc-btn danger" type="button" @click="onBatchDelete">批量删除</button>
+        <el-button text @click="selectedIds = []">清空选择</el-button>
+      </div>
+    </transition>
 
     <!-- 卡片视图 -->
     <div v-if="view === 'card'" v-loading="loading" class="ca-card-body">
@@ -501,9 +503,9 @@ onUnmounted(() => ui.clearActions())
                   <td>
                     <div class="ca-src">
                       <button class="ca-src-name" type="button" @click="openSourceCanvas(s)">{{ s.name }}</button>
-                      <span class="rc-status" :class="statusMeta(s).cls">{{ statusMeta(s).text }}</span>
-                      <span v-if="s.alarm" class="rc-status warn">告警</span>
-                      <span v-if="s.externalChanged" class="ca-flag">外部变更</span>
+                      <el-tag size="small" :type="statusMeta(s).type as any" effect="light">{{ statusMeta(s).text }}</el-tag>
+                      <el-tag v-if="s.alarm" size="small" type="warning" effect="dark">告警</el-tag>
+                      <el-tag v-if="s.externalChanged" size="small" type="warning" effect="light">外部变更</el-tag>
                     </div>
                     <div class="ca-cell-sub">{{ s.sourceId }} · {{ s.url }}</div>
                   </td>
@@ -591,38 +593,14 @@ onUnmounted(() => ui.clearActions())
 .ca-stats {
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: 8px;
   min-width: 0;
-  color: var(--rc-text-2);
-  font-size: 13px;
   white-space: nowrap;
 }
-.ca-stats span {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 5px;
-  padding: 0 8px;
-  border-left: 1px solid var(--rc-border-soft);
-  line-height: 20px;
-}
-.ca-stats span:first-child { border-left: 0; }
-.ca-stats b { color: var(--rc-text); font-size: 15px; font-weight: 800; }
-.ca-stats b.danger { color: var(--rc-error); }
-.ca-stats b.warn { color: #d97706; }
+.stat-tag { font-size: 12px; }
+.stat-tag b { font-weight: 800; font-size: 13px; margin-left: 3px; }
 .ca-spacer { flex: 1; min-width: 12px; }
-.ca-select {
-  height: 34px;
-  flex: 0 0 96px;
-  width: 96px;
-  border: 1px solid var(--rc-border);
-  border-radius: 6px;
-  background: #fff;
-  color: var(--rc-text);
-  font-size: 12px;
-  padding: 0 10px;
-  outline: none;
-}
-.ca-select:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
+
 .ca-clear-filter { flex: none; padding: 0 4px; height: 30px; font-size: 12px; }
 .ca-view-toggle {
   display: inline-flex;
@@ -780,14 +758,16 @@ onUnmounted(() => ui.clearActions())
   cursor: pointer;
 }
 .ca-src-name:hover { text-decoration: underline; }
-.ca-flag {
-  flex: none;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--rc-warn-bg);
-  color: var(--rc-warn);
-  font-size: 11px;
-  font-weight: 600;
+
+/* ---- 动画过渡 ---- */
+.slide-up-enter-active,
+.slide-up-leave-active {
+  transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.slide-up-enter-from,
+.slide-up-leave-to {
+  opacity: 0;
+  transform: translateY(10px);
 }
 .ca-count-link {
   padding: 0;

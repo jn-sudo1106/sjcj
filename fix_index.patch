@@ -1,0 +1,10 @@
+--- app/src/views/CollectAssets/index.vue
++++ app/src/views/CollectAssets/index.vue
+@@ -37,6 +37,7 @@
+ <style scoped>
+ .ca-page-wrap { display: flex; flex-direction: column; gap: 12px; height: 100%; }
+ .ca-tabs-wrap { display: flex; justify-content: flex-start; }
++.ca-content { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+ .ca-tabs-inner {
+   display: inline-flex;
+   padding: 4px;
