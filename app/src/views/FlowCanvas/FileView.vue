@@ -18,6 +18,7 @@ const loading = ref(false)
 const page = ref(1)
 const size = 20
 const filters = reactive({ nodeId: '', contentType: '', state: '' })
+const dateRange = ref<[string, string] | null>(null)
 
 async function loadSteps() {
   try {
@@ -48,6 +49,8 @@ async function loadList() {
       nodeId: filters.nodeId || undefined,
       contentType: filters.contentType || undefined,
       state: (filters.state || undefined) as '' | 'C' | 'E' | undefined,
+      dateFrom: dateRange.value?.[0] || undefined,
+      dateTo: dateRange.value?.[1] || undefined,
       page: page.value,
       size,
     })
@@ -65,18 +68,17 @@ watch(sourceId, async () => {
   page.value = 1
   await Promise.allSettled([loadSteps(), loadStats(), loadList()])
 }, { immediate: true })
-watch(filters, () => { page.value = 1; loadList() }, { deep: true })
+watch([filters, dateRange], () => { page.value = 1; loadList() }, { deep: true })
 
 function resetFilters() {
   filters.nodeId = ''
   filters.contentType = ''
   filters.state = ''
+  dateRange.value = null
 }
-function prevPage() {
-  if (page.value > 1) { page.value -= 1; loadList() }
-}
-function nextPage() {
-  if (page.value * size < total.value) { page.value += 1; loadList() }
+function handleCurrentChange(val: number) {
+  page.value = val
+  loadList()
 }
 function stateMeta(s: RawFile['state']) {
   return s === 'E' ? { cls: 'err', text: '失败' } : { cls: 'ok', text: '成功' }
@@ -94,32 +96,40 @@ function formatSize(bytes: number): string {
     <div class="fv-body">
       <div v-if="!sourceId" class="fv-empty-row">文件视图仅在子源详情下可用。</div>
       <template v-else>
-        <div class="fv-stats">
-          <div class="fv-stat"><span>文件总数</span><b>{{ (stats?.total ?? 0).toLocaleString() }}</b></div>
-          <div class="fv-stat"><span>总大小</span><b>{{ formatSize(stats?.totalSize ?? 0) }}</b></div>
-          <div class="fv-stat"><span>失败数</span><b :class="{ danger: (stats?.failed ?? 0) > 0 }">{{ stats?.failed ?? 0 }}</b></div>
-          <div class="fv-stat"><span>最近生成</span><b class="soft">{{ stats?.latestCreatedAt || '—' }}</b></div>
-        </div>
+
 
         <div class="fv-filters">
-          <select v-model="filters.nodeId" class="rc-select">
-            <option value="">全部节点</option>
-            <option v-for="s in steps" :key="s.stepId" :value="s.stepId">{{ s.name }}</option>
-          </select>
-          <select v-model="filters.contentType" class="rc-select">
-            <option value="">全部类型</option>
-            <option value="html">html</option>
-            <option value="pdf">pdf</option>
-            <option value="json">json</option>
-          </select>
-          <select v-model="filters.state" class="rc-select">
-            <option value="">全部状态</option>
-            <option value="C">成功</option>
-            <option value="E">失败</option>
-          </select>
-          <button class="rc-btn" type="button" @click="resetFilters">清空筛选</button>
+          <el-select v-model="filters.nodeId" placeholder="全部节点" clearable style="width: 150px">
+            <el-option label="全部节点" value="" />
+            <el-option v-for="s in steps" :key="s.stepId" :label="s.name" :value="s.stepId" />
+          </el-select>
+          <el-select v-model="filters.contentType" placeholder="全部类型" clearable style="width: 130px">
+            <el-option label="全部类型" value="" />
+            <el-option label="html" value="html" />
+            <el-option label="pdf" value="pdf" />
+            <el-option label="json" value="json" />
+          </el-select>
+          <el-select v-model="filters.state" placeholder="全部状态" clearable style="width: 130px">
+            <el-option label="全部状态" value="" />
+            <el-option label="成功" value="C" />
+            <el-option label="失败" value="E" />
+          </el-select>
+          <el-date-picker
+            v-model="dateRange"
+            type="daterange"
+            range-separator="至"
+            start-placeholder="开始日期"
+            end-placeholder="结束日期"
+            format="YYYY-MM-DD"
+            value-format="YYYY-MM-DD"
+            style="width: 280px"
+          />
+          <el-button type="primary" @click="resetFilters" plain>清空筛选</el-button>
           <span class="fv-spacer" />
-          <span class="muted">共 {{ total }} 个文件</span>
+          <span class="muted">
+            共 {{ total }} 个文件 <span v-if="stats?.totalSize" style="margin-left: 4px;">({{ formatSize(stats?.totalSize ?? 0) }})</span>
+            <span v-if="(stats?.failed ?? 0) > 0" style="color: #ef4444; margin-left: 8px;">(失败 {{ stats?.failed }})</span>
+          </span>
         </div>
 
         <table class="rc-data-table fv-table" v-loading="loading">
@@ -154,9 +164,14 @@ function formatSize(bytes: number): string {
           </tbody>
         </table>
         <div class="fv-pager">
-          <button class="rc-btn" type="button" :disabled="page <= 1" @click="prevPage">上一页</button>
-          <span class="muted">第 {{ page }} 页</span>
-          <button class="rc-btn" type="button" :disabled="page * size >= total" @click="nextPage">下一页</button>
+          <el-pagination
+            background
+            layout="prev, pager, next"
+            :current-page="page"
+            :page-size="size"
+            :total="total"
+            @current-change="handleCurrentChange"
+          />
         </div>
       </template>
     </div>
@@ -164,27 +179,54 @@ function formatSize(bytes: number): string {
 </template>
 
 <style scoped>
-.fv-shell { background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; height: 100%; display: flex; flex-direction: column; }
-.fv-body { flex: 1; overflow: auto; padding: 12px; }
-.fv-empty-row { text-align: center; color: var(--rc-faint); font-size: 12px; padding: 28px 12px; }
+.fv-shell { 
+  background: linear-gradient(145deg, #fafcff 0%, #ffffff 100%); 
+  border: 1px solid var(--rc-border); 
+  border-radius: 12px; 
+  overflow: hidden; 
+  height: 100%; 
+  display: flex; 
+  flex-direction: column;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.02);
+}
+.fv-body { flex: 1; overflow: auto; padding: 20px 24px; animation: fadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+.fv-empty-row { text-align: center; color: var(--rc-faint); font-size: 13px; padding: 40px 12px; }
 
-.fv-stats { display: flex; gap: 20px; padding: 10px 4px 14px; border-bottom: 1px solid var(--rc-border-soft); margin-bottom: 10px; }
-.fv-stat { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--rc-muted); }
-.fv-stat b { font-size: 16px; font-weight: 800; color: var(--rc-text); }
-.fv-stat b.danger { color: var(--rc-error); }
-.fv-stat b.soft { font-size: 12px; font-weight: 600; color: var(--rc-text-2); }
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 
-.fv-filters { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+
+
+.fv-filters { 
+  display: flex; 
+  align-items: center; 
+  gap: 12px; 
+  margin-bottom: 16px;
+  background: #f8fafc;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: 1px solid #f1f5f9;
+}
 .fv-spacer { flex: 1; }
-.muted { color: var(--rc-faint); font-size: 12px; }
+.muted { color: #94a3b8; font-size: 13px; }
 
-.fv-table { width: 100%; }
+.fv-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.fv-table th { background: #f8fafc; color: #475569; font-weight: 600; padding: 12px 16px; font-size: 13px; border-bottom: 2px solid #e2e8f0; text-align: left; }
+.fv-table td { padding: 14px 16px; border-bottom: 1px solid #f1f5f9; transition: background 0.2s; vertical-align: middle; }
+.fv-table tbody tr:hover td { background: #fdfefe; }
 .fv-table th.num, .fv-table td.num { text-align: right; }
-.fv-name { font-family: var(--rc-mono, monospace); font-size: 12px; }
-.soft { color: var(--rc-text-2); font-size: 11px; }
-.fv-op { margin-right: 8px; font-size: 12px; color: var(--rc-primary-ink); text-decoration: none; }
-.fv-op:hover { text-decoration: underline; }
 
-.fv-pager { display: flex; align-items: center; gap: 8px; justify-content: flex-end; margin-top: 8px; }
-.fv-pager .rc-btn { height: 26px; padding: 0 10px; font-size: 11px; }
+.fv-name { font-family: var(--rc-mono, monospace); font-size: 13px; color: #334155; }
+.soft { color: #94a3b8; font-size: 12px; }
+
+.rc-status { padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; display: inline-block; }
+.rc-status.ok { background: rgba(34, 197, 94, 0.1); color: #16a34a; border: 1px solid rgba(34, 197, 94, 0.2); }
+.rc-status.err { background: rgba(239, 68, 68, 0.1); color: #dc2626; border: 1px solid rgba(239, 68, 68, 0.2); }
+
+.fv-op { margin-right: 12px; font-size: 13px; color: #3b82f6; text-decoration: none; font-weight: 500; transition: color 0.2s; }
+.fv-op:hover { color: #2563eb; text-decoration: underline; }
+
+.fv-pager { display: flex; align-items: center; justify-content: flex-end; margin-top: 16px; }
 </style>
