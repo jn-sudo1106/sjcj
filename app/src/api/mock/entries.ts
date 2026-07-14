@@ -64,6 +64,22 @@ export function mockEntryDetail(params?: Record<string, unknown>): EntryType {
 
 // 新建 / 编辑表：按 tableId upsert，无 tableId 视为新建（内存 session 持久化）
 let entrySeq = 1
+export function cloneEntryStructure(tableId: string, sourceId: string): EntryType | null {
+  const origin = ENTRIES.find((entry) => entry.tableId === tableId)
+  if (!origin) return null
+  const now = new Date().toISOString().slice(0, 16).replace('T', ' ')
+  const cloned: EntryType = {
+    ...structuredClone(origin),
+    tableId: `T${Date.now()}${entrySeq++}`,
+    tableName: `${origin.tableName}_COPY_${entrySeq}`,
+    sourceId,
+    rowCount: 0,
+    updatedAt: now,
+  }
+  ENTRIES.unshift(cloned)
+  return cloned
+}
+
 export function mockSaveEntryType(params?: Record<string, unknown>): { tableId: string; message?: string } {
   const entry = params?.entry as EntryType | undefined
   if (!entry) return { tableId: '', message: '缺少表数据' }

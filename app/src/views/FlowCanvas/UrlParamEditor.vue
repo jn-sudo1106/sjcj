@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { paramApi, type Param } from '../../api'
 import { extractUrlParamIds, hasFragmentParams, expandParameterizedUrl } from './urlParams'
 import ParamEditorDrawer from './ParamEditorDrawer.vue'
@@ -16,7 +16,6 @@ const emit = defineEmits<{
   insertToken: [paramId: string]
 }>()
 
-const open = ref(false)
 const pickerValue = ref('')
 const available = ref<Param[]>([])
 const details = reactive<Record<string, Param | null | undefined>>({})
@@ -43,7 +42,7 @@ async function loadOne(id: string) {
   }
 }
 watch(refs, (ids) => { ids.forEach((id) => { if (!(id in details) && !loading[id]) loadOne(id) }) }, { immediate: true })
-watch(open, (value) => { if (value && !available.value.length) loadAvailable() })
+onMounted(loadAvailable)
 
 function valueOf(id: string): string {
   return props.paramValues[id] || details[id]?.defaultValue || candidates[id]?.[0] || ''
@@ -117,8 +116,7 @@ async function copyPreviewUrl() {
 
 <template>
   <div class="upe">
-    <button class="upe-toggle" type="button" @click="open = !open">{{ open ? '▾' : '▸' }} 参数配置<span v-if="refs.length">（{{ refs.length }} 个）</span></button>
-    <div v-if="open" class="upe-body">
+    <div class="upe-body">
       <div class="upe-actions">
         <select v-model="pickerValue" class="rc-select upe-picker"><option value="">添加已有参数</option><option v-for="param in available.filter((item) => !refs.includes(item.paramId))" :key="param.paramId" :value="param.paramId">{{ param.name }} · {{ param.paramId }}</option></select>
         <button class="rc-btn" type="button" :disabled="!pickerValue" @click="bind(pickerValue)">绑定</button>
@@ -146,8 +144,7 @@ async function copyPreviewUrl() {
 
 <style scoped>
 .upe { margin-top: 4px; }
-.upe-toggle { display: block; border: 0; background: transparent; color: var(--rc-muted); font-size: 11px; font-weight: 600; cursor: pointer; padding: 2px 0; }
-.upe-toggle:hover, .upe-link:hover { color: var(--rc-primary-ink); }
+.upe-link:hover { color: var(--rc-primary-ink); }
 .upe-body { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--rc-border-soft); }
 .upe-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; margin-bottom: 10px; }
 .upe-actions .rc-btn { height: 30px; padding: 0 10px; font-size: 12px; white-space: nowrap; }.upe-actions .rc-btn:last-child { grid-column: 1 / -1; justify-self: start; }

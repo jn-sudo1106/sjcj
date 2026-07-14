@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { mockSourcePaged, mockSourceDetail, mockSourceCreate, mockSourceUpdate, mockSourceNodeRuns, mockSourceSteps, mockChangeSourceEnable, mockChangeToSuccess, mockBatchImport, SOURCES } from './sources'
+import { mockSourcePaged, mockSourceDetail, mockSourceCreate, mockSourceUpdate, mockSourceNodeRuns, mockSourceSteps, mockSourceTaskPaged, mockChangeSourceEnable, mockChangeToSuccess, mockBatchImport, SOURCES } from './sources'
 
 describe('source mock 筛选', () => {
   it('支持外部变更待确认筛选', () => {
@@ -81,5 +81,42 @@ describe('节点粒度运行统计（0706 Phase4·任务视图=运行视图）',
 
   it('nodeRunStats：未知源返回空数组', () => {
     expect(mockSourceNodeRuns({ sourceId: 'ghost-404' })).toEqual([])
+  })
+})
+
+describe('子源任务分页（0713）', () => {
+  it('只返回指定子源节点生成的任务，并支持节点、状态和分页筛选', () => {
+    const sourceId = '391007768'
+    const siteId = 'site-zfb'
+    const all = mockSourceTaskPaged({ siteId, sourceId, size: 20 })
+    const stepIds = mockSourceSteps({ sourceId }).map((step) => step.stepId)
+
+    expect(all.total).toBeGreaterThan(0)
+    expect(all.list.every((task) => task.sourceId === sourceId)).toBe(true)
+    expect(all.list.every((task) => stepIds.includes(task.node ?? ''))).toBe(true)
+
+    const oneNode = mockSourceTaskPaged({ siteId, sourceId, nodeId: stepIds[0], size: 20 })
+    expect(oneNode.total).toBeGreaterThan(0)
+    expect(oneNode.list.every((task) => task.node === stepIds[0])).toBe(true)
+
+    const completed = mockSourceTaskPaged({ siteId, sourceId, state: 'C', page: 1, size: 1 })
+    expect(completed.total).toBeGreaterThan(1)
+    expect(completed.list).toHaveLength(1)
+    expect(completed.list[0].state).toBe('C')
+  })
+
+  it('不传子源时汇总同一网站全部子源的任务', () => {
+    const all = mockSourceTaskPaged({ siteId: 'site-news', size: 99 })
+
+    expect(all.total).toBeGreaterThan(0)
+    expect(new Set(all.list.map((task) => task.sourceId))).toEqual(new Set(['NEWS5521', 'NEWS5522']))
+  })
+
+  it('未知子源没有任务', () => {
+    expect(mockSourceTaskPaged({ siteId: 'site-zfb', sourceId: 'ghost-404' })).toEqual({ total: 0, list: [] })
+  })
+
+  it('网站与子源不匹配时不返回任务', () => {
+    expect(mockSourceTaskPaged({ siteId: 'site-news', sourceId: '391007768' })).toEqual({ total: 0, list: [] })
   })
 })

@@ -15,21 +15,9 @@ const route = useRoute()
 // 当前是否停在源列表页（页签条只挂在 /collect 与 /canvas 源详情两处）
 const onList = computed(() => !route.path.startsWith('/canvas'))
 
-// 网站页签（0710 会议 B3：页签条收窄为网站粒度）：页签条不改数据结构，站复用 sourceId 字段存 `site:${siteId}`，
-// 靠前缀区分；无 siteId 的历史草稿源仍是独立源页签。对比入口已迁到子源侧栏（B4），页签条只留"对比中"指示。
-function isSiteTab(id: string): boolean {
-  return id.startsWith('site:')
-}
-
 function navTo(key: string) {
   const snap = ws.snapshotOf(key)
-  const view = snap?.view === 'data' || snap?.view === 'task' ? { view: snap.view } : {}
-  if (isSiteTab(key)) {
-    // 恢复页签内上次停留的编排对象：子源 → ?sourceId，模板/未知 → ?siteId
-    const sub = snap?.activeKey && snap.activeKey !== 'site' ? snap.activeKey : ''
-    router.push({ path: '/canvas', query: sub ? { sourceId: sub, ...view } : { siteId: key.slice(5), ...view } })
-    return
-  }
+  const view = snap?.view === 'data' || snap?.view === 'task' || snap?.view === 'file' ? { view: snap.view } : {}
   router.push({ path: '/canvas', query: { sourceId: key, ...view } })
 }
 
@@ -106,10 +94,10 @@ async function onCloseAll() {
       type="button"
       role="tab"
       :aria-selected="!onList && t.sourceId === ws.activeSourceId"
-      :title="isSiteTab(t.sourceId) ? `${t.name} · 网站模板` : `${t.name} · ${t.sourceId}`"
+      :title="`${t.name} · ${t.sourceId}`"
       @click="onActivate(t)"
     >
-      <span class="rc-src-tab-name">{{ isSiteTab(t.sourceId) ? '🌐 ' : '' }}{{ t.name }}</span>
+      <span class="rc-src-tab-name">{{ t.name }}</span>
       <i class="rc-src-tab-x" aria-label="关闭页签" @click.stop="onClose(t)">×</i>
     </button>
     <span class="rc-src-tabs-hint">{{ ws.tabs.length }}/8</span>

@@ -22,18 +22,15 @@ watch(() => props.sites, (list) => list.forEach((s) => ensureChildren(s.siteId))
 
 // 页签网站化（0710 会议 B3）：入口只推路由，页签注册统一收口在画布加载（index.vue）
 function openSource(s: Source) {
-  router.push({ path: '/canvas', query: { sourceId: s.sourceId } })
+  router.push({ path: '/canvas', query: { sourceId: s.sourceId, view: 'flow' } })
 }
 // 卡片主体点击 → 进入网站统一流程模板（0707 优化·Phase4）
 function openSite(site: Site) {
   router.push({ path: '/canvas', query: { siteId: site.siteId } })
 }
-// 卡片底部直达入口（0710 会议 A4）：数据量→数据视图，任务→任务视图（任务视图只挂网站层）
+// 卡片底部直达入口：数据量进入当前网站首个子源的数据视图。
 function openSiteData(site: Site) {
   router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data' } })
-}
-function openSiteTask(site: Site) {
-  router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'task' } })
 }
 function isErr(s: Source): boolean {
   return !s.disabled && s.state === 'E'
@@ -110,7 +107,7 @@ function pickOverflow(s: Source) {
         <span v-for="t in site.tags" :key="t" class="scg-tag">{{ t }}</span>
       </div>
 
-      <!-- 底部行（0710 会议 A4）：数据量点进数据视图 + 任务视图直达入口（会议：任务视图只挂网站层） -->
+      <!-- 底部行：数据量点进数据视图。 -->
       <div class="scg-foot">
         <span class="scg-foot-count">{{ site.sourceCount }} 个源</span>
         <span class="scg-foot-sep" />
@@ -119,7 +116,6 @@ function pickOverflow(s: Source) {
         </button>
         <span class="scg-foot-sep" />
         <span v-if="site.updatedAt" class="scg-foot-date" :title="`编辑于 ${site.updatedAt}`">编辑于 {{ site.updatedAt.slice(0, 10) }}</span>
-        <button class="scg-foot-task" type="button" title="查看该网站任务视图" @click.stop="openSiteTask(site)">任务</button>
       </div>
     </div>
 
@@ -196,20 +192,6 @@ function pickOverflow(s: Source) {
 .scg-foot-link { flex: none; padding: 0; border: 0; background: transparent; color: var(--rc-primary-ink); font-size: 11px; cursor: pointer; white-space: nowrap; }
 .scg-foot-link:hover { text-decoration: underline; }
 .scg-foot-date { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.scg-foot-task {
-  flex: none;
-  margin-left: auto;
-  height: 22px;
-  padding: 0 10px;
-  border: 1px solid var(--rc-border);
-  border-radius: 6px;
-  background: #fff;
-  color: var(--rc-text-2);
-  font-size: 11px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.scg-foot-task:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 
 .scg-empty-state { grid-column: 1 / -1; text-align: center; padding: 48px 16px; color: var(--rc-faint); font-size: 12px; background: #fff; border: 1px solid var(--rc-border); border-radius: 12px; }
 

@@ -408,3 +408,41 @@ export function mockSourceTasks(params?: Record<string, unknown>): TaskInst[] {
     { taskId: '8348508001', state: 'L', typeName: '浏览器抓取', taskName: '进行中任务', sourceId, configId: '70598', node: 'dev_web_snatch_zfb', topic: 'dev_web_snatch_zfb', updatedAt: '2026-06-19 08:05' },
   ]
 }
+
+/**
+ * 子源任务视图的运行记录：默认由当前子源的流程步骤派生；不传 sourceId 时汇总同网站全部子源。
+ * 每个节点保留两条完成记录和一条当前/最近记录，便于节点、状态、分页筛选联调。
+ */
+export function mockSourceTaskPaged(params?: Record<string, unknown>): Paged<TaskInst> {
+  const sourceId = String(params?.sourceId ?? '')
+  const siteId = String(params?.siteId ?? '')
+  if (!siteId) return { total: 0, list: [] }
+  const scopedSources = sourceId
+    ? SOURCES.filter((source) => source.sourceId === sourceId && source.siteId === siteId)
+    : SOURCES.filter((source) => source.siteId === siteId)
+  if (!scopedSources.length) return { total: 0, list: [] }
+
+  const tasks = scopedSources.flatMap((source) => {
+    const latestState = source.disabled ? 'C' : source.state === 'E' || source.state === 'L' ? source.state : 'C'
+    return mockSourceSteps({ sourceId: source.sourceId }).flatMap((step, stepIndex) =>
+      (['C', 'C', latestState] as const).map((state, taskIndex): TaskInst => ({
+        taskId: `${source.sourceId}-${stepIndex + 1}-${taskIndex + 1}`,
+        state,
+        typeName: '采集任务',
+        taskName: step.name,
+        sourceId: source.sourceId,
+        configId: step.configId,
+        node: step.stepId,
+        topic: source.configTopic || (source.configId ? `queue_${source.configId}` : ''),
+        updatedAt: source.lastTaskAt || '2026-07-13 10:00',
+      })),
+    )
+  })
+  const nodeId = String(params?.nodeId ?? '')
+  const state = String(params?.state ?? '')
+  const filtered = tasks.filter((task) => (!nodeId || task.node === nodeId) && (!state || task.state === state))
+  const page = Math.max(1, Number(params?.page ?? 1))
+  const size = Math.max(1, Number(params?.size ?? 20))
+  const start = (page - 1) * size
+  return { total: filtered.length, list: filtered.slice(start, start + size) }
+}

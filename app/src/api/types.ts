@@ -161,22 +161,24 @@ export type ParamInput = Omit<Param, 'paramId' | 'usedBy' | 'updatedAt'> & { par
 /** 原始文件（0711 R11：文件视图，仅子源态展示——"文件视图只有源才有"） */
 export interface RawFile {
   fileId: string
+  siteId: string
   sourceId: string
   nodeId: string
   fileName: string
   contentType: string
   size: number
-  state: 'C' | 'E'
+  md5?: string
+  attributes?: Record<string, unknown>
   createdAt: string
   viewUrl?: string
   downloadUrl?: string
 }
 
 export interface RawFileQuery extends PageQuery {
-  sourceId: string
+  siteId: string
+  sourceId?: string
   nodeId?: string
   contentType?: string
-  state?: '' | 'C' | 'E'
   dateFrom?: string
   dateTo?: string
 }
@@ -184,8 +186,19 @@ export interface RawFileQuery extends PageQuery {
 export interface RawFileStats {
   total: number
   totalSize: number
-  failed: number
   latestCreatedAt?: string
+}
+
+export interface SourceCloneRequest {
+  templateSourceId: string
+  targetSiteId: string
+  target: { name: string; url: string }
+}
+
+export interface SourceCloneResult {
+  source: Source
+  flowId: string
+  tableIdMap: Record<string, string>
 }
 
 /** 节点粒度运行统计（0706 Phase4·任务视图=运行视图，0707 Phase5 起该形态退役，仅内部聚合用） */
@@ -506,6 +519,14 @@ export interface TaskInst {
   topic?: string // 主题
   parentId?: string
   updatedAt: string
+}
+
+/** 子源任务视图查询：默认收窄当前子源；不传 sourceId 时查询网站下全部子源。 */
+export interface SourceTaskQuery extends PageQuery {
+  siteId: string
+  sourceId?: string
+  nodeId?: string
+  state?: RunState
 }
 
 /** 工作台摘要项（首页摘要条） */

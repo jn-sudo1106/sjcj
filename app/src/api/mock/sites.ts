@@ -1,6 +1,8 @@
-import type { Paged, Source, Site, Ack, QueueStat, TaskInst } from '../types'
+import type { Paged, Source, Site, Ack, QueueStat, TaskInst, SourceCloneRequest, SourceCloneResult } from '../types'
 import { SOURCES, mockSourceCreate, setSourceDetached, mockSourceSteps, mockSourceNodeRuns } from './sources'
 import { mockFlowLoad, mockFlowSave } from './flows'
+import { cloneEntryStructure } from './entries'
+import { buildSourceSeed, type FlowDef, type NodeConfig } from '../../views/FlowCanvas/flowModel'
 
 // 网站—子源父子模型 mock（0707 优化·Phase2）：网站 = 统一流程模板 + 批量工具（不实际运行），
 // 子源（语言/变体）= 真正的采集运行实体。网站统一流程复用既有 flow/save·load 契约，id = `site:${siteId}`。
@@ -28,6 +30,7 @@ const LANGUAGES = [
   '意大利文', '荷兰文', '泰文', '越南文', '印尼文', '土耳其文', '波兰文', '瑞典文', '希腊文', '希伯来文',
   '印地文', '孟加拉文', '马来文', '乌克兰文',
 ]
+let cloneSequence = 1
 const LANG_DEMO_SOURCES: Source[] = LANGUAGES.map((lang, i) => {
   const idx = i + 1
   const state: Source['state'] = idx % 11 === 0 ? 'E' : idx % 7 === 0 ? 'L' : 'C'
@@ -98,7 +101,11 @@ function matches(site: Site, p?: Record<string, unknown>): boolean {
   const category = String(p.category ?? '')
   if (category && !site.categoryPath?.startsWith(category) && site.category !== category) return false
   const kw = String(p.keyword ?? '').trim().toLowerCase()
-  if (kw && ![site.name, site.siteId, site.owner].some((f) => String(f ?? '').toLowerCase().includes(kw))) return false
+  if (kw && ![
+    site.name,
+    site.owner,
+    ...sourcesOfSite(site.siteId).map((source) => source.name),
+  ].some((f) => String(f ?? '').toLowerCase().includes(kw))) return false
   const tag = String(p.tag ?? '')
   if (tag && !(site.tags ?? []).includes(tag)) return false
   const state = String(p.state ?? '')
@@ -139,17 +146,38 @@ export function mockSiteCreate(params?: Record<string, unknown>): { ok: boolean;
   return { ok: true, message: '网站已创建（本地演示）', siteId: site.siteId }
 }
 
+/** 网站基本信息编辑：只更新网站自身的名称、分类和责任人，不改子源、标签与网站统一流程。 */
+export function mockSiteUpdate(params?: Record<string, unknown>): Ack {
+  const site = params?.site as Pick<Site, 'siteId' | 'name' | 'category' | 'categoryPath' | 'owner'> | undefined
+  if (!site?.siteId || !site.name.trim() || !site.category.trim()) return { ok: false, message: '请填写网站名称和分类' }
+  const patch = {
+    ...site,
+    name: site.name.trim(),
+    category: site.category.trim(),
+    categoryPath: site.categoryPath?.trim() || `/${site.category.trim()}`,
+    owner: site.owner.trim(),
+    updatedAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
+  }
+  const created = readCreatedSites()
+  if (created.some((item) => item.siteId === site.siteId)) {
+    persistCreatedSites(created.map((item) => (item.siteId === site.siteId ? { ...item, ...patch } : item)))
+    return { ok: true, message: '网站基本信息已保存（本地演示）' }
+  }
+  const seed = SITE_SEEDS.find((item) => item.siteId === site.siteId)
+  if (!seed) return { ok: false, message: '网站不存在' }
+  Object.assign(seed, patch)
+  return { ok: true, message: '网站基本信息已保存（本地演示）' }
+}
+
 export function mockSiteSourcesOf(params?: Record<string, unknown>): Source[] {
   return sourcesOfSite(String(params?.siteId ?? ''))
 }
 
-// 网站下新增子源：inherit=true（缺省）时继承网站统一流程（若已存在），写法与 source/createSource 一致，仅补 siteId 归属。
-// inherit=false（0710 会议 B5）：只建名称/URL，流程从空白开始；该子源从未跟随过模板，不算 detached，
-// 后续网站保存的同步对它照常生效。
+// 网站下新增子源默认只建名称/URL，流程从空白开始；inherit=true 仅保留给旧数据迁移兼容场景。
 export function mockSiteSourceAdd(params?: Record<string, unknown>): { ok: boolean; message?: string; sourceId?: string } {
   const siteId = String(params?.siteId ?? '')
   const source = params?.source as Source | undefined
-  const inherit = params?.inherit !== false
+  const inherit = params?.inherit === true
   if (!siteId || !source) return { ok: false, message: '缺少网站或子源信息' }
   const res = mockSourceCreate({ source: { ...source, siteId } })
   if (res.ok && res.sourceId && inherit) {
@@ -163,8 +191,77 @@ export function mockSiteSourceAdd(params?: Record<string, unknown>): { ok: boole
   return res
 }
 
-// 按网站批量导入子源（0710 会议 A5）：一行一条「名称;URL」（URL 可省略），空行/缺名称行跳过；
-// 复用 mockSiteSourceAdd 走同一条创建 + 模板继承路径，不另起炉灶。
+function tableIdsOf(flow: FlowDef, source: Source): string[] {
+  const tableIds = new Set<string>([source.mainTable])
+  Object.values(flow.configs).forEach((cfg) => {
+    ;[cfg.collectCfg?.inputTable, cfg.collectCfg?.outputTable, cfg.inputTable, cfg.outputTable]
+      .filter(Boolean)
+      .forEach((tableId) => tableIds.add(tableId!))
+  })
+  return [...tableIds]
+}
+
+function remapTables(cfg: NodeConfig, tableIdMap: Record<string, string>): void {
+  if (cfg.collectCfg?.inputTable) cfg.collectCfg.inputTable = tableIdMap[cfg.collectCfg.inputTable] ?? cfg.collectCfg.inputTable
+  if (cfg.collectCfg?.outputTable) cfg.collectCfg.outputTable = tableIdMap[cfg.collectCfg.outputTable] ?? cfg.collectCfg.outputTable
+  if (cfg.inputTable) cfg.inputTable = tableIdMap[cfg.inputTable] ?? cfg.inputTable
+  if (cfg.outputTable) cfg.outputTable = tableIdMap[cfg.outputTable] ?? cfg.outputTable
+}
+
+/** 子源复制是原子 BFF 命令：仅复制流程、节点配置及表结构，不读取数据、文件和任务运行实例。 */
+export function mockSiteCloneSource(params?: Record<string, unknown>): SourceCloneResult {
+  const request = params as unknown as SourceCloneRequest
+  const template = SOURCES.find((source) => source.sourceId === request.templateSourceId)
+  if (!template) throw new Error(`模板子源「${request.templateSourceId}」不存在`)
+  if (!allSites().some((site) => site.siteId === request.targetSiteId)) throw new Error(`目标网站「${request.targetSiteId}」不存在`)
+
+  const sourceId = `src-copy-${Date.now().toString(36)}-${cloneSequence++}`
+  const source: Source = {
+    sourceId,
+    name: request.target.name,
+    url: request.target.url,
+    configId: template.configId,
+    mainTable: template.mainTable,
+    owner: template.owner,
+    state: 'C',
+    siteId: request.targetSiteId,
+  }
+  const created = mockSourceCreate({ source })
+  if (!created.ok) throw new Error(created.message)
+
+  const stored = mockFlowLoad({ id: template.sourceId })
+  const flow = stored
+    ? structuredClone(stored)
+    : {
+        id: sourceId,
+        name: source.name,
+        version: 'clone-v1',
+        ...buildSourceSeed(source, mockSourceSteps({ sourceId: template.sourceId }).map((step) => ({
+          ...step,
+          sourceId,
+          stepId: step.stepId.replace(template.sourceId, sourceId),
+        }))),
+        updatedAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
+      }
+  flow.id = sourceId
+  flow.name = source.name
+  flow.source = source
+
+  const tableIdMap: Record<string, string> = {}
+  tableIdsOf(flow, template).forEach((tableId) => {
+    const cloned = cloneEntryStructure(tableId, sourceId)
+    if (cloned) tableIdMap[tableId] = cloned.tableId
+  })
+  Object.values(flow.configs).forEach((cfg) => remapTables(cfg, tableIdMap))
+  source.mainTable = tableIdMap[source.mainTable] ?? source.mainTable
+  Object.assign(SOURCES.find((item) => item.sourceId === sourceId)!, { mainTable: source.mainTable })
+  mockFlowSave({ def: flow })
+  setSourceDetached(sourceId, false)
+  return { source, flowId: sourceId, tableIdMap }
+}
+
+// 按网站批量导入子源：一行一条「名称;URL」（URL 可省略），空行/缺名称行跳过；
+// 复用新增子源创建路径，所有导入项从空白流程开始。
 export function mockSiteImportSources(params?: Record<string, unknown>): { ok: boolean; message?: string; added?: number; skipped?: number } {
   const siteId = String(params?.siteId ?? '')
   const lines = String(params?.lines ?? '')
@@ -183,6 +280,7 @@ export function mockSiteImportSources(params?: Record<string, unknown>): { ok: b
     }
     const res = mockSiteSourceAdd({
       siteId,
+      inherit: false,
       source: {
         sourceId: `${siteId}-imp-${stamp}-${i + 1}`,
         name, url, configId: '', mainTable: '',

@@ -82,17 +82,23 @@ function select(node: SourceCategory) {
         class="rc-tree-row ctp-row"
         :class="{ active: item.node.id === modelValue.categoryPath }"
         :style="{ paddingLeft: `${8 + item.depth * 18}px` }"
+        role="radio"
+        :aria-checked="item.node.id === modelValue.categoryPath"
+        tabindex="0"
+        @click="select(item.node)"
+        @keydown.enter.prevent="select(item.node)"
+        @keydown.space.prevent="select(item.node)"
       >
         <span
           class="ctp-toggle"
           :class="{ invisible: !item.hasChildren }"
           @click.stop="toggle(item.node.id)"
         >{{ isFiltering || expanded.has(item.node.id) ? '▾' : '▸' }}</span>
-        <label class="ctp-check">
+        <label class="ctp-check" @click.stop="select(item.node)">
           <input
-            type="checkbox"
+            type="radio"
+            name="new-collect-category"
             :checked="item.node.id === modelValue.categoryPath"
-            @click.prevent="select(item.node)"
           />
           <span class="ctp-name">{{ item.node.name }}</span>
           <span class="ctp-count">（{{ item.node.count }}）</span>
@@ -106,9 +112,12 @@ function select(node: SourceCategory) {
 
 <style scoped>
 .ctp { display: flex; flex-direction: column; gap: 8px; }
-.ctp-search { height: 30px; padding: 0 9px; }
+.ctp-search { height: 30px; padding: 0 9px; box-sizing: border-box; border: 1px solid var(--rc-border); border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; outline: none; }
+.ctp-search::placeholder { color: var(--rc-faint); }
+.ctp-search:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .ctp-tree { max-height: 220px; overflow: auto; padding: 6px; border: 1px solid #dbe3ee; border-radius: 8px; }
-.ctp-row { display: flex; align-items: center; gap: 4px; padding-right: 8px; cursor: default; }
+.ctp-row { display: flex; align-items: center; gap: 4px; padding-right: 8px; cursor: pointer; border-radius: 6px; outline: none; }
+.ctp-row:hover, .ctp-row:focus-visible { background: #f8fafc; }
 .ctp-toggle { flex: none; width: 16px; text-align: center; color: var(--rc-muted); font-size: 11px; cursor: pointer; user-select: none; }
 .ctp-toggle.invisible { visibility: hidden; cursor: default; }
 .ctp-check { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; cursor: pointer; }

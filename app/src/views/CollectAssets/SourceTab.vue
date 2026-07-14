@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Grid, List, Refresh, Edit, CopyDocument, Operation } from '@element-plus/icons-vue'
+import { Search, Grid, List, Refresh, Edit, Operation } from '@element-plus/icons-vue'
 import { sourceApi, siteApi, type Source, type Site, type SourceCategory } from '../../api'
 import { useUiStore } from '../../stores/ui'
 import SiteCardGrid from './SiteCardGrid.vue'
@@ -57,7 +57,7 @@ async function loadList() {
     sites.value = res.list
     total.value = res.total
     expanded.value = new Set()
-  } catch (e) {
+  } catch {
     ElMessage.warning('加载网站列表失败')
     sites.value = []
     total.value = 0
@@ -68,7 +68,7 @@ async function loadList() {
 async function loadCategories() {
   try {
     categories.value = await sourceApi.sourceCategories()
-  } catch (e) {
+  } catch {
     ElMessage.warning('加载分类失败')
     categories.value = []
   }
@@ -76,7 +76,7 @@ async function loadCategories() {
 async function loadStats() {
   try {
     Object.assign(stats, await sourceApi.sourceStats())
-  } catch (e) {
+  } catch {
     ElMessage.warning('加载统计失败')
   }
 }
@@ -86,7 +86,7 @@ async function loadTagOptions() {
     const set = new Set<string>()
     res.list.forEach((s) => (s.tags ?? []).forEach((t) => set.add(t)))
     allTags.value = [...set].sort()
-  } catch (e) {
+  } catch {
     ElMessage.warning('加载标签选项失败')
     allTags.value = []
   }
@@ -214,15 +214,54 @@ function openSourceCanvas(s: Source, view?: 'data' | 'task') {
 function openSourceData(s: Source) {
   openSourceCanvas(s, 'data')
 }
-// 网站行「编辑」→ 进入网站统一流程模板画布（0707 优化·Phase4）
+// 网站行名称进入统一流程；编辑入口只维护网站的名称、分类和负责人。
 function openSiteCanvas(site: Site, view?: 'data') {
   router.push({ path: '/canvas', query: { siteId: site.siteId, ...(view ? { view } : {}) } })
 }
 function openSiteData(site: Site) {
   router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data' } })
 }
-function copySitePlaceholder(site: Site) {
-  ElMessage.info(`复制网站「${site.name}」：可在「新建采集」中选择从现有网站复制`)
+const siteCategoryOptions = computed(() => categories.value.flatMap((group) => [
+  { path: group.id, label: group.name },
+  ...(group.children ?? []).map((child) => ({ path: child.id, label: `${group.name} / ${child.name}` })),
+]))
+const siteEditor = reactive<{ visible: boolean; saving: boolean; site: Site | null }>({ visible: false, saving: false, site: null })
+const siteForm = reactive({ siteId: '', name: '', categoryPath: '', owner: '' })
+function openSiteEditor(site: Site) {
+  Object.assign(siteForm, {
+    siteId: site.siteId,
+    name: site.name,
+    categoryPath: site.categoryPath ?? '',
+    owner: site.owner,
+  })
+  siteEditor.site = site
+  siteEditor.visible = true
+}
+async function saveSiteEditor() {
+  const category = siteForm.categoryPath.split('/').filter(Boolean)[0]
+  if (!siteForm.name.trim() || !category) {
+    ElMessage.warning('请填写网站名称和分类')
+    return
+  }
+  siteEditor.saving = true
+  try {
+    const res = await siteApi.siteUpdate({
+      siteId: siteForm.siteId,
+      name: siteForm.name,
+      category,
+      categoryPath: siteForm.categoryPath,
+      owner: siteForm.owner,
+    })
+    if (!res?.ok) throw new Error(res?.message)
+    ElMessage.success(res.message || '网站基本信息已保存')
+    siteEditor.visible = false
+    siteEditor.site = null
+    await Promise.all([loadList(), loadTagOptions()])
+  } catch (error) {
+    ElMessage.warning(error instanceof Error ? error.message : '保存网站基本信息失败')
+  } finally {
+    siteEditor.saving = false
+  }
 }
 
 // ---- 写类 / 高危操作：统一二次确认占位 ----
@@ -347,7 +386,7 @@ onUnmounted(() => ui.clearActions())
         v-model="keyword"
         :prefix-icon="Search"
         clearable
-        placeholder="搜索网站名 / ID / 责任人"
+        placeholder="搜索网站名 / 子源名 / 责任人"
         class="ca-search"
         @input="onKeywordInput"
       />
@@ -491,8 +530,7 @@ onUnmounted(() => ui.clearActions())
                 <td><div class="ca-cell-main soft">{{ site.updatedAt || '—' }}</div></td>
                 <td>
                   <div class="ca-site-ops">
-                    <button class="ca-op-btn" type="button" title="编辑网站统一流程" @click="openSiteCanvas(site)"><el-icon :size="14"><Edit /></el-icon></button>
-                    <button class="ca-op-btn" type="button" title="复制网站" @click="copySitePlaceholder(site)"><el-icon :size="14"><CopyDocument /></el-icon></button>
+                    <button class="ca-op-btn" type="button" title="编辑网站基本信息" @click="openSiteEditor(site)"><el-icon :size="14"><Edit /></el-icon></button>
                   </div>
                 </td>
               </tr>
@@ -570,6 +608,20 @@ onUnmounted(() => ui.clearActions())
         @size-change="onSizeChange"
       />
     </div>
+
+    <el-dialog v-model="siteEditor.visible" class="ca-site-editor" title="编辑网站基本信息" width="520px" align-center destroy-on-close @closed="siteEditor.site = null">
+      <div v-if="siteEditor.site" class="ca-site-summary">
+        <span>网站 ID：<b>{{ siteEditor.site.siteId }}</b></span><span>子源：<b>{{ siteEditor.site.sourceCount }}</b></span><span>数据量：<b>{{ (siteEditor.site.dataCount ?? 0).toLocaleString() }} 条</b></span>
+      </div>
+      <el-form class="ca-site-form" label-position="top">
+        <el-form-item label="网站名称" required><el-input v-model="siteForm.name" placeholder="请输入网站名称" /></el-form-item>
+        <el-form-item label="所属分类" required>
+          <el-select v-model="siteForm.categoryPath" filterable placeholder="请选择分类" style="width: 100%"><el-option v-for="option in siteCategoryOptions" :key="option.path" :label="option.label" :value="option.path" /></el-select>
+        </el-form-item>
+        <el-form-item label="网站负责人"><el-input v-model="siteForm.owner" placeholder="用于网站默认归属，不会批量覆盖子源负责人" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="siteEditor.visible = false">取消</el-button><el-button type="primary" :loading="siteEditor.saving" @click="saveSiteEditor">保存</el-button></template>
+    </el-dialog>
   </div>
 </template>
 
@@ -734,6 +786,7 @@ onUnmounted(() => ui.clearActions())
 .ca-cell-main.soft { color: var(--rc-text-2); }
 .ca-cell-sub { font-size: 10px; color: var(--rc-faint); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 320px; }
 .ca-site-ops { display: flex; gap: 4px; }
+.ca-site-summary { display: flex; gap: 14px; margin-bottom: 18px; color: var(--rc-faint); font-size: 12px; }.ca-site-summary b { color: var(--rc-text-2); font-weight: 600; }.ca-site-form :deep(.el-form-item) { margin-bottom: 16px; }.ca-site-form :deep(.el-form-item__label) { padding-bottom: 5px; color: var(--rc-text-2); font-size: 12px; line-height: 1.2; }.ca-site-form :deep(.el-input__wrapper), .ca-site-form :deep(.el-select__wrapper) { min-height: 34px; border-radius: 6px; box-shadow: 0 0 0 1px var(--rc-border) inset; }
 .ca-op-btn {
   width: 26px;
   height: 26px;

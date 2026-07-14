@@ -20,4 +20,8 @@ const routes: RouteRecordRaw[] = [
 export const router = createRouter({
   history: createWebHashHistory(),
   routes,
+  // 画布内切视图 / 返回列表复用同一滚动容器：不重置的话新页面会停在旧的滚动位置，看起来像卡住
+  scrollBehavior(_to, _from, savedPosition) {
+    return savedPosition || { top: 0 }
+  },
 })

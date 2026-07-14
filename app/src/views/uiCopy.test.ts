@@ -4,11 +4,13 @@ import collectAssetsIndex from './CollectAssets/index.vue?raw'
 import flowCanvas from './FlowCanvas/index.vue?raw'
 import nodeInspector from './FlowCanvas/NodeInspector.vue?raw'
 import canvasHeader from './FlowCanvas/CanvasHeader.vue?raw'
+import flowBoard from './FlowCanvas/FlowBoard.vue?raw'
 import sourceBasicForm from './FlowCanvas/SourceBasicForm.vue?raw'
 import collectorSettings from './FlowCanvas/CollectorSettings.vue?raw'
 import resultView from './FlowCanvas/ResultView.vue?raw'
 import siteSourceSwitcher from './FlowCanvas/SiteSourceSwitcher.vue?raw'
 import tableDialog from './FlowCanvas/TableEditDialog.vue?raw'
+import siteCardGrid from './CollectAssets/SiteCardGrid.vue?raw'
 
 describe('最新方案 UI 入口收口', () => {
   it('字段级预处理/去重只在数据表编辑弹窗维护', () => {
@@ -45,7 +47,7 @@ describe('最新方案 UI 入口收口', () => {
     expect(nodeInspector).not.toContain(':checked="cc.isDetail"')
   })
 
-  it('任务配置承载任务输入输出，表配置保留表管理操作', () => {
+  it('任务配置承载任务输入和队列，输出表仅在表配置维护', () => {
     const taskStart = nodeInspector.indexOf("<template v-else-if=\"tab === 'task'\">")
     const tableStart = nodeInspector.indexOf("<template v-else-if=\"tab === 'table'\">")
     const configStart = nodeInspector.indexOf('<!-- 节点配置：单屏纵向分组')
@@ -58,9 +60,8 @@ describe('最新方案 UI 入口收口', () => {
     const configHeaderSection = nodeInspector.slice(configStart, nodeInspector.indexOf('<!-- 输入映射', configStart))
 
     expect(taskSection).toContain('<div class="rc-field"><label>输入表</label>')
-    // 0711 T5：输出表标签加了"固定 · xxx"能力提示，断言改为容错拼接文本而非固定死字符串
-    expect(taskSection).toContain('<div class="rc-field"><label>输出表{{ nodeCapability?.outputMode')
-    expect(taskSection).toContain('@change="onOutputTableChange"')
+    expect(taskSection).not.toContain('<div class="rc-field"><label>输出表')
+    expect(taskSection).not.toContain('@change="onOutputTableChange"')
     expect(taskSection).not.toContain('openEditTable')
     expect(taskSection).not.toContain('openNewTable')
     expect(taskSection).toContain('<ConditionRow v-if="!isFirstDataNode"')
@@ -93,6 +94,12 @@ describe('最新方案 UI 入口收口', () => {
     expect(sourceTab).toContain('{{ (site.dataCount ?? 0).toLocaleString() }} 条')
   })
 
+  it('采集资产卡片的子源直达流程画布，卡片底部不再提供任务入口', () => {
+    expect(siteCardGrid).toContain("query: { sourceId: s.sourceId, view: 'flow' }")
+    expect(siteCardGrid).not.toContain('scg-foot-task')
+    expect(siteCardGrid).not.toContain('openSiteTask')
+  })
+
   it('采集资产表格展开收起入口收进表头右侧', () => {
     expect(sourceTab).not.toContain('class="ca-table-ops"')
     expect(sourceTab).not.toContain('共 {{ total }} 个网站')
@@ -102,10 +109,11 @@ describe('最新方案 UI 入口收口', () => {
     expect(sourceTab).not.toContain('>展开/收起⌄</button>')
   })
 
-  it('网站数据视图无模板时用子源步骤生成可查看节点', () => {
-    expect(resultView).toContain('buildSourceSeed')
-    expect(resultView).toContain('sourceApi.sourceSteps(first.sourceId)')
-    expect(resultView).toContain('templateLayout.value = buildHorizontalLayout(seed.main, seed.branches, seed.configs)')
+  it('数据视图只使用当前子源流程，节点图不展示开始/结束', () => {
+    expect(resultView).toContain('ProcessNodeRail')
+    expect(resultView).toContain('includeTerminals: false')
+    expect(resultView).not.toContain('buildSourceSeed')
+    expect(resultView).not.toContain('templateLayout')
   })
 
   it('新建采集分类使用可搜索的目录树', () => {
@@ -134,25 +142,40 @@ describe('最新方案 UI 入口收口', () => {
     expect(nodeInspector).not.toContain('采集/非采集节点统一显示')
   })
 
-  it('节点配置支持 APP 入口字段；任务参数/拼接逻辑已瘦身移除（0710：无后端 Step 契约字段，与 URL 规则重叠）', () => {
+  it('节点配置支持 APP 入口字段；任务参数只能引用当前流程已绑定参数', () => {
     expect(nodeInspector).toContain('APP 包名')
     expect(nodeInspector).toContain('collectUrlLabel')
-    expect(nodeInspector).not.toContain('任务参数')
+    expect(nodeInspector).toContain('任务参数')
+    expect(nodeInspector).toContain('availableTaskParamRefs')
     expect(nodeInspector).not.toContain('任务拼接逻辑')
   })
 
-  it('子源信息只从顶部编辑，定时策略收在首节点运行设置', () => {
+  it('子源信息不在画布顶部重复编辑，定时策略收在首节点运行设置', () => {
     const taskStart = nodeInspector.indexOf("<template v-else-if=\"tab === 'task'\">")
     const tableStart = nodeInspector.indexOf("<template v-else-if=\"tab === 'table'\">")
     const taskSection = nodeInspector.slice(taskStart, tableStart)
 
     expect(nodeInspector).not.toContain('子源信息（各节点共享）')
-    expect(canvasHeader).toContain('<button class="rc-btn" type="button" @click="openEdit">编辑</button>')
+    expect(canvasHeader).not.toContain('@click="openEdit"')
+    expect(canvasHeader).toContain('class="ch-canvas-actions"')
+    expect(canvasHeader).toContain('v-if="view === \'flow\'" class="ch-actions"')
+    expect(canvasHeader).toContain('v-if="view === \'flow\'" class="ch-canvas-actions"')
+    expect(canvasHeader).not.toContain('<Teleport')
+    expect(flowBoard).toContain("import FlowXmlDialog from './FlowXmlDialog.vue'")
+    expect(flowBoard).toContain('rc-flow-xml')
     expect(sourceBasicForm).not.toContain('定时策略（仅作用于首节点）')
     expect(sourceBasicForm).not.toContain('选用配置 / 定时')
     expect(taskSection).not.toContain('<TaskScheduleSettings')
     expect(collectorSettings).toContain('<TaskScheduleSettings v-if="showSchedule"')
   })
+
+  it('切换子源保留当前视图，视图按钮等待路由完成后再允许下一次切换', () => {
+    expect(flowCanvas).toContain('const view = normalizeSourceView(route.query.view)')
+    expect(flowCanvas).toContain("void router.replace({ path: '/canvas', query: { sourceId: target.sourceId, view } })")
+    expect(canvasHeader).toContain("void router.replace({ path: '/canvas', query })")
+    expect(canvasHeader).not.toContain('switchingView')
+  })
+
 
   it('采集资产页顶部批量导入/批量操作入口收口，批量导入迁进网站详情子源侧栏（0711 R12）', () => {
     // 顶部动作注册只留「新建采集」

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { configApi, type Config, type Source } from '../../api'
-import CategoryTreePicker, { type CategorySelection } from './CategoryTreePicker.vue'
 
 // 源基础信息表单（0706 优化·Phase3）：新建源闸门段与 Phase4 源信息编辑抽屉共用同一份字段与交互。
 // 必填区（源ID/名称/分类）始终展示；URL 为选填（0707 微调）；标签/选用配置等源级选填项收在「更多设置」折叠区默认收起。
@@ -10,10 +9,7 @@ import CategoryTreePicker, { type CategorySelection } from './CategoryTreePicker
 // withDefaults 显式给 showIdentity 兜底 true：Vue 对 TS 字面量声明的可选 boolean prop 有个隐藏规则——
 // 不传时运行时直接落 false（不是 undefined），`showIdentity !== false` 这种判断式不显式兜底会全线误判为"隐藏"。
 // 0711 R5：代理/断点续爬/登录已从这里迁到 CollectorSettings.vue（节点级配置），本组件不再展示这几项。
-const props = withDefaults(
-  defineProps<{ modelValue: Source; sourceIdEditable?: boolean; showIdentity?: boolean; defaultOpen?: boolean }>(),
-  { showIdentity: true, defaultOpen: false },
-)
+const props = withDefaults(defineProps<{ modelValue: Source; defaultOpen?: boolean }>(), { defaultOpen: false })
 const emit = defineEmits<{ 'update:modelValue': [v: Source] }>()
 
 const moreOpen = ref(!!props.defaultOpen)
@@ -29,35 +25,17 @@ function patch(p: Partial<Source>) {
 function onInput(key: keyof Source, e: Event) {
   patch({ [key]: (e.target as HTMLInputElement).value } as Partial<Source>)
 }
-function onTagsChange(e: Event) {
-  patch({ tags: (e.target as HTMLInputElement).value.split(',').map((s) => s.trim()).filter(Boolean) })
-}
-function onCategoryUpdate(v: CategorySelection) {
-  patch({ dirId: v.dirId || v.categoryPath, category: v.category, categoryPath: v.categoryPath })
-}
 </script>
 
 <template>
   <div class="sbf">
-    <template v-if="showIdentity">
-      <div class="rc-field"><label>源 ID{{ sourceIdEditable === false ? '' : '（创建后不可修改）' }}</label>
-        <input class="rc-input" :disabled="sourceIdEditable === false" :value="modelValue.sourceId" @input="onInput('sourceId', $event)" placeholder="必填" />
-      </div>
-      <div class="rc-field"><label>源名称</label><input class="rc-input" :value="modelValue.name" @input="onInput('name', $event)" placeholder="必填" /></div>
-      <div class="rc-field"><label>源 URL</label><input class="rc-input" :value="modelValue.url" @input="onInput('url', $event)" placeholder="选填" /></div>
-      <div class="rc-field"><label>分类</label>
-        <CategoryTreePicker
-          :model-value="{ dirId: modelValue.dirId, category: modelValue.category || '', categoryPath: modelValue.categoryPath || '' }"
-          @update:model-value="onCategoryUpdate"
-        />
-      </div>
-    </template>
+    <div class="rc-field"><label>源名称</label><input class="rc-input" :value="modelValue.name" @input="onInput('name', $event)" placeholder="必填" /></div>
+    <div class="rc-field"><label>源 URL</label><input class="rc-input" :value="modelValue.url" @input="onInput('url', $event)" placeholder="选填" /></div>
 
     <button class="sbf-more-toggle" type="button" @click="moreOpen = !moreOpen">
-      {{ moreOpen ? '▾' : '▸' }} 更多设置（{{ showIdentity ? '标签 / ' : '' }}选用配置）
+      {{ moreOpen ? '▾' : '▸' }} 更多设置（选用配置）
     </button>
     <div v-if="moreOpen" class="sbf-more-body">
-      <div v-if="showIdentity" class="rc-field"><label>标签</label><input class="rc-input" :value="(modelValue.tags ?? []).join(', ')" @input="onTagsChange" /></div>
       <div class="rc-field"><label>选用配置</label>
         <div class="rc-segment">
           <button type="button" :class="{ active: modelValue.configMode === 'new' }" @click="patch({ configMode: 'new' })">新建配置</button>

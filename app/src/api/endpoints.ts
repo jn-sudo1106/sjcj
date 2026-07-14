@@ -28,6 +28,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/sourceCopy', desc: '从现有源复制预填（模板复用，不落库）', impl: true },
   // 0706 优化·Phase4 新增：任务视图 = 节点粒度运行记录（队列/总任务数/已处理数/状态）
   { path: 'source/nodeRunStats', desc: '源的节点粒度运行统计', impl: true },
+  { path: 'source/sourceTaskPaged', desc: '子源任务实例分页（支持节点与状态筛选）', impl: true },
   { path: 'source/changeSourceEnable', desc: '启用 / 停用源', danger: true, impl: true },
   { path: 'source/sendSnatch', desc: '发抓取', danger: true, impl: true },
   { path: 'source/sendSnatchWithParam', desc: '带参发抓取', danger: true },
@@ -216,8 +217,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'site/sitePaged', desc: '网站分页列表（含 sourceCount / errorCount 汇总）', impl: true },
   { path: 'site/siteDetail', desc: '网站详情', impl: true },
   { path: 'site/createSite', desc: '新建采集：网站 + 首批子源', impl: true },
+  { path: 'site/updateSite', desc: '编辑网站基本信息', danger: true, impl: true },
   { path: 'site/sourcesOfSite', desc: '网站下的子源列表', impl: true },
   { path: 'site/addSource', desc: '网站下新增子源（默认继承统一流程）', impl: true },
+  { path: 'site/cloneSource', desc: '复制子源流程、配置和表结构（不复制数据与运行实例）', danger: true, impl: true },
   { path: 'site/importSources', desc: '按网站批量导入子源，一行一条「名称;URL」（0710 会议批次）', impl: true },
   { path: 'site/removeSource', desc: '网站下移除子源', danger: true, impl: true },
   { path: 'site/syncFlow', desc: '网站统一流程同步覆盖到所选子源', danger: true, impl: true },

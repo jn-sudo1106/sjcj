@@ -66,6 +66,31 @@ describe('flow store 编辑动作', () => {
 
 })
 
+describe('决策条件分支', () => {
+  let f: ReturnType<typeof useFlowStore>
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    f = useFlowStore()
+    f.newFlow('blank')
+  })
+
+  it('初始化为一个条件分支，新增分支不使用 ELSE 语义', () => {
+    const owner = f.insertAfter('start', 'decision')!
+    const group = f.branchGroups.find((item) => item.ownerId === owner)!
+    expect(group.branches.map((branch) => branch.label)).toEqual(['条件分支 1'])
+    f.addBranch(owner)
+    expect(group.branches.map((branch) => branch.label)).toEqual(['条件分支 1', '条件分支 2'])
+  })
+
+  it('可删除空条件分支，但至少保留一条', () => {
+    const owner = f.insertAfter('start', 'decision')!
+    const second = f.addBranch(owner)!
+    expect(f.removeBranch(owner, second.id)).toEqual({ ok: true })
+    const only = f.branchGroups.find((item) => item.ownerId === owner)!.branches[0]
+    expect(f.removeBranch(owner, only.id).ok).toBe(false)
+  })
+})
+
 describe('两个独立采集节点 + 能力模型（0711 R7/R8）', () => {
   let f: ReturnType<typeof useFlowStore>
   beforeEach(() => {
@@ -562,15 +587,13 @@ describe('决策/分头分支段 store 操作（0707 Phase6·6.2）', () => {
     f.newFlow('blank')
   })
 
-  it('insertAfter(decision)：自动创建默认 IF + ELSE 分支段', () => {
+  it('insertAfter(decision)：自动创建默认条件分支', () => {
     const id = f.insertAfter('start', 'decision')
     expect(f.configs[id].kind).toBe('decision')
     const g = f.branchGroups.find((bg) => bg.ownerId === id)
     expect(g).toBeDefined()
-    expect(g!.branches).toHaveLength(2)
-    expect(g!.branches[0].label).toBe('IF')
-    expect(g!.branches[1].label).toBe('ELSE')
-    expect(g!.branches[1].condition).toBeUndefined()
+    expect(g!.branches).toHaveLength(1)
+    expect(g!.branches[0].label).toBe('条件分支 1')
   })
 
   it('insertAfter(parallel)：自动创建路径A + 路径B 两条分支', () => {
@@ -586,22 +609,22 @@ describe('决策/分头分支段 store 操作（0707 Phase6·6.2）', () => {
   it('ensureBranchGroup：已有则不覆盖', () => {
     const id = f.insertAfter('start', 'decision')
     const g1 = f.ensureBranchGroup(id, 'decision')
-    expect(g1?.branches).toHaveLength(2)
+    expect(g1?.branches).toHaveLength(1)
     // 再调一次，branches 数量不变
     f.ensureBranchGroup(id, 'decision')
-    expect(f.branchGroups.find((bg) => bg.ownerId === id)?.branches).toHaveLength(2)
+    expect(f.branchGroups.find((bg) => bg.ownerId === id)?.branches).toHaveLength(1)
   })
 
-  it('addBranch(决策)：追加 ELIF 到 ELSE 之前', () => {
+  it('addBranch(决策)：追加独立条件分支', () => {
     const id = f.insertAfter('start', 'decision')
     const elif = f.addBranch(id)
-    expect(elif?.label).toBe('ELIF-1')
+    expect(elif?.label).toBe('条件分支 2')
     const g = f.branchGroups.find((bg) => bg.ownerId === id)!
-    expect(g.branches.map((b) => b.label)).toEqual(['IF', 'ELIF-1', 'ELSE'])
+    expect(g.branches.map((b) => b.label)).toEqual(['条件分支 1', '条件分支 2'])
     // 再加一条
     const elif2 = f.addBranch(id)
-    expect(elif2?.label).toBe('ELIF-2')
-    expect(g.branches.map((b) => b.label)).toEqual(['IF', 'ELIF-1', 'ELIF-2', 'ELSE'])
+    expect(elif2?.label).toBe('条件分支 3')
+    expect(g.branches.map((b) => b.label)).toEqual(['条件分支 1', '条件分支 2', '条件分支 3'])
   })
 
   it('addBranch(分头节点)：拒绝', () => {
@@ -609,10 +632,10 @@ describe('决策/分头分支段 store 操作（0707 Phase6·6.2）', () => {
     expect(f.addBranch(id)).toBeNull()
   })
 
-  it('removeBranch(ELSE)：拒绝', () => {
+  it('removeBranch(唯一条件分支)：拒绝', () => {
     const id = f.insertAfter('start', 'decision')
     const g = f.branchGroups.find((bg) => bg.ownerId === id)!
-    expect(f.removeBranch(id, g.branches[1].id)).toEqual({ ok: false, reason: 'ELSE 不可删除' })
+    expect(f.removeBranch(id, g.branches[0].id)).toEqual({ ok: false, reason: '至少保留 1 条分支' })
   })
 
   it('removeBranch(只剩 2 条)：拒绝', () => {
@@ -676,16 +699,16 @@ describe('决策/分头分支段 store 操作（0707 Phase6·6.2）', () => {
 
     expect(f.moveBranch(id, elifBranch.id, 'up')).toBe(true)
 
-    expect(g.branches.map((b) => b.id)).toEqual([elifBranch.id, ifBranch.id, g.branches[2].id])
+    expect(g.branches.map((b) => b.id)).toEqual([elifBranch.id, ifBranch.id])
     expect(elifBranch.chain).toEqual([n1, n2])
   })
 
-  it('setBranchCondition(ELSE)：拒绝', () => {
+  it('setBranchCondition：每条条件分支均可设置条件', () => {
     const id = f.insertAfter('start', 'decision')
+    f.addBranch(id)
     const g = f.branchGroups.find((bg) => bg.ownerId === id)!
-    const elseId = g.branches[1].id
-    expect(f.setBranchCondition(id, elseId, { logic: 'AND', items: [] })).toBe(false)
-    expect(g.branches[1].condition).toBeUndefined()
+    const secondId = g.branches[1].id
+    expect(f.setBranchCondition(id, secondId, { logic: 'AND', items: [] })).toBe(true)
   })
 
   it('setBranchCondition(IF)：可设；setBranchLabel：可改名', () => {
@@ -725,23 +748,23 @@ describe('决策/分头分支段 store 操作（0707 Phase6·6.2）', () => {
   it('validateFlow：决策节点缺条件时拦截（0707 Phase6 6.6）', () => {
     const owner = f.insertAfter('start', 'decision')
     const errs = f.validateFlow()
-    expect(errs).toContain(`「${f.configs[owner].title}」第 1 条分支（IF）缺少条件`)
+    expect(errs).toContain(`「${f.configs[owner].title}」第 1 条分支（条件分支 1）缺少条件`)
   })
 
   it('validateFlow：决策节点条件完整时通过（0707 Phase6 6.6）', () => {
     const owner = f.insertAfter('start', 'decision')
     f.setBranchCondition(owner, f.branchGroups[0].branches[0].id, { logic: 'AND', items: [{ field: 'k', op: 'eq', value: 'v' }] })
     const errs = f.validateFlow()
-    expect(errs).not.toContain(`「${f.configs[owner].title}」第 1 条分支（IF）缺少条件`)
+    expect(errs).not.toContain(`「${f.configs[owner].title}」第 1 条分支（条件分支 1）缺少条件`)
   })
 
   it('validateFlow：表达式模式空表达式仍拦截；非空表达式通过（0707 优化·补·表达式模式）', () => {
     const owner = f.insertAfter('start', 'decision')
     f.setBranchCondition(owner, f.branchGroups[0].branches[0].id, { mode: 'expr', logic: 'AND', items: [], expr: '' })
-    expect(f.validateFlow()).toContain(`「${f.configs[owner].title}」第 1 条分支（IF）缺少条件`)
+    expect(f.validateFlow()).toContain(`「${f.configs[owner].title}」第 1 条分支（条件分支 1）缺少条件`)
 
     f.setBranchCondition(owner, f.branchGroups[0].branches[0].id, { mode: 'expr', logic: 'AND', items: [], expr: 'status = "C"' })
-    expect(f.validateFlow()).not.toContain(`「${f.configs[owner].title}」第 1 条分支（IF）缺少条件`)
+    expect(f.validateFlow()).not.toContain(`「${f.configs[owner].title}」第 1 条分支（条件分支 1）缺少条件`)
   })
 
   it('validateFlow：chain 节点也走主链节点同套校验（缺输出表则拦截）', () => {
@@ -822,7 +845,8 @@ describe('fan-in 收拢线渲染（0707 Phase6·6.4 补）', () => {
 
   it('奇数列（3 分支决策）：中间列落在 CENTER，仍无主链直线穿过 fan-out', () => {
     const owner = f.insertAfter('start', 'decision')
-    f.addBranch(owner) // IF/ELIF/ELSE 三分支（奇数）
+    f.addBranch(owner)
+    f.addBranch(owner) // 三条条件分支（奇数）
     expect(f.branchGroups[0].branches).toHaveLength(3)
 
     const layout = f.layout

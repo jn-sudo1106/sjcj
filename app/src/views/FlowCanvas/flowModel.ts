@@ -100,13 +100,14 @@ export interface OutputAdvanced {
   failPolicy: string
 }
 
-/** 任务级配置（0706 优化·调整4；0710 瘦身：拼接逻辑/任务参数无后端 Step 契约字段且与 URL 规则重叠，已删）：
- * 队列归属、任务 URL 来源字段/规则，独立于节点处理逻辑 */
+/** 任务级配置：队列、URL 来源/规则及已绑定参数引用，独立于节点处理逻辑。 */
 export interface TaskConfig {
   queue: string
   /** 任务 URL 来源字段：从输入表 schema 中选择，供 urlRule 拼接引用（0707 补齐，原属于连线配置的"任务 URL 来源字段"） */
   urlSourceField?: string
   urlRule: string
+  /** 任务 URL 规则可引用的参数；只能从当前流程已绑定参数中选择。 */
+  paramRefs?: string[]
 }
 
 export type WebKind = 'list' | 'detail' | 'attachment'
@@ -678,8 +679,8 @@ export function iconFor(cfg: NodeConfig): string {
   if (sub.indexOf('[155]') >= 0) return '155'
   if (sub.indexOf('[300]') >= 0) return '300'
   if (sub.indexOf('[400]') >= 0) return '400'
-  if (sub.indexOf('[BROWSER]') >= 0) return 'BROWSER'
-  if (sub.indexOf('[WECHAT]') >= 0) return 'WECHAT'
+  if (sub.indexOf('[BROWSER]') >= 0) return '180'
+  if (sub.indexOf('[WECHAT]') >= 0) return '185'
   if (isDecision(cfg)) return 'IF'
   if (isParallel(cfg)) return 'PAR'
   if (/规则/.test(cfg.title)) return 'R'
@@ -769,6 +770,10 @@ export interface HorizontalLayout {
   axisY: number
 }
 
+export interface HorizontalLayoutOptions {
+  includeTerminals?: boolean
+}
+
 /** 结果视图顶部节点条布局（纯函数版，从 flow store 的 horizontalLayout 计算逻辑提取，二者算法一致）
  *  0707 优化·Phase6：扩展支持 FlowBranchGroup 决策/分头节点的分支列（chain 节点平铺在 owner 节点下方一行） */
 export function buildHorizontalLayout(
@@ -776,6 +781,7 @@ export function buildHorizontalLayout(
   branches: BranchSeed[],
   configs: Record<string, NodeConfig>,
   branchGroups: FlowBranchGroup[] = [],
+  options: HorizontalLayoutOptions = {},
 ): HorizontalLayout {
   const HNODE_W = 132
   const HNODE_H = 60
@@ -786,6 +792,7 @@ export function buildHorizontalLayout(
   const PAD_X = 16
   const PAD_Y = 10
   const isTerm = (id: string) => id === 'start' || id === 'end'
+  const visibleMain = options.includeTerminals === false ? main.filter((id) => !isTerm(id)) : main
   // 主链顶对齐：仅当有"上方旁路"时才在主链上方留空，否则贴顶；下方旁路向下扩展高度
   const hasAbove = branches.some((b) => b.side === 'left')
   const hasBelow = branches.some((b) => b.side === 'right')
@@ -793,7 +800,7 @@ export function buildHorizontalLayout(
 
   const mainPos: Record<string, HPlacedPos> = {}
   let x = PAD_X
-  main.forEach((id) => {
+  visibleMain.forEach((id) => {
     const isT = isTerm(id)
     const w = isT ? HTERM_W : HNODE_W
     const h = isT ? HTERM_H : HNODE_H
@@ -817,7 +824,7 @@ export function buildHorizontalLayout(
 
   const nodes: HPlacedNode[] = []
   const terminals: HPlacedTerm[] = []
-  main.forEach((id) => {
+  visibleMain.forEach((id) => {
     if (isTerm(id)) terminals.push({ id, label: TERMINALS[id], pos: mainPos[id] })
     else if (configs[id]) nodes.push({ id, cfg: configs[id], pos: mainPos[id], branch: false })
   })
@@ -827,13 +834,13 @@ export function buildHorizontalLayout(
 
   // 主链横向连线
   const mainEdges: HEdge[] = []
-  for (let i = 0; i < main.length - 1; i++) {
-    const a = mainPos[main[i]]
-    const b = mainPos[main[i + 1]]
+  for (let i = 0; i < visibleMain.length - 1; i++) {
+    const a = mainPos[visibleMain[i]]
+    const b = mainPos[visibleMain[i + 1]]
     if (!a || !b) continue
     mainEdges.push({
       d: `M${a.left + a.width} ${axisY} L${b.left} ${axisY}`,
-      rule: Boolean(configs[main[i + 1]] && /规则/.test(configs[main[i + 1]].title)),
+      rule: Boolean(configs[visibleMain[i + 1]] && /规则/.test(configs[visibleMain[i + 1]].title)),
     })
   }
 
@@ -859,7 +866,7 @@ export function buildHorizontalLayout(
   let chainDx = 0
   let chainHasAny = false
   // 先确定是否有 chain 节点，决定是否需要往下扩展 totalHeight
-  for (const id of main) {
+  for (const id of visibleMain) {
     const g = hbranchGroupByOwner[id]
     if (!g) continue
     for (const b of g.branches) {
@@ -868,7 +875,7 @@ export function buildHorizontalLayout(
     if (chainHasAny) break
   }
   const chainYTop = axisY + HBRANCH_DY - HNODE_H / 2
-  for (const id of main) {
+  for (const id of visibleMain) {
     const g = hbranchGroupByOwner[id]
     if (!g) continue
     let cx = mainPos[id] ? mainPos[id].left : 0

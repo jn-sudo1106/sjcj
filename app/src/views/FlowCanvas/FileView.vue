@@ -1,93 +1,168 @@
 <script setup lang="ts">
-// 文件视图（0711 R11）：仅子源态展示（用户口径"文件视图只有源才有"），网站态不出现该视图。
-// 展示该子源每个抓取节点产出的原始文件：统计（总数/总大小/失败数/最近生成时间）+ 可筛选列表。
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
-import { fileApi, sourceApi, type RawFile, type RawFileStats, type Step } from '../../api'
+import { fileApi, siteApi, sourceApi, type RawFile, type RawFileStats, type Source, type Step } from '../../api'
 import CanvasHeader from './CanvasHeader.vue'
+import ProcessNodeRail from './ProcessNodeRail.vue'
+import { buildHorizontalLayout } from './flowModel'
 
 const flow = useFlowStore()
 const sourceId = computed(() => flow.sourceCtx?.sourceId ?? '')
+const siteId = computed(() => flow.sourceCtx?.siteId ?? '')
+const processLayout = computed(() => buildHorizontalLayout(flow.main, flow.branches, flow.configs, flow.branchGroups, { includeTerminals: false }))
 
-const steps = ref<Step[]>([])
+const siteSources = ref<Source[]>([])
+const stepsBySource = ref<Record<string, Step[]>>({})
 const stats = ref<RawFileStats | null>(null)
 const rows = ref<RawFile[]>([])
 const total = ref(0)
 const loading = ref(false)
 const page = ref(1)
 const size = 20
-const filters = reactive({ nodeId: '', contentType: '', state: '' })
-const dateRange = ref<[string, string] | null>(null)
+const filters = reactive({ sourceId: '', nodeId: '', contentType: '', dateFrom: '', dateTo: '' })
+const previewFile = ref<RawFile | null>(null)
+const previewOpen = ref(false)
+const showSourceColumn = computed(() => !filters.sourceId)
+const sourceNames = computed(() => Object.fromEntries(siteSources.value.map((source) => [source.sourceId, source.name])))
+const filterSteps = computed(() => {
+  const sourceIds = filters.sourceId ? [filters.sourceId] : siteSources.value.map((source) => source.sourceId)
+  return sourceIds.flatMap((id) => (stepsBySource.value[id] ?? []).map((step) => ({ ...step, sourceId: id })))
+})
 
-async function loadSteps() {
+function scope() {
+  return { siteId: siteId.value, sourceId: filters.sourceId || undefined }
+}
+
+let metadataRequest = 0
+async function loadNodeMetadata() {
+  const requestId = ++metadataRequest
+  const sourceIds = filters.sourceId ? [filters.sourceId] : siteSources.value.map((source) => source.sourceId)
+  if (!sourceIds.length) {
+    stepsBySource.value = {}
+    return
+  }
   try {
-    steps.value = sourceId.value ? await sourceApi.sourceSteps(sourceId.value) : []
-  } catch (e) {
-    ElMessage.warning('加载步骤映射失败')
-    steps.value = []
+    const metadata = await Promise.all(sourceIds.map(async (id) => ({ id, steps: await sourceApi.sourceSteps(id) })))
+    if (requestId !== metadataRequest) return
+    stepsBySource.value = Object.fromEntries(metadata.map(({ id, steps }) => [id, steps]))
+  } catch {
+    if (requestId !== metadataRequest) return
+    stepsBySource.value = {}
+    ElMessage.warning('加载流程节点失败')
   }
 }
+async function loadSiteSources() {
+  const currentSiteId = siteId.value
+  try {
+    const result = currentSiteId ? await siteApi.siteSources(currentSiteId) : []
+    if (currentSiteId !== siteId.value) return
+    siteSources.value = result
+  } catch {
+    if (currentSiteId !== siteId.value) return
+    siteSources.value = []
+    ElMessage.warning('加载所属子源失败')
+  }
+}
+let statsRequest = 0
 async function loadStats() {
-  try {
-    stats.value = sourceId.value ? await fileApi.fileStats(sourceId.value) : null
-  } catch (e) {
-    ElMessage.warning('加载统计信息失败')
+  const requestId = ++statsRequest
+  const query = { ...scope(), nodeId: filters.nodeId || undefined, contentType: filters.contentType || undefined, dateFrom: filters.dateFrom || undefined, dateTo: filters.dateTo || undefined }
+  if (!siteId.value) {
     stats.value = null
+    return
+  }
+  try {
+    const result = await fileApi.fileStats(query)
+    if (requestId !== statsRequest) return
+    stats.value = result
+  } catch {
+    if (requestId !== statsRequest) return
+    stats.value = null
+    ElMessage.warning('加载统计信息失败')
   }
 }
+let listRequest = 0
 async function loadList() {
-  if (!sourceId.value) {
+  const requestId = ++listRequest
+  const query = {
+    ...scope(),
+    nodeId: filters.nodeId || undefined,
+    contentType: filters.contentType || undefined,
+    dateFrom: filters.dateFrom || undefined,
+    dateTo: filters.dateTo || undefined,
+    page: page.value,
+    size,
+  }
+  if (!query.siteId) {
     rows.value = []
     total.value = 0
     return
   }
   loading.value = true
   try {
-    const res = await fileApi.filePaged({
-      sourceId: sourceId.value,
-      nodeId: filters.nodeId || undefined,
-      contentType: filters.contentType || undefined,
-      state: (filters.state || undefined) as '' | 'C' | 'E' | undefined,
-      dateFrom: dateRange.value?.[0] || undefined,
-      dateTo: dateRange.value?.[1] || undefined,
-      page: page.value,
-      size,
-    })
-    rows.value = res?.list ?? []
-    total.value = res?.total ?? 0
+    const result = await fileApi.filePaged(query)
+    if (requestId !== listRequest) return
+    rows.value = result?.list ?? []
+    total.value = result?.total ?? 0
+  } catch {
+    if (requestId !== listRequest) return
+    rows.value = []
+    total.value = 0
+    ElMessage.warning('加载文件列表失败')
   } finally {
-    loading.value = false
+    if (requestId === listRequest) loading.value = false
   }
 }
-function nodeName(nodeId: string): string {
-  return steps.value.find((s) => s.stepId === nodeId)?.name ?? nodeId
-}
-
-watch(sourceId, async () => {
-  page.value = 1
-  await Promise.allSettled([loadSteps(), loadStats(), loadList()])
-}, { immediate: true })
-watch([filters, dateRange], () => { page.value = 1; loadList() }, { deep: true })
-
-function resetFilters() {
-  filters.nodeId = ''
-  filters.contentType = ''
-  filters.state = ''
-  dateRange.value = null
-}
-function handleCurrentChange(val: number) {
-  page.value = val
-  loadList()
-}
-function stateMeta(s: RawFile['state']) {
-  return s === 'E' ? { cls: 'err', text: '失败' } : { cls: 'ok', text: '成功' }
+function nodeName(fileSourceId: string, nodeId: string): string {
+  return stepsBySource.value[fileSourceId]?.find((step) => step.stepId === nodeId)?.name ?? nodeId
 }
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
+function formatAttributes(attributes?: Record<string, unknown>): string {
+  if (!attributes || !Object.keys(attributes).length) return '—'
+  return Object.entries(attributes).map(([key, value]) => `${key}: ${String(value)}`).join('；')
+}
+function previewType(file: RawFile): 'image' | 'iframe' | 'unsupported' {
+  const name = file.fileName.toLowerCase()
+  if (file.contentType.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/.test(name)) return file.viewUrl ? 'image' : 'unsupported'
+  if (file.viewUrl && (file.contentType === 'html' || file.contentType === 'pdf' || file.contentType.startsWith('text/') || file.contentType.includes('json') || /\.(html?|pdf|txt|json|xml|csv)$/.test(name))) return 'iframe'
+  return 'unsupported'
+}
+function openPreview(file: RawFile) {
+  previewFile.value = file
+  previewOpen.value = true
+}
+function resetFilters() {
+  filters.sourceId = sourceId.value
+  filters.nodeId = ''
+  filters.contentType = ''
+  filters.dateFrom = ''
+  filters.dateTo = ''
+}
+function previousPage() {
+  page.value = Math.max(1, page.value - 1)
+  loadList()
+}
+function nextPage() {
+  if (page.value * size >= total.value) return
+  page.value += 1
+  loadList()
+}
+
+watch(sourceId, async (id) => {
+  page.value = 1
+  filters.sourceId = id
+  filters.nodeId = ''
+  await loadSiteSources()
+}, { immediate: true })
+watch(() => [filters.sourceId, filters.nodeId, filters.contentType, filters.dateFrom, filters.dateTo] as const, ([nextSourceId], previous) => {
+  page.value = 1
+  void Promise.all([nextSourceId !== previous?.[0] ? loadNodeMetadata() : Promise.resolve(), loadStats(), loadList()])
+}, { immediate: true })
 </script>
 
 <template>
@@ -96,85 +171,49 @@ function formatSize(bytes: number): string {
     <div class="fv-body">
       <div v-if="!sourceId" class="fv-empty-row">文件视图仅在子源详情下可用。</div>
       <template v-else>
-
-
+        <div class="fv-process-rail" data-testid="file-process-rail">
+          <ProcessNodeRail v-model="filters.nodeId" :layout="processLayout" />
+        </div>
         <div class="fv-filters">
-          <el-select v-model="filters.nodeId" placeholder="全部节点" clearable style="width: 150px">
-            <el-option label="全部节点" value="" />
-            <el-option v-for="s in steps" :key="s.stepId" :label="s.name" :value="s.stepId" />
-          </el-select>
-          <el-select v-model="filters.contentType" placeholder="全部类型" clearable style="width: 130px">
-            <el-option label="全部类型" value="" />
-            <el-option label="html" value="html" />
-            <el-option label="pdf" value="pdf" />
-            <el-option label="json" value="json" />
-          </el-select>
-          <el-select v-model="filters.state" placeholder="全部状态" clearable style="width: 130px">
-            <el-option label="全部状态" value="" />
-            <el-option label="成功" value="C" />
-            <el-option label="失败" value="E" />
-          </el-select>
-          <el-date-picker
-            v-model="dateRange"
-            type="daterange"
-            range-separator="至"
-            start-placeholder="开始日期"
-            end-placeholder="结束日期"
-            format="YYYY-MM-DD"
-            value-format="YYYY-MM-DD"
-            style="width: 280px"
-          />
-          <el-button type="primary" @click="resetFilters" plain>清空筛选</el-button>
+          <select v-model="filters.sourceId" class="fv-input" data-testid="file-source-filter" aria-label="所属子源">
+            <option value="">所属子源（全部）</option>
+            <option v-for="source in siteSources" :key="source.sourceId" :value="source.sourceId">所属子源：{{ source.name }}</option>
+          </select>
+          <select v-model="filters.nodeId" class="fv-input" aria-label="流程节点">
+            <option value="">节点（全部）</option>
+            <option v-for="step in filterSteps" :key="`${step.sourceId}-${step.stepId}`" :value="step.stepId">{{ showSourceColumn ? `${sourceNames[step.sourceId] || step.sourceId} · ${step.name}` : step.name }}</option>
+          </select>
+          <select v-model="filters.contentType" class="fv-input" aria-label="文件类型">
+            <option value="">类型（全部）</option><option value="html">html</option><option value="pdf">pdf</option><option value="json">json</option>
+          </select>
+          <input v-model="filters.dateFrom" class="fv-input fv-date" type="date" aria-label="开始日期">
+          <input v-model="filters.dateTo" class="fv-input fv-date" type="date" aria-label="结束日期">
+          <button class="rc-btn" type="button" @click="resetFilters">清空筛选</button>
           <span class="fv-spacer" />
-          <span class="muted">
-            共 {{ total }} 个文件 <span v-if="stats?.totalSize" style="margin-left: 4px;">({{ formatSize(stats?.totalSize ?? 0) }})</span>
-            <span v-if="(stats?.failed ?? 0) > 0" style="color: #ef4444; margin-left: 8px;">(失败 {{ stats?.failed }})</span>
-          </span>
+          <span class="muted">共 {{ total }} 个文件 <span v-if="stats?.totalSize">({{ formatSize(stats.totalSize) }})</span></span>
         </div>
 
         <table class="rc-data-table fv-table" v-loading="loading">
-          <thead>
-            <tr>
-              <th>文件名</th>
-              <th style="width: 110px">节点</th>
-              <th style="width: 70px">类型</th>
-              <th style="width: 90px" class="num">大小</th>
-              <th style="width: 70px">状态</th>
-              <th style="width: 150px">生成时间</th>
-              <th style="width: 110px">操作</th>
-            </tr>
-          </thead>
+          <thead><tr><th>文件名</th><th v-if="showSourceColumn">所属子源</th><th>节点</th><th>类型</th><th class="num">大小</th><th>MD5</th><th>扩展属性</th><th>生成时间</th><th>操作</th></tr></thead>
           <tbody>
-            <tr v-for="f in rows" :key="f.fileId">
-              <td class="fv-name">{{ f.fileName }}</td>
-              <td>{{ nodeName(f.nodeId) }}</td>
-              <td>{{ f.contentType }}</td>
-              <td class="num">{{ formatSize(f.size) }}</td>
-              <td><span class="rc-status" :class="stateMeta(f.state).cls">{{ stateMeta(f.state).text }}</span></td>
-              <td class="soft">{{ f.createdAt }}</td>
-              <td>
-                <a v-if="f.viewUrl" class="fv-op" :href="f.viewUrl" target="_blank" rel="noopener">查看</a>
-                <a v-if="f.downloadUrl" class="fv-op" :href="f.downloadUrl" target="_blank" rel="noopener">下载</a>
-                <span v-if="!f.viewUrl && !f.downloadUrl" class="muted">—</span>
-              </td>
+            <tr v-for="file in rows" :key="file.fileId">
+              <td class="fv-name">{{ file.fileName }}</td><td v-if="showSourceColumn">{{ sourceNames[file.sourceId] || file.sourceId }}</td><td>{{ nodeName(file.sourceId, file.nodeId) }}</td><td>{{ file.contentType }}</td><td class="num">{{ formatSize(file.size) }}</td>
+              <td class="fv-md5">{{ file.md5 || '—' }}</td><td class="fv-attrs">{{ formatAttributes(file.attributes) }}</td><td class="soft">{{ file.createdAt }}</td>
+              <td><button class="fv-op" type="button" :data-testid="`file-preview-${file.fileId}`" @click="openPreview(file)">预览</button><a v-if="file.downloadUrl" class="fv-op" :href="file.downloadUrl" :download="file.fileName">下载</a></td>
             </tr>
-            <tr v-if="!rows.length && !loading">
-              <td colspan="7" class="fv-empty-row">没有匹配的文件</td>
-            </tr>
+            <tr v-if="!rows.length && !loading"><td :colspan="showSourceColumn ? 9 : 8" class="fv-empty-row">没有匹配的文件</td></tr>
           </tbody>
         </table>
-        <div class="fv-pager">
-          <el-pagination
-            background
-            layout="prev, pager, next"
-            :current-page="page"
-            :page-size="size"
-            :total="total"
-            @current-change="handleCurrentChange"
-          />
-        </div>
+        <div class="fv-pager"><button class="rc-btn" :disabled="page <= 1" @click="previousPage">上一页</button><span class="muted">第 {{ page }} 页</span><button class="rc-btn" :disabled="page * size >= total" @click="nextPage">下一页</button></div>
       </template>
     </div>
+    <el-drawer v-model="previewOpen" title="文件预览" size="70%" destroy-on-close>
+      <template v-if="previewFile">
+        <img v-if="previewType(previewFile) === 'image'" class="fv-preview-image" :src="previewFile.viewUrl" :alt="previewFile.fileName">
+        <iframe v-else-if="previewType(previewFile) === 'iframe'" class="fv-preview-frame" :src="previewFile.viewUrl" :title="previewFile.fileName" />
+        <div v-else class="fv-preview-empty">该文件格式暂不支持站内预览，请下载后查看。</div>
+      </template>
+    </el-drawer>
   </main>
 </template>
 
@@ -190,15 +229,21 @@ function formatSize(bytes: number): string {
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.02);
 }
 .fv-body { flex: 1; overflow: auto; padding: 20px 24px; animation: fadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
-.fv-empty-row { text-align: center; color: var(--rc-faint); font-size: 13px; padding: 40px 12px; }
+.fv-empty-row, .fv-preview-empty { text-align: center; color: var(--rc-faint); font-size: 13px; padding: 40px 12px; }
 
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
-
-
+.fv-process-rail {
+  min-height: 80px;
+  margin-bottom: 14px;
+  overflow-x: auto;
+  background: #f8fafc;
+  border: 1px solid var(--rc-border-soft);
+  border-radius: 10px;
+}
 .fv-filters {
   display: flex;
   align-items: center;
@@ -209,6 +254,19 @@ function formatSize(bytes: number): string {
   border-radius: 10px;
   border: 1px solid #f1f5f9;
 }
+.fv-input {
+  height: 30px;
+  min-width: 112px;
+  padding: 0 10px;
+  color: var(--rc-text);
+  border: 1px solid var(--rc-border);
+  border-radius: 6px;
+  background: #fff;
+  font-size: 12px;
+}
+.fv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; outline: none; }
+.fv-date { min-width: 126px; }
+.fv-filters .rc-btn { height: 30px; padding: 0 14px; font-size: 12px; }
 .fv-spacer { flex: 1; }
 .muted { color: #94a3b8; font-size: 13px; }
 
@@ -218,15 +276,19 @@ function formatSize(bytes: number): string {
 .fv-table tbody tr:hover td { background: #fdfefe; }
 .fv-table th.num, .fv-table td.num { text-align: right; }
 
-.fv-name { font-family: var(--rc-mono, monospace); font-size: 13px; color: #334155; }
+.fv-name, .fv-md5 { font-family: var(--rc-mono, monospace); font-size: 12px; color: #334155; }
+.fv-attrs { max-width: 200px; color: var(--rc-faint); font-size: 12px; }
 .soft { color: #94a3b8; font-size: 12px; }
 
 .rc-status { padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; display: inline-block; }
 .rc-status.ok { background: rgba(34, 197, 94, 0.1); color: #16a34a; border: 1px solid rgba(34, 197, 94, 0.2); }
 .rc-status.err { background: rgba(239, 68, 68, 0.1); color: #dc2626; border: 1px solid rgba(239, 68, 68, 0.2); }
 
-.fv-op { margin-right: 12px; font-size: 13px; color: #3b82f6; text-decoration: none; font-weight: 500; transition: color 0.2s; }
+.fv-op { margin-right: 12px; padding: 0; border: 0; background: none; font-size: 13px; color: #3b82f6; text-decoration: none; font-weight: 500; cursor: pointer; transition: color 0.2s; }
 .fv-op:hover { color: #2563eb; text-decoration: underline; }
 
-.fv-pager { display: flex; align-items: center; justify-content: flex-end; margin-top: 16px; }
+.fv-pager { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.fv-pager .rc-btn { height: 28px; padding: 0 10px; font-size: 12px; }
+.fv-preview-frame { width: 100%; min-height: 70vh; border: 0; }
+.fv-preview-image { display: block; max-width: 100%; max-height: 70vh; margin: 0 auto; object-fit: contain; }
 </style>

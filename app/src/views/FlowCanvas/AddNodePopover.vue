@@ -4,8 +4,8 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { LIB_GROUPS, type LibItem } from './flowModel'
 
-const props = defineProps<{ x: number; y: number; hideLogicGroup?: boolean }>()
-const emit = defineEmits<{ pick: [template: string]; close: [] }>()
+const props = defineProps<{ x: number; y: number; hideLogicGroup?: boolean; compact?: boolean }>()
+const emit = defineEmits<{ pick: [template: string]; close: []; dragstart: [event: DragEvent, template: string] }>()
 
 const keyword = ref('')
 const searchEl = ref<HTMLInputElement | null>(null)
@@ -27,6 +27,9 @@ watch(flatItems, () => { activeIndex.value = 0 })
 function pick(it: LibItem) {
   emit('pick', it.template)
 }
+function onDragStart(event: DragEvent, it: LibItem) {
+  emit('dragstart', event, it.template)
+}
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'ArrowDown') {
     e.preventDefault()
@@ -44,7 +47,7 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 // 锚定定位：以触发点为基准，超出视口则回夹在可视区域内
-const style = ref({ left: '0px', top: '0px' })
+const style = ref<Record<string, string>>({ left: '0px', top: '0px' })
 async function place() {
   await nextTick()
   const el = popEl.value
@@ -64,7 +67,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div ref="popEl" class="anp-pop" :style="style" @keydown="onKeydown" @click.stop>
+  <div ref="popEl" class="anp-pop" :class="{ compact: props.compact }" :style="style" @keydown="onKeydown" @click.stop>
     <input
       ref="searchEl"
       v-model="keyword"
@@ -81,7 +84,9 @@ onMounted(() => {
           type="button"
           class="anp-item"
           :class="{ active: flatItems[activeIndex] === it }"
+          draggable="true"
           @click="pick(it)"
+          @dragstart="onDragStart($event, it)"
           @mouseenter="activeIndex = flatItems.indexOf(it)"
         >
           <span class="anp-item-icon">{{ it.badge ?? it.code }}</span>
@@ -110,6 +115,7 @@ onMounted(() => {
   box-shadow: 0 20px 48px -18px rgba(15, 23, 42, 0.4);
   overflow: hidden;
 }
+.anp-pop.compact { width: 184px; max-height: min(58vh, 420px); }
 .anp-search {
   flex: none;
   height: 34px;
@@ -138,6 +144,7 @@ onMounted(() => {
   text-align: left;
 }
 .anp-item.active, .anp-item:hover { background: var(--rc-primary-bg); }
+.anp-item:active { cursor: grabbing; }
 .anp-item-icon {
   flex: none;
   width: 26px;
@@ -155,5 +162,8 @@ onMounted(() => {
 .anp-item-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.35; }
 .anp-item-text b { font-size: 12px; font-weight: 700; color: var(--rc-text); }
 .anp-item-text span { font-size: 10px; color: var(--rc-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.compact .anp-item { gap: 7px; padding: 5px 7px; }
+.compact .anp-item-icon { width: 24px; height: 24px; }
+.compact .anp-item-text b { font-size: 11px; }
 .anp-empty { padding: 24px 8px; text-align: center; font-size: 12px; color: var(--rc-faint); }
 </style>

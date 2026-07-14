@@ -575,7 +575,7 @@ export const useFlowStore = defineStore('flow', () => {
   }
 
   // ---- 决策/分头分支段操作（0707 优化·Phase6）----
-  /** 给指定 ownerId 创建默认 FlowBranchGroup（决策 IF+ELSE、分头 2 分支）；
+  /** 给指定 ownerId 创建默认 FlowBranchGroup（决策一条条件分支、分头 2 分支）；
    *  已有则返回已有组，不覆盖；用于 insertAfter 自动创建 + 手工初始化 */
   function ensureBranchGroup(ownerId: string, kind: 'decision' | 'parallel'): FlowBranchGroup | null {
     const existing = branchGroups.find((bg) => bg.ownerId === ownerId)
@@ -584,8 +584,7 @@ export const useFlowStore = defineStore('flow', () => {
       const g: FlowBranchGroup = {
         ownerId,
         branches: [
-          { id: `${ownerId}-b-if-${branchSeq++}`, label: 'IF', condition: undefined, chain: [] },
-          { id: `${ownerId}-b-else-${branchSeq++}`, label: 'ELSE', condition: undefined, chain: [] },
+          { id: `${ownerId}-b-condition-${branchSeq++}`, label: '条件分支 1', condition: undefined, chain: [] },
         ],
       }
       branchGroups.push(g)
@@ -604,25 +603,23 @@ export const useFlowStore = defineStore('flow', () => {
     }
     return null
   }
-  /** 追加一条 ELIF 分支（决策场景，分头拒绝）；插入到 ELSE 之前 */
+  /** 追加一条条件分支（决策场景，分头拒绝）。 */
   function addBranch(ownerId: string): FlowBranch | null {
     const g = branchGroups.find((bg) => bg.ownerId === ownerId)
     if (!g) return null
     const cfg = configs[ownerId]
     if (!cfg || cfg.kind !== 'decision') return null
-    // 非 ELSE 分支数 = g.branches.length - 1，新 ELIF 命名按"非 ELSE 序号"
-    const elifIndex = g.branches.length - 1
-    const elif: FlowBranch = {
-      id: `${ownerId}-b-elif-${branchSeq++}`,
-      label: `ELIF-${elifIndex}`,
+    const branch: FlowBranch = {
+      id: `${ownerId}-b-condition-${branchSeq++}`,
+      label: `条件分支 ${g.branches.length + 1}`,
       condition: undefined,
       chain: [],
     }
-    g.branches.splice(elifIndex, 0, elif)
+    g.branches.push(branch)
     touch()
-    return elif
+    return branch
   }
-  /** 删除一条分支：ELSE 不可删；chain 非空拒绝（用户需先清理子链）；删到 1 条拒绝。
+  /** 删除一条空分支；chain 非空拒绝，且至少保留一条。
    *  返回 {ok, reason}，UI 据此给 inline 提示。 */
   function removeBranch(ownerId: string, branchId: string): { ok: boolean; reason?: string } {
     const g = branchGroups.find((bg) => bg.ownerId === ownerId)
@@ -633,13 +630,9 @@ export const useFlowStore = defineStore('flow', () => {
     if (branch.chain.length > 0) {
       return { ok: false, reason: `分支内还有 ${branch.chain.length} 个节点，请先移除` }
     }
-    const cfg = configs[ownerId]
-    const isDecisionNode = !!cfg && cfg.kind === 'decision'
-    if (isDecisionNode && idx === g.branches.length - 1) {
-      return { ok: false, reason: 'ELSE 不可删除' }
-    }
-    if (g.branches.length <= 2) {
-      return { ok: false, reason: '至少保留 2 条分支' }
+    const minBranches = configs[ownerId]?.kind === 'parallel' ? 2 : 1
+    if (g.branches.length <= minBranches) {
+      return { ok: false, reason: `至少保留 ${minBranches} 条分支` }
     }
     g.branches.splice(idx, 1)
     touch()
@@ -719,28 +712,16 @@ export const useFlowStore = defineStore('flow', () => {
     touch()
     return true
   }
-  /** 给指定分支设置条件（IF/ELIF）；ELSE 拒绝（应保持 condition = undefined） */
+  /** 给指定条件分支设置条件。 */
   function setBranchCondition(ownerId: string, branchId: string, cond: ConditionGroup | undefined): boolean {
     const g = branchGroups.find((bg) => bg.ownerId === ownerId)
     if (!g) return false
     const branch = g.branches.find((b) => b.id === branchId)
     if (!branch) return false
-    if (branch.condition === undefined && idxOfElse(g) === g.branches.indexOf(branch)) {
-      // ELSE 不可设条件（语义：按序匹配兜底）
-      return false
-    }
     branch.condition = cond
     touch()
     return true
   }
-  function idxOfElse(g: FlowBranchGroup): number {
-    // ELSE = 决策场景最后一条（condition 始终为 undefined 且不在前面 IF/ELIF 中）；
-    // 用"最后一条 + condition === undefined"识别，避免依赖 label 文案
-    if (g.branches.length === 0) return -1
-    const last = g.branches.length - 1
-    return g.branches[last].condition === undefined ? last : -1
-  }
-
   // 源级配置整体读写（0706 优化·源/节点配置分层）：首次编辑时懒创建草稿，供新建/空白流程也能编辑源信息
   function patchSource(patch: Partial<Source>) {
     if (!sourceCfg.value) {
@@ -966,6 +947,7 @@ export const useFlowStore = defineStore('flow', () => {
     }
     if (!mainIds.length) errs.push('流程为空：至少添加一个节点')
     const allIds = [...mainIds, ...branchIds, ...chainIds]
+    const flowParamRefs = new Set(Object.values(d.configs).flatMap((node) => node.collectCfg?.urlParamRefs ?? []))
     allIds.forEach((nid) => {
       const c = d.configs[nid]
       if (!c) return
@@ -994,19 +976,21 @@ export const useFlowStore = defineStore('flow', () => {
       ) {
         errs.push(`「${c.title}」缺少输入表`)
       }
+      const taskTokens = extractUrlParamIds(c.taskCfg?.urlRule ?? '')
+      const unavailableTaskParams = taskTokens.filter((pid) => !(c.taskCfg?.paramRefs ?? []).includes(pid))
+      if (unavailableTaskParams.length) errs.push(`「${c.title}」任务 URL 参数 ${unavailableTaskParams.join('、')} 尚未绑定到任务配置`)
+      const invalidTaskRefs = (c.taskCfg?.paramRefs ?? []).filter((pid) => !flowParamRefs.has(pid))
+      if (invalidTaskRefs.length) errs.push(`「${c.title}」任务参数 ${invalidTaskRefs.join('、')} 未绑定到当前流程`)
     })
     // 0707 优化·Phase6：决策/分头分支段校验
     for (const bg of d.branchGroups ?? []) {
       const ownerCfg = d.configs[bg.ownerId]
       if (!ownerCfg) continue
       if (ownerCfg.kind === 'decision') {
-        // ELSE = 决策场景最后一条（condition 始终 undefined）；非 ELSE 数 = branches.length - 1
-        const nonElseCount = bg.branches.length - 1
-        if (nonElseCount < 1) {
-          errs.push(`「${ownerCfg.title}」决策至少需要 1 条非 ELSE 分支（IF/ELIF）`)
+        if (bg.branches.length < 1) {
+          errs.push(`「${ownerCfg.title}」决策至少需要 1 条条件分支`)
         }
-        // IF/ELIF（非最后一条）必须有 condition
-        for (let i = 0; i < bg.branches.length - 1; i++) {
+        for (let i = 0; i < bg.branches.length; i++) {
           const b = bg.branches[i]
           if (!conditionGroupIsSet(b.condition)) {
             errs.push(`「${ownerCfg.title}」第 ${i + 1} 条分支（${b.label}）缺少条件`)

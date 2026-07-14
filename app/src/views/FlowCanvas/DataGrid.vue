@@ -72,7 +72,7 @@ function stateMeta(s?: string) {
       <table class="dg-table">
         <thead>
           <tr>
-            <th v-if="showSourceCol" style="width:140px">所属源</th>
+            <th v-if="showSourceCol" style="width:140px">所属子源</th>
             <th v-for="f in visibleCols" :key="f.prop" :style="{ minWidth: compact ? '96px' : '110px' }">{{ f.prop }}</th>
             <th v-if="!compact" style="width:64px">状态</th>
             <th v-if="showActions" style="width:80px">操作</th>

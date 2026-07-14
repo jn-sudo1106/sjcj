@@ -1,128 +1,44 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useWorkspaceStore } from '../../stores/workspace'
-import { dataApi, siteApi, flowApi, sourceApi, type DataTableMeta, type DataRow, type Source } from '../../api'
-import { buildHorizontalLayout, buildSourceSeed, iconFor, nodeOutputTable, pickFinalMainNodeId, type HorizontalLayout } from './flowModel'
+import { dataApi, siteApi, type DataTableMeta, type DataRow, type Source } from '../../api'
+import { buildHorizontalLayout, nodeOutputTable } from './flowModel'
 import CanvasHeader from './CanvasHeader.vue'
 import DataGrid from './DataGrid.vue'
+import ProcessNodeRail from './ProcessNodeRail.vue'
 
 const flow = useFlowStore()
 const ws = useWorkspaceStore()
 const router = useRouter()
 
-// 网站粒度上下文（0707 优化·Phase5）：无论画布当前停在网站模板还是某个子源，数据视图都站在网站粒度；
-// 没有 siteId 的历史/草稿源退回原单源行为（1:1+fallback）。tabKey 对应页签条 key（源 id 或 `site:xxx` 伪 id）。
-const siteId = computed(() => flow.sourceCtx?.siteId || flow.siteCtx?.siteId || '')
-const tabKey = computed(() => ws.activeSourceId)
-
-// 源筛选（可搜索下拉）：选项来自网站下全部子源；从子源画布进入时预选该子源，网站模板进入则不预选（=全部子源聚合）
+// 数据视图只属于子源流程；网站仅作为「全部子源」的数据查询范围。
+const source = computed(() => flow.sourceCtx)
+const sourceId = computed(() => source.value?.sourceId ?? '')
+const siteId = computed(() => source.value?.siteId ?? '')
+const tabKey = computed(() => sourceId.value)
 const siteChildren = ref<Source[]>([])
 const sourceNames = computed<Record<string, string>>(() =>
   Object.fromEntries(siteChildren.value.map((s) => [s.sourceId, s.name])),
 )
+const sourceFilter = ref('')
+const querySourceId = computed(() => sourceFilter.value || (!siteId.value ? sourceId.value : undefined))
 async function loadSiteChildren() {
   siteChildren.value = siteId.value ? await siteApi.siteSources(siteId.value) : []
 }
-
-// 节点条：网站粒度优先取网站统一流程模板；模板未保存或模板节点没绑任何输出表时（种子网站的虚拟模板
-// 刻意不带表，0710 空白引导口径——数据视图关心"哪里有数据"，无表模板查不出任何行），
-// 退回用站内第一个子源的实际步骤推导末端结果集入口。查询仍按 siteId 聚合全部子源。
-const templateLayout = ref<HorizontalLayout | null>(null)
-async function loadTemplateLayout() {
-  if (!siteId.value) {
-    templateLayout.value = null
-    return
-  }
-  const def = await flowApi.flowLoad(`site:${siteId.value}`)
-  if (def && Object.values(def.configs).some((c) => nodeOutputTable(c))) {
-    templateLayout.value = buildHorizontalLayout(def.main, def.branches, def.configs)
-    return
-  }
-  const children = siteChildren.value.length ? siteChildren.value : await siteApi.siteSources(siteId.value)
-  const first = children[0]
-  if (!first) {
-    templateLayout.value = null
-    return
-  }
-  const steps = await sourceApi.sourceSteps(first.sourceId)
-  const seed = buildSourceSeed(first, steps)
-  templateLayout.value = buildHorizontalLayout(seed.main, seed.branches, seed.configs)
-}
-watch(siteId, () => {
-  loadSiteChildren()
-  loadTemplateLayout()
+watch(sourceId, async (id) => {
+  sourceFilter.value = id
+  await loadSiteChildren()
 }, { immediate: true })
 
-// 横向流程图节点：把 horizontalLayout 的节点投射为带"是否数据节点"标记
-interface BarNode {
-  id: string
-  title: string
-  icon: string
-  outputTable: string
-  selectable: boolean
-  pos: { left: number; top: number; width: number; height: number }
-  branch: boolean
-  /** 主链末端数据节点 = 流程最终结果落表（优化 0701 问题二） */
-  final: boolean
-}
-const hlayout = computed(() => templateLayout.value ?? flow.horizontalLayout)
-
-// 节点条高度：默认跟随 layout 计算结果；用户可拖动分隔条调整
-const barHeight = ref<number | null>(null)
-const effectiveBarHeight = computed(() => barHeight.value ?? hlayout.value.totalHeight)
-watch(
-  () => hlayout.value.totalHeight,
-  (h) => {
-    if (barHeight.value == null) barHeight.value = h
-  },
-  { immediate: true },
+const processLayout = computed(() =>
+  buildHorizontalLayout(flow.main, flow.branches, flow.configs, flow.branchGroups, { includeTerminals: false }),
 )
-let resizeStart = 0
-let resizeStartH = 0
-function onResizeMove(e: MouseEvent) {
-  const next = Math.max(60, Math.min(window.innerHeight * 0.6, resizeStartH + (e.clientY - resizeStart)))
-  barHeight.value = next
-}
-function onResizeEnd() {
-  window.removeEventListener('mousemove', onResizeMove)
-  window.removeEventListener('mouseup', onResizeEnd)
-  document.body.style.userSelect = ''
-  document.body.style.cursor = ''
-}
-function onResizeStart(e: MouseEvent) {
-  e.preventDefault()
-  resizeStart = e.clientY
-  resizeStartH = effectiveBarHeight.value
-  document.body.style.userSelect = 'none'
-  document.body.style.cursor = 'row-resize'
-  window.addEventListener('mousemove', onResizeMove)
-  window.addEventListener('mouseup', onResizeEnd)
-}
-onBeforeUnmount(onResizeEnd)
-const bar = computed<BarNode[]>(() => {
-  const nodes = hlayout.value.nodes
-  const finalId = pickFinalMainNodeId(nodes)
-  return nodes.map((n) => {
-    const table = nodeOutputTable(n.cfg)
-    return {
-      id: n.id,
-      title: n.cfg.title,
-      icon: iconFor(n.cfg),
-      outputTable: table,
-      selectable: !!table,
-      pos: n.pos,
-      branch: n.branch,
-      final: n.id === finalId,
-    }
-  })
-})
-const dataNodes = computed(() => bar.value.filter((n) => n.selectable))
+const dataNodes = computed(() => processLayout.value.nodes.filter((node) => Boolean(nodeOutputTable(node.cfg))))
 const selectedNodeId = ref<string>('')
 const page = ref(1)
-// 数据范围由页面级子源侧栏选中态决定（0710 会议 C4 = 第 7 条同一侧栏）：子源态看该子源、网站态看全站，不再自建源筛选
 const filters = reactive({ dataId: '', parentId: '', state: '', sql: '' })
 
 // 默认选末端数据节点（最终结果表）；有页签快照（0701 问题三）时优先恢复快照里的节点/过滤/页码。
@@ -133,7 +49,7 @@ watch(
     if (!nodes.some((n) => n.id === selectedNodeId.value)) {
       const snap = ws.snapshotOf(tabKey.value)
       const snapId = snap?.selectedNodeId && nodes.some((n) => n.id === snap.selectedNodeId) ? snap.selectedNodeId : ''
-      selectedNodeId.value = snapId || ((nodes.find((n) => n.final) ?? nodes[0])?.id ?? '')
+      selectedNodeId.value = snapId || nodes.at(-1)?.id || ''
       if (snapId) {
         page.value = snap?.page ?? 1
         if (snap?.filters) {
@@ -149,16 +65,14 @@ watch(
   { immediate: true },
 )
 
-// 浏览状态实时写入页签快照，切页签/刷新后恢复
+// 浏览状态实时写入子源页签快照，切换后恢复。
 watch([selectedNodeId, page, () => ({ ...filters })], () => {
   const key = tabKey.value
   if (key) ws.saveSnapshot(key, { selectedNodeId: selectedNodeId.value, page: page.value, filters: { ...filters } })
 })
-const selectedTable = computed(() => bar.value.find((n) => n.id === selectedNodeId.value)?.outputTable ?? '')
-
-function pickNode(n: BarNode) {
-  if (!n.selectable) return
-  selectedNodeId.value = n.id
+const selectedTable = computed(() => dataNodes.value.find((n) => n.id === selectedNodeId.value) ? nodeOutputTable(dataNodes.value.find((n) => n.id === selectedNodeId.value)!.cfg) : '')
+function canSelectDataNode(nodeId: string) {
+  return dataNodes.value.some((node) => node.id === nodeId)
 }
 
 // 表元 + 数据
@@ -181,9 +95,8 @@ async function loadData() {
       dataApi.tableMeta(selectedTable.value),
       dataApi.rowQueryPaged({
         tableId: selectedTable.value,
-        // 数据范围跟随侧栏选中态（0710 会议 C4）：停在子源上=该子源数据，停在网站上=全站聚合
         siteId: siteId.value || undefined,
-        sourceId: flow.sourceCtx?.sourceId || undefined,
+        sourceId: querySourceId.value,
         dataId: filters.dataId || undefined,
         parentId: filters.parentId || undefined,
         state: filters.state || undefined,
@@ -200,6 +113,10 @@ async function loadData() {
   }
 }
 watch([selectedTable, page], loadData, { immediate: false })
+watch(sourceFilter, () => {
+  page.value = 1
+  loadData()
+})
 onMounted(loadData)
 
 function runQuery() {
@@ -282,51 +199,16 @@ async function saveEdit() {
   <main class="rv-shell">
     <CanvasHeader />
 
-    <div class="rv-bar" :style="{ height: effectiveBarHeight + 'px' }">
-      <div class="rv-bar-canvas" :style="{ width: hlayout.totalWidth + 'px', height: hlayout.totalHeight + 'px' }">
-        <svg :width="hlayout.totalWidth" :height="hlayout.totalHeight" aria-hidden="true">
-          <defs>
-            <marker id="rv-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M0 0 L10 5 L0 10 z" fill="#94a3b8" />
-            </marker>
-          </defs>
-          <path v-for="(e, i) in hlayout.mainEdges" :key="'m' + i" :d="e.d" class="rv-edge" :class="{ rule: e.rule }" marker-end="url(#rv-arrow)" />
-          <path v-for="(e, i) in hlayout.branchEdges" :key="'b' + i" :d="e.d" class="rv-edge dashed" marker-end="url(#rv-arrow)" />
-        </svg>
-
-        <div
-          v-for="t in hlayout.terminals"
-          :key="t.id"
-          class="rv-term"
-          :style="{ left: t.pos.left + 'px', top: t.pos.top + 'px', width: t.pos.width + 'px', height: t.pos.height + 'px' }"
-        >{{ t.label }}</div>
-
-        <button
-          v-for="n in bar"
-          :key="n.id"
-          class="rv-node"
-          :class="{ on: selectedNodeId === n.id, disabled: !n.selectable, branch: n.branch }"
-          type="button"
-          :disabled="!n.selectable"
-          :title="n.selectable ? `查看输出表 ${n.outputTable}` : '该节点无输出表'"
-          :style="{ left: n.pos.left + 'px', top: n.pos.top + 'px', width: n.pos.width + 'px', height: n.pos.height + 'px' }"
-          @click="pickNode(n)"
-        >
-          <span class="rv-node-icon">{{ n.icon }}</span>
-          <span class="rv-node-text">
-            <span class="rv-node-title">{{ n.title }}</span>
-            <span class="rv-node-sub">{{ n.outputTable || '无输出表' }}</span>
-          </span>
-          <span v-if="n.final" class="rv-node-final">最终结果</span>
-        </button>
-      </div>
-      <div v-if="!bar.length" class="rv-bar-empty">当前流程没有可查看数据的节点</div>
-    </div>
-    <div class="rv-resize" :title="'拖动调整流程图高度'" @mousedown="onResizeStart">
-      <span class="rv-resize-grip" aria-hidden="true"></span>
+    <div class="rv-bar" data-testid="data-process-rail">
+      <ProcessNodeRail v-model="selectedNodeId" :layout="processLayout" :selectable="canSelectDataNode" />
+      <div v-if="!dataNodes.length" class="rv-bar-empty">当前流程没有可查看数据的节点</div>
     </div>
 
     <div class="rv-filters">
+      <select v-if="siteId" v-model="sourceFilter" class="rv-input" data-testid="data-source-filter" aria-label="所属子源">
+        <option value="">所属子源（全部）</option>
+        <option v-for="item in siteChildren" :key="item.sourceId" :value="item.sourceId">所属子源：{{ item.name }}</option>
+      </select>
       <input v-model="filters.dataId" class="rv-input" placeholder="数据 ID" @keyup.enter="runQuery" />
       <input v-model="filters.parentId" class="rv-input" placeholder="父 ID" @keyup.enter="runQuery" />
       <select v-model="filters.state" class="rv-input">
@@ -353,7 +235,7 @@ async function saveEdit() {
       :rows="rows"
       :loading="loading"
       :selected-id="detail.row?.dataId"
-      :source-names="siteId ? sourceNames : undefined"
+      :source-names="!querySourceId && siteChildren.length ? sourceNames : undefined"
       @row-click="onRowClick"
       @row-action="onRowAction"
     />

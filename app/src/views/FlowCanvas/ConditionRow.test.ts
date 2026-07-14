@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import ConditionRow from './ConditionRow.vue'
+import type { ConditionGroup } from './flowModel'
 
 describe('ConditionRow', () => {
   it('勾选进入条件后立即展开条件编辑区', async () => {
@@ -42,5 +43,33 @@ describe('ConditionRow', () => {
       },
     })
     expect((wrapper.get('textarea.cond-expr').element as HTMLTextAreaElement).value).toBe('a > 1')
+  })
+
+  it('一体化进入条件选择字段后自动生成下方表达式，且支持编辑', async () => {
+    const wrapper = mount(ConditionRow, {
+      props: { condition: undefined, integrated: true, fields: [{ prop: 'title-K2', desc: '标题' }] },
+    })
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+
+    expect(wrapper.find('.cond-mode').exists()).toBe(false)
+    expect((wrapper.get('textarea.cond-expr').element as HTMLTextAreaElement).value).toBe('title-K2 CONTAINS ""')
+
+    await wrapper.get('textarea.cond-expr').setValue('status = "C"')
+    expect(wrapper.emitted('change')!.at(-1)![0]).toEqual({
+      mode: 'expr', logic: 'AND', items: [{ field: 'title-K2', op: 'contains', value: '' }], expr: 'status = "C"',
+    })
+  })
+
+  it('一体化模式回传手工表达式后，再修改字段条件不会覆盖表达式', async () => {
+    const wrapper = mount(ConditionRow, {
+      props: { condition: undefined, integrated: true, fields: [{ prop: 'title-K2', desc: '标题' }] },
+    })
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await wrapper.get('textarea.cond-expr').setValue('status = "C" OR manual_check = true')
+    await wrapper.setProps({ condition: wrapper.emitted('change')!.at(-1)![0] as ConditionGroup })
+
+    await wrapper.get('.cond-fields input').setValue('公告')
+
+    expect((wrapper.get('textarea.cond-expr').element as HTMLTextAreaElement).value).toBe('status = "C" OR manual_check = true')
   })
 })

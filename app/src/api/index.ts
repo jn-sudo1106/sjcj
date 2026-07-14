@@ -4,8 +4,8 @@ import type {
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestResult,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
-  Config, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, WorkbenchSummary,
-  OverviewSummary, TrendPoint, RawFile, RawFileQuery, RawFileStats,
+  Config, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
+  OverviewSummary, TrendPoint, RawFile, RawFileQuery, RawFileStats, SourceCloneRequest, SourceCloneResult,
 } from './types'
 import type { FlowDef, FlowRecommendation } from '../views/FlowCanvas/flowModel'
 
@@ -31,6 +31,7 @@ export const sourceApi = {
   deleteSource: (sourceIds: string[]) => request<Ack>('source/deleteSource', { sourceIds }),
   sourceLogs: (sourceId: string) => request<SourceLog[]>('source/logPaged', { sourceId }),
   sourceTasks: (sourceId: string) => request<TaskInst[]>('task/topTaskPaged', { sourceId }),
+  sourceTaskPaged: (q: SourceTaskQuery) => request<Paged<TaskInst>>('source/sourceTaskPaged', q),
   credentialRef: (refId: string) => request<CredentialRef | null>('source/credentialDetail', { refId }),
   // 批量导入（0707 Review #3 修复：deep/dir 此前被前端丢弃，现透传）。
   batchImport: (template: string, lines: string, opts?: { deep?: boolean; dir?: string }) =>
@@ -55,12 +56,16 @@ export const siteApi = {
   siteDetail: (siteId: string) => request<Site | null>('site/siteDetail', { siteId }),
   siteCreate: (site: Omit<Site, 'sourceCount' | 'errorCount'>, sources: Source[]) =>
     request<{ ok: boolean; message?: string; siteId?: string }>('site/createSite', { site, sources }),
+  siteUpdate: (site: Pick<Site, 'siteId' | 'name' | 'category' | 'categoryPath' | 'owner'>) =>
+    request<Ack>('site/updateSite', { site }),
   siteSources: (siteId: string) => request<Source[]>('site/sourcesOfSite', { siteId }),
-  // inherit（0710 会议 B5）：是否同步网站信息（统一流程模板 + 网站默认设置），缺省 true 保持旧行为
-  sourceAdd: (siteId: string, source: Source, inherit = true) =>
+  // 新增子源默认从空白流程开始；inherit=true 仅保留给旧数据迁移兼容场景。
+  sourceAdd: (siteId: string, source: Source, inherit = false) =>
     request<{ ok: boolean; message?: string; sourceId?: string }>('site/addSource', { siteId, source, inherit }),
+  cloneSource: (requestBody: SourceCloneRequest) =>
+    request<SourceCloneResult>('site/cloneSource', requestBody as unknown as Record<string, unknown>),
   sourceRemove: (siteId: string, sourceId: string) => request<Ack>('site/removeSource', { siteId, sourceId }),
-  // 按网站批量导入子源（0710 会议 A5）：一行一条「名称;URL」，导入的子源继承网站统一流程
+  // 按网站批量导入子源：一行一条「名称;URL」，导入后从空白流程开始。
   siteImportSources: (siteId: string, lines: string) =>
     request<{ ok: boolean; message?: string; added?: number; skipped?: number }>('site/importSources', { siteId, lines }),
   // 危险端点：整条流程覆盖所选子源，UI 走二次确认 + 多选列表
@@ -174,7 +179,7 @@ export const paramApi = {
 // 原始文件（0711 R11：文件视图，仅子源态使用）
 export const fileApi = {
   filePaged: (q: RawFileQuery) => request<Paged<RawFile>>('file/filePaged', q),
-  fileStats: (sourceId: string) => request<RawFileStats>('file/fileStats', { sourceId }),
+  fileStats: (q: Omit<RawFileQuery, 'page' | 'size'>) => request<RawFileStats>('file/fileStats', q),
 }
 
 // 工作台摘要（首页）

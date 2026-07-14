@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { mockSitePaged, mockSiteDetail, mockSiteCreate, mockSiteSourcesOf, mockSiteSourceAdd, mockSiteImportSources, mockSiteSourceRemove, mockSiteSyncFlow } from './sites'
+import { mockSitePaged, mockSiteDetail, mockSiteCreate, mockSiteUpdate, mockSiteSourcesOf, mockSiteSourceAdd, mockSiteImportSources, mockSiteSourceRemove, mockSiteSyncFlow, mockSiteCloneSource } from './sites'
 import { mockSourceDetail, mockSourcePaged } from './sources'
 import { mockFlowSave, mockFlowLoad } from './flows'
+import { mockEntryDetail } from './entries'
 
 describe('网站—子源模型（0707 优化·Phase2）· 汇总统计', () => {
   it('sitePaged：sourceCount / errorCount 按站内子源实时聚合', () => {
@@ -27,6 +28,16 @@ describe('网站—子源模型（0707 优化·Phase2）· 汇总统计', () => 
     expect(mockSiteDetail({ siteId: 'ghost-site' })).toBeNull()
   })
 
+  it('siteUpdate：只更新网站基本信息，不改其子源', () => {
+    const original = mockSiteDetail({ siteId: 'site-news' })!
+    const before = mockSiteSourcesOf({ siteId: 'site-news' }).map((source) => source.sourceId)
+    const result = mockSiteUpdate({ site: { siteId: 'site-news', name: '财经资讯采集（演示）', category: '舆情类', categoryPath: '/舆情类/新闻', owner: 'demo_owner' } })
+    expect(result.ok).toBe(true)
+    expect(mockSiteDetail({ siteId: 'site-news' })).toMatchObject({ name: '财经资讯采集（演示）', owner: 'demo_owner', tags: original.tags })
+    expect(mockSiteSourcesOf({ siteId: 'site-news' }).map((source) => source.sourceId)).toEqual(before)
+    mockSiteUpdate({ site: original })
+  })
+
   it('sitePaged：sort 在分页前生效（0710 修复跨页排序），缺省按最近修改倒序', () => {
     const all = mockSitePaged({ size: 999, sort: 'name' }).list.map((s) => s.name)
     expect([...all].sort((a, b) => a.localeCompare(b, 'zh'))).toEqual(all)
@@ -37,6 +48,12 @@ describe('网站—子源模型（0707 优化·Phase2）· 汇总统计', () => 
 
     const byUpdated = mockSitePaged({ size: 999 }).list.map((s) => s.updatedAt || '')
     expect([...byUpdated].sort((a, b) => b.localeCompare(a))).toEqual(byUpdated)
+  })
+
+  it('sitePaged：可按网站名、子源名或责任人搜索', () => {
+    expect(mockSitePaged({ keyword: '多语种公告监控', size: 999 }).list.some((site) => site.siteId === 'site-lang-demo')).toBe(true)
+    expect(mockSitePaged({ keyword: '多语种公告监控 - 法文', size: 999 }).list.map((site) => site.siteId)).toContain('site-lang-demo')
+    expect(mockSitePaged({ keyword: 'dev_zhonghe', size: 999 }).list.length).toBeGreaterThan(0)
   })
 
   it('sourcesOfSite：语言演示子源并入通用 SOURCES（按 sourceId 各处可查，不再触发 SOURCES[0] 兜底误加载）', () => {
@@ -70,6 +87,22 @@ describe('「新建采集」建网站 + 首批子源', () => {
 })
 
 describe('网站下增删子源', () => {
+  it('cloneSource：复制子源的流程和表结构，但不复制表数据或运行实例', () => {
+    const result = mockSiteCloneSource({
+      templateSourceId: '600519',
+      targetSiteId: 'site-lang-demo',
+      target: { name: '复制后的公告源', url: 'https://example.com/copy' },
+    })
+
+    expect(result.source.sourceId).not.toBe('600519')
+    expect(result.source.siteId).toBe('site-lang-demo')
+    expect(result.flowId).toBe(result.source.sourceId)
+    expect(Object.keys(result.tableIdMap)).toContain('2101001')
+    expect(Object.values(result.tableIdMap)).not.toContain('2101001')
+    expect(Object.values(result.tableIdMap).every((tableId) => mockEntryDetail({ tableId }).rowCount === 0)).toBe(true)
+    expect(mockFlowLoad({ id: result.flowId })?.main).toEqual(expect.arrayContaining([`${result.source.sourceId}-s1`, `${result.source.sourceId}-s2`]))
+  })
+
   it('sourceAdd：新子源归属正确；sourceRemove：移除后不再可见', () => {
     const res = mockSiteSourceAdd({ siteId: 'site-notice', source: { sourceId: 'site-notice-extra', name: '新增子源', url: '', configId: '', mainTable: '', owner: 'tester', state: 'C' } })
     expect(res.ok).toBe(true)
@@ -84,18 +117,17 @@ describe('网站下增删子源', () => {
     expect(mockSiteSourceRemove({ siteId: 'site-notice', sourceId: '600036' }).ok).toBe(false)
   })
 
-  it('sourceAdd inherit=false（0710 会议 B5）：不复制模板流程，流程从空白开始且不算 detached', () => {
-    // site-quote 是种子站，flowLoad 有虚拟默认模板可继承——正好用来区分两档行为
-    const inheritRes = mockSiteSourceAdd({
+  it('sourceAdd 默认空白流程；inherit=true 仅兼容旧数据迁移', () => {
+    const inherited = mockSiteSourceAdd({
       siteId: 'site-quote',
+      inherit: true,
       source: { sourceId: 'sq-inherit', name: '继承子源', url: '', configId: '', mainTable: '', owner: 't', state: 'C' },
     })
-    expect(inheritRes.ok).toBe(true)
-    expect(mockFlowLoad({ id: 'sq-inherit' })).not.toBeNull() // 缺省继承：拿到模板流程副本
+    expect(inherited.ok).toBe(true)
+    expect(mockFlowLoad({ id: 'sq-inherit' })).not.toBeNull()
 
     const blankRes = mockSiteSourceAdd({
       siteId: 'site-quote',
-      inherit: false,
       source: { sourceId: 'sq-blank', name: '空白子源', url: '', configId: '', mainTable: '', owner: 't', state: 'C' },
     })
     expect(blankRes.ok).toBe(true)
@@ -118,6 +150,7 @@ describe('按网站批量导入子源（0710 会议 A5）', () => {
     expect(after.length).toBe(before + 2)
     expect(after.some((s) => s.name === '导入子源甲' && s.url === 'https://example.com/a')).toBe(true)
     expect(after.filter((s) => s.name.startsWith('导入子源')).every((s) => s.siteId === 'site-quote')).toBe(true)
+    expect(mockFlowLoad({ id: after.find((s) => s.name === '导入子源甲')!.sourceId })).toBeNull()
   })
 
   it('importSources：网站不存在或无有效行时报错', () => {

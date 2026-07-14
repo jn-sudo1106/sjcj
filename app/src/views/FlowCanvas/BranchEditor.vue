@@ -39,13 +39,6 @@ const branchFields = computed<{ prop: string; desc: string }[]>(() => {
   return tables.value.find((t) => t.tableId === tid)?.fields.map((f) => ({ prop: f.prop, desc: f.desc })) ?? []
 })
 
-function isElse(branch: FlowBranch, idx: number) {
-  if (kind.value !== 'decision') return false
-  const g = group.value
-  if (!g) return false
-  return idx === g.branches.length - 1 && branch.condition === undefined
-}
-
 function onLabelChange(b: FlowBranch, e: Event) {
   flow.setBranchLabel(props.ownerId, b.id, (e.target as HTMLInputElement).value)
 }
@@ -105,23 +98,22 @@ async function onRemoveGroup() {
 <template>
   <div v-if="group" class="be-root">
     <div class="be-header">
-      <span class="be-title">{{ kind === 'decision' ? '决策分支（IF / ELIF / ELSE）' : '分头处理（多路无条件并行）' }}</span>
+      <span class="be-title">{{ kind === 'decision' ? '条件分支' : '分头处理（多路无条件并行）' }}</span>
       <span class="be-hint">汇合点 = 主链上下一个节点（不汇合时把决策放主链末端即可）</span>
     </div>
-    <div v-for="(b, idx) in group.branches" :key="b.id" class="be-branch" :class="{ 'be-else': isElse(b, idx) }">
+    <div v-for="(b, idx) in group.branches" :key="b.id" class="be-branch">
       <div class="be-branch-head">
         <input
           class="rc-input be-label"
           :value="b.label"
-          :disabled="isElse(b, idx)"
-          :placeholder="isElse(b, idx) ? 'ELSE（兜底）' : '分支名'"
+          placeholder="分支名"
           @change="onLabelChange(b, $event)"
         />
         <div class="be-tools">
           <button v-if="idx > 0" class="rc-row-move" type="button" title="上移" @click="onMove('up', b)">↑</button>
           <button v-if="idx < group.branches.length - 1" class="rc-row-move" type="button" title="下移" @click="onMove('down', b)">↓</button>
           <button
-            v-if="!isElse(b, idx) && group.branches.length > 2"
+            v-if="group.branches.length > 1"
             class="rc-row-del"
             type="button"
             title="删除该分支"
@@ -129,16 +121,14 @@ async function onRemoveGroup() {
           >✕</button>
         </div>
       </div>
-      <!-- 条件（决策场景非 ELSE 显示） -->
+      <!-- 条件（决策场景每条均独立配置） -->
       <ConditionRow
-        v-if="kind === 'decision' && !isElse(b, idx)"
+        v-if="kind === 'decision'"
+        integrated
         :condition="b.condition"
         :fields="branchFields"
         @change="(c) => onConditionChange(b, c)"
       />
-      <div v-else-if="kind === 'decision' && isElse(b, idx)" class="be-else-hint">
-        ELSE 兜底分支：所有 IF/ELIF 未命中时走这条，无需条件
-      </div>
       <!-- 分支子链摘要 + 节点列表 -->
       <div class="be-chain">
         <div class="be-chain-summary">
@@ -158,7 +148,7 @@ async function onRemoveGroup() {
       </div>
     </div>
     <div class="be-footer">
-      <button v-if="kind === 'decision'" class="rc-btn" type="button" @click="onAddElif">+ 添加 ELIF</button>
+      <button v-if="kind === 'decision'" class="rc-btn" type="button" @click="onAddElif">＋ 添加分支</button>
       <span v-else class="be-hint">分头节点追加分支未实现（0707 Phase 6 简化口径：拖出新分头节点更直观）</span>
     </div>
     <div class="be-danger-zone">
@@ -168,7 +158,7 @@ async function onRemoveGroup() {
   <div v-else class="be-empty">
     <div class="be-empty-hint">该节点尚未配置分支段</div>
     <button v-if="kind !== 'unknown'" class="rc-btn" type="button" @click="onInit">
-      初始化为{{ kind === 'decision' ? 'IF + ELSE' : '2 条并行分支' }}
+      初始化为{{ kind === 'decision' ? '条件分支 1' : '2 条并行分支' }}
     </button>
     <div v-else class="be-empty-hint">该节点不是决策/分头节点，无法初始化分支段</div>
   </div>

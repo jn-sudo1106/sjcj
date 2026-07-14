@@ -12,6 +12,7 @@ import ConditionRow from './ConditionRow.vue'
 import BranchEditor from './BranchEditor.vue'
 import CollectorSettings, { type CollectorRuntimeSettings } from './CollectorSettings.vue'
 import UrlParamEditor from './UrlParamEditor.vue'
+import { nodeInspectorTabs } from './nodeInspectorTabs'
 import {
   entryApi, configApi, ruleApi,
   type EntryType, type Config, type RuleGroup, type Rule, type SharedConfig,
@@ -30,13 +31,10 @@ const cc = computed(() => cfg.value?.collectCfg)
 const statusText = computed(() => (cfg.value?.disabled ? '已停止' : (cfg.value?.status ?? '')))
 const statusClass = computed(() => (cfg.value?.disabled || cfg.value?.planned ? 'warn' : 'ok'))
 
-// 顶层 Tab（0706 调整4 · 0707 微调 · Phase6 决策/分头）：普通节点 = 节点配置/表配置/任务配置/AI 对话 四 Tab；
-// 决策/分头节点不产表也不需要任务/AI 编排，只显示「分支配置」一个 Tab 承载 BranchEditor
+// 顶层 Tab：普通节点在表配置与任务配置间独立展示参数配置；
+// 决策/分头节点不产表也不需要任务/AI 编排，只显示「分支配置」一个 Tab 承载 BranchEditor。
 const isDecisionOrParallel = computed(() => !!cfg.value && decisionOrParallelKind(cfg.value) !== undefined)
-const TOP_TABS = computed<[string, string][]>(() => {
-  if (isDecisionOrParallel.value) return [['config', '分支配置']]
-  return [['config', '节点配置'], ['table', '表配置'], ['task', '任务配置'], ['ai', 'AI 对话']]
-})
+const TOP_TABS = computed(() => nodeInspectorTabs(cfg.value))
 
 // 资产联动数据
 const tables = ref<EntryType[]>([])
@@ -130,6 +128,25 @@ function onTaskUrlSourceFieldChange(e: Event) {
 }
 function onTaskUrlRuleChange(e: Event) {
   flow.patchTaskConfig(id.value, { urlRule: (e.target as HTMLInputElement).value })
+}
+const availableTaskParamRefs = computed(() => [...new Set(Object.values(flow.configs)
+  .flatMap((node) => node.collectCfg?.urlParamRefs ?? []))])
+const taskParamRefs = computed(() => cfg.value?.taskCfg?.paramRefs ?? [])
+function onTaskParamRefsChange(e: Event) {
+  const refs = [...(e.target as HTMLSelectElement).selectedOptions].map((option) => option.value)
+  flow.patchTaskConfig(id.value, { paramRefs: refs })
+}
+function insertTaskParamToken(e: Event) {
+  const paramId = (e.target as HTMLSelectElement).value
+  if (!paramId) return
+  const current = cfg.value?.taskCfg?.urlRule ?? ''
+  if (!current.includes(`$PARAM$_${paramId}`)) {
+    flow.patchTaskConfig(id.value, {
+      paramRefs: [...new Set([...taskParamRefs.value, paramId])],
+      urlRule: `${current}${current ? '' : '$VAL$'}$PARAM$_${paramId}`,
+    })
+  }
+  ;(e.target as HTMLSelectElement).value = ''
 }
 const isFirstCollectorNode = computed(() => !!cc.value && flow.main.find((nodeId) => !!flow.configs[nodeId]?.collectCfg) === id.value)
 
@@ -333,7 +350,7 @@ function onWebKind(e: Event) {
       </div>
     </div>
 
-    <!-- 顶层四 Tab（0706 调整4 · 0707 微调：节点配置 / 表配置 / 任务配置 / AI 对话）；保持在视口里不被滚动条挤出 -->
+    <!-- 顶层 Tab：节点配置 / 表配置 / 参数配置 / 任务配置 / AI 对话；保持在视口里不被滚动条挤出 -->
     <div class="rc-top-tabs">
       <button
         v-for="t in TOP_TABS"
@@ -350,7 +367,7 @@ function onWebKind(e: Event) {
         <NodeAiChat :key="id" />
       </template>
 
-      <!-- 任务配置：输入 / 进入条件 / 输出表选择 + 队列与 URL 规则，采集与非采集节点共用同一份 -->
+      <!-- 任务配置：输入、进入条件、队列和 URL 规则。输出表只在表配置维护。 -->
       <template v-else-if="tab === 'task'">
         <div class="rc-field"><label>输入表</label>
           <div v-if="isFirstDataNode" class="rc-readonly-hint">无 · 首步骤任务来自源 URL / 初始队列</div>
@@ -359,15 +376,7 @@ function onWebKind(e: Event) {
             <option v-for="t in tables" :key="t.tableId" :value="t.tableId">{{ t.tableId }} · {{ t.tableName }}</option>
           </select>
         </div>
-        <ConditionRow v-if="!isFirstDataNode" :condition="entryCondition" :fields="inputTableFields" @change="onEntryConditionChange" />
-        <div class="rc-field"><label>输出表{{ nodeCapability?.outputMode === 'fixed' ? `（固定 · ${nodeCapability.label}）` : '' }}</label>
-          <select class="rc-select" :value="nodeTableId" :disabled="nodeCapability?.outputMode === 'fixed'" @change="onOutputTableChange">
-            <option v-if="!cc" value="" disabled>请选择输出表</option>
-            <option v-if="nodeTableId && !tables.some((t) => t.tableId === nodeTableId)" :value="nodeTableId">{{ nodeTableId }}（来自源步骤）</option>
-            <option v-for="t in tables" :key="t.tableId" :value="t.tableId">{{ t.tableId }} · {{ t.tableName }}</option>
-          </select>
-        </div>
-
+        <ConditionRow v-if="!isFirstDataNode" integrated :condition="entryCondition" :fields="inputTableFields" @change="onEntryConditionChange" />
         <!-- 队列归属对首节点同样展示（0710 会议 D1：首节点无输入表但有队列，未填时保存/试跑自动写入默认队列名） -->
         <div class="rc-field"><label>队列归属{{ nodeCapability?.queueMode === 'fixed' ? `（固定 · ${nodeCapability.label}）` : '' }}</label>
           <input
@@ -389,6 +398,18 @@ function onWebKind(e: Event) {
             <input class="rc-input" :value="cfg.taskCfg?.urlRule ?? ''" placeholder="如 $VAL$（默认从来源字段取值，支持动态函数）" @input="onTaskUrlRuleChange" />
           </div>
         </template>
+        <div class="rc-field"><label>任务参数</label>
+          <select class="rc-select" multiple :value="taskParamRefs" :disabled="!availableTaskParamRefs.length" @change="onTaskParamRefsChange">
+            <option v-for="paramId in availableTaskParamRefs" :key="paramId" :value="paramId">{{ paramId }}</option>
+          </select>
+          <div v-if="!availableTaskParamRefs.length" class="rc-readonly-hint">请先在流程节点的参数配置中绑定参数。</div>
+        </div>
+        <div v-if="availableTaskParamRefs.length" class="rc-field"><label>插入任务参数</label>
+          <select class="rc-select" @change="insertTaskParamToken">
+            <option value="">选择已绑定参数，插入到 URL 规则</option>
+            <option v-for="paramId in availableTaskParamRefs" :key="paramId" :value="paramId">{{ paramId }}</option>
+          </select>
+        </div>
       </template>
 
       <template v-else-if="tab === 'table'">
@@ -424,6 +445,21 @@ function onWebKind(e: Event) {
 
       </template>
 
+      <!-- 参数配置独立于节点与任务配置：绑定全局参数，URL token 只标识参数插入位置。 -->
+      <template v-else-if="tab === 'params'">
+        <UrlParamEditor
+          v-if="cc && nodeCapability?.supportsUrlParams"
+          :url="cc.url"
+          :param-refs="cc.urlParamRefs ?? []"
+          :param-values="cc.urlParamValues ?? {}"
+          :warn-fragment="nodeCapability?.kind === 'web'"
+          @update:param-refs="onUrlParamRefsChange"
+          @update:param-values="onUrlParamValuesChange"
+          @insert-token="onInsertParamToken"
+        />
+        <div v-else class="rc-readonly-hint">当前节点不支持 URL 参数配置。</div>
+      </template>
+
       <!-- 节点配置：单屏纵向分组，无步进器 / 无子 Tab（0706 调整4）；
            决策/分头节点直接交给 BranchEditor 接管（0707 优化·Phase6） -->
       <template v-else>
@@ -450,17 +486,6 @@ function onWebKind(e: Event) {
               </option>
             </select>
           </div>
-          <!-- 参数配置：节点绑定全局参数，URL token 只标识参数插入位置。 -->
-          <UrlParamEditor
-            v-if="nodeCapability?.supportsUrlParams"
-            :url="cc.url"
-            :param-refs="cc.urlParamRefs ?? []"
-            :param-values="cc.urlParamValues ?? {}"
-            :warn-fragment="nodeCapability?.kind === 'web'"
-            @update:param-refs="onUrlParamRefsChange"
-            @update:param-values="onUrlParamValuesChange"
-            @insert-token="onInsertParamToken"
-          />
           <!-- 运行设置（0711 R5）：代理/断点续爬/登录，节点级配置、默认折叠 -->
           <CollectorSettings :model-value="runtimeSettings" :capability="nodeCapability" :show-schedule="isFirstCollectorNode" @update:model-value="onRuntimeSettingsChange" />
         </template>

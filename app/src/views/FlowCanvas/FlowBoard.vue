@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useRuntimeStore } from '../../stores/runtime'
@@ -7,6 +7,8 @@ import { useUiStore } from '../../stores/ui'
 import { flowApi } from '../../api'
 import CanvasHeader from './CanvasHeader.vue'
 import AddNodePopover from './AddNodePopover.vue'
+import FlowXmlDialog from './FlowXmlDialog.vue'
+import { flowToXml } from './flowXml'
 import {
   iconFor,
   isDataNode,
@@ -22,20 +24,20 @@ const runtime = useRuntimeStore()
 const ui = useUiStore()
 const flowEl = ref<HTMLElement | null>(null)
 const canvasScrollEl = ref<HTMLElement | null>(null)
+const xmlOpen = ref(false)
+const xml = computed(() => flowToXml(flow.serialize()))
+const canExportXml = computed(() => !flow.dirty && flow.validateFlow().length === 0)
 
 // 编排对象切换器已升级为页面级子源侧栏（0710 会议 B1），组件与接线整体迁至 index.vue
 
 async function generateWebFlow() {
   const source = flow.sourceCfg ? JSON.parse(JSON.stringify(flow.sourceCfg)) : undefined
-  // 网站态（0710：空白模板不再预置骨架，引导卡生成成为网站态的入口）：生成结果保持 `site:` 存档位和网站名，
-  // 否则保存会写到推荐流程的随机 id 下，网站模板存档丢失
-  const site = flow.siteCtx
   try {
     const rec = await flowApi.flowRecommend('', 'web-public')
     flow.load({
       ...rec.flow,
-      id: source?.sourceId ?? (site ? `site:${site.siteId}` : rec.flow.id),
-      name: source?.name ?? site?.name ?? rec.flow.name,
+      id: source?.sourceId ?? rec.flow.id,
+      name: source?.name ?? rec.flow.name,
       source,
     })
   } catch {
@@ -52,6 +54,7 @@ const menu = reactive<{ show: boolean; x: number; y: number; nodeId: string | nu
 const addPop = reactive<{ show: boolean; x: number; y: number; afterId: string; branch: { ownerId: string; branchId: string } | null }>({
   show: false, x: 0, y: 0, afterId: 'start', branch: null,
 })
+const nodePalette = reactive({ show: false, x: 0, y: 0 })
 
 // 连线表关系标注（Phase 4.2；0701 问题五升级；0707 连线配置撤掉后纯读节点级数据）：
 // 输出表 → 输入表（全节点落库 + 输入表自动继承后，链路血缘天然可标注）
@@ -222,10 +225,32 @@ function onPickNode(template: string) {
   closeAddPopover()
 }
 
+// 画布左侧节点库：沿用新增节点浮层与画布既有拖放契约。
+function openNodePalette() {
+  const rect = canvasScrollEl.value?.getBoundingClientRect()
+  nodePalette.x = rect ? rect.left + 28 : 8
+  nodePalette.y = rect ? rect.top + 54 : 20
+  nodePalette.show = true
+  addPop.show = false
+  menu.show = false
+}
+function pickNodeFromPalette(template: string) {
+  flow.insertAfter(flow.selectedId || 'end', template)
+}
+function onPaletteDragStart(event: DragEvent, template: string) {
+  if (!event.dataTransfer) return
+  event.dataTransfer.setData('text/plain', template)
+  event.dataTransfer.effectAllowed = 'copy'
+}
+function closeNodePalette() {
+  nodePalette.show = false
+}
+
 // 点击画布外任意处关闭右键菜单 / 添加节点浮层
 function onWindowClick() {
   if (menu.show) closeMenu()
   if (addPop.show) closeAddPopover()
+  if (nodePalette.show) closeNodePalette()
 }
 onMounted(() => {
   window.addEventListener('click', onWindowClick)
@@ -248,7 +273,17 @@ watch(
 
 <template>
   <main class="rc-canvas" @contextmenu="onPaneMenu" @click="closeMenu">
-    <CanvasHeader v-if="flow.sourceCtx || flow.siteCtx" />
+    <CanvasHeader v-if="flow.sourceCtx" />
+
+    <button
+      class="rc-node-library-toggle"
+      type="button"
+      :title="nodePalette.show ? '收起节点库' : '打开节点库'"
+      :aria-label="nodePalette.show ? '收起节点库' : '打开节点库'"
+      data-testid="node-library-toggle"
+      :class="{ active: nodePalette.show }"
+      @click.stop="nodePalette.show ? closeNodePalette() : openNodePalette()"
+    >＋</button>
 
     <div ref="canvasScrollEl" class="rc-canvas-scroll" @dragover="onDragOver" @drop="onDrop">
       <div ref="flowEl" class="rc-flow" :style="{ height: flow.layout.totalHeight + 'px' }">
@@ -259,16 +294,10 @@ watch(
           <path v-for="(e, i) in flow.layout.fanOutEdges" :key="'f' + i" class="rc-edge fan-out" :d="e.d" />
         </svg>
 
-        <!-- 空白画布引导卡（无业务节点时；§5.7：网站模板与子源走不同文案，引导用户各司其职） -->
+        <!-- 空白子源画布引导卡 -->
         <div v-if="!flow.layout.nodes.length" class="rc-empty-cta">
-          <template v-if="flow.siteCtx">
-            <div class="rc-empty-cta-title">网站统一流程 · 空白模板</div>
-            <div class="rc-empty-cta-sub">这里编排的是全站统一流程，保存后可一键同步到全部子源；想验证试跑时，用顶部切换器切到具体子源即可。</div>
-          </template>
-          <template v-else>
-            <div class="rc-empty-cta-title">空白编排画布</div>
-            <div class="rc-empty-cta-sub">可以用「＋」手工添加步骤，也可以先智能生成网页抓取初始流程，再逐节点调整配置。</div>
-          </template>
+          <div class="rc-empty-cta-title">空白编排画布</div>
+          <div class="rc-empty-cta-sub">可以用「＋」手工添加步骤，也可以先智能生成网页抓取初始流程，再逐节点调整配置。</div>
           <button class="rc-btn primary" type="button" @click="generateWebFlow">智能生成流程</button>
         </div>
 
@@ -367,6 +396,9 @@ watch(
       </div>
     </div>
 
+    <button class="rc-btn rc-flow-xml" type="button" @click.stop="xmlOpen = true">XML</button>
+    <FlowXmlDialog v-model:open="xmlOpen" :xml="xml" :flow-id="flow.flowId" :can-export="canExportXml" />
+
     <!-- 右键菜单 -->
     <div v-if="menu.show" class="rc-node-menu" :style="{ left: menu.x + 'px', top: menu.y + 'px' }" @click.stop>
       <template v-if="menu.nodeId">
@@ -394,6 +426,15 @@ watch(
       @pick="onPickNode"
       @close="closeAddPopover"
     />
+    <AddNodePopover
+      v-if="nodePalette.show"
+      :x="nodePalette.x"
+      :y="nodePalette.y"
+      compact
+      @pick="pickNodeFromPalette"
+      @dragstart="onPaletteDragStart"
+      @close="closeNodePalette"
+    />
   </main>
 </template>
 
@@ -406,6 +447,10 @@ watch(
 .rc-canvas-actions .rc-btn { height: 30px; padding: 0 11px; font-size: 12px; }
 
 .rc-canvas-scroll { flex: 1; overflow: auto; background-color: #f7f9fc; background-image: radial-gradient(#dfe7f2 0.8px, transparent 0.8px); background-size: 22px 22px; }
+.rc-flow-xml { position: absolute; z-index: 30; right: 32px; bottom: 32px; height: 28px; padding: 0 10px; border-color: var(--rc-border); background: rgba(255, 255, 255, .9); color: var(--rc-text-2); font-size: 11px; }
+.rc-flow-xml:hover { border-color: #bfdbfe; background: #fff; color: var(--rc-primary-ink); }
+.rc-node-library-toggle { position: absolute; z-index: 31; top: 108px; left: 12px; width: 30px; height: 30px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; color: var(--rc-primary); font-size: 21px; font-weight: 400; line-height: 1; cursor: pointer; transition: border-color .12s, background .12s, color .12s; }
+.rc-node-library-toggle:hover, .rc-node-library-toggle.active { border-color: #93c5fd; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 
 .rc-flow { position: relative; width: 640px; margin: 28px auto; }
 .rc-flow svg { position: absolute; inset: 0; pointer-events: none; }
