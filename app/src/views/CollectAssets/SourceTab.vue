@@ -197,7 +197,9 @@ async function toggleSite(siteId: string) {
 }
 
 // ---- 展示辅助 ----
-function statusMeta(s: Source) {
+// 显式返回类型（0714 review M3 顺手清理）：el-tag 的 type 字段期望有限 union，
+// 收紧后模板 `:type="statusMeta(s).type"` 不用再 `as any` 兜底
+function statusMeta(s: Source): { type: 'info' | 'success' | 'danger' | 'primary'; text: string } {
   if (s.disabled) return { type: 'info', text: '已停用' }
   if (s.state === 'C') return { type: 'success', text: '成功' }
   if (s.state === 'E') return { type: 'danger', text: '出错' }
@@ -503,7 +505,7 @@ onUnmounted(() => ui.clearActions())
                   <td>
                     <div class="ca-src">
                       <button class="ca-src-name" type="button" @click="openSourceCanvas(s)">{{ s.name }}</button>
-                      <el-tag size="small" :type="statusMeta(s).type as any" effect="light">{{ statusMeta(s).text }}</el-tag>
+                      <el-tag size="small" :type="statusMeta(s).type" effect="light">{{ statusMeta(s).text }}</el-tag>
                       <el-tag v-if="s.alarm" size="small" type="warning" effect="dark">告警</el-tag>
                       <el-tag v-if="s.externalChanged" size="small" type="warning" effect="light">外部变更</el-tag>
                     </div>
