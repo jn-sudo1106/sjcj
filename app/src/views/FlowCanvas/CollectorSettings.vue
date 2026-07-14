@@ -50,7 +50,7 @@ function setNeedLogin(v: boolean) {
 <template>
   <div v-if="showSchedule || capability?.supportsProxy || capability?.supportsResume || capability?.supportsLogin" class="cs-wrap">
     <button class="cs-toggle" type="button" @click="open = !open">
-      {{ open ? '▾' : '▸' }} 运行设置（代理 / 断点续爬 / 登录）
+      {{ open ? '▾' : '▸' }} 运行设置（代理 / 断点续爬 / 登录{{ showSchedule ? ' / 定时' : '' }}）
     </button>
     <div v-if="open" class="cs-body">
       <div v-if="capability?.supportsProxy || capability?.supportsResume" class="rc-field">

@@ -132,9 +132,8 @@ function onDelete(c: Config) {
         @size-change="onSize"
       />
     </div>
-  </div>
 
-  <el-drawer v-model="drawer.visible" :with-header="false" size="440px">
+  <el-drawer v-model="drawer.visible" :with-header="false" size="440px" append-to-body>
     <div v-if="drawer.cfg" class="ct-d">
       <div class="ct-d-title">{{ drawer.cfg.name }}</div>
       <div class="ct-d-sub muted">配置 ID {{ drawer.cfg.configId }}</div>
@@ -159,6 +158,7 @@ function onDelete(c: Config) {
       </div>
     </div>
   </el-drawer>
+  </div>
 </template>
 
 <style scoped>

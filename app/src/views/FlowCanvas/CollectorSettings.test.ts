@@ -25,7 +25,7 @@ describe('CollectorSettings（0711 R5：采集节点运行设置，默认折叠�
       props: { modelValue: {}, capability: COLLECTOR_CAPABILITIES.web, showSchedule: true },
     })
     await wrapper.find('.cs-toggle').trigger('click')
-    expect(wrapper.find('.tss-toggle').exists()).toBe(true)
+    expect(wrapper.find('.tss-wrap').exists()).toBe(true)
   })
 
   it('按 capability 精确显示控件：不支持代理/登录的节点类型不显示对应控件', async () => {

@@ -2,7 +2,7 @@
 // 采集资产卡片视图（0707 优化·Phase3；样式对齐 设计稿/原型设计/采集中心卡片样式.png）：
 // 一张卡 = 一个采集网站，渐变图标瓦片 + 子源 chips + 标签 + 底部统计。
 // 子源可能很多（0707 会后澄清）：chips 只显示前几个，其余收进「+N」浮层，浮层内可搜索。
-import { computed, onBeforeUnmount, onMounted, reactive, watch } from 'vue'
+import { onMounted, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { siteApi, type Site, type Source } from '../../api'
 import { siteIcon } from './siteVisual'
@@ -39,34 +39,17 @@ function isErr(s: Source): boolean {
   return !s.disabled && s.state === 'E'
 }
 
-// 「+N」浮层：锚定弹出 + 搜索（子源可能几十个，一律"前几个 + 溢出收纳 + 搜索"）
-const overflow = reactive<{ show: boolean; siteId: string; x: number; y: number; kw: string }>({
-  show: false, siteId: '', x: 0, y: 0, kw: '',
-})
-function openOverflow(siteId: string, ev: MouseEvent) {
-  overflow.show = true
-  overflow.siteId = siteId
-  overflow.x = Math.min(ev.clientX, window.innerWidth - 260)
-  overflow.y = Math.min(ev.clientY, window.innerHeight - 340)
-  overflow.kw = ''
-}
-function closeOverflow() {
-  overflow.show = false
-}
-const overflowChildren = computed(() => {
-  const list = childrenCache[overflow.siteId] ?? []
-  const kw = overflow.kw.trim().toLowerCase()
+const overflowKw = reactive<Record<string, string>>({})
+
+function filteredChildren(siteId: string) {
+  const list = childrenCache[siteId] ?? []
+  const kw = (overflowKw[siteId] || '').trim().toLowerCase()
   return kw ? list.filter((s) => s.name.toLowerCase().includes(kw) || s.sourceId.toLowerCase().includes(kw)) : list
-})
+}
+
 function pickOverflow(s: Source) {
-  closeOverflow()
   openSource(s)
 }
-function onWindowClick() {
-  if (overflow.show) closeOverflow()
-}
-onMounted(() => window.addEventListener('click', onWindowClick))
-onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 </script>
 
 <template>
@@ -91,12 +74,35 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
           :title="c.name"
           @click.stop="openSource(c)"
         >{{ c.name }}</button>
-        <button
+        <el-popover
           v-if="(childrenCache[site.siteId]?.length ?? 0) > CHIP_LIMIT"
-          type="button"
-          class="scg-chip more"
-          @click.stop="openOverflow(site.siteId, $event)"
-        >+{{ (childrenCache[site.siteId]?.length ?? 0) - CHIP_LIMIT }}</button>
+          placement="bottom"
+          trigger="click"
+          width="240"
+          :hide-after="0"
+        >
+          <template #reference>
+            <button type="button" class="scg-chip more" @click.stop>
+              +{{ (childrenCache[site.siteId]?.length ?? 0) - CHIP_LIMIT }}
+            </button>
+          </template>
+          <div class="scg-popover-content">
+            <input v-model="overflowKw[site.siteId]" class="scg-overflow-search" placeholder="搜索子源" />
+            <div class="scg-overflow-list">
+              <button
+                v-for="c in filteredChildren(site.siteId)"
+                :key="c.sourceId"
+                type="button"
+                class="scg-overflow-item"
+                @click="pickOverflow(c)"
+              >
+                <span class="scg-overflow-dot" :class="{ err: isErr(c) }" />
+                {{ c.name }}
+              </button>
+              <div v-if="!filteredChildren(site.siteId).length" class="scg-overflow-empty">没有匹配的子源</div>
+            </div>
+          </div>
+        </el-popover>
         <span v-if="childrenCache[site.siteId] && !childrenCache[site.siteId].length" class="scg-empty">暂无子源</span>
       </div>
 
@@ -120,22 +126,7 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
     <div v-if="!sites.length" class="scg-empty-state">没有匹配的网站</div>
   </div>
 
-  <div v-if="overflow.show" class="scg-overflow" :style="{ left: overflow.x + 'px', top: overflow.y + 'px' }" @click.stop>
-    <input v-model="overflow.kw" class="scg-overflow-search" placeholder="搜索子源" autofocus />
-    <div class="scg-overflow-list">
-      <button
-        v-for="c in overflowChildren"
-        :key="c.sourceId"
-        type="button"
-        class="scg-overflow-item"
-        @click="pickOverflow(c)"
-      >
-        <span class="scg-overflow-dot" :class="{ err: isErr(c) }" />
-        {{ c.name }}
-      </button>
-      <div v-if="!overflowChildren.length" class="scg-overflow-empty">没有匹配的子源</div>
-    </div>
-  </div>
+
 </template>
 
 <style scoped>
@@ -144,14 +135,16 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
   position: relative;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--rc-border);
+  border: 1px solid rgba(226, 232, 240, 0.8);
   border-radius: 12px;
-  background: #fff;
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(12px);
   padding: 16px 16px 12px;
   cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.015);
+  transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
 }
-.scg-card:hover { border-color: #bfdbfe; box-shadow: 0 10px 26px -16px rgba(37, 99, 235, 0.45); transform: translateY(-1px); }
+.scg-card:hover { border-color: #bfdbfe; box-shadow: 0 8px 24px rgba(0,0,0,0.04); transform: translateY(-2px); }
 .scg-dot { position: absolute; top: 14px; right: 14px; width: 8px; height: 8px; border-radius: 50%; background: var(--rc-error); }
 
 .scg-head { display: flex; align-items: center; gap: 11px; }
@@ -220,10 +213,10 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 
 .scg-empty-state { grid-column: 1 / -1; text-align: center; padding: 48px 16px; color: var(--rc-faint); font-size: 12px; background: #fff; border: 1px solid var(--rc-border); border-radius: 12px; }
 
-.scg-overflow { position: fixed; z-index: 90; width: 240px; max-height: 320px; display: flex; flex-direction: column; background: #fff; border: 1px solid var(--rc-border); border-radius: 10px; box-shadow: 0 20px 48px -18px rgba(15, 23, 42, 0.4); overflow: hidden; }
-.scg-overflow-search { flex: none; height: 32px; margin: 8px; padding: 0 9px; border: 1px solid var(--rc-border); border-radius: 7px; font-size: 12px; outline: none; background: #f8fafc; }
+.scg-popover-content { display: flex; flex-direction: column; max-height: 280px; }
+.scg-overflow-search { flex: none; height: 32px; margin-bottom: 8px; padding: 0 9px; border: 1px solid var(--rc-border); border-radius: 7px; font-size: 12px; outline: none; background: #f8fafc; }
 .scg-overflow-search:focus { border-color: #60a5fa; background: #fff; box-shadow: 0 0 0 3px #dbeafe; }
-.scg-overflow-list { flex: 1; overflow-y: auto; padding: 0 6px 8px; }
+.scg-overflow-list { flex: 1; overflow-y: auto; padding-right: 4px; }
 .scg-overflow-item { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; border-radius: 7px; padding: 6px 8px; font-size: 12px; color: var(--rc-text-2); cursor: pointer; text-align: left; }
 .scg-overflow-item:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .scg-overflow-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--rc-ok); }

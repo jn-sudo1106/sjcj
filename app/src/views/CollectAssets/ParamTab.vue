@@ -142,9 +142,8 @@ async function onAddValues() {
         @size-change="onSize"
       />
     </div>
-  </div>
 
-  <el-drawer v-model="drawer.visible" :with-header="false" size="440px">
+  <el-drawer v-model="drawer.visible" :with-header="false" size="440px" append-to-body>
     <div v-if="drawer.param" class="pt-d">
       <div class="pt-d-title">{{ drawer.param.name }}</div>
       <div class="pt-d-sub muted">
@@ -180,6 +179,7 @@ async function onAddValues() {
     </div>
   </el-drawer>
   <ParamEditorDrawer v-model="editor.visible" :param="editor.param" @saved="onParamSaved" />
+  </div>
 </template>
 
 <style scoped>
