@@ -57,7 +57,7 @@ export function mockFlowList(): FlowMeta[] {
   return readIndex()
 }
 
-// 流程推荐（M5.5）：首期按关键词 / 意图匹配预置链路；二期换真 LLM BFF，签名不变、界面零改动。
+// 流程模板推荐（M5.5）：首期按关键词 / 意图匹配预置模板；二期换真 LLM BFF，签名不变、界面零改动。
 function altsExcept(hit: PresetIntent | null): { intent: string; name: string }[] {
   return PRESET_INTENTS.filter((p) => p.key !== hit?.key).map((p) => ({ intent: p.key, name: p.label }))
 }
@@ -79,11 +79,12 @@ export function mockFlowRecommend(params?: Record<string, unknown>): FlowRecomme
   if (!hit) {
     return {
       flow: makeBlankFlow(),
-      rationale: '没有匹配到预置场景，已为你创建一张空白流程。可换一个意图，或从节点库拖入节点自行编排。',
+      templateId: undefined,
+      rationale: '没有匹配到专用模板，将应用公共网页抓取模板；之后可继续调整节点配置或切换模板。',
       alternatives: altsExcept(null),
     }
   }
-  return { flow: hit.build(), rationale: hit.rationale, alternatives: altsExcept(hit) }
+  return { flow: hit.build(), templateId: `preset-${hit.key}`, rationale: hit.rationale, alternatives: altsExcept(hit) }
 }
 
 // 节点级 AI 对话（0701 问题八）：mock 关键词匹配给出解释/建议型回复；二期换真 LLM BFF，签名不变、界面零改动。
@@ -98,7 +99,7 @@ export function mockNodeAiChat(params?: Record<string, unknown>): { reply: strin
   }
   if (/失败|报错|error|异常/.test(question)) {
     return {
-      reply: `「${nodeTitle}」常见的试跑失败原因：① 采集节点缺源 URL 或输出表；② 上游节点没有产出数据；③ 依赖的规则组/表达式未启用。可先在"表配置" Tab 确认输入/输出表是否都已就绪。`,
+      reply: `「${nodeTitle}」常见的发起抓取失败原因：① 采集节点缺源 URL 或输出表；② 上游节点没有产出数据；③ 依赖的规则组/表达式未启用。可先在"表配置" Tab 确认输入/输出表是否都已就绪。`,
     }
   }
   if (/队列|queue/.test(question)) {
@@ -112,6 +113,6 @@ export function mockNodeAiChat(params?: Record<string, unknown>): { reply: strin
     }
   }
   return {
-    reply: `我是「${nodeTitle}」的节点助手（演示）：可以问我"为什么试跑失败""这个节点的配置是什么""任务队列怎么填"。真实 LLM 接入后会给出更具体的建议。`,
+    reply: `我是「${nodeTitle}」的节点助手（演示）：可以问我"为什么发起抓取失败""这个节点的配置是什么""任务队列怎么填"。真实 LLM 接入后会给出更具体的建议。`,
   }
 }

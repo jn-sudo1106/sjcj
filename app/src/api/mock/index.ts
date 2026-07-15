@@ -37,6 +37,7 @@ import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats } from './mo
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
 import { mockFlowSave, mockFlowLoad, mockFlowList, mockFlowRecommend, mockNodeAiChat } from './flows'
+import { mockFlowTemplateDetail, mockFlowTemplateList, mockFlowTemplateSave } from './flowTemplates'
 import {
   mockSitePaged,
   mockSiteDetail,
@@ -170,6 +171,9 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'flow/list': mockFlowList,
   'flow/recommend': mockFlowRecommend,
   'flow/nodeAiChat': mockNodeAiChat,
+  'flow-template/list': mockFlowTemplateList,
+  'flow-template/detail': mockFlowTemplateDetail,
+  'flow-template/save': mockFlowTemplateSave,
 
   // 网站—子源父子模型（0707 优化·Phase2）
   'site/sitePaged': mockSitePaged,

@@ -37,7 +37,12 @@ import {
   type FlowDef,
 } from '../views/FlowCanvas/flowModel'
 import { extractUrlParamIds, hasFragmentParams } from '../views/FlowCanvas/urlParams'
-import type { RuleOrchestration, Source, Site, Step } from '../api'
+import {
+  compatibleTemplateBindings,
+  composeTemplateFlow,
+  extractTemplateNodeBindings,
+} from '../views/FlowCanvas/flowTemplates'
+import type { FlowTemplate, RuleOrchestration, Source, Site, Step } from '../api'
 
 export { TERMINALS }
 
@@ -85,6 +90,8 @@ export const useFlowStore = defineStore('flow', () => {
   const sourceCfg = ref<Source | null>(null)
   // 网站态上下文（0707 优化·Phase4）：与 sourceCtx 互斥——画布当前编排对象要么是某个子源（sourceCtx），
   // 要么是某个网站的统一流程模板（siteCtx），二者不会同时非空。网站模板不实际运行，没有 sourceCfg 概念。
+  // 唯一例外见 setSiteDisplayCtx（0714 会议 Task 3 网站详情页）：该场景 siteCtx 只作展示标记，
+  // sourceCtx 仍指向内部代表子源供数据查询，二者会同时非空。
   const siteCtx = ref<Site | null>(null)
   const selectedId = ref<string>('')
   const activeTab = ref<string>('config')
@@ -525,6 +532,10 @@ export const useFlowStore = defineStore('flow', () => {
       if (cap?.outputMode === 'fixed') next.outputTable = cap.fixedOutputTable ?? c.collectCfg.outputTable
     }
     Object.assign(c.collectCfg, next)
+    if ('urlParamRefs' in next && c.taskCfg?.paramValues) {
+      const allowed = new Set(c.collectCfg.urlParamRefs ?? [])
+      c.taskCfg.paramValues = c.taskCfg.paramValues.filter((item) => allowed.has(item.paramId))
+    }
     touch()
   }
   function setBaseRow(id: string, index: number, value: string) {
@@ -565,12 +576,31 @@ export const useFlowStore = defineStore('flow', () => {
     const c = configs[id]
     if (!c) return
     const next = { ...patch }
+    // 任务参数由当前节点的参数配置决定；只接受这些参数的取值映射，不能混入其他节点参数。
+    if ('paramValues' in next) {
+      const ownParamRefs = new Set(c.collectCfg?.urlParamRefs ?? [])
+      const seen = new Set<string>()
+      next.paramValues = (next.paramValues ?? []).filter((item) => {
+        if (!ownParamRefs.has(item.paramId) || seen.has(item.paramId)) return false
+        seen.add(item.paramId)
+        return true
+      }).map((item) => ({ paramId: item.paramId, fieldId: item.fieldId ?? '', valueExpr: item.valueExpr ?? '' }))
+    }
+    if ('contextMap' in next) next.contextMap = [...new Set((next.contextMap ?? []).filter(Boolean))]
+    if ('outColumns' in next) next.outColumns = [...new Set((next.outColumns ?? []).filter(Boolean))]
     // 固定产物类型节点的队列不可覆盖（0711 T5，与 patchCollect 的输出表防线同一口径）
     if ('queue' in next) {
       const cap = collectorCapabilityOf(c)
       if (cap?.queueMode === 'fixed') next.queue = cap.fixedQueue ?? c.taskCfg?.queue ?? ''
     }
-    c.taskCfg = { queue: '', urlRule: '', ...c.taskCfg, ...next }
+    const taskCfg = { queue: '', urlRule: '', ...c.taskCfg, ...next }
+    if (isFirstMainNode(main.value, configs, id)) {
+      delete taskCfg.paramValues
+      delete taskCfg.contextMap
+      delete taskCfg.outColumns
+      delete taskCfg.paramRefs
+    }
+    c.taskCfg = taskCfg
     touch()
   }
 
@@ -768,19 +798,21 @@ export const useFlowStore = defineStore('flow', () => {
 
   // ---- 流程定义 序列化 / 加载 ----
   function serialize(): FlowDef {
-    // 队列归属默认值（0710 会议 D1）：数据节点未填队列时序列化自动写入——
-    // 所选配置 topic → queue_配置ID → {siteId|流程ID}_main，与 TaskView/mock 的队列名 fallback 同一口径；
+    // 队列归属默认值：数据节点未填队列时按当前子源/网站/流程生成，
+    // 配置列表仅为后续系统对接保留，不参与流程默认值。
     // 只写序列化副本不回写内存 store（UI 未填时仍显示"自动 · xxx"占位，存档/试跑拿到的是有效队列名）。
     const defaultQueue =
-      sourceCfg.value?.configTopic ||
-      (sourceCfg.value?.configId ? `queue_${sourceCfg.value.configId}` : '') ||
-      `${siteCtx.value?.siteId || sourceCtx.value?.siteId || flowId.value}_main`
+      `${sourceCfg.value?.sourceId || siteCtx.value?.siteId || sourceCtx.value?.siteId || flowId.value}_main`
     const outConfigs = JSON.parse(JSON.stringify(configs)) as Record<string, NodeConfig>
     Object.values(outConfigs).forEach((c) => {
       if (!isDataNode(c)) return
       if (!c.taskCfg) c.taskCfg = { queue: '', urlRule: '' }
       if (!c.taskCfg.queue) c.taskCfg.queue = defaultQueue
     })
+    const outSource = sourceCfg.value ? (JSON.parse(JSON.stringify(sourceCfg.value)) as Source) : undefined
+    // 模板结构与子源动态配置分层：保存子源时重新从当前画布提取绑定，
+    // 防止用户刚改过表/参数/进入条件却仍写入旧的 nodeBindings。
+    if (outSource?.templateId) outSource.nodeBindings = extractTemplateNodeBindings(outConfigs)
     return {
       id: flowId.value,
       name: flowName.value,
@@ -789,7 +821,7 @@ export const useFlowStore = defineStore('flow', () => {
       branches: JSON.parse(JSON.stringify(branches)) as BranchSeed[],
       configs: outConfigs,
       updatedAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
-      source: sourceCfg.value ? (JSON.parse(JSON.stringify(sourceCfg.value)) as Source) : undefined,
+      source: outSource,
       // 0707 优化·Phase6：分支段（决策/分头）写入 FlowDef；空数组也写出，便于读取侧判空。
       branchGroups: JSON.parse(JSON.stringify(branchGroups)) as FlowBranchGroup[],
     }
@@ -802,6 +834,17 @@ export const useFlowStore = defineStore('flow', () => {
     branches.splice(0, branches.length, ...(JSON.parse(JSON.stringify(def.branches)) as BranchSeed[]))
     main.value = [...def.main]
     sourceCfg.value = def.source ? (JSON.parse(JSON.stringify(def.source)) as Source) : null
+    // 首节点没有输入表，历史存档里遗留的任务参数/上下文/出参不再参与当前模型。
+    const firstDataNodeId = main.value.find((nodeId) => !!configs[nodeId] && !isTerm(nodeId))
+    if (firstDataNodeId) {
+      const firstTask = configs[firstDataNodeId].taskCfg
+      if (firstTask) {
+        delete firstTask.paramValues
+        delete firstTask.contextMap
+        delete firstTask.outColumns
+        delete firstTask.paramRefs
+      }
+    }
     // 历史版本把定时策略放在 Source；迁入首节点任务配置，之后不再在子源信息里保存。
     const firstNodeId = main.value.find((nodeId) => !!configs[nodeId]?.collectCfg)
     const legacySchedule = sourceCfg.value
@@ -873,7 +916,16 @@ export const useFlowStore = defineStore('flow', () => {
     resetAllContext()
     sourceCtx.value = JSON.parse(JSON.stringify(source)) as Source
     // needLogin 未显式设置时按是否已绑登录凭据回填（与旧行为对齐：有凭据引用即视为登录态源）
-    const sourceForCfg: Source = { ...source, needLogin: source.needLogin ?? Boolean(source.credentialRef) }
+    // 已绑定模板的版本与动态绑定随子源 FlowDef 一起持久化；源列表的旧实体没有这些字段时，
+    // 不能在这里覆盖掉存档里的绑定信息。
+    const storedBinding = persistedDef?.source
+    const sourceForCfg: Source = {
+      ...source,
+      needLogin: source.needLogin ?? Boolean(source.credentialRef),
+      templateId: storedBinding?.templateId ?? source.templateId,
+      templateVersion: storedBinding?.templateVersion ?? source.templateVersion,
+      nodeBindings: storedBinding?.nodeBindings ?? source.nodeBindings,
+    }
     if (persistedDef) {
       load({ ...persistedDef, id: source.sourceId, source: sourceForCfg })
       return
@@ -906,9 +958,16 @@ export const useFlowStore = defineStore('flow', () => {
   function clearSiteCtx() {
     siteCtx.value = null
   }
+  // 网站详情页（0714 会议 Task 3）：只做聚合查看，不是网站统一流程模板——画布内部会悄悄加载一个代表子源
+  // 到 sourceCtx（供 ResultView/FileView/TaskView 取得共享的节点/表结构），但用户看到的对象是"网站"。
+  // 这里只设置 siteCtx 供顶部面包屑/动作栏识别为网站态展示，不像 startSiteFlow 那样重置画布或加载模板流程，
+  // 因此与 sourceCtx 同时非空——是本文件顶部"二者互斥"注释里唯一的例外，仅用于该页面的展示层。
+  function setSiteDisplayCtx(site: Site | null) {
+    siteCtx.value = site
+  }
 
   // 空白模板 → 有源草稿画布（0707 Phase3.1）：过闸创建后用户先进入编排工作区，
-  // 再手工用「+」添加步骤，或用空白画布引导卡「智能生成流程」；不自动塞首节点，sourceCtx/sourceCfg 只提供源上下文和摘要头编辑入口。
+  // 再手工用「+」添加步骤，或用空白画布引导卡「智能推荐模板」；不自动塞首节点，sourceCtx/sourceCfg 只提供源上下文和摘要头编辑入口。
   function startDraftSource(source: Source) {
     const draft = JSON.parse(JSON.stringify(source)) as Source
     siteCtx.value = null
@@ -924,6 +983,31 @@ export const useFlowStore = defineStore('flow', () => {
       source: draft,
     })
     sourceCtx.value = draft
+  }
+
+  /** 显式切换/升级模板：只按稳定 nodeId 继承同一模板的兼容绑定，绝不按节点名称猜测复用。 */
+  function applyTemplate(template: FlowTemplate): { retained: number; cleared: number } | null {
+    const source = sourceCfg.value ?? sourceCtx.value
+    if (!source) return null
+    const oldBindings = extractTemplateNodeBindings(configs)
+    const sameTemplate = source.templateId === template.id
+    const nodeBindings = sameTemplate
+      ? compatibleTemplateBindings(oldBindings, template.definition)
+      : {}
+    const boundSource: Source = {
+      ...(JSON.parse(JSON.stringify(source)) as Source),
+      templateId: template.id,
+      templateVersion: template.version,
+      nodeBindings,
+    }
+    const composed = composeTemplateFlow(template, boundSource, nodeBindings)
+    load(composed)
+    sourceCtx.value = JSON.parse(JSON.stringify(boundSource)) as Source
+    touch()
+    return {
+      retained: Object.keys(nodeBindings).length,
+      cleared: Object.keys(oldBindings).length - Object.keys(nodeBindings).length,
+    }
   }
 
   // 发布门禁：空链路 / 采集节点缺 URL·输出表 / 数据类节点缺输出表 不可发布。
@@ -947,7 +1031,6 @@ export const useFlowStore = defineStore('flow', () => {
     }
     if (!mainIds.length) errs.push('流程为空：至少添加一个节点')
     const allIds = [...mainIds, ...branchIds, ...chainIds]
-    const flowParamRefs = new Set(Object.values(d.configs).flatMap((node) => node.collectCfg?.urlParamRefs ?? []))
     allIds.forEach((nid) => {
       const c = d.configs[nid]
       if (!c) return
@@ -976,11 +1059,22 @@ export const useFlowStore = defineStore('flow', () => {
       ) {
         errs.push(`「${c.title}」缺少输入表`)
       }
-      const taskTokens = extractUrlParamIds(c.taskCfg?.urlRule ?? '')
-      const unavailableTaskParams = taskTokens.filter((pid) => !(c.taskCfg?.paramRefs ?? []).includes(pid))
-      if (unavailableTaskParams.length) errs.push(`「${c.title}」任务 URL 参数 ${unavailableTaskParams.join('、')} 尚未绑定到任务配置`)
-      const invalidTaskRefs = (c.taskCfg?.paramRefs ?? []).filter((pid) => !flowParamRefs.has(pid))
-      if (invalidTaskRefs.length) errs.push(`「${c.title}」任务参数 ${invalidTaskRefs.join('、')} 未绑定到当前流程`)
+      if (!isFirstMainNode(d.main, d.configs, nid)) {
+        const ownTaskParamRefs = new Set(c.collectCfg?.urlParamRefs ?? [])
+        const taskTokens = extractUrlParamIds(c.taskCfg?.urlRule ?? '')
+        const unavailableTaskParams = taskTokens.filter((pid) => !ownTaskParamRefs.has(pid))
+        if (unavailableTaskParams.length) errs.push(`「${c.title}」任务 URL 参数 ${unavailableTaskParams.join('、')} 未绑定到当前节点参数配置`)
+
+        const paramValues = c.taskCfg?.paramValues ?? []
+        const invalidTaskValues = paramValues.filter((item) => !ownTaskParamRefs.has(item.paramId)).map((item) => item.paramId)
+        if (invalidTaskValues.length) errs.push(`「${c.title}」任务参数 ${invalidTaskValues.join('、')} 未绑定到当前节点`)
+        const valueByParam = new Map(paramValues.map((item) => [item.paramId, item]))
+        const missingValues = [...ownTaskParamRefs].filter((paramId) => {
+          const value = valueByParam.get(paramId)
+          return !value || (!value.fieldId && !value.valueExpr)
+        })
+        if (missingValues.length) errs.push(`「${c.title}」任务参数 ${missingValues.join('、')} 缺少取值字段或值函数`)
+      }
     })
     // 0707 优化·Phase6：决策/分头分支段校验
     for (const bg of d.branchGroups ?? []) {
@@ -1020,6 +1114,6 @@ export const useFlowStore = defineStore('flow', () => {
     setTripleCell, addTripleRow, removeTripleRow,
     // 0707 优化·Phase6：决策/分头分支段操作
     ensureBranchGroup, addBranch, removeBranch, insertInBranch, moveInBranch, moveBranch, removeBranchGroup, detachFromBranches, setBranchLabel, setBranchCondition,
-    serialize, load, setFlowName, newFlow, loadFromSource, startDraftSource, clearSourceCtx, startSiteFlow, clearSiteCtx, validateFlow, markSaved,
+    serialize, load, setFlowName, newFlow, loadFromSource, startDraftSource, applyTemplate, clearSourceCtx, startSiteFlow, clearSiteCtx, setSiteDisplayCtx, validateFlow, markSaved,
   }
 })

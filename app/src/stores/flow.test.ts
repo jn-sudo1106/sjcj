@@ -3,6 +3,8 @@ import { setActivePinia, createPinia } from 'pinia'
 import { useFlowStore } from './flow'
 import { mockFlowRecommend, mockNodeAiChat } from '../api/mock/flows'
 import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES } from '../views/FlowCanvas/flowModel'
+import { makePresetFlowTemplates } from '../views/FlowCanvas/flowTemplates'
+import type { Source } from '../api'
 
 describe('flow store 编辑动作', () => {
   let f: ReturnType<typeof useFlowStore>
@@ -377,6 +379,54 @@ describe('节点输入表 + 任务队列（优化 0701 问题五）', () => {
     f.setTaskQueue('web-detail', 'my_queue')
     expect(f.configs['web-detail'].collectCfg?.inputTable).toBe('888888')
     expect(f.configs['web-detail'].taskCfg?.queue).toBe('my_queue')
+  })
+
+  it('任务参数取值只允许引用当前节点自己的 URL 参数，不继承上游节点参数', () => {
+    f.patchCollect('web-list', { urlParamRefs: ['p-page'] })
+    f.patchCollect('web-detail', { urlParamRefs: ['p-fundcode'] })
+    f.patchTaskConfig('web-detail', {
+      paramValues: [
+        { paramId: 'p-page', fieldId: 'page', valueExpr: '' },
+        { paramId: 'p-fundcode', fieldId: 'fund_code', valueExpr: 'trim($VAL$)' },
+      ],
+    })
+    expect(f.configs['web-detail'].taskCfg?.paramValues).toEqual([
+      { paramId: 'p-fundcode', fieldId: 'fund_code', valueExpr: 'trim($VAL$)' },
+    ])
+
+    const legacy = f.serialize()
+    delete legacy.configs['web-detail'].taskCfg!.paramValues
+    legacy.configs['web-detail'].taskCfg!.paramRefs = ['p-page', 'p-fundcode']
+    f.load(legacy)
+    expect(f.configs['web-detail'].taskCfg?.paramValues).toEqual([
+      { paramId: 'p-fundcode', fieldId: '', valueExpr: '' },
+    ])
+    expect(f.configs['web-detail'].taskCfg?.paramRefs).toBeUndefined()
+  })
+
+  it('校验会拦截任务参数跨节点引用和未配置取值', () => {
+    f.patchCollect('web-list', { urlParamRefs: ['p-page'] })
+    f.patchCollect('web-detail', { urlParamRefs: ['p-fundcode'] })
+    f.configs['web-detail'].taskCfg = {
+      ...f.configs['web-detail'].taskCfg,
+      queue: '',
+      urlRule: '',
+      paramValues: [{ paramId: 'p-page', fieldId: 'page', valueExpr: '' }],
+    }
+    expect(f.validateFlow()).toContain('「公告详情抓取」任务参数 p-page 未绑定到当前节点')
+    expect(f.validateFlow()).toContain('「公告详情抓取」任务参数 p-fundcode 缺少取值字段或值函数')
+  })
+
+  it('首节点不保存任务参数、上下文来源和出参列', () => {
+    f.patchCollect('web-list', { urlParamRefs: ['p-page'] })
+    f.patchTaskConfig('web-list', {
+      paramValues: [{ paramId: 'p-page', fieldId: 'page', valueExpr: '' }],
+      contextMap: ['title'],
+      outColumns: ['detail_url'],
+    })
+    expect(f.configs['web-list'].taskCfg).not.toHaveProperty('paramValues')
+    expect(f.configs['web-list'].taskCfg).not.toHaveProperty('contextMap')
+    expect(f.configs['web-list'].taskCfg).not.toHaveProperty('outColumns')
   })
 
   it('输入表字段选项：实体表缺失时回退到上游产物字段', () => {
@@ -970,7 +1020,18 @@ describe('「落表输出」节点移除（优化 0701 问题四）', () => {
     expect(nodeIds(mockFlowRecommend({ intent: 'web-login' }).flow.main).length).toBe(2)
     const fp = mockFlowRecommend({ intent: 'file-parse' })
     const titles = nodeIds(fp.flow.main).map((id) => fp.flow.configs[id].title)
-    expect(titles).toEqual(['文件下载', '文件解析', '字段抽取'])
+    expect(titles).toEqual(['文件下载', '数据处理'])
+  })
+
+  it('数据处理节点是唯一的新增入口，文件下载预置不再引用旧节点类型', () => {
+    expect(LIB_GROUPS.map((group) => group.title)).toEqual(expect.not.arrayContaining(['解析结构化', '数据清洗', '数据校验']))
+    expect(LIB_GROUPS.find((group) => group.title === '数据处理')?.items).toEqual([
+      expect.objectContaining({ template: 'process', name: '数据处理' }),
+    ])
+
+    const flow = mockFlowRecommend({ intent: 'file-parse' }).flow
+    const titles = nodeIds(flow.main).map((id) => flow.configs[id].title)
+    expect(titles).not.toEqual(expect.arrayContaining(['文件解析', '字段抽取']))
   })
 })
 
@@ -1001,9 +1062,9 @@ describe('节点级 AI 对话 mock 回复（优化 0701 问题八）', () => {
     expect(r.reply).toContain('已停止')
   })
 
-  it('命中"失败"关键词给出试跑失败排查建议', () => {
-    const r = mockNodeAiChat({ question: '为什么试跑失败', nodeTitle: '列表抓取' })
-    expect(r.reply).toContain('试跑失败原因')
+  it('命中"失败"关键词给出发起抓取失败排查建议', () => {
+    const r = mockNodeAiChat({ question: '为什么发起抓取失败', nodeTitle: '列表抓取' })
+    expect(r.reply).toContain('发起抓取失败原因')
   })
 
   it('命中"队列"关键词解释任务队列口径', () => {
@@ -1021,5 +1082,52 @@ describe('节点级 AI 对话 mock 回复（优化 0701 问题八）', () => {
   it('未命中关键词时返回通用问候', () => {
     const r = mockNodeAiChat({ question: '你好', nodeTitle: '列表抓取' })
     expect(r.reply).toContain('列表抓取')
+  })
+})
+
+describe('Task 5 流程模板绑定', () => {
+  it('子源序列化时保存模板版本和当前节点动态绑定', () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source: Source = {
+      sourceId: 'source-template-binding', name: '模板子源', url: 'https://source.example.com', configId: '', mainTable: '', owner: 'tester', state: 'C',
+    }
+    flow.loadFromSource(source, [])
+    const template = makePresetFlowTemplates().find((item) => item.id === 'preset-file-parse')!
+    const fileId = template.definition.main.find((id) => id !== 'start' && id !== 'end')!
+    flow.applyTemplate(template)
+    flow.patchCollect(fileId, { url: 'https://source.example.com/report.pdf', outputTable: 'source_table', urlParamRefs: ['param-a'] })
+
+    const saved = flow.serialize()
+    expect(saved.source).toMatchObject({ templateId: template.id, templateVersion: template.version })
+    expect(saved.source?.nodeBindings?.[fileId].collect).toMatchObject({
+      url: 'https://source.example.com/report.pdf', outputTable: 'source_table', urlParamRefs: ['param-a'],
+    })
+  })
+
+  it('模板升级清理已删除稳定节点的绑定，不按显示名称复用', () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source: Source = {
+      sourceId: 'source-template-upgrade', name: '模板升级子源', url: 'https://source.example.com', configId: '', mainTable: '', owner: 'tester', state: 'C',
+    }
+    flow.loadFromSource(source, [])
+    const template = makePresetFlowTemplates().find((item) => item.id === 'preset-file-parse')!
+    const fileId = template.definition.main.find((id) => id !== 'start' && id !== 'end')!
+    flow.applyTemplate(template)
+    flow.patchCollect(fileId, { url: 'https://source.example.com/report.pdf' })
+    const upgraded = {
+      ...template,
+      version: template.version + 1,
+      definition: {
+        ...template.definition,
+        main: template.definition.main.filter((id) => id !== fileId),
+        configs: Object.fromEntries(Object.entries(template.definition.configs).filter(([id]) => id !== fileId)),
+      },
+    }
+
+    const result = flow.applyTemplate(upgraded)
+    expect(result?.cleared).toBeGreaterThan(0)
+    expect(flow.sourceCfg?.nodeBindings?.[fileId]).toBeUndefined()
   })
 })

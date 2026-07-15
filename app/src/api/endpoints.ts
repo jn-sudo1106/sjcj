@@ -173,8 +173,11 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'flow/save', desc: '保存流程定义', impl: true },
   { path: 'flow/load', desc: '加载流程定义', impl: true },
   { path: 'flow/list', desc: '流程列表', impl: true },
-  { path: 'flow/recommend', desc: '流程推荐（mock 意图匹配 / 二期 LLM 生成）', impl: true },
+  { path: 'flow/recommend', desc: '流程模板推荐（mock 意图匹配 / 二期 LLM 推荐）', impl: true },
   { path: 'flow/nodeAiChat', desc: '节点级 AI 对话（mock 关键词回复 / 二期 LLM，0701 问题八）', impl: true },
+  { path: 'flow-template/list', desc: '流程模板列表（版本化）', impl: true },
+  { path: 'flow-template/detail', desc: '流程模板详情（可指定版本）', impl: true },
+  { path: 'flow-template/save', desc: '保存流程模板新版本', impl: true },
 
   /* ── comm 导出（目标 1 / 收录 1） ── */
   { path: 'comm/export', desc: '导出' },

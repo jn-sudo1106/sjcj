@@ -17,7 +17,7 @@ const files: RawFile[] = [{
 describe('FileView', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('默认查询当前子源，并可切换所属子源为全部网站范围', async () => {
+  it('默认查询当前子源（不再提供所属子源筛选）', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const peer = { ...current, sourceId: 'peer-source', name: '同站子源' } as Source
@@ -35,14 +35,32 @@ describe('FileView', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="file-process-rail"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="file-source-filter"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="file-source-filter"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('状态')
     expect(wrapper.text()).toContain('MD5')
     expect(wrapper.text()).toContain('扩展属性')
     expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ siteId: current.siteId, sourceId: current.sourceId }))
+  })
 
-    await wrapper.get('[data-testid="file-source-filter"]').setValue('')
+  it('网站详情页（site-wide）聚合查看全部子源文件，不展示流程节点条', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const peer = { ...current, sourceId: 'peer-source', name: '同站子源' } as Source
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    const query = vi.spyOn(fileApi, 'filePaged').mockResolvedValue({ list: files, total: 1 })
+    vi.spyOn(fileApi, 'fileStats').mockResolvedValue({ total: 1, totalSize: 2048 })
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current, peer])
+
+    const wrapper = shallowMount(FileView, {
+      props: { siteWide: true },
+      global: {
+        directives: { loading: {} },
+        stubs: { CanvasHeader: true, ProcessNodeRail: true, ElDrawer: true, ElPagination: true },
+      },
+    })
     await flushPromises()
+
+    expect(wrapper.find('[data-testid="file-process-rail"]').exists()).toBe(false)
     expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ siteId: current.siteId, sourceId: undefined }))
     expect(wrapper.text()).toContain('所属子源')
   })
@@ -58,7 +76,6 @@ describe('FileView', () => {
     await new Promise((resolve) => setTimeout(resolve, 150))
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="file-source-filter"]').element).toHaveProperty('value', source.sourceId)
     expect(wrapper.text()).toContain('列表抓取_1')
   })
 

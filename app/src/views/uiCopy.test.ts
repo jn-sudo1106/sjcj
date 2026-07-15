@@ -11,6 +11,8 @@ import resultView from './FlowCanvas/ResultView.vue?raw'
 import siteSourceSwitcher from './FlowCanvas/SiteSourceSwitcher.vue?raw'
 import tableDialog from './FlowCanvas/TableEditDialog.vue?raw'
 import siteCardGrid from './CollectAssets/SiteCardGrid.vue?raw'
+import appShell from '../layouts/AppShell.vue?raw'
+import runtimeStore from '../stores/runtime.ts?raw'
 
 describe('最新方案 UI 入口收口', () => {
   it('字段级预处理/去重只在数据表编辑弹窗维护', () => {
@@ -142,11 +144,12 @@ describe('最新方案 UI 入口收口', () => {
     expect(nodeInspector).not.toContain('采集/非采集节点统一显示')
   })
 
-  it('节点配置支持 APP 入口字段；任务参数只能引用当前流程已绑定参数', () => {
+  it('节点配置支持 APP 入口字段；任务参数由当前节点参数配置决定', () => {
     expect(nodeInspector).toContain('APP 包名')
     expect(nodeInspector).toContain('collectUrlLabel')
-    expect(nodeInspector).toContain('任务参数')
+    expect(nodeInspector).toContain('任务参数取值')
     expect(nodeInspector).toContain('availableTaskParamRefs')
+    expect(nodeInspector).toContain('paramValues')
     expect(nodeInspector).not.toContain('任务拼接逻辑')
   })
 
@@ -176,6 +179,19 @@ describe('最新方案 UI 入口收口', () => {
     expect(canvasHeader).not.toContain('switchingView')
   })
 
+  it('画布顶部只保留保存，运行记录使用发起抓取文案', () => {
+    expect(appShell).toContain("canvas: ['保存']")
+    expect(appShell).not.toContain("canvas: ['保存', '发起抓取']")
+    expect(runtimeStore).toContain('发起抓取落表')
+    expect(runtimeStore).not.toContain('试跑落表')
+  })
+
+  it('任一采集资产二级页都能从顶栏进入新建采集闸门', () => {
+    expect(appShell).toContain('function firePageAction(action: string)')
+    expect(appShell).toContain("router.push({ path: '/canvas', query: { mode: 'new' } })")
+    expect(appShell).toContain('@click="firePageAction(action)"')
+  })
+
 
   it('采集资产页顶部批量导入/批量操作入口收口，批量导入迁进网站详情子源侧栏（0711 R12）', () => {
     // 顶部动作注册只留「新建采集」
@@ -203,6 +219,43 @@ describe('最新方案 UI 入口收口', () => {
   it('采集资产页不重复渲染网站工作区页签', () => {
     expect(collectAssetsIndex).not.toContain("import SourceTabsBar from '../FlowCanvas/SourceTabsBar.vue'")
     expect(collectAssetsIndex).not.toContain('<SourceTabsBar')
+  })
+
+  it('流程模板列表并入采集资产的二级页签，而不是左侧独立菜单', () => {
+    expect(collectAssetsIndex).toContain("{ key: 'template', label: '流程模板列表' }")
+    expect(collectAssetsIndex).toContain('FlowTemplate')
+    expect(collectAssetsIndex).toContain("const query = tab === 'source' ? {} : { tab }")
+  })
+
+  it('空白画布的智能入口推荐并应用流程模板，不再直接生成孤立流程', () => {
+    expect(flowBoard).toContain('智能推荐模板')
+    expect(flowBoard).toContain('flowTemplateApi.list()')
+    expect(flowBoard).toContain('flow.applyTemplate(template)')
+    expect(flowBoard).not.toContain('generateWebFlow')
+  })
+
+  it('任务参数取值只面向当前节点参数，并支持上下文与出参字段', () => {
+    expect(nodeInspector).toContain('cc.value?.urlParamRefs')
+    expect(nodeInspector).not.toContain('Object.values(flow.configs)')
+    expect(nodeInspector).toContain('请先在当前节点的参数配置中绑定参数。')
+    expect(nodeInspector).toContain('上下文来源')
+    expect(nodeInspector).toContain('出参列')
+    expect(nodeInspector).toContain('addTaskField')
+    expect(nodeInspector).toContain('removeTaskField')
+    expect(nodeInspector).toContain('+ 添加字段')
+    expect(nodeInspector).toContain('!isFirstDataNode')
+  })
+
+  it('流程编辑不消费配置列表，源表单不再提供选用配置', () => {
+    expect(nodeInspector).not.toContain('configApi.configPaged')
+    expect(sourceBasicForm).not.toContain('选用配置')
+    expect(sourceBasicForm).not.toContain('使用已有配置')
+  })
+
+  it('子源流程头展示已应用模板，且不展示负责人', () => {
+    expect(canvasHeader).toContain('appliedTemplateLabel')
+    expect(canvasHeader).toContain('{{ appliedTemplateLabel }} ▾')
+    expect(canvasHeader).not.toContain('负责人 ${s.owner}')
   })
 
   it('规则节点使用规则编排面板', () => {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { paramApi, type Param } from '../../api'
-import { extractUrlParamIds, hasFragmentParams, expandParameterizedUrl } from './urlParams'
+import { extractUrlParamIds, hasFragmentParams } from './urlParams'
 import ParamEditorDrawer from './ParamEditorDrawer.vue'
 
 const props = defineProps<{
@@ -13,7 +13,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:paramRefs': [refs: string[]]
   'update:paramValues': [values: Record<string, string>]
-  insertToken: [paramId: string]
 }>()
 
 const pickerValue = ref('')
@@ -84,10 +83,6 @@ function openCreate() {
   drawer.param = null
   drawer.visible = true
 }
-function openEdit(param: Param) {
-  drawer.param = param
-  drawer.visible = true
-}
 function onSaved(param: Param) {
   details[param.paramId] = param
   loadOne(param.paramId)
@@ -95,22 +90,8 @@ function onSaved(param: Param) {
   loadAvailable()
 }
 
-const previewValues = computed<Record<string, string[]>>(() => Object.fromEntries(
-  tokenIds.value.map((id) => [id, refs.value.includes(id) ? [valueOf(id)].filter(Boolean) : []]),
-))
-const preview = computed(() => expandParameterizedUrl(props.url, previewValues.value))
-const comboValues = computed<Record<string, string[]>>(() => Object.fromEntries(
-  tokenIds.value.map((id) => [id, refs.value.includes(id) ? (candidates[id]?.length ? candidates[id] : [valueOf(id)].filter(Boolean)) : []]),
-))
-const comboStats = computed(() => expandParameterizedUrl(props.url, comboValues.value))
-
 function kindLabel(kind: Param['kind']) {
   return { list: '列表', date: '日期', sequence: '序列', date_sequence: '日期序列', database: '数据库' }[kind]
-}
-async function copyPreviewUrl() {
-  const url = preview.value.urls[0]
-  if (!url) return
-  await navigator.clipboard?.writeText(url)
 }
 </script>
 
@@ -130,13 +111,12 @@ async function copyPreviewUrl() {
         <template v-else-if="details[id]">
           <div class="upe-row-head">
             <div class="upe-identity"><span class="upe-id">{{ id }}</span><span class="upe-name">{{ details[id]!.name }}</span><span class="upe-meta">{{ details[id]!.group || '未分组' }} · {{ kindLabel(details[id]!.kind) }}</span></div>
-            <div class="upe-row-actions"><button class="upe-link" type="button" @click="openEdit(details[id]!)">编辑</button><button class="upe-link" type="button" @click="emit('insertToken', id)">插入 URL</button><button class="upe-link danger" type="button" @click="unbind(id)">解绑</button></div>
+            <div class="upe-row-actions"><button class="upe-link danger" type="button" @click="unbind(id)">解绑</button></div>
           </div>
           <div class="upe-override"><label>当前子源取值</label><select class="rc-select upe-value" :value="props.paramValues[id] || ''" @change="onPickValue(id, $event)"><option value="">使用默认值：{{ details[id]!.defaultValue || candidates[id]?.[0] || '无' }}</option><option v-for="value in candidates[id]" :key="value" :value="value">{{ value }}</option></select></div>
         </template>
         <template v-else><div class="upe-row-head"><span class="upe-id">{{ id }}</span><span class="upe-missing">参数不存在</span><button class="upe-link danger" type="button" @click="unbind(id)">解绑</button></div></template>
       </div>
-      <div v-if="tokenIds.length" class="upe-preview"><div class="upe-preview-head"><div class="upe-preview-label">最终 URL 预览（当前子源实际取值）</div><button v-if="!preview.errors.length && preview.urls[0]" class="upe-link upe-copy" type="button" @click="copyPreviewUrl">复制</button></div><div v-if="preview.errors.length" class="upe-missing">{{ preview.errors.join('；') }}</div><div v-else class="rc-code-box upe-preview-url">{{ preview.urls[0] }}</div><div class="muted upe-combo-hint">全部候选取值组合共 {{ comboStats.total }} 条{{ comboStats.truncated ? '（已按 1000 上限截断）' : '' }}</div></div>
       <ParamEditorDrawer v-model="drawer.visible" :param="drawer.param" @saved="onSaved" />
     </div>
   </div>
@@ -154,6 +134,5 @@ async function copyPreviewUrl() {
 .upe-empty { color: var(--rc-muted); font-size: 11px; line-height: 1.6; }.upe-empty code { color: var(--rc-primary-ink); font-family: var(--rc-mono, ui-monospace, monospace); }
 .upe-warn { font-size: 11px; color: var(--rc-warn, #d97706); background: var(--rc-warn-bg, #fef3c7); border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; line-height: 1.5; }
 .upe-row { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--rc-border-soft); font-size: 12px; }.upe-row-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }.upe-identity { display: flex; align-items: center; gap: 7px; min-width: 0; flex-wrap: wrap; }.upe-id { color: var(--rc-text-2); font-family: var(--rc-mono, ui-monospace, monospace); }.upe-name { font-weight: 600; }.upe-meta, .muted { color: var(--rc-faint); font-size: 11px; }.upe-row-actions { display: inline-flex; gap: 10px; flex: none; white-space: nowrap; }.upe-override { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 7px; }.upe-override label { color: var(--rc-muted); font-size: 11px; white-space: nowrap; }.upe-value { min-width: 0; height: 30px; padding: 0 8px; font-size: 12px; }.upe-link { border: 0; background: transparent; padding: 0; color: var(--rc-primary-ink); font-size: 11px; cursor: pointer; }.upe-link.danger, .upe-missing { color: var(--rc-error, #dc2626); }
-.upe-preview { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--rc-border-soft); }.upe-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }.upe-preview-label { font-size: 11px; color: var(--rc-muted); }.upe-preview-url { font-size: 11px; word-break: break-all; padding: 6px 8px; }.upe-copy { flex: none; }.upe-combo-hint { margin-top: 4px; }
 @media (max-width: 520px) { .upe-row-head { align-items: flex-start; flex-direction: column; gap: 5px; }.upe-row-actions { padding-left: 0; }.upe-override { grid-template-columns: 1fr; gap: 4px; } }
 </style>

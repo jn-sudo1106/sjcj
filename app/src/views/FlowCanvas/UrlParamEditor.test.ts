@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import UrlParamEditor from './UrlParamEditor.vue'
 
@@ -29,22 +29,5 @@ describe('UrlParamEditor', () => {
     })
 
     expect(wrapper.findAll('.upe-row')).toHaveLength(2)
-  })
-
-  it('最终 URL 预览支持一键复制当前预览 URL', async () => {
-    const writeText = vi.fn()
-    Object.assign(navigator, { clipboard: { writeText } })
-    const wrapper = mount(UrlParamEditor, {
-      props: {
-        url: 'https://example.com/list?date=$PARAM$_p-date',
-        paramRefs: ['p-date'],
-        paramValues: { 'p-date': '2026-07-12' },
-      },
-      global: { stubs: { 'el-drawer': { template: '<div><slot /><slot name="footer" /></div>' } } },
-    })
-
-    await wrapper.find('.upe-copy').trigger('click')
-
-    expect(writeText).toHaveBeenCalledWith('https://example.com/list?date=2026-07-12')
   })
 })

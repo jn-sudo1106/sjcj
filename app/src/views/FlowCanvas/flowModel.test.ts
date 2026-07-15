@@ -13,6 +13,20 @@ describe('流程参数配置迁移', () => {
 
     expect(cfg.collectCfg?.urlParamRefs).toEqual(['1035', '1036'])
   })
+
+  it('旧任务参数多选迁为当前节点参数的取值行，并清掉跨节点参数', () => {
+    const cfg = normalizeNodeConfig({
+      ...NODE_CONFIGS['web-detail'],
+      collectCfg: {
+        ...NODE_CONFIGS['web-detail'].collectCfg!,
+        urlParamRefs: ['p-fundcode'],
+      },
+      taskCfg: { queue: '', urlRule: '', paramRefs: ['p-page', 'p-fundcode'] },
+    })
+
+    expect(cfg.taskCfg?.paramValues).toEqual([{ paramId: 'p-fundcode', fieldId: '', valueExpr: '' }])
+    expect(cfg.taskCfg?.paramRefs).toBeUndefined()
+  })
 })
 
 describe('横向节点布局', () => {

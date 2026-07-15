@@ -4,7 +4,7 @@ import { ElMessage } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useRuntimeStore } from '../../stores/runtime'
 import { useUiStore } from '../../stores/ui'
-import { flowApi } from '../../api'
+import { flowApi, flowTemplateApi, type FlowTemplate } from '../../api'
 import CanvasHeader from './CanvasHeader.vue'
 import AddNodePopover from './AddNodePopover.vue'
 import FlowXmlDialog from './FlowXmlDialog.vue'
@@ -27,21 +27,44 @@ const canvasScrollEl = ref<HTMLElement | null>(null)
 const xmlOpen = ref(false)
 const xml = computed(() => flowToXml(flow.serialize()))
 const canExportXml = computed(() => !flow.dirty && flow.validateFlow().length === 0)
+const recommending = ref(false)
 
 // 编排对象切换器已升级为页面级子源侧栏（0710 会议 B1），组件与接线整体迁至 index.vue
 
-async function generateWebFlow() {
-  const source = flow.sourceCfg ? JSON.parse(JSON.stringify(flow.sourceCfg)) : undefined
+function loadTemplateDefaults(template: FlowTemplate) {
+  flow.load({
+    id: flow.flowId,
+    name: flow.flowName,
+    version: `template-v${template.version}`,
+    main: template.definition.main,
+    branches: template.definition.branches,
+    configs: template.definition.configs,
+    branchGroups: template.definition.branchGroups,
+    updatedAt: template.updatedAt,
+  })
+}
+
+async function recommendTemplateFlow() {
+  if (recommending.value) return
+  recommending.value = true
   try {
-    const rec = await flowApi.flowRecommend('', 'web-public')
-    flow.load({
-      ...rec.flow,
-      id: source?.sourceId ?? rec.flow.id,
-      name: source?.name ?? rec.flow.name,
-      source,
-    })
+    const prompt = [flow.sourceCtx?.name, flow.sourceCfg?.url, flow.sourceCtx?.url].filter(Boolean).join(' ')
+    const [recommendation, templates] = await Promise.all([flowApi.flowRecommend(prompt), flowTemplateApi.list()])
+    const template = (recommendation.templateId ? templates.find((item) => item.id === recommendation.templateId) : undefined)
+      ?? templates.find((item) => item.id === 'preset-web-public')
+    if (!template) {
+      ElMessage.info('暂未匹配到流程模板，请用「＋」手工添加节点，或从右上角选择模板。')
+      return
+    }
+    if (flow.sourceCtx || flow.sourceCfg) flow.applyTemplate(template)
+    else loadTemplateDefaults(template)
+    ElMessage.success(recommendation.templateId
+      ? `已推荐并应用「${template.name}」v${template.version}`
+      : `未识别具体场景，已应用默认模板「${template.name}」v${template.version}`)
   } catch {
-    ElMessage.error('推荐接口异常')
+    ElMessage.error('模板推荐异常')
+  } finally {
+    recommending.value = false
   }
 }
 
@@ -101,7 +124,7 @@ function footFor(cfg: NodeConfig) {
     : cfg.collect
       ? '源配置'
       : isDataNode(cfg)
-        ? '待试跑'
+        ? '待发起抓取'
         : '待配置'
   return {
     left,
@@ -297,8 +320,8 @@ watch(
         <!-- 空白子源画布引导卡 -->
         <div v-if="!flow.layout.nodes.length" class="rc-empty-cta">
           <div class="rc-empty-cta-title">空白编排画布</div>
-          <div class="rc-empty-cta-sub">可以用「＋」手工添加步骤，也可以先智能生成网页抓取初始流程，再逐节点调整配置。</div>
-          <button class="rc-btn primary" type="button" @click="generateWebFlow">智能生成流程</button>
+          <div class="rc-empty-cta-sub">可以用「＋」手工添加步骤，也可以按当前对象推荐流程模板，应用后再逐节点调整配置。</div>
+          <button class="rc-btn primary" type="button" :disabled="recommending" @click="recommendTemplateFlow">{{ recommending ? '推荐中…' : '智能推荐模板' }}</button>
         </div>
 
         <!-- 终端 -->

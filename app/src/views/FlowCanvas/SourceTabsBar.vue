@@ -17,8 +17,12 @@ const onList = computed(() => !route.path.startsWith('/canvas'))
 
 function navTo(key: string) {
   const snap = ws.snapshotOf(key)
-  const view = snap?.view === 'data' || snap?.view === 'task' || snap?.view === 'file' ? { view: snap.view } : {}
-  router.push({ path: '/canvas', query: { sourceId: key, ...view } })
+  // 流程视图也必须显式带上 view=flow。否则 index.vue 会先补全 URL，
+  // 但 sourceId 未变化，路由监听不会再次触发实际的 source 加载。
+  const view = snap?.view === 'data' || snap?.view === 'task' || snap?.view === 'file' || snap?.view === 'flow'
+    ? snap.view
+    : 'flow'
+  router.push({ path: '/canvas', query: { sourceId: key, view } })
 }
 
 function onActivate(t: SourceTab) {

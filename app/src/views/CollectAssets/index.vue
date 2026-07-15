@@ -1,18 +1,34 @@
 <script setup lang="ts">
-import { ref, type Component } from 'vue'
+import { ref, watch, type Component } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import SourceTab from './SourceTab.vue'
 import ConfigTab from './ConfigTab.vue'
 import EntryTab from './EntryTab.vue'
 import ParamTab from './ParamTab.vue'
+import FlowTemplate from '../FlowTemplate/index.vue'
 
 const TABS: { key: string; label: string }[] = [
   { key: 'source', label: '网站列表' },
   { key: 'config', label: '配置列表' },
   { key: 'entry', label: '表 ID 列表' },
   { key: 'param', label: '参数列表' },
+  { key: 'template', label: '流程模板列表' },
 ]
-const comps: Record<string, Component> = { source: SourceTab, config: ConfigTab, entry: EntryTab, param: ParamTab }
+const comps: Record<string, Component> = { source: SourceTab, config: ConfigTab, entry: EntryTab, param: ParamTab, template: FlowTemplate }
+const route = useRoute()
+const router = useRouter()
+const validTabs = new Set(TABS.map((tab) => tab.key))
 const active = ref('source')
+function normalizeTab(tab: unknown): string {
+  const key = String(tab ?? '')
+  return validTabs.has(key) ? key : 'source'
+}
+watch(() => route.query.tab, (tab) => { active.value = normalizeTab(tab) }, { immediate: true })
+function selectTab(key: string) {
+  const tab = normalizeTab(key)
+  const query = tab === 'source' ? {} : { tab }
+  void router.replace({ path: '/collect', query })
+}
 </script>
 
 <template>
@@ -24,7 +40,7 @@ const active = ref('source')
           :key="t.key"
           class="ca-tab-link"
           :class="{ active: active === t.key }"
-          @click="active = t.key"
+          @click="selectTab(t.key)"
         >
           {{ t.label }}
         </button>

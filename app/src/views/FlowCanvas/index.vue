@@ -15,8 +15,9 @@ import CompareSplit from './CompareSplit.vue'
 import TaskView from './TaskView.vue'
 import FileView from './FileView.vue'
 import SiteSourceSwitcher from './SiteSourceSwitcher.vue'
+import SiteDetailView from './SiteDetailView.vue'
 import CategoryTreePicker, { type CategorySelection } from './CategoryTreePicker.vue'
-import { firstSourceId, normalizeSourceView, sourceViewFromHash } from './workspaceRoute'
+import { firstSourceId, normalizeSourceView, normalizeSiteView, sourceViewFromHash } from './workspaceRoute'
 
 const route = useRoute()
 const router = useRouter()
@@ -32,6 +33,8 @@ function syncActiveView() {
 watch(() => route.query.view, () => {
   activeView.value = normalizeSourceView(route.query.view)
 }, { immediate: true })
+// 网站详情页（0714 会议 Task 3）：siteId 且无 sourceId，只读聚合数据/文件/任务视图，没有流程视图
+const isSiteDetail = computed(() => !!route.query.siteId && !route.query.sourceId)
 const isDataView = computed(() => activeView.value === 'data' && !!flow.sourceCtx)
 const isTaskView = computed(() => activeView.value === 'task' && !!flow.sourceCtx)
 // 文件视图只挂子源层（0711 R11：文件视图只有源才有）：网站态 URL 带 view=file 同理重定向回流程视图
@@ -49,8 +52,10 @@ watch(
 )
 
 // ---- 子源侧栏（0710 会议 B1）：页面级左列，流程/数据/任务视图共用；接线自 FlowBoard 顶部横排切换器迁入 ----
-const sidebarSiteId = computed(() => flow.sourceCtx?.siteId || '')
-const sidebarActiveKey = computed(() => flow.sourceCtx?.sourceId ?? '')
+// 网站详情页没有 sourceCtx（画布内部代表子源不登记为编排对象），侧栏 siteId 需要兜底读路由自己的 siteId
+const sidebarSiteId = computed(() => flow.sourceCtx?.siteId || String(route.query.siteId ?? ''))
+// 网站详情页态下侧栏不应高亮任何具体子源（内部代表子源只是取数据用，不是用户在看的对象）
+const sidebarActiveKey = computed(() => (isSiteDetail.value ? '' : flow.sourceCtx?.sourceId ?? ''))
 async function confirmDiscardIfDirty(): Promise<boolean> {
   if (!flow.dirty) return true
   try {
@@ -70,6 +75,13 @@ async function onSwitchTarget(target: Source) {
 }
 function onSwitchAdded(s: Source) {
   onSwitchTarget(s)
+}
+// 侧栏「网站」节点：切到网站详情页（全部子源聚合），视图随身携带（数据/文件/任务，落不到流程视图）
+async function onSwitchToSite() {
+  if (!(await confirmDiscardIfDirty())) return
+  ws.deactivate()
+  const view = normalizeSiteView(route.query.view)
+  void router.replace({ path: '/canvas', query: { siteId: sidebarSiteId.value, view } })
 }
 // 侧栏 ⇔（0710 会议 B4）：左栏=当前子源，右栏=所选子源（任意网站，按 id 直接加载）
 function onSidebarCompare(rightId: string) {
@@ -195,7 +207,9 @@ async function loadSourceFlow(sourceId: string) {
     return
   }
   flow.loadFromSource(source, steps ?? [], persistedDef)
-  ws.open(source.sourceId, source.name)
+  if (!ws.open(source.sourceId, source.name)) {
+    ElMessage.warning('页签已达上限（8 个），当前源未加入页签，请关闭部分页签后再试')
+  }
 }
 
 async function onSave() {
@@ -211,44 +225,68 @@ async function onSave() {
     ElMessage.error(`保存失败：${(e as Error).message ?? '未知错误'}，画布未清空，请重试`)
   }
 }
-function onTrial() {
-  // 试跑门槛（0710 会议 D3）：流程配置保存完成后才可试跑，有未保存改动先保存
+// 发起抓取（0714 会议 Task 4）：唯一完整执行入口——试跑作为独立概念/入口已删除，
+// 原来驱动运行态模拟的能力合并进这里；发起抓取请求成功后才驱动节点状态流转。
+// capturing：runtime.running 要等 sendSnatch 的 await 完之后才置真，中间有个真空窗口，
+// 单靠它挡不住同一按钮的快速二次点击，这里在校验通过后立即同步占位。
+const capturing = ref(false)
+async function onStartCapture() {
+  const s = flow.sourceCtx
+  if (!s) return
+  // 门槛沿用原试跑的两条（0710 会议 D3）：流程配置保存完成、且没有正在进行的发起抓取
   if (flow.dirty) {
-    ElMessage.warning('画布有未保存的改动，请先保存流程配置再试跑')
+    ElMessage.warning('画布有未保存的改动，请先保存流程配置再发起抓取')
     return
   }
-  if (runtime.running) {
-    ElMessage.warning('已有试跑正在进行，请稍候')
+  if (runtime.running || capturing.value) {
+    ElMessage.warning('已有发起抓取正在进行，请稍候')
     return
   }
-  const runId = runtime.trial(flow.serialize())
-  if (!runId) {
-    ElMessage.warning('当前画布没有可试跑的节点（已停止 / 规划中 / 缺 URL 或输出表的采集节点会被跳过）')
-    return
+  capturing.value = true
+  try {
+    const res = await sourceApi.sendSnatch([s.sourceId])
+    if (!res?.ok) {
+      ElMessage.warning(res?.message || '发起抓取失败，请重试')
+      return
+    }
+    const runId = runtime.startCapture(flow.serialize())
+    if (!runId) {
+      ElMessage.warning('当前画布没有可发起抓取的节点（已停止 / 规划中 / 缺 URL 或输出表的采集节点会被跳过）')
+      return
+    }
+    ElMessage.success(`已发起抓取 ${runId}，画布节点状态流转中 → 运行记录 / 数据查看`)
+  } finally {
+    capturing.value = false
   }
-  ElMessage.success(`已发起试跑 ${runId}，画布节点状态流转中 → 运行记录 / 数据查看`)
 }
 
 // "发布"概念全删（0710 会议 C3）：默认草稿语义，保存即生效
+// "试跑"入口已删除（0714 会议 Task 4）：CanvasHeader 的"发起抓取"按钮通过同一条动作总线触发 onStartCapture
 function registerCanvasActions() {
   ui.registerAction('保存', onSave)
-  ui.registerAction('试跑', onTrial)
+  ui.registerAction('发起抓取', onStartCapture)
 }
 
 async function enterFromRoute() {
   const siteId = String(route.query.siteId ?? '')
   const sourceId = String(route.query.sourceId ?? '')
   if (siteId) {
-    const first = firstSourceId(await siteApi.siteSources(siteId))
-    if (first) await router.replace({ path: '/canvas', query: { sourceId: first, view: 'flow' } })
-    else ElMessage.warning('该网站暂无子源，请先添加子源')
+    // 网站详情页（0714 会议 Task 3）：不再重定向到第一个子源，本身就是一个页面；
+    // 加载（含"该网站暂无子源"兜底）交给 SiteDetailView 自己处理，这里只管路由归一化和顶部动作栏。
+    const view = normalizeSiteView(route.query.view)
+    if (route.query.view !== view) await router.replace({ path: '/canvas', query: { siteId, view } })
+    else ui.clearActions()
   } else if (sourceId) {
     const view = normalizeSourceView(route.query.view)
+    // 补全 view 后不依赖 route watcher 再次触发：它只监听 sourceId/siteId，
+    // 因此缺省 view 的页签跳转或深链必须在本次调用里继续加载目标子源。
     if (route.query.view !== view) await router.replace({ path: '/canvas', query: { sourceId, view } })
-    else await loadSourceFlow(sourceId)
+    await loadSourceFlow(sourceId)
+    registerCanvasActions()
   } else {
     // 裸 /canvas 已由路由守卫导回采集资产；这里仅保留内部兜底
     flow.newFlow('blank')
+    registerCanvasActions()
   }
 }
 onMounted(async () => {
@@ -261,7 +299,6 @@ onMounted(async () => {
     return
   }
   await enterFromRoute()
-  registerCanvasActions()
 })
 // sourceId / siteId 互斥，合一个 watcher 统一处理深链与子源切换。
 watch(
@@ -287,6 +324,7 @@ onUnmounted(() => {
   ui.inspectorExpanded = false
   ui.clearActions()
   flow.clearSourceCtx()
+  flow.clearSiteCtx()
 })
 </script>
 
@@ -331,10 +369,12 @@ onUnmounted(() => {
         @pick="onSwitchTarget"
         @added="onSwitchAdded"
         @compare="onSidebarCompare"
+        @pick-site="onSwitchToSite"
       />
       <div class="rc-canvas-main">
         <!-- key 用加载完成后的 ctx，避免切换时读到旧子源数据。 -->
-        <CompareSplit v-if="ws.compareSourceId" class="rc-flow-result" />
+        <SiteDetailView v-if="isSiteDetail" :key="sidebarSiteId" :site-id="sidebarSiteId" class="rc-flow-result" />
+        <CompareSplit v-else-if="ws.compareSourceId" class="rc-flow-result" />
         <ResultView v-else-if="isDataView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
         <TaskView v-else-if="isTaskView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
         <FileView v-else-if="isFileView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />

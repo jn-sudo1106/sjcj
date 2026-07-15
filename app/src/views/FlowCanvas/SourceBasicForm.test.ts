@@ -19,26 +19,24 @@ describe('SourceBasicForm', () => {
     expect(wrapper.text()).not.toContain('源 ID')
     expect(wrapper.text()).not.toContain('分类')
     expect(wrapper.text()).not.toContain('标签')
-    expect(wrapper.find('.sbf-more-toggle').text()).not.toContain('标签')
+    expect(wrapper.find('.sbf-more-toggle').exists()).toBe(false)
   })
 
-  it('不传 defaultOpen：更多设置默认收起；defaultOpen=true：默认展开', () => {
-    const collapsed = mount(SourceBasicForm, { props: { modelValue: blankSource() } })
-    expect(collapsed.find('.sbf-more-body').exists()).toBe(false)
-
-    const expanded = mount(SourceBasicForm, { props: { modelValue: blankSource(), defaultOpen: true } })
-    expect(expanded.find('.sbf-more-body').exists()).toBe(true)
+  it('不再提供选用或新建配置入口', () => {
+    const wrapper = mount(SourceBasicForm, { props: { modelValue: blankSource() } })
+    expect(wrapper.text()).not.toContain('选用配置')
+    expect(wrapper.text()).not.toContain('新建配置')
+    expect(wrapper.text()).not.toContain('使用已有配置')
   })
 
   // 0711 R5：代理/断点续爬/登录/凭据迁到节点级 CollectorSettings，SourceBasicForm 不再展示这些字段
   it('不再展示代理/断点续爬/登录/凭据（已迁到节点级 CollectorSettings）', () => {
-    const wrapper = mount(SourceBasicForm, { props: { modelValue: blankSource(), defaultOpen: true } })
+    const wrapper = mount(SourceBasicForm, { props: { modelValue: blankSource() } })
     const text = wrapper.text()
     expect(text).not.toContain('使用代理')
     expect(text).not.toContain('断点续爬')
     expect(text).not.toContain('是否要求登陆')
     expect(text).not.toContain('登录凭据')
-    expect(wrapper.find('.sbf-more-toggle').text()).not.toContain('代理')
-    expect(wrapper.find('.sbf-more-toggle').text()).not.toContain('登录')
+    expect(wrapper.find('.sbf-more-toggle').exists()).toBe(false)
   })
 })

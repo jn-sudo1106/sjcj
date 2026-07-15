@@ -7,6 +7,7 @@ import CanvasHeader from './CanvasHeader.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import { buildHorizontalLayout } from './flowModel'
 
+const props = defineProps<{ siteWide?: boolean }>()
 const flow = useFlowStore()
 const sourceId = computed(() => flow.sourceCtx?.sourceId ?? '')
 const siteId = computed(() => flow.sourceCtx?.siteId ?? '')
@@ -137,7 +138,7 @@ function openPreview(file: RawFile) {
   previewOpen.value = true
 }
 function resetFilters() {
-  filters.sourceId = sourceId.value
+  filters.sourceId = props.siteWide ? '' : sourceId.value
   filters.nodeId = ''
   filters.contentType = ''
   filters.dateFrom = ''
@@ -155,7 +156,7 @@ function nextPage() {
 
 watch(sourceId, async (id) => {
   page.value = 1
-  filters.sourceId = id
+  filters.sourceId = props.siteWide ? '' : id
   filters.nodeId = ''
   await loadSiteSources()
 }, { immediate: true })
@@ -167,18 +168,14 @@ watch(() => [filters.sourceId, filters.nodeId, filters.contentType, filters.date
 
 <template>
   <main class="fv-shell">
-    <CanvasHeader />
+    <CanvasHeader v-if="!siteWide" />
     <div class="fv-body">
-      <div v-if="!sourceId" class="fv-empty-row">文件视图仅在子源详情下可用。</div>
+      <div v-if="!sourceId" class="fv-empty-row">{{ siteWide ? '该网站暂无子源，无法查看文件。' : '文件视图仅在子源详情下可用。' }}</div>
       <template v-else>
-        <div class="fv-process-rail" data-testid="file-process-rail">
+        <div v-if="!siteWide" class="fv-process-rail" data-testid="file-process-rail">
           <ProcessNodeRail v-model="filters.nodeId" :layout="processLayout" />
         </div>
         <div class="fv-filters">
-          <select v-model="filters.sourceId" class="fv-input" data-testid="file-source-filter" aria-label="所属子源">
-            <option value="">所属子源（全部）</option>
-            <option v-for="source in siteSources" :key="source.sourceId" :value="source.sourceId">所属子源：{{ source.name }}</option>
-          </select>
           <select v-model="filters.nodeId" class="fv-input" aria-label="流程节点">
             <option value="">节点（全部）</option>
             <option v-for="step in filterSteps" :key="`${step.sourceId}-${step.stepId}`" :value="step.stepId">{{ showSourceColumn ? `${sourceNames[step.sourceId] || step.sourceId} · ${step.name}` : step.name }}</option>

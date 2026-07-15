@@ -7,7 +7,8 @@ import CanvasHeader from './CanvasHeader.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import { buildHorizontalLayout } from './flowModel'
 
-// 任务是子源的运行事实：默认查看当前子源，可按筛选切换到网站下全部子源。
+// 任务是子源的运行事实：子源画布下只看当前子源；网站详情页（siteWide）聚合看全部子源，不提供内部筛选。
+const props = defineProps<{ siteWide?: boolean }>()
 const flow = useFlowStore()
 const source = computed(() => flow.sourceCtx)
 const sourceId = computed(() => source.value?.sourceId ?? '')
@@ -101,7 +102,7 @@ async function loadTasks() {
 
 watch(sourceId, async () => {
   page.value = 1
-  filters.sourceId = sourceId.value
+  filters.sourceId = props.siteWide ? '' : sourceId.value
   filters.nodeId = ''
   filters.state = ''
   await loadSiteSources()
@@ -127,7 +128,7 @@ function stateClass(state: TaskInst['state']): string {
   return state === 'L' ? 'run' : state === 'E' ? 'err' : 'ok'
 }
 function resetFilters() {
-  filters.sourceId = sourceId.value
+  filters.sourceId = props.siteWide ? '' : sourceId.value
   filters.nodeId = ''
   filters.state = ''
 }
@@ -144,19 +145,15 @@ function nextPage() {
 
 <template>
   <main class="tv-shell">
-    <CanvasHeader />
+    <CanvasHeader v-if="!siteWide" />
     <div class="tv-body">
-      <div v-if="!source" class="tv-empty-row">任务视图仅在子源详情下可用。</div>
+      <div v-if="!source" class="tv-empty-row">{{ siteWide ? '该网站暂无子源，无法查看任务。' : '任务视图仅在子源详情下可用。' }}</div>
       <template v-else>
-        <div class="tv-process-rail" data-testid="task-process-rail">
+        <div v-if="!siteWide" class="tv-process-rail" data-testid="task-process-rail">
           <ProcessNodeRail v-model="filters.nodeId" :layout="processLayout" />
         </div>
 
         <div class="tv-filters">
-          <select v-model="filters.sourceId" class="tv-input" data-testid="task-source-filter" aria-label="所属子源">
-            <option value="">所属子源（全部）</option>
-            <option v-for="item in siteSources" :key="item.sourceId" :value="item.sourceId">所属子源：{{ item.name }}</option>
-          </select>
           <select v-model="filters.nodeId" class="tv-input" data-testid="task-node-filter" aria-label="流程节点">
             <option value="">节点（全部）</option>
             <option v-for="step in filterSteps" :key="`${step.sourceId}-${step.stepId}`" :value="step.stepId">{{ showSourceColumn ? `${sourceNames[step.sourceId] || step.sourceId} · ${step.name}` : step.name }}</option>

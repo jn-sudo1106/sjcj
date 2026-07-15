@@ -5,7 +5,7 @@ import { ElMessage } from 'element-plus'
 import { siteApi, sourceApi, type Site, type Source } from '../../api'
 
 const props = defineProps<{ siteId: string; activeKey: string }>()
-const emit = defineEmits<{ pick: [target: Source]; added: [Source]; compare: [rightId: string] }>()
+const emit = defineEmits<{ pick: [target: Source]; added: [Source]; compare: [rightId: string]; pickSite: [] }>()
 
 const site = ref<Site | null>(null)
 const children = ref<Source[]>([])
@@ -242,10 +242,16 @@ async function submitImport() {
   <aside class="ssw-side" :class="{ collapsed }">
     <template v-if="!collapsed">
       <div class="ssw-head">
-        <div class="ssw-site" title="网站容器，不提供独立视图">
+        <button
+          class="ssw-site"
+          :class="{ active: !activeKey }"
+          type="button"
+          title="网站详情：数据/文件/任务汇总（全部子源）"
+          @click="emit('pickSite')"
+        >
           <span class="ssw-site-ico">🌐</span>
-          <span class="ssw-site-name">{{ site?.name || '网站·统一流程' }}</span>
-        </div>
+          <span class="ssw-site-name">{{ site?.name || '网站详情' }}</span>
+        </button>
         <button class="ssw-collapse" type="button" title="收起侧栏" @click="collapsed = true">«</button>
       </div>
       <input v-model="kw" class="ssw-search" placeholder="搜索子源" />
@@ -429,7 +435,10 @@ async function submitImport() {
   color: var(--rc-text-2);
   font-size: 12px;
   font-weight: 700;
+  cursor: pointer;
 }
+.ssw-site:hover { border-color: #93c5fd; color: var(--rc-primary-ink); }
+.ssw-site.active { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .ssw-site-ico { flex: none; }
 .ssw-site-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ssw-collapse { flex: none; border: 0; background: transparent; color: var(--rc-faint); font-size: 13px; cursor: pointer; width: 20px; height: 24px; border-radius: 5px; }

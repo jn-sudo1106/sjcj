@@ -14,7 +14,6 @@ import {
   Search,
   Upload,
   UserFilled,
-  VideoPlay,
 } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { TABS } from '../router/tabs'
@@ -35,7 +34,8 @@ const activeKey = computed(() => {
 const current = computed(() => TABS.find((t) => t.key === activeKey.value) ?? TABS[0])
 // 源详情 / 新建采集画布的标题与面包屑：采集资产 / 源名或新建采集
 const isSourceCanvas = computed(() => activeKey.value === 'collect' && route.path.startsWith('/canvas'))
-const sourceCrumb = computed(() => (route.query.mode === 'new' ? '新建采集' : (flow.sourceCtx?.name || flow.siteCtx?.name || '源详情')))
+// 网站详情页态下 sourceCtx/siteCtx 会同时非空（见 flow.ts setSiteDisplayCtx）：siteCtx 才是用户实际看到的对象，优先展示
+const sourceCrumb = computed(() => (route.query.mode === 'new' ? '新建采集' : (flow.siteCtx?.name || flow.sourceCtx?.name || '源详情')))
 
 const groupLabels = {
   home: '首页',
@@ -55,7 +55,7 @@ const navGroups = computed(() =>
 
 const pageActions: Record<string, string[]> = {
   overview: ['刷新', '导出', '新建采集'],
-  canvas: ['保存', '试跑'],
+  canvas: ['保存'],
   // 0711 R12：批量导入/批量操作已迁进网站详情子源侧栏，顶部只留"新建采集"（AppShell 顶部按钮按路由硬编码，
   // 与页面是否 ui.registerAction 无关——同款坑 0707 Phase3 记录过，改动入口必须两处一起改）
   collect: ['新建采集'],
@@ -65,16 +65,26 @@ const pageActions: Record<string, string[]> = {
   runs: ['导出记录'],
   tools: ['刷新', '导出报表'],
 }
-// 页面动作按真实路由段取，而不是侧栏高亮键（源详情画布仍要 保存/试跑；"发布"已按 0710 会议 C3 删除）
+// 页面动作按真实路由段取，而不是侧栏高亮键（源详情画布顶部只保留保存；抓取入口在画布 Header）。
 const actionKey = computed(() => route.path.split('/')[1] || 'overview')
 const isGateCanvas = computed(() => route.path.startsWith('/canvas') && route.query.mode === 'new')
-// 网站态（0707 优化·Phase4）：网站是流程模板，不实际运行，顶部动作收窄为仅「保存」（试跑/发布隐藏）
+// 网站详情页（0714 会议 Task 3）：只读聚合视图，没有可编辑的流程，顶部不需要任何动作按钮
+// （这里同时复用了 flow.siteCtx 作为"网站态"信号——目前只有 setSiteDisplayCtx 会设置它）
 const isSiteCanvas = computed(() => route.path.startsWith('/canvas') && !!flow.siteCtx)
 const activeActions = computed(() => {
   if (isGateCanvas.value) return []
-  if (isSiteCanvas.value) return ['保存']
+  if (isSiteCanvas.value) return []
   return pageActions[actionKey.value] ?? pageActions.canvas
 })
+function firePageAction(action: string) {
+  // 「新建采集」是采集资产的全局入口，不能依赖「网站列表」子页注册回调；
+  // 否则切到参数/模板等二级页后旧组件卸载，顶栏按钮会变成空操作。
+  if (action === '新建采集') {
+    void router.push({ path: '/canvas', query: { mode: 'new' } })
+    return
+  }
+  ui.fireAction(action)
+}
 
 const navIcons: Record<string, Component> = {
   overview: Odometer,
@@ -151,12 +161,9 @@ const navIcons: Record<string, Component> = {
               type="button"
               class="rc-action-btn"
               :class="{ primary: index === activeActions.length - 1 }"
-              :disabled="action === '试跑' && flow.dirty"
-              :title="action === '试跑' && flow.dirty ? '画布有未保存的改动，先保存流程配置再试跑' : undefined"
-              @click="ui.fireAction(action)"
+              @click="firePageAction(action)"
             >
-              <el-icon v-if="action.includes('试跑')"><VideoPlay /></el-icon>
-              <el-icon v-else-if="action.includes('发布') || action.includes('导出')"><Upload /></el-icon>
+              <el-icon v-if="action.includes('发布') || action.includes('导出')"><Upload /></el-icon>
               <el-icon v-else><Files /></el-icon>
               {{ action }}
             </button>
@@ -481,6 +488,7 @@ const navIcons: Record<string, Component> = {
   text-align: left;
   cursor: pointer;
 }
+
 
 .rc-main {
   display: flex;

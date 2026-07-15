@@ -6,6 +6,7 @@ import type {
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   Config, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, RawFile, RawFileQuery, RawFileStats, SourceCloneRequest, SourceCloneResult,
+  FlowTemplate, FlowTemplateSaveInput,
 } from './types'
 import type { FlowDef, FlowRecommendation } from '../views/FlowCanvas/flowModel'
 
@@ -203,6 +204,13 @@ export const flowApi = {
   // 节点级 AI 对话（0701 问题八）：mock 关键词回复，二期换真 LLM BFF，签名不变
   nodeAiChat: (params: { nodeId: string; question: string; nodeTitle: string; outputTable?: string; disabled?: boolean }) =>
     request<{ reply: string }>('flow/nodeAiChat', params),
+}
+
+// 流程模板（0714 会议 Task 5）：结构与子源动态绑定分开保存；version 用于固定已绑定子源。
+export const flowTemplateApi = {
+  list: () => request<FlowTemplate[]>('flow-template/list'),
+  detail: (id: string, version?: number) => request<FlowTemplate | null>('flow-template/detail', { id, version }),
+  save: (template: FlowTemplateSaveInput) => request<FlowTemplate>('flow-template/save', { template }),
 }
 
 // 子步骤（流程画布连线 = item/next）。未实现专属 mock，由 client fallback 回执。

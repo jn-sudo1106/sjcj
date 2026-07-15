@@ -1,6 +1,16 @@
 // 领域模型 — 按 docs/数据中心现有功能逆向工程 + 源列表实测字段建模。
 // mock 与未来真实 BFF 共用此类型；字段名尽量对齐数据采集平台原始口径。
 
+import type {
+  BranchSeed,
+  CollectConfig,
+  ConditionGroup,
+  FlowBranchGroup,
+  NodeConfig,
+  OutputAdvanced,
+  TaskConfig,
+} from '../views/FlowCanvas/flowModel'
+
 /** 通用分页返回 */
 export interface Paged<T> {
   total: number
@@ -78,6 +88,60 @@ export interface Source {
   scheduleTime?: string
   weekdays?: number[]
   cron?: string
+  // ---- 流程模板绑定（0714 会议 Task 5）：模板提供完整默认配置，子源保存自己的同节点覆盖。 ----
+  templateId?: string
+  templateVersion?: number
+  nodeBindings?: Record<string, FlowTemplateNodeBinding>
+}
+
+/** 模板内一个稳定节点对应的子源覆盖配置；未覆盖时使用模板默认值。 */
+export interface FlowTemplateNodeBinding {
+  collect?: Partial<Pick<CollectConfig,
+    | 'url'
+    | 'outputTable'
+    | 'inputTable'
+    | 'entryCondition'
+    | 'inputParams'
+    | 'urlParamRefs'
+    | 'urlParamValues'
+    | 'useProxy'
+    | 'resume'
+    | 'needLogin'
+    | 'loginUrl'
+    | 'account'
+    | 'credentialRef'
+    | 'scheduleType'
+    | 'scheduleTime'
+    | 'weekdays'
+    | 'cron'
+  >>
+  outputTable?: string
+  inputTable?: string
+  entryCondition?: ConditionGroup
+  task?: TaskConfig
+  outputAdvanced?: OutputAdvanced
+}
+
+/** 模板结构：稳定节点 ID、完整节点默认配置、顺序与连线。 */
+export interface FlowTemplateDefinition {
+  main: string[]
+  branches: BranchSeed[]
+  configs: Record<string, NodeConfig>
+  branchGroups?: FlowBranchGroup[]
+}
+
+export interface FlowTemplate {
+  id: string
+  name: string
+  version: number
+  definition: FlowTemplateDefinition
+  updatedAt: string
+}
+
+export interface FlowTemplateSaveInput {
+  id?: string
+  name: string
+  definition: FlowTemplateDefinition
 }
 
 /** 网站 Site（0707 优化·Phase2）：父级，统一流程模板 + 批量工具，本身不实际采集运行；下辖多个子源（Source.siteId） */

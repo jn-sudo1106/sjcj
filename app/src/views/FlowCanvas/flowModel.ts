@@ -100,13 +100,26 @@ export interface OutputAdvanced {
   failPolicy: string
 }
 
-/** 任务级配置：队列、URL 来源/规则及已绑定参数引用，独立于节点处理逻辑。 */
+/** 单个任务参数的取值：来自输入表字段，可选再经值函数处理。 */
+export interface TaskParamValue {
+  paramId: string
+  fieldId?: string
+  valueExpr?: string
+}
+
+/** 任务级配置：队列、URL 来源/规则及上下游字段映射，独立于节点处理逻辑。 */
 export interface TaskConfig {
   queue: string
   /** 任务 URL 来源字段：从输入表 schema 中选择，供 urlRule 拼接引用（0707 补齐，原属于连线配置的"任务 URL 来源字段"） */
   urlSourceField?: string
   urlRule: string
-  /** 任务 URL 规则可引用的参数；只能从当前流程已绑定参数中选择。 */
+  /** 当前节点已绑定参数的实际取值；参数集合由「参数配置」决定，不在此重复选择。 */
+  paramValues?: TaskParamValue[]
+  /** 随任务传递的输入表字段。 */
+  contextMap?: string[]
+  /** 当前节点输出表中保留并传给后续节点的字段。 */
+  outColumns?: string[]
+  /** @deprecated 旧版任务参数多选；加载时迁为 paramValues。 */
   paramRefs?: string[]
 }
 
@@ -222,7 +235,7 @@ const NODE_CONFIG_SEEDS = {
   'web-list': {
     title: '公告列表抓取', sub: '[90] 网页抓取 · 源配置', status: '运行', planned: false, collect: true,
     base: [['源 URL', 'https://example.com/announcements?page=${page}'], ['源名称', '交易所公告列表 - A 股'], ['源分类', '公告 / 交易所 / 列表'], ['定时策略', '30 8 * * 1-5']],
-    fields: [['使用代理', '否'], ['断点续爬', '开启'], ['本次使用配置', '配置 81909'], ['源标签', '公告、A股、列表页']],
+    fields: [['使用代理', '否'], ['断点续爬', '开启'], ['源标签', '公告、A股、列表页']],
     inmap: [['page', '序列参数', '1..20'], ['publish_date', '动态日期', '$CUR_DATA,-1']],
     params: [['page', 'sequence', '1..20'], ['publish_date', 'date', '$CUR_DATA,-1,yyyy-MM-dd']],
     output: [['detail_url', 'url', '详情页子步骤入口'], ['title', 'string', '公告标题'], ['publish_time', 'date', '发布时间']],
@@ -236,7 +249,7 @@ const NODE_CONFIG_SEEDS = {
   },
   'web-detail': {
     title: '公告详情抓取', sub: '[90] 网页抓取 · 子步骤产物', status: '运行', planned: false, collect: true,
-    base: [['本次使用配置', '配置 81908'], ['失败策略', '跳过并记录'], ['启用状态', '启用'], ['原始文件', '保存 HTML/PDF']],
+    base: [['失败策略', '跳过并记录'], ['启用状态', '启用'], ['原始文件', '保存 HTML/PDF']],
     fields: [['父步骤', '公告列表抓取'], ['去重', '由列表表去重'], ['超时', '30s'], ['重试', '2']],
     inmap: [['detail_url', '← 列表抓取.detail_url', '上一步属性'], ['retry', '常量', '2']],
     params: [['detail_url', 'from parent', '列表页输出'], ['retry', 'number', '2']],
@@ -252,7 +265,7 @@ const NODE_CONFIG_SEEDS = {
   'app-collect': {
     title: 'APP 抓取', sub: '[95] APP 抓取 · 移动端接口', status: '待配置', planned: false, collect: true,
     base: [['包名', 'com.example.app'], ['接口地址', 'https://m.example.com/api/list?page=${page}'], ['采集方式', 'APP 接口抓取'], ['鉴权方式', '接口 token / 设备参数']],
-    fields: [['本次使用配置', '配置 APP-001'], ['登录态', '按接口鉴权'], ['设备参数', '二期接入'], ['源标签', 'APP、接口']],
+    fields: [['登录态', '按接口鉴权'], ['设备参数', '二期接入'], ['源标签', 'APP、接口']],
     inmap: [['page', '序列参数', '1..20'], ['token', '常量 / 登录态', '按接口鉴权']],
     params: [['page', 'sequence', '1..20'], ['token', 'credential', '接口鉴权参数']],
     output: [['payload', 'json', '接口返回'], ['content', 'longtext', '正文'], ['source_url', 'url', '来源链接']],
@@ -268,7 +281,7 @@ const NODE_CONFIG_SEEDS = {
   'browser-html-collect': {
     title: '浏览器抓取', sub: '[BROWSER] 浏览器抓取 · 源配置', status: '待配置', planned: false, collect: true,
     base: [['源 URL', 'https://example.com'], ['源名称', '浏览器抓取源'], ['产物', 'HTML 文件（固定输出表）'], ['定时策略', '30 8 * * 1-5']],
-    fields: [['使用代理', '否'], ['断点续爬', '开启'], ['本次使用配置', '待选择'], ['源标签', '']],
+    fields: [['使用代理', '否'], ['断点续爬', '开启'], ['源标签', '']],
     inmap: [],
     params: [],
     output: [['html_file', 'file', '渲染后的 HTML 文件']],
@@ -285,7 +298,7 @@ const NODE_CONFIG_SEEDS = {
   'wechat-html-collect': {
     title: '公众号抓取', sub: '[WECHAT] 公众号抓取 · 源配置', status: '待配置', planned: false, collect: true,
     base: [['源 URL', 'https://mp.weixin.qq.com/s/xxx'], ['源名称', '公众号抓取源'], ['产物', 'HTML 文件（固定输出表）'], ['定时策略', '30 8 * * 1-5']],
-    fields: [['使用代理', '否'], ['断点续爬', '开启'], ['本次使用配置', '待选择'], ['源标签', '']],
+    fields: [['使用代理', '否'], ['断点续爬', '开启'], ['源标签', '']],
     inmap: [],
     params: [],
     output: [['html_file', 'file', '公众号页面 HTML 文件']],
@@ -404,6 +417,17 @@ const NODE_CONFIG_SEEDS = {
     params: [['branches', 'list', 'clean,rule,notify'], ['join_policy', 'enum', '全部成功 / 任一失败告警']],
     output: [['branch_results', 'json', '各路径结果'], ['join_status', 'enum', 'C/E/L'], ['parallel_trace', 'json', '分头处理日志']],
   },
+  // 0714 会议：节点面板精简，用一个通用「数据处理」节点顶替原「解析结构化/数据清洗/数据校验」三组
+  // （file-parse/ocr/ai-extract/field-map/clean/dedupe/check 定义本身保留不删，历史节点仍可正常打开/编辑，
+  // 只是新增节点入口收敛到这一个）。形态参照 custom：通用/灵活配置，不绑定固定语义。
+  process: {
+    title: '数据处理', sub: '数据处理类 · 通用配置', status: '待配置', planned: false,
+    base: [['处理方式', '待配置：清洗 / 去重 / 校验 / 结构化等，按需自定义'], ['输入来源', '上游节点产物'], ['失败策略', '记录并阻断'], ['能力状态', '通用数据处理节点']],
+    fields: [['负责人', '数据运营'], ['处理范围', '待补充'], ['异常输出', '待补充'], ['配置状态', '待补充']],
+    inmap: [['input', '← 上游节点.output', '输入数据']],
+    params: [['config', 'json', '自定义处理参数']],
+    output: [['result', 'table', '处理结果'], ['trace', 'json', '处理日志']],
+  },
   custom: {
     title: '自定义节点', sub: '自定义 · 待配置', status: '待配置', planned: false,
     base: [['节点说明', '请在此描述节点用途'], ['执行器', '待选择'], ['失败策略', '记录并阻断'], ['能力状态', '自定义草稿']],
@@ -472,7 +496,7 @@ export interface FlowDef {
 // 模板 → 节点配置 key
 export const TEMPLATE_TO_NODE: Record<string, string> = {
   web: 'web-list', app: 'app-collect', file: 'web-detail', python: 'web-list', parse: 'file-parse', ocr: 'ocr',
-  ai: 'ai-extract', map: 'field-map', clean: 'clean', dedupe: 'dedupe', check: 'check',
+  ai: 'ai-extract', map: 'field-map', clean: 'clean', dedupe: 'dedupe', check: 'check', process: 'process',
   rule: 'rule', 'rule-trace': 'rule', metric: 'metric', mail: 'mail',
   alert: 'alert', decision: 'decision', parallel: 'parallel', custom: 'custom',
   // 0711 R7/R8：两个独立的固定产物类型采集节点
@@ -521,22 +545,10 @@ export const LIB_GROUPS: LibGroup[] = [
     ]
   },
   {
-    title: '解析结构化', items: [
-      { template: 'parse', code: 'PARSE', badge: '200', name: '文件解析', desc: 'PDF/Word/Excel/图片解析', pill: 'p1' },
-      { template: 'ocr', code: '150', name: 'OCR 识别', desc: '待执行器确认', pill: 'plan', planned: true },
-      { template: 'ai', code: '155', name: 'AI 提取', desc: '待执行器确认', pill: 'plan', planned: true },
-      { template: 'map', code: 'MAP', badge: '205', name: '字段抽取 / 结构化映射', desc: '文本字段到目标 schema', pill: 'p1' },
-    ]
-  },
-  {
-    title: '数据清洗', items: [
-      { template: 'clean', code: 'CLEAN', badge: '210', name: '字段清洗 / 格式转换', desc: '函数工具、空值、单位、日期', pill: 'p1' },
-      { template: 'dedupe', code: 'DEDUP', badge: '215', name: '去重处理', desc: '去重字段、重复策略', pill: 'p1' },
-    ]
-  },
-  {
-    title: '数据校验', items: [
-      { template: 'check', code: '300', name: '完整性 / 阈值校验', desc: '质量门禁、异常流转', pill: 'p1' },
+    // 0714 会议：去掉「解析结构化/数据清洗/数据校验」三组细分节点，收敛为一个通用「数据处理」入口
+    // （原 parse/ocr/ai/map/clean/dedupe/check 的节点定义仍保留在 NODE_CONFIG_SEEDS 里，历史节点不受影响）
+    title: '数据处理', items: [
+      { template: 'process', code: 'PROC', name: '数据处理', desc: '清洗、去重、校验、结构化等，按需自定义配置', pill: 'p1' },
     ]
   },
   {
@@ -735,6 +747,26 @@ export function normalizeNodeConfig(cfg: NodeConfig | NodeConfigSeed): NodeConfi
   if (next.collectCfg && !next.collectCfg.urlParamRefs?.length) {
     // 旧流程只有 URL token；加载时迁移为显式节点绑定，保存后不再依赖隐式推导。
     next.collectCfg.urlParamRefs = extractUrlParamIds(next.collectCfg.url)
+  }
+  if (next.taskCfg) {
+    const ownParamRefs = new Set(next.collectCfg?.urlParamRefs ?? [])
+    const legacyValues: TaskParamValue[] = next.taskCfg.paramRefs?.map((paramId) => ({ paramId })) ?? []
+    const paramValues: TaskParamValue[] = next.taskCfg.paramValues ?? legacyValues
+    const seen = new Set<string>()
+    const normalizedValues = paramValues.filter((item) => {
+      if (!ownParamRefs.has(item.paramId) || seen.has(item.paramId)) return false
+      seen.add(item.paramId)
+      return true
+    }).map((item) => ({
+      paramId: item.paramId,
+      fieldId: item.fieldId ?? '',
+      valueExpr: item.valueExpr ?? '',
+    }))
+    if (normalizedValues.length) next.taskCfg.paramValues = normalizedValues
+    else delete next.taskCfg.paramValues
+    delete next.taskCfg.paramRefs
+    next.taskCfg.contextMap = [...new Set((next.taskCfg.contextMap ?? []).filter(Boolean))]
+    next.taskCfg.outColumns = [...new Set((next.taskCfg.outColumns ?? []).filter(Boolean))]
   }
   return {
     ...next,
@@ -1004,7 +1036,7 @@ export function buildSourceSeed(source: Source, steps: Step[]): SourceSeed {
 
 /**
  * 网站统一流程的空白模板（0710 回退 0707 优化·补的"默认两节点骨架"）：新建/从未编排过的网站
- * 进画布应落在空白引导卡模式（§5.7 文案 + 「智能生成流程」按需生成），而不是预置「列表抓取→详情解析」——
+ * 进画布应落在空白引导卡模式（§5.7 文案 + 「智能推荐模板」按需应用），而不是预置「列表抓取→详情解析」——
  * 预置骨架让用户误以为流程"已经获取到了"。id 固定 `site:${siteId}`，保证引导卡生成/保存都落对存档位。
  */
 export function makeSiteBlankTemplate(site: Site): FlowDef {
@@ -1197,12 +1229,11 @@ export const PRESET_INTENTS: PresetIntent[] = [
     key: 'file-parse',
     label: '文件下载解析',
     keywords: ['文件', '下载', 'pdf', 'word', 'excel', '附件', '解析', '报告'],
-    rationale: '识别为「文件下载解析」：下载文件 → 解析 → 字段抽取；每个节点的结果自动落表。',
+    rationale: '识别为「文件下载解析」：下载文件后交由数据处理节点完成解析、字段抽取等配置；每个节点的结果自动落表。',
     build: () =>
       buildFlow('文件下载解析链路', [
         { template: 'file', name: '文件下载', patch: { webKind: 'attachment', isDetail: false, snatchType: '[95] - 文件下载' } },
-        { template: 'parse', name: '文件解析' },
-        { template: 'map', name: '字段抽取' },
+        { template: 'process', name: '数据处理' },
       ]),
   },
   {
@@ -1216,6 +1247,8 @@ export const PRESET_INTENTS: PresetIntent[] = [
 
 export interface FlowRecommendation {
   flow: FlowDef
+  /** 命中的流程模板；空值表示未能推荐出可直接应用的模板。 */
+  templateId?: string
   rationale: string
   alternatives: { intent: string; name: string }[]
 }

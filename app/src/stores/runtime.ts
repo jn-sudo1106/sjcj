@@ -3,22 +3,22 @@ import { defineStore } from 'pinia'
 import type { RunRow, RunNode, DataRow } from '../api'
 import { isDataNode, nodeOutputTable, type FlowDef } from '../views/FlowCanvas/flowModel'
 
-// 运行时 store —— 试跑（mock）产生的运行数据的单一来源。
-// 画布节点态、运行记录、数据查看三页都读它，与静态 mock 叠加，形成「试跑→run→落表」闭环。
-let trialSeq = 1
+// 运行时 store —— 发起抓取（mock）产生的运行数据的单一来源。
+// 画布节点态、运行记录、数据查看三页都读它，与静态 mock 叠加，形成「发起抓取→run→落表」闭环。
+let captureSeq = 1
 
 export const useRuntimeStore = defineStore('runtime', () => {
-  const runs = ref<RunRow[]>([]) // 试跑产生的 run（叠加在 mock 之上）
+  const runs = ref<RunRow[]>([]) // 发起抓取产生的 run（叠加在 mock 之上）
   const runNodes = reactive<Record<string, RunNode[]>>({}) // run_id → 节点明细
   const nodeStates = reactive<Record<string, 'L' | 'C' | 'E'>>({}) // 画布节点 id → 运行态
-  const dataByTable = reactive<Record<string, DataRow[]>>({}) // 试跑落表数据（按数据查看表 id）
+  const dataByTable = reactive<Record<string, DataRow[]>>({}) // 发起抓取落表数据（按数据查看表 id）
   const lastRunId = ref('')
   const running = ref(false)
 
   const now = () => new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-')
 
-  // 单节点可试跑判定：已停止 / 规划中（待执行器）/ 采集节点缺 URL 或输出表（待配置）/
-  // 非采集数据节点缺输出表均不可试跑，与画布 footFor 的「已停止/规划中/待配置」文案保持一致，避免误导为已跑通。
+  // 可发起抓取判定：已停止 / 规划中（待执行器）/ 采集节点缺 URL 或输出表（待配置）/
+  // 非采集数据节点缺输出表均不可发起抓取，与画布 footFor 的「已停止/规划中/待配置」文案保持一致，避免误导为已跑通。
   function isRunnable(def: FlowDef, id: string): boolean {
     if (id === 'start' || id === 'end') return false
     const c = def.configs[id]
@@ -31,9 +31,10 @@ export const useRuntimeStore = defineStore('runtime', () => {
     return true
   }
 
-  // 试跑运行器：给定一组已校验通过的节点 id，跑一次 L→C 流转 + 落表。整链试跑与单节点试跑共用。
-  function runTrial(def: FlowDef, ids: string[]): string {
-    const runId = `RUN-TRIAL-${String(trialSeq++).padStart(2, '0')}`
+  // 抓取运行器：给定一组已校验通过的节点 id，跑一次 L→C 流转 + 落表。
+  function runCapture(def: FlowDef, ids: string[]): string {
+    // 运行 ID 前缀（0714 会议 Task 4）：用户可见，随「发起抓取」文案一并改名，不再叫 TRIAL
+    const runId = `RUN-CAPTURE-${String(captureSeq++).padStart(2, '0')}`
     running.value = true
     lastRunId.value = runId
     const startedAt = now()
@@ -78,11 +79,11 @@ export const useRuntimeStore = defineStore('runtime', () => {
     return runId
   }
 
-  // 整链试跑：跑主链上所有可试跑节点 + 决策/分头分支段 chain 内可试跑节点（0707 优化·Phase6）
-  function trial(def: FlowDef): string {
+  // 整链发起抓取：跑主链和决策/分头分支段内所有可运行节点。
+  function startCapture(def: FlowDef): string {
     if (running.value) return ''
     const ids = def.main.filter((id) => isRunnable(def, id))
-    // 0707 Phase6：chain 内节点也参与试跑（按声明顺序追加）
+    // 0707 Phase6：chain 内节点也参与运行（按声明顺序追加）
     for (const bg of def.branchGroups ?? []) {
       for (const b of bg.branches) {
         for (const nid of b.chain) {
@@ -91,14 +92,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
       }
     }
     if (!ids.length) return ''
-    return runTrial(def, ids)
-  }
-
-  // 单节点试跑：只跑当前节点（同样走真闭环 L→C + 落表），返回 '' 表示不可试跑或已有试跑在进行
-  function trialNode(def: FlowDef, nodeId: string): string {
-    if (running.value) return ''
-    if (!isRunnable(def, nodeId)) return ''
-    return runTrial(def, [nodeId])
+    return runCapture(def, ids)
   }
 
   // 落表：生成进入「数据查看」的实体数据，落到每个参与节点自己配置的输出表（不再写死 t-notice）
@@ -116,7 +110,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
       const rows: DataRow[] = [
         {
           dataId: `${runId}-${String(i + 1).padStart(3, '0')}`,
-          title: `试跑落表 · ${def.source?.name ?? cfg?.title ?? '网页抓取'}`,
+          title: `发起抓取落表 · ${def.source?.name ?? cfg?.title ?? '网页抓取'}`,
           summary: `来自流程「${def.name}」`,
           sourceId: def.source?.configId ?? '—',
           configId: def.source?.configId,
@@ -131,5 +125,5 @@ export const useRuntimeStore = defineStore('runtime', () => {
     })
   }
 
-  return { runs, runNodes, nodeStates, dataByTable, lastRunId, running, trial, trialNode }
+  return { runs, runNodes, nodeStates, dataByTable, lastRunId, running, startCapture }
 })

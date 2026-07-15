@@ -27,6 +27,13 @@ describe('workspace 源详情多页签（优化 0701 问题三）', () => {
     expect(ws.tabs.length).toBe(MAX_SOURCE_TABS)
   })
 
+  it('deactivate：让出活动页签，之前的页签不再被判定为已激活', () => {
+    ws.open('s1', '源一')
+    expect(ws.activeSourceId).toBe('s1')
+    ws.deactivate()
+    expect(ws.activeSourceId).toBe('')
+  })
+
   it('close：关闭活动页签激活右邻，无右邻激活左邻，关完为空', () => {
     ws.open('s1', '源一')
     ws.open('s2', '源二')

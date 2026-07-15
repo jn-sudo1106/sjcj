@@ -6,7 +6,7 @@ import { useUiStore } from '../../stores/ui'
 import {
   WEB_KIND_OPTIONS, decisionOrParallelKind, fieldOptionsFromTableOrOutput, nodeEntryCondition, nodeTaskQueue,
   makeDefaultRuleOrchestration, collectorCapabilityOf,
-  type CollectConfig, type ConditionGroup, type NodeConfig, type TripleField, type WebKind,
+  type CollectConfig, type ConditionGroup, type NodeConfig, type TaskParamValue, type TripleField, type WebKind,
 } from './flowModel'
 import ConditionRow from './ConditionRow.vue'
 import BranchEditor from './BranchEditor.vue'
@@ -14,8 +14,8 @@ import CollectorSettings, { type CollectorRuntimeSettings } from './CollectorSet
 import UrlParamEditor from './UrlParamEditor.vue'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
 import {
-  entryApi, configApi, ruleApi,
-  type EntryType, type Config, type RuleGroup, type Rule, type SharedConfig,
+  entryApi, paramApi, ruleApi,
+  type EntryType, type Param, type RuleGroup, type Rule, type SharedConfig,
   type RuleOrchestration, type RuleOrchestrationItem, type RuleOrchestrationTestResult,
 } from '../../api'
 import TableEditDialog from './TableEditDialog.vue'
@@ -38,7 +38,7 @@ const TOP_TABS = computed(() => nodeInspectorTabs(cfg.value))
 
 // 资产联动数据
 const tables = ref<EntryType[]>([])
-const configs = ref<Config[]>([])
+const params = ref<Param[]>([])
 const ruleGroups = ref<RuleGroup[]>([])
 const rules = ref<Rule[]>([])
 const sharedCfgs = ref<SharedConfig[]>([])
@@ -48,7 +48,7 @@ const isRule = computed(() => /规则/.test(cfg.value?.title ?? ''))
 onMounted(async () => {
   await Promise.allSettled([
     entryApi.entryPaged({ size: 100 }).then(r => tables.value = r.list),
-    configApi.configPaged({ size: 100 }).then(r => configs.value = r.list),
+    paramApi.paramPaged({ size: 100 }).then(r => params.value = r.list),
     ruleApi.ruleGroups().then(r => ruleGroups.value = r),
     ruleApi.rulePaged({ size: 100 }).then(r => rules.value = r.list),
     ruleApi.sharedConfigs().then(r => sharedCfgs.value = r),
@@ -83,11 +83,6 @@ function onUrlParamRefsChange(refs: string[]) {
 function onUrlParamValuesChange(values: Record<string, string>) {
   flow.patchCollect(id.value, { urlParamValues: values })
 }
-function onInsertParamToken(paramId: string) {
-  if (!cc.value || cc.value.url.includes(`$PARAM$_${paramId}`)) return
-  const separator = cc.value.url.includes('?') ? '&' : '?'
-  flow.patchCollect(id.value, { url: `${cc.value.url}${separator}param_${paramId}=$PARAM$_${paramId}` })
-}
 
 // 当前节点输出表（统一口径：采集类取 collectCfg.outputTable，非采集类取 cfg.outputTable）
 const nodeTableId = computed(() => cc.value?.outputTable || cfg.value?.outputTable || '')
@@ -110,15 +105,11 @@ function onInputTableChange(e: Event) {
   else flow.setInputTable(id.value, v)
 }
 
-// 任务配置（0706 调整4：队列/URL规则/拼接逻辑/触发条件统一收在 taskCfg，独立于节点处理逻辑）；
-// 采集节点未设置队列时以所选配置的 topic 作为占位提示（不写入 store，纯展示）
-function configTopicOf(configId: string): string {
-  return configs.value.find((c) => c.configId === configId)?.topic || ''
-}
+// 任务配置独立于已退役的配置功能；队列未填时按当前子源自动生成。
 const ownTaskQueue = computed(() => (cfg.value ? nodeTaskQueue(cfg.value) : ''))
 const taskQueueFallback = computed(() => {
   const sc = flow.sourceCfg
-  return sc ? configTopicOf(sc.configId) || sc.configTopic || '' : ''
+  return sc?.sourceId ? `${sc.sourceId}_main` : ''
 })
 function onTaskQueueChange(e: Event) {
   flow.setTaskQueue(id.value, (e.target as HTMLInputElement).value)
@@ -129,24 +120,21 @@ function onTaskUrlSourceFieldChange(e: Event) {
 function onTaskUrlRuleChange(e: Event) {
   flow.patchTaskConfig(id.value, { urlRule: (e.target as HTMLInputElement).value })
 }
-const availableTaskParamRefs = computed(() => [...new Set(Object.values(flow.configs)
-  .flatMap((node) => node.collectCfg?.urlParamRefs ?? []))])
-const taskParamRefs = computed(() => cfg.value?.taskCfg?.paramRefs ?? [])
-function onTaskParamRefsChange(e: Event) {
-  const refs = [...(e.target as HTMLSelectElement).selectedOptions].map((option) => option.value)
-  flow.patchTaskConfig(id.value, { paramRefs: refs })
+// 任务参数由当前节点「参数配置」绑定，不再另行选择参数；这里只配置每个参数的取值来源。
+const availableTaskParamRefs = computed(() => [...new Set(cc.value?.urlParamRefs ?? [])])
+const taskParamValues = computed<TaskParamValue[]>(() => {
+  const saved = new Map((cfg.value?.taskCfg?.paramValues ?? []).map((item) => [item.paramId, item]))
+  return availableTaskParamRefs.value.map((paramId) => ({ paramId, fieldId: '', valueExpr: '', ...saved.get(paramId) }))
+})
+function taskParamLabel(paramId: string) {
+  const param = params.value.find((item) => item.paramId === paramId)
+  return param ? `[${paramId}] ${param.name}` : `[${paramId}]`
 }
-function insertTaskParamToken(e: Event) {
-  const paramId = (e.target as HTMLSelectElement).value
-  if (!paramId) return
-  const current = cfg.value?.taskCfg?.urlRule ?? ''
-  if (!current.includes(`$PARAM$_${paramId}`)) {
-    flow.patchTaskConfig(id.value, {
-      paramRefs: [...new Set([...taskParamRefs.value, paramId])],
-      urlRule: `${current}${current ? '' : '$VAL$'}$PARAM$_${paramId}`,
-    })
-  }
-  ;(e.target as HTMLSelectElement).value = ''
+function onTaskParamValueChange(paramId: string, key: 'fieldId' | 'valueExpr', e: Event) {
+  const value = (e.target as HTMLInputElement | HTMLSelectElement).value
+  flow.patchTaskConfig(id.value, {
+    paramValues: taskParamValues.value.map((item) => item.paramId === paramId ? { ...item, [key]: value } : item),
+  })
 }
 const isFirstCollectorNode = computed(() => !!cc.value && flow.main.find((nodeId) => !!flow.configs[nodeId]?.collectCfg) === id.value)
 
@@ -169,6 +157,32 @@ const inputTableFields = computed(() => {
   const tid = isFirstDataNode.value ? nodeTableId.value : (ownInputTable.value || effectiveInputTableId.value)
   return fieldOptionsFromTableOrOutput(tid, tables.value, isFirstDataNode.value ? cfg.value?.output : prevNode.value?.output)
 })
+const outputTableFields = computed(() =>
+  fieldOptionsFromTableOrOutput(nodeTableId.value, tables.value, cfg.value?.output),
+)
+type TaskFieldList = 'contextMap' | 'outColumns'
+function taskFieldList(key: TaskFieldList) {
+  return cfg.value?.taskCfg?.[key] ?? []
+}
+function taskFieldOptions(key: TaskFieldList) {
+  return key === 'contextMap' ? inputTableFields.value : outputTableFields.value
+}
+function onTaskFieldChange(key: TaskFieldList, index: number, e: Event) {
+  const fields = [...taskFieldList(key)]
+  fields[index] = (e.target as HTMLSelectElement).value
+  flow.patchTaskConfig(id.value, { [key]: fields })
+}
+function addTaskField(key: TaskFieldList) {
+  const current = taskFieldList(key)
+  const next = taskFieldOptions(key).find((field) => !current.includes(field.prop))
+  if (next) flow.patchTaskConfig(id.value, { [key]: [...current, next.prop] })
+}
+function removeTaskField(key: TaskFieldList, index: number) {
+  flow.patchTaskConfig(id.value, { [key]: taskFieldList(key).filter((_, itemIndex) => itemIndex !== index) })
+}
+function canAddTaskField(key: TaskFieldList) {
+  return taskFieldOptions(key).some((field) => !taskFieldList(key).includes(field.prop))
+}
 const entryCondition = computed<ConditionGroup | undefined>(() => (cfg.value ? nodeEntryCondition(cfg.value) : undefined))
 function onEntryConditionChange(cond: ConditionGroup | undefined) {
   flow.setEntryCondition(id.value, cond)
@@ -367,7 +381,7 @@ function onWebKind(e: Event) {
         <NodeAiChat :key="id" />
       </template>
 
-      <!-- 任务配置：输入、进入条件、队列和 URL 规则。输出表只在表配置维护。 -->
+      <!-- 任务配置：首节点只维护队列；后续节点从输入表取任务参数/上下文，并声明出参列。 -->
       <template v-else-if="tab === 'task'">
         <div class="rc-field"><label>输入表</label>
           <div v-if="isFirstDataNode" class="rc-readonly-hint">无 · 首步骤任务来自源 URL / 初始队列</div>
@@ -398,18 +412,46 @@ function onWebKind(e: Event) {
             <input class="rc-input" :value="cfg.taskCfg?.urlRule ?? ''" placeholder="如 $VAL$（默认从来源字段取值，支持动态函数）" @input="onTaskUrlRuleChange" />
           </div>
         </template>
-        <div class="rc-field"><label>任务参数</label>
-          <select class="rc-select" multiple :value="taskParamRefs" :disabled="!availableTaskParamRefs.length" @change="onTaskParamRefsChange">
-            <option v-for="paramId in availableTaskParamRefs" :key="paramId" :value="paramId">{{ paramId }}</option>
-          </select>
-          <div v-if="!availableTaskParamRefs.length" class="rc-readonly-hint">请先在流程节点的参数配置中绑定参数。</div>
-        </div>
-        <div v-if="availableTaskParamRefs.length" class="rc-field"><label>插入任务参数</label>
-          <select class="rc-select" @change="insertTaskParamToken">
-            <option value="">选择已绑定参数，插入到 URL 规则</option>
-            <option v-for="paramId in availableTaskParamRefs" :key="paramId" :value="paramId">{{ paramId }}</option>
-          </select>
-        </div>
+        <template v-if="!isFirstDataNode">
+          <div class="rc-field">
+            <label>任务参数取值</label>
+            <div v-if="availableTaskParamRefs.length" class="ni-task-param-list">
+              <div v-for="item in taskParamValues" :key="item.paramId" class="ni-task-param-row">
+                <b>{{ taskParamLabel(item.paramId) }}</b>
+                <select class="rc-select" :value="item.fieldId" @change="onTaskParamValueChange(item.paramId, 'fieldId', $event)">
+                  <option value="">取值字段（输入表）</option>
+                  <option v-for="f in inputTableFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
+                </select>
+                <input class="rc-input" :value="item.valueExpr" placeholder="值函数（可选，如 trim($VAL$)）" @input="onTaskParamValueChange(item.paramId, 'valueExpr', $event)" />
+              </div>
+            </div>
+            <div v-else class="rc-readonly-hint">请先在当前节点的参数配置中绑定参数。</div>
+          </div>
+          <div class="rc-field"><label>上下文来源</label>
+            <div v-if="taskFieldList('contextMap').length" class="ni-task-field-list">
+              <div v-for="(fieldId, index) in taskFieldList('contextMap')" :key="`${fieldId}-${index}`" class="ni-task-field-row">
+                <select class="rc-select" :value="fieldId" @change="onTaskFieldChange('contextMap', index, $event)">
+                  <option v-for="f in inputTableFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
+                </select>
+                <button class="rc-row-del" type="button" title="删除字段" @click="removeTaskField('contextMap', index)">×</button>
+              </div>
+            </div>
+            <button class="rc-btn" type="button" :disabled="!canAddTaskField('contextMap')" @click="addTaskField('contextMap')">+ 添加字段</button>
+            <div class="rc-help">添加需要随任务传递的输入表字段。</div>
+          </div>
+          <div class="rc-field"><label>出参列</label>
+            <div v-if="taskFieldList('outColumns').length" class="ni-task-field-list">
+              <div v-for="(fieldId, index) in taskFieldList('outColumns')" :key="`${fieldId}-${index}`" class="ni-task-field-row">
+                <select class="rc-select" :value="fieldId" @change="onTaskFieldChange('outColumns', index, $event)">
+                  <option v-for="f in outputTableFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
+                </select>
+                <button class="rc-row-del" type="button" title="删除字段" @click="removeTaskField('outColumns', index)">×</button>
+              </div>
+            </div>
+            <button class="rc-btn" type="button" :disabled="!canAddTaskField('outColumns')" @click="addTaskField('outColumns')">+ 添加字段</button>
+            <div class="rc-help">添加当前节点输出表中需要保留给后续步骤的字段。</div>
+          </div>
+        </template>
       </template>
 
       <template v-else-if="tab === 'table'">
@@ -455,7 +497,6 @@ function onWebKind(e: Event) {
           :warn-fragment="nodeCapability?.kind === 'web'"
           @update:param-refs="onUrlParamRefsChange"
           @update:param-values="onUrlParamValuesChange"
-          @insert-token="onInsertParamToken"
         />
         <div v-else class="rc-readonly-hint">当前节点不支持 URL 参数配置。</div>
       </template>
@@ -581,7 +622,7 @@ function onWebKind(e: Event) {
 
         <!-- 非采集类专属：原「基础/输入映射/参数/试跑」四子页，合并为单屏纵向分组（0706 调整4） -->
         <template v-if="!cc && !isRule">
-          <div v-if="cfg.planned" class="rc-drawer show">规划中节点：OCR / AI 提取 / 发邮件仍待执行器确认。配置可先草拟，试跑与上线需等待能力就绪。</div>
+          <div v-if="cfg.planned" class="rc-drawer show">规划中节点：OCR / AI 提取 / 发邮件仍待执行器确认。配置可先草拟，发起抓取与上线需等待能力就绪。</div>
 
           <div v-for="(row, i) in cfg.base" :key="row[0]" class="rc-field">
             <label>{{ row[0] }}</label>
@@ -621,9 +662,9 @@ function onWebKind(e: Event) {
           <button class="rc-btn" type="button" @click="flow.addTripleRow(id, 'params')">+ 添加行</button>
           <div class="rc-help">参数来自采集平台列表、日期或序列；发任务时弹出填写，并进入运行记录供审计与重跑。</div>
 
-          <div class="ni-section-title">试跑信息</div>
+          <div class="ni-section-title">发起抓取信息</div>
           <div class="rc-list">
-            <div class="rc-list-row"><b>试跑输入</b><span>使用最近 10 条样本</span></div>
+            <div class="rc-list-row"><b>发起抓取输入</b><span>使用最近 10 条样本</span></div>
             <div class="rc-list-row"><b>执行器</b><span>{{ cfg.planned ? '待执行器确认' : '采集平台青龙 + 规则引擎' }}</span></div>
             <div class="rc-list-row"><b>执行方式</b><span>异步：发任务 → 轮询 L/C/E</span></div>
             <div class="rc-list-row"><b>最近结果</b><span>成功 8 / 失败 1 / 待复核 1</span></div>
@@ -646,7 +687,7 @@ function onWebKind(e: Event) {
         </div>
       </div>
       <div class="rc-inspector-body">
-        <div class="rc-help">当前画布为空或未选择节点。用画布中间的「智能生成流程」起草链路，或点击连线上的「＋」手工添加步骤。</div>
+        <div class="rc-help">当前画布为空或未选择节点。用画布中间的「智能推荐模板」起草链路，或点击连线上的「＋」手工添加步骤。</div>
       </div>
     </template>
 
@@ -695,6 +736,11 @@ function onWebKind(e: Event) {
 .rc-actions-row { display: flex; gap: 8px; margin-top: 12px; }
 .rc-actions-row .rc-btn { height: 32px; padding: 0 11px; font-size: 12px; }
 .rc-readonly-hint { padding: 7px 9px; border: 1px dashed #dbe3ee; border-radius: 7px; background: #f8fafc; color: var(--rc-faint); font-size: 12px; }
+.ni-task-param-list { display: grid; gap: 8px; }
+.ni-task-param-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 8px; border: 1px solid #dbeafe; border-radius: 8px; background: #f8fbff; }
+.ni-task-param-row b { color: var(--rc-text-2); font-size: 12px; }
+.ni-task-field-list { display: grid; gap: 6px; margin-bottom: 6px; }
+.ni-task-field-row { display: grid; grid-template-columns: minmax(0, 1fr) 24px; align-items: center; gap: 6px; }
 
 .rc-checks { display: flex; gap: 16px; padding: 4px 0; }
 .rc-check { display: inline-flex; align-items: center; gap: 6px; color: var(--rc-text-2); font-size: 12px; cursor: pointer; }

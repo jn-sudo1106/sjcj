@@ -3,11 +3,12 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
-import { sourceApi } from '../../api'
-import { PRESET_INTENTS } from './flowModel'
+import { useUiStore } from '../../stores/ui'
+import { flowTemplateApi, sourceApi, type FlowTemplate } from '../../api'
 import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from './workspaceRoute'
 
 const flow = useFlowStore()
+const ui = useUiStore()
 const route = useRoute()
 const router = useRouter()
 
@@ -21,6 +22,24 @@ watch(() => route.query.view, (next) => {
 }, { immediate: true })
 onMounted(() => window.addEventListener('hashchange', syncView))
 onBeforeUnmount(() => window.removeEventListener('hashchange', syncView))
+
+const templates = ref<FlowTemplate[]>([])
+async function loadTemplates() {
+  templates.value = await flowTemplateApi.list()
+}
+function onTemplateDropdownVisible(visible: boolean) {
+  if (visible) void loadTemplates()
+}
+onMounted(() => { void loadTemplates() })
+
+// 顶部下拉既是模板切换入口，也要明确当前子源实际应用的是哪一版模板。
+// 模板列表尚未加载、或旧存量流程没有模板绑定时，才回退到通用动作文案。
+const appliedTemplateLabel = computed(() => {
+  const templateId = src.value?.templateId
+  if (!templateId) return '切换模板'
+  const template = templates.value.find((item) => item.id === templateId)
+  return template ? `${template.name} · v${src.value?.templateVersion ?? template.version}` : '切换模板'
+})
 
 const statusMeta = computed(() => {
   const s = src.value
@@ -37,7 +56,6 @@ const metaLine = computed(() => {
   if (!s) return ''
   return [
     s.url,
-    s.owner ? `负责人 ${s.owner}` : '',
     s.lastSuccessAt ? `上次成功 ${s.lastSuccessAt}` : '',
   ]
     .filter(Boolean)
@@ -54,11 +72,11 @@ function switchView(target: 'flow' | 'data' | 'task' | 'file') {
   void router.replace({ path: '/canvas', query })
 }
 
-async function srcSnatch() {
-  const s = src.value
-  if (!s) return
-  const res = await sourceApi.sendSnatch([s.sourceId])
-  ElMessage.success(res?.message || '已发起抓取（演示）')
+// 发起抓取（0714 会议 Task 4）：唯一的完整执行入口——本组件只派发动作，
+// 校验/请求/驱动运行态统一收在 index.vue（走 ui 动作总线，避免在 FlowBoard/ResultView/TaskView/FileView
+// 四处宿主组件里各自转发一遍事件）。
+function srcSnatch() {
+  ui.fireAction('发起抓取')
 }
 async function srcToggle() {
   const s = src.value
@@ -78,20 +96,28 @@ async function srcToggle() {
   s.disabled = willDisable
 }
 
-function onSwitchFlow(command: string) {
+async function onSwitchFlow(command: string) {
   if (!command) return
-  if (command === '__new_blank__') {
-    flow.newFlow('blank')
-    ElMessage.success('已新建空白流程')
+  if (command === '__manage_templates__') {
+    void router.push({ path: '/collect', query: { tab: 'template' } })
     return
   }
-  const preset = PRESET_INTENTS.find((p) => p.key === command)
-  if (preset) {
-    flow.load(preset.build())
-    ElMessage.success(`已应用模板：${preset.label}`)
-  } else {
-    ElMessage.info(`模拟加载：${command}`)
+  const template = templates.value.find((item) => item.id === command)
+  if (!template || !src.value) return
+  if (flow.dirty) {
+    try {
+      await ElMessageBox.confirm(
+        '当前画布有未保存改动。切换模板会按稳定节点 ID 保留兼容绑定，并清理不兼容绑定，是否继续？',
+        '切换流程模板',
+        { type: 'warning', confirmButtonText: '切换', cancelButtonText: '取消' },
+      )
+    } catch {
+      return
+    }
   }
+  const result = flow.applyTemplate(template)
+  if (!result) return
+  ElMessage.success(`已应用模板「${template.name}」v${template.version}${result.cleared ? `，已清理 ${result.cleared} 项不兼容绑定` : ''}`)
 }
 </script>
 
@@ -115,13 +141,16 @@ function onSwitchFlow(command: string) {
         <div class="ch-sub">{{ metaLine }}</div>
       </div>
       <div v-if="view === 'flow'" class="ch-actions">
-        <el-dropdown trigger="click" @command="onSwitchFlow">
+        <el-dropdown trigger="click" @command="onSwitchFlow" @visible-change="onTemplateDropdownVisible">
           <button class="rc-btn" style="margin-right: 8px;" type="button">
-            切换流程 ▾
+            {{ appliedTemplateLabel }} ▾
           </button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item v-for="p in PRESET_INTENTS" :key="p.key" :command="p.key">{{ p.label }}</el-dropdown-item>
+              <el-dropdown-item v-for="template in templates" :key="template.id" :command="template.id">
+                {{ template.name }} · v{{ template.version }}
+              </el-dropdown-item>
+              <el-dropdown-item divided command="__manage_templates__">管理流程模板…</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>

@@ -61,7 +61,18 @@ function nodeXml(id: string, cfg: NodeConfig): string[] {
     lines.push(line(3, '</parameters>'))
   }
 
-  if (cfg.taskCfg) lines.push(line(3, `<task${attrs(cfg.taskCfg)} />`))
+  if (cfg.taskCfg) {
+    const { paramValues, contextMap, outColumns, paramRefs, ...task } = cfg.taskCfg
+    if (!paramValues?.length && !contextMap?.length && !outColumns?.length) {
+      lines.push(line(3, `<task${attrs(task)} />`))
+    } else {
+      lines.push(line(3, `<task${attrs(task)}>`))
+      lines.push(...(paramValues ?? []).map((item) => line(4, `<paramValue${attrs(item)} />`)))
+      lines.push(...(contextMap ?? []).map((fieldId) => line(4, `<context${attrs({ fieldId })} />`)))
+      lines.push(...(outColumns ?? []).map((fieldId) => line(4, `<outColumn${attrs({ fieldId })} />`)))
+      lines.push(line(3, '</task>'))
+    }
+  }
   lines.push(...conditionXml(cfg.entryCondition || cfg.collectCfg?.entryCondition, 3))
   lines.push(line(2, '</node>'))
   return lines

@@ -79,7 +79,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       activeSourceId.value = sourceId
       return true
     }
-    if (tabs.value.length >= MAX_SOURCE_TABS) return false
+    // 超出上限时仍需切到该源，否则页签条会停在上一个活动页签上，与实际画布内容对不上
+    if (tabs.value.length >= MAX_SOURCE_TABS) {
+      activeSourceId.value = sourceId
+      return false
+    }
     tabs.value.push({ sourceId, name: name || sourceId })
     activeSourceId.value = sourceId
     return true
@@ -87,6 +91,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   function activate(sourceId: string) {
     if (tabs.value.some((t) => t.sourceId === sourceId)) activeSourceId.value = sourceId
+  }
+  // 网站详情页（0714 会议 Task 3）：不是任何一个页签，进入前需要让出当前激活页签，
+  // 否则页签条上旧页签仍判定为"已激活"，用户点它没反应（SourceTabsBar.onActivate 的早退判断）。
+  function deactivate() {
+    activeSourceId.value = ''
   }
 
   /** 关闭页签：关闭活动页签时激活右邻（无则左邻）；返回下一个活动 sourceId（'' 表示已无页签） */
@@ -130,5 +139,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return snapshots[sourceId]
   }
 
-  return { tabs, activeSourceId, snapshots, compareSourceId, compareLeftId, open, activate, close, saveSnapshot, snapshotOf, enterCompare, exitCompare }
+  return { tabs, activeSourceId, snapshots, compareSourceId, compareLeftId, open, activate, deactivate, close, saveSnapshot, snapshotOf, enterCompare, exitCompare }
 })

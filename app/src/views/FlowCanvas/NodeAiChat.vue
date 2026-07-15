@@ -4,19 +4,19 @@ import { flowApi } from '../../api'
 import { useFlowStore } from '../../stores/flow'
 import { nodeOutputTable } from './flowModel'
 
-// 节点级 AI 对话（0701 问题八）：与顶栏「＋智能生成新流程」（流程级 AI）同体系两层，
+// 节点级 AI 对话（0701 问题八）：与画布「智能推荐模板」（流程级 AI）同体系两层，
 // mock 阶段走关键词匹配回复（flowApi.nodeAiChat），二期换真 LLM 界面零改动。
 const flow = useFlowStore()
 const cfg = computed(() => flow.selectedNode)
 const id = computed(() => flow.selectedId)
 
 interface ChatMsg { role: 'user' | 'ai'; text: string }
-const messages = ref<ChatMsg[]>([{ role: 'ai', text: `我是「${cfg.value?.title ?? '当前节点'}」的节点助手（演示），可以问我配置、输出表或试跑失败原因。` }])
+const messages = ref<ChatMsg[]>([{ role: 'ai', text: `我是「${cfg.value?.title ?? '当前节点'}」的节点助手（演示），可以问我配置、输出表或发起抓取失败原因。` }])
 const input = ref('')
 const sending = ref(false)
 const scrollEl = ref<HTMLElement | null>(null)
 
-const QUICK_COMMANDS = ['解释该节点配置', '为什么试跑失败', '任务队列怎么填']
+const QUICK_COMMANDS = ['解释该节点配置', '为什么发起抓取失败', '任务队列怎么填']
 
 async function scrollToBottom() {
   await nextTick()
@@ -62,7 +62,7 @@ async function send(text?: string) {
       <input
         v-model="input"
         class="rc-input"
-        placeholder="问点什么，如“为什么试跑失败”"
+        placeholder="问点什么，如“为什么发起抓取失败”"
         :disabled="sending"
         @keyup.enter="send()"
       />

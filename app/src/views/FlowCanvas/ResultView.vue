@@ -10,11 +10,12 @@ import CanvasHeader from './CanvasHeader.vue'
 import DataGrid from './DataGrid.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 
+const props = defineProps<{ siteWide?: boolean }>()
 const flow = useFlowStore()
 const ws = useWorkspaceStore()
 const router = useRouter()
 
-// 数据视图只属于子源流程；网站仅作为「全部子源」的数据查询范围。
+// 数据视图只属于子源流程；网站详情页（siteWide）复用同一份展示逻辑，聚合查看全部子源，不提供内部筛选。
 const source = computed(() => flow.sourceCtx)
 const sourceId = computed(() => source.value?.sourceId ?? '')
 const siteId = computed(() => source.value?.siteId ?? '')
@@ -23,15 +24,12 @@ const siteChildren = ref<Source[]>([])
 const sourceNames = computed<Record<string, string>>(() =>
   Object.fromEntries(siteChildren.value.map((s) => [s.sourceId, s.name])),
 )
-const sourceFilter = ref('')
-const querySourceId = computed(() => sourceFilter.value || (!siteId.value ? sourceId.value : undefined))
+// 网站详情页恒为全部；子源画布恒为当前子源——不再提供内部「所属子源」筛选（与侧栏导航重复，0714 会议 Task 3）
+const querySourceId = computed(() => (props.siteWide ? undefined : sourceId.value || undefined))
 async function loadSiteChildren() {
   siteChildren.value = siteId.value ? await siteApi.siteSources(siteId.value) : []
 }
-watch(sourceId, async (id) => {
-  sourceFilter.value = id
-  await loadSiteChildren()
-}, { immediate: true })
+watch(sourceId, loadSiteChildren, { immediate: true })
 
 const processLayout = computed(() =>
   buildHorizontalLayout(flow.main, flow.branches, flow.configs, flow.branchGroups, { includeTerminals: false }),
@@ -113,10 +111,6 @@ async function loadData() {
   }
 }
 watch([selectedTable, page], loadData, { immediate: false })
-watch(sourceFilter, () => {
-  page.value = 1
-  loadData()
-})
 onMounted(loadData)
 
 function runQuery() {
@@ -197,18 +191,14 @@ async function saveEdit() {
 
 <template>
   <main class="rv-shell">
-    <CanvasHeader />
+    <CanvasHeader v-if="!siteWide" />
 
-    <div class="rv-bar" data-testid="data-process-rail">
+    <div v-if="!siteWide" class="rv-bar" data-testid="data-process-rail">
       <ProcessNodeRail v-model="selectedNodeId" :layout="processLayout" :selectable="canSelectDataNode" />
       <div v-if="!dataNodes.length" class="rv-bar-empty">当前流程没有可查看数据的节点</div>
     </div>
 
     <div class="rv-filters">
-      <select v-if="siteId" v-model="sourceFilter" class="rv-input" data-testid="data-source-filter" aria-label="所属子源">
-        <option value="">所属子源（全部）</option>
-        <option v-for="item in siteChildren" :key="item.sourceId" :value="item.sourceId">所属子源：{{ item.name }}</option>
-      </select>
       <input v-model="filters.dataId" class="rv-input" placeholder="数据 ID" @keyup.enter="runQuery" />
       <input v-model="filters.parentId" class="rv-input" placeholder="父 ID" @keyup.enter="runQuery" />
       <select v-model="filters.state" class="rv-input">
@@ -252,7 +242,7 @@ async function saveEdit() {
             <div class="rv-d-title">{{ detail.row.title }}</div>
             <div class="rv-d-sub">
               数据 ID {{ detail.row.dataId }}
-              <template v-if="siteId">· 所属源 {{ sourceNames[detail.row.sourceId] || detail.row.sourceId }}</template>
+              <template v-if="!querySourceId && siteId">· 所属源 {{ sourceNames[detail.row.sourceId] || detail.row.sourceId }}</template>
             </div>
           </div>
           <button class="rc-btn ghost" type="button" @click="detail.visible = false">关闭</button>

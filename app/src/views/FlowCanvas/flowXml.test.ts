@@ -33,7 +33,11 @@ function flowFixture(): FlowDef {
           isDetail: false,
         },
         outputTable: 'table-1',
-        taskCfg: { queue: 'queue-a', urlSourceField: 'url', urlRule: 'https://x/$id' },
+        taskCfg: {
+          queue: 'queue-a', urlSourceField: 'url', urlRule: 'https://x/$id',
+          paramValues: [{ paramId: 'p-date', fieldId: 'publish_date', valueExpr: 'format($VAL$)' }],
+          contextMap: ['title'], outColumns: ['content'],
+        },
       },
     },
     branchGroups: [{
@@ -52,7 +56,10 @@ describe('flowXml', () => {
     expect(xml).toContain('<collect snatchType="[90] 网页抓取" webKind="list" url="https://example.com/?a=1&amp;b=2"')
     expect(xml).toContain('<table outputTable="table-1"')
     expect(xml).toContain('<param name="page" type="sequence" desc="页码" />')
-    expect(xml).toContain('<task queue="queue-a" urlSourceField="url" urlRule="https://x/$id" />')
+    expect(xml).toContain('<task queue="queue-a" urlSourceField="url" urlRule="https://x/$id">')
+    expect(xml).toContain('<paramValue paramId="p-date" fieldId="publish_date" valueExpr="format($VAL$)" />')
+    expect(xml).toContain('<context fieldId="title" />')
+    expect(xml).toContain('<outColumn fieldId="content" />')
     expect(xml).toContain('<branch id="branch-1" label="条件分支 1">')
     expect(xml).toContain('<condition logic="AND">')
     expect(xml).toContain('<rule field="title" op="contains" value="A&amp;B" />')
