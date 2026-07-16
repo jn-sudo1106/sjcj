@@ -55,7 +55,8 @@ const navGroups = computed(() =>
 
 const pageActions: Record<string, string[]> = {
   overview: ['刷新', '导出', '新建采集'],
-  canvas: ['保存'],
+  // 画布路由（含闸门/网站详情/子源详情）顶栏不放动作：保存/发起抓取都收在画布 Header，贴着它们作用的画布
+  canvas: [],
   // 0711 R12：批量导入/批量操作已迁进网站详情子源侧栏，顶部只留"新建采集"（AppShell 顶部按钮按路由硬编码，
   // 与页面是否 ui.registerAction 无关——同款坑 0707 Phase3 记录过，改动入口必须两处一起改）
   collect: ['新建采集'],
@@ -65,17 +66,9 @@ const pageActions: Record<string, string[]> = {
   runs: ['导出记录'],
   tools: ['刷新', '导出报表'],
 }
-// 页面动作按真实路由段取，而不是侧栏高亮键（源详情画布顶部只保留保存；抓取入口在画布 Header）。
+// 页面动作按真实路由段取，而不是侧栏高亮键
 const actionKey = computed(() => route.path.split('/')[1] || 'overview')
-const isGateCanvas = computed(() => route.path.startsWith('/canvas') && route.query.mode === 'new')
-// 网站详情页（0714 会议 Task 3）：只读聚合视图，没有可编辑的流程，顶部不需要任何动作按钮
-// （这里同时复用了 flow.siteCtx 作为"网站态"信号——目前只有 setSiteDisplayCtx 会设置它）
-const isSiteCanvas = computed(() => route.path.startsWith('/canvas') && !!flow.siteCtx)
-const activeActions = computed(() => {
-  if (isGateCanvas.value) return []
-  if (isSiteCanvas.value) return []
-  return pageActions[actionKey.value] ?? pageActions.canvas
-})
+const activeActions = computed(() => pageActions[actionKey.value] ?? [])
 function firePageAction(action: string) {
   // 「新建采集」是采集资产的全局入口，不能依赖「网站列表」子页注册回调；
   // 否则切到参数/模板等二级页后旧组件卸载，顶栏按钮会变成空操作。

@@ -154,6 +154,10 @@ async function onSwitchFlow(command: string) {
             </el-dropdown-menu>
           </template>
         </el-dropdown>
+        <!-- 保存从 AppShell 顶栏迁入画布 Header（贴着它作用的画布）；与发起抓取同走动作总线，处理函数在 index.vue -->
+        <button class="rc-btn primary" type="button" :title="flow.dirty ? '画布有未保存的改动' : undefined" @click="ui.fireAction('保存')">
+          保存{{ flow.dirty ? ' ·' : '' }}
+        </button>
       </div>
       <div v-if="view === 'flow'" class="ch-canvas-actions" aria-label="子源运行操作">
         <button class="rc-btn primary" type="button" @click="srcSnatch">发起抓取</button>

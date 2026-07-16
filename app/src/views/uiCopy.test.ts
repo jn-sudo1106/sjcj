@@ -179,9 +179,10 @@ describe('最新方案 UI 入口收口', () => {
     expect(canvasHeader).not.toContain('switchingView')
   })
 
-  it('画布顶部只保留保存，运行记录使用发起抓取文案', () => {
-    expect(appShell).toContain("canvas: ['保存']")
-    expect(appShell).not.toContain("canvas: ['保存', '发起抓取']")
+  it('画布路由顶栏无动作，保存迁入画布 Header；运行记录使用发起抓取文案', () => {
+    expect(appShell).toContain('canvas: [],')
+    expect(appShell).not.toContain("canvas: ['保存'")
+    expect(canvasHeader).toContain(`@click="ui.fireAction('保存')"`)
     expect(runtimeStore).toContain('发起抓取落表')
     expect(runtimeStore).not.toContain('试跑落表')
   })
