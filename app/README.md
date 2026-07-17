@@ -62,8 +62,15 @@ app/
 
 - `endpoints.ts` 收录 150 个端点（按 14 域 + 本系统自有），方法名 = 真实 `/v1` 路径。
 - 默认 `VITE_API_MODE=mock`：查 `mock/` 注册表；未实现专属 mock 的契约端点由 `client.ts` fallback（分页 → 空列表、写类 → 占位回执）。
-- 切 `VITE_API_MODE=http` + `VITE_API_BASE` 即接真实后端，界面与类型零改动。
+- 切 `VITE_API_MODE=http` 即接真实后端；业务请求默认使用同源 `/api/v1/`，如需替换可设置 `VITE_API_BASE`。
 - 写类 / 高危端点登记在 `DANGER_ENDPOINTS`（从契约 `danger` 派生），UI 统一二次确认占位、不落库。
+
+## 登录与同源代理
+
+- 验证码、登录、用户信息和退出默认请求同源 `/api`；业务接口默认请求同源 `/api/v1/`。
+- 本地开发通过 `VITE_API_PROXY_TARGET` 设置后端地址；未设置时使用测试环境。旧变量 `VITE_AUTH_PROXY_TARGET` 仍兼容。
+- 认证与业务请求都会携带 Cookie，并注入 `Access-Token` 请求头。
+- 生产部署必须在静态站点所在域名配置 `/api` 反向代理到后端。Vite 的 `server.proxy` 只服务本地开发，不会写入静态构建产物。
 
 ## 部署（sjcj 子路径隔离）
 

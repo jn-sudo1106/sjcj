@@ -10,7 +10,9 @@ describe('Phase 3.1 画布入口退役', () => {
   })
 
   it('裸 /canvas 重定向到采集资产，仅 sourceId/mode=new 可进入画布', () => {
-    const canvas = router.options.routes.find((r) => r.path === '/canvas')
+    // 登录迁移后业务路由嵌套在 AppShell 父路由（path: '/'）之下
+    const shell = router.options.routes.find((r) => r.path === '/')
+    const canvas = shell?.children?.find((r) => r.path === '/canvas')
     expect(canvas?.beforeEnter).toBeTypeOf('function')
     const beforeEnter = canvas?.beforeEnter as (to: { query: Record<string, unknown> }) => unknown
 
