@@ -226,7 +226,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'site/cloneSource', desc: '复制子源流程、配置和表结构（不复制数据与运行实例）', danger: true, impl: true },
   { path: 'site/importSources', desc: '按网站批量导入子源，一行一条「名称;URL」（0710 会议批次）', impl: true },
   { path: 'site/removeSource', desc: '网站下移除子源', danger: true, impl: true },
-  { path: 'site/syncFlow', desc: '网站统一流程同步覆盖到所选子源', danger: true, impl: true },
+  { path: 'site/syncFlow', desc: '子源流程覆盖同步到同网站所选子源（fromSourceId → sourceIds，网站本身无流程）', danger: true, impl: true },
   { path: 'site/queueStats', desc: '网站粒度队列汇总（0707 Phase5 任务视图网站化）', impl: true },
   { path: 'site/queueTaskPaged', desc: '队列任务明细分页', impl: true },
 ]

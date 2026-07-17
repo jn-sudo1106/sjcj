@@ -159,29 +159,48 @@ describe('按网站批量导入子源（0710 会议 A5）', () => {
   })
 })
 
-describe('网站统一流程同步（A+C：detached 标记 + 多选同步覆盖）', () => {
-  it('子源单独保存流程后 detached=true；网站同步覆盖后复位 detached=false', () => {
+describe('子源间流程同步（0716：detached 标记 + fromSourceId 多选覆盖，网站本身无流程）', () => {
+  it('子源单独保存流程后 detached=true；从来源子源同步覆盖后目标复位 detached=false，来源自身被剔除', () => {
     expect(mockSourceDetail({ sourceId: '600519' })!.detached).toBeFalsy()
 
     mockFlowSave({ def: { id: '600519', name: '自定义调整', version: 'v1', main: [], branches: [], configs: {}, updatedAt: '' } })
     expect(mockSourceDetail({ sourceId: '600519' })!.detached).toBe(true)
-
-    mockFlowSave({ def: { id: 'site:site-notice', name: '网站统一流程', version: 'v1', main: ['start', 'end'], branches: [], configs: {}, updatedAt: '' } })
-    // 网站模板本身保存不应误标任何子源脱离
     expect(mockSourceDetail({ sourceId: '000001' })!.detached).toBeFalsy()
 
-    const sync = mockSiteSyncFlow({ siteId: 'site-notice', sourceIds: ['600519'] })
+    // sourceIds 里混入来源自身：应被剔除，只同步真正的目标
+    const sync = mockSiteSyncFlow({ siteId: 'site-notice', fromSourceId: '600519', sourceIds: ['000001', '600519'] })
     expect(sync.ok).toBe(true)
-    expect(mockSourceDetail({ sourceId: '600519' })!.detached).toBe(false)
-    expect(mockFlowLoad({ id: '600519' })?.name).toBe('网站统一流程')
-    // 只覆盖勾选的子源：000001 未被选中，流程与 detached 均不受影响
-    expect(mockFlowLoad({ id: '000001' })).toBeNull()
-    expect(mockSourceDetail({ sourceId: '000001' })!.detached).toBeFalsy()
+    expect(sync.message).toContain('1 个子源')
+    expect(mockFlowLoad({ id: '000001' })?.name).toBe('自定义调整')
+    expect(mockSourceDetail({ sourceId: '000001' })!.detached).toBe(false)
+    // 来源自身不受影响：流程仍在，detached 保持 true
+    expect(mockFlowLoad({ id: '600519' })?.name).toBe('自定义调整')
+    expect(mockSourceDetail({ sourceId: '600519' })!.detached).toBe(true)
   })
 
-  it('网站没有统一流程模板时同步报错（种子网站有虚拟默认模板，须用非种子网站验证，0710）', () => {
-    const res = mockSiteSyncFlow({ siteId: 'site-user-created', sourceIds: ['600036'] })
-    expect(res.ok).toBe(false)
+  it('目标只有来源自身、或来源子源没有已保存流程时同步报错', () => {
+    expect(mockSiteSyncFlow({ siteId: 'site-notice', fromSourceId: '600519', sourceIds: ['600519'] }).ok).toBe(false)
+    // 600036 从未保存过流程
+    expect(mockSiteSyncFlow({ siteId: 'site-user-created', fromSourceId: '600036', sourceIds: ['000001'] }).ok).toBe(false)
+  })
+
+  it('来源或目标子源不属于该网站时整批拒绝，不写入跨站流程', () => {
+    mockFlowSave({ def: { id: '600519', name: '公告流程', version: 'v1', main: [], branches: [], configs: {}, updatedAt: '' } })
+    expect(mockFlowLoad({ id: '600036' })).toBeNull()
+
+    const crossSiteTarget = mockSiteSyncFlow({
+      siteId: 'site-notice',
+      fromSourceId: '600519',
+      sourceIds: ['000001', '600036'],
+    })
+    expect(crossSiteTarget.ok).toBe(false)
+    expect(mockFlowLoad({ id: '600036' })).toBeNull()
+
+    mockFlowSave({ def: { id: '600036', name: '行情流程', version: 'v1', main: [], branches: [], configs: {}, updatedAt: '' } })
+    const targetBefore = mockFlowLoad({ id: '000001' })
+    const crossSiteSource = mockSiteSyncFlow({ siteId: 'site-notice', fromSourceId: '600036', sourceIds: ['000001'] })
+    expect(crossSiteSource.ok).toBe(false)
+    expect(mockFlowLoad({ id: '000001' })).toEqual(targetBefore)
   })
 
   it('种子演示网站查无存档时 flowLoad 兜底默认骨架；非种子网站返回 null（0710）', () => {

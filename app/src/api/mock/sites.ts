@@ -305,16 +305,24 @@ export function mockSiteSourceRemove(params?: Record<string, unknown>): Ack {
   return { ok: true, demo: true, message: '子源已移除（本地演示）' }
 }
 
-// 网站统一流程同步覆盖到所选子源（危险端点）：整条流程覆盖，不做节点级 diff 合并（首期口径）；
-// 同步成功的子源复位 detached=false（不再"已单独调整"）。
+// 子源间流程同步（危险端点，0716）：把来源子源已保存的流程整条覆盖到同网站所选子源，
+// 不经网站统一模板（0714 后网站本身没有流程）；整条覆盖，不做节点级 diff 合并（首期口径）。
+// 同步成功的目标子源复位 detached=false（与同步来源一致；此后单独保存会重新标 true）。
 export function mockSiteSyncFlow(params?: Record<string, unknown>): Ack {
   const siteId = String(params?.siteId ?? '')
-  const sourceIds = (params?.sourceIds as string[] | undefined) ?? []
-  if (!siteId || !sourceIds.length) return { ok: false, message: '缺少网站或所选子源' }
-  const siteFlow = mockFlowLoad({ id: `site:${siteId}` })
-  if (!siteFlow) return { ok: false, message: '网站还没有可同步的统一流程' }
+  const fromSourceId = String(params?.fromSourceId ?? '')
+  const requestedSourceIds = Array.isArray(params?.sourceIds) ? params.sourceIds.map(String) : []
+  const sourceIds = [...new Set(requestedSourceIds.filter((id) => id !== fromSourceId))]
+  if (!siteId || !fromSourceId || !sourceIds.length) return { ok: false, message: '缺少网站、来源子源或目标子源' }
+  const siteSourceIds = new Set(sourcesOfSite(siteId).map((source) => source.sourceId))
+  if (!siteSourceIds.has(fromSourceId)) return { ok: false, message: '来源子源不存在或不属于该网站' }
+  if (sourceIds.some((sourceId) => !siteSourceIds.has(sourceId))) {
+    return { ok: false, message: '目标子源不存在或不属于该网站' }
+  }
+  const fromFlow = mockFlowLoad({ id: fromSourceId })
+  if (!fromFlow) return { ok: false, message: '来源子源还没有已保存的流程' }
   sourceIds.forEach((sourceId) => {
-    mockFlowSave({ def: { ...siteFlow, id: sourceId } })
+    mockFlowSave({ def: { ...fromFlow, id: sourceId } })
     setSourceDetached(sourceId, false)
   })
   return { ok: true, demo: true, message: `已同步到 ${sourceIds.length} 个子源（本地演示）` }

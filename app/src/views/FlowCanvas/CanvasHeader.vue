@@ -6,6 +6,7 @@ import { useFlowStore } from '../../stores/flow'
 import { useUiStore } from '../../stores/ui'
 import { flowTemplateApi, sourceApi, type FlowTemplate } from '../../api'
 import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from './workspaceRoute'
+import SyncSourcesDialog from './SyncSourcesDialog.vue'
 
 const flow = useFlowStore()
 const ui = useUiStore()
@@ -96,6 +97,17 @@ async function srcToggle() {
   s.disabled = willDisable
 }
 
+// 同步到子源（0716）：把当前子源已保存的流程批量覆盖到同网站其他子源。
+// 永远同步已保存的版本——画布有未保存改动时先拦下，避免"画布上是 A、同步出去是 B"。
+const syncOpen = ref(false)
+function openSyncDialog() {
+  if (flow.dirty) {
+    ElMessage.warning('画布有未保存的改动，请先保存当前流程')
+    return
+  }
+  syncOpen.value = true
+}
+
 async function onSwitchFlow(command: string) {
   if (!command) return
   if (command === '__manage_templates__') {
@@ -154,9 +166,10 @@ async function onSwitchFlow(command: string) {
             </el-dropdown-menu>
           </template>
         </el-dropdown>
+        <button v-if="src.siteId" class="rc-btn" type="button" title="把当前子源已保存的流程覆盖到同网站其他子源" @click="openSyncDialog">同步到子源…</button>
         <!-- 保存从 AppShell 顶栏迁入画布 Header（贴着它作用的画布）；与发起抓取同走动作总线，处理函数在 index.vue -->
-        <button class="rc-btn primary" type="button" :title="flow.dirty ? '画布有未保存的改动' : undefined" @click="ui.fireAction('保存')">
-          保存{{ flow.dirty ? ' ·' : '' }}
+        <button class="rc-btn primary" :class="{ dirty: flow.dirty }" type="button" :title="flow.dirty ? '画布有未保存的改动' : undefined" @click="ui.fireAction('保存')">
+          保存
         </button>
       </div>
       <div v-if="view === 'flow'" class="ch-canvas-actions" aria-label="子源运行操作">
@@ -167,6 +180,7 @@ async function onSwitchFlow(command: string) {
       </div>
     </template>
 
+    <SyncSourcesDialog v-if="src.siteId" v-model:open="syncOpen" :site-id="src.siteId" :from-source="src" />
   </div>
 </template>
 
@@ -182,6 +196,8 @@ async function onSwitchFlow(command: string) {
 .ch-sub { color: var(--rc-faint); font-size: 10px; margin-top: 1px; }
 .ch-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
 .ch-actions .rc-btn { height: 30px; padding: 0 11px; font-size: 12px; }
+.ch-actions .rc-btn.primary.dirty { position: relative; }
+.ch-actions .rc-btn.primary.dirty::after { content: ''; position: absolute; top: -3px; right: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--rc-warn); border: 1.5px solid #fff; }
 .ch-canvas-actions { position: absolute; z-index: 4; right: 32px; top: calc(100% + 18px); display: flex; gap: 6px; }
 .ch-canvas-actions .rc-btn { height: 30px; padding: 0 11px; font-size: 12px; }
 .rc-btn.ghost { height: 28px; padding: 0 10px; font-size: 12px; border-color: var(--rc-border); background: transparent; color: var(--rc-text-2); }

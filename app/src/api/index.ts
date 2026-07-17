@@ -69,8 +69,9 @@ export const siteApi = {
   // 按网站批量导入子源：一行一条「名称;URL」，导入后从空白流程开始。
   siteImportSources: (siteId: string, lines: string) =>
     request<{ ok: boolean; message?: string; added?: number; skipped?: number }>('site/importSources', { siteId, lines }),
-  // 危险端点：整条流程覆盖所选子源，UI 走二次确认 + 多选列表
-  siteSyncFlow: (siteId: string, sourceIds: string[]) => request<Ack>('site/syncFlow', { siteId, sourceIds }),
+  // 危险端点：把来源子源已保存的流程整条覆盖到同网站所选子源，UI 走多选列表 + 危险确认
+  siteSyncFlow: (siteId: string, fromSourceId: string, sourceIds: string[]) =>
+    request<Ack>('site/syncFlow', { siteId, fromSourceId, sourceIds }),
   // 任务视图网站化（0707 优化·Phase5）：队列汇总 + 展开明细，sourceId 可选收窄到单个子源
   siteQueueStats: (siteId: string, sourceId?: string) => request<QueueStat[]>('site/queueStats', { siteId, sourceId }),
   queueTaskPaged: (q: { siteId: string; queue: string; sourceId?: string; state?: string; page?: number; size?: number }) =>
