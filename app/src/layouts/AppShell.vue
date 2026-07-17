@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, type Component } from 'vue'
+import { computed, ref, type Component } from 'vue'
+import { ElMessageBox } from 'element-plus'
 import {
   Bell,
   Box,
@@ -11,20 +12,50 @@ import {
   Monitor,
   Odometer,
   QuestionFilled,
-  Search,
+  SwitchButton,
   Upload,
-  UserFilled,
+  User,
 } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { TABS } from '../router/tabs'
 import { useUiStore } from '../stores/ui'
 import { useFlowStore } from '../stores/flow'
+import { useAuthStore } from '../stores/auth'
+import ChangePasswordDialog from './ChangePasswordDialog.vue'
 import companyLogo from '../assets/brand/company-logo.png'
 
 const route = useRoute()
 const router = useRouter()
 const ui = useUiStore()
 const flow = useFlowStore()
+const auth = useAuthStore()
+
+// 退出登录带二次确认，文案对齐旧 UserMenu.vue（计划 §11.2 红线 4）
+async function handleLogout() {
+  try {
+    await ElMessageBox.confirm('真的要注销登录吗 ?', '提示', {
+      type: 'warning',
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return // 取消：不动会话
+  }
+  await auth.logout()
+  void router.push('/user/login')
+}
+const accountName = computed(() => auth.name || '未登录')
+const accountAvatarLabel = computed(() => accountName.value.slice(0, 4))
+const changePwdVisible = ref(false)
+function handleAccountCommand(command: string) {
+  if (command === 'logout') {
+    void handleLogout()
+    return
+  }
+  if (command === 'change-password') {
+    changePwdVisible.value = true
+  }
+}
 // 源详情 / 新建源画布（/canvas?sourceId=X 或 /canvas?mode=new）逻辑上属于「采集资产」子页，侧栏高亮采集资产
 const activeKey = computed(() => {
   const seg = route.path.split('/')[1] || 'overview'
@@ -35,7 +66,9 @@ const current = computed(() => TABS.find((t) => t.key === activeKey.value) ?? TA
 // 源详情 / 新建采集画布的标题与面包屑：采集资产 / 源名或新建采集
 const isSourceCanvas = computed(() => activeKey.value === 'collect' && route.path.startsWith('/canvas'))
 // 网站详情页态下 sourceCtx/siteCtx 会同时非空（见 flow.ts setSiteDisplayCtx）：siteCtx 才是用户实际看到的对象，优先展示
-const sourceCrumb = computed(() => (route.query.mode === 'new' ? '新建采集' : (flow.siteCtx?.name || flow.sourceCtx?.name || '源详情')))
+const sourceCrumb = computed(() =>
+  route.query.mode === 'new' ? '新建采集' : flow.siteCtx?.name || flow.sourceCtx?.name || '源详情',
+)
 
 const groupLabels = {
   home: '首页',
@@ -46,11 +79,13 @@ const groupLabels = {
 } as const
 
 const navGroups = computed(() =>
-  Object.entries(groupLabels).map(([key, label]) => ({
-    key,
-    label,
-    items: TABS.filter((t) => t.group === key),
-  })).filter((g) => g.items.length > 0),
+  Object.entries(groupLabels)
+    .map(([key, label]) => ({
+      key,
+      label,
+      items: TABS.filter((t) => t.group === key),
+    }))
+    .filter((g) => g.items.length > 0),
 )
 
 const pageActions: Record<string, string[]> = {
@@ -99,18 +134,37 @@ const navIcons: Record<string, Component> = {
         </span>
         <strong>青龙智能采集中心</strong>
       </div>
-      <div class="rc-global-search">
-        <el-icon><Search /></el-icon>
-        <span>搜索流程、节点、规则等</span>
-      </div>
       <div class="rc-top-actions">
-        <button class="rc-icon-btn" type="button" aria-label="帮助"><el-icon><QuestionFilled /></el-icon><span>帮助</span></button>
-        <button class="rc-icon-btn rc-notice" type="button" aria-label="通知"><el-icon><Bell /></el-icon></button>
-        <button class="rc-user" type="button">
-          <span class="rc-avatar"><el-icon><UserFilled /></el-icon></span>
-          <span>admin</span>
-          <span class="rc-user-caret">⌄</span>
+        <button class="rc-icon-btn" type="button" aria-label="帮助">
+          <el-icon><QuestionFilled /></el-icon><span>帮助</span>
         </button>
+        <button class="rc-icon-btn rc-notice" type="button" aria-label="通知">
+          <el-icon><Bell /></el-icon>
+        </button>
+        <el-dropdown
+          trigger="click"
+          popper-class="rc-account-popper"
+          placement="bottom-end"
+          @command="handleAccountCommand"
+        >
+          <button class="rc-user" type="button" :aria-label="`${accountName}，打开账号菜单`">
+            <span class="rc-avatar">
+              {{ accountAvatarLabel }}
+            </span>
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="change-password">
+                <el-icon><User /></el-icon>
+                修改密码
+              </el-dropdown-item>
+              <el-dropdown-item command="logout">
+                <el-icon><SwitchButton /></el-icon>
+                退出登录
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </header>
 
@@ -126,7 +180,9 @@ const navIcons: Record<string, Component> = {
             type="button"
             @click="router.push(t.path)"
           >
-            <span class="rc-nav-icon"><el-icon><component :is="navIcons[t.key]" /></el-icon></span>
+            <span class="rc-nav-icon"
+              ><el-icon><component :is="navIcons[t.key]" /></el-icon
+            ></span>
             <span>{{ t.label }}</span>
           </button>
         </nav>
@@ -168,6 +224,8 @@ const navIcons: Record<string, Component> = {
         </main>
       </section>
     </div>
+
+    <ChangePasswordDialog v-model="changePwdVisible" />
   </div>
 </template>
 
@@ -280,32 +338,11 @@ const navIcons: Record<string, Component> = {
   white-space: nowrap;
 }
 
-.rc-global-search {
-  width: 360px;
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--rc-border);
-  border-radius: 8px;
-  background: rgba(248, 250, 252, 0.86);
-  color: var(--rc-muted);
-  font-size: 13px;
-}
-
-.rc-global-search:focus-within {
-  border-color: #93c5fd;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08);
-  background: #fff;
-}
-
 .rc-top-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
+  gap: 8px;
 }
 
 .rc-icon-btn {
@@ -331,22 +368,36 @@ const navIcons: Record<string, Component> = {
 .rc-user {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 32px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--rc-text-2);
-  font-size: 13px;
-  font-weight: 700;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #3b75e8;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.22);
   cursor: pointer;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease;
 }
 
-.rc-icon-btn:hover,
-.rc-user:hover {
-  background: #f8fafc;
+.rc-icon-btn:hover {
+  background: #eff6ff;
   color: var(--rc-primary-ink);
+}
+
+.rc-user:hover {
+  background: #2563db;
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.28);
+}
+
+.rc-user:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.18);
+  outline-offset: 2px;
 }
 
 .rc-notice {
@@ -369,15 +420,47 @@ const navIcons: Record<string, Component> = {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
   border-radius: 50%;
-  background: linear-gradient(135deg, #dbeafe, #a5f3fc);
-  color: var(--rc-primary);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: -0.2px;
 }
 
-.rc-user-caret {
-  color: var(--rc-muted);
+:global(.rc-account-popper.el-popper) {
+  min-width: 156px;
+  overflow: hidden;
+  border: 1px solid #dce3ec;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+}
+
+:global(.rc-account-popper .el-dropdown-menu) {
+  padding: 0;
+}
+
+:global(.rc-account-popper .el-dropdown-menu__item) {
+  height: 48px;
+  gap: 12px;
+  padding: 0 20px;
+  color: #303744;
+  font-size: 14px;
+}
+
+:global(.rc-account-popper .el-dropdown-menu__item + .el-dropdown-menu__item) {
+  border-top: 1px solid #e5e9f0;
+}
+
+:global(.rc-account-popper .el-dropdown-menu__item .el-icon) {
+  margin: 0;
+  color: #285ed0;
+  font-size: 19px;
+}
+
+:global(.rc-account-popper .el-popper__arrow) {
+  display: none;
 }
 
 .rc-shell {
@@ -482,7 +565,6 @@ const navIcons: Record<string, Component> = {
   cursor: pointer;
 }
 
-
 .rc-main {
   display: flex;
   flex-direction: column;
@@ -580,12 +662,6 @@ const navIcons: Record<string, Component> = {
     flex: 1 1 auto;
   }
 
-  .rc-global-search {
-    order: 3;
-    width: 100%;
-    max-width: none;
-  }
-
   .rc-top-actions {
     flex: none;
   }
@@ -616,10 +692,6 @@ const navIcons: Record<string, Component> = {
 @media (max-width: 560px) {
   .rc-brand strong {
     font-size: 14px;
-  }
-
-  .rc-user span:not(.rc-avatar) {
-    display: none;
   }
 
   .rc-sidenav {
