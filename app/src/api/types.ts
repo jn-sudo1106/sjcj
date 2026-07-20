@@ -176,6 +176,40 @@ export interface Config {
   isLogin?: boolean // 登陆类配置
   owner?: string
   updatedAt?: string
+  url?: string
+  entryTypeId?: string
+  domain?: string
+  remark?: string
+  proxyConf?: string
+  coreParam?: string
+  runPolicy?: string
+  snatchConf?: string
+  downConf?: string
+  contentRule?: string
+  codeRule?: string
+  dedupType?: string
+  templateCode?: string
+  multiMode?: number
+  configType?: string
+  deleted?: boolean
+  params?: ConfigParamBinding[]
+}
+
+export interface ConfigParamBinding {
+  id: string
+  paramId: string
+  paramName: string
+  valueShow?: string
+}
+
+export interface ConfigActionLog {
+  actionId: string
+  configId: string
+  action: string
+  target: string
+  result: string
+  remark?: string
+  actionTime?: string
 }
 
 /** 实体/表 EntryType */
@@ -189,6 +223,12 @@ export interface EntryType {
   sourceId?: string
   owner?: string
   updatedAt?: string
+  keyField?: string
+  state?: string
+  recFlag?: string | number
+  checkFlag?: string | number
+  checkRule?: string
+  coreParam?: string
 }
 
 export interface EntryField {
@@ -199,6 +239,10 @@ export interface EntryField {
   width?: number
   preprocess?: string // 预处理清洗函数
   dedup?: boolean // 去重列
+  itemId?: string
+  columnName?: string
+  checkRule?: string
+  seq?: number
 }
 
 /** 参数来源类型：与原系统参数列表一致。 */
@@ -215,9 +259,18 @@ export interface Param {
   dateExpr?: string // $CUR_DATE,偏移,格式
   seq?: { start: number; end: number; step: number }
   databaseQuery?: string
+  tableName?: string
+  colName?: string
+  valueItems?: ParamValue[]
   usedBy?: number // 被多少配置引用
   owner?: string
   updatedAt?: string
+}
+
+export interface ParamValue {
+  valueId: string
+  seq: number
+  value: string
 }
 
 export type ParamInput = Omit<Param, 'paramId' | 'usedBy' | 'updatedAt'> & { paramId?: string }
@@ -495,6 +548,10 @@ export interface RowQuery extends PageQuery {
   parentId?: string
   state?: string
   sql?: string
+  nextFlag?: string
+  min?: string | number
+  max?: string | number
+  sorted?: number
 }
 
 /* ---------------- M4 运行记录 ---------------- */

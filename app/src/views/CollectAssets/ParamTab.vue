@@ -1,17 +1,23 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { paramApi, type Param } from '../../api'
+import { useAuthStore } from '../../stores/auth'
 import ParamEditorDrawer from '../FlowCanvas/ParamEditorDrawer.vue'
+
+// D3（0717 参数方案）：read 角色隐藏写操作，仅消费既有 auth store 的 role getter，不改动登录相关代码
+const auth = useAuthStore()
+const canWrite = computed(() => auth.role === 'admin')
 
 const list = ref<Param[]>([])
 const total = ref(0)
 const page = ref(1)
 const size = ref(10)
 const loading = ref(false)
-const keyword = ref('')
-const kindFilter = ref('all')
+const paramIdFilter = ref('')
+const paramNameFilter = ref('')
+const selected = ref<string[]>([])
 const drawer = reactive<{ visible: boolean; param: Param | null; preview: string[]; previewing: boolean }>({
   visible: false,
   param: null,
@@ -23,19 +29,25 @@ const editor = reactive<{ visible: boolean; param: Param | null }>({ visible: fa
 async function load() {
   loading.value = true
   try {
-    const r = await paramApi.paramPaged({ keyword: keyword.value, kind: kindFilter.value, page: page.value, size: size.value })
+    const r = await paramApi.paramPaged({
+      paramId: paramIdFilter.value,
+      paramName: paramNameFilter.value,
+      page: page.value,
+      size: size.value,
+    })
     list.value = r.list
     total.value = r.total
+  } catch (error) {
+    ElMessage.error(`加载参数失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
     loading.value = false
   }
 }
-function resetAndLoad() { page.value = 1; load() }
-watch(kindFilter, resetAndLoad)
+function resetAndLoad() { page.value = 1; void load() }
 let kw: ReturnType<typeof setTimeout> | undefined
-watch(keyword, () => { clearTimeout(kw); kw = setTimeout(resetAndLoad, 300) })
-function onSize() { page.value = 1; load() }
-onMounted(load)
+watch([paramIdFilter, paramNameFilter], () => { clearTimeout(kw); kw = setTimeout(resetAndLoad, 300) })
+function onSize() { page.value = 1; void load() }
+onMounted(() => { void load() })
 
 function kindMeta(k: string) {
   if (k === 'list') return { cls: 'ok', text: '列表' }
@@ -46,69 +58,169 @@ function kindMeta(k: string) {
 }
 
 function openCreate() { editor.param = null; editor.visible = true }
-function openEdit(param: Param) { editor.param = param; editor.visible = true }
+async function openEdit(param: Param) {
+  try {
+    const detail = await paramApi.paramDetail(param.paramId)
+    if (!detail) {
+      ElMessage.warning('参数不存在或已被删除')
+      return
+    }
+    editor.param = detail
+    editor.visible = true
+  } catch (error) {
+    ElMessage.error(`加载参数详情失败：${error instanceof Error ? error.message : String(error)}`)
+  }
+}
 async function onParamSaved() { await load() }
 
 async function openDetail(p: Param) {
-  drawer.param = p
-  drawer.preview = []
-  drawer.visible = true
+  try {
+    drawer.param = await paramApi.paramDetail(p.paramId) ?? p
+    drawer.preview = []
+    drawer.visible = true
+  } catch (error) {
+    ElMessage.error(`加载参数详情失败：${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 async function genPreview() {
   if (!drawer.param) return
   drawer.previewing = true
   try {
     drawer.preview = await paramApi.genValues(drawer.param.paramId)
+  } catch (error) {
+    ElMessage.error(`生成参数值失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
     drawer.previewing = false
   }
 }
 async function onAddValues() {
-  if (!drawer.param) return
+  if (!drawer.param || drawer.param.kind !== 'list') return
+  let values = ''
   try {
-    await ElMessageBox.confirm('新增参数值为写操作，是否继续？', '新增参数值', { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '取消' })
+    const result = await ElMessageBox.prompt('多个值可用逗号或换行分隔。', '新增参数值', {
+      inputType: 'textarea',
+      inputPlaceholder: '例如：上海\n深圳',
+      inputValidator: (value) => !!value.trim() || '请输入参数值',
+      confirmButtonText: '确认新增',
+      cancelButtonText: '取消',
+    })
+    values = result.value
   } catch {
     return
   }
-  const r = await paramApi.addParamValues(drawer.param.paramId)
-  ElMessage.success(r?.message || '操作已提交（演示）')
+  try {
+    const r = await paramApi.addParamValues(drawer.param.paramId, values)
+    ElMessage.success(r?.message || '操作已提交（演示）')
+    drawer.param = await paramApi.paramDetail(drawer.param.paramId) ?? drawer.param
+    await load()
+  } catch (error) {
+    ElMessage.error(`新增参数值失败：${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+async function onDeleteValue(valueId: string) {
+  try {
+    await ElMessageBox.confirm('删除后不可恢复，是否继续？', '删除参数值', { type: 'warning' })
+  } catch {
+    return
+  }
+  try {
+    const result = await paramApi.deleteParamValue(valueId)
+    ElMessage.success(result?.message || '参数值已删除')
+    if (drawer.param) drawer.param = await paramApi.paramDetail(drawer.param.paramId) ?? drawer.param
+    await load()
+  } catch (error) {
+    ElMessage.error(`删除参数值失败：${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+async function onCopy(param: Param) {
+  try {
+    await ElMessageBox.confirm(`复制参数“${param.name}”并生成新 ID？`, '制作副本', { type: 'warning' })
+  } catch {
+    return
+  }
+  try {
+    const result = await paramApi.paramCopy(param.paramId)
+    ElMessage.success(result?.message || '复制成功，请查询最新 ID')
+    await load()
+  } catch (error) {
+    ElMessage.error(`复制参数失败：${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+function toggleSelected(paramId: string, checked: boolean) {
+  selected.value = checked
+    ? Array.from(new Set([...selected.value, paramId]))
+    : selected.value.filter((id) => id !== paramId)
+}
+
+function togglePage(checked: boolean) {
+  const pageIds = list.value.map((param) => param.paramId)
+  selected.value = checked
+    ? Array.from(new Set([...selected.value, ...pageIds]))
+    : selected.value.filter((id) => !pageIds.includes(id))
+}
+
+async function runBatch(action: 'clear' | 'delete') {
+  if (!selected.value.length) {
+    ElMessage.warning('请先选择参数')
+    return
+  }
+  const isDelete = action === 'delete'
+  try {
+    await ElMessageBox.confirm(
+      `${isDelete ? '删除' : '清除缓存'}选中的 ${selected.value.length} 个参数？`,
+      isDelete ? '批量删除参数' : '清除参数缓存',
+      { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    const result = isDelete
+      ? await paramApi.deleteParams(selected.value)
+      : await paramApi.clearParams(selected.value)
+    ElMessage.success(result?.message || `${isDelete ? '删除' : '清理'}成功`)
+    selected.value = []
+    await load()
+  } catch (error) {
+    ElMessage.error(`${isDelete ? '删除' : '清理'}参数失败：${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 </script>
 
 <template>
   <div class="rc-card pt-main">
     <div class="rc-toolbar wrap">
-      <el-input v-model="keyword" :prefix-icon="Search" clearable placeholder="搜索参数 ID / 名称" style="width: 240px" />
-      <el-select v-model="kindFilter" style="width: 130px">
-        <el-option label="全部类型" value="all" />
-        <el-option label="列表" value="list" />
-        <el-option label="日期" value="date" />
-        <el-option label="序列" value="sequence" />
-        <el-option label="日期序列" value="date_sequence" />
-        <el-option label="数据库" value="database" />
-      </el-select>
+      <el-input v-model="paramIdFilter" :prefix-icon="Search" clearable placeholder="参数 ID" style="width: 150px" />
+      <el-input v-model="paramNameFilter" clearable placeholder="参数名称" style="width: 190px" />
       <span class="pt-spacer" />
       <span class="muted">共 {{ total }} 个参数</span>
-      <button class="rc-btn primary" type="button" @click="openCreate">新建参数</button>
+      <template v-if="canWrite">
+        <button class="rc-btn" type="button" :disabled="!selected.length" @click="runBatch('clear')">清除缓存</button>
+        <button class="rc-btn danger" type="button" :disabled="!selected.length" @click="runBatch('delete')">批量删除</button>
+        <button class="rc-btn primary" type="button" @click="openCreate">新建参数</button>
+      </template>
     </div>
 
     <div v-loading="loading" class="rc-table-scroll pt-table">
       <table class="rc-data-table">
         <thead>
           <tr>
+            <th v-if="canWrite" style="width: 42px"><input type="checkbox" :checked="!!list.length && list.every((p) => selected.includes(p.paramId))" aria-label="选择本页" @change="togglePage(($event.target as HTMLInputElement).checked)" /></th>
             <th style="width: 120px">参数 ID</th>
             <th>名称</th>
             <th style="width: 90px">分组</th>
             <th style="width: 96px">类型</th>
             <th>预览</th>
             <th style="width: 110px">默认值</th>
-            <th style="width: 70px">引用</th>
-            <th style="width: 100px">责任人</th>
             <th style="width: 120px">操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="p in list" :key="p.paramId">
+            <td v-if="canWrite"><input type="checkbox" :checked="selected.includes(p.paramId)" :aria-label="`选择参数 ${p.paramId}`" @change="toggleSelected(p.paramId, ($event.target as HTMLInputElement).checked)" /></td>
             <td>{{ p.paramId }}</td>
             <td><button class="pt-name" type="button" @click="openDetail(p)">{{ p.name }}</button></td>
             <td>{{ p.group || '—' }}</td>
@@ -117,11 +229,12 @@ async function onAddValues() {
               {{ p.kind === 'list' || p.kind === 'database' ? (p.values || []).join('、') : p.kind === 'date' ? p.dateExpr : p.kind === 'date_sequence' ? `${p.dateExpr} · ${p.seq?.start}~${p.seq?.end} / ${p.seq?.step}` : p.seq ? `${p.seq.start}~${p.seq.end} / ${p.seq.step}` : '—' }}
             </td>
             <td>{{ p.defaultValue || '—' }}</td>
-            <td>{{ p.usedBy ?? 0 }}</td>
-            <td>{{ p.owner || '—' }}</td>
             <td>
               <el-button link type="primary" size="small" @click="openDetail(p)">详情</el-button>
-              <el-button link type="primary" size="small" @click="openEdit(p)">编辑</el-button>
+              <template v-if="canWrite">
+                <el-button link type="primary" size="small" @click="openEdit(p)">编辑</el-button>
+                <el-button link type="primary" size="small" @click="onCopy(p)">复制</el-button>
+              </template>
             </td>
           </tr>
         </tbody>
@@ -134,7 +247,7 @@ async function onAddValues() {
         v-model:current-page="page"
         v-model:page-size="size"
         :total="total"
-        :page-sizes="[10, 20, 50]"
+        :page-sizes="[10, 30, 100, 200]"
         layout="total, sizes, prev, pager, next"
         background
         small
@@ -152,17 +265,16 @@ async function onAddValues() {
       </div>
 
       <dl class="rc-kv">
-        <dt>被引用</dt><dd>{{ drawer.param.usedBy ?? 0 }} 个配置</dd>
         <dt>分组</dt><dd>{{ drawer.param.group || '—' }}</dd>
         <dt>默认值</dt><dd>{{ drawer.param.defaultValue || '—' }}</dd>
-        <dt>责任人</dt><dd>{{ drawer.param.owner || '—' }}</dd>
         <dt>更新时间</dt><dd>{{ drawer.param.updatedAt || '—' }}</dd>
       </dl>
 
       <div class="pt-section">定义</div>
-      <div v-if="drawer.param.kind === 'list' || drawer.param.kind === 'database'" class="pt-tags">
+      <div v-if="drawer.param.kind === 'list'" class="pt-tags">
         <el-tag v-for="v in drawer.param.values || []" :key="v" size="small" effect="plain">{{ v }}</el-tag>
       </div>
+      <div v-else-if="drawer.param.kind === 'database'" class="rc-code-box">{{ drawer.param.databaseQuery }}</div>
       <div v-else-if="drawer.param.kind === 'date'" class="rc-code-box">{{ drawer.param.dateExpr }}</div>
       <div v-else-if="drawer.param.kind === 'date_sequence'" class="rc-code-box">{{ drawer.param.dateExpr }} · {{ drawer.param.seq?.start }}~{{ drawer.param.seq?.end }} / {{ drawer.param.seq?.step }}</div>
       <div v-else-if="drawer.param.seq" class="rc-code-box">start={{ drawer.param.seq.start }} end={{ drawer.param.seq.end }} step={{ drawer.param.seq.step }}</div>
@@ -170,10 +282,26 @@ async function onAddValues() {
       <div class="pt-section">生成值预览</div>
       <button class="rc-btn" type="button" @click="genPreview">{{ drawer.previewing ? '生成中…' : '生成值预览' }}</button>
       <div v-if="drawer.preview.length" class="pt-prev-box">
-        <el-tag v-for="(v, i) in drawer.preview" :key="i" size="small" type="info">{{ v }}</el-tag>
+        <div class="muted" style="margin-bottom: 4px">参数运行时生成的值列表，共 <span class="pt-prev-count">{{ drawer.preview.length }}</span> 个</div>
+        <textarea class="rc-input pt-prev-textarea" :value="drawer.preview.join('\n')" rows="10" readonly />
       </div>
 
-      <div class="pt-foot">
+      <template v-if="drawer.param.kind === 'list' && drawer.param.valueItems?.length">
+        <div class="pt-section">值列表</div>
+        <table class="rc-data-table">
+          <thead><tr><th style="width: 70px">值 ID</th><th style="width: 60px">序号</th><th>值</th><th v-if="canWrite" style="width: 70px">操作</th></tr></thead>
+          <tbody>
+            <tr v-for="item in drawer.param.valueItems" :key="item.valueId">
+              <td>{{ item.valueId }}</td>
+              <td>{{ item.seq }}</td>
+              <td>{{ item.value }}</td>
+              <td v-if="canWrite"><el-button link type="danger" size="small" @click="onDeleteValue(item.valueId)">删除</el-button></td>
+            </tr>
+          </tbody>
+        </table>
+      </template>
+
+      <div v-if="canWrite && drawer.param.kind === 'list'" class="pt-foot">
         <button class="rc-btn danger" type="button" @click="onAddValues">新增参数值</button>
       </div>
     </div>
@@ -195,7 +323,9 @@ async function onAddValues() {
 .pt-d-title { font-size: 15px; font-weight: 700; color: var(--rc-text); }
 .pt-d-sub { font-size: 12px; margin-bottom: 8px; }
 .pt-section { margin: 14px 0 8px; font-size: 13px; font-weight: 700; color: var(--rc-text); }
-.pt-tags, .pt-prev-box { display: flex; flex-wrap: wrap; gap: 6px; }
+.pt-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .pt-prev-box { margin-top: 10px; }
+.pt-prev-count { color: #d93025; font-weight: 700; }
+.pt-prev-textarea { width: 100%; resize: vertical; font-family: inherit; box-sizing: border-box; }
 .pt-foot { display: flex; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--rc-border-soft); }
 </style>

@@ -77,7 +77,6 @@ function onDelete(c: Config) {
       </el-select>
       <span class="ct-spacer" />
       <span class="muted">共 {{ total }} 个配置</span>
-      <button class="rc-btn primary" type="button" @click="ElMessage.info('新建配置：演示环境占位')">新建配置</button>
     </div>
 
     <div v-loading="loading" class="rc-table-scroll ct-table">

@@ -1,4 +1,4 @@
-import type { Paged, Config } from '../types'
+import type { Paged, Config, ConfigActionLog, ConfigParamBinding } from '../types'
 
 const CONFIGS: Config[] = [
   { configId: '81909', name: '支付宝评论抓取配置', topic: 'dev_web_snatch_zfb', policy: '交易日 08:30', enabled: true, sourceCount: 3, paramRefs: ['p-date'], isDetail: false, isLogin: false, owner: 'dev_zhonghe', updatedAt: '2026-06-18 14:32' },
@@ -31,4 +31,31 @@ export function mockConfigPaged(params?: Record<string, unknown>): Paged<Config>
 
 export function mockConfigDetail(params?: Record<string, unknown>): Config {
   return CONFIGS.find((c) => c.configId === String(params?.configId)) ?? CONFIGS[0]
+}
+
+export function mockConfigParams(params?: Record<string, unknown>): Paged<ConfigParamBinding> {
+  const config = mockConfigDetail(params)
+  const list = (config.paramRefs ?? []).map((paramId) => ({
+    id: `${config.configId}-${paramId}`,
+    paramId,
+    paramName: paramId,
+    valueShow: '点击参数列表查看',
+  }))
+  return { total: list.length, list }
+}
+
+export function mockConfigActionLogs(params?: Record<string, unknown>): Paged<ConfigActionLog> {
+  const configId = String(params?.configId ?? '')
+  const list: ConfigActionLog[] = [
+    {
+      actionId: `${configId}-log-1`,
+      configId,
+      action: 'UPDATE',
+      target: '配置定义',
+      result: 'SUCCESS',
+      remark: '演示操作日志',
+      actionTime: '2026-07-17 10:00:00',
+    },
+  ]
+  return { total: list.length, list }
 }

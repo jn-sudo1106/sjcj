@@ -52,9 +52,9 @@ import {
   mockSiteQueueStats,
   mockQueueTaskPaged,
 } from './sites'
-import { mockConfigPaged, mockConfigDetail } from './configs'
+import { mockConfigPaged, mockConfigDetail, mockConfigParams, mockConfigActionLogs } from './configs'
 import { mockEntryPaged, mockEntryDetail, mockSaveEntryType } from './entries'
-import { mockParamPaged, mockParamDetail, mockParamCreate, mockParamUpdate, mockGenValues } from './params'
+import { mockAddParamValues, mockDeleteParamValue, mockDeleteParams, mockGenValues, mockParamCopy, mockParamCreate, mockParamDetail, mockParamPaged, mockParamUpdate } from './params'
 import { mockFilePaged, mockFileStats } from './files'
 
 // mock 注册表：key = 真实 /v1 端点路径，value = 处理函数。
@@ -90,29 +90,45 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   // 采集资产 · 配置（M5）
   'config/configPaged': mockConfigPaged,
   'config/configDetail': mockConfigDetail,
-  'config/updateConfig': mockAck,
+  'config/modify/updateConfig': mockAck,
   'config/copyAll': mockAck,
   'config/delete': mockAck,
   'config/sendConfigTask': mockAck,
   'config/updateTopic': mockAck,
   'config/updateConfigPolicy': mockAck,
+  'config/changeEnable': mockAck,
+  'config/configParams': mockConfigParams,
+  'config/configParamAdd': mockAck,
+  'config/configParamDel': mockAck,
+  'config/configActionPaged': mockConfigActionLogs,
   'config/clear': mockAck,
 
   // 采集资产 · 实体表（M5）
   'config/entryTypePagedView': mockEntryPaged,
   'config/entryType': mockEntryDetail,
   'config/saveEntryType': mockSaveEntryType,
+  'config/entryTypeAddAll': mockSaveEntryType,
   'config/rebuildTable': mockAck,
   'config/rebuildIndex': mockAck,
-  'config/modifyEntryType': mockAck,
+  'config/modifyEntryType': mockSaveEntryType,
+  'config/deleteEntryType': mockAck,
+  'config/entry-type-clear': mockAck,
+  'config/entryTypeCopy': mockAck,
+  'config/checkTable': mockAck,
+  'config/syncTable': mockAck,
+  'config/calcEntrySum': mockAck,
+  'config/markEntryType': mockAck,
 
   // 采集资产 · 参数（M5）
   'config/paramPaged': mockParamPaged,
   'config/paramDetail': mockParamDetail,
   'config/genValues': mockGenValues,
   'config/param-add': mockParamCreate,
-  'config/addParamValues': mockAck,
+  'config/addParamValues': mockAddParamValues,
   'config/updateParam': mockParamUpdate,
+  'config/paramValueDel': mockDeleteParamValue,
+  'config/param-copy': mockParamCopy,
+  'config/deleteParam': mockDeleteParams,
 
   // 原始文件（0711 R11）
   'file/filePaged': mockFilePaged,

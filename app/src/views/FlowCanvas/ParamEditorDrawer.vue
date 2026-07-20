@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { paramApi, type Param, type ParamInput } from '../../api'
 
 const props = defineProps<{ modelValue: boolean; param?: Param | null; paramId?: string }>()
@@ -63,8 +63,8 @@ async function submit() {
     ElMessage.warning('请填写参数名称')
     return
   }
-  const isListLike = draft.kind === 'list' || draft.kind === 'database'
-  if (isListLike && !values().length) {
+  const hasListValues = draft.kind === 'list'
+  if (hasListValues && !values().length) {
     ElMessage.warning('请至少填写一个候选取值')
     return
   }
@@ -80,28 +80,49 @@ async function submit() {
     ElMessage.warning('请填写数据库查询定义')
     return
   }
+  const group = draft.group.trim()
+  if (group && !/^\d+$/.test(group)) {
+    ElMessage.warning('分组 ID 必须为整数')
+    return
+  }
+
+  // G9（0717 参数方案）：对齐旧 ParamEdit「数据提交确认」交互
+  try {
+    await ElMessageBox.confirm('是否确认提交数据？', '数据提交确认', {
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
 
   const input: ParamInput = {
     name: draft.name.trim(),
-    group: draft.group.trim() || undefined,
+    group: group || undefined,
     kind: draft.kind,
-    values: isListLike ? values() : undefined,
+    values: hasListValues ? values() : undefined,
     defaultValue: draft.defaultValue.trim() || undefined,
     dateExpr: draft.kind === 'date' || draft.kind === 'date_sequence' ? draft.dateExpr.trim() : undefined,
     seq: draft.kind === 'sequence' || draft.kind === 'date_sequence' ? seq() : undefined,
     databaseQuery: draft.kind === 'database' ? draft.databaseQuery.trim() : undefined,
+    tableName: props.param?.tableName,
+    colName: props.param?.colName,
   }
-  const result = isEdit.value
-    ? await paramApi.paramUpdate({ ...input, paramId: props.param!.paramId })
-    : await paramApi.paramCreate({ ...input, paramId: props.paramId || undefined })
-  if (!result?.ok || !result.param) {
-    ElMessage.warning(result?.message || '保存失败，请重试')
-    return
+  try {
+    const result = isEdit.value
+      ? await paramApi.paramUpdate({ ...input, paramId: props.param!.paramId })
+      : await paramApi.paramCreate({ ...input, paramId: props.paramId || undefined })
+    if (!result?.ok || !result.param) {
+      ElMessage.warning(result?.message || '保存失败，请重试')
+      return
+    }
+    ElMessage.success(result.message || '参数已保存')
+    visible.value = false
+    emit('saved', result.param)
+    if (!isEdit.value) emit('created', result.param)
+  } catch (error) {
+    ElMessage.error(`保存失败：${error instanceof Error ? error.message : String(error)}`)
   }
-  ElMessage.success(result.message || '参数已保存')
-  visible.value = false
-  emit('saved', result.param)
-  if (!isEdit.value) emit('created', result.param)
 }
 </script>
 
@@ -110,7 +131,7 @@ async function submit() {
     <div class="ped-body">
       <div v-if="isEdit" class="rc-field"><label>参数 ID</label><input class="rc-input" :value="param!.paramId" disabled /></div>
       <div class="rc-field"><label>参数名称</label><input v-model="draft.name" class="rc-input" placeholder="例如：懂车帝-级别参数" /></div>
-      <div class="rc-field"><label>分组</label><input v-model="draft.group" class="rc-input" placeholder="例如：公告、车型" /></div>
+      <div class="rc-field"><label>分组 ID</label><input v-model="draft.group" class="rc-input" inputmode="numeric" placeholder="可选，整数 ID" /></div>
       <div class="rc-field"><label>来源类型</label>
         <select v-model="draft.kind" class="rc-select">
           <option value="list">列表</option>
@@ -120,7 +141,7 @@ async function submit() {
           <option value="database">数据库</option>
         </select>
       </div>
-      <div v-if="draft.kind === 'list' || draft.kind === 'database'" class="rc-field"><label>{{ draft.kind === 'database' ? '数据库预览值' : '值定义' }}（逗号或换行分隔）</label>
+      <div v-if="draft.kind === 'list'" class="rc-field"><label>值定义（逗号或换行分隔）</label>
         <textarea v-model="draft.valuesInput" class="rc-input ped-textarea" rows="4" placeholder="SUV, 轿车, MPV" />
       </div>
       <div v-if="draft.kind === 'date' || draft.kind === 'date_sequence'" class="rc-field"><label>日期表达式</label><input v-model="draft.dateExpr" class="rc-input" placeholder="$CUR_DATE,-1,yyyy-MM-dd" /></div>
