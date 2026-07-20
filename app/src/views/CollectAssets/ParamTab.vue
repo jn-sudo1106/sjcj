@@ -120,7 +120,7 @@ async function onAddValues() {
 
 async function onDeleteValue(valueId: string) {
   try {
-    await ElMessageBox.confirm('删除后不可恢复，是否继续？', '删除参数值', { type: 'warning' })
+    await ElMessageBox.confirm('删除后不可恢复，是否继续？', '删除参数值', { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '取消' })
   } catch {
     return
   }
@@ -136,7 +136,8 @@ async function onDeleteValue(valueId: string) {
 
 async function onCopy(param: Param) {
   try {
-    await ElMessageBox.confirm(`复制参数“${param.name}”并生成新 ID？`, '制作副本', { type: 'warning' })
+    // 按钮文案对齐旧 ParamList.vue 的 a-popconfirm（okText="复制" cancelText="不处理"）
+    await ElMessageBox.confirm(`复制参数“${param.name}”并生成新 ID？`, '制作副本', { type: 'warning', confirmButtonText: '复制', cancelButtonText: '不处理' })
   } catch {
     return
   }

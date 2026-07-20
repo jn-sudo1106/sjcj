@@ -2,13 +2,15 @@
 // 依据《数据中心现有功能逆向工程_2026-06-17.md》：线上 Data Center 共提取 142 个 /v1 端点。
 // 本清单收录已考证端点（path = 真实 /v1 路径，不含前缀），按 14 个前缀域组织；
 // 每域注释「逆向统计目标数 / 本清单收录数」，未逐一还原的为登录态待补，真接入时按同名 path 规范补齐。
-// danger=写类/高危端点（UI 二次确认占位）；impl=已有专属 mock handler，其余由 client.ts fallback 兜底。
+// danger=写类/高危端点（UI 二次确认占位）；impl=已有专属 mock handler，其余由 client.ts fallback 兜底；
+// live=已完成真实后端联调验证、可上线（client.ts 据此逐端点切真实，而非全局 VITE_API_MODE 一刀切）。
 
 export interface EndpointSpec {
   path: string
   desc: string
   danger?: boolean
   impl?: boolean
+  live?: boolean
 }
 
 export const ENDPOINTS: EndpointSpec[] = [
@@ -65,20 +67,20 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'category/delete', desc: '删除分类', danger: true },
 
   /* ── config 配置 + 实体 + 参数（目标 35 / 收录 27） ── */
-  { path: 'config/configPaged', desc: '配置分页', impl: true },
-  { path: 'config/configDetail', desc: '配置详情', impl: true },
-  { path: 'config/modify/updateConfig', desc: '修改配置', danger: true, impl: true },
-  { path: 'config/copyAll', desc: '复制配置', danger: true, impl: true },
-  { path: 'config/delete', desc: '删除配置', danger: true, impl: true },
-  { path: 'config/sendConfigTask', desc: '发配置', danger: true, impl: true },
-  { path: 'config/updateTopic', desc: '修改主题(队列)', danger: true, impl: true },
-  { path: 'config/updateConfigPolicy', desc: '修改运行策略', danger: true, impl: true },
-  { path: 'config/changeEnable', desc: '启停配置', danger: true, impl: true },
-  { path: 'config/configParams', desc: '配置绑定参数分页', impl: true },
-  { path: 'config/configParamAdd', desc: '配置绑定参数', danger: true, impl: true },
-  { path: 'config/configParamDel', desc: '配置解绑参数', danger: true, impl: true },
-  { path: 'config/configActionPaged', desc: '配置操作日志分页', impl: true },
-  { path: 'config/clear', desc: '清配置缓存', danger: true, impl: true },
+  { path: 'config/configPaged', desc: '配置分页', impl: true, live: true },
+  { path: 'config/configDetail', desc: '配置详情', impl: true, live: true },
+  { path: 'config/modify/updateConfig', desc: '修改配置', danger: true, impl: true, live: true },
+  { path: 'config/copyAll', desc: '复制配置', danger: true, impl: true, live: true },
+  { path: 'config/delete', desc: '删除配置', danger: true, impl: true, live: true },
+  { path: 'config/sendConfigTask', desc: '发配置', danger: true, impl: true, live: true },
+  { path: 'config/updateTopic', desc: '修改主题(队列)', danger: true, impl: true, live: true },
+  { path: 'config/updateConfigPolicy', desc: '修改运行策略', danger: true, impl: true, live: true },
+  { path: 'config/changeEnable', desc: '启停配置', danger: true, impl: true, live: true },
+  { path: 'config/configParams', desc: '配置绑定参数分页', impl: true, live: true },
+  { path: 'config/configParamAdd', desc: '配置绑定参数', danger: true, impl: true, live: true },
+  { path: 'config/configParamDel', desc: '配置解绑参数', danger: true, impl: true, live: true },
+  { path: 'config/configActionPaged', desc: '配置操作日志分页', impl: true, live: true },
+  { path: 'config/clear', desc: '清配置缓存（同一端点也被参数「清除缓存」复用，已联调验证）', danger: true, impl: true, live: true },
   { path: 'config/entryTypePagedView', desc: '实体表分页', impl: true },
   { path: 'config/queryEntryTypesGroup', desc: '按源加载实体表分组' },
   { path: 'config/entryType', desc: '实体表详情', impl: true },
@@ -94,16 +96,16 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/markEntryType', desc: '切换正式表/测试表', danger: true, impl: true },
   { path: 'config/rebuildTable', desc: '重建表', danger: true, impl: true },
   { path: 'config/rebuildIndex', desc: '重建索引', danger: true, impl: true },
-  { path: 'config/paramPaged', desc: '参数分页', impl: true },
-  { path: 'config/paramDetail', desc: '参数详情', impl: true },
-  { path: 'config/genValues', desc: '生成参数值预览', impl: true },
-  { path: 'config/addParamValues', desc: '新增参数值', danger: true, impl: true },
-  { path: 'config/paramValueDel', desc: '删除参数值', danger: true },
+  { path: 'config/paramPaged', desc: '参数分页', impl: true, live: true },
+  { path: 'config/paramDetail', desc: '参数详情', impl: true, live: true },
+  { path: 'config/genValues', desc: '生成参数值预览', impl: true, live: true },
+  { path: 'config/addParamValues', desc: '新增参数值', danger: true, impl: true, live: true },
+  { path: 'config/paramValueDel', desc: '删除参数值', danger: true, live: true },
   { path: 'config/paramValueUpdate', desc: '修改参数值', danger: true },
-  { path: 'config/param-add', desc: '新增参数（0711 R9：URL 参数编辑器发现参数不存在时创建）', danger: true, impl: true },
-  { path: 'config/updateParam', desc: '修改参数', danger: true, impl: true },
-  { path: 'config/param-copy', desc: '复制参数', danger: true },
-  { path: 'config/deleteParam', desc: '删除参数', danger: true },
+  { path: 'config/param-add', desc: '新增参数（0711 R9：URL 参数编辑器发现参数不存在时创建）', danger: true, impl: true, live: true },
+  { path: 'config/updateParam', desc: '修改参数', danger: true, impl: true, live: true },
+  { path: 'config/param-copy', desc: '复制参数', danger: true, live: true },
+  { path: 'config/deleteParam', desc: '删除参数', danger: true, live: true },
   { path: 'config/logPaged', desc: '配置操作日志' },
   { path: 'config/bindParam', desc: '配置绑定参数', danger: true },
   { path: 'config/unbindParam', desc: '配置解绑参数', danger: true },
@@ -255,3 +257,6 @@ export const ENDPOINT_PATHS = new Set(ENDPOINTS.map((e) => e.path))
 
 /** 写类 / 高危端点（UI 统一二次确认占位） */
 export const DANGER_ENDPOINTS = new Set(ENDPOINTS.filter((e) => e.danger).map((e) => e.path))
+
+/** 已联调验证、可上线走真实后端的端点（client.ts 按此逐端点切真实，不受全局 mock/http 开关限制） */
+export const LIVE_ENDPOINTS = new Set(ENDPOINTS.filter((e) => e.live).map((e) => e.path))

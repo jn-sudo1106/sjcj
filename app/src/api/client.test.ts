@@ -127,3 +127,51 @@ describe('业务 API 真实请求鉴权', () => {
     expect(onExpired).toHaveBeenCalledTimes(1)
   })
 })
+
+// 按端点逐个上线机制（2026-07-20）：全局默认 mock，endpoints.ts 标 live:true 的端点自动逃逸走真实，
+// 其余端点（尚未联调验证的功能）继续走 mock——避免像 VITE_API_MODE=http 那样一刀切影响未接入的页面。
+describe('按端点上线：全局仍 mock 时，live 端点照样走真实 HTTP', () => {
+  const fetchMock = vi.fn()
+
+  beforeEach(() => {
+    fetchMock.mockReset()
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubEnv('VITE_API_MODE', 'mock')
+    vi.stubEnv('VITE_API_BASE', '')
+    // vitest.config.ts 默认关掉这套机制（避免撞上其它未打 fetch mock 的既有测试），这里专门测它本身要重新打开
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.resetModules()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+
+  it('已标 live 的参数端点（config/paramPaged）绕过全局 mock，真的发 fetch', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: 0, msg: null, count: 0, data: [], exts: null }))
+    const { request } = await import('./client')
+
+    await request('config/paramPaged', { page: 1, limit: 10 }, { method: 'GET' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/v1/config/paramPaged')
+  })
+
+  it('未标 live 的端点（source/sourcePaged）在全局 mock 下继续走 mock，不发 fetch', async () => {
+    const { request } = await import('./client')
+
+    await request('source/sourcePaged', { page: 1 })
+
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('options.mode==="mock" 的强制 mock 优先级高于 live 标记（未迁移业务域即便误标也不会被打真实）', async () => {
+    const { request } = await import('./client')
+
+    await request('config/paramPaged', { page: 1 }, { mode: 'mock' })
+
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})

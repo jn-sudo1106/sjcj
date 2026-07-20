@@ -1,8 +1,11 @@
 import { mockRegistry } from './mock'
-import { ENDPOINT_PATHS, DANGER_ENDPOINTS } from './endpoints'
+import { ENDPOINT_PATHS, DANGER_ENDPOINTS, LIVE_ENDPOINTS } from './endpoints'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readStoredToken, triggerSessionExpired } from './auth'
 
-// 数据适配层：默认 mock；进入第二阶段真接入时设 VITE_API_MODE=http 即切到真实后端，界面零改动。
+// 数据适配层：默认 mock。两种切真实后端的方式：
+// ①按端点：endpoints.ts 把某端点标 live:true 后自动切真实，其余仍走 mock —— 功能一个个上线用这个。
+// ②全局：VITE_API_MODE=http 强制全部端点走真实（仍受 options.mode==='mock' 的按调用强制项优先），
+//   仅用于本地联调验证一整批接口，不用于生产（生产靠①逐项上线，见 endpoints.ts 的 live 标记）。
 type AdapterMode = 'mock' | 'http'
 type HttpMethod = 'GET' | 'POST'
 
@@ -18,6 +21,8 @@ export interface RequestOptions {
 const MODE: AdapterMode = (import.meta.env.VITE_API_MODE as AdapterMode) || 'mock'
 const BASE_URL: string = import.meta.env.VITE_API_BASE || '/api/v1/'
 const FAIL_RATE = Number(import.meta.env.VITE_API_FAIL_RATE) || 0
+// 测试环境固定关闭（vitest.config.ts 的 test.env），避免既有测试意外撞上真实发起的 fetch
+const DISABLE_LIVE_ENDPOINTS = import.meta.env.VITE_API_DISABLE_LIVE_ENDPOINTS === '1'
 
 export class ApiError extends Error {
   endpoint: string
@@ -94,7 +99,7 @@ export async function request<T>(
   options: RequestOptions = {},
 ): Promise<T> {
   try {
-    if (options.mode === 'mock' || MODE === 'mock') {
+    if (options.mode === 'mock' || (MODE === 'mock' && (DISABLE_LIVE_ENDPOINTS || !LIVE_ENDPOINTS.has(endpoint)))) {
       await delay(120)
       if (FAIL_RATE > 0 && Math.random() < FAIL_RATE) {
         throw new Error(`mock 随机失败注入: ${endpoint}`)
