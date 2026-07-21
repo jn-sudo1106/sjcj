@@ -82,6 +82,12 @@ async function openDetail(p: Param) {
     ElMessage.error(`加载参数详情失败：${error instanceof Error ? error.message : String(error)}`)
   }
 }
+// 旧平台"参数值"列的"查看值"链接语义=直接调 genValues 看运行时生成值（ParamList.vue showValues），
+// 不是查看原始存储的值列表；复用详情抽屉展示，打开后自动触发一次生成。
+async function onViewValues(p: Param) {
+  await openDetail(p)
+  await genPreview()
+}
 async function genPreview() {
   if (!drawer.param) return
   drawer.previewing = true
@@ -219,7 +225,8 @@ async function runBatch(action: 'clear' | 'delete') {
             <th>名称</th>
             <th style="width: 90px">分组</th>
             <th style="width: 96px">类型</th>
-            <th>预览</th>
+            <th>值定义</th>
+            <th style="width: 80px">参数值</th>
             <th style="width: 110px">默认值</th>
             <th style="width: 120px">操作</th>
           </tr>
@@ -233,9 +240,8 @@ async function runBatch(action: 'clear' | 'delete') {
             <td><button class="pt-name" type="button" @click="openDetail(p)">{{ p.name }}</button></td>
             <td>{{ p.group || '—' }}</td>
             <td><span class="rc-status" :class="kindMeta(p.kind).cls">{{ kindMeta(p.kind).text }}</span></td>
-            <td class="muted pt-prev">
-              {{ p.kind === 'list' || p.kind === 'database' ? (p.values || []).join('、') : p.kind === 'date' ? p.dateExpr : p.kind === 'date_sequence' ? `${p.dateExpr} · ${p.seq?.start}~${p.seq?.end} / ${p.seq?.step}` : p.seq ? `${p.seq.start}~${p.seq.end} / ${p.seq.step}` : '—' }}
-            </td>
+            <td class="muted pt-prev">{{ p.valueDef || '—' }}</td>
+            <td><button class="pt-name" type="button" @click="onViewValues(p)">查看值</button></td>
             <td>{{ p.defaultValue || '—' }}</td>
             <td>
               <el-button link type="primary" size="small" @click="openDetail(p)">详情</el-button>

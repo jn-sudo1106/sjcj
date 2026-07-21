@@ -99,6 +99,7 @@ export function paramFromLegacy(input: unknown): Param {
     dateExpr: kind === 'date' || kind === 'date_sequence' ? String(record.defaultValue ?? '') : undefined,
     seq: kind === 'sequence' || kind === 'date_sequence' ? parseSequence(valueDef) : undefined,
     databaseQuery: kind === 'database' ? valueDef : undefined,
+    valueDef: record.valueDef == null ? undefined : String(record.valueDef),
     tableName: record.tableName == null ? undefined : String(record.tableName),
     colName: record.colName == null ? undefined : String(record.colName),
     valueItems: items,

@@ -259,6 +259,7 @@ export interface Param {
   dateExpr?: string // $CUR_DATE,偏移,格式
   seq?: { start: number; end: number; step: number }
   databaseQuery?: string
+  valueDef?: string // 旧平台原始 valueDef 字段，仅用于列表页"值定义"列展示；list/date 类型后端不落此字段
   tableName?: string
   colName?: string
   valueItems?: ParamValue[]
