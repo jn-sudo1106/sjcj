@@ -150,6 +150,9 @@ async function onCopy(param: Param) {
   }
 }
 
+const allChecked = computed(() => !!list.value.length && list.value.every((p) => selected.value.includes(p.paramId)))
+const pageIndeterminate = computed(() => !allChecked.value && list.value.some((p) => selected.value.includes(p.paramId)))
+
 function toggleSelected(paramId: string, checked: boolean) {
   selected.value = checked
     ? Array.from(new Set([...selected.value, paramId]))
@@ -209,7 +212,9 @@ async function runBatch(action: 'clear' | 'delete') {
       <table class="rc-data-table">
         <thead>
           <tr>
-            <th v-if="canWrite" style="width: 42px"><input type="checkbox" :checked="!!list.length && list.every((p) => selected.includes(p.paramId))" aria-label="选择本页" @change="togglePage(($event.target as HTMLInputElement).checked)" /></th>
+            <th v-if="canWrite" style="width: 42px">
+              <el-checkbox :model-value="allChecked" :indeterminate="pageIndeterminate" aria-label="选择本页" @change="togglePage" />
+            </th>
             <th style="width: 120px">参数 ID</th>
             <th>名称</th>
             <th style="width: 90px">分组</th>
@@ -221,7 +226,9 @@ async function runBatch(action: 'clear' | 'delete') {
         </thead>
         <tbody>
           <tr v-for="p in list" :key="p.paramId">
-            <td v-if="canWrite"><input type="checkbox" :checked="selected.includes(p.paramId)" :aria-label="`选择参数 ${p.paramId}`" @change="toggleSelected(p.paramId, ($event.target as HTMLInputElement).checked)" /></td>
+            <td v-if="canWrite">
+              <el-checkbox :model-value="selected.includes(p.paramId)" :aria-label="`选择参数 ${p.paramId}`" @change="toggleSelected(p.paramId, $event)" />
+            </td>
             <td>{{ p.paramId }}</td>
             <td><button class="pt-name" type="button" @click="openDetail(p)">{{ p.name }}</button></td>
             <td>{{ p.group || '—' }}</td>
