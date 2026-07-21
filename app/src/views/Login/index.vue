@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { CircleCheck, Hide, Lock, Refresh, User, View } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
@@ -78,6 +78,7 @@ async function handleSubmit() {
 }
 
 onMounted(() => void getCode())
+onUnmounted(() => clearTimeout(refreshTimer))
 </script>
 
 <template>
@@ -375,7 +376,7 @@ onMounted(() => void getCode())
 
 .lg-captcha-img {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   min-width: 0;
   margin-left: 38px;
   padding: 0;

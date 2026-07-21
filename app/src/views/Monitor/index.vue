@@ -13,11 +13,18 @@ const alarms = ref<AlarmRow[]>([])
 const stats = reactive({ healthText: '—', queueAlarms: 0, cacheWindow: '—', dangerOpen: 0 })
 
 async function loadAll() {
-  health.value = await monitorApi.health()
-  mq.value = await monitorApi.mq()
-  sync.value = await monitorApi.sync()
-  alarms.value = await monitorApi.alarms()
-  Object.assign(stats, await monitorApi.monitorStats())
+  const [h, m, s, a, st] = await Promise.all([
+    monitorApi.health(),
+    monitorApi.mq(),
+    monitorApi.sync(),
+    monitorApi.alarms(),
+    monitorApi.monitorStats(),
+  ])
+  health.value = h
+  mq.value = m
+  sync.value = s
+  alarms.value = a
+  Object.assign(stats, st)
 }
 
 function healthMeta(s: string) {

@@ -127,6 +127,16 @@ function formatAttributes(attributes?: Record<string, unknown>): string {
   if (!attributes || !Object.keys(attributes).length) return '—'
   return Object.entries(attributes).map(([key, value]) => `${key}: ${String(value)}`).join('；')
 }
+const ALLOWED_PREVIEW_PROTOCOLS = ['https:', 'http:', 'blob:']
+function safePreviewUrl(url: string | undefined): string {
+  if (!url) return ''
+  try {
+    const u = new URL(url, window.location.origin)
+    return ALLOWED_PREVIEW_PROTOCOLS.includes(u.protocol) ? url : ''
+  } catch {
+    return ''
+  }
+}
 function previewType(file: RawFile): 'image' | 'iframe' | 'unsupported' {
   const name = file.fileName.toLowerCase()
   if (file.contentType.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/.test(name)) return file.viewUrl ? 'image' : 'unsupported'
@@ -207,7 +217,7 @@ watch(() => [filters.sourceId, filters.nodeId, filters.contentType, filters.date
     <el-drawer v-model="previewOpen" title="文件预览" size="70%" destroy-on-close>
       <template v-if="previewFile">
         <img v-if="previewType(previewFile) === 'image'" class="fv-preview-image" :src="previewFile.viewUrl" :alt="previewFile.fileName">
-        <iframe v-else-if="previewType(previewFile) === 'iframe'" class="fv-preview-frame" :src="previewFile.viewUrl" :title="previewFile.fileName" />
+        <iframe v-else-if="previewType(previewFile) === 'iframe'" class="fv-preview-frame" :src="safePreviewUrl(previewFile.viewUrl)" :title="previewFile.fileName" />
         <div v-else class="fv-preview-empty">该文件格式暂不支持站内预览，请下载后查看。</div>
       </template>
     </el-drawer>

@@ -180,6 +180,13 @@ function toggleRow(id: string) {
   if (i >= 0) selectedIds.value.splice(i, 1)
   else selectedIds.value.push(id)
 }
+const siteCheckMap = computed(() => {
+  const map = new Map<string, { checked: boolean; indeterminate: boolean }>()
+  for (const site of sites.value) {
+    map.set(site.siteId, siteCheckState(site.siteId))
+  }
+  return map
+})
 function siteCheckState(siteId: string): { checked: boolean; indeterminate: boolean } {
   const ids = (childrenCache[siteId] ?? []).map((c) => c.sourceId)
   if (!ids.length) return { checked: false, indeterminate: false }
@@ -504,8 +511,8 @@ onUnmounted(() => ui.clearActions())
                 </td>
                 <td>
                   <el-checkbox
-                    :model-value="siteCheckState(site.siteId).checked"
-                    :indeterminate="siteCheckState(site.siteId).indeterminate"
+                    :model-value="siteCheckMap.get(site.siteId)?.checked"
+                    :indeterminate="siteCheckMap.get(site.siteId)?.indeterminate"
                     @change="toggleSite(site.siteId)"
                   />
                 </td>

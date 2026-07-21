@@ -59,6 +59,12 @@ async function loadRows() {
 }
 
 async function runSql() {
+  // 前端层基本防护：禁止子查询、注释、危险关键字（后端仍为最终防线）
+  const dangerous = /(\b(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|EXEC|UNION|--|\/\*|;)\b)/i
+  if (dangerous.test(sql.value)) {
+    ElMessage.warning('查询条件不允许包含 DDL/DML 关键字、子查询或注释')
+    return
+  }
   const fields = currentTable.value?.fields.map((f) => f.prop) ?? []
   const used = Array.from(sql.value.matchAll(/([a-zA-Z_][a-zA-Z0-9_]*)\s*(=|>|<|>=|<=|like|LIKE)/g)).map((m) => m[1])
   const bad = used.filter((u) => !fields.includes(u))

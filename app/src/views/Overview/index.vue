@@ -60,6 +60,11 @@ function stateMeta(s: string) {
   return { cls: 'muted', text: '-' }
 }
 
+// deltas 是后端 Record<string,string>，运行时校验成字面量联合，避免非法值静默通过
+function asTrend(v?: string): 'up' | 'down' | undefined {
+  return v === 'up' || v === 'down' ? v : undefined
+}
+
 interface Kpi {
   key: string
   label: string
@@ -67,7 +72,7 @@ interface Kpi {
   numeric: boolean
   unit?: string
   delta: string
-  trend: 'up' | 'down'
+  trend?: 'up' | 'down'
   icon: Component
   tone: string
   to?: () => void
@@ -82,12 +87,12 @@ const displayKpis = computed<Kpi[]>(() => {
   const k = data.value?.kpi
   if (!k) return []
   return [
-    { key: 'sources', label: '采集资产总数', value: k.sources, numeric: true, delta: '3.2%', trend: 'up', icon: Box, tone: 'primary', to: () => goCollect() },
-    { key: 'active', label: '启用采集源', value: activeSources.value, numeric: true, delta: '5.6%', trend: 'up', icon: CircleCheck, tone: 'ok', to: () => goCollect() },
-    { key: 'today', label: '今日采集任务', value: latestTaskCount.value, numeric: true, delta: '12.7%', trend: 'up', icon: Document, tone: 'primary', to: () => router.push('/runs') },
-    { key: 'rate', label: '成功率', value: k.successRate, numeric: false, delta: '0.42%', trend: 'up', icon: CircleCheck, tone: 'primary' },
-    { key: 'alarms', label: '告警数量', value: k.alarms, numeric: true, unit: '条', delta: '20.0%', trend: 'down', icon: Bell, tone: 'err', to: () => router.push('/tools') },
-    { key: 'new7', label: '近7日新增资产', value: k.newAssets7, numeric: true, delta: '18.4%', trend: 'up', icon: Files, tone: 'indigo' },
+    { key: 'sources', label: '采集资产总数', value: k.sources, numeric: true, delta: k.deltas?.sources ?? '', trend: asTrend(k.deltas?.sourcesTrend), icon: Box, tone: 'primary', to: () => goCollect() },
+    { key: 'active', label: '启用采集源', value: activeSources.value, numeric: true, delta: k.deltas?.active ?? '', trend: asTrend(k.deltas?.activeTrend), icon: CircleCheck, tone: 'ok', to: () => goCollect() },
+    { key: 'today', label: '今日采集任务', value: latestTaskCount.value, numeric: true, delta: k.deltas?.today ?? '', trend: asTrend(k.deltas?.todayTrend), icon: Document, tone: 'primary', to: () => router.push('/runs') },
+    { key: 'rate', label: '成功率', value: k.successRate, numeric: false, delta: k.deltas?.rate ?? '', trend: asTrend(k.deltas?.rateTrend), icon: CircleCheck, tone: 'primary' },
+    { key: 'alarms', label: '告警数量', value: k.alarms, numeric: true, unit: '条', delta: k.deltas?.alarms ?? '', trend: asTrend(k.deltas?.alarmsTrend), icon: Bell, tone: 'err', to: () => router.push('/tools') },
+    { key: 'new7', label: '近7日新增资产', value: k.newAssets7, numeric: true, delta: k.deltas?.new7 ?? '', trend: asTrend(k.deltas?.new7Trend), icon: Files, tone: 'indigo' },
   ]
 })
 
@@ -106,9 +111,9 @@ const alertCards = computed(() => {
   const exceptions = data.value?.exceptions ?? []
   return [
     { label: '紧急', value: exceptions.filter((e) => e.kind === 'error').length, cls: 'urgent', level: 'error' },
-    { label: '重要', value: exceptions.filter((e) => e.kind === 'external').length || data.value?.kpi.alarms || 0, cls: 'major', level: 'external' },
-    { label: '一般', value: exceptions.filter((e) => e.kind === 'disabled').length || data.value?.kpi.errorSources || 0, cls: 'normal', level: 'disabled' },
-    { label: '提示', value: data.value?.kpi.runningRuns ?? 0, cls: 'info', level: 'running' },
+    { label: '重要', value: exceptions.filter((e) => e.kind === 'external').length || data.value?.kpi?.alarms || 0, cls: 'major', level: 'external' },
+    { label: '一般', value: exceptions.filter((e) => e.kind === 'disabled').length || data.value?.kpi?.errorSources || 0, cls: 'normal', level: 'disabled' },
+    { label: '提示', value: data.value?.kpi?.runningRuns ?? 0, cls: 'info', level: 'running' },
   ]
 })
 
@@ -169,7 +174,7 @@ onUnmounted(() => ui.clearActions())
             <template v-else>{{ k.value }}</template>
             <small v-if="k.unit">{{ k.unit }}</small>
           </span>
-          <span class="ov-delta" :class="k.trend">较昨日 <b>{{ k.trend === 'up' ? '↑' : '↓' }} {{ k.delta }}</b></span>
+          <span v-if="k.delta" class="ov-delta" :class="k.trend">较昨日 <b>{{ k.trend === 'up' ? '↑' : '↓' }} {{ k.delta }}</b></span>
         </span>
         <span class="ov-kpi-icon"><el-icon><component :is="k.icon" /></el-icon></span>
       </button>
@@ -232,10 +237,10 @@ onUnmounted(() => ui.clearActions())
                   <div class="muted">{{ s.sourceId }}</div>
                 </td>
                 <td>{{ s.category }}</td>
-                <td>{{ ['张三', '李四', '王五', '赵六', '孙七'][index % 5] }}</td>
+                <td>{{ s.owner ?? '—' }}</td>
                 <td><span class="rc-status" :class="stateMeta(s.state).cls">{{ stateMeta(s.state).text }}</span></td>
                 <td class="muted">{{ s.lastSuccessAt || '-' }}</td>
-                <td>{{ Math.max(88, 98 - index) }}</td>
+                <td>{{ s.qualityScore ?? '—' }}</td>
               </tr>
             </tbody>
           </table>

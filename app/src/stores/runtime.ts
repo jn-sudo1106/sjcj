@@ -125,5 +125,13 @@ export const useRuntimeStore = defineStore('runtime', () => {
     })
   }
 
-  return { runs, runNodes, nodeStates, dataByTable, lastRunId, running, startCapture }
+  function clearNodeStates(ids?: string[]) {
+    if (!ids) {
+      Object.keys(nodeStates).forEach((k) => delete nodeStates[k])
+    } else {
+      ids.forEach((id) => delete nodeStates[id])
+    }
+  }
+
+  return { runs, runNodes, nodeStates, dataByTable, lastRunId, running, startCapture, clearNodeStates }
 })

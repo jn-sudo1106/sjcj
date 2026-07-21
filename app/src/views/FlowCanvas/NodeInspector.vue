@@ -46,14 +46,19 @@ const ruleOrchestrations = ref<RuleOrchestrationItem[]>([])
 const isRule = computed(() => /规则/.test(cfg.value?.title ?? ''))
 
 onMounted(async () => {
-  await Promise.allSettled([
+  const baseLoads = [
     entryApi.entryPaged({ size: 100 }).then(r => tables.value = r.list),
     paramApi.paramPaged({ size: 100 }).then(r => params.value = r.list),
-    ruleApi.ruleGroups().then(r => ruleGroups.value = r),
-    ruleApi.rulePaged({ size: 100 }).then(r => rules.value = r.list),
-    ruleApi.sharedConfigs().then(r => sharedCfgs.value = r),
-    ruleApi.orchestrationPaged({ size: 100 }).then(r => ruleOrchestrations.value = r.list)
-  ])
+  ]
+  const ruleLoads = isRule.value
+    ? [
+        ruleApi.ruleGroups().then(r => ruleGroups.value = r),
+        ruleApi.rulePaged({ size: 100 }).then(r => rules.value = r.list),
+        ruleApi.sharedConfigs().then(r => sharedCfgs.value = r),
+        ruleApi.orchestrationPaged({ size: 100 }).then(r => ruleOrchestrations.value = r.list),
+      ]
+    : []
+  await Promise.allSettled([...baseLoads, ...ruleLoads])
 })
 
 // 采集节点运行设置（0711 R5）：代理/断点续爬/登录迁到节点级；缺省读一次 Source 同名旧字段兜底展示（1:1+fallback）
@@ -626,23 +631,11 @@ function onWebKind(e: Event) {
 
           <div v-for="(row, i) in cfg.base" :key="row[0]" class="rc-field">
             <label>{{ row[0] }}</label>
-            <select v-if="isRule && row[0] === '规则组'" class="rc-select" :value="row[1]" @change="flow.setBaseRow(id, i, ($event.target as HTMLSelectElement).value)">
-              <option v-if="row[1] && !ruleGroups.some((g) => g.name === row[1])" :value="row[1]">{{ row[1] }}（当前）</option>
-              <option v-for="g in ruleGroups" :key="g.id" :value="g.name">{{ g.name }} · {{ g.stage }}</option>
-            </select>
-            <input v-else class="rc-input" :value="row[1]" @input="flow.setBaseRow(id, i, ($event.target as HTMLInputElement).value)" />
+            <input class="rc-input" :value="row[1]" @input="flow.setBaseRow(id, i, ($event.target as HTMLInputElement).value)" />
           </div>
           <div v-for="(row, i) in cfg.fields" :key="row[0]" class="rc-field">
             <label>{{ row[0] }}</label>
-            <select v-if="isRule && row[0] === '表达式'" class="rc-select" :value="row[1]" @change="flow.setFieldRow(id, i, ($event.target as HTMLSelectElement).value)">
-              <option v-if="row[1] && !rules.some((r) => r.name === row[1])" :value="row[1]">{{ row[1] }}（当前）</option>
-              <option v-for="r in rules" :key="r.ruleId" :value="r.name">{{ r.name }}</option>
-            </select>
-            <select v-else-if="isRule && row[0] === '共享配置'" class="rc-select" :value="row[1]" @change="flow.setFieldRow(id, i, ($event.target as HTMLSelectElement).value)">
-              <option v-if="row[1] && !sharedCfgs.some((s) => s.name === row[1])" :value="row[1]">{{ row[1] }}（当前）</option>
-              <option v-for="s in sharedCfgs" :key="s.id" :value="s.name">{{ s.name }}</option>
-            </select>
-            <input v-else class="rc-input" :value="row[1]" @input="flow.setFieldRow(id, i, ($event.target as HTMLInputElement).value)" />
+            <input class="rc-input" :value="row[1]" @input="flow.setFieldRow(id, i, ($event.target as HTMLInputElement).value)" />
           </div>
           <div class="rc-help">字段随节点类型变化：网页抓取呈现源/配置/子步骤；规则处理呈现规则组/表达式/共享配置。</div>
           <div class="rc-actions-row"><button class="rc-btn" type="button" @click="flow.duplicate(id)">复制节点</button></div>

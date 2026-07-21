@@ -88,6 +88,15 @@ const navGroups = computed(() =>
     .filter((g) => g.items.length > 0),
 )
 
+const PRIMARY_ACTIONS: Record<string, string> = {
+  overview: '新建采集',
+  collect: '新建采集',
+  rules: '发布校验',
+  metrics: '口径校验',
+  data: '新建查询视图',
+  runs: '导出记录',
+  tools: '导出报表',
+}
 const pageActions: Record<string, string[]> = {
   overview: ['刷新', '导出', '新建采集'],
   // 画布路由（含闸门/网站详情/子源详情）顶栏不放动作：保存/发起抓取都收在画布 Header，贴着它们作用的画布
@@ -205,11 +214,11 @@ const navIcons: Record<string, Component> = {
           </div>
           <div class="rc-module-actions">
             <button
-              v-for="(action, index) in activeActions"
+              v-for="action in activeActions"
               :key="action"
               type="button"
               class="rc-action-btn"
-              :class="{ primary: index === activeActions.length - 1 }"
+              :class="{ primary: action === PRIMARY_ACTIONS[actionKey] }"
               @click="firePageAction(action)"
             >
               <el-icon v-if="action.includes('发布') || action.includes('导出')"><Upload /></el-icon>

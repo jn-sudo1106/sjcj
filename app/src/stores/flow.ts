@@ -37,6 +37,7 @@ import {
   type FlowDef,
 } from '../views/FlowCanvas/flowModel'
 import { extractUrlParamIds, hasFragmentParams } from '../views/FlowCanvas/urlParams'
+import { useRuntimeStore } from './runtime'
 import {
   compatibleTemplateBindings,
   composeTemplateFlow,
@@ -453,6 +454,19 @@ export const useFlowStore = defineStore('flow', () => {
     configs[newId] = cfg
     const idx = main.value.indexOf(id)
     if (idx >= 0) main.value.splice(idx + 1, 0, newId)
+    // 复制分支段：决策/并行节点附属的 branchGroup 一并克隆到新 ownerId
+    const bg = branchGroups.find((g) => g.ownerId === id)
+    if (bg) {
+      const newBg: FlowBranchGroup = {
+        ownerId: newId,
+        branches: bg.branches.map((b) => ({
+          ...b,
+          id: `${newId}-b-${b.id.split('-b-')[1] ?? `copy-${branchSeq++}`}`,
+          chain: [...b.chain],
+        })),
+      }
+      branchGroups.push(newBg)
+    }
     select(newId)
     touch()
   }
@@ -501,6 +515,9 @@ export const useFlowStore = defineStore('flow', () => {
       removeBranchGroup(id)
     }
     delete configs[id]
+    // 清理运行时态：被删除节点不应残留在 nodeStates 中
+    const { clearNodeStates } = useRuntimeStore()
+    clearNodeStates([id])
     const fallback = main.value.find((m) => !isTerm(m))
     if (fallback) select(fallback)
     touch()
@@ -870,7 +887,7 @@ export const useFlowStore = defineStore('flow', () => {
     branchGroups.splice(0, branchGroups.length, ...((JSON.parse(JSON.stringify(def.branchGroups ?? [])) as FlowBranchGroup[])))
 
     seq = Math.max(1, ...Object.keys(configs).map((k) => Number(/-(\d+)$/.exec(k)?.[1]) || 0)) + 1
-    branchSeq = Math.max(1, ...branchGroups.flatMap((g) => g.branches.map((b) => Number(/-(?:b|elif|if|else)-(\d+)$/.exec(b.id)?.[1]) || 0))) + 1
+    branchSeq = Math.max(1, ...branchGroups.flatMap((g) => g.branches.map((b) => Number(/-(?:b-(?:condition|a|b)|elif|if|else)-(\d+)$/.exec(b.id)?.[1]) || 0))) + 1
 
     const first = main.value.find((m) => !isTerm(m))
     if (first) select(first)
@@ -1034,7 +1051,7 @@ export const useFlowStore = defineStore('flow', () => {
     allIds.forEach((nid) => {
       const c = d.configs[nid]
       if (!c) return
-      if (c.collectCfg) {
+      if (c.collectCfg && !c.disabled) {
         if (!c.collectCfg.url) errs.push(`「${c.title}」缺少源 URL`)
         if (!c.collectCfg.outputTable) errs.push(`「${c.title}」缺少输出表`)
         // URL 参数校验（纯同步、不查参数库）：token 必须显式绑定到当前节点，随后才能配置子源取值覆盖。

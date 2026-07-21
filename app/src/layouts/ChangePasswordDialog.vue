@@ -42,7 +42,7 @@ function resetForm() {
 
 function handleCancel() {
   visible.value = false
-  resetForm()
+  // @close 会触发 resetForm，无需重复调用
 }
 
 async function handleSubmit() {

@@ -25,7 +25,7 @@ const ui = useUiStore()
 const flowEl = ref<HTMLElement | null>(null)
 const canvasScrollEl = ref<HTMLElement | null>(null)
 const xmlOpen = ref(false)
-const xml = computed(() => flowToXml(flow.serialize()))
+const xml = computed(() => (xmlOpen.value ? flowToXml(flow.serialize()) : ''))
 const canExportXml = computed(() => !flow.dirty && flow.validateFlow().length === 0)
 const recommending = ref(false)
 

@@ -182,7 +182,7 @@ export const dataApi = {
     request<{ message?: string; row?: DataRow }>('data/rowUpdate', { tableId, dataId, values }, {
       method: 'POST',
       httpEndpoint: 'entry/entryUpdate',
-      httpParams: { entryTypeId: tableId, entryId: dataId, ...values },
+      httpParams: { ...values, entryTypeId: tableId, entryId: dataId },
     }),
 }
 
@@ -223,8 +223,10 @@ export const configApi = {
     const result = await request<Paged<unknown>>('config/configPaged', p, { method: 'GET', httpParams })
     return configPageFromLegacy(result)
   },
-  configDetail: async (configId: string) =>
-    configFromLegacy(await request<unknown>('config/configDetail', { configId }, { method: 'GET' })),
+  configDetail: async (configId: string) => {
+    const result = await request<unknown>('config/configDetail', { configId }, { method: 'GET' })
+    return result && typeof result === 'object' && !('ok' in result) ? configFromLegacy(result) : null
+  },
   updateConfig: (config: Config) =>
     request<Ack>('config/modify/updateConfig', { config }, { method: 'POST', httpParams: configToLegacy(config) }),
   copyAll: (configId: string) => request<Ack>('config/copyAll', { configId }, { method: 'GET', httpParams: { id: configId } }),
@@ -362,7 +364,8 @@ export const paramApi = {
   // 0711 R9：找不到返回 null（而不是静默兜底成别的参数），供 URL 参数编辑器判断"是否需要引导创建"
   paramDetail: async (paramId: string) => {
     const result = await request<unknown>('config/paramDetail', { paramId }, { method: 'GET' })
-    return result ? paramFromLegacy(result) : null
+    // data:null 走 fallback 后 result 是 {ok:true, message:...}，不是真实数据，按"未找到"处理
+    return result && typeof result === 'object' && !('ok' in result) ? paramFromLegacy(result) : null
   },
   genValues: (paramId: string) => request<string[]>('config/genValues', { paramId }, { method: 'GET' }),
   addParamValues: (paramId: string, paramValues: string) =>

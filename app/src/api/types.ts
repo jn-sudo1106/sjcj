@@ -672,6 +672,8 @@ export interface OverviewKpi {
   runningRuns: number // 运行中链路（纳入运行）
   alarms: number // 未恢复告警（纳入告警）
   newAssets7: number // 近 7 日新增资产
+  /** KPI 同比/环比变化（后端未返回时前端 fallback 为空） */
+  deltas?: Record<string, string>
 }
 
 /** 占比 / 分布通用切片（环形、柱状共用） */
@@ -689,6 +691,10 @@ export interface OverviewTopSource {
   state: RunState | string
   dataCount: number
   lastSuccessAt?: string
+  /** 负责人（后端未返回时前端显示 '—'） */
+  owner?: string
+  /** 质量评分（后端未返回时前端显示 '—'） */
+  qualityScore?: number
 }
 
 /** 异常 / 待确认条目（可下钻到采集资产源列表） */
