@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useUiStore } from '../../stores/ui'
@@ -47,20 +47,28 @@ const sharedCfgs = ref<SharedConfig[]>([])
 const ruleOrchestrations = ref<RuleOrchestrationItem[]>([])
 const isRule = computed(() => /规则/.test(cfg.value?.title ?? ''))
 
+// 规则相关数据只在真的选中过规则节点时才拉，拉过一次后缓存，切别的规则节点不重复拉。
+// NodeInspector 只 mount 一次（index.vue 里没给 :key），isRule 会随选中节点变化，
+// 不能只在 onMounted 判断一次——否则打开画布时没恰好选中规则节点，规则数据就永远加载不出来。
+const rulesLoaded = ref(false)
+function loadRuleAssets() {
+  if (rulesLoaded.value) return
+  rulesLoaded.value = true
+  void Promise.allSettled([
+    ruleApi.ruleGroups().then(r => ruleGroups.value = r),
+    ruleApi.rulePaged({ size: 100 }).then(r => rules.value = r.list),
+    ruleApi.sharedConfigs().then(r => sharedCfgs.value = r),
+    ruleApi.orchestrationPaged({ size: 100 }).then(r => ruleOrchestrations.value = r.list),
+  ])
+}
+watch(isRule, (v) => { if (v) loadRuleAssets() })
+
 onMounted(async () => {
-  const baseLoads = [
+  if (isRule.value) loadRuleAssets()
+  await Promise.allSettled([
     entryApi.entryPaged({ size: 100 }).then(r => tables.value = r.list),
     paramApi.paramPaged({ size: 100 }).then(r => params.value = r.list),
-  ]
-  const ruleLoads = isRule.value
-    ? [
-        ruleApi.ruleGroups().then(r => ruleGroups.value = r),
-        ruleApi.rulePaged({ size: 100 }).then(r => rules.value = r.list),
-        ruleApi.sharedConfigs().then(r => sharedCfgs.value = r),
-        ruleApi.orchestrationPaged({ size: 100 }).then(r => ruleOrchestrations.value = r.list),
-      ]
-    : []
-  await Promise.allSettled([...baseLoads, ...ruleLoads])
+  ])
 })
 
 // 采集节点运行设置（0711 R5）：代理/断点续爬/登录迁到节点级；缺省读一次 Source 同名旧字段兜底展示（1:1+fallback）

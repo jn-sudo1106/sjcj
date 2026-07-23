@@ -203,7 +203,10 @@ onMounted(() => {
   ui.registerAction('导入规则', onImport)
   ui.registerAction('发布校验', onGateCheck)
 })
-onUnmounted(() => ui.clearActions())
+onUnmounted(() => {
+  ui.clearActions()
+  if (kwTimer) clearTimeout(kwTimer)
+})
 </script>
 
 <template>

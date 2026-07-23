@@ -93,6 +93,9 @@ function nextGroupLetter(): string | null {
   const used = new Set(usedGroups())
   return GROUP_LETTERS.find((letter) => !used.has(letter)) ?? null
 }
+function groupLimitReached(): boolean {
+  return nextGroupLetter() === null
+}
 function onGroupChange(ref: ParamGroupRef, value: string) {
   ref.group = value === '__new' ? nextGroupLetter() : (value || null)
 }
@@ -104,28 +107,36 @@ function onParamCreated(param: Param) {
   loadParamCandidates()
 }
 function paramMetaLabel(paramId: string): string {
+  if (paramLoading[paramId]) return '查询中…'
   const detail = paramDetails[paramId]
-  if (!detail) return paramLoading[paramId] ? '查询中…' : '—'
+  if (!detail) return '—'
   return `${KIND_LABELS[detail.kind]} · ${paramValuePreviewLabel(detail, paramSamples[paramId] ?? [])}`
 }
 
-const countOf = computed<Record<string, number>>(() => {
-  const out: Record<string, number> = {}
+// review 0723 #6：详情/取值还没查回来时不能直接 fallback 到 0（paramSamples 未加载时 length 是 0），
+// 会导致 totalCount/预览在加载完成的瞬间从假数字跳到真实值；这里显式用 null 表示"还不知道"。
+const countOf = computed<Record<string, number | null>>(() => {
+  const out: Record<string, number | null> = {}
   for (const ref of model.value.refs) {
+    if (paramLoading[ref.paramId]) {
+      out[ref.paramId] = null
+      continue
+    }
     const detail = paramDetails[ref.paramId]
-    out[ref.paramId] = detail ? paramValueCount(detail) : (paramSamples[ref.paramId]?.length ?? 0)
+    out[ref.paramId] = detail ? paramValueCount(detail) : null
   }
   return out
 })
+const countsReady = computed(() => Object.values(countOf.value).every((v) => v !== null))
 const joinTypeValue = computed<JoinType>(() => joinType(model.value.refs))
 const joinTypeLabel = computed(() => ({ cartesian: '笛卡尔积', zip: '顺序', grouped: '分组顺序 + 组间笛卡尔积' } as const)[joinTypeValue.value])
-const totalCount = computed(() => countGroupedUrls(model.value.refs, countOf.value))
-const mismatchWarnings = computed(() => groupMismatchWarnings(model.value.refs, countOf.value))
+const totalCount = computed(() => (countsReady.value ? countGroupedUrls(model.value.refs, countOf.value as Record<string, number>) : null))
+const mismatchWarnings = computed(() => (countsReady.value ? groupMismatchWarnings(model.value.refs, countOf.value as Record<string, number>) : []))
 const mismatchText = computed(() => mismatchWarnings.value
   .map((w) => `组${w.group}：同组参数值数需一致（${w.paramIds.map((id) => `「${paramDetails[id]?.name ?? id}」${countOf.value[id] ?? 0}`).join(' / ')}），计数暂按最大值对齐`)
   .join('；'))
 const previewExamples = computed<string[]>(() => {
-  if (!model.value.refs.length || !model.value.urlTemplate.trim()) return []
+  if (!model.value.refs.length || !model.value.urlTemplate.trim() || !countsReady.value) return []
   const valuesByParam: Record<string, string[]> = {}
   for (const ref of model.value.refs) valuesByParam[ref.paramId] = paramSamples[ref.paramId] ?? []
   return expandGroupedParameterizedUrl(model.value.urlTemplate, model.value.refs, valuesByParam, PREVIEW_LIMIT).urls
@@ -192,6 +203,9 @@ defineExpose({ totalCount, mismatchWarnings, joinTypeLabel, previewExamples, pre
         </div>
       </div>
       <div class="ssw-add-hint">同组参数顺序拼（对齐取值）；不同组 / 无组之间笛卡尔积。点击"所属组"下拉即可编组。</div>
+      <div v-if="groupLimitReached()" class="ssw-add-hint" style="color: var(--rc-warn, #d97706)">
+        分组已达上限（A-F 共 6 个），如需更多请联系管理员。
+      </div>
     </template>
 
     <div class="ssw-join-line">
@@ -217,7 +231,7 @@ defineExpose({ totalCount, mismatchWarnings, joinTypeLabel, previewExamples, pre
     <div class="ssw-sec-label">预览值</div>
     <div class="ssw-preview-box">
       <div class="ssw-preview-sample">{{ previewSample || '—（请先添加参数）' }}</div>
-      <div class="ssw-preview-count">共 <b>{{ totalCount.toLocaleString('en-US') }}</b> 个 URL</div>
+      <div class="ssw-preview-count">共 <b>{{ totalCount === null ? '计算中…' : totalCount.toLocaleString('en-US') }}</b> 个 URL</div>
       <div v-if="previewExamples.length" class="ssw-preview-examples">
         <span class="ex-label">示例：</span>
         <code v-for="(u, i) in previewExamples" :key="i">{{ u }}</code>

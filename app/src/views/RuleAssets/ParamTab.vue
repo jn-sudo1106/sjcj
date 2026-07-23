@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { paramApi, type Param } from '../../api'
@@ -48,6 +48,7 @@ let kw: ReturnType<typeof setTimeout> | undefined
 watch([paramIdFilter, paramNameFilter], () => { clearTimeout(kw); kw = setTimeout(resetAndLoad, 300) })
 function onSize() { page.value = 1; void load() }
 onMounted(() => { void load() })
+onUnmounted(() => { if (kw) clearTimeout(kw) })
 
 function kindMeta(k: string) {
   if (k === 'list') return { cls: 'ok', text: '列表' }
@@ -242,6 +243,7 @@ async function batchDelete() {
             <th>值定义</th>
             <th style="width: 80px">参数值</th>
             <th style="width: 110px">默认值</th>
+            <th style="width: 140px">绑定参数子源</th>
             <th style="width: 120px">操作</th>
           </tr>
         </thead>
@@ -257,6 +259,18 @@ async function batchDelete() {
             <td class="muted pt-prev">{{ p.valueDef || '—' }}</td>
             <td><button class="pt-name" type="button" @click="onViewValues(p)">查看值</button></td>
             <td>{{ p.defaultValue || '—' }}</td>
+            <td>
+              <template v-if="p.paramSourceRefs?.length">
+                <el-tag
+                  v-for="ref in p.paramSourceRefs"
+                  :key="ref.sourceId"
+                  size="small"
+                  effect="plain"
+                  class="pt-source-tag"
+                >{{ ref.sourceName }}</el-tag>
+              </template>
+              <span v-else class="muted">—</span>
+            </td>
             <td>
               <el-button link type="primary" size="small" @click="openDetail(p)">详情</el-button>
               <template v-if="canWrite">
@@ -344,6 +358,7 @@ async function batchDelete() {
 .pt-table { flex: 1; }
 .pt-name { padding: 0; border: 0; background: transparent; color: var(--rc-primary-ink); font-size: 12px; font-weight: 700; cursor: pointer; }
 .pt-name:hover { text-decoration: underline; }
+.pt-source-tag + .pt-source-tag { margin-left: 4px; }
 .pt-prev { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pt-empty { padding: 48px; text-align: center; }
 .pt-pager { display: flex; justify-content: flex-end; padding: 10px 16px; border-top: 1px solid var(--rc-border-soft); }

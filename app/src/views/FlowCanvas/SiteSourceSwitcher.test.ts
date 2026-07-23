@@ -242,6 +242,26 @@ describe('SiteSourceSwitcher · 参数源（0721 会议：加源支持普通子�
     )
   })
 
+  it('同组值数不一致时阻断提交', async () => {
+    const wrapper = await openParamPanel()
+    await pickCandidate(wrapper, '913') // sequence 1~100，真实取值数 100
+    await pickCandidate(wrapper, '912') // list a~z，真实取值数 26
+    const selects = wrapper.findAll('.ssw-group-select')
+    await selects[0].setValue('__new') // 913 进新建组 A
+    await flushPromises()
+    await selects[1].setValue('A') // 912 进 A 组
+    await flushPromises()
+
+    const inputs = wrapper.findAll('.ssw-add-input')
+    await inputs[0].setValue('不一致测试')
+    await inputs[1].setValue('http://test.example')
+
+    await wrapper.get('[data-testid="add-source-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(siteApi.sourceAdd).not.toHaveBeenCalled()
+  })
+
   it('新建参数（弹中弹复用 ParamEditorDrawer）：保存成功后自动入列，占位符出现在模板', async () => {
     const wrapper = await openParamPanel()
     await wrapper.get('[data-testid="param-source-new"]').trigger('click')

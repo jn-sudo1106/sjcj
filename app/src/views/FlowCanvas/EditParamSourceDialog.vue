@@ -51,15 +51,19 @@ async function save() {
     urlTemplate: draft.value.urlTemplate,
     paramRefs: draft.value.refs.map((ref) => ({ ...ref })),
   }
-  const res = await sourceApi.sourceUpdate({ ...source, ...patch })
-  if (!res?.ok) {
-    ElMessage.warning(res?.message || '保存失败，请重试')
-    return
+  try {
+    const res = await sourceApi.sourceUpdate({ ...source, ...patch })
+    if (!res?.ok) {
+      ElMessage.warning(res?.message || '保存失败，请重试')
+      return
+    }
+    flow.patchSource(patch)
+    flow.patchSourceCtx(patch)
+    ElMessage.success(res.message || '参数子源已更新')
+    close()
+  } catch (error) {
+    ElMessage.error(`保存失败：${error instanceof Error ? error.message : String(error)}`)
   }
-  flow.patchSource(patch)
-  flow.patchSourceCtx(patch)
-  ElMessage.success(res.message || '参数子源已更新')
-  close()
 }
 </script>
 

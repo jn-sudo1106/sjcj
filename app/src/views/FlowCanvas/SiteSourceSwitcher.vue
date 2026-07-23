@@ -69,7 +69,10 @@ function onWindowClick() {
   paramEditorRef.value?.closePicker()
 }
 onMounted(() => window.addEventListener('click', onWindowClick))
-onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
+onBeforeUnmount(() => {
+  window.removeEventListener('click', onWindowClick)
+  if (cmpTimer) clearTimeout(cmpTimer)
+})
 
 // ---- 子源操作：名称点击切换；右键菜单提供重命名/发起抓取 ----
 const rename = reactive({ sourceId: '', name: '' })
@@ -93,15 +96,19 @@ async function saveRename(s: Source) {
     return
   }
   const updated = { ...s, name }
-  const res = await sourceApi.sourceUpdate(updated)
-  if (!res?.ok) {
-    ElMessage.warning(res?.message || '重命名失败，请重试')
-    return
+  try {
+    const res = await sourceApi.sourceUpdate(updated)
+    if (!res?.ok) {
+      ElMessage.warning(res?.message || '重命名失败，请重试')
+      return
+    }
+    s.name = name
+    cancelRename()
+    ElMessage.success(res?.message || '子源已重命名')
+    emit('added', updated)
+  } catch (error) {
+    ElMessage.error(`重命名失败：${error instanceof Error ? error.message : String(error)}`)
   }
-  s.name = name
-  cancelRename()
-  ElMessage.success(res?.message || '子源已重命名')
-  emit('added', updated)
 }
 
 const rowMenu = reactive({ show: false, x: 0, y: 0, source: null as Source | null })
@@ -280,8 +287,12 @@ function pickSource(s: Source) {
 }
 async function launchSource(s: Source) {
   if (s.disabled) return
-  const res = await sourceApi.sendSnatch([s.sourceId])
-  ElMessage.success(res?.message || `已发起「${s.name}」抓取`)
+  try {
+    const res = await sourceApi.sendSnatch([s.sourceId])
+    ElMessage.success(res?.message || `已发起「${s.name}」抓取`)
+  } catch (error) {
+    ElMessage.error(`发起抓取失败：${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 // ---- 批量导入子源（0711 R12：从采集资产页顶部迁入，siteId 已定，无需目标网站下拉） ----
