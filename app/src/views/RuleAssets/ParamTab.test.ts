@@ -116,7 +116,8 @@ describe('ParamTab 角色权限', () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
-    vi.spyOn(paramApi, 'paramCopy').mockResolvedValue({ ok: true, message: '复制成功', param: { paramId: 'p-copy' } as Param })
+    // paramCopy 真实返回 Ack（只有 ok/message/demo），不带 param 字段；测试断言只看 clearSpy，mock 形态不依赖返回体
+    vi.spyOn(paramApi, 'paramCopy').mockResolvedValue({ ok: true, message: '复制成功' })
     const clearSpy = vi.spyOn(paramApi, 'clearParams').mockResolvedValue({ ok: true })
     mountTab()
     await waitForLoad()
