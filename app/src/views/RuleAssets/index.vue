@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { ruleApi, type Rule, type RuleGroup, type RuleGate, type RuleTestCase, type SharedConfig } from '../../api'
@@ -7,8 +8,25 @@ import { useUiStore } from '../../stores/ui'
 import RuleGroupPanel from './RuleGroupPanel.vue'
 import RuleDetailDrawer from './RuleDetailDrawer.vue'
 import FunctionTester from './FunctionTester.vue'
+import ParamTab from './ParamTab.vue'
 
 const ui = useUiStore()
+
+// 顶层 tab（0721 会议 §六-1）：参数模块从采集资产迁入，与"规则组/函数"同级；
+// 现有规则组+规则列表+函数测试器整体作为"规则" tab（改动最小，不拆分成更细的规则组/函数两个 tab）。
+const TABS: { key: string; label: string }[] = [
+  { key: 'rule', label: '规则' },
+  { key: 'param', label: '参数' },
+]
+const route = useRoute()
+const router = useRouter()
+const activeTab = ref('rule')
+watch(() => route.query.tab, (tab) => {
+  activeTab.value = tab === 'param' ? 'param' : 'rule'
+}, { immediate: true })
+function selectTab(key: string) {
+  void router.replace({ path: '/rules', query: key === 'rule' ? {} : { tab: key } })
+}
 
 // ---- 数据 ----
 const groups = ref<RuleGroup[]>([])
@@ -189,6 +207,23 @@ onUnmounted(() => ui.clearActions())
 </script>
 
 <template>
+  <div class="ra-tabs-wrap">
+    <div class="ra-tabs-inner">
+      <button
+        v-for="t in TABS"
+        :key="t.key"
+        class="ra-tab-link"
+        :class="{ active: activeTab === t.key }"
+        @click="selectTab(t.key)"
+      >
+        {{ t.label }}
+      </button>
+    </div>
+  </div>
+
+  <ParamTab v-if="activeTab === 'param'" />
+
+  <template v-else>
   <div class="ra-layout">
     <RuleGroupPanel :groups="groups" v-model="activeGroup" :all-count="stats.exprs" :gate="gate" />
 
@@ -290,9 +325,25 @@ onUnmounted(() => ui.clearActions())
     @run-batch="onDrawerBatch"
     @test="onDrawerTest"
   />
+  </template>
 </template>
 
 <style scoped>
+.ra-tabs-wrap { display: flex; justify-content: flex-start; margin-bottom: 12px; }
+.ra-tabs-inner { display: inline-flex; padding: 4px; background: #f1f5f9; border-radius: 10px; gap: 4px; }
+.ra-tab-link {
+  border: 0;
+  background: transparent;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.ra-tab-link:hover { color: #0f172a; }
+.ra-tab-link.active { background: #ffffff; color: #0f172a; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); }
 .ra-layout {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr) 360px;

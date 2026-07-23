@@ -112,7 +112,11 @@ const pageActions: Record<string, string[]> = {
 }
 // 页面动作按真实路由段取，而不是侧栏高亮键
 const actionKey = computed(() => route.path.split('/')[1] || 'overview')
-const activeActions = computed(() => pageActions[actionKey.value] ?? [])
+// 规则资产的「新建规则组/导入规则/发布校验」是规则 tab 专属（0721 会议 §六-1 参数迁入后新增的参数 tab 不需要）
+const activeActions = computed(() => {
+  if (actionKey.value === 'rules' && route.query.tab === 'param') return []
+  return pageActions[actionKey.value] ?? []
+})
 function firePageAction(action: string) {
   // 「新建采集」是采集资产的全局入口，不能依赖「网站列表」子页注册回调；
   // 否则切到参数/模板等二级页后旧组件卸载，顶栏按钮会变成空操作。
@@ -474,7 +478,10 @@ const navIcons: Record<string, Component> = {
 
 .rc-shell {
   position: relative;
-  z-index: 1;
+  /* 必须 > .rc-topbar 的 z-index(20)：rc-shell 自身建立层叠上下文后，内部任何 fixed 弹窗/弹层
+     （如 SiteSourceSwitcher 的加源弹窗、EditParamSourceDialog、节点右键菜单等）无论自己 z-index 开多高，
+     都会被限制在这个上下文内比较，赢不过同级的顶部导航栏——曾导致弹窗被顶栏遮住。 */
+  z-index: 21;
   display: grid;
   grid-template-columns: 220px 1fr;
   min-height: 0;

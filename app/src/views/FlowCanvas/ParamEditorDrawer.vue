@@ -80,12 +80,6 @@ async function submit() {
     ElMessage.warning('请填写数据库查询定义')
     return
   }
-  const group = draft.group.trim()
-  if (group && !/^\d+$/.test(group)) {
-    ElMessage.warning('分组 ID 必须为整数')
-    return
-  }
-
   // G9（0717 参数方案）：对齐旧 ParamEdit「数据提交确认」交互
   try {
     await ElMessageBox.confirm('是否确认提交数据？', '数据提交确认', {
@@ -98,7 +92,10 @@ async function submit() {
 
   const input: ParamInput = {
     name: draft.name.trim(),
-    group: group || undefined,
+    // 分组 ID 输入框已下线（0721 会议结论5：语义迁到参数源拼接侧的分组，不再是参数自身属性）；
+    // 新建参数不再传这个字段（§六-3 拍板：不传）。编辑态时 draft.group 是从旧数据原样回填、没有可编辑入口，
+    // 照原样带回去，不会把老参数已有的分组值悄悄清空。
+    group: draft.group.trim() || undefined,
     kind: draft.kind,
     values: hasListValues ? values() : undefined,
     defaultValue: draft.defaultValue.trim() || undefined,
@@ -127,12 +124,11 @@ async function submit() {
 </script>
 
 <template>
-  <el-drawer v-model="visible" :title="isEdit ? '编辑参数' : '新建参数'" size="420px" :append-to-body="true">
+  <el-dialog v-model="visible" :title="isEdit ? '编辑参数' : '新建参数'" width="640px" append-to-body>
     <div class="ped-body">
       <div v-if="isEdit" class="rc-field"><label>参数 ID</label><input class="rc-input" :value="param!.paramId" disabled /></div>
       <div class="rc-field"><label>参数名称</label><input v-model="draft.name" class="rc-input" placeholder="例如：懂车帝-级别参数" /></div>
-      <div class="rc-field"><label>分组 ID</label><input v-model="draft.group" class="rc-input" inputmode="numeric" placeholder="可选，整数 ID" /></div>
-      <div class="rc-field"><label>来源类型</label>
+      <div class="rc-field"><label>参数类型</label>
         <select v-model="draft.kind" class="rc-select">
           <option value="list">列表</option>
           <option value="date">日期</option>
@@ -154,7 +150,7 @@ async function submit() {
       <div class="rc-field"><label>默认值</label><input v-model="draft.defaultValue" class="rc-input" placeholder="未设置时按来源类型的首个生成值回退" /></div>
     </div>
     <template #footer><div class="ped-foot"><button class="rc-btn" type="button" @click="visible = false">取消</button><button class="rc-btn primary" type="button" @click="submit">保存</button></div></template>
-  </el-drawer>
+  </el-dialog>
 </template>
 
 <style scoped>

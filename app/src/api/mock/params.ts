@@ -1,4 +1,5 @@
 import type { Paged, Param, ParamInput } from '../types'
+import { SOURCES } from './sources'
 
 const PARAMS: Param[] = [
   { paramId: 'p-date', name: '采集日期', kind: 'date', dateExpr: '$CUR_DATE,-1,yyyy-MM-dd', usedBy: 4, owner: 'dev_zhonghe', updatedAt: '2026-06-18' },
@@ -12,6 +13,10 @@ const PARAMS: Param[] = [
   { paramId: '1037', name: '懂车帝-能源参数(fuel_form)', kind: 'list', values: ['汽油', '柴油', '混动', '纯电'], usedBy: 1, owner: 'dev_zhonghe', updatedAt: '2026-07-11' },
   { paramId: '1038', name: '懂车帝-年限参数(age_range)', kind: 'list', values: ['1年以内', '1-3年', '3-5年', '5年以上'], usedBy: 1, owner: 'dev_zhonghe', updatedAt: '2026-07-11' },
   { paramId: '1039', name: '懂车帝-其他条件(expanded_origin)', kind: 'list', values: ['同城', '全国'], usedBy: 1, owner: 'dev_zhonghe', updatedAt: '2026-07-11' },
+  // 0721 会议·参数源演示数据：Leon 会中口头例子（FundComment 基础 url + 页码/栏目两个参数），
+  // paramId 沿用旧平台 9xx 编号体系，供「添加子源」参数源面板的"选择已有参数"候选。
+  { paramId: '913', name: '页码', kind: 'sequence', seq: { start: 1, end: 100, step: 1 }, usedBy: 0, owner: 'dev_zhonghe', updatedAt: '2026-07-21' },
+  { paramId: '912', name: '栏目', kind: 'list', values: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'], usedBy: 0, owner: 'dev_zhonghe', updatedAt: '2026-07-21' },
 ]
 
 // 新建参数本地持久化（同 sources.ts/sites.ts 的 created 思路）：mock 无真实后端，刷新页面需可恢复。
@@ -48,12 +53,21 @@ function readDeletedParamIds(): string[] {
 function persistDeletedParamIds(ids: string[]) {
   localStorage.setItem(DELETED_KEY, JSON.stringify(ids))
 }
+// 参数源绑定关系（0721 会议 T6）：不单独持久化一份反向索引，直接从 SOURCES 实时派生——
+// 源自己的 paramRefs 才是权威数据，反查一遍既不会跟编辑/删除源脱节，也不用管两处数据的一致性。
+function boundSourcesFor(paramId: string): { sourceId: string; sourceName: string }[] {
+  return SOURCES
+    .filter((source) => source.kind === 'param' && source.paramRefs?.some((ref) => ref.paramId === paramId))
+    .map((source) => ({ sourceId: source.sourceId, sourceName: source.name }))
+}
+
 function allParams(): Param[] {
   const updated = readUpdatedParams()
   const deleted = new Set(readDeletedParamIds())
   return [...readCreatedParams(), ...PARAMS]
     .filter((param) => !deleted.has(param.paramId))
     .map((param) => updated[param.paramId] ?? param)
+    .map((param) => ({ ...param, paramSourceRefs: boundSourcesFor(param.paramId) }))
 }
 
 function matches(p: Param, q?: Record<string, unknown>): boolean {

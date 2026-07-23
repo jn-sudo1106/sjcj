@@ -57,6 +57,17 @@ function kindMeta(k: string) {
   return { cls: 'warn', text: '数据库' }
 }
 
+// 清除缓存（0721 会议 §六-2）：UI 入口去掉，写操作成功后静默补一次调用——0720 真实联调证实列表有
+// 服务端缓存层，编辑后不清缓存列表不刷新；失败不影响主流程（缓存清理是锦上添花，不是成败关键）。
+async function clearCacheSilently(paramIds: string[]) {
+  if (!paramIds.length) return
+  try {
+    await paramApi.clearParams(paramIds)
+  } catch {
+    /* 静默忽略：缓存没清掉不影响本次操作是否成功，用户也无感 */
+  }
+}
+
 function openCreate() { editor.param = null; editor.visible = true }
 async function openEdit(param: Param) {
   try {
@@ -71,7 +82,7 @@ async function openEdit(param: Param) {
     ElMessage.error(`加载参数详情失败：${error instanceof Error ? error.message : String(error)}`)
   }
 }
-async function onParamSaved() { await load() }
+async function onParamSaved(param: Param) { await clearCacheSilently([param.paramId]); await load() }
 
 async function openDetail(p: Param) {
   try {
@@ -117,6 +128,7 @@ async function onAddValues() {
   try {
     const r = await paramApi.addParamValues(drawer.param.paramId, values)
     ElMessage.success(r?.message || '操作已提交（演示）')
+    await clearCacheSilently([drawer.param.paramId])
     drawer.param = await paramApi.paramDetail(drawer.param.paramId) ?? drawer.param
     await load()
   } catch (error) {
@@ -133,7 +145,10 @@ async function onDeleteValue(valueId: string) {
   try {
     const result = await paramApi.deleteParamValue(valueId)
     ElMessage.success(result?.message || '参数值已删除')
-    if (drawer.param) drawer.param = await paramApi.paramDetail(drawer.param.paramId) ?? drawer.param
+    if (drawer.param) {
+      await clearCacheSilently([drawer.param.paramId])
+      drawer.param = await paramApi.paramDetail(drawer.param.paramId) ?? drawer.param
+    }
     await load()
   } catch (error) {
     ElMessage.error(`删除参数值失败：${error instanceof Error ? error.message : String(error)}`)
@@ -150,6 +165,7 @@ async function onCopy(param: Param) {
   try {
     const result = await paramApi.paramCopy(param.paramId)
     ElMessage.success(result?.message || '复制成功，请查询最新 ID')
+    await clearCacheSilently([param.paramId])
     await load()
   } catch (error) {
     ElMessage.error(`复制参数失败：${error instanceof Error ? error.message : String(error)}`)
@@ -172,30 +188,29 @@ function togglePage(checked: boolean) {
     : selected.value.filter((id) => !pageIds.includes(id))
 }
 
-async function runBatch(action: 'clear' | 'delete') {
+// 批量清除缓存按钮已下线（0721 会议 §六-2：UI 去入口）；批量删除仍保留，删除成功后照样补一次静默清缓存
+async function batchDelete() {
   if (!selected.value.length) {
     ElMessage.warning('请先选择参数')
     return
   }
-  const isDelete = action === 'delete'
   try {
     await ElMessageBox.confirm(
-      `${isDelete ? '删除' : '清除缓存'}选中的 ${selected.value.length} 个参数？`,
-      isDelete ? '批量删除参数' : '清除参数缓存',
+      `删除选中的 ${selected.value.length} 个参数？`,
+      '批量删除参数',
       { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '取消' },
     )
   } catch {
     return
   }
   try {
-    const result = isDelete
-      ? await paramApi.deleteParams(selected.value)
-      : await paramApi.clearParams(selected.value)
-    ElMessage.success(result?.message || `${isDelete ? '删除' : '清理'}成功`)
+    const result = await paramApi.deleteParams(selected.value)
+    ElMessage.success(result?.message || '删除成功')
+    await clearCacheSilently(selected.value)
     selected.value = []
     await load()
   } catch (error) {
-    ElMessage.error(`${isDelete ? '删除' : '清理'}参数失败：${error instanceof Error ? error.message : String(error)}`)
+    ElMessage.error(`删除参数失败：${error instanceof Error ? error.message : String(error)}`)
   }
 }
 </script>
@@ -208,8 +223,7 @@ async function runBatch(action: 'clear' | 'delete') {
       <span class="pt-spacer" />
       <span class="muted">共 {{ total }} 个参数</span>
       <template v-if="canWrite">
-        <button class="rc-btn" type="button" :disabled="!selected.length" @click="runBatch('clear')">清除缓存</button>
-        <button class="rc-btn danger" type="button" :disabled="!selected.length" @click="runBatch('delete')">批量删除</button>
+        <button class="rc-btn danger" type="button" :disabled="!selected.length" @click="batchDelete">批量删除</button>
         <button class="rc-btn primary" type="button" @click="openCreate">新建参数</button>
       </template>
     </div>

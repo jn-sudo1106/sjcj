@@ -92,6 +92,16 @@ export interface Source {
   templateId?: string
   templateVersion?: number
   nodeBindings?: Record<string, FlowTemplateNodeBinding>
+  // ---- 参数源（0721 会议：加源支持"普通子源 / 参数源"两种类型）----
+  /** 省略视为 'normal'；'param' 时 baseUrl/urlTemplate/paramRefs 生效，源列表仍只存这 1 条记录，展开为 N 个 URL 在任务层做 */
+  kind?: 'normal' | 'param'
+  /** 参数源专用：不含占位符的基础地址，如 http://FundComment-2017052400023003000000000013026 */
+  baseUrl?: string
+  /** 参数源专用：基础url + 拼接符 + $PARAM$_id 占位符序列，可手动编辑覆盖默认生成 */
+  urlTemplate?: string
+  /** 参数源专用：本源绑定的参数及其分组——分组是"这次用在这个源里"的用法属性，独立于 Param.group（参数定义自带的全局分组），
+   *  同 group 值 = 顺序拼（对齐取值，要求同组各参数值数一致）；不同 group / 无 group = 组间笛卡尔积 */
+  paramRefs?: { paramId: string; group?: string | null }[]
 }
 
 /** 模板内一个稳定节点对应的子源覆盖配置；未覆盖时使用模板默认值。 */
@@ -263,9 +273,11 @@ export interface Param {
   tableName?: string
   colName?: string
   valueItems?: ParamValue[]
-  usedBy?: number // 被多少配置引用
+  usedBy?: number // 被多少配置引用（旧平台口径，与下面的参数源绑定是两回事，不要混用）
   owner?: string
   updatedAt?: string
+  /** 参数源绑定关系（0721 会议 T6）：这个参数被哪些参数源引用，mock 从 Source.paramRefs 实时派生，不单独持久化避免脏读 */
+  paramSourceRefs?: { sourceId: string; sourceName: string }[]
 }
 
 export interface ParamValue {

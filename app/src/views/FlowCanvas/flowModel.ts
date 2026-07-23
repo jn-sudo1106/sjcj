@@ -1035,6 +1035,22 @@ export function buildSourceSeed(source: Source, steps: Step[]): SourceSeed {
 }
 
 /**
+ * 参数源（0721 会议）：主链里排在最前面的采集节点，URL 强制取源的 urlTemplate（含 $PARAM$_id 占位符），
+ * urlParamRefs 直接取源自己权威的 paramRefs——不用 extractUrlParamIds 从模板文本正则反推，部分历史参数
+ * id 本身含 `-`（如 mock 的 p-fundcode）跟默认拼接符相邻时会有歧义，见 urlParams.ts 的坑记录。
+ * 不管这个节点是刚手工插入的，还是套模板/AI 推荐重建 configs 带来的，只要是"这个源画布里最靠前的采集节点"
+ * 就该顶着源的参数模板跑——否则套模板会把已经配好的参数配置悄悄冲掉（真实 bug，2026-07-21 会议反馈坐实）。
+ */
+export function applyParamSourceUrlToFirstCollectNode(main: string[], configs: Record<string, NodeConfig>, source: Source | null | undefined): void {
+  if (source?.kind !== 'param' || !source.urlTemplate) return
+  const firstCollectId = main.find((id) => configs[id]?.collectCfg)
+  const cfg = firstCollectId ? configs[firstCollectId] : undefined
+  if (!cfg?.collectCfg) return
+  cfg.collectCfg.url = source.urlTemplate
+  cfg.collectCfg.urlParamRefs = (source.paramRefs ?? []).map((ref) => ref.paramId)
+}
+
+/**
  * 网站统一流程的空白模板（0710 回退 0707 优化·补的"默认两节点骨架"）：新建/从未编排过的网站
  * 进画布应落在空白引导卡模式（§5.7 文案 + 「智能推荐模板」按需应用），而不是预置「列表抓取→详情解析」——
  * 预置骨架让用户误以为流程"已经获取到了"。id 固定 `site:${siteId}`，保证引导卡生成/保存都落对存档位。

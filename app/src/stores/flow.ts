@@ -19,6 +19,7 @@ import {
   makeStandardFlow,
   buildHorizontalLayout,
   buildSourceSeed,
+  applyParamSourceUrlToFirstCollectNode,
   emptyTripleRow,
   makeDefaultRuleOrchestration,
   normalizeNodeConfigs,
@@ -395,6 +396,8 @@ export const useFlowStore = defineStore('flow', () => {
     // - 找不到 prevId：默认插在 'end' 之前
     const at = prevId === 'end' ? idx : (idx < 0 ? main.value.length - 1 : idx + 1)
     main.value.splice(at, 0, id)
+    // 参数源（0721 会议 T5）：主链里排在最前面的采集节点顶着源的 urlTemplate 跑，见 flowModel.ts 的函数注释
+    applyParamSourceUrlToFirstCollectNode(main.value, configs, sourceCfg.value)
     // 0707 优化·Phase6：决策/分头节点插入主链时，自动创建默认 FlowBranchGroup（决策 IF+ELSE、分头 2 分支）
     if (template === 'decision') ensureBranchGroup(id, 'decision')
     else if (template === 'parallel') ensureBranchGroup(id, 'parallel')
@@ -775,6 +778,9 @@ export const useFlowStore = defineStore('flow', () => {
       sourceCfg.value = { sourceId: '', name: '', url: '', configId: '', mainTable: '', owner: '', state: 'C' }
     }
     Object.assign(sourceCfg.value, patch)
+    // 参数源（0721 会议）：编辑参数源弹窗改完 baseUrl/urlTemplate/paramRefs 后走这条路径落地，
+    // 顺带把首个采集节点重新灌一遍，画布跟着刷新，不用调用方自己记得再喊一次。
+    applyParamSourceUrlToFirstCollectNode(main.value, configs, sourceCfg.value)
     touch()
   }
   // 产物高级配置（原「落表输出」节点能力，全节点通用；0701 问题四）
@@ -1018,6 +1024,9 @@ export const useFlowStore = defineStore('flow', () => {
       nodeBindings,
     }
     const composed = composeTemplateFlow(template, boundSource, nodeBindings)
+    // 参数源（0721 会议）：套模板会用模板自带的 configs 整体替换，之前配好的参数 URL/绑定会被顶掉——
+    // 重新灌一遍，保证"套模板"和"手工加第一个采集节点"两条路径最终收敛到同一个正确状态。
+    applyParamSourceUrlToFirstCollectNode(composed.main, composed.configs, boundSource)
     load(composed)
     sourceCtx.value = JSON.parse(JSON.stringify(boundSource)) as Source
     touch()

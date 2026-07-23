@@ -12,6 +12,8 @@ import ConditionRow from './ConditionRow.vue'
 import BranchEditor from './BranchEditor.vue'
 import CollectorSettings, { type CollectorRuntimeSettings } from './CollectorSettings.vue'
 import UrlParamEditor from './UrlParamEditor.vue'
+import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
+import EditParamSourceDialog from './EditParamSourceDialog.vue'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
 import {
   entryApi, paramApi, ruleApi,
@@ -88,6 +90,16 @@ function onUrlParamRefsChange(refs: string[]) {
 function onUrlParamValuesChange(values: Record<string, string>) {
   flow.patchCollect(id.value, { urlParamValues: values })
 }
+// 参数源（0721 会议 T5）：源本身就是"多值组合展开成 N 个 URL"的语义，节点级「当前子源取值」单值下拉
+// 跟这个语义冲突（选一个值没有意义），改成只读摘要（复用加源那套 ParamSourceEditor，readonly 态）
+// + 编辑入口，真正编辑在源级弹窗里改，避免源级配置分散到节点上两处维护。
+const isParamSource = computed(() => flow.sourceCfg?.kind === 'param')
+const paramSourceModel = computed<ParamSourceModel>(() => ({
+  baseUrl: flow.sourceCfg?.baseUrl ?? '',
+  urlTemplate: flow.sourceCfg?.urlTemplate ?? '',
+  refs: flow.sourceCfg?.paramRefs ?? [],
+}))
+const editParamSourceOpen = ref(false)
 
 // 当前节点输出表（统一口径：采集类取 collectCfg.outputTable，非采集类取 cfg.outputTable）
 const nodeTableId = computed(() => cc.value?.outputTable || cfg.value?.outputTable || '')
@@ -494,15 +506,21 @@ function onWebKind(e: Event) {
 
       <!-- 参数配置独立于节点与任务配置：绑定全局参数，URL token 只标识参数插入位置。 -->
       <template v-else-if="tab === 'params'">
-        <UrlParamEditor
-          v-if="cc && nodeCapability?.supportsUrlParams"
-          :url="cc.url"
-          :param-refs="cc.urlParamRefs ?? []"
-          :param-values="cc.urlParamValues ?? {}"
-          :warn-fragment="nodeCapability?.kind === 'web'"
-          @update:param-refs="onUrlParamRefsChange"
-          @update:param-values="onUrlParamValuesChange"
-        />
+        <template v-if="cc && nodeCapability?.supportsUrlParams">
+          <template v-if="isParamSource">
+            <ParamSourceEditor :model-value="paramSourceModel" readonly />
+            <button class="rc-btn" type="button" style="margin-top: 8px" @click="editParamSourceOpen = true">编辑参数子源</button>
+          </template>
+          <UrlParamEditor
+            v-else
+            :url="cc.url"
+            :param-refs="cc.urlParamRefs ?? []"
+            :param-values="cc.urlParamValues ?? {}"
+            :warn-fragment="nodeCapability?.kind === 'web'"
+            @update:param-refs="onUrlParamRefsChange"
+            @update:param-values="onUrlParamValuesChange"
+          />
+        </template>
         <div v-else class="rc-readonly-hint">当前节点不支持 URL 参数配置。</div>
       </template>
 
@@ -685,6 +703,7 @@ function onWebKind(e: Event) {
     </template>
 
     <TableEditDialog v-model:open="tableDlg.open" :table-id="tableDlg.tableId" @saved="onTableSaved" />
+    <EditParamSourceDialog v-model="editParamSourceOpen" />
   </div>
 </template>
 

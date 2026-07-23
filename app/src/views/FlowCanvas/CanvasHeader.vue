@@ -52,15 +52,13 @@ const statusMeta = computed(() => {
   return { cls: 'muted', text: '未知' }
 })
 // 摘要头只展示运行所需信息；子源 ID、分类和标签不在此处暴露。
+// 参数源（0721 会议 T5）：只读摘要——普通源的 url 换成"参数源 · 模板 · N 个参数占位符"；
+// 具体每个参数的真实取值数需要逐个查详情，摘要头不为此额外发请求，只读 paramRefs 数量。
 const metaLine = computed(() => {
   const s = src.value
   if (!s) return ''
-  return [
-    s.url,
-    s.lastSuccessAt ? `上次成功 ${s.lastSuccessAt}` : '',
-  ]
-    .filter(Boolean)
-    .join(' · ')
+  const primary = s.kind === 'param' ? `参数子源 · ${s.urlTemplate || s.baseUrl || ''} · ${s.paramRefs?.length ?? 0} 个参数占位符` : s.url
+  return [primary, s.lastSuccessAt ? `上次成功 ${s.lastSuccessAt}` : ''].filter(Boolean).join(' · ')
 })
 function backToList() {
   router.push('/collect')

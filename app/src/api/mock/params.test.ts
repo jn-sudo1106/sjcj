@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, beforeEach } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import {
   mockAddParamValues,
   mockDeleteParamValue,
@@ -11,6 +11,7 @@ import {
   mockParamPaged,
   mockParamUpdate,
 } from './params'
+import { mockSourceCreate, mockSourceUpdate, SOURCES } from './sources'
 
 describe('参数 mock（0711 R9：URL 参数场景）', () => {
   beforeEach(() => {
@@ -24,6 +25,83 @@ describe('参数 mock（0711 R9：URL 参数场景）', () => {
 
   it('paramDetail：不存在的参数返回 null，不静默兜底成别的参数（0711 修复）', () => {
     expect(mockParamDetail({ paramId: 'ghost-param-id' })).toBeNull()
+  })
+
+  it('paramDetail：0721 参数源演示参数（913 页码 / 912 栏目）可查，genValues 有值', () => {
+    expect(mockParamDetail({ paramId: '913' })?.name).toBe('页码')
+    expect(mockGenValues({ paramId: '913' }).length).toBeGreaterThan(0)
+    expect(mockParamDetail({ paramId: '912' })?.values).toHaveLength(26)
+    expect(mockGenValues({ paramId: '912' })).toEqual(mockParamDetail({ paramId: '912' })?.values)
+  })
+})
+
+describe('参数绑定关系（0721 会议 T6：参数源反查绑定它的参数）', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+  // mockSourceCreate 是 unshift 到模块级 SOURCES 单例，测试间不会自动重置，手动清掉本组测试建的源，
+  // 避免上一条用例的绑定残留污染下一条用例的反查结果。
+  afterEach(() => {
+    for (let i = SOURCES.length - 1; i >= 0; i--) {
+      if (SOURCES[i].sourceId.startsWith('bind-test-')) SOURCES.splice(i, 1)
+    }
+  })
+
+  it('参数源保存后，paramDetail / paramPaged 都能查到反向绑定；未被引用时是空数组', () => {
+    expect(mockParamDetail({ paramId: '913' })?.paramSourceRefs).toEqual([])
+
+    const res = mockSourceCreate({
+      source: {
+        sourceId: 'bind-test-1', name: '绑定测试源', url: '', configId: '', mainTable: '', owner: 'tester', state: 'C',
+        kind: 'param', baseUrl: 'http://base', urlTemplate: 'http://base-$PARAM$_913',
+        paramRefs: [{ paramId: '913', group: null }],
+      },
+    })
+    expect(res.ok).toBe(true)
+
+    expect(mockParamDetail({ paramId: '913' })?.paramSourceRefs).toEqual([{ sourceId: 'bind-test-1', sourceName: '绑定测试源' }])
+    const paged = mockParamPaged({ paramId: '913' })
+    expect(paged.list[0]?.paramSourceRefs).toEqual([{ sourceId: 'bind-test-1', sourceName: '绑定测试源' }])
+    // 没被这个源引用的参数不受影响
+    expect(mockParamDetail({ paramId: '912' })?.paramSourceRefs).toEqual([])
+  })
+
+  it('多个参数源引用同一个参数时全部列出；编辑参数源改掉引用后绑定关系跟着变', () => {
+    mockSourceCreate({
+      source: {
+        sourceId: 'bind-test-2', name: '绑定测试源二', url: '', configId: '', mainTable: '', owner: 'tester', state: 'C',
+        kind: 'param', baseUrl: 'http://base2', urlTemplate: 'http://base2-$PARAM$_912',
+        paramRefs: [{ paramId: '912', group: null }],
+      },
+    })
+    mockSourceCreate({
+      source: {
+        sourceId: 'bind-test-3', name: '绑定测试源三', url: '', configId: '', mainTable: '', owner: 'tester', state: 'C',
+        kind: 'param', baseUrl: 'http://base3', urlTemplate: 'http://base3-$PARAM$_912',
+        paramRefs: [{ paramId: '912', group: null }],
+      },
+    })
+    // mockSourceCreate 用 unshift 落库，新创建的排前面，反查顺序跟着是后创建的在前
+    expect(mockParamDetail({ paramId: '912' })?.paramSourceRefs).toEqual([
+      { sourceId: 'bind-test-3', sourceName: '绑定测试源三' },
+      { sourceId: 'bind-test-2', sourceName: '绑定测试源二' },
+    ])
+
+    // 编辑「绑定测试源二」改成不再引用 912，绑定关系应实时反映（不是持久化的死快照）
+    mockSourceUpdate({
+      source: {
+        sourceId: 'bind-test-2', name: '绑定测试源二', url: '', configId: '', mainTable: '', owner: 'tester', state: 'C',
+        kind: 'param', baseUrl: 'http://base2', urlTemplate: 'http://base2-$PARAM$_913', paramRefs: [{ paramId: '913', group: null }],
+      },
+    })
+    expect(mockParamDetail({ paramId: '912' })?.paramSourceRefs).toEqual([{ sourceId: 'bind-test-3', sourceName: '绑定测试源三' }])
+    expect(mockParamDetail({ paramId: '913' })?.paramSourceRefs).toEqual([{ sourceId: 'bind-test-2', sourceName: '绑定测试源二' }])
+  })
+})
+
+describe('参数 mock（新建/编辑/复制/删除）', () => {
+  beforeEach(() => {
+    localStorage.clear()
   })
 
   it('paramCreate：成功创建后 paramDetail/paramPaged 都能查到；重复 id 报错', () => {

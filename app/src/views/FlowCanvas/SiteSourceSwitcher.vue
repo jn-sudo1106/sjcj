@@ -3,6 +3,8 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { siteApi, sourceApi, type Site, type Source } from '../../api'
+import type { ParamGroupRef } from './urlParams'
+import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
 
 const props = defineProps<{ siteId: string; activeKey: string }>()
 const emit = defineEmits<{ pick: [target: Source]; added: [Source]; compare: [rightId: string]; pickSite: [] }>()
@@ -64,6 +66,7 @@ function pickCompare(s: Source) {
 function onWindowClick() {
   if (cmp.show) closeComparePicker()
   closeRowMenu()
+  paramEditorRef.value?.closePicker()
 }
 onMounted(() => window.addEventListener('click', onWindowClick))
 onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
@@ -121,7 +124,8 @@ async function launchFromMenu() {
 
 // ---- ＋添加子源：默认复制当前网站首个子源，也可搜索全部子源或选择空白模板 ----
 type TemplateMode = 'default' | 'search' | 'blank'
-const addDlg = reactive({ show: false, name: '', url: '', templateMode: 'blank' as TemplateMode, templateSourceId: '' })
+type SourceKind = 'normal' | 'param'
+const addDlg = reactive({ show: false, name: '', url: '', templateMode: 'blank' as TemplateMode, templateSourceId: '', kind: 'normal' as SourceKind })
 const templateSearch = reactive({ keyword: '', results: [] as Source[], loading: false, open: false })
 const defaultTemplate = computed(() => children.value[0] ?? null)
 const selectedTemplate = computed(() => {
@@ -158,16 +162,83 @@ function openAdd(ev: MouseEvent) {
   addDlg.show = true
   addDlg.name = ''
   addDlg.url = ''
+  addDlg.kind = 'normal'
   addDlg.templateMode = defaultTemplate.value ? 'default' : 'blank'
   addDlg.templateSourceId = ''
   templateSearch.keyword = ''
   templateSearch.results = []
   templateSearch.open = false
+  resetParamSource()
 }
 function closeAdd() {
   addDlg.show = false
 }
+
+// ---- 参数源（0721 会议）：加源弹窗内新增分支，与上面的普通子源字段/流程互不干扰 ----
+// 面板本体抽成 ParamSourceEditor（NodeInspector 只读摘要 / 编辑参数源弹窗共用），这里只留创建态需要的胶水。
+const paramSrc = ref<ParamSourceModel>({ baseUrl: '', refs: [] as ParamGroupRef[], urlTemplate: '' })
+const paramEditorRef = ref<InstanceType<typeof ParamSourceEditor> | null>(null)
+
+function resetParamSource() {
+  paramSrc.value = { baseUrl: '', refs: [], urlTemplate: '' }
+}
+function switchKind(kind: SourceKind) {
+  addDlg.kind = kind
+}
+
+async function submitParamSource() {
+  const name = addDlg.name.trim()
+  if (!name) {
+    ElMessage.warning('请填写子源名称')
+    return
+  }
+  if (!paramSrc.value.baseUrl.trim()) {
+    ElMessage.warning('请填写基础 url')
+    return
+  }
+  if (!paramSrc.value.refs.length) {
+    ElMessage.warning('请至少添加一个参数')
+    return
+  }
+  if (paramEditorRef.value?.mismatchWarnings.length) {
+    ElMessage.warning('存在同组值数不一致的分组，请先调整')
+    return
+  }
+  const sourceId = `${props.siteId}-${Date.now().toString(36)}`
+  const res = await siteApi.sourceAdd(
+    props.siteId,
+    {
+      sourceId,
+      name,
+      url: '',
+      configId: '',
+      mainTable: '',
+      owner: site.value?.owner || 'admin',
+      state: 'C',
+      kind: 'param',
+      baseUrl: paramSrc.value.baseUrl.trim(),
+      urlTemplate: paramSrc.value.urlTemplate,
+      paramRefs: paramSrc.value.refs.map((ref) => ({ ...ref })),
+    },
+    false,
+  )
+  if (!res.ok) {
+    ElMessage.warning(res.message || '添加失败，请重试')
+    return
+  }
+  const addedId = res.sourceId || sourceId
+  ElMessage.success(`已添加参数子源「${name}」：源列表只存 1 条记录，发任务时将展开为 ${(paramEditorRef.value?.totalCount ?? 0).toLocaleString('en-US')} 个 URL`)
+  closeAdd()
+  await load()
+  const added = children.value.find((c) => c.sourceId === addedId)
+  if (added) emit('added', added)
+}
+
 async function submitAdd() {
+  if (addDlg.kind === 'param') {
+    await submitParamSource()
+    return
+  }
   if (!addDlg.name.trim()) {
     ElMessage.warning('请填写子源名称')
     return
@@ -280,6 +351,7 @@ async function submitImport() {
           >
             <span class="ssw-dot" :class="{ err: isErr(c), muted: c.disabled }" />
             <span class="ssw-row-name">{{ c.name }}</span>
+            <span v-if="c.kind === 'param'" class="ssw-kind-tag" title="参数子源：发任务时展开为多个 URL">参数子源</span>
           </button>
           <button
             v-if="canCompare && c.sourceId !== activeKey"
@@ -341,43 +413,61 @@ async function submitImport() {
   </div>
 
   <div v-if="addDlg.show" class="ssw-add-backdrop" @click.self="closeAdd">
-    <div class="ssw-add-card" @click.stop>
+    <div class="ssw-add-card" :class="{ wide: addDlg.kind === 'param' }" @click.stop="paramEditorRef?.closePicker()">
       <div class="ssw-add-title">添加子源</div>
-      <input v-model="addDlg.name" class="ssw-add-input" placeholder="子源名称，必填" />
-      <input v-model="addDlg.url" class="ssw-add-input" placeholder="子源 URL，选填" />
-      <select v-model="addDlg.templateMode" class="ssw-add-input" data-testid="source-template-mode" @change="onTemplateModeChange">
-        <option v-if="defaultTemplate" value="default">默认：本网站第一个子源（{{ defaultTemplate.name }}）</option>
-        <option value="search">搜索并选择全部子源</option>
-        <option value="blank">空白模板</option>
-      </select>
-      <div v-if="addDlg.templateMode === 'search'" class="ssw-template-combobox" @click.stop>
-        <input
-          v-model="templateSearch.keyword"
-          class="ssw-add-input"
-          data-testid="source-template-search"
-          placeholder="搜索并选择全部子源（名称或 ID）"
-          @focus="templateSearch.open = !!templateSearch.keyword.trim()"
-          @input="searchTemplateSources"
-        />
-        <div v-if="templateSearch.open" class="ssw-template-options">
-          <span v-if="templateSearch.loading" class="ssw-template-empty">搜索子源中…</span>
-          <span v-else-if="!templateSearch.results.length" class="ssw-template-empty">未找到匹配子源</span>
-          <button
-            v-for="source in templateSearch.results"
-            v-else
-            :key="source.sourceId"
-            type="button"
-            data-testid="source-template-option"
-            @click="selectTemplateSource(source)"
-          >
-            <span>{{ source.name }}</span>
-            <small>{{ source.sourceId }}</small>
-          </button>
+
+      <div class="ssw-kind-seg" data-testid="source-kind-seg">
+        <button type="button" :class="{ active: addDlg.kind === 'normal' }" @click="switchKind('normal')">
+          普通子源<small>手工填名称 + URL</small>
+        </button>
+        <button type="button" :class="{ active: addDlg.kind === 'param' }" data-testid="source-kind-param" @click="switchKind('param')">
+          参数子源<small>URL 模板 + 参数，按规律生成</small>
+        </button>
+      </div>
+
+      <template v-if="addDlg.kind === 'normal'">
+        <input v-model="addDlg.name" class="ssw-add-input" placeholder="子源名称，必填" />
+        <input v-model="addDlg.url" class="ssw-add-input" placeholder="子源 URL，选填" />
+        <select v-model="addDlg.templateMode" class="ssw-add-input" data-testid="source-template-mode" @change="onTemplateModeChange">
+          <option v-if="defaultTemplate" value="default">默认：本网站第一个子源（{{ defaultTemplate.name }}）</option>
+          <option value="search">搜索并选择全部子源</option>
+          <option value="blank">空白模板</option>
+        </select>
+        <div v-if="addDlg.templateMode === 'search'" class="ssw-template-combobox" @click.stop>
+          <input
+            v-model="templateSearch.keyword"
+            class="ssw-add-input"
+            data-testid="source-template-search"
+            placeholder="搜索并选择全部子源（名称或 ID）"
+            @focus="templateSearch.open = !!templateSearch.keyword.trim()"
+            @input="searchTemplateSources"
+          />
+          <div v-if="templateSearch.open" class="ssw-template-options">
+            <span v-if="templateSearch.loading" class="ssw-template-empty">搜索子源中…</span>
+            <span v-else-if="!templateSearch.results.length" class="ssw-template-empty">未找到匹配子源</span>
+            <button
+              v-for="source in templateSearch.results"
+              v-else
+              :key="source.sourceId"
+              type="button"
+              data-testid="source-template-option"
+              @click="selectTemplateSource(source)"
+            >
+              <span>{{ source.name }}</span>
+              <small>{{ source.sourceId }}</small>
+            </button>
+          </div>
         </div>
-      </div>
-      <div class="ssw-add-hint">
-        {{ selectedTemplate ? `将复制「${selectedTemplate.name}」的流程节点、相关配置和表结构，不复制数据与运行记录。` : '仅创建名称和 URL，流程从空白画布开始。' }}
-      </div>
+        <div class="ssw-add-hint">
+          {{ selectedTemplate ? `将复制「${selectedTemplate.name}」的流程节点、相关配置和表结构，不复制数据与运行记录。` : '仅创建名称和 URL，流程从空白画布开始。' }}
+        </div>
+      </template>
+
+      <template v-else>
+        <input v-model="addDlg.name" class="ssw-add-input" placeholder="子源名称，必填" />
+        <ParamSourceEditor ref="paramEditorRef" v-model="paramSrc" />
+      </template>
+
       <div class="ssw-add-actions">
         <button class="rc-btn" type="button" @click="closeAdd">取消</button>
         <button class="rc-btn primary" type="button" data-testid="add-source-submit" @click="submitAdd">添加并进入编排</button>
@@ -490,6 +580,8 @@ async function submitImport() {
 .ssw-row:hover .ssw-row-main { color: var(--rc-primary-ink); }
 .ssw-row.active .ssw-row-main { color: #fff; font-weight: 700; }
 .ssw-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssw-kind-tag { flex: none; font-size: 9px; font-weight: 700; color: var(--rc-primary-ink); background: var(--rc-primary-bg); border: 1px solid #bfdbfe; border-radius: 3px; padding: 0 4px; line-height: 14px; }
+.ssw-row.active .ssw-kind-tag { color: #fff; background: rgba(255, 255, 255, 0.2); border-color: rgba(255, 255, 255, 0.4); }
 .ssw-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--rc-ok); }
 .ssw-dot.err { background: var(--rc-error); }
 .ssw-dot.muted { background: var(--rc-faint); }
@@ -588,7 +680,7 @@ async function submitImport() {
 .ssw-row-menu button:disabled { color: var(--rc-faint); cursor: not-allowed; }
 
 .ssw-add-backdrop { position: fixed; inset: 0; z-index: 91; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, 0.28); }
-.ssw-add-card { width: min(340px, calc(100vw - 48px)); background: #fff; border: 1px solid var(--rc-border); border-radius: 12px; padding: 16px; box-shadow: 0 24px 64px -22px rgba(15, 23, 42, 0.45); }
+.ssw-add-card { width: min(340px, calc(100vw - 48px)); max-height: calc(100vh - 60px); overflow-y: auto; background: #fff; border: 1px solid var(--rc-border); border-radius: 12px; padding: 16px; box-shadow: 0 24px 64px -22px rgba(15, 23, 42, 0.45); }
 .ssw-add-title { font-size: 13px; font-weight: 800; color: var(--rc-text); margin-bottom: 10px; }
 .ssw-add-input { box-sizing: border-box; width: 100%; height: 32px; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 0 9px; outline: none; margin-bottom: 8px; }
 .ssw-add-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
@@ -615,4 +707,11 @@ async function submitImport() {
   font-family: inherit;
 }
 .ssw-import-textarea:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
+
+/* 参数源（0721 会议）：加源弹窗内新增分支；面板本体样式随 ParamSourceEditor.vue 迁走 */
+.ssw-add-card.wide { width: min(640px, calc(100vw - 48px)); transition: width 0.18s ease; }
+.ssw-kind-seg { display: flex; gap: 6px; margin-bottom: 10px; }
+.ssw-kind-seg button { flex: 1; height: 38px; border: 1px solid #d5e2f2; border-radius: 7px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
+.ssw-kind-seg button.active { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); box-shadow: inset 0 0 0 1px var(--rc-primary); }
+.ssw-kind-seg button small { display: block; font-size: 10px; font-weight: 400; color: var(--rc-muted); margin-top: 1px; }
 </style>

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { extractUrlParamIds, expandParameterizedUrl, hasFragmentParams, URL_EXPANSION_LIMIT } from './urlParams'
+import {
+  extractUrlParamIds, expandParameterizedUrl, hasFragmentParams, URL_EXPANSION_LIMIT,
+  joinType, countGroupedUrls, groupMismatchWarnings, firstGroupedCombos, expandGroupedParameterizedUrl,
+  type ParamGroupRef,
+} from './urlParams'
 
 describe('extractUrlParamIds（0711 R9）', () => {
   it('解析数字 id 与字符串 id，去重并保留首次出现顺序', () => {
@@ -84,5 +88,112 @@ describe('expandParameterizedUrl（0711 R9：笛卡尔积展开 + 上限截断�
   it('参数值先编码后替换（避免特殊字符破坏 URL）', () => {
     const r = expandParameterizedUrl('https://x.com?q=$PARAM$_kw', { kw: ['基金 & 白酒'] })
     expect(r.urls[0]).toBe(`https://x.com?q=${encodeURIComponent('基金 & 白酒')}`)
+  })
+})
+
+describe('joinType（0721 会议·按分组推导拼接类型）', () => {
+  it('全部无组 → 笛卡尔积', () => {
+    const refs: ParamGroupRef[] = [{ paramId: 'p1' }, { paramId: 'p2' }]
+    expect(joinType(refs)).toBe('cartesian')
+  })
+  it('每组仅 1 个成员（退化）→ 等价全笛卡尔积', () => {
+    const refs: ParamGroupRef[] = [{ paramId: 'p1', group: 'A' }, { paramId: 'p2', group: 'B' }]
+    expect(joinType(refs)).toBe('cartesian')
+  })
+  it('单组覆盖全部参数 → 顺序', () => {
+    const refs: ParamGroupRef[] = [{ paramId: 'p1', group: 'A' }, { paramId: 'p2', group: 'A' }]
+    expect(joinType(refs)).toBe('zip')
+  })
+  it('混合：一组顺序拼 + 另一无组参数 → 分组顺序+组间笛卡尔积', () => {
+    const refs: ParamGroupRef[] = [{ paramId: 'p1', group: 'A' }, { paramId: 'p2', group: 'A' }, { paramId: 'p3' }]
+    expect(joinType(refs)).toBe('grouped')
+  })
+})
+
+describe('countGroupedUrls（计数场景）', () => {
+  it('全部无组：各参数数量相乘', () => {
+    const refs: ParamGroupRef[] = [{ paramId: 'p1' }, { paramId: 'p2' }]
+    expect(countGroupedUrls(refs, { p1: 2, p2: 3 })).toBe(6)
+  })
+  it('单组顺序拼：取组内数量（值数一致时）', () => {
+    const refs: ParamGroupRef[] = [{ paramId: 'p1', group: 'A' }, { paramId: 'p2', group: 'A' }]
+    expect(countGroupedUrls(refs, { p1: 3, p2: 3 })).toBe(3)
+  })
+  it('混合：组内 zip（按 max 对齐）× 组外笛卡尔积', () => {
+    const refs: ParamGroupRef[] = [{ paramId: 'p1', group: 'A' }, { paramId: 'p2', group: 'A' }, { paramId: 'p3' }]
+    expect(countGroupedUrls(refs, { p1: 3, p2: 3, p3: 2 })).toBe(6)
+  })
+  it('同组值数不一致：按组内最大值对齐计数', () => {
+    const refs: ParamGroupRef[] = [{ paramId: 'p1', group: 'A' }, { paramId: 'p2', group: 'A' }]
+    expect(countGroupedUrls(refs, { p1: 2, p2: 4 })).toBe(4)
+  })
+})
+
+describe('groupMismatchWarnings', () => {
+  it('同组值数一致：无警告', () => {
+    const refs: ParamGroupRef[] = [{ paramId: 'p1', group: 'A' }, { paramId: 'p2', group: 'A' }]
+    expect(groupMismatchWarnings(refs, { p1: 3, p2: 3 })).toEqual([])
+  })
+  it('同组值数不一致：报警并列出涉及的参数', () => {
+    const refs: ParamGroupRef[] = [{ paramId: 'p1', group: 'A' }, { paramId: 'p2', group: 'A' }]
+    expect(groupMismatchWarnings(refs, { p1: 2, p2: 4 })).toEqual([{ group: 'A', paramIds: ['p1', 'p2'] }])
+  })
+  it('无组参数不参与校验', () => {
+    const refs: ParamGroupRef[] = [{ paramId: 'p1' }, { paramId: 'p2' }]
+    expect(groupMismatchWarnings(refs, { p1: 2, p2: 4 })).toEqual([])
+  })
+})
+
+describe('firstGroupedCombos（示例取值顺序：第一个因子进位最快）', () => {
+  it('纯笛卡尔积：p1 变化最快（1-a、2-a、3-a…）', () => {
+    const refs: ParamGroupRef[] = [{ paramId: 'p1' }, { paramId: 'p2' }]
+    const combos = firstGroupedCombos(refs, { p1: ['1', '2', '3'], p2: ['a', 'b'] }, 4)
+    expect(combos).toEqual([
+      { p1: '1', p2: 'a' }, { p1: '2', p2: 'a' }, { p1: '3', p2: 'a' }, { p1: '1', p2: 'b' },
+    ])
+  })
+  it('单组顺序拼：组内对齐取值（1-a、2-b…）', () => {
+    const refs: ParamGroupRef[] = [{ paramId: 'p1', group: 'A' }, { paramId: 'p2', group: 'A' }]
+    const combos = firstGroupedCombos(refs, { p1: ['1', '2'], p2: ['a', 'b'] }, 4)
+    expect(combos).toEqual([{ p1: '1', p2: 'a' }, { p1: '2', p2: 'b' }])
+  })
+})
+
+describe('expandGroupedParameterizedUrl（0721 会议·分组展开）', () => {
+  it('无参数：模板原样返回单条', () => {
+    const r = expandGroupedParameterizedUrl('https://x.com/a', [], {})
+    expect(r).toEqual({ urls: ['https://x.com/a'], total: 1, errors: [], truncated: false })
+  })
+  it('模板替换含 / 分隔（自定义拼接符）', () => {
+    const refs: ParamGroupRef[] = [{ paramId: '913' }, { paramId: '912' }]
+    const r = expandGroupedParameterizedUrl('http://base/$PARAM$_913/$PARAM$_912', refs, { 913: ['1'], 912: ['a'] })
+    expect(r.urls).toEqual(['http://base/1/a'])
+  })
+  it('未知 id（模板里无对应参数）原样保留', () => {
+    const refs: ParamGroupRef[] = [{ paramId: '913' }]
+    const r = expandGroupedParameterizedUrl('http://base-$PARAM$_913-$PARAM$_999', refs, { 913: ['1'] })
+    expect(r.urls).toEqual(['http://base-1-$PARAM$_999'])
+  })
+  it('值含 $：字面输出，不触发 JS replace 特殊替换语法', () => {
+    const refs: ParamGroupRef[] = [{ paramId: 'p1' }]
+    const r = expandGroupedParameterizedUrl('http://base-$PARAM$_p1', refs, { p1: ['a$&$`$b'] })
+    expect(r.urls).toEqual([`http://base-${encodeURIComponent('a$&$`$b')}`])
+  })
+  it('缺少取值的参数直接报错，不生成 URL', () => {
+    const refs: ParamGroupRef[] = [{ paramId: 'p1' }, { paramId: 'p2' }]
+    const r = expandGroupedParameterizedUrl('http://base-$PARAM$_p1-$PARAM$_p2', refs, { p1: ['1'] })
+    expect(r.urls).toEqual([])
+    expect(r.errors).toEqual(['参数 p2 缺少可用取值'])
+  })
+  it('组合数超过 limit 时截断且标记 truncated', () => {
+    const refs: ParamGroupRef[] = [{ paramId: 'p1' }, { paramId: 'p2' }]
+    const r = expandGroupedParameterizedUrl(
+      'http://base-$PARAM$_p1-$PARAM$_p2',
+      refs,
+      { p1: Array.from({ length: 20 }, (_, i) => `a${i}`), p2: Array.from({ length: 20 }, (_, i) => `b${i}`) },
+      100,
+    )
+    expect(r.total).toBe(100)
+    expect(r.truncated).toBe(true)
   })
 })

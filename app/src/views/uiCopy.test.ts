@@ -13,6 +13,7 @@ import tableDialog from './FlowCanvas/TableEditDialog.vue?raw'
 import siteCardGrid from './CollectAssets/SiteCardGrid.vue?raw'
 import appShell from '../layouts/AppShell.vue?raw'
 import runtimeStore from '../stores/runtime.ts?raw'
+import ruleAssetsIndex from './RuleAssets/index.vue?raw'
 
 describe('最新方案 UI 入口收口', () => {
   it('字段级预处理/去重只在数据表编辑弹窗维护', () => {
@@ -212,9 +213,12 @@ describe('最新方案 UI 入口收口', () => {
     expect(siteSourceSwitcher).toContain('siteApi.siteImportSources(props.siteId, importDlg.lines)')
     expect(siteSourceSwitcher).toContain('批量导入')
 
-    // 一级「参数列表」页签保留（0711-B 拍板：撤销原稿删除），ParamTab 不删
-    expect(collectAssetsIndex).toContain("import ParamTab from './ParamTab.vue'")
-    expect(collectAssetsIndex).toContain("{ key: 'param', label: '参数列表' }")
+    // 参数模块迁到规则资产（0721 会议 §六-1，覆盖 0711-B「ParamTab 留在采集资产」的旧口径）：
+    // 采集资产不再有 param tab，规则资产新增"参数" tab 承接
+    expect(collectAssetsIndex).not.toContain("import ParamTab from './ParamTab.vue'")
+    expect(collectAssetsIndex).not.toContain("{ key: 'param', label: '参数列表' }")
+    expect(ruleAssetsIndex).toContain("import ParamTab from './ParamTab.vue'")
+    expect(ruleAssetsIndex).toContain("{ key: 'param', label: '参数' }")
   })
 
   it('采集资产页不重复渲染网站工作区页签', () => {

@@ -4,17 +4,15 @@ import { useRoute, useRouter } from 'vue-router'
 import SourceTab from './SourceTab.vue'
 import ConfigTab from './ConfigTab.vue'
 import EntryTab from './EntryTab.vue'
-import ParamTab from './ParamTab.vue'
 import FlowTemplate from '../FlowTemplate/index.vue'
 
 const TABS: { key: string; label: string }[] = [
   { key: 'source', label: '网站列表' },
   { key: 'config', label: '配置列表' },
   { key: 'entry', label: '表 ID 列表' },
-  { key: 'param', label: '参数列表' },
   { key: 'template', label: '流程模板列表' },
 ]
-const comps: Record<string, Component> = { source: SourceTab, config: ConfigTab, entry: EntryTab, param: ParamTab, template: FlowTemplate }
+const comps: Record<string, Component> = { source: SourceTab, config: ConfigTab, entry: EntryTab, template: FlowTemplate }
 const route = useRoute()
 const router = useRouter()
 const validTabs = new Set(TABS.map((tab) => tab.key))
@@ -23,7 +21,14 @@ function normalizeTab(tab: unknown): string {
   const key = String(tab ?? '')
   return validTabs.has(key) ? key : 'source'
 }
-watch(() => route.query.tab, (tab) => { active.value = normalizeTab(tab) }, { immediate: true })
+// 参数模块迁到规则资产（0721 会议 §六-1）：旧链接 /collect?tab=param 重定向到新位置，保留一个迭代周期
+watch(() => route.query.tab, (tab) => {
+  if (tab === 'param') {
+    void router.replace('/rules?tab=param')
+    return
+  }
+  active.value = normalizeTab(tab)
+}, { immediate: true })
 function selectTab(key: string) {
   const tab = normalizeTab(key)
   const query = tab === 'source' ? {} : { tab }

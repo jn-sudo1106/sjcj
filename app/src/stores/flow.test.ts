@@ -469,6 +469,32 @@ describe('节点输入表 + 任务队列（优化 0701 问题五）', () => {
     expect(f.configs['st1'].collectCfg?.inputTable).toBe('')
     expect(f.configs['st2'].collectCfg?.inputTable).toBe('T1')
   })
+
+  it('参数源（0721 会议 T5）：空白画布新建的首个采集节点带出 urlTemplate，$PARAM$_id 自动识别为 urlParamRefs', () => {
+    const source = {
+      sourceId: 's-param', name: '参数源测试', url: '', mainTable: 'T1',
+      kind: 'param', baseUrl: 'http://base', urlTemplate: 'http://base-$PARAM$_913-$PARAM$_912',
+      paramRefs: [{ paramId: '913', group: null }, { paramId: '912', group: null }],
+    } as never
+    f.loadFromSource(source, [] as never) // 新源无 step，画布仍是 start/end 空白
+    expect(f.main).toEqual(['start', 'end'])
+
+    const firstId = f.insertAfter('start', 'web')!
+    expect(f.configs[firstId].collectCfg?.url).toBe('http://base-$PARAM$_913-$PARAM$_912')
+    expect(f.configs[firstId].collectCfg?.urlParamRefs).toEqual(['913', '912'])
+
+    // 非首节点（画布已不是空白 start/end）不套用同一模板，避免详情页等其他节点被误覆盖
+    const secondId = f.insertAfter(firstId, 'web')!
+    expect(f.configs[secondId].collectCfg?.url).toBe('')
+    expect(f.configs[secondId].collectCfg?.urlParamRefs ?? []).toEqual([])
+  })
+
+  it('普通源（kind 非 param）新建首个采集节点 URL 仍为空，不受此逻辑影响', () => {
+    const source = { sourceId: 's-normal', name: '普通源', url: '', mainTable: 'T1' } as never
+    f.loadFromSource(source, [] as never)
+    const firstId = f.insertAfter('start', 'web')!
+    expect(f.configs[firstId].collectCfg?.url).toBe('')
+  })
 })
 
 describe('节点参数结构化（0707 Phase 7A）', () => {
@@ -1129,5 +1155,43 @@ describe('Task 5 流程模板绑定', () => {
     const result = flow.applyTemplate(upgraded)
     expect(result?.cleared).toBeGreaterThan(0)
     expect(flow.sourceCfg?.nodeBindings?.[fileId]).toBeUndefined()
+  })
+})
+
+describe('参数源套模板不冲掉参数配置（0721 会议反馈坐实的真实 bug）', () => {
+  it('applyTemplate 后主链首个采集节点重新灌回 urlTemplate / urlParamRefs，源级字段全程不丢', () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source: Source = {
+      sourceId: 's-param', name: '参数源测试', url: '', configId: '', mainTable: 'T1', owner: 'a', state: 'C',
+      kind: 'param', baseUrl: 'http://base', urlTemplate: 'http://base-$PARAM$_913-$PARAM$_912',
+      paramRefs: [{ paramId: '913', group: null }, { paramId: '912', group: null }],
+    }
+    flow.loadFromSource(source, [])
+    const firstId = flow.insertAfter('start', 'web')!
+    expect(flow.configs[firstId].collectCfg?.url).toBe('http://base-$PARAM$_913-$PARAM$_912')
+
+    const template = makePresetFlowTemplates().find((item) => item.id === 'preset-web-public')!
+    flow.applyTemplate(template)
+
+    const collectNodeId = flow.main.find((id) => flow.configs[id]?.collectCfg)!
+    expect(flow.configs[collectNodeId].collectCfg?.url).toBe('http://base-$PARAM$_913-$PARAM$_912')
+    expect(flow.configs[collectNodeId].collectCfg?.urlParamRefs).toEqual(['913', '912'])
+    expect(flow.sourceCfg).toMatchObject({
+      kind: 'param', urlTemplate: 'http://base-$PARAM$_913-$PARAM$_912',
+      paramRefs: [{ paramId: '913', group: null }, { paramId: '912', group: null }],
+    })
+  })
+
+  it('普通源（非参数源）套模板不受影响，行为不变', () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source: Source = { sourceId: 's-normal', name: '普通源', url: 'https://example.com', configId: '', mainTable: 'T1', owner: 'a', state: 'C' }
+    flow.loadFromSource(source, [])
+    const template = makePresetFlowTemplates().find((item) => item.id === 'preset-web-public')!
+    flow.applyTemplate(template)
+
+    const collectNodeId = flow.main.find((id) => flow.configs[id]?.collectCfg)!
+    expect(flow.configs[collectNodeId].collectCfg?.urlParamRefs ?? []).toEqual([])
   })
 })

@@ -18,6 +18,31 @@ describe('新建 / 编辑源（0706 Phase3/4）', () => {
     expect(dup.message).toContain('已存在')
   })
 
+  it('createSource：参数源字段（kind/baseUrl/urlTemplate/paramRefs）1:1 序列化带出（0721 会议·参数源）', () => {
+    const paramRefs = [{ paramId: '913', group: null }, { paramId: '912', group: 'A' as string | null }]
+    const res = mockSourceCreate({
+      source: {
+        sourceId: 'src-param-test-1',
+        name: '参数源测试',
+        url: '',
+        configId: '',
+        mainTable: '',
+        owner: 'tester',
+        state: 'C',
+        kind: 'param',
+        baseUrl: 'http://FundComment-2017052400023003000000000013026',
+        urlTemplate: 'http://FundComment-2017052400023003000000000013026-$PARAM$_913-$PARAM$_912',
+        paramRefs,
+      },
+    })
+    expect(res.ok).toBe(true)
+    const detail = mockSourceDetail({ sourceId: 'src-param-test-1' })
+    expect(detail?.kind).toBe('param')
+    expect(detail?.baseUrl).toBe('http://FundComment-2017052400023003000000000013026')
+    expect(detail?.urlTemplate).toBe('http://FundComment-2017052400023003000000000013026-$PARAM$_913-$PARAM$_912')
+    expect(detail?.paramRefs).toEqual(paramRefs)
+  })
+
   it('updateSource：真写回 SOURCES，sourceDetail 可见变更；未知源报错', () => {
     const before = mockSourceDetail({ sourceId: '391007768' })
     const res = mockSourceUpdate({ source: { ...before!, tags: ['A', 'B'] } })
