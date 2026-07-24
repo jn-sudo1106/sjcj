@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, toRaw, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { pinyin } from 'pinyin-pro'
 import { entryApi, type EntryField, type EntryType } from '../../api'
+import { ENTRY_FIELD_DEFAULT_WIDTH } from '../../constants/entry'
 
 const props = defineProps<{ modelValue: boolean; entry?: EntryType | null }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean]; saved: [tableId: string] }>()
@@ -55,7 +56,7 @@ function maxKSeq(): number {
 }
 function blankField(seq: number): EntryField {
   const k = maxKSeq() + 1
-  return { prop: '', desc: '', type: 'string', required: false, dedup: false, seq, columnName: `K${k}`, width: 255 }
+  return { prop: '', desc: '', type: 'string', required: false, dedup: false, seq, columnName: `K${k}`, width: ENTRY_FIELD_DEFAULT_WIDTH }
 }
 
 function reset() {
@@ -65,9 +66,11 @@ function reset() {
     tableName: entry?.tableName ?? '',
     name: entry?.name ?? '',
     remark: entry?.remark ?? '',
-    fields: entry?.fields?.map((field) => ({ ...field })) ?? [],
+    // entry 是响应式 props，字段元素是 Vue reactive Proxy；structuredClone 处理不了 Proxy，需先 toRaw 剥掉再 clone
+    fields: entry?.fields?.map((field) => structuredClone(toRaw(field))) ?? [],
     keyField: entry?.keyField,
     state: entry?.state ?? 'C',
+    // null/undefined → ''：与 el-option value="" "请选择" 对齐，提交时透传空串 = 未配置（避免 String(null)='null'）
     recFlag: entry?.recFlag == null ? '' : String(entry.recFlag),
     checkFlag: entry?.checkFlag == null ? '' : String(entry.checkFlag),
     checkRule: entry?.checkRule ?? '',
@@ -122,7 +125,7 @@ function submitBatchAdd() {
       ...blankField(form.fields.length + 1),
       prop: prop.trim(),
       desc: desc?.trim() || prop.trim(),
-      width: widthStr?.trim() ? Number(widthStr.trim()) : 255,
+      width: widthStr?.trim() ? Number(widthStr.trim()) : ENTRY_FIELD_DEFAULT_WIDTH,
     })
   }
   batchDialog.visible = false

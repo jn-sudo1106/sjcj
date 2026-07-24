@@ -5,6 +5,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, CopyDocument, Delete, Download, Key, Odometer, RefreshRight, SwitchButton } from '@element-plus/icons-vue'
 import { entryApi, type EntryType } from '../../api'
 import { useAuthStore } from '../../stores/auth'
+import { getEffectiveWidth } from '../../constants/entry'
+import { exportFieldsAsCsv } from '../../utils/csvExport'
 import EntryEditorDrawer from './EntryEditorDrawer.vue'
 
 // 迁移方案 §1.6/§5-2：read 角色隐藏全部写入口（含旧只读页遗留的「新建」按钮，判为旧遗漏，不迁）。
@@ -68,19 +70,13 @@ watch(() => route.query.entryTypeId, (id) => {
 
 onMounted(() => { if (!route.query.entryTypeId) void load() })
 
-function timeago(value?: string) {
+// 显示后端返回的更新时间。统一走字符串截断（`yyyy-MM-dd HH:mm`）——
+// 旧 `new Date(value.replace(/-/g, '/'))` 解析无时区后缀的字符串会跨时区漂移，
+// 字符串截断避免此坑，且与 ParamTab / ConfigTab 口径一致。
+// 详见 REVIEW-2026-07-24.md #3。
+function formatDateTime(value?: string) {
   if (!value) return '—'
-  const ts = new Date(value.replace(/-/g, '/')).getTime()
-  if (Number.isNaN(ts)) return value
-  const diff = Date.now() - ts
-  const min = 60_000
-  const hour = 60 * min
-  const day = 24 * hour
-  if (diff < min) return '刚刚'
-  if (diff < hour) return `${Math.floor(diff / min)} 分钟前`
-  if (diff < day) return `${Math.floor(diff / hour)} 小时前`
-  if (diff < 30 * day) return `${Math.floor(diff / day)} 天前`
-  return value
+  return value.slice(0, 16)
 }
 
 async function openDetail(e: EntryType) {
@@ -110,12 +106,17 @@ async function onEntrySaved(tableId: string) {
 
 // 清除缓存（同 0721 会议 §六-2 对参数列表的决定）：UI 入口去掉，写操作成功后静默补一次调用——
 // 真实联调证实列表有服务端缓存层，不清缓存列表不会自动刷新；失败不影响主流程。
+// 失败留 console.warn breadcrumb（07-24 复盘，呼应 07-23 review #12）：下次进列表看到旧数据时能快速定位。
 async function clearCacheSilently(tableIds: string[]) {
-  if (!tableIds.length) return
+  // 过滤空串：[''].length === 1（数组有 1 个元素即使内容为空），
+  // 不过滤会把空 ID 发给后端，看起来无副作用但后端日志会有杂音。
+  const validIds = tableIds.filter((id) => !!id)
+  if (!validIds.length) return
   try {
-    await entryApi.clearCache(tableIds)
-  } catch {
-    /* 静默忽略：缓存没清掉不影响本次操作是否成功，用户也无感 */
+    await entryApi.clearCache(validIds)
+  } catch (error) {
+    // 静默吞错（用户体验：缓存没清掉不影响主流程）+ console.warn 留痕（开发定位）
+    console.warn('[EntryTab] clearCache failed', { tableIds: validIds, error })
   }
 }
 
@@ -227,7 +228,7 @@ async function onExtractFields(e: EntryType) {
     const detail = await entryApi.entryDetail(e.tableId)
     extractDialog.count = detail.fields.length
     extractDialog.text = detail.fields
-      .map((f) => `${f.prop}:${f.desc}:${!f.width || f.width < 10 ? 255 : f.width}`)
+      .map((f) => `${f.prop}:${f.desc}:${getEffectiveWidth(f.width)}`)
       .join('\n')
     extractDialog.visible = true
   } catch (error) {
@@ -306,25 +307,7 @@ async function onBatchDelete() {
 
 // §1.5：导出字段 CSV（首轮以同列结构导出 CSV，不引入 xlsx 依赖）
 function exportFields(e: EntryType) {
-  const header = ['序号', '内部ID', '数据库列', '字段编码', '字段名称', '数据类型']
-  const rows = e.fields.map((f, i) => [
-    String(f.seq ?? i + 1),
-    f.itemId ?? '',
-    f.columnName ?? '',
-    f.prop,
-    f.desc,
-    f.type === 'string' ? `varchar(${!f.width || f.width <= 0 ? 128 : f.width})` : f.type,
-  ])
-  const csv = [header, ...rows].map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n')
-  const blob = new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const tableNameShort = e.tableName.includes('.') ? e.tableName.split('.').slice(1).join('.') : e.tableName
-  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '')
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `表字段_${tableNameShort}_${date}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
+  exportFieldsAsCsv(e)
 }
 </script>
 
@@ -379,7 +362,7 @@ function exportFields(e: EntryType) {
             <td>{{ e.keyField || '—' }}</td>
             <td>{{ e.state || '—' }}</td>
             <td>{{ e.remark || '—' }}</td>
-            <td :title="e.updatedAt || ''">{{ timeago(e.updatedAt) }}</td>
+            <td :title="e.updatedAt || ''">{{ formatDateTime(e.updatedAt) }}</td>
             <td>
               <el-button link type="primary" size="small" @click="openDetail(e)">详情</el-button>
               <template v-if="canWrite">
@@ -429,7 +412,7 @@ function exportFields(e: EntryType) {
         <dt>去重字段</dt><dd>{{ drawer.entry.keyField || '—' }}</dd>
         <dt>状态</dt><dd>{{ drawer.entry.state || '—' }}</dd>
         <dt>备注</dt><dd>{{ drawer.entry.remark || '—' }}</dd>
-        <dt>更新时间</dt><dd :title="drawer.entry.updatedAt || ''">{{ timeago(drawer.entry.updatedAt) }}</dd>
+        <dt>更新时间</dt><dd :title="drawer.entry.updatedAt || ''">{{ formatDateTime(drawer.entry.updatedAt) }}</dd>
         <dt>记录变更</dt><dd>{{ drawer.entry.recFlag ?? '—' }}</dd>
         <dt>校验标识</dt><dd>{{ drawer.entry.checkFlag ?? '—' }}</dd>
         <dt>校验规则</dt><dd>{{ drawer.entry.checkRule || '—' }}</dd>

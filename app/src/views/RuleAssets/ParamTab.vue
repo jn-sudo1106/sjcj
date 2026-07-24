@@ -60,12 +60,14 @@ function kindMeta(k: string) {
 
 // 清除缓存（0721 会议 §六-2）：UI 入口去掉，写操作成功后静默补一次调用——0720 真实联调证实列表有
 // 服务端缓存层，编辑后不清缓存列表不刷新；失败不影响主流程（缓存清理是锦上添花，不是成败关键）。
+// 失败留 console.warn breadcrumb（07-24 复盘，呼应 07-23 review #12）：下次进列表看到旧数据时能快速定位。
 async function clearCacheSilently(paramIds: string[]) {
-  if (!paramIds.length) return
+  const validIds = paramIds.filter((id) => !!id)
+  if (!validIds.length) return
   try {
-    await paramApi.clearParams(paramIds)
-  } catch {
-    /* 静默忽略：缓存没清掉不影响本次操作是否成功，用户也无感 */
+    await paramApi.clearParams(validIds)
+  } catch (error) {
+    console.warn('[ParamTab] clearCache failed', { paramIds: validIds, error })
   }
 }
 

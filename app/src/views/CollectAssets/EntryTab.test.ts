@@ -37,7 +37,7 @@ describe('EntryTab · 表ID列表', () => {
     await flushPromises()
   }
 
-  it('初始查询携带 enable=\'0\'；查询按钮显式传 entryTypeId/name，不再猜词', async () => {
+  it('初始查询携带 enable=\'0\'（与旧 EntryTypeList 页面初始查询口径一致，见迁移方案 §1.3-1）；查询按钮显式传 entryTypeId/name，不再猜词', async () => {
     const pagedSpy = vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 0, list: [] })
     const auth = useAuthStore()
     auth.roles = ['admin']
@@ -76,21 +76,32 @@ describe('EntryTab · 表ID列表', () => {
     expect(pagedSpy).toHaveBeenCalledWith(expect.objectContaining({ entryTypeId: '2102157' }))
   })
 
-  it('admin 角色可见批量操作与新建；read 角色隐藏全部写入口；「清除缓存」入口已下线（同参数列表 0721 会议 §六-2）', async () => {
-    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 0, list: [] })
+  it('admin 角色可见写入口白名单 [新建, 更多]；read 角色隐藏写入口但保留只读的「详情」；「清除缓存」入口已下线（0721 会议 §六-2）', async () => {
+    // 列表需至少 1 行——空列表时行内「更多」触发按钮本就不会渲染，白名单断言会假通过（见 REVIEW-2026-07-24 复盘）
+    const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
     const auth = useAuthStore()
     auth.roles = ['admin']
     await mountTab()
     await waitForLoad()
+
+    // admin 写入口白名单断言（替代旧的「清除缓存」黑名单，避免「假阳性」）
+    expect(wrapper.text(), 'admin 缺写入口: 新建').toContain('新建')
+    expect(wrapper.text(), 'admin 缺写入口: 编辑').toContain('编辑')
+    expect(wrapper.findAll('button').some((b) => b.text().startsWith('更多')), 'admin 缺写入口: 更多').toBe(true)
     expect(wrapper.text()).not.toContain('清除缓存')
-    expect(wrapper.text()).toContain('新建')
 
     wrapper.unmount()
     auth.roles = ['read']
     await mountTab()
     await waitForLoad()
-    expect(wrapper.text()).not.toContain('清除缓存')
-    expect(wrapper.text()).not.toContain('新建')
+
+    // read 角色隐藏写入口；「详情」是只读操作，read 应该保留（不在黑名单里）
+    const writeEntries = ['新建', '编辑', '批量删除']
+    writeEntries.forEach((entry) => expect(wrapper.text(), `read 不应有写入口: ${entry}`).not.toContain(entry))
+    expect(wrapper.findAll('button').some((b) => b.text().startsWith('更多')), 'read 不应有「更多」入口').toBe(false)
+    expect(wrapper.text(), 'read 应保留只读的「详情」').toContain('详情')
+    // 表头勾选列也对 read 隐藏
     expect(wrapper.find('th input, th .el-checkbox').exists()).toBe(false)
   })
 
@@ -188,5 +199,158 @@ describe('EntryTab · 表ID列表', () => {
     await flushPromises()
 
     expect(clearSpy).toHaveBeenCalledWith(['t1'])
+  })
+
+  // ---- 写操作后清缓存契约（0721 会议 §六-2）----
+  // 7 个写路径里只测了「批量删除」+「保存/编辑」= 2 个；以下补齐剩余 5 个。
+  // 5 个都断言：成功后 entryApi.clearCache 被以正确 tableIds 调用。
+  // 任一路径未来被漏掉 / 参数错 / 顺序错，CI 会发现。
+
+  it('复制新表：成功提示透传后端 msg 并静默补一次清缓存', async () => {
+    const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
+    const copySpy = vi.spyOn(entryApi, 'copyEntry').mockResolvedValue({ ok: true, message: '复制成功' })
+    const clearSpy = vi.spyOn(entryApi, 'clearCache').mockResolvedValue({ ok: true })
+    const promptSpy = vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: 'tb_a_copy' } as never)
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountTab()
+    await waitForLoad()
+
+    const moreBtn = wrapper.findAll('button').find((b) => b.text().startsWith('更多'))!
+    await moreBtn.trigger('click')
+    await flushPromises()
+    const item = new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '复制新表')!
+    await item.trigger('click')
+    await flushPromises()
+
+    expect(promptSpy).toHaveBeenCalled()
+    expect(copySpy).toHaveBeenCalledWith('t1', 'tb_a_copy')
+    expect(clearSpy).toHaveBeenCalledWith(['t1'])
+  })
+
+  it('同步物理表结构：检查返回差异 SQL 时弹确认，确认后清缓存', async () => {
+    const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
+    const checkSpy = vi.spyOn(entryApi, 'checkTable').mockResolvedValue(['ALTER TABLE t ADD COLUMN k1 varchar(255)'])
+    const syncSpy = vi.spyOn(entryApi, 'syncTable').mockResolvedValue({ ok: true, message: '物理表结构已更新' })
+    const clearSpy = vi.spyOn(entryApi, 'clearCache').mockResolvedValue({ ok: true })
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountTab()
+    await waitForLoad()
+
+    const moreBtn = wrapper.findAll('button').find((b) => b.text().startsWith('更多'))!
+    await moreBtn.trigger('click')
+    await flushPromises()
+    const item = new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '同步物理表结构')!
+    await item.trigger('click')
+    await flushPromises()
+
+    expect(checkSpy).toHaveBeenCalledWith('t1')
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(syncSpy).toHaveBeenCalledWith('t1')
+    expect(clearSpy).toHaveBeenCalledWith(['t1'])
+  })
+
+  it('重新计算数据量：二次确认后清缓存', async () => {
+    const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
+    const calcSpy = vi.spyOn(entryApi, 'calcEntrySum').mockResolvedValue({ ok: true, message: '计算成功' })
+    const clearSpy = vi.spyOn(entryApi, 'clearCache').mockResolvedValue({ ok: true })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountTab()
+    await waitForLoad()
+
+    const moreBtn = wrapper.findAll('button').find((b) => b.text().startsWith('更多'))!
+    await moreBtn.trigger('click')
+    await flushPromises()
+    const item = new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '重新计算数据量')!
+    await item.trigger('click')
+    await flushPromises()
+
+    expect(calcSpy).toHaveBeenCalledWith('t1')
+    expect(clearSpy).toHaveBeenCalledWith(['t1'])
+  })
+
+  it('重建去重索引：二次确认后清缓存', async () => {
+    const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
+    const rebuildSpy = vi.spyOn(entryApi, 'rebuildIndex').mockResolvedValue({ ok: true, message: '重建成功' })
+    const clearSpy = vi.spyOn(entryApi, 'clearCache').mockResolvedValue({ ok: true })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountTab()
+    await waitForLoad()
+
+    const moreBtn = wrapper.findAll('button').find((b) => b.text().startsWith('更多'))!
+    await moreBtn.trigger('click')
+    await flushPromises()
+    const item = new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '重建去重索引')!
+    await item.trigger('click')
+    await flushPromises()
+
+    expect(rebuildSpy).toHaveBeenCalledWith('t1')
+    expect(clearSpy).toHaveBeenCalledWith(['t1'])
+  })
+
+  it('正式表/测试表切换：二次确认后清缓存（以 C → AC 方向为例）', async () => {
+    // state='C' 才会显示「置为正式表」菜单项
+    const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', state: 'C', fields: [] }]
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
+    const markSpy = vi.spyOn(entryApi, 'markEntryType').mockResolvedValue({ ok: true, message: '设置成功' })
+    const clearSpy = vi.spyOn(entryApi, 'clearCache').mockResolvedValue({ ok: true })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountTab()
+    await waitForLoad()
+
+    const moreBtn = wrapper.findAll('button').find((b) => b.text().startsWith('更多'))!
+    await moreBtn.trigger('click')
+    await flushPromises()
+    const item = new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '置为正式表')!
+    await item.trigger('click')
+    await flushPromises()
+
+    expect(markSpy).toHaveBeenCalledWith('t1', 'AC')
+    expect(clearSpy).toHaveBeenCalledWith(['t1'])
+  })
+
+  it('批量重建：成功提示 + 清缓存 + 刷新列表（与批量删除同口径）', async () => {
+    const entries: EntryType[] = [
+      { tableId: 't1', tableName: 'tb_a', fields: [] },
+      { tableId: 't2', tableName: 'tb_b', fields: [] },
+    ]
+    const pagedSpy = vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 2, list: entries })
+    const rebuildSpy = vi.spyOn(entryApi, 'rebuildTable').mockResolvedValue({ ok: true, message: '重建完成' })
+    const clearSpy = vi.spyOn(entryApi, 'clearCache').mockResolvedValue({ ok: true })
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountTab()
+    await waitForLoad()
+
+    // 勾选第一行
+    const rowCheckbox = wrapper.findAllComponents({ name: 'ElCheckbox' }).find((c) => c.props('ariaLabel') === '选择表 t1')
+    await rowCheckbox!.vm.$emit('change', true)
+    await flushPromises()
+
+    // 顶部「更多」按钮 → 检查并重建物理表
+    const topMoreBtn = wrapper.findAll('button').find((b) => b.text().startsWith('更多'))!
+    await topMoreBtn.trigger('click')
+    await flushPromises()
+    const item = new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').find((el) => el.text().includes('检查并重建物理表'))!
+    await item.trigger('click')
+    await flushPromises()
+
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('数量:1'), '检查表结构提示', expect.anything())
+    expect(rebuildSpy).toHaveBeenCalledWith(['t1'])
+    expect(clearSpy).toHaveBeenCalledWith(['t1'])
+    expect(pagedSpy).toHaveBeenCalled()
   })
 })
