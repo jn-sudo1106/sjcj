@@ -1,3 +1,4 @@
+import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
@@ -29,5 +30,12 @@ export default defineConfig({
         autoRewrite: true,
       },
     },
-  }
+  },
+  // @/ 路径别名（计划 优化修改 0723_架构重构_计划.md · A.0 Step -1）
+  // 用 fileURLToPath 而非 __dirname：本项目 vite.config 是 ESM（package.json "type": "module"），__dirname 不可用
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
 })

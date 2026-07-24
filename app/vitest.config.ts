@@ -1,8 +1,17 @@
+import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
   plugins: [vue()],
+  // @/ 路径别名（计划 优化修改 0723_架构重构_计划.md · A.0 Step -1）
+  // ⚠️ 不能省：vitest 不会自动继承 vite.config 的 alias，必须显式加，否则 `npm test` 时
+  // 所有 `@/...` 开头的 import 全部 resolve 失败。
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
