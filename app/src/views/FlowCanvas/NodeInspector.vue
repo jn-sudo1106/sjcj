@@ -515,19 +515,25 @@ function onWebKind(e: Event) {
       <!-- 参数配置独立于节点与任务配置：绑定全局参数，URL token 只标识参数插入位置。 -->
       <template v-else-if="tab === 'params'">
         <template v-if="cc && nodeCapability?.supportsUrlParams">
-          <template v-if="isParamSource">
+          <template v-if="isParamSource && isFirstCollectorNode">
             <ParamSourceEditor :model-value="paramSourceModel" readonly />
             <button class="rc-btn" type="button" style="margin-top: 8px" @click="editParamSourceOpen = true">编辑参数子源</button>
           </template>
-          <UrlParamEditor
-            v-else
-            :url="cc.url"
-            :param-refs="cc.urlParamRefs ?? []"
-            :param-values="cc.urlParamValues ?? {}"
-            :warn-fragment="nodeCapability?.kind === 'web'"
-            @update:param-refs="onUrlParamRefsChange"
-            @update:param-values="onUrlParamValuesChange"
-          />
+          <template v-else>
+            <!-- 参数子源的 urlTemplate 只灌给主链首个采集节点（applyParamSourceUrlToFirstCollectNode），
+                 其余节点该走各自的 UrlParamEditor；这里提示一下避免用户以为参数子源摘要该出现在这。 -->
+            <div v-if="isParamSource" class="rc-readonly-hint" style="margin-bottom: 8px">
+              本源为参数子源，URL 模板在首个采集节点生效；本节点的 URL 参数按下方单独配置。
+            </div>
+            <UrlParamEditor
+              :url="cc.url"
+              :param-refs="cc.urlParamRefs ?? []"
+              :param-values="cc.urlParamValues ?? {}"
+              :warn-fragment="nodeCapability?.kind === 'web'"
+              @update:param-refs="onUrlParamRefsChange"
+              @update:param-values="onUrlParamValuesChange"
+            />
+          </template>
         </template>
         <div v-else class="rc-readonly-hint">当前节点不支持 URL 参数配置。</div>
       </template>

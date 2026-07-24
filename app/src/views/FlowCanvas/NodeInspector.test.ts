@@ -66,3 +66,52 @@ describe('NodeInspector 规则数据懒加载（review 0723 #9 修正）', () =>
     expect(ruleApi.ruleGroups).toHaveBeenCalledTimes(1)
   })
 })
+
+// 参数子源的 urlTemplate 只灌给主链首个采集节点（flowModel.applyParamSourceUrlToFirstCollectNode），
+// 之前「参数配置」tab 的展示条件只看 isParamSource（源级），导致非首个采集节点也误展示参数子源摘要，
+// 挡掉了它自己本该有的 UrlParamEditor（节点级单值绑定）入口。这里验证按 isFirstCollectorNode 收窄后的展示。
+describe('NodeInspector 参数子源摘要只在首个采集节点展示', () => {
+  function setupParamSource() {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.sourceCfg = {
+      sourceId: 's-1', name: '参数子源', url: '', configId: '', mainTable: 'T1', owner: 'admin', state: 'C',
+      kind: 'param', baseUrl: 'http://base', urlTemplate: 'http://base-$PARAM$_913',
+      paramRefs: [{ paramId: '913', group: null }],
+    }
+    const first = cloneConfig(NODE_CONFIGS['web-list'])
+    if (first.collectCfg) first.collectCfg.url = 'http://base-$PARAM$_913'
+    const second = cloneConfig(NODE_CONFIGS['web-list'])
+    flow.main = ['web-1', 'web-2']
+    flow.configs['web-1'] = first
+    flow.configs['web-2'] = second
+    return flow
+  }
+
+  it('首个采集节点：展示参数子源只读摘要 + 编辑入口，不展示 UrlParamEditor', async () => {
+    mockAssets()
+    const flow = setupParamSource()
+    flow.select('web-1')
+    flow.setActiveTab('params')
+
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('编辑参数子源')
+    expect(wrapper.find('.upe').exists()).toBe(false)
+  })
+
+  it('非首个采集节点：展示提示 + 自己的 UrlParamEditor，不展示参数子源摘要/编辑入口', async () => {
+    mockAssets()
+    const flow = setupParamSource()
+    flow.select('web-2')
+    flow.setActiveTab('params')
+
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('本源为参数子源')
+    expect(wrapper.text()).not.toContain('编辑参数子源')
+    expect(wrapper.find('.upe').exists()).toBe(true)
+  })
+})
