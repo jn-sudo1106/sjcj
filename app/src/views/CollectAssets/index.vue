@@ -6,9 +6,10 @@ import ConfigTab from './ConfigTab.vue'
 import EntryTab from './EntryTab.vue'
 import FlowTemplate from '../FlowTemplate/index.vue'
 
+// 配置列表下线（0721 会议 §五 Phase D：经理+黄总确认"配置列表根本没用"，每个网站就是一个完整配置，
+// 节点/表/参数配置都在网站详情里看）——先隐藏入口，ConfigTab 组件本体和路由暂不删，方便快速回退。
 const TABS: { key: string; label: string }[] = [
   { key: 'source', label: '网站列表' },
-  { key: 'config', label: '配置列表' },
   { key: 'entry', label: '表 ID 列表' },
   { key: 'template', label: '流程模板列表' },
 ]
