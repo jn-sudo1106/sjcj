@@ -25,7 +25,7 @@ describe('toCsv 通用 CSV 构造', () => {
   })
 
   it('非字符串字段会被 toString 转换（数字 / null）', () => {
-    const csv = toCsv([[1, null, undefined, true]])
+    const csv = toCsv([[1, null, undefined, true]] as unknown as string[][])
     // null/undefined → 'null'/'undefined'（标准 String 行为），由调用方负责清洗
     expect(csv).toContain('"1"')
     expect(csv).toContain('"null"')
