@@ -3,7 +3,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { siteApi, sourceApi, type Site, type Source } from '../../api'
-import type { ParamGroupRef } from './urlParams'
+import type { ParamGroupRef } from '@/utils/flow/urlParams'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
 
 const props = defineProps<{ siteId: string; activeKey: string }>()

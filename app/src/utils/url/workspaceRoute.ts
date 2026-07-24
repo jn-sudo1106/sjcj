@@ -1,4 +1,4 @@
-import type { Source } from '../../api'
+import type { Source } from '@/api'
 
 export type SourceWorkspaceView = 'flow' | 'data' | 'file' | 'task'
 // 网站详情页（0714 会议 Task 3）：只做聚合查看，没有流程视图。

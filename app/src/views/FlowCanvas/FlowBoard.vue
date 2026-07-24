@@ -8,7 +8,7 @@ import { flowApi, flowTemplateApi, type FlowTemplate } from '../../api'
 import CanvasHeader from './CanvasHeader.vue'
 import AddNodePopover from './AddNodePopover.vue'
 import FlowXmlDialog from './FlowXmlDialog.vue'
-import { flowToXml } from './flowXml'
+import { flowToXml } from '@/utils/flow/flowXml'
 import {
   iconFor,
   isDataNode,

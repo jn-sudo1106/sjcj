@@ -37,13 +37,13 @@ import {
   type FlowBranchGroup,
   type FlowDef,
 } from '../views/FlowCanvas/flowModel'
-import { extractUrlParamIds, hasFragmentParams } from '../views/FlowCanvas/urlParams'
+import { extractUrlParamIds, hasFragmentParams } from '@/utils/flow/urlParams'
 import { useRuntimeStore } from './runtime'
 import {
   compatibleTemplateBindings,
   composeTemplateFlow,
   extractTemplateNodeBindings,
-} from '../views/FlowCanvas/flowTemplates'
+} from '@/utils/flow/flowTemplates'
 import type { FlowTemplate, RuleOrchestration, Source, Site, Step } from '../api'
 
 export { TERMINALS }

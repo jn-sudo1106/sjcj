@@ -7,8 +7,8 @@ import { paramApi, type Param } from '../../api'
 import {
   joinType, countGroupedUrls, groupMismatchWarnings, expandGroupedParameterizedUrl,
   type ParamGroupRef, type JoinType,
-} from './urlParams'
-import { paramValueCount, paramValuePreviewLabel } from './paramPreview'
+} from '@/utils/flow/urlParams'
+import { paramValueCount, paramValuePreviewLabel } from '@/utils/flow/paramPreview'
 import ParamEditorDrawer from './ParamEditorDrawer.vue'
 
 export interface ParamSourceModel {

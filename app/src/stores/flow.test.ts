@@ -3,7 +3,7 @@ import { setActivePinia, createPinia } from 'pinia'
 import { useFlowStore } from './flow'
 import { mockFlowRecommend, mockNodeAiChat } from '../api/mock/flows'
 import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES } from '../views/FlowCanvas/flowModel'
-import { makePresetFlowTemplates } from '../views/FlowCanvas/flowTemplates'
+import { makePresetFlowTemplates } from '@/utils/flow/flowTemplates'
 import type { Source } from '../api'
 
 describe('flow store 编辑动作', () => {

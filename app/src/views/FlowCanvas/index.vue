@@ -17,7 +17,7 @@ import FileView from './FileView.vue'
 import SiteSourceSwitcher from './SiteSourceSwitcher.vue'
 import SiteDetailView from './SiteDetailView.vue'
 import CategoryTreePicker, { type CategorySelection } from './CategoryTreePicker.vue'
-import { firstSourceId, normalizeSourceView, normalizeSiteView, sourceViewFromHash } from './workspaceRoute'
+import { firstSourceId, normalizeSourceView, normalizeSiteView, sourceViewFromHash } from '@/utils/url/workspaceRoute'
 
 const route = useRoute()
 const router = useRouter()

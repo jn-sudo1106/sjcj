@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { flowToXml, xmlEscape } from './flowXml'
-import type { FlowDef } from './flowModel'
+import type { FlowDef } from '@/views/FlowCanvas/flowModel'
 
 function flowFixture(): FlowDef {
   return {

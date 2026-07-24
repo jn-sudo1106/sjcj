@@ -5,7 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useUiStore } from '../../stores/ui'
 import { flowTemplateApi, sourceApi, type FlowTemplate } from '../../api'
-import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from './workspaceRoute'
+import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
 import SyncSourcesDialog from './SyncSourcesDialog.vue'
 
 const flow = useFlowStore()

@@ -1,7 +1,7 @@
 // 参数取值数 / 预览文案（0721 会议·参数源）：paramApi.genValues 是"预览"接口，sequence/date_sequence
 // 会截到 20 条演示（见 mock/params.ts 注释），但参数源面板的"共 N 个 URL"要展示真实取值数，不能用截断后的
 // 预览长度——这两个数在 list 类型下相等（list 从不截断），但在 sequence/date_sequence 下不相等，故单独算。
-import type { Param } from '../../api/types'
+import type { Param } from '@/api/types'
 
 export function paramValueCount(param: Pick<Param, 'kind' | 'values' | 'seq'>): number {
   switch (param.kind) {

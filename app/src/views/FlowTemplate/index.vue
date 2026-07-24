@@ -6,7 +6,7 @@ import { useFlowStore } from '../../stores/flow'
 import { useUiStore } from '../../stores/ui'
 import FlowBoard from '../FlowCanvas/FlowBoard.vue'
 import NodeInspector from '../FlowCanvas/NodeInspector.vue'
-import { makeBlankTemplateDefinition } from '../FlowCanvas/flowTemplates'
+import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
 import type { FlowDef } from '../FlowCanvas/flowModel'
 
 type FlowSnapshot = {

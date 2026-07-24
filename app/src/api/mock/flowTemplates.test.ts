@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mockFlowTemplateDetail, mockFlowTemplateList, mockFlowTemplateSave } from './flowTemplates'
 import { mockFlowLoad, mockFlowRecommend, mockFlowSave } from './flows'
 import type { Source } from '../types'
-import { composeTemplateFlow } from '../../views/FlowCanvas/flowTemplates'
+import { composeTemplateFlow } from '@/utils/flow/flowTemplates'
 
 afterEach(() => localStorage.clear())
 

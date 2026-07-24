@@ -3,7 +3,7 @@ import type {
   FlowTemplateDefinition,
   FlowTemplateNodeBinding,
   Source,
-} from '../../api'
+} from '@/api'
 import {
   LIB_GROUPS,
   NODE_CONFIGS,
@@ -13,7 +13,7 @@ import {
   makeBlankFlow,
   type FlowDef,
   type NodeConfig,
-} from './flowModel'
+} from '@/views/FlowCanvas/flowModel'
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T

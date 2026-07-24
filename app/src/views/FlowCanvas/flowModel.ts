@@ -2,7 +2,7 @@
 // 节点配置、连线（子步骤）配置、节点模板与图标/样式辅助函数均与原型口径一致。
 
 import type { RuleOrchestration, Site, Source, Step } from '../../api'
-import { extractUrlParamIds } from './urlParams'
+import { extractUrlParamIds } from '@/utils/flow/urlParams'
 
 export type NodeKind = 'node' | 'decision' | 'parallel'
 export type TripleField = 'inmap' | 'params' | 'output'

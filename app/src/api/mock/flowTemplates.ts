@@ -1,5 +1,5 @@
 import type { FlowTemplate, FlowTemplateSaveInput } from '../types'
-import { makePresetFlowTemplates, sanitizeTemplateDefinition } from '../../views/FlowCanvas/flowTemplates'
+import { makePresetFlowTemplates, sanitizeTemplateDefinition } from '@/utils/flow/flowTemplates'
 
 const STORAGE_KEY = 'sjcj.flow-templates.v1'
 
