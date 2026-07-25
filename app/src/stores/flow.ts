@@ -46,8 +46,6 @@ import {
 } from '@/utils/flow/flowTemplates'
 import type { FlowTemplate, RuleOrchestration, Source, Site, Step } from '../api'
 
-export { TERMINALS }
-
 // 画布布局常量（对齐原型：节点宽 210、居中 x=320、终端宽 150）
 const CENTER = 320
 const NODE_W = 210

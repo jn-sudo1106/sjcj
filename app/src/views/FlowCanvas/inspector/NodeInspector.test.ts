@@ -3,9 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import NodeInspector from './NodeInspector.vue'
-import { useFlowStore } from '../../stores/flow'
+import { useFlowStore } from '../../../stores/flow'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, paramApi, ruleApi } from '../../api'
+import { entryApi, paramApi, ruleApi } from '../../../api'
 
 function mockAssets() {
   vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 0, list: [] })

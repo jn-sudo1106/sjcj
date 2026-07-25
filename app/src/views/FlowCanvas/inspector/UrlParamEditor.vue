@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { paramApi, type Param } from '../../api'
+import { paramApi, type Param } from '../../../api'
 import { extractUrlParamIds, hasFragmentParams } from '@/utils/flow/urlParams'
-import ParamEditorDrawer from './ParamEditorDrawer.vue'
+import ParamEditorDrawer from '@/views/FlowCanvas/ParamEditorDrawer.vue'
 
 const props = defineProps<{
   url: string

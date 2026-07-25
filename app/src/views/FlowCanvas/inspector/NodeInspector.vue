@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { useFlowStore } from '../../stores/flow'
-import { useUiStore } from '../../stores/ui'
+import { useFlowStore } from '../../../stores/flow'
+import { useUiStore } from '../../../stores/ui'
 import {
   WEB_KIND_OPTIONS, decisionOrParallelKind, fieldOptionsFromTableOrOutput, nodeEntryCondition, nodeTaskQueue,
   makeDefaultRuleOrchestration, collectorCapabilityOf,
@@ -12,23 +12,23 @@ import ConditionRow from './ConditionRow.vue'
 import BranchEditor from './BranchEditor.vue'
 import CollectorSettings, { type CollectorRuntimeSettings } from './CollectorSettings.vue'
 import UrlParamEditor from './UrlParamEditor.vue'
-import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
-import EditParamSourceDialog from './EditParamSourceDialog.vue'
+import ParamSourceEditor, { type ParamSourceModel } from '@/views/FlowCanvas/ParamSourceEditor.vue'
+import EditParamSourceDialog from '@/views/FlowCanvas/EditParamSourceDialog.vue'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
 import {
   entryApi, paramApi, ruleApi,
   type EntryType, type Param, type RuleGroup, type Rule, type SharedConfig,
   type RuleOrchestration, type RuleOrchestrationItem, type RuleOrchestrationTestResult,
-} from '../../api'
+} from '../../../api'
 import TableEditDialog from './TableEditDialog.vue'
 import NodeAiChat from './NodeAiChat.vue'
 
 const flow = useFlowStore()
 const ui = useUiStore()
-const cfg = computed(() => flow.selectedNode)
-const id = computed(() => flow.selectedId)
-const tab = computed(() => flow.activeTab)
-const cc = computed(() => cfg.value?.collectCfg)
+const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
+const id = computed<string>(() => flow.selectedId)
+const tab = computed<string>(() => flow.activeTab)
+const cc = computed<CollectConfig | undefined>(() => cfg.value?.collectCfg)
 
 const statusText = computed(() => (cfg.value?.disabled ? '已停止' : (cfg.value?.status ?? '')))
 const statusClass = computed(() => (cfg.value?.disabled || cfg.value?.planned ? 'warn' : 'ok'))
@@ -146,10 +146,10 @@ function onTaskUrlRuleChange(e: Event) {
   flow.patchTaskConfig(id.value, { urlRule: (e.target as HTMLInputElement).value })
 }
 // 任务参数由当前节点「参数配置」绑定，不再另行选择参数；这里只配置每个参数的取值来源。
-const availableTaskParamRefs = computed(() => [...new Set(cc.value?.urlParamRefs ?? [])])
+const availableTaskParamRefs = computed<string[]>(() => [...new Set(cc.value?.urlParamRefs ?? [])])
 const taskParamValues = computed<TaskParamValue[]>(() => {
   const saved = new Map((cfg.value?.taskCfg?.paramValues ?? []).map((item) => [item.paramId, item]))
-  return availableTaskParamRefs.value.map((paramId) => ({ paramId, fieldId: '', valueExpr: '', ...saved.get(paramId) }))
+  return availableTaskParamRefs.value.map((paramId) => ({ paramId, fieldId: '', valueExpr: '', ...(saved.get(paramId) ?? {}) }))
 })
 function taskParamLabel(paramId: string) {
   const param = params.value.find((item) => item.paramId === paramId)
@@ -161,7 +161,7 @@ function onTaskParamValueChange(paramId: string, key: 'fieldId' | 'valueExpr', e
     paramValues: taskParamValues.value.map((item) => item.paramId === paramId ? { ...item, [key]: value } : item),
   })
 }
-const isFirstCollectorNode = computed(() => !!cc.value && flow.main.find((nodeId) => !!flow.configs[nodeId]?.collectCfg) === id.value)
+const isFirstCollectorNode = computed(() => !!cc.value && flow.main.find((nodeId: string) => !!flow.configs[nodeId]?.collectCfg) === id.value)
 
 const prevNode = computed<NodeConfig | undefined>(() => {
   const idx = flow.main.indexOf(id.value)
@@ -203,7 +203,7 @@ function addTaskField(key: TaskFieldList) {
   if (next) flow.patchTaskConfig(id.value, { [key]: [...current, next.prop] })
 }
 function removeTaskField(key: TaskFieldList, index: number) {
-  flow.patchTaskConfig(id.value, { [key]: taskFieldList(key).filter((_, itemIndex) => itemIndex !== index) })
+  flow.patchTaskConfig(id.value, { [key]: taskFieldList(key).filter((_: string, itemIndex: number) => itemIndex !== index) })
 }
 function canAddTaskField(key: TaskFieldList) {
   return taskFieldOptions(key).some((field) => !taskFieldList(key).includes(field.prop))
@@ -349,7 +349,7 @@ function setCC(key: string, e: Event) {
   flow.patchCollect(id.value, { [key]: val } as Partial<CollectConfig>)
 }
 const isAppCollect = computed(() => Boolean(cc.value && /APP/.test(`${cfg.value?.title ?? ''}${cfg.value?.sub ?? ''}${cc.value.snatchType}`)))
-const appPackageRowIndex = computed(() => cfg.value?.base.findIndex((row) => row[0] === '包名') ?? -1)
+const appPackageRowIndex = computed(() => cfg.value?.base.findIndex((row: [string, string]) => row[0] === '包名') ?? -1)
 const appPackageName = computed(() => {
   const row = cfg.value?.base[appPackageRowIndex.value]
   return row?.[1] ?? ''

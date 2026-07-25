@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { entryApi, type EntryType, type EntryField } from '../../api'
+import { entryApi, type EntryType, type EntryField } from '../../../api'
 
 const props = defineProps<{ open: boolean; tableId?: string }>()
 const emit = defineEmits<{ 'update:open': [boolean]; saved: [string] }>()
