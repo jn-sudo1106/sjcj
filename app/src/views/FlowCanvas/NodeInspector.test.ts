@@ -4,7 +4,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import NodeInspector from './NodeInspector.vue'
 import { useFlowStore } from '../../stores/flow'
-import { NODE_CONFIGS, cloneConfig } from './flowModel'
+import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, paramApi, ruleApi } from '../../api'
 
 function mockAssets() {

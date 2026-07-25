@@ -13,7 +13,7 @@ import {
   makeBlankFlow,
   type FlowDef,
   type NodeConfig,
-} from '@/views/FlowCanvas/flowModel'
+} from '@/views/FlowCanvas/canvas/flowModel'
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T

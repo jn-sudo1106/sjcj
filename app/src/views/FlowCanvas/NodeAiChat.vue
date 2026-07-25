@@ -2,7 +2,7 @@
 import { computed, nextTick, ref } from 'vue'
 import { flowApi } from '../../api'
 import { useFlowStore } from '../../stores/flow'
-import { nodeOutputTable } from './flowModel'
+import { nodeOutputTable } from '@/views/FlowCanvas/canvas/flowModel'
 
 // 节点级 AI 对话（0701 问题八）：与画布「智能推荐模板」（流程级 AI）同体系两层，
 // mock 阶段走关键词匹配回复（flowApi.nodeAiChat），二期换真 LLM 界面零改动。

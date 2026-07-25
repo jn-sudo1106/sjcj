@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import ConditionRow from './ConditionRow.vue'
-import type { ConditionGroup } from './flowModel'
+import type { ConditionGroup } from '@/views/FlowCanvas/canvas/flowModel'
 
 describe('ConditionRow', () => {
   it('勾选进入条件后立即展开条件编辑区', async () => {

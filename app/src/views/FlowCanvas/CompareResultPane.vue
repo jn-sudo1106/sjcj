@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { sourceApi, dataApi, type Source, type DataTableMeta, type DataRow } from '../../api'
-import { buildHorizontalLayout, buildSourceSeed, iconFor, nodeOutputTable, pickFinalMainNodeId, type NodeConfig } from './flowModel'
+import { buildHorizontalLayout, buildSourceSeed, iconFor, nodeOutputTable, pickFinalMainNodeId, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import DataGrid from './DataGrid.vue'
 
 // 分屏对比（0701 问题三 · 方案 C）单栏内容：给定 sourceId 独立加载、独立渲染，

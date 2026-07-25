@@ -1,7 +1,7 @@
 import { reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { RunRow, RunNode, DataRow } from '../api'
-import { isDataNode, nodeOutputTable, type FlowDef } from '../views/FlowCanvas/flowModel'
+import { isDataNode, nodeOutputTable, type FlowDef } from '@/views/FlowCanvas/canvas/flowModel'
 
 // 运行时 store —— 发起抓取（mock）产生的运行数据的单一来源。
 // 画布节点态、运行记录、数据查看三页都读它，与静态 mock 叠加，形成「发起抓取→run→落表」闭环。

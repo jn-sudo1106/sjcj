@@ -2,7 +2,7 @@ import type { Paged, Source, Site, Ack, QueueStat, TaskInst, SourceCloneRequest,
 import { SOURCES, mockSourceCreate, setSourceDetached, mockSourceSteps, mockSourceNodeRuns } from './sources'
 import { mockFlowLoad, mockFlowSave } from './flows'
 import { cloneEntryStructure } from './entries'
-import { buildSourceSeed, type FlowDef, type NodeConfig } from '../../views/FlowCanvas/flowModel'
+import { buildSourceSeed, type FlowDef, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 
 // 网站—子源父子模型 mock（0707 优化·Phase2）：网站 = 统一流程模板 + 批量工具（不实际运行），
 // 子源（语言/变体）= 真正的采集运行实体。网站统一流程复用既有 flow/save·load 契约，id = `site:${siteId}`。

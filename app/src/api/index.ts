@@ -8,7 +8,7 @@ import type {
   OverviewSummary, TrendPoint, RawFile, RawFileQuery, RawFileStats, SourceCloneRequest, SourceCloneResult,
   FlowTemplate, FlowTemplateSaveInput,
 } from './types'
-import type { FlowDef, FlowRecommendation } from '../views/FlowCanvas/flowModel'
+import type { FlowDef, FlowRecommendation } from '@/views/FlowCanvas/canvas/flowModel'
 import {
   configFromLegacy,
   configLogFromLegacy,

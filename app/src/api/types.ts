@@ -9,7 +9,7 @@ import type {
   NodeConfig,
   OutputAdvanced,
   TaskConfig,
-} from '../views/FlowCanvas/flowModel'
+} from '@/views/FlowCanvas/canvas/flowModel'
 
 /** 通用分页返回 */
 export interface Paged<T> {

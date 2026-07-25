@@ -3,9 +3,9 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { siteApi, sourceApi, type NodeRunStat, type Source, type Step, type TaskInst } from '../../api'
 import { useFlowStore } from '../../stores/flow'
-import CanvasHeader from './CanvasHeader.vue'
+import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
-import { buildHorizontalLayout } from './flowModel'
+import { buildHorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
 
 // 任务是子源的运行事实：子源画布下只看当前子源；网站详情页（siteWide）聚合看全部子源，不提供内部筛选。
 const props = defineProps<{ siteWide?: boolean }>()

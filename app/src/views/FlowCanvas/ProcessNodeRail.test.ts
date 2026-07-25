@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import ProcessNodeRail from './ProcessNodeRail.vue'
-import { buildHorizontalLayout, NODE_CONFIGS } from './flowModel'
+import { buildHorizontalLayout, NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
 
 describe('ProcessNodeRail', () => {
   it('点击可选节点时只发出该 nodeId', async () => {

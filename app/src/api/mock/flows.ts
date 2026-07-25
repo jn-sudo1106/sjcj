@@ -5,7 +5,7 @@ import {
   type FlowDef,
   type FlowRecommendation,
   type PresetIntent,
-} from '../../views/FlowCanvas/flowModel'
+} from '@/views/FlowCanvas/canvas/flowModel'
 import type { Ack } from '../types'
 import { setSourceDetached } from './sources'
 import { SITE_SEEDS } from './sites'

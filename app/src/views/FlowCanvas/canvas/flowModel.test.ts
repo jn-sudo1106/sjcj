@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyParamSourceUrlToFirstCollectNode, buildHorizontalLayout, iconFor, NODE_CONFIGS, normalizeNodeConfig, type NodeConfig } from './flowModel'
-import type { Source } from '../../api'
+import type { Source } from '../../../api'
 
 describe('流程参数配置迁移', () => {
   it('旧流程加载时从 URL token 初始化节点参数绑定', () => {

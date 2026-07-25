@@ -8,7 +8,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
-import { conditionGroupLabel, decisionOrParallelKind, type ConditionGroup, type FlowBranch, type FlowBranchGroup } from './flowModel'
+import { conditionGroupLabel, decisionOrParallelKind, type ConditionGroup, type FlowBranch, type FlowBranchGroup } from '@/views/FlowCanvas/canvas/flowModel'
 import ConditionRow from './ConditionRow.vue'
 import { entryApi, type EntryType } from '../../api'
 

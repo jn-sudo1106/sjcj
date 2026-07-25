@@ -36,7 +36,7 @@ import {
   type FlowBranch,
   type FlowBranchGroup,
   type FlowDef,
-} from '../views/FlowCanvas/flowModel'
+} from '@/views/FlowCanvas/canvas/flowModel'
 import { extractUrlParamIds, hasFragmentParams } from '@/utils/flow/urlParams'
 import { useRuntimeStore } from './runtime'
 import {

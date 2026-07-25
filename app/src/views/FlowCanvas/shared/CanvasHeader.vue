@@ -2,9 +2,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { useFlowStore } from '../../stores/flow'
-import { useUiStore } from '../../stores/ui'
-import { flowTemplateApi, sourceApi, type FlowTemplate } from '../../api'
+import { useFlowStore } from '../../../stores/flow'
+import { useUiStore } from '../../../stores/ui'
+import { flowTemplateApi, sourceApi, type FlowTemplate } from '../../../api'
 import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
 import SyncSourcesDialog from './SyncSourcesDialog.vue'
 

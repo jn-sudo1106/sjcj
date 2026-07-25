@@ -7,7 +7,7 @@ import {
   WEB_KIND_OPTIONS, decisionOrParallelKind, fieldOptionsFromTableOrOutput, nodeEntryCondition, nodeTaskQueue,
   makeDefaultRuleOrchestration, collectorCapabilityOf,
   type CollectConfig, type ConditionGroup, type NodeConfig, type TaskParamValue, type TripleField, type WebKind,
-} from './flowModel'
+} from '@/views/FlowCanvas/canvas/flowModel'
 import ConditionRow from './ConditionRow.vue'
 import BranchEditor from './BranchEditor.vue'
 import CollectorSettings, { type CollectorRuntimeSettings } from './CollectorSettings.vue'

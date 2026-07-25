@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import CollectorSettings from './CollectorSettings.vue'
-import { COLLECTOR_CAPABILITIES } from './flowModel'
+import { COLLECTOR_CAPABILITIES } from '@/views/FlowCanvas/canvas/flowModel'
 
 describe('CollectorSettings（0711 R5：采集节点运行设置，默认折叠）', () => {
   it('capability 未传或不支持任何能力时不渲染任何内容', () => {

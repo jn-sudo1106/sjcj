@@ -1,4 +1,4 @@
-import type { ConditionGroup, FlowDef, NodeConfig } from '@/views/FlowCanvas/flowModel'
+import type { ConditionGroup, FlowDef, NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 
 export function xmlEscape(value: string): string {
   return value

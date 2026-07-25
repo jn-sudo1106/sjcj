@@ -1,0 +1,583 @@
+// flowModel.seeds.ts — 节点配置种子与流程构造器
+//
+// 从 flowModel.ts（1270 行）物理切出：
+//   - 采集能力字典（COLLECTOR_CAPABILITIES / inferCollectorKind / collectorCapabilityOf）
+//   - 规则编排（DEFAULT_RULE_SYSTEM_PROMPT / makeDefaultRuleOrchestration）
+//   - 节点种子配置（NODE_CONFIG_SEEDS / NODE_CONFIGS）
+//   - 模板映射（TEMPLATE_TO_NODE / SNATCH_TYPES / WEB_KIND_OPTIONS / CONFIG_STRATEGY_OPTIONS
+//     / TEMPLATE_TO_SNATCH / Pill / LibItem / LibGroup / LIB_GROUPS / TEMPLATE_TO_NAME）
+//   - 流程构造器（buildSourceSeed / makeSiteSeedTemplate / makeBlankFlow / makeStandardFlow
+//     / buildFlow / PRESET_INTENTS）
+//
+// 依赖关系：seeds → layout（用 cloneConfig / normalizeNodeConfigs / backfillOutputTables）
+// 切分后 flowModel.ts 末尾 re-export `* from './flowModel.seeds'`，外部所有引用方零改动。
+
+import type { Source, Step } from '@/api'
+import type {
+  CollectConfig,
+  CollectorCapability,
+  CollectorKind,
+  FlowDef,
+  LibGroup,
+  NodeConfig,
+  NodeConfigSeed,
+  Pill,
+  PresetIntent,
+  RuleOrchestration,
+} from './flowModel'
+import { cloneConfig, normalizeNodeConfigs, backfillOutputTables } from './flowModel.layout'
+
+// ---------- 采集能力 ----------
+/** 采集节点能力字典：固定产物类型节点的表/队列不可编辑，UI 与 store 双重防线都据此判断（0711 T5） */
+export const COLLECTOR_CAPABILITIES: Record<CollectorKind, CollectorCapability> = {
+  web: { kind: 'web', label: '网页抓取', artifactType: 'structured', outputMode: 'selectable', queueMode: 'editable', supportsProxy: true, supportsResume: true, supportsLogin: true, supportsUrlParams: true },
+  browser_html: {
+    kind: 'browser_html', label: '浏览器抓取', artifactType: 'html', outputMode: 'fixed', fixedOutputTable: 'raw_html_browser',
+    queueMode: 'fixed', fixedQueue: 'browser_html_collect', supportsProxy: true, supportsResume: true, supportsLogin: true, supportsUrlParams: true,
+  },
+  wechat_official_html: {
+    kind: 'wechat_official_html', label: '公众号抓取', artifactType: 'html', outputMode: 'fixed', fixedOutputTable: 'raw_html_wechat_official',
+    queueMode: 'fixed', fixedQueue: 'wechat_official_html_collect', supportsProxy: true, supportsResume: true, supportsLogin: true, supportsUrlParams: true,
+  },
+  app: { kind: 'app', label: 'APP 抓取', artifactType: 'structured', outputMode: 'selectable', queueMode: 'editable', supportsProxy: false, supportsResume: false, supportsLogin: true, supportsUrlParams: false },
+  file_download: { kind: 'file_download', label: '文件下载', artifactType: 'file', outputMode: 'selectable', queueMode: 'editable', supportsProxy: false, supportsResume: true, supportsLogin: false, supportsUrlParams: false },
+  python: { kind: 'python', label: 'Python 抓取', artifactType: 'structured', outputMode: 'selectable', queueMode: 'editable', supportsProxy: false, supportsResume: false, supportsLogin: false, supportsUrlParams: false },
+}
+
+/** 从旧字段推导采集类型（1:1+fallback，0701 问题五同款口径）：显式 collectorKind 优先，否则按 snatchType 特征推断 */
+export function inferCollectorKind(cc?: CollectConfig): CollectorKind {
+  if (cc?.collectorKind) return cc.collectorKind
+  const st = cc?.snatchType || ''
+  if (/BROWSER/.test(st)) return 'browser_html'
+  if (/WECHAT/.test(st)) return 'wechat_official_html'
+  if (/\[170\]/.test(st)) return 'python'
+  if (/\[95\]/.test(st)) return cc?.webKind === 'attachment' ? 'file_download' : 'app'
+  return 'web'
+}
+
+/** 节点的采集能力描述；非采集节点（无 collectCfg）返回 undefined */
+export function collectorCapabilityOf(cfg: NodeConfig): CollectorCapability | undefined {
+  if (!cfg.collectCfg) return undefined
+  return COLLECTOR_CAPABILITIES[inferCollectorKind(cfg.collectCfg)]
+}
+
+// ---------- 规则编排 ----------
+export const DEFAULT_RULE_SYSTEM_PROMPT = '生成 Python 规则脚本：入口为 def main(content)，返回 JSON 对象；只做文本判断，不访问外部网络或文件。'
+
+export function makeDefaultRuleOrchestration(): RuleOrchestration {
+  return {
+    mode: 'new',
+    describe: 'content 中包含地产二字时，tags 返回房地产',
+    systemPrompt: DEFAULT_RULE_SYSTEM_PROMPT,
+    script: '',
+    scriptPath: '',
+    enabled: true,
+  }
+}
+
+// ---------- 节点种子配置（key = 节点 id）。插入新节点时克隆对应模板生成新 key ----------
+const NODE_CONFIG_SEEDS = {
+  'web-list': {
+    title: '公告列表抓取', sub: '[90] 网页抓取 · 源配置', status: '运行', planned: false, collect: true,
+    base: [['源 URL', 'https://example.com/announcements?page=${page}'], ['源名称', '交易所公告列表 - A 股'], ['源分类', '公告 / 交易所 / 列表'], ['定时策略', '30 8 * * 1-5']],
+    fields: [['使用代理', '否'], ['断点续爬', '开启'], ['源标签', '公告、A股、列表页']],
+    inmap: [['page', '序列参数', '1..20'], ['publish_date', '动态日期', '$CUR_DATA,-1']],
+    params: [['page', 'sequence', '1..20'], ['publish_date', 'date', '$CUR_DATA,-1,yyyy-MM-dd']],
+    output: [['detail_url', 'url', '详情页子步骤入口'], ['title', 'string', '公告标题'], ['publish_time', 'date', '发布时间']],
+    collectCfg: {
+      snatchType: '[90] - 网页抓取', url: 'https://example.com/announcements?page=${page}',
+      webKind: 'list',
+      outputTable: '2101001', inputTable: '', inputParams: ['p-date'],
+      isDetail: false,
+    },
+    taskCfg: { queue: 'announcement.list', urlRule: '' },
+  },
+  'web-detail': {
+    title: '公告详情抓取', sub: '[90] 网页抓取 · 子步骤产物', status: '运行', planned: false, collect: true,
+    base: [['失败策略', '跳过并记录'], ['启用状态', '启用'], ['原始文件', '保存 HTML/PDF']],
+    fields: [['父步骤', '公告列表抓取'], ['去重', '由列表表去重'], ['超时', '30s'], ['重试', '2']],
+    inmap: [['detail_url', '← 列表抓取.detail_url', '上一步属性'], ['retry', '常量', '2']],
+    params: [['detail_url', 'from parent', '列表页输出'], ['retry', 'number', '2']],
+    output: [['content', 'longtext', '正文'], ['attachments', 'json', '附件列表'], ['source_file', 'url', '原始文件']],
+    collectCfg: {
+      snatchType: '[90] - 网页抓取', url: 'https://example.com/detail/${detail_url}',
+      webKind: 'detail',
+      outputTable: '2101001', inputTable: '2101001', inputParams: [],
+      isDetail: true,
+    },
+    taskCfg: { queue: '', urlSourceField: 'file_url-K4', urlRule: '$VAL$' },
+  },
+  'app-collect': {
+    title: 'APP 抓取', sub: '[95] APP 抓取 · 移动端接口', status: '待配置', planned: false, collect: true,
+    base: [['包名', 'com.example.app'], ['接口地址', 'https://m.example.com/api/list?page=${page}'], ['采集方式', 'APP 接口抓取'], ['鉴权方式', '接口 token / 设备参数']],
+    fields: [['登录态', '按接口鉴权'], ['设备参数', '二期接入'], ['源标签', 'APP、接口']],
+    inmap: [['page', '序列参数', '1..20'], ['token', '常量 / 登录态', '按接口鉴权']],
+    params: [['page', 'sequence', '1..20'], ['token', 'credential', '接口鉴权参数']],
+    output: [['payload', 'json', '接口返回'], ['content', 'longtext', '正文'], ['source_url', 'url', '来源链接']],
+    collectCfg: {
+      snatchType: '[95] - APP 抓取', url: 'https://m.example.com/api/list?page=${page}',
+      webKind: 'list',
+      outputTable: '', inputTable: '', inputParams: [],
+      isDetail: false,
+    },
+    taskCfg: { queue: 'app.collect', urlRule: '' },
+  },
+  // 0711 R7：浏览器抓取——渲染并保存 HTML 文件，输出表/队列固定（先做成与网页抓取同构，仅能力键+固定值不同）
+  'browser-html-collect': {
+    title: '浏览器抓取', sub: '[BROWSER] 浏览器抓取 · 源配置', status: '待配置', planned: false, collect: true,
+    base: [['源 URL', 'https://example.com'], ['源名称', '浏览器抓取源'], ['产物', 'HTML 文件（固定输出表）'], ['定时策略', '30 8 * * 1-5']],
+    fields: [['使用代理', '否'], ['断点续爬', '开启'], ['源标签', '']],
+    inmap: [],
+    params: [],
+    output: [['html_file', 'file', '渲染后的 HTML 文件']],
+    collectCfg: {
+      snatchType: '[BROWSER] - 浏览器抓取', url: 'https://example.com',
+      webKind: 'list',
+      outputTable: COLLECTOR_CAPABILITIES.browser_html.fixedOutputTable ?? '', inputTable: '', inputParams: [],
+      isDetail: false,
+      collectorKind: 'browser_html',
+    },
+    taskCfg: { queue: COLLECTOR_CAPABILITIES.browser_html.fixedQueue ?? '', urlRule: '' },
+  },
+  // 0711 R8：公众号抓取——同构于浏览器抓取，仅固定表/队列取另一组能力键
+  'wechat-html-collect': {
+    title: '公众号抓取', sub: '[WECHAT] 公众号抓取 · 源配置', status: '待配置', planned: false, collect: true,
+    base: [['源 URL', 'https://mp.weixin.qq.com/s/xxx'], ['源名称', '公众号抓取源'], ['产物', 'HTML 文件（固定输出表）'], ['定时策略', '30 8 * * 1-5']],
+    fields: [['使用代理', '否'], ['断点续爬', '开启'], ['源标签', '']],
+    inmap: [],
+    params: [],
+    output: [['html_file', 'file', '公众号页面 HTML 文件']],
+    collectCfg: {
+      snatchType: '[WECHAT] - 公众号抓取', url: 'https://mp.weixin.qq.com/s/xxx',
+      webKind: 'list',
+      outputTable: COLLECTOR_CAPABILITIES.wechat_official_html.fixedOutputTable ?? '', inputTable: '', inputParams: [],
+      isDetail: false,
+      collectorKind: 'wechat_official_html',
+    },
+    taskCfg: { queue: COLLECTOR_CAPABILITIES.wechat_official_html.fixedQueue ?? '', urlRule: '' },
+  },
+  'file-parse': {
+    title: '文件解析', sub: '文件解析类 · PDF/Word/Excel/图片', status: '建议补充 · P1', planned: false,
+    base: [['文件来源', '← 文件下载.source_file / 原始文件归档'], ['文件类型', 'PDF / Word / Excel / 图片'], ['解析方式', '按页解析 + 表格抽取'], ['输出策略', '文本 + 结构化表']],
+    fields: [['页码 / Sheet', '全部'], ['字段范围', '标题、正文、表格、附件'], ['失败策略', '保留原始文件并告警'], ['能力状态', '建议补充']],
+    inmap: [['source_file', '← 文件下载.source_file', '原始文件'], ['file_type', '← 文件下载.file_type', '文件类型']],
+    params: [['parse_mode', 'enum', '全文/表格/图片'], ['page_range', 'string', '1-*'], ['sheet_name', 'string', '全部']],
+    output: [['parsed_text', 'longtext', '解析文本'], ['parsed_tables', 'json', '表格结构'], ['parse_trace', 'json', '解析日志']],
+  },
+  ocr: {
+    title: 'OCR 识别', sub: '[150] OCR 识别 · 执行器待确认', status: '规划中（待执行器）', planned: true,
+    base: [['OCR 引擎', '待数据中心确认'], ['文件来源', '← 文件解析 / 原始图片'], ['输出表', 'ocr_text_result'], ['置信度阈值', '0.82']],
+    fields: [['低置信度处理', '进入人工复核'], ['语言', '中文 + 英文'], ['版面保留', '开启'], ['能力状态', '页面可见，执行器待确认']],
+    inmap: [['image_file', '← 文件下载.source_file', '图片或扫描件'], ['page_image', '← 文件解析.page_image', '页面图片']],
+    params: [['min_confidence', 'number', '0.82'], ['language', 'enum', 'zh,en']],
+    output: [['ocr_text', 'longtext', '识别文本'], ['confidence', 'number', '置信度'], ['bbox', 'json', '位置']],
+  },
+  'ai-extract': {
+    title: '公告要素 AI 提取', sub: '[155] AI 提取 · schema', status: '规划中（待执行器）', planned: true,
+    base: [['模型策略', '公告要素抽取 v3'], ['输出实体表', 'announcement_event'], ['最低置信度', '0.80'], ['低置信度处理', '进入人工队列']],
+    fields: [['schema 校验', '开启'], ['敏感字段', '金额、主体、事项'], ['版本', 'draft-ai-0.3'], ['执行器', '待确认']],
+    inmap: [['content', '← 详情抓取.content', '正文'], ['attachments_text', '← 详情抓取.attachments', '附件解析文本']],
+    params: [['event_type', 'enum', '增持/减持/诉讼/回购'], ['amount', 'number', '万元'], ['company_name', 'string', '主体公司']],
+    output: [['event_type', 'string', '事项类型'], ['summary', 'text', '摘要'], ['confidence', 'number', '置信度']],
+  },
+  'field-map': {
+    title: '字段抽取 / 结构化映射', sub: '文本结构化类 · schema 映射', status: '建议补充 · P1', planned: false,
+    base: [['输入字段', 'parsed_text / content'], ['目标 schema', 'announcement_event'], ['缺失字段策略', '空值标记 + 异常输出'], ['置信度', '字段级记录']],
+    fields: [['映射方式', '规则 + 函数工具'], ['日期标准化', 'normalize_date'], ['金额单位', '万元'], ['能力状态', '新前端扩展']],
+    inmap: [['parsed_text', '← 文件解析.parsed_text', '解析文本'], ['content', '← 详情抓取.content', '正文']],
+    params: [['schema', 'json', '字段定义'], ['missing_policy', 'enum', '空值/阻断/告警']],
+    output: [['mapped_rows', 'table', '结构化行'], ['missing_fields', 'json', '缺失字段'], ['mapping_trace', 'json', '映射日志']],
+  },
+  clean: {
+    title: '字段清洗 / 格式转换', sub: '清洗类 · 函数工具', status: '建议补充 · P1', planned: false,
+    base: [['清洗函数', 'trim + normalize_date + unit_convert'], ['空值处理', '保留并标记'], ['日期转换', 'yyyy-MM-dd'], ['单位换算', '元 → 万元']],
+    fields: [['函数来源', '数据中心函数工具 + 新前端扩展'], ['异常输出', 'error_rows'], ['处理范围', '标题、日期、金额、主体'], ['能力状态', '建议补充']],
+    inmap: [['mapped_rows', '← 结构化映射.mapped_rows', '待清洗行']],
+    params: [['date_format', 'string', 'yyyy-MM-dd'], ['amount_unit', 'enum', '万元'], ['null_policy', 'enum', '标记']],
+    output: [['clean_rows', 'table', '清洗后数据'], ['clean_errors', 'json', '清洗异常'], ['clean_trace', 'json', '处理日志']],
+  },
+  dedupe: {
+    title: '去重处理', sub: '清洗类 · 去重字段', status: '建议补充 · P1', planned: false,
+    base: [['去重字段', 'source_url + publish_time'], ['重复策略', '保留最新'], ['异常输出', 'duplicate_rows'], ['保留规则', '优先完整字段']],
+    fields: [['表去重键', 'entry_type.dedupe_fields'], ['重复率阈值', '<= 1%'], ['处理方式', '写入前检查'], ['能力状态', '建议补充']],
+    inmap: [['clean_rows', '← 字段清洗.clean_rows', '待去重数据']],
+    params: [['dedupe_key', 'expr', 'source_url + publish_time'], ['keep_policy', 'enum', 'latest']],
+    output: [['unique_rows', 'table', '去重后数据'], ['duplicate_rows', 'json', '重复明细'], ['dedupe_rate', 'number', '重复率']],
+  },
+  rule: {
+    title: '规则引擎处理', sub: '规则处理 · group/page', status: '可批测', planned: false,
+    base: [['规则组', 'NEWS_SENTIMENT'], ['执行阶段', 'BASIC'], ['逻辑', 'AND · 命中即追踪'], ['规则版本', 'rulepkg-0616-draft']],
+    fields: [['表达式', 'RULE_STOCK_PRICE_COUNT'], ['共享配置', 'stockPriceKeywords'], ['Trace', '记录命中与过滤原因'], ['鉴权', '经采集配置中心网关代理']],
+    inmap: [['content', '← 详情抓取.content', '输入正文'], ['stockPriceKeywords', '← 共享配置', '关键词列表']],
+    params: [['minContentLength', 'number', '50'], ['stockPriceThreshold', 'number', '5'], ['stockPriceKeywords', 'list', '股价,涨停,跌停']],
+    output: [['rule_hit', 'boolean', '是否命中'], ['rule_reason', 'text', '命中原因'], ['risk_level', 'enum', 'low/mid/high']],
+    ruleCfg: makeDefaultRuleOrchestration(),
+  },
+  check: {
+    title: '质量校验', sub: '[300] 校验类 · 质量门禁', status: '异常分流', planned: false,
+    base: [['校验对象', 'announcement_event'], ['完整性规则', '主体/时间/事项必填'], ['去重键', 'source_url + publish_time'], ['异常去向', '回详情抓取或人工队列']],
+    fields: [['字段完整率', '>= 95%'], ['重复率', '<= 1%'], ['前处理函数', 'trim + normalize_date'], ['阻断策略', '高风险阻断发布']],
+    inmap: [['rows', '← AI提取.* / 详情.*', '待校验数据行'], ['risk_level', '← 规则处理.risk_level', '风险等级']],
+    params: [['required_fields', 'list', 'company,event_type,publish_time'], ['dedupe_key', 'expr', 'source_url + publish_time']],
+    output: [['quality_score', 'number', '质量分'], ['error_rows', 'json', '异常明细'], ['pass', 'boolean', '是否通过']],
+  },
+  // 「落表输出」节点已移除（优化 0701 问题四）：落表是每个节点的固有配置能力（产物 Tab），不再作为独立节点类型。
+  metric: {
+    title: '指标引用', sub: '输出类 · 指标中心引用', status: 'P1 · 跳转指标中心', planned: false,
+    base: [['指标数据集', 'announcement_event_dataset'], ['指标', '高风险公告数'], ['编辑入口', '指标中心轻编辑器'], ['引用方式', '只引用，不在画布编辑口径']],
+    fields: [['结果回溯', 'dataset -> table -> source -> task'], ['负责人', '数据运营'], ['状态', '已发布'], ['能力状态', '新前端扩展节点']],
+    inmap: [['entry_type_id', '← 上游节点.entry_type_id', '来源表'], ['data_id', '← 上游节点.data_id', '结果明细']],
+    params: [['dataset_id', 'string', 'ds_announcement_event'], ['measure_id', 'string', 'm_risk_notice']],
+    output: [['measure_result', 'url', '指标结果链接'], ['lineage', 'json', '回溯链路']],
+  },
+  mail: {
+    title: '提取数据发邮件', sub: '[400] 通知 · 模板与审计', status: '规划中（待执行器）', planned: true,
+    base: [['邮件模板', '投研公告日报'], ['收件组', '行业研究组 / 公司研究组'], ['触发条件', 'risk_level = high 或 人工确认'], ['发送窗口', '交易日 09:00-17:00']],
+    fields: [['附件', '规则命中明细.xlsx'], ['抄送', '合规留痕邮箱'], ['发送前确认', '开启'], ['执行器', '待确认']],
+    inmap: [['payload', '← 校验.pass + 规则.* ', '发送数据'], ['recipients', '← 收件组', '收件人']],
+    params: [['subject', 'template', '${date} 公告规则日报'], ['recipients', 'list', 'research-team']],
+    output: [['mail_id', 'string', '邮件 ID'], ['sent_at', 'datetime', '发送时间'], ['audit_link', 'url', '审计链接']],
+  },
+  alert: {
+    title: '异常告警', sub: '通知类 · 失败/阻断/恢复', status: 'P2 · 建议补充', planned: true,
+    base: [['告警条件', '校验失败 / 规则阻断 / 任务 E'], ['告警级别', 'warn / high'], ['接收人', '数据运营组'], ['恢复条件', '重跑成功或人工关闭']],
+    fields: [['渠道', '站内 + 邮件'], ['去重窗口', '30 分钟'], ['升级策略', '连续失败 3 次升级'], ['能力状态', '建议补充']],
+    inmap: [['error_rows', '← 校验.error_rows', '异常数据'], ['task_status', '← 运行记录.status', '任务状态']],
+    params: [['severity', 'enum', 'warn/high'], ['dedupe_window', 'number', '30m']],
+    output: [['alert_id', 'string', '告警 ID'], ['status', 'enum', 'open/closed'], ['audit_link', 'url', '审计链接']],
+  },
+  decision: {
+    title: '决策分支', sub: '逻辑控制 · 条件路径', status: '静态保留 · 待执行器', planned: false, kind: 'decision',
+    base: [['分支名称', '按条件分流'], ['条件 1', '抓取成功且字段完整'], ['条件 2', '失败或待复核'], ['默认路径', '人工复核']],
+    fields: [['节点来源', '研究工作台保留能力'], ['适配状态', '采集链路静态可配置'], ['上线依赖', '编排执行器支持条件路由'], ['失败策略', '保留运行记录']],
+    inmap: [['status', '← 上游节点.status', '运行状态'], ['quality_score', '← 校验.quality_score', '质量分']],
+    params: [['if', 'expr', 'status = "C" AND quality_score >= 0.95'], ['else', 'expr', '进入复核或告警']],
+    output: [['true_path', 'path', '继续落表或指标'], ['false_path', 'path', '回补 / 告警 / 人工复核'], ['decision_trace', 'json', '判断依据']],
+  },
+  parallel: {
+    title: '分头处理', sub: '逻辑控制 · 多路径并行', status: '静态保留 · 待编排', planned: false, kind: 'parallel',
+    base: [['并行名称', '抓取后分头处理'], ['路径 A', '结构化清洗'], ['路径 B', '规则命中'], ['汇合点', '质量校验']],
+    fields: [['节点来源', '研究工作台保留能力'], ['适配状态', '采集链路静态可配置'], ['上线依赖', '编排执行器支持 fan-out/fan-in'], ['并发上限', '待后端确认']],
+    inmap: [['rows', '← 上游节点.output', '待处理数据'], ['run_id', '← 当前运行', '运行标识']],
+    params: [['branches', 'list', 'clean,rule,notify'], ['join_policy', 'enum', '全部成功 / 任一失败告警']],
+    output: [['branch_results', 'json', '各路径结果'], ['join_status', 'enum', 'C/E/L'], ['parallel_trace', 'json', '分头处理日志']],
+  },
+  // 0714 会议：节点面板精简，用一个通用「数据处理」节点顶替原「解析结构化/数据清洗/数据校验」三组
+  // （file-parse/ocr/ai-extract/field-map/clean/dedupe/check 定义本身保留不删，历史节点仍可正常打开/编辑，
+  // 只是新增节点入口收敛到这一个）。形态参照 custom：通用/灵活配置，不绑定固定语义。
+  process: {
+    title: '数据处理', sub: '数据处理类 · 通用配置', status: '待配置', planned: false,
+    base: [['处理方式', '待配置：清洗 / 去重 / 校验 / 结构化等，按需自定义'], ['输入来源', '上游节点产物'], ['失败策略', '记录并阻断'], ['能力状态', '通用数据处理节点']],
+    fields: [['负责人', '数据运营'], ['处理范围', '待补充'], ['异常输出', '待补充'], ['配置状态', '待补充']],
+    inmap: [['input', '← 上游节点.output', '输入数据']],
+    params: [['config', 'json', '自定义处理参数']],
+    output: [['result', 'table', '处理结果'], ['trace', 'json', '处理日志']],
+  },
+  custom: {
+    title: '自定义节点', sub: '自定义 · 待配置', status: '待配置', planned: false,
+    base: [['节点说明', '请在此描述节点用途'], ['执行器', '待选择'], ['失败策略', '记录并阻断'], ['能力状态', '自定义草稿']],
+    fields: [['负责人', '数据运营'], ['输入来源', '上游节点'], ['输出去向', '下游节点'], ['配置状态', '待补充']],
+    inmap: [['input', '← 上游节点.output', '输入数据']],
+    params: [['config', 'json', '自定义参数']],
+    output: [['result', 'json', '节点输出'], ['trace', 'json', '执行日志']],
+  },
+} satisfies Record<string, NodeConfigSeed>
+
+export const NODE_CONFIGS: Record<string, NodeConfig> = normalizeNodeConfigs(NODE_CONFIG_SEEDS)
+
+// ---------- 模板映射 ----------
+// 模板 → 节点配置 key
+export const TEMPLATE_TO_NODE: Record<string, string> = {
+  web: 'web-list', app: 'app-collect', file: 'web-detail', python: 'web-list', parse: 'file-parse', ocr: 'ocr',
+  ai: 'ai-extract', map: 'field-map', clean: 'clean', dedupe: 'dedupe', check: 'check', process: 'process',
+  rule: 'rule', 'rule-trace': 'rule', metric: 'metric', mail: 'mail',
+  alert: 'alert', decision: 'decision', parallel: 'parallel', custom: 'custom',
+  // 0711 R7/R8：两个独立的固定产物类型采集节点
+  'browser-html': 'browser-html-collect', 'wechat-html': 'wechat-html-collect',
+}
+
+// 抓取类型选项（统一来源；NodeInspector 与种子配置共用）
+export const SNATCH_TYPES = ['[90] - 网页抓取', '[95] - APP 抓取', '[95] - 文件下载', '[150] - OCR 识别', '[155] - AI 提取', '[170] - Python 抓取']
+
+export const WEB_KIND_OPTIONS: { value: 'list' | 'detail' | 'attachment'; label: string; desc: string }[] = [
+  { value: 'list', label: '列表页', desc: '分页、搜索结果、列表入口' },
+  { value: 'detail', label: '详情页', desc: '正文、详情字段、附件入口' },
+  { value: 'attachment', label: '文件附件页', desc: '文件下载、附件直链入口' },
+]
+
+// 新建配置：运行策略下拉选项
+export const CONFIG_STRATEGY_OPTIONS = ['增量', '全量', '按需触发']
+
+// 模板 → 默认抓取类型（新插入采集节点用）
+export const TEMPLATE_TO_SNATCH: Record<string, string> = {
+  web: '[90] - 网页抓取',
+  app: '[95] - APP 抓取',
+  file: '[95] - 文件下载',
+  python: '[170] - Python 抓取',
+  ocr: '[150] - OCR 识别',
+  ai: '[155] - AI 提取',
+  'browser-html': '[BROWSER] - 浏览器抓取',
+  'wechat-html': '[WECHAT] - 公众号抓取',
+}
+
+// 左侧节点库分组
+export const LIB_GROUPS: LibGroup[] = [
+  {
+    title: '采集类', items: [
+      { template: 'web', code: '90', name: '网页抓取', desc: '源 URL、配置、子步骤', pill: 'p1' as Pill },
+      { template: 'app', code: '95', name: 'APP 抓取', desc: '包名、接口地址、移动端参数', pill: 'p1' as Pill },
+      { template: 'file', code: '95', name: '文件下载', desc: '附件、原始文件、入库', pill: 'p1' as Pill },
+      { template: 'python', code: '170', name: 'Python 抓取', desc: '青龙脚本、待确认权限', pill: 'p2' as Pill },
+      // 0711 R7/R8：抓 HTML 文件，输出表/队列固定，不可编辑
+      { template: 'browser-html', code: 'BROWSER', badge: '180', name: '浏览器抓取', desc: '渲染并保存 HTML，固定表/队列', pill: 'p1' as Pill },
+      { template: 'wechat-html', code: 'WECHAT', badge: '185', name: '公众号抓取', desc: '公众号页面采集，固定表/队列', pill: 'p1' as Pill },
+    ]
+  },
+  {
+    // 0714 会议：去掉「解析结构化/数据清洗/数据校验」三组细分节点，收敛为一个通用「数据处理」入口
+    // （原 parse/ocr/ai/map/clean/dedupe/check 的节点定义仍保留在 NODE_CONFIG_SEEDS 里，历史节点不受影响）
+    title: '数据处理', items: [
+      { template: 'process', code: 'PROC', name: '数据处理', desc: '清洗、去重、校验、结构化等，按需自定义配置', pill: 'p1' as Pill },
+    ]
+  },
+  {
+    // 0707 优化·Phase1：决策/分头处理从右键菜单单独入口收进添加节点浮层的「逻辑」分组（参照 Dify）
+    title: '逻辑', items: [
+      { template: 'decision', code: 'IF', badge: '310', name: '决策分支', desc: '按条件路由到下一个节点，命中一条走一条', pill: 'p1' as Pill },
+      { template: 'parallel', code: 'PAR', badge: '315', name: '分头处理', desc: '多条路径无条件并行执行', pill: 'p1' as Pill },
+    ]
+  },
+  {
+    title: '规则类', items: [
+      { template: 'rule', code: 'RULE', badge: '320', name: '规则处理', desc: '规则组、表达式、配置', pill: 'p1' as Pill },
+      { template: 'rule-trace', code: 'TRACE', badge: '325', name: '规则 Trace', desc: '命中、过滤、失败原因', pill: 'p1' as Pill },
+    ]
+  },
+  {
+    // 「落表输出」已并入每个节点的产物 Tab（0701 问题四），分组由"输出类"更名"引用类"
+    title: '引用类', items: [
+      { template: 'metric', code: 'M', badge: '350', name: '指标引用', desc: '跳转指标中心，不编辑口径', pill: 'p1' as Pill },
+    ]
+  },
+  {
+    title: '通知类', items: [
+      { template: 'mail', code: '400', name: '提取数据发邮件', desc: '待执行器确认', pill: 'plan' as Pill, planned: true },
+      { template: 'alert', code: 'ALERT', badge: '405', name: '异常告警', desc: '失败、阻断、恢复通知', pill: 'p2' as Pill, planned: true },
+    ]
+  },
+  {
+    // 移除节点库侧栏后（0706 优化·Phase3），画布内「+ 添加步骤」选单复用本清单；自定义节点原仅在弹窗 MODAL_TEMPLATES 出现，一并收进来保持能力不丢
+    title: '其他', items: [
+      { template: 'custom', code: '—', name: '自定义节点', desc: '自定义草稿，待补充配置', pill: 'p2' as Pill },
+    ]
+  },
+]
+
+// 模板 → 节点类型名（新插入节点的默认节点名称 / 源名称）
+export const TEMPLATE_TO_NAME: Record<string, string> = Object.fromEntries(
+  LIB_GROUPS.flatMap((g) => g.items.map((it) => [it.template, it.name])),
+)
+
+// ---------- 流程构造器 ----------
+/**
+ * 源 → 链路种子（纯函数，从 flow store 的 loadFromSource 提取）：把源的子步骤编译为画布节点。
+ * 分屏对比（Phase 5）用它独立构造第二栏的链路，不依赖/不污染全局 flow store。
+ */
+export function buildSourceSeed(source: Source, steps: Step[]): {
+  main: string[]
+  branches: import('./flowModel').BranchSeed[]
+  configs: Record<string, NodeConfig>
+} {
+  const configs: Record<string, NodeConfig> = {}
+  const main: string[] = ['start']
+  steps.forEach((step, i) => {
+    const templateKey = i === 0 ? 'web-list' : 'web-detail'
+    const cfg = cloneConfig(NODE_CONFIGS[templateKey])
+    cfg.title = step.name || (i === 0 ? '列表抓取' : '详情解析')
+    if (cfg.collectCfg) {
+      // 源级字段（源名称/分类/标签/登录/选用配置等）不再复制到节点：随 loadFromSource 整体挂到 flow.sourceCfg（0706 优化·源/节点配置分层）
+      cfg.collectCfg.url = source.url
+      cfg.collectCfg.outputTable = step.outputTable || source.mainTable || ''
+      // 接口 1:1（Step.inputTable，'-' 表示无）：首步无输入表，次步起 = 上一步输出表（0701 问题五）
+      cfg.collectCfg.inputTable = step.inputTable && step.inputTable !== '-' ? step.inputTable : ''
+    }
+    cfg.disabled = !step.enabled
+    configs[step.stepId] = cfg
+    main.push(step.stepId)
+  })
+  main.push('end')
+  // 名字含「规则」的源在主链插入「规则处理」节点（列表抓取 → 规则处理 → 详情解析），输出表取上游（首步）的表。
+  if (/规则/.test(source.name) && steps.length > 0) {
+    const firstStep = steps[0]
+    const ruleId = `${source.sourceId}-rule-demo`
+    const ruleCfg = cloneConfig(NODE_CONFIGS.rule)
+    ruleCfg.title = '规则处理'
+    delete ruleCfg.collectCfg
+    ruleCfg.outputTable = firstStep.outputTable || source.mainTable || ''
+    configs[ruleId] = ruleCfg
+    main.splice(main.indexOf(firstStep.stepId) + 1, 0, ruleId)
+  }
+  return { main, branches: [], configs }
+}
+
+/**
+ * 种子演示网站的默认模板骨架（0710）：存量演示网站模拟"后端已有统一流程模板"，
+ * mockFlowLoad 对种子网站查无存档时用它兜底（虚拟态，保存后才真正落盘）；
+ * 用户新建的网站不走这里，进画布是空白引导卡模式（见 makeSiteBlankTemplate）。
+ */
+export function makeSiteSeedTemplate(siteId: string, name: string): FlowDef {
+  const list = cloneConfig(NODE_CONFIGS['web-list'])
+  list.title = '列表抓取'
+  if (list.collectCfg) { list.collectCfg.url = ''; list.collectCfg.outputTable = '' }
+  const detail = cloneConfig(NODE_CONFIGS['web-detail'])
+  detail.title = '详情解析'
+  if (detail.collectCfg) { detail.collectCfg.url = ''; detail.collectCfg.outputTable = ''; detail.collectCfg.inputTable = '' }
+  return {
+    id: `site:${siteId}`,
+    name,
+    version: 'site-v1',
+    main: ['start', 'web-list', 'web-detail', 'end'],
+    branches: [],
+    configs: { 'web-list': list, 'web-detail': detail },
+    updatedAt: '',
+  }
+}
+
+// ---------- 新建流程 / 初始化画布（M5.5） ----------
+const nowStamp = (): string => new Date().toISOString().slice(0, 16).replace('T', ' ')
+
+/** 空白流程：仅 开始 → 完成，供从零编排 */
+export function makeBlankFlow(): FlowDef {
+  return {
+    id: `flow-${Date.now()}`,
+    name: '未命名流程',
+    version: 'draft-0.1',
+    main: ['start', 'end'],
+    branches: [],
+    configs: {},
+    updatedAt: nowStamp(),
+  }
+}
+
+/** 标准链路模板的源级配置（0706 优化·源/节点配置分层）：原种子 Demo 的源信息，独立于节点配置存在 */
+function demoStandardSource(): Source {
+  return {
+    sourceId: 'flow-default', name: '交易所公告列表 - A 股', url: 'https://example.com/announcements?page=${page}',
+    configId: '81909', mainTable: '2101001', owner: 'admin', state: 'C',
+    category: '公告', categoryPath: '/公告/交易所/列表', tags: ['公告', 'A股', '列表页'], dirId: '9009245',
+    useProxy: false, resume: true,
+    configMode: 'new', configName: '交易所公告列表配置', configTopic: 'announcement.list', configStrategy: '增量',
+    needLogin: true, loginUrl: 'https://example.com/login', account: 'research_***', credentialRef: 'cred-zfb',
+    scheduleType: '交易日定时', scheduleTime: '08:30', weekdays: [1, 2, 3, 4, 5], cron: '30 8 * * 1-5',
+  }
+}
+
+/** 标准链路模板（= 原种子 Demo：公告规则采集，固定节点 id 供子步骤 / 测试引用） */
+export function makeStandardFlow(): FlowDef {
+  const configs: Record<string, NodeConfig> = {}
+    ;['web-list', 'web-detail', 'ai-extract', 'rule', 'check', 'mail'].forEach((k) => {
+      configs[k] = cloneConfig(NODE_CONFIGS[k])
+    })
+  return backfillOutputTables({
+    id: 'flow-default',
+    name: '公告规则采集链路_v3',
+    version: 'draft-0.3',
+    main: ['start', 'web-list', 'web-detail', 'ai-extract', 'rule', 'end'],
+    branches: [
+      { id: 'check', side: 'left', rowAnchor: 'ai-extract', edgeFrom: 'check', edgeTo: 'rule' },
+      { id: 'mail', side: 'right', rowAnchor: 'ai-extract', edgeFrom: 'web-detail', edgeTo: 'mail' },
+    ],
+    configs,
+    updatedAt: nowStamp(),
+    source: demoStandardSource(),
+  })
+}
+
+// 预置意图链路构造器：按模板序列克隆节点、清空采集占位（与 store.insertAfter 同口径）
+let presetSeq = 1
+interface StepSpec {
+  template: string
+  name?: string
+  patch?: Partial<CollectConfig>
+}
+/** sourcePatch：预置意图若需要预设源级字段（如登录态），整条链路共用一份草稿源（0706 优化·源/节点配置分层） */
+function buildFlow(name: string, steps: StepSpec[], sourcePatch?: Partial<Source>): FlowDef {
+  const main: string[] = ['start']
+  const configs: Record<string, NodeConfig> = {}
+  steps.forEach((s) => {
+    const srcKey = TEMPLATE_TO_NODE[s.template] || 'web-list'
+    const cfg = cloneConfig(NODE_CONFIGS[srcKey])
+    if (s.template === 'decision') cfg.kind = 'decision'
+    if (s.template === 'parallel') cfg.kind = 'parallel'
+    cfg.title = s.name || TEMPLATE_TO_NAME[s.template] || cfg.title
+    if (cfg.collectCfg) {
+      cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[s.template] ?? cfg.collectCfg.snatchType
+      cfg.collectCfg.url = ''
+      cfg.collectCfg.outputTable = ''
+      cfg.collectCfg.inputParams = []
+      if (s.patch) Object.assign(cfg.collectCfg, s.patch)
+    }
+    const id = `${srcKey}-p${presetSeq++}`
+    configs[id] = cfg
+    main.push(id)
+  })
+  main.push('end')
+  const source: Source | undefined = sourcePatch
+    ? { sourceId: `src-${Date.now()}`, name, url: '', configId: '', mainTable: '', owner: '', state: 'C', ...sourcePatch }
+    : undefined
+  return backfillOutputTables({
+    id: `flow-${Date.now()}-${presetSeq}`,
+    name,
+    version: 'draft-0.1',
+    main,
+    branches: [],
+    configs,
+    updatedAt: nowStamp(),
+    source,
+  })
+}
+
+/** 预置意图 → 链路（首期种子，可扩展）。智能体首期按关键词匹配，二期换真 LLM。 */
+export const PRESET_INTENTS: PresetIntent[] = [
+  // 预置链路不再带「落表输出」步骤（0701 问题四）：落表是每个节点的产物配置，最终结果 = 末端节点的输出表。
+  {
+    key: 'web-public',
+    label: '公共网页抓取',
+    keywords: ['公共', '网页', '网站', '抓取', '爬', 'web', '页面', '列表'],
+    rationale: '识别为「公共网页数据抓取」：先抓列表页拿到详情链接，再抓详情正文；每个节点的结果自动落表。',
+    build: () =>
+      buildFlow('公共网页抓取链路', [
+        { template: 'web', name: '网页抓取（列表）', patch: { webKind: 'list', isDetail: false } },
+        { template: 'web', name: '网页抓取（详情）', patch: { webKind: 'detail', isDetail: true } },
+      ]),
+  },
+  {
+    key: 'web-login',
+    label: '登录站点抓取',
+    keywords: ['登录', '登陆', '账号', '凭据', 'cookie', '会员'],
+    rationale: '识别为「登录态站点抓取」：列表页需登录，再抓详情正文；登录凭据在节点登录配置里只存引用。',
+    build: () =>
+      buildFlow('登录站点抓取链路', [
+        { template: 'web', name: '网页抓取（列表·需登录）', patch: { webKind: 'list', isDetail: false } },
+        { template: 'web', name: '网页抓取（详情）', patch: { webKind: 'detail', isDetail: true } },
+      ], { needLogin: true }),
+  },
+  {
+    key: 'file-parse',
+    label: '文件下载解析',
+    keywords: ['文件', '下载', 'pdf', 'word', 'excel', '附件', '解析', '报告'],
+    rationale: '识别为「文件下载解析」：下载文件后交由数据处理节点完成解析、字段抽取等配置；每个节点的结果自动落表。',
+    build: () =>
+      buildFlow('文件下载解析链路', [
+        { template: 'file', name: '文件下载', patch: { webKind: 'attachment', isDetail: false, snatchType: '[95] - 文件下载' } },
+        { template: 'process', name: '数据处理' },
+      ]),
+  },
+  {
+    key: 'announcement',
+    label: '公告规则采集',
+    keywords: ['公告', '规则', '交易所', '投研', '标准'],
+    rationale: '识别为「公告规则采集」：套用标准链路（列表→详情→AI 提取→规则处理），含质量校验 / 告警旁路。',
+    build: () => makeStandardFlow(),
+  },
+]

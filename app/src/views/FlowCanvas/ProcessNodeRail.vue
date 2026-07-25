@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { iconFor, type HorizontalLayout } from './flowModel'
+import { iconFor, type HorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
 
 const props = withDefaults(defineProps<{
   layout: HorizontalLayout

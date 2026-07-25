@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { CONDITION_OP_OPTIONS, conditionGroupLabel, type ConditionGroup, type ConditionOp, type EntryCondition } from './flowModel'
+import { CONDITION_OP_OPTIONS, conditionGroupLabel, type ConditionGroup, type ConditionOp, type EntryCondition } from '@/views/FlowCanvas/canvas/flowModel'
 
 // 进入条件行编辑组件（0701 问题十·方案B；0706 优化·主题二升级为条件组；0707 优化·补加表达式模式）：
 // 字段模式 = 多行 字段(下拉，来自输入表 schema) + 操作符 + 值，行间用 AND/OR 逻辑连接符组合；

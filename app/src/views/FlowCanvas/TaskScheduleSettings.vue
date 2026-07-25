@@ -1,6 +1,6 @@
 <script setup lang="ts">
 
-import type { CollectorSchedule } from './flowModel'
+import type { CollectorSchedule } from '@/views/FlowCanvas/canvas/flowModel'
 
 const props = defineProps<{ modelValue: CollectorSchedule }>()
 const emit = defineEmits<{ 'update:modelValue': [patch: Partial<CollectorSchedule>] }>()

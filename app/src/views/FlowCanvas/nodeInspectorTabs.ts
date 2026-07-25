@@ -1,4 +1,4 @@
-import { decisionOrParallelKind, type NodeConfig } from './flowModel'
+import { decisionOrParallelKind, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 
 export type NodeInspectorTab = 'config' | 'table' | 'params' | 'task' | 'ai'
 export type NodeInspectorTabItem = [NodeInspectorTab, string]

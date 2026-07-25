@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { NodeConfig } from './flowModel'
+import type { NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
 
 const ordinaryNode = { kind: 'node' } as NodeConfig

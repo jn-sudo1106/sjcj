@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useFlowStore } from './flow'
 import { mockFlowRecommend, mockNodeAiChat } from '../api/mock/flows'
-import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES } from '../views/FlowCanvas/flowModel'
+import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES } from '@/views/FlowCanvas/canvas/flowModel'
 import { makePresetFlowTemplates } from '@/utils/flow/flowTemplates'
 import type { Source } from '../api'
 

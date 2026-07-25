@@ -6,7 +6,7 @@
 import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { sourceApi, type CredentialRef } from '../../api'
-import type { CollectConfig, CollectorCapability } from './flowModel'
+import type { CollectConfig, CollectorCapability } from '@/views/FlowCanvas/canvas/flowModel'
 import TaskScheduleSettings from './TaskScheduleSettings.vue'
 
 /** 运行设置涉及的字段子集（复用 CollectConfig，不重复定义类型） */
