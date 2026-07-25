@@ -11,6 +11,36 @@
 //   - flowModel.layout.ts 布局与规范化算法（buildHorizontalLayout / normalizeNodeConfig / 节点 UI 辅助）
 //
 // 拆分原则：types 在 flowModel.ts；seeds 与 layout 互不重复；seeds → layout 单向依赖（用 cloneConfig/backfillOutputTables）。
+//
+// ============================================================================
+// 采集 vs 非采集 节点的字段口径（plan §F.3 + P3-2 设计稿：字段命名规范_2026-07-25）
+// ============================================================================
+//
+// NodeConfig（所有节点共有，line 81 起）与 CollectConfig（采集节点私有，line 197 起）有 3 个字段同名重复：
+//
+//   ┌──────────────┬────────────────────────────────┬──────────────────────────────────────┐
+//   │ 字段         │ NodeConfig 语义                │ CollectConfig 语义                  │
+//   ├──────────────┼────────────────────────────────┼──────────────────────────────────────┤
+//   │ inputTable   │ 非采集类节点（采集类沿用       │ 采集节点步骤输入表（空 = 继承上游）   │
+//   │              │ collectCfg.inputTable）        │                                      │
+//   │ outputTable  │ 非采集类节点的产物落表绑定      │ 采集节点产物落表（必填）             │
+//   │              │ （采集类沿用 collectCfg.output）│                                      │
+//   │ entryCondition│ 节点进入条件（结构化条件组）   │ 采集节点步骤进入条件                 │
+//   └──────────────┴────────────────────────────────┴──────────────────────────────────────┘
+//
+// 设计取舍：不合并。
+//   - NodeConfig 保留空位 = 显式语义「非采集节点也能挂」，代码读起来更顺
+//   - 强行合并反而要 collectCfg?.[key] ?? cfg?.[key] 一路兜底，不如把兜底逻辑集中在下面 3 个辅助函数里
+//
+// 统一读取辅助（已实现，所有调用方都走这里，不要再写 raw 的 cfg.collectCfg?.inputTable）：
+//   - nodeInputTable(cfg)           // line 303，fallback: collectCfg.inputTable || cfg.inputTable
+//   - nodeOutputTable(cfg)          // line 299，fallback: collectCfg.outputTable || cfg.outputTable
+//   - nodeEntryCondition(cfg)       // line 314，fallback: collectCfg.entryCondition ?? cfg.entryCondition
+//   （flowModel.layout.ts 里 effectiveInputTable / backfillOutputTables / upstreamOutputTableOf
+//    等函数已改为调用这 3 个辅助，不再各自裸写兜底逻辑）
+//
+// 新加字段时：如果「采集节点独有」放 CollectConfig；如果「所有节点都能挂」放 NodeConfig 并加注释说明
+// 采集类节点的读取优先级。**不要**在两边都定义然后不写辅助函数。
 
 import type { RuleOrchestration, Site, Source } from '@/api'
 

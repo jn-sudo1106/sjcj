@@ -21,6 +21,7 @@ import type {
   TaskParamValue,
   TripleField,
 } from './flowModel'
+import { nodeInputTable, nodeOutputTable } from './flowModel'
 import { extractUrlParamIds } from '@/utils/flow/urlParams'
 
 // ---------- 节点配置规范化 ----------
@@ -284,7 +285,7 @@ function upstreamOutputTableOf(main: string[], configs: Record<string, NodeConfi
   for (let i = beforeIdx - 1; i >= 0; i--) {
     const c = configs[main[i]]
     if (c) {
-      const t = (c.collectCfg?.outputTable || c.outputTable || '')
+      const t = nodeOutputTable(c)
       if (t) return t
     }
   }
@@ -307,21 +308,21 @@ export function effectiveInputTable(
 ): string {
   const c = configs[id]
   if (!c) return ''
-  const own = (c.collectCfg?.inputTable || c.inputTable || '')
+  const own = nodeInputTable(c)
   if (own) return own
   const idx = main.indexOf(id)
   if (idx >= 0) return upstreamOutputTableOf(main, configs, idx)
   const branch = branches.find((b) => b.id === id)
   if (branch) {
     const anchor = configs[branch.rowAnchor]
-    return anchor ? (anchor.collectCfg?.outputTable || anchor.outputTable || '') : ''
+    return anchor ? nodeOutputTable(anchor) : ''
   }
   for (const bg of branchGroups) {
     for (const b of bg.branches) {
       const ci = b.chain.indexOf(id)
       if (ci < 0) continue
       for (let i = ci - 1; i >= 0; i--) {
-        const t = configs[b.chain[i]] ? (configs[b.chain[i]].collectCfg?.outputTable || configs[b.chain[i]].outputTable || '') : ''
+        const t = configs[b.chain[i]] ? nodeOutputTable(configs[b.chain[i]]) : ''
         if (t) return t
       }
       return effectiveInputTable(main, branches, configs, bg.ownerId, branchGroups)
@@ -348,7 +349,7 @@ export function backfillOutputTables(def: FlowDef): FlowDef {
   def.main.forEach((id) => {
     const c = def.configs[id]
     if (!c) return
-    const t = c.collectCfg?.outputTable || c.outputTable || ''
+    const t = nodeOutputTable(c)
     if (t) {
       upstream = t
       return
@@ -361,7 +362,7 @@ export function backfillOutputTables(def: FlowDef): FlowDef {
     // 此时 c.collectCfg 已 guard 为 undefined，c.outputTable 是必访问字段
     if (c.outputTable) return
     const anchor = def.configs[b.rowAnchor]
-    const t = anchor ? (anchor.collectCfg?.outputTable || anchor.outputTable || '') : ''
+    const t = anchor ? nodeOutputTable(anchor) : ''
     if (t) c.outputTable = t
   })
   return def

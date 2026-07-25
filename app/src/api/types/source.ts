@@ -99,7 +99,9 @@ export interface Source {
   /** 参数源专用：基础url + 拼接符 + $PARAM$_id 占位符序列，可手动编辑覆盖默认生成 */
   urlTemplate?: string
   /** 参数源专用：本源绑定的参数及其分组——分组是"这次用在这个源里"的用法属性，独立于 Param.group（参数定义自带的全局分组），
-   *  同 group 值 = 顺序拼（对齐取值，要求同组各参数值数一致）；不同 group / 无 group = 组间笛卡尔积 */
+   *  同 group 值 = 顺序拼（对齐取值，要求同组各参数值数一致）；不同 group / 无 group = 组间笛卡尔积。
+   *  分组由 views/FlowCanvas/source/ParamSourceEditor.vue 的分组选择器维护（新建组/选组/取消组），
+   *  展开算法见 utils/flow/urlParams.ts 的 ParamGroupRef / joinType() / groupMismatchWarnings()。 */
   paramRefs?: { paramId: string; group?: string | null }[]
 }
 
