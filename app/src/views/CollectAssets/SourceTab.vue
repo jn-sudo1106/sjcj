@@ -81,6 +81,8 @@ async function loadStats() {
 }
 async function loadTagOptions() {
   try {
+    // TODO: 后端加 /api/site/tags 轻量接口替代（性能审查 P0-2）
+    // 当前用 size: 999 拉全量只为取 tags 去重集合，数据量大时浪费
     const res = await siteApi.sitePaged({ size: 999 })
     const set = new Set<string>()
     res.list.forEach((s) => (s.tags ?? []).forEach((t) => set.add(t)))
@@ -210,7 +212,9 @@ function openSiteEditor(site: Site) {
 }
 
 async function onEditorSaved() {
-  await Promise.all([loadList(), loadTagOptions()])
+  // 性能审查 P1-3：编辑网站只改名称/分类/负责人，不改标签，删除 loadTagOptions 调用
+  // 标签列表在 mount 时加载一次即可（标签通过新建网站/其他途径才能变更）
+  await loadList()
 }
 
 // 新建采集
@@ -295,7 +299,9 @@ onUnmounted(() => ui.clearActions())
       />
     </div>
 
+    <!-- 性能审查 P2-2：editorVisible=false 时不挂载 SiteEditorDialog，避免其内部 fetch + watch 提前跑 -->
     <SiteEditorDialog
+      v-if="editorVisible"
       ref="siteEditorRef"
       v-model:visible="editorVisible"
       :site="editorSite"

@@ -1,12 +1,16 @@
 <script setup lang="ts">
+// KPI 面板（P3-1 收尾 · 性能优化 · P0-1 修复）
+// props 收窄：原 props.data: OverviewSummary → kpi + byState + trend 3 个具体字段
+// 收益：OverviewSummary 任意字段变化不再触发 KpiPanel 重渲染，只在 kpi/byState/trend 自身变化时触发
 import { computed, type Component } from 'vue'
 import { useRouter } from 'vue-router'
 import { Box, CircleCheck, Document, Files, Bell } from '@element-plus/icons-vue'
-import type { OverviewSummary, TrendPoint } from '@/api'
+import type { OverviewKpi, OverviewSlice, TrendPoint } from '@/api'
 import CountUp from '@/components/CountUp.vue'
 
 const props = defineProps<{
-  data: OverviewSummary
+  kpi: OverviewKpi
+  byState: OverviewSlice[]
   trend: TrendPoint[]
 }>()
 
@@ -34,13 +38,13 @@ interface Kpi {
 }
 
 const activeSources = computed(() =>
-  (props.data.byState ?? []).filter((slice) => slice.label !== '已停用').reduce((sum, slice) => sum + slice.value, 0),
+  (props.byState ?? []).filter((slice) => slice.label !== '已停用').reduce((sum, slice) => sum + slice.value, 0),
 )
 
 const latestTaskCount = computed(() => props.trend.at(-1)?.snatch ?? 0)
 
 const displayKpis = computed<Kpi[]>(() => {
-  const k = props.data.kpi
+  const k = props.kpi
   if (!k) return []
   return [
     { key: 'sources', label: '采集资产总数', value: k.sources, numeric: true, delta: k.deltas?.sources ?? '', trend: asTrend(k.deltas?.sourcesTrend), icon: Box, tone: 'primary', to: () => goCollect() },

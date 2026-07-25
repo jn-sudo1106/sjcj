@@ -1,11 +1,15 @@
 <script setup lang="ts">
+// 分布面板（P3-1 收尾 · 性能优化 · P0-1 修复）
+// props 收窄：原 props.data: OverviewSummary → panorama + byCategory + sourceTotal
 import { useRouter } from 'vue-router'
-import type { OverviewSummary } from '@/api'
+import type { OverviewPanorama, OverviewSlice } from '@/api'
 import DonutChart from '@/components/charts/DonutChart.vue'
 import AssetFlow from '@/components/charts/AssetFlow.vue'
 
 const props = defineProps<{
-  data: OverviewSummary
+  panorama: OverviewPanorama
+  byCategory: OverviewSlice[]
+  sourceTotal: number
 }>()
 
 const router = useRouter()
@@ -25,19 +29,19 @@ function goCollectCategory(category: string) {
       <div class="rc-card-head">
         <div class="rc-card-title">采集网站全景</div>
         <div class="ov-eco-meta">
-          <span class="website"><i />{{ data.panorama.total }} 网站</span>
-          <span class="error"><i />{{ data.panorama.error }} 异常</span>
+          <span class="website"><i />{{ panorama.total }} 网站</span>
+          <span class="error"><i />{{ panorama.error }} 异常</span>
           <button class="ov-more" type="button" @click="goCollect()">查看全部 ›</button>
         </div>
       </div>
-      <AssetFlow :panorama="data.panorama" @select="goCollectCategory" />
+      <AssetFlow :panorama="panorama" @select="goCollectCategory" />
     </div>
 
     <div class="rc-card">
       <div class="rc-card-head">
         <div class="rc-card-title">资产类型分布</div>
       </div>
-      <DonutChart :slices="data.byCategory" :center-value="data.kpi.sources" center-label="总数" />
+      <DonutChart :slices="byCategory" :center-value="sourceTotal" center-label="总数" />
     </div>
   </div>
 </template>

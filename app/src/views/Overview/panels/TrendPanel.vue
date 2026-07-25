@@ -1,12 +1,16 @@
 <script setup lang="ts">
+// 趋势面板（P3-1 收尾 · 性能优化 · P0-1 修复）
+// props 收窄：原 props.data: OverviewSummary → byCycle + sourceTotal + trend
+//   · sourceTotal = kpi.sources（拆为 number primitive，OverviewKpi 字段变化不影响本面板）
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import type { OverviewSummary, TrendPoint } from '@/api'
+import type { OverviewSlice, TrendPoint } from '@/api'
 import TrendBars from '@/components/charts/TrendBars.vue'
 import DonutChart from '@/components/charts/DonutChart.vue'
 
 const props = defineProps<{
-  data: OverviewSummary
+  byCycle: OverviewSlice[]
+  sourceTotal: number
   trend: TrendPoint[]
 }>()
 
@@ -42,7 +46,7 @@ const emit = defineEmits<{
         <div class="rc-card-title">采集周期分布</div>
         <button class="ov-more" type="button" @click="router.push('/metrics')">查看更多 ›</button>
       </div>
-      <DonutChart v-if="data" :slices="data.byCycle" :center-value="data.kpi.sources" center-label="总数" />
+      <DonutChart v-if="sourceTotal" :slices="byCycle" :center-value="sourceTotal" center-label="总数" />
     </div>
   </div>
 </template>

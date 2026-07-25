@@ -1,10 +1,17 @@
 <script setup lang="ts">
+// 异常面板（P3-1 收尾 · 性能优化 · P0-1 修复 + P2-3）
+// props 收窄：原 props.data: OverviewSummary → topSources + exceptions + kpi
+//   · kpi 仍传完整 object（仅用 3 字段 alarms/errorSources/runningRuns，进一步激进收窄
+//     拆 3 个 number props 收益有限且接口复杂，保持当前方案）
+//   · P2-3 模板行内 `stateMeta(s.state)` 每行调两次 → 抽 displayedSources row-level computed
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import type { OverviewSummary } from '@/api'
+import type { OverviewException, OverviewKpi, OverviewTopSource } from '@/api'
 
 const props = defineProps<{
-  data: OverviewSummary
+  topSources: OverviewTopSource[]
+  exceptions: OverviewException[]
+  kpi: OverviewKpi
 }>()
 
 const router = useRouter()
@@ -22,7 +29,7 @@ function stateMeta(s: string) {
 }
 
 const runtimeRows = computed(() =>
-  (props.data.topSources ?? []).slice(0, 5).map((s, index) => ({
+  (props.topSources ?? []).slice(0, 5).map((s, index) => ({
     time: s.lastSuccessAt?.slice(11, 16) || `14:${32 - index}`,
     title: s.name,
     detail: s.state === 'E' ? '采集失败，等待重试' : `数据量：${s.dataCount.toLocaleString()} 条`,
@@ -30,13 +37,21 @@ const runtimeRows = computed(() =>
   })),
 )
 
+// P2-3：把 stateMeta 提到 row 上，每行只算一次（避免模板 :class 和 {{ }} 各调一次）
+const displayedSources = computed(() =>
+  (props.topSources ?? []).map((s) => ({
+    source: s,
+    stateMeta: stateMeta(s.state),
+  })),
+)
+
 const alertCards = computed(() => {
-  const exceptions = props.data.exceptions ?? []
+  const exceptions = props.exceptions ?? []
   return [
     { label: '紧急', value: exceptions.filter((e) => e.kind === 'error').length, cls: 'urgent', level: 'error' },
-    { label: '重要', value: exceptions.filter((e) => e.kind === 'external').length || props.data.kpi?.alarms || 0, cls: 'major', level: 'external' },
-    { label: '一般', value: exceptions.filter((e) => e.kind === 'disabled').length || props.data.kpi?.errorSources || 0, cls: 'normal', level: 'disabled' },
-    { label: '提示', value: props.data.kpi?.runningRuns ?? 0, cls: 'info', level: 'running' },
+    { label: '重要', value: exceptions.filter((e) => e.kind === 'external').length || props.kpi?.alarms || 0, cls: 'major', level: 'external' },
+    { label: '一般', value: exceptions.filter((e) => e.kind === 'disabled').length || props.kpi?.errorSources || 0, cls: 'normal', level: 'disabled' },
+    { label: '提示', value: props.kpi?.runningRuns ?? 0, cls: 'info', level: 'running' },
   ]
 })
 
@@ -70,17 +85,17 @@ function onAlert(level: string) {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(s, index) in data.topSources" :key="s.sourceId">
+            <tr v-for="(row, index) in displayedSources" :key="row.source.sourceId">
               <td><span class="ov-rank" :class="{ top: index < 3 }">{{ index + 1 }}</span></td>
               <td>
-                <div class="ov-src-name">{{ s.name }}</div>
-                <div class="muted">{{ s.sourceId }}</div>
+                <div class="ov-src-name">{{ row.source.name }}</div>
+                <div class="muted">{{ row.source.sourceId }}</div>
               </td>
-              <td>{{ s.category }}</td>
-              <td>{{ s.owner ?? '—' }}</td>
-              <td><span class="rc-status" :class="stateMeta(s.state).cls">{{ stateMeta(s.state).text }}</span></td>
-              <td class="muted">{{ s.lastSuccessAt || '-' }}</td>
-              <td>{{ s.qualityScore ?? '—' }}</td>
+              <td>{{ row.source.category }}</td>
+              <td>{{ row.source.owner ?? '—' }}</td>
+              <td><span class="rc-status" :class="row.stateMeta.cls">{{ row.stateMeta.text }}</span></td>
+              <td class="muted">{{ row.source.lastSuccessAt || '-' }}</td>
+              <td>{{ row.source.qualityScore ?? '—' }}</td>
             </tr>
           </tbody>
         </table>

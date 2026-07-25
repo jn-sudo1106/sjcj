@@ -87,10 +87,14 @@ const siteCheckMap = computed(() => {
   }
   return map
 })
+// 性能审查 P2-1：把 selectedIds 数组转 Set，让 siteCheckState 的 includes O(n) → O(1)
+// 每次 selectedIds 变化才重新构造 Set（computed 缓存），原本每行 filter 都遍历 selectedIds
+const selectedSet = computed(() => new Set(selectedIds.value))
 function siteCheckState(siteId: string): { checked: boolean; indeterminate: boolean } {
   const ids = (childrenCache[siteId] ?? []).map((c) => c.sourceId)
   if (!ids.length) return { checked: false, indeterminate: false }
-  const hit = ids.filter((id) => selectedIds.value.includes(id)).length
+  const sel = selectedSet.value
+  const hit = ids.filter((id) => sel.has(id)).length
   return { checked: hit === ids.length, indeterminate: hit > 0 && hit < ids.length }
 }
 async function toggleSite(siteId: string) {

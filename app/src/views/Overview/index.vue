@@ -1,4 +1,10 @@
 <script setup lang="ts">
+// 总览页主壳（P3-1 收尾 · 性能优化）
+//   · P0-1: 4 panel 改 props 收窄（具体字段而非完整 OverviewSummary）
+// 备注：之前试过 P1-4 把 3 个 panel 改 defineAsyncComponent 做 chunk split，但实测
+//   · 4 panel 是页面必须显示的，staggered 反而比同步出更慢（用户先看到 KPI，再一段段补齐）
+//   · jsdom + vitest 下 defineAsyncComponent 不会被 flushPromises 等到，Overview 集成测试挂掉
+//   · P0-1 props 收窄已拿到重渲染隔离的主收益，P1-4 撤回
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -82,10 +88,10 @@ onUnmounted(() => ui.clearActions())
         </div>
       </div>
 
-      <KpiPanel :data="data" :trend="trend" />
-      <DistributionPanel :data="data" />
-      <TrendPanel :data="data" :trend="trend" @update-days="onUpdateDays" />
-      <AlertPanel :data="data" />
+      <KpiPanel :kpi="data.kpi" :by-state="data.byState" :trend="trend" />
+      <DistributionPanel :panorama="data.panorama" :by-category="data.byCategory" :source-total="data.kpi.sources" />
+      <TrendPanel :by-cycle="data.byCycle" :source-total="data.kpi.sources" :trend="trend" @update-days="onUpdateDays" />
+      <AlertPanel :top-sources="data.topSources" :exceptions="data.exceptions" :kpi="data.kpi" />
     </template>
   </div>
 </template>
