@@ -3,6 +3,7 @@ import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { monitorApi, type HealthCard, type MqQueue, type SyncRow, type AlarmRow } from '../../api'
 import { useUiStore } from '../../stores/ui'
+import StatusTag from '@/components/StatusTag.vue'
 
 const ui = useUiStore()
 
@@ -120,8 +121,8 @@ onUnmounted(() => ui.clearActions())
                 <td>{{ s.status }}</td>
                 <td>{{ s.diff }}</td>
                 <td>
-                  <span v-if="s.externalChanged" class="rc-status warn">待确认</span>
-                  <span v-else class="rc-status ok">一致</span>
+                  <StatusTag v-if="s.externalChanged" text="待确认" tone="warn" :show-icon="false" />
+                  <StatusTag v-else text="一致" tone="ok" :show-icon="false" />
                 </td>
               </tr>
             </tbody>

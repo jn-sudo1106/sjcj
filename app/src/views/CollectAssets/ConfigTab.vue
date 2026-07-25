@@ -3,6 +3,7 @@ import { onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { configApi, type Config } from '../../api'
+import StatusTag from '@/components/StatusTag.vue'
 
 const list = ref<Config[]>([])
 const total = ref(0)
@@ -101,11 +102,11 @@ function onDelete(c: Config) {
             <td>{{ c.policy || '—' }}</td>
             <td>{{ c.sourceCount ?? 0 }} · {{ c.paramRefs?.length ?? 0 }}</td>
             <td>
-              <span v-if="c.isDetail" class="rc-status run">详情类</span>
-              <span v-if="c.isLogin" class="rc-status warn ct-tag2">登陆类</span>
+              <StatusTag v-if="c.isDetail" text="详情类" tone="run" :show-icon="false" />
+              <StatusTag v-if="c.isLogin" text="登陆类" tone="warn" :show-icon="false" class="ct-tag2" />
               <span v-if="!c.isDetail && !c.isLogin" class="muted">普通</span>
             </td>
-            <td><span class="rc-status" :class="c.enabled ? 'ok' : 'muted'">{{ c.enabled ? '启用' : '停用' }}</span></td>
+            <td><StatusTag :text="c.enabled ? '启用' : '停用'" :tone="c.enabled ? 'ok' : 'muted'" :show-icon="false" /></td>
             <td>
               <el-button link type="primary" size="small" @click="openDetail(c)">详情</el-button>
               <el-button link type="primary" size="small" @click="onSend(c)">发配置</el-button>

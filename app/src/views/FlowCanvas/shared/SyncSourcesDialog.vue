@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { siteApi, type Source } from '@/api'
+import StatusTag from '@/components/StatusTag.vue'
 
 // 子源间流程同步弹窗（0716）：把来源子源已保存的流程批量覆盖到同网站勾选的子源。
 // 勾选 + 危险确认按钮合一（沿用 0710 C3"把选择题降为确认题"的精神，但保留勾选能力）；
@@ -103,7 +104,7 @@ async function confirmSync() {
         <label v-for="s in siblings" :key="s.sourceId" class="ssd-row" data-testid="sync-row">
           <input type="checkbox" :checked="checked.has(s.sourceId)" @change="toggle(s.sourceId)">
           <span class="ssd-name">{{ s.name }}</span>
-          <span v-if="s.detached" class="rc-status warn">已单独调整</span>
+          <StatusTag v-if="s.detached" text="已单独调整" tone="warn" :show-icon="false" />
           <span class="ssd-url">{{ s.url }}</span>
         </label>
       </div>
