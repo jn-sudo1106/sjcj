@@ -6,7 +6,7 @@ import { Search, Grid, List, Refresh, Edit, Operation } from '@element-plus/icon
 import { sourceApi, siteApi, type Source, type Site, type SourceCategory } from '../../api'
 import { useUiStore } from '../../stores/ui'
 import SiteCardGrid from './SiteCardGrid.vue'
-import { siteIcon } from './siteVisual'
+import { siteIcon } from '@/utils/visual/siteVisual'
 
 const ui = useUiStore()
 const route = useRoute()

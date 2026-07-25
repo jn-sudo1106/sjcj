@@ -6,7 +6,7 @@ import { ArrowDown, CopyDocument, Delete, Download, Key, Odometer, RefreshRight,
 import { entryApi, type EntryType } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import { getEffectiveWidth } from '../../constants/entry'
-import { exportFieldsAsCsv } from '../../utils/csvExport'
+import { exportFieldsAsCsv } from '@/utils/format/csvExport'
 import EntryEditorDrawer from './EntryEditorDrawer.vue'
 
 // 迁移方案 §1.6/§5-2：read 角色隐藏全部写入口（含旧只读页遗留的「新建」按钮，判为旧遗漏，不迁）。

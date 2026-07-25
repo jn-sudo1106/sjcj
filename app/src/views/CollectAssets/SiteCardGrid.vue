@@ -5,7 +5,7 @@
 import { onMounted, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { siteApi, type Site, type Source } from '../../api'
-import { siteIcon } from './siteVisual'
+import { siteIcon } from '@/utils/visual/siteVisual'
 
 const props = defineProps<{ sites: Site[] }>()
 const router = useRouter()

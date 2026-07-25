@@ -6,8 +6,8 @@
 // - exportFieldsAsCsv 封装 EntryType → CSV 行的转换 + 浏览器下载触发
 // - 列宽兜底走 constants/entry.getEffectiveWidth，与编辑器/提取字段保持一致
 
-import type { EntryType } from '../api/types'
-import { getEffectiveWidth } from '../constants/entry'
+import type { EntryType } from '@/api/types'
+import { getEffectiveWidth } from '@/constants/entry'
 
 /**
  * 把二维字符串数组转成 RFC 4180 兼容的 CSV 文本。
