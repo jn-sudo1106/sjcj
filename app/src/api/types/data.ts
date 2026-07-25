@@ -40,19 +40,39 @@ export interface DataTableMeta {
 }
 
 export interface DataRow {
-  dataId: string
-  title: string // 标题 / 文件
-  summary: string // 字段摘要
-  sourceId: string
-  configId?: string
-  taskId?: string
-  runId?: string
-  acceptState: 'accepted' | 'pending' | 'rejected' // 验收状态
+  dataId: string // ENTRY_ID
+  sourceId: string // SOURCE_ID
+  configId?: string // CONFIG_ID
+  /** DETAIL_ID：任务实例 ID，行内「任务」列可点入口 */
+  detailId?: string
+  parentId?: string // PARENT_ID 父数据 ID（详情解析等子步骤反推列表）
+  /** CATEGORY_ID：父数据所在表 ID；缺失时父 ID 列不可点（旧平台口径） */
+  categoryId?: string
+  state?: string // STATE 处理状态：C 初始 / AC 已审核 / NF 404 / E 出错
+  nextFlag?: string // NEXT_FLAG 后续标识
+  createDt?: string // CREATE_DT 生成时间
+  updateDt?: string // UPDATE_DT 更新时间
+  /** K0：原始 JSON ID，非空时「原始」列可点开 readJson */
+  k0?: string
+  seq?: string // SEQ
+  times?: string // TIMES
+  fileId?: string // FILE_ID
+  values?: Record<string, unknown> // 动态列值（键 = 大写物理列名 K1/K2...）
+
+  /** @deprecated mock 时代概念，无旧平台契约来源；随 mock 重做一并移除（E 包 T1c） */
+  title: string
+  /** @deprecated 同上 */
+  summary: string
+  /** @deprecated 同上 */
+  acceptState: 'accepted' | 'pending' | 'rejected'
+  /** @deprecated 同上 */
   fileType?: 'html' | 'pdf' | 'json' | '-'
+  /** @deprecated 同上 */
   parseState?: 'parsed' | 'failed' | 'none'
-  parentId?: string // 父数据 ID（详情解析等子步骤反推列表）
-  state?: string // 处理状态：C 完成 / E 出错 / L 处理中
-  values?: Record<string, unknown> // 动态列值（按表 schema 的 fields[].prop 索引）
+  /** @deprecated 真实行的任务指针是 detailId */
+  taskId?: string
+  /** @deprecated 真实行无此列 */
+  runId?: string
 }
 
 /** 结果视图查询入参 */

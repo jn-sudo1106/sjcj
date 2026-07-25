@@ -224,4 +224,28 @@ describe('旧平台实体数据行适配', () => {
     expect(row.title).toBe('only-id')
     expect(row.values).not.toHaveProperty('ENTRY_ID')
   })
+
+  it('dataRowFromLegacy：K0 属系统列（原始 JSON ID），K1 起才是动态值列', () => {
+    const row = dataRowFromLegacy({ ENTRY_ID: '1', K0: 'json-771', K1: '正文', K10: '尾列' })
+    expect(row.k0).toBe('json-771')
+    expect(row.values).toEqual({ K1: '正文', K10: '尾列' })
+  })
+
+  it('dataRowFromLegacy：CATEGORY_ID 缺失时 categoryId 为空（父 ID 列据此判不可点）', () => {
+    const row = dataRowFromLegacy({ ENTRY_ID: '1', PARENT_ID: '412' })
+    expect(row.parentId).toBe('412')
+    expect(row.categoryId).toBeUndefined()
+  })
+
+  it('dataRowFromLegacy：时间列与后续标识不落进 values', () => {
+    const row = dataRowFromLegacy({
+      ENTRY_ID: '1', NEXT_FLAG: '-1', DETAIL_ID: 'TK-1',
+      CREATE_DT: '2026-07-18 09:12:00', UPDATE_DT: '2026-07-18 10:00:00', K1: '正文',
+    })
+    expect(row).toMatchObject({
+      nextFlag: '-1', detailId: 'TK-1',
+      createDt: '2026-07-18 09:12:00', updateDt: '2026-07-18 10:00:00',
+    })
+    expect(row.values).toEqual({ K1: '正文' })
+  })
 })

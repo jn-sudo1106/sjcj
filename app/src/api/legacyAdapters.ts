@@ -315,8 +315,12 @@ export function dataTableFromLegacy(input: unknown): DataTableMeta {
 export function dataRowFromLegacy(input: unknown): DataRow {
   const record = asRecord(input)
   if ('dataId' in record && 'acceptState' in record) return record as unknown as DataRow
+  // 旧 entryDataPaged 行的系统物理列（见「单表数据查看迁移」方案 §1.2）；
+  // K0 是原始 JSON ID 也属系统列，K1 起才是动态值列。TASK_ID/RUN_ID 为 mock 遗留，随 T1c 移除。
   const systemKeys = new Set([
-    'ENTRY_ID', 'SOURCE_ID', 'CONFIG_ID', 'TASK_ID', 'RUN_ID', 'PARENT_ID', 'STATE', 'NEXT_FLAG',
+    'ENTRY_ID', 'SOURCE_ID', 'CONFIG_ID', 'ENTRY_TYPE_ID', 'DETAIL_ID', 'PARENT_ID', 'CATEGORY_ID',
+    'STATE', 'NEXT_FLAG', 'CREATE_DT', 'UPDATE_DT', 'K0', 'SEQ', 'TIMES', 'FILE_ID',
+    'TASK_ID', 'RUN_ID',
   ])
   const values = Object.fromEntries(Object.entries(record).filter(([key]) => !systemKeys.has(key)))
   const titleValue = record.TITLE ?? record.title ?? record.NAME ?? record.name
@@ -325,19 +329,30 @@ export function dataRowFromLegacy(input: unknown): DataRow {
     .slice(0, 3)
     .map(([key, value]) => `${key}: ${String(value ?? '')}`)
     .join(' · ')
+  const str = (value: unknown) => (value == null ? undefined : String(value))
   return {
     dataId: String(record.ENTRY_ID ?? record.entryId ?? ''),
+    sourceId: String(record.SOURCE_ID ?? record.sourceId ?? ''),
+    configId: str(record.CONFIG_ID),
+    detailId: str(record.DETAIL_ID),
+    parentId: str(record.PARENT_ID),
+    categoryId: str(record.CATEGORY_ID),
+    state: str(record.STATE),
+    nextFlag: str(record.NEXT_FLAG),
+    createDt: str(record.CREATE_DT),
+    updateDt: str(record.UPDATE_DT),
+    k0: str(record.K0),
+    seq: str(record.SEQ),
+    times: str(record.TIMES),
+    fileId: str(record.FILE_ID),
+    values,
+    // 以下为 mock 遗留字段，T1c 随 mock 重做移除
     title: String(titleValue ?? record.ENTRY_ID ?? ''),
     summary,
-    sourceId: String(record.SOURCE_ID ?? record.sourceId ?? ''),
-    configId: record.CONFIG_ID == null ? undefined : String(record.CONFIG_ID),
-    taskId: record.TASK_ID == null ? undefined : String(record.TASK_ID),
-    runId: record.RUN_ID == null ? undefined : String(record.RUN_ID),
-    parentId: record.PARENT_ID == null ? undefined : String(record.PARENT_ID),
-    state: record.STATE == null ? undefined : String(record.STATE),
+    taskId: str(record.TASK_ID),
+    runId: str(record.RUN_ID),
     acceptState: 'accepted',
     fileType: '-',
     parseState: 'none',
-    values,
   }
 }

@@ -153,9 +153,10 @@ export const dataApi = {
       parentId: q.parentId,
       state: q.state || 'ALL',
       nextFlag: q.nextFlag,
+      // SQL 条件的旧后端字段名是 more（不是 sql）；发错会被后端静默忽略，筛选失效
       min: q.sql ? q.min || 0 : q.min,
       max: q.max,
-      sql: q.sql,
+      more: q.sql,
       sorted: q.sorted ?? 0,
     }
     const result = await request<Paged<unknown>>('data/rowQueryPaged', q, {
