@@ -19,6 +19,7 @@ import siteSourceSwitcher from './FlowCanvas/source/SiteSourceSwitcher.vue?raw'
 import tableDialog from './FlowCanvas/inspector/TableEditDialog.vue?raw'
 import siteCardGrid from './CollectAssets/SiteCardGrid.vue?raw'
 import appShell from '../layouts/AppShell.vue?raw'
+import appModuleHead from '../layouts/AppModuleHead.vue?raw'
 import runtimeStore from '../stores/runtime.ts?raw'
 import ruleAssetsIndex from './RuleAssets/index.vue?raw'
 
@@ -184,17 +185,17 @@ describe('最新方案 UI 入口收口', () => {
   })
 
   it('画布路由顶栏无动作，保存迁入画布 Header；运行记录使用发起抓取文案', () => {
-    expect(appShell).toContain('canvas: [],')
-    expect(appShell).not.toContain("canvas: ['保存'")
+    expect(appModuleHead).toContain('canvas: [],')
+    expect(appModuleHead).not.toContain("canvas: ['保存'")
     expect(canvasHeader).toContain(`@click="ui.fireAction('保存')"`)
     expect(runtimeStore).toContain('发起抓取落表')
     expect(runtimeStore).not.toContain('试跑落表')
   })
 
   it('任一采集资产二级页都能从顶栏进入新建采集闸门', () => {
-    expect(appShell).toContain('function firePageAction(action: string)')
-    expect(appShell).toContain("router.push({ path: '/canvas', query: { mode: 'new' } })")
-    expect(appShell).toContain('@click="firePageAction(action)"')
+    expect(appModuleHead).toContain('function firePageAction(action: string)')
+    expect(appModuleHead).toContain("router.push({ path: '/canvas', query: { mode: 'new' } })")
+    expect(appModuleHead).toContain('@click="firePageAction(action)"')
   })
 
 
