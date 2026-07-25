@@ -8,6 +8,7 @@ import KpiPanel from './panels/KpiPanel.vue'
 import TrendPanel from './panels/TrendPanel.vue'
 import DistributionPanel from './panels/DistributionPanel.vue'
 import AlertPanel from './panels/AlertPanel.vue'
+import EmptyState from '@/components/EmptyState.vue'
 
 const router = useRouter()
 const ui = useUiStore()
@@ -62,12 +63,16 @@ onUnmounted(() => ui.clearActions())
 
 <template>
   <div v-loading="loading" class="ov">
-    <div v-if="loadError" class="ov-empty">
-      <div class="ov-empty-icon">!</div>
-      <div class="ov-empty-title">加载失败</div>
-      <div class="ov-empty-text">{{ loadError }}</div>
-      <button class="ov-empty-btn" type="button" @click="loadAll">重新加载</button>
-    </div>
+    <EmptyState
+      v-if="loadError"
+      icon="!"
+      title="加载失败"
+      :text="loadError"
+      action="重新加载"
+      size="lg"
+      class="ov-empty-wrap"
+      @action="loadAll"
+    />
 
     <template v-else-if="data">
       <div class="ov-intro">
