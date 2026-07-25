@@ -1,244 +1,28 @@
 <script setup lang="ts">
-import { computed, ref, type Component } from 'vue'
-import { ElMessageBox } from 'element-plus'
-import {
-  Bell,
-  Box,
-  Clock,
-  DataAnalysis,
-  Document,
-  Files,
-  Histogram,
-  Monitor,
-  Odometer,
-  QuestionFilled,
-  SwitchButton,
-  Upload,
-  User,
-} from '@element-plus/icons-vue'
-import { useRoute, useRouter } from 'vue-router'
-import { TABS } from '../router/tabs'
-import { useUiStore } from '../stores/ui'
-import { useFlowStore } from '../stores/flow'
-import { useAuthStore } from '../stores/auth'
-import ChangePasswordDialog from './ChangePasswordDialog.vue'
-import companyLogo from '../assets/brand/company-logo.png'
-
-const route = useRoute()
-const router = useRouter()
-const ui = useUiStore()
-const flow = useFlowStore()
-const auth = useAuthStore()
-
-// 退出登录带二次确认，文案对齐旧 UserMenu.vue（计划 §11.2 红线 4）
-async function handleLogout() {
-  try {
-    await ElMessageBox.confirm('真的要注销登录吗 ?', '提示', {
-      type: 'warning',
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-    })
-  } catch {
-    return // 取消：不动会话
-  }
-  await auth.logout()
-  void router.push('/user/login')
-}
-const accountName = computed(() => auth.name || '未登录')
-const accountAvatarLabel = computed(() => accountName.value.slice(0, 4))
-const changePwdVisible = ref(false)
-function handleAccountCommand(command: string) {
-  if (command === 'logout') {
-    void handleLogout()
-    return
-  }
-  if (command === 'change-password') {
-    changePwdVisible.value = true
-  }
-}
-// 源详情 / 新建源画布（/canvas?sourceId=X 或 /canvas?mode=new）逻辑上属于「采集资产」子页，侧栏高亮采集资产
-const activeKey = computed(() => {
-  const seg = route.path.split('/')[1] || 'overview'
-  if (seg === 'canvas') return 'collect'
-  return seg
-})
-const current = computed(() => TABS.find((t) => t.key === activeKey.value) ?? TABS[0])
-// 源详情 / 新建采集画布的标题与面包屑：采集资产 / 源名或新建采集
-const isSourceCanvas = computed(() => activeKey.value === 'collect' && route.path.startsWith('/canvas'))
-// 网站详情页态下 sourceCtx/siteCtx 会同时非空（见 flow.ts setSiteDisplayCtx）：siteCtx 才是用户实际看到的对象，优先展示
-const sourceCrumb = computed(() =>
-  route.query.mode === 'new' ? '新建采集' : flow.siteCtx?.name || flow.sourceCtx?.name || '源详情',
-)
-
-const groupLabels = {
-  home: '首页',
-  workbench: '编排工作台',
-  assets: '资产管理',
-  ops: '运行与验收',
-  tools: '运维工具',
-} as const
-
-const navGroups = computed(() =>
-  Object.entries(groupLabels)
-    .map(([key, label]) => ({
-      key,
-      label,
-      items: TABS.filter((t) => t.group === key),
-    }))
-    .filter((g) => g.items.length > 0),
-)
-
-const PRIMARY_ACTIONS: Record<string, string> = {
-  overview: '新建采集',
-  collect: '新建采集',
-  rules: '发布校验',
-  metrics: '口径校验',
-  data: '新建查询视图',
-  runs: '导出记录',
-  tools: '导出报表',
-}
-const pageActions: Record<string, string[]> = {
-  overview: ['刷新', '导出', '新建采集'],
-  // 画布路由（含闸门/网站详情/子源详情）顶栏不放动作：保存/发起抓取都收在画布 Header，贴着它们作用的画布
-  canvas: [],
-  // 0711 R12：批量导入/批量操作已迁进网站详情子源侧栏，顶部只留"新建采集"（AppShell 顶部按钮按路由硬编码，
-  // 与页面是否 ui.registerAction 无关——同款坑 0707 Phase3 记录过，改动入口必须两处一起改）
-  collect: ['新建采集'],
-  rules: ['新建规则组', '导入规则', '发布校验'],
-  metrics: ['新建指标', '批量维护', '口径校验'],
-  data: ['导出结果', '新建查询视图'],
-  runs: ['导出记录'],
-  tools: ['刷新', '导出报表'],
-}
-// 页面动作按真实路由段取，而不是侧栏高亮键
-const actionKey = computed(() => route.path.split('/')[1] || 'overview')
-// 规则资产的「新建规则组/导入规则/发布校验」是规则 tab 专属（0721 会议 §六-1 参数迁入后新增的参数 tab 不需要）
-const activeActions = computed(() => {
-  if (actionKey.value === 'rules' && route.query.tab === 'param') return []
-  return pageActions[actionKey.value] ?? []
-})
-function firePageAction(action: string) {
-  // 「新建采集」是采集资产的全局入口，不能依赖「网站列表」子页注册回调；
-  // 否则切到参数/模板等二级页后旧组件卸载，顶栏按钮会变成空操作。
-  if (action === '新建采集') {
-    void router.push({ path: '/canvas', query: { mode: 'new' } })
-    return
-  }
-  ui.fireAction(action)
-}
-
-const navIcons: Record<string, Component> = {
-  overview: Odometer,
-  collect: Box,
-  rules: Document,
-  metrics: Histogram,
-  data: DataAnalysis,
-  runs: Clock,
-  tools: Monitor,
-}
+// AppShell 主壳（P3 收尾 · AppShell 拆分）
+// 职责：整体布局 + 3 个子组件拼装（TopBar / Sidebar / ModuleHead）+ 响应式 CSS
+// 业务逻辑（账号下拉 / 侧栏导航 / 顶部动作）全部下沉到子组件
+// plan §E.4 列的 AppThemeSwitcher 实际未实现（项目当前无主题切换功能），故只拆 3 个
+import AppTopBar from './AppTopBar.vue'
+import AppSidebar from './AppSidebar.vue'
+import AppModuleHead from './AppModuleHead.vue'
 </script>
 
 <template>
   <div class="rc-app">
-    <header class="rc-topbar">
-      <div class="rc-brand">
-        <span class="rc-brand-mark">
-          <img :src="companyLogo" alt="" />
-        </span>
-        <strong>青龙智能采集中心</strong>
-      </div>
-      <div class="rc-top-actions">
-        <button class="rc-icon-btn" type="button" aria-label="帮助">
-          <el-icon><QuestionFilled /></el-icon><span>帮助</span>
-        </button>
-        <button class="rc-icon-btn rc-notice" type="button" aria-label="通知">
-          <el-icon><Bell /></el-icon>
-        </button>
-        <el-dropdown
-          trigger="click"
-          popper-class="rc-account-popper"
-          placement="bottom-end"
-          @command="handleAccountCommand"
-        >
-          <button class="rc-user" type="button" :aria-label="`${accountName}，打开账号菜单`">
-            <span class="rc-avatar">
-              {{ accountAvatarLabel }}
-            </span>
-          </button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="change-password">
-                <el-icon><User /></el-icon>
-                修改密码
-              </el-dropdown-item>
-              <el-dropdown-item command="logout">
-                <el-icon><SwitchButton /></el-icon>
-                退出登录
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-      </div>
-    </header>
+    <AppTopBar />
 
     <div class="rc-shell">
-      <aside class="rc-sidenav">
-        <nav v-for="group in navGroups" :key="group.key" class="rc-nav-group" :aria-label="group.label">
-          <div class="rc-nav-title">{{ group.label }}</div>
-          <button
-            v-for="t in group.items"
-            :key="t.key"
-            class="rc-nav-item"
-            :class="{ active: t.key === activeKey }"
-            type="button"
-            @click="router.push(t.path)"
-          >
-            <span class="rc-nav-icon"
-              ><el-icon><component :is="navIcons[t.key]" /></el-icon
-            ></span>
-            <span>{{ t.label }}</span>
-          </button>
-        </nav>
-        <button class="rc-collapse" type="button">‹ 收起侧栏</button>
-      </aside>
+      <AppSidebar />
 
       <section class="rc-main">
-        <div class="rc-module-head">
-          <div>
-            <div class="rc-bc">
-              <span>青龙智能采集中心</span>
-              <span>/</span>
-              <span>{{ current.label }}</span>
-              <template v-if="isSourceCanvas">
-                <span>/</span>
-                <span>{{ sourceCrumb }}</span>
-              </template>
-            </div>
-            <h1>{{ isSourceCanvas ? sourceCrumb : current.label }}</h1>
-          </div>
-          <div class="rc-module-actions">
-            <button
-              v-for="action in activeActions"
-              :key="action"
-              type="button"
-              class="rc-action-btn"
-              :class="{ primary: action === PRIMARY_ACTIONS[actionKey] }"
-              @click="firePageAction(action)"
-            >
-              <el-icon v-if="action.includes('发布') || action.includes('导出')"><Upload /></el-icon>
-              <el-icon v-else><Files /></el-icon>
-              {{ action }}
-            </button>
-          </div>
-        </div>
+        <AppModuleHead />
 
         <main class="rc-pane">
           <router-view />
         </main>
       </section>
     </div>
-
-    <ChangePasswordDialog v-model="changePwdVisible" />
   </div>
 </template>
 
@@ -266,319 +50,16 @@ const navIcons: Record<string, Component> = {
   animation: rc-aurora-drift 24s ease-in-out infinite alternate;
 }
 
-.rc-topbar {
-  position: relative;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  height: 56px;
-  min-height: 56px;
-  padding: 0 20px;
-  border-bottom: 1px solid #e2e8f0;
-  background: rgba(255, 255, 255, 0.88);
-  backdrop-filter: blur(12px);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.6) inset;
-}
-
-.rc-topbar::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(37, 99, 235, 0.55), rgba(6, 182, 212, 0.55), transparent);
-  background-size: 50% 100%;
-  background-repeat: no-repeat;
-  animation: rc-sheen 7s linear infinite;
-}
-
-.rc-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 220px;
-  flex: none;
-}
-
-.rc-brand strong {
-  color: var(--rc-text);
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.rc-brand-mark {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  flex: none;
-}
-
-.rc-brand-mark img {
-  display: block;
-  width: 30px;
-  height: 30px;
-  object-fit: contain;
-}
-
-.rc-brand-mark::before {
-  content: '';
-  position: absolute;
-  inset: -4px;
-  z-index: -1;
-  border-radius: 12px;
-  background: radial-gradient(circle, rgba(37, 99, 235, 0.3), transparent 68%);
-  animation: rc-glow-pulse 3.8s ease-in-out infinite;
-}
-
-.rc-env {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid #bfdbfe;
-  border-radius: 999px;
-  background: #eff6ff;
-  color: #2563eb;
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.rc-top-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.rc-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--rc-text-2);
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.rc-icon-btn span {
-  display: none;
-}
-
-.rc-user {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 38px;
-  padding: 0;
-  border: 2px solid #fff;
-  border-radius: 50%;
-  background: #3b75e8;
-  color: #fff;
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.22);
-  cursor: pointer;
-  transition:
-    transform 0.18s ease,
-    box-shadow 0.18s ease;
-}
-
-.rc-icon-btn:hover {
-  background: #eff6ff;
-  color: var(--rc-primary-ink);
-}
-
-.rc-user:hover {
-  background: #2563db;
-  color: #fff;
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.28);
-}
-
-.rc-user:focus-visible {
-  outline: 3px solid rgba(37, 99, 235, 0.18);
-  outline-offset: 2px;
-}
-
-.rc-notice {
-  position: relative;
-}
-
-.rc-notice::after {
-  content: '';
-  position: absolute;
-  top: 7px;
-  right: 6px;
-  width: 7px;
-  height: 7px;
-  border: 2px solid #fff;
-  border-radius: 50%;
-  background: var(--rc-error);
-}
-
-.rc-avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  border-radius: 50%;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: -0.2px;
-}
-
-:global(.rc-account-popper.el-popper) {
-  min-width: 156px;
-  overflow: hidden;
-  border: 1px solid #dce3ec;
-  border-radius: 12px;
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
-}
-
-:global(.rc-account-popper .el-dropdown-menu) {
-  padding: 0;
-}
-
-:global(.rc-account-popper .el-dropdown-menu__item) {
-  height: 48px;
-  gap: 12px;
-  padding: 0 20px;
-  color: #303744;
-  font-size: 14px;
-}
-
-:global(.rc-account-popper .el-dropdown-menu__item + .el-dropdown-menu__item) {
-  border-top: 1px solid #e5e9f0;
-}
-
-:global(.rc-account-popper .el-dropdown-menu__item .el-icon) {
-  margin: 0;
-  color: #285ed0;
-  font-size: 19px;
-}
-
-:global(.rc-account-popper .el-popper__arrow) {
-  display: none;
-}
-
+/* 必须 > .rc-topbar 的 z-index(20)：rc-shell 自身建立层叠上下文后，内部任何 fixed 弹窗/弹层
+   （如 SiteSourceSwitcher 的加源弹窗、EditParamSourceDialog、节点右键菜单等）无论自己 z-index 开多高，
+   都会被限制在这个上下文内比较，赢不过同级的顶部导航栏——曾导致弹窗被顶栏遮住。 */
 .rc-shell {
   position: relative;
-  /* 必须 > .rc-topbar 的 z-index(20)：rc-shell 自身建立层叠上下文后，内部任何 fixed 弹窗/弹层
-     （如 SiteSourceSwitcher 的加源弹窗、EditParamSourceDialog、节点右键菜单等）无论自己 z-index 开多高，
-     都会被限制在这个上下文内比较，赢不过同级的顶部导航栏——曾导致弹窗被顶栏遮住。 */
   z-index: 21;
   display: grid;
   grid-template-columns: 220px 1fr;
   min-height: 0;
   overflow: hidden;
-}
-
-.rc-sidenav {
-  width: 220px;
-  min-width: 220px;
-  max-width: 220px;
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  padding: 16px 12px;
-  overflow: auto;
-  border-right: 1px solid var(--rc-border);
-  background: rgba(255, 255, 255, 0.86);
-  backdrop-filter: blur(12px);
-  box-shadow: 8px 0 24px rgba(15, 23, 42, 0.03);
-}
-
-.rc-nav-group + .rc-nav-group {
-  margin-top: 18px;
-}
-
-.rc-nav-title {
-  margin: 16px 8px 8px;
-  color: var(--rc-muted);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.rc-nav-item {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  height: 40px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--rc-text-2);
-  font-size: 13px;
-  font-weight: 500;
-  text-align: left;
-  cursor: pointer;
-}
-
-.rc-nav-item:hover {
-  background: rgba(248, 250, 252, 0.92);
-  color: var(--rc-primary);
-}
-
-.rc-nav-item.active {
-  background: linear-gradient(90deg, rgba(246, 250, 255, 0.96) 0%, rgba(236, 254, 255, 0.72) 100%);
-  color: var(--rc-primary);
-  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.08);
-}
-
-.rc-nav-item.active::after {
-  content: '';
-  position: absolute;
-  right: 0;
-  top: 8px;
-  width: 3px;
-  height: 24px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, #2563eb 0%, #06b6d4 100%);
-  background-size: 100% 200%;
-  animation: rc-flow-line 2.6s linear infinite;
-}
-
-.rc-nav-icon {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  color: currentColor;
-  transition: filter 0.2s ease;
-}
-
-.rc-nav-item.active .rc-nav-icon {
-  filter: drop-shadow(0 0 5px rgba(37, 99, 235, 0.5));
-}
-
-.rc-collapse {
-  margin-top: auto;
-  border: 0;
-  background: transparent;
-  color: var(--rc-muted);
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
 }
 
 .rc-main {
@@ -589,67 +70,6 @@ const navIcons: Record<string, Component> = {
   padding: 20px 24px;
   overflow: hidden;
   background: transparent;
-}
-
-.rc-module-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-  margin-bottom: 16px;
-}
-
-.rc-bc {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--rc-muted);
-  font-size: 13px;
-  margin-bottom: 6px;
-}
-
-.rc-bc span:last-child {
-  color: var(--rc-primary-ink);
-  font-weight: 700;
-}
-
-.rc-module-head h1 {
-  margin: 8px 0 0;
-  color: var(--rc-text);
-  font-size: 20px;
-  line-height: 28px;
-  font-weight: 700;
-}
-
-.rc-module-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding-top: 22px;
-}
-
-.rc-action-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 34px;
-  padding: 0 13px;
-  border: 1px solid #d5e2f2;
-  border-radius: var(--rc-radius-sm);
-  background: #fff;
-  color: var(--rc-text-2);
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.rc-action-btn.primary {
-  border-color: var(--rc-primary);
-  background: var(--rc-primary);
-  color: #fff;
-  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.16);
 }
 
 .rc-pane {
@@ -667,36 +87,9 @@ const navIcons: Record<string, Component> = {
     overflow: auto;
   }
 
-  .rc-topbar {
-    height: auto;
-    padding: 12px;
-    flex-wrap: wrap;
-  }
-
-  .rc-brand {
-    min-width: 0;
-    flex: 1 1 auto;
-  }
-
-  .rc-top-actions {
-    flex: none;
-  }
-
   .rc-shell {
     grid-template-columns: 1fr;
     overflow: visible;
-  }
-
-  .rc-sidenav {
-    position: static;
-    width: auto;
-    min-width: 0;
-    max-width: none;
-    height: auto;
-    min-height: auto;
-    max-height: none;
-    border-right: 0;
-    border-bottom: 1px solid var(--rc-border);
   }
 
   .rc-main {
@@ -706,30 +99,8 @@ const navIcons: Record<string, Component> = {
 }
 
 @media (max-width: 560px) {
-  .rc-brand strong {
-    font-size: 14px;
-  }
-
-  .rc-sidenav {
-    padding: 12px;
-  }
-
-  .rc-nav-group + .rc-nav-group {
-    margin-top: 12px;
-  }
-
-  .rc-nav-title {
-    margin-top: 10px;
-  }
-
-  .rc-module-head {
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .rc-module-actions {
-    justify-content: flex-start;
-    padding-top: 0;
+  .rc-main {
+    padding: 16px 12px;
   }
 }
 </style>
