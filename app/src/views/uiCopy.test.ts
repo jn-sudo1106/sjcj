@@ -3,6 +3,10 @@ import sourceTab from './CollectAssets/SourceTab.vue?raw'
 import collectAssetsIndex from './CollectAssets/index.vue?raw'
 import flowCanvas from './FlowCanvas/index.vue?raw'
 import nodeInspector from './FlowCanvas/inspector/NodeInspector.vue?raw'
+import taskTab from './FlowCanvas/inspector/tabs/TaskTab.vue?raw'
+import tableTab from './FlowCanvas/inspector/tabs/TableTab.vue?raw'
+import paramsTab from './FlowCanvas/inspector/tabs/ParamsTab.vue?raw'
+import configTab from './FlowCanvas/inspector/tabs/ConfigTab.vue?raw'
 import canvasHeader from './FlowCanvas/shared/CanvasHeader.vue?raw'
 import flowBoard from './FlowCanvas/canvas/FlowBoard.vue?raw'
 import sourceBasicForm from './FlowCanvas/SourceBasicForm.vue?raw'
@@ -14,6 +18,10 @@ import siteCardGrid from './CollectAssets/SiteCardGrid.vue?raw'
 import appShell from '../layouts/AppShell.vue?raw'
 import runtimeStore from '../stores/runtime.ts?raw'
 import ruleAssetsIndex from './RuleAssets/index.vue?raw'
+
+// NodeInspector 拆 tab 子组件后（P1-1 Step 4），各 tab 的文案分布在 4 个子文件里；
+// 这个常量把主壳 + 4 个 tab 拼起来，用于「整块 inspector 不该出现某字符串」的负向断言。
+const allInspectorSource = nodeInspector + taskTab + tableTab + paramsTab + configTab
 
 describe('最新方案 UI 入口收口', () => {
   it('字段级预处理/去重只在数据表编辑弹窗维护', () => {
@@ -28,11 +36,11 @@ describe('最新方案 UI 入口收口', () => {
   })
 
   it('表配置不再内嵌输出表详情和字段预览', () => {
-    expect(nodeInspector).toContain('查看/编辑表')
-    expect(nodeInspector).toContain('新建表')
-    expect(nodeInspector).not.toContain('class="rc-table-detail"')
-    expect(nodeInspector).not.toContain('<th>属性</th><th>中文</th><th>类型</th><th>列宽</th>')
-    expect(nodeInspector).not.toContain('selectedTable.fields.length')
+    expect(tableTab).toContain('查看/编辑表')
+    expect(tableTab).toContain('新建表')
+    expect(allInspectorSource).not.toContain('class="rc-table-detail"')
+    expect(allInspectorSource).not.toContain('<th>属性</th><th>中文</th><th>类型</th><th>列宽</th>')
+    expect(allInspectorSource).not.toContain('selectedTable.fields.length')
   })
 
   it('表配置不展示自定义落表高级配置', () => {
@@ -43,40 +51,31 @@ describe('最新方案 UI 入口收口', () => {
   })
 
   it('节点配置不展示详情类数据字段，详情状态由网页类型推导', () => {
-    expect(nodeInspector).toContain('WEB_KIND_OPTIONS')
-    expect(nodeInspector).toContain('flow.patchCollect(id.value, { webKind:')
-    expect(nodeInspector).not.toContain('详情类数据')
-    expect(nodeInspector).not.toContain('toggleDetail')
-    expect(nodeInspector).not.toContain(':checked="cc.isDetail"')
+    expect(configTab).toContain('WEB_KIND_OPTIONS')
+    expect(configTab).toContain('flow.patchCollect(id.value, { webKind:')
+    expect(allInspectorSource).not.toContain('详情类数据')
+    expect(allInspectorSource).not.toContain('toggleDetail')
+    expect(allInspectorSource).not.toContain(':checked="cc.isDetail"')
   })
 
   it('任务配置承载任务输入和队列，输出表仅在表配置维护', () => {
-    const taskStart = nodeInspector.indexOf("<template v-else-if=\"tab === 'task'\">")
-    const tableStart = nodeInspector.indexOf("<template v-else-if=\"tab === 'table'\">")
-    const configStart = nodeInspector.indexOf('<!-- 节点配置：单屏纵向分组')
-    expect(taskStart).toBeGreaterThan(-1)
-    expect(tableStart).toBeGreaterThan(taskStart)
-    expect(configStart).toBeGreaterThan(tableStart)
+    // 拆 tab 后（P1-1 Step 4）：任务/表/节点配置分别在 TaskTab/TableTab/ConfigTab，
+    // 不再共用 NodeInspector 模板里的 <template v-else-if="tab === ..."> 切片，直接按文件断言。
+    expect(taskTab).toContain('<div class="rc-field"><label>输入表</label>')
+    expect(taskTab).not.toContain('<div class="rc-field"><label>输出表')
+    expect(taskTab).not.toContain('@change="onOutputTableChange"')
+    expect(taskTab).not.toContain('openEditTable')
+    expect(taskTab).not.toContain('openNewTable')
+    expect(taskTab).toContain('<ConditionRow v-if="!isFirstDataNode"')
+    expect(taskTab).toContain('@change="onEntryConditionChange"')
 
-    const taskSection = nodeInspector.slice(taskStart, tableStart)
-    const tableSection = nodeInspector.slice(tableStart, configStart)
-    const configHeaderSection = nodeInspector.slice(configStart, nodeInspector.indexOf('<!-- 输入映射', configStart))
+    expect(tableTab).toContain('查看/编辑表')
+    expect(tableTab).toContain('新建表')
+    expect(tableTab).toContain('openEditTable')
+    expect(tableTab).toContain('openNewTable')
 
-    expect(taskSection).toContain('<div class="rc-field"><label>输入表</label>')
-    expect(taskSection).not.toContain('<div class="rc-field"><label>输出表')
-    expect(taskSection).not.toContain('@change="onOutputTableChange"')
-    expect(taskSection).not.toContain('openEditTable')
-    expect(taskSection).not.toContain('openNewTable')
-    expect(taskSection).toContain('<ConditionRow v-if="!isFirstDataNode"')
-    expect(taskSection).toContain('@change="onEntryConditionChange"')
-
-    expect(tableSection).toContain('查看/编辑表')
-    expect(tableSection).toContain('新建表')
-    expect(tableSection).toContain('openEditTable')
-    expect(tableSection).toContain('openNewTable')
-
-    expect(configHeaderSection).not.toContain('<div class="rc-field"><label>输入表</label>')
-    expect(configHeaderSection).not.toContain('<ConditionRow')
+    expect(configTab).not.toContain('<div class="rc-field"><label>输入表</label>')
+    expect(configTab).not.toContain('<ConditionRow')
   })
 
   it('任务实例弹窗不再提供详情操作', () => {
@@ -140,25 +139,23 @@ describe('最新方案 UI 入口收口', () => {
   })
 
   it('采集节点配置不再展示输入映射和输入参数', () => {
-    expect(nodeInspector).toContain('v-if="!cc"')
-    expect(nodeInspector).not.toContain('<template v-if="cc">\n          <div class="rc-field"><label>输入参数[多选]</label>')
-    expect(nodeInspector).not.toContain('采集/非采集节点统一显示')
+    expect(configTab).toContain('v-if="!cc"')
+    expect(allInspectorSource).not.toContain('<template v-if="cc">\n          <div class="rc-field"><label>输入参数[多选]</label>')
+    expect(allInspectorSource).not.toContain('采集/非采集节点统一显示')
   })
 
   it('节点配置支持 APP 入口字段；任务参数由当前节点参数配置决定', () => {
-    expect(nodeInspector).toContain('APP 包名')
-    expect(nodeInspector).toContain('collectUrlLabel')
-    expect(nodeInspector).toContain('任务参数取值')
-    expect(nodeInspector).toContain('availableTaskParamRefs')
-    expect(nodeInspector).toContain('paramValues')
-    expect(nodeInspector).not.toContain('任务拼接逻辑')
+    expect(configTab).toContain('APP 包名')
+    expect(configTab).toContain('collectUrlLabel')
+    expect(taskTab).toContain('任务参数取值')
+    expect(taskTab).toContain('availableTaskParamRefs')
+    expect(taskTab).toContain('paramValues')
+    expect(allInspectorSource).not.toContain('任务拼接逻辑')
   })
 
   it('子源信息不在画布顶部重复编辑，定时策略收在首节点运行设置', () => {
-    const taskStart = nodeInspector.indexOf("<template v-else-if=\"tab === 'task'\">")
-    const tableStart = nodeInspector.indexOf("<template v-else-if=\"tab === 'table'\">")
-    const taskSection = nodeInspector.slice(taskStart, tableStart)
-
+    // 拆 tab 后（P1-1 Step 4）：TaskScheduleSettings 不该出现在任何 inspector 文件里，
+    // 只在 CollectorSettings 里按 showSchedule 条件渲染。
     expect(nodeInspector).not.toContain('子源信息（各节点共享）')
     expect(canvasHeader).not.toContain('@click="openEdit"')
     expect(canvasHeader).toContain('class="ch-canvas-actions"')
@@ -169,7 +166,7 @@ describe('最新方案 UI 入口收口', () => {
     expect(flowBoard).toContain('rc-flow-xml')
     expect(sourceBasicForm).not.toContain('定时策略（仅作用于首节点）')
     expect(sourceBasicForm).not.toContain('选用配置 / 定时')
-    expect(taskSection).not.toContain('<TaskScheduleSettings')
+    expect(allInspectorSource).not.toContain('<TaskScheduleSettings')
     expect(collectorSettings).toContain('<TaskScheduleSettings v-if="showSchedule"')
   })
 
@@ -240,15 +237,15 @@ describe('最新方案 UI 入口收口', () => {
   })
 
   it('任务参数取值只面向当前节点参数，并支持上下文与出参字段', () => {
-    expect(nodeInspector).toContain('cc.value?.urlParamRefs')
-    expect(nodeInspector).not.toContain('Object.values(flow.configs)')
-    expect(nodeInspector).toContain('请先在当前节点的参数配置中绑定参数。')
-    expect(nodeInspector).toContain('上下文来源')
-    expect(nodeInspector).toContain('出参列')
-    expect(nodeInspector).toContain('addTaskField')
-    expect(nodeInspector).toContain('removeTaskField')
-    expect(nodeInspector).toContain('+ 添加字段')
-    expect(nodeInspector).toContain('!isFirstDataNode')
+    expect(taskTab).toContain('cc.value?.urlParamRefs')
+    expect(allInspectorSource).not.toContain('Object.values(flow.configs)')
+    expect(taskTab).toContain('请先在当前节点的参数配置中绑定参数。')
+    expect(taskTab).toContain('上下文来源')
+    expect(taskTab).toContain('出参列')
+    expect(taskTab).toContain('addTaskField')
+    expect(taskTab).toContain('removeTaskField')
+    expect(taskTab).toContain('+ 添加字段')
+    expect(taskTab).toContain('!isFirstDataNode')
   })
 
   it('流程编辑不消费配置列表，源表单不再提供选用配置', () => {
@@ -264,13 +261,13 @@ describe('最新方案 UI 入口收口', () => {
   })
 
   it('规则节点使用规则编排面板', () => {
-    expect(nodeInspector).toContain('规则编排')
-    expect(nodeInspector).toContain('引用已有规则')
-    expect(nodeInspector).toContain('新建编排')
-    expect(nodeInspector).toContain('规则需求描述')
-    expect(nodeInspector).toContain('系统提示词')
-    expect(nodeInspector).toContain('生成脚本')
-    expect(nodeInspector).toContain('测试脚本')
-    expect(nodeInspector).toContain('保存脚本')
+    expect(configTab).toContain('规则编排')
+    expect(configTab).toContain('引用已有规则')
+    expect(configTab).toContain('新建编排')
+    expect(configTab).toContain('规则需求描述')
+    expect(configTab).toContain('系统提示词')
+    expect(configTab).toContain('生成脚本')
+    expect(configTab).toContain('测试脚本')
+    expect(configTab).toContain('保存脚本')
   })
 })
