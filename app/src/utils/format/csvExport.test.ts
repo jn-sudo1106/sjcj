@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { toCsv, entryFieldsToRows } from './csvExport'
-import type { EntryType } from '../api/types'
+import type { EntryType } from '@/api/types'
 
 describe('toCsv 通用 CSV 构造', () => {
   it('字段值含逗号、双引号、换行都能正确转义（RFC 4180）', () => {
