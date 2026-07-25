@@ -4,7 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { paramApi, type Param } from '../../api'
 import { useAuthStore } from '../../stores/auth'
-import ParamEditorDrawer from '../FlowCanvas/ParamEditorDrawer.vue'
+import ParamEditorDrawer from '@/components/param/ParamEditorDrawer.vue'
 
 // D3（0717 参数方案）：read 角色隐藏写操作，仅消费既有 auth store 的 role getter，不改动登录相关代码
 const auth = useAuthStore()

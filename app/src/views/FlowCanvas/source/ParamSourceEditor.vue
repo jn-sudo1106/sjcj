@@ -3,13 +3,13 @@
 // 1) SiteSourceSwitcher 加源弹窗（新建，可编辑）2) NodeInspector 参数配置 tab（readonly 只读摘要）
 // 3) 编辑参数源弹窗（预填已有数据，可编辑）。readonly 态仍然算 joinType/共N个/预览，只是不给增删/编辑入口。
 import { computed, reactive, ref, watch } from 'vue'
-import { paramApi, type Param } from '../../api'
+import { paramApi, type Param } from '../../../api'
 import {
   joinType, countGroupedUrls, groupMismatchWarnings, expandGroupedParameterizedUrl,
   type ParamGroupRef, type JoinType,
 } from '@/utils/flow/urlParams'
 import { paramValueCount, paramValuePreviewLabel } from '@/utils/flow/paramPreview'
-import ParamEditorDrawer from './ParamEditorDrawer.vue'
+import ParamEditorDrawer from '@/components/param/ParamEditorDrawer.vue'
 
 export interface ParamSourceModel {
   baseUrl: string

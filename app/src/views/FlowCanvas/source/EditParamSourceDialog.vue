@@ -4,8 +4,8 @@
 // 再同步回写 flow.sourceCfg/sourceCtx，patchSource 内部会把改完的模板重新灌回首个采集节点。
 import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { useFlowStore } from '../../stores/flow'
-import { sourceApi } from '../../api'
+import { useFlowStore } from '../../../stores/flow'
+import { sourceApi } from '../../../api'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
 
 const visible = defineModel<boolean>({ default: false })

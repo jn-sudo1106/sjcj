@@ -3,8 +3,8 @@ import { describe, expect, it, vi, afterEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import EditParamSourceDialog from './EditParamSourceDialog.vue'
-import { useFlowStore } from '../../stores/flow'
-import { sourceApi, paramApi, type Param, type Source } from '../../api'
+import { useFlowStore } from '../../../stores/flow'
+import { sourceApi, paramApi, type Param, type Source } from '../../../api'
 
 const param913: Param = { paramId: '913', name: '页码', kind: 'sequence', seq: { start: 1, end: 100, step: 1 }, usedBy: 0 }
 const param912: Param = { paramId: '912', name: '栏目', kind: 'list', values: ['a', 'b', 'c'], usedBy: 0 }

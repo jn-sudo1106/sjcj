@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { paramApi, type Param } from '../../../api'
 import { extractUrlParamIds, hasFragmentParams } from '@/utils/flow/urlParams'
-import ParamEditorDrawer from '@/views/FlowCanvas/ParamEditorDrawer.vue'
+import ParamEditorDrawer from '@/components/param/ParamEditorDrawer.vue'
 
 const props = defineProps<{
   url: string

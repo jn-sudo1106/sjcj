@@ -12,8 +12,8 @@ import ConditionRow from './ConditionRow.vue'
 import BranchEditor from './BranchEditor.vue'
 import CollectorSettings, { type CollectorRuntimeSettings } from './CollectorSettings.vue'
 import UrlParamEditor from './UrlParamEditor.vue'
-import ParamSourceEditor, { type ParamSourceModel } from '@/views/FlowCanvas/ParamSourceEditor.vue'
-import EditParamSourceDialog from '@/views/FlowCanvas/EditParamSourceDialog.vue'
+import ParamSourceEditor, { type ParamSourceModel } from '@/views/FlowCanvas/source/ParamSourceEditor.vue'
+import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDialog.vue'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
 import {
   entryApi, paramApi, ruleApi,

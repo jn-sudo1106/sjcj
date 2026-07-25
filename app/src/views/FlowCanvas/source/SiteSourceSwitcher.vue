@@ -2,7 +2,7 @@
 // 子源侧栏：页面级左侧固定栏，流程、数据、文件和任务视图共用。
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { siteApi, sourceApi, type Site, type Source } from '../../api'
+import { siteApi, sourceApi, type Site, type Source } from '../../../api'
 import type { ParamGroupRef } from '@/utils/flow/urlParams'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
 
