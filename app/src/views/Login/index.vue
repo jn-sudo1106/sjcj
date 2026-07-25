@@ -1,15 +1,18 @@
 <script setup lang="ts">
+// 登录页主壳（P3 收尾 · Login 拆分）
+// 职责：整体布局容器 + hero 左侧展示区
+// brand 顶部和 footer 链接拆到 LoginHeader / LoginFooter
+// 登录表单拆到 LoginForm（已存在）
+// plan §E.4 列的 AgreementDialog 未拆（功能已删，LoginForm 搜不到 agreement 关键字）
 import LoginForm from './components/LoginForm.vue'
-import companyLogo from '@/assets/brand/company-logo.png'
+import LoginHeader from './components/LoginHeader.vue'
+import LoginFooter from './components/LoginFooter.vue'
 import loginHero from '@/assets/brand/login-hero.png'
 </script>
 
 <template>
   <div class="lg-page">
-    <header class="lg-topbar">
-      <img class="lg-logo" :src="companyLogo" alt="" />
-      <strong>智能采集中心</strong>
-    </header>
+    <LoginHeader />
 
     <div class="lg-body">
       <section class="lg-hero" aria-label="智能采集中心">
@@ -24,16 +27,7 @@ import loginHero from '@/assets/brand/login-hero.png'
       <LoginForm />
     </div>
 
-    <footer class="lg-footer">
-      <nav>
-        <a href="_self">帮助中心</a>
-        <span>|</span>
-        <a href="_self">隐私政策</a>
-        <span>|</span>
-        <a href="_self">服务条款</a>
-      </nav>
-      <p>Copyright © 智能采集中心 版权所有</p>
-    </footer>
+    <LoginFooter />
   </div>
 </template>
 
@@ -55,31 +49,6 @@ import loginHero from '@/assets/brand/login-hero.png'
       transparent 100%
     ),
     linear-gradient(135deg, #f1f4fa 0%, #eef1f9 48%, #e7edf8 100%);
-}
-
-.lg-topbar {
-  position: absolute;
-  z-index: 2;
-  top: 34px;
-  left: 32px;
-  display: flex;
-  align-items: center;
-  gap: 15px;
-}
-
-.lg-logo {
-  width: 36px;
-  height: 36px;
-  object-fit: contain;
-  mix-blend-mode: multiply;
-  transform: scale(1.28);
-}
-
-.lg-topbar strong {
-  font-size: 27px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  color: #0a2450;
 }
 
 .lg-body {
@@ -148,62 +117,16 @@ import loginHero from '@/assets/brand/login-hero.png'
   pointer-events: none;
 }
 
-.lg-footer {
-  position: absolute;
-  z-index: 2;
-  bottom: 45px;
-  left: 50%;
-  transform: translateX(-50%);
-  text-align: center;
-  color: #596983;
-  font-size: 16px;
-  white-space: nowrap;
-}
-
-.lg-footer nav {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 28px;
-}
-
-.lg-footer nav span {
-  color: #9ba7ba;
-}
-
-.lg-footer a {
-  color: #52627c;
-  text-decoration: none;
-}
-
-.lg-footer a:hover {
-  color: #2f74ee;
-}
-
-.lg-footer p {
-  margin: 16px 0 0;
-}
-
 @media (max-width: 1500px) {
-  .lg-topbar {
-    top: 28px;
-    left: 28px;
-    gap: 12px;
-  }
-
-  .lg-logo {
-    width: 34px;
-    height: 34px;
-  }
-
-  .lg-topbar strong {
-    font-size: clamp(22px, 2.2vw, 26px);
-  }
-
   .lg-body {
     grid-template-columns: minmax(360px, 1fr) clamp(480px, 44vw, 620px);
     gap: clamp(18px, 2vw, 26px);
     padding: clamp(78px, 10vh, 96px) 30px clamp(88px, 12vh, 110px);
+  }
+
+  .lg-hero {
+    padding-top: clamp(46px, 7vh, 66px);
+    transform: translateX(-20px);
   }
 
   .lg-hero-copy h1 {
@@ -220,24 +143,10 @@ import loginHero from '@/assets/brand/login-hero.png'
     margin-top: 16px;
   }
 
-  .lg-hero {
-    padding-top: clamp(46px, 7vh, 66px);
-    transform: translateX(-20px);
-  }
-
   .lg-hero > img {
     width: min(100%, 640px);
     height: clamp(340px, 45vh, 430px);
     margin-top: -6px;
-  }
-
-  .lg-footer {
-    bottom: clamp(24px, 4vh, 38px);
-    font-size: 14px;
-  }
-
-  .lg-footer p {
-    margin-top: 12px;
   }
 }
 
@@ -246,20 +155,6 @@ import loginHero from '@/assets/brand/login-hero.png'
     height: auto;
     min-height: 100vh;
     overflow: auto;
-  }
-
-  .lg-topbar {
-    top: 24px;
-    left: 24px;
-  }
-
-  .lg-logo {
-    width: 32px;
-    height: 32px;
-  }
-
-  .lg-topbar strong {
-    font-size: 22px;
   }
 
   .lg-body {
@@ -274,47 +169,7 @@ import loginHero from '@/assets/brand/login-hero.png'
   }
 }
 
-@media (max-width: 560px) {
-  .lg-topbar {
-    top: 20px;
-    left: 20px;
-  }
-
-  .lg-body {
-    align-items: flex-start;
-    padding: 88px 12px 128px;
-  }
-
-  .lg-footer {
-    bottom: 24px;
-    font-size: 12px;
-  }
-
-  .lg-footer nav {
-    gap: 12px;
-  }
-
-  .lg-footer p {
-    margin-top: 10px;
-  }
-}
-
 @media (max-height: 900px) and (min-width: 1501px) {
-  .lg-topbar {
-    top: 26px;
-    left: 28px;
-    gap: 12px;
-  }
-
-  .lg-logo {
-    width: 34px;
-    height: 34px;
-  }
-
-  .lg-topbar strong {
-    font-size: 24px;
-  }
-
   .lg-body {
     grid-template-columns: minmax(520px, 1fr) 560px;
     gap: 24px;
@@ -345,19 +200,6 @@ import loginHero from '@/assets/brand/login-hero.png'
     width: min(100%, 650px);
     height: 400px;
     margin-top: -6px;
-  }
-
-  .lg-footer {
-    bottom: 18px;
-    font-size: 14px;
-  }
-
-  .lg-footer nav {
-    gap: 22px;
-  }
-
-  .lg-footer p {
-    margin-top: 10px;
   }
 }
 </style>
