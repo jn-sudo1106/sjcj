@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { paramApi, type Param, type ParamInput } from '../../api'
+import { paramApi, type Param, type ParamInput } from '@/api'
 
 const props = defineProps<{ modelValue: boolean; param?: Param | null; paramId?: string }>()
 const emit = defineEmits<{

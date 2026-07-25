@@ -4,7 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import SourceTabsBar from './SourceTabsBar.vue'
-import { useWorkspaceStore } from '../../../stores/workspace'
+import { useWorkspaceStore } from '@/stores/workspace'
 
 afterEach(() => sessionStorage.clear())
 

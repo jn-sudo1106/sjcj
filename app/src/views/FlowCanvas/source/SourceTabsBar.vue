@@ -2,8 +2,8 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
-import { useWorkspaceStore, type SourceTab } from '../../../stores/workspace'
-import { useFlowStore } from '../../../stores/flow'
+import { useWorkspaceStore, type SourceTab } from '@/stores/workspace'
+import { useFlowStore } from '@/stores/flow'
 
 // 源详情工作区页签条（优化 0701 问题三 · 方案 B）：多个源并存为可关闭页签,视觉对齐原系统使用习惯。
 // 首位是不可关闭的「源列表」固定页签：回列表后仍能看到已打开的源并可点回（0702 追加优化）。

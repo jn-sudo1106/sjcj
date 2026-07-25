@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue'
-import { dataApi, type DataTableMeta, type DataRow } from '../../api'
-import { useRuntimeStore } from '../../stores/runtime'
+import { dataApi, type DataTableMeta, type DataRow } from '@/api'
+import { useRuntimeStore } from '@/stores/runtime'
 import DataGrid from './DataGrid.vue'
 
 const props = defineProps<{ open: boolean; tableId: string; sourceId?: string; title?: string }>()

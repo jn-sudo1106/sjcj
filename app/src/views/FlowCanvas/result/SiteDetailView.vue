@@ -5,8 +5,8 @@
 // 查询所需的节点/表结构，但不走 ws.open（不登记页签、不出现在页签条里，用户看到的是"网站"而非某个具体子源）。
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { flowApi, sourceApi, siteApi, type Site } from '../../api'
-import { useFlowStore } from '../../stores/flow'
+import { flowApi, sourceApi, siteApi, type Site } from '@/api'
+import { useFlowStore } from '@/stores/flow'
 import { firstSourceId, normalizeSiteView } from '@/utils/url/workspaceRoute'
 import ResultView from './ResultView.vue'
 import FileView from './FileView.vue'

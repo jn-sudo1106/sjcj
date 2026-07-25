@@ -5,7 +5,7 @@
 // 本组件只管展示与编辑，不关心 fallback 从哪来。
 import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { sourceApi, type CredentialRef } from '../../../api'
+import { sourceApi, type CredentialRef } from '@/api'
 import type { CollectConfig, CollectorCapability } from '@/views/FlowCanvas/canvas/flowModel'
 import TaskScheduleSettings from './TaskScheduleSettings.vue'
 

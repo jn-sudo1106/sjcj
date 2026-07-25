@@ -4,8 +4,8 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import CanvasHeader from './CanvasHeader.vue'
-import { useFlowStore } from '../../../stores/flow'
-import { flowTemplateApi } from '../../../api'
+import { useFlowStore } from '@/stores/flow'
+import { flowTemplateApi } from '@/api'
 
 async function mountHeader() {
   vi.spyOn(flowTemplateApi, 'list').mockResolvedValue([])

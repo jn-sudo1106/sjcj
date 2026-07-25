@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { siteApi, sourceApi, type NodeRunStat, type Source, type Step, type TaskInst } from '../../api'
-import { useFlowStore } from '../../stores/flow'
+import { siteApi, sourceApi, type NodeRunStat, type Source, type Step, type TaskInst } from '@/api'
+import { useFlowStore } from '@/stores/flow'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import { buildHorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'

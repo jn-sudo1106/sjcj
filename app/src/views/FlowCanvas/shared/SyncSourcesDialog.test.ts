@@ -3,7 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ElMessage } from 'element-plus'
 import SyncSourcesDialog from './SyncSourcesDialog.vue'
-import type { Source } from '../../../api'
+import type { Source } from '@/api'
 
 const siteSources = vi.fn()
 const siteSyncFlow = vi.fn()

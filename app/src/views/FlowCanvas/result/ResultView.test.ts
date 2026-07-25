@@ -3,9 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ResultView from './ResultView.vue'
-import { dataApi, siteApi, type DataTableMeta, type Source } from '../../api'
-import { useFlowStore } from '../../stores/flow'
-import { mockSourceDetail, mockSourceSteps } from '../../api/mock/sources'
+import { dataApi, siteApi, type DataTableMeta, type Source } from '@/api'
+import { useFlowStore } from '@/stores/flow'
+import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
 
 const meta: DataTableMeta = {
   tableId: 'TB_ZFB_COMMENT', tableName: '评论', rowCount: 0,

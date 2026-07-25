@@ -4,10 +4,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { flowTemplateApi, type FlowTemplate, type FlowTemplateDefinition, type Site, type Source } from '../../api'
 import { useFlowStore } from '../../stores/flow'
 import { useUiStore } from '../../stores/ui'
-import FlowBoard from '../FlowCanvas/FlowBoard.vue'
-import NodeInspector from '../FlowCanvas/NodeInspector.vue'
+import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
+import NodeInspector from '@/views/FlowCanvas/inspector/NodeInspector.vue'
 import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
-import type { FlowDef } from '../FlowCanvas/flowModel'
+import type { FlowDef } from '@/views/FlowCanvas/canvas/flowModel'
 
 type FlowSnapshot = {
   definition: FlowDef

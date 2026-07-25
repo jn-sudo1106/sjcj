@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { DataTableMeta, DataRow } from '../../api'
+import type { DataTableMeta, DataRow } from '@/api'
 
 const props = defineProps<{
   meta: DataTableMeta | null

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { siteApi, type Source } from '../../../api'
+import { siteApi, type Source } from '@/api'
 
 // 子源间流程同步弹窗（0716）：把来源子源已保存的流程批量覆盖到同网站勾选的子源。
 // 勾选 + 危险确认按钮合一（沿用 0710 C3"把选择题降为确认题"的精神，但保留勾选能力）；

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useWorkspaceStore } from '../../stores/workspace'
-import { sourceApi } from '../../api'
+import { useWorkspaceStore } from '@/stores/workspace'
+import { sourceApi } from '@/api'
 import CompareResultPane from './CompareResultPane.vue'
 
 // 分屏对比容器（0701 问题三 · 方案 C；0710 会议 B4 与页签解耦）：左右栏都是真实 sourceId，

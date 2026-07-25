@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import CategoryTreePicker from './CategoryTreePicker.vue'
-import { sourceApi, type SourceCategory } from '../../../api'
+import { sourceApi, type SourceCategory } from '@/api'
 
 const categories: SourceCategory[] = [{
   id: 'fund', name: '基金类', count: 2, children: [

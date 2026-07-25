@@ -2,7 +2,7 @@
 // 分类目录树（0711 R1）：替换新建采集闸门里硬编码的分类下拉，改为可搜索 + 展开 + 勾选（单选）的目录树。
 // 数据来自 sourceApi.sourceCategories()（采集资产页左侧目录同源接口），树形结构由后端直接给出（SourceCategory.children）。
 import { computed, onMounted, ref } from 'vue'
-import { sourceApi, type SourceCategory } from '../../../api'
+import { sourceApi, type SourceCategory } from '@/api'
 
 export interface CategorySelection {
   dirId?: string

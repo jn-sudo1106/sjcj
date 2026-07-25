@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { FlowTemplate, Source } from '../../api'
+import type { FlowTemplate, Source } from '@/api'
 import {
   compatibleTemplateBindings,
   composeTemplateFlow,

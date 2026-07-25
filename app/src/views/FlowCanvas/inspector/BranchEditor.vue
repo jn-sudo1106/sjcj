@@ -7,10 +7,10 @@
 // - 链内节点在此提供上下移/摘除；节点新增走画布 fan-out 分支列的「+」（FlowBoard.vue），复用 AddNodePopover 并隐藏「逻辑」分组防嵌套。
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { useFlowStore } from '../../../stores/flow'
+import { useFlowStore } from '@/stores/flow'
 import { conditionGroupLabel, decisionOrParallelKind, type ConditionGroup, type FlowBranch, type FlowBranchGroup } from '@/views/FlowCanvas/canvas/flowModel'
 import ConditionRow from './ConditionRow.vue'
-import { entryApi, type EntryType } from '../../../api'
+import { entryApi, type EntryType } from '@/api'
 
 const props = defineProps<{ ownerId: string }>()
 const flow = useFlowStore()

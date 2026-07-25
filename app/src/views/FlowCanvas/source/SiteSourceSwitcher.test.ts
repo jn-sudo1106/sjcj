@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import SiteSourceSwitcher from './SiteSourceSwitcher.vue'
 import ParamEditorDrawer from '@/components/param/ParamEditorDrawer.vue'
-import { siteApi, sourceApi, paramApi, type Source, type Param } from '../../../api'
+import { siteApi, sourceApi, paramApi, type Source, type Param } from '@/api'
 
 const source: Source = {
   sourceId: 'source-a', siteId: 'site-a', name: '原子源', url: 'https://example.com',

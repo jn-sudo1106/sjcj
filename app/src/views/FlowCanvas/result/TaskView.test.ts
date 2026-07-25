@@ -4,8 +4,8 @@ import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import TaskView from './TaskView.vue'
-import { mockSourceDetail, mockSourceSteps } from '../../api/mock/sources'
-import { useFlowStore } from '../../stores/flow'
+import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
+import { useFlowStore } from '@/stores/flow'
 
 const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
 

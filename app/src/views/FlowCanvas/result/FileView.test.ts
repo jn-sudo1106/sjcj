@@ -3,9 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import FileView from './FileView.vue'
-import { fileApi, siteApi, type RawFile, type Source } from '../../api'
-import { useFlowStore } from '../../stores/flow'
-import { mockSourceDetail, mockSourceSteps } from '../../api/mock/sources'
+import { fileApi, siteApi, type RawFile, type Source } from '@/api'
+import { useFlowStore } from '@/stores/flow'
+import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
 
 const files: RawFile[] = [{
   fileId: 'file-1', siteId: 'site-zfb', sourceId: '391007768', nodeId: 'step-list',

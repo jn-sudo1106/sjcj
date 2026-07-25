@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
-import { flowApi } from '../../../api'
-import { useFlowStore } from '../../../stores/flow'
+import { flowApi } from '@/api'
+import { useFlowStore } from '@/stores/flow'
 import { nodeOutputTable } from '@/views/FlowCanvas/canvas/flowModel'
 
 // 节点级 AI 对话（0701 问题八）：与画布「智能推荐模板」（流程级 AI）同体系两层，
