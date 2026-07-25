@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { configApi, type Config } from '../../api'
 import StatusTag from '@/components/StatusTag.vue'
+import ConfirmButton from '@/components/ConfirmButton.vue'
 
 const list = ref<Config[]>([])
 const total = ref(0)
@@ -44,26 +45,19 @@ function openDetail(c: Config) {
   drawer.cfg = c
   drawer.visible = true
 }
-async function confirmDanger(title: string, body: string, run: () => Promise<{ message?: string }>) {
-  try {
-    await ElMessageBox.confirm(body, title, { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '取消' })
-  } catch {
-    return
-  }
-  const r = await run()
-  ElMessage.success(r?.message || '操作已提交（演示）')
-}
+// P3-1: confirmDanger 抽到 ConfirmButton 组件，4 个危险操作直接 inline 组件
+// onSend/onCopy/onClear/onDelete 4 个函数（保留 wrapper 处理参数），模板里用 ConfirmButton
 function onSend(c: Config) {
-  confirmDanger('发配置', `将向「${c.name}」下发配置任务，是否继续？`, () => configApi.sendConfigTask(c.configId))
+  return configApi.sendConfigTask(c.configId)
 }
 function onCopy(c: Config) {
-  confirmDanger('复制配置', `复制「${c.name}」？`, () => configApi.copyAll(c.configId))
+  return configApi.copyAll(c.configId)
 }
 function onClear(c: Config) {
-  confirmDanger('清配置缓存（高危）', `清除「${c.name}」配置缓存？`, () => configApi.clearConfig(c.configId))
+  return configApi.clearConfig(c.configId)
 }
 function onDelete(c: Config) {
-  confirmDanger('删除配置（高危）', `删除「${c.name}」？`, () => configApi.deleteConfig(c.configId))
+  return configApi.deleteConfig(c.configId)
 }
 </script>
 
@@ -109,9 +103,9 @@ function onDelete(c: Config) {
             <td><StatusTag :text="c.enabled ? '启用' : '停用'" :tone="c.enabled ? 'ok' : 'muted'" :show-icon="false" /></td>
             <td>
               <el-button link type="primary" size="small" @click="openDetail(c)">详情</el-button>
-              <el-button link type="primary" size="small" @click="onSend(c)">发配置</el-button>
-              <el-button link type="primary" size="small" @click="onCopy(c)">复制</el-button>
-              <el-button link type="danger" size="small" @click="onClear(c)">清缓存</el-button>
+              <ConfirmButton link type="primary" size="small" text="发配置" :title="`发配置：${c.name}`" :body="`将向「${c.name}」下发配置任务，是否继续？`" :action="() => onSend(c)" />
+              <ConfirmButton link type="primary" size="small" text="复制" :title="`复制配置：${c.name}`" :body="`复制「${c.name}」？`" :action="() => onCopy(c)" />
+              <ConfirmButton link type="danger" size="small" text="清缓存" :title="`清配置缓存（高危）：${c.name}`" :body="`清除「${c.name}」配置缓存？`" :action="() => onClear(c)" />
             </td>
           </tr>
         </tbody>
