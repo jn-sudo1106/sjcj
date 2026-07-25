@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import sourceTab from './CollectAssets/SourceTab.vue?raw'
+import batchBar from './CollectAssets/components/BatchBar.vue?raw'
+import tableView from './CollectAssets/components/TableView.vue?raw'
+import filterToolbar from './CollectAssets/components/FilterToolbar.vue?raw'
 import collectAssetsIndex from './CollectAssets/index.vue?raw'
 import flowCanvas from './FlowCanvas/index.vue?raw'
 import nodeInspector from './FlowCanvas/inspector/NodeInspector.vue?raw'
@@ -83,17 +86,19 @@ describe('最新方案 UI 入口收口', () => {
   })
 
   it('采集资产页顶部使用紧凑统计工具条', () => {
-    expect(sourceTab).not.toContain('class="ca-kpis"')
-    expect(sourceTab).toContain('class="ca-stats"')
-    expect(sourceTab).toContain('网站 <b>{{ total }}</b>')
-    expect(sourceTab).toContain('源 <b>{{ stats.total }}</b>')
+    // P2-2 拆分后统计工具条移到 FilterToolbar.vue 子组件
+    expect(filterToolbar).not.toContain('class="ca-kpis"')
+    expect(filterToolbar).toContain('class="ca-stats"')
+    expect(filterToolbar).toContain('网站 <b>{{ total }}</b>')
+    expect(filterToolbar).toContain('源 <b>{{ stats.total }}</b>')
   })
 
   it('采集资产网站行数据量可进入网站数据视图', () => {
-    expect(sourceTab).toContain('function openSiteData(site: Site)')
-    expect(sourceTab).toContain("router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data' } })")
-    expect(sourceTab).toContain('<button class="ca-count-link" type="button" title="查看该网站全部子源数据" @click="openSiteData(site)">')
-    expect(sourceTab).toContain('{{ (site.dataCount ?? 0).toLocaleString() }} 条')
+    // P2-2 拆分后表格视图移到 TableView.vue 子组件
+    expect(tableView).toContain('function openSiteData(site: Site)')
+    expect(tableView).toContain("router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data' } })")
+    expect(tableView).toContain('<button class="ca-count-link" type="button" title="查看该网站全部子源数据" @click="openSiteData(site)">')
+    expect(tableView).toContain('{{ (site.dataCount ?? 0).toLocaleString() }} 条')
   })
 
   it('采集资产卡片的子源直达流程画布，卡片底部不再提供任务入口', () => {
@@ -103,12 +108,13 @@ describe('最新方案 UI 入口收口', () => {
   })
 
   it('采集资产表格展开收起入口收进表头右侧', () => {
-    expect(sourceTab).not.toContain('class="ca-table-ops"')
-    expect(sourceTab).not.toContain('共 {{ total }} 个网站')
-    expect(sourceTab).toContain('class="ca-expand-menu"')
-    expect(sourceTab).toContain('title="展开/收起"')
-    expect(sourceTab).toContain('<el-icon :size="14"><Operation /></el-icon>')
-    expect(sourceTab).not.toContain('>展开/收起⌄</button>')
+    // P2-2 拆分后表格视图移到 TableView.vue 子组件
+    expect(tableView).not.toContain('class="ca-table-ops"')
+    expect(tableView).not.toContain('共 {{ total }} 个网站')
+    expect(tableView).toContain('class="ca-expand-menu"')
+    expect(tableView).toContain('title="展开/收起"')
+    expect(tableView).toContain('<el-icon :size="14"><Operation /></el-icon>')
+    expect(tableView).not.toContain('>展开/收起⌄</button>')
   })
 
   it('数据视图只使用当前子源流程，节点图不展示开始/结束', () => {
@@ -202,9 +208,10 @@ describe('最新方案 UI 入口收口', () => {
     expect(sourceTab).not.toContain('批量导入</button>')
 
     // 表格勾选后的上下文批量工具条继续保留（发抓取/操作类/监控类/批量删除）
-    expect(sourceTab).toContain('class="ca-batchbar"')
-    expect(sourceTab).toContain('@click="onBatchSnatch"')
-    expect(sourceTab).toContain('@click="onBatchDelete"')
+    // P2-2 拆分后批量工具条移到 BatchBar.vue 子组件
+    expect(batchBar).toContain('class="ca-batchbar"')
+    expect(batchBar).toContain('@click="emit(\'batchSnatch\')"')
+    expect(batchBar).toContain('@click="emit(\'batchDelete\')"')
 
     // 批量导入迁进网站详情子源侧栏，siteId 已定，不再需要目标网站下拉
     expect(siteSourceSwitcher).toContain('siteApi.siteImportSources(props.siteId, importDlg.lines)')
