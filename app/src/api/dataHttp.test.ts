@@ -116,22 +116,22 @@ describe('实体数据 API 旧平台 HTTP 契约', () => {
     expect(payload).not.toHaveProperty('state')
   })
 
-  it('排序：ENTRY_ID 列走 sorted ±1，不带 field/type', async () => {
+  it('排序：ENTRY_ID 列也走 field/type 数值化 hack，sorted 恒为字符串 "0"（对照真实源码 handleSortChange 修正）', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, count: 0, data: [] }))
     const { dataApi } = await import('./index')
 
     await dataApi.rowQueryPaged({ tableId: '1042', sortField: 'ENTRY_ID', sortOrder: 'ascend' })
     let payload = decryptBody(fetchMock.mock.calls[0][1] as RequestInit)
-    expect(payload.sorted).toBe(1)
-    expect(payload).not.toHaveProperty('field')
-    expect(payload).not.toHaveProperty('type')
+    expect(payload.sorted).toBe('0')
+    expect(payload.field).toBe('(ENTRY_ID+ 0)')
+    expect(payload.type).toBe(' ASC ')
 
     await dataApi.rowQueryPaged({ tableId: '1042', sortField: 'ENTRY_ID', sortOrder: 'descend' })
     payload = decryptBody(fetchMock.mock.calls[1][1] as RequestInit)
-    expect(payload.sorted).toBe(-1)
+    expect(payload.type).toBe(' DESC ')
   })
 
-  it('排序：非 ENTRY_ID 动态列走 field/type 数值化排序 hack，sorted 保持 "0"', async () => {
+  it('排序：动态列同样走 field/type 数值化排序 hack', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, count: 0, data: [] }))
     const { dataApi } = await import('./index')
 
@@ -188,11 +188,11 @@ describe('选表分组 / 动态表结构 API 旧平台 HTTP 契约（E 包 T1b�
     expect(url).toContain('sourceId=src-7')
   })
 
-  it('tables() 摊平四个分组为扁平列表，供现有选表下拉复用', async () => {
+  it('tables() 摊平 list1/list2/list3 为扁平列表；main 是默认选中的标量 ID，不参与摊平', async () => {
     fetchMock.mockResolvedValue(jsonResponse({
       code: '0', msg: null,
       data: {
-        main: [{ entryTypeId: '1', tableName: 't1' }],
+        main: '2',
         list1: [{ entryTypeId: '2', tableName: 't2' }],
         list2: [],
         list3: [{ entryTypeId: '3', tableName: 't3' }],
@@ -201,13 +201,24 @@ describe('选表分组 / 动态表结构 API 旧平台 HTTP 契约（E 包 T1b�
     const { dataApi } = await import('./index')
 
     const tables = await dataApi.tables()
-    expect(tables.map((t) => t.tableId)).toEqual(['1', '2', '3'])
+    expect(tables.map((t) => t.tableId)).toEqual(['2', '3'])
   })
 
-  it('tableMeta 用 GET 调 entry/queryEntryType，参数名是 type（不是 typeId）', async () => {
+  it('entryTypesGroup 把 main 解析为字符串 ID，不当作分组列表', async () => {
     fetchMock.mockResolvedValue(jsonResponse({
       code: '0', msg: null,
-      data: { curEntryType: { entryTypeId: '1042', tableName: 'sense_data.TB_NEWS', items: [] } },
+      data: { main: '2', list1: [], list2: [], list3: [] },
+    }))
+    const { dataApi } = await import('./index')
+
+    const group = await dataApi.entryTypesGroup()
+    expect(group.main).toBe('2')
+  })
+
+  it('tableMeta 用 GET 调 entry/queryEntryType，参数名是 type（不是 typeId）；响应是扁平记录，不包 curEntryType', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      code: '0', msg: null,
+      data: { entryTypeId: '1042', tableName: 'sense_data.TB_NEWS', items: [] },
     }))
     const { dataApi } = await import('./index')
 
@@ -217,7 +228,6 @@ describe('选表分组 / 动态表结构 API 旧平台 HTTP 契约（E 包 T1b�
     expect(url).toContain('/api/v1/entry/queryEntryType')
     expect(url).toContain('type=1042')
     expect(url).not.toContain('typeId=')
-    // 真实响应包一层 curEntryType，需解包后再转换
     expect(meta).toMatchObject({ tableId: '1042', tableName: 'sense_data.TB_NEWS' })
   })
 })

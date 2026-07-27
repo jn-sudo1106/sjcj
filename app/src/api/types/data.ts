@@ -48,9 +48,15 @@ export interface DataTableMeta {
   }[]
 }
 
-/** 选表分组（旧 config/queryEntryTypesGroup 返回形状，原样保留 4 个分组键） */
+/**
+ * 选表分组（旧 config/queryEntryTypesGroup 返回形状；对照真实源码 EntryList2.vue loadEntryTypes 修正）：
+ * main 不是第 4 个列表，是默认选中的 entryTypeId（标量）；三个真正的表分组是 list1/list2/list3，
+ * UI 分组标签「main/subs/other」对应的正是 list1/list2/list3（见 EntryTypeSelectMulti.vue），
+ * 与响应字段名 main 是两回事，容易混淆。
+ */
 export interface EntryTypeGroup {
-  main: EntryType[]
+  /** 默认选中的表 ID；未设置时旧前端回退到 list3[0] */
+  main?: string
   list1: EntryType[]
   list2: EntryType[]
   /** 旧前端对 list3 做了 reverse，此处已反转 */
@@ -124,7 +130,12 @@ export interface RowQuery extends PageQuery {
   nextFlag?: string
   min?: string | number
   max?: string | number
-  /** 排序列；ENTRY_ID 走 sorted±1，其余列走 field/type 数值化排序 hack（旧平台口径原样保留） */
+  /**
+   * 排序列：对照真实源码 EntryList2.vue handleSortChange 修正——该页表格用 u-table，
+   * 排序一律走 @sort-change 设置 field='(列名+ 0)'/type=' ASC '|' DESC '（含 ENTRY_ID 本身）；
+   * entry.js 里 sortField==='ENTRY_ID' → sorted±1 的分支是给另一套表格组件（s-table/AntD sorter）
+   * 准备的，此页从不设置 sortField/sortOrder，是死分支，不迁移。
+   */
   sortField?: string
   sortOrder?: 'ascend' | 'descend'
 }

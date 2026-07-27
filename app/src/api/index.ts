@@ -139,7 +139,6 @@ export const metricApi = {
 // 结果视图查询载荷组装（entryDataPaged/entryDistinctSource/summaryEntryData/exportUrl 共用，
 // 避免四处口径漂移——见「单表数据查看迁移」方案 §3.1）
 function buildLegacyRowQuery(q: RowQuery) {
-  const isEntryIdSort = q.sortField === 'ENTRY_ID'
   return {
     page: q.page ?? 1,
     limit: q.size ?? 20,
@@ -154,10 +153,12 @@ function buildLegacyRowQuery(q: RowQuery) {
     min: q.sql ? q.min || 0 : q.min,
     max: q.max,
     more: q.sql,
-    // ENTRY_ID 排序走 sorted±1；其余列走 field/type 数值化排序 hack（旧平台口径原样保留）
-    sorted: isEntryIdSort ? (q.sortOrder === 'descend' ? -1 : 1) : '0',
-    field: q.sortField && !isEntryIdSort ? `(${q.sortField}+ 0)` : undefined,
-    type: q.sortField && !isEntryIdSort ? (q.sortOrder === 'descend' ? ' DESC ' : ' ASC ') : undefined,
+    // 对照真实源码 EntryList2.vue：该页排序一律走 field/type 数值化 hack（含 ENTRY_ID 本身），
+    // sorted 恒为 '0'；entry.js 里 sortField==='ENTRY_ID' 触发 sorted±1 的分支是给另一套表格组件
+    // （s-table/AntD sorter）准备的，此页从不设置 sortField/sortOrder，是死分支，不迁移。
+    sorted: '0',
+    field: q.sortField ? `(${q.sortField}+ 0)` : undefined,
+    type: q.sortField ? (q.sortOrder === 'descend' ? ' DESC ' : ' ASC ') : undefined,
     enable: '0',
   }
 }
@@ -174,8 +175,9 @@ export const dataApi = {
     return entryTypeGroupFromLegacy(result)
   },
   tables: async (): Promise<DataTableMeta[]> => {
+    // group.main 不是列表（是默认选中的 entryTypeId 标量），真正的三个分组是 list1/list2/list3
     const group: EntryTypeGroup = await dataApi.entryTypesGroup()
-    return [...group.main, ...group.list1, ...group.list2, ...group.list3].map(dataTableFromLegacy)
+    return [...group.list1, ...group.list2, ...group.list3].map(dataTableFromLegacy)
   },
   rows: async (tableId: string) => (await dataApi.rowQueryPaged({ tableId, page: 1, size: 100 })).list,
   // 结果视图：按表 + 多条件 + 分页（独立端点，避免影响 /data 全局数据页）
@@ -188,16 +190,14 @@ export const dataApi = {
     return { total: result.total, list: result.list.map(dataRowFromLegacy) }
   },
   tableMeta: async (tableId: string) => {
+    // 对照真实源码 loadEntryTypeDetail：res.data 就是扁平的实体表记录（含 items[]），
+    // curEntryType 只是旧前端本地变量名，响应体里没有这层包装，不需要解包
     const result = await request<unknown>('data/tableMeta', { tableId }, {
       method: 'GET',
       httpEndpoint: 'entry/queryEntryType',
       httpParams: { type: tableId },
     })
-    // 真实响应包一层 curEntryType（见方案 §1.1）；mock/兜底数据可能是已转换的扁平形状
-    const payload = result && typeof result === 'object' && 'curEntryType' in (result as Record<string, unknown>)
-      ? (result as Record<string, unknown>).curEntryType
-      : result
-    return payload ? dataTableFromLegacy(payload) : null
+    return result ? dataTableFromLegacy(result) : null
   },
   dataStats: async () => {
     const tables = await dataApi.tables()

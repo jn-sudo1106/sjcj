@@ -319,12 +319,15 @@ export function dataTableFromLegacy(input: unknown): DataTableMeta {
   }
 }
 
-/** 选表分组：{main,list1,list2,list3} → 各分组转 EntryType[]；list3 按旧前端行为反转 */
+/**
+ * 选表分组：{main,list1,list2,list3} → main 是默认选中的 entryTypeId（标量，非列表），
+ * list1/list2/list3 才是三个真正的表分组；list3 按旧前端行为反转。
+ */
 export function entryTypeGroupFromLegacy(input: unknown): EntryTypeGroup {
   const record = asRecord(input)
   const bucket = (key: string) => (Array.isArray(record[key]) ? (record[key] as unknown[]) : [])
   return {
-    main: bucket('main').map(entryTypeFromLegacy),
+    main: record.main == null ? undefined : String(record.main),
     list1: bucket('list1').map(entryTypeFromLegacy),
     list2: bucket('list2').map(entryTypeFromLegacy),
     list3: bucket('list3').map(entryTypeFromLegacy).reverse(),
