@@ -38,7 +38,6 @@ const size = ref(10)
 const loading = ref(false)
 
 // ---- 表格视图 ref ----
-const tableViewRef = ref<InstanceType<typeof TableView> | null>(null)
 const editorVisible = ref(false)
 const editorSite = ref<Site | null>(null)
 
@@ -267,7 +266,6 @@ onUnmounted(() => {
     <!-- 表格视图 -->
     <TableView
       v-else
-      ref="tableViewRef"
       :sites="sites"
       :loading="loading"
       :total="total"
