@@ -133,61 +133,6 @@ onUnmounted(() => ui.clearActions())
   white-space: nowrap;
 }
 
-.ov-empty {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 60px 20px;
-  text-align: center;
-}
-
-.ov-empty-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: #fef2f2;
-  color: #ef4444;
-  font-size: 22px;
-  font-weight: 800;
-}
-
-.ov-empty-title {
-  margin-top: 8px;
-  color: #0f1e46;
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.ov-empty-text {
-  color: #64748b;
-  font-size: 13px;
-}
-
-.ov-empty-btn {
-  margin-top: 12px;
-  height: 34px;
-  padding: 0 20px;
-  border: 1px solid #2563eb;
-  border-radius: 6px;
-  background: #2563eb;
-  color: #fff;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s ease, box-shadow 0.2s ease;
-}
-
-.ov-empty-btn:hover {
-  background: #1d4ed8;
-  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.2);
-}
-
 @media (max-width: 720px) {
   .ov {
     height: auto;

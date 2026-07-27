@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { siteApi, type Site, type SourceCategory } from '@/api'
 
@@ -57,6 +57,9 @@ async function save() {
     saving.value = false
   }
 }
+
+// 父组件通过 v-if 挂载时传入 site，自动填充表单
+watch(() => props.site, (s) => { if (s) openEditor(s) }, { immediate: true })
 
 defineExpose({ openEditor })
 </script>

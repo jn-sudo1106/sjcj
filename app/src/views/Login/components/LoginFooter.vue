@@ -6,11 +6,11 @@
 <template>
   <footer class="lg-footer">
     <nav>
-      <a href="_self">帮助中心</a>
+      <a href="javascript:void(0)">帮助中心</a>
       <span>|</span>
-      <a href="_self">隐私政策</a>
+      <a href="javascript:void(0)">隐私政策</a>
       <span>|</span>
-      <a href="_self">服务条款</a>
+      <a href="javascript:void(0)">服务条款</a>
     </nav>
     <p>Copyright © 智能采集中心 版权所有</p>
   </footer>

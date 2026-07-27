@@ -3,18 +3,14 @@
 // 职责：按 group 分组的导航菜单 + 高亮 active 路由 + 收起侧栏按钮
 // 源详情 / 新建源画布（/canvas?sourceId=X 或 /canvas?mode=new）逻辑上属于「采集资产」子页，侧栏高亮采集资产
 import { computed, type Component } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { Box, Clock, DataAnalysis, Document, Histogram, Monitor, Odometer } from '@element-plus/icons-vue'
 import { TABS } from '@/router/tabs'
+import { useActiveNavKey } from '@/composables/useActiveNavKey'
 
-const route = useRoute()
 const router = useRouter()
 
-const activeKey = computed(() => {
-  const seg = route.path.split('/')[1] || 'overview'
-  if (seg === 'canvas') return 'collect'
-  return seg
-})
+const activeKey = useActiveNavKey()
 
 const groupLabels = {
   home: '首页',

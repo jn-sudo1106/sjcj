@@ -15,6 +15,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
+    exclude: ['**/node_modules/**', '**/.claude/**', '**/dist/**'],
     // 测试固定跑 mock 模式，不受本地 .env.local（真实后端联调开关）影响；
     // 个别测试要模拟真实 HTTP 协议时用 vi.stubEnv('VITE_API_MODE', 'http') 显式覆盖。
     // 同理关掉「逐端点上线」逃逸（endpoints.ts 的 live 标记，见 client.ts）：那是给真实浏览器/生产用的机制，

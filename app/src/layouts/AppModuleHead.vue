@@ -10,17 +10,14 @@ import { Files, Upload } from '@element-plus/icons-vue'
 import { TABS } from '@/router/tabs'
 import { useUiStore } from '@/stores/ui'
 import { useFlowStore } from '@/stores/flow'
+import { useActiveNavKey } from '@/composables/useActiveNavKey'
 
 const route = useRoute()
 const router = useRouter()
 const ui = useUiStore()
 const flow = useFlowStore()
 
-const activeKey = computed(() => {
-  const seg = route.path.split('/')[1] || 'overview'
-  if (seg === 'canvas') return 'collect'
-  return seg
-})
+const activeKey = useActiveNavKey()
 
 const current = computed(() => TABS.find((t) => t.key === activeKey.value) ?? TABS[0])
 

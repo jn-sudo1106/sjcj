@@ -66,8 +66,6 @@ async function handleSubmit() {
   }
 }
 
-defineExpose({ errorMsg })
-
 onMounted(() => void getCode())
 onUnmounted(() => clearTimeout(refreshTimer))
 </script>

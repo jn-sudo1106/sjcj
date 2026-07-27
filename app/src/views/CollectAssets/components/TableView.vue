@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
 import { Edit, Operation } from '@element-plus/icons-vue'
 import { siteApi, sourceApi, type Source, type Site } from '@/api'
 import { siteIcon } from '@/utils/visual/siteVisual'
+import { confirmDanger } from '@/utils/confirmDanger'
 
 const props = defineProps<{
   sites: Site[]
@@ -12,13 +12,13 @@ const props = defineProps<{
   total: number
   page: number
   size: number
+  selectedIds: string[]
 }>()
 
 const emit = defineEmits<{
   'update:page': [value: number]
   'update:size': [value: number]
-  'pageChange': []
-  'sizeChange': []
+  'update:selectedIds': [value: string[]]
   'openEditor': [site: Site]
 }>()
 
@@ -28,7 +28,10 @@ const router = useRouter()
 const expanded = ref<Set<string>>(new Set())
 const childrenCache = reactive<Record<string, Source[]>>({})
 const childrenLoading = reactive<Record<string, boolean>>({})
-const selectedIds = ref<string[]>([])
+const selectedIds = computed({
+  get: () => props.selectedIds,
+  set: (v) => emit('update:selectedIds', v),
+})
 
 // 表格：展开 / 懒加载子源
 async function ensureChildren(siteId: string) {
@@ -130,21 +133,6 @@ function openSiteData(site: Site) {
 }
 
 // 子源行内操作
-async function confirmDanger(title: string, body: string, run: () => Promise<{ message?: string }>) {
-  const { ElMessageBox } = await import('element-plus')
-  try {
-    await ElMessageBox.confirm(body, title, {
-      type: 'warning',
-      confirmButtonText: '确认执行',
-      cancelButtonText: '取消',
-    })
-  } catch {
-    return
-  }
-  const res = await run()
-  ElMessage.success(res?.message || '操作已提交（演示）')
-}
-
 function onRowSnatch(s: Source) {
   confirmDanger('发抓取', `将向子源「${s.name}」下发抓取任务，是否继续？`, () => sourceApi.sendSnatch([s.sourceId]))
 }
@@ -159,13 +147,12 @@ function onRowToggle(s: Source) {
   })
 }
 
-function onSizeChange() {
+function onSizeChange(newSize: number) {
+  emit('update:size', newSize)
   emit('update:page', 1)
-  emit('sizeChange')
 }
 
 defineExpose({
-  selectedIds,
   childrenCache,
   expanded,
   siteCheckMap,

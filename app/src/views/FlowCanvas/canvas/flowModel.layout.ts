@@ -21,7 +21,7 @@ import type {
   TaskParamValue,
   TripleField,
 } from './flowModel'
-import { nodeInputTable, nodeOutputTable } from './flowModel'
+import { isDataNode, nodeInputTable, nodeOutputTable } from './flowModel'
 import { extractUrlParamIds } from '@/utils/flow/urlParams'
 
 // ---------- 节点配置规范化 ----------
@@ -354,11 +354,11 @@ export function backfillOutputTables(def: FlowDef): FlowDef {
       upstream = t
       return
     }
-    if (!c.collectCfg && isDataNodeShape(c) && upstream) c.outputTable = upstream
+    if (!c.collectCfg && isDataNode(c) && upstream) c.outputTable = upstream
   })
   def.branches.forEach((b) => {
     const c = def.configs[b.id]
-    if (!c || c.collectCfg || !isDataNodeShape(c)) return
+    if (!c || c.collectCfg || !isDataNode(c)) return
     // 此时 c.collectCfg 已 guard 为 undefined，c.outputTable 是必访问字段
     if (c.outputTable) return
     const anchor = def.configs[b.rowAnchor]
@@ -366,12 +366,4 @@ export function backfillOutputTables(def: FlowDef): FlowDef {
     if (t) c.outputTable = t
   })
   return def
-}
-
-/** data 节点判定的本地副本（避免对 flowModel 的循环依赖；与 flowModel.isDataNode 等价但用更弱判定
- *  以避开把 isDataNode 拆到这里后被 seeds 反向引用造成的循环。实际语义：决策/分头/邮件/告警/指标 不算数据节点 */
-function isDataNodeShape(cfg: NodeConfig): boolean {
-  if (cfg.kind === 'decision' || /决策|条件路径/.test(cfg.title + cfg.sub)) return false
-  if (cfg.kind === 'parallel' || /分头|多路径并行/.test(cfg.title + cfg.sub)) return false
-  return !/邮件|告警|指标/.test(cfg.title + cfg.sub)
 }

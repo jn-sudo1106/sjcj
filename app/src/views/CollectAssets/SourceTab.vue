@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { sourceApi, siteApi, type Site, type SourceCategory } from '@/api'
 import { useUiStore } from '@/stores/ui'
+import { confirmDanger } from '@/utils/confirmDanger'
 import SiteCardGrid from './SiteCardGrid.vue'
 import FilterToolbar from './components/FilterToolbar.vue'
 import BatchBar from './components/BatchBar.vue'
@@ -95,9 +96,7 @@ async function loadTagOptions() {
 
 function resetAndLoad() {
   page.value = 1
-  if (tableViewRef.value) {
-    tableViewRef.value.selectedIds = []
-  }
+  selectedIds.value = []
   loadList()
 }
 async function refreshAll() {
@@ -123,24 +122,16 @@ function setView(v: 'card' | 'table') {
 }
 
 // ---- 选中状态 ----
-const selectedIds = computed(() => tableViewRef.value?.selectedIds ?? [])
+const selectedIds = ref<string[]>([])
 
-// ---- 批量操作 ----
-async function confirmDanger(title: string, body: string, run: () => Promise<{ message?: string }>) {
-  const { ElMessageBox } = await import('element-plus')
-  try {
-    await ElMessageBox.confirm(body, title, {
-      type: 'warning',
-      confirmButtonText: '确认执行',
-      cancelButtonText: '取消',
-    })
-  } catch {
-    return
-  }
-  const res = await run()
-  ElMessage.success(res?.message || '操作已提交（演示）')
+// ---- 搜索 debounce（300ms）----
+let kwTimer: ReturnType<typeof setTimeout> | undefined
+function onKeywordChange() {
+  clearTimeout(kwTimer)
+  kwTimer = setTimeout(() => resetAndLoad(), 300)
 }
 
+// ---- 批量操作 ----
 function requireSelection(): boolean {
   if (!selectedIds.value.length) {
     ElMessage.warning('请先在表格视图勾选网站或子源')
@@ -232,7 +223,10 @@ onMounted(() => {
   loadList()
   ui.registerAction('新建采集', openNewFlowCanvas)
 })
-onUnmounted(() => ui.clearActions())
+onUnmounted(() => {
+  ui.clearActions()
+  clearTimeout(kwTimer)
+})
 </script>
 
 <template>
@@ -249,6 +243,7 @@ onUnmounted(() => ui.clearActions())
       :stats="stats"
       :view="view"
       :has-filter="hasFilter"
+      @update:keyword="onKeywordChange"
       @filter-change="resetAndLoad"
       @clear-filters="clearFilters"
       @refresh="refreshAll"
@@ -261,7 +256,7 @@ onUnmounted(() => ui.clearActions())
       @batch-delete="onBatchDelete"
       @operate="onOperate"
       @monitor="onMonitor"
-      @clear-selection="() => { if (tableViewRef) tableViewRef.selectedIds = [] }"
+      @clear-selection="() => { selectedIds = [] }"
     />
 
     <!-- 卡片视图 -->
@@ -278,9 +273,10 @@ onUnmounted(() => ui.clearActions())
       :total="total"
       :page="page"
       :size="size"
+      :selected-ids="selectedIds"
       @update:page="(p: number) => { page = p; loadList() }"
       @update:size="(s: number) => { size = s }"
-      @size-change="() => { page = 1; loadList() }"
+      @update:selected-ids="(ids: string[]) => { selectedIds = ids }"
       @open-editor="openSiteEditor"
     />
 
@@ -302,7 +298,6 @@ onUnmounted(() => ui.clearActions())
     <!-- 性能审查 P2-2：editorVisible=false 时不挂载 SiteEditorDialog，避免其内部 fetch + watch 提前跑 -->
     <SiteEditorDialog
       v-if="editorVisible"
-      ref="siteEditorRef"
       v-model:visible="editorVisible"
       :site="editorSite"
       :categories="categories"
