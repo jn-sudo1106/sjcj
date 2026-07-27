@@ -19,7 +19,7 @@ export interface RequestOptions {
 }
 
 const MODE: AdapterMode = (import.meta.env.VITE_API_MODE as AdapterMode) || 'mock'
-const BASE_URL: string = import.meta.env.VITE_API_BASE || '/api/v1/'
+export const BASE_URL: string = import.meta.env.VITE_API_BASE || '/api/v1/'
 const FAIL_RATE = Number(import.meta.env.VITE_API_FAIL_RATE) || 0
 // 测试环境固定关闭（vitest.config.ts 的 test.env），避免既有测试意外撞上真实发起的 fetch
 const DISABLE_LIVE_ENDPOINTS = import.meta.env.VITE_API_DISABLE_LIVE_ENDPOINTS === '1'
@@ -42,7 +42,7 @@ export function isDanger(endpoint: string): boolean {
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-function appendQuery(url: string, params?: Record<string, unknown>): string {
+export function appendQuery(url: string, params?: Record<string, unknown>): string {
   if (!params) return url
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => {

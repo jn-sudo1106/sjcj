@@ -4,12 +4,14 @@ import {
   configToLegacy,
   dataRowFromLegacy,
   dataTableFromLegacy,
+  entryDetailFromLegacy,
   entryTypeFromLegacy,
   entryTypeGroupFromLegacy,
   entryTypeToLegacy,
   paramFromLegacy,
   paramPageFromLegacy,
   paramToLegacy,
+  summaryRowFromLegacy,
 } from './legacyAdapters'
 
 describe('旧平台参数模型适配', () => {
@@ -287,5 +289,30 @@ describe('选表分组与动态表结构适配（E 包 T1b）', () => {
       expect.objectContaining({ prop: 'title', columnName: 'K1', required: true, width: 140 }),
       expect.objectContaining({ prop: 'raw', columnName: 'K9', required: false, width: 80 }),
     ])
+  })
+})
+
+describe('数据详情 / 统计行适配（E 包 T1c）', () => {
+  it('entryDetailFromLegacy：showItems/subs 从行字段中摘出，不落进 row.values', () => {
+    const detail = entryDetailFromLegacy({
+      ENTRY_ID: '88231', SOURCE_ID: '161725', K1: '正文',
+      showItems: [{ itemId: '1', columnName: 'K1', itemName: '正文', value: '正文' }],
+      subs: [{ ENTRY_ID: '88232', SOURCE_ID: '161725' }],
+    })
+    expect(detail.row).toMatchObject({ dataId: '88231', sourceId: '161725' })
+    expect(detail.row.values).toEqual({ K1: '正文' })
+    expect(detail.showItems).toEqual([{ itemId: '1', columnName: 'K1', itemName: '正文', value: '正文' }])
+    expect(detail.subs).toEqual([expect.objectContaining({ dataId: '88232' })])
+  })
+
+  it('entryDetailFromLegacy：subs 缺失时为 undefined，不是空数组', () => {
+    const detail = entryDetailFromLegacy({ ENTRY_ID: '1', showItems: [] })
+    expect(detail.subs).toBeUndefined()
+    expect(detail.showItems).toEqual([])
+  })
+
+  it('summaryRowFromLegacy：动态分组列原样保留，CNT 规整为 number', () => {
+    const row = summaryRowFromLegacy({ K2: '161725', K3: '2026-07-18', CNT: '42' })
+    expect(row).toEqual({ K2: '161725', K3: '2026-07-18', CNT: 42 })
   })
 })

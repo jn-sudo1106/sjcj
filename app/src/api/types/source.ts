@@ -105,6 +105,12 @@ export interface Source {
   paramRefs?: { paramId: string; group?: string | null }[]
 }
 
+/** 同站源下拉选项（source/sourceSame，旧口径「[id]名称」，非完整 Source） */
+export interface SourceOption {
+  sourceId: string
+  name: string
+}
+
 /** 模板内一个稳定节点对应的子源覆盖配置；未覆盖时使用模板默认值。 */
 export interface FlowTemplateNodeBinding {
   collect?: Partial<Pick<CollectConfig,

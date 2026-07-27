@@ -1,6 +1,7 @@
 import {
   mockSourcePaged,
   mockSourceDetail,
+  mockSourceSame,
   mockSourceCategories,
   mockSourceStats,
   mockSourceSteps,
@@ -63,6 +64,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   // 采集资产 · 源（M2）
   'source/sourcePaged': mockSourcePaged,
   'source/sourceDetail': mockSourceDetail,
+  'source/sourceSame': mockSourceSame,
   'source/categoryTree': mockSourceCategories,
   'source/stats': mockSourceStats,
   'item/next/nextConfigPaged': mockSourceSteps,

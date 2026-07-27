@@ -17,6 +17,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   /* ── source 源（目标 36 / 收录 36） ── */
   { path: 'source/sourcePaged', desc: '源分页列表', impl: true },
   { path: 'source/sourceDetail', desc: '源详情', impl: true },
+  { path: 'source/sourceSame', desc: '同站源下拉（数据表页选源用）', impl: true },
   { path: 'source/categoryTree', desc: '源分类目录树（计数）', impl: true },
   { path: 'source/stats', desc: '源 KPI 统计', impl: true },
   { path: 'source/logPaged', desc: '源操作日志', impl: true },
@@ -110,17 +111,20 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/bindParam', desc: '配置绑定参数', danger: true },
   { path: 'config/unbindParam', desc: '配置解绑参数', danger: true },
 
-  /* ── entry 实体数据（目标 11 / 收录 7） ── */
+  /* ── entry 实体数据（收录 12，见「单表数据查看迁移」方案 §1.1 的 16 个旧端点核对） ── */
   { path: 'entry/entryDataPaged', desc: '实体数据分页' },
   { path: 'entry/queryEntryType', desc: '实体数据动态表结构' },
   { path: 'entry/entryDetail', desc: '实体数据详情' },
   { path: 'entry/entryDistinctSource', desc: '实体数据按源去重' },
   { path: 'entry/summaryEntryData', desc: '实体数据汇总' },
   { path: 'entry/re-save', desc: '重存实体数据', danger: true },
-  { path: 'entry/delete', desc: '删除实体数据', danger: true },
-  { path: 'entry/manualAdd', desc: '手动添加实体数据', danger: true },
+  // 旧仓库实际路径是 entryDelete（此前登记为 delete 是权宜猜测，单表数据查看方案 §1.1 核对修正）
+  { path: 'entry/entryDelete', desc: '删除实体数据（单条/按源/整表 × 当日/全量）', danger: true },
+  { path: 'entry/entryDeleteBatch', desc: '按 IDs 批量删除实体数据', danger: true },
+  { path: 'entry/entryClearParent', desc: '清除父表后续标识', danger: true },
   { path: 'entry/entryUpdate', desc: '手动修改实体数据', danger: true },
   { path: 'entry/batch/saveEntryOne', desc: '手动新增实体数据', danger: true },
+  { path: 'entry/entryExportAll', desc: '导出 Excel（URL 直开，同源 Cookie 鉴权）' },
 
   /* ── item/next 子步骤（目标 7 / 收录 5） ── */
   { path: 'item/next/nextConfigPaged', desc: '子步骤分页', impl: true },
@@ -228,6 +232,17 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'data/rowQueryPaged', desc: '结果视图：按表+筛选分页查询', impl: true },
   { path: 'data/tableMeta', desc: '单表 schema 元信息', impl: true },
   { path: 'data/rowUpdate', desc: '结果视图：行编辑保存', impl: true },
+  // 以下 E 包新增方法暂无专属 mock handler（尚无 UI 消费），演示环境走 client.ts 的通用 fallback 兜底
+  { path: 'data/rowDetail', desc: '数据详情（entryId+type，含 showItems/subs）' },
+  { path: 'data/distinctSource', desc: '提取去重源 ID' },
+  { path: 'data/summaryData', desc: '统计（未加密 POST）' },
+  { path: 'data/nextStep', desc: '发选中/本页后续', danger: true },
+  { path: 'data/nextStepBatch', desc: '发大批量后续（180s 超时）', danger: true },
+  { path: 'data/rowDelete', desc: '删除：单条/该源/整表 × 当日/全量', danger: true },
+  { path: 'data/rowDeleteBatch', desc: '按 IDs 批量删除', danger: true },
+  { path: 'data/clearParent', desc: '清除父表后续标识', danger: true },
+  { path: 'data/rowAdd', desc: '手动新增', danger: true },
+  { path: 'data/reSave', desc: '重新保存原始 JSON', danger: true },
   { path: 'measure/stats', desc: '指标中心 KPI', impl: true },
   { path: 'monitor/health', desc: '健康卡', impl: true },
   { path: 'monitor/alarmPaged', desc: '告警列表', impl: true },

@@ -1,9 +1,9 @@
-import { request } from './client'
+import { request, BASE_URL, appendQuery } from './client'
 import type {
-  Paged, Source, Site, SourceCategory, Step, Ack, PageQuery,
+  Paged, Source, Site, SourceCategory, SourceOption, Step, Ack, PageQuery,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestResult,
-  Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
+  Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   Config, ConfigActionLog, ConfigParamBinding, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, RawFile, RawFileQuery, RawFileStats, SourceCloneRequest, SourceCloneResult,
   FlowTemplate, FlowTemplateSaveInput,
@@ -17,6 +17,7 @@ import {
   configToLegacy,
   dataRowFromLegacy,
   dataTableFromLegacy,
+  entryDetailFromLegacy,
   entryTypeFromLegacy,
   entryTypeGroupFromLegacy,
   entryTypePageFromLegacy,
@@ -24,6 +25,7 @@ import {
   paramFromLegacy,
   paramPageFromLegacy,
   paramToLegacy,
+  summaryRowFromLegacy,
 } from './legacyAdapters'
 import { encryptLegacyPayload } from './legacyCrypto'
 
@@ -70,6 +72,8 @@ export const sourceApi = {
   // 源信息编辑抽屉 + 任务视图（0706 优化·Phase4）
   sourceUpdate: (source: Source) => assetMockRequest<Ack>('source/updateSource', { source }),
   sourceNodeRuns: (sourceId: string) => assetMockRequest<NodeRunStat[]>('source/nodeRunStats', { sourceId }),
+  // 数据表页选源下拉（E 包）：同站源列表，sourceId 可空
+  sourceSame: (sourceId?: string) => assetMockRequest<SourceOption[]>('source/sourceSame', { sourceId }),
 }
 
 // 网站—子源父子模型（0707 优化·Phase2）：网站=统一流程模板+批量工具（不运行），子源=运行实体
@@ -206,6 +210,107 @@ export const dataApi = {
       httpEndpoint: 'entry/entryUpdate',
       httpParams: { ...values, entryTypeId: tableId, entryId: dataId },
     }),
+  // 数据详情：entryId + type（非 entryTypeId），返回行 + showItems + subs
+  rowDetail: async (tableId: string, dataId: string): Promise<EntryDetail | null> => {
+    const result = await request<unknown>('data/rowDetail', { tableId, dataId }, {
+      method: 'GET',
+      httpEndpoint: 'entry/entryDetail',
+      httpParams: { entryId: dataId, type: tableId },
+    })
+    return result ? entryDetailFromLegacy(result) : null
+  },
+  // 提取去重源 ID：与分页查询同款字段（含 sorted/min 同款预处理），复用 buildLegacyRowQuery 避免口径漂移
+  distinctSource: async (q: RowQuery): Promise<string[]> => {
+    const result = await request<unknown>('data/distinctSource', q, {
+      method: 'GET',
+      httpEndpoint: 'entry/entryDistinctSource',
+      httpParams: buildLegacyRowQuery(q),
+    })
+    return Array.isArray(result) ? result.map(String) : []
+  },
+  // 统计：POST JSON 未加密（旧代码注释掉了 AES），结果全部本地排序，不做服务端分页
+  summaryData: async (q: RowQuery, summaryFields: string[]): Promise<SummaryRow[]> => {
+    const result = await request<unknown>('data/summaryData', q, {
+      method: 'POST',
+      httpEndpoint: 'entry/summaryEntryData',
+      httpParams: { ...buildLegacyRowQuery(q), page: 1, summaryFields: summaryFields.join(', ') },
+    })
+    const list = Array.isArray(result) ? result : ((result as Paged<unknown> | null)?.list ?? [])
+    return list.map(summaryRowFromLegacy)
+  },
+  // 发选中/本页后续：entryIds 逗号连接（危险）
+  nextStep: (sourceId: string, tableId: string, entryIds: string[]) =>
+    request<{ message?: string }>('data/nextStep', { sourceId, tableId, entryIds }, {
+      method: 'GET',
+      httpEndpoint: 'source/nextStep',
+      httpParams: { sourceId, entryTypeId: tableId, entryIds: entryIds.join(',') },
+    }),
+  // 大批量后续：POST AES，180s 超时（危险）
+  nextStepBatch: (params: {
+    tableId: string; sourceId?: string; state?: string
+    size: number; start: number; end?: number; nextFlag?: string; cond?: string
+  }) =>
+    request<{ message?: string }>('data/nextStepBatch', params, {
+      method: 'POST',
+      timeoutMs: 180_000,
+      httpEndpoint: 'source/nextStep2',
+      httpParams: {
+        data: encryptLegacyPayload({
+          entryTypeId: params.tableId, sourceId: params.sourceId, state: params.state,
+          size: params.size, start: params.start, end: params.end,
+          nextFlag: params.nextFlag, cond: params.cond,
+        }),
+      },
+    }),
+  // 删除：单条/该源/整表 × 当日/全量；key=当前小时数是必带的防呆参数（危险）
+  rowDelete: (tableId: string, opts: { sourceId?: string; all: 0 | 1; entryId?: string }) =>
+    request<{ success?: number }>('data/rowDelete', { tableId, ...opts }, {
+      method: 'GET',
+      httpEndpoint: 'entry/entryDelete',
+      httpParams: {
+        entryTypeId: tableId, sourceId: opts.sourceId, all: opts.all, entryId: opts.entryId,
+        key: new Date().getHours(),
+      },
+    }),
+  // 按 IDs 批量删除（危险）
+  rowDeleteBatch: (tableId: string, ids: string[]) =>
+    request<{ success: number; all: number; not_found: number }>('data/rowDeleteBatch', { tableId, ids }, {
+      method: 'POST',
+      httpEndpoint: 'entry/entryDeleteBatch',
+      httpParams: { ids, entryTypeId: tableId },
+    }),
+  // 清父表后续标识：整个查询条件 + 选中 ids + flag:'-1'（危险）
+  clearParent: (q: RowQuery, ids: string[]) =>
+    request<{ message?: string }>('data/clearParent', { ...q, ids }, {
+      method: 'POST',
+      httpEndpoint: 'entry/entryClearParent',
+      httpParams: { ...buildLegacyRowQuery(q), ids, flag: '-1' },
+    }),
+  // 手动新增：平铺字段体，null 字段提交前删除（危险）
+  rowAdd: (tableId: string, values: Record<string, unknown>) => {
+    const body: Record<string, unknown> = { ENTRY_TYPE_ID: tableId, ...values }
+    Object.keys(body).forEach((key) => { if (body[key] == null) delete body[key] })
+    return request<{ message?: string }>('data/rowAdd', { tableId, values }, {
+      method: 'POST',
+      httpEndpoint: 'entry/batch/saveEntryOne',
+      httpParams: body,
+    })
+  },
+  // 重新保存原始 JSON：jsonId = 行的 K0（危险）
+  reSave: (sourceId: string, jsonId: string) =>
+    request<{ message?: string }>('data/reSave', { sourceId, jsonId }, {
+      method: 'GET',
+      httpEndpoint: 'entry/re-save',
+      httpParams: { sourceId, jsonId },
+    }),
+  // 导出 Excel：纯 URL 直开，不走 request/axios，不带 Token（同源 Cookie 鉴权）
+  exportUrl: (q: RowQuery): string => {
+    const built = buildLegacyRowQuery(q)
+    return appendQuery(BASE_URL + 'entry/entryExportAll', {
+      entryType: built.entryType, sourceId: built.sourceId, state: built.state,
+      min: built.min, max: built.max, more: built.more,
+    })
+  },
 }
 
 // 运行记录（M4）

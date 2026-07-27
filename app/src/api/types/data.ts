@@ -77,7 +77,7 @@ export interface DataRow {
   fileId?: string // FILE_ID
   values?: Record<string, unknown> // 动态列值（键 = 大写物理列名 K1/K2...）
 
-  /** @deprecated mock 时代概念，无旧平台契约来源；随 mock 重做一并移除（E 包 T1c） */
+  /** @deprecated mock 时代概念，无旧平台契约来源；随 DataView UI 重做一并移除（UI 仍在读，先留存避免编译中断） */
   title: string
   /** @deprecated 同上 */
   summary: string
@@ -92,6 +92,23 @@ export interface DataRow {
   /** @deprecated 真实行无此列 */
   runId?: string
 }
+
+/** 数据详情：entryDetail 返回行 + showItems（反填编辑表单用）+ subs（子列表） */
+export interface EntryDetailItem {
+  itemId?: string
+  columnName: string
+  itemName?: string
+  value: unknown
+}
+
+export interface EntryDetail {
+  row: DataRow
+  showItems: EntryDetailItem[]
+  subs?: DataRow[]
+}
+
+/** 统计行：动态分组列（键名取决于 summaryFields）+ 固定 CNT 计数列 */
+export type SummaryRow = Record<string, unknown> & { CNT: number }
 
 /** 结果视图查询入参 */
 export interface RowQuery extends PageQuery {

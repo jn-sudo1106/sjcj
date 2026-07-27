@@ -4,6 +4,8 @@ import type {
   ConfigParamBinding,
   DataRow,
   DataTableMeta,
+  EntryDetail,
+  EntryDetailItem,
   EntryField,
   EntryType,
   EntryTypeGroup,
@@ -12,6 +14,7 @@ import type {
   ParamInput,
   ParamKind,
   ParamValue,
+  SummaryRow,
 } from './types'
 
 type LegacyRecord = Record<string, unknown>
@@ -362,7 +365,7 @@ export function dataRowFromLegacy(input: unknown): DataRow {
     times: str(record.TIMES),
     fileId: str(record.FILE_ID),
     values,
-    // 以下为 mock 遗留字段，T1c 随 mock 重做移除
+    // 以下为 mock 遗留字段，随 DataView UI 重做一并移除（与该重做同批次，避免 UI 编译中断）
     title: String(titleValue ?? record.ENTRY_ID ?? ''),
     summary,
     taskId: str(record.TASK_ID),
@@ -371,4 +374,31 @@ export function dataRowFromLegacy(input: unknown): DataRow {
     fileType: '-',
     parseState: 'none',
   }
+}
+
+/** 数据详情：entryDetail 返回行字段 + showItems（编辑表单反填用）+ subs（子列表） */
+export function entryDetailFromLegacy(input: unknown): EntryDetail {
+  const record = asRecord(input)
+  const { showItems, subs, ...rowFields } = record
+  return {
+    row: dataRowFromLegacy(rowFields),
+    showItems: Array.isArray(showItems) ? showItems.map(showItemFromLegacy) : [],
+    subs: Array.isArray(subs) ? subs.map(dataRowFromLegacy) : undefined,
+  }
+}
+
+function showItemFromLegacy(input: unknown): EntryDetailItem {
+  const record = asRecord(input)
+  return {
+    itemId: record.itemId == null ? undefined : String(record.itemId),
+    columnName: String(record.columnName ?? ''),
+    itemName: record.itemName == null ? undefined : String(record.itemName),
+    value: record.value,
+  }
+}
+
+/** 统计行：动态分组列原样保留，CNT 规整为 number */
+export function summaryRowFromLegacy(input: unknown): SummaryRow {
+  const record = asRecord(input)
+  return { ...record, CNT: Number(record.CNT ?? 0) }
 }
