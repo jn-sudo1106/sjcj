@@ -3,7 +3,7 @@ import type {
   Paged, Source, Site, SourceCategory, Step, Ack, PageQuery,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestResult,
-  Dataset, Measure, DataTableMeta, DataRow, RowQuery, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
+  Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   Config, ConfigActionLog, ConfigParamBinding, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, RawFile, RawFileQuery, RawFileStats, SourceCloneRequest, SourceCloneResult,
   FlowTemplate, FlowTemplateSaveInput,
@@ -18,6 +18,7 @@ import {
   dataRowFromLegacy,
   dataTableFromLegacy,
   entryTypeFromLegacy,
+  entryTypeGroupFromLegacy,
   entryTypePageFromLegacy,
   entryTypeToLegacy,
   paramFromLegacy,
@@ -131,48 +132,68 @@ export const metricApi = {
     request<{ datasets: number; measures: number; canvasRefs: number; sqlPending: number }>('measure/stats'),
 }
 
+// 结果视图查询载荷组装（entryDataPaged/entryDistinctSource/summaryEntryData/exportUrl 共用，
+// 避免四处口径漂移——见「单表数据查看迁移」方案 §3.1）
+function buildLegacyRowQuery(q: RowQuery) {
+  const isEntryIdSort = q.sortField === 'ENTRY_ID'
+  return {
+    page: q.page ?? 1,
+    limit: q.size ?? 20,
+    entryType: q.tableId,
+    sourceId: q.sourceId,
+    entryId: q.dataId,
+    parentId: q.parentId,
+    // 多选由调用方 join(',') 传入；旧 AES 载荷无值时不带该键（不兜底 'ALL'，见方案开放项 2）
+    state: q.state || undefined,
+    nextFlag: q.nextFlag,
+    // SQL 条件的旧后端字段名是 more（不是 sql）；发错会被后端静默忽略，筛选失效
+    min: q.sql ? q.min || 0 : q.min,
+    max: q.max,
+    more: q.sql,
+    // ENTRY_ID 排序走 sorted±1；其余列走 field/type 数值化排序 hack（旧平台口径原样保留）
+    sorted: isEntryIdSort ? (q.sortOrder === 'descend' ? -1 : 1) : '0',
+    field: q.sortField && !isEntryIdSort ? `(${q.sortField}+ 0)` : undefined,
+    type: q.sortField && !isEntryIdSort ? (q.sortOrder === 'descend' ? ' DESC ' : ' ASC ') : undefined,
+    enable: '0',
+  }
+}
+
 // 数据查看（M4）
 export const dataApi = {
-  tables: async () => {
-    const result = await request<DataTableMeta[] | Paged<unknown>>('data/tablePaged', undefined, {
+  // 选表分组（旧 EntryTypeSelectMulti 分组下拉的数据源）；sourceId 可空
+  entryTypesGroup: async (sourceId?: string) => {
+    const result = await request<unknown>('data/entryTypesGroup', { sourceId }, {
       method: 'GET',
-      httpEndpoint: 'config/entryTypePagedView',
-      httpParams: { page: 1, limit: 1000 },
+      httpEndpoint: 'config/queryEntryTypesGroup',
+      httpParams: sourceId ? { sourceId } : {},
     })
-    return Array.isArray(result) ? result : result.list.map(dataTableFromLegacy)
+    return entryTypeGroupFromLegacy(result)
+  },
+  tables: async (): Promise<DataTableMeta[]> => {
+    const group: EntryTypeGroup = await dataApi.entryTypesGroup()
+    return [...group.main, ...group.list1, ...group.list2, ...group.list3].map(dataTableFromLegacy)
   },
   rows: async (tableId: string) => (await dataApi.rowQueryPaged({ tableId, page: 1, size: 100 })).list,
   // 结果视图：按表 + 多条件 + 分页（独立端点，避免影响 /data 全局数据页）
   rowQueryPaged: async (q: RowQuery) => {
-    const legacyQuery = {
-      page: q.page ?? 1,
-      limit: q.size ?? 20,
-      entryType: q.tableId,
-      sourceId: q.sourceId,
-      entryId: q.dataId,
-      parentId: q.parentId,
-      state: q.state || 'ALL',
-      nextFlag: q.nextFlag,
-      // SQL 条件的旧后端字段名是 more（不是 sql）；发错会被后端静默忽略，筛选失效
-      min: q.sql ? q.min || 0 : q.min,
-      max: q.max,
-      more: q.sql,
-      sorted: q.sorted ?? 0,
-    }
     const result = await request<Paged<unknown>>('data/rowQueryPaged', q, {
       method: 'POST',
       httpEndpoint: 'entry/entryDataPaged',
-      httpParams: { data: encryptLegacyPayload(legacyQuery) },
+      httpParams: { data: encryptLegacyPayload(buildLegacyRowQuery(q)) },
     })
     return { total: result.total, list: result.list.map(dataRowFromLegacy) }
   },
   tableMeta: async (tableId: string) => {
     const result = await request<unknown>('data/tableMeta', { tableId }, {
       method: 'GET',
-      httpEndpoint: 'config/entryType',
-      httpParams: { typeId: tableId },
+      httpEndpoint: 'entry/queryEntryType',
+      httpParams: { type: tableId },
     })
-    return result ? dataTableFromLegacy(result) : null
+    // 真实响应包一层 curEntryType（见方案 §1.1）；mock/兜底数据可能是已转换的扁平形状
+    const payload = result && typeof result === 'object' && 'curEntryType' in (result as Record<string, unknown>)
+      ? (result as Record<string, unknown>).curEntryType
+      : result
+    return payload ? dataTableFromLegacy(payload) : null
   },
   dataStats: async () => {
     const tables = await dataApi.tables()

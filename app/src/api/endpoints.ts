@@ -222,7 +222,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'run/runPaged', desc: '运行记录分页', impl: true },
   { path: 'run/nodePaged', desc: 'run 节点明细', impl: true },
   { path: 'run/stats', desc: '运行 KPI', impl: true },
-  { path: 'data/tablePaged', desc: '可查看数据表', impl: true },
+  { path: 'data/entryTypesGroup', desc: '选表分组（聚合摊平供 /data 选表用）', impl: true },
   { path: 'data/rowPaged', desc: '实体数据行', impl: true },
   { path: 'data/stats', desc: '数据查看 KPI', impl: true },
   { path: 'data/rowQueryPaged', desc: '结果视图：按表+筛选分页查询', impl: true },

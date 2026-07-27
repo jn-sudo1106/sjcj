@@ -7,6 +7,7 @@
 // import type 严格模式避免运行时循环
 
 import type { PageQuery, RunState } from './common'
+import type { EntryType } from './collect'
 
 /** 指标数据集（dataset 层） */
 export interface Dataset {
@@ -36,7 +37,24 @@ export interface DataTableMeta {
   tableId: string
   tableName: string
   rowCount: number
-  fields: { prop: string; type: string; desc: string; sample?: string }[]
+  fields: {
+    prop: string
+    type: string
+    desc: string
+    sample?: string
+    columnName?: string // 物理列名（大写，K1/K2...），rowQueryPaged 行数据按此取值
+    required?: boolean // 动态列渲染只取 required 的前 20 个（旧平台口径）
+    width?: number
+  }[]
+}
+
+/** 选表分组（旧 config/queryEntryTypesGroup 返回形状，原样保留 4 个分组键） */
+export interface EntryTypeGroup {
+  main: EntryType[]
+  list1: EntryType[]
+  list2: EntryType[]
+  /** 旧前端对 list3 做了 reverse，此处已反转 */
+  list3: EntryType[]
 }
 
 export interface DataRow {
@@ -83,12 +101,15 @@ export interface RowQuery extends PageQuery {
   siteId?: string
   dataId?: string
   parentId?: string
+  /** 多选状态由调用方 join(',') 传入（如 'C,AC'）；空则不随载荷携带该键 */
   state?: string
   sql?: string
   nextFlag?: string
   min?: string | number
   max?: string | number
-  sorted?: number
+  /** 排序列；ENTRY_ID 走 sorted±1，其余列走 field/type 数值化排序 hack（旧平台口径原样保留） */
+  sortField?: string
+  sortOrder?: 'ascend' | 'descend'
 }
 
 /* ---------------- M4 运行记录 ---------------- */

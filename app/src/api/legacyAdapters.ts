@@ -6,6 +6,7 @@ import type {
   DataTableMeta,
   EntryField,
   EntryType,
+  EntryTypeGroup,
   Paged,
   Param,
   ParamInput,
@@ -308,7 +309,22 @@ export function dataTableFromLegacy(input: unknown): DataTableMeta {
       prop: field.prop,
       type: field.type,
       desc: field.desc,
+      columnName: field.columnName,
+      required: field.required,
+      width: field.width,
     })),
+  }
+}
+
+/** 选表分组：{main,list1,list2,list3} → 各分组转 EntryType[]；list3 按旧前端行为反转 */
+export function entryTypeGroupFromLegacy(input: unknown): EntryTypeGroup {
+  const record = asRecord(input)
+  const bucket = (key: string) => (Array.isArray(record[key]) ? (record[key] as unknown[]) : [])
+  return {
+    main: bucket('main').map(entryTypeFromLegacy),
+    list1: bucket('list1').map(entryTypeFromLegacy),
+    list2: bucket('list2').map(entryTypeFromLegacy),
+    list3: bucket('list3').map(entryTypeFromLegacy).reverse(),
   }
 }
 

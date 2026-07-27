@@ -3,7 +3,9 @@ import {
   configFromLegacy,
   configToLegacy,
   dataRowFromLegacy,
+  dataTableFromLegacy,
   entryTypeFromLegacy,
+  entryTypeGroupFromLegacy,
   entryTypeToLegacy,
   paramFromLegacy,
   paramPageFromLegacy,
@@ -247,5 +249,43 @@ describe('旧平台实体数据行适配', () => {
       createDt: '2026-07-18 09:12:00', updateDt: '2026-07-18 10:00:00',
     })
     expect(row.values).toEqual({ K1: '正文' })
+  })
+})
+
+describe('选表分组与动态表结构适配（E 包 T1b）', () => {
+  it('entryTypeGroupFromLegacy：四个分组各自转换，list3 按旧前端行为反转', () => {
+    const group = entryTypeGroupFromLegacy({
+      main: [{ entryTypeId: '1', tableName: 't1' }],
+      list1: [{ entryTypeId: '2', tableName: 't2' }],
+      list2: [],
+      list3: [{ entryTypeId: '3', tableName: 't3' }, { entryTypeId: '4', tableName: 't4' }],
+    })
+    expect(group.main).toEqual([expect.objectContaining({ tableId: '1' })])
+    expect(group.list1).toEqual([expect.objectContaining({ tableId: '2' })])
+    expect(group.list2).toEqual([])
+    // 源顺序 3,4 → 反转后 4,3
+    expect(group.list3.map((e) => e.tableId)).toEqual(['4', '3'])
+  })
+
+  it('entryTypeGroupFromLegacy：分组键缺失时按空数组处理，不抛错', () => {
+    const group = entryTypeGroupFromLegacy({ main: [{ entryTypeId: '1' }] })
+    expect(group.list1).toEqual([])
+    expect(group.list2).toEqual([])
+    expect(group.list3).toEqual([])
+  })
+
+  it('dataTableFromLegacy：透传 columnName/required/width（动态列渲染依据）', () => {
+    const table = dataTableFromLegacy({
+      entryTypeId: '1042',
+      tableName: 'sense_data.TB_NEWS',
+      items: [
+        { itemCode: 'title', itemName: '标题', columnName: 'K1', dataType: 'string', width: 140, required: true },
+        { itemCode: 'raw', itemName: '原始', columnName: 'K9', dataType: 'string', width: 80, required: false },
+      ],
+    })
+    expect(table.fields).toEqual([
+      expect.objectContaining({ prop: 'title', columnName: 'K1', required: true, width: 140 }),
+      expect.objectContaining({ prop: 'raw', columnName: 'K9', required: false, width: 80 }),
+    ])
   })
 })
