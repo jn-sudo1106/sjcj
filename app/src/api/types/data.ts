@@ -37,6 +37,8 @@ export interface DataTableMeta {
   tableId: string
   tableName: string
   rowCount: number
+  /** C 测试表 / AC 正式表——删除数据入口仅测试表显示（方案 §1.4-4） */
+  state?: string
   fields: {
     prop: string
     type: string

@@ -308,6 +308,7 @@ export function dataTableFromLegacy(input: unknown): DataTableMeta {
     tableId: entry.tableId,
     tableName: entry.tableName,
     rowCount: entry.rowCount ?? 0,
+    state: entry.state,
     fields: entry.fields.map((field) => ({
       prop: field.prop,
       type: field.type,
