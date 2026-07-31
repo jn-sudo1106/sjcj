@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { DOMWrapper, flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
@@ -218,6 +218,61 @@ describe('DataView · 数据表页', () => {
 
     expect(dataApi.rowDetail).toHaveBeenCalledWith('t1', '88231')
     expect(wrapper.text()).toContain('标题')
+  })
+
+  function formInput(label: string) {
+    const item = wrapper.findAllComponents({ name: 'ElFormItem' }).find((i) => i.props('label') === label)
+    return item!.find('input')
+  }
+
+  it('手动添加：填表单提交调 dataApi.rowAdd，null/空字段提交前删除', async () => {
+    const addSpy = vi.spyOn(dataApi, 'rowAdd').mockResolvedValue({ message: '新增成功' })
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    await wrapper.findAll('button').find((b) => b.text() === '手动添加')!.trigger('click')
+    await flushPromises()
+
+    await formInput('SOURCE_ID').setValue('600519')
+    await formInput('标题(K1)').setValue('测试标题')
+    // 发布日期(K2) 留空
+    await wrapper.findAll('button').find((b) => b.text() === '保存')!.trigger('click')
+    await flushPromises()
+
+    expect(addSpy).toHaveBeenCalledWith('t1', expect.objectContaining({ SOURCE_ID: '600519', K1: '测试标题' }))
+    const [, values] = addSpy.mock.calls[0]
+    expect(values).not.toHaveProperty('K2')
+  })
+
+  it('手动修改：仅测试表显示"更多"里的手动修改项，先取 rowDetail 反填再提交 rowUpdate', async () => {
+    vi.spyOn(dataApi, 'rowDetail').mockResolvedValue({
+      row: ROW,
+      showItems: [{ columnName: 'K1', itemName: '标题', value: '关于利润分配的公告' }],
+    })
+    const updateSpy = vi.spyOn(dataApi, 'rowUpdate').mockResolvedValue({ message: '修改成功' })
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    const moreBtn = wrapper.findAllComponents({ name: 'ElButton' }).find((b) => b.text().startsWith('更多'))
+    await moreBtn!.trigger('click')
+    await flushPromises()
+    // el-dropdown-menu 传送到 document.body，不在 wrapper 的渲染树内
+    const editItem = new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '手动修改')
+    await editItem!.trigger('click')
+    await flushPromises()
+
+    expect(dataApi.rowDetail).toHaveBeenCalledWith('t1', '88231')
+    expect((formInput('标题(K1)').element as HTMLInputElement).value).toBe('关于利润分配的公告')
+
+    await formInput('标题(K1)').setValue('改过的标题')
+    await wrapper.findAll('button').find((b) => b.text() === '保存')!.trigger('click')
+    await flushPromises()
+
+    expect(updateSpy).toHaveBeenCalledWith('t1', '88231', expect.objectContaining({ K1: '改过的标题' }))
   })
 
   it('read 角色：隐藏批量条勾选列/删除数据/工具入口，保留刷新/展示SQL/导出EXCEL', async () => {

@@ -39,6 +39,8 @@ export interface DataTableMeta {
   rowCount: number
   /** C 测试表 / AC 正式表——删除数据入口仅测试表显示（方案 §1.4-4） */
   state?: string
+  /** 去重列（逗号分隔的 columnName），手动修改弹窗副标题展示（方案 §1.6-2） */
+  keyField?: string
   fields: {
     prop: string
     type: string

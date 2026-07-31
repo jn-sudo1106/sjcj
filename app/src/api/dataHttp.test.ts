@@ -372,7 +372,9 @@ describe('数据详情 / 统计 / 后续 / 删除 API 旧平台 HTTP 契约（E 
     expect(body.entryType).toBe('1042')
   })
 
-  it('rowAdd 用 POST JSON 平铺体，null 字段提交前删除', async () => {
+  it('rowAdd 用 POST JSON 平铺体，null 字段提交前删除；ENTRY_TYPE_ID/SOURCE_ID/CONFIG_ID 数值化', async () => {
+    // 真实联调实测（2026-07-31）：这三个系统指针字段后端按 Integer 反序列化，字符串会 500
+    // “class java.lang.String cannot be cast to class java.lang.Integer”。K1 等动态列不做数值转换。
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '新增成功', data: null }))
     const { dataApi } = await import('./index')
 
@@ -382,7 +384,33 @@ describe('数据详情 / 统计 / 后续 / 删除 API 旧平台 HTTP 契约（E 
     expect(url).toContain('/api/v1/entry/batch/saveEntryOne')
     const body = JSON.parse(String(init.body)) as Record<string, unknown>
     expect(body).not.toHaveProperty('CONFIG_ID')
-    expect(body).toMatchObject({ ENTRY_TYPE_ID: '1042', SOURCE_ID: '161725', K1: '正文' })
+    expect(body).toEqual({ ENTRY_TYPE_ID: 1042, SOURCE_ID: 161725, K1: '正文' })
+  })
+
+  it('rowAdd：非数字形态的 tableId 原样保留字符串，不强转', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '新增成功', data: null }))
+    const { dataApi } = await import('./index')
+
+    await dataApi.rowAdd('ZZ-测试表', { K1: '正文' })
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body)) as Record<string, unknown>
+    expect(body.ENTRY_TYPE_ID).toBe('ZZ-测试表')
+  })
+
+  it('rowUpdate 用 POST JSON，键名是大写 ENTRY_ID/ENTRY_TYPE_ID（不是 entryId/entryTypeId），且数值化', async () => {
+    // 方案 §1.1："平铺 {ENTRY_ID, ENTRY_TYPE_ID, K1:..., K2:...}"（大写列名）；
+    // 真实联调实测同 rowAdd，这两个系统指针字段需要是 JSON number 不是字符串。
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '修改成功', data: null }))
+    const { dataApi } = await import('./index')
+
+    await dataApi.rowUpdate('1042', '88231', { K1: '改过的标题' })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/v1/entry/entryUpdate')
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>
+    expect(body).toEqual({ K1: '改过的标题', ENTRY_TYPE_ID: 1042, ENTRY_ID: 88231 })
+    expect(body).not.toHaveProperty('entryTypeId')
+    expect(body).not.toHaveProperty('entryId')
   })
 
   it('reSave 用 GET 调 entry/re-save，jsonId 即行的 K0', async () => {

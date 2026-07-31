@@ -8,11 +8,12 @@ import {
   type DataRow, type DataTableMeta, type EntryTypeGroup, type EntryDetail, type RowQuery, type SourceOption,
 } from '../../api'
 import { useAuthStore } from '../../stores/auth'
+import RowEditDialog from './RowEditDialog.vue'
 
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
-// 本文件覆盖检索区/工具条/批量条/动态列表格/分页/数据详情抽屉；
-// 手动添加、手动修改、统计抽屉、步骤抽屉、任务实例弹窗依赖动态表单/分组表格/SVG图/任务列表等
-// 复杂组件，本轮不做，对应入口不渲染（见设计文档 §0）。
+// 本文件覆盖检索区/工具条/批量条/动态列表格/分页/数据详情抽屉/手动添加/手动修改；
+// 统计抽屉、步骤抽屉、任务实例弹窗依赖分组表格/SVG图/任务列表等复杂组件，
+// 本轮不做，对应入口不渲染（见设计文档 §0）。
 const auth = useAuthStore()
 const canWrite = computed(() => auth.role === 'admin')
 const route = useRoute()
@@ -410,6 +411,13 @@ function openParentDetail(row: DataRow) {
   if (row.categoryId && row.parentId && row.parentId !== '0') void openDetailFor(row.categoryId, row.parentId)
 }
 
+// ---- 手动添加 / 手动修改（方案 §1.6-2/3，不自动刷新，原样保留） ----
+const editor = reactive<{ visible: boolean; mode: 'add' | 'edit'; row: DataRow | null }>({
+  visible: false, mode: 'add', row: null,
+})
+function openAdd() { editor.mode = 'add'; editor.row = null; editor.visible = true }
+function openEdit(row: DataRow) { editor.mode = 'edit'; editor.row = row; editor.visible = true }
+
 // ---- 行内操作：删除单条 / 重新保存原始 JSON（对照 EntryTab.vue 行内操作模式） ----
 function onDeleteOne(row: DataRow) {
   void confirmDanger(
@@ -542,6 +550,7 @@ onMounted(async () => {
       <button class="rc-btn" type="button" @click="showSql = !showSql">展示SQL</button>
       <button class="rc-btn" type="button" @click="onExport">导出EXCEL</button>
       <template v-if="canWrite">
+        <button class="rc-btn" type="button" @click="openAdd">手动添加</button>
         <el-dropdown v-if="isTestTable" trigger="click">
           <button class="rc-btn danger" type="button">删除数据<el-icon class="et-caret"><ArrowDown /></el-icon></button>
           <template #dropdown>
@@ -676,6 +685,7 @@ onMounted(async () => {
                 <el-button link type="primary" size="small">更多<el-icon class="et-caret"><ArrowDown /></el-icon></el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
+                    <el-dropdown-item v-if="isTestTable" @click="openEdit(row)">手动修改</el-dropdown-item>
                     <el-dropdown-item v-if="isTestTable" @click="onDeleteOne(row)">删除单条【无法恢复】</el-dropdown-item>
                     <el-dropdown-item v-if="row.k0" :divided="isTestTable" @click="onReSave(row)">重新保存原始JSON</el-dropdown-item>
                   </el-dropdown-menu>
@@ -715,6 +725,16 @@ onMounted(async () => {
         </template>
       </template>
     </el-drawer>
+
+    <!-- 手动添加 / 手动修改 -->
+    <RowEditDialog
+      v-model="editor.visible"
+      :table-id="tableId"
+      :table-meta="tableMeta"
+      :mode="editor.mode"
+      :row="editor.row"
+      :first-row="rows[0] ?? null"
+    />
   </div>
 </template>
 

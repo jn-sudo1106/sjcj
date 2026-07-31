@@ -204,12 +204,17 @@ export const dataApi = {
     return { tables: tables.length, rows: tables.reduce((sum, table) => sum + table.rowCount, 0), chars: 0, review: 0 }
   },
   // 结果视图行编辑（Phase 4.4）
-  rowUpdate: (tableId: string, dataId: string, values: Record<string, unknown>) =>
-    request<{ message?: string; row?: DataRow }>('data/rowUpdate', { tableId, dataId, values }, {
+  rowUpdate: (tableId: string, dataId: string, values: Record<string, unknown>) => {
+    // 方案 §1.1：真实载荷是大写 {ENTRY_ID, ENTRY_TYPE_ID, K1...}（不是 entryTypeId/entryId）；
+    // 真实联调实测：ENTRY_ID/ENTRY_TYPE_ID 后端按 Integer 反序列化，字符串会 500，同 rowAdd 需数值化。
+    const entryId = Number.isFinite(Number(dataId)) ? Number(dataId) : dataId
+    const entryTypeId = Number.isFinite(Number(tableId)) ? Number(tableId) : tableId
+    return request<{ message?: string; row?: DataRow }>('data/rowUpdate', { tableId, dataId, values }, {
       method: 'POST',
       httpEndpoint: 'entry/entryUpdate',
-      httpParams: { ...values, entryTypeId: tableId, entryId: dataId },
-    }),
+      httpParams: { ...values, ENTRY_TYPE_ID: entryTypeId, ENTRY_ID: entryId },
+    })
+  },
   // 数据详情：entryId + type（非 entryTypeId），返回行 + showItems + subs
   rowDetail: async (tableId: string, dataId: string): Promise<EntryDetail | null> => {
     const result = await request<unknown>('data/rowDetail', { tableId, dataId }, {
@@ -290,6 +295,15 @@ export const dataApi = {
   rowAdd: (tableId: string, values: Record<string, unknown>) => {
     const body: Record<string, unknown> = { ENTRY_TYPE_ID: tableId, ...values }
     Object.keys(body).forEach((key) => { if (body[key] == null) delete body[key] })
+    // 真实联调实测：ENTRY_TYPE_ID/SOURCE_ID/CONFIG_ID 后端按 Integer 反序列化，
+    // 传字符串会 500（class java.lang.String cannot be cast to class java.lang.Integer）；
+    // 动态列(K1..)值类型不定，不做数值转换，只转这三个系统指针字段。
+    for (const key of ['ENTRY_TYPE_ID', 'SOURCE_ID', 'CONFIG_ID']) {
+      const value = body[key]
+      if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) {
+        body[key] = Number(value)
+      }
+    }
     return request<{ message?: string }>('data/rowAdd', { tableId, values }, {
       method: 'POST',
       httpEndpoint: 'entry/batch/saveEntryOne',
