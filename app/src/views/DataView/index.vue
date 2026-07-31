@@ -2,20 +2,26 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown } from '@element-plus/icons-vue'
+import { ArrowDown, QuestionFilled, Plus } from '@element-plus/icons-vue'
 import {
   dataApi, sourceApi, entryApi,
   type DataRow, type DataTableMeta, type EntryTypeGroup, type EntryDetail, type RowQuery, type SourceOption,
+  type EntryType, type Source,
 } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import RowEditDialog from './RowEditDialog.vue'
 import SummaryDrawer from './SummaryDrawer.vue'
 import TaskInstDialog from './TaskInstDialog.vue'
 import StepDrawer from './StepDrawer.vue'
+import TableDetailDialog from './TableDetailDialog.vue'
+import SourceDetailDrawer from './SourceDetailDrawer.vue'
+import MoreTablesDialog from './MoreTablesDialog.vue'
+import MoreSourcesDialog from './MoreSourcesDialog.vue'
 
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
 // 本文件覆盖检索区/工具条/批量条/动态列表格/分页/数据详情抽屉/手动添加/手动修改/统计/
-// 步骤展示（简化列表，无 DAG 图，见方案 §4.1 偏离决定）/任务实例弹窗。
+// 步骤展示（简化列表，无 DAG 图，见方案 §4.1 偏离决定）/任务实例弹窗/
+// 表结构详情·源详情（? 按钮）/加载更多数据表·更多源（方案 §1.3 补齐）。
 const auth = useAuthStore()
 const canWrite = computed(() => auth.role === 'admin')
 const route = useRoute()
@@ -50,6 +56,42 @@ async function loadGroup() {
   if (!tableId.value) {
     tableId.value = group.value.main || group.value.list3[0]?.tableId || group.value.list1[0]?.tableId || ''
   }
+}
+
+// ---- 表结构详情 / 源详情（? 按钮，方案 §1.3-1/§1.3-2） ----
+const tableDetailOpen = ref(false)
+function openTableDetail() {
+  if (!tableMeta.value) {
+    ElMessage.error('请先选择数据表')
+    return
+  }
+  tableDetailOpen.value = true
+}
+const sourceDetailOpen = ref(false)
+function openSourceDetail() {
+  if (!sourceId.value) {
+    ElMessage.error('请先选择源ID')
+    return
+  }
+  sourceDetailOpen.value = true
+}
+
+// ---- 加载更多数据表 / 更多源（方案 §1.3-1/§1.3-2） ----
+const moreTablesOpen = ref(false)
+async function onTablePicked(entry: EntryType) {
+  if (!group.value.list3.some((t) => t.tableId === entry.tableId)) {
+    group.value = { ...group.value, list3: [entry, ...group.value.list3] }
+  }
+  tableId.value = entry.tableId
+  await onTableChange()
+}
+const moreSourcesOpen = ref(false)
+async function onSourcePicked(source: Source) {
+  if (!sourceOptions.value.some((s) => s.sourceId === source.sourceId)) {
+    sourceOptions.value = [{ sourceId: source.sourceId, name: source.name }, ...sourceOptions.value]
+  }
+  sourceId.value = source.sourceId
+  await onSourceChange()
 }
 async function loadSources() {
   sourceOptions.value = await sourceApi.sourceSame(sourceId.value || undefined)
@@ -539,10 +581,26 @@ onMounted(async () => {
         <el-option-group label="other">
           <el-option v-for="t in group.list3.slice(0, 5)" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName}`" />
         </el-option-group>
+        <template #footer>
+          <span class="dv-link" @click="moreTablesOpen = true">
+            <el-icon><Plus /></el-icon>加载更多数据表...
+          </span>
+        </template>
       </el-select>
+      <button class="rc-btn dv-help-btn" type="button" title="表结构详情" @click="openTableDetail">
+        <el-icon><QuestionFilled /></el-icon>
+      </button>
       <el-select v-model="sourceId" filterable clearable placeholder="选择源" style="width: 200px" @change="onSourceChange">
         <el-option v-for="s in sourceOptions" :key="s.sourceId" :value="s.sourceId" :label="`${s.sourceId} ${s.name}`" />
+        <template #footer>
+          <span class="dv-link" @click="moreSourcesOpen = true">
+            <el-icon><Plus /></el-icon>更多源...
+          </span>
+        </template>
       </el-select>
+      <button class="rc-btn dv-help-btn" type="button" title="源详情" @click="openSourceDetail">
+        <el-icon><QuestionFilled /></el-icon>
+      </button>
       <el-input v-model="dataId" clearable placeholder="请输入数据 ID" style="width: 160px" @keyup.enter="onSearch" />
       <button class="rc-btn primary" type="button" @click="onSearch">查询</button>
     </div>
@@ -803,6 +861,14 @@ onMounted(async () => {
       :parent-id="taskInst.parentId"
       :task-id="taskInst.taskId"
     />
+
+    <!-- 表结构详情 / 源详情（方案 §1.3-1/§1.3-2） -->
+    <TableDetailDialog v-model="tableDetailOpen" :table-meta="tableMeta" />
+    <SourceDetailDrawer v-model="sourceDetailOpen" :source-id="sourceId" />
+
+    <!-- 加载更多数据表 / 更多源（方案 §1.3-1/§1.3-2） -->
+    <MoreTablesDialog v-model="moreTablesOpen" @picked="onTablePicked" />
+    <MoreSourcesDialog v-model="moreSourcesOpen" @picked="onSourcePicked" />
   </div>
 </template>
 

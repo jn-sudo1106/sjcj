@@ -6,7 +6,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import DataView from './index.vue'
 import { useAuthStore } from '../../stores/auth'
-import { dataApi, sourceApi, type DataTableMeta, type DataRow, type EntryTypeGroup } from '../../api'
+import { dataApi, sourceApi, entryApi, type DataTableMeta, type DataRow, type EntryTypeGroup } from '../../api'
 
 // 数据表页_UI重写设计_2026-07-30：检索区/工具条/批量条/动态列表格/数据详情抽屉
 describe('DataView · 数据表页', () => {
@@ -379,5 +379,91 @@ describe('DataView · 数据表页', () => {
     await flushPromises()
 
     expect(taskSpy).toHaveBeenCalledWith(expect.objectContaining({ parentId: '88231', sourceId: '600519' }))
+  })
+
+  it('表结构详情：? 按钮展示已加载的 tableMeta 字段列表，不发新请求', async () => {
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    const before = (dataApi.tableMeta as ReturnType<typeof vi.fn>).mock.calls.length
+    await wrapper.findAll('button').find((b) => b.attributes('title') === '表结构详情')!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('表结构详情')
+    expect(wrapper.text()).toContain('标题-K1'.split('-')[1]) // K1 出现在字段表里（列名列）
+    expect((dataApi.tableMeta as ReturnType<typeof vi.fn>).mock.calls.length).toBe(before)
+  })
+
+  it('源详情：无源报错不打开；选源后 ? 按钮调 sourceApi.sourceDetail 展示信息', async () => {
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    await wrapper.findAll('button').find((b) => b.attributes('title') === '源详情')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('URL')
+
+    wrapper.unmount()
+    const detailSpy = vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({
+      sourceId: '600519', name: '贵州茅台', url: 'http://x', configId: 'c1', mainTable: 't1', owner: 'dev', state: 'C',
+    })
+    await mountPage({ sourceId: '600519' })
+    await waitForLoad()
+    await wrapper.findAll('button').find((b) => b.attributes('title') === '源详情')!.trigger('click')
+    await flushPromises()
+
+    expect(detailSpy).toHaveBeenCalledWith('600519')
+    expect(wrapper.text()).toContain('贵州茅台')
+  })
+
+  it('加载更多数据表：下拉底部入口调 entryApi.entryPaged，选中后切表', async () => {
+    const entrySpy = vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({
+      total: 1,
+      list: [{ tableId: 't9', tableName: 'sense_data.TB_MORE', name: '更多表', fields: [] }],
+    })
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    const link = new DOMWrapper(document.body).findAll('.dv-link').find((el) => el.text().includes('加载更多数据表'))
+    await link!.trigger('click')
+    await flushPromises()
+
+    expect(entrySpy).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('更多表')
+
+    const row = wrapper.findAll('tr').find((el) => el.text().includes('更多表'))
+    await row!.trigger('click')
+    await flushPromises()
+
+    expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t9')
+  })
+
+  it('更多源：下拉底部入口调 sourceApi.sourcePaged，选中后切源', async () => {
+    const sourceSpy = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 1,
+      list: [{ sourceId: 'src-9', name: '更多源示例', url: '', configId: 'c1', mainTable: 't1', owner: 'dev', state: 'C' }],
+    })
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    const link = new DOMWrapper(document.body).findAll('.dv-link').find((el) => el.text().includes('更多源'))
+    await link!.trigger('click')
+    await flushPromises()
+
+    expect(sourceSpy).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('更多源示例')
+
+    const row = wrapper.findAll('tr').find((el) => el.text().includes('更多源示例'))
+    await row!.trigger('click')
+    await flushPromises()
+
+    expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: 'src-9' }))
   })
 })
