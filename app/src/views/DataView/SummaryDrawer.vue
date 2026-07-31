@@ -47,9 +47,15 @@ function onClear() {
   summaryFields.value = []
 }
 // 统计导出（方案 §7 开放项 1）：xlsx 依赖未拍板，降级 CSV，文件名口径不变
+// CSV 转义遵循 RFC 4180：值含逗号/引号/换行时用双引号包裹，内部双引号转义为 ""
+function csvEscape(v: unknown): string {
+  const s = String(v ?? '')
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`
+  return s
+}
 function onExportCsv() {
   const cols = [...resultColumns.value, 'CNT']
-  const lines = [cols.join(','), ...state.rows.map((r) => cols.map((c) => JSON.stringify(r[c] ?? '')).join(','))]
+  const lines = [cols.map(csvEscape).join(','), ...state.rows.map((r) => cols.map((c) => csvEscape(r[c])).join(','))]
   const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
   const tableName = (props.tableMeta?.tableName ?? '').split('.').pop() ?? ''
@@ -70,7 +76,7 @@ function onExportCsv() {
     <div class="sd-toolbar">
       <button class="rc-btn primary" type="button" @click="onSummary">统计</button>
       <button class="rc-btn" type="button" @click="onClear">清空</button>
-      <button class="rc-btn" type="button" :disabled="!state.rows.length" @click="onExportCsv">导出EXCEL</button>
+      <button class="rc-btn" type="button" :disabled="!state.rows.length" @click="onExportCsv">导出CSV</button>
     </div>
     <div v-if="state.rows.length" class="sd-tags">
       <span class="rc-mini-card">统计列:{{ resultColumns.join(',') }}</span>

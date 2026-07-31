@@ -181,10 +181,11 @@ async function loadRows() {
   }
 }
 
-// canSendAll（方案 §1.4-2）：total ≤ 500000 且源/状态/起止/SQL 条件自上次查询未变动
+// canSendAll（方案 §1.4-2）：total ≤ 500000 且源/状态/SQL/nextFlag 条件自上次查询未变动
+// nextStepBatch 实际使用 sourceId/state/sql/nextFlag，签名只含这些字段；minId/maxId 不参与 batch 故不纳入
 const lastSignature = ref('')
 function querySignature() {
-  return JSON.stringify([sourceId.value, stateArray.value.join(','), minId.value, maxId.value, sql.value])
+  return JSON.stringify([sourceId.value, stateArray.value.join(','), sql.value, nextFlag.value])
 }
 const canSendAll = computed(() => total.value <= 500000 && querySignature() === lastSignature.value)
 
@@ -306,17 +307,20 @@ function onDeleteSelected() {
     },
   )
 }
-function onDeleteByRange(all: 0 | 1) {
-  const scopeLabel = sourceId.value || '不限'
+function onDeleteByRange(all: 0 | 1, scope: 'source' | 'all' = 'source') {
+  // scope='source' 仅删当前源数据；scope='all' 清空整表（不带 sourceId 过滤）
+  const sid = scope === 'source' ? (sourceId.value || undefined) : undefined
+  const scopeLabel = scope === 'source' ? (sourceId.value || '不限') : '全部源'
+  const scopeText = scope === 'source' ? '删除该源' : '清空表数据'
   void confirmDanger(
     '确认删除',
     all === 1
-      ? `确认删除,源:[${scopeLabel}] / 确认删除【所有】数据，源[${scopeLabel}], 表:${tableId.value}，注意删除后无法恢复`
-      : `确认删除,源:[${scopeLabel}] / 确认删除【当天】数据，源[${scopeLabel}], 表:${tableId.value}，注意删除后无法恢复`,
+      ? `确认${scopeText}【所有】数据，源[${scopeLabel}], 表:${tableId.value}，注意删除后无法恢复`
+      : `确认${scopeText}【当天】数据，源[${scopeLabel}], 表:${tableId.value}，注意删除后无法恢复`,
     async () => {
-      const r = await dataApi.rowDelete(tableId.value, { sourceId: sourceId.value || undefined, all })
+      const r = await dataApi.rowDelete(tableId.value, { sourceId: sid, all })
       if (!r.success) ElMessage.warning('未能改变数据, 可能原因:\n【数据超过14天或未找到对应ID】')
-      return { message: `清除当前源[${all === 1 ? '所有' : '当日'}]成功，清除条数:${r.success ?? 0}` }
+      return { message: `${scopeText}[${all === 1 ? '所有' : '当日'}]成功，清除条数:${r.success ?? 0}` }
     },
   )
 }
@@ -467,6 +471,11 @@ function onSendYellowBatch() {
   const start1 = Number(yStart.value) || 1
   const end1 = yEnd.value ? Number(yEnd.value) : undefined
   const size1 = Number(ySize.value) || 5000
+  // 标签声明 1-1W 条，提交前强制校验范围
+  if (!Number.isFinite(size1) || size1 < 1 || size1 > 10000) {
+    ElMessage.warning('发送数量必须在 1-10000 之间')
+    return
+  }
   const nextFlag1 = yNextFlag.value || undefined
   const cond1 = yCond.value || undefined
   // 展示文案原样保留旧字段名 entryTypeId（旧平台 nextStep2 载荷键名，见方案 §1.4-2）
@@ -523,7 +532,8 @@ function onReSave(row: DataRow) {
 }
 function openRawJson(row: DataRow) {
   if (!row.k0) return
-  window.open(`/api/v1/readJson?sourceId=${row.sourceId}&id=${row.k0}`, '_blank')
+  const params = new URLSearchParams({ sourceId: row.sourceId, id: String(row.k0) })
+  window.open(`/api/v1/readJson?${params}`, '_blank')
 }
 
 // ---- 动态列（方案 §1.5-3：required 前 20 个，宽度 120×0.9／140×0.9） ----
@@ -540,7 +550,9 @@ function cellKind(prop: string, desc: string, value: unknown): 'link' | 'minio' 
   return 'text'
 }
 function minioUrl(value: string) {
-  return `http://${location.hostname}:9102/api/oss/download?fileId=${value}`
+  // OSS 端口走环境变量，默认 9102（演示环境）
+  const ossPort = import.meta.env.VITE_OSS_PORT || '9102'
+  return `http://${location.hostname}:${ossPort}/api/oss/download?fileId=${encodeURIComponent(value)}`
 }
 function formatDateTime(value?: string) {
   return value ? value.slice(0, 16) : '—'
@@ -658,12 +670,12 @@ onMounted(async () => {
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item :disabled="!selectedRowKeys.length" @click="onDeleteSelected">删除选中的数据</el-dropdown-item>
-              <el-dropdown-item divided @click="onDeleteByRange(0)">删除该源-当日</el-dropdown-item>
-              <el-dropdown-item @click="onDeleteByRange(1)">删除该源-所有</el-dropdown-item>
+              <el-dropdown-item divided @click="onDeleteByRange(0, 'source')">删除该源-当日</el-dropdown-item>
+              <el-dropdown-item @click="onDeleteByRange(1, 'source')">删除该源-所有</el-dropdown-item>
               <el-dropdown-item @click="onDeleteByIds">填入IDs-删除</el-dropdown-item>
               <el-dropdown-item divided @click="onMarkFormal">设为正式表</el-dropdown-item>
-              <el-dropdown-item @click="onDeleteByRange(0)">清空表数据【当日】</el-dropdown-item>
-              <el-dropdown-item @click="onDeleteByRange(1)">清空表数据【全量】</el-dropdown-item>
+              <el-dropdown-item @click="onDeleteByRange(0, 'all')">清空表数据【当日】</el-dropdown-item>
+              <el-dropdown-item @click="onDeleteByRange(1, 'all')">清空表数据【全量】</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -716,7 +728,7 @@ onMounted(async () => {
 
     <!-- 动态列表格 -->
     <div v-loading="loading" class="rc-table-scroll dv-table">
-      <el-table :data="rows" style="width: 100%" @sort-change="onSortChange">
+      <el-table :data="rows" style="width: 100%" show-overflow-tooltip @sort-change="onSortChange">
         <el-table-column v-if="canWrite" width="42" fixed="left">
           <template #header>
             <el-checkbox :model-value="allChecked" :indeterminate="pageIndeterminate" aria-label="选择本页" @change="togglePage" />
@@ -750,7 +762,7 @@ onMounted(async () => {
             <template v-else-if="cellKind(f.prop, f.desc, row.values?.[f.columnName!]) === 'minio'">
               <a class="dv-a" :href="minioUrl(String(row.values?.[f.columnName!]))" target="_blank" rel="noopener">{{ row.values?.[f.columnName!] }}</a>
             </template>
-            <span v-else :title="String(row.values?.[f.columnName!] ?? '')">{{ row.values?.[f.columnName!] ?? '—' }}</span>
+            <span v-else>{{ row.values?.[f.columnName!] ?? '—' }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="state" label="状态" width="70" sortable="custom">
@@ -948,6 +960,14 @@ onMounted(async () => {
 }
 .dv-table {
   flex: 1;
+}
+/* 方案 §1.5-1：行高 40；配合 show-overflow-tooltip 单行截断，避免长文本撑高行高 */
+.dv-table :deep(.el-table .cell) {
+  white-space: nowrap;
+}
+.dv-table :deep(.el-table td.el-table__cell),
+.dv-table :deep(.el-table th.el-table__cell) {
+  padding: 8px 0;
 }
 .dv-a {
   color: var(--rc-primary-ink);

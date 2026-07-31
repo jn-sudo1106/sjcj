@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, watch } from 'vue'
+import { onUnmounted, reactive, watch } from 'vue'
 import { entryApi, type EntryType } from '../../api'
 
 const props = defineProps<{ modelValue: boolean }>()
@@ -26,6 +26,8 @@ function onKeywordInput() {
   timer = setTimeout(() => { state.page = 1; void load() }, 250)
 }
 function onPageChange() { void load() }
+
+onUnmounted(() => clearTimeout(timer))
 
 watch(() => props.modelValue, (v) => {
   if (!v) return
