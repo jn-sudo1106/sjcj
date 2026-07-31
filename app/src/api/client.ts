@@ -143,7 +143,15 @@ export async function request<T>(
       triggerSessionExpired()
       throw new Error('登录失效,请重新登录')
     }
-    if (!res.ok) throw new Error(`请求失败 ${res.status}`)
+    if (!res.ok) {
+      // 尝试解出后端业务 message（4xx/5xx 通常仍带 code/msg envelope）
+      let detail = ''
+      try {
+        const body = await res.clone().json() as Record<string, unknown>
+        if (body && typeof body === 'object' && body.msg) detail = `: ${String(body.msg)}`
+      } catch { /* 无 body 或非 JSON */ }
+      throw new Error(`请求失败 ${res.status}${detail}`)
+    }
     return normalizeHttpPayload(httpEndpoint, await res.json()) as T
   } catch (e) {
     throw new ApiError(endpoint, e)

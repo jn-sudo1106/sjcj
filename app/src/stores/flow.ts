@@ -33,6 +33,7 @@ import {
   type FlowBranch,
   type FlowBranchGroup,
   type FlowDef,
+  type RuleOrchestration,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { extractUrlParamIds, hasFragmentParams } from '@/utils/flow/urlParams'
 import {
@@ -42,6 +43,7 @@ import {
 import type { FlowTemplate, Source, Site, Step } from '../api'
 import { useSourceStore } from './source'
 import { useNodeStore } from './node'
+import { useRuntimeStore } from './runtime'
 
 // 画布布局常量（对齐原型：节点宽 210、居中 x=320、终端宽 150）
 const CENTER = 320
@@ -443,6 +445,7 @@ export const useFlowStore = defineStore('flow', () => {
     configs[id] = cfg
     branch.chain.push(id)
     applyParamSourceUrlToFirstCollectNode(main.value, configs, sourceCfg.value)
+    select(id)
     nodeStore.touch()
     return id
   }
@@ -512,6 +515,7 @@ export const useFlowStore = defineStore('flow', () => {
     const cfg = configs[id]
     if (!cfg) return
     cfg.disabled = !cfg.disabled
+    select(id)
     nodeStore.touch()
   }
 
@@ -538,6 +542,7 @@ export const useFlowStore = defineStore('flow', () => {
     const orphans = new Set(g.branches.flatMap((b) => b.chain))
     for (const orphan of orphans) delete configs[orphan]
     branchGroups.splice(i, 1)
+    nodeStore.touch()
   }
 
   function detachFromBranches(nodeId: string) {
@@ -569,13 +574,15 @@ export const useFlowStore = defineStore('flow', () => {
       if (first) select(first)
       else selectedId.value = ''
     }
+    // 清理运行时态，避免删除正在运行/已完成的节点后 runtime.nodeStates 残留脏数据
+    useRuntimeStore().clearNodeStates([id])
     applyParamSourceUrlToFirstCollectNode(main.value, configs, sourceCfg.value)
     nodeStore.touch()
   }
 
   function setTitle(id: string, title: string) {
     const c = configs[id]
-    if (c) c.title = title
+    if (c) c.title = title || '未命名节点'
     nodeStore.touch()
   }
 
@@ -805,9 +812,15 @@ export const useFlowStore = defineStore('flow', () => {
 
   function applyTemplate(template: FlowTemplate): { retained: number; cleared: number } | null {
     const result = sourceStore.applyTemplate(template, configs)
-    if (!result) return null
+    if (!result) {
+      console.warn('[flow] applyTemplate skipped: sourceStore.applyTemplate returned null', { template })
+      return null
+    }
     const source = sourceCfg.value ?? sourceCtx.value
-    if (!source) return null
+    if (!source) {
+      console.warn('[flow] applyTemplate skipped: no source bound', { template })
+      return null
+    }
     const composed = composeTemplateFlow(template, source, source.nodeBindings ?? {})
     applyParamSourceUrlToFirstCollectNode(composed.main, composed.configs, source)
     load(composed)
@@ -989,7 +1002,7 @@ export const useFlowStore = defineStore('flow', () => {
     removeTripleRow: (id: string, field: TripleField, rowIndex: number) => nodeStore.removeTripleRow(id, field, rowIndex),
     patchCollect: (id: string, patch: Partial<CollectConfig>) => nodeStore.patchCollect(id, patch),
     patchTaskConfig: (id: string, patch: Partial<TaskConfig>) => nodeStore.patchTaskConfig(id, patch),
-    patchRuleConfig: (id: string, patch: any) => nodeStore.patchRuleConfig(id, patch),
+    patchRuleConfig: (id: string, patch: Partial<RuleOrchestration>) => nodeStore.patchRuleConfig(id, patch),
     setOutputTable: (id: string, tableId: string) => nodeStore.setOutputTable(id, tableId),
     setInputTable: (id: string, tableId: string) => nodeStore.setInputTable(id, tableId),
     setTaskQueue: (id: string, value: string) => nodeStore.setTaskQueue(id, value),
