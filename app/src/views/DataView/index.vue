@@ -639,11 +639,6 @@ onMounted(async () => {
       </button>
       <el-input v-model="dataId" clearable placeholder="请输入数据 ID" style="width: 160px" @keyup.enter="onSearch" />
       <button class="rc-btn primary" type="button" @click="onSearch">查询</button>
-    </div>
-
-    <!-- 筛选芯片行 -->
-    <div class="rc-toolbar wrap">
-      <el-tag v-for="c in chips" :key="c.key" closable size="small" effect="plain" @close="c.clear">{{ c.label }}</el-tag>
       <span class="dv-spacer" />
       <span class="dv-link" @click="advancedOpen = !advancedOpen">
         高级筛选<el-icon class="et-caret"><ArrowDown /></el-icon>
@@ -657,6 +652,11 @@ onMounted(async () => {
           </el-dropdown-menu>
         </template>
       </el-dropdown>
+    </div>
+
+    <!-- 筛选芯片行：无筛选条件时不占位 -->
+    <div v-if="chips.length" class="rc-toolbar wrap">
+      <el-tag v-for="c in chips" :key="c.key" closable size="small" effect="plain" @close="c.clear">{{ c.label }}</el-tag>
     </div>
 
     <!-- 高级筛选折叠面板 -->
