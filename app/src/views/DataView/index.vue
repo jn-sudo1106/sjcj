@@ -654,8 +654,8 @@ onMounted(async () => {
       </el-dropdown>
     </div>
 
-    <!-- 筛选芯片行：无筛选条件时不占位 -->
-    <div v-if="chips.length" class="rc-toolbar wrap">
+    <!-- 筛选芯片行：无筛选条件时不占位；只有几个小标签，不需要跟其他工具条一样高 -->
+    <div v-if="chips.length" class="rc-toolbar wrap dv-chips-row">
       <el-tag v-for="c in chips" :key="c.key" closable size="small" effect="plain" @close="c.clear">{{ c.label }}</el-tag>
     </div>
 
@@ -758,7 +758,14 @@ onMounted(async () => {
 
     <!-- 动态列表格 -->
     <div v-loading="loading" class="rc-table-scroll dv-table">
-      <el-table :data="rows" style="width: 100%" show-overflow-tooltip empty-text="没有查询到符合条件的记录" @sort-change="onSortChange">
+      <el-table
+        :data="rows"
+        style="width: 100%"
+        show-overflow-tooltip
+        empty-text="没有查询到符合条件的记录"
+        :header-cell-style="{ height: '42px', background: '#f8fafc', color: 'var(--rc-text-2)', fontWeight: '700', borderBottom: '1px solid #e8eef6' }"
+        @sort-change="onSortChange"
+      >
         <el-table-column v-if="canWrite" width="42" fixed="left">
           <template #header>
             <el-checkbox :model-value="allChecked" :indeterminate="pageIndeterminate" aria-label="选择本页" @change="togglePage" />
@@ -1007,6 +1014,16 @@ onMounted(async () => {
 .dv-table :deep(.el-table td.el-table__cell),
 .dv-table :deep(.el-table th.el-table__cell) {
   padding: 8px 0;
+}
+/* 悬停背景跟 .rc-data-table（参数/表ID页用的表格）保持一致 */
+.dv-table :deep(.el-table__body tr:hover > td) {
+  background: #f8fbff;
+}
+/* 筛选芯片行只放几个小标签，不需要跟检索行/工具条一样高 */
+.dv-chips-row {
+  min-height: 0;
+  padding-top: 8px;
+  padding-bottom: 8px;
 }
 .dv-a {
   color: var(--rc-primary-ink);
