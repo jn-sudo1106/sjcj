@@ -184,7 +184,7 @@ async function submit() {
     </div>
     <div class="rc-table-scroll">
       <table class="rc-data-table ete-table">
-        <thead><tr><th style="width: 44px">序号</th><th>编码</th><th>展示名</th><th style="width: 70px">数据库列</th><th style="width: 96px">类型</th><th style="width: 110px">校验</th><th style="width: 64px">列宽</th><th>预处理</th><th style="width: 44px">去重</th><th style="width: 90px">操作</th></tr></thead>
+        <thead><tr><th style="width: 44px">序号</th><th>编码</th><th>展示名</th><th style="width: 70px">数据库列</th><th style="width: 96px">类型</th><th style="width: 110px">校验</th><th style="width: 64px">列宽</th><th>预处理</th><th style="width: 44px">去重</th><th style="width: 44px">必填</th><th style="width: 90px">操作</th></tr></thead>
         <tbody>
           <tr v-for="(field, index) in form.fields" :key="field.itemId || index">
             <td>{{ field.seq ?? index + 1 }}</td>
@@ -208,6 +208,7 @@ async function submit() {
               <el-autocomplete v-model="field.preprocess" :fetch-suggestions="preprocessSuggestions" style="width: 100%" clearable />
             </td>
             <td><input v-model="field.dedup" type="checkbox" /></td>
+            <td><input v-model="field.required" type="checkbox" /></td>
             <td class="ete-actions">
               <button type="button" @click="moveField(index, -1)">↑</button>
               <button type="button" @click="moveField(index, 1)">↓</button>
@@ -259,7 +260,7 @@ async function submit() {
 .rc-input, .rc-select { width: 100%; box-sizing: border-box; border: 1px solid #dbe3ee; border-radius: 6px; padding: 6px 8px; background: #fff; color: var(--rc-text); font-size: 12px; }
 .ete-title { display: flex; align-items: center; justify-content: space-between; margin: 10px 0; }
 .ete-title span { display: flex; gap: 8px; }
-.ete-table { min-width: 1180px; }
+.ete-table { min-width: 1220px; }
 .ete-table td { padding: 6px; }
 .ete-number { width: 72px; }
 .ete-actions { white-space: nowrap; }

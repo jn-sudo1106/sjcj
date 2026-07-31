@@ -191,6 +191,19 @@ describe('旧平台实体表模型适配', () => {
     ])
   })
 
+  it('entryTypeToLegacy：required 数值化为 0/1（真实联调实测，后端 CfgEntryItem.required 按 Integer 反序列化，传布尔会 500）', () => {
+    const legacy = entryTypeToLegacy({
+      tableId: 't1', tableName: 'tb_a', fields: [
+        { prop: 'a', desc: 'A', type: 'string', required: true, columnName: 'K1', seq: 1 },
+        { prop: 'b', desc: 'B', type: 'string', required: false, columnName: 'K2', seq: 2 },
+      ],
+    })
+    expect(legacy.items).toMatchObject([
+      { itemCode: 'a', required: 1 },
+      { itemCode: 'b', required: 0 },
+    ])
+  })
+
   it('entryTypeToLegacy 新建（无 tableId）时不带 entryTypeId', () => {
     const legacy = entryTypeToLegacy({ tableId: '', tableName: 'tb_new', fields: [] })
     expect(legacy.entryTypeId).toBeUndefined()

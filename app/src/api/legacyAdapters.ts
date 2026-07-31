@@ -298,6 +298,9 @@ export function entryTypeToLegacy(input: EntryType): LegacyRecord {
       width: field.width,
       clearRule: field.preprocess,
       uniqueKey: field.dedup,
+      // 真实联调实测：CfgEntryItem.required 后端按 Integer 反序列化，传布尔值会报
+      // MismatchedInputException（同 §数据表页 numericId 那批坑，uniqueKey 这个字段倒是布尔能过）
+      required: field.required ? 1 : 0,
       seq: field.seq ?? index + 1,
     })),
   }
