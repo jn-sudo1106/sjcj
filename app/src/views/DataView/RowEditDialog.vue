@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { dataApi, type DataTableMeta, type DataRow } from '../../api'
 
@@ -30,6 +30,21 @@ const loading = ref(false)
 
 const dynamicFields = computed(() => props.tableMeta?.fields ?? [])
 const keyField = computed(() => props.tableMeta?.keyField)
+
+// 字段多的表（动态列可达数十个）不加高度封顶会把整个表单撑出视口，保存按钮点不到。
+// el-dialog 的居中定位不是简单的 vh 线性关系（且页面根节点 .dv-page 带了个 transform，
+// 会劫持 position:fixed 的定位基准），静态 CSS calc() 猜不出通用公式——改成实测：
+// 弹窗打开后量一下内容区离视口顶部的实际距离，直接算出还剩多少空间给它。
+const bodyEl = ref<HTMLElement | null>(null)
+const bodyMaxHeight = ref(400)
+function recalcBodyHeight() {
+  if (!bodyEl.value) return
+  const top = bodyEl.value.getBoundingClientRect().top
+  const FOOTER_RESERVE = 76 // footer 按钮高度 + 上下边距，估算即可，留够比精确更重要
+  bodyMaxHeight.value = Math.max(160, window.innerHeight - top - FOOTER_RESERVE)
+}
+window.addEventListener('resize', recalcBodyHeight)
+onBeforeUnmount(() => window.removeEventListener('resize', recalcBodyHeight))
 
 watch(() => props.modelValue, async (v) => {
   if (!v) return
@@ -80,22 +95,32 @@ async function onSubmit() {
 </script>
 
 <template>
-  <el-dialog v-model="visible" :title="mode === 'edit' ? '手动修改' : '手动添加'" width="520px">
+  <el-dialog v-model="visible" :title="mode === 'edit' ? '手动修改' : '手动添加'" width="520px" @opened="recalcBodyHeight">
     <div v-if="keyField" class="rc-mini-card">去重列:{{ keyField }}</div>
-    <el-form v-loading="loading" label-width="110px" label-position="left">
-      <el-form-item label="SOURCE_ID">
-        <el-input v-model="form.SOURCE_ID" />
-      </el-form-item>
-      <el-form-item label="CONFIG_ID">
-        <el-input v-model="form.CONFIG_ID" />
-      </el-form-item>
-      <el-form-item v-for="f in dynamicFields" :key="f.columnName" :label="`${f.desc}(${f.columnName})`">
-        <el-input v-model="form.values[f.columnName!]" />
-      </el-form-item>
-    </el-form>
+    <div ref="bodyEl" class="red-body" :style="{ maxHeight: `${bodyMaxHeight}px` }">
+      <el-form v-loading="loading" label-width="110px" label-position="left">
+        <el-form-item label="SOURCE_ID">
+          <el-input v-model="form.SOURCE_ID" />
+        </el-form-item>
+        <el-form-item label="CONFIG_ID">
+          <el-input v-model="form.CONFIG_ID" />
+        </el-form-item>
+        <el-form-item v-for="f in dynamicFields" :key="f.columnName" :label="`${f.desc}(${f.columnName})`">
+          <el-input v-model="form.values[f.columnName!]" />
+        </el-form-item>
+      </el-form>
+    </div>
     <template #footer>
       <button class="rc-btn" type="button" @click="visible = false">取消</button>
       <button class="rc-btn primary" type="button" @click="onSubmit">保存</button>
     </template>
   </el-dialog>
 </template>
+
+<style scoped>
+/* max-height 由 recalcBodyHeight() 实测算出（行内 style 绑定），这里只留滚动/内边距 */
+.red-body {
+  overflow-y: auto;
+  padding-right: 4px;
+}
+</style>

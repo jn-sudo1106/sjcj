@@ -68,11 +68,18 @@ function openTableDetail() {
   tableDetailOpen.value = true
 }
 const sourceDetailOpen = ref(false)
+const sourceDetailTargetId = ref('')
 function openSourceDetail() {
   if (!sourceId.value) {
     ElMessage.error('请先选择源ID')
     return
   }
+  sourceDetailTargetId.value = sourceId.value
+  sourceDetailOpen.value = true
+}
+// 行内源列点击：以行 sourceId 打开源详情（不影响检索栏的 sourceId）
+function openSourceDetailForRow(sid: string) {
+  sourceDetailTargetId.value = sid
   sourceDetailOpen.value = true
 }
 
@@ -557,6 +564,23 @@ function minioUrl(value: string) {
 function formatDateTime(value?: string) {
   return value ? value.slice(0, 16) : '—'
 }
+// 相对时间（方案 §1.5-4/§4.3：timeago + hover 绝对时间 title）
+function timeAgo(value?: string): string {
+  if (!value) return '—'
+  const ts = new Date(value).getTime()
+  if (Number.isNaN(ts)) return value
+  const diff = Date.now() - ts
+  if (diff < 0) return value.slice(0, 16)
+  const sec = Math.floor(diff / 1000)
+  if (sec < 60) return `${sec}秒前`
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min}分钟前`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr}小时前`
+  const day = Math.floor(hr / 24)
+  if (day < 30) return `${day}天前`
+  return value.slice(0, 10)
+}
 
 // ---- 深链接：?entryType=/?sourceId= 进入自动带入，watch 路由参数变化即时重载 ----
 watch(() => route.query.entryType, (v) => {
@@ -690,6 +714,10 @@ onMounted(async () => {
           </template>
         </el-dropdown>
       </template>
+      <span class="dv-spacer" />
+      <!-- 常显上下文 tag（方案 §1.4-6） -->
+      <span v-if="sourceId" class="rc-mini-card">源:{{ sourceId }}</span>
+      <span v-if="tableMeta?.tableName" class="rc-mini-card">表:{{ tableMeta.tableName.split('.').pop() }}</span>
     </div>
     <div v-if="showSql" class="dv-sql-tip">{{ sqlPreview }}</div>
 
@@ -724,11 +752,13 @@ onMounted(async () => {
         <label>自定SQL条件<el-input v-model="yCond" placeholder="如 K1 IS NULL" style="width: 160px" /></label>
         <button class="rc-btn danger" type="button" @click="onSendYellowBatch">批量发后续</button>
       </div>
+      <!-- 参考API（方案 §1.4-2）：展示 nextStep2 拼接 URL 供运营核对 -->
+      <div class="dv-yellow-api">参考API: POST /api/v1/source/nextStep2 (AES, timeout 180s)</div>
     </div>
 
     <!-- 动态列表格 -->
     <div v-loading="loading" class="rc-table-scroll dv-table">
-      <el-table :data="rows" style="width: 100%" show-overflow-tooltip @sort-change="onSortChange">
+      <el-table :data="rows" style="width: 100%" show-overflow-tooltip empty-text="没有查询到符合条件的记录" @sort-change="onSortChange">
         <el-table-column v-if="canWrite" width="42" fixed="left">
           <template #header>
             <el-checkbox :model-value="allChecked" :indeterminate="pageIndeterminate" aria-label="选择本页" @change="togglePage" />
@@ -745,7 +775,10 @@ onMounted(async () => {
           <template #default="{ row }"><a class="dv-a" @click="openDetail(row)">{{ row.dataId }}</a></template>
         </el-table-column>
         <el-table-column prop="sourceId" label="源" width="100" sortable="custom">
-          <template #default="{ row }">{{ row.sourceId }}</template>
+          <template #default="{ row }">
+            <a v-if="row.sourceId" class="dv-a" @click="openSourceDetailForRow(row.sourceId)">{{ row.sourceId }}</a>
+            <span v-else>—</span>
+          </template>
         </el-table-column>
         <el-table-column
           v-for="f in dynamicColumns"
@@ -769,10 +802,10 @@ onMounted(async () => {
           <template #default="{ row }">{{ row.state || '—' }}</template>
         </el-table-column>
         <el-table-column prop="updateDt" label="更新" width="90" sortable="custom">
-          <template #default="{ row }">{{ formatDateTime(row.updateDt) }}</template>
+          <template #default="{ row }"><span :title="formatDateTime(row.updateDt)">{{ timeAgo(row.updateDt) }}</span></template>
         </el-table-column>
         <el-table-column prop="createDt" label="生成" width="90" sortable="custom">
-          <template #default="{ row }">{{ formatDateTime(row.createDt) }}</template>
+          <template #default="{ row }"><span :title="formatDateTime(row.createDt)">{{ timeAgo(row.createDt) }}</span></template>
         </el-table-column>
         <el-table-column label="任务" width="100">
           <template #default="{ row }">
@@ -877,7 +910,7 @@ onMounted(async () => {
 
     <!-- 表结构详情 / 源详情（方案 §1.3-1/§1.3-2） -->
     <TableDetailDialog v-model="tableDetailOpen" :table-meta="tableMeta" />
-    <SourceDetailDrawer v-model="sourceDetailOpen" :source-id="sourceId" />
+    <SourceDetailDrawer v-model="sourceDetailOpen" :source-id="sourceDetailTargetId" />
 
     <!-- 加载更多数据表 / 更多源（方案 §1.3-1/§1.3-2） -->
     <MoreTablesDialog v-model="moreTablesOpen" @picked="onTablePicked" />
@@ -957,6 +990,12 @@ onMounted(async () => {
   gap: 4px;
   font-size: 11px;
   color: var(--rc-text-2);
+}
+.dv-yellow-api {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--rc-muted);
+  font-family: var(--rc-mono, monospace);
 }
 .dv-table {
   flex: 1;
