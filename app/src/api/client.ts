@@ -99,7 +99,10 @@ export async function request<T>(
   options: RequestOptions = {},
 ): Promise<T> {
   try {
-    if (options.mode === 'mock' || (MODE === 'mock' && (DISABLE_LIVE_ENDPOINTS || !LIVE_ENDPOINTS.has(endpoint)))) {
+    // 按端点上线判断优先看 httpEndpoint（真实路径）：data 域调用惯例是 request(逻辑键, ..., {httpEndpoint: 真实路径})，
+    // 逻辑键（如 data/rowQueryPaged）从不出现在 endpoints.ts，只看 endpoint 会导致 live 标记对整个 data 域永远失效。
+    const liveCheckKey = options.httpEndpoint ?? endpoint
+    if (options.mode === 'mock' || (MODE === 'mock' && (DISABLE_LIVE_ENDPOINTS || !LIVE_ENDPOINTS.has(liveCheckKey)))) {
       await delay(120)
       if (FAIL_RATE > 0 && Math.random() < FAIL_RATE) {
         throw new Error(`mock 随机失败注入: ${endpoint}`)

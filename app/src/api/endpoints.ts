@@ -38,7 +38,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/createJobs', desc: '生成 / 保存定时（批量定时）', danger: true, impl: true },
   { path: 'source/clear', desc: '清源缓存', danger: true },
   { path: 'source/queryStepDetail', desc: '查询子步骤详情' },
-  { path: 'source/nextStep', desc: '手动后续处理', danger: true },
+  { path: 'source/nextStep', desc: '手动后续处理', danger: true, live: true },
+  // nextStep2（发全部/大量后续）联调时按用户要求未真实触发（避免误发大批量抓取任务），暂不标 live
   { path: 'source/nextStep2', desc: '手动后续处理 2', danger: true },
   { path: 'source/batchImport', desc: '模板源批量导入', danger: true, impl: true },
   { path: 'source/batchModifyConfig', desc: '批量改配置', danger: true, impl: true },
@@ -83,7 +84,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/configActionPaged', desc: '配置操作日志分页', impl: true, live: true },
   { path: 'config/clear', desc: '清配置缓存（同一端点也被参数「清除缓存」复用，已联调验证）', danger: true, impl: true, live: true },
   { path: 'config/entryTypePagedView', desc: '实体表分页', impl: true, live: true },
-  { path: 'config/queryEntryTypesGroup', desc: '按源加载实体表分组' },
+  { path: 'config/queryEntryTypesGroup', desc: '按源加载实体表分组', live: true },
   { path: 'config/entryType', desc: '实体表详情', impl: true, live: true },
   { path: 'config/saveEntryType', desc: '⚠️ mock 时代占位，旧仓库无此路径，非真实契约端点，仅 mock/index.ts 引用', danger: true, impl: true },
   { path: 'config/entryTypeAddAll', desc: '新建实体表', danger: true, impl: true, live: true },
@@ -112,18 +113,21 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/unbindParam', desc: '配置解绑参数', danger: true },
 
   /* ── entry 实体数据（收录 12，见「单表数据查看迁移」方案 §1.1 的 16 个旧端点核对） ── */
-  { path: 'entry/entryDataPaged', desc: '实体数据分页' },
-  { path: 'entry/queryEntryType', desc: '实体数据动态表结构' },
-  { path: 'entry/entryDetail', desc: '实体数据详情' },
-  { path: 'entry/entryDistinctSource', desc: '实体数据按源去重' },
+  { path: 'entry/entryDataPaged', desc: '实体数据分页', live: true },
+  { path: 'entry/queryEntryType', desc: '实体数据动态表结构', live: true },
+  { path: 'entry/entryDetail', desc: '实体数据详情', live: true },
+  { path: 'entry/entryDistinctSource', desc: '实体数据按源去重', live: true },
+  // summaryEntryData（统计）本轮新加，仅 mock 联调，未过真实后端，暂不标 live
   { path: 'entry/summaryEntryData', desc: '实体数据汇总' },
+  // re-save 未见明确真实联调验证记录，暂不标 live
   { path: 'entry/re-save', desc: '重存实体数据', danger: true },
   // 旧仓库实际路径是 entryDelete（此前登记为 delete 是权宜猜测，单表数据查看方案 §1.1 核对修正）
-  { path: 'entry/entryDelete', desc: '删除实体数据（单条/按源/整表 × 当日/全量）', danger: true },
-  { path: 'entry/entryDeleteBatch', desc: '按 IDs 批量删除实体数据', danger: true },
-  { path: 'entry/entryClearParent', desc: '清除父表后续标识', danger: true },
-  { path: 'entry/entryUpdate', desc: '手动修改实体数据', danger: true },
-  { path: 'entry/batch/saveEntryOne', desc: '手动新增实体数据', danger: true },
+  { path: 'entry/entryDelete', desc: '删除实体数据（单条/按源/整表 × 当日/全量）', danger: true, live: true },
+  { path: 'entry/entryDeleteBatch', desc: '按 IDs 批量删除实体数据', danger: true, live: true },
+  // entryClearParent 契约已核实正确（字段名/类型排除），但后端对该接口本身有 bug（见联调发现文档 §3），标 live 是因为前端对接完成、真实报错也是预期内的已知问题
+  { path: 'entry/entryClearParent', desc: '清除父表后续标识', danger: true, live: true },
+  { path: 'entry/entryUpdate', desc: '手动修改实体数据', danger: true, live: true },
+  { path: 'entry/batch/saveEntryOne', desc: '手动新增实体数据', danger: true, live: true },
   { path: 'entry/entryExportAll', desc: '导出 Excel（URL 直开，同源 Cookie 鉴权）' },
 
   /* ── item/next 子步骤（目标 7 / 收录 5） ── */
