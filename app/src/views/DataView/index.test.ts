@@ -289,6 +289,26 @@ describe('DataView · 数据表页', () => {
     expect(wrapper.findAll('button').some((b) => b.text() === '导出EXCEL')).toBe(true)
   })
 
+  it('任务实例：read 角色可查看但重发（危险操作）按钮/勾选列/批量重发对 read 隐藏', async () => {
+    vi.spyOn(dataApi, 'taskInstPaged').mockResolvedValue({
+      total: 1,
+      list: [{ taskId: 'd-99', state: 'C', typeName: '浏览器抓取', taskName: 't', sourceId: '600519', updatedAt: '2026-07-01' }],
+    })
+    const auth = useAuthStore()
+    auth.roles = ['read']
+    await mountPage()
+    await waitForLoad()
+
+    // read 角色下操作列（详情列 ENTRY_ID 仍是唯一 dv-a，任务列不受 canWrite 限制，可查看）
+    const taskLink = wrapper.findAll('a.dv-a').find((a) => a.text() === 'd-99')
+    await taskLink!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('任务实例')
+    expect(wrapper.findAll('button').some((b) => b.text().startsWith('重发'))).toBe(false)
+    expect(wrapper.find('.el-table__header .el-checkbox').exists()).toBe(false)
+  })
+
   it('深链接：?entryType=/?sourceId= 自动带入检索', async () => {
     await mountPage({ entryType: 't9', sourceId: 'src-9' })
     await waitForLoad()

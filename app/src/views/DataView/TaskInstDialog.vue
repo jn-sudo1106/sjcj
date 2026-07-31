@@ -10,6 +10,8 @@ const props = defineProps<{
   taskId?: string
   configId?: string
   fileId?: string
+  // 重发是危险操作（endpoints.ts danger:true），read 角色不可见（方案 DoD：写入口对 read 完全隐藏）
+  canWrite?: boolean
 }>()
 const emit = defineEmits<{ 'update:modelValue': [boolean] }>()
 
@@ -93,7 +95,7 @@ function resendOne(row: TaskInst) {
       <el-input v-model="filter.parentId" placeholder="父ID" style="width: 120px" @keyup.enter="onSearch" />
       <button class="rc-btn primary" type="button" @click="onSearch">查询</button>
     </div>
-    <div v-if="state.selected.length" class="ti-batch">
+    <div v-if="canWrite && state.selected.length" class="ti-batch">
       <button class="rc-btn primary" type="button" @click="resendBatch">重发（{{ state.selected.length }}）</button>
     </div>
     <el-table
@@ -103,7 +105,7 @@ function resendOne(row: TaskInst) {
       row-key="taskId"
       @selection-change="(rows: TaskInst[]) => (state.selected = rows.map((r) => r.taskId))"
     >
-      <el-table-column type="selection" width="42" />
+      <el-table-column v-if="canWrite" type="selection" width="42" />
       <el-table-column prop="taskId" label="任务ID" width="110" />
       <el-table-column prop="state" label="状态" width="70" />
       <el-table-column prop="taskSpecId" label="类型" width="80" />
@@ -114,7 +116,7 @@ function resendOne(row: TaskInst) {
       <el-table-column prop="updatedAt" label="更新时间" width="140" />
       <el-table-column prop="node" label="执行节点" width="140" />
       <el-table-column prop="parentId" label="父ID" width="90" />
-      <el-table-column label="操作" width="80" fixed="right">
+      <el-table-column v-if="canWrite" label="操作" width="80" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="resendOne(row)">重发</el-button>
         </template>

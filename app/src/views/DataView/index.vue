@@ -860,6 +860,7 @@ onMounted(async () => {
       :source-id="taskInst.sourceId"
       :parent-id="taskInst.parentId"
       :task-id="taskInst.taskId"
+      :can-write="canWrite"
     />
 
     <!-- 表结构详情 / 源详情（方案 §1.3-1/§1.3-2） -->
