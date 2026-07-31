@@ -373,6 +373,38 @@ describe('数据详情 / 统计 / 后续 / 删除 API 旧平台 HTTP 契约（E 
     expect(body.entryType).toBe(1042)
   })
 
+  it('taskInstPaged 用 GET 调 task/topTaskPaged，page/limit 口径 + 字段名对照旧 column.config', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      code: '0', msg: null,
+      data: { total: 1, list: [{ taskId: '8348509120', state: 'C', actionName: '浏览器抓取', taskName: '任务A', sourceId: '161725', configId: '70598', updateDt: '2026-07-31 08:00', nodeCode: 'node1', taskTopic: 'topic1', parentId: '9', taskSpecId: 'spec1' }] },
+    }))
+    const { dataApi } = await import('./index')
+
+    const result = await dataApi.taskInstPaged({ page: 2, size: 30, sourceId: '161725', state: 'C' })
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/v1/task/topTaskPaged')
+    expect(url).toContain('page=2')
+    expect(url).toContain('limit=30')
+    expect(url).toContain('sourceId=161725')
+    expect(url).toContain('state=C')
+    expect(result.total).toBe(1)
+    expect(result.list[0]).toMatchObject({
+      taskId: '8348509120', state: 'C', typeName: '浏览器抓取', node: 'node1', topic: 'topic1', updatedAt: '2026-07-31 08:00', taskSpecId: 'spec1',
+    })
+  })
+
+  it('resendTask 用 GET 调 task/resetTaskInsts，ids 逗号连接（危险端点）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '已重置', data: null }))
+    const { dataApi } = await import('./index')
+
+    await dataApi.resendTask(['1', '2', '3'])
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/v1/task/resetTaskInsts')
+    expect(url).toContain('ids=1%2C2%2C3')
+  })
+
   it('rowAdd 用 POST JSON 平铺体，null 字段提交前删除；ENTRY_TYPE_ID/SOURCE_ID/CONFIG_ID 数值化', async () => {
     // 真实联调实测（2026-07-31）：这三个系统指针字段后端按 Integer 反序列化，字符串会 500
     // “class java.lang.String cannot be cast to class java.lang.Integer”。K1 等动态列不做数值转换。

@@ -31,7 +31,7 @@ describe('DataView · 数据表页', () => {
     ],
   }
   const ROW: DataRow = {
-    dataId: '88231', sourceId: '600519', state: 'C', k0: 'json-771',
+    dataId: '88231', sourceId: '600519', state: 'C', k0: 'json-771', detailId: 'd-99',
     values: { K1: '关于利润分配的公告', K2: '2026-07-18' },
     title: '关于利润分配的公告', summary: '', acceptState: 'accepted',
   }
@@ -294,5 +294,90 @@ describe('DataView · 数据表页', () => {
     await waitForLoad()
 
     expect(dataApi.rowQueryPaged).toHaveBeenCalledWith(expect.objectContaining({ tableId: 't9', sourceId: 'src-9' }))
+  })
+
+  it('统计：选统计列后调用 summaryData（沿用当前查询条件），展示结果表', async () => {
+    const summarySpy = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([{ K2: '2026-07-18', CNT: 3 }])
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    await wrapper.findAll('button').find((b) => b.text() === '统计')!.trigger('click')
+    await flushPromises()
+
+    const select = wrapper.findAllComponents({ name: 'ElSelect' }).find((s) => s.props('multiple'))
+    await select!.vm.$emit('update:modelValue', ['K2'])
+    await flushPromises()
+    await wrapper.findAll('button').filter((b) => b.text() === '统计')[1]!.trigger('click')
+    await flushPromises()
+
+    expect(summarySpy).toHaveBeenCalledWith(expect.objectContaining({ tableId: 't1' }), ['K2'])
+    expect(wrapper.text()).toContain('结果行数:1')
+    expect(wrapper.text()).toContain('覆盖数据量:3')
+  })
+
+  it('展示步骤：无源ID报错；选源后加载 sourceApi.sourceSteps 并展示步骤卡片', async () => {
+    const stepsSpyNoSource = vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    await wrapper.findAll('button').find((b) => b.text().startsWith('工具'))!.trigger('click')
+    await flushPromises()
+    let item = new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '展示步骤')
+    await item!.trigger('click')
+    await flushPromises()
+    expect(stepsSpyNoSource).not.toHaveBeenCalled()
+
+    wrapper.unmount()
+    const stepsSpy = vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      { stepId: 's1', sourceId: '600519', name: '抓取列表', outputTable: 'sense_data.TB_LIST', enabled: true },
+    ])
+    await mountPage({ sourceId: '600519' })
+    await waitForLoad()
+    await wrapper.findAll('button').find((b) => b.text().startsWith('工具'))!.trigger('click')
+    await flushPromises()
+    item = new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '展示步骤')
+    await item!.trigger('click')
+    await flushPromises()
+
+    expect(stepsSpy).toHaveBeenCalledWith('600519')
+    expect(wrapper.text()).toContain('抓取列表')
+  })
+
+  it('任务实例：点「任务」列（DETAIL_ID）打开弹窗，按 taskId 查询', async () => {
+    const taskSpy = vi.spyOn(dataApi, 'taskInstPaged').mockResolvedValue({
+      total: 1,
+      list: [{ taskId: 'd-99', state: 'C', typeName: '浏览器抓取', taskName: 't', sourceId: '600519', updatedAt: '2026-07-01' }],
+    })
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    await wrapper.findAll('a.dv-a').find((a) => a.text() === 'd-99')!.trigger('click')
+    await flushPromises()
+
+    expect(taskSpy).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'd-99', sourceId: '600519', parentId: undefined }))
+    expect(wrapper.text()).toContain('任务实例')
+  })
+
+  it('任务实例：行内「查后续任务实例」按 parentId=ENTRY_ID 查询', async () => {
+    const taskSpy = vi.spyOn(dataApi, 'taskInstPaged').mockResolvedValue({ total: 0, list: [] })
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    const moreBtn = wrapper.findAllComponents({ name: 'ElButton' }).find((b) => b.text().startsWith('更多'))
+    await moreBtn!.trigger('click')
+    await flushPromises()
+    const item = new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '查后续任务实例')
+    await item!.trigger('click')
+    await flushPromises()
+
+    expect(taskSpy).toHaveBeenCalledWith(expect.objectContaining({ parentId: '88231', sourceId: '600519' }))
   })
 })

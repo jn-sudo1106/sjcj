@@ -15,6 +15,7 @@ import type {
   ParamKind,
   ParamValue,
   SummaryRow,
+  TaskInst,
 } from './types'
 
 type LegacyRecord = Record<string, unknown>
@@ -406,4 +407,23 @@ function showItemFromLegacy(input: unknown): EntryDetailItem {
 export function summaryRowFromLegacy(input: unknown): SummaryRow {
   const record = asRecord(input)
   return { ...record, CNT: Number(record.CNT ?? 0) }
+}
+
+// 字段名对照旧 column.config.js TASK_LIST.base：actionName→typeName、nodeCode→node、
+// taskTopic→topic、updateDt→updatedAt（方案 §1.6-5 TaskInst）。
+export function taskInstFromLegacy(input: unknown): TaskInst {
+  const record = asRecord(input)
+  return {
+    taskId: String(record.taskId ?? ''),
+    state: String(record.state ?? '') as TaskInst['state'],
+    typeName: record.actionName == null ? '' : String(record.actionName),
+    taskName: record.taskName == null ? '' : String(record.taskName),
+    sourceId: String(record.sourceId ?? ''),
+    configId: record.configId == null ? undefined : String(record.configId),
+    node: record.nodeCode == null ? undefined : String(record.nodeCode),
+    topic: record.taskTopic == null ? undefined : String(record.taskTopic),
+    parentId: record.parentId == null ? undefined : String(record.parentId),
+    updatedAt: record.updateDt == null ? '' : String(record.updateDt),
+    taskSpecId: record.taskSpecId == null ? undefined : String(record.taskSpecId),
+  }
 }

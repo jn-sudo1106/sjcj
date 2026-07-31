@@ -9,11 +9,13 @@ import {
 } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import RowEditDialog from './RowEditDialog.vue'
+import SummaryDrawer from './SummaryDrawer.vue'
+import TaskInstDialog from './TaskInstDialog.vue'
+import StepDrawer from './StepDrawer.vue'
 
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
-// 本文件覆盖检索区/工具条/批量条/动态列表格/分页/数据详情抽屉/手动添加/手动修改；
-// 统计抽屉、步骤抽屉、任务实例弹窗依赖分组表格/SVG图/任务列表等复杂组件，
-// 本轮不做，对应入口不渲染（见设计文档 §0）。
+// 本文件覆盖检索区/工具条/批量条/动态列表格/分页/数据详情抽屉/手动添加/手动修改/统计/
+// 步骤展示（简化列表，无 DAG 图，见方案 §4.1 偏离决定）/任务实例弹窗。
 const auth = useAuthStore()
 const canWrite = computed(() => auth.role === 'admin')
 const route = useRoute()
@@ -322,6 +324,47 @@ function onClearParent() {
   )
 }
 
+// ---- 统计（方案 §1.4-5，read 也可见） ----
+const summaryOpen = ref(false)
+
+// ---- 展示步骤（方案 §1.4-3；简化为步骤列表，无 DAG 图，见方案 §4.1 偏离决定） ----
+const stepOpen = ref(false)
+function openStepDrawer() {
+  if (!sourceId.value) {
+    ElMessage.error('查询栏中未指定源ID,无法展示步骤')
+    return
+  }
+  stepOpen.value = true
+}
+async function onStepSelectTable(outputTable: string) {
+  const all = [...group.value.list1, ...group.value.list2, ...group.value.list3]
+  const match = all.find((t) => t.tableName === outputTable)
+  if (!match) {
+    ElMessage.warning(`未找到匹配的表:${outputTable}`)
+    return
+  }
+  tableId.value = match.tableId
+  await onTableChange()
+}
+
+// ---- 任务实例弹窗（方案 §1.6-5；DETAIL_ID 列点入口 / 行内「查后续任务实例」入口） ----
+const taskInst = reactive<{ visible: boolean; sourceId: string; parentId: string | null; taskId: string }>({
+  visible: false, sourceId: '', parentId: null, taskId: '',
+})
+function openTaskInstByDetail(row: DataRow) {
+  if (!row.detailId) return
+  taskInst.sourceId = row.sourceId
+  taskInst.parentId = null
+  taskInst.taskId = row.detailId
+  taskInst.visible = true
+}
+function openTaskInstByRow(row: DataRow) {
+  taskInst.sourceId = row.sourceId
+  taskInst.parentId = row.dataId
+  taskInst.taskId = ''
+  taskInst.visible = true
+}
+
 // ---- 选中批量条：发后续任务 / 更多批量操作 ----
 function onNextStepSelected() {
   if (!selectedRowKeys.value.length) {
@@ -549,6 +592,7 @@ onMounted(async () => {
       <button class="rc-btn" type="button" @click="onRefresh">刷新</button>
       <button class="rc-btn" type="button" @click="showSql = !showSql">展示SQL</button>
       <button class="rc-btn" type="button" @click="onExport">导出EXCEL</button>
+      <button class="rc-btn" type="button" @click="summaryOpen = true">统计</button>
       <template v-if="canWrite">
         <button class="rc-btn" type="button" @click="openAdd">手动添加</button>
         <el-dropdown v-if="isTestTable" trigger="click">
@@ -570,6 +614,7 @@ onMounted(async () => {
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item @click="onDistinctSource">提取去重后源 ID</el-dropdown-item>
+              <el-dropdown-item @click="openStepDrawer">展示步骤</el-dropdown-item>
               <el-dropdown-item divided @click="onClearParent">A.清除-父表-后续标识</el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -660,7 +705,10 @@ onMounted(async () => {
           <template #default="{ row }">{{ formatDateTime(row.createDt) }}</template>
         </el-table-column>
         <el-table-column label="任务" width="100">
-          <template #default="{ row }">{{ row.detailId || '—' }}</template>
+          <template #default="{ row }">
+            <a v-if="row.detailId" class="dv-a" @click="openTaskInstByDetail(row)">{{ row.detailId }}</a>
+            <span v-else>—</span>
+          </template>
         </el-table-column>
         <el-table-column prop="nextFlag" label="后续" width="70">
           <template #default="{ row }">{{ row.nextFlag ?? '—' }}</template>
@@ -685,6 +733,7 @@ onMounted(async () => {
                 <el-button link type="primary" size="small">更多<el-icon class="et-caret"><ArrowDown /></el-icon></el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
+                    <el-dropdown-item @click="openTaskInstByRow(row)">查后续任务实例</el-dropdown-item>
                     <el-dropdown-item v-if="isTestTable" @click="openEdit(row)">手动修改</el-dropdown-item>
                     <el-dropdown-item v-if="isTestTable" @click="onDeleteOne(row)">删除单条【无法恢复】</el-dropdown-item>
                     <el-dropdown-item v-if="row.k0" :divided="isTestTable" @click="onReSave(row)">重新保存原始JSON</el-dropdown-item>
@@ -734,6 +783,25 @@ onMounted(async () => {
       :mode="editor.mode"
       :row="editor.row"
       :first-row="rows[0] ?? null"
+    />
+
+    <!-- 统计（方案 §1.6-4） -->
+    <SummaryDrawer v-model="summaryOpen" :table-meta="tableMeta" :build-query="buildQuery" />
+
+    <!-- 展示步骤（方案 §1.6-5，简化列表版；见 §4.1 偏离决定） -->
+    <StepDrawer
+      v-model="stepOpen"
+      :source-id="sourceId"
+      :current-table-name="tableMeta?.tableName"
+      @select-table="onStepSelectTable"
+    />
+
+    <!-- 任务实例弹窗（方案 §1.6-5） -->
+    <TaskInstDialog
+      v-model="taskInst.visible"
+      :source-id="taskInst.sourceId"
+      :parent-id="taskInst.parentId"
+      :task-id="taskInst.taskId"
     />
   </div>
 </template>

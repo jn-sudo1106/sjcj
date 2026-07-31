@@ -186,4 +186,17 @@ export interface TaskInst {
   topic?: string // 主题
   parentId?: string
   updatedAt: string
+  /** 任务规格 ID（类型代码），任务实例弹窗筛选/展示用（方案 §1.6-5 TaskInst） */
+  taskSpecId?: string
+}
+
+/** 任务实例分页查询（TaskInstDialog，方案 §1.6-5） */
+export interface TaskInstQuery extends PageQuery {
+  taskId?: string
+  sourceId?: string
+  configId?: string
+  parentId?: string
+  fileId?: string
+  taskSpecId?: string
+  state?: string
 }

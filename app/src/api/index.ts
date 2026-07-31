@@ -4,6 +4,7 @@ import type {
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestResult,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
+  TaskInstQuery,
   Config, ConfigActionLog, ConfigParamBinding, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, RawFile, RawFileQuery, RawFileStats, SourceCloneRequest, SourceCloneResult,
   FlowTemplate, FlowTemplateSaveInput,
@@ -26,6 +27,7 @@ import {
   paramPageFromLegacy,
   paramToLegacy,
   summaryRowFromLegacy,
+  taskInstFromLegacy,
 } from './legacyAdapters'
 import { encryptLegacyPayload } from './legacyCrypto'
 
@@ -250,6 +252,28 @@ export const dataApi = {
     const list = Array.isArray(result) ? result : ((result as Paged<unknown> | null)?.list ?? [])
     return list.map(summaryRowFromLegacy)
   },
+  // 任务实例分页（方案 §1.6-5 TaskInst）：GET，参数按旧 page/limit 口径（task.js 内部由 pageNo/pageSize 映射而来）
+  taskInstPaged: async (q: TaskInstQuery): Promise<{ total: number; list: TaskInst[] }> => {
+    const result = await request<unknown>('data/taskInstPaged', q, {
+      method: 'GET',
+      httpEndpoint: 'task/topTaskPaged',
+      httpParams: {
+        page: q.page ?? 1, limit: q.size ?? 20,
+        taskId: q.taskId, sourceId: q.sourceId, configId: q.configId,
+        parentId: q.parentId, fileId: q.fileId, taskSpecId: q.taskSpecId, state: q.state,
+      },
+    })
+    const list = Array.isArray(result) ? result : ((result as Paged<unknown> | null)?.list ?? [])
+    const total = Array.isArray(result) ? list.length : ((result as Paged<unknown> | null)?.total ?? list.length)
+    return { total, list: list.map(taskInstFromLegacy) }
+  },
+  // 重发任务实例：ids 逗号连接（危险，endpoints.ts 已登记 danger:true）
+  resendTask: (taskIds: string[]) =>
+    request<{ message?: string }>('data/resendTask', { taskIds }, {
+      method: 'GET',
+      httpEndpoint: 'task/resetTaskInsts',
+      httpParams: { ids: taskIds.join(',') },
+    }),
   // 发选中/本页后续：entryIds 逗号连接（危险）
   nextStep: (sourceId: string, tableId: string, entryIds: string[]) =>
     request<{ message?: string }>('data/nextStep', { sourceId, tableId, entryIds }, {
