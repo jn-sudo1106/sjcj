@@ -138,11 +138,22 @@ export const metricApi = {
 
 // 结果视图查询载荷组装（entryDataPaged/entryDistinctSource/summaryEntryData/exportUrl 共用，
 // 避免四处口径漂移——见「单表数据查看迁移」方案 §3.1）
+// 真实联调实测（2026-07-31）：entryType/entryId/sourceId/configId 这类系统指针字段，
+// 后端非 AES 的 POST JSON 接口（saveEntryOne/entryUpdate 等）按 Integer 反序列化，
+// 字符串会报 Integer 转换异常；此处对 entryType 一并数值化仅为口径统一防御，
+// 不改变 entryClearParent 的"业务类型不存在"报错（该报错已排除类型/字段名问题，
+// 是后端接口内部问题，详见联调发现文档第 3 节）。
+// 业务字段（K1.. 动态列/state/more 等）类型不定，不做转换。
+function numericId(value: unknown): unknown {
+  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) return Number(value)
+  return value
+}
+
 function buildLegacyRowQuery(q: RowQuery) {
   return {
     page: q.page ?? 1,
     limit: q.size ?? 20,
-    entryType: q.tableId,
+    entryType: numericId(q.tableId),
     sourceId: q.sourceId,
     entryId: q.dataId,
     parentId: q.parentId,
@@ -204,17 +215,13 @@ export const dataApi = {
     return { tables: tables.length, rows: tables.reduce((sum, table) => sum + table.rowCount, 0), chars: 0, review: 0 }
   },
   // 结果视图行编辑（Phase 4.4）
-  rowUpdate: (tableId: string, dataId: string, values: Record<string, unknown>) => {
-    // 方案 §1.1：真实载荷是大写 {ENTRY_ID, ENTRY_TYPE_ID, K1...}（不是 entryTypeId/entryId）；
-    // 真实联调实测：ENTRY_ID/ENTRY_TYPE_ID 后端按 Integer 反序列化，字符串会 500，同 rowAdd 需数值化。
-    const entryId = Number.isFinite(Number(dataId)) ? Number(dataId) : dataId
-    const entryTypeId = Number.isFinite(Number(tableId)) ? Number(tableId) : tableId
-    return request<{ message?: string; row?: DataRow }>('data/rowUpdate', { tableId, dataId, values }, {
+  rowUpdate: (tableId: string, dataId: string, values: Record<string, unknown>) =>
+    // 方案 §1.1：真实载荷是大写 {ENTRY_ID, ENTRY_TYPE_ID, K1...}（不是 entryTypeId/entryId）；数值化见 numericId。
+    request<{ message?: string; row?: DataRow }>('data/rowUpdate', { tableId, dataId, values }, {
       method: 'POST',
       httpEndpoint: 'entry/entryUpdate',
-      httpParams: { ...values, ENTRY_TYPE_ID: entryTypeId, ENTRY_ID: entryId },
-    })
-  },
+      httpParams: { ...values, ENTRY_TYPE_ID: numericId(tableId), ENTRY_ID: numericId(dataId) },
+    }),
   // 数据详情：entryId + type（非 entryTypeId），返回行 + showItems + subs
   rowDetail: async (tableId: string, dataId: string): Promise<EntryDetail | null> => {
     const result = await request<unknown>('data/rowDetail', { tableId, dataId }, {
@@ -295,14 +302,9 @@ export const dataApi = {
   rowAdd: (tableId: string, values: Record<string, unknown>) => {
     const body: Record<string, unknown> = { ENTRY_TYPE_ID: tableId, ...values }
     Object.keys(body).forEach((key) => { if (body[key] == null) delete body[key] })
-    // 真实联调实测：ENTRY_TYPE_ID/SOURCE_ID/CONFIG_ID 后端按 Integer 反序列化，
-    // 传字符串会 500（class java.lang.String cannot be cast to class java.lang.Integer）；
-    // 动态列(K1..)值类型不定，不做数值转换，只转这三个系统指针字段。
+    // ENTRY_TYPE_ID/SOURCE_ID/CONFIG_ID 数值化（见 numericId）；动态列(K1..)值类型不定，不转换。
     for (const key of ['ENTRY_TYPE_ID', 'SOURCE_ID', 'CONFIG_ID']) {
-      const value = body[key]
-      if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) {
-        body[key] = Number(value)
-      }
+      if (key in body) body[key] = numericId(body[key])
     }
     return request<{ message?: string }>('data/rowAdd', { tableId, values }, {
       method: 'POST',

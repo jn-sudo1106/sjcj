@@ -46,10 +46,10 @@ describe('实体数据 API 旧平台 HTTP 契约', () => {
     // 旧后端读 more；sql 键不应出现，否则筛选被静默忽略
     expect(payload.more).toBe("CREATE_DT > CURDATE()")
     expect(payload).not.toHaveProperty('sql')
-    // 前端字段名改名口径
+    // 前端字段名改名口径；entryType 数值化（真实联调实测：POST JSON 接口按 Integer 反序列化）
     expect(payload.page).toBe(2)
     expect(payload.limit).toBe(40)
-    expect(payload.entryType).toBe('1042')
+    expect(payload.entryType).toBe(1042)
     expect(payload.entryId).toBe('9')
   })
 
@@ -300,7 +300,7 @@ describe('数据详情 / 统计 / 后续 / 删除 API 旧平台 HTTP 契约（E 
     const body = JSON.parse(String(init.body)) as Record<string, unknown>
     expect(body).not.toHaveProperty('data')
     expect(body.summaryFields).toBe('K2, K3')
-    expect(body.entryType).toBe('1042')
+    expect(body.entryType).toBe(1042)
     expect(rows).toEqual([{ K2: '161725', CNT: 42 }])
   })
 
@@ -369,7 +369,8 @@ describe('数据详情 / 统计 / 后续 / 删除 API 旧平台 HTTP 契约（E 
     const body = JSON.parse(String(init.body)) as Record<string, unknown>
     expect(body.flag).toBe('-1')
     expect(body.ids).toEqual(['1', '2'])
-    expect(body.entryType).toBe('1042')
+    // 真实联调实测（2026-07-31）：entryType 不数值化时后端报"业务类型不存在"，需数值化
+    expect(body.entryType).toBe(1042)
   })
 
   it('rowAdd 用 POST JSON 平铺体，null 字段提交前删除；ENTRY_TYPE_ID/SOURCE_ID/CONFIG_ID 数值化', async () => {
