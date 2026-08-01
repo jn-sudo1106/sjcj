@@ -1,4 +1,4 @@
-import type { Paged, Source, SourceCategory, Step, Ack, CredentialRef, SourceLog, TaskInst, NodeRunStat } from '../types'
+import type { Paged, Source, SourceCategory, SourceOption, Step, Ack, CredentialRef, SourceLog, TaskInst, NodeRunStat } from '../types'
 
 // 样例源数据 — 取自源列表实测记录的字段结构，扩展为多分类 / 多状态以支撑列表、筛选、分类树。
 // siteId（0707 优化·Phase2）：按分类归拢进 mock/sites.ts 的演示网站，供网站—子源模型联调；导出供 sites.ts 聚合读取。
@@ -210,6 +210,14 @@ export function mockSourcePaged(params?: Record<string, unknown>): Paged<Source>
 
 export function mockSourceDetail(params?: Record<string, unknown>): Source | null {
   return SOURCES.find((s) => s.sourceId === String(params?.sourceId)) ?? null
+}
+
+// 数据表页选源下拉：同站源列表；sourceId 不存在或未落站时兜底返回全量
+export function mockSourceSame(params?: Record<string, unknown>): SourceOption[] {
+  const siteId = SOURCES.find((s) => s.sourceId === String(params?.sourceId))?.siteId
+  return SOURCES
+    .filter((s) => !siteId || s.siteId === siteId)
+    .map((s) => ({ sourceId: s.sourceId, name: s.name }))
 }
 
 export function mockSourceCategories(): SourceCategory[] {

@@ -4,13 +4,18 @@ import type {
   ConfigParamBinding,
   DataRow,
   DataTableMeta,
+  EntryDetail,
+  EntryDetailItem,
   EntryField,
   EntryType,
+  EntryTypeGroup,
   Paged,
   Param,
   ParamInput,
   ParamKind,
   ParamValue,
+  SummaryRow,
+  TaskInst,
 } from './types'
 
 type LegacyRecord = Record<string, unknown>
@@ -293,6 +298,9 @@ export function entryTypeToLegacy(input: EntryType): LegacyRecord {
       width: field.width,
       clearRule: field.preprocess,
       uniqueKey: field.dedup,
+      // 真实联调实测：CfgEntryItem.required 后端按 Integer 反序列化，传布尔值会报
+      // MismatchedInputException（同 §数据表页 numericId 那批坑，uniqueKey 这个字段倒是布尔能过）
+      required: field.required ? 1 : 0,
       seq: field.seq ?? index + 1,
     })),
   }
@@ -304,19 +312,43 @@ export function dataTableFromLegacy(input: unknown): DataTableMeta {
     tableId: entry.tableId,
     tableName: entry.tableName,
     rowCount: entry.rowCount ?? 0,
+    state: entry.state,
+    keyField: entry.keyField,
     fields: entry.fields.map((field) => ({
       prop: field.prop,
       type: field.type,
       desc: field.desc,
+      columnName: field.columnName,
+      required: field.required,
+      width: field.width,
     })),
+  }
+}
+
+/**
+ * 选表分组：{main,list1,list2,list3} → main 是默认选中的 entryTypeId（标量，非列表），
+ * list1/list2/list3 才是三个真正的表分组；list3 按旧前端行为反转。
+ */
+export function entryTypeGroupFromLegacy(input: unknown): EntryTypeGroup {
+  const record = asRecord(input)
+  const bucket = (key: string) => (Array.isArray(record[key]) ? (record[key] as unknown[]) : [])
+  return {
+    main: record.main == null ? undefined : String(record.main),
+    list1: bucket('list1').map(entryTypeFromLegacy),
+    list2: bucket('list2').map(entryTypeFromLegacy),
+    list3: bucket('list3').map(entryTypeFromLegacy).reverse(),
   }
 }
 
 export function dataRowFromLegacy(input: unknown): DataRow {
   const record = asRecord(input)
   if ('dataId' in record && 'acceptState' in record) return record as unknown as DataRow
+  // 旧 entryDataPaged 行的系统物理列（见「单表数据查看迁移」方案 §1.2）；
+  // K0 是原始 JSON ID 也属系统列，K1 起才是动态值列。TASK_ID/RUN_ID 为 mock 遗留，随 T1c 移除。
   const systemKeys = new Set([
-    'ENTRY_ID', 'SOURCE_ID', 'CONFIG_ID', 'TASK_ID', 'RUN_ID', 'PARENT_ID', 'STATE', 'NEXT_FLAG',
+    'ENTRY_ID', 'SOURCE_ID', 'CONFIG_ID', 'ENTRY_TYPE_ID', 'DETAIL_ID', 'PARENT_ID', 'CATEGORY_ID',
+    'STATE', 'NEXT_FLAG', 'CREATE_DT', 'UPDATE_DT', 'K0', 'SEQ', 'TIMES', 'FILE_ID',
+    'TASK_ID', 'RUN_ID',
   ])
   const values = Object.fromEntries(Object.entries(record).filter(([key]) => !systemKeys.has(key)))
   const titleValue = record.TITLE ?? record.title ?? record.NAME ?? record.name
@@ -325,19 +357,76 @@ export function dataRowFromLegacy(input: unknown): DataRow {
     .slice(0, 3)
     .map(([key, value]) => `${key}: ${String(value ?? '')}`)
     .join(' · ')
+  const str = (value: unknown) => (value == null ? undefined : String(value))
   return {
     dataId: String(record.ENTRY_ID ?? record.entryId ?? ''),
+    sourceId: String(record.SOURCE_ID ?? record.sourceId ?? ''),
+    configId: str(record.CONFIG_ID),
+    detailId: str(record.DETAIL_ID),
+    parentId: str(record.PARENT_ID),
+    categoryId: str(record.CATEGORY_ID),
+    state: str(record.STATE),
+    nextFlag: str(record.NEXT_FLAG),
+    createDt: str(record.CREATE_DT),
+    updateDt: str(record.UPDATE_DT),
+    k0: str(record.K0),
+    seq: str(record.SEQ),
+    times: str(record.TIMES),
+    fileId: str(record.FILE_ID),
+    values,
+    // 以下为 mock 遗留字段，随 DataView UI 重做一并移除（与该重做同批次，避免 UI 编译中断）
     title: String(titleValue ?? record.ENTRY_ID ?? ''),
     summary,
-    sourceId: String(record.SOURCE_ID ?? record.sourceId ?? ''),
-    configId: record.CONFIG_ID == null ? undefined : String(record.CONFIG_ID),
-    taskId: record.TASK_ID == null ? undefined : String(record.TASK_ID),
-    runId: record.RUN_ID == null ? undefined : String(record.RUN_ID),
-    parentId: record.PARENT_ID == null ? undefined : String(record.PARENT_ID),
-    state: record.STATE == null ? undefined : String(record.STATE),
+    taskId: str(record.TASK_ID),
+    runId: str(record.RUN_ID),
     acceptState: 'accepted',
     fileType: '-',
     parseState: 'none',
-    values,
+  }
+}
+
+/** 数据详情：entryDetail 返回行字段 + showItems（编辑表单反填用）+ subs（子列表） */
+export function entryDetailFromLegacy(input: unknown): EntryDetail {
+  const record = asRecord(input)
+  const { showItems, subs, ...rowFields } = record
+  return {
+    row: dataRowFromLegacy(rowFields),
+    showItems: Array.isArray(showItems) ? showItems.map(showItemFromLegacy) : [],
+    subs: Array.isArray(subs) ? subs.map(dataRowFromLegacy) : undefined,
+  }
+}
+
+function showItemFromLegacy(input: unknown): EntryDetailItem {
+  const record = asRecord(input)
+  return {
+    itemId: record.itemId == null ? undefined : String(record.itemId),
+    columnName: String(record.columnName ?? ''),
+    itemName: record.itemName == null ? undefined : String(record.itemName),
+    value: record.value,
+  }
+}
+
+/** 统计行：动态分组列原样保留，CNT 规整为 number */
+export function summaryRowFromLegacy(input: unknown): SummaryRow {
+  const record = asRecord(input)
+  return { ...record, CNT: Number(record.CNT ?? 0) }
+}
+
+// 字段名对照旧 column.config.js TASK_LIST.base：actionName→typeName、nodeCode→node、
+// taskTopic→topic、updateDt→updatedAt（方案 §1.6-5 TaskInst）。
+export function taskInstFromLegacy(input: unknown): TaskInst {
+  const record = asRecord(input)
+  return {
+    taskId: String(record.taskId ?? ''),
+    state: String(record.state ?? '') as TaskInst['state'],
+    typeName: record.actionName == null ? '' : String(record.actionName),
+    taskName: record.taskName == null ? '' : String(record.taskName),
+    sourceId: String(record.sourceId ?? ''),
+    configId: record.configId == null ? undefined : String(record.configId),
+    node: record.nodeCode == null ? undefined : String(record.nodeCode),
+    topic: record.taskTopic == null ? undefined : String(record.taskTopic),
+    parentId: record.parentId == null ? undefined : String(record.parentId),
+    updatedAt: record.updateDt == null ? '' : String(record.updateDt),
+    taskSpecId: record.taskSpecId == null ? undefined : String(record.taskSpecId),
   }
 }

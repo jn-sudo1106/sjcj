@@ -233,8 +233,10 @@ for (const source of RESULT_SOURCE_TABLES) {
   ]
 }
 
-export function mockDataTables(): DataTableMeta[] {
-  return TABLES
+// 演示环境无源分组数据：main（默认选中表）留空，全部表放进 list1（UI 上对应「main」分组标签），
+// list2/list3 留空（entryTypeGroupFromLegacy 按此形状消化）
+export function mockEntryTypesGroup(): { main?: string; list1: DataTableMeta[]; list2: []; list3: [] } {
+  return { list1: TABLES, list2: [], list3: [] }
 }
 export function mockDataRows(params?: Record<string, unknown>): DataRow[] {
   return ROWS[String(params?.tableId ?? 't-notice')] ?? []

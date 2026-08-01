@@ -1,6 +1,7 @@
 import {
   mockSourcePaged,
   mockSourceDetail,
+  mockSourceSame,
   mockSourceCategories,
   mockSourceStats,
   mockSourceSteps,
@@ -31,7 +32,7 @@ import {
   mockRuleOrchestrationSave,
 } from './rules'
 import { mockDatasets, mockMeasures, mockMetricStats } from './metrics'
-import { mockDataTables, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate } from './dataview'
+import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate } from './dataview'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats } from './monitor'
 import { mockWorkbenchSummary } from './workbench'
@@ -63,6 +64,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   // 采集资产 · 源（M2）
   'source/sourcePaged': mockSourcePaged,
   'source/sourceDetail': mockSourceDetail,
+  'source/sourceSame': mockSourceSame,
   'source/categoryTree': mockSourceCategories,
   'source/stats': mockSourceStats,
   'item/next/nextConfigPaged': mockSourceSteps,
@@ -155,7 +157,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'measure/stats': mockMetricStats,
 
   // 数据查看（M4）
-  'data/tablePaged': mockDataTables,
+  'data/entryTypesGroup': mockEntryTypesGroup,
   'data/rowPaged': mockDataRows,
   'data/stats': mockDataStats,
   'data/rowQueryPaged': mockDataRowQueryPaged,

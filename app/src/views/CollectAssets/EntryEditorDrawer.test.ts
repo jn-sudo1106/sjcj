@@ -16,6 +16,7 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
 
   afterEach(() => {
     wrapper?.unmount()
+    vi.restoreAllMocks()
   })
 
   async function mountEditor(entry: EntryType | null) {
@@ -71,14 +72,33 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
       ],
     }
     await mountEditor(entry)
-    const dedupBoxes = body().findAll('td input[type="checkbox"]')
-    await dedupBoxes[0].setValue(true)
-    await dedupBoxes[1].setValue(true)
+    // 去重是每行第一个 checkbox（第二个是必填），按行取避免被列数变化影响
+    const rows = body().findAll('tbody tr')
+    await rows[0].find('td input[type="checkbox"]').setValue(true)
+    await rows[1].find('td input[type="checkbox"]').setValue(true)
     await flushPromises()
 
     const keyFieldField = body().findAll('.rc-field').find((f) => f.text().includes('去重列'))!
     const keyFieldInput = keyFieldField.find('input')
     expect((keyFieldInput.element as HTMLInputElement).value).toBe('K1,K2')
+  })
+
+  it('必填勾选：勾了才会作为 true 传给 entrySave（数据表页动态列按 required 过滤，需要能勾）', async () => {
+    const entry: EntryType = {
+      tableId: 't1', tableName: 'tb_a', name: '表A', fields: [
+        { prop: 'a', desc: 'A', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
+      ],
+    }
+    const saveSpy = vi.spyOn(entryApi, 'entrySave').mockResolvedValue({ message: 'ok', tableId: 't1' })
+    await mountEditor(entry)
+    // 每行第二个 checkbox 是必填（第一个是去重）
+    await body().findAll('tbody tr')[0].findAll('td input[type="checkbox"]')[1].setValue(true)
+    await body().findAll('button').find((b) => b.text() === '保存')!.trigger('click')
+    await flushPromises()
+
+    expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({
+      fields: [expect.objectContaining({ prop: 'a', required: true })],
+    }))
   })
 
   it('提交前校验：itemCode 重复时报错且不调用 entrySave', async () => {

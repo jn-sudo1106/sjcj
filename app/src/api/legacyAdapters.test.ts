@@ -3,11 +3,15 @@ import {
   configFromLegacy,
   configToLegacy,
   dataRowFromLegacy,
+  dataTableFromLegacy,
+  entryDetailFromLegacy,
   entryTypeFromLegacy,
+  entryTypeGroupFromLegacy,
   entryTypeToLegacy,
   paramFromLegacy,
   paramPageFromLegacy,
   paramToLegacy,
+  summaryRowFromLegacy,
 } from './legacyAdapters'
 
 describe('旧平台参数模型适配', () => {
@@ -187,6 +191,19 @@ describe('旧平台实体表模型适配', () => {
     ])
   })
 
+  it('entryTypeToLegacy：required 数值化为 0/1（真实联调实测，后端 CfgEntryItem.required 按 Integer 反序列化，传布尔会 500）', () => {
+    const legacy = entryTypeToLegacy({
+      tableId: 't1', tableName: 'tb_a', fields: [
+        { prop: 'a', desc: 'A', type: 'string', required: true, columnName: 'K1', seq: 1 },
+        { prop: 'b', desc: 'B', type: 'string', required: false, columnName: 'K2', seq: 2 },
+      ],
+    })
+    expect(legacy.items).toMatchObject([
+      { itemCode: 'a', required: 1 },
+      { itemCode: 'b', required: 0 },
+    ])
+  })
+
   it('entryTypeToLegacy 新建（无 tableId）时不带 entryTypeId', () => {
     const legacy = entryTypeToLegacy({ tableId: '', tableName: 'tb_new', fields: [] })
     expect(legacy.entryTypeId).toBeUndefined()
@@ -223,5 +240,95 @@ describe('旧平台实体数据行适配', () => {
     const row = dataRowFromLegacy({ ENTRY_ID: 'only-id' })
     expect(row.title).toBe('only-id')
     expect(row.values).not.toHaveProperty('ENTRY_ID')
+  })
+
+  it('dataRowFromLegacy：K0 属系统列（原始 JSON ID），K1 起才是动态值列', () => {
+    const row = dataRowFromLegacy({ ENTRY_ID: '1', K0: 'json-771', K1: '正文', K10: '尾列' })
+    expect(row.k0).toBe('json-771')
+    expect(row.values).toEqual({ K1: '正文', K10: '尾列' })
+  })
+
+  it('dataRowFromLegacy：CATEGORY_ID 缺失时 categoryId 为空（父 ID 列据此判不可点）', () => {
+    const row = dataRowFromLegacy({ ENTRY_ID: '1', PARENT_ID: '412' })
+    expect(row.parentId).toBe('412')
+    expect(row.categoryId).toBeUndefined()
+  })
+
+  it('dataRowFromLegacy：时间列与后续标识不落进 values', () => {
+    const row = dataRowFromLegacy({
+      ENTRY_ID: '1', NEXT_FLAG: '-1', DETAIL_ID: 'TK-1',
+      CREATE_DT: '2026-07-18 09:12:00', UPDATE_DT: '2026-07-18 10:00:00', K1: '正文',
+    })
+    expect(row).toMatchObject({
+      nextFlag: '-1', detailId: 'TK-1',
+      createDt: '2026-07-18 09:12:00', updateDt: '2026-07-18 10:00:00',
+    })
+    expect(row.values).toEqual({ K1: '正文' })
+  })
+})
+
+describe('选表分组与动态表结构适配（E 包 T1b）', () => {
+  it('entryTypeGroupFromLegacy：main 是默认选中表 ID（标量），list1/list2/list3 才是分组列表；list3 按旧前端行为反转', () => {
+    const group = entryTypeGroupFromLegacy({
+      main: '2',
+      list1: [{ entryTypeId: '2', tableName: 't2' }],
+      list2: [],
+      list3: [{ entryTypeId: '3', tableName: 't3' }, { entryTypeId: '4', tableName: 't4' }],
+    })
+    expect(group.main).toBe('2')
+    expect(group.list1).toEqual([expect.objectContaining({ tableId: '2' })])
+    expect(group.list2).toEqual([])
+    // 源顺序 3,4 → 反转后 4,3
+    expect(group.list3.map((e) => e.tableId)).toEqual(['4', '3'])
+  })
+
+  it('entryTypeGroupFromLegacy：分组键缺失时按空数组处理，main 缺失时为 undefined，不抛错', () => {
+    const group = entryTypeGroupFromLegacy({ main: '1' })
+    expect(group.list1).toEqual([])
+    expect(group.list2).toEqual([])
+    expect(group.list3).toEqual([])
+
+    const empty = entryTypeGroupFromLegacy({})
+    expect(empty.main).toBeUndefined()
+  })
+
+  it('dataTableFromLegacy：透传 columnName/required/width（动态列渲染依据）', () => {
+    const table = dataTableFromLegacy({
+      entryTypeId: '1042',
+      tableName: 'sense_data.TB_NEWS',
+      items: [
+        { itemCode: 'title', itemName: '标题', columnName: 'K1', dataType: 'string', width: 140, required: true },
+        { itemCode: 'raw', itemName: '原始', columnName: 'K9', dataType: 'string', width: 80, required: false },
+      ],
+    })
+    expect(table.fields).toEqual([
+      expect.objectContaining({ prop: 'title', columnName: 'K1', required: true, width: 140 }),
+      expect.objectContaining({ prop: 'raw', columnName: 'K9', required: false, width: 80 }),
+    ])
+  })
+})
+
+describe('数据详情 / 统计行适配（E 包 T1c）', () => {
+  it('entryDetailFromLegacy：showItems/subs 从行字段中摘出，不落进 row.values', () => {
+    const detail = entryDetailFromLegacy({
+      ENTRY_ID: '88231', SOURCE_ID: '161725', K1: '正文',
+      showItems: [{ itemId: '1', columnName: 'K1', itemName: '正文', value: '正文' }],
+      subs: [{ ENTRY_ID: '88232', SOURCE_ID: '161725' }],
+    })
+    expect(detail.row).toMatchObject({ dataId: '88231', sourceId: '161725' })
+    expect(detail.row.values).toEqual({ K1: '正文' })
+    expect(detail.showItems).toEqual([{ itemId: '1', columnName: 'K1', itemName: '正文', value: '正文' }])
+    expect(detail.subs).toEqual([expect.objectContaining({ dataId: '88232' })])
+  })
+
+  it('entryDetailFromLegacy：subs 缺失时为 undefined，不是空数组', () => {
+    const detail = entryDetailFromLegacy({ ENTRY_ID: '1', showItems: [] })
+    expect(detail.subs).toBeUndefined()
+    expect(detail.showItems).toEqual([])
+  })
+
+  it('summaryRowFromLegacy：动态分组列原样保留，CNT 规整为 number', () => {
+    const row = summaryRowFromLegacy({ K2: '161725', K3: '2026-07-18', CNT: '42' })
+    expect(row).toEqual({ K2: '161725', K3: '2026-07-18', CNT: 42 })
   })
 })

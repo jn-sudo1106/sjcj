@@ -19,7 +19,7 @@ export interface RequestOptions {
 }
 
 const MODE: AdapterMode = (import.meta.env.VITE_API_MODE as AdapterMode) || 'mock'
-const BASE_URL: string = import.meta.env.VITE_API_BASE || '/api/v1/'
+export const BASE_URL: string = import.meta.env.VITE_API_BASE || '/api/v1/'
 const FAIL_RATE = Number(import.meta.env.VITE_API_FAIL_RATE) || 0
 // 测试环境固定关闭（vitest.config.ts 的 test.env），避免既有测试意外撞上真实发起的 fetch
 const DISABLE_LIVE_ENDPOINTS = import.meta.env.VITE_API_DISABLE_LIVE_ENDPOINTS === '1'
@@ -42,7 +42,7 @@ export function isDanger(endpoint: string): boolean {
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-function appendQuery(url: string, params?: Record<string, unknown>): string {
+export function appendQuery(url: string, params?: Record<string, unknown>): string {
   if (!params) return url
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => {
@@ -99,7 +99,10 @@ export async function request<T>(
   options: RequestOptions = {},
 ): Promise<T> {
   try {
-    if (options.mode === 'mock' || (MODE === 'mock' && (DISABLE_LIVE_ENDPOINTS || !LIVE_ENDPOINTS.has(endpoint)))) {
+    // 按端点上线判断优先看 httpEndpoint（真实路径）：data 域调用惯例是 request(逻辑键, ..., {httpEndpoint: 真实路径})，
+    // 逻辑键（如 data/rowQueryPaged）从不出现在 endpoints.ts，只看 endpoint 会导致 live 标记对整个 data 域永远失效。
+    const liveCheckKey = options.httpEndpoint ?? endpoint
+    if (options.mode === 'mock' || (MODE === 'mock' && (DISABLE_LIVE_ENDPOINTS || !LIVE_ENDPOINTS.has(liveCheckKey)))) {
       await delay(120)
       if (FAIL_RATE > 0 && Math.random() < FAIL_RATE) {
         throw new Error(`mock 随机失败注入: ${endpoint}`)
@@ -140,7 +143,15 @@ export async function request<T>(
       triggerSessionExpired()
       throw new Error('登录失效,请重新登录')
     }
-    if (!res.ok) throw new Error(`请求失败 ${res.status}`)
+    if (!res.ok) {
+      // 尝试解出后端业务 message（4xx/5xx 通常仍带 code/msg envelope）
+      let detail = ''
+      try {
+        const body = await res.clone().json() as Record<string, unknown>
+        if (body && typeof body === 'object' && body.msg) detail = `: ${String(body.msg)}`
+      } catch { /* 无 body 或非 JSON */ }
+      throw new Error(`请求失败 ${res.status}${detail}`)
+    }
     return normalizeHttpPayload(httpEndpoint, await res.json()) as T
   } catch (e) {
     throw new ApiError(endpoint, e)

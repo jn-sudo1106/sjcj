@@ -542,6 +542,7 @@ export const useFlowStore = defineStore('flow', () => {
     const orphans = new Set(g.branches.flatMap((b) => b.chain))
     for (const orphan of orphans) delete configs[orphan]
     branchGroups.splice(i, 1)
+    nodeStore.touch()
   }
 
   function detachFromBranches(nodeId: string) {
@@ -573,6 +574,8 @@ export const useFlowStore = defineStore('flow', () => {
       if (first) select(first)
       else selectedId.value = ''
     }
+    // 清理运行时态，避免删除正在运行/已完成的节点后 runtime.nodeStates 残留脏数据
+    useRuntimeStore().clearNodeStates([id])
     applyParamSourceUrlToFirstCollectNode(main.value, configs, sourceCfg.value)
     // 清理运行时态，避免删除正在运行/已完成的节点后 runtime.nodeStates 残留脏数据
     useRuntimeStore().clearNodeStates([id])
@@ -811,9 +814,15 @@ export const useFlowStore = defineStore('flow', () => {
 
   function applyTemplate(template: FlowTemplate): { retained: number; cleared: number } | null {
     const result = sourceStore.applyTemplate(template, configs)
-    if (!result) return null
+    if (!result) {
+      console.warn('[flow] applyTemplate skipped: sourceStore.applyTemplate returned null', { template })
+      return null
+    }
     const source = sourceCfg.value ?? sourceCtx.value
-    if (!source) return null
+    if (!source) {
+      console.warn('[flow] applyTemplate skipped: no source bound', { template })
+      return null
+    }
     const composed = composeTemplateFlow(template, source, source.nodeBindings ?? {})
     applyParamSourceUrlToFirstCollectNode(composed.main, composed.configs, source)
     load(composed)

@@ -34,7 +34,6 @@ const PRIMARY_ACTIONS: Record<string, string> = {
   collect: '新建采集',
   rules: '发布校验',
   metrics: '口径校验',
-  data: '新建查询视图',
   runs: '导出记录',
   tools: '导出报表',
 }
@@ -46,7 +45,8 @@ const pageActions: Record<string, string[]> = {
   collect: ['新建采集'],
   rules: ['新建规则组', '导入规则', '发布校验'],
   metrics: ['新建指标', '批量维护', '口径校验'],
-  data: ['导出结果', '新建查询视图'],
+  // 数据表页动作全部收在页内工具条（检索/工具条/批量条），顶栏不重复放
+  data: [],
   runs: ['导出记录'],
   tools: ['刷新', '导出报表'],
 }
