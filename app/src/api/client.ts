@@ -93,16 +93,23 @@ function fallback(endpoint: string): unknown {
   return null
 }
 
+/** 是否走 mock（与 request 内判定一致，供流式等非 JSON 客户端复用） */
+export function usesMockAdapter(endpoint: string, options: RequestOptions = {}): boolean {
+  // live 判定键：
+  // - data 域：httpEndpoint 为相对真实路径（如 entry/entryDataPaged），优先用它（逻辑键不在清单里）
+  // - vrule：httpEndpoint 为根相对绝对路径（/vrule/...），不在清单里，改用逻辑键（rule/orchestration*）
+  const httpKey = options.httpEndpoint
+  const liveCheckKey = httpKey && !httpKey.startsWith('/') ? httpKey : endpoint
+  return options.mode === 'mock' || (MODE === 'mock' && (DISABLE_LIVE_ENDPOINTS || !LIVE_ENDPOINTS.has(liveCheckKey)))
+}
+
 export async function request<T>(
   endpoint: string,
   params?: Record<string, unknown>,
   options: RequestOptions = {},
 ): Promise<T> {
   try {
-    // 按端点上线判断优先看 httpEndpoint（真实路径）：data 域调用惯例是 request(逻辑键, ..., {httpEndpoint: 真实路径})，
-    // 逻辑键（如 data/rowQueryPaged）从不出现在 endpoints.ts，只看 endpoint 会导致 live 标记对整个 data 域永远失效。
-    const liveCheckKey = options.httpEndpoint ?? endpoint
-    if (options.mode === 'mock' || (MODE === 'mock' && (DISABLE_LIVE_ENDPOINTS || !LIVE_ENDPOINTS.has(liveCheckKey)))) {
+    if (usesMockAdapter(endpoint, options)) {
       await delay(120)
       if (FAIL_RATE > 0 && Math.random() < FAIL_RATE) {
         throw new Error(`mock 随机失败注入: ${endpoint}`)
@@ -122,7 +129,10 @@ export async function request<T>(
     const headers: Record<string, string> = {}
     const token = readStoredToken()
     if (token) headers[ACCESS_TOKEN_HEADER] = token
-    const url = paramsIn === 'query' ? appendQuery(BASE_URL + httpEndpoint, httpParams) : BASE_URL + httpEndpoint
+    // 以 `/` 开头的 httpEndpoint 视为站点根相对路径（如 /vrule/...），不再拼 BASE_URL（/api/v1/）。
+    // 规则编排 Sprint 4 直连旧 vrule 网关时用这个口径；采集中心同域端点仍走相对 path。
+    const resolvedPath = httpEndpoint.startsWith('/') ? httpEndpoint : BASE_URL + httpEndpoint
+    const url = paramsIn === 'query' ? appendQuery(resolvedPath, httpParams) : resolvedPath
     const controller = new AbortController()
     const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs ?? 20_000)
     if (paramsIn === 'body') headers['Content-Type'] = 'application/json'

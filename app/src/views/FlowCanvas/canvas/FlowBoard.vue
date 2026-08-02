@@ -475,7 +475,7 @@ watch(
 .rc-node-library-toggle { position: absolute; z-index: 31; top: 108px; left: 12px; width: 30px; height: 30px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; color: var(--rc-primary); font-size: 21px; font-weight: 400; line-height: 1; cursor: pointer; transition: border-color .12s, background .12s, color .12s; }
 .rc-node-library-toggle:hover, .rc-node-library-toggle.active { border-color: #93c5fd; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 
-.rc-flow { position: relative; width: 640px; margin: 28px auto; }
+.rc-flow { position: relative; width: 640px; margin: 56px auto 28px 24px; }
 .rc-flow svg { position: absolute; inset: 0; pointer-events: none; }
 .rc-edge { fill: none; stroke: #cbd5e1; stroke-width: 1.6; }
 .rc-edge.rule { stroke: #60a5fa; stroke-dasharray: 5 4; }

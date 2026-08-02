@@ -1,8 +1,9 @@
-import { request, BASE_URL, appendQuery } from './client'
+import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError } from './client'
+import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readLoginUsername, readStoredToken, triggerSessionExpired } from './auth'
 import type {
   Paged, Source, Site, SourceCategory, SourceOption, Step, Ack, PageQuery,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
-  RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestResult,
+  RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestRequest, RuleOrchestrationTestResult,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   TaskInstQuery,
   Config, ConfigActionLog, ConfigParamBinding, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
@@ -26,6 +27,17 @@ import {
   paramFromLegacy,
   paramPageFromLegacy,
   paramToLegacy,
+  isVruleNumericRuleId,
+  parseRuleOrchestrationStreamText,
+  pickRuleIdFromComposeList,
+  ruleOrchestrationGenerateFormBody,
+  ruleOrchestrationGenerateFromLegacy,
+  ruleOrchestrationSaveMetaFromLegacy,
+  ruleOrchestrationSaveMetaToLegacy,
+  ruleOrchestrationSaveScriptFromLegacy,
+  ruleOrchestrationSaveScriptToLegacy,
+  ruleOrchestrationTestFromLegacy,
+  ruleOrchestrationTestToLegacy,
   summaryRowFromLegacy,
   taskInstFromLegacy,
 } from './legacyAdapters'
@@ -105,6 +117,73 @@ export const siteApi = {
     assetMockRequest<Paged<TaskInst>>('site/queueTaskPaged', q),
 }
 
+/** 保存后 list/compose 回查数字 ruleId（旧页 F() 刷列表的等价） */
+async function fetchNewestComposeRuleId(cfg: RuleOrchestration): Promise<string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const token = readStoredToken()
+  if (token) headers[ACCESS_TOKEN_HEADER] = token
+  const res = await fetch('/vrule/ai/dashscope/list/compose', {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify({ pageNum: 1, pageSize: 30, ruleType: '数据处理' }),
+  })
+  if (!res.ok) throw new Error(`回查规则列表失败 ${res.status}`)
+  const payload = (await res.json()) as { records?: unknown }
+  const ruleId = pickRuleIdFromComposeList(payload.records, cfg)
+  if (!ruleId) throw new Error('业务规则已保存，但未能解析 ruleId，请确认规则名称后重试')
+  return ruleId
+}
+
+/** 规则编排生成脚本：流式读 /vrule/ai/dashscope/stream（对齐旧页 Rt，非 JSON） */
+async function fetchRuleOrchestrationStream(ruleCfg: RuleOrchestration): Promise<RuleOrchestrationGenerateResult> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/x-www-form-urlencoded',
+  }
+  const token = readStoredToken()
+  if (token) headers[ACCESS_TOKEN_HEADER] = token
+  const controller = new AbortController()
+  // 生成可能较慢，放宽到 120s（旧页无超时，仅 AbortController 取消）
+  const timeout = window.setTimeout(() => controller.abort(), 120_000)
+  let res: Response
+  try {
+    res = await fetch('/vrule/ai/dashscope/stream', {
+      method: 'POST',
+      credentials: 'include',
+      headers,
+      body: ruleOrchestrationGenerateFormBody(ruleCfg),
+      signal: controller.signal,
+    })
+  } finally {
+    window.clearTimeout(timeout)
+  }
+  if (isSessionExpiredRedirect(res)) {
+    triggerSessionExpired()
+    throw new Error('登录失效,请重新登录')
+  }
+  if (!res.ok) {
+    let detail = ''
+    try {
+      detail = (await res.text()).trim()
+    } catch { /* ignore */ }
+    throw new Error(detail ? `请求失败 ${res.status}: ${detail.slice(0, 200)}` : `请求失败 ${res.status}`)
+  }
+  let text = ''
+  if (res.body && typeof res.body.getReader === 'function') {
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      text += decoder.decode(value, { stream: true })
+    }
+    text += decoder.decode()
+  } else {
+    text = await res.text()
+  }
+  return parseRuleOrchestrationStreamText(text)
+}
+
 // 规则资产（M3）
 export const ruleApi = {
   ruleGroups: () => request<RuleGroup[]>('rule/groupTree'),
@@ -118,12 +197,77 @@ export const ruleApi = {
   testCases: (ruleId: string) => request<RuleTestCase[]>('rule/testCasePaged', { ruleId }),
   evaluate: (expr: string, context: string) => request<EvalResult>('rule/evaluate', { expr, context }),
   orchestrationPaged: (p?: PageQuery) => request<Paged<RuleOrchestrationItem>>('rule/orchestrationPaged', p),
-  orchestrationGenerate: (describe: string, systemPrompt?: string) =>
-    request<RuleOrchestrationGenerateResult>('rule/orchestrationGenerate', { describe, systemPrompt }),
-  orchestrationTest: (script: string, params: Record<string, unknown>) =>
-    request<RuleOrchestrationTestResult>('rule/orchestrationTest', { script, params }),
-  orchestrationSave: (ruleCfg: RuleOrchestration) =>
-    request<RuleOrchestrationSaveResult>('rule/orchestrationSave', { ruleCfg }),
+  // 路径 A：保存业务规则元数据换 ruleId。
+  // mock 收 { cfg, userCode }；live → POST /vrule/api/custom-compose/save。
+  // 旧页保存成功不读响应体、只刷列表；响应无 id 时再 GET list/compose 按名称回查。
+  orchestrationSaveMeta: async (cfg: RuleOrchestration, userCode?: string) => {
+    const resolvedUser = (userCode || readLoginUsername() || 'admin').trim()
+    const endpoint = 'rule/orchestrationSaveMeta'
+    const opts = {
+      method: 'POST' as const,
+      httpEndpoint: '/vrule/api/custom-compose/save',
+      httpParams: ruleOrchestrationSaveMetaToLegacy(cfg, resolvedUser),
+    }
+    if (usesMockAdapter(endpoint, opts)) {
+      const result = await request<unknown>(endpoint, { cfg, userCode: resolvedUser }, { mode: 'mock' })
+      return ruleOrchestrationSaveMetaFromLegacy(result, cfg)
+    }
+    try {
+      const result = await request<unknown>(endpoint, { cfg, userCode: resolvedUser }, opts)
+      try {
+        return ruleOrchestrationSaveMetaFromLegacy(result, cfg)
+      } catch {
+        // 响应无 ruleId：对齐旧页刷列表回查
+        const ruleId = await fetchNewestComposeRuleId(cfg)
+        return { ruleId, message: '业务规则保存成功' }
+      }
+    } catch (e) {
+      throw e instanceof ApiError ? e : new ApiError(endpoint, e)
+    }
+  },
+  // 传整个 ruleCfg：mock 按 inputFields/outputFields 生成多参骨架。
+  // 真实：POST /vrule/ai/dashscope/stream（form-urlencoded + 流式文本，见 rule-orchestration 页 Rt）。
+  // 注意：saveMeta 未 live 时拿到的是 orch-* mock id，真实 stream 会 400——此时回退 mock 生成。
+  orchestrationGenerate: async (ruleCfg: RuleOrchestration) => {
+    const endpoint = 'rule/orchestrationGenerate'
+    const useMock = usesMockAdapter(endpoint) || !isVruleNumericRuleId(ruleCfg.ruleId)
+    if (useMock) {
+      const result = await request<unknown>(endpoint, { ruleCfg }, { mode: 'mock' })
+      if (result && typeof result === 'object' && 'script' in (result as object)) {
+        return result as RuleOrchestrationGenerateResult
+      }
+      return ruleOrchestrationGenerateFromLegacy(result)
+    }
+    try {
+      return await fetchRuleOrchestrationStream(ruleCfg)
+    } catch (e) {
+      throw e instanceof ApiError ? e : new ApiError(endpoint, e)
+    }
+  },
+  // req → 旧体 { rule_id, params, timeout }；响应 result 数组 → outputs（0801 §4.4）
+  orchestrationTest: async (req: RuleOrchestrationTestRequest) => {
+    const result = await request<unknown>('rule/orchestrationTest', { ...req }, {
+      method: 'POST',
+      httpEndpoint: '/vrule/fastapi/execute/dynamic',
+      httpParams: ruleOrchestrationTestToLegacy(req),
+    })
+    // mock 已是新体；http 为旧体。用 success/outputs 判别，避免双重包装
+    if (result && typeof result === 'object' && 'outputs' in (result as object)) {
+      return result as RuleOrchestrationTestResult
+    }
+    return ruleOrchestrationTestFromLegacy(result)
+  },
+  orchestrationSave: async (ruleCfg: RuleOrchestration) => {
+    const result = await request<unknown>('rule/orchestrationSave', { ruleCfg }, {
+      method: 'POST',
+      httpEndpoint: '/vrule/ai/dashscope/script/edit',
+      httpParams: ruleOrchestrationSaveScriptToLegacy(ruleCfg),
+    })
+    if (result && typeof result === 'object' && 'scriptPath' in (result as object) && 'ruleId' in (result as object)) {
+      return result as RuleOrchestrationSaveResult
+    }
+    return ruleOrchestrationSaveScriptFromLegacy(result, ruleCfg)
+  },
 
   // 写类 / 重操作：mock 仅回执，UI 二次确认占位
   publishRule: (ruleId: string) => request<Ack>('rule/publish', { ruleId }),

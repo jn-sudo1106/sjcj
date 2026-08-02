@@ -57,11 +57,11 @@ describe('规则编排 mock（0707 Phase 9）', () => {
 
     const tested = mockRuleOrchestrationTest({
       script: generated.script,
-      params: { content: '某地产公司发布重大事项公告' },
+      rows: [{ content: '某地产公司发布重大事项公告' }],
     })
     expect(tested).toMatchObject({
       success: true,
-      result: { tags: ['房地产'] },
+      outputs: [{ tags: ['房地产'] }],
     })
 
     const saved = mockRuleOrchestrationSave({
@@ -72,5 +72,35 @@ describe('规则编排 mock（0707 Phase 9）', () => {
     })
     expect(saved.ruleId).toMatch(/^orch-/)
     expect(saved.scriptPath).toBe(generated.scriptPath)
+  })
+
+  // 走 RuleTableFieldBinder 选定字段的路径（0801 方案）：不能永远吐旧「地产」演示脚本/tags 出参，
+  // 否则任何自定义规则测出来的结果都是一坨看不懂的 {tags: []}（浏览器验证中实测发现的问题）。
+  it('按 inputFields/outputFields 生成骨架与出参，不再固定回退地产演示', () => {
+    const generated = mockRuleOrchestrationGenerate({
+      ruleCfg: { describe: '根据商品ID生成商品名称', inputFields: ['sku_id'], outputFields: ['sku_name'] },
+    })
+    expect(generated.script).toContain('def main(sku_id)')
+    expect(generated.script).toContain('"sku_name"')
+
+    const tested = mockRuleOrchestrationTest({
+      script: generated.script,
+      inputFields: ['sku_id'],
+      outputFields: ['sku_name'],
+      rows: [{ sku_id: 'SKU-A' }],
+    })
+    expect(tested.success).toBe(true)
+    // sku_name 不在入参里，透传不到，回退占位值而不是空对象/undefined
+    expect(tested.outputs).toEqual([{ sku_name: 'demo-sku_name' }])
+  })
+
+  it('出参字段与入参字段同名时直接透传该值', () => {
+    const tested = mockRuleOrchestrationTest({
+      script: 'def main(sku_id):\n    return {"sku_id": sku_id}',
+      inputFields: ['sku_id'],
+      outputFields: ['sku_id'],
+      rows: [{ sku_id: 'SKU-A' }],
+    })
+    expect(tested.outputs).toEqual([{ sku_id: 'SKU-A' }])
   })
 })

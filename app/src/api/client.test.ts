@@ -174,4 +174,18 @@ describe('按端点上线：全局仍 mock 时，live 端点照样走真实 HTTP
 
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  it('vrule 绝对路径 httpEndpoint 时 live 以逻辑键为准（/vrule/... 不在清单）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: { id: 1 } }))
+    const { request } = await import('./client')
+
+    await request('rule/orchestrationSaveMeta', {}, {
+      method: 'POST',
+      httpEndpoint: '/vrule/api/custom-compose/save',
+      httpParams: { state: 1 },
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0][0]).toBe('/vrule/api/custom-compose/save')
+  })
 })

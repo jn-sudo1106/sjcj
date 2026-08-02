@@ -15,6 +15,15 @@ export const LOGIN_USERNAME_KEY = 'loginUsername'
 // 旧 Vue.ls.set(ACCESS_TOKEN, token, 7 天)：7 天只是本地键的过期时间，不代表服务端会话时长
 export const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
+/** 当前登录用户名（sessionStorage）；vrule userCode 优先用它，缺省回退 admin */
+export function readLoginUsername(): string {
+  try {
+    return (sessionStorage.getItem(LOGIN_USERNAME_KEY) || '').trim()
+  } catch {
+    return ''
+  }
+}
+
 // 旧包裹层：业务失败是 HTTP 200 + code !== '0'，拦截器 reject(res.msg)（纯字符串）。
 // 这里用 AuthError 承载同一个 msg：调用方取 e.message 即旧代码里的 err。
 export class AuthError extends Error {

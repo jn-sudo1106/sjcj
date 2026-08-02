@@ -575,6 +575,47 @@ describe('规则编排配置（0707 Phase 9）', () => {
   })
 })
 
+// 0801 方案 §9.1/§9.2：规则处理节点走独立发布门禁，不套用其他数据节点「缺少输出表」的通用检查
+// （规则节点默认输出表=输入表，NodeConfig.outputTable 留空是正常状态）。
+describe('validateFlow：规则处理节点发布门禁（0801 方案 §9.1）', () => {
+  let f: ReturnType<typeof useFlowStore>
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    f = useFlowStore()
+    f.newFlow('standard')
+  })
+
+  it('未保存业务规则（无 ruleId）：报「尚未保存业务规则」，不报「缺少输出表」', () => {
+    const errs = f.validateFlow()
+    expect(errs).toContain('「规则引擎处理」尚未保存业务规则')
+    expect(errs.some((e) => e.includes('规则引擎处理') && e.includes('缺少输出表'))).toBe(false)
+  })
+
+  it('有 ruleId 但字段/脚本不全：分别报缺入参、缺出参、未生成脚本', () => {
+    f.patchRuleConfig('rule', { mode: 'ref', ruleId: 'orch-1', inputFields: [], outputFields: [], script: '' })
+    const errs = f.validateFlow()
+    expect(errs).toContain('「规则引擎处理」缺少入参字段')
+    expect(errs).toContain('「规则引擎处理」缺少出参字段')
+    expect(errs).toContain('「规则引擎处理」尚未生成规则脚本')
+    expect(errs).not.toContain('「规则引擎处理」尚未保存业务规则')
+  })
+
+  it('ruleId + 入参 + 出参 + 脚本齐全：不报任何规则相关错误', () => {
+    f.patchRuleConfig('rule', {
+      mode: 'ref', ruleId: 'orch-1', inputFields: ['sku_id'], outputFields: ['sku_name'],
+      script: 'def main(sku_id):\n    return {"sku_name": sku_id}',
+    })
+    const errs = f.validateFlow()
+    expect(errs.some((e) => e.includes('规则引擎处理'))).toBe(false)
+  })
+
+  it('规则节点已停用：跳过校验', () => {
+    f.toggleDisabled('rule')
+    const errs = f.validateFlow()
+    expect(errs.some((e) => e.includes('规则引擎处理'))).toBe(false)
+  })
+})
+
 describe('分支段（0707 Phase6）+ 节点进入条件兼容加载', () => {
   let f: ReturnType<typeof useFlowStore>
   beforeEach(() => {

@@ -67,7 +67,11 @@ export interface EvalResult {
   error?: string
 }
 
-/** 规则编排列表项（规则引擎 rule-orchestration） */
+// 规则编排字段与旧 vrule 平台字段名不同（见 0801 方案 §4.2 实测），
+// 差异一律在 legacyAdapters 里转换，本文件与业务组件只用下面这套语义命名。
+export type RuleDataSource = 'dp-news' | 'dp-wwdata' | 'dp-swdata' | (string & {})
+
+/** 规则编排列表项（规则引擎 rule-orchestration，本期编排列表后置，暂无消费方） */
 export interface RuleOrchestrationItem {
   ruleId: string
   name: string
@@ -76,18 +80,64 @@ export interface RuleOrchestrationItem {
   scriptPath: string
   enabled: boolean
   createdAt: string
+  dataSource?: RuleDataSource
+  inputTable?: string
+  inputFields?: string[]
+  outputFields?: string[]
 }
 
 /** 规则处理节点绑定的编排配置 */
 export interface RuleOrchestration {
+  /** ref=查看已保存的编排；new=新建中（尚未保存元数据或未切到 ref） */
   mode: 'ref' | 'new'
   ruleId?: string
   name?: string
+  /** = 旧 nlDescribe；旧系统无独立「用户提示词」字段，本字段已兼任，不要另加 */
   describe: string
   systemPrompt?: string
+  /** 详情接口不返回脚本正文，需单独调读脚本端点后回填 */
   script?: string
+  /** = 旧 codePath */
   scriptPath?: string
+  /** = 旧 state（1 → true） */
   enabled?: boolean
+
+  /** 数据源；默认 dp-wwdata（采集库） */
+  dataSource?: RuleDataSource
+  /** 输入表物理表名（发给 vrule 用，= 旧 targetTable） */
+  inputTable?: string
+  /** 输入表 tableId（与采集中心 NodeConfig.inputTable 同步用，两者同源同编号空间） */
+  inputTableId?: string
+  /** 输出表物理表名；本期由采集中心侧存储，vrule 是否接收待确认（拍板 #5） */
+  outputTable?: string
+  outputTableId?: string
+  /** 入参字段编码（itemCode），>=1 */
+  inputFields?: string[]
+  /** 出参字段编码（itemCode），>=1，多选 */
+  outputFields?: string[]
+}
+
+/** 表选项：统一 vrule dbTableName / 采集中心 EntryType 两侧命名（两者 tableName 含义相反，见 §4.3） */
+export interface RuleTableOption {
+  tableId: string
+  /** 中文业务名 */
+  tableName: string
+  /** 物理表名，发给 vrule 用 */
+  dbTableName: string
+  /** 去重列，逗号分隔，如 "K1,K10" */
+  keyField?: string
+}
+
+/** 字段选项 */
+export interface RuleFieldOption {
+  itemCode: string
+  itemName: string
+  /** 物理列名 K1/K2…；测试取数回填入参只能靠它匹配（行数据里没有 itemCode） */
+  columnName?: string
+  dataType?: string
+  itemDesc?: string
+  /** < 0 为系统固定字段（ID/SOURCE_ID/UPDATE_DT/CREATE_DT），UI 默认折叠 */
+  seq?: number
 }
 
 export interface RuleOrchestrationGenerateResult {
@@ -95,13 +145,34 @@ export interface RuleOrchestrationGenerateResult {
   scriptPath: string
 }
 
-export interface RuleOrchestrationTestResult {
-  success: boolean
-  result?: Record<string, unknown>
-  error?: string
-  executionTime: number
+/** 测试执行请求。左栏单选（会议 20:51），故 rows 本期恒为 1 条；接口预留多条 */
+export interface RuleOrchestrationTestRequest {
+  ruleId?: string
+  script?: string
+  inputTable: string
+  inputFields: string[]
+  outputFields: string[]
+  rows: Array<Record<string, string>>
 }
 
+/** 一条输入可产出多条输出记录（实测：zb_value 与 zb_tb 同时有值 → 2 条），故为数组，非单对象 */
+export interface RuleOrchestrationTestResult {
+  success: boolean
+  outputs?: Array<Record<string, unknown>>
+  error?: string
+  /** 秒，= 旧 execution_time */
+  executionTime: number
+  /** 脚本指纹，= 旧 code_hash，可用于标记结果对应的脚本版本 */
+  codeHash?: string
+}
+
+/** 保存业务规则元数据（路径 A，对应旧 custom-compose/save）：换取 ruleId 供生成脚本使用 */
+export interface RuleOrchestrationSaveMetaResult {
+  ruleId: string
+  message?: string
+}
+
+/** 保存脚本（路径 B，对应旧 dashscope/script/edit） */
 export interface RuleOrchestrationSaveResult {
   ruleId: string
   scriptPath: string

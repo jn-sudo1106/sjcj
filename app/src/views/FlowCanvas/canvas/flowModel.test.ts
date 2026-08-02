@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyParamSourceUrlToFirstCollectNode, buildHorizontalLayout, iconFor, NODE_CONFIGS, normalizeNodeConfig, type NodeConfig } from './flowModel'
+import { applyParamSourceUrlToFirstCollectNode, buildHorizontalLayout, iconFor, isRuleNode, NODE_CONFIGS, normalizeNodeConfig, type NodeConfig } from './flowModel'
 import type { Source } from '@/api'
 
 describe('流程参数配置迁移', () => {
@@ -116,5 +116,18 @@ describe('applyParamSourceUrlToFirstCollectNode（0721 会议 T5）', () => {
       kind: 'param', urlTemplate: 'http://x', paramRefs: [],
     }))
     expect(c1.collectCfg?.urlParamRefs).toEqual([])
+  })
+})
+
+// 0801 方案 §6.1：共享给 nodeInspectorTabs（Tab 分流）与 ConfigTab（渲染分支）的规则节点判定
+describe('isRuleNode', () => {
+  it('标题含「规则」判定为规则节点', () => {
+    expect(isRuleNode({ title: '规则处理' } as NodeConfig)).toBe(true)
+  })
+  it('标题不含「规则」判定为非规则节点', () => {
+    expect(isRuleNode({ title: '网页抓取' } as NodeConfig)).toBe(false)
+  })
+  it('cfg 为 undefined 时判定为非规则节点', () => {
+    expect(isRuleNode(undefined)).toBe(false)
   })
 })

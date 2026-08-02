@@ -62,7 +62,8 @@ export function collectorCapabilityOf(cfg: NodeConfig): CollectorCapability | un
 }
 
 // ---------- 规则编排 ----------
-export const DEFAULT_RULE_SYSTEM_PROMPT = '生成 Python 规则脚本：入口为 def main(content)，返回 JSON 对象；只做文本判断，不访问外部网络或文件。'
+export const DEFAULT_RULE_SYSTEM_PROMPT =
+  '生成 Python 规则脚本：入口函数名为 main，参数为指定入参字段列表，返回包含指定出参字段的 JSON 对象；只做字段转换与判断，禁止访问未授权外部网络或本地文件。'
 
 export function makeDefaultRuleOrchestration(): RuleOrchestration {
   return {
@@ -72,6 +73,14 @@ export function makeDefaultRuleOrchestration(): RuleOrchestration {
     script: '',
     scriptPath: '',
     enabled: true,
+    // 表相关字段一律双值（物理表名 + tableId），见 0801 方案 §4.6；默认采集库
+    dataSource: 'dp-wwdata',
+    inputTable: '',
+    inputTableId: '',
+    outputTable: '',
+    outputTableId: '',
+    inputFields: [],
+    outputFields: [],
   }
 }
 
@@ -348,9 +357,9 @@ export const LIB_GROUPS: LibGroup[] = [
     ]
   },
   {
+    // 规则 Trace 不是独立节点类型（无执行器/配置），已从添加面板移除；历史 template=rule-trace 仍映射到 rule
     title: '规则类', items: [
       { template: 'rule', code: 'RULE', badge: '320', name: '规则处理', desc: '规则组、表达式、配置', pill: 'p1' as Pill },
-      { template: 'rule-trace', code: 'TRACE', badge: '325', name: '规则 Trace', desc: '命中、过滤、失败原因', pill: 'p1' as Pill },
     ]
   },
   {

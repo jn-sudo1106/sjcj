@@ -8,6 +8,7 @@ import type {
   RuleOrchestration,
   RuleOrchestrationGenerateResult,
   RuleOrchestrationItem,
+  RuleOrchestrationSaveMetaResult,
   RuleOrchestrationSaveResult,
   RuleOrchestrationTestResult,
 } from '../types'
@@ -337,6 +338,14 @@ function makeRuleScript(describe: string): string {
     return {"tags": [], "matched": bool(content)}`
 }
 
+// 按当前表字段绑定生成骨架：入参做形参，出参做返回 dict 的 key（同名入参直接透传，其余占位 None）。
+// 没有 outputFields 时回退旧「地产」单 content 演示脚本，保证已有测试与旧流程不受影响。
+function makeGenericRuleScript(inputFields: string[], outputFields: string[]): string {
+  const args = inputFields.length ? inputFields.join(', ') : 'content'
+  const body = outputFields.map((f) => `"${f}": ${inputFields.includes(f) ? f : 'None'}`).join(', ')
+  return `def main(${args}):\n    return {${body}}`
+}
+
 export function mockRuleOrchestrationPaged(params?: Record<string, unknown>): Paged<RuleOrchestrationItem> {
   const filtered = ORCHESTRATIONS.filter((item) => matchesOrchestration(item, params))
   const page = Number(params?.page ?? 1)
@@ -345,25 +354,45 @@ export function mockRuleOrchestrationPaged(params?: Record<string, unknown>): Pa
   return { total: filtered.length, list: filtered.slice(start, start + size) }
 }
 
+// 路径 A：保存业务规则元数据换取 ruleId（0801 方案 §5.2）。有 ruleId 时按 ruleId 更新
+// （对应「修改表字段」回改后重新保存），否则新分配一个，与 mockRuleOrchestrationSave 共用同一 id 序列。
+export function mockRuleOrchestrationSaveMeta(params?: Record<string, unknown>): RuleOrchestrationSaveMetaResult {
+  const cfg = ((params?.cfg ?? params) || {}) as RuleOrchestration
+  const ruleId = cfg.ruleId || `orch-${orchestrationSeq++}`
+  return { ruleId, message: '业务规则已保存' }
+}
+
 export function mockRuleOrchestrationGenerate(params?: Record<string, unknown>): RuleOrchestrationGenerateResult {
-  const describe = String(params?.describe ?? '').trim()
+  const cfg = ((params?.ruleCfg ?? params) || {}) as RuleOrchestration
+  const describe = String(cfg.describe ?? '').trim()
   const id = `orch-draft-${Date.now()}`
   return {
-    script: makeRuleScript(describe),
+    script: cfg.outputFields?.length ? makeGenericRuleScript(cfg.inputFields ?? [], cfg.outputFields) : makeRuleScript(describe),
     scriptPath: `/rules/generated/${id}.py`,
   }
 }
 
 export function mockRuleOrchestrationTest(params?: Record<string, unknown>): RuleOrchestrationTestResult {
   const script = String(params?.script ?? '').trim()
-  if (!script) return { success: false, error: '脚本为空', executionTime: 0 }
-  const rawParams = (params?.params ?? {}) as Record<string, unknown>
-  const content = String(rawParams.content ?? '')
+  if (!script) return { success: false, error: '脚本为空', outputs: [], executionTime: 0 }
+  // req.rows 恒为 1 条（左栏单选，会议 20:51）；outputs 建模为数组是因为一条输入可产出多条输出
+  // （实测规则 173：zb_value 与 zb_tb 同时有值时返回 2 条），演示规则仍是单条输出，数组长度为 1。
+  const rows = Array.isArray(params?.rows) ? (params.rows as Array<Record<string, unknown>>) : []
+  const row = rows[0] ?? {}
+  const outputFields = Array.isArray(params?.outputFields) ? (params.outputFields as string[]) : []
+  // 走 RuleTableFieldBinder 选定字段的规则：出参按 outputFields 回填，能从入参原样透传的就透传，
+  // 否则标个 demo- 前缀占位，让人一眼看出这是演示值，不是真实规则逻辑推导出来的。
+  if (outputFields.length) {
+    const outputs = Object.fromEntries(outputFields.map((f) => [f, row[f] ?? `demo-${f}`]))
+    return { success: true, outputs: [outputs], executionTime: 0.02 }
+  }
+  // 兼容旧「地产」单 content 字段演示脚本（0707 Phase 9 遗留，rules.test.ts 仍在测）
+  const content = String(row.content ?? '')
   const tags = /地产/.test(content) ? ['房地产'] : []
   return {
     success: true,
-    result: { tags },
-    executionTime: 18,
+    outputs: [{ tags }],
+    executionTime: 0.018,
   }
 }
 

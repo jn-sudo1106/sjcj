@@ -14,6 +14,7 @@ import {
   isDecision,
   isParallel,
   isDataNode,
+  isRuleNode,
   nodeOutputTable,
   effectiveInputTable,
   isFirstMainNode,
@@ -882,6 +883,17 @@ export const useFlowStore = defineStore('flow', () => {
         if (unbound.length) errs.push(`「${c.title}」URL 参数 ${unbound.join('、')} 尚未绑定到参数配置`)
         const unresolved = paramIds.filter((pid) => refs.includes(pid) && !c.collectCfg?.urlParamValues?.[pid])
         if (unresolved.length) errs.push(`「${c.title}」URL 参数 ${unresolved.join('、')} 还没有选定取值`)
+      } else if (!c.disabled && isRuleNode(c)) {
+        // 规则处理节点走独立校验（0801 方案 §9.1）：默认输出表=输入表，NodeConfig.outputTable
+        // 未显式指定时留空是正常状态，不能套用其他数据节点「缺少输出表」那条通用检查。
+        const ruleCfg = c.ruleCfg
+        if (!ruleCfg?.ruleId) {
+          errs.push(`「${c.title}」尚未保存业务规则`)
+        } else {
+          if (!ruleCfg.inputFields?.length) errs.push(`「${c.title}」缺少入参字段`)
+          if (!ruleCfg.outputFields?.length) errs.push(`「${c.title}」缺少出参字段`)
+          if (!ruleCfg.script?.trim()) errs.push(`「${c.title}」尚未生成规则脚本`)
+        }
       } else if (!c.disabled && isDataNode(c) && !c.outputTable) {
         errs.push(`「${c.title}」缺少输出表`)
       }

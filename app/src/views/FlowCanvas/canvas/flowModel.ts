@@ -382,6 +382,14 @@ export function decisionOrParallelKind(cfg: NodeConfig): 'decision' | 'parallel'
   return undefined
 }
 
+/**
+ * 规则处理节点判定（0801 方案 §6.1）：抽成共享函数供 nodeInspectorTabs（Tab 分流）与
+ * ConfigTab（渲染分支）共用同一口径，避免各自维护一份 /规则/ 正则漂移。
+ */
+export function isRuleNode(cfg?: NodeConfig): boolean {
+  return /规则/.test(cfg?.title ?? '')
+}
+
 // ---------- 杂项（与 seeds/layout 无强耦合，独立放在 types 文件） ----------
 /**
  * 参数源（0721 会议）：主链里排在最前面的采集节点，URL 强制取源的 urlTemplate（含 $PARAM$_id 占位符），

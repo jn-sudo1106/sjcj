@@ -384,7 +384,14 @@ onUnmounted(() => {
           :class="{ 'source-mode': !!flow.sourceCtx, expanded: ui.inspectorExpanded }"
           :style="{ '--insp-w': inspWidth }"
         >
-          <FlowBoard />
+          <FlowBoard v-if="!ui.inspectorExpanded" />
+          <button
+            v-else
+            type="button"
+            class="rc-canvas-collapsed"
+            title="点击恢复画布"
+            @click="ui.toggleInspectorExpanded()"
+          >» 画布已收起</button>
           <div
             v-if="!ui.inspectorExpanded"
             class="rc-insp-splitter"
@@ -413,8 +420,15 @@ onUnmounted(() => {
   align-items: stretch;
 }
 .rc-flow-shell.source-mode { grid-template-columns: minmax(480px, 1fr) 6px var(--insp-w, 480px); }
-/* 展开态：配置区约 2/3 视口宽，画布压缩为缩略列 */
-.rc-flow-shell.expanded { grid-template-columns: minmax(0, 1fr) 6px minmax(0, 60vw); }
+/* 展开态：画布收起为窄条（与左侧子源侧栏收起态一致），配置区占满剩余空间 */
+.rc-flow-shell.expanded { grid-template-columns: 36px 6px minmax(0, 1fr); }
+.rc-canvas-collapsed {
+  display: flex; align-items: center; justify-content: center;
+  writing-mode: vertical-rl; text-orientation: mixed;
+  width: 36px; padding: 0; border: 1px solid var(--rc-border); border-radius: var(--rc-radius);
+  background: #fff; color: var(--rc-muted); font-size: 12px; letter-spacing: 1px; cursor: pointer;
+}
+.rc-canvas-collapsed:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); border-color: #93c5fd; }
 
 .rc-insp-splitter { cursor: col-resize; position: relative; border-radius: 3px; }
 .rc-insp-splitter::before {

@@ -10,6 +10,8 @@ import taskTab from './FlowCanvas/inspector/tabs/TaskTab.vue?raw'
 import tableTab from './FlowCanvas/inspector/tabs/TableTab.vue?raw'
 import paramsTab from './FlowCanvas/inspector/tabs/ParamsTab.vue?raw'
 import configTab from './FlowCanvas/inspector/tabs/ConfigTab.vue?raw'
+import ruleOrchestrationTab from './FlowCanvas/inspector/tabs/RuleOrchestrationTab.vue?raw'
+import ruleTableFieldBinder from './FlowCanvas/inspector/RuleTableFieldBinder.vue?raw'
 import canvasHeader from './FlowCanvas/shared/CanvasHeader.vue?raw'
 import flowBoard from './FlowCanvas/canvas/FlowBoard.vue?raw'
 import sourceBasicForm from './FlowCanvas/SourceBasicForm.vue?raw'
@@ -22,9 +24,10 @@ import appModuleHead from '../layouts/AppModuleHead.vue?raw'
 import runtimeStore from '../stores/runtime.ts?raw'
 import ruleAssetsIndex from './RuleAssets/index.vue?raw'
 
-// NodeInspector 拆 tab 子组件后（P1-1 Step 4），各 tab 的文案分布在 4 个子文件里；
-// 这个常量把主壳 + 4 个 tab 拼起来，用于「整块 inspector 不该出现某字符串」的负向断言。
-const allInspectorSource = nodeInspector + taskTab + tableTab + paramsTab + configTab
+// NodeInspector 拆 tab 子组件后（P1-1 Step 4），各 tab 的文案分布在子文件里；
+// 这个常量把主壳 + 各 tab 拼起来，用于「整块 inspector 不该出现某字符串」的负向断言。
+// 0801 方案：规则编排面板从 ConfigTab 移入独立的 RuleOrchestrationTab（+ RuleTableFieldBinder）。
+const allInspectorSource = nodeInspector + taskTab + tableTab + paramsTab + configTab + ruleOrchestrationTab + ruleTableFieldBinder
 
 describe('最新方案 UI 入口收口', () => {
   it('字段级预处理/去重只在数据表编辑弹窗维护', () => {
@@ -267,14 +270,22 @@ describe('最新方案 UI 入口收口', () => {
     expect(canvasHeader).not.toContain('负责人 ${s.owner}')
   })
 
-  it('规则节点使用规则编排面板', () => {
-    expect(configTab).toContain('规则编排')
-    expect(configTab).toContain('引用已有规则')
-    expect(configTab).toContain('新建编排')
-    expect(configTab).toContain('规则需求描述')
-    expect(configTab).toContain('系统提示词')
-    expect(configTab).toContain('生成脚本')
-    expect(configTab).toContain('测试脚本')
-    expect(configTab).toContain('保存脚本')
+  it('规则节点使用独立的编排配置 Tab，节点配置 Tab 不再内嵌规则编排面板（0801 方案）', () => {
+    expect(ruleOrchestrationTab).toContain('规则编排')
+    expect(ruleOrchestrationTab).toContain('保存业务规则')
+    expect(ruleTableFieldBinder).toContain('数据源')
+    expect(ruleTableFieldBinder).toContain('规则名称')
+    expect(ruleTableFieldBinder).toContain('输入表')
+    expect(ruleTableFieldBinder).toContain('入参字段')
+    expect(ruleTableFieldBinder).toContain('出参字段')
+    // 编排列表后置，本期无「引用已有」分段；「指定用户」不渲染，「表名关键词」并入输入表下拉（会议 11:57/13:50）
+    expect(allInspectorSource).not.toContain('引用已有规则')
+    expect(allInspectorSource).not.toContain('新建编排')
+    expect(allInspectorSource).not.toContain('指定用户')
+    expect(allInspectorSource).not.toContain('表名关键词')
+    // 规则编排从 ConfigTab 移出（只留一句迁移注释指向新 Tab，不再渲染面板本体）；
+    // 任务配置保留独立 Tab（最新拍板调整），ConfigTab 不再内嵌 TaskTab
+    expect(configTab).not.toContain('class="ni-section-title">规则编排')
+    expect(configTab).not.toContain('<TaskTab')
   })
 })

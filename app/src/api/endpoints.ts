@@ -221,9 +221,12 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'rule/testCasePaged', desc: '测试集', impl: true },
   { path: 'rule/evaluate', desc: '函数测试器求值', impl: true },
   { path: 'rule/orchestrationPaged', desc: '规则编排列表', impl: true },
-  { path: 'rule/orchestrationGenerate', desc: '规则编排生成脚本', impl: true },
-  { path: 'rule/orchestrationTest', desc: '规则编排测试脚本', impl: true },
-  { path: 'rule/orchestrationSave', desc: '规则编排保存脚本', danger: true, impl: true },
+  // 0801 方案：逻辑键；http 时 ruleApi 经 adapter 打到 /vrule/...（见 ruleHttp.test.ts）
+  { path: 'rule/orchestrationSaveMeta', desc: '规则编排保存业务规则元数据 → /vrule/api/custom-compose/save', danger: true, impl: true, live: true },
+  // generate 已接真实流式（form-urlencoded）；需数字 ruleId（由 saveMeta live 提供）
+  { path: 'rule/orchestrationGenerate', desc: '规则编排生成脚本 → /vrule/ai/dashscope/stream', impl: true, live: true },
+  { path: 'rule/orchestrationTest', desc: '规则编排测试脚本 → /vrule/fastapi/execute/dynamic', impl: true },
+  { path: 'rule/orchestrationSave', desc: '规则编排保存脚本 → /vrule/ai/dashscope/script/edit', danger: true, impl: true, live: true },
   { path: 'rule/publish', desc: '发布规则', danger: true, impl: true },
   { path: 'rule/runBatchTest', desc: '跑批测', impl: true },
   // 运行记录 / 数据查看 / 监控（服务层聚合）

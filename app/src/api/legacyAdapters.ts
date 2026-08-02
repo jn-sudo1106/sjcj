@@ -14,6 +14,12 @@ import type {
   ParamInput,
   ParamKind,
   ParamValue,
+  RuleOrchestration,
+  RuleOrchestrationGenerateResult,
+  RuleOrchestrationSaveMetaResult,
+  RuleOrchestrationSaveResult,
+  RuleOrchestrationTestRequest,
+  RuleOrchestrationTestResult,
   SummaryRow,
   TaskInst,
 } from './types'
@@ -410,6 +416,215 @@ function showItemFromLegacy(input: unknown): EntryDetailItem {
 export function summaryRowFromLegacy(input: unknown): SummaryRow {
   const record = asRecord(input)
   return { ...record, CNT: Number(record.CNT ?? 0) }
+}
+
+// ---------------- 规则编排（vrule，0801 方案 §4.2/§4.4/§8，字段名 2026-08-01 线上实测核实）----------------
+// 注意：vrule 的 tableName 是中文业务名，采集中心 EntryType.tableName 是物理表名，两者含义相反；
+// 表/字段/取数本期不走 vrule 端点（改用 entryApi/dataApi，见 utils/flow/ruleOrchestration.ts），
+// 此处只处理详情/保存元数据/测试执行/保存脚本这四个仍需要 vrule 的动作。
+
+/** 详情 GET custom-compose/getComposeById 实测响应 → RuleOrchestration；mode 恒为 ref（已存在的编排） */
+export function ruleOrchestrationDetailFromLegacy(input: unknown): RuleOrchestration {
+  const record = asRecord(input)
+  const splitCsv = (v: unknown) => (v == null || v === '' ? [] : String(v).split(',').map((s) => s.trim()).filter(Boolean))
+  return {
+    mode: 'ref',
+    ruleId: record.id == null ? undefined : String(record.id),
+    name: record.ruleName == null ? undefined : String(record.ruleName),
+    describe: String(record.nlDescribe ?? ''),
+    systemPrompt: record.systemPrompt == null ? undefined : String(record.systemPrompt),
+    // 详情不返回脚本正文，需单独调读脚本端点后由调用方回填 script
+    scriptPath: record.codePath == null ? undefined : String(record.codePath),
+    enabled: Number(record.state ?? 0) === 1,
+    dataSource: record.dataSource == null ? undefined : String(record.dataSource),
+    inputTable: record.targetTable == null ? undefined : String(record.targetTable),
+    // outputTable：实测详情响应无此字段（拍板 #5），本期不从这里取
+    inputFields: splitCsv(record.inputFields),
+    outputFields: splitCsv(record.outputFields),
+  }
+}
+
+/**
+ * 保存业务规则元数据（路径 A，POST custom-compose/save）。userCode 不在 RuleOrchestration 模型里，
+ * 由调用方显式传入——本项目里"当前登录账号"从不接入业务字段，一律沿用现有系统的硬编码 'admin' 占位
+ * （如 FlowCanvas/index.vue、stores/runtime.ts 的 owner 字段，拍板已确认跟现有系统保持一致）。
+ * 注意：真实 vrule 后端的 userCode 语义是租户码（js1/papa/gf/user1/ht_poc/dev_zhonghe），
+ * 'admin' 不是其中之一——Sprint 4 真实联调时需要后端确认这个占位值能否直接收，还是需要换真实租户码。
+ */
+export function ruleOrchestrationSaveMetaToLegacy(cfg: RuleOrchestration, userCode: string): LegacyRecord {
+  return {
+    state: 1,
+    ruleType: '数据处理',
+    dataSource: cfg.dataSource,
+    userCode,
+    ruleName: cfg.name,
+    targetTable: cfg.inputTable,
+    outputTable: cfg.outputTable,
+    inputFields: (cfg.inputFields ?? []).join(','),
+    outputFields: (cfg.outputFields ?? []).join(','),
+  }
+}
+
+/** 测试执行请求 → 旧体 { rule_id, params, timeout }；左栏单选（会议 20:51），rows 恒为 1 条，取 rows[0] */
+export function ruleOrchestrationTestToLegacy(req: RuleOrchestrationTestRequest): LegacyRecord {
+  return {
+    rule_id: req.ruleId,
+    params: req.rows[0] ?? {},
+    timeout: 300,
+  }
+}
+
+/**
+ * 测试执行响应 { success, result, error, execution_time, code_hash } → RuleOrchestrationTestResult。
+ * result 实测为数组（一条输入可产出多条输出，见方案 §4.4），此处防御性地兼容非数组返回，
+ * 避免旧接口在极端场景吐单对象时前端渲染崩溃。
+ */
+export function ruleOrchestrationTestFromLegacy(input: unknown): RuleOrchestrationTestResult {
+  const record = asRecord(input)
+  const result = record.result
+  const outputs = Array.isArray(result) ? (result as Array<Record<string, unknown>>) : result ? [result as Record<string, unknown>] : []
+  return {
+    success: Boolean(record.success),
+    outputs,
+    error: record.error == null ? undefined : String(record.error),
+    executionTime: Number(record.execution_time ?? 0),
+    codeHash: record.code_hash == null ? undefined : String(record.code_hash),
+  }
+}
+
+/** 保存脚本（路径 B，POST dashscope/script/edit）：codeFileName/scriptCode 是旧接口固定字段名 */
+export function ruleOrchestrationSaveScriptToLegacy(cfg: Pick<RuleOrchestration, 'ruleId' | 'scriptPath' | 'script'>): LegacyRecord {
+  return {
+    ruleId: cfg.ruleId,
+    codeFileName: cfg.scriptPath,
+    scriptCode: cfg.script,
+  }
+}
+
+/**
+ * 保存元数据响应 → { ruleId, message }。
+ * 兼容：裸 id / { id } / { ruleId } / envelope 已被 client.normalizeHttpPayload 剥掉后的 data。
+ * 旧页保存成功后不读响应体、只刷列表——若响应无 id，调用方再走 list/compose 回查。
+ */
+export function ruleOrchestrationSaveMetaFromLegacy(
+  input: unknown,
+  fallback?: Pick<RuleOrchestration, 'ruleId'>,
+): RuleOrchestrationSaveMetaResult {
+  if (typeof input === 'string' || typeof input === 'number') {
+    return { ruleId: String(input), message: '业务规则已保存' }
+  }
+  const record = asRecord(input)
+  const ruleId = record.ruleId ?? record.id ?? fallback?.ruleId
+  if (ruleId == null || ruleId === '') throw new Error('保存业务规则未返回 ruleId')
+  return {
+    ruleId: String(ruleId),
+    message: record.message == null && record.msg == null ? undefined : String(record.message ?? record.msg),
+  }
+}
+
+/** 从 list/compose 的 records 里按规则名+输入表匹配最新 id（旧页保存后刷列表的等价逻辑） */
+export function pickRuleIdFromComposeList(
+  records: unknown,
+  cfg: Pick<RuleOrchestration, 'name' | 'inputTable'>,
+): string | undefined {
+  if (!Array.isArray(records) || !records.length) return undefined
+  const name = (cfg.name ?? '').trim()
+  const table = (cfg.inputTable ?? '').trim()
+  const rows = records.map(asRecord)
+  const byNameTable = rows.find(
+    (r) => String(r.ruleName ?? '').trim() === name && String(r.targetTable ?? '').trim() === table,
+  )
+  if (byNameTable?.id != null) return String(byNameTable.id)
+  const byName = rows.find((r) => String(r.ruleName ?? '').trim() === name)
+  if (byName?.id != null) return String(byName.id)
+  // 列表默认按创建时间倒序：取第一条数字 id 兜底（仅在名称匹配失败时）
+  return undefined
+}
+
+/** 保存脚本响应 → { ruleId, scriptPath, message }；缺省回退请求侧已有值 */
+export function ruleOrchestrationSaveScriptFromLegacy(
+  input: unknown,
+  cfg: Pick<RuleOrchestration, 'ruleId' | 'scriptPath'>,
+): RuleOrchestrationSaveResult {
+  if (input == null || (typeof input === 'object' && !Object.keys(asRecord(input)).length)) {
+    return {
+      ruleId: String(cfg.ruleId ?? ''),
+      scriptPath: String(cfg.scriptPath ?? ''),
+      message: '规则脚本已保存',
+    }
+  }
+  const record = asRecord(input)
+  return {
+    ruleId: String(record.ruleId ?? record.id ?? cfg.ruleId ?? ''),
+    scriptPath: String(record.scriptPath ?? record.codePath ?? record.codeFileName ?? cfg.scriptPath ?? ''),
+    message: record.message == null && record.msg == null ? undefined : String(record.message ?? record.msg),
+  }
+}
+
+/**
+ * 生成脚本 → 旧体 form 字段（vrule 线上实测，rule-orchestration 页 Rt）：
+ * POST /vrule/ai/dashscope/stream，Content-Type: application/x-www-form-urlencoded
+ * - query = 规则处理描述（本项目 describe）
+ * - userPrompt = 旧 UI「用户提示词 / 编辑系统提示词」同一字段（本项目 systemPrompt 映射过去）
+ * 实测：缺 userPrompt 时接口直接 400 Bad Request，故必须始终带上（空则用兜底模板）。
+ * 表字段不进此请求（已由路径 A saveMeta 落库，后端按 ruleId 取）。
+ */
+export const DEFAULT_GENERATE_USER_PROMPT =
+  '生成 Python 规则脚本：入口函数名为 main，参数为指定入参字段列表，返回包含指定出参字段的 JSON 对象；禁止输出非 Python 内容。'
+
+export function ruleOrchestrationGenerateToLegacy(cfg: RuleOrchestration): LegacyRecord {
+  return {
+    ruleId: String(cfg.ruleId ?? ''),
+    query: cfg.describe ?? '',
+    userPrompt: (cfg.systemPrompt ?? '').trim() || DEFAULT_GENERATE_USER_PROMPT,
+  }
+}
+
+/** 组装 form-urlencoded 正文（与旧 fetch body: URLSearchParams 一致） */
+export function ruleOrchestrationGenerateFormBody(cfg: RuleOrchestration): string {
+  const legacy = ruleOrchestrationGenerateToLegacy(cfg)
+  const params = new URLSearchParams()
+  params.set('ruleId', String(legacy.ruleId ?? ''))
+  params.set('query', String(legacy.query ?? ''))
+  params.set('userPrompt', String(legacy.userPrompt ?? ''))
+  return params.toString()
+}
+
+/** mock saveMeta 分配 orch-*；真实 vrule id 为纯数字。非数字 id 打真实 stream 会 400。 */
+export function isVruleNumericRuleId(ruleId?: string): boolean {
+  return !!ruleId && /^\d+$/.test(String(ruleId))
+}
+
+/** 流式正文末行 `# [系统消息] 当前文件已经保存至MinIO：{path}` → scriptPath（旧 _t()） */
+const STREAM_SCRIPT_PATH_MARKERS = [
+  '# [系统消息] 当前文件已经保存至MinIO：',
+]
+
+export function parseRuleOrchestrationStreamText(text: string): RuleOrchestrationGenerateResult {
+  const script = text
+  let scriptPath = ''
+  const lines = text.split('\n').filter(Boolean)
+  for (let i = lines.length - 1; i >= 0; i--) {
+    for (const marker of STREAM_SCRIPT_PATH_MARKERS) {
+      if (lines[i].startsWith(marker)) {
+        scriptPath = lines[i].slice(marker.length).trim()
+        break
+      }
+    }
+    if (scriptPath) break
+  }
+  if (!script.trim()) throw new Error('生成脚本未返回内容')
+  return { script, scriptPath }
+}
+
+/** 生成脚本响应 → { script, scriptPath }；兼容 code/codePath 别名（非流式兜底） */
+export function ruleOrchestrationGenerateFromLegacy(input: unknown): RuleOrchestrationGenerateResult {
+  if (typeof input === 'string') return parseRuleOrchestrationStreamText(input)
+  const record = asRecord(input)
+  const script = String(record.script ?? record.code ?? record.scriptCode ?? '')
+  const scriptPath = String(record.scriptPath ?? record.codePath ?? record.codeFileName ?? '')
+  if (!script) throw new Error('生成脚本未返回 script')
+  return { script, scriptPath }
 }
 
 // 字段名对照旧 column.config.js TASK_LIST.base：actionName→typeName、nodeCode→node、

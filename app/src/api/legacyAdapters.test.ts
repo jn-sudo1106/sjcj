@@ -11,6 +11,18 @@ import {
   paramFromLegacy,
   paramPageFromLegacy,
   paramToLegacy,
+  ruleOrchestrationDetailFromLegacy,
+  parseRuleOrchestrationStreamText,
+  pickRuleIdFromComposeList,
+  ruleOrchestrationGenerateFormBody,
+  ruleOrchestrationGenerateFromLegacy,
+  ruleOrchestrationGenerateToLegacy,
+  ruleOrchestrationSaveMetaFromLegacy,
+  ruleOrchestrationSaveMetaToLegacy,
+  ruleOrchestrationSaveScriptFromLegacy,
+  ruleOrchestrationSaveScriptToLegacy,
+  ruleOrchestrationTestFromLegacy,
+  ruleOrchestrationTestToLegacy,
   summaryRowFromLegacy,
 } from './legacyAdapters'
 
@@ -330,5 +342,192 @@ describe('数据详情 / 统计行适配（E 包 T1c）', () => {
   it('summaryRowFromLegacy：动态分组列原样保留，CNT 规整为 number', () => {
     const row = summaryRowFromLegacy({ K2: '161725', K3: '2026-07-18', CNT: '42' })
     expect(row).toEqual({ K2: '161725', K3: '2026-07-18', CNT: 42 })
+  })
+})
+
+// 以下 fixture 取自 vrule 线上实测（2026-08-01，getComposeById?id=173 / fastapi/execute/dynamic），
+// 详见 0801-规则编排迁入规则处理节点_开发设计方案.md §4.2/§4.4。
+describe('规则编排模型适配（vrule，0801 方案 §4）', () => {
+  const REAL_DETAIL_173 = {
+    id: 173,
+    ruleName: '邮箱附件转换指标数据规则',
+    nlDescribe: '【转换规则】…',
+    state: 1,
+    codePath: '/code01/20260721/1784639958876.py',
+    createTime: '2026-07-21 21:18:54',
+    systemPrompt: '## 核心逻辑…',
+    targetTable: 'sense_data.TB_email_XQ',
+    inputFields: 'date,time_period,excel_name,category1,category2,zb_name,zb_value,zb_tb,zb_unit,tb_unit,frequence,source,sheet_name,table_name',
+    outputFields: 'information_publish_date,end_date,indicator_code,indicator_data,information_source_title,insert_time_original',
+    ruleType: '数据处理',
+    dataSource: 'dp-wwdata',
+    userCode: 'gf',
+  }
+
+  it('ruleOrchestrationDetailFromLegacy：id→ruleId 转 string，state 1→enabled true，targetTable→inputTable', () => {
+    const cfg = ruleOrchestrationDetailFromLegacy(REAL_DETAIL_173)
+    expect(cfg.mode).toBe('ref')
+    expect(cfg.ruleId).toBe('173')
+    expect(cfg.name).toBe('邮箱附件转换指标数据规则')
+    expect(cfg.describe).toBe('【转换规则】…')
+    expect(cfg.enabled).toBe(true)
+    expect(cfg.scriptPath).toBe('/code01/20260721/1784639958876.py')
+    expect(cfg.inputTable).toBe('sense_data.TB_email_XQ')
+    expect(cfg.dataSource).toBe('dp-wwdata')
+    expect(cfg.inputFields).toHaveLength(14)
+    expect(cfg.inputFields).toContain('zb_value')
+    expect(cfg.outputFields).toEqual([
+      'information_publish_date', 'end_date', 'indicator_code',
+      'indicator_data', 'information_source_title', 'insert_time_original',
+    ])
+    // 详情响应无 outputTable / script 字段（拍板 #5 / 需单独读脚本），不应凭空捏造
+    expect(cfg.outputTable).toBeUndefined()
+    expect(cfg.script).toBeUndefined()
+  })
+
+  it('ruleOrchestrationDetailFromLegacy：state 非 1 时 enabled 为 false；逗号串为空时字段数组为空', () => {
+    const cfg = ruleOrchestrationDetailFromLegacy({ ...REAL_DETAIL_173, state: 0, inputFields: '', outputFields: undefined })
+    expect(cfg.enabled).toBe(false)
+    expect(cfg.inputFields).toEqual([])
+    expect(cfg.outputFields).toEqual([])
+  })
+
+  it('ruleOrchestrationSaveMetaToLegacy：字段数组 join 逗号串，userCode 由调用方显式传入', () => {
+    const body = ruleOrchestrationSaveMetaToLegacy(
+      {
+        mode: 'new',
+        name: '邮箱附件转换指标数据规则',
+        describe: '……',
+        dataSource: 'dp-wwdata',
+        inputTable: 'sense_data.TB_email_XQ',
+        outputTable: 'sense_data.TB_INDICATOR_DATA',
+        inputFields: ['date', 'zb_value'],
+        outputFields: ['end_date', 'indicator_data'],
+      },
+      'ht_poc',
+    )
+    expect(body).toEqual({
+      state: 1,
+      ruleType: '数据处理',
+      dataSource: 'dp-wwdata',
+      userCode: 'ht_poc',
+      ruleName: '邮箱附件转换指标数据规则',
+      targetTable: 'sense_data.TB_email_XQ',
+      outputTable: 'sense_data.TB_INDICATOR_DATA',
+      inputFields: 'date,zb_value',
+      outputFields: 'end_date,indicator_data',
+    })
+  })
+
+  it('ruleOrchestrationTestToLegacy：取 rows[0] 作为 params，timeout 固定 300', () => {
+    const body = ruleOrchestrationTestToLegacy({
+      ruleId: '173',
+      inputTable: 'sense_data.TB_email_XQ',
+      inputFields: ['date', 'zb_value'],
+      outputFields: ['end_date'],
+      rows: [{ date: '2025年', zb_value: '49.7' }],
+    })
+    expect(body).toEqual({ rule_id: '173', params: { date: '2025年', zb_value: '49.7' }, timeout: 300 })
+  })
+
+  it('ruleOrchestrationTestFromLegacy：一条输入两条输出（实测 173 · zb_value + zb_tb 同时有值）', () => {
+    const result = ruleOrchestrationTestFromLegacy({
+      success: true,
+      result: [
+        { information_publish_date: null, end_date: null, indicator_data: '49.700000' },
+        { information_publish_date: null, end_date: null, indicator_data: '23.630000' },
+      ],
+      error: null,
+      execution_time: 0.30226659774780273,
+      code_hash: 'eae9f5bd009626d4835e0c695d158dec',
+    })
+    expect(result.success).toBe(true)
+    expect(result.outputs).toHaveLength(2)
+    expect(result.outputs?.[0].indicator_data).toBe('49.700000')
+    expect(result.outputs?.[1].indicator_data).toBe('23.630000')
+    expect(result.executionTime).toBeCloseTo(0.302, 3)
+    expect(result.codeHash).toBe('eae9f5bd009626d4835e0c695d158dec')
+  })
+
+  it('ruleOrchestrationTestFromLegacy：result 缺失时 outputs 为空数组，不是 undefined', () => {
+    const result = ruleOrchestrationTestFromLegacy({ success: false, error: '脚本为空', execution_time: 0 })
+    expect(result.outputs).toEqual([])
+    expect(result.error).toBe('脚本为空')
+  })
+
+  it('ruleOrchestrationSaveScriptToLegacy：映射为旧接口固定字段名 codeFileName/scriptCode', () => {
+    const body = ruleOrchestrationSaveScriptToLegacy({
+      ruleId: '173',
+      scriptPath: '/code01/20260801/123.py',
+      script: 'def main(date):\n    return {}',
+    })
+    expect(body).toEqual({
+      ruleId: '173',
+      codeFileName: '/code01/20260801/123.py',
+      scriptCode: 'def main(date):\n    return {}',
+    })
+  })
+
+  it('ruleOrchestrationSaveMetaFromLegacy：兼容裸 id / {id} / {ruleId}', () => {
+    expect(ruleOrchestrationSaveMetaFromLegacy(173)).toEqual({ ruleId: '173', message: '业务规则已保存' })
+    expect(ruleOrchestrationSaveMetaFromLegacy({ id: 173, msg: 'ok' })).toEqual({ ruleId: '173', message: 'ok' })
+    expect(ruleOrchestrationSaveMetaFromLegacy({ ruleId: 'orch-1' }).ruleId).toBe('orch-1')
+  })
+
+  it('ruleOrchestrationSaveScriptFromLegacy：缺省回退请求侧 path', () => {
+    expect(ruleOrchestrationSaveScriptFromLegacy(null, { ruleId: '173', scriptPath: '/a.py' })).toEqual({
+      ruleId: '173',
+      scriptPath: '/a.py',
+      message: '规则脚本已保存',
+    })
+    expect(ruleOrchestrationSaveScriptFromLegacy({ codePath: '/b.py' }, { ruleId: '173', scriptPath: '/a.py' })).toEqual({
+      ruleId: '173',
+      scriptPath: '/b.py',
+      message: undefined,
+    })
+  })
+
+  it('ruleOrchestrationGenerateToLegacy：form 字段 ruleId/query/userPrompt（缺省用兜底，避免 400）', () => {
+    expect(
+      ruleOrchestrationGenerateToLegacy({
+        mode: 'ref',
+        ruleId: '173',
+        describe: '转换',
+        systemPrompt: 'sys',
+        inputFields: ['date', 'zb_value'],
+        outputFields: ['end_date'],
+      }),
+    ).toEqual({ ruleId: '173', query: '转换', userPrompt: 'sys' })
+    const emptyPrompt = ruleOrchestrationGenerateToLegacy({ mode: 'ref', ruleId: '173', describe: '转换', systemPrompt: '' })
+    expect(emptyPrompt.userPrompt).toBeTruthy()
+    expect(ruleOrchestrationGenerateFormBody({
+      mode: 'ref', ruleId: '173', describe: '转换', systemPrompt: 'a b',
+    })).toBe('ruleId=173&query=%E8%BD%AC%E6%8D%A2&userPrompt=a+b')
+    expect(ruleOrchestrationGenerateFromLegacy({ code: 'def main():\n  pass', codePath: '/x.py' })).toEqual({
+      script: 'def main():\n  pass',
+      scriptPath: '/x.py',
+    })
+  })
+
+  it('parseRuleOrchestrationStreamText：从 MinIO 系统消息行取 scriptPath', () => {
+    const text = [
+      'def main(date):',
+      '    return {"end_date": date}',
+      '# [系统消息] 当前文件已经保存至MinIO：/code01/20260801/123.py',
+    ].join('\n')
+    expect(parseRuleOrchestrationStreamText(text)).toEqual({
+      script: text,
+      scriptPath: '/code01/20260801/123.py',
+    })
+  })
+
+  it('pickRuleIdFromComposeList：按规则名+输入表匹配', () => {
+    const records = [
+      { id: 174, ruleName: '测试', targetTable: 'sense_data.TB_ENTRY' },
+      { id: 173, ruleName: '邮箱附件', targetTable: 'sense_data.TB_email_XQ' },
+    ]
+    expect(pickRuleIdFromComposeList(records, { name: '邮箱附件', inputTable: 'sense_data.TB_email_XQ' })).toBe('173')
+    expect(pickRuleIdFromComposeList(records, { name: '测试', inputTable: '' })).toBe('174')
+    expect(pickRuleIdFromComposeList(records, { name: '不存在', inputTable: 'x' })).toBeUndefined()
   })
 })

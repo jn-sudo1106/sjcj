@@ -1,21 +1,23 @@
 <script setup lang="ts">
 // 节点配置 Tab（P1-1 Step 4 · 从 NodeInspector.vue 拆出）。
-// 内容：决策/分头节点交给 BranchEditor；其余节点按 [基础 → 输入映射 → 规则编排 | 处理类参数] 分组纵向展示。
-// 行为与原内联实现 1:1；规则资产 ruleOrchestrations 经 useNodeInspectorAssets 注入（懒加载由主壳负责）。
-import { computed, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+// 内容：决策/分头 → BranchEditor；采集 → URL/运行设置；规则节点仅「节点名称 + 输入映射」
+// （规则编排已迁到「编排配置」Tab，见 RuleOrchestrationTab，0801 方案 §6.1）。
+import { computed, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
-  WEB_KIND_OPTIONS, decisionOrParallelKind, makeDefaultRuleOrchestration, collectorCapabilityOf,
+  WEB_KIND_OPTIONS, decisionOrParallelKind, collectorCapabilityOf,
   type CollectConfig, type NodeConfig, type TripleField, type WebKind,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import BranchEditor from '../BranchEditor.vue'
 import CollectorSettings, { type CollectorRuntimeSettings } from '../CollectorSettings.vue'
-import { ruleApi, type RuleOrchestration, type RuleOrchestrationTestResult } from '@/api'
-import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
+import ParamSourceEditor, { type ParamSourceModel } from '@/views/FlowCanvas/source/ParamSourceEditor.vue'
+
+// 参数子源（0802 重构·方案 A）：编辑入口从 ParamsTab 挪到 ConfigTab 源 URL 区域下方；
+// 只在「首节点 + 源是参数子源」时挂载，patchSource 内部 applyParamSourceUrlToFirstCollectNode
+// 会自动把首节点 cc.url / cc.urlParamRefs 同步好（见 flowModel.ts:401-408）。
 
 const flow = useFlowStore()
-const { ruleOrchestrations } = useNodeInspectorAssets()
 
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
 const id = computed<string>(() => flow.selectedId)
@@ -47,6 +49,61 @@ function onRuntimeSettingsChange(patch: Partial<CollectorRuntimeSettings>) {
 
 // 首采集节点判定：调度设置只在首采集节点展示（与原 NodeInspector 顶层逻辑一致）
 const isFirstCollectorNode = computed(() => !!cc.value && flow.main.find((nodeId: string) => !!flow.configs[nodeId]?.collectCfg) === id.value)
+
+// 参数子源：仅首节点 + 源是参数子源（source.kind === 'param'）时挂载 ParamSourceEditor
+const isParamSource = computed(() => flow.sourceCfg?.kind === 'param')
+const showParamSourceEditor = computed(() => isFirstCollectorNode.value && isParamSource.value)
+// ParamSourceModel 是整体替换（baseUrl/urlTemplate/refs 三件套），用 ref + watch 同步
+const paramSourceModel = ref<ParamSourceModel>({ baseUrl: '', urlTemplate: '', refs: [] })
+watch(
+  () => flow.sourceCfg && isParamSource.value,
+  (show) => {
+    if (!show) return
+    paramSourceModel.value = {
+      baseUrl: flow.sourceCfg?.baseUrl ?? '',
+      urlTemplate: flow.sourceCfg?.urlTemplate ?? '',
+      refs: (flow.sourceCfg?.paramRefs ?? []).map((ref) => ({ ...ref })),
+    }
+  },
+  { immediate: true },
+)
+// 用户在 ParamSourceEditor 内编辑：实时 patchSource → applyParamSourceUrlToFirstCollectNode
+// 把模板和 refs 同步到首节点 cc.url / cc.urlParamRefs（无须手写联动）
+let suppressPatch = false
+watch(
+  paramSourceModel,
+  (next) => {
+    if (suppressPatch) return
+    if (!flow.sourceCfg) return
+    flow.patchSource({
+      baseUrl: next.baseUrl,
+      urlTemplate: next.urlTemplate,
+      paramRefs: next.refs.map((ref) => ({ ...ref })),
+    })
+  },
+  { deep: true },
+)
+// 切节点 / 切源导致 sourceCfg 变时，重新同步 paramSourceModel
+watch(
+  () => `${flow.sourceCfg?.baseUrl ?? ''}|${flow.sourceCfg?.urlTemplate ?? ''}|${(flow.sourceCfg?.paramRefs ?? []).map((r) => `${r.paramId}:${r.group ?? ''}`).join(',')}`,
+  () => {
+    if (!isParamSource.value || !flow.sourceCfg) return
+    const next: ParamSourceModel = {
+      baseUrl: flow.sourceCfg.baseUrl ?? '',
+      urlTemplate: flow.sourceCfg.urlTemplate ?? '',
+      refs: (flow.sourceCfg.paramRefs ?? []).map((ref) => ({ ...ref })),
+    }
+    if (next.baseUrl === paramSourceModel.value.baseUrl
+      && next.urlTemplate === paramSourceModel.value.urlTemplate
+      && next.refs.length === paramSourceModel.value.refs.length
+      && next.refs.every((r, i) => r.paramId === paramSourceModel.value.refs[i]?.paramId && r.group === paramSourceModel.value.refs[i]?.group)) {
+      return
+    }
+    suppressPatch = true
+    paramSourceModel.value = next
+    suppressPatch = false
+  },
+)
 
 // 主链上一个节点：用于输入映射「来源」下拉建议
 const prevNode = computed<NodeConfig | undefined>(() => {
@@ -93,100 +150,8 @@ function onWebKind(e: Event) {
   flow.patchCollect(id.value, { webKind: (e.target as HTMLSelectElement).value as WebKind })
 }
 
-// ---- 规则处理节点：规则引擎编排面板（0707 Phase 9）----
-const rulePromptOpen = ref(false)
-const ruleGenerating = ref(false)
-const ruleTesting = ref(false)
-const ruleSaving = ref(false)
-const ruleTestContent = ref('某地产公司发布重大事项公告')
-const ruleTestResult = ref<RuleOrchestrationTestResult | null>(null)
-const ruleCfg = computed<RuleOrchestration>(() => ({ ...makeDefaultRuleOrchestration(), ...cfg.value?.ruleCfg }))
-const ruleTestResultText = computed(() =>
-  ruleTestResult.value ? JSON.stringify(ruleTestResult.value.result ?? { error: ruleTestResult.value.error }, null, 2) : '',
-)
-function patchRuleCfg(patch: Partial<RuleOrchestration>) {
-  flow.patchRuleConfig(id.value, patch)
-  ruleTestResult.value = null
-}
-function onRuleModeChange(mode: RuleOrchestration['mode']) {
-  patchRuleCfg({ mode })
-}
-function onRuleRefChange(e: Event) {
-  const ruleId = (e.target as HTMLSelectElement).value
-  const item = ruleOrchestrations.value.find((r) => r.ruleId === ruleId)
-  if (!item) return
-  patchRuleCfg({
-    mode: 'ref',
-    ruleId: item.ruleId,
-    name: item.name,
-    describe: item.describe,
-    script: item.script,
-    scriptPath: item.scriptPath,
-    enabled: item.enabled,
-  })
-}
-function onRuleDescribeChange(e: Event) {
-  patchRuleCfg({ describe: (e.target as HTMLTextAreaElement).value })
-}
-function onRulePromptChange(e: Event) {
-  patchRuleCfg({ systemPrompt: (e.target as HTMLTextAreaElement).value })
-}
-function onRuleTestContentChange(e: Event) {
-  ruleTestContent.value = (e.target as HTMLTextAreaElement).value
-}
-async function onGenerateRuleScript() {
-  if (!ruleCfg.value.describe.trim()) {
-    ElMessage.warning('请先填写规则需求描述')
-    return
-  }
-  ruleGenerating.value = true
-  try {
-    const res = await ruleApi.orchestrationGenerate(ruleCfg.value.describe, ruleCfg.value.systemPrompt)
-    patchRuleCfg({ mode: 'new', script: res.script, scriptPath: res.scriptPath })
-    ElMessage.success('脚本已生成')
-  } finally {
-    ruleGenerating.value = false
-  }
-}
-async function onTestRuleScript() {
-  if (!ruleCfg.value.script?.trim()) {
-    ElMessage.warning('请先生成或选择脚本')
-    return
-  }
-  ruleTesting.value = true
-  try {
-    const res = await ruleApi.orchestrationTest(ruleCfg.value.script, { content: ruleTestContent.value })
-    ruleTestResult.value = res
-    if (res.success) ElMessage.success('测试通过')
-    else ElMessage.warning(res.error || '测试未通过')
-  } finally {
-    ruleTesting.value = false
-  }
-}
-async function onSaveRuleScript() {
-  if (!ruleCfg.value.script?.trim()) {
-    ElMessage.warning('请先生成或选择脚本')
-    return
-  }
-  try {
-    await ElMessageBox.confirm('保存后将把当前规则编排绑定到该规则处理节点，是否继续？', '保存规则脚本', {
-      type: 'warning',
-      confirmButtonText: '确认保存',
-      cancelButtonText: '取消',
-    })
-  } catch {
-    return
-  }
-  ruleSaving.value = true
-  try {
-    const res = await ruleApi.orchestrationSave(ruleCfg.value)
-    patchRuleCfg({ mode: 'ref', ruleId: res.ruleId, scriptPath: res.scriptPath })
-    ruleOrchestrations.value = (await ruleApi.orchestrationPaged({ size: 100 })).list
-    ElMessage.success(res.message || '规则脚本已保存')
-  } finally {
-    ruleSaving.value = false
-  }
-}
+// 规则节点：输入映射默认折叠（跨节点传参本期不做，0801 §6.1；需要时可展开）
+const ruleInmapOpen = ref(false)
 </script>
 
 <template>
@@ -215,100 +180,48 @@ async function onSaveRuleScript() {
           </option>
         </select>
       </div>
+      <!-- 参数子源（0802 重构·方案 A）：编辑入口从 ParamsTab 挪到源 URL 区域下方；
+           仅首节点 + 源是参数子源时挂载，详见 patchSource 链路注释 -->
+      <template v-if="showParamSourceEditor">
+        <div class="ni-section-title">参数子源</div>
+        <div class="rc-section-divider">
+          <ParamSourceEditor v-model="paramSourceModel" />
+        </div>
+      </template>
       <!-- 运行设置（0711 R5）：代理/断点续爬/登录，节点级配置、默认折叠 -->
       <CollectorSettings :model-value="runtimeSettings" :capability="nodeCapability" :show-schedule="isFirstCollectorNode" @update:model-value="onRuntimeSettingsChange" />
     </template>
 
-    <!-- 输入映射：只保留给处理/规则/AI 等非采集节点，采集节点避免与源配置和表配置重复 -->
+    <!-- 输入映射：非采集节点；规则节点默认折叠（主路径在「编排配置」） -->
     <template v-if="!cc">
-      <div class="ni-section-title">输入映射</div>
-      <table class="rc-mini-table rc-edit-table">
-        <thead><tr><th>目标入参</th><th>来源</th><th>说明</th><th></th></tr></thead>
-        <tbody>
-          <tr v-for="(row, i) in cfg?.inmap ?? []" :key="i">
-            <td><input class="rc-cell-input" :value="row.name" @input="onTripleCell('inmap', i, 0, $event)" /></td>
-            <td><input class="rc-cell-input" list="ni-inmap-src" :value="row.from" @input="onTripleCell('inmap', i, 1, $event)" /></td>
-            <td><input class="rc-cell-input" :value="row.desc" @input="onTripleCell('inmap', i, 2, $event)" /></td>
-            <td><button class="rc-row-del" type="button" title="删除该行" @click="flow.removeTripleRow(id, 'inmap', i)">✕</button></td>
-          </tr>
-        </tbody>
-      </table>
-      <datalist id="ni-inmap-src">
-        <option v-for="opt in inmapSourceOptions" :key="opt" :value="opt" />
-      </datalist>
-      <button class="rc-btn" type="button" @click="flow.addTripleRow(id, 'inmap')">+ 添加行</button>
-      <div class="rc-help">把上游节点输出字段映射到本节点入参（对应采集平台"上一步属性"、AI 提取"输出映射"）。← 表示取自上游；"来源"输入框下拉建议取自上一节点的产物字段。</div>
+      <template v-if="isRule">
+        <button class="ni-adv-toggle" type="button" @click="ruleInmapOpen = !ruleInmapOpen">
+          {{ ruleInmapOpen ? '▾' : '▸' }} 输入映射（可选）
+        </button>
+        <div class="rc-help" style="margin-bottom: 8px">表字段与脚本请到「编排配置」；此处仅跨节点字段映射（本期非必填）。</div>
+      </template>
+      <template v-if="!isRule || ruleInmapOpen">
+        <div v-if="!isRule" class="ni-section-title">输入映射</div>
+        <table class="rc-mini-table rc-edit-table">
+          <thead><tr><th>目标入参</th><th>来源</th><th>说明</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="(row, i) in cfg?.inmap ?? []" :key="i">
+              <td><input class="rc-cell-input" :value="row.name" @input="onTripleCell('inmap', i, 0, $event)" /></td>
+              <td><input class="rc-cell-input" list="ni-inmap-src" :value="row.from" @input="onTripleCell('inmap', i, 1, $event)" /></td>
+              <td><input class="rc-cell-input" :value="row.desc" @input="onTripleCell('inmap', i, 2, $event)" /></td>
+              <td><button class="rc-row-del" type="button" title="删除该行" @click="flow.removeTripleRow(id, 'inmap', i)">✕</button></td>
+            </tr>
+          </tbody>
+        </table>
+        <datalist id="ni-inmap-src">
+          <option v-for="opt in inmapSourceOptions" :key="opt" :value="opt" />
+        </datalist>
+        <button class="rc-btn" type="button" @click="flow.addTripleRow(id, 'inmap')">+ 添加行</button>
+        <div class="rc-help">把上游节点输出字段映射到本节点入参（对应采集平台"上一步属性"、AI 提取"输出映射"）。← 表示取自上游；"来源"输入框下拉建议取自上一节点的产物字段。</div>
+      </template>
     </template>
 
-    <template v-if="!cc && isRule">
-      <div class="ni-section-title">规则编排</div>
-      <div class="rc-field"><label>规则来源</label>
-        <div class="rc-segment">
-          <button type="button" :class="{ active: ruleCfg.mode === 'ref' }" @click="onRuleModeChange('ref')">引用已有规则</button>
-          <button type="button" :class="{ active: ruleCfg.mode === 'new' }" @click="onRuleModeChange('new')">新建编排</button>
-        </div>
-      </div>
-
-      <div v-if="ruleCfg.mode === 'ref'" class="rc-field"><label>已有规则编排</label>
-        <select class="rc-select" :value="ruleCfg.ruleId ?? ''" @change="onRuleRefChange">
-          <option value="">选择规则编排</option>
-          <option v-for="r in ruleOrchestrations" :key="r.ruleId" :value="r.ruleId">
-            {{ r.ruleId }} · {{ r.name }}{{ r.enabled ? '' : '（停用）' }}
-          </option>
-        </select>
-      </div>
-
-      <div class="rc-field"><label>规则需求描述</label>
-        <textarea
-          class="rc-input rc-textarea"
-          :readonly="ruleCfg.mode === 'ref'"
-          :value="ruleCfg.describe"
-          placeholder="描述规则处理逻辑，如 content 中包含地产二字时，tags 返回房地产"
-          @input="onRuleDescribeChange"
-        />
-      </div>
-
-      <div class="ni-adv">
-        <button class="ni-adv-toggle" type="button" @click="rulePromptOpen = !rulePromptOpen">
-          {{ rulePromptOpen ? '▾' : '▸' }} 系统提示词
-        </button>
-        <div v-if="rulePromptOpen" class="ni-adv-body">
-          <textarea
-            class="rc-input rc-textarea"
-            :readonly="ruleCfg.mode === 'ref'"
-            :value="ruleCfg.systemPrompt ?? ''"
-            @input="onRulePromptChange"
-          />
-        </div>
-      </div>
-
-      <div class="rc-actions-row">
-        <button class="rc-btn primary" type="button" :disabled="ruleGenerating || ruleCfg.mode === 'ref'" @click="onGenerateRuleScript">
-          {{ ruleGenerating ? '生成中...' : '生成脚本' }}
-        </button>
-      </div>
-
-      <div class="rc-list ni-rule-meta">
-        <div class="rc-list-row"><b>脚本路径</b><span>{{ ruleCfg.scriptPath || '未生成' }}</span></div>
-      </div>
-      <textarea class="rc-code-box" readonly :value="ruleCfg.script || '生成脚本后展示 Python 预览；引用已有规则时展示已保存脚本。'" />
-
-      <div class="ni-section-title">测试脚本</div>
-      <div class="rc-field"><label>测试 content</label>
-        <textarea class="rc-input rc-textarea" :value="ruleTestContent" @input="onRuleTestContentChange" />
-      </div>
-      <div class="rc-actions-row">
-        <button class="rc-btn" type="button" :disabled="ruleTesting" @click="onTestRuleScript">
-          {{ ruleTesting ? '测试中...' : '测试脚本' }}
-        </button>
-        <button class="rc-btn primary" type="button" :disabled="ruleSaving" @click="onSaveRuleScript">
-          {{ ruleSaving ? '保存中...' : '保存脚本' }}
-        </button>
-      </div>
-      <pre v-if="ruleTestResult" class="ni-json-box">{{ ruleTestResultText }}</pre>
-    </template>
-
-    <!-- 非采集类专属：原「基础/输入映射/参数/试跑」四子页，合并为单屏纵向分组（0706 调整4） -->
+    <!-- 非采集非规则：基础字段 / 参数 / 试跑信息 -->
     <template v-if="!cc && !isRule">
       <div v-if="cfg?.planned" class="rc-drawer show">规划中节点：OCR / AI 提取 / 发邮件仍待执行器确认。配置可先草拟，发起抓取与上线需等待能力就绪。</div>
 
@@ -381,6 +294,8 @@ async function onSaveRuleScript() {
 .rc-segment button:first-child { border-left: 0; }
 .rc-segment button.active { background: var(--rc-primary); color: #fff; font-weight: 700; }
 .ni-section-title { margin: 16px 0 8px; padding-top: 12px; border-top: 1px dashed var(--rc-border-soft); color: var(--rc-muted); font-size: 12px; font-weight: 700; }
+/* 参数子源编辑器容器（0802）：跟其他段落用同色背景区分；ParamSourceEditor 是 display:contents，外层负责间距 */
+.rc-section-divider { margin-top: 4px; padding: 8px 10px; background: #f8fafc; border: 1px solid var(--rc-border-soft); border-radius: 7px; }
 .ni-adv { margin-top: 12px; border-top: 1px dashed var(--rc-border-soft); padding-top: 8px; }
 .ni-adv-toggle { border: 0; background: transparent; color: var(--rc-muted); font-size: 11px; font-weight: 600; cursor: pointer; padding: 2px 0; }
 .ni-adv-toggle:hover { color: var(--rc-primary-ink); }

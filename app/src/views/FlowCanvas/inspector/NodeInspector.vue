@@ -17,6 +17,7 @@ import TaskTab from './tabs/TaskTab.vue'
 import TableTab from './tabs/TableTab.vue'
 import ParamsTab from './tabs/ParamsTab.vue'
 import ConfigTab from './tabs/ConfigTab.vue'
+import RuleOrchestrationTab from './tabs/RuleOrchestrationTab.vue'
 
 const flow = useFlowStore()
 const ui = useUiStore()
@@ -98,6 +99,7 @@ onMounted(async () => {
         <NodeAiChat v-if="tab === 'ai'" :key="id" />
         <TaskTab v-else-if="tab === 'task'" />
         <TableTab v-else-if="tab === 'table'" />
+        <RuleOrchestrationTab v-else-if="tab === 'orchestration'" />
         <ParamsTab v-else-if="tab === 'params'" />
         <ConfigTab v-else />
       </div>
