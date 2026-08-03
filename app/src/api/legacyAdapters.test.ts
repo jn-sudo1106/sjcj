@@ -509,16 +509,18 @@ describe('规则编排模型适配（vrule，0801 方案 §4）', () => {
     })
   })
 
-  it('parseRuleOrchestrationStreamText：从 MinIO 系统消息行取 scriptPath', () => {
-    const text = [
+  it('parseRuleOrchestrationStreamText：从 MinIO 系统消息行取 scriptPath（全角/半角冒号）', () => {
+    const textFull = [
       'def main(date):',
       '    return {"end_date": date}',
       '# [系统消息] 当前文件已经保存至MinIO：/code01/20260801/123.py',
     ].join('\n')
-    expect(parseRuleOrchestrationStreamText(text)).toEqual({
-      script: text,
+    expect(parseRuleOrchestrationStreamText(textFull)).toEqual({
+      script: textFull,
       scriptPath: '/code01/20260801/123.py',
     })
+    const textHalf = 'print(1)\n# [系统消息] 当前文件已经保存至MinIO:/code01/x.py'
+    expect(parseRuleOrchestrationStreamText(textHalf).scriptPath).toBe('/code01/x.py')
   })
 
   it('pickRuleIdFromComposeList：按规则名+输入表匹配', () => {

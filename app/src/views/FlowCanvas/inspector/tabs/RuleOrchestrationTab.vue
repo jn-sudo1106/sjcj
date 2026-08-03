@@ -75,6 +75,8 @@ async function onSaveMeta() {
     if (ruleCfg.value.inputTableId) flow.setInputTable(id.value, ruleCfg.value.inputTableId)
     if (ruleCfg.value.outputTableId) flow.setOutputTable(id.value, ruleCfg.value.outputTableId)
     editingMeta.value = false
+    // 新拿到的 ruleId 允许进入 Path B 时再回灌一次（详情/脚本）
+    hydrateToken.value = ''
     ElMessage.success(res.message || '业务规则已保存')
   } catch (e) {
     ElMessage.error(`保存业务规则失败：${(e as Error)?.message ?? String(e)}`)
@@ -106,6 +108,49 @@ const outputFieldsLabel = computed(() => (ruleCfg.value.outputFields ?? []).map(
 const outputTableLabel = computed(() => (ruleCfg.value.outputTableId ? ruleCfg.value.outputTable : '默认 = 输入表'))
 
 // ---- 路径 B：描述 / 生成脚本 / 全屏查看 / 编辑系统提示词 / 保存脚本（0801 方案 §6.4）----
+// 进入查看态时按 ruleId 回灌详情 + 缺正文时按 scriptPath 拉 MinIO（对齐旧 handleOpenRecord）
+const hydrateToken = ref('')
+const hydrating = ref(false)
+async function hydrateViewFromServer() {
+  const ruleId = ruleCfg.value.ruleId
+  if (!ruleId || showBinder.value) return
+  const token = `${id.value}:${ruleId}`
+  if (hydrateToken.value === token || hydrating.value) return
+  hydrating.value = true
+  hydrateToken.value = token
+  try {
+    const stored = cfg.value?.ruleCfg
+    try {
+      const detail = await ruleApi.orchestrationDetail(ruleId)
+      const next: Partial<RuleOrchestration> = {}
+      // 服务端有值才覆盖，避免 saveMeta 后详情尚无 nlDescribe 时用空串抹掉本地草稿
+      if (detail.describe?.trim()) next.describe = detail.describe
+      if (detail.systemPrompt?.trim()) next.systemPrompt = detail.systemPrompt
+      if (detail.scriptPath?.trim()) next.scriptPath = detail.scriptPath
+      if (detail.name?.trim() && !stored?.name?.trim()) next.name = detail.name
+      if (Object.keys(next).length) patch(next)
+    } catch {
+      // 详情失败不阻塞；下面仍可凭本地 scriptPath 拉脚本
+    }
+    const path = (cfg.value?.ruleCfg?.scriptPath || ruleCfg.value.scriptPath || '').trim()
+    if (path && !cfg.value?.ruleCfg?.script?.trim()) {
+      try {
+        const script = await ruleApi.orchestrationLoadScript(path)
+        if (script.trim()) patch({ script })
+      } catch (e) {
+        ElMessage.warning(`加载脚本失败：${(e as Error)?.message ?? String(e)}`)
+      }
+    }
+  } finally {
+    hydrating.value = false
+  }
+}
+watch(
+  () => [id.value, ruleCfg.value.ruleId, showBinder.value] as const,
+  () => { void hydrateViewFromServer() },
+  { immediate: true },
+)
+
 function onDescribeChange(e: Event) {
   patch({ describe: (e.target as HTMLTextAreaElement).value })
 }
@@ -114,6 +159,10 @@ function onSystemPromptChange(value: string) {
 }
 
 const generating = ref(false)
+const generateAbort = ref<AbortController | null>(null)
+function onCancelGenerate() {
+  generateAbort.value?.abort()
+}
 async function onGenerateScript() {
   if (!ruleCfg.value.describe.trim()) {
     ElMessage.warning('请先填写规则处理描述')
@@ -123,14 +172,22 @@ async function onGenerateScript() {
     ElMessage.warning('请先完成入参/出参字段绑定')
     return
   }
+  generateAbort.value?.abort()
+  const controller = new AbortController()
+  generateAbort.value = controller
   generating.value = true
   try {
-    const res = await ruleApi.orchestrationGenerate(ruleCfg.value)
+    const res = await ruleApi.orchestrationGenerate(ruleCfg.value, controller.signal)
     patch({ script: res.script, scriptPath: res.scriptPath })
     ElMessage.success('脚本已生成')
   } catch (e) {
-    ElMessage.error(`生成脚本失败：${(e as Error)?.message ?? String(e)}`)
+    if (controller.signal.aborted || (e as Error)?.message?.includes('已取消')) {
+      ElMessage.info('已取消生成')
+    } else {
+      ElMessage.error(`生成脚本失败：${(e as Error)?.message ?? String(e)}`)
+    }
   } finally {
+    if (generateAbort.value === controller) generateAbort.value = null
     generating.value = false
   }
 }
@@ -208,7 +265,9 @@ const canTest = computed(() => !!ruleCfg.value.script?.trim() && !!ruleCfg.value
       <button class="rc-btn primary" type="button" :disabled="generating" @click="onGenerateScript">
         {{ generating ? '生成中...' : '生成脚本' }}
       </button>
+      <button v-if="generating" class="rc-btn" type="button" @click="onCancelGenerate">取消</button>
     </div>
+    <div v-if="hydrating" class="rc-help">正在同步编排详情…</div>
 
     <div class="rc-list ni-rule-meta">
       <div class="rc-list-row"><b>脚本路径</b><span>{{ ruleCfg.scriptPath || '未生成' }}</span></div>

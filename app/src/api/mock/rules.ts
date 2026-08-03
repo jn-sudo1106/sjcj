@@ -362,6 +362,31 @@ export function mockRuleOrchestrationSaveMeta(params?: Record<string, unknown>):
   return { ruleId, message: '业务规则已保存' }
 }
 
+/** 路径 B 回灌：按 ruleId 取详情（对齐 getComposeById） */
+export function mockRuleOrchestrationDetail(params?: Record<string, unknown>): RuleOrchestration {
+  const ruleId = String(params?.ruleId ?? '')
+  const existing = ORCHESTRATIONS.find((item) => item.ruleId === ruleId)
+  if (existing) {
+    return {
+      mode: 'ref',
+      ruleId: existing.ruleId,
+      name: existing.name,
+      describe: existing.describe,
+      script: existing.script,
+      scriptPath: existing.scriptPath,
+      enabled: existing.enabled,
+    }
+  }
+  return { mode: 'ref', ruleId, describe: '', scriptPath: '', script: '' }
+}
+
+/** 按 codePath 读脚本正文（对齐 GET dashscope/code） */
+export function mockRuleOrchestrationLoadScript(params?: Record<string, unknown>): string {
+  const path = String(params?.scriptPath ?? params?.file_name ?? '')
+  const existing = ORCHESTRATIONS.find((item) => item.scriptPath === path || item.ruleId === path)
+  return existing?.script ?? `# mock script for ${path}\ndef main():\n    return {}`
+}
+
 export function mockRuleOrchestrationGenerate(params?: Record<string, unknown>): RuleOrchestrationGenerateResult {
   const cfg = ((params?.ruleCfg ?? params) || {}) as RuleOrchestration
   const describe = String(cfg.describe ?? '').trim()

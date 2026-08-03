@@ -30,6 +30,7 @@ import {
   isVruleNumericRuleId,
   parseRuleOrchestrationStreamText,
   pickRuleIdFromComposeList,
+  ruleOrchestrationDetailFromLegacy,
   ruleOrchestrationGenerateFormBody,
   ruleOrchestrationGenerateFromLegacy,
   ruleOrchestrationSaveMetaFromLegacy,
@@ -135,14 +136,40 @@ async function fetchNewestComposeRuleId(cfg: RuleOrchestration): Promise<string>
   return ruleId
 }
 
+/** vrule 文本响应（GET dashscope/code 返回纯文本，不能走 request 的 JSON 解析） */
+async function fetchVruleText(url: string, init?: RequestInit): Promise<string> {
+  const headers: Record<string, string> = { ...(init?.headers as Record<string, string> | undefined) }
+  const token = readStoredToken()
+  if (token) headers[ACCESS_TOKEN_HEADER] = token
+  const res = await fetch(url, { credentials: 'include', ...init, headers })
+  if (isSessionExpiredRedirect(res)) {
+    triggerSessionExpired()
+    throw new Error('登录失效,请重新登录')
+  }
+  if (!res.ok) {
+    let detail = ''
+    try { detail = (await res.text()).trim() } catch { /* ignore */ }
+    throw new Error(detail ? `请求失败 ${res.status}: ${detail.slice(0, 200)}` : `请求失败 ${res.status}`)
+  }
+  return res.text()
+}
+
 /** 规则编排生成脚本：流式读 /vrule/ai/dashscope/stream（对齐旧页 Rt，非 JSON） */
-async function fetchRuleOrchestrationStream(ruleCfg: RuleOrchestration): Promise<RuleOrchestrationGenerateResult> {
+async function fetchRuleOrchestrationStream(
+  ruleCfg: RuleOrchestration,
+  externalSignal?: AbortSignal,
+): Promise<RuleOrchestrationGenerateResult> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/x-www-form-urlencoded',
   }
   const token = readStoredToken()
   if (token) headers[ACCESS_TOKEN_HEADER] = token
   const controller = new AbortController()
+  const onExternalAbort = () => controller.abort()
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort()
+    else externalSignal.addEventListener('abort', onExternalAbort, { once: true })
+  }
   // 生成可能较慢，放宽到 120s（旧页无超时，仅 AbortController 取消）
   const timeout = window.setTimeout(() => controller.abort(), 120_000)
   let res: Response
@@ -156,6 +183,7 @@ async function fetchRuleOrchestrationStream(ruleCfg: RuleOrchestration): Promise
     })
   } finally {
     window.clearTimeout(timeout)
+    externalSignal?.removeEventListener('abort', onExternalAbort)
   }
   if (isSessionExpiredRedirect(res)) {
     triggerSessionExpired()
@@ -197,6 +225,44 @@ export const ruleApi = {
   testCases: (ruleId: string) => request<RuleTestCase[]>('rule/testCasePaged', { ruleId }),
   evaluate: (expr: string, context: string) => request<EvalResult>('rule/evaluate', { expr, context }),
   orchestrationPaged: (p?: PageQuery) => request<Paged<RuleOrchestrationItem>>('rule/orchestrationPaged', p),
+  // 路径 B 回灌：POST /vrule/api/custom-compose/getComposeById?id=（对齐旧 handleOpenRecord）
+  orchestrationDetail: async (ruleId: string) => {
+    const endpoint = 'rule/orchestrationDetail'
+    const opts = {
+      method: 'POST' as const,
+      httpEndpoint: '/vrule/api/custom-compose/getComposeById',
+      paramsIn: 'query' as const,
+      httpParams: { id: ruleId },
+    }
+    if (usesMockAdapter(endpoint, opts)) {
+      const result = await request<unknown>(endpoint, { ruleId }, { mode: 'mock' })
+      if (result && typeof result === 'object' && 'describe' in (result as object)) {
+        return result as RuleOrchestration
+      }
+      return ruleOrchestrationDetailFromLegacy(result)
+    }
+    try {
+      const result = await request<unknown>(endpoint, { ruleId }, opts)
+      return ruleOrchestrationDetailFromLegacy(result)
+    } catch (e) {
+      throw e instanceof ApiError ? e : new ApiError(endpoint, e)
+    }
+  },
+  // 读脚本正文：GET /vrule/ai/dashscope/code?file_name=（响应纯文本，非 JSON）
+  orchestrationLoadScript: async (scriptPath: string) => {
+    const endpoint = 'rule/orchestrationLoadScript'
+    const path = scriptPath.trim()
+    if (!path) throw new Error('脚本路径为空')
+    if (usesMockAdapter(endpoint)) {
+      const result = await request<unknown>(endpoint, { scriptPath: path }, { mode: 'mock' })
+      return String(result ?? '')
+    }
+    try {
+      return await fetchVruleText(`/vrule/ai/dashscope/code?file_name=${encodeURIComponent(path)}`, { method: 'GET' })
+    } catch (e) {
+      throw e instanceof ApiError ? e : new ApiError(endpoint, e)
+    }
+  },
   // 路径 A：保存业务规则元数据换 ruleId。
   // mock 收 { cfg, userCode }；live → POST /vrule/api/custom-compose/save。
   // 旧页保存成功不读响应体、只刷列表；响应无 id 时再 GET list/compose 按名称回查。
@@ -228,7 +294,7 @@ export const ruleApi = {
   // 传整个 ruleCfg：mock 按 inputFields/outputFields 生成多参骨架。
   // 真实：POST /vrule/ai/dashscope/stream（form-urlencoded + 流式文本，见 rule-orchestration 页 Rt）。
   // 注意：saveMeta 未 live 时拿到的是 orch-* mock id，真实 stream 会 400——此时回退 mock 生成。
-  orchestrationGenerate: async (ruleCfg: RuleOrchestration) => {
+  orchestrationGenerate: async (ruleCfg: RuleOrchestration, signal?: AbortSignal) => {
     const endpoint = 'rule/orchestrationGenerate'
     const useMock = usesMockAdapter(endpoint) || !isVruleNumericRuleId(ruleCfg.ruleId)
     if (useMock) {
@@ -239,18 +305,23 @@ export const ruleApi = {
       return ruleOrchestrationGenerateFromLegacy(result)
     }
     try {
-      return await fetchRuleOrchestrationStream(ruleCfg)
+      return await fetchRuleOrchestrationStream(ruleCfg, signal)
     } catch (e) {
+      if (signal?.aborted || (e instanceof DOMException && e.name === 'AbortError') || (e as Error)?.name === 'AbortError') {
+        throw e instanceof ApiError ? e : new ApiError(endpoint, new Error('已取消生成'))
+      }
       throw e instanceof ApiError ? e : new ApiError(endpoint, e)
     }
   },
   // req → 旧体 { rule_id, params, timeout }；响应 result 数组 → outputs（0801 §4.4）
   orchestrationTest: async (req: RuleOrchestrationTestRequest) => {
-    const result = await request<unknown>('rule/orchestrationTest', { ...req }, {
-      method: 'POST',
+    const endpoint = 'rule/orchestrationTest'
+    const opts = {
+      method: 'POST' as const,
       httpEndpoint: '/vrule/fastapi/execute/dynamic',
       httpParams: ruleOrchestrationTestToLegacy(req),
-    })
+    }
+    const result = await request<unknown>(endpoint, { ...req }, opts)
     // mock 已是新体；http 为旧体。用 success/outputs 判别，避免双重包装
     if (result && typeof result === 'object' && 'outputs' in (result as object)) {
       return result as RuleOrchestrationTestResult

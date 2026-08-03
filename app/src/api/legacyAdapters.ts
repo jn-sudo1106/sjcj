@@ -446,10 +446,10 @@ export function ruleOrchestrationDetailFromLegacy(input: unknown): RuleOrchestra
 
 /**
  * 保存业务规则元数据（路径 A，POST custom-compose/save）。userCode 不在 RuleOrchestration 模型里，
- * 由调用方显式传入——本项目里"当前登录账号"从不接入业务字段，一律沿用现有系统的硬编码 'admin' 占位
- * （如 FlowCanvas/index.vue、stores/runtime.ts 的 owner 字段，拍板已确认跟现有系统保持一致）。
- * 注意：真实 vrule 后端的 userCode 语义是租户码（js1/papa/gf/user1/ht_poc/dev_zhonghe），
- * 'admin' 不是其中之一——Sprint 4 真实联调时需要后端确认这个占位值能否直接收，还是需要换真实租户码。
+ * 由调用方显式传入。
+ * 旧页语义：userCode = 数据源下的「指定用户」编码，默认取父系统 session 登录名（hydrateExternalContext），
+ * 也可在下拉中改选他人；会议已去掉「指定用户」UI，本项目直接用当前登录账号（readLoginUsername），
+ * 缺省回退 'admin'（与 FlowCanvas owner 占位一致）。
  */
 export function ruleOrchestrationSaveMetaToLegacy(cfg: RuleOrchestration, userCode: string): LegacyRecord {
   return {
@@ -595,9 +595,10 @@ export function isVruleNumericRuleId(ruleId?: string): boolean {
   return !!ruleId && /^\d+$/.test(String(ruleId))
 }
 
-/** 流式正文末行 `# [系统消息] 当前文件已经保存至MinIO：{path}` → scriptPath（旧 _t()） */
+/** 流式正文末行 `# [系统消息] 当前文件已经保存至MinIO：{path}` → scriptPath（旧 extractCodeFile，全角/半角冒号都认） */
 const STREAM_SCRIPT_PATH_MARKERS = [
   '# [系统消息] 当前文件已经保存至MinIO：',
+  '# [系统消息] 当前文件已经保存至MinIO:',
 ]
 
 export function parseRuleOrchestrationStreamText(text: string): RuleOrchestrationGenerateResult {

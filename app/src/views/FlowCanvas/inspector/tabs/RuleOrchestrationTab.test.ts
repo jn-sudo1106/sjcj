@@ -30,6 +30,9 @@ function mockAssets() {
   vi.spyOn(ruleApi, 'rulePaged').mockResolvedValue({ total: 0, list: [] })
   vi.spyOn(ruleApi, 'sharedConfigs').mockResolvedValue([])
   vi.spyOn(ruleApi, 'orchestrationPaged').mockResolvedValue({ total: 0, list: [] })
+  // Path B 回灌默认空操作，避免干扰既有用例；覆盖回灌行为的用例再单独 mock
+  vi.spyOn(ruleApi, 'orchestrationDetail').mockResolvedValue({ mode: 'ref', describe: '' })
+  vi.spyOn(ruleApi, 'orchestrationLoadScript').mockResolvedValue('')
 }
 
 afterEach(() => vi.restoreAllMocks())
@@ -249,6 +252,32 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     await flushPromises()
 
     expect(ruleApi.orchestrationSave).not.toHaveBeenCalled()
+  })
+
+  it('进入查看态：回灌详情描述，并在仅有 scriptPath 时拉取脚本正文', async () => {
+    mockAssets()
+    vi.spyOn(ruleApi, 'orchestrationDetail').mockResolvedValue({
+      mode: 'ref',
+      ruleId: '173',
+      describe: '服务端描述',
+      systemPrompt: '服务端提示词',
+      scriptPath: '/code01/a.py',
+    })
+    vi.spyOn(ruleApi, 'orchestrationLoadScript').mockResolvedValue('def main():\n    return {}')
+    const { flow, wrapper } = mountOnRuleNode()
+    flow.patchRuleConfig('rule-1', {
+      mode: 'ref', ruleId: '173', name: '已有规则',
+      dataSource: 'dp-wwdata', inputTable: 'sense_data.TB_JD_SKU_BASE', inputTableId: '2102154',
+      inputFields: ['sku_id'], outputFields: ['sku_name'],
+      describe: '', script: '', scriptPath: '',
+    })
+    await flushPromises()
+
+    expect(ruleApi.orchestrationDetail).toHaveBeenCalledWith('173')
+    expect(ruleApi.orchestrationLoadScript).toHaveBeenCalledWith('/code01/a.py')
+    expect(flow.configs['rule-1'].ruleCfg?.describe).toBe('服务端描述')
+    expect(flow.configs['rule-1'].ruleCfg?.script).toContain('def main')
+    expect(wrapper.text()).toContain('查看业务编排')
   })
 })
 

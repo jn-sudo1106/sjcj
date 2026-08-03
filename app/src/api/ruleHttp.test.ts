@@ -192,4 +192,47 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
     expect(fetchMock).not.toHaveBeenCalled()
     expect(result.script).toContain('def main(date, zb_value)')
   })
+
+  it('orchestrationDetail：POST getComposeById?id=，映射 nlDescribe/codePath', async () => {
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    fetchMock.mockResolvedValue(jsonResponse({
+      id: 173,
+      ruleName: '邮箱附件',
+      nlDescribe: '转换规则',
+      codePath: '/code01/a.py',
+      state: 1,
+      targetTable: 'sense_data.TB_email_XQ',
+      inputFields: 'date',
+      outputFields: 'end_date',
+    }))
+    const { ruleApi } = await import('./index')
+
+    const detail = await ruleApi.orchestrationDetail('173')
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/vrule/api/custom-compose/getComposeById?id=173')
+    expect(init.method).toBe('POST')
+    expect(detail.ruleId).toBe('173')
+    expect(detail.describe).toBe('转换规则')
+    expect(detail.scriptPath).toBe('/code01/a.py')
+  })
+
+  it('orchestrationLoadScript：GET dashscope/code 读纯文本', async () => {
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => 'def main(date):\n    return {}',
+    } as Response)
+    const { ruleApi } = await import('./index')
+
+    const script = await ruleApi.orchestrationLoadScript('/code01/a.py')
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/vrule/ai/dashscope/code?file_name=%2Fcode01%2Fa.py')
+    expect(script).toContain('def main(date)')
+  })
 })
