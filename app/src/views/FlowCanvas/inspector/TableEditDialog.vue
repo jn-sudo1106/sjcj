@@ -23,6 +23,7 @@ const form = reactive({
   name: '',
   tableName: '',
   remark: '',
+  dedupMode: 'source' as 'source' | 'table',
   recordChange: '',
   validate: '',
   validateScript: '',
@@ -55,6 +56,7 @@ function resetFromTable(t?: EntryType) {
     form.name = ''
     form.tableName = ''
     form.remark = ''
+    form.dedupMode = 'source'
     form.fields = []
     return
   }
@@ -62,6 +64,7 @@ function resetFromTable(t?: EntryType) {
   form.name = t.name || ''
   form.tableName = t.tableName
   form.remark = t.remark || ''
+  form.dedupMode = t.dedupMode || 'source'
   form.fields = t.fields.map((f, i) => {
     const { code, dbColumn } = splitProp(f.prop)
     return {
@@ -122,6 +125,7 @@ async function onSave() {
     tableName: form.tableName.trim(),
     name: form.name.trim(),
     remark: form.remark.trim(),
+    dedupMode: form.dedupMode,
     fields: form.fields.map<EntryField>((f) => ({
       prop: f.dbColumn ? `${f.code || f.dbColumn.toLowerCase()}-${f.dbColumn}` : f.code,
       desc: f.desc,
@@ -178,6 +182,13 @@ function notImpl(label: string) {
 
       <!-- 高级占位行 -->
       <div class="ted-meta2">
+        <div class="ted-field sm">
+          <label>去重方式</label>
+          <select v-model="form.dedupMode" class="ted-input" data-testid="table-dedup-mode">
+            <option value="source">源内去重</option>
+            <option value="table">表内去重</option>
+          </select>
+        </div>
         <div class="ted-field sm">
           <label>记变化</label>
           <select class="ted-input" disabled><option>请选择</option></select>

@@ -96,6 +96,10 @@ export interface NodeConfig {
   collectCfg?: CollectConfig
   /** 非采集类节点的产物落表绑定（采集类沿用 collectCfg.outputTable，二者不重复） */
   outputTable?: string
+  /** 输出表去重方式：'source' 源内去重 / 'table' 表内去重 */
+  dedupMode?: 'source' | 'table'
+  /** 输出表选定的目标字段列表（默认包含全部字段） */
+  outFields?: string[]
   /** 产物高级配置（原「落表输出」节点能力，降维为全节点通用；0701 问题四） */
   outputAdvanced?: OutputAdvanced
   /** 非采集类节点的输入表（采集类沿用 collectCfg.inputTable）；空 = 自动继承上游节点输出表，显式设置即覆盖（0701 问题五） */
@@ -201,6 +205,10 @@ export interface CollectConfig {
   webKind: WebKind
   url: string
   outputTable: string
+  /** 输出表去重方式：'source' 源内去重 / 'table' 表内去重 */
+  dedupMode?: 'source' | 'table'
+  /** 输出表选定的目标字段列表（默认包含全部字段） */
+  outFields?: string[]
   /** 输入表：空 = 自动继承上游节点输出表，显式设置即覆盖（0701 问题五） */
   inputTable: string
   /** 节点进入条件：语义为本采集步骤只处理满足条件的输入表行 */

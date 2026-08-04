@@ -67,6 +67,8 @@ export interface EntryType {
   owner?: string
   updatedAt?: string
   keyField?: string
+  /** 去重方式：'source' 源内去重 / 'table' 表内去重 */
+  dedupMode?: 'source' | 'table'
   state?: string
   recFlag?: string | number
   checkFlag?: string | number

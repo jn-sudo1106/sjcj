@@ -5,7 +5,7 @@
 import { computed, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
-import { collectorCapabilityOf, type NodeConfig, type TripleField } from '@/views/FlowCanvas/canvas/flowModel'
+import { collectorCapabilityOf, fieldOptionsFromTableOrOutput, type NodeConfig, type TripleField } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi } from '@/api'
 import TableEditDialog from '../TableEditDialog.vue'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
@@ -21,10 +21,71 @@ const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.val
 
 // 当前节点输出表（统一口径：采集类取 collectCfg.outputTable，非采集类取 cfg.outputTable）
 const nodeTableId = computed(() => cc.value?.outputTable || cfg.value?.outputTable || '')
+const currentDedupMode = computed<'source' | 'table'>(() => cc.value?.dedupMode || cfg.value?.dedupMode || 'source')
+const DEFAULT_PRESET_TABLES = [
+  { name: '资讯列表', tableId: '2103330' },
+  { name: '资源表', tableId: '2101001' },
+  { name: '评论交互表', tableId: '2102157' },
+  { name: '社交舆情表', tableId: '2103300' },
+]
+
+// 当前节点输出表的全部候选字段
+const outputTableFields = computed(() =>
+  fieldOptionsFromTableOrOutput(nodeTableId.value, tables.value, cfg.value?.output),
+)
+
+// 存储在节点上的已选字段列表（若未自定义则默认为全部字段）
+const savedOutFields = computed<string[] | undefined>(() =>
+  cc.value?.outFields ?? cfg.value?.outFields ?? cfg.value?.taskCfg?.outColumns,
+)
+
+// 当前实际生效的已选字段 ID 集合（默认包含全部字段）
+const selectedFieldProps = computed<string[]>(() => {
+  const allProps = outputTableFields.value.map((f) => f.prop)
+  if (!savedOutFields.value) return allProps
+  return savedOutFields.value
+})
+
+function isFieldSelected(prop: string): boolean {
+  return selectedFieldProps.value.includes(prop)
+}
+
+function updateOutFields(propsList: string[]) {
+  flow.setOutFields(id.value, propsList)
+}
+
+function toggleOutputField(prop: string) {
+  const current = new Set(selectedFieldProps.value)
+  if (current.has(prop)) {
+    current.delete(prop)
+  } else {
+    current.add(prop)
+  }
+  updateOutFields(Array.from(current))
+}
+
+function selectAllFields() {
+  updateOutFields(outputTableFields.value.map((f) => f.prop))
+}
+
+function clearAllFields() {
+  updateOutFields([])
+}
+
+function selectPresetTable(tableId: string) {
+  if (nodeCapability.value?.outputMode === 'fixed') return
+  if (cc.value) flow.patchCollect(id.value, { outputTable: tableId })
+  else flow.setOutputTable(id.value, tableId)
+}
+
 function onOutputTableChange(e: Event) {
   const v = (e.target as HTMLSelectElement).value
   if (cc.value) flow.patchCollect(id.value, { outputTable: v })
   else flow.setOutputTable(id.value, v)
+}
+function onDedupModeChange(mode: 'source' | 'table') {
+  if (cc.value) flow.patchCollect(id.value, { dedupMode: mode })
+  else flow.setDedupMode(id.value, mode)
 }
 
 function onTripleCell(field: TripleField, i: number, col: 0 | 1 | 2, e: Event) {
@@ -67,6 +128,51 @@ async function onTableSaved(tableId: string) {
       <button class="rc-input-btn" type="button" @click="openEditTable">查看/编辑表</button>
       <button class="rc-input-btn" type="button" @click="openNewTable">新建表</button>
     </div>
+    <div class="rc-preset-tables" data-testid="table-presets">
+      <span class="rc-preset-label">常用默认表：</span>
+      <button
+        v-for="preset in DEFAULT_PRESET_TABLES"
+        :key="preset.tableId"
+        type="button"
+        class="rc-preset-chip"
+        :class="{ active: nodeTableId === preset.tableId }"
+        :disabled="nodeCapability?.outputMode === 'fixed'"
+        @click="selectPresetTable(preset.tableId)"
+      >
+        {{ preset.name }} ({{ preset.tableId }})
+      </button>
+    </div>
+  </div>
+  <div class="rc-field">
+    <label>去重方式</label>
+    <div class="rc-segment" data-testid="table-dedup-segment">
+      <button type="button" :class="{ active: currentDedupMode !== 'table' }" @click="onDedupModeChange('source')">源内去重</button>
+      <button type="button" :class="{ active: currentDedupMode === 'table' }" @click="onDedupModeChange('table')">表内去重</button>
+    </div>
+    <div class="rc-help">源内去重：仅在当前采集源范围内对落库数据去重；表内去重：跨源在整张数据表范围内全局去重。</div>
+  </div>
+  <!-- 输出字段选择（默认全选） -->
+  <div v-if="outputTableFields.length" class="rc-field">
+    <div class="rc-field-header">
+      <label>输出字段选择（已选中 {{ selectedFieldProps.length }} / {{ outputTableFields.length }} 个字段，默认包含全部字段）</label>
+      <div class="rc-field-actions">
+        <button type="button" class="rc-text-btn" data-testid="select-all-fields" @click="selectAllFields">全选</button>
+        <button type="button" class="rc-text-btn" data-testid="clear-all-fields" @click="clearAllFields">清空</button>
+      </div>
+    </div>
+    <div class="rc-tag-row" data-testid="output-fields-list">
+      <span
+        v-for="f in outputTableFields"
+        :key="f.prop"
+        class="rc-tag"
+        :class="{ on: isFieldSelected(f.prop) }"
+        @click="toggleOutputField(f.prop)"
+      >
+        <input type="checkbox" :checked="isFieldSelected(f.prop)" class="rc-tag-check" @click.stop="toggleOutputField(f.prop)" />
+        <span class="rc-tag-text">{{ f.prop }} {{ f.desc ? `· ${f.desc}` : '' }}</span>
+      </span>
+    </div>
+    <div class="rc-help">勾选落库并保留在输出表中的字段列，未勾选字段落库时忽略；默认选中全部字段。</div>
   </div>
   <!-- 非采集类的产物明细表（采集类的产物即上方所选输出表，不重复维护一份 output 三元表） -->
   <template v-if="!cc">
@@ -110,4 +216,49 @@ async function onTableSaved(tableId: string) {
 .rc-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 11px; border: 1px solid #d5e2f2; border-radius: 7px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; }
 .rc-btn:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rc-help { color: var(--rc-faint); font-size: 10px; line-height: 1.5; margin-top: 6px; }
+.rc-segment { display: inline-flex; border: 1px solid #dbe3ee; border-radius: 7px; overflow: hidden; background: #fff; }
+.rc-segment button { border: 0; background: transparent; color: var(--rc-text-2); font-size: 11px; padding: 5px 12px; cursor: pointer; }
+.rc-segment button.active { background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-weight: 700; }
+
+.rc-preset-tables { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.rc-preset-label { font-size: 11px; color: var(--rc-muted); font-weight: 600; }
+.rc-preset-chip {
+  padding: 3px 8px;
+  border: 1px solid #d5e2f2;
+  border-radius: 5px;
+  background: #f8fafc;
+  color: var(--rc-text-2);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  font-family: inherit;
+}
+.rc-preset-chip:hover:not(:disabled) {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: var(--rc-primary-ink);
+}
+.rc-preset-chip.active {
+  border-color: var(--rc-primary);
+  background: var(--rc-primary-bg);
+  color: var(--rc-primary-ink);
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px var(--rc-primary);
+}
+.rc-preset-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.rc-field-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.rc-field-header label { margin-bottom: 0; }
+.rc-field-actions { display: flex; gap: 8px; }
+.rc-text-btn { border: 0; background: transparent; color: var(--rc-primary); font-size: 11px; font-weight: 600; cursor: pointer; padding: 0; }
+.rc-text-btn:hover { text-decoration: underline; }
+.rc-tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.rc-tag { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border: 1px solid #d5e2f2; border-radius: 6px; background: #f8fafc; color: var(--rc-text-2); font-size: 11px; cursor: pointer; user-select: none; transition: all 0.12s ease; }
+.rc-tag:hover { border-color: #93c5fd; background: #eff6ff; }
+.rc-tag.on { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-weight: 600; }
+.rc-tag-check { margin: 0; cursor: pointer; accent-color: var(--rc-primary); }
 </style>

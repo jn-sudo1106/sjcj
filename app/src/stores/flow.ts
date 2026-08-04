@@ -1018,6 +1018,8 @@ export const useFlowStore = defineStore('flow', () => {
     patchTaskConfig: (id: string, patch: Partial<TaskConfig>) => nodeStore.patchTaskConfig(id, patch),
     patchRuleConfig: (id: string, patch: Partial<RuleOrchestration>) => nodeStore.patchRuleConfig(id, patch),
     setOutputTable: (id: string, tableId: string) => nodeStore.setOutputTable(id, tableId),
+    setDedupMode: (id: string, mode: 'source' | 'table') => nodeStore.setDedupMode(id, mode),
+    setOutFields: (id: string, fields: string[]) => nodeStore.setOutFields(id, fields),
     setInputTable: (id: string, tableId: string) => nodeStore.setInputTable(id, tableId),
     setTaskQueue: (id: string, value: string) => nodeStore.setTaskQueue(id, value),
     setEntryCondition: (id: string, cond: ConditionGroup | undefined) => nodeStore.setEntryCondition(id, cond),

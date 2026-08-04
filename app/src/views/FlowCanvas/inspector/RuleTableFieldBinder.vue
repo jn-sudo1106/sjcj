@@ -25,6 +25,13 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ 'update:modelValue': [BinderModel]; 'select-existing': [ruleId: string] }>()
 
+const DEFAULT_PRESET_TABLES = [
+  { name: '资讯列表', tableId: '2103330' },
+  { name: '资源表', tableId: '2101001' },
+  { name: '评论交互表', tableId: '2102157' },
+  { name: '社交舆情表', tableId: '2103300' },
+]
+
 const DATA_SOURCES: { value: RuleDataSource; label: string }[] = [
   { value: 'dp-news', label: '资讯库' },
   { value: 'dp-wwdata', label: '采集库' },
@@ -248,6 +255,19 @@ const outputExpanded = ref(false)
         :value="t.tableId"
       />
     </el-select>
+    <div class="rc-preset-tables" data-testid="rule-table-presets">
+      <span class="rc-preset-label">常用默认表：</span>
+      <button
+        v-for="preset in DEFAULT_PRESET_TABLES"
+        :key="preset.tableId"
+        type="button"
+        class="rc-preset-chip"
+        :class="{ active: modelValue.outputTableId === preset.tableId }"
+        @click="onOutputTableId(preset.tableId)"
+      >
+        {{ preset.name }} ({{ preset.tableId }})
+      </button>
+    </div>
   </div>
 
   <div class="rc-field"><label>入参字段 *</label>
@@ -327,4 +347,35 @@ const outputExpanded = ref(false)
 .rc-tag-toggle { border: 0; background: transparent; color: var(--rc-primary); font-size: 11px; font-weight: 600; cursor: pointer; padding: 4px 2px; }
 .rc-tag-toggle:hover { text-decoration: underline; }
 .rc-tag-pool { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--rc-border-soft); }
+
+.rc-preset-tables { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.rc-preset-label { font-size: 11px; color: var(--rc-muted); font-weight: 600; }
+.rc-preset-chip {
+  padding: 3px 8px;
+  border: 1px solid #d5e2f2;
+  border-radius: 5px;
+  background: #f8fafc;
+  color: var(--rc-text-2);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  font-family: inherit;
+}
+.rc-preset-chip:hover:not(:disabled) {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: var(--rc-primary-ink);
+}
+.rc-preset-chip.active {
+  border-color: var(--rc-primary);
+  background: var(--rc-primary-bg);
+  color: var(--rc-primary-ink);
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px var(--rc-primary);
+}
+.rc-preset-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 </style>

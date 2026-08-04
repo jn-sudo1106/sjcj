@@ -120,6 +120,25 @@ export const useNodeStore = defineStore('node', () => {
     touch()
   }
 
+  function setDedupMode(id: string, mode: 'source' | 'table') {
+    const c = configs[id]
+    if (!c) return
+    if (c.collectCfg) c.collectCfg.dedupMode = mode
+    else c.dedupMode = mode
+    touch()
+  }
+
+  function setOutFields(id: string, fields: string[]) {
+    const c = configs[id]
+    if (!c) return
+    const unique = [...new Set(fields.filter(Boolean))]
+    if (c.collectCfg) c.collectCfg.outFields = unique
+    else c.outFields = unique
+    if (!c.taskCfg) c.taskCfg = { queue: '', urlRule: '' }
+    c.taskCfg.outColumns = unique
+    touch()
+  }
+
   function setInputTable(id: string, tableId: string) {
     const c = configs[id]
     if (c) c.inputTable = tableId
@@ -180,6 +199,8 @@ export const useNodeStore = defineStore('node', () => {
     patchTaskConfig,
     patchRuleConfig,
     setOutputTable,
+    setDedupMode,
+    setOutFields,
     setInputTable,
     setTaskQueue,
     setEntryCondition,

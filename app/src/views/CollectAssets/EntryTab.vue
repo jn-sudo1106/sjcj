@@ -410,6 +410,7 @@ function exportFields(e: EntryType) {
         <dt>表名称</dt><dd>{{ drawer.entry.name || '—' }}</dd>
         <dt>物理表名</dt><dd>{{ drawer.entry.tableName }}</dd>
         <dt>去重字段</dt><dd>{{ drawer.entry.keyField || '—' }}</dd>
+        <dt>去重方式</dt><dd>{{ drawer.entry.dedupMode === 'table' ? '表内去重' : '源内去重' }}</dd>
         <dt>状态</dt><dd>{{ drawer.entry.state || '—' }}</dd>
         <dt>备注</dt><dd>{{ drawer.entry.remark || '—' }}</dd>
         <dt>更新时间</dt><dd :title="drawer.entry.updatedAt || ''">{{ formatDateTime(drawer.entry.updatedAt) }}</dd>

@@ -39,8 +39,22 @@ describe('flow store 编辑动作', () => {
   })
 
   it('patchCollect 写入采集配置', () => {
-    f.patchCollect('web-list', { url: 'http://new.example' })
+    f.patchCollect('web-list', { url: 'http://new.example', dedupMode: 'table' })
     expect(f.configs['web-list'].collectCfg?.url).toBe('http://new.example')
+    expect(f.configs['web-list'].collectCfg?.dedupMode).toBe('table')
+  })
+
+  it('setDedupMode 切换去重方式（源内去重 vs 表内去重）', () => {
+    f.setDedupMode('web-list', 'table')
+    expect(f.configs['web-list'].collectCfg?.dedupMode).toBe('table')
+    f.setDedupMode('web-list', 'source')
+    expect(f.configs['web-list'].collectCfg?.dedupMode).toBe('source')
+  })
+
+  it('setOutFields 设置输出表勾选字段（与 taskCfg.outColumns 保持同步）', () => {
+    f.setOutFields('web-detail', ['title', 'content'])
+    expect(f.configs['web-detail'].collectCfg?.outFields).toEqual(['title', 'content'])
+    expect(f.configs['web-detail'].taskCfg?.outColumns).toEqual(['title', 'content'])
   })
 
   it('网页抓取节点细分为列表页、详情页、文件附件页', () => {
