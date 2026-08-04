@@ -763,7 +763,7 @@ onMounted(async () => {
         style="width: 100%"
         show-overflow-tooltip
         empty-text="没有查询到符合条件的记录"
-        :header-cell-style="{ height: '42px', background: '#f8fafc', color: 'var(--rc-text-2)', fontWeight: '700', borderBottom: '1px solid #e8eef6' }"
+        :header-cell-style="{ height: '42px', background: '#f8fafc', color: 'var(--rc-text-2)', fontWeight: '700', fontSize: '12px', borderBottom: '1px solid #e8eef6' }"
         @sort-change="onSortChange"
       >
         <el-table-column v-if="canWrite" width="42" fixed="left">
@@ -835,6 +835,11 @@ onMounted(async () => {
             <span v-else>—</span>
           </template>
         </el-table-column>
+        <!-- 占位列：所有其它列都是定宽，列少/窗口宽时总宽度撑不满容器，"操作"这个 fixed="right" 列
+             会贴着容器右边缘悬空，跟前一列之间露出空白缝隙。这列不设宽度，Element Plus 会把它当
+             弹性列吸收剩余空间，保证"操作"前面永远有内容顶着，不留缝（参照 TaskInstDialog.vue 里
+             "任务名"不设宽度的同款做法）。 -->
+        <el-table-column />
         <el-table-column v-if="canWrite" label="操作" width="110" fixed="right">
           <template #default="{ row }">
             <span class="dv-row-actions">
@@ -1014,6 +1019,11 @@ onMounted(async () => {
 .dv-table :deep(.el-table td.el-table__cell),
 .dv-table :deep(.el-table th.el-table__cell) {
   padding: 8px 0;
+  font-size: 12px;
+}
+/* el-table 默认正文色比 .rc-data-table（参数/表ID页）浅，统一成同一个色值 */
+.dv-table :deep(.el-table td.el-table__cell) {
+  color: #334155;
 }
 /* 悬停背景跟 .rc-data-table（参数/表ID页用的表格）保持一致 */
 .dv-table :deep(.el-table__body tr:hover > td) {
