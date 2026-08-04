@@ -3,9 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import NodeInspector from './NodeInspector.vue'
+import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDialog.vue'
 import { useFlowStore } from '@/stores/flow'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, paramApi, ruleApi } from '@/api'
+import { entryApi, paramApi, ruleApi, sourceApi } from '@/api'
 
 function mockAssets() {
   vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 0, list: [] })
@@ -126,7 +127,7 @@ describe('NodeInspector 参数子源编辑入口在 ConfigTab（0802 重构）',
     expect(wrapper.find('.upe').exists()).toBe(true)
   })
 
-  it('首个采集节点 + 切到「配置」tab：源 URL 下方挂载 ParamSourceEditor（编辑态），不是只读', async () => {
+  it('首个采集节点 + 切到「配置」tab：源 URL 下方挂载只读摘要 + 「编辑」按钮（0803 调整，不再默认可编辑）', async () => {
     mockAssets()
     const flow = setupParamSource()
     flow.select('web-1')
@@ -135,12 +136,19 @@ describe('NodeInspector 参数子源编辑入口在 ConfigTab（0802 重构）',
     const wrapper = mount(NodeInspector)
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="param-source-pick"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="param-source-template"]').exists()).toBe(true)
-    expect(wrapper.find('.ssw-readonly-template').exists()).toBe(false)
+    // 默认只读：无「选择已有参数」等编辑态操作，模板为只读展示
+    expect(wrapper.find('[data-testid="param-source-pick"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="param-source-template"]').exists()).toBe(false)
+    expect(wrapper.find('.ssw-readonly-template').exists()).toBe(true)
+    // 「编辑」按钮打开 EditParamSourceDialog（弹窗内才是可编辑态）
+    const editBtn = wrapper.find('[data-testid="param-source-edit-open"]')
+    expect(editBtn.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="edit-param-source-save"]').exists()).toBe(false)
+    await editBtn.trigger('click')
+    expect(wrapper.find('[data-testid="edit-param-source-save"]').exists()).toBe(true)
   })
 
-  it('非首个采集节点 + 切到「配置」tab：源 URL 下方不挂载 ParamSourceEditor', async () => {
+  it('非首个采集节点 + 切到「配置」tab：源 URL 下方不挂载参数子源摘要', async () => {
     mockAssets()
     const flow = setupParamSource()
     flow.select('web-2')
@@ -149,10 +157,10 @@ describe('NodeInspector 参数子源编辑入口在 ConfigTab（0802 重构）',
     const wrapper = mount(NodeInspector)
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="param-source-pick"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="param-source-edit-open"]').exists()).toBe(false)
   })
 
-  it('非参数源 + 首个采集节点 + 切到「配置」tab：源 URL 下方也不挂载 ParamSourceEditor', async () => {
+  it('非参数源 + 首个采集节点 + 切到「配置」tab：源 URL 下方也不挂载参数子源摘要', async () => {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
@@ -169,6 +177,65 @@ describe('NodeInspector 参数子源编辑入口在 ConfigTab（0802 重构）',
     const wrapper = mount(NodeInspector)
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="param-source-pick"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="param-source-edit-open"]').exists()).toBe(false)
+  })
+
+  // REVIEW-2026-08-04 P2 #6：从 ConfigTab 走完整保存链路——点「编辑」→ 弹窗出现 → 改 urlTemplate → 保存
+  // → sourceApi.sourceUpdate 落库 + flow.sourceCfg 同步 + 首节点 cc.url 同步 + 弹窗关 + 只读摘要刷新。
+  // ParamSourceEditor 在 ConfigTab 只读区也用（同一组件、readonly 模式），没法整个 stub 掉，否则
+  // 只读摘要也被搞没；改为不 mount ElementPlus、绕开 ParamSourceEditor 真实渲染：
+  // 直接调 dialog 的 save + 改 dialog 内部的 draft（拿到 ref 后改 .value，defineModel 双向绑定的写法）。
+  it('ConfigTab 点编辑 → 改 urlTemplate → 保存：sourceUpdate 落库 + sourceCfg/首节点/只读摘要全部同步', async () => {
+    mockAssets()
+    vi.spyOn(sourceApi, 'sourceUpdate').mockResolvedValue({ ok: true, message: '已保存' })
+    const flow = setupParamSource()
+    flow.select('web-1')
+    flow.setActiveTab('config')
+
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+
+    // 保存前：只读摘要展示旧 urlTemplate
+    const readonlyTpl = () => wrapper.get('.ssw-readonly-template').text()
+    expect(readonlyTpl()).toContain('http://base-$PARAM$_913')
+
+    // 点编辑 → 弹窗出现
+    await wrapper.get('[data-testid="param-source-edit-open"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="edit-param-source-save"]').exists()).toBe(true)
+
+    // 拿 EditParamSourceDialog 组件实例，直接改其内部 draft ref 的值
+    // （defineModel 双向绑定的契约：用 .value = 改，外部 v-model 同步生效）
+    const dialog = wrapper.findComponent(EditParamSourceDialog)
+    expect(dialog.exists()).toBe(true)
+    ;(dialog.vm as any).draft = {
+      baseUrl: 'http://new-base',
+      urlTemplate: 'http://new-base-$PARAM$_913',
+      refs: [{ paramId: '913', group: null }],
+    }
+    await flushPromises()
+
+    // 点保存
+    await wrapper.get('[data-testid="edit-param-source-save"]').trigger('click')
+    await flushPromises()
+
+    // 1) sourceUpdate 落库，传新模板
+    expect(sourceApi.sourceUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      sourceId: 's-1',
+      baseUrl: 'http://new-base',
+      urlTemplate: 'http://new-base-$PARAM$_913',
+    }))
+
+    // 2) flow.sourceCfg 同步新模板
+    expect(flow.sourceCfg?.urlTemplate).toBe('http://new-base-$PARAM$_913')
+    expect(flow.sourceCfg?.baseUrl).toBe('http://new-base')
+
+    // 3) 首节点 cc.url 同步（patchSource → applyParamSourceUrlToFirstCollectNode）
+    expect(flow.configs['web-1'].collectCfg?.url).toBe('http://new-base-$PARAM$_913')
+
+    // 4) 弹窗关闭 + 5) 只读摘要刷新
+    expect(wrapper.find('[data-testid="edit-param-source-save"]').exists()).toBe(false)
+    expect(readonlyTpl()).toContain('http://new-base-$PARAM$_913')
+    expect(readonlyTpl()).not.toContain('http://base-$PARAM$_913')
   })
 })

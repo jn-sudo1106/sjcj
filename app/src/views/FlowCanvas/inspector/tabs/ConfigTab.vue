@@ -2,7 +2,7 @@
 // 节点配置 Tab（P1-1 Step 4 · 从 NodeInspector.vue 拆出）。
 // 内容：决策/分头 → BranchEditor；采集 → URL/运行设置；规则节点仅「节点名称 + 输入映射」
 // （规则编排已迁到「编排配置」Tab，见 RuleOrchestrationTab，0801 方案 §6.1）。
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
@@ -12,10 +12,12 @@ import {
 import BranchEditor from '../BranchEditor.vue'
 import CollectorSettings, { type CollectorRuntimeSettings } from '../CollectorSettings.vue'
 import ParamSourceEditor, { type ParamSourceModel } from '@/views/FlowCanvas/source/ParamSourceEditor.vue'
+import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDialog.vue'
 
-// 参数子源（0802 重构·方案 A）：编辑入口从 ParamsTab 挪到 ConfigTab 源 URL 区域下方；
-// 只在「首节点 + 源是参数子源」时挂载，patchSource 内部 applyParamSourceUrlToFirstCollectNode
-// 会自动把首节点 cc.url / cc.urlParamRefs 同步好（见 flowModel.ts:401-408）。
+// 参数子源（0803 调整）：本区域默认只读摘要，编辑收进「编辑」按钮弹出的 EditParamSourceDialog——
+// 该弹窗保存走 sourceApi.sourceUpdate 落库，再 patchSource/patchSourceCtx 写回，
+// patchSource 内部 applyParamSourceUrlToFirstCollectNode 会自动把首节点 cc.url / cc.urlParamRefs 同步好
+// （见 flowModel.ts:401-408）；本文件不再直接双向绑定 model，只做一次性只读派生。
 
 const flow = useFlowStore()
 
@@ -50,60 +52,16 @@ function onRuntimeSettingsChange(patch: Partial<CollectorRuntimeSettings>) {
 // 首采集节点判定：调度设置只在首采集节点展示（与原 NodeInspector 顶层逻辑一致）
 const isFirstCollectorNode = computed(() => !!cc.value && flow.main.find((nodeId: string) => !!flow.configs[nodeId]?.collectCfg) === id.value)
 
-// 参数子源：仅首节点 + 源是参数子源（source.kind === 'param'）时挂载 ParamSourceEditor
+// 参数子源：仅首节点 + 源是参数子源（source.kind === 'param'）时展示只读摘要
 const isParamSource = computed(() => flow.sourceCfg?.kind === 'param')
 const showParamSourceEditor = computed(() => isFirstCollectorNode.value && isParamSource.value)
-// ParamSourceModel 是整体替换（baseUrl/urlTemplate/refs 三件套），用 ref + watch 同步
-const paramSourceModel = ref<ParamSourceModel>({ baseUrl: '', urlTemplate: '', refs: [] })
-watch(
-  () => flow.sourceCfg && isParamSource.value,
-  (show) => {
-    if (!show) return
-    paramSourceModel.value = {
-      baseUrl: flow.sourceCfg?.baseUrl ?? '',
-      urlTemplate: flow.sourceCfg?.urlTemplate ?? '',
-      refs: (flow.sourceCfg?.paramRefs ?? []).map((ref) => ({ ...ref })),
-    }
-  },
-  { immediate: true },
-)
-// 用户在 ParamSourceEditor 内编辑：实时 patchSource → applyParamSourceUrlToFirstCollectNode
-// 把模板和 refs 同步到首节点 cc.url / cc.urlParamRefs（无须手写联动）
-let suppressPatch = false
-watch(
-  paramSourceModel,
-  (next) => {
-    if (suppressPatch) return
-    if (!flow.sourceCfg) return
-    flow.patchSource({
-      baseUrl: next.baseUrl,
-      urlTemplate: next.urlTemplate,
-      paramRefs: next.refs.map((ref) => ({ ...ref })),
-    })
-  },
-  { deep: true },
-)
-// 切节点 / 切源导致 sourceCfg 变时，重新同步 paramSourceModel
-watch(
-  () => `${flow.sourceCfg?.baseUrl ?? ''}|${flow.sourceCfg?.urlTemplate ?? ''}|${(flow.sourceCfg?.paramRefs ?? []).map((r) => `${r.paramId}:${r.group ?? ''}`).join(',')}`,
-  () => {
-    if (!isParamSource.value || !flow.sourceCfg) return
-    const next: ParamSourceModel = {
-      baseUrl: flow.sourceCfg.baseUrl ?? '',
-      urlTemplate: flow.sourceCfg.urlTemplate ?? '',
-      refs: (flow.sourceCfg.paramRefs ?? []).map((ref) => ({ ...ref })),
-    }
-    if (next.baseUrl === paramSourceModel.value.baseUrl
-      && next.urlTemplate === paramSourceModel.value.urlTemplate
-      && next.refs.length === paramSourceModel.value.refs.length
-      && next.refs.every((r, i) => r.paramId === paramSourceModel.value.refs[i]?.paramId && r.group === paramSourceModel.value.refs[i]?.group)) {
-      return
-    }
-    suppressPatch = true
-    paramSourceModel.value = next
-    suppressPatch = false
-  },
-)
+// 只读派生，不回写：编辑统一走「编辑」按钮打开的 EditParamSourceDialog
+const paramSourceModel = computed<ParamSourceModel>(() => ({
+  baseUrl: flow.sourceCfg?.baseUrl ?? '',
+  urlTemplate: flow.sourceCfg?.urlTemplate ?? '',
+  refs: (flow.sourceCfg?.paramRefs ?? []).map((ref) => ({ ...ref })),
+}))
+const editParamSourceVisible = ref(false)
 
 // 主链上一个节点：用于输入映射「来源」下拉建议
 const prevNode = computed<NodeConfig | undefined>(() => {
@@ -180,13 +138,17 @@ const ruleInmapOpen = ref(false)
           </option>
         </select>
       </div>
-      <!-- 参数子源（0802 重构·方案 A）：编辑入口从 ParamsTab 挪到源 URL 区域下方；
-           仅首节点 + 源是参数子源时挂载，详见 patchSource 链路注释 -->
+      <!-- 参数子源（0803 调整）：默认只读摘要，点「编辑」打开 EditParamSourceDialog 修改；
+           仅首节点 + 源是参数子源时展示，详见上方脚本注释 -->
       <template v-if="showParamSourceEditor">
-        <div class="ni-section-title">参数子源</div>
-        <div class="rc-section-divider">
-          <ParamSourceEditor v-model="paramSourceModel" />
+        <div class="ni-section-title ni-section-title-row">
+          <span>参数子源</span>
+          <button class="rc-btn" type="button" data-testid="param-source-edit-open" @click="editParamSourceVisible = true">编辑</button>
         </div>
+        <div class="rc-section-divider">
+          <ParamSourceEditor :model-value="paramSourceModel" readonly />
+        </div>
+        <EditParamSourceDialog v-model="editParamSourceVisible" />
       </template>
       <!-- 运行设置（0711 R5）：代理/断点续爬/登录，节点级配置、默认折叠 -->
       <CollectorSettings :model-value="runtimeSettings" :capability="nodeCapability" :show-schedule="isFirstCollectorNode" @update:model-value="onRuntimeSettingsChange" />
@@ -294,6 +256,8 @@ const ruleInmapOpen = ref(false)
 .rc-segment button:first-child { border-left: 0; }
 .rc-segment button.active { background: var(--rc-primary); color: #fff; font-weight: 700; }
 .ni-section-title { margin: 16px 0 8px; padding-top: 12px; border-top: 1px dashed var(--rc-border-soft); color: var(--rc-muted); font-size: 12px; font-weight: 700; }
+.ni-section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ni-section-title-row .rc-btn { height: 24px; padding: 0 9px; font-size: 11px; }
 /* 参数子源编辑器容器（0802）：跟其他段落用同色背景区分；ParamSourceEditor 是 display:contents，外层负责间距 */
 .rc-section-divider { margin-top: 4px; padding: 8px 10px; background: #f8fafc; border: 1px solid var(--rc-border-soft); border-radius: 7px; }
 .ni-adv { margin-top: 12px; border-top: 1px dashed var(--rc-border-soft); padding-top: 8px; }
