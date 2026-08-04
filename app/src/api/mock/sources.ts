@@ -4,13 +4,13 @@ import type { Paged, Source, SourceCategory, SourceOption, Step, Ack, Credential
 // siteId（0707 优化·Phase2）：按分类归拢进 mock/sites.ts 的演示网站，供网站—子源模型联调；导出供 sites.ts 聚合读取。
 export const SOURCES: Source[] = [
   {
-    sourceId: '391007768', name: '支付宝评论规则过滤', url: 'undComment-209',
+    sourceId: '391007768', name: '支付宝评论规则过滤', url: 'FundComment-209',
     configId: '81909', mainTable: '2102157', owner: 'dev_zhonghe',
     categoryPath: '/基金类/支付宝评论', cycle: '每日', state: 'C',
     dataCount: 4501, newInCount: 12, successCount: 4489, version: 7,
     lastTaskAt: '2026-06-18 17:40:09', lastSuccessAt: '2026-06-18 17:42:51',
     domain: 'comment.zfb', category: '基金类', subCategory: '支付宝评论', resume: true,
-    coreParam: 'fund_code', lastUrl: 'undComment-209?p=2', dirId: '9008845',
+    coreParam: 'fund_code', lastUrl: 'FundComment-209?p=2', dirId: '9008845',
     credentialRef: 'cred-zfb', updatedAt: '2026-06-18 17:42', freqTag: '日度', verified: 'normal',
     siteId: 'site-zfb',
   },
