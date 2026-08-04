@@ -106,7 +106,7 @@ export interface RuleOrchestration {
   dataSource?: RuleDataSource
   /** 输入表物理表名（发给 vrule 用，= 旧 targetTable） */
   inputTable?: string
-  /** 输入表 tableId（与采集中心 NodeConfig.inputTable 同步用，两者同源同编号空间） */
+  /** 输入表 tableId；0803 起改走 vrule 跨租户表搜索（news-getTableList），不再是采集中心 entryType 的 tableId */
   inputTableId?: string
   /** 输出表物理表名；本期由采集中心侧存储，vrule 是否接收待确认（拍板 #5） */
   outputTable?: string
@@ -115,6 +115,12 @@ export interface RuleOrchestration {
   inputFields?: string[]
   /** 出参字段编码（itemCode），>=1，多选 */
   outputFields?: string[]
+  /**
+   * 0803 追加：规则所属租户（旧 userCode）。查看详情时从 getComposeById 的 userCode 字段回填；
+   * 新建时取自「输入表」选中项所属租户（跨租户表搜索按租户逐个查，选中的表天然知道自己来自哪个租户）。
+   * 保存业务规则时用它而非登录账号，保证规则归属的租户和它引用的表所属租户一致。
+   */
+  userCode?: string
 }
 
 /** 表选项：统一 vrule dbTableName / 采集中心 EntryType 两侧命名（两者 tableName 含义相反，见 §4.3） */
@@ -126,6 +132,8 @@ export interface RuleTableOption {
   dbTableName: string
   /** 去重列，逗号分隔，如 "K1,K10" */
   keyField?: string
+  /** 0803 追加：这张表来自跨租户搜索时具体命中的租户（news-getTableList 的 userCode），用于回填 RuleOrchestration.userCode */
+  ownerUserCode?: string
 }
 
 /** 字段选项 */

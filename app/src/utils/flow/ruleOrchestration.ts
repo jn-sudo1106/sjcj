@@ -1,28 +1,8 @@
-// 规则编排：表/字段模型转换 + 测试取数行映射（0801 方案 §4.3/§4.6/§8.6）。
-// 表列表与字段列表本期直接复用采集中心 entryApi/dataApi，不走 vrule 的
-// news-getTableList/news-getTableFields——两边 tableId 同源同编号空间，但 tableName 含义相反
-// （vrule.tableName=中文名，EntryType.tableName=物理表名），本文件负责把这层差异抹平。
-import type { EntryField, EntryType, RuleFieldOption, RuleTableOption } from '@/api/types'
-
-export function ruleTableOptionFromEntryType(entry: Pick<EntryType, 'tableId' | 'tableName' | 'name' | 'keyField'>): RuleTableOption {
-  return {
-    tableId: entry.tableId,
-    // EntryType 无中文名时退回物理表名，保证下拉始终有文案可显示
-    tableName: entry.name || entry.tableName,
-    dbTableName: entry.tableName,
-    keyField: entry.keyField,
-  }
-}
-
-export function ruleFieldOptionFromEntryField(field: EntryField): RuleFieldOption {
-  return {
-    itemCode: field.prop,
-    itemName: field.desc,
-    columnName: field.columnName,
-    dataType: field.type,
-    seq: field.seq,
-  }
-}
+// 规则编排：测试取数行映射（0801 方案 §8.6）。
+// 0803 起表列表/字段列表改走 vrule 跨租户搜索（news-getTableList/news-getTableFields），
+// 不再需要采集中心 EntryType/EntryField → RuleTableOption/RuleFieldOption 的转换，
+// 这里只保留跟表来源无关的纯字段处理工具。
+import type { RuleFieldOption } from '@/api/types'
 
 /** 系统固定字段（ID/SOURCE_ID/UPDATE_DT/CREATE_DT），seq 为负；UI 默认折叠不展示在入参/出参可选项里 */
 export function isSystemField(field: Pick<RuleFieldOption, 'seq'>): boolean {

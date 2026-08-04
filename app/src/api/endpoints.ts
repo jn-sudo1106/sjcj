@@ -220,7 +220,15 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'rule/sharedConfigPaged', desc: '共享配置', impl: true },
   { path: 'rule/testCasePaged', desc: '测试集', impl: true },
   { path: 'rule/evaluate', desc: '函数测试器求值', impl: true },
-  { path: 'rule/orchestrationPaged', desc: '规则编排列表', impl: true },
+  // TODO(REVIEW-2026-08-04 P2 #8)：desc 里的真实路径和 index.ts 里 httpEndpoint 硬编码的字符串是两份
+  // 拷贝，改路径要改两处（这里 + rule/orchestrationSaveMeta/orchestrationDetail/orchestrationGenerate/
+  // orchestrationTest/orchestrationSave 等其它 vrule 端点同样重复）。可以给 ENDPOINTS 表加一个
+  // httpEndpoint 字段统一管理、desc 只负责人话描述，但这个改动会触及全部 impl:true 端点的写法，
+  // 影响面不止 vrule 这几个，值得单独立一个 PR 做，这里先留个标记。
+  { path: 'rule/orchestrationPaged', desc: '规则编排列表 → /vrule/ai/dashscope/list/compose', impl: true, live: true },
+  // 0803 追加：采集中心自己的实体表注册表在真实环境里近乎空，规则节点的表来源改走 vrule 跨租户搜索
+  { path: 'rule/orchestrationTableSearch', desc: '规则处理节点跨租户表搜索 → query-user-info + news-getTableList', impl: true, live: true },
+  { path: 'rule/orchestrationTableFields', desc: '规则处理节点表字段 → /vrule/.../news-getTableFields', impl: true, live: true },
   // 0801 方案：逻辑键；http 时 ruleApi 经 adapter 打到 /vrule/...（见 ruleHttp.test.ts）
   { path: 'rule/orchestrationSaveMeta', desc: '规则编排保存业务规则元数据 → /vrule/api/custom-compose/save', danger: true, impl: true, live: true },
   { path: 'rule/orchestrationDetail', desc: '规则编排详情 → /vrule/api/custom-compose/getComposeById', impl: true, live: true },

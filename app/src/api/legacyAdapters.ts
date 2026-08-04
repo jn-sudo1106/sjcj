@@ -14,9 +14,12 @@ import type {
   ParamInput,
   ParamKind,
   ParamValue,
+  RuleFieldOption,
   RuleOrchestration,
   RuleOrchestrationGenerateResult,
+  RuleOrchestrationItem,
   RuleOrchestrationSaveMetaResult,
+  RuleTableOption,
   RuleOrchestrationSaveResult,
   RuleOrchestrationTestRequest,
   RuleOrchestrationTestResult,
@@ -441,15 +444,90 @@ export function ruleOrchestrationDetailFromLegacy(input: unknown): RuleOrchestra
     // outputTable：实测详情响应无此字段（拍板 #5），本期不从这里取
     inputFields: splitCsv(record.inputFields),
     outputFields: splitCsv(record.outputFields),
+    // 0803 追加：引用已有规则时用它去查它自己租户下的表（跨租户表搜索），而不是当前登录账号的租户
+    userCode: record.userCode == null ? undefined : String(record.userCode),
+  }
+}
+
+/**
+ * 编排列表（0803 追加，支持规则名称 combobox 模糊搜索引用）：POST /vrule/ai/dashscope/list/compose，
+ * 对照 vanv-rule-center-main 源码核实真实存在（DashScopeController#listRuleCompose，MyBatis-Plus IPage，
+ * 序列化为 { records, total, ... }），返回的 id 是数据库自增 Long，与 getComposeById 需要的类型一致。
+ * ⚠️ 该接口的 customQuery 参数是对 nlDescribe 的精确 eq，不支持按名称模糊搜——前端不传它，
+ * 拉一页（size 由调用方定）后交给 RuleTableFieldBinder 客户端按名称模糊过滤，和「输入表」下拉的现有做法一致。
+ */
+export function ruleOrchestrationListFromLegacy(input: unknown): Paged<RuleOrchestrationItem> {
+  const page = asRecord(input)
+  const records = Array.isArray(page.records) ? page.records : []
+  const splitCsv = (v: unknown) => (v == null || v === '' ? [] : String(v).split(',').map((s) => s.trim()).filter(Boolean))
+  const list: RuleOrchestrationItem[] = records.map((raw) => {
+    const record = asRecord(raw)
+    return {
+      ruleId: record.id == null ? '' : String(record.id),
+      name: record.ruleName == null ? '' : String(record.ruleName),
+      describe: String(record.nlDescribe ?? ''),
+      // 列表不返回脚本正文（与详情一致），需单独调读脚本端点
+      script: '',
+      scriptPath: record.codePath == null ? '' : String(record.codePath),
+      enabled: Number(record.state ?? 0) === 1,
+      createdAt: record.createTime == null ? '' : String(record.createTime),
+      dataSource: record.dataSource == null ? undefined : String(record.dataSource),
+      inputTable: record.targetTable == null ? undefined : String(record.targetTable),
+      inputFields: splitCsv(record.inputFields),
+      outputFields: splitCsv(record.outputFields),
+    }
+  })
+  return { total: Number(page.total ?? list.length), list }
+}
+
+/**
+ * 0803 追加：跨租户表搜索（news-getTableList 单条记录）→ RuleTableOption。
+ * 实测响应字段与前端模型基本同名（tableId 是 number，需转 string）；ownerUserCode 由调用方按查询时用的
+ * userCode 回填（响应本身不带这个字段，是我们在“按租户逐个查”时自己知道的上下文）。
+ */
+export function ruleTableOptionFromLegacy(input: unknown, ownerUserCode: string): RuleTableOption {
+  const record = asRecord(input)
+  return {
+    tableId: record.tableId == null ? '' : String(record.tableId),
+    tableName: record.tableName == null ? '' : String(record.tableName),
+    dbTableName: record.dbTableName == null ? '' : String(record.dbTableName),
+    keyField: record.keyField == null || record.keyField === '' ? undefined : String(record.keyField),
+    ownerUserCode,
+  }
+}
+
+/**
+ * 0803 追加：news-getTableFields 单条记录 → RuleFieldOption。
+ * vrule 后端字段命名习惯——表/字段都是驼峰，唯独字段描述字段名是 `item_desc` 下划线，
+ * 与前端 RuleFieldOption.itemDesc 驼峰不一致，adapter 负责把下划线命名翻译为驼峰。
+ * 改 adapter 时不要忘了这一层翻译；其他字段名如果未来 vrule 也用了下划线命名，同样要在这里兜一下。
+ */
+export function ruleFieldOptionFromLegacy(input: unknown): RuleFieldOption {
+  const record = asRecord(input)
+  return {
+    itemCode: record.itemCode == null ? '' : String(record.itemCode),
+    itemName: record.itemName == null ? '' : String(record.itemName),
+    columnName: record.columnName == null ? undefined : String(record.columnName),
+    dataType: record.dataType == null ? undefined : String(record.dataType),
+    itemDesc: record.item_desc == null ? undefined : String(record.item_desc),
+    seq: typeof record.seq === 'number' ? record.seq : (record.seq == null ? undefined : Number(record.seq)),
   }
 }
 
 /**
  * 保存业务规则元数据（路径 A，POST custom-compose/save）。userCode 不在 RuleOrchestration 模型里，
  * 由调用方显式传入。
- * 旧页语义：userCode = 数据源下的「指定用户」编码，默认取父系统 session 登录名（hydrateExternalContext），
- * 也可在下拉中改选他人；会议已去掉「指定用户」UI，本项目直接用当前登录账号（readLoginUsername），
- * 缺省回退 'admin'（与 FlowCanvas owner 占位一致）。
+ * 0803 对照 vrule 真实后端源码（vanv-rule-center-main）核实：custom-compose/save 对 userCode 零校验
+ * （直接 BeanUtils.copyProperties 落库，无白名单/外键），真实租户清单（js1/papa/gf/user1/ht_poc/
+ * dev_zhonghe）也不在这个后端里，query-user-info 只是转发到另一个外部网关。旧前端 hydrateExternalContext
+ * 读的 sessionStorage.loginUsername 键，预期值是宿主门户注入的真实租户码，不是操作人个人账号——
+ * 本项目复用同一个 key 名（readLoginUsername），但写入的是采集配置中心自己的登录账号，语义不同，
+ * 只是恰好后端不校验才能跑通。运营侧方案：规则编排相关操作专用 dev_zhonghe 账号登录，
+ * 使 readLoginUsername() 天然返回合法租户码，无需在代码里硬编码；查无登录时缺省回退 'admin'
+ * （与 FlowCanvas owner 占位一致，纯兜底，非真实租户）。
+ * TODO(REVIEW-2026-08-04 P2 #15)：这是个妥协方案，前提是后端一直不校验 userCode。配个 ticket
+ * 跟踪"vrule 后端什么时候开始校验 userCode"——一旦对方加了白名单/外键校验，这里全部要重新设计
+ * （不能再指望 dev_zhonghe 账号名字恰好是合法租户码这件事）。
  */
 export function ruleOrchestrationSaveMetaToLegacy(cfg: RuleOrchestration, userCode: string): LegacyRecord {
   return {

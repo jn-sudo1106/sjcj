@@ -33,6 +33,8 @@ import {
   mockRuleOrchestrationGenerate,
   mockRuleOrchestrationTest,
   mockRuleOrchestrationSave,
+  mockRuleOrchestrationTableSearch,
+  mockRuleOrchestrationTableFields,
 } from './rules'
 import { mockDatasets, mockMeasures, mockMetricStats } from './metrics'
 import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate } from './dataview'
@@ -148,6 +150,8 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'rule/testCasePaged': mockRuleTestCases,
   'rule/evaluate': mockEvaluate,
   'rule/orchestrationPaged': mockRuleOrchestrationPaged,
+  'rule/orchestrationTableSearch': mockRuleOrchestrationTableSearch,
+  'rule/orchestrationTableFields': mockRuleOrchestrationTableFields,
   'rule/orchestrationSaveMeta': mockRuleOrchestrationSaveMeta,
   'rule/orchestrationDetail': mockRuleOrchestrationDetail,
   'rule/orchestrationLoadScript': mockRuleOrchestrationLoadScript,

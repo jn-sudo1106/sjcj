@@ -219,6 +219,107 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
     expect(detail.scriptPath).toBe('/code01/a.py')
   })
 
+  it('orchestrationPaged：POST list/compose，pageNum/pageSize + IPage.records 映射为 Paged<RuleOrchestrationItem>', async () => {
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    fetchMock.mockResolvedValue(jsonResponse({
+      total: 1,
+      records: [{
+        id: 173, ruleName: '邮箱附件转换指标数据规则', nlDescribe: '转换规则',
+        codePath: '/code01/a.py', state: 1, targetTable: 'sense_data.TB_email_XQ',
+        inputFields: 'date,zb_value', outputFields: 'end_date',
+      }],
+    }))
+    const { ruleApi } = await import('./index')
+
+    const paged = await ruleApi.orchestrationPaged({ size: 50 })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/vrule/ai/dashscope/list/compose')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toMatchObject({ pageNum: 1, pageSize: 50 })
+    expect(paged.total).toBe(1)
+    expect(paged.list[0]).toMatchObject({
+      ruleId: '173', name: '邮箱附件转换指标数据规则', describe: '转换规则',
+      scriptPath: '/code01/a.py', enabled: true, inputFields: ['date', 'zb_value'], outputFields: ['end_date'],
+    })
+  })
+
+  // REVIEW-2026-08-04 P1：补 orchestrationPaged 的错误路径——之前只测了 happy path
+  it('orchestrationPaged：业务错误码（code 非 "0"）→ throw json.msg', async () => {
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    fetchMock.mockResolvedValue(jsonResponse({ code: -1, msg: '规则列表查询失败' }))
+    const { ruleApi } = await import('./index')
+
+    await expect(ruleApi.orchestrationPaged({ size: 50 })).rejects.toThrow('规则列表查询失败')
+  })
+
+  it('orchestrationPaged：session expired 重定向 → throw 登录失效', async () => {
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    fetchMock.mockResolvedValue({
+      ok: false, status: 302, redirected: true, url: '/apiapi/logout.htm',
+      json: async () => ({}),
+    } as unknown as Response)
+    const { ruleApi } = await import('./index')
+
+    await expect(ruleApi.orchestrationPaged({ size: 50 })).rejects.toThrow('登录失效')
+  })
+
+  it('orchestrationPaged：records 为空/缺失时兜底为空列表', async () => {
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    fetchMock.mockResolvedValue(jsonResponse({ total: 0 })) // 无 records 字段
+    const { ruleApi } = await import('./index')
+
+    const paged = await ruleApi.orchestrationPaged({ size: 50 })
+
+    expect(paged.total).toBe(0)
+    expect(paged.list).toEqual([])
+  })
+
+  it('orchestrationPaged：inputFields/outputFields 为 null 时按空数组兜底（splitCsv null 分支）', async () => {
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    fetchMock.mockResolvedValue(jsonResponse({
+      total: 1,
+      records: [{ id: 173, ruleName: '示例规则', targetTable: 'sense_data.TB_X', inputFields: null, outputFields: null }],
+    }))
+    const { ruleApi } = await import('./index')
+
+    const paged = await ruleApi.orchestrationPaged({ size: 50 })
+
+    expect(paged.list[0].inputFields).toEqual([])
+    expect(paged.list[0].outputFields).toEqual([])
+  })
+
+  // 已知行为（不是本次修的范围，先锁定）：真实响应目前是不带 code 字段的裸 IPage（见上面 happy path）。
+  // client.ts 的 normalizeHttpPayload 假定的信封是 {code, data}——如果这个端点哪天改成带 code 包一层，
+  // 但 total/records 仍平铺在顶层（不嵌进 data），会被当成"没 data"直接吞成 { ok: true }，
+  // total/records 静默丢失、变成空列表，且不报错。这里锁定这个已知坑，以后改 normalizeHttpPayload
+  // 或后端响应格式时，这条测试会先炸，提醒去看这个交互。
+  it('orchestrationPaged：响应意外带 code:"0" 但 total/records 仍平铺顶层——会被信封解析吞成空列表（已知坑）', async () => {
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    fetchMock.mockResolvedValue(jsonResponse({
+      code: '0', total: 1,
+      records: [{ id: 173, ruleName: '示例规则', targetTable: 'sense_data.TB_X' }],
+    }))
+    const { ruleApi } = await import('./index')
+
+    const paged = await ruleApi.orchestrationPaged({ size: 50 })
+
+    expect(paged.total).toBe(0)
+    expect(paged.list).toEqual([])
+  })
+
   it('orchestrationLoadScript：GET dashscope/code 读纯文本', async () => {
     vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
     vi.stubEnv('VITE_API_MODE', 'http')
@@ -234,5 +335,34 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
 
     expect(fetchMock.mock.calls[0][0]).toBe('/vrule/ai/dashscope/code?file_name=%2Fcode01%2Fa.py')
     expect(script).toContain('def main(date)')
+  })
+
+  // REVIEW-2026-08-04 P1 #3：搜索框快速连打字时新一轮搜索主动 abort 旧请求。
+  // fetch 拿到 aborted signal 必须立即抛 AbortError（不是 fetch 内部超时统一打"请求超时"），
+  // orchestrationTableSearch 透传 AbortError，不要包成 ApiError 让上层以为是真业务失败。
+  it('orchestrationTableSearch：外部 abort 触发时 fetch 立即抛 AbortError，orchestrationTableSearch 透传且不包 ApiError', async () => {
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    // 模拟"挂起"的 fetch：收到请求时不 resolve，监听 abort 事件后抛 AbortError
+    fetchMock.mockImplementation((_url, init) => new Promise((_, reject) => {
+      const signal = (init as RequestInit | undefined)?.signal as AbortSignal | undefined
+      if (!signal) {
+        reject(new Error('expected signal'))
+        return
+      }
+      if (signal.aborted) {
+        reject(new DOMException('aborted', 'AbortError'))
+        return
+      }
+      signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
+    }))
+    const { ruleApi } = await import('./index')
+
+    const controller = new AbortController()
+    const promise = ruleApi.orchestrationTableSearch('dp-wwdata', 'email', controller.signal)
+    // 立即 abort 模拟"快速连打字"
+    controller.abort()
+    await expect(promise).rejects.toMatchObject({ name: 'AbortError' })
   })
 })

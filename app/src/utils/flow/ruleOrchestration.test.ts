@@ -1,35 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isSystemField, mapRowToInputFields, ruleTableOptionFromEntryType, ruleFieldOptionFromEntryField } from './ruleOrchestration'
-
-describe('ruleTableOptionFromEntryType（0801 §4.3：两侧 tableName 含义相反）', () => {
-  it('EntryType.tableName（物理表名）映射为 dbTableName，name（中文名）映射为 tableName', () => {
-    const opt = ruleTableOptionFromEntryType({
-      tableId: '2102154',
-      tableName: 'sense_data.TB_JD_SKU_BASE',
-      name: 'JD-商品基础',
-      keyField: 'K1,K10',
-    })
-    expect(opt).toEqual({
-      tableId: '2102154',
-      tableName: 'JD-商品基础',
-      dbTableName: 'sense_data.TB_JD_SKU_BASE',
-      keyField: 'K1,K10',
-    })
-  })
-  it('无中文名时退回物理表名，避免下拉无文案', () => {
-    const opt = ruleTableOptionFromEntryType({ tableId: '1', tableName: 'sense_data.TB_X', keyField: undefined })
-    expect(opt.tableName).toBe('sense_data.TB_X')
-  })
-})
-
-describe('ruleFieldOptionFromEntryField', () => {
-  it('prop→itemCode，desc→itemName，columnName/type/seq 透传', () => {
-    const opt = ruleFieldOptionFromEntryField({
-      prop: 'sku_id', desc: '商品ID', type: 'string', required: false, columnName: 'K1', seq: 1,
-    })
-    expect(opt).toEqual({ itemCode: 'sku_id', itemName: '商品ID', columnName: 'K1', dataType: 'string', seq: 1 })
-  })
-})
+import { isSystemField, mapRowToInputFields } from './ruleOrchestration'
 
 describe('isSystemField（seq < 0 为系统固定字段）', () => {
   it('负数 seq 判定为系统字段', () => {

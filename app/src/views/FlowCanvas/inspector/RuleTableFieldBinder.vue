@@ -1,18 +1,29 @@
 <script setup lang="ts">
-// 规则处理节点「新增业务规则」表/字段绑定（0801 方案 §6.3/§7.2）。
-// 表列表由父级传入（NodeInspector 资产 + RuleOrchestrationTab 按需 ensureTableDetail 补 fields）。
-// 不走 vrule news-getTableList/news-getTableFields——两边 tableId 同源同编号空间（拍板清单 §2）。
+// 规则处理节点「新增业务规则」表/字段绑定（0801 方案 §6.3/§7.2；0803 改造：表来源换成 vrule 跨租户搜索）。
+// 采集中心自己的实体表注册表在真实环境里近乎空（实测仅 2 条），规则真正引用的 sense_data 表在 vrule 那边，
+// 但 news-getTableList 按租户分域、没有「查全部」的接口——本组件直接调 ruleApi.orchestrationTableSearch
+// （内部按数据源查全部真实租户、逐个查表合并去重），输入即搜索，不再依赖父级预加载的 tables 列表。
+// 字段列表（入参/出参）仍由父级 RuleOrchestrationTab 传入——它同时要给「查看业务编排」的只读摘要显示字段名，
+// 缓存逻辑放父级更省一次重复请求。
 import { computed, ref } from 'vue'
-import type { EntryType, RuleDataSource, RuleFieldOption, RuleOrchestration, RuleTableOption } from '@/api'
-import { isSystemField, ruleFieldOptionFromEntryField, ruleTableOptionFromEntryType } from '@/utils/flow/ruleOrchestration'
+import { ElMessage } from 'element-plus'
+import { ruleApi, type RuleDataSource, type RuleFieldOption, type RuleOrchestration, type RuleOrchestrationItem, type RuleTableOption } from '@/api'
+import { isSystemField } from '@/utils/flow/ruleOrchestration'
 
 type BinderModel = Pick<
   RuleOrchestration,
-  'dataSource' | 'name' | 'inputTable' | 'inputTableId' | 'outputTable' | 'outputTableId' | 'inputFields' | 'outputFields'
+  'dataSource' | 'name' | 'inputTable' | 'inputTableId' | 'outputTable' | 'outputTableId' | 'inputFields' | 'outputFields' | 'userCode'
 >
 
-const props = defineProps<{ modelValue: BinderModel; tables: EntryType[] }>()
-const emit = defineEmits<{ 'update:modelValue': [BinderModel] }>()
+// 规则名称支持模糊搜索已有规则并引用（0803 会议）：全新态和「修改表字段」编辑态都开放——
+// 后者选中已有项等于中途反悔换成引用别的规则（复用同一套 select-existing + 表冲突确认逻辑）。
+const props = defineProps<{
+  modelValue: BinderModel
+  ruleOptions?: RuleOrchestrationItem[]
+  inputFieldOptions: RuleFieldOption[]
+  outputFieldOptions: RuleFieldOption[]
+}>()
+const emit = defineEmits<{ 'update:modelValue': [BinderModel]; 'select-existing': [ruleId: string] }>()
 
 const DATA_SOURCES: { value: RuleDataSource; label: string }[] = [
   { value: 'dp-news', label: '资讯库' },
@@ -24,68 +35,134 @@ function patch(p: Partial<BinderModel>) {
   emit('update:modelValue', { ...props.modelValue, ...p })
 }
 
-const tableOptions = computed<RuleTableOption[]>(() => props.tables.map(ruleTableOptionFromEntryType))
-
-function fieldsOf(tableId: string | undefined): RuleFieldOption[] {
-  if (!tableId) return []
-  const entry = props.tables.find((t) => t.tableId === tableId)
-  return entry ? entry.fields.map(ruleFieldOptionFromEntryField) : []
-}
-
 // 系统固定字段（seq < 0）默认不进可选池；已选中的仍保留在已选 tag，避免静默丢字段
 const showSystemFields = ref(false)
 function selectableFields(all: RuleFieldOption[]): RuleFieldOption[] {
   if (showSystemFields.value) return all
   return all.filter((f) => !isSystemField(f))
 }
+const inputFieldPool = computed(() => selectableFields(props.inputFieldOptions))
+const outputFieldPool = computed(() => selectableFields(props.outputFieldOptions))
 
-// 输出表为空时出参同源于输入表（0801 方案 §6.3：「输出表可选，默认使用输入表」）
-const inputFieldOptions = computed(() => fieldsOf(props.modelValue.inputTableId))
-const outputFieldOptions = computed(() =>
-  props.modelValue.outputTableId ? fieldsOf(props.modelValue.outputTableId) : inputFieldOptions.value,
-)
-const inputFieldPool = computed(() => selectableFields(inputFieldOptions.value))
-const outputFieldPool = computed(() => selectableFields(outputFieldOptions.value))
+function debounce<A extends unknown[]>(fn: (...args: A) => void, ms: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return (...args: A) => {
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => fn(...args), ms)
+  }
+}
 
-// 可搜索下拉：输入与下拉同一控件；filter-method 接管后按名称/物理表/ID 模糊过滤
-const tableKeyword = ref('')
-function onTableFilter(query: string) {
-  tableKeyword.value = query
+// 表搜索（跨租户，0803）：输入表/输出表各自独立的搜索态，避免共用一份状态时互相打断。
+// REVIEW-2026-08-04 P1 #3：每次 runSearch 创建新 AbortController；新 search 触发时主动 abort 旧 controller，
+// 让"快速连打字"场景下旧请求的网络层真正被中断（不是仅靠 requestSeq 丢弃结果）。
+// AbortError 不弹错——主动取消是预期行为，error 兜底只针对真实失败。
+function useTableSearch() {
+  const results = ref<RuleTableOption[]>([])
+  const loading = ref(false)
+  const selected = ref<RuleTableOption | null>(null)
+  let requestSeq = 0
+  let inflight: AbortController | null = null
+  async function runSearch(dataSource: string | undefined, keyword: string) {
+    if (!dataSource) return
+    // 主动取消上一轮正在飞的请求（不只是丢弃结果，还要把 fetch 也 abort 掉）
+    if (inflight) inflight.abort()
+    const controller = new AbortController()
+    inflight = controller
+    const seq = ++requestSeq
+    loading.value = true
+    try {
+      const list = await ruleApi.orchestrationTableSearch(dataSource, keyword, controller.signal)
+      if (seq !== requestSeq) return // 有更新的搜索已发出，丢弃这次的结果
+      results.value = list
+    } catch (e) {
+      if (seq !== requestSeq) return
+      // 主动取消不弹错——是预期行为；区分靠 error.name
+      if ((e as Error)?.name === 'AbortError') return
+      ElMessage.error(`搜索表失败：${(e as Error)?.message ?? String(e)}`)
+    } finally {
+      if (seq === requestSeq) {
+        loading.value = false
+        if (inflight === controller) inflight = null
+      }
+    }
+  }
+  const debouncedSearch = debounce(runSearch, 300)
+  // 渲染用列表：把当前已选项也并进去，保证下拉重新打开、或搜索结果不包含已选项时控件仍能正确回显 label
+  const renderOptions = computed(() => {
+    if (!selected.value) return results.value
+    if (results.value.some((t) => t.tableId === selected.value!.tableId)) return results.value
+    return [selected.value, ...results.value]
+  })
+  return { results, loading, selected, runSearch, debouncedSearch, renderOptions }
 }
-function onTableSelectVisible(open: boolean) {
-  // 打开时重置关键词，保证已选项仍在 option 列表里能正确显示 label
-  if (open) tableKeyword.value = ''
+const inputTableSearch = useTableSearch()
+const outputTableSearch = useTableSearch()
+
+function onInputTableFilter(query: string) {
+  inputTableSearch.debouncedSearch(props.modelValue.dataSource, query)
 }
-const filteredTableOptions = computed(() => {
-  const kw = tableKeyword.value.trim().toLowerCase()
-  if (!kw) return tableOptions.value
-  return tableOptions.value.filter(
-    (t) =>
-      t.tableName.toLowerCase().includes(kw) ||
-      t.dbTableName.toLowerCase().includes(kw) ||
-      t.tableId.toLowerCase().includes(kw),
-  )
-})
+function onInputTableVisible(open: boolean) {
+  if (open && !inputTableSearch.results.value.length) void inputTableSearch.runSearch(props.modelValue.dataSource, '')
+}
+function onOutputTableFilter(query: string) {
+  outputTableSearch.debouncedSearch(props.modelValue.dataSource, query)
+}
+function onOutputTableVisible(open: boolean) {
+  if (open && !outputTableSearch.results.value.length) void outputTableSearch.runSearch(props.modelValue.dataSource, '')
+}
 function tableOptionLabel(t: RuleTableOption) {
   return `${t.tableName} · ${t.dbTableName}`
 }
 
 function onDataSourceChange(value: RuleDataSource) {
-  // 会议要求切换数据源清空表/字段重选；本项目表列表当前统一来自采集库 entryApi，未按数据源分流，
-  // 但切换动作仍应清空已选表字段，避免把上一数据源选的字段错误带到新数据源下（拍板范围内的稳妥默认）。
-  patch({ dataSource: value, inputTable: '', inputTableId: '', outputTable: '', outputTableId: '', inputFields: [], outputFields: [] })
+  // 切换数据源清空表/字段重选——不同数据源下的租户、表都不是同一批
+  patch({
+    dataSource: value, inputTable: '', inputTableId: '', outputTable: '', outputTableId: '',
+    inputFields: [], outputFields: [], userCode: undefined,
+  })
+  inputTableSearch.results.value = []
+  inputTableSearch.selected.value = null
+  outputTableSearch.results.value = []
+  outputTableSearch.selected.value = null
 }
-function onNameChange(e: Event) {
-  patch({ name: (e.target as HTMLInputElement).value })
+// 规则名称 combobox：value 用规则名文本本身（而非 ruleId），这样未匹配到已有项时控件仍能正常回显
+// 当前草稿名；匹配到已有项则不在本组件内直接改名，交给父级 select-existing 去异步拉详情后再落地。
+const nameKeyword = ref('')
+function onNameFilter(query: string) {
+  nameKeyword.value = query
+}
+function onNameSelectVisible(open: boolean) {
+  if (open) nameKeyword.value = ''
+}
+const filteredRuleOptions = computed(() => {
+  const kw = nameKeyword.value.trim().toLowerCase()
+  const all = props.ruleOptions ?? []
+  if (!kw) return all
+  return all.filter((o) => o.name.toLowerCase().includes(kw))
+})
+function ruleOptionLabel(o: RuleOrchestrationItem) {
+  return o.enabled === false ? `${o.name}（已停用）` : o.name
+}
+function onNameSelect(value: string) {
+  const matched = (props.ruleOptions ?? []).find((o) => o.name === value)
+  if (matched) {
+    emit('select-existing', matched.ruleId)
+    return
+  }
+  patch({ name: value })
 }
 function onInputTableId(tableId: string | undefined | null) {
   const id = tableId ?? ''
-  const table = tableOptions.value.find((t) => t.tableId === id)
-  patch({ inputTableId: id, inputTable: table?.dbTableName ?? '', inputFields: [] })
+  const table = inputTableSearch.renderOptions.value.find((t) => t.tableId === id)
+  inputTableSearch.selected.value = table ?? null
+  // 输入表决定这条规则归属的租户（userCode）——发 saveMeta 时要用它，而不是登录账号，
+  // 保证规则的租户和它引用的表所属租户一致（0803 追加，见 RuleOrchestration.userCode 注释）。
+  patch({ inputTableId: id, inputTable: table?.dbTableName ?? '', inputFields: [], userCode: table?.ownerUserCode })
 }
 function onOutputTableId(tableId: string | undefined | null) {
   const id = tableId ?? ''
-  const table = tableOptions.value.find((t) => t.tableId === id)
+  const table = outputTableSearch.renderOptions.value.find((t) => t.tableId === id)
+  outputTableSearch.selected.value = table ?? null
   patch({ outputTableId: id, outputTable: table?.dbTableName ?? '', outputFields: [] })
 }
 
@@ -113,7 +190,19 @@ const outputExpanded = ref(false)
   </div>
 
   <div class="rc-field"><label>规则名称 *</label>
-    <input class="rc-input" :value="modelValue.name ?? ''" placeholder="请输入规则名称" @input="onNameChange" />
+    <el-select
+      class="rc-table-select"
+      :model-value="modelValue.name || undefined"
+      filterable
+      allow-create
+      default-first-option
+      placeholder="搜索已有规则引用，或输入新名称新建"
+      :filter-method="onNameFilter"
+      @change="onNameSelect"
+      @visible-change="onNameSelectVisible"
+    >
+      <el-option v-for="o in filteredRuleOptions" :key="o.ruleId" :label="ruleOptionLabel(o)" :value="o.name" />
+    </el-select>
   </div>
 
   <div class="rc-field"><label>输入表 *</label>
@@ -121,19 +210,22 @@ const outputExpanded = ref(false)
       class="rc-table-select"
       :model-value="modelValue.inputTableId || undefined"
       filterable
+      remote
       clearable
-      placeholder="输入关键词筛选或选择表名"
-      :filter-method="onTableFilter"
+      :remote-method="onInputTableFilter"
+      :loading="inputTableSearch.loading.value"
+      placeholder="输入关键词跨租户搜索表，如 email、公告…"
       @update:model-value="onInputTableId"
-      @visible-change="onTableSelectVisible"
+      @visible-change="onInputTableVisible"
     >
       <el-option
-        v-for="t in filteredTableOptions"
+        v-for="t in inputTableSearch.renderOptions.value"
         :key="t.tableId"
         :label="tableOptionLabel(t)"
         :value="t.tableId"
       />
     </el-select>
+    <div class="rc-help">跨全部真实租户合并搜索，不需要额外选择租户——选中表后规则自动归属这张表所在的租户</div>
   </div>
 
   <div class="rc-field"><label>输出表（可选，默认使用输入表）</label>
@@ -141,14 +233,16 @@ const outputExpanded = ref(false)
       class="rc-table-select"
       :model-value="modelValue.outputTableId || undefined"
       filterable
+      remote
       clearable
+      :remote-method="onOutputTableFilter"
+      :loading="outputTableSearch.loading.value"
       placeholder="默认 = 输入表；可输入筛选"
-      :filter-method="onTableFilter"
       @update:model-value="onOutputTableId"
-      @visible-change="onTableSelectVisible"
+      @visible-change="onOutputTableVisible"
     >
       <el-option
-        v-for="t in filteredTableOptions"
+        v-for="t in outputTableSearch.renderOptions.value"
         :key="t.tableId"
         :label="tableOptionLabel(t)"
         :value="t.tableId"
@@ -220,6 +314,7 @@ const outputExpanded = ref(false)
   box-shadow: 0 0 0 1px #60a5fa inset, 0 0 0 3px #dbeafe;
 }
 .rc-readonly-hint { padding: 7px 9px; border: 1px dashed #dbe3ee; border-radius: 7px; background: #f8fafc; color: var(--rc-faint); font-size: 12px; }
+.rc-help { color: var(--rc-faint); font-size: 10px; line-height: 1.5; margin-top: 4px; }
 .rc-segment { display: inline-flex; border: 1px solid #dbe3ee; border-radius: 7px; overflow: hidden; background: #fff; }
 .rc-segment button { border: 0; border-left: 1px solid #dbe3ee; background: #fff; color: var(--rc-text-2); padding: 7px 10px; font-size: 12px; cursor: pointer; }
 .rc-segment button:first-child { border-left: 0; }

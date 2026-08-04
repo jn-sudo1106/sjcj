@@ -5,12 +5,14 @@ import type {
   SharedConfig,
   RuleTestCase,
   EvalResult,
+  RuleFieldOption,
   RuleOrchestration,
   RuleOrchestrationGenerateResult,
   RuleOrchestrationItem,
   RuleOrchestrationSaveMetaResult,
   RuleOrchestrationSaveResult,
   RuleOrchestrationTestResult,
+  RuleTableOption,
 } from '../types'
 
 // ---------------- 规则组 / 规则 / 共享配置 ----------------
@@ -438,4 +440,49 @@ export function mockRuleOrchestrationSave(params?: Record<string, unknown>): Rul
   if (existing) Object.assign(existing, item)
   else ORCHESTRATIONS.unshift(item)
   return { ruleId, scriptPath, message: '规则脚本已保存（演示）' }
+}
+
+// ---------------- 0803 追加：规则节点跨租户表搜索 / 表字段（mock，对齐真实 vrule 响应字段名） ----------------
+// REVIEW-2026-08-04 P2 #4：mock 按数据源分组（与真实环境一致：不同数据源下的表分属不同批），
+// 申万库（dp-swdata）实测为空——保留空 map 而不是删掉这条数据源，避免业务侧误以为"申万库还没接 vrule"。
+// TODO(REVIEW-2026-08-04 P2 #5)：mock 里 keyField 写死成 'K1,K2'（vrule 旧前端的"键列"概念），
+// 真实 vrule 现在的 keyField 语义未必仍是"K 列"，可能是"主键字段名"或者其他——下次接入真实数据时
+// 按 vanv-rule-center-main 源码核实一下回填；如果届时发现 keyField 不再使用，本字段可以从
+// RuleTableOption 类型里删掉（业务侧暂无调用方）。
+const VRULE_TABLES_BY_DS: Record<string, RuleTableOption[]> = {
+  'dp-wwdata': [
+    { tableId: 'vt-jd-sku', tableName: 'JD-商品基础', dbTableName: 'sense_data.TB_JD_SKU_BASE', keyField: 'K1,K2', ownerUserCode: 'ht_poc' },
+  ],
+  'dp-news': [
+    { tableId: 'vt-email-xq', tableName: '邮箱附件_详情', dbTableName: 'sense_data.TB_email_XQ', keyField: 'K1,K2', ownerUserCode: 'gf' },
+  ],
+  'dp-swdata': [],
+}
+const VRULE_FIELDS: Record<string, RuleFieldOption[]> = {
+  'vt-email-xq': [
+    { itemCode: 'ID', itemName: '主键', columnName: 'ENTRY_ID', dataType: 'string', seq: -100 },
+    { itemCode: 'date', itemName: '日期', columnName: 'K1', dataType: 'string', seq: 1 },
+    { itemCode: 'zb_value', itemName: '指标值', columnName: 'K2', dataType: 'string', seq: 2 },
+  ],
+  'vt-jd-sku': [
+    { itemCode: 'ID', itemName: '主键', columnName: 'ENTRY_ID', dataType: 'string', seq: -100 },
+    { itemCode: 'sku_id', itemName: '商品ID', columnName: 'K1', dataType: 'string', seq: 1 },
+    { itemCode: 'sku_name', itemName: '商品名称', columnName: 'K2', dataType: 'string', seq: 2 },
+  ],
+}
+
+export function mockRuleOrchestrationTableSearch(params?: Record<string, unknown>): RuleTableOption[] {
+  // REVIEW-2026-08-04 P2 #4：mock 模式下 dataSource 也参与过滤，匹配生产契约——生产里
+  // searchTablesAcrossTenants 内部就是按 dataSource 调 vrule，不同 ds 返回的表自然不同。
+  const dataSource = String(params?.dataSource ?? '')
+  const pool = VRULE_TABLES_BY_DS[dataSource] ?? []
+  const keyword = String(params?.keyword ?? '').trim().toLowerCase()
+  if (!keyword) return pool
+  return pool.filter(
+    (t) => t.tableName.toLowerCase().includes(keyword) || t.dbTableName.toLowerCase().includes(keyword),
+  )
+}
+
+export function mockRuleOrchestrationTableFields(params?: Record<string, unknown>): RuleFieldOption[] {
+  return VRULE_FIELDS[String(params?.tableId ?? '')] ?? []
 }
