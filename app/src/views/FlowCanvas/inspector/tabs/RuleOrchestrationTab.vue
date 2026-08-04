@@ -5,8 +5,7 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { makeDefaultRuleOrchestration, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, ruleApi, type EntryType, type RuleFieldOption, type RuleOrchestration } from '@/api'
-import { ruleFieldOptionFromEntryField } from '@/utils/flow/ruleOrchestration'
+import { ruleApi, type RuleFieldOption, type RuleOrchestration, type RuleTableOption } from '@/api'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
 import RuleScriptDialog from '../RuleScriptDialog.vue'
@@ -14,7 +13,7 @@ import RuleSystemPromptDialog from '../RuleSystemPromptDialog.vue'
 import RuleTestDialog from '../RuleTestDialog.vue'
 
 const flow = useFlowStore()
-const { tables } = useNodeInspectorAssets()
+const { ruleOrchestrations } = useNodeInspectorAssets()
 
 const id = computed<string>(() => flow.selectedId)
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
@@ -24,27 +23,29 @@ function patch(p: Partial<RuleOrchestration>) {
   flow.patchRuleConfig(id.value, p)
 }
 
-// 表列表（entryApi.entryPaged）不带字段定义，真实后端的字段只在单表详情里（entryApi.entryDetail →
-// config/entryType，live）。选中输入/输出表时按需拉一次详情并缓存，避免每次切换都重复请求。
-const tableDetails = ref<Map<string, EntryType>>(new Map())
-async function ensureTableDetail(tableId: string | undefined) {
-  if (!tableId || tableDetails.value.has(tableId)) return
+// 表字段（0803 改造）：表来源已换成 vrule 跨租户搜索（RuleTableFieldBinder 内部自搜），采集中心的
+// entryDetail 根本不认识这些表，字段改走 ruleApi.orchestrationTableFields（news-getTableFields）。
+// 选中输入/输出表时按需拉一次并缓存，key 带上 dataSource 避免跨数据源撞 tableId。
+const tableFields = ref<Map<string, RuleFieldOption[]>>(new Map())
+async function ensureTableFields(tableId: string | undefined, dataSource: string | undefined) {
+  if (!tableId || !dataSource) return
+  const key = `${dataSource}:${tableId}`
+  if (tableFields.value.has(key)) return
   try {
-    const detail = await entryApi.entryDetail(tableId)
-    tableDetails.value.set(tableId, detail)
+    const fields = await ruleApi.orchestrationTableFields(tableId, dataSource)
+    tableFields.value.set(key, fields)
   } catch (e) {
     ElMessage.error(`加载表字段失败：${(e as Error)?.message ?? String(e)}`)
   }
 }
 watch(
-  () => [ruleCfg.value.inputTableId, ruleCfg.value.outputTableId],
-  ([inputTableId, outputTableId]) => {
-    ensureTableDetail(inputTableId)
-    ensureTableDetail(outputTableId)
+  () => [ruleCfg.value.inputTableId, ruleCfg.value.outputTableId, ruleCfg.value.dataSource] as const,
+  ([inputTableId, outputTableId, dataSource]) => {
+    ensureTableFields(inputTableId, dataSource)
+    ensureTableFields(outputTableId, dataSource)
   },
   { immediate: true },
 )
-const tablesWithFields = computed(() => tables.value.map((t) => tableDetails.value.get(t.tableId) ?? t))
 
 // 有 ruleId 时默认只读摘要，需显式「修改表字段」才回到可编辑态（0801 方案 §6.2，默认不鼓励改表字段）
 const editingMeta = ref(false)
@@ -68,8 +69,9 @@ async function onSaveMeta() {
   }
   saving.value = true
   try {
-    // userCode：优先当前登录账号（sessionStorage），缺省由 ruleApi 回退 'admin'
-    const res = await ruleApi.orchestrationSaveMeta(ruleCfg.value)
+    // userCode：优先用选中输入表所属的租户（0803 追加，见 RuleOrchestration.userCode 注释），
+    // 保证规则归属的租户和它引用的表所属租户一致；没有表来源时才回退登录账号/'admin'
+    const res = await ruleApi.orchestrationSaveMeta(ruleCfg.value, ruleCfg.value.userCode)
     patch({ mode: 'ref', ruleId: res.ruleId })
     // 表相关字段同步到 NodeConfig（0801 方案 §4.6）：节点侧存 tableId，不是物理表名
     if (ruleCfg.value.inputTableId) flow.setInputTable(id.value, ruleCfg.value.inputTableId)
@@ -91,10 +93,90 @@ function onCancelEditMeta() {
   editingMeta.value = false
 }
 
+// 引用已有规则（0803 会议）：规则名称 combobox 选中已有项后触发。拉详情 + 缺脚本时读脚本正文，
+// 若引用规则原关联的输入表和当前节点已选表冲突则先确认覆盖（拍板：提示冲突，用户确认）。
+const selectingExisting = ref(false)
+async function onSelectExisting(ruleId: string) {
+  if (selectingExisting.value) return
+  selectingExisting.value = true
+  try {
+    const detail = await ruleApi.orchestrationDetail(ruleId)
+    // 详情只返回物理表名（targetTable），需要反查 vrule 那边的 tableId 才能和 NodeConfig 打通（§4.6）。
+    // 0803 改造：表来源已换成跨租户搜索，用规则自己的物理表名当关键词去搜（news-getTableList 的 name
+    // 参数已实测对物理表名做模糊匹配），优先取和该规则自身 userCode 同租户的那条，避免撞到别的租户下同名表。
+    let matchedTable: RuleTableOption | undefined
+    if (detail.dataSource && detail.inputTable) {
+      try {
+        const candidates = await ruleApi.orchestrationTableSearch(detail.dataSource, detail.inputTable)
+        const exact = candidates.filter((t) => t.dbTableName === detail.inputTable)
+        matchedTable = exact.find((t) => t.ownerUserCode === detail.userCode) ?? exact[0]
+      } catch (e) {
+        ElMessage.warning(`反查表 ID 失败：${(e as Error)?.message ?? String(e)}`)
+      }
+    }
+    const nextInputTableId = matchedTable?.tableId ?? ''
+    const currentInputTableId = ruleCfg.value.inputTableId
+    const hasConflict = !!currentInputTableId && !!nextInputTableId && currentInputTableId !== nextInputTableId
+    if (hasConflict) {
+      try {
+        await ElMessageBox.confirm(
+          `该规则原关联的输入表为「${detail.inputTable}」，与当前节点已选表不一致。是否用该规则的表 / 字段配置覆盖当前节点？`,
+          '表配置冲突',
+          { type: 'warning', confirmButtonText: '确认覆盖', cancelButtonText: '取消引用' },
+        )
+      } catch {
+        return // 用户取消引用，保持当前草稿不变
+      }
+    }
+    if (!matchedTable && detail.inputTable) {
+      // 反查表失败（search 抛错）或搜到空结果，两种情况 matchedTable 都是 undefined——
+      // 不管哪种，输入表都没法确定，不能让规则带着空 inputTableId 落进 store 却弹"已引用"成功，
+      // 所以这里直接 return，保持当前草稿不变，让用户看着提示手动重新选择输入表。
+      ElMessage.warning(`该规则原关联表「${detail.inputTable}」在 vrule 表清单里搜不到，请手动重新选择输入表`)
+      return
+    }
+    let script = detail.script ?? ''
+    if (!script.trim() && detail.scriptPath?.trim()) {
+      try {
+        script = await ruleApi.orchestrationLoadScript(detail.scriptPath)
+      } catch {
+        // 脚本读取失败不阻塞引用；进入查看态后 hydrateViewFromServer 仍会再试一次
+      }
+    }
+    // REVIEW-2026-08-04 P1：显式列出要采纳的字段，不用 `...detail` 展开——避免 detail 以后
+    // 加了新字段、且这个字段本不该被新规则采纳时，被悄悄带进来。
+    patch({
+      mode: detail.mode,
+      ruleId: detail.ruleId,
+      name: detail.name,
+      describe: detail.describe,
+      systemPrompt: detail.systemPrompt,
+      scriptPath: detail.scriptPath,
+      enabled: detail.enabled,
+      dataSource: detail.dataSource,
+      inputTable: detail.inputTable,
+      inputFields: detail.inputFields,
+      outputFields: detail.outputFields,
+      script,
+      inputTableId: nextInputTableId,
+      outputTable: '',
+      outputTableId: '',
+      userCode: matchedTable?.ownerUserCode ?? detail.userCode,
+    })
+    if (nextInputTableId) flow.setInputTable(id.value, nextInputTableId)
+    editingMeta.value = false
+    hydrateToken.value = ''
+    ElMessage.success(`已引用规则「${detail.name}」`)
+  } catch (e) {
+    ElMessage.error(`加载规则详情失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    selectingExisting.value = false
+  }
+}
+
 function fieldsOf(tableId: string | undefined): RuleFieldOption[] {
-  if (!tableId) return []
-  const entry = tableDetails.value.get(tableId) ?? tables.value.find((t) => t.tableId === tableId)
-  return entry ? entry.fields.map(ruleFieldOptionFromEntryField) : []
+  if (!tableId || !ruleCfg.value.dataSource) return []
+  return tableFields.value.get(`${ruleCfg.value.dataSource}:${tableId}`) ?? []
 }
 const inputFieldOptions = computed(() => fieldsOf(ruleCfg.value.inputTableId))
 const outputFieldOptions = computed(() =>
@@ -231,7 +313,15 @@ const canTest = computed(() => !!ruleCfg.value.script?.trim() && !!ruleCfg.value
   <div class="ni-section-title">规则编排</div>
 
   <template v-if="showBinder">
-    <RuleTableFieldBinder :model-value="ruleCfg" :tables="tablesWithFields" @update:model-value="patch" />
+    <RuleTableFieldBinder
+      :model-value="ruleCfg"
+      :rule-options="ruleOrchestrations"
+      :input-field-options="inputFieldOptions"
+      :output-field-options="outputFieldOptions"
+      @update:model-value="patch"
+      @select-existing="onSelectExisting"
+    />
+    <div v-if="selectingExisting" class="rc-help">正在加载已引用规则的详情…</div>
     <div class="rc-actions-row">
       <button class="rc-btn primary" type="button" :disabled="saving" @click="onSaveMeta">
         {{ saving ? '保存中...' : '保存业务规则' }}

@@ -278,9 +278,11 @@ describe('最新方案 UI 入口收口', () => {
     expect(ruleTableFieldBinder).toContain('输入表')
     expect(ruleTableFieldBinder).toContain('入参字段')
     expect(ruleTableFieldBinder).toContain('出参字段')
-    // 编排列表后置，本期无「引用已有」分段；「指定用户」不渲染，「表名关键词」并入输入表下拉（会议 11:57/13:50）
-    expect(allInspectorSource).not.toContain('引用已有规则')
-    expect(allInspectorSource).not.toContain('新建编排')
+    // 编排列表页面（搜索/分页/启停等整页管理）仍然后置；但 0803 会议追加：编排配置内联的「引用已有规则」
+    // 要做——规则名称 combobox 模糊搜索命中已有项即触发引用，不需要整页列表
+    expect(ruleTableFieldBinder).toContain('select-existing')
+    expect(ruleOrchestrationTab).toContain('onSelectExisting')
+    // 「指定用户」不渲染，「表名关键词」并入输入表下拉（会议 11:57/13:50），这两条仍然成立
     expect(allInspectorSource).not.toContain('指定用户')
     expect(allInspectorSource).not.toContain('表名关键词')
     // 规则编排从 ConfigTab 移出（只留一句迁移注释指向新 Tab，不再渲染面板本体）；
