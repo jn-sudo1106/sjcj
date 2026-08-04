@@ -103,14 +103,27 @@ async function loadTasks() {
 watch(sourceId, async () => {
   page.value = 1
   filters.sourceId = props.siteWide ? '' : sourceId.value
-  filters.nodeId = ''
   filters.state = ''
   await loadSiteSources()
 }, { immediate: true })
+
+watch([processLayout, filterSteps], () => {
+  if (!filters.nodeId || (filterSteps.value.length > 0 && !filterSteps.value.some((s) => s.stepId === filters.nodeId))) {
+    const firstId = processLayout.value.nodes[0]?.id || filterSteps.value[0]?.stepId
+    if (firstId) filters.nodeId = firstId
+  }
+}, { immediate: true })
+
 watch(() => [filters.sourceId, filters.nodeId, filters.state] as const, ([nextSourceId], previous) => {
   page.value = 1
   void Promise.all([nextSourceId !== previous?.[0] ? loadNodeMetadata() : Promise.resolve(), loadTasks()])
 }, { immediate: true })
+
+function resetFilters() {
+  filters.sourceId = props.siteWide ? '' : sourceId.value
+  filters.nodeId = processLayout.value.nodes[0]?.id || filterSteps.value[0]?.stepId || ''
+  filters.state = ''
+}
 
 function nodeName(taskSourceId: string, nodeId?: string): string {
   return stepsBySource.value[taskSourceId]?.find((step) => step.stepId === nodeId)?.name ?? nodeId ?? '—'
@@ -126,11 +139,6 @@ function stateText(state: TaskInst['state']): string {
 }
 function stateClass(state: TaskInst['state']): string {
   return state === 'L' ? 'run' : state === 'E' ? 'err' : 'ok'
-}
-function resetFilters() {
-  filters.sourceId = props.siteWide ? '' : sourceId.value
-  filters.nodeId = ''
-  filters.state = ''
 }
 function previousPage() {
   page.value = Math.max(1, page.value - 1)
@@ -155,7 +163,7 @@ function nextPage() {
 
         <div class="tv-filters">
           <select v-model="filters.nodeId" class="tv-input" data-testid="task-node-filter" aria-label="流程节点">
-            <option value="">节点（全部）</option>
+            <option v-if="!filterSteps.length" value="">暂无节点</option>
             <option v-for="step in filterSteps" :key="`${step.sourceId}-${step.stepId}`" :value="step.stepId">{{ showSourceColumn ? `${sourceNames[step.sourceId] || step.sourceId} · ${step.name}` : step.name }}</option>
           </select>
           <select v-model="filters.state" class="tv-input" aria-label="任务状态">

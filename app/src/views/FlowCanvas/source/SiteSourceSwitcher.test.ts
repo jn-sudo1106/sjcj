@@ -139,6 +139,23 @@ describe('SiteSourceSwitcher', () => {
     expect(wrapper.emitted('pick')).toEqual([[source]])
     expect(wrapper.find('.ssw-row-run').exists()).toBe(false)
   })
+
+  it('点击列表开头的全部行触发 pickSite 事件（取消源 ID 过滤）', async () => {
+    const wrapper = await createWrapper()
+    await wrapper.get('.ssw-row-all-btn').trigger('click')
+    expect(wrapper.emitted('pickSite')).toBeTruthy()
+  })
+
+  it('支持折叠源列表，并在线下方面板完整展示选中源的名称与源 ID', async () => {
+    const wrapper = await createWrapper()
+    expect(wrapper.find('[data-testid="active-source-detail"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="active-source-full-name"]').text()).toBe(source.name)
+    expect(wrapper.get('[data-testid="active-source-full-id"]').text()).toBe(source.sourceId)
+
+    // 点击折叠分割栏图标收起列表
+    await wrapper.get('.ssw-section-toggle').trigger('click')
+    expect(wrapper.find('.ssw-search').exists()).toBe(false)
+  })
 })
 
 describe('SiteSourceSwitcher · 参数源（0721 会议：加源支持普通子源 / 参数源）', () => {

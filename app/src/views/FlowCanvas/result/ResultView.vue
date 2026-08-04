@@ -24,8 +24,6 @@ const siteChildren = ref<Source[]>([])
 const sourceNames = computed<Record<string, string>>(() =>
   Object.fromEntries(siteChildren.value.map((s) => [s.sourceId, s.name])),
 )
-// 网站详情页恒为全部；子源画布恒为当前子源——不再提供内部「所属子源」筛选（与侧栏导航重复，0714 会议 Task 3）
-const querySourceId = computed(() => (props.siteWide ? undefined : sourceId.value || undefined))
 async function loadSiteChildren() {
   siteChildren.value = siteId.value ? await siteApi.siteSources(siteId.value) : []
 }
@@ -37,7 +35,14 @@ const processLayout = computed(() =>
 const dataNodes = computed(() => processLayout.value.nodes.filter((node) => Boolean(nodeOutputTable(node.cfg))))
 const selectedNodeId = ref<string>('')
 const page = ref(1)
-const filters = reactive({ dataId: '', parentId: '', state: '', sql: '' })
+const filters = reactive({ sourceId: '', dataId: '', parentId: '', state: '', sql: '' })
+
+watch(sourceId, (id) => {
+  filters.sourceId = props.siteWide ? '' : id
+  loadSiteChildren()
+}, { immediate: true })
+
+const querySourceId = computed(() => filters.sourceId || (props.siteWide ? undefined : sourceId.value || undefined))
 
 // 默认选末端数据节点（最终结果表）；有页签快照（0701 问题三）时优先恢复快照里的节点/过滤/页码。
 // 切换页签后旧节点 id 不在新流程里时也重置，避免表格变空。
@@ -118,6 +123,7 @@ function runQuery() {
   loadData()
 }
 function clearFilters() {
+  filters.sourceId = props.siteWide ? '' : sourceId.value
   filters.dataId = ''
   filters.parentId = ''
   filters.state = ''
@@ -199,6 +205,18 @@ async function saveEdit() {
     </div>
 
     <div class="rv-filters">
+      <select v-model="selectedNodeId" class="rv-input" data-testid="data-node-filter" aria-label="流程节点">
+        <option v-if="!dataNodes.length" value="">节点（无）</option>
+        <option v-for="node in dataNodes" :key="node.id" :value="node.id">
+          {{ node.cfg.title || node.id }}
+        </option>
+      </select>
+      <select v-model="filters.sourceId" class="rv-input" data-testid="data-source-filter" aria-label="源 ID" @change="runQuery">
+        <option value="">源 ID（全部子源）</option>
+        <option v-for="s in siteChildren" :key="s.sourceId" :value="s.sourceId">
+          {{ s.name }} ({{ s.sourceId }})
+        </option>
+      </select>
       <input v-model="filters.dataId" class="rv-input" placeholder="数据 ID" @keyup.enter="runQuery" />
       <input v-model="filters.parentId" class="rv-input" placeholder="父 ID" @keyup.enter="runQuery" />
       <select v-model="filters.state" class="rv-input">
