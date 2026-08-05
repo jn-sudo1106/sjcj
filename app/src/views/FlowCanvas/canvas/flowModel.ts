@@ -209,8 +209,6 @@ export interface CollectorCapability {
   supportsUrlParams: boolean
 }
 
-export type DedupType = 'source' | 'table'
-
 /** 代理明细（0804 S3-1）：勾选「使用代理」后才展开填写；下传时按抓取配置 XML 里的 Proxy JSON 形状序列化
  *（ip/port/账号/密码，其余字段用默认值，见开发方案 §3.1），本类型只存前端表单用得到的四项。 */
 export interface CollectorProxyDetail {
@@ -257,9 +255,6 @@ export interface CollectConfig {
   cron?: string
   /** 业务类型（0804 S3-1）：规则名称维度的分类（如新闻/登录/分类），跟网页类型 webKind 是两个独立概念，别混 */
   bizType?: string
-  /** 去重类型（0804 S3-1）：源去重＝按源/语言顺序去重；表内去重＝只看表内是否已存在同值——
-   *  跟输出表本身的去重列（EntryField.dedup）是两回事，那个是"哪一列参与判重"，这个是"判重的范围"。 */
-  dedupType?: DedupType
   /** 代理明细（0804 S3-1）：useProxy 勾选后才展开填写，未勾选时不下传 */
   proxyDetail?: CollectorProxyDetail
   /** 结构化配置（入库配置，0804 S3-1）：程序按此规则把抓取结果落进输出表；本期存不透明文本，具体 schema 由执行端解释 */

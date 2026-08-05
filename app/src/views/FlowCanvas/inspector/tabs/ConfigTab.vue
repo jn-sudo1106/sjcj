@@ -8,7 +8,7 @@ import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
   WEB_KIND_OPTIONS, decisionOrParallelKind, collectorCapabilityOf, isRuleNode,
-  type CollectConfig, type DedupType, type NodeConfig, type TripleField, type WebKind,
+  type CollectConfig, type NodeConfig, type TripleField, type WebKind,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, ruleApi, type RuleOrchestrationItem } from '@/api'
 import BranchEditor from '../BranchEditor.vue'
@@ -152,9 +152,6 @@ const BIZ_TYPE_OPTIONS = [
 function onBizType(e: Event) {
   flow.patchCollect(id.value, { bizType: (e.target as HTMLSelectElement).value || undefined })
 }
-function onDedupType(v: DedupType) {
-  flow.patchCollect(id.value, { dedupType: v })
-}
 </script>
 
 <template>
@@ -198,13 +195,6 @@ function onDedupType(v: DedupType) {
           <option value="">请选择</option>
           <option v-for="opt in BIZ_TYPE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
-      </div>
-      <!-- 去重类型（0804 S3-1）：源去重＝按源/语言顺序去重；表内去重＝只看表内是否已存在同值 -->
-      <div class="rc-field"><label>去重类型</label>
-        <div class="rc-segment">
-          <button type="button" :class="{ active: cc.dedupType !== 'table' }" @click="onDedupType('source')">源去重</button>
-          <button type="button" :class="{ active: cc.dedupType === 'table' }" @click="onDedupType('table')">表内去重</button>
-        </div>
       </div>
       <!-- 参数子源（0803 调整）：默认只读摘要，点「编辑」打开 EditParamSourceDialog 修改；
            仅首节点 + 源是参数子源时展示，详见上方脚本注释 -->
@@ -293,10 +283,6 @@ function onDedupType(v: DedupType) {
 .rc-btn:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rc-btn.primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }
 .rc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.rc-segment { display: inline-flex; border: 1px solid #dbe3ee; border-radius: 7px; overflow: hidden; background: #fff; }
-.rc-segment button { border: 0; border-left: 1px solid #dbe3ee; background: #fff; color: var(--rc-text-2); padding: 7px 10px; font-size: 12px; cursor: pointer; }
-.rc-segment button:first-child { border-left: 0; }
-.rc-segment button.active { background: var(--rc-primary); color: #fff; font-weight: 700; }
 .ni-section-title { margin: 16px 0 8px; padding-top: 12px; border-top: 1px dashed var(--rc-border-soft); color: var(--rc-muted); font-size: 12px; font-weight: 700; }
 .ni-section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ni-section-title-row .rc-btn { height: 24px; padding: 0 9px; font-size: 11px; }
