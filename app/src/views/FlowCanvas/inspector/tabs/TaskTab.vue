@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 任务配置 Tab（P1-1 Step 4 · 从 NodeInspector.vue 拆出）。
-// 内容：输入表（首步骤无）→ 进入条件 → 队列归属 → 任务 URL 来源/规则 → 任务参数取值 → 上下文来源 → 出参列。
+// 内容：输入表（首步骤无）→ 进入条件 → 队列归属 → 任务参数取值 → 上下文来源 → 出参列。
+// 「任务 URL 来源字段/规则」已删除（0804 拍板：当时保留是为了传参，现在在参数位置拼接即可，见开发方案 §2.3）。
 // 行为与原 NodeInspector 内联实现 1:1，仅物理搬迁；共享资产 tables/params 经 useNodeInspectorAssets 注入。
 import { computed } from 'vue'
 import { useFlowStore } from '@/stores/flow'
@@ -65,13 +66,6 @@ const taskQueueFallback = computed(() => {
 function onTaskQueueChange(e: Event) {
   flow.setTaskQueue(id.value, (e.target as HTMLInputElement).value)
 }
-function onTaskUrlSourceFieldChange(e: Event) {
-  flow.patchTaskConfig(id.value, { urlSourceField: (e.target as HTMLSelectElement).value })
-}
-function onTaskUrlRuleChange(e: Event) {
-  flow.patchTaskConfig(id.value, { urlRule: (e.target as HTMLInputElement).value })
-}
-
 // 任务参数由当前节点「参数配置」绑定，不再另行选择参数；这里只配置每个参数的取值来源。
 const availableTaskParamRefs = computed<string[]>(() => [...new Set(cc.value?.urlParamRefs ?? [])])
 const taskParamValues = computed<TaskParamValue[]>(() => {
@@ -139,17 +133,6 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
       @input="onTaskQueueChange"
     />
   </div>
-  <template v-if="!isFirstDataNode">
-    <div class="rc-field"><label>任务 URL 来源字段</label>
-      <select class="rc-select" :value="cfg?.taskCfg?.urlSourceField ?? ''" @change="onTaskUrlSourceFieldChange">
-        <option value="">选择字段（上一步属性）</option>
-        <option v-for="f in inputTableFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
-      </select>
-    </div>
-    <div class="rc-field"><label>任务 URL 规则</label>
-      <input class="rc-input" :value="cfg?.taskCfg?.urlRule ?? ''" placeholder="如 $VAL$（默认从来源字段取值，支持动态函数）" @input="onTaskUrlRuleChange" />
-    </div>
-  </template>
   <template v-if="!isFirstDataNode">
     <div class="rc-field">
       <label>任务参数取值</label>

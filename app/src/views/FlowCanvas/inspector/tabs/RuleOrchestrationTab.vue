@@ -1,226 +1,120 @@
 <script setup lang="ts">
-// 编排配置 Tab（0801 方案 §6.2/§6.4/§7.2）：规则处理节点专属，替换原「表配置」。
-// 路径 A（新增业务规则→保存元数据拿 ruleId）+ 路径 B（描述/生成/全屏/测试/保存脚本）。
+// 编排配置 Tab（0801 方案 §6.2/§6.4/§7.2）：规则处理节点=业务规则脚本（路径 B：描述/生成/全屏/测试/保存），
+// 0804 S3-3 起非规则节点（采集/登录）也走这个 Tab，内容换成抓取配置 XML——两者同构复用 RuleOrchestration
+// （content 概念 ≙ script/scriptPath/describe/systemPrompt，见 flowModel.ts execCfg 字段注释与方案 §3.1 修正 D），
+// 存储位置不同（ruleCfg vs execCfg，避免污染 isRuleNode() 判定），UI/接口调用整套照搬，只有文案、
+// 字段校验、测试入口（规则节点专属）、切换已有配置（非规则节点专属，规则节点的等价能力已被 D3 砍掉）不同。
+// 0804 S2-2 拍板：路径 A（表/字段绑定 + 保存元数据）整个搬去「表配置」Tab（TableTab.vue），
+// 本 Tab 不再有 showBinder/editingMeta 两态切换——表配置本来就是常驻可编辑的一个 Tab，
+// 编排配置只消费已经选好的表/字段，不重复展示可编辑摘要。
+// 0804 拍板：规则名称 = 节点名称，不再单独输入（下面 orchCfg 计算时强制用 cfg.title 覆盖）；
+// 「引用已有规则」能力整体砍掉，复用需求交给模板功能承接（等于回退 edc08d1）。
 import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
-import { makeDefaultRuleOrchestration, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { ruleApi, type RuleFieldOption, type RuleOrchestration, type RuleTableOption } from '@/api'
-import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
-import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
+import { isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { entryApi, ruleApi, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
+import { useRuleTableFields } from '@/composables/useRuleTableFields'
+import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
 import RuleScriptDialog from '../RuleScriptDialog.vue'
 import RuleSystemPromptDialog from '../RuleSystemPromptDialog.vue'
 import RuleTestDialog from '../RuleTestDialog.vue'
 
 const flow = useFlowStore()
-const { ruleOrchestrations } = useNodeInspectorAssets()
 
 const id = computed<string>(() => flow.selectedId)
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
-const ruleCfg = computed<RuleOrchestration>(() => ({ ...makeDefaultRuleOrchestration(), ...cfg.value?.ruleCfg }))
+const isRule = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
+const orchCfg = computed<RuleOrchestration>(() => ({
+  ...(isRule.value ? makeDefaultRuleOrchestration() : makeDefaultExecConfig()),
+  ...(isRule.value ? cfg.value?.ruleCfg : cfg.value?.execCfg),
+  name: cfg.value?.title ?? '',
+}))
 
 function patch(p: Partial<RuleOrchestration>) {
-  flow.patchRuleConfig(id.value, p)
+  if (isRule.value) flow.patchRuleConfig(id.value, p)
+  else flow.patchExecConfig(id.value, p)
 }
 
-// 表字段（0803 改造）：表来源已换成 vrule 跨租户搜索（RuleTableFieldBinder 内部自搜），采集中心的
-// entryDetail 根本不认识这些表，字段改走 ruleApi.orchestrationTableFields（news-getTableFields）。
-// 选中输入/输出表时按需拉一次并缓存，key 带上 dataSource 避免跨数据源撞 tableId。
-const tableFields = ref<Map<string, RuleFieldOption[]>>(new Map())
-async function ensureTableFields(tableId: string | undefined, dataSource: string | undefined) {
-  if (!tableId || !dataSource) return
-  const key = `${dataSource}:${tableId}`
-  if (tableFields.value.has(key)) return
+// 文案分流：内容同构，只有措辞按节点类型切换
+const describeLabel = computed(() => (isRule.value ? '规则处理描述' : '抓取需求描述'))
+const describePlaceholder = computed(() => (isRule.value ? '描述规则处理逻辑，如根据输入字段生成指标数值' : '描述抓取需求，如打开列表页提取表格前 20 行数据'))
+const pathLabel = computed(() => (isRule.value ? '脚本路径' : '配置路径'))
+const generateLabel = computed(() => (isRule.value ? '生成脚本' : '生成配置'))
+const saveLabel = computed(() => (isRule.value ? '保存脚本' : '保存配置'))
+const codeEmptyHint = computed(() => (isRule.value ? '生成脚本后展示 Python 预览' : '生成配置后展示 XML 预览'))
+
+// ---- 抓取配置 XML 轻解析（0804 S3-4，方案 §3.1 修正 B · 附录 §十）：仅非规则节点 ----
+// 只读动作链摘要（顶部展示）+ 保存前的字段一致性提示，不做可视化编辑（方案已拍板不做）。
+const parsedCapture = computed(() => (!isRule.value && orchCfg.value.script?.trim() ? parseCaptureConfig(orchCfg.value.script) : undefined))
+function summarizeActions(actions: { title: string }[]): string {
+  const groups: { title: string; count: number }[] = []
+  for (const a of actions) {
+    const last = groups[groups.length - 1]
+    if (last && last.title === a.title) last.count++
+    else groups.push({ title: a.title, count: 1 })
+  }
+  return groups.map((g) => (g.count > 1 ? `${g.title} ×${g.count}` : g.title)).join(' → ')
+}
+const actionSummary = computed(() => (parsedCapture.value ? summarizeActions(parsedCapture.value.actions) : ''))
+
+// 采集节点没有逐字段勾选 UI（跟规则节点的 inputFields/outputFields 不同），校验对象退化为
+// 输出表的全部字段——校验"XML 引用的 BizId 是否都在这张表上"，而不是"是否都在某个已选子集里"。
+const outputTableId = computed(() => cfg.value?.collectCfg?.outputTable || cfg.value?.outputTable || '')
+async function checkColumnConsistency(): Promise<boolean> {
+  if (isRule.value || !parsedCapture.value?.columns.length || !outputTableId.value) return true
   try {
-    const fields = await ruleApi.orchestrationTableFields(tableId, dataSource)
-    tableFields.value.set(key, fields)
-  } catch (e) {
-    ElMessage.error(`加载表字段失败：${(e as Error)?.message ?? String(e)}`)
-  }
-}
-watch(
-  () => [ruleCfg.value.inputTableId, ruleCfg.value.outputTableId, ruleCfg.value.dataSource] as const,
-  ([inputTableId, outputTableId, dataSource]) => {
-    ensureTableFields(inputTableId, dataSource)
-    ensureTableFields(outputTableId, dataSource)
-  },
-  { immediate: true },
-)
-
-// 有 ruleId 时默认只读摘要，需显式「修改表字段」才回到可编辑态（0801 方案 §6.2，默认不鼓励改表字段）
-const editingMeta = ref(false)
-const showBinder = computed(() => !ruleCfg.value.ruleId || editingMeta.value)
-
-function validateMeta(): string | undefined {
-  if (!ruleCfg.value.dataSource) return '请选择数据源'
-  if (!ruleCfg.value.name?.trim()) return '请填写规则名称'
-  if (!ruleCfg.value.inputTableId) return '请选择输入表'
-  if (!ruleCfg.value.inputFields?.length) return '请至少选择 1 个入参字段'
-  if (!ruleCfg.value.outputFields?.length) return '请至少选择 1 个出参字段'
-  return undefined
-}
-
-const saving = ref(false)
-async function onSaveMeta() {
-  const error = validateMeta()
-  if (error) {
-    ElMessage.warning(error)
-    return
-  }
-  saving.value = true
-  try {
-    // userCode：优先用选中输入表所属的租户（0803 追加，见 RuleOrchestration.userCode 注释），
-    // 保证规则归属的租户和它引用的表所属租户一致；没有表来源时才回退登录账号/'admin'
-    const res = await ruleApi.orchestrationSaveMeta(ruleCfg.value, ruleCfg.value.userCode)
-    patch({ mode: 'ref', ruleId: res.ruleId })
-    // 表相关字段同步到 NodeConfig（0801 方案 §4.6）：节点侧存 tableId，不是物理表名
-    if (ruleCfg.value.inputTableId) flow.setInputTable(id.value, ruleCfg.value.inputTableId)
-    if (ruleCfg.value.outputTableId) flow.setOutputTable(id.value, ruleCfg.value.outputTableId)
-    editingMeta.value = false
-    // 新拿到的 ruleId 允许进入 Path B 时再回灌一次（详情/脚本）
-    hydrateToken.value = ''
-    ElMessage.success(res.message || '业务规则已保存')
-  } catch (e) {
-    ElMessage.error(`保存业务规则失败：${(e as Error)?.message ?? String(e)}`)
-  } finally {
-    saving.value = false
-  }
-}
-function onEditMeta() {
-  editingMeta.value = true
-}
-function onCancelEditMeta() {
-  editingMeta.value = false
-}
-
-// 引用已有规则（0803 会议）：规则名称 combobox 选中已有项后触发。拉详情 + 缺脚本时读脚本正文，
-// 若引用规则原关联的输入表和当前节点已选表冲突则先确认覆盖（拍板：提示冲突，用户确认）。
-const selectingExisting = ref(false)
-async function onSelectExisting(ruleId: string) {
-  if (selectingExisting.value) return
-  selectingExisting.value = true
-  try {
-    const detail = await ruleApi.orchestrationDetail(ruleId)
-    // 详情只返回物理表名（targetTable），需要反查 vrule 那边的 tableId 才能和 NodeConfig 打通（§4.6）。
-    // 0803 改造：表来源已换成跨租户搜索，用规则自己的物理表名当关键词去搜（news-getTableList 的 name
-    // 参数已实测对物理表名做模糊匹配），优先取和该规则自身 userCode 同租户的那条，避免撞到别的租户下同名表。
-    let matchedTable: RuleTableOption | undefined
-    if (detail.dataSource && detail.inputTable) {
-      try {
-        const candidates = await ruleApi.orchestrationTableSearch(detail.dataSource, detail.inputTable)
-        const exact = candidates.filter((t) => t.dbTableName === detail.inputTable)
-        matchedTable = exact.find((t) => t.ownerUserCode === detail.userCode) ?? exact[0]
-      } catch (e) {
-        ElMessage.warning(`反查表 ID 失败：${(e as Error)?.message ?? String(e)}`)
-      }
+    const entry = await entryApi.entryDetail(outputTableId.value)
+    const issues = validateColumns(parsedCapture.value, entry.fields.map((f) => f.prop))
+    if (!issues.length) return true
+    try {
+      await ElMessageBox.confirm(issues.join('\n'), '字段一致性提示', {
+        type: 'warning', confirmButtonText: '仍要保存', cancelButtonText: '取消',
+      })
+      return true
+    } catch {
+      return false
     }
-    const nextInputTableId = matchedTable?.tableId ?? ''
-    const currentInputTableId = ruleCfg.value.inputTableId
-    const hasConflict = !!currentInputTableId && !!nextInputTableId && currentInputTableId !== nextInputTableId
-    if (hasConflict) {
-      try {
-        await ElMessageBox.confirm(
-          `该规则原关联的输入表为「${detail.inputTable}」，与当前节点已选表不一致。是否用该规则的表 / 字段配置覆盖当前节点？`,
-          '表配置冲突',
-          { type: 'warning', confirmButtonText: '确认覆盖', cancelButtonText: '取消引用' },
-        )
-      } catch {
-        return // 用户取消引用，保持当前草稿不变
-      }
-    }
-    if (!matchedTable && detail.inputTable) {
-      // 反查表失败（search 抛错）或搜到空结果，两种情况 matchedTable 都是 undefined——
-      // 不管哪种，输入表都没法确定，不能让规则带着空 inputTableId 落进 store 却弹"已引用"成功，
-      // 所以这里直接 return，保持当前草稿不变，让用户看着提示手动重新选择输入表。
-      ElMessage.warning(`该规则原关联表「${detail.inputTable}」在 vrule 表清单里搜不到，请手动重新选择输入表`)
-      return
-    }
-    let script = detail.script ?? ''
-    if (!script.trim() && detail.scriptPath?.trim()) {
-      try {
-        script = await ruleApi.orchestrationLoadScript(detail.scriptPath)
-      } catch {
-        // 脚本读取失败不阻塞引用；进入查看态后 hydrateViewFromServer 仍会再试一次
-      }
-    }
-    // REVIEW-2026-08-04 P1：显式列出要采纳的字段，不用 `...detail` 展开——避免 detail 以后
-    // 加了新字段、且这个字段本不该被新规则采纳时，被悄悄带进来。
-    patch({
-      mode: detail.mode,
-      ruleId: detail.ruleId,
-      name: detail.name,
-      describe: detail.describe,
-      systemPrompt: detail.systemPrompt,
-      scriptPath: detail.scriptPath,
-      enabled: detail.enabled,
-      dataSource: detail.dataSource,
-      inputTable: detail.inputTable,
-      inputFields: detail.inputFields,
-      outputFields: detail.outputFields,
-      script,
-      inputTableId: nextInputTableId,
-      outputTable: '',
-      outputTableId: '',
-      userCode: matchedTable?.ownerUserCode ?? detail.userCode,
-    })
-    if (nextInputTableId) flow.setInputTable(id.value, nextInputTableId)
-    editingMeta.value = false
-    hydrateToken.value = ''
-    ElMessage.success(`已引用规则「${detail.name}」`)
-  } catch (e) {
-    ElMessage.error(`加载规则详情失败：${(e as Error)?.message ?? String(e)}`)
-  } finally {
-    selectingExisting.value = false
+  } catch {
+    return true // 拉字段失败不阻塞保存，只是跳过这次校验
   }
 }
 
-function fieldsOf(tableId: string | undefined): RuleFieldOption[] {
-  if (!tableId || !ruleCfg.value.dataSource) return []
-  return tableFields.value.get(`${ruleCfg.value.dataSource}:${tableId}`) ?? []
-}
-const inputFieldOptions = computed(() => fieldsOf(ruleCfg.value.inputTableId))
-const outputFieldOptions = computed(() =>
-  ruleCfg.value.outputTableId ? fieldsOf(ruleCfg.value.outputTableId) : inputFieldOptions.value,
-)
-function labelOf(options: RuleFieldOption[], code: string) {
-  return options.find((f) => f.itemCode === code)?.itemName ?? code
-}
-const inputFieldsLabel = computed(() => (ruleCfg.value.inputFields ?? []).map((c) => labelOf(inputFieldOptions.value, c)).join('、') || '—')
-const outputFieldsLabel = computed(() => (ruleCfg.value.outputFields ?? []).map((c) => labelOf(outputFieldOptions.value, c)).join('、') || '—')
-const outputTableLabel = computed(() => (ruleCfg.value.outputTableId ? ruleCfg.value.outputTable : '默认 = 输入表'))
+// 表字段：只读消费「表配置」Tab 已经选好的表——测试台需要按字段回填入参标签，见 RuleTestDialog。
+// 非规则节点的 orchCfg 没有 inputTableId/outputTableId，watch 里的字段拉取会静默 no-op，安全。
+const { inputFieldOptions } = useRuleTableFields(orchCfg)
 
-// ---- 路径 B：描述 / 生成脚本 / 全屏查看 / 编辑系统提示词 / 保存脚本（0801 方案 §6.4）----
 // 进入查看态时按 ruleId 回灌详情 + 缺正文时按 scriptPath 拉 MinIO（对齐旧 handleOpenRecord）
 const hydrateToken = ref('')
 const hydrating = ref(false)
 async function hydrateViewFromServer() {
-  const ruleId = ruleCfg.value.ruleId
-  if (!ruleId || showBinder.value) return
+  const ruleId = orchCfg.value.ruleId
+  if (!ruleId) return
   const token = `${id.value}:${ruleId}`
   if (hydrateToken.value === token || hydrating.value) return
   hydrating.value = true
   hydrateToken.value = token
   try {
-    const stored = cfg.value?.ruleCfg
     try {
       const detail = await ruleApi.orchestrationDetail(ruleId)
       const next: Partial<RuleOrchestration> = {}
       // 服务端有值才覆盖，避免 saveMeta 后详情尚无 nlDescribe 时用空串抹掉本地草稿
+      // name 不在此列：规则名称 = 节点名称（0804 拍板），orchCfg 计算时已强制用 cfg.title 覆盖
       if (detail.describe?.trim()) next.describe = detail.describe
       if (detail.systemPrompt?.trim()) next.systemPrompt = detail.systemPrompt
       if (detail.scriptPath?.trim()) next.scriptPath = detail.scriptPath
-      if (detail.name?.trim() && !stored?.name?.trim()) next.name = detail.name
       if (Object.keys(next).length) patch(next)
     } catch {
       // 详情失败不阻塞；下面仍可凭本地 scriptPath 拉脚本
     }
-    const path = (cfg.value?.ruleCfg?.scriptPath || ruleCfg.value.scriptPath || '').trim()
-    if (path && !cfg.value?.ruleCfg?.script?.trim()) {
+    const stored = isRule.value ? cfg.value?.ruleCfg : cfg.value?.execCfg
+    const path = (stored?.scriptPath || orchCfg.value.scriptPath || '').trim()
+    if (path && !stored?.script?.trim()) {
       try {
         const script = await ruleApi.orchestrationLoadScript(path)
         if (script.trim()) patch({ script })
       } catch (e) {
-        ElMessage.warning(`加载脚本失败：${(e as Error)?.message ?? String(e)}`)
+        ElMessage.warning(`加载失败：${(e as Error)?.message ?? String(e)}`)
       }
     }
   } finally {
@@ -228,7 +122,7 @@ async function hydrateViewFromServer() {
   }
 }
 watch(
-  () => [id.value, ruleCfg.value.ruleId, showBinder.value] as const,
+  () => [id.value, isRule.value, orchCfg.value.ruleId] as const,
   () => { void hydrateViewFromServer() },
   { immediate: true },
 )
@@ -246,12 +140,12 @@ function onCancelGenerate() {
   generateAbort.value?.abort()
 }
 async function onGenerateScript() {
-  if (!ruleCfg.value.describe.trim()) {
-    ElMessage.warning('请先填写规则处理描述')
+  if (!orchCfg.value.describe.trim()) {
+    ElMessage.warning(isRule.value ? '请先填写规则处理描述' : '请先填写抓取需求描述')
     return
   }
-  if (!ruleCfg.value.inputFields?.length || !ruleCfg.value.outputFields?.length) {
-    ElMessage.warning('请先完成入参/出参字段绑定')
+  if (isRule.value && (!orchCfg.value.inputFields?.length || !orchCfg.value.outputFields?.length)) {
+    ElMessage.warning('请先在「表配置」完成入参/出参字段绑定')
     return
   }
   generateAbort.value?.abort()
@@ -259,14 +153,14 @@ async function onGenerateScript() {
   generateAbort.value = controller
   generating.value = true
   try {
-    const res = await ruleApi.orchestrationGenerate(ruleCfg.value, controller.signal)
+    const res = await ruleApi.orchestrationGenerate(orchCfg.value, controller.signal)
     patch({ script: res.script, scriptPath: res.scriptPath })
-    ElMessage.success('脚本已生成')
+    ElMessage.success(isRule.value ? '脚本已生成' : '配置已生成')
   } catch (e) {
     if (controller.signal.aborted || (e as Error)?.message?.includes('已取消')) {
       ElMessage.info('已取消生成')
     } else {
-      ElMessage.error(`生成脚本失败：${(e as Error)?.message ?? String(e)}`)
+      ElMessage.error(`生成${isRule.value ? '脚本' : '配置'}失败：${(e as Error)?.message ?? String(e)}`)
     }
   } finally {
     if (generateAbort.value === controller) generateAbort.value = null
@@ -279,115 +173,153 @@ const systemPromptDialogOpen = ref(false)
 
 const savingScript = ref(false)
 async function onSaveScript() {
-  if (!ruleCfg.value.script?.trim()) {
-    ElMessage.warning('请先生成脚本')
+  if (!orchCfg.value.script?.trim()) {
+    ElMessage.warning(isRule.value ? '请先生成脚本' : '请先生成配置')
     return
   }
+  if (!(await checkColumnConsistency())) return
   try {
-    await ElMessageBox.confirm('保存后将把当前脚本绑定到该规则处理节点，是否继续？', '保存规则脚本', {
-      type: 'warning',
-      confirmButtonText: '确认保存',
-      cancelButtonText: '取消',
-    })
+    await ElMessageBox.confirm(
+      isRule.value ? '保存后将把当前脚本绑定到该规则处理节点，是否继续？' : '保存后将把当前配置绑定到该节点，是否继续？',
+      isRule.value ? '保存规则脚本' : '保存抓取配置',
+      { type: 'warning', confirmButtonText: '确认保存', cancelButtonText: '取消' },
+    )
   } catch {
     return
   }
   savingScript.value = true
   try {
-    const res = await ruleApi.orchestrationSave(ruleCfg.value)
+    const res = await ruleApi.orchestrationSave(orchCfg.value)
     patch({ mode: 'ref', ruleId: res.ruleId, scriptPath: res.scriptPath })
-    ElMessage.success(res.message || '规则脚本已保存')
+    ElMessage.success(res.message || (isRule.value ? '规则脚本已保存' : '抓取配置已保存'))
   } catch (e) {
-    ElMessage.error(`保存脚本失败：${(e as Error)?.message ?? String(e)}`)
+    ElMessage.error(`保存失败：${(e as Error)?.message ?? String(e)}`)
   } finally {
     savingScript.value = false
   }
 }
 
-// ---- 全屏测试台（L3，拍板 #12，见 §6.5）：测试脚本条件为 script + inputTable ----
+// ---- 切换已有配置（P0，仅非规则节点；规则节点的「引用已有规则」已被 D3 砍掉，见方案 §1.3）----
+// 复用 ruleApi.orchestrationPaged（vrule 编排列表接口，无新增端点）；列表项不带 format，
+// 按 scriptPath 是否 .xml 后缀筛出抓取配置类记录——后续如果有专用接口，只用改这一个函数。
+const switchOptions = ref<RuleOrchestrationItem[]>([])
+const switchLoading = ref(false)
+const switchLoaded = ref(false)
+const switchSelected = ref('')
+async function loadSwitchOptions() {
+  if (switchLoaded.value || switchLoading.value) return
+  switchLoading.value = true
+  try {
+    const paged = await ruleApi.orchestrationPaged({ size: 100 })
+    switchOptions.value = paged.list.filter((item) => item.scriptPath?.endsWith('.xml'))
+    switchLoaded.value = true
+  } catch (e) {
+    ElMessage.error(`加载既有配置失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    switchLoading.value = false
+  }
+}
+watch(isRule, (v) => { if (!v) void loadSwitchOptions() }, { immediate: true })
+
+const applyingSwitch = ref(false)
+async function onApplySwitch() {
+  const target = switchOptions.value.find((o) => o.ruleId === switchSelected.value)
+  if (!target) return
+  applyingSwitch.value = true
+  try {
+    const detail = await ruleApi.orchestrationDetail(target.ruleId)
+    const scriptPath = detail.scriptPath || target.scriptPath
+    const script = scriptPath ? await ruleApi.orchestrationLoadScript(scriptPath).catch(() => '') : ''
+    patch({
+      mode: 'ref',
+      ruleId: target.ruleId,
+      describe: detail.describe || target.describe || '',
+      systemPrompt: detail.systemPrompt || orchCfg.value.systemPrompt,
+      scriptPath,
+      script,
+    })
+    ElMessage.success(`已切换到「${target.name}」`)
+  } catch (e) {
+    ElMessage.error(`切换配置失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    applyingSwitch.value = false
+  }
+}
+
+// ---- 全屏测试台（L3，拍板 #12，见 §6.5）：仅规则节点——抓取配置的"测试"是真打开网页抓一次，
+// 跟脚本测试台的输入来源完全不同，测试台复用不了，本期不做（方案 §3.1 修正 D / §9.2-11）----
 const testDialogOpen = ref(false)
-const canTest = computed(() => !!ruleCfg.value.script?.trim() && !!ruleCfg.value.inputTable)
+const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value.inputTable)
 </script>
 
 <template>
-  <div class="ni-section-title">规则编排</div>
-
-  <template v-if="showBinder">
-    <RuleTableFieldBinder
-      :model-value="ruleCfg"
-      :rule-options="ruleOrchestrations"
-      :input-field-options="inputFieldOptions"
-      :output-field-options="outputFieldOptions"
-      @update:model-value="patch"
-      @select-existing="onSelectExisting"
+  <div class="ni-section-title">{{ isRule ? '查看业务编排' : '抓取配置' }}</div>
+  <div class="rc-field"><label>{{ describeLabel }}</label>
+    <textarea
+      class="rc-input rc-textarea"
+      :value="orchCfg.describe"
+      :placeholder="describePlaceholder"
+      @input="onDescribeChange"
     />
-    <div v-if="selectingExisting" class="rc-help">正在加载已引用规则的详情…</div>
-    <div class="rc-actions-row">
-      <button class="rc-btn primary" type="button" :disabled="saving" @click="onSaveMeta">
-        {{ saving ? '保存中...' : '保存业务规则' }}
-      </button>
-      <button v-if="ruleCfg.ruleId" class="rc-btn" type="button" :disabled="saving" @click="onCancelEditMeta">取消</button>
+  </div>
+
+  <template v-if="!isRule">
+    <!-- 只读动作链摘要（0804 S3-4，方案 §3.1）：按 NextActionId 链表走出来的执行顺序，不可编辑 -->
+    <div v-if="actionSummary" class="rc-list ni-rule-meta">
+      <div class="rc-list-row"><b>动作链</b><span :title="actionSummary">{{ actionSummary }}</span></div>
+    </div>
+    <div v-if="parsedCapture?.warnings.length" class="rc-help">{{ parsedCapture.warnings.join('；') }}</div>
+    <div class="rc-field"><label>切换已有配置</label>
+      <div class="rc-input-group">
+        <select v-model="switchSelected" class="rc-select grow" :disabled="switchLoading">
+          <option value="">{{ switchLoading ? '加载中...' : (switchOptions.length ? '选择既有抓取配置' : '暂无既有抓取配置') }}</option>
+          <option v-for="o in switchOptions" :key="o.ruleId" :value="o.ruleId">{{ o.name }} · {{ o.ruleId }}</option>
+        </select>
+        <button class="rc-input-btn" type="button" :disabled="!switchSelected || applyingSwitch" @click="onApplySwitch">
+          {{ applyingSwitch ? '切换中...' : '应用' }}
+        </button>
+      </div>
     </div>
   </template>
 
-  <template v-else>
-    <div class="rc-list ni-rule-meta">
-      <div class="rc-list-row"><b>规则 ID</b><span>{{ ruleCfg.ruleId }}</span></div>
-      <div class="rc-list-row"><b>规则名称</b><span>{{ ruleCfg.name }}</span></div>
-      <div class="rc-list-row"><b>输入表</b><span>{{ ruleCfg.inputTable }}</span></div>
-      <div class="rc-list-row"><b>输出表</b><span>{{ outputTableLabel }}</span></div>
-      <div class="rc-list-row"><b>入参字段</b><span>{{ inputFieldsLabel }}</span></div>
-      <div class="rc-list-row"><b>出参字段</b><span>{{ outputFieldsLabel }}</span></div>
-    </div>
-    <div class="rc-actions-row"><button class="rc-btn" type="button" @click="onEditMeta">修改表字段</button></div>
+  <div class="rc-actions-row">
+    <button class="rc-btn" type="button" @click="systemPromptDialogOpen = true">编辑系统提示词</button>
+    <button class="rc-btn primary" type="button" :disabled="generating" @click="onGenerateScript">
+      {{ generating ? '生成中...' : generateLabel }}
+    </button>
+    <button v-if="generating" class="rc-btn" type="button" @click="onCancelGenerate">取消</button>
+  </div>
+  <div v-if="hydrating" class="rc-help">正在同步编排详情…</div>
 
-    <div class="ni-section-title">查看业务编排</div>
-    <div class="rc-field"><label>规则处理描述</label>
-      <textarea
-        class="rc-input rc-textarea"
-        :value="ruleCfg.describe"
-        placeholder="描述规则处理逻辑，如根据输入字段生成指标数值"
-        @input="onDescribeChange"
-      />
-    </div>
-    <div class="rc-actions-row">
-      <button class="rc-btn" type="button" @click="systemPromptDialogOpen = true">编辑系统提示词</button>
-      <button class="rc-btn primary" type="button" :disabled="generating" @click="onGenerateScript">
-        {{ generating ? '生成中...' : '生成脚本' }}
-      </button>
-      <button v-if="generating" class="rc-btn" type="button" @click="onCancelGenerate">取消</button>
-    </div>
-    <div v-if="hydrating" class="rc-help">正在同步编排详情…</div>
+  <div class="rc-list ni-rule-meta">
+    <div class="rc-list-row"><b>{{ pathLabel }}</b><span>{{ orchCfg.scriptPath || '未生成' }}</span></div>
+  </div>
+  <textarea class="rc-code-box" readonly :value="orchCfg.script || codeEmptyHint" />
+  <div class="rc-actions-row">
+    <button class="rc-btn" type="button" :disabled="!orchCfg.script?.trim()" @click="scriptDialogOpen = true">全屏查看</button>
+    <button v-if="isRule" class="rc-btn" type="button" :disabled="!canTest" @click="testDialogOpen = true">测试脚本</button>
+    <button class="rc-btn primary" type="button" :disabled="savingScript || !orchCfg.script?.trim()" @click="onSaveScript">
+      {{ savingScript ? '保存中...' : saveLabel }}
+    </button>
+  </div>
 
-    <div class="rc-list ni-rule-meta">
-      <div class="rc-list-row"><b>脚本路径</b><span>{{ ruleCfg.scriptPath || '未生成' }}</span></div>
-    </div>
-    <textarea class="rc-code-box" readonly :value="ruleCfg.script || '生成脚本后展示 Python 预览'" />
-    <div class="rc-actions-row">
-      <button class="rc-btn" type="button" :disabled="!ruleCfg.script?.trim()" @click="scriptDialogOpen = true">全屏查看</button>
-      <button class="rc-btn" type="button" :disabled="!canTest" @click="testDialogOpen = true">测试脚本</button>
-      <button class="rc-btn primary" type="button" :disabled="savingScript || !ruleCfg.script?.trim()" @click="onSaveScript">
-        {{ savingScript ? '保存中...' : '保存脚本' }}
-      </button>
-    </div>
-
-    <RuleScriptDialog v-model:open="scriptDialogOpen" :script-path="ruleCfg.scriptPath" :script="ruleCfg.script || ''" />
-    <RuleSystemPromptDialog
-      v-model:open="systemPromptDialogOpen"
-      :model-value="ruleCfg.systemPrompt ?? ''"
-      @update:model-value="onSystemPromptChange"
-    />
-    <RuleTestDialog
-      v-model:open="testDialogOpen"
-      :rule-id="ruleCfg.ruleId"
-      :script="ruleCfg.script || ''"
-      :input-table="ruleCfg.inputTable || ''"
-      :input-table-id="ruleCfg.inputTableId || ''"
-      :input-fields="ruleCfg.inputFields ?? []"
-      :output-fields="ruleCfg.outputFields ?? []"
-      :fields="inputFieldOptions"
-    />
-  </template>
+  <RuleScriptDialog v-model:open="scriptDialogOpen" :title="isRule ? '脚本查看' : '配置查看'" :script-path="orchCfg.scriptPath" :script="orchCfg.script || ''" />
+  <RuleSystemPromptDialog
+    v-model:open="systemPromptDialogOpen"
+    :model-value="orchCfg.systemPrompt ?? ''"
+    @update:model-value="onSystemPromptChange"
+  />
+  <RuleTestDialog
+    v-if="isRule"
+    v-model:open="testDialogOpen"
+    :rule-id="orchCfg.ruleId"
+    :script="orchCfg.script || ''"
+    :input-table="orchCfg.inputTable || ''"
+    :input-table-id="orchCfg.inputTableId || ''"
+    :input-fields="orchCfg.inputFields ?? []"
+    :output-fields="orchCfg.outputFields ?? []"
+    :fields="inputFieldOptions"
+  />
 </template>
 
 <style scoped>
@@ -396,6 +328,14 @@ const canTest = computed(() => !!ruleCfg.value.script?.trim() && !!ruleCfg.value
 .rc-input { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; box-sizing: border-box; }
 .rc-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .rc-textarea { min-height: 74px; resize: vertical; line-height: 1.5; }
+.rc-input-group { display: flex; align-items: stretch; width: 100%; }
+.rc-input-group .rc-select.grow { border-radius: 7px 0 0 7px; flex: 1; }
+.rc-select { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; }
+.rc-select:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
+.rc-select:disabled { background: #f8fafc; color: var(--rc-faint); }
+.rc-input-btn { white-space: nowrap; padding: 0 12px; border: 1px solid #dbe3ee; border-left: 0; border-radius: 0 7px 7px 0; background: #fff; color: var(--rc-primary); cursor: pointer; font-size: 12px; font-weight: 600; }
+.rc-input-btn:hover { background: var(--rc-primary-bg); }
+.rc-input-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .rc-actions-row { display: flex; gap: 8px; margin-top: 12px; }
 .rc-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 11px; border: 1px solid #d5e2f2; border-radius: 7px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; }
 .rc-btn:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }

@@ -1,18 +1,21 @@
 <script setup lang="ts">
 // 节点配置 Tab（P1-1 Step 4 · 从 NodeInspector.vue 拆出）。
-// 内容：决策/分头 → BranchEditor；采集 → URL/运行设置；规则节点仅「节点名称 + 输入映射」
-// （规则编排已迁到「编排配置」Tab，见 RuleOrchestrationTab，0801 方案 §6.1）。
+// 内容：决策/分头 → BranchEditor；采集 → URL/运行设置；规则节点仅「节点名称」
+// （表/字段在「表配置」，脚本在「编排配置」，见 RuleOrchestrationTab，0801 方案 §6.1）。
+// 跨节点字段映射那块（inmap，原节点配置里的一段表格）已整块删除（0804 拍板：没什么用，见开发方案 §2.4）。
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
-  WEB_KIND_OPTIONS, decisionOrParallelKind, collectorCapabilityOf,
-  type CollectConfig, type NodeConfig, type TripleField, type WebKind,
+  WEB_KIND_OPTIONS, decisionOrParallelKind, collectorCapabilityOf, isRuleNode,
+  type CollectConfig, type DedupType, type NodeConfig, type TripleField, type WebKind,
 } from '@/views/FlowCanvas/canvas/flowModel'
+import { entryApi, ruleApi, type RuleOrchestrationItem } from '@/api'
 import BranchEditor from '../BranchEditor.vue'
 import CollectorSettings, { type CollectorRuntimeSettings } from '../CollectorSettings.vue'
 import ParamSourceEditor, { type ParamSourceModel } from '@/views/FlowCanvas/source/ParamSourceEditor.vue'
 import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDialog.vue'
+import SelectExistingRuleDialog from '../SelectExistingRuleDialog.vue'
 
 // 参数子源（0803 调整）：本区域默认只读摘要，编辑收进「编辑」按钮弹出的 EditParamSourceDialog——
 // 该弹窗保存走 sourceApi.sourceUpdate 落库，再 patchSource/patchSourceCtx 写回，
@@ -26,7 +29,7 @@ const id = computed<string>(() => flow.selectedId)
 const cc = computed<CollectConfig | undefined>(() => cfg.value?.collectCfg)
 
 const isDecisionOrParallel = computed(() => !!cfg.value && decisionOrParallelKind(cfg.value) !== undefined)
-const isRule = computed(() => /规则/.test(cfg.value?.title ?? ''))
+const isRule = computed(() => isRuleNode(cfg.value))
 const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
 
 // 采集节点运行设置（0711 R5）：代理/断点续爬/登录迁到节点级；缺省读一次 Source 同名旧字段兜底展示（1:1+fallback）
@@ -63,29 +66,59 @@ const paramSourceModel = computed<ParamSourceModel>(() => ({
 }))
 const editParamSourceVisible = ref(false)
 
-// 主链上一个节点：用于输入映射「来源」下拉建议
-const prevNode = computed<NodeConfig | undefined>(() => {
-  const idx = flow.main.indexOf(id.value)
-  for (let i = idx - 1; i >= 0; i--) {
-    const pid = flow.main[i]
-    if (pid === 'start') return undefined
-    const c = flow.configs[pid]
-    if (c) return c
-  }
-  return undefined
-})
-const inmapSourceOptions = computed(() => {
-  const p = prevNode.value
-  if (!p) return []
-  return p.output.map((row) => `← ${p.title}.${row.name}`)
-})
-
 function onTripleCell(field: TripleField, i: number, col: 0 | 1 | 2, e: Event) {
   flow.setTripleCell(id.value, field, i, col, (e.target as HTMLInputElement).value)
 }
 
 function onTitle(e: Event) {
   flow.setTitle(id.value, (e.target as HTMLInputElement).value)
+}
+
+// 选择已有规则（0805 恢复 D3 砍掉的能力，分开做：节点名称输入框只管"新建/改名"，
+// 这个按钮 + 弹窗单独管"选"，见方案 §1.3 会议原话"新建是新建、选是选"）。
+const selectExistingOpen = ref(false)
+const applyingExisting = ref(false)
+async function onSelectExistingRule(rule: RuleOrchestrationItem) {
+  applyingExisting.value = true
+  try {
+    const detail = await ruleApi.orchestrationDetail(rule.ruleId)
+    // 详情只带物理表名（inputTable），要反查成 entryType 的 tableId 才能跟 NodeConfig/表配置打通——
+    // 现在表来源已经改回 entryApi（0805），直接按物理表名去搜，取第一个物理表名精确匹配的。
+    let inputTableId = ''
+    if (detail.inputTable) {
+      try {
+        const found = (await entryApi.entryPaged({ name: detail.inputTable, size: 20 })).list
+          .find((t) => t.tableName === detail.inputTable)
+        inputTableId = found?.tableId ?? ''
+        if (!inputTableId) ElMessage.warning(`该规则原关联表「${detail.inputTable}」搜不到，请到「表配置」手动重新选择输入表`)
+      } catch {
+        ElMessage.warning('反查输入表失败，请到「表配置」手动重新选择输入表')
+      }
+    }
+    flow.setTitle(id.value, detail.name || rule.name)
+    flow.patchRuleConfig(id.value, {
+      mode: 'ref',
+      ruleId: detail.ruleId,
+      describe: detail.describe,
+      systemPrompt: detail.systemPrompt,
+      scriptPath: detail.scriptPath,
+      script: detail.script,
+      enabled: detail.enabled,
+      dataSource: detail.dataSource,
+      inputTable: detail.inputTable,
+      inputTableId,
+      inputFields: detail.inputFields,
+      outputFields: detail.outputFields,
+      outputTable: '',
+      outputTableId: '',
+    })
+    if (inputTableId) flow.setInputTable(id.value, inputTableId)
+    ElMessage.success(`已选择规则「${detail.name || rule.name}」`)
+  } catch (e) {
+    ElMessage.error(`加载规则详情失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    applyingExisting.value = false
+  }
 }
 function setCC(key: string, e: Event) {
   const t = e.target as HTMLInputElement
@@ -108,8 +141,20 @@ function onWebKind(e: Event) {
   flow.patchCollect(id.value, { webKind: (e.target as HTMLSelectElement).value as WebKind })
 }
 
-// 规则节点：输入映射默认折叠（跨节点传参本期不做，0801 §6.1；需要时可展开）
-const ruleInmapOpen = ref(false)
+// 业务类型（0804 S3-1）：规则名称维度的分类，跟网页类型（网页/APP、列表/详情/登录）是两个独立概念，别混——
+// 会议原文举例"新闻/登录/分类"，先给这几个常见值，后续按实际使用再补
+const BIZ_TYPE_OPTIONS = [
+  { value: 'news', label: '新闻' },
+  { value: 'login', label: '登录' },
+  { value: 'category', label: '分类' },
+  { value: 'announcement', label: '公告' },
+]
+function onBizType(e: Event) {
+  flow.patchCollect(id.value, { bizType: (e.target as HTMLSelectElement).value || undefined })
+}
+function onDedupType(v: DedupType) {
+  flow.patchCollect(id.value, { dedupType: v })
+}
 </script>
 
 <template>
@@ -117,7 +162,16 @@ const ruleInmapOpen = ref(false)
        决策/分头节点直接交给 BranchEditor 接管（0707 优化·Phase6） -->
   <BranchEditor v-if="isDecisionOrParallel && id" :owner-id="id" :key="id" />
   <template v-else>
-    <div class="rc-field"><label>节点名称</label><input class="rc-input" :value="cfg?.title" @input="onTitle" /></div>
+    <div class="rc-field"><label>节点名称{{ isRule ? '（= 规则名称）' : '' }}</label>
+      <div v-if="isRule" class="rc-input-group">
+        <input class="rc-input" :value="cfg?.title" placeholder="新建：直接输入规则名称" @input="onTitle" />
+        <button class="rc-input-btn" type="button" :disabled="applyingExisting" @click="selectExistingOpen = true">
+          {{ applyingExisting ? '加载中...' : '选择已有' }}
+        </button>
+      </div>
+      <input v-else class="rc-input" :value="cfg?.title" @input="onTitle" />
+    </div>
+    <SelectExistingRuleDialog v-if="isRule" v-model:open="selectExistingOpen" @select="onSelectExistingRule" />
 
     <!-- 采集类专属：源 URL / 网页类型（详情状态由网页类型自动推导） -->
     <template v-if="cc">
@@ -138,6 +192,20 @@ const ruleInmapOpen = ref(false)
           </option>
         </select>
       </div>
+      <!-- 业务类型（0804 S3-1）：跟上面的网页类型是两个独立字段，不要合并 -->
+      <div class="rc-field"><label>业务类型</label>
+        <select class="rc-select" :value="cc.bizType ?? ''" @change="onBizType">
+          <option value="">请选择</option>
+          <option v-for="opt in BIZ_TYPE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+        </select>
+      </div>
+      <!-- 去重类型（0804 S3-1）：源去重＝按源/语言顺序去重；表内去重＝只看表内是否已存在同值 -->
+      <div class="rc-field"><label>去重类型</label>
+        <div class="rc-segment">
+          <button type="button" :class="{ active: cc.dedupType !== 'table' }" @click="onDedupType('source')">源去重</button>
+          <button type="button" :class="{ active: cc.dedupType === 'table' }" @click="onDedupType('table')">表内去重</button>
+        </div>
+      </div>
       <!-- 参数子源（0803 调整）：默认只读摘要，点「编辑」打开 EditParamSourceDialog 修改；
            仅首节点 + 源是参数子源时展示，详见上方脚本注释 -->
       <template v-if="showParamSourceEditor">
@@ -152,35 +220,6 @@ const ruleInmapOpen = ref(false)
       </template>
       <!-- 运行设置（0711 R5）：代理/断点续爬/登录，节点级配置、默认折叠 -->
       <CollectorSettings :model-value="runtimeSettings" :capability="nodeCapability" :show-schedule="isFirstCollectorNode" @update:model-value="onRuntimeSettingsChange" />
-    </template>
-
-    <!-- 输入映射：非采集节点；规则节点默认折叠（主路径在「编排配置」） -->
-    <template v-if="!cc">
-      <template v-if="isRule">
-        <button class="ni-adv-toggle" type="button" @click="ruleInmapOpen = !ruleInmapOpen">
-          {{ ruleInmapOpen ? '▾' : '▸' }} 输入映射（可选）
-        </button>
-        <div class="rc-help" style="margin-bottom: 8px">表字段与脚本请到「编排配置」；此处仅跨节点字段映射（本期非必填）。</div>
-      </template>
-      <template v-if="!isRule || ruleInmapOpen">
-        <div v-if="!isRule" class="ni-section-title">输入映射</div>
-        <table class="rc-mini-table rc-edit-table">
-          <thead><tr><th>目标入参</th><th>来源</th><th>说明</th><th></th></tr></thead>
-          <tbody>
-            <tr v-for="(row, i) in cfg?.inmap ?? []" :key="i">
-              <td><input class="rc-cell-input" :value="row.name" @input="onTripleCell('inmap', i, 0, $event)" /></td>
-              <td><input class="rc-cell-input" list="ni-inmap-src" :value="row.from" @input="onTripleCell('inmap', i, 1, $event)" /></td>
-              <td><input class="rc-cell-input" :value="row.desc" @input="onTripleCell('inmap', i, 2, $event)" /></td>
-              <td><button class="rc-row-del" type="button" title="删除该行" @click="flow.removeTripleRow(id, 'inmap', i)">✕</button></td>
-            </tr>
-          </tbody>
-        </table>
-        <datalist id="ni-inmap-src">
-          <option v-for="opt in inmapSourceOptions" :key="opt" :value="opt" />
-        </datalist>
-        <button class="rc-btn" type="button" @click="flow.addTripleRow(id, 'inmap')">+ 添加行</button>
-        <div class="rc-help">把上游节点输出字段映射到本节点入参（对应采集平台"上一步属性"、AI 提取"输出映射"）。← 表示取自上游；"来源"输入框下拉建议取自上一节点的产物字段。</div>
-      </template>
     </template>
 
     <!-- 非采集非规则：基础字段 / 参数 / 试跑信息 -->
@@ -236,6 +275,9 @@ const ruleInmapOpen = ref(false)
 .rc-input-action { min-width: 36px; border: 1px solid #dbe3ee; border-left: 0; background: #fff; color: var(--rc-primary); font-size: 12px; cursor: pointer; }
 .rc-input-action:last-child { border-radius: 0 7px 7px 0; }
 .rc-input-action:hover { background: var(--rc-primary-bg); }
+.rc-input-btn { white-space: nowrap; padding: 0 12px; border: 1px solid #dbe3ee; border-left: 0; border-radius: 0 7px 7px 0; background: #fff; color: var(--rc-primary); cursor: pointer; font-size: 12px; font-weight: 600; }
+.rc-input-btn:hover { background: var(--rc-primary-bg); }
+.rc-input-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .rc-actions-row { display: flex; gap: 8px; margin-top: 12px; }
 .rc-actions-row .rc-btn { height: 32px; padding: 0 11px; font-size: 12px; }
 .rc-mini-table { width: 100%; border-collapse: collapse; font-size: 11px; }

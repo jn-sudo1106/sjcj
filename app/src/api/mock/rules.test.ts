@@ -103,4 +103,15 @@ describe('规则编排 mock（0707 Phase 9）', () => {
     })
     expect(tested.outputs).toEqual([{ sku_id: 'SKU-A' }])
   })
+
+  // S3-2：cfg.format === 'xml' 时产出 XML 抓取配置骨架而不是 Python 脚本，scriptPath 后缀跟着换；
+  // 缺省（无 format 或 'python'）行为不变，规则节点零回归。
+  it('format 为 xml 时生成 XML 产物骨架，scriptPath 用 .xml 后缀', () => {
+    const generated = mockRuleOrchestrationGenerate({
+      ruleCfg: { describe: '列表抓取', format: 'xml' },
+    })
+    expect(generated.script).toContain('<Config>')
+    expect(generated.script).toContain('</Config>')
+    expect(generated.scriptPath).toMatch(/\.xml$/)
+  })
 })

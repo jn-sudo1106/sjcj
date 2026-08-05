@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyParamSourceUrlToFirstCollectNode, buildHorizontalLayout, iconFor, isRuleNode, NODE_CONFIGS, normalizeNodeConfig, type NodeConfig } from './flowModel'
+import { applyParamSourceUrlToFirstCollectNode, buildHorizontalLayout, iconFor, isRuleNode, makeDefaultExecConfig, NODE_CONFIGS, normalizeNodeConfig, type NodeConfig } from './flowModel'
 import type { Source } from '@/api'
 
 describe('流程参数配置迁移', () => {
@@ -120,14 +120,33 @@ describe('applyParamSourceUrlToFirstCollectNode（0721 会议 T5）', () => {
 })
 
 // 0801 方案 §6.1：共享给 nodeInspectorTabs（Tab 分流）与 ConfigTab（渲染分支）的规则节点判定
+// 0805 修正（真机验证发现）：判定口径从标题正则改成"带不带 ruleCfg"这个结构信号——
+// 0804 拍板"规则名称 = 节点名称"后标题变成自由文本，用户随手一改就可能不含"规则"两字，
+// 旧的 /规则/.test(title) 会把它误判成非规则节点，UI 整个错位（RuleTableFieldBinder 消失等）。
 describe('isRuleNode', () => {
-  it('标题含「规则」判定为规则节点', () => {
-    expect(isRuleNode({ title: '规则处理' } as NodeConfig)).toBe(true)
+  it('带 ruleCfg 判定为规则节点，跟标题内容无关', () => {
+    expect(isRuleNode({ title: '规则处理', ruleCfg: { mode: 'new', describe: '' } } as NodeConfig)).toBe(true)
   })
-  it('标题不含「规则」判定为非规则节点', () => {
+  it('标题改成不含"规则"两字，只要还带着 ruleCfg 仍判定为规则节点', () => {
+    expect(isRuleNode({ title: 'CLAUDE测试_S3验证_勿用', ruleCfg: { mode: 'new', describe: '' } } as NodeConfig)).toBe(true)
+  })
+  it('标题含"规则"但没有 ruleCfg：判定为非规则节点', () => {
+    expect(isRuleNode({ title: '规则处理' } as NodeConfig)).toBe(false)
+  })
+  it('没有 ruleCfg 的普通节点判定为非规则节点', () => {
     expect(isRuleNode({ title: '网页抓取' } as NodeConfig)).toBe(false)
   })
   it('cfg 为 undefined 时判定为非规则节点', () => {
     expect(isRuleNode(undefined)).toBe(false)
+  })
+})
+
+// 0804 S3-3：execCfg 与 ruleCfg 同构复用 RuleOrchestration，只是默认 format 恒为 'xml'
+describe('makeDefaultExecConfig（0804 S3-3）', () => {
+  it('format 恒为 xml，describe 留空（不像 ruleCfg 带演示文案，避免误导抓取需求描述）', () => {
+    const cfg = makeDefaultExecConfig()
+    expect(cfg.format).toBe('xml')
+    expect(cfg.describe).toBe('')
+    expect(cfg.systemPrompt).toBeTruthy()
   })
 })

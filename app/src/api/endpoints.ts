@@ -226,9 +226,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   // httpEndpoint 字段统一管理、desc 只负责人话描述，但这个改动会触及全部 impl:true 端点的写法，
   // 影响面不止 vrule 这几个，值得单独立一个 PR 做，这里先留个标记。
   { path: 'rule/orchestrationPaged', desc: '规则编排列表 → /vrule/ai/dashscope/list/compose', impl: true, live: true },
-  // 0803 追加：采集中心自己的实体表注册表在真实环境里近乎空，规则节点的表来源改走 vrule 跨租户搜索
-  { path: 'rule/orchestrationTableSearch', desc: '规则处理节点跨租户表搜索 → query-user-info + news-getTableList', impl: true, live: true },
-  { path: 'rule/orchestrationTableFields', desc: '规则处理节点表字段 → /vrule/.../news-getTableFields', impl: true, live: true },
+  // 0803 曾把规则节点表来源改走 vrule 搜索（news-getTableSearch/TableFields），0805 撤回：
+  // 实测确认采集中心 entryType 和 vrule 是同一份底层表注册表（entryTypeId/itemCode 编号空间共享），
+  // 改回统一用 config/entryTypePagedView + config/entryType（见下方 entryApi 相关端点），两个 vrule
+  // 专用端点随之删除，不再需要。
   // 0801 方案：逻辑键；http 时 ruleApi 经 adapter 打到 /vrule/...（见 ruleHttp.test.ts）
   { path: 'rule/orchestrationSaveMeta', desc: '规则编排保存业务规则元数据 → /vrule/api/custom-compose/save', danger: true, impl: true, live: true },
   { path: 'rule/orchestrationDetail', desc: '规则编排详情 → /vrule/api/custom-compose/getComposeById', impl: true, live: true },

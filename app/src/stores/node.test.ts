@@ -185,6 +185,37 @@ describe('setOutputTable / setInputTable / setTaskQueue / setNodeDisabled', () =
   })
 })
 
+describe('setStructuredConfig / setContentRules（0804 S3-1）', () => {
+  it('有 collectCfg 时写在 collectCfg 上，而不是 cfg 顶层', () => {
+    const { n, configs } = setup()
+    n.setStructuredConfig('web-list', '{"table":"T1"}')
+    n.setContentRules('web-list', 'content=trim')
+    expect(configs['web-list'].collectCfg?.structuredConfig).toBe('{"table":"T1"}')
+    expect(configs['web-list'].collectCfg?.contentRules).toBe('content=trim')
+    expect(configs['web-list'].structuredConfig).toBeUndefined()
+    expect(configs['web-list'].contentRules).toBeUndefined()
+  })
+
+  it('没有 collectCfg（非采集节点）时写在 cfg 顶层', () => {
+    const { n, configs } = setup()
+    configs['rule-1'] = {
+      title: '规则处理', sub: '', status: '', planned: false,
+      base: [], fields: [], inmap: [], params: [], output: [],
+    }
+    n.setStructuredConfig('rule-1', '{"table":"T2"}')
+    n.setContentRules('rule-1', 'summary=truncate(200)')
+    expect(configs['rule-1'].structuredConfig).toBe('{"table":"T2"}')
+    expect(configs['rule-1'].contentRules).toBe('summary=truncate(200)')
+  })
+
+  it('传空字符串时清空为 undefined（不留空字符串占位）', () => {
+    const { n, configs } = setup()
+    n.setStructuredConfig('web-list', '{"table":"T1"}')
+    n.setStructuredConfig('web-list', '')
+    expect(configs['web-list'].collectCfg?.structuredConfig).toBeUndefined()
+  })
+})
+
 describe('setEntryCondition', () => {
   it('有 collectCfg 时条件写在 collectCfg 上，而不是 cfg 顶层', () => {
     const { n, configs } = setup()
@@ -215,5 +246,24 @@ describe('patchRuleConfig', () => {
     n.patchRuleConfig('web-list', { enabled: false })
     expect(configs['web-list'].ruleCfg?.describe).toBe('A')
     expect(configs['web-list'].ruleCfg?.enabled).toBe(false)
+  })
+})
+
+// 0804 S3-3：采集节点的抓取配置走独立的 execCfg，不写 ruleCfg——否则 isRuleNode() 会把它误判成规则节点
+describe('patchExecConfig（0804 S3-3）', () => {
+  it('首次 patch 时用默认抓取配置兜底缺省字段，format 恒为 xml', () => {
+    const { n, configs } = setup()
+    n.patchExecConfig('web-list', { describe: '抓取列表页' })
+    expect(configs['web-list'].execCfg?.describe).toBe('抓取列表页')
+    expect(configs['web-list'].execCfg?.format).toBe('xml')
+    expect(configs['web-list'].ruleCfg).toBeUndefined() // 不污染 ruleCfg
+  })
+
+  it('第二次 patch 在已有 execCfg 基础上合并', () => {
+    const { n, configs } = setup()
+    n.patchExecConfig('web-list', { describe: 'A' })
+    n.patchExecConfig('web-list', { scriptPath: '/x/1.xml' })
+    expect(configs['web-list'].execCfg?.describe).toBe('A')
+    expect(configs['web-list'].execCfg?.scriptPath).toBe('/x/1.xml')
   })
 })

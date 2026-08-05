@@ -4,7 +4,6 @@ import type {
   Paged, Source, Site, SourceCategory, SourceOption, Step, Ack, PageQuery,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestRequest, RuleOrchestrationTestResult,
-  RuleFieldOption, RuleTableOption,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   TaskInstQuery,
   Config, ConfigActionLog, ConfigParamBinding, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
@@ -31,7 +30,6 @@ import {
   isVruleNumericRuleId,
   parseRuleOrchestrationStreamText,
   pickRuleIdFromComposeList,
-  ruleFieldOptionFromLegacy,
   ruleOrchestrationDetailFromLegacy,
   ruleOrchestrationGenerateFormBody,
   ruleOrchestrationGenerateFromLegacy,
@@ -42,7 +40,6 @@ import {
   ruleOrchestrationSaveScriptToLegacy,
   ruleOrchestrationTestFromLegacy,
   ruleOrchestrationTestToLegacy,
-  ruleTableOptionFromLegacy,
   summaryRowFromLegacy,
   taskInstFromLegacy,
 } from './legacyAdapters'
@@ -158,130 +155,6 @@ async function fetchVruleText(url: string, init?: RequestInit): Promise<string> 
   return res.text()
 }
 
-/**
- * vrule JSON 响应通用 POST（{code,msg,result} 信封，code!==0/200 视为业务失败）。
- * REVIEW-2026-08-04 P0：跟 client.ts 的 request() 不一样，这里是直接调 fetch，之前没有超时——
- * 跨租户表搜索一旦某个租户的网关卡住（不是 fail 是 hang），会一直等。加 AbortController，
- * 8s 超时（比 client.ts 默认的 20s 更紧，因为这里是搜索框边输入边查，等太久用户体验先崩）。
- * REVIEW-2026-08-04 P1 #3：接受可选 externalSignal——调用方（如搜索框 runSearch）可以在发起新一轮
- * 搜索时把旧的 controller abort 掉，避免快速连打字时旧请求还在飞、浪费带宽/挤占网关。
- * 外部 signal 一旦 abort，内部 controller 联动 abort（不区分"超时"还是"主动取消"，调用方拿到
- * AbortError 自行决定要不要弹错；搜索框场景里主动取消就不弹）。
- */
-async function fetchVruleJson<T>(path: string, body: unknown, externalSignal?: AbortSignal): Promise<T> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  const token = readStoredToken()
-  if (token) headers[ACCESS_TOKEN_HEADER] = token
-  const controller = new AbortController()
-  const timeout = window.setTimeout(() => controller.abort(), 8_000)
-  const onExternalAbort = () => controller.abort()
-  if (externalSignal) {
-    if (externalSignal.aborted) controller.abort()
-    else externalSignal.addEventListener('abort', onExternalAbort, { once: true })
-  }
-  let res: Response
-  try {
-    res = await fetch(path, {
-      method: 'POST', credentials: 'include', headers, body: JSON.stringify(body), signal: controller.signal,
-    })
-  } catch (e) {
-    if ((e as Error)?.name === 'AbortError') {
-      // 区分语义：外部主动取消时透传 AbortError，调用方可以 swallow；超时统一打"请求超时"
-      if (externalSignal?.aborted) throw (e instanceof Error ? e : new Error('aborted'))
-      throw new Error('请求超时')
-    }
-    throw e
-  } finally {
-    window.clearTimeout(timeout)
-    if (externalSignal) externalSignal.removeEventListener('abort', onExternalAbort)
-  }
-  if (isSessionExpiredRedirect(res)) {
-    triggerSessionExpired()
-    throw new Error('登录失效,请重新登录')
-  }
-  if (!res.ok) throw new Error(`请求失败 ${res.status}`)
-  const json = (await res.json()) as { code?: number | string; msg?: string }
-  const code = json?.code
-  if (code !== undefined && Number(code) !== 0 && Number(code) !== 200) {
-    throw new Error(String(json?.msg || '请求失败'))
-  }
-  return json as T
-}
-
-/** 0803 追加：给定数据源，查这个数据源下全部真实租户（query-user-info，无分页，实测 8 个封顶） */
-async function fetchDataSourceUsers(dsKey: string, signal?: AbortSignal): Promise<string[]> {
-  const json = await fetchVruleJson<{ result?: unknown }>(
-    '/vrule/vapi/api-gateway/execute/83s7q37b/query-user-info',
-    { _dsKey: dsKey },
-    signal,
-  )
-  const list = Array.isArray(json.result) ? json.result : []
-  return list
-    .map((r) => (r && typeof r === 'object' ? String((r as Record<string, unknown>).userCode ?? '') : ''))
-    .filter(Boolean)
-}
-
-/** 0803 追加：单个租户下按关键字查表（news-getTableList），已知 name 参数对物理表名/中文名都做模糊匹配 */
-async function fetchTableListForUser(dsKey: string, userCode: string, keyword: string, signal?: AbortSignal): Promise<RuleTableOption[]> {
-  const json = await fetchVruleJson<{ result?: { list?: unknown[] } }>(
-    '/vrule/vapi/api-gateway/execute/83s7q37b/news-getTableList',
-    { page: '1', pageSize: '20', _dsKey: dsKey, userCode, name: keyword || undefined },
-    signal,
-  )
-  const list = Array.isArray(json.result?.list) ? json.result.list : []
-  return list.map((r) => ruleTableOptionFromLegacy(r, userCode)).filter((t) => t.tableId)
-}
-
-/** REVIEW-2026-08-04 P0：按批并发上限跑一批 task，避免租户一多就一次性打出去 N 个请求。
- *  REVIEW-2026-08-04 P1 #3：可选 signal——已 abort 时直接抛 AbortError，调用方负责 swallow。
- *  不在循环里逐个 task 注入 abort（task 内部用的 fetch 各自有自己的 controller 听外部 signal），
- *  这里只负责"开始下一批之前先看一下要不要停"。*/
-async function runWithConcurrency<T>(tasks: (() => Promise<T>)[], limit: number, signal?: AbortSignal): Promise<PromiseSettledResult<T>[]> {
-  if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
-  const results: PromiseSettledResult<T>[] = []
-  for (let i = 0; i < tasks.length; i += limit) {
-    if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
-    const batch = tasks.slice(i, i + limit).map((task) => task())
-    results.push(...(await Promise.allSettled(batch)))
-  }
-  return results
-}
-
-/**
- * 0803 追加：跨租户表搜索——先查这个数据源下全部真实租户，再对每个租户查表，按 tableId 去重合并。
- * 用 allSettled 而不是 all：单个租户查询失败（实测 dp-swdata/admin 出现过真实的数据库连接超时）
- * 不该让整个搜索失败，只丢弃那一个租户的结果。
- * REVIEW-2026-08-04 P0：租户数一次性全并发发出去也有压垮网关的风险，按 5 个一批分批跑。
- * REVIEW-2026-08-04 P1 #3：透传 signal——快速连打字时新一轮搜索主动 abort 旧请求。
- * 第一个 fetchDataSourceUsers 也接受 signal（语义一致：用户连打字时旧租户清单也直接停）。
- */
-async function searchTablesAcrossTenants(dsKey: string, keyword: string, signal?: AbortSignal): Promise<RuleTableOption[]> {
-  const users = await fetchDataSourceUsers(dsKey, signal).catch(() => [] as string[])
-  const settled = await runWithConcurrency(
-    users.map((userCode) => () => fetchTableListForUser(dsKey, userCode, keyword, signal)),
-    5,
-    signal,
-  )
-  const merged = new Map<string, RuleTableOption>()
-  for (const result of settled) {
-    if (result.status !== 'fulfilled') continue
-    for (const table of result.value) {
-      if (!merged.has(table.tableId)) merged.set(table.tableId, table)
-    }
-  }
-  return [...merged.values()]
-}
-
-/** 0803 追加：表字段（news-getTableFields），实测不需要 userCode 参数 */
-async function fetchTableFieldsLive(tableId: string, dsKey: string): Promise<RuleFieldOption[]> {
-  const json = await fetchVruleJson<{ result?: unknown[] }>(
-    '/vrule/vapi/api-gateway/execute/83s7q37b/news-getTableFields',
-    { tableId, _dsKey: dsKey },
-  )
-  const list = Array.isArray(json.result) ? json.result : []
-  return list.map(ruleFieldOptionFromLegacy).filter((f) => f.itemCode)
-}
-
 /** 规则编排生成脚本：流式读 /vrule/ai/dashscope/stream（对齐旧页 Rt，非 JSON） */
 async function fetchRuleOrchestrationStream(
   ruleCfg: RuleOrchestration,
@@ -372,37 +245,14 @@ export const ruleApi = {
       throw e instanceof ApiError ? e : new ApiError(endpoint, e)
     }
   },
-  // 0803 追加：规则节点「输入表/输出表」跨租户搜索。采集中心自己的实体表注册表在真实环境里几乎是空的
-  // （实测只有 2 条），而 vrule 的表清单才是规则真正引用的那批 sense_data 表——但 news-getTableList
-  // 按 userCode 分租户，没有「查全部」的接口，只能先 query-user-info 拿这个数据源下的真实租户，
-  // 再逐个查表合并去重。keyword 传给每个租户的 name 参数（已实测对物理表名/中文名都做模糊匹配）。
-  orchestrationTableSearch: async (dataSource: string, keyword: string, signal?: AbortSignal): Promise<RuleTableOption[]> => {
-    const endpoint = 'rule/orchestrationTableSearch'
-    if (usesMockAdapter(endpoint)) {
-      // mock 模式不接 signal：mockRegistry 的同步函数不感知 abort，调用方仍然能用 requestSeq/AbortController 取消 UI 状态写入
-      return request<RuleTableOption[]>(endpoint, { dataSource, keyword }, { mode: 'mock' })
-    }
-    try {
-      return await searchTablesAcrossTenants(dataSource, keyword, signal)
-    } catch (e) {
-      // 主动 abort 由调用方（RuleTableFieldBinder.runSearch）通过 requestSeq 防过期结果 + 不写入，
-      // 这里不要把 AbortError 包成 ApiError，否则错误兜底链路会误以为是真业务失败。
-      if ((e as Error)?.name === 'AbortError') throw e
-      throw e instanceof ApiError ? e : new ApiError(endpoint, e)
-    }
-  },
-  // 0803 追加：选中表之后拉字段（news-getTableFields），跟 orchestrationTableSearch 配套——
-  // 表既然来自 vrule，字段也必须走 vrule 自己的接口，采集中心的 entryDetail 根本不认识这张表。
-  orchestrationTableFields: async (tableId: string, dataSource: string): Promise<RuleFieldOption[]> => {
-    const endpoint = 'rule/orchestrationTableFields'
-    if (usesMockAdapter(endpoint)) {
-      return request<RuleFieldOption[]>(endpoint, { tableId, dataSource }, { mode: 'mock' })
-    }
-    try {
-      return await fetchTableFieldsLive(tableId, dataSource)
-    } catch (e) {
-      throw e instanceof ApiError ? e : new ApiError(endpoint, e)
-    }
+  // 0805 追加（恢复 D3 砍掉的「引用已有规则」能力，但按会议原话"新建是新建、选是选"分开做，
+  // 不再混进规则名称输入框——见 ConfigTab.vue 的「选择已有规则」按钮）：只列当前登录账号自己的规则，
+  // 跟 orchestrationSaveMeta 默认 userCode 口径对齐（同一个人存的规则才该出现在他自己的候选列表里）。
+  // 复用 orchestrationPaged，不新增端点；接口不支持按 userCode 服务端过滤，客户端按 size:100 拉一页后过滤。
+  orchestrationOwnRules: async (): Promise<RuleOrchestrationItem[]> => {
+    const userCode = (readLoginUsername() || 'admin').trim()
+    const paged = await ruleApi.orchestrationPaged({ size: 100 })
+    return paged.list.filter((item) => item.userCode === userCode)
   },
   // 路径 B 回灌：POST /vrule/api/custom-compose/getComposeById?id=（对齐旧 handleOpenRecord）
   orchestrationDetail: async (ruleId: string) => {
@@ -511,7 +361,8 @@ export const ruleApi = {
     const result = await request<unknown>('rule/orchestrationSave', { ruleCfg }, {
       method: 'POST',
       httpEndpoint: '/vrule/ai/dashscope/script/edit',
-      httpParams: ruleOrchestrationSaveScriptToLegacy(ruleCfg),
+      // format 缺省即 'python'（规则节点零回归）；采集节点抓取配置传 'xml'，codeFileName 后缀跟着纠正（S3-2/S3-3）
+      httpParams: ruleOrchestrationSaveScriptToLegacy(ruleCfg, ruleCfg.format ?? 'python'),
     })
     if (result && typeof result === 'object' && 'scriptPath' in (result as object) && 'ruleId' in (result as object)) {
       return result as RuleOrchestrationSaveResult

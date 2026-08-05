@@ -189,8 +189,10 @@ export interface Step {
   inputTable?: string // 步骤输入表
   outputTable?: string // 步骤输出表
   configId?: string // 本步骤使用配置
-  urlSourceField?: string // 任务 URL 来源字段
-  urlRule?: string // 任务 URL 规则
+  /** @deprecated 0804 拍板：任务 URL 来源字段已从 UI 删除，仅供历史流程回读，见开发方案 §2.3 */
+  urlSourceField?: string
+  /** @deprecated 同上，任务 URL 规则已从 UI 删除 */
+  urlRule?: string
   condition?: string // 步骤执行条件（函数表达式）
   failAction?: string // 失败动作
   contextMap?: string[] // 上下文来源

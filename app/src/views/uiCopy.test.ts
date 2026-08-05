@@ -147,8 +147,9 @@ describe('最新方案 UI 入口收口', () => {
     expect(flowCanvas).toContain('@input="i === 0 && (firstSourceNameTouched = true)"')
   })
 
-  it('采集节点配置不再展示输入映射和输入参数', () => {
-    expect(configTab).toContain('v-if="!cc"')
+  it('节点配置不再展示输入映射和输入参数（0804 拍板：整块删除，非只对采集节点隐藏）', () => {
+    expect(configTab).not.toContain('输入映射')
+    expect(configTab).not.toContain("onTripleCell('inmap'")
     expect(allInspectorSource).not.toContain('<template v-if="cc">\n          <div class="rc-field"><label>输入参数[多选]</label>')
     expect(allInspectorSource).not.toContain('采集/非采集节点统一显示')
   })
@@ -271,17 +272,23 @@ describe('最新方案 UI 入口收口', () => {
   })
 
   it('规则节点使用独立的编排配置 Tab，节点配置 Tab 不再内嵌规则编排面板（0801 方案）', () => {
-    expect(ruleOrchestrationTab).toContain('规则编排')
-    expect(ruleOrchestrationTab).toContain('保存业务规则')
-    expect(ruleTableFieldBinder).toContain('数据源')
-    expect(ruleTableFieldBinder).toContain('规则名称')
+    // 0804 S2-2：表/字段绑定 + 保存业务规则搬去表配置 Tab，规则/采集节点共用同一个 TableTab
+    expect(tableTab).toContain('RuleTableFieldBinder')
+    expect(tableTab).toContain('保存并配置编排')
+    expect(ruleOrchestrationTab).toContain('查看业务编排')
+    expect(ruleOrchestrationTab).not.toContain('保存业务规则')
+    expect(ruleOrchestrationTab).not.toContain('修改表字段')
     expect(ruleTableFieldBinder).toContain('输入表')
     expect(ruleTableFieldBinder).toContain('入参字段')
     expect(ruleTableFieldBinder).toContain('出参字段')
-    // 编排列表页面（搜索/分页/启停等整页管理）仍然后置；但 0803 会议追加：编排配置内联的「引用已有规则」
-    // 要做——规则名称 combobox 模糊搜索命中已有项即触发引用，不需要整页列表
-    expect(ruleTableFieldBinder).toContain('select-existing')
-    expect(ruleOrchestrationTab).toContain('onSelectExisting')
+    // 0804 拍板：数据源固定为采集库、规则名称 = 节点名称，两个字段都不再单独渲染，
+    // RuleTableFieldBinder/RuleOrchestrationTab 这两处不再混入"引用已有"的 select-existing/onSelectExisting——
+    // 0805 恢复了等价能力，但按会议原话"新建是新建、选是选"分开做，挪到了 ConfigTab.vue 的
+    // 「选择已有规则」按钮 + SelectExistingRuleDialog.vue（跟这两处彻底不是一回事，断言仍然成立）
+    expect(ruleTableFieldBinder).not.toContain('数据源')
+    expect(ruleTableFieldBinder).not.toContain('规则名称')
+    expect(ruleTableFieldBinder).not.toContain('select-existing')
+    expect(ruleOrchestrationTab).not.toContain('onSelectExisting')
     // 「指定用户」不渲染，「表名关键词」并入输入表下拉（会议 11:57/13:50），这两条仍然成立
     expect(allInspectorSource).not.toContain('指定用户')
     expect(allInspectorSource).not.toContain('表名关键词')

@@ -26,6 +26,7 @@ import type {
   RuleOrchestration,
 } from './flowModel'
 import { cloneConfig, normalizeNodeConfigs, backfillOutputTables } from './flowModel.layout'
+import { RULE_DATA_SOURCE } from '@/constants/rule'
 
 // ---------- 采集能力 ----------
 /** 采集节点能力字典：固定产物类型节点的表/队列不可编辑，UI 与 store 双重防线都据此判断（0711 T5） */
@@ -73,14 +74,34 @@ export function makeDefaultRuleOrchestration(): RuleOrchestration {
     script: '',
     scriptPath: '',
     enabled: true,
-    // 表相关字段一律双值（物理表名 + tableId），见 0801 方案 §4.6；默认采集库
-    dataSource: 'dp-wwdata',
+    // 表相关字段一律双值（物理表名 + tableId），见 0801 方案 §4.6；数据源固定采集库（0804 拍板）
+    dataSource: RULE_DATA_SOURCE,
     inputTable: '',
     inputTableId: '',
     outputTable: '',
     outputTableId: '',
     inputFields: [],
     outputFields: [],
+  }
+}
+
+// ---------- 抓取配置（0804 S3-3，方案 §3.1 修正 C/D）----------
+// 动作类型清单会议未给全（方案 §9.1 D10 连带效果：降级为"填默认提示词"，不卡排期），
+// 这里按已拿到的 XML 样例（参考_抓取配置XML样例_2026-08-04.xml）总结出的结构给一份能跑的默认值，
+// 后续拿到官方动作清单再补充，不影响现有节点（用户可编辑，不是写死的行为）。
+export const DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT =
+  '生成抓取配置 XML：以 <Config> 为根节点，按 OpenUrlAction → ExtractDataTableAction → ExtractSingleValueAction 这类动作链描述抓取步骤（NextActionId 串联执行顺序），' +
+  '字段绑定用 <ColumnCfg><Column BizId="字段id">列序号</Column></ColumnCfg>；只输出合法 XML 本身，不要输出 Markdown 代码块标记或解释性文字。'
+
+export function makeDefaultExecConfig(): RuleOrchestration {
+  return {
+    mode: 'new',
+    format: 'xml',
+    describe: '',
+    systemPrompt: DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT,
+    script: '',
+    scriptPath: '',
+    enabled: true,
   }
 }
 

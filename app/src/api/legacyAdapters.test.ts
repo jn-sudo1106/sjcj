@@ -13,6 +13,7 @@ import {
   paramToLegacy,
   ruleOrchestrationDetailFromLegacy,
   parseRuleOrchestrationStreamText,
+  stripMinioMarkerLine,
   pickRuleIdFromComposeList,
   ruleOrchestrationGenerateFormBody,
   ruleOrchestrationGenerateFromLegacy,
@@ -419,6 +420,15 @@ describe('规则编排模型适配（vrule，0801 方案 §4）', () => {
     })
   })
 
+  // S3-2 §9.2-2：真机实测 targetTable 传空 + ruleType '数据处理' 直接 200（见开发方案 §9.2），
+  // ruleType 参数化只是留个钩子，默认值必须还是 '数据处理'，不传第三个参数时行为不变。
+  it('ruleOrchestrationSaveMetaToLegacy：targetTable 可以传空（采集首节点场景），ruleType 可覆盖', () => {
+    const cfg = { mode: 'new' as const, describe: '', dataSource: 'dp-wwdata' as const, inputTable: '', outputTable: 'sense_data.TB_X' }
+    expect(ruleOrchestrationSaveMetaToLegacy(cfg, 'ht_poc').targetTable).toBe('')
+    expect(ruleOrchestrationSaveMetaToLegacy(cfg, 'ht_poc').ruleType).toBe('数据处理')
+    expect(ruleOrchestrationSaveMetaToLegacy(cfg, 'ht_poc', '抓取配置').ruleType).toBe('抓取配置')
+  })
+
   it('ruleOrchestrationTestToLegacy：取 rows[0] 作为 params，timeout 固定 300', () => {
     const body = ruleOrchestrationTestToLegacy({
       ruleId: '173',
@@ -468,6 +478,15 @@ describe('规则编排模型适配（vrule，0801 方案 §4）', () => {
     })
   })
 
+  // S3-2：format 默认 'python'，扩展名已匹配时零回归；未传 format 的既有调用方（规则节点）行为不变。
+  it('ruleOrchestrationSaveScriptToLegacy：format 缺省或已匹配扩展名时原样透传，不匹配时纠正后缀', () => {
+    const cfg = { ruleId: '9', scriptPath: '/rules/generated/9.py', script: 'x' }
+    expect(ruleOrchestrationSaveScriptToLegacy(cfg).codeFileName).toBe('/rules/generated/9.py')
+    expect(ruleOrchestrationSaveScriptToLegacy(cfg, 'python').codeFileName).toBe('/rules/generated/9.py')
+    expect(ruleOrchestrationSaveScriptToLegacy(cfg, 'xml').codeFileName).toBe('/rules/generated/9.xml')
+    expect(ruleOrchestrationSaveScriptToLegacy({ ruleId: '9', scriptPath: '', script: 'x' }, 'xml').codeFileName).toBe('')
+  })
+
   it('ruleOrchestrationSaveMetaFromLegacy：兼容裸 id / {id} / {ruleId}', () => {
     expect(ruleOrchestrationSaveMetaFromLegacy(173)).toEqual({ ruleId: '173', message: '业务规则已保存' })
     expect(ruleOrchestrationSaveMetaFromLegacy({ id: 173, msg: 'ok' })).toEqual({ ruleId: '173', message: 'ok' })
@@ -509,18 +528,31 @@ describe('规则编排模型适配（vrule，0801 方案 §4）', () => {
     })
   })
 
-  it('parseRuleOrchestrationStreamText：从 MinIO 系统消息行取 scriptPath（全角/半角冒号）', () => {
-    const textFull = [
-      'def main(date):',
-      '    return {"end_date": date}',
-      '# [系统消息] 当前文件已经保存至MinIO：/code01/20260801/123.py',
-    ].join('\n')
+  // S3-2：标记行本身不是脚本正文，剥离后的 script 不应再包含它——对 Python 只是少一行注释，
+  // 但这条规则本身跟格式无关，对 XML（S3-3）来说是必须的（见 stripMinioMarkerLine 注释）。
+  it('parseRuleOrchestrationStreamText：从 MinIO 系统消息行取 scriptPath（全角/半角冒号），标记行从 script 里剥掉', () => {
+    const body = ['def main(date):', '    return {"end_date": date}']
+    const textFull = [...body, '# [系统消息] 当前文件已经保存至MinIO：/code01/20260801/123.py'].join('\n')
     expect(parseRuleOrchestrationStreamText(textFull)).toEqual({
-      script: textFull,
+      script: body.join('\n'),
       scriptPath: '/code01/20260801/123.py',
     })
     const textHalf = 'print(1)\n# [系统消息] 当前文件已经保存至MinIO:/code01/x.py'
-    expect(parseRuleOrchestrationStreamText(textHalf).scriptPath).toBe('/code01/x.py')
+    expect(parseRuleOrchestrationStreamText(textHalf)).toEqual({ script: 'print(1)', scriptPath: '/code01/x.py' })
+  })
+
+  it('parseRuleOrchestrationStreamText：没有标记行时整段原样返回，scriptPath 为空串', () => {
+    expect(parseRuleOrchestrationStreamText('def main():\n    return {}')).toEqual({
+      script: 'def main():\n    return {}',
+      scriptPath: '',
+    })
+  })
+
+  it('stripMinioMarkerLine：与 parseRuleOrchestrationStreamText 共用同一实现，可独立单测（S3-2 抽函数）', () => {
+    expect(stripMinioMarkerLine('<Config>\n  <Action id="1"/>\n</Config>\n# [系统消息] 当前文件已经保存至MinIO：/x/1.xml')).toEqual({
+      script: '<Config>\n  <Action id="1"/>\n</Config>',
+      scriptPath: '/x/1.xml',
+    })
   })
 
   it('pickRuleIdFromComposeList：按规则名+输入表匹配', () => {

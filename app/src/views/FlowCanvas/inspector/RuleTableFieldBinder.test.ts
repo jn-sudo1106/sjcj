@@ -1,35 +1,31 @@
 // @vitest-environment jsdom
-// REVIEW-2026-08-04 P1 #3：搜索框快速连打字时旧请求真被 abort（不只是 requestSeq 防过期结果）。
-// 单元测试只覆盖 RuleTableFieldBinder 的 runSearch abort 链路——API 层的 signal 透传
-// 在 api/ruleHttp.test.ts 单独覆盖。
-// 不使用 vi.useFakeTimers（debounce 用 setTimeout，与 fake timers 配合不稳），改用真实等待 + 直接调组件实例的 runSearch。
+// 0805 改判：表来源从 vrule 搜索改回 entryApi（跟采集中心其他节点的表配置同源，见组件顶部注释）。
+// entryApi.entryPaged 不支持外部 AbortSignal，快速连打字时靠 requestSeq 丢弃过期结果（不是真正
+// abort 网络请求）——下面第一个 describe 块覆盖这条防护，取代旧版基于 AbortController 的用例。
+// 不使用 vi.useFakeTimers（debounce 用 setTimeout，与 fake timers 配合不稳），改用真实等待 + 直接调组件实例的方法。
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import { ElMessage } from 'element-plus'
 import RuleTableFieldBinder from './RuleTableFieldBinder.vue'
-import { ruleApi, type RuleOrchestrationItem } from '@/api'
-import type { RuleFieldOption, RuleOrchestration, RuleTableOption } from '@/api'
+import TableEditDialog from './TableEditDialog.vue'
+import { entryApi } from '@/api'
+import type { EntryType, RuleFieldOption, RuleOrchestration } from '@/api'
 
 function mountBinder(modelValue: Partial<RuleOrchestration> = {}) {
   setActivePinia(createPinia())
   const fullModel = {
-    dataSource: 'dp-wwdata',
-    mode: 'new' as const,
-    name: '',
     inputFields: [],
     outputFields: [],
     ...modelValue,
   }
-  const ruleOptions: RuleOrchestrationItem[] = []
   const inputFieldOptions: RuleFieldOption[] = []
   const outputFieldOptions: RuleFieldOption[] = []
   const wrapper = mount(RuleTableFieldBinder, {
     global: { plugins: [ElementPlus] },
     props: {
       modelValue: fullModel,
-      ruleOptions,
       inputFieldOptions,
       outputFieldOptions,
     },
@@ -39,20 +35,12 @@ function mountBinder(modelValue: Partial<RuleOrchestration> = {}) {
 
 afterEach(() => vi.restoreAllMocks())
 
-describe('RuleTableFieldBinder · runSearch 取消旧请求（P1 #3）', () => {
-  it('快速连打字：旧 search 的 controller 真正被 abort，fetch 收到 aborted signal', async () => {
-    // 记录每次 call 拿到的 signal，外部主动 abort 时 signal.aborted 应为 true
-    const capturedSignals: AbortSignal[] = []
-    const resolvers: Array<(v: RuleTableOption[]) => void> = []
-    const rejecters: Array<(e: unknown) => void> = []
-    const pushPending = () => new Promise<RuleTableOption[]>((resolve, reject) => {
-      resolvers.push(resolve)
-      rejecters.push(reject)
-    })
-    vi.spyOn(ruleApi, 'orchestrationTableSearch').mockImplementation((_ds, _kw, signal) => {
-      if (signal) capturedSignals.push(signal)
-      return pushPending()
-    })
+describe('RuleTableFieldBinder · runSearch 防止旧请求覆盖新结果（requestSeq）', () => {
+  it('快速连打字：先发的请求比后发的晚 resolve 时，旧结果不会覆盖新结果', async () => {
+    const resolvers: Array<(v: { total: number; list: EntryType[] }) => void> = []
+    vi.spyOn(entryApi, 'entryPaged').mockImplementation(
+      () => new Promise((resolve) => { resolvers.push(resolve) }),
+    )
 
     const wrapper = mountBinder()
     await flushPromises()
@@ -61,39 +49,79 @@ describe('RuleTableFieldBinder · runSearch 取消旧请求（P1 #3）', () => {
     // 在 wrapper.vm 上；调它能直接触发 debouncedSearch，不依赖 el-select 内部行为。
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const vm = wrapper.vm as any
-    expect(typeof vm.onInputTableFilter).toBe('function')
 
     // 第一次输入：触发 debouncedSearch（300ms 防抖）
     vm.onInputTableFilter('em')
     await new Promise((r) => setTimeout(r, 320))
     await flushPromises()
-    expect(capturedSignals.length).toBe(1)
-    const firstSignal = capturedSignals[0]
-    expect(firstSignal.aborted).toBe(false)
-
-    // 第二次输入：debouncedSearch 再次触发，runSearch 内部应主动 abort 旧 controller
+    // 第二次输入：debouncedSearch 再次触发，requestSeq 递增
     vm.onInputTableFilter('ema')
     await new Promise((r) => setTimeout(r, 320))
     await flushPromises()
-    expect(capturedSignals.length).toBe(2)
-    expect(firstSignal.aborted).toBe(true) // 旧 request 的 signal 真的被 abort
-    const secondSignal = capturedSignals[1]
-    expect(secondSignal.aborted).toBe(false)
+    expect(resolvers.length).toBe(2)
 
-    // 收尾：让两个 promise 都收掉不留 pending
-    resolvers[0]?.([])
-    rejecters[1]?.(new DOMException('aborted', 'AbortError'))
+    // 新请求先 resolve
+    resolvers[1]({ total: 1, list: [{ tableId: 'new', tableName: 'sense_data.T_NEW', name: '新结果', fields: [] }] })
     await flushPromises()
+    // 旧请求（更早发出，网络更慢）后 resolve——结果应被丢弃，不覆盖已生效的新结果
+    resolvers[0]({ total: 1, list: [{ tableId: 'old', tableName: 'sense_data.T_OLD', name: '旧结果', fields: [] }] })
+    await flushPromises()
+
+    expect(vm.inputTableSearch.results.value.map((t: EntryType) => t.tableId)).toEqual(['new'])
   })
 
-  it('AbortError 不弹 ElMessage.error：主动取消是预期行为，不是错误', async () => {
+  it('搜索失败时弹出错误提示', async () => {
     const errorSpy = vi.spyOn(ElMessage, 'error').mockImplementation(() => ({ close: () => {} }))
-    let firstSignal: AbortSignal | undefined
-    vi.spyOn(ruleApi, 'orchestrationTableSearch').mockImplementation((_ds, _kw, signal) => {
-      if (signal && !firstSignal) firstSignal = signal
-      return new Promise((_resolve, reject) => {
-        signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
-      })
+    vi.spyOn(entryApi, 'entryPaged').mockRejectedValue(new Error('网络错误'))
+
+    const wrapper = mountBinder()
+    await flushPromises()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vm = wrapper.vm as any
+    vm.onInputTableFilter('em')
+    await new Promise((r) => setTimeout(r, 320))
+    await flushPromises()
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('网络错误'))
+  })
+})
+
+describe('RuleTableFieldBinder · 新建表（0804 拍板：共用表配置的 TableEditDialog/entryApi）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('点新建表保存后：自动注入为选项并选中，入参字段重置为空', async () => {
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({
+      tableId: 'new-1', tableName: 'sense_data.TB_NEW', name: '新建表',
+      fields: [{ prop: 'a-K1', desc: 'A', type: 'string', required: false }],
+    })
+
+    const wrapper = mountBinder({ inputFields: ['stale'] })
+    await flushPromises()
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vm = wrapper.vm as any
+    vm.openNewTable('input')
+    await flushPromises()
+
+    // 弹窗内部表单/entrySave 已有 TableTab 同款覆盖，这里只验证 RuleTableFieldBinder 自己的接线：
+    // 直接驱动弹窗的 saved 事件，不重复走一遍表单填写
+    const dialog = wrapper.findComponent(TableEditDialog)
+    expect(dialog.exists()).toBe(true)
+    await dialog.vm.$emit('saved', 'new-1')
+    await flushPromises()
+
+    expect(entryApi.entryDetail).toHaveBeenCalledWith('new-1')
+    const updates = wrapper.emitted('update:modelValue') as Array<[Record<string, unknown>]> | undefined
+    expect(updates?.length).toBeTruthy()
+    const last = updates![updates!.length - 1][0]
+    expect(last.inputTableId).toBe('new-1')
+    expect(last.inputTable).toBe('sense_data.TB_NEW')
+    expect(last.inputFields).toEqual([])
+  })
+
+  it('点输出表旁的新建表：保存后选中到输出表，不影响输入表', async () => {
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({
+      tableId: 'new-2', tableName: 'sense_data.TB_OUT', name: '输出新表', fields: [],
     })
 
     const wrapper = mountBinder()
@@ -101,20 +129,79 @@ describe('RuleTableFieldBinder · runSearch 取消旧请求（P1 #3）', () => {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const vm = wrapper.vm as any
-
-    // 第一次输入
-    vm.onInputTableFilter('em')
-    await new Promise((r) => setTimeout(r, 320))
+    vm.openNewTable('output')
     await flushPromises()
-    expect(firstSignal?.aborted).toBe(false)
-
-    // 触发新一轮：旧 controller abort → 旧 fetch 抛 AbortError
-    vm.onInputTableFilter('ema')
-    await new Promise((r) => setTimeout(r, 320))
+    await wrapper.findComponent(TableEditDialog).vm.$emit('saved', 'new-2')
     await flushPromises()
 
-    // AbortError 触发期间没有 ElMessage.error 被调用
-    expect(errorSpy).not.toHaveBeenCalled()
+    const updates = wrapper.emitted('update:modelValue') as Array<[Record<string, unknown>]> | undefined
+    const last = updates![updates!.length - 1][0]
+    expect(last.outputTableId).toBe('new-2')
+    expect(last.outputTable).toBe('sense_data.TB_OUT')
+    expect(last.inputTableId).toBeUndefined()
+  })
+})
+
+// 字段默认全选（0804 拍板，S2-3）：选完表、字段异步加载完成后自动勾满非系统字段。
+describe('RuleTableFieldBinder · 字段默认全选（0804 S2-3）', () => {
+  const FIELDS: RuleFieldOption[] = [
+    { itemCode: 'sku_id', itemName: '商品ID', columnName: 'K1', dataType: 'string', seq: 1 },
+    { itemCode: 'sku_name', itemName: '商品名称', columnName: 'K2', dataType: 'string', seq: 2 },
+    { itemCode: 'ID', itemName: '主键', columnName: 'ENTRY_ID', dataType: 'string', seq: -100 },
+  ]
+
+  function lastEmittedPatch(wrapper: ReturnType<typeof mountBinder>) {
+    const updates = wrapper.emitted('update:modelValue') as Array<[Partial<RuleOrchestration>]> | undefined
+    return updates?.[updates.length - 1]?.[0]
+  }
+
+  it('字段异步到位后自动全选非系统字段（系统字段 seq<0 不进默认选择）', async () => {
+    const wrapper = mountBinder({ inputTableId: 't1' })
+    await flushPromises()
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined() // 字段还没到，不该发任何 patch
+
+    await wrapper.setProps({ inputFieldOptions: FIELDS })
+    await flushPromises()
+
+    expect(lastEmittedPatch(wrapper)).toEqual({ inputFields: ['sku_id', 'sku_name'] })
+  })
+
+  it('输出表未单独选（沿用输入表）：输出字段池随输入字段池一起到位，也一并自动全选', async () => {
+    const wrapper = mountBinder({ inputTableId: 't1' })
+    await flushPromises()
+
+    // 输出表为空时父级传入的 outputFieldOptions 就是输入字段池本身（组合逻辑见 useRuleTableFields）
+    await wrapper.setProps({ inputFieldOptions: FIELDS, outputFieldOptions: FIELDS })
+    await flushPromises()
+
+    const updates = (wrapper.emitted('update:modelValue') as Array<[Partial<RuleOrchestration>]>).map((c) => c[0])
+    expect(updates).toContainEqual({ inputFields: ['sku_id', 'sku_name'] })
+    expect(updates).toContainEqual({ outputFields: ['sku_id', 'sku_name'] })
+  })
+
+  it('已有 inputFields（历史流程回读）：字段池到位后不覆盖既有选择', async () => {
+    const wrapper = mountBinder({ inputTableId: 't1', inputFields: ['sku_id'] })
+    await flushPromises()
+
+    await wrapper.setProps({ inputFieldOptions: FIELDS })
+    await flushPromises()
+
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+  })
+
+  it('用户手动清空已选字段后，字段池不变的情况下不会被重新勾上', async () => {
+    const wrapper = mountBinder({ inputTableId: 't1' })
+    await wrapper.setProps({ inputFieldOptions: FIELDS })
+    await flushPromises()
+    expect(lastEmittedPatch(wrapper)).toEqual({ inputFields: ['sku_id', 'sku_name'] })
+
+    // 模拟父级把自动全选的结果写回 store 后又整体清空（用户手动取消）：inputFields 变 []，
+    // 但 inputFieldOptions 这个字段池引用没变——不应该触发新一轮自动全选。
+    await wrapper.setProps({ modelValue: { inputTableId: 't1', inputFields: [], outputFields: [] } })
+    await flushPromises()
+
+    // 没有新的 emit（还是只有前面那一次自动全选的记录）
+    expect((wrapper.emitted('update:modelValue') as unknown[]).length).toBe(1)
   })
 })
 

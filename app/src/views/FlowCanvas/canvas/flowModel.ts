@@ -98,6 +98,10 @@ export interface NodeConfig {
   outputTable?: string
   /** 产物高级配置（原「落表输出」节点能力，降维为全节点通用；0701 问题四） */
   outputAdvanced?: OutputAdvanced
+  /** 结构化配置（入库配置，0804 S3-1）：非采集类节点用这个，采集类走 collectCfg.structuredConfig（同 outputTable 的双轨模式） */
+  structuredConfig?: string
+  /** 正文规则（0804 S3-1）：非采集类节点用这个，采集类走 collectCfg.contentRules */
+  contentRules?: string
   /** 非采集类节点的输入表（采集类沿用 collectCfg.inputTable）；空 = 自动继承上游节点输出表，显式设置即覆盖（0701 问题五） */
   inputTable?: string
   /** 节点进入条件：语义为本节点只处理满足条件的输入表行 */
@@ -106,6 +110,12 @@ export interface NodeConfig {
   taskCfg?: TaskConfig
   /** 规则处理节点编排配置（0707 Phase 9：规则引擎 rule-orchestration） */
   ruleCfg?: RuleOrchestration
+  /**
+   * 非规则节点（采集/登录等）的编排配置（0804 S3-3，方案 §3.1 修正 C/D）：抓取配置 XML /
+   * 登录配置，跟 ruleCfg 同构复用 RuleOrchestration（含 S3-2 加的 format 字段，此处恒为
+   * 'xml'），只是换个字段名——不能直接塞进 ruleCfg，否则 isRuleNode() 会把这类节点误判成规则节点。
+   */
+  execCfg?: RuleOrchestration
 }
 
 type InputMappingLike = InputMapping | LegacyTriple
@@ -156,11 +166,15 @@ export interface TaskParamValue {
   valueExpr?: string
 }
 
-/** 任务级配置：队列、URL 来源/规则及上下游字段映射，独立于节点处理逻辑。 */
+/** 任务级配置：队列及上下游字段映射，独立于节点处理逻辑。 */
 export interface TaskConfig {
   queue: string
-  /** 任务 URL 来源字段：从输入表 schema 中选择，供 urlRule 拼接引用（0707 补齐，原属于连线配置的"任务 URL 来源字段"） */
+  /**
+   * @deprecated 0804 拍板：任务 URL 来源字段/规则已从 UI 删除——当时保留是为了传参，
+   * 现在在参数位置拼接即可（见开发方案 §2.3）。字段保留仅供历史流程回读，新建流程不再写入。
+   */
   urlSourceField?: string
+  /** @deprecated 同上，不再从 UI 写入 */
   urlRule: string
   /** 当前节点已绑定参数的实际取值；参数集合由「参数配置」决定，不在此重复选择。 */
   paramValues?: TaskParamValue[]
@@ -193,6 +207,17 @@ export interface CollectorCapability {
   supportsResume: boolean
   supportsLogin: boolean
   supportsUrlParams: boolean
+}
+
+export type DedupType = 'source' | 'table'
+
+/** 代理明细（0804 S3-1）：勾选「使用代理」后才展开填写；下传时按抓取配置 XML 里的 Proxy JSON 形状序列化
+ *（ip/port/账号/密码，其余字段用默认值，见开发方案 §3.1），本类型只存前端表单用得到的四项。 */
+export interface CollectorProxyDetail {
+  ip?: string
+  port?: number
+  account?: string
+  password?: string
 }
 
 /** 采集类节点的可编辑配置（0706 优化·源/节点配置分层后瘦身：源级字段迁至 Source，见 api/types.ts） */
@@ -230,6 +255,17 @@ export interface CollectConfig {
   scheduleTime?: string
   weekdays?: number[]
   cron?: string
+  /** 业务类型（0804 S3-1）：规则名称维度的分类（如新闻/登录/分类），跟网页类型 webKind 是两个独立概念，别混 */
+  bizType?: string
+  /** 去重类型（0804 S3-1）：源去重＝按源/语言顺序去重；表内去重＝只看表内是否已存在同值——
+   *  跟输出表本身的去重列（EntryField.dedup）是两回事，那个是"哪一列参与判重"，这个是"判重的范围"。 */
+  dedupType?: DedupType
+  /** 代理明细（0804 S3-1）：useProxy 勾选后才展开填写，未勾选时不下传 */
+  proxyDetail?: CollectorProxyDetail
+  /** 结构化配置（入库配置，0804 S3-1）：程序按此规则把抓取结果落进输出表；本期存不透明文本，具体 schema 由执行端解释 */
+  structuredConfig?: string
+  /** 正文规则（0804 S3-1）：按输出字段配置的处理规则（如 content=trim），本期存不透明文本，一行一条 */
+  contentRules?: string
 }
 
 export type CollectorSchedule = Pick<CollectConfig, 'scheduleType' | 'scheduleTime' | 'weekdays' | 'cron'>
@@ -283,9 +319,10 @@ export interface FlowDef {
 }
 
 // 0707 澄清：连线（子步骤）不再是独立配置对象——原来挂在连线上的字段本来就该是下游节点自己的配置，
-// 已按各自归属并回节点：步骤输入/输出表、步骤名称→节点自身字段；任务 URL 规则/来源字段、步骤执行条件→任务配置 Tab
-// （urlRule/urlSourceField/trigger）；失败动作→表配置高级配置（failPolicy）；上下文来源→节点配置 Tab 的「输入映射」
-// （inmap，采集/非采集节点统一显示）；出参列去除——下游「输入映射」的来源下拉本就能看到上游全部产物字段，无需再单独选一次。
+// 已按各自归属并回节点：步骤输入/输出表、步骤名称→节点自身字段；步骤执行条件→任务配置 Tab（trigger）；
+// 失败动作→表配置高级配置（failPolicy）；出参列去除——下游「输入映射」的来源下拉本就能看到上游全部产物字段，无需再单独选一次。
+// 0804 拍板：任务 URL 规则/来源字段（urlRule/urlSourceField）、节点配置 Tab 的「输入映射」（inmap）
+// 两处都已从 UI 删除，字段仅供历史流程回读（见开发方案 §2.3/§2.4，NodeConfig.inmap 类型定义不变）。
 // 连线在画布上纯粹是节点间的视觉连接，点击不再弹出独立检查器。
 
 // ---------- 辅助函数（移植自原型） ----------
@@ -383,11 +420,17 @@ export function decisionOrParallelKind(cfg: NodeConfig): 'decision' | 'parallel'
 }
 
 /**
- * 规则处理节点判定（0801 方案 §6.1）：抽成共享函数供 nodeInspectorTabs（Tab 分流）与
- * ConfigTab（渲染分支）共用同一口径，避免各自维护一份 /规则/ 正则漂移。
+ * 规则处理节点判定（0801 方案 §6.1）：抽成共享函数供 nodeInspectorTabs（Tab 分流）、TableTab（渲染分支）、
+ * ConfigTab、NodeInspector 共用同一口径，避免各自维护一份判断逻辑漂移。
+ *
+ * 0805 修正（真机验证发现）：原实现是 /规则/.test(cfg.title)——0804 拍板"规则名称 = 节点名称"后，
+ * 节点标题变成用户可以随便改的自由文本，一旦改名不含"规则"两个字，节点就会被误判成非规则节点，
+ * 表配置/编排配置的内容整个错位（RuleTableFieldBinder 消失、编排配置门禁失效）。改用结构信号：
+ * 规则节点在插入时就带着 ruleCfg（来自 NODE_CONFIG_SEEDS.rule），其他节点类型从不带这个字段，
+ * 这个信号不随改名变化，比正则可靠。
  */
 export function isRuleNode(cfg?: NodeConfig): boolean {
-  return /规则/.test(cfg?.title ?? '')
+  return !!cfg?.ruleCfg
 }
 
 // ---------- 杂项（与 seeds/layout 无强耦合，独立放在 types 文件） ----------

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // NodeInspector 主壳（P1-1 Step 4 · 拆 tab 子组件后的瘦壳）。
-// 职责：① 加载并提供资产（tables/params/ruleGroups/rules/sharedCfgs/ruleOrchestrations）；
+// 职责：① 加载并提供资产（tables/params/ruleGroups/rules/sharedCfgs）；
 //       ② 顶层 Tab 切换；③ 节点头（标题/启停/展开）。各 Tab 的字段级逻辑在 tabs/*.vue 里。
 // 规则资产的懒加载逻辑必须留主壳：NodeInspector 只 mount 一次（index.vue 没给 :key），
 // isRule 会随选中节点变化，不能只在 onMounted 判断一次——否则打开画布时没选中规则节点就永远拉不到规则数据
@@ -8,7 +8,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
-import { type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { isRuleNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
 import { entryApi, paramApi, ruleApi } from '@/api'
 import { provideNodeInspectorAssets } from './useNodeInspectorAssets'
@@ -28,13 +28,14 @@ const tab = computed<string>(() => flow.activeTab)
 const statusText = computed(() => (cfg.value?.disabled ? '已停止' : (cfg.value?.status ?? '')))
 const statusClass = computed(() => (cfg.value?.disabled || cfg.value?.planned ? 'warn' : 'ok'))
 
-// 顶层 Tab：普通节点在表配置与任务配置间独立展示参数配置；
-// 决策/分头节点不产表也不需要任务/AI 编排，只显示「分支配置」一个 Tab 承载 BranchEditor。
+// 顶层 Tab：非决策/分头节点统一走 config/table/[params]/orchestration/task/ai 这套（0804 拍板 + 0805 改判）；
+// 参数配置只在非规则节点出现（0805 推翻 D17：采集节点的 URL 参数绑定离不开这个入口）；
+// 决策/分头节点不产表也不需要编排/任务/AI，只显示「分支配置」一个 Tab 承载 BranchEditor。
 const TOP_TABS = computed(() => nodeInspectorTabs(cfg.value))
 
 // 资产联动数据：主壳加载一次并 provide，各 tab 子组件通过 useNodeInspectorAssets 只读消费。
 const assets = provideNodeInspectorAssets()
-const isRule = computed(() => /规则/.test(cfg.value?.title ?? ''))
+const isRule = computed(() => isRuleNode(cfg.value))
 
 // 规则相关数据只在真的选中过规则节点时才拉，拉过一次后缓存，切别的规则节点不重复拉。
 const rulesLoaded = ref(false)
@@ -45,7 +46,6 @@ function loadRuleAssets() {
     ruleApi.ruleGroups().then((r) => (assets.ruleGroups.value = r)),
     ruleApi.rulePaged({ size: 100 }).then((r) => (assets.rules.value = r.list)),
     ruleApi.sharedConfigs().then((r) => (assets.sharedCfgs.value = r)),
-    ruleApi.orchestrationPaged({ size: 100 }).then((r) => (assets.ruleOrchestrations.value = r.list)),
   ])
 }
 watch(isRule, (v) => { if (v) loadRuleAssets() })
@@ -83,7 +83,7 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- 顶层 Tab：节点配置 / 表配置 / 参数配置 / 任务配置 / AI 对话；保持在视口里不被滚动条挤出 -->
+      <!-- 顶层 Tab：节点配置 / 表配置 / [参数配置] / 编排配置 / 任务配置 / AI 对话；保持在视口里不被滚动条挤出 -->
       <div class="rc-top-tabs">
         <button
           v-for="t in TOP_TABS"
@@ -91,6 +91,8 @@ onMounted(async () => {
           type="button"
           class="rc-top-tab"
           :class="{ active: tab === t[0] }"
+          :disabled="!!t[2]"
+          :title="t[2]"
           @click="flow.setActiveTab(t[0])"
         >{{ t[1] }}</button>
       </div>
@@ -131,11 +133,12 @@ onMounted(async () => {
 .rc-insp-expand:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rc-inspector-body { padding: 12px; overflow: auto; flex: 1 1 auto; min-height: 0; }
 
-/* 顶层四 Tab（0706 调整4 · 0707 微调：节点配置 / 表配置 / 任务配置 / AI 对话） */
+/* 顶层 Tab（0706 调整4 · 0707 微调 · 0804 统一为 config/table/orchestration/task/ai · 0805 参数配置回归非规则节点） */
 .rc-top-tabs { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--rc-border); border-radius: 9px; background: #f1f5f9; margin-bottom: 12px; }
 .rc-top-tab { flex: 1; border: 0; background: transparent; border-radius: 7px; padding: 7px 4px; color: var(--rc-muted); font-size: 12px; font-weight: 600; cursor: pointer; }
 .rc-top-tab.active { background: #fff; color: var(--rc-primary-ink); box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08); }
-.rc-top-tab:hover:not(.active) { color: var(--rc-primary-ink); }
+.rc-top-tab:hover:not(.active):not(:disabled) { color: var(--rc-primary-ink); }
+.rc-top-tab:disabled { color: var(--rc-faint); cursor: not-allowed; opacity: 0.6; }
 
 .rc-help { color: var(--rc-faint); font-size: 10px; line-height: 1.5; margin-top: 6px; }
 </style>

@@ -907,10 +907,6 @@ export const useFlowStore = defineStore('flow', () => {
       }
       if (!isFirstMainNode(d.main, d.configs, nid)) {
         const ownTaskParamRefs = new Set(c.collectCfg?.urlParamRefs ?? [])
-        const taskTokens = extractUrlParamIds(c.taskCfg?.urlRule ?? '')
-        const unavailableTaskParams = taskTokens.filter((pid) => !ownTaskParamRefs.has(pid))
-        if (unavailableTaskParams.length) errs.push(`「${c.title}」任务 URL 参数 ${unavailableTaskParams.join('、')} 未绑定到当前节点参数配置`)
-
         const paramValues = c.taskCfg?.paramValues ?? []
         const invalidTaskValues = paramValues.filter((item) => !ownTaskParamRefs.has(item.paramId)).map((item) => item.paramId)
         if (invalidTaskValues.length) errs.push(`「${c.title}」任务参数 ${invalidTaskValues.join('、')} 未绑定到当前节点`)
@@ -1017,9 +1013,12 @@ export const useFlowStore = defineStore('flow', () => {
     patchCollect: (id: string, patch: Partial<CollectConfig>) => nodeStore.patchCollect(id, patch),
     patchTaskConfig: (id: string, patch: Partial<TaskConfig>) => nodeStore.patchTaskConfig(id, patch),
     patchRuleConfig: (id: string, patch: Partial<RuleOrchestration>) => nodeStore.patchRuleConfig(id, patch),
+    patchExecConfig: (id: string, patch: Partial<RuleOrchestration>) => nodeStore.patchExecConfig(id, patch),
     setOutputTable: (id: string, tableId: string) => nodeStore.setOutputTable(id, tableId),
     setInputTable: (id: string, tableId: string) => nodeStore.setInputTable(id, tableId),
     setTaskQueue: (id: string, value: string) => nodeStore.setTaskQueue(id, value),
+    setStructuredConfig: (id: string, value: string) => nodeStore.setStructuredConfig(id, value),
+    setContentRules: (id: string, value: string) => nodeStore.setContentRules(id, value),
     setEntryCondition: (id: string, cond: ConditionGroup | undefined) => nodeStore.setEntryCondition(id, cond),
     setNodeDisabled: (id: string, disabled: boolean) => nodeStore.setNodeDisabled(id, disabled),
     setBaseRow: (id: string, index: number, value: string) => nodeStore.setBaseRow(id, index, value),

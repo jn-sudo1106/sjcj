@@ -71,7 +71,7 @@ export interface EvalResult {
 // 差异一律在 legacyAdapters 里转换，本文件与业务组件只用下面这套语义命名。
 export type RuleDataSource = 'dp-news' | 'dp-wwdata' | 'dp-swdata' | (string & {})
 
-/** 规则编排列表项（规则引擎 rule-orchestration，本期编排列表后置，暂无消费方） */
+/** 规则编排列表项（规则引擎 rule-orchestration） */
 export interface RuleOrchestrationItem {
   ruleId: string
   name: string
@@ -84,6 +84,8 @@ export interface RuleOrchestrationItem {
   inputTable?: string
   inputFields?: string[]
   outputFields?: string[]
+  /** 0805 追加：归属租户（服务端 userCode），供「选择已有规则」按登录账号过滤用 */
+  userCode?: string
 }
 
 /** 规则处理节点绑定的编排配置 */
@@ -91,6 +93,7 @@ export interface RuleOrchestration {
   /** ref=查看已保存的编排；new=新建中（尚未保存元数据或未切到 ref） */
   mode: 'ref' | 'new'
   ruleId?: string
+  /** 0804 拍板：= 节点名称（NodeConfig.title），不再单独输入；保存/查看态均由调用方用 cfg.title 覆盖 */
   name?: string
   /** = 旧 nlDescribe；旧系统无独立「用户提示词」字段，本字段已兼任，不要另加 */
   describe: string
@@ -102,11 +105,11 @@ export interface RuleOrchestration {
   /** = 旧 state（1 → true） */
   enabled?: boolean
 
-  /** 数据源；默认 dp-wwdata（采集库） */
+  /** 数据源；0804 拍板固定为采集库，不再可选（见 RULE_DATA_SOURCE） */
   dataSource?: RuleDataSource
   /** 输入表物理表名（发给 vrule 用，= 旧 targetTable） */
   inputTable?: string
-  /** 输入表 tableId；0803 起改走 vrule 跨租户表搜索（news-getTableList），不再是采集中心 entryType 的 tableId */
+  /** 输入表 tableId；0803 起改走 vrule 表搜索（news-getTableList），不再是采集中心 entryType 的 tableId */
   inputTableId?: string
   /** 输出表物理表名；本期由采集中心侧存储，vrule 是否接收待确认（拍板 #5） */
   outputTable?: string
@@ -115,25 +118,42 @@ export interface RuleOrchestration {
   inputFields?: string[]
   /** 出参字段编码（itemCode），>=1，多选 */
   outputFields?: string[]
+  /** 结构化配置（入库配置，0804 S3-1）：本期存不透明文本，具体 schema 由执行端解释 */
+  structuredConfig?: string
+  /** 正文规则（0804 S3-1）：按输出字段配置的处理规则（如 content=trim），本期存不透明文本，一行一条 */
+  contentRules?: string
   /**
-   * 0803 追加：规则所属租户（旧 userCode）。查看详情时从 getComposeById 的 userCode 字段回填；
-   * 新建时取自「输入表」选中项所属租户（跨租户表搜索按租户逐个查，选中的表天然知道自己来自哪个租户）。
-   * 保存业务规则时用它而非登录账号，保证规则归属的租户和它引用的表所属租户一致。
+   * 0803 追加：规则所属租户（旧 userCode）。查看详情时从 getComposeById 的 userCode 字段回填，
+   * 仅作透传展示。0804 起表搜索固定按登录账号单租户查，保存业务规则时不再需要从这里回传租户——
+   * orchestrationSaveMeta 未收到 userCode 时自会回退到登录账号。
    */
   userCode?: string
+  /**
+   * S3-2 追加：产物类型，纯前端本地字段，只用于渲染/解析分支选择（Python 预览 vs XML 编辑器、
+   * 流式正文剥标记行后按什么校验），不进 ruleOrchestrationGenerateToLegacy/SaveMetaToLegacy/
+   * SaveScriptToLegacy 的请求体——生成接口零改动复用（方案 §3.1 修正 E），产物类型由 systemPrompt
+   * 内容本身决定，后端不需要知道这个字段。缺省视为 'python'（规则节点现状）。
+   */
+  format?: 'python' | 'xml'
 }
 
-/** 表选项：统一 vrule dbTableName / 采集中心 EntryType 两侧命名（两者 tableName 含义相反，见 §4.3） */
-export interface RuleTableOption {
-  tableId: string
-  /** 中文业务名 */
-  tableName: string
-  /** 物理表名，发给 vrule 用 */
-  dbTableName: string
-  /** 去重列，逗号分隔，如 "K1,K10" */
-  keyField?: string
-  /** 0803 追加：这张表来自跨租户搜索时具体命中的租户（news-getTableList 的 userCode），用于回填 RuleOrchestration.userCode */
-  ownerUserCode?: string
+/**
+ * 非规则节点（采集/登录等，S3-3 起）的执行配置数据模型（方案 §3.1 修正 C/D，计划 S3-2）。
+ * 字段语义对齐 RuleOrchestration 的同名概念（见下方 ≙ 标注），复用同一套生成/保存/读取接口——
+ * S3-3 接入时把 NodeExecConfig 映射成 RuleOrchestration 形状再调用 ruleApi，不新增端点。
+ */
+export interface NodeExecConfig {
+  configId?: string
+  /** 仅前端用于渲染/解析分发，不进请求体（同 RuleOrchestration.format） */
+  format: 'xml' | 'python'
+  /** ≙ RuleOrchestration.script */
+  content?: string
+  /** ≙ RuleOrchestration.scriptPath */
+  filePath?: string
+  /** ≙ RuleOrchestration.describe */
+  describe?: string
+  /** ≙ RuleOrchestration.systemPrompt */
+  systemPrompt?: string
 }
 
 /** 字段选项 */

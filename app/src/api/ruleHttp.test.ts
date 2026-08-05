@@ -337,32 +337,4 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
     expect(script).toContain('def main(date)')
   })
 
-  // REVIEW-2026-08-04 P1 #3：搜索框快速连打字时新一轮搜索主动 abort 旧请求。
-  // fetch 拿到 aborted signal 必须立即抛 AbortError（不是 fetch 内部超时统一打"请求超时"），
-  // orchestrationTableSearch 透传 AbortError，不要包成 ApiError 让上层以为是真业务失败。
-  it('orchestrationTableSearch：外部 abort 触发时 fetch 立即抛 AbortError，orchestrationTableSearch 透传且不包 ApiError', async () => {
-    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
-    vi.stubEnv('VITE_API_MODE', 'http')
-    vi.resetModules()
-    // 模拟"挂起"的 fetch：收到请求时不 resolve，监听 abort 事件后抛 AbortError
-    fetchMock.mockImplementation((_url, init) => new Promise((_, reject) => {
-      const signal = (init as RequestInit | undefined)?.signal as AbortSignal | undefined
-      if (!signal) {
-        reject(new Error('expected signal'))
-        return
-      }
-      if (signal.aborted) {
-        reject(new DOMException('aborted', 'AbortError'))
-        return
-      }
-      signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true })
-    }))
-    const { ruleApi } = await import('./index')
-
-    const controller = new AbortController()
-    const promise = ruleApi.orchestrationTableSearch('dp-wwdata', 'email', controller.signal)
-    // 立即 abort 模拟"快速连打字"
-    controller.abort()
-    await expect(promise).rejects.toMatchObject({ name: 'AbortError' })
-  })
 })

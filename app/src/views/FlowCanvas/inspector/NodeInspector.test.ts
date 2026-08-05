@@ -14,7 +14,6 @@ function mockAssets() {
   vi.spyOn(ruleApi, 'ruleGroups').mockResolvedValue([])
   vi.spyOn(ruleApi, 'rulePaged').mockResolvedValue({ total: 0, list: [] })
   vi.spyOn(ruleApi, 'sharedConfigs').mockResolvedValue([])
-  vi.spyOn(ruleApi, 'orchestrationPaged').mockResolvedValue({ total: 0, list: [] })
 }
 
 // review 0723 #9 修正：文档原描述（onMounted 无条件加载 6 个 API）已经不成立，当前代码已有 isRule 判断；
@@ -23,7 +22,7 @@ function mockAssets() {
 afterEach(() => vi.restoreAllMocks())
 
 describe('NodeInspector 规则数据懒加载（review 0723 #9 修正）', () => {
-  it('打开画布选中非规则节点：规则相关 4 个 API 不调用；之后切到规则节点才补拉，且只拉一次', async () => {
+  it('打开画布选中非规则节点：规则相关 3 个 API 不调用；之后切到规则节点才补拉，且只拉一次', async () => {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
@@ -38,7 +37,6 @@ describe('NodeInspector 规则数据懒加载（review 0723 #9 修正）', () =>
     expect(ruleApi.ruleGroups).not.toHaveBeenCalled()
     expect(ruleApi.rulePaged).not.toHaveBeenCalled()
     expect(ruleApi.sharedConfigs).not.toHaveBeenCalled()
-    expect(ruleApi.orchestrationPaged).not.toHaveBeenCalled()
 
     flow.select('rule-1')
     await flushPromises()
@@ -46,7 +44,6 @@ describe('NodeInspector 规则数据懒加载（review 0723 #9 修正）', () =>
     expect(ruleApi.ruleGroups).toHaveBeenCalledTimes(1)
     expect(ruleApi.rulePaged).toHaveBeenCalledTimes(1)
     expect(ruleApi.sharedConfigs).toHaveBeenCalledTimes(1)
-    expect(ruleApi.orchestrationPaged).toHaveBeenCalledTimes(1)
 
     // 切到另一个规则节点：数据已经拉过，不重复请求
     flow.select('rule-2')
@@ -73,6 +70,8 @@ describe('NodeInspector 规则数据懒加载（review 0723 #9 修正）', () =>
 // 挡掉了它自己本该有的 UrlParamEditor（节点级单值绑定）入口。这里验证按 isFirstCollectorNode 收窄后的展示。
 // 0802 重构·方案 A：参数子源编辑入口整体挪到 ConfigTab 源 URL 区，ParamsTab 不再重复展示摘要/跳转按钮；
 // 仅在「非首个采集节点 + 是参数源」时给一行提示，避免用户误以为本节点能编辑参数子源。
+// 0804 拍板（决议 D17）曾把「参数配置」tab 对全部节点隐藏；0805 改判（推翻 D17）恢复非规则节点的入口——
+// 下面 setActiveTab('params') 的两个用例随之恢复。
 describe('NodeInspector 参数子源编辑入口在 ConfigTab（0802 重构）', () => {
   function setupParamSource() {
     setActivePinia(createPinia())

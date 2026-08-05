@@ -14,12 +14,10 @@ import type {
   ParamInput,
   ParamKind,
   ParamValue,
-  RuleFieldOption,
   RuleOrchestration,
   RuleOrchestrationGenerateResult,
   RuleOrchestrationItem,
   RuleOrchestrationSaveMetaResult,
-  RuleTableOption,
   RuleOrchestrationSaveResult,
   RuleOrchestrationTestRequest,
   RuleOrchestrationTestResult,
@@ -444,7 +442,7 @@ export function ruleOrchestrationDetailFromLegacy(input: unknown): RuleOrchestra
     // outputTable：实测详情响应无此字段（拍板 #5），本期不从这里取
     inputFields: splitCsv(record.inputFields),
     outputFields: splitCsv(record.outputFields),
-    // 0803 追加：引用已有规则时用它去查它自己租户下的表（跨租户表搜索），而不是当前登录账号的租户
+    // 0803 追加，0804 起前端不再消费：仅作服务端归属租户的透传记录（保存元数据已固定用登录账号）
     userCode: record.userCode == null ? undefined : String(record.userCode),
   }
 }
@@ -475,43 +473,10 @@ export function ruleOrchestrationListFromLegacy(input: unknown): Paged<RuleOrche
       inputTable: record.targetTable == null ? undefined : String(record.targetTable),
       inputFields: splitCsv(record.inputFields),
       outputFields: splitCsv(record.outputFields),
+      userCode: record.userCode == null ? undefined : String(record.userCode),
     }
   })
   return { total: Number(page.total ?? list.length), list }
-}
-
-/**
- * 0803 追加：跨租户表搜索（news-getTableList 单条记录）→ RuleTableOption。
- * 实测响应字段与前端模型基本同名（tableId 是 number，需转 string）；ownerUserCode 由调用方按查询时用的
- * userCode 回填（响应本身不带这个字段，是我们在“按租户逐个查”时自己知道的上下文）。
- */
-export function ruleTableOptionFromLegacy(input: unknown, ownerUserCode: string): RuleTableOption {
-  const record = asRecord(input)
-  return {
-    tableId: record.tableId == null ? '' : String(record.tableId),
-    tableName: record.tableName == null ? '' : String(record.tableName),
-    dbTableName: record.dbTableName == null ? '' : String(record.dbTableName),
-    keyField: record.keyField == null || record.keyField === '' ? undefined : String(record.keyField),
-    ownerUserCode,
-  }
-}
-
-/**
- * 0803 追加：news-getTableFields 单条记录 → RuleFieldOption。
- * vrule 后端字段命名习惯——表/字段都是驼峰，唯独字段描述字段名是 `item_desc` 下划线，
- * 与前端 RuleFieldOption.itemDesc 驼峰不一致，adapter 负责把下划线命名翻译为驼峰。
- * 改 adapter 时不要忘了这一层翻译；其他字段名如果未来 vrule 也用了下划线命名，同样要在这里兜一下。
- */
-export function ruleFieldOptionFromLegacy(input: unknown): RuleFieldOption {
-  const record = asRecord(input)
-  return {
-    itemCode: record.itemCode == null ? '' : String(record.itemCode),
-    itemName: record.itemName == null ? '' : String(record.itemName),
-    columnName: record.columnName == null ? undefined : String(record.columnName),
-    dataType: record.dataType == null ? undefined : String(record.dataType),
-    itemDesc: record.item_desc == null ? undefined : String(record.item_desc),
-    seq: typeof record.seq === 'number' ? record.seq : (record.seq == null ? undefined : Number(record.seq)),
-  }
 }
 
 /**
@@ -528,11 +493,16 @@ export function ruleFieldOptionFromLegacy(input: unknown): RuleFieldOption {
  * TODO(REVIEW-2026-08-04 P2 #15)：这是个妥协方案，前提是后端一直不校验 userCode。配个 ticket
  * 跟踪"vrule 后端什么时候开始校验 userCode"——一旦对方加了白名单/外键校验，这里全部要重新设计
  * （不能再指望 dev_zhonghe 账号名字恰好是合法租户码这件事）。
+ *
+ * ruleType（S3-2 §9.2-2）：默认沿用规则节点现值 `'数据处理'`。0805 真机实测过 `targetTable: ''`
+ * （模拟采集首节点没有输入表）+ `ruleType: '数据处理'` 直接 POST 成功建行——后端不校验空 targetTable，
+ * ruleType 也未被拒绝，采集节点（S3-3）暂不需要另传别的值，参数留着只是为了不排除未来按节点类型
+ * 区分的可能性。
  */
-export function ruleOrchestrationSaveMetaToLegacy(cfg: RuleOrchestration, userCode: string): LegacyRecord {
+export function ruleOrchestrationSaveMetaToLegacy(cfg: RuleOrchestration, userCode: string, ruleType = '数据处理'): LegacyRecord {
   return {
     state: 1,
-    ruleType: '数据处理',
+    ruleType,
     dataSource: cfg.dataSource,
     userCode,
     ruleName: cfg.name,
@@ -570,11 +540,21 @@ export function ruleOrchestrationTestFromLegacy(input: unknown): RuleOrchestrati
   }
 }
 
-/** 保存脚本（路径 B，POST dashscope/script/edit）：codeFileName/scriptCode 是旧接口固定字段名 */
-export function ruleOrchestrationSaveScriptToLegacy(cfg: Pick<RuleOrchestration, 'ruleId' | 'scriptPath' | 'script'>): LegacyRecord {
+/**
+ * 保存脚本（路径 B，POST dashscope/script/edit）：codeFileName/scriptCode 是旧接口固定字段名。
+ * format（S3-2，默认 'python'，零回归）：仅在 scriptPath 的扩展名跟 format 对不上时纠正后缀
+ * （如 XML 抓取配置误带 .py 路径），scriptPath 为空或扩展名已匹配时原样透传，不影响规则节点现有行为。
+ */
+export function ruleOrchestrationSaveScriptToLegacy(
+  cfg: Pick<RuleOrchestration, 'ruleId' | 'scriptPath' | 'script'>,
+  format: 'python' | 'xml' = 'python',
+): LegacyRecord {
+  const ext = format === 'xml' ? '.xml' : '.py'
+  const path = cfg.scriptPath ?? ''
+  const codeFileName = path && !path.endsWith(ext) ? path.replace(/\.[^./\\]*$/, '') + ext : path
   return {
     ruleId: cfg.ruleId,
-    codeFileName: cfg.scriptPath,
+    codeFileName,
     scriptCode: cfg.script,
   }
 }
@@ -679,19 +659,34 @@ const STREAM_SCRIPT_PATH_MARKERS = [
   '# [系统消息] 当前文件已经保存至MinIO:',
 ]
 
-export function parseRuleOrchestrationStreamText(text: string): RuleOrchestrationGenerateResult {
-  const script = text
+/**
+ * 剥离流式正文末尾的 MinIO 保存标记行，抽成独立函数便于单测（S3-2 §9.2-1）。
+ * 标记行不是脚本/配置正文的一部分：对 Python 只是多一行无意义注释，但对 XML（S3-3 抓取配置）
+ * 这行会破坏合法性，必须剥掉——按最后一次匹配的行整行连同其后的空行一并去掉。
+ * 找不到标记行时原样返回整段文本（scriptPath 为空串）。
+ */
+export function stripMinioMarkerLine(text: string): { script: string; scriptPath: string } {
+  const rawLines = text.split('\n')
   let scriptPath = ''
-  const lines = text.split('\n').filter(Boolean)
-  for (let i = lines.length - 1; i >= 0; i--) {
+  let markerIdx = -1
+  for (let i = rawLines.length - 1; i >= 0; i--) {
+    const line = rawLines[i]
+    if (!line) continue
     for (const marker of STREAM_SCRIPT_PATH_MARKERS) {
-      if (lines[i].startsWith(marker)) {
-        scriptPath = lines[i].slice(marker.length).trim()
+      if (line.startsWith(marker)) {
+        scriptPath = line.slice(marker.length).trim()
+        markerIdx = i
         break
       }
     }
     if (scriptPath) break
   }
+  const script = markerIdx >= 0 ? rawLines.slice(0, markerIdx).join('\n').trimEnd() : text
+  return { script, scriptPath }
+}
+
+export function parseRuleOrchestrationStreamText(text: string): RuleOrchestrationGenerateResult {
+  const { script, scriptPath } = stripMinioMarkerLine(text)
   if (!script.trim()) throw new Error('生成脚本未返回内容')
   return { script, scriptPath }
 }

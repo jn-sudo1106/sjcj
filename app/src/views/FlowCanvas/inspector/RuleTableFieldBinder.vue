@@ -1,38 +1,39 @@
 <script setup lang="ts">
-// 规则处理节点「新增业务规则」表/字段绑定（0801 方案 §6.3/§7.2；0803 改造：表来源换成 vrule 跨租户搜索）。
-// 采集中心自己的实体表注册表在真实环境里近乎空（实测仅 2 条），规则真正引用的 sense_data 表在 vrule 那边，
-// 但 news-getTableList 按租户分域、没有「查全部」的接口——本组件直接调 ruleApi.orchestrationTableSearch
-// （内部按数据源查全部真实租户、逐个查表合并去重），输入即搜索，不再依赖父级预加载的 tables 列表。
+// 规则处理节点「新增业务规则」表/字段绑定（0801 方案 §6.3/§7.2）。
+// 0805 改判（推翻 0803 的 vrule 单租户搜索）：用户指出采集中心自己的 entryType 和 vrule 那边其实是
+// 同一份底层表注册表（entryTypeId/itemCode 编号空间共享，真机核对过 TB_NEWS_TAGS 两边 tableId 都是
+// 2101991），两套查询没必要——改回跟其他节点表配置同源的 entryApi.entryPaged/entryDetail，
+// 输入即搜索（按 name 关键字），不再依赖父级预加载的 tables 列表。
 // 字段列表（入参/出参）仍由父级 RuleOrchestrationTab 传入——它同时要给「查看业务编排」的只读摘要显示字段名，
 // 缓存逻辑放父级更省一次重复请求。
-import { computed, ref } from 'vue'
+// 0804 拍板：所属库固定为采集库（不再可选，见 RULE_DATA_SOURCE）；命名沿用节点标题，
+// 不再单独输入，「引用已有规则」能力一并砍掉（复用需求交给模板功能承接）。
+// 字段默认全选（0804 拍板，S2-3）：选完表、字段加载完成后自动勾满非系统字段，用户可再手动取消。
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { ruleApi, type RuleDataSource, type RuleFieldOption, type RuleOrchestration, type RuleOrchestrationItem, type RuleTableOption } from '@/api'
+import { entryApi, type EntryType, type RuleFieldOption, type RuleOrchestration } from '@/api'
 import { isSystemField } from '@/utils/flow/ruleOrchestration'
+import TableEditDialog from './TableEditDialog.vue'
 
 type BinderModel = Pick<
   RuleOrchestration,
-  'dataSource' | 'name' | 'inputTable' | 'inputTableId' | 'outputTable' | 'outputTableId' | 'inputFields' | 'outputFields' | 'userCode'
+  'inputTable' | 'inputTableId' | 'outputTable' | 'outputTableId' | 'inputFields' | 'outputFields'
 >
 
-// 规则名称支持模糊搜索已有规则并引用（0803 会议）：全新态和「修改表字段」编辑态都开放——
-// 后者选中已有项等于中途反悔换成引用别的规则（复用同一套 select-existing + 表冲突确认逻辑）。
 const props = defineProps<{
   modelValue: BinderModel
-  ruleOptions?: RuleOrchestrationItem[]
   inputFieldOptions: RuleFieldOption[]
   outputFieldOptions: RuleFieldOption[]
 }>()
-const emit = defineEmits<{ 'update:modelValue': [BinderModel]; 'select-existing': [ruleId: string] }>()
+const emit = defineEmits<{ 'update:modelValue': [Partial<BinderModel>] }>()
 
-const DATA_SOURCES: { value: RuleDataSource; label: string }[] = [
-  { value: 'dp-news', label: '资讯库' },
-  { value: 'dp-wwdata', label: '采集库' },
-  { value: 'dp-swdata', label: '申万库' },
-]
-
+// 0804 S2-3 修正：只发真正改动的字段，不要在这里拿 props.modelValue 兜底铺满整个对象——
+// 父级（TableTab#patchRule → flow.patchRuleConfig）本来就按"合并到当前 store 状态"处理传入的 patch。
+// 之前这里 emit 的是 {...props.modelValue, ...p} 的整份快照：默认全选的入参/出参两个 watch
+// 在同一轮响应式刷新里各自基于同一份（尚未更新）props.modelValue 起算，先发的那次改动会被后发的
+// 快照覆盖回旧值——两个 watch 都改完，最终却只有一个生效。改成只发 p 这个真正的偏移量就不会互相踩。
 function patch(p: Partial<BinderModel>) {
-  emit('update:modelValue', { ...props.modelValue, ...p })
+  emit('update:modelValue', p)
 }
 
 // 系统固定字段（seq < 0）默认不进可选池；已选中的仍保留在已选 tag，避免静默丢字段
@@ -43,6 +44,23 @@ function selectableFields(all: RuleFieldOption[]): RuleFieldOption[] {
 }
 const inputFieldPool = computed(() => selectableFields(props.inputFieldOptions))
 const outputFieldPool = computed(() => selectableFields(props.outputFieldOptions))
+const allInputSelected = computed(() => inputFieldPool.value.length > 0 && inputFieldPool.value.every((f) => props.modelValue.inputFields?.includes(f.itemCode)))
+const allOutputSelected = computed(() => outputFieldPool.value.length > 0 && outputFieldPool.value.every((f) => props.modelValue.outputFields?.includes(f.itemCode)))
+
+// 字段默认全选（0804 拍板）：表选完、字段异步加载完成后自动勾满非系统字段，用户可以再手动取消。
+// 触发条件只看"字段池非空 + 当前未选任何字段"，不额外记"是不是刚选的表"——
+// 字段池一旦拉到手（父级按 tableId 缓存），这个 watch 源引用不再变化，之后用户清空选择也不会被重新勾上；
+// 回读历史流程（inputFields 已有值）同样不会被覆盖，因为条件直接不成立。
+watch(() => props.inputFieldOptions, (options) => {
+  if (!options.length || props.modelValue.inputFields?.length) return
+  const codes = selectableFields(options).map((f) => f.itemCode)
+  if (codes.length) patch({ inputFields: codes })
+})
+watch(() => props.outputFieldOptions, (options) => {
+  if (!options.length || props.modelValue.outputFields?.length) return
+  const codes = selectableFields(options).map((f) => f.itemCode)
+  if (codes.length) patch({ outputFields: codes })
+})
 
 function debounce<A extends unknown[]>(fn: (...args: A) => void, ms: number) {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -52,38 +70,26 @@ function debounce<A extends unknown[]>(fn: (...args: A) => void, ms: number) {
   }
 }
 
-// 表搜索（跨租户，0803）：输入表/输出表各自独立的搜索态，避免共用一份状态时互相打断。
-// REVIEW-2026-08-04 P1 #3：每次 runSearch 创建新 AbortController；新 search 触发时主动 abort 旧 controller，
-// 让"快速连打字"场景下旧请求的网络层真正被中断（不是仅靠 requestSeq 丢弃结果）。
-// AbortError 不弹错——主动取消是预期行为，error 兜底只针对真实失败。
+// 表搜索：输入表/输出表各自独立的搜索态，避免共用一份状态时互相打断。
+// entryApi.entryPaged 不支持外部 AbortSignal（跟其他节点表配置共用同一个内部 20s 超时的 request()），
+// 用 requestSeq 丢弃过期结果即可防止旧搜索覆盖新结果——不是真正中断网络请求，但已足够安全。
 function useTableSearch() {
-  const results = ref<RuleTableOption[]>([])
+  const results = ref<EntryType[]>([])
   const loading = ref(false)
-  const selected = ref<RuleTableOption | null>(null)
+  const selected = ref<EntryType | null>(null)
   let requestSeq = 0
-  let inflight: AbortController | null = null
-  async function runSearch(dataSource: string | undefined, keyword: string) {
-    if (!dataSource) return
-    // 主动取消上一轮正在飞的请求（不只是丢弃结果，还要把 fetch 也 abort 掉）
-    if (inflight) inflight.abort()
-    const controller = new AbortController()
-    inflight = controller
+  async function runSearch(keyword: string) {
     const seq = ++requestSeq
     loading.value = true
     try {
-      const list = await ruleApi.orchestrationTableSearch(dataSource, keyword, controller.signal)
+      const paged = await entryApi.entryPaged({ name: keyword || undefined, size: 20 })
       if (seq !== requestSeq) return // 有更新的搜索已发出，丢弃这次的结果
-      results.value = list
+      results.value = paged.list
     } catch (e) {
       if (seq !== requestSeq) return
-      // 主动取消不弹错——是预期行为；区分靠 error.name
-      if ((e as Error)?.name === 'AbortError') return
       ElMessage.error(`搜索表失败：${(e as Error)?.message ?? String(e)}`)
     } finally {
-      if (seq === requestSeq) {
-        loading.value = false
-        if (inflight === controller) inflight = null
-      }
+      if (seq === requestSeq) loading.value = false
     }
   }
   const debouncedSearch = debounce(runSearch, 300)
@@ -99,71 +105,56 @@ const inputTableSearch = useTableSearch()
 const outputTableSearch = useTableSearch()
 
 function onInputTableFilter(query: string) {
-  inputTableSearch.debouncedSearch(props.modelValue.dataSource, query)
+  inputTableSearch.debouncedSearch(query)
 }
 function onInputTableVisible(open: boolean) {
-  if (open && !inputTableSearch.results.value.length) void inputTableSearch.runSearch(props.modelValue.dataSource, '')
+  if (open && !inputTableSearch.results.value.length) void inputTableSearch.runSearch('')
 }
 function onOutputTableFilter(query: string) {
-  outputTableSearch.debouncedSearch(props.modelValue.dataSource, query)
+  outputTableSearch.debouncedSearch(query)
 }
 function onOutputTableVisible(open: boolean) {
-  if (open && !outputTableSearch.results.value.length) void outputTableSearch.runSearch(props.modelValue.dataSource, '')
+  if (open && !outputTableSearch.results.value.length) void outputTableSearch.runSearch('')
 }
-function tableOptionLabel(t: RuleTableOption) {
-  return `${t.tableName} · ${t.dbTableName}`
+function tableOptionLabel(t: EntryType) {
+  return `${t.name || t.tableName} · ${t.tableName}`
 }
 
-function onDataSourceChange(value: RuleDataSource) {
-  // 切换数据源清空表/字段重选——不同数据源下的租户、表都不是同一批
-  patch({
-    dataSource: value, inputTable: '', inputTableId: '', outputTable: '', outputTableId: '',
-    inputFields: [], outputFields: [], userCode: undefined,
-  })
-  inputTableSearch.results.value = []
-  inputTableSearch.selected.value = null
-  outputTableSearch.results.value = []
-  outputTableSearch.selected.value = null
-}
-// 规则名称 combobox：value 用规则名文本本身（而非 ruleId），这样未匹配到已有项时控件仍能正常回显
-// 当前草稿名；匹配到已有项则不在本组件内直接改名，交给父级 select-existing 去异步拉详情后再落地。
-const nameKeyword = ref('')
-function onNameFilter(query: string) {
-  nameKeyword.value = query
-}
-function onNameSelectVisible(open: boolean) {
-  if (open) nameKeyword.value = ''
-}
-const filteredRuleOptions = computed(() => {
-  const kw = nameKeyword.value.trim().toLowerCase()
-  const all = props.ruleOptions ?? []
-  if (!kw) return all
-  return all.filter((o) => o.name.toLowerCase().includes(kw))
-})
-function ruleOptionLabel(o: RuleOrchestrationItem) {
-  return o.enabled === false ? `${o.name}（已停用）` : o.name
-}
-function onNameSelect(value: string) {
-  const matched = (props.ruleOptions ?? []).find((o) => o.name === value)
-  if (matched) {
-    emit('select-existing', matched.ruleId)
-    return
-  }
-  patch({ name: value })
-}
 function onInputTableId(tableId: string | undefined | null) {
   const id = tableId ?? ''
   const table = inputTableSearch.renderOptions.value.find((t) => t.tableId === id)
   inputTableSearch.selected.value = table ?? null
-  // 输入表决定这条规则归属的租户（userCode）——发 saveMeta 时要用它，而不是登录账号，
-  // 保证规则的租户和它引用的表所属租户一致（0803 追加，见 RuleOrchestration.userCode 注释）。
-  patch({ inputTableId: id, inputTable: table?.dbTableName ?? '', inputFields: [], userCode: table?.ownerUserCode })
+  patch({ inputTableId: id, inputTable: table?.tableName ?? '', inputFields: [] })
 }
 function onOutputTableId(tableId: string | undefined | null) {
   const id = tableId ?? ''
   const table = outputTableSearch.renderOptions.value.find((t) => t.tableId === id)
   outputTableSearch.selected.value = table ?? null
-  patch({ outputTableId: id, outputTable: table?.dbTableName ?? '', outputFields: [] })
+  patch({ outputTableId: id, outputTable: table?.tableName ?? '', outputFields: [] })
+}
+
+// 新建表（0804 拍板："申请表"就是新建表，跟表配置共用同一个建表弹窗/entryApi）。
+// 建表本身走通用的实体表注册（entrySave），跟其它节点在「表配置」用的是同一个 TableEditDialog；
+// 新表存进搜索结果并选中，不依赖下一次搜索能不能马上查到它。
+const newTableDialog = reactive<{ open: boolean; target: 'input' | 'output' }>({ open: false, target: 'input' })
+function openNewTable(target: 'input' | 'output') {
+  newTableDialog.target = target
+  newTableDialog.open = true
+}
+function injectCreatedTable(search: typeof inputTableSearch, entry: EntryType) {
+  if (!search.results.value.some((t) => t.tableId === entry.tableId)) {
+    search.results.value = [entry, ...search.results.value]
+  }
+}
+async function onNewTableSaved(tableId: string) {
+  const entry = await entryApi.entryDetail(tableId)
+  if (newTableDialog.target === 'input') {
+    injectCreatedTable(inputTableSearch, entry)
+    onInputTableId(tableId)
+  } else {
+    injectCreatedTable(outputTableSearch, entry)
+    onOutputTableId(tableId)
+  }
 }
 
 function toggleField(kind: 'input' | 'output', code: string) {
@@ -179,75 +170,54 @@ const outputExpanded = ref(false)
 </script>
 
 <template>
-  <div class="rc-field"><label>数据源 *</label>
-    <div class="rc-segment">
-      <button
-        v-for="ds in DATA_SOURCES" :key="ds.value" type="button"
-        :class="{ active: modelValue.dataSource === ds.value }"
-        @click="onDataSourceChange(ds.value)"
-      >{{ ds.label }}</button>
+  <div class="rc-field"><label>输入表 *</label>
+    <div class="rc-select-row">
+      <el-select
+        class="rc-table-select"
+        :model-value="modelValue.inputTableId || undefined"
+        filterable
+        remote
+        clearable
+        :remote-method="onInputTableFilter"
+        :loading="inputTableSearch.loading.value"
+        placeholder="输入关键词搜索表，如 email、公告…"
+        @update:model-value="onInputTableId"
+        @visible-change="onInputTableVisible"
+      >
+        <el-option
+          v-for="t in inputTableSearch.renderOptions.value"
+          :key="t.tableId"
+          :label="tableOptionLabel(t)"
+          :value="t.tableId"
+        />
+      </el-select>
+      <button class="rc-input-btn" type="button" @click="openNewTable('input')">＋ 新建表</button>
     </div>
   </div>
 
-  <div class="rc-field"><label>规则名称 *</label>
-    <el-select
-      class="rc-table-select"
-      :model-value="modelValue.name || undefined"
-      filterable
-      allow-create
-      default-first-option
-      placeholder="搜索已有规则引用，或输入新名称新建"
-      :filter-method="onNameFilter"
-      @change="onNameSelect"
-      @visible-change="onNameSelectVisible"
-    >
-      <el-option v-for="o in filteredRuleOptions" :key="o.ruleId" :label="ruleOptionLabel(o)" :value="o.name" />
-    </el-select>
-  </div>
-
-  <div class="rc-field"><label>输入表 *</label>
-    <el-select
-      class="rc-table-select"
-      :model-value="modelValue.inputTableId || undefined"
-      filterable
-      remote
-      clearable
-      :remote-method="onInputTableFilter"
-      :loading="inputTableSearch.loading.value"
-      placeholder="输入关键词跨租户搜索表，如 email、公告…"
-      @update:model-value="onInputTableId"
-      @visible-change="onInputTableVisible"
-    >
-      <el-option
-        v-for="t in inputTableSearch.renderOptions.value"
-        :key="t.tableId"
-        :label="tableOptionLabel(t)"
-        :value="t.tableId"
-      />
-    </el-select>
-    <div class="rc-help">跨全部真实租户合并搜索，不需要额外选择租户——选中表后规则自动归属这张表所在的租户</div>
-  </div>
-
   <div class="rc-field"><label>输出表（可选，默认使用输入表）</label>
-    <el-select
-      class="rc-table-select"
-      :model-value="modelValue.outputTableId || undefined"
-      filterable
-      remote
-      clearable
-      :remote-method="onOutputTableFilter"
-      :loading="outputTableSearch.loading.value"
-      placeholder="默认 = 输入表；可输入筛选"
-      @update:model-value="onOutputTableId"
-      @visible-change="onOutputTableVisible"
-    >
-      <el-option
-        v-for="t in outputTableSearch.renderOptions.value"
-        :key="t.tableId"
-        :label="tableOptionLabel(t)"
-        :value="t.tableId"
-      />
-    </el-select>
+    <div class="rc-select-row">
+      <el-select
+        class="rc-table-select"
+        :model-value="modelValue.outputTableId || undefined"
+        filterable
+        remote
+        clearable
+        :remote-method="onOutputTableFilter"
+        :loading="outputTableSearch.loading.value"
+        placeholder="默认 = 输入表；可输入筛选"
+        @update:model-value="onOutputTableId"
+        @visible-change="onOutputTableVisible"
+      >
+        <el-option
+          v-for="t in outputTableSearch.renderOptions.value"
+          :key="t.tableId"
+          :label="tableOptionLabel(t)"
+          :value="t.tableId"
+        />
+      </el-select>
+      <button class="rc-input-btn" type="button" @click="openNewTable('output')">＋ 新建表</button>
+    </div>
   </div>
 
   <div class="rc-field"><label>入参字段 *</label>
@@ -259,7 +229,7 @@ const outputExpanded = ref(false)
           {{ inputFieldOptions.find((f) => f.itemCode === code)?.itemName ?? code }} ×
         </span>
         <button class="rc-tag-toggle" type="button" @click="inputExpanded = !inputExpanded">
-          {{ inputExpanded ? '▾ 收起' : `▸ 共 ${inputFieldPool.length} 个可选` }}
+          {{ inputExpanded ? '▾ 收起' : (allInputSelected ? `▸ 已全选 ${inputFieldPool.length} 个` : `▸ 共 ${inputFieldPool.length} 个可选`) }}
         </button>
         <button class="rc-tag-toggle" type="button" @click="showSystemFields = !showSystemFields">
           {{ showSystemFields ? '隐藏系统字段' : '显示系统字段' }}
@@ -284,7 +254,7 @@ const outputExpanded = ref(false)
           {{ outputFieldOptions.find((f) => f.itemCode === code)?.itemName ?? code }} ×
         </span>
         <button class="rc-tag-toggle" type="button" @click="outputExpanded = !outputExpanded">
-          {{ outputExpanded ? '▾ 收起' : `▸ 共 ${outputFieldPool.length} 个可选` }}
+          {{ outputExpanded ? '▾ 收起' : (allOutputSelected ? `▸ 已全选 ${outputFieldPool.length} 个` : `▸ 共 ${outputFieldPool.length} 个可选`) }}
         </button>
       </div>
       <div v-if="outputExpanded" class="rc-tag-row rc-tag-pool">
@@ -296,6 +266,8 @@ const outputExpanded = ref(false)
       </div>
     </template>
   </div>
+
+  <TableEditDialog v-model:open="newTableDialog.open" @saved="onNewTableSaved" />
 </template>
 
 <style scoped>
@@ -313,12 +285,11 @@ const outputExpanded = ref(false)
 .rc-table-select :deep(.el-select__wrapper.is-focused) {
   box-shadow: 0 0 0 1px #60a5fa inset, 0 0 0 3px #dbeafe;
 }
+.rc-select-row { display: flex; align-items: stretch; gap: 8px; }
+.rc-select-row .rc-table-select { flex: 1; }
+.rc-input-btn { white-space: nowrap; padding: 0 12px; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-primary); cursor: pointer; font-size: 12px; font-weight: 600; }
+.rc-input-btn:hover { background: var(--rc-primary-bg); }
 .rc-readonly-hint { padding: 7px 9px; border: 1px dashed #dbe3ee; border-radius: 7px; background: #f8fafc; color: var(--rc-faint); font-size: 12px; }
-.rc-help { color: var(--rc-faint); font-size: 10px; line-height: 1.5; margin-top: 4px; }
-.rc-segment { display: inline-flex; border: 1px solid #dbe3ee; border-radius: 7px; overflow: hidden; background: #fff; }
-.rc-segment button { border: 0; border-left: 1px solid #dbe3ee; background: #fff; color: var(--rc-text-2); padding: 7px 10px; font-size: 12px; cursor: pointer; }
-.rc-segment button:first-child { border-left: 0; }
-.rc-segment button.active { background: var(--rc-primary); color: #fff; font-weight: 700; }
 .rc-tag-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .rc-tag-empty { padding: 4px 8px; }
 .rc-tag { display: inline-flex; align-items: center; padding: 4px 9px; border: 1px solid #dbe3ee; border-radius: 999px; background: #fff; color: var(--rc-text-2); font-size: 11px; cursor: pointer; user-select: none; }

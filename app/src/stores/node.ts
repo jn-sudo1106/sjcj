@@ -8,6 +8,7 @@ import {
   setTripleValue,
   collectorCapabilityOf,
   makeDefaultRuleOrchestration,
+  makeDefaultExecConfig,
   type NodeConfig,
   type CollectConfig,
   type ConditionGroup,
@@ -130,6 +131,23 @@ export const useNodeStore = defineStore('node', () => {
     patchTaskConfig(id, { queue: value })
   }
 
+  // 结构化配置/正文规则（0804 S3-1）：采集类写 collectCfg，非采集类写 NodeConfig 顶层——
+  // 跟 setEntryCondition 同一个"哪边有 collectCfg 就写哪边"套路，调用方不用自己分支。
+  function setStructuredConfig(id: string, value: string) {
+    const c = configs[id]
+    if (!c) return
+    const target = c.collectCfg ?? c
+    target.structuredConfig = value || undefined
+    touch()
+  }
+  function setContentRules(id: string, value: string) {
+    const c = configs[id]
+    if (!c) return
+    const target = c.collectCfg ?? c
+    target.contentRules = value || undefined
+    touch()
+  }
+
   function setEntryCondition(id: string, cond: ConditionGroup | undefined) {
     const c = configs[id]
     if (!c) return
@@ -165,6 +183,14 @@ export const useNodeStore = defineStore('node', () => {
     touch()
   }
 
+  /** 非规则节点的编排配置（0804 S3-3）：与 patchRuleConfig 同款，写 execCfg 而不是 ruleCfg */
+  function patchExecConfig(id: string, patch: Partial<RuleOrchestration>) {
+    const c = configs[id]
+    if (!c) return
+    c.execCfg = { ...makeDefaultExecConfig(), ...c.execCfg, ...patch }
+    touch()
+  }
+
   return {
     // 状态
     selectedId,
@@ -179,9 +205,12 @@ export const useNodeStore = defineStore('node', () => {
     patchCollect,
     patchTaskConfig,
     patchRuleConfig,
+    patchExecConfig,
     setOutputTable,
     setInputTable,
     setTaskQueue,
+    setStructuredConfig,
+    setContentRules,
     setEntryCondition,
     setNodeDisabled,
     setBaseRow,

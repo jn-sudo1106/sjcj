@@ -10,7 +10,7 @@ import type { CollectConfig, CollectorCapability } from '@/views/FlowCanvas/canv
 import TaskScheduleSettings from './TaskScheduleSettings.vue'
 
 /** 运行设置涉及的字段子集（复用 CollectConfig，不重复定义类型） */
-export type CollectorRuntimeSettings = Pick<CollectConfig, 'useProxy' | 'resume' | 'needLogin' | 'loginUrl' | 'account' | 'credentialRef' | 'scheduleType' | 'scheduleTime' | 'weekdays' | 'cron'>
+export type CollectorRuntimeSettings = Pick<CollectConfig, 'useProxy' | 'resume' | 'needLogin' | 'loginUrl' | 'account' | 'credentialRef' | 'scheduleType' | 'scheduleTime' | 'weekdays' | 'cron' | 'proxyDetail'>
 
 const props = defineProps<{ modelValue: CollectorRuntimeSettings; capability?: CollectorCapability; showSchedule?: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [patch: Partial<CollectorRuntimeSettings>] }>()
@@ -41,6 +41,19 @@ function onCheck(key: 'useProxy' | 'resume', e: Event) {
 function onInput(key: 'loginUrl' | 'account', e: Event) {
   patch({ [key]: (e.target as HTMLInputElement).value })
 }
+
+// 代理明细（0804 S3-1）：勾选「使用代理」才展开；取消勾选时清空明细，避免残留脏数据误导下次开启
+function onProxyCheck(e: Event) {
+  const checked = (e.target as HTMLInputElement).checked
+  patch(checked ? { useProxy: true } : { useProxy: false, proxyDetail: undefined })
+}
+function onProxyDetail(key: 'ip' | 'account' | 'password', e: Event) {
+  patch({ proxyDetail: { ...props.modelValue.proxyDetail, [key]: (e.target as HTMLInputElement).value } })
+}
+function onProxyPort(e: Event) {
+  const v = (e.target as HTMLInputElement).value
+  patch({ proxyDetail: { ...props.modelValue.proxyDetail, port: v ? Number(v) : undefined } })
+}
 function setNeedLogin(v: boolean) {
   // 登录关闭时清理 loginUrl/credentialRef（0711 计划口径），避免残留脏数据误导后续开启
   patch(v ? { needLogin: true } : { needLogin: false, loginUrl: '', account: '', credentialRef: '' })
@@ -57,12 +70,19 @@ function setNeedLogin(v: boolean) {
         <label>核心参数</label>
         <div class="cs-checks">
           <label v-if="capability?.supportsProxy" class="cs-check">
-            <input type="checkbox" :checked="modelValue.useProxy" @change="onCheck('useProxy', $event)" /> 使用代理
+            <input type="checkbox" :checked="modelValue.useProxy" @change="onProxyCheck" /> 使用代理
           </label>
           <label v-if="capability?.supportsResume" class="cs-check">
             <input type="checkbox" :checked="modelValue.resume" @change="onCheck('resume', $event)" /> 断点续爬
           </label>
         </div>
+      </div>
+      <!-- 代理明细（0804 S3-1）：勾选「使用代理」才展开 -->
+      <div v-if="capability?.supportsProxy && modelValue.useProxy" class="cs-proxy-grid">
+        <div class="rc-field"><label>代理 IP</label><input class="rc-input" :value="modelValue.proxyDetail?.ip" placeholder="如 192.168.1.1" @input="onProxyDetail('ip', $event)" /></div>
+        <div class="rc-field"><label>端口</label><input class="rc-input" type="number" :value="modelValue.proxyDetail?.port" placeholder="如 8080" @input="onProxyPort" /></div>
+        <div class="rc-field"><label>账号</label><input class="rc-input" :value="modelValue.proxyDetail?.account" @input="onProxyDetail('account', $event)" /></div>
+        <div class="rc-field"><label>密码</label><input class="rc-input" type="password" :value="modelValue.proxyDetail?.password" @input="onProxyDetail('password', $event)" /></div>
       </div>
       <template v-if="capability?.supportsLogin">
         <div class="rc-field"><label>是否要求登陆</label>
@@ -102,6 +122,7 @@ function setNeedLogin(v: boolean) {
 .rc-segment button:first-child { border-left: 0; }
 .rc-segment button.active { background: var(--rc-primary); color: #fff; font-weight: 700; }
 
+.cs-proxy-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; margin-bottom: 4px; }
 .cs-checks { display: flex; gap: 16px; padding: 4px 0; }
 .cs-check { display: inline-flex; align-items: center; gap: 6px; color: var(--rc-text-2); font-size: 12px; cursor: pointer; }
 .cs-cred { display: flex; align-items: center; gap: 8px; padding: 8px 9px; border: 1px solid #dbe3ee; border-radius: 7px; background: #f8fafc; font-size: 12px; color: var(--rc-text-2); }

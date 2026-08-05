@@ -2,7 +2,7 @@
 // 脚本全文查看（L3 弹层，0801 方案 §6.6）：唯一默认大弹层，因窄栏代码区放不下脚本全文，会议 15:38 已拍板。
 import { ElMessage } from 'element-plus'
 
-const props = defineProps<{ open: boolean; scriptPath?: string; script: string }>()
+const props = defineProps<{ open: boolean; title?: string; scriptPath?: string; script: string }>()
 const emit = defineEmits<{ 'update:open': [boolean] }>()
 
 function close() {
@@ -19,7 +19,7 @@ async function copyScript() {
 </script>
 
 <template>
-  <el-dialog :model-value="open" title="脚本查看" width="90vw" top="6vh" :close-on-click-modal="false" @update:model-value="close">
+  <el-dialog :model-value="open" :title="title || '脚本查看'" width="90vw" top="6vh" :close-on-click-modal="false" @update:model-value="close">
     <div class="rsd-path">{{ scriptPath || '未生成脚本路径' }}</div>
     <textarea class="rsd-code" readonly :value="script" />
     <template #footer>

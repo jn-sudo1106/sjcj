@@ -74,4 +74,58 @@ describe('CollectorSettings（0711 R5：采集节点运行设置，默认折叠�
     expect(emitted).toBeTruthy()
     expect(emitted![0][0]).toEqual({ useProxy: true })
   })
+
+  // 代理明细（0804 S3-1）：勾选后才展开 IP/端口/账号/密码 4 个输入
+  describe('代理明细（0804 S3-1）', () => {
+    it('未勾选代理时不展示明细输入', async () => {
+      const wrapper = mount(CollectorSettings, {
+        props: { modelValue: { useProxy: false }, capability: COLLECTOR_CAPABILITIES.web },
+      })
+      await wrapper.find('.cs-toggle').trigger('click')
+      expect(wrapper.find('.cs-proxy-grid').exists()).toBe(false)
+    })
+
+    it('已勾选代理时展示明细输入，填写后 patch proxyDetail', async () => {
+      const wrapper = mount(CollectorSettings, {
+        props: { modelValue: { useProxy: true }, capability: COLLECTOR_CAPABILITIES.web },
+      })
+      await wrapper.find('.cs-toggle').trigger('click')
+      expect(wrapper.find('.cs-proxy-grid').exists()).toBe(true)
+
+      const ipInput = wrapper.findAll('.cs-proxy-grid input')[0]
+      await ipInput.setValue('192.168.1.1')
+      const emitted = wrapper.emitted('update:modelValue')
+      const last = emitted![emitted!.length - 1][0] as Record<string, unknown>
+      expect(last).toEqual({ proxyDetail: { ip: '192.168.1.1' } })
+    })
+
+    it('填写端口时转成数字；清空时转回 undefined', async () => {
+      const wrapper = mount(CollectorSettings, {
+        props: { modelValue: { useProxy: true, proxyDetail: { ip: '10.0.0.1' } }, capability: COLLECTOR_CAPABILITIES.web },
+      })
+      await wrapper.find('.cs-toggle').trigger('click')
+      const portInput = wrapper.findAll('.cs-proxy-grid input')[1]
+      await portInput.setValue('8080')
+      let emitted = wrapper.emitted('update:modelValue')
+      let last = emitted![emitted!.length - 1][0] as Record<string, unknown>
+      expect(last).toEqual({ proxyDetail: { ip: '10.0.0.1', port: 8080 } })
+
+      await portInput.setValue('')
+      emitted = wrapper.emitted('update:modelValue')
+      last = emitted![emitted!.length - 1][0] as Record<string, unknown>
+      expect((last.proxyDetail as Record<string, unknown>).port).toBeUndefined()
+    })
+
+    it('取消勾选代理时清空明细，避免残留脏数据', async () => {
+      const wrapper = mount(CollectorSettings, {
+        props: { modelValue: { useProxy: true, proxyDetail: { ip: '10.0.0.1', port: 8080 } }, capability: COLLECTOR_CAPABILITIES.web },
+      })
+      await wrapper.find('.cs-toggle').trigger('click')
+      const proxyCheckbox = wrapper.find('.cs-check input[type="checkbox"]')
+      await proxyCheckbox.setValue(false)
+      const emitted = wrapper.emitted('update:modelValue')
+      const last = emitted![emitted!.length - 1][0] as Record<string, unknown>
+      expect(last).toEqual({ useProxy: false, proxyDetail: undefined })
+    })
+  })
 })
