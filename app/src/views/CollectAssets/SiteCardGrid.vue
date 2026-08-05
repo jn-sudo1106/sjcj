@@ -87,6 +87,18 @@ function pickOverflow(s: Source) {
             <input v-model="overflowKw[site.siteId]" class="scg-overflow-search" placeholder="搜索子源" />
             <div class="scg-overflow-list">
               <button
+                v-if="!overflowKw[site.siteId]"
+                type="button"
+                class="scg-overflow-item"
+                @click="openSite(site)"
+              >
+                <span class="scg-overflow-dot all" />
+                <div class="scg-overflow-text">
+                  <div class="scg-overflow-name">全部</div>
+                  <div class="scg-overflow-id">不根据源 ID 过滤</div>
+                </div>
+              </button>
+              <button
                 v-for="c in filteredChildren(site.siteId)"
                 :key="c.sourceId"
                 type="button"
@@ -94,7 +106,10 @@ function pickOverflow(s: Source) {
                 @click="pickOverflow(c)"
               >
                 <span class="scg-overflow-dot" :class="{ err: isErr(c) }" />
-                {{ c.name }}
+                <div class="scg-overflow-text">
+                  <div class="scg-overflow-name">{{ c.name }}</div>
+                  <div class="scg-overflow-id">{{ c.sourceId }}</div>
+                </div>
               </button>
               <div v-if="!filteredChildren(site.siteId).length" class="scg-overflow-empty">没有匹配的子源</div>
             </div>
@@ -201,7 +216,12 @@ function pickOverflow(s: Source) {
 .scg-overflow-list { flex: 1; overflow-y: auto; padding-right: 4px; }
 .scg-overflow-item { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; border-radius: 7px; padding: 6px 8px; font-size: 12px; color: var(--rc-text-2); cursor: pointer; text-align: left; }
 .scg-overflow-item:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.scg-overflow-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.scg-overflow-name { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
+.scg-overflow-id { font-size: 10px; color: var(--rc-faint); font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.2; margin-top: 1px; }
+.scg-overflow-item:hover .scg-overflow-id { color: var(--rc-primary-ink); opacity: 0.85; }
 .scg-overflow-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--rc-ok); }
+.scg-overflow-dot.all { background: #3b82f6; }
 .scg-overflow-dot.err { background: var(--rc-error); }
 .scg-overflow-empty { padding: 16px 8px; text-align: center; font-size: 11px; color: var(--rc-faint); }
 </style>

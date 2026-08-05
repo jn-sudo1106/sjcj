@@ -69,6 +69,7 @@ function reset() {
     // entry 是响应式 props，字段元素是 Vue reactive Proxy；structuredClone 处理不了 Proxy，需先 toRaw 剥掉再 clone
     fields: entry?.fields?.map((field) => structuredClone(toRaw(field))) ?? [],
     keyField: entry?.keyField,
+    dedupMode: entry?.dedupMode ?? 'source',
     state: entry?.state ?? 'C',
     // null/undefined → ''：与 el-option value="" "请选择" 对齐，提交时透传空串 = 未配置（避免 String(null)='null'）
     recFlag: entry?.recFlag == null ? '' : String(entry.recFlag),
@@ -173,6 +174,12 @@ async function submit() {
       <div class="rc-field"><label>名称</label><input v-model="form.name" class="rc-input" @input="onNameInput" /></div>
       <div class="rc-field"><label>物理表</label><input v-model="form.tableName" class="rc-input" placeholder="例如 tb_entry_news" @input="onTableNameInput" /></div>
       <div class="rc-field"><label>去重列</label><input class="rc-input" :value="form.keyField || '—'" disabled /></div>
+      <div class="rc-field"><label>去重方式</label>
+        <select v-model="form.dedupMode" class="rc-input" data-testid="entry-dedup-mode">
+          <option value="source">源内去重</option>
+          <option value="table">表内去重</option>
+        </select>
+      </div>
       <div class="rc-field ete-wide"><label>备注</label><textarea v-model="form.remark" class="rc-input" rows="2" /></div>
     </div>
 

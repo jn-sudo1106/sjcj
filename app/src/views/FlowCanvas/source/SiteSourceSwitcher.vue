@@ -19,12 +19,25 @@ watch(() => props.siteId, load)
 defineExpose({ reload: load })
 
 const collapsed = ref(false)
+const listExpanded = ref(true)
+const detailExpanded = ref(true)
 const kw = ref('')
 const filtered = computed(() => {
   const q = kw.value.trim().toLowerCase()
   if (!q) return children.value
   return children.value.filter((s) => s.name.toLowerCase().includes(q) || s.sourceId.toLowerCase().includes(q))
 })
+const activeSource = computed(() => children.value.find((s) => s.sourceId === props.activeKey) || null)
+
+async function copyId(id: string) {
+  try {
+    await navigator.clipboard.writeText(id)
+    ElMessage.success('已复制源 ID 到剪贴板')
+  } catch {
+    ElMessage.info(`源 ID: ${id}`)
+  }
+}
+
 function isErr(s: Source): boolean {
   return !s.disabled && s.state === 'E'
 }
@@ -336,43 +349,93 @@ async function submitImport() {
         </button>
         <button class="ssw-collapse" type="button" title="收起侧栏" @click="collapsed = true">«</button>
       </div>
-      <input v-model="kw" class="ssw-search" placeholder="搜索子源" />
-      <div class="ssw-list">
-        <div v-for="c in filtered" :key="c.sourceId" class="ssw-row" :class="{ active: activeKey === c.sourceId }">
-          <template v-if="rename.sourceId === c.sourceId">
-            <input
-              v-model="rename.name"
-              class="ssw-rename-input"
-              data-testid="source-rename-input"
-              autofocus
-              @click.stop
-              @keydown.enter.prevent="saveRename(c)"
-              @keydown.esc.prevent="cancelRename"
-              @blur="saveRename(c)"
-            />
-          </template>
-          <button
-            v-else
-            class="ssw-row-main"
-            type="button"
-            :title="`${c.name} · ${c.sourceId}`"
-            @click="pickSource(c)"
-            @dblclick.stop="startRename(c)"
-            @contextmenu.prevent.stop="openRowMenu($event, c)"
-          >
-            <span class="ssw-dot" :class="{ err: isErr(c), muted: c.disabled }" />
-            <span class="ssw-row-name">{{ c.name }}</span>
-            <span v-if="c.kind === 'param'" class="ssw-kind-tag" title="参数子源：发任务时展开为多个 URL">参数子源</span>
-          </button>
-          <button
-            v-if="canCompare && c.sourceId !== activeKey"
-            class="ssw-row-cmp"
-            type="button"
-            title="与当前子源并排对比"
-            @click.stop="emit('compare', c.sourceId)"
-          >⇔</button>
+      <div class="ssw-section-toggle" @click="listExpanded = !listExpanded">
+        <span class="ssw-section-title">子源列表 ({{ children.length }})</span>
+        <span class="ssw-section-icon">{{ listExpanded ? '▼' : '▶' }}</span>
+      </div>
+      <template v-if="listExpanded">
+        <input v-model="kw" class="ssw-search" placeholder="搜索子源" />
+        <div class="ssw-list">
+          <div v-if="!kw" class="ssw-row" :class="{ active: !activeKey }">
+            <button
+              class="ssw-row-all-btn"
+              type="button"
+              title="全部（不根据源 ID 过滤）"
+              @click="emit('pickSite')"
+            >
+              <span class="ssw-dot all" />
+              <div class="ssw-row-text">
+                <div class="ssw-row-head">
+                  <span class="ssw-row-name">全部</span>
+                </div>
+                <div class="ssw-row-id">不根据源 ID 过滤</div>
+              </div>
+            </button>
+          </div>
+          <div v-for="c in filtered" :key="c.sourceId" class="ssw-row" :class="{ active: activeKey === c.sourceId }">
+            <template v-if="rename.sourceId === c.sourceId">
+              <input
+                v-model="rename.name"
+                class="ssw-rename-input"
+                data-testid="source-rename-input"
+                autofocus
+                @click.stop
+                @keydown.enter.prevent="saveRename(c)"
+                @keydown.esc.prevent="cancelRename"
+                @blur="saveRename(c)"
+              />
+            </template>
+            <button
+              v-else
+              class="ssw-row-main"
+              type="button"
+              :title="`${c.name} · ${c.sourceId}`"
+              @click="pickSource(c)"
+              @dblclick.stop="startRename(c)"
+              @contextmenu.prevent.stop="openRowMenu($event, c)"
+            >
+              <span class="ssw-dot" :class="{ err: isErr(c), muted: c.disabled }" />
+              <div class="ssw-row-text">
+                <div class="ssw-row-head">
+                  <span class="ssw-row-name">{{ c.name }}</span>
+                  <span v-if="c.kind === 'param'" class="ssw-kind-tag" title="参数子源：发任务时展开为多个 URL">参数子源</span>
+                </div>
+                <div class="ssw-row-id">{{ c.sourceId }}</div>
+              </div>
+            </button>
+            <button
+              v-if="canCompare && c.sourceId !== activeKey"
+              class="ssw-row-cmp"
+              type="button"
+              title="与当前子源并排对比"
+              @click.stop="emit('compare', c.sourceId)"
+            >⇔</button>
+          </div>
+          <div v-if="!filtered.length" class="ssw-empty">{{ kw ? '没有匹配的子源' : '该网站暂无子源' }}</div>
         </div>
-        <div v-if="!filtered.length" class="ssw-empty">{{ kw ? '没有匹配的子源' : '该网站暂无子源' }}</div>
+      </template>
+
+      <!-- 选中源详情分割栏：点击源后完整展示源名称和源 ID -->
+      <div v-if="activeSource" class="ssw-section-toggle ssw-detail-header" @click="detailExpanded = !detailExpanded">
+        <span class="ssw-section-title">源详情</span>
+        <span class="ssw-section-icon">{{ detailExpanded ? '▼' : '▶' }}</span>
+      </div>
+      <div v-if="activeSource && detailExpanded" class="ssw-active-detail" data-testid="active-source-detail">
+        <div class="ssw-detail-field">
+          <span class="ssw-detail-label">源名称</span>
+          <div class="ssw-detail-val name" data-testid="active-source-full-name">{{ activeSource.name }}</div>
+        </div>
+        <div class="ssw-detail-field">
+          <span class="ssw-detail-label">源 ID</span>
+          <div class="ssw-detail-val id">
+            <code data-testid="active-source-full-id">{{ activeSource.sourceId }}</code>
+            <button class="ssw-copy-btn" type="button" title="复制源 ID" @click="copyId(activeSource.sourceId)">复制</button>
+          </div>
+        </div>
+        <div v-if="activeSource.url" class="ssw-detail-field">
+          <span class="ssw-detail-label">URL</span>
+          <div class="ssw-detail-val url" :title="activeSource.url">{{ activeSource.url }}</div>
+        </div>
       </div>
       <div class="ssw-foot">
         <button class="ssw-foot-btn" type="button" title="添加子源" @click="openAdd">＋ 添加子源</button>
@@ -464,8 +527,10 @@ async function submitImport() {
               data-testid="source-template-option"
               @click="selectTemplateSource(source)"
             >
-              <span>{{ source.name }}</span>
-              <small>{{ source.sourceId }}</small>
+              <div class="ssw-template-text">
+                <span class="ssw-template-label">{{ source.name }}</span>
+                <span class="ssw-template-id">{{ source.sourceId }}</span>
+              </div>
             </button>
           </div>
         </div>
@@ -562,7 +627,8 @@ async function submitImport() {
 .ssw-row { display: flex; align-items: center; border-radius: 7px; }
 .ssw-row:hover { background: var(--rc-primary-bg); }
 .ssw-row.active { background: var(--rc-primary); }
-.ssw-row-main {
+.ssw-row-main,
+.ssw-row-all-btn {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -588,12 +654,19 @@ async function submitImport() {
   font-size: 12px;
   color: var(--rc-text);
 }
-.ssw-row:hover .ssw-row-main { color: var(--rc-primary-ink); }
-.ssw-row.active .ssw-row-main { color: #fff; font-weight: 700; }
-.ssw-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssw-row:hover .ssw-row-main,
+.ssw-row:hover .ssw-row-all-btn { color: var(--rc-primary-ink); }
+.ssw-row.active .ssw-row-main,
+.ssw-row.active .ssw-row-all-btn { color: #fff; font-weight: 700; }
+.ssw-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ssw-row-head { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.ssw-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.3; }
+.ssw-row-id { font-size: 10px; opacity: 0.6; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.2; margin-top: 1px; }
+.ssw-row.active .ssw-row-id { opacity: 0.85; }
 .ssw-kind-tag { flex: none; font-size: 9px; font-weight: 700; color: var(--rc-primary-ink); background: var(--rc-primary-bg); border: 1px solid #bfdbfe; border-radius: 3px; padding: 0 4px; line-height: 14px; }
 .ssw-row.active .ssw-kind-tag { color: #fff; background: rgba(255, 255, 255, 0.2); border-color: rgba(255, 255, 255, 0.4); }
 .ssw-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--rc-ok); }
+.ssw-dot.all { background: #3b82f6; }
 .ssw-dot.err { background: var(--rc-error); }
 .ssw-dot.muted { background: var(--rc-faint); }
 .ssw-row-cmp {
@@ -697,9 +770,11 @@ async function submitImport() {
 .ssw-add-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .ssw-template-combobox { position: relative; }
 .ssw-template-options { position: absolute; z-index: 2; top: 32px; right: 0; left: 0; max-height: 160px; overflow: auto; border: 1px solid #bfdbfe; border-radius: 7px; background: #fff; box-shadow: 0 8px 20px rgba(15, 23, 42, 0.14); }
-.ssw-template-options button { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px; border: 0; background: #fff; color: var(--rc-text); padding: 8px 9px; font-size: 12px; text-align: left; cursor: pointer; }
+.ssw-template-options button { display: flex; width: 100%; align-items: center; border: 0; background: #fff; color: var(--rc-text); padding: 6px 9px; font-size: 12px; text-align: left; cursor: pointer; }
 .ssw-template-options button:hover { background: #eff6ff; }
-.ssw-template-options small { color: var(--rc-muted); font-size: 11px; }
+.ssw-template-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.ssw-template-label { font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssw-template-id { font-size: 10px; color: var(--rc-faint); font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
 .ssw-template-empty { display: block; padding: 8px 9px; color: var(--rc-muted); font-size: 12px; }
 .ssw-add-inherit { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--rc-text); cursor: pointer; margin: 2px 0 4px; }
 .ssw-add-hint { font-size: 11px; color: var(--rc-muted); line-height: 1.6; margin-bottom: 6px; }
@@ -725,4 +800,97 @@ async function submitImport() {
 .ssw-kind-seg button { flex: 1; height: 38px; border: 1px solid #d5e2f2; border-radius: 7px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
 .ssw-kind-seg button.active { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); box-shadow: inset 0 0 0 1px var(--rc-primary); }
 .ssw-kind-seg button small { display: block; font-size: 10px; font-weight: 400; color: var(--rc-muted); margin-top: 1px; }
+
+/* 折叠分割栏 & 选中源详情 */
+.ssw-section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 9px;
+  margin: 6px 6px 0;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: var(--rc-text-2);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid var(--rc-border-soft);
+  transition: background 0.12s, color 0.12s;
+}
+.ssw-section-toggle:hover {
+  background: #e2e8f0;
+  color: var(--rc-text);
+}
+.ssw-section-icon {
+  font-size: 9px;
+  color: var(--rc-muted);
+}
+.ssw-active-detail {
+  flex: none;
+  margin: 0 6px 6px;
+  padding: 8px 9px;
+  background: #fff;
+  border: 1px solid var(--rc-border-soft);
+  border-top: none;
+  border-bottom-left-radius: 6px;
+  border-bottom-right-radius: 6px;
+  font-size: 11px;
+}
+.ssw-detail-field {
+  margin-bottom: 6px;
+}
+.ssw-detail-field:last-child {
+  margin-bottom: 0;
+}
+.ssw-detail-label {
+  display: block;
+  font-size: 10px;
+  color: var(--rc-muted);
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.ssw-detail-val.name {
+  color: var(--rc-text);
+  font-weight: 600;
+  word-break: break-all;
+  line-height: 1.35;
+}
+.ssw-detail-val.id {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+.ssw-detail-val.id code {
+  font-family: monospace;
+  font-size: 10px;
+  color: #2563eb;
+  background: #eff6ff;
+  padding: 2px 5px;
+  border-radius: 4px;
+  word-break: break-all;
+  flex: 1;
+  min-width: 0;
+}
+.ssw-copy-btn {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--rc-border);
+  border-radius: 4px;
+  background: #f8fafc;
+  color: var(--rc-text-2);
+  font-size: 10px;
+  cursor: pointer;
+}
+.ssw-copy-btn:hover {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  color: var(--rc-primary-ink);
+}
+.ssw-detail-val.url {
+  color: var(--rc-faint);
+  font-size: 10px;
+  word-break: break-all;
+}
 </style>

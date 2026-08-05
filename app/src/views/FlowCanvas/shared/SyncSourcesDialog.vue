@@ -103,8 +103,13 @@ async function confirmSync() {
       <div class="ssd-list">
         <label v-for="s in siblings" :key="s.sourceId" class="ssd-row" data-testid="sync-row">
           <input type="checkbox" :checked="checked.has(s.sourceId)" @change="toggle(s.sourceId)">
-          <span class="ssd-name">{{ s.name }}</span>
-          <StatusTag v-if="s.detached" text="已单独调整" tone="warn" :show-icon="false" />
+          <div class="ssd-text">
+            <div class="ssd-name-line">
+              <span class="ssd-name">{{ s.name }}</span>
+              <StatusTag v-if="s.detached" text="已单独调整" tone="warn" :show-icon="false" />
+            </div>
+            <div class="ssd-id">{{ s.sourceId }}</div>
+          </div>
           <span class="ssd-url">{{ s.url }}</span>
         </label>
       </div>
@@ -131,7 +136,10 @@ async function confirmSync() {
 .ssd-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; font-size: 12px; color: var(--rc-text); cursor: pointer; }
 .ssd-list .ssd-row + .ssd-row { border-top: 1px solid var(--rc-border-soft); }
 .ssd-head { padding: 4px 10px 8px; color: var(--rc-text-2); }
+.ssd-text { display: flex; flex-direction: column; min-width: 0; }
+.ssd-name-line { display: flex; align-items: center; gap: 6px; }
 .ssd-name { font-weight: 600; }
+.ssd-id { font-size: 10px; color: var(--rc-faint); font-family: monospace; margin-top: 1px; }
 .ssd-url { margin-left: auto; color: var(--rc-faint); font-size: 11px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rc-btn { height: 30px; padding: 0 14px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text-2); cursor: pointer; }
 .rc-btn.danger { margin-left: 8px; border-color: #f87171; background: #dc2626; color: #fff; }

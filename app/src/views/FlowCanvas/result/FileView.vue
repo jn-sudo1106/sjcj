@@ -147,13 +147,6 @@ function openPreview(file: RawFile) {
   previewFile.value = file
   previewOpen.value = true
 }
-function resetFilters() {
-  filters.sourceId = props.siteWide ? '' : sourceId.value
-  filters.nodeId = ''
-  filters.contentType = ''
-  filters.dateFrom = ''
-  filters.dateTo = ''
-}
 function previousPage() {
   page.value = Math.max(1, page.value - 1)
   loadList()
@@ -167,9 +160,24 @@ function nextPage() {
 watch(sourceId, async (id) => {
   page.value = 1
   filters.sourceId = props.siteWide ? '' : id
-  filters.nodeId = ''
   await loadSiteSources()
 }, { immediate: true })
+
+watch([processLayout, filterSteps], () => {
+  if (!filters.nodeId || (filterSteps.value.length > 0 && !filterSteps.value.some((s) => s.stepId === filters.nodeId))) {
+    const firstId = processLayout.value.nodes[0]?.id || filterSteps.value[0]?.stepId
+    if (firstId) filters.nodeId = firstId
+  }
+}, { immediate: true })
+
+function resetFilters() {
+  filters.sourceId = props.siteWide ? '' : sourceId.value
+  filters.nodeId = processLayout.value.nodes[0]?.id || filterSteps.value[0]?.stepId || ''
+  filters.contentType = ''
+  filters.dateFrom = ''
+  filters.dateTo = ''
+}
+
 watch(() => [filters.sourceId, filters.nodeId, filters.contentType, filters.dateFrom, filters.dateTo] as const, ([nextSourceId], previous) => {
   page.value = 1
   void Promise.all([nextSourceId !== previous?.[0] ? loadNodeMetadata() : Promise.resolve(), loadStats(), loadList()])
@@ -186,8 +194,8 @@ watch(() => [filters.sourceId, filters.nodeId, filters.contentType, filters.date
           <ProcessNodeRail v-model="filters.nodeId" :layout="processLayout" />
         </div>
         <div class="fv-filters">
-          <select v-model="filters.nodeId" class="fv-input" aria-label="流程节点">
-            <option value="">节点（全部）</option>
+          <select v-model="filters.nodeId" class="fv-input" data-testid="file-node-filter" aria-label="流程节点">
+            <option v-if="!filterSteps.length" value="">暂无节点</option>
             <option v-for="step in filterSteps" :key="`${step.sourceId}-${step.stepId}`" :value="step.stepId">{{ showSourceColumn ? `${sourceNames[step.sourceId] || step.sourceId} · ${step.name}` : step.name }}</option>
           </select>
           <select v-model="filters.contentType" class="fv-input" aria-label="文件类型">

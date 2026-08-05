@@ -27,6 +27,14 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ 'update:modelValue': [Partial<BinderModel>] }>()
 
+// 常用默认表快捷选择（同事 e1f9290 加的，跟本文件其余的 0805 改造无关，原样保留）
+const DEFAULT_PRESET_TABLES = [
+  { name: '资讯列表', tableId: '2103330' },
+  { name: '资源表', tableId: '2101001' },
+  { name: '评论交互表', tableId: '2102157' },
+  { name: '社交舆情表', tableId: '2103300' },
+]
+
 // 0804 S2-3 修正：只发真正改动的字段，不要在这里拿 props.modelValue 兜底铺满整个对象——
 // 父级（TableTab#patchRule → flow.patchRuleConfig）本来就按"合并到当前 store 状态"处理传入的 patch。
 // 之前这里 emit 的是 {...props.modelValue, ...p} 的整份快照：默认全选的入参/出参两个 watch
@@ -218,6 +226,19 @@ const outputExpanded = ref(false)
       </el-select>
       <button class="rc-input-btn" type="button" @click="openNewTable('output')">＋ 新建表</button>
     </div>
+    <div class="rc-preset-tables" data-testid="rule-table-presets">
+      <span class="rc-preset-label">常用默认表：</span>
+      <button
+        v-for="preset in DEFAULT_PRESET_TABLES"
+        :key="preset.tableId"
+        type="button"
+        class="rc-preset-chip"
+        :class="{ active: modelValue.outputTableId === preset.tableId }"
+        @click="onOutputTableId(preset.tableId)"
+      >
+        {{ preset.name }} ({{ preset.tableId }})
+      </button>
+    </div>
   </div>
 
   <div class="rc-field"><label>入参字段 *</label>
@@ -298,4 +319,35 @@ const outputExpanded = ref(false)
 .rc-tag-toggle { border: 0; background: transparent; color: var(--rc-primary); font-size: 11px; font-weight: 600; cursor: pointer; padding: 4px 2px; }
 .rc-tag-toggle:hover { text-decoration: underline; }
 .rc-tag-pool { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--rc-border-soft); }
+
+.rc-preset-tables { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.rc-preset-label { font-size: 11px; color: var(--rc-muted); font-weight: 600; }
+.rc-preset-chip {
+  padding: 3px 8px;
+  border: 1px solid #d5e2f2;
+  border-radius: 5px;
+  background: #f8fafc;
+  color: var(--rc-text-2);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  font-family: inherit;
+}
+.rc-preset-chip:hover:not(:disabled) {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: var(--rc-primary-ink);
+}
+.rc-preset-chip.active {
+  border-color: var(--rc-primary);
+  background: var(--rc-primary-bg);
+  color: var(--rc-primary-ink);
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px var(--rc-primary);
+}
+.rc-preset-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 </style>
