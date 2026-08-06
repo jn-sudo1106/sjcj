@@ -16,8 +16,7 @@ import { isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type N
 import { entryApi, ruleApi, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
-import RuleScriptDialog from '../RuleScriptDialog.vue'
-import RuleSystemPromptDialog from '../RuleSystemPromptDialog.vue'
+import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import RuleTestDialog from '../RuleTestDialog.vue'
 
 const flow = useFlowStore()
@@ -43,6 +42,9 @@ const pathLabel = computed(() => (isRule.value ? '脚本路径' : '配置路径'
 const generateLabel = computed(() => (isRule.value ? '生成脚本' : '生成配置'))
 const saveLabel = computed(() => (isRule.value ? '保存脚本' : '保存配置'))
 const codeEmptyHint = computed(() => (isRule.value ? '生成脚本后展示 Python 预览' : '生成配置后展示 XML 预览'))
+// S6-1：编排工作区（合并原 RuleScriptDialog/RuleSystemPromptDialog）的文案分流
+const workbenchTitle = computed(() => (isRule.value ? '规则脚本工作区' : '抓取配置工作区'))
+const scriptLabel = computed(() => (isRule.value ? 'Python 脚本' : '抓取配置 XML'))
 
 // ---- 抓取配置 XML 轻解析（0804 S3-4，方案 §3.1 修正 B · 附录 §十）：仅非规则节点 ----
 // 只读动作链摘要（顶部展示）+ 保存前的字段一致性提示，不做可视化编辑（方案已拍板不做）。
@@ -133,6 +135,9 @@ function onDescribeChange(e: Event) {
 function onSystemPromptChange(value: string) {
   patch({ systemPrompt: value })
 }
+function onScriptChange(value: string) {
+  patch({ script: value })
+}
 
 const generating = ref(false)
 const generateAbort = ref<AbortController | null>(null)
@@ -168,13 +173,20 @@ async function onGenerateScript() {
   }
 }
 
-const scriptDialogOpen = ref(false)
-const systemPromptDialogOpen = ref(false)
+const workbenchOpen = ref(false)
 
 const savingScript = ref(false)
 async function onSaveScript() {
   if (!orchCfg.value.script?.trim()) {
     ElMessage.warning(isRule.value ? '请先生成脚本' : '请先生成配置')
+    return
+  }
+  // S6-2 联调后端实测（vanv-rule-center DashScopeServiceImpl.editGenerateCode）：/script/edit 按
+  // scriptPath 直接原地覆盖写文件，不认 ruleId，也不会新建——scriptPath 为空等于拿空文件名去覆盖，
+  // 明显不对。S6-1 开放手写脚本前，script 非空必然等价于已经点过一次「生成脚本」（两者一起写入），
+  // 这条守卫本来隐式成立；手写脚本之后不再成立，必须显式补上。
+  if (!orchCfg.value.scriptPath?.trim()) {
+    ElMessage.warning(isRule.value ? '请先点「生成脚本」换一个本节点自己的文件路径，再保存' : '请先点「生成配置」换一个本节点自己的文件路径，再保存')
     return
   }
   if (!(await checkColumnConsistency())) return
@@ -225,20 +237,29 @@ const applyingSwitch = ref(false)
 async function onApplySwitch() {
   const target = switchOptions.value.find((o) => o.ruleId === switchSelected.value)
   if (!target) return
+  // 本节点必须已经有自己的编排记录（「表配置」保存过一次）才能切换套用，否则下面只拷内容不带
+  // ruleId 的做法没有落点——没有自己的 ruleId，点「生成脚本」时 dashscopeStream 会因 ruleId 不存在报错。
+  if (!orchCfg.value.ruleId) {
+    ElMessage.warning('请先在「表配置」保存一次，本节点有自己的编排记录后才能切换套用')
+    return
+  }
   applyingSwitch.value = true
   try {
     const detail = await ruleApi.orchestrationDetail(target.ruleId)
-    const scriptPath = detail.scriptPath || target.scriptPath
-    const script = scriptPath ? await ruleApi.orchestrationLoadScript(scriptPath).catch(() => '') : ''
+    const sourceScriptPath = detail.scriptPath || target.scriptPath
+    const script = sourceScriptPath ? await ruleApi.orchestrationLoadScript(sourceScriptPath).catch(() => '') : ''
+    // 只拷内容当草稿，ruleId/scriptPath 不跟着换——这两个决定「保存脚本」实际写去哪，沿用源节点的
+    // 会直接覆盖它的文件/数据库记录，不是"另存"（后端实测：/script/edit 按 scriptPath 原地覆盖写
+    // 文件，跟 ruleId 无关；生成脚本按 ruleId saveOrUpdate 数据库记录，也是更新不是新建，见
+    // vanv-rule-center DashScopeServiceImpl）。scriptPath 清空，强制先点一次「生成脚本」换成本节点
+    // 自己的新文件，才允许「保存脚本」（onSaveScript 的 scriptPath 非空校验兜底）。
     patch({
-      mode: 'ref',
-      ruleId: target.ruleId,
       describe: detail.describe || target.describe || '',
       systemPrompt: detail.systemPrompt || orchCfg.value.systemPrompt,
-      scriptPath,
       script,
+      scriptPath: '',
     })
-    ElMessage.success(`已切换到「${target.name}」`)
+    ElMessage.success(`已复制「${target.name}」的内容，点「生成脚本」换成本节点自己的文件后再保存`)
   } catch (e) {
     ElMessage.error(`切换配置失败：${(e as Error)?.message ?? String(e)}`)
   } finally {
@@ -283,7 +304,7 @@ const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value
   </template>
 
   <div class="rc-actions-row">
-    <button class="rc-btn" type="button" @click="systemPromptDialogOpen = true">编辑系统提示词</button>
+    <button class="rc-btn" type="button" @click="workbenchOpen = true">编辑系统提示词</button>
     <button class="rc-btn primary" type="button" :disabled="generating" @click="onGenerateScript">
       {{ generating ? '生成中...' : generateLabel }}
     </button>
@@ -296,18 +317,35 @@ const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value
   </div>
   <textarea class="rc-code-box" readonly :value="orchCfg.script || codeEmptyHint" />
   <div class="rc-actions-row">
-    <button class="rc-btn" type="button" :disabled="!orchCfg.script?.trim()" @click="scriptDialogOpen = true">全屏查看</button>
+    <button class="rc-btn" type="button" :disabled="!orchCfg.script?.trim()" @click="workbenchOpen = true">全屏查看</button>
     <button v-if="isRule" class="rc-btn" type="button" :disabled="!canTest" @click="testDialogOpen = true">测试脚本</button>
     <button class="rc-btn primary" type="button" :disabled="savingScript || !orchCfg.script?.trim()" @click="onSaveScript">
       {{ savingScript ? '保存中...' : saveLabel }}
     </button>
   </div>
 
-  <RuleScriptDialog v-model:open="scriptDialogOpen" :title="isRule ? '脚本查看' : '配置查看'" :script-path="orchCfg.scriptPath" :script="orchCfg.script || ''" />
-  <RuleSystemPromptDialog
-    v-model:open="systemPromptDialogOpen"
-    :model-value="orchCfg.systemPrompt ?? ''"
-    @update:model-value="onSystemPromptChange"
+  <!-- S6-1（方案 §4.1）：合并原 RuleScriptDialog（只读脚本查看）+ RuleSystemPromptDialog（编辑系统提示词）
+       为一个双栏工作区——两个入口按钮（编辑系统提示词/全屏查看）现在打开同一个弹层，左右两栏一屏对照，
+       面板内直接能生成/保存/测试，不用退出去。 -->
+  <RuleWorkbenchDialog
+    v-model:open="workbenchOpen"
+    :title="workbenchTitle"
+    :script-label="scriptLabel"
+    :system-prompt="orchCfg.systemPrompt ?? ''"
+    :script="orchCfg.script ?? ''"
+    :script-path="orchCfg.scriptPath"
+    :generate-label="generateLabel"
+    :save-label="saveLabel"
+    :generating="generating"
+    :saving="savingScript"
+    :show-test="isRule"
+    :can-test="canTest"
+    @update:system-prompt="onSystemPromptChange"
+    @update:script="onScriptChange"
+    @generate="onGenerateScript"
+    @cancel-generate="onCancelGenerate"
+    @save="onSaveScript"
+    @test="testDialogOpen = true"
   />
   <RuleTestDialog
     v-if="isRule"

@@ -113,7 +113,9 @@ describe('DataView · 数据表页', () => {
     await mountPage()
     await waitForLoad()
 
-    await wrapper.find('.dv-link').trigger('click') // 展开高级筛选
+    // .dv-link 现在有多个匹配（含 DataView 自己的"常用查询"下拉、DataQueryPanel 内部的"高级筛选"），
+    // S5-1 把筛选面板抽到 DataQueryPanel 后按文案精确定位，不再依赖"第一个 .dv-link 就是高级筛选"这个巧合
+    await wrapper.findAll('.dv-link').find((el) => el.text() === '高级筛选')!.trigger('click')
     await flushPromises()
     const cInitial = wrapper.findAllComponents({ name: 'ElCheckboxButton' }).find((c) => c.text() === 'C 初始')
     await cInitial!.find('input').setValue(true)

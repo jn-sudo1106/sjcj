@@ -43,6 +43,10 @@ export const COLLECTOR_CAPABILITIES: Record<CollectorKind, CollectorCapability> 
   app: { kind: 'app', label: 'APP 抓取', artifactType: 'structured', outputMode: 'selectable', queueMode: 'editable', supportsProxy: false, supportsResume: false, supportsLogin: true, supportsUrlParams: false },
   file_download: { kind: 'file_download', label: '文件下载', artifactType: 'file', outputMode: 'selectable', queueMode: 'editable', supportsProxy: false, supportsResume: true, supportsLogin: false, supportsUrlParams: false },
   python: { kind: 'python', label: 'Python 抓取', artifactType: 'structured', outputMode: 'selectable', queueMode: 'editable', supportsProxy: false, supportsResume: false, supportsLogin: false, supportsUrlParams: false },
+  // S4-1（方案 §6.1）：登录从采集节点运行设置里的勾选项拆成独立节点——它自己就是登录动作，不需要
+  // "本节点是否需要登录"这个开关（supportsLogin: false），账号/凭据是它自己的核心字段，见 ConfigTab.vue
+  // 的 kind === 'login' 专属输入框。产物是会话/凭据，落哪张表由用户选（0805 确认 outputMode: selectable）。
+  login: { kind: 'login', label: '网页登录', artifactType: 'structured', outputMode: 'selectable', queueMode: 'editable', supportsProxy: true, supportsResume: false, supportsLogin: false, supportsUrlParams: false },
 }
 
 /** 从旧字段推导采集类型（1:1+fallback，0701 问题五同款口径）：显式 collectorKind 优先，否则按 snatchType 特征推断 */
@@ -85,13 +89,252 @@ export function makeDefaultRuleOrchestration(): RuleOrchestration {
   }
 }
 
-// ---------- 抓取配置（0804 S3-3，方案 §3.1 修正 C/D）----------
+// ---------- 抓取配置（0804 S3-3，方案 §3.1 修正 C/D；0805 S3-5 补全为 few-shot，见方案 §十 附录）----------
 // 动作类型清单会议未给全（方案 §9.1 D10 连带效果：降级为"填默认提示词"，不卡排期），
-// 这里按已拿到的 XML 样例（参考_抓取配置XML样例_2026-08-04.xml）总结出的结构给一份能跑的默认值，
-// 后续拿到官方动作清单再补充，不影响现有节点（用户可编辑，不是写死的行为）。
+// 下面这份提示词按已拿到的 XML 样例（参考_抓取配置XML样例_2026-08-04.xml）总结出结构说明 + 完整中文属性名清单 +
+// $$$ iframe 拼接规则 + 四份路径冗余规则，并把样例原文整份作为 few-shot 附在最后——比纯文字描述可靠（方案 §十.8 第 4 条）。
+// 后续拿到官方完整动作清单，只需要在这个常量里补充新动作类型的说明，不改代码、不改调用方（用户可编辑，不是写死行为）。
+export const CAPTURE_CONFIG_SAMPLE_XML = `<Actions>
+    <OpenUrlAction DisplayTitle="打开网页" ActionId="7fcadca9-b326-4861-8a14-0bab68f87eb3" NextActionId="cae34015-fc59-42b6-95e3-e9e984ca970d" LastActionId="">
+        <Config>
+            <Url>
+                <![CDATA[http://43.248.49.97/?outerValue1=7405,2603,7402,7404,7405,7406,7407,7408,7409,7410,7411,7412,2603,7402,7603,7604,7604,7608,7609,2606,7602,7903,7904,7905,7906,7907,7901,7601,7903,2608,7901,7804,7805,7806,2607,2604,2609,8003,8007,7502,2609,7504&year=2021&startMonth=8&endMonth=9]]>
+            </Url>
+            <UseHttp>False</UseHttp>
+            <Proxy>
+                <![CDATA[{"ip":null,"ttl":0,"protocol":null,"port":0,"time":null,"ntype":0,"strLoginName":null,"strPass":null,"isNeedUpdate":false,"strMode":null}]]>
+            </Proxy>
+            <HideImage>False</HideImage>
+            <ReqType>GET</ReqType>
+            <ReqParam></ReqParam>
+            <BrowserScrollLoad>False</BrowserScrollLoad>
+            <AsyncComplete>False</AsyncComplete>
+            <MaxView>False</MaxView>
+            <SingleProcess>False</SingleProcess>
+            <CaptchaList>
+                <![CDATA[]]>
+            </CaptchaList>
+            <WaitEngineAct>60</WaitEngineAct>
+            <ErrorUrl></ErrorUrl>
+            <VerifingAuths></VerifingAuths>
+            <HTTPMonitor>False</HTTPMonitor>
+            <AsyncUrls></AsyncUrls>
+            <ContentLoad>False</ContentLoad>
+            <FilterUrls></FilterUrls>
+            <ChangeEnv>False</ChangeEnv>
+            <FailedMaxNum>60</FailedMaxNum>
+            <RunAsyncMode>True</RunAsyncMode>
+            <SaveOriFile>False</SaveOriFile>
+            <FailedExit>True</FailedExit>
+            <AntiCraw>
+                <![CDATA[{"strUrl":"","strCont":"","strTitle":"","xpaths":[],"isPause":false}]]>
+            </AntiCraw>
+            <HeadCont></HeadCont>
+            <UnUseComUrl></UnUseComUrl>
+            <SameUrlNotNav>False</SameUrlNotNav>
+            <MonNav>False</MonNav>
+            <ContIsSame>False</ContIsSame>
+            <MinContSizeLimit>1000</MinContSizeLimit>
+            <BodyCont>
+                <![CDATA[]]>
+            </BodyCont>
+        </Config>
+        <CfgNode>
+            <![CDATA[{"headCont":null,"bodyCont":null,"strReqType":null,"strUrl":null}]]>
+        </CfgNode>
+    </OpenUrlAction>
+    <ExtractSingleValueAction DisplayTitle="提取单值" ActionId="3b230630-0b6c-43bb-861d-6305ab85abec" NextActionId="" LastActionId="5fbb46ee-073c-4f93-a666-6520d2102e32">
+        <Config>
+            <ColumnCfg>
+                <Column BizId="1107021" BizName="币类型">0</Column>
+            </ColumnCfg>
+            <XpathConfig>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[6]/div[1]" isFrame="True" AttrName="FullXpath" AttrValue="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[6]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[6]/div[1]" isFrame="True" AttrName="RelXpath" AttrValue="//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[6]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[6]/div[1]" isFrame="True" AttrName="下一个动作" AttrValue="无">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[6]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[6]/div[1]" isFrame="True" AttrName="等待页面跳转" AttrValue="False">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[6]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[6]/div[1]" isFrame="True" AttrName="忽略动作失败" AttrValue="False">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[6]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[6]/div[1]" isFrame="True" AttrName="等待时间" AttrValue="0">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[6]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[6]/div[1]" isFrame="True" AttrName="自动抓取" AttrValue="False">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[6]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[6]/div[1]" isFrame="True" AttrName="提取类型" AttrValue="提取文本">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[6]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[6]/div[1]" isFrame="True" AttrName="ReqActId" AttrValue="无">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[6]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[6]/div[1]" isFrame="True" AttrName="正则过滤" AttrValue="">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[6]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[6]/div[1]" isFrame="True" AttrName="点评解码" AttrValue="False">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[6]/div[1]</Xpath>
+            </XpathConfig>
+        </Config>
+    </ExtractSingleValueAction>
+    <ExtractSingleValueAction DisplayTitle="提取单值" ActionId="5fbb46ee-073c-4f93-a666-6520d2102e32" NextActionId="3b230630-0b6c-43bb-861d-6305ab85abec" LastActionId="c4e7f7a8-3b92-4b75-8ef8-d75b82c22fcb">
+        <Config>
+            <ColumnCfg>
+                <Column BizId="1106473" BizName="结束时间">0</Column>
+            </ColumnCfg>
+            <XpathConfig>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="FullXpath" AttrValue="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="RelXpath" AttrValue="//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="下一个动作" AttrValue="3b230630-0b6c-43bb-861d-6305ab85abec">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="等待页面跳转" AttrValue="False">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="忽略动作失败" AttrValue="False">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="等待时间" AttrValue="0">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="自动抓取" AttrValue="False">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="提取类型" AttrValue="提取文本">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="ReqActId" AttrValue="无">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="正则过滤" AttrValue="">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="点评解码" AttrValue="False">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+            </XpathConfig>
+        </Config>
+    </ExtractSingleValueAction>
+    <ExtractSingleValueAction DisplayTitle="提取单值" ActionId="c4e7f7a8-3b92-4b75-8ef8-d75b82c22fcb" NextActionId="5fbb46ee-073c-4f93-a666-6520d2102e32" LastActionId="cae34015-fc59-42b6-95e3-e9e984ca970d">
+        <Config>
+            <ColumnCfg>
+                <Column BizId="1106472" BizName="起始时间">0</Column>
+            </ColumnCfg>
+            <XpathConfig>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="FullXpath" AttrValue="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="RelXpath" AttrValue="//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="下一个动作" AttrValue="5fbb46ee-073c-4f93-a666-6520d2102e32">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="等待页面跳转" AttrValue="False">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="忽略动作失败" AttrValue="False">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="等待时间" AttrValue="0">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="自动抓取" AttrValue="False">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="提取类型" AttrValue="提取文本">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="ReqActId" AttrValue="无">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="正则过滤" AttrValue="">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/table[1]/tbody[1]/tr[1]/td[4]/div[1]" isFrame="True" AttrName="点评解码" AttrValue="False">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@class='table table-border  table-hover table-sort table-responsive']/tbody[1]/tr[@class='text-r'][1]/td[4]/div[1]</Xpath>
+            </XpathConfig>
+        </Config>
+    </ExtractSingleValueAction>
+    <ExtractDataTableAction DisplayTitle="提取表格" ActionId="cae34015-fc59-42b6-95e3-e9e984ca970d" NextActionId="c4e7f7a8-3b92-4b75-8ef8-d75b82c22fcb" LastActionId="7fcadca9-b326-4861-8a14-0bab68f87eb3">
+        <Config>
+            <ColumnCfg>
+                <Column BizId="1106469" BizName="商品编码">0</Column>
+                <Column BizId="1106470" BizName="商品名称">1</Column>
+                <Column BizId="1107025" BizName="贸易伙伴编码">2</Column>
+                <Column BizId="1107026" BizName="贸易伙伴名称">3</Column>
+                <Column BizId="1107019" BizName="第一数量">4</Column>
+                <Column BizId="Col5" BizName="Col5">5</Column>
+                <Column BizId="Col6" BizName="Col6">6</Column>
+                <Column BizId="Col7" BizName="Col7">7</Column>
+                <Column BizId="1106471" BizName="进出口金额">8</Column>
+            </ColumnCfg>
+            <XpathConfig>
+                <Xpath RealPath="html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]$$$html[1]/body[1]/div[1]/div[2]/table[1]/tbody[1]/tr[1]/td[1]/div[1]" isFrame="True">//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]$$$//table[@id='table']/tbody[1]/tr[@class='text-c  mt-10'][1]/td[1]/div[@class='th-line'][1]</Xpath>
+            </XpathConfig>
+            <ParaCfg>
+                <Para name="FullXpath">
+                    <![CDATA[html[1]/body[1]/div[1]/section[1]/div[2]/div[2]/iframe[1]]]>
+                </Para>
+                <Para name="RelXpath">
+                    <![CDATA[//div[@id='iframe_box']/div[@class='show_iframe'][2]/iframe[1]]]>
+                </Para>
+                <Para name="下一个动作">
+                    <![CDATA[c4e7f7a8-3b92-4b75-8ef8-d75b82c22fcb]]>
+                </Para>
+                <Para name="等待页面跳转">
+                    <![CDATA[False]]>
+                </Para>
+                <Para name="忽略动作失败">
+                    <![CDATA[False]]>
+                </Para>
+                <Para name="等待时间">
+                    <![CDATA[0]]>
+                </Para>
+                <Para name="自动抓取">
+                    <![CDATA[False]]>
+                </Para>
+                <Para name="表格Row筛选">
+                    <![CDATA[]]>
+                </Para>
+                <Para name="关键字识别表格">
+                    <![CDATA[]]>
+                </Para>
+                <Para name="选择列表">
+                    <![CDATA[无]]>
+                </Para>
+                <Para name="多Table模式">
+                    <![CDATA[False]]>
+                </Para>
+                <Para name="列表模式">
+                    <![CDATA[False]]>
+                </Para>
+                <Para name="点击表内元素">
+                    <![CDATA[]]>
+                </Para>
+                <Para name="去除表头">
+                    <![CDATA[True]]>
+                </Para>
+                <Para name="检查隐藏属性">
+                    <![CDATA[False]]>
+                </Para>
+                <Para name="行列转置">
+                    <![CDATA[False]]>
+                </Para>
+                <Para name="关键字删除行">
+                    <![CDATA[]]>
+                </Para>
+                <Para name="关键字筛选列">
+                    <![CDATA[]]>
+                </Para>
+                <Para name="删除列">
+                    <![CDATA[]]>
+                </Para>
+                <Para name="复制列">
+                    <![CDATA[]]>
+                </Para>
+                <Para name="行列转换">
+                    <![CDATA[]]>
+                </Para>
+                <Para name="表格筛选">
+                    <![CDATA[]]>
+                </Para>
+                <Para name="开始和结束关键字(|)分割">
+                    <![CDATA[]]>
+                </Para>
+                <Para name="列配置">
+                    <![CDATA[]]>
+                </Para>
+                <Para name="是否Trim">
+                    <![CDATA[True]]>
+                </Para>
+                <Para name="补空列">
+                    <![CDATA[]]>
+                </Para>
+                <Para name="去除重复列">
+                    <![CDATA[False]]>
+                </Para>
+            </ParaCfg>
+            <TableAct>{}</TableAct>
+        </Config>
+    </ExtractDataTableAction>
+</Actions>`
+
 export const DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT =
-  '生成抓取配置 XML：以 <Config> 为根节点，按 OpenUrlAction → ExtractDataTableAction → ExtractSingleValueAction 这类动作链描述抓取步骤（NextActionId 串联执行顺序），' +
-  '字段绑定用 <ColumnCfg><Column BizId="字段id">列序号</Column></ColumnCfg>；只输出合法 XML 本身，不要输出 Markdown 代码块标记或解释性文字。'
+  '你要生成抓取配置 XML（老引擎直接读取执行，格式必须完全兼容，不能自创字段或属性名）。\n\n' +
+  '【整体结构】根节点 <Actions>；每个子元素名本身就是动作类型（不是 <Action type="...">）；' +
+  'DisplayTitle 是中文显示名；ActionId 是 GUID；NextActionId/LastActionId 构成双向链表——' +
+  '执行顺序按 NextActionId 串联，不是 XML 文档顺序；链头的 LastActionId=""，链尾的 NextActionId=""。\n\n' +
+  '【已知动作类型】\n' +
+  '- OpenUrlAction（打开网页）：属性是 <Config> 的直接子元素，如 <Url><![CDATA[...]]></Url>、<ReqType>GET</ReqType>、<WaitEngineAct>60</WaitEngineAct>、<FailedExit>True</FailedExit>。\n' +
+  '- ExtractSingleValueAction（提取单值）：属性走 <Config><XpathConfig><Xpath RealPath="绝对路径" isFrame="True/False" AttrName="属性中文名" AttrValue="属性值">相对路径xpath正文</Xpath>，' +
+  '每个属性单独一个 <Xpath> 元素、完整重复一遍 xpath 正文，缺一个属性都不行。\n' +
+  '- ExtractDataTableAction（提取表格）：属性走 <Config><ParaCfg><Para name="属性中文名"><![CDATA[值]]></Para>，同样要写全，不能省略。\n' +
+  '还可能有登录、下载、翻页等动作类型（会议未给全清单）——若需要，按同样的「元素名=动作类型」「属性挂在 <Config> 下」思路类推，不要臆造跟已知动作冲突的结构。\n\n' +
+  '【中文属性名清单，必须原样使用，不能翻译、不能增删】\n' +
+  'ExtractSingleValueAction 的 XpathConfig 固定 11 个：FullXpath、RelXpath、下一个动作、等待页面跳转、忽略动作失败、等待时间、自动抓取、提取类型、ReqActId、正则过滤、点评解码。\n' +
+  'ExtractDataTableAction 的 ParaCfg 固定 26 个：FullXpath、RelXpath、下一个动作、等待页面跳转、忽略动作失败、等待时间、自动抓取、表格Row筛选、关键字识别表格、选择列表、多Table模式、列表模式、点击表内元素、去除表头、检查隐藏属性、行列转置、关键字删除行、关键字筛选列、删除列、复制列、行列转换、表格筛选、开始和结束关键字(|)分割、列配置、是否Trim、补空列、去除重复列。\n\n' +
+  '【$$$ iframe 拼接规则】isFrame="True" 时，把「iframe 自身的 xpath」和「iframe 内目标元素的 xpath」用 $$$ 拼接成一条，可以多级嵌套（跨多层 iframe）；isFrame="False" 时不需要 $$$。\n\n' +
+  '【四份路径冗余规则】同一个提取点，下面四处必须保持完全一致，任何一处写错都会导致老引擎解析失败：' +
+  '① <Xpath> 的 RealPath 属性（绝对路径，如 html[1]/body[1]/…）；' +
+  '② <Xpath> 元素的正文（相对路径，如 //div[@id=...]，含 $$$ 拼接）；' +
+  '③ AttrName="FullXpath" 那一行的 AttrValue（= iframe 自身的绝对路径部分）；' +
+  '④ AttrName="RelXpath" 那一行的 AttrValue（= iframe 自身的相对路径部分）。\n\n' +
+  '【字段绑定】<ColumnCfg><Column BizId="字段id" BizName="字段中文名">列序号</Column></ColumnCfg>；' +
+  'BizId/BizName 必须取自当前节点「表配置」里已选中的输出字段，不要虚构字段；' +
+  '提取表格动作的列序号是表格实际列位置（从 0 开始数）；提取单值动作的列序号恒为 0；' +
+  '暂时没有对应业务字段的列，用 BizId=BizName="Col{n}"（n = 该列列序号）占位，不要跳过这一列。\n\n' +
+  '【输出要求】只输出合法 XML 本身，不要输出 Markdown 代码块标记，不要输出任何解释性文字。\n\n' +
+  '【完整示例】下面是一份真实可用的抓取配置（海关进出口数据抓取场景，5 个动作），结构、属性名、四份路径冗余、' +
+  '$$$ iframe 拼接、ColumnCfg 占位列写法都以这份为准：\n\n' +
+  CAPTURE_CONFIG_SAMPLE_XML
 
 export function makeDefaultExecConfig(): RuleOrchestration {
   return {
@@ -185,6 +428,24 @@ const NODE_CONFIG_SEEDS = {
       collectorKind: 'wechat_official_html',
     },
     taskCfg: { queue: COLLECTOR_CAPABILITIES.wechat_official_html.fixedQueue ?? '', urlRule: '' },
+  },
+  // S4-1（方案 §6.1）：网页登录——无输入表，有输出表（会话/凭据，用户自选，见 COLLECTOR_CAPABILITIES.login），
+  // 账号/凭据是节点自己的核心字段（非折叠的运行设置项），跟采集节点运行设置里已废弃的 needLogin 开关是两回事。
+  'login-collect': {
+    title: '网页登录', sub: '[LOGIN] 网页登录 · 源配置', status: '待配置', planned: false, collect: true,
+    base: [['登录页 URL', 'https://example.com/login'], ['源名称', '网页登录源'], ['产物', '登录会话/凭据（输出表可选）'], ['定时策略', '']],
+    fields: [['使用代理', '否'], ['登录账号', ''], ['凭据引用', '']],
+    inmap: [],
+    params: [],
+    output: [['session_token', 'string', '登录会话/凭据'], ['login_status', 'string', '登录结果']],
+    collectCfg: {
+      snatchType: '[LOGIN] - 网页登录', url: 'https://example.com/login',
+      webKind: 'list',
+      outputTable: '', inputTable: '', inputParams: [],
+      isDetail: false,
+      collectorKind: 'login',
+    },
+    taskCfg: { queue: 'login.collect', urlRule: '' },
   },
   'file-parse': {
     title: '文件解析', sub: '文件解析类 · PDF/Word/Excel/图片', status: '建议补充 · P1', planned: false,
@@ -324,6 +585,8 @@ export const TEMPLATE_TO_NODE: Record<string, string> = {
   alert: 'alert', decision: 'decision', parallel: 'parallel', custom: 'custom',
   // 0711 R7/R8：两个独立的固定产物类型采集节点
   'browser-html': 'browser-html-collect', 'wechat-html': 'wechat-html-collect',
+  // S4-1：网页登录，独立节点类型（方案 §6.1）
+  login: 'login-collect',
 }
 
 // 抓取类型选项（统一来源；NodeInspector 与种子配置共用）
@@ -348,6 +611,7 @@ export const TEMPLATE_TO_SNATCH: Record<string, string> = {
   ai: '[155] - AI 提取',
   'browser-html': '[BROWSER] - 浏览器抓取',
   'wechat-html': '[WECHAT] - 公众号抓取',
+  login: '[LOGIN] - 网页登录',
 }
 
 // 左侧节点库分组
@@ -361,6 +625,8 @@ export const LIB_GROUPS: LibGroup[] = [
       // 0711 R7/R8：抓 HTML 文件，输出表/队列固定，不可编辑
       { template: 'browser-html', code: 'BROWSER', badge: '180', name: '浏览器抓取', desc: '渲染并保存 HTML，固定表/队列', pill: 'p1' as Pill },
       { template: 'wechat-html', code: 'WECHAT', badge: '185', name: '公众号抓取', desc: '公众号页面采集，固定表/队列', pill: 'p1' as Pill },
+      // S4-1（方案 §6.1）：登录从采集节点的运行设置勾选项拆成独立节点，无输入表、有输出表（会话/凭据）
+      { template: 'login', code: 'LOGIN', name: '网页登录', desc: '登录页 URL、账号、凭据，登录后交给后续抓取节点', pill: 'p1' as Pill },
     ]
   },
   {

@@ -120,9 +120,9 @@ describe('TableTab · 规则节点表/字段绑定（0804 S2-2 从编排配置�
   })
 })
 
-// 结构化配置（入库配置）+ 正文规则（0804 S3-1）：规则/采集节点分走不同的存储位置，
-// 但都在同一个表配置 Tab 里，UI 交互完全一致。
-describe('TableTab · 结构化配置 / 正文规则（0804 S3-1）', () => {
+// 结构化配置（入库配置）+ 正文规则（0804 S3-1）：只跟采集节点有关（0805 改判：规则节点表配置
+// 不再有这两块，见 RuleTableFieldBinder 的入参/出参字段绑定）。
+describe('TableTab · 结构化配置 / 正文规则（0804 S3-1，0805 收窄为仅采集节点）', () => {
   function mountOnCollectorNode() {
     setActivePinia(createPinia())
     const flow = useFlowStore()
@@ -133,19 +133,13 @@ describe('TableTab · 结构化配置 / 正文规则（0804 S3-1）', () => {
     return { flow, wrapper }
   }
 
-  it('规则节点：填写后写入 ruleCfg.structuredConfig / contentRules', async () => {
+  it('规则节点：表配置 Tab 不再出现结构化配置/正文规则输入框', async () => {
     mockAssets()
-    const { flow, wrapper } = mountOnRuleNode()
+    const { wrapper } = mountOnRuleNode()
     await flushPromises()
 
-    const textareas = wrapper.findAll('textarea')
-    const structuredInput = textareas.find((t) => t.attributes('placeholder')?.includes('入库规则'))!
-    const contentRuleInput = textareas.find((t) => t.attributes('placeholder')?.includes('content=trim'))!
-    await structuredInput.setValue('{"table":"T1"}')
-    await contentRuleInput.setValue('content=trim')
-
-    expect(flow.configs['rule-1'].ruleCfg?.structuredConfig).toBe('{"table":"T1"}')
-    expect(flow.configs['rule-1'].ruleCfg?.contentRules).toBe('content=trim')
+    expect(wrapper.text()).not.toContain('结构化配置')
+    expect(wrapper.text()).not.toContain('正文规则')
   })
 
   it('采集节点：填写后写入 collectCfg.structuredConfig / contentRules（走 store 双轨 setter）', async () => {

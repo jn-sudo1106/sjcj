@@ -120,3 +120,77 @@ describe('ConfigTab · 规则节点「选择已有规则」（0805）', () => {
     expect(flow.configs['rule-1'].ruleCfg?.inputTableId).toBe('')
   })
 })
+
+// S4-1（方案 §6.1）：登录节点自己的核心字段（账号/凭据引用）常显，不走采集节点运行设置里已废弃的 needLogin 开关
+describe('ConfigTab · 网页登录节点专属字段（S4-1）', () => {
+  it('登录节点：显示「登录账号」「凭据引用」输入框；普通采集节点没有', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['login-1'] = cloneConfig(NODE_CONFIGS['login-collect'])
+    flow.select('login-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('登录账号')
+    expect(wrapper.text()).toContain('凭据引用')
+
+    setActivePinia(createPinia())
+    const flow2 = useFlowStore()
+    flow2.configs['web-1'] = cloneConfig(NODE_CONFIGS['web-list'])
+    flow2.select('web-1')
+    flow2.setActiveTab('config')
+    const wrapper2 = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(wrapper2.text()).not.toContain('登录账号')
+    expect(wrapper2.text()).not.toContain('凭据引用')
+  })
+
+  it('填写账号/凭据引用：写入 collectCfg.account / collectCfg.credentialRef', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['login-1'] = cloneConfig(NODE_CONFIGS['login-collect'])
+    flow.select('login-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const inputs = wrapper.findAll('input')
+    const accountInput = inputs.find((i) => i.attributes('placeholder') === '登录用户名')!
+    const credInput = inputs.find((i) => i.attributes('placeholder') === '凭据中心的引用 ID')!
+    await accountInput.setValue('svc_login_user')
+    await credInput.setValue('cred-001')
+
+    expect(flow.configs['login-1'].collectCfg?.account).toBe('svc_login_user')
+    expect(flow.configs['login-1'].collectCfg?.credentialRef).toBe('cred-001')
+  })
+})
+
+// S4-1 遗留修复：isFirstCollectorNode 之前按"主链第一个带 collectCfg 的节点"判定，登录节点也带
+// collectCfg，流程排成「登录→列表抓取」后会把"首采集节点"专属配置（定时策略/参数子源）错误地
+// 挂到登录节点上。改成跳过 collectorKind === 'login'，跟登录节点讨论时一起拍板（见 ConfigTab.vue:56）。
+describe('ConfigTab · 首采集节点判定跳过登录节点（S4-1 遗留修复）', () => {
+  it('登录→列表抓取：定时策略折叠区展示在列表抓取节点，不是登录节点', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.newFlow('standard')
+    flow.insertAfter('start', 'login')
+
+    flow.select('web-list')
+    flow.setActiveTab('config')
+    const webWrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    await webWrapper.find('.cs-toggle').trigger('click')
+    expect(webWrapper.find('.tss-wrap').exists()).toBe(true)
+
+    const loginId = flow.main.find((id) => flow.configs[id]?.collectCfg?.collectorKind === 'login')!
+    flow.select(loginId)
+    flow.setActiveTab('config')
+    const loginWrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    await loginWrapper.find('.cs-toggle').trigger('click')
+    expect(loginWrapper.find('.tss-wrap').exists()).toBe(false)
+  })
+})

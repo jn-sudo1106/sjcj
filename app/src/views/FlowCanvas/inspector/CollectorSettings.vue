@@ -9,7 +9,11 @@ import { sourceApi, type CredentialRef } from '@/api'
 import type { CollectConfig, CollectorCapability } from '@/views/FlowCanvas/canvas/flowModel'
 import TaskScheduleSettings from './TaskScheduleSettings.vue'
 
-/** 运行设置涉及的字段子集（复用 CollectConfig，不重复定义类型） */
+/** 运行设置涉及的字段子集（复用 CollectConfig，不重复定义类型）。
+ *  @deprecated needLogin/loginUrl/account/credentialRef 这四项（S4-1，方案 §6.1）：登录已拆成独立的
+ *  「网页登录」节点（collectorKind: 'login'，见 flowModel.seeds.ts），新流程应该连一个登录节点在前面，
+ *  不要再靠这里的开关。只读兼容旧数据——UI 仍会渲染（capability.supportsLogin 为 true 的节点，即
+ *  browser_html/wechat_official_html），不强制迁移旧配置。 */
 export type CollectorRuntimeSettings = Pick<CollectConfig, 'useProxy' | 'resume' | 'needLogin' | 'loginUrl' | 'account' | 'credentialRef' | 'scheduleType' | 'scheduleTime' | 'weekdays' | 'cron' | 'proxyDetail'>
 
 const props = defineProps<{ modelValue: CollectorRuntimeSettings; capability?: CollectorCapability; showSchedule?: boolean }>()
@@ -63,7 +67,7 @@ function setNeedLogin(v: boolean) {
 <template>
   <div v-if="showSchedule || capability?.supportsProxy || capability?.supportsResume || capability?.supportsLogin" class="cs-wrap">
     <button class="cs-toggle" type="button" @click="open = !open">
-      {{ open ? '▾' : '▸' }} 运行设置（代理 / 断点续爬 / 登录{{ showSchedule ? ' / 定时' : '' }}）
+      {{ open ? '▾' : '▸' }} 运行设置（代理 / 断点续爬{{ showSchedule ? ' / 定时' : '' }}）
     </button>
     <div v-if="open" class="cs-body">
       <div v-if="capability?.supportsProxy || capability?.supportsResume" class="rc-field">

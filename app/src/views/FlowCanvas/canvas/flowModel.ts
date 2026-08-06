@@ -194,7 +194,7 @@ export type WebKind = 'list' | 'detail' | 'attachment'
 
 /** 采集节点类型（0711 R7/R8：新增"浏览器抓取"/"公众号抓取"两个独立固定产物类型节点）。
  *  旧节点没有这个字段，用 inferCollectorKind() 从 snatchType/webKind 推导，不强制迁移数据。 */
-export type CollectorKind = 'web' | 'browser_html' | 'wechat_official_html' | 'app' | 'file_download' | 'python'
+export type CollectorKind = 'web' | 'browser_html' | 'wechat_official_html' | 'app' | 'file_download' | 'python' | 'login'
 
 /** 采集节点能力描述：固定产物类型节点的表/队列不可编辑，UI 与 store 双重防线都据此判断（0711 T5） */
 export interface CollectorCapability {

@@ -23,8 +23,8 @@ export function nodeInspectorTabs(cfg?: NodeConfig): NodeInspectorTabItem[] {
   const tabs: NodeInspectorTabItem[] = [
     ['config', '节点配置'],
     ['table', '表配置'],
-    ...(isRule ? [] : [['params', '参数配置'] as NodeInspectorTabItem]),
     ['orchestration', '编排配置'],
+    ...(isRule ? [] : [['params', '参数配置'] as NodeInspectorTabItem]),
     ['task', '任务配置'],
     ['ai', 'AI 对话'],
   ]

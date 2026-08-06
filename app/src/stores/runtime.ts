@@ -95,6 +95,14 @@ export const useRuntimeStore = defineStore('runtime', () => {
     return runCapture(def, ids)
   }
 
+  // 单节点运行（S7-1 改判：不是"整链从某节点起跑"，是"只跑这一个节点，不往下继续"）。
+  // 纯前端模拟——真实 sendSnatch(sourceIds) 目前无法按节点范围发起抓取，暂不接入，避免"按钮说只跑一个节点，后端却重抓整个源"的误导。
+  function runSingleNode(def: FlowDef, id: string): { runId: string; reason?: string } {
+    if (running.value) return { runId: '', reason: '已有发起抓取正在进行，请稍候' }
+    if (!isRunnable(def, id)) return { runId: '', reason: '该节点当前不可运行（已停用 / 规划中 / 缺少必要配置）' }
+    return { runId: runCapture(def, [id]) }
+  }
+
   // 落表：生成进入「数据查看」的实体数据，落到每个参与节点自己配置的输出表（不再写死 t-notice）
   function generateData(def: FlowDef, runId: string, ids: string[]) {
     const outputTables = new Set<string>()
@@ -133,5 +141,5 @@ export const useRuntimeStore = defineStore('runtime', () => {
     }
   }
 
-  return { runs, runNodes, nodeStates, dataByTable, lastRunId, running, startCapture, clearNodeStates }
+  return { runs, runNodes, nodeStates, dataByTable, lastRunId, running, startCapture, runSingleNode, clearNodeStates }
 })

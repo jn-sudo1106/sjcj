@@ -136,7 +136,9 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     await editBtn.trigger('click')
     await flushPromises()
 
-    const textarea = wrapper.find('textarea.rspd-textarea')
+    // S6-1：系统提示词编辑区从独立弹窗合并进 RuleWorkbenchDialog 左栏，class 从 .rspd-textarea 换成
+    // .wb-textarea（右栏脚本框也用这个 class，加 .wb-code；左栏提示词没有，用 :not 精确定位）
+    const textarea = wrapper.find('textarea.wb-textarea:not(.wb-code)')
     await textarea.setValue('新的系统提示词')
     const saveBtn = wrapper.findAll('button').find((b) => b.text() === '保存' && b.classes().includes('primary'))!
     await saveBtn.trigger('click')
@@ -260,13 +262,14 @@ describe('RuleOrchestrationTab · 全屏测试台（拍板 #12）', () => {
     await wrapper.findAll('button').find((b) => b.text() === '测试脚本')!.trigger('click')
     await flushPromises()
 
-    const radio = wrapper.find('input[type="radio"]')
-    await radio.trigger('change')
+    // S5-2：行选择从 radio 改成数据展示区尾列的「测试」按钮（DataQueryPanel 的 #columns-after 插槽）
+    const testRowBtn = wrapper.findAll('button').find((b) => b.text() === '测试')!
+    await testRowBtn.trigger('click')
     await flushPromises()
 
-    // fields prop 只含 sku_id（inputFieldOptions 来自 ruleCfg.inputFields=['sku_id']），columnName 未知时回退原样，
+    // fields prop 只含 sku_id（columns 来自 ruleCfg.inputFields=['sku_id']），columnName 未知时回退原样，
     // 这里断言入参表单已用选中行数据初始化（K1 对应 EntryType 里未声明 columnName 的字段时回退空串是预期行为，
-    // 关键是确认「选行即回填」这条主链路：表单值来自 mapRowToInputFields，而非手动敲入）。
+    // 关键是确认「点测试即选中即回填」这条主链路：表单值来自 mapRowToInputFields，而非手动敲入）。
     const paramInput = wrapper.find('.rtd-param-row input')
     expect(paramInput.exists()).toBe(true)
 
@@ -285,7 +288,7 @@ describe('RuleOrchestrationTab · 全屏测试台（拍板 #12）', () => {
     expect(wrapper.html()).toContain('sku_name')
   })
 
-  it('筛选输入框查询：sql 条件透传给 rowQueryPaged', async () => {
+  it('高级筛选 SQL 条件：透传给 rowQueryPaged（S5-2 起改走 DataQueryPanel 的高级筛选）', async () => {
     const { wrapper } = mountWithScript()
     await flushPromises()
     const rowSpy = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
@@ -293,7 +296,9 @@ describe('RuleOrchestrationTab · 全屏测试台（拍板 #12）', () => {
     await wrapper.findAll('button').find((b) => b.text() === '测试脚本')!.trigger('click')
     await flushPromises()
 
-    await wrapper.find('input[placeholder*="筛选"]').setValue("K1='2025'")
+    await wrapper.findAll('.dv-link').find((el) => el.text() === '高级筛选')!.trigger('click')
+    await flushPromises()
+    await wrapper.find('input[placeholder*="SQL 条件"]').setValue("K1='2025'")
     await wrapper.findAll('button').find((b) => b.text() === '查询')!.trigger('click')
     await flushPromises()
 
@@ -307,7 +312,7 @@ describe('RuleOrchestrationTab · 全屏测试台（拍板 #12）', () => {
 
     await wrapper.findAll('button').find((b) => b.text() === '测试脚本')!.trigger('click')
     await flushPromises()
-    await wrapper.find('input[type="radio"]').trigger('change')
+    await wrapper.findAll('button').find((b) => b.text() === '测试')!.trigger('click')
     await flushPromises()
 
     const detailBtn = wrapper.findAll('button').find((b) => b.text() === '查看详情')!
@@ -382,12 +387,17 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     expect(flow.configs['web-1'].execCfg?.ruleId).toBe('184')
   })
 
-  it('切换已有配置：下拉只列出 .xml 结尾的既有记录，应用后回灌 describe/script/ruleId', async () => {
+  // S6-2 联调后端实测（vanv-rule-center DashScopeServiceImpl）：/script/edit 按 scriptPath 原地覆盖写
+  // 文件、生成脚本按 ruleId saveOrUpdate 数据库记录，都是"改已有"不是"建新的"——切换只能拷内容当草稿，
+  // ruleId/scriptPath 不能跟着换成源记录的，否则后面一保存/一重新生成就把源记录的文件或数据库行覆盖了。
+  it('切换已有配置：下拉只列出 .xml 结尾的既有记录，应用后回灌 describe/script，但 ruleId 保留本节点自己的、scriptPath 清空', async () => {
     setActivePinia(createPinia())
     const flow = useFlowStore()
     flow.configs['web-1'] = cloneConfig(NODE_CONFIGS['web-list'])
     flow.select('web-1')
     flow.setActiveTab('orchestration')
+    // 本节点必须已经有自己的编排记录（「表配置」保存过一次）才允许切换套用
+    flow.patchExecConfig('web-1', { mode: 'ref', ruleId: '184', scriptPath: '/x/184.xml' })
     mockAssets()
     vi.spyOn(ruleApi, 'orchestrationPaged').mockResolvedValue({
       total: 2,
@@ -415,7 +425,10 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
 
     expect(ruleApi.orchestrationDetail).toHaveBeenCalledWith('22')
     expect(ruleApi.orchestrationLoadScript).toHaveBeenCalledWith('/a/22.xml')
-    expect(flow.configs['web-1'].execCfg?.ruleId).toBe('22')
+    // ruleId 还是本节点自己的 184，没有被切换对象的 22 顶替
+    expect(flow.configs['web-1'].execCfg?.ruleId).toBe('184')
+    // scriptPath 清空——强制先「生成脚本」换一个本节点自己的文件才能保存，不会误覆盖源节点的 /a/22.xml
+    expect(flow.configs['web-1'].execCfg?.scriptPath).toBe('')
     expect(flow.configs['web-1'].execCfg?.describe).toBe('既有抓取需求')
     expect(flow.configs['web-1'].execCfg?.script).toContain('<Config>')
   })

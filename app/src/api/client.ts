@@ -162,7 +162,13 @@ export async function request<T>(
       } catch { /* 无 body 或非 JSON */ }
       throw new Error(`请求失败 ${res.status}${detail}`)
     }
-    return normalizeHttpPayload(httpEndpoint, await res.json()) as T
+    // 2xx 但响应体为空是部分真实后端网关的合法成功态（实测撞见 vrule AI 编辑网关），
+    // 不能直接 res.json() 空字符串——那会抛 "Unexpected end of JSON input"。
+    // 只在正文真为空时按 null 处理（走各 xxxFromLegacy 适配器的空输入兜底分支）；
+    // 非空但解析失败仍然是真实错误，照样往外抛，不吞掉。
+    const bodyText = await res.text()
+    const body = bodyText.trim() ? JSON.parse(bodyText) : null
+    return normalizeHttpPayload(httpEndpoint, body) as T
   } catch (e) {
     throw new ApiError(endpoint, e)
   }

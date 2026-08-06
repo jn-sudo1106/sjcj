@@ -203,6 +203,31 @@ const outputExpanded = ref(false)
     </div>
   </div>
 
+  <div class="rc-field"><label>入参字段 *</label>
+    <div v-if="!modelValue.inputTableId" class="rc-readonly-hint">请先选择输入表</div>
+    <template v-else>
+      <div class="rc-tag-row">
+        <span v-if="!modelValue.inputFields?.length" class="rc-readonly-hint rc-tag-empty">未选择</span>
+        <span v-for="code in modelValue.inputFields" :key="code" class="rc-tag on" @click="toggleField('input', code)">
+          {{ inputFieldOptions.find((f) => f.itemCode === code)?.itemName ?? code }} ×
+        </span>
+        <button class="rc-tag-toggle" type="button" @click="inputExpanded = !inputExpanded">
+          {{ inputExpanded ? '▾ 收起' : (allInputSelected ? `▸ 已全选 ${inputFieldPool.length} 个` : `▸ 共 ${inputFieldPool.length} 个可选`) }}
+        </button>
+        <button class="rc-tag-toggle" type="button" @click="showSystemFields = !showSystemFields">
+          {{ showSystemFields ? '隐藏系统字段' : '显示系统字段' }}
+        </button>
+      </div>
+      <div v-if="inputExpanded" class="rc-tag-row rc-tag-pool">
+        <span
+          v-for="f in inputFieldPool" :key="f.itemCode"
+          class="rc-tag" :class="{ on: modelValue.inputFields?.includes(f.itemCode) }"
+          @click="toggleField('input', f.itemCode)"
+        >{{ f.itemName }}</span>
+      </div>
+    </template>
+  </div>
+
   <div class="rc-field"><label>输出表（可选，默认使用输入表）</label>
     <div class="rc-select-row">
       <el-select
@@ -239,31 +264,6 @@ const outputExpanded = ref(false)
         {{ preset.name }} ({{ preset.tableId }})
       </button>
     </div>
-  </div>
-
-  <div class="rc-field"><label>入参字段 *</label>
-    <div v-if="!modelValue.inputTableId" class="rc-readonly-hint">请先选择输入表</div>
-    <template v-else>
-      <div class="rc-tag-row">
-        <span v-if="!modelValue.inputFields?.length" class="rc-readonly-hint rc-tag-empty">未选择</span>
-        <span v-for="code in modelValue.inputFields" :key="code" class="rc-tag on" @click="toggleField('input', code)">
-          {{ inputFieldOptions.find((f) => f.itemCode === code)?.itemName ?? code }} ×
-        </span>
-        <button class="rc-tag-toggle" type="button" @click="inputExpanded = !inputExpanded">
-          {{ inputExpanded ? '▾ 收起' : (allInputSelected ? `▸ 已全选 ${inputFieldPool.length} 个` : `▸ 共 ${inputFieldPool.length} 个可选`) }}
-        </button>
-        <button class="rc-tag-toggle" type="button" @click="showSystemFields = !showSystemFields">
-          {{ showSystemFields ? '隐藏系统字段' : '显示系统字段' }}
-        </button>
-      </div>
-      <div v-if="inputExpanded" class="rc-tag-row rc-tag-pool">
-        <span
-          v-for="f in inputFieldPool" :key="f.itemCode"
-          class="rc-tag" :class="{ on: modelValue.inputFields?.includes(f.itemCode) }"
-          @click="toggleField('input', f.itemCode)"
-        >{{ f.itemName }}</span>
-      </div>
-    </template>
   </div>
 
   <div class="rc-field"><label>出参字段 *</label>

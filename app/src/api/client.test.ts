@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ACCESS_TOKEN_HEADER, writeStoredToken } from './auth'
 
 function jsonResponse(body: unknown) {
-  return { ok: true, status: 200, redirected: false, url: '', json: async () => body } as Response
+  // request() 现在先 res.text() 再 JSON.parse（client.ts 空响应体兜底），mock 也要跟着给 text()
+  return { ok: true, status: 200, redirected: false, url: '', json: async () => body, text: async () => JSON.stringify(body) } as Response
 }
 
 // S1（计划 §12.2）：会话失效 302 → /apiapi/logout.htm，与认证客户端共用同一检测逻辑
@@ -47,6 +48,22 @@ describe('业务 API 真实请求鉴权', () => {
     expect(url).toBe('/api/v1/source/sourcePaged')
     expect(init.credentials).toBe('include')
     expect((init.headers as Record<string, string>)[ACCESS_TOKEN_HEADER]).toBe('tok-business')
+  })
+
+  // 实测撞见：vrule AI 编辑网关有时 2xx 但响应体为空，res.json() 直接解析空字符串会抛
+  // "Unexpected end of JSON input"（S6-1 联调时报出，client.ts 修 res.text()+按需 JSON.parse 兜底）
+  it('2xx 但响应体为空：按 null 处理，不抛 JSON 解析异常', async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200, redirected: false, url: '', text: async () => '' } as Response)
+    const { request } = await import('./client')
+
+    await expect(request('rule/orchestrationSave', {})).resolves.toBeNull()
+  })
+
+  it('2xx 但响应体是非空的非法 JSON：仍然抛错，不静默吞掉', async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200, redirected: false, url: '', text: async () => '不是 JSON' } as Response)
+    const { request } = await import('./client')
+
+    await expect(request('rule/orchestrationSave', {})).rejects.toThrow()
   })
 
   it('可为未迁移业务域强制走 Mock，不影响全局真实接口模式', async () => {

@@ -221,7 +221,23 @@ function menuAction(action: string) {
   else if (action === 'move-up' && id) flow.move(id, -1)
   else if (action === 'move-down' && id) flow.move(id, 1)
   else if (action === 'toggle' && id) flow.toggleDisabled(id)
+  else if (action === 'run-node' && id) runNode(id)
   else if (action === 'delete' && id) flow.remove(id)
+}
+
+// 单节点运行（右键菜单入口，S7-1 改判 0806）：与 NodeInspector 头部按钮同一套 runtime.runSingleNode，
+// 只是不用先选中/打开节点面板——右键即可发起，跟"上移/下移/运行 停止"这些既有的免选中操作放一起更顺手。
+function runNode(id: string) {
+  if (flow.dirty) {
+    ElMessage.warning('画布有未保存的改动，请先保存流程配置再运行节点')
+    return
+  }
+  const { runId, reason } = runtime.runSingleNode(flow.serialize(), id)
+  if (!runId) {
+    ElMessage.warning(reason || '当前节点不可运行')
+    return
+  }
+  ElMessage.success(`已发起「${flow.configs[id]?.title ?? id}」单节点运行 ${runId}`)
 }
 
 // ---- 添加节点浮层（0707 优化·Phase1，参照 Dify：锚定弹层 + 搜索 + 分组，点选即插） ----
@@ -432,6 +448,7 @@ watch(
         <button type="button" @click="menuAction('move-up')">上移</button>
         <button type="button" @click="menuAction('move-down')">下移</button>
         <button type="button" @click="menuAction('toggle')">运行 / 停止</button>
+        <button type="button" :disabled="runtime.running" @click="menuAction('run-node')">运行此节点</button>
         <div class="sep" />
         <button class="danger" type="button" @click="menuAction('delete')">删除节点</button>
       </template>

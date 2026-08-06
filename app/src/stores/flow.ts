@@ -123,6 +123,23 @@ export const useFlowStore = defineStore('flow', () => {
   let branchSeq = 1
   let seq = 1
 
+  // S6-3（方案 §4.4）：删节点待清理资源清单——本期只收集不真删，见 remove() 里的调用点。
+  // scriptPath 对应脚本/配置文件（MinIO），configId 对应业务规则或编排记录在后端的 ruleId。
+  interface NodeCleanupResource {
+    nodeId: string
+    nodeTitle: string
+    scriptPath?: string
+    configId?: string
+  }
+  const pendingCleanup = ref<NodeCleanupResource[]>([])
+  function collectCleanupResources(id: string, cfg: NodeConfig | undefined): NodeCleanupResource | null {
+    if (!cfg) return null
+    const scriptPath = cfg.ruleCfg?.scriptPath || cfg.execCfg?.scriptPath || undefined
+    const configId = cfg.ruleCfg?.ruleId || cfg.execCfg?.ruleId || undefined
+    if (!scriptPath && !configId) return null
+    return { nodeId: id, nodeTitle: cfg.title, scriptPath, configId }
+  }
+
   // 绑定 flow store 到 node store（供节点编辑函数访问 configs/main）
   nodeStore.bindFlowStore(configs, () => main.value)
 
@@ -556,6 +573,15 @@ export const useFlowStore = defineStore('flow', () => {
   }
 
   function remove(id: string) {
+    // S6-3（方案 §4.4）：删节点语义上该连带清理它的业务规则/编排记录 + 脚本文件，但技术指导明确
+    // "你暂时别删吧……后面删的时候你到底要删的时候你再删"——后端删除接口还没就绪验证过，本期只收集
+    // "如果要清理，该清理什么"这份清单（scriptPath / configId），不真的调任何删除接口。
+    const cleanup = collectCleanupResources(id, configs[id])
+    if (cleanup) {
+      pendingCleanup.value = [...pendingCleanup.value, cleanup]
+      // eslint-disable-next-line no-console
+      console.info('[TODO S6-3] 节点删除待清理资源（本期不真删，见方案 §4.4，后端接口就绪后再接）：', cleanup)
+    }
     // 分支段 owner 本身被删：连带整组分支
     const bgIdx = branchGroups.findIndex((bg) => bg.ownerId === id)
     if (bgIdx >= 0) {
@@ -947,6 +973,8 @@ export const useFlowStore = defineStore('flow', () => {
     main,
     branches,
     branchGroups,
+    // S6-3：删节点待清理资源清单（本期只收集不真删，见方案 §4.4）
+    pendingCleanup,
     // 代理状态（保持 API 不变）
     flowId,
     flowName,

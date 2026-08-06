@@ -151,12 +151,6 @@ function onStructuredConfig(e: Event) {
 function onContentRules(e: Event) {
   flow.setContentRules(id.value, (e.target as HTMLTextAreaElement).value)
 }
-function onRuleStructuredConfig(e: Event) {
-  patchRule({ structuredConfig: (e.target as HTMLTextAreaElement).value })
-}
-function onRuleContentRules(e: Event) {
-  patchRule({ contentRules: (e.target as HTMLTextAreaElement).value })
-}
 
 // ---- 数据表编辑弹窗（T2）----
 const tableDlg = reactive<{ open: boolean; tableId: string }>({ open: false, tableId: '' })
@@ -222,13 +216,6 @@ async function onSaveExecMeta() {
       :output-field-options="outputFieldOptions"
       @update:model-value="patchRule"
     />
-    <!-- 结构化配置（入库配置）+ 正文规则（0804 S3-1）：不透明文本，具体 schema 由执行端解释 -->
-    <div class="rc-field"><label>结构化配置（入库配置）</label>
-      <textarea class="rc-input" rows="2" placeholder="按输出表字段配置入库规则" :value="ruleCfg.structuredConfig" @input="onRuleStructuredConfig"></textarea>
-    </div>
-    <div class="rc-field"><label>正文规则</label>
-      <textarea class="rc-input" rows="2" placeholder="按输出字段配置处理规则，一行一条，如 content=trim" :value="ruleCfg.contentRules" @input="onRuleContentRules"></textarea>
-    </div>
     <div class="rc-actions-row">
       <button class="rc-btn primary" type="button" :disabled="savingRule" @click="onSaveRuleMeta">
         {{ savingRule ? '保存中...' : '保存并配置编排' }}

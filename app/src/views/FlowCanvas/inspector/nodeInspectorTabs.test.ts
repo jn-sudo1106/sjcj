@@ -12,12 +12,12 @@ const ruleNodeSaved = { title: '规则处理', kind: 'node', ruleCfg: { mode: 'r
 // 0804 拍板（决议 D5+D8）：规则节点与采集节点收敛成同一套 Tab；
 // 0805 改判（推翻 D17）：「参数配置」对非规则节点恢复，规则节点仍然没有（见 nodeInspectorTabs.ts 顶部注释）。
 describe('nodeInspectorTabs', () => {
-  it('ordinary node gets the unified tab set: config/table/params/orchestration/task/ai, nothing disabled', () => {
+  it('ordinary node gets the unified tab set: config/table/orchestration/params/task/ai, nothing disabled', () => {
     expect(nodeInspectorTabs(ordinaryNode)).toEqual([
       ['config', '节点配置'],
       ['table', '表配置'],
-      ['params', '参数配置'],
       ['orchestration', '编排配置'],
+      ['params', '参数配置'],
       ['task', '任务配置'],
       ['ai', 'AI 对话'],
     ])

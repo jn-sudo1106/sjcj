@@ -2,7 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 function jsonResponse(body: unknown) {
-  return { ok: true, status: 200, json: async () => body } as Response
+  // request() 现在先 res.text() 再 JSON.parse（client.ts 空响应体兜底），mock 也要跟着给 text()
+  return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) } as Response
 }
 
 describe('表 ID（实体表）API 旧平台 HTTP 契约', () => {

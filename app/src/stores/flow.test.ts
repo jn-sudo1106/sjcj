@@ -185,6 +185,23 @@ describe('两个独立采集节点 + 能力模型（0711 R7/R8）', () => {
     expect(f.configs[webId].collectCfg?.outputTable).toBe('custom_table_1')
     expect(f.configs[webId].taskCfg?.queue).toBe('custom_queue_1')
   })
+
+  it('S4-1：节点库存在网页登录，能插入主链，输出表可选（非固定）且自己不需要「登录」开关', () => {
+    const flat = LIB_GROUPS.flatMap((g) => g.items)
+    expect(flat.some((i) => i.template === 'login')).toBe(true)
+    expect(TEMPLATE_TO_NODE.login).toBe('login-collect')
+
+    const loginId = f.insertAfter('web-list', 'login')
+    expect(f.configs[loginId].collectCfg?.collectorKind).toBe('login')
+
+    const cap = collectorCapabilityOf(f.configs[loginId])!
+    expect(cap.outputMode).toBe('selectable')
+    expect(cap.supportsLogin).toBe(false)
+
+    // 输出表可选（非固定防线），跟普通网页抓取节点一样能自由编辑
+    f.patchCollect(loginId, { outputTable: 'login_session_table' })
+    expect(f.configs[loginId].collectCfg?.outputTable).toBe('login_session_table')
+  })
 })
 
 describe('队列默认值 + 节点启停（0710 会议 D1/D5）', () => {
@@ -874,6 +891,35 @@ describe('决策/分头分支段 store 操作（0707 Phase6·6.2）', () => {
     // chain 同步摘除（防止悬挂引用）
     const g = f.branchGroups.find((bg) => bg.ownerId === owner)!
     expect(g.branches[0].chain).not.toContain(child)
+  })
+
+  // S6-3（方案 §4.4）：技术指导明确"暂时别删"——本期删节点只收集待清理资源清单，不真的调删除接口。
+  it('remove(带 scriptPath/ruleId 的规则节点)：待清理清单记下 scriptPath + configId，节点仍正常删除', () => {
+    const id = f.insertAfter('start', 'rule')
+    f.patchRuleConfig(id, { mode: 'ref', ruleId: 'orch-173', scriptPath: '/rules/orch-173.py' })
+    expect(f.pendingCleanup).toHaveLength(0)
+
+    f.remove(id)
+
+    expect(f.configs[id]).toBeUndefined() // 节点本身照常删除，S6-3 不影响这条
+    expect(f.pendingCleanup).toHaveLength(1)
+    expect(f.pendingCleanup[0]).toMatchObject({ nodeId: id, scriptPath: '/rules/orch-173.py', configId: 'orch-173' })
+  })
+
+  it('remove(非规则节点，execCfg 带 scriptPath/ruleId)：同样记待清理清单', () => {
+    const id = f.insertAfter('start', 'web')
+    f.patchExecConfig(id, { mode: 'ref', ruleId: '184', scriptPath: '/x/184.xml' })
+
+    f.remove(id)
+
+    expect(f.pendingCleanup).toHaveLength(1)
+    expect(f.pendingCleanup[0]).toMatchObject({ nodeId: id, scriptPath: '/x/184.xml', configId: '184' })
+  })
+
+  it('remove(从没保存过业务规则/编排的节点)：没有 scriptPath/ruleId 就不记入清单', () => {
+    const id = f.insertAfter('start', 'web')
+    f.remove(id)
+    expect(f.pendingCleanup).toHaveLength(0)
   })
 
   it('validateFlow：决策节点缺条件时拦截（0707 Phase6 6.6）', () => {

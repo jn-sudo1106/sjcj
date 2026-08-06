@@ -52,8 +52,15 @@ function onRuntimeSettingsChange(patch: Partial<CollectorRuntimeSettings>) {
   flow.patchCollect(id.value, patch)
 }
 
-// 首采集节点判定：调度设置只在首采集节点展示（与原 NodeInspector 顶层逻辑一致）
-const isFirstCollectorNode = computed(() => !!cc.value && flow.main.find((nodeId: string) => !!flow.configs[nodeId]?.collectCfg) === id.value)
+// 首采集节点判定：调度设置只在首采集节点展示（与原 NodeInspector 顶层逻辑一致）。
+// S4-1 追加登录节点后修正：登录节点也带 collectCfg，但它不是"真正意义上的采集起点"——
+// 定时策略/参数子源这类"数据采集入口"专属配置得跳过登录节点，落在它后面第一个真正抓取数据的节点上，
+// 否则流程排成"登录→列表抓取"后，这些配置会挂到登录节点上，列表抓取节点反而丢了。
+function isRealCollectorNode(nodeId: string): boolean {
+  const c = flow.configs[nodeId]
+  return !!c?.collectCfg && collectorCapabilityOf(c)?.kind !== 'login'
+}
+const isFirstCollectorNode = computed(() => isRealCollectorNode(id.value) && flow.main.find(isRealCollectorNode) === id.value)
 
 // 参数子源：仅首节点 + 源是参数子源（source.kind === 'param'）时展示只读摘要
 const isParamSource = computed(() => flow.sourceCfg?.kind === 'param')
@@ -182,6 +189,16 @@ function onBizType(e: Event) {
           <button class="rc-input-action" type="button" title="打开" @click="ElMessage.info('打开链接（演示）')">↗</button>
         </div>
       </div>
+      <!-- 登录节点专属（S4-1，方案 §6.1）：账号/凭据是节点自己的核心字段，常显不折叠——
+           跟采集节点运行设置里已废弃的 needLogin 开关（CollectorSettings.vue）不是一回事，别混 -->
+      <template v-if="nodeCapability?.kind === 'login'">
+        <div class="rc-field"><label>登录账号</label>
+          <input class="rc-input" :value="cc.account" placeholder="登录用户名" @input="setCC('account', $event)" />
+        </div>
+        <div class="rc-field"><label>凭据引用</label>
+          <input class="rc-input" :value="cc.credentialRef" placeholder="凭据中心的引用 ID" @input="setCC('credentialRef', $event)" />
+        </div>
+      </template>
       <div v-if="!isAppCollect" class="rc-field"><label>网页类型</label>
         <select class="rc-select" :value="cc.webKind" @change="onWebKind">
           <option v-for="kind in WEB_KIND_OPTIONS" :key="kind.value" :value="kind.value">

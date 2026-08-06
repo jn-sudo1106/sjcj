@@ -2,7 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 function jsonResponse(body: unknown) {
-  return { ok: true, status: 200, json: async () => body } as Response
+  // request() 现在先 res.text() 再 JSON.parse（client.ts 空响应体兜底），mock 也要跟着给 text()
+  return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) } as Response
 }
 
 describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
@@ -63,13 +64,9 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
     vi.resetModules()
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ code: '0', data: null }))
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          records: [{ id: 180, ruleName: sampleCfg.name, targetTable: sampleCfg.inputTable }],
-        }),
-      } as Response)
+      .mockResolvedValueOnce(jsonResponse({
+        records: [{ id: 180, ruleName: sampleCfg.name, targetTable: sampleCfg.inputTable }],
+      }))
     const { ruleApi } = await import('./index')
 
     const result = await ruleApi.orchestrationSaveMeta(sampleCfg, 'ht_poc')

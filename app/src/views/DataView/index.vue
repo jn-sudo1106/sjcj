@@ -9,6 +9,7 @@ import {
   type EntryType, type Source,
 } from '../../api'
 import { useAuthStore } from '../../stores/auth'
+import DataQueryPanel, { type DataQueryColumn, type DataQueryFilter } from '@/components/DataQueryPanel.vue'
 import RowEditDialog from './RowEditDialog.vue'
 import SummaryDrawer from './SummaryDrawer.vue'
 import TaskInstDialog from './TaskInstDialog.vue'
@@ -22,17 +23,14 @@ import MoreSourcesDialog from './MoreSourcesDialog.vue'
 // 本文件覆盖检索区/工具条/批量条/动态列表格/分页/数据详情抽屉/手动添加/手动修改/统计/
 // 步骤展示（简化列表，无 DAG 图，见方案 §4.1 偏离决定）/任务实例弹窗/
 // 表结构详情·源详情（? 按钮）/加载更多数据表·更多源（方案 §1.3 补齐）。
+// S5-1（0805 拍板，方案 §5.2）：筛选表单（数据ID/父ID/状态/后续标识/ID区间/SQL）+ 结果表格本体
+// （动态列渲染/排序/分页/可选勾选列）已抽到 @/components/DataQueryPanel.vue，跟 RuleTestDialog（S5-2）
+// 共用；本文件只保留选表/选源/常用查询/工具条/批量操作业务逻辑/各弹窗，通过 query-change/loaded 事件
+// 镜像面板的筛选状态和查询结果，供 buildQuery()/统计/导出/批量发送等既有功能读取。
 const auth = useAuthStore()
 const canWrite = computed(() => auth.role === 'admin')
 const route = useRoute()
 
-const AUTO1_KEY = 'auto1'
-const STATE_OPTIONS = [
-  { value: 'C', label: 'C 初始' },
-  { value: 'AC', label: 'AC 已审核' },
-  { value: 'NF', label: 'NF 404' },
-  { value: 'E', label: 'E 出错' },
-]
 interface CommonQuery { label: string; sql: string; clearSource?: boolean }
 const COMMON_QUERIES: CommonQuery[] = [
   { label: '日新增', sql: 'CREATE_DT > CURDATE()' },
@@ -107,168 +105,63 @@ async function loadTableMeta() {
   tableMeta.value = tableId.value ? await dataApi.tableMeta(tableId.value) : null
 }
 
-// ---- 检索字段 ----
-const dataId = ref('')
-const parentId = ref('')
-const stateArray = ref<string[]>([])
-const nextFlag = ref('')
-const minId = ref('')
-const maxId = ref('')
-const sql = ref('')
-const sortField = ref('')
-const sortOrder = ref<'ascend' | 'descend' | ''>('')
-const advancedOpen = ref(false)
+// ---- 查询面板桥接（S5-1）：面板自己管筛选字段/结果/分页，这里只镜像它的输出，
+// 供 buildQuery()/统计/导出/批量发送/canSendAll 这些既有功能继续读 ----
+const panelRef = ref<InstanceType<typeof DataQueryPanel>>()
+const panelFilter = ref<DataQueryFilter>({ page: 1, size: 20 })
+const panelRows = ref<DataRow[]>([])
+const panelTotal = ref(0)
+// 动态列排序上限（total ≤ 500000 才开放，方案 §1.5-5）交给 DataQueryPanel 内部处理；ENTRY_ID/源/
+// 状态/更新/生成这几个固定列原本就不受这个限制（旧代码里 sortable="custom" 写死，没跟这条挂钩），
+// 所以这里不需要再算一份 allSort。
 
-const sqlHistory = ref<string[]>(readAuto1())
-function readAuto1(): string[] {
-  try {
-    const raw = JSON.parse(localStorage.getItem(AUTO1_KEY) || '[]')
-    return Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : []
-  } catch {
-    return []
-  }
-}
-function saveAuto1(value: string) {
-  if (!value.trim()) return
-  const list = [value, ...sqlHistory.value.filter((v) => v !== value)].slice(0, 20)
-  sqlHistory.value = list
-  localStorage.setItem(AUTO1_KEY, JSON.stringify(list))
-}
-function querySqlHistory(queryString: string, cb: (results: { value: string }[]) => void) {
-  cb(sqlHistory.value.filter((v) => v.includes(queryString)).map((v) => ({ value: v })))
-}
-
-// ---- 结果 / 分页 / 选择 ----
-const rows = ref<DataRow[]>([])
-const total = ref(0)
-const page = ref(1)
-const size = ref(20)
-const loading = ref(false)
-const selectedRowKeys = ref<string[]>([])
-
-const allChecked = computed(() => rows.value.length > 0 && selectedRowKeys.value.length === rows.value.length)
-const pageIndeterminate = computed(() => selectedRowKeys.value.length > 0 && selectedRowKeys.value.length < rows.value.length)
-function togglePage(val: boolean) {
-  selectedRowKeys.value = val ? rows.value.map((r) => r.dataId) : []
-}
-function toggleSelected(id: string, val: boolean) {
-  selectedRowKeys.value = val ? [...selectedRowKeys.value, id] : selectedRowKeys.value.filter((k) => k !== id)
-}
-
-function buildQuery(): RowQuery {
-  return {
-    tableId: tableId.value,
-    sourceId: sourceId.value || undefined,
-    dataId: dataId.value.trim() || undefined,
-    parentId: parentId.value.trim() || undefined,
-    state: stateArray.value.join(',') || undefined,
-    sql: sql.value.trim() || undefined,
-    nextFlag: nextFlag.value || undefined,
-    min: minId.value.trim() || undefined,
-    max: maxId.value.trim() || undefined,
-    sortField: sortField.value || undefined,
-    sortOrder: sortOrder.value || undefined,
-    page: page.value,
-    size: size.value,
-  }
-}
-
-async function loadRows() {
-  if (!tableId.value) return
-  loading.value = true
-  try {
-    const result = await dataApi.rowQueryPaged(buildQuery())
-    rows.value = result.list
-    total.value = result.total
-    selectedRowKeys.value = []
-  } catch (error) {
-    ElMessage.error(`查询失败:${String(error instanceof Error ? error.message : error).slice(0, 100)}`)
-  } finally {
-    loading.value = false
-  }
-}
-
-// canSendAll（方案 §1.4-2）：total ≤ 500000 且源/状态/SQL/nextFlag 条件自上次查询未变动
-// nextStepBatch 实际使用 sourceId/state/sql/nextFlag，签名只含这些字段；minId/maxId 不参与 batch 故不纳入
 const lastSignature = ref('')
 function querySignature() {
-  return JSON.stringify([sourceId.value, stateArray.value.join(','), sql.value, nextFlag.value])
+  return JSON.stringify([sourceId.value, panelFilter.value.state ?? '', panelFilter.value.sql ?? '', panelFilter.value.nextFlag ?? ''])
 }
-const canSendAll = computed(() => total.value <= 500000 && querySignature() === lastSignature.value)
-
-function onSearch() {
-  if (sql.value.trim()) saveAuto1(sql.value.trim())
-  page.value = 1
+function onPanelQueryChange(f: DataQueryFilter) {
+  panelFilter.value = f
   lastSignature.value = querySignature()
-  void loadRows()
 }
-function onRefresh() {
-  void loadRows()
+function onPanelLoaded(payload: { rows: DataRow[]; total: number }) {
+  panelRows.value = payload.rows
+  panelTotal.value = payload.total
 }
+// canSendAll（方案 §1.4-2）：total ≤ 500000 且源/状态/SQL/nextFlag 条件自上次查询未变动
+const canSendAll = computed(() => panelTotal.value <= 500000 && querySignature() === lastSignature.value)
+
+function buildQuery(): RowQuery {
+  return { tableId: tableId.value, sourceId: sourceId.value || undefined, ...panelFilter.value }
+}
+
+const selectedRowKeys = ref<string[]>([])
+
 async function onTableChange() {
   await loadTableMeta()
-  onSearch()
+  panelRef.value?.search()
 }
 async function onSourceChange() {
   await loadGroup()
-  onSearch()
+  panelRef.value?.search()
 }
 function applyCommonQuery(q: CommonQuery) {
-  sql.value = q.sql
   if (q.clearSource) {
     lastSourceId.value = sourceId.value
     sourceId.value = ''
   } else if (lastSourceId.value) {
     sourceId.value = lastSourceId.value
   }
-  onSearch()
+  panelRef.value?.search({ sql: q.sql })
 }
-function removeStateChip(value: string) {
-  stateArray.value = stateArray.value.filter((v) => v !== value)
-  onSearch()
-}
-function clearNextFlag() { nextFlag.value = ''; onSearch() }
-function clearParentId() { parentId.value = ''; onSearch() }
-function clearRange() { minId.value = ''; maxId.value = ''; onSearch() }
-
-const chips = computed(() => {
-  const list: { key: string; label: string; clear: () => void }[] = []
-  for (const s of stateArray.value) {
-    const opt = STATE_OPTIONS.find((o) => o.value === s)
-    list.push({ key: `state-${s}`, label: opt?.label ?? s, clear: () => removeStateChip(s) })
-  }
-  if (nextFlag.value) list.push({ key: 'nextFlag', label: `后续标识：${nextFlag.value}`, clear: clearNextFlag })
-  if (parentId.value) list.push({ key: 'parentId', label: `父ID：${parentId.value}`, clear: clearParentId })
-  if (minId.value || maxId.value) {
-    list.push({ key: 'range', label: `ID区间：${minId.value || '不限'}－${maxId.value || '不限'}`, clear: clearRange })
-  }
-  return list
-})
-
-function onSortChange({ prop, order }: { prop: string; order: 'ascending' | 'descending' | null }) {
-  if (!order) {
-    sortField.value = ''
-    sortOrder.value = ''
-  } else {
-    sortField.value = prop
-    sortOrder.value = order === 'descending' ? 'descend' : 'ascend'
-  }
-  onSearch()
-}
-// 动态列排序仅当 total ≤ 500000 时开放（方案 §1.5-5）
-const allSort = computed(() => total.value <= 500000)
-
-function onPageChange() { void loadRows() }
-function onSizeChange() { page.value = 1; void loadRows() }
 
 // ---- 展示 SQL（方案 §1.4-6，本地拼接，不发请求） ----
 const showSql = ref(false)
 const sqlPreview = computed(() => {
   let s = `select * from ${tableMeta.value?.tableName ?? ''} where 1=1`
-  if (dataId.value.trim()) s += ` and entry_id in (${dataId.value.trim()})`
+  if (panelFilter.value.dataId) s += ` and entry_id in (${panelFilter.value.dataId})`
   if (sourceId.value) s += ` and source_id=${sourceId.value}`
-  if (stateArray.value.length) s += ` and state in (${stateArray.value.map((v) => `'${v}'`).join(',')})`
-  if (sql.value.trim()) s += ` and ${sql.value.trim()}`
+  if (panelFilter.value.state) s += ` and state in (${panelFilter.value.state.split(',').map((v) => `'${v}'`).join(',')})`
+  if (panelFilter.value.sql) s += ` and ${panelFilter.value.sql}`
   return s
 })
 
@@ -293,7 +186,7 @@ async function confirmDanger(
     const r = await run()
     const message = r && typeof r === 'object' && 'message' in r ? (r as { message?: string }).message : undefined
     ElMessage.success(message || successFallback || '操作成功')
-    await loadRows()
+    await panelRef.value?.refresh()
   } catch (error) {
     ElMessage.error(`操作失败：${error instanceof Error ? error.message : String(error)}`)
   }
@@ -429,12 +322,12 @@ function onNextStepSelected() {
     .catch((err) => ElMessage.error(`发送失败,原因: [${err instanceof Error ? err.message : String(err)}]`))
 }
 function onNextStepAll() {
-  const body = `[实验性] 批量发送当前条件下全部后续任务?  条件: [ {源:${sourceId.value || '不限'} && 状态:${stateArray.value.join(',') || '不限'} && ...} ]`
+  const body = `[实验性] 批量发送当前条件下全部后续任务?  条件: [ {源:${sourceId.value || '不限'} && 状态:${panelFilter.value.state || '不限'} && ...} ]`
   ElMessageBox.confirm(body, '提示', { type: 'warning' }).then(async () => {
     try {
       const r = await dataApi.nextStepBatch({
-        tableId: tableId.value, sourceId: sourceId.value || undefined, state: stateArray.value.join(',') || undefined,
-        size: 500000, start: 0, nextFlag: nextFlag.value || undefined, cond: sql.value || undefined,
+        tableId: tableId.value, sourceId: sourceId.value || undefined, state: panelFilter.value.state,
+        size: 500000, start: 0, nextFlag: panelFilter.value.nextFlag, cond: panelFilter.value.sql,
       })
       ElMessage.success(`发送成功:${r.message ?? ''}`)
     } catch (err) {
@@ -443,7 +336,7 @@ function onNextStepAll() {
   }).catch(() => {})
 }
 async function onNextStepPage() {
-  const ids = rows.value.map((r) => r.dataId)
+  const ids = panelRows.value.map((r) => r.dataId)
   if (!ids.length) {
     ElMessage.warning('本页无数据')
     return
@@ -451,8 +344,7 @@ async function onNextStepPage() {
   try {
     const r = await dataApi.nextStep(sourceId.value, tableId.value, ids)
     ElMessage.success(`发送成功:${r.message ?? ''}, 将自动跳转到下一页`)
-    page.value += 1
-    await loadRows()
+    panelRef.value?.advancePage()
   } catch (err) {
     ElMessage.error(`发送失败,原因: [${err instanceof Error ? err.message : String(err)}]`)
   }
@@ -468,8 +360,8 @@ const yNextFlag = ref('')
 const yCond = ref('')
 function openYellowPanel() {
   yellowOpen.value = true
-  if (!yEnd.value && rows.value.length) {
-    yEnd.value = String(Math.max(...rows.value.map((r) => Number(r.dataId) || 0)))
+  if (!yEnd.value && panelRows.value.length) {
+    yEnd.value = String(Math.max(...panelRows.value.map((r) => Number(r.dataId) || 0)))
   }
 }
 function onSendYellowBatch() {
@@ -543,24 +435,19 @@ function openRawJson(row: DataRow) {
   window.open(`/api/v1/readJson?${params}`, '_blank')
 }
 
-// ---- 动态列（方案 §1.5-3：required 前 20 个，宽度 120×0.9／140×0.9） ----
+// ---- 动态列（方案 §1.5-3：required 前 20 个，宽度 120×0.9／140×0.9）→ 面板 columns prop ----
 const dynamicColumns = computed(() => (tableMeta.value?.fields ?? []).filter((f) => f.required).slice(0, 20))
 function columnWidth(desc: string) {
   const base = /区间|时间|日期|周期/.test(desc) ? 140 : 120
   return Math.round(base * 0.9)
 }
-function cellKind(prop: string, desc: string, value: unknown): 'link' | 'minio' | 'text' {
-  const v = String(value ?? '')
-  if (!v) return 'text'
-  if (/^https?:/.test(v)) return 'link'
-  if ((prop.includes('path') || prop.includes('minio') || /地址|路径|图片/.test(desc)) && v.startsWith('/')) return 'minio'
-  return 'text'
-}
-function minioUrl(value: string) {
-  // OSS 端口走环境变量，默认 9102（演示环境）
-  const ossPort = import.meta.env.VITE_OSS_PORT || '9102'
-  return `http://${location.hostname}:${ossPort}/api/oss/download?fileId=${encodeURIComponent(value)}`
-}
+const panelColumns = computed<DataQueryColumn[]>(() => dynamicColumns.value.map((f) => ({
+  prop: f.columnName ?? f.prop,
+  label: `${f.desc}-${f.columnName}`,
+  width: columnWidth(f.desc),
+  sortable: true,
+  hintProp: f.prop,
+})))
 function formatDateTime(value?: string) {
   return value ? value.slice(0, 16) : '—'
 }
@@ -599,13 +486,13 @@ onMounted(async () => {
   await loadGroup()
   if (typeof etQuery === 'string' && etQuery) tableId.value = etQuery
   await loadTableMeta()
-  onSearch()
+  panelRef.value?.search()
 })
 </script>
 
 <template>
   <div class="rc-card dv-page">
-    <!-- 检索主行 -->
+    <!-- 检索主行：选表/选源/常用查询（选表/选源不在 DataQueryPanel 职责内，见组件头注释） -->
     <div class="rc-toolbar wrap">
       <el-select v-model="tableId" filterable placeholder="选择数据表" style="width: 220px" @change="onTableChange">
         <el-option-group label="main">
@@ -637,13 +524,7 @@ onMounted(async () => {
       <button class="rc-btn dv-help-btn" type="button" title="源详情" @click="openSourceDetail">
         <el-icon><QuestionFilled /></el-icon>
       </button>
-      <el-input v-model="dataId" clearable placeholder="请输入数据 ID" style="width: 160px" @keyup.enter="onSearch" />
-      <button class="rc-btn primary" type="button" @click="onSearch">查询</button>
       <span class="dv-spacer" />
-      <span class="dv-link" @click="advancedOpen = !advancedOpen">
-        高级筛选<el-icon class="et-caret"><ArrowDown /></el-icon>
-      </span>
-      <el-divider direction="vertical" />
       <el-dropdown trigger="click" @command="applyCommonQuery">
         <span class="dv-link">常用查询<el-icon class="et-caret"><ArrowDown /></el-icon></span>
         <template #dropdown>
@@ -654,130 +535,94 @@ onMounted(async () => {
       </el-dropdown>
     </div>
 
-    <!-- 筛选芯片行：无筛选条件时不占位；只有几个小标签，不需要跟其他工具条一样高 -->
-    <div v-if="chips.length" class="rc-toolbar wrap dv-chips-row">
-      <el-tag v-for="c in chips" :key="c.key" closable size="small" effect="plain" @close="c.clear">{{ c.label }}</el-tag>
-    </div>
-
-    <!-- 高级筛选折叠面板 -->
-    <div v-if="advancedOpen" class="rc-toolbar wrap">
-      <el-input v-model="parentId" clearable placeholder="父 ID" style="width: 120px" @keyup.enter="onSearch" />
-      <el-checkbox-group v-model="stateArray" @change="onSearch">
-        <el-checkbox-button v-for="o in STATE_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</el-checkbox-button>
-      </el-checkbox-group>
-      <el-input v-model="nextFlag" clearable placeholder="后续标识（如 -1）" style="width: 150px" @keyup.enter="onSearch" />
-      <span class="dv-range">
-        <el-input v-model="minId" placeholder="起始 ID" style="width: 100px" @keyup.enter="onSearch" />
-        <span class="dv-range-sep">－</span>
-        <el-input v-model="maxId" placeholder="终止 ID" style="width: 100px" @keyup.enter="onSearch" />
-      </span>
-      <el-autocomplete
-        v-model="sql"
-        :fetch-suggestions="querySqlHistory"
-        clearable
-        placeholder="SQL 条件，如 CREATE_DT > CURDATE()"
-        style="width: 320px"
-        @keyup.enter="onSearch"
-      />
-    </div>
-
-    <!-- 工具条 -->
-    <div class="rc-toolbar wrap">
-      <button class="rc-btn" type="button" @click="onRefresh">刷新</button>
-      <button class="rc-btn" type="button" @click="showSql = !showSql">展示SQL</button>
-      <button class="rc-btn" type="button" @click="onExport">导出EXCEL</button>
-      <button class="rc-btn" type="button" @click="summaryOpen = true">统计</button>
-      <template v-if="canWrite">
-        <button class="rc-btn" type="button" @click="openAdd">手动添加</button>
-        <el-dropdown v-if="isTestTable" trigger="click">
-          <button class="rc-btn danger" type="button">删除数据<el-icon class="et-caret"><ArrowDown /></el-icon></button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item :disabled="!selectedRowKeys.length" @click="onDeleteSelected">删除选中的数据</el-dropdown-item>
-              <el-dropdown-item divided @click="onDeleteByRange(0, 'source')">删除该源-当日</el-dropdown-item>
-              <el-dropdown-item @click="onDeleteByRange(1, 'source')">删除该源-所有</el-dropdown-item>
-              <el-dropdown-item @click="onDeleteByIds">填入IDs-删除</el-dropdown-item>
-              <el-dropdown-item divided @click="onMarkFormal">设为正式表</el-dropdown-item>
-              <el-dropdown-item @click="onDeleteByRange(0, 'all')">清空表数据【当日】</el-dropdown-item>
-              <el-dropdown-item @click="onDeleteByRange(1, 'all')">清空表数据【全量】</el-dropdown-item>
-            </el-dropdown-menu>
+    <!-- S5-1：筛选表单（数据ID/父ID/状态/后续标识/ID区间/SQL）+ 结果表格本体，见 DataQueryPanel.vue -->
+    <DataQueryPanel
+      ref="panelRef"
+      :table-id="tableId"
+      :source-id="sourceId"
+      :columns="panelColumns"
+      :selectable="canWrite"
+      v-model:selected-keys="selectedRowKeys"
+      @query-change="onPanelQueryChange"
+      @loaded="onPanelLoaded"
+    >
+      <template #toolbar>
+        <!-- 工具条 -->
+        <div class="rc-toolbar wrap">
+          <button class="rc-btn" type="button" @click="panelRef?.refresh()">刷新</button>
+          <button class="rc-btn" type="button" @click="showSql = !showSql">展示SQL</button>
+          <button class="rc-btn" type="button" @click="onExport">导出EXCEL</button>
+          <button class="rc-btn" type="button" @click="summaryOpen = true">统计</button>
+          <template v-if="canWrite">
+            <button class="rc-btn" type="button" @click="openAdd">手动添加</button>
+            <el-dropdown v-if="isTestTable" trigger="click">
+              <button class="rc-btn danger" type="button">删除数据<el-icon class="et-caret"><ArrowDown /></el-icon></button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item :disabled="!selectedRowKeys.length" @click="onDeleteSelected">删除选中的数据</el-dropdown-item>
+                  <el-dropdown-item divided @click="onDeleteByRange(0, 'source')">删除该源-当日</el-dropdown-item>
+                  <el-dropdown-item @click="onDeleteByRange(1, 'source')">删除该源-所有</el-dropdown-item>
+                  <el-dropdown-item @click="onDeleteByIds">填入IDs-删除</el-dropdown-item>
+                  <el-dropdown-item divided @click="onMarkFormal">设为正式表</el-dropdown-item>
+                  <el-dropdown-item @click="onDeleteByRange(0, 'all')">清空表数据【当日】</el-dropdown-item>
+                  <el-dropdown-item @click="onDeleteByRange(1, 'all')">清空表数据【全量】</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <el-dropdown trigger="click">
+              <button class="rc-btn" type="button">工具<el-icon class="et-caret"><ArrowDown /></el-icon></button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item @click="onDistinctSource">提取去重后源 ID</el-dropdown-item>
+                  <el-dropdown-item @click="openStepDrawer">展示步骤</el-dropdown-item>
+                  <el-dropdown-item divided @click="onClearParent">A.清除-父表-后续标识</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </template>
-        </el-dropdown>
-        <el-dropdown trigger="click">
-          <button class="rc-btn" type="button">工具<el-icon class="et-caret"><ArrowDown /></el-icon></button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item @click="onDistinctSource">提取去重后源 ID</el-dropdown-item>
-              <el-dropdown-item @click="openStepDrawer">展示步骤</el-dropdown-item>
-              <el-dropdown-item divided @click="onClearParent">A.清除-父表-后续标识</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+          <span class="dv-spacer" />
+          <!-- 常显上下文 tag（方案 §1.4-6） -->
+          <span v-if="sourceId" class="rc-mini-card">源:{{ sourceId }}</span>
+          <span v-if="tableMeta?.tableName" class="rc-mini-card">表:{{ tableMeta.tableName.split('.').pop() }}</span>
+        </div>
+        <div v-if="showSql" class="dv-sql-tip">{{ sqlPreview }}</div>
+
+        <!-- 选中批量条 -->
+        <div v-if="canWrite && selectedRowKeys.length" class="dv-batch">
+          <span class="dv-batch-count">已选择 <b>{{ selectedRowKeys.length }}</b> 项</span>
+          <button class="rc-btn primary" type="button" @click="onNextStepSelected">发后续任务</button>
+          <el-dropdown trigger="click">
+            <span class="dv-link">更多批量操作<el-icon class="et-caret"><ArrowDown /></el-icon></span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item :disabled="!canSendAll" @click="onNextStepAll">发全部后续(当前条件下所有)</el-dropdown-item>
+                <el-dropdown-item @click="onNextStepPage">发本页任务</el-dropdown-item>
+                <el-dropdown-item divided @click="openYellowPanel">发大量后续...</el-dropdown-item>
+                <el-dropdown-item v-if="isTestTable" divided @click="onDeleteSelected">删除选中的数据</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <span class="dv-spacer" />
+          <span class="dv-link" @click="selectedRowKeys = []">取消选择</span>
+        </div>
+
+        <!-- 发大量后续黄色面板 -->
+        <div v-if="yellowOpen" class="dv-yellow">
+          <div class="dv-yellow-row">
+            <label>从该ID起<el-input v-model="yStart" style="width: 100px" /></label>
+            <label>至该ID止<el-input v-model="yEnd" style="width: 100px" /></label>
+            <label>发送数量(1-1W条)<el-input v-model="ySize" style="width: 100px" /></label>
+            <label>状态过滤<el-input v-model="yState1" placeholder="表中state列" style="width: 110px" /></label>
+            <label>后续标识<el-input v-model="yNextFlag" placeholder="-1未抓后续，1已抓" style="width: 130px" /></label>
+            <label>自定SQL条件<el-input v-model="yCond" placeholder="如 K1 IS NULL" style="width: 160px" /></label>
+            <button class="rc-btn danger" type="button" @click="onSendYellowBatch">批量发后续</button>
+          </div>
+          <!-- 参考API（方案 §1.4-2）：展示 nextStep2 拼接 URL 供运营核对 -->
+          <div class="dv-yellow-api">参考API: POST /api/v1/source/nextStep2 (AES, timeout 180s)</div>
+        </div>
       </template>
-      <span class="dv-spacer" />
-      <!-- 常显上下文 tag（方案 §1.4-6） -->
-      <span v-if="sourceId" class="rc-mini-card">源:{{ sourceId }}</span>
-      <span v-if="tableMeta?.tableName" class="rc-mini-card">表:{{ tableMeta.tableName.split('.').pop() }}</span>
-    </div>
-    <div v-if="showSql" class="dv-sql-tip">{{ sqlPreview }}</div>
 
-    <!-- 选中批量条 -->
-    <div v-if="canWrite && selectedRowKeys.length" class="dv-batch">
-      <el-checkbox :model-value="allChecked" :indeterminate="pageIndeterminate" @change="togglePage" />
-      <span class="dv-batch-count">已选择 <b>{{ selectedRowKeys.length }}</b> 项</span>
-      <button class="rc-btn primary" type="button" @click="onNextStepSelected">发后续任务</button>
-      <el-dropdown trigger="click">
-        <span class="dv-link">更多批量操作<el-icon class="et-caret"><ArrowDown /></el-icon></span>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <el-dropdown-item :disabled="!canSendAll" @click="onNextStepAll">发全部后续(当前条件下所有)</el-dropdown-item>
-            <el-dropdown-item @click="onNextStepPage">发本页任务</el-dropdown-item>
-            <el-dropdown-item divided @click="openYellowPanel">发大量后续...</el-dropdown-item>
-            <el-dropdown-item v-if="isTestTable" divided @click="onDeleteSelected">删除选中的数据</el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
-      <span class="dv-spacer" />
-      <span class="dv-link" @click="selectedRowKeys = []">取消选择</span>
-    </div>
-
-    <!-- 发大量后续黄色面板 -->
-    <div v-if="yellowOpen" class="dv-yellow">
-      <div class="dv-yellow-row">
-        <label>从该ID起<el-input v-model="yStart" style="width: 100px" /></label>
-        <label>至该ID止<el-input v-model="yEnd" style="width: 100px" /></label>
-        <label>发送数量(1-1W条)<el-input v-model="ySize" style="width: 100px" /></label>
-        <label>状态过滤<el-input v-model="yState1" placeholder="表中state列" style="width: 110px" /></label>
-        <label>后续标识<el-input v-model="yNextFlag" placeholder="-1未抓后续，1已抓" style="width: 130px" /></label>
-        <label>自定SQL条件<el-input v-model="yCond" placeholder="如 K1 IS NULL" style="width: 160px" /></label>
-        <button class="rc-btn danger" type="button" @click="onSendYellowBatch">批量发后续</button>
-      </div>
-      <!-- 参考API（方案 §1.4-2）：展示 nextStep2 拼接 URL 供运营核对 -->
-      <div class="dv-yellow-api">参考API: POST /api/v1/source/nextStep2 (AES, timeout 180s)</div>
-    </div>
-
-    <!-- 动态列表格 -->
-    <div v-loading="loading" class="rc-table-scroll dv-table">
-      <el-table
-        :data="rows"
-        style="width: 100%"
-        show-overflow-tooltip
-        empty-text="没有查询到符合条件的记录"
-        :header-cell-style="{ height: '42px', background: '#f8fafc', color: 'var(--rc-text-2)', fontWeight: '700', fontSize: '12px', borderBottom: '1px solid #e8eef6' }"
-        @sort-change="onSortChange"
-      >
-        <el-table-column v-if="canWrite" width="42" fixed="left">
-          <template #header>
-            <el-checkbox :model-value="allChecked" :indeterminate="pageIndeterminate" aria-label="选择本页" @change="togglePage" />
-          </template>
-          <template #default="{ row }">
-            <el-checkbox
-              :model-value="selectedRowKeys.includes(row.dataId)"
-              :aria-label="`选择 ${row.dataId}`"
-              @change="(val: boolean) => toggleSelected(row.dataId, val)"
-            />
-          </template>
-        </el-table-column>
+      <template #columns-before>
         <el-table-column prop="dataId" label="ENTRY_ID" width="105" fixed="left" sortable="custom">
           <template #default="{ row }"><a class="dv-a" @click="openDetail(row)">{{ row.dataId }}</a></template>
         </el-table-column>
@@ -787,24 +632,9 @@ onMounted(async () => {
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column
-          v-for="f in dynamicColumns"
-          :key="f.columnName"
-          :prop="f.columnName"
-          :label="`${f.desc}-${f.columnName}`"
-          :width="columnWidth(f.desc)"
-          :sortable="allSort ? 'custom' : false"
-        >
-          <template #default="{ row }">
-            <template v-if="cellKind(f.prop, f.desc, row.values?.[f.columnName!]) === 'link'">
-              <a class="dv-a" :href="String(row.values?.[f.columnName!])" target="_blank" rel="noopener">{{ row.values?.[f.columnName!] }}</a>
-            </template>
-            <template v-else-if="cellKind(f.prop, f.desc, row.values?.[f.columnName!]) === 'minio'">
-              <a class="dv-a" :href="minioUrl(String(row.values?.[f.columnName!]))" target="_blank" rel="noopener">{{ row.values?.[f.columnName!] }}</a>
-            </template>
-            <span v-else>{{ row.values?.[f.columnName!] ?? '—' }}</span>
-          </template>
-        </el-table-column>
+      </template>
+
+      <template #columns-after>
         <el-table-column prop="state" label="状态" width="70" sortable="custom">
           <template #default="{ row }">{{ row.state || '—' }}</template>
         </el-table-column>
@@ -858,21 +688,8 @@ onMounted(async () => {
             </span>
           </template>
         </el-table-column>
-      </el-table>
-    </div>
-    <div class="dv-pager">
-      <el-pagination
-        v-model:current-page="page"
-        v-model:page-size="size"
-        :total="total"
-        :page-sizes="[20, 40, 100, 200]"
-        layout="total, sizes, prev, pager, next, jumper"
-        background
-        small
-        @current-change="onPageChange"
-        @size-change="onSizeChange"
-      />
-    </div>
+      </template>
+    </DataQueryPanel>
 
     <!-- 数据详情抽屉（只读） -->
     <el-drawer v-model="detail.visible" title="数据表详情" size="480px">
@@ -897,7 +714,7 @@ onMounted(async () => {
       :table-meta="tableMeta"
       :mode="editor.mode"
       :row="editor.row"
-      :first-row="rows[0] ?? null"
+      :first-row="panelRows[0] ?? null"
     />
 
     <!-- 统计（方案 §1.6-4） -->
@@ -952,14 +769,6 @@ onMounted(async () => {
   margin-left: 4px;
   font-size: 12px;
 }
-.dv-range {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.dv-range-sep {
-  color: var(--rc-faint);
-}
 .dv-sql-tip {
   padding: 8px 16px;
   border-bottom: 1px solid var(--rc-border-soft);
@@ -1009,32 +818,6 @@ onMounted(async () => {
   color: var(--rc-muted);
   font-family: var(--rc-mono, monospace);
 }
-.dv-table {
-  flex: 1;
-}
-/* 方案 §1.5-1：行高 40；配合 show-overflow-tooltip 单行截断，避免长文本撑高行高 */
-.dv-table :deep(.el-table .cell) {
-  white-space: nowrap;
-}
-.dv-table :deep(.el-table td.el-table__cell),
-.dv-table :deep(.el-table th.el-table__cell) {
-  padding: 8px 0;
-  font-size: 12px;
-}
-/* el-table 默认正文色比 .rc-data-table（参数/表ID页）浅，统一成同一个色值 */
-.dv-table :deep(.el-table td.el-table__cell) {
-  color: #334155;
-}
-/* 悬停背景跟 .rc-data-table（参数/表ID页用的表格）保持一致 */
-.dv-table :deep(.el-table__body tr:hover > td) {
-  background: #f8fbff;
-}
-/* 筛选芯片行只放几个小标签，不需要跟检索行/工具条一样高 */
-.dv-chips-row {
-  min-height: 0;
-  padding-top: 8px;
-  padding-bottom: 8px;
-}
 .dv-a {
   color: var(--rc-primary-ink);
   cursor: pointer;
@@ -1046,12 +829,6 @@ onMounted(async () => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-}
-.dv-pager {
-  display: flex;
-  justify-content: flex-end;
-  padding: 10px 16px;
-  border-top: 1px solid var(--rc-border-soft);
 }
 .dv-section {
   margin: 16px 0 8px;
