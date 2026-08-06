@@ -108,10 +108,14 @@ export interface NodeConfig {
   contentRules?: string
   /** 非采集类节点的输入表（采集类沿用 collectCfg.inputTable）；空 = 自动继承上游节点输出表，显式设置即覆盖（0701 问题五） */
   inputTable?: string
+  /** 表配置中已选的输入字段；未设置时默认使用输入表全部字段。 */
+  inputFields?: string[]
   /** 节点进入条件：语义为本节点只处理满足条件的输入表行 */
   entryCondition?: ConditionGroup
   /** 任务级配置（队列/URL规则/拼接逻辑/触发条件），采集与非采集节点共用同一处（0706 调整4·任务配置独立化） */
   taskCfg?: TaskConfig
+  /** 节点级定时策略：所有有执行语义的节点共用；旧采集/Source 字段仅作兼容读取。 */
+  schedule?: CollectorSchedule
   /** 规则处理节点编排配置（0707 Phase 9：规则引擎 rule-orchestration） */
   ruleCfg?: RuleOrchestration
   /**

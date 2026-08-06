@@ -12,10 +12,12 @@ import { flowToXml } from '@/utils/flow/flowXml'
 import {
   iconFor,
   isDataNode,
+  isRuleNode,
   isDecision,
   isParallel,
   nodeClassFor,
   nodeOutputTable,
+  collectorCapabilityOf,
   type NodeConfig,
 } from './flowModel'
 
@@ -24,6 +26,7 @@ const runtime = useRuntimeStore()
 const ui = useUiStore()
 const flowEl = ref<HTMLElement | null>(null)
 const canvasScrollEl = ref<HTMLElement | null>(null)
+let canvasResizeObserver: ResizeObserver | null = null
 const xmlOpen = ref(false)
 const xml = computed(() => (xmlOpen.value ? flowToXml(flow.serialize()) : ''))
 const canExportXml = computed(() => !flow.dirty && flow.validateFlow().length === 0)
@@ -105,10 +108,12 @@ function runText(id: string) {
 }
 // 节点运行状态语义（0703 问题九）：待配置 → 运行 ↔ 停止；"运行"即业务口中"配置完成、点启动进入运行"的状态，
 // "停止"即"数据在此节点不处理"——均为纯文案层，disabled 字段名/序列化结构不变。
-// 与 runtime.isRunnable 同源判定：数据类节点（采集或非采集）只要输出表位都视为「待配置」。
+// 与 runtime.isRunnable 同源判定：登录和规则节点按各自能力判断，不能只看输出表。
 function footFor(cfg: NodeConfig) {
   const configured = cfg.collectCfg
-    ? !!(cfg.collectCfg.url && cfg.collectCfg.outputTable)
+    ? !!(cfg.collectCfg.url && (collectorCapabilityOf(cfg)?.kind === 'login' || cfg.collectCfg.outputTable))
+    : isRuleNode(cfg)
+      ? !!(cfg.ruleCfg?.ruleId && cfg.ruleCfg.script?.trim())
     : isDataNode(cfg) && !!nodeOutputTable(cfg)
   const left = cfg.disabled
     ? '已停止'
@@ -291,22 +296,29 @@ function onWindowClick() {
   if (addPop.show) closeAddPopover()
   if (nodePalette.show) closeNodePalette()
 }
+async function centerCanvas() {
+  await nextTick()
+  await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+  const el = canvasScrollEl.value
+  if (!el) return
+  el.scrollLeft = Math.max(0, (el.scrollWidth - el.clientWidth) / 2)
+}
 onMounted(() => {
   window.addEventListener('click', onWindowClick)
+  void centerCanvas()
+  canvasResizeObserver = new ResizeObserver(() => void centerCanvas())
+  if (canvasScrollEl.value) canvasResizeObserver.observe(canvasScrollEl.value)
 })
-onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
+onBeforeUnmount(() => {
+  window.removeEventListener('click', onWindowClick)
+  canvasResizeObserver?.disconnect()
+})
 
 // 展开配置区后画布变窄，固定宽度的 .rc-flow 可能超出可视区域（0703 反馈）：
 // 展开宽度维持原样，改为把画布滚动条居中，保证默认就能看到节点，而不是贴左露一半
 watch(
   () => ui.inspectorExpanded,
-  async (expanded) => {
-    if (!expanded) return
-    await nextTick()
-    const el = canvasScrollEl.value
-    if (!el) return
-    el.scrollLeft = Math.max(0, (el.scrollWidth - el.clientWidth) / 2)
-  },
+  () => void centerCanvas(),
 )
 </script>
 
@@ -492,7 +504,7 @@ watch(
 .rc-node-library-toggle { position: absolute; z-index: 31; top: 108px; left: 12px; width: 30px; height: 30px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; color: var(--rc-primary); font-size: 21px; font-weight: 400; line-height: 1; cursor: pointer; transition: border-color .12s, background .12s, color .12s; }
 .rc-node-library-toggle:hover, .rc-node-library-toggle.active { border-color: #93c5fd; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 
-.rc-flow { position: relative; width: 640px; margin: 56px auto 28px 24px; }
+.rc-flow { position: relative; width: 640px; margin: 56px auto 28px; }
 .rc-flow svg { position: absolute; inset: 0; pointer-events: none; }
 .rc-edge { fill: none; stroke: #cbd5e1; stroke-width: 1.6; }
 .rc-edge.rule { stroke: #60a5fa; stroke-dasharray: 5 4; }

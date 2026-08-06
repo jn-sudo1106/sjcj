@@ -167,11 +167,9 @@ describe('ConfigTab · 网页登录节点专属字段（S4-1）', () => {
   })
 })
 
-// S4-1 遗留修复：isFirstCollectorNode 之前按"主链第一个带 collectCfg 的节点"判定，登录节点也带
-// collectCfg，流程排成「登录→列表抓取」后会把"首采集节点"专属配置（定时策略/参数子源）错误地
-// 挂到登录节点上。改成跳过 collectorKind === 'login'，跟登录节点讨论时一起拍板（见 ConfigTab.vue:56）。
-describe('ConfigTab · 首采集节点判定跳过登录节点（S4-1 遗留修复）', () => {
-  it('登录→列表抓取：定时策略折叠区展示在列表抓取节点，不是登录节点', async () => {
+// S4-1：定时策略已从首采集节点解绑，节点配置中的独立折叠区对登录和列表节点都存在。
+describe('ConfigTab · 节点级定时策略', () => {
+  it('登录→列表抓取：定时策略独立展示在两个节点的节点配置中', async () => {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
@@ -182,15 +180,13 @@ describe('ConfigTab · 首采集节点判定跳过登录节点（S4-1 遗留修�
     flow.setActiveTab('config')
     const webWrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
     await flushPromises()
-    await webWrapper.find('.cs-toggle').trigger('click')
-    expect(webWrapper.find('.tss-wrap').exists()).toBe(true)
+    expect(webWrapper.find('.ni-schedule').exists()).toBe(true)
 
     const loginId = flow.main.find((id) => flow.configs[id]?.collectCfg?.collectorKind === 'login')!
     flow.select(loginId)
     flow.setActiveTab('config')
     const loginWrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
     await flushPromises()
-    await loginWrapper.find('.cs-toggle').trigger('click')
-    expect(loginWrapper.find('.tss-wrap').exists()).toBe(false)
+    expect(loginWrapper.find('.ni-schedule').exists()).toBe(true)
   })
 })

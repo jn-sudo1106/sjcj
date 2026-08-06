@@ -124,12 +124,17 @@ const connectorPaths = computed(() => {
 
 <style scoped>
 .af {
+  width: 100%;
+  min-width: 0;
   min-height: 320px;
+  overflow: hidden;
   background: linear-gradient(180deg, #ffffff 0%, #f7fbff 66%, #f2f9ff 100%);
 }
 
 .af-stage {
   position: relative;
+  width: 100%;
+  min-width: 0;
   min-height: 320px;
   overflow: hidden;
   isolation: isolate;

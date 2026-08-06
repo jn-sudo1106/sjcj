@@ -242,7 +242,38 @@ const displayKpis = computed<Kpi[]>(() => {
 
 @media (max-width: 1480px) {
   .ov-kpis {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .ov-kpi {
+    min-height: 96px;
+    padding: 14px 10px;
+    gap: 6px;
+  }
+
+  .ov-kpi-label {
+    font-size: 12px;
+  }
+
+  .ov-kpi-val {
+    margin: 7px 0 6px;
+    font-size: 24px;
+  }
+
+  .ov-delta {
+    font-size: 11px;
+    line-height: 1.3;
+  }
+
+  .ov-delta b {
+    margin-left: 4px;
+  }
+
+  .ov-kpi-icon {
+    width: 40px;
+    height: 40px;
+    font-size: 20px;
   }
 }
 

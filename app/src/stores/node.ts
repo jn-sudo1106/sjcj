@@ -3,7 +3,6 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import {
-  isFirstMainNode,
   emptyTripleRow,
   setTripleValue,
   collectorCapabilityOf,
@@ -11,6 +10,7 @@ import {
   makeDefaultExecConfig,
   type NodeConfig,
   type CollectConfig,
+  type CollectorSchedule,
   type ConditionGroup,
   type TaskConfig,
   type TripleField,
@@ -33,11 +33,12 @@ export const useNodeStore = defineStore('node', () => {
 
   // 这些需要从 flow store 获取
   let configs: Record<string, NodeConfig> = {}
-  let getMain: () => string[] = () => []
+  let getEffectiveInputTable: (id: string) => string = (id) => configs[id]?.collectCfg?.inputTable || configs[id]?.inputTable || ''
 
-  function bindFlowStore(flowConfigs: Record<string, NodeConfig>, flowMainGetter: () => string[]) {
+  function bindFlowStore(flowConfigs: Record<string, NodeConfig>, flowMainGetter: () => string[], inputTableGetter?: (id: string) => string) {
     configs = flowConfigs
-    getMain = flowMainGetter
+    void flowMainGetter
+    getEffectiveInputTable = inputTableGetter ?? ((id) => configs[id]?.collectCfg?.inputTable || configs[id]?.inputTable || '')
   }
 
   // ---- 节点字段编辑（三列表格）----
@@ -104,14 +105,23 @@ export const useNodeStore = defineStore('node', () => {
       const cap = collectorCapabilityOf(c)
       if (cap?.queueMode === 'fixed') next.queue = cap.fixedQueue ?? c.taskCfg?.queue ?? ''
     }
+    // 0806：上下文来源/任务参数/出参列不再按主链位置清空。
+    // 没有有效输入表时这些字段没有可用来源，保持为空；节点有显式输入表或上游输入后才允许配置。
     const taskCfg = { queue: '', urlRule: '', ...c.taskCfg, ...next }
-    if (isFirstMainNode(getMain(), configs, id)) {
+    if (!getEffectiveInputTable(id)) {
       delete taskCfg.paramValues
       delete taskCfg.contextMap
       delete taskCfg.outColumns
       delete taskCfg.paramRefs
     }
     c.taskCfg = taskCfg
+    touch()
+  }
+
+  function patchSchedule(id: string, patch: Partial<CollectorSchedule>) {
+    const c = configs[id]
+    if (!c) return
+    c.schedule = { ...c.schedule, ...patch }
     touch()
   }
 
@@ -142,7 +152,24 @@ export const useNodeStore = defineStore('node', () => {
 
   function setInputTable(id: string, tableId: string) {
     const c = configs[id]
-    if (c) c.inputTable = tableId
+    if (c) {
+      c.inputTable = tableId
+      if (!c.ruleCfg) delete c.inputFields
+    }
+    touch()
+  }
+
+  function setInputFields(id: string, fields: string[]) {
+    const c = configs[id]
+    if (!c) return
+    c.inputFields = [...new Set(fields.filter(Boolean))]
+    touch()
+  }
+
+  function resetInputFields(id: string) {
+    const c = configs[id]
+    if (!c) return
+    delete c.inputFields
     touch()
   }
 
@@ -223,12 +250,15 @@ export const useNodeStore = defineStore('node', () => {
     removeTripleRow,
     patchCollect,
     patchTaskConfig,
+    patchSchedule,
     patchRuleConfig,
     patchExecConfig,
     setOutputTable,
     setDedupMode,
     setOutFields,
     setInputTable,
+    setInputFields,
+    resetInputFields,
     setTaskQueue,
     setStructuredConfig,
     setContentRules,

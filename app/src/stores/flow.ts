@@ -141,7 +141,7 @@ export const useFlowStore = defineStore('flow', () => {
   }
 
   // 绑定 flow store 到 node store（供节点编辑函数访问 configs/main）
-  nodeStore.bindFlowStore(configs, () => main.value)
+  nodeStore.bindFlowStore(configs, () => main.value, (id) => effectiveInputTableFor(id))
 
   // ---- 工具 ----
   function isTerm(id: string) {
@@ -757,17 +757,11 @@ export const useFlowStore = defineStore('flow', () => {
     branches.splice(0, branches.length, ...(JSON.parse(JSON.stringify(def.branches)) as BranchSeed[]))
     main.value = [...def.main]
     sourceCfg.value = def.source ? (JSON.parse(JSON.stringify(def.source)) as Source) : null
-    const firstDataNodeId = main.value.find((nodeId) => !!configs[nodeId] && !isTerm(nodeId))
-    if (firstDataNodeId) {
-      const firstTask = configs[firstDataNodeId].taskCfg
-      if (firstTask) {
-        delete firstTask.paramValues
-        delete firstTask.contextMap
-        delete firstTask.outColumns
-        delete firstTask.paramRefs
-      }
-    }
-    const firstNodeId = main.value.find((nodeId) => !!configs[nodeId]?.collectCfg)
+    // 0806：历史流程的 Source/TaskConfig 定时字段仍需迁移，但不再把登录节点当作采集起点。
+    const firstNodeId = main.value.find((nodeId) => {
+      const cfg = configs[nodeId]
+      return !!cfg?.collectCfg && collectorCapabilityOf(cfg)?.kind !== 'login'
+    })
     const legacySchedule = sourceCfg.value
     if (firstNodeId && legacySchedule && configs[firstNodeId].collectCfg) {
       const firstCollect = configs[firstNodeId].collectCfg
@@ -776,6 +770,12 @@ export const useFlowStore = defineStore('flow', () => {
       firstCollect.scheduleTime = legacySchedule.scheduleTime ?? firstTask?.scheduleTime ?? firstCollect.scheduleTime
       firstCollect.weekdays = legacySchedule.weekdays ?? firstTask?.weekdays ?? firstCollect.weekdays
       firstCollect.cron = legacySchedule.cron ?? firstTask?.cron ?? firstCollect.cron
+      configs[firstNodeId].schedule = {
+        scheduleType: firstCollect.scheduleType,
+        scheduleTime: firstCollect.scheduleTime,
+        weekdays: firstCollect.weekdays,
+        cron: firstCollect.cron,
+      }
       delete legacySchedule.scheduleType
       delete legacySchedule.scheduleTime
       delete legacySchedule.weekdays
@@ -877,6 +877,25 @@ export const useFlowStore = defineStore('flow', () => {
     sourceStore.resetAllContext()
   }
 
+  /**
+   * 判断节点是否存在结构上的上游业务节点。
+   * 这不是“首节点业务规则”：它只用于区分“链路断裂”与“流程入口本来就没有输入表”。
+   */
+  function hasUpstreamNode(def: FlowDef, id: string): boolean {
+    const idx = def.main.indexOf(id)
+    if (idx >= 0) return def.main.slice(0, idx).some((pid) => !!def.configs[pid] && !isTerm(pid))
+    const side = def.branches.find((item) => item.id === id)
+    if (side) return !!def.configs[side.rowAnchor]
+    for (const group of def.branchGroups ?? []) {
+      for (const branch of group.branches) {
+        const chainIndex = branch.chain.indexOf(id)
+        if (chainIndex < 0) continue
+        return chainIndex > 0 || !!def.configs[group.ownerId]
+      }
+    }
+    return false
+  }
+
   // 发布门禁
   function validateFlow(def?: FlowDef): string[] {
     const d = def ?? serialize()
@@ -896,11 +915,11 @@ export const useFlowStore = defineStore('flow', () => {
     allIds.forEach((nid) => {
       const c = d.configs[nid]
       if (!c) return
+      const capability = collectorCapabilityOf(c)
       if (c.collectCfg && !c.disabled) {
         if (!c.collectCfg.url) errs.push(`「${c.title}」缺少源 URL`)
-        if (!c.collectCfg.outputTable) errs.push(`「${c.title}」缺少输出表`)
-        const cap = collectorCapabilityOf(c)
-        if (cap?.kind === 'web' && hasFragmentParams(c.collectCfg.url)) {
+        if (capability?.kind !== 'login' && !c.collectCfg.outputTable) errs.push(`「${c.title}」缺少输出表`)
+        if (capability?.kind === 'web' && hasFragmentParams(c.collectCfg.url)) {
           errs.push(`「${c.title}」URL 参数写在 # 片段里，普通网页抓取读不到，请改用浏览器抓取节点`)
         }
         const paramIds = extractUrlParamIds(c.collectCfg.url)
@@ -923,15 +942,17 @@ export const useFlowStore = defineStore('flow', () => {
       } else if (!c.disabled && isDataNode(c) && !c.outputTable) {
         errs.push(`「${c.title}」缺少输出表`)
       }
+      const effectiveInput = effectiveInputTable(d.main, d.branches, d.configs, nid, d.branchGroups ?? [])
       if (
         !c.disabled &&
         isDataNode(c) &&
-        !isFirstMainNode(d.main, d.configs, nid) &&
-        !effectiveInputTable(d.main, d.branches, d.configs, nid, d.branchGroups ?? [])
+        capability?.kind !== 'login' &&
+        hasUpstreamNode(d, nid) &&
+        !effectiveInput
       ) {
         errs.push(`「${c.title}」缺少输入表`)
       }
-      if (!isFirstMainNode(d.main, d.configs, nid)) {
+      if (effectiveInput) {
         const ownTaskParamRefs = new Set(c.collectCfg?.urlParamRefs ?? [])
         const paramValues = c.taskCfg?.paramValues ?? []
         const invalidTaskValues = paramValues.filter((item) => !ownTaskParamRefs.has(item.paramId)).map((item) => item.paramId)
@@ -1040,12 +1061,15 @@ export const useFlowStore = defineStore('flow', () => {
     removeTripleRow: (id: string, field: TripleField, rowIndex: number) => nodeStore.removeTripleRow(id, field, rowIndex),
     patchCollect: (id: string, patch: Partial<CollectConfig>) => nodeStore.patchCollect(id, patch),
     patchTaskConfig: (id: string, patch: Partial<TaskConfig>) => nodeStore.patchTaskConfig(id, patch),
+    patchSchedule: (id: string, patch: Partial<import('@/views/FlowCanvas/canvas/flowModel').CollectorSchedule>) => nodeStore.patchSchedule(id, patch),
     patchRuleConfig: (id: string, patch: Partial<RuleOrchestration>) => nodeStore.patchRuleConfig(id, patch),
     patchExecConfig: (id: string, patch: Partial<RuleOrchestration>) => nodeStore.patchExecConfig(id, patch),
     setOutputTable: (id: string, tableId: string) => nodeStore.setOutputTable(id, tableId),
     setDedupMode: (id: string, mode: 'source' | 'table') => nodeStore.setDedupMode(id, mode),
     setOutFields: (id: string, fields: string[]) => nodeStore.setOutFields(id, fields),
     setInputTable: (id: string, tableId: string) => nodeStore.setInputTable(id, tableId),
+    setInputFields: (id: string, fields: string[]) => nodeStore.setInputFields(id, fields),
+    resetInputFields: (id: string) => nodeStore.resetInputFields(id),
     setTaskQueue: (id: string, value: string) => nodeStore.setTaskQueue(id, value),
     setStructuredConfig: (id: string, value: string) => nodeStore.setStructuredConfig(id, value),
     setContentRules: (id: string, value: string) => nodeStore.setContentRules(id, value),

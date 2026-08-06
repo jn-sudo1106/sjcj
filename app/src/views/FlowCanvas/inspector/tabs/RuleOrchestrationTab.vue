@@ -217,19 +217,25 @@ async function onSaveScript() {
 const switchOptions = ref<RuleOrchestrationItem[]>([])
 const switchLoading = ref(false)
 const switchLoaded = ref(false)
+const switchLoadError = ref('')
 const switchSelected = ref('')
 async function loadSwitchOptions() {
   if (switchLoaded.value || switchLoading.value) return
   switchLoading.value = true
+  switchLoadError.value = ''
   try {
     const paged = await ruleApi.orchestrationPaged({ size: 100 })
     switchOptions.value = paged.list.filter((item) => item.scriptPath?.endsWith('.xml'))
     switchLoaded.value = true
   } catch (e) {
-    ElMessage.error(`加载既有配置失败：${(e as Error)?.message ?? String(e)}`)
+    // 既有配置只是可选的复用入口，列表接口异常不能阻断当前节点的新建/生成/保存流程。
+    switchLoadError.value = `既有配置列表暂时不可用：${(e as Error)?.message ?? String(e)}`
   } finally {
     switchLoading.value = false
   }
+}
+function retryLoadSwitchOptions() {
+  void loadSwitchOptions()
 }
 watch(isRule, (v) => { if (!v) void loadSwitchOptions() }, { immediate: true })
 
@@ -299,6 +305,10 @@ const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value
         <button class="rc-input-btn" type="button" :disabled="!switchSelected || applyingSwitch" @click="onApplySwitch">
           {{ applyingSwitch ? '切换中...' : '应用' }}
         </button>
+      </div>
+      <div v-if="switchLoadError" class="rc-switch-load-error">
+        <span>{{ switchLoadError }}</span>
+        <button type="button" @click="retryLoadSwitchOptions">重试</button>
       </div>
     </div>
   </template>
@@ -374,6 +384,10 @@ const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value
 .rc-input-btn { white-space: nowrap; padding: 0 12px; border: 1px solid #dbe3ee; border-left: 0; border-radius: 0 7px 7px 0; background: #fff; color: var(--rc-primary); cursor: pointer; font-size: 12px; font-weight: 600; }
 .rc-input-btn:hover { background: var(--rc-primary-bg); }
 .rc-input-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.rc-switch-load-error { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-top: 6px; color: var(--rc-warn); font-size: 10px; line-height: 1.5; }
+.rc-switch-load-error span { min-width: 0; }
+.rc-switch-load-error button { flex: none; padding: 0; border: 0; background: transparent; color: var(--rc-primary); font-size: 10px; cursor: pointer; }
+.rc-switch-load-error button:hover { text-decoration: underline; }
 .rc-actions-row { display: flex; gap: 8px; margin-top: 12px; }
 .rc-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 11px; border: 1px solid #d5e2f2; border-radius: 7px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; }
 .rc-btn:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }

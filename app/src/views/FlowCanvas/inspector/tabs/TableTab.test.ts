@@ -157,6 +157,22 @@ describe('TableTab · 结构化配置 / 正文规则（0804 S3-1，0805 收窄�
     expect(flow.configs['web-1'].collectCfg?.contentRules).toBe('summary=truncate(200)')
     expect(flow.configs['web-1'].structuredConfig).toBeUndefined()
   })
+
+  it('非规则节点：表配置展示输入表/输入字段，默认全选且切换表后恢复默认', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnCollectorNode()
+    flow.patchCollect('web-1', { inputTable: INPUT_TABLE.tableId })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('输入字段选择')
+    expect(flow.configs['web-1'].inputFields).toBeUndefined()
+    await wrapper.find('[data-testid="clear-all-input-fields"]').trigger('click')
+    expect(flow.configs['web-1'].inputFields).toEqual([])
+    await wrapper.find('[data-testid="select-all-input-fields"]').trigger('click')
+    expect(flow.configs['web-1'].inputFields).toEqual(['sku_id', 'sku_name'])
+    await wrapper.find('select').setValue('')
+    expect(flow.configs['web-1'].inputFields).toBeUndefined()
+  })
 })
 
 // 0804 S3-3：非规则节点也要在「生成配置」前落一条 vrule compose 记录换数字 ruleId，

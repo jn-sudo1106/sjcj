@@ -8,11 +8,12 @@ import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
   WEB_KIND_OPTIONS, decisionOrParallelKind, collectorCapabilityOf, isRuleNode,
-  type CollectConfig, type NodeConfig, type TripleField, type WebKind,
+  type CollectConfig, type CollectorSchedule, type NodeConfig, type TripleField, type WebKind,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, ruleApi, type RuleOrchestrationItem } from '@/api'
 import BranchEditor from '../BranchEditor.vue'
 import CollectorSettings, { type CollectorRuntimeSettings } from '../CollectorSettings.vue'
+import TaskScheduleSettings from '../TaskScheduleSettings.vue'
 import ParamSourceEditor, { type ParamSourceModel } from '@/views/FlowCanvas/source/ParamSourceEditor.vue'
 import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDialog.vue'
 import SelectExistingRuleDialog from '../SelectExistingRuleDialog.vue'
@@ -42,14 +43,23 @@ const runtimeSettings = computed<CollectorRuntimeSettings>(() => {
     loginUrl: cc.value?.loginUrl ?? s?.loginUrl,
     account: cc.value?.account ?? s?.account,
     credentialRef: cc.value?.credentialRef ?? s?.credentialRef,
-    scheduleType: cc.value?.scheduleType ?? s?.scheduleType,
-    scheduleTime: cc.value?.scheduleTime ?? s?.scheduleTime,
-    weekdays: cc.value?.weekdays ?? s?.weekdays,
-    cron: cc.value?.cron ?? s?.cron,
   }
 })
 function onRuntimeSettingsChange(patch: Partial<CollectorRuntimeSettings>) {
   flow.patchCollect(id.value, patch)
+}
+
+const scheduleSettings = computed<CollectorSchedule>(() => {
+  const s = flow.sourceCfg
+  return {
+    scheduleType: cfg.value?.schedule?.scheduleType ?? cc.value?.scheduleType ?? s?.scheduleType,
+    scheduleTime: cfg.value?.schedule?.scheduleTime ?? cc.value?.scheduleTime ?? s?.scheduleTime,
+    weekdays: cfg.value?.schedule?.weekdays ?? cc.value?.weekdays ?? s?.weekdays,
+    cron: cfg.value?.schedule?.cron ?? cc.value?.cron ?? s?.cron,
+  }
+})
+function onScheduleChange(patch: Partial<CollectorSchedule>) {
+  flow.patchSchedule(id.value, patch)
 }
 
 // 首采集节点判定：调度设置只在首采集节点展示（与原 NodeInspector 顶层逻辑一致）。
@@ -175,6 +185,10 @@ function onBizType(e: Event) {
       </div>
       <input v-else class="rc-input" :value="cfg?.title" @input="onTitle" />
     </div>
+    <details class="ni-schedule">
+      <summary>定时策略</summary>
+      <TaskScheduleSettings :model-value="scheduleSettings" @update:model-value="onScheduleChange" />
+    </details>
     <SelectExistingRuleDialog v-if="isRule" v-model:open="selectExistingOpen" @select="onSelectExistingRule" />
 
     <!-- 采集类专属：源 URL / 网页类型（详情状态由网页类型自动推导） -->
@@ -225,8 +239,8 @@ function onBizType(e: Event) {
         </div>
         <EditParamSourceDialog v-model="editParamSourceVisible" />
       </template>
-      <!-- 运行设置（0711 R5）：代理/断点续爬/登录，节点级配置、默认折叠 -->
-      <CollectorSettings :model-value="runtimeSettings" :capability="nodeCapability" :show-schedule="isFirstCollectorNode" @update:model-value="onRuntimeSettingsChange" />
+      <!-- 运行设置（0711 R5）：只保留代理/断点续爬；定时策略已独立到上方节点配置。 -->
+      <CollectorSettings :model-value="runtimeSettings" :capability="nodeCapability" @update:model-value="onRuntimeSettingsChange" />
     </template>
 
     <!-- 非采集非规则：基础字段 / 参数 / 试跑信息 -->
@@ -303,6 +317,9 @@ function onBizType(e: Event) {
 .ni-section-title { margin: 16px 0 8px; padding-top: 12px; border-top: 1px dashed var(--rc-border-soft); color: var(--rc-muted); font-size: 12px; font-weight: 700; }
 .ni-section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ni-section-title-row .rc-btn { height: 24px; padding: 0 9px; font-size: 11px; }
+.ni-schedule { margin: 10px 0 12px; border-top: 1px dashed var(--rc-border-soft); padding-top: 8px; }
+.ni-schedule summary { color: var(--rc-muted); font-size: 11px; font-weight: 600; cursor: pointer; }
+.ni-schedule[open] summary { color: var(--rc-primary-ink); margin-bottom: 8px; }
 /* 参数子源编辑器容器（0802）：跟其他段落用同色背景区分；ParamSourceEditor 是 display:contents，外层负责间距 */
 .rc-section-divider { margin-top: 4px; padding: 8px 10px; background: #f8fafc; border: 1px solid var(--rc-border-soft); border-radius: 7px; }
 .ni-adv { margin-top: 12px; border-top: 1px dashed var(--rc-border-soft); padding-top: 8px; }

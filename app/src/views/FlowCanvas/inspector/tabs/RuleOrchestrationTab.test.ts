@@ -457,17 +457,30 @@ describe('RuleOrchestrationTab · 抓取配置 XML 轻解析接入（S3-4）', (
     </ExtractDataTableAction>
   </Actions>`
 
-  function mountOnCollectorNode() {
+  function mountOnCollectorNode(orchestrationPagedMode: 'empty' | 'error' = 'empty') {
     setActivePinia(createPinia())
     const flow = useFlowStore()
     flow.configs['web-1'] = cloneConfig(NODE_CONFIGS['web-list'])
     flow.select('web-1')
     flow.setActiveTab('orchestration')
     mockAssets()
-    vi.spyOn(ruleApi, 'orchestrationPaged').mockResolvedValue({ total: 0, list: [] })
+    if (orchestrationPagedMode === 'error') {
+      vi.spyOn(ruleApi, 'orchestrationPaged').mockRejectedValue(new Error('请求失败 502'))
+    } else {
+      vi.spyOn(ruleApi, 'orchestrationPaged').mockResolvedValue({ total: 0, list: [] })
+    }
     const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
     return { flow, wrapper }
   }
+
+  it('既有配置列表异常时不阻断编排配置，展示非阻断提示并支持重试', async () => {
+    const { wrapper } = mountOnCollectorNode('error')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('既有配置列表暂时不可用：请求失败 502')
+    expect(wrapper.text()).toContain('重试')
+    expect(wrapper.find('textarea[placeholder*="描述抓取需求"]').exists()).toBe(true)
+  })
 
   it('顶部展示只读动作链摘要：按 NextActionId 链表顺序，连续同名动作折叠成 ×N', async () => {
     const { flow, wrapper } = mountOnCollectorNode()

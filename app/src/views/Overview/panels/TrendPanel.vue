@@ -54,6 +54,8 @@ const emit = defineEmits<{
 <style scoped>
 .ov-trend-grid {
   display: grid;
+  width: 100%;
+  min-width: 0;
   grid-template-columns: minmax(0, 1.7fr) minmax(360px, 1fr);
   gap: 12px;
   align-items: stretch;
@@ -61,6 +63,7 @@ const emit = defineEmits<{
 }
 
 .rc-card {
+  min-width: 0;
   border-color: #dfe8f5;
   background: #fff;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
@@ -140,7 +143,7 @@ const emit = defineEmits<{
   }
 }
 
-@media (max-width: 1480px) {
+@media (max-width: 960px) {
   .ov-trend-grid {
     grid-template-columns: 1fr;
   }

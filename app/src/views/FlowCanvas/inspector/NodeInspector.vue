@@ -135,7 +135,7 @@ onMounted(async () => {
 
 /* 顶层 Tab（0706 调整4 · 0707 微调 · 0804 统一为 config/table/orchestration/task/ai · 0805 参数配置回归非规则节点） */
 .rc-top-tabs { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--rc-border); border-radius: 9px; background: #f1f5f9; margin-bottom: 12px; }
-.rc-top-tab { flex: 1; border: 0; background: transparent; border-radius: 7px; padding: 7px 4px; color: var(--rc-muted); font-size: 12px; font-weight: 600; cursor: pointer; }
+.rc-top-tab { flex: 1; min-width: 0; border: 0; background: transparent; border-radius: 7px; padding: 7px 4px; color: var(--rc-muted); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-top-tab.active { background: #fff; color: var(--rc-primary-ink); box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08); }
 .rc-top-tab:hover:not(.active):not(:disabled) { color: var(--rc-primary-ink); }
 .rc-top-tab:disabled { color: var(--rc-faint); cursor: not-allowed; opacity: 0.6; }

@@ -1,7 +1,7 @@
 import { reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { RunRow, RunNode, DataRow } from '../api'
-import { isDataNode, nodeOutputTable, type FlowDef } from '@/views/FlowCanvas/canvas/flowModel'
+import { isDataNode, isRuleNode, nodeOutputTable, collectorCapabilityOf, type FlowDef } from '@/views/FlowCanvas/canvas/flowModel'
 
 // 运行时 store —— 发起抓取（mock）产生的运行数据的单一来源。
 // 画布节点态、运行记录、数据查看三页都读它，与静态 mock 叠加，形成「发起抓取→run→落表」闭环。
@@ -17,14 +17,17 @@ export const useRuntimeStore = defineStore('runtime', () => {
 
   const now = () => new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-')
 
-  // 可发起抓取判定：已停止 / 规划中（待执行器）/ 采集节点缺 URL 或输出表（待配置）/
-  // 非采集数据节点缺输出表均不可发起抓取，与画布 footFor 的「已停止/规划中/待配置」文案保持一致，避免误导为已跑通。
+  // 可发起抓取判定：按节点能力判断，不再把登录/规则套入普通采集节点的 URL+输出表规则。
   function isRunnable(def: FlowDef, id: string): boolean {
     if (id === 'start' || id === 'end') return false
     const c = def.configs[id]
     if (!c || c.disabled || c.planned) return false
     if (c.collectCfg) {
-      if (!(c.collectCfg.url && c.collectCfg.outputTable)) return false
+      const capability = collectorCapabilityOf(c)
+      if (!c.collectCfg.url) return false
+      if (capability?.kind !== 'login' && !c.collectCfg.outputTable) return false
+    } else if (isRuleNode(c)) {
+      if (!c.ruleCfg?.ruleId || !c.ruleCfg.script?.trim()) return false
     } else if (isDataNode(c) && !nodeOutputTable(c)) {
       return false
     }

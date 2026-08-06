@@ -139,6 +139,8 @@ function onAlert(level: string) {
 <style scoped>
 .ov-bottom-grid {
   display: grid;
+  width: 100%;
+  min-width: 0;
   grid-template-columns: minmax(0, 1.7fr) minmax(360px, 1fr) 390px;
   gap: 12px;
   align-items: stretch;
@@ -153,6 +155,7 @@ function onAlert(level: string) {
 }
 
 .rc-card {
+  min-width: 0;
   border-color: #dfe8f5;
   background: #fff;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
@@ -363,11 +366,23 @@ function onAlert(level: string) {
 
 @media (max-width: 1480px) {
   .ov-bottom-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ov-source-card {
+    grid-column: 1 / -1;
   }
 }
 
 @media (max-width: 720px) {
+  .ov-bottom-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ov-source-card {
+    grid-column: auto;
+  }
+
   .ov-alerts {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

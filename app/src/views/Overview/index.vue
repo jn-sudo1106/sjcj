@@ -102,13 +102,20 @@ onUnmounted(() => ui.clearActions())
   flex-direction: column;
   gap: 12px;
   height: 100%;
+  width: 100%;
   min-height: 0;
-  overflow: auto;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding-right: 2px;
 }
 
 .ov > * {
   flex: none;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .ov-intro {
@@ -116,6 +123,7 @@ onUnmounted(() => ui.clearActions())
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+  min-width: 0;
   color: #334155;
   font-size: 13px;
   padding: 10px 16px;
@@ -128,8 +136,11 @@ onUnmounted(() => ui.clearActions())
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+  overflow: hidden;
   color: #64748b;
   font-size: 12px;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

@@ -296,6 +296,9 @@ describe('flow store 新建 / 校验（M5.5）', () => {
     expect(collect.scheduleTime).toBe('09:30')
     expect(collect.weekdays).toEqual([1, 3, 5])
     expect(collect.cron).toBe('0 30 9 * * 1,3,5')
+    expect(f.configs['web-list'].schedule).toEqual({
+      scheduleType: '每周', scheduleTime: '09:30', weekdays: [1, 3, 5], cron: '0 30 9 * * 1,3,5',
+    })
     const legacyTask = f.configs['web-list'].taskCfg as { scheduleType?: string } | undefined
     expect(legacyTask?.scheduleType).toBeUndefined()
     expect(f.sourceCfg?.scheduleType).toBeUndefined()
@@ -448,7 +451,7 @@ describe('节点输入表 + 任务队列（优化 0701 问题五）', () => {
     expect(f.validateFlow()).toContain('「公告详情抓取」任务参数 p-fundcode 缺少取值字段或值函数')
   })
 
-  it('首节点不保存任务参数、上下文来源和出参列', () => {
+  it('无有效输入表的首节点保持任务参数、上下文来源和出参列为空', () => {
     f.patchCollect('web-list', { urlParamRefs: ['p-page'] })
     f.patchTaskConfig('web-list', {
       paramValues: [{ paramId: 'p-page', fieldId: 'page', valueExpr: '' }],
@@ -458,6 +461,17 @@ describe('节点输入表 + 任务队列（优化 0701 问题五）', () => {
     expect(f.configs['web-list'].taskCfg).not.toHaveProperty('paramValues')
     expect(f.configs['web-list'].taskCfg).not.toHaveProperty('contextMap')
     expect(f.configs['web-list'].taskCfg).not.toHaveProperty('outColumns')
+    f.patchCollect('web-list', { inputTable: 'INPUT_T' })
+    f.patchTaskConfig('web-list', {
+      paramValues: [{ paramId: 'p-page', fieldId: 'page', valueExpr: '' }],
+      contextMap: ['title'],
+      outColumns: ['detail_url'],
+    })
+    expect(f.configs['web-list'].taskCfg).toMatchObject({
+      paramValues: [{ paramId: 'p-page', fieldId: 'page', valueExpr: '' }],
+      contextMap: ['title'],
+      outColumns: ['detail_url'],
+    })
   })
 
   it('输入表字段选项：实体表缺失时回退到上游产物字段', () => {

@@ -3,38 +3,19 @@
 // 默认折叠收起（用户口径："在抓取节点配置、折叠起来"）；只在 capability 支持的项上渲染对应控件。
 // 缺省值兜底：调用方（NodeInspector）传入的 modelValue 已经是"节点自身值 ?? 旧 Source 同名字段"的 1:1+fallback 结果，
 // 本组件只管展示与编辑，不关心 fallback 从哪来。
-import { ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { sourceApi, type CredentialRef } from '@/api'
+import { computed, ref } from 'vue'
 import type { CollectConfig, CollectorCapability } from '@/views/FlowCanvas/canvas/flowModel'
-import TaskScheduleSettings from './TaskScheduleSettings.vue'
 
 /** 运行设置涉及的字段子集（复用 CollectConfig，不重复定义类型）。
  *  @deprecated needLogin/loginUrl/account/credentialRef 这四项（S4-1，方案 §6.1）：登录已拆成独立的
  *  「网页登录」节点（collectorKind: 'login'，见 flowModel.seeds.ts），新流程应该连一个登录节点在前面，
- *  不要再靠这里的开关。只读兼容旧数据——UI 仍会渲染（capability.supportsLogin 为 true 的节点，即
- *  browser_html/wechat_official_html），不强制迁移旧配置。 */
-export type CollectorRuntimeSettings = Pick<CollectConfig, 'useProxy' | 'resume' | 'needLogin' | 'loginUrl' | 'account' | 'credentialRef' | 'scheduleType' | 'scheduleTime' | 'weekdays' | 'cron' | 'proxyDetail'>
+ *  不要再靠这里的开关。旧字段只显示兼容提示，不再提供编辑入口；定时策略已迁到 ConfigTab。 */
+export type CollectorRuntimeSettings = Pick<CollectConfig, 'useProxy' | 'resume' | 'needLogin' | 'loginUrl' | 'account' | 'credentialRef' | 'proxyDetail'>
 
-const props = defineProps<{ modelValue: CollectorRuntimeSettings; capability?: CollectorCapability; showSchedule?: boolean }>()
+const props = defineProps<{ modelValue: CollectorRuntimeSettings; capability?: CollectorCapability }>()
 const emit = defineEmits<{ 'update:modelValue': [patch: Partial<CollectorRuntimeSettings>] }>()
 
 const open = ref(false)
-const cred = ref<CredentialRef | null>(null)
-watch(
-  () => props.modelValue.credentialRef,
-  async (refId) => {
-    if (!refId) { cred.value = null; return }
-    // 凭据查询失败时显式 toast + 清空 cred（避免 cred.value 永远 undefined 导致"已绑定凭据"区域显示空）
-    try {
-      cred.value = await sourceApi.credentialRef(refId)
-    } catch (e) {
-      cred.value = null
-      ElMessage.warning(`凭据 ${refId} 查询失败：${(e as Error).message ?? '未知错误'}`)
-    }
-  },
-  { immediate: true },
-)
 
 function patch(p: Partial<CollectorRuntimeSettings>) {
   emit('update:modelValue', p)
@@ -42,10 +23,6 @@ function patch(p: Partial<CollectorRuntimeSettings>) {
 function onCheck(key: 'useProxy' | 'resume', e: Event) {
   patch({ [key]: (e.target as HTMLInputElement).checked })
 }
-function onInput(key: 'loginUrl' | 'account', e: Event) {
-  patch({ [key]: (e.target as HTMLInputElement).value })
-}
-
 // 代理明细（0804 S3-1）：勾选「使用代理」才展开；取消勾选时清空明细，避免残留脏数据误导下次开启
 function onProxyCheck(e: Event) {
   const checked = (e.target as HTMLInputElement).checked
@@ -58,16 +35,13 @@ function onProxyPort(e: Event) {
   const v = (e.target as HTMLInputElement).value
   patch({ proxyDetail: { ...props.modelValue.proxyDetail, port: v ? Number(v) : undefined } })
 }
-function setNeedLogin(v: boolean) {
-  // 登录关闭时清理 loginUrl/credentialRef（0711 计划口径），避免残留脏数据误导后续开启
-  patch(v ? { needLogin: true } : { needLogin: false, loginUrl: '', account: '', credentialRef: '' })
-}
+const hasLegacyLogin = computed(() => Boolean(props.modelValue.needLogin || props.modelValue.loginUrl || props.modelValue.account || props.modelValue.credentialRef))
 </script>
 
 <template>
-  <div v-if="showSchedule || capability?.supportsProxy || capability?.supportsResume || capability?.supportsLogin" class="cs-wrap">
+  <div v-if="capability?.supportsProxy || capability?.supportsResume || (capability?.supportsLogin && hasLegacyLogin)" class="cs-wrap">
     <button class="cs-toggle" type="button" @click="open = !open">
-      {{ open ? '▾' : '▸' }} 运行设置（代理 / 断点续爬{{ showSchedule ? ' / 定时' : '' }}）
+      {{ open ? '▾' : '▸' }} 运行设置（代理 / 断点续爬{{ hasLegacyLogin ? ' / 旧登录配置' : '' }}）
     </button>
     <div v-if="open" class="cs-body">
       <div v-if="capability?.supportsProxy || capability?.supportsResume" class="rc-field">
@@ -88,25 +62,9 @@ function setNeedLogin(v: boolean) {
         <div class="rc-field"><label>账号</label><input class="rc-input" :value="modelValue.proxyDetail?.account" @input="onProxyDetail('account', $event)" /></div>
         <div class="rc-field"><label>密码</label><input class="rc-input" type="password" :value="modelValue.proxyDetail?.password" @input="onProxyDetail('password', $event)" /></div>
       </div>
-      <template v-if="capability?.supportsLogin">
-        <div class="rc-field"><label>是否要求登陆</label>
-          <div class="rc-segment">
-            <button type="button" :class="{ active: !modelValue.needLogin }" @click="setNeedLogin(false)">不登陆</button>
-            <button type="button" :class="{ active: modelValue.needLogin }" @click="setNeedLogin(true)">要求登陆</button>
-          </div>
-        </div>
-        <template v-if="modelValue.needLogin">
-          <div class="rc-field"><label>登陆URL</label><input class="rc-input" :value="modelValue.loginUrl" @input="onInput('loginUrl', $event)" /></div>
-          <div class="rc-field"><label>登陆用户名</label><input class="rc-input" :value="modelValue.account" @input="onInput('account', $event)" /></div>
-          <div class="rc-field"><label>登录凭据（只存引用，明文不回显）</label>
-            <div class="cs-cred">
-              <span v-if="cred">{{ cred.name }} · {{ cred.account }}</span>
-              <span v-else class="cs-cred-empty">未绑定凭据</span>
-            </div>
-          </div>
-        </template>
-      </template>
-      <TaskScheduleSettings v-if="showSchedule" :model-value="modelValue" @update:model-value="patch" />
+      <div v-if="capability?.supportsLogin && hasLegacyLogin" class="cs-legacy-login">
+        当前节点保留旧登录配置。新流程请添加“网页登录”节点，旧字段仅用于兼容读取。
+      </div>
     </div>
   </div>
 </template>
@@ -131,4 +89,5 @@ function setNeedLogin(v: boolean) {
 .cs-check { display: inline-flex; align-items: center; gap: 6px; color: var(--rc-text-2); font-size: 12px; cursor: pointer; }
 .cs-cred { display: flex; align-items: center; gap: 8px; padding: 8px 9px; border: 1px solid #dbe3ee; border-radius: 7px; background: #f8fafc; font-size: 12px; color: var(--rc-text-2); }
 .cs-cred-empty { color: var(--rc-faint); }
+.cs-legacy-login { padding: 8px 9px; border: 1px dashed #f5c2c7; border-radius: 7px; background: #fff7f7; color: #9f1239; font-size: 11px; line-height: 1.5; }
 </style>

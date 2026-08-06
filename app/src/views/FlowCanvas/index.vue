@@ -458,6 +458,12 @@ onUnmounted(() => {
 .rc-input, .rc-select { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; }
 .rc-input:focus, .rc-select:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 
+/* 13 寸视口：保留画布与配置区并排，同时给右侧 Tab 留出完整的可读宽度。 */
+@media (max-width: 1400px) and (min-width: 1241px) {
+  .rc-flow-shell,
+  .rc-flow-shell.source-mode { grid-template-columns: minmax(360px, 1fr) 6px minmax(360px, 400px); }
+}
+
 @media (max-width: 1240px) {
   .rc-canvas-cols, .rc-canvas-cols.with-tabs { height: auto; min-height: 0; }
   .rc-flow-shell,

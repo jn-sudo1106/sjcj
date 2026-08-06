@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 任务配置 Tab（P1-1 Step 4 · 从 NodeInspector.vue 拆出）。
-// 内容：输入表（首步骤无）→ 进入条件 → 队列归属 → 任务参数取值 → 上下文来源 → 出参列。
+// 内容：有效输入表摘要 → 进入条件 → 队列归属 → 任务参数取值 → 上下文来源 → 出参列。
 // 「任务 URL 来源字段/规则」已删除（0804 拍板：当时保留是为了传参，现在在参数位置拼接即可，见开发方案 §2.3）。
 // 行为与原 NodeInspector 内联实现 1:1，仅物理搬迁；共享资产 tables/params 经 useNodeInspectorAssets 注入。
 import { computed } from 'vue'
@@ -21,18 +21,10 @@ const cc = computed(() => cfg.value?.collectCfg)
 
 const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
 
-// ---- 输入表（0701 问题五）：从第 2 个步骤起有输入表，空 = 自动继承上游输出表 ----
-const isFirstDataNode = computed(() => (id.value ? flow.isFirstMainNodeId(id.value) : false))
+// ---- 输入表：显式配置优先，否则继承上游；是否有输入不再由节点位置决定 ----
 const effectiveInputTableId = computed(() => (id.value ? flow.effectiveInputTableFor(id.value) : ''))
+const hasEffectiveInput = computed(() => Boolean(effectiveInputTableId.value))
 const ownInputTable = computed(() => cc.value?.inputTable ?? cfg.value?.inputTable ?? '')
-const inputTableAutoLabel = computed(() =>
-  effectiveInputTableId.value ? `自动 · 继承上游（${effectiveInputTableId.value}）` : '自动 · 无上游可继承',
-)
-function onInputTableChange(e: Event) {
-  const v = (e.target as HTMLSelectElement).value
-  if (cc.value) flow.patchCollect(id.value, { inputTable: v })
-  else flow.setInputTable(id.value, v)
-}
 
 // 当前节点输出表（统一口径：采集类取 collectCfg.outputTable，非采集类取 cfg.outputTable）
 const nodeTableId = computed(() => cc.value?.outputTable || cfg.value?.outputTable || '')
@@ -48,10 +40,14 @@ const prevNode = computed<NodeConfig | undefined>(() => {
   return undefined
 })
 
-// 输入表 schema 字段清单：首节点取本节点输出表，其余取有效输入表；继承临时表查不到 schema 时回退上游 output。
+// 输入表 schema 字段清单：显式输入表优先，其次取有效输入表；继承临时表查不到 schema 时回退上游 output。
 const inputTableFields = computed(() => {
-  const tid = isFirstDataNode.value ? nodeTableId.value : (ownInputTable.value || effectiveInputTableId.value)
-  return fieldOptionsFromTableOrOutput(tid, tables.value, isFirstDataNode.value ? cfg.value?.output : prevNode.value?.output)
+  const tid = ownInputTable.value || effectiveInputTableId.value
+  return fieldOptionsFromTableOrOutput(tid, tables.value, prevNode.value?.output ?? cfg.value?.output)
+})
+const selectedInputFields = computed(() => {
+  const selected = cfg.value?.inputFields
+  return selected === undefined ? inputTableFields.value : inputTableFields.value.filter((field) => selected.includes(field.prop))
 })
 const outputTableFields = computed(() =>
   fieldOptionsFromTableOrOutput(nodeTableId.value, tables.value, cfg.value?.output),
@@ -88,7 +84,7 @@ function taskFieldList(key: TaskFieldList) {
   return cfg.value?.taskCfg?.[key] ?? []
 }
 function taskFieldOptions(key: TaskFieldList) {
-  return key === 'contextMap' ? inputTableFields.value : outputTableFields.value
+  return key === 'contextMap' ? selectedInputFields.value : outputTableFields.value
 }
 function onTaskFieldChange(key: TaskFieldList, index: number, e: Event) {
   const fields = [...taskFieldList(key)]
@@ -114,16 +110,14 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
 </script>
 
 <template>
-  <!-- 任务配置：首节点只维护队列；后续节点从输入表取任务参数/上下文，并声明出参列。 -->
-  <div class="rc-field"><label>输入表</label>
-    <div v-if="isFirstDataNode" class="rc-readonly-hint">无 · 首步骤任务来自源 URL / 初始队列</div>
-    <select v-else class="rc-select" :value="ownInputTable" @change="onInputTableChange">
-      <option value="">{{ inputTableAutoLabel }}</option>
-      <option v-for="t in tables" :key="t.tableId" :value="t.tableId">{{ t.tableId }} · {{ t.tableName }}</option>
-    </select>
+  <!-- 任务配置：所有业务节点统一展示输入/任务字段；无有效输入时由字段候选空态表达。 -->
+  <div class="rc-field"><label>有效输入表</label>
+    <div class="rc-readonly-hint">
+      {{ effectiveInputTableId ? `${ownInputTable ? '显式' : '继承'} · ${effectiveInputTableId}` : '暂无有效输入表，请先到「表配置」选择输入表或配置上游输出表。' }}
+    </div>
   </div>
-  <ConditionRow v-if="!isFirstDataNode" integrated :condition="entryCondition" :fields="inputTableFields" @change="onEntryConditionChange" />
-  <!-- 队列归属对首节点同样展示（0710 会议 D1：首节点无输入表但有队列，未填时保存/试跑自动写入默认队列名） -->
+  <ConditionRow v-if="hasEffectiveInput" integrated :condition="entryCondition" :fields="inputTableFields" @change="onEntryConditionChange" />
+  <!-- 队列归属对所有采集节点展示；固定产物节点仍由能力模型锁定。 -->
   <div class="rc-field"><label>队列归属{{ nodeCapability?.queueMode === 'fixed' ? `（固定 · ${nodeCapability.label}）` : '' }}</label>
     <input
       class="rc-input"
@@ -133,46 +127,45 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
       @input="onTaskQueueChange"
     />
   </div>
-  <template v-if="!isFirstDataNode">
-    <div class="rc-field">
-      <label>任务参数取值</label>
-      <div v-if="availableTaskParamRefs.length" class="ni-task-param-list">
-        <div v-for="item in taskParamValues" :key="item.paramId" class="ni-task-param-row">
-          <b>{{ taskParamLabel(item.paramId) }}</b>
-          <select class="rc-select" :value="item.fieldId" @change="onTaskParamValueChange(item.paramId, 'fieldId', $event)">
-            <option value="">取值字段（输入表）</option>
-            <option v-for="f in inputTableFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
-          </select>
-          <input class="rc-input" :value="item.valueExpr" placeholder="值函数（可选，如 trim($VAL$)）" @input="onTaskParamValueChange(item.paramId, 'valueExpr', $event)" />
-        </div>
+  <div class="rc-field">
+    <label>任务参数取值</label>
+    <div v-if="!hasEffectiveInput" class="rc-readonly-hint">暂无有效输入表，当前参数取值为空。</div>
+    <div v-else-if="availableTaskParamRefs.length" class="ni-task-param-list">
+      <div v-for="item in taskParamValues" :key="item.paramId" class="ni-task-param-row">
+        <b>{{ taskParamLabel(item.paramId) }}</b>
+        <select class="rc-select" :value="item.fieldId" @change="onTaskParamValueChange(item.paramId, 'fieldId', $event)">
+          <option value="">取值字段（输入表）</option>
+          <option v-for="f in selectedInputFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
+        </select>
+        <input class="rc-input" :value="item.valueExpr" placeholder="值函数（可选，如 trim($VAL$)）" @input="onTaskParamValueChange(item.paramId, 'valueExpr', $event)" />
       </div>
-      <div v-else class="rc-readonly-hint">请先在当前节点的参数配置中绑定参数。</div>
     </div>
-    <div class="rc-field"><label>上下文来源</label>
-      <div v-if="taskFieldList('contextMap').length" class="ni-task-field-list">
-        <div v-for="(fieldId, index) in taskFieldList('contextMap')" :key="`${fieldId}-${index}`" class="ni-task-field-row">
-          <select class="rc-select" :value="fieldId" @change="onTaskFieldChange('contextMap', index, $event)">
-            <option v-for="f in inputTableFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
-          </select>
-          <button class="rc-row-del" type="button" title="删除字段" @click="removeTaskField('contextMap', index)">×</button>
-        </div>
+    <div v-else class="rc-readonly-hint">请先在当前节点的参数配置中绑定参数。</div>
+  </div>
+  <div class="rc-field"><label>上下文来源</label>
+    <div v-if="hasEffectiveInput && taskFieldList('contextMap').length" class="ni-task-field-list">
+      <div v-for="(fieldId, index) in taskFieldList('contextMap')" :key="`${fieldId}-${index}`" class="ni-task-field-row">
+        <select class="rc-select" :value="fieldId" @change="onTaskFieldChange('contextMap', index, $event)">
+          <option v-for="f in selectedInputFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
+        </select>
+        <button class="rc-row-del" type="button" title="删除字段" @click="removeTaskField('contextMap', index)">×</button>
       </div>
-      <button class="rc-btn" type="button" :disabled="!canAddTaskField('contextMap')" @click="addTaskField('contextMap')">+ 添加字段</button>
-      <div class="rc-help">添加需要随任务传递的输入表字段。</div>
     </div>
-    <div class="rc-field"><label>出参列</label>
-      <div v-if="taskFieldList('outColumns').length" class="ni-task-field-list">
-        <div v-for="(fieldId, index) in taskFieldList('outColumns')" :key="`${fieldId}-${index}`" class="ni-task-field-row">
-          <select class="rc-select" :value="fieldId" @change="onTaskFieldChange('outColumns', index, $event)">
-            <option v-for="f in outputTableFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
-          </select>
-          <button class="rc-row-del" type="button" title="删除字段" @click="removeTaskField('outColumns', index)">×</button>
-        </div>
+    <button class="rc-btn" type="button" :disabled="!hasEffectiveInput || !canAddTaskField('contextMap')" @click="addTaskField('contextMap')">+ 添加字段</button>
+    <div class="rc-help">{{ hasEffectiveInput ? '添加需要随任务传递的输入表字段。' : '暂无有效输入表，当前上下文来源为空。' }}</div>
+  </div>
+  <div class="rc-field"><label>出参列</label>
+    <div v-if="hasEffectiveInput && taskFieldList('outColumns').length" class="ni-task-field-list">
+      <div v-for="(fieldId, index) in taskFieldList('outColumns')" :key="`${fieldId}-${index}`" class="ni-task-field-row">
+        <select class="rc-select" :value="fieldId" @change="onTaskFieldChange('outColumns', index, $event)">
+          <option v-for="f in outputTableFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
+        </select>
+        <button class="rc-row-del" type="button" title="删除字段" @click="removeTaskField('outColumns', index)">×</button>
       </div>
-      <button class="rc-btn" type="button" :disabled="!canAddTaskField('outColumns')" @click="addTaskField('outColumns')">+ 添加字段</button>
-      <div class="rc-help">添加当前节点输出表中需要保留给后续步骤的字段。</div>
     </div>
-  </template>
+    <button class="rc-btn" type="button" :disabled="!hasEffectiveInput || !canAddTaskField('outColumns')" @click="addTaskField('outColumns')">+ 添加字段</button>
+    <div class="rc-help">{{ hasEffectiveInput ? '添加当前节点输出表中需要保留给后续步骤的字段。' : '暂无有效输入表，当前出参列为空。' }}</div>
+  </div>
 </template>
 
 <style scoped>

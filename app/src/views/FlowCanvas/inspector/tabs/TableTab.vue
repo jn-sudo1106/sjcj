@@ -68,6 +68,43 @@ async function onSaveRuleMeta() {
 
 const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
 
+// ---- 非规则节点：统一输入表/输入字段配置（0806） ----
+const ownInputTableId = computed(() => cc.value?.inputTable || cfg.value?.inputTable || '')
+const effectiveInputTableId = computed(() => (id.value ? flow.effectiveInputTableFor(id.value) : ''))
+const inputTableId = computed(() => ownInputTableId.value || effectiveInputTableId.value)
+const inputTableLabel = computed(() => effectiveInputTableId.value
+  ? `自动 · 继承上游（${effectiveInputTableId.value}）`
+  : '自动 · 无上游输入表')
+const inputTableFields = computed(() => inputTableId.value
+  ? fieldOptionsFromTableOrOutput(inputTableId.value, tables.value, cfg.value?.output)
+  : [])
+const savedInputFields = computed<string[] | undefined>(() => cfg.value?.inputFields)
+const selectedInputFieldProps = computed<string[]>(() => {
+  const allProps = inputTableFields.value.map((f) => f.prop)
+  return savedInputFields.value === undefined ? allProps : savedInputFields.value
+})
+function isInputFieldSelected(prop: string): boolean {
+  return selectedInputFieldProps.value.includes(prop)
+}
+function toggleInputField(prop: string) {
+  const current = new Set(selectedInputFieldProps.value)
+  if (current.has(prop)) current.delete(prop)
+  else current.add(prop)
+  flow.setInputFields(id.value, [...current])
+}
+function selectAllInputFields() {
+  flow.setInputFields(id.value, inputTableFields.value.map((f) => f.prop))
+}
+function clearAllInputFields() {
+  flow.setInputFields(id.value, [])
+}
+function onInputTableChange(e: Event) {
+  const value = (e.target as HTMLSelectElement).value
+  if (cc.value) flow.patchCollect(id.value, { inputTable: value })
+  else flow.setInputTable(id.value, value)
+  flow.resetInputFields(id.value)
+}
+
 // 当前节点输出表（统一口径：采集类取 collectCfg.outputTable，非采集类取 cfg.outputTable）
 const nodeTableId = computed(() => cc.value?.outputTable || cfg.value?.outputTable || '')
 const currentDedupMode = computed<'source' | 'table'>(() => cc.value?.dedupMode || cfg.value?.dedupMode || 'source')
@@ -224,6 +261,37 @@ async function onSaveExecMeta() {
   </template>
 
   <template v-else>
+    <template v-if="nodeCapability?.kind !== 'login'">
+      <div class="rc-field"><label>输入表</label>
+        <select class="rc-select" :value="ownInputTableId" @change="onInputTableChange">
+          <option value="">{{ inputTableLabel }}</option>
+          <option v-if="ownInputTableId && !tables.some((t) => t.tableId === ownInputTableId)" :value="ownInputTableId">{{ ownInputTableId }}（当前配置）</option>
+          <option v-for="t in tables" :key="t.tableId" :value="t.tableId">{{ t.tableId }} · {{ t.tableName }}</option>
+        </select>
+        <div v-if="!effectiveInputTableId" class="rc-help">暂无有效输入表；可显式选择输入表，或先配置上游输出表。</div>
+      </div>
+      <div v-if="inputTableFields.length" class="rc-field">
+        <div class="rc-field-header">
+          <label>输入字段选择（已选中 {{ selectedInputFieldProps.length }} / {{ inputTableFields.length }} 个字段，默认包含全部字段）</label>
+          <div class="rc-field-actions">
+            <button type="button" class="rc-text-btn" data-testid="select-all-input-fields" @click="selectAllInputFields">全选</button>
+            <button type="button" class="rc-text-btn" data-testid="clear-all-input-fields" @click="clearAllInputFields">清空</button>
+          </div>
+        </div>
+        <div class="rc-tag-row" data-testid="input-fields-list">
+          <span
+            v-for="f in inputTableFields"
+            :key="f.prop"
+            class="rc-tag"
+            :class="{ on: isInputFieldSelected(f.prop) }"
+            @click="toggleInputField(f.prop)"
+          >
+            <input type="checkbox" :checked="isInputFieldSelected(f.prop)" class="rc-tag-check" @click.stop="toggleInputField(f.prop)" />
+            <span class="rc-tag-text">{{ f.prop }} {{ f.desc ? `· ${f.desc}` : '' }}</span>
+          </span>
+        </div>
+      </div>
+    </template>
     <!-- 表配置：保留输出表管理入口，表结构通过「查看/编辑表」查看维护 -->
     <div class="rc-field"><label>输出表{{ nodeCapability?.outputMode === 'fixed' ? `（固定 · ${nodeCapability.label}，不可更改）` : (cc ? '' : '（本节点处理结果落此表，默认继承上游节点；结果视图可查数据）') }}</label>
       <div class="rc-input-group">

@@ -49,6 +49,8 @@ function goCollectCategory(category: string) {
 <style scoped>
 .ov-dist-grid {
   display: grid;
+  width: 100%;
+  min-width: 0;
   grid-template-columns: minmax(0, 1.7fr) minmax(360px, 1fr);
   gap: 12px;
   align-items: stretch;
@@ -56,6 +58,7 @@ function goCollectCategory(category: string) {
 }
 
 .rc-card {
+  min-width: 0;
   border-color: #dfe8f5;
   background: #fff;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
@@ -142,7 +145,7 @@ function goCollectCategory(category: string) {
   }
 }
 
-@media (max-width: 1480px) {
+@media (max-width: 960px) {
   .ov-dist-grid {
     grid-template-columns: 1fr;
   }

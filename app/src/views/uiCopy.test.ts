@@ -67,12 +67,14 @@ describe('最新方案 UI 入口收口', () => {
   it('任务配置承载任务输入和队列，输出表仅在表配置维护', () => {
     // 拆 tab 后（P1-1 Step 4）：任务/表/节点配置分别在 TaskTab/TableTab/ConfigTab，
     // 不再共用 NodeInspector 模板里的 <template v-else-if="tab === ..."> 切片，直接按文件断言。
-    expect(taskTab).toContain('<div class="rc-field"><label>输入表</label>')
+    expect(taskTab).toContain('有效输入表')
+    expect(taskTab).not.toContain('@change="onInputTableChange"')
     expect(taskTab).not.toContain('<div class="rc-field"><label>输出表')
     expect(taskTab).not.toContain('@change="onOutputTableChange"')
     expect(taskTab).not.toContain('openEditTable')
     expect(taskTab).not.toContain('openNewTable')
-    expect(taskTab).toContain('<ConditionRow v-if="!isFirstDataNode"')
+    expect(taskTab).toContain('<ConditionRow v-if="hasEffectiveInput"')
+    expect(taskTab).not.toContain('isFirstDataNode')
     expect(taskTab).toContain('@change="onEntryConditionChange"')
 
     expect(tableTab).toContain('查看/编辑表')
@@ -163,9 +165,8 @@ describe('最新方案 UI 入口收口', () => {
     expect(allInspectorSource).not.toContain('任务拼接逻辑')
   })
 
-  it('子源信息不在画布顶部重复编辑，定时策略收在首节点运行设置', () => {
-    // 拆 tab 后（P1-1 Step 4）：TaskScheduleSettings 不该出现在任何 inspector 文件里，
-    // 只在 CollectorSettings 里按 showSchedule 条件渲染。
+  it('子源信息不在画布顶部重复编辑，定时策略收在节点配置', () => {
+    // 定时策略已从采集运行设置中拆出，作为节点级配置保留，避免首节点位置分支影响其他节点。
     expect(nodeInspector).not.toContain('子源信息（各节点共享）')
     expect(canvasHeader).not.toContain('@click="openEdit"')
     expect(canvasHeader).toContain('class="ch-canvas-actions"')
@@ -176,8 +177,8 @@ describe('最新方案 UI 入口收口', () => {
     expect(flowBoard).toContain('rc-flow-xml')
     expect(sourceBasicForm).not.toContain('定时策略（仅作用于首节点）')
     expect(sourceBasicForm).not.toContain('选用配置 / 定时')
-    expect(allInspectorSource).not.toContain('<TaskScheduleSettings')
-    expect(collectorSettings).toContain('<TaskScheduleSettings v-if="showSchedule"')
+    expect(configTab).toContain('<TaskScheduleSettings')
+    expect(collectorSettings).not.toContain('<TaskScheduleSettings')
   })
 
   it('切换子源保留当前视图，视图按钮等待路由完成后再允许下一次切换', () => {
@@ -256,7 +257,9 @@ describe('最新方案 UI 入口收口', () => {
     expect(taskTab).toContain('addTaskField')
     expect(taskTab).toContain('removeTaskField')
     expect(taskTab).toContain('+ 添加字段')
-    expect(taskTab).toContain('!isFirstDataNode')
+    expect(taskTab).toContain('hasEffectiveInput')
+    expect(taskTab).toContain('effectiveInputTableId')
+    expect(taskTab).not.toContain('isFirstDataNode')
   })
 
   it('流程编辑不消费配置列表，源表单不再提供选用配置', () => {

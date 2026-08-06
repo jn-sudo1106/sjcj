@@ -15,7 +15,7 @@ function setup(main: string[] = ['start', 'web-list', 'web-detail', 'end']) {
   setActivePinia(createPinia())
   const n = useNodeStore()
   const configs = makeConfigs()
-  n.bindFlowStore(configs, () => main)
+  n.bindFlowStore(configs, () => main, (id) => configs[id]?.collectCfg?.inputTable || configs[id]?.inputTable || '')
   return { n, configs }
 }
 
@@ -132,11 +132,7 @@ describe('patchCollect', () => {
 })
 
 describe('patchTaskConfig', () => {
-  // 注：isFirstMainNode 判定是否首节点看「main 数组里排在前面、且在 configs 里有实体」的节点，
-  // 不是看数组下标——默认 setup 的 configs 只有 web-list/web-detail 两个实体，'start' 没有对应
-  // configs 项，所以 web-list（前面只有 'start'）会被判定为「首节点」，触发下面 patchTaskConfig
-  // 里 isFirstMainNode 分支清空 paramValues/contextMap/outColumns。因此下面两个用例用 web-detail
-  // （前面有 web-list 这个真实节点）来验证「非首节点」时的正常合并逻辑，首节点分支单独测。
+  // 任务参数、上下文来源和出参列不再按主链位置清空；是否有输入由有效输入表语义决定。
 
   it('paramValues 只保留本节点 urlParamRefs 里的参数，且去重（非首节点）', () => {
     const { n, configs } = setup()
@@ -145,17 +141,31 @@ describe('patchTaskConfig', () => {
     expect(configs['web-detail'].taskCfg?.paramValues).toEqual([{ paramId: 'p-a', fieldId: '', valueExpr: '' }])
   })
 
-  it('contextMap / outColumns 去重且过滤空值（非首节点）', () => {
+  it('contextMap / outColumns 去重且过滤空值（任意节点）', () => {
     const { n, configs } = setup()
     n.patchTaskConfig('web-detail', { contextMap: ['a', 'a', '', 'b'] })
     expect(configs['web-detail'].taskCfg?.contextMap).toEqual(['a', 'b'])
   })
 
-  it('主链首节点会被清掉 paramValues/contextMap/outColumns（首节点无上游可传参）', () => {
-    const { n, configs } = setup() // web-list 前面只有无 configs 实体的 'start'，判定为首节点
+  it('没有有效输入表时保持 paramValues/contextMap/outColumns 为空', () => {
+    const { n, configs } = setup()
     n.patchTaskConfig('web-list', { paramValues: [], contextMap: ['a'], outColumns: ['b'] })
     expect(configs['web-list'].taskCfg?.contextMap).toBeUndefined()
     expect(configs['web-list'].taskCfg?.outColumns).toBeUndefined()
+  })
+
+  it('有显式输入表时保留 paramValues/contextMap/outColumns', () => {
+    const { n, configs } = setup()
+    configs['web-list'].collectCfg!.inputTable = 'INPUT_T'
+    configs['web-list'].collectCfg!.urlParamRefs = ['p-a']
+    n.patchTaskConfig('web-list', {
+      paramValues: [{ paramId: 'p-a', fieldId: 'title' }],
+      contextMap: ['title'],
+      outColumns: ['detail_url'],
+    })
+    expect(configs['web-list'].taskCfg?.paramValues).toEqual([{ paramId: 'p-a', fieldId: 'title', valueExpr: '' }])
+    expect(configs['web-list'].taskCfg?.contextMap).toEqual(['title'])
+    expect(configs['web-list'].taskCfg?.outColumns).toEqual(['detail_url'])
   })
 })
 

@@ -20,13 +20,13 @@ describe('CollectorSettings（0711 R5：采集节点运行设置，默认折叠�
     expect(wrapper.find('.cs-body').exists()).toBe(true)
   })
 
-  it('首节点将定时策略显示在运行设置内', async () => {
+  it('运行设置不再承载定时策略', async () => {
     const wrapper = mount(CollectorSettings, {
-      props: { modelValue: {}, capability: COLLECTOR_CAPABILITIES.web, showSchedule: true },
+      props: { modelValue: {}, capability: COLLECTOR_CAPABILITIES.web },
     })
     await wrapper.find('.cs-toggle').trigger('click')
-    expect(wrapper.find('.tss-wrap').exists()).toBe(true)
-    expect(wrapper.text()).toContain('定时策略')
+    expect(wrapper.find('.tss-wrap').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('定时策略')
   })
 
   it('按 capability 精确显示控件：不支持代理/登录的节点类型不显示对应控件', async () => {
@@ -44,7 +44,7 @@ describe('CollectorSettings（0711 R5：采集节点运行设置，默认折叠�
     expect(wechat.find('.cs-wrap').exists()).toBe(true)
   })
 
-  it('登录关闭时清理 loginUrl/credentialRef/account', async () => {
+  it('旧登录配置只显示迁移提示，不再提供编辑入口', async () => {
     const wrapper = mount(CollectorSettings, {
       props: {
         modelValue: { needLogin: true, loginUrl: 'https://x.com/login', account: 'admin', credentialRef: 'cred-1' },
@@ -52,15 +52,9 @@ describe('CollectorSettings（0711 R5：采集节点运行设置，默认折叠�
       },
     })
     await wrapper.find('.cs-toggle').trigger('click')
-    const offBtn = wrapper.findAll('.rc-segment button')[0]
-    await offBtn.trigger('click')
-    const emitted = wrapper.emitted('update:modelValue')
-    expect(emitted).toBeTruthy()
-    const patch = emitted![emitted!.length - 1][0] as Record<string, unknown>
-    expect(patch.needLogin).toBe(false)
-    expect(patch.loginUrl).toBe('')
-    expect(patch.account).toBe('')
-    expect(patch.credentialRef).toBe('')
+    expect(wrapper.text()).toContain('旧登录配置')
+    expect(wrapper.find('.rc-segment').exists()).toBe(false)
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
   })
 
   it('切换代理 checkbox 只 emit 变更的字段', async () => {

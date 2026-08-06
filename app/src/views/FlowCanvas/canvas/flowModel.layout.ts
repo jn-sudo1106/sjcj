@@ -18,6 +18,8 @@ import type {
   InputMapping,
   NodeConfig,
   NodeConfigSeed,
+  CollectorSchedule,
+  TaskConfig,
   TaskParamValue,
   TripleField,
 } from './flowModel'
@@ -79,6 +81,18 @@ export function normalizeNodeConfig(cfg: NodeConfig | NodeConfigSeed): NodeConfi
     next.taskCfg.contextMap = [...new Set((next.taskCfg.contextMap ?? []).filter(Boolean))]
     next.taskCfg.outColumns = [...new Set((next.taskCfg.outColumns ?? []).filter(Boolean))]
   }
+  // 0806：定时策略统一迁到节点级；旧 CollectConfig / TaskConfig 字段保留兼容，
+  // 新 UI 只写 next.schedule，避免再把定时策略绑定到首节点或采集节点。
+  const legacyTask = next.taskCfg as (TaskConfig & Partial<CollectorSchedule>) | undefined
+  const legacyCollect = next.collectCfg
+  const schedule = next.schedule
+  const normalizedSchedule: CollectorSchedule = {
+    scheduleType: schedule?.scheduleType ?? legacyCollect?.scheduleType ?? legacyTask?.scheduleType,
+    scheduleTime: schedule?.scheduleTime ?? legacyCollect?.scheduleTime ?? legacyTask?.scheduleTime,
+    weekdays: schedule?.weekdays ?? legacyCollect?.weekdays ?? legacyTask?.weekdays,
+    cron: schedule?.cron ?? legacyCollect?.cron ?? legacyTask?.cron,
+  }
+  if (Object.values(normalizedSchedule).some((value) => value !== undefined && value !== '')) next.schedule = normalizedSchedule
   return {
     ...next,
     inmap: (next.inmap ?? []).map(normalizeInputMapping),
