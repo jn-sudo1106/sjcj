@@ -19,6 +19,7 @@ import type {
   NodeConfig,
   NodeConfigSeed,
   CollectorSchedule,
+  LoginConfigRef,
   TaskConfig,
   TaskParamValue,
   TripleField,
@@ -57,6 +58,52 @@ export function setTripleValue(field: TripleField, row: InputMapping | FieldDef,
 
 export function normalizeNodeConfig(cfg: NodeConfig | NodeConfigSeed): NodeConfig {
   const next = JSON.parse(JSON.stringify(cfg)) as NodeConfigSeed
+  if (next.collectCfg) {
+    const legacyAccount = next.collectCfg.account?.trim()
+    const normalizeLoginConfigs = (items: LoginConfigRef[]) => {
+      const seen = new Set<string>()
+      const configs = items
+        .map((item, index) => {
+          const raw = item as unknown as Record<string, unknown>
+          return {
+          id: item.id?.trim() || `login-${index + 1}`,
+          loginUrl: item.loginUrl?.trim() || next.collectCfg?.loginUrl?.trim() || next.collectCfg?.url?.trim() || '',
+          loginName: item.loginName?.trim() || String(raw.account ?? '').trim(),
+          // 登录密码只允许存在于当前编辑会话；从已保存流程/模板加载时不回填。
+          loginPwd: '',
+          newLoginConfig: item.newLoginConfig === '0' ? '0' as const : '1' as const,
+          authConfig: item.authConfig?.trim() || '',
+          enabled: item.enabled !== false,
+          }
+        })
+        .filter((item) => {
+          if (seen.has(item.id)) return false
+          seen.add(item.id)
+          return true
+        })
+      const preferred = next.collectCfg?.defaultLoginConfigId
+      next.collectCfg!.loginConfigs = configs
+      next.collectCfg!.defaultLoginConfigId = configs.some((item) => item.id === preferred && item.enabled)
+        ? preferred
+        : configs.find((item) => item.enabled)?.id
+      const selected = configs.find((item) => item.id === next.collectCfg!.defaultLoginConfigId)
+      if (selected?.loginUrl) next.collectCfg!.url = selected.loginUrl
+    }
+
+    if (next.collectCfg.loginConfigs?.length) {
+      normalizeLoginConfigs(next.collectCfg.loginConfigs)
+    } else if (legacyAccount || next.collectCfg.loginUrl) {
+      normalizeLoginConfigs([{
+        id: 'legacy-default',
+        loginUrl: next.collectCfg.loginUrl || next.collectCfg.url || '',
+        loginName: legacyAccount || '',
+        loginPwd: '',
+        newLoginConfig: '1',
+        authConfig: '',
+        enabled: true,
+      }])
+    }
+  }
   if (next.collectCfg && !next.collectCfg.urlParamRefs?.length) {
     // 旧流程只有 URL token；加载时迁移为显式节点绑定，保存后不再依赖隐式推导。
     next.collectCfg.urlParamRefs = extractUrlParamIds(next.collectCfg.url)

@@ -288,7 +288,7 @@ describe('RuleOrchestrationTab · 全屏测试台（拍板 #12）', () => {
     expect(wrapper.html()).toContain('sku_name')
   })
 
-  it('高级筛选 SQL 条件：透传给 rowQueryPaged（S5-2 起改走 DataQueryPanel 的高级筛选）', async () => {
+  it('筛选条件 SQL：透传给 rowQueryPaged（S5-2 起改走 DataQueryPanel）', async () => {
     const { wrapper } = mountWithScript()
     await flushPromises()
     const rowSpy = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
@@ -296,9 +296,8 @@ describe('RuleOrchestrationTab · 全屏测试台（拍板 #12）', () => {
     await wrapper.findAll('button').find((b) => b.text() === '测试脚本')!.trigger('click')
     await flushPromises()
 
-    await wrapper.findAll('.dv-link').find((el) => el.text() === '高级筛选')!.trigger('click')
-    await flushPromises()
-    await wrapper.find('input[placeholder*="SQL 条件"]').setValue("K1='2025'")
+    await wrapper.find('button[aria-controls="data-query-advanced"]').trigger('click')
+    await wrapper.find('input[placeholder*="条件表达式"]').setValue("K1='2025'")
     await wrapper.findAll('button').find((b) => b.text() === '查询')!.trigger('click')
     await flushPromises()
 

@@ -8,6 +8,7 @@ import { useWorkspaceStore } from '../../stores/workspace'
 import { flowApi, sourceApi, siteApi, type Source, type Site } from '../../api'
 import { useRuntimeStore } from '../../stores/runtime'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
+import LoginConfigSelectDialog from '@/views/FlowCanvas/launch/LoginConfigSelectDialog.vue'
 import NodeInspector from '@/views/FlowCanvas/inspector/NodeInspector.vue'
 import ResultView from './result/ResultView.vue'
 import SourceTabsBar from './source/SourceTabsBar.vue'
@@ -17,6 +18,7 @@ import FileView from './result/FileView.vue'
 import SiteSourceSwitcher from './source/SiteSourceSwitcher.vue'
 import SiteDetailView from './result/SiteDetailView.vue'
 import CategoryTreePicker, { type CategorySelection } from './source/CategoryTreePicker.vue'
+import { collectorCapabilityOf, type LoginConfigRef } from '@/views/FlowCanvas/canvas/flowModel'
 import { firstSourceId, normalizeSourceView, normalizeSiteView, sourceViewFromHash } from '@/utils/url/workspaceRoute'
 
 const route = useRoute()
@@ -230,6 +232,61 @@ async function onSave() {
 // capturing：runtime.running 要等 sendSnatch 的 await 完之后才置真，中间有个真空窗口，
 // 单靠它挡不住同一按钮的快速二次点击，这里在校验通过后立即同步占位。
 const capturing = ref(false)
+const loginConfigDialogOpen = ref(false)
+const loginConfigDialogConfigs = ref<LoginConfigRef[]>([])
+const loginConfigDialogDefaultId = ref('')
+let resolveLoginConfigSelection: ((configId?: string) => void) | null = null
+
+function loginConfigsForNode(cfg: ReturnType<typeof flow.serialize>['configs'][string]): LoginConfigRef[] {
+  const collect = cfg.collectCfg
+  if (!collect) return []
+  if (collect.loginConfigs?.length) return collect.loginConfigs
+  return collect.account || collect.loginUrl
+    ? [{
+      id: 'legacy-default', loginUrl: collect.loginUrl || collect.url || '', loginName: collect.account || '', loginPwd: '',
+      newLoginConfig: '1' as const, authConfig: '', enabled: true,
+    }]
+    : []
+}
+
+function loginNodeForStart() {
+  const entries = Object.entries(flow.configs)
+  for (const [nodeId, cfg] of entries) {
+    if (collectorCapabilityOf(cfg)?.kind === 'login') return { nodeId, cfg }
+  }
+  return undefined
+}
+
+function chooseLoginConfigForStart(): Promise<{ nodeId: string; configId: string } | null | undefined> {
+  const loginNode = loginNodeForStart()
+  if (!loginNode) return Promise.resolve(null)
+  const configs = loginConfigsForNode(loginNode.cfg)
+  const enabled = configs.filter((config) => config.enabled)
+  if (!enabled.length) {
+    ElMessage.warning('请先在网页登录节点配置至少一条启用的登录配置')
+    return Promise.resolve(undefined)
+  }
+  const defaultId = loginNode.cfg.collectCfg?.defaultLoginConfigId
+  if (enabled.length === 1) return Promise.resolve({ nodeId: loginNode.nodeId, configId: enabled[0].id })
+
+  loginConfigDialogConfigs.value = configs
+  loginConfigDialogDefaultId.value = defaultId || enabled[0].id
+  loginConfigDialogOpen.value = true
+  return new Promise((resolve) => { resolveLoginConfigSelection = (configId) => resolve(configId ? { nodeId: loginNode.nodeId, configId } : undefined) })
+}
+
+function confirmLoginConfigSelection(configId: string) {
+  loginConfigDialogOpen.value = false
+  resolveLoginConfigSelection?.(configId)
+  resolveLoginConfigSelection = null
+}
+
+function cancelLoginConfigSelection() {
+  loginConfigDialogOpen.value = false
+  resolveLoginConfigSelection?.()
+  resolveLoginConfigSelection = null
+}
+
 async function onStartCapture() {
   const s = flow.sourceCtx
   if (!s) return
@@ -242,14 +299,19 @@ async function onStartCapture() {
     ElMessage.warning('已有发起抓取正在进行，请稍候')
     return
   }
+  const loginSelection = await chooseLoginConfigForStart()
+  if (loginSelection === undefined) return
   capturing.value = true
   try {
+    // P0 执行器契约确认前，登录配置选择只作用于当前 mock 运行态，不透传给旧 sendSnatch。
     const res = await sourceApi.sendSnatch([s.sourceId])
     if (!res?.ok) {
       ElMessage.warning(res?.message || '发起抓取失败，请重试')
       return
     }
-    const runId = runtime.startCapture(flow.serialize())
+    const runId = runtime.startCapture(flow.serialize({ includeLoginPasswords: true }), loginSelection
+      ? { loginNodeId: loginSelection.nodeId, loginConfigId: loginSelection.configId }
+      : undefined)
     if (!runId) {
       ElMessage.warning('当前画布没有可发起抓取的节点（已停止 / 规划中 / 缺 URL 或输出表的采集节点会被跳过）')
       return
@@ -319,6 +381,8 @@ watch(isGate, (v) => {
   }
 })
 onUnmounted(() => {
+  resolveLoginConfigSelection?.()
+  resolveLoginConfigSelection = null
   window.removeEventListener('hashchange', syncActiveView)
   onSplitEnd()
   ui.inspectorExpanded = false
@@ -404,6 +468,13 @@ onUnmounted(() => {
       </div>
     </div>
   </template>
+  <LoginConfigSelectDialog
+    v-model:open="loginConfigDialogOpen"
+    :configs="loginConfigDialogConfigs"
+    :default-id="loginConfigDialogDefaultId"
+    @confirm="confirmLoginConfigSelection"
+    @cancel="cancelLoginConfigSelection"
+  />
 </template>
 
 <style scoped>

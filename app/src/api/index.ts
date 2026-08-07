@@ -8,7 +8,7 @@ import type {
   TaskInstQuery,
   Config, ConfigActionLog, ConfigParamBinding, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, RawFile, RawFileQuery, RawFileStats, SourceCloneRequest, SourceCloneResult,
-  FlowTemplate, FlowTemplateSaveInput,
+  FlowTemplate, FlowTemplateSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
 } from './types'
 import type { FlowDef, FlowRecommendation } from '@/views/FlowCanvas/canvas/flowModel'
 import {
@@ -42,15 +42,27 @@ import {
   ruleOrchestrationTestToLegacy,
   summaryRowFromLegacy,
   taskInstFromLegacy,
+  assertLegacySnatchSaveLogin,
+  legacySnatchSavePayloadFromFlow,
 } from './legacyAdapters'
 import { encryptLegacyPayload } from './legacyCrypto'
 
 export * from './types'
-export { isDanger, DANGER_ENDPOINTS } from './client'
+export { isDanger, DANGER_ENDPOINTS, isMockMode } from './client'
 
 // 网站/子源域尚未迁移真实后端，始终使用现有 Mock；参数等已迁移域仍由全局模式决定。
 const assetMockRequest = <T>(endpoint: string, params?: Record<string, unknown>) =>
   request<T>(endpoint, params, { mode: 'mock' })
+
+async function legacySnatchSaveRequest(payload: LegacySnatchSaveRequest): Promise<LegacySnatchSaveResult> {
+  const result = await request<LegacySnatchSaveResult>('snatch/snatchSave', payload as unknown as Record<string, unknown>, {
+    method: 'POST',
+    httpEndpoint: 'snatch/snatchSave',
+  })
+  if (result?.sourceId || !result?.message) return result
+  const sourceId = result.message.match(/源ID[:：]\s*([^\s,，]+)/)?.[1]
+  return sourceId ? { ...result, sourceId } : result
+}
 
 // 类型化接口：每个方法一一对应一个真实 /v1 端点。后续按 142 个端点逐域补全。
 export const sourceApi = {
@@ -67,7 +79,17 @@ export const sourceApi = {
   // 注：endpoints.ts:54 只登记 path 无参数契约，按单源封装；批量场景由调用方循环（见 SourceTab.onOperate）。
   changeToSuccess: (sourceId: string) => assetMockRequest<Ack>('source/changeToSuccess', { sourceId }),
   copySource: (sourceId: string) => assetMockRequest<Ack>('source/copySource', { sourceId }),
-  sendSnatch: (sourceIds: string[]) => assetMockRequest<Ack>('source/sendSnatch', { sourceIds }),
+  /** 发起抓取；真实执行器的登录配置选择参数待 P0 契约确认，当前只沿用旧 sourceIds 请求。 */
+  sendSnatch: (sourceIds: string[]) =>
+    assetMockRequest<Ack>('source/sendSnatch', { sourceIds }),
+  /** 旧平台新建源的一次性提交；请求体字段严格沿用 Step1/2/3 的 snatchSave 契约。 */
+  snatchSaveAll: (payload: LegacySnatchSaveRequest) => legacySnatchSaveRequest(payload),
+  /** 从当前画布生成旧请求体；请求体字段仍按旧平台命名，待 P0 确认后由明确的新建源动作调用。 */
+  snatchSaveFromFlow: (def: FlowDef, loginSubmission?: LegacyLoginSubmission) => {
+    const payload = legacySnatchSavePayloadFromFlow(def, loginSubmission)
+    assertLegacySnatchSaveLogin(payload)
+    return legacySnatchSaveRequest(payload)
+  },
   deleteSource: (sourceIds: string[]) => assetMockRequest<Ack>('source/deleteSource', { sourceIds }),
   sourceLogs: (sourceId: string) => assetMockRequest<SourceLog[]>('source/logPaged', { sourceId }),
   sourceTasks: (sourceId: string) => assetMockRequest<TaskInst[]>('task/topTaskPaged', { sourceId }),
@@ -396,6 +418,18 @@ function numericId(value: unknown): unknown {
   return value
 }
 
+function escapeLegacySqlString(value: string) {
+  return value.replaceAll("'", "''")
+}
+
+function buildLegacyMore(q: RowQuery) {
+  const parts: string[] = []
+  if (q.startTime) parts.push(`CREATE_DT >= '${escapeLegacySqlString(q.startTime)}'`)
+  if (q.endTime) parts.push(`CREATE_DT <= '${escapeLegacySqlString(q.endTime)}'`)
+  if (q.sql?.trim()) parts.push(q.startTime || q.endTime ? `(${q.sql.trim()})` : q.sql.trim())
+  return parts.join(' AND ') || undefined
+}
+
 function buildLegacyRowQuery(q: RowQuery) {
   return {
     page: q.page ?? 1,
@@ -407,10 +441,11 @@ function buildLegacyRowQuery(q: RowQuery) {
     // 多选由调用方 join(',') 传入；旧 AES 载荷无值时不带该键（不兜底 'ALL'，见方案开放项 2）
     state: q.state || undefined,
     nextFlag: q.nextFlag,
-    // SQL 条件的旧后端字段名是 more（不是 sql）；发错会被后端静默忽略，筛选失效
+    // SQL 条件的旧后端字段名是 more（不是 sql）；发错会被后端静默忽略，筛选失效。
+    // 时间范围同样合并进 more，保留旧端点和 AES 载荷契约。
     min: q.sql ? q.min || 0 : q.min,
     max: q.max,
-    more: q.sql,
+    more: buildLegacyMore(q),
     // 对照真实源码 EntryList2.vue：该页排序一律走 field/type 数值化 hack（含 ENTRY_ID 本身），
     // sorted 恒为 '0'；entry.js 里 sortField==='ENTRY_ID' 触发 sorted±1 的分支是给另一套表格组件
     // （s-table/AntD sorter）准备的，此页从不设置 sortField/sortOrder，是死分支，不迁移。
@@ -422,6 +457,7 @@ function buildLegacyRowQuery(q: RowQuery) {
 }
 
 // 数据查看（M4）
+type DataRequestOptions = { mode?: 'mock' | 'http' }
 export const dataApi = {
   // 选表分组（旧 EntryTypeSelectMulti 分组下拉的数据源）；sourceId 可空
   entryTypesGroup: async (sourceId?: string) => {
@@ -439,19 +475,21 @@ export const dataApi = {
   },
   rows: async (tableId: string) => (await dataApi.rowQueryPaged({ tableId, page: 1, size: 100 })).list,
   // 结果视图：按表 + 多条件 + 分页（独立端点，避免影响 /data 全局数据页）
-  rowQueryPaged: async (q: RowQuery) => {
+  rowQueryPaged: async (q: RowQuery, options: DataRequestOptions = {}) => {
     const result = await request<Paged<unknown>>('data/rowQueryPaged', q, {
       method: 'POST',
+      ...options,
       httpEndpoint: 'entry/entryDataPaged',
       httpParams: { data: encryptLegacyPayload(buildLegacyRowQuery(q)) },
     })
     return { total: result.total, list: result.list.map(dataRowFromLegacy) }
   },
-  tableMeta: async (tableId: string) => {
+  tableMeta: async (tableId: string, options: DataRequestOptions = {}) => {
     // 对照真实源码 loadEntryTypeDetail：res.data 就是扁平的实体表记录（含 items[]），
     // curEntryType 只是旧前端本地变量名，响应体里没有这层包装，不需要解包
     const result = await request<unknown>('data/tableMeta', { tableId }, {
       method: 'GET',
+      ...options,
       httpEndpoint: 'entry/queryEntryType',
       httpParams: { type: tableId },
     })

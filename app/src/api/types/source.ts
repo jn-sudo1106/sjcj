@@ -14,7 +14,7 @@
 //     —— api → view 是 plan §十 已识别的分层倒置，P1-3 暂不解决，保持 import type 不产生运行时依赖
 // import type 严格模式
 
-import type { PageQuery, RunState } from './common'
+import type { Ack, PageQuery, RunState } from './common'
 import type { ConfigParamBinding } from './collect'
 import type {
   BranchSeed,
@@ -32,6 +32,8 @@ export interface Source {
   name: string
   url: string
   configId: string
+  /** @deprecated 旧平台 snatchSave 请求字段；读取旧源时保留，业务层不再新写。 */
+  sourceType?: string | number
   configId2?: string
   configId3?: string
   mainTable: string // 主表
@@ -72,12 +74,16 @@ export interface Source {
   // ---- 源级配置（0706 优化·源/节点配置分层）：整条流程共享，编辑入口 = 源信息头编辑抽屉 / 新建源第一步 ----
   /** @deprecated 节点级缺省值；已双轨至 CollectConfig.useProxy */
   useProxy?: boolean // 是否使用代理
+  /** @deprecated 旧平台 snatchSave 请求字段，值为 '1' / ''。 */
+  proxy?: string
   /** @deprecated 节点级缺省值；已双轨至 CollectConfig.needLogin */
   needLogin?: boolean // 是否要求登陆（与 credentialRef 解耦：可先开关，后续再绑凭据）
   /** @deprecated 节点级缺省值；已双轨至 CollectConfig.loginUrl */
   loginUrl?: string // 登陆 URL
   /** @deprecated 节点级缺省值；已双轨至 CollectConfig.account */
   account?: string // 登陆用户名
+  /** @deprecated 旧平台已存在登录模板的 ID；对应 snatchSave.authConfig。 */
+  authConfig?: string
   configMode?: 'new' | 'existing' // 选用配置：新建 / 使用已有
   configName?: string // 新建配置名称（configMode='new' 时）
   configTopic?: string // 新建配置 Topic（队列 fallback 提示用）
@@ -127,6 +133,8 @@ export interface FlowTemplateNodeBinding {
     | 'loginUrl'
     | 'account'
     | 'credentialRef'
+    | 'loginConfigs'
+    | 'defaultLoginConfigId'
     | 'scheduleType'
     | 'scheduleTime'
     | 'weekdays'
@@ -251,6 +259,44 @@ export interface SourceCloneResult {
   source: Source
   flowId: string
   tableIdMap: Record<string, string>
+}
+
+/** 旧平台 /v1/snatch/snatchSave 的完整新建源请求字段。字段名按旧 Step1/2/3 原样保留。 */
+export interface LegacySnatchSaveRequest {
+  sourceType?: string | number
+  sourceUrl: string
+  sourceName: string
+  categoryId?: string
+  proxy?: string
+  keep?: string
+  cron?: string
+  tags?: string
+  newConfig: '0' | '1'
+  configId?: string
+  isMulti: string
+  loginTemplete: string
+  entryTypeId?: string
+  params: { paramId: string }[]
+  reqLogin: '0' | '1'
+  newLoginConfig?: '0' | '1'
+  authConfig?: string
+  loginUrl?: string
+  loginName?: string
+  /** 仅允许由提交动作临时传入，不进入 FlowDef。 */
+  loginPwd?: string
+}
+
+/** 旧平台登录提交的临时敏感字段，不随流程快照保存。 */
+export interface LegacyLoginSubmission {
+  /** 从多条 loginConfigs 中指定本次提交到旧平台的那一条。 */
+  configId?: string
+  newLoginConfig: '0' | '1'
+  authConfig?: string
+  loginPwd?: string
+}
+
+export interface LegacySnatchSaveResult extends Ack {
+  sourceId?: string
 }
 
 /** 源分类目录树节点（多级，带计数）— 采集资产左侧目录 */

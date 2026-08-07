@@ -54,6 +54,21 @@ describe('实体数据 API 旧平台 HTTP 契约', () => {
     expect(payload.entryId).toBe('9')
   })
 
+  it('时间范围与条件表达式合并到旧端点 more', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, count: 0, data: [] }))
+    const { dataApi } = await import('./index')
+
+    await dataApi.rowQueryPaged({
+      tableId: '1042',
+      startTime: '2026-08-01 00:00:00',
+      endTime: '2026-08-02 23:59:59',
+      sql: "K1 <> '测试'",
+    })
+
+    const payload = decryptBody(fetchMock.mock.calls[0][1] as RequestInit)
+    expect(payload.more).toBe("CREATE_DT >= '2026-08-01 00:00:00' AND CREATE_DT <= '2026-08-02 23:59:59' AND (K1 <> '测试')")
+  })
+
   it('SQL 条件有值时 min 默认 0，无值时不兜底', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, count: 0, data: [] }))
     const { dataApi } = await import('./index')

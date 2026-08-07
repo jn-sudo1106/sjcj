@@ -65,5 +65,7 @@ watch([() => props.modelValue, () => props.sourceId], async ([open, sourceId]) =
 <style scoped>
 /* 源详情 12 项字段用单列纵向排太长，常态高度下要滚动才能看到最后几项；
    改成两组 label:value 并排（4 列），行数减半，抽屉宽度也相应放宽到 640px。 */
-.rc-kv-wide { grid-template-columns: 68px 1fr 68px 1fr; }
+.rc-kv-wide {
+  grid-template-columns: 68px 1fr 68px 1fr;
+}
 </style>

@@ -19,9 +19,18 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
+function sanitizeTemplateConfig(config: NodeConfig): NodeConfig {
+  const next = clone(config)
+  if (next.collectCfg) {
+    Reflect.deleteProperty(next.collectCfg, 'password')
+    next.collectCfg.loginConfigs?.forEach((item) => Reflect.deleteProperty(item, 'loginPwd'))
+  }
+  return next
+}
+
 const SOURCE_OVERRIDE_COLLECT_KEYS = [
   'url', 'outputTable', 'inputTable', 'entryCondition', 'inputParams', 'urlParamRefs', 'urlParamValues',
-  'useProxy', 'resume', 'needLogin', 'loginUrl', 'account', 'credentialRef',
+  'useProxy', 'resume', 'needLogin', 'loginUrl', 'account', 'credentialRef', 'loginConfigs', 'defaultLoginConfigId',
   'scheduleType', 'scheduleTime', 'weekdays', 'cron',
 ] as const
 
@@ -46,7 +55,7 @@ export function templateDefinitionFromFlow(def: FlowDef): FlowTemplateDefinition
   const idMap = new Map(ids.map((id, index) => [id, `node-${index + 1}`]))
   const mapId = (id: string) => idMap.get(id) ?? id
   const configs: Record<string, NodeConfig> = {}
-  ids.forEach((id) => { configs[mapId(id)] = clone(def.configs[id]) })
+  ids.forEach((id) => { configs[mapId(id)] = sanitizeTemplateConfig(def.configs[id]) })
 
   return {
     main: def.main.map(mapId),
@@ -71,7 +80,7 @@ export function sanitizeTemplateDefinition(definition: FlowTemplateDefinition): 
   return {
     main: [...definition.main],
     branches: clone(definition.branches),
-    configs: clone(definition.configs),
+    configs: Object.fromEntries(Object.entries(definition.configs).map(([id, config]) => [id, sanitizeTemplateConfig(config)])),
     branchGroups: clone(definition.branchGroups ?? []),
   }
 }
@@ -99,7 +108,15 @@ export function extractTemplateNodeBindings(configs: Record<string, NodeConfig>)
       const collect: NonNullable<FlowTemplateNodeBinding['collect']> = {}
       SOURCE_OVERRIDE_COLLECT_KEYS.forEach((key) => {
         const value = config.collectCfg?.[key]
-        if (value !== undefined) (collect as Record<string, unknown>)[key] = clone(value)
+        if (value !== undefined) {
+          const copied = clone(value)
+          if (key === 'loginConfigs' && Array.isArray(copied)) {
+            copied.forEach((item) => {
+              if (item && typeof item === 'object') Reflect.deleteProperty(item, 'loginPwd')
+            })
+          }
+          (collect as Record<string, unknown>)[key] = copied
+        }
       })
       binding.collect = collect
     }

@@ -55,6 +55,26 @@ const TABLES: DataTableMeta[] = [
     ],
   },
   {
+    tableId: '2101500', tableName: 'sense_data.TB_LANG_NOTICE', rowCount: 288,
+    fields: [
+      { prop: 'feed_id-K1', type: 'string', desc: '公告 ID', sample: 'LANG-01-0001' },
+      { prop: 'title-K2', type: 'string', desc: '公告标题', sample: '多语种公告示例' },
+      { prop: 'publish_time-K3', type: 'string', desc: '发布时间', sample: '2026-07-07 08:02' },
+      { prop: 'url-K4', type: 'url', desc: '原文链接', sample: 'https://example.com/notice' },
+      { prop: 'content-K5', type: 'longtext', desc: '正文', sample: '这是演示数据' },
+    ],
+  },
+  {
+    tableId: '2101500_DETAIL', tableName: 'sense_data.TB_LANG_NOTICE_DETAIL', rowCount: 288,
+    fields: [
+      { prop: 'feed_id-K1', type: 'string', desc: '公告 ID', sample: 'LANG-01-0001-D' },
+      { prop: 'parent_id', type: 'string', desc: '父 ID（列表）', sample: 'LANG-01-0001' },
+      { prop: 'publish_time-K3', type: 'string', desc: '发布时间', sample: '2026-07-07 08:02' },
+      { prop: 'url-K4', type: 'url', desc: '原文链接', sample: 'https://example.com/notice' },
+      { prop: 'content-K5', type: 'longtext', desc: '正文', sample: '这是演示详情数据' },
+    ],
+  },
+  {
     tableId: '2100157', tableName: 'sense_data.TB_FUND_COMMENT', rowCount: 1817,
     fields: [
       { prop: 'feed_id-K1', type: 'string', desc: '评论 ID', sample: '8364949149' },
@@ -193,6 +213,26 @@ function genSourceDetailRow(i: number, label: string): Record<string, unknown> {
     'tags-K10': '20170',
   }
 }
+function genLangNoticeRow(i: number, langIndex: number): Record<string, unknown> {
+  const id = `LANG-${String(langIndex).padStart(2, '0')}-${String(i + 1).padStart(4, '0')}`
+  return {
+    'feed_id-K1': id,
+    'title-K2': `多语种公告示例 ${langIndex}-${i + 1}`,
+    'publish_time-K3': '2026-07-07 08:02',
+    'url-K4': `https://example.com/notice?lang=${langIndex}&id=${i + 1}`,
+    'content-K5': '这是多语种演示数据',
+  }
+}
+function genLangNoticeDetailRow(i: number, langIndex: number): Record<string, unknown> {
+  const parentId = `LANG-${String(langIndex).padStart(2, '0')}-${String(i + 1).padStart(4, '0')}`
+  return {
+    'feed_id-K1': `${parentId}-D`,
+    parent_id: parentId,
+    'publish_time-K3': '2026-07-07 08:02',
+    'url-K4': `https://example.com/notice?lang=${langIndex}&id=${i + 1}`,
+    'content-K5': '这是多语种演示详情数据',
+  }
+}
 
 const QUERY_ROWS: Record<string, DataRow[]> = {}
 function buildRows(sourceId: string, n: number, gen: (i: number) => Record<string, unknown>): DataRow[] {
@@ -230,6 +270,18 @@ for (const source of RESULT_SOURCE_TABLES) {
   QUERY_ROWS[detailTable] = [
     ...(QUERY_ROWS[detailTable] ?? []),
     ...buildRows(source.sourceId, 12, detailGen),
+  ]
+}
+// 多语种演示网站的输出表属于前端种子数据，真实后端未必已注册；Mock 模式下仍提供完整结果视图样例。
+for (let langIndex = 1; langIndex <= 24; langIndex += 1) {
+  const sourceId = `site-lang-demo-${String(langIndex).padStart(2, '0')}`
+  QUERY_ROWS['2101500'] = [
+    ...(QUERY_ROWS['2101500'] ?? []),
+    ...buildRows(sourceId, 12, (i) => genLangNoticeRow(i, langIndex)),
+  ]
+  QUERY_ROWS['2101500_DETAIL'] = [
+    ...(QUERY_ROWS['2101500_DETAIL'] ?? []),
+    ...buildRows(sourceId, 12, (i) => genLangNoticeDetailRow(i, langIndex)),
   ]
 }
 

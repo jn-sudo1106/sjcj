@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ResultView from './ResultView.vue'
-import { dataApi, siteApi, type DataTableMeta, type Source } from '@/api'
+import { dataApi, siteApi, type DataRow, type DataTableMeta, type Source } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
 
@@ -85,5 +85,30 @@ describe('ResultView', () => {
     const sourceFilter = wrapper.find<HTMLSelectElement>('[data-testid="data-source-filter"]')
     expect(sourceFilter.exists()).toBe(true)
     expect(sourceFilter.element.value).toBe(current.sourceId)
+  })
+
+  it('表结构接口异常时不阻断数据查询，并提示已回退到演示数据', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const row: DataRow = {
+      dataId: 'row-1', sourceId: current.sourceId, title: '测试行', summary: '',
+      acceptState: 'accepted', values: { K1: '正文', K2: 42 },
+    }
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'tableMeta').mockRejectedValue(new Error('业务类型不存在'))
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [row], total: 1 })
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+
+    const wrapper = shallowMount(ResultView, {
+      global: {
+        directives: { loading: {} },
+        stubs: { CanvasHeader: true, ElDrawer: true, DataGrid: true },
+      },
+    })
+    await flushPromises()
+
+    expect(query).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('真实数据接口暂不可用，已切换到本地演示数据')
+    expect(wrapper.text()).toContain('1 行')
   })
 })

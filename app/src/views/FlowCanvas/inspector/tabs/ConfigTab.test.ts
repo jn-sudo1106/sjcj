@@ -119,11 +119,22 @@ describe('ConfigTab · 规则节点「选择已有规则」（0805）', () => {
     expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBe('173')
     expect(flow.configs['rule-1'].ruleCfg?.inputTableId).toBe('')
   })
+
+  it('规则节点名称允许暂时清空，保存校验再提示必填', async () => {
+    const { flow, wrapper } = mountOnRuleNode()
+    await flushPromises()
+
+    const titleInput = wrapper.find('input[placeholder="新建：直接输入规则名称"]')
+    await titleInput.setValue('')
+
+    expect((titleInput.element as HTMLInputElement).value).toBe('')
+    expect(flow.configs['rule-1'].title).toBe('')
+  })
 })
 
 // S4-1（方案 §6.1）：登录节点自己的核心字段（账号/凭据引用）常显，不走采集节点运行设置里已废弃的 needLogin 开关
 describe('ConfigTab · 网页登录节点专属字段（S4-1）', () => {
-  it('登录节点：显示「登录账号」「凭据引用」输入框；普通采集节点没有', async () => {
+  it('登录节点：显示旧平台登录字段；普通采集节点没有', async () => {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
@@ -132,8 +143,11 @@ describe('ConfigTab · 网页登录节点专属字段（S4-1）', () => {
     flow.setActiveTab('config')
     const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
     await flushPromises()
-    expect(wrapper.text()).toContain('登录账号')
-    expect(wrapper.text()).toContain('凭据引用')
+    await wrapper.find('[data-testid="login-config-add"]').trigger('click')
+    expect(wrapper.text()).toContain('登录配置')
+    expect(wrapper.find('input[placeholder="登录用户名"]').exists()).toBe(true)
+    expect(wrapper.find('input[placeholder="登录密码"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('凭据引用')
 
     setActivePinia(createPinia())
     const flow2 = useFlowStore()
@@ -146,7 +160,7 @@ describe('ConfigTab · 网页登录节点专属字段（S4-1）', () => {
     expect(wrapper2.text()).not.toContain('凭据引用')
   })
 
-  it('填写账号/凭据引用：写入 collectCfg.account / collectCfg.credentialRef', async () => {
+  it('新增登录配置：写入旧平台字段，并设为默认配置', async () => {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
@@ -156,14 +170,100 @@ describe('ConfigTab · 网页登录节点专属字段（S4-1）', () => {
     const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
     await flushPromises()
 
-    const inputs = wrapper.findAll('input')
-    const accountInput = inputs.find((i) => i.attributes('placeholder') === '登录用户名')!
-    const credInput = inputs.find((i) => i.attributes('placeholder') === '凭据中心的引用 ID')!
-    await accountInput.setValue('svc_login_user')
-    await credInput.setValue('cred-001')
+    await wrapper.find('[data-testid="login-config-add"]').trigger('click')
+    const urlInput = wrapper.find('input[placeholder="登录 URL"]')
+    const loginNameInput = wrapper.find('input[placeholder="登录用户名"]')
+    const loginPwdInput = wrapper.find('input[placeholder="登录密码"]')
+    await urlInput.setValue('https://example.com/login')
+    await loginNameInput.setValue('main-user')
+    await loginPwdInput.setValue('pwd-001')
 
-    expect(flow.configs['login-1'].collectCfg?.account).toBe('svc_login_user')
-    expect(flow.configs['login-1'].collectCfg?.credentialRef).toBe('cred-001')
+    expect(flow.configs['login-1'].collectCfg?.loginConfigs).toEqual([{
+      id: 'login-1', loginUrl: 'https://example.com/login', loginName: 'main-user', loginPwd: 'pwd-001', newLoginConfig: '1', authConfig: '', enabled: true,
+    }])
+    expect(flow.configs['login-1'].collectCfg?.defaultLoginConfigId).toBe('login-1')
+  })
+
+  it('新建登录密码允许暂时为空，等待保存校验', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['login-1'] = cloneConfig(NODE_CONFIGS['login-collect'])
+    flow.select('login-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="login-config-add"]').trigger('click')
+    const passwordInput = wrapper.find('input[placeholder="登录密码"]')
+    await wrapper.find('input[placeholder="登录 URL"]').setValue('https://example.com/login')
+    await wrapper.find('input[placeholder="登录用户名"]').setValue('main-user')
+    await passwordInput.setValue('')
+
+    expect((passwordInput.element as HTMLInputElement).value).toBe('')
+    expect(flow.configs['login-1'].collectCfg?.loginConfigs?.[0].loginPwd).toBe('')
+    expect(wrapper.find('.login-config-error').text()).toContain('请填写登录密码')
+  })
+
+  it('多登录配置：可新增第二条配置并停用其中一条', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['login-1'] = cloneConfig(NODE_CONFIGS['login-collect'])
+    flow.select('login-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="login-config-add"]').trigger('click')
+    await wrapper.find('input[placeholder="登录 URL"]').setValue('https://example.com/login')
+    await wrapper.find('input[placeholder="登录用户名"]').setValue('main-user')
+    await wrapper.find('input[placeholder="登录密码"]').setValue('pwd-001')
+    await wrapper.find('[data-testid="login-config-add"]').trigger('click')
+    const urls = wrapper.findAll('input[placeholder="登录 URL"]')
+    const loginNames = wrapper.findAll('input[placeholder="登录用户名"]')
+    const passwords = wrapper.findAll('input[placeholder="登录密码"]')
+    await urls[1].setValue('https://example.com/login')
+    await loginNames[1].setValue('backup-user')
+    await passwords[1].setValue('pwd-002')
+
+    const second = flow.configs['login-1'].collectCfg?.loginConfigs?.[1]
+    expect(second).toMatchObject({ loginName: 'backup-user', loginPwd: 'pwd-002', newLoginConfig: '1', authConfig: '', enabled: true })
+    await wrapper.findAll('.login-config-check input[type="checkbox"]')[1].setValue(false)
+    expect(flow.configs['login-1'].collectCfg?.loginConfigs?.[1].enabled).toBe(false)
+    expect(flow.configs['login-1'].collectCfg?.defaultLoginConfigId).toBe('login-1')
+  })
+
+  it('删除登录配置：首个和唯一配置都可删除，删除最后一个时清理旧字段', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['login-1'] = cloneConfig(NODE_CONFIGS['login-collect'])
+    flow.configs['login-1'].collectCfg = {
+      ...flow.configs['login-1'].collectCfg!,
+      account: 'legacy-account',
+      loginConfigs: [
+        { id: 'login-1', loginUrl: 'https://example.com/login', loginName: 'main-user', loginPwd: 'pwd-001', newLoginConfig: '1', authConfig: '', enabled: true },
+        { id: 'login-2', loginUrl: 'https://example.com/login', loginName: 'backup-user', loginPwd: 'pwd-002', newLoginConfig: '1', authConfig: '', enabled: true },
+      ],
+      defaultLoginConfigId: 'login-1',
+    }
+    flow.select('login-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="login-config-login-1"] .rc-row-del').trigger('click')
+    expect(flow.configs['login-1'].collectCfg?.loginConfigs).toEqual([{
+      id: 'login-2', loginUrl: 'https://example.com/login', loginName: 'backup-user', loginPwd: 'pwd-002', newLoginConfig: '1', authConfig: '', enabled: true,
+    }])
+    expect(flow.configs['login-1'].collectCfg?.defaultLoginConfigId).toBe('login-2')
+
+    await wrapper.find('[data-testid="login-config-login-2"] .rc-row-del').trigger('click')
+    expect(flow.configs['login-1'].collectCfg?.loginConfigs).toEqual([])
+    expect(flow.configs['login-1'].collectCfg?.defaultLoginConfigId).toBeUndefined()
+    expect(flow.configs['login-1'].collectCfg?.account).toBe('')
+    expect(wrapper.find('.login-config-empty').exists()).toBe(true)
   })
 })
 

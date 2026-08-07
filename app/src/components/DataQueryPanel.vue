@@ -4,8 +4,8 @@
 //
 // 范围边界（0805 拍板，"只抽筛选+表格+插槽"）：
 // - 选表/选源不在本组件职责内：tableId/sourceId 由调用方管理，作为 prop 传入，本组件不渲染选表/选源下拉。
-// - 「数据ID/父ID/状态」是方案 §5.2 明确要求的下限；额外带上 DataView 原有的「后续标识/ID区间/SQL条件」
-//   高级筛选一并抽出（两边都用得上，不算扩大范围）。
+// - 「数据ID/父ID/时间范围」是数据查看页的基础条件；额外带上 DataView 原有的「后续标识/ID区间/条件表达式」
+//   完整筛选一并抽出（两边都用得上，不算扩大范围）。
 // - 不带任何批量操作的业务逻辑（发后续任务/批量删除等）——那些仍然是调用方的关注点。本组件只提供一个
 //   可选的勾选列（selectable，纯选中状态，不含批量操作菜单），调用方基于 v-model:selected-keys 自己接批量操作。
 // - ENTRY_ID/源/任务/父ID/原始/操作 这些 DataView 特有、带自定义点击行为的列，通过 #columns-before/
@@ -30,33 +30,28 @@ export interface DataQueryColumn {
 export interface DataQueryFilterPatch {
   dataId?: string
   parentId?: string
-  state?: string[]
   sql?: string
   nextFlag?: string
   min?: string
   max?: string
+  startTime?: string
+  endTime?: string
 }
 export interface DataQueryFilter {
   dataId?: string
   parentId?: string
-  state?: string
   sql?: string
   nextFlag?: string
   min?: string
   max?: string
+  startTime?: string
+  endTime?: string
   sortField?: string
   sortOrder?: 'ascend' | 'descend'
   page: number
   size: number
 }
 
-// 状态字典是平台统一口径（C/AC/NF/E），不是 DataView 独有的，固定在组件内
-const STATE_OPTIONS = [
-  { value: 'C', label: 'C 初始' },
-  { value: 'AC', label: 'AC 已审核' },
-  { value: 'NF', label: 'NF 404' },
-  { value: 'E', label: 'E 出错' },
-]
 const SQL_HISTORY_KEY = 'dataQueryPanel.sqlHistory'
 
 const props = defineProps<{
@@ -77,7 +72,7 @@ const emit = defineEmits<{
 // ---- 筛选字段 ----
 const dataId = ref('')
 const parentId = ref('')
-const stateArray = ref<string[]>([])
+const timeRange = ref<[string, string]>()
 const nextFlag = ref('')
 const minId = ref('')
 const maxId = ref('')
@@ -115,14 +110,16 @@ const loading = ref(false)
 const allSort = computed(() => total.value <= 500000)
 
 function currentFilter(): Omit<DataQueryFilter, 'page' | 'size'> {
+  const [startTime, endTime] = timeRange.value ?? []
   return {
     dataId: dataId.value.trim() || undefined,
     parentId: parentId.value.trim() || undefined,
-    state: stateArray.value.join(',') || undefined,
     sql: sql.value.trim() || undefined,
     nextFlag: nextFlag.value || undefined,
     min: minId.value.trim() || undefined,
     max: maxId.value.trim() || undefined,
+    startTime: startTime || undefined,
+    endTime: endTime || undefined,
     sortField: sortField.value || undefined,
     sortOrder: sortOrder.value || undefined,
   }
@@ -151,11 +148,13 @@ function applyPatch(patch?: DataQueryFilterPatch) {
   if (!patch) return
   if (patch.dataId !== undefined) dataId.value = patch.dataId
   if (patch.parentId !== undefined) parentId.value = patch.parentId
-  if (patch.state !== undefined) stateArray.value = patch.state
   if (patch.sql !== undefined) sql.value = patch.sql
   if (patch.nextFlag !== undefined) nextFlag.value = patch.nextFlag
   if (patch.min !== undefined) minId.value = patch.min
   if (patch.max !== undefined) maxId.value = patch.max
+  if (patch.startTime !== undefined || patch.endTime !== undefined) {
+    timeRange.value = patch.startTime && patch.endTime ? [patch.startTime, patch.endTime] : undefined
+  }
 }
 /** 调用方（含内部按钮/输入框）触发一次查询：可选先合并一份筛选 patch，再重置到第 1 页查询 */
 function search(patch?: DataQueryFilterPatch) {
@@ -163,6 +162,19 @@ function search(patch?: DataQueryFilterPatch) {
   if (sql.value.trim()) saveSqlHistory(sql.value.trim())
   page.value = 1
   void loadRows()
+}
+/** 清空全部筛选条件并回到第一页；表/源由调用方保留。 */
+function clearFilters() {
+  dataId.value = ''
+  parentId.value = ''
+  timeRange.value = undefined
+  sql.value = ''
+  nextFlag.value = ''
+  minId.value = ''
+  maxId.value = ''
+  sortField.value = ''
+  sortOrder.value = ''
+  search()
 }
 /** 不改筛选条件/页码，原样重查一次（如外部数据变了但筛选条件没变） */
 function refresh() {
@@ -183,24 +195,14 @@ function advancePage() {
   page.value += 1
   void loadRows()
 }
-defineExpose({ search, refresh, advancePage })
+defineExpose({ search, refresh, advancePage, clearFilters })
 
-function removeStateChip(value: string) {
-  stateArray.value = stateArray.value.filter((v) => v !== value)
-  search()
-}
 function clearNextFlag() { nextFlag.value = ''; search() }
-function clearParentId() { parentId.value = ''; search() }
 function clearRange() { minId.value = ''; maxId.value = ''; search() }
 
 const chips = computed(() => {
   const list: { key: string; label: string; clear: () => void }[] = []
-  for (const s of stateArray.value) {
-    const opt = STATE_OPTIONS.find((o) => o.value === s)
-    list.push({ key: `state-${s}`, label: opt?.label ?? s, clear: () => removeStateChip(s) })
-  }
   if (nextFlag.value) list.push({ key: 'nextFlag', label: `后续标识：${nextFlag.value}`, clear: clearNextFlag })
-  if (parentId.value) list.push({ key: 'parentId', label: `父ID：${parentId.value}`, clear: clearParentId })
   if (minId.value || maxId.value) {
     list.push({ key: 'range', label: `ID区间：${minId.value || '不限'}－${maxId.value || '不限'}`, clear: clearRange })
   }
@@ -252,22 +254,38 @@ function onRowClick(row: DataRow) {
 
 <template>
   <div class="dqp">
-    <div class="rc-toolbar wrap">
+    <div class="rc-toolbar wrap dqp-primary-row" data-testid="data-query-primary">
       <el-input v-model="dataId" clearable placeholder="请输入数据 ID" style="width: 160px" @keyup.enter="search()" />
+      <el-input v-model="parentId" clearable placeholder="父 ID" style="width: 120px" @keyup.enter="search()" />
+      <el-date-picker
+        v-model="timeRange"
+        type="datetimerange"
+        value-format="YYYY-MM-DD HH:mm:ss"
+        range-separator="至"
+        start-placeholder="开始时间"
+        end-placeholder="结束时间"
+        style="width: 280px"
+      />
       <button class="rc-btn primary" type="button" @click="search()">查询</button>
+      <button class="rc-btn" type="button" @click="clearFilters">清空</button>
+      <button
+        class="rc-btn dqp-advanced-toggle"
+        type="button"
+        :aria-expanded="advancedOpen"
+        aria-controls="data-query-advanced"
+        @click="advancedOpen = !advancedOpen"
+      >
+        高级筛选 <span aria-hidden="true">{{ advancedOpen ? '⌃' : '⌄' }}</span>
+      </button>
       <span class="dqp-spacer" />
-      <span class="dv-link" @click="advancedOpen = !advancedOpen">高级筛选</span>
+      <slot name="quick" />
     </div>
 
     <div v-if="chips.length" class="rc-toolbar wrap dqp-chips-row">
       <el-tag v-for="c in chips" :key="c.key" closable size="small" effect="plain" @close="c.clear">{{ c.label }}</el-tag>
     </div>
 
-    <div v-if="advancedOpen" class="rc-toolbar wrap">
-      <el-input v-model="parentId" clearable placeholder="父 ID" style="width: 120px" @keyup.enter="search()" />
-      <el-checkbox-group v-model="stateArray" @change="search()">
-        <el-checkbox-button v-for="o in STATE_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</el-checkbox-button>
-      </el-checkbox-group>
+    <div v-if="advancedOpen" id="data-query-advanced" class="rc-toolbar wrap dqp-query-row" data-testid="data-query-filters">
       <el-input v-model="nextFlag" clearable placeholder="后续标识（如 -1）" style="width: 150px" @keyup.enter="search()" />
       <span class="dqp-range">
         <el-input v-model="minId" placeholder="起始 ID" style="width: 100px" @keyup.enter="search()" />
@@ -278,7 +296,7 @@ function onRowClick(row: DataRow) {
         v-model="sql"
         :fetch-suggestions="querySqlHistory"
         clearable
-        placeholder="SQL 条件，如 CREATE_DT > CURDATE()"
+        placeholder="条件表达式，如 CREATE_DT > CURDATE()"
         style="width: 320px"
         @keyup.enter="search()"
       />
@@ -353,12 +371,15 @@ function onRowClick(row: DataRow) {
 </template>
 
 <style scoped>
-.dqp { display: flex; flex-direction: column; }
-.dqp-spacer { flex: 1; }
+.dqp { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+.dqp-primary-row { align-items: center; gap: 8px; }
 .dqp-chips-row { min-height: 0; padding-top: 8px; padding-bottom: 8px; }
+.dqp-query-row { align-items: center; gap: 8px; padding-top: 4px; padding-bottom: 8px; }
+.dqp-advanced-toggle { white-space: nowrap; }
+.dqp-spacer { flex: 1; min-width: 8px; }
 .dqp-range { display: inline-flex; align-items: center; gap: 6px; }
 .dqp-range-sep { color: var(--rc-faint); }
-.dqp-table { flex: 1; }
+.dqp-table { flex: 1; min-height: 0; background: #fff; }
 .dqp-table :deep(.el-table .cell) { white-space: nowrap; }
 .dqp-table :deep(.el-table td.el-table__cell), .dqp-table :deep(.el-table th.el-table__cell) { padding: 8px 0; font-size: 12px; }
 .dqp-table :deep(.el-table td.el-table__cell) { color: #334155; }
@@ -366,9 +387,12 @@ function onRowClick(row: DataRow) {
 .dqp-a { color: var(--rc-primary-ink); cursor: pointer; }
 .dqp-a:hover { text-decoration: underline; }
 .dqp-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--rc-border-soft); }
-.dv-link { display: inline-flex; align-items: center; color: var(--rc-text-2); font-size: 13px; cursor: pointer; }
-.dv-link:hover { color: var(--rc-primary-ink); }
 .rc-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 11px; border: 1px solid #d5e2f2; border-radius: 7px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; }
 .rc-btn:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rc-btn.primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }
+@media (max-width: 900px) {
+  .dqp-query-row > :deep(.el-input), .dqp-query-row > :deep(.el-autocomplete) { width: 100% !important; max-width: 320px; }
+  .dqp-range { width: 100%; }
+  .dqp-range :deep(.el-input) { flex: 1; width: auto !important; }
+}
 </style>

@@ -24,6 +24,8 @@ import type {
   SummaryRow,
   TaskInst,
 } from './types'
+import type { LegacyLoginSubmission, LegacySnatchSaveRequest } from './types/source'
+import type { FlowDef, NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 
 type LegacyRecord = Record<string, unknown>
 
@@ -45,6 +47,94 @@ const PARAM_KIND_TO_LEGACY: Record<ParamKind, string> = {
 
 function asRecord(value: unknown): LegacyRecord {
   return value && typeof value === 'object' ? (value as LegacyRecord) : {}
+}
+
+function flowCollectorConfigs(def: FlowDef): NodeConfig[] {
+  const ids = [...def.main, ...Object.keys(def.configs)]
+  const seen = new Set<string>()
+  return ids
+    .filter((id) => {
+      if (seen.has(id)) return false
+      seen.add(id)
+      return true
+    })
+    .map((id) => def.configs[id])
+    .filter((cfg): cfg is NodeConfig => !!cfg?.collectCfg)
+}
+
+function isLoginConfig(cfg: NodeConfig): boolean {
+  const collect = cfg.collectCfg
+  return collect?.collectorKind === 'login' || /\[LOGIN\]|登录/i.test(`${collect?.snatchType ?? ''}${cfg.title}`)
+}
+
+function sourceTypeFromSnatchType(snatchType: string | undefined): string | undefined {
+  const match = snatchType?.match(/^\[(\d+)\]/)
+  return match?.[1]
+}
+
+function legacyParamRefs(def: FlowDef, collectCfg: NodeConfig['collectCfg']): { paramId: string }[] {
+  const ids = collectCfg?.inputParams?.length
+    ? collectCfg.inputParams
+    : (def.source?.paramRefs ?? []).map((ref) => ref.paramId)
+  return [...new Set(ids.filter(Boolean))].map((paramId) => ({ paramId }))
+}
+
+/**
+ * 把新画布模型转换为旧平台 SourceBuildForm.commitAll 的请求体。
+ * 旧接口是一次性新建源，字段必须保持 sourceUrl/sourceName/reqLogin 等旧名称，不能直接发送 FlowDef。
+ */
+export function legacySnatchSavePayloadFromFlow(
+  def: FlowDef,
+  loginSubmission?: LegacyLoginSubmission,
+): LegacySnatchSaveRequest {
+  const source = def.source
+  const collectors = flowCollectorConfigs(def)
+  const loginCfg = collectors.find(isLoginConfig)?.collectCfg
+  const sourceCfg = collectors.find((cfg) => !isLoginConfig(cfg))?.collectCfg ?? collectors[0]?.collectCfg
+  const loginConfigs = loginCfg?.loginConfigs ?? []
+  const selectedLogin = loginConfigs.find((item) => item.id === loginSubmission?.configId)
+    ?? loginConfigs.find((item) => item.id === loginCfg?.defaultLoginConfigId)
+    ?? loginConfigs[0]
+  const useProxy = sourceCfg?.useProxy ?? source?.useProxy ?? false
+  const keep = sourceCfg?.resume ?? source?.resume ?? false
+  const requiresLogin = !!loginCfg || !!(sourceCfg?.needLogin ?? source?.needLogin)
+  const authConfig = loginSubmission?.authConfig ?? selectedLogin?.authConfig ?? source?.authConfig
+  const newLoginConfig = loginSubmission?.newLoginConfig ?? (authConfig ? '0' : '1')
+
+  return {
+    sourceType: source?.sourceType ?? sourceTypeFromSnatchType(sourceCfg?.snatchType) ?? '90',
+    sourceUrl: source?.url ?? sourceCfg?.url ?? loginCfg?.url ?? '',
+    sourceName: source?.name ?? def.name,
+    categoryId: source?.dirId ?? '',
+    proxy: source?.proxy ?? (useProxy ? '1' : ''),
+    keep: keep ? '1' : '',
+    cron: sourceCfg?.cron ?? source?.cron ?? '',
+    tags: source?.tags?.join(',') ?? '',
+    newConfig: source?.configMode === 'existing' ? '0' : '1',
+    configId: source?.configId || undefined,
+    isMulti: sourceCfg?.isDetail ? '0' : '1',
+    loginTemplete: loginCfg ? '1' : '',
+    entryTypeId: sourceCfg?.outputTable || source?.mainTable || undefined,
+    params: legacyParamRefs(def, sourceCfg),
+    reqLogin: requiresLogin ? '1' : '0',
+    newLoginConfig: requiresLogin ? newLoginConfig : undefined,
+    authConfig: requiresLogin ? authConfig : undefined,
+    loginUrl: requiresLogin ? (selectedLogin?.loginUrl || loginCfg?.loginUrl || source?.loginUrl || '') : undefined,
+    loginName: requiresLogin ? (selectedLogin?.loginName || source?.account || '') : undefined,
+    loginPwd: requiresLogin ? (loginSubmission?.loginPwd ?? selectedLogin?.loginPwd) : undefined,
+  }
+}
+
+/** 旧平台 Step3 的必填约束。 */
+export function assertLegacySnatchSaveLogin(payload: LegacySnatchSaveRequest): void {
+  if (payload.reqLogin !== '1') return
+  if (payload.newLoginConfig === '0') {
+    if (!payload.authConfig) throw new Error('使用已有登录时必须提供旧平台 authConfig')
+    return
+  }
+  if (!payload.loginUrl || !payload.loginName || !payload.loginPwd) {
+    throw new Error('新建登录时必须提供旧平台 loginUrl、loginName、loginPwd')
+  }
 }
 
 // 旧平台用 eval('(' + valueDef + ')') 解析该字段，容许非严格 JSON（裸键名如 {start:1,end:10}）。

@@ -73,6 +73,7 @@ onUnmounted(() => ui.clearActions())
           </div>
           <div class="muted rr-item-flow">{{ r.flow }}</div>
           <div class="muted">{{ r.startedAt }} · {{ r.owner }}</div>
+          <div v-if="r.loginAccount" class="muted">登录用户名：{{ r.loginAccount }}</div>
         </button>
       </div>
     </div>
@@ -91,6 +92,7 @@ onUnmounted(() => ui.clearActions())
           <div>
             <div class="rr-title">{{ selected.runId }}</div>
             <div class="muted">{{ selected.flow }} · {{ selected.startedAt }} → {{ selected.finishedAt || '进行中' }}</div>
+            <div v-if="selected.loginAccount" class="muted">本次登录用户名：{{ selected.loginAccount }}</div>
           </div>
           <span class="rc-status" :class="stMeta(selected.state).cls">{{ stMeta(selected.state).text }}</span>
         </div>

@@ -141,28 +141,22 @@ function onOutputTableId(tableId: string | undefined | null) {
   patch({ outputTableId: id, outputTable: table?.tableName ?? '', outputFields: [] })
 }
 
-// 新建表（0804 拍板："申请表"就是新建表，跟表配置共用同一个建表弹窗/entryApi）。
-// 建表本身走通用的实体表注册（entrySave），跟其它节点在「表配置」用的是同一个 TableEditDialog；
+// 新建表仅用于输出表：规则输入表必须选择已有表，避免在规则节点内创建孤立输入表。
+// 建表本身走通用的实体表注册（entrySave），跟表配置共用同一个 TableEditDialog；
 // 新表存进搜索结果并选中，不依赖下一次搜索能不能马上查到它。
-const newTableDialog = reactive<{ open: boolean; target: 'input' | 'output' }>({ open: false, target: 'input' })
-function openNewTable(target: 'input' | 'output') {
-  newTableDialog.target = target
+const newTableDialog = reactive<{ open: boolean }>({ open: false })
+function openNewTable() {
   newTableDialog.open = true
 }
-function injectCreatedTable(search: typeof inputTableSearch, entry: EntryType) {
+function injectCreatedTable(search: typeof outputTableSearch, entry: EntryType) {
   if (!search.results.value.some((t) => t.tableId === entry.tableId)) {
     search.results.value = [entry, ...search.results.value]
   }
 }
 async function onNewTableSaved(tableId: string) {
   const entry = await entryApi.entryDetail(tableId)
-  if (newTableDialog.target === 'input') {
-    injectCreatedTable(inputTableSearch, entry)
-    onInputTableId(tableId)
-  } else {
-    injectCreatedTable(outputTableSearch, entry)
-    onOutputTableId(tableId)
-  }
+  injectCreatedTable(outputTableSearch, entry)
+  onOutputTableId(tableId)
 }
 
 function toggleField(kind: 'input' | 'output', code: string) {
@@ -199,7 +193,6 @@ const outputExpanded = ref(false)
           :value="t.tableId"
         />
       </el-select>
-      <button class="rc-input-btn" type="button" @click="openNewTable('input')">＋ 新建表</button>
     </div>
   </div>
 
@@ -249,7 +242,7 @@ const outputExpanded = ref(false)
           :value="t.tableId"
         />
       </el-select>
-      <button class="rc-input-btn" type="button" @click="openNewTable('output')">＋ 新建表</button>
+      <button class="rc-input-btn" type="button" @click="openNewTable">＋ 新建表</button>
     </div>
     <div class="rc-preset-tables" data-testid="rule-table-presets">
       <span class="rc-preset-label">常用默认表：</span>

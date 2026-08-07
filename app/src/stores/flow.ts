@@ -611,7 +611,9 @@ export const useFlowStore = defineStore('flow', () => {
 
   function setTitle(id: string, title: string) {
     const c = configs[id]
-    if (c) c.title = title || '未命名节点'
+    // 允许输入框在编辑过程中暂时为空；保存/发布前由 validateFlow 统一校验，
+    // 不能在每次 input 时回填“未命名节点”导致最后一个字无法删除。
+    if (c) c.title = title
     nodeStore.touch()
   }
 
@@ -725,7 +727,7 @@ export const useFlowStore = defineStore('flow', () => {
   }
 
   // ---- 流程定义 序列化 / 加载 ----
-  function serialize(): FlowDef {
+  function serialize(options: { includeLoginPasswords?: boolean } = {}): FlowDef {
     const defaultQueue =
       `${sourceCfg.value?.sourceId || siteCtx.value?.siteId || sourceCtx.value?.siteId || flowId.value}_main`
     const outConfigs = JSON.parse(JSON.stringify(configs)) as Record<string, NodeConfig>
@@ -734,6 +736,13 @@ export const useFlowStore = defineStore('flow', () => {
       if (!c.taskCfg) c.taskCfg = { queue: '', urlRule: '' }
       if (!c.taskCfg.queue) c.taskCfg.queue = defaultQueue
     })
+    if (!options.includeLoginPasswords) {
+      Object.values(outConfigs).forEach((c) => {
+        if (!c.collectCfg) return
+        Reflect.deleteProperty(c.collectCfg, 'password')
+        c.collectCfg.loginConfigs?.forEach((config) => Reflect.deleteProperty(config, 'loginPwd'))
+      })
+    }
     const outSource = sourceCfg.value ? (JSON.parse(JSON.stringify(sourceCfg.value)) as Source) : undefined
     if (outSource?.templateId) outSource.nodeBindings = extractTemplateNodeBindings(outConfigs)
     return {
@@ -898,7 +907,7 @@ export const useFlowStore = defineStore('flow', () => {
 
   // 发布门禁
   function validateFlow(def?: FlowDef): string[] {
-    const d = def ?? serialize()
+    const d = def ?? serialize({ includeLoginPasswords: true })
     const errs: string[] = []
     const mainIds = d.main.filter((idv) => !isTerm(idv))
     const branchIds = d.branches.map((b) => b.id).filter((id) => !isTerm(id))
@@ -915,10 +924,36 @@ export const useFlowStore = defineStore('flow', () => {
     allIds.forEach((nid) => {
       const c = d.configs[nid]
       if (!c) return
+      if (!c.title.trim()) errs.push('节点名称不能为空')
       const capability = collectorCapabilityOf(c)
       if (c.collectCfg && !c.disabled) {
         if (!c.collectCfg.url) errs.push(`「${c.title}」缺少源 URL`)
-        if (capability?.kind !== 'login' && !c.collectCfg.outputTable) errs.push(`「${c.title}」缺少输出表`)
+          if (capability?.kind !== 'login' && !c.collectCfg.outputTable) errs.push(`「${c.title}」缺少输出表`)
+          if (capability?.kind === 'login') {
+            const configs = c.collectCfg.loginConfigs?.length
+              ? c.collectCfg.loginConfigs
+              : (c.collectCfg.account || c.collectCfg.loginUrl
+                ? [{
+                  id: 'legacy-default',
+                  loginUrl: c.collectCfg.loginUrl || '',
+                  loginName: c.collectCfg.account || '',
+                  loginPwd: '',
+                  newLoginConfig: '1' as const,
+                  authConfig: '',
+                  enabled: true,
+                }]
+                : [])
+            const enabledConfigs = configs.filter((config) => config.enabled)
+            if (!enabledConfigs.length) errs.push(`「${c.title}」至少需要一个启用的登录配置`)
+            const invalidConfig = configs.find((config) => config.newLoginConfig === '0'
+              ? !config.authConfig.trim()
+              : !config.loginUrl.trim() || !config.loginName.trim() || !config.loginPwd.trim())
+            if (invalidConfig) errs.push(`「${c.title}」登录配置的登录 URL、用户名、密码或已有登录模板不能为空`)
+            const defaultId = c.collectCfg.defaultLoginConfigId
+            if (enabledConfigs.length && !enabledConfigs.some((config) => config.id === defaultId)) {
+              errs.push(`「${c.title}」请选择一个启用的默认登录配置`)
+            }
+          }
         if (capability?.kind === 'web' && hasFragmentParams(c.collectCfg.url)) {
           errs.push(`「${c.title}」URL 参数写在 # 片段里，普通网页抓取读不到，请改用浏览器抓取节点`)
         }

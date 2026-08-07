@@ -7,6 +7,7 @@ import {
   makePresetFlowTemplates,
   sanitizeTemplateDefinition,
 } from './flowTemplates'
+import { NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
 
 const source: Source = {
   sourceId: 'source-template-test', name: '测试子源', url: 'https://source.example.com', configId: '', mainTable: '', owner: 'tester', state: 'C',
@@ -43,6 +44,22 @@ describe('流程模板与子源绑定组合', () => {
     expect(composed.configs[fileId].collectCfg?.outputTable).toBe('table-source')
     expect(composed.source?.nodeBindings).toEqual(bindings)
     expect(extractTemplateNodeBindings(composed.configs)[fileId].collect?.urlParamRefs).toEqual(['param-url'])
+  })
+
+  it('模板绑定保留登录节点配置和默认配置，但不保存登录密码', () => {
+    const configs = {
+      login: {
+        ...NODE_CONFIGS['login-collect'],
+        collectCfg: {
+          ...NODE_CONFIGS['login-collect'].collectCfg!,
+          loginConfigs: [{ id: 'login-1', loginUrl: 'https://example.com/login', loginName: 'main-user', loginPwd: 'pwd-1', newLoginConfig: '1' as const, authConfig: '', enabled: true }],
+          defaultLoginConfigId: 'login-1',
+        },
+      },
+    }
+    const bindings = extractTemplateNodeBindings(configs)
+    expect(bindings.login.collect?.loginConfigs).toEqual([{ id: 'login-1', loginUrl: 'https://example.com/login', loginName: 'main-user', newLoginConfig: '1', authConfig: '', enabled: true }])
+    expect(bindings.login.collect?.defaultLoginConfigId).toBe('login-1')
   })
 
   it('升级只按稳定 nodeId 保留绑定，不按节点名称静默复用', () => {

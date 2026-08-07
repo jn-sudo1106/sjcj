@@ -44,6 +44,12 @@ describe('flow store 编辑动作', () => {
     expect(f.configs['web-list'].collectCfg?.dedupMode).toBe('table')
   })
 
+  it('setTitle 允许编辑过程暂时清空，流程校验再提示节点名称必填', () => {
+    f.setTitle('web-list', '')
+    expect(f.configs['web-list'].title).toBe('')
+    expect(f.validateFlow()).toContain('节点名称不能为空')
+  })
+
   it('setDedupMode 切换去重方式（源内去重 vs 表内去重）', () => {
     f.setDedupMode('web-list', 'table')
     expect(f.configs['web-list'].collectCfg?.dedupMode).toBe('table')
@@ -271,6 +277,46 @@ describe('flow store 新建 / 校验（M5.5）', () => {
     expect(errs.some((e) => e.includes('输出表'))).toBe(true)
   })
 
+  it('validateFlow：登录节点必须有旧平台登录字段、启用配置和默认配置', () => {
+    f.newFlow('blank')
+    const id = f.insertAfter('start', 'login')
+    f.patchCollect(id, {
+      url: 'https://example.com/login',
+      loginConfigs: [
+        { id: 'login-1', loginUrl: 'https://example.com/login', loginName: 'main-user', loginPwd: 'pwd-1', newLoginConfig: '1', authConfig: '', enabled: true },
+        { id: 'login-2', loginUrl: 'https://example.com/login', loginName: 'backup-user', loginPwd: 'pwd-2', newLoginConfig: '1', authConfig: '', enabled: true },
+      ],
+    })
+    f.configs[id].collectCfg!.defaultLoginConfigId = 'missing'
+    let errs = f.validateFlow()
+    expect(errs).toContain('「网页登录」请选择一个启用的默认登录配置')
+
+    f.patchCollect(id, { loginConfigs: [{ id: 'login-1', loginUrl: '', loginName: '', loginPwd: '', newLoginConfig: '1', authConfig: '', enabled: false }] })
+    errs = f.validateFlow()
+    expect(errs).toContain('「网页登录」至少需要一个启用的登录配置')
+    expect(errs).toContain('「网页登录」登录配置的登录 URL、用户名、密码或已有登录模板不能为空')
+  })
+
+  it('流程保存快照不落盘登录密码，运行态快照可临时带出，重新加载不回填', () => {
+    f.newFlow('blank')
+    const id = f.insertAfter('start', 'login')
+    f.patchCollect(id, {
+      url: 'https://example.com/login',
+      loginConfigs: [{ id: 'login-1', loginUrl: 'https://example.com/login', loginName: 'alice', loginPwd: 'secret', newLoginConfig: '1', authConfig: '', enabled: true }],
+      defaultLoginConfigId: 'login-1',
+    })
+
+    const saved = f.serialize()
+    expect(saved.configs[id].collectCfg?.loginConfigs?.[0]).not.toHaveProperty('loginPwd')
+    expect(JSON.stringify(saved)).not.toContain('secret')
+
+    const runtime = f.serialize({ includeLoginPasswords: true })
+    expect(runtime.configs[id].collectCfg?.loginConfigs?.[0].loginPwd).toBe('secret')
+
+    f.load(runtime)
+    expect(f.configs[id].collectCfg?.loginConfigs?.[0].loginPwd).toBe('')
+  })
+
   it('serialize → load 往返一致', () => {
     f.newFlow('standard')
     const snap = f.serialize()
@@ -451,16 +497,18 @@ describe('节点输入表 + 任务队列（优化 0701 问题五）', () => {
     expect(f.validateFlow()).toContain('「公告详情抓取」任务参数 p-fundcode 缺少取值字段或值函数')
   })
 
-  it('无有效输入表的首节点保持任务参数、上下文来源和出参列为空', () => {
+  it('无有效输入表的首节点也保留任务参数、上下文来源和出参列', () => {
     f.patchCollect('web-list', { urlParamRefs: ['p-page'] })
     f.patchTaskConfig('web-list', {
       paramValues: [{ paramId: 'p-page', fieldId: 'page', valueExpr: '' }],
       contextMap: ['title'],
       outColumns: ['detail_url'],
     })
-    expect(f.configs['web-list'].taskCfg).not.toHaveProperty('paramValues')
-    expect(f.configs['web-list'].taskCfg).not.toHaveProperty('contextMap')
-    expect(f.configs['web-list'].taskCfg).not.toHaveProperty('outColumns')
+    expect(f.configs['web-list'].taskCfg).toMatchObject({
+      paramValues: [{ paramId: 'p-page', fieldId: 'page', valueExpr: '' }],
+      contextMap: ['title'],
+      outColumns: ['detail_url'],
+    })
     f.patchCollect('web-list', { inputTable: 'INPUT_T' })
     f.patchTaskConfig('web-list', {
       paramValues: [{ paramId: 'p-page', fieldId: 'page', valueExpr: '' }],

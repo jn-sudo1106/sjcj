@@ -147,11 +147,11 @@ describe('patchTaskConfig', () => {
     expect(configs['web-detail'].taskCfg?.contextMap).toEqual(['a', 'b'])
   })
 
-  it('没有有效输入表时保持 paramValues/contextMap/outColumns 为空', () => {
+  it('没有有效输入表时也不清空已提交的 paramValues/contextMap/outColumns', () => {
     const { n, configs } = setup()
     n.patchTaskConfig('web-list', { paramValues: [], contextMap: ['a'], outColumns: ['b'] })
-    expect(configs['web-list'].taskCfg?.contextMap).toBeUndefined()
-    expect(configs['web-list'].taskCfg?.outColumns).toBeUndefined()
+    expect(configs['web-list'].taskCfg?.contextMap).toEqual(['a'])
+    expect(configs['web-list'].taskCfg?.outColumns).toEqual(['b'])
   })
 
   it('有显式输入表时保留 paramValues/contextMap/outColumns', () => {

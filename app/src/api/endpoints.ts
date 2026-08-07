@@ -34,6 +34,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/sourceTaskPaged', desc: '子源任务实例分页（支持节点与状态筛选）', impl: true },
   { path: 'source/changeSourceEnable', desc: '启用 / 停用源', danger: true, impl: true },
   { path: 'source/sendSnatch', desc: '发抓取', danger: true, impl: true },
+  { path: 'snatch/snatchSave', desc: '旧平台新建源（Step1/2/3 一次性提交）', danger: true },
   { path: 'source/sendSnatchWithParam', desc: '带参发抓取', danger: true },
   { path: 'source/createJobs', desc: '生成 / 保存定时（批量定时）', danger: true, impl: true },
   { path: 'source/clear', desc: '清源缓存', danger: true },

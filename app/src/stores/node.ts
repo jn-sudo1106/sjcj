@@ -33,12 +33,11 @@ export const useNodeStore = defineStore('node', () => {
 
   // 这些需要从 flow store 获取
   let configs: Record<string, NodeConfig> = {}
-  let getEffectiveInputTable: (id: string) => string = (id) => configs[id]?.collectCfg?.inputTable || configs[id]?.inputTable || ''
 
   function bindFlowStore(flowConfigs: Record<string, NodeConfig>, flowMainGetter: () => string[], inputTableGetter?: (id: string) => string) {
     configs = flowConfigs
     void flowMainGetter
-    getEffectiveInputTable = inputTableGetter ?? ((id) => configs[id]?.collectCfg?.inputTable || configs[id]?.inputTable || '')
+    void inputTableGetter
   }
 
   // ---- 节点字段编辑（三列表格）----
@@ -76,6 +75,30 @@ export const useNodeStore = defineStore('node', () => {
       const cap = collectorCapabilityOf(c)
       if (cap?.outputMode === 'fixed') next.outputTable = cap.fixedOutputTable ?? c.collectCfg.outputTable
     }
+    if ('loginConfigs' in next) {
+      const seen = new Set<string>()
+      next.loginConfigs = (next.loginConfigs ?? []).map((item, index) => ({
+        id: item.id?.trim() || `login-${index + 1}`,
+        loginUrl: item.loginUrl?.trim() || '',
+        loginName: item.loginName?.trim() || '',
+        loginPwd: item.loginPwd?.trim() || '',
+        newLoginConfig: item.newLoginConfig === '0' ? '0' as const : '1' as const,
+        authConfig: item.authConfig?.trim() || '',
+        enabled: item.enabled !== false,
+      })).filter((item) => {
+        if (seen.has(item.id)) return false
+        seen.add(item.id)
+        return true
+      })
+      const preferred = next.defaultLoginConfigId
+      next.defaultLoginConfigId = next.loginConfigs.some((item) => item.id === preferred && item.enabled)
+        ? preferred
+        : next.loginConfigs.find((item) => item.enabled)?.id
+
+      const selected = next.loginConfigs.find((item) => item.id === next.defaultLoginConfigId)
+      next.loginUrl = selected?.loginUrl ?? (next.loginConfigs.length ? c.collectCfg.loginUrl : '')
+      next.account = selected?.loginName ?? (next.loginConfigs.length ? c.collectCfg.account : '')
+    }
     Object.assign(c.collectCfg, next)
     if ('urlParamRefs' in next && c.taskCfg?.paramValues) {
       const allowed = new Set(c.collectCfg.urlParamRefs ?? [])
@@ -105,15 +128,9 @@ export const useNodeStore = defineStore('node', () => {
       const cap = collectorCapabilityOf(c)
       if (cap?.queueMode === 'fixed') next.queue = cap.fixedQueue ?? c.taskCfg?.queue ?? ''
     }
-    // 0806：上下文来源/任务参数/出参列不再按主链位置清空。
-    // 没有有效输入表时这些字段没有可用来源，保持为空；节点有显式输入表或上游输入后才允许配置。
+    // 0806：上下文来源/任务参数/出参列不再按主链位置或当前输入表清空。
+    // 无有效输入表时由 UI 禁用候选并在发布/运行时提示，但不能在一次 patch 中丢失用户已经保存的配置。
     const taskCfg = { queue: '', urlRule: '', ...c.taskCfg, ...next }
-    if (!getEffectiveInputTable(id)) {
-      delete taskCfg.paramValues
-      delete taskCfg.contextMap
-      delete taskCfg.outColumns
-      delete taskCfg.paramRefs
-    }
     c.taskCfg = taskCfg
     touch()
   }

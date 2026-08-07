@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, QuestionFilled, Plus } from '@element-plus/icons-vue'
+import { ArrowDown, QuestionFilled, Plus, Refresh } from '@element-plus/icons-vue'
 import {
   dataApi, sourceApi, entryApi,
   type DataRow, type DataTableMeta, type EntryTypeGroup, type EntryDetail, type RowQuery, type SourceOption,
@@ -18,27 +18,29 @@ import TableDetailDialog from './TableDetailDialog.vue'
 import SourceDetailDrawer from './SourceDetailDrawer.vue'
 import MoreTablesDialog from './MoreTablesDialog.vue'
 import MoreSourcesDialog from './MoreSourcesDialog.vue'
+import { unsupportedNextStepBatchFilters } from './batchGuards'
+import DataMaintenanceDrawer from './DataMaintenanceDrawer.vue'
 
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
-// 本文件覆盖检索区/工具条/批量条/动态列表格/分页/数据详情抽屉/手动添加/手动修改/统计/
+// 本文件覆盖数据范围/快捷查询/结果工具条/批量条/动态列表格/分页/数据详情抽屉/手动添加/手动修改/统计/
 // 步骤展示（简化列表，无 DAG 图，见方案 §4.1 偏离决定）/任务实例弹窗/
 // 表结构详情·源详情（? 按钮）/加载更多数据表·更多源（方案 §1.3 补齐）。
-// S5-1（0805 拍板，方案 §5.2）：筛选表单（数据ID/父ID/状态/后续标识/ID区间/SQL）+ 结果表格本体
+// S5-1（0805 拍板，方案 §5.2）：筛选表单（数据ID/父ID/时间/后续标识/ID区间/条件表达式）+ 结果表格本体
 // （动态列渲染/排序/分页/可选勾选列）已抽到 @/components/DataQueryPanel.vue，跟 RuleTestDialog（S5-2）
-// 共用；本文件只保留选表/选源/常用查询/工具条/批量操作业务逻辑/各弹窗，通过 query-change/loaded 事件
+// 共用；本文件只保留选表/选源/快捷查询/结果工具条/批量操作业务逻辑/各弹窗，通过 query-change/loaded 事件
 // 镜像面板的筛选状态和查询结果，供 buildQuery()/统计/导出/批量发送等既有功能读取。
 const auth = useAuthStore()
 const canWrite = computed(() => auth.role === 'admin')
 const route = useRoute()
+const router = useRouter()
 
-interface CommonQuery { label: string; sql: string; clearSource?: boolean }
+interface CommonQuery { label: string; sql?: string; kind?: 'all-source' }
 const COMMON_QUERIES: CommonQuery[] = [
+  { label: '所有源', kind: 'all-source' },
   { label: '日新增', sql: 'CREATE_DT > CURDATE()' },
   { label: '日更新', sql: 'UPDATE_DT > CURDATE()' },
   { label: '近2日新增', sql: 'CREATE_DT > DATE_SUB(CURDATE(), INTERVAL 1 DAY)' },
   { label: '近2日更新', sql: 'UPDATE_DT > DATE_SUB(CURDATE(), INTERVAL 1 DAY)' },
-  { label: '日新增(所有源)', sql: 'CREATE_DT > CURDATE()', clearSource: true },
-  { label: '日更新(所有源)', sql: 'UPDATE_DT > CURDATE()', clearSource: true },
 ]
 
 // ---- 选表 / 选源 ----
@@ -47,7 +49,6 @@ const tableId = ref('')
 const tableMeta = ref<DataTableMeta | null>(null)
 const sourceOptions = ref<SourceOption[]>([])
 const sourceId = ref('')
-const lastSourceId = ref('') // 常用查询"所有源"变体清空源后，用于恢复
 
 async function loadGroup() {
   group.value = await dataApi.entryTypesGroup(sourceId.value || undefined)
@@ -112,12 +113,22 @@ const panelFilter = ref<DataQueryFilter>({ page: 1, size: 20 })
 const panelRows = ref<DataRow[]>([])
 const panelTotal = ref(0)
 // 动态列排序上限（total ≤ 500000 才开放，方案 §1.5-5）交给 DataQueryPanel 内部处理；ENTRY_ID/源/
-// 状态/更新/生成这几个固定列原本就不受这个限制（旧代码里 sortable="custom" 写死，没跟这条挂钩），
+// 更新/生成这几个固定列原本就不受这个限制（旧代码里 sortable="custom" 写死，没跟这条挂钩），
 // 所以这里不需要再算一份 allSort。
 
 const lastSignature = ref('')
 function querySignature() {
-  return JSON.stringify([sourceId.value, panelFilter.value.state ?? '', panelFilter.value.sql ?? '', panelFilter.value.nextFlag ?? ''])
+  return JSON.stringify([
+    sourceId.value,
+    panelFilter.value.dataId ?? '',
+    panelFilter.value.parentId ?? '',
+    panelFilter.value.startTime ?? '',
+    panelFilter.value.endTime ?? '',
+    panelFilter.value.sql ?? '',
+    panelFilter.value.nextFlag ?? '',
+    panelFilter.value.min ?? '',
+    panelFilter.value.max ?? '',
+  ])
 }
 function onPanelQueryChange(f: DataQueryFilter) {
   panelFilter.value = f
@@ -127,8 +138,11 @@ function onPanelLoaded(payload: { rows: DataRow[]; total: number }) {
   panelRows.value = payload.rows
   panelTotal.value = payload.total
 }
-// canSendAll（方案 §1.4-2）：total ≤ 500000 且源/状态/SQL/nextFlag 条件自上次查询未变动
-const canSendAll = computed(() => panelTotal.value <= 500000 && querySignature() === lastSignature.value)
+// canSendAll（方案 §1.4-2）：total ≤ 500000 且源/全部查询条件自上次查询未变动
+const unsupportedBatchFilters = computed(() => unsupportedNextStepBatchFilters(panelFilter.value))
+const canSendAll = computed(() => panelTotal.value <= 500000
+  && querySignature() === lastSignature.value
+  && unsupportedBatchFilters.value.length === 0)
 
 function buildQuery(): RowQuery {
   return { tableId: tableId.value, sourceId: sourceId.value || undefined, ...panelFilter.value }
@@ -144,12 +158,11 @@ async function onSourceChange() {
   await loadGroup()
   panelRef.value?.search()
 }
-function applyCommonQuery(q: CommonQuery) {
-  if (q.clearSource) {
-    lastSourceId.value = sourceId.value
+async function applyCommonQuery(q: CommonQuery) {
+  if (q.kind === 'all-source') {
     sourceId.value = ''
-  } else if (lastSourceId.value) {
-    sourceId.value = lastSourceId.value
+    await onSourceChange()
+    return
   }
   panelRef.value?.search({ sql: q.sql })
 }
@@ -159,8 +172,10 @@ const showSql = ref(false)
 const sqlPreview = computed(() => {
   let s = `select * from ${tableMeta.value?.tableName ?? ''} where 1=1`
   if (panelFilter.value.dataId) s += ` and entry_id in (${panelFilter.value.dataId})`
+  if (panelFilter.value.parentId) s += ` and parent_id in (${panelFilter.value.parentId})`
   if (sourceId.value) s += ` and source_id=${sourceId.value}`
-  if (panelFilter.value.state) s += ` and state in (${panelFilter.value.state.split(',').map((v) => `'${v}'`).join(',')})`
+  if (panelFilter.value.startTime) s += ` and CREATE_DT >= '${panelFilter.value.startTime}'`
+  if (panelFilter.value.endTime) s += ` and CREATE_DT <= '${panelFilter.value.endTime}'`
   if (panelFilter.value.sql) s += ` and ${panelFilter.value.sql}`
   return s
 })
@@ -207,11 +222,26 @@ function onDeleteSelected() {
     },
   )
 }
-function onDeleteByRange(all: 0 | 1, scope: 'source' | 'all' = 'source') {
+async function onDeleteByRange(all: 0 | 1, scope: 'source' | 'all' = 'source') {
   // scope='source' 仅删当前源数据；scope='all' 清空整表（不带 sourceId 过滤）
   const sid = scope === 'source' ? (sourceId.value || undefined) : undefined
   const scopeLabel = scope === 'source' ? (sourceId.value || '不限') : '全部源'
   const scopeText = scope === 'source' ? '删除该源' : '清空表数据'
+  if (all === 1 && scope === 'all') {
+    try {
+      const result = await ElMessageBox.prompt(
+        `这是不可恢复的全量清空操作。请输入当前表名“${tableId.value}”继续。`,
+        '高风险确认',
+        { inputPlaceholder: tableId.value, inputErrorMessage: '请输入当前表名' },
+      )
+      if (result.value.trim() !== tableId.value) {
+        ElMessage.warning('表名不匹配，已取消操作')
+        return
+      }
+    } catch {
+      return
+    }
+  }
   void confirmDanger(
     '确认删除',
     all === 1
@@ -252,7 +282,6 @@ function onMarkFormal() {
   )
 }
 
-// ---- 工具▾（方案 §1.4-3；展示步骤/生成源/取数API/指标数据集依赖确认后迁或复杂组件，不做） ----
 async function onDistinctSource() {
   try {
     const ids = await dataApi.distinctSource(buildQuery())
@@ -262,6 +291,18 @@ async function onDistinctSource() {
   }
 }
 function onClearParent() {
+  if (!canWrite.value) {
+    ElMessage.error('仅管理员可清除父表后续标识')
+    return
+  }
+  if (!sourceId.value) {
+    ElMessage.warning('请先选择源，再清除父表后续标识')
+    return
+  }
+  if (!selectedRowKeys.value.length) {
+    ElMessage.warning('请先选择要清除标识的数据')
+    return
+  }
   void confirmDanger(
     '提示',
     '确认清除父表后续标识?',
@@ -270,8 +311,90 @@ function onClearParent() {
   )
 }
 
+// ---- 工具▾：旧平台入口恢复为显式菜单；未迁移的复杂弹窗不伪造成功结果 ----
+const apiOpen = ref(false)
+const apiPreview = computed(() => {
+  const query = buildQuery()
+  return [
+    '查询接口：POST /api/v1/entry/entryDataPaged',
+    `导出接口：GET ${dataApi.exportUrl(query)}`,
+    `当前条件：${JSON.stringify(query)}`,
+  ].join('\n')
+})
+
+function onShowApi() {
+  apiOpen.value = true
+}
+function onGenerateSource() {
+  if (!selectedRowKeys.value.length) {
+    ElMessage.warning('请选择要提取的数据行')
+    return
+  }
+  ElMessage.info('“提取数据生成源”需要源配置选择，当前版本已保留入口，生成对话框待迁移')
+}
+function onOpenDataset() {
+  void router.push({ path: '/metrics', query: { entryType: tableId.value, sourceId: sourceId.value || undefined } })
+}
+function onToolCommand(command: string) {
+  switch (command) {
+    case 'steps':
+      openStepDrawer()
+      break
+    case 'api':
+      onShowApi()
+      break
+    case 'dataset':
+      onOpenDataset()
+      break
+    case 'generate-source':
+      onGenerateSource()
+      break
+  }
+}
+
 // ---- 统计（方案 §1.4-5，read 也可见） ----
 const summaryOpen = ref(false)
+const maintenanceOpen = ref(false)
+
+function onMoreCommand(command: string) {
+  // 延后一帧打开抽屉，避免下拉菜单的当前 click 冒泡到抽屉遮罩后立即触发关闭。
+  if (command === 'summary') window.setTimeout(() => { summaryOpen.value = true }, 0)
+  if (command === 'sql') showSql.value = !showSql.value
+}
+
+function openMaintenance() { maintenanceOpen.value = true }
+function handleMaintenanceAction(action: string) {
+  maintenanceOpen.value = false
+  switch (action) {
+    case 'reprocess':
+      onNextStepAll()
+      break
+    case 'delete-selected':
+      onDeleteSelected()
+      break
+    case 'delete-source-day':
+      onDeleteByRange(0, 'source')
+      break
+    case 'delete-source-all':
+      onDeleteByRange(1, 'source')
+      break
+    case 'delete-ids':
+      void onDeleteByIds()
+      break
+    case 'mark-formal':
+      onMarkFormal()
+      break
+    case 'clear-table-day':
+      onDeleteByRange(0, 'all')
+      break
+    case 'clear-table-all':
+      onDeleteByRange(1, 'all')
+      break
+    case 'clear-parent':
+      onClearParent()
+      break
+  }
+}
 
 // ---- 展示步骤（方案 §1.4-3；简化为步骤列表，无 DAG 图，见方案 §4.1 偏离决定） ----
 const stepOpen = ref(false)
@@ -322,11 +445,15 @@ function onNextStepSelected() {
     .catch((err) => ElMessage.error(`发送失败,原因: [${err instanceof Error ? err.message : String(err)}]`))
 }
 function onNextStepAll() {
-  const body = `[实验性] 批量发送当前条件下全部后续任务?  条件: [ {源:${sourceId.value || '不限'} && 状态:${panelFilter.value.state || '不限'} && ...} ]`
+  if (unsupportedBatchFilters.value.length) {
+    ElMessage.warning(`当前筛选包含${unsupportedBatchFilters.value.join('、')}，旧平台批量后续暂不支持，请清除后再操作`)
+    return
+  }
+  const body = `[实验性] 批量发送当前条件下全部后续任务?  条件: [ {源:${sourceId.value || '不限'} && ...} ]`
   ElMessageBox.confirm(body, '提示', { type: 'warning' }).then(async () => {
     try {
       const r = await dataApi.nextStepBatch({
-        tableId: tableId.value, sourceId: sourceId.value || undefined, state: panelFilter.value.state,
+        tableId: tableId.value, sourceId: sourceId.value || undefined,
         size: 500000, start: 0, nextFlag: panelFilter.value.nextFlag, cond: panelFilter.value.sql,
       })
       ElMessage.success(`发送成功:${r.message ?? ''}`)
@@ -435,8 +562,8 @@ function openRawJson(row: DataRow) {
   window.open(`/api/v1/readJson?${params}`, '_blank')
 }
 
-// ---- 动态列（方案 §1.5-3：required 前 20 个，宽度 120×0.9／140×0.9）→ 面板 columns prop ----
-const dynamicColumns = computed(() => (tableMeta.value?.fields ?? []).filter((f) => f.required).slice(0, 20))
+// ---- 动态列（方案 §1.5-3：物理表字段全部保留，通过横向滚动查看）→ 面板 columns prop ----
+const dynamicColumns = computed(() => (tableMeta.value?.fields ?? []).filter((f) => f.columnName || f.prop))
 function columnWidth(desc: string) {
   const base = /区间|时间|日期|周期/.test(desc) ? 140 : 120
   return Math.round(base * 0.9)
@@ -492,7 +619,7 @@ onMounted(async () => {
 
 <template>
   <div class="rc-card dv-page">
-    <!-- 检索主行：选表/选源/常用查询（选表/选源不在 DataQueryPanel 职责内，见组件头注释） -->
+    <!-- 数据范围：选表/选源（查询条件与快捷查询由 DataQueryPanel 统一承载） -->
     <div class="rc-toolbar wrap">
       <el-select v-model="tableId" filterable placeholder="选择数据表" style="width: 220px" @change="onTableChange">
         <el-option-group label="main">
@@ -524,18 +651,9 @@ onMounted(async () => {
       <button class="rc-btn dv-help-btn" type="button" title="源详情" @click="openSourceDetail">
         <el-icon><QuestionFilled /></el-icon>
       </button>
-      <span class="dv-spacer" />
-      <el-dropdown trigger="click" @command="applyCommonQuery">
-        <span class="dv-link">常用查询<el-icon class="et-caret"><ArrowDown /></el-icon></span>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <el-dropdown-item v-for="q in COMMON_QUERIES" :key="q.label" :command="q">{{ q.label }}</el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
     </div>
 
-    <!-- S5-1：筛选表单（数据ID/父ID/状态/后续标识/ID区间/SQL）+ 结果表格本体，见 DataQueryPanel.vue -->
+    <!-- 查询条件与结果表格：基础条件常显，高级条件默认收起，见 DataQueryPanel.vue -->
     <DataQueryPanel
       ref="panelRef"
       :table-id="tableId"
@@ -546,47 +664,68 @@ onMounted(async () => {
       @query-change="onPanelQueryChange"
       @loaded="onPanelLoaded"
     >
+      <template #quick>
+        <span class="dv-quick-label">快捷：</span>
+        <button v-for="q in COMMON_QUERIES" :key="q.label" class="dv-quick-btn" type="button" @click="applyCommonQuery(q)">
+          {{ q.label }}
+        </button>
+      </template>
       <template #toolbar>
-        <!-- 工具条 -->
-        <div class="rc-toolbar wrap">
-          <button class="rc-btn" type="button" @click="panelRef?.refresh()">刷新</button>
-          <button class="rc-btn" type="button" @click="showSql = !showSql">展示SQL</button>
-          <button class="rc-btn" type="button" @click="onExport">导出EXCEL</button>
-          <button class="rc-btn" type="button" @click="summaryOpen = true">统计</button>
-          <template v-if="canWrite">
-            <button class="rc-btn" type="button" @click="openAdd">手动添加</button>
-            <el-dropdown v-if="isTestTable" trigger="click">
-              <button class="rc-btn danger" type="button">删除数据<el-icon class="et-caret"><ArrowDown /></el-icon></button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item :disabled="!selectedRowKeys.length" @click="onDeleteSelected">删除选中的数据</el-dropdown-item>
-                  <el-dropdown-item divided @click="onDeleteByRange(0, 'source')">删除该源-当日</el-dropdown-item>
-                  <el-dropdown-item @click="onDeleteByRange(1, 'source')">删除该源-所有</el-dropdown-item>
-                  <el-dropdown-item @click="onDeleteByIds">填入IDs-删除</el-dropdown-item>
-                  <el-dropdown-item divided @click="onMarkFormal">设为正式表</el-dropdown-item>
-                  <el-dropdown-item @click="onDeleteByRange(0, 'all')">清空表数据【当日】</el-dropdown-item>
-                  <el-dropdown-item @click="onDeleteByRange(1, 'all')">清空表数据【全量】</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-            <el-dropdown trigger="click">
-              <button class="rc-btn" type="button">工具<el-icon class="et-caret"><ArrowDown /></el-icon></button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item @click="onDistinctSource">提取去重后源 ID</el-dropdown-item>
-                  <el-dropdown-item @click="openStepDrawer">展示步骤</el-dropdown-item>
-                  <el-dropdown-item divided @click="onClearParent">A.清除-父表-后续标识</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-          </template>
+        <!-- 结果工具条：默认仅保留刷新、新增、导出、更多四个入口 -->
+        <div class="dv-result-toolbar" data-testid="data-result-toolbar">
           <span class="dv-spacer" />
-          <!-- 常显上下文 tag（方案 §1.4-6） -->
-          <span v-if="sourceId" class="rc-mini-card">源:{{ sourceId }}</span>
-          <span v-if="tableMeta?.tableName" class="rc-mini-card">表:{{ tableMeta.tableName.split('.').pop() }}</span>
+          <button class="rc-icon-btn" data-testid="data-refresh" type="button" title="刷新" aria-label="刷新" @click="panelRef?.refresh()">
+            <el-icon><Refresh /></el-icon>
+          </button>
+          <button v-if="canWrite" class="rc-btn" data-testid="data-add" type="button" @click="openAdd">新增数据</button>
+          <el-dropdown trigger="click">
+            <button class="rc-btn" data-testid="data-export" type="button">导出<el-icon class="et-caret"><ArrowDown /></el-icon></button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item @click="onExport">导出 Excel</el-dropdown-item>
+                <el-dropdown-item @click="onDistinctSource">查看去重源 ID</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <el-dropdown v-if="canWrite && isTestTable" trigger="click">
+            <button class="rc-btn" data-testid="data-delete" type="button">删除数据<el-icon class="et-caret"><ArrowDown /></el-icon></button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item :disabled="!selectedRowKeys.length" @click="onDeleteSelected">删除选中的数据</el-dropdown-item>
+                <el-dropdown-item divided disabled>按时间删除…</el-dropdown-item>
+                <el-dropdown-item @click="onDeleteByRange(0, 'source')">删除该源-当日数据</el-dropdown-item>
+                <el-dropdown-item @click="onDeleteByRange(1, 'source')">删除该源-所有数据</el-dropdown-item>
+                <el-dropdown-item @click="onDeleteByIds">填入 IDs-删除</el-dropdown-item>
+                <el-dropdown-item divided disabled>表操作</el-dropdown-item>
+                <el-dropdown-item @click="onMarkFormal">设为正式表</el-dropdown-item>
+                <el-dropdown-item @click="onDeleteByRange(0, 'all')">清空表数据【当日】</el-dropdown-item>
+                <el-dropdown-item @click="onDeleteByRange(1, 'all')">清空表数据【全量】</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <el-dropdown trigger="click">
+            <button class="rc-btn" data-testid="data-tools" type="button">工具<el-icon class="et-caret"><ArrowDown /></el-icon></button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item @click="onToolCommand('steps')">展示步骤</el-dropdown-item>
+                <el-dropdown-item @click="onShowApi">取数 API</el-dropdown-item>
+                <el-dropdown-item @click="onToolCommand('dataset')">指标数据集</el-dropdown-item>
+                <el-dropdown-item @click="onToolCommand('generate-source')">提取数据生成源</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <el-dropdown trigger="click">
+            <button class="rc-btn" data-testid="data-more" type="button">更多<el-icon class="et-caret"><ArrowDown /></el-icon></button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item @click="onMoreCommand('summary')">查看统计</el-dropdown-item>
+                <el-dropdown-item @click="onMoreCommand('sql')">{{ showSql ? '隐藏查询条件/SQL' : '查看查询条件/SQL' }}</el-dropdown-item>
+                <el-dropdown-item v-if="canWrite" divided @click="openMaintenance">数据维护</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
         <div v-if="showSql" class="dv-sql-tip">{{ sqlPreview }}</div>
-
         <!-- 选中批量条 -->
         <div v-if="canWrite && selectedRowKeys.length" class="dv-batch">
           <span class="dv-batch-count">已选择 <b>{{ selectedRowKeys.length }}</b> 项</span>
@@ -635,9 +774,6 @@ onMounted(async () => {
       </template>
 
       <template #columns-after>
-        <el-table-column prop="state" label="状态" width="70" sortable="custom">
-          <template #default="{ row }">{{ row.state || '—' }}</template>
-        </el-table-column>
         <el-table-column prop="updateDt" label="更新" width="90" sortable="custom">
           <template #default="{ row }"><span :title="formatDateTime(row.updateDt)">{{ timeAgo(row.updateDt) }}</span></template>
         </el-table-column>
@@ -691,6 +827,13 @@ onMounted(async () => {
       </template>
     </DataQueryPanel>
 
+    <div v-if="apiOpen" class="dv-api-panel">
+      <div class="dv-api-panel-title">取数 API <span>当前条件预览</span></div>
+      <p class="dv-dialog-hint">可将当前表、源和筛选条件交给接口调用方；鉴权仍沿用当前登录会话。</p>
+      <pre class="dv-api-preview">{{ apiPreview }}</pre>
+      <button class="rc-btn" type="button" @click="apiOpen = false">关闭</button>
+    </div>
+
     <!-- 数据详情抽屉（只读） -->
     <el-drawer v-model="detail.visible" title="数据表详情" size="480px">
       <template v-if="detail.data">
@@ -719,6 +862,17 @@ onMounted(async () => {
 
     <!-- 统计（方案 §1.6-4） -->
     <SummaryDrawer v-model="summaryOpen" :table-meta="tableMeta" :build-query="buildQuery" />
+
+    <DataMaintenanceDrawer
+      v-model="maintenanceOpen"
+      :table-id="tableId"
+      :table-name="tableMeta?.tableName"
+      :source-id="sourceId"
+      :selected-count="selectedRowKeys.length"
+      :is-test-table="isTestTable"
+      :can-clear-parent="canWrite && !!sourceId && selectedRowKeys.length > 0"
+      @action="handleMaintenanceAction"
+    />
 
     <!-- 展示步骤（方案 §1.6-5，简化列表版；见 §4.1 偏离决定） -->
     <StepDrawer
@@ -750,10 +904,57 @@ onMounted(async () => {
 <style scoped>
 .dv-page {
   display: flex;
+  height: 100%;
+  min-height: 0;
   flex-direction: column;
+}
+.dv-result-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 4px 16px;
+  border-top: 1px solid var(--rc-border-soft);
+  border-bottom: 1px solid var(--rc-border-soft);
+  background: #fff;
+}
+.rc-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid #d5e2f2;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--rc-text-2);
+  cursor: pointer;
+}
+.rc-icon-btn:hover {
+  border-color: #bfdbfe;
+  background: var(--rc-primary-bg);
+  color: var(--rc-primary-ink);
 }
 .dv-spacer {
   flex: 1;
+}
+.dv-quick-label {
+  color: var(--rc-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.dv-quick-btn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--rc-primary-ink);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dv-quick-btn:hover {
+  text-decoration: underline;
 }
 .dv-link {
   display: inline-flex;
@@ -776,6 +977,44 @@ onMounted(async () => {
   font-size: 12px;
   font-family: var(--rc-mono, monospace);
   background: #f8fafc;
+}
+.dv-dialog-hint {
+  margin: 0 0 10px;
+  color: var(--rc-muted);
+  font-size: 12px;
+}
+.dv-api-panel {
+  display: grid;
+  gap: 8px;
+  margin: 8px 16px;
+  padding: 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: var(--rc-radius-sm);
+  background: #f8fbff;
+}
+.dv-api-panel-title {
+  color: var(--rc-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+.dv-api-panel-title span {
+  margin-left: 8px;
+  color: var(--rc-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.dv-api-preview {
+  max-height: 260px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--rc-border-soft);
+  border-radius: var(--rc-radius-sm);
+  background: #f8fafc;
+  color: var(--rc-text-2);
+  font: 12px/1.6 var(--rc-mono, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .dv-batch {
   display: flex;

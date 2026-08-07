@@ -24,6 +24,11 @@ const FAIL_RATE = Number(import.meta.env.VITE_API_FAIL_RATE) || 0
 // 测试环境固定关闭（vitest.config.ts 的 test.env），避免既有测试意外撞上真实发起的 fetch
 const DISABLE_LIVE_ENDPOINTS = import.meta.env.VITE_API_DISABLE_LIVE_ENDPOINTS === '1'
 
+/** 当前构建是否以 Mock 为默认数据源；用于真实端点失败时仅在演示模式做本地回退。 */
+export function isMockMode(): boolean {
+  return MODE === 'mock'
+}
+
 export class ApiError extends Error {
   endpoint: string
 

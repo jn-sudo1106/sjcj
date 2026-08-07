@@ -28,6 +28,21 @@ describe('流程参数配置迁移', () => {
     expect(cfg.taskCfg?.paramValues).toEqual([{ paramId: 'p-fundcode', fieldId: '', valueExpr: '' }])
     expect(cfg.taskCfg?.paramRefs).toBeUndefined()
   })
+
+  it('旧登录字段加载时迁移为一条完整的默认登录配置', () => {
+    const cfg = normalizeNodeConfig({
+      ...NODE_CONFIGS['login-collect'],
+      collectCfg: {
+        ...NODE_CONFIGS['login-collect'].collectCfg!,
+        account: 'research_***',
+      },
+    })
+
+    expect(cfg.collectCfg?.loginConfigs).toEqual([{
+      id: 'legacy-default', loginUrl: 'https://example.com/login', loginName: 'research_***', loginPwd: '', newLoginConfig: '1', authConfig: '', enabled: true,
+    }])
+    expect(cfg.collectCfg?.defaultLoginConfigId).toBe('legacy-default')
+  })
 })
 
 describe('横向节点布局', () => {

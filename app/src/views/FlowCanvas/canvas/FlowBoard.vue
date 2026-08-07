@@ -106,12 +106,25 @@ function runText(id: string) {
   const s = runtime.nodeStates[id]
   return s === 'L' ? '处理中' : s === 'C' ? '完成' : s === 'E' ? '失败' : ''
 }
+function hasLoginConfig(cfg: NodeConfig): boolean {
+  const collect = cfg.collectCfg
+  if (!collect || collectorCapabilityOf(cfg)?.kind !== 'login') return true
+  const configs = collect.loginConfigs?.length
+    ? collect.loginConfigs
+    : collect.account || collect.loginUrl
+      ? [{
+        id: 'legacy-default', loginUrl: collect.loginUrl || collect.url || '', loginName: collect.account || '', loginPwd: '',
+        newLoginConfig: '1' as const, authConfig: '', enabled: true,
+      }]
+      : []
+  return configs.some((config) => config.enabled && (config.newLoginConfig === '0' ? config.authConfig.trim() : config.loginUrl.trim() && config.loginName.trim() && config.loginPwd.trim()))
+}
 // 节点运行状态语义（0703 问题九）：待配置 → 运行 ↔ 停止；"运行"即业务口中"配置完成、点启动进入运行"的状态，
 // "停止"即"数据在此节点不处理"——均为纯文案层，disabled 字段名/序列化结构不变。
 // 与 runtime.isRunnable 同源判定：登录和规则节点按各自能力判断，不能只看输出表。
 function footFor(cfg: NodeConfig) {
   const configured = cfg.collectCfg
-    ? !!(cfg.collectCfg.url && (collectorCapabilityOf(cfg)?.kind === 'login' || cfg.collectCfg.outputTable))
+    ? !!(cfg.collectCfg.url && hasLoginConfig(cfg) && (collectorCapabilityOf(cfg)?.kind === 'login' || cfg.collectCfg.outputTable))
     : isRuleNode(cfg)
       ? !!(cfg.ruleCfg?.ruleId && cfg.ruleCfg.script?.trim())
     : isDataNode(cfg) && !!nodeOutputTable(cfg)
@@ -237,7 +250,7 @@ function runNode(id: string) {
     ElMessage.warning('画布有未保存的改动，请先保存流程配置再运行节点')
     return
   }
-  const { runId, reason } = runtime.runSingleNode(flow.serialize(), id)
+  const { runId, reason } = runtime.runSingleNode(flow.serialize({ includeLoginPasswords: true }), id)
   if (!runId) {
     ElMessage.warning(reason || '当前节点不可运行')
     return

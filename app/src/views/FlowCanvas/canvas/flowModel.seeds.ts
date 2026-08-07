@@ -429,12 +429,11 @@ const NODE_CONFIG_SEEDS = {
     },
     taskCfg: { queue: COLLECTOR_CAPABILITIES.wechat_official_html.fixedQueue ?? '', urlRule: '' },
   },
-  // S4-1（方案 §6.1）：网页登录——无输入表，有输出表（会话/凭据，用户自选，见 COLLECTOR_CAPABILITIES.login），
-  // 账号/凭据是节点自己的核心字段（非折叠的运行设置项），跟采集节点运行设置里已废弃的 needLogin 开关是两回事。
+  // 网页登录：无输入表；登录配置清单维护多条完整登录数据配置，发起任务时可临时切换默认配置。
   'login-collect': {
     title: '网页登录', sub: '[LOGIN] 网页登录 · 源配置', status: '待配置', planned: false, collect: true,
     base: [['登录页 URL', 'https://example.com/login'], ['源名称', '网页登录源'], ['产物', '登录会话/凭据（输出表可选）'], ['定时策略', '']],
-    fields: [['使用代理', '否'], ['登录账号', ''], ['凭据引用', '']],
+    fields: [['使用代理', '否'], ['登录配置', ''], ['默认配置', '']],
     inmap: [],
     params: [],
     output: [['session_token', 'string', '登录会话/凭据'], ['login_status', 'string', '登录结果']],
@@ -851,7 +850,7 @@ export const PRESET_INTENTS: PresetIntent[] = [
     key: 'web-login',
     label: '登录站点抓取',
     keywords: ['登录', '登陆', '账号', '凭据', 'cookie', '会员'],
-    rationale: '识别为「登录态站点抓取」：列表页需登录，再抓详情正文；登录凭据在节点登录配置里只存引用。',
+    rationale: '识别为「登录态站点抓取」：列表页需登录，再抓详情正文；登录节点字段沿用旧平台 Step3。',
     build: () =>
       buildFlow('登录站点抓取链路', [
         { template: 'web', name: '网页抓取（列表·需登录）', patch: { webKind: 'list', isDetail: false } },

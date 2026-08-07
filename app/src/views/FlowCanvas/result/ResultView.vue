@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { dataApi, siteApi, type DataTableMeta, type DataRow, type Source } from '@/api'
+import { dataApi, isMockMode, siteApi, type DataTableMeta, type DataRow, type Source } from '@/api'
 import { buildHorizontalLayout, nodeOutputTable } from '@/views/FlowCanvas/canvas/flowModel'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import DataGrid from './DataGrid.vue'
@@ -83,34 +83,95 @@ const meta = ref<DataTableMeta | null>(null)
 const rows = ref<DataRow[]>([])
 const total = ref(0)
 const loading = ref(false)
+const metaError = ref('')
+const dataError = ref('')
+const demoFallback = ref(false)
 const size = 20
+
+function inferTableMeta(tableId: string, dataRows: DataRow[], rowCount: number): DataTableMeta {
+  const samples = new Map<string, unknown>()
+  dataRows.forEach((row) => {
+    Object.entries(row.values ?? {}).forEach(([prop, value]) => {
+      if (!samples.has(prop)) samples.set(prop, value)
+    })
+  })
+  return {
+    tableId,
+    tableName: tableId,
+    rowCount,
+    fields: [...samples.entries()].map(([prop, sample]) => ({
+      prop,
+      type: sample !== null && typeof sample === 'object' ? 'json' : typeof sample === 'number' ? 'number' : 'string',
+      desc: prop,
+      sample: sample == null ? undefined : String(sample),
+    })),
+  }
+}
 
 async function loadData() {
   if (!selectedTable.value) {
     meta.value = null
     rows.value = []
     total.value = 0
+    metaError.value = ''
+    dataError.value = ''
+    demoFallback.value = false
     return
   }
   loading.value = true
+  metaError.value = ''
+  dataError.value = ''
+  demoFallback.value = false
   try {
-    const [metaRes, dataRes] = await Promise.all([
+    // 表结构与数据是两条独立能力：后端某张表未注册时 tableMeta 可能失败，
+    // 不能连带阻断仍可返回的数据行（例如演示流程的输出表）。
+    const query = {
+      tableId: selectedTable.value,
+      siteId: siteId.value || undefined,
+      sourceId: querySourceId.value,
+      dataId: filters.dataId || undefined,
+      parentId: filters.parentId || undefined,
+      state: filters.state || undefined,
+      sql: filters.sql || undefined,
+      page: page.value,
+      size,
+    }
+    let [metaRes, dataRes] = await Promise.allSettled([
       dataApi.tableMeta(selectedTable.value),
-      dataApi.rowQueryPaged({
-        tableId: selectedTable.value,
-        siteId: siteId.value || undefined,
-        sourceId: querySourceId.value,
-        dataId: filters.dataId || undefined,
-        parentId: filters.parentId || undefined,
-        state: filters.state || undefined,
-        sql: filters.sql || undefined,
-        page: page.value,
-        size,
-      }),
+      dataApi.rowQueryPaged(query),
     ])
-    meta.value = metaRes
-    rows.value = dataRes?.list ?? []
-    total.value = dataRes?.total ?? 0
+    // 默认是 Mock + 已联调端点走真实后端：演示流程的表可能只存在本地种子数据。
+    // 仅在 Mock 模式下回退，VITE_API_MODE=http 仍然完整暴露真实后端错误。
+    if (isMockMode() && (metaRes.status === 'rejected' || dataRes.status === 'rejected')) {
+      const [fallbackMeta, fallbackData] = await Promise.allSettled([
+        dataApi.tableMeta(selectedTable.value, { mode: 'mock' }),
+        dataApi.rowQueryPaged(query, { mode: 'mock' }),
+      ])
+      if (fallbackMeta.status === 'fulfilled' && fallbackMeta.value) metaRes = fallbackMeta
+      if (fallbackData.status === 'fulfilled') dataRes = fallbackData
+      demoFallback.value = fallbackMeta.status === 'fulfilled' || fallbackData.status === 'fulfilled'
+    }
+    if (metaRes.status === 'fulfilled' && metaRes.value) {
+      meta.value = metaRes.value
+    } else {
+      meta.value = dataRes.status === 'fulfilled'
+        ? inferTableMeta(selectedTable.value, dataRes.value.list ?? [], dataRes.value.total ?? 0)
+        : null
+      metaError.value = demoFallback.value
+        ? '真实数据接口暂不可用，已切换到本地演示数据'
+        : meta.value?.fields.length
+          ? '表结构暂不可用，已根据当前数据生成列'
+          : '表结构暂不可用，暂无法展示字段'
+    }
+    if (demoFallback.value) metaError.value = '真实数据接口暂不可用，已切换到本地演示数据'
+    if (dataRes.status === 'fulfilled') {
+      rows.value = dataRes.value.list ?? []
+      total.value = dataRes.value.total ?? 0
+    } else {
+      rows.value = []
+      total.value = 0
+      dataError.value = '数据加载失败，请点击“查询”重试'
+    }
   } finally {
     loading.value = false
   }
@@ -230,8 +291,11 @@ async function saveEdit() {
       <button class="rc-btn" type="button" @click="clearFilters">清空</button>
     </div>
 
+    <div v-if="metaError" class="rv-notice" role="status">{{ metaError }}</div>
+    <div v-if="dataError" class="rv-notice error" role="alert">{{ dataError }}</div>
+
     <div class="rv-tablehead">
-      <span class="rv-tablename">{{ meta?.tableName || '—' }}</span>
+      <span class="rv-tablename">{{ meta?.tableName || selectedTable || '—' }}</span>
       <span class="rv-tablecount">{{ total.toLocaleString() }} 行</span>
       <span class="rv-spacer" />
       <span class="muted">第 {{ page }} 页 · 每页 {{ size }}</span>
@@ -331,6 +395,8 @@ async function saveEdit() {
 .rv-tablecount { font-size: 12px; color: var(--rc-faint); }
 .rv-spacer { flex: 1; }
 .muted { color: var(--rc-faint); font-size: 12px; }
+.rv-notice { padding: 7px 12px; border-bottom: 1px solid #fde68a; background: #fffbeb; color: #92400e; font-size: 12px; }
+.rv-notice.error { border-bottom-color: #fecaca; background: #fef2f2; color: #b91c1c; }
 
 .rv-grid { flex: 1; min-height: 0; }
 .rv-pager { display: flex; gap: 6px; justify-content: flex-end; padding: 8px 12px; border-top: 1px solid var(--rc-border-soft); background: #fff; }

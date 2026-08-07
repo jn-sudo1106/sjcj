@@ -200,6 +200,21 @@ export type WebKind = 'list' | 'detail' | 'attachment'
  *  旧节点没有这个字段，用 inferCollectorKind() 从 snatchType/webKind 推导，不强制迁移数据。 */
 export type CollectorKind = 'web' | 'browser_html' | 'wechat_official_html' | 'app' | 'file_download' | 'python' | 'login'
 
+/**
+ * 登录节点使用的一条完整登录数据配置。
+ *
+ * 字段按旧平台 Step3 保持一致；一个登录节点可以配置多条，发起任务时再临时选择其中一条。
+ */
+export interface LoginConfigRef {
+  id: string
+  loginUrl: string
+  loginName: string
+  loginPwd: string
+  newLoginConfig: '0' | '1'
+  authConfig: string
+  enabled: boolean
+}
+
 /** 采集节点能力描述：固定产物类型节点的表/队列不可编辑，UI 与 store 双重防线都据此判断（0711 T5） */
 export interface CollectorCapability {
   kind: CollectorKind
@@ -260,6 +275,10 @@ export interface CollectConfig {
   loginUrl?: string
   account?: string
   credentialRef?: string
+  /** 登录节点的多条旧平台登录配置。 */
+  loginConfigs?: LoginConfigRef[]
+  /** 默认登录配置；发起任务时可以临时覆盖，不修改此默认值。 */
+  defaultLoginConfigId?: string
   /** 定时策略只作用于首个采集节点；历史 Source/TaskConfig 同名字段在 load 时迁入。 */
   scheduleType?: string
   scheduleTime?: string

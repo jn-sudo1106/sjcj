@@ -8,7 +8,7 @@ import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
   WEB_KIND_OPTIONS, decisionOrParallelKind, collectorCapabilityOf, isRuleNode,
-  type CollectConfig, type CollectorSchedule, type NodeConfig, type TripleField, type WebKind,
+  type CollectConfig, type CollectorSchedule, type LoginConfigRef, type NodeConfig, type TripleField, type WebKind,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, ruleApi, type RuleOrchestrationItem } from '@/api'
 import BranchEditor from '../BranchEditor.vue'
@@ -32,6 +32,7 @@ const cc = computed<CollectConfig | undefined>(() => cfg.value?.collectCfg)
 const isDecisionOrParallel = computed(() => !!cfg.value && decisionOrParallelKind(cfg.value) !== undefined)
 const isRule = computed(() => isRuleNode(cfg.value))
 const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
+const isLoginNode = computed(() => nodeCapability.value?.kind === 'login')
 
 // 采集节点运行设置（0711 R5）：代理/断点续爬/登录迁到节点级；缺省读一次 Source 同名旧字段兜底展示（1:1+fallback）
 const runtimeSettings = computed<CollectorRuntimeSettings>(() => {
@@ -47,6 +48,89 @@ const runtimeSettings = computed<CollectorRuntimeSettings>(() => {
 })
 function onRuntimeSettingsChange(patch: Partial<CollectorRuntimeSettings>) {
   flow.patchCollect(id.value, patch)
+}
+
+// 登录节点配置清单：字段沿用旧平台 Step3；每条记录对应一次旧登录配置。
+const loginConfigs = computed<LoginConfigRef[]>(() => {
+  if (cc.value?.loginConfigs?.length) return cc.value.loginConfigs
+  if (cc.value?.account || cc.value?.loginUrl) {
+    return [{
+      id: 'legacy-default',
+      loginUrl: cc.value.url || cc.value.loginUrl || '',
+      loginName: cc.value.account || '',
+      loginPwd: '',
+      newLoginConfig: '1',
+      authConfig: '',
+      enabled: true,
+    }]
+  }
+  return []
+})
+function nextLoginConfigId(configs: LoginConfigRef[]) {
+  let n = configs.length + 1
+  while (configs.some((config) => config.id === `login-${n}`)) n += 1
+  return `login-${n}`
+}
+function patchLoginConfigs(configs: LoginConfigRef[], defaultId = cc.value?.defaultLoginConfigId) {
+  const enabled = configs.filter((config) => config.enabled)
+  const resolvedDefault = enabled.some((config) => config.id === defaultId)
+    ? defaultId
+    : enabled[0]?.id
+  const selected = configs.find((config) => config.id === resolvedDefault)
+  const patch: Partial<CollectConfig> = {
+    loginConfigs: configs,
+    defaultLoginConfigId: resolvedDefault,
+    // 旧节点字段只镜像默认配置，避免旧执行器读取到空 URL/账号。
+    loginUrl: selected?.loginUrl || '',
+    account: selected?.loginName || '',
+  }
+  if (!configs.length) {
+    patch.loginConfigs = []
+    patch.defaultLoginConfigId = undefined
+    patch.url = ''
+    patch.account = ''
+  }
+  // 登录节点的通用 URL 由默认配置同步，运行器仍可沿用旧的 collectCfg.url 判定。
+  if (selected?.loginUrl) patch.url = selected.loginUrl
+  flow.patchCollect(id.value, patch)
+}
+function addLoginConfig() {
+  const next = [...loginConfigs.value, {
+    id: nextLoginConfigId(loginConfigs.value),
+    loginUrl: '',
+    loginName: '',
+    loginPwd: '',
+    newLoginConfig: '1' as const,
+    authConfig: '',
+    enabled: true,
+  }]
+  patchLoginConfigs(next, next.at(-1)?.id)
+}
+function updateLoginConfig(idToUpdate: string, patch: Partial<LoginConfigRef>) {
+  patchLoginConfigs(loginConfigs.value.map((config) =>
+    config.id === idToUpdate ? { ...config, ...patch } : config,
+  ))
+}
+function loginConfigError(config: LoginConfigRef) {
+  if (config.newLoginConfig === '0') return config.authConfig.trim() ? '' : '请填写已有登录模板 ID'
+  if (!config.loginUrl.trim()) return '请填写登录 URL'
+  if (!config.loginName.trim()) return '请填写登录用户名'
+  if (!config.loginPwd.trim()) return '请填写登录密码'
+  return ''
+}
+function toggleLoginConfig(config: LoginConfigRef) {
+  if (config.enabled && loginConfigs.value.filter((item) => item.enabled).length <= 1) {
+    ElMessage.warning('至少保留一个启用的登录配置')
+    return
+  }
+  updateLoginConfig(config.id, { enabled: !config.enabled })
+}
+function setDefaultLoginConfig(config: LoginConfigRef) {
+  if (!config.enabled) return
+  patchLoginConfigs(loginConfigs.value, config.id)
+}
+function removeLoginConfig(config: LoginConfigRef) {
+  patchLoginConfigs(loginConfigs.value.filter((item) => item.id !== config.id))
 }
 
 const scheduleSettings = computed<CollectorSchedule>(() => {
@@ -191,27 +275,74 @@ function onBizType(e: Event) {
     </details>
     <SelectExistingRuleDialog v-if="isRule" v-model:open="selectExistingOpen" @select="onSelectExistingRule" />
 
-    <!-- 采集类专属：源 URL / 网页类型（详情状态由网页类型自动推导） -->
+    <!-- 采集类专属：源 URL / 网页类型（详情状态由网页类型自动推导）；登录节点的 URL 在登录配置清单中维护。 -->
     <template v-if="cc">
       <div v-if="isAppCollect" class="rc-field"><label>APP 包名</label>
         <input class="rc-input" :value="appPackageName" placeholder="如 com.example.app" @input="onAppPackageChange" />
       </div>
-      <div class="rc-field"><label>{{ collectUrlLabel }}</label>
+      <div v-if="!isLoginNode" class="rc-field"><label>{{ collectUrlLabel }}</label>
         <div class="rc-input-group">
           <input class="rc-input" :value="cc.url" :placeholder="collectUrlPlaceholder" @input="setCC('url', $event)" />
           <button class="rc-input-action" type="button" title="复制" @click="ElMessage.info('复制链接（演示）')">复制</button>
           <button class="rc-input-action" type="button" title="打开" @click="ElMessage.info('打开链接（演示）')">↗</button>
         </div>
       </div>
-      <!-- 登录节点专属（S4-1，方案 §6.1）：账号/凭据是节点自己的核心字段，常显不折叠——
+      <!-- 登录节点专属：每一行是一条完整登录数据配置，常显不折叠——
            跟采集节点运行设置里已废弃的 needLogin 开关（CollectorSettings.vue）不是一回事，别混 -->
-      <template v-if="nodeCapability?.kind === 'login'">
-        <div class="rc-field"><label>登录账号</label>
-          <input class="rc-input" :value="cc.account" placeholder="登录用户名" @input="setCC('account', $event)" />
+      <template v-if="isLoginNode">
+        <div class="ni-section-title ni-section-title-row">
+          <span>登录配置</span>
+          <button class="rc-btn" type="button" data-testid="login-config-add" @click="addLoginConfig">新增登录配置</button>
         </div>
-        <div class="rc-field"><label>凭据引用</label>
-          <input class="rc-input" :value="cc.credentialRef" placeholder="凭据中心的引用 ID" @input="setCC('credentialRef', $event)" />
+        <div v-if="!loginConfigs.length" class="rc-help login-config-empty">
+          请新增至少一条登录配置。
         </div>
+        <div v-for="(config, index) in loginConfigs" :key="config.id" class="login-config-card" :data-testid="`login-config-${config.id}`">
+          <div class="login-config-index">登录配置 {{ index + 1 }}</div>
+          <select class="rc-select" :value="config.newLoginConfig" aria-label="已有登录" @change="updateLoginConfig(config.id, { newLoginConfig: ($event.target as HTMLSelectElement).value as '0' | '1' })">
+            <option value="1">新建登录</option>
+            <option value="0">使用已有登录</option>
+          </select>
+          <template v-if="config.newLoginConfig === '1'">
+            <input
+              class="rc-input"
+              :value="config.loginUrl"
+              placeholder="登录 URL"
+              aria-label="登录 URL"
+              @input="updateLoginConfig(config.id, { loginUrl: ($event.target as HTMLInputElement).value })"
+            />
+            <input
+              class="rc-input"
+              :value="config.loginName"
+              placeholder="登录用户名"
+              aria-label="登录用户名"
+              @input="updateLoginConfig(config.id, { loginName: ($event.target as HTMLInputElement).value })"
+            />
+            <input
+              class="rc-input"
+              type="password"
+              :value="config.loginPwd"
+              placeholder="登录密码"
+              aria-label="登录密码"
+              @input="updateLoginConfig(config.id, { loginPwd: ($event.target as HTMLInputElement).value })"
+            />
+          </template>
+          <input
+            v-else
+            class="rc-input"
+            :value="config.authConfig"
+            placeholder="已有登录模板 ID"
+            aria-label="已有登录模板 ID"
+            @input="updateLoginConfig(config.id, { authConfig: ($event.target as HTMLInputElement).value })"
+          />
+          <div class="login-config-actions">
+            <label class="login-config-check"><input type="checkbox" :checked="config.enabled" @change="toggleLoginConfig(config)" /> 启用</label>
+            <label class="login-config-check"><input type="radio" name="default-login-config" :checked="config.id === cc?.defaultLoginConfigId" :disabled="!config.enabled" @change="setDefaultLoginConfig(config)" /> 默认</label>
+            <button class="rc-row-del" type="button" title="删除登录配置" @click="removeLoginConfig(config)">✕</button>
+          </div>
+          <div v-if="loginConfigError(config)" class="rc-help login-config-error">{{ loginConfigError(config) }}</div>
+        </div>
+        <div class="rc-help">字段按旧平台登录配置保持一致；发起抓取时默认使用默认配置，也可以临时切换。</div>
       </template>
       <div v-if="!isAppCollect" class="rc-field"><label>网页类型</label>
         <select class="rc-select" :value="cc.webKind" @change="onWebKind">
@@ -336,4 +467,16 @@ function onBizType(e: Event) {
 .ni-json-box { min-height: 70px; margin-top: 10px; background: #f8fafc; color: var(--rc-text); }
 .rc-help { color: var(--rc-faint); font-size: 10px; line-height: 1.5; margin-top: 6px; }
 .rc-drawer { margin-bottom: 12px; padding: 10px; border: 1px solid #bfdbfe; background: var(--rc-primary-bg); color: #1e40af; border-radius: 8px; font-size: 11px; line-height: 1.55; }
+.login-config-empty { padding: 8px 10px; border: 1px dashed var(--rc-border); border-radius: 7px; background: #f8fafc; }
+.login-config-card { display: grid; grid-template-columns: auto 1fr 1.35fr 1fr 1fr; gap: 6px; align-items: center; margin-bottom: 8px; padding: 8px; border: 1px solid #e8eef6; border-radius: 8px; background: #fbfdff; }
+.login-config-card .rc-input { min-width: 0; }
+.login-config-index { color: var(--rc-muted); font-size: 11px; white-space: nowrap; }
+.login-config-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding-top: 2px; }
+.login-config-error { grid-column: 1 / -1; margin-top: -2px; color: var(--rc-error); }
+.login-config-check { display: inline-flex; align-items: center; gap: 3px; color: var(--rc-muted); font-size: 10px; white-space: nowrap; cursor: pointer; }
+.login-config-card .rc-row-del { margin-left: auto; }
+@media (max-width: 520px) {
+  .login-config-card { grid-template-columns: 1fr 1fr; }
+  .login-config-index { grid-column: 1 / -1; }
+}
 </style>

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // S5-1（方案 §5.2）：DataQueryPanel 从 DataView/index.vue 抽出的可复用「筛选 + 结果表格」面板。
 // 验收标准之一是"新组件可独立挂载"——本文件只挂载 DataQueryPanel 本身（不经由 DataView），
-// 覆盖查询/勾选列/行点击/高级筛选这几条组件自身的核心契约；DataView 侧的行为无回归由
+// 覆盖查询/勾选列/行点击/筛选条件这几条组件自身的核心契约；DataView 侧的行为无回归由
 // views/DataView/index.test.ts 覆盖（S5-1 改动没有改写那份测试的断言意图，只改了一处因为
 // .dv-link 类名冲突导致要按文案精确定位的选择器）。
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -63,24 +63,45 @@ describe('DataQueryPanel · 独立挂载', () => {
     expect(last.dataId).toBe('88231')
   })
 
-  it('高级筛选：勾选状态出现在筛选芯片，点击关闭清空并重新查询', async () => {
+  it('高级筛选默认收起，展开后显示高级条件', async () => {
+    const wrapper = mountPanel()
+
+    expect(wrapper.find('[data-testid="data-query-filters"]').exists()).toBe(false)
+    await wrapper.find('button[aria-controls="data-query-advanced"]').trigger('click')
+    expect(wrapper.find('[data-testid="data-query-filters"]').exists()).toBe(true)
+    expect(wrapper.find('input[placeholder="后续标识（如 -1）"]').exists()).toBe(true)
+  })
+
+  it('时间范围与高级条件只在点击查询时提交', async () => {
+    const spy = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = mountPanel()
+    const before = spy.mock.calls.length
+
+    const datePicker = wrapper.findComponent({ name: 'ElDatePicker' })
+    await datePicker.vm.$emit('update:modelValue', ['2026-08-01 00:00:00', '2026-08-02 23:59:59'])
+    await wrapper.find('button[aria-controls="data-query-advanced"]').trigger('click')
+    await wrapper.find('input[placeholder="后续标识（如 -1）"]').setValue('-1')
+    expect(spy.mock.calls.length).toBe(before)
+
+    await wrapper.findAll('button').find((b) => b.text() === '查询')!.trigger('click')
+    await flushPromises()
+    expect(spy).toHaveBeenLastCalledWith(expect.objectContaining({
+      startTime: '2026-08-01 00:00:00',
+      endTime: '2026-08-02 23:59:59',
+      nextFlag: '-1',
+    }))
+  })
+
+  it('清空：清除所有筛选条件并回到第一页查询', async () => {
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
     const wrapper = mountPanel()
 
-    await wrapper.findAll('.dv-link').find((el) => el.text() === '高级筛选')!.trigger('click')
-    await flushPromises()
-    const cInitial = wrapper.findAllComponents({ name: 'ElCheckboxButton' }).find((c) => c.text() === 'C 初始')
-    await cInitial!.find('input').setValue(true)
-    await flushPromises()
-
-    expect(wrapper.findAllComponents({ name: 'ElTag' }).some((t) => t.text() === 'C 初始')).toBe(true)
-    expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'C' }))
-
-    const tag = wrapper.findAllComponents({ name: 'ElTag' }).find((t) => t.text() === 'C 初始')
-    await tag!.vm.$emit('close')
+    await wrapper.find('input[placeholder="请输入数据 ID"]').setValue('88231')
+    await wrapper.find('input[placeholder="父 ID"]').setValue('p-1')
+    await wrapper.findAll('button').find((b) => b.text() === '清空')!.trigger('click')
     await flushPromises()
 
-    expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ state: undefined }))
+    expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ dataId: undefined, parentId: undefined, page: 1 }))
   })
 
   it('selectable：勾选行 emit update:selectedKeys；不开启时不渲染勾选列', async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { LegacySnatchSaveRequest } from './types/source'
 import {
   configFromLegacy,
   configToLegacy,
@@ -25,6 +26,8 @@ import {
   ruleOrchestrationTestFromLegacy,
   ruleOrchestrationTestToLegacy,
   summaryRowFromLegacy,
+  assertLegacySnatchSaveLogin,
+  legacySnatchSavePayloadFromFlow,
 } from './legacyAdapters'
 
 describe('旧平台参数模型适配', () => {
@@ -89,6 +92,51 @@ describe('旧平台参数模型适配', () => {
       total: 1,
       list: [expect.objectContaining({ paramId: '1', name: '日期', kind: 'date' })],
     })
+  })
+})
+
+describe('旧平台新建源登录字段适配', () => {
+  it('保持 Step1/2/3 的字段名，并把登录节点映射到 reqLogin/loginUrl/loginName', () => {
+    const payload = legacySnatchSavePayloadFromFlow({
+      id: 'flow-1', name: '公告源', version: '1', main: ['collect', 'login'], branches: [], updatedAt: '',
+      source: {
+        sourceId: 'src-1', sourceType: 90, name: '公告源', url: 'https://example.com', configId: '', mainTable: '', owner: 'admin', state: 'C',
+        dirId: 'cat-1', tags: ['公告', 'A股'], useProxy: true,
+      },
+      configs: {
+        collect: {
+          title: '列表抓取', sub: '', status: '运行', planned: false, collect: true, base: [], fields: [], inmap: [], params: [], output: [],
+          collectCfg: { snatchType: '[90] - 网页抓取', webKind: 'list', url: 'https://example.com/list', outputTable: 'tb-1', inputTable: '', inputParams: ['p-date'], isDetail: false, resume: true },
+        },
+        login: {
+          title: '网页登录', sub: '', status: '运行', planned: false, collect: true, base: [], fields: [], inmap: [], params: [], output: [],
+          collectCfg: {
+            snatchType: '[LOGIN] - 网页登录', webKind: 'list', url: 'https://example.com/login', outputTable: '', inputTable: '', inputParams: [], isDetail: false, collectorKind: 'login',
+            loginConfigs: [
+              { id: 'login-1', loginUrl: 'https://example.com/login', loginName: 'alice', loginPwd: 'secret-1', newLoginConfig: '1', authConfig: '', enabled: true },
+              { id: 'login-2', loginUrl: 'https://example.com/login-2', loginName: 'bob', loginPwd: 'secret-2', newLoginConfig: '1', authConfig: '', enabled: true },
+            ],
+            defaultLoginConfigId: 'login-1',
+          },
+        },
+      },
+    } as never, { configId: 'login-2', newLoginConfig: '1', loginPwd: 'secret' })
+
+    expect(payload).toMatchObject({
+      sourceType: 90, sourceUrl: 'https://example.com', sourceName: '公告源', categoryId: 'cat-1', proxy: '1', keep: '1',
+      tags: '公告,A股', newConfig: '1', isMulti: '1', loginTemplete: '1', entryTypeId: 'tb-1',
+      params: [{ paramId: 'p-date' }], reqLogin: '1', newLoginConfig: '1',
+      loginUrl: 'https://example.com/login-2', loginName: 'bob', loginPwd: 'secret',
+    })
+    expect(payload).not.toHaveProperty('credentialRef')
+  })
+
+  it('新建登录缺旧平台密码时直接阻止提交，不能把 credentialRef 当作 authConfig', () => {
+    const payload = {
+      reqLogin: '1', newLoginConfig: '1', loginUrl: 'https://example.com/login', loginName: 'alice',
+      loginPwd: undefined, sourceUrl: 'https://example.com', sourceName: '源', newConfig: '1', isMulti: '1', loginTemplete: '1', params: [],
+    } as LegacySnatchSaveRequest
+    expect(() => assertLegacySnatchSaveLogin(payload)).toThrow('loginPwd')
   })
 })
 

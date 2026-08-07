@@ -7,6 +7,13 @@ import { isDataNode, isRuleNode, nodeOutputTable, collectorCapabilityOf, type Fl
 // 画布节点态、运行记录、数据查看三页都读它，与静态 mock 叠加，形成「发起抓取→run→落表」闭环。
 let captureSeq = 1
 
+export interface CaptureOptions {
+  /** 任务级覆盖的登录节点；未传时按流程中的第一个登录节点解析。 */
+  loginNodeId?: string
+  /** 任务级覆盖的登录配置；不写回流程默认值。 */
+  loginConfigId?: string
+}
+
 export const useRuntimeStore = defineStore('runtime', () => {
   const runs = ref<RunRow[]>([]) // 发起抓取产生的 run（叠加在 mock 之上）
   const runNodes = reactive<Record<string, RunNode[]>>({}) // run_id → 节点明细
@@ -25,6 +32,17 @@ export const useRuntimeStore = defineStore('runtime', () => {
     if (c.collectCfg) {
       const capability = collectorCapabilityOf(c)
       if (!c.collectCfg.url) return false
+      if (capability?.kind === 'login') {
+        const configs = c.collectCfg.loginConfigs?.length
+          ? c.collectCfg.loginConfigs
+          : c.collectCfg.account || c.collectCfg.loginUrl
+            ? [{
+              id: 'legacy-default', loginUrl: c.collectCfg.loginUrl || c.collectCfg.url || '', loginName: c.collectCfg.account || '', loginPwd: '',
+              newLoginConfig: '1' as const, authConfig: '', enabled: true,
+            }]
+            : []
+        if (!configs.some((config) => config.enabled && (config.newLoginConfig === '0' ? config.authConfig.trim() : config.loginUrl.trim() && config.loginName.trim() && config.loginPwd.trim()))) return false
+      }
       if (capability?.kind !== 'login' && !c.collectCfg.outputTable) return false
     } else if (isRuleNode(c)) {
       if (!c.ruleCfg?.ruleId || !c.ruleCfg.script?.trim()) return false
@@ -35,7 +53,32 @@ export const useRuntimeStore = defineStore('runtime', () => {
   }
 
   // 抓取运行器：给定一组已校验通过的节点 id，跑一次 L→C 流转 + 落表。
-  function runCapture(def: FlowDef, ids: string[]): string {
+  function resolveLoginConfig(def: FlowDef, options?: CaptureOptions) {
+    const loginNode = options?.loginNodeId
+      ? def.configs[options.loginNodeId]
+      : Object.values(def.configs).find((cfg) => collectorCapabilityOf(cfg)?.kind === 'login')
+    const collect = loginNode?.collectCfg
+    if (!collect) return undefined
+    const configs = collect.loginConfigs?.length
+      ? collect.loginConfigs
+      : collect.account || collect.loginUrl
+        ? [{
+          id: 'legacy-default', loginUrl: collect.loginUrl || collect.url || '', loginName: collect.account || '', loginPwd: '',
+          newLoginConfig: '1' as const, authConfig: '', enabled: true,
+        }]
+        : []
+    const selected = options?.loginConfigId
+      ? configs.find((item) => item.id === options.loginConfigId && item.enabled)
+      : configs.find((item) => item.id === collect.defaultLoginConfigId && item.enabled)
+        ?? configs.find((item) => item.enabled)
+    if (!selected) return undefined
+    return { nodeId: options?.loginNodeId, ...selected }
+  }
+
+  function runCapture(def: FlowDef, ids: string[], options?: CaptureOptions): string {
+    const loginConfig = resolveLoginConfig(def, options)
+    // 用户明确选择的配置如果已停用/删除，不能静默回退到默认配置，避免账号串用。
+    if (options?.loginConfigId && !loginConfig) return ''
     // 运行 ID 前缀（0714 会议 Task 4）：用户可见，随「发起抓取」文案一并改名，不再叫 TRIAL
     const runId = `RUN-CAPTURE-${String(captureSeq++).padStart(2, '0')}`
     running.value = true
@@ -58,7 +101,16 @@ export const useRuntimeStore = defineStore('runtime', () => {
         extTraceId: /规则/.test(cfg?.title ?? '') ? `TRACE-${runId}` : '-',
       }
     })
-    const run: RunRow = { runId, flow: def.name, state: 'L', startedAt, owner: 'admin', ruleHits: 0 }
+    const run: RunRow = {
+      runId,
+      flow: def.name,
+      state: 'L',
+      startedAt,
+      owner: 'admin',
+      ruleHits: 0,
+      loginConfigId: loginConfig?.id,
+      loginAccount: loginConfig?.loginName,
+    }
     runs.value = [run, ...runs.value]
 
     // 逐节点 L→C 流转（mock 轮询模拟）
@@ -83,7 +135,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
   }
 
   // 整链发起抓取：跑主链和决策/分头分支段内所有可运行节点。
-  function startCapture(def: FlowDef): string {
+  function startCapture(def: FlowDef, options?: CaptureOptions): string {
     if (running.value) return ''
     const ids = def.main.filter((id) => isRunnable(def, id))
     // 0707 Phase6：chain 内节点也参与运行（按声明顺序追加）
@@ -95,15 +147,15 @@ export const useRuntimeStore = defineStore('runtime', () => {
       }
     }
     if (!ids.length) return ''
-    return runCapture(def, ids)
+    return runCapture(def, ids, options)
   }
 
   // 单节点运行（S7-1 改判：不是"整链从某节点起跑"，是"只跑这一个节点，不往下继续"）。
   // 纯前端模拟——真实 sendSnatch(sourceIds) 目前无法按节点范围发起抓取，暂不接入，避免"按钮说只跑一个节点，后端却重抓整个源"的误导。
-  function runSingleNode(def: FlowDef, id: string): { runId: string; reason?: string } {
+  function runSingleNode(def: FlowDef, id: string, options?: CaptureOptions): { runId: string; reason?: string } {
     if (running.value) return { runId: '', reason: '已有发起抓取正在进行，请稍候' }
     if (!isRunnable(def, id)) return { runId: '', reason: '该节点当前不可运行（已停用 / 规划中 / 缺少必要配置）' }
-    return { runId: runCapture(def, [id]) }
+    return { runId: runCapture(def, [id], options) }
   }
 
   // 落表：生成进入「数据查看」的实体数据，落到每个参与节点自己配置的输出表（不再写死 t-notice）

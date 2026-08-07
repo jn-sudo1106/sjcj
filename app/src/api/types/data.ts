@@ -132,6 +132,9 @@ export interface RowQuery extends PageQuery {
   parentId?: string
   /** 多选状态由调用方 join(',') 传入（如 'C,AC'）；空则不随载荷携带该键 */
   state?: string
+  /** 数据查看页基础时间范围，默认针对 CREATE_DT 查询；由旧适配层合并到 more */
+  startTime?: string
+  endTime?: string
   sql?: string
   nextFlag?: string
   min?: string | number
@@ -163,6 +166,9 @@ export interface RunRow {
   finishedAt?: string
   owner: string
   ruleHits?: number
+  /** 任务级临时选择的登录配置快照（不保存密码等敏感信息）。 */
+  loginConfigId?: string
+  loginAccount?: string
 }
 
 export interface RunNode {

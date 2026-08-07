@@ -70,7 +70,7 @@ function onExportCsv() {
 
 <template>
   <el-drawer v-model="visible" title="统计" size="900px">
-    <el-select v-model="summaryFields" multiple filterable placeholder="选择统计列" style="width: 100%">
+    <el-select v-model="summaryFields" multiple filterable placeholder="选择统计列" style="width: 100%" data-testid="summary-fields">
       <el-option v-for="f in fields" :key="f.columnName" :label="`${f.desc}(${f.columnName})`" :value="f.columnName!" />
     </el-select>
     <div class="sd-toolbar">

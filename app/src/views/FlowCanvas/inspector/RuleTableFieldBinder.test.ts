@@ -89,34 +89,14 @@ describe('RuleTableFieldBinder · runSearch 防止旧请求覆盖新结果（req
 describe('RuleTableFieldBinder · 新建表（0804 拍板：共用表配置的 TableEditDialog/entryApi）', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('点新建表保存后：自动注入为选项并选中，入参字段重置为空', async () => {
-    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({
-      tableId: 'new-1', tableName: 'sense_data.TB_NEW', name: '新建表',
-      fields: [{ prop: 'a-K1', desc: 'A', type: 'string', required: false }],
-    })
-
-    const wrapper = mountBinder({ inputFields: ['stale'] })
+  it('输入表只支持选择已有表，输出表仍保留新建入口', async () => {
+    const wrapper = mountBinder()
     await flushPromises()
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vm = wrapper.vm as any
-    vm.openNewTable('input')
-    await flushPromises()
-
-    // 弹窗内部表单/entrySave 已有 TableTab 同款覆盖，这里只验证 RuleTableFieldBinder 自己的接线：
-    // 直接驱动弹窗的 saved 事件，不重复走一遍表单填写
-    const dialog = wrapper.findComponent(TableEditDialog)
-    expect(dialog.exists()).toBe(true)
-    await dialog.vm.$emit('saved', 'new-1')
-    await flushPromises()
-
-    expect(entryApi.entryDetail).toHaveBeenCalledWith('new-1')
-    const updates = wrapper.emitted('update:modelValue') as Array<[Record<string, unknown>]> | undefined
-    expect(updates?.length).toBeTruthy()
-    const last = updates![updates!.length - 1][0]
-    expect(last.inputTableId).toBe('new-1')
-    expect(last.inputTable).toBe('sense_data.TB_NEW')
-    expect(last.inputFields).toEqual([])
+    const inputRow = wrapper.findAll('.rc-field').find((row) => row.find('label').text() === '输入表 *')
+    const outputRow = wrapper.findAll('.rc-field').find((row) => row.find('label').text().startsWith('输出表'))
+    expect(inputRow?.find('button').exists()).toBe(false)
+    expect(outputRow?.text()).toContain('新建表')
   })
 
   it('点输出表旁的新建表：保存后选中到输出表，不影响输入表', async () => {
@@ -129,7 +109,7 @@ describe('RuleTableFieldBinder · 新建表（0804 拍板：共用表配置的 T
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const vm = wrapper.vm as any
-    vm.openNewTable('output')
+    vm.openNewTable()
     await flushPromises()
     await wrapper.findComponent(TableEditDialog).vm.$emit('saved', 'new-2')
     await flushPromises()
@@ -204,4 +184,3 @@ describe('RuleTableFieldBinder · 字段默认全选（0804 S2-3）', () => {
     expect((wrapper.emitted('update:modelValue') as unknown[]).length).toBe(1)
   })
 })
-
