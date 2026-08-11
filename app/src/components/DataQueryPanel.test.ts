@@ -63,6 +63,21 @@ describe('DataQueryPanel · 独立挂载', () => {
     expect(last.dataId).toBe('88231')
   })
 
+  it('状态多选：查询按逗号拼接 state 参数，清空后不再提交', async () => {
+    const spy = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = mountPanel({ showState: true })
+
+    const stateSelect = wrapper.findComponent({ name: 'ElSelect' })
+    await stateSelect.vm.$emit('update:modelValue', ['C', 'E'])
+    await wrapper.findAll('button').find((b) => b.text() === '查询')!.trigger('click')
+    await flushPromises()
+    expect(spy).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'C,E' }))
+
+    await wrapper.findAll('button').find((b) => b.text() === '清空')!.trigger('click')
+    await flushPromises()
+    expect(spy).toHaveBeenLastCalledWith(expect.objectContaining({ state: undefined }))
+  })
+
   it('高级筛选默认收起，展开后显示高级条件', async () => {
     const wrapper = mountPanel()
 

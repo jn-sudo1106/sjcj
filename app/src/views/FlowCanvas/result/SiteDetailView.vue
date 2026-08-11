@@ -5,12 +5,13 @@
 // 查询所需的节点/表结构，但不走 ws.open（不登记页签、不出现在页签条里，用户看到的是"网站"而非某个具体子源）。
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { flowApi, sourceApi, siteApi, type Site } from '@/api'
+import { flowApi, sourceApi, siteApi, type Site, type Source } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { firstSourceId, normalizeSiteView } from '@/utils/url/workspaceRoute'
 import ResultView from './ResultView.vue'
 import FileView from './FileView.vue'
 import TaskView from './TaskView.vue'
+import SourceOverviewView from './SourceOverviewView.vue'
 
 const props = defineProps<{ siteId: string }>()
 const route = useRoute()
@@ -57,9 +58,12 @@ onMounted(load)
 watch(() => props.siteId, load)
 
 const view = computed(() => normalizeSiteView(route.query.view))
-function switchView(target: 'data' | 'file' | 'task') {
+function switchView(target: 'source' | 'data' | 'file' | 'task') {
   if (view.value === target) return
   void router.replace({ path: '/canvas', query: { siteId: props.siteId, view: target } })
+}
+function openSource(source: Source) {
+  void router.replace({ path: '/canvas', query: { sourceId: source.sourceId, view: 'flow' } })
 }
 </script>
 
@@ -71,6 +75,7 @@ function switchView(target: 'data' | 'file' | 'task') {
         <div class="sdv-sub">{{ site?.categoryPath || site?.category || '' }}</div>
       </div>
       <div class="sdv-switcher">
+        <button class="sdv-seg" :class="{ on: view === 'source' }" type="button" data-testid="site-source-view" @click="switchView('source')">源视图</button>
         <button class="sdv-seg" :class="{ on: view === 'data' }" type="button" @click="switchView('data')">数据视图</button>
         <button class="sdv-seg" :class="{ on: view === 'file' }" type="button" @click="switchView('file')">文件视图</button>
         <button class="sdv-seg" :class="{ on: view === 'task' }" type="button" @click="switchView('task')">任务视图</button>
@@ -78,7 +83,8 @@ function switchView(target: 'data' | 'file' | 'task') {
     </div>
     <div v-if="loadError" class="sdv-empty">{{ loadError }}</div>
     <template v-else>
-      <ResultView v-if="view === 'data'" site-wide class="sdv-body" />
+      <SourceOverviewView v-if="view === 'source'" :current-site-id="siteId" class="sdv-body" @open-source="openSource" />
+      <ResultView v-else-if="view === 'data'" site-wide class="sdv-body" />
       <FileView v-else-if="view === 'file'" site-wide class="sdv-body" />
       <TaskView v-else site-wide class="sdv-body" />
     </template>

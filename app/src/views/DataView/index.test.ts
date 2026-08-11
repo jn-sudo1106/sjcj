@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import DataView from './index.vue'
+import DataImportDialog from './DataImportDialog.vue'
 import { useAuthStore } from '../../stores/auth'
 import { dataApi, sourceApi, entryApi, type DataTableMeta, type DataRow, type EntryTypeGroup } from '../../api'
 
@@ -67,7 +68,7 @@ describe('DataView · 数据表页', () => {
     await flushPromises()
   }
 
-  async function openResultMenu(testId: 'data-export' | 'data-delete' | 'data-tools' | 'data-more') {
+  async function openResultMenu(testId: 'data-export' | 'data-delete' | 'data-more') {
     await wrapper.get(`[data-testid="${testId}"]`).trigger('click')
     await flushPromises()
     return new DOMWrapper(document.body)
@@ -125,16 +126,22 @@ describe('DataView · 数据表页', () => {
     expect(wrapper.find('input[placeholder="后续标识（如 -1）"]').exists()).toBe(true)
   })
 
-  it('快捷查询直接展示，点击今日新增只提交对应条件且不清空当前源', async () => {
+  async function chooseQuickQuery(label: string) {
+    await wrapper.get('[data-testid="data-quick"]').trigger('click')
+    await flushPromises()
+    const item = new DOMWrapper(document.body).findAll('li, .el-dropdown-menu__item').find((el) => el.text() === label)
+    if (!item) throw new Error(`未找到快捷查询：${label}`)
+    await item.trigger('click')
+    await flushPromises()
+  }
+
+  it('快捷查询收敛为项目统一的按钮下拉，选择今日新增只提交对应条件且不清空当前源', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     await mountPage({ sourceId: '600519' })
     await waitForLoad()
 
-    const quick = wrapper.findAll('button').find((b) => b.text() === '日新增')
-    expect(quick).toBeTruthy()
-    await quick!.trigger('click')
-    await flushPromises()
+    await chooseQuickQuery('日新增')
 
     expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({
       sourceId: '600519',
@@ -142,15 +149,13 @@ describe('DataView · 数据表页', () => {
     }))
   })
 
-  it('快捷查询：点击所有源会清空当前源过滤并重新查询', async () => {
+  it('快捷查询：选择所有源会清空当前源过滤并重新查询', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     await mountPage({ sourceId: '600519' })
     await waitForLoad()
 
-    const quick = wrapper.findAll('button').find((b) => b.text() === '所有源')
-    expect(quick).toBeTruthy()
-    await quick!.trigger('click')
+    await chooseQuickQuery('所有源')
     await waitForLoad()
 
     expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 't1', sourceId: undefined }))
@@ -186,46 +191,42 @@ describe('DataView · 数据表页', () => {
     expect(openSpy).toHaveBeenCalledWith('/api/v1/entry/entryExportAll?entryType=t1', '_blank')
   })
 
-  it('数据维护入口：仅 admin 且测试表（state===\'C\'）时可见；正式表仍保留入口但不展示测试删除项', async () => {
+  it('更多菜单保留查看能力和已命名的清除父表操作，不再显示数据维护', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     await mountPage()
     await waitForLoad()
-    let body = await openResultMenu('data-more')
-    expect(body.findAll('li, .el-dropdown-menu__item').some((el) => el.text() === '数据维护')).toBe(true)
-    await body.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '数据维护')!.trigger('click')
-    await new Promise((r) => setTimeout(r, 50))
-    expect(wrapper.text()).toContain('删除选中数据')
 
-    wrapper.unmount()
-    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({ ...META, state: 'AC' })
-    await mountPage()
-    await waitForLoad()
-    body = await openResultMenu('data-more')
-    expect(body.findAll('li, .el-dropdown-menu__item').some((el) => el.text() === '数据维护')).toBe(true)
-    await body.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '数据维护')!.trigger('click')
-    await new Promise((r) => setTimeout(r, 50))
-    expect(wrapper.text()).not.toContain('删除选中数据')
+    const body = await openResultMenu('data-more')
+    expect(body.text()).toContain('查看统计')
+    expect(body.text()).toContain('查看查询条件/SQL')
+    expect(body.text()).toContain('展示处理步骤')
+    expect(body.text()).toContain('查看去重源 ID')
+    expect(body.text()).toContain('清除父表后续标识')
+    expect(body.text()).not.toContain('数据维护')
   })
 
-  it('恢复旧平台入口：测试表管理员可见删除数据和工具菜单，正式表隐藏删除菜单', async () => {
+  it('工具条按新增、导入、导出、更多与删除收敛，不显示夸张的危险操作按钮', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     await mountPage()
     await waitForLoad()
 
     expect(wrapper.find('[data-testid="data-delete"]').exists()).toBe(true)
-    const tools = await openResultMenu('data-tools')
-    expect(tools.text()).toContain('取数 API')
-    expect(tools.text()).toContain('指标数据集')
-    expect(tools.text()).toContain('提取数据生成源')
+    expect(wrapper.find('[data-testid="data-import"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="data-danger"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="data-tools"]').exists()).toBe(false)
+
+    const exportMenu = await openResultMenu('data-export')
+    expect(exportMenu.text()).toContain('导出 Excel')
+    expect(exportMenu.text()).toContain('取数 API')
 
     wrapper.unmount()
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({ ...META, state: 'AC' })
     await mountPage()
     await waitForLoad()
     expect(wrapper.find('[data-testid="data-delete"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="data-tools"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="data-import"]').exists()).toBe(true)
   })
 
   it('删除数据：按时间删除和表操作按旧系统分组，表操作只保留三项', async () => {
@@ -242,26 +243,56 @@ describe('DataView · 数据表页', () => {
     expect(body.text()).toContain('清空表数据【当日】')
     expect(body.text()).toContain('清空表数据【全量】')
     expect(body.text()).not.toContain('重新处理后续步骤')
-    expect(body.text()).not.toContain('清除父表后续标识')
   })
 
-  it('工具：取数 API 展示当前条件；清除父表标识归入数据维护而不与工具重复', async () => {
+  it('取数 API 归入导出；清除父表标识归入更多', async () => {
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage({ sourceId: '600519' })
+    await waitForLoad()
+
+    const exportMenu = await openResultMenu('data-export')
+    const apiItem = exportMenu.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '取数 API')!
+    await apiItem.trigger('click')
+    await flushPromises()
+    await new Promise((r) => setTimeout(r, 500))
+    await flushPromises()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-testid="data-api-dialog"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('API描述')
+    expect(wrapper.text()).toContain('ID取数')
+    expect(wrapper.text()).toContain('startId')
+    expect(wrapper.text()).toContain('endId')
+    expect(wrapper.text()).toContain('返回值说明')
+    expect(wrapper.text()).toContain('appId=dev&appKey=dev1&type=t1&sourceId=600519&startId=0&size=10')
+    const closeApiButton = wrapper.findAll('button').find((el) => el.text() === '关闭')
+    expect(closeApiButton).toBeDefined()
+    await closeApiButton!.trigger('click')
+
+    const moreMenu = await openResultMenu('data-more')
+    expect(moreMenu.text()).toContain('清除父表后续标识')
+  })
+
+  it('导入数据：管理员可打开旧接口字段口径的导入弹窗', async () => {
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage({ sourceId: '600519' })
+    await waitForLoad()
+
+    await wrapper.get('[data-testid="data-import"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findComponent(DataImportDialog).props('modelValue')).toBe(true)
+  })
+
+  it('结果表展示 STATE 状态列', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     await mountPage()
     await waitForLoad()
 
-    let tools = await openResultMenu('data-tools')
-    const apiItem = tools.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '取数 API')!
-    await apiItem.trigger('click')
-    await flushPromises()
-    await new Promise((r) => setTimeout(r, 200))
-    await flushPromises()
-    await wrapper.vm.$nextTick()
-    expect(wrapper.text()).toContain('/api/v1/entry/entryDataPaged')
-
-    tools = await openResultMenu('data-tools')
-    expect(tools.text()).not.toContain('清除父表后续标识')
+    expect(wrapper.text()).toContain('状态')
+    expect(wrapper.text()).toContain('C')
   })
 
   it('动态列：表头按 {desc}-{columnName} 渲染数据表字段', async () => {
@@ -432,15 +463,15 @@ describe('DataView · 数据表页', () => {
     expect(wrapper.text()).toContain('覆盖数据量:3')
   })
 
-  it('展示步骤：无源ID报错；选源后加载 sourceApi.sourceSteps 并展示步骤卡片', async () => {
+  it('展示步骤：无源ID报错；选源后加载 sourceApi.sourceSteps 并打开步骤抽屉', async () => {
     const stepsSpyNoSource = vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
     const auth = useAuthStore()
     auth.roles = ['admin']
     await mountPage()
     await waitForLoad()
 
-    let body = await openResultMenu('data-tools')
-    let item = body.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '展示步骤')
+    let body = await openResultMenu('data-more')
+    let item = body.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '展示处理步骤')
     await item!.trigger('click')
     await flushPromises()
     expect(stepsSpyNoSource).not.toHaveBeenCalled()
@@ -451,13 +482,13 @@ describe('DataView · 数据表页', () => {
     ])
     await mountPage({ sourceId: '600519' })
     await waitForLoad()
-    body = await openResultMenu('data-tools')
-    item = body.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '展示步骤')
+    body = await openResultMenu('data-more')
+    item = body.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '展示处理步骤')
     await item!.trigger('click')
     await flushPromises()
 
     expect(stepsSpy).toHaveBeenCalledWith('600519')
-    expect(wrapper.text()).toContain('抓取列表')
+    expect(wrapper.text()).toContain('处理步骤')
   })
 
   it('任务实例：点「任务」列（DETAIL_ID）打开弹窗，按 taskId 查询', async () => {
@@ -494,7 +525,7 @@ describe('DataView · 数据表页', () => {
     expect(taskSpy).toHaveBeenCalledWith(expect.objectContaining({ parentId: '88231', sourceId: '600519' }))
   })
 
-  it('表结构详情：? 按钮展示已加载的 tableMeta 字段列表，不发新请求', async () => {
+  it('表结构详情：? 按钮打开右侧详情抽屉，展示已加载的 tableMeta 字段列表，不发新请求', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     await mountPage()
@@ -504,7 +535,8 @@ describe('DataView · 数据表页', () => {
     await wrapper.findAll('button').find((b) => b.attributes('title') === '表结构详情')!.trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('表结构详情')
+    expect(document.body.textContent).toContain('表结构详情')
+    expect(document.body.querySelector('.el-drawer')).not.toBeNull()
     expect(wrapper.text()).toContain('标题-K1'.split('-')[1]) // K1 出现在字段表里（列名列）
     expect((dataApi.tableMeta as ReturnType<typeof vi.fn>).mock.calls.length).toBe(before)
   })
@@ -548,6 +580,9 @@ describe('DataView · 数据表页', () => {
 
     expect(entrySpy).toHaveBeenCalled()
     expect(wrapper.text()).toContain('更多表')
+    expect(wrapper.text()).toContain('去重字段')
+    expect(wrapper.text()).toContain('更新时间')
+    expect(wrapper.findAll('button[aria-label="刷新"]').length).toBeGreaterThan(1)
 
     const row = wrapper.findAll('tr').find((el) => el.text().includes('更多表'))
     await row!.trigger('click')
@@ -572,6 +607,8 @@ describe('DataView · 数据表页', () => {
 
     expect(sourceSpy).toHaveBeenCalled()
     expect(wrapper.text()).toContain('更多源示例')
+    expect(wrapper.text()).toContain('配置ID')
+    expect(wrapper.text()).toContain('域')
 
     const row = wrapper.findAll('tr').find((el) => el.text().includes('更多源示例'))
     await row!.trigger('click')

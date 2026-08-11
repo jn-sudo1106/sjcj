@@ -229,9 +229,14 @@ describe('ConfigTab · 网页登录节点专属字段（S4-1）', () => {
 
     const second = flow.configs['login-1'].collectCfg?.loginConfigs?.[1]
     expect(second).toMatchObject({ loginName: 'backup-user', loginPwd: 'pwd-002', newLoginConfig: '1', authConfig: '', enabled: true })
-    await wrapper.findAll('.login-config-check input[type="checkbox"]')[1].setValue(false)
+    const toggle = wrapper.get('[data-testid="login-config-enable-login-2"]')
+    expect(toggle.attributes('role')).toBe('switch')
+    expect(toggle.attributes('aria-checked')).toBe('true')
+    expect(wrapper.get('[data-testid="login-config-status-login-2"]').text()).toContain('已启用')
+    await toggle.trigger('click')
     expect(flow.configs['login-1'].collectCfg?.loginConfigs?.[1].enabled).toBe(false)
     expect(flow.configs['login-1'].collectCfg?.defaultLoginConfigId).toBe('login-1')
+    expect(wrapper.get('[data-testid="login-config-status-login-2"]').text()).toContain('已停用')
   })
 
   it('删除登录配置：首个和唯一配置都可删除，删除最后一个时清理旧字段', async () => {

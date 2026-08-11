@@ -6,13 +6,18 @@ const props = withDefaults(defineProps<{
   layout: HorizontalLayout
   modelValue?: string
   selectable?: (nodeId: string) => boolean
-}>(), { modelValue: '', selectable: () => true })
+  /** 运行状态由任务/数据查看等只读视图提供；画布编辑态不传。 */
+  nodeStates?: Record<string, string | undefined>
+}>(), { modelValue: '', selectable: () => true, nodeStates: () => ({}) })
 const emit = defineEmits<{ 'update:modelValue': [nodeId: string] }>()
 
 const railStyle = computed(() => ({ width: `${props.layout.totalWidth}px`, height: `${props.layout.totalHeight}px` }))
 const finalNodeId = computed(() => props.layout.nodes.filter((node) => !node.branch).at(-1)?.id)
 function pick(nodeId: string) {
   if (props.selectable(nodeId)) emit('update:modelValue', nodeId)
+}
+function stateText(state?: string) {
+  return state === 'E' ? '异常' : state === 'L' ? '运行中' : state === 'C' ? '完成' : state === 'D' ? '已停用' : ''
 }
 </script>
 
@@ -42,6 +47,7 @@ function pick(nodeId: string) {
         <b>{{ node.cfg.title }}</b>
         <small v-if="node.cfg.sub" class="pnr-node-sub">{{ node.cfg.sub }}</small>
       </span>
+      <span v-if="nodeStates[node.id]" class="pnr-node-state" :class="`state-${nodeStates[node.id]}`" :title="stateText(nodeStates[node.id])" :aria-label="stateText(nodeStates[node.id])" />
       <span v-if="node.id === finalNodeId" class="pnr-node-final">最终结果</span>
     </button>
   </div>
@@ -62,5 +68,10 @@ function pick(nodeId: string) {
 .pnr-node b, .pnr-node small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pnr-node b { font-size: 12px; font-weight: 700; }
 .pnr-node small { color: #94a3b8; font-family: var(--rc-mono, monospace); font-size: 10px; }
+.pnr-node-state { width: 7px; height: 7px; flex: none; border-radius: 50%; background: #94a3b8; }
+.pnr-node-state.state-C { background: #16a34a; }
+.pnr-node-state.state-L { background: #2563eb; }
+.pnr-node-state.state-E { background: #dc2626; }
+.pnr-node-state.state-D { background: #94a3b8; }
 .pnr-node-final { position: absolute; top: -9px; right: 7px; padding: 1px 6px; border: 1px solid #86efac; border-radius: 5px; background: #f0fdf4; color: #15803d; font-size: 9px; font-weight: 700; line-height: 1.35; }
 </style>

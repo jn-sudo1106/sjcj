@@ -10,7 +10,10 @@ import { sourceApi, type Source } from '../../api'
 
 const SOURCE_A: Source = {
   sourceId: 'src-a', name: '源 A', url: 'http://a', configId: 'c-a', mainTable: 't-a',
-  owner: 'dev_a', categoryPath: '/x/a', cycle: '每日', state: 'C', dataCount: 1,
+  owner: 'dev_a', category: '新闻', subCategory: '公告', categoryPath: '/x/a', dirId: 'dir-a', domain: 'a.test',
+  tags: ['重点'], cycle: '每日', state: 'C', dataCount: 1, newInCount: 2, successCount: 1,
+  resume: true, authConfig: 'login-a', priority: 1, coreParam: 'code', lastUrl: 'http://a/last',
+  updatedAt: '2026-08-11 10:00',
 }
 const SOURCE_B: Source = {
   sourceId: 'src-b', name: '源 B', url: 'http://b', configId: 'c-b', mainTable: 't-b',
@@ -33,6 +36,9 @@ describe('SourceDetailDrawer', () => {
 
     expect(sourceApi.sourceDetail).toHaveBeenCalledWith('src-a')
     expect(wrapper.text()).toContain('源 A')
+    expect(wrapper.text()).toContain('配置 ID')
+    expect(wrapper.text()).toContain('登录配置')
+    expect(wrapper.text()).toContain('目录路径')
   })
 
   it('抽屉保持打开时切换 sourceId：重新拉取新源的详情，不停留在旧数据/空白', async () => {

@@ -408,9 +408,16 @@ export function dataTableFromLegacy(input: unknown): DataTableMeta {
   return {
     tableId: entry.tableId,
     tableName: entry.tableName,
+    name: entry.name,
     rowCount: entry.rowCount ?? 0,
     state: entry.state,
     keyField: entry.keyField,
+    remark: entry.remark,
+    updatedAt: entry.updatedAt,
+    recFlag: entry.recFlag,
+    checkFlag: entry.checkFlag,
+    checkRule: entry.checkRule,
+    coreParam: entry.coreParam,
     fields: entry.fields.map((field) => ({
       prop: field.prop,
       type: field.type,
@@ -418,6 +425,11 @@ export function dataTableFromLegacy(input: unknown): DataTableMeta {
       columnName: field.columnName,
       required: field.required,
       width: field.width,
+      itemId: field.itemId,
+      seq: field.seq,
+      preprocess: field.preprocess,
+      dedup: field.dedup,
+      checkRule: field.checkRule,
     })),
   }
 }

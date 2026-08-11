@@ -21,4 +21,11 @@ describe('ProcessNodeRail', () => {
     expect(wrapper.find('[data-node-id="web-list"] .pnr-node-sub').text()).toBe(NODE_CONFIGS['web-list'].sub)
     expect(wrapper.find('[data-node-id="web-detail"] .pnr-node-final').text()).toBe('最终结果')
   })
+
+  it('需要展示运行事实的只读视图可传入节点状态', () => {
+    const layout = buildHorizontalLayout(['start', 'web-list', 'end'], [], NODE_CONFIGS, [], { includeTerminals: false })
+    const wrapper = mount(ProcessNodeRail, { props: { layout, nodeStates: { 'web-list': 'E' } } })
+    expect(wrapper.find('[data-node-id="web-list"] .pnr-node-state').classes()).toContain('state-E')
+    expect(wrapper.find('[data-node-id="web-list"] .pnr-node-state').attributes('aria-label')).toBe('异常')
+  })
 })

@@ -35,7 +35,7 @@ import {
   mockRuleOrchestrationSave,
 } from './rules'
 import { mockDatasets, mockMeasures, mockMetricStats } from './metrics'
-import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate } from './dataview'
+import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate, mockEntryDataUpload } from './dataview'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats } from './monitor'
 import { mockWorkbenchSummary } from './workbench'
@@ -91,6 +91,8 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'source/changeFreqTag': mockAck,
   'source/markVerified': mockAck,
   'source/generateConfig': mockAck,
+
+  'entry/batch/uploadData': mockEntryDataUpload,
 
   // 采集资产 · 配置（M5）
   'config/configPaged': mockConfigPaged,

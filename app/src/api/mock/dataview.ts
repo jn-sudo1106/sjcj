@@ -302,7 +302,7 @@ export function mockDataRowQueryPaged(params?: Record<string, unknown>): Paged<D
   const all = QUERY_ROWS[tableId] ?? []
   const dataId = String(params?.dataId ?? '').trim()
   const parentId = String(params?.parentId ?? '').trim()
-  const state = String(params?.state ?? '').trim()
+  const states = String(params?.state ?? '').split(',').map((item) => item.trim()).filter(Boolean)
   const sourceId = String(params?.sourceId ?? '').trim()
   const sql = String(params?.sql ?? '').trim()
   // 网站粒度查询（0707 优化·Phase5）：圈定该网站下全部子源；sourceId 再在此范围内进一步收窄
@@ -311,7 +311,7 @@ export function mockDataRowQueryPaged(params?: Record<string, unknown>): Paged<D
   const filtered = all.filter((r) => {
     if (dataId && !r.dataId.includes(dataId)) return false
     if (parentId && r.parentId !== parentId) return false
-    if (state && r.state !== state) return false
+    if (states.length && !states.includes(r.state ?? '')) return false
     if (siteSourceIds && !siteSourceIds.has(r.sourceId)) return false
     if (sourceId && r.sourceId !== sourceId) return false
     if (sql && !JSON.stringify(r.values ?? {}).includes(sql)) return false
@@ -331,6 +331,17 @@ export function mockDataRowUpdate(params?: Record<string, unknown>): { message?:
   if (!row) return { message: '未找到该行数据' }
   row.values = { ...row.values, ...values }
   return { message: '行数据已保存（演示）', row }
+}
+
+/** 旧 UploadData 的 Excel 上传端点。演示环境仅校验并回执文件信息，不解析本地二进制内容。 */
+export function mockEntryDataUpload(params?: Record<string, unknown>): { success: boolean; message: string } {
+  const fileName = String(params?.fileName ?? '').trim()
+  const tableId = String(params?.tableId ?? '').trim()
+  const sourceId = String(params?.sourceId ?? '').trim()
+  const configId = String(params?.configId ?? '').trim()
+  if (!fileName || !/\.(xlsx?|xls)$/i.test(fileName)) return { success: false, message: '仅支持 Excel 文件（.xls、.xlsx）' }
+  if (!tableId || !sourceId || !configId) return { success: false, message: '表 ID、源 ID、配置 ID 均为必填项' }
+  return { success: true, message: `已接收 ${fileName}，将导入表 ${tableId}（本地演示不解析文件内容）` }
 }
 
 export function mockDataStats(): { tables: number; rows: number; chars: number; review: number } {

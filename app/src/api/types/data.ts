@@ -36,6 +36,8 @@ export interface Measure {
 export interface DataTableMeta {
   tableId: string
   tableName: string
+  /** 旧表详情的业务名称；tableName 是物理表名，两者不能混用。 */
+  name?: string
   rowCount: number
   /** C 测试表 / AC 正式表——删除数据入口仅测试表显示（方案 §1.4-4） */
   state?: string
@@ -43,6 +45,13 @@ export interface DataTableMeta {
   keyField?: string
   /** 去重方式：'source' 源内去重 / 'table' 表内去重 */
   dedupMode?: 'source' | 'table'
+  remark?: string
+  updatedAt?: string
+  /** 旧表详情中的表级规则字段。 */
+  recFlag?: string | number
+  checkFlag?: string | number
+  checkRule?: string
+  coreParam?: string
   fields: {
     prop: string
     type: string
@@ -51,6 +60,11 @@ export interface DataTableMeta {
     columnName?: string // 物理列名（大写，K1/K2...），rowQueryPaged 行数据按此取值
     required?: boolean // 动态列渲染只取 required 的前 20 个（旧平台口径）
     width?: number
+    itemId?: string
+    seq?: number
+    preprocess?: string
+    dedup?: boolean
+    checkRule?: string
   }[]
 }
 

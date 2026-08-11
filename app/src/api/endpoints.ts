@@ -129,6 +129,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'entry/entryClearParent', desc: '清除父表后续标识', danger: true, live: true },
   { path: 'entry/entryUpdate', desc: '手动修改实体数据', danger: true, live: true },
   { path: 'entry/batch/saveEntryOne', desc: '手动新增实体数据', danger: true, live: true },
+  { path: 'entry/batch/uploadData', desc: '批量导入实体数据（Excel）', danger: true, impl: true, live: true },
   { path: 'entry/entryExportAll', desc: '导出 Excel（URL 直开，同源 Cookie 鉴权）' },
 
   /* ── item/next 子步骤（目标 7 / 收录 5） ── */

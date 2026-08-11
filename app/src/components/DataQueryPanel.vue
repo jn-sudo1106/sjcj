@@ -30,6 +30,7 @@ export interface DataQueryColumn {
 export interface DataQueryFilterPatch {
   dataId?: string
   parentId?: string
+  state?: string
   sql?: string
   nextFlag?: string
   min?: string
@@ -40,6 +41,8 @@ export interface DataQueryFilterPatch {
 export interface DataQueryFilter {
   dataId?: string
   parentId?: string
+  /** 多状态查询按英文逗号拼接，透传旧接口的 state 参数。 */
+  state?: string
   sql?: string
   nextFlag?: string
   min?: string
@@ -53,11 +56,19 @@ export interface DataQueryFilter {
 }
 
 const SQL_HISTORY_KEY = 'dataQueryPanel.sqlHistory'
+const STATE_OPTIONS = [
+  { value: 'C', label: '初始（C）' },
+  { value: 'AC', label: '已审核（AC）' },
+  { value: 'NF', label: '404（NF）' },
+  { value: 'E', label: '异常（E）' },
+]
 
 const props = defineProps<{
   tableId: string
   sourceId?: string
   columns: DataQueryColumn[]
+  /** 数据查看页专属的业务状态筛选；规则试跑等复用场景不展示。 */
+  showState?: boolean
   selectable?: boolean
   selectedKeys?: string[]
   pageSize?: number
@@ -72,6 +83,7 @@ const emit = defineEmits<{
 // ---- 筛选字段 ----
 const dataId = ref('')
 const parentId = ref('')
+const states = ref<string[]>([])
 const timeRange = ref<[string, string]>()
 const nextFlag = ref('')
 const minId = ref('')
@@ -114,6 +126,7 @@ function currentFilter(): Omit<DataQueryFilter, 'page' | 'size'> {
   return {
     dataId: dataId.value.trim() || undefined,
     parentId: parentId.value.trim() || undefined,
+    state: states.value.join(',') || undefined,
     sql: sql.value.trim() || undefined,
     nextFlag: nextFlag.value || undefined,
     min: minId.value.trim() || undefined,
@@ -148,6 +161,7 @@ function applyPatch(patch?: DataQueryFilterPatch) {
   if (!patch) return
   if (patch.dataId !== undefined) dataId.value = patch.dataId
   if (patch.parentId !== undefined) parentId.value = patch.parentId
+  if (patch.state !== undefined) states.value = patch.state.split(',').map((item) => item.trim()).filter(Boolean)
   if (patch.sql !== undefined) sql.value = patch.sql
   if (patch.nextFlag !== undefined) nextFlag.value = patch.nextFlag
   if (patch.min !== undefined) minId.value = patch.min
@@ -167,6 +181,7 @@ function search(patch?: DataQueryFilterPatch) {
 function clearFilters() {
   dataId.value = ''
   parentId.value = ''
+  states.value = []
   timeRange.value = undefined
   sql.value = ''
   nextFlag.value = ''
@@ -199,9 +214,11 @@ defineExpose({ search, refresh, advancePage, clearFilters })
 
 function clearNextFlag() { nextFlag.value = ''; search() }
 function clearRange() { minId.value = ''; maxId.value = ''; search() }
+function clearState() { states.value = []; search() }
 
 const chips = computed(() => {
   const list: { key: string; label: string; clear: () => void }[] = []
+  if (states.value.length) list.push({ key: 'state', label: `状态：${states.value.join('、')}`, clear: clearState })
   if (nextFlag.value) list.push({ key: 'nextFlag', label: `后续标识：${nextFlag.value}`, clear: clearNextFlag })
   if (minId.value || maxId.value) {
     list.push({ key: 'range', label: `ID区间：${minId.value || '不限'}－${maxId.value || '不限'}`, clear: clearRange })
@@ -255,8 +272,22 @@ function onRowClick(row: DataRow) {
 <template>
   <div class="dqp">
     <div class="rc-toolbar wrap dqp-primary-row" data-testid="data-query-primary">
-      <el-input v-model="dataId" clearable placeholder="请输入数据 ID" style="width: 160px" @keyup.enter="search()" />
-      <el-input v-model="parentId" clearable placeholder="父 ID" style="width: 120px" @keyup.enter="search()" />
+      <el-input v-model="dataId" class="dqp-data-id" clearable placeholder="请输入数据 ID" style="width: 160px" @keyup.enter="search()" />
+      <el-input v-model="parentId" class="dqp-parent-id" clearable placeholder="父 ID" style="width: 120px" @keyup.enter="search()" />
+      <el-select
+        v-if="showState"
+        v-model="states"
+        multiple
+        collapse-tags
+        collapse-tags-tooltip
+        clearable
+        class="dqp-state"
+        placeholder="状态（全部）"
+        style="width: 180px"
+        data-testid="data-query-state"
+      >
+        <el-option v-for="option in STATE_OPTIONS" :key="option.value" :label="option.label" :value="option.value" />
+      </el-select>
       <el-date-picker
         v-model="timeRange"
         type="datetimerange"
@@ -264,6 +295,7 @@ function onRowClick(row: DataRow) {
         range-separator="至"
         start-placeholder="开始时间"
         end-placeholder="结束时间"
+        class="dqp-time-range"
         style="width: 280px"
       />
       <button class="rc-btn primary" type="button" @click="search()">查询</button>
@@ -278,7 +310,7 @@ function onRowClick(row: DataRow) {
         高级筛选 <span aria-hidden="true">{{ advancedOpen ? '⌃' : '⌄' }}</span>
       </button>
       <span class="dqp-spacer" />
-      <slot name="quick" />
+      <span class="dqp-quick-slot"><slot name="quick" /></span>
     </div>
 
     <div v-if="chips.length" class="rc-toolbar wrap dqp-chips-row">
@@ -377,6 +409,7 @@ function onRowClick(row: DataRow) {
 .dqp-query-row { align-items: center; gap: 8px; padding-top: 4px; padding-bottom: 8px; }
 .dqp-advanced-toggle { white-space: nowrap; }
 .dqp-spacer { flex: 1; min-width: 8px; }
+.dqp-quick-slot { display: inline-flex; flex: none; }
 .dqp-range { display: inline-flex; align-items: center; gap: 6px; }
 .dqp-range-sep { color: var(--rc-faint); }
 .dqp-table { flex: 1; min-height: 0; background: #fff; }
@@ -394,5 +427,17 @@ function onRowClick(row: DataRow) {
   .dqp-query-row > :deep(.el-input), .dqp-query-row > :deep(.el-autocomplete) { width: 100% !important; max-width: 320px; }
   .dqp-range { width: 100%; }
   .dqp-range :deep(.el-input) { flex: 1; width: auto !important; }
+}
+@media (min-width: 901px) and (max-width: 1200px) {
+  .dqp-primary-row.rc-toolbar.wrap {
+    flex-wrap: nowrap;
+    gap: 8px;
+    overflow-x: auto;
+  }
+  .dqp-primary-row :deep(.dqp-data-id) { width: 130px !important; }
+  .dqp-primary-row :deep(.dqp-parent-id) { width: 96px !important; }
+  .dqp-primary-row :deep(.dqp-state) { width: 140px !important; }
+  .dqp-primary-row :deep(.dqp-time-range) { width: 240px !important; min-width: 240px; }
+  .dqp-primary-row .rc-btn { padding: 0 9px; }
 }
 </style>

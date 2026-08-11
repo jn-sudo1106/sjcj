@@ -458,6 +458,54 @@ function buildLegacyRowQuery(q: RowQuery) {
 
 // 数据查看（M4）
 type DataRequestOptions = { mode?: 'mock' | 'http' }
+export interface EntryDataImportInput {
+  file: File
+  tableId: string
+  sourceId: string
+  configId: string
+}
+export interface EntryDataImportResult {
+  success: boolean
+  message?: string
+}
+
+async function importEntryData(input: EntryDataImportInput): Promise<EntryDataImportResult> {
+  const endpoint = 'entry/batch/uploadData'
+  const options = { method: 'POST' as const, httpEndpoint: endpoint }
+  if (usesMockAdapter(endpoint, options)) {
+    return request<EntryDataImportResult>(endpoint, {
+      fileName: input.file.name,
+      tableId: input.tableId,
+      sourceId: input.sourceId,
+      configId: input.configId,
+    }, { mode: 'mock' })
+  }
+
+  const form = new FormData()
+  form.append('file', input.file)
+  form.append('entryTypeId', input.tableId)
+  form.append('sourceId', input.sourceId)
+  form.append('configId', input.configId)
+  const headers: Record<string, string> = {}
+  const token = readStoredToken()
+  if (token) headers[ACCESS_TOKEN_HEADER] = token
+  try {
+    const response = await fetch(BASE_URL + endpoint, { method: 'POST', credentials: 'include', headers, body: form })
+    if (isSessionExpiredRedirect(response)) {
+      triggerSessionExpired()
+      throw new Error('登录失效,请重新登录')
+    }
+    const payload = await response.json().catch(() => null) as { success?: unknown; msg?: unknown; message?: unknown } | null
+    if (!response.ok) throw new Error(String(payload?.msg ?? payload?.message ?? `请求失败 ${response.status}`))
+    return {
+      success: Boolean(payload?.success),
+      message: String(payload?.msg ?? payload?.message ?? (payload?.success ? '导入成功' : '导入失败')),
+    }
+  } catch (error) {
+    throw error instanceof ApiError ? error : new ApiError(endpoint, error)
+  }
+}
+
 export const dataApi = {
   // 选表分组（旧 EntryTypeSelectMulti 分组下拉的数据源）；sourceId 可空
   entryTypesGroup: async (sourceId?: string) => {
@@ -619,6 +667,8 @@ export const dataApi = {
       httpParams: body,
     })
   },
+  // 旧 UploadData：multipart/form-data，字段名固定为 file / entryTypeId / sourceId / configId。
+  importData: (input: EntryDataImportInput) => importEntryData(input),
   // 重新保存原始 JSON：jsonId = 行的 K0（危险）
   reSave: (sourceId: string, jsonId: string) =>
     request<{ message?: string }>('data/reSave', { sourceId, jsonId }, {

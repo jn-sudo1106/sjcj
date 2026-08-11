@@ -336,7 +336,19 @@ function onBizType(e: Event) {
             @input="updateLoginConfig(config.id, { authConfig: ($event.target as HTMLInputElement).value })"
           />
           <div class="login-config-actions">
-            <label class="login-config-check"><input type="checkbox" :checked="config.enabled" @change="toggleLoginConfig(config)" /> 启用</label>
+            <span class="login-config-state" :class="{ on: config.enabled }" :data-testid="`login-config-status-${config.id}`">
+              <button
+                class="login-config-switch"
+                :class="{ on: config.enabled }"
+                type="button"
+                role="switch"
+                :aria-checked="config.enabled"
+                :aria-label="`登录配置 ${index + 1}${config.enabled ? '已启用' : '已停用'}`"
+                :data-testid="`login-config-enable-${config.id}`"
+                @click="toggleLoginConfig(config)"
+              ><span /></button>
+              <span>{{ config.enabled ? '已启用' : '已停用' }}</span>
+            </span>
             <label class="login-config-check"><input type="radio" name="default-login-config" :checked="config.id === cc?.defaultLoginConfigId" :disabled="!config.enabled" @change="setDefaultLoginConfig(config)" /> 默认</label>
             <button class="rc-row-del" type="button" title="删除登录配置" @click="removeLoginConfig(config)">✕</button>
           </div>
@@ -474,6 +486,13 @@ function onBizType(e: Event) {
 .login-config-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding-top: 2px; }
 .login-config-error { grid-column: 1 / -1; margin-top: -2px; color: var(--rc-error); }
 .login-config-check { display: inline-flex; align-items: center; gap: 3px; color: var(--rc-muted); font-size: 10px; white-space: nowrap; cursor: pointer; }
+.login-config-state { display: inline-flex; align-items: center; gap: 5px; color: var(--rc-muted); font-size: 10px; white-space: nowrap; }
+.login-config-state.on { color: var(--rc-primary-ink); }
+.login-config-switch { width: 30px; height: 18px; padding: 2px; border: 1px solid #cbd5e1; border-radius: 999px; background: #e2e8f0; cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease; }
+.login-config-switch span { display: block; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(15 23 42 / 18%); transition: transform 0.15s ease; }
+.login-config-switch.on { border-color: var(--rc-primary); background: var(--rc-primary); }
+.login-config-switch.on span { transform: translateX(12px); }
+.login-config-switch:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
 .login-config-card .rc-row-del { margin-left: auto; }
 @media (max-width: 520px) {
   .login-config-card { grid-template-columns: 1fr 1fr; }

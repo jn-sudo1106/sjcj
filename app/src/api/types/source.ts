@@ -49,6 +49,11 @@ export interface Source {
   dataCount?: number // 数据
   newInCount?: number // 新入
   successCount?: number // 成功
+  /** 旧平台 lastInsert：最近一次新入数据时间。 */
+  lastInsertAt?: string
+  /** 旧平台 jobCnt/categoryId：详情中保留原有运行摘要口径。 */
+  jobCount?: number
+  stepCount?: number
   remark?: string // 备注
   cycle?: string // 采集周期：实时 / 每日 / 每周 / 每月
   alarm?: boolean // 是否告警
@@ -84,6 +89,7 @@ export interface Source {
   account?: string // 登陆用户名
   /** @deprecated 旧平台已存在登录模板的 ID；对应 snatchSave.authConfig。 */
   authConfig?: string
+  createdAt?: string // 创建日期
   configMode?: 'new' | 'existing' // 选用配置：新建 / 使用已有
   configName?: string // 新建配置名称（configMode='new' 时）
   configTopic?: string // 新建配置 Topic（队列 fallback 提示用）

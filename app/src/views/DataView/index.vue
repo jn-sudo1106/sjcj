@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, QuestionFilled, Plus, Refresh } from '@element-plus/icons-vue'
+import { ArrowDown, CopyDocument, QuestionFilled, Plus, Refresh } from '@element-plus/icons-vue'
 import {
   dataApi, sourceApi, entryApi,
   type DataRow, type DataTableMeta, type EntryTypeGroup, type EntryDetail, type RowQuery, type SourceOption,
@@ -18,8 +18,8 @@ import TableDetailDialog from './TableDetailDialog.vue'
 import SourceDetailDrawer from './SourceDetailDrawer.vue'
 import MoreTablesDialog from './MoreTablesDialog.vue'
 import MoreSourcesDialog from './MoreSourcesDialog.vue'
+import DataImportDialog from './DataImportDialog.vue'
 import { unsupportedNextStepBatchFilters } from './batchGuards'
-import DataMaintenanceDrawer from './DataMaintenanceDrawer.vue'
 
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
 // 本文件覆盖数据范围/快捷查询/结果工具条/批量条/动态列表格/分页/数据详情抽屉/手动添加/手动修改/统计/
@@ -32,7 +32,6 @@ import DataMaintenanceDrawer from './DataMaintenanceDrawer.vue'
 const auth = useAuthStore()
 const canWrite = computed(() => auth.role === 'admin')
 const route = useRoute()
-const router = useRouter()
 
 interface CommonQuery { label: string; sql?: string; kind?: 'all-source' }
 const COMMON_QUERIES: CommonQuery[] = [
@@ -49,6 +48,8 @@ const tableId = ref('')
 const tableMeta = ref<DataTableMeta | null>(null)
 const sourceOptions = ref<SourceOption[]>([])
 const sourceId = ref('')
+const tableSelectRef = ref<{ blur: () => void } | null>(null)
+const sourceSelectRef = ref<{ blur: () => void } | null>(null)
 
 async function loadGroup() {
   group.value = await dataApi.entryTypesGroup(sourceId.value || undefined)
@@ -84,6 +85,10 @@ function openSourceDetailForRow(sid: string) {
 
 // ---- 加载更多数据表 / 更多源（方案 §1.3-1/§1.3-2） ----
 const moreTablesOpen = ref(false)
+function openMoreTables() {
+  tableSelectRef.value?.blur()
+  moreTablesOpen.value = true
+}
 async function onTablePicked(entry: EntryType) {
   if (!group.value.list3.some((t) => t.tableId === entry.tableId)) {
     group.value = { ...group.value, list3: [entry, ...group.value.list3] }
@@ -92,6 +97,10 @@ async function onTablePicked(entry: EntryType) {
   await onTableChange()
 }
 const moreSourcesOpen = ref(false)
+function openMoreSources() {
+  sourceSelectRef.value?.blur()
+  moreSourcesOpen.value = true
+}
 async function onSourcePicked(source: Source) {
   if (!sourceOptions.value.some((s) => s.sourceId === source.sourceId)) {
     sourceOptions.value = [{ sourceId: source.sourceId, name: source.name }, ...sourceOptions.value]
@@ -122,6 +131,7 @@ function querySignature() {
     sourceId.value,
     panelFilter.value.dataId ?? '',
     panelFilter.value.parentId ?? '',
+    panelFilter.value.state ?? '',
     panelFilter.value.startTime ?? '',
     panelFilter.value.endTime ?? '',
     panelFilter.value.sql ?? '',
@@ -166,6 +176,10 @@ async function applyCommonQuery(q: CommonQuery) {
   }
   panelRef.value?.search({ sql: q.sql })
 }
+async function onCommonQuerySelect(label: string) {
+  const query = COMMON_QUERIES.find((item) => item.label === label)
+  if (query) await applyCommonQuery(query)
+}
 
 // ---- 展示 SQL（方案 §1.4-6，本地拼接，不发请求） ----
 const showSql = ref(false)
@@ -173,6 +187,7 @@ const sqlPreview = computed(() => {
   let s = `select * from ${tableMeta.value?.tableName ?? ''} where 1=1`
   if (panelFilter.value.dataId) s += ` and entry_id in (${panelFilter.value.dataId})`
   if (panelFilter.value.parentId) s += ` and parent_id in (${panelFilter.value.parentId})`
+  if (panelFilter.value.state) s += ` and STATE in (${panelFilter.value.state.split(',').map((item) => `'${item.trim()}'`).join(',')})`
   if (sourceId.value) s += ` and source_id=${sourceId.value}`
   if (panelFilter.value.startTime) s += ` and CREATE_DT >= '${panelFilter.value.startTime}'`
   if (panelFilter.value.endTime) s += ` and CREATE_DT <= '${panelFilter.value.endTime}'`
@@ -311,89 +326,84 @@ function onClearParent() {
   )
 }
 
-// ---- 工具▾：旧平台入口恢复为显式菜单；未迁移的复杂弹窗不伪造成功结果 ----
+// ---- 取数 API：还原旧平台的 ID 取数 API 描述 ----
 const apiOpen = ref(false)
-const apiPreview = computed(() => {
-  const query = buildQuery()
-  return [
-    '查询接口：POST /api/v1/entry/entryDataPaged',
-    `导出接口：GET ${dataApi.exportUrl(query)}`,
-    `当前条件：${JSON.stringify(query)}`,
-  ].join('\n')
+const apiIdFetchUrl = computed(() => {
+  // 对照旧平台 EntryList2.handleShowApi：API 地址还要带源过滤，size 固定为 10。
+  // appId/appKey 是旧接口约定的演示应用标识，不使用当前登录 token 替代。
+  const params = [
+    'appId=dev',
+    'appKey=dev1',
+    `type=${tableId.value || '<tableId>'}`,
+  ]
+  if (sourceId.value) params.push(`sourceId=${sourceId.value}`)
+  params.push(`startId=${panelFilter.value.min || '0'}`)
+  if (panelFilter.value.max) params.push(`endId=${panelFilter.value.max}`)
+  if (panelFilter.value.startTime || panelFilter.value.endTime) {
+    const dateRange = `${panelFilter.value.startTime || 'EMPTY'} - ${panelFilter.value.endTime || 'EMPTY'}`
+    params.push(`dataRange=${encodeURIComponent(dateRange)}`)
+  }
+  params.push('size=10')
+  return `${window.location.origin}/rest/api/v1/data/entry?${params.join('&')}`
 })
+
+const apiParams = [
+  { name: 'size', type: '整型', required: '是', limit: '1-200', description: '每次获取数量' },
+  { name: 'startId', type: '长整型', required: '必填', limit: '最小为0', description: '取数据的起始ID，如从头取，设成0' },
+  { name: 'endId', type: '长整型', required: '非', limit: '-', description: '限制取数据的最大ID，与startId配合用来取一段数据' },
+]
+
+const apiReturns = [
+  { code: 'id', name: 'ID', type: '长整型', description: '数据主键' },
+  { code: 'state', name: '数据状态', type: '字符串', description: 'D 表示软删除' },
+  { code: 'lastId', name: '本次获取数据中最大ID', type: '长整型', description: '获取下一批数据时，startId设为lastId+1' },
+  { code: 'parentId', name: '上层数据ID', type: '长整型', description: '详情表 与 列表表中关联字段' },
+  { code: '[其它字段]', name: '其它字段', type: '-', description: '参考数据表配置中相关字段详情' },
+]
+
+async function copyApiUrl() {
+  if (!navigator.clipboard?.writeText) {
+    ElMessage.warning('当前环境不支持复制，请手动复制')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(apiIdFetchUrl.value)
+    ElMessage.success('API 地址已复制')
+  } catch {
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
 
 function onShowApi() {
   apiOpen.value = true
 }
-function onGenerateSource() {
-  if (!selectedRowKeys.value.length) {
-    ElMessage.warning('请选择要提取的数据行')
+
+// ---- 导入数据（旧 UploadData：entry/batch/uploadData） ----
+// 旧页未选源时从当前结果首行回填 SOURCE_ID / CONFIG_ID；沿用该口径，避免导入目标与当前查询脱节。
+const importOpen = ref(false)
+const importSourceId = computed(() => sourceId.value || panelRows.value[0]?.sourceId || '')
+const importConfigId = computed(() => panelRows.value[0]?.configId ?? '')
+function openImport() {
+  if (!tableId.value) {
+    ElMessage.error('请先选择数据表')
     return
   }
-  ElMessage.info('“提取数据生成源”需要源配置选择，当前版本已保留入口，生成对话框待迁移')
-}
-function onOpenDataset() {
-  void router.push({ path: '/metrics', query: { entryType: tableId.value, sourceId: sourceId.value || undefined } })
-}
-function onToolCommand(command: string) {
-  switch (command) {
-    case 'steps':
-      openStepDrawer()
-      break
-    case 'api':
-      onShowApi()
-      break
-    case 'dataset':
-      onOpenDataset()
-      break
-    case 'generate-source':
-      onGenerateSource()
-      break
+  if (!importSourceId.value) {
+    ElMessage.error('请先选择源，或先查询包含源 ID 的数据')
+    return
   }
+  importOpen.value = true
 }
 
 // ---- 统计（方案 §1.4-5，read 也可见） ----
 const summaryOpen = ref(false)
-const maintenanceOpen = ref(false)
 
 function onMoreCommand(command: string) {
   // 延后一帧打开抽屉，避免下拉菜单的当前 click 冒泡到抽屉遮罩后立即触发关闭。
   if (command === 'summary') window.setTimeout(() => { summaryOpen.value = true }, 0)
   if (command === 'sql') showSql.value = !showSql.value
-}
-
-function openMaintenance() { maintenanceOpen.value = true }
-function handleMaintenanceAction(action: string) {
-  maintenanceOpen.value = false
-  switch (action) {
-    case 'reprocess':
-      onNextStepAll()
-      break
-    case 'delete-selected':
-      onDeleteSelected()
-      break
-    case 'delete-source-day':
-      onDeleteByRange(0, 'source')
-      break
-    case 'delete-source-all':
-      onDeleteByRange(1, 'source')
-      break
-    case 'delete-ids':
-      void onDeleteByIds()
-      break
-    case 'mark-formal':
-      onMarkFormal()
-      break
-    case 'clear-table-day':
-      onDeleteByRange(0, 'all')
-      break
-    case 'clear-table-all':
-      onDeleteByRange(1, 'all')
-      break
-    case 'clear-parent':
-      onClearParent()
-      break
-  }
+  if (command === 'steps') openStepDrawer()
+  if (command === 'distinct-source') void onDistinctSource()
 }
 
 // ---- 展示步骤（方案 §1.4-3；简化为步骤列表，无 DAG 图，见方案 §4.1 偏离决定） ----
@@ -454,6 +464,7 @@ function onNextStepAll() {
     try {
       const r = await dataApi.nextStepBatch({
         tableId: tableId.value, sourceId: sourceId.value || undefined,
+        state: panelFilter.value.state,
         size: 500000, start: 0, nextFlag: panelFilter.value.nextFlag, cond: panelFilter.value.sql,
       })
       ElMessage.success(`发送成功:${r.message ?? ''}`)
@@ -621,7 +632,7 @@ onMounted(async () => {
   <div class="rc-card dv-page">
     <!-- 数据范围：选表/选源（查询条件与快捷查询由 DataQueryPanel 统一承载） -->
     <div class="rc-toolbar wrap">
-      <el-select v-model="tableId" filterable placeholder="选择数据表" style="width: 220px" @change="onTableChange">
+      <el-select ref="tableSelectRef" v-model="tableId" filterable placeholder="选择数据表" style="width: 220px" @change="onTableChange">
         <el-option-group label="main">
           <el-option v-for="t in group.list1" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName}`" />
         </el-option-group>
@@ -632,7 +643,7 @@ onMounted(async () => {
           <el-option v-for="t in group.list3.slice(0, 5)" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName}`" />
         </el-option-group>
         <template #footer>
-          <span class="dv-link" @click="moreTablesOpen = true">
+          <span class="dv-link" @click.stop="openMoreTables">
             <el-icon><Plus /></el-icon>加载更多数据表...
           </span>
         </template>
@@ -640,10 +651,10 @@ onMounted(async () => {
       <button class="rc-btn dv-help-btn" type="button" title="表结构详情" @click="openTableDetail">
         <el-icon><QuestionFilled /></el-icon>
       </button>
-      <el-select v-model="sourceId" filterable clearable placeholder="选择源" style="width: 200px" @change="onSourceChange">
+      <el-select ref="sourceSelectRef" v-model="sourceId" filterable clearable placeholder="选择源" style="width: 200px" @change="onSourceChange">
         <el-option v-for="s in sourceOptions" :key="s.sourceId" :value="s.sourceId" :label="`${s.sourceId} ${s.name}`" />
         <template #footer>
-          <span class="dv-link" @click="moreSourcesOpen = true">
+          <span class="dv-link" @click.stop="openMoreSources">
             <el-icon><Plus /></el-icon>更多源...
           </span>
         </template>
@@ -659,31 +670,39 @@ onMounted(async () => {
       :table-id="tableId"
       :source-id="sourceId"
       :columns="panelColumns"
+      show-state
       :selectable="canWrite"
       v-model:selected-keys="selectedRowKeys"
       @query-change="onPanelQueryChange"
       @loaded="onPanelLoaded"
     >
       <template #quick>
-        <span class="dv-quick-label">快捷：</span>
-        <button v-for="q in COMMON_QUERIES" :key="q.label" class="dv-quick-btn" type="button" @click="applyCommonQuery(q)">
-          {{ q.label }}
-        </button>
+        <el-dropdown trigger="click" @command="onCommonQuerySelect">
+          <button class="rc-btn dv-quick-btn" data-testid="data-quick" type="button">
+            快捷查询 <el-icon><ArrowDown /></el-icon>
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-for="q in COMMON_QUERIES" :key="q.label" :command="q.label">{{ q.label }}</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </template>
       <template #toolbar>
-        <!-- 结果工具条：默认仅保留刷新、新增、导出、更多四个入口 -->
+        <!-- 结果工具条：按新增 / 导出 / 查看 / 删除与危险操作收敛，不保留泛化“工具”或重复“数据维护”。 -->
         <div class="dv-result-toolbar" data-testid="data-result-toolbar">
           <span class="dv-spacer" />
           <button class="rc-icon-btn" data-testid="data-refresh" type="button" title="刷新" aria-label="刷新" @click="panelRef?.refresh()">
             <el-icon><Refresh /></el-icon>
           </button>
           <button v-if="canWrite" class="rc-btn" data-testid="data-add" type="button" @click="openAdd">新增数据</button>
+          <button v-if="canWrite" class="rc-btn" data-testid="data-import" type="button" @click="openImport">导入数据</button>
           <el-dropdown trigger="click">
             <button class="rc-btn" data-testid="data-export" type="button">导出<el-icon class="et-caret"><ArrowDown /></el-icon></button>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item @click="onExport">导出 Excel</el-dropdown-item>
-                <el-dropdown-item @click="onDistinctSource">查看去重源 ID</el-dropdown-item>
+                <el-dropdown-item @click="onShowApi">取数 API</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -704,23 +723,16 @@ onMounted(async () => {
             </template>
           </el-dropdown>
           <el-dropdown trigger="click">
-            <button class="rc-btn" data-testid="data-tools" type="button">工具<el-icon class="et-caret"><ArrowDown /></el-icon></button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item @click="onToolCommand('steps')">展示步骤</el-dropdown-item>
-                <el-dropdown-item @click="onShowApi">取数 API</el-dropdown-item>
-                <el-dropdown-item @click="onToolCommand('dataset')">指标数据集</el-dropdown-item>
-                <el-dropdown-item @click="onToolCommand('generate-source')">提取数据生成源</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-          <el-dropdown trigger="click">
             <button class="rc-btn" data-testid="data-more" type="button">更多<el-icon class="et-caret"><ArrowDown /></el-icon></button>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item @click="onMoreCommand('summary')">查看统计</el-dropdown-item>
                 <el-dropdown-item @click="onMoreCommand('sql')">{{ showSql ? '隐藏查询条件/SQL' : '查看查询条件/SQL' }}</el-dropdown-item>
-                <el-dropdown-item v-if="canWrite" divided @click="openMaintenance">数据维护</el-dropdown-item>
+                <el-dropdown-item @click="onMoreCommand('steps')">展示处理步骤</el-dropdown-item>
+                <el-dropdown-item @click="onMoreCommand('distinct-source')">查看去重源 ID</el-dropdown-item>
+                <el-dropdown-item v-if="canWrite" divided :disabled="!sourceId || !selectedRowKeys.length" @click="onClearParent">
+                  清除父表后续标识
+                </el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -774,6 +786,13 @@ onMounted(async () => {
       </template>
 
       <template #columns-after>
+        <el-table-column prop="state" label="状态" width="84">
+          <template #default="{ row }">
+            <el-tag size="small" effect="light" :type="row.state === 'AC' ? 'success' : (row.state === 'E' || row.state === 'NF' ? 'danger' : 'info')">
+              {{ row.state || '—' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="updateDt" label="更新" width="90" sortable="custom">
           <template #default="{ row }"><span :title="formatDateTime(row.updateDt)">{{ timeAgo(row.updateDt) }}</span></template>
         </el-table-column>
@@ -827,12 +846,51 @@ onMounted(async () => {
       </template>
     </DataQueryPanel>
 
-    <div v-if="apiOpen" class="dv-api-panel">
-      <div class="dv-api-panel-title">取数 API <span>当前条件预览</span></div>
-      <p class="dv-dialog-hint">可将当前表、源和筛选条件交给接口调用方；鉴权仍沿用当前登录会话。</p>
-      <pre class="dv-api-preview">{{ apiPreview }}</pre>
-      <button class="rc-btn" type="button" @click="apiOpen = false">关闭</button>
-    </div>
+    <el-dialog v-model="apiOpen" class="dv-api-dialog" title="API描述" width="980px" destroy-on-close>
+      <div class="dv-api-content" data-testid="data-api-dialog">
+        <div class="dv-api-line">
+          <span class="dv-api-dot" aria-hidden="true" />
+          <span class="dv-api-label">[2] ID取数：</span>
+          <code class="dv-api-url">{{ apiIdFetchUrl }}</code>
+          <button class="rc-icon-btn dv-api-copy" type="button" title="复制 API 地址" aria-label="复制 API 地址" @click="copyApiUrl">
+            <el-icon><CopyDocument /></el-icon>
+          </button>
+        </div>
+        <div class="dv-api-line dv-api-section-title">
+          <span class="dv-api-dot" aria-hidden="true" />
+          <span>请求URL：</span>
+        </div>
+        <el-table :data="apiParams" border size="small" class="dv-api-table">
+          <el-table-column prop="name" label="参数" width="150" />
+          <el-table-column prop="type" label="类型" width="150" />
+          <el-table-column prop="required" label="必填" width="120" />
+          <el-table-column prop="limit" label="限制" width="150" />
+          <el-table-column prop="description" label="说明" min-width="360" />
+        </el-table>
+        <div class="dv-api-line dv-api-section-title dv-api-return-title">
+          <span class="dv-api-dot" aria-hidden="true" />
+          <span>返回值说明：</span>
+        </div>
+        <el-table :data="apiReturns" border size="small" class="dv-api-table">
+          <el-table-column prop="code" label="编码" width="180" />
+          <el-table-column prop="name" label="名称" width="250" />
+          <el-table-column prop="type" label="类型" width="180" />
+          <el-table-column prop="description" label="说明" min-width="360" />
+        </el-table>
+        <p class="dv-api-note">地址参数沿用旧平台 ID 取数接口约定；当前页面的状态和 SQL 条件不属于该接口参数，若部署环境使用不同的应用标识，需要替换 URL 中的 appId、appKey。</p>
+      </div>
+      <template #footer>
+        <button class="rc-btn" type="button" @click="apiOpen = false">关闭</button>
+      </template>
+    </el-dialog>
+
+    <DataImportDialog
+      v-model="importOpen"
+      :table-id="tableId"
+      :source-id="importSourceId"
+      :initial-config-id="importConfigId"
+      @uploaded="panelRef?.refresh()"
+    />
 
     <!-- 数据详情抽屉（只读） -->
     <el-drawer v-model="detail.visible" title="数据表详情" size="480px">
@@ -862,17 +920,6 @@ onMounted(async () => {
 
     <!-- 统计（方案 §1.6-4） -->
     <SummaryDrawer v-model="summaryOpen" :table-meta="tableMeta" :build-query="buildQuery" />
-
-    <DataMaintenanceDrawer
-      v-model="maintenanceOpen"
-      :table-id="tableId"
-      :table-name="tableMeta?.tableName"
-      :source-id="sourceId"
-      :selected-count="selectedRowKeys.length"
-      :is-test-table="isTestTable"
-      :can-clear-parent="canWrite && !!sourceId && selectedRowKeys.length > 0"
-      @action="handleMaintenanceAction"
-    />
 
     <!-- 展示步骤（方案 §1.6-5，简化列表版；见 §4.1 偏离决定） -->
     <StepDrawer
@@ -939,22 +986,11 @@ onMounted(async () => {
 .dv-spacer {
   flex: 1;
 }
-.dv-quick-label {
-  color: var(--rc-muted);
-  font-size: 12px;
-  white-space: nowrap;
-}
 .dv-quick-btn {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--rc-primary-ink);
+  height: 32px;
+  padding: 0 11px;
   font-size: 12px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.dv-quick-btn:hover {
-  text-decoration: underline;
+  font-weight: 600;
 }
 .dv-link {
   display: inline-flex;
@@ -978,43 +1014,97 @@ onMounted(async () => {
   font-family: var(--rc-mono, monospace);
   background: #f8fafc;
 }
-.dv-dialog-hint {
-  margin: 0 0 10px;
-  color: var(--rc-muted);
-  font-size: 12px;
-}
-.dv-api-panel {
+.dv-api-content {
   display: grid;
-  gap: 8px;
-  margin: 8px 16px;
-  padding: 12px;
-  border: 1px solid #bfdbfe;
-  border-radius: var(--rc-radius-sm);
-  background: #f8fbff;
+  gap: 12px;
+  min-width: 0;
 }
-.dv-api-panel-title {
+.dv-api-dialog :deep(.el-dialog) {
+  max-width: calc(100vw - 32px);
+  border-radius: var(--rc-radius);
+}
+.dv-api-dialog :deep(.el-dialog__header) {
+  margin-right: 0;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid var(--rc-border-soft);
+}
+.dv-api-dialog :deep(.el-dialog__title) {
   color: var(--rc-text);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
 }
-.dv-api-panel-title span {
-  margin-left: 8px;
-  color: var(--rc-muted);
-  font-size: 11px;
-  font-weight: 400;
+.dv-api-dialog :deep(.el-dialog__body) {
+  padding: 16px 20px;
 }
-.dv-api-preview {
-  max-height: 260px;
-  margin: 0;
-  padding: 12px;
-  overflow: auto;
-  border: 1px solid var(--rc-border-soft);
-  border-radius: var(--rc-radius-sm);
+.dv-api-dialog :deep(.el-dialog__footer) {
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--rc-border-soft);
+}
+.dv-api-line {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+  color: var(--rc-text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.dv-api-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--rc-primary);
+}
+.dv-api-label {
+  flex: 0 0 auto;
+}
+.dv-api-url {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--rc-primary-ink);
+  font: 12px/1.5 var(--rc-mono, monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dv-api-copy {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border: 0;
+}
+.dv-api-section-title {
+  margin-top: 2px;
+}
+.dv-api-return-title {
+  margin-top: 8px;
+}
+.dv-api-table {
+  width: 100%;
+}
+.dv-api-table :deep(th.el-table__cell) {
+  height: 40px;
+  padding: 0;
   background: #f8fafc;
   color: var(--rc-text-2);
-  font: 12px/1.6 var(--rc-mono, monospace);
-  white-space: pre-wrap;
+  font-size: 12px;
+  font-weight: 700;
+}
+.dv-api-table :deep(td.el-table__cell) {
+  padding: 7px 0;
+  color: #334155;
+}
+.dv-api-table :deep(.cell) {
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
   word-break: break-word;
+}
+.dv-api-note {
+  margin: 0;
+  color: var(--rc-muted);
+  font-size: 12px;
 }
 .dv-batch {
   display: flex;

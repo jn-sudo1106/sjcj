@@ -353,17 +353,31 @@ describe('选表分组与动态表结构适配（E 包 T1b）', () => {
     expect(empty.main).toBeUndefined()
   })
 
-  it('dataTableFromLegacy：透传 columnName/required/width（动态列渲染依据）', () => {
+  it('dataTableFromLegacy：透传表详情元数据和字段元数据', () => {
     const table = dataTableFromLegacy({
       entryTypeId: '1042',
+      typeName: '新闻表',
       tableName: 'sense_data.TB_NEWS',
+      dataCnt: 20,
+      state: 'C',
+      keyField: 'K1',
+      remark: '新闻数据',
+      updateDt: '2026-08-11 10:00:00',
+      recFlag: 1,
+      checkFlag: 0,
+      checkRule: 'K1 非空',
+      coreParam: 'news',
       items: [
-        { itemCode: 'title', itemName: '标题', columnName: 'K1', dataType: 'string', width: 140, required: true },
+        { itemId: 'i-1', seq: 1, itemCode: 'title', itemName: '标题', columnName: 'K1', dataType: 'string', width: 140, required: true, clearRule: 'trim', uniqueKey: true, checkRule: '非空' },
         { itemCode: 'raw', itemName: '原始', columnName: 'K9', dataType: 'string', width: 80, required: false },
       ],
     })
+    expect(table).toMatchObject({
+      name: '新闻表', rowCount: 20, state: 'C', keyField: 'K1', remark: '新闻数据',
+      updatedAt: '2026-08-11 10:00:00', recFlag: 1, checkFlag: 0, checkRule: 'K1 非空', coreParam: 'news',
+    })
     expect(table.fields).toEqual([
-      expect.objectContaining({ prop: 'title', columnName: 'K1', required: true, width: 140 }),
+      expect.objectContaining({ prop: 'title', itemId: 'i-1', seq: 1, columnName: 'K1', required: true, width: 140, preprocess: 'trim', dedup: true, checkRule: '非空' }),
       expect.objectContaining({ prop: 'raw', columnName: 'K9', required: false, width: 80 }),
     ])
   })

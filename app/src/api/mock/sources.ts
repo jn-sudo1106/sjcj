@@ -184,8 +184,20 @@ const countUnder = (prefix: string) => SOURCES.filter((s) => s.categoryPath?.sta
 
 function matches(s: Source, p?: Record<string, unknown>): boolean {
   if (!p) return true
+  const siteId = String(p.siteId ?? '')
+  if (siteId && s.siteId !== siteId) return false
   const category = String(p.category ?? '')
   if (category && !s.categoryPath?.startsWith(category)) return false
+  const sourceIds = String(p.sourceIds ?? p.ids ?? '').split(/[，,\s]+/).map((id) => id.trim()).filter(Boolean)
+  if (sourceIds.length && !sourceIds.includes(s.sourceId)) return false
+  const name = String(p.name ?? '').trim().toLowerCase()
+  if (name && !s.name.toLowerCase().includes(name)) return false
+  const configId = String(p.configId ?? '').trim()
+  if (configId && !s.configId.includes(configId)) return false
+  const sourceUrl = String(p.sourceUrl ?? '').trim().toLowerCase()
+  if (sourceUrl && !s.url.toLowerCase().includes(sourceUrl)) return false
+  const entryTypeId = String(p.entryTypeId ?? '').trim()
+  if (entryTypeId && !s.mainTable.includes(entryTypeId)) return false
   const kw = String(p.keyword ?? '').trim().toLowerCase()
   if (kw && ![s.name, s.sourceId, s.url, s.owner].some((f) => String(f ?? '').toLowerCase().includes(kw))) return false
   const state = String(p.state ?? '')
@@ -194,6 +206,13 @@ function matches(s: Source, p?: Record<string, unknown>): boolean {
     else if (state === 'external') { if (!s.externalChanged) return false }
     else if (s.disabled || s.state !== state) return false
   }
+  const enable = String(p.enable ?? '')
+  if (enable === '0' && s.disabled) return false
+  if (enable === '1' && !s.disabled) return false
+  const count = String(p.count ?? '').trim()
+  if (count && !String(s.dataCount ?? '').includes(count)) return false
+  const dataDate = String(p.dataDate ?? '').trim()
+  if (dataDate && ![s.lastTaskAt, s.lastSuccessAt, s.updatedAt].some((date) => String(date ?? '').startsWith(dataDate))) return false
   if (p.alarm === true && !s.alarm) return false
   const cycle = String(p.cycle ?? '')
   if (cycle && cycle !== 'all' && s.cycle !== cycle) return false

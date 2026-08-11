@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { firstSourceId, normalizeSourceView, sourceViewFromHash } from './workspaceRoute'
+import { firstSourceId, normalizeSiteView, normalizeSourceView, sourceViewFromHash } from './workspaceRoute'
 
 describe('子源工作区路由', () => {
   it('未指定视图时默认流程视图', () => {
@@ -13,5 +13,10 @@ describe('子源工作区路由', () => {
   it('hash 路由可解析工作区视图', () => {
     expect(sourceViewFromHash('#/canvas?sourceId=src-a&view=data')).toBe('data')
     expect(sourceViewFromHash('#/canvas?sourceId=src-a')).toBe('flow')
+  })
+
+  it('源视图只属于网站详情，子源路由不会进入该视图', () => {
+    expect(normalizeSiteView('source')).toBe('source')
+    expect(normalizeSourceView('source')).toBe('flow')
   })
 })
