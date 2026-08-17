@@ -98,7 +98,7 @@ describe('workspace 分屏对比（0710 会议 B4：与页签解耦，左右均�
     ws = useWorkspaceStore()
   })
 
-  it('enterCompare：左右为不同真实子源即可，不要求已打开页签；site: 伪 id 被拒', () => {
+  it('enterCompare：左右为不同真实源即可，不要求已打开页签；site: 伪 id 被拒', () => {
     expect(ws.enterCompare('s2')).toBe(false) // 尚无左栏
     expect(ws.enterCompare('s2', 's2')).toBe(false) // 不能对比自己
     expect(ws.enterCompare('s2', 'site:a')).toBe(false) // 网站伪 id 不参与对比

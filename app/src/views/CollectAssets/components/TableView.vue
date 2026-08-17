@@ -24,7 +24,7 @@ const emit = defineEmits<{
 
 const router = useRouter()
 
-// 表格视图：树形展开子源，勾选作用于子源级
+// 表格视图：树形展开源，勾选作用于源级
 const expanded = ref<Set<string>>(new Set())
 const childrenCache = reactive<Record<string, Source[]>>({})
 const childrenLoading = reactive<Record<string, boolean>>({})
@@ -33,7 +33,7 @@ const selectedIds = computed({
   set: (v) => emit('update:selectedIds', v),
 })
 
-// 表格：展开 / 懒加载子源
+// 表格：展开 / 懒加载源
 async function ensureChildren(siteId: string) {
   if (childrenCache[siteId] || childrenLoading[siteId]) return
   childrenLoading[siteId] = true
@@ -120,7 +120,7 @@ function statusMeta(s: Source): { type: 'info' | 'success' | 'danger' | 'primary
 }
 
 function openSourceCanvas(s: Source, view?: 'data' | 'task') {
-  router.push({ path: '/canvas', query: { sourceId: s.sourceId, ...(view ? { view } : {}) } })
+  router.push({ path: '/canvas', query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, ...(view ? { view } : {}) } })
 }
 function openSourceData(s: Source) {
   openSourceCanvas(s, 'data')
@@ -132,13 +132,13 @@ function openSiteData(site: Site) {
   router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data' } })
 }
 
-// 子源行内操作
+// 源行内操作
 function onRowSnatch(s: Source) {
-  confirmDanger('发抓取', `将向子源「${s.name}」下发抓取任务，是否继续？`, () => sourceApi.sendSnatch([s.sourceId]))
+  confirmDanger('发抓取', `将向源「${s.name}」下发抓取任务，是否继续？`, () => sourceApi.sendSnatch([s.sourceId]))
 }
 function onRowToggle(s: Source) {
   const willDisable = !s.disabled
-  confirmDanger(willDisable ? '停用子源' : '启用子源', `确认${willDisable ? '停用' : '启用'}子源「${s.name}」？`, async () => {
+  confirmDanger(willDisable ? '停用源' : '启用源', `确认${willDisable ? '停用' : '启用'}源「${s.name}」？`, async () => {
     const res = await sourceApi.changeSourceEnable(s.sourceId, willDisable)
     if (res?.ok) {
       s.disabled = willDisable
@@ -232,7 +232,7 @@ defineExpose({
                 <div class="ca-cell-sub">定时运行</div>
               </td>
               <td>
-                <button class="ca-count-link" type="button" title="查看该网站全部子源数据" @click="openSiteData(site)">
+                <button class="ca-count-link" type="button" title="查看该网站全部源数据" @click="openSiteData(site)">
                   {{ (site.dataCount ?? 0).toLocaleString() }} 条
                 </button>
               </td>
@@ -246,7 +246,7 @@ defineExpose({
             </tr>
             <template v-if="expanded.has(site.siteId)">
               <tr v-if="childrenLoading[site.siteId]"><td colspan="8" class="ca-empty-row">加载中…</td></tr>
-              <tr v-else-if="!(childrenCache[site.siteId] ?? []).length"><td colspan="8" class="ca-empty-row">该网站暂无子源</td></tr>
+              <tr v-else-if="!(childrenCache[site.siteId] ?? []).length"><td colspan="8" class="ca-empty-row">该网站暂无源</td></tr>
               <tr v-for="s in (childrenCache[site.siteId] ?? [])" :key="s.sourceId" class="ca-child-row" :class="{ active: selectedIds.includes(s.sourceId) }">
                 <td></td>
                 <td><el-checkbox :model-value="selectedIds.includes(s.sourceId)" @change="toggleRow(s.sourceId)" /></td>
@@ -282,7 +282,7 @@ defineExpose({
       <!-- 空态 -->
       <div v-if="!loading && !sites.length" class="ca-empty">
         <div class="ca-empty-title">没有匹配的网站</div>
-        <div class="muted">调整筛选条件，或返回全部网站；批量导入子源请进入具体网站详情操作。</div>
+        <div class="muted">调整筛选条件，或返回全部网站；批量导入源请进入具体网站详情操作。</div>
       </div>
     </div>
     <div class="ca-pager">

@@ -110,7 +110,7 @@ describe('SourceTab 批量操作', () => {
     const { wrapper } = await mountAt()
     await wrapper.findComponent({ name: 'BatchBar' }).vm.$emit('batch-delete')
     await flushPromises()
-    expect(ElMessage.warning).toHaveBeenCalledWith('请先在表格视图勾选网站或子源')
+    expect(ElMessage.warning).toHaveBeenCalledWith('请先在表格视图勾选网站或源')
     expect(ElMessageBox.confirm).not.toHaveBeenCalled()
   })
 

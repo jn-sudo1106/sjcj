@@ -1,8 +1,9 @@
 import type { Source } from '@/api'
 
 export type SourceWorkspaceView = 'flow' | 'data' | 'file' | 'task'
-// 网站详情页（0714 会议 Task 3）：只做聚合查看，没有流程视图。
-export type SiteWorkspaceView = 'source' | 'data' | 'file' | 'task'
+// 网站详情页（0812 会议纠偏）：网站汇总态没有任务页签，任务只在具体源和一级任务中心查看；
+// monitor 在 M5 接入，这里先占住枚举位，normalizeSiteView 暂不放行（未接入前落到 data）。
+export type SiteWorkspaceView = 'source' | 'data' | 'file' | 'monitor'
 
 export function firstSourceId(sources: Pick<Source, 'sourceId'>[]): string {
   return sources[0]?.sourceId ?? ''
@@ -13,7 +14,7 @@ export function normalizeSourceView(view: unknown): SourceWorkspaceView {
 }
 
 export function normalizeSiteView(view: unknown): SiteWorkspaceView {
-  return view === 'source' || view === 'file' || view === 'task' ? view : 'data'
+  return view === 'source' || view === 'file' ? view : 'data'
 }
 
 /** Hash 路由发生并发更新时，以地址栏中的 view 作为工作区视图兜底状态。 */

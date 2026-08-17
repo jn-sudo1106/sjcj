@@ -21,7 +21,7 @@ const VALID_STATES = ['all', 'error']
 // ---- 分类 / 标签 / 统计 ----
 const categories = ref<SourceCategory[]>([])
 const allTags = ref<string[]>([])
-const stats = reactive({ total: 0, error: 0, externalChanged: 0, disabled: 0 })
+const stats = reactive({ total: 0, error: 0, notify: 0 })
 
 // ---- 筛选 ----
 const keyword = ref('')
@@ -74,9 +74,14 @@ async function loadCategories() {
 }
 async function loadStats() {
   try {
-    Object.assign(stats, await sourceApi.sourceStats())
+    const summary = await siteApi.siteSummary()
+    Object.assign(stats, {
+      total: summary.sourceTotal,
+      error: summary.errorCount,
+      notify: summary.notifyCount,
+    })
   } catch {
-    ElMessage.warning('加载统计失败')
+    ElMessage.warning('加载网站统计失败')
   }
 }
 async function loadTagOptions() {
@@ -133,7 +138,7 @@ function onKeywordChange() {
 // ---- 批量操作 ----
 function requireSelection(): boolean {
   if (!selectedIds.value.length) {
-    ElMessage.warning('请先在表格视图勾选网站或子源')
+    ElMessage.warning('请先在表格视图勾选网站或源')
     return false
   }
   return true

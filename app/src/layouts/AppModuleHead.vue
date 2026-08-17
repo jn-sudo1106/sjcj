@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 模块标题区（P3 收尾 · AppShell 拆分）
 // 职责：面包屑 + 模块标题 + 顶部动作按钮
-// 0711 R12：批量导入/批量操作已迁进网站详情子源侧栏，顶部只留"新建采集"
+// 0711 R12：批量导入/批量操作已迁进网站详情源侧栏，顶部只留"新建采集"
 //   （AppShell 顶部按钮按路由硬编码，与页面是否 ui.registerAction 无关）
 // 规则资产的「新建规则组/导入规则/发布校验」是规则 tab 专属（0721 会议 §六-1 参数迁入后新增的参数 tab 不需要）
 import { computed } from 'vue'
@@ -40,7 +40,7 @@ const PRIMARY_ACTIONS: Record<string, string> = {
 
 const pageActions: Record<string, string[]> = {
   overview: ['刷新', '导出', '新建采集'],
-  // 画布路由（含闸门/网站详情/子源详情）顶栏不放动作：保存/发起抓取都收在画布 Header
+  // 画布路由（含闸门/网站详情/源详情）顶栏不放动作：保存/发起抓取都收在画布 Header
   canvas: [],
   collect: ['新建采集'],
   rules: ['新建规则组', '导入规则', '发布校验'],

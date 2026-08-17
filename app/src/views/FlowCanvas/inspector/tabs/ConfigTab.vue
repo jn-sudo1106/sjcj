@@ -18,7 +18,7 @@ import ParamSourceEditor, { type ParamSourceModel } from '@/views/FlowCanvas/sou
 import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDialog.vue'
 import SelectExistingRuleDialog from '../SelectExistingRuleDialog.vue'
 
-// 参数子源（0803 调整）：本区域默认只读摘要，编辑收进「编辑」按钮弹出的 EditParamSourceDialog——
+// 参数源（0803 调整）：本区域默认只读摘要，编辑收进「编辑」按钮弹出的 EditParamSourceDialog——
 // 该弹窗保存走 sourceApi.sourceUpdate 落库，再 patchSource/patchSourceCtx 写回，
 // patchSource 内部 applyParamSourceUrlToFirstCollectNode 会自动把首节点 cc.url / cc.urlParamRefs 同步好
 // （见 flowModel.ts:401-408）；本文件不再直接双向绑定 model，只做一次性只读派生。
@@ -148,7 +148,7 @@ function onScheduleChange(patch: Partial<CollectorSchedule>) {
 
 // 首采集节点判定：调度设置只在首采集节点展示（与原 NodeInspector 顶层逻辑一致）。
 // S4-1 追加登录节点后修正：登录节点也带 collectCfg，但它不是"真正意义上的采集起点"——
-// 定时策略/参数子源这类"数据采集入口"专属配置得跳过登录节点，落在它后面第一个真正抓取数据的节点上，
+// 定时策略/参数源这类"数据采集入口"专属配置得跳过登录节点，落在它后面第一个真正抓取数据的节点上，
 // 否则流程排成"登录→列表抓取"后，这些配置会挂到登录节点上，列表抓取节点反而丢了。
 function isRealCollectorNode(nodeId: string): boolean {
   const c = flow.configs[nodeId]
@@ -156,7 +156,7 @@ function isRealCollectorNode(nodeId: string): boolean {
 }
 const isFirstCollectorNode = computed(() => isRealCollectorNode(id.value) && flow.main.find(isRealCollectorNode) === id.value)
 
-// 参数子源：仅首节点 + 源是参数子源（source.kind === 'param'）时展示只读摘要
+// 参数源：仅首节点 + 源是参数源（source.kind === 'param'）时展示只读摘要
 const isParamSource = computed(() => flow.sourceCfg?.kind === 'param')
 const showParamSourceEditor = computed(() => isFirstCollectorNode.value && isParamSource.value)
 // 只读派生，不回写：编辑统一走「编辑」按钮打开的 EditParamSourceDialog
@@ -370,11 +370,11 @@ function onBizType(e: Event) {
           <option v-for="opt in BIZ_TYPE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
       </div>
-      <!-- 参数子源（0803 调整）：默认只读摘要，点「编辑」打开 EditParamSourceDialog 修改；
-           仅首节点 + 源是参数子源时展示，详见上方脚本注释 -->
+      <!-- 参数源（0803 调整）：默认只读摘要，点「编辑」打开 EditParamSourceDialog 修改；
+           仅首节点 + 源是参数源时展示，详见上方脚本注释 -->
       <template v-if="showParamSourceEditor">
         <div class="ni-section-title ni-section-title-row">
-          <span>参数子源</span>
+          <span>参数源</span>
           <button class="rc-btn" type="button" data-testid="param-source-edit-open" @click="editParamSourceVisible = true">编辑</button>
         </div>
         <div class="rc-section-divider">
@@ -463,7 +463,7 @@ function onBizType(e: Event) {
 .ni-schedule { margin: 10px 0 12px; border-top: 1px dashed var(--rc-border-soft); padding-top: 8px; }
 .ni-schedule summary { color: var(--rc-muted); font-size: 11px; font-weight: 600; cursor: pointer; }
 .ni-schedule[open] summary { color: var(--rc-primary-ink); margin-bottom: 8px; }
-/* 参数子源编辑器容器（0802）：跟其他段落用同色背景区分；ParamSourceEditor 是 display:contents，外层负责间距 */
+/* 参数源编辑器容器（0802）：跟其他段落用同色背景区分；ParamSourceEditor 是 display:contents，外层负责间距 */
 .rc-section-divider { margin-top: 4px; padding: 8px 10px; background: #f8fafc; border: 1px solid var(--rc-border-soft); border-radius: 7px; }
 .ni-adv { margin-top: 12px; border-top: 1px dashed var(--rc-border-soft); padding-top: 8px; }
 .ni-adv-toggle { border: 0; background: transparent; color: var(--rc-muted); font-size: 11px; font-weight: 600; cursor: pointer; padding: 2px 0; }

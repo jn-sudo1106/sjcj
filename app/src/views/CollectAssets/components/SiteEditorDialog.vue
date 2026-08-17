@@ -67,14 +67,14 @@ defineExpose({ openEditor })
 <template>
   <el-dialog :model-value="visible" class="ca-site-editor" title="编辑网站基本信息" width="520px" align-center destroy-on-close @closed="emit('update:visible', false)" @update:model-value="(v: boolean) => emit('update:visible', v)">
     <div v-if="site" class="ca-site-summary">
-      <span>网站 ID：<b>{{ site.siteId }}</b></span><span>子源：<b>{{ site.sourceCount }}</b></span><span>数据量：<b>{{ (site.dataCount ?? 0).toLocaleString() }} 条</b></span>
+      <span>网站 ID：<b>{{ site.siteId }}</b></span><span>源：<b>{{ site.sourceCount }}</b></span><span>数据量：<b>{{ (site.dataCount ?? 0).toLocaleString() }} 条</b></span>
     </div>
     <el-form class="ca-site-form" label-position="top">
       <el-form-item label="网站名称" required><el-input v-model="form.name" placeholder="请输入网站名称" /></el-form-item>
       <el-form-item label="所属分类" required>
         <el-select v-model="form.categoryPath" filterable placeholder="请选择分类" style="width: 100%"><el-option v-for="option in siteCategoryOptions" :key="option.path" :label="option.label" :value="option.path" /></el-select>
       </el-form-item>
-      <el-form-item label="网站负责人"><el-input v-model="form.owner" placeholder="用于网站默认归属，不会批量覆盖子源负责人" /></el-form-item>
+      <el-form-item label="网站负责人"><el-input v-model="form.owner" placeholder="用于网站默认归属，不会批量覆盖源负责人" /></el-form-item>
     </el-form>
     <template #footer><el-button @click="emit('update:visible', false)">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存</el-button></template>
   </el-dialog>

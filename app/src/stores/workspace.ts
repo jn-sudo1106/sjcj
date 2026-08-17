@@ -13,9 +13,9 @@ export interface SourceTab {
 }
 
 export interface SourceTabSnapshot {
-  /** 源详情视图（0706 Phase4；0711 R11 加文件）：流程（默认）/ 数据 / 文件（仅子源态）/ 任务（仅网站态） */
+  /** 源详情视图（0706 Phase4；0711 R11 加文件）：流程（默认）/ 数据 / 文件（仅源态）/ 任务（仅网站态） */
   view?: 'flow' | 'data' | 'file' | 'task'
-  /** 网站页签内当前停留的编排对象（0710 会议 B3）：'site' = 统一流程模板，否则为子源 sourceId；激活页签时恢复 */
+  /** 网站页签内当前停留的编排对象（0710 会议 B3）：'site' = 统一流程模板，否则为源 sourceId；激活页签时恢复 */
   activeKey?: string
   selectedNodeId?: string
   filters?: { dataId: string; parentId: string; state: string; sql: string; sourceFilter?: string }
@@ -53,7 +53,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const activeSourceId = ref<string>(persisted.activeSourceId)
   const snapshots = reactive<Record<string, SourceTabSnapshot>>(persisted.snapshots)
   // 分屏对比（0701 问题三 · 方案 C；0710 会议 B4 与页签解耦）：compareLeftId（左栏）/ compareSourceId（右栏）
-  // 都是真实 sourceId，不要求对应已打开的页签——右栏按 id 直接加载，入口在子源侧栏（同站 ⇔ + 全局选择器）。
+  // 都是真实 sourceId，不要求对应已打开的页签——右栏按 id 直接加载，入口在源侧栏（同站 ⇔ + 全局选择器）。
   // 属临时查看态，不做 sessionStorage 持久化（刷新即退出对比，回到单栏）。
   const compareSourceId = ref<string>('')
   const compareLeftId = ref<string>('')

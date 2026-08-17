@@ -10,11 +10,11 @@ import {
 import { NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
 
 const source: Source = {
-  sourceId: 'source-template-test', name: '测试子源', url: 'https://source.example.com', configId: '', mainTable: '', owner: 'tester', state: 'C',
+  sourceId: 'source-template-test', name: '测试源', url: 'https://source.example.com', configId: '', mainTable: '', owner: 'tester', state: 'C',
 }
 
-describe('流程模板与子源绑定组合', () => {
-  it('模板保留完整默认配置，子源绑定可以覆盖 URL、表和参数', () => {
+describe('流程模板与源绑定组合', () => {
+  it('模板保留完整默认配置，源绑定可以覆盖 URL、表和参数', () => {
     const template = makePresetFlowTemplates().find((item) => item.id === 'preset-file-parse')!
     const fileId = template.definition.main.find((id) => id !== 'start' && id !== 'end')!
     const definition = sanitizeTemplateDefinition(template.definition)

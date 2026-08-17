@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 采集资产卡片视图（0707 优化·Phase3；样式对齐 设计稿/原型设计/采集中心卡片样式.png）：
-// 一张卡 = 一个采集网站，渐变图标瓦片 + 子源 chips + 标签 + 底部统计。
-// 子源可能很多（0707 会后澄清）：chips 只显示前几个，其余收进「+N」浮层，浮层内可搜索。
+// 一张卡 = 一个采集网站，渐变图标瓦片 + 源 chips + 标签 + 底部统计。
+// 源可能很多（0707 会后澄清）：chips 只显示前几个，其余收进「+N」浮层，浮层内可搜索。
 import { onMounted, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { siteApi, type Site, type Source } from '../../api'
@@ -22,13 +22,13 @@ watch(() => props.sites, (list) => list.forEach((s) => ensureChildren(s.siteId))
 
 // 页签网站化（0710 会议 B3）：入口只推路由，页签注册统一收口在画布加载（index.vue）
 function openSource(s: Source) {
-  router.push({ path: '/canvas', query: { sourceId: s.sourceId, view: 'flow' } })
+  router.push({ path: '/canvas', query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, view: 'flow' } })
 }
 // 卡片主体点击 → 进入网站统一流程模板（0707 优化·Phase4）
 function openSite(site: Site) {
   router.push({ path: '/canvas', query: { siteId: site.siteId } })
 }
-// 卡片底部直达入口：数据量进入当前网站首个子源的数据视图。
+// 卡片底部直达入口：数据量进入当前网站首个源的数据视图。
 function openSiteData(site: Site) {
   router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data' } })
 }
@@ -52,7 +52,7 @@ function pickOverflow(s: Source) {
 <template>
   <div class="scg-grid">
     <div v-for="site in sites" :key="site.siteId" class="scg-card" title="进入网站统一流程" @click="openSite(site)">
-      <span v-if="site.errorCount > 0" class="scg-dot" :title="`${site.errorCount} 个子源出错`" />
+      <span v-if="site.errorCount > 0" class="scg-dot" :title="`${site.errorCount} 个源出错`" />
       <div class="scg-head">
         <span class="scg-icon"><el-icon :size="20"><component :is="siteIcon(site)" /></el-icon></span>
         <div class="scg-title">
@@ -84,7 +84,7 @@ function pickOverflow(s: Source) {
             </button>
           </template>
           <div class="scg-popover-content">
-            <input v-model="overflowKw[site.siteId]" class="scg-overflow-search" placeholder="搜索子源" />
+            <input v-model="overflowKw[site.siteId]" class="scg-overflow-search" placeholder="搜索源" />
             <div class="scg-overflow-list">
               <button
                 v-if="!overflowKw[site.siteId]"
@@ -111,11 +111,11 @@ function pickOverflow(s: Source) {
                   <div class="scg-overflow-id">{{ c.sourceId }}</div>
                 </div>
               </button>
-              <div v-if="!filteredChildren(site.siteId).length" class="scg-overflow-empty">没有匹配的子源</div>
+              <div v-if="!filteredChildren(site.siteId).length" class="scg-overflow-empty">没有匹配的源</div>
             </div>
           </div>
         </el-popover>
-        <span v-if="childrenCache[site.siteId] && !childrenCache[site.siteId].length" class="scg-empty">暂无子源</span>
+        <span v-if="childrenCache[site.siteId] && !childrenCache[site.siteId].length" class="scg-empty">暂无源</span>
       </div>
 
       <div v-if="site.tags?.length" class="scg-tags">

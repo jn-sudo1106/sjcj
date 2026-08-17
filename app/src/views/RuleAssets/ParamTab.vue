@@ -245,7 +245,7 @@ async function batchDelete() {
             <th>值定义</th>
             <th style="width: 80px">参数值</th>
             <th style="width: 110px">默认值</th>
-            <th style="width: 140px">绑定参数子源</th>
+            <th style="width: 140px">绑定参数源</th>
             <th style="width: 120px">操作</th>
           </tr>
         </thead>

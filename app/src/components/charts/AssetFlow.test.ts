@@ -45,7 +45,7 @@ describe('AssetFlow', () => {
     expect(wrapper.text()).toContain('基金类')
     expect(wrapper.text()).toContain('支付宝评论')
     expect(wrapper.text()).toContain('2 个网站')
-    expect(wrapper.text()).toContain('5 个子源')
+    expect(wrapper.text()).toContain('5 个源')
     expect(wrapper.text()).not.toContain('第三方平台')
   })
 

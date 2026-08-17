@@ -65,19 +65,19 @@ describe('NodeInspector 规则数据懒加载（review 0723 #9 修正）', () =>
   })
 })
 
-// 参数子源的 urlTemplate 只灌给主链首个采集节点（flowModel.applyParamSourceUrlToFirstCollectNode），
-// 之前「参数配置」tab 的展示条件只看 isParamSource（源级），导致非首个采集节点也误展示参数子源摘要，
+// 参数源的 urlTemplate 只灌给主链首个采集节点（flowModel.applyParamSourceUrlToFirstCollectNode），
+// 之前「参数配置」tab 的展示条件只看 isParamSource（源级），导致非首个采集节点也误展示参数源摘要，
 // 挡掉了它自己本该有的 UrlParamEditor（节点级单值绑定）入口。这里验证按 isFirstCollectorNode 收窄后的展示。
-// 0802 重构·方案 A：参数子源编辑入口整体挪到 ConfigTab 源 URL 区，ParamsTab 不再重复展示摘要/跳转按钮；
-// 仅在「非首个采集节点 + 是参数源」时给一行提示，避免用户误以为本节点能编辑参数子源。
+// 0802 重构·方案 A：参数源编辑入口整体挪到 ConfigTab 源 URL 区，ParamsTab 不再重复展示摘要/跳转按钮；
+// 仅在「非首个采集节点 + 是参数源」时给一行提示，避免用户误以为本节点能编辑参数源。
 // 0804 拍板（决议 D17）曾把「参数配置」tab 对全部节点隐藏；0805 改判（推翻 D17）恢复非规则节点的入口——
 // 下面 setActiveTab('params') 的两个用例随之恢复。
-describe('NodeInspector 参数子源编辑入口在 ConfigTab（0802 重构）', () => {
+describe('NodeInspector 参数源编辑入口在 ConfigTab（0802 重构）', () => {
   function setupParamSource() {
     setActivePinia(createPinia())
     const flow = useFlowStore()
     flow.sourceCfg = {
-      sourceId: 's-1', name: '参数子源', url: '', configId: '', mainTable: 'T1', owner: 'admin', state: 'C',
+      sourceId: 's-1', name: '参数源', url: '', configId: '', mainTable: 'T1', owner: 'admin', state: 'C',
       kind: 'param', baseUrl: 'http://base', urlTemplate: 'http://base-$PARAM$_913',
       paramRefs: [{ paramId: '913', group: null }],
     }
@@ -90,7 +90,7 @@ describe('NodeInspector 参数子源编辑入口在 ConfigTab（0802 重构）',
     return flow
   }
 
-  it('首个采集节点 + 是参数子源：ParamsTab 不展示「非首个」提示，照常展示 UrlParamEditor（URL 取自参数子源）', async () => {
+  it('首个采集节点 + 是参数源：ParamsTab 不展示「非首个」提示，照常展示 UrlParamEditor（URL 取自参数源）', async () => {
     mockAssets()
     const flow = setupParamSource()
     flow.select('web-1')
@@ -101,9 +101,9 @@ describe('NodeInspector 参数子源编辑入口在 ConfigTab（0802 重构）',
 
     // 编辑入口在 ConfigTab：ParamsTab 没有任何「去配置」按钮或摘要块
     expect(wrapper.find('[data-testid="params-jump-to-config"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('去「配置」编辑参数子源')
-    // 首节点：URL 由参数子源管理，不展示「本源为参数子源…本节点的 URL 参数按下方单独配置」的非首节点提示
-    expect(wrapper.text()).not.toContain('本源为参数子源')
+    expect(wrapper.text()).not.toContain('去「配置」编辑参数源')
+    // 首节点：URL 由参数源管理，不展示「本源为参数源…本节点的 URL 参数按下方单独配置」的非首节点提示
+    expect(wrapper.text()).not.toContain('本源为参数源')
     // 节点级 UrlParamEditor 仍展示，URL 由 applyParamSourceUrlToFirstCollectNode 同步进 cc.url
     expect(wrapper.find('.upe').exists()).toBe(true)
     // 源级 urlTemplate 已被灌进首节点 cc.url，UrlParamEditor 拿到的 url prop 应当带 $PARAM$_913
@@ -112,7 +112,7 @@ describe('NodeInspector 参数子源编辑入口在 ConfigTab（0802 重构）',
     expect(typeof upeUrl === 'string' ? upeUrl : '').toContain('$PARAM$_913')
   })
 
-  it('非首个采集节点：展示提示 + 自己的 UrlParamEditor，不展示参数子源摘要/跳转按钮', async () => {
+  it('非首个采集节点：展示提示 + 自己的 UrlParamEditor，不展示参数源摘要/跳转按钮', async () => {
     mockAssets()
     const flow = setupParamSource()
     flow.select('web-2')
@@ -121,7 +121,7 @@ describe('NodeInspector 参数子源编辑入口在 ConfigTab（0802 重构）',
     const wrapper = mount(NodeInspector)
     await flushPromises()
 
-    expect(wrapper.text()).toContain('本源为参数子源')
+    expect(wrapper.text()).toContain('本源为参数源')
     expect(wrapper.find('[data-testid="params-jump-to-config"]').exists()).toBe(false)
     expect(wrapper.find('.upe').exists()).toBe(true)
   })
@@ -147,7 +147,7 @@ describe('NodeInspector 参数子源编辑入口在 ConfigTab（0802 重构）',
     expect(wrapper.find('[data-testid="edit-param-source-save"]').exists()).toBe(true)
   })
 
-  it('非首个采集节点 + 切到「配置」tab：源 URL 下方不挂载参数子源摘要', async () => {
+  it('非首个采集节点 + 切到「配置」tab：源 URL 下方不挂载参数源摘要', async () => {
     mockAssets()
     const flow = setupParamSource()
     flow.select('web-2')
@@ -159,12 +159,12 @@ describe('NodeInspector 参数子源编辑入口在 ConfigTab（0802 重构）',
     expect(wrapper.find('[data-testid="param-source-edit-open"]').exists()).toBe(false)
   })
 
-  it('非参数源 + 首个采集节点 + 切到「配置」tab：源 URL 下方也不挂载参数子源摘要', async () => {
+  it('非参数源 + 首个采集节点 + 切到「配置」tab：源 URL 下方也不挂载参数源摘要', async () => {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
     flow.sourceCfg = {
-      sourceId: 's-2', name: '普通子源', url: 'http://x.com', configId: '', mainTable: 'T1', owner: 'admin', state: 'C',
+      sourceId: 's-2', name: '普通源', url: 'http://x.com', configId: '', mainTable: 'T1', owner: 'admin', state: 'C',
       // kind 缺省 = 'normal'
     }
     const first = cloneConfig(NODE_CONFIGS['web-list'])

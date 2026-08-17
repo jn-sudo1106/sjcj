@@ -10,7 +10,7 @@ import { useFlowStore } from '@/stores/flow'
 const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
 
 describe('TaskView', () => {
-  it('仅展示当前子源的节点任务，而非网站队列聚合（不再提供所属子源筛选）', async () => {
+  it('仅展示当前源的节点任务，而非网站队列聚合（不再提供所属源筛选）', async () => {
     setActivePinia(createPinia())
     await router.push('/canvas')
     const source = mockSourceDetail({ sourceId: '391007768' })!
@@ -33,7 +33,7 @@ describe('TaskView', () => {
     expect(wrapper.text()).not.toContain('队列聚合')
   })
 
-  it('网站详情页（site-wide）聚合查看全部子源任务，不展示流程节点条', async () => {
+  it('网站详情页（site-wide）聚合查看全部源任务，不展示流程节点条', async () => {
     setActivePinia(createPinia())
     await router.push('/canvas')
     const source = mockSourceDetail({ sourceId: '391007768' })!
@@ -47,6 +47,6 @@ describe('TaskView', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="task-process-rail"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('所属子源')
+    expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('所属源')
   })
 })

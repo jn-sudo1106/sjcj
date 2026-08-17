@@ -32,7 +32,7 @@ const xml = computed(() => (xmlOpen.value ? flowToXml(flow.serialize()) : ''))
 const canExportXml = computed(() => !flow.dirty && flow.validateFlow().length === 0)
 const recommending = ref(false)
 
-// 编排对象切换器已升级为页面级子源侧栏（0710 会议 B1），组件与接线整体迁至 index.vue
+// 编排对象切换器已升级为页面级源侧栏（0710 会议 B1），组件与接线整体迁至 index.vue
 
 function loadTemplateDefaults(template: FlowTemplate) {
   flow.load({
@@ -358,7 +358,7 @@ watch(
           <path v-for="(e, i) in flow.layout.fanOutEdges" :key="'f' + i" class="rc-edge fan-out" :d="e.d" />
         </svg>
 
-        <!-- 空白子源画布引导卡 -->
+        <!-- 空白源画布引导卡 -->
         <div v-if="!flow.layout.nodes.length" class="rc-empty-cta">
           <div class="rc-empty-cta-title">空白编排画布</div>
           <div class="rc-empty-cta-sub">可以用「＋」手工添加步骤，也可以按当前对象推荐流程模板，应用后再逐节点调整配置。</div>

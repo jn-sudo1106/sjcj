@@ -23,10 +23,10 @@ export const useSourceStore = defineStore('source', () => {
   // 源级配置（0706 优化·源/节点配置分层）：sourceCtx 保留作只读上下文（是否绑定持久化源，驱动 UI 的「源模式」），
   // sourceCfg 是可编辑副本，供源信息编辑抽屉读写；load() 统一从 FlowDef.source 灌入，二者内容随加载同步、写入路径各自独立。
   const sourceCfg = ref<Source | null>(null)
-  // 网站态上下文（0707 优化·Phase4）：与 sourceCtx 互斥——画布当前编排对象要么是某个子源（sourceCtx），
+  // 网站态上下文（0707 优化·Phase4）：与 sourceCtx 互斥——画布当前编排对象要么是某个源（sourceCtx），
   // 要么是某个网站的统一流程模板（siteCtx），二者不会同时非空。网站模板不实际运行，没有 sourceCfg 概念。
   // 唯一例外见 setSiteDisplayCtx（0714 会议 Task 3 网站详情页）：该场景 siteCtx 只作展示标记，
-  // sourceCtx 仍指向内部代表子源供数据查询，二者会同时非空。
+  // sourceCtx 仍指向内部代表源供数据查询，二者会同时非空。
   const siteCtx = ref<Site | null>(null)
 
   // ---- 源级操作 ----
@@ -61,7 +61,7 @@ export const useSourceStore = defineStore('source', () => {
     siteCtx.value = null
   }
 
-  // 网站详情页（0714 会议 Task 3）：只做聚合查看，不是网站统一流程模板——画布内部会悄悄加载一个代表子源
+  // 网站详情页（0714 会议 Task 3）：只做聚合查看，不是网站统一流程模板——画布内部会悄悄加载一个代表源
   // 到 sourceCtx（供 ResultView/FileView/TaskView 取得共享的节点/表结构），但用户看到的对象是"网站"。
   // 这里只设置 siteCtx 供顶部面包屑/动作栏识别为网站态展示，不像 startSiteFlow 那样重置画布或加载模板流程，
   // 因此与 sourceCtx 同时非空——是本文件顶部"二者互斥"注释里唯一的例外，仅用于该页面的展示层。
@@ -72,14 +72,14 @@ export const useSourceStore = defineStore('source', () => {
   // 源 → 画布：把源的子步骤编译为画布节点（首步当列表，其余当详情）。
   // 种子构造用纯函数 buildSourceSeed（flowModel.ts），分屏对比 Phase 5 的第二栏独立复用同一构造逻辑，不经过本 store。
   // persistedDef（0707 优化·Phase4）：调用方若已查到该源自己保存过的 FlowDef（含网站同步覆盖写入的），
-  // 优先加载它而不是重新按 Step 拼一份通用模板——否则子源单独改过的流程 / 网站同步覆盖的结果重进画布都会被冲掉。
+  // 优先加载它而不是重新按 Step 拼一份通用模板——否则源单独改过的流程 / 网站同步覆盖的结果重进画布都会被冲掉。
   function loadFromSource(source: Source, steps: Step[], persistedDef?: FlowDef | null) {
     // 存克隆而非引用（0706 Phase4 修复）：mock 按引用返回内部数据，若 sourceCtx 与之共享对象，
     // mock 侧的原始变更会绕过响应式代理静默改值，导致后续同值代理赋值不触发更新、摘要头保存后不刷新
     resetAllContext()
     sourceCtx.value = JSON.parse(JSON.stringify(source)) as Source
     // needLogin 未显式设置时按是否已绑登录凭据回填（与旧行为对齐：有凭据引用即视为登录态源）
-    // 已绑定模板的版本与动态绑定随子源 FlowDef 一起持久化；源列表的旧实体没有这些字段时，
+    // 已绑定模板的版本与动态绑定随源 FlowDef 一起持久化；源列表的旧实体没有这些字段时，
     // 不能在这里覆盖掉存档里的绑定信息。
     const storedBinding = persistedDef?.source
     const sourceForCfg: Source = {

@@ -59,7 +59,7 @@ async function save() {
     }
     flow.patchSource(patch)
     flow.patchSourceCtx(patch)
-    ElMessage.success(res.message || '参数子源已更新')
+    ElMessage.success(res.message || '参数源已更新')
     close()
   } catch (error) {
     ElMessage.error(`保存失败：${error instanceof Error ? error.message : String(error)}`)
@@ -70,7 +70,7 @@ async function save() {
 <template>
   <div v-if="visible" class="epsd-backdrop" @click.self="close">
     <div class="epsd-card">
-      <div class="epsd-title">编辑参数子源</div>
+      <div class="epsd-title">编辑参数源</div>
       <ParamSourceEditor ref="editorRef" v-model="draft" />
       <div class="epsd-actions">
         <button class="rc-btn" type="button" @click="close">取消</button>

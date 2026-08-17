@@ -7,7 +7,7 @@ import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import { buildHorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
 
-// 任务是子源的运行事实：子源画布下只看当前子源；网站详情页（siteWide）聚合看全部子源，不提供内部筛选。
+// 任务是源的运行事实：源画布下只看当前源；网站详情页（siteWide）聚合看全部源，不提供内部筛选。
 const props = defineProps<{ siteWide?: boolean }>()
 const flow = useFlowStore()
 const source = computed(() => flow.sourceCtx)
@@ -64,7 +64,7 @@ async function loadSiteSources() {
   } catch {
     if (currentSiteId !== siteId.value) return
     siteSources.value = []
-    ElMessage.warning('加载所属子源失败')
+    ElMessage.warning('加载所属源失败')
   }
 }
 
@@ -155,7 +155,7 @@ function nextPage() {
   <main class="tv-shell">
     <CanvasHeader v-if="!siteWide" />
     <div class="tv-body">
-      <div v-if="!source" class="tv-empty-row">{{ siteWide ? '该网站暂无子源，无法查看任务。' : '任务视图仅在子源详情下可用。' }}</div>
+      <div v-if="!source" class="tv-empty-row">{{ siteWide ? '该网站暂无源，无法查看任务。' : '任务视图仅在源详情下可用。' }}</div>
       <template v-else>
         <div v-if="!siteWide" class="tv-process-rail" data-testid="task-process-rail">
           <ProcessNodeRail v-model="filters.nodeId" :layout="processLayout" />
@@ -177,7 +177,7 @@ function nextPage() {
 
         <table class="rc-data-table tv-table" data-testid="source-task-table" v-loading="loading">
           <thead>
-            <tr><th>任务 ID</th><th v-if="showSourceColumn">所属子源</th><th>流程节点</th><th>任务名称</th><th>队列</th><th>总任务数</th><th>已处理数</th><th>类型</th><th>状态</th><th>更新时间</th></tr>
+            <tr><th>任务 ID</th><th v-if="showSourceColumn">所属源</th><th>流程节点</th><th>任务名称</th><th>队列</th><th>总任务数</th><th>已处理数</th><th>类型</th><th>状态</th><th>更新时间</th></tr>
           </thead>
           <tbody>
             <tr v-for="task in rows" :key="task.taskId">

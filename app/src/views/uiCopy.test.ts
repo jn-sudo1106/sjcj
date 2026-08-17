@@ -102,12 +102,12 @@ describe('最新方案 UI 入口收口', () => {
     // P2-2 拆分后表格视图移到 TableView.vue 子组件
     expect(tableView).toContain('function openSiteData(site: Site)')
     expect(tableView).toContain("router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data' } })")
-    expect(tableView).toContain('<button class="ca-count-link" type="button" title="查看该网站全部子源数据" @click="openSiteData(site)">')
+    expect(tableView).toContain('<button class="ca-count-link" type="button" title="查看该网站全部源数据" @click="openSiteData(site)">')
     expect(tableView).toContain('{{ (site.dataCount ?? 0).toLocaleString() }} 条')
   })
 
-  it('采集资产卡片的子源直达流程画布，卡片底部不再提供任务入口', () => {
-    expect(siteCardGrid).toContain("query: { sourceId: s.sourceId, view: 'flow' }")
+  it('采集资产卡片的源直达流程画布，卡片底部不再提供任务入口', () => {
+    expect(siteCardGrid).toContain("query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, view: 'flow' }")
     expect(siteCardGrid).not.toContain('scg-foot-task')
     expect(siteCardGrid).not.toContain('openSiteTask')
   })
@@ -122,7 +122,7 @@ describe('最新方案 UI 入口收口', () => {
     expect(tableView).not.toContain('>展开/收起⌄</button>')
   })
 
-  it('数据视图只使用当前子源流程，节点图不展示开始/结束', () => {
+  it('数据视图只使用当前源流程，节点图不展示开始/结束', () => {
     expect(resultView).toContain('ProcessNodeRail')
     expect(resultView).toContain('includeTerminals: false')
     expect(resultView).not.toContain('buildSourceSeed')
@@ -136,17 +136,18 @@ describe('最新方案 UI 入口收口', () => {
     expect(flowCanvas).not.toContain('<select class="rc-select" v-model="gateSite.category"')
   })
 
-  it('新建采集删除标签字段和子源默认设置整块', () => {
+  it('新建采集删除标签字段和源默认设置整块', () => {
     expect(flowCanvas).not.toContain('gateSourceDefaults')
     expect(flowCanvas).not.toContain('gateTagsInput')
     expect(flowCanvas).not.toContain('<SourceBasicForm')
     expect(flowCanvas).not.toContain('<div class="rc-field"><label>标签</label>')
   })
 
-  it('新建采集首个子源名称跟随网站名称，手动改过后停止跟随', () => {
+  it('新建采集首个源名称跟随网站名称，手动改过后停止跟随', () => {
     expect(flowCanvas).toContain('firstSourceNameTouched')
     expect(flowCanvas).toContain("if (!firstSourceNameTouched.value && gateRows.value[0]) gateRows.value[0].name = name")
     expect(flowCanvas).toContain('@input="i === 0 && (firstSourceNameTouched = true)"')
+    expect(flowCanvas).toContain('siteApi.siteCreate(siteForCreate, sources)')
   })
 
   it('节点配置不再展示输入映射和输入参数（0804 拍板：整块删除，非只对采集节点隐藏）', () => {
@@ -165,9 +166,9 @@ describe('最新方案 UI 入口收口', () => {
     expect(allInspectorSource).not.toContain('任务拼接逻辑')
   })
 
-  it('子源信息不在画布顶部重复编辑，定时策略收在节点配置', () => {
+  it('源信息不在画布顶部重复编辑，定时策略收在节点配置', () => {
     // 定时策略已从采集运行设置中拆出，作为节点级配置保留，避免首节点位置分支影响其他节点。
-    expect(nodeInspector).not.toContain('子源信息（各节点共享）')
+    expect(nodeInspector).not.toContain('源信息（各节点共享）')
     expect(canvasHeader).not.toContain('@click="openEdit"')
     expect(canvasHeader).toContain('class="ch-canvas-actions"')
     expect(canvasHeader).toContain('v-if="view === \'flow\'" class="ch-actions"')
@@ -181,9 +182,9 @@ describe('最新方案 UI 入口收口', () => {
     expect(collectorSettings).not.toContain('<TaskScheduleSettings')
   })
 
-  it('切换子源保留当前视图，视图按钮等待路由完成后再允许下一次切换', () => {
+  it('切换源保留当前视图，视图按钮等待路由完成后再允许下一次切换', () => {
     expect(flowCanvas).toContain('const view = normalizeSourceView(route.query.view)')
-    expect(flowCanvas).toContain("void router.replace({ path: '/canvas', query: { sourceId: target.sourceId, view } })")
+    expect(flowCanvas).toContain("void router.replace({ path: '/canvas', query: { ...(target.siteId ? { siteId: target.siteId } : {}), sourceId: target.sourceId, view } })")
     expect(canvasHeader).toContain("void router.replace({ path: '/canvas', query })")
     expect(canvasHeader).not.toContain('switchingView')
   })
@@ -203,7 +204,7 @@ describe('最新方案 UI 入口收口', () => {
   })
 
 
-  it('采集资产页顶部批量导入/批量操作入口收口，批量导入迁进网站详情子源侧栏（0711 R12）', () => {
+  it('采集资产页顶部批量导入/批量操作入口收口，批量导入迁进网站详情源侧栏（0711 R12）', () => {
     // 顶部动作注册只留「新建采集」
     expect(sourceTab).not.toContain("ui.registerAction('批量导入'")
     expect(sourceTab).not.toContain("ui.registerAction('批量操作'")
@@ -218,7 +219,7 @@ describe('最新方案 UI 入口收口', () => {
     expect(batchBar).toContain('@click="emit(\'batchSnatch\')"')
     expect(batchBar).toContain('@click="emit(\'batchDelete\')"')
 
-    // 批量导入迁进网站详情子源侧栏，siteId 已定，不再需要目标网站下拉
+    // 批量导入迁进网站详情源侧栏，siteId 已定，不再需要目标网站下拉
     expect(siteSourceSwitcher).toContain('siteApi.siteImportSources(props.siteId, importDlg.lines)')
     expect(siteSourceSwitcher).toContain('批量导入')
 
@@ -235,10 +236,13 @@ describe('最新方案 UI 入口收口', () => {
     expect(collectAssetsIndex).not.toContain('<SourceTabsBar')
   })
 
-  it('流程模板列表并入采集资产的二级页签，而不是左侧独立菜单', () => {
-    expect(collectAssetsIndex).toContain("{ key: 'template', label: '流程模板列表' }")
-    expect(collectAssetsIndex).toContain('FlowTemplate')
-    expect(collectAssetsIndex).toContain("const query = tab === 'source' ? {} : { tab }")
+  it('流程模板列表并入规则资产的二级页签，而不是左侧独立菜单（0812 计划 M4-9：跟参数模块一样从采集资产迁走）', () => {
+    expect(collectAssetsIndex).not.toContain("{ key: 'template', label: '流程模板列表' }")
+    expect(collectAssetsIndex).not.toContain("import FlowTemplate from '../FlowTemplate/index.vue'")
+    expect(collectAssetsIndex).toContain("tab === 'param' || tab === 'template'")
+    expect(ruleAssetsIndex).toContain("{ key: 'template', label: '流程模板' }")
+    expect(ruleAssetsIndex).toContain("import FlowTemplate from '../FlowTemplate/index.vue'")
+    expect(canvasHeader).toContain("void router.push({ path: '/rules', query: { tab: 'template' } })")
   })
 
   it('空白画布的智能入口推荐并应用流程模板，不再直接生成孤立流程', () => {
@@ -268,7 +272,7 @@ describe('最新方案 UI 入口收口', () => {
     expect(sourceBasicForm).not.toContain('使用已有配置')
   })
 
-  it('子源流程头展示已应用模板，且不展示负责人', () => {
+  it('源流程头展示已应用模板，且不展示负责人', () => {
     expect(canvasHeader).toContain('appliedTemplateLabel')
     expect(canvasHeader).toContain('{{ appliedTemplateLabel }} ▾')
     expect(canvasHeader).not.toContain('负责人 ${s.owner}')

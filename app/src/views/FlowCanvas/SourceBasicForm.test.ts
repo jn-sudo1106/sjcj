@@ -12,7 +12,7 @@ function blankSource(): Source {
 // 隐式落成 false（不是 undefined），导致「不传 showIdentity」这个最常见的调用方式（CanvasHeader 的编辑源信息抽屉）
 // 反而被误判成 showIdentity=false，整块源ID/名称/URL/分类全部消失——这个 bug 曾经真实复现过，加测试锁住。
 describe('SourceBasicForm', () => {
-  it('子源基础表单只展示名称和 URL，不展示源 ID、分类或标签', () => {
+  it('源基础表单只展示名称和 URL，不展示源 ID、分类或标签', () => {
     const wrapper = mount(SourceBasicForm, { props: { modelValue: blankSource() } })
     expect(wrapper.text()).toContain('源名称')
     expect(wrapper.text()).toContain('源 URL')

@@ -11,7 +11,7 @@ defineProps<{
   categories: SourceCategory[]
   allTags: string[]
   total: number
-  stats: { total: number; error: number; externalChanged: number; disabled: number }
+  stats: { total: number; error: number; notify: number }
   view: 'card' | 'table'
   hasFilter: boolean
 }>()
@@ -31,6 +31,11 @@ const emit = defineEmits<{
 function onKeywordInput(e: Event) {
   emit('update:keyword', (e.target as HTMLInputElement).value)
 }
+
+function categoryLabel(category: SourceCategory, child = false) {
+  const prefix = child ? ' └ ' : ''
+  return `${prefix}${category.name}${category.count == null ? '' : `（${category.count}）`}`
+}
 </script>
 
 <template>
@@ -39,15 +44,15 @@ function onKeywordInput(e: Event) {
       :model-value="keyword"
       :prefix-icon="Search"
       clearable
-      placeholder="搜索网站名 / 子源名 / 责任人"
+      placeholder="搜索网站名 / 源名 / 责任人"
       class="ca-search"
       @input="onKeywordInput"
     />
     <el-select :model-value="categoryFilter" placeholder="全部分类" style="width: 150px" clearable @update:model-value="(v: string) => { emit('update:categoryFilter', v); emit('filterChange') }">
       <el-option label="全部分类" value="" />
       <template v-for="g in categories" :key="g.id">
-        <el-option :label="`${g.name}（${g.count}）`" :value="g.id" />
-        <el-option v-for="c in g.children" :key="c.id" :label="` └ ${c.name}（${c.count}）`" :value="c.id" />
+        <el-option :label="categoryLabel(g)" :value="g.id" />
+        <el-option v-for="c in g.children" :key="c.id" :label="categoryLabel(c, true)" :value="c.id" />
       </template>
     </el-select>
     <el-select :model-value="tagFilter" placeholder="全部标签" style="width: 130px" clearable @update:model-value="(v: string) => { emit('update:tagFilter', v); emit('filterChange') }">
@@ -56,7 +61,7 @@ function onKeywordInput(e: Event) {
     </el-select>
     <el-select :model-value="stateFilter" placeholder="全部状态" style="width: 130px" clearable @update:model-value="(v: string) => { emit('update:stateFilter', v); emit('filterChange') }">
       <el-option label="全部状态" value="all" />
-      <el-option label="有异常子源" value="error" />
+      <el-option label="有异常源" value="error" />
     </el-select>
     <el-select :model-value="sortBy" style="width: 120px" @update:model-value="(v: 'updated' | 'name') => emit('update:sortBy', v)">
       <el-option label="最近修改" value="updated" />
@@ -66,9 +71,8 @@ function onKeywordInput(e: Event) {
     <div class="ca-stats">
       <el-tag type="info" effect="plain" class="stat-tag">网站 <b>{{ total }}</b></el-tag>
       <el-tag type="info" effect="plain" class="stat-tag">源 <b>{{ stats.total }}</b></el-tag>
-      <el-tag v-if="stats.error > 0" type="danger" class="stat-tag">异常 <b>{{ stats.error }}</b></el-tag>
-      <el-tag v-if="stats.externalChanged > 0" type="warning" class="stat-tag">待确认 <b>{{ stats.externalChanged }}</b></el-tag>
-      <el-tag v-if="stats.disabled > 0" type="info" effect="plain" class="stat-tag">停用 <b>{{ stats.disabled }}</b></el-tag>
+      <el-tag v-if="stats.error > 0" type="danger" class="stat-tag">出错源 <b>{{ stats.error }}</b></el-tag>
+      <el-tag v-if="stats.notify > 0" type="warning" class="stat-tag">告警网站 <b>{{ stats.notify }}</b></el-tag>
     </div>
     <span class="ca-spacer" />
     <div class="ca-view-toggle">

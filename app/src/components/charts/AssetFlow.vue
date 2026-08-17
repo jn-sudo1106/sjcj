@@ -71,14 +71,14 @@ const connectorPaths = computed(() => {
           class="af-branch"
           type="button"
           :data-panorama-branch="branch.id"
-          :aria-label="`${branch.label}，${branch.total} 个网站，${branch.sourceCount} 个子源，${branchStatus(branch.error).text}`"
+          :aria-label="`${branch.label}，${branch.total} 个网站，${branch.sourceCount} 个源，${branchStatus(branch.error).text}`"
           @click="emit('select', branch.id)"
         >
           <span class="af-branch-head">
             <span class="af-branch-icon"><el-icon><component :is="branchIcon(branch.label)" /></el-icon></span>
             <span class="af-branch-title">
               <b>{{ branch.label }}</b>
-              <small>{{ branch.total }} 个网站 · {{ branch.sourceCount }} 个子源</small>
+              <small>{{ branch.total }} 个网站 · {{ branch.sourceCount }} 个源</small>
             </span>
             <span class="af-branch-state" :class="branchStatus(branch.error).cls">
               {{ branchStatus(branch.error).text }}
@@ -91,7 +91,7 @@ const connectorPaths = computed(() => {
               class="af-child"
               :class="{ error: child.error > 0 }"
               :data-panorama-child="child.id"
-              :title="`${child.total} 个网站 · ${child.sourceCount} 个子源`"
+              :title="`${child.total} 个网站 · ${child.sourceCount} 个源`"
             >
               <span>{{ child.label }}</span>
               <b>{{ child.total }}</b>
@@ -105,7 +105,7 @@ const connectorPaths = computed(() => {
         <img :src="platformIcon" alt="" class="af-platform-icon" />
         <span class="af-hub-label">
           <b>统一数据平台</b>
-          <small>{{ panorama.total }} 个网站 · {{ panorama.sourceCount }} 个子源</small>
+          <small>{{ panorama.total }} 个网站 · {{ panorama.sourceCount }} 个源</small>
         </span>
       </button>
 

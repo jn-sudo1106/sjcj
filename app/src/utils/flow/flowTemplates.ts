@@ -75,7 +75,7 @@ export function templateDefinitionFromFlow(def: FlowDef): FlowTemplateDefinition
   }
 }
 
-/** 保存模板时做深拷贝，保留 URL、表、参数等可作为子源起点的默认配置。 */
+/** 保存模板时做深拷贝，保留 URL、表、参数等可作为源起点的默认配置。 */
 export function sanitizeTemplateDefinition(definition: FlowTemplateDefinition): FlowTemplateDefinition {
   return {
     main: [...definition.main],
@@ -142,7 +142,7 @@ export function compatibleTemplateBindings(
   )
 }
 
-/** 用模板定义 + 子源绑定合成实际可编辑、可运行的 FlowDef。 */
+/** 用模板定义 + 源绑定合成实际可编辑、可运行的 FlowDef。 */
 export function composeTemplateFlow(
   template: FlowTemplate,
   source: Source,

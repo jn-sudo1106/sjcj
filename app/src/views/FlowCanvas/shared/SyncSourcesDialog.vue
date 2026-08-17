@@ -4,9 +4,9 @@ import { ElMessage } from 'element-plus'
 import { siteApi, type Source } from '@/api'
 import StatusTag from '@/components/StatusTag.vue'
 
-// 子源间流程同步弹窗（0716）：把来源子源已保存的流程批量覆盖到同网站勾选的子源。
+// 源间流程同步弹窗（0716）：把源头已保存的流程批量覆盖到同网站勾选的源。
 // 勾选 + 危险确认按钮合一（沿用 0710 C3"把选择题降为确认题"的精神，但保留勾选能力）；
-// 已单独调整过流程（detached）的子源默认不勾，需手动勾选才会被覆盖。
+// 已单独调整过流程（detached）的源默认不勾，需手动勾选才会被覆盖。
 const props = defineProps<{
   open: boolean
   siteId: string
@@ -39,7 +39,7 @@ watch(
     } catch (error) {
       if (!active) return
       loadError.value = true
-      ElMessage.error(`加载子源列表失败：${error instanceof Error ? error.message : String(error)}`)
+      ElMessage.error(`加载源列表失败：${error instanceof Error ? error.message : String(error)}`)
     } finally {
       if (active) loading.value = false
     }
@@ -73,7 +73,7 @@ async function confirmSync() {
       ElMessage.error(res.message || '同步失败')
       return
     }
-    ElMessage.success(res.message || `已同步到 ${checked.value.size} 个子源`)
+    ElMessage.success(res.message || `已同步到 ${checked.value.size} 个源`)
     close(false)
   } catch (error) {
     ElMessage.error(`同步失败：${error instanceof Error ? error.message : String(error)}`)
@@ -86,15 +86,15 @@ async function confirmSync() {
 <template>
   <el-dialog
     :model-value="open"
-    title="同步流程到其他子源"
+    title="同步流程到其他源"
     width="560px"
     :close-on-click-modal="false"
     @update:model-value="close"
   >
-    <p class="ssd-tip">将「{{ fromSource.name }}」已保存的流程<strong>整条覆盖</strong>到勾选的子源，被覆盖子源的原有流程不可恢复。</p>
-    <div v-if="loading" class="ssd-empty">加载子源列表…</div>
-    <div v-else-if="loadError" class="ssd-empty">子源列表加载失败，请关闭后重试。</div>
-    <div v-else-if="!siblings.length" class="ssd-empty">该网站下没有其他子源。</div>
+    <p class="ssd-tip">将「{{ fromSource.name }}」已保存的流程<strong>整条覆盖</strong>到勾选的源，被覆盖源的原有流程不可恢复。</p>
+    <div v-if="loading" class="ssd-empty">加载源列表…</div>
+    <div v-else-if="loadError" class="ssd-empty">源列表加载失败，请关闭后重试。</div>
+    <div v-else-if="!siblings.length" class="ssd-empty">该网站下没有其他源。</div>
     <template v-else>
       <label class="ssd-row ssd-head">
         <input data-testid="sync-toggle-all" type="checkbox" :checked="allChecked" @change="toggleAll">
@@ -123,7 +123,7 @@ async function confirmSync() {
         :disabled="!checked.size || syncing"
         @click="confirmSync"
       >
-        覆盖 {{ checked.size }} 个子源的流程
+        覆盖 {{ checked.size }} 个源的流程
       </button>
     </template>
   </el-dialog>

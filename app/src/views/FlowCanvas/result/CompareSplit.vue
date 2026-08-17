@@ -5,7 +5,7 @@ import { sourceApi } from '@/api'
 import CompareResultPane from './CompareResultPane.vue'
 
 // 分屏对比容器（0701 问题三 · 方案 C；0710 会议 B4 与页签解耦）：左右栏都是真实 sourceId，
-// 由子源侧栏（行内 ⇔ / 全局选择器）写入 workspace 的 compareLeftId/compareSourceId，不要求已打开页签。
+// 由源侧栏（行内 ⇔ / 全局选择器）写入 workspace 的 compareLeftId/compareSourceId，不要求已打开页签。
 // 两栏各自独立（CompareResultPane 不共享状态），不影响正常单栏视图的既有实现。
 const ws = useWorkspaceStore()
 
@@ -27,7 +27,7 @@ watch(rightId, async (id) => { rightName.value = await nameOf(id) }, { immediate
   <div class="cs-shell">
     <div class="cs-toolbar">
       <span class="cs-title">并排对比</span>
-      <span class="cs-hint">左栏为发起对比时的当前子源；换右栏对象请在左侧子源侧栏点 ⇔</span>
+      <span class="cs-hint">左栏为发起对比时的当前源；换右栏对象请在左侧源侧栏点 ⇔</span>
       <span class="cs-spacer" />
       <button class="rc-btn" type="button" @click="ws.exitCompare()">退出对比</button>
     </div>
@@ -35,7 +35,7 @@ watch(rightId, async (id) => { rightName.value = await nameOf(id) }, { immediate
       <CompareResultPane v-if="leftId" :key="leftId" :source-id="leftId" :label="leftName" />
       <div class="cs-divider" aria-hidden="true" />
       <CompareResultPane v-if="rightId" :key="rightId" :source-id="rightId" :label="rightName" />
-      <div v-else class="cs-empty">请在左侧子源侧栏选择要对比的子源（行内 ⇔ 或底部「⇔ 对比」）</div>
+      <div v-else class="cs-empty">请在左侧源侧栏选择要对比的源（行内 ⇔ 或底部「⇔ 对比」）</div>
     </div>
   </div>
 </template>

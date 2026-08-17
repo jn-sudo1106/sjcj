@@ -36,7 +36,7 @@ export const useUiStore = defineStore('ui', () => {
     inspectorExpanded.value = !inspectorExpanded.value
   }
 
-  // 采集资产视图偏好（0707 优化·Phase3）：卡片（默认，网站粒度浏览）/ 表格（树形展开子源，批量运维）
+  // 采集资产视图偏好（0707 优化·Phase3）：卡片（默认，网站粒度浏览）/ 表格（树形展开源，批量运维）
   const ASSET_VIEW_KEY = 'rc-asset-view'
   const savedAssetView = localStorage.getItem(ASSET_VIEW_KEY)
   const assetView = ref<'card' | 'table'>(savedAssetView === 'table' ? 'table' : 'card')

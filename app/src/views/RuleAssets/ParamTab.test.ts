@@ -76,21 +76,21 @@ describe('ParamTab 角色权限', () => {
     expect(clearSpy).toHaveBeenCalledWith(deleteSpy.mock.calls[0][0])
   })
 
-  it('admin 角色可见「绑定参数子源」列，且 mock 派生出的 paramSourceRefs 正常渲染', async () => {
+  it('admin 角色可见「绑定参数源」列，且 mock 派生出的 paramSourceRefs 正常渲染', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     vi.spyOn(paramApi, 'paramPaged').mockResolvedValue({
       total: 1,
       list: [{
         paramId: '913', name: '页码', kind: 'sequence', seq: { start: 1, end: 100, step: 1 },
-        paramSourceRefs: [{ sourceId: 'src-x', sourceName: '测试参数子源' }],
+        paramSourceRefs: [{ sourceId: 'src-x', sourceName: '测试参数源' }],
       } as Param],
     })
     mountTab()
     await waitForLoad()
 
-    expect(wrapper.text()).toContain('绑定参数子源')
-    expect(wrapper.text()).toContain('测试参数子源')
+    expect(wrapper.text()).toContain('绑定参数源')
+    expect(wrapper.text()).toContain('测试参数源')
   })
 
   it('新建参数（onParamSaved）：保存后静默补一次 clearParams（0721 会议 §六-2）', async () => {

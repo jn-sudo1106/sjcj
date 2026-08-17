@@ -9,7 +9,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 afterEach(() => sessionStorage.clear())
 
 describe('SourceTabsBar', () => {
-  it('切回流程视图页签时显式写入 view=flow，避免画布停留在上一子源', async () => {
+  it('切回流程视图页签时显式写入 view=flow，避免画布停留在上一源', async () => {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [{ path: '/canvas', component: { template: '<div />' } }],
@@ -20,11 +20,11 @@ describe('SourceTabsBar', () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     const workspace = useWorkspaceStore()
-    workspace.open('source-a', '子源 A')
-    workspace.open('source-b', '子源 B')
+    workspace.open('source-a', '源 A')
+    workspace.open('source-b', '源 B')
 
     const wrapper = mount(SourceTabsBar, { global: { plugins: [pinia, router] } })
-    await wrapper.get('[title="子源 A · source-a"]').trigger('click')
+    await wrapper.get('[title="源 A · source-a"]').trigger('click')
     await flushPromises()
 
     expect(router.currentRoute.value.query).toEqual({ sourceId: 'source-a', view: 'flow' })

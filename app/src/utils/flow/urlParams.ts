@@ -45,7 +45,7 @@ export const URL_EXPANSION_LIMIT = 1000
 
 /**
  * 按参数取值展开 URL 模板为具体 URL 列表（笛卡尔积）。
- * valuesByParam：参数 id → 候选取值列表（通常来自 paramApi.genValues，也可以是用户为该子源选定的单值 [value]）。
+ * valuesByParam：参数 id → 候选取值列表（通常来自 paramApi.genValues，也可以是用户为该源选定的单值 [value]）。
  * 任一参数缺少取值直接判失败（errors 非空时 urls 为空，调用方应阻断试跑/保存）。
  * 组合数超过 limit 时截断，truncated=true。
  */

@@ -53,7 +53,7 @@ const outputTableFields = computed(() =>
   fieldOptionsFromTableOrOutput(nodeTableId.value, tables.value, cfg.value?.output),
 )
 
-// 任务配置独立于已退役的配置功能；队列未填时按当前子源自动生成。
+// 任务配置独立于已退役的配置功能；队列未填时按当前源自动生成。
 const ownTaskQueue = computed(() => (cfg.value ? nodeTaskQueue(cfg.value) : ''))
 const taskQueueFallback = computed(() => {
   const sc = flow.sourceCfg

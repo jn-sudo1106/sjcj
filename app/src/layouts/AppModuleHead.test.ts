@@ -50,9 +50,9 @@ describe('AppModuleHead 面包屑 / 标题', () => {
     expect(wrapper.find('h1').text()).toBe('源详情')
 
     const flow = useFlowStore()
-    flow.loadFromSource({ sourceId: 's1', name: '子源A', url: 'x', configId: '', mainTable: '', owner: '', state: 'C' } as never, [])
+    flow.loadFromSource({ sourceId: 's1', name: '源A', url: 'x', configId: '', mainTable: '', owner: '', state: 'C' } as never, [])
     await flushPromises()
-    expect(wrapper.find('h1').text()).toBe('子源A') // 只有 sourceCtx 时用它
+    expect(wrapper.find('h1').text()).toBe('源A') // 只有 sourceCtx 时用它
 
     flow.setSiteDisplayCtx({ siteId: 'site1', name: '网站A', category: '', owner: '', sourceCount: 0, errorCount: 0 } as never)
     await flushPromises()

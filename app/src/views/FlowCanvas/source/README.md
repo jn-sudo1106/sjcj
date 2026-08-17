@@ -1,9 +1,9 @@
 # source/
-子源管理：左侧侧栏的子源列表 + 加源弹窗 + 分类选择
+源管理：左侧侧栏的源列表 + 加源弹窗 + 分类选择
 
-- SiteSourceSwitcher.vue: 子源侧栏（含加源弹窗 + 普通/参数子源分支）
-- ParamSourceEditor.vue: 参数子源编辑器（加源/编辑/只读三态复用）
-- EditParamSourceDialog.vue: 编辑参数子源弹窗
+- SiteSourceSwitcher.vue: 源侧栏（含加源弹窗 + 普通/参数源分支）
+- ParamSourceEditor.vue: 参数源编辑器（加源/编辑/只读三态复用）
+- EditParamSourceDialog.vue: 编辑参数源弹窗
 - SourceTabsBar.vue: 源页签栏（index.vue 引用）
 - CategoryTreePicker.vue: 源分类选择（index.vue 引用）
 
