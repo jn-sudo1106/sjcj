@@ -39,6 +39,13 @@ describe('SiteTableSelect', () => {
     expect(options[0].text()).not.toContain('源引用')
   })
 
+  it('无初始选表时默认选择目录中的首张表', async () => {
+    vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result())
+    const wrapper = await mountSelect()
+
+    expect(wrapper.emitted('update:modelValue')).toContainEqual(['t1'])
+  })
+
   it('按表 ID 或表名称本地过滤', async () => {
     vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result())
     const wrapper = await mountSelect()
@@ -55,7 +62,7 @@ describe('SiteTableSelect', () => {
     await wrapper.get('[data-testid="site-table-select-input"]').trigger('focus')
 
     await wrapper.get('[data-testid="site-table-select-option"]').trigger('mousedown')
-    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['t1'])
+    expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual(['t1'])
   })
 
   it('目录加载失败时在下拉区域显示错误', async () => {
@@ -82,15 +89,15 @@ describe('SiteTableSelect', () => {
     await wrapper.setProps({ siteId: 'site-b' })
     await flushPromises()
 
-    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual([''])
+    expect(wrapper.emitted('update:modelValue')).toEqual([[''], ['t1']])
     expect(siteTables).toHaveBeenCalledWith('site-b', expect.objectContaining({ force: false }))
   })
 
-  it('当前选中的表在新结果里不存在时清空选择，不留死选择', async () => {
+  it('当前选中的表不在新目录时自动切换到首张表', async () => {
     vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result({ tables: [{ tableId: 't9', tableName: 'T9' }] }))
     const wrapper = await mountSelect('t1')
 
-    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual([''])
+    expect(wrapper.emitted('update:modelValue')).toEqual([['t9']])
   })
 
   it('点击刷新按钮强制重新加载', async () => {

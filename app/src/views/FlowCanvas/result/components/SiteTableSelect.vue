@@ -22,8 +22,18 @@ const filtered = computed(() => {
 })
 const selected = computed(() => tables.value.find((t) => t.tableId === props.modelValue) ?? null)
 
+function syncSelectedTable(nextTables: SiteTableOption[], selectFirst = false) {
+  const firstTableId = nextTables[0]?.tableId
+  if (!firstTableId) {
+    if (props.modelValue) emit('update:modelValue', '')
+    return
+  }
+  const selectedStillExists = nextTables.some((table) => table.tableId === props.modelValue)
+  if (selectFirst || !selectedStillExists) emit('update:modelValue', firstTableId)
+}
+
 let requestId = 0
-async function load(force = false) {
+async function load(force = false, selectFirst = false) {
   const id = ++requestId
   loading.value = true
   error.value = ''
@@ -37,10 +47,9 @@ async function load(force = false) {
     })
     if (id !== requestId) return
     tables.value = result.tables
-    // 选中的表在新结果里不存在了（切网站/刷新后表集合变化）就清空，不留着一个查不出数据的死选择。
-    if (props.modelValue && !result.tables.some((t) => t.tableId === props.modelValue)) {
-      emit('update:modelValue', '')
-    }
+    // 首次进入网站视图默认选择首张表；切换网站也重新按新目录选择。
+    // 已选表仍在当前目录中时保留它，刷新不会打断用户正在看的表。
+    syncSelectedTable(result.tables, selectFirst)
   } catch (err) {
     if (id !== requestId) return
     error.value = err instanceof Error ? err.message : String(err)
@@ -51,7 +60,7 @@ async function load(force = false) {
 onMounted(() => load())
 watch(() => props.siteId, () => {
   emit('update:modelValue', '')
-  void load()
+  void load(false, true)
 })
 
 function pick(table: SiteTableOption) {
