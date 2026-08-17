@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 网站范围表选择器（0812 计划 M2-2）：供"全部源"状态下选择当前网站的表。
-// 数据来自 siteApi.siteTables（前端按 site/sources + 逐源 queryEntryTypesGroup 聚合，
-// 见方案 §5.3），不是真实的"网站表"后端接口——后端未提供该接口前，也不用第一个源的表冒充。
+// 数据来自 siteApi.siteTables 的可选表目录；网站内是否有数据在选表后通过真实行查询判断。
+// 不再按网站源逐个请求同一份目录，也不展示未经验证的“源引用数”。
 import { computed, onMounted, ref, watch } from 'vue'
 import { siteApi, type SiteTableOption } from '@/api'
 
@@ -11,9 +11,6 @@ const emit = defineEmits<{ 'update:modelValue': [tableId: string] }>()
 const tables = ref<SiteTableOption[]>([])
 const loading = ref(false)
 const error = ref('')
-const overThreshold = ref(false)
-const sourceCount = ref(0)
-const failedSourceIds = ref<string[]>([])
 const keyword = ref('')
 const open = ref(false)
 
@@ -31,8 +28,6 @@ async function load(force = false) {
   loading.value = true
   error.value = ''
   tables.value = []
-  overThreshold.value = false
-  failedSourceIds.value = []
   try {
     const result = await siteApi.siteTables(props.siteId, {
       force,
@@ -42,9 +37,6 @@ async function load(force = false) {
     })
     if (id !== requestId) return
     tables.value = result.tables
-    sourceCount.value = result.sourceCount
-    overThreshold.value = result.overThreshold
-    failedSourceIds.value = result.failedSourceIds
     // 选中的表在新结果里不存在了（切网站/刷新后表集合变化）就清空，不留着一个查不出数据的死选择。
     if (props.modelValue && !result.tables.some((t) => t.tableId === props.modelValue)) {
       emit('update:modelValue', '')
@@ -87,44 +79,35 @@ function onBlur() {
 
 <template>
   <div class="sts-wrap">
-    <div v-if="overThreshold" class="sts-notice" data-testid="site-table-select-over-threshold">
-      该网站源数量较多（{{ sourceCount }} 个），暂不自动聚合表列表，请先选择具体源查看数据。
+    <div class="sts-field">
+      <input
+        v-model="keyword"
+        class="sts-input"
+        data-testid="site-table-select-input"
+        :placeholder="selected ? `${selected.tableName}（${selected.tableId}）` : '选择表（按表 ID 或表名称搜索）'"
+        @focus="onFocus"
+        @mousedown="onMousedown"
+        @blur="onBlur"
+      />
+      <button class="sts-refresh" type="button" title="刷新表列表" :disabled="loading" @click="refresh">↻</button>
     </div>
-    <template v-else>
-      <div class="sts-field">
-        <input
-          v-model="keyword"
-          class="sts-input"
-          data-testid="site-table-select-input"
-          :placeholder="selected ? `${selected.tableName}（${selected.tableId}）` : '选择表（按表 ID 或表名称搜索）'"
-          @focus="onFocus"
-          @mousedown="onMousedown"
-          @blur="onBlur"
-        />
-        <button class="sts-refresh" type="button" title="刷新表列表" :disabled="loading" @click="refresh">↻</button>
-      </div>
-      <div v-if="open" class="sts-options" data-testid="site-table-select-options">
-        <div v-if="loading && !tables.length" class="sts-empty">加载中…</div>
-        <div v-else-if="error" class="sts-empty sts-error">{{ error }}</div>
-        <div v-else-if="!filtered.length" class="sts-empty">{{ keyword ? '没有匹配的表' : '该网站暂无可查询的表' }}</div>
-        <button
-          v-for="table in filtered"
-          :key="table.tableId"
-          type="button"
-          class="sts-option"
-          data-testid="site-table-select-option"
-          :class="{ active: table.tableId === modelValue }"
-          @mousedown.prevent="pick(table)"
-        >
-          <span class="sts-option-name">{{ table.name || table.tableName }}</span>
-          <span class="sts-option-id">{{ table.tableId }}</span>
-          <span class="sts-option-count">{{ table.sourceCount }} 个源引用</span>
-        </button>
-      </div>
-      <div v-if="failedSourceIds.length" class="sts-notice sts-warn" data-testid="site-table-select-partial-fail">
-        {{ failedSourceIds.length }} 个源的表未能加载，列表可能不完整
-      </div>
-    </template>
+    <div v-if="open" class="sts-options" data-testid="site-table-select-options">
+      <div v-if="loading && !tables.length" class="sts-empty">加载中…</div>
+      <div v-else-if="error" class="sts-empty sts-error">{{ error }}</div>
+      <div v-else-if="!filtered.length" class="sts-empty">{{ keyword ? '没有匹配的表' : '该网站暂无可查询的表' }}</div>
+      <button
+        v-for="table in filtered"
+        :key="table.tableId"
+        type="button"
+        class="sts-option"
+        data-testid="site-table-select-option"
+        :class="{ active: table.tableId === modelValue }"
+        @mousedown.prevent="pick(table)"
+      >
+        <span class="sts-option-name">{{ table.name || table.tableName }}</span>
+        <span class="sts-option-id">{{ table.tableId }}</span>
+      </button>
+    </div>
   </div>
 </template>
 
@@ -144,7 +127,4 @@ function onBlur() {
 .sts-option:hover, .sts-option.active { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .sts-option-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .sts-option-id { flex: none; font-family: monospace; font-size: 10px; color: var(--rc-faint); }
-.sts-option-count { flex: none; font-size: 10px; color: var(--rc-faint); }
-.sts-notice { padding: 8px 10px; border: 1px solid var(--rc-border-soft); border-radius: 6px; background: #f8fafc; color: var(--rc-muted); font-size: 12px; }
-.sts-notice.sts-warn { margin-top: 6px; border-color: #fde68a; background: #fffbeb; color: #92400e; }
 </style>

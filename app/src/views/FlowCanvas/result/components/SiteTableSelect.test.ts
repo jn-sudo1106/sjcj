@@ -8,8 +8,8 @@ import type { SiteTablesResult } from '@/api'
 function result(overrides: Partial<SiteTablesResult> = {}): SiteTablesResult {
   return {
     tables: [
-      { tableId: 't1', tableName: 'T1', name: '正文表', sourceCount: 3 },
-      { tableId: 't2', tableName: 'T2', sourceCount: 1 },
+      { tableId: 't1', tableName: 'T1', name: '正文表' },
+      { tableId: 't2', tableName: 'T2' },
     ],
     sourceCount: 3,
     overThreshold: false,
@@ -27,7 +27,7 @@ async function mountSelect(modelValue = '') {
 describe('SiteTableSelect', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('挂载后加载表并展示表名、ID、引用源数', async () => {
+  it('挂载后加载表并展示表名、ID', async () => {
     vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result())
     const wrapper = await mountSelect()
 
@@ -36,7 +36,7 @@ describe('SiteTableSelect', () => {
     expect(options).toHaveLength(2)
     expect(options[0].text()).toContain('正文表')
     expect(options[0].text()).toContain('t1')
-    expect(options[0].text()).toContain('3 个源引用')
+    expect(options[0].text()).not.toContain('源引用')
   })
 
   it('按表 ID 或表名称本地过滤', async () => {
@@ -58,19 +58,19 @@ describe('SiteTableSelect', () => {
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['t1'])
   })
 
-  it('源数量超阈值时显示提示，不渲染选项', async () => {
-    vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result({ tables: [], overThreshold: true, sourceCount: 500 }))
+  it('目录加载失败时在下拉区域显示错误', async () => {
+    vi.spyOn(siteApi, 'siteTables').mockRejectedValue(new Error('目录请求失败'))
     const wrapper = await mountSelect()
 
-    expect(wrapper.find('[data-testid="site-table-select-over-threshold"]').text()).toContain('500')
-    expect(wrapper.find('[data-testid="site-table-select-input"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="site-table-select-input"]').trigger('focus')
+    expect(wrapper.find('.sts-error').text()).toContain('目录请求失败')
   })
 
-  it('部分源加载失败时显示提示但不影响已加载的表', async () => {
-    vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result({ failedSourceIds: ['bad-1', 'bad-2'] }))
+  it('不显示虚假的部分源失败提示', async () => {
+    vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result())
     const wrapper = await mountSelect()
 
-    expect(wrapper.find('[data-testid="site-table-select-partial-fail"]').text()).toContain('2 个源')
+    expect(wrapper.find('[data-testid="site-table-select-partial-fail"]').exists()).toBe(false)
     await wrapper.get('[data-testid="site-table-select-input"]').trigger('focus')
     expect(wrapper.findAll('[data-testid="site-table-select-option"]')).toHaveLength(2)
   })
@@ -87,7 +87,7 @@ describe('SiteTableSelect', () => {
   })
 
   it('当前选中的表在新结果里不存在时清空选择，不留死选择', async () => {
-    vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result({ tables: [{ tableId: 't9', tableName: 'T9', sourceCount: 1 }] }))
+    vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result({ tables: [{ tableId: 't9', tableName: 'T9' }] }))
     const wrapper = await mountSelect('t1')
 
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual([''])

@@ -84,25 +84,22 @@ export interface EntryTypeGroup {
 }
 
 /**
- * 网站范围表选项（0812 计划 M2-1）：旧平台没有"网站下所有表"接口，前端按
- * site/sources + 逐源 config/queryEntryTypesGroup 聚合、去重得到；sourceCount
- * 就是聚合过程中顺带算出的引用源数，不是另外查的。
+ * 网站范围表选项（0812 计划 M2-1）：旧平台返回可选表目录，网站内是否有数据
+ * 在选表后通过真实数据查询判断；不能把表目录重复按源计数。
  */
 export interface SiteTableOption {
   tableId: string
   tableName: string
   name?: string
-  /** 当前网站下引用了这张表的源数量 */
-  sourceCount: number
 }
 
 export interface SiteTablesResult {
   tables: SiteTableOption[]
-  /** 网站下的源总数（聚合的分母，用于阈值判断和"部分源失败"提示） */
+  /** 保留兼容字段；表目录不再按源聚合，固定为 0。 */
   sourceCount: number
-  /** 源数量超过阈值时不聚合，只返回这个标记；调用方应改为要求用户先选源 */
+  /** 保留兼容字段；表目录不再按源聚合，固定为 false。 */
   overThreshold: boolean
-  /** 查询表失败的源 ID，用于"部分源未能加载"提示，不代表整体失败 */
+  /** 保留兼容字段；表目录请求不再逐源发起，固定为空。 */
   failedSourceIds: string[]
 }
 

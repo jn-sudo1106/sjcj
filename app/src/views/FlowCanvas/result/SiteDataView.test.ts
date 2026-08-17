@@ -127,6 +127,20 @@ describe('SiteDataView · 全部源（表筛选）', () => {
     expect(wrapper.text()).toContain('已加载 1 条')
   })
 
+  it('distinctSource 返回空集合时也退回网站全部源，继续真实查询', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue([])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const rowQueryPaged = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [row('a', '1')] })
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+
+    expect(rowQueryPaged).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'a' }))
+    expect(wrapper.text()).toContain('已加载 1 条')
+    expect(wrapper.text()).not.toContain('没有可查询的源')
+  })
+
   it('查询条件原样透传给每个源', async () => {
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
     vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['a'])

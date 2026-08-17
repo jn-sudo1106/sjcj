@@ -251,7 +251,11 @@ async function resetAndLoad() {
       }
       if (id !== requestId) return
       const siteSourceIds = new Set(siteChildren.value.map((s) => s.sourceId))
-      candidateSourceIds = distinctIds ? distinctIds.filter((sid) => siteSourceIds.has(sid)) : [...siteSourceIds]
+      const scopedDistinctIds = distinctIds?.filter((sid) => siteSourceIds.has(sid)) ?? []
+      // entryDistinctSource 只是优化候选源的接口，不是“没有数据”的最终判定。
+      // 旧接口可能因分页、数据口径或表级记录异常返回空集合；空集合时回退到网站全部源，
+      // 让 entryDataPaged 进行真实查询，避免把 TB_CNEWS 这类有效表提前判成不可查。
+      candidateSourceIds = scopedDistinctIds.length ? scopedDistinctIds : [...siteSourceIds]
     }
     mergeStates = initMergeState(candidateSourceIds)
     if (!candidateSourceIds.length) {
