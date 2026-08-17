@@ -44,6 +44,8 @@ describe('FileView', () => {
     expect(wrapper.text()).toContain('状态（不限）')
     expect(wrapper.text()).toContain('MD5')
     expect(wrapper.find('[data-testid="file-process-rail"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="file-resource-table"]').text()).toContain('数据源：news-文件资源表')
+    expect(wrapper.text()).not.toContain('文件记录关联字段待接口确认后再启用节点筛选')
     expect(tables).toHaveBeenCalled()
     expect(meta).toHaveBeenCalledWith('file-resource')
     expect(wrapper.find('input[type="date"]').exists()).toBe(false)

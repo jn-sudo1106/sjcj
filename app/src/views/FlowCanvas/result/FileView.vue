@@ -161,13 +161,12 @@ watch(() => [filters.fileName, filters.ext, filters.state] as const, () => {
         <div class="fv-process-rail" data-testid="file-process-rail">
           <ProcessNodeRail v-model="selectedNodeId" :layout="processLayout" />
         </div>
-        <div class="fv-node-note">流程节点仅作当前源的流程上下文展示；文件记录关联字段待接口确认后再启用节点筛选。</div>
-        <div class="fv-toolbar-note">
-          <span v-if="tableLoading">正在定位 file_resource 文件资源表…</span>
-          <span v-else-if="error" class="fv-error">{{ error }}</span>
-          <span v-else>数据源：{{ table?.name || table?.tableName || 'file_resource' }}</span>
-        </div>
         <div class="fv-filters">
+          <span class="fv-toolbar-note" data-testid="file-resource-table">
+            <span v-if="tableLoading">正在定位 file_resource 文件资源表…</span>
+            <span v-else-if="error" class="fv-error">{{ error }}</span>
+            <span v-else>数据源：{{ table?.name || table?.tableName || 'file_resource' }}</span>
+          </span>
           <input v-model="filters.fileName" class="fv-input" placeholder="文件名或展示名" aria-label="文件名">
           <input v-model="filters.ext" class="fv-input" placeholder="类型，如 pdf、html" aria-label="文件类型">
           <select v-model="filters.state" class="fv-input" aria-label="状态">
@@ -226,8 +225,7 @@ watch(() => [filters.fileName, filters.ext, filters.state] as const, () => {
   border: 1px solid var(--rc-border-soft, #e2e8f0);
   border-radius: 10px;
 }
-.fv-node-note { margin: 0 0 12px; color: var(--rc-muted); font-size: 12px; }
-.fv-toolbar-note { margin-bottom: 12px; color: var(--rc-muted); font-size: 12px; }
+.fv-toolbar-note { color: var(--rc-muted); font-size: 12px; white-space: nowrap; }
 .fv-error { color: var(--rc-error); }
 
 @keyframes fadeIn {
