@@ -22,6 +22,7 @@ const routes: RouteRecordRaw[] = [
       { path: '/rules', component: () => import('../views/RuleAssets/index.vue') },
       { path: '/metrics', component: () => import('../views/MetricCenter/index.vue') },
       { path: '/data', component: () => import('../views/DataView/index.vue') },
+      { path: '/files', component: () => import('../views/FileCenter/index.vue') },
       { path: '/runs', component: () => import('../views/RunRecords/index.vue') },
       { path: '/monitor', component: () => import('../views/Monitor/index.vue') },
       // 兼容旧导航路径；监控中心的正式入口统一为 /monitor。

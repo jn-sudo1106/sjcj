@@ -8,12 +8,12 @@ import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
 import { initMergeState, mergeLoadMore, type MergeSourceState, type MergeLoadMoreResult } from './siteDataMerge'
 
-const props = defineProps<{ siteId: string }>()
+const props = defineProps<{ siteId: string; initialSourceId?: string }>()
 
 const PAGE_SIZE = 20
 const MAX_PARALLEL_REQUESTS = 4
 
-const selectedSourceId = ref('')
+const selectedSourceId = ref(props.initialSourceId ?? '')
 const siteSources = ref<Source[]>([])
 const sourceNames = computed<Record<string, string>>(() => Object.fromEntries(siteSources.value.map((source) => [source.sourceId, source.name])))
 const table = ref<{ tableId: string; tableName: string; name?: string } | null>(null)
@@ -169,8 +169,8 @@ function openDetail(file: FileResourceRecord) {
   detail.visible = true
 }
 
-watch(() => props.siteId, () => {
-  selectedSourceId.value = ''
+watch(() => [props.siteId, props.initialSourceId] as const, () => {
+  selectedSourceId.value = props.initialSourceId ?? ''
   void loadResourceTable()
 }, { immediate: true })
 watch(selectedSourceId, () => {
