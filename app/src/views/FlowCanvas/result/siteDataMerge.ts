@@ -23,10 +23,12 @@ export interface MergeSourceState<T extends MergeRow = DataRow> {
   exhausted: boolean
   /** 最近一次尝试补页失败；不等于 exhausted，下次 load more 会重新给机会 */
   failed: boolean
+  /** 最近一次失败原因，供调用方展示可定位的部分失败提示。 */
+  error: string
 }
 
 export function initMergeState<T extends MergeRow = DataRow>(sourceIds: string[]): MergeSourceState<T>[] {
-  return sourceIds.map((sourceId) => ({ sourceId, buffer: [], nextPage: 1, exhausted: false, failed: false }))
+  return sourceIds.map((sourceId) => ({ sourceId, buffer: [], nextPage: 1, exhausted: false, failed: false, error: '' }))
 }
 
 function mergeKey<T extends MergeRow>(row: T): number {
@@ -54,8 +56,9 @@ async function refill<T extends MergeRow>(states: MergeSourceState<T>[], size: n
         s.buffer = rows
         s.nextPage += 1
         s.exhausted = rows.length < size
-      } catch {
+      } catch (error) {
         s.failed = true
+        s.error = error instanceof Error ? error.message : String(error)
       }
     }
   }))
@@ -76,6 +79,8 @@ export interface MergeLoadMoreResult<T extends MergeRow = DataRow> {
   states: MergeSourceState<T>[]
   /** 本次调用中发生过查询失败的源 ID；不代表整体失败，部分结果仍然有效 */
   failedSourceIds: string[]
+  /** 失败源及其本次请求错误；保留 failedSourceIds 兼容既有数据视图。 */
+  failedSources: { sourceId: string; error: string }[]
   /** 所有源都已真正取完（不含失败），不会再有更多数据 */
   allExhausted: boolean
 }
@@ -91,7 +96,7 @@ export async function mergeLoadMore<T extends MergeRow>(
   fetchPage: FetchPage<T>,
   maxParallel = Number.POSITIVE_INFINITY,
 ): Promise<MergeLoadMoreResult<T>> {
-  states.forEach((s) => { s.failed = false })
+  states.forEach((s) => { s.failed = false; s.error = '' })
   const rows: T[] = []
   const failedSourceIds = new Set<string>()
   while (rows.length < count) {
@@ -101,5 +106,6 @@ export async function mergeLoadMore<T extends MergeRow>(
     if (!picked) break
     rows.push(picked)
   }
-  return { rows, states, failedSourceIds: [...failedSourceIds], allExhausted: states.every((s) => s.exhausted) }
+  const failedSources = states.filter((s) => s.failed).map((s) => ({ sourceId: s.sourceId, error: s.error || '请求失败' }))
+  return { rows, states, failedSourceIds: [...failedSourceIds], failedSources, allExhausted: states.every((s) => s.exhausted) }
 }

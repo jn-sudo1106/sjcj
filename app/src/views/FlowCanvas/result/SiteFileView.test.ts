@@ -42,4 +42,23 @@ describe('SiteFileView', () => {
     expect(wrapper.find('a[target="_blank"]').attributes('href')).toBe('https://files.example.com/two.html')
     expect(wrapper.text()).toContain('已加载全部文件')
   })
+
+  it('明确展示失败源和接口错误，避免只有计数无法定位', async () => {
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1', '源一'), source('s2', '源二')])
+    vi.spyOn(fileApi, 'resourceRows').mockImplementation(async (query) => {
+      if (query.sourceId === 's1') throw new Error('请求失败 500')
+      return { total: 1, list: [file('s2', '30', 'two.html')] }
+    })
+
+    const wrapper = shallowMount(SiteFileView, {
+      props: { siteId: 'site-a' },
+      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="site-file-partial-fail"]').text()).toContain('源一（s1）：请求失败 500')
+    expect(wrapper.text()).toContain('two.html')
+  })
 })

@@ -5,7 +5,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fileApi, siteApi, type FileResourceRecord, type Source } from '@/api'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
-import { initMergeState, mergeLoadMore, type MergeSourceState } from './siteDataMerge'
+import { initMergeState, mergeLoadMore, type MergeSourceState, type MergeLoadMoreResult } from './siteDataMerge'
 
 const props = defineProps<{ siteId: string }>()
 
@@ -22,7 +22,7 @@ const tableLoading = ref(false)
 const loading = ref(false)
 const loadingMore = ref(false)
 const error = ref('')
-const failedSourceIds = ref<string[]>([])
+const failedSources = ref<MergeLoadMoreResult<FileResourceRecord>['failedSources']>([])
 const allExhausted = ref(false)
 const noCandidateSources = ref(false)
 
@@ -83,7 +83,7 @@ async function loadMore(requestId = queryRequest) {
     const result = await mergeLoadMore(mergeStates, PAGE_SIZE, PAGE_SIZE, fetchPage, MAX_PARALLEL_REQUESTS)
     if (requestId !== queryRequest) return
     rows.value = [...rows.value, ...result.rows]
-    failedSourceIds.value = result.failedSourceIds
+    failedSources.value = result.failedSources
     allExhausted.value = result.allExhausted
   } catch {
     if (requestId !== queryRequest) return
@@ -96,7 +96,7 @@ async function loadMore(requestId = queryRequest) {
 async function resetAndLoad() {
   const requestId = ++queryRequest
   rows.value = []
-  failedSourceIds.value = []
+  failedSources.value = []
   allExhausted.value = false
   noCandidateSources.value = false
   mergeStates = []
@@ -157,6 +157,11 @@ function safeExternalUrl(value: unknown): string {
     return ''
   }
 }
+function failedSourceText({ sourceId, error }: MergeLoadMoreResult<FileResourceRecord>['failedSources'][number]): string {
+  const name = sourceNames.value[sourceId] || sourceId
+  const reason = error.replaceAll(/\s+/g, ' ').slice(0, 120)
+  return `${name}（${sourceId}）：${reason}`
+}
 
 watch(() => props.siteId, () => {
   selectedSourceId.value = ''
@@ -184,8 +189,8 @@ watch(selectedSourceId, () => {
     <div v-else-if="error" class="sfv-empty">{{ error }}</div>
     <div v-else-if="noCandidateSources" class="sfv-empty">当前网站没有可查询的源</div>
     <template v-else>
-      <div v-if="failedSourceIds.length" class="sfv-notice" data-testid="site-file-partial-fail">
-        {{ failedSourceIds.length }} 个源本次查询失败，结果可能不完整
+      <div v-if="failedSources.length" class="sfv-notice" data-testid="site-file-partial-fail">
+        {{ failedSources.length }} 个源本次查询失败，结果可能不完整：{{ failedSources.map(failedSourceText).join('；') }}
       </div>
       <div class="sfv-tablehead">
         <span class="sfv-tablename">{{ table?.name || table?.tableName || 'file_resource' }}</span>
