@@ -60,6 +60,29 @@ describe('SiteFileView', () => {
     expect(wrapper.text()).toContain('task-2.html')
   })
 
+  it('直分页提供统一的每页条数和跳转控件', async () => {
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    const rows = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 61, list: [file('orphan-source', '1', 'task.html')] })
+
+    const wrapper = shallowMount(SiteFileView, {
+      props: { siteId: undefined },
+      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('select[aria-label="每页条数"]').findAll('option')).toHaveLength(3)
+    await wrapper.get('input[aria-label="跳转页码"]').setValue(3)
+    await wrapper.get('[data-testid="site-file-jump"]').trigger('click')
+    await flushPromises()
+    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ page: 3, size: 20 }))
+
+    await wrapper.get('select[aria-label="每页条数"]').setValue('50')
+    await flushPromises()
+    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, size: 50 }))
+    expect(wrapper.text()).toContain('第 1 / 2 页')
+  })
+
   it('网站内已选择具体源时也走单源准确分页，不按全部源归并', async () => {
     vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
     vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)

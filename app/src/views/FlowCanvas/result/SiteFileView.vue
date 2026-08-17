@@ -12,7 +12,7 @@ import { initMergeState, mergeLoadMore, type MergeSourceState, type MergeLoadMor
 const props = defineProps<{ siteId?: string; initialSourceId?: string }>()
 const slots = useSlots()
 
-const PAGE_SIZE = 20
+const PAGE_SIZE_OPTIONS = [20, 50, 100]
 const MAX_PARALLEL_REQUESTS = 4
 
 const selectedSourceId = ref(props.initialSourceId ?? '')
@@ -22,6 +22,8 @@ const table = ref<{ tableId: string; tableName: string; name?: string } | null>(
 const rows = ref<FileResourceRecord[]>([])
 const filters = reactive({ fileName: '', ext: '', state: '' })
 const page = ref(1)
+const size = ref(PAGE_SIZE_OPTIONS[0])
+const jumpPage = ref(1)
 const total = ref(0)
 const tableLoading = ref(false)
 const loading = ref(false)
@@ -34,7 +36,7 @@ const detail = reactive<{ visible: boolean; file: FileResourceRecord | null }>({
 // 全部网站或已收窄到单个源时，entryDataPaged 能返回准确 total，直接用常规分页；只有
 // 网站“全部源”需要前端跨源归并，才只能提供加载更多。
 const usesDirectPaging = computed(() => !props.siteId || !!selectedSourceId.value)
-const maxPage = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
+const maxPage = computed(() => Math.max(1, Math.ceil(total.value / size.value)))
 
 let mergeStates: MergeSourceState<FileResourceRecord>[] = []
 let candidateSourceIds: string[] = []
@@ -91,7 +93,7 @@ async function loadMore(requestId = queryRequest) {
   if (!candidateSourceIds.length || allExhausted.value) return
   loadingMore.value = true
   try {
-    const result = await mergeLoadMore(mergeStates, PAGE_SIZE, PAGE_SIZE, fetchPage, MAX_PARALLEL_REQUESTS)
+    const result = await mergeLoadMore(mergeStates, PAGE_SIZE_OPTIONS[0], PAGE_SIZE_OPTIONS[0], fetchPage, MAX_PARALLEL_REQUESTS)
     if (requestId !== queryRequest) return
     rows.value = [...rows.value, ...result.rows]
     failedSources.value = result.failedSources
@@ -107,6 +109,7 @@ async function loadMore(requestId = queryRequest) {
 async function resetAndLoad(resetPage = true) {
   const requestId = ++queryRequest
   if (resetPage) page.value = 1
+  jumpPage.value = page.value
   rows.value = []
   total.value = 0
   failedSources.value = []
@@ -142,7 +145,7 @@ async function resetAndLoad(resetPage = true) {
         fileName: filters.fileName || undefined,
         ext: filters.ext || undefined,
         page: page.value,
-        size: PAGE_SIZE,
+        size: size.value,
       })
       if (requestId !== queryRequest) return
       rows.value = result.list
@@ -205,11 +208,25 @@ function openDetail(file: FileResourceRecord) {
 function previousPage() {
   if (!usesDirectPaging.value || page.value <= 1) return
   page.value -= 1
+  jumpPage.value = page.value
   void resetAndLoad(false)
 }
 function nextPage() {
   if (!usesDirectPaging.value || page.value >= maxPage.value) return
   page.value += 1
+  jumpPage.value = page.value
+  void resetAndLoad(false)
+}
+function changePageSize() {
+  if (!usesDirectPaging.value) return
+  page.value = 1
+  void resetAndLoad()
+}
+function goToPage() {
+  if (!usesDirectPaging.value) return
+  const target = Math.min(maxPage.value, Math.max(1, Number(jumpPage.value) || 1))
+  page.value = target
+  jumpPage.value = target
   void resetAndLoad(false)
 }
 
@@ -275,9 +292,17 @@ watch(selectedSourceId, () => {
       </div>
       <div class="sfv-foot">
         <template v-if="usesDirectPaging">
+          <label class="muted">每页
+            <select v-model.number="size" class="sfv-page-size" aria-label="每页条数" @change="changePageSize">
+              <option v-for="option in PAGE_SIZE_OPTIONS" :key="option" :value="option">{{ option }}</option>
+            </select>
+            条
+          </label>
           <button class="rc-btn" type="button" data-testid="site-file-prev" :disabled="page <= 1 || loading" @click="previousPage">上一页</button>
           <span class="muted">第 {{ page }} / {{ maxPage }} 页</span>
           <button class="rc-btn" type="button" data-testid="site-file-next" :disabled="page >= maxPage || loading" @click="nextPage">下一页</button>
+          <input v-model.number="jumpPage" class="sfv-page-jump" type="number" min="1" :max="maxPage" aria-label="跳转页码" @keyup.enter="goToPage">
+          <button class="rc-btn" type="button" data-testid="site-file-jump" @click="goToPage">跳转</button>
         </template>
         <span v-else-if="allExhausted" class="muted">已加载全部文件</span>
         <button v-else class="rc-btn" type="button" data-testid="site-file-load-more" :disabled="loadingMore" @click="loadMore()">{{ loadingMore ? '加载中…' : '加载更多' }}</button>
@@ -292,7 +317,7 @@ watch(selectedSourceId, () => {
 .sfv-toolbar { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); }
 .sfv-input { height: 28px; min-width: 112px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; outline: none; }
 .sfv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
-.sfv-toolbar .rc-btn, .sfv-foot .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }
+.sfv-toolbar .rc-btn, .sfv-foot .rc-btn { height: 28px; padding: 0 10px; font-size: 12px; }
 .sfv-scope { display: inline-flex; align-items: center; min-width: 220px; height: 28px; padding: 0 9px; border: 1px solid var(--rc-border); border-radius: 6px; background: #f8fafc; color: var(--rc-text-2); font-size: 12px; }
 .sfv-toolbar :deep(.sss-wrap) { min-width: 170px; width: 170px; }
 .sfv-toolbar :deep(.sss-input) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -312,7 +337,10 @@ watch(selectedSourceId, () => {
 .sfv-link:hover { text-decoration: underline; }
 .soft { color: var(--rc-faint); }
 .sfv-empty-row { padding: 40px 12px !important; color: var(--rc-faint) !important; text-align: center; }
-.sfv-foot { display: flex; justify-content: center; padding: 10px 12px; border-top: 1px solid var(--rc-border-soft); }
+.sfv-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--rc-border-soft); }
+.sfv-page-size, .sfv-page-jump { height: 28px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; }
+.sfv-page-size { width: 54px; margin: 0 4px; }
+.sfv-page-jump { width: 54px; padding: 0 6px; }
 @media (max-width: 900px) {
   .sfv-toolbar { flex-wrap: wrap; overflow-x: visible; }
   .sfv-toolbar :deep(.sss-wrap) { min-width: 220px; width: auto; }
