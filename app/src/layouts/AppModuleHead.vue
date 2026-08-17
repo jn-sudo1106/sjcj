@@ -35,7 +35,7 @@ const PRIMARY_ACTIONS: Record<string, string> = {
   rules: '发布校验',
   metrics: '口径校验',
   runs: '导出记录',
-  tools: '导出报表',
+  monitor: '导出报表',
 }
 
 const pageActions: Record<string, string[]> = {
@@ -48,7 +48,7 @@ const pageActions: Record<string, string[]> = {
   // 数据表页动作全部收在页内工具条（检索/工具条/批量条），顶栏不重复放
   data: [],
   runs: ['导出记录'],
-  tools: ['刷新', '导出报表'],
+  monitor: ['刷新', '导出报表'],
 }
 
 // 页面动作按真实路由段取，而不是侧栏高亮键

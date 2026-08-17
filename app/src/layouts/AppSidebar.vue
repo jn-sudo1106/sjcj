@@ -16,8 +16,9 @@ const groupLabels = {
   home: '首页',
   workbench: '编排工作台',
   assets: '资产管理',
-  ops: '运行与验收',
-  tools: '运维工具',
+  ops: '数据与运行',
+  tools: '运维监控',
+  intelligence: '智能能力',
 } as const
 
 const navGroups = computed(() =>
@@ -37,7 +38,7 @@ const navIcons: Record<string, Component> = {
   metrics: Histogram,
   data: DataAnalysis,
   runs: Clock,
-  tools: Monitor,
+  monitor: Monitor,
 }
 </script>
 

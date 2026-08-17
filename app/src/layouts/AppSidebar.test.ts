@@ -26,11 +26,13 @@ async function mountAt(path: string) {
 }
 
 describe('AppSidebar', () => {
-  it('按 TABS 的 group 分组渲染导航（home/assets/ops/tools 等分组标题）', async () => {
+  it('按 TABS 的 group 分组渲染导航（首页/资产管理/数据与运行/运维监控）', async () => {
     const { wrapper } = await mountAt('/overview')
     const groupTitles = wrapper.findAll('.rc-nav-title').map((n) => n.text())
     expect(groupTitles).toContain('首页')
     expect(groupTitles).toContain('资产管理')
+    expect(groupTitles).toContain('数据与运行')
+    expect(groupTitles).toContain('运维监控')
   })
 
   it('每个分组只渲染属于该 group 的 tab，不会出现空分组', async () => {
@@ -64,5 +66,12 @@ describe('AppSidebar', () => {
     await rulesItem.trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.path).toBe('/rules')
+  })
+
+  it('监控中心是正式入口，旧监控路径不再出现在侧栏', async () => {
+    const { wrapper } = await mountAt('/monitor')
+    const monitor = wrapper.findAll('.rc-nav-item').find((item) => item.text().includes('监控中心'))
+    expect(monitor?.classes('active')).toBe(true)
+    expect(wrapper.text()).not.toContain('监控工具')
   })
 })

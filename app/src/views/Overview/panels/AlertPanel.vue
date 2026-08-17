@@ -60,7 +60,7 @@ function onAlert(level: string) {
   if (level === 'external') return goCollect('external')
   if (level === 'disabled') return goCollect('disabled')
   if (level === 'running') return router.push({ path: '/runs', query: { state: 'L' } })
-  return router.push('/tools')
+  return router.push('/monitor')
 }
 </script>
 

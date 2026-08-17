@@ -20,4 +20,12 @@ describe('Phase 3.1 画布入口退役', () => {
     expect(beforeEnter({ query: { sourceId: '391007768' } })).toBe(true)
     expect(beforeEnter({ query: { mode: 'new' } })).toBe(true)
   })
+
+  it('旧 /tools 路径兼容跳转到 /monitor，并保留查询条件', () => {
+    const shell = router.options.routes.find((r) => r.path === '/')
+    const monitorAlias = shell?.children?.find((r) => r.path === '/tools')
+    expect(monitorAlias?.redirect).toBeTypeOf('function')
+    const redirect = monitorAlias?.redirect as (to: { query: Record<string, unknown> }) => unknown
+    expect(redirect({ query: { state: 'E' } })).toEqual({ path: '/monitor', query: { state: 'E' } })
+  })
 })
