@@ -36,6 +36,17 @@ function isErr(s: Source): boolean {
   return !s.disabled && s.state === 'E'
 }
 
+function siteDataCount(site: Site): number | undefined {
+  const children = childrenCache[site.siteId]
+  if (children) return children.reduce((total, source) => total + (source.dataCount ?? 0), 0)
+  return site.dataCount
+}
+
+function formatSiteDataCount(site: Site): string {
+  const count = siteDataCount(site)
+  return count == null ? '数据 —' : `数据 ${count.toLocaleString()} 条`
+}
+
 const overflowKw = reactive<Record<string, string>>({})
 
 function filteredChildren(siteId: string) {
@@ -127,7 +138,7 @@ function pickOverflow(s: Source) {
         <span class="scg-foot-count">{{ site.sourceCount }} 个源</span>
         <span class="scg-foot-sep" />
         <button class="scg-foot-link" type="button" title="查看该网站数据视图" @click.stop="openSiteData(site)">
-          数据 {{ (site.dataCount ?? 0).toLocaleString() }} 条
+          {{ formatSiteDataCount(site) }}
         </button>
         <span class="scg-foot-sep" />
         <span v-if="site.updatedAt" class="scg-foot-date" :title="`编辑于 ${site.updatedAt}`">编辑于 {{ site.updatedAt.slice(0, 10) }}</span>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Edit, Operation } from '@element-plus/icons-vue'
 import { siteApi, sourceApi, type Source, type Site } from '@/api'
@@ -33,7 +33,7 @@ const selectedIds = computed({
   set: (v) => emit('update:selectedIds', v),
 })
 
-// 表格：展开 / 懒加载源
+// 表格：同页预取源列表，用于站级数据量汇总；展开/收起只控制子源展示。
 async function ensureChildren(siteId: string) {
   if (childrenCache[siteId] || childrenLoading[siteId]) return
   childrenLoading[siteId] = true
@@ -43,6 +43,11 @@ async function ensureChildren(siteId: string) {
     childrenLoading[siteId] = false
   }
 }
+
+watch(() => props.sites.map((site) => site.siteId).join(','), () => {
+  props.sites.forEach((site) => { void ensureChildren(site.siteId) })
+}, { immediate: true })
+
 async function toggleExpand(siteId: string) {
   const next = new Set(expanded.value)
   if (next.has(siteId)) next.delete(siteId)
@@ -130,6 +135,17 @@ function openSiteCanvas(site: Site, view?: 'data') {
 }
 function openSiteData(site: Site) {
   router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data' } })
+}
+
+function siteDataCount(site: Site): number | undefined {
+  const children = childrenCache[site.siteId]
+  if (children) return children.reduce((total, source) => total + (source.dataCount ?? 0), 0)
+  return site.dataCount
+}
+
+function formatDataCount(site: Site): string {
+  const count = siteDataCount(site)
+  return count == null ? '—' : `${count.toLocaleString()} 条`
 }
 
 // 源行内操作
@@ -233,7 +249,7 @@ defineExpose({
               </td>
               <td>
                 <button class="ca-count-link" type="button" title="查看该网站全部源数据" @click="openSiteData(site)">
-                  {{ (site.dataCount ?? 0).toLocaleString() }} 条
+                  {{ formatDataCount(site) }}
                 </button>
               </td>
               <td><div class="ca-cell-main">{{ site.owner }}</div></td>

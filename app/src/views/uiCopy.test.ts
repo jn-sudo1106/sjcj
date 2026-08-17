@@ -103,7 +103,7 @@ describe('最新方案 UI 入口收口', () => {
     expect(tableView).toContain('function openSiteData(site: Site)')
     expect(tableView).toContain("router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data' } })")
     expect(tableView).toContain('<button class="ca-count-link" type="button" title="查看该网站全部源数据" @click="openSiteData(site)">')
-    expect(tableView).toContain('{{ (site.dataCount ?? 0).toLocaleString() }} 条')
+    expect(tableView).toContain('{{ formatDataCount(site) }}')
   })
 
   it('采集资产卡片的源直达流程画布，卡片底部不再提供任务入口', () => {
