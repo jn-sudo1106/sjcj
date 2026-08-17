@@ -81,6 +81,22 @@ describe('siteDataMerge：多源 top-K 归并', () => {
     expect(badCallCount).toBe(1)
   })
 
+  it('可限制同一轮归并的并发源请求数', async () => {
+    let active = 0
+    let peak = 0
+    const fetchPage: FetchPage = async (sourceId) => {
+      active += 1
+      peak = Math.max(peak, active)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      active -= 1
+      return [row(sourceId, Number(sourceId.slice(1)))]
+    }
+
+    await mergeLoadMore(initMergeState(['s1', 's2', 's3', 's4']), 4, 1, fetchPage, 2)
+
+    expect(peak).toBe(2)
+  })
+
   it('失败源在下一次 load more 时会重新获得尝试机会', async () => {
     let attempt = 0
     const fetchPage: FetchPage = async (sourceId) => {

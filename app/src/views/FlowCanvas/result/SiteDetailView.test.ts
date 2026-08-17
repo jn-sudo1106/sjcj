@@ -57,6 +57,19 @@ describe('SiteDetailView', () => {
     expect(wrapper.find('site-data-view-stub').exists()).toBe(true)
   })
 
+  it('网站文件页不再展示开发中占位，改为网站范围文件列表', async () => {
+    setActivePinia(createPinia())
+    await router.push({ path: '/canvas', query: { siteId: 'site-zfb', view: 'file' } })
+    const wrapper = shallowMount(SiteDetailView, {
+      props: { siteId: 'site-zfb' },
+      global: { plugins: [router], stubs: { SourceOverviewView: true, SiteDataView: true, SiteFileView: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('site-file-view-stub').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="site-file-placeholder"]').exists()).toBe(false)
+  })
+
   // 0812 计划 M1-4：网站态不再加载"代表源"，不写 flow.sourceCtx——网站下可能有多张表、
   // 多个流程，拿第一个源的节点/表结构冒充整个网站会得到错误结果。
   it('不加载代表源，flow.sourceCtx 在网站态保持清空', async () => {

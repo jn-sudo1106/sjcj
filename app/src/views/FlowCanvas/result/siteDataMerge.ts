@@ -9,10 +9,14 @@
 // 保证归并算法本身是自洽、正确的，不管后端排序参数最终生效与否。
 import type { DataRow } from '@/api'
 
-export interface MergeSourceState {
+export interface MergeRow {
+  dataId: string
+}
+
+export interface MergeSourceState<T extends MergeRow = DataRow> {
   sourceId: string
   /** 已取到但还没展示的行，按归并键降序排列，弹出取 [0] */
-  buffer: DataRow[]
+  buffer: T[]
   /** 下一次要取的页码（从 1 开始） */
   nextPage: number
   /** 该源的数据已经取完（最近一页返回条数 < size） */
@@ -21,40 +25,45 @@ export interface MergeSourceState {
   failed: boolean
 }
 
-export function initMergeState(sourceIds: string[]): MergeSourceState[] {
+export function initMergeState<T extends MergeRow = DataRow>(sourceIds: string[]): MergeSourceState<T>[] {
   return sourceIds.map((sourceId) => ({ sourceId, buffer: [], nextPage: 1, exhausted: false, failed: false }))
 }
 
-function mergeKey(row: DataRow): number {
+function mergeKey<T extends MergeRow>(row: T): number {
   const n = Number(row.dataId)
   return Number.isFinite(n) ? n : 0
 }
 
-function sortDesc(rows: DataRow[]): DataRow[] {
+function sortDesc<T extends MergeRow>(rows: T[]): T[] {
   return [...rows].sort((a, b) => mergeKey(b) - mergeKey(a))
 }
 
-export type FetchPage = (sourceId: string, page: number, size: number) => Promise<DataRow[]>
+export type FetchPage<T extends MergeRow = DataRow> = (sourceId: string, page: number, size: number) => Promise<T[]>
 
-async function refill(states: MergeSourceState[], size: number, fetchPage: FetchPage): Promise<void> {
+async function refill<T extends MergeRow>(states: MergeSourceState<T>[], size: number, fetchPage: FetchPage<T>, maxParallel: number): Promise<void> {
   // 已经标记 failed 的源本轮不重试，避免一个持续报错的源在同一次 load more 里被反复打；
   // failed 会在下一次 mergeLoadMore 调用开头统一重置，下次点"加载更多"会再给一次机会。
   const needRefill = states.filter((s) => !s.exhausted && !s.failed && s.buffer.length === 0)
-  await Promise.all(needRefill.map(async (s) => {
-    try {
-      const rows = sortDesc(await fetchPage(s.sourceId, s.nextPage, size))
-      s.buffer = rows
-      s.nextPage += 1
-      s.exhausted = rows.length < size
-    } catch {
-      s.failed = true
+  let next = 0
+  const workers = Math.min(needRefill.length, Number.isFinite(maxParallel) ? Math.max(1, Math.floor(maxParallel)) : needRefill.length)
+  await Promise.all(Array.from({ length: workers }, async () => {
+    while (next < needRefill.length) {
+      const s = needRefill[next++]
+      try {
+        const rows = sortDesc(await fetchPage(s.sourceId, s.nextPage, size))
+        s.buffer = rows
+        s.nextPage += 1
+        s.exhausted = rows.length < size
+      } catch {
+        s.failed = true
+      }
     }
   }))
 }
 
 /** 弹出当前所有源 buffer 里归并键最大的一条；调用前必须先 refill，否则会漏掉刚好 buffer 空的源。 */
-function popMax(states: MergeSourceState[]): DataRow | null {
-  let best: MergeSourceState | null = null
+function popMax<T extends MergeRow>(states: MergeSourceState<T>[]): T | null {
+  let best: MergeSourceState<T> | null = null
   for (const s of states) {
     if (!s.buffer.length) continue
     if (!best || mergeKey(s.buffer[0]) > mergeKey(best.buffer[0])) best = s
@@ -62,9 +71,9 @@ function popMax(states: MergeSourceState[]): DataRow | null {
   return best ? (best.buffer.shift() ?? null) : null
 }
 
-export interface MergeLoadMoreResult {
-  rows: DataRow[]
-  states: MergeSourceState[]
+export interface MergeLoadMoreResult<T extends MergeRow = DataRow> {
+  rows: T[]
+  states: MergeSourceState<T>[]
   /** 本次调用中发生过查询失败的源 ID；不代表整体失败，部分结果仍然有效 */
   failedSourceIds: string[]
   /** 所有源都已真正取完（不含失败），不会再有更多数据 */
@@ -75,17 +84,18 @@ export interface MergeLoadMoreResult {
  * 归并加载：在已有 states（含之前调用剩下的 buffer）基础上，继续往下取最多 count 条。
  * 每弹出一条前都先补齐空 buffer 的源，保证每一步弹出的确实是"当前已知全局最大"。
  */
-export async function mergeLoadMore(
-  states: MergeSourceState[],
+export async function mergeLoadMore<T extends MergeRow>(
+  states: MergeSourceState<T>[],
   count: number,
   size: number,
-  fetchPage: FetchPage,
-): Promise<MergeLoadMoreResult> {
+  fetchPage: FetchPage<T>,
+  maxParallel = Number.POSITIVE_INFINITY,
+): Promise<MergeLoadMoreResult<T>> {
   states.forEach((s) => { s.failed = false })
-  const rows: DataRow[] = []
+  const rows: T[] = []
   const failedSourceIds = new Set<string>()
   while (rows.length < count) {
-    await refill(states, size, fetchPage)
+    await refill(states, size, fetchPage, maxParallel)
     states.forEach((s) => { if (s.failed) failedSourceIds.add(s.sourceId) })
     const picked = popMax(states)
     if (!picked) break

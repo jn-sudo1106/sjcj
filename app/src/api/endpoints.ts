@@ -194,9 +194,14 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'mq/check/delete', desc: '删除队列检查', danger: true },
   { path: 'mq/check/changeEnable', desc: '启停队列检查', danger: true },
 
-  /* ── file 原始文件 / JSON（目标 3 / 收录 3） ── */
-  { path: 'file/filePaged', desc: '原始文件分页（0711 R11 文件视图落地，仅源态查询）', impl: true, live: true },
-  { path: 'file/fileStats', desc: '原始文件统计：总数/总大小/失败数/最近生成时间（0711 R11 新增，非逆向清单原有项）', impl: true, live: true },
+  /* ── file 原始文件 / JSON（目标 3 / 收录 5） ── */
+  // 2026-08-17 核实：现役 FileList2.vue 不使用 filePaged，而是 file_resource 表的通用实体表接口。
+  { path: 'file/resourceTables', desc: '文件资源表目录（映射 config/entryTypePagedView?name=file_resource）', impl: true },
+  { path: 'file/resourceTableMeta', desc: '文件资源表结构（映射 entry/queryEntryType）', impl: true },
+  { path: 'file/resourceRows', desc: '文件资源记录分页（映射 entry/entryDataPaged）', impl: true },
+  // 以下两项仅为旧 mock/兼容测试保留，禁止新增业务调用；真实旧平台没有对应接口。
+  { path: 'file/filePaged', desc: '已废弃：旧原始文件分页兼容 mock', impl: true },
+  { path: 'file/fileStats', desc: '已废弃：新平台自造统计端点，无旧平台契约', impl: true },
   { path: 'file/fileProcess', desc: '文件后续处理', danger: true },
   { path: 'file/fileJsonPaged', desc: '原始 JSON 分页' },
 

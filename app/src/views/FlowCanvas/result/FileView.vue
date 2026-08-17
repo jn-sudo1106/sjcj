@@ -2,100 +2,98 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
-import { fileApi, sourceApi, type RawFile, type RawFileStats, type Step } from '@/api'
+import { fileApi, type FileResourceRecord } from '@/api'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import { buildHorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
 
-// 文件视图只在具体源下挂载（0812 计划 M1-4）：网站汇总态的文件页签是"开发中"占位，
-// 不会渲染这个组件，所以这里不需要、也不做"全部源遍历查询"的分支——那条路径此前会对
-// 网站下每个源各发一次 sourceSteps 请求（N+1），已按 M3-3 删掉，不是"先留着以后再用"，
-// 真要做网站范围文件查询也得等 R2（后端 filePaged 支持 siteId 聚合）到位后按新接口重做。
+// 文件视图只在具体源下挂载。真实旧平台 FileList2.vue 的链路是：
+// file_resource 表目录 → tableMeta → entryDataPaged；网站全部源仍由上层页面另行处理。
+// 文件记录与流程节点的真实关联字段尚未确认，因此这里不再用 sourceSteps 冒充 nodeId 筛选。
 const flow = useFlowStore()
 const sourceId = computed(() => flow.sourceCtx?.sourceId ?? '')
-const siteId = computed(() => flow.sourceCtx?.siteId ?? '')
-const processLayout = computed(() => buildHorizontalLayout(flow.main, flow.branches, flow.configs, flow.branchGroups, { includeTerminals: false }))
+const processLayout = computed(() =>
+  buildHorizontalLayout(flow.main, flow.branches, flow.configs, flow.branchGroups, { includeTerminals: false }),
+)
+const selectedNodeId = ref('')
 
-const steps = ref<Step[]>([])
-const stats = ref<RawFileStats | null>(null)
-const rows = ref<RawFile[]>([])
+// 文件资源表目前没有确认的流程节点关联字段。节点轨道保留为当前源的流程上下文，
+// 选中节点只更新视觉状态，不能据此拼接 nodeId 查询，避免把无依据的关联当成接口契约。
+watch(processLayout, (layout) => {
+  if (!selectedNodeId.value || !layout.nodes.some((node) => node.id === selectedNodeId.value)) {
+    selectedNodeId.value = layout.nodes[0]?.id ?? ''
+  }
+}, { immediate: true })
+
+const table = ref<{ tableId: string; tableName: string; name?: string } | null>(null)
+const rows = ref<FileResourceRecord[]>([])
 const total = ref(0)
 const loading = ref(false)
+const tableLoading = ref(false)
+const error = ref('')
 const page = ref(1)
 const size = 20
-// 查询参数对齐旧平台 page/inst/FileList.vue 与 /v1/filePaged（0812 计划 M3-1：
-// state/attachId/fileId/ext），nodeId 是新平台专属（按流程节点筛选，旧平台没有节点概念）。
-// 文件名查询和日期范围 UI 不加：filePaged 是否支持 fileName/siteId 聚合尚未确认（Q5/R2），
-// 旧平台本身也没有日期筛选（M3-2）。
-const filters = reactive({ nodeId: '', state: '', attachId: '', fileId: '', ext: '' })
-const previewFile = ref<RawFile | null>(null)
-const previewOpen = ref(false)
+const filters = reactive({ fileName: '', ext: '', state: '' })
 
-function scope() {
-  return { siteId: siteId.value, sourceId: sourceId.value }
-}
-
-let metadataRequest = 0
-async function loadNodeMetadata() {
-  const requestId = ++metadataRequest
-  if (!sourceId.value) {
-    steps.value = []
-    return
-  }
+let tableRequest = 0
+async function loadResourceTable() {
+  const requestId = ++tableRequest
+  table.value = null
+  rows.value = []
+  total.value = 0
+  error.value = ''
+  if (!sourceId.value) return
+  tableLoading.value = true
   try {
-    const result = await sourceApi.sourceSteps(sourceId.value)
-    if (requestId !== metadataRequest) return
-    steps.value = result
+    const candidates = await fileApi.resourceTables()
+    if (requestId !== tableRequest) return
+    if (candidates.length === 0) {
+      error.value = '未找到 file_resource 文件资源表'
+      return
+    }
+    if (candidates.length > 1) {
+      error.value = `检测到 ${candidates.length} 张 file_resource 表，暂不自动选择`
+      return
+    }
+    // 旧平台文件列表以固定 K 字段展示，表目录已足够发起查询；详情接口不可用时不阻断列表。
+    table.value = candidates[0]
+    void fileApi.resourceMeta(candidates[0].tableId).then((meta) => {
+      if (requestId === tableRequest && meta) table.value = meta
+    }).catch(() => undefined)
+    await loadList(requestId)
   } catch {
-    if (requestId !== metadataRequest) return
-    steps.value = []
-    ElMessage.warning('加载流程节点失败')
-  }
-}
-let statsRequest = 0
-async function loadStats() {
-  const requestId = ++statsRequest
-  if (!siteId.value || !sourceId.value) {
-    stats.value = null
-    return
-  }
-  const query = { ...scope(), nodeId: filters.nodeId || undefined, state: filters.state || undefined, attachId: filters.attachId || undefined, fileId: filters.fileId || undefined, ext: filters.ext || undefined }
-  try {
-    const result = await fileApi.fileStats(query)
-    if (requestId !== statsRequest) return
-    stats.value = result
-  } catch {
-    if (requestId !== statsRequest) return
-    stats.value = null
-    ElMessage.warning('加载统计信息失败')
+    if (requestId !== tableRequest) return
+    error.value = '加载文件资源表失败'
+    ElMessage.warning('加载文件列表失败')
+  } finally {
+    if (requestId === tableRequest) tableLoading.value = false
   }
 }
 let listRequest = 0
-async function loadList() {
+async function loadList(parentRequest = tableRequest) {
   const requestId = ++listRequest
-  if (!siteId.value || !sourceId.value) {
+  if (!sourceId.value || !table.value || parentRequest !== tableRequest) {
     rows.value = []
     total.value = 0
     return
   }
   const query = {
-    ...scope(),
-    nodeId: filters.nodeId || undefined,
+    tableId: table.value.tableId,
+    sourceId: sourceId.value,
     state: filters.state || undefined,
-    attachId: filters.attachId || undefined,
-    fileId: filters.fileId || undefined,
+    fileName: filters.fileName || undefined,
     ext: filters.ext || undefined,
     page: page.value,
     size,
   }
   loading.value = true
   try {
-    const result = await fileApi.filePaged(query)
-    if (requestId !== listRequest) return
+    const result = await fileApi.resourceRows(query)
+    if (requestId !== listRequest || parentRequest !== tableRequest) return
     rows.value = result?.list ?? []
     total.value = result?.total ?? 0
   } catch {
-    if (requestId !== listRequest) return
+    if (requestId !== listRequest || parentRequest !== tableRequest) return
     rows.value = []
     total.value = 0
     ElMessage.warning('加载文件列表失败')
@@ -103,72 +101,55 @@ async function loadList() {
     if (requestId === listRequest) loading.value = false
   }
 }
-function nodeName(nodeId: string): string {
-  return steps.value.find((step) => step.stepId === nodeId)?.name ?? nodeId
+function valueOf(file: FileResourceRecord, key: string): unknown {
+  return file.values[key]
 }
-function formatSize(bytes: number): string {
+function textOf(file: FileResourceRecord, key: string): string {
+  const value = valueOf(file, key)
+  return value == null || value === '' ? '—' : String(value)
+}
+function formatSize(value: unknown): string {
+  const bytes = Number(value)
+  if (!Number.isFinite(bytes)) return '—'
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
-function formatAttributes(attributes?: Record<string, unknown>): string {
-  if (!attributes || !Object.keys(attributes).length) return '—'
-  return Object.entries(attributes).map(([key, value]) => `${key}: ${String(value)}`).join('；')
-}
-const ALLOWED_PREVIEW_PROTOCOLS = ['https:', 'http:', 'blob:']
-function safePreviewUrl(url: string | undefined): string {
+function safeExternalUrl(value: unknown): string {
+  const url = String(value ?? '').trim()
   if (!url) return ''
   try {
-    const u = new URL(url, window.location.origin)
-    return ALLOWED_PREVIEW_PROTOCOLS.includes(u.protocol) ? url : ''
+    const parsed = new URL(url)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : ''
   } catch {
     return ''
   }
 }
-function previewType(file: RawFile): 'image' | 'iframe' | 'unsupported' {
-  const name = file.realName.toLowerCase()
-  if (file.contentType.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/.test(name)) return file.viewUrl ? 'image' : 'unsupported'
-  if (file.viewUrl && (file.contentType === 'html' || file.contentType === 'pdf' || file.contentType.startsWith('text/') || file.contentType.includes('json') || /\.(html?|pdf|txt|json|xml|csv)$/.test(name))) return 'iframe'
-  return 'unsupported'
-}
-function openPreview(file: RawFile) {
-  previewFile.value = file
-  previewOpen.value = true
-}
 function previousPage() {
   page.value = Math.max(1, page.value - 1)
-  loadList()
+  void loadList()
 }
 function nextPage() {
   if (page.value * size >= total.value) return
   page.value += 1
-  loadList()
+  void loadList()
 }
 
 watch(sourceId, () => {
   page.value = 1
-  void loadNodeMetadata()
-}, { immediate: true })
-
-watch([processLayout, steps], () => {
-  if (!filters.nodeId || (steps.value.length > 0 && !steps.value.some((s) => s.stepId === filters.nodeId))) {
-    const firstId = processLayout.value.nodes[0]?.id || steps.value[0]?.stepId
-    if (firstId) filters.nodeId = firstId
-  }
+  void loadResourceTable()
 }, { immediate: true })
 
 function resetFilters() {
-  filters.nodeId = processLayout.value.nodes[0]?.id || steps.value[0]?.stepId || ''
-  filters.state = ''
-  filters.attachId = ''
-  filters.fileId = ''
+  filters.fileName = ''
   filters.ext = ''
+  filters.state = ''
 }
 
-watch(() => [filters.nodeId, filters.state, filters.attachId, filters.fileId, filters.ext] as const, () => {
+watch(() => [filters.fileName, filters.ext, filters.state] as const, () => {
   page.value = 1
-  void Promise.all([loadStats(), loadList()])
-}, { immediate: true })
+  if (table.value) void loadList()
+})
 </script>
 
 <template>
@@ -178,48 +159,49 @@ watch(() => [filters.nodeId, filters.state, filters.attachId, filters.fileId, fi
       <div v-if="!sourceId" class="fv-empty-row">文件视图仅在源详情下可用。</div>
       <template v-else>
         <div class="fv-process-rail" data-testid="file-process-rail">
-          <ProcessNodeRail v-model="filters.nodeId" :layout="processLayout" />
+          <ProcessNodeRail v-model="selectedNodeId" :layout="processLayout" />
         </div>
-        <!-- 查询字段对齐旧平台 page/inst/FileList.vue（0812 计划 M3-1）：state/attachId/fileId/ext，
-             流程节点下拉是新平台专属加项。不加文件名/日期筛选——fileName、siteId 聚合是否被
-             后端支持还没确认（Q5/R2），旧平台本身也没有日期筛选（M3-2）。 -->
+        <div class="fv-node-note">流程节点仅作当前源的流程上下文展示；文件记录关联字段待接口确认后再启用节点筛选。</div>
+        <div class="fv-toolbar-note">
+          <span v-if="tableLoading">正在定位 file_resource 文件资源表…</span>
+          <span v-else-if="error" class="fv-error">{{ error }}</span>
+          <span v-else>数据源：{{ table?.name || table?.tableName || 'file_resource' }}</span>
+        </div>
         <div class="fv-filters">
-          <select v-model="filters.nodeId" class="fv-input" data-testid="file-node-filter" aria-label="流程节点">
-            <option v-if="!steps.length" value="">暂无节点</option>
-            <option v-for="step in steps" :key="step.stepId" :value="step.stepId">{{ step.name }}</option>
-          </select>
+          <input v-model="filters.fileName" class="fv-input" placeholder="文件名或展示名" aria-label="文件名">
+          <input v-model="filters.ext" class="fv-input" placeholder="类型，如 pdf、html" aria-label="文件类型">
           <select v-model="filters.state" class="fv-input" aria-label="状态">
             <option value="">状态（不限）</option><option value="C">初始</option><option value="AC">被消重</option>
           </select>
-          <input v-model="filters.attachId" class="fv-input" placeholder="附件ID" aria-label="附件ID">
-          <input v-model="filters.fileId" class="fv-input" placeholder="批次ID" aria-label="批次ID">
-          <input v-model="filters.ext" class="fv-input" placeholder="类型，如 xls, doc" aria-label="类型">
           <button class="rc-btn" type="button" @click="resetFilters">清空筛选</button>
           <span class="fv-spacer" />
-          <span class="muted">共 {{ total }} 个文件 <span v-if="stats?.totalSize">({{ formatSize(stats.totalSize) }})</span></span>
+          <span class="muted">共 {{ total }} 个文件</span>
         </div>
 
         <table class="rc-data-table fv-table" v-loading="loading">
-          <thead><tr><th>附件ID</th><th>批次ID</th><th>状态</th><th>名称</th><th>节点</th><th>类型</th><th class="num">大小</th><th>MD5</th><th>扩展属性</th><th>下载时间</th><th>操作</th></tr></thead>
+          <thead><tr><th>文件名</th><th>展示名</th><th>扩展名</th><th class="num">大小</th><th>MD5</th><th>文件链接</th><th>文件路径</th><th>文本文件</th><th>文本路径</th><th>生成时间</th></tr></thead>
           <tbody>
-            <tr v-for="file in rows" :key="file.attachId">
-              <td class="fv-name">{{ file.attachId }}</td><td class="soft">{{ file.fileId }}</td><td>{{ file.state }}</td><td class="fv-name">{{ file.realName }}</td><td>{{ nodeName(file.nodeId) }}</td><td>{{ file.contentType }}</td><td class="num">{{ formatSize(file.fileSize) }}</td>
-              <td class="fv-md5">{{ file.md5 || '—' }}</td><td class="fv-attrs">{{ formatAttributes(file.attributes) }}</td><td class="soft">{{ file.createDt }}</td>
-              <td><button class="fv-op" type="button" :data-testid="`file-preview-${file.attachId}`" @click="openPreview(file)">预览</button><a v-if="file.downloadUrl" class="fv-op" :href="file.downloadUrl" :download="file.realName">下载</a></td>
+            <tr v-for="file in rows" :key="file.dataId">
+              <td class="fv-name">{{ textOf(file, 'K1') }}</td>
+              <td>{{ textOf(file, 'K6') }}</td>
+              <td>{{ textOf(file, 'K7') }}</td>
+              <td class="num">{{ formatSize(valueOf(file, 'K4')) }}</td>
+              <td class="fv-md5">{{ textOf(file, 'K5') }}</td>
+              <td>
+                <a v-if="safeExternalUrl(valueOf(file, 'K2'))" class="fv-op" :href="safeExternalUrl(valueOf(file, 'K2'))" target="_blank" rel="noreferrer noopener nofollow">打开</a>
+                <span v-else class="soft">{{ textOf(file, 'K2') }}</span>
+              </td>
+              <td class="fv-path">{{ textOf(file, 'K3') }}</td>
+              <td>{{ textOf(file, 'K8') }}</td>
+              <td class="fv-path">{{ textOf(file, 'K9') }}</td>
+              <td class="soft">{{ file.createDt || '—' }}</td>
             </tr>
-            <tr v-if="!rows.length && !loading"><td colspan="11" class="fv-empty-row">没有匹配的文件</td></tr>
+            <tr v-if="!rows.length && !loading"><td colspan="10" class="fv-empty-row">{{ error || '没有匹配的文件' }}</td></tr>
           </tbody>
         </table>
         <div class="fv-pager"><button class="rc-btn" :disabled="page <= 1" @click="previousPage">上一页</button><span class="muted">第 {{ page }} 页</span><button class="rc-btn" :disabled="page * size >= total" @click="nextPage">下一页</button></div>
       </template>
     </div>
-    <el-drawer v-model="previewOpen" title="文件预览" size="70%" destroy-on-close>
-      <template v-if="previewFile">
-        <img v-if="previewType(previewFile) === 'image'" class="fv-preview-image" :src="previewFile.viewUrl" :alt="previewFile.realName">
-        <iframe v-else-if="previewType(previewFile) === 'iframe'" class="fv-preview-frame" :src="safePreviewUrl(previewFile.viewUrl)" :title="previewFile.realName" />
-        <div v-else class="fv-preview-empty">该文件格式暂不支持站内预览，请下载后查看。</div>
-      </template>
-    </el-drawer>
   </main>
 </template>
 
@@ -235,21 +217,24 @@ watch(() => [filters.nodeId, filters.state, filters.attachId, filters.fileId, fi
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.02);
 }
 .fv-body { flex: 1; overflow: auto; padding: 20px 24px; animation: fadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
-.fv-empty-row, .fv-preview-empty { text-align: center; color: var(--rc-faint); font-size: 13px; padding: 40px 12px; }
+.fv-empty-row { text-align: center; color: var(--rc-faint); font-size: 13px; padding: 40px 12px; }
+.fv-process-rail {
+  min-height: 80px;
+  margin-bottom: 8px;
+  overflow-x: auto;
+  background: #f8fafc;
+  border: 1px solid var(--rc-border-soft, #e2e8f0);
+  border-radius: 10px;
+}
+.fv-node-note { margin: 0 0 12px; color: var(--rc-muted); font-size: 12px; }
+.fv-toolbar-note { margin-bottom: 12px; color: var(--rc-muted); font-size: 12px; }
+.fv-error { color: var(--rc-error); }
 
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
-.fv-process-rail {
-  min-height: 80px;
-  margin-bottom: 14px;
-  overflow-x: auto;
-  background: #f8fafc;
-  border: 1px solid var(--rc-border-soft);
-  border-radius: 10px;
-}
 .fv-filters {
   display: flex;
   align-items: center;
@@ -282,7 +267,7 @@ watch(() => [filters.nodeId, filters.state, filters.attachId, filters.fileId, fi
 .fv-table th.num, .fv-table td.num { text-align: right; }
 
 .fv-name, .fv-md5 { font-family: var(--rc-mono, monospace); font-size: 12px; color: #334155; }
-.fv-attrs { max-width: 200px; color: var(--rc-faint); font-size: 12px; }
+.fv-path { max-width: 220px; color: var(--rc-faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .soft { color: #94a3b8; font-size: 12px; }
 
 .rc-status { padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; display: inline-block; }
@@ -294,6 +279,4 @@ watch(() => [filters.nodeId, filters.state, filters.attachId, filters.fileId, fi
 
 .fv-pager { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .fv-pager .rc-btn { height: 28px; padding: 0 10px; font-size: 12px; }
-.fv-preview-frame { width: 100%; min-height: 70vh; border: 0; }
-.fv-preview-image { display: block; max-width: 100%; max-height: 70vh; margin: 0 auto; object-fit: contain; }
 </style>

@@ -13,6 +13,7 @@ import { useFlowStore } from '@/stores/flow'
 import { normalizeSiteView } from '@/utils/url/workspaceRoute'
 import SourceOverviewView from './SourceOverviewView.vue'
 import SiteDataView from './SiteDataView.vue'
+import SiteFileView from './SiteFileView.vue'
 
 const props = defineProps<{ siteId: string }>()
 const route = useRoute()
@@ -71,7 +72,7 @@ function openSource(source: Source) {
     <template v-else>
       <SourceOverviewView v-if="view === 'source'" :current-site-id="siteId" class="sdv-body" @open-source="openSource" />
       <SiteDataView v-else-if="view === 'data'" :site-id="siteId" class="sdv-body" />
-      <div v-else class="sdv-empty" data-testid="site-file-placeholder">网站维度文件视图正在开发中，请先进入具体源查看文件</div>
+      <SiteFileView v-else-if="view === 'file'" :site-id="siteId" class="sdv-body" />
     </template>
   </main>
 </template>

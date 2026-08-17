@@ -62,7 +62,7 @@ import {
 import { mockConfigPaged, mockConfigDetail, mockConfigParams, mockConfigActionLogs } from './configs'
 import { mockEntryPaged, mockEntryDetail, mockSaveEntryType } from './entries'
 import { mockAddParamValues, mockDeleteParamValue, mockDeleteParams, mockGenValues, mockParamCopy, mockParamCreate, mockParamDetail, mockParamPaged, mockParamUpdate } from './params'
-import { mockFilePaged, mockFileStats } from './files'
+import { mockFilePaged, mockFileStats, mockFileResourceTables, mockFileResourceTableMeta, mockFileResourceRows } from './files'
 
 // mock 注册表：key = 真实 /v1 端点路径，value = 处理函数。
 // 真接入时这张表整体被 http 请求取代，端点字符串不变。
@@ -143,6 +143,9 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'config/deleteParam': mockDeleteParams,
 
   // 原始文件（0711 R11）
+  'file/resourceTables': mockFileResourceTables,
+  'file/resourceTableMeta': mockFileResourceTableMeta,
+  'file/resourceRows': mockFileResourceRows,
   'file/filePaged': mockFilePaged,
   'file/fileStats': mockFileStats,
 

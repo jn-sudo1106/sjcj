@@ -3,10 +3,10 @@
 //       SourceCategory（分类目录树）/ SourceCloneRequest/Result（克隆）/
 //       SourceLog（源日志）/ SourceTaskQuery（任务视图查询）/
 //       CredentialRef（凭据引用）/ FlowTemplateNodeBinding/Definition/FlowTemplate/SaveInput（流程模板 4 件）/
-//       RawFile/Query/Stats（原始文件 3 件）
+//       FileResourceRecord/Query（file_resource 文件资源 2 件）
 // 跨域被引用：data.DataRow.sourceId (string, 不是类型), overview.OverviewKpi.sources (number)
 // 跨域引用：
-//   - PageQuery (RawFileQuery/SourceTaskQuery extends PageQuery)
+//   - PageQuery (FileResourceQuery/SourceTaskQuery extends PageQuery)
 //   - RunState (Source.state / Task.state)
 //   - ConfigParamBinding (Site.params: ConfigParamBinding[])
 //   - flowModel 类型（FlowTemplateNodeBinding.collect/entryCondition/task/outputAdvanced,
@@ -252,17 +252,38 @@ export interface Task {
   error?: string
 }
 
-/** 原始文件（0711 R11 落地；0812 计划 M3-1 对齐旧平台 `page/inst/FileList.vue`/`/v1/filePaged`
- *  字段 1:1）。`attachId` 才是主键，`fileId` 是"批次ID"——此前误把 `fileId` 当主键用，
- *  2026-08-15 按旧平台改正。`nodeId`/`contentType`/`viewUrl`/`downloadUrl` 是新平台专属
- *  （流程节点归属 + 站内安全预览，旧平台没有这些概念），其余字段名直接沿用旧平台。 */
+/**
+ * `file_resource` 表的一行记录（旧 `entryDataPaged` 结果的最小系统字段 + K1～K15 动态列）。
+ * K1～K15 的具体含义由 `tableMeta` 返回的字段定义决定，不能在 API 层假设固定逻辑字段名。
+ */
+export interface FileResourceRecord {
+  dataId: string
+  sourceId: string
+  state?: string
+  createDt?: string
+  updateDt?: string
+  fileId?: string
+  values: Record<string, unknown>
+}
+
+export interface FileResourceQuery extends PageQuery {
+  tableId: string
+  sourceId?: string
+  state?: string
+  /** K1/K6 文件名或展示名模糊查询，由 API 层转成旧端点 more 条件。 */
+  fileName?: string
+  /** K7 扩展名模糊查询。 */
+  ext?: string
+}
+
+/** @deprecated 仅保留旧演示 mock 的数据形状，业务文件视图已迁移到 FileResourceRecord。 */
 export interface RawFile {
   attachId: string
-  fileId: string // 批次ID（不是主键）
-  state: string // C 初始 / AC 被消重（旧平台口径；具体取值范围待后端确认，见计划文档 Q5）
+  fileId: string
+  state: string
   siteId: string
   sourceId: string
-  nodeId: string // 新平台专属：按流程节点归属
+  nodeId: string
   realName: string
   storePath?: string
   fileSize: number
@@ -274,22 +295,24 @@ export interface RawFile {
   md5?: string
   taskId?: string
   remarks?: string
-  contentType: string // 新平台专属：用于预览类型判断
+  contentType: string
   attributes?: Record<string, unknown>
-  viewUrl?: string // 新平台专属：站内安全预览（M3-5）
-  downloadUrl?: string // 新平台专属：下载链接
+  viewUrl?: string
+  downloadUrl?: string
 }
 
+/** @deprecated 仅保留旧演示 mock 的查询形状。 */
 export interface RawFileQuery extends PageQuery {
   siteId: string
   sourceId?: string
-  nodeId?: string // 新平台专属：按流程节点筛选
+  nodeId?: string
   state?: string
   attachId?: string
   fileId?: string
   ext?: string
 }
 
+/** @deprecated 旧 fileStats 没有真实平台契约，仅保留 mock 测试类型。 */
 export interface RawFileStats {
   total: number
   totalSize: number

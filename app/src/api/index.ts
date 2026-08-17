@@ -7,7 +7,7 @@ import type {
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   TaskInstQuery, SiteTableOption, SiteTablesResult,
   Config, ConfigActionLog, ConfigParamBinding, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
-  OverviewSummary, TrendPoint, RawFile, RawFileQuery, RawFileStats, SourceCloneRequest, SourceCloneResult,
+  OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, SourceCloneRequest, SourceCloneResult,
   FlowTemplate, FlowTemplateSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
 } from './types'
 import type { FlowDef, FlowRecommendation } from '@/views/FlowCanvas/canvas/flowModel'
@@ -246,45 +246,26 @@ export const sourceApi = {
   },
 }
 
-// 网站表聚合（0812 计划 M2-1）：旧平台没有"网站下所有表"接口，siteTables 按
-// site/sources + 逐源 config/queryEntryTypesGroup 现拼；源数超阈值不聚合，
-// 改为要求用户先选源，避免几千个源打几千次请求。按 siteId 缓存，手动 refresh 清除。
-const SITE_TABLES_CONCURRENCY = 6
-const SITE_TABLES_SOURCE_THRESHOLD = 200
+// 网站表选择（0812 计划 M2-1）：旧平台没有"网站下所有表"接口，
+// config/queryEntryTypesGroup 返回的是可选表目录，不能把同一张表重复按源计数，
+// 也不能为一个网站的每个源重复请求同一份目录。网站范围只在选表后的真实数据查询阶段
+// 通过 entryDistinctSource + siteSources（失败/空结果时回退逐源查询）判断。
 const siteTablesCache = new Map<string, Promise<SiteTablesResult>>()
 
 async function loadSiteTables(
-  siteId: string,
+  _siteId: string,
   onProgress?: (tables: SiteTableOption[]) => void,
 ): Promise<SiteTablesResult> {
-  const sources = await siteApi.siteSources(siteId)
-  if (sources.length > SITE_TABLES_SOURCE_THRESHOLD) {
-    return { tables: [], sourceCount: sources.length, overThreshold: true, failedSourceIds: [] }
-  }
   const tableMap = new Map<string, SiteTableOption>()
-  const failedSourceIds: string[] = []
-  let cursor = 0
-  async function worker() {
-    while (cursor < sources.length) {
-      const source = sources[cursor]
-      cursor += 1
-      try {
-        const group = await dataApi.entryTypesGroup(source.sourceId)
-        for (const entry of [...group.list1, ...group.list2, ...group.list3]) {
-          const existing = tableMap.get(entry.tableId)
-          if (existing) existing.sourceCount += 1
-          else tableMap.set(entry.tableId, { tableId: entry.tableId, tableName: entry.tableName, name: entry.name, sourceCount: 1 })
-        }
-      } catch {
-        // 单源查表失败不清空已聚合结果，只记下来给调用方提示"部分源未能加载"。
-        failedSourceIds.push(source.sourceId)
-      }
-      onProgress?.([...tableMap.values()])
+  const group = await dataApi.entryTypesGroup()
+  for (const entry of [...group.list1, ...group.list2, ...group.list3]) {
+    if (!tableMap.has(entry.tableId)) {
+      tableMap.set(entry.tableId, { tableId: entry.tableId, tableName: entry.tableName, name: entry.name })
     }
   }
-  const workerCount = Math.min(SITE_TABLES_CONCURRENCY, sources.length) || 1
-  await Promise.all(Array.from({ length: workerCount }, worker))
-  return { tables: [...tableMap.values()], sourceCount: sources.length, overThreshold: false, failedSourceIds }
+  const tables = [...tableMap.values()]
+  onProgress?.(tables)
+  return { tables, sourceCount: 0, overThreshold: false, failedSourceIds: [] }
 }
 
 // 网站—源父子模型（0707 优化·Phase2）：网站=统一流程模板+批量工具（不运行），源=运行实体
@@ -761,6 +742,49 @@ function buildLegacyRowQuery(q: RowQuery) {
   }
 }
 
+async function rowQueryPagedAt(
+  logicalEndpoint: string,
+  q: RowQuery,
+  options: DataRequestOptions = {},
+): Promise<Paged<DataRow>> {
+  const result = await request<Paged<unknown>>(logicalEndpoint, q, {
+    method: 'POST',
+    ...options,
+    httpEndpoint: 'entry/entryDataPaged',
+    httpParams: { data: encryptLegacyPayload(buildLegacyRowQuery(q)) },
+  })
+  return { total: result.total, list: result.list.map(dataRowFromLegacy) }
+}
+
+function escapeFileResourceLike(value: string) {
+  return value.replaceAll('\\', '\\\\').replaceAll("'", "''").replaceAll('%', '\\%').replaceAll('_', '\\_')
+}
+
+function fileResourceSql(q: FileResourceQuery): string | undefined {
+  const parts: string[] = []
+  if (q.fileName?.trim()) {
+    const value = escapeFileResourceLike(q.fileName.trim())
+    parts.push(`(K1 LIKE '%${value}%' OR K6 LIKE '%${value}%')`)
+  }
+  if (q.ext?.trim()) {
+    const value = escapeFileResourceLike(q.ext.trim().replace(/^\./, ''))
+    parts.push(`K7 LIKE '%${value}%'`)
+  }
+  return parts.join(' AND ') || undefined
+}
+
+function fileResourceFromDataRow(row: DataRow): FileResourceRecord {
+  return {
+    dataId: row.dataId,
+    sourceId: row.sourceId,
+    state: row.state,
+    createDt: row.createDt,
+    updateDt: row.updateDt,
+    fileId: row.fileId,
+    values: row.values ?? {},
+  }
+}
+
 // 数据查看（M4）
 type DataRequestOptions = { mode?: 'mock' | 'http' }
 export interface EntryDataImportInput {
@@ -828,15 +852,7 @@ export const dataApi = {
   },
   rows: async (tableId: string) => (await dataApi.rowQueryPaged({ tableId, page: 1, size: 100 })).list,
   // 结果视图：按表 + 多条件 + 分页（独立端点，避免影响 /data 全局数据页）
-  rowQueryPaged: async (q: RowQuery, options: DataRequestOptions = {}) => {
-    const result = await request<Paged<unknown>>('data/rowQueryPaged', q, {
-      method: 'POST',
-      ...options,
-      httpEndpoint: 'entry/entryDataPaged',
-      httpParams: { data: encryptLegacyPayload(buildLegacyRowQuery(q)) },
-    })
-    return { total: result.total, list: result.list.map(dataRowFromLegacy) }
-  },
+  rowQueryPaged: (q: RowQuery, options: DataRequestOptions = {}) => rowQueryPagedAt('data/rowQueryPaged', q, options),
   tableMeta: async (tableId: string, options: DataRequestOptions = {}) => {
     // 对照真实源码 loadEntryTypeDetail：res.data 就是扁平的实体表记录（含 items[]），
     // curEntryType 只是旧前端本地变量名，响应体里没有这层包装，不需要解包
@@ -1208,10 +1224,38 @@ export const paramApi = {
     request<Ack>('config/clear', { paramIds }, { method: 'GET', httpParams: { ids: paramIds } }),
 }
 
-// 原始文件（0711 R11：文件视图，仅源态使用）
+// 文件资源（M3-1）：旧平台现役 FileList2.vue 使用 file_resource 表 + entryDataPaged，
+// 不再调用废弃的 filePaged，也不提供新平台自造的 fileStats。
 export const fileApi = {
-  filePaged: (q: RawFileQuery) => request<Paged<RawFile>>('file/filePaged', q),
-  fileStats: (q: Omit<RawFileQuery, 'page' | 'size'>) => request<RawFileStats>('file/fileStats', q),
+  resourceTables: async (options: DataRequestOptions = {}) => {
+    const result = await request<Paged<unknown>>('file/resourceTables', { page: 1, size: 100, name: 'file_resource' }, {
+      method: 'GET',
+      ...options,
+      httpEndpoint: 'config/entryTypePagedView',
+      httpParams: { page: 1, limit: 100, name: 'file_resource', enable: '0' },
+    })
+    return entryTypePageFromLegacy(result).list
+  },
+  resourceMeta: async (tableId: string, options: DataRequestOptions = {}) => {
+    const result = await request<unknown>('file/resourceTableMeta', { tableId }, {
+      method: 'GET',
+      ...options,
+      httpEndpoint: 'entry/queryEntryType',
+      httpParams: { type: tableId },
+    })
+    return result ? dataTableFromLegacy(result) : null
+  },
+  resourceRows: async (q: FileResourceQuery, options: DataRequestOptions = {}) => {
+    const result = await rowQueryPagedAt('file/resourceRows', {
+      tableId: q.tableId,
+      sourceId: q.sourceId,
+      state: q.state,
+      sql: fileResourceSql(q),
+      page: q.page,
+      size: q.size,
+    }, options)
+    return { total: result.total, list: result.list.map(fileResourceFromDataRow) }
+  },
 }
 
 // 工作台摘要（首页）
