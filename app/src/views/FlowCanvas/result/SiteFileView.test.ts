@@ -38,6 +38,46 @@ describe('SiteFileView', () => {
     expect(wrapper.text()).toContain('task.html')
   })
 
+  it('全部网站查询使用接口 total 展示准确分页', async () => {
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    const rows = vi.spyOn(fileApi, 'resourceRows').mockImplementation(async (query) => ({
+      total: 21,
+      list: [file('orphan-source', String(query.page), `task-${query.page}.html`)],
+    }))
+
+    const wrapper = shallowMount(SiteFileView, {
+      props: { siteId: undefined },
+      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('共 21 个文件')
+    expect(wrapper.text()).toContain('第 1 / 2 页')
+    await wrapper.get('[data-testid="site-file-next"]').trigger('click')
+    await flushPromises()
+    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: undefined, page: 2, size: 20 }))
+    expect(wrapper.text()).toContain('task-2.html')
+  })
+
+  it('网站内已选择具体源时也走单源准确分页，不按全部源归并', async () => {
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1', '源一'), source('s2', '源二')])
+    const rows = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 21, list: [file('s1', '1', 'one.html')] })
+
+    const wrapper = shallowMount(SiteFileView, {
+      props: { siteId: 'site-a', initialSourceId: 's1' },
+      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+    })
+    await flushPromises()
+
+    expect(rows).toHaveBeenCalledTimes(1)
+    expect(rows).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 's1', page: 1, size: 20 }))
+    expect(wrapper.text()).toContain('共 21 个文件')
+    expect(wrapper.text()).toContain('第 1 / 2 页')
+  })
+
   it('网站全部源按 sourceId 查询 file_resource 后合并展示，并保留所属源', async () => {
     vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
     vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)

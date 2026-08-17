@@ -21,6 +21,8 @@ const sourceNames = computed<Record<string, string>>(() => Object.fromEntries(si
 const table = ref<{ tableId: string; tableName: string; name?: string } | null>(null)
 const rows = ref<FileResourceRecord[]>([])
 const filters = reactive({ fileName: '', ext: '', state: '' })
+const page = ref(1)
+const total = ref(0)
 const tableLoading = ref(false)
 const loading = ref(false)
 const loadingMore = ref(false)
@@ -29,6 +31,10 @@ const failedSources = ref<MergeLoadMoreResult<FileResourceRecord>['failedSources
 const allExhausted = ref(false)
 const noCandidateSources = ref(false)
 const detail = reactive<{ visible: boolean; file: FileResourceRecord | null }>({ visible: false, file: null })
+// 全部网站或已收窄到单个源时，entryDataPaged 能返回准确 total，直接用常规分页；只有
+// 网站“全部源”需要前端跨源归并，才只能提供加载更多。
+const usesDirectPaging = computed(() => !props.siteId || !!selectedSourceId.value)
+const maxPage = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
 let mergeStates: MergeSourceState<FileResourceRecord>[] = []
 let candidateSourceIds: string[] = []
@@ -98,15 +104,18 @@ async function loadMore(requestId = queryRequest) {
   }
 }
 
-async function resetAndLoad() {
+async function resetAndLoad(resetPage = true) {
   const requestId = ++queryRequest
+  if (resetPage) page.value = 1
   rows.value = []
+  total.value = 0
   failedSources.value = []
   allExhausted.value = false
   noCandidateSources.value = false
   mergeStates = []
   candidateSourceIds = []
-  if (!table.value || error.value) return
+  error.value = ''
+  if (!table.value) return
   loading.value = true
   try {
     if (props.siteId) {
@@ -125,11 +134,27 @@ async function resetAndLoad() {
       noCandidateSources.value = true
       return
     }
+    if (usesDirectPaging.value) {
+      const result = await fileApi.resourceRows({
+        tableId: table.value.tableId,
+        sourceId: selectedSourceId.value || undefined,
+        state: filters.state || undefined,
+        fileName: filters.fileName || undefined,
+        ext: filters.ext || undefined,
+        page: page.value,
+        size: PAGE_SIZE,
+      })
+      if (requestId !== queryRequest) return
+      rows.value = result.list
+      total.value = result.total
+      allExhausted.value = true
+      return
+    }
     mergeStates = initMergeState<FileResourceRecord>(candidateSourceIds)
     await loadMore(requestId)
   } catch {
     if (requestId !== queryRequest) return
-    error.value = '加载网站源列表失败，请重试'
+    error.value = '加载文件列表失败，请重试'
   } finally {
     if (requestId === queryRequest) loading.value = false
   }
@@ -177,6 +202,16 @@ function openDetail(file: FileResourceRecord) {
   detail.file = file
   detail.visible = true
 }
+function previousPage() {
+  if (!usesDirectPaging.value || page.value <= 1) return
+  page.value -= 1
+  void resetAndLoad(false)
+}
+function nextPage() {
+  if (!usesDirectPaging.value || page.value >= maxPage.value) return
+  page.value += 1
+  void resetAndLoad(false)
+}
 
 watch(() => [props.siteId, props.initialSourceId] as const, () => {
   selectedSourceId.value = props.initialSourceId ?? ''
@@ -211,7 +246,7 @@ watch(selectedSourceId, () => {
       </div>
       <div class="sfv-tablehead">
         <span class="sfv-tablename">{{ table?.name || table?.tableName || 'file_resource' }}</span>
-        <span class="sfv-count">已加载 {{ rows.length }} 个文件</span>
+        <span class="sfv-count">{{ usesDirectPaging ? `共 ${total} 个文件` : `已加载 ${rows.length} 个文件` }}</span>
       </div>
       <div class="sfv-table-wrap">
         <table class="rc-data-table sfv-table" v-loading="loading">
@@ -239,7 +274,12 @@ watch(selectedSourceId, () => {
         </table>
       </div>
       <div class="sfv-foot">
-        <span v-if="allExhausted" class="muted">已加载全部文件</span>
+        <template v-if="usesDirectPaging">
+          <button class="rc-btn" type="button" data-testid="site-file-prev" :disabled="page <= 1 || loading" @click="previousPage">上一页</button>
+          <span class="muted">第 {{ page }} / {{ maxPage }} 页</span>
+          <button class="rc-btn" type="button" data-testid="site-file-next" :disabled="page >= maxPage || loading" @click="nextPage">下一页</button>
+        </template>
+        <span v-else-if="allExhausted" class="muted">已加载全部文件</span>
         <button v-else class="rc-btn" type="button" data-testid="site-file-load-more" :disabled="loadingMore" @click="loadMore()">{{ loadingMore ? '加载中…' : '加载更多' }}</button>
       </div>
     </template>
