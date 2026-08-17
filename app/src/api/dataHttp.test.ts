@@ -199,9 +199,9 @@ describe('选表分组 / 动态表结构 API 旧平台 HTTP 契约（E 包 T1b�
     expect(url).not.toContain('sourceId=')
     expect(init.method).toBe('GET')
 
-    await dataApi.entryTypesGroup('src-7')
+    await dataApi.entryTypesGroup('430016502,430016501,430016398')
     ;[url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
-    expect(url).toContain('sourceId=src-7')
+    expect(url).toContain('sourceId=430016502%2C430016501%2C430016398')
   })
 
   it('tables() 摊平 list1/list2/list3 为扁平列表；main 是默认选中的标量 ID，不参与摊平', async () => {

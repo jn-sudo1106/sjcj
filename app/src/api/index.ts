@@ -246,18 +246,23 @@ export const sourceApi = {
   },
 }
 
-// 网站表选择（0812 计划 M2-1）：旧平台没有"网站下所有表"接口，
-// config/queryEntryTypesGroup 返回的是可选表目录，不能把同一张表重复按源计数，
-// 也不能为一个网站的每个源重复请求同一份目录。网站范围只在选表后的真实数据查询阶段
-// 通过 entryDistinctSource + siteSources（失败/空结果时回退逐源查询）判断。
+// 网站表选择（0812 计划 M2-1）：config/queryEntryTypesGroup 支持逗号分隔的 sourceId，
+// 一个网站只请求一次目录，避免为每个源重复请求同一份表目录。网站范围只在选表后的真实
+// 数据查询阶段通过 entryDistinctSource + siteSources（失败/空结果时回退逐源查询）判断。
 const siteTablesCache = new Map<string, Promise<SiteTablesResult>>()
 
 async function loadSiteTables(
-  _siteId: string,
+  siteId: string,
   onProgress?: (tables: SiteTableOption[]) => void,
 ): Promise<SiteTablesResult> {
   const tableMap = new Map<string, SiteTableOption>()
-  const group = await dataApi.entryTypesGroup()
+  const sources = await siteApi.siteSources(siteId)
+  const sourceIds = sources.map((source) => source.sourceId.trim()).filter(Boolean)
+  if (!sourceIds.length) {
+    onProgress?.([])
+    return { tables: [], sourceCount: 0, overThreshold: false, failedSourceIds: [] }
+  }
+  const group = await dataApi.entryTypesGroup(sourceIds.join(','))
   for (const entry of [...group.list1, ...group.list2, ...group.list3]) {
     if (!tableMap.has(entry.tableId)) {
       tableMap.set(entry.tableId, { tableId: entry.tableId, tableName: entry.tableName, name: entry.name })
@@ -265,7 +270,7 @@ async function loadSiteTables(
   }
   const tables = [...tableMap.values()]
   onProgress?.(tables)
-  return { tables, sourceCount: 0, overThreshold: false, failedSourceIds: [] }
+  return { tables, sourceCount: sourceIds.length, overThreshold: false, failedSourceIds: [] }
 }
 
 // 网站—源父子模型（0707 优化·Phase2）：网站=统一流程模板+批量工具（不运行），源=运行实体
