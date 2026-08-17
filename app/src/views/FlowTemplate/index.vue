@@ -103,7 +103,7 @@ async function selectTemplate(template: FlowTemplate) {
 
 async function createTemplate() {
   try {
-    const { value } = await ElMessageBox.prompt('新模板会以完整的节点默认配置作为子源的可编辑起点。', '新建流程模板', {
+    const { value } = await ElMessageBox.prompt('新模板会以完整的节点默认配置作为源的可编辑起点。', '新建流程模板', {
       inputValue: '未命名模板',
       inputPattern: /\S+/,
       inputErrorMessage: '请输入模板名称',
@@ -122,7 +122,7 @@ async function createTemplate() {
 
 async function renameTemplate(template: FlowTemplate) {
   try {
-    const { value } = await ElMessageBox.prompt('重命名会生成该模板的新版本；已绑定子源仍固定使用原版本。', '重命名流程模板', {
+    const { value } = await ElMessageBox.prompt('重命名会生成该模板的新版本；已绑定源仍固定使用原版本。', '重命名流程模板', {
       inputValue: template.name,
       inputPattern: /\S+/,
       inputErrorMessage: '请输入模板名称',
@@ -163,7 +163,7 @@ async function saveTemplate() {
     draft.value = saved
     replaceTemplateInList(saved)
     loadTemplateIntoCanvas(saved)
-    ElMessage.success(`模板已保存为 v${saved.version}；子源仍可独立修改配置`)
+    ElMessage.success(`模板已保存为 v${saved.version}；源仍可独立修改配置`)
   } finally {
     saving.value = false
   }
@@ -195,7 +195,7 @@ onBeforeUnmount(() => {
         </div>
         <button class="rc-btn primary" type="button" @click="createTemplate">＋ 新建</button>
       </div>
-      <p class="ft-hint">模板提供完整的节点默认配置；应用后，子源可继续按自己的 URL、表、参数和运行设置修改。</p>
+      <p class="ft-hint">模板提供完整的节点默认配置；应用后，源可继续按自己的 URL、表、参数和运行设置修改。</p>
       <div v-for="template in templates" :key="template.id" class="ft-item" :class="{ on: draft?.id === template.id }">
         <button class="ft-item-select" type="button" :aria-current="draft?.id === template.id || undefined" @click="selectTemplate(template)">
           <strong>{{ template.name }}</strong>
@@ -220,7 +220,7 @@ onBeforeUnmount(() => {
 
         <div class="ft-boundary">
           <strong>模板编辑</strong>
-          <span>画布和右侧配置与流程视图一致。这里配置的是默认值，子源应用模板后可独立改写，不会反向修改模板。</span>
+          <span>画布和右侧配置与流程视图一致。这里配置的是默认值，源应用模板后可独立改写，不会反向修改模板。</span>
         </div>
 
         <div class="ft-flow-shell" :class="{ expanded: ui.inspectorExpanded }">

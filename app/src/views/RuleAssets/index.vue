@@ -9,20 +9,23 @@ import RuleGroupPanel from './RuleGroupPanel.vue'
 import RuleDetailDrawer from './RuleDetailDrawer.vue'
 import FunctionTester from './FunctionTester.vue'
 import ParamTab from './ParamTab.vue'
+import FlowTemplate from '../FlowTemplate/index.vue'
 
 const ui = useUiStore()
 
 // 顶层 tab（0721 会议 §六-1）：参数模块从采集资产迁入，与"规则组/函数"同级；
 // 现有规则组+规则列表+函数测试器整体作为"规则" tab（改动最小，不拆分成更细的规则组/函数两个 tab）。
+// 流程模板同样迁入（0812 计划 M4-9）：复用原编辑器组件 FlowTemplate，不重写。
 const TABS: { key: string; label: string }[] = [
   { key: 'rule', label: '规则' },
   { key: 'param', label: '参数' },
+  { key: 'template', label: '流程模板' },
 ]
 const route = useRoute()
 const router = useRouter()
 const activeTab = ref('rule')
 watch(() => route.query.tab, (tab) => {
-  activeTab.value = tab === 'param' ? 'param' : 'rule'
+  activeTab.value = tab === 'param' || tab === 'template' ? tab : 'rule'
 }, { immediate: true })
 function selectTab(key: string) {
   void router.replace({ path: '/rules', query: key === 'rule' ? {} : { tab: key } })
@@ -225,6 +228,7 @@ onUnmounted(() => {
   </div>
 
   <ParamTab v-if="activeTab === 'param'" />
+  <FlowTemplate v-else-if="activeTab === 'template'" />
 
   <template v-else>
   <div class="ra-layout">

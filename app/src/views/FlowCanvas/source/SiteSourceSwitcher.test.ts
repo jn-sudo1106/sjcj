@@ -1,16 +1,17 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { ElMessageBox } from 'element-plus'
 import SiteSourceSwitcher from './SiteSourceSwitcher.vue'
 import ParamEditorDrawer from '@/components/param/ParamEditorDrawer.vue'
 import { siteApi, sourceApi, paramApi, type Source, type Param } from '@/api'
 
 const source: Source = {
-  sourceId: 'source-a', siteId: 'site-a', name: '原子源', url: 'https://example.com',
+  sourceId: 'source-a', siteId: 'site-a', name: '原源', url: 'https://example.com',
   configId: '', mainTable: '', owner: 'admin', state: 'C',
 }
 const templateSource: Source = {
-  sourceId: 'source-template', siteId: 'site-template', name: '跨网站模板子源', url: 'https://template.example.com',
+  sourceId: 'source-template', siteId: 'site-template', name: '跨网站模板源', url: 'https://template.example.com',
   configId: '', mainTable: '', owner: 'admin', state: 'C',
 }
 // 0721 会议·参数源演示参数（页码=sequence 真实取值数 100，栏目=list 真实取值数 26），与 mock/params.ts 的 913/912 种子同口径
@@ -33,10 +34,11 @@ function mockApis() {
   vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [templateSource] })
   vi.spyOn(siteApi, 'sourceAdd').mockResolvedValue({ ok: true, sourceId: 'source-new' })
   vi.spyOn(siteApi, 'cloneSource').mockResolvedValue({
-    source: { ...source, sourceId: 'source-new', name: '复制子源' }, flowId: 'flow-new', tableIdMap: {},
+    source: { ...source, sourceId: 'source-new', name: '复制源' }, flowId: 'flow-new', tableIdMap: {},
   })
   vi.spyOn(sourceApi, 'sourceUpdate').mockResolvedValue({ ok: true })
   vi.spyOn(sourceApi, 'sendSnatch').mockResolvedValue({ ok: true })
+  vi.spyOn(sourceApi, 'changeSite').mockResolvedValue({ ok: true, message: '已关联' })
   vi.spyOn(paramApi, 'paramPaged').mockResolvedValue({ total: 2, list: [param913, param912] })
   vi.spyOn(paramApi, 'paramDetail').mockImplementation(async (id) => ({ 913: param913, 912: param912 }[id] ?? null))
   vi.spyOn(paramApi, 'genValues').mockImplementation(async (id) => paramSample[id] ?? [])
@@ -46,7 +48,10 @@ async function createWrapper() {
   mockApis()
   const wrapper = mount(SiteSourceSwitcher, {
     props: { siteId: 'site-a', activeKey: source.sourceId },
-    global: { stubs: { 'el-drawer': { template: '<div><slot /><slot name="footer" /></div>' } } },
+    global: {
+      stubs: { 'el-drawer': { template: '<div><slot /><slot name="footer" /></div>' } },
+      directives: { loading: {} },
+    },
   })
   await flushPromises()
   return wrapper
@@ -55,22 +60,22 @@ async function createWrapper() {
 afterEach(() => vi.restoreAllMocks())
 
 describe('SiteSourceSwitcher', () => {
-  it('默认复制本网站第一个子源', async () => {
+  it('默认复制本网站第一个源', async () => {
     const wrapper = await createWrapper()
-    await wrapper.get('[title="添加子源"]').trigger('click')
+    await wrapper.get('[title="添加源"]').trigger('click')
     const inputs = wrapper.findAll('.ssw-add-input')
-    await inputs[0].setValue('默认复制子源')
+    await inputs[0].setValue('默认复制源')
     await inputs[1].setValue('https://default.example.com')
     await wrapper.get('[data-testid="add-source-submit"]').trigger('click')
 
     expect(siteApi.cloneSource).toHaveBeenCalledWith(expect.objectContaining({ templateSourceId: source.sourceId }))
   })
 
-  it('可搜索并选择全部子源作为模板，复制范围为子源', async () => {
+  it('可搜索并选择全部源作为模板，复制范围为源', async () => {
     const wrapper = await createWrapper()
-    await wrapper.get('[title="添加子源"]').trigger('click')
+    await wrapper.get('[title="添加源"]').trigger('click')
     const inputs = wrapper.findAll('.ssw-add-input')
-    await inputs[0].setValue('复制子源')
+    await inputs[0].setValue('复制源')
     await inputs[1].setValue('https://copied.example.com')
     await wrapper.get('[data-testid="source-template-mode"]').setValue('search')
     await wrapper.get('[data-testid="source-template-search"]').setValue('跨网站')
@@ -81,35 +86,48 @@ describe('SiteSourceSwitcher', () => {
     expect(siteApi.cloneSource).toHaveBeenCalledWith({
       templateSourceId: templateSource.sourceId,
       targetSiteId: 'site-a',
-      target: { name: '复制子源', url: 'https://copied.example.com' },
+      target: { name: '复制源', url: 'https://copied.example.com' },
     })
     expect(siteApi.sourceAdd).not.toHaveBeenCalled()
   })
 
   it('选择空白模板时明确传 inherit=false', async () => {
     const wrapper = await createWrapper()
-    await wrapper.get('[title="添加子源"]').trigger('click')
+    await wrapper.get('[title="添加源"]').trigger('click')
     const inputs = wrapper.findAll('.ssw-add-input')
-    await inputs[0].setValue('空白子源')
+    await inputs[0].setValue('空白源')
     await inputs[1].setValue('https://blank.example.com')
     await wrapper.get('[data-testid="source-template-mode"]').setValue('blank')
     await wrapper.get('[data-testid="add-source-submit"]').trigger('click')
 
     expect(siteApi.sourceAdd).toHaveBeenCalledWith(
-      'site-a', expect.objectContaining({ name: '空白子源', url: 'https://blank.example.com' }), false,
+      'site-a', expect.objectContaining({ name: '空白源', url: 'https://blank.example.com' }), false,
     )
   })
 
-  it('未填写子源名称时给出明确提示且不提交', async () => {
+  // 0812 计划 M1-11：绑定已有源/仅展示未关联入口已删除，只保留新建源；
+  // 按源 ID 导入现有源的能力放到 M4 的"导入源"，接旧平台真实批量归属契约。
+  it('添加源弹窗不再提供绑定已有源入口', async () => {
     const wrapper = await createWrapper()
-    await wrapper.get('[title="添加子源"]').trigger('click')
+    await wrapper.get('[title="添加源"]').trigger('click')
+
+    expect(wrapper.find('[data-testid="source-add-mode"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="add-mode-bind"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="bind-source-table"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('绑定已有源')
+    expect(wrapper.text()).not.toContain('仅展示未关联')
+  })
+
+  it('未填写源名称时给出明确提示且不提交', async () => {
+    const wrapper = await createWrapper()
+    await wrapper.get('[title="添加源"]').trigger('click')
     await wrapper.get('[data-testid="add-source-submit"]').trigger('click')
 
     expect(siteApi.cloneSource).not.toHaveBeenCalled()
     expect(siteApi.sourceAdd).not.toHaveBeenCalled()
   })
 
-  it('双击子源行内重命名并保存', async () => {
+  it('双击源行内重命名并保存', async () => {
     const wrapper = await createWrapper()
     await wrapper.get('.ssw-row-main').trigger('dblclick')
     const input = wrapper.get('[data-testid="source-rename-input"]')
@@ -132,7 +150,7 @@ describe('SiteSourceSwitcher', () => {
     expect(sourceApi.sendSnatch).toHaveBeenCalledWith([source.sourceId])
   })
 
-  it('子源行只负责进入详情，发起抓取收进右键菜单', async () => {
+  it('源行只负责进入详情，发起抓取收进右键菜单', async () => {
     const wrapper = await createWrapper()
 
     await wrapper.get('.ssw-row-main').trigger('click')
@@ -158,10 +176,10 @@ describe('SiteSourceSwitcher', () => {
   })
 })
 
-describe('SiteSourceSwitcher · 参数源（0721 会议：加源支持普通子源 / 参数源）', () => {
+describe('SiteSourceSwitcher · 参数源（0721 会议：加源支持普通源 / 参数源）', () => {
   async function openParamPanel() {
     const wrapper = await createWrapper()
-    await wrapper.get('[title="添加子源"]').trigger('click')
+    await wrapper.get('[title="添加源"]').trigger('click')
     await wrapper.get('[data-testid="source-kind-param"]').trigger('click')
     return wrapper
   }
@@ -179,7 +197,7 @@ describe('SiteSourceSwitcher · 参数源（0721 会议：加源支持普通子�
     await flushPromises()
   }
 
-  it('切换到参数源：普通子源字段隐藏，参数源字段出现', async () => {
+  it('切换到参数源：普通源字段隐藏，参数源字段出现', async () => {
     const wrapper = await openParamPanel()
     expect(wrapper.find('[data-testid="source-template-mode"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="param-source-template"]').exists()).toBe(true)
@@ -291,5 +309,198 @@ describe('SiteSourceSwitcher · 参数源（0721 会议：加源支持普通子�
     expect(wrapper.get('.ssw-param-table').text()).toContain('新建的参数')
     const template = wrapper.get<HTMLInputElement>('[data-testid="param-source-template"]')
     expect(template.element.value).toContain('$PARAM$_param-9001')
+  })
+})
+
+// 批量导入弹窗（0812 会议反馈：新增源和导入已有源合并成一个入口，弹窗里用 tab 分，不再是两个按钮）
+describe('SiteSourceSwitcher · 批量导入（新增源 tab）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('默认打开就是"新增源" tab，按原有 名称;URL 格式提交', async () => {
+    const wrapper = await createWrapper()
+    const importSources = vi.spyOn(siteApi, 'siteImportSources').mockResolvedValue({ ok: true, message: '已导入 1 个源' })
+
+    await wrapper.get('[data-testid="open-batch"]').trigger('click')
+    expect(wrapper.find('[data-testid="bind-source-table"]').exists()).toBe(false)
+    await wrapper.get('.ssw-import-textarea').setValue('测试源;https://example.com')
+    await wrapper.get('[data-testid="batch-import-submit"]').trigger('click')
+
+    expect(importSources).toHaveBeenCalledWith('site-a', '测试源;https://example.com')
+  })
+
+  it('点"导入已有源" tab 切换过去，再点回"新增源"，两边状态不互相污染', async () => {
+    const wrapper = await createWrapper()
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+
+    await wrapper.get('[data-testid="open-batch"]').trigger('click')
+    await wrapper.get('[data-testid="batch-tab-existing"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="bind-source-table"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="batch-tab-new"]').trigger('click')
+    expect(wrapper.find('[data-testid="bind-source-table"]').exists()).toBe(false)
+    expect(wrapper.find('.ssw-import-textarea').exists()).toBe(true)
+  })
+})
+
+// 导入已有源（0812 计划 M4-5，1:1 迁移旧平台 SiteList.vue 的关联源弹窗）：跟"新增源" tab
+// 是两回事——那边建的是新源，这里导入的是已经存在、可能属于别的网站甚至没有归属的源。
+describe('SiteSourceSwitcher · 导入已有源（M4-5）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const unbound: Source = { sourceId: 'src-unbound', name: '未关联源', url: '', configId: '', mainTable: '', owner: 'admin', state: 'C' }
+  const otherSite: Source = { sourceId: 'src-other', siteId: 'site-b', siteName: '别的网站', name: '别站的源', url: '', configId: '', mainTable: '', owner: 'admin', state: 'C' }
+  const sameSite: Source = { sourceId: 'src-same', siteId: 'site-a', name: '已在本站的源', url: '', configId: '', mainTable: '', owner: 'admin', state: 'C' }
+
+  it('打开弹窗加载候选源，按归属状态显示"未关联/已属本站/已属其他网站"', async () => {
+    const wrapper = await createWrapper()
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 3, list: [unbound, otherSite, sameSite] })
+
+    await wrapper.get('[data-testid="open-batch"]').trigger('click')
+    await wrapper.get('[data-testid="batch-tab-existing"]').trigger('click')
+    await flushPromises()
+    // 默认勾选"仅展示未关联"，先关掉才能看到三种状态都在（M4-5：1:1 对齐旧平台 hideBound 语义）
+    await wrapper.get('.ssw-bind-hide input[type="checkbox"]').setValue(false)
+
+    const table = wrapper.get('[data-testid="bind-source-table"]')
+    expect(table.text()).toContain('未关联')
+    expect(table.text()).toContain('已属本站')
+    expect(table.text()).toContain('已属其他网站')
+    expect(table.text()).toContain('别的网站')
+  })
+
+  it('勾选源后点击"确认导入"，调用 changeSite(选中的源ID, 当前网站ID) 并刷新列表', async () => {
+    const wrapper = await createWrapper()
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [unbound] })
+
+    await wrapper.get('[data-testid="open-batch"]').trigger('click')
+    await wrapper.get('[data-testid="batch-tab-existing"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="bind-source-table"] input[type="checkbox"]').setValue(true)
+    await wrapper.get('[data-testid="bind-source-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(sourceApi.changeSite).toHaveBeenCalledWith(['src-unbound'], 'site-a')
+    expect(wrapper.find('[data-testid="bind-source-table"]').exists()).toBe(false) // 弹窗已关闭
+  })
+
+  it('勾选的源里有已属其他网站的，提交前弹二次确认；确认后才真的调用 changeSite（M4-6：显著标记 + 二次确认，不硬拦）', async () => {
+    const wrapper = await createWrapper()
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [otherSite] })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+
+    await wrapper.get('[data-testid="open-batch"]').trigger('click')
+    await wrapper.get('[data-testid="batch-tab-existing"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('.ssw-bind-hide input[type="checkbox"]').setValue(false) // 关掉"仅展示未关联"才能看到别站的源
+    await wrapper.get('[data-testid="bind-source-table"] input[type="checkbox"]').setValue(true)
+    await wrapper.get('[data-testid="bind-source-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('别的网站'), '确认导入', expect.anything())
+    expect(sourceApi.changeSite).toHaveBeenCalledWith(['src-other'], 'site-a')
+  })
+
+  it('二次确认弹窗点取消时，不调用 changeSite', async () => {
+    const wrapper = await createWrapper()
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [otherSite] })
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+
+    await wrapper.get('[data-testid="open-batch"]').trigger('click')
+    await wrapper.get('[data-testid="batch-tab-existing"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('.ssw-bind-hide input[type="checkbox"]').setValue(false)
+    await wrapper.get('[data-testid="bind-source-table"] input[type="checkbox"]').setValue(true)
+    await wrapper.get('[data-testid="bind-source-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(sourceApi.changeSite).not.toHaveBeenCalled()
+  })
+
+  it('未勾选任何源时，"确认导入"按钮禁用', async () => {
+    const wrapper = await createWrapper()
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [unbound] })
+
+    await wrapper.get('[data-testid="open-batch"]').trigger('click')
+    await wrapper.get('[data-testid="batch-tab-existing"]').trigger('click')
+    await flushPromises()
+
+    const btn = wrapper.get<HTMLButtonElement>('[data-testid="bind-source-submit"]')
+    expect(btn.element.disabled).toBe(true)
+  })
+
+  // 按源ID批量导入（0812 会议反馈）：不是"检索出来再手动勾选"，是粘贴一批源 ID 直接提交——
+  // ID 本身就是选择，跳过表格预览/勾选这一步。
+  it('按源ID批量导入：粘贴源 ID 直接提交，无需先在表格里勾选', async () => {
+    const wrapper = await createWrapper()
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+
+    await wrapper.get('[data-testid="open-batch"]').trigger('click')
+    await wrapper.get('[data-testid="batch-tab-existing"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="id-import-toggle"]').trigger('click')
+    paged.mockResolvedValueOnce({ total: 1, list: [unbound] })
+    await wrapper.get('[data-testid="id-import-textarea"]').setValue('src-unbound')
+    await wrapper.get('[data-testid="id-import-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceIds: ['src-unbound'] }))
+    expect(sourceApi.changeSite).toHaveBeenCalledWith(['src-unbound'], 'site-a')
+    expect(wrapper.find('[data-testid="bind-source-table"]').exists()).toBe(false) // 弹窗已关闭
+  })
+
+  it('按源ID批量导入：未找到的 ID 会提示，找到的部分照常导入', async () => {
+    const wrapper = await createWrapper()
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+
+    await wrapper.get('[data-testid="open-batch"]').trigger('click')
+    await wrapper.get('[data-testid="batch-tab-existing"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="id-import-toggle"]').trigger('click')
+    paged.mockResolvedValueOnce({ total: 1, list: [unbound] })
+    await wrapper.get('[data-testid="id-import-textarea"]').setValue('src-unbound, ghost-id-not-real')
+    await wrapper.get('[data-testid="id-import-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceIds: ['src-unbound', 'ghost-id-not-real'] }))
+    expect(sourceApi.changeSite).toHaveBeenCalledWith(['src-unbound'], 'site-a')
+  })
+
+  it('按源ID批量导入：命中的源已属其他网站时，同样先弹二次确认再提交', async () => {
+    const wrapper = await createWrapper()
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+
+    await wrapper.get('[data-testid="open-batch"]').trigger('click')
+    await wrapper.get('[data-testid="batch-tab-existing"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="id-import-toggle"]').trigger('click')
+    paged.mockResolvedValueOnce({ total: 1, list: [otherSite] })
+    await wrapper.get('[data-testid="id-import-textarea"]').setValue('src-other')
+    await wrapper.get('[data-testid="id-import-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('别的网站'), '确认导入', expect.anything())
+    expect(sourceApi.changeSite).toHaveBeenCalledWith(['src-other'], 'site-a')
+  })
+
+  it('勾选"仅展示未关联"时过滤掉已属本站/其他网站的源', async () => {
+    const wrapper = await createWrapper()
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 3, list: [unbound, otherSite, sameSite] })
+
+    await wrapper.get('[data-testid="open-batch"]').trigger('click')
+    await wrapper.get('[data-testid="batch-tab-existing"]').trigger('click')
+    await flushPromises()
+
+    // 默认就是"仅展示未关联"勾选态
+    let table = wrapper.get('[data-testid="bind-source-table"]')
+    expect(table.text()).toContain('未关联源')
+    expect(table.text()).not.toContain('别站的源')
+    expect(table.text()).not.toContain('已在本站的源')
+
+    await wrapper.get('.ssw-bind-hide input[type="checkbox"]').setValue(false)
+    table = wrapper.get('[data-testid="bind-source-table"]')
+    expect(table.text()).toContain('别站的源')
+    expect(table.text()).toContain('已在本站的源')
   })
 })

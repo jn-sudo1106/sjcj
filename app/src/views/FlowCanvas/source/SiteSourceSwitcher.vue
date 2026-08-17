@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// 子源侧栏：页面级左侧固定栏，流程、数据、文件和任务视图共用。
+// 源侧栏：页面级左侧固定栏，流程、数据、文件和任务视图共用。
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { siteApi, sourceApi, type Site, type Source } from '@/api'
 import type { ParamGroupRef } from '@/utils/flow/urlParams'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
@@ -64,7 +64,7 @@ function onCompareKwInput() {
     }
     cmp.loading = true
     try {
-      // 全局搜索（含跨站）：复用源分页契约的 keyword 匹配，排除当前子源
+      // 全局搜索（含跨站）：复用源分页契约的 keyword 匹配，排除当前源
       const res = await sourceApi.sourcePaged({ keyword: q, size: 50 })
       cmp.results = res.list.filter((s) => s.sourceId !== props.activeKey)
     } finally {
@@ -87,7 +87,7 @@ onBeforeUnmount(() => {
   if (cmpTimer) clearTimeout(cmpTimer)
 })
 
-// ---- 子源操作：名称点击切换；右键菜单提供重命名/发起抓取 ----
+// ---- 源操作：名称点击切换；右键菜单提供重命名/发起抓取 ----
 const rename = reactive({ sourceId: '', name: '' })
 function startRename(s: Source) {
   rename.sourceId = s.sourceId
@@ -117,7 +117,7 @@ async function saveRename(s: Source) {
     }
     s.name = name
     cancelRename()
-    ElMessage.success(res?.message || '子源已重命名')
+    ElMessage.success(res?.message || '源已重命名')
     emit('added', updated)
   } catch (error) {
     ElMessage.error(`重命名失败：${error instanceof Error ? error.message : String(error)}`)
@@ -142,10 +142,18 @@ async function launchFromMenu() {
   await launchSource(s)
 }
 
-// ---- ＋添加子源：默认复制当前网站首个子源，也可搜索全部子源或选择空白模板 ----
+// ---- ＋添加源（0812 会议纠偏：删除"绑定已有源/仅展示未关联"模式，只保留新建；
+// 按源 ID/名称导入现有源的能力放到 M4 的"导入源"，接旧平台真实批量归属契约） ----
 type TemplateMode = 'default' | 'search' | 'blank'
 type SourceKind = 'normal' | 'param'
-const addDlg = reactive({ show: false, name: '', url: '', templateMode: 'blank' as TemplateMode, templateSourceId: '', kind: 'normal' as SourceKind })
+const addDlg = reactive({
+  show: false,
+  name: '',
+  url: '',
+  templateMode: 'blank' as TemplateMode,
+  templateSourceId: '',
+  kind: 'normal' as SourceKind,
+})
 const templateSearch = reactive({ keyword: '', results: [] as Source[], loading: false, open: false })
 const defaultTemplate = computed(() => children.value[0] ?? null)
 const selectedTemplate = computed(() => {
@@ -194,7 +202,7 @@ function closeAdd() {
   addDlg.show = false
 }
 
-// ---- 参数源（0721 会议）：加源弹窗内新增分支，与上面的普通子源字段/流程互不干扰 ----
+// ---- 参数源（0721 会议）：加源弹窗内新增分支，与上面的普通源字段/流程互不干扰 ----
 // 面板本体抽成 ParamSourceEditor（NodeInspector 只读摘要 / 编辑参数源弹窗共用），这里只留创建态需要的胶水。
 const paramSrc = ref<ParamSourceModel>({ baseUrl: '', refs: [] as ParamGroupRef[], urlTemplate: '' })
 const paramEditorRef = ref<InstanceType<typeof ParamSourceEditor> | null>(null)
@@ -209,7 +217,7 @@ function switchKind(kind: SourceKind) {
 async function submitParamSource() {
   const name = addDlg.name.trim()
   if (!name) {
-    ElMessage.warning('请填写子源名称')
+    ElMessage.warning('请填写源名称')
     return
   }
   if (!paramSrc.value.baseUrl.trim()) {
@@ -247,7 +255,7 @@ async function submitParamSource() {
     return
   }
   const addedId = res.sourceId || sourceId
-  ElMessage.success(`已添加参数子源「${name}」：源列表只存 1 条记录，发任务时将展开为 ${(paramEditorRef.value?.totalCount ?? 0).toLocaleString('en-US')} 个 URL`)
+  ElMessage.success(`已添加参数源「${name}」：源列表只存 1 条记录，发任务时将展开为 ${(paramEditorRef.value?.totalCount ?? 0).toLocaleString('en-US')} 个 URL`)
   closeAdd()
   await load()
   const added = children.value.find((c) => c.sourceId === addedId)
@@ -260,14 +268,14 @@ async function submitAdd() {
     return
   }
   if (!addDlg.name.trim()) {
-    ElMessage.warning('请填写子源名称')
+    ElMessage.warning('请填写源名称')
     return
   }
   const sourceId = `${props.siteId}-${Date.now().toString(36)}`
   const target = { name: addDlg.name.trim(), url: addDlg.url.trim() }
   let addedId = sourceId
   if (addDlg.templateMode === 'search' && !selectedTemplate.value) {
-    ElMessage.warning('请先选择模板子源，或切换为空白模板')
+    ElMessage.warning('请先选择模板源，或切换为空白模板')
     return
   }
   if (selectedTemplate.value) {
@@ -278,7 +286,7 @@ async function submitAdd() {
     })
     if (!res?.source) return
     addedId = res.source.sourceId
-    ElMessage.success(`已复制子源「${target.name}」的流程、相关配置和表结构（不复制数据）`)
+    ElMessage.success(`已复制源「${target.name}」的流程、相关配置和表结构（不复制数据）`)
   } else {
     const res = await siteApi.sourceAdd(
       props.siteId,
@@ -287,7 +295,7 @@ async function submitAdd() {
     )
     if (!res.ok) return
     addedId = res.sourceId || sourceId
-    ElMessage.success(`已添加子源「${target.name}」（空白流程，请先编排）`)
+    ElMessage.success(`已添加源「${target.name}」（空白流程，请先编排）`)
   }
   closeAdd()
   await load()
@@ -308,18 +316,165 @@ async function launchSource(s: Source) {
   }
 }
 
-// ---- 批量导入子源（0711 R12：从采集资产页顶部迁入，siteId 已定，无需目标网站下拉） ----
-const importDlg = reactive({ show: false, lines: '' })
-function openImport() {
+// ---- 批量导入（0812 会议反馈：关联已有源不该另起一个入口，跟"批量导入新源"都是"批量往这个
+// 网站加源"，只是加的对象一个是新建一个是已存在，合成一个按钮、弹窗里用 tab 分）----
+type BatchTab = 'new' | 'existing'
+const batchTab = ref<BatchTab>('new')
+function openBatch() {
   importDlg.show = true
+  batchTab.value = 'new'
   importDlg.lines = ''
+  resetBindState()
 }
-function closeImport() {
+function closeBatch() {
   importDlg.show = false
 }
+function switchBatchTab(tab: BatchTab) {
+  batchTab.value = tab
+  if (tab === 'existing' && !bindDlg.results.length) void loadBindCandidates()
+}
+
+// ---- 导入已有源（0812 计划 M4-5，1:1 迁移旧平台 SiteList.vue 的关联源弹窗）：
+// 按名称搜索、表格勾选后一次性 changeSite(ids, siteId)；按源 ID 批量导入见下面的 idImport（粘贴
+// 即提交，不用先勾选）。跟"新增源" tab 是两回事——那边建的是新源，这里导入的是已经存在、
+// 可能属于别的网站甚至没有归属的源。 ----
+const bindDlg = reactive({
+  keyword: '',
+  results: [] as Source[],
+  selected: new Set<string>(),
+  hideBound: true,
+  page: 1,
+  total: 0,
+  loading: false,
+  submitting: false,
+})
+const BIND_PAGE_SIZE = 20
+// 1:1 对齐旧平台 SiteList.vue 的 hideBound：只看 siteId 是否为空，连"已属本站"的也一起过滤掉——
+// 已经在本站的源不需要再关联一次。
+const bindVisibleResults = computed(() =>
+  bindDlg.hideBound ? bindDlg.results.filter((s) => !s.siteId) : bindDlg.results,
+)
+async function loadBindCandidates() {
+  bindDlg.loading = true
+  try {
+    const res = await sourceApi.sourcePaged({ keyword: bindDlg.keyword.trim() || undefined, page: bindDlg.page, size: BIND_PAGE_SIZE })
+    bindDlg.results = res.list
+    bindDlg.total = res.total
+  } finally {
+    bindDlg.loading = false
+  }
+}
+function resetBindState() {
+  bindDlg.keyword = ''
+  bindDlg.results = []
+  bindDlg.selected = new Set()
+  bindDlg.hideBound = true
+  bindDlg.page = 1
+  bindDlg.total = 0
+  idImport.open = false
+  idImport.text = ''
+}
+function bindSearch() {
+  bindDlg.page = 1
+  void loadBindCandidates()
+}
+function bindPrevPage() {
+  if (bindDlg.page <= 1) return
+  bindDlg.page -= 1
+  void loadBindCandidates()
+}
+function bindNextPage() {
+  if (bindDlg.page * BIND_PAGE_SIZE >= bindDlg.total) return
+  bindDlg.page += 1
+  void loadBindCandidates()
+}
+function toggleBindRow(sourceId: string) {
+  const next = new Set(bindDlg.selected)
+  if (next.has(sourceId)) next.delete(sourceId)
+  else next.add(sourceId)
+  bindDlg.selected = next
+}
+// 已属其他网站的源需要二次确认才能提交（0812 计划 M4-6：显著标记 + 二次确认，不硬拦——按旧平台
+// 行为，勾选后依然能提交，只是要让用户明确知道这会把源从原网站挪走）。已属本站/未关联的不用额外确认，
+// 不给"每次都要点一下确认"的无意义摩擦。名称搜索/源ID 两条路径共用这一个确认逻辑。
+async function confirmCrossSiteIfNeeded(candidates: Source[]): Promise<boolean> {
+  const crossSite = candidates.filter((s) => s.siteId && s.siteId !== props.siteId)
+  if (!crossSite.length) return true
+  const names = crossSite.map((s) => `「${s.name}」（当前属于${s.siteName || s.siteId}）`).join('、')
+  try {
+    await ElMessageBox.confirm(
+      `其中 ${crossSite.length} 个源已属于其他网站：${names}，导入后会改为属于「${site.value?.name ?? '当前网站'}」，是否继续？`,
+      '确认导入',
+      { type: 'warning', confirmButtonText: '确认导入', cancelButtonText: '取消' },
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+async function submitBind() {
+  if (!bindDlg.selected.size) return
+  const selected = bindDlg.results.filter((s) => bindDlg.selected.has(s.sourceId))
+  if (!(await confirmCrossSiteIfNeeded(selected))) return
+  bindDlg.submitting = true
+  try {
+    const res = await sourceApi.changeSite([...bindDlg.selected], props.siteId)
+    if (!res?.ok) {
+      ElMessage.warning(res?.message || '导入失败，请重试')
+      return
+    }
+    ElMessage.success(res.message || `已导入 ${bindDlg.selected.size} 个源到「${site.value?.name ?? '当前网站'}」`)
+    closeBatch()
+    await load()
+  } finally {
+    bindDlg.submitting = false
+  }
+}
+
+// 按源ID批量导入（0812 会议反馈：不是"检索后手动勾选再点确认"，是粘贴一批源 ID 直接提交——
+// ID 本身就是选择，不需要再在表格里勾一遍）。仍然过一遍跨网站二次确认，只是不需要先进表格预览。
+const idImport = reactive({ open: false, text: '', loading: false })
+function toggleIdImport() {
+  idImport.open = !idImport.open
+}
+async function submitByIds() {
+  const ids = [...new Set(idImport.text.split(/[,，\n\s]+/).map((id) => id.trim()).filter(Boolean))]
+  if (!ids.length) {
+    ElMessage.warning('请输入源 ID')
+    return
+  }
+  idImport.loading = true
+  try {
+    const res = await sourceApi.sourcePaged({ sourceIds: ids, page: 1, size: ids.length })
+    const found = res.list
+    const missing = ids.filter((id) => !found.some((s) => s.sourceId === id))
+    if (!found.length) {
+      ElMessage.warning(`未找到匹配的源：${missing.join('、')}`)
+      return
+    }
+    if (!(await confirmCrossSiteIfNeeded(found))) return
+    const submitRes = await sourceApi.changeSite(found.map((s) => s.sourceId), props.siteId)
+    if (!submitRes?.ok) {
+      ElMessage.warning(submitRes?.message || '导入失败，请重试')
+      return
+    }
+    let msg = submitRes.message || `已导入 ${found.length} 个源到「${site.value?.name ?? '当前网站'}」`
+    if (missing.length) msg += `；${missing.length} 个源 ID 未找到：${missing.join('、')}`
+    ElMessage.success(msg)
+    idImport.text = ''
+    idImport.open = false
+    closeBatch()
+    await load()
+  } finally {
+    idImport.loading = false
+  }
+}
+
+// ---- 批量导入·新增源 tab（0711 R12：从采集资产页顶部迁入，siteId 已定，无需目标网站下拉） ----
+const importDlg = reactive({ show: false, lines: '' })
 async function submitImport() {
   if (!importDlg.lines.trim()) {
-    ElMessage.warning('请填写子源清单，一行一条「名称;URL」')
+    ElMessage.warning('请填写源清单，一行一条「名称;URL」')
     return
   }
   const res = await siteApi.siteImportSources(props.siteId, importDlg.lines)
@@ -328,7 +483,7 @@ async function submitImport() {
     return
   }
   ElMessage.success(res?.message || '批量导入已提交（演示）')
-  closeImport()
+  closeBatch()
   await load()
 }
 </script>
@@ -341,7 +496,7 @@ async function submitImport() {
           class="ssw-site"
           :class="{ active: !activeKey }"
           type="button"
-          title="网站详情：数据/文件/任务汇总（全部子源）"
+          title="网站详情：源/数据/文件汇总（全部源）"
           @click="emit('pickSite')"
         >
           <span class="ssw-site-ico">🌐</span>
@@ -350,11 +505,11 @@ async function submitImport() {
         <button class="ssw-collapse" type="button" title="收起侧栏" @click="collapsed = true">«</button>
       </div>
       <div class="ssw-section-toggle" @click="listExpanded = !listExpanded">
-        <span class="ssw-section-title">子源列表 ({{ children.length }})</span>
+        <span class="ssw-section-title">源列表 ({{ children.length }})</span>
         <span class="ssw-section-icon">{{ listExpanded ? '▼' : '▶' }}</span>
       </div>
       <template v-if="listExpanded">
-        <input v-model="kw" class="ssw-search" placeholder="搜索子源" />
+        <input v-model="kw" class="ssw-search" placeholder="搜索源" />
         <div class="ssw-list">
           <div v-if="!kw" class="ssw-row" :class="{ active: !activeKey }">
             <button
@@ -398,7 +553,7 @@ async function submitImport() {
               <div class="ssw-row-text">
                 <div class="ssw-row-head">
                   <span class="ssw-row-name">{{ c.name }}</span>
-                  <span v-if="c.kind === 'param'" class="ssw-kind-tag" title="参数子源：发任务时展开为多个 URL">参数子源</span>
+                  <span v-if="c.kind === 'param'" class="ssw-kind-tag" title="参数源：发任务时展开为多个 URL">参数源</span>
                 </div>
                 <div class="ssw-row-id">{{ c.sourceId }}</div>
               </div>
@@ -407,11 +562,11 @@ async function submitImport() {
               v-if="canCompare && c.sourceId !== activeKey"
               class="ssw-row-cmp"
               type="button"
-              title="与当前子源并排对比"
+              title="与当前源并排对比"
               @click.stop="emit('compare', c.sourceId)"
             >⇔</button>
           </div>
-          <div v-if="!filtered.length" class="ssw-empty">{{ kw ? '没有匹配的子源' : '该网站暂无子源' }}</div>
+          <div v-if="!filtered.length" class="ssw-empty">{{ kw ? '没有匹配的源' : '该网站暂无源' }}</div>
         </div>
       </template>
 
@@ -438,26 +593,26 @@ async function submitImport() {
         </div>
       </div>
       <div class="ssw-foot">
-        <button class="ssw-foot-btn" type="button" title="添加子源" @click="openAdd">＋ 添加子源</button>
+        <button class="ssw-foot-btn" type="button" title="添加源" @click="openAdd">＋ 添加源</button>
         <button
           class="ssw-foot-btn"
           type="button"
           :disabled="!canCompare"
-          :title="canCompare ? '选择任意网站的子源并排对比' : '请先切到具体子源再对比'"
+          :title="canCompare ? '选择任意网站的源并排对比' : '请先切到具体源再对比'"
           @click.stop="openComparePicker"
         >⇔ 对比</button>
       </div>
       <div class="ssw-foot">
-        <button class="ssw-foot-btn" type="button" title="批量导入子源" @click.stop="openImport">批量导入</button>
+        <button class="ssw-foot-btn" type="button" title="批量新增源，或把已存在的源关联到这个网站" data-testid="open-batch" @click.stop="openBatch">批量导入</button>
       </div>
     </template>
-    <button v-else class="ssw-expand" type="button" title="展开子源侧栏" @click="collapsed = false">»</button>
+    <button v-else class="ssw-expand" type="button" title="展开源侧栏" @click="collapsed = false">»</button>
   </aside>
 
-  <!-- 全局对比选择器（B4）：默认列本站其他子源，输入即全局搜索（含跨站） -->
+  <!-- 全局对比选择器（B4）：默认列本站其他源，输入即全局搜索（含跨站） -->
   <div v-if="cmp.show" class="ssw-cmp-pop" @click.stop>
-    <div class="ssw-cmp-title">选择对比对象（与当前子源并排）</div>
-    <input v-model="cmp.kw" class="ssw-search" placeholder="搜索全部网站的子源" autofocus @input="onCompareKwInput" />
+    <div class="ssw-cmp-title">选择对比对象（与当前源并排）</div>
+    <input v-model="cmp.kw" class="ssw-search" placeholder="搜索全部网站的源" autofocus @input="onCompareKwInput" />
     <div class="ssw-cmp-list">
       <div v-if="cmp.loading" class="ssw-empty">搜索中…</div>
       <template v-else>
@@ -466,7 +621,7 @@ async function submitImport() {
           <span class="ssw-cmp-name">{{ s.name }}</span>
           <span class="ssw-cmp-id">{{ s.sourceId }}</span>
         </button>
-        <div v-if="!cmp.results.length" class="ssw-empty">没有匹配的子源</div>
+        <div v-if="!cmp.results.length" class="ssw-empty">没有匹配的源</div>
       </template>
     </div>
   </div>
@@ -488,23 +643,29 @@ async function submitImport() {
 
   <div v-if="addDlg.show" class="ssw-add-backdrop" @click.self="closeAdd">
     <div class="ssw-add-card" :class="{ wide: addDlg.kind === 'param' }" @click.stop="paramEditorRef?.closePicker()">
-      <div class="ssw-add-title">添加子源</div>
+      <div class="ssw-add-header">
+        <div class="ssw-add-title">添加源</div>
+      </div>
 
+      <div class="ssw-field-label">源类型</div>
       <div class="ssw-kind-seg" data-testid="source-kind-seg">
         <button type="button" :class="{ active: addDlg.kind === 'normal' }" @click="switchKind('normal')">
-          普通子源<small>手工填名称 + URL</small>
+          <strong>普通源</strong><small>手工填写名称 + URL</small>
         </button>
         <button type="button" :class="{ active: addDlg.kind === 'param' }" data-testid="source-kind-param" @click="switchKind('param')">
-          参数子源<small>URL 模板 + 参数，按规律生成</small>
+          <strong>参数源</strong><small>URL 模板 + 参数，按规律生成</small>
         </button>
       </div>
 
       <template v-if="addDlg.kind === 'normal'">
-        <input v-model="addDlg.name" class="ssw-add-input" placeholder="子源名称，必填" />
-        <input v-model="addDlg.url" class="ssw-add-input" placeholder="子源 URL，选填" />
+        <label class="ssw-field-label">源名称 <em>*</em></label>
+        <input v-model="addDlg.name" class="ssw-add-input" placeholder="请输入源名称" />
+        <label class="ssw-field-label">源 URL <span>（可选）</span></label>
+        <input v-model="addDlg.url" class="ssw-add-input" placeholder="请输入源 URL" />
+        <label class="ssw-field-label">复制配置来源</label>
         <select v-model="addDlg.templateMode" class="ssw-add-input" data-testid="source-template-mode" @change="onTemplateModeChange">
-          <option v-if="defaultTemplate" value="default">默认：本网站第一个子源（{{ defaultTemplate.name }}）</option>
-          <option value="search">搜索并选择全部子源</option>
+          <option v-if="defaultTemplate" value="default">默认：本网站第一个源（{{ defaultTemplate.name }}）</option>
+          <option value="search">搜索并选择全部源</option>
           <option value="blank">空白模板</option>
         </select>
         <div v-if="addDlg.templateMode === 'search'" class="ssw-template-combobox" @click.stop>
@@ -512,13 +673,13 @@ async function submitImport() {
             v-model="templateSearch.keyword"
             class="ssw-add-input"
             data-testid="source-template-search"
-            placeholder="搜索并选择全部子源（名称或 ID）"
+            placeholder="搜索并选择全部源（名称或 ID）"
             @focus="templateSearch.open = !!templateSearch.keyword.trim()"
             @input="searchTemplateSources"
           />
           <div v-if="templateSearch.open" class="ssw-template-options">
-            <span v-if="templateSearch.loading" class="ssw-template-empty">搜索子源中…</span>
-            <span v-else-if="!templateSearch.results.length" class="ssw-template-empty">未找到匹配子源</span>
+            <span v-if="templateSearch.loading" class="ssw-template-empty">搜索源中…</span>
+            <span v-else-if="!templateSearch.results.length" class="ssw-template-empty">未找到匹配源</span>
             <button
               v-for="source in templateSearch.results"
               v-else
@@ -540,7 +701,8 @@ async function submitImport() {
       </template>
 
       <template v-else>
-        <input v-model="addDlg.name" class="ssw-add-input" placeholder="子源名称，必填" />
+        <label class="ssw-field-label">源名称 <em>*</em></label>
+        <input v-model="addDlg.name" class="ssw-add-input" placeholder="请输入源名称" />
         <ParamSourceEditor ref="paramEditorRef" v-model="paramSrc" />
       </template>
 
@@ -551,21 +713,106 @@ async function submitImport() {
     </div>
   </div>
 
-  <!-- 批量导入子源弹窗（0711 R12：从采集资产页迁入，siteId 已定，无目标网站选择） -->
-  <div v-if="importDlg.show" class="ssw-add-backdrop" @click.self="closeImport">
-    <div class="ssw-add-card" @click.stop>
-      <div class="ssw-add-title">批量导入子源</div>
-      <textarea
-        v-model="importDlg.lines"
-        class="ssw-import-textarea"
-        rows="6"
-        placeholder="一行一条，格式：子源名称;URL（URL 可省略）&#10;波兰语公告;https://example.com/notice?lang=pl&#10;瑞典语公告;https://example.com/notice?lang=sv"
-      />
-      <div class="ssw-add-hint">导入的子源均从空白流程开始，空行跳过</div>
-      <div class="ssw-add-actions">
-        <button class="rc-btn" type="button" @click="closeImport">取消</button>
-        <button class="rc-btn primary" type="button" @click="submitImport">导入</button>
+  <!-- 批量导入弹窗（0812 会议反馈：新增源和关联已有源都是"批量往这个网站加源"，只是加的对象
+       一个是新建一个是已存在，合成一个入口、弹窗里用 tab 分，不再是两个独立按钮） -->
+  <div v-if="importDlg.show" class="ssw-add-backdrop" @click.self="closeBatch">
+    <div class="ssw-add-card" :class="{ bind: batchTab === 'existing' }" @click.stop>
+      <div class="ssw-add-header">
+        <div class="ssw-add-title">批量导入 · {{ site?.name || '当前网站' }}</div>
       </div>
+      <div class="ssw-bind-toolbar batch-tabs">
+        <button type="button" class="ssw-batch-tab" :class="{ active: batchTab === 'new' }" data-testid="batch-tab-new" @click="switchBatchTab('new')">新增源</button>
+        <button type="button" class="ssw-batch-tab" :class="{ active: batchTab === 'existing' }" data-testid="batch-tab-existing" @click="switchBatchTab('existing')">导入已有源</button>
+      </div>
+
+      <template v-if="batchTab === 'new'">
+        <textarea
+          v-model="importDlg.lines"
+          class="ssw-import-textarea"
+          rows="6"
+          placeholder="一行一条，格式：源名称;URL（URL 可省略）&#10;波兰语公告;https://example.com/notice?lang=pl&#10;瑞典语公告;https://example.com/notice?lang=sv"
+        />
+        <div class="ssw-add-hint">导入的源均从空白流程开始，空行跳过</div>
+        <div class="ssw-add-actions">
+          <button class="rc-btn" type="button" @click="closeBatch">取消</button>
+          <button class="rc-btn primary" type="button" data-testid="batch-import-submit" @click="submitImport">导入</button>
+        </div>
+      </template>
+
+      <!-- 导入已有源（0812 计划 M4-5，1:1 迁移旧平台 SiteList.vue 的关联源）：跟"新增源" tab 是两回事——
+           那边建的是新源，这里导入的是已经存在的源，可能属于别的网站（要显著提示），也可能压根没归属过。
+           两条路径：按名称搜索+表格勾选（下面这块），或者按源ID批量导入（粘贴即提交，不用先勾选）。 -->
+      <template v-else>
+        <div class="ssw-bind-toolbar">
+          <input
+            v-model="bindDlg.keyword"
+            class="ssw-add-input bind-kw"
+            placeholder="按源名称搜索"
+            data-testid="bind-source-search"
+            @keyup.enter="bindSearch"
+          />
+          <button class="rc-btn" type="button" @click="bindSearch">搜索</button>
+          <button class="rc-btn" type="button" data-testid="id-import-toggle" @click="toggleIdImport">
+            {{ idImport.open ? '收起按源ID批量导入' : '按源ID批量导入' }}
+          </button>
+          <label class="ssw-bind-hide">
+            <input v-model="bindDlg.hideBound" type="checkbox" />
+            仅展示未关联
+          </label>
+          <span class="ssw-bind-selected">已选 {{ bindDlg.selected.size }}</span>
+        </div>
+
+        <!-- 按源ID批量导入：粘贴一批源 ID 直接提交，ID 本身就是选择，不用先在下面表格里勾一遍
+             （0812 会议反馈：不是"检索后手动勾选"）。仍会先查一遍归属，跨网站的照样弹二次确认。 -->
+        <div v-if="idImport.open" class="ssw-bind-batch">
+          <textarea
+            v-model="idImport.text"
+            class="ssw-import-textarea"
+            rows="3"
+            placeholder="输入源 ID，逗号或换行分隔，提交后直接导入到当前网站"
+            data-testid="id-import-textarea"
+          />
+          <button class="rc-btn primary" type="button" :disabled="idImport.loading" data-testid="id-import-submit" @click="submitByIds">
+            {{ idImport.loading ? '导入中…' : '批量导入' }}
+          </button>
+        </div>
+
+        <div class="ssw-bind-table-wrap" v-loading="bindDlg.loading">
+          <table class="rc-data-table ssw-bind-table" data-testid="bind-source-table">
+            <thead><tr><th style="width:32px"></th><th>源ID</th><th>源名称</th><th>当前归属</th></tr></thead>
+            <tbody>
+              <tr v-for="s in bindVisibleResults" :key="s.sourceId" @click="toggleBindRow(s.sourceId)">
+                <td @click.stop><input type="checkbox" :checked="bindDlg.selected.has(s.sourceId)" @change="toggleBindRow(s.sourceId)" /></td>
+                <td class="mono">{{ s.sourceId }}</td>
+                <td>{{ s.name }}</td>
+                <td>
+                  <span v-if="!s.siteId" class="ssw-bind-unbound">未关联</span>
+                  <span v-else-if="s.siteId === props.siteId" class="ssw-bind-current">已属本站</span>
+                  <span v-else class="ssw-bind-other" :title="'已关联到其它网站，勾选并提交会改为关联到 ' + (site?.name || '当前网站')">已属其他网站{{ s.siteName ? `「${s.siteName}」` : '' }}</span>
+                </td>
+              </tr>
+              <tr v-if="!bindDlg.loading && !bindVisibleResults.length"><td colspan="4" class="ssw-empty">没有匹配的源</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="ssw-bind-pager">
+          <button class="rc-btn" type="button" :disabled="bindDlg.page <= 1" @click="bindPrevPage">上一页</button>
+          <span class="ssw-bind-muted">第 {{ bindDlg.page }} 页 · 共 {{ bindDlg.total }} 条</span>
+          <button class="rc-btn" type="button" :disabled="bindDlg.page * BIND_PAGE_SIZE >= bindDlg.total" @click="bindNextPage">下一页</button>
+        </div>
+
+        <div class="ssw-add-hint">勾选源后点击"确认导入"即可批量导入到当前网站。</div>
+        <div class="ssw-add-actions">
+          <button class="rc-btn" type="button" @click="closeBatch">取消</button>
+          <button
+            class="rc-btn primary"
+            type="button"
+            data-testid="bind-source-submit"
+            :disabled="!bindDlg.selected.size || bindDlg.submitting"
+            @click="submitBind"
+          >{{ bindDlg.submitting ? '提交中…' : '确认导入' }}</button>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -763,10 +1010,14 @@ async function submitImport() {
 .ssw-row-menu button:hover:not(:disabled) { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .ssw-row-menu button:disabled { color: var(--rc-faint); cursor: not-allowed; }
 
-.ssw-add-backdrop { position: fixed; inset: 0; z-index: 91; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, 0.28); }
-.ssw-add-card { width: min(340px, calc(100vw - 48px)); max-height: calc(100vh - 60px); overflow-y: auto; background: #fff; border: 1px solid var(--rc-border); border-radius: 12px; padding: 16px; box-shadow: 0 24px 64px -22px rgba(15, 23, 42, 0.45); }
-.ssw-add-title { font-size: 13px; font-weight: 800; color: var(--rc-text); margin-bottom: 10px; }
-.ssw-add-input { box-sizing: border-box; width: 100%; height: 32px; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 0 9px; outline: none; margin-bottom: 8px; }
+.ssw-add-backdrop { position: fixed; inset: 0; z-index: 91; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(15, 23, 42, 0.34); }
+.ssw-add-card { box-sizing: border-box; width: min(720px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 32px)); overflow-y: auto; background: #fff; border: 1px solid #dbe5f1; border-radius: 18px; padding: 24px; box-shadow: 0 24px 64px -22px rgba(15, 23, 42, 0.45); }
+.ssw-add-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+.ssw-add-title { font-size: 22px; font-weight: 800; color: var(--rc-text); letter-spacing: -0.02em; }
+.ssw-field-label { display: block; margin: 0 0 8px; color: var(--rc-text); font-size: 14px; font-weight: 700; }
+.ssw-field-label em { color: #ef4444; font-style: normal; margin-left: 2px; }
+.ssw-field-label span { color: var(--rc-muted); font-weight: 500; }
+.ssw-add-input { box-sizing: border-box; width: 100%; height: 44px; border: 1px solid #cbd8e8; border-radius: 9px; background: #fff; color: var(--rc-text); font-size: 14px; padding: 0 13px; outline: none; margin-bottom: 18px; }
 .ssw-add-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .ssw-template-combobox { position: relative; }
 .ssw-template-options { position: absolute; z-index: 2; top: 32px; right: 0; left: 0; max-height: 160px; overflow: auto; border: 1px solid #bfdbfe; border-radius: 7px; background: #fff; box-shadow: 0 8px 20px rgba(15, 23, 42, 0.14); }
@@ -777,8 +1028,8 @@ async function submitImport() {
 .ssw-template-id { font-size: 10px; color: var(--rc-faint); font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
 .ssw-template-empty { display: block; padding: 8px 9px; color: var(--rc-muted); font-size: 12px; }
 .ssw-add-inherit { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--rc-text); cursor: pointer; margin: 2px 0 4px; }
-.ssw-add-hint { font-size: 11px; color: var(--rc-muted); line-height: 1.6; margin-bottom: 6px; }
-.ssw-add-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.ssw-add-hint { font-size: 12px; color: var(--rc-muted); line-height: 1.6; margin: -4px 0 6px; }
+.ssw-add-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--rc-border-soft); }
 .ssw-import-textarea {
   width: 100%;
   border: 1px solid #dbe3ee;
@@ -795,11 +1046,20 @@ async function submitImport() {
 .ssw-import-textarea:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 
 /* 参数源（0721 会议）：加源弹窗内新增分支；面板本体样式随 ParamSourceEditor.vue 迁走 */
-.ssw-add-card.wide { width: min(640px, calc(100vw - 48px)); transition: width 0.18s ease; }
-.ssw-kind-seg { display: flex; gap: 6px; margin-bottom: 10px; }
-.ssw-kind-seg button { flex: 1; height: 38px; border: 1px solid #d5e2f2; border-radius: 7px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
-.ssw-kind-seg button.active { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); box-shadow: inset 0 0 0 1px var(--rc-primary); }
-.ssw-kind-seg button small { display: block; font-size: 10px; font-weight: 400; color: var(--rc-muted); margin-top: 1px; }
+.ssw-add-card.wide { width: min(780px, calc(100vw - 32px)); transition: width 0.18s ease; }
+.ssw-kind-seg { display: flex; gap: 16px; margin: 0 0 24px; }
+.ssw-kind-seg button { flex: 1; min-height: 82px; padding: 14px 18px; border: 1px solid #d5e2f2; border-radius: 12px; background: #fff; color: var(--rc-text-2); font-size: 16px; font-weight: 700; cursor: pointer; text-align: left; font-family: inherit; }
+.ssw-kind-seg button.active { border-color: var(--rc-primary); background: #eff6ff; color: var(--rc-primary-ink); box-shadow: inset 0 0 0 1px var(--rc-primary); }
+.ssw-kind-seg button strong { display: block; }
+.ssw-kind-seg button small { display: block; font-size: 13px; font-weight: 500; color: var(--rc-muted); margin-top: 7px; }
+
+@media (max-width: 720px) {
+  .ssw-add-card, .ssw-add-card.wide { width: calc(100vw - 24px); padding: 18px; border-radius: 14px; }
+  .ssw-add-header { align-items: flex-start; flex-direction: column; gap: 12px; margin-bottom: 18px; }
+  .ssw-kind-seg { gap: 8px; }
+  .ssw-kind-seg button { min-height: 72px; padding: 10px; font-size: 14px; }
+  .ssw-kind-seg button small { font-size: 11px; }
+}
 
 /* 折叠分割栏 & 选中源详情 */
 .ssw-section-toggle {
@@ -893,4 +1153,29 @@ async function submitImport() {
   font-size: 10px;
   word-break: break-all;
 }
+
+/* 批量导入弹窗（新增源 / 关联已有源共用一个入口，靠 tab 分） */
+.ssw-add-card.bind { width: min(760px, calc(100vw - 32px)); }
+.batch-tabs { margin-bottom: 16px; }
+.ssw-batch-tab { height: 32px; padding: 0 14px; border: 1px solid var(--rc-border); border-radius: 999px; background: #fff; color: var(--rc-text-2); font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.ssw-batch-tab:hover { border-color: #93c5fd; color: var(--rc-primary-ink); }
+.ssw-batch-tab.active { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.ssw-bind-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.ssw-add-input.bind-kw { width: 220px; height: 34px; margin-bottom: 0; }
+.ssw-bind-toolbar .rc-btn { height: 34px; padding: 0 12px; font-size: 12px; }
+.ssw-bind-hide { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--rc-text-2); cursor: pointer; user-select: none; }
+.ssw-bind-selected { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--rc-primary-ink); }
+.ssw-bind-batch { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 12px; }
+.ssw-bind-batch .ssw-import-textarea { flex: 1; margin-bottom: 0; }
+.ssw-bind-batch .rc-btn { flex: none; height: 34px; padding: 0 12px; font-size: 12px; white-space: nowrap; }
+.ssw-bind-table-wrap { max-height: 320px; overflow: auto; border: 1px solid var(--rc-border-soft); border-radius: 8px; }
+.ssw-bind-table { width: 100%; }
+.ssw-bind-table tbody tr { cursor: pointer; }
+.ssw-bind-table tbody tr:hover { background: var(--rc-primary-bg); }
+.ssw-bind-table .mono { font-family: monospace; font-size: 11px; }
+.ssw-bind-unbound { color: var(--rc-faint); font-size: 12px; }
+.ssw-bind-current { color: var(--rc-ok); font-size: 12px; font-weight: 600; }
+.ssw-bind-other { color: #d97706; font-size: 12px; font-weight: 600; }
+.ssw-bind-pager { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 10px 0 4px; }
+.ssw-bind-muted { font-size: 12px; color: var(--rc-muted); }
 </style>

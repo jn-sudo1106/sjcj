@@ -4,16 +4,14 @@ import { useRoute, useRouter } from 'vue-router'
 import SourceTab from './SourceTab.vue'
 import ConfigTab from './ConfigTab.vue'
 import EntryTab from './EntryTab.vue'
-import FlowTemplate from '../FlowTemplate/index.vue'
 
 // 配置列表下线（0721 会议 §五 Phase D：经理+黄总确认"配置列表根本没用"，每个网站就是一个完整配置，
 // 节点/表/参数配置都在网站详情里看）——先隐藏入口，ConfigTab 组件本体和路由暂不删，方便快速回退。
 const TABS: { key: string; label: string }[] = [
   { key: 'source', label: '网站列表' },
   { key: 'entry', label: '表 ID 列表' },
-  { key: 'template', label: '流程模板列表' },
 ]
-const comps: Record<string, Component> = { source: SourceTab, config: ConfigTab, entry: EntryTab, template: FlowTemplate }
+const comps: Record<string, Component> = { source: SourceTab, config: ConfigTab, entry: EntryTab }
 const route = useRoute()
 const router = useRouter()
 const validTabs = new Set(TABS.map((tab) => tab.key))
@@ -22,10 +20,11 @@ function normalizeTab(tab: unknown): string {
   const key = String(tab ?? '')
   return validTabs.has(key) ? key : 'source'
 }
-// 参数模块迁到规则资产（0721 会议 §六-1）：旧链接 /collect?tab=param 重定向到新位置，保留一个迭代周期
+// 参数模块、流程模板都迁到规则资产（0721 会议 §六-1；流程模板见 0812 计划 M4-9）：
+// 旧链接 /collect?tab=param / tab=template 重定向到新位置，保留一个迭代周期
 watch(() => route.query.tab, (tab) => {
-  if (tab === 'param') {
-    void router.replace('/rules?tab=param')
+  if (tab === 'param' || tab === 'template') {
+    void router.replace(`/rules?tab=${tab}`)
     return
   }
   active.value = normalizeTab(tab)

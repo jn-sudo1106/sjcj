@@ -48,6 +48,6 @@ describe('CanvasHeader · 参数源摘要（0721 会议 T5）', () => {
     )
     await flushPromises()
 
-    expect(wrapper.get('.ch-sub').text()).toBe('参数子源 · http://base-$PARAM$_913-$PARAM$_912 · 2 个参数占位符')
+    expect(wrapper.get('.ch-sub').text()).toBe('参数源 · http://base-$PARAM$_913-$PARAM$_912 · 2 个参数占位符')
   })
 })

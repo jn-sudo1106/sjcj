@@ -33,7 +33,7 @@ function onTemplateDropdownVisible(visible: boolean) {
 }
 onMounted(() => { void loadTemplates() })
 
-// 顶部下拉既是模板切换入口，也要明确当前子源实际应用的是哪一版模板。
+// 顶部下拉既是模板切换入口，也要明确当前源实际应用的是哪一版模板。
 // 模板列表尚未加载、或旧存量流程没有模板绑定时，才回退到通用动作文案。
 const appliedTemplateLabel = computed(() => {
   const templateId = src.value?.templateId
@@ -51,13 +51,13 @@ const statusMeta = computed(() => {
   if (s.state === 'L') return { cls: 'run', text: '运行中' }
   return { cls: 'muted', text: '未知' }
 })
-// 摘要头只展示运行所需信息；子源 ID、分类和标签不在此处暴露。
+// 摘要头只展示运行所需信息；源 ID、分类和标签不在此处暴露。
 // 参数源（0721 会议 T5）：只读摘要——普通源的 url 换成"参数源 · 模板 · N 个参数占位符"；
 // 具体每个参数的真实取值数需要逐个查详情，摘要头不为此额外发请求，只读 paramRefs 数量。
 const metaLine = computed(() => {
   const s = src.value
   if (!s) return ''
-  const primary = s.kind === 'param' ? `参数子源 · ${s.urlTemplate || s.baseUrl || ''} · ${s.paramRefs?.length ?? 0} 个参数占位符` : s.url
+  const primary = s.kind === 'param' ? `参数源 · ${s.urlTemplate || s.baseUrl || ''} · ${s.paramRefs?.length ?? 0} 个参数占位符` : s.url
   return [primary, s.lastSuccessAt ? `上次成功 ${s.lastSuccessAt}` : ''].filter(Boolean).join(' · ')
 })
 function backToList() {
@@ -95,7 +95,7 @@ async function srcToggle() {
   s.disabled = willDisable
 }
 
-// 同步到子源（0716）：把当前子源已保存的流程批量覆盖到同网站其他子源。
+// 同步到源（0716）：把当前源已保存的流程批量覆盖到同网站其他源。
 // 永远同步已保存的版本——画布有未保存改动时先拦下，避免"画布上是 A、同步出去是 B"。
 const syncOpen = ref(false)
 function openSyncDialog() {
@@ -109,7 +109,8 @@ function openSyncDialog() {
 async function onSwitchFlow(command: string) {
   if (!command) return
   if (command === '__manage_templates__') {
-    void router.push({ path: '/collect', query: { tab: 'template' } })
+    // 流程模板管理页迁到规则资产（0812 计划 M4-9）
+    void router.push({ path: '/rules', query: { tab: 'template' } })
     return
   }
   const template = templates.value.find((item) => item.id === command)
@@ -164,13 +165,13 @@ async function onSwitchFlow(command: string) {
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <button v-if="src.siteId" class="rc-btn" type="button" title="把当前子源已保存的流程覆盖到同网站其他子源" @click="openSyncDialog">同步到子源…</button>
+        <button v-if="src.siteId" class="rc-btn" type="button" title="把当前源已保存的流程覆盖到同网站其他源" @click="openSyncDialog">同步到源…</button>
         <!-- 保存从 AppShell 顶栏迁入画布 Header（贴着它作用的画布）；与发起抓取同走动作总线，处理函数在 index.vue -->
         <button class="rc-btn primary" :class="{ dirty: flow.dirty }" type="button" :title="flow.dirty ? '画布有未保存的改动' : undefined" @click="ui.fireAction('保存')">
           保存
         </button>
       </div>
-      <div v-if="view === 'flow'" class="ch-canvas-actions" aria-label="子源运行操作">
+      <div v-if="view === 'flow'" class="ch-canvas-actions" aria-label="源运行操作">
         <button class="rc-btn primary" type="button" @click="srcSnatch">发起抓取</button>
         <button class="rc-btn" :class="{ danger: !src.disabled }" type="button" @click="srcToggle">
           {{ src.disabled ? '启用' : '停用' }}
