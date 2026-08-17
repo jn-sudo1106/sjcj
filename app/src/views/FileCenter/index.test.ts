@@ -20,7 +20,7 @@ function makeRouter() {
 describe('FileCenter', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('默认不查询全平台，先提示选择网站', async () => {
+  it('默认查询全部网站，不要求先选择网站', async () => {
     vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: sites.length, list: sites })
     const router = makeRouter()
     await router.push('/files')
@@ -29,8 +29,9 @@ describe('FileCenter', () => {
     })
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="file-center-empty"]').text()).toContain('请先选择网站')
-    expect(wrapper.findComponent({ name: 'SiteFileView' }).exists()).toBe(false)
+    const fileView = wrapper.findComponent({ name: 'SiteFileView' })
+    expect(fileView.exists()).toBe(true)
+    expect(fileView.props('siteId')).toBeUndefined()
   })
 
   it('从 URL 恢复网站和源预筛选，并把源条件交给文件视图', async () => {

@@ -66,17 +66,16 @@ watch(() => route.query.siteId, syncFromRoute)
         :disabled="loading || !!error"
         @change="selectSite(($event.target as HTMLSelectElement).value)"
       >
-        <option value="">请选择网站</option>
+      <option value="">全部网站</option>
         <option v-for="site in sites" :key="site.siteId" :value="site.siteId">{{ site.name }}（{{ site.siteId }}）</option>
       </select>
-      <span class="fc-hint">选择网站后，可继续按源、文件名、类型和状态筛选</span>
+      <span class="fc-hint">默认展示全部文件；选择网站后，可继续按源、文件名、类型和状态筛选</span>
       <button v-if="error" class="rc-btn" type="button" data-testid="file-center-retry" @click="retry">重试</button>
     </div>
 
     <div v-if="loading" class="fc-empty">正在加载网站列表…</div>
     <div v-else-if="error" class="fc-empty fc-error">{{ error }}</div>
-    <div v-else-if="!siteId" class="fc-empty" data-testid="file-center-empty">请先选择网站，再查询该网站下的文件</div>
-    <SiteFileView v-else :site-id="siteId" :initial-source-id="queryString(route.query.sourceId)" class="fc-files" />
+    <SiteFileView v-else :site-id="siteId || undefined" :initial-source-id="siteId ? queryString(route.query.sourceId) : undefined" class="fc-files" />
   </main>
 </template>
 

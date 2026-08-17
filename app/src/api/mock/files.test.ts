@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import { mockDataRowQueryPaged } from './dataview'
-import { mockFilePaged, mockFileStats } from './files'
+import { mockFilePaged, mockFileResourceRows, mockFileStats } from './files'
 import { mockSourceDetail, mockSourceNodeRuns, mockSourceTaskPaged } from './sources'
 
 describe('原始文件 mock（0812 计划 M3-1：字段对齐旧平台 page/inst/FileList.vue，attachId 是主键、fileId 是批次ID）', () => {
@@ -21,6 +21,12 @@ describe('原始文件 mock（0812 计划 M3-1：字段对齐旧平台 page/inst
     const page = mockFilePaged({ siteId: 'site-notice', page: 1, size: 999 })
     expect(page.list.length).toBeGreaterThan(0)
     expect(new Set(page.list.map((file) => file.sourceId)).size).toBeGreaterThan(1)
+  })
+
+  it('file_resource：sourceId 省略时返回全平台文件，供文件中心默认范围使用', () => {
+    const page = mockFileResourceRows({ page: 1, size: 999 })
+    expect(page.list.length).toBeGreaterThan(0)
+    expect(new Set(page.list.map((row) => row.sourceId)).size).toBeGreaterThan(1)
   })
 
   it('两个演示网站均提供可预览、可下载的首条抓取文件', () => {

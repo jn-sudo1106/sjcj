@@ -20,6 +20,24 @@ function file(sourceId: string, dataId: string, fileName: string): FileResourceR
 describe('SiteFileView', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it('未选择网站时直接查询全部 file_resource，不按网站源关联过滤', async () => {
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    const siteSources = vi.spyOn(siteApi, 'siteSources')
+    const rows = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 1, list: [file('orphan-source', '40', 'task.html')] })
+
+    const wrapper = shallowMount(SiteFileView, {
+      props: { siteId: undefined },
+      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+    })
+    await flushPromises()
+
+    expect(siteSources).not.toHaveBeenCalled()
+    expect(rows).toHaveBeenCalledWith(expect.objectContaining({ tableId: 'file-resource', sourceId: undefined }))
+    expect(wrapper.text()).toContain('全部网站 / 全部源')
+    expect(wrapper.text()).toContain('task.html')
+  })
+
   it('网站全部源按 sourceId 查询 file_resource 后合并展示，并保留所属源', async () => {
     vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
     vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// 网站文件视图：file_resource 只支持单个 sourceId，所以网站“全部源”按源分页取数后做前端归并。
+// 网站文件视图：具体网站下 file_resource 只支持单个 sourceId，所以网站“全部源”按源分页取数后做前端归并。
+// 未选择网站时直接查询 file_resource 全量范围，避免任务文件尚未完成网站关联时被过滤掉。
 // 不展示流程节点——网站没有唯一流程；选具体源仅收窄文件范围，仍默认展示该源全部文件。
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
@@ -8,7 +9,7 @@ import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
 import { initMergeState, mergeLoadMore, type MergeSourceState, type MergeLoadMoreResult } from './siteDataMerge'
 
-const props = defineProps<{ siteId: string; initialSourceId?: string }>()
+const props = defineProps<{ siteId?: string; initialSourceId?: string }>()
 
 const PAGE_SIZE = 20
 const MAX_PARALLEL_REQUESTS = 4
@@ -68,7 +69,8 @@ async function fetchPage(sourceId: string, page: number, size: number): Promise<
   if (!table.value) return []
   const result = await fileApi.resourceRows({
     tableId: table.value.tableId,
-    sourceId,
+    // 全部网站范围用一次不带 sourceId 的查询，不能把“全部”伪装成某个源。
+    sourceId: sourceId || undefined,
     state: filters.state || undefined,
     fileName: filters.fileName || undefined,
     ext: filters.ext || undefined,
@@ -106,12 +108,18 @@ async function resetAndLoad() {
   if (!table.value || error.value) return
   loading.value = true
   try {
-    const sources = await siteApi.siteSources(props.siteId)
-    if (requestId !== queryRequest) return
-    siteSources.value = sources
-    candidateSourceIds = selectedSourceId.value
-      ? sources.filter((source) => source.sourceId === selectedSourceId.value).map((source) => source.sourceId)
-      : sources.map((source) => source.sourceId)
+    if (props.siteId) {
+      const sources = await siteApi.siteSources(props.siteId)
+      if (requestId !== queryRequest) return
+      siteSources.value = sources
+      candidateSourceIds = selectedSourceId.value
+        ? sources.filter((source) => source.sourceId === selectedSourceId.value).map((source) => source.sourceId)
+        : sources.map((source) => source.sourceId)
+    } else {
+      siteSources.value = []
+      // mergeLoadMore 仍可复用分页/加载更多状态；空字符串在 fetchPage 中转换为 undefined。
+      candidateSourceIds = ['']
+    }
     if (!candidateSourceIds.length) {
       noCandidateSources.value = true
       return
@@ -181,7 +189,8 @@ watch(selectedSourceId, () => {
 <template>
   <main class="sfv-shell">
     <div class="sfv-toolbar">
-      <SiteSourceSelect v-model="selectedSourceId" :site-id="siteId" />
+      <SiteSourceSelect v-if="siteId" v-model="selectedSourceId" :site-id="siteId" />
+      <span v-else class="sfv-scope">全部网站 / 全部源</span>
       <input v-model="filters.fileName" class="sfv-input" placeholder="文件名或展示名" aria-label="文件名" @keyup.enter="runQuery">
       <input v-model="filters.ext" class="sfv-input" placeholder="类型，如 pdf、html" aria-label="文件类型" @keyup.enter="runQuery">
       <select v-model="filters.state" class="sfv-input" aria-label="状态">
@@ -242,6 +251,7 @@ watch(selectedSourceId, () => {
 .sfv-input { height: 28px; min-width: 112px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; outline: none; }
 .sfv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .sfv-toolbar .rc-btn, .sfv-foot .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }
+.sfv-scope { display: inline-flex; align-items: center; min-width: 220px; height: 28px; padding: 0 9px; border: 1px solid var(--rc-border); border-radius: 6px; background: #f8fafc; color: var(--rc-text-2); font-size: 12px; }
 .sfv-empty { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px 12px; color: var(--rc-faint); font-size: 12px; text-align: center; }
 .sfv-notice { padding: 7px 12px; border-bottom: 1px solid #fde68a; background: #fffbeb; color: #92400e; font-size: 12px; }
 .sfv-tablehead { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--rc-border-soft); }

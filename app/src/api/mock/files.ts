@@ -198,9 +198,15 @@ export function mockFileResourceTableMeta(): EntryType {
 
 export function mockFileResourceRows(params?: Record<string, unknown>): Paged<DataRow> {
   const sourceId = String(params?.sourceId ?? '')
-  const source = SOURCES.find((item) => item.sourceId === sourceId)
-  if (!source) return { total: 0, list: [] }
-  const all = mockFilePaged({ siteId: source.siteId, sourceId, page: 1, size: 999 }).list
+  // 未传 sourceId 对应文件中心的“全部网站/全部源”默认范围，不能因为任务文件尚未关联网站而返回空列表。
+  const sourceIds = sourceId
+    ? [sourceId]
+    : SOURCES.map((source) => source.sourceId)
+  if (sourceId && !SOURCES.some((source) => source.sourceId === sourceId)) return { total: 0, list: [] }
+  const all = sourceIds.flatMap((id) => {
+    const source = SOURCES.find((item) => item.sourceId === id)
+    return source ? mockFilePaged({ siteId: source.siteId, sourceId: id, page: 1, size: 999 }).list : []
+  })
   const state = String(params?.state ?? '')
   const fileName = String(params?.fileName ?? '').trim().toLowerCase()
   const ext = String(params?.ext ?? '').trim().replace(/^\./, '').toLowerCase()
