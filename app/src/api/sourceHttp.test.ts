@@ -37,4 +37,187 @@ describe('旧平台新建源 HTTP 契约', () => {
     expect(JSON.parse(String(init.body))).toEqual(payload)
     expect(result).toMatchObject({ ok: true, message: '源ID:12345', sourceId: '12345' })
   })
+
+  it('POST /v1/source/sourcePaged：把新分页/筛选字段转换为旧 payload，并映射列表字段', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      code: '0',
+      count: 1,
+      data: [{
+        sourceId: 391003979,
+        sourceName: '中银证券研究',
+        sourceUrl: 'https://example.com',
+        configId: 81516,
+        entryTypeId: 2101991,
+        author: 'muyan',
+        dataCnt: 30,
+        lastInsert: '2026-08-12 10:00:00',
+        lastSuccess: '2026-08-12 09:00:00',
+        jobCnt: 1,
+        stepCnt: 2,
+        isDelete: 0,
+        notifyFlag: 1,
+        keepLast: 1,
+        tags: '重点,研报',
+        categoryId: 7,
+        categoryName: '资讯/研报',
+      }],
+      exts: [{ freq: 'DAY', allCount: 1 }],
+    }))
+    const { sourceApi } = await import('./index')
+
+    const result = await sourceApi.sourcePaged({
+      page: 2,
+      size: 40,
+      sourceIds: '391003979',
+      name: '中银',
+      configId: '81516',
+      category: '资讯',
+      enable: '0',
+      siteId: '11',
+      field: 'dataCnt',
+      sorted: 1,
+      state: 'all',
+    })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/v1/source/sourcePaged')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      pageNo: 2,
+      pageSize: 40,
+      page: 2,
+      limit: 40,
+      ids: '391003979',
+      name: '中银',
+      configId: '81516',
+      categorys: '资讯',
+      enable: '0',
+      siteId: '11',
+      notify: '',
+      field: 'dataCnt',
+      sorted: 1,
+      tags: [],
+    })
+    expect(JSON.parse(String(init.body))).not.toHaveProperty('state')
+    expect(result).toEqual({
+      total: 1,
+      list: [expect.objectContaining({
+        sourceId: '391003979',
+        name: '中银证券研究',
+        url: 'https://example.com',
+        configId: '81516',
+        mainTable: '2101991',
+        dataCount: 30,
+        lastInsertAt: '2026-08-12 10:00:00',
+        jobCount: 1,
+        stepCount: 2,
+        alarm: true,
+        resume: true,
+        tags: ['重点', '研报'],
+        dirId: '7',
+      })],
+    })
+  })
+
+  it('GET /v1/source/sourceDetail：读取 res.data 并保留详情字段映射', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      code: '0',
+      data: {
+        sourceId: 391003979,
+        sourceName: '中银证券研究',
+        sourceUrl: 'https://example.com',
+        configId: 81516,
+        entryTypeId: 2101991,
+        sourceParam: 'page=1',
+        lastUrl: 'https://example.com/p/1',
+        createDt: '2025-01-01',
+        updateDt: '2026-08-12',
+      },
+    }))
+    const { sourceApi } = await import('./index')
+
+    await expect(sourceApi.sourceDetail('391003979')).resolves.toEqual(expect.objectContaining({
+      sourceId: '391003979',
+      name: '中银证券研究',
+      mainTable: '2101991',
+      coreParam: 'page=1',
+      lastUrl: 'https://example.com/p/1',
+      createdAt: '2025-01-01',
+      updatedAt: '2026-08-12',
+    }))
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/source/sourceDetail?sourceId=391003979')
+  })
+
+  it('GET /v1/source/sourceSame：把旧的 sourceName 选项映射为当前选源模型', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      code: 0,
+      data: [
+        { sourceId: 391003979, sourceName: '中银证券研究' },
+        { sourceId: 391003978, sourceName: '政之的IPO研究笔记' },
+      ],
+    }))
+    const { sourceApi } = await import('./index')
+
+    await expect(sourceApi.sourceSame('391003979')).resolves.toEqual([
+      { sourceId: '391003979', name: '中银证券研究' },
+      { sourceId: '391003978', name: '政之的IPO研究笔记' },
+    ])
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/source/sourceSame?sourceId=391003979')
+  })
+
+  it('GET /v1/category/categoryPaged：首屏和子级读取都按旧 parentId 契约请求', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      code: '0',
+      data: [
+        { categoryId: 1, categoryName: '资讯', parentId: 0, count: 3 },
+        { categoryId: 2, categoryName: '研报', parentId: 1, count: 2 },
+      ],
+    }))
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      code: '0',
+      data: [{ categoryId: 3, categoryName: '宏观', parentId: 1 }],
+    }))
+    const { sourceApi } = await import('./index')
+
+    await expect(sourceApi.sourceCategories()).resolves.toEqual([
+      { id: '1', name: '资讯', count: 3, children: [{ id: '2', name: '研报', count: 2 }] },
+    ])
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/category/categoryPaged?page=1&limit=10000&allSub=false')
+
+    await expect(sourceApi.sourceCategories('1')).resolves.toEqual([
+      { id: '3', name: '宏观' },
+    ])
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/category/categoryPaged?page=1&limit=10000&allSub=false&parentId=1')
+  })
+
+  it('GET /v1/item/next/nextConfigPaged：按旧步骤字段映射流程节点', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      code: '0',
+      data: [
+        { itemConfig: 701, sourceId: 430002164, name: '列表抓取', configId: 81516, entryTypeId: 900, outEntry: 901, lastStep: '', cond: '', isDelete: 0 },
+        { itemConfig: 702, sourceId: 430002164, name: '详情解析', nodeType: 'detail', configId: 81516, entryTypeId: 901, outEntry: 902, lastStep: '701', cond: 'status=C', isDelete: 1 },
+      ],
+    }))
+    const { sourceApi } = await import('./index')
+
+    await expect(sourceApi.sourceSteps('430002164')).resolves.toEqual([
+      expect.objectContaining({
+        stepId: '701', sourceId: '430002164', name: '列表抓取', inputTable: '900', outputTable: '901', enabled: true,
+      }),
+      expect.objectContaining({
+        stepId: '702', sourceId: '430002164', name: '详情解析', nodeType: 'detail', inputTable: '901', outputTable: '902', contextMap: ['701'], condition: 'status=C', enabled: false,
+      }),
+    ])
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/item/next/nextConfigPaged?sourceId=430002164&page=1&limit=10000&svg=true')
+  })
+
+  it('GET /v1/source/bindSite：按单源关系写入契约提交 sourceId 和 siteId', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '关联成功' }))
+    const { sourceApi } = await import('./index')
+
+    await expect(sourceApi.bindSite('430002164', '1')).resolves.toMatchObject({ ok: true, message: '关联成功' })
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/source/bindSite?sourceId=430002164&siteId=1')
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
+  })
+
 })

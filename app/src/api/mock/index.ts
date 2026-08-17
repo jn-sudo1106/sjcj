@@ -13,6 +13,8 @@ import {
   mockSourceCreate,
   mockSourceCopy,
   mockSourceUpdate,
+  mockBindSite,
+  mockChangeSite,
   mockSourceNodeRuns,
   mockChangeSourceEnable,
   mockChangeToSuccess,
@@ -44,6 +46,7 @@ import { mockFlowSave, mockFlowLoad, mockFlowList, mockFlowRecommend, mockNodeAi
 import { mockFlowTemplateDetail, mockFlowTemplateList, mockFlowTemplateSave } from './flowTemplates'
 import {
   mockSitePaged,
+  mockSiteSummary,
   mockSiteDetail,
   mockSiteCreate,
   mockSiteUpdate,
@@ -77,6 +80,8 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'source/createSource': mockSourceCreate,
   'source/sourceCopy': mockSourceCopy,
   'source/updateSource': mockSourceUpdate,
+  'source/bindSite': mockBindSite,
+  'source/changeSite': mockChangeSite,
   'source/nodeRunStats': mockSourceNodeRuns,
   'source/sendSnatch': mockAck,
   'source/deleteSource': mockAck,
@@ -201,8 +206,9 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'flow-template/detail': mockFlowTemplateDetail,
   'flow-template/save': mockFlowTemplateSave,
 
-  // 网站—子源父子模型（0707 优化·Phase2）
+  // 网站—源父子模型（0707 优化·Phase2）
   'site/sitePaged': mockSitePaged,
+  'site/summary': mockSiteSummary,
   'site/siteDetail': mockSiteDetail,
   'site/createSite': mockSiteCreate,
   'site/updateSite': mockSiteUpdate,

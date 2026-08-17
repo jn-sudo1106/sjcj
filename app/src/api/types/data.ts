@@ -83,6 +83,29 @@ export interface EntryTypeGroup {
   list3: EntryType[]
 }
 
+/**
+ * 网站范围表选项（0812 计划 M2-1）：旧平台没有"网站下所有表"接口，前端按
+ * site/sources + 逐源 config/queryEntryTypesGroup 聚合、去重得到；sourceCount
+ * 就是聚合过程中顺带算出的引用源数，不是另外查的。
+ */
+export interface SiteTableOption {
+  tableId: string
+  tableName: string
+  name?: string
+  /** 当前网站下引用了这张表的源数量 */
+  sourceCount: number
+}
+
+export interface SiteTablesResult {
+  tables: SiteTableOption[]
+  /** 网站下的源总数（聚合的分母，用于阈值判断和"部分源失败"提示） */
+  sourceCount: number
+  /** 源数量超过阈值时不聚合，只返回这个标记；调用方应改为要求用户先选源 */
+  overThreshold: boolean
+  /** 查询表失败的源 ID，用于"部分源未能加载"提示，不代表整体失败 */
+  failedSourceIds: string[]
+}
+
 export interface DataRow {
   dataId: string // ENTRY_ID
   sourceId: string // SOURCE_ID
@@ -140,7 +163,7 @@ export type SummaryRow = Record<string, unknown> & { CNT: number }
 export interface RowQuery extends PageQuery {
   tableId: string
   sourceId?: string
-  /** 网站粒度查询（0707 优化·Phase5）：圈定该网站下全部子源；与 sourceId 同传时 sourceId 在此范围内进一步收窄 */
+  /** 网站粒度查询（0707 优化·Phase5）：圈定该网站下全部源；与 sourceId 同传时 sourceId 在此范围内进一步收窄 */
   siteId?: string
   dataId?: string
   parentId?: string

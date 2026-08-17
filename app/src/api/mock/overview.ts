@@ -71,7 +71,7 @@ function sliceByCategory(): OverviewSlice[] {
     .flatMap((c) => c.children ?? [])
     .map((c, i) => ({
       label: c.name,
-      value: c.count,
+      value: c.count ?? 0,
       tone: tones[i % tones.length],
     }))
 }

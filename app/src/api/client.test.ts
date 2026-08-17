@@ -176,10 +176,10 @@ describe('按端点上线：全局仍 mock 时，live 端点照样走真实 HTTP
     expect(url).toContain('/api/v1/config/paramPaged')
   })
 
-  it('未标 live 的端点（source/sourcePaged）在全局 mock 下继续走 mock，不发 fetch', async () => {
+  it('未标 live 的端点（source/stats）在全局 mock 下继续走 mock，不发 fetch', async () => {
     const { request } = await import('./client')
 
-    await request('source/sourcePaged', { page: 1 })
+    await request('source/stats', { page: 1 })
 
     expect(fetchMock).not.toHaveBeenCalled()
   })
@@ -204,5 +204,90 @@ describe('按端点上线：全局仍 mock 时，live 端点照样走真实 HTTP
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock.mock.calls[0][0]).toBe('/vrule/api/custom-compose/save')
+  })
+})
+
+// 生产写守卫（0812 计划 M0-4）：代理指向生产（118.25.96.217）时，danger 端点只放行
+// 网站与源关系写入（site/*、source/bindSite、source/changeSite），其余一律拦截、不发 fetch。
+describe('生产写守卫', () => {
+  const fetchMock = vi.fn()
+
+  beforeEach(() => {
+    localStorage.clear()
+    fetchMock.mockReset()
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.stubEnv('VITE_API_BASE', '')
+    vi.resetModules()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+
+  it('未连生产（默认测试环境代理）时，danger 端点正常发出', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
+    const { request } = await import('./client')
+
+    await request('source/updateSource', { sourceId: '1' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('连生产时，不在白名单的 danger 端点被拦截，不发 fetch', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    const { request, ProductionWriteBlockedError } = await import('./client')
+
+    await expect(request('source/updateSource', { sourceId: '1' })).rejects.toThrow(/写保护|不在允许清单/)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    // 拦截发生在网络请求之前，抛出的错误信息里必须点名具体端点，方便排查是哪次调用被挡
+    try {
+      await request('task/resetTaskInsts', { ids: '1' })
+    } catch (e) {
+      expect((e as Error).message).toContain('task/resetTaskInsts')
+    }
+    void ProductionWriteBlockedError
+  })
+
+  it('连生产时，site/* 写端点在白名单内，正常放行', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
+    const { request } = await import('./client')
+
+    await request('site/add', { siteName: 'x' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('连生产时，source/bindSite、source/changeSite 在白名单内，正常放行', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
+    const { request } = await import('./client')
+
+    await request('source/bindSite', { sourceId: '1', siteId: '2' }, { httpEndpoint: 'source/bindSite' })
+    await request('source/changeSite', { ids: '1', siteId: '2' }, { httpEndpoint: 'source/changeSite' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('非 danger 端点即使连生产也不受影响（只读请求正常发出）', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: [] }))
+    const { request } = await import('./client')
+
+    await request('source/sourcePaged', { page: 1 })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('isProductionBackend 按 VITE_API_PROXY_TARGET 主机名判定，VITE_AUTH_PROXY_TARGET 作为兼容兜底', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', '')
+    vi.stubEnv('VITE_AUTH_PROXY_TARGET', 'http://118.25.96.217:9999')
+    const { isProductionBackend } = await import('./client')
+
+    expect(isProductionBackend()).toBe(true)
   })
 })

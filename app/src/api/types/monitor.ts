@@ -46,7 +46,7 @@ export interface NodeRunStat {
   state?: RunState // 运行状态；缺省视为空闲
 }
 
-/** 队列粒度运行统计（0707 优化·Phase5·任务视图网站化）：网站下全部子源节点按队列去重聚合 */
+/** 队列粒度运行统计（0707 优化·Phase5·任务视图网站化）：网站下全部源节点按队列去重聚合 */
 export interface QueueStat {
   queue: string
   totalTasks: number

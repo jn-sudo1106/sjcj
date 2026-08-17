@@ -35,7 +35,7 @@ export function mockFlowSave(params?: Record<string, unknown>): Ack {
   const idx = readIndex().filter((f) => f.id !== def.id)
   idx.unshift({ id: def.id, name: def.name, updatedAt: def.updatedAt })
   localStorage.setItem(INDEX_KEY, JSON.stringify(idx))
-  // 网站统一流程模板（id = site:xxx）不算"某个子源保存了自己的流程"，其余 id 若命中某个站内子源则标记脱离（0707 优化·Phase2）
+  // 网站统一流程模板（id = site:xxx）不算"某个源保存了自己的流程"，其余 id 若命中某个站内源则标记脱离（0707 优化·Phase2）
   if (!def.id.startsWith('site:')) setSourceDetached(def.id, true)
   return { ok: true, message: '流程已保存（本地）' }
 }

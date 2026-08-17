@@ -29,6 +29,13 @@ export default defineConfig({
         // CORS 失败，掩盖会话失效检测；autoRewrite 把 Location 的 host 改写回本地源，保持 dev 与生产一致。
         autoRewrite: true,
       },
+      // 旧平台对外取数接口使用 /rest/api/v1/data/entry；开发环境也要保持同源，
+      // 否则复制出的 API 地址会落到 Vite 页面服务而不是后端。
+      '/rest': {
+        target: process.env.VITE_API_PROXY_TARGET || process.env.VITE_AUTH_PROXY_TARGET || 'http://115.227.21.133:9999',
+        changeOrigin: true,
+        autoRewrite: true,
+      },
       // 规则编排 Sprint 4：saveMeta/test/saveScript 直连同机 vrule（0801 方案 §8.1）
       '/vrule': {
         target: process.env.VITE_API_PROXY_TARGET || process.env.VITE_AUTH_PROXY_TARGET || 'http://115.227.21.133:9999',

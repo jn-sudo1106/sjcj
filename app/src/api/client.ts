@@ -45,6 +45,42 @@ export function isDanger(endpoint: string): boolean {
   return DANGER_ENDPOINTS.has(endpoint)
 }
 
+// 生产写守卫（0812 计划 M0-4）：本地/联调会话可能把 VITE_API_PROXY_TARGET 指向生产环境
+// （118.25.96.217）做只读核实；此时除"网站与源关系"外的所有 danger 端点必须被拦截，
+// 不能只靠开发者自觉——这是唯一允许在生产写入的范围，其余源本身的增删改、发抓取、
+// 发后续任务、任务重跑等一律禁止（方案 §0.1 环境矩阵）。
+// 判定读当前实际连接的后端主机：VITE_API_PROXY_TARGET 是 shell 环境变量，Vite 按
+// VITE_ 前缀规则会同时把它注入 import.meta.env，与 vite.config.ts 的 dev proxy target 一致
+// （两者读的是同一个变量，不会出现"代理连了生产但客户端判断成测试"的不一致）。
+const PRODUCTION_BACKEND_HOSTS = ['118.25.96.217']
+
+function currentBackendTarget(): string {
+  const env = import.meta.env as Record<string, string | undefined>
+  return env.VITE_API_PROXY_TARGET || env.VITE_AUTH_PROXY_TARGET || ''
+}
+
+export function isProductionBackend(): boolean {
+  const target = currentBackendTarget()
+  return PRODUCTION_BACKEND_HOSTS.some((host) => target.includes(host))
+}
+
+// 生产环境下唯一放行的写入范围：网站关系（site/* 全部）与源—网站关系（changeSite/bindSite）。
+// 按"真实请求目的地"（httpEndpoint，未显式指定时回退到逻辑 endpoint）判断，与 usesMockAdapter
+// 的 liveCheckKey 口径一致，避免逻辑键与真实路径不同名时误放行或误拦截。
+function isProductionWriteAllowed(httpEndpoint: string): boolean {
+  return httpEndpoint.startsWith('site/') || httpEndpoint === 'source/bindSite' || httpEndpoint === 'source/changeSite'
+}
+
+export class ProductionWriteBlockedError extends Error {
+  httpEndpoint: string
+
+  constructor(httpEndpoint: string) {
+    super(`生产环境写保护：端点 [${httpEndpoint}] 不在允许清单（仅网站/源关系写操作可用），已阻止发送，未联网`)
+    this.httpEndpoint = httpEndpoint
+    this.name = 'ProductionWriteBlockedError'
+  }
+}
+
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 export function appendQuery(url: string, params?: Record<string, unknown>): string {
@@ -131,6 +167,9 @@ export async function request<T>(
     const paramsIn = options.paramsIn ?? (method === 'GET' ? 'query' : 'body')
     const httpParams = options.httpParams ?? params
     const httpEndpoint = options.httpEndpoint ?? endpoint
+    if (isDanger(endpoint) && isProductionBackend() && !isProductionWriteAllowed(httpEndpoint)) {
+      throw new ProductionWriteBlockedError(httpEndpoint)
+    }
     const headers: Record<string, string> = {}
     const token = readStoredToken()
     if (token) headers[ACCESS_TOKEN_HEADER] = token

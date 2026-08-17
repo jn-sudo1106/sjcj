@@ -14,7 +14,7 @@ const PARAMS: Param[] = [
   { paramId: '1038', name: '懂车帝-年限参数(age_range)', kind: 'list', values: ['1年以内', '1-3年', '3-5年', '5年以上'], usedBy: 1, owner: 'dev_zhonghe', updatedAt: '2026-07-11' },
   { paramId: '1039', name: '懂车帝-其他条件(expanded_origin)', kind: 'list', values: ['同城', '全国'], usedBy: 1, owner: 'dev_zhonghe', updatedAt: '2026-07-11' },
   // 0721 会议·参数源演示数据：Leon 会中口头例子（FundComment 基础 url + 页码/栏目两个参数），
-  // paramId 沿用旧平台 9xx 编号体系，供「添加子源」参数源面板的"选择已有参数"候选。
+  // paramId 沿用旧平台 9xx 编号体系，供「添加源」参数源面板的"选择已有参数"候选。
   { paramId: '913', name: '页码', kind: 'sequence', seq: { start: 1, end: 100, step: 1 }, usedBy: 0, owner: 'dev_zhonghe', updatedAt: '2026-07-21' },
   { paramId: '912', name: '栏目', kind: 'list', values: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'], usedBy: 0, owner: 'dev_zhonghe', updatedAt: '2026-07-21' },
 ]

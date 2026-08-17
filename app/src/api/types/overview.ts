@@ -71,8 +71,8 @@ export interface OverviewPanoramaNode {
   id: string
   label: string
   total: number // 网站数
-  sourceCount: number // 网站下子源数
-  error: number // 含异常子源的网站数
+  sourceCount: number // 网站下源数
+  error: number // 含异常源的网站数
 }
 
 /** 一级分类节点，children 为当前分类树的二级分支 */
@@ -83,7 +83,7 @@ export interface OverviewPanoramaBranch extends OverviewPanoramaNode {
 /** 采集网站全景聚合 */
 export interface OverviewPanorama {
   total: number // 网站总数
-  sourceCount: number // 子源总数
+  sourceCount: number // 源总数
   error: number // 异常网站数
   unclassified: number // 未进入任何一级分类的网站数
   branches: OverviewPanoramaBranch[]

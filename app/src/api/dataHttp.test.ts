@@ -320,6 +320,22 @@ describe('数据详情 / 统计 / 后续 / 删除 API 旧平台 HTTP 契约（E 
     expect(rows).toEqual([{ K2: '161725', CNT: 42 }])
   })
 
+  it('summaryData 兼容真实接口的空结果', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, data: [] }))
+    const { dataApi } = await import('./index')
+
+    const rows = await dataApi.summaryData({ tableId: '2101991', sourceId: '391003973' }, ['K3'])
+
+    expect(rows).toEqual([])
+  })
+
+  it('summaryData 保留真实业务失败文案', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '-1', msg: '统计字段不合法' }))
+    const { dataApi } = await import('./index')
+
+    await expect(dataApi.summaryData({ tableId: '2101991' }, ['K3'])).rejects.toThrow('统计字段不合法')
+  })
+
   it('nextStep 用 GET 调 source/nextStep，entryIds 逗号连接', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '发送成功', data: null }))
     const { dataApi } = await import('./index')
@@ -473,7 +489,7 @@ describe('数据详情 / 统计 / 后续 / 删除 API 旧平台 HTTP 契约（E 
     expect(url).toContain('jsonId=json-771')
   })
 
-  it('exportUrl 是纯字符串拼接，不发起请求，只带 6 个查询字段', async () => {
+  it('exportUrl 对照旧平台只带 5 个查询字段，不发起请求', async () => {
     const { dataApi } = await import('./index')
 
     const url = dataApi.exportUrl({ tableId: '1042', sourceId: '161725', sql: "CREATE_DT > CURDATE()" })
@@ -482,8 +498,7 @@ describe('数据详情 / 统计 / 后续 / 删除 API 旧平台 HTTP 契约（E 
     expect(url).toContain('/api/v1/entry/entryExportAll?')
     expect(url).toContain('entryType=1042')
     expect(url).toContain('sourceId=161725')
-    expect(url).toContain('more=CREATE_DT+%3E+CURDATE%28%29')
-    // SQL 条件有值时 min 默认 0，导出与查询保持一致口径
-    expect(url).toContain('min=0')
+    expect(url).not.toContain('more=')
+    expect(url).not.toContain('min=')
   })
 })

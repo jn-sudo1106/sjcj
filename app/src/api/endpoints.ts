@@ -15,9 +15,9 @@ export interface EndpointSpec {
 
 export const ENDPOINTS: EndpointSpec[] = [
   /* ── source 源（目标 36 / 收录 36） ── */
-  { path: 'source/sourcePaged', desc: '源分页列表', impl: true },
-  { path: 'source/sourceDetail', desc: '源详情', impl: true },
-  { path: 'source/sourceSame', desc: '同站源下拉（数据表页选源用）', impl: true },
+  { path: 'source/sourcePaged', desc: '源分页列表', impl: true, live: true },
+  { path: 'source/sourceDetail', desc: '源详情', impl: true, live: true },
+  { path: 'source/sourceSame', desc: '同站源下拉（数据表页选源用）', impl: true, live: true },
   { path: 'source/categoryTree', desc: '源分类目录树（计数）', impl: true },
   { path: 'source/stats', desc: '源 KPI 统计', impl: true },
   { path: 'source/logPaged', desc: '源操作日志', impl: true },
@@ -31,7 +31,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/sourceCopy', desc: '从现有源复制预填（模板复用，不落库）', impl: true },
   // 0706 优化·Phase4 新增：任务视图 = 节点粒度运行记录（队列/总任务数/已处理数/状态）
   { path: 'source/nodeRunStats', desc: '源的节点粒度运行统计', impl: true },
-  { path: 'source/sourceTaskPaged', desc: '子源任务实例分页（支持节点与状态筛选）', impl: true },
+  { path: 'source/sourceTaskPaged', desc: '源任务实例分页（支持节点与状态筛选）', impl: true },
   { path: 'source/changeSourceEnable', desc: '启用 / 停用源', danger: true, impl: true },
   { path: 'source/sendSnatch', desc: '发抓取', danger: true, impl: true },
   { path: 'snatch/snatchSave', desc: '旧平台新建源（Step1/2/3 一次性提交）', danger: true },
@@ -62,7 +62,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/monitorQuery', desc: '源监控查询' },
 
   /* ── category 分类（目标 6 / 收录 6） ── */
-  { path: 'category/categoryPaged', desc: '分类分页' },
+  // 源选择器沿用旧平台 categoryPaged 根节点读取；子节点仍需按 parentId 懒加载，暂不把 categoryTree 误标为完整 live。
+  { path: 'category/categoryPaged', desc: '分类分页', live: true },
   { path: 'category/categoryQuery', desc: '分类查询' },
   { path: 'category/add', desc: '新增分类', danger: true },
   { path: 'category/addBatch', desc: '批量新增分类', danger: true },
@@ -118,8 +119,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'entry/queryEntryType', desc: '实体数据动态表结构', live: true },
   { path: 'entry/entryDetail', desc: '实体数据详情', live: true },
   { path: 'entry/entryDistinctSource', desc: '实体数据按源去重', live: true },
-  // summaryEntryData（统计）本轮新加，仅 mock 联调，未过真实后端，暂不标 live
-  { path: 'entry/summaryEntryData', desc: '实体数据汇总' },
+  // 0812 已在 115.227.21.133 以当前表 + 发布时间字段验证真实请求；空结果属于正常响应。
+  { path: 'entry/summaryEntryData', desc: '实体数据汇总', live: true },
   // re-save 未见明确真实联调验证记录，暂不标 live
   { path: 'entry/re-save', desc: '重存实体数据', danger: true },
   // 旧仓库实际路径是 entryDelete（此前登记为 delete 是权宜猜测，单表数据查看方案 §1.1 核对修正）
@@ -133,7 +134,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'entry/entryExportAll', desc: '导出 Excel（URL 直开，同源 Cookie 鉴权）' },
 
   /* ── item/next 子步骤（目标 7 / 收录 5） ── */
-  { path: 'item/next/nextConfigPaged', desc: '子步骤分页', impl: true },
+  { path: 'item/next/nextConfigPaged', desc: '子步骤分页 / 流程图读取', impl: true, live: true },
   { path: 'item/next/saveItemConfig', desc: '新增子步骤', danger: true },
   { path: 'item/next/stepModify', desc: '修改子步骤', danger: true },
   { path: 'item/next/enable', desc: '启停子步骤', danger: true },
@@ -158,7 +159,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'comm-job/disable', desc: '停用通用任务', danger: true },
 
   /* ── task 任务实例（目标 2 / 收录 2） ── */
-  { path: 'task/topTaskPaged', desc: '任务实例分页（运行记录事实源）', impl: true },
+  { path: 'task/topTaskPaged', desc: '任务实例分页（运行记录事实源）', impl: true, live: true },
   { path: 'task/resetTaskInsts', desc: '重置任务实例', danger: true },
 
   /* ── dataset 指标数据集（目标 9 / 收录 9） ── */
@@ -194,8 +195,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'mq/check/changeEnable', desc: '启停队列检查', danger: true },
 
   /* ── file 原始文件 / JSON（目标 3 / 收录 3） ── */
-  { path: 'file/filePaged', desc: '原始文件分页（0711 R11 文件视图落地，仅子源态查询）', impl: true },
-  { path: 'file/fileStats', desc: '原始文件统计：总数/总大小/失败数/最近生成时间（0711 R11 新增，非逆向清单原有项）', impl: true },
+  { path: 'file/filePaged', desc: '原始文件分页（0711 R11 文件视图落地，仅源态查询）', impl: true, live: true },
+  { path: 'file/fileStats', desc: '原始文件统计：总数/总大小/失败数/最近生成时间（0711 R11 新增，非逆向清单原有项）', impl: true, live: true },
   { path: 'file/fileProcess', desc: '文件后续处理', danger: true },
   { path: 'file/fileJsonPaged', desc: '原始 JSON 分页' },
 
@@ -272,17 +273,27 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'overview/summary', desc: '采集资产总览聚合（KPI / 生态 / 占比 / Top / 异常）', impl: true },
   { path: 'overview/trend', desc: '采集任务趋势（近 N 天抓取量 / 成功量）', impl: true },
 
-  // 网站—子源父子模型（0707 优化·Phase2 新增：前端新概念，非 142 逆向清单原有项）
-  { path: 'site/sitePaged', desc: '网站分页列表（含 sourceCount / errorCount 汇总）', impl: true },
+  // 网站—源父子模型：0810 对接 data-view 的网站读取接口；写类仅按明确流程逐步联调。
+  // 0812 已在 W1 测试环境完成只读联调；建站/保存/关联写入不标记为默认 live。
+  { path: 'site/sitePaged', desc: '网站分页列表（真实 cfg_site，含 sourceCnt / errorCnt 汇总）', impl: true, live: true },
+  { path: 'site/summary', desc: '网站统计摘要（网站/源/告警网站/出错源）', live: true },
+  { path: 'site/detail', desc: '网站详情（真实路径）', live: true },
+  { path: 'site/sources', desc: '网站下的源分页（真实路径）', live: true },
+  { path: 'site/add', desc: '独立新建网站', danger: true },
+  // 关系写入必须显式切 HTTP + 受控环境；不能因默认 mock 下的 live 机制误触发真实绑定。
+  { path: 'source/bindSite', desc: '将源关联到网站', danger: true, impl: true },
+  // 批量版 bindSite（0812 计划 M4-5）；2026-08-15 生产环境已实测确认契约（Q4：无效 ID 静默跳过，
+  // 不是整批失败），同样不给默认 live，联调需显式切 HTTP + 受控环境。
+  { path: 'source/changeSite', desc: '批量关联/变更源所属网站', danger: true, impl: true },
   { path: 'site/siteDetail', desc: '网站详情', impl: true },
-  { path: 'site/createSite', desc: '新建采集：网站 + 首批子源', impl: true },
+  { path: 'site/createSite', desc: '新建采集：网站 + 首批源', impl: true },
   { path: 'site/updateSite', desc: '编辑网站基本信息', danger: true, impl: true },
-  { path: 'site/sourcesOfSite', desc: '网站下的子源列表', impl: true },
-  { path: 'site/addSource', desc: '网站下新增子源（默认继承统一流程）', impl: true },
-  { path: 'site/cloneSource', desc: '复制子源流程、配置和表结构（不复制数据与运行实例）', danger: true, impl: true },
-  { path: 'site/importSources', desc: '按网站批量导入子源，一行一条「名称;URL」（0710 会议批次）', impl: true },
-  { path: 'site/removeSource', desc: '网站下移除子源', danger: true, impl: true },
-  { path: 'site/syncFlow', desc: '子源流程覆盖同步到同网站所选子源（fromSourceId → sourceIds，网站本身无流程）', danger: true, impl: true },
+  { path: 'site/sourcesOfSite', desc: '网站下的源列表', impl: true },
+  { path: 'site/addSource', desc: '网站下新增源（默认继承统一流程）', impl: true },
+  { path: 'site/cloneSource', desc: '复制源流程、配置和表结构（不复制数据与运行实例）', danger: true, impl: true },
+  { path: 'site/importSources', desc: '按网站批量导入源，一行一条「名称;URL」（0710 会议批次）', impl: true },
+  { path: 'site/removeSource', desc: '网站下移除源', danger: true, impl: true },
+  { path: 'site/syncFlow', desc: '源流程覆盖同步到同网站所选源（fromSourceId → sourceIds，网站本身无流程）', danger: true, impl: true },
   { path: 'site/queueStats', desc: '网站粒度队列汇总（0707 Phase5 任务视图网站化）', impl: true },
   { path: 'site/queueTaskPaged', desc: '队列任务明细分页', impl: true },
 ]

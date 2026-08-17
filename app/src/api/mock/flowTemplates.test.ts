@@ -51,11 +51,11 @@ describe('流程模板 mock 持久化', () => {
     expect(mockFlowTemplateList().find((item) => item.id === original.id)?.version).toBe(saved.version)
   })
 
-  it('模板更新不会自动覆盖已经绑定旧版本的子源流程', () => {
+  it('模板更新不会自动覆盖已经绑定旧版本的源流程', () => {
     const template = mockFlowTemplateList().find((item) => item.id === 'preset-file-parse')!
     const fileId = template.definition.main.find((id) => id !== 'start' && id !== 'end')!
     const source: Source = {
-      sourceId: 'source-template-versioned', name: '版本固定子源', url: 'https://source.example.com', configId: '', mainTable: '', owner: 'tester', state: 'C',
+      sourceId: 'source-template-versioned', name: '版本固定源', url: 'https://source.example.com', configId: '', mainTable: '', owner: 'tester', state: 'C',
     }
     const def = composeTemplateFlow(template, source, {
       [fileId]: { collect: { url: 'https://source.example.com/old.pdf', outputTable: 'old_table', inputTable: '', inputParams: [] } },

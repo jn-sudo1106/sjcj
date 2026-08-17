@@ -1,7 +1,7 @@
 import type { Paged, Source, SourceCategory, SourceOption, Step, Ack, CredentialRef, SourceLog, TaskInst, NodeRunStat } from '../types'
 
 // 样例源数据 — 取自源列表实测记录的字段结构，扩展为多分类 / 多状态以支撑列表、筛选、分类树。
-// siteId（0707 优化·Phase2）：按分类归拢进 mock/sites.ts 的演示网站，供网站—子源模型联调；导出供 sites.ts 聚合读取。
+// siteId（0707 优化·Phase2）：按分类归拢进 mock/sites.ts 的演示网站，供网站—源模型联调；导出供 sites.ts 聚合读取。
 export const SOURCES: Source[] = [
   {
     sourceId: '391007768', name: '支付宝评论规则过滤', url: 'FundComment-209',
@@ -185,7 +185,9 @@ const countUnder = (prefix: string) => SOURCES.filter((s) => s.categoryPath?.sta
 function matches(s: Source, p?: Record<string, unknown>): boolean {
   if (!p) return true
   const siteId = String(p.siteId ?? '')
-  if (siteId && s.siteId !== siteId) return false
+  if (siteId === '0') {
+    if (s.siteId) return false
+  } else if (siteId && s.siteId !== siteId) return false
   const category = String(p.category ?? '')
   if (category && !s.categoryPath?.startsWith(category)) return false
   const sourceIds = String(p.sourceIds ?? p.ids ?? '').split(/[，,\s]+/).map((id) => id.trim()).filter(Boolean)
@@ -239,7 +241,28 @@ export function mockSourceSame(params?: Record<string, unknown>): SourceOption[]
     .map((s) => ({ sourceId: s.sourceId, name: s.name }))
 }
 
-export function mockSourceCategories(): SourceCategory[] {
+function categoryWithCount(node: Omit<SourceCategory, 'count'>): SourceCategory {
+  return {
+    id: node.id,
+    name: node.name,
+    count: countUnder(node.id),
+    children: node.children?.map(categoryWithCount),
+  }
+}
+
+function findCategory(nodes: Omit<SourceCategory, 'count'>[], id: string): Omit<SourceCategory, 'count'> | undefined {
+  for (const node of nodes) {
+    if (node.id === id) return node
+    const child = node.children && findCategory(node.children, id)
+    if (child) return child
+  }
+}
+
+export function mockSourceCategories(params?: Record<string, unknown>): SourceCategory[] {
+  const parentId = String(params?.parentId ?? '')
+  if (parentId) {
+    return (findCategory(CATEGORY_TREE, parentId)?.children ?? []).map(categoryWithCount)
+  }
   return CATEGORY_TREE.map((g) => ({
     id: g.id,
     name: g.name,
@@ -259,7 +282,7 @@ export function mockSourceStats(): { total: number; error: number; externalChang
 
 // 子步骤（连线详情字段口径）— 详情抽屉「子步骤」分页。
 // 用户新建的源（created 持久化里的）没有真实步骤，返回空 → 画布走空白引导卡模式（0710：新建源不预置骨架）；
-// 演示种子源保持默认两步骨架，模拟"后端已有配置的存量源"。
+// 演示种源保持默认两步骨架，模拟"后端已有配置的存量源"。
 export function mockSourceSteps(params?: Record<string, unknown>): Step[] {
   const sourceId = String(params?.sourceId ?? '')
   const src = SOURCES.find((s) => s.sourceId === sourceId)
@@ -378,9 +401,41 @@ export function mockSourceUpdate(params?: Record<string, unknown>): Ack {
   return { ok: true, message: '源信息已保存（本地演示）' }
 }
 
-// 子源流程与网站统一模板的脱离状态（0707 优化·Phase2）：
-// - flows.ts 的 mockFlowSave 在保存某个子源自身的流程时调用 setSourceDetached(sourceId, true)；
-// - sites.ts 的 mockSiteSyncFlow 用网站模板覆盖某子源后调用 setSourceDetached(sourceId, false) 复位。
+// 绑定已有源到网站：与真实 source/bindSite 保持单源写入口径，供绑定弹窗本地演示后刷新左侧源列表。
+export function mockBindSite(params?: Record<string, unknown>): Ack {
+  const sourceId = String(params?.sourceId ?? '')
+  const siteId = String(params?.siteId ?? '')
+  if (!sourceId || !siteId) return { ok: false, message: '缺少源 ID / 网站 ID' }
+  const source = SOURCES.find((item) => item.sourceId === sourceId)
+  if (!source) return { ok: false, message: `源「${sourceId}」不存在` }
+  source.siteId = siteId
+  source.siteName = undefined
+  persistUpdatedOverride(sourceId, { siteId, siteName: undefined })
+  return { ok: true, message: '源已关联网站（本地演示）' }
+}
+
+// 批量关联/变更源所属网站（0812 计划 M4-5，bindSite 的多源版）：真改多个 SOURCES.siteId + 本地持久化，
+// 无效/不存在的源 ID 静默跳过——2026-08-15 生产环境真实实测确认（Q4）：批次里混无效 ID 不会让
+// 整批失败，是静默跳过、有效项照常处理，这里的 mock 口径跟真实行为保持一致，不做"部分失败"提示。
+export function mockChangeSite(params?: Record<string, unknown>): Ack {
+  const ids = String(params?.ids ?? '').split(',').map((id) => id.trim()).filter(Boolean)
+  const siteId = String(params?.siteId ?? '')
+  if (!ids.length || !siteId) return { ok: false, message: '缺少源 ID / 网站 ID' }
+  let changed = 0
+  ids.forEach((sourceId) => {
+    const source = SOURCES.find((item) => item.sourceId === sourceId)
+    if (!source) return
+    source.siteId = siteId === '0' ? undefined : siteId
+    source.siteName = undefined
+    persistUpdatedOverride(sourceId, { siteId: source.siteId, siteName: undefined })
+    changed += 1
+  })
+  return { ok: true, message: `批量更改网站成功（本地演示，实际关联 ${changed} 个源）` }
+}
+
+// 源流程与网站统一模板的脱离状态（0707 优化·Phase2）：
+// - flows.ts 的 mockFlowSave 在保存某个源自身的流程时调用 setSourceDetached(sourceId, true)；
+// - sites.ts 的 mockSiteSyncFlow 用网站模板覆盖某源后调用 setSourceDetached(sourceId, false) 复位。
 // 仅对已归属网站（siteId 非空）的源生效；无 siteId 的历史/草稿源没有"脱离模板"这个概念。
 export function setSourceDetached(sourceId: string, detached: boolean): void {
   const s = SOURCES.find((x) => x.sourceId === sourceId)
@@ -437,7 +492,7 @@ export function mockSourceTasks(params?: Record<string, unknown>): TaskInst[] {
 }
 
 /**
- * 子源任务视图的运行记录：默认由当前子源的流程步骤派生；不传 sourceId 时汇总同网站全部子源。
+ * 源任务视图的运行记录：默认由当前源的流程步骤派生；不传 sourceId 时汇总同网站全部源。
  * 每个节点保留两条完成记录和一条当前/最近记录，便于节点、状态、分页筛选联调。
  */
 export function mockSourceTaskPaged(params?: Record<string, unknown>): Paged<TaskInst> {

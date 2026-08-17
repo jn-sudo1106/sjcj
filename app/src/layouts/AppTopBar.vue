@@ -7,11 +7,15 @@ import { ElMessageBox } from 'element-plus'
 import { Bell, QuestionFilled, SwitchButton, User } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { isProductionBackend } from '@/api/client'
 import ChangePasswordDialog from './ChangePasswordDialog.vue'
 import companyLogo from '@/assets/brand/company-logo.png'
 
 const router = useRouter()
 const auth = useAuthStore()
+// 生产写守卫（0812 计划 M0-4）配套：连生产时必须一眼看出，避免联调误操作；
+// 非生产（默认测试环境）时不展示，不给日常开发添加视觉噪音。
+const connectedToProduction = isProductionBackend()
 
 async function handleLogout() {
   try {
@@ -49,6 +53,9 @@ function handleAccountCommand(command: string) {
         <img :src="companyLogo" alt="" />
       </span>
       <strong>青龙智能采集中心</strong>
+      <span v-if="connectedToProduction" class="rc-env-badge" data-testid="prod-env-badge">
+        生产环境 · 写操作受限
+      </span>
     </div>
     <div class="rc-top-actions">
       <button class="rc-icon-btn" type="button" aria-label="帮助">
@@ -156,6 +163,18 @@ function handleAccountCommand(command: string) {
   border-radius: 12px;
   background: radial-gradient(circle, rgba(37, 99, 235, 0.3), transparent 68%);
   animation: rc-glow-pulse 3.8s ease-in-out infinite;
+}
+
+.rc-env-badge {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid rgba(220, 38, 38, 0.35);
+  border-radius: 999px;
+  background: rgba(254, 226, 226, 0.9);
+  color: #b91c1c;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .rc-top-actions {

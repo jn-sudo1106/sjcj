@@ -56,7 +56,7 @@ describe('采集资产总览 mock 聚合', () => {
     expect(summary.panorama.sourceCount).toBe(sites.reduce((sum, site) => sum + site.sourceCount, 0))
   })
 
-  it('按分类路径聚合网站、子源与异常网站并单列无法归类的网站', () => {
+  it('按分类路径聚合网站、源与异常网站并单列无法归类的网站', () => {
     const categories: SourceCategory[] = [
       {
         id: '/基金类',

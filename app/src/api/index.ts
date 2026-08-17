@@ -1,11 +1,11 @@
-import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError } from './client'
+import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError, isMockMode } from './client'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readLoginUsername, readStoredToken, triggerSessionExpired } from './auth'
 import type {
-  Paged, Source, Site, SourceCategory, SourceOption, Step, Ack, PageQuery,
+  Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestRequest, RuleOrchestrationTestResult,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
-  TaskInstQuery,
+  TaskInstQuery, SiteTableOption, SiteTablesResult,
   Config, ConfigActionLog, ConfigParamBinding, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, RawFile, RawFileQuery, RawFileStats, SourceCloneRequest, SourceCloneResult,
   FlowTemplate, FlowTemplateSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
@@ -40,6 +40,15 @@ import {
   ruleOrchestrationSaveScriptToLegacy,
   ruleOrchestrationTestFromLegacy,
   ruleOrchestrationTestToLegacy,
+  siteFromLegacy,
+  sitePageFromLegacy,
+  siteSummaryFromLegacy,
+  siteSourceFromLegacy,
+  sourceCategoriesFromLegacy,
+  sourceFromLegacy,
+  sourceOptionFromLegacy,
+  sourcePageFromLegacy,
+  sourceStepsFromLegacy,
   summaryRowFromLegacy,
   taskInstFromLegacy,
   assertLegacySnatchSaveLogin,
@@ -50,7 +59,7 @@ import { encryptLegacyPayload } from './legacyCrypto'
 export * from './types'
 export { isDanger, DANGER_ENDPOINTS, isMockMode } from './client'
 
-// 网站/子源域尚未迁移真实后端，始终使用现有 Mock；参数等已迁移域仍由全局模式决定。
+// 对方后端尚未提供对应实现的资产能力强制走 Mock；网站读取链路已在 siteApi 单独切真实。
 const assetMockRequest = <T>(endpoint: string, params?: Record<string, unknown>) =>
   request<T>(endpoint, params, { mode: 'mock' })
 
@@ -64,13 +73,109 @@ async function legacySnatchSaveRequest(payload: LegacySnatchSaveRequest): Promis
   return sourceId ? { ...result, sourceId } : result
 }
 
+function ackFromApiResult(result: unknown): Ack {
+  const record = result && typeof result === 'object' ? result as Record<string, unknown> : {}
+  return {
+    ok: record.ok !== false && record.success !== false && String(record.code ?? '0') === '0',
+    demo: record.demo === true,
+    message: record.message == null ? (record.msg == null ? undefined : String(record.msg)) : String(record.message),
+  }
+}
+
+function idFromApiResult(result: unknown, keys: string[]): string | undefined {
+  if (typeof result === 'string' || typeof result === 'number') return String(result)
+  if (!result || typeof result !== 'object') return undefined
+  const record = result as Record<string, unknown>
+  for (const key of keys) {
+    const value = record[key]
+    if (value !== undefined && value !== null && String(value).trim()) return String(value)
+  }
+  return undefined
+}
+
+function legacySnatchSavePayloadFromSource(site: Site, source: Source): LegacySnatchSaveRequest {
+  return {
+    sourceType: source.sourceType ?? '90',
+    sourceUrl: source.url ?? '',
+    sourceName: source.name,
+    categoryId: source.dirId ?? site.dirId ?? '',
+    proxy: source.proxy ?? (source.useProxy ? '1' : ''),
+    keep: source.resume ? '1' : '',
+    cron: source.cron ?? '',
+    tags: source.tags?.join(',') ?? '',
+    newConfig: source.configMode === 'existing' ? '0' : '1',
+    configId: source.configId || undefined,
+    isMulti: '1',
+    loginTemplete: '',
+    entryTypeId: source.mainTable || undefined,
+    params: [],
+    reqLogin: '0',
+  }
+}
+
 // 类型化接口：每个方法一一对应一个真实 /v1 端点。后续按 142 个端点逐域补全。
 export const sourceApi = {
-  sourcePaged: (p?: PageQuery) => assetMockRequest<Paged<Source>>('source/sourcePaged', p),
-  sourceDetail: (sourceId: string) => assetMockRequest<Source | null>('source/sourceDetail', { sourceId }),
-  sourceCategories: () => assetMockRequest<SourceCategory[]>('source/categoryTree'),
+  sourcePaged: async (p?: PageQuery) => {
+    const ids = Array.isArray(p?.sourceIds) ? p.sourceIds.join(',') : (p?.sourceIds ?? p?.ids)
+    const state = p?.state === 'all' ? undefined : p?.state
+    const result = await request<unknown>('source/sourcePaged', p, {
+      method: 'POST',
+      httpEndpoint: 'source/sourcePaged',
+      httpParams: {
+        pageNo: p?.page ?? 1,
+        pageSize: p?.size ?? 20,
+        page: p?.page ?? 1,
+        limit: p?.size ?? 20,
+        ids,
+        siteId: p?.siteId,
+        sourceId: p?.sourceId,
+        name: p?.name ?? p?.keyword,
+        sourceUrl: p?.sourceUrl,
+        entryTypeId: p?.entryTypeId,
+        configId: p?.configId,
+        count: p?.count,
+        dataDate: p?.dataDate,
+        enable: p?.enable,
+        state,
+        categorys: p?.categorys ?? p?.category,
+        cron: p?.cron,
+        topic: p?.topic,
+        notify: p?.notify ?? '',
+        groupBy: p?.groupBy,
+        sorted: p?.sorted ?? -1,
+        tags: p?.tags ?? [],
+        field: p?.field,
+        type: p?.type,
+      },
+    })
+    return sourcePageFromLegacy(result)
+  },
+  sourceDetail: async (sourceId: string) => {
+    const result = await request<unknown>('source/sourceDetail', { sourceId }, {
+      method: 'GET',
+      httpEndpoint: 'source/sourceDetail',
+      httpParams: { sourceId },
+    })
+    return result ? sourceFromLegacy(result) : null
+  },
+  // 旧分类接口首屏只返回根节点；展开节点时按 parentId 懒加载子级。
+  sourceCategories: async (parentId?: string) => {
+    const result = await request<unknown>('source/categoryTree', { parentId }, {
+      method: 'GET',
+      httpEndpoint: 'category/categoryPaged',
+      httpParams: { page: 1, limit: 10000, allSub: false, parentId },
+    })
+    return sourceCategoriesFromLegacy(result)
+  },
   sourceStats: () => assetMockRequest<{ total: number; error: number; externalChanged: number; disabled: number }>('source/stats'),
-  sourceSteps: (sourceId: string) => assetMockRequest<Step[]>('item/next/nextConfigPaged', { sourceId }),
+  sourceSteps: async (sourceId: string) => {
+    const result = await request<unknown>('item/next/nextConfigPaged', { sourceId }, {
+      method: 'GET',
+      httpEndpoint: 'item/next/nextConfigPaged',
+      httpParams: { sourceId, page: 1, limit: 10000, svg: true },
+    })
+    return sourceStepsFromLegacy(result, sourceId)
+  },
 
   // 写类 / 高危端点：首期 mock 仅回执，UI 统一二次确认占位（呼应权威方案读写边界）。
   changeSourceEnable: (sourceId: string, disabled: boolean) =>
@@ -82,6 +187,26 @@ export const sourceApi = {
   /** 发起抓取；真实执行器的登录配置选择参数待 P0 契约确认，当前只沿用旧 sourceIds 请求。 */
   sendSnatch: (sourceIds: string[]) =>
     assetMockRequest<Ack>('source/sendSnatch', { sourceIds }),
+  /** 将已创建的真实源关联到网站；真实端点，调用方需在同一环境完成受控写入。 */
+  bindSite: async (sourceId: string, siteId: string): Promise<Ack> => {
+    const result = await request<unknown>('source/bindSite', { sourceId, siteId }, {
+      method: 'GET',
+      httpEndpoint: 'source/bindSite',
+      httpParams: { sourceId, siteId },
+    })
+    return ackFromApiResult(result)
+  },
+  /** 批量把已有源关联/迁到某个网站（0812 计划 M4-5，bindSite 的多源版）；真实端点，调用方需在
+   *  同一环境完成受控写入。2026-08-15 生产环境实测确认（Q4）：批次里混无效源 ID 不会导致整批
+   *  失败，会静默跳过继续处理有效项，响应只有整批一个 success，没有逐条结果。 */
+  changeSite: async (sourceIds: string[], siteId: string): Promise<Ack> => {
+    const result = await request<unknown>('source/changeSite', { ids: sourceIds, siteId }, {
+      method: 'GET',
+      httpEndpoint: 'source/changeSite',
+      httpParams: { ids: sourceIds.join(','), siteId },
+    })
+    return ackFromApiResult(result)
+  },
   /** 旧平台新建源的一次性提交；请求体字段严格沿用 Step1/2/3 的 snatchSave 契约。 */
   snatchSaveAll: (payload: LegacySnatchSaveRequest) => legacySnatchSaveRequest(payload),
   /** 从当前画布生成旧请求体；请求体字段仍按旧平台命名，待 P0 确认后由明确的新建源动作调用。 */
@@ -111,31 +236,211 @@ export const sourceApi = {
   sourceUpdate: (source: Source) => assetMockRequest<Ack>('source/updateSource', { source }),
   sourceNodeRuns: (sourceId: string) => assetMockRequest<NodeRunStat[]>('source/nodeRunStats', { sourceId }),
   // 数据表页选源下拉（E 包）：同站源列表，sourceId 可空
-  sourceSame: (sourceId?: string) => assetMockRequest<SourceOption[]>('source/sourceSame', { sourceId }),
+  sourceSame: async (sourceId?: string) => {
+    const result = await request<unknown>('source/sourceSame', { sourceId }, {
+      method: 'GET',
+      httpEndpoint: 'source/sourceSame',
+      httpParams: { sourceId },
+    })
+    return (Array.isArray(result) ? result : []).map(sourceOptionFromLegacy)
+  },
 }
 
-// 网站—子源父子模型（0707 优化·Phase2）：网站=统一流程模板+批量工具（不运行），子源=运行实体
+// 网站表聚合（0812 计划 M2-1）：旧平台没有"网站下所有表"接口，siteTables 按
+// site/sources + 逐源 config/queryEntryTypesGroup 现拼；源数超阈值不聚合，
+// 改为要求用户先选源，避免几千个源打几千次请求。按 siteId 缓存，手动 refresh 清除。
+const SITE_TABLES_CONCURRENCY = 6
+const SITE_TABLES_SOURCE_THRESHOLD = 200
+const siteTablesCache = new Map<string, Promise<SiteTablesResult>>()
+
+async function loadSiteTables(
+  siteId: string,
+  onProgress?: (tables: SiteTableOption[]) => void,
+): Promise<SiteTablesResult> {
+  const sources = await siteApi.siteSources(siteId)
+  if (sources.length > SITE_TABLES_SOURCE_THRESHOLD) {
+    return { tables: [], sourceCount: sources.length, overThreshold: true, failedSourceIds: [] }
+  }
+  const tableMap = new Map<string, SiteTableOption>()
+  const failedSourceIds: string[] = []
+  let cursor = 0
+  async function worker() {
+    while (cursor < sources.length) {
+      const source = sources[cursor]
+      cursor += 1
+      try {
+        const group = await dataApi.entryTypesGroup(source.sourceId)
+        for (const entry of [...group.list1, ...group.list2, ...group.list3]) {
+          const existing = tableMap.get(entry.tableId)
+          if (existing) existing.sourceCount += 1
+          else tableMap.set(entry.tableId, { tableId: entry.tableId, tableName: entry.tableName, name: entry.name, sourceCount: 1 })
+        }
+      } catch {
+        // 单源查表失败不清空已聚合结果，只记下来给调用方提示"部分源未能加载"。
+        failedSourceIds.push(source.sourceId)
+      }
+      onProgress?.([...tableMap.values()])
+    }
+  }
+  const workerCount = Math.min(SITE_TABLES_CONCURRENCY, sources.length) || 1
+  await Promise.all(Array.from({ length: workerCount }, worker))
+  return { tables: [...tableMap.values()], sourceCount: sources.length, overThreshold: false, failedSourceIds }
+}
+
+// 网站—源父子模型（0707 优化·Phase2）：网站=统一流程模板+批量工具（不运行），源=运行实体
 export const siteApi = {
-  sitePaged: (p?: PageQuery) => assetMockRequest<Paged<Site>>('site/sitePaged', p),
-  siteDetail: (siteId: string) => assetMockRequest<Site | null>('site/siteDetail', { siteId }),
-  siteCreate: (site: Omit<Site, 'sourceCount' | 'errorCount'>, sources: Source[]) =>
-    assetMockRequest<{ ok: boolean; message?: string; siteId?: string }>('site/createSite', { site, sources }),
+  sitePaged: async (p?: PageQuery) => {
+    const state = String(p?.state ?? '')
+    const result = await request<Paged<unknown>>('site/sitePaged', p, {
+      method: 'POST',
+      httpParams: {
+        page: p?.page ?? 1,
+        limit: p?.size ?? 20,
+        name: p?.keyword || undefined,
+        state: state === 'error' ? 'ERROR' : undefined,
+      },
+    })
+    return sitePageFromLegacy(result)
+  },
+  siteSummary: async (): Promise<SiteSummary> => {
+    const result = await request<unknown>('site/summary', undefined, { method: 'GET' })
+    return siteSummaryFromLegacy(result)
+  },
+  siteDetail: async (siteId: string) => {
+    const result = await request<unknown>('site/siteDetail', { siteId }, {
+      method: 'GET',
+      httpEndpoint: 'site/detail',
+      httpParams: { siteId },
+    })
+    return result ? siteFromLegacy(result) : null
+  },
+  /**
+   * 页面仍提交网站和首批源；真实适配层拆成 site/add → snatchSave → bindSite。
+   * site/add 不标记为默认 live，避免本地默认测试代理误触发建站；生产联调需显式切到 HTTP + 118 环境。
+   */
+  siteCreate: async (site: Site, sources: Source[] = []): Promise<SiteCreateResult> => {
+    if (isMockMode()) {
+      return assetMockRequest<SiteCreateResult>('site/createSite', { site, sources })
+    }
+    if (!isMockMode() && import.meta.env.VITE_SITE_CREATE_TARGET !== 'production') {
+      return { ok: false, message: '新建网站仅允许生产环境，请设置 VITE_SITE_CREATE_TARGET=production' }
+    }
+
+    const siteName = site.name.trim()
+    const sitePayload: SiteCreateInput = {
+      siteName,
+      stdSiteName: siteName,
+      categoryId: site.dirId && /^\d+$/.test(site.dirId) ? Number(site.dirId) : undefined,
+    }
+    const result = await request<unknown>('site/createSite', sitePayload as unknown as Record<string, unknown>, {
+      method: 'POST',
+      httpEndpoint: 'site/add',
+      httpParams: sitePayload as unknown as Record<string, unknown>,
+    })
+
+    const siteAck = ackFromApiResult(result)
+    if (!siteAck.ok) return siteAck
+    let siteId = idFromApiResult(result, ['siteId', 'siteID', 'siteid', 'id'])
+    if (!siteId) {
+      const matched = (await siteApi.sitePaged({ keyword: siteName, page: 1, size: 20 })).list
+        .filter((item) => item.name.trim() === siteName)
+      if (matched.length !== 1) {
+        return {
+          ...siteAck,
+          ok: false,
+          message: matched.length > 1
+            ? `网站「${siteName}」回查到多个同名结果，未继续保存源`
+            : `网站「${siteName}」已创建，但未能回查 siteId，未继续保存源`,
+        }
+      }
+      siteId = matched[0].siteId
+    }
+
+    let firstSourceId: string | undefined
+    for (const source of sources) {
+      let saved: LegacySnatchSaveResult
+      try {
+        saved = await legacySnatchSaveRequest(legacySnatchSavePayloadFromSource(site, source))
+      } catch (error) {
+        return {
+          ok: false,
+          siteId,
+          message: `网站「${siteName}」已创建，但源「${source.name}」保存请求失败：${(error as Error).message ?? '未知错误'}`,
+        }
+      }
+      if (!saved.ok) {
+        return { ...saved, ok: false, siteId, message: saved.message || `源「${source.name}」保存失败，网站已创建` }
+      }
+      const sourceId = saved.sourceId
+      if (!sourceId) {
+        return { ok: false, siteId, message: `源「${source.name}」已提交，但未能解析 sourceId，未继续关联网站` }
+      }
+      firstSourceId ||= sourceId
+      let bound: Ack
+      try {
+        bound = await sourceApi.bindSite(sourceId, siteId)
+      } catch (error) {
+        return {
+          ok: false,
+          siteId,
+          sourceId,
+          message: `网站「${siteName}」和源「${source.name}」已创建，但关联网站请求失败：${(error as Error).message ?? '未知错误'}`,
+        }
+      }
+      if (!bound.ok) {
+        return { ...bound, ok: false, siteId, sourceId, message: bound.message || `源「${source.name}」已创建，但关联网站失败` }
+      }
+    }
+    return {
+      ...siteAck,
+      ok: true,
+      message: sources.length ? '网站、源已按顺序保存并完成关联' : '网站已创建',
+      siteId,
+      sourceId: firstSourceId,
+    }
+  },
   siteUpdate: (site: Pick<Site, 'siteId' | 'name' | 'category' | 'categoryPath' | 'owner'>) =>
     assetMockRequest<Ack>('site/updateSite', { site }),
-  siteSources: (siteId: string) => assetMockRequest<Source[]>('site/sourcesOfSite', { siteId }),
-  // 新增子源默认从空白流程开始；inherit=true 仅保留给旧数据迁移兼容场景。
+  siteSources: async (siteId: string) => {
+    const result = await request<Paged<unknown> | Source[]>('site/sourcesOfSite', { siteId }, {
+      method: 'GET',
+      httpEndpoint: 'site/sources',
+      httpParams: { siteId, page: 1, limit: 1000 },
+    })
+    const list = Array.isArray(result) ? result : result.list
+    return list.map(siteSourceFromLegacy)
+  },
+  // 网站范围表聚合（M2-1）：同一 siteId 的并发/重复调用共享同一个进行中的请求；
+  // 只有触发首次请求的调用方能实时收到 onProgress，后到的调用方直接等最终结果。
+  siteTables: (siteId: string, options: { onProgress?: (tables: SiteTableOption[]) => void; force?: boolean } = {}) => {
+    if (options.force) siteTablesCache.delete(siteId)
+    let cached = siteTablesCache.get(siteId)
+    if (!cached) {
+      cached = loadSiteTables(siteId, options.onProgress)
+      siteTablesCache.set(siteId, cached)
+      cached.catch(() => siteTablesCache.delete(siteId)) // 失败态不缓存，允许下次重试
+    } else if (options.onProgress) {
+      const notify = options.onProgress
+      cached.then((result) => notify(result.tables)).catch(() => {})
+    }
+    return cached
+  },
+  refreshSiteTables: (siteId: string) => {
+    siteTablesCache.delete(siteId)
+  },
+  // 新增源默认从空白流程开始；inherit=true 仅保留给旧数据迁移兼容场景。
   sourceAdd: (siteId: string, source: Source, inherit = false) =>
     assetMockRequest<{ ok: boolean; message?: string; sourceId?: string }>('site/addSource', { siteId, source, inherit }),
   cloneSource: (requestBody: SourceCloneRequest) =>
     assetMockRequest<SourceCloneResult>('site/cloneSource', requestBody as unknown as Record<string, unknown>),
   sourceRemove: (siteId: string, sourceId: string) => assetMockRequest<Ack>('site/removeSource', { siteId, sourceId }),
-  // 按网站批量导入子源：一行一条「名称;URL」，导入后从空白流程开始。
+  // 按网站批量导入源：一行一条「名称;URL」，导入后从空白流程开始。
   siteImportSources: (siteId: string, lines: string) =>
     assetMockRequest<{ ok: boolean; message?: string; added?: number; skipped?: number }>('site/importSources', { siteId, lines }),
-  // 危险端点：把来源子源已保存的流程整条覆盖到同网站所选子源，UI 走多选列表 + 危险确认
+  // 危险端点：把源头已保存的流程整条覆盖到同网站所选源，UI 走多选列表 + 危险确认
   siteSyncFlow: (siteId: string, fromSourceId: string, sourceIds: string[]) =>
     assetMockRequest<Ack>('site/syncFlow', { siteId, fromSourceId, sourceIds }),
-  // 任务视图网站化（0707 优化·Phase5）：队列汇总 + 展开明细，sourceId 可选收窄到单个子源
+  // 任务视图网站化（0707 优化·Phase5）：队列汇总 + 展开明细，sourceId 可选收窄到单个源
   siteQueueStats: (siteId: string, sourceId?: string) => assetMockRequest<QueueStat[]>('site/queueStats', { siteId, sourceId }),
   queueTaskPaged: (q: { siteId: string; queue: string; sourceId?: string; state?: string; page?: number; size?: number }) =>
     assetMockRequest<Paged<TaskInst>>('site/queueTaskPaged', q),
@@ -676,12 +981,13 @@ export const dataApi = {
       httpEndpoint: 'entry/re-save',
       httpParams: { sourceId, jsonId },
     }),
-  // 导出 Excel：纯 URL 直开，不走 request/axios，不带 Token（同源 Cookie 鉴权）
+  // 导出 Excel：旧平台只透传这 5 个查询字段；不把内部查询字段 more 误传给导出接口。
+  // 纯 URL 直开，不走 request/axios，由同源 Cookie 完成鉴权。
   exportUrl: (q: RowQuery): string => {
     const built = buildLegacyRowQuery(q)
     return appendQuery(BASE_URL + 'entry/entryExportAll', {
       entryType: built.entryType, sourceId: built.sourceId, state: built.state,
-      min: built.min, max: built.max, more: built.more,
+      min: q.min, max: q.max,
     })
   },
 }
@@ -902,7 +1208,7 @@ export const paramApi = {
     request<Ack>('config/clear', { paramIds }, { method: 'GET', httpParams: { ids: paramIds } }),
 }
 
-// 原始文件（0711 R11：文件视图，仅子源态使用）
+// 原始文件（0711 R11：文件视图，仅源态使用）
 export const fileApi = {
   filePaged: (q: RawFileQuery) => request<Paged<RawFile>>('file/filePaged', q),
   fileStats: (q: Omit<RawFileQuery, 'page' | 'size'>) => request<RawFileStats>('file/fileStats', q),
@@ -931,7 +1237,7 @@ export const flowApi = {
     request<{ reply: string }>('flow/nodeAiChat', params),
 }
 
-// 流程模板（0714 会议 Task 5）：结构与子源动态绑定分开保存；version 用于固定已绑定子源。
+// 流程模板（0714 会议 Task 5）：结构与源动态绑定分开保存；version 用于固定已绑定源。
 export const flowTemplateApi = {
   list: () => request<FlowTemplate[]>('flow-template/list'),
   detail: (id: string, version?: number) => request<FlowTemplate | null>('flow-template/detail', { id, version }),

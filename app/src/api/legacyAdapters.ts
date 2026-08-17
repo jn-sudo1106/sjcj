@@ -21,6 +21,12 @@ import type {
   RuleOrchestrationSaveResult,
   RuleOrchestrationTestRequest,
   RuleOrchestrationTestResult,
+  Site,
+  SiteSummary,
+  Source,
+  SourceCategory,
+  SourceOption,
+  Step,
   SummaryRow,
   TaskInst,
 } from './types'
@@ -820,4 +826,218 @@ export function taskInstFromLegacy(input: unknown): TaskInst {
     updatedAt: record.updateDt == null ? '' : String(record.updateDt),
     taskSpecId: record.taskSpecId == null ? undefined : String(record.taskSpecId),
   }
+}
+
+/** data-view 网站管理（cfg_site）到本平台网站卡片模型的只读映射。 */
+export function siteFromLegacy(input: unknown): Site {
+  const record = asRecord(input)
+  if ('name' in record && 'sourceCount' in record) return record as unknown as Site
+
+  const sourceCount = Number(record.sourceCnt ?? record.sourceCount ?? 0)
+  const categoryPath = record.categoryName == null ? '' : String(record.categoryName)
+  const category = categoryPath.split('/').filter(Boolean)[0] ?? ''
+  const errorCount = record.errorCnt == null
+    ? (record.siteHealth === 'ERROR' ? sourceCount : 0)
+    : Number(record.errorCnt)
+
+  return {
+    siteId: String(record.siteId ?? ''),
+    name: String(record.siteName ?? ''),
+    category,
+    categoryPath: categoryPath || undefined,
+    dirId: record.categoryId == null ? undefined : String(record.categoryId),
+    owner: '',
+    tags: [],
+    sourceCount,
+    errorCount,
+    updatedAt: record.updateDt == null ? undefined : String(record.updateDt),
+    dataCount: record.dataTotal == null ? undefined : Number(record.dataTotal),
+    lastTaskAt: record.lastInsert == null ? undefined : String(record.lastInsert),
+  }
+}
+
+export function sitePageFromLegacy(input: Paged<unknown>): Paged<Site> {
+  return { total: input.total, list: input.list.map(siteFromLegacy) }
+}
+
+function legacyNumber(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  const number = Number(value)
+  return Number.isFinite(number) ? number : undefined
+}
+
+function legacyTags(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) return value.map(String).filter(Boolean)
+  if (typeof value !== 'string' || !value.trim()) return undefined
+  return value.split(/[，,]/).map((tag) => tag.trim()).filter(Boolean)
+}
+
+/** data-view 源分页/详情到当前 Source 模型的只读映射。 */
+export function sourceFromLegacy(input: unknown): Source {
+  const record = asRecord(input)
+  if ('name' in record && 'url' in record && 'mainTable' in record) return record as unknown as Source
+
+  const categoryPath = record.categoryName == null ? undefined : String(record.categoryName)
+  const category = record.classify ?? record.templetCode
+  const isDeleted = legacyNumber(record.isDelete)
+  const notifyFlag = legacyNumber(record.notifyFlag)
+  const alarmCount = legacyNumber(record.alarmCnt)
+  const rawSiteId = record.siteId
+  const siteId = rawSiteId == null || rawSiteId === 0 || rawSiteId === '0' ? undefined : String(rawSiteId)
+
+  return {
+    sourceId: String(record.sourceId ?? ''),
+    name: String(record.sourceName ?? ''),
+    url: record.sourceUrl == null ? '' : String(record.sourceUrl),
+    configId: record.configId == null ? '' : String(record.configId),
+    sourceType: record.sourceType == null ? undefined : String(record.sourceType),
+    mainTable: record.entryTypeId == null ? '' : String(record.entryTypeId),
+    owner: record.author == null ? '' : String(record.author),
+    category: category == null ? undefined : String(category),
+    subCategory: record.classifySub == null ? undefined : String(record.classifySub),
+    categoryPath,
+    dirId: record.categoryId == null ? undefined : String(record.categoryId),
+    tags: legacyTags(record.tags),
+    priority: legacyNumber(record.priority),
+    disabled: isDeleted == null ? undefined : isDeleted !== 0,
+    state: String(record.state ?? ''),
+    lastTaskAt: record.lastRun == null ? undefined : String(record.lastRun),
+    lastSuccessAt: record.lastSuccess == null ? undefined : String(record.lastSuccess),
+    dataCount: legacyNumber(record.dataCnt),
+    lastInsertAt: record.lastInsert == null ? undefined : String(record.lastInsert),
+    jobCount: legacyNumber(record.jobCnt),
+    stepCount: legacyNumber(record.stepCnt),
+    remark: record.remark == null ? undefined : String(record.remark),
+    cycle: record.schedule == null ? undefined : String(record.schedule),
+    alarm: notifyFlag === 1 || (alarmCount != null && alarmCount > 0),
+    lastUrl: record.lastUrl == null ? undefined : String(record.lastUrl),
+    coreParam: record.sourceParam == null ? undefined : String(record.sourceParam),
+    authConfig: record.authConfig == null ? undefined : String(record.authConfig),
+    resume: legacyNumber(record.keepLast) === 1,
+    domain: record.domain == null ? undefined : String(record.domain),
+    createdAt: record.createDt == null ? undefined : String(record.createDt),
+    updatedAt: record.updateDt == null ? undefined : String(record.updateDt),
+    siteId,
+    siteName: record.siteName == null ? undefined : String(record.siteName),
+  }
+}
+
+/** 旧平台 sourcePaged 的分页结构适配。 */
+export function sourcePageFromLegacy(input: unknown): Paged<Source> {
+  const record = asRecord(input)
+  const list = Array.isArray(input)
+    ? input
+    : (Array.isArray(record.list) ? record.list : [])
+  const total = legacyNumber(record.total ?? record.count ?? record.totalCount) ?? list.length
+  return { total, list: list.map(sourceFromLegacy) }
+}
+
+/** 旧平台 item/next 步骤列表到当前流程节点模型的只读映射。 */
+export function stepFromLegacy(input: unknown, sourceId: string): Step {
+  const record = asRecord(input)
+  const rawStepId = record.itemConfig ?? record.stepId ?? record.id
+  const rawSourceId = record.sourceId ?? sourceId
+  const rawEnabled = record.enabled
+  const isDelete = legacyNumber(record.isDelete)
+  const contextMap = record.lastStep == null
+    ? undefined
+    : String(record.lastStep).split(/[，,]/).map((item) => item.trim()).filter(Boolean)
+  const outColumns = Array.isArray(record.outColumns)
+    ? record.outColumns.map(String).filter(Boolean)
+    : undefined
+
+  return {
+    stepId: String(rawStepId ?? ''),
+    applySource: record.applySource == null ? undefined : String(record.applySource),
+    sourceId: String(rawSourceId ?? sourceId),
+    name: String(record.name ?? record.flowName ?? ''),
+    nodeType: record.nodeType == null && record.nodeKind == null && record.type == null && record.template == null
+      ? undefined
+      : String(record.nodeType ?? record.nodeKind ?? record.type ?? record.template),
+    inputTable: record.inputTable == null && record.entryTypeId == null
+      ? undefined
+      : String(record.inputTable ?? record.entryTypeId),
+    outputTable: record.outputTable == null && record.outEntry == null
+      ? undefined
+      : String(record.outputTable ?? record.outEntry),
+    configId: record.configId == null ? undefined : String(record.configId),
+    urlSourceField: record.urlSourceField == null ? undefined : String(record.urlSourceField),
+    urlRule: record.urlRule == null ? undefined : String(record.urlRule),
+    condition: record.condition == null && record.cond == null ? undefined : String(record.condition ?? record.cond),
+    failAction: record.failAction == null ? undefined : String(record.failAction),
+    contextMap,
+    outColumns,
+    enabled: rawEnabled == null ? isDelete !== 1 : Boolean(rawEnabled),
+  }
+}
+
+/** 旧平台 item/next 分页/流程图响应到当前步骤数组。 */
+export function sourceStepsFromLegacy(input: unknown, sourceId: string): Step[] {
+  const record = asRecord(input)
+  const rows = Array.isArray(input)
+    ? input
+    : (Array.isArray(record.list) ? record.list : [])
+  return rows
+    .map((item) => stepFromLegacy(item, sourceId))
+    .filter((step) => step.stepId)
+}
+
+/** 旧平台 sourceSame 的轻量源选项适配。 */
+export function sourceOptionFromLegacy(input: unknown): SourceOption {
+  const record = asRecord(input)
+  return {
+    sourceId: String(record.sourceId ?? ''),
+    name: String(record.name ?? record.sourceName ?? ''),
+  }
+}
+
+/** 旧平台分类分页结果适配为当前树结构；接口未返回子级时不虚构 children。 */
+export function sourceCategoriesFromLegacy(input: unknown): SourceCategory[] {
+  const record = asRecord(input)
+  const rows = Array.isArray(input)
+    ? input
+    : (Array.isArray(record.list) ? record.list : [])
+  const nodes = rows.map((item) => {
+    const row = asRecord(item)
+    const count = legacyNumber(row.count ?? row.sourceCnt ?? row.sourceCount)
+    return {
+      id: String(row.categoryId ?? row.id ?? ''),
+      name: String(row.categoryName ?? row.name ?? ''),
+      parentId: row.parentId == null || row.parentId === 0 ? '' : String(row.parentId),
+      count,
+    }
+  }).filter((node) => node.id && node.name)
+  const byId = new Map<string, SourceCategory>()
+  nodes.forEach((node) => byId.set(node.id, {
+    id: node.id,
+    name: node.name,
+    ...(node.count == null ? {} : { count: node.count }),
+  }))
+  const roots: SourceCategory[] = []
+  nodes.forEach((node) => {
+    const target = byId.get(node.id)!
+    const parent = node.parentId ? byId.get(node.parentId) : undefined
+    if (parent) {
+      parent.children = [...(parent.children ?? []), target]
+    } else {
+      roots.push(target)
+    }
+  })
+  return roots
+}
+
+/** data-view 网站统计摘要到当前顶部统计模型的只读映射。 */
+export function siteSummaryFromLegacy(input: unknown): SiteSummary {
+  const record = asRecord(input)
+  return {
+    total: Number(record.total ?? 0),
+    sourceTotal: Number(record.sourceTotal ?? 0),
+    notifyCount: Number(record.notifyCount ?? 0),
+    errorCount: Number(record.errorCnt ?? record.errorCount ?? 0),
+  }
+}
+
+/** data-view 网站下源列表到本平台 Source 的只读映射。 */
+export function siteSourceFromLegacy(input: unknown): Source {
+  return sourceFromLegacy(input)
 }

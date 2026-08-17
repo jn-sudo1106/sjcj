@@ -52,7 +52,7 @@ export function mockFlowTemplateDetail(params?: Record<string, unknown>): FlowTe
   return template ? clone(template) : null
 }
 
-/** 每次保存同一 id 都生成新版本；旧版本继续供已绑定子源读取，不会被静默覆盖。 */
+/** 每次保存同一 id 都生成新版本；旧版本继续供已绑定源读取，不会被静默覆盖。 */
 export function mockFlowTemplateSave(params?: Record<string, unknown>): FlowTemplate {
   const input = params?.template as FlowTemplateSaveInput | undefined
   const name = input?.name?.trim()

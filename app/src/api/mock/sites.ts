@@ -1,11 +1,11 @@
-import type { Paged, Source, Site, Ack, QueueStat, TaskInst, SourceCloneRequest, SourceCloneResult } from '../types'
+import type { Paged, Source, Site, SiteSummary, Ack, QueueStat, TaskInst, SourceCloneRequest, SourceCloneResult } from '../types'
 import { SOURCES, mockSourceCreate, setSourceDetached, mockSourceSteps, mockSourceNodeRuns } from './sources'
 import { mockFlowLoad, mockFlowSave } from './flows'
 import { cloneEntryStructure } from './entries'
 import { buildSourceSeed, type FlowDef, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 
-// 网站—子源父子模型 mock（0707 优化·Phase2）：网站 = 统一流程模板 + 批量工具（不实际运行），
-// 子源（语言/变体）= 真正的采集运行实体。网站统一流程复用既有 flow/save·load 契约，id = `site:${siteId}`。
+// 网站—源父子模型 mock（0707 优化·Phase2）：网站 = 统一流程模板 + 批量工具（不实际运行），
+// 源（语言/变体）= 真正的采集运行实体。网站统一流程复用既有 flow/save·load 契约，id = `site:${siteId}`。
 
 // export 给 flows.ts 的 mockFlowLoad：种子演示网站查无模板存档时兜底默认骨架（0710，与用户新建网站区分）
 export const SITE_SEEDS: Omit<Site, 'sourceCount' | 'errorCount'>[] = [
@@ -18,13 +18,13 @@ export const SITE_SEEDS: Omit<Site, 'sourceCount' | 'errorCount'>[] = [
   { siteId: 'site-lang-demo', name: '多语种公告监控', category: '股票类', categoryPath: '/股票类/公告', owner: 'dev_zhonghe', tags: ['多语言', '演示'], updatedAt: '2026-07-01 09:00' },
 ]
 
-// 「子源可能很多」演示数据（0707 会后澄清）：单独一个网站挂 24 个语言子源，
+// 「源可能很多」演示数据（0707 会后澄清）：单独一个网站挂 24 个语言源，
 // 供采集资产卡片 chips「+N」浮层与数据/任务视图源筛选下拉的可搜索、溢出收纳交互联调用。
 // 0707 优化·Phase3 修正：并入通用 SOURCES（见下方 push）——Phase3 之前曾刻意不并入以避免撑爆采集资产表格，
 // 但 Phase3 把 SourceTab.vue 从 sourceApi.sourcePaged 换成了 siteApi.sitePaged，flat 列表已无消费方，
 // 顾虑不存在了；不并入的代价是任何按 sourceId 查找（sourceDetail/sourceSteps/nodeRunStats…全部键在 SOURCES 上）
 // 都找不到这些 id，命中 mockSourceDetail 的 `SOURCES.find(...) ?? SOURCES[0]` 兜底，
-// 会静默加载成 SOURCES[0]（错的源）而不是报错——从卡片点进语言子源实测到了这个问题，因此改为并入。
+// 会静默加载成 SOURCES[0]（错的源）而不是报错——从卡片点进语言源实测到了这个问题，因此改为并入。
 const LANGUAGES = [
   '中文', '英文', '日文', '韩文', '法文', '德文', '西班牙文', '葡萄牙文', '俄文', '阿拉伯文',
   '意大利文', '荷兰文', '泰文', '越南文', '印尼文', '土耳其文', '波兰文', '瑞典文', '希腊文', '希伯来文',
@@ -72,7 +72,7 @@ function allSites(): Omit<Site, 'sourceCount' | 'errorCount'>[] {
   return [...readCreatedSites(), ...SITE_SEEDS]
 }
 
-// 某网站下的全部子源（语言演示数据已并入 SOURCES，见上方 push，这里无需再单独合并）。
+// 某网站下的全部源（语言演示数据已并入 SOURCES，见上方 push，这里无需再单独合并）。
 function sourcesOfSite(siteId: string): Source[] {
   return SOURCES.filter((s) => s.siteId === siteId)
 }
@@ -125,14 +125,33 @@ export function mockSitePaged(params?: Record<string, unknown>): Paged<Site> {
   return { total: filtered.length, list: filtered.slice(start, start + size) }
 }
 
+/** 与网站列表同口径的顶部统计，供关闭真实端点时回退。 */
+export function mockSiteSummary(): SiteSummary {
+  const sites = allSites().map(withAggregate)
+  return {
+    total: sites.length,
+    sourceTotal: sites.reduce((total, site) => total + site.sourceCount, 0),
+    notifyCount: 0,
+    errorCount: sites.reduce((total, site) => total + site.errorCount, 0),
+  }
+}
+
 export function mockSiteDetail(params?: Record<string, unknown>): Site | null {
   const seed = allSites().find((s) => s.siteId === String(params?.siteId ?? ''))
   return seed ? withAggregate(seed) : null
 }
 
-// 「新建采集」两段式闸门：建网站 + 首批子源（子源沿用 source/createSource 的落库 + 查重逻辑，仅补 siteId）。
-export function mockSiteCreate(params?: Record<string, unknown>): { ok: boolean; message?: string; siteId?: string } {
-  const site = params?.site as Omit<Site, 'sourceCount' | 'errorCount'> | undefined
+// 本地演示仍保持页面原有的一次提交体验；真实 HTTP 适配层会把同一提交拆成多步落库。
+export function mockSiteCreate(params?: Record<string, unknown>): { ok: boolean; message?: string; siteId?: string; sourceId?: string } {
+  const input = params?.site as Omit<Site, 'sourceCount' | 'errorCount'> | undefined
+  const site = input ?? {
+    siteId: String(params?.siteId ?? `site-local-${Date.now()}`),
+    name: String(params?.siteName ?? ''),
+    category: String(params?.category ?? ''),
+    categoryPath: params?.categoryPath == null ? undefined : String(params.categoryPath),
+    dirId: params?.categoryId == null ? undefined : String(params.categoryId),
+    owner: String(params?.owner ?? 'admin'),
+  }
   const sources = (params?.sources as Source[] | undefined) ?? []
   if (!site?.siteId || !site.name) return { ok: false, message: '缺少网站 ID / 名称' }
   if (allSites().some((s) => s.siteId === site.siteId)) {
@@ -143,10 +162,10 @@ export function mockSiteCreate(params?: Record<string, unknown>): { ok: boolean;
     const res = mockSourceCreate({ source: { ...src, siteId: site.siteId } })
     if (!res.ok) return res
   }
-  return { ok: true, message: '网站已创建（本地演示）', siteId: site.siteId }
+  return { ok: true, message: '网站已创建（本地演示）', siteId: site.siteId, sourceId: sources[0]?.sourceId }
 }
 
-/** 网站基本信息编辑：只更新网站自身的名称、分类和责任人，不改子源、标签与网站统一流程。 */
+/** 网站基本信息编辑：只更新网站自身的名称、分类和责任人，不改源、标签与网站统一流程。 */
 export function mockSiteUpdate(params?: Record<string, unknown>): Ack {
   const site = params?.site as Pick<Site, 'siteId' | 'name' | 'category' | 'categoryPath' | 'owner'> | undefined
   if (!site?.siteId || !site.name.trim() || !site.category.trim()) return { ok: false, message: '请填写网站名称和分类' }
@@ -173,12 +192,12 @@ export function mockSiteSourcesOf(params?: Record<string, unknown>): Source[] {
   return sourcesOfSite(String(params?.siteId ?? ''))
 }
 
-// 网站下新增子源默认只建名称/URL，流程从空白开始；inherit=true 仅保留给旧数据迁移兼容场景。
+// 网站下新增源默认只建名称/URL，流程从空白开始；inherit=true 仅保留给旧数据迁移兼容场景。
 export function mockSiteSourceAdd(params?: Record<string, unknown>): { ok: boolean; message?: string; sourceId?: string } {
   const siteId = String(params?.siteId ?? '')
   const source = params?.source as Source | undefined
   const inherit = params?.inherit === true
-  if (!siteId || !source) return { ok: false, message: '缺少网站或子源信息' }
+  if (!siteId || !source) return { ok: false, message: '缺少网站或源信息' }
   const res = mockSourceCreate({ source: { ...source, siteId } })
   if (res.ok && res.sourceId && inherit) {
     const siteFlow = mockFlowLoad({ id: `site:${siteId}` })
@@ -208,11 +227,11 @@ function remapTables(cfg: NodeConfig, tableIdMap: Record<string, string>): void 
   if (cfg.outputTable) cfg.outputTable = tableIdMap[cfg.outputTable] ?? cfg.outputTable
 }
 
-/** 子源复制是原子 BFF 命令：仅复制流程、节点配置及表结构，不读取数据、文件和任务运行实例。 */
+/** 源复制是原子 BFF 命令：仅复制流程、节点配置及表结构，不读取数据、文件和任务运行实例。 */
 export function mockSiteCloneSource(params?: Record<string, unknown>): SourceCloneResult {
   const request = params as unknown as SourceCloneRequest
   const template = SOURCES.find((source) => source.sourceId === request.templateSourceId)
-  if (!template) throw new Error(`模板子源「${request.templateSourceId}」不存在`)
+  if (!template) throw new Error(`模板源「${request.templateSourceId}」不存在`)
   if (!allSites().some((site) => site.siteId === request.targetSiteId)) throw new Error(`目标网站「${request.targetSiteId}」不存在`)
 
   const sourceId = `src-copy-${Date.now().toString(36)}-${cloneSequence++}`
@@ -260,8 +279,8 @@ export function mockSiteCloneSource(params?: Record<string, unknown>): SourceClo
   return { source, flowId: sourceId, tableIdMap }
 }
 
-// 按网站批量导入子源：一行一条「名称;URL」（URL 可省略），空行/缺名称行跳过；
-// 复用新增子源创建路径，所有导入项从空白流程开始。
+// 按网站批量导入源：一行一条「名称;URL」（URL 可省略），空行/缺名称行跳过；
+// 复用新增源创建路径，所有导入项从空白流程开始。
 export function mockSiteImportSources(params?: Record<string, unknown>): { ok: boolean; message?: string; added?: number; skipped?: number } {
   const siteId = String(params?.siteId ?? '')
   const lines = String(params?.lines ?? '')
@@ -292,43 +311,43 @@ export function mockSiteImportSources(params?: Record<string, unknown>): { ok: b
     else skipped++
   })
   if (!added) return { ok: false, message: '没有可导入的行，请检查「名称;URL」格式' }
-  return { ok: true, added, skipped, message: `已导入 ${added} 条子源${skipped ? `、跳过 ${skipped} 条` : ''}（本地演示）` }
+  return { ok: true, added, skipped, message: `已导入 ${added} 条源${skipped ? `、跳过 ${skipped} 条` : ''}（本地演示）` }
 }
 
-// 网站下移除子源（危险端点）：仅从通用 SOURCES 摘除（语言演示数据是只读种子，不支持移除）。
+// 网站下移除源（危险端点）：仅从通用 SOURCES 摘除（语言演示数据是只读种子，不支持移除）。
 export function mockSiteSourceRemove(params?: Record<string, unknown>): Ack {
   const siteId = String(params?.siteId ?? '')
   const sourceId = String(params?.sourceId ?? '')
   const idx = SOURCES.findIndex((s) => s.sourceId === sourceId && s.siteId === siteId)
-  if (idx < 0) return { ok: false, message: '子源不存在或不属于该网站' }
+  if (idx < 0) return { ok: false, message: '源不存在或不属于该网站' }
   SOURCES.splice(idx, 1)
-  return { ok: true, demo: true, message: '子源已移除（本地演示）' }
+  return { ok: true, demo: true, message: '源已移除（本地演示）' }
 }
 
-// 子源间流程同步（危险端点，0716）：把来源子源已保存的流程整条覆盖到同网站所选子源，
+// 源间流程同步（危险端点，0716）：把源头已保存的流程整条覆盖到同网站所选源，
 // 不经网站统一模板（0714 后网站本身没有流程）；整条覆盖，不做节点级 diff 合并（首期口径）。
-// 同步成功的目标子源复位 detached=false（与同步来源一致；此后单独保存会重新标 true）。
+// 同步成功的目标源复位 detached=false（与同步来源一致；此后单独保存会重新标 true）。
 export function mockSiteSyncFlow(params?: Record<string, unknown>): Ack {
   const siteId = String(params?.siteId ?? '')
   const fromSourceId = String(params?.fromSourceId ?? '')
   const requestedSourceIds = Array.isArray(params?.sourceIds) ? params.sourceIds.map(String) : []
   const sourceIds = [...new Set(requestedSourceIds.filter((id) => id !== fromSourceId))]
-  if (!siteId || !fromSourceId || !sourceIds.length) return { ok: false, message: '缺少网站、来源子源或目标子源' }
+  if (!siteId || !fromSourceId || !sourceIds.length) return { ok: false, message: '缺少网站、源头或目标源' }
   const siteSourceIds = new Set(sourcesOfSite(siteId).map((source) => source.sourceId))
-  if (!siteSourceIds.has(fromSourceId)) return { ok: false, message: '来源子源不存在或不属于该网站' }
+  if (!siteSourceIds.has(fromSourceId)) return { ok: false, message: '源头不存在或不属于该网站' }
   if (sourceIds.some((sourceId) => !siteSourceIds.has(sourceId))) {
-    return { ok: false, message: '目标子源不存在或不属于该网站' }
+    return { ok: false, message: '目标源不存在或不属于该网站' }
   }
   const fromFlow = mockFlowLoad({ id: fromSourceId })
-  if (!fromFlow) return { ok: false, message: '来源子源还没有已保存的流程' }
+  if (!fromFlow) return { ok: false, message: '源头还没有已保存的流程' }
   sourceIds.forEach((sourceId) => {
     mockFlowSave({ def: { ...fromFlow, id: sourceId } })
     setSourceDetached(sourceId, false)
   })
-  return { ok: true, demo: true, message: `已同步到 ${sourceIds.length} 个子源（本地演示）` }
+  return { ok: true, demo: true, message: `已同步到 ${sourceIds.length} 个源（本地演示）` }
 }
 
-// 任务视图网站化（0707 优化·Phase5）：队列粒度聚合，网站下全部子源节点按队列去重；sourceId 可选进一步收窄到单个子源。
+// 任务视图网站化（0707 优化·Phase5）：队列粒度聚合，网站下全部源节点按队列去重；sourceId 可选进一步收窄到单个源。
 export function mockSiteQueueStats(params?: Record<string, unknown>): QueueStat[] {
   const siteId = String(params?.siteId ?? '')
   const sourceFilter = String(params?.sourceId ?? '')

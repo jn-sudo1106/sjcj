@@ -1,10 +1,11 @@
 // AppTopBar 单元测试（补 P2-2 AppShell 拆分遗留的测试缺口 · 之前完全零覆盖）
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus, { ElMessageBox } from 'element-plus'
+import type { Component } from 'vue'
 import AppTopBar from './AppTopBar.vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -23,13 +24,13 @@ function makeRouter() {
   })
 }
 
-async function mountTopBar() {
+async function mountTopBar(component: Component = AppTopBar) {
   const router = makeRouter()
   await router.push('/overview')
   await router.isReady()
   const pinia = createPinia()
   setActivePinia(pinia)
-  const wrapper = mount(AppTopBar, { global: { plugins: [pinia, router, ElementPlus] } })
+  const wrapper = mount(component, { global: { plugins: [pinia, router, ElementPlus] } })
   return { wrapper, router }
 }
 
@@ -91,5 +92,34 @@ describe('AppTopBar', () => {
 
     expect(auth.token).toBe('tok-1')
     expect(router.currentRoute.value.path).toBe('/overview')
+  })
+})
+
+// 生产写守卫（0812 计划 M0-4）配套：连生产时顶栏必须有醒目提示，避免联调误操作。
+// isProductionBackend() 在组件 setup 顶层只读一次 import.meta.env，需 resetModules + 动态 import
+// 让新的 env 值生效，静态导入的 AppTopBar（上面用例用的那份）不会随 stubEnv 改变。
+describe('AppTopBar 生产环境徽标', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('未连生产（默认测试环境代理）时不显示徽标', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
+    vi.resetModules()
+    const { default: FreshAppTopBar } = await import('./AppTopBar.vue')
+    const { wrapper } = await mountTopBar(FreshAppTopBar)
+
+    expect(wrapper.find('[data-testid="prod-env-badge"]').exists()).toBe(false)
+  })
+
+  it('连生产时显示醒目徽标', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.resetModules()
+    const { default: FreshAppTopBar } = await import('./AppTopBar.vue')
+    const { wrapper } = await mountTopBar(FreshAppTopBar)
+
+    const badge = wrapper.find('[data-testid="prod-env-badge"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('生产环境')
   })
 })
