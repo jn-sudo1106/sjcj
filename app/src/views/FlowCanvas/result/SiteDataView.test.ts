@@ -188,8 +188,32 @@ describe('SiteDataView · 全部源（表筛选）', () => {
     const wrapper = mountView()
     await pickTable(wrapper)
 
-    expect(wrapper.find('[data-testid="site-data-partial-fail"]').text()).toContain('1 个源')
+    expect(wrapper.find('[data-testid="site-data-partial-fail"]').text()).toContain('源-bad（bad）：boom')
     expect(wrapper.text()).toContain('已加载 1 条')
+  })
+
+  it('网站全部源查询并发最多为 4，避免大量源同时占满请求', async () => {
+    const sources = ['a', 'b', 'c', 'd', 'e'].map(source)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue(sources)
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(sources.map((item) => item.sourceId))
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    let active = 0
+    let maxActive = 0
+    vi.spyOn(dataApi, 'rowQueryPaged').mockImplementation(async ({ sourceId }) => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      active -= 1
+      return { total: 0, list: [row(String(sourceId), '1')] }
+    })
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await flushPromises()
+
+    expect(maxActive).toBeLessThanOrEqual(4)
+    expect(wrapper.text()).toContain('已加载 5 条')
   })
 
   it('切换网站时清空已选的表', async () => {

@@ -32,12 +32,13 @@ import {
 import DataGrid from './DataGrid.vue'
 import SiteTableSelect from './components/SiteTableSelect.vue'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
-import { initMergeState, mergeLoadMore, type MergeSourceState } from './siteDataMerge'
+import { initMergeState, mergeLoadMore, type MergeLoadMoreResult, type MergeSourceState } from './siteDataMerge'
 
 const props = defineProps<{ siteId: string }>()
 const router = useRouter()
 
 const PAGE_SIZE = 20
+const MAX_PARALLEL_REQUESTS = 4
 
 const tableId = ref('')
 const selectedSourceId = ref('')
@@ -49,7 +50,7 @@ const rows = ref<DataRow[]>([])
 const loading = ref(false)
 const loadingMore = ref(false)
 const dataError = ref('')
-const failedSourceIds = ref<string[]>([])
+const failedSources = ref<MergeLoadMoreResult<DataRow>['failedSources']>([])
 const allExhausted = ref(false)
 const noCandidateSources = ref(false)
 
@@ -199,13 +200,13 @@ async function loadMore() {
   loadingMore.value = true
   dataError.value = ''
   try {
-    const result = await mergeLoadMore(mergeStates, PAGE_SIZE, PAGE_SIZE, fetchPage)
+    const result = await mergeLoadMore(mergeStates, PAGE_SIZE, PAGE_SIZE, fetchPage, MAX_PARALLEL_REQUESTS)
     if (id !== requestId) return
     rows.value = [...rows.value, ...result.rows]
-    failedSourceIds.value = result.failedSourceIds
+    failedSources.value = result.failedSources
     allExhausted.value = result.allExhausted
     if (!meta.value && rows.value.length) meta.value = inferTableMeta(effectiveTableId.value, rows.value)
-    if (result.rows.length === 0 && result.failedSourceIds.length && !result.allExhausted) {
+    if (result.rows.length === 0 && result.failedSources.length && !result.allExhausted) {
       dataError.value = '本次未能取到新数据，可能是相关源暂时查询失败，请点击“加载更多”重试'
     }
   } catch {
@@ -222,7 +223,7 @@ async function resetAndLoad() {
   meta.value = null
   metaError.value = ''
   dataError.value = ''
-  failedSourceIds.value = []
+  failedSources.value = []
   allExhausted.value = false
   noCandidateSources.value = false
   mergeStates = []
@@ -303,6 +304,11 @@ function clearFilters() {
   filters.state = ''
   filters.sql = ''
   runQuery()
+}
+function failedSourceText({ sourceId, error }: MergeLoadMoreResult<DataRow>['failedSources'][number]): string {
+  const name = sourceNames.value[sourceId] || sourceId
+  const reason = error.replaceAll(/\s+/g, ' ').slice(0, 120)
+  return `${name}（${sourceId}）：${reason}`
 }
 
 const detail = reactive<{ visible: boolean; row: DataRow | null }>({ visible: false, row: null })
@@ -396,8 +402,8 @@ const detailFields = computed(() => {
     <template v-else-if="effectiveTableId">
       <div v-if="metaError" class="sdv2-notice" role="status">{{ metaError }}</div>
       <div v-if="dataError" class="sdv2-notice error" role="alert">{{ dataError }}</div>
-      <div v-if="failedSourceIds.length" class="sdv2-notice warn" data-testid="site-data-partial-fail">
-        {{ failedSourceIds.length }} 个源本次查询失败，结果可能不完整
+      <div v-if="failedSources.length" class="sdv2-notice warn" data-testid="site-data-partial-fail">
+        {{ failedSources.length }} 个源本次查询失败，结果可能不完整：{{ failedSources.map(failedSourceText).join('；') }}
       </div>
 
       <div class="sdv2-tablehead">
