@@ -5,6 +5,7 @@ import { useFlowStore } from '@/stores/flow'
 import { fileApi, type FileResourceRecord } from '@/api'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
+import FileDetailDrawer from './FileDetailDrawer.vue'
 import { buildHorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
 
 // 文件视图只在具体源下挂载。真实旧平台 FileList2.vue 的链路是：
@@ -31,9 +32,13 @@ const total = ref(0)
 const loading = ref(false)
 const tableLoading = ref(false)
 const error = ref('')
+const listError = ref('')
 const page = ref(1)
-const size = 20
+const size = ref(20)
+const jumpPage = ref(1)
 const filters = reactive({ fileName: '', ext: '', state: '' })
+const detail = reactive<{ visible: boolean; file: FileResourceRecord | null }>({ visible: false, file: null })
+const maxPage = computed(() => Math.max(1, Math.ceil(total.value / size.value)))
 
 let tableRequest = 0
 async function loadResourceTable() {
@@ -42,6 +47,7 @@ async function loadResourceTable() {
   rows.value = []
   total.value = 0
   error.value = ''
+  listError.value = ''
   if (!sourceId.value) return
   tableLoading.value = true
   try {
@@ -75,6 +81,7 @@ async function loadList(parentRequest = tableRequest) {
   if (!sourceId.value || !table.value || parentRequest !== tableRequest) {
     rows.value = []
     total.value = 0
+    listError.value = ''
     return
   }
   const query = {
@@ -84,9 +91,10 @@ async function loadList(parentRequest = tableRequest) {
     fileName: filters.fileName || undefined,
     ext: filters.ext || undefined,
     page: page.value,
-    size,
+    size: size.value,
   }
   loading.value = true
+  listError.value = ''
   try {
     const result = await fileApi.resourceRows(query)
     if (requestId !== listRequest || parentRequest !== tableRequest) return
@@ -96,6 +104,7 @@ async function loadList(parentRequest = tableRequest) {
     if (requestId !== listRequest || parentRequest !== tableRequest) return
     rows.value = []
     total.value = 0
+    listError.value = '文件列表查询失败，请重试'
     ElMessage.warning('加载文件列表失败')
   } finally {
     if (requestId === listRequest) loading.value = false
@@ -127,16 +136,33 @@ function safeExternalUrl(value: unknown): string {
 }
 function previousPage() {
   page.value = Math.max(1, page.value - 1)
+  jumpPage.value = page.value
   void loadList()
 }
 function nextPage() {
-  if (page.value * size >= total.value) return
+  if (page.value * size.value >= total.value) return
   page.value += 1
+  jumpPage.value = page.value
   void loadList()
+}
+function changePageSize() {
+  page.value = 1
+  jumpPage.value = 1
+  void loadList()
+}
+function goToPage() {
+  page.value = Math.min(maxPage.value, Math.max(1, Number(jumpPage.value) || 1))
+  jumpPage.value = page.value
+  void loadList()
+}
+function openDetail(file: FileResourceRecord) {
+  detail.file = file
+  detail.visible = true
 }
 
 watch(sourceId, () => {
   page.value = 1
+  jumpPage.value = 1
   void loadResourceTable()
 }, { immediate: true })
 
@@ -148,6 +174,7 @@ function resetFilters() {
 
 watch(() => [filters.fileName, filters.ext, filters.state] as const, () => {
   page.value = 1
+  jumpPage.value = 1
   if (table.value) void loadList()
 })
 </script>
@@ -178,7 +205,7 @@ watch(() => [filters.fileName, filters.ext, filters.state] as const, () => {
         </div>
 
         <table class="rc-data-table fv-table" v-loading="loading">
-          <thead><tr><th>文件名</th><th>展示名</th><th>扩展名</th><th class="num">大小</th><th>MD5</th><th>文件链接</th><th>文件路径</th><th>文本文件</th><th>文本路径</th><th>生成时间</th></tr></thead>
+          <thead><tr><th>文件名</th><th>展示名</th><th>扩展名</th><th class="num">大小</th><th>MD5</th><th>文件链接</th><th>文件路径</th><th>文本文件</th><th>文本路径</th><th class="num">文本大小</th><th>状态</th><th>更新时间</th><th>生成时间</th><th>操作</th></tr></thead>
           <tbody>
             <tr v-for="file in rows" :key="file.dataId">
               <td class="fv-name">{{ textOf(file, 'K1') }}</td>
@@ -193,14 +220,29 @@ watch(() => [filters.fileName, filters.ext, filters.state] as const, () => {
               <td class="fv-path">{{ textOf(file, 'K3') }}</td>
               <td>{{ textOf(file, 'K8') }}</td>
               <td class="fv-path">{{ textOf(file, 'K9') }}</td>
+              <td class="num">{{ formatSize(valueOf(file, 'K10')) }}</td>
+              <td>{{ file.state || '—' }}</td>
+              <td class="soft">{{ file.updateDt || '—' }}</td>
               <td class="soft">{{ file.createDt || '—' }}</td>
+              <td><button class="fv-op" type="button" data-testid="file-detail" @click="openDetail(file)">详情</button></td>
             </tr>
-            <tr v-if="!rows.length && !loading"><td colspan="10" class="fv-empty-row">{{ error || '没有匹配的文件' }}</td></tr>
+            <tr v-if="!rows.length && !loading"><td colspan="14" class="fv-empty-row">{{ listError || error || '没有匹配的文件' }}</td></tr>
           </tbody>
         </table>
-        <div class="fv-pager"><button class="rc-btn" :disabled="page <= 1" @click="previousPage">上一页</button><span class="muted">第 {{ page }} 页</span><button class="rc-btn" :disabled="page * size >= total" @click="nextPage">下一页</button></div>
+        <div class="fv-pager">
+          <label class="muted">每页
+            <select v-model.number="size" class="fv-page-size" aria-label="每页条数" @change="changePageSize"><option :value="20">20</option><option :value="50">50</option><option :value="100">100</option></select>
+            条
+          </label>
+          <button class="rc-btn" :disabled="page <= 1" @click="previousPage">上一页</button>
+          <span class="muted">第 {{ page }} / {{ maxPage }} 页</span>
+          <button class="rc-btn" :disabled="page >= maxPage" @click="nextPage">下一页</button>
+          <input v-model.number="jumpPage" class="fv-page-jump" type="number" min="1" :max="maxPage" aria-label="跳转页码" @keyup.enter="goToPage">
+          <button class="rc-btn" type="button" @click="goToPage">跳转</button>
+        </div>
       </template>
     </div>
+    <FileDetailDrawer v-model="detail.visible" :file="detail.file" />
   </main>
 </template>
 
@@ -277,4 +319,7 @@ watch(() => [filters.fileName, filters.ext, filters.state] as const, () => {
 
 .fv-pager { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .fv-pager .rc-btn { height: 28px; padding: 0 10px; font-size: 12px; }
+.fv-page-size, .fv-page-jump { height: 28px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; }
+.fv-page-size { width: 54px; margin: 0 4px; }
+.fv-page-jump { width: 54px; padding: 0 6px; }
 </style>

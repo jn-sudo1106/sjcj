@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import SiteFileView from './SiteFileView.vue'
+import FileDetailDrawer from './FileDetailDrawer.vue'
 import { fileApi, siteApi, type FileResourceRecord, type Source } from '@/api'
 
 const table = { tableId: 'file-resource', tableName: 'sense_data.tb_news_file_resource', name: 'news-文件资源表', rowCount: 40, fields: [] }
@@ -11,7 +12,8 @@ function source(sourceId: string, name: string): Source {
 function file(sourceId: string, dataId: string, fileName: string): FileResourceRecord {
   return {
     dataId, sourceId, state: 'C', createDt: '2026-08-17 12:00:00',
-    values: { K1: fileName, K2: `https://files.example.com/${fileName}`, K3: `/data/${fileName}`, K4: 1024, K5: `md5-${dataId}`, K6: fileName, K7: 'html', K8: '', K9: '' },
+    updateDt: '2026-08-17 12:10:00',
+    values: { K1: fileName, K2: `https://files.example.com/${fileName}`, K3: `/data/${fileName}`, K4: 1024, K5: `md5-${dataId}`, K6: fileName, K7: 'html', K8: '', K9: '', K10: 512 },
   }
 }
 
@@ -40,6 +42,10 @@ describe('SiteFileView', () => {
     expect(wrapper.text()).toContain('源二')
     expect(wrapper.text()).toContain('two.html')
     expect(wrapper.find('a[target="_blank"]').attributes('href')).toBe('https://files.example.com/two.html')
+    expect(wrapper.text()).toContain('文本大小')
+    expect(wrapper.text()).toContain('更新时间')
+    await wrapper.get('[data-testid="site-file-detail"]').trigger('click')
+    expect(wrapper.findComponent(FileDetailDrawer).props('sourceName')).toBe('源二')
     expect(wrapper.text()).toContain('已加载全部文件')
   })
 

@@ -5,6 +5,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fileApi, siteApi, type FileResourceRecord, type Source } from '@/api'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
+import FileDetailDrawer from './FileDetailDrawer.vue'
 import { initMergeState, mergeLoadMore, type MergeSourceState, type MergeLoadMoreResult } from './siteDataMerge'
 
 const props = defineProps<{ siteId: string }>()
@@ -25,6 +26,7 @@ const error = ref('')
 const failedSources = ref<MergeLoadMoreResult<FileResourceRecord>['failedSources']>([])
 const allExhausted = ref(false)
 const noCandidateSources = ref(false)
+const detail = reactive<{ visible: boolean; file: FileResourceRecord | null }>({ visible: false, file: null })
 
 let mergeStates: MergeSourceState<FileResourceRecord>[] = []
 let candidateSourceIds: string[] = []
@@ -162,6 +164,10 @@ function failedSourceText({ sourceId, error }: MergeLoadMoreResult<FileResourceR
   const reason = error.replaceAll(/\s+/g, ' ').slice(0, 120)
   return `${name}（${sourceId}）：${reason}`
 }
+function openDetail(file: FileResourceRecord) {
+  detail.file = file
+  detail.visible = true
+}
 
 watch(() => props.siteId, () => {
   selectedSourceId.value = ''
@@ -198,7 +204,7 @@ watch(selectedSourceId, () => {
       </div>
       <div class="sfv-table-wrap">
         <table class="rc-data-table sfv-table" v-loading="loading">
-          <thead><tr><th>所属源</th><th>文件名</th><th>展示名</th><th>扩展名</th><th class="num">大小</th><th>MD5</th><th>文件链接</th><th>文件路径</th><th>文本文件</th><th>文本路径</th><th>生成时间</th></tr></thead>
+          <thead><tr><th>所属源</th><th>文件名</th><th>展示名</th><th>扩展名</th><th class="num">大小</th><th>MD5</th><th>文件链接</th><th>文件路径</th><th>文本文件</th><th>文本路径</th><th class="num">文本大小</th><th>状态</th><th>更新时间</th><th>生成时间</th><th>操作</th></tr></thead>
           <tbody>
             <tr v-for="file in rows" :key="`${file.sourceId}-${file.dataId}`">
               <td>{{ sourceNames[file.sourceId] || file.sourceId }}</td>
@@ -211,9 +217,13 @@ watch(selectedSourceId, () => {
               <td class="sfv-path">{{ textOf(file, 'K3') }}</td>
               <td>{{ textOf(file, 'K8') }}</td>
               <td class="sfv-path">{{ textOf(file, 'K9') }}</td>
+              <td class="num">{{ formatSize(valueOf(file, 'K10')) }}</td>
+              <td>{{ file.state || '—' }}</td>
+              <td class="soft">{{ file.updateDt || '—' }}</td>
               <td class="soft">{{ file.createDt || '—' }}</td>
+              <td><button class="sfv-link" type="button" data-testid="site-file-detail" @click="openDetail(file)">详情</button></td>
             </tr>
-            <tr v-if="!rows.length && !loading"><td colspan="11" class="sfv-empty-row">没有匹配的文件</td></tr>
+            <tr v-if="!rows.length && !loading"><td colspan="15" class="sfv-empty-row">没有匹配的文件</td></tr>
           </tbody>
         </table>
       </div>
@@ -222,6 +232,7 @@ watch(selectedSourceId, () => {
         <button v-else class="rc-btn" type="button" data-testid="site-file-load-more" :disabled="loadingMore" @click="loadMore()">{{ loadingMore ? '加载中…' : '加载更多' }}</button>
       </div>
     </template>
+    <FileDetailDrawer v-model="detail.visible" :file="detail.file" :source-name="detail.file ? sourceNames[detail.file.sourceId] || detail.file.sourceId : ''" />
   </main>
 </template>
 
@@ -243,7 +254,7 @@ watch(selectedSourceId, () => {
 .sfv-table th.num, .sfv-table td.num { text-align: right; }
 .sfv-name, .sfv-md5 { font-family: var(--rc-mono, monospace); color: #334155; }
 .sfv-path { max-width: 220px; overflow: hidden; color: var(--rc-faint); text-overflow: ellipsis; white-space: nowrap; }
-.sfv-link { color: var(--rc-primary); text-decoration: none; }
+.sfv-link { padding: 0; border: 0; background: none; color: var(--rc-primary); text-decoration: none; cursor: pointer; }
 .sfv-link:hover { text-decoration: underline; }
 .soft { color: var(--rc-faint); }
 .sfv-empty-row { padding: 40px 12px !important; color: var(--rc-faint) !important; text-align: center; }
