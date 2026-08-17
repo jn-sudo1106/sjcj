@@ -319,7 +319,8 @@ defineExpose({
 </template>
 
 <style scoped>
-.ca-table-card { display: flex; flex-direction: column; overflow: hidden; }
+.ca-table-card { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.ca-table { min-width: 900px; }
 .ca-table th { white-space: nowrap; }
 .ca-th-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .ca-expand-menu {

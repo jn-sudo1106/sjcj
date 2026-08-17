@@ -161,6 +161,8 @@ function pickOverflow(s: Source) {
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.6);
   backdrop-filter: blur(12px);
+  min-width: 0;
+  min-height: 148px;
   padding: 16px 16px 12px;
   cursor: pointer;
   box-shadow: 0 2px 10px rgba(0,0,0,0.015);
@@ -235,4 +237,8 @@ function pickOverflow(s: Source) {
 .scg-overflow-dot.all { background: #3b82f6; }
 .scg-overflow-dot.err { background: var(--rc-error); }
 .scg-overflow-empty { padding: 16px 8px; text-align: center; font-size: 11px; color: var(--rc-faint); }
+
+@media (max-width: 900px) {
+  .scg-grid { grid-template-columns: 1fr; }
+}
 </style>
