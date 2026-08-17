@@ -1,0 +1,95 @@
+// 网站"全部源"数据归并（0812 计划 M2-5A）：旧接口 entry/entryDataPaged 的 sourceId 是
+// Long 单值，不支持一次查多个源（已实测确认，见方案 §6.2.1 R1）。这里改成向每个相关源
+// 分别取"当前已知最大"的一条，做标准 top-K 归并，得到"整个网站按某字段排序的前 N 条"。
+//
+// 正确性前提：每个源返回的分页本身必须按归并字段降序——不然"某源前 N 条"就不是真的
+// 前 N 条，归并结果也就不对。旧平台参考页面 EntryList2.vue 从未真正用过 sortField/
+// sortOrder（api/types/data.ts 顶部注释标注为"死分支，不迁移"），后端是否真的照办未经
+// 实测（见计划 §3.2 Q9 追加项）。因此这里对每一批拿到的数据做客户端二次排序兜底，
+// 保证归并算法本身是自洽、正确的，不管后端排序参数最终生效与否。
+import type { DataRow } from '@/api'
+
+export interface MergeSourceState {
+  sourceId: string
+  /** 已取到但还没展示的行，按归并键降序排列，弹出取 [0] */
+  buffer: DataRow[]
+  /** 下一次要取的页码（从 1 开始） */
+  nextPage: number
+  /** 该源的数据已经取完（最近一页返回条数 < size） */
+  exhausted: boolean
+  /** 最近一次尝试补页失败；不等于 exhausted，下次 load more 会重新给机会 */
+  failed: boolean
+}
+
+export function initMergeState(sourceIds: string[]): MergeSourceState[] {
+  return sourceIds.map((sourceId) => ({ sourceId, buffer: [], nextPage: 1, exhausted: false, failed: false }))
+}
+
+function mergeKey(row: DataRow): number {
+  const n = Number(row.dataId)
+  return Number.isFinite(n) ? n : 0
+}
+
+function sortDesc(rows: DataRow[]): DataRow[] {
+  return [...rows].sort((a, b) => mergeKey(b) - mergeKey(a))
+}
+
+export type FetchPage = (sourceId: string, page: number, size: number) => Promise<DataRow[]>
+
+async function refill(states: MergeSourceState[], size: number, fetchPage: FetchPage): Promise<void> {
+  // 已经标记 failed 的源本轮不重试，避免一个持续报错的源在同一次 load more 里被反复打；
+  // failed 会在下一次 mergeLoadMore 调用开头统一重置，下次点"加载更多"会再给一次机会。
+  const needRefill = states.filter((s) => !s.exhausted && !s.failed && s.buffer.length === 0)
+  await Promise.all(needRefill.map(async (s) => {
+    try {
+      const rows = sortDesc(await fetchPage(s.sourceId, s.nextPage, size))
+      s.buffer = rows
+      s.nextPage += 1
+      s.exhausted = rows.length < size
+    } catch {
+      s.failed = true
+    }
+  }))
+}
+
+/** 弹出当前所有源 buffer 里归并键最大的一条；调用前必须先 refill，否则会漏掉刚好 buffer 空的源。 */
+function popMax(states: MergeSourceState[]): DataRow | null {
+  let best: MergeSourceState | null = null
+  for (const s of states) {
+    if (!s.buffer.length) continue
+    if (!best || mergeKey(s.buffer[0]) > mergeKey(best.buffer[0])) best = s
+  }
+  return best ? (best.buffer.shift() ?? null) : null
+}
+
+export interface MergeLoadMoreResult {
+  rows: DataRow[]
+  states: MergeSourceState[]
+  /** 本次调用中发生过查询失败的源 ID；不代表整体失败，部分结果仍然有效 */
+  failedSourceIds: string[]
+  /** 所有源都已真正取完（不含失败），不会再有更多数据 */
+  allExhausted: boolean
+}
+
+/**
+ * 归并加载：在已有 states（含之前调用剩下的 buffer）基础上，继续往下取最多 count 条。
+ * 每弹出一条前都先补齐空 buffer 的源，保证每一步弹出的确实是"当前已知全局最大"。
+ */
+export async function mergeLoadMore(
+  states: MergeSourceState[],
+  count: number,
+  size: number,
+  fetchPage: FetchPage,
+): Promise<MergeLoadMoreResult> {
+  states.forEach((s) => { s.failed = false })
+  const rows: DataRow[] = []
+  const failedSourceIds = new Set<string>()
+  while (rows.length < count) {
+    await refill(states, size, fetchPage)
+    states.forEach((s) => { if (s.failed) failedSourceIds.add(s.sourceId) })
+    const picked = popMax(states)
+    if (!picked) break
+    rows.push(picked)
+  }
+  return { rows, states, failedSourceIds: [...failedSourceIds], allExhausted: states.every((s) => s.exhausted) }
+}

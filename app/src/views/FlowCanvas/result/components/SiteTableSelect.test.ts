@@ -1,0 +1,127 @@
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+import SiteTableSelect from './SiteTableSelect.vue'
+import { siteApi } from '@/api'
+import type { SiteTablesResult } from '@/api'
+
+function result(overrides: Partial<SiteTablesResult> = {}): SiteTablesResult {
+  return {
+    tables: [
+      { tableId: 't1', tableName: 'T1', name: '正文表', sourceCount: 3 },
+      { tableId: 't2', tableName: 'T2', sourceCount: 1 },
+    ],
+    sourceCount: 3,
+    overThreshold: false,
+    failedSourceIds: [],
+    ...overrides,
+  }
+}
+
+async function mountSelect(modelValue = '') {
+  const wrapper = mount(SiteTableSelect, { props: { siteId: 'site-a', modelValue } })
+  await flushPromises()
+  return wrapper
+}
+
+describe('SiteTableSelect', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('挂载后加载表并展示表名、ID、引用源数', async () => {
+    vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result())
+    const wrapper = await mountSelect()
+
+    await wrapper.get('[data-testid="site-table-select-input"]').trigger('focus')
+    const options = wrapper.findAll('[data-testid="site-table-select-option"]')
+    expect(options).toHaveLength(2)
+    expect(options[0].text()).toContain('正文表')
+    expect(options[0].text()).toContain('t1')
+    expect(options[0].text()).toContain('3 个源引用')
+  })
+
+  it('按表 ID 或表名称本地过滤', async () => {
+    vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result())
+    const wrapper = await mountSelect()
+    await wrapper.get('[data-testid="site-table-select-input"]').trigger('focus')
+
+    await wrapper.get('[data-testid="site-table-select-input"]').setValue('t2')
+    expect(wrapper.findAll('[data-testid="site-table-select-option"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="site-table-select-option"]').text()).toContain('T2')
+  })
+
+  it('点击选项触发 update:modelValue', async () => {
+    vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result())
+    const wrapper = await mountSelect()
+    await wrapper.get('[data-testid="site-table-select-input"]').trigger('focus')
+
+    await wrapper.get('[data-testid="site-table-select-option"]').trigger('mousedown')
+    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['t1'])
+  })
+
+  it('源数量超阈值时显示提示，不渲染选项', async () => {
+    vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result({ tables: [], overThreshold: true, sourceCount: 500 }))
+    const wrapper = await mountSelect()
+
+    expect(wrapper.find('[data-testid="site-table-select-over-threshold"]').text()).toContain('500')
+    expect(wrapper.find('[data-testid="site-table-select-input"]').exists()).toBe(false)
+  })
+
+  it('部分源加载失败时显示提示但不影响已加载的表', async () => {
+    vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result({ failedSourceIds: ['bad-1', 'bad-2'] }))
+    const wrapper = await mountSelect()
+
+    expect(wrapper.find('[data-testid="site-table-select-partial-fail"]').text()).toContain('2 个源')
+    await wrapper.get('[data-testid="site-table-select-input"]').trigger('focus')
+    expect(wrapper.findAll('[data-testid="site-table-select-option"]')).toHaveLength(2)
+  })
+
+  it('切换 siteId 时清空已选并重新加载', async () => {
+    const siteTables = vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result())
+    const wrapper = await mountSelect('t1')
+
+    await wrapper.setProps({ siteId: 'site-b' })
+    await flushPromises()
+
+    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual([''])
+    expect(siteTables).toHaveBeenCalledWith('site-b', expect.objectContaining({ force: false }))
+  })
+
+  it('当前选中的表在新结果里不存在时清空选择，不留死选择', async () => {
+    vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result({ tables: [{ tableId: 't9', tableName: 'T9', sourceCount: 1 }] }))
+    const wrapper = await mountSelect('t1')
+
+    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual([''])
+  })
+
+  it('点击刷新按钮强制重新加载', async () => {
+    const siteTables = vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result())
+    const wrapper = await mountSelect()
+
+    await wrapper.get('[title="刷新表列表"]').trigger('click')
+    await flushPromises()
+
+    expect(siteTables).toHaveBeenLastCalledWith('site-a', expect.objectContaining({ force: true }))
+  })
+
+  it('默认收起，不管有没有已选表', async () => {
+    vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result())
+    const wrapper = await mountSelect()
+
+    expect(wrapper.find('[data-testid="site-table-select-options"]').exists()).toBe(false)
+  })
+
+  it('选完一张表后，输入框焦点未变也能再点开选别的表', async () => {
+    vi.spyOn(siteApi, 'siteTables').mockResolvedValue(result())
+    const wrapper = await mountSelect()
+    const input = wrapper.get('[data-testid="site-table-select-input"]')
+
+    await input.trigger('focus')
+    await wrapper.get('[data-testid="site-table-select-option"]').trigger('mousedown')
+    expect(wrapper.find('[data-testid="site-table-select-options"]').exists()).toBe(false)
+
+    // 选中后输入框焦点没丢（mousedown.prevent 保住的），这里不再 trigger('focus')，
+    // 模拟真实场景下浏览器不会重复派发 focus 事件，只靠 mousedown 兜底重新展开。
+    await input.trigger('mousedown')
+    expect(wrapper.findAll('[data-testid="site-table-select-option"]')).toHaveLength(2)
+  })
+})

@@ -27,7 +27,7 @@ const flow = useFlowStore()
 const ui = useUiStore()
 const ws = useWorkspaceStore()
 const runtime = useRuntimeStore()
-// 三种结果视图均以当前子源为粒度。
+// 三种结果视图均以当前源为粒度。
 const activeView = ref(normalizeSourceView(route.query.view))
 function syncActiveView() {
   activeView.value = sourceViewFromHash(window.location.hash)
@@ -39,11 +39,11 @@ watch(() => route.query.view, () => {
 const isSiteDetail = computed(() => !!route.query.siteId && !route.query.sourceId)
 const isDataView = computed(() => activeView.value === 'data' && !!flow.sourceCtx)
 const isTaskView = computed(() => activeView.value === 'task' && !!flow.sourceCtx)
-// 文件视图只挂子源层（0711 R11：文件视图只有源才有）：网站态 URL 带 view=file 同理重定向回流程视图
+// 文件视图只挂源层（0711 R11：文件视图只有源才有）：网站态 URL 带 view=file 同理重定向回流程视图
 const isFileView = computed(() => activeView.value === 'file' && !!flow.sourceCtx)
 
 
-// 视图快照按子源页签保存，避免切换子源后丢失当前视图。
+// 视图快照按源页签保存，避免切换源后丢失当前视图。
 watch(
   () => [route.query.sourceId, route.query.view, flow.sourceCtx?.sourceId] as const,
   ([qSrc, v, ctxSrc]) => {
@@ -53,10 +53,10 @@ watch(
   { immediate: true },
 )
 
-// ---- 子源侧栏（0710 会议 B1）：页面级左列，流程/数据/任务视图共用；接线自 FlowBoard 顶部横排切换器迁入 ----
-// 网站详情页没有 sourceCtx（画布内部代表子源不登记为编排对象），侧栏 siteId 需要兜底读路由自己的 siteId
+// ---- 源侧栏（0710 会议 B1）：页面级左列，流程/数据/任务视图共用；接线自 FlowBoard 顶部横排切换器迁入 ----
+// 网站详情页没有 sourceCtx（画布内部代表源不登记为编排对象），侧栏 siteId 需要兜底读路由自己的 siteId
 const sidebarSiteId = computed(() => flow.sourceCtx?.siteId || String(route.query.siteId ?? ''))
-// 网站详情页态下侧栏不应高亮任何具体子源（内部代表子源只是取数据用，不是用户在看的对象）
+// 网站详情页态下侧栏不应高亮任何具体源（内部代表源只是取数据用，不是用户在看的对象）
 const sidebarActiveKey = computed(() => (isSiteDetail.value ? '' : flow.sourceCtx?.sourceId ?? ''))
 async function confirmDiscardIfDirty(): Promise<boolean> {
   if (!flow.dirty) return true
@@ -69,33 +69,33 @@ async function confirmDiscardIfDirty(): Promise<boolean> {
     return false
   }
 }
-// 切换只改路由，加载统一走 route watcher → enterFromRoute；视图随身携带（切子源不切视图，0710 会议第 7/10 条）
+// 切换只改路由，加载统一走 route watcher → enterFromRoute；视图随身携带（切源不切视图，0710 会议第 7/10 条）
 async function onSwitchTarget(target: Source) {
   if (!(await confirmDiscardIfDirty())) return
   const view = normalizeSourceView(route.query.view)
-  void router.replace({ path: '/canvas', query: { sourceId: target.sourceId, view } })
+  void router.replace({ path: '/canvas', query: { ...(target.siteId ? { siteId: target.siteId } : {}), sourceId: target.sourceId, view } })
 }
 function onSwitchAdded(s: Source) {
   onSwitchTarget(s)
 }
-// 侧栏「网站」节点：切到网站详情页（全部子源聚合），视图随身携带（数据/文件/任务，落不到流程视图）
+// 侧栏「网站」节点：切到网站详情页（全部源聚合），视图随身携带（数据/文件/任务，落不到流程视图）
 async function onSwitchToSite() {
   if (!(await confirmDiscardIfDirty())) return
   ws.deactivate()
   const view = normalizeSiteView(route.query.view)
   void router.replace({ path: '/canvas', query: { siteId: sidebarSiteId.value, view } })
 }
-// 侧栏 ⇔（0710 会议 B4）：左栏=当前子源，右栏=所选子源（任意网站，按 id 直接加载）
+// 侧栏 ⇔（0710 会议 B4）：左栏=当前源，右栏=所选源（任意网站，按 id 直接加载）
 function onSidebarCompare(rightId: string) {
   const left = flow.sourceCtx?.sourceId
   if (!left) {
-    ElMessage.warning('请先切到具体子源再对比')
+    ElMessage.warning('请先切到具体源再对比')
     return
   }
-  if (!ws.enterCompare(rightId, left)) ElMessage.warning('无法对比：请选择另一个子源')
+  if (!ws.enterCompare(rightId, left)) ElMessage.warning('无法对比：请选择另一个源')
 }
 
-// ---- 新建采集闸门：先填网站基础信息和首批子源，创建后默认进入首个子源的流程视图。
+// ---- 新建采集闸门：页面保留网站 + 首批源表单；siteApi 在真实环境内部分步骤落库。
 const isGate = computed(() => route.query.mode === 'new')
 function suggestId(prefix: string): string {
   return `${prefix}${Math.floor(100000 + Math.random() * 900000)}`
@@ -127,8 +127,9 @@ const gateCategory = computed<CategorySelection>({
     gateSite.value.categoryPath = v.categoryPath
   },
 })
-// 首个子源名称在未手工修改前跟随网站名称。
+// 首个源名称在未手工修改前跟随网站名称。
 const firstSourceNameTouched = ref(false)
+const creating = ref(false)
 watch(
   () => gateSite.value.name,
   (name) => {
@@ -145,6 +146,7 @@ function onCancelGate() {
   router.push('/collect')
 }
 async function onCreateAndEnter() {
+  if (creating.value) return
   const site = gateSite.value
   if (!site.name || !site.category) {
     ElMessage.warning('请完整填写网站名称 / 分类')
@@ -152,23 +154,30 @@ async function onCreateAndEnter() {
   }
   const rows = gateRows.value.filter((r) => r.name.trim())
   if (!rows.length) {
-    ElMessage.warning('请至少填写一个子源名称')
+    ElMessage.warning('请至少填写一个源名称')
     return
   }
-  // 子源默认设置（代理/断点续爬/选用配置/登录/定时等）已随闸门收口整块移除，创建后在画布"子源信息"里配
+  // 源默认设置（代理/断点续爬/选用配置/登录/定时等）已随闸门收口整块移除，创建后在画布"源信息"里配
   const sources: Source[] = rows.map((r) => ({
     sourceId: r.sourceId, name: r.name, url: r.url, configId: '', mainTable: '', owner: site.owner || 'admin', state: 'C',
   }))
   const siteForCreate: Site = { ...site, sourceCount: sources.length, errorCount: sources.filter((s) => s.state === 'E').length }
-  const res = await siteApi.siteCreate(siteForCreate, sources)
-  if (!res?.ok) {
-    ElMessage.warning(res?.message || '创建失败，请重试')
-    return
+  creating.value = true
+  try {
+    const res = await siteApi.siteCreate(siteForCreate, sources)
+    if (!res?.ok) {
+      ElMessage.warning(res?.message || '创建失败，请重试')
+      return
+    }
+    const sourceId = res.sourceId || firstSourceId(sources)
+    await router.replace({ path: '/canvas', query: { ...(res.siteId ? { siteId: res.siteId } : {}), sourceId, view: 'flow' } })
+    registerCanvasActions()
+    ElMessage.success(`网站「${siteForCreate.name}」已创建（${sources.length} 个源），已进入首个源的流程视图`)
+  } catch (error) {
+    ElMessage.error(`创建失败：${(error as Error).message ?? '网络异常'}，请勿重复提交；如已返回网站 ID，请先回查网站后再继续`)
+  } finally {
+    creating.value = false
   }
-  const sourceId = firstSourceId(sources)
-  await router.replace({ path: '/canvas', query: { sourceId, view: 'flow' } })
-  registerCanvasActions()
-  ElMessage.success(`网站「${siteForCreate.name}」已创建（${sources.length} 个子源），已进入首个子源的流程视图`)
 }
 // ---- 配置区宽度（优化 0701 问题一）：拖拽分隔条调宽 + 一键展开 ----
 const inspWidth = computed(() => `${ui.inspectorWidth ?? (flow.sourceCtx ? 480 : 372)}px`)
@@ -198,7 +207,7 @@ function onSplitStart(e: MouseEvent) {
 }
 
 async function loadSourceFlow(sourceId: string) {
-  // 已保存的子源流程优先于按步骤拼出的默认骨架。
+  // 已保存的源流程优先于按步骤拼出的默认骨架。
   const [source, steps, persistedDef] = await Promise.all([
     sourceApi.sourceDetail(sourceId),
     sourceApi.sourceSteps(sourceId),
@@ -332,17 +341,26 @@ function registerCanvasActions() {
 async function enterFromRoute() {
   const siteId = String(route.query.siteId ?? '')
   const sourceId = String(route.query.sourceId ?? '')
-  if (siteId) {
-    // 网站详情页（0714 会议 Task 3）：不再重定向到第一个子源，本身就是一个页面；
-    // 加载（含"该网站暂无子源"兜底）交给 SiteDetailView 自己处理，这里只管路由归一化和顶部动作栏。
+  if (siteId && !sourceId) {
+    // 旧网站任务链接（0812 计划 M1-3）：网站汇总态任务页签已删除，跳转到运行记录；
+    // /tasks 要到 M3-11 才建，此前统一先落到 /runs，M3-11 完成后再把目标改成 /tasks 并更新测试。
+    if (route.query.view === 'task') {
+      await router.replace({ path: '/runs', query: { siteId } })
+      return
+    }
+    // 网站详情页（0714 会议 Task 3）：不再重定向到第一个源，本身就是一个页面；
+    // 加载（含"该网站暂无源"兜底）交给 SiteDetailView 自己处理，这里只管路由归一化和顶部动作栏。
     const view = normalizeSiteView(route.query.view)
     if (route.query.view !== view) await router.replace({ path: '/canvas', query: { siteId, view } })
     else ui.clearActions()
   } else if (sourceId) {
     const view = normalizeSourceView(route.query.view)
+    const querySiteId = String(route.query.siteId ?? '')
     // 补全 view 后不依赖 route watcher 再次触发：它只监听 sourceId/siteId，
-    // 因此缺省 view 的页签跳转或深链必须在本次调用里继续加载目标子源。
-    if (route.query.view !== view) await router.replace({ path: '/canvas', query: { sourceId, view } })
+    // 因此缺省 view 的页签跳转或深链必须在本次调用里继续加载目标源。
+    if (route.query.view !== view) {
+      await router.replace({ path: '/canvas', query: { ...(querySiteId ? { siteId: querySiteId } : {}), sourceId, view } })
+    }
     await loadSourceFlow(sourceId)
     registerCanvasActions()
   } else {
@@ -362,7 +380,7 @@ onMounted(async () => {
   }
   await enterFromRoute()
 })
-// sourceId / siteId 互斥，合一个 watcher 统一处理深链与子源切换。
+// sourceId / siteId 互斥，合一个 watcher 统一处理深链与源切换。
 watch(
   () => [route.query.sourceId, route.query.siteId] as const,
   async ([sid, stid], prev) => {
@@ -396,35 +414,35 @@ onUnmounted(() => {
   <div v-if="isGate" class="rc-gate">
     <div class="rc-gate-card">
       <div class="rc-gate-title">新建采集 · 网站基础信息</div>
-      <div class="rc-gate-hint">网站用于归属与管理；子源（语言 / 变体）才是真正的采集实体，创建后可在画布内继续增删调整。</div>
+      <div class="rc-gate-hint">网站用于归属与管理；源（语言 / 变体）才是真正的采集实体，创建后可在画布内继续增删调整。</div>
       <div class="rc-field"><label>网站名称</label><input class="rc-input" v-model="gateSite.name" placeholder="必填" /></div>
       <div class="rc-field"><label>分类</label>
         <CategoryTreePicker v-model="gateCategory" />
       </div>
 
-      <div class="rc-gate-rows-title">子源清单（至少一个，语言 / 变体，创建后可继续增删）</div>
+      <div class="rc-gate-rows-title">源清单（至少一个，语言 / 变体，创建后可继续增删）</div>
       <div v-for="(row, i) in gateRows" :key="row.sourceId" class="rc-gate-row">
         <input
           class="rc-input"
           v-model="row.name"
-          placeholder="子源名称，必填"
+          placeholder="源名称，必填"
           @input="i === 0 && (firstSourceNameTouched = true)"
         />
-        <input class="rc-input" v-model="row.url" placeholder="子源 URL，选填" />
+        <input class="rc-input" v-model="row.url" placeholder="源 URL，选填" />
         <button class="rc-btn" type="button" :disabled="gateRows.length <= 1" @click="removeGateRow(i)">移除</button>
       </div>
-      <button class="rc-btn" type="button" @click="addGateRow">＋ 添加子源</button>
+      <button class="rc-btn" type="button" @click="addGateRow">＋ 添加源</button>
 
       <div class="rc-gate-actions">
         <button class="rc-btn" type="button" @click="onCancelGate">取消</button>
-        <button class="rc-btn primary" type="button" @click="onCreateAndEnter">创建并进入编排</button>
+        <button class="rc-btn primary" type="button" :disabled="creating" @click="onCreateAndEnter">{{ creating ? '创建中…' : '创建并进入编排' }}</button>
       </div>
     </div>
   </div>
 
   <template v-else>
     <SourceTabsBar v-if="flow.sourceCtx" />
-    <!-- 两列布局（0710 会议 B1）：左列子源侧栏（页面级，在视图层之上），右列内容区随流程/数据/任务视图切换 -->
+    <!-- 两列布局（0710 会议 B1）：左列源侧栏（页面级，在视图层之上），右列内容区随流程/数据/任务视图切换 -->
     <div class="rc-canvas-cols" :class="{ 'with-tabs': !!flow.sourceCtx }">
       <SiteSourceSwitcher
         v-if="sidebarSiteId"
@@ -436,7 +454,7 @@ onUnmounted(() => {
         @pick-site="onSwitchToSite"
       />
       <div class="rc-canvas-main">
-        <!-- key 用加载完成后的 ctx，避免切换时读到旧子源数据。 -->
+        <!-- key 用加载完成后的 ctx，避免切换时读到旧源数据。 -->
         <SiteDetailView v-if="isSiteDetail" :key="sidebarSiteId" :site-id="sidebarSiteId" class="rc-flow-result" />
         <CompareSplit v-else-if="ws.compareSourceId" class="rc-flow-result" />
         <ResultView v-else-if="isDataView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
@@ -491,7 +509,7 @@ onUnmounted(() => {
   align-items: stretch;
 }
 .rc-flow-shell.source-mode { grid-template-columns: minmax(480px, 1fr) 6px var(--insp-w, 480px); }
-/* 展开态：画布收起为窄条（与左侧子源侧栏收起态一致），配置区占满剩余空间 */
+/* 展开态：画布收起为窄条（与左侧源侧栏收起态一致），配置区占满剩余空间 */
 .rc-flow-shell.expanded { grid-template-columns: 36px 6px minmax(0, 1fr); }
 .rc-canvas-collapsed {
   display: flex; align-items: center; justify-content: center;

@@ -1,6 +1,8 @@
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-/** 通用危险操作确认：弹确认框 → 执行 → 成功 toast */
+/** 通用危险操作确认：弹确认框 → 执行 → 成功 toast；执行失败给可见的错误提示，不静默变成
+ *  未捕获的 rejection——danger 端点在生产环境可能被写保护拦截（ProductionWriteBlockedError），
+ *  这是真实会发生的失败路径，不是防御性假设。 */
 export async function confirmDanger(
   title: string,
   body: string,
@@ -15,6 +17,10 @@ export async function confirmDanger(
   } catch {
     return
   }
-  const res = await run()
-  ElMessage.success(res?.message || '操作已提交（演示）')
+  try {
+    const res = await run()
+    ElMessage.success(res?.message || '操作已提交（演示）')
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '操作失败，请重试')
+  }
 }

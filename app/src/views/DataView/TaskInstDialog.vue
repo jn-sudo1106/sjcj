@@ -25,7 +25,7 @@ const STATE_OPTIONS = [
   { value: 'AC', label: '跳过-AC' },
 ]
 
-const filter = reactive({ state: '', taskSpecId: '', sourceId: '', taskId: '', configId: '', parentId: '' })
+const filter = reactive({ state: '', taskSpecId: '', sourceId: '', taskId: '', configId: '', parentId: '', fileId: '' })
 const page = reactive({ page: 1, size: 20, total: 0 })
 const state = reactive<{ loading: boolean; rows: TaskInst[]; selected: string[] }>({ loading: false, rows: [], selected: [] })
 
@@ -35,6 +35,7 @@ watch(() => props.modelValue, (v) => {
   filter.parentId = props.parentId ?? ''
   filter.taskId = props.taskId ?? ''
   filter.configId = props.configId ?? ''
+  filter.fileId = props.fileId ?? ''
   page.page = 1
   void load()
 })
@@ -50,7 +51,7 @@ async function load() {
       taskId: filter.taskId || undefined,
       configId: filter.configId || undefined,
       parentId: filter.parentId || undefined,
-      fileId: props.fileId,
+      fileId: filter.fileId || undefined,
     })
     state.rows = r.list
     page.total = r.total
@@ -93,6 +94,7 @@ function resendOne(row: TaskInst) {
       <el-input v-model="filter.taskId" placeholder="任务ID" style="width: 120px" @keyup.enter="onSearch" />
       <el-input v-model="filter.configId" placeholder="配置ID" style="width: 120px" @keyup.enter="onSearch" />
       <el-input v-model="filter.parentId" placeholder="父ID" style="width: 120px" @keyup.enter="onSearch" />
+      <el-input v-model="filter.fileId" placeholder="文件ID" style="width: 120px" @keyup.enter="onSearch" />
       <button class="rc-btn primary" type="button" @click="onSearch">查询</button>
     </div>
     <div v-if="canWrite && state.selected.length" class="ti-batch">
@@ -115,6 +117,7 @@ function resendOne(row: TaskInst) {
       <el-table-column prop="configId" label="配置ID" width="90" />
       <el-table-column prop="updatedAt" label="更新时间" width="140" />
       <el-table-column prop="node" label="执行节点" width="140" />
+      <el-table-column prop="topic" label="主题" width="140" />
       <el-table-column prop="parentId" label="父ID" width="90" />
       <el-table-column v-if="canWrite" label="操作" width="80" fixed="right">
         <template #default="{ row }">

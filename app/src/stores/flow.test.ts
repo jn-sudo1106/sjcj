@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useFlowStore } from './flow'
 import { mockFlowRecommend, mockNodeAiChat } from '../api/mock/flows'
-import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES } from '@/views/FlowCanvas/canvas/flowModel'
+import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES, buildSourceSeed } from '@/views/FlowCanvas/canvas/flowModel'
 import { makePresetFlowTemplates } from '@/utils/flow/flowTemplates'
 import type { Source } from '../api'
 
@@ -326,7 +326,7 @@ describe('flow store 新建 / 校验（M5.5）', () => {
     expect(Object.keys(f.configs).sort()).toEqual(Object.keys(snap.configs).sort())
   })
 
-  it('加载历史子源定时策略时迁到首节点运行配置', () => {
+  it('加载历史源定时策略时迁到首节点运行配置', () => {
     f.newFlow('standard')
     const legacy = f.serialize()
     const source = legacy.source!
@@ -561,6 +561,29 @@ describe('节点输入表 + 任务队列（优化 0701 问题五）', () => {
     f.loadFromSource(source, steps)
     expect(f.configs['st1'].collectCfg?.inputTable).toBe('')
     expect(f.configs['st2'].collectCfg?.inputTable).toBe('T1')
+  })
+
+  it('流程视图节点保留真实步骤元数据，并按依赖稳定排序', () => {
+    const source = { sourceId: 's-step', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: 'st2', sourceId: 's-step', name: '详情解析', inputTable: 'T1', outputTable: 'T2', contextMap: ['st1'], condition: 'status=C', failAction: '跳过', enabled: false },
+      { stepId: 'st1', sourceId: 's-step', name: '列表抓取', inputTable: '-', outputTable: 'T1', outColumns: ['detail_url'], enabled: true },
+    ] as never)
+
+    expect(seed.main).toEqual(['start', 'st1', 'st2', 'end'])
+    expect(seed.configs.st1.collectCfg?.inputTable).toBe('')
+    expect(seed.configs.st1.taskCfg?.outColumns).toEqual(['detail_url'])
+    expect(seed.configs.st2.collectCfg?.entryCondition?.expr).toBe('status=C')
+    expect(seed.configs.st2.outputAdvanced?.failPolicy).toBe('跳过')
+    expect(seed.configs.st2.disabled).toBe(true)
+  })
+
+  it('已保存源没有 item/next 步骤时，流程视图显示源根列表节点', () => {
+    const seed = buildSourceSeed({ sourceId: '391000001', name: '真实源', url: 'http://x', configId: 'c1', mainTable: 'T1', owner: 'a', state: 'C' }, [])
+    expect(seed.main).toEqual(['start', 'source:391000001', 'end'])
+    expect(seed.configs['source:391000001'].collectCfg?.webKind).toBe('list')
+    expect(seed.configs['source:391000001'].collectCfg?.url).toBe('http://x')
+    expect(seed.configs['source:391000001'].collectCfg?.outputTable).toBe('T1')
   })
 
   it('参数源（0721 会议 T5）：空白画布新建的首个采集节点带出 urlTemplate，$PARAM$_id 自动识别为 urlParamRefs', () => {
@@ -1275,11 +1298,11 @@ describe('节点级 AI 对话 mock 回复（优化 0701 问题八）', () => {
 })
 
 describe('Task 5 流程模板绑定', () => {
-  it('子源序列化时保存模板版本和当前节点动态绑定', () => {
+  it('源序列化时保存模板版本和当前节点动态绑定', () => {
     setActivePinia(createPinia())
     const flow = useFlowStore()
     const source: Source = {
-      sourceId: 'source-template-binding', name: '模板子源', url: 'https://source.example.com', configId: '', mainTable: '', owner: 'tester', state: 'C',
+      sourceId: 'source-template-binding', name: '模板源', url: 'https://source.example.com', configId: '', mainTable: '', owner: 'tester', state: 'C',
     }
     flow.loadFromSource(source, [])
     const template = makePresetFlowTemplates().find((item) => item.id === 'preset-file-parse')!
@@ -1298,7 +1321,7 @@ describe('Task 5 流程模板绑定', () => {
     setActivePinia(createPinia())
     const flow = useFlowStore()
     const source: Source = {
-      sourceId: 'source-template-upgrade', name: '模板升级子源', url: 'https://source.example.com', configId: '', mainTable: '', owner: 'tester', state: 'C',
+      sourceId: 'source-template-upgrade', name: '模板升级源', url: 'https://source.example.com', configId: '', mainTable: '', owner: 'tester', state: 'C',
     }
     flow.loadFromSource(source, [])
     const template = makePresetFlowTemplates().find((item) => item.id === 'preset-file-parse')!

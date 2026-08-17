@@ -43,6 +43,7 @@
 // 采集类节点的读取优先级。**不要**在两边都定义然后不写辅助函数。
 
 import type { RuleOrchestration, Site, Source } from '@/api'
+import { effectiveInputTable } from './flowModel.layout'
 
 // 让外部通过 flowModel 访问的 api types（seeds / 外部代码常用）
 export type { RuleOrchestration, Site, Source } from '@/api'
@@ -262,8 +263,8 @@ export interface CollectConfig {
   /** URL 参数绑定的参数 id 列表（0711 R9：源 URL 支持 $PARAM$_id 占位符）；与旧的 inputParams 是两个不同概念，互不覆盖。
    *  实际引用的参数 id 已经写死在 URL 的 $PARAM$_id token 里，这个列表是从 url 解析出的缓存/展示用途，不是"选择绑定哪个参数"。 */
   urlParamRefs?: string[]
-  /** 每个参数 id 对应的选定取值（0711-B 拍板⑧：子源级可覆盖）——本字段随 collectCfg 一起活在"这个子源自己的 FlowDef"里，
-   *  天然就是子源级：模板同步下发时所有子源起初相同，之后各子源独立编辑互不影响，和 url 字段完全同一套落点逻辑。
+  /** 每个参数 id 对应的选定取值（0711-B 拍板⑧：源级可覆盖）——本字段随 collectCfg 一起活在"这个源自己的 FlowDef"里，
+   *  天然就是源级：模板同步下发时所有源起初相同，之后各源独立编辑互不影响，和 url 字段完全同一套落点逻辑。
    *  缺省 = 用参数候选值列表的第一个值作为预览/试跑取值。 */
   urlParamValues?: Record<string, string>
   /** 运行设置（0711 R5：代理/断点续爬/登录从 Source 级迁到节点级，各节点可独立配置）。
@@ -457,6 +458,43 @@ export function decisionOrParallelKind(cfg: NodeConfig): 'decision' | 'parallel'
  */
 export function isRuleNode(cfg?: NodeConfig): boolean {
   return !!cfg?.ruleCfg
+}
+
+/**
+ * 首个可执行节点判定（0812 计划 M2-10，方案 §6.7-A）：不能把所有"没有输入表"的节点都当成
+ * 首节点——按主链顺序找第一个跳过 start/end 占位、未停用、非规划中、非决策/分头的真实节点。
+ * 只在主链上找：分支内节点天然有 owner 节点作为上游依赖，不可能是流程的入口。
+ */
+export function isFirstRunnableNode(main: string[], configs: Record<string, NodeConfig>, id: string): boolean {
+  const first = main.find((nid) => {
+    if (nid === 'start' || nid === 'end') return false
+    const cfg = configs[nid]
+    if (!cfg || cfg.disabled || cfg.planned) return false
+    if (isDecision(cfg) || isParallel(cfg)) return false
+    return true
+  })
+  return first === id
+}
+
+/**
+ * 歧义下游节点判定（0812 计划 M2-14，方案 §6.7-B）：旧 `nextStep`/`nextStep2` 没有
+ * `targetNodeId` 参数，如果同一张有效输入表被两个及以上节点共用，后端没法知道任务该发给
+ * 哪一个，这种情况下手动执行必须禁用，不能假装按钮只会驱动当前选中的节点。
+ * `nodes` 传调用方已经算好的候选节点列表（如 buildHorizontalLayout(...).nodes），避免这里
+ * 重新遍历 main + 全部分支去重建一遍。
+ */
+export function hasAmbiguousInput(
+  nodes: { id: string }[],
+  main: string[],
+  branches: BranchSeed[],
+  configs: Record<string, NodeConfig>,
+  branchGroups: FlowBranchGroup[],
+  id: string,
+): boolean {
+  const target = effectiveInputTable(main, branches, configs, id, branchGroups)
+  if (!target) return false
+  const consumers = nodes.filter((n) => effectiveInputTable(main, branches, configs, n.id, branchGroups) === target)
+  return consumers.length > 1
 }
 
 // ---------- 杂项（与 seeds/layout 无强耦合，独立放在 types 文件） ----------

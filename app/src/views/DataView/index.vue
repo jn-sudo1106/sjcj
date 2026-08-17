@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, CopyDocument, QuestionFilled, Plus, Refresh } from '@element-plus/icons-vue'
@@ -33,13 +33,15 @@ const auth = useAuthStore()
 const canWrite = computed(() => auth.role === 'admin')
 const route = useRoute()
 
-interface CommonQuery { label: string; sql?: string; kind?: 'all-source' }
+interface CommonQuery { label: string; sql?: string; allSources?: boolean }
 const COMMON_QUERIES: CommonQuery[] = [
-  { label: '所有源', kind: 'all-source' },
+  { label: '所有源', allSources: true },
   { label: '日新增', sql: 'CREATE_DT > CURDATE()' },
   { label: '日更新', sql: 'UPDATE_DT > CURDATE()' },
   { label: '近2日新增', sql: 'CREATE_DT > DATE_SUB(CURDATE(), INTERVAL 1 DAY)' },
   { label: '近2日更新', sql: 'UPDATE_DT > DATE_SUB(CURDATE(), INTERVAL 1 DAY)' },
+  { label: '日新增（所有源）', sql: 'CREATE_DT > CURDATE()', allSources: true },
+  { label: '日更新（所有源）', sql: 'UPDATE_DT > CURDATE()', allSources: true },
 ]
 
 // ---- 选表 / 选源 ----
@@ -169,12 +171,14 @@ async function onSourceChange() {
   panelRef.value?.search()
 }
 async function applyCommonQuery(q: CommonQuery) {
-  if (q.kind === 'all-source') {
+  if (q.allSources) {
     sourceId.value = ''
-    await onSourceChange()
-    return
+    // DataQueryPanel 不会监听 sourceId 自动查询；先同步空源范围和表分组，
+    // 再由下面的同一次 search 合并 SQL，避免组合快捷查询出现两次请求。
+    await loadGroup()
+    await nextTick()
   }
-  panelRef.value?.search({ sql: q.sql })
+  panelRef.value?.search(q.sql ? { sql: q.sql } : undefined)
 }
 async function onCommonQuerySelect(label: string) {
   const query = COMMON_QUERIES.find((item) => item.label === label)
@@ -330,36 +334,55 @@ function onClearParent() {
 const apiOpen = ref(false)
 const apiIdFetchUrl = computed(() => {
   // 对照旧平台 EntryList2.handleShowApi：API 地址还要带源过滤，size 固定为 10。
-  // appId/appKey 是旧接口约定的演示应用标识，不使用当前登录 token 替代。
+  // appId/appKey 是旧接口的应用凭据，不使用当前登录 token 替代；部署时可通过
+  // VITE_LEGACY_API_APP_ID / VITE_LEGACY_API_APP_KEY 覆盖默认演示值。
+  const restBase = import.meta.env.VITE_LEGACY_REST_BASE || `${window.location.origin}/rest`
+  const appId = import.meta.env.VITE_LEGACY_API_APP_ID || 'dev'
+  const appKey = import.meta.env.VITE_LEGACY_API_APP_KEY || 'dev1'
   const params = [
-    'appId=dev',
-    'appKey=dev1',
-    `type=${tableId.value || '<tableId>'}`,
+    `appId=${encodeURIComponent(appId)}`,
+    `appKey=${encodeURIComponent(appKey)}`,
+    `type=${encodeURIComponent(tableId.value || '<tableId>')}`,
   ]
-  if (sourceId.value) params.push(`sourceId=${sourceId.value}`)
-  params.push(`startId=${panelFilter.value.min || '0'}`)
-  if (panelFilter.value.max) params.push(`endId=${panelFilter.value.max}`)
+  if (sourceId.value) params.push(`sourceId=${encodeURIComponent(sourceId.value)}`)
+  params.push(`startId=${encodeURIComponent(String(panelFilter.value.min || '0'))}`)
+  if (panelFilter.value.max) params.push(`endId=${encodeURIComponent(String(panelFilter.value.max))}`)
   if (panelFilter.value.startTime || panelFilter.value.endTime) {
     const dateRange = `${panelFilter.value.startTime || 'EMPTY'} - ${panelFilter.value.endTime || 'EMPTY'}`
     params.push(`dataRange=${encodeURIComponent(dateRange)}`)
   }
   params.push('size=10')
-  return `${window.location.origin}/rest/api/v1/data/entry?${params.join('&')}`
+  return `${restBase.replace(/\/$/, '')}/api/v1/data/entry?${params.join('&')}`
 })
 
 const apiParams = [
+  { name: 'appId', type: '字符串', required: '是', limit: '-', description: '取数应用 ID，由部署环境提供' },
+  { name: 'appKey', type: '字符串', required: '是', limit: '-', description: '取数应用密钥，由部署环境提供' },
+  { name: 'type', type: '整型', required: '是', limit: '-', description: '实体类型 ID，对应数据表' },
+  { name: 'sourceId', type: '长整型', required: '非', limit: '-', description: '限制某源采集的数据；查询全表时留空' },
   { name: 'size', type: '整型', required: '是', limit: '1-200', description: '每次获取数量' },
   { name: 'startId', type: '长整型', required: '必填', limit: '最小为0', description: '取数据的起始ID，如从头取，设成0' },
   { name: 'endId', type: '长整型', required: '非', limit: '-', description: '限制取数据的最大ID，与startId配合用来取一段数据' },
+  { name: 'dataRange', type: '字符串', required: '非', limit: '时间范围', description: '时间上下限可单一为空，格式为“开始 - 结束”' },
 ]
 
-const apiReturns = [
-  { code: 'id', name: 'ID', type: '长整型', description: '数据主键' },
-  { code: 'state', name: '数据状态', type: '字符串', description: 'D 表示软删除' },
-  { code: 'lastId', name: '本次获取数据中最大ID', type: '长整型', description: '获取下一批数据时，startId设为lastId+1' },
-  { code: 'parentId', name: '上层数据ID', type: '长整型', description: '详情表 与 列表表中关联字段' },
-  { code: '[其它字段]', name: '其它字段', type: '-', description: '参考数据表配置中相关字段详情' },
-]
+const apiReturns = computed(() => [
+  { code: 'data.lastId', name: '本次获取数据中最大ID', type: '长整型', description: '获取下一批数据时，startId 设为 lastId+1' },
+  { code: 'data.size', name: '本次返回数量', type: '整型', description: '本次 list 实际返回的数据条数' },
+  { code: 'data.list[].id', name: 'ID', type: '长整型', description: '数据主键' },
+  { code: 'data.list[].state', name: '数据状态', type: '字符串', description: 'D 表示软删除' },
+  { code: 'data.list[].sourceId', name: '源 ID', type: '长整型', description: '数据所属源' },
+  { code: 'data.list[].parentId', name: '上层数据 ID', type: '长整型', description: '详情表与列表表中的关联字段（有则返回）' },
+  { code: 'data.list[].seq', name: '序号', type: '长整型', description: '数据序号（有则返回）' },
+  { code: 'data.list[].createDt', name: '生成时间', type: '字符串', description: '数据生成时间（有则返回）' },
+  { code: 'data.list[].updateDt', name: '更新时间', type: '字符串', description: '数据更新时间（有则返回）' },
+  ...(tableMeta.value?.fields ?? []).map((field) => ({
+    code: `data.list[].${field.prop}`,
+    name: `${field.desc}（${field.columnName || field.prop}）`,
+    type: field.type || '-',
+    description: '当前数据表字段，字段值随表结构返回',
+  })),
+])
 
 async function copyApiUrl() {
   if (!navigator.clipboard?.writeText) {
@@ -877,7 +900,7 @@ onMounted(async () => {
           <el-table-column prop="type" label="类型" width="180" />
           <el-table-column prop="description" label="说明" min-width="360" />
         </el-table>
-        <p class="dv-api-note">地址参数沿用旧平台 ID 取数接口约定；当前页面的状态和 SQL 条件不属于该接口参数，若部署环境使用不同的应用标识，需要替换 URL 中的 appId、appKey。</p>
+        <p class="dv-api-note">返回值按真实接口的 data.lastId/data.size/data.list 结构展示；list 中还会返回当前数据表的全部业务字段。appId、appKey 使用部署环境配置，当前未配置时显示演示值。</p>
       </div>
       <template #footer>
         <button class="rc-btn" type="button" @click="apiOpen = false">关闭</button>

@@ -1,17 +1,18 @@
 <script setup lang="ts">
-// 网站详情页（0714 会议 Task 3）：点击网站不再重定向到第一个子源，落在这个页面上——
-// 只读聚合数据/文件/任务三个视图（没有流程视图，网站本身没有可编辑的单一流程）。
-// 内部悄悄加载一个代表子源（同网站下子源共享流程/表结构）供 ResultView/FileView/TaskView 取得
-// 查询所需的节点/表结构，但不走 ws.open（不登记页签、不出现在页签条里，用户看到的是"网站"而非某个具体子源）。
-import { computed, onMounted, ref, watch } from 'vue'
+// 网站详情页（0812 计划 M1-2/M1-4 纠偏）：网站汇总态只读聚合源/数据/文件三个视图，
+// 没有流程视图（网站本身没有可编辑的单一流程），也没有任务页签（任务只在具体源和一级
+// 任务中心查看，见 workspaceRoute.ts 的 SiteWorkspaceView）。
+// 不再悄悄加载"代表源"：网站下可能有多张表、多个流程，拿第一个源的节点/表结构
+// 冒充整个网站会得到错误结果（0812 会议结论）。数据/文件视图按 siteId 查询的真实实现见
+// M2/M3；在那之前网站汇总态的数据/文件页签展示"开发中"占位，不渲染依赖 flow.sourceCtx
+// 的旧 ResultView/FileView，避免用一个空的/串味的 flow.sourceCtx 发出错误查询。
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { flowApi, sourceApi, siteApi, type Site, type Source } from '@/api'
+import { siteApi, type Site, type Source } from '@/api'
 import { useFlowStore } from '@/stores/flow'
-import { firstSourceId, normalizeSiteView } from '@/utils/url/workspaceRoute'
-import ResultView from './ResultView.vue'
-import FileView from './FileView.vue'
-import TaskView from './TaskView.vue'
+import { normalizeSiteView } from '@/utils/url/workspaceRoute'
 import SourceOverviewView from './SourceOverviewView.vue'
+import SiteDataView from './SiteDataView.vue'
 
 const props = defineProps<{ siteId: string }>()
 const route = useRoute()
@@ -21,49 +22,35 @@ const flow = useFlowStore()
 const site = ref<Site | null>(null)
 const loadError = ref('')
 
-// 过期请求保护（与 FileView/TaskView 的 xxxRequest 计数同一套口径）：快速切换网站时，
-// 先发出的旧请求若比后发出的新请求更晚 resolve，不能覆盖新网站已经写入 flow store 的数据。
+// 过期请求保护：快速切换网站时，先发出的旧请求若比后发出的新请求更晚 resolve，
+// 不能用旧网站的数据覆盖新网站已经展示的标题/上下文。
 let loadSeq = 0
 async function load() {
   const requestId = ++loadSeq
   loadError.value = ''
-  const [siteDetail, children] = await Promise.all([siteApi.siteDetail(props.siteId), siteApi.siteSources(props.siteId)])
+  const siteDetail = await siteApi.siteDetail(props.siteId)
   if (requestId !== loadSeq) return
-  site.value = siteDetail
-  const repId = firstSourceId(children)
-  if (!repId) {
-    loadError.value = '该网站暂无子源，请先添加子源'
-    flow.clearSourceCtx()
-    flow.setSiteDisplayCtx(siteDetail ?? null)
-    return
-  }
-  // repId 就是 children 里那条记录自己的 sourceId，siteSources 和 sourceDetail 读的是同一份数据，
-  // 不用再单独发一次 sourceDetail 请求。
-  const source = children.find((c) => c.sourceId === repId) ?? null
-  const [steps, persistedDef] = await Promise.all([
-    sourceApi.sourceSteps(repId),
-    flowApi.flowLoad(repId),
-  ])
-  if (requestId !== loadSeq) return
-  if (!source) {
-    loadError.value = '子源加载失败，请重试'
-    return
-  }
-  // 先加载代表子源供数据查询，再补设 siteCtx 供顶部面包屑/动作栏识别为网站态展示——
-  // loadFromSource 内部会重置 siteCtx，顺序不能反过来（见 flow.ts setSiteDisplayCtx 注释）。
-  flow.loadFromSource(source, steps ?? [], persistedDef)
+  // 网站态不再注入任何代表源；只有用户点进具体源（openSource）才加载该源的流程。
+  flow.clearSourceCtx()
   flow.setSiteDisplayCtx(siteDetail ?? null)
+  site.value = siteDetail
+  if (!siteDetail) loadError.value = '网站不存在或加载失败，请重试'
 }
 onMounted(load)
 watch(() => props.siteId, load)
+// 从网站详情切到源时，旧页面的异步加载不能再回写状态，避免覆盖新路由对应的源。
+onUnmounted(() => {
+  loadSeq += 1
+})
 
 const view = computed(() => normalizeSiteView(route.query.view))
-function switchView(target: 'source' | 'data' | 'file' | 'task') {
+function switchView(target: 'source' | 'data' | 'file') {
   if (view.value === target) return
   void router.replace({ path: '/canvas', query: { siteId: props.siteId, view: target } })
 }
 function openSource(source: Source) {
-  void router.replace({ path: '/canvas', query: { sourceId: source.sourceId, view: 'flow' } })
+  // 保留网站上下文，进入具体源后左侧仍需加载同网站的源树。
+  void router.replace({ path: '/canvas', query: { siteId: props.siteId, sourceId: source.sourceId, view: 'flow' } })
 }
 </script>
 
@@ -76,17 +63,15 @@ function openSource(source: Source) {
       </div>
       <div class="sdv-switcher">
         <button class="sdv-seg" :class="{ on: view === 'source' }" type="button" data-testid="site-source-view" @click="switchView('source')">源视图</button>
-        <button class="sdv-seg" :class="{ on: view === 'data' }" type="button" @click="switchView('data')">数据视图</button>
-        <button class="sdv-seg" :class="{ on: view === 'file' }" type="button" @click="switchView('file')">文件视图</button>
-        <button class="sdv-seg" :class="{ on: view === 'task' }" type="button" @click="switchView('task')">任务视图</button>
+        <button class="sdv-seg" :class="{ on: view === 'data' }" type="button" data-testid="site-data-view" @click="switchView('data')">数据视图</button>
+        <button class="sdv-seg" :class="{ on: view === 'file' }" type="button" data-testid="site-file-view" @click="switchView('file')">文件视图</button>
       </div>
     </div>
     <div v-if="loadError" class="sdv-empty">{{ loadError }}</div>
     <template v-else>
       <SourceOverviewView v-if="view === 'source'" :current-site-id="siteId" class="sdv-body" @open-source="openSource" />
-      <ResultView v-else-if="view === 'data'" site-wide class="sdv-body" />
-      <FileView v-else-if="view === 'file'" site-wide class="sdv-body" />
-      <TaskView v-else site-wide class="sdv-body" />
+      <SiteDataView v-else-if="view === 'data'" :site-id="siteId" class="sdv-body" />
+      <div v-else class="sdv-empty" data-testid="site-file-placeholder">网站维度文件视图正在开发中，请先进入具体源查看文件</div>
     </template>
   </main>
 </template>

@@ -44,7 +44,8 @@ const state = reactive<{
   list: [],
   categories: [],
 })
-const tableHeight = 'min(450px, calc(100vh - 300px))'
+// 以 13.6 寸屏幕为基准：弹层本身不再纵向滚动，表格承担右侧结果的主滚动。
+const tableHeight = 'clamp(260px, calc(100vh - 360px), 390px)'
 
 function normalizedIds() {
   return state.sourceIds.split(/[，,\s]+/).map((id) => id.trim()).filter(Boolean).join(',')
@@ -85,6 +86,28 @@ async function loadCategories() {
     ElMessage.error(`加载源分类失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
     state.categoriesLoading = false
+  }
+}
+
+// 旧平台的分类接口首次仅返回根节点；用户展开时以 parentId 获取下一层。
+// 不用空数组或 0 伪造子级/计数，接口未返回即保留为空态。
+async function loadCategoryChildren(
+  node: { level: number; data: SourceCategory },
+  resolve: (nodes: SourceCategory[]) => void,
+) {
+  if (node.level === 0) {
+    resolve(state.categories)
+    return
+  }
+  if (node.data.children) {
+    resolve(node.data.children)
+    return
+  }
+  try {
+    resolve(await sourceApi.sourceCategories(node.data.id))
+  } catch (error) {
+    ElMessage.error(`加载子分类失败：${error instanceof Error ? error.message : String(error)}`)
+    resolve([])
   }
 }
 
@@ -153,16 +176,24 @@ function formatCount(value?: number) { return value == null ? '—' : value }
         <button class="dv-category-all" :class="{ active: !state.category }" type="button" @click="clearCategory">全部</button>
         <el-tree
           v-if="state.categories.length"
+          class="dv-category-tree"
           :data="state.categories"
+          :current-node-key="state.category || undefined"
           node-key="id"
           :props="{ label: 'name', children: 'children' }"
+          lazy
           highlight-current
+          :load="loadCategoryChildren"
           @node-click="onCategory"
         >
           <template #default="{ data }">
-            <span>{{ data.name }}（{{ data.count }}）</span>
+            <span class="dv-category-node">
+              <span class="dv-category-name">{{ data.name }}</span>
+              <span v-if="data.count != null" class="dv-category-count">{{ data.count }}</span>
+            </span>
           </template>
         </el-tree>
+        <div v-else-if="!state.categoriesLoading" class="dv-category-empty">暂无分类</div>
       </aside>
 
       <main class="dv-source-main">
@@ -228,13 +259,21 @@ function formatCount(value?: number) { return value == null ? '—' : value }
 
 <style scoped>
 .dv-picker-dialog :deep(.el-dialog) { max-width: calc(100vw - 48px); margin: 5vh auto; }
-.dv-picker-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 150px); overflow: auto; }
-.dv-source-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 16px; }
-.dv-source-categories { min-height: 450px; padding-right: 12px; border-right: 1px solid var(--rc-border-soft); }
+.dv-picker-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 150px); overflow: hidden; }
+.dv-source-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 16px; height: min(520px, calc(100vh - 170px)); }
+.dv-source-categories { display: flex; flex-direction: column; min-height: 0; padding: 4px 12px 4px 0; border-right: 1px solid var(--rc-border-soft); }
 .dv-category-all, .dv-advanced-link { border: 0; background: transparent; color: var(--rc-primary-ink); cursor: pointer; font-size: 13px; }
-.dv-category-all { width: 100%; padding: 8px 10px; text-align: left; border-radius: 4px; }
+.dv-category-all { width: 100%; min-height: 34px; padding: 0 10px; text-align: left; border-radius: 6px; font-weight: 700; }
 .dv-category-all.active, .dv-category-all:hover { background: var(--rc-primary-soft); }
-.dv-source-main { min-width: 0; }
+.dv-category-tree { min-height: 0; flex: 1; margin-top: 4px; overflow: auto; padding: 2px; background: transparent; }
+.dv-category-tree :deep(.el-tree-node__content) { height: 34px; margin: 1px 0; border-radius: 6px; color: var(--rc-text-2); font-size: 13px; }
+.dv-category-tree :deep(.el-tree-node__content:hover), .dv-category-tree :deep(.is-current > .el-tree-node__content) { background: var(--rc-primary-soft); color: var(--rc-primary-ink); }
+.dv-category-tree :deep(.el-tree-node__expand-icon) { color: var(--rc-muted); }
+.dv-category-node { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; padding-right: 8px; }
+.dv-category-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dv-category-count { flex: none; color: var(--rc-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.dv-category-empty { padding: 10px; color: var(--rc-muted); font-size: 12px; text-align: center; }
+.dv-source-main { min-width: 0; overflow: hidden; }
 .dv-picker-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .dv-picker-toolbar :deep(.el-textarea__inner) { min-height: 32px !important; padding: 6px 11px; }
 .dv-advanced-link { padding: 8px 4px; }
@@ -245,8 +284,9 @@ function formatCount(value?: number) { return value == null ? '—' : value }
 .dv-picker-pagination { display: flex; justify-content: flex-end; margin-top: 14px; }
 .dv-ellipsis { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 900px) {
-  .dv-source-layout { grid-template-columns: 1fr; }
-  .dv-source-categories { min-height: auto; padding-right: 0; border-right: 0; border-bottom: 1px solid var(--rc-border-soft); padding-bottom: 8px; }
+  .dv-picker-dialog :deep(.el-dialog__body) { overflow: auto; }
+  .dv-source-layout { grid-template-columns: 1fr; height: auto; }
+  .dv-source-categories { min-height: auto; max-height: 180px; padding-right: 0; border-right: 0; border-bottom: 1px solid var(--rc-border-soft); padding-bottom: 8px; }
   .dv-source-advanced { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
 }
 </style>

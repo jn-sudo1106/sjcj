@@ -161,6 +161,27 @@ describe('DataView · 数据表页', () => {
     expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 't1', sourceId: undefined }))
   })
 
+  it.each([
+    ['日新增（所有源）', 'CREATE_DT > CURDATE()'],
+    ['日更新（所有源）', 'UPDATE_DT > CURDATE()'],
+  ])('快捷查询：%s 清空源范围并只提交一次对应 SQL', async (label, sql) => {
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage({ sourceId: '600519' })
+    await waitForLoad()
+
+    const queryCallsBefore = (dataApi.rowQueryPaged as ReturnType<typeof vi.fn>).mock.calls.length
+    await chooseQuickQuery(label)
+    await waitForLoad()
+
+    expect(dataApi.rowQueryPaged).toHaveBeenCalledTimes(queryCallsBefore + 1)
+    expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({
+      tableId: 't1',
+      sourceId: undefined,
+      sql,
+    }))
+  })
+
   it('展示SQL：切换后本地拼接展示，不发请求', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
@@ -263,6 +284,10 @@ describe('DataView · 数据表页', () => {
     expect(wrapper.text()).toContain('ID取数')
     expect(wrapper.text()).toContain('startId')
     expect(wrapper.text()).toContain('endId')
+    expect(wrapper.text()).toContain('appId')
+    expect(wrapper.text()).toContain('sourceId')
+    expect(wrapper.text()).toContain('data.list[].title')
+    expect(wrapper.text()).toContain('data.list[].id')
     expect(wrapper.text()).toContain('返回值说明')
     expect(wrapper.text()).toContain('appId=dev&appKey=dev1&type=t1&sourceId=600519&startId=0&size=10')
     const closeApiButton = wrapper.findAll('button').find((el) => el.text() === '关闭')

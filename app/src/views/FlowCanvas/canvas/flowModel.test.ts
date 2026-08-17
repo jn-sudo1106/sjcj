@@ -1,6 +1,72 @@
 import { describe, expect, it } from 'vitest'
-import { applyParamSourceUrlToFirstCollectNode, buildHorizontalLayout, iconFor, isRuleNode, makeDefaultExecConfig, NODE_CONFIGS, normalizeNodeConfig, type NodeConfig } from './flowModel'
+import {
+  applyParamSourceUrlToFirstCollectNode, buildHorizontalLayout, hasAmbiguousInput, iconFor, isFirstRunnableNode, isRuleNode,
+  makeDefaultExecConfig, NODE_CONFIGS, normalizeNodeConfig, type FlowBranchGroup, type NodeConfig,
+} from './flowModel'
 import type { Source } from '@/api'
+
+function cfg(overrides: Partial<NodeConfig> = {}): NodeConfig {
+  return { title: '', sub: '', status: '', planned: false, base: [], fields: [], inmap: [], params: [], output: [], ...overrides }
+}
+
+describe('isFirstRunnableNode（0812 计划 M2-10）', () => {
+  it('主链第一个真实节点是首节点', () => {
+    const main = ['start', 'n1', 'n2', 'end']
+    const configs = { n1: cfg({ title: '抓取列表页' }), n2: cfg({ title: '解析详情页' }) }
+    expect(isFirstRunnableNode(main, configs, 'n1')).toBe(true)
+    expect(isFirstRunnableNode(main, configs, 'n2')).toBe(false)
+  })
+
+  it('跳过停用节点，让下一个真实节点顶上首节点位置', () => {
+    const main = ['start', 'n1', 'n2', 'end']
+    const configs = { n1: cfg({ disabled: true }), n2: cfg() }
+    expect(isFirstRunnableNode(main, configs, 'n1')).toBe(false)
+    expect(isFirstRunnableNode(main, configs, 'n2')).toBe(true)
+  })
+
+  it('跳过规划中节点', () => {
+    const main = ['start', 'n1', 'n2', 'end']
+    const configs = { n1: cfg({ planned: true }), n2: cfg() }
+    expect(isFirstRunnableNode(main, configs, 'n2')).toBe(true)
+  })
+
+  it('跳过决策/分头节点：结构节点不可能是首节点', () => {
+    const main = ['start', 'n1', 'n2', 'end']
+    const configs = { n1: cfg({ kind: 'decision' }), n2: cfg() }
+    expect(isFirstRunnableNode(main, configs, 'n1')).toBe(false)
+    expect(isFirstRunnableNode(main, configs, 'n2')).toBe(true)
+  })
+
+  it('主链没有真实节点时，任何 id 都不是首节点', () => {
+    expect(isFirstRunnableNode(['start', 'end'], {}, 'start')).toBe(false)
+  })
+})
+
+describe('hasAmbiguousInput（0812 计划 M2-14）', () => {
+  const main = ['start', 'n1', 'n2', 'n3', 'end']
+  const configs = {
+    n1: cfg({ outputTable: 'T1' }),
+    n2: cfg({ inputTable: 'T1' }), // 未设置输出表，effective input 都会解析到 T1
+    n3: cfg({ inputTable: 'T1' }),
+  }
+  const nodes = [{ id: 'n1' }, { id: 'n2' }, { id: 'n3' }]
+  const branchGroups: FlowBranchGroup[] = []
+
+  it('两个节点共用同一张有效输入表时判定为歧义', () => {
+    expect(hasAmbiguousInput(nodes, main, [], configs, branchGroups, 'n2')).toBe(true)
+    expect(hasAmbiguousInput(nodes, main, [], configs, branchGroups, 'n3')).toBe(true)
+  })
+
+  it('唯一消费者时不算歧义', () => {
+    const soloConfigs = { n1: cfg({ outputTable: 'T1' }), n2: cfg({ inputTable: 'T1' }) }
+    const soloNodes = [{ id: 'n1' }, { id: 'n2' }]
+    expect(hasAmbiguousInput(soloNodes, main, [], soloConfigs, branchGroups, 'n2')).toBe(false)
+  })
+
+  it('没有有效输入表时不算歧义（没有表就无所谓歧义）', () => {
+    expect(hasAmbiguousInput(nodes, main, [], configs, branchGroups, 'n1')).toBe(false)
+  })
+})
 
 describe('流程参数配置迁移', () => {
   it('旧流程加载时从 URL token 初始化节点参数绑定', () => {

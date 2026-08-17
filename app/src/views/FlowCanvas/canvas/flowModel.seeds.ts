@@ -675,6 +675,88 @@ export const TEMPLATE_TO_NAME: Record<string, string> = Object.fromEntries(
 
 // ---------- 流程构造器 ----------
 /**
+ * item/next 返回的是后端步骤，而画布展示的是节点。这里保留后端给出的稳定 stepId，
+ * 只把没有独立节点类型的历史字段转换成现有节点模板；这样流程视图不会再依赖页面自己生成的随机节点 ID。
+ */
+function templateKeyForStep(step: Step, index: number): string {
+  const explicit = String(step.nodeType ?? '').trim().toLowerCase()
+  const explicitAliases: Record<string, string> = {
+    list: 'web-list', 'web-list': 'web-list', 'web_list': 'web-list',
+    detail: 'web-detail', 'web-detail': 'web-detail', 'web_detail': 'web-detail',
+    login: 'login', 'rule': 'rule', 'clean': 'clean', 'dedupe': 'dedupe', 'check': 'check',
+  }
+  if (explicitAliases[explicit] && NODE_CONFIGS[explicitAliases[explicit]]) return explicitAliases[explicit]
+
+  const name = step.name || ''
+  if (/登录/.test(name) && NODE_CONFIGS.login) return 'login'
+  if (/规则/.test(name) && NODE_CONFIGS.rule) return 'rule'
+  if (/清洗/.test(name) && NODE_CONFIGS.clean) return 'clean'
+  if (/去重/.test(name) && NODE_CONFIGS.dedupe) return 'dedupe'
+  if (/校验/.test(name) && NODE_CONFIGS.check) return 'check'
+  if (/详情|正文/.test(name)) return 'web-detail'
+  return index === 0 ? 'web-list' : 'web-detail'
+}
+
+/** 按 lastStep/contextMap 做稳定拓扑排序；无依赖或循环时保持接口返回顺序。 */
+function orderSourceSteps(steps: Step[]): Step[] {
+  const byId = new Set(steps.map((step) => step.stepId))
+  const remaining = [...steps]
+  const ordered: Step[] = []
+  const emitted = new Set<string>()
+  while (remaining.length) {
+    const index = remaining.findIndex((step) =>
+      (step.contextMap ?? []).filter((id) => byId.has(id)).every((id) => emitted.has(id)),
+    )
+    const [next] = remaining.splice(index < 0 ? 0 : index, 1)
+    ordered.push(next)
+    emitted.add(next.stepId)
+  }
+  return ordered
+}
+
+/** 已保存源可能只有 source 根配置、没有 item/next 后续步骤；此时仍需在流程视图显示列表节点。 */
+function rootStepForSource(source: Source): Step | null {
+  if (!source.url?.trim() || !source.mainTable?.trim()) return null
+  return {
+    stepId: `source:${source.sourceId}`,
+    sourceId: source.sourceId,
+    name: '列表抓取',
+    inputTable: '-',
+    outputTable: source.mainTable,
+    configId: source.configId,
+    enabled: source.disabled !== true,
+  }
+}
+
+function applyStepMetadata(cfg: NodeConfig, step: Step) {
+  cfg.disabled = !step.enabled
+  if (cfg.collectCfg) {
+    cfg.collectCfg.entryCondition = step.condition
+      ? { mode: 'expr', logic: 'AND', items: [], expr: step.condition }
+      : undefined
+    cfg.taskCfg = {
+      ...(cfg.taskCfg ?? { queue: '', urlRule: '' }),
+      ...(step.urlSourceField !== undefined ? { urlSourceField: step.urlSourceField } : {}),
+      ...(step.urlRule !== undefined ? { urlRule: step.urlRule } : {}),
+      ...(step.contextMap !== undefined ? { contextMap: [...step.contextMap] } : {}),
+      ...(step.outColumns !== undefined ? { outColumns: [...step.outColumns] } : {}),
+    }
+  } else {
+    cfg.entryCondition = step.condition
+      ? { mode: 'expr', logic: 'AND', items: [], expr: step.condition }
+      : undefined
+    if (step.inputTable !== undefined) cfg.inputTable = step.inputTable === '-' ? '' : step.inputTable
+    if (step.outputTable !== undefined) cfg.outputTable = step.outputTable
+  }
+  if (step.failAction !== undefined) {
+    cfg.outputAdvanced = {
+      ...(cfg.outputAdvanced ?? { writeMode: 'append', dedupeKey: '', failPolicy: '' }),
+      failPolicy: step.failAction,
+    }
+  }
+}
+
+/**
  * 源 → 链路种子（纯函数，从 flow store 的 loadFromSource 提取）：把源的子步骤编译为画布节点。
  * 分屏对比（Phase 5）用它独立构造第二栏的链路，不依赖/不污染全局 flow store。
  */
@@ -685,8 +767,9 @@ export function buildSourceSeed(source: Source, steps: Step[]): {
 } {
   const configs: Record<string, NodeConfig> = {}
   const main: string[] = ['start']
-  steps.forEach((step, i) => {
-    const templateKey = i === 0 ? 'web-list' : 'web-detail'
+  const sourceSteps = steps.length ? orderSourceSteps(steps) : (rootStepForSource(source) ? [rootStepForSource(source)!] : [])
+  sourceSteps.forEach((step, i) => {
+    const templateKey = templateKeyForStep(step, i)
     const cfg = cloneConfig(NODE_CONFIGS[templateKey])
     cfg.title = step.name || (i === 0 ? '列表抓取' : '详情解析')
     if (cfg.collectCfg) {
@@ -696,14 +779,14 @@ export function buildSourceSeed(source: Source, steps: Step[]): {
       // 接口 1:1（Step.inputTable，'-' 表示无）：首步无输入表，次步起 = 上一步输出表（0701 问题五）
       cfg.collectCfg.inputTable = step.inputTable && step.inputTable !== '-' ? step.inputTable : ''
     }
-    cfg.disabled = !step.enabled
+    applyStepMetadata(cfg, step)
     configs[step.stepId] = cfg
     main.push(step.stepId)
   })
   main.push('end')
   // 名字含「规则」的源在主链插入「规则处理」节点（列表抓取 → 规则处理 → 详情解析），输出表取上游（首步）的表。
-  if (/规则/.test(source.name) && steps.length > 0) {
-    const firstStep = steps[0]
+  if (/规则/.test(source.name) && sourceSteps.length > 0 && !sourceSteps.some((step) => /规则/.test(step.name))) {
+    const firstStep = sourceSteps[0]
     const ruleId = `${source.sourceId}-rule-demo`
     const ruleCfg = cloneConfig(NODE_CONFIGS.rule)
     ruleCfg.title = '规则处理'
