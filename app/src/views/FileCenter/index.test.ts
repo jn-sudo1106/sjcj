@@ -17,6 +17,12 @@ function makeRouter() {
   })
 }
 
+const fileViewStub = {
+  name: 'SiteFileView',
+  props: ['siteId', 'initialSourceId'],
+  template: '<div><slot name="toolbar-prefix" /></div>',
+}
+
 describe('FileCenter', () => {
   afterEach(() => vi.restoreAllMocks())
 
@@ -25,7 +31,7 @@ describe('FileCenter', () => {
     const router = makeRouter()
     await router.push('/files')
     const wrapper = shallowMount(FileCenter, {
-      global: { plugins: [router], stubs: { SiteFileView: true } },
+      global: { plugins: [router], stubs: { SiteFileView: fileViewStub } },
     })
     await flushPromises()
 
@@ -39,7 +45,7 @@ describe('FileCenter', () => {
     const router = makeRouter()
     await router.push({ path: '/files', query: { siteId: 'site-a', sourceId: 'source-2' } })
     const wrapper = shallowMount(FileCenter, {
-      global: { plugins: [router], stubs: { SiteFileView: true } },
+      global: { plugins: [router], stubs: { SiteFileView: fileViewStub } },
     })
     await flushPromises()
 
@@ -53,7 +59,7 @@ describe('FileCenter', () => {
     const router = makeRouter()
     await router.push('/files')
     const wrapper = shallowMount(FileCenter, {
-      global: { plugins: [router], stubs: { SiteFileView: true } },
+      global: { plugins: [router], stubs: { SiteFileView: fileViewStub } },
     })
     await flushPromises()
 

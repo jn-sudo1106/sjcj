@@ -2,7 +2,7 @@
 // 网站文件视图：具体网站下 file_resource 只支持单个 sourceId，所以网站“全部源”按源分页取数后做前端归并。
 // 未选择网站时直接查询 file_resource 全量范围，避免任务文件尚未完成网站关联时被过滤掉。
 // 不展示流程节点——网站没有唯一流程；选具体源仅收窄文件范围，仍默认展示该源全部文件。
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, useSlots, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fileApi, siteApi, type FileResourceRecord, type Source } from '@/api'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
@@ -10,6 +10,7 @@ import FileDetailDrawer from './FileDetailDrawer.vue'
 import { initMergeState, mergeLoadMore, type MergeSourceState, type MergeLoadMoreResult } from './siteDataMerge'
 
 const props = defineProps<{ siteId?: string; initialSourceId?: string }>()
+const slots = useSlots()
 
 const PAGE_SIZE = 20
 const MAX_PARALLEL_REQUESTS = 4
@@ -189,8 +190,9 @@ watch(selectedSourceId, () => {
 <template>
   <main class="sfv-shell">
     <div class="sfv-toolbar">
+      <slot name="toolbar-prefix" />
       <SiteSourceSelect v-if="siteId" v-model="selectedSourceId" :site-id="siteId" />
-      <span v-else class="sfv-scope">全部网站 / 全部源</span>
+      <span v-else-if="!slots['toolbar-prefix']" class="sfv-scope">全部网站 / 全部源</span>
       <input v-model="filters.fileName" class="sfv-input" placeholder="文件名或展示名" aria-label="文件名" @keyup.enter="runQuery">
       <input v-model="filters.ext" class="sfv-input" placeholder="类型，如 pdf、html" aria-label="文件类型" @keyup.enter="runQuery">
       <select v-model="filters.state" class="sfv-input" aria-label="状态">
@@ -247,11 +249,13 @@ watch(selectedSourceId, () => {
 
 <style scoped>
 .sfv-shell { display: flex; flex-direction: column; height: 100%; overflow: hidden; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); }
-.sfv-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); }
+.sfv-toolbar { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); }
 .sfv-input { height: 28px; min-width: 112px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; outline: none; }
 .sfv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .sfv-toolbar .rc-btn, .sfv-foot .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }
 .sfv-scope { display: inline-flex; align-items: center; min-width: 220px; height: 28px; padding: 0 9px; border: 1px solid var(--rc-border); border-radius: 6px; background: #f8fafc; color: var(--rc-text-2); font-size: 12px; }
+.sfv-toolbar :deep(.sss-wrap) { min-width: 170px; width: 170px; }
+.sfv-toolbar :deep(.sss-input) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sfv-empty { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px 12px; color: var(--rc-faint); font-size: 12px; text-align: center; }
 .sfv-notice { padding: 7px 12px; border-bottom: 1px solid #fde68a; background: #fffbeb; color: #92400e; font-size: 12px; }
 .sfv-tablehead { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--rc-border-soft); }
@@ -269,4 +273,8 @@ watch(selectedSourceId, () => {
 .soft { color: var(--rc-faint); }
 .sfv-empty-row { padding: 40px 12px !important; color: var(--rc-faint) !important; text-align: center; }
 .sfv-foot { display: flex; justify-content: center; padding: 10px 12px; border-top: 1px solid var(--rc-border-soft); }
+@media (max-width: 900px) {
+  .sfv-toolbar { flex-wrap: wrap; overflow-x: visible; }
+  .sfv-toolbar :deep(.sss-wrap) { min-width: 220px; width: auto; }
+}
 </style>
