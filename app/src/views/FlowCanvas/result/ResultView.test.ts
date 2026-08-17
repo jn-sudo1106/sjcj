@@ -31,7 +31,8 @@ const DataGridStub = {
 // ElDrawer 用显式 stub（而非 `true` 全量 stub）：M3-0B 的上游数据下钻测试要点进详情
 // 抽屉内部找父 ID 链接，`true` 全量 stub 不渲染默认插槽，会让这些断言全部落空。
 const ElDrawerStub = { name: 'ElDrawer', props: ['modelValue'], template: '<div><slot /></div>' }
-const STUBS = { CanvasHeader: true, ElDrawer: ElDrawerStub, DataGrid: DataGridStub }
+const TaskInstDialogStub = { name: 'TaskInstDialog', props: ['modelValue', 'sourceId', 'parentId', 'canWrite'], template: '<div />' }
+const STUBS = { CanvasHeader: true, ElDrawer: ElDrawerStub, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub }
 
 describe('ResultView', () => {
   afterEach(() => vi.restoreAllMocks())
@@ -76,6 +77,21 @@ describe('ResultView', () => {
     const nodeFilter = wrapper.find<HTMLSelectElement>('[data-testid="data-node-filter"]')
     expect(nodeFilter.exists()).toBe(true)
     expect(nodeFilter.element.value).not.toBe('')
+  })
+
+  it('行内查后续任务实例按当前行打开只读任务弹窗', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('row-action', { dataId: 'entry-1', sourceId: current.sourceId, title: '', summary: '', acceptState: 'pending' }, 'tasks')
+
+    const dialog = wrapper.findComponent({ name: 'TaskInstDialog' })
+    expect(dialog.props()).toMatchObject({ modelValue: true, sourceId: current.sourceId, parentId: 'entry-1', canWrite: false })
   })
 
   it('表结构接口异常时不阻断数据查询，并提示已回退到演示数据', async () => {

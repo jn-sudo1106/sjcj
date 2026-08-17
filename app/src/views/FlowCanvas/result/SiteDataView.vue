@@ -23,19 +23,18 @@
 // 在具体源下每行都是同一个源，容易让人以为是跨源归并，改叫"所属节点"并去掉操作列，
 // 避免跟具体源自己的数据视图（ResultView.vue）混淆。
 import { computed, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { dataApi, flowApi, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source } from '@/api'
 import {
   buildHorizontalLayout, buildSourceSeed, effectiveInputTable, nodeOutputTable, isDecision, isParallel,
   type NodeConfig, type BranchSeed, type FlowBranchGroup,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import DataGrid from './DataGrid.vue'
+import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 import SiteTableSelect from './components/SiteTableSelect.vue'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import { initMergeState, mergeLoadMore, type MergeLoadMoreResult, type MergeSourceState } from './siteDataMerge'
 
 const props = defineProps<{ siteId: string }>()
-const router = useRouter()
 
 const PAGE_SIZE = 20
 const MAX_PARALLEL_REQUESTS = 4
@@ -312,6 +311,7 @@ function failedSourceText({ sourceId, error }: MergeLoadMoreResult<DataRow>['fai
 }
 
 const detail = reactive<{ visible: boolean; row: DataRow | null }>({ visible: false, row: null })
+const taskInst = reactive<{ visible: boolean; sourceId: string; parentId: string | null }>({ visible: false, sourceId: '', parentId: null })
 function onRowClick(row: DataRow) {
   detail.row = row
   detail.visible = true
@@ -321,7 +321,9 @@ function onRowAction(row: DataRow, cmd: string) {
     detail.row = row
     detail.visible = true
   } else if (cmd === 'tasks') {
-    router.push({ path: '/runs', query: { dataId: row.dataId } })
+    taskInst.sourceId = row.sourceId
+    taskInst.parentId = row.dataId
+    taskInst.visible = true
   }
 }
 // row.values 的键是旧平台物理列名（K1/K2...），不是 f.prop 这个逻辑字段名（如 "title"）——
@@ -456,6 +458,12 @@ const detailFields = computed(() => {
         </dl>
       </div>
     </el-drawer>
+    <TaskInstDialog
+      v-model="taskInst.visible"
+      :source-id="taskInst.sourceId"
+      :parent-id="taskInst.parentId"
+      :can-write="false"
+    />
   </main>
 </template>
 

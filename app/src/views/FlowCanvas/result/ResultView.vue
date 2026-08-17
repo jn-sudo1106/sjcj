@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -13,12 +12,12 @@ import { confirmDanger } from '@/utils/confirmDanger'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import DataGrid from './DataGrid.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
+import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 
 // 数据视图只属于具体源流程（0812 计划 M2-4：网站"全部源"态改用独立的 SiteDataView.vue，
 // 不再靠 siteWide 布尔开关把两种数据流塞进同一个组件——那正是 M1-4 删掉的"代表源"问题的成因）。
 const flow = useFlowStore()
 const ws = useWorkspaceStore()
-const router = useRouter()
 
 const source = computed(() => flow.sourceCtx)
 const sourceId = computed(() => source.value?.sourceId ?? '')
@@ -341,6 +340,7 @@ function nextPage() {
 
 // 详情 drawer
 const detail = reactive<{ visible: boolean; row: DataRow | null }>({ visible: false, row: null })
+const taskInst = reactive<{ visible: boolean; sourceId: string; parentId: string | null }>({ visible: false, sourceId: '', parentId: null })
 function onRowClick(r: DataRow) {
   detail.row = r
   detail.visible = true
@@ -354,7 +354,9 @@ function onRowAction(r: DataRow, cmd: string) {
     editing.value = false
     closeParentDetail()
   } else if (cmd === 'tasks') {
-    router.push({ path: '/runs', query: { dataId: r.dataId } })
+    taskInst.sourceId = r.sourceId
+    taskInst.parentId = r.dataId
+    taskInst.visible = true
   }
 }
 
@@ -636,6 +638,12 @@ async function saveEdit() {
         </div>
       </div>
     </el-drawer>
+    <TaskInstDialog
+      v-model="taskInst.visible"
+      :source-id="taskInst.sourceId"
+      :parent-id="taskInst.parentId"
+      :can-write="false"
+    />
   </main>
 </template>
 

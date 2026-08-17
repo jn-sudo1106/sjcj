@@ -28,6 +28,7 @@ const meta: DataTableMeta = { tableId: 't1', tableName: 'T1', rowCount: 0, field
 const stubs = {
   SiteTableSelect: { name: 'SiteTableSelect', template: '<div />', emits: ['update:modelValue'] },
   SiteSourceSelect: { name: 'SiteSourceSelect', template: '<div />', emits: ['update:modelValue'] },
+  TaskInstDialog: { name: 'TaskInstDialog', props: ['modelValue', 'sourceId', 'parentId', 'canWrite'], template: '<div />' },
   ElDrawer: true,
 }
 
@@ -154,6 +155,20 @@ describe('SiteDataView · 全部源（表筛选）', () => {
     await flushPromises()
 
     expect(rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ dataId: '123', sourceId: 'a' }))
+  })
+
+  it('行内查后续任务实例按当前行的 sourceId 和 dataId 打开任务弹窗', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['a'])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [row('a', '123')] })
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('row-action', row('a', '123'), 'tasks')
+
+    const dialog = wrapper.findComponent({ name: 'TaskInstDialog' })
+    expect(dialog.props()).toMatchObject({ modelValue: true, sourceId: 'a', parentId: '123', canWrite: false })
   })
 
   it('点击加载更多会继续归并查询，不重复已展示的行', async () => {
