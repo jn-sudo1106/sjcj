@@ -44,17 +44,9 @@ const railOpen = ref(true)
 // .rv-shell 内部，会跟着一起进全屏；祖先链上没有 transform/filter/contain，fixed 能正常
 // 逃逸到视口（已核对 AppShell.vue / FlowCanvas/index.vue）。
 const fullscreen = ref(false)
-// 进全屏顺手收起轨道（全屏就是冲着"多看数据"去的），但收起后展开按钮还在，全屏里想看
-// 拓扑随时能展开——不像之前那样在全屏里把轨道锁死。退出全屏恢复进来之前的折叠状态。
-let railBeforeFullscreen = true
-watch(fullscreen, (on) => {
-  if (on) {
-    railBeforeFullscreen = railOpen.value
-    railOpen.value = false
-  } else {
-    railOpen.value = railBeforeFullscreen
-  }
-})
+// 全屏不动轨道（0819 会议 N1-2）：删掉节点下拉后，流程图是唯一的节点选择器，
+// 进全屏再把它自动收起来，等于逼用户先想起来去点"展开流程"才能切节点。
+// 节点选择在全屏与非全屏下应当完全一致；想让出纵向空间的人自己点折叠即可。
 function onWindowKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape' && fullscreen.value) fullscreen.value = false
 }
@@ -590,8 +582,9 @@ async function saveEdit() {
 
 <template>
   <main class="rv-shell" :class="{ 'is-fullscreen': fullscreen }">
-    <!-- 全屏是"只看数据"的模式：源信息头和节点轨道让位，筛选行与表头行（含发起抓取、
-         输入/输出切换、分页、列 ▾）全部保留——不然全屏就只能看不能用了。 -->
+    <!-- 全屏是"只看数据"的模式：只有源信息头让位，节点轨道保留（它是唯一的节点选择器，
+         藏起来就没法切节点了）；筛选行与表头行（含发起抓取、输入/输出切换、分页、列 ▾）
+         全部保留——不然全屏就只能看不能用了。 -->
     <CanvasHeader v-if="!fullscreen" />
 
     <!-- 折叠开关和「查看条件」都放在轨道自己身上：控件应该长在它所控制的东西上，
@@ -622,17 +615,13 @@ async function saveEdit() {
       <template v-if="pathConditionLabel"><dt>路径条件</dt><dd>{{ pathConditionLabel }}</dd></template>
     </dl>
 
-    <!-- 这一行只放"怎么查"：选哪个节点 + 各个筛选条件 + 查询/清空。节点上下文（折叠开关、
-         查看条件）已经上移到轨道，输入/输出/执行方式在下面的表头行，各归各位。 -->
+    <!-- 这一行只放"怎么查"：各个筛选条件 + 查询/清空。节点选择归流程图（0819 会议 05:13
+         "上面那个和下面那个不是两个都有了吗？只要有一个就行了"——原来这里还有一个与轨道
+         完全同步的节点下拉，同一件事两个控件，已删）；节点上下文（折叠开关、查看条件）在
+         轨道上，输入/输出/执行方式在下面的表头行，各归各位。 -->
     <div v-if="selectedNodeId" class="ctx-summary" data-testid="data-node-context">
       <!-- 全屏时源信息头被藏起来了，这里把源名补回来，否则看不出在看哪个源的数据。 -->
       <span v-if="fullscreen" class="rv-fs-source" :title="source?.name || sourceId">{{ source?.name || sourceId }}</span>
-      <select :value="selectedNodeId" class="rv-input" data-testid="data-node-filter" aria-label="流程节点" @change="onSelectNode(($event.target as HTMLSelectElement).value)">
-        <option v-if="!allNodes.length" value="">节点（无）</option>
-        <option v-for="node in allNodes" :key="node.id" :value="node.id">
-          {{ node.cfg.title || node.id }}
-        </option>
-      </select>
       <template v-if="hasAnyTable">
         <input v-model="filters.dataId" class="rv-input id" placeholder="数据 ID" @keyup.enter="runQuery" />
         <input v-model="filters.parentId" class="rv-input id" placeholder="父 ID" @keyup.enter="runQuery" />
@@ -952,7 +941,6 @@ async function saveEdit() {
 @media (prefers-reduced-motion: reduce) { .ctx-summary .rv-input.flex { transition: none; } }
 /* select 会自己撑到最长选项的宽度：节点名一长就吃掉 230px+，把 SQL 挤没。截断显示，
    当前选中是哪个节点在轨道上也有高亮，信息不会丢。 */
-.ctx-summary .rv-input[data-testid="data-node-filter"] { max-width: 168px; }
 .ctx-summary .rv-input.st { width: 104px; min-width: 0; flex: none; }
 /* 再兜一层：窗口真的很窄、SQL 框缩到底之后整行还是会横向滚动，这时把查询/清空钉在右端，
    保证任何宽度下都点得到。 */

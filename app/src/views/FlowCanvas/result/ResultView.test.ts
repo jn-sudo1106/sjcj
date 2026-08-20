@@ -4,6 +4,7 @@ import { DOMWrapper, flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ResultView from './ResultView.vue'
+import ProcessNodeRail from './ProcessNodeRail.vue'
 import { dataApi, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
@@ -76,9 +77,11 @@ describe('ResultView', () => {
     })
     await flushPromises()
 
-    const nodeFilter = wrapper.find<HTMLSelectElement>('[data-testid="data-node-filter"]')
-    expect(nodeFilter.exists()).toBe(true)
-    expect(nodeFilter.element.value).not.toBe('')
+    const rail = wrapper.findComponent(ProcessNodeRail)
+    expect(rail.exists()).toBe(true)
+    expect(rail.props('modelValue')).not.toBe('')
+    // 节点选择只此一处：与流程图重复的下拉已删（0819 会议 05:13）
+    expect(wrapper.find('[data-testid="data-node-filter"]').exists()).toBe(false)
   })
 
   it('行内查后续任务实例按当前行打开只读任务弹窗', async () => {
@@ -122,8 +125,10 @@ describe('ResultView', () => {
   })
 })
 
+// 节点选择统一走流程图（0819 N1-1 删掉了与之重复的下拉）。shallowMount 下 ProcessNodeRail
+// 被自动 stub、内部按钮不渲染，所以直接对组件发 update:modelValue——等价于点它的节点按钮。
 async function selectNode(wrapper: ReturnType<typeof shallowMount>, nodeId: string) {
-  await wrapper.find<HTMLSelectElement>('[data-testid="data-node-filter"]').setValue(nodeId)
+  await wrapper.findComponent(ProcessNodeRail).vm.$emit('update:modelValue', nodeId)
   await flushPromises()
 }
 
@@ -162,8 +167,8 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     const wrapper = mountResultView()
     await flushPromises()
 
-    const options = wrapper.find('[data-testid="data-node-filter"]').findAll('option')
-    expect(options.some((o) => o.element.value === decId)).toBe(true)
+    const railNodes = wrapper.findComponent(ProcessNodeRail).props('layout').nodes
+    expect(railNodes.some((n: { id: string }) => n.id === decId)).toBe(true)
 
     await selectNode(wrapper, decId)
 
@@ -288,10 +293,11 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     await wrapper.get('[data-testid="data-fullscreen-toggle"]').trigger('click')
 
     expect(wrapper.find('.rv-shell').classes()).toContain('is-fullscreen')
-    // 让位的：源信息头、节点轨道
-    expect(wrapper.find('[data-testid="data-process-rail"]').exists()).toBe(false)
-    // 保留的：筛选条件、发起抓取——全屏不是"只能看不能用"
-    expect(wrapper.find('[data-testid="data-node-filter"]').exists()).toBe(true)
+    // 让位的：只有源信息头
+    expect(wrapper.findComponent({ name: 'CanvasHeader' }).exists()).toBe(false)
+    // 保留的：节点轨道（0819 N1-2——它是唯一的节点选择器，全屏藏起来就没法切节点了）、
+    // 筛选条件、发起抓取——全屏不是"只能看不能用"
+    expect(wrapper.find('[data-testid="data-process-rail"]').exists()).toBe(true)
     expect(wrapper.find('input[placeholder="数据 ID"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="data-exec-btn"]').exists()).toBe(true)
     // 源信息头没了，源名要在筛选行补回来，否则看不出在看哪个源的数据

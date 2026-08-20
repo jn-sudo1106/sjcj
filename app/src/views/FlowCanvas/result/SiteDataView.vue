@@ -29,6 +29,7 @@ import {
   type NodeConfig, type BranchSeed, type FlowBranchGroup,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import DataGrid from './DataGrid.vue'
+import ProcessNodeRail from './ProcessNodeRail.vue'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 import SiteTableSelect from './components/SiteTableSelect.vue'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
@@ -40,8 +41,8 @@ const PAGE_SIZE = 20
 const MAX_PARALLEL_REQUESTS = 4
 
 // 全屏（参考 ResultView.vue 的具体源数据视图）：整个面板 position:fixed 铺满视口，不复制
-// 模板、不引入弹层——这里没有 ResultView.vue 那样需要收起的节点轨道（节点选择本来就是
-// 纯下拉，不占额外空间），所以不用像那边一样记录/恢复"进全屏前的折叠状态"。
+// 模板、不引入弹层。轨道在全屏下不做任何自动折叠——它是唯一的节点选择器，藏起来就没法
+// 切节点了（0819 N1-2，ResultView 那边也已按同一口径去掉了自动收起）。
 const fullscreen = ref(false)
 function onWindowKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape' && fullscreen.value) fullscreen.value = false
@@ -115,9 +116,10 @@ const processLayout = computed(() => (flowData.value
   : null))
 
 const selectedNodeId = ref('')
-// 节点选择用跟"选表"一样的纯下拉（不复用流程画布的节点链路图/ProcessNodeRail）。
-const nodeKeyword = ref('')
-const nodeSelectOpen = ref(false)
+// 节点选择复用流程图 ProcessNodeRail，与具体源结果视图（ResultView.vue）完全同构
+// ——0819 会议 04:33"这个页面不是应该搞成跟单个源一样的效果"、04:47"给我加个流程图"。
+// 本文件此前的"用跟选表一样的纯下拉、不复用 ProcessNodeRail"的决定已被该次会议推翻。
+const railOpen = ref(true)
 
 const selectedCfg = computed<NodeConfig | undefined>(() => allNodes.value.find((n) => n.id === selectedNodeId.value)?.cfg)
 const outputTableId = computed(() => (selectedCfg.value ? nodeOutputTable(selectedCfg.value) : ''))
@@ -144,24 +146,6 @@ watch(allNodes, (nodes) => {
 function onSelectNode(id: string) {
   if (!id || id === selectedNodeId.value) return
   selectedNodeId.value = id
-}
-
-const filteredNodes = computed(() => {
-  const q = nodeKeyword.value.trim().toLowerCase()
-  if (!q) return allNodes.value
-  return allNodes.value.filter((n) => (n.cfg.title || '').toLowerCase().includes(q) || n.id.toLowerCase().includes(q))
-})
-function pickNode(id: string) {
-  onSelectNode(id)
-  nodeKeyword.value = ''
-  nodeSelectOpen.value = false
-}
-function onNodeSelectFocus() {
-  nodeSelectOpen.value = true
-}
-function onNodeSelectBlur() {
-  // 留一点时间给点击选项的 mousedown 先触发，不然 blur 先关掉下拉，点击就落空了。
-  window.setTimeout(() => { nodeSelectOpen.value = false }, 150)
 }
 
 // ---------- 全部源 / 具体源共用的查询 + 归并分页 ----------
@@ -388,33 +372,6 @@ const detailFields = computed(() => {
     <div class="sdv2-toolbar">
       <SiteSourceSelect v-model="selectedSourceId" :site-id="siteId" />
       <SiteTableSelect v-if="!selectedSourceId" v-model="tableId" :site-id="siteId" />
-      <div v-else-if="processLayout" class="sns-field">
-        <input
-          v-model="nodeKeyword"
-          class="sns-input"
-          data-testid="source-node-select-input"
-          :placeholder="selectedCfg ? (selectedCfg.title || selectedNodeId) : '选择节点（按节点名称搜索）'"
-          @focus="onNodeSelectFocus"
-          @mousedown="onNodeSelectFocus"
-          @blur="onNodeSelectBlur"
-        />
-        <div v-if="nodeSelectOpen" class="sns-options" data-testid="source-node-select-options">
-          <div v-if="!filteredNodes.length" class="sns-empty">{{ nodeKeyword ? '没有匹配的节点' : '该源没有可查看数据的节点' }}</div>
-          <button
-            v-for="node in filteredNodes"
-            :key="node.id"
-            type="button"
-            class="sns-option"
-            data-testid="source-node-select-option"
-            :data-node-id="node.id"
-            :class="{ active: node.id === selectedNodeId }"
-            @mousedown.prevent="pickNode(node.id)"
-          >
-            <span class="sns-option-name">{{ node.cfg.title || node.id }}</span>
-            <span v-if="nodeOutputTable(node.cfg)" class="sns-option-hint">输出 {{ nodeOutputTable(node.cfg) }}</span>
-          </button>
-        </div>
-      </div>
       <template v-if="effectiveTableId">
         <input v-model="filters.dataId" class="sdv2-input" placeholder="数据 ID" @keyup.enter="runQuery" />
         <input v-model="filters.parentId" class="sdv2-input" placeholder="父 ID" @keyup.enter="runQuery" />
@@ -428,6 +385,26 @@ const detailFields = computed(() => {
         <button class="rc-btn primary" type="button" @click="runQuery">查询</button>
         <button class="rc-btn" type="button" @click="clearFilters">清空</button>
       </template>
+    </div>
+
+    <!-- 具体源：节点选择走流程图，与 ResultView.vue 同构（0819 N1-3/N1-4）。放在工具行之后、
+         数据之前——先定范围（选源）、再定节点、最后看数据；"全部源"态没有唯一流程，
+         不渲染轨道（沿用 0812 §1.1-5，那时是选表）。 -->
+    <div v-if="selectedSourceId && processLayout" class="sdv2-railbox">
+      <div v-if="railOpen" class="sdv2-bar" data-testid="site-data-process-rail">
+        <ProcessNodeRail :model-value="selectedNodeId" :layout="processLayout" @update:model-value="onSelectNode" />
+        <div v-if="!allNodes.length" class="sdv2-bar-empty">该源没有可查看数据的节点</div>
+      </div>
+      <div class="sdv2-rail-ctl">
+        <button
+          type="button"
+          class="sdv2-rail-toggle"
+          :class="{ open: railOpen }"
+          data-testid="site-data-rail-toggle"
+          :title="railOpen ? '收起流程节点轨道' : '展开流程节点轨道'"
+          @click="railOpen = !railOpen"
+        >{{ railOpen ? '收起流程' : '展开流程' }} <span class="arrow">▾</span></button>
+      </div>
     </div>
 
     <template v-if="selectedSourceId && flowLoadError">
@@ -578,14 +555,14 @@ const detailFields = computed(() => {
 .sdv2-notice.error { border-bottom-color: #fecaca; background: #fef2f2; color: #b91c1c; }
 .rc-btn.ghost { background: transparent; border-color: var(--rc-border); color: var(--rc-text-2); }
 
-.sns-field { position: relative; display: flex; align-items: center; gap: 6px; min-width: 220px; }
-.sns-input { flex: 1; height: 28px; padding: 0 9px; border: 1px solid var(--rc-border); border-radius: 6px; font-size: 12px; outline: none; background: #fff; }
-.sns-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
-.sns-options { position: absolute; z-index: 5; top: 32px; left: 0; right: 0; min-width: 260px; max-height: 260px; overflow-y: auto; border: 1px solid var(--rc-border); border-radius: 7px; background: #fff; box-shadow: 0 12px 28px -12px rgba(15, 23, 42, 0.3); }
-.sns-empty { padding: 10px; color: var(--rc-faint); font-size: 12px; text-align: center; }
-.sns-option { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border: 0; border-bottom: 1px solid var(--rc-border-soft); background: #fff; color: var(--rc-text-2); font-size: 12px; text-align: left; cursor: pointer; }
-.sns-option:last-child { border-bottom: 0; }
-.sns-option:hover, .sns-option.active { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
-.sns-option-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.sns-option-hint { flex: none; font-family: var(--rc-mono, monospace); font-size: 10px; color: var(--rc-faint); }
+/* 节点轨道：与 ResultView.vue 的 .rv-railbox 一套取值，两个数据视图的流程图观感必须一致
+   （0819 N1-4）。折叠开关长在轨道自己身上——控件应该长在它所控制的东西上。 */
+.sdv2-railbox { position: relative; min-height: 32px; border-bottom: 1px solid var(--rc-border-soft); background: #f8fafc; }
+.sdv2-bar { position: relative; padding: 8px 0; background: #f8fafc; overflow: auto; }
+.sdv2-bar-empty { color: var(--rc-faint); font-size: 12px; padding: 16px; text-align: center; }
+.sdv2-rail-ctl { position: absolute; top: 4px; right: 10px; z-index: 2; display: flex; align-items: center; gap: 6px; }
+.sdv2-rail-toggle { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 999px; background: #fff; color: var(--rc-text-2); font-size: 11.5px; cursor: pointer; }
+.sdv2-rail-toggle:hover { border-color: var(--rc-primary); color: var(--rc-primary-ink); }
+.sdv2-rail-toggle .arrow { display: inline-block; transition: transform .18s ease; }
+.sdv2-rail-toggle.open .arrow { transform: rotate(180deg); }
 </style>

@@ -46,11 +46,11 @@ async function pickSource(wrapper: ReturnType<typeof mount>, sourceId: string) {
   await select.vm.$emit('update:modelValue', sourceId)
   await flushPromises()
 }
-// 节点选择用跟"选表"一样的纯下拉：先点输入框展开，再点目标节点选项——不是流程画布的
-// 节点链路图（那个太"流程图"了，用户明确要求换成纯下拉，见 2026-08-14 第三次纠偏）。
+// 节点选择走流程图 ProcessNodeRail，与具体源结果视图同构（0819 N1-3；此前的"纯下拉"
+// 决定已被 0819 会议 04:47"给我加个流程图"推翻）。这里是 mount 不是 shallowMount，
+// 轨道真实渲染，直接点节点按钮即可。
 async function selectNode(wrapper: ReturnType<typeof mount>, nodeId: string) {
-  await wrapper.get('[data-testid="source-node-select-input"]').trigger('focus')
-  await wrapper.get(`[data-node-id="${nodeId}"]`).trigger('mousedown')
+  await wrapper.get(`[data-node-id="${nodeId}"]`).trigger('click')
   await flushPromises()
 }
 
@@ -327,7 +327,7 @@ describe('SiteDataView · 全部源 ⇔ 具体源切换（方案 §6.5：任何�
     // 表选择器不见了，换成节点下拉；具体源分支自己走 sourceApi/flowApi，
     // 不该再碰全部源分支的 siteSources/distinctSource
     expect(wrapper.findComponent({ name: 'SiteTableSelect' }).exists()).toBe(false)
-    expect(wrapper.find('[data-testid="source-node-select-input"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="site-data-process-rail"]').exists()).toBe(true)
     expect(siteSources).not.toHaveBeenCalled()
     expect(distinctSource).not.toHaveBeenCalled()
   })
@@ -350,7 +350,7 @@ describe('SiteDataView · 全部源 ⇔ 具体源切换（方案 §6.5：任何�
 
     await pickSource(wrapper, '')
 
-    expect(wrapper.find('[data-testid="source-node-select-input"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="site-data-process-rail"]').exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'SiteTableSelect' }).exists()).toBe(true)
     expect(wrapper.text()).toContain('请先选择一张表')
   })
@@ -385,7 +385,7 @@ describe('SiteDataView · 具体源（节点筛选，纯查看——2026-08-14 �
     await pickSource(wrapper, '391007768')
 
     expect(wrapper.text()).toContain('源不存在或加载失败')
-    expect(wrapper.find('[data-testid="source-node-select-input"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="site-data-process-rail"]').exists()).toBe(false)
   })
 
   it('没有已保存流程时，按步骤用 buildSourceSeed 拼默认骨架并展示节点', async () => {
@@ -401,7 +401,9 @@ describe('SiteDataView · 具体源（节点筛选，纯查看——2026-08-14 �
 
     // 默认选中末端节点：详情解析（buildSourceSeed 按步骤拼出的最后一个真实节点）——
     // 纯查看态没有节点摘要行了，选中的节点名只显示在下拉输入框的 placeholder 里。
-    expect(wrapper.get('[data-testid="source-node-select-input"]').attributes('placeholder')).toBe('详情解析')
+    // 选中节点由轨道自己高亮，不再有下拉 placeholder 承载"当前是哪个节点"
+    expect(wrapper.get('[data-node-id="391007768-s2"]').classes()).toContain('active')
+    expect(wrapper.get('[data-node-id="391007768-s2"]').text()).toContain('详情解析')
   })
 
   it('有已保存流程（flowLoad 返回非空）时优先用它，不再用 buildSourceSeed 拼骨架', async () => {
@@ -420,7 +422,7 @@ describe('SiteDataView · 具体源（节点筛选，纯查看——2026-08-14 �
     const wrapper = mountView()
     await pickSource(wrapper, '391007768')
 
-    expect(wrapper.get('[data-testid="source-node-select-input"]').attributes('placeholder')).toBe('自定义节点')
+    expect(wrapper.get('.sdv2-bar .pnr-node.active').text()).toContain('自定义节点')
     // sourceSteps 依然会拉（并行请求的一部分），但结果被 persistedDef 盖过，不影响展示
     expect(sourceSteps).toHaveBeenCalled()
   })
