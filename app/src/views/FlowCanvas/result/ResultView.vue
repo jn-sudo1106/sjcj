@@ -809,7 +809,9 @@ async function saveEdit() {
         <div class="rv-d-head">
           <div>
             <div class="rv-d-title">{{ detail.row.title }}</div>
-            <div class="rv-d-sub">数据 ID {{ detail.row.dataId }}</div>
+            <!-- 源 ID 跟数据 ID 并列：详情是"这条数据是什么"的完整视图，
+                 光有数据 ID 看不出它属于哪个源（0819 会议 09:23～09:44）。 -->
+            <div class="rv-d-sub">数据 ID {{ detail.row.dataId }} · 源 ID {{ detail.row.sourceId || sourceId }}</div>
             <button
               v-if="canDrillParent"
               type="button"

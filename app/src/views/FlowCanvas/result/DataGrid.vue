@@ -43,16 +43,22 @@ function toggleAll() {
   emit('update:selectedIds', allChecked.value ? [] : props.rows.map((r) => r.dataId))
 }
 
-// ENTRY_ID 是每行的真实主键（legacyAdapters dataId 就取自它），但旧平台各表的
-// fields schema 里基本不声明这一列，导致列表上根本看不到——用户想核对/填批量操作
-// 的 ID 范围时无从下手（2026-08-19 用户反馈）。这里补一个不依赖 schema 的合成列，
-// 默认隐藏（不干扰原有列），要用时从「列 ▾」里勾出来。
+// 两个身份列都不依赖 schema，靠合成列补出来——旧平台各表的 fields 里基本不声明它们，
+// 导致列表上既看不出"这条数据的 ID"，也看不出"它属于哪个源"：
+//   ENTRY_ID  每行真实主键（legacyAdapters 的 dataId 取自它）
+//   SOURCE_ID 该行所属源（DataRow.sourceId）
+// 0819 会议 08:16"你数据就没展示怎么说（还怎么按数据 ID 查）"→ 08:20"我没把这个主键字段
+// 放出来"；09:23"你肯定要有个地方展示这个选在哪一个源"→ 09:33"在你这个数据节点里面、
+// 字段里面应该有"→ 09:44"不是源 ID，你的 430114955 这个 ID 应该有的"。
+// 故两列**默认可见**（N0 那批 ENTRY_ID 曾默认隐藏，与该要求相反，此处纠正）；
+// 嫌占地方的人从「列 ▾」自行关掉。
 const ENTRY_ID_COL = { prop: 'ENTRY_ID', type: 'string', desc: '主键 ID' }
-const cols = computed(() => (props.meta ? [ENTRY_ID_COL, ...props.meta.fields] : []))
+const SOURCE_ID_COL = { prop: 'SOURCE_ID', type: 'string', desc: '所属源 ID' }
+const cols = computed(() => (props.meta ? [ENTRY_ID_COL, SOURCE_ID_COL, ...props.meta.fields] : []))
 
 // 列可见性控制（Phase 4.3）：切换表时重置，避免残留跟别的表同名字段冲突的隐藏状态
-const hiddenCols = ref<Set<string>>(new Set(['ENTRY_ID']))
-watch(() => props.meta?.tableId, () => { hiddenCols.value = new Set(['ENTRY_ID']) })
+const hiddenCols = ref<Set<string>>(new Set())
+watch(() => props.meta?.tableId, () => { hiddenCols.value = new Set() })
 const visibleCols = computed(() => cols.value.filter((f) => !hiddenCols.value.has(f.prop)))
 function toggleCol(prop: string) {
   const next = new Set(hiddenCols.value)
@@ -72,6 +78,7 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 // 不是接口没数据，是取错了 key。
 function cellText(row: DataRow, field: { prop: string; columnName?: string }): string {
   if (field.prop === 'ENTRY_ID') return row.dataId || '—'
+  if (field.prop === 'SOURCE_ID') return row.sourceId || '—'
   const v = row.values?.[field.columnName ?? field.prop]
   if (v === undefined || v === null) return '—'
   if (typeof v === 'object') return JSON.stringify(v)

@@ -476,7 +476,7 @@ const detailFields = computed(() => {
           <div>
             <div class="sdv2-d-title">{{ detail.row.title }}</div>
             <div class="sdv2-d-sub">
-              数据 ID {{ detail.row.dataId }}<template v-if="!selectedSourceId"> · 所属源 {{ sourceNames[detail.row.sourceId] || detail.row.sourceId }}</template>
+              数据 ID {{ detail.row.dataId }} · 源 ID {{ detail.row.sourceId }}<template v-if="!selectedSourceId && sourceNames[detail.row.sourceId]"> {{ sourceNames[detail.row.sourceId] }}</template>
             </div>
             <button
               v-if="canDrillParent"

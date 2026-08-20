@@ -3,6 +3,14 @@ import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import DataGrid from './DataGrid.vue'
 
+// 按表头文字定位单元格：ENTRY_ID / SOURCE_ID 两个身份合成列固定占最前面，
+// 用 nth-child 写死列序号的断言会随它们的显隐而碎（0819 N1-5）。
+function cellByHeader(wrapper: ReturnType<typeof mount>, header: string): string {
+  const idx = wrapper.findAll('thead th').findIndex((th) => th.text() === header)
+  if (idx < 0) throw new Error(`表头里没有「${header}」列`)
+  return wrapper.findAll('tbody tr:first-child td')[idx].text()
+}
+
 describe('DataGrid', () => {
   it('全站范围传入源映射时显示所属源名称', () => {
     const wrapper = mount(DataGrid, {
@@ -28,7 +36,20 @@ describe('DataGrid', () => {
     })
 
     // "状态"列本来就没传 state，会正常显示"—"，只断言标题格自己不是"—"
-    expect(wrapper.get('tbody td:nth-child(1)').text()).toBe('真实标题')
+    expect(cellByHeader(wrapper, 'title')).toBe('真实标题')
+  })
+
+  it('ENTRY_ID / SOURCE_ID 两个身份列默认可见——旧平台各表 schema 不声明它们，不补出来就既看不出数据 ID 也看不出属于哪个源（0819 会议 08:16 / 09:44）', () => {
+    const wrapper = mount(DataGrid, {
+      props: {
+        meta: { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'name', type: 'string', desc: '名称' }] },
+        rows: [{ dataId: 'd1', title: '', summary: '', sourceId: '430016500', acceptState: 'accepted', values: { name: '数据 A' } }],
+      },
+      global: { stubs: { ElDropdown: true } },
+    })
+
+    expect(cellByHeader(wrapper, 'ENTRY_ID')).toBe('d1')
+    expect(cellByHeader(wrapper, 'SOURCE_ID')).toBe('430016500')
   })
 
   it('没有 columnName 时（比如兜底推断出的 meta）退回用 prop 取值', () => {
