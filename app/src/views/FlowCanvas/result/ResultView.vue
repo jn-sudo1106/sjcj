@@ -343,6 +343,22 @@ function onSelectNode(id: string) {
   page.value = 1
   ctxOpen.value = false
   selectedRowIds.value = []
+  sortField.value = ''
+  sortOrder.value = ''
+}
+
+// 排序（迁移旧平台 EntryList2.vue 的 @sort-change，0819 补迁）：状态由本页持有，
+// DataGrid 只负责显示与派发；载荷拼装在 api/index.ts，与旧平台同为 `(列名+ 0)` + ASC/DESC。
+const sortField = ref('')
+const sortOrder = ref<'ascend' | 'descend' | ''>('')
+// 旧平台按总行数 > 50 万关掉业务列排序（watch pageForm.total → allSort）：K 列没有索引，
+// 大表上排序会拖垮库。ENTRY_ID / SOURCE_ID / STATE 这些固定列不受限，旧平台也是始终可排。
+const allowColumnSort = computed(() => total.value <= 500000)
+function onSortChange(field: string, order: 'ascend' | 'descend' | '') {
+  sortField.value = field
+  sortOrder.value = order
+  page.value = 1
+  void loadData()
 }
 
 // 浏览状态实时写入源页签快照，切换后恢复。
@@ -418,6 +434,8 @@ async function loadData() {
       parentId: filters.parentId || undefined,
       state: filters.state || undefined,
       sql: filters.sql || undefined,
+      sortField: sortField.value || undefined,
+      sortOrder: sortOrder.value || undefined,
       page: page.value,
       size: size.value,
     }
@@ -691,6 +709,10 @@ async function saveEdit() {
         :selected-id="detail.row?.dataId"
         :selectable="canPickRows"
         :selected-ids="selectedRowIds"
+        :sort-field="sortField"
+        :sort-order="sortOrder"
+        :allow-column-sort="allowColumnSort"
+        @sort-change="onSortChange"
         @update:selected-ids="selectedRowIds = $event"
         @row-click="onRowClick"
         @row-action="onRowAction"

@@ -6,7 +6,8 @@ import DataGrid from './DataGrid.vue'
 // 按表头文字定位单元格：ENTRY_ID / SOURCE_ID 两个身份合成列固定占最前面，
 // 用 nth-child 写死列序号的断言会随它们的显隐而碎（0819 N1-5）。
 function cellByHeader(wrapper: ReturnType<typeof mount>, header: string): string {
-  const idx = wrapper.findAll('thead th').findIndex((th) => th.text() === header)
+  // 列头尾部带排序指示符（↕/↑/↓），按去掉它之后的文字匹配
+  const idx = wrapper.findAll('thead th').findIndex((th) => th.text().replace(/[↕↑↓]\s*$/, '').trim() === header)
   if (idx < 0) throw new Error(`表头里没有「${header}」列`)
   return wrapper.findAll('tbody tr:first-child td')[idx].text()
 }
@@ -49,8 +50,10 @@ describe('DataGrid', () => {
       global: { stubs: { ElDropdown: true } },
     })
 
-    expect(cellByHeader(wrapper, '主键 ID-ENTRY_ID')).toBe('d1')
-    expect(cellByHeader(wrapper, '所属源 ID-SOURCE_ID')).toBe('430016500')
+    // 这两个合成列用短标签，对齐旧平台固定列（ENTRY_ID 列 label="ENTRY_ID"、SOURCE_ID 列 label="源"）；
+    // 跟动态列一样拼成「主键 ID-ENTRY_ID」会长到把列头挤成两行
+    expect(cellByHeader(wrapper, 'ENTRY_ID')).toBe('d1')
+    expect(cellByHeader(wrapper, '源')).toBe('430016500')
   })
 
   it('列头是「中文名-物理列名」，对齐旧平台 EntryList2.vue 的 itemName-columnName——SQL 条件框拼的是物理列名，界面不暴露它就等于把人往坑里引', () => {
@@ -69,10 +72,53 @@ describe('DataGrid', () => {
       global: { stubs: { ElDropdown: true } },
     })
 
-    const heads = wrapper.findAll('thead th').map((th) => th.text())
+    const heads = wrapper.findAll('thead th').map((th) => th.text().replace(/[↕↑↓]\s*$/, '').trim())
     expect(heads).toContain('标题-K1')
     expect(heads).toContain('K2') // desc 缺失时只显示物理列名
     expect(heads).toContain('推断列-inferred') // 没有 columnName 的推断列退回 prop
+  })
+
+  it('点列头排序：三态循环升→降→取消，派发的是物理列名（迁移旧平台 EntryList2.vue 的 @sort-change）', async () => {
+    const wrapper = mount(DataGrid, {
+      props: {
+        meta: { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'title', columnName: 'K1', type: 'string', desc: '标题' }] },
+        rows: [],
+      },
+      global: { stubs: { ElDropdown: true } },
+    })
+    const th = wrapper.findAll('thead th').find((t) => t.text().startsWith('标题-K1'))!
+
+    await th.trigger('click')
+    expect(wrapper.emitted('sort-change')![0]).toEqual(['K1', 'ascend'])
+
+    await wrapper.setProps({ sortField: 'K1', sortOrder: 'ascend' })
+    await th.trigger('click')
+    expect(wrapper.emitted('sort-change')![1]).toEqual(['K1', 'descend'])
+
+    // 第三次取消。旧平台这里有瑕疵：u-table 把 order 置 null 后它一律当降序，取消不掉；
+    // 我们的查询层支持不传 sortField，故实现成真正的三态。
+    await wrapper.setProps({ sortField: 'K1', sortOrder: 'descend' })
+    await th.trigger('click')
+    expect(wrapper.emitted('sort-change')![2]).toEqual(['', ''])
+  })
+
+  it('allowColumnSort=false（旧平台总行数 > 50 万）时业务列不可排，但 ENTRY_ID/SOURCE_ID 这类固定列仍可排', async () => {
+    const wrapper = mount(DataGrid, {
+      props: {
+        meta: { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'title', columnName: 'K1', type: 'string', desc: '标题' }] },
+        rows: [],
+        allowColumnSort: false,
+      },
+      global: { stubs: { ElDropdown: true } },
+    })
+
+    const kCol = wrapper.findAll('thead th').find((t) => t.text().startsWith('标题-K1'))!
+    await kCol.trigger('click')
+    expect(wrapper.emitted('sort-change')).toBeUndefined()
+
+    const idCol = wrapper.findAll('thead th').find((t) => t.text().startsWith('ENTRY_ID'))!
+    await idCol.trigger('click')
+    expect(wrapper.emitted('sort-change')![0]).toEqual(['ENTRY_ID', 'ascend'])
   })
 
   it('没有 columnName 时（比如兜底推断出的 meta）退回用 prop 取值', () => {

@@ -2,7 +2,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { DataTableMeta, DataRow } from '@/api'
 
-const props = defineProps<{
+// withDefaults 是必须的：Vue 3 对 boolean 类型的 prop 有 casting 规则——未传时值是 false
+// 而不是 undefined，所以 `props.allowColumnSort !== false` 这种写法会把"没传"误判成"禁止排序"。
+const props = withDefaults(defineProps<{
   meta: DataTableMeta | null
   rows: DataRow[]
   loading?: boolean
@@ -18,8 +20,40 @@ const props = defineProps<{
    *  不影响其余用法（全部源归并视图、输出数据页签都不需要勾选）。 */
   selectable?: boolean
   selectedIds?: string[]
-}>()
+  /** 当前排序列（发给后端的物理列名）与方向；由调用方持有，表格只负责显示与派发 */
+  sortField?: string
+  sortOrder?: 'ascend' | 'descend' | ''
+  /** 是否允许对业务列（K 列）排序。旧平台 EntryList2.vue 按总行数 > 50 万关掉
+   *  （watch pageForm.total → allSort），大表按无索引的业务列排序会拖垮库。
+   *  ENTRY_ID / SOURCE_ID / 状态这些固定列不受此限制，旧平台也是始终可排。 */
+  allowColumnSort?: boolean
+}>(), { allowColumnSort: true })
 const showActions = computed(() => !props.compact && !props.hideActions)
+
+// 排序（迁移旧平台 EntryList2.vue 的 @sort-change）：发给后端的是物理列名，
+// 载荷拼装在 api/index.ts（field=`(列名+ 0)`、type=' ASC '/' DESC '），与旧平台一致。
+const FIXED_SORTABLE = new Set(['ENTRY_ID', 'SOURCE_ID', 'STATE'])
+function sortKeyOf(field: { prop: string; columnName?: string }): string {
+  return field.columnName || field.prop
+}
+function canSort(field: { prop: string; columnName?: string }): boolean {
+  return FIXED_SORTABLE.has(sortKeyOf(field)) || props.allowColumnSort
+}
+function sortIndicator(field: { prop: string; columnName?: string }): string {
+  if (props.sortField !== sortKeyOf(field)) return '↕'
+  return props.sortOrder === 'descend' ? '↓' : '↑'
+}
+// 三态循环：升 → 降 → 取消。旧平台这里有个瑕疵——u-table 的 sortable='custom' 第三次点击
+// 会把 column.order 置 null，而它的 handleSortChange 只判断 'ascending'，else 一律当降序，
+// 于是点到第二次以后就在降序卡住、取消不掉。我们的查询层支持不传 sortField（= 不排序），
+// 故实现成真正的三态，不复刻这个 bug。
+function onSort(field: { prop: string; columnName?: string }) {
+  if (!canSort(field)) return
+  const key = sortKeyOf(field)
+  if (props.sortField !== key) return emit('sort-change', key, 'ascend')
+  if (props.sortOrder === 'ascend') return emit('sort-change', key, 'descend')
+  emit('sort-change', '', '')
+}
 const showSourceCol = computed(() => !!props.sourceNames)
 function sourceLabel(row: DataRow): string {
   return props.sourceNames?.[row.sourceId] ?? row.sourceId
@@ -28,6 +62,7 @@ const emit = defineEmits<{
   (e: 'row-click', row: DataRow): void
   (e: 'row-action', row: DataRow, cmd: string): void
   (e: 'update:selectedIds', ids: string[]): void
+  (e: 'sort-change', field: string, order: 'ascend' | 'descend' | ''): void
 }>()
 
 const selectedSet = computed(() => new Set(props.selectedIds ?? []))
@@ -52,8 +87,11 @@ function toggleAll() {
 // 字段里面应该有"→ 09:44"不是源 ID，你的 430114955 这个 ID 应该有的"。
 // 故两列**默认可见**（N0 那批 ENTRY_ID 曾默认隐藏，与该要求相反，此处纠正）；
 // 嫌占地方的人从「列 ▾」自行关掉。
-const ENTRY_ID_COL = { prop: 'ENTRY_ID', type: 'string', desc: '主键 ID' }
-const SOURCE_ID_COL = { prop: 'SOURCE_ID', type: 'string', desc: '所属源 ID' }
+// label 是列头显式文案，仅这两个合成列有：旧平台 EntryList2.vue 的固定列用的就是短标签
+// （ENTRY_ID 列 label="ENTRY_ID"、SOURCE_ID 列 label="源"），只有动态列才拼 itemName-columnName。
+// 跟着拼成「主键 ID-ENTRY_ID」会长到把列头挤成两行，也偏离旧平台。desc 仍保留给悬浮提示。
+const ENTRY_ID_COL = { prop: 'ENTRY_ID', type: 'string', desc: '主键 ID', label: 'ENTRY_ID' }
+const SOURCE_ID_COL = { prop: 'SOURCE_ID', type: 'string', desc: '所属源 ID', label: '源' }
 const cols = computed(() => (props.meta ? [ENTRY_ID_COL, SOURCE_ID_COL, ...props.meta.fields] : []))
 
 // 列可见性控制（Phase 4.3）：切换表时重置，避免残留跟别的表同名字段冲突的隐藏状态
@@ -82,7 +120,8 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 // 等于把人往坑里引（0819 会议 10:53"条件支持什么开头"的根子）。数据一直都在，只是没渲染。
 // 兜底：没有 columnName 的列（ENTRY_ID/SOURCE_ID 合成列本身就是物理列名，
 // 或 inferTableMeta 推断出的列）退回 prop；desc 缺失时只显示物理列名。
-function colLabel(field: { prop: string; desc?: string; columnName?: string }): string {
+function colLabel(field: { prop: string; desc?: string; columnName?: string; label?: string }): string {
+  if (field.label) return field.label
   const physical = field.columnName || field.prop
   return field.desc && field.desc !== physical ? `${field.desc}-${physical}` : physical
 }
@@ -134,7 +173,14 @@ function stateMeta(s?: string) {
               <input type="checkbox" :checked="allChecked" :indeterminate="someChecked" @change="toggleAll" />
             </th>
             <th v-if="showSourceCol" style="width:140px">{{ sourceColLabel || '所属源' }}</th>
-            <th v-for="f in visibleCols" :key="f.prop" :style="{ minWidth: compact ? '96px' : '110px' }" :title="f.desc || f.prop">{{ colLabel(f) }}</th>
+            <th
+              v-for="f in visibleCols"
+              :key="f.prop"
+              :style="{ minWidth: compact ? '96px' : '120px' }"
+              :class="{ 'dg-sortable': canSort(f), 'dg-sorted': sortField === sortKeyOf(f) }"
+              :title="canSort(f) ? `${f.desc || f.prop}（点击排序）` : (f.desc || f.prop)"
+              @click="onSort(f)"
+            >{{ colLabel(f) }}<span v-if="canSort(f)" class="dg-sort-ind">{{ sortIndicator(f) }}</span></th>
             <th v-if="!compact" style="width:64px">状态</th>
             <th v-if="showActions" style="width:80px">操作</th>
           </tr>
@@ -190,7 +236,11 @@ function stateMeta(s?: string) {
 .dg-col-item:hover { background: var(--rc-primary-bg); }
 .dg-scroll { flex: 1; overflow: auto; }
 .dg-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.dg-table th { position: sticky; top: 0; background: #f8fafc; color: var(--rc-text-2); font-weight: 700; text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rc-border); font-family: var(--rc-mono, monospace); }
+.dg-sortable { cursor: pointer; user-select: none; }
+.dg-sortable:hover { color: var(--rc-primary); }
+.dg-sort-ind { margin-left: 4px; opacity: .35; font-size: 10px; }
+.dg-sorted .dg-sort-ind { opacity: 1; color: var(--rc-primary); }
+.dg-table th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; position: sticky; top: 0; background: #f8fafc; color: var(--rc-text-2); font-weight: 700; text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rc-border); font-family: var(--rc-mono, monospace); }
 .dg-table td { padding: 8px 10px; border-bottom: 1px solid var(--rc-border-soft); color: var(--rc-text); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dg-table tbody tr { cursor: pointer; }
 .dg-table tbody tr:hover { background: #f8fbff; }
