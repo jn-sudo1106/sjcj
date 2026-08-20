@@ -3,6 +3,7 @@ import { reactive, ref, watch } from 'vue'
 import { dataApi, type DataTableMeta, type DataRow } from '@/api'
 import { useRuntimeStore } from '@/stores/runtime'
 import DataGrid from './DataGrid.vue'
+import { withoutComposition } from '@/utils/enterKey'
 
 const props = defineProps<{ open: boolean; tableId: string; sourceId?: string; title?: string }>()
 const emit = defineEmits<{ 'update:open': [boolean] }>()
@@ -68,6 +69,9 @@ function nextPage() {
 function close() {
   emit('update:open', false)
 }
+
+// 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
+const onEnterQuery = withoutComposition(() => runQuery())
 </script>
 
 <template>
@@ -84,7 +88,7 @@ function close() {
         <span class="tdd-name">{{ meta?.tableName || tableId }}</span>
         <span class="tdd-count">{{ total.toLocaleString() }} 行</span>
         <span class="tdd-spacer" />
-        <input v-model="filters.dataId" class="tdd-input" placeholder="数据 ID" @keyup.enter="runQuery" />
+        <input v-model="filters.dataId" class="tdd-input" placeholder="数据 ID" @keyup.enter="onEnterQuery" />
         <select v-model="filters.state" class="tdd-input">
           <option value="">状态（全部）</option>
           <option value="C">C 成功</option>

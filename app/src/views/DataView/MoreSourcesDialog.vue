@@ -3,6 +3,7 @@ import { reactive, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { sourceApi, type Source, type SourceCategory } from '../../api'
+import { withoutComposition } from '@/utils/enterKey'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [boolean]; picked: [Source] }>()
@@ -161,6 +162,9 @@ function pick(row: Source) {
 
 function formatUrl(value?: string) { return value || '—' }
 function formatCount(value?: number) { return value == null ? '—' : value }
+
+// 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
+const onEnterSearch = withoutComposition(() => onSearch())
 </script>
 
 <template>
@@ -198,9 +202,9 @@ function formatCount(value?: number) { return value == null ? '—' : value }
 
       <main class="dv-source-main">
         <div class="dv-picker-toolbar">
-          <el-input v-model="state.sourceIds" type="textarea" :rows="1" resize="none" placeholder="源ID（可输入多个）" style="width: 190px" @keyup.enter="onSearch" />
-          <el-input v-model="state.name" clearable placeholder="源名称" style="width: 170px" @keyup.enter="onSearch" />
-          <el-input v-model="state.configId" clearable placeholder="配置" style="width: 130px" @keyup.enter="onSearch" />
+          <el-input v-model="state.sourceIds" type="textarea" :rows="1" resize="none" placeholder="源ID（可输入多个）" style="width: 190px" @keyup.enter="onEnterSearch" />
+          <el-input v-model="state.name" clearable placeholder="源名称" style="width: 170px" @keyup.enter="onEnterSearch" />
+          <el-input v-model="state.configId" clearable placeholder="配置" style="width: 130px" @keyup.enter="onEnterSearch" />
           <el-button type="primary" @click="onSearch">查询</el-button>
           <el-button @click="onReset">重置</el-button>
           <button class="dv-advanced-link" type="button" @click="state.advanced = !state.advanced">
@@ -214,14 +218,14 @@ function formatCount(value?: number) { return value == null ? '—' : value }
         </div>
 
         <div v-if="state.advanced" class="dv-source-advanced">
-          <el-input v-model="state.sourceUrl" clearable placeholder="URL片断" @keyup.enter="onSearch" />
-          <el-input v-model="state.entryTypeId" clearable placeholder="输出表ID" @keyup.enter="onSearch" />
+          <el-input v-model="state.sourceUrl" clearable placeholder="URL片断" @keyup.enter="onEnterSearch" />
+          <el-input v-model="state.entryTypeId" clearable placeholder="输出表ID" @keyup.enter="onEnterSearch" />
           <el-select v-model="state.enable" placeholder="状态" @change="onSearch">
             <el-option label="在用" value="0" />
             <el-option label="停用" value="1" />
             <el-option label="全部" value="" />
           </el-select>
-          <el-input v-model="state.count" clearable placeholder="数据量" @keyup.enter="onSearch" />
+          <el-input v-model="state.count" clearable placeholder="数据量" @keyup.enter="onEnterSearch" />
           <el-date-picker v-model="state.dataDate" value-format="YYYY-MM-DD" type="date" placeholder="数据时间" />
         </div>
 

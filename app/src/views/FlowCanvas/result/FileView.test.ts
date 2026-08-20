@@ -23,6 +23,12 @@ const files: FileResourceRecord[] = [{
   },
 }]
 
+// 查询条件不绑回车（2026-08-20）：中文输入法上屏也会发 Enter 的 keyup，Vue 的
+// @keyup.enter 不过滤 isComposing，绑了等于打字打到一半就把半截条件查出去。
+async function clickQuery(wrapper: { findAll: (s: string) => { text: () => string; trigger: (e: string) => Promise<void> }[] }) {
+  await wrapper.findAll('button').find((b) => b.text() === '查询')!.trigger('click')
+}
+
 describe('FileView', () => {
   afterEach(() => vi.restoreAllMocks())
 
@@ -152,7 +158,7 @@ describe('FileView', () => {
     await flushPromises()
     expect(query).toHaveBeenCalledTimes(callsAfterMount)
 
-    await sqlInput.trigger('keyup.enter')
+    await clickQuery(wrapper)
     await flushPromises()
     expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ sql: 'K1 IS N' }))
   })

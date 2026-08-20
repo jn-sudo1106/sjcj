@@ -6,6 +6,7 @@ import { entryApi, type DataTableMeta, type EntryType } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import EntryEditorDrawer from '../CollectAssets/EntryEditorDrawer.vue'
 import TableDetailDialog from './TableDetailDialog.vue'
+import { withoutComposition } from '@/utils/enterKey'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [boolean]; picked: [EntryType] }>()
@@ -138,6 +139,9 @@ async function runBatch(action: 'rebuild' | 'delete') {
     ElMessage.error(`操作失败：${error instanceof Error ? error.message : String(error)}`)
   }
 }
+
+// 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
+const onEnterSearch = withoutComposition(() => onSearch())
 </script>
 
 <template>
@@ -149,8 +153,8 @@ async function runBatch(action: 'rebuild' | 'delete') {
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
   >
     <div class="dv-picker-toolbar">
-      <el-input v-model="state.tableId" clearable placeholder="表 ID" style="width: 150px" @input="onKeywordInput" @keyup.enter="onSearch" />
-      <el-input v-model="state.name" clearable placeholder="表名称" style="width: 190px" @input="onKeywordInput" @keyup.enter="onSearch" />
+      <el-input v-model="state.tableId" clearable placeholder="表 ID" style="width: 150px" @input="onKeywordInput" @keyup.enter="onEnterSearch" />
+      <el-input v-model="state.name" clearable placeholder="表名称" style="width: 190px" @input="onKeywordInput" @keyup.enter="onEnterSearch" />
       <el-button type="primary" @click="onSearch">查询</el-button>
       <el-button @click="onReset">重置</el-button>
       <span class="dv-picker-spacer" />

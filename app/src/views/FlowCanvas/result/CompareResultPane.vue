@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { sourceApi, dataApi, type Source, type DataTableMeta, type DataRow } from '@/api'
 import { buildHorizontalLayout, buildSourceSeed, iconFor, nodeOutputTable, pickFinalMainNodeId, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import DataGrid from './DataGrid.vue'
+import { withoutComposition } from '@/utils/enterKey'
 
 // 分屏对比（0701 问题三 · 方案 C）单栏内容：给定 sourceId 独立加载、独立渲染，
 // 不读写全局 flow store（对比态两栏可能同时显示两个不同的源，flow store 单实例装不下）。
@@ -114,6 +115,9 @@ function prevPage() {
 function nextPage() {
   if (page.value * size < total.value) page.value += 1
 }
+
+// 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
+const onEnterQuery = withoutComposition(() => runQuery())
 </script>
 
 <template>
@@ -144,7 +148,7 @@ function nextPage() {
     </div>
 
     <div class="cp-filters">
-      <input v-model="filters.dataId" class="cp-input" placeholder="数据 ID" @keyup.enter="runQuery" />
+      <input v-model="filters.dataId" class="cp-input" placeholder="数据 ID" @keyup.enter="onEnterQuery" />
       <select v-model="filters.state" class="cp-input" @change="runQuery">
         <option value="">状态（全部）</option>
         <option value="C">C 成功</option>

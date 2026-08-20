@@ -3,6 +3,7 @@ import { computed, nextTick, ref } from 'vue'
 import { flowApi } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { nodeOutputTable } from '@/views/FlowCanvas/canvas/flowModel'
+import { withoutComposition } from '@/utils/enterKey'
 
 // 节点级 AI 对话（0701 问题八）：与画布「智能推荐模板」（流程级 AI）同体系两层，
 // mock 阶段走关键词匹配回复（flowApi.nodeAiChat），二期换真 LLM 界面零改动。
@@ -45,6 +46,9 @@ async function send(text?: string) {
   }
 }
 
+
+// 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
+const onEnterSend = withoutComposition(() => send())
 </script>
 
 <template>
@@ -64,7 +68,7 @@ async function send(text?: string) {
         class="rc-input"
         placeholder="问点什么，如“为什么发起抓取失败”"
         :disabled="sending"
-        @keyup.enter="send()"
+        @keyup.enter="onEnterSend"
       />
       <button class="rc-btn primary" type="button" :disabled="sending || !input.trim()" @click="send()">发送</button>
     </div>

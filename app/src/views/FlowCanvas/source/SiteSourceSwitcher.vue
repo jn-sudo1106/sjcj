@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { siteApi, sourceApi, type Site, type Source } from '@/api'
 import type { ParamGroupRef } from '@/utils/flow/urlParams'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
+import { withoutComposition } from '@/utils/enterKey'
 
 const props = defineProps<{ siteId: string; activeKey: string }>()
 const emit = defineEmits<{ pick: [target: Source]; added: [Source]; compare: [rightId: string]; pickSite: [] }>()
@@ -486,6 +487,9 @@ async function submitImport() {
   closeBatch()
   await load()
 }
+
+// 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
+const onEnterBindSearch = withoutComposition(() => bindSearch())
 </script>
 
 <template>
@@ -749,7 +753,7 @@ async function submitImport() {
             class="ssw-add-input bind-kw"
             placeholder="按源名称搜索"
             data-testid="bind-source-search"
-            @keyup.enter="bindSearch"
+            @keyup.enter="onEnterBindSearch"
           />
           <button class="rc-btn" type="button" @click="bindSearch">搜索</button>
           <button class="rc-btn" type="button" data-testid="id-import-toggle" @click="toggleIdImport">

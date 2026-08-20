@@ -272,8 +272,8 @@ function onRowClick(row: DataRow) {
 <template>
   <div class="dqp">
     <div class="rc-toolbar wrap dqp-primary-row" data-testid="data-query-primary">
-      <el-input v-model="dataId" class="dqp-data-id" clearable placeholder="请输入数据 ID" style="width: 160px" @keyup.enter="search()" />
-      <el-input v-model="parentId" class="dqp-parent-id" clearable placeholder="父 ID" style="width: 120px" @keyup.enter="search()" />
+      <el-input v-model="dataId" class="dqp-data-id" clearable placeholder="请输入数据 ID" style="width: 160px" />
+      <el-input v-model="parentId" class="dqp-parent-id" clearable placeholder="父 ID" style="width: 120px" />
       <el-select
         v-if="showState"
         v-model="states"
@@ -318,11 +318,11 @@ function onRowClick(row: DataRow) {
     </div>
 
     <div v-if="advancedOpen" id="data-query-advanced" class="rc-toolbar wrap dqp-query-row" data-testid="data-query-filters">
-      <el-input v-model="nextFlag" clearable placeholder="后续标识（如 -1）" style="width: 150px" @keyup.enter="search()" />
+      <el-input v-model="nextFlag" clearable placeholder="后续标识（如 -1）" style="width: 150px" />
       <span class="dqp-range">
-        <el-input v-model="minId" placeholder="起始 ID" style="width: 100px" @keyup.enter="search()" />
+        <el-input v-model="minId" placeholder="起始 ID" style="width: 100px" />
         <span class="dqp-range-sep">－</span>
-        <el-input v-model="maxId" placeholder="终止 ID" style="width: 100px" @keyup.enter="search()" />
+        <el-input v-model="maxId" placeholder="终止 ID" style="width: 100px" />
       </span>
       <el-autocomplete
         v-model="sql"
@@ -330,7 +330,6 @@ function onRowClick(row: DataRow) {
         clearable
         placeholder="条件表达式，如 CREATE_DT > CURDATE()"
         style="width: 320px"
-        @keyup.enter="search()"
       />
     </div>
 

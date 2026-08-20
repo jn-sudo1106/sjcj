@@ -8,6 +8,7 @@ import { useAuthStore } from '../../stores/auth'
 import { getEffectiveWidth } from '../../constants/entry'
 import { exportFieldsAsCsv } from '@/utils/format/csvExport'
 import EntryEditorDrawer from './EntryEditorDrawer.vue'
+import { withoutComposition } from '@/utils/enterKey'
 
 // 迁移方案 §1.6/§5-2：read 角色隐藏全部写入口（含旧只读页遗留的「新建」按钮，判为旧遗漏，不迁）。
 const auth = useAuthStore()
@@ -309,13 +310,16 @@ async function onBatchDelete() {
 function exportFields(e: EntryType) {
   exportFieldsAsCsv(e)
 }
+
+// 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
+const onEnterSearch = withoutComposition(() => onSearch())
 </script>
 
 <template>
   <div class="rc-card et-main">
     <div class="rc-toolbar wrap">
-      <el-input v-model="entryTypeIdFilter" clearable placeholder="表 ID" style="width: 150px" @keyup.enter="onSearch" />
-      <el-input v-model="nameFilter" clearable placeholder="表名称" style="width: 190px" @keyup.enter="onSearch" />
+      <el-input v-model="entryTypeIdFilter" clearable placeholder="表 ID" style="width: 150px" @keyup.enter="onEnterSearch" />
+      <el-input v-model="nameFilter" clearable placeholder="表名称" style="width: 190px" @keyup.enter="onEnterSearch" />
       <button class="rc-btn" type="button" @click="onSearch">查询</button>
       <button class="rc-btn" type="button" @click="onReset">重置</button>
       <span class="et-spacer" />

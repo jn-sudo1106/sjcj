@@ -9,6 +9,7 @@ import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import GlobalSourceSelect from './components/GlobalSourceSelect.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
 import { initMergeState, mergeLoadMore, type MergeSourceState, type MergeLoadMoreResult } from './siteDataMerge'
+import { withoutComposition } from '@/utils/enterKey'
 
 const props = defineProps<{ siteId?: string; initialSourceId?: string }>()
 
@@ -250,6 +251,9 @@ watch(() => [props.siteId, props.initialSourceId] as const, () => {
 watch(selectedSourceId, () => {
   if (table.value) void resetAndLoad()
 })
+
+// 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
+const onEnterJump = withoutComposition(() => goToPage())
 </script>
 
 <template>
@@ -268,12 +272,12 @@ watch(selectedSourceId, () => {
       >
         <option v-for="c in tableCandidates" :key="c.tableId" :value="c.tableId">[{{ c.tableId }}] {{ c.name || c.tableName }}</option>
       </select>
-      <input v-model="filters.fileName" class="sfv-input" placeholder="文件名或展示名" aria-label="文件名" @keyup.enter="runQuery">
-      <input v-model="filters.ext" class="sfv-input" placeholder="类型，如 pdf、html" aria-label="文件类型" @keyup.enter="runQuery">
+      <input v-model="filters.fileName" class="sfv-input" placeholder="文件名或展示名" aria-label="文件名">
+      <input v-model="filters.ext" class="sfv-input" placeholder="类型，如 pdf、html" aria-label="文件类型">
       <select v-model="filters.state" class="sfv-input" aria-label="状态">
         <option value="">状态（不限）</option><option value="C">初始</option><option value="AC">被消重</option>
       </select>
-      <input v-model="filters.sql" class="sfv-input" placeholder="自定义SQL, 如 K1 IS NULL" aria-label="自定义SQL" @keyup.enter="runQuery">
+      <input v-model="filters.sql" class="sfv-input" placeholder="自定义SQL, 如 K1 IS NULL" aria-label="自定义SQL">
       <button class="rc-btn primary" type="button" @click="runQuery">查询</button>
       <button class="rc-btn" type="button" @click="clearFilters">清空</button>
     </div>
@@ -325,7 +329,7 @@ watch(selectedSourceId, () => {
           <button class="rc-btn" type="button" data-testid="site-file-prev" :disabled="page <= 1 || loading" @click="previousPage">上一页</button>
           <span class="muted">第 {{ page }} / {{ maxPage }} 页</span>
           <button class="rc-btn" type="button" data-testid="site-file-next" :disabled="page >= maxPage || loading" @click="nextPage">下一页</button>
-          <input v-model.number="jumpPage" class="sfv-page-jump" type="number" min="1" :max="maxPage" aria-label="跳转页码" @keyup.enter="goToPage">
+          <input v-model.number="jumpPage" class="sfv-page-jump" type="number" min="1" :max="maxPage" aria-label="跳转页码" @keyup.enter="onEnterJump">
           <button class="rc-btn" type="button" data-testid="site-file-jump" @click="goToPage">跳转</button>
         </template>
         <span v-else-if="allExhausted" class="muted">已加载全部文件</span>

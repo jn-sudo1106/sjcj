@@ -18,6 +18,12 @@ function file(sourceId: string, dataId: string, fileName: string): FileResourceR
   }
 }
 
+// 查询条件不绑回车（2026-08-20）：中文输入法上屏也会发 Enter 的 keyup，Vue 的
+// @keyup.enter 不过滤 isComposing，绑了等于打字打到一半就把半截条件查出去。
+async function clickQuery(wrapper: { findAll: (s: string) => { text: () => string; trigger: (e: string) => Promise<void> }[] }) {
+  await wrapper.findAll('button').find((b) => b.text() === '查询')!.trigger('click')
+}
+
 describe('SiteFileView', () => {
   afterEach(() => vi.restoreAllMocks())
 
@@ -172,7 +178,7 @@ describe('SiteFileView', () => {
     await flushPromises()
     expect(rows).toHaveBeenCalledTimes(callsAfterMount)
 
-    await sqlInput.trigger('keyup.enter')
+    await clickQuery(wrapper)
     await flushPromises()
     expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ sql: 'K1 IS N' }))
   })
@@ -188,9 +194,9 @@ describe('SiteFileView', () => {
     })
     await flushPromises()
     const sqlInput = wrapper.get('input[aria-label="自定义SQL"]')
-    await sqlInput.trigger('keyup.enter')
+    await clickQuery(wrapper)
     await sqlInput.setValue('K1 IS NULL')
-    await sqlInput.trigger('keyup.enter')
+    await clickQuery(wrapper)
     await flushPromises()
     expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ sql: 'K1 IS NULL' }))
 

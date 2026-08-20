@@ -2,6 +2,7 @@
 import { reactive, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { dataApi, type TaskInst } from '../../api'
+import { withoutComposition } from '@/utils/enterKey'
 
 const props = defineProps<{
   modelValue: boolean
@@ -81,6 +82,9 @@ function resendBatch() {
 function resendOne(row: TaskInst) {
   void resend([row.taskId])
 }
+
+// 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
+const onEnterSearch = withoutComposition(() => onSearch())
 </script>
 
 <template>
@@ -89,12 +93,12 @@ function resendOne(row: TaskInst) {
       <el-select v-model="filter.state" style="width: 120px" @change="onSearch">
         <el-option v-for="o in STATE_OPTIONS" :key="o.value" :label="o.label" :value="o.value" />
       </el-select>
-      <el-input v-model="filter.taskSpecId" placeholder="任务规格" style="width: 120px" @keyup.enter="onSearch" />
-      <el-input v-model="filter.sourceId" placeholder="源" style="width: 120px" @keyup.enter="onSearch" />
-      <el-input v-model="filter.taskId" placeholder="任务ID" style="width: 120px" @keyup.enter="onSearch" />
-      <el-input v-model="filter.configId" placeholder="配置ID" style="width: 120px" @keyup.enter="onSearch" />
-      <el-input v-model="filter.parentId" placeholder="父ID" style="width: 120px" @keyup.enter="onSearch" />
-      <el-input v-model="filter.fileId" placeholder="文件ID" style="width: 120px" @keyup.enter="onSearch" />
+      <el-input v-model="filter.taskSpecId" placeholder="任务规格" style="width: 120px" @keyup.enter="onEnterSearch" />
+      <el-input v-model="filter.sourceId" placeholder="源" style="width: 120px" @keyup.enter="onEnterSearch" />
+      <el-input v-model="filter.taskId" placeholder="任务ID" style="width: 120px" @keyup.enter="onEnterSearch" />
+      <el-input v-model="filter.configId" placeholder="配置ID" style="width: 120px" @keyup.enter="onEnterSearch" />
+      <el-input v-model="filter.parentId" placeholder="父ID" style="width: 120px" @keyup.enter="onEnterSearch" />
+      <el-input v-model="filter.fileId" placeholder="文件ID" style="width: 120px" @keyup.enter="onEnterSearch" />
       <button class="rc-btn primary" type="button" @click="onSearch">查询</button>
     </div>
     <div v-if="canWrite && state.selected.length" class="ti-batch">

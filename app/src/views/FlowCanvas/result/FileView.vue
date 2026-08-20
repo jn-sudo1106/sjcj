@@ -7,6 +7,7 @@ import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
 import { buildHorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
+import { withoutComposition } from '@/utils/enterKey'
 
 // 文件视图只在具体源下挂载。真实旧平台 FileList2.vue 的链路是：
 // file_resource 表目录 → tableMeta → entryDataPaged；网站全部源仍由上层页面另行处理。
@@ -184,28 +185,25 @@ function resetFilters() {
   filters.fileName = ''
   filters.ext = ''
   filters.state = ''
-  // sql 不在下面的自动 watch 里；若只有 sql 有值、其余三项本就是空，watch 不会因为"值没变"
-  // 而触发，清空按钮会看起来没反应——所以这里不依赖 watch，直接重新查一次。
   filters.sql = ''
   page.value = 1
   jumpPage.value = 1
   if (table.value) void loadList()
 }
 
-watch(() => [filters.fileName, filters.ext, filters.state] as const, () => {
-  page.value = 1
-  jumpPage.value = 1
-  if (table.value) void loadList()
-})
-
-// 自定义 SQL 不进上面的自动 watch：fileName/ext 是模糊匹配，边打字边查最多结果多点少点；
-// 一段没打完的 SQL（如 "K1 IS N"）逐字符发出去大概率报语法错误，每敲一下弹一次失败提示，
-// 体验比前两个差一截——所以单独要求按 Enter 才查（与 ResultView.vue 的同名字段行为一致）。
-function onSqlEnter() {
+// 筛选一律点「查询」执行（2026-08-20）。此前 fileName/ext/state 挂在自动 watch 上边打字边查
+// ——当时的判断是"模糊匹配最多结果多点少点"，但在生产的大表上那是每敲一个字符白打一次库；
+// 而且同一个文件查询功能在网站文件视图（SiteFileView）里是手动的，两边行为本就不一致。
+// 也不绑回车：中文输入法上屏时同样会发 Enter 的 keyup，Vue 的 @keyup.enter 不过滤
+// isComposing，绑了等于打字打到一半就把半截条件查出去。
+function runQuery() {
   page.value = 1
   jumpPage.value = 1
   if (table.value) void loadList()
 }
+
+// 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
+const onEnterJump = withoutComposition(() => goToPage())
 </script>
 
 <template>
@@ -238,7 +236,8 @@ function onSqlEnter() {
           <select v-model="filters.state" class="fv-input" aria-label="状态">
             <option value="">状态（不限）</option><option value="C">初始</option><option value="AC">被消重</option>
           </select>
-          <input v-model="filters.sql" class="fv-input" placeholder="自定义SQL, 如 K1 IS NULL" aria-label="自定义SQL" @keyup.enter="onSqlEnter">
+          <input v-model="filters.sql" class="fv-input" placeholder="自定义SQL, 如 K1 IS NULL" aria-label="自定义SQL">
+          <button class="rc-btn primary" type="button" @click="runQuery">查询</button>
           <button class="rc-btn" type="button" @click="resetFilters">清空筛选</button>
           <span class="fv-spacer" />
           <span class="muted">共 {{ total }} 个文件</span>
@@ -277,7 +276,7 @@ function onSqlEnter() {
           <button class="rc-btn" :disabled="page <= 1" @click="previousPage">上一页</button>
           <span class="muted">第 {{ page }} / {{ maxPage }} 页</span>
           <button class="rc-btn" :disabled="page >= maxPage" @click="nextPage">下一页</button>
-          <input v-model.number="jumpPage" class="fv-page-jump" type="number" min="1" :max="maxPage" aria-label="跳转页码" @keyup.enter="goToPage">
+          <input v-model.number="jumpPage" class="fv-page-jump" type="number" min="1" :max="maxPage" aria-label="跳转页码" @keyup.enter="onEnterJump">
           <button class="rc-btn" type="button" @click="goToPage">跳转</button>
         </div>
       </template>
