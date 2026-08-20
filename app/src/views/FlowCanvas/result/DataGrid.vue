@@ -43,11 +43,16 @@ function toggleAll() {
   emit('update:selectedIds', allChecked.value ? [] : props.rows.map((r) => r.dataId))
 }
 
-const cols = computed(() => props.meta?.fields ?? [])
+// ENTRY_ID 是每行的真实主键（legacyAdapters dataId 就取自它），但旧平台各表的
+// fields schema 里基本不声明这一列，导致列表上根本看不到——用户想核对/填批量操作
+// 的 ID 范围时无从下手（2026-08-19 用户反馈）。这里补一个不依赖 schema 的合成列，
+// 默认隐藏（不干扰原有列），要用时从「列 ▾」里勾出来。
+const ENTRY_ID_COL = { prop: 'ENTRY_ID', type: 'string', desc: '主键 ID' }
+const cols = computed(() => (props.meta ? [ENTRY_ID_COL, ...props.meta.fields] : []))
 
 // 列可见性控制（Phase 4.3）：切换表时重置，避免残留跟别的表同名字段冲突的隐藏状态
-const hiddenCols = ref<Set<string>>(new Set())
-watch(() => props.meta?.tableId, () => { hiddenCols.value = new Set() })
+const hiddenCols = ref<Set<string>>(new Set(['ENTRY_ID']))
+watch(() => props.meta?.tableId, () => { hiddenCols.value = new Set(['ENTRY_ID']) })
 const visibleCols = computed(() => cols.value.filter((f) => !hiddenCols.value.has(f.prop)))
 function toggleCol(prop: string) {
   const next = new Set(hiddenCols.value)
@@ -66,6 +71,7 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 // 真实 bug，2026-08-14 生产环境实测发现：详情弹层和表格本体所有字段都显示"—"，
 // 不是接口没数据，是取错了 key。
 function cellText(row: DataRow, field: { prop: string; columnName?: string }): string {
+  if (field.prop === 'ENTRY_ID') return row.dataId || '—'
   const v = row.values?.[field.columnName ?? field.prop]
   if (v === undefined || v === null) return '—'
   if (typeof v === 'object') return JSON.stringify(v)
@@ -87,6 +93,10 @@ function stateMeta(s?: string) {
          （2026-08-15：数据视图一屏只看得到 6.2/20 行）。 -->
     <div v-if="!compact && (cols.length > 1 || $slots.head)" class="dg-toolbar">
       <div class="dg-head"><slot name="head" /></div>
+      <!-- #head-right：不参与 .dg-head 横向滚动的常驻区。表头内容多到溢出时，#head 里的
+           东西会被滚动条藏起来（2026-08-19 用户反馈：全屏按钮在最右边，得先拉滚动条才够
+           得着），像"全屏"这种任何时候都该点得到的开关放这里，跟「列 ▾」一样钉住。 -->
+      <div v-if="$slots['head-right']" class="dg-head-right"><slot name="head-right" /></div>
       <div v-if="cols.length > 1" class="dg-cols-menu" @click.stop>
         <button class="dg-col-btn" type="button" @click="colsMenuOpen = !colsMenuOpen">列 ▾</button>
         <div v-if="colsMenuOpen" class="dg-cols-panel">
@@ -145,6 +155,8 @@ function stateMeta(s?: string) {
 .dg-toolbar { display: flex; align-items: center; gap: 8px; padding: 5px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fbfdff; }
 /* 插槽内容不换行、放不下横向滚动：换行会让这条横条随窗口变窄一路长高，又把数据区挤回去。 */
 .dg-head { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px 10px; flex-wrap: nowrap; overflow-x: auto; }
+/* 常驻区：flex:none 不被压缩、不参与 .dg-head 的横向滚动，永远够得着 */
+.dg-head-right { flex: none; display: flex; align-items: center; gap: 8px; }
 .dg-head > * { flex-shrink: 0; }
 .dg-cols-menu { position: relative; flex: none; }
 .dg-col-btn { height: 24px; padding: 0 9px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text-2); font-size: 11px; cursor: pointer; }
