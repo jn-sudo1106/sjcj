@@ -128,10 +128,46 @@ describe('ResultView', () => {
 
 // 节点选择统一走流程图（0819 N1-1 删掉了与之重复的下拉）。shallowMount 下 ProcessNodeRail
 // 被自动 stub、内部按钮不渲染，所以直接对组件发 update:modelValue——等价于点它的节点按钮。
+// 查询条件不绑回车（2026-08-20）：中文输入法上屏时也会发 Enter 的 keyup，而 Vue 的
+// @keyup.enter 不过滤 isComposing，实测会在打字打到一半时把半截条件当成回车查出去。
+async function typeSql(wrapper: ReturnType<typeof shallowMount>, sql: string) {
+  const input = wrapper.findAll('.ctx-summary input').find((i) => (i.attributes('placeholder') || '').includes('SQL'))!
+  await input.setValue(sql)
+  return input
+}
+
 async function selectNode(wrapper: ReturnType<typeof shallowMount>, nodeId: string) {
   await wrapper.findComponent(ProcessNodeRail).vm.$emit('update:modelValue', nodeId)
   await flushPromises()
 }
+
+describe('ResultView · 查询条件的执行时机（0819 N3 前置修复）', () => {
+  it('输入条件不触发查询，只提示"条件已修改"；回车也不执行——中文输入法上屏会发 Enter 的 keyup，绑回车等于打字打到一半就把半截条件查出去', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    const callsAfterMount = query.mock.calls.length
+
+    const input = await typeSql(wrapper, "K1 LIKE '%工行%'")
+    await flushPromises()
+    expect(query.mock.calls.length).toBe(callsAfterMount) // 输入不查
+    expect(wrapper.find('[data-testid="data-filters-dirty"]').exists()).toBe(true)
+
+    await input.trigger('keyup.enter')
+    await flushPromises()
+    expect(query.mock.calls.length).toBe(callsAfterMount) // 回车也不查
+
+    await wrapper.findAll('.rv-actions button').find((b) => b.text() === '查询')!.trigger('click')
+    await flushPromises()
+    expect(query.mock.calls.length).toBe(callsAfterMount + 1) // 只有点查询才查
+    expect(wrapper.find('[data-testid="data-filters-dirty"]').exists()).toBe(false)
+  })
+})
 
 function mountResultView() {
   return shallowMount(ResultView, {

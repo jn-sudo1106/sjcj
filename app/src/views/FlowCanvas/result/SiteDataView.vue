@@ -131,6 +131,12 @@ const selectedNodeId = ref('')
 // 节点选择复用流程图 ProcessNodeRail，与具体源结果视图（ResultView.vue）完全同构
 // ——0819 会议 04:33"这个页面不是应该搞成跟单个源一样的效果"、04:47"给我加个流程图"。
 // 本文件此前的"用跟选表一样的纯下拉、不复用 ProcessNodeRail"的决定已被该次会议推翻。
+// 条件改了但还没查：上一次的结果此刻已经不对应输入框里的条件了。不清理的话表现极具
+// 误导性——失败后把输入框清空重打，那条报错和空表格一直挂着不走，看着像"边打字边查还一直报错"
+// （2026-08-20 实测，ResultView.vue 同源问题一并修）。
+const filtersDirty = ref(false)
+watch(() => ({ ...filters }), () => { filtersDirty.value = true })
+
 const railOpen = ref(readRailOpen())
 watch(railOpen, writeRailOpen)
 
@@ -279,7 +285,10 @@ async function resetAndLoad() {
     if (!meta.value) metaError.value = '表结构暂不可用，已根据当前数据生成列'
     await loadMore()
   } finally {
-    if (id === requestId) loading.value = false
+    if (id === requestId) {
+      loading.value = false
+      filtersDirty.value = false
+    }
   }
 }
 
@@ -386,15 +395,15 @@ const detailFields = computed(() => {
       <SiteSourceSelect v-model="selectedSourceId" :site-id="siteId" />
       <SiteTableSelect v-if="!selectedSourceId" v-model="tableId" :site-id="siteId" />
       <template v-if="effectiveTableId">
-        <input v-model="filters.dataId" class="sdv2-input" placeholder="数据 ID" @keyup.enter="runQuery" />
-        <input v-model="filters.parentId" class="sdv2-input" placeholder="父 ID" @keyup.enter="runQuery" />
+        <input v-model="filters.dataId" class="sdv2-input" placeholder="数据 ID" />
+        <input v-model="filters.parentId" class="sdv2-input" placeholder="父 ID" />
         <select v-model="filters.state" class="sdv2-input">
           <option value="">状态（全部）</option>
           <option value="C">C 成功</option>
           <option value="E">E 出错</option>
           <option value="L">L 处理中</option>
         </select>
-        <input v-model="filters.sql" class="sdv2-input flex" placeholder="SQL 条件 / 关键词（如 CREATE_DT > curdate()）" @keyup.enter="runQuery" />
+        <input v-model="filters.sql" class="sdv2-input flex" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%'）" />
         <button class="rc-btn primary" type="button" @click="runQuery">查询</button>
         <button class="rc-btn" type="button" @click="clearFilters">清空</button>
       </template>
@@ -444,8 +453,11 @@ const detailFields = computed(() => {
       <div class="sdv2-empty">当前筛选条件下，这张表在本网站没有可查询的源</div>
     </template>
     <template v-else-if="effectiveTableId">
-      <div v-if="metaError" class="sdv2-notice" role="status">{{ metaError }}</div>
-      <div v-if="dataError" class="sdv2-notice error" role="alert">{{ dataError }}</div>
+      <div v-if="filtersDirty" class="sdv2-notice" role="status" data-testid="site-data-filters-dirty">查询条件已修改，点「查询」执行</div>
+      <template v-else>
+        <div v-if="metaError" class="sdv2-notice" role="status">{{ metaError }}</div>
+        <div v-if="dataError" class="sdv2-notice error" role="alert">{{ dataError }}</div>
+      </template>
       <div v-if="failedSources.length" class="sdv2-notice warn" data-testid="site-data-partial-fail">
         {{ failedSources.length }} 个源本次查询失败，结果可能不完整：{{ failedSources.map(failedSourceText).join('；') }}
       </div>

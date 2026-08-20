@@ -347,6 +347,13 @@ function onSelectNode(id: string) {
   sortOrder.value = ''
 }
 
+// 条件改了但还没查：上一次的结果（尤其是失败态）此刻已经不对应输入框里的条件了。
+// 不清理的话表现极具误导性——2026-08-20 实测：输入一个错的条件回车失败后，
+// 把输入框清空、重新打字，那条"真实数据接口暂不可用"和 0 行的空表格一直挂着不走，
+// 看起来就像"边打字边查、而且一直报错"。所以条件一变就把失效的结果状态换成待查询提示。
+const filtersDirty = ref(false)
+watch(() => ({ ...filters }), () => { filtersDirty.value = true })
+
 // 排序（迁移旧平台 EntryList2.vue 的 @sort-change，0819 补迁）：状态由本页持有，
 // DataGrid 只负责显示与派发；载荷拼装在 api/index.ts，与旧平台同为 `(列名+ 0)` + ASC/DESC。
 const sortField = ref('')
@@ -478,7 +485,10 @@ async function loadData() {
       dataError.value = '数据加载失败，请点击“查询”重试'
     }
   } finally {
-    if (id === requestId) loading.value = false
+    if (id === requestId) {
+      loading.value = false
+      filtersDirty.value = false
+    }
   }
 }
 watch([selectedTable, page], loadData, { immediate: false })
@@ -639,19 +649,22 @@ async function saveEdit() {
          "上面那个和下面那个不是两个都有了吗？只要有一个就行了"——原来这里还有一个与轨道
          完全同步的节点下拉，同一件事两个控件，已删）；节点上下文（折叠开关、查看条件）在
          轨道上，输入/输出/执行方式在下面的表头行，各归各位。 -->
+    <!-- 查询条件一律点「查询」执行，不绑回车（2026-08-20 决定）。原先绑了 @keyup.enter，
+         但中文输入法上屏时也会发 Enter 的 keyup，而 Vue 的 @keyup.enter 不过滤 isComposing——
+         实测打字打到一半就被当成回车查了一次，条件只输了半截，结果还看不出是怎么来的。 -->
     <div v-if="selectedNodeId" class="ctx-summary" data-testid="data-node-context">
       <!-- 全屏时源信息头被藏起来了，这里把源名补回来，否则看不出在看哪个源的数据。 -->
       <span v-if="fullscreen" class="rv-fs-source" :title="source?.name || sourceId">{{ source?.name || sourceId }}</span>
       <template v-if="hasAnyTable">
-        <input v-model="filters.dataId" class="rv-input id" placeholder="数据 ID" @keyup.enter="runQuery" />
-        <input v-model="filters.parentId" class="rv-input id" placeholder="父 ID" @keyup.enter="runQuery" />
+        <input v-model="filters.dataId" class="rv-input id" placeholder="数据 ID" />
+        <input v-model="filters.parentId" class="rv-input id" placeholder="父 ID" />
         <select v-model="filters.state" class="rv-input st">
           <option value="">状态（全部）</option>
           <option value="C">C 成功</option>
           <option value="E">E 出错</option>
           <option value="L">L 处理中</option>
         </select>
-        <input v-model="filters.sql" class="rv-input flex" placeholder="SQL 条件 / 关键词（如 CREATE_DT > curdate()）" @keyup.enter="runQuery" />
+        <input v-model="filters.sql" class="rv-input flex" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%'）" />
         <span class="rv-actions">
           <button class="rc-btn primary" type="button" @click="runQuery">查询</button>
           <button class="rc-btn" type="button" @click="clearFilters">清空</button>
@@ -660,8 +673,12 @@ async function saveEdit() {
     </div>
 
     <template v-if="hasAnyTable">
-      <div v-if="metaError" class="rv-notice" role="status">{{ metaError }}</div>
-      <div v-if="dataError" class="rv-notice error" role="alert">{{ dataError }}</div>
+      <!-- 条件已改但未执行：盖住上一次的结果状态，避免把旧的失败/空表当成当前条件的结果 -->
+      <div v-if="filtersDirty" class="rv-notice" role="status" data-testid="data-filters-dirty">查询条件已修改，点「查询」执行</div>
+      <template v-else>
+        <div v-if="metaError" class="rv-notice" role="status">{{ metaError }}</div>
+        <div v-if="dataError" class="rv-notice error" role="alert">{{ dataError }}</div>
+      </template>
 
       <!-- 发大量后续（M3-0G 复议）：旧平台是"点开一个独立字段面板，跟主查询筛选行分开"，
            不是主查询自己的一部分——字段名也刻意不撞（start/end/size 而不是复用 filters）。 -->
