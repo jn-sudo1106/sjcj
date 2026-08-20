@@ -66,6 +66,28 @@ describe('业务 API 真实请求鉴权', () => {
     await expect(request('rule/orchestrationSave', {})).rejects.toThrow()
   })
 
+  // M3-0K（2026-08-18 实测）：业务失败常见形态是 HTTP 200 + envelope code!=='0'，不是传输层 5xx；
+  // envelope.data 有时带比 msg 更具体的诊断（真实样例：nextStep 的 cond 语法错误，msg 只有
+  // "错误信息:运行时异常"，data 却是解释器报错 "<Long, 1> can't be a left value for assignment."）。
+  it('业务失败（code!=0）时，envelope.data 是非空字符串则拼进错误信息，而不是被丢弃', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      success: false, code: '500', msg: '错误信息:运行时异常',
+      data: "<Long, 1> can't be a left value for assignment.",
+    }))
+    const { request } = await import('./client')
+
+    await expect(request('source/nextStep', {})).rejects.toThrow(
+      "错误信息:运行时异常：<Long, 1> can't be a left value for assignment.",
+    )
+  })
+
+  it('业务失败时 envelope.data 为空/非字符串（如 null）：只用 msg，不拼出多余的"："', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: false, code: '500', msg: '没有详情配置', data: null }))
+    const { request } = await import('./client')
+
+    await expect(request('source/nextStep', {})).rejects.toThrow('没有详情配置')
+  })
+
   it('可为未迁移业务域强制走 Mock，不影响全局真实接口模式', async () => {
     const { request } = await import('./client')
 
@@ -94,6 +116,18 @@ describe('业务 API 真实请求鉴权', () => {
     expect(init.method).toBe('GET')
     expect(init.body).toBeUndefined()
     expect(result).toEqual({ paramId: '1035' })
+  })
+
+  it('data 是标量（如 0）时不吞掉 msg——2026-08-19 nextStep2 真实联调实测', async () => {
+    // 真实响应：{success:true, code:"0", msg:"操作成功，请等待处理，本次发送:0 条任务", data:0}
+    // data:0 是"本次发送 0 条"的诊断数字，不是调用方要的载荷；旧逻辑 `data !== null` 对 0 成立，
+    // 把标量 0 当整个响应体返回，msg 被静默丢弃，UI 只能落到兜底文案"操作已提交（演示）"。
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '操作成功，请等待处理，本次发送:0 条任务', data: 0 }))
+    const { request } = await import('./client')
+
+    const result = await request<{ message?: string }>('source/nextStep2', {}, { method: 'POST' })
+
+    expect(result).toEqual({ ok: true, message: '操作成功，请等待处理，本次发送:0 条任务' })
   })
 
   it('把真实后端分页响应（count 字段）转换为新平台分页结构', async () => {

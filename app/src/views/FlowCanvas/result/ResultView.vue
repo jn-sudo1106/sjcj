@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { dataApi, isMockMode, sourceApi, type DataTableMeta, type DataRow, type EntryDetail } from '@/api'
+import { dataApi, isMockMode, sourceApi, parseNextStepReceipt, type DataTableMeta, type DataRow, type EntryDetail } from '@/api'
 import {
   buildHorizontalLayout, nodeOutputTable, nodeEntryCondition, conditionGroupLabel, conditionGroupIsSet,
   isDecision, isParallel, isFirstRunnableNode, hasAmbiguousInput, type NodeConfig,
@@ -150,6 +150,42 @@ async function onSendFetch() {
   if (execMode.value !== 'fetch' || !sourceId.value) return
   await confirmDanger('发起抓取', `将对源「${source.value?.name || sourceId.value}」发起抓取，是否继续？`, () => sourceApi.sendSnatch([sourceId.value]))
 }
+
+// M3-0J：真实回执里"本次发送:N 条"是提交条数，不是实际进入条数——被目标节点进入条件
+// 拒绝的数据也算在"发送"里（2026-08-18 测试环境实测，见方案 §12.1B）。原样把 message 当
+// 成功 toast 弹出会把"全部被拒绝"误显示成"全部成功"，必须先解析分组。抽成共享函数是因为
+// M3-0E「发本页任务」发的是同一个 nextStep 接口，回执格式完全一样，不能一个按钮解析、
+// 另一个按钮不解析。
+function showNextStepReceipt(res: { message?: string }) {
+  const receipt = parseNextStepReceipt(res?.message || '')
+  if (receipt.entries.length === 0) {
+    // 解析不出任何 ok_/reject_ 分组（如全部 ID 无效）：按提交数原样展示，不假装有结果。
+    ElMessage.success(res?.message || '操作已提交（演示）')
+  } else if (receipt.rejectCount > 0 && receipt.okCount === 0) {
+    ElMessage.warning(`已提交 ${receipt.submitted} 条，全部被目标节点的进入条件拒绝，未进入下一步`)
+  } else if (receipt.rejectCount > 0) {
+    ElMessage.warning(`已提交 ${receipt.submitted} 条：${receipt.okCount} 条已进入下一步，${receipt.rejectCount} 条被进入条件拒绝`)
+  } else {
+    ElMessage.success(`已提交 ${receipt.submitted} 条，${receipt.okCount} 条已进入下一步`)
+  }
+}
+// M3-0K：nextStep 失败时原始报错定位不到是哪个节点配错（旧平台节点条件语法出错会导致
+// 整条请求业务失败，见方案 §12.1B）。这里统一补上目标节点名；命中"运行时异常"这个
+// 后端固定措辞时才追加条件排查提示——写保护、网络失败等其他原因不应被误导成条件问题。
+// 抽成通用包装（不叫 runNextStep 了）是因为发全部后续/发大量后续调的是 nextStepBatch，
+// 同一个错误定位问题同样存在，不能只给逐行/本页两个入口修。
+async function withNodeErrorContext<T>(nodeName: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn()
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err)
+    const hint = raw.includes('运行时异常') ? '（多为该节点的进入条件表达式写错，可检查节点配置里的进入条件）' : ''
+    throw new Error(`目标节点"${nodeName}"处理失败：${raw}${hint}`)
+  }
+}
+function runNextStep(ids: string[], tableId: string, nodeName: string) {
+  return withNodeErrorContext(nodeName, () => dataApi.nextStep(sourceId.value, tableId, ids))
+}
 async function onSendNextStep() {
   if (execMode.value !== 'input' || !canExecute.value || !selectedTable.value || !selectedRowIds.value.length) return
   const count = selectedRowIds.value.length
@@ -160,10 +196,122 @@ async function onSendNextStep() {
   // "发后续任务"（nextStep）——0812 会议 53:40 原文明确是"两个不一样的方法"，统一叫
   // "发起抓取"是我之前的误判，已按会议记录改回两个文案（M3-0A）。
   await confirmDanger('发后续任务', `将对选中的 ${count} 条数据发起"${nodeName}"的后续处理任务，是否继续？`, async () => {
-    const res = await dataApi.nextStep(sourceId.value, tableId, ids)
+    const res = await runNextStep(ids, tableId, nodeName)
     selectedRowIds.value = []
     return res
-  })
+  }, showNextStepReceipt)
+}
+// M3-0E：旧平台「发后续 ▾」下拉第二项 sendNextCurPage——取当页全部 ENTRY_ID 一次发送，
+// 免去手点勾选框；guard 跟逐行勾选发送同一套（canPickRows 决定能不能勾行，这里是"整页
+// 一起勾"，本质是同一件事）。成功后仅在确实还有下一页时才自动翻页，不像旧平台那样盲目
+// +1（可能翻到确定为空的页）。
+async function onSendCurrentPage() {
+  if (!canPickRows.value || !selectedTable.value || !rows.value.length) return
+  const count = rows.value.length
+  const nodeName = selectedCfg.value?.title || selectedNodeId.value
+  const ids = rows.value.map((r) => r.dataId)
+  const tableId = selectedTable.value
+  await confirmDanger('发本页任务', `将对本页全部 ${count} 条数据发起"${nodeName}"的后续处理任务，是否继续？`, async () => {
+    const res = await runNextStep(ids, tableId, nodeName)
+    selectedRowIds.value = []
+    if (page.value * size.value < total.value) nextPage()
+    return res
+  }, showNextStepReceipt)
+}
+
+// 「发后续 ▾」下拉：把发全部后续/发本页任务/发大量后续收进同一个菜单，对齐旧平台自己的
+// 布局（截图实测）。原来发后续任务+发本页任务两个按钮常驻，行里已经很挤，再加两个新按钮
+// 会更挤；旧平台自己也是"发后续任务"常驻 + 其余三项收进下拉，不是我们发明的形态。
+// 点击面板外关闭：跟 DataGrid.vue 的「列 ▾」同一套模式——全局 click 关闭，面板自己
+// @click.stop 防止点面板内部时被同一次事件冒泡关掉。
+//
+// 真实浏览器验收发现（2026-08-19）：这个按钮渲染在 DataGrid 的 #head 插槽里，而 #head
+// 的父容器 .dg-head 设了 overflow-x: auto——CSS 规范里 overflow-x 不是 visible 时
+// overflow-y 会被浏览器强制按 auto 处理，绝对定位的下拉面板往下延伸的部分被这个容器
+// 当成"内容溢出"裁掉了一截，出现滚动条、菜单显示不全。改成 Teleport 到 body、position:
+// fixed 跟随触发按钮的真实坐标，彻底脱离 .dg-head 的裁剪盒子，不是靠加 overflow:visible
+// 覆盖——那样反而会让 .dg-head 横向滚动条本身的意义（表头内容多时可横向滚）跟着失效。
+const moreMenuOpen = ref(false)
+const moreToggleRef = ref<HTMLElement | null>(null)
+const morePanelPos = reactive({ top: 0, left: 0 })
+async function toggleMoreMenu() {
+  moreMenuOpen.value = !moreMenuOpen.value
+  if (!moreMenuOpen.value) return
+  await nextTick()
+  const rect = moreToggleRef.value?.getBoundingClientRect()
+  if (rect) { morePanelPos.top = rect.bottom + 4; morePanelPos.left = rect.left }
+}
+function onWindowClickAway() {
+  moreMenuOpen.value = false
+}
+onMounted(() => window.addEventListener('click', onWindowClickAway))
+onBeforeUnmount(() => window.removeEventListener('click', onWindowClickAway))
+
+// 发全部后续（M3-0G 复议，2026-08-19）：旧平台硬编码 size=500000、start=0，用户不填任何
+// 数量，只受当前筛选条件约束（sourceId 天然由具体源页面锁定，state/cond 取自筛选行——
+// 不含 dataId/parentId，旧平台 sendNextAll 本身就不认这两个字段）。数量不可调，唯一的
+// 防护就是确认框把量级说清楚，不能悄悄把 50 万条包装成"点一下就发"。
+async function onSendAllUnderFilter() {
+  if (!canPickRows.value || !selectedTable.value) return
+  const nodeName = selectedCfg.value?.title || selectedNodeId.value
+  const tableId = selectedTable.value
+  await confirmDanger(
+    '发全部后续',
+    `[实验性] 将对当前筛选条件下"${nodeName}"的全部数据发起后续处理（最多 500000 条，量级可能很大），是否继续？`,
+    () => withNodeErrorContext(nodeName, () => dataApi.nextStepBatch({
+      tableId, sourceId: sourceId.value,
+      state: filters.state || undefined,
+      cond: filters.sql || undefined,
+      size: 500000, start: 0,
+    })),
+    showNextStepReceipt,
+  )
+}
+
+// 发大量后续（M3-0G 复议）：旧平台面板字段 从该ID起/至该ID止/发送数量/状态过滤/后续标识/
+// 自定SQL条件——是一套独立于主查询筛选行的字段，不共用 filters（旧平台叫 state1/more，
+// 跟主查询的 state/more 是分开的两份状态）。
+// 真实校验补丁：旧平台"发送数量(1-1W条)"只是标签文字，代码里从没校验过，填多少都能发
+// （2026-08-18 读源码实测确认）。这里补上真实的 1-10000 上限，不再是摆设。
+const SEND_MORE_MAX = 10000
+const sendMoreOpen = ref(false)
+const sendMoreForm = reactive({ start: '', end: '', size: String(SEND_MORE_MAX / 2), state: '', nextFlag: '', cond: '' })
+const sendMoreSizeError = computed(() => {
+  const n = Number(sendMoreForm.size)
+  if (!sendMoreForm.size.trim() || !Number.isInteger(n) || n < 1) return '发送数量必须是 1 及以上的整数'
+  if (n > SEND_MORE_MAX) return `发送数量最多 ${SEND_MORE_MAX} 条`
+  return ''
+})
+function toggleSendMore() {
+  if (!sendMoreOpen.value) {
+    // 对齐旧平台 showSendMore：打开面板时把"至该ID止"预填成当页已加载数据里最大的 ID，
+    // 方便用户"从这里接着往后发"，不用自己去翻数据表格里的 ID。
+    const ids = rows.value.map((r) => Number(r.dataId)).filter((n) => !Number.isNaN(n))
+    if (ids.length) sendMoreForm.end = String(Math.max(...ids))
+  }
+  sendMoreOpen.value = !sendMoreOpen.value
+}
+async function onSendMoreBatch() {
+  if (!canPickRows.value || !selectedTable.value || sendMoreSizeError.value) return
+  const nodeName = selectedCfg.value?.title || selectedNodeId.value
+  const tableId = selectedTable.value
+  await confirmDanger(
+    '批量发后续',
+    `将按填写的条件对"${nodeName}"批量发起后续处理，最多 ${sendMoreForm.size} 条，是否继续？`,
+    () => withNodeErrorContext(nodeName, () => dataApi.nextStepBatch({
+      tableId, sourceId: sourceId.value,
+      state: sendMoreForm.state || undefined,
+      size: Number(sendMoreForm.size),
+      start: sendMoreForm.start ? Number(sendMoreForm.start) : 0,
+      end: sendMoreForm.end ? Number(sendMoreForm.end) : undefined,
+      nextFlag: sendMoreForm.nextFlag || undefined,
+      cond: sendMoreForm.cond || undefined,
+    })),
+    (res) => {
+      showNextStepReceipt(res)
+      sendMoreOpen.value = false
+    },
+  )
 }
 
 // 默认选末端数据节点（最终结果表）；有页签快照（0701 问题三）时优先恢复快照里的节点/过滤/页码。
@@ -217,7 +365,11 @@ const loading = ref(false)
 const metaError = ref('')
 const dataError = ref('')
 const demoFallback = ref(false)
-const size = 20
+// M3-0F：旧平台页大小是 [20,40,100,200]，这里此前写死 20——不只是少个控件，是真实能力
+// 缩水：「发后续任务」按当页勾选发送，20 条封顶时旧平台用户能勾 200 条一次发完，这里要翻
+// 10 次页各勾一次。
+const PAGE_SIZES = [20, 40, 100, 200]
+const size = ref(PAGE_SIZES[0])
 
 function inferTableMeta(tableId: string, dataRows: DataRow[], rowCount: number): DataTableMeta {
   const samples = new Map<string, unknown>()
@@ -273,7 +425,7 @@ async function loadData() {
       state: filters.state || undefined,
       sql: filters.sql || undefined,
       page: page.value,
-      size,
+      size: size.value,
     }
     let [metaRes, dataRes] = await Promise.allSettled([
       dataApi.tableMeta(selectedTable.value),
@@ -324,6 +476,8 @@ function runQuery() {
   page.value = 1
   loadData()
 }
+// el-pagination 的 v-model:page-size 已经把 size.value 设成新值了，这里只管"页大小变了要
+// 从第一页重新查"这半件事，跟 runQuery 是同一件事，不用另起一个函数。
 function clearFilters() {
   filters.dataId = ''
   filters.parentId = ''
@@ -331,11 +485,8 @@ function clearFilters() {
   filters.sql = ''
   runQuery()
 }
-function prevPage() {
-  if (page.value > 1) page.value -= 1
-}
 function nextPage() {
-  if (page.value * size < total.value) page.value += 1
+  if (page.value * size.value < total.value) page.value += 1
 }
 
 // 详情 drawer
@@ -503,6 +654,40 @@ async function saveEdit() {
       <div v-if="metaError" class="rv-notice" role="status">{{ metaError }}</div>
       <div v-if="dataError" class="rv-notice error" role="alert">{{ dataError }}</div>
 
+      <!-- 发大量后续（M3-0G 复议）：旧平台是"点开一个独立字段面板，跟主查询筛选行分开"，
+           不是主查询自己的一部分——字段名也刻意不撞（start/end/size 而不是复用 filters）。 -->
+      <div v-if="sendMoreOpen" class="rv-sendmore" data-testid="data-sendmore-panel">
+        <div class="rv-sendmore-field">
+          <label>从该 ID 起</label>
+          <input v-model="sendMoreForm.start" class="rv-input" placeholder="不填则从头开始" />
+        </div>
+        <div class="rv-sendmore-field">
+          <label>至该 ID 止</label>
+          <input v-model="sendMoreForm.end" class="rv-input" placeholder="不填则不限" />
+        </div>
+        <div class="rv-sendmore-field">
+          <label>发送数量（1～{{ SEND_MORE_MAX }}）</label>
+          <input v-model="sendMoreForm.size" class="rv-input" data-testid="data-sendmore-size" />
+        </div>
+        <div class="rv-sendmore-field">
+          <label>状态过滤</label>
+          <input v-model="sendMoreForm.state" class="rv-input" placeholder="表中 state 列" />
+        </div>
+        <div class="rv-sendmore-field">
+          <label>后续标识</label>
+          <input v-model="sendMoreForm.nextFlag" class="rv-input" placeholder="-1 未抓后续，1 已..." />
+        </div>
+        <div class="rv-sendmore-field flex">
+          <label>自定 SQL 条件</label>
+          <input v-model="sendMoreForm.cond" class="rv-input" placeholder="如 K1 IS NULL" />
+        </div>
+        <div class="rv-sendmore-actions">
+          <span v-if="sendMoreSizeError" class="rv-sendmore-error" data-testid="data-sendmore-error">{{ sendMoreSizeError }}</span>
+          <button class="rc-btn" type="button" @click="sendMoreOpen = false">取消</button>
+          <button class="rc-btn danger" type="button" data-testid="data-sendmore-submit" :disabled="!!sendMoreSizeError" @click="onSendMoreBatch">批量发后续</button>
+        </div>
+      </div>
+
       <!-- 表头内容走 DataGrid 的 #head 插槽，跟「列 ▾」和分页共用同一条横条。原来这里是
            独立的 .rv-tablehead(47px) + DataGrid 自己的列按钮行(33px) + .rv-pager(45px)
            三条横条，加起来 125px 全在挤数据区（2026-08-15 第十二次纠偏）。
@@ -549,12 +734,16 @@ async function saveEdit() {
               <span v-else class="ctx-piece"><span class="k">输出</span><span class="v code">{{ outputTableId }}</span></span>
             </template>
           </template>
-          <!-- 这里在 hasAnyTable 内部，execMode 只可能是 'fetch'/'input' 两种（'none' 恰好
-               对应 !hasAnyTable，走的是上面的空态分支），不用再兜底"不支持手动执行"文案。 -->
-          <span class="pill" :class="execMode">{{ execMode === 'fetch' ? '按源抓取' : '按输入数据执行' }}</span>
-          <span class="rv-tablename">{{ meta?.tableName || selectedTable || '—' }}</span>
+          <!-- 「按源抓取 / 按输入数据执行」徽标已删除（2026-08-19）：它当初存在是因为
+               08-14 那阵执行按钮文案一度统一成"发起抓取"、不分首节点/后续节点，需要
+               额外说明这个节点按什么发；M3-0A 把按钮文案改回两种之后（发起抓取 /
+               发后续任务），这层信息就被按钮本身接管了——左边还有「输入·输出 表ID」，
+               三处说同一件事。禁用/输出 tab 场景的解释也已经由按钮 title 和
+               data-view-only-hint 承担，删掉它还能给这行让出 93px。 -->
+          <!-- 表名是这行里最长、也最可省略的一项（实测 sense_data.TB_TB_NEWS_TAGS 独占
+               188px）：允许它收缩并省略号截断，完整值走 title 悬浮看，把宽度让给按钮。 -->
+          <span class="rv-tablename" :title="meta?.tableName || selectedTable || ''">{{ meta?.tableName || selectedTable || '—' }}</span>
           <span class="rv-tablecount">{{ total.toLocaleString() }} 行</span>
-          <span class="rv-spacer" />
           <span v-if="canPickRows" class="muted">已选 {{ selectedRowIds.length }} 条</span>
           <!-- 输入≠输出、当前看的是输出 tab：这批行不是本节点的输入，不给一个点了才发现
                被禁用的按钮，直接说清楚去哪操作（M3-0C，对应用户"为什么一个有checkbox一个
@@ -569,9 +758,51 @@ async function saveEdit() {
             :title="execDisabledReason"
             @click="execMode === 'fetch' ? onSendFetch() : onSendNextStep()"
           >{{ execMode === 'fetch' ? '发起抓取' : '发后续任务' }}</button>
-          <span class="muted">第 {{ page }} 页 · 每页 {{ size }}</span>
-          <button class="rc-btn tiny" type="button" data-testid="data-prev-page" :disabled="page <= 1" @click="prevPage">上一页</button>
-          <button class="rc-btn tiny" type="button" data-testid="data-next-page" :disabled="page * size >= total" @click="nextPage">下一页</button>
+          <!-- 「发后续 ▾」：发全部后续/发本页任务/发大量后续收进同一个菜单，对齐旧平台自己
+               的布局——不是三个常驻按钮堆在行里。触发按钮留在原位（跟表头其他内容同一行），
+               展开的面板 Teleport 到 body、position:fixed 定位，脱离 .dg-head 的裁剪盒子
+               （见上方 moreMenuOpen 声明处的说明）。 -->
+          <div v-if="canPickRows" class="rv-more-menu" @click.stop>
+            <button ref="moreToggleRef" class="rc-btn" type="button" data-testid="data-exec-more-toggle" @click="toggleMoreMenu">发后续 ▾</button>
+          </div>
+          <Teleport to="body">
+            <div
+              v-if="moreMenuOpen && canPickRows"
+              class="rv-more-panel"
+              :style="{ top: morePanelPos.top + 'px', left: morePanelPos.left + 'px' }"
+              @click.stop
+            >
+              <button type="button" class="rv-more-item" data-testid="data-exec-all-btn" @click="onSendAllUnderFilter(); moreMenuOpen = false">发全部后续（当前条件下所有）</button>
+              <button
+                type="button"
+                class="rv-more-item"
+                data-testid="data-exec-page-btn"
+                :disabled="!rows.length"
+                @click="onSendCurrentPage(); moreMenuOpen = false"
+              >发本页任务</button>
+              <button type="button" class="rv-more-item" data-testid="data-exec-batch-toggle" @click="toggleSendMore(); moreMenuOpen = false">发大量后续</button>
+            </div>
+          </Teleport>
+          <!-- 简化分页：页码文字 + 独立页大小下拉 + 上一页/下一页两个按钮四个元素合并成
+               一个 el-pagination（2026-08-19，用户反馈"分页那块也散"）。size 变化时
+               v-model:page-size 已经把 size.value 设好了，@size-change 只需要把页
+               重置到第 1 页再重新查——跟 watch([selectedTable, page], loadData) 分工：
+               page 变化交给 watch，size 变化这里手动触发（watch 没监听 size，故意的，
+               避免 v-model 更新 page/size 时被同一次操作触发两次查询）。 -->
+          <el-pagination
+            v-model:current-page="page"
+            v-model:page-size="size"
+            :total="total"
+            :page-sizes="PAGE_SIZES"
+            layout="sizes, prev, pager, next"
+            small
+            data-testid="data-pagination"
+            @size-change="runQuery"
+          />
+        </template>
+        <!-- 全屏放在不随 #head 横向滚动的常驻区：表头内容一多，原来它在最右边会被滚动条
+             藏起来，得先拉滚动条才够得着（2026-08-19 用户反馈）。 -->
+        <template #head-right>
           <button
             class="rc-btn tiny"
             type="button"
@@ -736,12 +967,6 @@ button.ctx-piece.scope-piece { border: 0; background: transparent; font: inherit
 button.ctx-piece.scope-piece:hover { opacity: .85; background: var(--rc-border-soft); }
 button.ctx-piece.scope-piece.active { opacity: 1; background: var(--rc-primary-bg); }
 button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v { color: var(--rc-primary-ink); }
-/* pill 现在挨着表头渲染，只在 hasAnyTable 时出现——execMode 恰好只在 hasAnyTable 为 true
-   时才可能是 'fetch'/'input'（两者互斥的判定条件相同），'none' 这个取值永远走不到这里，
-   不需要 .pill.none 这个变体；'不支持手动执行'这层意思由结构节点的空态文案本身承担。 */
-.pill { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
-.pill.fetch { background: var(--rc-ok-bg); color: var(--rc-ok); }
-.pill.input { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .ctx-toggle { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border: 1px solid #fde68a; border-radius: 999px; background: #fffbeb; color: #92400e; font-size: 11.5px; font-weight: 700; cursor: pointer; }
 .ctx-toggle:hover { border-color: #fbbf24; }
 .ctx-toggle .arrow { display: inline-block; transition: transform .18s ease; }
@@ -752,6 +977,27 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
 .rv-empty-scope { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px 12px; text-align: center; color: var(--rc-faint); font-size: 12px; }
 
 .rv-input { height: 28px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; font-size: 12px; outline: none; min-width: 110px; background: #fff; }
+
+.rv-more-menu { flex: none; }
+/* Teleport 到 body 后用 position:fixed + JS 算出的 top/left（见 toggleMoreMenu），
+   不能再用相对 .rv-more-menu 的 position:absolute——脱离原父级后没有定位基准了，
+   这正是要脱离的原因：.dg-head 的 overflow-x:auto 会强制 overflow-y 变 auto，
+   绝对定位在原位置会被那个裁剪盒子切掉一截、出现滚动条（2026-08-19 真实浏览器验收发现）。 */
+/* 61 不是随便挑的：.rv-shell.is-fullscreen 也是 60，全屏模式下打开这个菜单必须严格盖过它，
+   不能靠"Teleport 到 body 末尾、DOM 顺序更靠后所以层叠更上"这种偶然性。 */
+.rv-more-panel { position: fixed; z-index: 61; min-width: 210px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; box-shadow: 0 12px 28px -12px rgba(15, 23, 42, 0.3); padding: 4px; }
+.rv-more-item { display: block; width: 100%; text-align: left; padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--rc-text-2); font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.rv-more-item:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.rv-more-item:disabled { opacity: .5; cursor: default; }
+.rv-more-item:hover:disabled { background: transparent; color: var(--rc-text-2); }
+
+.rv-sendmore { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; padding: 12px; margin-bottom: 10px; border: 1px solid #fde68a; border-radius: 8px; background: #fffbeb; }
+.rv-sendmore-field { display: flex; flex-direction: column; gap: 4px; }
+.rv-sendmore-field.flex { flex: 1; min-width: 200px; }
+.rv-sendmore-field label { font-size: 11px; color: var(--rc-text-2); font-weight: 600; }
+.rv-sendmore-field .rv-input { min-width: 0; width: 100%; }
+.rv-sendmore-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.rv-sendmore-error { color: #b91c1c; font-size: 12px; }
 /* 数据 ID / 父 ID 本来就是短数字，不用跟节点选择、状态这些下拉一样宽——
    窄一点给查询/清空腾地方，尽量跟筛选条件同一行（2026-08-15 第九次纠偏）。 */
 .rv-input.id { width: 78px; min-width: 0; flex: none; }
@@ -763,9 +1009,11 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
 
 /* 表头内容现在渲染在 DataGrid 的 #head 插槽里（那条横条由 .dg-toolbar 负责排版），
    这里只留下内容本身的样式，不再有独立的 .rv-tablehead / .rv-pager 横条。 */
-.rv-tablename { font-family: var(--rc-mono, monospace); font-size: 12px; color: var(--rc-text-2); }
+/* 这一行的空间预算（2026-08-19 实测：需要 988px 只有 924px，溢出 64px 出横向滚动条）：
+   表名是唯一可以牺牲的——允许收缩+省略号，其余按钮/分页都得完整可见可点。
+   注意 .dg-head > * 有 flex-shrink: 0，这里要显式改回 1 才收缩得动。 */
+.rv-tablename { font-family: var(--rc-mono, monospace); font-size: 12px; color: var(--rc-text-2); min-width: 60px; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rv-tablecount { font-size: 12px; color: var(--rc-faint); }
-.rv-spacer { flex: 1; }
 .muted { color: var(--rc-faint); font-size: 12px; }
 .rv-notice { padding: 7px 12px; border-bottom: 1px solid #fde68a; background: #fffbeb; color: #92400e; font-size: 12px; }
 .rv-notice.error { border-bottom-color: #fecaca; background: #fef2f2; color: #b91c1c; }

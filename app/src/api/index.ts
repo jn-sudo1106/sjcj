@@ -58,6 +58,7 @@ import { encryptLegacyPayload } from './legacyCrypto'
 
 export * from './types'
 export { isDanger, DANGER_ENDPOINTS, isMockMode } from './client'
+export { parseNextStepReceipt, type NextStepReceipt, type NextStepReceiptEntry } from './legacyAdapters'
 
 // 对方后端尚未提供对应实现的资产能力强制走 Mock；网站读取链路已在 siteApi 单独切真实。
 const assetMockRequest = <T>(endpoint: string, params?: Record<string, unknown>) =>

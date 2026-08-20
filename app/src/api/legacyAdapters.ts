@@ -1041,3 +1041,38 @@ export function siteSummaryFromLegacy(input: unknown): SiteSummary {
 export function siteSourceFromLegacy(input: unknown): Source {
   return sourceFromLegacy(input)
 }
+
+/**
+ * `source/nextStep` / `source/nextStep2` 回执解析（0812 计划 M3-0J）。
+ * 真实响应形如 `"本次发送:3 条, 结果:,reject_39025: [3条]"`——"本次发送"是提交条数，
+ * 不是进入条数；按目标节点分组的 `ok_<itemConfig>` / `reject_<itemConfig>` 才是真实结果，
+ * `reject_` 表示被该节点的进入条件拒绝（2026-08-18 测试环境实测确认，见方案 §12.1B）。
+ * 无法解析出任何分组时（如全部 ID 无效："本次发送:0 条, 结果:"）entries 为空数组，
+ * 调用方按 submitted 兜底展示。
+ */
+export interface NextStepReceiptEntry {
+  status: 'ok' | 'reject'
+  nodeId: string
+  count: number
+}
+
+export interface NextStepReceipt {
+  submitted: number
+  entries: NextStepReceiptEntry[]
+  okCount: number
+  rejectCount: number
+  raw: string
+}
+
+export function parseNextStepReceipt(message: string): NextStepReceipt {
+  const submittedMatch = message.match(/本次发送[:：]\s*(\d+)\s*条/)
+  const submitted = submittedMatch ? Number(submittedMatch[1]) : 0
+  const entries: NextStepReceiptEntry[] = []
+  const entryPattern = /(ok|reject)_([^:\s]+)\s*:\s*\[(\d+)\s*条\]/g
+  let match: RegExpExecArray | null
+  while ((match = entryPattern.exec(message))) {
+    entries.push({ status: match[1] as 'ok' | 'reject', nodeId: match[2], count: Number(match[3]) })
+  }
+  const sum = (status: 'ok' | 'reject') => entries.filter((e) => e.status === status).reduce((s, e) => s + e.count, 0)
+  return { submitted, entries, okCount: sum('ok'), rejectCount: sum('reject'), raw: message }
+}

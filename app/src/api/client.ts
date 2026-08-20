@@ -105,7 +105,11 @@ function normalizeHttpPayload(endpoint: string, payload: unknown): unknown {
 
   const code = String(envelope.code ?? '')
   if (code && code !== '0') {
-    throw new Error(String(envelope.msg || `业务请求失败 [${endpoint}]`))
+    // M3-0K（2026-08-18 实测）：业务失败时 envelope.data 有时带着比 msg 更具体的诊断（例如
+    // nextStep 的 cond 语法错误，msg 只有"错误信息:运行时异常"，data 却是真实的解释器报错
+    // "<Long, 1> can't be a left value for assignment."）。此前只取 msg，data 被静默丢弃。
+    const detail = typeof envelope.data === 'string' && envelope.data.trim() ? `：${envelope.data}` : ''
+    throw new Error(String(envelope.msg || `业务请求失败 [${endpoint}]`) + detail)
   }
 
   const data = envelope.data
@@ -118,7 +122,12 @@ function normalizeHttpPayload(endpoint: string, payload: unknown): unknown {
       total: Number(envelope.count ?? envelope.totalCount ?? envelope.total ?? data.length),
     }
   }
-  if (data !== undefined && data !== null) return data
+  // data 有时只是个诊断用的标量，不是调用方要的载荷——2026-08-19 真实联调 nextStep2 实测撞见：
+  // 后端回 {msg:"操作成功，请等待处理，本次发送:0 条任务", data:0}，"0 !== null" 成立，旧逻辑把
+  // 标量 0 当整个响应体返回，调用方按 {message} 取值时 msg 被静默丢弃，UI 只能落到兜底文案。
+  // 只有 data 是对象/数组（详情、列表）时才是调用方真正要用的载荷，可以直接透传；标量场景下
+  // envelope.msg 才是要展示给用户的真实文案。
+  if (data !== undefined && data !== null && typeof data === 'object') return data
   return { ok: true, message: String(envelope.msg || '操作成功') }
 }
 

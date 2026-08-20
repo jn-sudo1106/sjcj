@@ -28,6 +28,7 @@ import {
   summaryRowFromLegacy,
   assertLegacySnatchSaveLogin,
   legacySnatchSavePayloadFromFlow,
+  parseNextStepReceipt,
 } from './legacyAdapters'
 
 describe('旧平台参数模型适配', () => {
@@ -625,5 +626,45 @@ describe('规则编排模型适配（vrule，0801 方案 §4）', () => {
     expect(pickRuleIdFromComposeList(records, { name: '邮箱附件', inputTable: 'sense_data.TB_email_XQ' })).toBe('173')
     expect(pickRuleIdFromComposeList(records, { name: '测试', inputTable: '' })).toBe('174')
     expect(pickRuleIdFromComposeList(records, { name: '不存在', inputTable: 'x' })).toBeUndefined()
+  })
+})
+
+describe('nextStep 回执解析（0812 计划 M3-0J，样例取自 2026-08-18 测试环境真实实测）', () => {
+  it('全部进入：提交数与 ok 数一致', () => {
+    const r = parseNextStepReceipt('本次发送:2 条, 结果:,ok_39025: [2条]')
+    expect(r.submitted).toBe(2)
+    expect(r.okCount).toBe(2)
+    expect(r.rejectCount).toBe(0)
+    expect(r.entries).toEqual([{ status: 'ok', nodeId: '39025', count: 2 }])
+  })
+
+  it('全部被进入条件拒绝：submitted 不为 0，但 okCount 为 0——不能当成功展示', () => {
+    const r = parseNextStepReceipt('本次发送:3 条, 结果:,reject_39025: [3条]')
+    expect(r.submitted).toBe(3)
+    expect(r.okCount).toBe(0)
+    expect(r.rejectCount).toBe(3)
+    expect(r.entries).toEqual([{ status: 'reject', nodeId: '39025', count: 3 }])
+  })
+
+  it('混合分组：ok 与 reject 分别累加', () => {
+    const r = parseNextStepReceipt('本次发送:5 条, 结果:,ok_39025: [3条],reject_39025: [2条]')
+    expect(r.submitted).toBe(5)
+    expect(r.okCount).toBe(3)
+    expect(r.rejectCount).toBe(2)
+    expect(r.entries).toHaveLength(2)
+  })
+
+  it('全部 ID 无效：没有任何分组，entries 为空数组，调用方应按 submitted 兜底', () => {
+    const r = parseNextStepReceipt('本次发送:0 条, 结果:')
+    expect(r.submitted).toBe(0)
+    expect(r.entries).toEqual([])
+    expect(r.okCount).toBe(0)
+    expect(r.rejectCount).toBe(0)
+  })
+
+  it('无法识别的文本：submitted 与 entries 均为空，不抛错', () => {
+    const r = parseNextStepReceipt('')
+    expect(r.submitted).toBe(0)
+    expect(r.entries).toEqual([])
   })
 })

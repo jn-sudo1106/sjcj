@@ -66,3 +66,36 @@ describe('confirmDanger', () => {
     expect(ElMessage.error).toHaveBeenCalledWith('操作失败，请重试')
   })
 })
+
+describe('confirmDanger · onSuccess 覆盖（M3-0J：部分接口需要按回执内容判断成功/部分成功/失败）', () => {
+  it('传入 onSuccess 时不弹默认成功 toast，改由 onSuccess 决定', async () => {
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
+    const run = vi.fn().mockResolvedValue({ message: '本次发送:3 条, 结果:,reject_1: [3条]' })
+    const onSuccess = vi.fn()
+
+    await confirmDanger('发后续任务', '正文', run, onSuccess)
+
+    expect(onSuccess).toHaveBeenCalledWith({ message: '本次发送:3 条, 结果:,reject_1: [3条]' })
+    expect(ElMessage.success).not.toHaveBeenCalled()
+  })
+
+  it('run 抛错时仍走 ElMessage.error，不调用 onSuccess', async () => {
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
+    const run = vi.fn().mockRejectedValue(new Error('生产环境写保护'))
+    const onSuccess = vi.fn()
+
+    await confirmDanger('发后续任务', '正文', run, onSuccess)
+
+    expect(onSuccess).not.toHaveBeenCalled()
+    expect(ElMessage.error).toHaveBeenCalledWith('生产环境写保护')
+  })
+
+  it('不传 onSuccess 时行为与之前完全一致（向后兼容）', async () => {
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
+    const run = vi.fn().mockResolvedValue({ message: '已提交' })
+
+    await confirmDanger('标题', '正文', run)
+
+    expect(ElMessage.success).toHaveBeenCalledWith('已提交')
+  })
+})

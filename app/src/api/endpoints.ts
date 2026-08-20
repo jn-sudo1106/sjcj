@@ -40,8 +40,11 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/clear', desc: '清源缓存', danger: true },
   { path: 'source/queryStepDetail', desc: '查询子步骤详情' },
   { path: 'source/nextStep', desc: '手动后续处理', danger: true, live: true },
-  // nextStep2（发全部/大量后续）联调时按用户要求未真实触发（避免误发大批量抓取任务），暂不标 live
-  { path: 'source/nextStep2', desc: '手动后续处理 2', danger: true },
+  // nextStep2（发全部/大量后续）2026-08-19 起真实接线（M3-0G 复议，见方案；前端已加数量上限
+  // 校验）；但这条请求路径本身从未真实调用过（AES 载荷形状、后端真实响应仅凭读源码推断），
+  // 标 live 只是让"功能一个个上线"的默认流程生效，不代表已联调验证——上生产前必须先在测试
+  // 环境用真实小批量数据走一遍完整链路，不能假设代码读对了就等于接口对了。
+  { path: 'source/nextStep2', desc: '手动后续处理 2', danger: true, live: true },
   { path: 'source/batchImport', desc: '模板源批量导入', danger: true, impl: true },
   { path: 'source/batchModifyConfig', desc: '批量改配置', danger: true, impl: true },
   { path: 'source/changeFreqTag', desc: '频率标识', danger: true, impl: true },
