@@ -775,6 +775,9 @@ function fileResourceSql(q: FileResourceQuery): string | undefined {
     const value = escapeFileResourceLike(q.ext.trim().replace(/^\./, ''))
     parts.push(`K7 LIKE '%${value}%'`)
   }
+  // 自定义 SQL（对齐旧平台 FileList2.vue 的"自定义SQL, 如 K1 IS NULL"，此前迁移遗漏，见 M3-2 补漏）：
+  // 用户输入可能本身含 OR，加括号后再与其他条件 AND，避免优先级被吃掉。
+  if (q.sql?.trim()) parts.push(`(${q.sql.trim()})`)
   return parts.join(' AND ') || undefined
 }
 

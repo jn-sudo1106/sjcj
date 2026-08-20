@@ -128,4 +128,77 @@ describe('FileView', () => {
     expect(wrapper.text()).toContain('文件列表查询失败，请重试')
     expect(wrapper.text()).not.toContain('没有匹配的文件')
   })
+
+  it('自定义 SQL 筛选：对齐旧平台 FileList2.vue 的同名筛选项，此前迁移遗漏（补漏）', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    const query = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ list: files, total: 1 })
+
+    const wrapper = shallowMount(FileView, {
+      global: { directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await flushPromises()
+    const callsAfterMount = query.mock.calls.length
+
+    const sqlInput = wrapper.get('input[aria-label="自定义SQL"]')
+    expect(sqlInput.attributes('placeholder')).toBe('自定义SQL, 如 K1 IS NULL')
+
+    // 逐字符打字（未按 Enter）不触发查询——fileName/ext 是模糊匹配、边打边查没问题，
+    // 但一段没打完的 SQL 逐字符发出去大概率触发后端语法错误，所以要求先按 Enter。
+    await sqlInput.setValue('K1 IS N')
+    await flushPromises()
+    expect(query).toHaveBeenCalledTimes(callsAfterMount)
+
+    await sqlInput.trigger('keyup.enter')
+    await flushPromises()
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ sql: 'K1 IS N' }))
+  })
+
+  it('检测到多张 file_resource 表时给出手动选择的下拉，而不是报错停住（对齐旧平台 loadEntryTypes1 的表ID选择器）', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    const tableB = { tableId: 'file-resource-2', tableName: 'sense_data.tb_ext_file_resource', name: 'ext-文件资源表', rowCount: 5, fields: [] }
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table, tableB])
+    vi.spyOn(fileApi, 'resourceMeta').mockImplementation(async (id) => (id === tableB.tableId ? tableB : table))
+    const query = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ list: files, total: 1 })
+
+    const wrapper = shallowMount(FileView, {
+      global: { directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await flushPromises()
+
+    // 不再是死路："检测到 N 张表，暂不自动选择"这句话不该出现了
+    expect(wrapper.text()).not.toContain('暂不自动选择')
+    const select = wrapper.get('select[aria-label="表ID"]')
+    expect(select.findAll('option')).toHaveLength(2)
+    expect(select.findAll('option')[0].text()).toContain('news-文件资源表')
+    // 默认选第一张，照样能查到数据
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 'file-resource' }))
+
+    await select.setValue(tableB.tableId)
+    await flushPromises()
+
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 'file-resource-2' }))
+  })
+
+  it('只有一张 file_resource 表时不显示下拉，维持原有的纯文本展示', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ list: files, total: 1 })
+
+    const wrapper = shallowMount(FileView, {
+      global: { directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('select[aria-label="表ID"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('数据源：news-文件资源表')
+  })
 })

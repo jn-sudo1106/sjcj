@@ -274,6 +274,8 @@ export interface FileResourceQuery extends PageQuery {
   fileName?: string
   /** K7 扩展名模糊查询。 */
   ext?: string
+  /** 自定义 SQL 条件（如 `K1 IS NULL`），对齐旧平台 FileList2.vue 的同名筛选项，此前迁移时漏做。 */
+  sql?: string
 }
 
 /** @deprecated 仅保留旧演示 mock 的数据形状，业务文件视图已迁移到 FileResourceRecord。 */

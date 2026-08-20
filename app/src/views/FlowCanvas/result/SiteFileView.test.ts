@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import SiteFileView from './SiteFileView.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
+import GlobalSourceSelect from './components/GlobalSourceSelect.vue'
 import { fileApi, siteApi, type FileResourceRecord, type Source } from '@/api'
 
 const table = { tableId: 'file-resource', tableName: 'sense_data.tb_news_file_resource', name: 'news-文件资源表', rowCount: 40, fields: [] }
@@ -34,7 +35,8 @@ describe('SiteFileView', () => {
 
     expect(siteSources).not.toHaveBeenCalled()
     expect(rows).toHaveBeenCalledWith(expect.objectContaining({ tableId: 'file-resource', sourceId: undefined }))
-    expect(wrapper.text()).toContain('全部网站 / 全部源')
+    // 未选网站时不再是一段死文案，是可搜索的全局源筛选（对齐旧平台 FileList2.vue 的"源ID"选择器）。
+    expect(wrapper.findComponent(GlobalSourceSelect).exists()).toBe(true)
     expect(wrapper.text()).toContain('task.html')
   })
 
@@ -147,5 +149,79 @@ describe('SiteFileView', () => {
 
     expect(wrapper.get('[data-testid="site-file-partial-fail"]').text()).toContain('源一（s1）：请求失败 500')
     expect(wrapper.text()).toContain('two.html')
+  })
+
+  it('自定义 SQL 筛选：对齐旧平台 FileList2.vue 的同名筛选项，此前迁移遗漏（补漏）', async () => {
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    const rows = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 1, list: [file('orphan-source', '40', 'task.html')] })
+
+    const wrapper = shallowMount(SiteFileView, {
+      props: { siteId: undefined },
+      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+    })
+    await flushPromises()
+    const callsAfterMount = rows.mock.calls.length
+
+    const sqlInput = wrapper.get('input[aria-label="自定义SQL"]')
+    expect(sqlInput.attributes('placeholder')).toBe('自定义SQL, 如 K1 IS NULL')
+
+    // 逐字符打字不触发查询——与 fileName/ext 一样要求 Enter 或点「查询」才发出去，
+    // 避免一段没打完的 SQL 逐字符触发后端语法错误。
+    await sqlInput.setValue('K1 IS N')
+    await flushPromises()
+    expect(rows).toHaveBeenCalledTimes(callsAfterMount)
+
+    await sqlInput.trigger('keyup.enter')
+    await flushPromises()
+    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ sql: 'K1 IS N' }))
+  })
+
+  it('清空筛选会一并清掉自定义 SQL 并重新查询', async () => {
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    const rows = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 1, list: [file('orphan-source', '40', 'task.html')] })
+
+    const wrapper = shallowMount(SiteFileView, {
+      props: { siteId: undefined },
+      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+    })
+    await flushPromises()
+    const sqlInput = wrapper.get('input[aria-label="自定义SQL"]')
+    await sqlInput.trigger('keyup.enter')
+    await sqlInput.setValue('K1 IS NULL')
+    await sqlInput.trigger('keyup.enter')
+    await flushPromises()
+    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ sql: 'K1 IS NULL' }))
+
+    const clearBtn = wrapper.findAll('button').find((b) => b.text() === '清空')!
+    await clearBtn.trigger('click')
+    await flushPromises()
+
+    expect((sqlInput.element as HTMLInputElement).value).toBe('')
+    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ sql: undefined }))
+  })
+
+  it('检测到多张 file_resource 表时给出手动选择的下拉，而不是报错停住', async () => {
+    const tableB = { tableId: 'file-resource-2', tableName: 'sense_data.tb_ext_file_resource', name: 'ext-文件资源表', rowCount: 5, fields: [] }
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table, tableB])
+    vi.spyOn(fileApi, 'resourceMeta').mockImplementation(async (id) => (id === tableB.tableId ? tableB : table))
+    const rows = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 1, list: [file('orphan-source', '40', 'task.html')] })
+
+    const wrapper = shallowMount(SiteFileView, {
+      props: { siteId: undefined },
+      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('暂不自动选择')
+    const select = wrapper.get('select[aria-label="表ID"]')
+    expect(select.findAll('option')).toHaveLength(2)
+    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 'file-resource' }))
+
+    await select.setValue(tableB.tableId)
+    await flushPromises()
+
+    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 'file-resource-2' }))
   })
 })

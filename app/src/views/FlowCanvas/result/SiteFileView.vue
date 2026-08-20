@@ -2,15 +2,15 @@
 // 网站文件视图：具体网站下 file_resource 只支持单个 sourceId，所以网站“全部源”按源分页取数后做前端归并。
 // 未选择网站时直接查询 file_resource 全量范围，避免任务文件尚未完成网站关联时被过滤掉。
 // 不展示流程节点——网站没有唯一流程；选具体源仅收窄文件范围，仍默认展示该源全部文件。
-import { computed, reactive, ref, useSlots, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fileApi, siteApi, type FileResourceRecord, type Source } from '@/api'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
+import GlobalSourceSelect from './components/GlobalSourceSelect.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
 import { initMergeState, mergeLoadMore, type MergeSourceState, type MergeLoadMoreResult } from './siteDataMerge'
 
 const props = defineProps<{ siteId?: string; initialSourceId?: string }>()
-const slots = useSlots()
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100]
 const MAX_PARALLEL_REQUESTS = 4
@@ -18,9 +18,13 @@ const MAX_PARALLEL_REQUESTS = 4
 const selectedSourceId = ref(props.initialSourceId ?? '')
 const siteSources = ref<Source[]>([])
 const sourceNames = computed<Record<string, string>>(() => Object.fromEntries(siteSources.value.map((source) => [source.sourceId, source.name])))
-const table = ref<{ tableId: string; tableName: string; name?: string } | null>(null)
+type ResourceTable = { tableId: string; tableName: string; name?: string }
+const table = ref<ResourceTable | null>(null)
+// 检测到多张 file_resource 表时此前直接报错停住，用户完全够不着数据；旧平台 FileList2.vue
+// 是给了一个"表ID"下拉手动选（loadEntryTypes1），不是自动挑一张——这里补齐同样的手动选择。
+const tableCandidates = ref<ResourceTable[]>([])
 const rows = ref<FileResourceRecord[]>([])
-const filters = reactive({ fileName: '', ext: '', state: '' })
+const filters = reactive({ fileName: '', ext: '', state: '', sql: '' })
 const page = ref(1)
 const size = ref(PAGE_SIZE_OPTIONS[0])
 const jumpPage = ref(1)
@@ -46,6 +50,7 @@ let queryRequest = 0
 async function loadResourceTable() {
   const requestId = ++tableRequest
   table.value = null
+  tableCandidates.value = []
   error.value = ''
   tableLoading.value = true
   try {
@@ -55,16 +60,8 @@ async function loadResourceTable() {
       error.value = '未找到 file_resource 文件资源表'
       return
     }
-    if (candidates.length > 1) {
-      error.value = `检测到 ${candidates.length} 张 file_resource 表，暂不自动选择`
-      return
-    }
-    // 旧平台列表用固定 K 字段渲染，表目录已足够查询；详情接口异常不能阻断文件列表。
-    table.value = candidates[0]
-    void fileApi.resourceMeta(candidates[0].tableId).then((meta) => {
-      if (requestId === tableRequest && meta) table.value = meta
-    }).catch(() => undefined)
-    if (requestId === tableRequest) await resetAndLoad()
+    tableCandidates.value = candidates
+    await selectTable(candidates[0], requestId)
   } catch {
     if (requestId !== tableRequest) return
     error.value = '加载文件资源表失败'
@@ -72,6 +69,19 @@ async function loadResourceTable() {
   } finally {
     if (requestId === tableRequest) tableLoading.value = false
   }
+}
+// 旧平台列表用固定 K 字段渲染，表目录已足够查询；详情接口异常不能阻断文件列表。
+async function selectTable(candidate: ResourceTable, requestId = tableRequest) {
+  table.value = candidate
+  void fileApi.resourceMeta(candidate.tableId).then((meta) => {
+    if (requestId === tableRequest && meta) table.value = meta
+  }).catch(() => undefined)
+  if (requestId === tableRequest) await resetAndLoad()
+}
+function onTableChange(tableId: string) {
+  const candidate = tableCandidates.value.find((c) => c.tableId === tableId)
+  if (!candidate) return
+  void selectTable(candidate)
 }
 
 async function fetchPage(sourceId: string, page: number, size: number): Promise<FileResourceRecord[]> {
@@ -83,6 +93,7 @@ async function fetchPage(sourceId: string, page: number, size: number): Promise<
     state: filters.state || undefined,
     fileName: filters.fileName || undefined,
     ext: filters.ext || undefined,
+    sql: filters.sql || undefined,
     page,
     size,
   })
@@ -144,6 +155,7 @@ async function resetAndLoad(resetPage = true) {
         state: filters.state || undefined,
         fileName: filters.fileName || undefined,
         ext: filters.ext || undefined,
+        sql: filters.sql || undefined,
         page: page.value,
         size: size.value,
       })
@@ -170,6 +182,7 @@ function clearFilters() {
   filters.fileName = ''
   filters.ext = ''
   filters.state = ''
+  filters.sql = ''
   runQuery()
 }
 function valueOf(file: FileResourceRecord, key: string): unknown {
@@ -244,12 +257,23 @@ watch(selectedSourceId, () => {
     <div class="sfv-toolbar">
       <slot name="toolbar-prefix" />
       <SiteSourceSelect v-if="siteId" v-model="selectedSourceId" :site-id="siteId" />
-      <span v-else-if="!slots['toolbar-prefix']" class="sfv-scope">全部网站 / 全部源</span>
+      <GlobalSourceSelect v-else v-model="selectedSourceId" />
+      <select
+        v-if="tableCandidates.length > 1"
+        class="sfv-input"
+        aria-label="表ID"
+        data-testid="site-file-table-select"
+        :value="table?.tableId"
+        @change="onTableChange(($event.target as HTMLSelectElement).value)"
+      >
+        <option v-for="c in tableCandidates" :key="c.tableId" :value="c.tableId">[{{ c.tableId }}] {{ c.name || c.tableName }}</option>
+      </select>
       <input v-model="filters.fileName" class="sfv-input" placeholder="文件名或展示名" aria-label="文件名" @keyup.enter="runQuery">
       <input v-model="filters.ext" class="sfv-input" placeholder="类型，如 pdf、html" aria-label="文件类型" @keyup.enter="runQuery">
       <select v-model="filters.state" class="sfv-input" aria-label="状态">
         <option value="">状态（不限）</option><option value="C">初始</option><option value="AC">被消重</option>
       </select>
+      <input v-model="filters.sql" class="sfv-input" placeholder="自定义SQL, 如 K1 IS NULL" aria-label="自定义SQL" @keyup.enter="runQuery">
       <button class="rc-btn primary" type="button" @click="runQuery">查询</button>
       <button class="rc-btn" type="button" @click="clearFilters">清空</button>
     </div>
@@ -318,7 +342,6 @@ watch(selectedSourceId, () => {
 .sfv-input { height: 28px; min-width: 112px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; outline: none; }
 .sfv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .sfv-toolbar .rc-btn, .sfv-foot .rc-btn { height: 28px; padding: 0 10px; font-size: 12px; }
-.sfv-scope { display: inline-flex; align-items: center; min-width: 220px; height: 28px; padding: 0 9px; border: 1px solid var(--rc-border); border-radius: 6px; background: #f8fafc; color: var(--rc-text-2); font-size: 12px; }
 .sfv-toolbar :deep(.sss-wrap) { min-width: 170px; width: 170px; }
 .sfv-toolbar :deep(.sss-input) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sfv-empty { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px 12px; color: var(--rc-faint); font-size: 12px; text-align: center; }
@@ -343,6 +366,6 @@ watch(selectedSourceId, () => {
 .sfv-page-jump { width: 54px; padding: 0 6px; }
 @media (max-width: 900px) {
   .sfv-toolbar { flex-wrap: wrap; overflow-x: visible; }
-  .sfv-toolbar :deep(.sss-wrap) { min-width: 220px; width: auto; }
+  .sfv-toolbar :deep(.sss-wrap), .sfv-toolbar :deep(.gss-wrap) { min-width: 220px; width: auto; }
 }
 </style>

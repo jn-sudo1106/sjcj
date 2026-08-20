@@ -26,7 +26,12 @@ watch(processLayout, (layout) => {
   }
 }, { immediate: true })
 
-const table = ref<{ tableId: string; tableName: string; name?: string } | null>(null)
+type ResourceTable = { tableId: string; tableName: string; name?: string }
+const table = ref<ResourceTable | null>(null)
+// 检测到多张 file_resource 表时此前直接报错停住（Q5①未确认多表规则），用户完全够不着数据；
+// 旧平台 FileList2.vue 其实是给了一个"表ID"下拉手动选（loadEntryTypes1，query name=file_resource
+// 最多 10 条），不是自动挑一张——这里补齐同样的手动选择，而不是等 Q5① 有结论才能查文件。
+const tableCandidates = ref<ResourceTable[]>([])
 const rows = ref<FileResourceRecord[]>([])
 const total = ref(0)
 const loading = ref(false)
@@ -36,7 +41,7 @@ const listError = ref('')
 const page = ref(1)
 const size = ref(20)
 const jumpPage = ref(1)
-const filters = reactive({ fileName: '', ext: '', state: '' })
+const filters = reactive({ fileName: '', ext: '', state: '', sql: '' })
 const detail = reactive<{ visible: boolean; file: FileResourceRecord | null }>({ visible: false, file: null })
 const maxPage = computed(() => Math.max(1, Math.ceil(total.value / size.value)))
 
@@ -44,6 +49,7 @@ let tableRequest = 0
 async function loadResourceTable() {
   const requestId = ++tableRequest
   table.value = null
+  tableCandidates.value = []
   rows.value = []
   total.value = 0
   error.value = ''
@@ -57,16 +63,8 @@ async function loadResourceTable() {
       error.value = '未找到 file_resource 文件资源表'
       return
     }
-    if (candidates.length > 1) {
-      error.value = `检测到 ${candidates.length} 张 file_resource 表，暂不自动选择`
-      return
-    }
-    // 旧平台文件列表以固定 K 字段展示，表目录已足够发起查询；详情接口不可用时不阻断列表。
-    table.value = candidates[0]
-    void fileApi.resourceMeta(candidates[0].tableId).then((meta) => {
-      if (requestId === tableRequest && meta) table.value = meta
-    }).catch(() => undefined)
-    await loadList(requestId)
+    tableCandidates.value = candidates
+    await selectTable(candidates[0], requestId)
   } catch {
     if (requestId !== tableRequest) return
     error.value = '加载文件资源表失败'
@@ -74,6 +72,21 @@ async function loadResourceTable() {
   } finally {
     if (requestId === tableRequest) tableLoading.value = false
   }
+}
+// 旧平台文件列表以固定 K 字段展示，表目录已足够发起查询；详情接口不可用时不阻断列表。
+async function selectTable(candidate: ResourceTable, requestId = tableRequest) {
+  table.value = candidate
+  void fileApi.resourceMeta(candidate.tableId).then((meta) => {
+    if (requestId === tableRequest && meta) table.value = meta
+  }).catch(() => undefined)
+  await loadList(requestId)
+}
+function onTableChange(tableId: string) {
+  const candidate = tableCandidates.value.find((c) => c.tableId === tableId)
+  if (!candidate) return
+  page.value = 1
+  jumpPage.value = 1
+  void selectTable(candidate)
 }
 let listRequest = 0
 async function loadList(parentRequest = tableRequest) {
@@ -90,6 +103,7 @@ async function loadList(parentRequest = tableRequest) {
     state: filters.state || undefined,
     fileName: filters.fileName || undefined,
     ext: filters.ext || undefined,
+    sql: filters.sql || undefined,
     page: page.value,
     size: size.value,
   }
@@ -170,6 +184,12 @@ function resetFilters() {
   filters.fileName = ''
   filters.ext = ''
   filters.state = ''
+  // sql 不在下面的自动 watch 里；若只有 sql 有值、其余三项本就是空，watch 不会因为"值没变"
+  // 而触发，清空按钮会看起来没反应——所以这里不依赖 watch，直接重新查一次。
+  filters.sql = ''
+  page.value = 1
+  jumpPage.value = 1
+  if (table.value) void loadList()
 }
 
 watch(() => [filters.fileName, filters.ext, filters.state] as const, () => {
@@ -177,6 +197,15 @@ watch(() => [filters.fileName, filters.ext, filters.state] as const, () => {
   jumpPage.value = 1
   if (table.value) void loadList()
 })
+
+// 自定义 SQL 不进上面的自动 watch：fileName/ext 是模糊匹配，边打字边查最多结果多点少点；
+// 一段没打完的 SQL（如 "K1 IS N"）逐字符发出去大概率报语法错误，每敲一下弹一次失败提示，
+// 体验比前两个差一截——所以单独要求按 Enter 才查（与 ResultView.vue 的同名字段行为一致）。
+function onSqlEnter() {
+  page.value = 1
+  jumpPage.value = 1
+  if (table.value) void loadList()
+}
 </script>
 
 <template>
@@ -192,13 +221,24 @@ watch(() => [filters.fileName, filters.ext, filters.state] as const, () => {
           <span class="fv-toolbar-note" data-testid="file-resource-table">
             <span v-if="tableLoading">正在定位 file_resource 文件资源表…</span>
             <span v-else-if="error" class="fv-error">{{ error }}</span>
-            <span v-else>数据源：{{ table?.name || table?.tableName || 'file_resource' }}</span>
+            <span v-else-if="tableCandidates.length <= 1">数据源：{{ table?.name || table?.tableName || 'file_resource' }}</span>
           </span>
+          <select
+            v-if="!tableLoading && !error && tableCandidates.length > 1"
+            class="fv-input"
+            aria-label="表ID"
+            data-testid="file-table-select"
+            :value="table?.tableId"
+            @change="onTableChange(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="c in tableCandidates" :key="c.tableId" :value="c.tableId">[{{ c.tableId }}] {{ c.name || c.tableName }}</option>
+          </select>
           <input v-model="filters.fileName" class="fv-input" placeholder="文件名或展示名" aria-label="文件名">
           <input v-model="filters.ext" class="fv-input" placeholder="类型，如 pdf、html" aria-label="文件类型">
           <select v-model="filters.state" class="fv-input" aria-label="状态">
             <option value="">状态（不限）</option><option value="C">初始</option><option value="AC">被消重</option>
           </select>
+          <input v-model="filters.sql" class="fv-input" placeholder="自定义SQL, 如 K1 IS NULL" aria-label="自定义SQL" @keyup.enter="onSqlEnter">
           <button class="rc-btn" type="button" @click="resetFilters">清空筛选</button>
           <span class="fv-spacer" />
           <span class="muted">共 {{ total }} 个文件</span>
@@ -322,4 +362,11 @@ watch(() => [filters.fileName, filters.ext, filters.state] as const, () => {
 .fv-page-size, .fv-page-jump { height: 28px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; }
 .fv-page-size { width: 54px; margin: 0 4px; }
 .fv-page-jump { width: 54px; padding: 0 6px; }
+
+/* 新增自定义 SQL 输入框后 .fv-filters 四个筛选项 + 提示文案在窄容器下会被挤出可视区
+   （原生 flex 默认 nowrap，且父级 overflow: visible，溢出部分既不换行也不能横向滚动，
+   实测在这次核对里就撞见了）。对齐 SiteFileView.vue 已有的同一断点处理，允许换行。 */
+@media (max-width: 900px) {
+  .fv-filters { flex-wrap: wrap; }
+}
 </style>
