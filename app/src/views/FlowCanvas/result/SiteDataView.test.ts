@@ -157,6 +157,54 @@ describe('SiteDataView · 全部源（表筛选）', () => {
     expect(rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ dataId: '123', sourceId: 'a' }))
   })
 
+  it('表名/行数走 DataGrid 的 #head 插槽，跟「列 ▾」同一条横条——不再是独立的 .sdv2-tablehead 单占一行（参考 ResultView.vue）', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['a'])
+    const meta2Cols: DataTableMeta = {
+      tableId: 't1', tableName: 'T1', rowCount: 0,
+      fields: [{ prop: 'title', type: 'string', desc: '标题' }, { prop: 'url', type: 'string', desc: '链接' }],
+    }
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta2Cols)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [row('a', '1')] })
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+
+    // 旧结构会有独立的 .sdv2-tablehead 包裹层；现在表名/计数直接是 DataGrid 工具行的一部分。
+    expect(wrapper.find('.sdv2-tablehead').exists()).toBe(false)
+    const toolbar = wrapper.get('.dg-toolbar')
+    expect(toolbar.text()).toContain('T1')
+    expect(toolbar.text()).toContain('已加载 1 条')
+    expect(toolbar.find('[data-testid="site-data-fullscreen-toggle"]').exists()).toBe(true)
+    expect(toolbar.text()).toContain('列 ▾')
+  })
+
+  it('全屏切换：点击进入/退出全屏，Esc 也能退出（参考 ResultView.vue 具体源数据视图）', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['a'])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+
+    const shell = wrapper.get('.sdv2-shell')
+    expect(shell.classes()).not.toContain('is-fullscreen')
+
+    const toggle = wrapper.get('[data-testid="site-data-fullscreen-toggle"]')
+    expect(toggle.text()).toBe('⤢ 全屏')
+    await toggle.trigger('click')
+    expect(shell.classes()).toContain('is-fullscreen')
+    expect(wrapper.get('[data-testid="site-data-fullscreen-toggle"]').text()).toBe('⤡ 退出全屏')
+
+    // Esc 监听挂在 window 上，不是组件根节点——直接派发到 window。
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+    expect(shell.classes()).not.toContain('is-fullscreen')
+
+    wrapper.unmount()
+  })
+
   it('行内查后续任务实例按当前行的 sourceId 和 dataId 打开任务弹窗', async () => {
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
     vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['a'])
@@ -461,5 +509,94 @@ describe('SiteDataView · 具体源（节点筛选，纯查看——2026-08-14 �
 
     // 过期的请求 #2 响应到达了，但请求竞态保护应该已经丢弃它
     expect(grid().props('rows')?.[0]?.dataId).toBe('fresh')
+  })
+})
+
+// M3-0H：ResultView.vue 已有的 M3-0B（父 ID 下钻）此前只落在具体源流程页；网站数据视图
+// 这边一直没补——筛选行有「父 ID」输入框能按父 ID 筛，却点不开任何一行的父数据，同一页面
+// 内口径不一致。逻辑照搬 ResultView.vue 的 canDrillParent/openParentDetail，用 ElDrawer 的
+// 真实渲染 stub（而非全量 true stub）才能点进抽屉内部找父 ID 链接。
+const ElDrawerStub = { name: 'ElDrawer', props: ['modelValue'], template: '<div><slot /></div>' }
+function mountViewWithDrawer(siteId = 'site-a') {
+  return mount(SiteDataView, { props: { siteId }, global: { stubs: { ...stubs, ElDrawer: ElDrawerStub } } })
+}
+
+describe('SiteDataView · 上游数据下钻（M3-0H）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('行带 categoryId+parentId 时详情抽屉里父 ID 可点，点开后展示上游行数据', async () => {
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('391007768')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['391007768'])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 1,
+      list: [{ dataId: 'd1', sourceId: '391007768', title: '详情行', summary: '', acceptState: 'pending', categoryId: 'cat-1', parentId: 'p1' }],
+    })
+    const rowDetail = vi.spyOn(dataApi, 'rowDetail').mockResolvedValue({
+      row: { dataId: 'p1', sourceId: '391007768', title: '上游行', summary: '', acceptState: 'pending' },
+      showItems: [{ columnName: 'K1', itemName: '标题', value: '上游标题' }],
+    })
+
+    const wrapper = mountViewWithDrawer()
+    await pickTable(wrapper)
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('row-action',
+      { dataId: 'd1', sourceId: '391007768', title: '详情行', summary: '', acceptState: 'pending', categoryId: 'cat-1', parentId: 'p1' }, 'detail')
+    await flushPromises()
+
+    const link = wrapper.get('[data-testid="site-data-parent-drill"]')
+    expect(link.text()).toContain('p1')
+
+    await link.trigger('click')
+    await flushPromises()
+
+    expect(rowDetail).toHaveBeenCalledWith('cat-1', 'p1')
+    expect(wrapper.get('[data-testid="site-data-parent-panel"]').text()).toContain('上游标题')
+  })
+
+  it('行没有 categoryId/parentId（或 parentId 是 "0"）时不渲染下钻入口', async () => {
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('391007768')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['391007768'])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 1,
+      list: [{ dataId: 'd1', sourceId: '391007768', title: '无父行', summary: '', acceptState: 'pending', parentId: '0' }],
+    })
+
+    const wrapper = mountViewWithDrawer()
+    await pickTable(wrapper)
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('row-action',
+      { dataId: 'd1', sourceId: '391007768', title: '无父行', summary: '', acceptState: 'pending', parentId: '0' }, 'detail')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="site-data-parent-drill"]').exists()).toBe(false)
+  })
+
+  it('换行打开新详情时收起上一行残留的上游数据面板', async () => {
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('391007768')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['391007768'])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 1,
+      list: [{ dataId: 'd1', sourceId: '391007768', title: 'A', summary: '', acceptState: 'pending', categoryId: 'cat-1', parentId: 'p1' }],
+    })
+    vi.spyOn(dataApi, 'rowDetail').mockResolvedValue({
+      row: { dataId: 'p1', sourceId: '391007768', title: '上游行', summary: '', acceptState: 'pending' },
+      showItems: [],
+    })
+
+    const wrapper = mountViewWithDrawer()
+    await pickTable(wrapper)
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('row-action',
+      { dataId: 'd1', sourceId: '391007768', title: 'A', summary: '', acceptState: 'pending', categoryId: 'cat-1', parentId: 'p1' }, 'detail')
+    await flushPromises()
+    await wrapper.get('[data-testid="site-data-parent-drill"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="site-data-parent-panel"]').exists()).toBe(true)
+
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('row-action',
+      { dataId: 'd2', sourceId: '391007768', title: 'B', summary: '', acceptState: 'pending' }, 'detail')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="site-data-parent-panel"]').exists()).toBe(false)
   })
 })

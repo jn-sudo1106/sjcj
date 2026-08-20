@@ -22,8 +22,8 @@
 // 一眼"的定位不符，真要执行任务走 ResultView.vue（具体源的流程结果视图）。列表的"所属源"列
 // 在具体源下每行都是同一个源，容易让人以为是跨源归并，改叫"所属节点"并去掉操作列，
 // 避免跟具体源自己的数据视图（ResultView.vue）混淆。
-import { computed, reactive, ref, watch } from 'vue'
-import { dataApi, flowApi, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source } from '@/api'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { dataApi, flowApi, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail } from '@/api'
 import {
   buildHorizontalLayout, buildSourceSeed, effectiveInputTable, nodeOutputTable, isDecision, isParallel,
   type NodeConfig, type BranchSeed, type FlowBranchGroup,
@@ -38,6 +38,16 @@ const props = defineProps<{ siteId: string }>()
 
 const PAGE_SIZE = 20
 const MAX_PARALLEL_REQUESTS = 4
+
+// 全屏（参考 ResultView.vue 的具体源数据视图）：整个面板 position:fixed 铺满视口，不复制
+// 模板、不引入弹层——这里没有 ResultView.vue 那样需要收起的节点轨道（节点选择本来就是
+// 纯下拉，不占额外空间），所以不用像那边一样记录/恢复"进全屏前的折叠状态"。
+const fullscreen = ref(false)
+function onWindowKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && fullscreen.value) fullscreen.value = false
+}
+onMounted(() => window.addEventListener('keydown', onWindowKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onWindowKeydown))
 
 const tableId = ref('')
 const selectedSourceId = ref('')
@@ -185,8 +195,9 @@ async function fetchPage(sourceId: string, page: number, size: number): Promise<
     sql: filters.sql || undefined,
     page,
     size,
-    // 排序参数是否真的被后端接受未经实测（旧参考页面从未真正用过，见计划 §3.2 Q9
-    // 追加项）；就算不生效，归并算法本身对每批数据有客户端二次排序兜底，见 siteDataMerge.ts。
+    // 排序参数已实测确认真实生效（2026-08-15，测试环境，见计划 §3.2 Q9）：不传/ascend/descend
+    // 三次真实调用返回了方向相反的不同批次数据，不是静默忽略。客户端二次排序兜底仍保留
+    // （siteDataMerge.ts），但已不再是"建立在未验证假设上"，是多源归并后的防御性再排序。
     sortField: 'ENTRY_ID',
     sortOrder: 'descend',
   })
@@ -315,16 +326,49 @@ const taskInst = reactive<{ visible: boolean; sourceId: string; parentId: string
 function onRowClick(row: DataRow) {
   detail.row = row
   detail.visible = true
+  closeParentDetail()
 }
 function onRowAction(row: DataRow, cmd: string) {
   if (cmd === 'detail') {
     detail.row = row
     detail.visible = true
+    closeParentDetail()
   } else if (cmd === 'tasks') {
     taskInst.sourceId = row.sourceId
     taskInst.parentId = row.dataId
     taskInst.visible = true
   }
+}
+
+// 上游数据下钻（M3-0H）：ResultView.vue 已有的 M3-0B 只落在具体源流程页，网站数据视图
+// 这边一直没补——筛选行有「父 ID」输入框能按父 ID 筛，但点不开任何一行的父数据，
+// 同一页面内口径不一致。categoryId/parentId 同样早就在 DataRow 里，只是没渲染入口。
+const parentDetail = ref<EntryDetail | null>(null)
+const parentLoading = ref(false)
+const parentError = ref('')
+const canDrillParent = computed(() => !!detail.row?.categoryId && !!detail.row?.parentId && detail.row.parentId !== '0')
+async function openParentDetail() {
+  if (!detail.row?.categoryId || !detail.row?.parentId) return
+  parentLoading.value = true
+  parentError.value = ''
+  try {
+    const res = await dataApi.rowDetail(detail.row.categoryId, detail.row.parentId)
+    parentDetail.value = res
+    if (!res) parentError.value = '未找到上游数据'
+  } catch (error) {
+    parentError.value = error instanceof Error ? error.message : '获取上游数据失败'
+  } finally {
+    parentLoading.value = false
+  }
+}
+function closeParentDetail() {
+  parentDetail.value = null
+  parentError.value = ''
+}
+function parentItemText(v: unknown): string {
+  if (v === undefined || v === null || v === '') return '—'
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
 }
 // row.values 的键是旧平台物理列名（K1/K2...），不是 f.prop 这个逻辑字段名（如 "title"）——
 // 两者只在 f.columnName 上能对上，直接拿 f.prop 去 row.values 里取永远是 undefined。真实
@@ -340,7 +384,7 @@ const detailFields = computed(() => {
 </script>
 
 <template>
-  <main class="sdv2-shell">
+  <main class="sdv2-shell" :class="{ 'is-fullscreen': fullscreen }">
     <div class="sdv2-toolbar">
       <SiteSourceSelect v-model="selectedSourceId" :site-id="siteId" />
       <SiteTableSelect v-if="!selectedSourceId" v-model="tableId" :site-id="siteId" />
@@ -408,11 +452,9 @@ const detailFields = computed(() => {
         {{ failedSources.length }} 个源本次查询失败，结果可能不完整：{{ failedSources.map(failedSourceText).join('；') }}
       </div>
 
-      <div class="sdv2-tablehead">
-        <span class="sdv2-tablename">{{ meta?.tableName || effectiveTableId }}</span>
-        <span class="sdv2-count">已加载 {{ rows.length }} 条</span>
-      </div>
-
+      <!-- 表头内容走 DataGrid 的 #head 插槽，跟「列 ▾」共用同一条横条——参考 ResultView.vue
+           的具体源数据视图（2026-08-15 第十二次纠偏）；这里此前是独立的 .sdv2-tablehead
+           单占一行，跟 DataGrid 自己的「列 ▾」行分开，同一类信息在两个数据视图里长得不一样。 -->
       <DataGrid
         class="sdv2-grid"
         :meta="meta"
@@ -424,7 +466,19 @@ const detailFields = computed(() => {
         :hide-actions="!!selectedSourceId"
         @row-click="onRowClick"
         @row-action="onRowAction"
-      />
+      >
+        <template #head>
+          <span class="sdv2-tablename">{{ meta?.tableName || effectiveTableId }}</span>
+          <span class="sdv2-count">已加载 {{ rows.length }} 条</span>
+          <button
+            class="rc-btn tiny sdv2-fs-btn"
+            type="button"
+            data-testid="site-data-fullscreen-toggle"
+            :title="fullscreen ? '退出全屏（Esc）' : '全屏查看数据'"
+            @click="fullscreen = !fullscreen"
+          >{{ fullscreen ? '⤡ 退出全屏' : '⤢ 全屏' }}</button>
+        </template>
+      </DataGrid>
 
       <div class="sdv2-foot">
         <span v-if="allExhausted" class="muted">已加载全部数据</span>
@@ -447,8 +501,29 @@ const detailFields = computed(() => {
             <div class="sdv2-d-sub">
               数据 ID {{ detail.row.dataId }}<template v-if="!selectedSourceId"> · 所属源 {{ sourceNames[detail.row.sourceId] || detail.row.sourceId }}</template>
             </div>
+            <button
+              v-if="canDrillParent"
+              type="button"
+              class="sdv2-parent-link"
+              data-testid="site-data-parent-drill"
+              :disabled="parentLoading"
+              @click="openParentDetail"
+            >父 ID {{ detail.row.parentId }} <span aria-hidden="true">↗</span></button>
           </div>
           <button class="rc-btn ghost" type="button" @click="detail.visible = false">关闭</button>
+        </div>
+        <div v-if="parentError" class="sdv2-notice error">{{ parentError }}</div>
+        <div v-if="parentDetail" class="sdv2-parent-panel" data-testid="site-data-parent-panel">
+          <div class="sdv2-parent-panel-head">
+            <span>上游数据 · {{ parentDetail.row.dataId }}</span>
+            <button class="rc-btn ghost" type="button" @click="closeParentDetail">收起</button>
+          </div>
+          <dl class="rc-kv">
+            <template v-for="item in parentDetail.showItems" :key="item.columnName">
+              <dt>{{ item.itemName || item.columnName }}</dt>
+              <dd>{{ parentItemText(item.value) }}</dd>
+            </template>
+          </dl>
         </div>
         <dl class="rc-kv">
           <template v-for="f in detailFields" :key="f.label">
@@ -469,6 +544,9 @@ const detailFields = computed(() => {
 
 <style scoped>
 .sdv2-shell { background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; height: 100%; display: flex; flex-direction: column; }
+/* 全屏（参考 ResultView.vue）：fixed 铺满视口逃逸到父级布局之外，父级（SiteDetailView.vue
+   的网站标题/页签）不需要跟着让位——position:fixed 本来就会跳出正常文档流。 */
+.sdv2-shell.is-fullscreen { position: fixed; inset: 0; z-index: 60; height: 100vh; border: 0; border-radius: 0; }
 .sdv2-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; position: relative; }
 .sdv2-input { height: 28px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; font-size: 12px; outline: none; min-width: 110px; background: #fff; }
 .sdv2-input.flex { flex: 1; min-width: 200px; font-family: var(--rc-mono, monospace); }
@@ -478,9 +556,10 @@ const detailFields = computed(() => {
 .sdv2-notice { padding: 7px 12px; border-bottom: 1px solid #fde68a; background: #fffbeb; color: #92400e; font-size: 12px; }
 .sdv2-notice.error { border-bottom-color: #fecaca; background: #fef2f2; color: #b91c1c; }
 .sdv2-notice.warn { border-bottom-color: #fde68a; background: #fffbeb; color: #92400e; }
-.sdv2-tablehead { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; }
 .sdv2-tablename { font-family: var(--rc-mono, monospace); font-size: 12px; color: var(--rc-text-2); }
 .sdv2-count { font-size: 12px; color: var(--rc-faint); }
+.sdv2-fs-btn { margin-left: auto; }
+.rc-btn.tiny { height: 24px; padding: 0 10px; font-size: 11.5px; }
 .sdv2-grid { flex: 1; min-height: 0; }
 .sdv2-foot { display: flex; justify-content: center; padding: 10px 12px; border-top: 1px solid var(--rc-border-soft); background: #fff; }
 .sdv2-foot .rc-btn { height: 28px; padding: 0 16px; font-size: 12px; }
@@ -489,6 +568,14 @@ const detailFields = computed(() => {
 .sdv2-d-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .sdv2-d-title { font-size: 14px; font-weight: 700; color: var(--rc-text); }
 .sdv2-d-sub { font-size: 11px; color: var(--rc-faint); margin-top: 3px; }
+.sdv2-parent-link { margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; padding: 0; font-size: 11px; color: var(--rc-primary); cursor: pointer; }
+.sdv2-parent-link:hover { text-decoration: underline; }
+.sdv2-parent-link:disabled { opacity: .6; cursor: default; text-decoration: none; }
+.sdv2-parent-panel { margin-bottom: 14px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #f8fafc; padding: 10px 12px; }
+.sdv2-parent-panel-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 700; color: var(--rc-text-2); margin-bottom: 8px; }
+.sdv2-parent-panel .rc-kv { margin: 0; }
+.sdv2-notice { padding: 7px 12px; border-bottom: 1px solid #fde68a; background: #fffbeb; color: #92400e; font-size: 12px; }
+.sdv2-notice.error { border-bottom-color: #fecaca; background: #fef2f2; color: #b91c1c; }
 .rc-btn.ghost { background: transparent; border-color: var(--rc-border); color: var(--rc-text-2); }
 
 .sns-field { position: relative; display: flex; align-items: center; gap: 6px; min-width: 220px; }
