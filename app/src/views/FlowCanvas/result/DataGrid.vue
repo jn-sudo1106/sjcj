@@ -76,6 +76,17 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 // （比如 "title"）——这两个只在 f.columnName 里对得上，直接用 f.prop 去取永远是 undefined。
 // 真实 bug，2026-08-14 生产环境实测发现：详情弹层和表格本体所有字段都显示"—"，
 // 不是接口没数据，是取错了 key。
+// 列头文案对齐旧平台 EntryList2.vue:842 的 `item.itemName + '-' + item.columnName`
+// ——即「标题-K1」。SQL 条件框拼的是物理列名（K1），而迁移时列头只渲染了 prop（itemCode，
+// 如 title），把 columnName 整个藏了起来：界面上唯一能看到的名字拿去写 WHERE 必然 500，
+// 等于把人往坑里引（0819 会议 10:53"条件支持什么开头"的根子）。数据一直都在，只是没渲染。
+// 兜底：没有 columnName 的列（ENTRY_ID/SOURCE_ID 合成列本身就是物理列名，
+// 或 inferTableMeta 推断出的列）退回 prop；desc 缺失时只显示物理列名。
+function colLabel(field: { prop: string; desc?: string; columnName?: string }): string {
+  const physical = field.columnName || field.prop
+  return field.desc && field.desc !== physical ? `${field.desc}-${physical}` : physical
+}
+
 function cellText(row: DataRow, field: { prop: string; columnName?: string }): string {
   if (field.prop === 'ENTRY_ID') return row.dataId || '—'
   if (field.prop === 'SOURCE_ID') return row.sourceId || '—'
@@ -109,7 +120,7 @@ function stateMeta(s?: string) {
         <div v-if="colsMenuOpen" class="dg-cols-panel">
           <label v-for="f in cols" :key="f.prop" class="dg-col-item">
             <input type="checkbox" :checked="!hiddenCols.has(f.prop)" @change="toggleCol(f.prop)" />
-            {{ f.prop }} · {{ f.desc }}
+            {{ colLabel(f) }}
           </label>
         </div>
       </div>
@@ -123,7 +134,7 @@ function stateMeta(s?: string) {
               <input type="checkbox" :checked="allChecked" :indeterminate="someChecked" @change="toggleAll" />
             </th>
             <th v-if="showSourceCol" style="width:140px">{{ sourceColLabel || '所属源' }}</th>
-            <th v-for="f in visibleCols" :key="f.prop" :style="{ minWidth: compact ? '96px' : '110px' }">{{ f.prop }}</th>
+            <th v-for="f in visibleCols" :key="f.prop" :style="{ minWidth: compact ? '96px' : '110px' }" :title="f.desc || f.prop">{{ colLabel(f) }}</th>
             <th v-if="!compact" style="width:64px">状态</th>
             <th v-if="showActions" style="width:80px">操作</th>
           </tr>

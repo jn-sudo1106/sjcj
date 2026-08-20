@@ -36,7 +36,8 @@ describe('DataGrid', () => {
     })
 
     // "状态"列本来就没传 state，会正常显示"—"，只断言标题格自己不是"—"
-    expect(cellByHeader(wrapper, 'title')).toBe('真实标题')
+    // 列头是「中文名-物理列名」，对齐旧平台 EntryList2.vue
+    expect(cellByHeader(wrapper, '标题-K1')).toBe('真实标题')
   })
 
   it('ENTRY_ID / SOURCE_ID 两个身份列默认可见——旧平台各表 schema 不声明它们，不补出来就既看不出数据 ID 也看不出属于哪个源（0819 会议 08:16 / 09:44）', () => {
@@ -48,8 +49,30 @@ describe('DataGrid', () => {
       global: { stubs: { ElDropdown: true } },
     })
 
-    expect(cellByHeader(wrapper, 'ENTRY_ID')).toBe('d1')
-    expect(cellByHeader(wrapper, 'SOURCE_ID')).toBe('430016500')
+    expect(cellByHeader(wrapper, '主键 ID-ENTRY_ID')).toBe('d1')
+    expect(cellByHeader(wrapper, '所属源 ID-SOURCE_ID')).toBe('430016500')
+  })
+
+  it('列头是「中文名-物理列名」，对齐旧平台 EntryList2.vue 的 itemName-columnName——SQL 条件框拼的是物理列名，界面不暴露它就等于把人往坑里引', () => {
+    const wrapper = mount(DataGrid, {
+      props: {
+        meta: {
+          tableId: 't1', tableName: '表', rowCount: 1,
+          fields: [
+            { prop: 'title', columnName: 'K1', type: 'string', desc: '标题' },
+            { prop: 'noDesc', columnName: 'K2', type: 'string', desc: '' },
+            { prop: 'inferred', type: 'string', desc: '推断列' },
+          ],
+        },
+        rows: [],
+      },
+      global: { stubs: { ElDropdown: true } },
+    })
+
+    const heads = wrapper.findAll('thead th').map((th) => th.text())
+    expect(heads).toContain('标题-K1')
+    expect(heads).toContain('K2') // desc 缺失时只显示物理列名
+    expect(heads).toContain('推断列-inferred') // 没有 columnName 的推断列退回 prop
   })
 
   it('没有 columnName 时（比如兜底推断出的 meta）退回用 prop 取值', () => {

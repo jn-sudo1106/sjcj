@@ -471,10 +471,14 @@ describe('SiteDataView · 具体源（节点筛选，纯查看——2026-08-14 �
     await pickSource(wrapper, '391007768')
     await selectNode(wrapper, 'last')
 
+    // 按列标题精确断言，不用 text() 全文包含：SOURCE_ID 身份列的表头是
+    // 「所属源 ID-SOURCE_ID」（0819 N1-5，会议 09:44 要求行内能看到源 ID），
+    // 全文匹配会把它误判成「所属源」列还在。
     const grid = wrapper.findComponent({ name: 'DataGrid' })
-    expect(grid.text()).toContain('所属节点')
-    expect(grid.text()).not.toContain('所属源')
-    expect(grid.text()).not.toContain('操作')
+    const headers = grid.findAll('thead th').map((th) => th.text())
+    expect(headers).toContain('所属节点')
+    expect(headers).not.toContain('所属源')
+    expect(headers).not.toContain('操作')
   })
 
   it('请求竞态保护：快速切节点时，只有最后一次请求的结果生效，过期响应到达也不覆盖当前展示', async () => {
