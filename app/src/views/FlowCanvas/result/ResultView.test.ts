@@ -27,9 +27,10 @@ const DataGridStub = {
   name: 'DataGrid',
   props: ['meta', 'rows', 'loading', 'selectedId', 'compact', 'hideActions', 'sourceNames', 'sourceColLabel', 'selectable', 'selectedIds'],
   emits: ['row-click', 'row-action', 'update:selectedIds'],
-  // head-right 是"不随表头横向滚动"的常驻区（全屏按钮在里面），stub 里也要渲染，
-  // 否则依赖它的断言会全部落空。
-  template: '<div class="dg-stub"><slot name="head" /><slot name="head-right" /></div>',
+  // head-right 是"不随表头横向滚动"的常驻区（全屏按钮在里面），foot 是表格下方的横条
+  // （分页在里面，0819 N1-8 从 #head 移过去的）；stub 里都要渲染，否则依赖它们的断言
+  // 会全部落空。
+  template: '<div class="dg-stub"><slot name="head" /><slot name="head-right" /><slot name="foot" /></div>',
 }
 // ElDrawer 用显式 stub（而非 `true` 全量 stub）：M3-0B 的上游数据下钻测试要点进详情
 // 抽屉内部找父 ID 链接，`true` 全量 stub 不渲染默认插槽，会让这些断言全部落空。

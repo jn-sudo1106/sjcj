@@ -154,6 +154,10 @@ function stateMeta(s?: string) {
         </tbody>
       </table>
     </div>
+    <!-- #foot：表格下方的常驻横条，给分页用（0819 N1-8，会议 19:13"页子放下面，
+         没有把页子放上面的"）。此前分页并在 #head 里是为了省纵向空间，现在由顶部区
+         收窄（N1-10）来补偿，两项必须同批，否则会卡在"分页下移了但空间没补回来"。 -->
+    <div v-if="$slots.foot" class="dg-foot"><slot name="foot" /></div>
   </div>
 </template>
 
@@ -164,6 +168,8 @@ function stateMeta(s?: string) {
 .dg-head { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px 10px; flex-wrap: nowrap; overflow-x: auto; }
 /* 常驻区：flex:none 不被压缩、不参与 .dg-head 的横向滚动，永远够得着 */
 .dg-head-right { flex: none; display: flex; align-items: center; gap: 8px; }
+/* 表格下方横条：跟 .dg-toolbar 同一套内边距与底色，视觉上把表格夹在中间 */
+.dg-foot { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 5px 12px; border-top: 1px solid var(--rc-border-soft); background: #fbfdff; }
 .dg-head > * { flex-shrink: 0; }
 .dg-cols-menu { position: relative; flex: none; }
 .dg-col-btn { height: 24px; padding: 0 9px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text-2); font-size: 11px; cursor: pointer; }

@@ -23,6 +23,7 @@
 // 在具体源下每行都是同一个源，容易让人以为是跨源归并，改叫"所属节点"并去掉操作列，
 // 避免跟具体源自己的数据视图（ResultView.vue）混淆。
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { dataApi, flowApi, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail } from '@/api'
 import {
   buildHorizontalLayout, buildSourceSeed, effectiveInputTable, nodeOutputTable, isDecision, isParallel,
@@ -30,12 +31,23 @@ import {
 } from '@/views/FlowCanvas/canvas/flowModel'
 import DataGrid from './DataGrid.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
+import { readRailOpen, writeRailOpen } from './railPref'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 import SiteTableSelect from './components/SiteTableSelect.vue'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import { initMergeState, mergeLoadMore, type MergeLoadMoreResult, type MergeSourceState } from './siteDataMerge'
 
 const props = defineProps<{ siteId: string }>()
+const router = useRouter()
+
+// 本视图与具体源结果视图（ResultView.vue）长得几乎一样——都是流程图选节点 + 数据表格——
+// 但能力不同：这里是纯查看，发起抓取/发后续/输入输出切换都在那边。2026-08-20 拍板保持
+// 这个分工（不合并、不改成"选中源即跳转"），代价是必须让用户看得出差别，否则会困惑
+// "为什么这里不能发任务"。于是给一个明确的只读标识 + 一个去那边的入口。
+function openSourceView() {
+  if (!selectedSourceId.value) return
+  void router.push({ path: '/canvas', query: { siteId: props.siteId, sourceId: selectedSourceId.value, view: 'data' } })
+}
 
 const PAGE_SIZE = 20
 const MAX_PARALLEL_REQUESTS = 4
@@ -119,7 +131,8 @@ const selectedNodeId = ref('')
 // 节点选择复用流程图 ProcessNodeRail，与具体源结果视图（ResultView.vue）完全同构
 // ——0819 会议 04:33"这个页面不是应该搞成跟单个源一样的效果"、04:47"给我加个流程图"。
 // 本文件此前的"用跟选表一样的纯下拉、不复用 ProcessNodeRail"的决定已被该次会议推翻。
-const railOpen = ref(true)
+const railOpen = ref(readRailOpen())
+watch(railOpen, writeRailOpen)
 
 const selectedCfg = computed<NodeConfig | undefined>(() => allNodes.value.find((n) => n.id === selectedNodeId.value)?.cfg)
 const outputTableId = computed(() => (selectedCfg.value ? nodeOutputTable(selectedCfg.value) : ''))
@@ -404,6 +417,14 @@ const detailFields = computed(() => {
           :title="railOpen ? '收起流程节点轨道' : '展开流程节点轨道'"
           @click="railOpen = !railOpen"
         >{{ railOpen ? '收起流程' : '展开流程' }} <span class="arrow">▾</span></button>
+        <span class="sdv2-readonly">只读查看</span>
+        <button
+          type="button"
+          class="sdv2-goto"
+          data-testid="site-data-goto-source"
+          title="到该源的数据视图，那里可以发起抓取、发后续任务"
+          @click="openSourceView"
+        >进入源流程 →</button>
       </div>
     </div>
 
@@ -565,4 +586,8 @@ const detailFields = computed(() => {
 .sdv2-rail-toggle:hover { border-color: var(--rc-primary); color: var(--rc-primary-ink); }
 .sdv2-rail-toggle .arrow { display: inline-block; transition: transform .18s ease; }
 .sdv2-rail-toggle.open .arrow { transform: rotate(180deg); }
+/* 只读标识 + 去具体源的入口：本视图不提供执行动作，必须让人看出来它跟源结果视图的差别 */
+.sdv2-readonly { flex: none; padding: 2px 8px; border-radius: 999px; background: #f1f5f9; color: var(--rc-faint); font-size: 11px; }
+.sdv2-goto { flex: none; height: 24px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 999px; background: #fff; color: var(--rc-primary); font-size: 11.5px; cursor: pointer; }
+.sdv2-goto:hover { border-color: var(--rc-primary); background: var(--rc-primary-bg); }
 </style>

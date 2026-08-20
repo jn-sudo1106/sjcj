@@ -82,7 +82,11 @@ function firePageAction(action: string) {
           <span>{{ sourceCrumb }}</span>
         </template>
       </div>
-      <h1>{{ isSourceCanvas ? sourceCrumb : current.label }}</h1>
+      <!-- 画布态不渲染 h1（0819 N1-12）：那里 h1 的内容与紧邻上方的面包屑末项一字不差，
+           下面还有源标签页、源信息行、左侧源列表选中项——同一个源名在一屏里出现 5 次，
+           h1 是其中信息量最低的一个，去掉给操作区让出约 36px。
+           其余页面（采集资产、数据中心等）没有自己的头部，标题保留。 -->
+      <h1 v-if="!isSourceCanvas">{{ current.label }}</h1>
     </div>
     <div class="rc-module-actions">
       <button

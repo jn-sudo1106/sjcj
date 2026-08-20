@@ -12,6 +12,7 @@ import { confirmDanger } from '@/utils/confirmDanger'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import DataGrid from './DataGrid.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
+import { readRailOpen, writeRailOpen } from './railPref'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 
 // 数据视图只属于具体源流程（0812 计划 M2-4：网站"全部源"态改用独立的 SiteDataView.vue，
@@ -39,7 +40,8 @@ const filters = reactive({ dataId: '', parentId: '', state: '', sql: '' })
 // 节点轨道默认展开：轨道是"这个源的流程长什么样"的上下文，进页面第一眼就该看到；
 // 想把这 96px 让给数据的人自己收起来。真要大量看数据走全屏，不靠默认折叠常规页面
 // 换那几行（2026-08-15 定案）。
-const railOpen = ref(true)
+const railOpen = ref(readRailOpen())
+watch(railOpen, writeRailOpen)
 // 全屏：整个面板 position:fixed 铺满视口，不复制模板、不引入弹层——详情抽屉本来就渲染在
 // .rv-shell 内部，会跟着一起进全屏；祖先链上没有 transform/filter/contain，fixed 能正常
 // 逃逸到视口（已核对 AppShell.vue / FlowCanvas/index.vue）。
@@ -772,6 +774,10 @@ async function saveEdit() {
               <button type="button" class="rv-more-item" data-testid="data-exec-batch-toggle" @click="toggleSendMore(); moreMenuOpen = false">发大量后续</button>
             </div>
           </Teleport>
+        </template>
+        <!-- 分页移到表格下方（0819 N1-8，会议 19:13"页子一般放下面"）。原先它并在 #head
+             里是为了省纵向空间，现在由顶部区收窄（N1-10）补偿。 -->
+        <template #foot>
           <!-- 简化分页：页码文字 + 独立页大小下拉 + 上一页/下一页两个按钮四个元素合并成
                一个 el-pagination（2026-08-19，用户反馈"分页那块也散"）。size 变化时
                v-model:page-size 已经把 size.value 设好了，@size-change 只需要把页
@@ -789,6 +795,7 @@ async function saveEdit() {
             @size-change="runQuery"
           />
         </template>
+
         <!-- 全屏放在不随 #head 横向滚动的常驻区：表头内容一多，原来它在最右边会被滚动条
              藏起来，得先拉滚动条才够得着（2026-08-19 用户反馈）。 -->
         <template #head-right>
