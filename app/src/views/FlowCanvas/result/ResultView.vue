@@ -120,7 +120,10 @@ function openNodeCondition() {
       sourceId: sourceId.value,
       view: 'flow',
       nodeId: selectedNodeId.value,
-      tab: 'config',
+      // 进入条件的编辑界面在「任务配置」页（TaskTab.vue 的 ConditionRow），不是节点配置页。
+      // 例外：决策/分头节点在 nodeInspectorTabs 里只有「分支配置」一个页签（key 仍是
+      // config），跳 task 会落到不存在的页签。
+      tab: isStructuralNode.value ? 'config' : 'task',
     },
   })
 }

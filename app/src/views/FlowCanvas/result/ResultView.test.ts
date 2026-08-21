@@ -464,7 +464,8 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
         sourceId: '391007768',
         view: 'flow',
         nodeId: '391007768-rule-demo',
-        tab: 'config',
+        // 进入条件的编辑界面在「任务配置」页，不是节点配置页
+        tab: 'task',
       }),
     }))
   })
@@ -508,7 +509,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     routerPush.mockClear()
     await wrapper.find('[data-testid="data-node-condition-link"]').trigger('click')
     expect(routerPush).toHaveBeenCalledWith(expect.objectContaining({
-      query: expect.objectContaining({ nodeId: childId, view: 'flow', tab: 'config' }),
+      query: expect.objectContaining({ nodeId: childId, view: 'flow', tab: 'task' }),
     }))
   })
 

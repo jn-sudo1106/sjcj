@@ -16,6 +16,7 @@ import CompareSplit from './result/CompareSplit.vue'
 import TaskView from './result/TaskView.vue'
 import FileView from './result/FileView.vue'
 import SiteSourceSwitcher from './source/SiteSourceSwitcher.vue'
+import { nodeInspectorTabs } from './inspector/nodeInspectorTabs'
 import SiteDetailView from './result/SiteDetailView.vue'
 import CategoryTreePicker, { type CategorySelection } from './source/CategoryTreePicker.vue'
 import { collectorCapabilityOf, type LoginConfigRef } from '@/views/FlowCanvas/canvas/flowModel'
@@ -67,7 +68,12 @@ watch(
     if (!id || Date.now() > pendingUntil.value) return
     if (!flow.configs[id] || flow.selectedId === id) return
     flow.selectedId = id
-    if (pendingTab.value) flow.activeTab = pendingTab.value
+    // tab 未必适用于该节点（决策/分头节点只有「分支配置」一个页签），落不到就退到该节点
+    // 的第一个页签——保持上一次的 activeTab 会让 inspector 停在一个对当前节点不存在的
+    // 页签上，看起来像空白。
+    const tabs = nodeInspectorTabs(flow.configs[id])
+    const wanted = pendingTab.value
+    if (tabs.length) flow.activeTab = tabs.some(([key]) => key === wanted) ? wanted : tabs[0][0]
   },
   { immediate: true, flush: 'post' },
 )
