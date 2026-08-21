@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, nextTick } 
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { dataApi, isMockMode, sourceApi, parseNextStepReceipt, type DataTableMeta, type DataRow, type EntryDetail } from '@/api'
+import { dataApi, isMockMode, isProductionBackend, sourceApi, parseNextStepReceipt, type DataTableMeta, type DataRow, type EntryDetail } from '@/api'
 import {
   buildHorizontalLayout, nodeOutputTable, nodeEntryCondition, conditionGroupLabel, conditionGroupIsSet,
   isDecision, isParallel, isFirstRunnableNode, hasAmbiguousInput, type NodeConfig,
@@ -354,6 +354,17 @@ function onSelectNode(id: string) {
 const filtersDirty = ref(false)
 watch(() => ({ ...filters }), () => { filtersDirty.value = true })
 
+// 后端的 SQL 报错是整段 MyBatis 异常：真正有用的是 `Unknown column 'title' in 'where clause'`
+// 这一句，前后还裹着 jar 路径、mapper 类名、参数占位的 SQL，实测一千多字，整段铺在提示条上
+// 没法看。这里抽出首要原因显示，完整原文挂 title 悬浮，排查时仍拿得到。
+function briefError(message: string): string {
+  const m = message.match(/SQLSyntaxErrorException:\s*([^#;]+)/)
+    || message.match(/Cause:\s*([^#;]+)/)
+    || message.match(/错误信息:\s*([^#;]+)/)
+  return m ? m[1].trim() : message
+}
+const dataErrorFull = ref('')
+
 // 排序（迁移旧平台 EntryList2.vue 的 @sort-change，0819 补迁）：状态由本页持有，
 // DataGrid 只负责显示与派发；载荷拼装在 api/index.ts，与旧平台同为 `(列名+ 0)` + ASC/DESC。
 const sortField = ref('')
@@ -423,6 +434,7 @@ async function loadData() {
     total.value = 0
     metaError.value = ''
     dataError.value = ''
+    dataErrorFull.value = ''
     demoFallback.value = false
     return
   }
@@ -451,9 +463,18 @@ async function loadData() {
       dataApi.rowQueryPaged(query),
     ])
     if (id !== requestId) return
-    // 默认是 Mock + 已联调端点走真实后端：演示流程的表可能只存在本地种子数据。
-    // 仅在 Mock 模式下回退，VITE_API_MODE=http 仍然完整暴露真实后端错误。
-    if (isMockMode() && (metaRes.status === 'rejected' || dataRes.status === 'rejected')) {
+    // 真实请求失败时，先把失败原因留下来——它一直都在（client.ts 会把 4xx/5xx 响应体里的
+    // 后端 msg 解出来拼成 `请求失败 500: xxx`），此前却被下面的回退整个盖成一句
+    // "真实数据接口暂不可用"，把"你的 SQL 条件写错了"说成"服务挂了"，用户完全无从判断。
+    const failReason = (r: PromiseSettledResult<unknown>) =>
+      (r.status === 'rejected' ? String((r.reason as Error)?.message || r.reason || '') : '')
+    const dataFail = failReason(dataRes)
+    const metaFail = failReason(metaRes)
+
+    // 默认是 Mock + 已联调端点走真实后端：演示流程的表可能只存在本地种子数据，失败时回退
+    // 到种子数据看一眼是有意义的。但**连着生产后端时绝不回退**：页面顶着"生产环境"徽标
+    // 却显示本地演示数据，只靠一行小字提示，误判成真实数据是迟早的事——宁可空着报错。
+    if (isMockMode() && !isProductionBackend() && (metaRes.status === 'rejected' || dataRes.status === 'rejected')) {
       const [fallbackMeta, fallbackData] = await Promise.allSettled([
         dataApi.tableMeta(selectedTable.value, { mode: 'mock' }),
         dataApi.rowQueryPaged(query, { mode: 'mock' }),
@@ -470,19 +491,24 @@ async function loadData() {
         ? inferTableMeta(selectedTable.value, dataRes.value.list ?? [], dataRes.value.total ?? 0)
         : null
       metaError.value = demoFallback.value
-        ? '真实数据接口暂不可用，已切换到本地演示数据'
+        ? `真实数据接口暂不可用，已切换到本地演示数据${metaFail || dataFail ? `（${briefError(metaFail || dataFail)}）` : ''}`
         : meta.value?.fields.length
           ? '表结构暂不可用，已根据当前数据生成列'
-          : '表结构暂不可用，暂无法展示字段'
+          : `表结构暂不可用，暂无法展示字段${metaFail ? `（${metaFail}）` : ''}`
     }
-    if (demoFallback.value) metaError.value = '真实数据接口暂不可用，已切换到本地演示数据'
+    if (demoFallback.value) {
+      metaError.value = `真实数据接口暂不可用，已切换到本地演示数据${metaFail || dataFail ? `（${briefError(metaFail || dataFail)}）` : ''}`
+    }
     if (dataRes.status === 'fulfilled') {
       rows.value = dataRes.value.list ?? []
       total.value = dataRes.value.total ?? 0
     } else {
       rows.value = []
       total.value = 0
-      dataError.value = '数据加载失败，请点击“查询”重试'
+      // 把后端的真实报错摆出来：SQL 条件写错时这里是「Unknown column 'title'」之类，
+      // 比一句“请重试”有用得多——重试多少次结果都一样。
+      dataErrorFull.value = dataFail
+      dataError.value = dataFail ? briefError(dataFail) : '数据加载失败，请点击“查询”重试'
     }
   } finally {
     if (id === requestId) {
@@ -677,7 +703,7 @@ async function saveEdit() {
       <div v-if="filtersDirty" class="rv-notice" role="status" data-testid="data-filters-dirty">查询条件已修改，点「查询」执行</div>
       <template v-else>
         <div v-if="metaError" class="rv-notice" role="status">{{ metaError }}</div>
-        <div v-if="dataError" class="rv-notice error" role="alert">{{ dataError }}</div>
+        <div v-if="dataError" class="rv-notice error" role="alert" :title="dataErrorFull || dataError">{{ dataError }}</div>
       </template>
 
       <!-- 发大量后续（M3-0G 复议）：旧平台是"点开一个独立字段面板，跟主查询筛选行分开"，

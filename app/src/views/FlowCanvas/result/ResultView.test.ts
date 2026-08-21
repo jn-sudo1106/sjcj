@@ -5,10 +5,17 @@ import { createPinia, setActivePinia } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ResultView from './ResultView.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
-import { dataApi, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source } from '@/api'
+import { dataApi, isProductionBackend, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
 import type { NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+
+// 只替换 isProductionBackend，其余照搬真实模块——现有用例的 vi.spyOn(dataApi, …)
+// 作用在同一个 dataApi 对象引用上，不受影响。
+vi.mock('@/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api')>()
+  return { ...actual, isProductionBackend: vi.fn(() => false) }
+})
 
 vi.mock('element-plus', async (importOriginal) => {
   const actual = await importOriginal<typeof import('element-plus')>()
@@ -140,6 +147,42 @@ async function selectNode(wrapper: ReturnType<typeof shallowMount>, nodeId: stri
   await wrapper.findComponent(ProcessNodeRail).vm.$emit('update:modelValue', nodeId)
   await flushPromises()
 }
+
+describe('ResultView · 查询失败的暴露方式（0819 N3）', () => {
+  it('把后端的真实报错摆出来，而不是笼统的"请重试"——SQL 条件写错时重试多少次结果都一样', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockRejectedValue(
+      new Error("请求异常 [data/rowQueryPaged]: 请求失败 500: You have an error in your SQL syntax near 'title'"),
+    )
+
+    const wrapper = mountResultView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('请求失败 500')
+    expect(wrapper.text()).toContain('SQL syntax')
+    expect(wrapper.text()).not.toContain('数据加载失败，请点击')
+  })
+
+  it('连生产后端时失败不回退演示数据——页面顶着"生产环境"徽标却显示本地种子数据，误判成真实数据是迟早的事，宁可空着报错', async () => {
+    setActivePinia(createPinia())
+    vi.mocked(isProductionBackend).mockReturnValue(true)
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    // 与上面那条"回退"用例同样的失败形态：表结构失败、数据成功
+    vi.spyOn(dataApi, 'tableMeta').mockRejectedValue(new Error('业务类型不存在'))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('已切换到本地演示数据')
+    expect(wrapper.text()).toContain('业务类型不存在')
+    vi.mocked(isProductionBackend).mockReturnValue(false)
+  })
+})
 
 describe('ResultView · 查询条件的执行时机（0819 N3 前置修复）', () => {
   it('输入条件不触发查询，只提示"条件已修改"；回车也不执行——中文输入法上屏会发 Enter 的 keyup，绑回车等于打字打到一半就把半截条件查出去', async () => {
