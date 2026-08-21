@@ -298,7 +298,15 @@ const onEnterJump = withoutComposition(() => goToPage())
           <thead><tr><th>所属源</th><th>文件名</th><th>展示名</th><th>扩展名</th><th class="num">大小</th><th>MD5</th><th>文件链接</th><th>文件路径</th><th>文本文件</th><th>文本路径</th><th class="num">文本大小</th><th>状态</th><th>更新时间</th><th>生成时间</th><th>操作</th></tr></thead>
           <tbody>
             <tr v-for="file in rows" :key="`${file.sourceId}-${file.dataId}`">
-              <td>{{ sourceNames[file.sourceId] || file.sourceId }}</td>
+              <!-- 源 ID 不在当前网站的源列表里时，标出来而不是让它看着像个源名：
+                   导入的文件数据带的是对方体系的源 ID（会议 15:53），对不上是常态，
+                   得让人一眼看出"这不是本站的源"，而不是以为源名显示成了一串数字。 -->
+              <td>
+                <template v-if="sourceNames[file.sourceId]">{{ sourceNames[file.sourceId] }}</template>
+                <span v-else class="sfv-unmatched" :title="`源 ID ${file.sourceId} 不在当前范围的源列表中`" data-testid="file-source-unmatched">
+                  {{ file.sourceId }}<em>未匹配</em>
+                </span>
+              </td>
               <td class="sfv-name">{{ textOf(file, 'K1') }}</td>
               <td>{{ textOf(file, 'K6') }}</td>
               <td>{{ textOf(file, 'K7') }}</td>
@@ -344,6 +352,8 @@ const onEnterJump = withoutComposition(() => goToPage())
 .sfv-shell { display: flex; flex-direction: column; height: 100%; overflow: hidden; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); }
 /* 默认就换行（2026-08-20）：原先 nowrap、只在 ≤900px 的断点才 wrap，中间宽度区间会把
    筛选条件挤出容器；筛选行横向滚动很难用——「查询」按钮会被滚出视野。 */
+.sfv-unmatched { display: inline-flex; align-items: center; gap: 5px; color: var(--rc-text-2); }
+.sfv-unmatched em { flex: none; padding: 1px 5px; border-radius: 4px; background: #fef3c7; color: #92400e; font-size: 10px; font-style: normal; }
 .sfv-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); }
 .sfv-input { height: 28px; min-width: 112px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; outline: none; }
 .sfv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }

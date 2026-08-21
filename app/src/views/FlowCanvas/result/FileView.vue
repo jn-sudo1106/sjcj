@@ -19,12 +19,14 @@ const processLayout = computed(() =>
 )
 const selectedNodeId = ref('')
 
-// 文件资源表目前没有确认的流程节点关联字段。节点轨道保留为当前源的流程上下文，
-// 选中节点只更新视觉状态，不能据此拼接 nodeId 查询，避免把无依据的关联当成接口契约。
+// 文件资源表没有流程节点字段：它只关联到源和表（会议 14:15"它没有关联到步骤"）。
+// 轨道因此是**只读的流程上下文**，不是筛选器——原先它可点，但点了只换高亮、查询结果
+// 纹丝不动，等于把"能按步骤筛"这件事伪装出来。0819 N2-5 定的口径是只标注、不筛选：
+// 选中固定停在首个节点，与会议 15:04"默认第一个步骤"一致；真正按步骤筛要等数据侧
+// 给 file_resource 补上步骤字段并把历史数据刷过去（对外事项 R5）。
+const nodeSelectable = () => false
 watch(processLayout, (layout) => {
-  if (!selectedNodeId.value || !layout.nodes.some((node) => node.id === selectedNodeId.value)) {
-    selectedNodeId.value = layout.nodes[0]?.id ?? ''
-  }
+  selectedNodeId.value = layout.nodes[0]?.id ?? ''
 }, { immediate: true })
 
 type ResourceTable = { tableId: string; tableName: string; name?: string }
@@ -213,7 +215,10 @@ const onEnterJump = withoutComposition(() => goToPage())
       <div v-if="!sourceId" class="fv-empty-row">文件视图仅在源详情下可用。</div>
       <template v-else>
         <div class="fv-process-rail" data-testid="file-process-rail">
-          <ProcessNodeRail v-model="selectedNodeId" :layout="processLayout" />
+          <ProcessNodeRail :model-value="selectedNodeId" :layout="processLayout" :selectable="nodeSelectable" />
+          <div class="fv-rail-note" data-testid="file-rail-note">
+            文件资源只关联到源与表，不区分步骤；此处默认归入首个步骤，仅作流程上下文展示
+          </div>
         </div>
         <div class="fv-filters">
           <select
@@ -312,6 +317,7 @@ const onEnterJump = withoutComposition(() => goToPage())
   border: 1px solid var(--rc-border-soft, #e2e8f0);
   border-radius: 10px;
 }
+.fv-rail-note { padding: 0 12px 8px; color: var(--rc-faint); font-size: 11px; }
 .fv-toolbar-note { flex: 0 1 auto; min-width: 0; color: var(--rc-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fv-error { color: var(--rc-error); }
 
