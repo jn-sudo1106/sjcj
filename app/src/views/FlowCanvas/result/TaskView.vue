@@ -172,7 +172,7 @@ function nextPage() {
             <option value="L">运行中</option>
             <option value="E">异常</option>
           </select>
-          <button class="rc-btn" type="button" @click="resetFilters">清空筛选</button>
+          <button class="rc-btn" type="button" @click="resetFilters">清空</button>
         </div>
 
         <table class="rc-data-table tv-table" data-testid="source-task-table" v-loading="loading">

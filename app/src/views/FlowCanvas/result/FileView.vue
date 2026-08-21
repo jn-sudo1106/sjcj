@@ -216,11 +216,6 @@ const onEnterJump = withoutComposition(() => goToPage())
           <ProcessNodeRail v-model="selectedNodeId" :layout="processLayout" />
         </div>
         <div class="fv-filters">
-          <span class="fv-toolbar-note" data-testid="file-resource-table">
-            <span v-if="tableLoading">正在定位 file_resource 文件资源表…</span>
-            <span v-else-if="error" class="fv-error">{{ error }}</span>
-            <span v-else-if="tableCandidates.length <= 1">数据源：{{ table?.name || table?.tableName || 'file_resource' }}</span>
-          </span>
           <select
             v-if="!tableLoading && !error && tableCandidates.length > 1"
             class="fv-input"
@@ -233,13 +228,24 @@ const onEnterJump = withoutComposition(() => goToPage())
           </select>
           <input v-model="filters.fileName" class="fv-input" placeholder="文件名或展示名" aria-label="文件名">
           <input v-model="filters.ext" class="fv-input" placeholder="类型，如 pdf、html" aria-label="文件类型">
-          <select v-model="filters.state" class="fv-input" aria-label="状态">
+          <select v-model="filters.state" class="fv-input fv-input-fixed" aria-label="状态">
             <option value="">状态（不限）</option><option value="C">初始</option><option value="AC">被消重</option>
           </select>
           <input v-model="filters.sql" class="fv-input" placeholder="自定义SQL, 如 K1 IS NULL" aria-label="自定义SQL">
           <button class="rc-btn primary" type="button" @click="runQuery">查询</button>
-          <button class="rc-btn" type="button" @click="resetFilters">清空筛选</button>
-          <span class="fv-spacer" />
+          <button class="rc-btn" type="button" @click="resetFilters">清空</button>
+        </div>
+
+        <!-- 表名与计数从筛选行移到这里（2026-08-21）：筛选行只放「怎么查」，表头放「查的是哪张表、
+             多少条」——与数据视图（ResultView 的 DataGrid #head）同口径。这两项原先挤在筛选行里
+             各占 143px 和 67px，加上一个 flex:1 的占位符吃掉整行剩余空间，直接把查询/清空按钮
+             挤到了第二行。 -->
+        <div class="fv-tablehead">
+          <span class="fv-toolbar-note" data-testid="file-resource-table">
+            <span v-if="tableLoading">正在定位 file_resource 文件资源表…</span>
+            <span v-else-if="error" class="fv-error">{{ error }}</span>
+            <span v-else-if="tableCandidates.length <= 1">数据源：{{ table?.name || table?.tableName || 'file_resource' }}</span>
+          </span>
           <span class="muted">共 {{ total }} 个文件</span>
         </div>
 
@@ -306,7 +312,7 @@ const onEnterJump = withoutComposition(() => goToPage())
   border: 1px solid var(--rc-border-soft, #e2e8f0);
   border-radius: 10px;
 }
-.fv-toolbar-note { color: var(--rc-muted); font-size: 12px; white-space: nowrap; }
+.fv-toolbar-note { flex: 0 1 auto; min-width: 0; color: var(--rc-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fv-error { color: var(--rc-error); }
 
 @keyframes fadeIn {
@@ -319,7 +325,7 @@ const onEnterJump = withoutComposition(() => goToPage())
   /* 换行而不是把条件挤出容器（2026-08-20，与另外两个查询页同口径） */
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   margin-bottom: 16px;
   background: #f8fafc;
   padding: 12px 16px;
@@ -328,7 +334,9 @@ const onEnterJump = withoutComposition(() => goToPage())
 }
 .fv-input {
   height: 30px;
-  min-width: 112px;
+  min-width: 0;
+  flex: 1 1 128px;
+  max-width: 190px;
   padding: 0 10px;
   color: var(--rc-text);
   border: 1px solid var(--rc-border);
@@ -336,9 +344,11 @@ const onEnterJump = withoutComposition(() => goToPage())
   background: #fff;
   font-size: 12px;
 }
+.fv-input-fixed { flex: none; width: 110px; }
 .fv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; outline: none; }
 .fv-filters .rc-btn { height: 30px; padding: 0 14px; font-size: 12px; }
-.fv-spacer { flex: 1; }
+/* 表头条：表名靠左、计数靠右，跟表格同宽 */
+.fv-tablehead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .muted { color: #94a3b8; font-size: 13px; }
 
 .fv-table { width: 100%; border-collapse: separate; border-spacing: 0; }
