@@ -36,6 +36,17 @@ export default defineConfig({
         changeOrigin: true,
         autoRewrite: true,
       },
+      // 文件预览（0819 N2）：OSS 下载服务在同机的 **9102** 端口，与业务后端（9999）不同源。
+      // 浏览器不允许页面跨源读取内容——「新窗口打开/下载」不受限，但站内预览必须 fetch 到
+      // 字节流才能渲染（Excel 要解析、PDF 要喂给 iframe），跨源直取会被 CORS 拒（实测
+      // Failed to fetch）。故按 /api、/rest、/vrule 同款做法收进同源。
+      // 真实路径形如 /oss/api/oss/download?fileId=/qinlong/xxx.xlsx，转发时去掉 /oss 前缀。
+      '/oss': {
+        target: (process.env.VITE_API_PROXY_TARGET || process.env.VITE_AUTH_PROXY_TARGET || 'http://115.227.21.133:9999')
+          .replace(/:\d+$/, ':9102'),
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/oss/, ''),
+      },
       // 规则编排 Sprint 4：saveMeta/test/saveScript 直连同机 vrule（0801 方案 §8.1）
       '/vrule': {
         target: process.env.VITE_API_PROXY_TARGET || process.env.VITE_AUTH_PROXY_TARGET || 'http://115.227.21.133:9999',

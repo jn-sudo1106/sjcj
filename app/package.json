@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
+    "@lucky-office/excel": "^0.3.2",
     "@types/md5": "^2.3.6",
     "crypto-js": "^4.2.0",
     "element-plus": "^2.14.2",
