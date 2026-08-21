@@ -31,24 +31,25 @@ async function mountAt(path: string, query?: Record<string, string>) {
   return { wrapper, router }
 }
 
-// 画布态不渲染 h1（0819 N1-12：它与面包屑末项一字不差，白占约 36px），
-// 于是 sourceCrumb 的唯一展示载体就是面包屑最后一段——这些用例测的本来就是
-// sourceCrumb 的取值优先级，换个载体断言，测的东西不变。
+// 全站已取消独立的大标题行（2026-08-21）：面包屑的末项本身升为 h1——省掉一整行，
+// 又保留文档结构里的一级标题。所以"当前位置"的文字要按末项取，且末项不再是 span。
 const lastCrumb = (wrapper: { findAll: (s: string) => { text: () => string }[] }) =>
-  wrapper.findAll('.rc-bc span').at(-1)!.text()
+  wrapper.findAll('.rc-bc > *').at(-1)!.text()
 
 describe('AppModuleHead 面包屑 / 标题', () => {
   it('普通页面：面包屑显示"青龙智能采集中心 / <当前模块>"，无源相关的第三段', async () => {
     const { wrapper } = await mountAt('/overview')
     expect(wrapper.find('.rc-bc').text()).toBe('青龙智能采集中心/采集资产总览')
-    expect(wrapper.find('h1').text()).toBe('采集资产总览')
+    // 普通页面同理：末项就是 h1，页面里没有第二个标题行
+    expect(wrapper.find('.rc-bc h1').text()).toBe('采集资产总览')
+    expect(wrapper.findAll('h1')).toHaveLength(1)
   })
 
   it('/canvas 路径下多出第三段面包屑（源/网站/新建）', async () => {
     const { wrapper } = await mountAt('/canvas', { mode: 'new' })
     expect(wrapper.find('.rc-bc').text()).toBe('青龙智能采集中心/采集资产/新建采集')
-    // 画布态不再渲染 h1（N1-12）
-    expect(wrapper.find('h1').exists()).toBe(false)
+    // 标题即面包屑末项：h1 在面包屑内部，不再单独占一行
+    expect(wrapper.find('.rc-bc h1').text()).toBe('新建采集')
   })
 
   it('sourceCrumb 优先级：mode=new > siteCtx.name > sourceCtx.name > 默认"源详情"', async () => {

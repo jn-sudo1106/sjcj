@@ -71,22 +71,20 @@ function firePageAction(action: string) {
 </script>
 
 <template>
+  <!-- 全站不再有独立的大标题行（2026-08-21）：它的文字与紧邻上方的面包屑末项一字不差，
+       白占一行。改为把面包屑的末项本身升为 h1——视觉上仍是面包屑，文档结构里仍有一级标题，
+       无障碍与 SEO 语义不丢。动作按钮同时收到这一行，与面包屑平齐。
+       整块高度由约 55px 降到约 24px。 -->
   <div class="rc-module-head">
-    <div>
-      <div class="rc-bc">
-        <span>青龙智能采集中心</span>
-        <span>/</span>
+    <div class="rc-bc">
+      <span>青龙智能采集中心</span>
+      <span>/</span>
+      <template v-if="isSourceCanvas">
         <span>{{ current.label }}</span>
-        <template v-if="isSourceCanvas">
-          <span>/</span>
-          <span>{{ sourceCrumb }}</span>
-        </template>
-      </div>
-      <!-- 画布态不渲染 h1（0819 N1-12）：那里 h1 的内容与紧邻上方的面包屑末项一字不差，
-           下面还有源标签页、源信息行、左侧源列表选中项——同一个源名在一屏里出现 5 次，
-           h1 是其中信息量最低的一个，去掉给操作区让出约 36px。
-           其余页面（采集资产、数据中心等）没有自己的头部，标题保留。 -->
-      <h1 v-if="!isSourceCanvas">{{ current.label }}</h1>
+        <span>/</span>
+        <h1>{{ sourceCrumb }}</h1>
+      </template>
+      <h1 v-else>{{ current.label }}</h1>
     </div>
     <div class="rc-module-actions">
       <button
@@ -108,10 +106,10 @@ function firePageAction(action: string) {
 <style scoped>
 .rc-module-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 18px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .rc-bc {
@@ -120,20 +118,24 @@ function firePageAction(action: string) {
   gap: 7px;
   color: var(--rc-muted);
   font-size: 13px;
-  margin-bottom: 6px;
+  min-width: 0;
 }
 
-.rc-bc span:last-child {
+/* 末项（当前位置）高亮：它现在是 h1，样式上仍与面包屑其余部分一致，只是加重 */
+.rc-bc > :last-child {
   color: var(--rc-primary-ink);
   font-weight: 700;
 }
 
+/* h1 只保留语义，外观完全跟随面包屑——不要浏览器默认的 2em 字号与上下 margin */
 .rc-module-head h1 {
-  margin: 8px 0 0;
-  color: var(--rc-text);
-  font-size: 20px;
-  line-height: 28px;
+  margin: 0;
+  font-size: inherit;
+  line-height: inherit;
   font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .rc-module-actions {
@@ -142,7 +144,7 @@ function firePageAction(action: string) {
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
-  padding-top: 22px;
+  flex: none;
 }
 
 .rc-action-btn {
