@@ -481,6 +481,40 @@ describe('SiteDataView · 具体源（节点筛选，纯查看——2026-08-14 �
     expect(headers).not.toContain('操作')
   })
 
+  it('触底自动加载：DataGrid 派发 reach-end 就继续取下一批（会议 10:39"是不是应该直接朝下滑动就加载更多啊？你这个要点还不麻烦吗"）', async () => {
+    mockFlowFixture('391007768')
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    // 每批都返回满页（PAGE_SIZE=20），归并层据此判定"还有更多"
+    const fullPage = Array.from({ length: 20 }, (_, i) => row('391007768', `d${i}`))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: fullPage })
+
+    const wrapper = mountView()
+    await pickSource(wrapper, '391007768')
+    await selectNode(wrapper, 'last')
+    const before = wrapper.findComponent({ name: 'DataGrid' }).props('rows')!.length
+    expect(before).toBe(20)
+
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('reach-end')
+    await flushPromises()
+
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('rows')!.length).toBeGreaterThan(before)
+  })
+
+  it('数据耗尽后解除观察（autoLoadMore 转 false），底部只留"已加载全部数据"，不再有加载更多按钮', async () => {
+    mockFlowFixture('391007768')
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    // 不足一页 → 归并层直接判定耗尽
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [row('391007768', 'only')] })
+
+    const wrapper = mountView()
+    await pickSource(wrapper, '391007768')
+    await selectNode(wrapper, 'last')
+
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('autoLoadMore')).toBe(false)
+    expect(wrapper.find('[data-testid="site-data-load-more"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('已加载全部数据')
+  })
+
   it('请求竞态保护：快速切节点时，只有最后一次请求的结果生效，过期响应到达也不覆盖当前展示', async () => {
     const current = mockSourceDetail({ sourceId: '391007768' })!
     vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(current)

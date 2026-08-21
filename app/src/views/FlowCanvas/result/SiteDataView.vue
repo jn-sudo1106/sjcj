@@ -207,9 +207,13 @@ async function fetchPage(sourceId: string, page: number, size: number): Promise<
   return result.list
 }
 
+// 触底自动加载会在滚动中反复触发，必须挡住重入——原先只有按钮触发，点第二下之前
+// 上一次早就回来了，没有这个风险（0819 N3-1）。
+const autoLoadFailed = ref(false)
 async function loadMore() {
   const id = requestId
-  if (!candidateSourceIds.length || allExhausted.value) return
+  if (!candidateSourceIds.length || allExhausted.value || loadingMore.value) return
+  autoLoadFailed.value = false
   loadingMore.value = true
   dataError.value = ''
   try {
@@ -225,6 +229,9 @@ async function loadMore() {
   } catch {
     if (id !== requestId) return
     dataError.value = '数据加载失败，请重试'
+    // 失败后停掉自动加载，退回按钮让用户自己决定要不要重试——
+    // 否则观察器会在同一个位置反复触发同一个失败请求。
+    autoLoadFailed.value = true
   } finally {
     if (id === requestId) loadingMore.value = false
   }
@@ -238,6 +245,11 @@ async function resetAndLoad() {
   dataError.value = ''
   failedSources.value = []
   allExhausted.value = false
+  autoLoadFailed.value = false
+  // 换批次时必须显式复位 loadingMore：上一批若还卡在飞行中，它的 finally 会因为
+  // requestId 已经变了而跳过复位，标志位就永远停在 true——加了重入保护之后，
+  // 这个残留会把新批次的首次加载一起挡掉（切节点后表格空白）。
+  loadingMore.value = false
   noCandidateSources.value = false
   mergeStates = []
   candidateSourceIds = []
@@ -473,6 +485,8 @@ const detailFields = computed(() => {
         :selected-id="detail.row?.dataId"
         :source-names="gridSourceNames"
         :source-col-label="selectedSourceId ? '所属节点' : undefined"
+        :auto-load-more="!allExhausted && !loadingMore && !autoLoadFailed"
+        @reach-end="loadMore"
         :hide-actions="!!selectedSourceId"
         @row-click="onRowClick"
         @row-action="onRowAction"
@@ -492,14 +506,16 @@ const detailFields = computed(() => {
 
       <div class="sdv2-foot">
         <span v-if="allExhausted" class="muted">已加载全部数据</span>
+        <span v-else-if="loadingMore" class="muted" data-testid="site-data-loading-more">加载中…</span>
+        <!-- 按钮始终作为兜底出现：加载失败后（自动加载已停）、以及浏览器没有
+             IntersectionObserver 时，它是唯一的继续加载入口。 -->
         <button
           v-else
           class="rc-btn"
           type="button"
           data-testid="site-data-load-more"
-          :disabled="loadingMore"
           @click="loadMore"
-        >{{ loadingMore ? '加载中…' : '加载更多' }}</button>
+        >加载更多</button>
       </div>
     </template>
 

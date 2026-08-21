@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { DataTableMeta, DataRow } from '@/api'
 
 // withDefaults 是必须的：Vue 3 对 boolean 类型的 prop 有 casting 规则——未传时值是 false
@@ -27,6 +27,9 @@ const props = withDefaults(defineProps<{
    *  （watch pageForm.total → allSort），大表按无索引的业务列排序会拖垮库。
    *  ENTRY_ID / SOURCE_ID / 状态这些固定列不受此限制，旧平台也是始终可排。 */
   allowColumnSort?: boolean
+  /** 触底自动加载：为 true 时在滚动容器底部装一个哨兵，进入视口就 emit reach-end。
+   *  调用方在数据耗尽 / 正在加载时把它置 false，观察器随之解除。 */
+  autoLoadMore?: boolean
 }>(), { allowColumnSort: true })
 const showActions = computed(() => !props.compact && !props.hideActions)
 
@@ -63,7 +66,35 @@ const emit = defineEmits<{
   (e: 'row-action', row: DataRow, cmd: string): void
   (e: 'update:selectedIds', ids: string[]): void
   (e: 'sort-change', field: string, order: 'ascend' | 'descend' | ''): void
+  (e: 'reach-end'): void
 }>()
+
+// 触底加载（0819 N3-1，会议 10:39"是不是应该直接朝下滑动就加载更多啊？你这个要点还不麻烦吗"）。
+// 观察器装在这里而不是调用方：纵向滚动发生在本组件的 .dg-scroll 上（flex:1 + overflow:auto），
+// 调用方拿不到这个容器，只能靠本组件把"到底了"这件事 emit 出去。
+// rootMargin 提前 120px 触发，滚到底之前就开始取下一批，接得上。
+const scrollRef = ref<HTMLElement | null>(null)
+const sentinelRef = ref<HTMLElement | null>(null)
+let endObserver: IntersectionObserver | undefined
+
+function teardownObserver() {
+  endObserver?.disconnect()
+  endObserver = undefined
+}
+function setupObserver() {
+  teardownObserver()
+  // jsdom 与老浏览器没有 IntersectionObserver：不装观察器，调用方的「加载更多」按钮就是兜底
+  if (!props.autoLoadMore || typeof IntersectionObserver === 'undefined') return
+  if (!scrollRef.value || !sentinelRef.value) return
+  endObserver = new IntersectionObserver(
+    (entries) => { if (entries.some((e) => e.isIntersecting)) emit('reach-end') },
+    { root: scrollRef.value, rootMargin: '120px' },
+  )
+  endObserver.observe(sentinelRef.value)
+}
+watch(() => props.autoLoadMore, () => void nextTick(setupObserver))
+onMounted(() => void nextTick(setupObserver))
+onBeforeUnmount(teardownObserver)
 
 const selectedSet = computed(() => new Set(props.selectedIds ?? []))
 const allChecked = computed(() => props.rows.length > 0 && props.rows.every((r) => selectedSet.value.has(r.dataId)))
@@ -165,7 +196,7 @@ function stateMeta(s?: string) {
       </div>
     </div>
     <div v-if="!cols.length && !loading" class="dg-empty">该节点暂无输出表 schema</div>
-    <div v-else class="dg-scroll" v-loading="loading">
+    <div v-else ref="scrollRef" class="dg-scroll" v-loading="loading">
       <table class="dg-table">
         <thead>
           <tr>
@@ -210,6 +241,8 @@ function stateMeta(s?: string) {
           </tr>
         </tbody>
       </table>
+      <!-- 触底哨兵：必须在滚动容器内部、表格之后，滚到底时才会进入 root 的视口 -->
+      <div v-if="autoLoadMore" ref="sentinelRef" class="dg-sentinel" aria-hidden="true" />
     </div>
     <!-- #foot：表格下方的常驻横条，给分页用（0819 N1-8，会议 19:13"页子放下面，
          没有把页子放上面的"）。此前分页并在 #head 里是为了省纵向空间，现在由顶部区
@@ -235,6 +268,7 @@ function stateMeta(s?: string) {
 .dg-col-item { display: flex; align-items: center; gap: 6px; padding: 5px 6px; font-size: 11px; color: var(--rc-text-2); cursor: pointer; border-radius: 5px; white-space: nowrap; }
 .dg-col-item:hover { background: var(--rc-primary-bg); }
 .dg-scroll { flex: 1; overflow: auto; }
+.dg-sentinel { height: 1px; }
 .dg-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .dg-sortable { cursor: pointer; user-select: none; }
 .dg-sortable:hover { color: var(--rc-primary); }
