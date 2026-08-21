@@ -67,6 +67,7 @@ const emit = defineEmits<{
   (e: 'update:selectedIds', ids: string[]): void
   (e: 'sort-change', field: string, order: 'ascend' | 'descend' | ''): void
   (e: 'reach-end'): void
+  (e: 'file-click', path: string, field: { prop: string; desc?: string }): void
 }>()
 
 // 触底加载（0819 N3-1，会议 10:39"是不是应该直接朝下滑动就加载更多啊？你这个要点还不麻烦吗"）。
@@ -151,6 +152,18 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
 // 等于把人往坑里引（0819 会议 10:53"条件支持什么开头"的根子）。数据一直都在，只是没渲染。
 // 兜底：没有 columnName 的列（ENTRY_ID/SOURCE_ID 合成列本身就是物理列名，
 // 或 inferTableMeta 推断出的列）退回 prop；desc 缺失时只显示物理列名。
+// 文件类单元格识别（0819 N2-6）：判据迁移自旧平台 EntryList2.vue:344——
+// itemCode 含 path/minio，或列名含「地址/路径/图片」，且值以 / 开头（OSS 路径的形状）。
+// 我们的 field.prop 即旧平台的 itemCode、field.desc 即 itemName，一一对应。
+// 旧平台据此把这些单元格渲染成 OSS 下载链接；这里进一步做成可点开的站内预览。
+function isFileCell(field: { prop: string; desc?: string }, value: string): boolean {
+  if (!value.startsWith('/')) return false
+  const code = String(field.prop || '').toLowerCase()
+  const label = String(field.desc || '')
+  return code.includes('path') || code.includes('minio')
+    || label.includes('地址') || label.includes('路径') || label.includes('图片')
+}
+
 function colLabel(field: { prop: string; desc?: string; columnName?: string; label?: string }): string {
   if (field.label) return field.label
   const physical = field.columnName || field.prop
@@ -222,7 +235,18 @@ function stateMeta(s?: string) {
               <input type="checkbox" :checked="selectedSet.has(r.dataId)" @change="toggleRow(r.dataId)" />
             </td>
             <td v-if="showSourceCol" :title="sourceLabel(r)">{{ sourceLabel(r) }}</td>
-            <td v-for="f in visibleCols" :key="f.prop" :title="cellText(r, f)">{{ cellText(r, f) }}</td>
+            <td v-for="f in visibleCols" :key="f.prop" :title="cellText(r, f)">
+              <!-- 路径类单元格做成可点：点开站内预览，不改变行点击（打开数据详情）的语义 -->
+              <button
+                v-if="isFileCell(f, cellText(r, f))"
+                type="button"
+                class="dg-file-cell"
+                data-testid="data-file-cell"
+                :title="`预览 ${cellText(r, f)}`"
+                @click.stop="emit('file-click', cellText(r, f), f)"
+              >📄 {{ cellText(r, f) }}</button>
+              <template v-else>{{ cellText(r, f) }}</template>
+            </td>
             <td v-if="!compact"><span class="rc-status" :class="stateMeta(r.state).cls">{{ stateMeta(r.state).text }}</span></td>
             <td v-if="showActions" class="dg-actions" @click.stop>
               <el-dropdown trigger="click" @command="(c: string) => emit('row-action', r, c)">
@@ -270,6 +294,8 @@ function stateMeta(s?: string) {
 .dg-scroll { flex: 1; overflow: auto; }
 .dg-sentinel { height: 1px; }
 .dg-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.dg-file-cell { max-width: 100%; padding: 0; border: 0; background: none; color: var(--rc-primary); font: inherit; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dg-file-cell:hover { text-decoration: underline; }
 .dg-sortable { cursor: pointer; user-select: none; }
 .dg-sortable:hover { color: var(--rc-primary); }
 .dg-sort-ind { margin-left: 4px; opacity: .35; font-size: 10px; }

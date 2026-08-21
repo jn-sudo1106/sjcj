@@ -12,6 +12,8 @@ import {
 import { confirmDanger } from '@/utils/confirmDanger'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import DataGrid from './DataGrid.vue'
+import FilePreview from './components/FilePreview.vue'
+import { extFromName } from '@/utils/ossFile'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import { readRailOpen, writeRailOpen } from './railPref'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
@@ -680,6 +682,16 @@ async function saveEdit() {
     saving.value = false
   }
 }
+
+// 单元格里的文件预览（0819 N2-7）：路径类字段点开就地看内容，不用先跳到文件视图再找。
+// 用居中 dialog 而不是右侧抽屉——这是"看一眼就关"的操作型短流程，抽屉留给实体详情
+// （项目弹层规范）。预览器与文件详情共用一个组件，取数、降级、下载全在里面。
+const filePreview = reactive({ visible: false, path: '', name: '' })
+function onCellFile(path: string) {
+  filePreview.path = path
+  filePreview.name = path.split('/').pop() || ''
+  filePreview.visible = true
+}
 </script>
 
 <template>
@@ -805,6 +817,7 @@ async function saveEdit() {
         :allow-column-sort="allowColumnSort"
         @sort-change="onSortChange"
         @update:selected-ids="selectedRowIds = $event"
+        @file-click="onCellFile"
         @row-click="onRowClick"
         @row-action="onRowAction"
       >
@@ -987,6 +1000,15 @@ async function saveEdit() {
       :can-write="false"
     />
   </main>
+
+    <el-dialog v-model="filePreview.visible" :title="filePreview.name || '文件预览'" width="820px" top="6vh" append-to-body>
+      <FilePreview
+        :path="filePreview.path"
+        :name="filePreview.name"
+        :ext="extFromName(filePreview.name)"
+        data-testid="data-cell-file-preview"
+      />
+    </el-dialog>
 </template>
 
 <style scoped>

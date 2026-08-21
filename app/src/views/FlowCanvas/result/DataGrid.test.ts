@@ -121,6 +121,34 @@ describe('DataGrid', () => {
     expect(wrapper.emitted('sort-change')![0]).toEqual(['ENTRY_ID', 'ascend'])
   })
 
+  it('路径类单元格渲染成可点预览，判据迁移自旧平台 EntryList2.vue：itemCode 含 path/minio 或列名含地址/路径/图片，且值以 / 开头', async () => {
+    const wrapper = mount(DataGrid, {
+      props: {
+        meta: {
+          tableId: 't1', tableName: '表', rowCount: 1,
+          fields: [
+            { prop: 'content_path', columnName: 'K6', type: 'string', desc: '正文路径' },
+            { prop: 'title', columnName: 'K1', type: 'string', desc: '标题' },
+            { prop: 'src_url', columnName: 'K2', type: 'string', desc: 'URL' },
+          ],
+        },
+        rows: [{
+          dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted',
+          values: { K6: '/qinlong/a/content.txt', K1: '普通标题', K2: 'https://example.com/x' },
+        }],
+      },
+      global: { stubs: { ElDropdown: true } },
+    })
+
+    const cells = wrapper.findAll('[data-testid="data-file-cell"]')
+    // 只有 content_path 命中：标题不是路径类；src_url 虽是链接，但值不以 / 开头（旧平台同款判据）
+    expect(cells).toHaveLength(1)
+    expect(cells[0].text()).toContain('/qinlong/a/content.txt')
+
+    await cells[0].trigger('click')
+    expect(wrapper.emitted('file-click')![0][0]).toBe('/qinlong/a/content.txt')
+  })
+
   it('没有 columnName 时（比如兜底推断出的 meta）退回用 prop 取值', () => {
     const wrapper = mount(DataGrid, {
       props: {
