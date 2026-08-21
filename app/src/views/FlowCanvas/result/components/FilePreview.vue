@@ -149,10 +149,13 @@ function onExcelError(e: unknown) {
 .fp-wrap { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
 .fp-hint { display: flex; align-items: center; gap: 10px; padding: 14px; border-radius: 8px; background: #f8fafc; color: var(--rc-text-2); font-size: 12px; }
 .fp-hint.error { background: #fef2f2; color: #b91c1c; word-break: break-all; }
-.fp-excel { height: 420px; border: 1px solid var(--rc-border-soft); border-radius: 8px; overflow: hidden; }
-.fp-frame { width: 100%; height: 420px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
-.fp-img { max-width: 100%; max-height: 420px; object-fit: contain; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
-.fp-text { max-height: 420px; overflow: auto; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
+/* 内容区撑满可用高度，不写死：放在预览抽屉里有 700+px 可用，放在单元格预览的 dialog 里
+   则由 min-height 保底。原先一律固定 420px，在抽屉里白白空掉一大半。 */
+.fp-excel, .fp-frame, .fp-text { flex: 1; min-height: 260px; }
+.fp-excel { border: 1px solid var(--rc-border-soft); border-radius: 8px; overflow: hidden; }
+.fp-frame { width: 100%; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
+.fp-img { max-width: 100%; flex: 1; min-height: 0; object-fit: contain; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
+.fp-text { overflow: auto; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
 .fp-text pre { margin: 0; padding: 12px; font-family: var(--rc-mono, monospace); font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
 .fp-foot { display: flex; gap: 8px; }
 .fp-foot .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; line-height: 28px; text-decoration: none; }

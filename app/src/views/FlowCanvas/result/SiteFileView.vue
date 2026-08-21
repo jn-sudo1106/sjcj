@@ -8,6 +8,7 @@ import { fileApi, siteApi, type FileResourceRecord, type Source } from '@/api'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import GlobalSourceSelect from './components/GlobalSourceSelect.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
+import FilePreviewDrawer from './components/FilePreviewDrawer.vue'
 import { initMergeState, mergeLoadMore, type MergeSourceState, type MergeLoadMoreResult } from './siteDataMerge'
 import { withoutComposition } from '@/utils/enterKey'
 
@@ -254,6 +255,15 @@ watch(selectedSourceId, () => {
 
 // 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
 const onEnterJump = withoutComposition(() => goToPage())
+
+// 点表格行开预览（2026-08-21 产品意见）：预览篇幅大，与「详情」的字段列表拆开各走各的抽屉。
+// 行尾「详情」按钮用 @click.stop，避免冒泡把预览一起打开。
+const previewVisible = ref(false)
+const previewFile = ref<FileResourceRecord | null>(null)
+function openPreview(file: FileResourceRecord) {
+  previewFile.value = file
+  previewVisible.value = true
+}
 </script>
 
 <template>
@@ -297,7 +307,13 @@ const onEnterJump = withoutComposition(() => goToPage())
         <table class="rc-data-table sfv-table" v-loading="loading">
           <thead><tr><th>所属源</th><th>文件名</th><th>展示名</th><th>扩展名</th><th class="num">大小</th><th>MD5</th><th>文件链接</th><th>文件路径</th><th>文本文件</th><th>文本路径</th><th class="num">文本大小</th><th>状态</th><th>更新时间</th><th>生成时间</th><th>操作</th></tr></thead>
           <tbody>
-            <tr v-for="file in rows" :key="`${file.sourceId}-${file.dataId}`">
+            <tr
+              v-for="file in rows"
+              :key="`${file.sourceId}-${file.dataId}`"
+              class="sfv-row"
+              :class="{ active: previewFile?.dataId === file.dataId }"
+              @click="openPreview(file)"
+            >
               <!-- 源 ID 不在当前网站的源列表里时，标出来而不是让它看着像个源名：
                    导入的文件数据带的是对方体系的源 ID（会议 15:53），对不上是常态，
                    得让人一眼看出"这不是本站的源"，而不是以为源名显示成了一串数字。 -->
@@ -320,7 +336,7 @@ const onEnterJump = withoutComposition(() => goToPage())
               <td>{{ file.state || '—' }}</td>
               <td class="soft">{{ file.updateDt || '—' }}</td>
               <td class="soft">{{ file.createDt || '—' }}</td>
-              <td><button class="sfv-link" type="button" data-testid="site-file-detail" @click="openDetail(file)">详情</button></td>
+              <td><button class="sfv-link" type="button" data-testid="site-file-detail" @click.stop="openDetail(file)">详情</button></td>
             </tr>
             <tr v-if="!rows.length && !loading"><td colspan="15" class="sfv-empty-row">没有匹配的文件</td></tr>
           </tbody>
@@ -345,6 +361,7 @@ const onEnterJump = withoutComposition(() => goToPage())
       </div>
     </template>
     <FileDetailDrawer v-model="detail.visible" :file="detail.file" :source-name="detail.file ? sourceNames[detail.file.sourceId] || detail.file.sourceId : ''" />
+    <FilePreviewDrawer v-model="previewVisible" :file="previewFile" data-testid="site-file-preview-drawer" />
   </main>
 </template>
 
@@ -383,4 +400,6 @@ const onEnterJump = withoutComposition(() => goToPage())
 @media (max-width: 900px) {
   .sfv-toolbar :deep(.sss-wrap), .sfv-toolbar :deep(.gss-wrap) { min-width: 220px; width: auto; }
 }
+.sfv-row { cursor: pointer; }
+.sfv-row.active > td { background: var(--rc-primary-bg); }
 </style>

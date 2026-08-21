@@ -6,6 +6,7 @@ import { fileApi, type FileResourceRecord } from '@/api'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
+import FilePreviewDrawer from './components/FilePreviewDrawer.vue'
 import { buildHorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
 import { withoutComposition } from '@/utils/enterKey'
 
@@ -206,6 +207,15 @@ function runQuery() {
 
 // 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
 const onEnterJump = withoutComposition(() => goToPage())
+
+// 点表格行开预览（2026-08-21 产品意见）：预览篇幅大，与「详情」的字段列表拆开各走各的抽屉。
+// 行尾「详情」按钮用 @click.stop，避免冒泡把预览一起打开。
+const previewVisible = ref(false)
+const previewFile = ref<FileResourceRecord | null>(null)
+function openPreview(file: FileResourceRecord) {
+  previewFile.value = file
+  previewVisible.value = true
+}
 </script>
 
 <template>
@@ -257,7 +267,13 @@ const onEnterJump = withoutComposition(() => goToPage())
         <table class="rc-data-table fv-table" v-loading="loading">
           <thead><tr><th>文件名</th><th>展示名</th><th>扩展名</th><th class="num">大小</th><th>MD5</th><th>文件链接</th><th>文件路径</th><th>文本文件</th><th>文本路径</th><th class="num">文本大小</th><th>状态</th><th>更新时间</th><th>生成时间</th><th>操作</th></tr></thead>
           <tbody>
-            <tr v-for="file in rows" :key="file.dataId">
+            <tr
+              v-for="file in rows"
+              :key="file.dataId"
+              class="fv-row"
+              :class="{ active: previewFile?.dataId === file.dataId }"
+              @click="openPreview(file)"
+            >
               <td class="fv-name">{{ textOf(file, 'K1') }}</td>
               <td>{{ textOf(file, 'K6') }}</td>
               <td>{{ textOf(file, 'K7') }}</td>
@@ -274,7 +290,7 @@ const onEnterJump = withoutComposition(() => goToPage())
               <td>{{ file.state || '—' }}</td>
               <td class="soft">{{ file.updateDt || '—' }}</td>
               <td class="soft">{{ file.createDt || '—' }}</td>
-              <td><button class="fv-op" type="button" data-testid="file-detail" @click="openDetail(file)">详情</button></td>
+              <td><button class="fv-op" type="button" data-testid="file-detail" @click.stop="openDetail(file)">详情</button></td>
             </tr>
             <tr v-if="!rows.length && !loading"><td colspan="14" class="fv-empty-row">{{ listError || error || '没有匹配的文件' }}</td></tr>
           </tbody>
@@ -293,6 +309,7 @@ const onEnterJump = withoutComposition(() => goToPage())
       </template>
     </div>
     <FileDetailDrawer v-model="detail.visible" :file="detail.file" />
+    <FilePreviewDrawer v-model="previewVisible" :file="previewFile" data-testid="file-preview-drawer" />
   </main>
 </template>
 
@@ -386,4 +403,6 @@ const onEnterJump = withoutComposition(() => goToPage())
 @media (max-width: 900px) {
   .fv-filters { flex-wrap: wrap; }
 }
+.fv-row { cursor: pointer; }
+.fv-row.active > td { background: var(--rc-primary-bg); }
 </style>
