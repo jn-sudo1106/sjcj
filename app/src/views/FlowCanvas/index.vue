@@ -35,6 +35,43 @@ function syncActiveView() {
 watch(() => route.query.view, () => {
   activeView.value = normalizeSourceView(route.query.view)
 }, { immediate: true })
+// 深链定位节点（0819 N4-1）：数据视图的「查看条件」不再就地展开，而是跳到流程画布并
+// 选中该节点、打开对应配置页签。
+//
+// 实测下来这里有个绕不开的时序（浏览器逐帧采样确认）：跳过来后 selectedId 会先被正确设成
+// 目标节点，约 200ms 后再被 store 的 load() 末尾那句无条件 select(第一个节点) 覆盖回去。
+// load() 是异步加载完成后才跑的，而且它先清空 configs 再填回来（键数 2→0→2 最终不变），
+// 所以既不能只设一次，也不能靠"键数变化"去等它。
+//
+// 解法是给一个短暂的纠正窗口：跳转后的 1.5 秒内，只要选中被改成别的节点就纠正回来；
+// 窗口一过就彻底放手，用户之后手动点别的节点不会被拉回。
+const pendingNodeId = ref('')
+const pendingTab = ref('')
+const pendingUntil = ref(0)
+const PENDING_WINDOW_MS = 1500
+watch(
+  [() => route.query.nodeId, () => route.query.tab],
+  () => {
+    const id = String(route.query.nodeId ?? '')
+    if (!id) return
+    pendingNodeId.value = id
+    pendingTab.value = String(route.query.tab ?? '')
+    pendingUntil.value = Date.now() + PENDING_WINDOW_MS
+  },
+  { immediate: true },
+)
+watch(
+  [pendingNodeId, () => flow.selectedId, () => Object.keys(flow.configs).length],
+  () => {
+    const id = pendingNodeId.value
+    if (!id || Date.now() > pendingUntil.value) return
+    if (!flow.configs[id] || flow.selectedId === id) return
+    flow.selectedId = id
+    if (pendingTab.value) flow.activeTab = pendingTab.value
+  },
+  { immediate: true, flush: 'post' },
+)
+
 // 网站详情页（0714 会议 Task 3）：siteId 且无 sourceId，只读聚合数据/文件/任务视图，没有流程视图
 const isSiteDetail = computed(() => !!route.query.siteId && !route.query.sourceId)
 const isDataView = computed(() => activeView.value === 'data' && !!flow.sourceCtx)
@@ -343,9 +380,9 @@ async function enterFromRoute() {
   const sourceId = String(route.query.sourceId ?? '')
   if (siteId && !sourceId) {
     // 旧网站任务链接（0812 计划 M1-3）：网站汇总态任务页签已删除，跳转到运行记录；
-    // /tasks 要到 M3-11 才建，此前统一先落到 /runs，M3-11 完成后再把目标改成 /tasks 并更新测试。
+    // M3-11 已完成（0819 N4-2）：「运行记录」改名「任务中心」，路径同步为 /tasks。
     if (route.query.view === 'task') {
-      await router.replace({ path: '/runs', query: { siteId } })
+      await router.replace({ path: '/tasks', query: { siteId } })
       return
     }
     // 网站详情页（0714 会议 Task 3）：不再重定向到第一个源，本身就是一个页面；

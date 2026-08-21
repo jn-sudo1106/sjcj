@@ -59,7 +59,7 @@ function onAlert(level: string) {
   if (level === 'error') return goCollect('E')
   if (level === 'external') return goCollect('external')
   if (level === 'disabled') return goCollect('disabled')
-  if (level === 'running') return router.push({ path: '/runs', query: { state: 'L' } })
+  if (level === 'running') return router.push({ path: '/tasks', query: { state: 'L' } })
   return router.push('/monitor')
 }
 </script>
@@ -105,10 +105,10 @@ function onAlert(level: string) {
     <div class="rc-card ov-live-card">
       <div class="rc-card-head">
         <div class="rc-card-title">实时运行动态</div>
-        <button class="ov-more" type="button" @click="router.push('/runs')">查看更多 ›</button>
+        <button class="ov-more" type="button" @click="router.push('/tasks')">查看更多 ›</button>
       </div>
       <div class="ov-live">
-        <button v-for="r in runtimeRows" :key="r.title + r.time" class="ov-live-row" type="button" @click="router.push('/runs')">
+        <button v-for="r in runtimeRows" :key="r.title + r.time" class="ov-live-row" type="button" @click="router.push('/tasks')">
           <span class="ov-live-dot" :class="r.cls" />
           <span class="ov-live-time">{{ r.time }}</span>
           <span class="ov-live-copy">

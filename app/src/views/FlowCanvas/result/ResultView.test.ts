@@ -12,6 +12,9 @@ import type { NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 
 // 只替换 isProductionBackend，其余照搬真实模块——现有用例的 vi.spyOn(dataApi, …)
 // 作用在同一个 dataApi 对象引用上，不受影响。
+const routerPush = vi.fn()
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }) }))
+
 vi.mock('@/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api')>()
   return { ...actual, isProductionBackend: vi.fn(() => false) }
@@ -425,7 +428,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     expect(wrapper.find('[data-testid="data-process-rail"]').exists()).toBe(true)
   })
 
-  it('节点自身设置了进入条件时，摘要行出现"查看条件"；展开后才显示条件文案，默认收起', async () => {
+  it('节点自身设置了进入条件时出现「查看条件」，点击跳到流程画布的该节点配置——不再就地展开（0819 N4-1，会议 21:06"直接点它，然后就跳过去，不要在这边搞个东西起来"）', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
@@ -441,13 +444,22 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     await flushPromises()
     await selectNode(wrapper, '391007768-rule-demo')
 
-    expect(wrapper.find('.ctx-toggle').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="data-node-condition-link"]').exists()).toBe(true)
+    // 就地展开的条件区已删除
     expect(wrapper.find('.ctx-detail').exists()).toBe(false)
 
-    await wrapper.find('.ctx-toggle').trigger('click')
+    routerPush.mockClear()
+    await wrapper.find('[data-testid="data-node-condition-link"]').trigger('click')
 
-    expect(wrapper.find('.ctx-detail').text()).toContain('进入条件')
-    expect(wrapper.find('.ctx-detail').text()).toContain('title 包含 "公告"')
+    expect(routerPush).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/canvas',
+      query: expect.objectContaining({
+        sourceId: '391007768',
+        view: 'flow',
+        nodeId: '391007768-rule-demo',
+        tab: 'config',
+      }),
+    }))
   })
 
   it('没有进入条件也不在任何分支上的节点，摘要行不出现"查看条件"（没内容不留空展开区）', async () => {
@@ -466,7 +478,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     expect(wrapper.find('.ctx-toggle').exists()).toBe(false)
   })
 
-  it('分支上的节点展开条件后能看到路径条件（来自决策分支的条件+分支名）', async () => {
+  it('分支上的节点同样出现「查看条件」入口，跳转带上该节点 id（路径条件由分支条件决定，内容到画布里看）', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
@@ -482,12 +494,15 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     const wrapper = mountResultView()
     await flushPromises()
     await selectNode(wrapper, childId)
-    await wrapper.find('.ctx-toggle').trigger('click')
 
-    const text = wrapper.find('.ctx-detail').text()
-    expect(text).toContain('路径条件')
-    expect(text).toContain('amount 大于 "0"')
-    expect(text).toContain(bg.branches[0].label)
+    // 分支上的节点自身没有进入条件，靠路径条件（分支条件）也应给出入口
+    expect(wrapper.find('[data-testid="data-node-condition-link"]').exists()).toBe(true)
+
+    routerPush.mockClear()
+    await wrapper.find('[data-testid="data-node-condition-link"]').trigger('click')
+    expect(routerPush).toHaveBeenCalledWith(expect.objectContaining({
+      query: expect.objectContaining({ nodeId: childId, view: 'flow', tab: 'config' }),
+    }))
   })
 
   it('快速切换节点时只有最后一次请求的结果生效，过期响应到达也不会覆盖当前展示（请求竞态保护）', async () => {

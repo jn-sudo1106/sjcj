@@ -23,10 +23,13 @@ const routes: RouteRecordRaw[] = [
       { path: '/metrics', component: () => import('../views/MetricCenter/index.vue') },
       { path: '/data', component: () => import('../views/DataView/index.vue') },
       { path: '/files', component: () => import('../views/FileCenter/index.vue') },
-      { path: '/runs', component: () => import('../views/RunRecords/index.vue') },
+      { path: '/tasks', component: () => import('../views/RunRecords/index.vue') },
       { path: '/monitor', component: () => import('../views/Monitor/index.vue') },
       // 兼容旧导航路径；监控中心的正式入口统一为 /monitor。
       { path: '/tools', redirect: (to) => ({ path: '/monitor', query: to.query }) },
+      // 「运行记录」改名「任务中心」（0819 N4-2 / 0812 M3-11），路径随之从 /runs 改到
+      // /tasks；旧链接（含各处已经发出去的 /runs?siteId=）仍要能用，故留重定向。
+      { path: '/runs', redirect: (to) => ({ path: '/tasks', query: to.query }) },
     ],
   },
 ]

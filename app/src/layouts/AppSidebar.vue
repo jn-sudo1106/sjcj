@@ -38,7 +38,7 @@ const navIcons: Record<string, Component> = {
   metrics: Histogram,
   data: DataAnalysis,
   files: Files,
-  runs: Clock,
+  tasks: Clock,
   monitor: Monitor,
 }
 </script>

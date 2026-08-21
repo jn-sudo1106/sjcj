@@ -49,7 +49,7 @@ const displayKpis = computed<Kpi[]>(() => {
   return [
     { key: 'sources', label: '采集资产总数', value: k.sources, numeric: true, delta: k.deltas?.sources ?? '', trend: asTrend(k.deltas?.sourcesTrend), icon: Box, tone: 'primary', to: () => goCollect() },
     { key: 'active', label: '启用采集源', value: activeSources.value, numeric: true, delta: k.deltas?.active ?? '', trend: asTrend(k.deltas?.activeTrend), icon: CircleCheck, tone: 'ok', to: () => goCollect() },
-    { key: 'today', label: '今日采集任务', value: latestTaskCount.value, numeric: true, delta: k.deltas?.today ?? '', trend: asTrend(k.deltas?.todayTrend), icon: Document, tone: 'primary', to: () => router.push('/runs') },
+    { key: 'today', label: '今日采集任务', value: latestTaskCount.value, numeric: true, delta: k.deltas?.today ?? '', trend: asTrend(k.deltas?.todayTrend), icon: Document, tone: 'primary', to: () => router.push('/tasks') },
     { key: 'rate', label: '成功率', value: k.successRate, numeric: false, delta: k.deltas?.rate ?? '', trend: asTrend(k.deltas?.rateTrend), icon: CircleCheck, tone: 'primary' },
     { key: 'alarms', label: '告警数量', value: k.alarms, numeric: true, unit: '条', delta: k.deltas?.alarms ?? '', trend: asTrend(k.deltas?.alarmsTrend), icon: Bell, tone: 'err', to: () => router.push('/monitor') },
     { key: 'new7', label: '近7日新增资产', value: k.newAssets7, numeric: true, delta: k.deltas?.new7 ?? '', trend: asTrend(k.deltas?.new7Trend), icon: Files, tone: 'indigo' },

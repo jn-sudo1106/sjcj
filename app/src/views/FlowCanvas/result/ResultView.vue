@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -21,6 +22,7 @@ const flow = useFlowStore()
 const ws = useWorkspaceStore()
 
 const source = computed(() => flow.sourceCtx)
+const router = useRouter()
 const sourceId = computed(() => source.value?.sourceId ?? '')
 const siteId = computed(() => source.value?.siteId ?? '')
 const tabKey = computed(() => sourceId.value)
@@ -33,7 +35,6 @@ const processLayout = computed(() =>
 const allNodes = computed(() => processLayout.value.nodes)
 const selectedNodeId = ref<string>('')
 const scope = ref<'output' | 'input'>('output')
-const ctxOpen = ref(false)
 const page = ref(1)
 const filters = reactive({ dataId: '', parentId: '', state: '', sql: '' })
 
@@ -98,6 +99,25 @@ const pathConditionLabel = computed(() => {
   return ''
 })
 const hasCond = computed(() => !!entryConditionLabel.value || !!pathConditionLabel.value)
+
+// 「查看条件」改为跳转到流程画布的节点配置（0819 N4-1）。会议 21:06："你看它可能不止那么
+// 简单，可能会稍微复杂一点，直接点它，然后就跳过去，不要在这边搞个东西起来，不是很奇怪吗"
+// ——就地展开只能塞下一行摘要，真要看清条件还是得去配置面板，索性直接送过去。
+// entryConditionLabel / pathConditionLabel 保留：它们决定这个入口要不要出现（没条件的节点
+// 不给一个点过去什么都没有的按钮），文案里也用来提示条件类型。
+function openNodeCondition() {
+  if (!selectedNodeId.value) return
+  void router.push({
+    path: '/canvas',
+    query: {
+      ...(siteId.value ? { siteId: siteId.value } : {}),
+      sourceId: sourceId.value,
+      view: 'flow',
+      nodeId: selectedNodeId.value,
+      tab: 'config',
+    },
+  })
+}
 
 function onScopeChange(next: 'output' | 'input') {
   if (scope.value === next) return
@@ -317,7 +337,6 @@ watch(
       const snap = ws.snapshotOf(tabKey.value)
       const snapId = snap?.selectedNodeId && nodes.some((n) => n.id === snap.selectedNodeId) ? snap.selectedNodeId : ''
       selectedNodeId.value = snapId || nodes.at(-1)?.id || ''
-      ctxOpen.value = false
       if (snapId) {
         page.value = snap?.page ?? 1
         if (snap?.filters) {
@@ -341,7 +360,6 @@ function onSelectNode(id: string) {
   selectedNodeId.value = id
   scope.value = defaultScope()
   page.value = 1
-  ctxOpen.value = false
   selectedRowIds.value = []
   sortField.value = ''
   sortOrder.value = ''
@@ -680,15 +698,16 @@ async function saveEdit() {
           :title="railOpen ? '收起流程节点轨道' : '展开流程节点轨道'"
           @click="railOpen = !railOpen"
         >{{ railOpen ? '收起流程' : '展开流程' }} <span class="arrow">▾</span></button>
-        <button v-if="hasCond" type="button" class="ctx-toggle" :class="{ open: ctxOpen }" @click="ctxOpen = !ctxOpen">
-          查看条件 <span class="arrow">▾</span>
-        </button>
+        <button
+          v-if="hasCond"
+          type="button"
+          class="ctx-toggle"
+          data-testid="data-node-condition-link"
+          title="到流程画布查看该节点的完整配置与条件"
+          @click="openNodeCondition"
+        >查看条件 <span class="arrow">↗</span></button>
       </div>
     </div>
-    <dl v-if="hasCond && ctxOpen" class="ctx-detail">
-      <template v-if="entryConditionLabel"><dt>进入条件</dt><dd>{{ entryConditionLabel }}</dd></template>
-      <template v-if="pathConditionLabel"><dt>路径条件</dt><dd>{{ pathConditionLabel }}</dd></template>
-    </dl>
 
     <!-- 这一行只放"怎么查"：各个筛选条件 + 查询/清空。节点选择归流程图（0819 会议 05:13
          "上面那个和下面那个不是两个都有了吗？只要有一个就行了"——原来这里还有一个与轨道
@@ -1057,10 +1076,6 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
 .ctx-toggle { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border: 1px solid #fde68a; border-radius: 999px; background: #fffbeb; color: #92400e; font-size: 11.5px; font-weight: 700; cursor: pointer; }
 .ctx-toggle:hover { border-color: #fbbf24; }
 .ctx-toggle .arrow { display: inline-block; transition: transform .18s ease; }
-.ctx-toggle.open .arrow { transform: rotate(180deg); }
-.ctx-detail { display: grid; grid-template-columns: max-content 1fr; gap: 7px 12px; padding: 9px 12px 12px; margin: 0; border-bottom: 1px solid var(--rc-border-soft); background: #fff; }
-.ctx-detail dt { font-size: 11px; color: var(--rc-faint); }
-.ctx-detail dd { margin: 0; font-size: 12.5px; color: var(--rc-text-2); font-family: var(--rc-mono, monospace); }
 .rv-empty-scope { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px 12px; text-align: center; color: var(--rc-faint); font-size: 12px; }
 
 .rv-input { height: 28px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; font-size: 12px; outline: none; min-width: 110px; background: #fff; }

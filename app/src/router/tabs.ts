@@ -14,6 +14,6 @@ export const TABS: TabMeta[] = [
   { key: 'metrics', path: '/metrics', label: '指标中心', desc: '指标数据集、指标定义、口径维护', group: 'assets' },
   { key: 'data', path: '/data', label: '数据中心', desc: '实体数据、原始文件、表结构', group: 'ops' },
   { key: 'files', path: '/files', label: '文件中心', desc: '默认全平台，可按网站、源查询文件资源', group: 'ops' },
-  { key: 'runs', path: '/runs', label: '运行记录', desc: '任务实例、节点状态、失败重跑', group: 'ops' },
+  { key: 'tasks', path: '/tasks', label: '任务中心', desc: '任务实例、节点状态、失败重跑', group: 'ops' },
   { key: 'monitor', path: '/monitor', label: '监控中心', desc: '系统健康、MQ、同步状态、告警', group: 'tools' },
 ]
