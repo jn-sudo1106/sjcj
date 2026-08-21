@@ -316,6 +316,8 @@ const onEnterJump = withoutComposition(() => goToPage())
 
 .fv-filters {
   display: flex;
+  /* 换行而不是把条件挤出容器（2026-08-20，与另外两个查询页同口径） */
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   margin-bottom: 16px;

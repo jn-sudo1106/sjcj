@@ -997,7 +997,10 @@ async function saveEdit() {
 /* 换行会让这两条工具栏高度随窗口变窄一路往上涨，挤掉下面数据表格的空间——改成不换行、
    放不下就横向滚动，工具栏高度锁死为固定的一行，数据表格永远拿到最多的剩余空间
    （2026-08-15 第十次纠偏：目的是"下面数据行更多"，不是"这一行摆得下"）。 */
-.ctx-summary { display: flex; align-items: center; flex-wrap: nowrap; overflow-x: auto; gap: 7px 10px; padding: 7px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; }
+/* 窄屏换行，不横向滚动（2026-08-20）：这一行原本 nowrap + overflow-x:auto，窗口一窄就出现
+   横向滚动条——筛选条件横向滚动很难用，「查询」按钮会被滚出视野，得先滚回去才点得到。
+   换行只是多占一行高度，比这个代价小得多；宽屏下仍是一行，没有变化。 */
+.ctx-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 7px 10px; padding: 7px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; }
 .ctx-summary > * { flex-shrink: 0; }
 /* SQL 框是这一行唯一可伸缩的元素，负责吸收多余/不足的宽度。必须比上面那条 no-shrink
    规则更具体，否则整行永远超宽、把右端的「查询/清空」挤出可视区——2026-08-15 实测回归，
@@ -1007,18 +1010,20 @@ async function saveEdit() {
    本来就装不下 6 个控件，所以再加一手：聚焦时临时变宽到 560px，把其他控件挤到横向
    滚动区外——查询/清空是 sticky 钉住的，照样点得到。真要长时间写 SQL 走全屏，
    那边这一行有 1280px（2026-08-15 第十三次纠偏：SQL 框太小）。 */
-.ctx-summary .rv-input.flex { flex: 1 1 380px; min-width: 180px; width: auto; transition: width .18s ease; }
+.ctx-summary .rv-input.flex { flex: 1 1 320px; min-width: 180px; width: auto; }
 /* 聚焦时必须连 flex-shrink 一起退掉：这一行常态是刚好塞满的，可用空间为 0，
    只加大 flex-basis 会被 shrink 原样拉回 min-width，等于没写（实测踩过）。
    固定宽度后整行转为横向滚动，浏览器会把聚焦元素滚进视野，查询/清空是 sticky 的照样点得到。 */
-.ctx-summary .rv-input.flex:focus { flex: none; width: 520px; }
+/* 不再有 .rv-input.flex:focus 的固定放大（原为 width:520px）：它把这一行顶宽 340px，
+   是窄屏下一点输入框就冒出横向滚动条的直接原因。flex:1 本来就会吃掉整行剩余宽度。 */
 @media (prefers-reduced-motion: reduce) { .ctx-summary .rv-input.flex { transition: none; } }
 /* select 会自己撑到最长选项的宽度：节点名一长就吃掉 230px+，把 SQL 挤没。截断显示，
    当前选中是哪个节点在轨道上也有高亮，信息不会丢。 */
 .ctx-summary .rv-input.st { width: 104px; min-width: 0; flex: none; }
 /* 再兜一层：窗口真的很窄、SQL 框缩到底之后整行还是会横向滚动，这时把查询/清空钉在右端，
    保证任何宽度下都点得到。 */
-.rv-actions { position: sticky; right: 0; display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; background: linear-gradient(90deg, transparent, #fff 12px); }
+/* 不再 sticky：那是为横向滚动时钉住按钮准备的，改成换行后没有横向滚动，渐变底也失去意义 */
+.rv-actions { display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; }
 .ctx-piece { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--rc-text-2); white-space: nowrap; }
 .ctx-piece .k { font-size: 11px; color: var(--rc-faint); }
 .ctx-piece .v.code { font-family: var(--rc-mono, monospace); font-size: 11.5px; }

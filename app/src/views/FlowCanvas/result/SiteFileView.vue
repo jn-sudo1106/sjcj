@@ -342,7 +342,9 @@ const onEnterJump = withoutComposition(() => goToPage())
 
 <style scoped>
 .sfv-shell { display: flex; flex-direction: column; height: 100%; overflow: hidden; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); }
-.sfv-toolbar { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); }
+/* 默认就换行（2026-08-20）：原先 nowrap、只在 ≤900px 的断点才 wrap，中间宽度区间会把
+   筛选条件挤出容器；筛选行横向滚动很难用——「查询」按钮会被滚出视野。 */
+.sfv-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); }
 .sfv-input { height: 28px; min-width: 112px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; outline: none; }
 .sfv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .sfv-toolbar .rc-btn, .sfv-foot .rc-btn { height: 28px; padding: 0 10px; font-size: 12px; }
@@ -369,7 +371,6 @@ const onEnterJump = withoutComposition(() => goToPage())
 .sfv-page-size { width: 54px; margin: 0 4px; }
 .sfv-page-jump { width: 54px; padding: 0 6px; }
 @media (max-width: 900px) {
-  .sfv-toolbar { flex-wrap: wrap; overflow-x: visible; }
   .sfv-toolbar :deep(.sss-wrap), .sfv-toolbar :deep(.gss-wrap) { min-width: 220px; width: auto; }
 }
 </style>
