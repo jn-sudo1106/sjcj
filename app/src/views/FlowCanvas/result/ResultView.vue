@@ -354,6 +354,23 @@ function onSelectNode(id: string) {
 const filtersDirty = ref(false)
 watch(() => ({ ...filters }), () => { filtersDirty.value = true })
 
+// 慢查询提示（0819 N3-3，会议 12:00"数量大的话查询都查崩掉"）：大表上一次范围过宽的查询
+// 可能跑很久，页面除了转圈没有任何交代，用户不知道是卡死了还是还在跑。超过阈值就提示可以
+// 缩小范围，但**不中断请求**——结果还是要的，中断了等于白等。
+const SLOW_QUERY_MS = 8000
+const slowQuery = ref(false)
+let slowTimer: ReturnType<typeof setTimeout> | undefined
+function startSlowTimer() {
+  stopSlowTimer()
+  slowTimer = setTimeout(() => { slowQuery.value = true }, SLOW_QUERY_MS)
+}
+function stopSlowTimer() {
+  if (slowTimer) clearTimeout(slowTimer)
+  slowTimer = undefined
+  slowQuery.value = false
+}
+onBeforeUnmount(stopSlowTimer)
+
 // 后端的 SQL 报错是整段 MyBatis 异常：真正有用的是 `Unknown column 'title' in 'where clause'`
 // 这一句，前后还裹着 jar 路径、mapper 类名、参数占位的 SQL，实测一千多字，整段铺在提示条上
 // 没法看。这里抽出首要原因显示，完整原文挂 title 悬浮，排查时仍拿得到。
@@ -439,6 +456,7 @@ async function loadData() {
     return
   }
   loading.value = true
+  startSlowTimer()
   metaError.value = ''
   dataError.value = ''
   demoFallback.value = false
@@ -514,6 +532,7 @@ async function loadData() {
     if (id === requestId) {
       loading.value = false
       filtersDirty.value = false
+      stopSlowTimer()
     }
   }
 }
@@ -692,7 +711,7 @@ async function saveEdit() {
         </select>
         <input v-model="filters.sql" class="rv-input flex" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%'）" />
         <span class="rv-actions">
-          <button class="rc-btn primary" type="button" @click="runQuery">查询</button>
+          <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
           <button class="rc-btn" type="button" @click="clearFilters">清空</button>
         </span>
       </template>
@@ -700,7 +719,8 @@ async function saveEdit() {
 
     <template v-if="hasAnyTable">
       <!-- 条件已改但未执行：盖住上一次的结果状态，避免把旧的失败/空表当成当前条件的结果 -->
-      <div v-if="filtersDirty" class="rv-notice" role="status" data-testid="data-filters-dirty">查询条件已修改，点「查询」执行</div>
+      <div v-if="slowQuery" class="rv-notice" role="status" data-testid="data-slow-query">查询较慢，可缩小条件范围再试；本次请求仍在等待结果</div>
+      <div v-else-if="filtersDirty && !loading" class="rv-notice" role="status" data-testid="data-filters-dirty">查询条件已修改，点「查询」执行</div>
       <template v-else>
         <div v-if="metaError" class="rv-notice" role="status">{{ metaError }}</div>
         <div v-if="dataError" class="rv-notice error" role="alert" :title="dataErrorFull || dataError">{{ dataError }}</div>

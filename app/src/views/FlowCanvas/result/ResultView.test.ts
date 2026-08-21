@@ -184,6 +184,41 @@ describe('ResultView · 查询失败的暴露方式（0819 N3）', () => {
   })
 })
 
+describe('ResultView · 大数据量保护（0819 N3-3）', () => {
+  it('查询期间按钮禁用并显示"查询中…"，超过阈值提示可缩小范围但不中断请求', async () => {
+    vi.useFakeTimers()
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    // 所有查询都挂起不返回，模拟"大表查询很久没回来"
+    const releases: ((v: { list: DataRow[]; total: number }) => void)[] = []
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockImplementation(
+      () => new Promise((resolve) => { releases.push(resolve) }),
+    )
+
+    const wrapper = mountResultView()
+    await vi.advanceTimersByTimeAsync(0)
+
+    const queryBtn = () => wrapper.findAll('.rv-actions button').find((b) => b.text().startsWith('查询'))!
+    expect(queryBtn().attributes('disabled')).toBeDefined()
+    expect(queryBtn().text()).toBe('查询中…')
+    expect(wrapper.find('[data-testid="data-slow-query"]').exists()).toBe(false)
+
+    // 跨过 8s 阈值：提示出现，但请求既没被中断也没被重发（仍挂在那儿等结果）
+    const callsBefore = query.mock.calls.length
+    await vi.advanceTimersByTimeAsync(8100)
+    expect(wrapper.find('[data-testid="data-slow-query"]').exists()).toBe(true)
+    expect(query.mock.calls.length).toBe(callsBefore)
+
+    releases.forEach((r) => r({ list: [], total: 0 }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(wrapper.find('[data-testid="data-slow-query"]').exists()).toBe(false)
+    expect(queryBtn().attributes('disabled')).toBeUndefined()
+    vi.useRealTimers()
+  })
+})
+
 describe('ResultView · 查询条件的执行时机（0819 N3 前置修复）', () => {
   it('输入条件不触发查询，只提示"条件已修改"；回车也不执行——中文输入法上屏会发 Enter 的 keyup，绑回车等于打字打到一半就把半截条件查出去', async () => {
     setActivePinia(createPinia())

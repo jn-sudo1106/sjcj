@@ -60,7 +60,10 @@ function onWindowKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape' && fullscreen.value) fullscreen.value = false
 }
 onMounted(() => window.addEventListener('keydown', onWindowKeydown))
-onBeforeUnmount(() => window.removeEventListener('keydown', onWindowKeydown))
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onWindowKeydown)
+  stopSlowTimer()
+})
 
 const tableId = ref('')
 const selectedSourceId = ref('')
@@ -136,6 +139,21 @@ const selectedNodeId = ref('')
 // （2026-08-20 实测，ResultView.vue 同源问题一并修）。
 const filtersDirty = ref(false)
 watch(() => ({ ...filters }), () => { filtersDirty.value = true })
+
+// 慢查询提示（0819 N3-3）：与 ResultView 同口径。全部源模式还要按源逐个查再归并，
+// 更容易慢；超时只提示、不中断，结果仍然会等回来。
+const SLOW_QUERY_MS = 8000
+const slowQuery = ref(false)
+let slowTimer: ReturnType<typeof setTimeout> | undefined
+function startSlowTimer() {
+  stopSlowTimer()
+  slowTimer = setTimeout(() => { slowQuery.value = true }, SLOW_QUERY_MS)
+}
+function stopSlowTimer() {
+  if (slowTimer) clearTimeout(slowTimer)
+  slowTimer = undefined
+  slowQuery.value = false
+}
 
 const railOpen = ref(readRailOpen())
 watch(railOpen, writeRailOpen)
@@ -256,6 +274,7 @@ async function resetAndLoad() {
   const tid = effectiveTableId.value
   if (!tid) return
   loading.value = true
+  startSlowTimer()
   try {
     if (selectedSourceId.value) {
       // 具体源：候选源集合永远只有它自己，退化成单源归并，复用同一套分页逻辑。
@@ -300,6 +319,7 @@ async function resetAndLoad() {
     if (id === requestId) {
       loading.value = false
       filtersDirty.value = false
+      stopSlowTimer()
     }
   }
 }
@@ -416,7 +436,7 @@ const detailFields = computed(() => {
           <option value="L">L 处理中</option>
         </select>
         <input v-model="filters.sql" class="sdv2-input flex" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%'）" />
-        <button class="rc-btn primary" type="button" @click="runQuery">查询</button>
+        <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
         <button class="rc-btn" type="button" @click="clearFilters">清空</button>
       </template>
     </div>
@@ -465,7 +485,8 @@ const detailFields = computed(() => {
       <div class="sdv2-empty">当前筛选条件下，这张表在本网站没有可查询的源</div>
     </template>
     <template v-else-if="effectiveTableId">
-      <div v-if="filtersDirty" class="sdv2-notice" role="status" data-testid="site-data-filters-dirty">查询条件已修改，点「查询」执行</div>
+      <div v-if="slowQuery" class="sdv2-notice" role="status" data-testid="site-data-slow-query">查询较慢，可缩小条件范围再试；本次请求仍在等待结果</div>
+      <div v-else-if="filtersDirty && !loading" class="sdv2-notice" role="status" data-testid="site-data-filters-dirty">查询条件已修改，点「查询」执行</div>
       <template v-else>
         <div v-if="metaError" class="sdv2-notice" role="status">{{ metaError }}</div>
         <div v-if="dataError" class="sdv2-notice error" role="alert">{{ dataError }}</div>
