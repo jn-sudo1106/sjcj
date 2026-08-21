@@ -13,7 +13,11 @@ import type { NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 // 只替换 isProductionBackend，其余照搬真实模块——现有用例的 vi.spyOn(dataApi, …)
 // 作用在同一个 dataApi 对象引用上，不受影响。
 const routerPush = vi.fn()
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }) }))
+vi.mock('vue-router', () => ({
+  useRouter: () => ({ push: routerPush }),
+  // 跳转要透传当前 query（否则会丢 siteId，左侧源列表整个不渲染）
+  useRoute: () => ({ query: { siteId: '1', sourceId: '391007768', view: 'data' } }),
+}))
 
 vi.mock('@/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api')>()
@@ -454,6 +458,9 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     expect(routerPush).toHaveBeenCalledWith(expect.objectContaining({
       path: '/canvas',
       query: expect.objectContaining({
+        // siteId 必须带上（值可能来自源详情，也可能来自当前路由）：左侧源列表的渲染
+        // 条件依赖它，丢了整个侧栏都不渲染
+        siteId: expect.stringMatching(/.+/),
         sourceId: '391007768',
         view: 'flow',
         nodeId: '391007768-rule-demo',

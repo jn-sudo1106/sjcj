@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -23,6 +23,7 @@ const ws = useWorkspaceStore()
 
 const source = computed(() => flow.sourceCtx)
 const router = useRouter()
+const route = useRoute()
 const sourceId = computed(() => source.value?.sourceId ?? '')
 const siteId = computed(() => source.value?.siteId ?? '')
 const tabKey = computed(() => sourceId.value)
@@ -107,10 +108,15 @@ const hasCond = computed(() => !!entryConditionLabel.value || !!pathConditionLab
 // 不给一个点过去什么都没有的按钮），文案里也用来提示条件类型。
 function openNodeCondition() {
   if (!selectedNodeId.value) return
+  // siteId 必须带上：左侧源列表的渲染条件是 sidebarSiteId（flow.sourceCtx?.siteId
+  // || route.query.siteId），跳转时丢了它整个源侧栏都不渲染。
+  // 这里原先只取 source.value?.siteId——mock 的源详情带这个字段，生产上的真实源详情
+  // 不带，于是单测一路绿灯、真实环境跳过去左栏就空了。故再兜一层当前路由上的 siteId。
+  const navSiteId = siteId.value || String(route.query.siteId ?? '')
   void router.push({
     path: '/canvas',
     query: {
-      ...(siteId.value ? { siteId: siteId.value } : {}),
+      ...(navSiteId ? { siteId: navSiteId } : {}),
       sourceId: sourceId.value,
       view: 'flow',
       nodeId: selectedNodeId.value,
