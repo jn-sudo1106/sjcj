@@ -78,4 +78,29 @@ describe('file_resource 文件视图 HTTP 契约', () => {
     expect(result.list[0]).toMatchObject({ dataId: '9001', sourceId: '391007768', state: 'C' })
     expect(result.list[0].values).toMatchObject({ K1: '公告.pdf', K7: 'pdf' })
   })
+
+  // 2026-08-22 生产实测：文件行自带 CONFIG_ID / DETAIL_ID 物理列，此前适配时被丢掉，
+  // 导致"文件挂在哪个节点"这条现成的线索前端完全看不到。
+  it('保留文件行的 CONFIG_ID / DETAIL_ID —— 节点归属靠它反查步骤', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      code: '0', count: 1, data: [{ ENTRY_ID: '9001', SOURCE_ID: '391002885', CONFIG_ID: 81134, DETAIL_ID: '8390132556', STATE: 'C', K1: 'a.xlsx' }],
+    }))
+    const { fileApi } = await import('./index')
+
+    const result = await fileApi.resourceRows({ tableId: '6200028', sourceId: '391002885', page: 1, size: 20 })
+
+    expect(result.list[0]).toMatchObject({ dataId: '9001', configId: '81134', detailId: '8390132556' })
+  })
+
+  it('按节点筛选落到 CONFIG_ID 等值条件，与其他条件 AND 相接', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', count: 0, data: [] }))
+    const { fileApi } = await import('./index')
+
+    await fileApi.resourceRows({ tableId: '6200028', sourceId: '430016501', configId: '1400765', ext: 'xlsx', page: 1, size: 20 })
+
+    const more = String(decryptBody(fetchMock.mock.calls[0][1] as RequestInit).more)
+    expect(more).toContain("CONFIG_ID = '1400765'")
+    expect(more).toContain('K7 LIKE')
+    expect(more).toContain(' AND ')
+  })
 })

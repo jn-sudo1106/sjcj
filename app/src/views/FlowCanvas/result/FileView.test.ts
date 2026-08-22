@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import FileView from './FileView.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
-import { fileApi, type FileResourceRecord } from '@/api'
+import { fileApi, sourceApi, type FileResourceRecord } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
 
@@ -30,7 +30,75 @@ async function clickQuery(wrapper: { findAll: (s: string) => { text: () => strin
 }
 
 describe('FileView', () => {
+  // 文件列表现在挂在步骤列表之后（首查就要带首节点的 configId），步骤走 mock 通道有 120ms
+  // 真实定时器，不打桩的话 flushPromises 追不上，列表会停在未加载态。
+  beforeEach(() => vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([]))
   afterEach(() => vi.restoreAllMocks())
+
+  // 节点归属（2026-08-22 生产实测）：文件行的 CONFIG_ID 等于源子步骤的 Step.configId，
+  // 画布节点 ID 却是 Step.stepId，必须经步骤列表转一道才对得上。
+  // 存量迁移文件的源在平台里查无此人，解析不出节点——轨道要按数据实际情况开合，
+  // 不能写死可点（点了没反应）也不能写死只读（数据修好后就成了假的能力缺失）。
+  describe('节点轨道', () => {
+    async function mountWith(rows: FileResourceRecord[], steps: Awaited<ReturnType<typeof sourceApi.sourceSteps>>) {
+      setActivePinia(createPinia())
+      const current = mockSourceDetail({ sourceId: '391007768' })!
+      useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+      vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps)
+      vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+      vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+      const query = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ list: rows, total: rows.length })
+      const wrapper = shallowMount(FileView, {
+        global: { directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      })
+      await flushPromises()
+      return { wrapper, query }
+    }
+
+    const boundSteps = [
+      { stepId: '391007768-s1', sourceId: '391007768', name: '列表抓取', configId: '1400774', enabled: true },
+      { stepId: '391007768-s2', sourceId: '391007768', name: '详情解析', configId: '1400765', enabled: true },
+    ]
+
+    it('文件的 CONFIG_ID 能对上步骤时轨道可点，并按该步骤的 configId 查询', async () => {
+      const bound = [{ ...files[0], configId: '1400765' }]
+      const { wrapper, query } = await mountWith(bound, boundSteps)
+
+      expect(wrapper.find('[data-testid="file-rail-note"]').text()).toContain('点击节点')
+      const rail = wrapper.findComponent({ name: 'ProcessNodeRail' })
+      expect((rail.props('selectable') as () => boolean)()).toBe(true)
+      // 首节点是 s1，其 configId 为 1400774
+      expect(query.mock.calls.at(-1)?.[0]).toMatchObject({ configId: '1400774' })
+    })
+
+    it('点击节点改选中并按该节点的 configId 重查（轨道的 update:modelValue 此前没接，点了没反应）', async () => {
+      const bound = [{ ...files[0], configId: '1400765' }]
+      const { wrapper, query } = await mountWith(bound, boundSteps)
+      const callsBefore = query.mock.calls.length
+
+      wrapper.findComponent({ name: 'ProcessNodeRail' }).vm.$emit('update:modelValue', '391007768-s2')
+      await flushPromises()
+
+      expect(query.mock.calls.length).toBe(callsBefore + 1)
+      expect(query.mock.calls.at(-1)?.[0]).toMatchObject({ configId: '1400765' })
+    })
+
+    it('迁移文件对不上步骤时轨道保持只读，并说明原因而不是谎称没有归属能力', async () => {
+      // 源 391002885 在平台里查无此人，步骤接口 500 → steps 为空
+      const migrated = [{ ...files[0], configId: '81134' }]
+      const { wrapper, query } = await mountWith(migrated, [])
+
+      expect(wrapper.find('[data-testid="file-rail-note"]').text()).toContain('迁移数据')
+      const rail = wrapper.findComponent({ name: 'ProcessNodeRail' })
+      expect((rail.props('selectable') as () => boolean)()).toBe(false)
+      expect(query.mock.calls.at(-1)?.[0].configId).toBeUndefined()
+    })
+
+    it('节点下没有文件时不说"迁移数据"——那是另一回事', async () => {
+      const { wrapper } = await mountWith([], boundSteps)
+      expect(wrapper.find('[data-testid="file-rail-note"]').text()).toBe('该节点下暂无文件记录')
+    })
+  })
 
   it('按 file_resource 表目录 + 元数据 + entryDataPaged 查询文件资源', async () => {
     setActivePinia(createPinia())

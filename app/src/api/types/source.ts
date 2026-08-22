@@ -263,6 +263,14 @@ export interface FileResourceRecord {
   createDt?: string
   updateDt?: string
   fileId?: string
+  /**
+   * 产出该文件的采集配置 ID（旧行的 CONFIG_ID）。
+   * 它对应源子步骤的 `Step.configId`，可经此反查到具体流程节点——注意不是节点 ID 本身，
+   * 节点 ID 用的是 `Step.stepId`（旧字段 itemConfig）。2026-08-22 生产实测见 FileView 说明。
+   */
+  configId?: string
+  /** 产出该文件的那条明细记录 ID（旧行的 DETAIL_ID），用于回溯到数据视图对应行。 */
+  detailId?: string
   values: Record<string, unknown>
 }
 
@@ -276,6 +284,8 @@ export interface FileResourceQuery extends PageQuery {
   ext?: string
   /** 自定义 SQL 条件（如 `K1 IS NULL`），对齐旧平台 FileList2.vue 的同名筛选项，此前迁移时漏做。 */
   sql?: string
+  /** 按产出节点筛选：传该节点对应的 `Step.configId`，落到 CONFIG_ID 等值条件。 */
+  configId?: string
 }
 
 /** @deprecated 仅保留旧演示 mock 的数据形状，业务文件视图已迁移到 FileResourceRecord。 */

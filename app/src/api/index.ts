@@ -776,6 +776,9 @@ function fileResourceSql(q: FileResourceQuery): string | undefined {
     const value = escapeFileResourceLike(q.ext.trim().replace(/^\./, ''))
     parts.push(`K7 LIKE '%${value}%'`)
   }
+  // 按产出节点筛选（2026-08-22）：CONFIG_ID 是文件行自带的物理列，走等值条件由后端过滤，
+  // 不能在前端按页过滤——那样只筛得到当前这一页，翻页就露馅。
+  if (q.configId?.trim()) parts.push(`CONFIG_ID = '${escapeFileResourceLike(q.configId.trim())}'`)
   // 自定义 SQL（对齐旧平台 FileList2.vue 的"自定义SQL, 如 K1 IS NULL"，此前迁移遗漏，见 M3-2 补漏）：
   // 用户输入可能本身含 OR，加括号后再与其他条件 AND，避免优先级被吃掉。
   if (q.sql?.trim()) parts.push(`(${q.sql.trim()})`)
@@ -790,6 +793,8 @@ function fileResourceFromDataRow(row: DataRow): FileResourceRecord {
     createDt: row.createDt,
     updateDt: row.updateDt,
     fileId: row.fileId,
+    configId: row.configId,
+    detailId: row.detailId,
     values: row.values ?? {},
   }
 }

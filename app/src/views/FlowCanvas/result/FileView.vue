@@ -2,7 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
-import { fileApi, type FileResourceRecord } from '@/api'
+import { fileApi, sourceApi, type FileResourceRecord, type Step } from '@/api'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
@@ -12,7 +12,6 @@ import { withoutComposition } from '@/utils/enterKey'
 
 // 文件视图只在具体源下挂载。真实旧平台 FileList2.vue 的链路是：
 // file_resource 表目录 → tableMeta → entryDataPaged；网站全部源仍由上层页面另行处理。
-// 文件记录与流程节点的真实关联字段尚未确认，因此这里不再用 sourceSteps 冒充 nodeId 筛选。
 const flow = useFlowStore()
 const sourceId = computed(() => flow.sourceCtx?.sourceId ?? '')
 const processLayout = computed(() =>
@@ -20,18 +19,67 @@ const processLayout = computed(() =>
 )
 const selectedNodeId = ref('')
 
-// 节点归属是**存量数据问题，不是系统能力缺失**（2026-08-21 产品澄清）：
-// 迁移过来的这批文件没有跟节点绑定，所以统一落在首个步骤；后续新增源采集到的文件
-// 都会带上真实的节点归属。会议 15:21 说的"这个数据要刷一下、刷到第一个步骤上面"
-// 指的就是给这批存量数据补值。
+// 文件与流程节点的归属关系（2026-08-22 生产实测确认）：
+// 文件行自带物理列 CONFIG_ID，它等于源子步骤的 Step.configId；而画布节点 ID 用的是
+// Step.stepId（旧字段 itemConfig），两者不是一个东西，必须经步骤列表转一道。
+// 实测样例（源 430016501）：数据行 CONFIG_ID=1400765 → 步骤 itemConfig=40251「1400774-详情」，
+// 精确命中详情节点。
 //
-// 因此轨道当前是只读的流程上下文：现有数据全在首节点，按节点筛选筛不出任何差异，
-// 可点只会让人以为筛过了（原先就是这样——点了换高亮、结果纹丝不动）。
-// 等数据侧把节点归属补齐、新数据积累起来之后，这里再放开为真正的筛选器（R5）。
-const nodeSelectable = () => false
+// 但存量文件挂不上：现有 40 条文件的 SOURCE_ID（如 391002885）在平台里查无此源
+// （sourceDetail 返回"未找到相关ID"、nextConfigPaged 直接 500），是迁移带进来的外部 ID。
+// 这正是产品说的"迁移过来的数据没有跟节点绑定，后续新增源的文件都会带上真实节点归属"。
+//
+// 所以轨道按**数据是否解析得出节点**动态开合，而不是写死只读：解析得出就是真筛选器，
+// 解析不出就保持只读，免得点了换高亮、结果纹丝不动。数据侧补齐后无需改代码自动生效。
+const steps = ref<Step[]>([])
+/** Step.configId → 画布节点 ID(stepId)；建映射时丢掉没有 configId 的步骤。 */
+const configToNode = computed(() => {
+  const map = new Map<string, string>()
+  for (const step of steps.value) {
+    // 同一个 configId 被多个步骤引用时取靠前的那个：源可以"选用已有配置"，
+    // 多步骤共用一份配置是允许的，这时按后者覆盖只会得到一个随机结果。
+    if (step.configId && !map.has(String(step.configId))) map.set(String(step.configId), step.stepId)
+  }
+  return map
+})
+const nodeToConfig = computed(() => {
+  const map = new Map<string, string>()
+  for (const [configId, nodeId] of configToNode.value) map.set(nodeId, configId)
+  return map
+})
+// 能否按节点筛选取决于**步骤列表**，不取决于当前这页文件：文件是查询结果，
+// 而查询本身要带 configId，拿结果反推能力会绕成死循环（先查一次不带条件的，
+// 拿到结果才知道能筛，再查一次）。迁移源的步骤接口直接 500，steps 为空，这里自然关闭。
+const nodeFilterEnabled = computed(() => configToNode.value.size > 0)
+const nodeSelectable = () => nodeFilterEnabled.value
+const railNote = computed(() => {
+  if (!nodeFilterEnabled.value) {
+    return '这些文件是迁移数据，未绑定本平台的流程节点，统一显示在首个步骤；新采集的文件会带上真实节点归属'
+  }
+  return rows.value.length === 0 && !loading.value ? '该节点下暂无文件记录' : '点击节点按产出该文件的步骤筛选'
+})
+
+async function loadSteps() {
+  const id = sourceId.value
+  if (!id) { steps.value = []; return }
+  try {
+    steps.value = await sourceApi.sourceSteps(id)
+  } catch {
+    // 步骤查不到（迁移源在平台里不存在时接口会 500）不阻断文件列表，只是轨道退回只读
+    steps.value = []
+  }
+}
+
 watch(processLayout, (layout) => {
   selectedNodeId.value = layout.nodes[0]?.id ?? ''
 }, { immediate: true })
+// 选中节点变化时重新按该节点的 configId 查询；轨道只读时点不动，不会走到这里
+watch(selectedNodeId, () => {
+  if (!nodeFilterEnabled.value) return
+  page.value = 1
+  jumpPage.value = 1
+  if (table.value) void loadList()
+})
 
 type ResourceTable = { tableId: string; tableName: string; name?: string }
 const table = ref<ResourceTable | null>(null)
@@ -111,6 +159,7 @@ async function loadList(parentRequest = tableRequest) {
     fileName: filters.fileName || undefined,
     ext: filters.ext || undefined,
     sql: filters.sql || undefined,
+    configId: nodeFilterEnabled.value ? nodeToConfig.value.get(selectedNodeId.value) : undefined,
     page: page.value,
     size: size.value,
   }
@@ -184,7 +233,9 @@ function openDetail(file: FileResourceRecord) {
 watch(sourceId, () => {
   page.value = 1
   jumpPage.value = 1
-  void loadResourceTable()
+  // 先取步骤再查列表：首查就要带上首节点的 configId，否则第一屏是不带节点条件的全量，
+  // 跟轨道上的高亮对不上，用户看到的是"选了首节点却是全部文件"。
+  void loadSteps().then(() => loadResourceTable())
 }, { immediate: true })
 
 function resetFilters() {
@@ -228,10 +279,13 @@ function openPreview(file: FileResourceRecord) {
       <div v-if="!sourceId" class="fv-empty-row">文件视图仅在源详情下可用。</div>
       <template v-else>
         <div class="fv-process-rail" data-testid="file-process-rail">
-          <ProcessNodeRail :model-value="selectedNodeId" :layout="processLayout" :selectable="nodeSelectable" />
-          <div class="fv-rail-note" data-testid="file-rail-note">
-            当前文件多为迁移数据，未绑定流程节点，统一显示在首个步骤；新采集的文件会带上真实节点归属
-          </div>
+          <ProcessNodeRail
+            :model-value="selectedNodeId"
+            :layout="processLayout"
+            :selectable="nodeSelectable"
+            @update:model-value="selectedNodeId = $event"
+          />
+          <div class="fv-rail-note" data-testid="file-rail-note">{{ railNote }}</div>
         </div>
         <div class="fv-filters">
           <select
