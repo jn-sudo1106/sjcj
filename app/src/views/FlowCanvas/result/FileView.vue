@@ -20,11 +20,14 @@ const processLayout = computed(() =>
 )
 const selectedNodeId = ref('')
 
-// 文件资源表没有流程节点字段：它只关联到源和表（会议 14:15"它没有关联到步骤"）。
-// 轨道因此是**只读的流程上下文**，不是筛选器——原先它可点，但点了只换高亮、查询结果
-// 纹丝不动，等于把"能按步骤筛"这件事伪装出来。0819 N2-5 定的口径是只标注、不筛选：
-// 选中固定停在首个节点，与会议 15:04"默认第一个步骤"一致；真正按步骤筛要等数据侧
-// 给 file_resource 补上步骤字段并把历史数据刷过去（对外事项 R5）。
+// 节点归属是**存量数据问题，不是系统能力缺失**（2026-08-21 产品澄清）：
+// 迁移过来的这批文件没有跟节点绑定，所以统一落在首个步骤；后续新增源采集到的文件
+// 都会带上真实的节点归属。会议 15:21 说的"这个数据要刷一下、刷到第一个步骤上面"
+// 指的就是给这批存量数据补值。
+//
+// 因此轨道当前是只读的流程上下文：现有数据全在首节点，按节点筛选筛不出任何差异，
+// 可点只会让人以为筛过了（原先就是这样——点了换高亮、结果纹丝不动）。
+// 等数据侧把节点归属补齐、新数据积累起来之后，这里再放开为真正的筛选器（R5）。
 const nodeSelectable = () => false
 watch(processLayout, (layout) => {
   selectedNodeId.value = layout.nodes[0]?.id ?? ''
@@ -227,7 +230,7 @@ function openPreview(file: FileResourceRecord) {
         <div class="fv-process-rail" data-testid="file-process-rail">
           <ProcessNodeRail :model-value="selectedNodeId" :layout="processLayout" :selectable="nodeSelectable" />
           <div class="fv-rail-note" data-testid="file-rail-note">
-            文件资源只关联到源与表，不区分步骤；此处默认归入首个步骤，仅作流程上下文展示
+            当前文件多为迁移数据，未绑定流程节点，统一显示在首个步骤；新采集的文件会带上真实节点归属
           </div>
         </div>
         <div class="fv-filters">
@@ -265,7 +268,7 @@ function openPreview(file: FileResourceRecord) {
         </div>
 
         <table class="rc-data-table fv-table" v-loading="loading">
-          <thead><tr><th>文件名</th><th>展示名</th><th>扩展名</th><th class="num">大小</th><th>MD5</th><th>文件链接</th><th>文件路径</th><th>文本文件</th><th>文本路径</th><th class="num">文本大小</th><th>状态</th><th>更新时间</th><th>生成时间</th><th>操作</th></tr></thead>
+          <thead><tr><th>文件名-K1</th><th>展示名-K6</th><th>扩展名-K7</th><th class="num">大小-K4</th><th>MD5-K5</th><th>文件链接-K2</th><th>文件路径-K3</th><th>文本文件-K8</th><th>文本路径-K9</th><th class="num">文本大小-K10</th><th>状态</th><th>更新时间</th><th>生成时间</th><th>操作</th></tr></thead>
           <tbody>
             <tr
               v-for="file in rows"

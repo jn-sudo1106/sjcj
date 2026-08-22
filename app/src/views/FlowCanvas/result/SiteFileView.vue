@@ -305,7 +305,7 @@ function openPreview(file: FileResourceRecord) {
       </div>
       <div class="sfv-table-wrap">
         <table class="rc-data-table sfv-table" v-loading="loading">
-          <thead><tr><th>所属源</th><th>文件名</th><th>展示名</th><th>扩展名</th><th class="num">大小</th><th>MD5</th><th>文件链接</th><th>文件路径</th><th>文本文件</th><th>文本路径</th><th class="num">文本大小</th><th>状态</th><th>更新时间</th><th>生成时间</th><th>操作</th></tr></thead>
+          <thead><tr><th>所属源</th><th>文件名-K1</th><th>展示名-K6</th><th>扩展名-K7</th><th class="num">大小-K4</th><th>MD5-K5</th><th>文件链接-K2</th><th>文件路径-K3</th><th>文本文件-K8</th><th>文本路径-K9</th><th class="num">文本大小-K10</th><th>状态</th><th>更新时间</th><th>生成时间</th><th>操作</th></tr></thead>
           <tbody>
             <tr
               v-for="file in rows"
