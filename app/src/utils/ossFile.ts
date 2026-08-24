@@ -51,6 +51,28 @@ export function previewKindOf(ext?: string | null): PreviewKind {
   return 'none'
 }
 
+const MIME_BY_EXT: Record<string, string> = {
+  pdf: 'application/pdf',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  svg: 'image/svg+xml',
+}
+
+/**
+ * 扩展名 → MIME 类型，**建 blob 时必须带上**。
+ *
+ * `new Blob([buf])` 不给 type，得到的 blob URL 没有 Content-Type，浏览器按 text/plain 处理：
+ * PDF 塞进 <iframe> 会整页显示 `%PDF-1.7 …` 的二进制原文，而不是渲染成文档（2026-08-24 实测）。
+ */
+export function mimeTypeOf(ext?: string | null): string {
+  const e = String(ext ?? '').trim().toLowerCase().replace(/^\./, '')
+  return MIME_BY_EXT[e] ?? ''
+}
+
 /** 从文件名兜底推断扩展名——K7 缺失时用（例如数据视图单元格里只有一个路径）。 */
 export function extFromName(name?: string | null): string {
   const m = /\.([A-Za-z0-9]+)$/.exec(String(name ?? '').trim())

@@ -11,7 +11,7 @@
 //
 // 真实类型分布（文件中心首页 20 行）：xlsx 13 / pdf 7 / txt 0，故 Excel 是主力路径。
 import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue'
-import { extFromName, fetchOssFile, previewKindOf, type PreviewKind } from '@/utils/ossFile'
+import { extFromName, fetchOssFile, mimeTypeOf, previewKindOf, type PreviewKind } from '@/utils/ossFile'
 
 const props = defineProps<{
   /** K3 文件路径（OSS 上的路径），站内预览的唯一来源 */
@@ -35,7 +35,8 @@ const ExcelViewer = defineAsyncComponent(async () => {
 const AUTO_LOAD_LIMIT = 20 * 1024 * 1024
 const TEXT_LIMIT = 2 * 1024 * 1024
 
-const kind = computed<PreviewKind>(() => previewKindOf(props.ext || extFromName(props.name)))
+const effectiveExt = computed(() => props.ext || extFromName(props.name))
+const kind = computed<PreviewKind>(() => previewKindOf(effectiveExt.value))
 const sizeNum = computed(() => {
   const n = Number(props.size)
   return Number.isFinite(n) && n > 0 ? n : 0
@@ -80,7 +81,9 @@ async function load() {
       text.value = new TextDecoder('utf-8').decode(slice)
     } else {
       releaseBlob()
-      blobUrl.value = URL.createObjectURL(new Blob([buf]))
+      // 必须带 MIME：无类型的 blob URL 会被当成 text/plain，PDF 在 <iframe> 里
+      // 显示成 `%PDF-1.7 …` 的二进制原文（2026-08-24 实测）。
+      blobUrl.value = URL.createObjectURL(new Blob([buf], { type: mimeTypeOf(effectiveExt.value) }))
     }
   } catch (e) {
     // 不静默失败：把原因摆出来，同时下方仍保留下载与「新窗口打开」两条退路
