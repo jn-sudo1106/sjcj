@@ -4,7 +4,7 @@
 // 不展示流程节点——网站没有唯一流程；选具体源仅收窄文件范围，仍默认展示该源全部文件。
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { fileApi, siteApi, type FileResourceRecord, type Source } from '@/api'
+import { fileApi, siteApi, type DataTableMeta, type FileResourceRecord, type Source } from '@/api'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import GlobalSourceSelect from './components/GlobalSourceSelect.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
@@ -20,7 +20,7 @@ const MAX_PARALLEL_REQUESTS = 4
 const selectedSourceId = ref(props.initialSourceId ?? '')
 const siteSources = ref<Source[]>([])
 const sourceNames = computed<Record<string, string>>(() => Object.fromEntries(siteSources.value.map((source) => [source.sourceId, source.name])))
-type ResourceTable = { tableId: string; tableName: string; name?: string }
+type ResourceTable = Pick<DataTableMeta, 'tableId' | 'tableName'> & { name?: string; fields?: DataTableMeta['fields'] }
 const table = ref<ResourceTable | null>(null)
 // 检测到多张 file_resource 表时此前直接报错停住，用户完全够不着数据；旧平台 FileList2.vue
 // 是给了一个"表ID"下拉手动选（loadEntryTypes1），不是自动挑一张——这里补齐同样的手动选择。
@@ -217,6 +217,7 @@ function failedSourceText({ sourceId, error }: MergeLoadMoreResult<FileResourceR
   return `${name}（${sourceId}）：${reason}`
 }
 function openDetail(file: FileResourceRecord) {
+  previewVisible.value = false
   detail.file = file
   detail.visible = true
 }
@@ -261,6 +262,7 @@ const onEnterJump = withoutComposition(() => goToPage())
 const previewVisible = ref(false)
 const previewFile = ref<FileResourceRecord | null>(null)
 function openPreview(file: FileResourceRecord) {
+  detail.visible = false
   previewFile.value = file
   previewVisible.value = true
 }
@@ -360,7 +362,15 @@ function openPreview(file: FileResourceRecord) {
         <button v-else class="rc-btn" type="button" data-testid="site-file-load-more" :disabled="loadingMore" @click="loadMore()">{{ loadingMore ? '加载中…' : '加载更多' }}</button>
       </div>
     </template>
-    <FileDetailDrawer v-model="detail.visible" :file="detail.file" :source-name="detail.file ? sourceNames[detail.file.sourceId] || detail.file.sourceId : ''" />
+    <FileDetailDrawer
+      v-model="detail.visible"
+      :file="detail.file"
+      :source-name="detail.file ? sourceNames[detail.file.sourceId] || '' : ''"
+      :table-id="table?.tableId"
+      :table-name="table?.name || table?.tableName || ''"
+      :fields="table?.fields ?? []"
+      @preview="openPreview"
+    />
     <FilePreviewDrawer v-model="previewVisible" :file="previewFile" data-testid="site-file-preview-drawer" />
   </main>
 </template>

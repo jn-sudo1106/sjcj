@@ -134,7 +134,10 @@ describe('SiteFileView', () => {
     expect(wrapper.text()).toContain('文本大小')
     expect(wrapper.text()).toContain('更新时间')
     await wrapper.get('[data-testid="site-file-detail"]').trigger('click')
-    expect(wrapper.findComponent(FileDetailDrawer).props('sourceName')).toBe('源二')
+    const drawer = wrapper.findComponent(FileDetailDrawer)
+    expect(drawer.props('sourceName')).toBe('源二')
+    expect(drawer.props('tableId')).toBe('file-resource')
+    expect(drawer.props('tableName')).toBe('news-文件资源表')
     expect(wrapper.text()).toContain('已加载全部文件')
   })
 

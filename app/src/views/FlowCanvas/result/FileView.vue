@@ -2,7 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
-import { fileApi, sourceApi, type FileResourceRecord, type Step } from '@/api'
+import { fileApi, sourceApi, type DataTableMeta, type FileResourceRecord, type Step } from '@/api'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
@@ -14,6 +14,7 @@ import { withoutComposition } from '@/utils/enterKey'
 // file_resource 表目录 → tableMeta → entryDataPaged；网站全部源仍由上层页面另行处理。
 const flow = useFlowStore()
 const sourceId = computed(() => flow.sourceCtx?.sourceId ?? '')
+const sourceName = computed(() => flow.sourceCtx?.name ?? '')
 const processLayout = computed(() =>
   buildHorizontalLayout(flow.main, flow.branches, flow.configs, flow.branchGroups, { includeTerminals: false }),
 )
@@ -81,7 +82,7 @@ watch(selectedNodeId, () => {
   if (table.value) void loadList()
 })
 
-type ResourceTable = { tableId: string; tableName: string; name?: string }
+type ResourceTable = Pick<DataTableMeta, 'tableId' | 'tableName'> & { name?: string; fields?: DataTableMeta['fields'] }
 const table = ref<ResourceTable | null>(null)
 // 检测到多张 file_resource 表时此前直接报错停住（Q5①未确认多表规则），用户完全够不着数据；
 // 旧平台 FileList2.vue 其实是给了一个"表ID"下拉手动选（loadEntryTypes1，query name=file_resource
@@ -226,6 +227,7 @@ function goToPage() {
   void loadList()
 }
 function openDetail(file: FileResourceRecord) {
+  previewVisible.value = false
   detail.file = file
   detail.visible = true
 }
@@ -267,6 +269,7 @@ const onEnterJump = withoutComposition(() => goToPage())
 const previewVisible = ref(false)
 const previewFile = ref<FileResourceRecord | null>(null)
 function openPreview(file: FileResourceRecord) {
+  detail.visible = false
   previewFile.value = file
   previewVisible.value = true
 }
@@ -365,7 +368,15 @@ function openPreview(file: FileResourceRecord) {
         </div>
       </template>
     </div>
-    <FileDetailDrawer v-model="detail.visible" :file="detail.file" />
+    <FileDetailDrawer
+      v-model="detail.visible"
+      :file="detail.file"
+      :source-name="sourceName"
+      :table-id="table?.tableId"
+      :table-name="table?.name || table?.tableName || ''"
+      :fields="table?.fields ?? []"
+      @preview="openPreview"
+    />
     <FilePreviewDrawer v-model="previewVisible" :file="previewFile" data-testid="file-preview-drawer" />
   </main>
 </template>

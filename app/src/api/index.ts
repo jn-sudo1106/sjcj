@@ -795,6 +795,12 @@ function fileResourceFromDataRow(row: DataRow): FileResourceRecord {
     fileId: row.fileId,
     configId: row.configId,
     detailId: row.detailId,
+    parentId: row.parentId,
+    categoryId: row.categoryId,
+    seq: row.seq,
+    times: row.times,
+    k0: row.k0,
+    nextFlag: row.nextFlag,
     values: row.values ?? {},
   }
 }

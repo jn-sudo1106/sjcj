@@ -271,6 +271,13 @@ export interface FileResourceRecord {
   configId?: string
   /** 产出该文件的那条明细记录 ID（旧行的 DETAIL_ID），用于回溯到数据视图对应行。 */
   detailId?: string
+  parentId?: string
+  categoryId?: string
+  seq?: string
+  times?: string
+  /** K0：原始 JSON ID，非空时可打开 readJson */
+  k0?: string
+  nextFlag?: string
   values: Record<string, unknown>
 }
 

@@ -4,6 +4,7 @@ import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import FileView from './FileView.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
+import FilePreviewDrawer from './components/FilePreviewDrawer.vue'
 import { fileApi, sourceApi, type FileResourceRecord } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
@@ -179,7 +180,11 @@ describe('FileView', () => {
     expect(wrapper.text()).toContain('更新时间')
     expect(wrapper.text()).toContain('512 B')
     await wrapper.get('[data-testid="file-detail"]').trigger('click')
-    expect(wrapper.findComponent(FileDetailDrawer).props('file')).toEqual(row)
+    const drawer = wrapper.findComponent(FileDetailDrawer)
+    expect(drawer.props('file')).toEqual(row)
+    expect(drawer.props('sourceName')).toBe('支付宝评论规则过滤')
+    expect(drawer.props('tableId')).toBe('file-resource')
+    expect(drawer.props('tableName')).toBe('news-文件资源表')
 
     await wrapper.get('select[aria-label="每页条数"]').setValue('50')
     await flushPromises()
@@ -274,5 +279,25 @@ describe('FileView', () => {
 
     expect(wrapper.find('select[aria-label="表ID"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('数据源：news-文件资源表')
+  })
+
+  it('点详情关掉预览，点行打开预览则关掉详情', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ list: files, total: 1 })
+
+    const wrapper = shallowMount(FileView, {
+      global: { directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await flushPromises()
+
+    await wrapper.get('.fv-row').trigger('click')
+    expect(wrapper.findComponent(FilePreviewDrawer).props('modelValue')).toBe(true)
+    await wrapper.get('[data-testid="file-detail"]').trigger('click')
+    expect(wrapper.findComponent(FileDetailDrawer).props('modelValue')).toBe(true)
+    expect(wrapper.findComponent(FilePreviewDrawer).props('modelValue')).toBe(false)
   })
 })

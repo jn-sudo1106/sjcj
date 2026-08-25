@@ -92,6 +92,22 @@ describe('file_resource 文件视图 HTTP 契约', () => {
     expect(result.list[0]).toMatchObject({ dataId: '9001', configId: '81134', detailId: '8390132556' })
   })
 
+  it('保留父ID / 序号 / 总次数 / 原始 JSON，供文件详情对齐旧平台标识区', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      code: '0', count: 1, data: [{
+        ENTRY_ID: '9001', SOURCE_ID: '391002885', PARENT_ID: '88001', CATEGORY_ID: '2102157',
+        SEQ: '3', TIMES: '2', K0: 'json-771', FILE_ID: 'f-9', STATE: 'C', K1: 'a.xlsx',
+      }],
+    }))
+    const { fileApi } = await import('./index')
+
+    const result = await fileApi.resourceRows({ tableId: '6200028', sourceId: '391002885', page: 1, size: 20 })
+
+    expect(result.list[0]).toMatchObject({
+      parentId: '88001', categoryId: '2102157', seq: '3', times: '2', k0: 'json-771', fileId: 'f-9',
+    })
+  })
+
   it('按节点筛选落到 CONFIG_ID 等值条件，与其他条件 AND 相接', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', count: 0, data: [] }))
     const { fileApi } = await import('./index')
