@@ -203,6 +203,20 @@ describe('旧平台步骤模型适配（item/next，2026-08-26 生产实测源 4
 
     expect(step.outColumns).toEqual(['K3', 'K4'])
   })
+
+  it('mainConfig/flowCode/itemId/extName 不再被解析阶段丢弃（取自 2026-08-26 生产实测源 430016516 第 4 步）', () => {
+    // 附件入资源表：itemId 4103139 与同源另一步骤（itemConfig 39935）复用，验证不去重、原样保留。
+    const step = stepFromLegacy({
+      itemConfig: 39944, sourceId: -1, name: '附件入资源表', configId: 1400622, mainConfig: 1400639,
+      flowCode: 'WEB_SNATCH', itemId: 4103139, extName: null, entryTypeId: 2100249, outEntry: 6200020,
+      lastStep: '39936', cond: 'K7 != nil', isDelete: 0,
+    }, '430016516')
+
+    expect(step.mainConfig).toBe('1400639')
+    expect(step.flowCode).toBe('WEB_SNATCH')
+    expect(step.itemId).toBe('4103139')
+    expect(step.extName).toBeUndefined()
+  })
 })
 
 describe('旧平台实体表模型适配', () => {

@@ -237,6 +237,20 @@ export interface Step {
   urlRule?: string
   condition?: string // 步骤执行条件（函数表达式）
   failAction?: string // 失败动作
+  /** 该步骤所属源的主配置 ID（旧 mainConfig）。2026-08-26 生产实测：同一源的所有步骤
+   *  mainConfig 相同、等于其首步骤自身的 configId，是"一包多 config"映射的关键锚点
+   *  （对应 0824-08 的 LegacyConfigMapping）；本仓库目前没有消费方，只做数据保留，
+   *  不在解析阶段静默丢弃。 */
+  mainConfig?: string
+  /** 步骤模板编码（旧 flowCode，如 "WEB_SNATCH"）。实测样本中所有步骤取值一致，
+   *  尚未见到非 WEB_SNATCH 的样本，无法确认完整枚举，仅做数据保留。 */
+  flowCode?: string
+  /** 旧「使用属性」（旧 itemId）。实测非首步骤才有值，且同一 itemId 可能被多个步骤复用
+   *  （见源 430016516 的 itemConfig 39935/39944 共用 itemId 4103139），具体语义未确认，
+   *  仅做数据保留。 */
+  itemId?: string
+  /** 旧「扩展名」（旧 extName）。实测样本全部为空，字段存在但含义和触发场景未验证。 */
+  extName?: string
   /** 依赖的前置步骤 ID（旧 lastStep）；只用于拓扑排序，不是任务上下文字段。
    *  2026-08-26 生产实测（源 430016821）：lastStep 是单个步骤 itemConfig 值（如 "40597"），
    *  真实的上下文来源另在 context 字段（如 "K2,K17"），此前误把 lastStep 当成上下文来源用。 */

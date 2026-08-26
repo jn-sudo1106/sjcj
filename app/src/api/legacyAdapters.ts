@@ -963,6 +963,10 @@ export function stepFromLegacy(input: unknown, sourceId: string): Step {
       ? undefined
       : String(record.outputTable ?? record.outEntry),
     configId: record.configId == null ? undefined : String(record.configId),
+    mainConfig: record.mainConfig == null ? undefined : String(record.mainConfig),
+    flowCode: record.flowCode == null ? undefined : String(record.flowCode),
+    itemId: record.itemId == null ? undefined : String(record.itemId),
+    extName: record.extName == null ? undefined : String(record.extName),
     urlSourceField: record.urlSourceField == null ? undefined : String(record.urlSourceField),
     urlRule: record.urlRule == null ? undefined : String(record.urlRule),
     condition: record.condition == null && record.cond == null ? undefined : String(record.condition ?? record.cond),
