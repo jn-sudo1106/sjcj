@@ -578,6 +578,19 @@ describe('节点输入表 + 任务队列（优化 0701 问题五）', () => {
     expect(seed.configs.st2.disabled).toBe(true)
   })
 
+  it('步骤带真实 topic（configDetail 回填）时覆盖节点模板默认队列；没有 topic 时保留模板默认值', () => {
+    const source = { sourceId: 's-topic', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: 'st1', sourceId: 's-topic', name: '列表抓取', inputTable: '-', outputTable: 'T1', topic: 'news_snt', enabled: true },
+      { stepId: 'st2', sourceId: 's-topic', name: '详情解析', inputTable: 'T1', outputTable: 'T2', dependsOn: ['st1'], enabled: true },
+    ] as never)
+
+    expect(seed.configs.st1.taskCfg?.queue).toBe('news_snt')
+    // st2 没有 configDetail 回填的 topic：保留节点模板默认队列（web-detail 模板默认就是空），
+    // 不能被 attachStepTopics 查不到时的 undefined 静默覆盖成别的值。
+    expect(seed.configs.st2.taskCfg?.queue).toBe('')
+  })
+
   it('已保存源没有 item/next 步骤时，流程视图显示源根列表节点', () => {
     const seed = buildSourceSeed({ sourceId: '391000001', name: '真实源', url: 'http://x', configId: 'c1', mainTable: 'T1', owner: 'a', state: 'C' }, [])
     expect(seed.main).toEqual(['start', 'source:391000001', 'end'])

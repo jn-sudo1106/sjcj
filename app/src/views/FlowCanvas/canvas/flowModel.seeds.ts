@@ -738,6 +738,9 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
       : undefined
     cfg.taskCfg = {
       ...(cfg.taskCfg ?? { queue: '', urlRule: '' }),
+      // 有真实 topic（旧 config.topic，见 sourceApi.sourceSteps 的 attachStepTopics）才覆盖队列；
+      // 查不到时保留节点模板默认队列，不能用空值覆盖出一个看起来更“真”的错误默认值。
+      ...(step.topic ? { queue: step.topic } : {}),
       ...(step.urlSourceField !== undefined ? { urlSourceField: step.urlSourceField } : {}),
       ...(step.urlRule !== undefined ? { urlRule: step.urlRule } : {}),
       ...(step.contextMap !== undefined ? { contextMap: [...step.contextMap] } : {}),

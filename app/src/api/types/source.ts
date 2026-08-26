@@ -243,6 +243,10 @@ export interface Step {
   dependsOn?: string[]
   contextMap?: string[] // 上下文来源（旧 context 字段，K{n} 字段代号列表）
   outColumns?: string[] // 出参列（旧 outContext 字段）
+  /** 本步骤 configId 对应配置的真实队列（旧 config.topic）。nextConfigPaged 本身不带这个字段，
+   *  由 sourceApi.sourceSteps 按 configId 另查 config/configDetail 回填；查不到时留空，
+   *  由调用方回退到节点模板默认队列，不能把空值当成"该用默认值"以外的含义。 */
+  topic?: string
   enabled: boolean
 }
 

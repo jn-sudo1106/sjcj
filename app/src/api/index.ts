@@ -1,7 +1,7 @@
 import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError, isMockMode } from './client'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readLoginUsername, readStoredToken, triggerSessionExpired } from './auth'
 import type {
-  Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery,
+  Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery, Step,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestRequest, RuleOrchestrationTestResult,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
@@ -114,6 +114,26 @@ function legacySnatchSavePayloadFromSource(site: Site, source: Source): LegacySn
   }
 }
 
+// item/next/nextConfigPaged 本身不带 topic（旧 config.topic，真实队列）；2026-08-26 生产实测
+// （源 430016821/430016822/430016516）确认每个 configId 的 topic 各不相同、且有真实业务含义，
+// 此前画布只能回退到节点模板的硬编码默认队列（如 announcement.list），显示的是假值而非缺值。
+// 这里按每个步骤的 configId 去重后查 config/configDetail 补回真实 topic；单条查询失败不阻断
+// 整体加载（Promise.allSettled），查不到就保持 undefined，由调用方回退到模板默认队列。
+async function attachStepTopics(steps: Step[]): Promise<Step[]> {
+  const configIds = [...new Set(steps.map((s) => s.configId).filter((id): id is string => !!id))]
+  if (!configIds.length) return steps
+  const results = await Promise.allSettled(configIds.map((id) => configApi.configDetail(id)))
+  const topicByConfigId = new Map<string, string>()
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled' && r.value?.topic) topicByConfigId.set(configIds[i], r.value.topic)
+  })
+  if (!topicByConfigId.size) return steps
+  return steps.map((step) => {
+    const topic = step.configId ? topicByConfigId.get(step.configId) : undefined
+    return topic ? { ...step, topic } : step
+  })
+}
+
 // 类型化接口：每个方法一一对应一个真实 /v1 端点。后续按 142 个端点逐域补全。
 export const sourceApi = {
   sourcePaged: async (p?: PageQuery) => {
@@ -175,7 +195,8 @@ export const sourceApi = {
       httpEndpoint: 'item/next/nextConfigPaged',
       httpParams: { sourceId, page: 1, limit: 10000, svg: true },
     })
-    return sourceStepsFromLegacy(result, sourceId)
+    const steps = sourceStepsFromLegacy(result, sourceId)
+    return attachStepTopics(steps)
   },
 
   // 写类 / 高危端点：首期 mock 仅回执，UI 统一二次确认占位（呼应权威方案读写边界）。

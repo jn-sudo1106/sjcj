@@ -29,14 +29,16 @@ export function mockConfigPaged(params?: Record<string, unknown>): Paged<Config>
   return { total: filtered.length, list: filtered.slice(start, start + size) }
 }
 
-export function mockConfigDetail(params?: Record<string, unknown>): Config {
-  return CONFIGS.find((c) => c.configId === String(params?.configId)) ?? CONFIGS[0]
+// 不再兜底成 CONFIGS[0]：真实后端查不到就是没有，兜底会让任何未登记的 configId
+// （比如按源步骤真实 configId 查询）都静默拿到第一条固定数据，冒充成真实内容。
+export function mockConfigDetail(params?: Record<string, unknown>): Config | undefined {
+  return CONFIGS.find((c) => c.configId === String(params?.configId))
 }
 
 export function mockConfigParams(params?: Record<string, unknown>): Paged<ConfigParamBinding> {
   const config = mockConfigDetail(params)
-  const list = (config.paramRefs ?? []).map((paramId) => ({
-    id: `${config.configId}-${paramId}`,
+  const list = (config?.paramRefs ?? []).map((paramId) => ({
+    id: `${config!.configId}-${paramId}`,
     paramId,
     paramName: paramId,
     valueShow: '点击参数列表查看',

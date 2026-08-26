@@ -211,6 +211,43 @@ describe('旧平台新建源 HTTP 契约', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/item/next/nextConfigPaged?sourceId=430002164&page=1&limit=10000&svg=true')
   })
 
+  it('sourceSteps 按各步骤 configId 查 configDetail 补回真实 topic（取自 2026-08-26 生产实测源 430016821）', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      code: 0,
+      data: [
+        { itemConfig: 0, sourceId: 430016821, name: '上市公司-配置', configId: 1400935, outEntry: 900, lastStep: null, isDelete: 0 },
+        { itemConfig: 40597, sourceId: -1, name: '1400935-详情', configId: 1400974, entryTypeId: 900, outEntry: 900, lastStep: '0', cond: 'K17==nil', isDelete: 0 },
+        { itemConfig: 40598, sourceId: -1, name: '1400935-详情', configId: 1400975, entryTypeId: 900, outEntry: 900, lastStep: '40597', context: 'K2,K17', isDelete: 0 },
+      ],
+    }))
+    fetchMock.mockResolvedValueOnce(jsonResponse({ code: null, data: { configId: 1400935, topic: 'news_snt' }, msg: null, success: true }))
+    fetchMock.mockResolvedValueOnce(jsonResponse({ code: null, data: { configId: 1400974, topic: 'dev_web_snatch_html_download' }, msg: null, success: true }))
+    fetchMock.mockResolvedValueOnce(jsonResponse({ code: null, data: { configId: 1400975, topic: 'news_cont' }, msg: null, success: true }))
+    const { sourceApi } = await import('./index')
+
+    const steps = await sourceApi.sourceSteps('430016821')
+
+    expect(steps.map((s) => s.topic)).toEqual(['news_snt', 'dev_web_snatch_html_download', 'news_cont'])
+    expect(fetchMock.mock.calls).toHaveLength(4)
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/config/configDetail?configId=1400935')
+    expect(fetchMock.mock.calls[2][0]).toBe('/api/v1/config/configDetail?configId=1400974')
+    expect(fetchMock.mock.calls[3][0]).toBe('/api/v1/config/configDetail?configId=1400975')
+  })
+
+  it('sourceSteps：单条 configDetail 查询失败不阻断整体加载，该步骤 topic 留空回退模板默认值', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      code: 0,
+      data: [{ itemConfig: 0, sourceId: 430099999, name: '列表抓取', configId: 999999, isDelete: 0 }],
+    }))
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 500, text: async () => '' } as Response)
+    const { sourceApi } = await import('./index')
+
+    const steps = await sourceApi.sourceSteps('430099999')
+
+    expect(steps).toHaveLength(1)
+    expect(steps[0].topic).toBeUndefined()
+  })
+
   it('GET /v1/source/bindSite：按单源关系写入契约提交 sourceId 和 siteId', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '关联成功' }))
     const { sourceApi } = await import('./index')
