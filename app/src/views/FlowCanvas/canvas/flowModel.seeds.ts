@@ -784,17 +784,9 @@ export function buildSourceSeed(source: Source, steps: Step[]): {
     main.push(step.stepId)
   })
   main.push('end')
-  // 名字含「规则」的源在主链插入「规则处理」节点（列表抓取 → 规则处理 → 详情解析），输出表取上游（首步）的表。
-  if (/规则/.test(source.name) && sourceSteps.length > 0 && !sourceSteps.some((step) => /规则/.test(step.name))) {
-    const firstStep = sourceSteps[0]
-    const ruleId = `${source.sourceId}-rule-demo`
-    const ruleCfg = cloneConfig(NODE_CONFIGS.rule)
-    ruleCfg.title = '规则处理'
-    delete ruleCfg.collectCfg
-    ruleCfg.outputTable = firstStep.outputTable || source.mainTable || ''
-    configs[ruleId] = ruleCfg
-    main.splice(main.indexOf(firstStep.stepId) + 1, 0, ruleId)
-  }
+  // 节点链严格来自 item/next 的真实子步骤，不按源名称猜测补节点：
+  // 这里曾按 /规则/ 匹配源名插入一个「规则处理」节点（演示期遗留），会让存量源的画布
+  // 与旧平台拓扑不一致，且该虚构节点保存进配置包时结构合法、白名单拦不住。2026-08-26 移除。
   return { main, branches: [], configs }
 }
 

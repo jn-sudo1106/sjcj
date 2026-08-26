@@ -437,16 +437,18 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
     flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
-    // 用规则处理节点（无 collectCfg）设置：采集节点的进入条件走 collectCfg.entryCondition，
+    // 显式插一个规则处理节点（无 collectCfg）：采集节点的进入条件走 collectCfg.entryCondition，
     // 直接赋值 cfg.entryCondition 会被 nodeEntryCondition() 的 collectCfg 优先读取口径吃掉。
-    flow.configs['391007768-rule-demo'].entryCondition = { logic: 'AND', items: [{ field: 'title', op: 'contains', value: '公告' }] }
+    // 不再依赖 buildSourceSeed 按源名猜测补节点（该演示期逻辑 2026-08-26 已移除）。
+    flow.configs[ruleNodeId] = cfg({ title: '规则处理', entryCondition: { logic: 'AND', items: [{ field: 'title', op: 'contains', value: '公告' }] } })
+    flow.main.splice(2, 0, ruleNodeId)
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
 
     const wrapper = mountResultView()
     await flushPromises()
-    await selectNode(wrapper, '391007768-rule-demo')
+    await selectNode(wrapper, ruleNodeId)
 
     expect(wrapper.find('[data-testid="data-node-condition-link"]').exists()).toBe(true)
     // 就地展开的条件区已删除
@@ -463,7 +465,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
         siteId: expect.stringMatching(/.+/),
         sourceId: '391007768',
         view: 'flow',
-        nodeId: '391007768-rule-demo',
+        nodeId: ruleNodeId,
         // 进入条件的编辑界面在「任务配置」页，不是节点配置页
         tab: 'task',
       }),
@@ -546,6 +548,9 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('rows')?.[0]?.dataId).toBe('fresh-2102157_DETAIL')
   })
 })
+
+// 规则处理节点（无 collectCfg）的固定 ID，供进入条件用例显式构造，不依赖种子自动补节点。
+const ruleNodeId = '391007768-rule-node'
 
 function cfg(overrides: Partial<NodeConfig> = {}): NodeConfig {
   return { title: '', sub: '', status: '', planned: false, base: [], fields: [], inmap: [], params: [], output: [], ...overrides }
