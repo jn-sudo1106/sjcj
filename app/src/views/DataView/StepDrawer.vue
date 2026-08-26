@@ -2,7 +2,7 @@
 // 数据查看的“展示处理步骤”与流程/数据/文件/任务视图共用 ProcessNodeRail，避免另维护一套卡片顺序和名称。
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { flowApi, sourceApi, type NodeRunStat, type Source, type Step } from '../../api'
+import { sourceApi, type NodeRunStat, type Source, type Step } from '../../api'
 import ProcessNodeRail from '@/views/FlowCanvas/result/ProcessNodeRail.vue'
 import { buildHorizontalLayout, buildSourceSeed, nodeOutputTable, type FlowDef } from '@/views/FlowCanvas/canvas/flowModel'
 
@@ -17,13 +17,11 @@ const loading = ref(false)
 const source = ref<Source | null>(null)
 const steps = ref<Step[]>([])
 const nodeRuns = ref<NodeRunStat[]>([])
-const persistedDef = ref<FlowDef | null>(null)
 const selectedNodeId = ref('')
 let loadSeq = 0
 
 const flowDef = computed<FlowDef | null>(() => {
   if (!source.value) return null
-  if (persistedDef.value) return persistedDef.value
   const seed = buildSourceSeed(source.value, steps.value)
   return {
     id: source.value.sourceId,
@@ -72,24 +70,23 @@ async function load() {
   const requestId = ++loadSeq
   loading.value = true
   try {
-    const [detail, sourceSteps, runs, savedDef] = await Promise.all([
+    // 不再读 flowApi.flowLoad 的本地草稿：没有真实后端对应物，画布保存过一次就会
+    // 一直挡住这里的真实拓扑展示，见 FlowCanvas/index.vue 的同一处修复说明。
+    const [detail, sourceSteps, runs] = await Promise.all([
       sourceApi.sourceDetail(sourceId),
       sourceApi.sourceSteps(sourceId),
       sourceApi.sourceNodeRuns(sourceId),
-      flowApi.flowLoad(sourceId),
     ])
     if (requestId !== loadSeq) return
     source.value = detail
     steps.value = sourceSteps ?? []
     nodeRuns.value = runs ?? []
-    persistedDef.value = savedDef
     selectedNodeId.value = processLayout.value?.nodes[0]?.id || ''
   } catch (error) {
     if (requestId !== loadSeq) return
     source.value = null
     steps.value = []
     nodeRuns.value = []
-    persistedDef.value = null
     ElMessage.error(`步骤加载失败:${error instanceof Error ? error.message : String(error)}`)
   } finally {
     if (requestId === loadSeq) loading.value = false

@@ -250,17 +250,20 @@ function onSplitStart(e: MouseEvent) {
 }
 
 async function loadSourceFlow(sourceId: string) {
-  // 已保存的源流程优先于按步骤拼出的默认骨架。
-  const [source, steps, persistedDef] = await Promise.all([
+  // 不再读 flowApi.flowLoad 的本地草稿：flow/save 没有真实后端对应物（旧平台流程存在
+  // item/next 子步骤里，没有"流程定义"这个接口），画布保存过一次后本地草稿会一直挡住
+  // 真实拓扑，源改了/后端数据变了也看不出来。节点链始终来自真实的 sourceSteps。
+  // flowSave 仍然写本地草稿（不在这里删），"同步到源"功能读的正是这份草稿，两者不冲突：
+  // 草稿只用于显式同步操作，不再被当作这个源自己的真相。
+  const [source, steps] = await Promise.all([
     sourceApi.sourceDetail(sourceId),
     sourceApi.sourceSteps(sourceId),
-    flowApi.flowLoad(sourceId),
   ])
   if (!source) {
     ElMessage.error('源不存在')
     return
   }
-  flow.loadFromSource(source, steps ?? [], persistedDef)
+  flow.loadFromSource(source, steps ?? [], null)
   if (!ws.open(source.sourceId, source.name)) {
     ElMessage.warning('页签已达上限（8 个），当前源未加入页签，请关闭部分页签后再试')
   }

@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import StepDrawer from './StepDrawer.vue'
-import { flowApi, sourceApi, type Source, type Step } from '@/api'
+import { sourceApi, type Source, type Step } from '@/api'
 
 const source: Source = {
   sourceId: 'src-1', name: '步骤测试源', url: 'https://example.com', configId: 'cfg-1', mainTable: 'TB_LIST', owner: 'tester', state: 'C',
@@ -22,7 +22,6 @@ describe('StepDrawer', () => {
       { nodeId: 'src-1-s1', queue: 'queue_cfg-1', totalTasks: 1, processedTasks: 0, state: 'L' },
       { nodeId: 'src-1-s2', queue: 'queue_cfg-1.detail', totalTasks: 1, processedTasks: 0, state: 'E' },
     ])
-    vi.spyOn(flowApi, 'flowLoad').mockResolvedValue(null)
     const wrapper = mount(StepDrawer, {
       props: { modelValue: true, sourceId: 'src-1' },
       global: { directives: { loading: {} }, stubs: { ElDrawer: { template: '<section><slot /></section>' } } },

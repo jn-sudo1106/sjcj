@@ -9,19 +9,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import SiteDataView from './SiteDataView.vue'
-import { dataApi, flowApi, siteApi, sourceApi } from '@/api'
+import { dataApi, siteApi, sourceApi } from '@/api'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
-import type { DataRow, DataTableMeta, Source } from '@/api'
-import type { NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import type { DataRow, DataTableMeta, Source, Step } from '@/api'
 
 function source(id: string): Source {
   return { sourceId: id, name: `源-${id}`, url: '', configId: '', mainTable: '', owner: 'admin', state: 'C' }
 }
 function row(sourceId: string, dataId: string): DataRow {
   return { dataId, sourceId, title: `${sourceId}-${dataId}`, summary: '', acceptState: 'pending' }
-}
-function cfg(overrides: Partial<NodeConfig> = {}): NodeConfig {
-  return { title: '', sub: '', status: '', planned: false, base: [], fields: [], inmap: [], params: [], output: [], ...overrides }
 }
 const meta: DataTableMeta = { tableId: 't1', tableName: 'T1', rowCount: 0, fields: [{ prop: 'title', type: 'string', desc: '标题' }] }
 
@@ -58,20 +54,19 @@ async function selectNode(wrapper: ReturnType<typeof mount>, nodeId: string) {
 // T1，输出 T2) → last(输入 T2，唯一消费者)；mid2 单独把输入也设成 T1，跟 mid 撞车制造歧义。
 // 具体源分支这里不测执行（已经不提供手动执行入口，见 2026-08-14 第四次纠偏），
 // 这套多节点骨架主要用来测节点切换、请求竞态。
+// 不再走 flowApi.flowLoad 本地草稿（该路径已移除，见 SiteDataView.vue 的同一处修复说明），
+// 改用真实的 sourceApi.sourceSteps + buildSourceSeed 拼出同一套四节点结构：
+// first(输出 T1，首节点) → mid(输入 T1，输出 T2) → mid2(输入 T1，输出 T3，跟 mid 撞车制造
+// 歧义场景) → last(输入 T2，唯一消费者)。
 function mockFlowFixture(sourceId = '391007768') {
   vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(mockSourceDetail({ sourceId })!)
-  vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
-  vi.spyOn(flowApi, 'flowLoad').mockResolvedValue({
-    id: sourceId, name: 'f', version: 'v1', updatedAt: '',
-    main: ['start', 'first', 'mid', 'mid2', 'last', 'end'],
-    branches: [],
-    configs: {
-      first: cfg({ title: '抓取列表页', outputTable: 'T1' }),
-      mid: cfg({ title: '处理A', inputTable: 'T1', outputTable: 'T2' }),
-      mid2: cfg({ title: '处理B', inputTable: 'T1', outputTable: 'T3' }),
-      last: cfg({ title: '入库', inputTable: 'T2' }),
-    },
-  })
+  const steps: Step[] = [
+    { stepId: 'first', sourceId, name: '抓取列表页', outputTable: 'T1', enabled: true },
+    { stepId: 'mid', sourceId, name: '处理A', inputTable: 'T1', outputTable: 'T2', enabled: true },
+    { stepId: 'mid2', sourceId, name: '处理B', inputTable: 'T1', outputTable: 'T3', enabled: true },
+    { stepId: 'last', sourceId, name: '入库', inputTable: 'T2', enabled: true },
+  ]
+  vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps)
 }
 
 describe('SiteDataView · 全部源（表筛选）', () => {
@@ -379,7 +374,6 @@ describe('SiteDataView · 具体源（节点筛选，纯查看——2026-08-14 �
   it('源不存在时展示错误，不渲染节点下拉', async () => {
     vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(null)
     vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
-    vi.spyOn(flowApi, 'flowLoad').mockResolvedValue(null)
 
     const wrapper = mountView()
     await pickSource(wrapper, '391007768')
@@ -388,11 +382,15 @@ describe('SiteDataView · 具体源（节点筛选，纯查看——2026-08-14 �
     expect(wrapper.find('[data-testid="site-data-process-rail"]').exists()).toBe(false)
   })
 
-  it('没有已保存流程时，按步骤用 buildSourceSeed 拼默认骨架并展示节点', async () => {
+  // 此前这里还有两个用例：一个断言"没有本地草稿时才用 buildSourceSeed"，一个断言"有本地
+  // 草稿（flowApi.flowLoad 非空）时优先用它"。2026-08-26 去掉了本地草稿层——flowLoad 没有
+  // 真实后端对应物，画布保存过一次就会一直挡住这里的真实拓扑展示（见 FlowCanvas/index.vue
+  // 同一处修复说明）。现在节点链只有一种来源，两个用例合并成这一个；draft-覆盖那个分支已经
+  // 不是这个组件的行为，不再测。
+  it('按步骤用 buildSourceSeed 拼默认骨架并展示节点', async () => {
     const current = mockSourceDetail({ sourceId: '391007768' })!
     vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(current)
     vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(mockSourceSteps({ sourceId: current.sourceId }))
-    vi.spyOn(flowApi, 'flowLoad').mockResolvedValue(null)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
 
@@ -406,45 +404,10 @@ describe('SiteDataView · 具体源（节点筛选，纯查看——2026-08-14 �
     expect(wrapper.get('[data-node-id="391007768-s2"]').text()).toContain('详情解析')
   })
 
-  it('有已保存流程（flowLoad 返回非空）时优先用它，不再用 buildSourceSeed 拼骨架', async () => {
-    const current = mockSourceDetail({ sourceId: '391007768' })!
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(current)
-    const sourceSteps = vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(mockSourceSteps({ sourceId: current.sourceId }))
-    vi.spyOn(flowApi, 'flowLoad').mockResolvedValue({
-      id: current.sourceId, name: '自定义流程', version: 'v1', updatedAt: '',
-      main: ['start', 'custom-node', 'end'],
-      branches: [],
-      configs: { 'custom-node': { title: '自定义节点', sub: '', status: '', planned: false, base: [], fields: [], inmap: [], params: [], output: [], outputTable: 'CUSTOM_TB' } },
-    })
-    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
-    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
-
-    const wrapper = mountView()
-    await pickSource(wrapper, '391007768')
-
-    expect(wrapper.get('.sdv2-bar .pnr-node.active').text()).toContain('自定义节点')
-    // sourceSteps 依然会拉（并行请求的一部分），但结果被 persistedDef 盖过，不影响展示
-    expect(sourceSteps).toHaveBeenCalled()
-  })
-
-  it('决策/分头等结构节点选中后展示只读空态，不查询数据', async () => {
-    const current = mockSourceDetail({ sourceId: '391007768' })!
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(current)
-    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(mockSourceSteps({ sourceId: current.sourceId }))
-    vi.spyOn(flowApi, 'flowLoad').mockResolvedValue({
-      id: current.sourceId, name: 'f', version: 'v1', updatedAt: '',
-      main: ['start', 'decision-1', 'end'],
-      branches: [],
-      configs: { 'decision-1': { title: '决策分支', sub: '', status: '', planned: false, kind: 'decision', base: [], fields: [], inmap: [], params: [], output: [] } },
-    })
-    const rowQueryPaged = vi.spyOn(dataApi, 'rowQueryPaged')
-
-    const wrapper = mountView()
-    await pickSource(wrapper, '391007768')
-
-    expect(wrapper.find('[data-testid="source-node-empty"]').exists()).toBe(true)
-    expect(rowQueryPaged).not.toHaveBeenCalled()
-  })
+  // 决策/分头节点此前只能靠本地草稿（flowApi.flowLoad 返回一个手工构造的 kind:'decision'
+  // 节点）注入进这个只读视图；本地草稿层已去掉，而三批真实生产样本（430016821/430016822/
+  // 430016516）证明 item/next 的真实拓扑始终是线性链，没有分支结构。这个场景现在无法通过
+  // 应用的真实行为触达，用例一并删除，不留一个只能靠已废弃机制才能达到的假测试。
 
   it('纯查看：不展示输入/输出切换、不提供手动执行按钮', async () => {
     mockFlowFixture('391007768')
@@ -519,7 +482,6 @@ describe('SiteDataView · 具体源（节点筛选，纯查看——2026-08-14 �
     const current = mockSourceDetail({ sourceId: '391007768' })!
     vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(current)
     vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(mockSourceSteps({ sourceId: current.sourceId }))
-    vi.spyOn(flowApi, 'flowLoad').mockResolvedValue(null)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
 
     // 按调用顺序区分：请求 #1（初始挂载默认节点）立即返回，#2（切到首节点）卡住，

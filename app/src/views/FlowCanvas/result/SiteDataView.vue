@@ -24,7 +24,7 @@
 // 避免跟具体源自己的数据视图（ResultView.vue）混淆。
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { dataApi, flowApi, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail } from '@/api'
+import { dataApi, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail } from '@/api'
 import {
   buildHorizontalLayout, buildSourceSeed, effectiveInputTable, nodeOutputTable, isDecision, isParallel,
   type NodeConfig, type BranchSeed, type FlowBranchGroup,
@@ -104,19 +104,18 @@ async function loadFlowData(sourceId: string) {
   flowLoadError.value = ''
   flowData.value = null
   try {
-    const [source, steps, persistedDef] = await Promise.all([
+    // 不再读 flowApi.flowLoad 的本地草稿：没有真实后端对应物，画布保存过一次就会
+    // 一直挡住这里的真实拓扑展示，见 FlowCanvas/index.vue 的同一处修复说明。
+    const [source, steps] = await Promise.all([
       sourceApi.sourceDetail(sourceId),
       sourceApi.sourceSteps(sourceId),
-      flowApi.flowLoad(sourceId),
     ])
     if (sourceId !== selectedSourceId.value) return
     if (!source) {
       flowLoadError.value = '源不存在或加载失败'
       return
     }
-    flowData.value = persistedDef
-      ? { main: persistedDef.main, branches: persistedDef.branches, configs: persistedDef.configs, branchGroups: persistedDef.branchGroups ?? [] }
-      : { ...buildSourceSeed(source, steps ?? []), branchGroups: [] }
+    flowData.value = { ...buildSourceSeed(source, steps ?? []), branchGroups: [] }
   } catch {
     if (sourceId !== selectedSourceId.value) return
     flowLoadError.value = '流程加载失败，请重试'
