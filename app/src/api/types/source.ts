@@ -245,9 +245,12 @@ export interface Step {
   /** 步骤模板编码（旧 flowCode，如 "WEB_SNATCH"）。实测样本中所有步骤取值一致，
    *  尚未见到非 WEB_SNATCH 的样本，无法确认完整枚举，仅做数据保留。 */
   flowCode?: string
-  /** 旧「使用属性」（旧 itemId）。实测非首步骤才有值，且同一 itemId 可能被多个步骤复用
-   *  （见源 430016516 的 itemConfig 39935/39944 共用 itemId 4103139），具体语义未确认，
-   *  仅做数据保留。 */
+  /** 旧「使用属性」（旧 itemId）。2026-08-26 生产管理后台「关联-步骤」编辑面板实测确认：
+   *  这是"任务URL来源字段"的引用——反查出本步骤该从上一步产出的哪个字段取值去抓取
+   *  （如 itemId=9002 → 字段 K2/URL，itemId=9017 → 字段 K17/正文html路径）。仅首步骤
+   *  （无上游）没有这个值；同一 itemId 可能被多个步骤复用（见源 430016516 的 itemConfig
+   *  39935/39944 共用 itemId 4103139）。当前 nextConfigPaged 只返回 ID，未连字段展示名，
+   *  本仓库暂无消费方，仅做数据保留。 */
   itemId?: string
   /** 旧「扩展名」（旧 extName）。实测样本全部为空，字段存在但含义和触发场景未验证。 */
   extName?: string
