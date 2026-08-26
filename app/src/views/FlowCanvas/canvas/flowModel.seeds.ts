@@ -697,7 +697,9 @@ function templateKeyForStep(step: Step, index: number): string {
   return index === 0 ? 'web-list' : 'web-detail'
 }
 
-/** 按 lastStep/contextMap 做稳定拓扑排序；无依赖或循环时保持接口返回顺序。 */
+/** 按 dependsOn（旧 lastStep）做稳定拓扑排序；无依赖或循环时保持接口返回顺序。
+ *  注意 dependsOn 只是前置步骤 ID，不是 contextMap——后者是任务上下文字段（旧 context 字段），
+ *  两者曾被误合并进同一个字段，2026-08-26 生产实测（源 430016821）后拆开，见 legacyAdapters.stepFromLegacy。 */
 function orderSourceSteps(steps: Step[]): Step[] {
   const byId = new Set(steps.map((step) => step.stepId))
   const remaining = [...steps]
@@ -705,7 +707,7 @@ function orderSourceSteps(steps: Step[]): Step[] {
   const emitted = new Set<string>()
   while (remaining.length) {
     const index = remaining.findIndex((step) =>
-      (step.contextMap ?? []).filter((id) => byId.has(id)).every((id) => emitted.has(id)),
+      (step.dependsOn ?? []).filter((id) => byId.has(id)).every((id) => emitted.has(id)),
     )
     const [next] = remaining.splice(index < 0 ? 0 : index, 1)
     ordered.push(next)

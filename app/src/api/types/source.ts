@@ -237,8 +237,12 @@ export interface Step {
   urlRule?: string
   condition?: string // 步骤执行条件（函数表达式）
   failAction?: string // 失败动作
-  contextMap?: string[] // 上下文来源
-  outColumns?: string[] // 出参列
+  /** 依赖的前置步骤 ID（旧 lastStep）；只用于拓扑排序，不是任务上下文字段。
+   *  2026-08-26 生产实测（源 430016821）：lastStep 是单个步骤 itemConfig 值（如 "40597"），
+   *  真实的上下文来源另在 context 字段（如 "K2,K17"），此前误把 lastStep 当成上下文来源用。 */
+  dependsOn?: string[]
+  contextMap?: string[] // 上下文来源（旧 context 字段，K{n} 字段代号列表）
+  outColumns?: string[] // 出参列（旧 outContext 字段）
   enabled: boolean
 }
 

@@ -205,7 +205,7 @@ describe('旧平台新建源 HTTP 契约', () => {
         stepId: '701', sourceId: '430002164', name: '列表抓取', inputTable: '900', outputTable: '901', enabled: true,
       }),
       expect.objectContaining({
-        stepId: '702', sourceId: '430002164', name: '详情解析', nodeType: 'detail', inputTable: '901', outputTable: '902', contextMap: ['701'], condition: 'status=C', enabled: false,
+        stepId: '702', sourceId: '430002164', name: '详情解析', nodeType: 'detail', inputTable: '901', outputTable: '902', dependsOn: ['701'], condition: 'status=C', enabled: false,
       }),
     ])
     expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/item/next/nextConfigPaged?sourceId=430002164&page=1&limit=10000&svg=true')

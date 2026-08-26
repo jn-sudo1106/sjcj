@@ -939,12 +939,14 @@ export function stepFromLegacy(input: unknown, sourceId: string): Step {
   const rawSourceId = record.sourceId ?? sourceId
   const rawEnabled = record.enabled
   const isDelete = legacyNumber(record.isDelete)
-  const contextMap = record.lastStep == null
-    ? undefined
-    : String(record.lastStep).split(/[，,]/).map((item) => item.trim()).filter(Boolean)
-  const outColumns = Array.isArray(record.outColumns)
-    ? record.outColumns.map(String).filter(Boolean)
+  // lastStep 是依赖的前置步骤 ID（拓扑排序用），不是上下文字段列表；
+  // 上下文来源/出参列的真实字段是 context / outContext（2026-08-26 生产实测，源 430016821）。
+  const splitFieldList = (value: unknown) => typeof value === 'string' && value.trim()
+    ? value.split(/[，,]/).map((item) => item.trim()).filter(Boolean)
     : undefined
+  const dependsOn = record.lastStep == null ? undefined : splitFieldList(String(record.lastStep))
+  const contextMap = splitFieldList(record.context)
+  const outColumns = splitFieldList(record.outContext)
 
   return {
     stepId: String(rawStepId ?? ''),
@@ -965,6 +967,7 @@ export function stepFromLegacy(input: unknown, sourceId: string): Step {
     urlRule: record.urlRule == null ? undefined : String(record.urlRule),
     condition: record.condition == null && record.cond == null ? undefined : String(record.condition ?? record.cond),
     failAction: record.failAction == null ? undefined : String(record.failAction),
+    dependsOn,
     contextMap,
     outColumns,
     enabled: rawEnabled == null ? isDelete !== 1 : Boolean(rawEnabled),

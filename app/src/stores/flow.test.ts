@@ -566,7 +566,7 @@ describe('节点输入表 + 任务队列（优化 0701 问题五）', () => {
   it('流程视图节点保留真实步骤元数据，并按依赖稳定排序', () => {
     const source = { sourceId: 's-step', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
     const seed = buildSourceSeed(source, [
-      { stepId: 'st2', sourceId: 's-step', name: '详情解析', inputTable: 'T1', outputTable: 'T2', contextMap: ['st1'], condition: 'status=C', failAction: '跳过', enabled: false },
+      { stepId: 'st2', sourceId: 's-step', name: '详情解析', inputTable: 'T1', outputTable: 'T2', dependsOn: ['st1'], condition: 'status=C', failAction: '跳过', enabled: false },
       { stepId: 'st1', sourceId: 's-step', name: '列表抓取', inputTable: '-', outputTable: 'T1', outColumns: ['detail_url'], enabled: true },
     ] as never)
 

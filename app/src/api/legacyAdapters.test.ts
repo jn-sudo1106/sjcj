@@ -7,6 +7,7 @@ import {
   dataTableFromLegacy,
   entryDetailFromLegacy,
   entryTypeFromLegacy,
+  stepFromLegacy,
   entryTypeGroupFromLegacy,
   entryTypeToLegacy,
   paramFromLegacy,
@@ -169,6 +170,38 @@ describe('旧平台配置模型适配', () => {
       configName: '评论抓取',
       entryTypeId: '2001',
     })
+  })
+})
+
+describe('旧平台步骤模型适配（item/next，2026-08-26 生产实测源 430016821 修复 lastStep/context 混淆）', () => {
+  it('lastStep 只作为依赖排序用的 dependsOn，不再冒充上下文来源；上下文来源来自真实的 context 字段', () => {
+    // 取自生产 118.25.96.217 实测响应（源 430016821，第 3 步 itemConfig=40598）：
+    // lastStep="40597" 是前一步骤 ID，context="K2,K17" 才是 cond 表达式里引用的字段代号。
+    const step = stepFromLegacy({
+      itemConfig: 40598,
+      sourceId: -1,
+      name: '1400935-详情',
+      configId: 1400975,
+      entryTypeId: 900,
+      outEntry: 900,
+      lastStep: '40597',
+      context: 'K2,K17',
+      cond: "K17 != nil && !string.contains(K2,'weixin.qq')",
+      isDelete: 0,
+    }, '430016821')
+
+    expect(step.dependsOn).toEqual(['40597'])
+    expect(step.contextMap).toEqual(['K2', 'K17'])
+    // 回归防护：上下文来源不能再混入依赖步骤 ID。
+    expect(step.contextMap).not.toContain('40597')
+  })
+
+  it('outColumns 读取 outContext（旧响应从无 outColumns 字段，此前一直读错字段名）', () => {
+    const step = stepFromLegacy({
+      itemConfig: 1, sourceId: '430016821', name: '出参步骤', outContext: 'K3,K4', isDelete: 0,
+    }, '430016821')
+
+    expect(step.outColumns).toEqual(['K3', 'K4'])
   })
 })
 
