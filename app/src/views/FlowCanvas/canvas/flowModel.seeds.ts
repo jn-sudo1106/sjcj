@@ -680,15 +680,23 @@ export const TEMPLATE_TO_NAME: Record<string, string> = Object.fromEntries(
  */
 function templateKeyForStep(step: Step, index: number): string {
   const explicit = String(step.nodeType ?? '').trim().toLowerCase()
+  // NODE_CONFIGS 里登录模板注册的 key 是 'login-collect'，不是 'login'（下面三处此前都在查
+  // 一个不存在的 key，恒为 falsy，登录节点路由从未真正生效过；2026-08-26 加 isLoginConfig 路由时
+  // 顺带一起修，不是本次新引入的问题）。
   const explicitAliases: Record<string, string> = {
     list: 'web-list', 'web-list': 'web-list', 'web_list': 'web-list',
     detail: 'web-detail', 'web-detail': 'web-detail', 'web_detail': 'web-detail',
-    login: 'login', 'rule': 'rule', 'clean': 'clean', 'dedupe': 'dedupe', 'check': 'check',
+    login: 'login-collect', 'rule': 'rule', 'clean': 'clean', 'dedupe': 'dedupe', 'check': 'check',
   }
   if (explicitAliases[explicit] && NODE_CONFIGS[explicitAliases[explicit]]) return explicitAliases[explicit]
 
+  // isLoginConfig 来自 configDetail.templetCode（见 attachStepConfigDetails），是比步骤名正则
+  // 更可靠的信号：2026-08-26 生产实测配置 1400968「baidu-登陆」证明登录步骤的名字未必含
+  // "登录"二字（该样本是"登陆"），名字正则会漏判；查不到时才回退到名字正则。
+  if (step.isLoginConfig && NODE_CONFIGS['login-collect']) return 'login-collect'
+
   const name = step.name || ''
-  if (/登录/.test(name) && NODE_CONFIGS.login) return 'login'
+  if (/登录/.test(name) && NODE_CONFIGS['login-collect']) return 'login-collect'
   if (/规则/.test(name) && NODE_CONFIGS.rule) return 'rule'
   if (/清洗/.test(name) && NODE_CONFIGS.clean) return 'clean'
   if (/去重/.test(name) && NODE_CONFIGS.dedupe) return 'dedupe'

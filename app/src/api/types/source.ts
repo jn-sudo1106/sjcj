@@ -261,6 +261,12 @@ export interface Step {
    *  由 sourceApi.sourceSteps 按 configId 另查 config/configDetail 回填；查不到时留空，
    *  由调用方回退到节点模板默认队列，不能把空值当成"该用默认值"以外的含义。 */
   topic?: string
+  /** 本步骤 configId 对应配置是否为登录类（旧 config.templetCode === 'login'），随 topic
+   *  一起由 sourceApi.sourceSteps 按 configId 查 config/configDetail 回填。2026-08-26 生产实测
+   *  （配置 1400968「baidu-登陆」）：登录步骤的名字未必含"登录"二字（该样本是"登陆"），
+   *  也没见到 nextConfigPaged 原始 type/nodeType 字段标出登录语义；节点模板路由不能只靠
+   *  步骤名正则，这个字段才是可靠信号，查不到时才回退到名字正则。 */
+  isLoginConfig?: boolean
   enabled: boolean
 }
 

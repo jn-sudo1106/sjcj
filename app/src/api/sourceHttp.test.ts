@@ -234,6 +234,24 @@ describe('旧平台新建源 HTTP 契约', () => {
     expect(fetchMock.mock.calls[3][0]).toBe('/api/v1/config/configDetail?configId=1400975')
   })
 
+  it('sourceSteps 按 configDetail.templetCode 回填 isLoginConfig（取自 2026-08-26 生产实测配置 1400968「baidu-登陆」）', async () => {
+    // 步骤名字本身不含"登录"二字（用的是"登陆"），此前只靠名字正则会漏判成普通采集节点。
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      code: 0,
+      data: [{ itemConfig: 0, sourceId: 430020000, name: 'baidu-登陆', configId: 1400968, isDelete: 0 }],
+    }))
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      code: null, msg: null, success: true,
+      data: { configId: 1400968, configName: 'baidu-登陆', templetCode: 'login', topic: 'dev_web_snatch_资讯用户' },
+    }))
+    const { sourceApi } = await import('./index')
+
+    const steps = await sourceApi.sourceSteps('430020000')
+
+    expect(steps[0].isLoginConfig).toBe(true)
+    expect(steps[0].topic).toBe('dev_web_snatch_资讯用户')
+  })
+
   it('sourceSteps：单条 configDetail 查询失败不阻断整体加载，该步骤 topic 留空回退模板默认值', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({
       code: 0,

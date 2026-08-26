@@ -587,8 +587,17 @@ describe('节点输入表 + 任务队列（优化 0701 问题五）', () => {
 
     expect(seed.configs.st1.taskCfg?.queue).toBe('news_snt')
     // st2 没有 configDetail 回填的 topic：保留节点模板默认队列（web-detail 模板默认就是空），
-    // 不能被 attachStepTopics 查不到时的 undefined 静默覆盖成别的值。
+    // 不能被 attachStepConfigDetails 查不到时的 undefined 静默覆盖成别的值。
     expect(seed.configs.st2.taskCfg?.queue).toBe('')
+  })
+
+  it('isLoginConfig 为真时路由到登录节点模板，即使步骤名不含"登录"二字（取自 2026-08-26 生产实测配置 1400968「baidu-登陆」）', () => {
+    const source = { sourceId: 's-login', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: 'st1', sourceId: 's-login', name: 'baidu-登陆', isLoginConfig: true, enabled: true },
+    ] as never)
+
+    expect(seed.configs.st1.collectCfg?.collectorKind).toBe('login')
   })
 
   it('已保存源没有 item/next 步骤时，流程视图显示源根列表节点', () => {
