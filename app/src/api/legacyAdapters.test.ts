@@ -8,6 +8,8 @@ import {
   entryDetailFromLegacy,
   entryTypeFromLegacy,
   stepFromLegacy,
+  stepToSaveItemConfigPayload,
+  stepToStepModifyPayload,
   entryTypeGroupFromLegacy,
   entryTypeToLegacy,
   paramFromLegacy,
@@ -216,6 +218,50 @@ describe('旧平台步骤模型适配（item/next，2026-08-26 生产实测源 4
     expect(step.flowCode).toBe('WEB_SNATCH')
     expect(step.itemId).toBe('4103139')
     expect(step.extName).toBeUndefined()
+  })
+
+  it('url 字段现在被读取（此前 stepFromLegacy 读 urlSourceField/urlRule，但真实响应从无这两个 key，恒为 undefined；真值在 url）', () => {
+    const step = stepFromLegacy({
+      itemConfig: 40251, sourceId: -1, name: '1400774-详情', configId: 1400765, mainConfig: 1400774,
+      flowCode: 'WEB_SNATCH', entryTypeId: 900, outEntry: 900, lastStep: '0', cond: 'K6==nil',
+      url: "K2+'#need_upload_xq/xq/'", isDelete: 0,
+    }, '430016501')
+
+    expect(step.url).toBe("K2+'#need_upload_xq/xq/'")
+    expect(step.urlSourceField).toBeUndefined()
+    expect(step.urlRule).toBeUndefined()
+  })
+
+  it('stepToStepModifyPayload 逐字段对照 2026-08-26 生产实测：源 430016398（test1）itemConfig 40600 原样重新提交 stepModify 抓到的真实请求体，未改动任何数据（提交前后 nextConfigPaged 回读一致）', () => {
+    const step = stepFromLegacy({
+      authConfig: null, bizType: null, cond: null, configId: 1400917, context: null,
+      entryTypeId: 6200026, extName: null, flowCode: 'WEB_SNATCH', isDelete: 1,
+      itemConfig: 40600, itemId: 52000351, lastStep: '0', mainConfig: 1400917,
+      name: '1400917-详情', nextStep: null, outContext: null, outEntry: 6200026,
+      sid: null, sourceId: -1, type: 'entry', url: '$VAL$',
+    }, '430016398')
+
+    expect(stepToStepModifyPayload(step)).toEqual({
+      lastStep: '0', sourceId: -1, mainConfig: 1400917, entryTypeId: 6200026,
+      name: '1400917-详情', url: '$VAL$', extName: null, configId: 1400917,
+      cond: null, outEntry: 6200026, outContext: null, itemId: 52000351,
+      type: 'entry', flowCode: 'WEB_SNATCH', context: null, bizType: null,
+      enabled: false, allField: [], nextStep: null, itemConfig: 40600,
+      isDelete: 1, authConfig: null, sid: null, checked: true, show: true,
+    })
+  })
+
+  it('stepToSaveItemConfigPayload 是 stepModify payload 去掉 itemConfig/isDelete（新建步骤没有已知 ID，也不预置为已删除）', () => {
+    const step = stepFromLegacy({
+      itemConfig: 40600, sourceId: -1, name: '1400917-详情', configId: 1400917, mainConfig: 1400917,
+      flowCode: 'WEB_SNATCH', entryTypeId: 6200026, outEntry: 6200026, itemId: 52000351,
+      lastStep: '0', url: '$VAL$', isDelete: 1,
+    }, '430016398')
+
+    const createPayload = stepToSaveItemConfigPayload(step)
+    expect(createPayload).not.toHaveProperty('itemConfig')
+    expect(createPayload).not.toHaveProperty('isDelete')
+    expect(createPayload).toMatchObject({ name: '1400917-详情', configId: 1400917, url: '$VAL$' })
   })
 })
 

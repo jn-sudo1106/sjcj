@@ -49,6 +49,8 @@ import {
   sourceOptionFromLegacy,
   sourcePageFromLegacy,
   sourceStepsFromLegacy,
+  stepToSaveItemConfigPayload,
+  stepToStepModifyPayload,
   summaryRowFromLegacy,
   taskInstFromLegacy,
   assertLegacySnatchSaveLogin,
@@ -1339,8 +1341,33 @@ export const flowTemplateApi = {
 
 // 子步骤（流程画布连线 = item/next）。未实现专属 mock，由 client fallback 回执。
 export const itemApi = {
-  saveItemConfig: (stepId: string) => request<Ack>('item/next/saveItemConfig', { stepId }),
-  stepModify: (stepId: string) => request<Ack>('item/next/stepModify', { stepId }),
-  enable: (stepId: string, enabled: boolean) => request<Ack>('item/next/enable', { stepId, enabled }),
-  deleteStep: (stepId: string) => request<Ack>('item/next/delete', { stepId }),
+  /** 新建步骤。2026-08-26 核对旧平台前端源码（source-step.js）确认真实调用是
+   *  `axios({method:'post', params: parameter})`——POST 但走 query string，不是 JSON body，
+   *  所以这里显式 `paramsIn: 'query'`。未标 live，走 mock，不受此次改动影响；接口本身是真实
+   *  存在的（2026-08-26 已用测试源 430016398 实测 stepModify 姊妹接口验证过字段契约）。 */
+  saveItemConfig: (step: Step) => request<Ack>('item/next/saveItemConfig', stepToSaveItemConfigPayload(step), {
+    method: 'POST',
+    httpEndpoint: 'item/next/saveItemConfig',
+    paramsIn: 'query',
+  }),
+  /** 修改步骤。旧平台真实调用是 `axios({method:'post', data})`，JSON body。字段契约
+   *  2026-08-26 用测试源 430016398（itemConfig 40600）原样提交实测确认，提交前后
+   *  nextConfigPaged 回读比对完全一致，未改变任何真实数据。未标 live，走 mock。 */
+  stepModify: (step: Step) => request<Ack>('item/next/stepModify', stepToStepModifyPayload(step), {
+    method: 'POST',
+    httpEndpoint: 'item/next/stepModify',
+  }),
+  /** 启停步骤。旧平台真实调用是 GET，`params: {id, state}`（source-step.js changeStepState）。
+   *  state 的取值约定未核实过真实样本，调用方需按旧平台约定自行传入，这里不做语义假设。 */
+  enable: (stepId: string, state: string) => request<Ack>('item/next/enable', { id: stepId, state }, {
+    method: 'GET',
+    httpEndpoint: 'item/next/enable',
+    httpParams: { id: stepId, state },
+  }),
+  /** 删除步骤。旧平台真实调用是 GET，`params: {id}`（source-step.js deleteItemConfig）。 */
+  deleteStep: (stepId: string) => request<Ack>('item/next/delete', { id: stepId }, {
+    method: 'GET',
+    httpEndpoint: 'item/next/delete',
+    httpParams: { id: stepId },
+  }),
 }

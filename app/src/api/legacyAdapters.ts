@@ -969,6 +969,7 @@ export function stepFromLegacy(input: unknown, sourceId: string): Step {
     extName: record.extName == null ? undefined : String(record.extName),
     urlSourceField: record.urlSourceField == null ? undefined : String(record.urlSourceField),
     urlRule: record.urlRule == null ? undefined : String(record.urlRule),
+    url: record.url == null ? undefined : String(record.url),
     condition: record.condition == null && record.cond == null ? undefined : String(record.condition ?? record.cond),
     failAction: record.failAction == null ? undefined : String(record.failAction),
     dependsOn,
@@ -987,6 +988,62 @@ export function sourceStepsFromLegacy(input: unknown, sourceId: string): Step[] 
   return rows
     .map((item) => stepFromLegacy(item, sourceId))
     .filter((step) => step.stepId)
+}
+
+// 步骤写入 payload（saveItemConfig 新建、stepModify 修改共用字段）。字段名和取值逐一对照
+// 2026-08-26 生产实测：源 430016398、itemConfig 40600，POST /v1/item/next/stepModify 的真实
+// 请求体（未改动任何字段值原样提交，提交前后 nextConfigPaged 回读比对完全一致）：
+//   {lastStep,sourceId,mainConfig,entryTypeId,name,url,extName,configId,cond,outEntry,
+//    outContext,itemId,type,flowCode,context,bizType,enabled,allField,nextStep,itemConfig,
+//    isDelete,authConfig,sid,checked,show}
+// bizType/authConfig/sid/allField/checked/show 六项在目前见过的所有样本里恒为固定值
+// （null/null/null/[]/true/true），语义未确认，这里按实测值原样透传，不体现进 Step 类型——
+// 一旦哪天见到非固定值的样本，说明这几项真的可变，需要另建 Step 字段承接。
+function stepWritePayloadBase(step: Step): Record<string, unknown> {
+  return {
+    lastStep: step.dependsOn?.length ? step.dependsOn.join(',') : null,
+    sourceId: step.sourceId === '' || step.sourceId == null ? null : Number(step.sourceId),
+    mainConfig: step.mainConfig == null ? undefined : Number(step.mainConfig),
+    entryTypeId: step.inputTable == null ? null : Number(step.inputTable),
+    name: step.name,
+    url: step.url ?? null,
+    extName: step.extName ?? null,
+    configId: step.configId == null ? undefined : Number(step.configId),
+    cond: step.condition ?? null,
+    outEntry: step.outputTable == null ? null : Number(step.outputTable),
+    outContext: step.outColumns?.length ? step.outColumns.join(',') : null,
+    itemId: step.itemId == null ? null : Number(step.itemId),
+    type: step.nodeType ?? 'entry',
+    flowCode: step.flowCode ?? 'WEB_SNATCH',
+    context: step.contextMap?.length ? step.contextMap.join(',') : null,
+    bizType: null,
+    enabled: step.enabled,
+    allField: [] as string[],
+    nextStep: null,
+    authConfig: null,
+    sid: null,
+    checked: true,
+    show: true,
+  }
+}
+
+/** 新建步骤（POST item/next/saveItemConfig）。旧平台真实调用是
+ *  `axios({method:'post', params: parameter})`——注意是 POST 但走 query string，不是 JSON
+ *  body，调用方需要用 `paramsIn: 'query'`。新建步骤没有 itemConfig（后端分配 ID），也不传
+ *  isDelete。 */
+export function stepToSaveItemConfigPayload(step: Step): Record<string, unknown> {
+  return stepWritePayloadBase(step)
+}
+
+/** 修改步骤（POST item/next/stepModify）。旧平台真实调用是 `axios({method:'post', data})`，
+ *  JSON body（默认 paramsIn: 'body' 即可）。itemConfig 取 step.stepId；isDelete 和 enabled
+ *  互为反数，2026-08-26 实测确认两个字段同时提交，不是只传其中一个。 */
+export function stepToStepModifyPayload(step: Step): Record<string, unknown> {
+  return {
+    ...stepWritePayloadBase(step),
+    itemConfig: step.stepId === '' ? undefined : Number(step.stepId),
+    isDelete: step.enabled ? 0 : 1,
+  }
 }
 
 /** 旧平台 sourceSame 的轻量源选项适配。 */

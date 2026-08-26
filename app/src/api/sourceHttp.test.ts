@@ -275,4 +275,33 @@ describe('旧平台新建源 HTTP 契约', () => {
     expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
   })
 
+  it('itemApi.stepModify：POST + JSON body（旧平台真实调用是 axios({method:"post", data}）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '修改步骤成功' }))
+    const { itemApi } = await import('./index')
+    const step = { stepId: '40600', sourceId: '-1', name: '1400917-详情', configId: '1400917', enabled: false } as never
+
+    await itemApi.stepModify(step)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/v1/item/next/stepModify')
+    expect(init.method).toBe('POST')
+    const body = JSON.parse(String(init.body))
+    expect(body.itemConfig).toBe(40600)
+    expect(body.isDelete).toBe(1)
+  })
+
+  it('itemApi.saveItemConfig：POST 但走 query string，不是 JSON body（旧平台真实调用是 axios({method:"post", params}）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '增加步骤成功' }))
+    const { itemApi } = await import('./index')
+    const step = { stepId: '', sourceId: '430016398', name: '新步骤', configId: '1400917', enabled: true } as never
+
+    await itemApi.saveItemConfig(step)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/v1/item/next/saveItemConfig?')
+    expect(url).toContain('name=')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBeUndefined()
+  })
+
 })

@@ -223,6 +223,11 @@ export interface SiteSummary {
 /** 子步骤 Step（item/next）— 连线详情字段 */
 export interface Step {
   stepId: string
+  /** 适用源，-1 表示该配置所有源。2026-08-26 核实：这是又一个和 urlSourceField/urlRule 同类
+   *  的死字段——nextConfigPaged 的真实响应里从来没有 applySource 这个 key，只有 sourceId；
+   *  UI 上"适用源"那一栏显示的其实就是 sourceId 本身。当前代码库里也没有任何地方读
+   *  Step.applySource。真正承载"适用源"语义、且需要在写入 payload 里用到的是 sourceId，
+   *  不是这个字段。保留字段定义只是不删除历史占位，不要指望它有值。 */
   applySource?: string // 适用源，-1 表示该配置所有源
   sourceId: string
   name: string
@@ -231,10 +236,20 @@ export interface Step {
   inputTable?: string // 步骤输入表
   outputTable?: string // 步骤输出表
   configId?: string // 本步骤使用配置
-  /** @deprecated 0804 拍板：任务 URL 来源字段已从 UI 删除，仅供历史流程回读，见开发方案 §2.3 */
+  /** @deprecated 0804 拍板：任务 URL 来源字段已从 UI 删除，仅供历史流程回读，见开发方案 §2.3。
+   *  2026-08-26 核实：这个字段名从未对上过真实响应（nextConfigPaged 没有 urlSourceField 这个
+   *  key），恒为 undefined；"URL 来源字段"的真实语义是 itemId（见下）。此字段留作历史占位，
+   *  不要指望它有值。 */
   urlSourceField?: string
-  /** @deprecated 同上，任务 URL 规则已从 UI 删除 */
+  /** @deprecated 同上，任务 URL 规则已从 UI 删除。2026-08-26 核实：同样从未对上真实响应
+   *  （没有 urlRule 这个 key），恒为 undefined；真实的"任务URL规则"值在 url 字段（见下）。 */
   urlRule?: string
+  /** 任务URL规则（旧 nextConfigPaged.url / stepModify 写入时的 url 字段）。2026-08-26 生产
+   *  实测：非首步骤这里是 "$VAL$"（默认从 itemId 指向的字段取值）或字段拼接表达式，如
+   *  "K2+'#need_upload_xq/xq/'"；首步骤是该步骤自己的抓取 URL。新平台画布目前统一显示
+   *  源的实际 URL，这个真实表达式没有展示位——不要跟上面已废弃的 urlRule 搞混，那个字段
+   *  从未生效过，这个才是真值来源。 */
+  url?: string
   condition?: string // 步骤执行条件（函数表达式）
   failAction?: string // 失败动作
   /** 该步骤所属源的主配置 ID（旧 mainConfig）。2026-08-26 生产实测：同一源的所有步骤
