@@ -925,6 +925,36 @@ export function sourceFromLegacy(input: unknown): Source {
   }
 }
 
+/** 前端 Source → 旧平台 updateSource 请求体的字段逆向映射。
+ *  与 sourceFromLegacy 对称:旧平台契约统一使用 sourceName/sourceUrl/entryTypeId/author/classify/categoryId 等字段,
+ *  保存时再映射回去。 */
+export function sourceToLegacyParams(source: Source): Record<string, unknown> {
+  return {
+    sourceId: source.sourceId,
+    sourceName: source.name,
+    sourceUrl: source.url,
+    configId: source.configId,
+    sourceType: source.sourceType,
+    entryTypeId: source.mainTable,
+    author: source.owner,
+    classify: source.category,
+    classifySub: source.subCategory,
+    categoryName: source.categoryPath,
+    categoryId: source.dirId,
+    tags: Array.isArray(source.tags) ? source.tags.join(',') : source.tags,
+    priority: source.priority,
+    isDelete: source.disabled === true ? 1 : source.disabled === false ? 0 : undefined,
+    state: source.state,
+    remark: source.remark,
+    schedule: source.cycle,
+    notifyFlag: source.alarm ? 1 : 0,
+    keepLast: source.resume ? 1 : 0,
+    domain: source.domain,
+    sourceParam: source.coreParam,
+    authConfig: source.authConfig,
+  }
+}
+
 /** 旧平台 sourcePaged 的分页结构适配。 */
 export function sourcePageFromLegacy(input: unknown): Paged<Source> {
   const record = asRecord(input)

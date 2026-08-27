@@ -48,6 +48,7 @@ import {
   sourceFromLegacy,
   sourceOptionFromLegacy,
   sourcePageFromLegacy,
+  sourceToLegacyParams,
   sourceStepsFromLegacy,
   stepToSaveItemConfigPayload,
   stepToStepModifyPayload,
@@ -276,7 +277,14 @@ export const sourceApi = {
   sourceCreate: (source: Source) => assetMockRequest<{ ok: boolean; message?: string; sourceId?: string }>('source/createSource', { source }),
   sourceCopy: (fromId: string) => assetMockRequest<Source | null>('source/sourceCopy', { sourceId: fromId }),
   // 源信息编辑抽屉 + 任务视图（0706 优化·Phase4）
-  sourceUpdate: (source: Source) => assetMockRequest<Ack>('source/updateSource', { source }),
+  sourceUpdate: async (source: Source) => {
+    const result = await request<unknown>('source/updateSource', { source }, {
+      method: 'POST',
+      httpEndpoint: 'source/updateSource',
+      httpParams: sourceToLegacyParams(source),
+    })
+    return ackFromApiResult(result)
+  },
   sourceNodeRuns: (sourceId: string) => assetMockRequest<NodeRunStat[]>('source/nodeRunStats', { sourceId }),
   // 数据表页选源下拉（E 包）：同站源列表，sourceId 可空
   sourceSame: async (sourceId?: string) => {

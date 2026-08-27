@@ -22,7 +22,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/stats', desc: '源 KPI 统计', impl: true },
   { path: 'source/logPaged', desc: '源操作日志', impl: true },
   { path: 'source/credentialDetail', desc: '登录凭据引用（脱敏）', impl: true },
-  { path: 'source/updateSource', desc: '编辑源', danger: true, impl: true },
+  { path: 'source/updateSource', desc: '编辑源', danger: true, impl: true, live: true },
   { path: 'source/updateSourceSimple', desc: '简单编辑源', danger: true },
   { path: 'source/deleteSource', desc: '删除源', danger: true, impl: true },
   { path: 'source/copySource', desc: '复制派生源', danger: true, impl: true },
