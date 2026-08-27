@@ -54,7 +54,7 @@ function handleAccountCommand(command: string) {
       </span>
       <strong>青龙智能采集中心</strong>
       <span v-if="connectedToProduction" class="rc-env-badge" data-testid="prod-env-badge">
-        生产环境 · 写操作受限
+        生产环境 · 允许新建，禁止改删
       </span>
     </div>
     <div class="rc-top-actions">

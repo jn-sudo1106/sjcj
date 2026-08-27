@@ -7,7 +7,7 @@ import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readStoredToken, trigger
 // ②全局：VITE_API_MODE=http 强制全部端点走真实（仍受 options.mode==='mock' 的按调用强制项优先），
 //   仅用于本地联调验证一整批接口，不用于生产（生产靠①逐项上线，见 endpoints.ts 的 live 标记）。
 type AdapterMode = 'mock' | 'http'
-type HttpMethod = 'GET' | 'POST'
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE'
 
 export interface RequestOptions {
   mode?: AdapterMode
@@ -31,11 +31,13 @@ export function isMockMode(): boolean {
 
 export class ApiError extends Error {
   endpoint: string
+  override readonly cause?: unknown
 
   constructor(endpoint: string, cause?: unknown) {
     super(`请求异常 [${endpoint}]: ${(cause as Error)?.message ?? String(cause)}`)
     this.endpoint = endpoint
     this.name = 'ApiError'
+    this.cause = cause
   }
 }
 
@@ -45,13 +47,11 @@ export function isDanger(endpoint: string): boolean {
   return DANGER_ENDPOINTS.has(endpoint)
 }
 
-// 生产写守卫（0812 计划 M0-4）：本地/联调会话可能把 VITE_API_PROXY_TARGET 指向生产环境
-// （118.25.96.217）做只读核实；此时除"网站与源关系"外的所有 danger 端点必须被拦截，
-// 不能只靠开发者自觉——这是唯一允许在生产写入的范围，其余源本身的增删改、发抓取、
-// 发后续任务、任务重跑等一律禁止（方案 §0.1 环境矩阵）。
-// 判定读当前实际连接的后端主机：VITE_API_PROXY_TARGET 是 shell 环境变量，Vite 按
-// VITE_ 前缀规则会同时把它注入 import.meta.env，与 vite.config.ts 的 dev proxy target 一致
-// （两者读的是同一个变量，不会出现"代理连了生产但客户端判断成测试"的不一致）。
+// 生产写守卫（0812 计划 M0-4，2026-08-25 放宽为「可新建、禁改删」）：
+// 本地/联调会话可能把 VITE_API_PROXY_TARGET 指向生产（118.25.96.217）。
+// 允许：新建网站、新建源（含随源新建配置）、把新建源关联网站、创建编排元数据。
+// 禁止：改、删、启停、发抓取、换绑已有源、覆盖流程等。
+// 判定读当前实际连接的后端主机：VITE_API_PROXY_TARGET 与 vite.config.ts 的 proxy target 同源。
 const PRODUCTION_BACKEND_HOSTS = ['118.25.96.217']
 
 function currentBackendTarget(): string {
@@ -64,22 +64,38 @@ export function isProductionBackend(): boolean {
   return PRODUCTION_BACKEND_HOSTS.some((host) => target.includes(host))
 }
 
-// 生产环境下唯一放行的写入范围：网站关系（site/* 全部）与源—网站关系（changeSite/bindSite）。
-// 按"真实请求目的地"（httpEndpoint，未显式指定时回退到逻辑 endpoint）判断，与 usesMockAdapter
-// 的 liveCheckKey 口径一致，避免逻辑键与真实路径不同名时误放行或误拦截。
-function isProductionWriteAllowed(httpEndpoint: string): boolean {
-  // 2026-08-26 拍板放开：配置的参数绑定/解绑。这是本清单里第一次出现的真删改
+/**
+ * 生产新建通道：代理已指向生产，且显式允许新建。
+ * 日常联调保持 VITE_API_MODE=mock（已迁移 live 端点走正式接口，未迁移继续 mock），
+ * 不要用 VITE_API_MODE=http 一刀切打生产。
+ */
+export function isProductionCreateEnabled(): boolean {
+  return isProductionBackend() && import.meta.env.VITE_SITE_CREATE_TARGET === 'production'
+}
+
+// 按真实请求目的地（httpEndpoint）判断，与 usesMockAdapter 的 liveCheckKey 口径一致。
+const PRODUCTION_CREATE_ENDPOINTS = new Set([
+  'site/add',
+  'site/createSite',
+  'snatch/snatchSave',
+  'source/bindSite',
+  '/vrule/api/custom-compose/save',
+  // 2026-08-26 拍板放开：配置的参数绑定/解绑。这两个是本清单里**第一次**出现的真删改
   // （configParamDel 直接删掉配置与参数的绑定记录，不可撤销），放开原因是画布上的「解绑」
   // 此前只改内存、刷新就回来，等于界面骗人；旧平台同一个按钮本来就是即时写库的。
-  if (httpEndpoint === 'config/configParamAdd' || httpEndpoint === 'config/configParamDel') return true
-  return httpEndpoint.startsWith('site/') || httpEndpoint === 'source/bindSite' || httpEndpoint === 'source/changeSite'
+  'config/configParamAdd',
+  'config/configParamDel',
+])
+
+function isProductionWriteAllowed(httpEndpoint: string): boolean {
+  return PRODUCTION_CREATE_ENDPOINTS.has(httpEndpoint)
 }
 
 export class ProductionWriteBlockedError extends Error {
   httpEndpoint: string
 
   constructor(httpEndpoint: string) {
-    super(`生产环境写保护：端点 [${httpEndpoint}] 不在允许清单（仅网站/源关系写操作可用），已阻止发送，未联网`)
+    super(`生产环境写保护：端点 [${httpEndpoint}] 不在允许清单（仅允许新建网站/源/配置及编排元数据，禁止改删），已阻止发送，未联网`)
     this.httpEndpoint = httpEndpoint
     this.name = 'ProductionWriteBlockedError'
   }
@@ -113,7 +129,11 @@ function normalizeHttpPayload(endpoint: string, payload: unknown): unknown {
     // nextStep 的 cond 语法错误，msg 只有"错误信息:运行时异常"，data 却是真实的解释器报错
     // "<Long, 1> can't be a left value for assignment."）。此前只取 msg，data 被静默丢弃。
     const detail = typeof envelope.data === 'string' && envelope.data.trim() ? `：${envelope.data}` : ''
-    throw new Error(String(envelope.msg || `业务请求失败 [${endpoint}]`) + detail)
+    const err = new Error(String(envelope.msg || envelope.message || `业务请求失败 [${endpoint}]`) + detail) as Error & {
+      payload?: Record<string, unknown>
+    }
+    err.payload = envelope
+    throw err
   }
 
   const data = envelope.data
@@ -149,12 +169,15 @@ function fallback(endpoint: string): unknown {
 
 /** 是否走 mock（与 request 内判定一致，供流式等非 JSON 客户端复用） */
 export function usesMockAdapter(endpoint: string, options: RequestOptions = {}): boolean {
+  // 按调用覆盖优先：强制 mock 用于未迁移域；强制 http 用于少数已迁移写路径（如生产新建）。
+  if (options.mode === 'mock') return true
+  if (options.mode === 'http') return false
   // live 判定键：
   // - data 域：httpEndpoint 为相对真实路径（如 entry/entryDataPaged），优先用它（逻辑键不在清单里）
   // - vrule：httpEndpoint 为根相对绝对路径（/vrule/...），不在清单里，改用逻辑键（rule/orchestration*）
   const httpKey = options.httpEndpoint
   const liveCheckKey = httpKey && !httpKey.startsWith('/') ? httpKey : endpoint
-  return options.mode === 'mock' || (MODE === 'mock' && (DISABLE_LIVE_ENDPOINTS || !LIVE_ENDPOINTS.has(liveCheckKey)))
+  return MODE === 'mock' && (DISABLE_LIVE_ENDPOINTS || !LIVE_ENDPOINTS.has(liveCheckKey))
 }
 
 export async function request<T>(
@@ -213,11 +236,21 @@ export async function request<T>(
     if (!res.ok) {
       // 尝试解出后端业务 message（4xx/5xx 通常仍带 code/msg envelope）
       let detail = ''
+      let body: Record<string, unknown> | undefined
       try {
-        const body = await res.clone().json() as Record<string, unknown>
-        if (body && typeof body === 'object' && body.msg) detail = `: ${String(body.msg)}`
+        body = await res.clone().json() as Record<string, unknown>
+        if (body && typeof body === 'object') {
+          if (body.msg) detail = `: ${String(body.msg)}`
+          else if (body.message) detail = `: ${String(body.message)}`
+        }
       } catch { /* 无 body 或非 JSON */ }
-      throw new Error(`请求失败 ${res.status}${detail}`)
+      const err = new Error(`请求失败 ${res.status}${detail}`) as Error & {
+        body?: Record<string, unknown>
+        status?: number
+      }
+      err.body = body
+      err.status = res.status
+      throw err
     }
     // 2xx 但响应体为空是部分真实后端网关的合法成功态（实测撞见 vrule AI 编辑网关），
     // 不能直接 res.json() 空字符串——那会抛 "Unexpected end of JSON input"。

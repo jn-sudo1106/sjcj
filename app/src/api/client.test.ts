@@ -226,6 +226,16 @@ describe('按端点上线：全局仍 mock 时，live 端点照样走真实 HTTP
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('options.mode==="http" 在全局 mock 下仍发 fetch（生产新建等单次逃逸，不切全局 http）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
+    const { request } = await import('./client')
+
+    await request('site/add', { siteName: 'x' }, { mode: 'http', method: 'POST' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/v1/site/add')
+  })
+
   it('vrule 绝对路径 httpEndpoint 时 live 以逻辑键为准（/vrule/... 不在清单）', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: { id: 1 } }))
     const { request } = await import('./client')
@@ -241,8 +251,7 @@ describe('按端点上线：全局仍 mock 时，live 端点照样走真实 HTTP
   })
 })
 
-// 生产写守卫（0812 计划 M0-4）：代理指向生产（118.25.96.217）时，danger 端点只放行
-// 网站与源关系写入（site/*、source/bindSite、source/changeSite），其余一律拦截、不发 fetch。
+// 生产写守卫：代理指向生产（118.25.96.217）时，danger 端点只放行新建网站/源/配置及编排元数据，改删一律拦截。
 describe('生产写守卫', () => {
   const fetchMock = vi.fn()
 
@@ -286,25 +295,33 @@ describe('生产写守卫', () => {
     void ProductionWriteBlockedError
   })
 
-  it('连生产时，site/* 写端点在白名单内，正常放行', async () => {
+  it('连生产时，新建网站/源/配置及编排元数据在白名单内，正常放行', async () => {
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { request } = await import('./client')
 
     await request('site/add', { siteName: 'x' })
+    await request('snatch/snatchSave', { sourceName: 'x' }, { httpEndpoint: 'snatch/snatchSave' })
+    await request('source/bindSite', { sourceId: '1', siteId: '2' }, { httpEndpoint: 'source/bindSite' })
+    await request('rule/orchestrationSaveMeta', {}, {
+      httpEndpoint: '/vrule/api/custom-compose/save',
+      httpParams: { ruleName: '编排测试' },
+    })
 
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
   })
 
-  it('连生产时，source/bindSite、source/changeSite 在白名单内，正常放行', async () => {
+  it('连生产时，改删和换绑已有源仍拦截', async () => {
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
-    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { request } = await import('./client')
 
-    await request('source/bindSite', { sourceId: '1', siteId: '2' }, { httpEndpoint: 'source/bindSite' })
-    await request('source/changeSite', { ids: '1', siteId: '2' }, { httpEndpoint: 'source/changeSite' })
-
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    await expect(request('site/updateSite', { siteId: '1' })).rejects.toThrow(/禁止改删/)
+    await expect(request('source/changeSite', { ids: '1', siteId: '2' }, { httpEndpoint: 'source/changeSite' })).rejects.toThrow(/禁止改删/)
+    await expect(request('config/delete', { id: '1' })).rejects.toThrow(/禁止改删/)
+    await expect(request('rule/orchestrationSave', {}, {
+      httpEndpoint: '/vrule/ai/dashscope/script/edit',
+    })).rejects.toThrow(/禁止改删/)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('非 danger 端点即使连生产也不受影响（只读请求正常发出）', async () => {
@@ -323,5 +340,19 @@ describe('生产写守卫', () => {
     const { isProductionBackend } = await import('./client')
 
     expect(isProductionBackend()).toBe(true)
+  })
+
+  it('isProductionCreateEnabled 需要同时指向生产并打开新建开关', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_SITE_CREATE_TARGET', 'production')
+    const { isProductionCreateEnabled } = await import('./client')
+    expect(isProductionCreateEnabled()).toBe(true)
+  })
+
+  it('只连生产但未打开新建开关时，isProductionCreateEnabled 为 false', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_SITE_CREATE_TARGET', '')
+    const { isProductionCreateEnabled } = await import('./client')
+    expect(isProductionCreateEnabled()).toBe(false)
   })
 })
