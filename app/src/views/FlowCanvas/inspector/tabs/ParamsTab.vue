@@ -36,6 +36,7 @@ const isFirstCollectorNode = computed(() => !!cc.value && flow.main.find((nodeId
     </div>
     <UrlParamEditor
       :url="cc.url"
+      :config-id="cfg?.configId"
       :param-refs="cc.urlParamRefs ?? []"
       :param-values="cc.urlParamValues ?? {}"
       :warn-fragment="nodeCapability?.kind === 'web'"

@@ -11,6 +11,7 @@
 //   - entryApi/paramApi 在 onMounted 拉一次——同样留主壳。
 import { inject, provide, ref, type InjectionKey, type Ref } from 'vue'
 import type { EntryType, Param, RuleGroup, Rule, SharedConfig } from '@/api'
+import { useEntryTableFieldsCache } from '@/composables/useEntryTableFieldsCache'
 
 export interface NodeInspectorAssets {
   tables: Ref<EntryType[]>
@@ -18,18 +19,23 @@ export interface NodeInspectorAssets {
   ruleGroups: Ref<RuleGroup[]>
   rules: Ref<Rule[]>
   sharedCfgs: Ref<SharedConfig[]>
+  /** entryPaged 表清单不带字段（见 useEntryTableFieldsCache 头注），tab 要用某张表的字段列表时先调这个补齐。 */
+  ensureTableFields: (tableId: string | undefined) => void
 }
 
 const KEY: InjectionKey<NodeInspectorAssets> = Symbol('NodeInspectorAssets')
 
 /** 主壳调用：创建 5 个资产 ref 并 provide，返回引用以便主壳加载/写入。 */
 export function provideNodeInspectorAssets(): NodeInspectorAssets {
+  const tables = ref<EntryType[]>([])
+  const { ensureTableFields } = useEntryTableFieldsCache(tables)
   const assets: NodeInspectorAssets = {
-    tables: ref([]),
+    tables,
     params: ref([]),
     ruleGroups: ref([]),
     rules: ref([]),
     sharedCfgs: ref([]),
+    ensureTableFields,
   }
   provide(KEY, assets)
   return assets

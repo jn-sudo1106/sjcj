@@ -127,10 +127,19 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
   const configIds = [...new Set(steps.map((s) => s.configId).filter((id): id is string => !!id))]
   if (!configIds.length) return steps
   const results = await Promise.allSettled(configIds.map((id) => configApi.configDetail(id)))
-  const detailByConfigId = new Map<string, { topic?: string; isLoginConfig?: boolean }>()
+  type StepConfigDetail = { topic?: string; isLoginConfig?: boolean; multiMode?: number; paramBindings?: Step['paramBindings'] }
+  const detailByConfigId = new Map<string, StepConfigDetail>()
   results.forEach((r, i) => {
     if (r.status !== 'fulfilled' || !r.value) return
-    detailByConfigId.set(configIds[i], { topic: r.value.topic || undefined, isLoginConfig: r.value.isLogin })
+    // multiMode 是旧 isMulti 的三态原值，只迁不展示（见 Step.multiMode 注释）。
+    // params 是配置绑定的参数（旧「使用参数」表），configDetail 响应里就带着，不用另发请求。
+    const bindings = (r.value.params ?? []).map((p) => ({ paramId: p.paramId, value: p.valueShow || undefined }))
+    detailByConfigId.set(configIds[i], {
+      topic: r.value.topic || undefined,
+      isLoginConfig: r.value.isLogin,
+      multiMode: r.value.multiMode,
+      ...(bindings.length ? { paramBindings: bindings } : {}),
+    })
   })
   if (!detailByConfigId.size) return steps
   return steps.map((step) => {
@@ -140,6 +149,8 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
       ...step,
       ...(detail.topic ? { topic: detail.topic } : {}),
       ...(detail.isLoginConfig !== undefined ? { isLoginConfig: detail.isLoginConfig } : {}),
+      ...(detail.multiMode !== undefined ? { multiMode: detail.multiMode } : {}),
+      ...(detail.paramBindings ? { paramBindings: detail.paramBindings } : {}),
     }
   })
 }

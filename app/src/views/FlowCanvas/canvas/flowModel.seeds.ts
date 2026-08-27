@@ -740,6 +740,7 @@ function rootStepForSource(source: Source): Step | null {
 
 function applyStepMetadata(cfg: NodeConfig, step: Step) {
   cfg.disabled = !step.enabled
+  if (step.configId) cfg.configId = step.configId
   if (cfg.collectCfg) {
     cfg.collectCfg.entryCondition = step.condition
       ? { mode: 'expr', logic: 'AND', items: [], expr: step.condition }
@@ -753,6 +754,19 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
       ...(step.urlRule !== undefined ? { urlRule: step.urlRule } : {}),
       ...(step.contextMap !== undefined ? { contextMap: [...step.contextMap] } : {}),
       ...(step.outColumns !== undefined ? { outColumns: [...step.outColumns] } : {}),
+    }
+    // 旧 isMulti 三态原值：只迁不展示（见 Step.multiMode 注释）。不要拿它去改 isDetail/webKind——
+    // 网页类型已改为「节点类别」，走新平台自己的节点类型分类；旧平台与之对应的是抓取类型
+    // （configType，如 90 网页抓取），不是 isMulti。这里只是把原值带在节点上不丢，供后续写回用。
+    if (step.multiMode !== undefined) cfg.collectCfg.multiMode = step.multiMode
+    // 配置绑定的参数（旧「使用参数」表）回填到节点的参数配置。只在节点自己还没有绑定时才填：
+    // 2026-08-26 拍板「后续听我们的，因为我们是新的平台」——新平台已有的绑定优先，迁移值只补空位，
+    // 不覆盖用户在新平台做过的选择。取值沿用旧平台「参考值」的原样展示（不打码，与旧平台一致）。
+    if (step.paramBindings?.length && !cfg.collectCfg.urlParamRefs?.length) {
+      cfg.collectCfg.urlParamRefs = step.paramBindings.map((b) => b.paramId)
+      const values = { ...(cfg.collectCfg.urlParamValues ?? {}) }
+      step.paramBindings.forEach((b) => { if (b.value !== undefined && values[b.paramId] === undefined) values[b.paramId] = b.value })
+      if (Object.keys(values).length) cfg.collectCfg.urlParamValues = values
     }
   } else {
     cfg.entryCondition = step.condition

@@ -12,6 +12,7 @@ import { isRuleNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel
 import { nodeInspectorTabs } from './nodeInspectorTabs'
 import { entryApi, paramApi, ruleApi } from '@/api'
 import { provideNodeInspectorAssets } from './useNodeInspectorAssets'
+import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
 import NodeAiChat from './NodeAiChat.vue'
 import TaskTab from './tabs/TaskTab.vue'
 import TableTab from './tabs/TableTab.vue'
@@ -53,7 +54,7 @@ watch(isRule, (v) => { if (v) loadRuleAssets() })
 onMounted(async () => {
   if (isRule.value) loadRuleAssets()
   await Promise.allSettled([
-    entryApi.entryPaged({ size: 100 }).then((r) => (assets.tables.value = r.list)),
+    entryApi.entryPaged({ size: 100 }).then((r) => (assets.tables.value = mergeEntryTypesPreservingFields(assets.tables.value, r.list))),
     paramApi.paramPaged({ size: 100 }).then((r) => (assets.params.value = r.list)),
   ])
 })

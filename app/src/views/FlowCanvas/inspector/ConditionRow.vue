@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { CONDITION_OP_OPTIONS, conditionGroupLabel, type ConditionGroup, type ConditionOp, type EntryCondition } from '@/views/FlowCanvas/canvas/flowModel'
+import { ElMessageBox } from 'element-plus'
+import { CONDITION_OP_OPTIONS, conditionGroupLabel, conditionOpNeedsValue, type ConditionGroup, type ConditionOp, type EntryCondition } from '@/views/FlowCanvas/canvas/flowModel'
+import { conditionsToExpr, parseConditionExpr } from '@/utils/flow/conditionExpr'
 
 // 进入条件行编辑组件（0701 问题十·方案B；0706 优化·主题二升级为条件组；0707 优化·补加表达式模式）：
 // 字段模式 = 多行 字段(下拉，来自输入表 schema) + 操作符 + 值，行间用 AND/OR 逻辑连接符组合；
@@ -8,7 +10,7 @@ import { CONDITION_OP_OPTIONS, conditionGroupLabel, type ConditionGroup, type Co
 // 两种模式二选一，不混用；本组件同时供节点级「进入条件」（NodeInspector）与分支条件（BranchEditor）复用。
 const props = defineProps<{
   condition?: ConditionGroup
-  fields: { prop: string; desc: string }[]
+  fields: { prop: string; desc: string; columnName?: string }[]
   /** 节点进入条件采用一体化编辑：字段选择自动生成下方可编辑表达式。 */
   integrated?: boolean
 }>()
@@ -21,15 +23,17 @@ const logic = ref<'AND' | 'OR'>('AND')
 const expr = ref('')
 const exprEdited = ref(false)
 
+// item.field 存的是下拉选中的 prop（业务标识/itemCode），真实表达式里用的是物理列名（K1/K2/...）——
+// 两者不是一套命名空间，读写表达式时要来回换；换不到（字段还没加载，或像 NEXT_FLAG 这种运行时
+// 标记根本不是表字段）就原样用标识符本身，不猜。
+function columnOf(field: string): string {
+  return props.fields.find((f) => f.prop === field)?.columnName || field
+}
+function propOf(column: string): string {
+  return props.fields.find((f) => f.columnName === column)?.prop || column
+}
 function expressionOf(entries = items.value, joiner = logic.value): string {
-  const parts = entries
-    .filter((item) => item.field)
-    .map((item) => {
-      if (item.op === 'notEmpty') return `${item.field} IS NOT EMPTY`
-      const op = { contains: 'CONTAINS', eq: '=', ne: '!=', gt: '>', lt: '<' }[item.op]
-      return `${item.field} ${op} "${item.value}"`
-    })
-  return parts.join(` ${joiner} `)
+  return conditionsToExpr(entries.map((item) => ({ ...item, field: columnOf(item.field) })), joiner)
 }
 
 function reinit(cond?: ConditionGroup) {
@@ -38,9 +42,32 @@ function reinit(cond?: ConditionGroup) {
   logic.value = cond?.logic ?? 'AND'
   items.value = cond ? cond.items.map((it) => ({ ...it })) : []
   expr.value = cond?.expr ?? (props.integrated ? expressionOf(items.value, logic.value) : '')
+
+  // 迁移来的条件只有 expr（没有 items，见 flowModel.seeds 的 applyStepMetadata）——解析回字段行，
+  // 让用户直接看到/编辑「正文路径 为空」，而不是面对一个空的字段下拉。解析不了（混用 &&/||、
+  // 自定义函数等）才退回原始文本只读，宁可不解析也不要解析出和原意不同的条件。
+  const parsed = props.integrated && cond?.expr && !cond.items.length ? parseConditionExpr(cond.expr) : null
+  if (parsed) {
+    logic.value = parsed.logic
+    items.value = parsed.items.map((item) => ({ ...item, field: propOf(item.field) }))
+    exprEdited.value = false // 改字段行时按真实语法重新生成；未改动前保留原文的空格写法
+    return
+  }
   exprEdited.value = Boolean(props.integrated && cond?.expr && cond.expr !== expressionOf(items.value, logic.value))
 }
 watch(() => props.condition, reinit, { deep: true, immediate: true })
+
+// 表字段是异步加载的（entryDetail），解析时可能还没到——那会儿 K6 映射不到 prop，先原样存着列名。
+// 字段到位后把这些还是列名的项换成 prop，下拉才能正确显示成「正文路径」而不是裸列名。
+watch(() => props.fields, (fields) => {
+  if (!fields.length) return
+  const remapped = items.value.map((item) => {
+    if (fields.some((f) => f.prop === item.field)) return item
+    const match = fields.find((f) => f.columnName === item.field)
+    return match ? { ...item, field: match.prop } : item
+  })
+  if (remapped.some((item, i) => item.field !== items.value[i].field)) items.value = remapped
+})
 
 function currentGroup(): ConditionGroup {
   if (props.integrated) return { mode: 'expr', logic: logic.value, items: items.value, expr: expr.value }
@@ -83,7 +110,18 @@ function updateItem(i: number, patch: Partial<EntryCondition>) {
   if (props.integrated && !exprEdited.value) expr.value = expressionOf()
   commit()
 }
-function addItem() {
+async function addItem() {
+  // 一体化模式下，若当前表达式是迁移来的原始文本（无法拆成字段，见 reinit 的 exprEdited 判定），
+  // 字段行加了也不会同步回表达式——点“+ 添加条件”看似在编辑同一个条件，实际完全脱节。
+  // 先确认清楚：继续会放弃原始表达式、改由字段模式重新生成，避免误以为是在原表达式基础上追加。
+  if (props.integrated && exprEdited.value && expr.value) {
+    try {
+      await ElMessageBox.confirm('当前是迁移来的原始表达式，无法直接在字段模式里编辑。继续将放弃原表达式，改由字段模式重新生成，是否继续？', '切换为字段模式', { type: 'warning', confirmButtonText: '继续', cancelButtonText: '取消' })
+    } catch {
+      return
+    }
+    exprEdited.value = false
+  }
   items.value = [...items.value, { field: props.fields[0]?.prop ?? '', op: 'contains', value: '' }]
   if (props.integrated && !exprEdited.value) expr.value = expressionOf()
   commit()
@@ -101,6 +139,14 @@ function onExprInput(e: Event) {
 function fieldDescOf(field: string) {
   return props.fields.find((f) => f.prop === field)?.desc
 }
+
+// 下拉选项 = 输入表字段 + 条件里出现过但不属于该表的标识符（如 NEXT_FLAG 这种运行时标记，
+// 生产里真实存在）。不补进选项的话这些条件在下拉里显示为空白，看起来像"没选字段"。
+const fieldOptions = computed(() => {
+  const known = new Set(props.fields.map((f) => f.prop))
+  const extras = [...new Set(items.value.map((item) => item.field).filter((f) => f && !known.has(f)))]
+  return [...props.fields.map((f) => ({ prop: f.prop, desc: f.desc })), ...extras.map((prop) => ({ prop, desc: '表外标识' }))]
+})
 const summary = computed(() => conditionGroupLabel(active.value ? currentGroup() : undefined, fieldDescOf))
 </script>
 
@@ -120,12 +166,12 @@ const summary = computed(() => conditionGroupLabel(active.value ? currentGroup()
         <div v-for="(item, i) in items" :key="i" class="cond-fields">
           <select class="rc-select" :value="item.field" @change="updateItem(i, { field: ($event.target as HTMLSelectElement).value })">
             <option value="">选择字段</option>
-            <option v-for="f in fields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
+            <option v-for="f in fieldOptions" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
           </select>
           <select class="rc-select" :value="item.op" @change="updateItem(i, { op: ($event.target as HTMLSelectElement).value as ConditionOp })">
             <option v-for="o in CONDITION_OP_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
           </select>
-          <input v-if="item.op !== 'notEmpty'" class="rc-input" :value="item.value" placeholder="值" @input="updateItem(i, { value: ($event.target as HTMLInputElement).value })" />
+          <input v-if="conditionOpNeedsValue(item.op)" class="rc-input" :value="item.value" placeholder="值" @input="updateItem(i, { value: ($event.target as HTMLInputElement).value })" />
           <button v-if="items.length > 1" class="cond-del" type="button" title="删除该条件" @click="removeItem(i)">✕</button>
         </div>
         <button class="cond-add" type="button" @click="addItem">+ 添加条件</button>
@@ -135,7 +181,7 @@ const summary = computed(() => conditionGroupLabel(active.value ? currentGroup()
         <textarea
           class="rc-input cond-expr"
           :value="expr"
-          placeholder='写原始表达式，如 status = "C" AND quality_score >= 0.95'
+          placeholder="写原始表达式，如 K17 != nil &amp;&amp; !string.contains(K2,'weixin.qq')"
           rows="3"
           @input="onExprInput"
         />

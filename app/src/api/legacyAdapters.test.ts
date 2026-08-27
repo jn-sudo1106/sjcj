@@ -135,6 +135,30 @@ describe('旧平台新建源登录字段适配', () => {
     expect(payload).not.toHaveProperty('credentialRef')
   })
 
+  it('迁移带过来的 isMulti 三态原值原样回写，不被 isDetail 布尔压成列表类', () => {
+    // 旧平台 isMulti：1=列表类[按去重字段去重] / 0=详情类[按父ID去重] / 2=更新父表[按父ID更新父表]
+    // （旧前端 column.config.js:642）。isDetail 只是布尔，此前无条件用它推导，2 会被压成 1，
+    // 去重语义从"按父ID更新父表"变成"按去重字段去重"。
+    const flowWith = (collectCfg: Record<string, unknown>) => ({
+      id: 'flow-1', name: '源', version: '1', main: ['collect'], branches: [], updatedAt: '',
+      source: { sourceId: 'src-1', sourceType: 90, name: '源', url: 'https://example.com', configId: '', mainTable: '', owner: 'admin', state: 'C' },
+      configs: {
+        collect: {
+          title: '抓取', sub: '', status: '运行', planned: false, collect: true, base: [], fields: [], inmap: [], params: [], output: [],
+          collectCfg: { snatchType: '[90] - 网页抓取', webKind: 'list', url: 'https://example.com', outputTable: 'tb-1', inputTable: '', inputParams: [], resume: true, ...collectCfg },
+        },
+      },
+    })
+
+    // 迁移数据：更新父表（2）——必须原样回写
+    expect(legacySnatchSavePayloadFromFlow(flowWith({ isDetail: false, multiMode: 2 }) as never).isMulti).toBe('2')
+    // 迁移数据：详情类（0）
+    expect(legacySnatchSavePayloadFromFlow(flowWith({ isDetail: true, multiMode: 0 }) as never).isMulti).toBe('0')
+    // 新建节点没有原值：仍按 isDetail 布尔推导，行为不变
+    expect(legacySnatchSavePayloadFromFlow(flowWith({ isDetail: true }) as never).isMulti).toBe('0')
+    expect(legacySnatchSavePayloadFromFlow(flowWith({ isDetail: false }) as never).isMulti).toBe('1')
+  })
+
   it('新建登录缺旧平台密码时直接阻止提交，不能把 credentialRef 当作 authConfig', () => {
     const payload = {
       reqLogin: '1', newLoginConfig: '1', loginUrl: 'https://example.com/login', loginName: 'alice',

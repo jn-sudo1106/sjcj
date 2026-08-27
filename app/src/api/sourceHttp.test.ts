@@ -234,6 +234,56 @@ describe('旧平台新建源 HTTP 契约', () => {
     expect(fetchMock.mock.calls[3][0]).toBe('/api/v1/config/configDetail?configId=1400975')
   })
 
+  it('sourceSteps 按 configDetail.params 回填 paramBindings（取自 2026-08-26 生产实测：配置 1400774 绑了 baidu-密码=aaaa）', async () => {
+    // 旧平台「使用参数」弹窗绑的参数，此前新平台两个接口都没读，画布参数配置恒显示「暂无参数配置」。
+    // 注意 paramCnt 恒为 0，不能用它判空，只能看 params 数组本身。
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      code: 0,
+      data: [{ itemConfig: 0, sourceId: 430016501, name: 'stockstar-证券之星-港股-公司报道', configId: 1400774, outEntry: 900, lastStep: null, isDelete: 0 }],
+    }))
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      code: null, msg: null, success: true,
+      data: { configId: 1400774, paramCnt: 0, params: [{ id: 56, paramId: 730008, paramName: 'baidu-密码', valueShow: 'aaaa' }] },
+    }))
+    const { sourceApi } = await import('./index')
+
+    const steps = await sourceApi.sourceSteps('430016501')
+
+    expect(steps[0].paramBindings).toEqual([{ paramId: '730008', value: 'aaaa' }])
+  })
+
+  it('配置没绑参数时不产生 paramBindings 字段', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      code: 0,
+      data: [{ itemConfig: 0, sourceId: 430016501, name: '列表', configId: 1400765, outEntry: 900, lastStep: null, isDelete: 0 }],
+    }))
+    fetchMock.mockResolvedValueOnce(jsonResponse({ code: null, msg: null, success: true, data: { configId: 1400765, params: [] } }))
+    const { sourceApi } = await import('./index')
+
+    const steps = await sourceApi.sourceSteps('430016501')
+
+    expect(steps[0].paramBindings).toBeUndefined()
+  })
+
+  it('sourceSteps 按 configDetail.isMulti 回填 multiMode 三态原值（只迁不展示；2026-08-26 生产实测 200 条配置分布 1:197 / 2:3）', async () => {
+    // 旧 isMulti 是三态：1=列表类 / 0=详情类 / 2=更新父表。新平台的 isDetail 只是布尔，
+    // 压不下 2，所以原值单独迁移一份，写回时以它为准。
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      code: 0,
+      data: [
+        { itemConfig: 0, sourceId: 430016502, name: '列表', configId: 1400774, outEntry: 900, lastStep: null, isDelete: 0 },
+        { itemConfig: 40251, sourceId: -1, name: '1400774-详情', configId: 1400765, entryTypeId: 900, outEntry: 900, lastStep: '0', isDelete: 0 },
+      ],
+    }))
+    fetchMock.mockResolvedValueOnce(jsonResponse({ code: null, data: { configId: 1400774, isMulti: 1 }, msg: null, success: true }))
+    fetchMock.mockResolvedValueOnce(jsonResponse({ code: null, data: { configId: 1400765, isMulti: 2 }, msg: null, success: true }))
+    const { sourceApi } = await import('./index')
+
+    const steps = await sourceApi.sourceSteps('430016502')
+
+    expect(steps.map((s) => s.multiMode)).toEqual([1, 2])
+  })
+
   it('sourceSteps 按 configDetail.templetCode 回填 isLoginConfig（取自 2026-08-26 生产实测配置 1400968「baidu-登陆」）', async () => {
     // 步骤名字本身不含"登录"二字（用的是"登陆"），此前只靠名字正则会漏判成普通采集节点。
     fetchMock.mockResolvedValueOnce(jsonResponse({

@@ -5,20 +5,23 @@
 // - 汇合：分支段统一在主链上 owner 的下一个节点收拢（Q1 默认口径；不需要汇合的流程把决策放主链末端即可）；
 // - 条件字段下拉取 owner 节点的 effectiveInputTable（决策/分头的"上游输出表"）schema；
 // - 链内节点在此提供上下移/摘除；节点新增走画布 fan-out 分支列的「+」（FlowBoard.vue），复用 AddNodePopover 并隐藏「逻辑」分组防嵌套。
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { conditionGroupLabel, decisionOrParallelKind, type ConditionGroup, type FlowBranch, type FlowBranchGroup } from '@/views/FlowCanvas/canvas/flowModel'
 import ConditionRow from './ConditionRow.vue'
-import { entryApi, type EntryType } from '@/api'
+import { type EntryType } from '@/api'
+import { useEntryTableFieldsCache } from '@/composables/useEntryTableFieldsCache'
 
 const props = defineProps<{ ownerId: string }>()
 const flow = useFlowStore()
 
+// entryPaged（表清单接口）不带字段级 schema，字段要按 tableId 单独查 entryDetail（见
+// useEntryTableFieldsCache 头注）；分支条件只需要 owner 节点 effectiveInputTable 这一张表。
 const tables = ref<EntryType[]>([])
-onMounted(async () => {
-  tables.value = (await entryApi.entryPaged({ size: 100 })).list
-})
+const { ensureTableFields } = useEntryTableFieldsCache(tables)
+const ownerInputTableId = computed(() => flow.effectiveInputTableFor(props.ownerId))
+watch(ownerInputTableId, (tid) => ensureTableFields(tid), { immediate: true })
 
 const group = computed<FlowBranchGroup | undefined>(() =>
   flow.branchGroups.find((bg) => bg.ownerId === props.ownerId),
@@ -33,10 +36,10 @@ const kind = computed<'decision' | 'parallel' | 'unknown'>(() => {
 })
 
 /** 条件字段下拉：取 owner 节点的 effectiveInputTable schema（决策/分头的"上游输出表"） */
-const branchFields = computed<{ prop: string; desc: string }[]>(() => {
-  const tid = flow.effectiveInputTableFor(props.ownerId)
+const branchFields = computed<{ prop: string; desc: string; columnName?: string }[]>(() => {
+  const tid = ownerInputTableId.value
   if (!tid) return []
-  return tables.value.find((t) => t.tableId === tid)?.fields.map((f) => ({ prop: f.prop, desc: f.desc })) ?? []
+  return tables.value.find((t) => t.tableId === tid)?.fields.map((f) => ({ prop: f.prop, desc: f.desc, columnName: f.columnName })) ?? []
 })
 
 function onLabelChange(b: FlowBranch, e: Event) {

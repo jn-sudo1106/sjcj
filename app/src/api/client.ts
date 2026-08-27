@@ -68,6 +68,10 @@ export function isProductionBackend(): boolean {
 // 按"真实请求目的地"（httpEndpoint，未显式指定时回退到逻辑 endpoint）判断，与 usesMockAdapter
 // 的 liveCheckKey 口径一致，避免逻辑键与真实路径不同名时误放行或误拦截。
 function isProductionWriteAllowed(httpEndpoint: string): boolean {
+  // 2026-08-26 拍板放开：配置的参数绑定/解绑。这是本清单里第一次出现的真删改
+  // （configParamDel 直接删掉配置与参数的绑定记录，不可撤销），放开原因是画布上的「解绑」
+  // 此前只改内存、刷新就回来，等于界面骗人；旧平台同一个按钮本来就是即时写库的。
+  if (httpEndpoint === 'config/configParamAdd' || httpEndpoint === 'config/configParamDel') return true
   return httpEndpoint.startsWith('site/') || httpEndpoint === 'source/bindSite' || httpEndpoint === 'source/changeSite'
 }
 

@@ -3,7 +3,7 @@
 // 内容：有效输入表摘要 → 进入条件 → 队列归属 → 任务参数取值 → 上下文来源 → 出参列。
 // 「任务 URL 来源字段/规则」已删除（0804 拍板：当时保留是为了传参，现在在参数位置拼接即可，见开发方案 §2.3）。
 // 行为与原 NodeInspector 内联实现 1:1，仅物理搬迁；共享资产 tables/params 经 useNodeInspectorAssets 注入。
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { useFlowStore } from '@/stores/flow'
 import {
   fieldOptionsFromTableOrOutput, nodeEntryCondition, nodeTaskQueue, collectorCapabilityOf,
@@ -13,7 +13,7 @@ import ConditionRow from '../ConditionRow.vue'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 
 const flow = useFlowStore()
-const { tables, params } = useNodeInspectorAssets()
+const { tables, params, ensureTableFields } = useNodeInspectorAssets()
 
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
 const id = computed<string>(() => flow.selectedId)
@@ -41,14 +41,15 @@ const prevNode = computed<NodeConfig | undefined>(() => {
 })
 
 // 输入表 schema 字段清单：显式输入表优先，其次取有效输入表；继承临时表查不到 schema 时回退上游 output。
-const inputTableFields = computed(() => {
-  const tid = ownInputTable.value || effectiveInputTableId.value
-  return fieldOptionsFromTableOrOutput(tid, tables.value, prevNode.value?.output ?? cfg.value?.output)
-})
+const inputTableId = computed(() => ownInputTable.value || effectiveInputTableId.value)
+watch(inputTableId, (tid) => ensureTableFields(tid), { immediate: true })
+const inputTableFields = computed(() =>
+  fieldOptionsFromTableOrOutput(inputTableId.value, tables.value, prevNode.value?.output ?? cfg.value?.output))
 const selectedInputFields = computed(() => {
   const selected = cfg.value?.inputFields
   return selected === undefined ? inputTableFields.value : inputTableFields.value.filter((field) => selected.includes(field.prop))
 })
+watch(nodeTableId, (tid) => ensureTableFields(tid), { immediate: true })
 const outputTableFields = computed(() =>
   fieldOptionsFromTableOrOutput(nodeTableId.value, tables.value, cfg.value?.output),
 )

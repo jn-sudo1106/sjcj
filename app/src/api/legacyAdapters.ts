@@ -118,7 +118,10 @@ export function legacySnatchSavePayloadFromFlow(
     tags: source?.tags?.join(',') ?? '',
     newConfig: source?.configMode === 'existing' ? '0' : '1',
     configId: source?.configId || undefined,
-    isMulti: sourceCfg?.isDetail ? '0' : '1',
+    // 有迁移带过来的原值就原样回写，保住旧平台的第三态（2=更新父表）；只有新建节点没有原值时
+    // 才从 isDetail 布尔推导。此前无条件用布尔推导，只能出 0/1，会把 2 静默压成 1（列表类），
+    // 去重语义从"按父ID更新父表"变成"按去重字段去重"。三态定义见 Step.multiMode 注释。
+    isMulti: sourceCfg?.multiMode !== undefined ? String(sourceCfg.multiMode) : (sourceCfg?.isDetail ? '0' : '1'),
     loginTemplete: loginCfg ? '1' : '',
     entryTypeId: sourceCfg?.outputTable || source?.mainTable || undefined,
     params: legacyParamRefs(def, sourceCfg),

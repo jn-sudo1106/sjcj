@@ -7,7 +7,7 @@
 // 0804 S3-3 追加：非规则节点也需要在「生成配置」前落一条 vrule compose 记录换数字 ruleId
 // （isVruleNumericRuleId 约束，见 RuleOrchestrationTab.vue），跟规则节点同一套 orchestrationSaveMeta，
 // 只是 targetTable 传空——采集节点没有 vrule 输入表，S3-2 §9.2-2 已实测确认后端接受空 targetTable。
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
@@ -22,9 +22,10 @@ import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import TableEditDialog from '../TableEditDialog.vue'
 import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
+import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
 
 const flow = useFlowStore()
-const { tables } = useNodeInspectorAssets()
+const { tables, ensureTableFields } = useNodeInspectorAssets()
 
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
 const id = computed<string>(() => flow.selectedId)
@@ -75,6 +76,7 @@ const inputTableId = computed(() => ownInputTableId.value || effectiveInputTable
 const inputTableLabel = computed(() => effectiveInputTableId.value
   ? `自动 · 继承上游（${effectiveInputTableId.value}）`
   : '自动 · 无上游输入表')
+watch(inputTableId, (tid) => ensureTableFields(tid), { immediate: true })
 const inputTableFields = computed(() => inputTableId.value
   ? fieldOptionsFromTableOrOutput(inputTableId.value, tables.value, cfg.value?.output)
   : [])
@@ -115,48 +117,10 @@ const DEFAULT_PRESET_TABLES = [
   { name: '社交舆情表', tableId: '2103300' },
 ]
 
-// 当前节点输出表的全部候选字段
-const outputTableFields = computed(() =>
-  fieldOptionsFromTableOrOutput(nodeTableId.value, tables.value, cfg.value?.output),
-)
-
-// 存储在节点上的已选字段列表（若未自定义则默认为全部字段）
-const savedOutFields = computed<string[] | undefined>(() =>
-  cc.value?.outFields ?? cfg.value?.outFields ?? cfg.value?.taskCfg?.outColumns,
-)
-
-// 当前实际生效的已选字段 ID 集合（默认包含全部字段）
-const selectedFieldProps = computed<string[]>(() => {
-  const allProps = outputTableFields.value.map((f) => f.prop)
-  if (!savedOutFields.value) return allProps
-  return savedOutFields.value
-})
-
-function isFieldSelected(prop: string): boolean {
-  return selectedFieldProps.value.includes(prop)
-}
-
-function updateOutFields(propsList: string[]) {
-  flow.setOutFields(id.value, propsList)
-}
-
-function toggleOutputField(prop: string) {
-  const current = new Set(selectedFieldProps.value)
-  if (current.has(prop)) {
-    current.delete(prop)
-  } else {
-    current.add(prop)
-  }
-  updateOutFields(Array.from(current))
-}
-
-function selectAllFields() {
-  updateOutFields(outputTableFields.value.map((f) => f.prop))
-}
-
-function clearAllFields() {
-  updateOutFields([])
-}
+// 输出字段勾选相关的 outputTableFields/savedOutFields/selectedFieldProps/toggleOutputField/
+// selectAllFields/clearAllFields 随「输出字段选择」区块一并撤掉（原因见下方模板处注释）。
+// flow.setOutFields 这个 store action 因此暂时没有调用方了，但没有删——outFields 还在
+// NodeConfig 类型和配置包定义（configPackageDefinition）里，写入通路打通后这块要整体恢复。
 
 function selectPresetTable(tableId: string) {
   if (nodeCapability.value?.outputMode === 'fixed') return
@@ -204,7 +168,7 @@ function openEditTable() {
   tableDlg.open = true
 }
 async function onTableSaved(tableId: string) {
-  tables.value = (await entryApi.entryPaged({ size: 100 })).list
+  tables.value = mergeEntryTypesPreservingFields(tables.value, (await entryApi.entryPaged({ size: 100 })).list)
   if (id.value) {
     if (cc.value) flow.patchCollect(id.value, { outputTable: tableId })
     else flow.setOutputTable(id.value, tableId)
@@ -327,29 +291,12 @@ async function onSaveExecMeta() {
       </div>
       <div class="rc-help">源内去重：仅在当前采集源范围内对落库数据去重；表内去重：跨源在整张数据表范围内全局去重。</div>
     </div>
-    <!-- 输出字段选择（默认全选） -->
-    <div v-if="outputTableFields.length" class="rc-field">
-      <div class="rc-field-header">
-        <label>输出字段选择（已选中 {{ selectedFieldProps.length }} / {{ outputTableFields.length }} 个字段，默认包含全部字段）</label>
-        <div class="rc-field-actions">
-          <button type="button" class="rc-text-btn" data-testid="select-all-fields" @click="selectAllFields">全选</button>
-          <button type="button" class="rc-text-btn" data-testid="clear-all-fields" @click="clearAllFields">清空</button>
-        </div>
-      </div>
-      <div class="rc-tag-row" data-testid="output-fields-list">
-        <span
-          v-for="f in outputTableFields"
-          :key="f.prop"
-          class="rc-tag"
-          :class="{ on: isFieldSelected(f.prop) }"
-          @click="toggleOutputField(f.prop)"
-        >
-          <input type="checkbox" :checked="isFieldSelected(f.prop)" class="rc-tag-check" @click.stop="toggleOutputField(f.prop)" />
-          <span class="rc-tag-text">{{ f.prop }} {{ f.desc ? `· ${f.desc}` : '' }}</span>
-        </span>
-      </div>
-      <div class="rc-help">勾选落库并保留在输出表中的字段列，未勾选字段落库时忽略；默认选中全部字段。</div>
-    </div>
+    <!-- 「输出字段选择」（outFields）2026-08-26 撤掉：这个勾选没有任何后端通路——不在 item/next
+         步骤写入 payload 里（stepToStepModifyPayload 无此 key），只写进本地草稿和配置包定义，
+         而配置包端点全是 mock（config-packages/* 只有 impl 没有 live）。也就是说勾与不勾对真实
+         抓取零影响，展示出来只会让人以为配置生效了。等写入通路真的打通再恢复。
+         注意：规则节点那套入参/出参字段绑定不受影响，它走 orchestrationSaveMeta →
+         /vrule/api/custom-compose/save（live 且在生产写白名单里），是真生效的。 -->
     <!-- 结构化配置（入库配置）+ 正文规则（0804 S3-1）：不透明文本，具体 schema 由执行端解释 -->
     <div class="rc-field"><label>结构化配置（入库配置）</label>
       <textarea class="rc-input" rows="2" placeholder="按输出表字段配置入库规则" :value="structuredConfigValue" @input="onStructuredConfig"></textarea>

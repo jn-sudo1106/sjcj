@@ -578,6 +578,26 @@ describe('节点输入表 + 任务队列（优化 0701 问题五）', () => {
     expect(seed.configs.st2.disabled).toBe(true)
   })
 
+  it('配置绑定的参数回填到节点参数配置；节点已有绑定时不覆盖（2026-08-26 拍板：新平台优先）', () => {
+    const source = { sourceId: 's-param', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+
+    // 迁移值补空位：节点原本没有绑定，用配置上的 baidu-密码=aaaa 填上
+    const seed = buildSourceSeed(source, [
+      {
+        stepId: 'st1', sourceId: 's-param', name: '列表抓取', inputTable: '-', outputTable: 'T1', enabled: true,
+        paramBindings: [{ paramId: '730008', value: 'aaaa' }],
+      },
+    ] as never)
+    expect(seed.configs.st1.collectCfg?.urlParamRefs).toEqual(['730008'])
+    expect(seed.configs.st1.collectCfg?.urlParamValues).toEqual({ '730008': 'aaaa' })
+
+    // 没有绑定的配置不产生任何参数字段
+    const bare = buildSourceSeed(source, [
+      { stepId: 'st1', sourceId: 's-param', name: '列表抓取', inputTable: '-', outputTable: 'T1', enabled: true },
+    ] as never)
+    expect(bare.configs.st1.collectCfg?.urlParamRefs ?? []).toEqual([])
+  })
+
   it('步骤带真实 topic（configDetail 回填）时覆盖节点模板默认队列；没有 topic 时保留模板默认值', () => {
     const source = { sourceId: 's-topic', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
     const seed = buildSourceSeed(source, [

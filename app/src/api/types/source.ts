@@ -91,10 +91,10 @@ export interface Source {
   /** @deprecated 旧平台已存在登录模板的 ID；对应 snatchSave.authConfig。 */
   authConfig?: string
   createdAt?: string // 创建日期
-  configMode?: 'new' | 'existing' // 选用配置：新建 / 使用已有
-  configName?: string // 新建配置名称（configMode='new' 时）
-  configTopic?: string // 新建配置 Topic（队列 fallback 提示用）
-  configStrategy?: string // 新建配置运行策略：增量/全量/按需触发
+  configMode?: 'new' | 'existing' // 选用配置：新建 / 使用已有。0824 起只读历史，新流程不得新写。
+  configName?: string // 新建配置名称（configMode='new' 时）。0824 起只读历史。
+  configTopic?: string // 新建配置 Topic（队列 fallback 提示用）。0824 起只读历史。
+  configStrategy?: string // 新建配置运行策略：增量/全量/按需触发。0824 起只读历史。
   /** @deprecated 历史调度字段；读取流程时迁入首节点 TaskConfig，不再新写入。 */
   scheduleType?: string
   scheduleTime?: string
@@ -285,6 +285,20 @@ export interface Step {
    *  也没见到 nextConfigPaged 原始 type/nodeType 字段标出登录语义；节点模板路由不能只靠
    *  步骤名正则，这个字段才是可靠信号，查不到时才回退到名字正则。 */
   isLoginConfig?: boolean
+  /** 本步骤 configId 对应配置的旧 `isMulti` 原值，随 topic 一起由 sourceApi.sourceSteps 回填。
+   *  旧平台是三态（旧前端 column.config.js:642 权威定义）：
+   *    1 = 列表类[按去重字段去重]、0 = 详情类[按父ID去重]、2 = 更新父表[按父ID更新父表]。
+   *  新平台的 CollectConfig.isDetail 只是布尔，压不下第三态——2026-08-26 生产实测 200 条配置
+   *  分布为 isMulti=1:197 / isMulti=2:3（本环境无 0），若只留布尔，那 3 条"更新父表"回写时会
+   *  被压成"列表类"，去重语义发生变化。故原样迁移这个数值，暂不展示，等新平台确定怎么表达
+   *  第三态再接 UI；期间任何写回都应以这个原值为准，不要拿 isDetail 反推。 */
+  multiMode?: number
+  /** 本步骤 configId 对应配置绑定的参数（旧「使用参数」弹窗那张表），随 topic 一起由
+   *  sourceApi.sourceSteps 从 config/configDetail 的 params 回填。2026-08-26 生产实测：
+   *  在旧平台给配置 1400774 绑上「baidu-密码=aaaa」后，configDetail.params 与 config/configParams
+   *  两个接口都能拿到，但此前新平台两边都没读，画布参数配置恒显示「暂无参数配置」——
+   *  用户在旧平台配好的绑定迁过来会静默消失。注意 configDetail.paramCnt 恒为 0，不可用来判空。 */
+  paramBindings?: { paramId: string; value?: string }[]
   enabled: boolean
 }
 

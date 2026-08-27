@@ -68,16 +68,20 @@ export interface FieldDef {
 export interface FieldOption {
   prop: string
   desc: string
+  /** 物理列名（K1/K2/...）。条件/表达式等要拼真实语法的地方须用这个，prop 只是选字段用的业务标识
+   *  （itemCode），两者不是同一套命名空间——2026-08-26 实测：真实 cond 用 "K6==nil" 这种物理列名，
+   *  不是 itemCode；同一坑 DataGrid.vue/ResultView.vue/SiteDataView.vue 已经踩过一次。 */
+  columnName?: string
 }
 
 type FieldOptionTable = {
   tableId: string
-  fields: FieldOption[]
+  fields: { prop: string; desc: string; columnName?: string }[]
 }
 
 export function fieldOptionsFromTableOrOutput(tableId: string, tables: FieldOptionTable[], fallbackOutput: FieldDef[] = []): FieldOption[] {
   const table = tables.find((t) => t.tableId === tableId)
-  if (table) return table.fields.map((f) => ({ prop: f.prop, desc: f.desc }))
+  if (table) return table.fields.map((f) => ({ prop: f.prop, desc: f.desc, columnName: f.columnName }))
   return fallbackOutput.map((f) => ({ prop: f.name, desc: f.desc || f.type }))
 }
 
@@ -88,6 +92,9 @@ export interface NodeConfig {
   planned: boolean
   collect?: boolean
   kind?: NodeKind
+  /** 本节点引用的配置 ID（迁移数据来自 Step.configId）。0824-00 §1.1 的新模型里 FlowNode N:1 Config，
+   *  节点必须且只能引用一个配置——这个字段就是那个引用。参数绑定/解绑要按它调 config/configParam* 接口。 */
+  configId?: string
   disabled?: boolean
   base: [string, string][]
   fields: [string, string][]
@@ -141,7 +148,10 @@ export interface LibItem { template: string; code: string; badge?: string; name:
 export interface LibGroup { title: string; items: LibItem[] }
 
 /** 条件操作符（0701 问题十·方案B「节点进入条件」） */
-export type ConditionOp = 'contains' | 'eq' | 'ne' | 'gt' | 'lt' | 'notEmpty'
+// isEmpty/notContains 是 2026-08-26 按真实 cond 语法补的：`K17==nil`（为空）和
+// `!string.contains(K2,'weixin.qq')`（不包含）都是生产在用的写法，此前没有对应的操作符，
+// 迁移数据解析回字段模式时表达不了。语法细节见 utils/flow/conditionExpr.ts。
+export type ConditionOp = 'contains' | 'notContains' | 'eq' | 'ne' | 'gt' | 'lt' | 'isEmpty' | 'notEmpty'
 
 /** 结构化进入条件：语义"本节点只处理满足条件的行"，1:1 对应 Step.condition（函数表达式）契约 */
 export interface EntryCondition {
@@ -258,6 +268,10 @@ export interface CollectConfig {
   entryCondition?: ConditionGroup
   inputParams: string[]
   isDetail: boolean
+  /** 旧 `isMulti` 三态原值（1=列表类 / 0=详情类 / 2=更新父表），从迁移数据带过来只存不展示。
+   *  isDetail 只能表达 0 与"非 0"，压不下第三态，所以两个字段并存：展示继续走 isDetail，
+   *  写回旧平台时应以 multiMode 为准。详见 api/types/source.ts 的 Step.multiMode 注释。 */
+  multiMode?: number
   /** 采集节点类型（0711 R7/R8）：缺省时用 inferCollectorKind() 推导，不强制迁移旧数据 */
   collectorKind?: CollectorKind
   /** URL 参数绑定的参数 id 列表（0711 R9：源 URL 支持 $PARAM$_id 占位符）；与旧的 inputParams 是两个不同概念，互不覆盖。
@@ -384,12 +398,19 @@ export function nodeEntryCondition(cfg: NodeConfig): ConditionGroup | undefined 
 /** 条件操作符文案（0701 问题十·方案B；0707 优化·Phase6 起仅给分支条件用） */
 export const CONDITION_OP_OPTIONS: { value: ConditionOp; label: string }[] = [
   { value: 'contains', label: '包含' },
+  { value: 'notContains', label: '不包含' },
   { value: 'eq', label: '等于' },
   { value: 'ne', label: '不等于' },
   { value: 'gt', label: '大于' },
   { value: 'lt', label: '小于' },
+  { value: 'isEmpty', label: '为空' },
   { value: 'notEmpty', label: '非空' },
 ]
+
+/** 不需要填值的操作符（为空/非空）：UI 隐藏值输入框，生成表达式时也不带值 */
+export function conditionOpNeedsValue(op: ConditionOp): boolean {
+  return op !== 'isEmpty' && op !== 'notEmpty'
+}
 
 /** 单条件展示文案（0707 优化·Phase6 重构为内部 helper）：「标题 包含 "证券"」；fieldDesc 传字段中文名，缺省退回字段 prop。
  *  仅 conditionGroupLabel 内部使用；外部请走 conditionGroupLabel。 */
@@ -397,7 +418,7 @@ function entryConditionLabel(cond: EntryCondition | undefined, fieldDesc?: strin
   if (!cond || !cond.field) return ''
   const fieldLabel = fieldDesc || cond.field
   const opLabel = CONDITION_OP_OPTIONS.find((o) => o.value === cond.op)?.label ?? cond.op
-  return cond.op === 'notEmpty' ? `${fieldLabel} 非空` : `${fieldLabel} ${opLabel} "${cond.value}"`
+  return conditionOpNeedsValue(cond.op) ? `${fieldLabel} ${opLabel} "${cond.value}"` : `${fieldLabel} ${opLabel}`
 }
 
 /** 条件组展示文案（0706 优化·主题二）：多条件按 AND/OR 拼接，如「标题 包含 "证券" 且 金额 大于 "100"」。 */
