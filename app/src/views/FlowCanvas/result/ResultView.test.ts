@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ResultView from './ResultView.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
+import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import { dataApi, isProductionBackend, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
@@ -261,7 +262,9 @@ function mountResultView() {
       // teleport: false——「发后续 ▾」的展开面板真实 Teleport 到 document.body 了
       // （脱离 DataGrid 的 .dg-head 溢出裁剪盒子，见 ResultView.vue 里的说明），VTU
       // 默认会把 <Teleport> 整个 stub 掉、内容根本不渲染，测不到真的点没点对。
-      stubs: { ...STUBS, teleport: false },
+      // SnatchLauncher 需真实渲染：onSendFetch 通过它的 launch 走 loadParams→sendSnatchWithParam，
+      // 其孙级 SourceParamModal 在 shallowMount 下仍被桩（本测试只覆盖无参数的直发路径）。
+      stubs: { ...STUBS, teleport: false, SnatchLauncher },
     },
   })
 }
@@ -612,7 +615,8 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
     vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
-    const sendSnatch = vi.spyOn(sourceApi, 'sendSnatch').mockResolvedValue({ ok: true, message: '已发起抓取' })
+    vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({})
+    const sendSnatch = vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: '已发起抓取' })
 
     const wrapper = mountResultView()
     await flushPromises()
@@ -627,7 +631,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     await btn.trigger('click')
     await flushPromises()
 
-    expect(sendSnatch).toHaveBeenCalledWith([current.sourceId])
+    expect(sendSnatch).toHaveBeenCalledWith(expect.objectContaining({ ids: [current.sourceId] }))
     expect(ElMessage.success).toHaveBeenCalledWith('已发起抓取')
   })
 
@@ -1103,7 +1107,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
     vi.mocked(ElMessageBox.confirm).mockRejectedValue('cancel')
-    const sendSnatch = vi.spyOn(sourceApi, 'sendSnatch')
+    const sendSnatch = vi.spyOn(sourceApi, 'sendSnatchWithParam')
 
     const wrapper = mountResultView()
     await flushPromises()

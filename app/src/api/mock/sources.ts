@@ -1,4 +1,4 @@
-import type { Paged, Source, SourceCategory, SourceOption, Step, Ack, CredentialRef, SourceLog, TaskInst, NodeRunStat } from '../types'
+import type { Paged, Source, SourceCategory, SourceOption, Step, Ack, CredentialRef, SourceLog, TaskInst, NodeRunStat, SourceLoadParamsResult } from '../types'
 
 // 样例源数据 — 取自源列表实测记录的字段结构，扩展为多分类 / 多状态以支撑列表、筛选、分类树。
 // siteId（0707 优化·Phase2）：按分类归拢进 mock/sites.ts 的演示网站，供网站—源模型联调；导出供 sites.ts 聚合读取。
@@ -364,6 +364,17 @@ export function mockBatchImport(params?: Record<string, unknown>): Ack {
 // 写类 / 高危端点：首期 mock 仅回执，不落库；UI 走二次确认占位。
 export function mockAck(): Ack {
   return { ok: true, demo: true, message: '演示环境：操作已记录，未实际执行写入' }
+}
+
+// 旧平台 /v1/config/loadParams：返回选中源配置下挂的可选参数定义。
+// 演示环境无真实配置，返回空对象 {} —— 对应前端「无参数，直接发抓取」分支。
+export function mockLoadParams(_params?: Record<string, unknown>): SourceLoadParamsResult {
+  return {}
+}
+
+// 旧平台 /v1/source/sendSnatchWithParam：带参发抓取，回执形状与 sendSnatch 一致。
+export function mockSendSnatchWithParam(_params?: Record<string, unknown>): Ack {
+  return mockAck()
 }
 
 // 新建采集源闸门（0706 优化·Phase3）：真落库到 SOURCES（本地演示持久化），含源 ID 查重。

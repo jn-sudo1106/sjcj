@@ -37,7 +37,8 @@ function mockApis() {
     source: { ...source, sourceId: 'source-new', name: '复制源' }, flowId: 'flow-new', tableIdMap: {},
   })
   vi.spyOn(sourceApi, 'sourceUpdate').mockResolvedValue({ ok: true })
-  vi.spyOn(sourceApi, 'sendSnatch').mockResolvedValue({ ok: true })
+  vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({})
+  vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: 'ok' })
   vi.spyOn(sourceApi, 'changeSite').mockResolvedValue({ ok: true, message: '已关联' })
   vi.spyOn(paramApi, 'paramPaged').mockResolvedValue({ total: 2, list: [param913, param912] })
   vi.spyOn(paramApi, 'paramDetail').mockImplementation(async (id) => ({ 913: param913, 912: param912 }[id] ?? null))
@@ -147,7 +148,8 @@ describe('SiteSourceSwitcher', () => {
     expect(wrapper.text()).toContain('重命名')
     expect(wrapper.text()).toContain('发起抓取')
     await wrapper.get('[data-testid="source-menu-launch"]').trigger('click')
-    expect(sourceApi.sendSnatch).toHaveBeenCalledWith([source.sourceId])
+    await flushPromises()
+    expect(sourceApi.sendSnatchWithParam).toHaveBeenCalledWith(expect.objectContaining({ ids: [source.sourceId] }))
   })
 
   it('源行只负责进入详情，发起抓取收进右键菜单', async () => {

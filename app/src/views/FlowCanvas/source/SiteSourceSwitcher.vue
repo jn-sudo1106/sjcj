@@ -3,6 +3,8 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { siteApi, sourceApi, type Site, type Source } from '@/api'
+import SourceParamModal from './SourceParamModal.vue'
+import { hasLoadParams } from './paramNormalize'
 import type { ParamGroupRef } from '@/utils/flow/urlParams'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
 import { withoutComposition } from '@/utils/enterKey'
@@ -136,11 +138,13 @@ function closeRowMenu() {
   rowMenu.show = false
   rowMenu.source = null
 }
+
+const paramModalRef = ref<InstanceType<typeof SourceParamModal>>()
 async function launchFromMenu() {
   const s = rowMenu.source
   if (!s || s.disabled) return
   closeRowMenu()
-  await launchSource(s)
+  await sendSnatchForSource(s)
 }
 
 // ---- ＋添加源（0812 会议纠偏：删除"绑定已有源/仅展示未关联"模式，只保留新建；
@@ -307,14 +311,50 @@ async function submitAdd() {
 function pickSource(s: Source) {
   emit('pick', s)
 }
-async function launchSource(s: Source) {
-  if (s.disabled) return
+// —— 发抓取（从旧平台 SourceList 原样迁移）——
+// 流程：loadParams → 有参数则弹参数框由用户确认后带参发送；无参数则直接带参发送。
+async function sendSnatchForSource(s: Source, queue = '') {
   try {
-    const res = await sourceApi.sendSnatch([s.sourceId])
-    ElMessage.success(res?.message || `已发起「${s.name}」抓取`)
+    const configParam = await sourceApi.loadParams([s.sourceId])
+    if (hasLoadParams(configParam)) {
+      paramModalRef.value?.showParam(configParam, [s], false, queue)
+    } else {
+      const res = await sourceApi.sendSnatchWithParam({ ids: [s.sourceId], param: {}, all: 0, include: [], skip: 0, queue: queue || undefined })
+      ElMessage.success(res?.message || `已发起「${s.name}」抓取`)
+    }
   } catch (error) {
     ElMessage.error(`发起抓取失败：${error instanceof Error ? error.message : String(error)}`)
   }
+}
+
+// 发指定队列：先填队列名，再走完整发抓取流程。
+async function sendSnatchTestFromMenu() {
+  const s = rowMenu.source
+  if (!s) return
+  closeRowMenu()
+  try {
+    const { value } = await ElMessageBox.prompt('请输入发送队列名称', '发指定队列', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      inputPlaceholder: '队列名',
+    })
+    if (!value?.trim()) return
+    await sendSnatchForSource(s, value.trim())
+  } catch {
+    /* 用户取消 */
+  }
+}
+
+// 参数弹窗回调：组装好参数后带参发送。
+function sendWithParamsCallback(
+  ids: string[],
+  param: Record<string, string>,
+  all: number,
+  include: string[],
+  skip: number,
+  queue: string,
+) {
+  return sourceApi.sendSnatchWithParam({ ids, param, all, include, skip, queue: queue || undefined })
 }
 
 // ---- 批量导入（0812 会议反馈：关联已有源不该另起一个入口，跟"批量导入新源"都是"批量往这个
@@ -643,7 +683,10 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
       :disabled="rowMenu.source.disabled"
       @click="launchFromMenu"
     >发起抓取</button>
+    <button type="button" data-testid="source-menu-snatch-queue" @click="sendSnatchTestFromMenu">发指定队列</button>
   </div>
+
+  <SourceParamModal ref="paramModalRef" :callback="sendWithParamsCallback" @refresh="load" />
 
   <div v-if="addDlg.show" class="ssw-add-backdrop" @click.self="closeAdd">
     <div class="ssw-add-card" :class="{ wide: addDlg.kind === 'param' }" @click.stop="paramEditorRef?.closePicker()">

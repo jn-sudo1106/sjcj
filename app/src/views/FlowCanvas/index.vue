@@ -16,6 +16,7 @@ import CompareSplit from './result/CompareSplit.vue'
 import TaskView from './result/TaskView.vue'
 import FileView from './result/FileView.vue'
 import SiteSourceSwitcher from './source/SiteSourceSwitcher.vue'
+import SnatchLauncher from './source/SnatchLauncher.vue'
 import { nodeInspectorTabs } from './inspector/nodeInspectorTabs'
 import SiteDetailView from './result/SiteDetailView.vue'
 import CategoryTreePicker, { type CategorySelection } from './source/CategoryTreePicker.vue'
@@ -342,6 +343,8 @@ function cancelLoginConfigSelection() {
   resolveLoginConfigSelection = null
 }
 
+const snatchLauncher = ref<InstanceType<typeof SnatchLauncher>>()
+
 async function onStartCapture() {
   const s = flow.sourceCtx
   if (!s) return
@@ -356,22 +359,30 @@ async function onStartCapture() {
   }
   const loginSelection = await chooseLoginConfigForStart()
   if (loginSelection === undefined) return
+  // 使用「当前节点」的配置发抓取：选中节点引用的 configId 决定参数范围，未选中节点则按整源。
+  const node = flow.selectedNode
+  const configId = node?.configId
   capturing.value = true
   try {
-    // P0 执行器契约确认前，登录配置选择只作用于当前 mock 运行态，不透传给旧 sendSnatch。
-    const res = await sourceApi.sendSnatch([s.sourceId])
-    if (!res?.ok) {
-      ElMessage.warning(res?.message || '发起抓取失败，请重试')
-      return
-    }
-    const runId = runtime.startCapture(flow.serialize({ includeLoginPasswords: true }), loginSelection
-      ? { loginNodeId: loginSelection.nodeId, loginConfigId: loginSelection.configId }
-      : undefined)
-    if (!runId) {
-      ElMessage.warning('当前画布没有可发起抓取的节点（已停止 / 规划中 / 缺 URL 或输出表的采集节点会被跳过）')
-      return
-    }
-    ElMessage.success(`已发起抓取 ${runId}，画布节点状态流转中 → 运行记录 / 数据查看`)
+    await snatchLauncher.value?.launch(s.sourceId, {
+      configId,
+      queue: undefined,
+      onSuccess: () => {
+        const runId = runtime.startCapture(
+          flow.serialize({ includeLoginPasswords: true }),
+          loginSelection
+            ? { loginNodeId: loginSelection.nodeId, loginConfigId: loginSelection.configId }
+            : undefined,
+        )
+        if (!runId) {
+          ElMessage.warning('当前画布没有可发起抓取的节点（已停止 / 规划中 / 缺 URL 或输出表的采集节点会被跳过）')
+          return
+        }
+        ElMessage.success(`已发起抓取 ${runId}，画布节点状态流转中 → 运行记录 / 数据查看`)
+      },
+    })
+  } catch {
+    // launch 内部已自行提示，这里仅兜底
   } finally {
     capturing.value = false
   }
@@ -539,6 +550,7 @@ onUnmounted(() => {
     @confirm="confirmLoginConfigSelection"
     @cancel="cancelLoginConfigSelection"
   />
+  <SnatchLauncher ref="snatchLauncher" />
 </template>
 
 <style scoped>

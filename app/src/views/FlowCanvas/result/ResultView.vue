@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { dataApi, isMockMode, isProductionBackend, sourceApi, parseNextStepReceipt, type DataTableMeta, type DataRow, type EntryDetail } from '@/api'
+import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, type DataTableMeta, type DataRow, type EntryDetail } from '@/api'
 import {
   buildHorizontalLayout, nodeOutputTable, nodeEntryCondition, conditionGroupLabel, conditionGroupIsSet,
   isDecision, isParallel, isFirstRunnableNode, hasAmbiguousInput, type NodeConfig,
@@ -17,6 +17,7 @@ import { extFromName } from '@/utils/ossFile'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import { readRailOpen, writeRailOpen } from './railPref'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
+import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 
 // 数据视图只属于具体源流程（0812 计划 M2-4：网站"全部源"态改用独立的 SiteDataView.vue，
 // 不再靠 siteWide 布尔开关把两种数据流塞进同一个组件——那正是 M1-4 删掉的"代表源"问题的成因）。
@@ -37,6 +38,7 @@ const processLayout = computed(() =>
 )
 const allNodes = computed(() => processLayout.value.nodes)
 const selectedNodeId = ref<string>('')
+const snatchLauncher = ref<InstanceType<typeof SnatchLauncher>>()
 const scope = ref<'output' | 'input'>('output')
 const page = ref(1)
 const filters = reactive({ dataId: '', parentId: '', state: '', sql: '' })
@@ -173,7 +175,16 @@ const selectedRowIds = ref<string[]>([])
 
 async function onSendFetch() {
   if (execMode.value !== 'fetch' || !sourceId.value) return
-  await confirmDanger('发起抓取', `将对源「${source.value?.name || sourceId.value}」发起抓取，是否继续？`, () => sourceApi.sendSnatch([sourceId.value]))
+  await confirmDanger(
+    '发起抓取',
+    `将对源「${source.value?.name || sourceId.value}」发起抓取，是否继续？`,
+    () =>
+      snatchLauncher.value?.launch(sourceId.value, {
+        configId: selectedCfg.value?.configId,
+        onSuccess: () => ElMessage.success('已发起抓取'),
+      }),
+    () => {},
+  )
 }
 
 // M3-0J：真实回执里"本次发送:N 条"是提交条数，不是实际进入条数——被目标节点进入条件
@@ -999,6 +1010,7 @@ function onCellFile(path: string) {
       :parent-id="taskInst.parentId"
       :can-write="false"
     />
+    <SnatchLauncher ref="snatchLauncher" />
   </main>
 
     <el-dialog v-model="filePreview.visible" :title="filePreview.name || '文件预览'" width="820px" top="6vh" append-to-body>

@@ -6,7 +6,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
  *  `onSuccess` 可选：默认行为是把 `res.message` 原样弹成功 toast，对大多数危险操作（删除、启停等）
  *  这就是全部结果。但个别接口的回执需要按内容判断成功/部分成功/失败（例如 `nextStep`，见
  *  `parseNextStepReceipt` 与 M3-0J），此时调用方传入 `onSuccess` 自行决定弹什么、弹哪种 toast。 */
-export async function confirmDanger<T extends { message?: string }>(
+export async function confirmDanger<T extends { message?: string } | undefined>(
   title: string,
   body: string,
   run: () => Promise<T>,

@@ -482,3 +482,34 @@ export interface SourceTaskQuery extends PageQuery {
   nodeId?: string
   state?: RunState
 }
+
+/** 旧平台 /v1/config/loadParams 返回：每个配置下挂的一组抓取参数定义。 */
+export interface SourceParamDef {
+  paramId: string
+  paramName: string
+  /** 后端给的缺省值（单值字符串，可能为空串） */
+  curValue?: string
+  /** 可选值全集 */
+  allValues?: string[]
+  // ---- 以下字段仅前端参数弹窗内部使用，不进请求 ----
+  /** 是否勾选该参数（弹窗 UI 态） */
+  check?: boolean
+  /** el-select multiple/tags 当前值；curValue 空则 []，否则 [curValue] */
+  curValues?: string[]
+  /** 下拉展示用的截断可选值（前 100） */
+  showValues?: string[]
+}
+
+/** loadParams 返回结构：{ [configId]: SourceParamDef[] } */
+export type SourceLoadParamsResult = Record<string, SourceParamDef[]>
+
+/** 带参发抓取请求体（对应旧 /v1/source/sendSnatchWithParam） */
+export interface SendSnatchWithParamPayload {
+  ids: string[]
+  /** 拼装好的参数：{ "configId_paramId": "v1;v2" } */
+  param: Record<string, string>
+  all: number
+  include: string[]
+  skip: number
+  queue?: string
+}

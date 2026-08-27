@@ -16,6 +16,8 @@ export interface RequestOptions {
   timeoutMs?: number
   httpParams?: Record<string, unknown>
   httpEndpoint?: string
+  /** 额外的 URL query 参数；用于 POST 也需要 query 的场景（如旧 /v1 端点把 ids/all/skip/include/queue 放 query、body 仅放 param）。 */
+  query?: Record<string, unknown>
 }
 
 const MODE: AdapterMode = (import.meta.env.VITE_API_MODE as AdapterMode) || 'mock'
@@ -85,6 +87,7 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   // 此前只改内存、刷新就回来，等于界面骗人；旧平台同一个按钮本来就是即时写库的。
   'config/configParamAdd',
   'config/configParamDel',
+  'source/sendSnatchWithParam',
 ])
 
 function isProductionWriteAllowed(httpEndpoint: string): boolean {
@@ -213,12 +216,13 @@ export async function request<T>(
     // 规则编排 Sprint 4 直连旧 vrule 网关时用这个口径；采集中心同域端点仍走相对 path。
     const resolvedPath = httpEndpoint.startsWith('/') ? httpEndpoint : BASE_URL + httpEndpoint
     const url = paramsIn === 'query' ? appendQuery(resolvedPath, httpParams) : resolvedPath
+    const requestUrl = options.query ? appendQuery(url, options.query) : url
     const controller = new AbortController()
     const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs ?? 20_000)
     if (paramsIn === 'body') headers['Content-Type'] = 'application/json'
     let res: Response
     try {
-      res = await fetch(url, {
+      res = await fetch(requestUrl, {
         method,
         credentials: 'include',
         headers,

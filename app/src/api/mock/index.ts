@@ -19,6 +19,8 @@ import {
   mockChangeSourceEnable,
   mockChangeToSuccess,
   mockBatchImport,
+  mockLoadParams,
+  mockSendSnatchWithParam,
 } from './sources'
 import {
   mockRuleGroups,
@@ -84,6 +86,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'source/changeSite': mockChangeSite,
   'source/nodeRunStats': mockSourceNodeRuns,
   'source/sendSnatch': mockAck,
+  'source/sendSnatchWithParam': mockSendSnatchWithParam,
   'source/deleteSource': mockAck,
   // 采集资产 · 源（M5 补充）
   'source/logPaged': mockSourceLogs,
@@ -112,6 +115,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'config/configParams': mockConfigParams,
   'config/configParamAdd': mockAck,
   'config/configParamDel': mockAck,
+  'config/loadParams': mockLoadParams,
   'config/configActionPaged': mockConfigActionLogs,
   'config/clear': mockAck,
 

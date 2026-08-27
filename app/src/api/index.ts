@@ -1,7 +1,7 @@
 import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError, isMockMode } from './client'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readLoginUsername, readStoredToken, triggerSessionExpired } from './auth'
 import type {
-  Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery, Step,
+  Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery, Step, SourceLoadParamsResult, SendSnatchWithParamPayload,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestRequest, RuleOrchestrationTestResult,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
@@ -231,6 +231,26 @@ export const sourceApi = {
   /** 发起抓取；真实执行器的登录配置选择参数待 P0 契约确认，当前只沿用旧 sourceIds 请求。 */
   sendSnatch: (sourceIds: string[]) =>
     assetMockRequest<Ack>('source/sendSnatch', { sourceIds }),
+  /** 读取源配置的可选参数定义（旧 /v1/config/loadParams）：返回 { [configId]: 参数定义[] }，空对象表示无参数直接发。 */
+  loadParams: (sourceIds: string[]) =>
+    request<SourceLoadParamsResult>('config/loadParams', { ids: sourceIds }, {
+      method: 'GET',
+      httpEndpoint: 'config/loadParams',
+      httpParams: { ids: sourceIds.join(',') },
+    }),
+  /** 带参发抓取（旧 /v1/source/sendSnatchWithParam）：query 传 ids/all/skip/include/queue，body 仅传 param（{ "configId_paramId": "v1;v2" }）。 */
+  sendSnatchWithParam: (payload: SendSnatchWithParamPayload) =>
+    request<Ack>('source/sendSnatchWithParam', payload.param, {
+      method: 'POST',
+      httpEndpoint: 'source/sendSnatchWithParam',
+      query: {
+        ids: payload.ids.join(','),
+        all: payload.all,
+        skip: payload.skip,
+        ...(payload.include.length ? { include: payload.include.join(',') } : {}),
+        ...(payload.queue ? { queue: payload.queue } : {}),
+      },
+    }),
   /** 将已创建的真实源关联到网站；真实端点，调用方需在同一环境完成受控写入。 */
   bindSite: async (sourceId: string, siteId: string): Promise<Ack> => {
     const result = await request<unknown>('source/bindSite', { sourceId, siteId }, {
