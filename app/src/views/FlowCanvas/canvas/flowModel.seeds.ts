@@ -607,6 +607,17 @@ export const MULTI_MODE_OPTIONS: { value: number; label: string }[] = [
   { value: 2, label: '更新父表[根据父ID更新父表]' },
 ]
 
+// 「业务类型」（旧 config.templetCode，旧前端 column.config.js:620 权威定义）。
+// 值和文案都照抄旧平台——2026-08-28 踩过坑：此前这里是按会议口头举例编的
+// （news/login/分类/公告），其中「分类」「公告」后端根本不存在，选了就是写脏数据；
+// 而真实存在的 data（另类）不在列表里，导致旧平台设成「另类」的配置在新平台显示成空。
+// 注意 templetCode === 'login' 会被 configFromLegacy 判定为登录类配置，不是普通标签。
+export const BIZ_TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: 'data', label: '另类' },
+  { value: 'news', label: '新闻' },
+  { value: 'login', label: '登陆' },
+]
+
 export const CONFIG_STRATEGY_OPTIONS = ['增量', '全量', '按需触发']
 
 // 模板 → 默认抓取类型（新插入采集节点用）

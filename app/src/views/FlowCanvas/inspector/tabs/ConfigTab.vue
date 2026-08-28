@@ -7,7 +7,7 @@ import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
-  MULTI_MODE_OPTIONS, decisionOrParallelKind, collectorCapabilityOf, isRuleNode,
+  BIZ_TYPE_OPTIONS, MULTI_MODE_OPTIONS, decisionOrParallelKind, collectorCapabilityOf, isRuleNode,
   type CollectConfig, type CollectorSchedule, type LoginConfigRef, type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, ruleApi, type RuleOrchestrationItem } from '@/api'
@@ -233,14 +233,14 @@ function onAppPackageChange(e: Event) {
   if (appPackageRowIndex.value < 0) return
   flow.setBaseRow(id.value, appPackageRowIndex.value, (e.target as HTMLInputElement).value)
 }
-// 业务类型（0804 S3-1）：规则名称维度的分类，跟节点类型（网页抓取/APP 抓取/网页登录…）是两个独立概念，别混——
-// 会议原文举例"新闻/登录/分类"，先给这几个常见值，后续按实际使用再补
-const BIZ_TYPE_OPTIONS = [
-  { value: 'news', label: '新闻' },
-  { value: 'login', label: '登录' },
-  { value: 'category', label: '分类' },
-  { value: 'announcement', label: '公告' },
-]
+// 业务类型（旧 templetCode）：跟节点类型（网页抓取/APP 抓取/网页登录…）是两个独立概念，别混。
+// 选项来自 BIZ_TYPE_OPTIONS（照抄旧平台，见 flowModel.seeds）。
+// 后端若出现清单外的值，补一个临时项显示原值——不能让 select 匹配不到 option 就静默显示成空，
+// 那正是 2026-08-28「旧平台改成另类、新平台看不到」的表象。
+const unknownBizType = computed(() => {
+  const v = cc.value?.bizType
+  return v && !BIZ_TYPE_OPTIONS.some((opt) => opt.value === v) ? v : ''
+})
 // 「是否列表」（旧 config.isMulti）：只写 multiMode 这个三态原值，不去联动 webKind/isDetail——
 // 旧平台没有"网页类型"这个轴，写回时 legacyAdapters 也是以 multiMode 为准。
 const multiMode = computed(() => (cfg.value?.collectCfg?.multiMode ?? '') as number | '')
@@ -401,6 +401,7 @@ function onBizType(e: Event) {
         <select class="rc-select" :value="cc.bizType ?? ''" @change="onBizType">
           <option value="">请选择</option>
           <option v-for="opt in BIZ_TYPE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+          <option v-if="unknownBizType" :value="unknownBizType">{{ unknownBizType }}（旧平台清单外的值）</option>
         </select>
       </div>
       <!-- 参数源（0803 调整）：默认只读摘要，点「编辑」打开 EditParamSourceDialog 修改；
