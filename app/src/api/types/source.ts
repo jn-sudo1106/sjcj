@@ -289,6 +289,14 @@ export interface Step {
    *  节点配置 Tab 的「配置名称」是必填项（0824-06 §4：config-meta，新建首次保存必填），
    *  已有配置要显示后端真名——configDetail 在加载源时本来就逐个查过，这里只是把 name 一起带出来，不额外发请求。 */
   configName?: string
+  /** 以下四项与 configName/topic 同批，由 sourceApi.sourceSteps 从 config/configDetail 回填。
+   *  它们都是节点面板要展示、保存时又要原样回写的配置正文字段；不回填的话面板显示的是节点模板
+   *  默认值，而「保存配置」会拿这个默认值把后端真值覆盖掉（2026-08-28 实测：配置 1400968
+   *  templetCode='login' 会被写空，登录节点模板路由随之失效）。 */
+  bizType?: string
+  dedupType?: string
+  codeRule?: string
+  contentRule?: string
   /** 本步骤 configId 对应配置的旧 `isMulti` 原值，随 topic 一起由 sourceApi.sourceSteps 回填。
    *  旧平台是三态（旧前端 column.config.js:642 权威定义）：
    *    1 = 列表类[按去重字段去重]、0 = 详情类[按父ID去重]、2 = 更新父表[按父ID更新父表]。

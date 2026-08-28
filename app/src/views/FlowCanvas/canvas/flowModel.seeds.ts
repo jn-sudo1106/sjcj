@@ -769,6 +769,12 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
     // 网页类型已改为「节点类别」，走新平台自己的节点类型分类；旧平台与之对应的是抓取类型
     // （configType，如 90 网页抓取），不是 isMulti。这里只是把原值带在节点上不丢，供后续写回用。
     if (step.multiMode !== undefined) cfg.collectCfg.multiMode = step.multiMode
+    // 配置正文里前端要展示 + 保存时要回写的字段（随 topic 一起从 configDetail 回填）。
+    // 不写进节点的话，面板显示的是节点模板默认值，而保存会拿默认值覆盖后端真值。
+    if (step.bizType !== undefined) cfg.collectCfg.bizType = step.bizType
+    if (step.dedupType !== undefined) cfg.collectCfg.dedupMode = step.dedupType === 'ALL' ? 'table' : 'source'
+    if (step.codeRule !== undefined) cfg.collectCfg.structuredConfig = step.codeRule
+    if (step.contentRule !== undefined) cfg.collectCfg.contentRules = step.contentRule
     // 配置绑定的参数（旧「使用参数」表）回填到节点的参数配置。只在节点自己还没有绑定时才填：
     // 2026-08-26 拍板「后续听我们的，因为我们是新的平台」——新平台已有的绑定优先，迁移值只补空位，
     // 不覆盖用户在新平台做过的选择。取值沿用旧平台「参考值」的原样展示（不打码，与旧平台一致）。

@@ -128,7 +128,11 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
   const configIds = [...new Set(steps.map((s) => s.configId).filter((id): id is string => !!id))]
   if (!configIds.length) return steps
   const results = await Promise.allSettled(configIds.map((id) => configApi.configDetail(id)))
-  type StepConfigDetail = { topic?: string; configName?: string; isLoginConfig?: boolean; multiMode?: number; paramBindings?: Step['paramBindings'] }
+  type StepConfigDetail = {
+    topic?: string; configName?: string; isLoginConfig?: boolean; multiMode?: number
+    bizType?: string; dedupType?: string; codeRule?: string; contentRule?: string
+    paramBindings?: Step['paramBindings']
+  }
   const detailByConfigId = new Map<string, StepConfigDetail>()
   results.forEach((r, i) => {
     if (r.status !== 'fulfilled' || !r.value) return
@@ -138,6 +142,10 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
     detailByConfigId.set(configIds[i], {
       topic: r.value.topic || undefined,
       configName: r.value.name || undefined,
+      bizType: r.value.templateCode || undefined,
+      dedupType: r.value.dedupType ?? undefined,
+      codeRule: r.value.codeRule || undefined,
+      contentRule: r.value.contentRule || undefined,
       isLoginConfig: r.value.isLogin,
       multiMode: r.value.multiMode,
       ...(bindings.length ? { paramBindings: bindings } : {}),
@@ -151,6 +159,10 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
       ...step,
       ...(detail.topic ? { topic: detail.topic } : {}),
       ...(detail.configName ? { configName: detail.configName } : {}),
+      ...(detail.bizType ? { bizType: detail.bizType } : {}),
+      ...(detail.dedupType !== undefined ? { dedupType: detail.dedupType } : {}),
+      ...(detail.codeRule ? { codeRule: detail.codeRule } : {}),
+      ...(detail.contentRule ? { contentRule: detail.contentRule } : {}),
       ...(detail.isLoginConfig !== undefined ? { isLoginConfig: detail.isLoginConfig } : {}),
       ...(detail.multiMode !== undefined ? { multiMode: detail.multiMode } : {}),
       ...(detail.paramBindings ? { paramBindings: detail.paramBindings } : {}),

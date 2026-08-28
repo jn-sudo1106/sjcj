@@ -50,12 +50,12 @@ export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
 export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown> = {}): Record<string, unknown> {
   const cc = cfg.collectCfg
   const source = cc ?? cfg
-  return {
-    ...base,
+  // 只覆盖节点上确实有值的字段，其余保持 base 原值。
+  // 这一层是兜底：节点上某个配置字段没被回填时（历史遗漏或以后新增字段忘了接），
+  // 直接写进 payload 就会用空值把后端真值抹掉——2026-08-28 实测配置 1400968 的
+  // templetCode='login' 就是这么被清掉的。有值才覆盖，没值就别碰。
+  const edited: Record<string, unknown> = {
     configName: cfg.configName ?? '',
-    // configUrl 是配置自己的地址，跟源实际 URL 不是一回事（0824-02 §1.5：配置 81516 被 9 个源复用，
-    // 各源 sourceUrl 不同）。这里只带原值，绝不用节点上的源 URL 覆盖它。
-    configUrl: base.configUrl ?? '',
     entryTypeId: (cc?.outputTable ?? cfg.outputTable) || undefined,
     inEntryType: (cc?.inputTable ?? cfg.inputTable) || undefined,
     isMulti: cc?.multiMode,
@@ -65,4 +65,14 @@ export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown
     codeRule: source.structuredConfig || undefined,
     contentRule: source.contentRules || undefined,
   }
+  const payload: Record<string, unknown> = {
+    ...base,
+    // configUrl 是配置自己的地址，跟源实际 URL 不是一回事（0824-02 §1.5：配置 81516 被 9 个源复用，
+    // 各源 sourceUrl 不同）。这里只带原值，绝不用节点上的源 URL 覆盖它。
+    configUrl: base.configUrl ?? '',
+  }
+  Object.entries(edited).forEach(([key, value]) => {
+    if (value !== undefined) payload[key] = value
+  })
+  return payload
 }

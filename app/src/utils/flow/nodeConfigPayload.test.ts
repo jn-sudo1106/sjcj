@@ -84,3 +84,47 @@ describe('节点 ↔ 配置字段映射', () => {
     expect(buildConfigPayload(cfg).snatchDrepeat).toBe('')
   })
 })
+
+describe('buildConfigPayload 不覆盖节点上没有的字段（2026-08-28 回归）', () => {
+  // 实测：配置 1400968 的 templetCode='login' 曾被"保存配置"写空，登录节点模板路由随之失效。
+  // 根因是节点上从没回填过这些配置正文字段，payload 却无条件把它们写进去。
+  const base = {
+    configId: '1400968',
+    configName: 'baidu-登陆',
+    configUrl: 'https://passport.baidu.com/',
+    templetCode: 'login',
+    snatchDrepeat: 'ALL',
+    codeRule: '{"globals":["列ID"]}',
+    contentRule: '{"py_name":"zx_translate"}',
+    clearRule: '{"keep":1}',
+    snatchConf: '<Actions/>',
+    inEntryType: 900,
+  }
+
+  it('节点没回填业务类型 / 入库配置 / 正文规则时，保持后端原值不动', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.configName = 'baidu-登陆'
+    // 刻意不设 bizType / structuredConfig / contentRules，模拟"没回填"
+    const payload = buildConfigPayload(cfg, base)
+
+    expect(payload.templetCode).toBe('login')
+    expect(payload.codeRule).toBe('{"globals":["列ID"]}')
+    expect(payload.contentRule).toBe('{"py_name":"zx_translate"}')
+    // 未建模的 BLOB 一样原样带走
+    expect(payload.clearRule).toBe('{"keep":1}')
+    expect(payload.snatchConf).toBe('<Actions/>')
+  })
+
+  it('节点上有值时才覆盖', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.configName = 'baidu-登陆'
+    cfg.collectCfg!.bizType = 'news'
+    cfg.collectCfg!.structuredConfig = '{"changed":1}'
+    const payload = buildConfigPayload(cfg, base)
+
+    expect(payload.templetCode).toBe('news')
+    expect(payload.codeRule).toBe('{"changed":1}')
+    // 没改的仍是原值
+    expect(payload.contentRule).toBe('{"py_name":"zx_translate"}')
+  })
+})
