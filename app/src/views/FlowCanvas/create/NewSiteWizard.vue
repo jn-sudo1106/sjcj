@@ -1,0 +1,161 @@
+<script setup lang="ts">
+// 新建采集闸门原型：单页填写网站 + 首批源，创建后进入画布配流程。
+// 不做分步向导，也不在这一页选择流程、模板或节点配置。
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { siteApi, type Site, type Source } from '@/api'
+import { useUiStore } from '@/stores/ui'
+import { firstSourceId } from '@/utils/url/workspaceRoute'
+import CategoryTreePicker, { type CategorySelection } from '@/views/FlowCanvas/source/CategoryTreePicker.vue'
+
+const router = useRouter()
+const ui = useUiStore()
+
+function suggestId(prefix: string): string {
+  return `${prefix}${Math.floor(100000 + Math.random() * 900000)}`
+}
+
+function blankSiteDraft(): Site {
+  return {
+    siteId: suggestId('site-'),
+    name: '',
+    category: '',
+    categoryPath: '',
+    owner: 'admin',
+    sourceCount: 0,
+    errorCount: 0,
+    tags: [],
+  }
+}
+
+interface GateChildRow { sourceId: string; name: string; url: string }
+function blankRow(): GateChildRow {
+  return { sourceId: suggestId('src-'), name: '', url: '' }
+}
+
+const gateSite = ref(blankSiteDraft())
+const gateRows = ref<GateChildRow[]>([blankRow()])
+const firstSourceNameTouched = ref(false)
+const creating = ref(false)
+
+const gateCategory = computed<CategorySelection>({
+  get: () => ({ dirId: gateSite.value.dirId, category: gateSite.value.category, categoryPath: gateSite.value.categoryPath ?? '' }),
+  set: (v) => {
+    gateSite.value.dirId = v.dirId
+    gateSite.value.category = v.category
+    gateSite.value.categoryPath = v.categoryPath
+  },
+})
+
+watch(() => gateSite.value.name, (name) => {
+  if (!firstSourceNameTouched.value && gateRows.value[0]) gateRows.value[0].name = name
+}, { flush: 'sync' })
+
+function addGateRow() {
+  gateRows.value.push(blankRow())
+}
+
+function removeGateRow(i: number) {
+  if (gateRows.value.length > 1) gateRows.value.splice(i, 1)
+}
+
+function onCancelGate() {
+  void router.push('/collect')
+}
+
+async function onCreateAndEnter() {
+  if (creating.value) return
+  const site = gateSite.value
+  if (!site.name || !site.category) {
+    ElMessage.warning('请完整填写网站名称 / 分类')
+    return
+  }
+  const rows = gateRows.value.filter((r) => r.name.trim())
+  if (!rows.length) {
+    ElMessage.warning('请至少填写一个源名称')
+    return
+  }
+  const sources: Source[] = rows.map((r) => ({
+    sourceId: r.sourceId,
+    name: r.name,
+    url: r.url,
+    configId: '',
+    mainTable: '',
+    owner: site.owner || 'admin',
+    state: 'C',
+    dirId: site.dirId,
+  }))
+  const siteForCreate: Site = { ...site, sourceCount: sources.length, errorCount: 0 }
+  creating.value = true
+  try {
+    const res = await siteApi.siteCreate(siteForCreate, sources)
+    if (!res?.ok) {
+      ElMessage.warning(res?.message || '创建失败，请重试')
+      return
+    }
+    const sourceId = res.sourceId || firstSourceId(sources)
+    ElMessage.success(`网站「${siteForCreate.name}」已创建（${sources.length} 个源），已进入首个源的流程视图`)
+    await router.replace({ path: '/canvas', query: { ...(res.siteId ? { siteId: res.siteId } : {}), sourceId, view: 'flow' } })
+  } catch (error) {
+    ElMessage.error(`创建失败：${(error as Error).message ?? '网络异常'}，请勿重复提交；如已返回网站 ID，请先回查网站后再继续`)
+  } finally {
+    creating.value = false
+  }
+}
+
+onMounted(() => {
+  ui.clearActions()
+})
+</script>
+
+<template>
+  <div class="rc-gate">
+    <div class="rc-gate-card">
+      <div class="rc-gate-title">新建采集 · 网站基础信息</div>
+      <div class="rc-gate-hint">网站用于归属与管理；源（语言 / 变体）才是真正的采集实体。这一页填完即可创建，流程配置进画布后再做。</div>
+      <div class="rc-field">
+        <label>网站名称</label>
+        <input class="rc-input" v-model="gateSite.name" placeholder="必填" />
+      </div>
+      <div class="rc-field">
+        <label>分类</label>
+        <CategoryTreePicker v-model="gateCategory" />
+      </div>
+
+      <div class="rc-gate-rows-title">源清单（至少一个，语言 / 变体，创建后可继续增删）</div>
+      <div v-for="(row, i) in gateRows" :key="row.sourceId" class="rc-gate-row">
+        <input
+          class="rc-input"
+          v-model="row.name"
+          placeholder="源名称，必填"
+          @input="i === 0 && (firstSourceNameTouched = true)"
+        />
+        <input class="rc-input" v-model="row.url" placeholder="源 URL，选填" />
+        <button class="rc-btn" type="button" :disabled="gateRows.length <= 1" @click="removeGateRow(i)">移除</button>
+      </div>
+      <button class="rc-btn" type="button" @click="addGateRow">＋ 添加源</button>
+
+      <div class="rc-gate-actions">
+        <button class="rc-btn" type="button" @click="onCancelGate">取消</button>
+        <button class="rc-btn primary" type="button" :disabled="creating" @click="onCreateAndEnter">
+          {{ creating ? '创建中…' : '创建并进入编排' }}
+        </button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.rc-gate { display: flex; justify-content: center; padding: 24px 16px 40px; }
+.rc-gate-card { width: min(640px, 100%); background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); padding: 20px 22px; }
+.rc-gate-title { font-size: 15px; font-weight: 800; color: var(--rc-text); margin-bottom: 6px; }
+.rc-gate-hint { font-size: 11px; color: var(--rc-muted); line-height: 1.6; margin-bottom: 14px; }
+.rc-gate-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--rc-border-soft); }
+.rc-gate-rows-title { font-size: 11px; font-weight: 700; color: var(--rc-muted); margin: 14px 0 8px; }
+.rc-gate-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-bottom: 8px; align-items: center; }
+.rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 10px; }
+.rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }
+.rc-input, .rc-select { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; }
+.rc-input:focus, .rc-select:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
+</style>

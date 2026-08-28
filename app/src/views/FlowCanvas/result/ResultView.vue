@@ -178,7 +178,7 @@ async function onSendFetch() {
   await confirmDanger(
     '发起抓取',
     `将对源「${source.value?.name || sourceId.value}」发起抓取，是否继续？`,
-    () =>
+    async () =>
       snatchLauncher.value?.launch(sourceId.value, {
         configId: selectedCfg.value?.configId,
         onSuccess: () => ElMessage.success('已发起抓取'),

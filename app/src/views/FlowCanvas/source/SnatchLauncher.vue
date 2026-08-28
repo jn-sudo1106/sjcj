@@ -18,8 +18,9 @@ async function sendWithParamsCallback(
   skip: number,
   queue: string,
 ) {
-  await sourceApi.sendSnatchWithParam({ ids, param, all: all as 0 | 1, include, skip, queue })
+  const res = await sourceApi.sendSnatchWithParam({ ids, param, all: all as 0 | 1, include, skip, queue })
   afterSend?.()
+  return res
 }
 
 interface LaunchOptions {
