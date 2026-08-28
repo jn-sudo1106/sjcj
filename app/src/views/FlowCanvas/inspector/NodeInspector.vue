@@ -18,6 +18,7 @@ import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
 import NodeAiChat from './NodeAiChat.vue'
 import SelectExistingConfigDialog from './SelectExistingConfigDialog.vue'
 import SaveSharedConfigDialog from './SaveSharedConfigDialog.vue'
+import SaveAsNewConfigDialog from './SaveAsNewConfigDialog.vue'
 import TaskTab from './tabs/TaskTab.vue'
 import TableTab from './tabs/TableTab.vue'
 import ParamsTab from './tabs/ParamsTab.vue'
@@ -123,14 +124,18 @@ async function doUpdateExistingConfig() {
   }
 }
 
-async function createConfigFromNode(node: NodeConfig, base: Record<string, unknown>) {
-  const res = await configApi.createConfig(buildConfigPayload(node, base))
+async function createConfigFromNode(node: NodeConfig, base: Record<string, unknown>, newName?: string) {
+  const payload = buildConfigPayload(node, base)
+  if (newName) payload.configName = newName
+  const res = await configApi.createConfig(payload)
   if (!res.ok) {
     ElMessage.error(res.message || '新建配置失败')
     return
   }
   if (!res.configId) {
-    ElMessage.warning('配置已创建，但按名回查不到新配置 ID，请刷新后确认（配置名重复时会出现这种情况）')
+    // 回查不到就**不绑定**：宁可让用户去刷新确认，也不能把节点绑回原配置——
+    // 2026-08-28 就是这么把"另存"变成了"改原件"（后端遇重名会自动加 _copy 后缀）。
+    ElMessage.warning('配置已创建，但按名回查不到新配置 ID，节点未改绑，请刷新后确认')
     return
   }
   const detail = await configApi.configDetail(res.configId)
@@ -138,16 +143,19 @@ async function createConfigFromNode(node: NodeConfig, base: Record<string, unkno
   ElMessage.success(`已新建配置 #${res.configId} 并绑定到本节点，记得保存流程`)
 }
 
-async function onSaveAsNewConfig() {
+// 另存为新配置：先要一个唯一的新名字（弹窗里查重），再创建。
+// 名字唯一是回查新 configId 的前提，见 SaveAsNewConfigDialog 顶部注释。
+const saveAsNewOpen = ref(false)
+function onSaveAsNewConfig() {
+  if (saving.value) return
+  saveAsNewOpen.value = true
+}
+async function doSaveAsNewConfig(newName: string) {
   const node = cfg.value
   if (!node || saving.value) return
-  if (!node.configName) {
-    ElMessage.warning('请先填写配置名称')
-    return
-  }
   saving.value = true
   try {
-    await createConfigFromNode(node, await baseRecordFor(configId.value))
+    await createConfigFromNode(node, await baseRecordFor(configId.value), newName)
   } catch (e) {
     reportWriteError('新建配置', e)
   } finally {
@@ -276,6 +284,12 @@ onMounted(async () => {
         :config-name="cfg?.configName"
         @confirm="doUpdateExistingConfig"
         @save-as-new="onSaveAsNewConfig"
+      />
+      <SaveAsNewConfigDialog
+        v-model:open="saveAsNewOpen"
+        :source-name="cfg?.configName"
+        :source-config-id="configId || undefined"
+        @confirm="doSaveAsNewConfig"
       />
       <SelectExistingConfigDialog
         v-model:open="selectConfigOpen"

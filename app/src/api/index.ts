@@ -6,7 +6,7 @@ import type {
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestRequest, RuleOrchestrationTestResult,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   TaskInstQuery, SiteTableOption, SiteTablesResult,
-  ConfigActionLog, ConfigParamBinding, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
+  Config, ConfigActionLog, ConfigParamBinding, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, SourceCloneRequest, SourceCloneResult,
   FlowTemplate, FlowTemplateSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
 } from './types'
@@ -1170,6 +1170,22 @@ export const monitorApi = {
     request<{ healthText: string; queueAlarms: number; cacheWindow: string; dangerOpen: number }>('monitor/stats'),
 }
 
+/**
+ * 按配置名精确查已有配置。抽成模块级函数是为了打断循环推断——
+ * 在 configApi 的成员里互相引用 configApi 会让 TS 推不出对象类型。
+ */
+async function configsByExactName(name: string): Promise<Config[]> {
+  const trimmed = name.trim()
+  if (!trimmed) return []
+  // 直接发请求而不是走 configApi.configPaged：在 configApi 成员里引用 configApi 会形成
+  // 循环推断，TS 推不出整个对象的类型（表现是后面新加的成员"不存在于类型上"）。
+  const result = await request<Paged<unknown>>('config/configPaged', { name: trimmed, page: 1, size: 50 }, {
+    method: 'GET',
+    httpParams: { page: 1, limit: 50, name: trimmed },
+  })
+  return configPageFromLegacy(result).list.filter((item) => item.name === trimmed)
+}
+
 // 配置列表（M5 采集资产）
 export const configApi = {
   configPaged: async (p: PageQuery = {}) => {
@@ -1225,6 +1241,17 @@ export const configApi = {
     return result && typeof result === 'object' && !('ok' in result) ? (result as Record<string, unknown>) : null
   },
   /**
+   * 配置名是否已被占用（精确同名）。
+   * 「另存为新配置」必须靠名字回查新建出来的 configId（updateConfig 不回传 ID，见 createConfig），
+   * 所以名字必须唯一——2026-08-28 实测：拿重名去建，**后端会自动加 `_copy` 后缀**
+   * （建出 `test2_copy`），而回查按原名找只能找到旧那条，结果把节点绑回了原配置，
+   * 用户以为在改副本、其实在改原件。
+   */
+  configNameExists: async (name: string, excludeConfigId?: string): Promise<boolean> => {
+    const hits = await configsByExactName(name)
+    return hits.some((item) => item.configId !== excludeConfigId)
+  },
+  /**
    * 新建配置：updateConfig 不带 configId 即为新增（config_api.md §二）。
    * 但它的响应是 `{success, code, msg, data: null}`，**不回传新 configId**，
    * 只能按配置名回查——所以配置名必须唯一，重名时取 configId 最大的那条。
@@ -1235,11 +1262,8 @@ export const configApi = {
     const ack = await request<Ack>('config/modify/updateConfig', { config: body }, { method: 'POST', httpParams: body })
     if (ack && 'ok' in ack && !ack.ok) return { ok: false as const, message: ack.message }
     const name = String(payload.configName ?? '')
-    if (!name) return { ok: true as const, configId: undefined, message: ack?.message }
-    const page = await configApi.configPaged({ name, page: 1, size: 20 })
-    const hit = page.list
-      .filter((item) => item.name === name)
-      .sort((a, b) => Number(b.configId) - Number(a.configId))[0]
+    if (!name) return { ok: true as const, configId: undefined as string | undefined, message: ack?.message }
+    const hit = (await configsByExactName(name)).sort((a, b) => Number(b.configId) - Number(a.configId))[0]
     return { ok: true as const, configId: hit?.configId, message: ack?.message }
   },
   copyAll: (configId: string) => request<Ack>('config/copyAll', { configId }, { method: 'GET', httpParams: { id: configId } }),
