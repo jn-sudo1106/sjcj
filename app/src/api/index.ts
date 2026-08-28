@@ -6,7 +6,7 @@ import type {
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestRequest, RuleOrchestrationTestResult,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   TaskInstQuery, SiteTableOption, SiteTablesResult,
-  Config, ConfigActionLog, ConfigParamBinding, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
+  ConfigActionLog, ConfigParamBinding, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, SourceCloneRequest, SourceCloneResult,
   FlowTemplate, FlowTemplateSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
 } from './types'
@@ -16,7 +16,6 @@ import {
   configLogFromLegacy,
   configPageFromLegacy,
   configParamFromLegacy,
-  configToLegacy,
   dataRowFromLegacy,
   dataTableFromLegacy,
   entryDetailFromLegacy,
@@ -1183,8 +1182,15 @@ export const configApi = {
     const result = await request<unknown>('config/configDetail', { configId }, { method: 'GET' })
     return result && typeof result === 'object' && !('ok' in result) ? configFromLegacy(result) : null
   },
-  updateConfig: (config: Config) =>
-    request<Ack>('config/modify/updateConfig', { config }, { method: 'POST', httpParams: configToLegacy(config) }),
+  /**
+   * 更新配置。入参已经是**旧平台字段名的完整记录**（`buildConfigPayload` 在 configDetail 原始记录上改出来的），
+   * 直接原样 POST——**不要再过 configToLegacy**：那个函数是"模型 → 旧字段"的转换，读的是 `name`/`multiMode`/
+   * `templateCode` 这些模型键，对已经是旧字段名的 payload 全部读成 undefined，
+   * 结果只有键名恰好相同的几个字段（configId/topic/entryTypeId/codeRule/contentRule）侥幸活下来，
+   * 配置名称/是否列表/业务类型/去重/输入表 全部写空 —— 表现就是"点了保存但没更新"。
+   */
+  updateConfig: (payload: Record<string, unknown>) =>
+    request<Ack>('config/modify/updateConfig', { config: payload }, { method: 'POST', httpParams: payload }),
   /**
    * 「选择已有配置」的候选来源（旧平台 ConfigSelect.vue 同款）：按源查同资源配置，
    * list1 = 同域/local、list2 = 其它域。旧前端合并顺序是 [...list2, ...list1]，这里照搬，
