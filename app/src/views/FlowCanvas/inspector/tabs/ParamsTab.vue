@@ -90,7 +90,10 @@ const isFirstCollectorNode = computed(() => !!cc.value && flow.main.find((nodeId
 
 <style scoped>
 .rc-readonly-hint { padding: 7px 9px; border: 1px dashed #dbe3ee; border-radius: 7px; background: #f8fafc; color: var(--rc-faint); font-size: 12px; }
-.rc-field { display: block; min-width: 0; margin-bottom: 10px; }
+/* 全局 .rc-field 是工具栏用的横向 pill（tokens.css:143，inline-flex + 34px 定高 + 边框 + 白底 + 左右 padding），
+   面板里竖排用必须整套重置。此前只覆盖了 display/min-width，剩下的定高和边框还在，
+   「出参列」就被压进一个 34px 的带框盒子里、按钮和说明溢出到框外。口径同 CollectorSettings.vue。 */
+.rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 10px; }
 .rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }
 .pt-outcols { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--rc-border-soft); }
 .rc-select { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; }
