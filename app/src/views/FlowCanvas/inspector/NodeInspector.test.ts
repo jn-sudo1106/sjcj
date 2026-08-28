@@ -338,8 +338,10 @@ describe('配置绑定条与节点配置脏状态条（0824-00 §5.4/§6.1）', 
 })
 
 describe('配置名称必填与 AI 对话 Tab（0824-06 §4）', () => {
-  it('采集节点没填配置名称：保存配置禁用并说明原因', async () => {
+  it('配置名称只在保存那一刻校验：面板不打星号、按钮不禁用，点了才提示', async () => {
     mockAssets()
+    const update = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    const create = vi.spyOn(configApi, 'createConfig').mockResolvedValue({ ok: true, configId: '1', message: undefined })
     setActivePinia(createPinia())
     const flow = useFlowStore()
     flow.configs['web-1'] = cloneConfig(NODE_CONFIGS['web-list'])
@@ -347,13 +349,20 @@ describe('配置名称必填与 AI 对话 Tab（0824-06 §4）', () => {
 
     const w = mount(NodeInspector)
     await flushPromises()
+    // 面板上没有必填星号，也没有常驻红字提示
+    expect(w.text()).not.toContain('配置名称必填')
+    expect(w.find('.rc-inspector-body').text()).not.toContain('配置名称 *')
+
+    // 名称为空时按钮可点，但点了不发请求
     const saveBtn = () => w.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存配置')!
-    expect(w.text()).toContain('配置名称必填')
-    expect(saveBtn().attributes('disabled')).toBeDefined()
+    expect(saveBtn().attributes('disabled')).toBeUndefined()
+    await saveBtn().trigger('click')
+    await flushPromises()
+    expect(update).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
 
     flow.setConfigName('web-1', '公告列表配置')
     await flushPromises()
-    expect(saveBtn().attributes('disabled')).toBeUndefined()
     // 配置绑定条同步显示配置名称
     expect(w.find('.rc-config-bar').text()).toContain('公告列表配置')
     w.unmount()

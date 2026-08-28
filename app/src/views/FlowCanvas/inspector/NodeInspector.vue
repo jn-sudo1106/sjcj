@@ -49,16 +49,14 @@ const configId = computed(() => cfg.value?.configId || '')
 const nodeConfigDirty = computed(() => flow.dirtyConfigNodes.includes(id.value))
 // 底部条常驻（不只在脏时出现）：新加的节点默认「新建配置」态，一个字段没改也要能保存一次拿 configId
 // （0824-00 §5.3）；脏标只影响文案和按钮可用性。
-// 配置名称必填（0824-06 §4）：字段目前只在采集节点的「节点配置」Tab 上，没有该字段的节点不设门槛，
+// 配置名称必填（0824-06 §4）。校验只在**保存那一刻**做：面板上不打星号、不常驻红字提示，
+// 按钮也不因此禁用——点了保存才提示（2026-08-28 拍板，整个面板统一这个口径）。
+// 字段只在采集节点的「节点配置」Tab 上，没有该字段的节点不设门槛，
 // 否则规则/数据处理节点会被一个填不了的必填项永久挡住保存。
 const configNameMissing = computed(() => !!cfg.value?.collectCfg && !cfg.value?.configName)
 // 配置身份（新建 / 已有）由上面的配置绑定条表达，这里只说"有没有未提交的修改"，不重复也不夸大落库状态。
-const canSaveNodeConfig = computed(() => (nodeConfigDirty.value || !configId.value) && !configNameMissing.value)
-const footNote = computed(() => {
-  if (configNameMissing.value) return '配置名称必填，请先在「节点配置」填写'
-  if (nodeConfigDirty.value) return '节点配置有未保存修改'
-  return '无未保存修改'
-})
+const canSaveNodeConfig = computed(() => nodeConfigDirty.value || !configId.value)
+const footNote = computed(() => (nodeConfigDirty.value ? '节点配置有未保存修改' : '无未保存修改'))
 // ---- 配置联调（config_api.md）----
 // 保存配置 → config/modify/updateConfig（带 configId = 更新）
 // 另存为新配置 → 同端点不带 configId = 新增；它不回传新 configId，createConfig 内部按名回查。
@@ -86,6 +84,10 @@ const saveSharedOpen = ref(false)
 async function onSaveNodeConfig() {
   const node = cfg.value
   if (!node || saving.value) return
+  if (configNameMissing.value) {
+    ElMessage.warning('请先填写配置名称')
+    return
+  }
   if (configId.value) {
     saveSharedOpen.value = true
     return
@@ -225,8 +227,8 @@ onMounted(async () => {
         <button
           class="cb-act"
           type="button"
-          :disabled="saving || configNameMissing"
-          :title="configNameMissing ? '请先填写配置名称' : '用当前表单值另建一份配置，只给本节点用，不动原配置'"
+          :disabled="saving"
+          title="用当前表单值另建一份配置，只给本节点用，不动原配置"
           @click="onSaveAsNewConfig"
         >另存为新配置</button>
       </div>
@@ -258,13 +260,13 @@ onMounted(async () => {
       <!-- AI 对话不产生配置改动，不挂保存条 -->
       <div v-if="!isBranchNode && tab !== 'ai'" class="rc-insp-foot">
         <span class="foot-note">
-          <i v-if="nodeConfigDirty || configNameMissing" class="foot-dot" />{{ footNote }}
+          <i v-if="nodeConfigDirty" class="foot-dot" />{{ footNote }}
         </span>
         <button
           class="rc-btn primary"
           type="button"
           :disabled="!canSaveNodeConfig || saving"
-          :title="configNameMissing ? '请先填写配置名称' : (nodeConfigDirty ? undefined : (configId ? '当前没有需要保存的修改' : '新建配置还没有配置 ID，保存后随「保存流程」一起提交'))"
+          :title="nodeConfigDirty ? undefined : (configId ? '当前没有需要保存的修改' : '新建配置还没有配置 ID，保存后随「保存流程」一起提交')"
           @click="onSaveNodeConfig"
         >{{ saving ? '保存中…' : '保存配置' }}</button>
       </div>

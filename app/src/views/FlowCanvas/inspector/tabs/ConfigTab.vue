@@ -385,21 +385,21 @@ function onBizType(e: Event) {
         </select>
       </div>
       <!-- 配置名称（config-meta，0824-06 §4）：已有配置显示后端真名，新建配置必填 -->
-      <div class="rc-field"><label>配置名称 <span class="ni-required">*</span></label>
+      <!-- 不打 *：整个面板都没有必填星号，统一在保存时校验并提示（2026-08-28） -->
+      <div class="rc-field"><label>配置名称</label>
         <input
           class="rc-input"
-          :class="{ invalid: !configName }"
           :value="configName"
           placeholder="新建配置：填写配置名称"
           aria-label="配置名称"
           @input="onConfigName"
         />
-        <div v-if="!configName" class="rc-help ni-required-hint">配置名称必填，保存配置前请先填写。</div>
       </div>
       <!-- 业务类型（0804 S3-1）：跟上面的网页类型是两个独立字段，不要合并 -->
       <div class="rc-field"><label>业务类型</label>
         <select class="rc-select" :value="cc.bizType ?? ''" @change="onBizType">
-          <option value="">请选择</option>
+          <!-- 占位项禁用：选回空只会让界面显示空、后端仍是原值（payload 跳过 undefined），两边对不上 -->
+          <option value="" disabled>请选择</option>
           <option v-for="opt in BIZ_TYPE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
           <option v-if="unknownBizType" :value="unknownBizType">{{ unknownBizType }}（旧平台清单外的值）</option>
         </select>
@@ -469,9 +469,6 @@ function onBizType(e: Event) {
 <style scoped>
 .rc-input-group .rc-readonly { flex: 1 1 auto; min-width: 0; border-radius: 7px 0 0 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rc-readonly { min-height: 30px; display: flex; align-items: center; padding: 0 9px; border: 1px solid var(--rc-border-soft); border-radius: 6px; background: #f8fafc; color: var(--rc-text); font-size: 12px; }
-.ni-required { color: var(--rc-danger, #ef4444); }
-.rc-input.invalid { border-color: var(--rc-warn); }
-.ni-required-hint { color: var(--rc-warn); }
 
 .rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 10px; }
 .rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }
