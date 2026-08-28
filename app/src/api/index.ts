@@ -1174,6 +1174,17 @@ export const monitorApi = {
  * 按配置名精确查已有配置。抽成模块级函数是为了打断循环推断——
  * 在 configApi 的成员里互相引用 configApi 会让 TS 推不出对象类型。
  */
+/** 按名**模糊**查（后端 name 就是模糊匹配）。用于复制后定位新配置：`原名_copy` 一定包含原名。 */
+async function configsByNameLike(name: string): Promise<Config[]> {
+  const trimmed = name.trim()
+  if (!trimmed) return []
+  const result = await request<Paged<unknown>>('config/configPaged', { name: trimmed, page: 1, size: 100 }, {
+    method: 'GET',
+    httpParams: { page: 1, limit: 100, name: trimmed },
+  })
+  return configPageFromLegacy(result).list
+}
+
 async function configsByExactName(name: string): Promise<Config[]> {
   const trimmed = name.trim()
   if (!trimmed) return []
@@ -1242,29 +1253,39 @@ export const configApi = {
   },
   /**
    * 配置名是否已被占用（精确同名）。
-   * 「另存为新配置」必须靠名字回查新建出来的 configId（updateConfig 不回传 ID，见 createConfig），
-   * 所以名字必须唯一——2026-08-28 实测：拿重名去建，**后端会自动加 `_copy` 后缀**
-   * （建出 `test2_copy`），而回查按原名找只能找到旧那条，结果把节点绑回了原配置，
-   * 用户以为在改副本、其实在改原件。
+   * 「另存为新配置」要求用户填一个不与现有配置重名的新名字：copyAll 复制出来的叫 `原名_copy`，
+   * 紧接着要用这个新名字改名；重名会让配置列表里出现两条同名记录，后续按名定位全乱。
    */
   configNameExists: async (name: string, excludeConfigId?: string): Promise<boolean> => {
     const hits = await configsByExactName(name)
     return hits.some((item) => item.configId !== excludeConfigId)
   },
   /**
-   * 新建配置：updateConfig 不带 configId 即为新增（config_api.md §二）。
-   * 但它的响应是 `{success, code, msg, data: null}`，**不回传新 configId**，
-   * 只能按配置名回查——所以配置名必须唯一，重名时取 configId 最大的那条。
+   * 「另存为新配置」的第一步：复制原配置并定位复制出来的那条。
+   *
+   * **为什么不用 `updateConfig` 不带 configId 新建**：2026-08-28 生产实测，那样**不会创建任何配置**
+   * （接口返回 success，但配置操作日志里没有对应的 CONF_ADD，全库当天只新增了一条 `copy from`）。
+   * `config_api.md` §二「configId 缺省即为新增」与实际行为对不上。旧平台也从没这么用过——
+   * 它的配置列表连「新增」按钮都没有，`updateConfig` 三个调用点全带 configId；
+   * 建配置只有三条路：新建源向导 `snatch/snatchSave`、源列表 `source/genConfig`、配置列表 `config/copyAll`。
+   *
+   * **为什么按 ID 差集定位而不是猜名字**：copyAll 生成的名字是 `原名_copy`，但那个名字可能**早就被占用**
+   * （生产上就有一条历史遗留的 `test2_copy`），按名字回查会认错。改成复制前后各查一次同名前缀，
+   * 取新增的 ID——不依赖任何命名规则。
    */
-  createConfig: async (payload: Record<string, unknown>) => {
-    const body = { ...payload }
-    delete body.configId
-    const ack = await request<Ack>('config/modify/updateConfig', { config: body }, { method: 'POST', httpParams: body })
+  copyConfigAndLocate: async (sourceConfigId: string, sourceName: string) => {
+    const before = new Set((await configsByNameLike(sourceName)).map((item) => item.configId))
+    const ack = await request<Ack>('config/copyAll', { configId: sourceConfigId }, {
+      method: 'GET',
+      httpParams: { id: sourceConfigId },
+    })
     if (ack && 'ok' in ack && !ack.ok) return { ok: false as const, message: ack.message }
-    const name = String(payload.configName ?? '')
-    if (!name) return { ok: true as const, configId: undefined as string | undefined, message: ack?.message }
-    const hit = (await configsByExactName(name)).sort((a, b) => Number(b.configId) - Number(a.configId))[0]
-    return { ok: true as const, configId: hit?.configId, message: ack?.message }
+    const added = (await configsByNameLike(sourceName)).filter((item) => !before.has(item.configId))
+    if (added.length !== 1) {
+      // 0 条 = 没复制成功；多条 = 同时有别人在复制，认不准。两种都不绑定，交给用户确认。
+      return { ok: false as const, message: `复制后无法唯一定位新配置（匹配到 ${added.length} 条），请刷新确认` }
+    }
+    return { ok: true as const, configId: added[0].configId, name: added[0].name }
   },
   copyAll: (configId: string) => request<Ack>('config/copyAll', { configId }, { method: 'GET', httpParams: { id: configId } }),
   deleteConfig: (configIds: string[] | string) => {

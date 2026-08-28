@@ -60,7 +60,7 @@ const canSaveNodeConfig = computed(() => nodeConfigDirty.value || !configId.valu
 const footNote = computed(() => (nodeConfigDirty.value ? '节点配置有未保存修改' : '无未保存修改'))
 // ---- 配置联调（config_api.md）----
 // 保存配置 → config/modify/updateConfig（带 configId = 更新）
-// 另存为新配置 → 同端点不带 configId = 新增；它不回传新 configId，createConfig 内部按名回查。
+// 另存为新配置 → config/copyAll 复制 + 改名（updateConfig 不带 configId 并不会创建配置，实测）。
 const selectConfigOpen = ref(false)
 const saving = ref(false)
 
@@ -93,14 +93,9 @@ async function onSaveNodeConfig() {
     saveSharedOpen.value = true
     return
   }
-  saving.value = true
-  try {
-    await createConfigFromNode(node, {})
-  } catch (e) {
-    reportWriteError('新建配置', e)
-  } finally {
-    saving.value = false
-  }
+  // 没有 configId 的节点没法保存：`updateConfig` 不带 configId 不会创建配置（实测），
+  // 而 copyAll 需要一个可复制的源配置。这种节点要先「选择已有配置」再改，或等后端补新建端点（§6-2）。
+  ElMessage.warning('本节点还没有绑定配置，请先「选择已有配置」；新建配置暂无可用接口')
 }
 
 async function doUpdateExistingConfig() {
@@ -124,23 +119,32 @@ async function doUpdateExistingConfig() {
   }
 }
 
-async function createConfigFromNode(node: NodeConfig, base: Record<string, unknown>, newName?: string) {
-  const payload = buildConfigPayload(node, base)
-  if (newName) payload.configName = newName
-  const res = await configApi.createConfig(payload)
-  if (!res.ok) {
-    ElMessage.error(res.message || '新建配置失败')
+/**
+ * 另存为新配置 = 复制 + 改名 + 写入当前表单值（2026-08-28 拍板走这条）。
+ * `updateConfig` 不带 configId 并不会创建配置（实测），只能沿用旧平台的 copyAll。
+ * copyAll 的额外好处：它是后端整条复制，未建模的 BLOB（snatchConf 等）天然带走，比自己拼 payload 保真。
+ */
+async function copyConfigAsNew(node: NodeConfig, newName: string) {
+  const from = configId.value
+  const fromName = node.configName ?? ''
+  const copied = await configApi.copyConfigAndLocate(from, fromName)
+  if (!copied.ok) {
+    ElMessage.error(copied.message || '复制配置失败')
     return
   }
-  if (!res.configId) {
-    // 回查不到就**不绑定**：宁可让用户去刷新确认，也不能把节点绑回原配置——
-    // 2026-08-28 就是这么把"另存"变成了"改原件"（后端遇重名会自动加 _copy 后缀）。
-    ElMessage.warning('配置已创建，但按名回查不到新配置 ID，节点未改绑，请刷新后确认')
-    return
-  }
-  const detail = await configApi.configDetail(res.configId)
+  const newId = copied.configId
+  // 先绑定再写内容：绑定是关键一步——只要绑上了，后续保存就打在新配置上，
+  // 不会再污染原配置。内容写失败可以重试保存，绑定失败则会一直误伤原件。
+  const base = (await configApi.configDetailRaw(newId)) ?? {}
+  const payload = { ...buildConfigPayload(node, base), configId: newId, configName: newName }
+  const ack = await configApi.updateConfig(payload)
+  const detail = await configApi.configDetail(newId)
   if (detail) flow.bindExistingConfig(id.value, detail)
-  ElMessage.success(`已新建配置 #${res.configId} 并绑定到本节点，记得保存流程`)
+  if (ack && 'ok' in ack && !ack.ok) {
+    ElMessage.warning(`已复制为配置 #${newId}（暂名「${copied.name}」）并绑定到本节点，但内容写入失败，请重新点「保存配置」`)
+    return
+  }
+  ElMessage.success(`已另存为配置 #${newId}「${newName}」并绑定到本节点，记得保存流程`)
 }
 
 // 另存为新配置：先要一个唯一的新名字（弹窗里查重），再创建。
@@ -153,11 +157,16 @@ function onSaveAsNewConfig() {
 async function doSaveAsNewConfig(newName: string) {
   const node = cfg.value
   if (!node || saving.value) return
+  if (!configId.value) {
+    // 没有原配置就无从复制。节点还没绑过配置时不该出现这个入口，这里只是兜底。
+    ElMessage.warning('当前节点还没有绑定配置，无法另存')
+    return
+  }
   saving.value = true
   try {
-    await createConfigFromNode(node, await baseRecordFor(configId.value), newName)
+    await copyConfigAsNew(node, newName)
   } catch (e) {
-    reportWriteError('新建配置', e)
+    reportWriteError('另存为新配置', e)
   } finally {
     saving.value = false
   }

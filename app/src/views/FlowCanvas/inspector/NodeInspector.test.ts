@@ -288,16 +288,19 @@ describe('配置绑定条与节点配置脏状态条（0824-00 §5.4/§6.1）', 
     await flushPromises()
     expect(w.text()).toContain('节点配置有未保存修改')
 
-    // 没有 configId 的节点，「保存配置」走新建（updateConfig 不带 configId），打桩到位再点
-    vi.spyOn(configApi, 'createConfig').mockResolvedValue({ ok: true, configId: '900001', message: undefined })
-    vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: '900001', name: '公告列表配置', enabled: true })
+    // 没有 configId 的节点点保存：不发任何写请求。
+    // updateConfig 不带 configId 并不会创建配置（2026-08-28 实测），copyAll 又需要可复制的源配置，
+    // 所以这种节点只能先「选择已有配置」。
+    const update = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    const copy = vi.spyOn(configApi, 'copyConfigAndLocate')
     const saveBtn = w.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存配置')!
     await saveBtn.trigger('click')
     await flushPromises()
     await flushPromises()
-    expect(w.text()).toContain('无未保存修改')
-    expect(flow.configDirty).toBe(false)
-    expect(flow.flowDirty).toBe(true)
+    expect(update).not.toHaveBeenCalled()
+    expect(copy).not.toHaveBeenCalled()
+    // 没写成，脏标保持
+    expect(flow.configDirty).toBe(true)
     w.unmount()
   })
 
@@ -341,7 +344,7 @@ describe('配置名称必填与 AI 对话 Tab（0824-06 §4）', () => {
   it('配置名称只在保存那一刻校验：面板不打星号、按钮不禁用，点了才提示', async () => {
     mockAssets()
     const update = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: 'ok' })
-    const create = vi.spyOn(configApi, 'createConfig').mockResolvedValue({ ok: true, configId: '1', message: undefined })
+    const copy = vi.spyOn(configApi, 'copyConfigAndLocate')
     setActivePinia(createPinia())
     const flow = useFlowStore()
     flow.configs['web-1'] = cloneConfig(NODE_CONFIGS['web-list'])
@@ -359,7 +362,7 @@ describe('配置名称必填与 AI 对话 Tab（0824-06 §4）', () => {
     await saveBtn().trigger('click')
     await flushPromises()
     expect(update).not.toHaveBeenCalled()
-    expect(create).not.toHaveBeenCalled()
+    expect(copy).not.toHaveBeenCalled()
 
     flow.setConfigName('web-1', '公告列表配置')
     await flushPromises()

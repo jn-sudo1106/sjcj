@@ -63,18 +63,30 @@ describe('配置写入 HTTP 契约', () => {
     expect(bodyOf(fetchMock.mock.calls[0])).toMatchObject(payload)
   })
 
-  it('createConfig 去掉 configId 走新增，并保留其余字段', async () => {
+  it('copyConfigAndLocate 按 ID 差集定位复制出来的配置，不靠猜名字', async () => {
+    // 复制前后各查一次同名前缀，取新增的 ID。名字规则（原名_copy）不可靠——
+    // 生产上就有一条历史遗留的 test2_copy，按名字回查会认错。
     fetchMock
+      .mockResolvedValueOnce(jsonResponse({ code: 0, count: 2, data: [{ configId: 1400917, configName: 'test2' }, { configId: 1400980, configName: 'test2_copy' }] }))
       .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '操作成功' }))
-      .mockResolvedValueOnce(jsonResponse({ code: 0, count: 1, data: [{ configId: 900001, configName: 'test2' }] }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, count: 3, data: [{ configId: 1400917, configName: 'test2' }, { configId: 1400980, configName: 'test2_copy' }, { configId: 1400999, configName: 'test2_copy' }] }))
     const { configApi } = await import('./index')
 
-    const res = await configApi.createConfig(payload)
+    const res = await configApi.copyConfigAndLocate('1400917', 'test2')
 
-    const body = bodyOf(fetchMock.mock.calls[0])
-    expect(body.configId).toBeUndefined()
-    expect(body).toMatchObject({ configName: 'test2', isMulti: 0, templetCode: 'news', snatchDrepeat: 'ALL' })
-    // 响应不回传新 configId，按名回查兜底
-    expect(res).toMatchObject({ ok: true, configId: '900001' })
+    expect(String(fetchMock.mock.calls[1][0])).toContain('config/copyAll')
+    // 复制前就存在的同名 test2_copy(1400980) 不能被认成新的
+    expect(res).toMatchObject({ ok: true, configId: '1400999' })
+  })
+
+  it('定位不到唯一新配置时不返回 ID（宁可不绑，也不能绑错）', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ code: 0, count: 1, data: [{ configId: 1400917, configName: 'test2' }] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '操作成功' }))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, count: 1, data: [{ configId: 1400917, configName: 'test2' }] }))
+    const { configApi } = await import('./index')
+
+    const res = await configApi.copyConfigAndLocate('1400917', 'test2')
+    expect(res.ok).toBe(false)
   })
 })
