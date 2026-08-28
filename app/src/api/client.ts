@@ -102,6 +102,11 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   // 数据来自 source/sourcePaged 的 configId 反查（穿透流程，首节点配置与子步骤引用都命中）。
   // 新建（还没有 configId）没有影响面，不拦。
   'config/modify/updateConfig',
+  // 2026-08-28 放开：复制配置（「另存为新配置」的第一步）。
+  // 纯新增——复制出一条新配置，不改不删任何已有数据，与 site/add、snatch/snatchSave 同性质。
+  // 之所以必须走它：updateConfig 不带 configId 并不会创建配置（实测），旧平台建配置也只有
+  // 新建源向导 / source/genConfig / config/copyAll 三条路，前两条都会顺带动源。
+  'config/copyAll',
 ])
 
 function isProductionWriteAllowed(httpEndpoint: string): boolean {

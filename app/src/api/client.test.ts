@@ -305,6 +305,16 @@ describe('生产写守卫', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  it('连生产时，config/copyAll 在白名单内（「另存为新配置」的第一步，纯新增）', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
+    const { request } = await import('./client')
+
+    await request('config/copyAll', { configId: '1' }, { method: 'GET', httpParams: { id: '1' } })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('连生产时，新建网站/源/配置及编排元数据在白名单内，正常放行', async () => {
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
