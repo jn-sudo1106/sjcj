@@ -418,3 +418,39 @@ describe('保存已有配置的影响范围确认（0824-00 §2.2，源维度）
     w.unmount()
   })
 })
+
+// 旧平台在「结构化配置」旁挂了个一键填模板（旧前端 column.config.js:599 的 more/callback）：
+// 图标是问号，点下去其实往表单写 {"globals":["列ID"]}。我们做成显式按钮，不照抄那个坑。
+describe('结构化配置「配全局ID」一键填模板', () => {
+  async function openTableTab() {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = { ...cloneConfig(NODE_CONFIGS['web-list']), configName: '公告列表配置' }
+    flow.select('web-1')
+    const w = mount(NodeInspector)
+    await flushPromises()
+    flow.setActiveTab('table')
+    await flushPromises()
+    return { flow, w }
+  }
+
+  it('空值时点一下填入全局ID模板', async () => {
+    const { flow, w } = await openTableTab()
+    const btn = w.findAll('button').find((b) => b.text() === '配全局ID')
+    expect(btn).toBeTruthy()
+    await btn!.trigger('click')
+    expect(flow.configs['web-1'].collectCfg?.structuredConfig).toBe('{"globals":["列ID"]}')
+    w.unmount()
+  })
+
+  it('已有内容时不覆盖', async () => {
+    const { flow, w } = await openTableTab()
+    flow.setStructuredConfig('web-1', '{"mine":1}')
+    await flushPromises()
+    const btn = w.findAll('button').find((b) => b.text() === '配全局ID')!
+    await btn.trigger('click')
+    expect(flow.configs['web-1'].collectCfg?.structuredConfig).toBe('{"mine":1}')
+    w.unmount()
+  })
+})

@@ -149,6 +149,18 @@ const contentRulesValue = computed(() => cc.value?.contentRules ?? cfg.value?.co
 function onStructuredConfig(e: Event) {
   flow.setStructuredConfig(id.value, (e.target as HTMLTextAreaElement).value)
 }
+// 「配全局ID」：旧平台在结构化配置旁挂了个一键填模板（旧前端 column.config.js:599 的
+// more/callback，图标是问号但点下去其实是往表单里写 `{"globals":["列ID"]}`）。
+// 这里做成显式按钮而不是问号——问号点了会改数据是旧平台的坑，别照抄。
+// 已有内容时不覆盖，避免手滑清掉用户写好的规则。
+const GLOBAL_ID_TEMPLATE = '{"globals":["列ID"]}'
+function fillGlobalIdTemplate() {
+  if (structuredConfigValue.value.trim()) {
+    ElMessage.warning('结构化配置已有内容，未覆盖；如需重填请先清空')
+    return
+  }
+  flow.setStructuredConfig(id.value, GLOBAL_ID_TEMPLATE)
+}
 function onContentRules(e: Event) {
   flow.setContentRules(id.value, (e.target as HTMLTextAreaElement).value)
 }
@@ -298,7 +310,11 @@ async function onSaveExecMeta() {
          注意：规则节点那套入参/出参字段绑定不受影响，它走 orchestrationSaveMeta →
          /vrule/api/custom-compose/save（live 且在生产写白名单里），是真生效的。 -->
     <!-- 结构化配置（入库配置）+ 正文规则（0804 S3-1）：不透明文本，具体 schema 由执行端解释 -->
-    <div class="rc-field"><label>结构化配置（入库配置）</label>
+    <div class="rc-field">
+      <label class="tt-label-row">
+        <span>结构化配置（入库配置）</span>
+        <button class="tt-fill" type="button" title="填入全局ID模板：{&quot;globals&quot;:[&quot;列ID&quot;]}" @click="fillGlobalIdTemplate">配全局ID</button>
+      </label>
       <textarea class="rc-input" rows="2" placeholder="按输出表字段配置入库规则" :value="structuredConfigValue" @input="onStructuredConfig"></textarea>
     </div>
     <div class="rc-field"><label>正文规则</label>
@@ -332,6 +348,10 @@ async function onSaveExecMeta() {
 </template>
 
 <style scoped>
+.tt-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tt-fill { border: 1px solid #d5e2f2; background: #fff; color: var(--rc-text-2); border-radius: 6px; font-size: 11px; padding: 2px 7px; cursor: pointer; }
+.tt-fill:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+
 .rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 10px; }
 .rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }
 .rc-input { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; box-sizing: border-box; font-family: inherit; resize: vertical; }
