@@ -361,8 +361,9 @@ describe('SiteSourceSwitcher · 导入已有源（M4-5）', () => {
     await wrapper.get('[data-testid="open-batch"]').trigger('click')
     await wrapper.get('[data-testid="batch-tab-existing"]').trigger('click')
     await flushPromises()
-    // 默认勾选"仅展示未关联"，先关掉才能看到三种状态都在（M4-5：1:1 对齐旧平台 hideBound 语义）
+    // 默认勾选"仅展示未关联"，先关掉才能看到三种状态都在;取消勾选会触发重新查询（服务端过滤）
     await wrapper.get('.ssw-bind-hide input[type="checkbox"]').setValue(false)
+    await flushPromises()
 
     const table = wrapper.get('[data-testid="bind-source-table"]')
     expect(table.text()).toContain('未关联')
@@ -486,21 +487,28 @@ describe('SiteSourceSwitcher · 导入已有源（M4-5）', () => {
     expect(sourceApi.changeSite).toHaveBeenCalledWith(['src-other'], 'site-a')
   })
 
-  it('勾选"仅展示未关联"时过滤掉已属本站/其他网站的源', async () => {
+  it('勾选"仅展示未关联"走服务端 siteIds=-1 过滤，翻页/总数按过滤后口径（不再前端过滤当前页）', async () => {
     const wrapper = await createWrapper()
-    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 3, list: [unbound, otherSite, sameSite] })
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async (p) =>
+      p?.siteIds === '-1' ? { total: 1, list: [unbound] } : { total: 3, list: [unbound, otherSite, sameSite] },
+    )
 
     await wrapper.get('[data-testid="open-batch"]').trigger('click')
     await wrapper.get('[data-testid="batch-tab-existing"]').trigger('click')
     await flushPromises()
 
-    // 默认就是"仅展示未关联"勾选态
+    // 默认就是"仅展示未关联"勾选态：请求必须带 siteIds='-1'，表格只显示未关联源
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ siteIds: '-1' }))
     let table = wrapper.get('[data-testid="bind-source-table"]')
     expect(table.text()).toContain('未关联源')
     expect(table.text()).not.toContain('别站的源')
     expect(table.text()).not.toContain('已在本站的源')
 
+    // 取消勾选：重新查询且不带 siteIds，三种归属都能看到
     await wrapper.get('.ssw-bind-hide input[type="checkbox"]').setValue(false)
+    await flushPromises()
+    const lastCall = paged.mock.calls[paged.mock.calls.length - 1][0]
+    expect(lastCall?.siteIds).toBeUndefined()
     table = wrapper.get('[data-testid="bind-source-table"]')
     expect(table.text()).toContain('别站的源')
     expect(table.text()).toContain('已在本站的源')

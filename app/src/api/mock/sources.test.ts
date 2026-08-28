@@ -21,6 +21,29 @@ describe('source mock 筛选', () => {
       SOURCES.splice(SOURCES.indexOf(unassigned), 1)
     }
   })
+
+  it('支持 siteIds 统一入参：-1 只返回未关联（SITE_ID IS NULL），逗号列表按 siteId IN 过滤', () => {
+    const unassigned = { sourceId: 'unassigned-test-2', name: '未关联测试源2', url: '', configId: '', mainTable: '', owner: '', state: 'C' as const }
+    SOURCES.push(unassigned)
+    try {
+      const onlyUnbound = mockSourcePaged({ siteIds: '-1', size: 999 }).list
+      expect(onlyUnbound).toContainEqual(unassigned)
+      expect(onlyUnbound.every((item) => !item.siteId)).toBe(true)
+
+      const inNews = mockSourcePaged({ siteIds: 'site-news', size: 999 }).list
+      expect(inNews.length).toBeGreaterThan(0)
+      expect(inNews.every((item) => item.siteId === 'site-news')).toBe(true)
+
+      const inMulti = mockSourcePaged({ siteIds: 'site-news,site-zfb', size: 999 }).list
+      expect(inMulti.length).toBeGreaterThan(0)
+      expect(inMulti.every((item) => item.siteId === 'site-news' || item.siteId === 'site-zfb')).toBe(true)
+
+      // 不传/空 siteIds 不做 site 维度过滤（向后兼容）
+      expect(mockSourcePaged({ size: 999 }).total).toBe(SOURCES.length)
+    } finally {
+      SOURCES.splice(SOURCES.indexOf(unassigned), 1)
+    }
+  })
 })
 
 describe('新建 / 编辑源（0706 Phase3/4）', () => {

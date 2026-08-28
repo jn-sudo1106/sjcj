@@ -188,6 +188,17 @@ function matches(s: Source, p?: Record<string, unknown>): boolean {
   if (siteId === '0') {
     if (s.siteId) return false
   } else if (siteId && s.siteId !== siteId) return false
+  // siteIds 统一入参（InfoSourceController.sourcePaged 新契约）：'-1' 只查未关联（SITE_ID IS NULL），
+  // 逗号列表按 SITE_ID IN (…) 过滤；不传/空则不做 site 维度过滤。
+  const siteIds = String(p.siteIds ?? '').trim()
+  if (siteIds) {
+    if (siteIds === '-1') {
+      if (s.siteId) return false
+    } else {
+      const ids = siteIds.split(/[，,]/).map((id) => id.trim()).filter(Boolean)
+      if (ids.length && (!s.siteId || !ids.includes(s.siteId))) return false
+    }
+  }
   const category = String(p.category ?? '')
   if (category && !s.categoryPath?.startsWith(category)) return false
   const sourceIds = String(p.sourceIds ?? p.ids ?? '').split(/[，,\s]+/).map((id) => id.trim()).filter(Boolean)

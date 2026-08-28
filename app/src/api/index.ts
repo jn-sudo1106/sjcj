@@ -172,6 +172,7 @@ export const sourceApi = {
         limit: p?.size ?? 20,
         ids,
         siteId: p?.siteId,
+        siteIds: p?.siteIds,
         sourceId: p?.sourceId,
         name: p?.name ?? p?.keyword,
         sourceUrl: p?.sourceUrl,

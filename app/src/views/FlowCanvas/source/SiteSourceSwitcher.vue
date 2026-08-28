@@ -505,20 +505,28 @@ const bindDlg = reactive({
   submitting: false,
 })
 const BIND_PAGE_SIZE = 20
-// 1:1 对齐旧平台 SiteList.vue 的 hideBound：只看 siteId 是否为空，连"已属本站"的也一起过滤掉——
-// 已经在本站的源不需要再关联一次。
-const bindVisibleResults = computed(() =>
-  bindDlg.hideBound ? bindDlg.results.filter((s) => !s.siteId) : bindDlg.results,
-)
+// 「仅展示未关联」改走服务端 siteIds='-1'（SITE_ID IS NULL），勾选态变化必须重查接口：
+// 旧实现是前端把已关联源从当前页里 filter 掉——分页/总数口径全错（total 含已关联源、翻页会
+// 跳到别的归属），现在把过滤条件交给 sourcePaged 后端，页码与 total 才是真实口径。
 async function loadBindCandidates() {
   bindDlg.loading = true
   try {
-    const res = await sourceApi.sourcePaged({ keyword: bindDlg.keyword.trim() || undefined, page: bindDlg.page, size: BIND_PAGE_SIZE })
+    const res = await sourceApi.sourcePaged({
+      keyword: bindDlg.keyword.trim() || undefined,
+      page: bindDlg.page,
+      size: BIND_PAGE_SIZE,
+      siteIds: bindDlg.hideBound ? '-1' : undefined,
+    })
     bindDlg.results = res.list
     bindDlg.total = res.total
   } finally {
     bindDlg.loading = false
   }
+}
+// 勾选/取消「仅展示未关联」：过滤条件是服务端生效的，来回切换都要重新查询并回到第一页。
+function onHideBoundChange() {
+  bindDlg.page = 1
+  void loadBindCandidates()
 }
 function resetBindState() {
   bindDlg.keyword = ''
@@ -965,7 +973,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
             {{ idImport.open ? '收起按源ID批量导入' : '按源ID批量导入' }}
           </button>
           <label class="ssw-bind-hide">
-            <input v-model="bindDlg.hideBound" type="checkbox" />
+            <input v-model="bindDlg.hideBound" type="checkbox" data-testid="bind-hide-bound" @change="onHideBoundChange" />
             仅展示未关联
           </label>
           <span class="ssw-bind-selected">已选 {{ bindDlg.selected.size }}</span>
@@ -990,7 +998,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
           <table class="rc-data-table ssw-bind-table" data-testid="bind-source-table">
             <thead><tr><th style="width:32px"></th><th>源ID</th><th>源名称</th><th>当前归属</th></tr></thead>
             <tbody>
-              <tr v-for="s in bindVisibleResults" :key="s.sourceId" @click="toggleBindRow(s.sourceId)">
+              <tr v-for="s in bindDlg.results" :key="s.sourceId" @click="toggleBindRow(s.sourceId)">
                 <td @click.stop><input type="checkbox" :checked="bindDlg.selected.has(s.sourceId)" @change="toggleBindRow(s.sourceId)" /></td>
                 <td class="mono">{{ s.sourceId }}</td>
                 <td>{{ s.name }}</td>
@@ -1000,7 +1008,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
                   <span v-else class="ssw-bind-other" :title="'已关联到其它网站，勾选并提交会改为关联到 ' + (site?.name || '当前网站')">已属其他网站{{ s.siteName ? `「${s.siteName}」` : '' }}</span>
                 </td>
               </tr>
-              <tr v-if="!bindDlg.loading && !bindVisibleResults.length"><td colspan="4" class="ssw-empty">没有匹配的源</td></tr>
+              <tr v-if="!bindDlg.loading && !bindDlg.results.length"><td colspan="4" class="ssw-empty">没有匹配的源</td></tr>
             </tbody>
           </table>
         </div>
