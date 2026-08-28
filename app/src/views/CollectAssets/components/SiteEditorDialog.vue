@@ -15,8 +15,10 @@ const emit = defineEmits<{
 }>()
 
 const saving = ref(false)
-const form = reactive({ siteId: '', name: '', categoryPath: '', owner: '' })
+const form = reactive({ siteId: '', name: '', categoryPath: '' })
 
+// categoryPath 存的其实是选中项的 categoryId（见下方 el-option :value="option.path"，
+// path 字段名是历史遗留，实际内容是 id 不是斜杠路径）。
 const siteCategoryOptions = computed(() => props.categories.flatMap((group) => [
   { path: group.id, label: group.name },
   ...(group.children ?? []).map((child) => ({ path: child.id, label: `${group.name} / ${child.name}` })),
@@ -26,27 +28,22 @@ function openEditor(site: Site) {
   Object.assign(form, {
     siteId: site.siteId,
     name: site.name,
-    categoryPath: site.categoryPath ?? '',
-    owner: site.owner,
+    // 读方向 site.categoryPath 是后端拼好的展示串（如 "/财经资讯/社交平台"），跟下拉选项的
+    // value（categoryId）不是一套东西，直接填进去必然选不中——改用 site.dirId（真实 categoryId）。
+    categoryPath: site.dirId ?? '',
   })
   emit('update:visible', true)
 }
 
 async function save() {
-  const category = form.categoryPath.split('/').filter(Boolean)[0]
-  if (!form.name.trim() || !category) {
+  const categoryId = form.categoryPath
+  if (!form.name.trim() || !categoryId) {
     ElMessage.warning('请填写网站名称和分类')
     return
   }
   saving.value = true
   try {
-    const res = await siteApi.siteUpdate({
-      siteId: form.siteId,
-      name: form.name,
-      category,
-      categoryPath: form.categoryPath,
-      owner: form.owner,
-    })
+    const res = await siteApi.siteUpdate({ siteId: form.siteId, name: form.name, dirId: categoryId })
     if (!res?.ok) throw new Error(res?.message)
     ElMessage.success(res.message || '网站基本信息已保存')
     emit('update:visible', false)
@@ -74,7 +71,6 @@ defineExpose({ openEditor })
       <el-form-item label="所属分类" required>
         <el-select v-model="form.categoryPath" filterable placeholder="请选择分类" style="width: 100%"><el-option v-for="option in siteCategoryOptions" :key="option.path" :label="option.label" :value="option.path" /></el-select>
       </el-form-item>
-      <el-form-item label="网站负责人"><el-input v-model="form.owner" placeholder="用于网站默认归属，不会批量覆盖源负责人" /></el-form-item>
     </el-form>
     <template #footer><el-button @click="emit('update:visible', false)">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存</el-button></template>
   </el-dialog>

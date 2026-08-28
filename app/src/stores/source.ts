@@ -1,5 +1,8 @@
 // stores/source.ts - 源配置 + 上下文（P2-1 · stores/flow.ts 拆分）
 // 职责：sourceCfg/sourceCtx/siteCtx 源级状态 + patchSource/loadFromSource 等源操作
+// 0824 M1-5：本 store 只保留源/网站上下文，不持久化节点链副本。
+// 节点配置草稿与流程结构由 flow store 持有；源 Store 只保存源及步骤快照。
+// configMode/configName/configTopic/configStrategy 只用于历史回读，新流程不得新写。
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { Source, Site, Step } from '../api'
@@ -29,12 +32,21 @@ export const useSourceStore = defineStore('source', () => {
   // sourceCtx 仍指向内部代表源供数据查询，二者会同时非空。
   const siteCtx = ref<Site | null>(null)
 
+  const NODE_COPY_KEYS = ['configs', 'definition', 'main', 'branches', 'branchGroups'] as const
+
+  function withoutNodeCopies<T extends Record<string, unknown>>(patch: T): T {
+    const next = { ...patch }
+    for (const key of NODE_COPY_KEYS) delete next[key]
+    return next
+  }
+
   // ---- 源级操作 ----
   function patchSource(patch: Partial<Source>) {
+    const clean = withoutNodeCopies(patch as Record<string, unknown>) as Partial<Source>
     if (!sourceCfg.value) {
       sourceCfg.value = { sourceId: '', name: '', url: '', configId: '', mainTable: '', owner: '', state: 'C' }
     }
-    Object.assign(sourceCfg.value, patch)
+    Object.assign(sourceCfg.value, clean)
   }
 
   // 源级上下文唯一写入口（0712 review m15）：源信息头（sourceCtx）与流程序列化层（sourceCfg）
@@ -43,7 +55,7 @@ export const useSourceStore = defineStore('source', () => {
   // 这是 0706 优化·源/节点配置分层 的设计：写路径集中，serialize 走 sourceCfg 副本即可。
   function patchSourceCtx(patch: Partial<Source>) {
     if (!sourceCtx.value) return
-    sourceCtx.value = { ...sourceCtx.value, ...patch }
+    sourceCtx.value = { ...sourceCtx.value, ...withoutNodeCopies(patch as Record<string, unknown>) as Partial<Source> }
   }
 
   function resetAllContext() {

@@ -130,6 +130,7 @@ async function onSwitchFlow(command: string) {
   if (!result) return
   ElMessage.success(`已应用模板「${template.name}」v${template.version}${result.cleared ? `，已清理 ${result.cleared} 项不兼容绑定` : ''}`)
 }
+
 </script>
 
 <template>

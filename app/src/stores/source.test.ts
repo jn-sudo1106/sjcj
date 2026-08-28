@@ -48,6 +48,18 @@ describe('patchSource / patchSourceCtx', () => {
     expect(s.sourceCfg?.url).toBe('http://a')
   })
 
+  it('patchSource 不把节点链副本写进源 Store', () => {
+    const s = useSourceStore()
+    s.patchSource({
+      name: '草稿源',
+      configs: { start: { title: '不该进源' } },
+      definition: { main: ['start'] },
+    } as never)
+    expect(s.sourceCfg?.name).toBe('草稿源')
+    expect(s.sourceCfg).not.toHaveProperty('configs')
+    expect(s.sourceCfg).not.toHaveProperty('definition')
+  })
+
   it('patchSourceCtx 在 sourceCtx 为 null 时 no-op（不会像 patchSource 那样懒创建）', () => {
     const s = useSourceStore()
     s.patchSourceCtx({ name: '不应生效' })

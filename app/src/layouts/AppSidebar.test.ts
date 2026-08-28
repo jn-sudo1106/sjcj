@@ -16,9 +16,9 @@ function makeRouter() {
   })
 }
 
-async function mountAt(path: string) {
+async function mountAt(path: string, query?: Record<string, string>) {
   const router = makeRouter()
-  await router.push(path)
+  await router.push({ path, query })
   await router.isReady()
   const wrapper = mount(AppSidebar, { global: { plugins: [router, ElementPlus] } })
   await flushPromises()

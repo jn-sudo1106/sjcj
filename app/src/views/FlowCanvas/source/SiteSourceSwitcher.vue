@@ -2,11 +2,12 @@
 // 源侧栏：页面级左侧固定栏，流程、数据、文件和任务视图共用。
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { siteApi, sourceApi, type Site, type Source } from '@/api'
+import { siteApi, sourceApi, type Site, type SourceCategory, type Source } from '@/api'
 import SourceParamModal from './SourceParamModal.vue'
 import { hasLoadParams } from './paramNormalize'
 import type { ParamGroupRef } from '@/utils/flow/urlParams'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
+import SiteEditorDialog from '@/views/CollectAssets/components/SiteEditorDialog.vue'
 import { withoutComposition } from '@/utils/enterKey'
 
 const props = defineProps<{ siteId: string; activeKey: string }>()
@@ -82,6 +83,7 @@ function pickCompare(s: Source) {
 function onWindowClick() {
   if (cmp.show) closeComparePicker()
   closeRowMenu()
+  closeSiteMenu()
   paramEditorRef.value?.closePicker()
 }
 onMounted(() => window.addEventListener('click', onWindowClick))
@@ -145,6 +147,119 @@ async function launchFromMenu() {
   if (!s || s.disabled) return
   closeRowMenu()
   await sendSnatchForSource(s)
+}
+
+// ---- 源右键：更换网站（2026-08-27）----
+// 一个源只属于一个网站（0824-00 §1.1 变更），所以这是「搬移」不是「多加一个关联」：
+// 换绑成功后本网站不再包含该源，必须在确认文案里说清楚，否则用户会以为只是加了个关系。
+const moveDlg = reactive({ show: false, source: null as Source | null, targetSiteId: '', saving: false })
+const siteOptions = ref<Site[]>([])
+async function openMoveDialog(s: Source) {
+  closeRowMenu()
+  moveDlg.source = s
+  moveDlg.targetSiteId = ''
+  moveDlg.show = true
+  if (!siteOptions.value.length) {
+    try {
+      siteOptions.value = (await siteApi.sitePaged({ size: 200 })).list
+    } catch (error) {
+      ElMessage.error(`网站列表加载失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+}
+function closeMoveDialog() {
+  moveDlg.show = false
+  moveDlg.source = null
+}
+const moveTargets = computed(() => siteOptions.value.filter((s) => String(s.siteId) !== String(props.siteId)))
+async function submitMove() {
+  const s = moveDlg.source
+  const target = moveDlg.targetSiteId
+  if (!s || !target || moveDlg.saving) return
+  const targetName = moveTargets.value.find((x) => String(x.siteId) === target)?.name || target
+  moveDlg.saving = true
+  try {
+    const res = await sourceApi.changeSite([s.sourceId], target)
+    if (!res?.ok) {
+      ElMessage.warning(res?.message || '更换网站失败，请重试')
+      return
+    }
+    // 换绑成功：本网站列表里移除该源（源已经搬走，不是还在这儿）
+    children.value = children.value.filter((c) => c.sourceId !== s.sourceId)
+    closeMoveDialog()
+    ElMessage.success(`源「${s.name}」已移至网站「${targetName}」`)
+  } catch (error) {
+    ElMessage.error(`更换网站失败：${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    moveDlg.saving = false
+  }
+}
+
+// ---- 源右键：删除源（2026-08-27）----
+// 永久删除，不可恢复；确认文案必须写明源名和 ID，避免误删相邻行。
+async function deleteFromMenu() {
+  const s = rowMenu.source
+  if (!s) return
+  closeRowMenu()
+  try {
+    await ElMessageBox.confirm(
+      `将永久删除源「${s.name}」（ID ${s.sourceId}），该操作直接生效且不可恢复。确认删除？`,
+      '删除源',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' },
+    )
+  } catch {
+    return
+  }
+  try {
+    const res = await sourceApi.deleteSource([s.sourceId])
+    if (!res?.ok) {
+      ElMessage.warning(res?.message || '删除失败，请重试')
+      return
+    }
+    children.value = children.value.filter((c) => c.sourceId !== s.sourceId)
+    ElMessage.success(`源「${s.name}」已删除`)
+  } catch (error) {
+    ElMessage.error(`删除失败：${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+// ---- 网站右键：重命名（2026-08-27）----
+const siteMenu = reactive({ show: false, x: 0, y: 0 })
+function openSiteMenu(event: MouseEvent) {
+  if (!site.value) return
+  siteMenu.show = true
+  siteMenu.x = event.clientX
+  siteMenu.y = event.clientY
+}
+function closeSiteMenu() {
+  siteMenu.show = false
+}
+// 编辑网站基本信息复用采集资产页的 SiteEditorDialog（名称+分类，分类必填），
+// 不再单独做一个只改名称的简化版——分类是必填字段，只给名称输入框会存不进去。
+const siteEditDlg = reactive({ show: false })
+const siteCategories = ref<SourceCategory[]>([])
+async function openSiteEdit() {
+  closeSiteMenu()
+  if (!site.value) return
+  if (!siteCategories.value.length) {
+    try {
+      // sourceApi.sourceCategories() 不带 parentId 只返回顶层分类，不含子级（实测：真实分类是
+      // 两级，网站当前分类往往就是子级，如「财经资讯 / 社交平台」）。CategoryTreePicker/
+      // MoreSourcesDialog 用的是真正的树控件、按展开节点懒加载子级；这里是普通下拉框，没有
+      // 展开动作，只能一次性把每个顶层的子级都取回来拍平，否则网站当前分类在下拉里选不中，
+      // 保存时又会把它换成一个错的顶层分类。
+      const roots = await sourceApi.sourceCategories()
+      const childrenByRoot = await Promise.all(roots.map((r) => sourceApi.sourceCategories(r.id)))
+      siteCategories.value = roots.map((r, i) => ({ ...r, children: childrenByRoot[i] }))
+    } catch (error) {
+      ElMessage.error(`分类列表加载失败：${error instanceof Error ? error.message : String(error)}`)
+      return
+    }
+  }
+  siteEditDlg.show = true
+}
+function onSiteEditSaved() {
+  void load()
 }
 
 // ---- ＋添加源（0812 会议纠偏：删除"绑定已有源/仅展示未关联"模式，只保留新建；
@@ -540,8 +655,9 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
           class="ssw-site"
           :class="{ active: !activeKey }"
           type="button"
-          title="网站详情：源/数据/文件汇总（全部源）"
+          title="网站详情：源/数据/文件汇总（全部源）；右键可重命名"
           @click="emit('pickSite')"
+          @contextmenu.prevent.stop="openSiteMenu($event)"
         >
           <span class="ssw-site-ico">🌐</span>
           <span class="ssw-site-name">{{ site?.name || '网站详情' }}</span>
@@ -684,6 +800,52 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
       @click="launchFromMenu"
     >发起抓取</button>
     <button type="button" data-testid="source-menu-snatch-queue" @click="sendSnatchTestFromMenu">发指定队列</button>
+    <button type="button" data-testid="source-menu-move" @click="openMoveDialog(rowMenu.source!)">更换网站…</button>
+    <button type="button" class="danger" data-testid="source-menu-delete" @click="deleteFromMenu">删除源</button>
+  </div>
+
+  <!-- 网站右键菜单：重命名 -->
+  <div
+    v-if="siteMenu.show"
+    class="ssw-row-menu"
+    :style="{ left: `${siteMenu.x}px`, top: `${siteMenu.y}px` }"
+    @click.stop
+  >
+    <button type="button" data-testid="site-menu-rename" @click="openSiteEdit">编辑网站信息</button>
+  </div>
+
+  <SiteEditorDialog
+    v-if="siteEditDlg.show"
+    v-model:visible="siteEditDlg.show"
+    :site="site"
+    :categories="siteCategories"
+    @saved="onSiteEditSaved"
+  />
+
+  <!-- 更换网站：一个源只属于一个网站，这是搬移不是新增关联 -->
+  <div v-if="moveDlg.show" class="ssw-add-backdrop" @click.self="closeMoveDialog">
+    <div class="ssw-add-card" @click.stop>
+      <div class="ssw-add-header"><b>更换网站</b></div>
+      <div class="ssw-move-body">
+        <p class="ssw-move-src">源「{{ moveDlg.source?.name }}」（ID {{ moveDlg.source?.sourceId }}）</p>
+        <label class="ssw-move-label">移动到网站</label>
+        <select v-model="moveDlg.targetSiteId" class="rc-select" data-testid="move-site-select">
+          <option value="">请选择目标网站</option>
+          <option v-for="s in moveTargets" :key="s.siteId" :value="String(s.siteId)">{{ s.name }}（ID {{ s.siteId }}）</option>
+        </select>
+        <p class="ssw-move-warn">一个源只能属于一个网站：移动后本网站将不再包含该源。</p>
+      </div>
+      <div class="ssw-add-footer">
+        <button class="rc-btn" type="button" @click="closeMoveDialog">取消</button>
+        <button
+          class="rc-btn primary"
+          type="button"
+          data-testid="move-site-submit"
+          :disabled="!moveDlg.targetSiteId || moveDlg.saving"
+          @click="submitMove"
+        >{{ moveDlg.saving ? '移动中…' : '确认移动' }}</button>
+      </div>
+    </div>
   </div>
 
   <SourceParamModal ref="paramModalRef" :callback="sendWithParamsCallback" @refresh="load" />
@@ -1056,6 +1218,16 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 }
 .ssw-row-menu button:hover:not(:disabled) { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .ssw-row-menu button:disabled { color: var(--rc-faint); cursor: not-allowed; }
+.ssw-row-menu button.danger { color: #b91c1c; }
+.ssw-row-menu button.danger:hover:not(:disabled) { background: var(--rc-error-bg); color: #b91c1c; }
+
+/* 更换网站弹窗：内容很短，不用 ssw-add-card 那套大表单排版 */
+.ssw-move-body { display: grid; gap: 8px; margin-bottom: 20px; }
+.ssw-move-src { margin: 0; color: var(--rc-text); font-size: 14px; font-weight: 600; }
+.ssw-move-label { color: var(--rc-muted); font-size: 12px; }
+.ssw-move-body .rc-select { width: 100%; height: 40px; border: 1px solid #cbd8e8; border-radius: 9px; background: #fff; color: var(--rc-text); font-size: 14px; padding: 0 11px; outline: none; }
+.ssw-move-body .rc-select:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
+.ssw-move-warn { margin: 2px 0 0; padding: 8px 10px; border: 1px solid #fde68a; border-radius: 8px; background: #fffbeb; color: #92400e; font-size: 12px; line-height: 1.5; }
 
 .ssw-add-backdrop { position: fixed; inset: 0; z-index: 91; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(15, 23, 42, 0.34); }
 .ssw-add-card { box-sizing: border-box; width: min(720px, calc(100vw - 32px)); max-height: min(760px, calc(100vh - 32px)); overflow-y: auto; background: #fff; border: 1px solid #dbe5f1; border-radius: 18px; padding: 24px; box-shadow: 0 24px 64px -22px rgba(15, 23, 42, 0.45); }

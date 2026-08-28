@@ -24,7 +24,13 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/credentialDetail', desc: '登录凭据引用（脱敏）', impl: true },
   { path: 'source/updateSource', desc: '编辑源', danger: true, impl: true, live: true },
   { path: 'source/updateSourceSimple', desc: '简单编辑源', danger: true },
-  { path: 'source/deleteSource', desc: '删除源', danger: true, impl: true },
+  // 真实路径是 /v1/source/delete（GET ?ids=a,b），不是 source/deleteSource——后者是本项目早期自造的
+  // 逻辑名。2026-08-27 接真实写入时按旧前端 src/api/source.js:241 的契约修正，httpEndpoint 显式指定。
+  // usesMockAdapter 的 live 判定按真实 httpEndpoint 查表（见 client.ts:181 注释），live 必须标在
+  // 下面 source/delete 这一条上；标在这条逻辑名上不生效——2026-08-27 曾把 live 错标在这里，
+  // 导致「删除源」表面上像是接了真实接口，实际仍然悄悄走 mock（旧平台 SITE 编辑同款踩坑，见 §site/update）。
+  { path: 'source/deleteSource', desc: '删除源 → GET /v1/source/delete?ids=', danger: true, impl: true },
+  { path: 'source/delete', desc: '删除源（真实路径，见上方 source/deleteSource 的说明）', danger: true, live: true },
   { path: 'source/copySource', desc: '复制派生源', danger: true, impl: true },
   // 0706 优化·Phase3 新增（前端新流程，非 142 逆向清单原有项）：新建采集源两段式闸门
   { path: 'source/createSource', desc: '新建源（闸门创建，含 ID 查重）', impl: true },
@@ -283,7 +289,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'overview/trend', desc: '采集任务趋势（近 N 天抓取量 / 成功量）', impl: true },
 
   // 网站—源父子模型：0810 对接 data-view 的网站读取接口；写类仅按明确流程逐步联调。
-  // 0812 已在 W1 测试环境完成只读联调；建站/保存/关联写入不标记为默认 live。
+  // 0812 已在 W1 测试环境完成只读联调。建站三条（site/add、snatchSave、bindSite）不标默认 live，
+  // 避免测试代理误写入；生产新建由 siteCreate 在 isProductionCreateEnabled 时单次强制 http。
   { path: 'site/sitePaged', desc: '网站分页列表（真实 cfg_site，含 sourceCnt / errorCnt 汇总）', impl: true, live: true },
   { path: 'site/summary', desc: '网站统计摘要（网站/源/告警网站/出错源）', live: true },
   { path: 'site/detail', desc: '网站详情（真实路径）', live: true },
@@ -296,7 +303,12 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/changeSite', desc: '批量关联/变更源所属网站', danger: true, impl: true },
   { path: 'site/siteDetail', desc: '网站详情', impl: true },
   { path: 'site/createSite', desc: '新建采集：网站 + 首批源', impl: true },
-  { path: 'site/updateSite', desc: '编辑网站基本信息', danger: true, impl: true },
+  // 真实路径是 /v1/site/update（POST，body 为 cfg_site 实体），见旧前端 src/api/site.js:95。
+  // live 必须标在下面 site/update 这一条上，不是这条逻辑名——usesMockAdapter 按真实 httpEndpoint
+  // 查表（client.ts:181）。2026-08-27 曾把 live 标在这里，导致改网站名称表面接了真实接口，实际
+  // 仍悄悄落回 mock（mockSiteUpdate 还是旧的 category/owner 必填形状，传新形状直接 `.trim()` 报错）。
+  { path: 'site/updateSite', desc: '编辑网站基本信息 → POST /v1/site/update', danger: true, impl: true },
+  { path: 'site/update', desc: '编辑网站基本信息（真实路径，见上方 site/updateSite 的说明）', danger: true, live: true },
   { path: 'site/sourcesOfSite', desc: '网站下的源列表', impl: true },
   { path: 'site/addSource', desc: '网站下新增源（默认继承统一流程）', impl: true },
   { path: 'site/cloneSource', desc: '复制源流程、配置和表结构（不复制数据与运行实例）', danger: true, impl: true },

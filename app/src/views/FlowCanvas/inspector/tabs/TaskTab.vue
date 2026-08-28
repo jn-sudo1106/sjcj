@@ -26,9 +26,6 @@ const effectiveInputTableId = computed(() => (id.value ? flow.effectiveInputTabl
 const hasEffectiveInput = computed(() => Boolean(effectiveInputTableId.value))
 const ownInputTable = computed(() => cc.value?.inputTable ?? cfg.value?.inputTable ?? '')
 
-// 当前节点输出表（统一口径：采集类取 collectCfg.outputTable，非采集类取 cfg.outputTable）
-const nodeTableId = computed(() => cc.value?.outputTable || cfg.value?.outputTable || '')
-
 const prevNode = computed<NodeConfig | undefined>(() => {
   const idx = flow.main.indexOf(id.value)
   for (let i = idx - 1; i >= 0; i--) {
@@ -49,11 +46,6 @@ const selectedInputFields = computed(() => {
   const selected = cfg.value?.inputFields
   return selected === undefined ? inputTableFields.value : inputTableFields.value.filter((field) => selected.includes(field.prop))
 })
-watch(nodeTableId, (tid) => ensureTableFields(tid), { immediate: true })
-const outputTableFields = computed(() =>
-  fieldOptionsFromTableOrOutput(nodeTableId.value, tables.value, cfg.value?.output),
-)
-
 // 任务配置独立于已退役的配置功能；队列未填时按当前源自动生成。
 const ownTaskQueue = computed(() => (cfg.value ? nodeTaskQueue(cfg.value) : ''))
 const taskQueueFallback = computed(() => {
@@ -80,12 +72,11 @@ function onTaskParamValueChange(paramId: string, key: 'fieldId' | 'valueExpr', e
   })
 }
 
-type TaskFieldList = 'contextMap' | 'outColumns'
+// 「出参列」（outColumns）2026-08-27 拍板搬到参数配置 Tab，这里只剩「上下文来源」（contextMap）。
+// 两者取值来源本来就不同：上下文来源取输入表字段，出参列取输出表字段——放在一起容易被误当成一类。
+type TaskFieldList = 'contextMap'
 function taskFieldList(key: TaskFieldList) {
   return cfg.value?.taskCfg?.[key] ?? []
-}
-function taskFieldOptions(key: TaskFieldList) {
-  return key === 'contextMap' ? selectedInputFields.value : outputTableFields.value
 }
 function onTaskFieldChange(key: TaskFieldList, index: number, e: Event) {
   const fields = [...taskFieldList(key)]
@@ -94,14 +85,14 @@ function onTaskFieldChange(key: TaskFieldList, index: number, e: Event) {
 }
 function addTaskField(key: TaskFieldList) {
   const current = taskFieldList(key)
-  const next = taskFieldOptions(key).find((field) => !current.includes(field.prop))
+  const next = selectedInputFields.value.find((field) => !current.includes(field.prop))
   if (next) flow.patchTaskConfig(id.value, { [key]: [...current, next.prop] })
 }
 function removeTaskField(key: TaskFieldList, index: number) {
   flow.patchTaskConfig(id.value, { [key]: taskFieldList(key).filter((_: string, itemIndex: number) => itemIndex !== index) })
 }
 function canAddTaskField(key: TaskFieldList) {
-  return taskFieldOptions(key).some((field) => !taskFieldList(key).includes(field.prop))
+  return selectedInputFields.value.some((field) => !taskFieldList(key).includes(field.prop))
 }
 
 const entryCondition = computed<ConditionGroup | undefined>(() => (cfg.value ? nodeEntryCondition(cfg.value) : undefined))
@@ -154,18 +145,6 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
     </div>
     <button class="rc-btn" type="button" :disabled="!hasEffectiveInput || !canAddTaskField('contextMap')" @click="addTaskField('contextMap')">+ 添加字段</button>
     <div class="rc-help">{{ hasEffectiveInput ? '添加需要随任务传递的输入表字段。' : '暂无有效输入表，当前上下文来源为空。' }}</div>
-  </div>
-  <div class="rc-field"><label>出参列</label>
-    <div v-if="hasEffectiveInput && taskFieldList('outColumns').length" class="ni-task-field-list">
-      <div v-for="(fieldId, index) in taskFieldList('outColumns')" :key="`${fieldId}-${index}`" class="ni-task-field-row">
-        <select class="rc-select" :value="fieldId" @change="onTaskFieldChange('outColumns', index, $event)">
-          <option v-for="f in outputTableFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
-        </select>
-        <button class="rc-row-del" type="button" title="删除字段" @click="removeTaskField('outColumns', index)">×</button>
-      </div>
-    </div>
-    <button class="rc-btn" type="button" :disabled="!hasEffectiveInput || !canAddTaskField('outColumns')" @click="addTaskField('outColumns')">+ 添加字段</button>
-    <div class="rc-help">{{ hasEffectiveInput ? '添加当前节点输出表中需要保留给后续步骤的字段。' : '暂无有效输入表，当前出参列为空。' }}</div>
   </div>
 </template>
 

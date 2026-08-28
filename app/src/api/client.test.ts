@@ -274,7 +274,7 @@ describe('生产写守卫', () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { request } = await import('./client')
 
-    await request('source/updateSource', { sourceId: '1' })
+    await request('task/resetTaskInsts', { ids: '1' })
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
@@ -283,7 +283,7 @@ describe('生产写守卫', () => {
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
     const { request, ProductionWriteBlockedError } = await import('./client')
 
-    await expect(request('source/updateSource', { sourceId: '1' })).rejects.toThrow(/写保护|不在允许清单/)
+    await expect(request('task/resetTaskInsts', { ids: '1' })).rejects.toThrow(/写保护|不在允许清单/)
     expect(fetchMock).not.toHaveBeenCalled()
 
     // 拦截发生在网络请求之前，抛出的错误信息里必须点名具体端点，方便排查是哪次调用被挡

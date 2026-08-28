@@ -88,6 +88,13 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'config/configParamAdd',
   'config/configParamDel',
   'source/sendSnatchWithParam',
+  // 2026-08-27 拍板放开：源换网站 / 删除源 / 网站重命名（侧栏右键菜单）。
+  // source/delete 是**永久删除源**，本清单里破坏性最强的一条，UI 侧必须保留二次确认。
+  'source/delete',
+  'site/update',
+  // 2026-08-28 拍板放开：源重命名（source/updateSource，team_six bfbbcf7 已切真实请求，
+  // 但漏加本白名单，导致打生产时被写保护拦下）。
+  'source/updateSource',
 ])
 
 function isProductionWriteAllowed(httpEndpoint: string): boolean {

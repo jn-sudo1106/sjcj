@@ -5,7 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useUiStore } from '../../stores/ui'
 import { useWorkspaceStore } from '../../stores/workspace'
-import { flowApi, sourceApi, siteApi, type Source, type Site } from '../../api'
+import { flowApi, sourceApi, type Source } from '../../api'
 import { useRuntimeStore } from '../../stores/runtime'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
 import LoginConfigSelectDialog from '@/views/FlowCanvas/launch/LoginConfigSelectDialog.vue'
@@ -19,9 +19,9 @@ import SiteSourceSwitcher from './source/SiteSourceSwitcher.vue'
 import SnatchLauncher from './source/SnatchLauncher.vue'
 import { nodeInspectorTabs } from './inspector/nodeInspectorTabs'
 import SiteDetailView from './result/SiteDetailView.vue'
-import CategoryTreePicker, { type CategorySelection } from './source/CategoryTreePicker.vue'
 import { collectorCapabilityOf, type LoginConfigRef } from '@/views/FlowCanvas/canvas/flowModel'
-import { firstSourceId, normalizeSourceView, normalizeSiteView, sourceViewFromHash } from '@/utils/url/workspaceRoute'
+import { normalizeSourceView, normalizeSiteView, sourceViewFromHash } from '@/utils/url/workspaceRoute'
+import NewSiteWizard from './create/NewSiteWizard.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -139,90 +139,8 @@ function onSidebarCompare(rightId: string) {
   if (!ws.enterCompare(rightId, left)) ElMessage.warning('无法对比：请选择另一个源')
 }
 
-// ---- 新建采集闸门：页面保留网站 + 首批源表单；siteApi 在真实环境内部分步骤落库。
+// ---- 新建采集闸门：单页网站 + 首批源；创建后进入画布。
 const isGate = computed(() => route.query.mode === 'new')
-function suggestId(prefix: string): string {
-  return `${prefix}${Math.floor(100000 + Math.random() * 900000)}`
-}
-function blankSiteDraft(): Site {
-  return {
-    siteId: suggestId('site-'),
-    name: '',
-    category: '',
-    categoryPath: '',
-    owner: 'admin',
-    sourceCount: 0,
-    errorCount: 0,
-    tags: [],
-  }
-}
-interface GateChildRow { sourceId: string; name: string; url: string }
-function blankRow(): GateChildRow {
-  return { sourceId: suggestId('src-'), name: '', url: '' }
-}
-const gateSite = ref(blankSiteDraft())
-const gateRows = ref<GateChildRow[]>([blankRow()])
-// 分类目录树（0711 R1）：CategoryTreePicker 单独维护 dirId/category/categoryPath 三个字段，桥接到 gateSite
-const gateCategory = computed<CategorySelection>({
-  get: () => ({ dirId: gateSite.value.dirId, category: gateSite.value.category, categoryPath: gateSite.value.categoryPath ?? '' }),
-  set: (v) => {
-    gateSite.value.dirId = v.dirId
-    gateSite.value.category = v.category
-    gateSite.value.categoryPath = v.categoryPath
-  },
-})
-// 首个源名称在未手工修改前跟随网站名称。
-const firstSourceNameTouched = ref(false)
-const creating = ref(false)
-watch(
-  () => gateSite.value.name,
-  (name) => {
-    if (!firstSourceNameTouched.value && gateRows.value[0]) gateRows.value[0].name = name
-  },
-)
-function addGateRow() {
-  gateRows.value.push(blankRow())
-}
-function removeGateRow(i: number) {
-  if (gateRows.value.length > 1) gateRows.value.splice(i, 1)
-}
-function onCancelGate() {
-  router.push('/collect')
-}
-async function onCreateAndEnter() {
-  if (creating.value) return
-  const site = gateSite.value
-  if (!site.name || !site.category) {
-    ElMessage.warning('请完整填写网站名称 / 分类')
-    return
-  }
-  const rows = gateRows.value.filter((r) => r.name.trim())
-  if (!rows.length) {
-    ElMessage.warning('请至少填写一个源名称')
-    return
-  }
-  // 源默认设置（代理/断点续爬/选用配置/登录/定时等）已随闸门收口整块移除，创建后在画布"源信息"里配
-  const sources: Source[] = rows.map((r) => ({
-    sourceId: r.sourceId, name: r.name, url: r.url, configId: '', mainTable: '', owner: site.owner || 'admin', state: 'C',
-  }))
-  const siteForCreate: Site = { ...site, sourceCount: sources.length, errorCount: sources.filter((s) => s.state === 'E').length }
-  creating.value = true
-  try {
-    const res = await siteApi.siteCreate(siteForCreate, sources)
-    if (!res?.ok) {
-      ElMessage.warning(res?.message || '创建失败，请重试')
-      return
-    }
-    const sourceId = res.sourceId || firstSourceId(sources)
-    await router.replace({ path: '/canvas', query: { ...(res.siteId ? { siteId: res.siteId } : {}), sourceId, view: 'flow' } })
-    registerCanvasActions()
-    ElMessage.success(`网站「${siteForCreate.name}」已创建（${sources.length} 个源），已进入首个源的流程视图`)
-  } catch (error) {
-    ElMessage.error(`创建失败：${(error as Error).message ?? '网络异常'}，请勿重复提交；如已返回网站 ID，请先回查网站后再继续`)
-  } finally {
-    creating.value = false
-  }
-}
 // ---- 配置区宽度（优化 0701 问题一）：拖拽分隔条调宽 + 一键展开 ----
 const inspWidth = computed(() => `${ui.inspectorWidth ?? (flow.sourceCtx ? 480 : 372)}px`)
 let splitStartX = 0
@@ -391,6 +309,7 @@ async function onStartCapture() {
 // "发布"概念全删（0710 会议 C3）：默认草稿语义，保存即生效
 // "试跑"入口已删除（0714 会议 Task 4）：CanvasHeader 的"发起抓取"按钮通过同一条动作总线触发 onStartCapture
 function registerCanvasActions() {
+  ui.clearActions()
   ui.registerAction('保存', onSave)
   ui.registerAction('发起抓取', onStartCapture)
 }
@@ -429,10 +348,7 @@ async function enterFromRoute() {
 onMounted(async () => {
   window.addEventListener('hashchange', syncActiveView)
   if (isGate.value) {
-    gateSite.value = blankSiteDraft()
-    gateRows.value = [blankRow()]
-    firstSourceNameTouched.value = false
-    registerCanvasActions()
+    ui.clearActions()
     return
   }
   await enterFromRoute()
@@ -446,14 +362,8 @@ watch(
     await enterFromRoute()
   },
 )
-// 同一路由内进入 mode=new 时回到基础信息闸门
 watch(isGate, (v) => {
-  if (v) {
-    gateSite.value = blankSiteDraft()
-    gateRows.value = [blankRow()]
-    firstSourceNameTouched.value = false
-    registerCanvasActions()
-  }
+  if (v) ui.clearActions()
 })
 onUnmounted(() => {
   resolveLoginConfigSelection?.()
@@ -468,34 +378,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div v-if="isGate" class="rc-gate">
-    <div class="rc-gate-card">
-      <div class="rc-gate-title">新建采集 · 网站基础信息</div>
-      <div class="rc-gate-hint">网站用于归属与管理；源（语言 / 变体）才是真正的采集实体，创建后可在画布内继续增删调整。</div>
-      <div class="rc-field"><label>网站名称</label><input class="rc-input" v-model="gateSite.name" placeholder="必填" /></div>
-      <div class="rc-field"><label>分类</label>
-        <CategoryTreePicker v-model="gateCategory" />
-      </div>
-
-      <div class="rc-gate-rows-title">源清单（至少一个，语言 / 变体，创建后可继续增删）</div>
-      <div v-for="(row, i) in gateRows" :key="row.sourceId" class="rc-gate-row">
-        <input
-          class="rc-input"
-          v-model="row.name"
-          placeholder="源名称，必填"
-          @input="i === 0 && (firstSourceNameTouched = true)"
-        />
-        <input class="rc-input" v-model="row.url" placeholder="源 URL，选填" />
-        <button class="rc-btn" type="button" :disabled="gateRows.length <= 1" @click="removeGateRow(i)">移除</button>
-      </div>
-      <button class="rc-btn" type="button" @click="addGateRow">＋ 添加源</button>
-
-      <div class="rc-gate-actions">
-        <button class="rc-btn" type="button" @click="onCancelGate">取消</button>
-        <button class="rc-btn primary" type="button" :disabled="creating" @click="onCreateAndEnter">{{ creating ? '创建中…' : '创建并进入编排' }}</button>
-      </div>
-    </div>
-  </div>
+  <NewSiteWizard v-if="isGate" />
 
   <template v-else>
     <SourceTabsBar v-if="flow.sourceCtx" />
@@ -591,19 +474,6 @@ onUnmounted(() => {
 .rc-insp-splitter:hover::before, .rc-insp-splitter:active::before { background: var(--rc-primary); }
 .rc-insp-splitter.placeholder { cursor: default; pointer-events: none; }
 .rc-insp-splitter.placeholder::before { background: transparent; }
-
-/* 新建源闸门：先填写基础信息，过闸后再进入画布 */
-.rc-gate { display: flex; justify-content: center; padding: 24px 16px 40px; }
-.rc-gate-card { width: min(640px, 100%); background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); padding: 20px 22px; }
-.rc-gate-title { font-size: 15px; font-weight: 800; color: var(--rc-text); margin-bottom: 6px; }
-.rc-gate-hint { font-size: 11px; color: var(--rc-muted); line-height: 1.6; margin-bottom: 14px; }
-.rc-gate-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--rc-border-soft); }
-.rc-gate-rows-title { font-size: 11px; font-weight: 700; color: var(--rc-muted); margin: 14px 0 8px; }
-.rc-gate-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-bottom: 8px; align-items: center; }
-.rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 10px; }
-.rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }
-.rc-input, .rc-select { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; }
-.rc-input:focus, .rc-select:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 
 /* 13 寸视口：保留画布与配置区并排，同时给右侧 Tab 留出完整的可读宽度。 */
 @media (max-width: 1400px) and (min-width: 1241px) {

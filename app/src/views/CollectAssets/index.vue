@@ -5,11 +5,8 @@ import SourceTab from './SourceTab.vue'
 import ConfigTab from './ConfigTab.vue'
 import EntryTab from './EntryTab.vue'
 
-// 旧「配置列表」入口保持隐藏。注意 0721 会议 §五 Phase D 的"配置列表根本没用"已被 0824 复议推翻
-//（0824-00 §3.1 与复议 4：配置管理入口恢复，但载体改为配置中心的「配置包」，走 /configs）。
-// 这里仍不放出旧入口，理由不是"配置管理没用"，而是粒度对不上：一条旧 config ≈ 包内一个节点，
-// 而配置包 = 整条节点链 + 各节点右侧共享配置（0824-09 R1），旧 configPaged 撑不起配置包列表。
-// ConfigTab 组件本体和路由暂不删，留作旧数据只读排查。
+// 旧「配置列表」入口保持隐藏。最新口径把流程与节点配置拆开管理，旧 configPaged 只覆盖
+// 节点配置的一部分，不能直接作为新的配置中心。ConfigTab 组件暂不删，留作旧数据只读排查。
 const TABS: { key: string; label: string }[] = [
   { key: 'source', label: '网站列表' },
   { key: 'entry', label: '表 ID 列表' },

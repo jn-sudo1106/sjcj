@@ -120,7 +120,7 @@ const DEFAULT_PRESET_TABLES = [
 // 输出字段勾选相关的 outputTableFields/savedOutFields/selectedFieldProps/toggleOutputField/
 // selectAllFields/clearAllFields 随「输出字段选择」区块一并撤掉（原因见下方模板处注释）。
 // flow.setOutFields 这个 store action 因此暂时没有调用方了，但没有删——outFields 还在
-// NodeConfig 类型和配置包定义（configPackageDefinition）里，写入通路打通后这块要整体恢复。
+// NodeConfig 类型里仍保留这些字段；真实节点配置写入通路打通后再整体恢复。
 
 function selectPresetTable(tableId: string) {
   if (nodeCapability.value?.outputMode === 'fixed') return
@@ -292,9 +292,9 @@ async function onSaveExecMeta() {
       <div class="rc-help">源内去重：仅在当前采集源范围内对落库数据去重；表内去重：跨源在整张数据表范围内全局去重。</div>
     </div>
     <!-- 「输出字段选择」（outFields）2026-08-26 撤掉：这个勾选没有任何后端通路——不在 item/next
-         步骤写入 payload 里（stepToStepModifyPayload 无此 key），只写进本地草稿和配置包定义，
-         而配置包端点全是 mock（config-packages/* 只有 impl 没有 live）。也就是说勾与不勾对真实
-         抓取零影响，展示出来只会让人以为配置生效了。等写入通路真的打通再恢复。
+         步骤写入 payload 里（stepToStepModifyPayload 无此 key），目前只会写进本地流程草稿。
+         也就是说勾与不勾对真实抓取零影响，展示出来只会让人以为配置生效了。等节点配置的
+         写入通路真的打通再恢复。
          注意：规则节点那套入参/出参字段绑定不受影响，它走 orchestrationSaveMeta →
          /vrule/api/custom-compose/save（live 且在生产写白名单里），是真生效的。 -->
     <!-- 结构化配置（入库配置）+ 正文规则（0804 S3-1）：不透明文本，具体 schema 由执行端解释 -->

@@ -337,7 +337,7 @@ watch(
 
 <template>
   <main class="rc-canvas" @contextmenu="onPaneMenu" @click="closeMenu">
-    <CanvasHeader v-if="flow.sourceCtx" />
+    <CanvasHeader />
 
     <button
       class="rc-node-library-toggle"

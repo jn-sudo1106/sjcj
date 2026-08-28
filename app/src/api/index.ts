@@ -1,4 +1,4 @@
-import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError, isMockMode } from './client'
+import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError, isMockMode, isProductionCreateEnabled, type RequestOptions } from './client'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readLoginUsername, readStoredToken, triggerSessionExpired } from './auth'
 import type {
   Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery, Step, SourceLoadParamsResult, SendSnatchWithParamPayload,
@@ -60,17 +60,18 @@ import {
 import { encryptLegacyPayload } from './legacyCrypto'
 
 export * from './types'
-export { isDanger, DANGER_ENDPOINTS, isMockMode, isProductionBackend } from './client'
+export { isDanger, DANGER_ENDPOINTS, isMockMode, isProductionBackend, isProductionCreateEnabled } from './client'
 export { parseNextStepReceipt, type NextStepReceipt, type NextStepReceiptEntry } from './legacyAdapters'
 
 // 对方后端尚未提供对应实现的资产能力强制走 Mock；网站读取链路已在 siteApi 单独切真实。
 const assetMockRequest = <T>(endpoint: string, params?: Record<string, unknown>) =>
   request<T>(endpoint, params, { mode: 'mock' })
 
-async function legacySnatchSaveRequest(payload: LegacySnatchSaveRequest): Promise<LegacySnatchSaveResult> {
+async function legacySnatchSaveRequest(payload: LegacySnatchSaveRequest, options: Pick<RequestOptions, 'mode'> = {}): Promise<LegacySnatchSaveResult> {
   const result = await request<LegacySnatchSaveResult>('snatch/snatchSave', payload as unknown as Record<string, unknown>, {
     method: 'POST',
     httpEndpoint: 'snatch/snatchSave',
+    ...options,
   })
   if (result?.sourceId || !result?.message) return result
   const sourceId = result.message.match(/源ID[:：]\s*([^\s,，]+)/)?.[1]
@@ -252,11 +253,12 @@ export const sourceApi = {
       },
     }),
   /** 将已创建的真实源关联到网站；真实端点，调用方需在同一环境完成受控写入。 */
-  bindSite: async (sourceId: string, siteId: string): Promise<Ack> => {
+  bindSite: async (sourceId: string, siteId: string, options?: Pick<RequestOptions, 'mode'>): Promise<Ack> => {
     const result = await request<unknown>('source/bindSite', { sourceId, siteId }, {
       method: 'GET',
       httpEndpoint: 'source/bindSite',
       httpParams: { sourceId, siteId },
+      ...options,
     })
     return ackFromApiResult(result)
   },
@@ -279,7 +281,16 @@ export const sourceApi = {
     assertLegacySnatchSaveLogin(payload)
     return legacySnatchSaveRequest(payload)
   },
-  deleteSource: (sourceIds: string[]) => assetMockRequest<Ack>('source/deleteSource', { sourceIds }),
+  /** 删除源（高危、不可恢复）。契约按旧前端 src/api/source.js:241：GET /v1/source/delete?ids=a,b。
+   *  逻辑端点名沿用 source/deleteSource，真实路径用 httpEndpoint 显式指定。 */
+  deleteSource: async (sourceIds: string[]): Promise<Ack> => {
+    const result = await request<unknown>('source/deleteSource', { ids: sourceIds }, {
+      method: 'GET',
+      httpEndpoint: 'source/delete',
+      httpParams: { ids: sourceIds.join(',') },
+    })
+    return ackFromApiResult(result)
+  },
   sourceLogs: (sourceId: string) => assetMockRequest<SourceLog[]>('source/logPaged', { sourceId }),
   sourceTasks: (sourceId: string) => assetMockRequest<TaskInst[]>('task/topTaskPaged', { sourceId }),
   sourceTaskPaged: (q: SourceTaskQuery) => assetMockRequest<Paged<TaskInst>>('source/sourceTaskPaged', q),
@@ -373,15 +384,17 @@ export const siteApi = {
   },
   /**
    * 页面仍提交网站和首批源；真实适配层拆成 site/add → snatchSave → bindSite。
-   * site/add 不标记为默认 live，避免本地默认测试代理误触发建站；生产联调需显式切到 HTTP + 118 环境。
+   * 这三条不标默认 live，避免测试代理误建站。生产新建走 isProductionCreateEnabled + 单次 mode:'http'，
+   * 其余未迁移页面继续 mock，不要切全局 VITE_API_MODE=http。
    */
   siteCreate: async (site: Site, sources: Source[] = []): Promise<SiteCreateResult> => {
-    if (isMockMode()) {
-      return assetMockRequest<SiteCreateResult>('site/createSite', { site, sources })
-    }
-    if (!isMockMode() && import.meta.env.VITE_SITE_CREATE_TARGET !== 'production') {
+    if (!isProductionCreateEnabled()) {
+      if (isMockMode()) {
+        return assetMockRequest<SiteCreateResult>('site/createSite', { site, sources })
+      }
       return { ok: false, message: '新建网站仅允许生产环境，请设置 VITE_SITE_CREATE_TARGET=production' }
     }
+    const liveWrite = { mode: 'http' as const }
 
     const siteName = site.name.trim()
     const sitePayload: SiteCreateInput = {
@@ -393,6 +406,7 @@ export const siteApi = {
       method: 'POST',
       httpEndpoint: 'site/add',
       httpParams: sitePayload as unknown as Record<string, unknown>,
+      ...liveWrite,
     })
 
     const siteAck = ackFromApiResult(result)
@@ -417,7 +431,7 @@ export const siteApi = {
     for (const source of sources) {
       let saved: LegacySnatchSaveResult
       try {
-        saved = await legacySnatchSaveRequest(legacySnatchSavePayloadFromSource(site, source))
+        saved = await legacySnatchSaveRequest(legacySnatchSavePayloadFromSource(site, source), liveWrite)
       } catch (error) {
         return {
           ok: false,
@@ -435,7 +449,7 @@ export const siteApi = {
       firstSourceId ||= sourceId
       let bound: Ack
       try {
-        bound = await sourceApi.bindSite(sourceId, siteId)
+        bound = await sourceApi.bindSite(sourceId, siteId, liveWrite)
       } catch (error) {
         return {
           ok: false,
@@ -456,8 +470,24 @@ export const siteApi = {
       sourceId: firstSourceId,
     }
   },
-  siteUpdate: (site: Pick<Site, 'siteId' | 'name' | 'category' | 'categoryPath' | 'owner'>) =>
-    assetMockRequest<Ack>('site/updateSite', { site }),
+  /** 编辑网站基本信息。契约按旧前端 src/api/site.js:95：POST /v1/site/update，body 为 cfg_site 实体。
+   *  只提交本次真正要改的字段 + siteId，不回填整实体，避免把没读到的字段覆盖成空。
+   *  2026-08-27 实测：site/detail 真实响应没有 owner/author 这个字段（siteFromLegacy 里
+   *  Site.owner 恒为 ''），旧平台真实网站编辑表单（SiteList.vue submitEdit）也没有这一项——
+   *  之前塞进 httpParams 的 author 是没有实据的猜测，已删掉，改成只提交 siteId/siteName/categoryId。
+   *  categoryId 字段名对齐旧平台 CATEGORY 列配置（dataIndex: 'categoryId'）。 */
+  siteUpdate: async (site: Pick<Site, 'siteId' | 'name' | 'dirId'>): Promise<Ack> => {
+    const result = await request<unknown>('site/updateSite', { site }, {
+      method: 'POST',
+      httpEndpoint: 'site/update',
+      httpParams: {
+        siteId: Number(site.siteId),
+        siteName: site.name,
+        ...(site.dirId ? { categoryId: Number(site.dirId) } : {}),
+      },
+    })
+    return ackFromApiResult(result)
+  },
   siteSources: async (siteId: string) => {
     const result = await request<Paged<unknown> | Source[]>('site/sourcesOfSite', { siteId }, {
       method: 'GET',

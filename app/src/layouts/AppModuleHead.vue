@@ -22,7 +22,7 @@ const activeKey = useActiveNavKey()
 const current = computed(() => TABS.find((t) => t.key === activeKey.value) ?? TABS[0])
 
 // 源详情 / 新建采集画布的标题与面包屑
-const isSourceCanvas = computed(() => activeKey.value === 'collect' && route.path.startsWith('/canvas'))
+const isSourceCanvas = computed(() => route.path.startsWith('/canvas'))
 // 网站详情页态下 sourceCtx/siteCtx 会同时非空（见 flow.ts setSiteDisplayCtx）
 //   siteCtx 才是用户实际看到的对象，优先展示
 const sourceCrumb = computed(() =>

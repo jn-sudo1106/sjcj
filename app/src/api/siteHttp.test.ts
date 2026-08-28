@@ -13,6 +13,7 @@ describe('网站读取 HTTP 契约', () => {
     vi.stubGlobal('fetch', fetchMock)
     vi.stubEnv('VITE_API_MODE', 'http')
     vi.stubEnv('VITE_API_BASE', '')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
     vi.stubEnv('VITE_SITE_CREATE_TARGET', 'production')
     vi.resetModules()
   })
@@ -89,10 +90,47 @@ describe('网站读取 HTTP 契约', () => {
     expect(JSON.parse(String(siteInit.body))).toEqual({ siteName: '演示网站', stdSiteName: '演示网站', categoryId: 7 })
     expect(sourceUrl).toContain('/api/v1/snatch/snatchSave')
     expect(sourceInit.method).toBe('POST')
-    expect(JSON.parse(String(sourceInit.body))).toMatchObject({ sourceName: '演示源', sourceUrl: 'https://example.com', categoryId: '7' })
+    expect(JSON.parse(String(sourceInit.body))).toMatchObject({
+      sourceName: '演示源', sourceUrl: 'https://example.com', categoryId: '7', newConfig: '1',
+    })
     expect(bindUrl).toContain('/api/v1/source/bindSite?sourceId=9001&siteId=11825')
     expect(bindInit.method).toBe('GET')
     expect(result).toEqual({ ok: true, demo: false, message: '网站、源已按顺序保存并完成关联', siteId: '11825', sourceId: '9001' })
+  })
+
+  it('全局 mock 且未开生产新建时，siteCreate 走夹具不发 fetch', async () => {
+    vi.stubEnv('VITE_API_MODE', 'mock')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
+    vi.stubEnv('VITE_SITE_CREATE_TARGET', '')
+    const { siteApi } = await import('./index')
+
+    const result = await siteApi.siteCreate({
+      siteId: 'site-hybrid-fixture-1', name: '夹具网站', category: '', owner: 'admin', sourceCount: 0, errorCount: 0,
+    }, [])
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(result.ok).toBe(true)
+  })
+
+  it('全局 mock 时生产新建仍强制走 site/add，不依赖 VITE_API_MODE=http', async () => {
+    vi.stubEnv('VITE_API_MODE', 'mock')
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '1')
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '新增成功', data: { siteId: 11825 } }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '源ID:9001' }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '关联成功' }))
+    const { siteApi } = await import('./index')
+
+    const result = await siteApi.siteCreate({
+      siteId: 'site-draft', name: '混用新建站', category: '新闻', dirId: '7', owner: 'admin', sourceCount: 1, errorCount: 0,
+    }, [{ sourceId: 'source-draft', name: '混用新建源', url: 'https://example.com', configId: '', mainTable: '', owner: 'admin', state: 'C' }])
+
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      expect.stringContaining('/api/v1/site/add'),
+      expect.stringContaining('/api/v1/snatch/snatchSave'),
+      expect.stringContaining('/api/v1/source/bindSite'),
+    ])
+    expect(result).toMatchObject({ ok: true, siteId: '11825', sourceId: '9001' })
   })
 
   it('非生产建站目标拒绝发送 site/add', async () => {

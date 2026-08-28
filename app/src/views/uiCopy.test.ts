@@ -5,6 +5,7 @@ import tableView from './CollectAssets/components/TableView.vue?raw'
 import filterToolbar from './CollectAssets/components/FilterToolbar.vue?raw'
 import collectAssetsIndex from './CollectAssets/index.vue?raw'
 import flowCanvas from './FlowCanvas/index.vue?raw'
+import newSiteWizard from './FlowCanvas/create/NewSiteWizard.vue?raw'
 import nodeInspector from './FlowCanvas/inspector/NodeInspector.vue?raw'
 import taskTab from './FlowCanvas/inspector/tabs/TaskTab.vue?raw'
 import tableTab from './FlowCanvas/inspector/tabs/TableTab.vue?raw'
@@ -130,24 +131,29 @@ describe('最新方案 UI 入口收口', () => {
   })
 
   it('新建采集分类使用可搜索的目录树', () => {
-    expect(flowCanvas).toContain('CategoryTreePicker')
-    expect(flowCanvas).toContain('<CategoryTreePicker v-model="gateCategory" />')
+    expect(newSiteWizard).toContain('CategoryTreePicker')
+    expect(newSiteWizard).toContain('<CategoryTreePicker v-model="gateCategory" />')
+    expect(newSiteWizard).not.toContain('GATE_CATEGORY_OPTIONS')
+    expect(newSiteWizard).not.toContain('<select class="rc-select" v-model="gateSite.category"')
     expect(flowCanvas).not.toContain('GATE_CATEGORY_OPTIONS')
-    expect(flowCanvas).not.toContain('<select class="rc-select" v-model="gateSite.category"')
   })
 
   it('新建采集删除标签字段和源默认设置整块', () => {
+    expect(newSiteWizard).not.toContain('gateSourceDefaults')
+    expect(newSiteWizard).not.toContain('gateTagsInput')
     expect(flowCanvas).not.toContain('gateSourceDefaults')
     expect(flowCanvas).not.toContain('gateTagsInput')
     expect(flowCanvas).not.toContain('<SourceBasicForm')
-    expect(flowCanvas).not.toContain('<div class="rc-field"><label>标签</label>')
+    expect(newSiteWizard).not.toContain('<div class="rc-field"><label>标签</label>')
   })
 
   it('新建采集首个源名称跟随网站名称，手动改过后停止跟随', () => {
-    expect(flowCanvas).toContain('firstSourceNameTouched')
-    expect(flowCanvas).toContain("if (!firstSourceNameTouched.value && gateRows.value[0]) gateRows.value[0].name = name")
-    expect(flowCanvas).toContain('@input="i === 0 && (firstSourceNameTouched = true)"')
-    expect(flowCanvas).toContain('siteApi.siteCreate(siteForCreate, sources)')
+    expect(newSiteWizard).toContain('firstSourceNameTouched')
+    expect(newSiteWizard).toContain('if (!firstSourceNameTouched.value && gateRows.value[0]) gateRows.value[0].name = name')
+    expect(newSiteWizard).toContain('@input="i === 0 && (firstSourceNameTouched = true)"')
+    expect(newSiteWizard).toContain('siteApi.siteCreate(siteForCreate, sources)')
+    expect(newSiteWizard).not.toContain('WIZARD_STEPS')
+    expect(newSiteWizard).not.toContain('创建网站并启用')
   })
 
   it('节点配置不再展示输入映射和输入参数（0804 拍板：整块删除，非只对采集节点隐藏）', () => {
