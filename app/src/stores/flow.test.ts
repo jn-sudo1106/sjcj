@@ -1423,3 +1423,109 @@ describe('参数源套模板不冲掉参数配置（0721 会议反馈坐实的�
     expect(flow.configs[collectNodeId].collectCfg?.urlParamRefs ?? []).toEqual([])
   })
 })
+
+describe('双层脏状态（0824-00 §5.4）', () => {
+  let f: ReturnType<typeof useFlowStore>
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    f = useFlowStore()
+    f.newFlow('standard')
+  })
+
+  it('节点配置表单改动只置 configDirty，并按节点记账', () => {
+    f.setDedupMode('web-list', 'table')
+    expect(f.configDirty).toBe(true)
+    expect(f.flowDirty).toBe(false)
+    expect(f.dirtyConfigNodes).toEqual(['web-list'])
+    expect(f.dirty).toBe(true)
+  })
+
+  it('拓扑动作只置 flowDirty', () => {
+    f.insertAfter('web-list', 'web')
+    expect(f.flowDirty).toBe(true)
+    expect(f.configDirty).toBe(false)
+  })
+
+  it('保存配置：清本节点 config 脏标，并把流程置脏（§5.5 配置内容变了 → 流程待保存）', () => {
+    f.setDedupMode('web-list', 'table')
+    f.markNodeConfigSaved('web-list')
+    expect(f.configDirty).toBe(false)
+    expect(f.flowDirty).toBe(true)
+  })
+})
+
+describe('configDetail 异步回填（applyStepDetails）', () => {
+  let f: ReturnType<typeof useFlowStore>
+  const source = { sourceId: 'S1', name: '测试源', url: 'https://example.com/list', mainTable: '900', configId: '1000', owner: '', state: 'C' } as Source
+  const bareSteps = [
+    { stepId: 'st-1', sourceId: 'S1', name: '列表抓取', configId: '1000', enabled: true },
+    { stepId: 'st-2', sourceId: '-1', name: 'baidu-登陆', configId: '1001', enabled: true },
+  ] as unknown as Parameters<typeof f.applyStepDetails>[0]
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    f = useFlowStore()
+    f.loadFromSource(source, bareSteps as never, null)
+  })
+
+  it('裸步骤先画出来：没有 configDetail 时队列/配置名回落默认值', () => {
+    expect(Object.keys(f.configs)).toEqual(expect.arrayContaining(['st-1', 'st-2']))
+    expect(f.configs['st-1'].configName).toBeUndefined()
+  })
+
+  it('补充到达后回填配置名 / 队列 / 是否列表，且不置任何脏标', () => {
+    const enriched = [
+      { ...bareSteps[0], configName: '公告列表配置', topic: 'q_list', multiMode: 1 },
+      { ...bareSteps[1], configName: 'baidu-登陆配置', topic: 'q_login' },
+    ]
+    f.applyStepDetails(enriched as never)
+
+    expect(f.configs['st-1'].configName).toBe('公告列表配置')
+    expect(f.configs['st-1'].taskCfg?.queue).toBe('q_list')
+    expect(f.configs['st-1'].collectCfg?.multiMode).toBe(1)
+    // 回读不是用户改动
+    expect(f.dirty).toBe(false)
+    expect(f.configDirty).toBe(false)
+    expect(f.flowDirty).toBe(false)
+  })
+
+  it('isLoginConfig 迟到时整节点重建成登录节点，并回报被重建的 nodeId', () => {
+    // 步骤名是"登陆"不是"登录"，名字正则漏判，只能靠 isLoginConfig
+    expect(collectorCapabilityOf(f.configs['st-2'])?.kind).not.toBe('login')
+
+    const rebuilt = f.applyStepDetails([
+      bareSteps[0],
+      { ...bareSteps[1], isLoginConfig: true, configName: 'baidu-登陆配置' },
+    ] as never)
+
+    expect(rebuilt).toEqual(['st-2'])
+    expect(collectorCapabilityOf(f.configs['st-2'])?.kind).toBe('login')
+    expect(f.configs['st-2'].configName).toBe('baidu-登陆配置')
+    expect(f.dirty).toBe(false)
+  })
+})
+
+describe('源 URL 归源（0824-11 §1.1b）', () => {
+  let f: ReturnType<typeof useFlowStore>
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    f = useFlowStore()
+    f.newFlow('standard')
+    f.patchSource({ sourceId: 'S1', name: '测试源', url: 'https://old.example/list' } as Partial<Source>)
+    f.markSaved()
+  })
+
+  it('改源 URL 写进源，并同步到各采集节点的显示副本', () => {
+    f.patchSource({ url: 'https://new.example/list' })
+    expect(f.sourceCfg?.url).toBe('https://new.example/list')
+    const collectNodes = Object.values(f.configs).filter((c) => c.collectCfg)
+    expect(collectNodes.length).toBeGreaterThan(0)
+    collectNodes.forEach((c) => expect(c.collectCfg?.url).toBe('https://new.example/list'))
+  })
+
+  it('源 URL 归流程脏（保存流程管），不是配置脏', () => {
+    f.patchSource({ url: 'https://new.example/list' })
+    expect(f.flowDirty).toBe(true)
+    expect(f.configDirty).toBe(false)
+  })
+})

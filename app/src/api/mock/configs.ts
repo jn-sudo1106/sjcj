@@ -29,6 +29,13 @@ export function mockConfigPaged(params?: Record<string, unknown>): Paged<Config>
   return { total: filtered.length, list: filtered.slice(start, start + size) }
 }
 
+// 同资源配置（选择已有配置的候选）：mock 里没有真实域关系，按当前 configId 排除自身即可，
+// 真实分域（list1 同域 / list2 其它域）由后端返回，前端只负责合并顺序。
+export function mockSameConfigs(params?: Record<string, unknown>): Config[] {
+  const current = String(params?.configId ?? '')
+  return CONFIGS.filter((c) => c.configId !== current)
+}
+
 // 不再兜底成 CONFIGS[0]：真实后端查不到就是没有，兜底会让任何未登记的 configId
 // （比如按源步骤真实 configId 查询）都静默拿到第一条固定数据，冒充成真实内容。
 export function mockConfigDetail(params?: Record<string, unknown>): Config | undefined {

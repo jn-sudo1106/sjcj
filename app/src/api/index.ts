@@ -129,7 +129,7 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
   const configIds = [...new Set(steps.map((s) => s.configId).filter((id): id is string => !!id))]
   if (!configIds.length) return steps
   const results = await Promise.allSettled(configIds.map((id) => configApi.configDetail(id)))
-  type StepConfigDetail = { topic?: string; isLoginConfig?: boolean; multiMode?: number; paramBindings?: Step['paramBindings'] }
+  type StepConfigDetail = { topic?: string; configName?: string; isLoginConfig?: boolean; multiMode?: number; paramBindings?: Step['paramBindings'] }
   const detailByConfigId = new Map<string, StepConfigDetail>()
   results.forEach((r, i) => {
     if (r.status !== 'fulfilled' || !r.value) return
@@ -138,6 +138,7 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
     const bindings = (r.value.params ?? []).map((p) => ({ paramId: p.paramId, value: p.valueShow || undefined }))
     detailByConfigId.set(configIds[i], {
       topic: r.value.topic || undefined,
+      configName: r.value.name || undefined,
       isLoginConfig: r.value.isLogin,
       multiMode: r.value.multiMode,
       ...(bindings.length ? { paramBindings: bindings } : {}),
@@ -150,6 +151,7 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
     return {
       ...step,
       ...(detail.topic ? { topic: detail.topic } : {}),
+      ...(detail.configName ? { configName: detail.configName } : {}),
       ...(detail.isLoginConfig !== undefined ? { isLoginConfig: detail.isLoginConfig } : {}),
       ...(detail.multiMode !== undefined ? { multiMode: detail.multiMode } : {}),
       ...(detail.paramBindings ? { paramBindings: detail.paramBindings } : {}),
@@ -213,15 +215,26 @@ export const sourceApi = {
     return sourceCategoriesFromLegacy(result)
   },
   sourceStats: () => assetMockRequest<{ total: number; error: number; externalChanged: number; disabled: number }>('source/stats'),
-  sourceSteps: async (sourceId: string) => {
+  /**
+   * 源的子步骤。默认连 config/configDetail 的补充一起返回（topic / 配置名 / 登录语义 /
+   * isMulti / 参数绑定），调用方拿到的就是完整数据。
+   *
+   * `withConfigDetails: false` 只发 nextConfigPaged 就返回——画布用这条快路：
+   * 补充那一轮必须等本轮出 configId 才能发，串在首屏前面等于白等一个 RTT
+   * （实测切源 nextConfigPaged 115ms → configDetail 124ms → 数据视图自己的查询才开始）。
+   * 跳过后由 `stepConfigDetails` 在首屏之后异步补，见 flowModel.seeds 的 applyStepDetails。
+   */
+  sourceSteps: async (sourceId: string, options: { withConfigDetails?: boolean } = {}) => {
     const result = await request<unknown>('item/next/nextConfigPaged', { sourceId }, {
       method: 'GET',
       httpEndpoint: 'item/next/nextConfigPaged',
       httpParams: { sourceId, page: 1, limit: 10000, svg: true },
     })
     const steps = sourceStepsFromLegacy(result, sourceId)
-    return attachStepConfigDetails(steps)
+    return options.withConfigDetails === false ? steps : attachStepConfigDetails(steps)
   },
+  /** 步骤的 configDetail 补充，单独拿出来给「先画后补」用 */
+  stepConfigDetails: (steps: Step[]) => attachStepConfigDetails(steps),
 
   // 写类 / 高危端点：首期 mock 仅回执，UI 统一二次确认占位（呼应权威方案读写边界）。
   changeSourceEnable: (sourceId: string, disabled: boolean) =>
@@ -1172,6 +1185,45 @@ export const configApi = {
   },
   updateConfig: (config: Config) =>
     request<Ack>('config/modify/updateConfig', { config }, { method: 'POST', httpParams: configToLegacy(config) }),
+  /**
+   * 「选择已有配置」的候选来源（旧平台 ConfigSelect.vue 同款）：按源查同资源配置，
+   * list1 = 同域/local、list2 = 其它域。旧前端合并顺序是 [...list2, ...list1]，这里照搬，
+   * 免得同一个源在新旧平台看到的候选顺序不一样。configId 传当前值，后端用来排除自身。
+   */
+  sameConfigs: async (sourceId: string, configId?: string) => {
+    const result = await request<unknown>('item/next/configs/same', { sourceId, configId }, {
+      method: 'GET',
+      httpParams: { sourceId, configId },
+    })
+    const record = (result ?? {}) as { list1?: unknown[]; list2?: unknown[] }
+    return [...(record.list2 ?? []), ...(record.list1 ?? [])].map(configFromLegacy)
+  },
+  /**
+   * 配置详情的原始记录。「另存为新配置」要在后端原样字段上改 —— 我们的 Config 模型没有覆盖
+   * clearRule/transRule/checkRule 等 BLOB 字段，从建模值重建 payload 会把它们清空。
+   */
+  configDetailRaw: async (configId: string) => {
+    const result = await request<unknown>('config/configDetail', { configId }, { method: 'GET' })
+    return result && typeof result === 'object' && !('ok' in result) ? (result as Record<string, unknown>) : null
+  },
+  /**
+   * 新建配置：updateConfig 不带 configId 即为新增（config_api.md §二）。
+   * 但它的响应是 `{success, code, msg, data: null}`，**不回传新 configId**，
+   * 只能按配置名回查——所以配置名必须唯一，重名时取 configId 最大的那条。
+   */
+  createConfig: async (payload: Record<string, unknown>) => {
+    const body = { ...payload }
+    delete body.configId
+    const ack = await request<Ack>('config/modify/updateConfig', { config: body }, { method: 'POST', httpParams: body })
+    if (ack && 'ok' in ack && !ack.ok) return { ok: false as const, message: ack.message }
+    const name = String(payload.configName ?? '')
+    if (!name) return { ok: true as const, configId: undefined, message: ack?.message }
+    const page = await configApi.configPaged({ name, page: 1, size: 20 })
+    const hit = page.list
+      .filter((item) => item.name === name)
+      .sort((a, b) => Number(b.configId) - Number(a.configId))[0]
+    return { ok: true as const, configId: hit?.configId, message: ack?.message }
+  },
   copyAll: (configId: string) => request<Ack>('config/copyAll', { configId }, { method: 'GET', httpParams: { id: configId } }),
   deleteConfig: (configIds: string[] | string) => {
     const ids = Array.isArray(configIds) ? configIds : [configIds]

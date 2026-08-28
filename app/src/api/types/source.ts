@@ -285,6 +285,10 @@ export interface Step {
    *  也没见到 nextConfigPaged 原始 type/nodeType 字段标出登录语义；节点模板路由不能只靠
    *  步骤名正则，这个字段才是可靠信号，查不到时才回退到名字正则。 */
   isLoginConfig?: boolean
+  /** 本步骤 configId 对应配置的名称（旧 config.name），随 topic 一起由 sourceApi.sourceSteps 回填。
+   *  节点配置 Tab 的「配置名称」是必填项（0824-06 §4：config-meta，新建首次保存必填），
+   *  已有配置要显示后端真名——configDetail 在加载源时本来就逐个查过，这里只是把 name 一起带出来，不额外发请求。 */
+  configName?: string
   /** 本步骤 configId 对应配置的旧 `isMulti` 原值，随 topic 一起由 sourceApi.sourceSteps 回填。
    *  旧平台是三态（旧前端 column.config.js:642 权威定义）：
    *    1 = 列表类[按去重字段去重]、0 = 详情类[按父ID去重]、2 = 更新父表[按父ID更新父表]。

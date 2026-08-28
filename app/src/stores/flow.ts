@@ -3,6 +3,7 @@
 // 组合 source.ts 和 node.ts 保持 API 不变
 import { computed, reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
+import { applyConfigToNode } from '@/utils/flow/nodeConfigPayload'
 import {
   NODE_CONFIGS,
   TEMPLATE_TO_NODE,
@@ -35,6 +36,7 @@ import {
   type FlowBranchGroup,
   type FlowDef,
   type RuleOrchestration,
+  applyStepDetails as applyStepDetailsToConfigs,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { extractUrlParamIds, hasFragmentParams } from '@/utils/flow/urlParams'
 import {
@@ -111,6 +113,10 @@ export const useFlowStore = defineStore('flow', () => {
     get: () => nodeStore.dirty,
     set: (v) => { nodeStore.dirty = v },
   })
+  // 双层脏状态（0824-00 §5.4）：configDirty 归「保存节点配置」，flowDirty 归「保存流程」
+  const configDirty = computed(() => nodeStore.configDirty)
+  const flowDirty = computed(() => nodeStore.flowDirty)
+  const dirtyConfigNodes = computed(() => nodeStore.dirtyConfigNodes)
 
   // ---- 流程核心状态 ----
   const configs = reactive<Record<string, NodeConfig>>({})
@@ -425,7 +431,7 @@ export const useFlowStore = defineStore('flow', () => {
     if (template === 'decision') ensureBranchGroup(id, 'decision')
     else if (template === 'parallel') ensureBranchGroup(id, 'parallel')
     select(id)
-    nodeStore.touch()
+    nodeStore.touchFlow()
     return id
   }
 
@@ -464,7 +470,7 @@ export const useFlowStore = defineStore('flow', () => {
     branch.chain.push(id)
     applyParamSourceUrlToFirstCollectNode(main.value, configs, sourceCfg.value)
     select(id)
-    nodeStore.touch()
+    nodeStore.touchFlow()
     return id
   }
 
@@ -478,7 +484,7 @@ export const useFlowStore = defineStore('flow', () => {
     if (idx >= 0) main.value.splice(idx + 1, 0, newId)
     applyParamSourceUrlToFirstCollectNode(main.value, configs, sourceCfg.value)
     select(newId)
-    nodeStore.touch()
+    nodeStore.touchFlow()
   }
 
   function duplicate(id: string) {
@@ -502,7 +508,7 @@ export const useFlowStore = defineStore('flow', () => {
       branchGroups.push(newBg)
     }
     select(newId)
-    nodeStore.touch()
+    nodeStore.touchFlow()
   }
 
   function move(id: string, dir: -1 | 1) {
@@ -513,7 +519,7 @@ export const useFlowStore = defineStore('flow', () => {
     ;[next[i], next[j]] = [next[j], next[i]]
     main.value = next
     select(id)
-    nodeStore.touch()
+    nodeStore.touchFlow()
   }
 
   function moveTo(id: string, afterId: string) {
@@ -526,7 +532,7 @@ export const useFlowStore = defineStore('flow', () => {
     arr.splice(at + 1, 0, id)
     main.value = arr
     select(id)
-    nodeStore.touch()
+    nodeStore.touchFlow()
   }
 
   function toggleDisabled(id: string) {
@@ -534,7 +540,7 @@ export const useFlowStore = defineStore('flow', () => {
     if (!cfg) return
     cfg.disabled = !cfg.disabled
     select(id)
-    nodeStore.touch()
+    nodeStore.touchFlow()
   }
 
   function insertInBranch(ownerId: string, branchId: string, newNodeId: string, index?: number): boolean {
@@ -549,7 +555,7 @@ export const useFlowStore = defineStore('flow', () => {
     } else {
       branch.chain.splice(index, 0, newNodeId)
     }
-    nodeStore.touch()
+    nodeStore.touchFlow()
     return true
   }
 
@@ -560,7 +566,7 @@ export const useFlowStore = defineStore('flow', () => {
     const orphans = new Set(g.branches.flatMap((b) => b.chain))
     for (const orphan of orphans) delete configs[orphan]
     branchGroups.splice(i, 1)
-    nodeStore.touch()
+    nodeStore.touchFlow()
   }
 
   function detachFromBranches(nodeId: string) {
@@ -606,7 +612,7 @@ export const useFlowStore = defineStore('flow', () => {
     applyParamSourceUrlToFirstCollectNode(main.value, configs, sourceCfg.value)
     // 清理运行时态，避免删除正在运行/已完成的节点后 runtime.nodeStates 残留脏数据
     useRuntimeStore().clearNodeStates([id])
-    nodeStore.touch()
+    nodeStore.touchFlow()
   }
 
   function setTitle(id: string, title: string) {
@@ -614,7 +620,7 @@ export const useFlowStore = defineStore('flow', () => {
     // 允许输入框在编辑过程中暂时为空；保存/发布前由 validateFlow 统一校验，
     // 不能在每次 input 时回填“未命名节点”导致最后一个字无法删除。
     if (c) c.title = title
-    nodeStore.touch()
+    nodeStore.touchFlow()
   }
 
   // ---- 决策/分头分支段操作（0707 优化·Phase6）----
@@ -657,7 +663,7 @@ export const useFlowStore = defineStore('flow', () => {
       chain: [],
     }
     g.branches.push(branch)
-    nodeStore.touch()
+    nodeStore.touchFlow()
     return branch
   }
 
@@ -675,7 +681,7 @@ export const useFlowStore = defineStore('flow', () => {
       return { ok: false, reason: `至少保留 ${minBranches} 条分支` }
     }
     g.branches.splice(idx, 1)
-    nodeStore.touch()
+    nodeStore.touchFlow()
     return { ok: true }
   }
 
@@ -689,7 +695,7 @@ export const useFlowStore = defineStore('flow', () => {
     const next = [...g.branches]
     ;[next[index], next[j]] = [next[j], next[index]]
     g.branches = next
-    nodeStore.touch()
+    nodeStore.touchFlow()
     return true
   }
 
@@ -703,7 +709,7 @@ export const useFlowStore = defineStore('flow', () => {
     const next = [...branch.chain]
     ;[next[index], next[j]] = [next[j], next[index]]
     branch.chain = next
-    nodeStore.touch()
+    nodeStore.touchFlow()
     return true
   }
 
@@ -713,7 +719,7 @@ export const useFlowStore = defineStore('flow', () => {
     const branch = g.branches.find((b) => b.id === branchId)
     if (!branch) return false
     branch.label = label || branch.label
-    nodeStore.touch()
+    nodeStore.touchFlow()
     return true
   }
 
@@ -722,7 +728,7 @@ export const useFlowStore = defineStore('flow', () => {
     const branch = g?.branches.find((b) => b.id === branchId)
     if (!branch) return false
     branch.condition = cond
-    nodeStore.touch()
+    nodeStore.touchFlow()
     return true
   }
 
@@ -756,6 +762,34 @@ export const useFlowStore = defineStore('flow', () => {
       source: outSource,
       branchGroups: JSON.parse(JSON.stringify(branchGroups)) as FlowBranchGroup[],
     }
+  }
+
+  /**
+   * 绑定已有配置（0824-00 §5.3）：把配置正文覆盖到节点，流程字段（节点名称/源 URL/进入条件）保持不动。
+   * 内容来自后端已保存的配置，所以只置流程脏（节点的 configId 变了），不置配置脏。
+   */
+  function bindExistingConfig(id: string, config: import('@/api').Config) {
+    const cfg = configs[id]
+    if (!cfg) return
+    applyConfigToNode(cfg, config)
+    nodeStore.markConfigSaved(id)
+    nodeStore.touchFlow()
+  }
+
+  /**
+   * configDetail 异步回填（2026-08-28）：画布先用 nextConfigPaged 的裸步骤画出来，
+   * 补充字段随后打回。这是**回读**不是用户改动，所以不置任何脏标。
+   * 返回被重建的节点（登录语义改变了模板路由），调用方据此决定要不要修选中态。
+   */
+  function applyStepDetails(steps: Step[]): string[] {
+    if (!sourceCfg.value) return []
+    return applyStepDetailsToConfigs(configs, sourceCfg.value, steps)
+  }
+
+  /** 保存配置：清该节点的 config 脏标，并把流程置脏（配置内容变了，流程需要重新提交） */
+  function markNodeConfigSaved(id: string) {
+    nodeStore.markConfigSaved(id)
+    nodeStore.touchFlow()
   }
 
   function load(def: FlowDef) {
@@ -863,19 +897,27 @@ export const useFlowStore = defineStore('flow', () => {
     applyParamSourceUrlToFirstCollectNode(composed.main, composed.configs, source)
     load(composed)
     sourceCtx.value = JSON.parse(JSON.stringify(source)) as Source
-    nodeStore.touch()
+    nodeStore.touchFlow()
     return result
   }
 
   function setFlowName(name: string) {
     sourceStore.setFlowName(name)
-    nodeStore.touch()
+    nodeStore.touchFlow()
   }
 
   function patchSource(patch: Partial<Source>) {
     sourceStore.patchSource(patch)
+    // 源 URL 的真值只有一份，在源上；每个采集节点里的 collectCfg.url 是 buildNodeForStep 复制去的
+    // 显示副本（0824-11 §1.1b）。改了源就把副本同步过去，否则画布/发抓取/XML 读到的还是旧值。
+    // 参数源的首节点 URL 由下面 applyParamSourceUrlToFirstCollectNode 再覆盖一次，顺序不能反。
+    if (patch.url !== undefined) {
+      Object.values(configs).forEach((cfg) => {
+        if (cfg.collectCfg) cfg.collectCfg.url = patch.url ?? ''
+      })
+    }
     applyParamSourceUrlToFirstCollectNode(main.value, configs, sourceCfg.value)
-    nodeStore.touch()
+    nodeStore.touchFlow()
   }
 
   function patchSourceCtx(patch: Partial<Source>) {
@@ -1040,6 +1082,12 @@ export const useFlowStore = defineStore('flow', () => {
     selectedId,
     activeTab,
     dirty,
+    configDirty,
+    flowDirty,
+    dirtyConfigNodes,
+    bindExistingConfig,
+    applyStepDetails,
+    markNodeConfigSaved,
     selectedNode,
     // 布局
     layout,
@@ -1089,7 +1137,7 @@ export const useFlowStore = defineStore('flow', () => {
     // 发布门禁
     validateFlow,
     // 代理 node store 的操作
-    touch: () => nodeStore.touch(),
+    touch: () => nodeStore.touchFlow(),
     markSaved: () => nodeStore.markSaved(),
     setTripleCell: (id: string, field: TripleField, rowIndex: number, colIndex: 0 | 1 | 2, value: string) => nodeStore.setTripleCell(id, field, rowIndex, colIndex, value),
     addTripleRow: (id: string, field: TripleField) => nodeStore.addTripleRow(id, field),
@@ -1108,6 +1156,7 @@ export const useFlowStore = defineStore('flow', () => {
     setTaskQueue: (id: string, value: string) => nodeStore.setTaskQueue(id, value),
     setStructuredConfig: (id: string, value: string) => nodeStore.setStructuredConfig(id, value),
     setContentRules: (id: string, value: string) => nodeStore.setContentRules(id, value),
+    setConfigName: (id: string, name: string) => nodeStore.setConfigName(id, name),
     setEntryCondition: (id: string, cond: ConditionGroup | undefined) => nodeStore.setEntryCondition(id, cond),
     setNodeDisabled: (id: string, disabled: boolean) => nodeStore.setNodeDisabled(id, disabled),
     setBaseRow: (id: string, index: number, value: string) => nodeStore.setBaseRow(id, index, value),

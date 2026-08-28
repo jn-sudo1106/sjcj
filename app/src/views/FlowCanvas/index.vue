@@ -5,7 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useUiStore } from '../../stores/ui'
 import { useWorkspaceStore } from '../../stores/workspace'
-import { flowApi, sourceApi, type Source } from '../../api'
+import { flowApi, sourceApi, type Source, type Step } from '../../api'
 import { useRuntimeStore } from '../../stores/runtime'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
 import LoginConfigSelectDialog from '@/views/FlowCanvas/launch/LoginConfigSelectDialog.vue'
@@ -81,6 +81,13 @@ watch(
 
 // 网站详情页（0714 会议 Task 3）：siteId 且无 sourceId，只读聚合数据/文件/任务视图，没有流程视图
 const isSiteDetail = computed(() => !!route.query.siteId && !route.query.sourceId)
+// 源加载中的占位（2026-08-28 修）：三个结果视图原来都拿 `!!flow.sourceCtx` 当门槛，
+// 而从网站详情页切源、或深链/刷新进 view=data 时 sourceCtx 是空的，条件不成立就掉进
+// v-else 的流程画布——URL 明明是 view=data，中间却要闪 240ms 流程视图（逐帧实测）。
+// 改成：有 sourceId 但 ctx 还没到位时渲染占位，不拿流程画布顶包。
+// 源之间互切不受影响（ctx 是上一个源，非空，照旧直接换）。
+const sourceMissing = ref(false)
+const awaitingSource = computed(() => !!route.query.sourceId && !flow.sourceCtx)
 const isDataView = computed(() => activeView.value === 'data' && !!flow.sourceCtx)
 const isTaskView = computed(() => activeView.value === 'task' && !!flow.sourceCtx)
 // 文件视图只挂源层（0711 R11：文件视图只有源才有）：网站态 URL 带 view=file 同理重定向回流程视图
@@ -174,11 +181,15 @@ async function loadSourceFlow(sourceId: string) {
   // 真实拓扑，源改了/后端数据变了也看不出来。节点链始终来自真实的 sourceSteps。
   // flowSave 仍然写本地草稿（不在这里删），"同步到源"功能读的正是这份草稿，两者不冲突：
   // 草稿只用于显式同步操作，不再被当作这个源自己的真相。
+  sourceMissing.value = false
+  // 首屏不等 config/configDetail 那一轮（withConfigDetails: false）：它必须等 nextConfigPaged
+  // 出 configId 才能发，串在前面等于白等一个 RTT。步骤先到先画，补充字段随后回填。
   const [source, steps] = await Promise.all([
     sourceApi.sourceDetail(sourceId),
-    sourceApi.sourceSteps(sourceId),
+    sourceApi.sourceSteps(sourceId, { withConfigDetails: false }),
   ])
   if (!source) {
+    sourceMissing.value = true
     ElMessage.error('源不存在')
     return
   }
@@ -186,17 +197,51 @@ async function loadSourceFlow(sourceId: string) {
   if (!ws.open(source.sourceId, source.name)) {
     ElMessage.warning('页签已达上限（8 个），当前源未加入页签，请关闭部分页签后再试')
   }
+  void backfillStepDetails(sourceId, steps ?? [])
+}
+
+/** configDetail 补充：首屏之后异步打回。中途切走了就丢弃，别把上一个源的数据写到当前画布上。 */
+async function backfillStepDetails(sourceId: string, steps: Step[]) {
+  if (!steps.length) return
+  try {
+    const enriched = await sourceApi.stepConfigDetails(steps)
+    if (flow.sourceCtx?.sourceId !== sourceId) return
+    const rebuilt = flow.applyStepDetails(enriched)
+    // 登录语义改变了模板路由、且被重建的正好是当前选中节点时，右侧面板要跟着换一份配置
+    if (rebuilt.includes(flow.selectedId)) flow.select(flow.selectedId)
+  } catch {
+    // 补充失败不影响已经画出来的流程：节点仍是可用的，只是队列/配置名等回落到模板默认值
+  }
 }
 
 async function onSave() {
+  // 0824-00 §5.6：未保存配置的节点阻断流程保存，并把选中态定位过去
+  const pending = flow.dirtyConfigNodes[0]
+  if (pending) {
+    flow.select(pending)
+    ElMessage.warning(`节点「${flow.configs[pending]?.title || pending}」的配置尚未保存，请先在右侧保存节点配置`)
+    return
+  }
   try {
+    // 「保存流程」= 只影响当前源的那一层（2026-08-28 拍板按影响范围分工，见 0824-11 §1）：
+    // 源字段（源 URL 等）走 source/updateSource 真落库；
+    // 步骤字段（节点名称 / 进入条件 / 拓扑）的写接口 item/next/* 前端还没实现，目前只进本地草稿。
+    const source = flow.sourceCfg
+    if (source) {
+      const res = await sourceApi.sourceUpdate(source)
+      if (!res?.ok) {
+        ElMessage.error(res?.message || '保存源信息失败')
+        return
+      }
+      flow.patchSourceCtx({ url: source.url })
+    }
     const res = await flowApi.flowSave(flow.serialize())
     if (!res?.ok) {
       ElMessage.error(res?.message || '保存失败')
       return
     }
     flow.markSaved()
-    ElMessage.success(res?.message || '流程已保存')
+    ElMessage.success(source ? '源信息已保存；节点与拓扑改动待步骤接口接入后落库' : (res?.message || '流程已保存'))
   } catch (e) {
     ElMessage.error(`保存失败：${(e as Error).message ?? '未知错误'}，画布未清空，请重试`)
   }
@@ -395,7 +440,10 @@ onUnmounted(() => {
       />
       <div class="rc-canvas-main">
         <!-- key 用加载完成后的 ctx，避免切换时读到旧源数据。 -->
-        <SiteDetailView v-if="isSiteDetail" :key="sidebarSiteId" :site-id="sidebarSiteId" class="rc-flow-result" />
+        <div v-if="awaitingSource" class="rc-source-loading">
+          {{ sourceMissing ? '源不存在或已被删除' : '正在加载源…' }}
+        </div>
+        <SiteDetailView v-else-if="isSiteDetail" :key="sidebarSiteId" :site-id="sidebarSiteId" class="rc-flow-result" />
         <CompareSplit v-else-if="ws.compareSourceId" class="rc-flow-result" />
         <ResultView v-else-if="isDataView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
         <TaskView v-else-if="isTaskView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
@@ -438,6 +486,7 @@ onUnmounted(() => {
 
 <style scoped>
 /* 两列骨架（0710 会议 B1）：高度收敛到 wrapper，一处管理页签条占位；子列全部 100% 撑满 */
+.rc-source-loading { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--rc-faint); font-size: 12px; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); }
 .rc-canvas-cols { display: flex; gap: 8px; align-items: stretch; height: calc(100vh - 168px); min-height: 600px; }
 .rc-canvas-cols.with-tabs { height: calc(100vh - 204px); min-height: 564px; }
 .rc-canvas-main { flex: 1; min-width: 0; min-height: 0; }

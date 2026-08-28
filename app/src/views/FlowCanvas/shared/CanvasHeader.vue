@@ -168,8 +168,9 @@ async function onSwitchFlow(command: string) {
         </el-dropdown>
         <button v-if="src.siteId" class="rc-btn" type="button" title="把当前源已保存的流程覆盖到同网站其他源" @click="openSyncDialog">同步到源…</button>
         <!-- 保存从 AppShell 顶栏迁入画布 Header（贴着它作用的画布）；与发起抓取同走动作总线，处理函数在 index.vue -->
-        <button class="rc-btn primary" :class="{ dirty: flow.dirty }" type="button" :title="flow.dirty ? '画布有未保存的改动' : undefined" @click="ui.fireAction('保存')">
-          保存
+        <!-- 0824-00 §5.1/§5.4：与右侧「保存节点配置」区分开，这里只管流程级脏状态 -->
+        <button class="rc-btn primary" :class="{ dirty: flow.flowDirty }" type="button" :title="flow.flowDirty ? '流程有未保存修改' : undefined" @click="ui.fireAction('保存')">
+          保存流程
         </button>
       </div>
       <div v-if="view === 'flow'" class="ch-canvas-actions" aria-label="源运行操作">

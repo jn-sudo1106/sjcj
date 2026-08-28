@@ -95,7 +95,9 @@ function onDelete(c: Config) {
             <td>{{ c.policy || '—' }}</td>
             <td>{{ c.sourceCount ?? 0 }} · {{ c.paramRefs?.length ?? 0 }}</td>
             <td>
-              <StatusTag v-if="c.isDetail" text="详情类" tone="run" :show-icon="false" />
+              <!-- isDetail 现在表示"非列表类"（isMulti 0 或 2）；2 是「更新父表」，按原义标出来 -->
+              <StatusTag v-if="c.multiMode === 2" text="更新父表" tone="run" :show-icon="false" />
+              <StatusTag v-else-if="c.isDetail" text="详情类" tone="run" :show-icon="false" />
               <StatusTag v-if="c.isLogin" text="登陆类" tone="warn" :show-icon="false" class="ct-tag2" />
               <span v-if="!c.isDetail && !c.isLogin" class="muted">普通</span>
             </td>

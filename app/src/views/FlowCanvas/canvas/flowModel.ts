@@ -95,6 +95,9 @@ export interface NodeConfig {
   /** 本节点引用的配置 ID（迁移数据来自 Step.configId）。0824-00 §1.1 的新模型里 FlowNode N:1 Config，
    *  节点必须且只能引用一个配置——这个字段就是那个引用。参数绑定/解绑要按它调 config/configParam* 接口。 */
   configId?: string
+  /** 本节点引用配置的名称（config-meta，0824-06 §4）。已有配置来自 config/configDetail 回填，
+   *  新建配置由用户在「节点配置 → 配置名称」填写，首次保存必填。 */
+  configName?: string
   disabled?: boolean
   base: [string, string][]
   fields: [string, string][]

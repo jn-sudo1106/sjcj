@@ -295,6 +295,16 @@ describe('生产写守卫', () => {
     void ProductionWriteBlockedError
   })
 
+  it('连生产时，config/modify/updateConfig 在白名单内（2026-08-28 拍板放开新建+保存配置）', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
+    const { request } = await import('./client')
+
+    await request('config/modify/updateConfig', { config: { configName: 'x' } }, { method: 'POST', httpParams: { configName: 'x' } })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('连生产时，新建网站/源/配置及编排元数据在白名单内，正常放行', async () => {
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))

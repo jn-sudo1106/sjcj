@@ -6,7 +6,7 @@ import NodeInspector from './NodeInspector.vue'
 import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDialog.vue'
 import { useFlowStore } from '@/stores/flow'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, paramApi, ruleApi, sourceApi } from '@/api'
+import { configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
 
 function mockAssets() {
   vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 0, list: [] })
@@ -236,5 +236,185 @@ describe('NodeInspector 参数源编辑入口在 ConfigTab（0802 重构）', ()
     expect(wrapper.find('[data-testid="edit-param-source-save"]').exists()).toBe(false)
     expect(readonlyTpl()).toContain('http://new-base-$PARAM$_913')
     expect(readonlyTpl()).not.toContain('http://base-$PARAM$_913')
+  })
+})
+
+describe('配置绑定条与节点配置脏状态条（0824-00 §5.4/§6.1）', () => {
+  it('采集节点显示配置绑定条：有 configId 标「已有配置」，没有则标「新建配置 · 未保存」', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = { ...cloneConfig(NODE_CONFIGS['web-list']), configId: '6200026' }
+    flow.configs['web-2'] = cloneConfig(NODE_CONFIGS['web-list'])
+    flow.select('web-1')
+
+    const w = mount(NodeInspector)
+    await flushPromises()
+    expect(w.find('.rc-config-bar').exists()).toBe(true)
+    expect(w.text()).toContain('#6200026')
+    expect(w.text()).toContain('已有配置')
+
+    flow.select('web-2')
+    await flushPromises()
+    expect(w.text()).toContain('新建配置 · 未保存')
+    w.unmount()
+  })
+
+  it('决策节点不参与配置绑定，不显示配置条', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['dec-1'] = { ...cloneConfig(NODE_CONFIGS['web-list']), kind: 'decision' }
+    flow.select('dec-1')
+
+    const w = mount(NodeInspector)
+    await flushPromises()
+    expect(w.find('.rc-config-bar').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('改节点配置置脏；保存配置后清脏标并把流程置脏', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = { ...cloneConfig(NODE_CONFIGS['web-list']), configName: '公告列表配置' }
+    flow.select('web-1')
+
+    const w = mount(NodeInspector)
+    await flushPromises()
+    expect(w.find('.rc-insp-foot').exists()).toBe(true)
+
+    flow.setDedupMode('web-1', 'table')
+    await flushPromises()
+    expect(w.text()).toContain('节点配置有未保存修改')
+
+    // 没有 configId 的节点，「保存配置」走新建（updateConfig 不带 configId），打桩到位再点
+    vi.spyOn(configApi, 'createConfig').mockResolvedValue({ ok: true, configId: '900001', message: undefined })
+    vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: '900001', name: '公告列表配置', enabled: true })
+    const saveBtn = w.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存配置')!
+    await saveBtn.trigger('click')
+    await flushPromises()
+    await flushPromises()
+    expect(w.text()).toContain('无未保存修改')
+    expect(flow.configDirty).toBe(false)
+    expect(flow.flowDirty).toBe(true)
+    w.unmount()
+  })
+
+  it('底部条常驻：未改动的已有配置节点也在，保存按钮禁用；新建配置态可直接保存（§5.3）', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = { ...cloneConfig(NODE_CONFIGS['web-list']), configId: '1400774', configName: '公告列表配置' }
+    flow.configs['web-2'] = { ...cloneConfig(NODE_CONFIGS['web-list']), configName: '新配置' }
+    flow.select('web-1')
+
+    const w = mount(NodeInspector)
+    await flushPromises()
+    const saveOf = () => w.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存配置')!
+    expect(w.text()).toContain('无未保存修改')
+    expect(saveOf().attributes('disabled')).toBeDefined()
+
+    // 新建配置态：一个字段没改也要能保存一次（§5.3 首次保存才拿 configId）
+    flow.select('web-2')
+    await flushPromises()
+    expect(w.text()).toContain('新建配置 · 未保存')
+    expect(saveOf().attributes('disabled')).toBeUndefined()
+    w.unmount()
+  })
+
+  it('决策节点不显示节点配置脏状态条', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['dec-1'] = { ...cloneConfig(NODE_CONFIGS['web-list']), kind: 'decision' }
+    flow.select('dec-1')
+
+    const w = mount(NodeInspector)
+    await flushPromises()
+    expect(w.find('.rc-insp-foot').exists()).toBe(false)
+    w.unmount()
+  })
+})
+
+describe('配置名称必填与 AI 对话 Tab（0824-06 §4）', () => {
+  it('采集节点没填配置名称：保存配置禁用并说明原因', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = cloneConfig(NODE_CONFIGS['web-list'])
+    flow.select('web-1')
+
+    const w = mount(NodeInspector)
+    await flushPromises()
+    const saveBtn = () => w.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存配置')!
+    expect(w.text()).toContain('配置名称必填')
+    expect(saveBtn().attributes('disabled')).toBeDefined()
+
+    flow.setConfigName('web-1', '公告列表配置')
+    await flushPromises()
+    expect(saveBtn().attributes('disabled')).toBeUndefined()
+    // 配置绑定条同步显示配置名称
+    expect(w.find('.rc-config-bar').text()).toContain('公告列表配置')
+    w.unmount()
+  })
+
+  it('AI 对话 Tab 下不显示保存配置条', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = { ...cloneConfig(NODE_CONFIGS['web-list']), configName: '公告列表配置' }
+    flow.select('web-1')
+
+    const w = mount(NodeInspector)
+    await flushPromises()
+    expect(w.find('.rc-insp-foot').exists()).toBe(true)
+
+    flow.setActiveTab('ai')
+    await flushPromises()
+    expect(w.find('.rc-insp-foot').exists()).toBe(false)
+    w.unmount()
+  })
+})
+
+describe('保存已有配置的影响范围确认（0824-00 §2.2，源维度）', () => {
+  it('有 configId 时点保存不直接写库，先弹影响范围；确认后才发 updateConfig', async () => {
+    mockAssets()
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 337,
+      list: [
+        { sourceId: '430016501', name: '多彩贵州网-金融-金融理财', configId: '1400774' },
+        { sourceId: '430016502', name: '多彩贵州网-金融-其它', configId: '1400935' },
+      ] as never,
+    })
+    const detailRaw = vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({ clearRule: '{"keep":1}' })
+    const update = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: '操作成功' })
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = { ...cloneConfig(NODE_CONFIGS['web-list']), configId: '1400774', configName: '公告列表配置' }
+    flow.select('web-1')
+
+    const w = mount(NodeInspector)
+    await flushPromises()
+    flow.setDedupMode('web-1', 'table')
+    await flushPromises()
+
+    const saveBtn = w.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存配置')!
+    await saveBtn.trigger('click')
+    await flushPromises()
+    // 只开弹窗，没写库
+    expect(update).not.toHaveBeenCalled()
+    expect(sourceApi.sourcePaged).toHaveBeenCalledWith(expect.objectContaining({ configId: '1400774' }))
+
+    // 确认后才写，且带上原始记录里的 BLOB 字段
+    const dialog = w.findComponent({ name: 'SaveSharedConfigDialog' })
+    dialog.vm.$emit('confirm')
+    await flushPromises()
+    await flushPromises()
+    expect(detailRaw).toHaveBeenCalledWith('1400774')
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(update.mock.calls[0][0]).toMatchObject({ configId: '1400774', clearRule: '{"keep":1}', snatchDrepeat: 'ALL' })
+    expect(flow.configDirty).toBe(false)
+    w.unmount()
   })
 })

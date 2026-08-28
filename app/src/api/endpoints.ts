@@ -145,6 +145,7 @@ export const ENDPOINTS: EndpointSpec[] = [
 
   /* ── item/next 子步骤（目标 7 / 收录 5） ── */
   { path: 'item/next/nextConfigPaged', desc: '子步骤分页 / 流程图读取', impl: true, live: true },
+  { path: 'item/next/configs/same', desc: '同资源配置（选择已有配置的候选来源，list1 同域 / list2 其它域）', impl: true, live: true },
   { path: 'item/next/saveItemConfig', desc: '新增子步骤', danger: true },
   { path: 'item/next/stepModify', desc: '修改子步骤', danger: true },
   { path: 'item/next/enable', desc: '启停子步骤', danger: true },
