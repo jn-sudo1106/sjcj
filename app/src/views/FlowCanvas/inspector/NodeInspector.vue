@@ -6,14 +6,18 @@
 // isRule 会随选中节点变化，不能只在 onMounted 判断一次——否则打开画布时没选中规则节点就永远拉不到规则数据
 // （见 NodeInspector.test.ts「规则数据懒加载」）。
 import { computed, onMounted, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
-import { isRuleNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { decisionOrParallelKind, isRuleNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
-import { entryApi, paramApi, ruleApi } from '@/api'
+import { configApi, entryApi, paramApi, ruleApi, type Config } from '@/api'
 import { provideNodeInspectorAssets } from './useNodeInspectorAssets'
 import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
+import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
 import NodeAiChat from './NodeAiChat.vue'
+import SelectExistingConfigDialog from './SelectExistingConfigDialog.vue'
+import SaveSharedConfigDialog from './SaveSharedConfigDialog.vue'
 import TaskTab from './tabs/TaskTab.vue'
 import TableTab from './tabs/TableTab.vue'
 import ParamsTab from './tabs/ParamsTab.vue'
@@ -33,6 +37,126 @@ const statusClass = computed(() => (cfg.value?.disabled || cfg.value?.planned ? 
 // 参数配置只在非规则节点出现（0805 推翻 D17：采集节点的 URL 参数绑定离不开这个入口）；
 // 决策/分头节点不产表也不需要编排/任务/AI，只显示「分支配置」一个 Tab 承载 BranchEditor。
 const TOP_TABS = computed(() => nodeInspectorTabs(cfg.value))
+
+// 配置绑定条（0824-00 §6.1）：一个 FlowNode 必须且只能引用一个 Config。
+// 本期只落骨架——configId 来自迁移回填（flowModel.ts NodeConfig.configId），
+// 配置名称/使用节点数/状态要等 config/configDetail 与使用范围接口（0824-07 §5），拿不到就不渲染，不填占位 0。
+// 决策/分头节点只有「分支配置」，不参与配置绑定。
+const isBranchNode = computed(() => !!cfg.value && decisionOrParallelKind(cfg.value) !== undefined)
+const configId = computed(() => cfg.value?.configId || '')
+
+// 双层脏状态（0824-00 §5.4）：本条只管当前节点的配置表单；流程脏标在画布 Header。
+const nodeConfigDirty = computed(() => flow.dirtyConfigNodes.includes(id.value))
+// 底部条常驻（不只在脏时出现）：新加的节点默认「新建配置」态，一个字段没改也要能保存一次拿 configId
+// （0824-00 §5.3）；脏标只影响文案和按钮可用性。
+// 配置名称必填（0824-06 §4）：字段目前只在采集节点的「节点配置」Tab 上，没有该字段的节点不设门槛，
+// 否则规则/数据处理节点会被一个填不了的必填项永久挡住保存。
+const configNameMissing = computed(() => !!cfg.value?.collectCfg && !cfg.value?.configName)
+// 配置身份（新建 / 已有）由上面的配置绑定条表达，这里只说"有没有未提交的修改"，不重复也不夸大落库状态。
+const canSaveNodeConfig = computed(() => (nodeConfigDirty.value || !configId.value) && !configNameMissing.value)
+const footNote = computed(() => {
+  if (configNameMissing.value) return '配置名称必填，请先在「节点配置」填写'
+  if (nodeConfigDirty.value) return '节点配置有未保存修改'
+  return '无未保存修改'
+})
+// ---- 配置联调（config_api.md）----
+// 保存配置 → config/modify/updateConfig（带 configId = 更新）
+// 另存为新配置 → 同端点不带 configId = 新增；它不回传新 configId，createConfig 内部按名回查。
+const selectConfigOpen = ref(false)
+const saving = ref(false)
+
+function reportWriteError(action: string, e: unknown) {
+  const message = (e as Error)?.message ?? String(e)
+  ElMessage.error(`${action}失败：${message}`)
+}
+
+/** 取配置原始记录做基底：我们的模型没覆盖 clearRule/transRule/checkRule 等 BLOB，不带原值会被清空 */
+async function baseRecordFor(currentId: string): Promise<Record<string, unknown>> {
+  if (!currentId) return {}
+  try {
+    return (await configApi.configDetailRaw(currentId)) ?? {}
+  } catch {
+    return {}
+  }
+}
+
+// 更新已有配置前先过影响范围确认（0824-00 §2.2）：配置可被多个源复用，这一次保存会写到所有用到它的源。
+// 新建（还没有 configId）没有影响面，直接建。
+const saveSharedOpen = ref(false)
+async function onSaveNodeConfig() {
+  const node = cfg.value
+  if (!node || saving.value) return
+  if (configId.value) {
+    saveSharedOpen.value = true
+    return
+  }
+  saving.value = true
+  try {
+    await createConfigFromNode(node, {})
+  } catch (e) {
+    reportWriteError('新建配置', e)
+  } finally {
+    saving.value = false
+  }
+}
+
+async function doUpdateExistingConfig() {
+  const node = cfg.value
+  if (!node || saving.value) return
+  saving.value = true
+  try {
+    const base = await baseRecordFor(configId.value)
+    const payload = { ...buildConfigPayload(node, base), configId: configId.value }
+    const ack = await configApi.updateConfig(payload as never)
+    if (ack && 'ok' in ack && !ack.ok) {
+      ElMessage.error(ack.message || '保存配置失败')
+      return
+    }
+    flow.markNodeConfigSaved(id.value)
+    ElMessage.success(ack?.message || `配置 #${configId.value} 已保存`)
+  } catch (e) {
+    reportWriteError('保存配置', e)
+  } finally {
+    saving.value = false
+  }
+}
+
+async function createConfigFromNode(node: NodeConfig, base: Record<string, unknown>) {
+  const res = await configApi.createConfig(buildConfigPayload(node, base))
+  if (!res.ok) {
+    ElMessage.error(res.message || '新建配置失败')
+    return
+  }
+  if (!res.configId) {
+    ElMessage.warning('配置已创建，但按名回查不到新配置 ID，请刷新后确认（配置名重复时会出现这种情况）')
+    return
+  }
+  const detail = await configApi.configDetail(res.configId)
+  if (detail) flow.bindExistingConfig(id.value, detail)
+  ElMessage.success(`已新建配置 #${res.configId} 并绑定到本节点，记得保存流程`)
+}
+
+async function onSaveAsNewConfig() {
+  const node = cfg.value
+  if (!node || saving.value) return
+  if (!node.configName) {
+    ElMessage.warning('请先填写配置名称')
+    return
+  }
+  saving.value = true
+  try {
+    await createConfigFromNode(node, await baseRecordFor(configId.value))
+  } catch (e) {
+    reportWriteError('新建配置', e)
+  } finally {
+    saving.value = false
+  }
+}
+
+function onSelectExistingConfig(config: Config) {
+  flow.bindExistingConfig(id.value, config)
+  ElMessage.success(`已绑定配置 #${config.configId}，记得保存流程`)
+}
 
 // 资产联动数据：主壳加载一次并 provide，各 tab 子组件通过 useNodeInspectorAssets 只读消费。
 const assets = provideNodeInspectorAssets()
@@ -84,6 +208,29 @@ onMounted(async () => {
         </div>
       </div>
 
+      <!-- 配置绑定条（0824-00 §6.1）：当前节点引用的 Config 身份 + 换绑入口 -->
+      <div v-if="!isBranchNode" class="rc-config-bar">
+        <span class="cb-label">当前配置</span>
+        <span v-if="cfg?.configName" class="cb-name" :title="cfg.configName">{{ cfg.configName }}</span>
+        <span v-if="configId" class="cb-id" :title="`配置 ID ${configId}`">#{{ configId }}</span>
+        <span class="cb-origin" :class="{ fresh: !configId }">{{ configId ? '已有配置' : '新建配置 · 未保存' }}</span>
+        <span class="cb-gap" />
+        <button
+          class="cb-act"
+          type="button"
+          :disabled="!flow.sourceCtx"
+          :title="flow.sourceCtx ? '按本源查同资源配置，只改本节点的配置引用' : '当前不是源画布，无法按源查同资源配置'"
+          @click="selectConfigOpen = true"
+        >选择已有配置</button>
+        <button
+          class="cb-act"
+          type="button"
+          :disabled="saving || configNameMissing"
+          :title="configNameMissing ? '请先填写配置名称' : '用当前表单值另建一份配置，只给本节点用，不动原配置'"
+          @click="onSaveAsNewConfig"
+        >另存为新配置</button>
+      </div>
+
       <!-- 顶层 Tab：节点配置 / 表配置 / [参数配置] / 编排配置 / 任务配置 / AI 对话；保持在视口里不被滚动条挤出 -->
       <div class="rc-top-tabs">
         <button
@@ -106,6 +253,34 @@ onMounted(async () => {
         <ParamsTab v-else-if="tab === 'params'" />
         <ConfigTab v-else />
       </div>
+
+      <!-- 节点配置脏状态条（0824-00 §5.4）：右侧只保留保存动作 -->
+      <!-- AI 对话不产生配置改动，不挂保存条 -->
+      <div v-if="!isBranchNode && tab !== 'ai'" class="rc-insp-foot">
+        <span class="foot-note">
+          <i v-if="nodeConfigDirty || configNameMissing" class="foot-dot" />{{ footNote }}
+        </span>
+        <button
+          class="rc-btn primary"
+          type="button"
+          :disabled="!canSaveNodeConfig || saving"
+          :title="configNameMissing ? '请先填写配置名称' : (nodeConfigDirty ? undefined : (configId ? '当前没有需要保存的修改' : '新建配置还没有配置 ID，保存后随「保存流程」一起提交'))"
+          @click="onSaveNodeConfig"
+        >{{ saving ? '保存中…' : '保存配置' }}</button>
+      </div>
+      <SaveSharedConfigDialog
+        v-model:open="saveSharedOpen"
+        :config-id="configId"
+        :config-name="cfg?.configName"
+        @confirm="doUpdateExistingConfig"
+        @save-as-new="onSaveAsNewConfig"
+      />
+      <SelectExistingConfigDialog
+        v-model:open="selectConfigOpen"
+        :source-id="flow.sourceCtx?.sourceId"
+        :current-config-id="configId || undefined"
+        @select="onSelectExistingConfig"
+      />
     </template>
 
     <template v-else>
@@ -142,4 +317,20 @@ onMounted(async () => {
 .rc-top-tab:disabled { color: var(--rc-faint); cursor: not-allowed; opacity: 0.6; }
 
 .rc-help { color: var(--rc-faint); font-size: 10px; line-height: 1.5; margin-top: 6px; }
+
+/* 配置绑定条（0824-00 §6.1） */
+.rc-config-bar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fbfdff; }
+.cb-label { color: var(--rc-muted); font-size: 11px; white-space: nowrap; }
+.cb-name { font-size: 11px; font-weight: 600; color: var(--rc-text); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cb-id { font-size: 11px; font-weight: 600; color: var(--rc-text); font-variant-numeric: tabular-nums; }
+.cb-origin { font-size: 10px; color: var(--rc-primary-ink); background: var(--rc-primary-bg); border-radius: 4px; padding: 2px 6px; white-space: nowrap; }
+.cb-origin.fresh { color: var(--rc-warn); background: #fff7ed; }
+.cb-gap { flex: 1 1 auto; }
+.cb-act { border: 1px solid #d5e2f2; background: #fff; color: var(--rc-text-2); border-radius: 6px; font-size: 11px; padding: 3px 8px; cursor: pointer; white-space: nowrap; }
+.cb-act:disabled { color: var(--rc-faint); border-color: var(--rc-border-soft); cursor: not-allowed; }
+
+/* 节点配置脏状态条（0824-00 §5.4） */
+.rc-insp-foot { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--rc-border-soft); background: #fff; }
+.foot-note { display: inline-flex; align-items: center; gap: 6px; flex: 1 1 auto; font-size: 11px; color: var(--rc-text-2); }
+.foot-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--rc-warn); flex-shrink: 0; }
 </style>

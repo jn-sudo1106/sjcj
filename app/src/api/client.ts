@@ -95,6 +95,13 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   // 2026-08-28 拍板放开：源重命名（source/updateSource，team_six bfbbcf7 已切真实请求，
   // 但漏加本白名单，导致打生产时被写保护拦下）。
   'source/updateSource',
+  // 2026-08-28 拍板放开：节点配置的新建与保存（config/modify/updateConfig）。
+  // 这个端点**新增和修改是同一个**（不带 configId = 新增，带 = 更新，见 config_api.md §二），
+  // 放开它等于同时放开"改已有配置"，而配置可被多个节点/流程/源复用，一次保存会影响到所有引用方。
+  // UI 侧的防线是「保存配置」前的影响范围确认（SaveSharedConfigDialog）：按**源**计，
+  // 数据来自 source/sourcePaged 的 configId 反查（穿透流程，首节点配置与子步骤引用都命中）。
+  // 新建（还没有 configId）没有影响面，不拦。
+  'config/modify/updateConfig',
 ])
 
 function isProductionWriteAllowed(httpEndpoint: string): boolean {

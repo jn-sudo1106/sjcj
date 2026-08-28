@@ -20,6 +20,7 @@ import collectorSettings from './FlowCanvas/inspector/CollectorSettings.vue?raw'
 import resultView from './FlowCanvas/result/ResultView.vue?raw'
 import siteSourceSwitcher from './FlowCanvas/source/SiteSourceSwitcher.vue?raw'
 import tableDialog from './FlowCanvas/inspector/TableEditDialog.vue?raw'
+import editNodeSourceDialog from './FlowCanvas/inspector/EditNodeSourceDialog.vue?raw'
 import siteCardGrid from './CollectAssets/SiteCardGrid.vue?raw'
 import appModuleHead from '../layouts/AppModuleHead.vue?raw'
 import runtimeStore from '../stores/runtime.ts?raw'
@@ -57,12 +58,71 @@ describe('最新方案 UI 入口收口', () => {
     expect(nodeInspector).not.toContain('patchOutputAdvanced')
   })
 
-  it('节点配置不展示详情类数据字段，详情状态由网页类型推导', () => {
-    expect(configTab).toContain('WEB_KIND_OPTIONS')
-    expect(configTab).toContain('flow.patchCollect(id.value, { webKind:')
+  it('节点配置用只读「节点类型」替代可选的「网页类型」（0824-00 §6.2）', () => {
+    // 节点类别在添加节点时就确定，配置表单里不再提供改写入口；webKind 原值只迁不展示。
+    expect(configTab).toContain('<label>节点类型</label>')
+    expect(configTab).not.toContain('WEB_KIND_OPTIONS')
+    expect(configTab).not.toContain('{ webKind:')
+    expect(allInspectorSource).not.toContain('<label>网页类型</label>')
     expect(allInspectorSource).not.toContain('详情类数据')
     expect(allInspectorSource).not.toContain('toggleDetail')
     expect(allInspectorSource).not.toContain(':checked="cc.isDetail"')
+  })
+
+  it('配置名称是节点配置里的必填项（0824-06 §4）', () => {
+    expect(configTab).toContain('配置名称')
+    expect(configTab).toContain('flow.setConfigName(')
+  })
+
+  it('非配置字段（节点名称/源 URL）在采集节点上只读，编辑收进弹窗', () => {
+    // 0824-11 §1.2b：一个面板三种归属，底部「保存配置」只管配置那一层。
+    // 面板上不摆分组标题也不内嵌保存按钮，改用参数源同款的「只读 + 编辑弹窗」。
+    expect(configTab).toContain('EditNodeSourceDialog')
+    expect(configTab).toContain('data-testid="edit-node-source"')
+    expect(configTab).not.toContain('ni-section-hint')
+    // 面板上不再直接改这两个字段
+    expect(configTab).not.toContain("setCC('url'")
+    expect(configTab).not.toContain('flow.patchSource({ url:')
+  })
+
+  it('弹窗里的 .rc-field 必须重置全局样式', () => {
+    // tokens.css 的 .rc-field 是工具栏用的横向 pill（inline-flex + 边框 + 白底 + 34px 定高），
+    // 面板/弹窗里直接用会在输入框外面再套一层框。全仓 12 个用到它的组件都要在自己的 style 里重置。
+    expect(editNodeSourceDialog).toMatch(/\.rc-field \{[^}]*border: 0/)
+    expect(editNodeSourceDialog).toMatch(/\.rc-field \{[^}]*background: transparent/)
+  })
+
+  it('编辑弹窗把源 URL 落到源、节点名称落到流程（0824-11 §1.1b）', () => {
+    const dialog = editNodeSourceDialog
+    expect(dialog).toContain('sourceApi.sourceUpdate')
+    expect(dialog).toContain('flow.patchSource({ url:')
+    expect(dialog).toContain('flow.setTitle(')
+    // 步骤写接口没实现，不能假装节点名称已落库
+    expect(dialog).toContain('待步骤接口接入后落库')
+  })
+
+  it('「是否列表」三态放在节点配置的节点类型下，不进表配置', () => {
+    // 旧平台 isMulti 在配置上编辑，步骤表单里没有这一项（旧前端 column.config.js:640）
+    expect(configTab).toContain('<label>是否列表</label>')
+    expect(configTab).toContain('MULTI_MODE_OPTIONS')
+    const nodeType = configTab.indexOf('<label>节点类型</label>')
+    const multi = configTab.indexOf('<label>是否列表</label>')
+    expect(nodeType).toBeGreaterThan(-1)
+    expect(multi).toBeGreaterThan(nodeType)
+  })
+
+  it('表编辑弹窗不再提供去重方式入口（0824-00 §6.3：查看/编辑表只操作表资产）', () => {
+    expect(tableDialog).not.toContain('table-dedup-mode')
+    expect(tableDialog).not.toContain('<label>去重方式</label>')
+    // 去重方式仍留在表配置
+    expect(tableTab).toContain('去重方式')
+  })
+
+  it('定时策略紧挨在运行设置上方（采集节点）', () => {
+    const schedule = configTab.lastIndexOf('<summary>定时策略</summary>')
+    const runtime = configTab.indexOf('<CollectorSettings')
+    expect(schedule).toBeGreaterThan(-1)
+    expect(runtime).toBeGreaterThan(schedule)
   })
 
   it('任务配置承载任务输入和队列，输出表仅在表配置维护', () => {

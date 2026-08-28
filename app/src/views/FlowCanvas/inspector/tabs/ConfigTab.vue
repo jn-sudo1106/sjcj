@@ -7,8 +7,8 @@ import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
-  WEB_KIND_OPTIONS, decisionOrParallelKind, collectorCapabilityOf, isRuleNode,
-  type CollectConfig, type CollectorSchedule, type LoginConfigRef, type NodeConfig, type TripleField, type WebKind,
+  MULTI_MODE_OPTIONS, decisionOrParallelKind, collectorCapabilityOf, isRuleNode,
+  type CollectConfig, type CollectorSchedule, type LoginConfigRef, type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, ruleApi, type RuleOrchestrationItem } from '@/api'
 import BranchEditor from '../BranchEditor.vue'
@@ -17,6 +17,7 @@ import TaskScheduleSettings from '../TaskScheduleSettings.vue'
 import ParamSourceEditor, { type ParamSourceModel } from '@/views/FlowCanvas/source/ParamSourceEditor.vue'
 import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDialog.vue'
 import SelectExistingRuleDialog from '../SelectExistingRuleDialog.vue'
+import EditNodeSourceDialog from '../EditNodeSourceDialog.vue'
 
 // 参数源（0803 调整）：本区域默认只读摘要，编辑收进「编辑」按钮弹出的 EditParamSourceDialog——
 // 该弹窗保存走 sourceApi.sourceUpdate 落库，再 patchSource/patchSourceCtx 写回，
@@ -221,11 +222,6 @@ async function onSelectExistingRule(rule: RuleOrchestrationItem) {
     applyingExisting.value = false
   }
 }
-function setCC(key: string, e: Event) {
-  const t = e.target as HTMLInputElement
-  const val: string | boolean = t.type === 'checkbox' ? t.checked : t.value
-  flow.patchCollect(id.value, { [key]: val } as Partial<CollectConfig>)
-}
 const isAppCollect = computed(() => Boolean(cc.value && /APP/.test(`${cfg.value?.title ?? ''}${cfg.value?.sub ?? ''}${cc.value.snatchType}`)))
 const appPackageRowIndex = computed(() => cfg.value?.base.findIndex((row: [string, string]) => row[0] === '包名') ?? -1)
 const appPackageName = computed(() => {
@@ -233,16 +229,11 @@ const appPackageName = computed(() => {
   return row?.[1] ?? ''
 })
 const collectUrlLabel = computed(() => (isAppCollect.value ? '接口地址' : '源 URL'))
-const collectUrlPlaceholder = computed(() => (isAppCollect.value ? '如 https://m.example.com/api/list?page=${page}' : '如 https://example.com/list?page=${page}'))
 function onAppPackageChange(e: Event) {
   if (appPackageRowIndex.value < 0) return
   flow.setBaseRow(id.value, appPackageRowIndex.value, (e.target as HTMLInputElement).value)
 }
-function onWebKind(e: Event) {
-  flow.patchCollect(id.value, { webKind: (e.target as HTMLSelectElement).value as WebKind })
-}
-
-// 业务类型（0804 S3-1）：规则名称维度的分类，跟网页类型（网页/APP、列表/详情/登录）是两个独立概念，别混——
+// 业务类型（0804 S3-1）：规则名称维度的分类，跟节点类型（网页抓取/APP 抓取/网页登录…）是两个独立概念，别混——
 // 会议原文举例"新闻/登录/分类"，先给这几个常见值，后续按实际使用再补
 const BIZ_TYPE_OPTIONS = [
   { value: 'news', label: '新闻' },
@@ -250,6 +241,22 @@ const BIZ_TYPE_OPTIONS = [
   { value: 'category', label: '分类' },
   { value: 'announcement', label: '公告' },
 ]
+// 「是否列表」（旧 config.isMulti）：只写 multiMode 这个三态原值，不去联动 webKind/isDetail——
+// 旧平台没有"网页类型"这个轴，写回时 legacyAdapters 也是以 multiMode 为准。
+const multiMode = computed(() => (cfg.value?.collectCfg?.multiMode ?? '') as number | '')
+function onMultiMode(e: Event) {
+  const raw = (e.target as HTMLSelectElement).value
+  flow.patchCollect(id.value, { multiMode: raw === '' ? undefined : Number(raw) })
+}
+
+const configName = computed(() => cfg.value?.configName ?? '')
+function onConfigName(e: Event) {
+  flow.setConfigName(id.value, (e.target as HTMLInputElement).value)
+}
+
+// 节点名称 / 源 URL 的编辑收进弹窗，落库也在弹窗里（见 EditNodeSourceDialog）
+const editNodeSourceOpen = ref(false)
+
 function onBizType(e: Event) {
   flow.patchCollect(id.value, { bizType: (e.target as HTMLSelectElement).value || undefined })
 }
@@ -260,6 +267,10 @@ function onBizType(e: Event) {
        决策/分头节点直接交给 BranchEditor 接管（0707 优化·Phase6） -->
   <BranchEditor v-if="isDecisionOrParallel && id" :owner-id="id" :key="id" />
   <template v-else>
+    <!-- 节点名称 / 源 URL 不属于配置，底部「保存配置」不管它们（0824-11 §1.2b）。
+         采集节点上做成只读 + 「编辑」弹窗（与本文件参数源那块同款），既不让用户以为底部按钮
+         把整屏都存了，也不用摆一个分组标题把内部归属摊出来。
+         规则节点的节点名称 = 规则名称，有自己的新建/选择已有流程（0805），保持原样直接编辑。 -->
     <div class="rc-field"><label>节点名称{{ isRule ? '（= 规则名称）' : '' }}</label>
       <div v-if="isRule" class="rc-input-group">
         <input class="rc-input" :value="cfg?.title" placeholder="新建：直接输入规则名称" @input="onTitle" />
@@ -267,25 +278,30 @@ function onBizType(e: Event) {
           {{ applyingExisting ? '加载中...' : '选择已有' }}
         </button>
       </div>
+      <div v-else-if="cc" class="rc-input-group">
+        <div class="rc-readonly">{{ cfg?.title }}</div>
+        <button class="rc-input-btn" type="button" data-testid="edit-node-source" @click="editNodeSourceOpen = true">编辑</button>
+      </div>
       <input v-else class="rc-input" :value="cfg?.title" @input="onTitle" />
     </div>
-    <details class="ni-schedule">
+    <div v-if="cc && !isLoginNode" class="rc-field"><label>{{ collectUrlLabel }}</label>
+      <div class="rc-input-group">
+        <div class="rc-readonly">{{ cc.url }}</div>
+        <button class="rc-input-action" type="button" title="复制" @click="ElMessage.info('复制链接（演示）')">复制</button>
+        <button class="rc-input-action" type="button" title="打开" @click="ElMessage.info('打开链接（演示）')">↗</button>
+      </div>
+    </div>
+    <EditNodeSourceDialog v-model:open="editNodeSourceOpen" :node-id="id" :show-url="!!cc && !isLoginNode" />
+    <!-- 定时策略：采集节点挪到「运行设置」上方（见下）；非采集节点没有运行设置，仍留在这里 -->
+    <details v-if="!cc" class="ni-schedule">
       <summary>定时策略</summary>
       <TaskScheduleSettings :model-value="scheduleSettings" @update:model-value="onScheduleChange" />
     </details>
     <SelectExistingRuleDialog v-if="isRule" v-model:open="selectExistingOpen" @select="onSelectExistingRule" />
 
-    <!-- 采集类专属：源 URL / 网页类型（详情状态由网页类型自动推导）；登录节点的 URL 在登录配置清单中维护。 -->
     <template v-if="cc">
       <div v-if="isAppCollect" class="rc-field"><label>APP 包名</label>
         <input class="rc-input" :value="appPackageName" placeholder="如 com.example.app" @input="onAppPackageChange" />
-      </div>
-      <div v-if="!isLoginNode" class="rc-field"><label>{{ collectUrlLabel }}</label>
-        <div class="rc-input-group">
-          <input class="rc-input" :value="cc.url" :placeholder="collectUrlPlaceholder" @input="setCC('url', $event)" />
-          <button class="rc-input-action" type="button" title="复制" @click="ElMessage.info('复制链接（演示）')">复制</button>
-          <button class="rc-input-action" type="button" title="打开" @click="ElMessage.info('打开链接（演示）')">↗</button>
-        </div>
       </div>
       <!-- 登录节点专属：每一行是一条完整登录数据配置，常显不折叠——
            跟采集节点运行设置里已废弃的 needLogin 开关（CollectorSettings.vue）不是一回事，别混 -->
@@ -356,12 +372,29 @@ function onBizType(e: Event) {
         </div>
         <div class="rc-help">字段按旧平台登录配置保持一致；发起抓取时默认使用默认配置，也可以临时切换。</div>
       </template>
-      <div v-if="!isAppCollect" class="rc-field"><label>网页类型</label>
-        <select class="rc-select" :value="cc.webKind" @change="onWebKind">
-          <option v-for="kind in WEB_KIND_OPTIONS" :key="kind.value" :value="kind.value">
-            {{ kind.label }} · {{ kind.desc }}
-          </option>
+      <!-- 节点类型（0824-00 §6.2 替代「网页类型」）：直接取当前节点的类型，添加节点时就已确定，这里只读 -->
+      <div class="rc-field"><label>节点类型</label>
+        <div class="rc-readonly">{{ nodeCapability?.label ?? '—' }}</div>
+      </div>
+      <!-- 是否列表（旧 config.isMulti，0824-06 §4 归 config-meta）：决定落库去重口径。
+           旧平台在配置上编辑、步骤上没有这一项，因此跟节点类型放在一起，不进表配置。 -->
+      <div class="rc-field"><label>是否列表</label>
+        <select class="rc-select" :value="multiMode" aria-label="是否列表" @change="onMultiMode">
+          <option value="">未设置</option>
+          <option v-for="opt in MULTI_MODE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
+      </div>
+      <!-- 配置名称（config-meta，0824-06 §4）：已有配置显示后端真名，新建配置必填 -->
+      <div class="rc-field"><label>配置名称 <span class="ni-required">*</span></label>
+        <input
+          class="rc-input"
+          :class="{ invalid: !configName }"
+          :value="configName"
+          placeholder="新建配置：填写配置名称"
+          aria-label="配置名称"
+          @input="onConfigName"
+        />
+        <div v-if="!configName" class="rc-help ni-required-hint">配置名称必填，保存配置前请先填写。</div>
       </div>
       <!-- 业务类型（0804 S3-1）：跟上面的网页类型是两个独立字段，不要合并 -->
       <div class="rc-field"><label>业务类型</label>
@@ -382,7 +415,11 @@ function onBizType(e: Event) {
         </div>
         <EditParamSourceDialog v-model="editParamSourceVisible" />
       </template>
-      <!-- 运行设置（0711 R5）：只保留代理/断点续爬；定时策略已独立到上方节点配置。 -->
+      <details class="ni-schedule">
+        <summary>定时策略</summary>
+        <TaskScheduleSettings :model-value="scheduleSettings" @update:model-value="onScheduleChange" />
+      </details>
+      <!-- 运行设置（0711 R5）：只保留代理/断点续爬；定时策略紧挨在它上方。 -->
       <CollectorSettings :model-value="runtimeSettings" :capability="nodeCapability" @update:model-value="onRuntimeSettingsChange" />
     </template>
 
@@ -429,6 +466,12 @@ function onBizType(e: Event) {
 </template>
 
 <style scoped>
+.rc-input-group .rc-readonly { flex: 1 1 auto; min-width: 0; border-radius: 7px 0 0 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-readonly { min-height: 30px; display: flex; align-items: center; padding: 0 9px; border: 1px solid var(--rc-border-soft); border-radius: 6px; background: #f8fafc; color: var(--rc-text); font-size: 12px; }
+.ni-required { color: var(--rc-danger, #ef4444); }
+.rc-input.invalid { border-color: var(--rc-warn); }
+.ni-required-hint { color: var(--rc-warn); }
+
 .rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 10px; }
 .rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }
 .rc-input, .rc-select { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; }
@@ -460,9 +503,15 @@ function onBizType(e: Event) {
 .ni-section-title { margin: 16px 0 8px; padding-top: 12px; border-top: 1px dashed var(--rc-border-soft); color: var(--rc-muted); font-size: 12px; font-weight: 700; }
 .ni-section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ni-section-title-row .rc-btn { height: 24px; padding: 0 9px; font-size: 11px; }
-.ni-schedule { margin: 10px 0 12px; border-top: 1px dashed var(--rc-border-soft); padding-top: 8px; }
-.ni-schedule summary { color: var(--rc-muted); font-size: 11px; font-weight: 600; cursor: pointer; }
-.ni-schedule[open] summary { color: var(--rc-primary-ink); margin-bottom: 8px; }
+/* 定时策略与紧挨在下面的「运行设置」共用一套折叠样式：同样的 ▸/▾ 文字箭头、同样的间距，
+   分隔线一律画在展开内容上方而不是标题上方（对齐 CollectorSettings.vue 的 .cs-toggle / .cs-body）。 */
+.ni-schedule { margin-top: 4px; }
+.ni-schedule > summary { display: block; list-style: none; color: var(--rc-muted); font-size: 11px; font-weight: 600; cursor: pointer; padding: 2px 0; }
+.ni-schedule > summary::-webkit-details-marker { display: none; }
+.ni-schedule > summary::before { content: '▸ '; }
+.ni-schedule[open] > summary::before { content: '▾ '; }
+.ni-schedule > summary:hover { color: var(--rc-primary-ink); }
+.ni-schedule > summary + * { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--rc-border-soft); }
 /* 参数源编辑器容器（0802）：跟其他段落用同色背景区分；ParamSourceEditor 是 display:contents，外层负责间距 */
 .rc-section-divider { margin-top: 4px; padding: 8px 10px; background: #f8fafc; border: 1px solid var(--rc-border-soft); border-radius: 7px; }
 .ni-adv { margin-top: 12px; border-top: 1px dashed var(--rc-border-soft); padding-top: 8px; }

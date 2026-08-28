@@ -1,6 +1,6 @@
 // stores/node.ts - 节点状态辅助（P2-1 · stores/flow.ts 拆分）
 // 职责：selectedId/activeTab + dirty 标记 + 节点字段编辑（三列表格/采集/任务/规则 patch）
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import {
   emptyTripleRow,
@@ -22,13 +22,39 @@ export const useNodeStore = defineStore('node', () => {
   const selectedId = ref<string>('')
   const activeTab = ref<string>('config')
 
-  // ---- 未保存改动标记（B3）：load() 时清零，其余编辑动作调用 touch() 置脏 ----
-  const dirty = ref(false)
+  // ---- 双层未保存标记（0824-00 §5.4）----
+  // 节点配置表单改动 → configDirty，按节点记，由「保存节点配置」逐节点清；
+  // 节点增删/移动/连线/换配置/流程名 → flowDirty，由「保存流程」清。
+  // dirty 保留为两者并集：发起抓取门槛、模板页恢复等老调用点语义不变。
+  const dirtyConfigNodes = ref<string[]>([])
+  const flowDirty = ref(false)
+  const configDirty = computed(() => dirtyConfigNodes.value.length > 0)
+  const dirty = computed({
+    get: () => configDirty.value || flowDirty.value,
+    set: (v) => {
+      if (v) flowDirty.value = true
+      else {
+        dirtyConfigNodes.value = []
+        flowDirty.value = false
+      }
+    },
+  })
+  function touchConfig(id: string) {
+    if (!dirtyConfigNodes.value.includes(id)) dirtyConfigNodes.value.push(id)
+  }
+  function touchFlow() {
+    flowDirty.value = true
+  }
+  /** 旧签名保留：现存调用点（flow store 的拓扑/流程名/源字段动作）都是流程级 */
   function touch() {
-    dirty.value = true
+    touchFlow()
+  }
+  function markConfigSaved(id: string) {
+    dirtyConfigNodes.value = dirtyConfigNodes.value.filter((nodeId) => nodeId !== id)
   }
   function markSaved() {
-    dirty.value = false
+    dirtyConfigNodes.value = []
+    flowDirty.value = false
   }
 
   // 这些需要从 flow store 获取
@@ -45,7 +71,7 @@ export const useNodeStore = defineStore('node', () => {
     const c = configs[id]
     const row = c?.[field]?.[rowIndex]
     if (row) setTripleValue(field, row, colIndex, value)
-    touch()
+    touchConfig(id)
   }
 
   function addTripleRow(id: string, field: TripleField) {
@@ -53,13 +79,13 @@ export const useNodeStore = defineStore('node', () => {
     if (!c) return
     if (field === 'inmap') c.inmap.push(emptyTripleRow(field) as never)
     else c[field].push(emptyTripleRow(field) as never)
-    touch()
+    touchConfig(id)
   }
 
   function removeTripleRow(id: string, field: TripleField, rowIndex: number) {
     const c = configs[id]
     if (c) c[field].splice(rowIndex, 1)
-    touch()
+    touchConfig(id)
   }
 
   // ---- 节点级 patch（采集/任务/规则）----
@@ -104,7 +130,7 @@ export const useNodeStore = defineStore('node', () => {
       const allowed = new Set(c.collectCfg.urlParamRefs ?? [])
       c.taskCfg.paramValues = c.taskCfg.paramValues.filter((item) => allowed.has(item.paramId))
     }
-    touch()
+    touchConfig(id)
   }
 
   function patchTaskConfig(id: string, patch: Partial<TaskConfig>) {
@@ -132,20 +158,20 @@ export const useNodeStore = defineStore('node', () => {
     // 无有效输入表时由 UI 禁用候选并在发布/运行时提示，但不能在一次 patch 中丢失用户已经保存的配置。
     const taskCfg = { queue: '', urlRule: '', ...c.taskCfg, ...next }
     c.taskCfg = taskCfg
-    touch()
+    touchConfig(id)
   }
 
   function patchSchedule(id: string, patch: Partial<CollectorSchedule>) {
     const c = configs[id]
     if (!c) return
     c.schedule = { ...c.schedule, ...patch }
-    touch()
+    touchConfig(id)
   }
 
   function setOutputTable(id: string, tableId: string) {
     const c = configs[id]
     if (c) c.outputTable = tableId
-    touch()
+    touchConfig(id)
   }
 
   function setDedupMode(id: string, mode: 'source' | 'table') {
@@ -153,7 +179,7 @@ export const useNodeStore = defineStore('node', () => {
     if (!c) return
     if (c.collectCfg) c.collectCfg.dedupMode = mode
     else c.dedupMode = mode
-    touch()
+    touchConfig(id)
   }
 
   function setOutFields(id: string, fields: string[]) {
@@ -164,7 +190,7 @@ export const useNodeStore = defineStore('node', () => {
     else c.outFields = unique
     if (!c.taskCfg) c.taskCfg = { queue: '', urlRule: '' }
     c.taskCfg.outColumns = unique
-    touch()
+    touchConfig(id)
   }
 
   function setInputTable(id: string, tableId: string) {
@@ -173,21 +199,21 @@ export const useNodeStore = defineStore('node', () => {
       c.inputTable = tableId
       if (!c.ruleCfg) delete c.inputFields
     }
-    touch()
+    touchConfig(id)
   }
 
   function setInputFields(id: string, fields: string[]) {
     const c = configs[id]
     if (!c) return
     c.inputFields = [...new Set(fields.filter(Boolean))]
-    touch()
+    touchConfig(id)
   }
 
   function resetInputFields(id: string) {
     const c = configs[id]
     if (!c) return
     delete c.inputFields
-    touch()
+    touchConfig(id)
   }
 
   function setTaskQueue(id: string, value: string) {
@@ -201,14 +227,14 @@ export const useNodeStore = defineStore('node', () => {
     if (!c) return
     const target = c.collectCfg ?? c
     target.structuredConfig = value || undefined
-    touch()
+    touchConfig(id)
   }
   function setContentRules(id: string, value: string) {
     const c = configs[id]
     if (!c) return
     const target = c.collectCfg ?? c
     target.contentRules = value || undefined
-    touch()
+    touchConfig(id)
   }
 
   function setEntryCondition(id: string, cond: ConditionGroup | undefined) {
@@ -217,33 +243,41 @@ export const useNodeStore = defineStore('node', () => {
     const target = c.collectCfg ?? c
     if (cond) target.entryCondition = cond
     else delete target.entryCondition
-    touch()
+    touchConfig(id)
+  }
+
+  /** 配置名称（config-meta，0824-06 §4）：新建配置首次保存必填，改已有配置的名字等于改共享配置名 */
+  function setConfigName(id: string, name: string) {
+    const c = configs[id]
+    if (!c) return
+    c.configName = name
+    touchConfig(id)
   }
 
   function setNodeDisabled(id: string, disabled: boolean) {
     const c = configs[id]
     if (!c) return
     c.disabled = disabled
-    touch()
+    touchFlow()
   }
 
   function setBaseRow(id: string, index: number, value: string) {
     const c = configs[id]
     if (c && c.base[index]) c.base[index][1] = value
-    touch()
+    touchConfig(id)
   }
 
   function setFieldRow(id: string, index: number, value: string) {
     const c = configs[id]
     if (c && c.fields[index]) c.fields[index][1] = value
-    touch()
+    touchConfig(id)
   }
 
   function patchRuleConfig(id: string, patch: Partial<RuleOrchestration>) {
     const c = configs[id]
     if (!c) return
     c.ruleCfg = { ...makeDefaultRuleOrchestration(), ...c.ruleCfg, ...patch }
-    touch()
+    touchConfig(id)
   }
 
   /** 非规则节点的编排配置（0804 S3-3）：与 patchRuleConfig 同款，写 execCfg 而不是 ruleCfg */
@@ -251,7 +285,7 @@ export const useNodeStore = defineStore('node', () => {
     const c = configs[id]
     if (!c) return
     c.execCfg = { ...makeDefaultExecConfig(), ...c.execCfg, ...patch }
-    touch()
+    touchConfig(id)
   }
 
   return {
@@ -259,8 +293,14 @@ export const useNodeStore = defineStore('node', () => {
     selectedId,
     activeTab,
     dirty,
+    configDirty,
+    flowDirty,
+    dirtyConfigNodes,
     // 操作
     touch,
+    touchConfig,
+    touchFlow,
+    markConfigSaved,
     markSaved,
     setTripleCell,
     addTripleRow,
@@ -279,6 +319,7 @@ export const useNodeStore = defineStore('node', () => {
     setTaskQueue,
     setStructuredConfig,
     setContentRules,
+    setConfigName,
     setEntryCondition,
     setNodeDisabled,
     setBaseRow,

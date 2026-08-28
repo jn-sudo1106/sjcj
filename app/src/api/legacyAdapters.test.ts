@@ -197,6 +197,16 @@ describe('旧平台配置模型适配', () => {
       entryTypeId: '2001',
     })
   })
+
+  it('isDetail 表示非列表类：isMulti 0 和 2 都算，只有 1 是列表类', () => {
+    // 2026-08-27 生产实测：真实详情配置（1400765「python详情解析器_900」）isMulti=2 而不是 0，
+    // 原来写死 === 0 等于恒为假。三态原值另在 multiMode 上，要区分 0/2 读它。
+    expect(configFromLegacy({ configId: 1, configName: 'a', isMulti: 1 })).toMatchObject({ isDetail: false, multiMode: 1 })
+    expect(configFromLegacy({ configId: 2, configName: 'b', isMulti: 0 })).toMatchObject({ isDetail: true, multiMode: 0 })
+    expect(configFromLegacy({ configId: 3, configName: 'c', isMulti: 2 })).toMatchObject({ isDetail: true, multiMode: 2 })
+    // 没有原值时不臆断
+    expect(configFromLegacy({ configId: 4, configName: 'd' })).toMatchObject({ isDetail: false, multiMode: undefined })
+  })
 })
 
 describe('旧平台步骤模型适配（item/next，2026-08-26 生产实测源 430016821 修复 lastStep/context 混淆）', () => {

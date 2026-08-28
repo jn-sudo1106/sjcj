@@ -61,7 +61,7 @@ import {
   mockSiteQueueStats,
   mockQueueTaskPaged,
 } from './sites'
-import { mockConfigPaged, mockConfigDetail, mockConfigParams, mockConfigActionLogs } from './configs'
+import { mockConfigPaged, mockConfigDetail, mockConfigParams, mockConfigActionLogs, mockSameConfigs } from './configs'
 import { mockEntryPaged, mockEntryDetail, mockSaveEntryType } from './entries'
 import { mockAddParamValues, mockDeleteParamValue, mockDeleteParams, mockGenValues, mockParamCopy, mockParamCreate, mockParamDetail, mockParamPaged, mockParamUpdate } from './params'
 import { mockFilePaged, mockFileStats, mockFileResourceTables, mockFileResourceTableMeta, mockFileResourceRows } from './files'
@@ -76,6 +76,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'source/categoryTree': mockSourceCategories,
   'source/stats': mockSourceStats,
   'item/next/nextConfigPaged': mockSourceSteps,
+  'item/next/configs/same': mockSameConfigs,
   'source/changeSourceEnable': mockChangeSourceEnable,
   'source/changeToSuccess': mockChangeToSuccess,
   'source/copySource': mockAck,

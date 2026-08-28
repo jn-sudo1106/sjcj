@@ -259,11 +259,17 @@ export function configFromLegacy(input: unknown): Config {
     policy: record.runPolicy == null ? undefined : String(record.runPolicy),
     enabled: enable === 0,
     paramRefs: params.map((param) => param.paramId),
-    isDetail: multiMode === 0,
+    // isDetail = 非列表类。旧三态里 0（详情类）和 2（更新父表）都是"挂在父记录下的子步骤配置"，
+    // 只有 1 是列表类。此前写死 multiMode === 0，而 2026-08-27 生产实测真实详情配置走的是 2
+    // （源 430016501 的 1400765「python详情解析器_900」isMulti=2），200 条配置分布 1:197 / 2:3、
+    // 本环境没有 0——等于这个判断恒为假，详情配置全被标成普通。三态原值另在 multiMode 上，
+    // 需要区分 0 和 2 时读它，不要拿这个布尔反推。
+    isDetail: multiMode !== undefined && multiMode !== 1,
     isLogin: templateCode === 'login',
     updatedAt: record.updateDt == null ? undefined : String(record.updateDt),
     url: record.configUrl == null ? undefined : String(record.configUrl),
     entryTypeId: record.entryTypeId == null ? undefined : String(record.entryTypeId),
+    inEntryTypeId: record.inEntryType == null ? undefined : String(record.inEntryType),
     domain: record.domain == null ? undefined : String(record.domain),
     remark: record.remark == null ? undefined : String(record.remark),
     proxyConf: record.proxyConf == null ? undefined : String(record.proxyConf),
@@ -293,6 +299,7 @@ export function configToLegacy(input: Config): LegacyRecord {
     configUrl: input.url,
     topic: input.topic,
     entryTypeId: input.entryTypeId,
+    inEntryType: input.inEntryTypeId,
     domain: input.domain,
     remark: input.remark,
     proxyConf: input.proxyConf,

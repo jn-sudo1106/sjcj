@@ -103,21 +103,35 @@ export const useSourceStore = defineStore('source', () => {
     }
     // 注意：这里不直接调用 load()，而是返回配置供 flow store 加载
     // 避免循环依赖
-    return {
-      def: persistedDef
-        ? { ...persistedDef, id: source.sourceId, source: sourceForCfg }
-        : {
-            id: source.sourceId,
-            name: source.name,
-            version: `source-v${source.version ?? 1}`,
-            main: buildSourceSeed(source, steps).main,
-            branches: buildSourceSeed(source, steps).branches,
-            configs: buildSourceSeed(source, steps).configs,
-            updatedAt: source.updatedAt || '',
-            source: sourceForCfg,
-          },
-      sourceCtx: sourceCtx.value,
-    }
+    const def: FlowDef = persistedDef
+      ? { ...persistedDef, id: source.sourceId, source: sourceForCfg }
+      : {
+          id: source.sourceId,
+          name: source.name,
+          version: `source-v${source.version ?? 1}`,
+          main: buildSourceSeed(source, steps).main,
+          branches: buildSourceSeed(source, steps).branches,
+          configs: buildSourceSeed(source, steps).configs,
+          updatedAt: source.updatedAt || '',
+          source: sourceForCfg,
+        }
+    backfillConfigNames(def, steps)
+    return { def, sourceCtx: sourceCtx.value }
+  }
+
+  // 配置名称按 configId 从 steps 回填（configName 随 topic 一起由 sourceApi.sourceSteps 从
+  // config/configDetail 带出来）。存档流程是在这个字段存在之前保存的，整包回读不带名字，
+  // 靠这里补上。只填空位不覆盖——本地已有的名字可能是用户改过还没写回后端的值。
+  function backfillConfigNames(def: FlowDef, steps: Step[]) {
+    const nameByConfigId = new Map(
+      steps.filter((step) => step.configId && step.configName).map((step) => [step.configId!, step.configName!]),
+    )
+    if (!nameByConfigId.size) return
+    Object.values(def.configs).forEach((cfg) => {
+      if (cfg.configName || !cfg.configId) return
+      const name = nameByConfigId.get(cfg.configId)
+      if (name) cfg.configName = name
+    })
   }
 
   // 网站态：加载/新建网站统一流程模板（0707 优化·Phase4）。def 为空 = 该网站还没保存过模板，起一个空白流程。

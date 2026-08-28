@@ -598,6 +598,15 @@ export const WEB_KIND_OPTIONS: { value: 'list' | 'detail' | 'attachment'; label:
 ]
 
 // 新建配置：运行策略下拉选项
+// 「是否列表」三态（旧 config.isMulti，旧前端 column.config.js:640 权威定义）：
+// 决定落库去重口径，属于配置（config-meta）而不是步骤——旧平台的步骤表单里根本没有这一项。
+// 文案照抄旧平台，方便真实源逐字段核对（0824-00 §9）。
+export const MULTI_MODE_OPTIONS: { value: number; label: string }[] = [
+  { value: 1, label: '列表类[根据去重字段去重]' },
+  { value: 0, label: '详情类[根据父ID去重]' },
+  { value: 2, label: '更新父表[根据父ID更新父表]' },
+]
+
 export const CONFIG_STRATEGY_OPTIONS = ['增量', '全量', '按需触发']
 
 // 模板 → 默认抓取类型（新插入采集节点用）
@@ -741,6 +750,7 @@ function rootStepForSource(source: Source): Step | null {
 function applyStepMetadata(cfg: NodeConfig, step: Step) {
   cfg.disabled = !step.enabled
   if (step.configId) cfg.configId = step.configId
+  if (step.configName) cfg.configName = step.configName
   if (cfg.collectCfg) {
     cfg.collectCfg.entryCondition = step.condition
       ? { mode: 'expr', logic: 'AND', items: [], expr: step.condition }
@@ -783,6 +793,53 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
   }
 }
 
+/** 单个步骤 → 画布节点。buildSourceSeed 与 applyStepDetails（configDetail 异步回填）共用同一套构造。 */
+function buildNodeForStep(source: Source, step: Step, index: number): NodeConfig {
+  const cfg = cloneConfig(NODE_CONFIGS[templateKeyForStep(step, index)])
+  cfg.title = step.name || (index === 0 ? '列表抓取' : '详情解析')
+  if (cfg.collectCfg) {
+    // 源级字段（源名称/分类/标签/登录/选用配置等）不再复制到节点：随 loadFromSource 整体挂到 flow.sourceCfg（0706 优化·源/节点配置分层）
+    cfg.collectCfg.url = source.url
+    cfg.collectCfg.outputTable = step.outputTable || source.mainTable || ''
+    // 接口 1:1（Step.inputTable，'-' 表示无）：首步无输入表，次步起 = 上一步输出表（0701 问题五）
+    cfg.collectCfg.inputTable = step.inputTable && step.inputTable !== '-' ? step.inputTable : ''
+  }
+  applyStepMetadata(cfg, step)
+  return cfg
+}
+
+/**
+ * configDetail 异步回填（2026-08-28）：画布首屏不再等 config/configDetail 那一轮请求，
+ * 步骤先到先画，补充字段（topic / 配置名 / 登录语义 / isMulti / 参数绑定）随后打回节点。
+ *
+ * 绝大多数补充只是字段级 patch，applyStepMetadata 原样再跑一遍即可（它是幂等的：
+ * 传进来的还是同一批步骤，只是多了几个字段）。唯一的结构性影响是 `isLoginConfig`——
+ * 它参与 templateKeyForStep 的节点模板路由，回填前登录步骤可能被画成普通采集节点，
+ * 这种情况必须整节点重建，不能只补字段。
+ *
+ * 返回被重建的 nodeId 列表，供调用方决定要不要刷新选中态。
+ */
+export function applyStepDetails(
+  configs: Record<string, NodeConfig>,
+  source: Source,
+  steps: Step[],
+): string[] {
+  const rebuilt: string[] = []
+  orderSourceSteps(steps).forEach((step, i) => {
+    const current = configs[step.stepId]
+    if (!current) return
+    const shouldBeLogin = !!step.isLoginConfig
+    const isLogin = collectorCapabilityOf(current)?.kind === 'login'
+    if (shouldBeLogin && !isLogin) {
+      configs[step.stepId] = buildNodeForStep(source, step, i)
+      rebuilt.push(step.stepId)
+      return
+    }
+    applyStepMetadata(current, step)
+  })
+  return rebuilt
+}
+
 /**
  * 源 → 链路种子（纯函数，从 flow store 的 loadFromSource 提取）：把源的子步骤编译为画布节点。
  * 分屏对比（Phase 5）用它独立构造第二栏的链路，不依赖/不污染全局 flow store。
@@ -796,18 +853,7 @@ export function buildSourceSeed(source: Source, steps: Step[]): {
   const main: string[] = ['start']
   const sourceSteps = steps.length ? orderSourceSteps(steps) : (rootStepForSource(source) ? [rootStepForSource(source)!] : [])
   sourceSteps.forEach((step, i) => {
-    const templateKey = templateKeyForStep(step, i)
-    const cfg = cloneConfig(NODE_CONFIGS[templateKey])
-    cfg.title = step.name || (i === 0 ? '列表抓取' : '详情解析')
-    if (cfg.collectCfg) {
-      // 源级字段（源名称/分类/标签/登录/选用配置等）不再复制到节点：随 loadFromSource 整体挂到 flow.sourceCfg（0706 优化·源/节点配置分层）
-      cfg.collectCfg.url = source.url
-      cfg.collectCfg.outputTable = step.outputTable || source.mainTable || ''
-      // 接口 1:1（Step.inputTable，'-' 表示无）：首步无输入表，次步起 = 上一步输出表（0701 问题五）
-      cfg.collectCfg.inputTable = step.inputTable && step.inputTable !== '-' ? step.inputTable : ''
-    }
-    applyStepMetadata(cfg, step)
-    configs[step.stepId] = cfg
+    configs[step.stepId] = buildNodeForStep(source, step, i)
     main.push(step.stepId)
   })
   main.push('end')

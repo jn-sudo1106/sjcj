@@ -64,6 +64,8 @@ function resetFromTable(t?: EntryType) {
   form.name = t.name || ''
   form.tableName = t.tableName
   form.remark = t.remark || ''
+  // 去重方式的编辑入口已挪到「表配置」（0824-00 §6.3：查看/编辑表只操作表资产）；
+  // 这里只把原值带着走，保存时原样回写，避免编辑一次表就把它重置成源内去重。
   form.dedupMode = t.dedupMode || 'source'
   form.fields = t.fields.map((f, i) => {
     const { code, dbColumn } = splitProp(f.prop)
@@ -182,13 +184,6 @@ function notImpl(label: string) {
 
       <!-- 高级占位行 -->
       <div class="ted-meta2">
-        <div class="ted-field sm">
-          <label>去重方式</label>
-          <select v-model="form.dedupMode" class="ted-input" data-testid="table-dedup-mode">
-            <option value="source">源内去重</option>
-            <option value="table">表内去重</option>
-          </select>
-        </div>
         <div class="ted-field sm">
           <label>记变化</label>
           <select class="ted-input" disabled><option>请选择</option></select>

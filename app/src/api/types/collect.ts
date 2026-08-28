@@ -21,6 +21,8 @@ export interface Config {
   updatedAt?: string
   url?: string
   entryTypeId?: string
+  /** 入参表（旧 inEntryType）：节点的输入表绑定，与 entryTypeId（输出表）成对 */
+  inEntryTypeId?: string
   domain?: string
   remark?: string
   proxyConf?: string
