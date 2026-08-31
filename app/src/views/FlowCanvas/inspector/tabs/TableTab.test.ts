@@ -74,7 +74,9 @@ describe('TableTab · 规则节点表/字段绑定（0804 S2-2 从编排配置�
     flow.setTitle('rule-1', '邮箱附件转换指标数据规则')
     await flushPromises()
 
-    const tableSelects = wrapper.findAllComponents({ name: 'ElSelect' })
+    // 只在 Tab 正文里找：配置条上还有一个「本节点使用配置」选择器（0828 §2.1-2b），
+    // 按全局第一个 ElSelect 取会取到它。
+    const tableSelects = wrapper.find('.rc-inspector-body').findAllComponents({ name: 'ElSelect' })
     expect(tableSelects.length).toBeGreaterThanOrEqual(1)
     await tableSelects[0].vm.$emit('visible-change', true)
     await flushPromises()
@@ -214,5 +216,52 @@ describe('TableTab · 非规则节点「保存并配置编排」（0804 S3-3）'
     expect(flow.configs['web-1'].execCfg?.mode).toBe('ref')
     expect(flow.configs['web-1'].ruleCfg).toBeUndefined()
     expect(flow.activeTab).toBe('orchestration')
+  })
+})
+
+// 去重列（0828 D11）：会上「去重列丢了，要加回来」。它是派生值——由输出表字段的「去重」勾选聚合，
+// 旧平台也是这么拼 uniqueKey 的（配置详情接口本身不返回它，见 api/legacyAdapters.ts:342）。
+describe('TableTab · 去重列（0828 D11）', () => {
+  const DEDUP_TABLE: EntryType = {
+    tableId: '2103330', tableName: 'sense_data.TB_NEWS', name: '资讯列表',
+    fields: [
+      { prop: 'title', desc: '标题', type: 'string', required: false, columnName: 'K1', dedup: true },
+      { prop: 'url', desc: '链接', type: 'string', required: false, columnName: 'K2', dedup: true },
+      { prop: 'body', desc: '正文', type: 'text', required: false, columnName: 'K3' },
+    ],
+  }
+
+  async function mountWithTable(table: EntryType, outputTable: string) {
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [table] })
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue(table)
+    vi.spyOn(paramApi, 'paramPaged').mockResolvedValue({ total: 0, list: [] })
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.collectCfg!.outputTable = outputTable
+    flow.configs['web-1'] = cfg
+    flow.select('web-1')
+    flow.setActiveTab('table')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    return wrapper
+  }
+
+  it('展示输出表里勾了「去重」的字段', async () => {
+    const wrapper = await mountWithTable(DEDUP_TABLE, '2103330')
+    expect(wrapper.get('[data-testid="dedup-columns"]').text()).toBe('title、url')
+  })
+
+  it('没有字段勾去重时显示占位，并提示去表字段里勾', async () => {
+    const noDedup: EntryType = { ...DEDUP_TABLE, fields: DEDUP_TABLE.fields.map((f) => ({ ...f, dedup: false })) }
+    const wrapper = await mountWithTable(noDedup, '2103330')
+    expect(wrapper.get('[data-testid="dedup-columns"]').text()).toBe('—')
+    expect(wrapper.text()).toContain('勾选「去重」')
+  })
+
+  it('还没选输出表时提示先选表', async () => {
+    const wrapper = await mountWithTable(DEDUP_TABLE, '')
+    expect(wrapper.get('[data-testid="dedup-columns"]').text()).toBe('—')
+    expect(wrapper.text()).toContain('先选择输出表')
   })
 })

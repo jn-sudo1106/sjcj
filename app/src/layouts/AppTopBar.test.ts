@@ -103,8 +103,8 @@ describe('AppTopBar 生产环境徽标', () => {
     vi.unstubAllEnvs()
   })
 
-  it('未连生产（默认测试环境代理）时不显示徽标', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
+  it('未连生产时不显示徽标', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://127.0.0.1:9999')
     vi.resetModules()
     const { default: FreshAppTopBar } = await import('./AppTopBar.vue')
     const { wrapper } = await mountTopBar(FreshAppTopBar)

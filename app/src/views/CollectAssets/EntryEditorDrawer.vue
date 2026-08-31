@@ -3,7 +3,10 @@ import { computed, reactive, ref, toRaw, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { pinyin } from 'pinyin-pro'
 import { entryApi, type EntryField, type EntryType } from '../../api'
-import { ENTRY_FIELD_DEFAULT_WIDTH } from '../../constants/entry'
+import {
+  ENTRY_FIELD_DEFAULT_WIDTH, ENTRY_PREPROCESS_PRESETS,
+  ENTRY_CHECK_RULE_PRESETS, entryCheckRuleLabel,
+} from '../../constants/entry'
 
 const props = defineProps<{ modelValue: boolean; entry?: EntryType | null }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean]; saved: [tableId: string] }>()
@@ -26,23 +29,9 @@ function onNameInput() {
 }
 function onTableNameInput() { tableNameTouched.value = true }
 
-const PREPROCESS_PRESETS = [
-  "date('yyyy-MM-dd')",
-  'SOURCE_NAME',
-  'SOURCE_URL',
-  "subIndex(value, 'c', 1, -1)",
-  "value ? '有' : '无'",
-]
 function preprocessSuggestions(query: string, cb: (results: { value: string }[]) => void) {
-  const options = PREPROCESS_PRESETS.filter((p) => !query || p.includes(query))
+  const options = ENTRY_PREPROCESS_PRESETS.filter((p) => !query || p.includes(query))
   cb(options.map((value) => ({ value })))
-}
-
-const CHECK_RULE_PRESETS = ['', 'Y']
-function checkRuleLabel(v: string) {
-  if (v === '') return '不校验'
-  if (v === 'Y') return '校验非空'
-  return v
 }
 
 // K 序规则：新增行 columnName = 'K' + (当前最大序号+1)；已有行 columnName 任何操作都不得改写。
@@ -95,11 +84,36 @@ watch(
 function addField() {
   form.fields.push(blankField(form.fields.length + 1))
 }
+/**
+ * 删除后把**新增行**的 K 序补齐，不留空洞（对齐旧平台 EntryTypeEdit.delItem）。
+ *
+ * 为什么必须补：`columnName` 是前端定的，后端照单收（entryTypeToLegacy 原样发 columnName）。
+ * 2026-08-28 生产实测 77 张表，K 序**全部连续、零空洞**——没有先例说明后端能处理空洞，
+ * 别拿生产当试验场。而我们原来的实现会漏出空洞：连加 K5/K6/K7 再删 K6，就剩 K5、K7。
+ *
+ * 为什么是安全的：**只有新增行可删**（itemId <= 0，见上面的 return），所以重排永远只动
+ * 还没落库的行；已落库字段（itemId > 0）的 columnName **一个都不碰**——那才是会让
+ * 已入库数据错位的操作。旧平台的重排也是这个前提下才成立的。
+ */
+function compactNewColumnNames() {
+  let next = 0
+  for (const f of form.fields) {
+    if (Number(f.itemId ?? 0) <= 0) continue
+    const m = /^K(\d+)$/.exec(f.columnName ?? '')
+    if (m) next = Math.max(next, Number(m[1]))
+  }
+  for (const f of form.fields) {
+    if (Number(f.itemId ?? 0) > 0) continue
+    next += 1
+    f.columnName = `K${next}`
+  }
+}
 function removeField(index: number) {
   const field = form.fields[index]
   if (Number(field.itemId ?? 0) > 0) return // 仅新增行可删（物理列已绑定，不可删）
   form.fields.splice(index, 1)
   form.fields.forEach((f, i) => { f.seq = i + 1 })
+  compactNewColumnNames()
 }
 function moveField(index: number, offset: number) {
   const next = index + offset
@@ -113,9 +127,19 @@ function onItemCodeBlur(field: EntryField) {
   if (!field.desc?.trim() && field.prop?.trim()) field.desc = field.prop.trim()
 }
 
+// 导入字段（0828 D13，原「批量加」）。会上定的交互：**既能粘文本，也能选文件；
+// 选了文件就把内容读进同一个文本框再点确定**——原话「他选一个文件，然后可以把它文件展出来，
+// 就直接上面贴，然后点确定」。不做独立的文件解析分支，用户能看见解析成什么样。
 async function openBatchAdd() {
   batchDialog.text = 'code:编码:100\nname:名称:200\nurl:url:500'
   batchDialog.visible = true
+}
+async function onPickImportFile(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  batchDialog.text = await file.text()
+  input.value = '' // 允许连续选同一个文件
 }
 function submitBatchAdd() {
   const lines = batchDialog.text.split('\n').map((l) => l.trim()).filter(Boolean)
@@ -185,13 +209,14 @@ async function submit() {
 
     <div class="ete-title"><strong>字段定义</strong>
       <span>
-        <button class="rc-btn" type="button" @click="addField">加属性</button>
-        <button class="rc-btn" type="button" @click="openBatchAdd">批量加</button>
+        <button class="rc-btn" type="button" @click="openBatchAdd">导入字段</button>
       </span>
     </div>
+    <!-- 加属性只保留一个，放在字段表下方（0828 D14）。本抽屉原本只有顶部那一个，
+         挪到表下是为了跟画布侧的表编辑弹窗位置一致。 -->
     <div class="rc-table-scroll">
       <table class="rc-data-table ete-table">
-        <thead><tr><th style="width: 44px">序号</th><th>编码</th><th>展示名</th><th style="width: 70px">数据库列</th><th style="width: 96px">类型</th><th style="width: 110px">校验</th><th style="width: 64px">列宽</th><th>预处理</th><th style="width: 44px">去重</th><th style="width: 44px">必填</th><th style="width: 90px">操作</th></tr></thead>
+        <thead><tr><th style="width: 44px">序号</th><th>编码</th><th>展示名</th><th style="width: 70px">数据库列</th><th style="width: 96px">类型</th><th style="width: 110px">校验</th><th>预处理</th><th style="width: 44px">去重</th><th style="width: 44px">必填</th><th style="width: 64px">列宽</th><th style="width: 90px">操作</th></tr></thead>
         <tbody>
           <tr v-for="(field, index) in form.fields" :key="field.itemId || index">
             <td>{{ field.seq ?? index + 1 }}</td>
@@ -206,39 +231,46 @@ async function submit() {
               </select>
             </td>
             <td>
+              <!-- 校验：旧平台是可搜索下拉且能补自定义值（handleNextSearch），这里用 allow-create 等价 -->
               <el-select v-model="field.checkRule" filterable allow-create default-first-option placeholder="不校验" style="width: 100%">
-                <el-option v-for="v in CHECK_RULE_PRESETS" :key="v" :label="checkRuleLabel(v)" :value="v" />
+                <el-option v-for="v in ENTRY_CHECK_RULE_PRESETS" :key="v" :label="entryCheckRuleLabel(v)" :value="v" />
               </el-select>
             </td>
-            <td><input v-model.number="field.width" class="rc-input ete-number" type="number" /></td>
             <td>
               <el-autocomplete v-model="field.preprocess" :fetch-suggestions="preprocessSuggestions" style="width: 100%" clearable />
             </td>
             <td><input v-model="field.dedup" type="checkbox" /></td>
             <td><input v-model="field.required" type="checkbox" /></td>
+            <!-- 列宽放到最后（0828 D17） -->
+            <td><input v-model.number="field.width" class="rc-input ete-number" type="number" /></td>
             <td class="ete-actions">
               <button type="button" @click="moveField(index, -1)">↑</button>
               <button type="button" @click="moveField(index, 1)">↓</button>
-              <button v-if="!(Number(field.itemId ?? 0) > 0)" type="button" class="danger" @click="removeField(index)">删</button>
+              <!-- 已落库字段不可删：用禁用态而不是隐藏，否则用户看不出"为什么这行没有删除按钮" -->
+              <button
+                type="button"
+                class="danger"
+                :disabled="Number(field.itemId ?? 0) > 0"
+                :title="Number(field.itemId ?? 0) > 0 ? '该字段已落库，物理列绑着数据，不能删除' : '删除'"
+                @click="removeField(index)"
+              >删</button>
             </td>
           </tr>
         </tbody>
       </table>
+      <button class="ete-addrow" type="button" @click="addField">＋ 新增字段</button>
     </div>
 
+    <!-- 「高级」：本期只做**校验 / 校验脚本**（0828 D15 原本整块暂缓，2026-08-28 拍板校验要做）。
+         记变化同属旧平台这一行，但本期隐藏，见下方注释。 -->
     <div class="ete-adv-toggle" @click="advancedOpen = !advancedOpen">高级 {{ advancedOpen ? '▲' : '▼' }}</div>
     <div v-if="advancedOpen" class="ete-grid">
-      <div class="rc-field">
-        <label>记变化</label>
-        <select v-model="form.recFlag" class="rc-select">
-          <option value="">请选择</option>
-          <option value="1">记变化(进rec库)</option>
-          <option value="0">不记变化</option>
-        </select>
-      </div>
+      <!-- 「记变化」（recFlag）2026-08-28 拍板隐藏：本期只做校验。
+           **只隐藏控件，不动数据**——reset 仍回填、提交仍原样带回，后端已有值不会被这次保存抹掉。
+           要恢复就把下面这段注释还原成控件。 -->
       <div class="rc-field">
         <label>校验</label>
-        <select v-model="form.checkFlag" class="rc-select">
+        <select v-model="form.checkFlag" class="rc-select" data-testid="entry-check-flag">
           <option value="">请选择</option>
           <option value="1">校验(失败进err库)</option>
           <option value="0">不校验</option>
@@ -246,11 +278,17 @@ async function submit() {
       </div>
       <div class="rc-field ete-wide"><label>校验脚本</label><input v-model="form.checkRule" class="rc-input" placeholder="校验通过的数据行才能入库" /></div>
     </div>
-
     <template #footer><div class="ete-foot"><button class="rc-btn" type="button" @click="visible = false">取消</button><button class="rc-btn primary" type="button" @click="submit">保存</button></div></template>
   </el-drawer>
 
-  <el-dialog v-model="batchDialog.visible" title="批量加属性" width="480px" append-to-body>
+  <el-dialog v-model="batchDialog.visible" title="导入字段" width="480px" append-to-body>
+    <div class="ete-import-head">
+      <label class="rc-btn ete-import-file">
+        选择文件…
+        <input type="file" accept=".csv,.txt" data-testid="import-fields-file" @change="onPickImportFile" />
+      </label>
+      <span class="ete-import-hint">支持 .csv / .txt；选完会把内容填到下面，可再编辑</span>
+    </div>
     <textarea v-model="batchDialog.text" class="rc-input" rows="8" placeholder="英文名:中文名:宽度，一行一个" />
     <template #footer>
       <button class="rc-btn" type="button" @click="batchDialog.visible = false">取消</button>
@@ -273,6 +311,12 @@ async function submit() {
 .ete-actions { white-space: nowrap; }
 .ete-actions button { border: 0; background: transparent; color: var(--rc-primary); cursor: pointer; }
 .ete-actions button.danger { color: #dc2626; }
+.ete-addrow { width: 100%; height: 34px; border: 0; border-top: 1px solid var(--rc-border-soft); background: #fbfdff; color: var(--rc-primary); font-size: 12px; cursor: pointer; }
+.ete-addrow:hover { background: var(--rc-primary-bg); }
 .ete-adv-toggle { margin: 12px 0 8px; font-size: 12px; font-weight: 600; color: var(--rc-primary-ink); cursor: pointer; }
+.ete-import-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.ete-import-file { position: relative; overflow: hidden; cursor: pointer; }
+.ete-import-file input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.ete-import-hint { color: var(--rc-faint); font-size: 11px; }
 .ete-foot { display: flex; justify-content: flex-end; gap: 8px; }
 </style>

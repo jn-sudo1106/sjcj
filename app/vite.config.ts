@@ -1,6 +1,7 @@
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import { DEFAULT_API_PROXY_TARGET } from './src/constants/backend'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
@@ -8,10 +9,10 @@ export default defineConfig(({ mode }) => {
   // 直接读 process.env.VITE_* 只会命中硬编码兜底，导致 app/.env 里的代理目标永不生效。
   // 必须用 loadEnv 在当前目录（app/）显式读取。
   const env = loadEnv(mode, process.cwd(), '')
-  // 回退地址保留旧行为：没有本地 .env、也没导出环境变量时，仍走 115.227.21.133:9999，
-  // 与改动前完全一致——避免无 .env 的机器（服务器 / 同事环境）代理指向被悄悄改掉。
   const proxyTarget =
-    env.VITE_API_PROXY_TARGET || env.VITE_AUTH_PROXY_TARGET || 'http://115.227.21.133:9999'
+    env.VITE_API_PROXY_TARGET || env.VITE_AUTH_PROXY_TARGET || DEFAULT_API_PROXY_TARGET
+  // 没有 .env 时，前端 isProductionBackend 也要读到同一地址，不能只改了 proxy 而守卫仍当「未连生产」。
+  if (!env.VITE_API_PROXY_TARGET) process.env.VITE_API_PROXY_TARGET = proxyTarget
   return {
     base: env.VITE_BASE || '/',
     plugins: [vue()],

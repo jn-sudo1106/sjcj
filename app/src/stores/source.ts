@@ -12,11 +12,7 @@ import {
   buildSourceSeed,
   type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
-import {
-  extractTemplateNodeBindings,
-  compatibleTemplateBindings,
-} from '@/utils/flow/flowTemplates'
-import type { FlowTemplate } from '../api'
+import type { FlowRecord } from '../api'
 
 export const useSourceStore = defineStore('source', () => {
   // ---- 源级状态 ----
@@ -160,29 +156,25 @@ export const useSourceStore = defineStore('source', () => {
     }
   }
 
-  /** 显式切换/升级模板：只按稳定 nodeId 继承同一模板的兼容绑定，绝不按节点名称猜测复用。 */
+  /** 应用流程：全量替换当前节点，不继承旧流程的节点绑定。 */
   function applyTemplate(
-    template: FlowTemplate,
+    template: FlowRecord,
     configs: Record<string, NodeConfig>,
   ): { retained: number; cleared: number } | null {
     const source = sourceCfg.value ?? sourceCtx.value
     if (!source) return null
-    const oldBindings = extractTemplateNodeBindings(configs)
-    const sameTemplate = source.templateId === template.id
-    const nodeBindings = sameTemplate
-      ? compatibleTemplateBindings(oldBindings, template.definition)
-      : {}
+    const cleared = Object.keys(configs).filter((id) => id !== 'start' && id !== 'end').length
     const boundSource: Source = {
       ...(JSON.parse(JSON.stringify(source)) as Source),
       templateId: template.id,
       templateVersion: template.version,
-      nodeBindings,
+      nodeBindings: {},
     }
     if (sourceCfg.value) Object.assign(sourceCfg.value, boundSource)
     if (sourceCtx.value) Object.assign(sourceCtx.value, boundSource)
     return {
-      retained: Object.keys(nodeBindings).length,
-      cleared: Object.keys(oldBindings).length - Object.keys(nodeBindings).length,
+      retained: 0,
+      cleared,
     }
   }
 

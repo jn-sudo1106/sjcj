@@ -222,7 +222,7 @@ describe('旧平台新建源 HTTP 契约', () => {
         { itemConfig: 40598, sourceId: -1, name: '1400935-详情', configId: 1400975, entryTypeId: 900, outEntry: 900, lastStep: '40597', context: 'K2,K17', isDelete: 0 },
       ],
     }))
-    fetchMock.mockResolvedValueOnce(jsonResponse({ code: null, data: { configId: 1400935, topic: 'news_snt' }, msg: null, success: true }))
+    fetchMock.mockResolvedValueOnce(jsonResponse({ code: null, data: { configId: 1400935, topic: 'news_snt', runPolicy: '{snatch:{retryCnt:3}}' }, msg: null, success: true }))
     fetchMock.mockResolvedValueOnce(jsonResponse({ code: null, data: { configId: 1400974, topic: 'dev_web_snatch_html_download' }, msg: null, success: true }))
     fetchMock.mockResolvedValueOnce(jsonResponse({ code: null, data: { configId: 1400975, topic: 'news_cont' }, msg: null, success: true }))
     const { sourceApi } = await import('./index')
@@ -230,6 +230,7 @@ describe('旧平台新建源 HTTP 契约', () => {
     const steps = await sourceApi.sourceSteps('430016821')
 
     expect(steps.map((s) => s.topic)).toEqual(['news_snt', 'dev_web_snatch_html_download', 'news_cont'])
+    expect(steps[0].runPolicy).toBe('{snatch:{retryCnt:3}}')
     expect(fetchMock.mock.calls).toHaveLength(4)
     expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/config/configDetail?configId=1400935')
     expect(fetchMock.mock.calls[2][0]).toBe('/api/v1/config/configDetail?configId=1400974')
@@ -354,6 +355,79 @@ describe('旧平台新建源 HTTP 契约', () => {
     expect(url).toContain('name=')
     expect(init.method).toBe('POST')
     expect(init.body).toBeUndefined()
+  })
+
+  it('GET /v1/source/tagSource：勾选源 ID + #标签，新增不带 action', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '标记成功' }))
+    const { sourceApi } = await import('./index')
+    const result = await sourceApi.tagSource(['src-1', 'src-2'], ['正文缺失'])
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const parsed = new URL(url, 'http://local.test')
+    expect(parsed.pathname).toBe('/api/v1/source/tagSource')
+    expect(parsed.searchParams.get('ids')).toBe('src-1,src-2')
+    expect(parsed.searchParams.get('tags')).toBe('#正文缺失')
+    expect(parsed.searchParams.get('action')).toBeNull()
+    expect(init.method).toBe('GET')
+    expect(result).toMatchObject({ ok: true, message: '标记成功' })
+  })
+
+  it('清标签不走 tagSource action=clear，改为 POST updateSource 空 tags', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '修改成功' }))
+    const { sourceApi } = await import('./index')
+    await sourceApi.tagSource(['src-1', 'src-2'], [], 'clear')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const bodies = fetchMock.mock.calls.map((call) => {
+      const [url, init] = call as [string, RequestInit]
+      expect(new URL(url, 'http://local.test').pathname).toBe('/api/v1/source/updateSource')
+      expect(init.method).toBe('POST')
+      return JSON.parse(String(init.body))
+    })
+    expect(bodies).toEqual([
+      { sourceId: 'src-1', tags: '' },
+      { sourceId: 'src-2', tags: '' },
+    ])
+  })
+
+  it('GET /v1/source/setColor：设颜色带 isClear=0；清除写 flag=0，不带 isClear', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '标记成功' }))
+    const { sourceApi } = await import('./index')
+    await sourceApi.setColor(['src-1'], 2)
+    expect(new URL(String(fetchMock.mock.calls[0][0]), 'http://local.test').searchParams.get('flag')).toBe('2')
+    expect(new URL(String(fetchMock.mock.calls[0][0]), 'http://local.test').searchParams.get('isClear')).toBe('0')
+    await sourceApi.setColor(['src-1'], undefined, true)
+    const cleared = new URL(String(fetchMock.mock.calls[1][0]), 'http://local.test')
+    expect(cleared.pathname).toBe('/api/v1/source/setColor')
+    expect(cleared.searchParams.get('flag')).toBe('0')
+    expect(cleared.searchParams.get('isClear')).toBeNull()
+  })
+
+  it('setColor flag=0 失败时回退 updateSource usedFlag=0', async () => {
+    fetchMock
+      .mockRejectedValueOnce(new Error('请求失败 500'))
+      .mockResolvedValue(jsonResponse({ code: '0', msg: '修改成功' }))
+    const { sourceApi } = await import('./index')
+    await sourceApi.setColor(['src-1'], undefined, true)
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/v1/source/setColor')
+    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(new URL(url, 'http://local.test').pathname).toBe('/api/v1/source/updateSource')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({ sourceId: 'src-1', usedFlag: 0 })
+  })
+
+  it('日常 mock 模式且已标 live 时，setColor / tagSource 仍打真实接口，不被 mock 吃掉', async () => {
+    vi.stubEnv('VITE_API_MODE', 'mock')
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.resetModules()
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '标记成功' }))
+    const { sourceApi } = await import('./index')
+
+    await sourceApi.setColor(['src-1'], 2)
+    await sourceApi.tagSource(['src-1'], ['正文缺失'])
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/v1/source/setColor')
+    expect(String(fetchMock.mock.calls[1][0])).toContain('/api/v1/source/tagSource')
   })
 
 })

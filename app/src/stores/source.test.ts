@@ -231,6 +231,20 @@ describe('applyTemplate', () => {
     s.applyTemplate(template, {})
     expect(s.sourceCfg?.templateId).toBe(template.id)
   })
+
+  it('重复应用同一流程也会全量替换，不保留旧节点绑定', () => {
+    const s = useSourceStore()
+    const template = makePresetFlowTemplates()[0]
+    s.patchSource({
+      sourceId: 's1', name: '草稿源', templateId: template.id,
+      nodeBindings: { 'node-1': { outputTable: 'OLD_TABLE' } },
+    })
+    const result = s.applyTemplate(template, {
+      'node-1': { title: '旧节点' } as never,
+    })
+    expect(result).toEqual({ retained: 0, cleared: 1 })
+    expect(s.sourceCfg?.nodeBindings).toEqual({})
+  })
 })
 
 describe('setFlowName', () => {

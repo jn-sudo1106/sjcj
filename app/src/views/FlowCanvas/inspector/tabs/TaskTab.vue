@@ -1,6 +1,8 @@
 <script setup lang="ts">
 // 任务配置 Tab（P1-1 Step 4 · 从 NodeInspector.vue 拆出）。
-// 内容：有效输入表摘要 → 进入条件 → 队列归属 → 任务参数取值 → 上下文来源 → 出参列。
+// 内容：有效输入表摘要 → 进入条件 → 队列名称 → 任务参数取值 → 上下文来源。
+// 进入条件留在本 Tab（2026-08-28 确认）；入口文案按 0828 D20 改成「添加条件」，
+// 落库仍在流程的步骤上（Step.condition，0824-11 §1.1）。
 // 「任务 URL 来源字段/规则」已删除（0804 拍板：当时保留是为了传参，现在在参数位置拼接即可，见开发方案 §2.3）。
 // 行为与原 NodeInspector 内联实现 1:1，仅物理搬迁；共享资产 tables/params 经 useNodeInspectorAssets 注入。
 import { computed, watch } from 'vue'
@@ -74,31 +76,33 @@ function onTaskParamValueChange(paramId: string, key: 'fieldId' | 'valueExpr', e
 
 // 「出参列」（outColumns）2026-08-27 拍板搬到参数配置 Tab，这里只剩「上下文来源」（contextMap）。
 // 两者取值来源本来就不同：上下文来源取输入表字段，出参列取输出表字段——放在一起容易被误当成一类。
-type TaskFieldList = 'contextMap'
-function taskFieldList(key: TaskFieldList) {
-  return cfg.value?.taskCfg?.[key] ?? []
+//
+// 2026-08-28 对齐旧平台（旧 SourceStep.vue「上下文来源」+ page/base/EntryItemMultiSelect.vue）：
+//   ① 候选取**输入表全部字段**，不按表配置的勾选过滤——旧平台直接 queryEntryType(表).items；
+//   ② 一个**多选下拉**一次选完，不再是"每行一个 select + 添加/删除按钮"；
+//   ③ 选项文案 `[K1] - 标题 - [title]`（columnName / itemName / itemCode 三段）；
+//   ④ 存 **columnName**（旧平台 `item.join(',')` 存的就是 columnName），不是 prop。
+// ④ 现在改零代价：步骤写接口还没实现，contextMap 从没落过库；等 W9 接了再改就要写迁移。
+const contextMap = computed<string[]>(() => cfg.value?.taskCfg?.contextMap ?? [])
+function onContextMapChange(next: string[]) {
+  flow.patchTaskConfig(id.value, { contextMap: next })
 }
-function onTaskFieldChange(key: TaskFieldList, index: number, e: Event) {
-  const fields = [...taskFieldList(key)]
-  fields[index] = (e.target as HTMLSelectElement).value
-  flow.patchTaskConfig(id.value, { [key]: fields })
+/** 选项文案照抄旧平台 EntryItemMultiSelect：`[columnName] - 展示名 - [编码]` */
+function contextOptionLabel(f: { prop: string; desc: string; columnName?: string }) {
+  const column = f.columnName || f.prop
+  const code = f.prop.replace(/-K\d+$/, '')
+  return `[${column}] - ${f.desc || code} - [${code}]`
 }
-function addTaskField(key: TaskFieldList) {
-  const current = taskFieldList(key)
-  const next = selectedInputFields.value.find((field) => !current.includes(field.prop))
-  if (next) flow.patchTaskConfig(id.value, { [key]: [...current, next.prop] })
-}
-function removeTaskField(key: TaskFieldList, index: number) {
-  flow.patchTaskConfig(id.value, { [key]: taskFieldList(key).filter((_: string, itemIndex: number) => itemIndex !== index) })
-}
-function canAddTaskField(key: TaskFieldList) {
-  return selectedInputFields.value.some((field) => !taskFieldList(key).includes(field.prop))
+/** 候选的值 = columnName；表里查不到 columnName 时退回 prop，至少不丢这一项 */
+function contextOptionValue(f: { prop: string; columnName?: string }) {
+  return f.columnName || f.prop
 }
 
 const entryCondition = computed<ConditionGroup | undefined>(() => (cfg.value ? nodeEntryCondition(cfg.value) : undefined))
 function onEntryConditionChange(cond: ConditionGroup | undefined) {
   flow.setEntryCondition(id.value, cond)
 }
+
 </script>
 
 <template>
@@ -109,8 +113,8 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
     </div>
   </div>
   <ConditionRow v-if="hasEffectiveInput" integrated :condition="entryCondition" :fields="inputTableFields" @change="onEntryConditionChange" />
-  <!-- 队列归属对所有采集节点展示；固定产物节点仍由能力模型锁定。 -->
-  <div class="rc-field"><label>队列归属{{ nodeCapability?.queueMode === 'fixed' ? `（固定 · ${nodeCapability.label}）` : '' }}</label>
+  <!-- 队列名称（0824-00 §6.6 改名，旧字段 topic）对所有采集节点展示；固定产物节点仍由能力模型锁定。 -->
+  <div class="rc-field"><label>队列名称{{ nodeCapability?.queueMode === 'fixed' ? `（固定 · ${nodeCapability.label}）` : '' }}</label>
     <input
       class="rc-input"
       :value="ownTaskQueue"
@@ -135,16 +139,25 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
     <div v-else class="rc-readonly-hint">请先在当前节点的参数配置中绑定参数。</div>
   </div>
   <div class="rc-field"><label>上下文来源</label>
-    <div v-if="hasEffectiveInput && taskFieldList('contextMap').length" class="ni-task-field-list">
-      <div v-for="(fieldId, index) in taskFieldList('contextMap')" :key="`${fieldId}-${index}`" class="ni-task-field-row">
-        <select class="rc-select" :value="fieldId" @change="onTaskFieldChange('contextMap', index, $event)">
-          <option v-for="f in selectedInputFields" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
-        </select>
-        <button class="rc-row-del" type="button" title="删除字段" @click="removeTaskField('contextMap', index)">×</button>
-      </div>
-    </div>
-    <button class="rc-btn" type="button" :disabled="!hasEffectiveInput || !canAddTaskField('contextMap')" @click="addTaskField('contextMap')">+ 添加字段</button>
-    <div class="rc-help">{{ hasEffectiveInput ? '添加需要随任务传递的输入表字段。' : '暂无有效输入表，当前上下文来源为空。' }}</div>
+    <el-select
+      :model-value="contextMap"
+      multiple
+      filterable
+      collapse-tags
+      collapse-tags-tooltip
+      :disabled="!hasEffectiveInput"
+      :placeholder="hasEffectiveInput ? '请选择列' : '暂无有效输入表'"
+      style="width: 100%"
+      data-testid="context-map-select"
+      @update:model-value="onContextMapChange"
+    >
+      <el-option
+        v-for="f in inputTableFields"
+        :key="contextOptionValue(f)"
+        :label="contextOptionLabel(f)"
+        :value="contextOptionValue(f)"
+      />
+    </el-select>
   </div>
 </template>
 

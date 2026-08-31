@@ -35,7 +35,7 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
     expect((columnInputs[0].element as HTMLInputElement).value).toBe('K1')
   })
 
-  it('加属性：新行编号在既有最大序号基础上 +1，不改写已有行 columnName', async () => {
+  it('新增字段：新行编号在既有最大序号基础上 +1，不改写已有行 columnName', async () => {
     const entry: EntryType = {
       tableId: 't1', tableName: 'tb_a', fields: [
         { prop: 'a', desc: 'A', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
@@ -43,25 +43,74 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
       ],
     }
     await mountEditor(entry)
-    await body().findAll('button').find((b) => b.text() === '加属性')!.trigger('click')
+    await body().findAll('button').find((b) => b.text() === '＋ 新增字段')!.trigger('click')
     await flushPromises()
 
     const columnInputs = body().findAll('td input[disabled]').map((i) => (i.element as HTMLInputElement).value)
     expect(columnInputs).toEqual(['K1', 'K3', 'K4'])
   })
 
-  it('已有行（itemId>0）不可删除，仅新增行可删', async () => {
+  // 2026-08-28 生产实测 77 张表，K 序全部连续、零空洞——columnName 是前端定的、后端照单收，
+  // 删掉中间的新增行必须把后面的新增行补上来，不能给后端漏空洞。
+  // 前提是「只有新增行可删」：已落库字段（itemId>0）的 columnName 一个都不碰。
+  it('删掉中间的新增行后，后续新增行的 K 序补齐，不留空洞', async () => {
+    const entry: EntryType = {
+      tableId: 't1', tableName: 'tb_a', fields: [
+        { prop: 'a', desc: 'A', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
+        { prop: 'b', desc: 'B', type: 'string', required: false, dedup: false, columnName: 'K2', itemId: '2', seq: 2 },
+      ],
+    }
+    await mountEditor(entry)
+    const addBtn = () => body().findAll('button').find((b) => b.text() === '＋ 新增字段')!
+    await addBtn().trigger('click')
+    await addBtn().trigger('click')
+    await addBtn().trigger('click')
+    await flushPromises()
+    const cols = () => body().findAll('td input[disabled]').map((i) => (i.element as HTMLInputElement).value)
+    expect(cols()).toEqual(['K1', 'K2', 'K3', 'K4', 'K5'])
+
+    // 删掉中间那个新增行（K4）。已落库行也有删除按钮（禁用态），所以只在可用的里面取。
+    const enabledDels = () => body().findAll('button.danger').filter((b) => b.attributes('disabled') === undefined)
+    await enabledDels()[1].trigger('click')
+    await flushPromises()
+    expect(cols()).toEqual(['K1', 'K2', 'K3', 'K4'])
+  })
+
+  it('补齐 K 序时绝不改写已落库字段的 columnName', async () => {
+    const entry: EntryType = {
+      tableId: 't1', tableName: 'tb_a', fields: [
+        { prop: 'a', desc: 'A', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
+        { prop: 'b', desc: 'B', type: 'string', required: false, dedup: false, columnName: 'K5', itemId: '2', seq: 2 },
+      ],
+    }
+    await mountEditor(entry)
+    await body().findAll('button').find((b) => b.text() === '＋ 新增字段')!.trigger('click')
+    await flushPromises()
+    await body().findAll('button.danger').filter((b) => b.attributes('disabled') === undefined)[0].trigger('click')
+    await flushPromises()
+    // 已落库的 K1 / K5 原样保留（K5 那个"空洞"是历史数据，不该被我们悄悄压缩）
+    const cols = body().findAll('td input[disabled]').map((i) => (i.element as HTMLInputElement).value)
+    expect(cols).toEqual(['K1', 'K5'])
+  })
+
+  // 2026-08-28：已落库行改成**禁用态**删除按钮（原来是直接不渲染）——
+  // 整列空白看不出"为什么这行不能删"，禁用 + 悬浮说明才讲得清。
+  it('已有行（itemId>0）的删除按钮禁用，新增行可删', async () => {
     const entry: EntryType = {
       tableId: 't1', tableName: 'tb_a', fields: [
         { prop: 'a', desc: 'A', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
       ],
     }
     await mountEditor(entry)
-    expect(body().find('button.danger').exists()).toBe(false)
+    expect(body().findAll('button.danger').length).toBe(1)
+    expect(body().find('button.danger').attributes('disabled')).toBeDefined()
 
-    await body().findAll('button').find((b) => b.text() === '加属性')!.trigger('click')
+    await body().findAll('button').find((b) => b.text() === '＋ 新增字段')!.trigger('click')
     await flushPromises()
-    expect(body().find('button.danger').exists()).toBe(true)
+    const dels = body().findAll('button.danger')
+    expect(dels.length).toBe(2)
+    expect(dels[0].attributes('disabled')).toBeDefined()   // 已落库
+    expect(dels[1].attributes('disabled')).toBeUndefined() // 新增行
   })
 
   it('去重勾选联动：勾选字段后只读 keyField 输入按 columnName 逗号连接实时更新', async () => {

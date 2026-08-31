@@ -78,6 +78,21 @@ function currentGroup(): ConditionGroup {
 function commit() {
   emit('change', active.value ? currentGroup() : undefined)
 }
+/** 「添加条件」：整合模式下代替原来的勾选框（0828 D20） */
+function activate() {
+  active.value = true
+  if (!items.value.length) {
+    items.value = [{ field: props.fields[0]?.prop ?? '', op: 'contains', value: '' }]
+  }
+  expr.value = expressionOf()
+  exprEdited.value = false
+  commit()
+}
+/** 「移除」：清掉条件，等价于原来取消勾选 */
+function deactivate() {
+  active.value = false
+  commit()
+}
 function toggle(e: Event) {
   if ((e.target as HTMLInputElement).checked) {
     active.value = true
@@ -152,8 +167,22 @@ const summary = computed(() => conditionGroupLabel(active.value ? currentGroup()
 
 <template>
   <div class="cond-row">
-    <label class="cond-toggle"><input type="checkbox" :checked="active" @change="toggle" /> 进入条件</label>
+    <!-- 整合模式（节点上的进入条件，0828 D20）：不摆勾选框，直接一个「添加条件」按钮。
+         会上原话「把这个去掉，比如添加条件不就行了吗」——勾选框 + 「进入条件」标签是多余的一层。
+         分支条件（BranchEditor，非整合模式）保持原来的勾选框不动。 -->
+    <button
+      v-if="integrated && !active"
+      class="cond-add cond-add-entry"
+      type="button"
+      data-testid="add-entry-condition"
+      @click="activate"
+    >+ 添加条件</button>
+    <label v-else-if="!integrated" class="cond-toggle"><input type="checkbox" :checked="active" @change="toggle" /> 进入条件</label>
     <template v-if="active">
+      <div v-if="integrated" class="cond-head">
+        <span class="cond-head-title">进入条件</span>
+        <button class="cond-clear" type="button" data-testid="clear-entry-condition" @click="deactivate">移除</button>
+      </div>
       <div v-if="!integrated" class="cond-mode">
         <button type="button" :class="{ active: mode === 'fields' }" @click="onModeChange('fields')">字段模式</button>
         <button type="button" :class="{ active: mode === 'expr' }" @click="onModeChange('expr')">表达式模式</button>
@@ -195,6 +224,11 @@ const summary = computed(() => conditionGroupLabel(active.value ? currentGroup()
 <style scoped>
 .cond-row { margin-bottom: 10px; }
 .cond-toggle { display: flex; align-items: center; gap: 6px; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; cursor: pointer; }
+.cond-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.cond-head-title { color: var(--rc-muted); font-size: 11px; }
+.cond-clear { border: 0; background: transparent; color: var(--rc-faint); font-size: 11px; cursor: pointer; padding: 0; }
+.cond-clear:hover { color: #b91c1c; }
+.cond-add-entry { margin-bottom: 0; }
 .cond-mode { display: inline-flex; border: 1px solid #dbe3ee; border-radius: 7px; overflow: hidden; margin-bottom: 6px; }
 .cond-mode button { border: 0; border-left: 1px solid #dbe3ee; background: #fff; color: var(--rc-text-2); padding: 4px 10px; font-size: 11px; cursor: pointer; }
 .cond-mode button:first-child { border-left: 0; }

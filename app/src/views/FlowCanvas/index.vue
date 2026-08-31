@@ -197,7 +197,42 @@ async function loadSourceFlow(sourceId: string) {
   if (!ws.open(source.sourceId, source.name)) {
     ElMessage.warning('页签已达上限（8 个），当前源未加入页签，请关闭部分页签后再试')
   }
+  // 把所属网站记进页签快照：切页签时 URL 上没有 siteId，而 sourceDetail 又不返回它（实测为 null），
+  // 不记下来的话切到别的网站的源，左侧源列表会整块消失。只在拿得到时写，别用空值覆盖已有的。
+  const ownerSiteId = source.siteId || String(route.query.siteId ?? '') || ws.snapshotOf(source.sourceId)?.siteId || ''
+  if (ownerSiteId) ws.saveSnapshot(source.sourceId, { siteId: ownerSiteId })
+  else void resolveOwnerSite(source.sourceId)
   void backfillStepDetails(sourceId, steps ?? [])
+}
+
+/**
+ * 反查源所属网站（2026-08-28）。
+ *
+ * `source/sourceDetail` **不返回 siteId**（生产实测是 `null`），所以只拿到 sourceId 的入口
+ * ——深链 `/canvas?sourceId=X`、会话恢复后的页签——都推不出归属，左侧源列表会整块空掉。
+ * 但 `source/sourcePaged` 带 `sourceId` 过滤时**是返回 siteId 的**（同样实测），
+ * 所以不用麻烦后端加字段，这里补一次查询即可。
+ *
+ * 异步补、不挡首屏：画布和右侧面板不依赖它，只有左侧源列表要。查不到就保持现状，不报错打扰用户。
+ */
+async function resolveOwnerSite(sourceId: string) {
+  try {
+    const res = await sourceApi.sourcePaged({ sourceId, page: 1, size: 1 })
+    const row = res.list.find((s) => String(s.sourceId) === String(sourceId))
+    const siteId = row?.siteId
+    if (!siteId) return
+    // ⚠️ 无网站归属的源，后端不是给 null，而是把 siteId **填成该源的 configId**
+    //（2026-08-28 实测：抽样 200 个游离源，siteId 100% 等于 configId；而真正有归属的 7 个源
+    // siteId 都是真实的小整数网站 ID，无一相等）。直接用会拿 configId 去查网站，
+    // 侧栏显示「该网站暂无源」——比空着更误导。判定为游离源就不写。
+    if (row?.configId && String(siteId) === String(row.configId)) return
+    // 中途切走就丢弃，别把上一个源的归属写到当前上下文上
+    if (String(route.query.sourceId ?? '') !== String(sourceId)) return
+    ws.saveSnapshot(sourceId, { siteId })
+    flow.patchSourceCtx({ siteId })
+  } catch {
+    // 反查失败不影响主流程：左侧列表保持空态，用户仍可从网站列表进入
+  }
 }
 
 /** configDetail 补充：首屏之后异步打回。中途切走了就丢弃，别把上一个源的数据写到当前画布上。 */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BIZ_TYPE_OPTIONS, MULTI_MODE_OPTIONS } from './flowModel'
+import { BIZ_TYPE_OPTIONS, MULTI_MODE_OPTIONS, WEB_TYPE_OPTIONS, SNATCH_TYPES, TEMPLATE_TO_SNATCH } from './flowModel'
 
 // 这两个下拉的值直接写进旧平台的 config 表，必须与旧前端 column.config.js 逐字一致。
 // 2026-08-28 事故：业务类型曾按会议口头举例编成 news/login/分类/公告——
@@ -26,5 +26,67 @@ describe('旧平台枚举必须逐字一致', () => {
     const values = BIZ_TYPE_OPTIONS.map((o) => o.value)
     expect(values).not.toContain('category')
     expect(values).not.toContain('announcement')
+  })
+})
+
+// 抓取类型（= 节点类型 = config.configType）。2026-08-28 生产实测 GET /v1/config/sourceTypes 的全部 11 条。
+// 之前这里的硬编码含 95 / 155 / [BROWSER] / [WECHAT] / [LOGIN] 五个后端不存在的值，
+// 其中 95 会被 sourceTypeFromSnatchType 解析后写进新建源请求体——不是显示问题。
+describe('抓取类型与后端字典一致（config/sourceTypes 实测）', () => {
+  const REAL_SOURCE_TYPES = new Map<string, string>([
+    ['160', 'Mail抓取'], ['90', '网页抓取'], ['500', '资讯抓取'], ['110', 'EXCEL抓取'],
+    ['120', 'DOC抓取'], ['130', 'PDF抓取'], ['140', 'App抓取'], ['150', 'OCR抓取'],
+    ['170', 'Python抓取'], ['300', '校验类'], ['400', '提取数据发邮件'],
+  ])
+
+  it('SNATCH_TYPES 与字典逐条一致（编号 + 名称）', () => {
+    const parsed = SNATCH_TYPES.map((t) => {
+      const m = t.match(/^\[(\d+)\] - (.+)$/)
+      expect(m, `「${t}」不是「[编号] - 名称」格式`).toBeTruthy()
+      return [m![1], m![2]] as const
+    })
+    expect(parsed.length).toBe(REAL_SOURCE_TYPES.size)
+    parsed.forEach(([code, name]) => {
+      expect(REAL_SOURCE_TYPES.get(code), `编号 ${code} 不在后端字典里`).toBe(name)
+    })
+  })
+
+  it('不含任何臆造值：95 / 155 / [BROWSER] / [WECHAT] / [LOGIN] 都不许再出现', () => {
+    const all = [...SNATCH_TYPES, ...Object.values(TEMPLATE_TO_SNATCH)].join('|')
+    expect(all).not.toContain('[95]')
+    expect(all).not.toContain('[155]')
+    expect(all).not.toContain('[BROWSER]')
+    expect(all).not.toContain('[WECHAT]')
+    expect(all).not.toContain('[LOGIN]')
+  })
+
+  it('TEMPLATE_TO_SNATCH 的每个取值都出自 SNATCH_TYPES', () => {
+    Object.entries(TEMPLATE_TO_SNATCH).forEach(([template, value]) => {
+      expect(SNATCH_TYPES, `模板 ${template} 映射到了字典外的 ${value}`).toContain(value)
+    })
+  })
+})
+
+// 「网页类型」是展示层的说法（沿用新平台原有的列表页/详情页/文件附件页），落库仍是旧 isMulti。
+// 展示可以不同名，但**底层取值和旧平台原文必须一一对应**，否则新旧逐字段核对就断了。
+describe('网页类型 ↔ 旧 isMulti', () => {
+  it('下拉只有列表页(1) / 详情页(0) 两项——「2 更新父表」不给用户选', () => {
+    expect(WEB_TYPE_OPTIONS.map((o) => [o.value, o.label])).toEqual([
+      [1, '列表页'],
+      [0, '详情页'],
+    ])
+    expect(WEB_TYPE_OPTIONS.some((o) => o.value === 2)).toBe(false)
+  })
+
+  it('每项的 legacy 与旧平台原文逐字一致（核对时靠它对上旧平台）', () => {
+    WEB_TYPE_OPTIONS.forEach((opt) => {
+      const legacy = MULTI_MODE_OPTIONS.find((m) => m.value === opt.value)
+      expect(legacy, `isMulti=${opt.value} 在旧平台清单里不存在`).toBeTruthy()
+      expect(opt.legacy).toBe(legacy!.label)
+    })
+  })
+
+  it('MULTI_MODE_OPTIONS 保留完整三态——它是旧平台原文的唯一来源，2 仍要能写回', () => {
+    expect(MULTI_MODE_OPTIONS.map((m) => m.value)).toEqual([1, 0, 2])
   })
 })

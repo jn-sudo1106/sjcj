@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ENDPOINTS, ENDPOINT_PATHS, DANGER_ENDPOINTS } from './endpoints'
+import { ENDPOINTS, ENDPOINT_PATHS, DANGER_ENDPOINTS, LIVE_ENDPOINTS } from './endpoints'
 import { mockRegistry } from './mock'
 
 describe('端点契约一致性', () => {
@@ -10,6 +10,10 @@ describe('端点契约一致性', () => {
     expect(DANGER_ENDPOINTS.has('source/sendSnatch')).toBe(true)
     expect(DANGER_ENDPOINTS.has('rule/publish')).toBe(true)
     expect(DANGER_ENDPOINTS.has('source/sourcePaged')).toBe(false)
+  })
+  it('问题标记写入已标 live，日常 mock 模式也会打真实 tagSource / setColor', () => {
+    expect(LIVE_ENDPOINTS.has('source/tagSource')).toBe(true)
+    expect(LIVE_ENDPOINTS.has('source/setColor')).toBe(true)
   })
   it('所有已注册 mock 端点都在契约清单内', () => {
     for (const key of Object.keys(mockRegistry)) {

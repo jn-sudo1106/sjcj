@@ -43,7 +43,7 @@ import {
   composeTemplateFlow,
   extractTemplateNodeBindings,
 } from '@/utils/flow/flowTemplates'
-import type { FlowTemplate, Source, Site, Step } from '../api'
+import type { FlowRecord, Source, Site, Step } from '../api'
 import { useSourceStore } from './source'
 import { useNodeStore } from './node'
 import { useRuntimeStore } from './runtime'
@@ -412,6 +412,10 @@ export const useFlowStore = defineStore('flow', () => {
     if (template === 'parallel') cfg.kind = 'parallel'
     const typeName = TEMPLATE_TO_NAME[template]
     if (typeName) cfg.title = typeName
+    // 配置名 = 节点名（0828 D08/P4）：新节点直接带上，用户不必为"起名"多点一次。
+    // 模板里可能带着上一份配置的身份，连 configId 一起清干净——新节点是新建态。
+    delete cfg.configId
+    cfg.configName = cfg.title
     if (cfg.collectCfg) {
       cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[template] ?? cfg.collectCfg.snatchType
       cfg.collectCfg.url = ''
@@ -455,6 +459,10 @@ export const useFlowStore = defineStore('flow', () => {
     const cfg = cloneConfig(NODE_CONFIGS[srcKey])
     const typeName = TEMPLATE_TO_NAME[template]
     if (typeName) cfg.title = typeName
+    // 配置名 = 节点名（0828 D08/P4）：新节点直接带上，用户不必为"起名"多点一次。
+    // 模板里可能带着上一份配置的身份，连 configId 一起清干净——新节点是新建态。
+    delete cfg.configId
+    cfg.configName = cfg.title
     if (cfg.collectCfg) {
       cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[template] ?? cfg.collectCfg.snatchType
       cfg.collectCfg.url = ''
@@ -478,6 +486,11 @@ export const useFlowStore = defineStore('flow', () => {
     const src = configs[id]
     if (!src) return
     const cfg = JSON.parse(JSON.stringify(src)) as NodeConfig
+    // 副本不得继承原节点的 configId：一个节点只能引用一个配置，两个节点引用同一份配置时，
+    // 在副本上改字段再保存就是在改原件（0828 D02「复制节点 = 新增一套配置」）。
+    // 这里只保证"绝不指向原配置"；真正复制出一份新配置由调用方的 useDuplicateNode 异步完成。
+    delete cfg.configId
+    delete cfg.configName
     const newId = `${id.split('-')[0]}-${seq++}`
     configs[newId] = cfg
     const idx = main.value.indexOf(id)
@@ -487,10 +500,20 @@ export const useFlowStore = defineStore('flow', () => {
     nodeStore.touchFlow()
   }
 
-  function duplicate(id: string) {
-    if (!configs[id]) return
+  /**
+   * 复制节点。**返回新节点 id**，调用方据此接着复制配置（见 useDuplicateNode）。
+   *
+   * 副本**不继承 configId/configName**：`cloneConfig` 是整体深拷贝，原来把 configId 一起带走了，
+   * 结果两个节点引用同一份配置——在副本上改一个字段再保存，改的是原件。
+   * 0828 D02 把「复制节点」定为唯一的复用手段，这条路径会被高频触发，必须在 store 这一层就断干净：
+   * 即使后续 config/copyAll 失败，副本也只会停在"未绑定配置"，不会污染原配置。
+   */
+  function duplicate(id: string): string | undefined {
+    if (!configs[id]) return undefined
     const cfg = cloneConfig(configs[id])
     cfg.title = cfg.title.replace(/（复制）$/, '') + '（复制）'
+    delete cfg.configId
+    delete cfg.configName
     const newId = `${id}-copy-${seq++}`
     configs[newId] = cfg
     const idx = main.value.indexOf(id)
@@ -508,6 +531,20 @@ export const useFlowStore = defineStore('flow', () => {
       branchGroups.push(newBg)
     }
     select(newId)
+    nodeStore.touchFlow()
+    return newId
+  }
+
+  /**
+   * 把 config/copyAll 复制出来的新配置绑到副本节点上。
+   * 内容不用回写——copyAll 是后端整条复制，服务端那份与副本节点当前内容一致，所以直接清配置脏标。
+   */
+  function bindCopiedConfig(id: string, configId: string, configName: string) {
+    const cfg = configs[id]
+    if (!cfg) return
+    cfg.configId = configId
+    cfg.configName = configName
+    nodeStore.markConfigSaved(id)
     nodeStore.touchFlow()
   }
 
@@ -615,11 +652,22 @@ export const useFlowStore = defineStore('flow', () => {
     nodeStore.touchFlow()
   }
 
+  /**
+   * 改节点名。**配置名跟着走**（0828 D08/P4：配置名 = 节点名）。
+   *
+   * 「跟不跟」不额外存标记，用**当前配置名是否还等于旧节点名**判断：
+   * 相等（或为空）说明用户没单独改过配置名，跟着更新；一旦用户单独改过配置名就自动脱钩，
+   * 之后改节点名不再覆盖他填的名字。
+   */
   function setTitle(id: string, title: string) {
     const c = configs[id]
     // 允许输入框在编辑过程中暂时为空；保存/发布前由 validateFlow 统一校验，
     // 不能在每次 input 时回填“未命名节点”导致最后一个字无法删除。
-    if (c) c.title = title
+    if (c) {
+      const followed = !c.configName || c.configName === c.title
+      c.title = title
+      if (followed) c.configName = title
+    }
     nodeStore.touchFlow()
   }
 
@@ -882,7 +930,7 @@ export const useFlowStore = defineStore('flow', () => {
     load(flowDef)
   }
 
-  function applyTemplate(template: FlowTemplate): { retained: number; cleared: number } | null {
+  function applyTemplate(template: FlowRecord): { retained: number; cleared: number } | null {
     const result = sourceStore.applyTemplate(template, configs)
     if (!result) {
       console.warn('[flow] applyTemplate skipped: sourceStore.applyTemplate returned null', { template })
@@ -1103,6 +1151,7 @@ export const useFlowStore = defineStore('flow', () => {
     addNodeToBranch,
     duplicateNode,
     duplicate,
+    bindCopiedConfig,
     move,
     moveTo,
     toggleDisabled,

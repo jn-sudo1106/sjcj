@@ -10,6 +10,9 @@ export interface TabMeta {
 export const TABS: TabMeta[] = [
   { key: 'overview', path: '/overview', label: '采集资产总览', desc: 'KPI、采集生态、趋势、占比、异常下钻', group: 'home' },
   { key: 'collect', path: '/collect', label: '采集资产', desc: '源、配置、表、批量操作', group: 'assets' },
+  // 流程中心（0828 W6-1）：Flow 是与源/规则/指标并列的一类资产，且被多个源复用——
+  // 塞进采集资产的 tab 会暗示它从属于某个源，所以提为一级入口。
+  { key: 'flow', path: '/flows', label: '流程中心', desc: '流程、节点与配置、使用范围反查', group: 'assets' },
   { key: 'rules', path: '/rules', label: '规则资产', desc: '规则组、表达式、测试集、发布门禁、参数', group: 'assets' },
   { key: 'metrics', path: '/metrics', label: '指标中心', desc: '指标数据集、指标定义、口径维护', group: 'assets' },
   { key: 'data', path: '/data', label: '数据中心', desc: '实体数据、原始文件、表结构', group: 'ops' },

@@ -1,4 +1,5 @@
 import type { Paged, Source, SourceCategory, SourceOption, Step, Ack, CredentialRef, SourceLog, TaskInst, NodeRunStat, SourceLoadParamsResult } from '../types'
+import { colorFromFlag, mergeIssueTags, parseIssueTags } from '@/utils/sourceMark'
 
 // 样例源数据 — 取自源列表实测记录的字段结构，扩展为多分类 / 多状态以支撑列表、筛选、分类树。
 // siteId（0707 优化·Phase2）：按分类归拢进 mock/sites.ts 的演示网站，供网站—源模型联调；导出供 sites.ts 聚合读取。
@@ -12,7 +13,7 @@ export const SOURCES: Source[] = [
     domain: 'comment.zfb', category: '基金类', subCategory: '支付宝评论', resume: true,
     coreParam: 'fund_code', lastUrl: 'FundComment-209?p=2', dirId: '9008845',
     credentialRef: 'cred-zfb', updatedAt: '2026-06-18 17:42', freqTag: '日度', verified: 'normal',
-    siteId: 'site-zfb',
+    siteId: 'site-zfb', tags: ['日期错误待重跑'], color: 'orange',
   },
   {
     sourceId: '301287174', name: '004432-南方中证申万有色金属ETF联接A',
@@ -20,7 +21,7 @@ export const SOURCES: Source[] = [
     owner: 'dev_zhonghe', categoryPath: '/基金类/支付宝评论', cycle: '每日', state: 'E',
     alarm: true, dataCount: 4501, newInCount: 0, successCount: 4120, version: 3,
     lastTaskAt: '2026-06-18 17:40:09', lastSuccessAt: '2026-06-15 18:06:52', remark: '抓取超时，待排查代理',
-    siteId: 'site-zfb',
+    siteId: 'site-zfb', tags: ['正文缺失', '内容重复'], color: 'red',
   },
   {
     sourceId: '301287169', name: '160517-博时中证银行', url: 'FundComment-160517',
@@ -28,7 +29,7 @@ export const SOURCES: Source[] = [
     categoryPath: '/基金类/支付宝评论', cycle: '每周', state: 'E', alarm: true,
     dataCount: 880, newInCount: 0, successCount: 870, version: 2,
     lastTaskAt: '2026-06-18 09:10:00', lastSuccessAt: '2026-06-11 09:12:30',
-    siteId: 'site-zfb',
+    siteId: 'site-zfb', tags: ['内容重复'], color: 'green',
   },
   {
     sourceId: '161725', name: '161725-招商中证白酒指数', url: 'TTFund-161725',
@@ -226,6 +227,10 @@ function matches(s: Source, p?: Record<string, unknown>): boolean {
   if (count && !String(s.dataCount ?? '').includes(count)) return false
   const dataDate = String(p.dataDate ?? '').trim()
   if (dataDate && ![s.lastTaskAt, s.lastSuccessAt, s.updatedAt].some((date) => String(date ?? '').startsWith(dataDate))) return false
+  const tagFilters = parseIssueTags(p.tags)
+  if (tagFilters.length && !tagFilters.some((tag) => (s.tags ?? []).includes(tag))) return false
+  const colorKey = typeof p.color === 'string' && p.color ? p.color : colorFromFlag(p.flag)
+  if (colorKey && s.color !== colorKey) return false
   if (p.alarm === true && !s.alarm) return false
   const cycle = String(p.cycle ?? '')
   if (cycle && cycle !== 'all' && s.cycle !== cycle) return false
@@ -386,6 +391,47 @@ export function mockLoadParams(_params?: Record<string, unknown>): SourceLoadPar
 // 旧平台 /v1/source/sendSnatchWithParam：带参发抓取，回执形状与 sendSnatch 一致。
 export function mockSendSnatchWithParam(_params?: Record<string, unknown>): Ack {
   return mockAck()
+}
+
+function parseSourceIds(params?: Record<string, unknown>): string[] {
+  const raw = params?.sourceIds ?? params?.ids
+  if (Array.isArray(raw)) return raw.map(String).map((id) => id.trim()).filter(Boolean)
+  return String(raw ?? '').split(/[，,\s]+/).map((id) => id.trim()).filter(Boolean)
+}
+
+export function mockTagSource(params?: Record<string, unknown>): Ack {
+  const ids = parseSourceIds(params)
+  const action = String(params?.action ?? 'add') === 'clear' ? 'clear' : 'add'
+  const incoming = parseIssueTags(params?.tags)
+  if (!ids.length) return { ok: false, message: '请勾选要标记的源' }
+  let changed = 0
+  ids.forEach((sourceId) => {
+    const source = SOURCES.find((item) => item.sourceId === sourceId)
+    if (!source) return
+    const tags = action === 'clear' ? [] : mergeIssueTags(source.tags, incoming)
+    source.tags = tags
+    persistUpdatedOverride(sourceId, { tags })
+    changed += 1
+  })
+  return { ok: true, message: action === 'clear' ? `已清除 ${changed} 个源的标签` : `已更新 ${changed} 个源的标签` }
+}
+
+export function mockSetColor(params?: Record<string, unknown>): Ack {
+  const ids = parseSourceIds(params)
+  const flagNum = Number(params?.flag)
+  const clear = params?.clear === true || params?.isClear === 1 || params?.isClear === '1' || flagNum === 0
+  const color = clear ? '' : (typeof params?.color === 'string' && params.color ? params.color : colorFromFlag(params?.flag) ?? '')
+  if (!ids.length) return { ok: false, message: '请勾选要标记的源' }
+  if (!clear && !color) return { ok: false, message: '请选择颜色标识' }
+  let changed = 0
+  ids.forEach((sourceId) => {
+    const source = SOURCES.find((item) => item.sourceId === sourceId)
+    if (!source) return
+    source.color = color || undefined
+    persistUpdatedOverride(sourceId, { color: color || '' })
+    changed += 1
+  })
+  return { ok: true, message: clear ? `已清除 ${changed} 个源的颜色标识` : `已更新 ${changed} 个源的颜色标识` }
 }
 
 // 新建采集源闸门（0706 优化·Phase3）：真落库到 SOURCES（本地演示持久化），含源 ID 查重。

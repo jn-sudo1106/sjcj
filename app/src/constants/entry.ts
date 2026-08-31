@@ -36,3 +36,37 @@ export function getEffectiveWidth(width: number | undefined | null): number {
   }
   return width
 }
+
+/**
+ * 预处理（旧 `clearRule`）的候选预设。
+ *
+ * **逐字照抄旧平台** `page/config/modules/EntryTypeEdit.vue` 的 `clearRuleOptions`。
+ * 2026-08-28 订正：新平台原先第 5 条编成了 `value ? '有' : '无'`，旧平台其实是那条
+ * 按股票代码前缀补交易所后缀的 if 表达式——它同时也是"预处理里可以写多行脚本"的示例，
+ * 换成一个三元表达式就把这个信息丢了。
+ *
+ * 两套表编辑界面共用（采集资产抽屉 / 画布弹窗），避免两边给的候选不一样。
+ */
+export const ENTRY_PREPROCESS_PRESETS = [
+  "date('yyyy-MM-dd')",
+  'SOURCE_NAME',
+  'SOURCE_URL',
+  "subIndex(value, 'c', 1, -1)",
+  "if(string.startsWith(K1, '600')) { return value + '.sh';} else {  return value + '.sz'; }",
+]
+
+/**
+ * 字段级「校验」（旧 `CfgEntryItem.checkRule`）的候选。
+ *
+ * 照抄旧平台 `EntryTypeEdit.vue` 的 `checkSelect`：只有「-不校验-」（空串）和「校验非空」（`Y`）两项。
+ * 旧平台的下拉还支持 `handleNextSearch` 把用户输入的任意值补进选项——即**允许自定义校验表达式**，
+ * 新平台用 `el-select` 的 `filterable + allow-create` 等价实现。
+ */
+export const ENTRY_CHECK_RULE_PRESETS = ['', 'Y']
+
+/** 校验取值 → 展示文案；清单外的值（用户自定义）原样显示 */
+export function entryCheckRuleLabel(value: string): string {
+  if (value === '') return '不校验'
+  if (value === 'Y') return '校验非空'
+  return value
+}

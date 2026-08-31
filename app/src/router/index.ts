@@ -19,6 +19,7 @@ const routes: RouteRecordRaw[] = [
         beforeEnter: (to) => (to.query.sourceId || to.query.siteId || to.query.mode === 'new' ? true : '/collect'),
       },
       { path: '/collect', component: () => import('../views/CollectAssets/index.vue') },
+      { path: '/flows', component: () => import('../views/FlowCenter/index.vue') },
       { path: '/rules', component: () => import('../views/RuleAssets/index.vue') },
       { path: '/metrics', component: () => import('../views/MetricCenter/index.vue') },
       { path: '/data', component: () => import('../views/DataView/index.vue') },

@@ -25,6 +25,7 @@ import siteCardGrid from './CollectAssets/SiteCardGrid.vue?raw'
 import appModuleHead from '../layouts/AppModuleHead.vue?raw'
 import runtimeStore from '../stores/runtime.ts?raw'
 import ruleAssetsIndex from './RuleAssets/index.vue?raw'
+import entryEditorDrawer from './CollectAssets/EntryEditorDrawer.vue?raw'
 
 // NodeInspector 拆 tab 子组件后（P1-1 Step 4），各 tab 的文案分布在子文件里；
 // 这个常量把主壳 + 各 tab 拼起来，用于「整块 inspector 不该出现某字符串」的负向断言。
@@ -58,15 +59,20 @@ describe('最新方案 UI 入口收口', () => {
     expect(nodeInspector).not.toContain('patchOutputAdvanced')
   })
 
-  it('节点配置用只读「节点类型」替代可选的「网页类型」（0824-00 §6.2）', () => {
-    // 节点类别在添加节点时就确定，配置表单里不再提供改写入口；webKind 原值只迁不展示。
+  // 2026-08-28 订正：原用例断言「面板上不该出现『网页类型』」，是基于 0824-00 §6.2「节点类型替代网页类型」
+  // 那个理解写的——**理解错了**。节点类型（= 抓取类型 = configType，实测 90/140/170…）不分列表/详情，
+  // 列表/详情这条轴一直在 isMulti 上，那一项就是旧平台的「网页类型」，并没有被删掉。
+  // 真正要挡住的是旧的 webKind 那一套（列表页/详情页/附件页 三选一 + 详情类勾选），它才是被节点类型取代的。
+  it('节点类型只读、不提供旧 webKind 字段；「网页类型」= isMulti 保留（0824-00 §6.2 订正）', () => {
     expect(configTab).toContain('<label>节点类型</label>')
+    // 旧的 webKind 三选一不再出现
     expect(configTab).not.toContain('WEB_KIND_OPTIONS')
     expect(configTab).not.toContain('{ webKind:')
-    expect(allInspectorSource).not.toContain('<label>网页类型</label>')
     expect(allInspectorSource).not.toContain('详情类数据')
     expect(allInspectorSource).not.toContain('toggleDetail')
     expect(allInspectorSource).not.toContain(':checked="cc.isDetail"')
+    // 「网页类型」= isMulti，仍在节点配置里；被节点类型取代的是旧 webKind 那个独立字段
+    expect(configTab).toContain('<label>网页类型</label>')
   })
 
   it('配置名称是节点配置里的必填项（0824-06 §4）', () => {
@@ -101,12 +107,14 @@ describe('最新方案 UI 入口收口', () => {
     expect(dialog).toContain('待步骤接口接入后落库')
   })
 
-  it('「是否列表」三态放在节点配置的节点类型下，不进表配置', () => {
+  // 展示叫「网页类型」（沿用新平台原有说法），落库仍是旧 isMulti 三态，一一对应，
+  // 对应关系由 canvas/legacyEnums.test.ts 锁死（含旧平台原文逐字校验）。
+  it('「网页类型」三态放在节点配置的节点类型下，不进表配置', () => {
     // 旧平台 isMulti 在配置上编辑，步骤表单里没有这一项（旧前端 column.config.js:640）
-    expect(configTab).toContain('<label>是否列表</label>')
-    expect(configTab).toContain('MULTI_MODE_OPTIONS')
+    expect(configTab).toContain('<label>网页类型</label>')
+    expect(configTab).toContain('WEB_TYPE_OPTIONS')
     const nodeType = configTab.indexOf('<label>节点类型</label>')
-    const multi = configTab.indexOf('<label>是否列表</label>')
+    const multi = configTab.indexOf('<label>网页类型</label>')
     expect(nodeType).toBeGreaterThan(-1)
     expect(multi).toBeGreaterThan(nodeType)
   })
@@ -302,34 +310,47 @@ describe('最新方案 UI 入口收口', () => {
     expect(collectAssetsIndex).not.toContain('<SourceTabsBar')
   })
 
-  it('流程模板列表并入规则资产的二级页签，而不是左侧独立菜单（0812 计划 M4-9：跟参数模块一样从采集资产迁走）', () => {
+  it('不再展示流程模板入口，旧链接统一转到流程中心', () => {
     expect(collectAssetsIndex).not.toContain("{ key: 'template', label: '流程模板列表' }")
     expect(collectAssetsIndex).not.toContain("import FlowTemplate from '../FlowTemplate/index.vue'")
-    expect(collectAssetsIndex).toContain("tab === 'param' || tab === 'template'")
-    expect(ruleAssetsIndex).toContain("{ key: 'template', label: '流程模板' }")
-    expect(ruleAssetsIndex).toContain("import FlowTemplate from '../FlowTemplate/index.vue'")
-    expect(canvasHeader).toContain("void router.push({ path: '/rules', query: { tab: 'template' } })")
+    expect(collectAssetsIndex).toContain("router.replace('/flows')")
+    expect(ruleAssetsIndex).not.toContain("{ key: 'template', label: '流程模板' }")
+    expect(ruleAssetsIndex).not.toContain("import FlowTemplate from '../FlowTemplate/index.vue'")
+    expect(ruleAssetsIndex).toContain("router.replace('/flows')")
+    expect(canvasHeader).toContain("void router.push('/flows')")
   })
 
-  it('空白画布的智能入口推荐并应用流程模板，不再直接生成孤立流程', () => {
-    expect(flowBoard).toContain('智能推荐模板')
-    expect(flowBoard).toContain('flowTemplateApi.list()')
+  it('空白画布的智能入口推荐并应用可复用流程，不暴露模板概念', () => {
+    expect(flowBoard).toContain('智能推荐流程')
+    expect(flowBoard).not.toContain('智能推荐模板')
+    expect(flowBoard).toContain('flowCenterApi.list()')
     expect(flowBoard).toContain('flow.applyTemplate(template)')
     expect(flowBoard).not.toContain('generateWebFlow')
   })
 
-  it('任务参数取值只面向当前节点参数，并支持上下文与出参字段', () => {
+  it('任务参数取值只面向当前节点参数', () => {
     expect(taskTab).toContain('cc.value?.urlParamRefs')
     expect(allInspectorSource).not.toContain('Object.values(flow.configs)')
     expect(taskTab).toContain('请先在当前节点的参数配置中绑定参数。')
-    expect(taskTab).toContain('上下文来源')
-    expect(taskTab).toContain('出参列')
-    expect(taskTab).toContain('addTaskField')
-    expect(taskTab).toContain('removeTaskField')
-    expect(taskTab).toContain('+ 添加字段')
     expect(taskTab).toContain('hasEffectiveInput')
     expect(taskTab).toContain('effectiveInputTableId')
     expect(taskTab).not.toContain('isFirstDataNode')
+  })
+
+  // 上下文来源 2026-08-28 对齐旧平台（W4-2）：多选下拉取代"每行一个 select + 添加/删除"，
+  // 行为细节（候选不过滤 / 文案 / 存 columnName）由 tabs/TaskTab.test.ts 实测锁定，这里只守 UI 形态。
+  it('上下文来源是多选下拉，不再有逐行添加/删除', () => {
+    expect(taskTab).toContain('data-testid="context-map-select"')
+    expect(taskTab).toContain('multiple')
+    expect(taskTab).not.toContain('addTaskField')
+    expect(taskTab).not.toContain('removeTaskField')
+    expect(taskTab).not.toContain('+ 添加字段')
+  })
+
+  // 出参列 2026-08-27 搬去参数配置 Tab，任务配置里不该再有它的控件（注释提到不算）
+  it('出参列的控件在参数配置 Tab，不在任务配置', () => {
+    expect(taskTab).not.toContain('<label>出参列</label>')
+    expect(paramsTab).toContain('<label>出参列</label>')
   })
 
   it('流程编辑不消费配置列表，源表单不再提供选用配置', () => {
@@ -338,7 +359,7 @@ describe('最新方案 UI 入口收口', () => {
     expect(sourceBasicForm).not.toContain('使用已有配置')
   })
 
-  it('源流程头展示已应用模板，且不展示负责人', () => {
+  it('源流程头展示已应用流程，且不展示负责人', () => {
     expect(canvasHeader).toContain('appliedTemplateLabel')
     expect(canvasHeader).toContain('{{ appliedTemplateLabel }} ▾')
     expect(canvasHeader).not.toContain('负责人 ${s.owner}')
@@ -369,5 +390,100 @@ describe('最新方案 UI 入口收口', () => {
     // 任务配置保留独立 Tab（最新拍板调整），ConfigTab 不再内嵌 TaskTab
     expect(configTab).not.toContain('class="ni-section-title">规则编排')
     expect(configTab).not.toContain('<TaskTab')
+  })
+})
+
+// W3（0828 D13/D14/D15/D17）：两套表编辑界面改法必须一致，别只改一个。
+describe('表编辑：导入字段 / 单一加属性 / 无高级 / 列宽末列', () => {
+  const drawer = entryEditorDrawer
+  const dialog = tableDialog
+
+  it('「批量加」改名「导入字段」，且支持选文件', () => {
+    ;[drawer, dialog].forEach((src) => {
+      expect(src).toContain('导入字段')
+      expect(src).not.toContain('>批量加<')
+      expect(src).toContain('data-testid="import-fields-file"')
+      expect(src).toContain('accept=".csv,.txt"')
+    })
+  })
+
+  // 注意断言的是**真实 UI 标记**（>按钮文案<、<label>…</label>），不是源码里任意出现的字符串——
+  // 否则注释和 ElMessage 文案也会被算进去。
+  it('每个界面只剩一个加字段按钮，文案统一为「新增字段」', () => {
+    ;[drawer, dialog].forEach((src) => {
+      expect(src.match(/>＋ 新增字段</g)?.length).toBe(1)
+      expect(src).not.toContain('新增属性')
+      expect(src).not.toContain('>＋ 加属性<')
+    })
+  })
+
+  // 字段类型照抄旧平台（旧 EntryTypeEdit.vue 的 dataType 下拉只有三项）。
+  // 之前画布侧还编了 url/number/date/json，与业务类型/抓取类型是同一类自造枚举问题。
+  it('字段类型只有 string / text / longtext', () => {
+    expect(dialog).toContain("const FIELD_TYPES = ['string', 'text', 'longtext'] as const")
+    ;[drawer, dialog].forEach((src) => {
+      expect(src).not.toContain("'json'")
+      expect(src).not.toContain('>number<')
+    })
+  })
+
+  it('两个界面都在编码失焦时补展示名（旧 handleBlurCode）', () => {
+    expect(drawer).toContain('@blur="onItemCodeBlur(field)"')
+    expect(dialog).toContain('@blur="onCodeBlur(f)"')
+  })
+
+  // 0828 D15 原本把「高级」和字段级「校验」整块暂缓，2026-08-28 拍板校验要做，两边一并恢复。
+  // 记变化跟校验/校验脚本本来就是旧平台同一行，只放两项反而更难理解，所以整块恢复。
+  it('「高级」与字段级「校验」两边都在，且校验候选照抄旧平台', () => {
+    ;[drawer, dialog].forEach((src) => {
+      expect(src).toContain('ENTRY_CHECK_RULE_PRESETS')
+      expect(src).toContain('entryCheckRuleLabel')
+      expect(src).toContain('allow-create') // 旧平台可搜索补自定义值的等价实现
+      expect(src).toContain('校验(失败进err库)')
+      expect(src).toContain('校验脚本')
+    })
+  })
+
+  // 记变化本期只隐藏控件，**数据仍要原样带回**，否则保存一次就把后端已有值抹掉了。
+  it('「记变化」控件隐藏，但 recFlag 仍回填与提交', () => {
+    ;[drawer, dialog].forEach((src) => {
+      expect(src).not.toContain('记变化(进rec库)')
+    })
+    expect(drawer).toContain('recFlag:')     // reset 回填
+    expect(dialog).toContain('form.recordChange = t.recFlag')
+    expect(dialog).toContain('recFlag: form.recordChange || undefined') // 提交带回
+  })
+
+  it('已落库字段的删除按钮是禁用态，不是藏起来（否则看不出为什么不能删）', () => {
+    expect(dialog).toContain(':disabled="isPersisted(f)"')
+    expect(dialog).not.toContain('ted-locked')
+    expect(drawer).toContain(':disabled="Number(field.itemId ?? 0) > 0"')
+  })
+
+  it('列宽是字段表的最后一列（操作列之前，D17）', () => {
+    const drawerHead = drawer.slice(drawer.indexOf('<thead>'), drawer.indexOf('</thead>'))
+    expect(drawerHead.indexOf('列宽')).toBeGreaterThan(drawerHead.indexOf('去重'))
+    const dialogHead = dialog.slice(dialog.indexOf('<thead>'), dialog.indexOf('</thead>'))
+    expect(dialogHead.indexOf('列宽')).toBeGreaterThan(dialogHead.indexOf('去重'))
+  })
+})
+
+// 字段展示名跟旧平台一一映射，不自造（2026-08-28 拍板）。这里锁住已经踩过/差点踩的几个：
+// codeRule 旧平台就叫「结构化配置」，0824-00 §6.3 计划改成「入库配置」的方向是反的，已撤销。
+describe('字段展示名与旧平台一致', () => {
+  it('codeRule 展示为「结构化配置」，不是「入库配置」', () => {
+    expect(tableTab).toContain('<span>结构化配置</span>')
+    expect(tableTab).not.toContain('<span>结构化配置（入库配置）</span>')
+    expect(tableTab).not.toContain('<label>入库配置</label>')
+  })
+})
+
+// 「更换网站」弹窗的确认按钮（0828 W5-2）。会上：「那确认移动啥就自己要改一下，觉得很失败」
+// → 就叫「确认」。标题「更换网站」+ 正文已经说清在做什么，按钮不必再复述一遍动作。
+describe('更换网站弹窗', () => {
+  it('确认按钮就叫「确认」，不叫「确认移动」', () => {
+    expect(siteSourceSwitcher).toContain("'确认'")
+    expect(siteSourceSwitcher).not.toContain('确认移动')
+    expect(siteSourceSwitcher).not.toContain('移动中…')
   })
 })

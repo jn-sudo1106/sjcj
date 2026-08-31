@@ -88,6 +88,96 @@ describe('flow store 编辑动作', () => {
 
 })
 
+describe('配置名 = 节点名（0828 D08/P4）', () => {
+  let f: ReturnType<typeof useFlowStore>
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    f = useFlowStore()
+    f.newFlow('standard')
+  })
+
+  it('新拉的节点自带配置名 = 节点名，且不继承模板上的 configId', () => {
+    const before = f.main.length
+    f.insertAfter('web-list', 'web')
+    expect(f.main.length).toBe(before + 1)
+    const newId = f.main[f.main.indexOf('web-list') + 1]
+    expect(f.configs[newId].configName).toBe(f.configs[newId].title)
+    expect(f.configs[newId].configId).toBeUndefined()
+  })
+
+  it('改节点名时配置名跟着走', () => {
+    f.insertAfter('web-list', 'web')
+    const newId = f.main[f.main.indexOf('web-list') + 1]
+    f.setTitle(newId, '港股公司报道')
+    expect(f.configs[newId].configName).toBe('港股公司报道')
+  })
+
+  it('用户单独改过配置名之后自动脱钩，再改节点名不覆盖他填的名字', () => {
+    f.insertAfter('web-list', 'web')
+    const newId = f.main[f.main.indexOf('web-list') + 1]
+    f.setConfigName(newId, '我自己起的配置名')
+    f.setTitle(newId, '港股公司报道')
+    expect(f.configs[newId].title).toBe('港股公司报道')
+    expect(f.configs[newId].configName).toBe('我自己起的配置名')
+  })
+
+  it('配置名为空时也跟随（迁移进来的节点没有配置名）', () => {
+    f.setConfigName('web-list', '')
+    f.setTitle('web-list', '列表抓取')
+    expect(f.configs['web-list'].configName).toBe('列表抓取')
+  })
+})
+
+describe('复制节点 = 新增一套配置（0828 D02）', () => {
+  let f: ReturnType<typeof useFlowStore>
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    f = useFlowStore()
+    f.newFlow('standard')
+  })
+
+  it('副本不继承原节点的 configId/configName —— 否则改副本就是在改原配置', () => {
+    f.bindCopiedConfig('web-list', '1400774', '证券之星列表配置')
+    expect(f.configs['web-list'].configId).toBe('1400774')
+
+    const newId = f.duplicate('web-list')
+    expect(newId).toBeTruthy()
+    expect(f.configs[newId!].configId).toBeUndefined()
+    expect(f.configs[newId!].configName).toBeUndefined()
+    // 原节点不受影响
+    expect(f.configs['web-list'].configId).toBe('1400774')
+  })
+
+  it('duplicate 返回新节点 id，供调用方接着复制配置', () => {
+    const newId = f.duplicate('web-list')
+    expect(newId).toBeTruthy()
+    expect(f.main).toContain(newId!)
+    expect(f.duplicate('不存在的节点')).toBeUndefined()
+  })
+
+  it('副本内容与原节点一致，只是不共用配置身份', () => {
+    f.patchCollect('web-list', { outputTable: '2103330' })
+    const newId = f.duplicate('web-list')!
+    expect(f.configs[newId].collectCfg?.outputTable).toBe('2103330')
+    expect(f.configs[newId].title).toContain('（复制）')
+  })
+
+  it('bindCopiedConfig 绑上新配置后该节点无配置脏标（copyAll 是整条复制，内容本就一致）', () => {
+    const newId = f.duplicate('web-list')!
+    f.bindCopiedConfig(newId, '1400981', '证券之星列表配置_copy')
+    expect(f.configs[newId].configId).toBe('1400981')
+    expect(f.dirtyConfigNodes).not.toContain(newId)
+  })
+
+  it('分支内复制 duplicateNode 同样不继承 configId（两条复制路径都要断干净）', () => {
+    f.bindCopiedConfig('web-list', '1400774', '证券之星列表配置')
+    f.duplicateNode('web-list')
+    const copies = f.main.filter((id: string) => id !== 'web-list' && f.configs[id]?.title === f.configs['web-list'].title)
+    expect(copies.length).toBeGreaterThan(0)
+    copies.forEach((id: string) => expect(f.configs[id].configId).toBeUndefined())
+  })
+})
+
 describe('决策条件分支', () => {
   let f: ReturnType<typeof useFlowStore>
   beforeEach(() => {
@@ -1297,15 +1387,18 @@ describe('APP 抓取节点（0707 Phase 8）', () => {
     f.newFlow('blank')
   })
 
-  it('添加浮层提供 APP 抓取模板，插入后使用 [95] APP 抓取配置', () => {
+  // 2026-08-28 订正：原来断言的 `[95] - APP 抓取` 是臆造值——后端字典 config/sourceTypes
+  // 里根本没有 95，真实 App 抓取是 140。95 不是无害的显示问题：sourceTypeFromSnatchType
+  // 会把它解析成 sourceType=95 写进新建源请求体。字典逐条锁定见 canvas/legacyEnums.test.ts。
+  it('添加浮层提供 APP 抓取模板，插入后使用 [140] App抓取配置', () => {
     const collectGroup = LIB_GROUPS.find((g) => g.title === '采集类')
     expect(collectGroup?.items.some((it) => it.template === 'app' && it.name === 'APP 抓取')).toBe(true)
     expect(TEMPLATE_TO_NODE.app).toBe('app-collect')
-    expect(TEMPLATE_TO_SNATCH.app).toBe('[95] - APP 抓取')
+    expect(TEMPLATE_TO_SNATCH.app).toBe('[140] - App抓取')
 
     const id = f.insertAfter('start', 'app')
     expect(f.configs[id].title).toBe('APP 抓取')
-    expect(f.configs[id].collectCfg?.snatchType).toBe('[95] - APP 抓取')
+    expect(f.configs[id].collectCfg?.snatchType).toBe('[140] - App抓取')
     expect(f.configs[id].base.some(([label]) => label === '包名')).toBe(true)
   })
 })
@@ -1475,7 +1568,7 @@ describe('configDetail 异步回填（applyStepDetails）', () => {
 
   it('补充到达后回填配置名 / 队列 / 是否列表，且不置任何脏标', () => {
     const enriched = [
-      { ...bareSteps[0], configName: '公告列表配置', topic: 'q_list', multiMode: 1 },
+      { ...bareSteps[0], configName: '公告列表配置', topic: 'q_list', multiMode: 1, runPolicy: '{"snatch":{"retryCnt":3}}' },
       { ...bareSteps[1], configName: 'baidu-登陆配置', topic: 'q_login' },
     ]
     f.applyStepDetails(enriched as never)
@@ -1483,6 +1576,7 @@ describe('configDetail 异步回填（applyStepDetails）', () => {
     expect(f.configs['st-1'].configName).toBe('公告列表配置')
     expect(f.configs['st-1'].taskCfg?.queue).toBe('q_list')
     expect(f.configs['st-1'].collectCfg?.multiMode).toBe(1)
+    expect(f.configs['st-1'].runPolicy).toBe('{"snatch":{"retryCnt":3}}')
     // 回读不是用户改动
     expect(f.dirty).toBe(false)
     expect(f.configDirty).toBe(false)

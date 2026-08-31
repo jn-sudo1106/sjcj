@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { flowTemplateApi, type FlowTemplate, type FlowTemplateDefinition, type Site, type Source } from '../../api'
+import { flowCenterApi, type FlowRecord, type FlowDefinition, type Site, type Source } from '../../api'
 import { useFlowStore } from '../../stores/flow'
 import { useUiStore } from '../../stores/ui'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
@@ -20,8 +20,8 @@ type FlowSnapshot = {
 
 const flow = useFlowStore()
 const ui = useUiStore()
-const templates = ref<FlowTemplate[]>([])
-const draft = ref<FlowTemplate | null>(null)
+const templates = ref<FlowRecord[]>([])
+const draft = ref<FlowRecord | null>(null)
 const loading = ref(false)
 const saving = ref(false)
 const snapshot = ref<FlowSnapshot | null>(null)
@@ -30,7 +30,7 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
-function templateDefinitionFromCanvas(): FlowTemplateDefinition {
+function templateDefinitionFromCanvas(): FlowDefinition {
   return {
     main: [...flow.main],
     branches: clone(flow.branches),
@@ -51,7 +51,7 @@ function captureFlowSnapshot() {
   }
 }
 
-function loadTemplateIntoCanvas(template: FlowTemplate) {
+function loadTemplateIntoCanvas(template: FlowRecord) {
   captureFlowSnapshot()
   flow.clearSourceCtx()
   flow.clearSiteCtx()
@@ -67,7 +67,7 @@ function loadTemplateIntoCanvas(template: FlowTemplate) {
   })
 }
 
-function replaceTemplateInList(saved: FlowTemplate) {
+function replaceTemplateInList(saved: FlowRecord) {
   templates.value = [
     saved,
     ...templates.value.filter((template) => template.id !== saved.id),
@@ -77,7 +77,7 @@ function replaceTemplateInList(saved: FlowTemplate) {
 async function loadTemplates(selectId = draft.value?.id) {
   loading.value = true
   try {
-    templates.value = await flowTemplateApi.list()
+    templates.value = await flowCenterApi.list()
     const selected = templates.value.find((template) => template.id === selectId) ?? templates.value[0]
     if (selected) await selectTemplate(selected)
   } finally {
@@ -85,7 +85,7 @@ async function loadTemplates(selectId = draft.value?.id) {
   }
 }
 
-async function selectTemplate(template: FlowTemplate) {
+async function selectTemplate(template: FlowRecord) {
   if (draft.value?.id !== template.id && flow.dirty) {
     try {
       await ElMessageBox.confirm('当前模板有未保存改动，切换后将丢失这些改动。是否继续？', '切换流程模板', {
@@ -95,7 +95,7 @@ async function selectTemplate(template: FlowTemplate) {
       return
     }
   }
-  const detail = await flowTemplateApi.detail(template.id)
+  const detail = await flowCenterApi.detail(template.id)
   if (!detail) return
   draft.value = detail
   loadTemplateIntoCanvas(detail)
@@ -110,7 +110,7 @@ async function createTemplate() {
       confirmButtonText: '新建',
       cancelButtonText: '取消',
     })
-    const created = await flowTemplateApi.save({ name: value.trim(), definition: makeBlankTemplateDefinition() })
+    const created = await flowCenterApi.save({ name: value.trim(), definition: makeBlankTemplateDefinition() })
     draft.value = created
     replaceTemplateInList(created)
     loadTemplateIntoCanvas(created)
@@ -120,7 +120,7 @@ async function createTemplate() {
   }
 }
 
-async function renameTemplate(template: FlowTemplate) {
+async function renameTemplate(template: FlowRecord) {
   try {
     const { value } = await ElMessageBox.prompt('重命名会生成该模板的新版本；已绑定源仍固定使用原版本。', '重命名流程模板', {
       inputValue: template.name,
@@ -129,9 +129,9 @@ async function renameTemplate(template: FlowTemplate) {
       confirmButtonText: '保存新版本',
       cancelButtonText: '取消',
     })
-    const detail = await flowTemplateApi.detail(template.id)
+    const detail = await flowCenterApi.detail(template.id)
     if (!detail) return
-    const saved = await flowTemplateApi.save({ id: detail.id, name: value.trim(), definition: detail.definition })
+    const saved = await flowCenterApi.save({ id: detail.id, name: value.trim(), definition: detail.definition })
     replaceTemplateInList(saved)
     if (draft.value?.id === saved.id) {
       draft.value = saved
@@ -155,7 +155,7 @@ async function saveTemplate() {
   }
   saving.value = true
   try {
-    const saved = await flowTemplateApi.save({
+    const saved = await flowCenterApi.save({
       id: draft.value.id,
       name: draft.value.name.trim(),
       definition: templateDefinitionFromCanvas(),

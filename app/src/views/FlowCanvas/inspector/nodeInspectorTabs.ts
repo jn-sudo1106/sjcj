@@ -17,7 +17,7 @@ export type NodeInspectorTabItem = [NodeInspectorTab, string, string?]
  * 与会议「选表选字段→保存→才能进编排配置」的统一时序对齐（见开发方案 §2.2）。
  * 非规则节点暂不设门禁：抓取配置内容本身还没建（S3），提前拦反而挡住占位内容。
  */
-export function nodeInspectorTabs(cfg?: NodeConfig): NodeInspectorTabItem[] {
+export function nodeInspectorTabs(cfg?: NodeConfig, options: { includeAi?: boolean } = {}): NodeInspectorTabItem[] {
   if (cfg && decisionOrParallelKind(cfg) !== undefined) return [['config', '分支配置']]
   const isRule = !!cfg && isRuleNode(cfg)
   const tabs: NodeInspectorTabItem[] = [
@@ -26,7 +26,7 @@ export function nodeInspectorTabs(cfg?: NodeConfig): NodeInspectorTabItem[] {
     ['orchestration', '编排配置'],
     ...(isRule ? [] : [['params', '参数配置'] as NodeInspectorTabItem]),
     ['task', '任务配置'],
-    ['ai', 'AI 对话'],
+    ...(options.includeAi === false ? [] : [['ai', 'AI 对话'] as NodeInspectorTabItem]),
   ]
   if (isRule && !cfg?.ruleCfg?.ruleId) {
     const orchestration = tabs.find((t) => t[0] === 'orchestration')!

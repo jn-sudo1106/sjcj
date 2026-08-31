@@ -32,6 +32,7 @@ import type {
 } from './types'
 import type { LegacyLoginSubmission, LegacySnatchSaveRequest } from './types/source'
 import type { FlowDef, NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { colorFromLegacy, parseIssueTags } from '@/utils/sourceMark'
 
 type LegacyRecord = Record<string, unknown>
 
@@ -876,12 +877,6 @@ function legacyNumber(value: unknown): number | undefined {
   return Number.isFinite(number) ? number : undefined
 }
 
-function legacyTags(value: unknown): string[] | undefined {
-  if (Array.isArray(value)) return value.map(String).filter(Boolean)
-  if (typeof value !== 'string' || !value.trim()) return undefined
-  return value.split(/[，,]/).map((tag) => tag.trim()).filter(Boolean)
-}
-
 /** data-view 源分页/详情到当前 Source 模型的只读映射。 */
 export function sourceFromLegacy(input: unknown): Source {
   const record = asRecord(input)
@@ -907,7 +902,8 @@ export function sourceFromLegacy(input: unknown): Source {
     subCategory: record.classifySub == null ? undefined : String(record.classifySub),
     categoryPath,
     dirId: record.categoryId == null ? undefined : String(record.categoryId),
-    tags: legacyTags(record.tags),
+    tags: parseIssueTags(record.tags),
+    color: colorFromLegacy(record),
     priority: legacyNumber(record.priority),
     disabled: isDeleted == null ? undefined : isDeleted !== 0,
     state: String(record.state ?? ''),

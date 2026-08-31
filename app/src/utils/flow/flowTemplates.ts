@@ -1,7 +1,7 @@
 import type {
-  FlowTemplate,
-  FlowTemplateDefinition,
-  FlowTemplateNodeBinding,
+  FlowRecord,
+  FlowDefinition,
+  FlowNodeBinding,
   Source,
 } from '@/api'
 import {
@@ -50,7 +50,7 @@ function orderedNodeIds(def: FlowDef): string[] {
 }
 
 /** 把任意流程规范化为模板可长期引用的稳定 node-1/node-2… ID。模板保存完整节点默认配置。 */
-export function templateDefinitionFromFlow(def: FlowDef): FlowTemplateDefinition {
+export function templateDefinitionFromFlow(def: FlowDef): FlowDefinition {
   const ids = orderedNodeIds(def)
   const idMap = new Map(ids.map((id, index) => [id, `node-${index + 1}`]))
   const mapId = (id: string) => idMap.get(id) ?? id
@@ -76,7 +76,7 @@ export function templateDefinitionFromFlow(def: FlowDef): FlowTemplateDefinition
 }
 
 /** 保存模板时做深拷贝，保留 URL、表、参数等可作为源起点的默认配置。 */
-export function sanitizeTemplateDefinition(definition: FlowTemplateDefinition): FlowTemplateDefinition {
+export function sanitizeTemplateDefinition(definition: FlowDefinition): FlowDefinition {
   return {
     main: [...definition.main],
     branches: clone(definition.branches),
@@ -85,12 +85,12 @@ export function sanitizeTemplateDefinition(definition: FlowTemplateDefinition): 
   }
 }
 
-export function makeBlankTemplateDefinition(): FlowTemplateDefinition {
+export function makeBlankTemplateDefinition(): FlowDefinition {
   return templateDefinitionFromFlow(makeBlankFlow())
 }
 
 /** 既有预置意图作为不可变的初始种子；实际画布入口改由模板 API 消费。 */
-export function makePresetFlowTemplates(): FlowTemplate[] {
+export function makePresetFlowTemplates(): FlowRecord[] {
   return PRESET_INTENTS.map((preset, index) => ({
     id: `preset-${preset.key}`,
     name: preset.label,
@@ -100,12 +100,12 @@ export function makePresetFlowTemplates(): FlowTemplate[] {
   }))
 }
 
-export function extractTemplateNodeBindings(configs: Record<string, NodeConfig>): Record<string, FlowTemplateNodeBinding> {
-  const bindings: Record<string, FlowTemplateNodeBinding> = {}
+export function extractTemplateNodeBindings(configs: Record<string, NodeConfig>): Record<string, FlowNodeBinding> {
+  const bindings: Record<string, FlowNodeBinding> = {}
   Object.entries(configs).forEach(([id, config]) => {
-    const binding: FlowTemplateNodeBinding = {}
+    const binding: FlowNodeBinding = {}
     if (config.collectCfg) {
-      const collect: NonNullable<FlowTemplateNodeBinding['collect']> = {}
+      const collect: NonNullable<FlowNodeBinding['collect']> = {}
       SOURCE_OVERRIDE_COLLECT_KEYS.forEach((key) => {
         const value = config.collectCfg?.[key]
         if (value !== undefined) {
@@ -132,9 +132,9 @@ export function extractTemplateNodeBindings(configs: Record<string, NodeConfig>)
 
 /** 同一模板升级仅按稳定 nodeId 保留绑定；切换到其他模板则由调用方传空绑定。 */
 export function compatibleTemplateBindings(
-  bindings: Record<string, FlowTemplateNodeBinding>,
-  definition: FlowTemplateDefinition,
-): Record<string, FlowTemplateNodeBinding> {
+  bindings: Record<string, FlowNodeBinding>,
+  definition: FlowDefinition,
+): Record<string, FlowNodeBinding> {
   return Object.fromEntries(
     Object.entries(bindings)
       .filter(([nodeId]) => Boolean(definition.configs[nodeId]))
@@ -144,9 +144,9 @@ export function compatibleTemplateBindings(
 
 /** 用模板定义 + 源绑定合成实际可编辑、可运行的 FlowDef。 */
 export function composeTemplateFlow(
-  template: FlowTemplate,
+  template: FlowRecord,
   source: Source,
-  nodeBindings: Record<string, FlowTemplateNodeBinding>,
+  nodeBindings: Record<string, FlowNodeBinding>,
 ): FlowDef {
   const definition = sanitizeTemplateDefinition(template.definition)
   const configs = clone(definition.configs)
@@ -179,7 +179,7 @@ export function composeTemplateFlow(
   }
 }
 
-export function appendTemplateNode(definition: FlowTemplateDefinition, template: string): string {
+export function appendTemplateNode(definition: FlowDefinition, template: string): string {
   const seedKey = TEMPLATE_TO_NODE[template]
   const seed = seedKey ? NODE_CONFIGS[seedKey] : undefined
   if (!seed) return ''
@@ -191,14 +191,14 @@ export function appendTemplateNode(definition: FlowTemplateDefinition, template:
   return id
 }
 
-export function moveTemplateNode(definition: FlowTemplateDefinition, nodeId: string, direction: 'up' | 'down'): void {
+export function moveTemplateNode(definition: FlowDefinition, nodeId: string, direction: 'up' | 'down'): void {
   const index = definition.main.indexOf(nodeId)
   const target = index + (direction === 'up' ? -1 : 1)
   if (index < 1 || target < 1 || target >= definition.main.length - 1) return
   ;[definition.main[index], definition.main[target]] = [definition.main[target], definition.main[index]]
 }
 
-export function removeTemplateNode(definition: FlowTemplateDefinition, nodeId: string): void {
+export function removeTemplateNode(definition: FlowDefinition, nodeId: string): void {
   delete definition.configs[nodeId]
   definition.main = definition.main.filter((id) => id !== nodeId)
   definition.branches = definition.branches.filter((branch) => branch.id !== nodeId)

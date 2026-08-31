@@ -110,6 +110,16 @@ function onInputTableChange(e: Event) {
 // 当前节点输出表（统一口径：采集类取 collectCfg.outputTable，非采集类取 cfg.outputTable）
 const nodeTableId = computed(() => cc.value?.outputTable || cfg.value?.outputTable || '')
 const currentDedupMode = computed<'source' | 'table'>(() => cc.value?.dedupMode || cfg.value?.dedupMode || 'source')
+
+// 去重列（0828 D11）：会上指出「去重列丢了，要加回来」。
+// 它不是一个独立字段——旧平台也是**派生**的：由输出表字段里勾了「去重」的那些聚合而成
+// （旧 EntryTypeEdit.vue 的 loadInfo 就是这么拼 uniqueKey 的，见 api/legacyAdapters.ts:342，
+// 配置详情接口本身不返回它）。所以这里只读展示，改要去「查看/编辑表」勾字段。
+// 复用 useNodeInspectorAssets 已缓存的表字段，不额外发请求。
+const dedupColumns = computed<string[]>(() => {
+  const table = tables.value.find((t) => t.tableId === nodeTableId.value)
+  return (table?.fields ?? []).filter((f) => f.dedup).map((f) => f.prop)
+})
 const DEFAULT_PRESET_TABLES = [
   { name: '资讯列表', tableId: '2103330' },
   { name: '资源表', tableId: '2101001' },
@@ -142,7 +152,7 @@ function onTripleCell(field: TripleField, i: number, col: 0 | 1 | 2, e: Event) {
   flow.setTripleCell(id.value, field, i, col, (e.target as HTMLInputElement).value)
 }
 
-// 结构化配置（入库配置）/ 正文规则（0804 S3-1）：非规则节点走 store 的双轨 setter（采集类写
+// 结构化配置 / 正文规则（0804 S3-1）：非规则节点走 store 的双轨 setter（采集类写
 // collectCfg，非采集类写 NodeConfig 顶层，两边取哪边由 setStructuredConfig 内部判断，本组件不用分支）。
 const structuredConfigValue = computed(() => cc.value?.structuredConfig ?? cfg.value?.structuredConfig ?? '')
 const contentRulesValue = computed(() => cc.value?.contentRules ?? cfg.value?.contentRules ?? '')
@@ -303,16 +313,30 @@ async function onSaveExecMeta() {
       </div>
       <div class="rc-help">源内去重：仅在当前采集源范围内对落库数据去重；表内去重：跨源在整张数据表范围内全局去重。</div>
     </div>
+    <!-- 去重列（0828 D11）：只读，来自输出表字段的「去重」勾选 -->
+    <div class="rc-field">
+      <label>去重列</label>
+      <div class="rc-readonly-hint" data-testid="dedup-columns">
+        {{ dedupColumns.length ? dedupColumns.join('、') : '—' }}
+      </div>
+      <div class="rc-help">
+        {{ dedupColumns.length
+          ? '按这些字段判断数据是否重复。'
+          : (nodeTableId ? '当前输出表没有字段勾选「去重」，到「查看/编辑表」的字段表里勾选。' : '先选择输出表。') }}
+      </div>
+    </div>
     <!-- 「输出字段选择」（outFields）2026-08-26 撤掉：这个勾选没有任何后端通路——不在 item/next
          步骤写入 payload 里（stepToStepModifyPayload 无此 key），目前只会写进本地流程草稿。
          也就是说勾与不勾对真实抓取零影响，展示出来只会让人以为配置生效了。等节点配置的
          写入通路真的打通再恢复。
          注意：规则节点那套入参/出参字段绑定不受影响，它走 orchestrationSaveMeta →
          /vrule/api/custom-compose/save（live 且在生产写白名单里），是真生效的。 -->
-    <!-- 结构化配置（入库配置）+ 正文规则（0804 S3-1）：不透明文本，具体 schema 由执行端解释 -->
+    <!-- 结构化配置 + 正文规则（0804 S3-1）：不透明文本，具体 schema 由执行端解释。
+         **名称保持「结构化配置」**（2026-08-28 确认）：旧平台 column.config.js 里 codeRule 的 title 就是它，
+         0824-00 §6.3 计划改成「入库配置」的方向是反的——字段展示名跟旧平台走，改了反而对不上。 -->
     <div class="rc-field">
       <label class="tt-label-row">
-        <span>结构化配置（入库配置）</span>
+        <span>结构化配置</span>
         <button class="tt-fill" type="button" title="填入全局ID模板：{&quot;globals&quot;:[&quot;列ID&quot;]}" @click="fillGlobalIdTemplate">配全局ID</button>
       </label>
       <textarea class="rc-input" rows="2" placeholder="按输出表字段配置入库规则" :value="structuredConfigValue" @input="onStructuredConfig"></textarea>

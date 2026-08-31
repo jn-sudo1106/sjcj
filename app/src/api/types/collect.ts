@@ -40,6 +40,16 @@ export interface Config {
   params?: ConfigParamBinding[]
 }
 
+/**
+ * 抓取类型字典项（旧 `/v1/config/sourceTypes`）。
+ * **节点类型 = 抓取类型 = `Config.configType`**（2026-08-28 确认）。
+ * 形如 `{ sourceType: '90', typeName: '网页抓取' }`，旧平台下拉展示成 `[90] - 网页抓取`。
+ */
+export interface SourceTypeDict {
+  sourceType: string
+  typeName: string
+}
+
 export interface ConfigParamBinding {
   id: string
   paramId: string

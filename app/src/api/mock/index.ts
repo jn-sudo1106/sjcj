@@ -21,6 +21,8 @@ import {
   mockBatchImport,
   mockLoadParams,
   mockSendSnatchWithParam,
+  mockTagSource,
+  mockSetColor,
 } from './sources'
 import {
   mockRuleGroups,
@@ -99,6 +101,8 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'source/createJobs': mockAck,
   'source/changeFreqTag': mockAck,
   'source/markVerified': mockAck,
+  'source/tagSource': mockTagSource,
+  'source/setColor': mockSetColor,
   'source/generateConfig': mockAck,
 
   'entry/batch/uploadData': mockEntryDataUpload,
@@ -117,6 +121,15 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'config/configParamAdd': mockAck,
   'config/configParamDel': mockAck,
   'config/loadParams': mockLoadParams,
+  // 抓取类型字典 mock：只放旧平台下拉里确定见过的数值型取值，不含前端自造的 [BROWSER]/[WECHAT]/[LOGIN]，
+  // 真实取值以 live 请求为准（0824-11 §1.2d）。
+  'config/sourceTypes': () => [
+    { sourceType: '90', typeName: '网页抓取' },
+    { sourceType: '95', typeName: 'APP 抓取' },
+    { sourceType: '150', typeName: 'OCR 识别' },
+    { sourceType: '155', typeName: 'AI 提取' },
+    { sourceType: '170', typeName: 'Python 抓取' },
+  ],
   'config/configActionPaged': mockConfigActionLogs,
   'config/clear': mockAck,
 

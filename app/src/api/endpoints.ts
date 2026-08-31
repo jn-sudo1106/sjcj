@@ -64,8 +64,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/check/changeEnable', desc: '启停源检查', danger: true },
   { path: 'source/check/check-one', desc: '执行一次源检查', danger: true },
   { path: 'source/check/runNow', desc: '立即运行源检查', danger: true },
-  { path: 'source/tagSource', desc: '源打标签', danger: true },
-  { path: 'source/setColor', desc: '设颜色标识', danger: true },
+  { path: 'source/tagSource', desc: '源打标签', danger: true, impl: true, live: true },
+  { path: 'source/setColor', desc: '设颜色标识（旧 usedFlag）', danger: true, impl: true, live: true },
   { path: 'source/changeToSuccess', desc: '改为成功状态', danger: true },
   { path: 'source/saveJsonQuery', desc: '保存时 Json 查询' },
   { path: 'source/monitorQuery', desc: '源监控查询' },
@@ -91,6 +91,11 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/changeEnable', desc: '启停配置', danger: true, impl: true, live: true },
   { path: 'config/configParams', desc: '配置绑定参数分页', impl: true, live: true },
   { path: 'config/loadParams', desc: '读取源配置的可选参数（发抓取参数弹窗）', impl: true, live: true },
+  // 抓取类型字典（= 节点类型 = 配置的 configType，2026-08-28 确认）。旧平台 `api/source-type.js` 的
+  // allSourceTypes，供旧「配置编辑」弹窗的「抓取类型」下拉用。取值形如 { sourceType: 90, typeName: '网页抓取' }。
+  // 前端 SNATCH_TYPES / TEMPLATE_TO_SNATCH 目前是硬编码，且含 [BROWSER]/[WECHAT]/[LOGIN] 三个自造值，
+  // 要以这个字典为准校正（0824-11 §1.2d：枚举一律照抄后端，不许自造）。
+  { path: 'config/sourceTypes', desc: '抓取类型字典（节点类型 / configType 的权威取值）', impl: true, live: true },
   { path: 'config/configParamAdd', desc: '配置绑定参数', danger: true, impl: true, live: true },
   { path: 'config/configParamDel', desc: '配置解绑参数', danger: true, impl: true, live: true },
   { path: 'config/configActionPaged', desc: '配置操作日志分页', impl: true, live: true },
@@ -223,9 +228,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'flow/list', desc: '流程列表', impl: true },
   { path: 'flow/recommend', desc: '流程模板推荐（mock 意图匹配 / 二期 LLM 推荐）', impl: true },
   { path: 'flow/nodeAiChat', desc: '节点级 AI 对话（mock 关键词回复 / 二期 LLM，0701 问题八）', impl: true },
-  { path: 'flow-template/list', desc: '流程模板列表（版本化）', impl: true },
-  { path: 'flow-template/detail', desc: '流程模板详情（可指定版本）', impl: true },
-  { path: 'flow-template/save', desc: '保存流程模板新版本', impl: true },
+  { path: 'flow-template/list', desc: '流程列表（临时兼容存储，版本化）', impl: true },
+  { path: 'flow-template/detail', desc: '流程详情（临时兼容存储，可指定版本）', impl: true },
+  { path: 'flow-template/save', desc: '保存流程（临时兼容存储）', impl: true },
 
   /* ── comm 导出（目标 1 / 收录 1） ── */
   { path: 'comm/export', desc: '导出' },

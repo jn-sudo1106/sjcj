@@ -588,8 +588,36 @@ export const TEMPLATE_TO_NODE: Record<string, string> = {
   login: 'login-collect',
 }
 
-// 抓取类型选项（统一来源；NodeInspector 与种子配置共用）
-export const SNATCH_TYPES = ['[90] - 网页抓取', '[95] - APP 抓取', '[95] - 文件下载', '[150] - OCR 识别', '[155] - AI 提取', '[170] - Python 抓取']
+/**
+ * 抓取类型 = **节点类型** = 配置的 `configType`（2026-08-28 确认）。
+ *
+ * 取值**照抄后端字典** `GET /v1/config/sourceTypes`（旧 `api/source-type.js` 的 allSourceTypes），
+ * 2026-08-28 在生产实测拉取，共 11 条，按 seq 排序如下。
+ *
+ * 此前这里是硬编码的臆造值，实测查出三处错（0824-11 §1.2d 同类问题）：
+ *   - `[95] - APP 抓取` / `[95] - 文件下载`：**后端没有 95**。真实 App 抓取是 **140**；
+ *   - `[155] - AI 提取`：**后端没有 155**；
+ *   - `[150]` 的名字是「OCR抓取」不是「OCR 识别」。
+ * 95/155 不是无害的显示问题——`legacyAdapters.sourceTypeFromSnatchType()` 会把 `[95]` 解析成
+ * sourceType=95 写进新建源的请求体。
+ *
+ * 生产分布实测（2026-08-28，1050 条配置抽样 600 条）：**全部是 90**，
+ * 连「通用浏览器下载」（#1400232）也是 90——浏览器/公众号/文件下载/登录都不是独立类型，
+ * 区分在别的字段上（登录是 `templetCode='login'`，见 §1.2d）。
+ */
+export const SNATCH_TYPES = [
+  '[160] - Mail抓取',
+  '[90] - 网页抓取',
+  '[500] - 资讯抓取',
+  '[110] - EXCEL抓取',
+  '[120] - DOC抓取',
+  '[130] - PDF抓取',
+  '[140] - App抓取',
+  '[150] - OCR抓取',
+  '[170] - Python抓取',
+  '[300] - 校验类',
+  '[400] - 提取数据发邮件',
+]
 
 export const WEB_KIND_OPTIONS: { value: 'list' | 'detail' | 'attachment'; label: string; desc: string }[] = [
   { value: 'list', label: '列表页', desc: '分页、搜索结果、列表入口' },
@@ -607,6 +635,28 @@ export const MULTI_MODE_OPTIONS: { value: number; label: string }[] = [
   { value: 2, label: '更新父表[根据父ID更新父表]' },
 ]
 
+/**
+ * 「网页类型」下拉（2026-08-28 拍板）：**展示只有列表页 / 详情页两项**，落库仍是旧 `isMulti`。
+ *
+ * 三态里的 `2 更新父表` **不给用户选**——它由「输入表 == 输出表」推导（见
+ * `utils/flow/nodeConfigPayload.ts` 的 `resolveMultiMode`）。所以：
+ *
+ * ```
+ * 列表页            → isMulti = 1
+ * 详情页 + 输入≠输出 → isMulti = 0   详情类[根据父ID去重]
+ * 详情页 + 输入==输出 → isMulti = 2   更新父表[根据父ID更新父表]
+ * ```
+ *
+ * 回显方向上 **0 和 2 都显示成「详情页」**（存量配置线上真实分布是 1:197 / 2:3，见 0824-11 §5）。
+ *
+ * `legacy` 是旧平台该取值的原文，挂在 option 的 title 上，新旧平台逐字段核对时直接可见（0824-00 §9）。
+ * MULTI_MODE_OPTIONS **不删**：它是旧平台三态原文的唯一来源，由 legacyEnums.test.ts 逐字锁死。
+ */
+export const WEB_TYPE_OPTIONS: { value: number; label: string; desc: string; legacy: string }[] = [
+  { value: 1, label: '列表页', desc: '分页、搜索结果、列表入口', legacy: '列表类[根据去重字段去重]' },
+  { value: 0, label: '详情页', desc: '正文、详情字段；输入表与输出表相同时按「更新父表」落库', legacy: '详情类[根据父ID去重]' },
+]
+
 // 「业务类型」（旧 config.templetCode，旧前端 column.config.js:620 权威定义）。
 // 值和文案都照抄旧平台——2026-08-28 踩过坑：此前这里是按会议口头举例编的
 // （news/login/分类/公告），其中「分类」「公告」后端根本不存在，选了就是写脏数据；
@@ -618,19 +668,43 @@ export const BIZ_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: 'login', label: '登陆' },
 ]
 
+/**
+ * 「网页类型」的默认值（0828 D10：去掉「未设置」占位，必须有默认）。
+ *
+ * 从节点自己的形态推导，不猜：种子模板上 `webKind`/`isDetail` 已经表明它是列表还是详情
+ * （见 NODE_CONFIGS 的 web-list / web-detail）。推导不出就按列表页——
+ * 线上真实分布 1:197 / 2:3（0824-11 §5），列表类是绝对多数。
+ *
+ * 展示与落库共用这一个推导（ConfigTab 的回显兜底、nodeConfigPayload 的 resolveMultiMode），
+ * 保证"看到的就是会写进去的"。
+ */
+export function defaultMultiMode(cfg: NodeConfig): number {
+  const cc = cfg.collectCfg
+  if (cc?.webKind === 'detail' || cc?.isDetail) return 0
+  return 1
+}
+
 export const CONFIG_STRATEGY_OPTIONS = ['增量', '全量', '按需触发']
 
-// 模板 → 默认抓取类型（新插入采集节点用）
+/**
+ * 模板 → 默认抓取类型（新插入采集节点用）。取值必须出自 SNATCH_TYPES，见其注释。
+ *
+ * 浏览器抓取 / 公众号抓取 / 文件下载 / 网页登录**都归 90 网页抓取**——2026-08-28 生产实测：
+ * 后端字典里没有它们各自的类型，「通用浏览器下载」#1400232 的 configType 就是 90，
+ * 抽样 600 条配置也全是 90。它们的差异体现在别的字段上（登录是 `templetCode='login'`），
+ * 不是靠 configType 区分。**不要再为它们臆造 `[BROWSER]`/`[WECHAT]`/`[LOGIN]` 这类伪代码。**
+ */
 export const TEMPLATE_TO_SNATCH: Record<string, string> = {
   web: '[90] - 网页抓取',
-  app: '[95] - APP 抓取',
-  file: '[95] - 文件下载',
-  python: '[170] - Python 抓取',
-  ocr: '[150] - OCR 识别',
-  ai: '[155] - AI 提取',
-  'browser-html': '[BROWSER] - 浏览器抓取',
-  'wechat-html': '[WECHAT] - 公众号抓取',
-  login: '[LOGIN] - 网页登录',
+  app: '[140] - App抓取',
+  python: '[170] - Python抓取',
+  ocr: '[150] - OCR抓取',
+  mail: '[160] - Mail抓取',
+  // 以下四类后端没有独立 configType，统一按网页抓取落库
+  file: '[90] - 网页抓取',
+  'browser-html': '[90] - 网页抓取',
+  'wechat-html': '[90] - 网页抓取',
+  login: '[90] - 网页抓取',
 }
 
 // 左侧节点库分组
@@ -638,8 +712,8 @@ export const LIB_GROUPS: LibGroup[] = [
   {
     title: '采集类', items: [
       { template: 'web', code: '90', name: '网页抓取', desc: '源 URL、配置、子步骤', pill: 'p1' as Pill },
-      { template: 'app', code: '95', name: 'APP 抓取', desc: '包名、接口地址、移动端参数', pill: 'p1' as Pill },
-      { template: 'file', code: '95', name: '文件下载', desc: '附件、原始文件、入库', pill: 'p1' as Pill },
+      { template: 'app', code: '140', name: 'APP 抓取', desc: '包名、接口地址、移动端参数', pill: 'p1' as Pill },
+      { template: 'file', code: '90', name: '文件下载', desc: '附件、原始文件、入库', pill: 'p1' as Pill },
       { template: 'python', code: '170', name: 'Python 抓取', desc: '青龙脚本、待确认权限', pill: 'p2' as Pill },
       // 0711 R7/R8：抓 HTML 文件，输出表/队列固定，不可编辑
       { template: 'browser-html', code: 'BROWSER', badge: '180', name: '浏览器抓取', desc: '渲染并保存 HTML，固定表/队列', pill: 'p1' as Pill },
@@ -762,6 +836,7 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
   cfg.disabled = !step.enabled
   if (step.configId) cfg.configId = step.configId
   if (step.configName) cfg.configName = step.configName
+  if (step.runPolicy !== undefined) cfg.runPolicy = step.runPolicy
   if (cfg.collectCfg) {
     cfg.collectCfg.entryCondition = step.condition
       ? { mode: 'expr', logic: 'AND', items: [], expr: step.condition }

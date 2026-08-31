@@ -172,6 +172,12 @@ function closeMoveDialog() {
   moveDlg.source = null
 }
 const moveTargets = computed(() => siteOptions.value.filter((s) => String(s.siteId) !== String(props.siteId)))
+/** 换绑弹窗里的「当前所属」：优先用网站列表里的真名，取不到就退回 ID（0828 W5-9） */
+const currentSiteLabel = computed(() => {
+  const current = siteOptions.value.find((s) => String(s.siteId) === String(props.siteId))
+  if (current) return `${current.name}（ID ${current.siteId}）`
+  return site.value?.name ? `${site.value.name}（ID ${props.siteId}）` : `ID ${props.siteId}`
+})
 async function submitMove() {
   const s = moveDlg.source
   const target = moveDlg.targetSiteId
@@ -836,11 +842,25 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
       <div class="ssw-add-header"><b>更换网站</b></div>
       <div class="ssw-move-body">
         <p class="ssw-move-src">源「{{ moveDlg.source?.name }}」（ID {{ moveDlg.source?.sourceId }}）</p>
+        <!-- 当前所属网站（0828 W5-9）：换绑是「搬走」，得先让用户看清是从哪儿搬 -->
+        <p class="ssw-move-from" data-testid="move-from-site">当前所属：{{ currentSiteLabel }}</p>
         <label class="ssw-move-label">移动到网站</label>
-        <select v-model="moveDlg.targetSiteId" class="rc-select" data-testid="move-site-select">
-          <option value="">请选择目标网站</option>
-          <option v-for="s in moveTargets" :key="s.siteId" :value="String(s.siteId)">{{ s.name }}（ID {{ s.siteId }}）</option>
-        </select>
+        <!-- 可搜索（0828 W5-1）：会上「你这三个多的话怎么办？你这下拉框拉拉拉粉上」——
+             原生 select 在网站多了之后只能滚动找，换成可按名称/ID 过滤的下拉 -->
+        <el-select
+          v-model="moveDlg.targetSiteId"
+          filterable
+          placeholder="请选择目标网站（可输入名称或 ID 过滤）"
+          data-testid="move-site-select"
+          style="width: 100%"
+        >
+          <el-option
+            v-for="s in moveTargets"
+            :key="s.siteId"
+            :label="`${s.name}（ID ${s.siteId}）`"
+            :value="String(s.siteId)"
+          />
+        </el-select>
         <p class="ssw-move-warn">一个源只能属于一个网站：移动后本网站将不再包含该源。</p>
       </div>
       <div class="ssw-add-footer">
@@ -851,7 +871,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
           data-testid="move-site-submit"
           :disabled="!moveDlg.targetSiteId || moveDlg.saving"
           @click="submitMove"
-        >{{ moveDlg.saving ? '移动中…' : '确认移动' }}</button>
+        >{{ moveDlg.saving ? '处理中…' : '确认' }}</button>
       </div>
     </div>
   </div>
@@ -1089,6 +1109,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 
 .ssw-list { flex: 1; overflow-y: auto; padding: 0 6px 6px; scrollbar-width: thin; }
 .ssw-row { display: flex; align-items: center; border-radius: 7px; }
+
 .ssw-row:hover { background: var(--rc-primary-bg); }
 .ssw-row.active { background: var(--rc-primary); }
 .ssw-row-main,
@@ -1100,8 +1121,9 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
   gap: 7px;
   border: 0;
   background: transparent;
-  padding: 6px 8px;
-  font-size: 12px;
+  /* 0828 W5-3：会上反馈「字体有点小」——源名提到 13px，行内边距放宽 */
+  padding: 8px 8px;
+  font-size: 13px;
   color: var(--rc-text-2);
   cursor: pointer;
   text-align: left;
@@ -1124,8 +1146,8 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 .ssw-row.active .ssw-row-all-btn { color: #fff; font-weight: 700; }
 .ssw-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .ssw-row-head { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.ssw-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.3; }
-.ssw-row-id { font-size: 10px; opacity: 0.6; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.2; margin-top: 1px; }
+.ssw-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.4; }
+.ssw-row-id { font-size: 11px; opacity: 0.6; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.2; margin-top: 1px; }
 .ssw-row.active .ssw-row-id { opacity: 0.85; }
 .ssw-kind-tag { flex: none; font-size: 9px; font-weight: 700; color: var(--rc-primary-ink); background: var(--rc-primary-bg); border: 1px solid #bfdbfe; border-radius: 3px; padding: 0 4px; line-height: 14px; }
 .ssw-row.active .ssw-kind-tag { color: #fff; background: rgba(255, 255, 255, 0.2); border-color: rgba(255, 255, 255, 0.4); }
@@ -1232,6 +1254,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 /* 更换网站弹窗：内容很短，不用 ssw-add-card 那套大表单排版 */
 .ssw-move-body { display: grid; gap: 8px; margin-bottom: 20px; }
 .ssw-move-src { margin: 0; color: var(--rc-text); font-size: 14px; font-weight: 600; }
+.ssw-move-from { margin: 0; color: var(--rc-muted); font-size: 12px; }
 .ssw-move-label { color: var(--rc-muted); font-size: 12px; }
 .ssw-move-body .rc-select { width: 100%; height: 40px; border: 1px solid #cbd8e8; border-radius: 9px; background: #fff; color: var(--rc-text); font-size: 14px; padding: 0 11px; outline: none; }
 .ssw-move-body .rc-select:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }

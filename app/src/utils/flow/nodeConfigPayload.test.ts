@@ -24,6 +24,7 @@ const config: Config = {
   dedupType: 'ALL',
   codeRule: '{"globals":["列ID"]}',
   contentRule: '{"py_name":"zx_translate"}',
+  runPolicy: '{"snatch":{"retryCnt":3}}',
 }
 
 describe('节点 ↔ 配置字段映射', () => {
@@ -41,6 +42,7 @@ describe('节点 ↔ 配置字段映射', () => {
     expect(cfg.collectCfg?.structuredConfig).toBe('{"globals":["列ID"]}')
     expect(cfg.collectCfg?.contentRules).toBe('{"py_name":"zx_translate"}')
     expect(cfg.taskCfg?.queue).toBe('dev_web_snatch_python_parse_new')
+    expect(cfg.runPolicy).toBe('{"snatch":{"retryCnt":3}}')
 
     // 节点名称与进入条件属流程、源 URL 属源：配置自己的 configUrl 都不能覆盖它们
     expect(cfg.title).toBe('多彩贵州网-金融')
@@ -57,6 +59,7 @@ describe('节点 ↔ 配置字段映射', () => {
       transRule: '{"t":2}',
       checkRule: '{"c":3}',
       snatchConf: '<xml/>',
+      runPolicy: '{"snatch":{"retryCnt":5}}',
     })
 
     expect(payload).toMatchObject({
@@ -72,6 +75,7 @@ describe('节点 ↔ 配置字段映射', () => {
       transRule: '{"t":2}',
       checkRule: '{"c":3}',
       snatchConf: '<xml/>',
+      runPolicy: '{"snatch":{"retryCnt":5}}',
     })
     // 源 URL 不进配置：payload 里没有任何等于节点源 URL 的字段
     expect(Object.values(payload)).not.toContain('http://finance.gog.cn/jrlc/index.shtml')
@@ -126,5 +130,76 @@ describe('buildConfigPayload 不覆盖节点上没有的字段（2026-08-28 回�
     expect(payload.codeRule).toBe('{"changed":1}')
     // 没改的仍是原值
     expect(payload.contentRule).toBe('{"py_name":"zx_translate"}')
+  })
+})
+
+describe('configType（节点类型 = 旧「抓取类型」，0828 W0-7）', () => {
+  it('从节点的 snatchType 取出编号写进 payload', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.collectCfg!.snatchType = '[140] - App抓取'
+    expect(buildConfigPayload(cfg).configType).toBe(140)
+  })
+
+  it('解析不出编号就不写，保留 base 原值（不猜一个覆盖后端真值）', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.collectCfg!.snatchType = '未知类型'
+    expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(90)
+  })
+
+  it('非采集节点没有 snatchType，同样保留 base 原值', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['rule'])
+    expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(90)
+  })
+})
+
+describe('isMulti 落库推导（2026-08-28：「更新父表」不由用户选）', () => {
+  function detailNode(input: string, output: string) {
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.collectCfg!.multiMode = 0 // 界面上选的是「详情页」
+    cfg.collectCfg!.inputTable = input
+    cfg.collectCfg!.outputTable = output
+    return cfg
+  }
+
+  it('详情页 + 输入表 == 输出表 → 落库 2（更新父表）', () => {
+    expect(buildConfigPayload(detailNode('2103330', '2103330')).isMulti).toBe(2)
+  })
+
+  it('详情页 + 输入表 ≠ 输出表 → 落库 0（详情类）', () => {
+    expect(buildConfigPayload(detailNode('2103330', '2103331')).isMulti).toBe(0)
+  })
+
+  it('输入表为空时不算成「相同」，落库 0', () => {
+    expect(buildConfigPayload(detailNode('', '')).isMulti).toBe(0)
+  })
+
+  it('列表页恒为 1，不受输入/输出表影响', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.collectCfg!.multiMode = 1
+    cfg.collectCfg!.inputTable = '2103330'
+    cfg.collectCfg!.outputTable = '2103330'
+    expect(buildConfigPayload(cfg).isMulti).toBe(1)
+  })
+
+  // 「未设置」占位已按 D10 去掉，界面上永远显示一个具体值，所以落库也永远有值：
+  // 模型上没值时按节点形态推导（web-list → 列表页 1，web-detail → 详情页 0），
+  // 与界面回显共用 defaultMultiMode，保证"看到的就是会写进去的"。
+  it('模型上没设过时按节点形态推导：列表节点 → 1', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.collectCfg!.multiMode = undefined
+    expect(buildConfigPayload(cfg).isMulti).toBe(1)
+  })
+
+  it('模型上没设过时按节点形态推导：详情节点 + 输入≠输出 → 0', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['web-detail'])
+    cfg.collectCfg!.multiMode = undefined
+    cfg.collectCfg!.inputTable = '2101001'
+    cfg.collectCfg!.outputTable = '2101002'
+    expect(buildConfigPayload(cfg).isMulti).toBe(0)
+  })
+
+  it('非采集节点没有 collectCfg，不写这个字段，保留 base 原值', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['rule'])
+    expect(buildConfigPayload(cfg, { isMulti: 2 }).isMulti).toBe(2)
   })
 })

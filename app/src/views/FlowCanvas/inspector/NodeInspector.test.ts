@@ -240,7 +240,7 @@ describe('NodeInspector 参数源编辑入口在 ConfigTab（0802 重构）', ()
 })
 
 describe('配置绑定条与节点配置脏状态条（0824-00 §5.4/§6.1）', () => {
-  it('采集节点显示配置绑定条：有 configId 标「已有配置」，没有则标「新建配置 · 未保存」', async () => {
+  it('采集节点显示配置绑定条：有 configId 标「已有配置」，没有则标「新建配置 · 未保存」，旁边有「更换」入口', async () => {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
@@ -250,9 +250,12 @@ describe('配置绑定条与节点配置脏状态条（0824-00 §5.4/§6.1）', 
 
     const w = mount(NodeInspector)
     await flushPromises()
-    expect(w.find('.rc-config-bar').exists()).toBe(true)
+    const bar = w.find('.rc-config-bar')
+    expect(bar.exists()).toBe(true)
     expect(w.text()).toContain('#6200026')
     expect(w.text()).toContain('已有配置')
+    // 换配置的入口在配置条上（0828 §2.1-2b：保持原样式，旁边加轻量入口）
+    expect(bar.find('[data-testid="node-config-select"]').exists()).toBe(true)
 
     flow.select('web-2')
     await flushPromises()
@@ -293,7 +296,7 @@ describe('配置绑定条与节点配置脏状态条（0824-00 §5.4/§6.1）', 
     // 所以这种节点只能先「选择已有配置」。
     const update = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: 'ok' })
     const copy = vi.spyOn(configApi, 'copyConfigAndLocate')
-    const saveBtn = w.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存配置')!
+    const saveBtn = w.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存')!
     await saveBtn.trigger('click')
     await flushPromises()
     await flushPromises()
@@ -314,7 +317,7 @@ describe('配置绑定条与节点配置脏状态条（0824-00 §5.4/§6.1）', 
 
     const w = mount(NodeInspector)
     await flushPromises()
-    const saveOf = () => w.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存配置')!
+    const saveOf = () => w.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存')!
     expect(w.text()).toContain('无未保存修改')
     expect(saveOf().attributes('disabled')).toBeDefined()
 
@@ -357,7 +360,7 @@ describe('配置名称必填与 AI 对话 Tab（0824-06 §4）', () => {
     expect(w.find('.rc-inspector-body').text()).not.toContain('配置名称 *')
 
     // 名称为空时按钮可点，但点了不发请求
-    const saveBtn = () => w.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存配置')!
+    const saveBtn = () => w.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存')!
     expect(saveBtn().attributes('disabled')).toBeUndefined()
     await saveBtn().trigger('click')
     await flushPromises()
@@ -389,8 +392,11 @@ describe('配置名称必填与 AI 对话 Tab（0824-06 §4）', () => {
   })
 })
 
-describe('保存已有配置的影响范围确认（0824-00 §2.2，源维度）', () => {
-  it('有 configId 时点保存不直接写库，先弹影响范围；确认后才发 updateConfig', async () => {
+// 2026-08-28（0828 §6.2）：保存前的影响范围确认**删掉了**——会上原话「正常保存就保存了，不要有提示」。
+// 影响范围降级成保存按钮旁的一行灰字「N 个源在用」，独占（1 个源）时连这行都不显示。
+// 本组用例随之从「先弹窗、确认才写」改成「直接写」，并新增灰字的两个断言。
+describe('保存已有配置：直接落库 + 使用范围灰字（0828 §6.2）', () => {
+  it('有 configId 时点保存直接发 updateConfig，不弹任何确认', async () => {
     mockAssets()
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
       total: 337,
@@ -411,22 +417,38 @@ describe('保存已有配置的影响范围确认（0824-00 §2.2，源维度）
     flow.setDedupMode('web-1', 'table')
     await flushPromises()
 
-    const saveBtn = w.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存配置')!
+    // 置脏即查使用范围，并把「337 个源在用」挂在保存按钮旁（不拦截）
+    expect(sourceApi.sourcePaged).toHaveBeenCalledWith(expect.objectContaining({ configId: '1400774' }))
+    expect(w.find('[data-testid="config-usage-note"]').text()).toBe('337 个源在用')
+
+    const saveBtn = w.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存')!
     await saveBtn.trigger('click')
     await flushPromises()
-    // 只开弹窗，没写库
-    expect(update).not.toHaveBeenCalled()
-    expect(sourceApi.sourcePaged).toHaveBeenCalledWith(expect.objectContaining({ configId: '1400774' }))
+    await flushPromises()
 
-    // 确认后才写，且带上原始记录里的 BLOB 字段
-    const dialog = w.findComponent({ name: 'SaveSharedConfigDialog' })
-    dialog.vm.$emit('confirm')
-    await flushPromises()
-    await flushPromises()
+    // 一次点击直接写库，且带上原始记录里的 BLOB 字段
     expect(detailRaw).toHaveBeenCalledWith('1400774')
     expect(update).toHaveBeenCalledTimes(1)
     expect(update.mock.calls[0][0]).toMatchObject({ configId: '1400774', clearRule: '{"keep":1}', snatchDrepeat: 'ALL' })
     expect(flow.configDirty).toBe(false)
+    w.unmount()
+  })
+
+  it('独占配置（只有 1 个源在用）不显示使用范围灰字', async () => {
+    mockAssets()
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [] as never })
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({})
+    vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: '操作成功' })
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = { ...cloneConfig(NODE_CONFIGS['web-list']), configId: '1400900', configName: '独占配置' }
+    flow.select('web-1')
+
+    const w = mount(NodeInspector)
+    await flushPromises()
+    flow.setDedupMode('web-1', 'table')
+    await flushPromises()
+    expect(w.find('[data-testid="config-usage-note"]').exists()).toBe(false)
     w.unmount()
   })
 })

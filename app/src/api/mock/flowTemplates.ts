@@ -1,9 +1,9 @@
-import type { FlowTemplate, FlowTemplateSaveInput } from '../types'
+import type { FlowRecord, FlowSaveInput } from '../types'
 import { makePresetFlowTemplates, sanitizeTemplateDefinition } from '@/utils/flow/flowTemplates'
 
 const STORAGE_KEY = 'sjcj.flow-templates.v1'
 
-type TemplateVersions = Record<string, FlowTemplate[]>
+type TemplateVersions = Record<string, FlowRecord[]>
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
@@ -27,7 +27,7 @@ function writeVersions(versions: TemplateVersions): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(versions))
 }
 
-function latest(versions: FlowTemplate[]): FlowTemplate | undefined {
+function latest(versions: FlowRecord[]): FlowRecord | undefined {
   return versions[versions.length - 1]
 }
 
@@ -35,15 +35,15 @@ function now(): string {
   return new Date().toISOString().slice(0, 16).replace('T', ' ')
 }
 
-export function mockFlowTemplateList(): FlowTemplate[] {
+export function mockFlowTemplateList(): FlowRecord[] {
   return Object.values(readVersions())
     .map(latest)
-    .filter((template): template is FlowTemplate => Boolean(template))
+    .filter((template): template is FlowRecord => Boolean(template))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .map(clone)
 }
 
-export function mockFlowTemplateDetail(params?: Record<string, unknown>): FlowTemplate | null {
+export function mockFlowTemplateDetail(params?: Record<string, unknown>): FlowRecord | null {
   const id = String(params?.id ?? '')
   const version = Number(params?.version ?? 0)
   const versions = readVersions()[id]
@@ -53,15 +53,15 @@ export function mockFlowTemplateDetail(params?: Record<string, unknown>): FlowTe
 }
 
 /** 每次保存同一 id 都生成新版本；旧版本继续供已绑定源读取，不会被静默覆盖。 */
-export function mockFlowTemplateSave(params?: Record<string, unknown>): FlowTemplate {
-  const input = params?.template as FlowTemplateSaveInput | undefined
+export function mockFlowTemplateSave(params?: Record<string, unknown>): FlowRecord {
+  const input = params?.template as FlowSaveInput | undefined
   const name = input?.name?.trim()
   if (!input?.definition || !name) throw new Error('模板名称和结构不能为空')
 
   const all = readVersions()
   const id = input.id || `tpl-${Date.now().toString(36)}`
   const versions = all[id] ?? []
-  const template: FlowTemplate = {
+  const template: FlowRecord = {
     id,
     name,
     version: (latest(versions)?.version ?? 0) + 1,

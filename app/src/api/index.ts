@@ -6,9 +6,9 @@ import type {
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestRequest, RuleOrchestrationTestResult,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   TaskInstQuery, SiteTableOption, SiteTablesResult,
-  Config, ConfigActionLog, ConfigParamBinding, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
+  Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, SourceCloneRequest, SourceCloneResult,
-  FlowTemplate, FlowTemplateSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
+  FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
 } from './types'
 import type { FlowDef, FlowRecommendation } from '@/views/FlowCanvas/canvas/flowModel'
 import {
@@ -57,6 +57,7 @@ import {
   legacySnatchSavePayloadFromFlow,
 } from './legacyAdapters'
 import { encryptLegacyPayload } from './legacyCrypto'
+import { issueTagsForWrite } from '@/utils/sourceMark'
 
 export * from './types'
 export { isDanger, DANGER_ENDPOINTS, isMockMode, isProductionBackend, isProductionCreateEnabled } from './client'
@@ -75,6 +76,76 @@ async function legacySnatchSaveRequest(payload: LegacySnatchSaveRequest, options
   if (result?.sourceId || !result?.message) return result
   const sourceId = result.message.match(/源ID[:：]\s*([^\s,，]+)/)?.[1]
   return sourceId ? { ...result, sourceId } : result
+}
+
+/** 清颜色：旧 markSourceFlag(ids, 1, 1) 的 isClear=1 在现网 500。
+ *  usedFlag===0 即无颜色（旧列表徽章条件）；先走能写成功的 setColor flag=0，失败再 updateSource。 */
+async function clearSourceColor(sourceIds: string[]): Promise<Ack> {
+  if (!sourceIds.length) return { ok: false, message: '请勾选要清除颜色标识的源' }
+  try {
+    const result = await request<unknown>('source/setColor', { sourceIds, flag: 0, clear: true }, {
+      method: 'GET',
+      httpEndpoint: 'source/setColor',
+      httpParams: { ids: sourceIds.join(','), flag: 0 },
+    })
+    return ackFromApiResult(result)
+  } catch (error) {
+    if (usesMockAdapter('source/updateSource', { httpEndpoint: 'source/updateSource' })) throw error
+    const results = await Promise.allSettled(
+      sourceIds.map((sourceId) =>
+        request<unknown>('source/updateSource', { sourceId, usedFlag: 0 }, {
+          method: 'POST',
+          httpEndpoint: 'source/updateSource',
+          httpParams: { sourceId, usedFlag: 0 },
+        }),
+      ),
+    )
+    const failed = results.filter((item) => item.status === 'rejected')
+    if (failed.length) {
+      const first = failed[0] as PromiseRejectedResult
+      const detail = first.reason instanceof Error ? first.reason.message : String(first.reason)
+      const original = error instanceof Error ? error.message : String(error)
+      throw new Error(
+        failed.length === sourceIds.length
+          ? original
+          : `已清除 ${sourceIds.length - failed.length} 个源的颜色标识，${failed.length} 个失败：${detail}`,
+      )
+    }
+    return { ok: true, message: `已清除 ${sourceIds.length} 个源的颜色标识` }
+  }
+}
+
+/** 清标签：旧 /v1/source/tagSource 没有 clear；备注弹窗同一条 POST updateSource { sourceId, tags: '' }。 */
+async function clearSourceTags(sourceIds: string[]): Promise<Ack> {
+  if (!sourceIds.length) return { ok: false, message: '请勾选要清除标签的源' }
+  if (usesMockAdapter('source/tagSource', { httpEndpoint: 'source/tagSource' })) {
+    const result = await request<unknown>('source/tagSource', { sourceIds, tags: [], action: 'clear' }, {
+      method: 'GET',
+      httpEndpoint: 'source/tagSource',
+      httpParams: { ids: sourceIds.join(','), action: 'clear' },
+    })
+    return ackFromApiResult(result)
+  }
+  const results = await Promise.allSettled(
+    sourceIds.map((sourceId) =>
+      request<unknown>('source/updateSource', { sourceId, tags: '' }, {
+        method: 'POST',
+        httpEndpoint: 'source/updateSource',
+        httpParams: { sourceId, tags: '' },
+      }),
+    ),
+  )
+  const failed = results.filter((item) => item.status === 'rejected')
+  if (failed.length) {
+    const first = failed[0] as PromiseRejectedResult
+    const detail = first.reason instanceof Error ? first.reason.message : String(first.reason)
+    throw new Error(
+      failed.length === sourceIds.length
+        ? detail
+        : `已清除 ${sourceIds.length - failed.length} 个源的标签，${failed.length} 个失败：${detail}`,
+    )
+  }
+  return { ok: true, message: `已清除 ${sourceIds.length} 个源的标签` }
 }
 
 function ackFromApiResult(result: unknown): Ack {
@@ -131,6 +202,7 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
   type StepConfigDetail = {
     topic?: string; configName?: string; isLoginConfig?: boolean; multiMode?: number
     bizType?: string; dedupType?: string; codeRule?: string; contentRule?: string
+    runPolicy?: string
     paramBindings?: Step['paramBindings']
   }
   const detailByConfigId = new Map<string, StepConfigDetail>()
@@ -146,6 +218,7 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
       dedupType: r.value.dedupType ?? undefined,
       codeRule: r.value.codeRule || undefined,
       contentRule: r.value.contentRule || undefined,
+      runPolicy: r.value.runPolicy || undefined,
       isLoginConfig: r.value.isLogin,
       multiMode: r.value.multiMode,
       ...(bindings.length ? { paramBindings: bindings } : {}),
@@ -163,6 +236,7 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
       ...(detail.dedupType !== undefined ? { dedupType: detail.dedupType } : {}),
       ...(detail.codeRule ? { codeRule: detail.codeRule } : {}),
       ...(detail.contentRule ? { contentRule: detail.contentRule } : {}),
+      ...(detail.runPolicy ? { runPolicy: detail.runPolicy } : {}),
       ...(detail.isLoginConfig !== undefined ? { isLoginConfig: detail.isLoginConfig } : {}),
       ...(detail.multiMode !== undefined ? { multiMode: detail.multiMode } : {}),
       ...(detail.paramBindings ? { paramBindings: detail.paramBindings } : {}),
@@ -202,6 +276,7 @@ export const sourceApi = {
         groupBy: p?.groupBy,
         sorted: p?.sorted ?? -1,
         tags: p?.tags ?? [],
+        flag: p?.flag,
         field: p?.field,
         type: p?.type,
       },
@@ -327,6 +402,34 @@ export const sourceApi = {
   batchSchedule: (sourceIds: string[]) => assetMockRequest<Ack>('source/createJobs', { sourceIds }),
   changeFreqTag: (sourceIds: string[], freqTag: string) => assetMockRequest<Ack>('source/changeFreqTag', { sourceIds, freqTag }),
   markVerified: (sourceIds: string[], verified: string) => assetMockRequest<Ack>('source/markVerified', { sourceIds, verified }),
+  /** 源打标签。GET /v1/source/tagSource 只追加（旧 markBatch，tags 以 # 开头）。
+   *  清标没有 action=clear：旧备注弹窗用 updateSource 把 tags 写成空串覆盖。 */
+  tagSource: async (sourceIds: string[], tags: string[], action: 'add' | 'clear' = 'add'): Promise<Ack> => {
+    if (action === 'clear') return clearSourceTags(sourceIds)
+    const result = await request<unknown>('source/tagSource', { sourceIds, tags, action }, {
+      method: 'GET',
+      httpEndpoint: 'source/tagSource',
+      httpParams: {
+        ids: sourceIds.join(','),
+        tags: issueTagsForWrite(tags),
+      },
+    })
+    return ackFromApiResult(result)
+  },
+  /** 设/清颜色标识。GET /v1/source/setColor 写入 usedFlag 1–8；清除写 flag=0（isClear=1 现网 500）。 */
+  setColor: async (sourceIds: string[], flag: number | undefined, clear = false): Promise<Ack> => {
+    if (clear) return clearSourceColor(sourceIds)
+    const result = await request<unknown>('source/setColor', { sourceIds, flag, clear }, {
+      method: 'GET',
+      httpEndpoint: 'source/setColor',
+      httpParams: {
+        ids: sourceIds.join(','),
+        flag: flag ?? 1,
+        isClear: 0,
+      },
+    })
+    return ackFromApiResult(result)
+  },
   generateConfig: (sourceId: string) => assetMockRequest<Ack>('source/generateConfig', { sourceId }),
 
   // 新建采集源两段式闸门（0706 优化·Phase3）
@@ -1315,6 +1418,23 @@ export const configApi = {
       method: 'GET',
       httpParams: { ids: configIds, enable: enabled ? 0 : 1 },
     }),
+  /**
+   * 抓取类型字典（旧 `api/source-type.js` 的 allSourceTypes）。
+   *
+   * 2026-08-28 确认：**节点类型就是抓取类型**，落在配置的 `configType` 上（旧「配置编辑」弹窗那一项，
+   * 旧 `column.config.js:661` dataIndex=configType，type=SOURCE_TYPE）。
+   * 它是**后端字典**，不是前端枚举——`SNATCH_TYPES` / `TEMPLATE_TO_SNATCH` 目前硬编码，
+   * 且含 `[BROWSER]`/`[WECHAT]`/`[LOGIN]` 三个自造值，要以本接口为准校正
+   * （0824-11 §1.2d：枚举一律照抄后端，不许自造）。
+   */
+  sourceTypes: async (): Promise<SourceTypeDict[]> => {
+    const result = await request<{ list?: unknown[] } | unknown[]>('config/sourceTypes', {}, { method: 'GET' })
+    const rows = Array.isArray(result) ? result : (result?.list ?? [])
+    return rows.map((row) => {
+      const r = row as Record<string, unknown>
+      return { sourceType: String(r.sourceType ?? ''), typeName: String(r.typeName ?? '') }
+    }).filter((item) => item.sourceType)
+  },
   configParams: async (configId: string, p: PageQuery = {}) => {
     const result = await request<Paged<unknown>>('config/configParams', { configId, ...p }, {
       method: 'GET',
@@ -1517,11 +1637,12 @@ export const flowApi = {
     request<{ reply: string }>('flow/nodeAiChat', params),
 }
 
-// 流程模板（0714 会议 Task 5）：结构与源动态绑定分开保存；version 用于固定已绑定源。
-export const flowTemplateApi = {
-  list: () => request<FlowTemplate[]>('flow-template/list'),
-  detail: (id: string, version?: number) => request<FlowTemplate | null>('flow-template/detail', { id, version }),
-  save: (template: FlowTemplateSaveInput) => request<FlowTemplate>('flow-template/save', { template }),
+// 流程中心正式 API 门面。真实 Flow CRUD 尚未提供时，底层暂时适配旧 flow-template mock；
+// 业务代码只依赖 FlowRecord/FlowSaveInput，不再扩散“流程模板”概念。
+export const flowCenterApi = {
+  list: () => request<FlowRecord[]>('flow-template/list'),
+  detail: (id: string, version?: number) => request<FlowRecord | null>('flow-template/detail', { id, version }),
+  save: (flow: FlowSaveInput) => request<FlowRecord>('flow-template/save', { template: flow }),
 }
 
 // 子步骤（流程画布连线 = item/next）。未实现专属 mock，由 client fallback 回执。

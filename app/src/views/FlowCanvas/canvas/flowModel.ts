@@ -127,6 +127,8 @@ export interface NodeConfig {
   taskCfg?: TaskConfig
   /** 节点级定时策略：所有有执行语义的节点共用；旧采集/Source 字段仅作兼容读取。 */
   schedule?: CollectorSchedule
+  /** 配置的旧运行策略原文（config.runPolicy）。只读迁移，确认写契约前不从节点表单回写。 */
+  runPolicy?: string
   /** 规则处理节点编排配置（0707 Phase 9：规则引擎 rule-orchestration） */
   ruleCfg?: RuleOrchestration
   /**
@@ -575,6 +577,6 @@ export interface FlowRecommendation {
 // ---------- Re-export（保持外部 import 路径 @/views/FlowCanvas/canvas/flowModel 仍能访问 seeds + layout 的 symbol） ----------
 // 物理拆分（按 plan §A.5.2）：seeds 与 layout 独立可独立测试；本文件只留 types + 杂项。
 // 外部 7 个引用方（stores × 3 + api × 4）只需把 'flowModel' 路径加上 'canvas/'，其他不变。
-// FlowTemplate/index.vue 的 1 处 import 留到 Step 7 统一改（见 plan §A.5.3.5）。
+// 旧流程归档页仍复用此处模型；流程中心统一使用 FlowRecord/FlowDefinition DTO。
 export * from './flowModel.seeds'
 export * from './flowModel.layout'

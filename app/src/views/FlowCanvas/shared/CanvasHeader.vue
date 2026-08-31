@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
-import { flowTemplateApi, sourceApi, type FlowTemplate } from '@/api'
+import { flowCenterApi, type FlowRecord } from '@/api'
 import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
 import SyncSourcesDialog from './SyncSourcesDialog.vue'
 
@@ -24,22 +24,21 @@ watch(() => route.query.view, (next) => {
 onMounted(() => window.addEventListener('hashchange', syncView))
 onBeforeUnmount(() => window.removeEventListener('hashchange', syncView))
 
-const templates = ref<FlowTemplate[]>([])
+const templates = ref<FlowRecord[]>([])
 async function loadTemplates() {
-  templates.value = await flowTemplateApi.list()
+  templates.value = await flowCenterApi.list()
 }
 function onTemplateDropdownVisible(visible: boolean) {
   if (visible) void loadTemplates()
 }
 onMounted(() => { void loadTemplates() })
 
-// 顶部下拉既是模板切换入口，也要明确当前源实际应用的是哪一版模板。
-// 模板列表尚未加载、或旧存量流程没有模板绑定时，才回退到通用动作文案。
+// 顶部下拉是流程切换入口；内部沿用既有版本化接口，用户界面不再暴露“模板”概念。
 const appliedTemplateLabel = computed(() => {
   const templateId = src.value?.templateId
-  if (!templateId) return '切换模板'
+  if (!templateId) return '切换流程'
   const template = templates.value.find((item) => item.id === templateId)
-  return template ? `${template.name} · v${src.value?.templateVersion ?? template.version}` : '切换模板'
+  return template ? `${template.name} · v${src.value?.templateVersion ?? template.version}` : '切换流程'
 })
 
 const statusMeta = computed(() => {
@@ -60,8 +59,21 @@ const metaLine = computed(() => {
   const primary = s.kind === 'param' ? `参数源 · ${s.urlTemplate || s.baseUrl || ''} · ${s.paramRefs?.length ?? 0} 个参数占位符` : s.url
   return [primary, s.lastSuccessAt ? `上次成功 ${s.lastSuccessAt}` : ''].filter(Boolean).join(' · ')
 })
-function backToList() {
-  router.push('/collect')
+/**
+ * 返回源视图（0828 W5-6/7 合并）。
+ *
+ * 原来是「返回列表」→ `/collect`（网站列表）。会上明确不要回网站列表：
+ * 「你这个返回不要返回到网站」「我点个返回的源列表」。
+ * 落点是**当前源所属网站**的源视图（单网站），不是全网站。
+ * 这也把原计划里单独加一个「源视图」入口按钮那条合并掉了：一个返回按钮就够，不再多摆一个。
+ *
+ * 归属网站按既有优先级取：源上下文 > URL。游离源（无网站归属，见 0824-11 §1.2c-3）
+ * 没有可回的源视图，退回网站列表。
+ */
+function backToSourceView() {
+  const siteId = src.value?.siteId || String(route.query.siteId ?? '')
+  if (siteId) router.push({ path: '/canvas', query: { siteId, view: 'source' } })
+  else router.push('/collect')
 }
 function switchView(target: 'flow' | 'data' | 'task' | 'file') {
   if (view.value === target) return
@@ -77,23 +89,6 @@ function switchView(target: 'flow' | 'data' | 'task' | 'file') {
 function srcSnatch() {
   ui.fireAction('发起抓取')
 }
-async function srcToggle() {
-  const s = src.value
-  if (!s) return
-  const willDisable = !s.disabled
-  try {
-    await ElMessageBox.confirm(
-      `确认${willDisable ? '停用' : '启用'}源「${s.name}」？`,
-      willDisable ? '停用源' : '启用源',
-      { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
-  const res = await sourceApi.changeSourceEnable(s.sourceId, willDisable)
-  ElMessage.success(res?.message || `已${willDisable ? '停用' : '启用'}（演示）`)
-  s.disabled = willDisable
-}
 
 // 同步到源（0716）：把当前源已保存的流程批量覆盖到同网站其他源。
 // 永远同步已保存的版本——画布有未保存改动时先拦下，避免"画布上是 A、同步出去是 B"。
@@ -108,9 +103,8 @@ function openSyncDialog() {
 
 async function onSwitchFlow(command: string) {
   if (!command) return
-  if (command === '__manage_templates__') {
-    // 流程模板管理页迁到规则资产（0812 计划 M4-9）
-    void router.push({ path: '/rules', query: { tab: 'template' } })
+  if (command === '__manage_flows__') {
+    void router.push('/flows')
     return
   }
   const template = templates.value.find((item) => item.id === command)
@@ -118,8 +112,8 @@ async function onSwitchFlow(command: string) {
   if (flow.dirty) {
     try {
       await ElMessageBox.confirm(
-        '当前画布有未保存改动。切换模板会按稳定节点 ID 保留兼容绑定，并清理不兼容绑定，是否继续？',
-        '切换流程模板',
+        '当前画布有未保存改动。切换流程会全量替换当前节点，是否继续？',
+        '切换流程',
         { type: 'warning', confirmButtonText: '切换', cancelButtonText: '取消' },
       )
     } catch {
@@ -128,14 +122,14 @@ async function onSwitchFlow(command: string) {
   }
   const result = flow.applyTemplate(template)
   if (!result) return
-  ElMessage.success(`已应用模板「${template.name}」v${template.version}${result.cleared ? `，已清理 ${result.cleared} 项不兼容绑定` : ''}`)
+  ElMessage.success(`已应用流程「${template.name}」v${template.version}${result.cleared ? `，原 ${result.cleared} 个节点已替换` : ''}`)
 }
 
 </script>
 
 <template>
   <div v-if="src" class="rc-canvas-head">
-    <button class="rc-btn ghost" type="button" @click="backToList">← 返回列表</button>
+    <button class="rc-btn ghost" type="button" @click="backToSourceView">← 返回源视图</button>
     <div class="ch-switcher">
       <button class="ch-seg" :class="{ on: view === 'flow' }" type="button" @click="switchView('flow')">流程视图</button>
       <button class="ch-seg" :class="{ on: view === 'data' }" type="button" @click="switchView('data')">数据视图</button>
@@ -162,7 +156,7 @@ async function onSwitchFlow(command: string) {
               <el-dropdown-item v-for="template in templates" :key="template.id" :command="template.id">
                 {{ template.name }} · v{{ template.version }}
               </el-dropdown-item>
-              <el-dropdown-item divided command="__manage_templates__">管理流程模板…</el-dropdown-item>
+              <el-dropdown-item divided command="__manage_flows__">管理流程…</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -173,11 +167,10 @@ async function onSwitchFlow(command: string) {
           保存流程
         </button>
       </div>
+      <!-- 「停用」0828 D24 移除：源启停统一在源视图的行操作里做，画布头只留运行入口。
+           这里不做成禁用或隐藏——按钮整个删掉，避免同一能力两个入口。 -->
       <div v-if="view === 'flow'" class="ch-canvas-actions" aria-label="源运行操作">
         <button class="rc-btn primary" type="button" @click="srcSnatch">发起抓取</button>
-        <button class="rc-btn" :class="{ danger: !src.disabled }" type="button" @click="srcToggle">
-          {{ src.disabled ? '启用' : '停用' }}
-        </button>
       </div>
     </template>
 

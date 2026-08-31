@@ -25,7 +25,7 @@ function redirectedToLogout(status = 500) {
     ok: status >= 200 && status < 300,
     status,
     redirected: true,
-    url: 'http://115.227.21.133:9999/apiapi/logout.htm',
+    url: 'http://118.25.96.217:9999/apiapi/logout.htm',
     json: async (): Promise<unknown> => {
       throw new Error('no body')
     },

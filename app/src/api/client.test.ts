@@ -13,7 +13,7 @@ function redirectedToLogout() {
     ok: false,
     status: 500,
     redirected: true,
-    url: 'http://115.227.21.133:9999/apiapi/logout.htm',
+    url: 'http://118.25.96.217:9999/apiapi/logout.htm',
     json: async (): Promise<unknown> => {
       throw new Error('no body')
     },
@@ -269,8 +269,8 @@ describe('生产写守卫', () => {
     vi.unstubAllEnvs()
   })
 
-  it('未连生产（默认测试环境代理）时，danger 端点正常发出', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
+  it('未连生产时，danger 端点正常发出', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://127.0.0.1:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { request } = await import('./client')
 
@@ -305,7 +305,18 @@ describe('生产写守卫', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('连生产时，config/copyAll 在白名单内（「另存为新配置」的第一步，纯新增）', async () => {
+  it('连生产时，source/tagSource 与 source/setColor 在白名单内（问题标记入库，旧平台可见）', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
+    const { request } = await import('./client')
+
+    await request('source/tagSource', { ids: '1', tags: '正文缺失', action: 'add' }, { method: 'GET', httpEndpoint: 'source/tagSource' })
+    await request('source/setColor', { ids: '1', flag: 2, isClear: 0 }, { method: 'GET', httpEndpoint: 'source/setColor' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('连生产时，config/copyAll 在白名单内（「复制节点 = 新增一套配置」的实现，纯新增）', async () => {
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { request } = await import('./client')

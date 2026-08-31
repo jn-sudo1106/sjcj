@@ -6,14 +6,16 @@
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
+import { useDuplicateNode } from '@/views/FlowCanvas/canvas/useDuplicateNode'
 import {
-  BIZ_TYPE_OPTIONS, MULTI_MODE_OPTIONS, decisionOrParallelKind, collectorCapabilityOf, isRuleNode,
+  BIZ_TYPE_OPTIONS, WEB_TYPE_OPTIONS, defaultMultiMode, decisionOrParallelKind, collectorCapabilityOf, isRuleNode,
   type CollectConfig, type CollectorSchedule, type LoginConfigRef, type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, ruleApi, type RuleOrchestrationItem } from '@/api'
 import BranchEditor from '../BranchEditor.vue'
 import CollectorSettings, { type CollectorRuntimeSettings } from '../CollectorSettings.vue'
 import TaskScheduleSettings from '../TaskScheduleSettings.vue'
+import RuntimePolicySummary from '../RuntimePolicySummary.vue'
 import ParamSourceEditor, { type ParamSourceModel } from '@/views/FlowCanvas/source/ParamSourceEditor.vue'
 import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDialog.vue'
 import SelectExistingRuleDialog from '../SelectExistingRuleDialog.vue'
@@ -25,6 +27,8 @@ import EditNodeSourceDialog from '../EditNodeSourceDialog.vue'
 // （见 flowModel.ts:401-408）；本文件不再直接双向绑定 model，只做一次性只读派生。
 
 const flow = useFlowStore()
+// 复制节点 = 新增一套配置（0828 D02），与画布右键菜单同一条路径
+const duplicateNode = useDuplicateNode()
 
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
 const id = computed<string>(() => flow.selectedId)
@@ -241,9 +245,17 @@ const unknownBizType = computed(() => {
   const v = cc.value?.bizType
   return v && !BIZ_TYPE_OPTIONS.some((opt) => opt.value === v) ? v : ''
 })
-// 「是否列表」（旧 config.isMulti）：只写 multiMode 这个三态原值，不去联动 webKind/isDetail——
-// 旧平台没有"网页类型"这个轴，写回时 legacyAdapters 也是以 multiMode 为准。
-const multiMode = computed(() => (cfg.value?.collectCfg?.multiMode ?? '') as number | '')
+// 「网页类型」（展示）→ 落库仍写旧 config.isMulti，不去联动 webKind/isDetail。
+// 下拉只有 列表页(1) / 详情页(0) 两项；`2 更新父表` 不给选，由「输入表 == 输出表」在落库时推导
+// （见 utils/flow/nodeConfigPayload.ts 的 resolveMultiMode）。
+// 回显时 **0 和 2 都落在「详情页」上**，否则线上那批 isMulti=2 的存量配置会显示成空。
+const multiMode = computed(() => {
+  const node = cfg.value
+  if (!node?.collectCfg) return '' as const
+  // 没值时按节点形态推导（D10 去掉了「未设置」占位），与落库用的 resolveMultiMode 同一个推导
+  const raw = node.collectCfg.multiMode ?? defaultMultiMode(node)
+  return raw === 1 ? 1 : 0
+})
 function onMultiMode(e: Event) {
   const raw = (e.target as HTMLSelectElement).value
   flow.patchCollect(id.value, { multiMode: raw === '' ? undefined : Number(raw) })
@@ -376,12 +388,20 @@ function onBizType(e: Event) {
       <div class="rc-field"><label>节点类型</label>
         <div class="rc-readonly">{{ nodeCapability?.label ?? '—' }}</div>
       </div>
-      <!-- 是否列表（旧 config.isMulti，0824-06 §4 归 config-meta）：决定落库去重口径。
+      <!-- 网页类型（2026-08-28 拍板）：展示沿用新平台原有说法，落库仍是旧 `isMulti`。
+           **只给两项**：列表页(1) / 详情页(0)；`2 更新父表` 不由用户选，按「输入表 == 输出表」推导。
+           这一项没有被「节点类型」取代：节点类型（= 旧「抓取类型」= configType）不分列表/详情，
+           列表/详情这条轴一直在 isMulti 上；被节点类型取代的是旧 webKind 那个**独立字段**。
+           选项 title 挂着旧平台原文，新旧平台逐字段核对时直接可见（0824-00 §9）。
            旧平台在配置上编辑、步骤上没有这一项，因此跟节点类型放在一起，不进表配置。 -->
-      <div class="rc-field"><label>是否列表</label>
-        <select class="rc-select" :value="multiMode" aria-label="是否列表" @change="onMultiMode">
-          <option value="">未设置</option>
-          <option v-for="opt in MULTI_MODE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+      <div class="rc-field"><label>网页类型</label>
+        <select class="rc-select" :value="multiMode" aria-label="网页类型" @change="onMultiMode">
+          <option
+            v-for="opt in WEB_TYPE_OPTIONS"
+            :key="opt.value"
+            :value="opt.value"
+            :title="`${opt.desc}（旧平台：${opt.legacy}）`"
+          >{{ opt.label }}</option>
         </select>
       </div>
       <!-- 配置名称（config-meta，0824-06 §4）：已有配置显示后端真名，新建配置必填 -->
@@ -424,6 +444,10 @@ function onBizType(e: Event) {
       <CollectorSettings :model-value="runtimeSettings" :capability="nodeCapability" @update:model-value="onRuntimeSettingsChange" />
     </template>
 
+    <!-- 运行策略属于节点引用的 Config：配置中心入口弱化后，在流程右侧直接展示。
+         当前只读，避免在后端 updateConfigPolicy / runPolicy 映射未确认时制造“能改但存不了”的假象。 -->
+    <RuntimePolicySummary v-if="cfg?.configId" :raw="cfg.runPolicy" />
+
     <!-- 非采集非规则：基础字段 / 参数 / 试跑信息 -->
     <template v-if="!cc && !isRule">
       <div v-if="cfg?.planned" class="rc-drawer show">规划中节点：OCR / AI 提取 / 发邮件仍待执行器确认。配置可先草拟，发起抓取与上线需等待能力就绪。</div>
@@ -437,7 +461,7 @@ function onBizType(e: Event) {
         <input class="rc-input" :value="row[1]" @input="flow.setFieldRow(id, i, ($event.target as HTMLInputElement).value)" />
       </div>
       <div class="rc-help">字段随节点类型变化：网页抓取呈现源/配置/子步骤；规则处理呈现规则组/表达式/共享配置。</div>
-      <div class="rc-actions-row"><button class="rc-btn" type="button" @click="flow.duplicate(id)">复制节点</button></div>
+      <div class="rc-actions-row"><button class="rc-btn" type="button" @click="void duplicateNode(id)">复制节点</button></div>
 
       <div class="ni-section-title">参数</div>
       <table class="rc-mini-table rc-edit-table">

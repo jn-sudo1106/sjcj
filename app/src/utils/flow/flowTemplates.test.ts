@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { FlowTemplate, Source } from '@/api'
+import type { FlowRecord, Source } from '@/api'
 import {
   compatibleTemplateBindings,
   composeTemplateFlow,
@@ -69,7 +69,7 @@ describe('流程模板与源绑定组合', () => {
       [fileId]: { collect: { url: 'https://source.example.com' } },
       [processId]: { task: { queue: 'source_queue', urlRule: '' } },
     }
-    const upgraded: FlowTemplate = {
+    const upgraded: FlowRecord = {
       ...template,
       version: 2,
       definition: {

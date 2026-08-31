@@ -3,7 +3,7 @@
 //       Rule（规则表达式）/ SharedConfig（共享配置）/ RuleTestCase（测试集样本）/
 //       EvalResult（求值结果）/ RuleOrchestration*（规则编排 5 个）
 // 跨域被引用：源节点（flowModel）通过 NodeConfig 间接引 RuleOrchestration，
-//             但 NodeConfig 不在本文件，跨域引用关系由 source 域 FlowTemplateNodeBinding 维持
+//             但 NodeConfig 不在本文件，跨域引用关系由 source 域 FlowNodeBinding 维持
 // 跨域引用：无（自包含，RuleOrchestration 不直接引 Source/Config）
 // 无外部 import。
 

@@ -4,7 +4,7 @@
 // 源详情 / 新建源画布（/canvas?sourceId=X 或 /canvas?mode=new）逻辑上属于「采集资产」子页，侧栏高亮采集资产
 import { computed, type Component } from 'vue'
 import { useRouter } from 'vue-router'
-import { Box, Clock, DataAnalysis, Document, Files, Histogram, Monitor, Odometer } from '@element-plus/icons-vue'
+import { Box, Clock, Connection, DataAnalysis, Document, Files, Histogram, Monitor, Odometer } from '@element-plus/icons-vue'
 import { TABS } from '@/router/tabs'
 import { useActiveNavKey } from '@/composables/useActiveNavKey'
 
@@ -34,6 +34,7 @@ const navGroups = computed(() =>
 const navIcons: Record<string, Component> = {
   overview: Odometer,
   collect: Box,
+  flow: Connection,
   rules: Document,
   metrics: Histogram,
   data: DataAnalysis,

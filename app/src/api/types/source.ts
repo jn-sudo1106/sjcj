@@ -2,15 +2,15 @@
 // 包含 Source（源）/ Site（网站）/ Step（连线步骤）/ Task（任务实例）/
 //       SourceCategory（分类目录树）/ SourceCloneRequest/Result（克隆）/
 //       SourceLog（源日志）/ SourceTaskQuery（任务视图查询）/
-//       CredentialRef（凭据引用）/ FlowTemplateNodeBinding/Definition/FlowTemplate/SaveInput（流程模板 4 件）/
+//       CredentialRef（凭据引用）/ FlowNodeBinding/FlowDefinition/FlowRecord/FlowSaveInput（流程 4 件）/
 //       FileResourceRecord/Query（file_resource 文件资源 2 件）
 // 跨域被引用：data.DataRow.sourceId (string, 不是类型), overview.OverviewKpi.sources (number)
 // 跨域引用：
 //   - PageQuery (FileResourceQuery/SourceTaskQuery extends PageQuery)
 //   - RunState (Source.state / Task.state)
 //   - ConfigParamBinding (Site.params: ConfigParamBinding[])
-//   - flowModel 类型（FlowTemplateNodeBinding.collect/entryCondition/task/outputAdvanced,
-//                     FlowTemplateDefinition.branches/configs/branchGroups）
+//   - flowModel 类型（FlowNodeBinding.collect/entryCondition/task/outputAdvanced,
+//                     FlowDefinition.branches/configs/branchGroups）
 //     —— api → view 是 plan §十 已识别的分层倒置，P1-3 暂不解决，保持 import type 不产生运行时依赖
 // import type 严格模式
 
@@ -100,10 +100,10 @@ export interface Source {
   scheduleTime?: string
   weekdays?: number[]
   cron?: string
-  // ---- 流程模板绑定（0714 会议 Task 5）：模板提供完整默认配置，源保存自己的同节点覆盖。 ----
+  // ---- 流程绑定：流程提供完整默认配置，源保存自己的同节点覆盖。 ----
   templateId?: string
   templateVersion?: number
-  nodeBindings?: Record<string, FlowTemplateNodeBinding>
+  nodeBindings?: Record<string, FlowNodeBinding>
   // ---- 参数源（0721 会议：加源支持"普通源 / 参数源"两种类型）----
   /** 省略视为 'normal'；'param' 时 baseUrl/urlTemplate/paramRefs 生效，源列表仍只存这 1 条记录，展开为 N 个 URL 在任务层做 */
   kind?: 'normal' | 'param'
@@ -124,8 +124,8 @@ export interface SourceOption {
   name: string
 }
 
-/** 模板内一个稳定节点对应的源覆盖配置；未覆盖时使用模板默认值。 */
-export interface FlowTemplateNodeBinding {
+/** 流程内一个稳定节点对应的源覆盖配置；未覆盖时使用流程默认值。 */
+export interface FlowNodeBinding {
   collect?: Partial<Pick<CollectConfig,
     | 'url'
     | 'outputTable'
@@ -154,26 +154,27 @@ export interface FlowTemplateNodeBinding {
   outputAdvanced?: OutputAdvanced
 }
 
-/** 模板结构：稳定节点 ID、完整节点默认配置、顺序与连线。 */
-export interface FlowTemplateDefinition {
+/** 流程结构：稳定节点 ID、完整节点默认配置、顺序与连线。 */
+export interface FlowDefinition {
   main: string[]
   branches: BranchSeed[]
   configs: Record<string, NodeConfig>
   branchGroups?: FlowBranchGroup[]
 }
 
-export interface FlowTemplate {
+/** 流程中心使用的正式前端 DTO；真实后端接口到位前由兼容适配层读取旧 mock。 */
+export interface FlowRecord {
   id: string
   name: string
   version: number
-  definition: FlowTemplateDefinition
+  definition: FlowDefinition
   updatedAt: string
 }
 
-export interface FlowTemplateSaveInput {
+export interface FlowSaveInput {
   id?: string
   name: string
-  definition: FlowTemplateDefinition
+  definition: FlowDefinition
 }
 
 /** 网站 Site（0707 优化·Phase2）：父级，统一流程模板 + 批量工具，本身不实际采集运行；下辖多个源（Source.siteId） */
@@ -297,6 +298,8 @@ export interface Step {
   dedupType?: string
   codeRule?: string
   contentRule?: string
+  /** 本步骤配置的运行策略原文（旧 config.runPolicy），由 configDetail 回填。 */
+  runPolicy?: string
   /** 本步骤 configId 对应配置的旧 `isMulti` 原值，随 topic 一起由 sourceApi.sourceSteps 回填。
    *  旧平台是三态（旧前端 column.config.js:642 权威定义）：
    *    1 = 列表类[按去重字段去重]、0 = 详情类[按父ID去重]、2 = 更新父表[按父ID更新父表]。

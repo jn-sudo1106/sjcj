@@ -20,11 +20,14 @@ function normalizeTab(tab: unknown): string {
   const key = String(tab ?? '')
   return validTabs.has(key) ? key : 'source'
 }
-// 参数模块、流程模板都迁到规则资产（0721 会议 §六-1；流程模板见 0812 计划 M4-9）：
-// 旧链接 /collect?tab=param / tab=template 重定向到新位置，保留一个迭代周期
+// 参数模块迁到规则资产；旧“流程模板”链接统一收口到流程中心。
 watch(() => route.query.tab, (tab) => {
-  if (tab === 'param' || tab === 'template') {
-    void router.replace(`/rules?tab=${tab}`)
+  if (tab === 'template') {
+    void router.replace('/flows')
+    return
+  }
+  if (tab === 'param') {
+    void router.replace('/rules?tab=param')
     return
   }
   active.value = normalizeTab(tab)

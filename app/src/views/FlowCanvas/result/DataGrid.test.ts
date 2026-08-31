@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import DataGrid from './DataGrid.vue'
 
@@ -211,6 +211,40 @@ describe('DataGrid', () => {
     })
 
     await wrapper.find('.dg-select input[type="checkbox"]').setValue(true)
+    expect(wrapper.emitted('row-click')).toBeUndefined()
+  })
+})
+
+// 单元格复制值（0828 D27）。会上原话「人家有的时候他只需要复制这个值」。
+describe('DataGrid · 复制单元格的值', () => {
+  function mountGrid() {
+    return mount(DataGrid, {
+      props: {
+        meta: { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'name', type: 'string', desc: '名称' }] },
+        rows: [{ dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted', values: { name: '数据 A' } }],
+      },
+      global: { stubs: { ElDropdown: true } },
+    })
+  }
+
+  /** 「名称」列所在的那个 td（前面还有自动补的 ENTRY_ID / SOURCE_ID 身份列） */
+  function nameCell(wrapper: ReturnType<typeof mount>) {
+    return wrapper.findAll('tbody tr:first-child td').find((td) => td.text().includes('数据 A'))!
+  }
+
+  it('有值的单元格带复制按钮，且图标不污染单元格文本', () => {
+    const wrapper = mountGrid()
+    expect(wrapper.findAll('[data-testid="data-cell-copy"]').length).toBeGreaterThan(0)
+    // 图标用 SVG 而非字符：td 的文本必须还是纯数据值，否则会把别处「取值是否正确」的断言污染掉
+    expect(nameCell(wrapper).text()).toBe('数据 A')
+  })
+
+  it('点复制写入剪贴板，且不触发行点击（行点击是打开详情）', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const wrapper = mountGrid()
+    await nameCell(wrapper).get('[data-testid="data-cell-copy"]').trigger('click')
+    expect(writeText).toHaveBeenCalledWith('数据 A')
     expect(wrapper.emitted('row-click')).toBeUndefined()
   })
 })

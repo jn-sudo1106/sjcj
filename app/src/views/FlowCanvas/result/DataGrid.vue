@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { DataTableMeta, DataRow } from '@/api'
 
 // withDefaults 是必须的：Vue 3 对 boolean 类型的 prop 有 casting 规则——未传时值是 false
@@ -170,6 +171,40 @@ function colLabel(field: { prop: string; desc?: string; columnName?: string; lab
   return field.desc && field.desc !== physical ? `${field.desc}-${physical}` : physical
 }
 
+/**
+ * 复制单元格的值（0828 D27）。
+ *
+ * `navigator.clipboard` 在非 HTTPS / 非安全上下文里不可用（内网 http 部署就是这种），
+ * 所以要有回退；两条都失败时把值弹出来让用户自己选，不静默失败。
+ */
+async function copyCell(text: string) {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制')
+    return
+  } catch {
+    // 落到下面的兜底
+  }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    if (ok) {
+      ElMessage.success('已复制')
+      return
+    }
+  } catch {
+    // 继续兜底
+  }
+  ElMessageBox.alert(text, '复制失败，请手动选中复制', { confirmButtonText: '知道了' })
+}
+
 function cellText(row: DataRow, field: { prop: string; columnName?: string }): string {
   if (field.prop === 'ENTRY_ID') return row.dataId || '—'
   if (field.prop === 'SOURCE_ID') return row.sourceId || '—'
@@ -235,7 +270,7 @@ function stateMeta(s?: string) {
               <input type="checkbox" :checked="selectedSet.has(r.dataId)" @change="toggleRow(r.dataId)" />
             </td>
             <td v-if="showSourceCol" :title="sourceLabel(r)">{{ sourceLabel(r) }}</td>
-            <td v-for="f in visibleCols" :key="f.prop" :title="cellText(r, f)">
+            <td v-for="f in visibleCols" :key="f.prop" class="dg-cell" :title="cellText(r, f)">
               <!-- 路径类单元格做成可点：点开站内预览，不改变行点击（打开数据详情）的语义 -->
               <button
                 v-if="isFileCell(f, cellText(r, f))"
@@ -246,6 +281,25 @@ function stateMeta(s?: string) {
                 @click.stop="emit('file-click', cellText(r, f), f)"
               >📄 {{ cellText(r, f) }}</button>
               <template v-else>{{ cellText(r, f) }}</template>
+              <!-- 复制该格的值（0828 D27）。会上原话「人家有的时候他只需要复制这个值」。
+                   hover 才显形，避免每格常驻一个图标；@click.stop 保住行点击（打开详情）的语义。 -->
+              <button
+                v-if="cellText(r, f)"
+                type="button"
+                class="dg-copy"
+                data-testid="data-cell-copy"
+                title="复制该值"
+                @click.stop="copyCell(cellText(r, f))"
+              >
+                <!-- 用 SVG 而不是字符图标：字符会进 td 的 textContent，把「取值是否正确」这类断言污染成
+                     「真实标题⧉」（2026-08-28 实测撞到）。图标不该改变单元格的文本内容。 -->
+                <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                  <path
+                    d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z"
+                    fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
             </td>
             <td v-if="!compact"><span class="rc-status" :class="stateMeta(r.state).cls">{{ stateMeta(r.state).text }}</span></td>
             <td v-if="showActions" class="dg-actions" @click.stop>
@@ -294,6 +348,10 @@ function stateMeta(s?: string) {
 .dg-scroll { flex: 1; overflow: auto; }
 .dg-sentinel { height: 1px; }
 .dg-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.dg-cell { position: relative; }
+.dg-copy { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); border: 0; background: rgba(255,255,255,.9); color: var(--rc-faint); font-size: 12px; line-height: 1; padding: 2px 4px; border-radius: 4px; cursor: pointer; opacity: 0; transition: opacity .12s; }
+.dg-cell:hover .dg-copy { opacity: 1; }
+.dg-copy:hover { color: var(--rc-primary); background: var(--rc-primary-bg); }
 .dg-file-cell { max-width: 100%; padding: 0; border: 0; background: none; color: var(--rc-primary); font: inherit; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dg-file-cell:hover { text-decoration: underline; }
 .dg-sortable { cursor: pointer; user-select: none; }

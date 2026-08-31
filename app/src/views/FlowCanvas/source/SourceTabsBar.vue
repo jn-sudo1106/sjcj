@@ -22,7 +22,11 @@ function navTo(key: string) {
   const view = snap?.view === 'data' || snap?.view === 'task' || snap?.view === 'file' || snap?.view === 'flow'
     ? snap.view
     : 'flow'
-  router.push({ path: '/canvas', query: { sourceId: key, view } })
+  // 必须带上 siteId，否则切到别的网站下的源时左侧源列表会空：
+  // 侧栏取的是 `flow.sourceCtx?.siteId || route.query.siteId`，而 sourceDetail 实测返回 siteId: null，
+  // URL 再不带就两头落空（2026-08-28 修）。
+  const siteId = snap?.siteId
+  router.push({ path: '/canvas', query: { ...(siteId ? { siteId } : {}), sourceId: key, view } })
 }
 
 function onActivate(t: SourceTab) {

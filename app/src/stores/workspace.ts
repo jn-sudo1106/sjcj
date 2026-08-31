@@ -17,6 +17,14 @@ export interface SourceTabSnapshot {
   view?: 'flow' | 'data' | 'file' | 'task'
   /** 网站页签内当前停留的编排对象（0710 会议 B3）：'site' = 统一流程模板，否则为源 sourceId；激活页签时恢复 */
   activeKey?: string
+  /**
+   * 该源所属网站（左侧源列表要它才能加载）。
+   *
+   * 为什么必须记在页签上：切页签时只有 sourceId，而 `source/sourceDetail` **实测返回 `siteId: null`**
+   * （2026-08-28 生产验证），拿不到归属；URL 上的 siteId 又只有"从网站详情进来"那条路径才有。
+   * 两个来源同时落空时，左侧源列表就会整块消失——页签快照是唯一能跨切换保住它的地方。
+   */
+  siteId?: string
   selectedNodeId?: string
   filters?: { dataId: string; parentId: string; state: string; sql: string; sourceFilter?: string }
   page?: number

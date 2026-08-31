@@ -10,6 +10,7 @@ import {
   stepFromLegacy,
   stepToSaveItemConfigPayload,
   stepToStepModifyPayload,
+  sourceFromLegacy,
   entryTypeGroupFromLegacy,
   entryTypeToLegacy,
   paramFromLegacy,
@@ -793,5 +794,23 @@ describe('nextStep 回执解析（0812 计划 M3-0J，样例取自 2026-08-18 �
     const r = parseNextStepReceipt('')
     expect(r.submitted).toBe(0)
     expect(r.entries).toEqual([])
+  })
+})
+
+describe('旧平台源列表标记字段', () => {
+  it('usedFlag 映射为颜色 key，tags 去掉 # 后回读为问题标记', () => {
+    expect(sourceFromLegacy({
+      sourceId: 1,
+      sourceName: '公告源',
+      sourceUrl: 'https://example.com',
+      configId: 2,
+      entryTypeId: 3,
+      tags: '#正文缺失,#内容重复',
+      usedFlag: 1,
+    })).toMatchObject({
+      sourceId: '1',
+      tags: ['正文缺失', '内容重复'],
+      color: 'red',
+    })
   })
 })

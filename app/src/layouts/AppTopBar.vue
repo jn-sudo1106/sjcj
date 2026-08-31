@@ -13,8 +13,7 @@ import companyLogo from '@/assets/brand/company-logo.png'
 
 const router = useRouter()
 const auth = useAuthStore()
-// 生产写守卫（0812 计划 M0-4）配套：连生产时必须一眼看出，避免联调误操作；
-// 非生产（默认测试环境）时不展示，不给日常开发添加视觉噪音。
+// 连生产时必须一眼看出，避免联调误操作；未连生产时不展示。
 const connectedToProduction = isProductionBackend()
 
 async function handleLogout() {

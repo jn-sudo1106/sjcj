@@ -50,7 +50,7 @@ describe('ConditionRow', () => {
     const wrapper = mount(ConditionRow, {
       props: { condition: undefined, integrated: true, fields: [{ prop: 'title-K2', desc: '标题' }] },
     })
-    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await wrapper.get('[data-testid="add-entry-condition"]').trigger('click')
 
     expect(wrapper.find('.cond-mode').exists()).toBe(false)
     expect((wrapper.get('textarea.cond-expr').element as HTMLTextAreaElement).value).toBe("string.contains(title-K2,'')")
@@ -69,7 +69,7 @@ describe('ConditionRow', () => {
         fields: [{ prop: 'content_path', desc: '正文路径', columnName: 'K6' }],
       },
     })
-    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await wrapper.get('[data-testid="add-entry-condition"]').trigger('click')
 
     expect((wrapper.get('textarea.cond-expr').element as HTMLTextAreaElement).value).toBe("string.contains(K6,'')")
     expect(wrapper.emitted('change')!.at(-1)![0]).toEqual({
@@ -81,7 +81,7 @@ describe('ConditionRow', () => {
     const wrapper = mount(ConditionRow, {
       props: { condition: undefined, integrated: true, fields: [{ prop: 'title-K2', desc: '标题' }] },
     })
-    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await wrapper.get('[data-testid="add-entry-condition"]').trigger('click')
     await wrapper.get('textarea.cond-expr').setValue('status = "C" OR manual_check = true')
     await wrapper.setProps({ condition: wrapper.emitted('change')!.at(-1)![0] as ConditionGroup })
 

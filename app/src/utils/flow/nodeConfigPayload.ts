@@ -10,7 +10,7 @@
 // 旧字段对照见 0824-02 §4：codeRule=入库配置、contentRule=正文规则、snatchDrepeat=去重类型、
 // templetCode=业务类型、isMulti=是否列表、entryTypeId=输出表、inEntryType=输入表、topic=队列。
 import type { Config } from '@/api'
-import type { NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { defaultMultiMode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 
 /** 去重类型：旧 '' = 源内去重，'ALL' = 表内去重（0824-02 §4） */
 function dedupFromLegacy(dedupType?: string): 'source' | 'table' {
@@ -24,6 +24,7 @@ function dedupToLegacy(mode?: 'source' | 'table'): string {
 export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
   cfg.configId = config.configId
   cfg.configName = config.name
+  cfg.runPolicy = config.runPolicy
   const target = cfg.collectCfg ?? cfg
   target.structuredConfig = config.codeRule || undefined
   target.contentRules = config.contentRule || undefined
@@ -47,6 +48,38 @@ export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
  * clearRule/transRule/checkRule/snatchConf 等 BLOB 字段，不带上原值就会被这次保存清空。
  * 新建配置没有原值，base 传 {} 即可。
  */
+/**
+ * 节点类型 → 配置的 `configType`（= 旧平台「抓取类型」，2026-08-28 确认）。
+ * 节点上以 `[90] - 网页抓取` 这样的展示串存在（TEMPLATE_TO_SNATCH），这里取出编号。
+ * 取值范围由 canvas/legacyEnums.test.ts 锁死为后端字典 config/sourceTypes 的 11 个编号。
+ * 解析不出编号就返回 undefined——按"有值才覆盖"的原则保留 base 原值，绝不猜一个写进去。
+ */
+function configTypeFrom(snatchType: string | undefined): number | undefined {
+  const code = snatchType?.match(/^\[(\d+)\]/)?.[1]
+  return code ? Number(code) : undefined
+}
+
+/**
+ * 落库用的 `isMulti`（2026-08-28 拍板）。
+ *
+ * 界面上「网页类型」只让选 列表页 / 详情页 两项；旧三态里的 `2 更新父表` **不由用户选**，
+ * 而是按「输入表 == 输出表」推导——详情步骤如果读写同一张表，语义上就是回写父行。
+ *
+ * 放在落库这一步算，而不是在下拉的 change 里算：用户可能先选详情页、之后再改输入/输出表，
+ * 在 change 里算就会停在改表之前的结论。这里算能保证跟最终提交的表配置一致。
+ */
+export function resolveMultiMode(cfg: NodeConfig): number | undefined {
+  const cc = cfg.collectCfg
+  if (!cc) return undefined
+  // 「未设置」占位已去掉（D10），界面永远显示一个具体值；模型上没值时按节点形态推导，
+  // 与 ConfigTab 的回显兜底共用 defaultMultiMode，保证"看到的就是会写进去的"。
+  const mode = cc.multiMode ?? defaultMultiMode(cfg)
+  if (mode === 1) return 1
+  const input = cc?.inputTable ?? cfg.inputTable
+  const output = cc?.outputTable ?? cfg.outputTable
+  return input && output && input === output ? 2 : 0
+}
+
 export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown> = {}): Record<string, unknown> {
   const cc = cfg.collectCfg
   const source = cc ?? cfg
@@ -58,7 +91,9 @@ export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown
     configName: cfg.configName ?? '',
     entryTypeId: (cc?.outputTable ?? cfg.outputTable) || undefined,
     inEntryType: (cc?.inputTable ?? cfg.inputTable) || undefined,
-    isMulti: cc?.multiMode,
+    isMulti: resolveMultiMode(cfg),
+    // 节点类型（0828 W0-7）：此前**完全没写**，导致复制出来的配置类型永远停在被复制那份上。
+    configType: configTypeFrom(cc?.snatchType),
     templetCode: cc?.bizType || undefined,
     topic: cfg.taskCfg?.queue || undefined,
     snatchDrepeat: dedupToLegacy(cc?.dedupMode ?? cfg.dedupMode),

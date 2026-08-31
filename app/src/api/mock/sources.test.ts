@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { mockSourcePaged, mockSourceDetail, mockSourceCreate, mockSourceUpdate, mockSourceNodeRuns, mockSourceSteps, mockSourceTaskPaged, mockChangeSourceEnable, mockChangeToSuccess, mockBatchImport, SOURCES } from './sources'
+import { mockSourcePaged, mockSourceDetail, mockSourceCreate, mockSourceUpdate, mockSourceNodeRuns, mockSourceSteps, mockSourceTaskPaged, mockChangeSourceEnable, mockChangeToSuccess, mockBatchImport, mockTagSource, mockSetColor, SOURCES } from './sources'
 
 describe('source mock 筛选', () => {
   it('支持外部变更待确认筛选', () => {
@@ -178,5 +178,38 @@ describe('源任务分页（0713）', () => {
 
   it('网站与源不匹配时不返回任务', () => {
     expect(mockSourceTaskPaged({ siteId: 'site-news', sourceId: '391007768' })).toEqual({ total: 0, list: [] })
+  })
+})
+
+describe('源问题标记 / 颜色标识', () => {
+  it('按问题标签和颜色标识筛选', () => {
+    const byTag = mockSourcePaged({ tags: ['内容重复'], size: 999 })
+    expect(byTag.total).toBeGreaterThan(0)
+    expect(byTag.list.every((source) => source.tags?.includes('内容重复'))).toBe(true)
+    expect(mockSourcePaged({ tags: ['#内容重复'], size: 999 }).total).toBe(byTag.total)
+
+    const byColor = mockSourcePaged({ flag: 1, size: 999 })
+    expect(byColor.list.every((source) => source.color === 'red')).toBe(true)
+  })
+
+  it('tagSource 追加问题标签；setColor 写入颜色；clear 清掉对应标记', () => {
+    const sourceId = '161725'
+    const before = { tags: [...(SOURCES.find((s) => s.sourceId === sourceId)?.tags ?? [])], color: SOURCES.find((s) => s.sourceId === sourceId)?.color }
+    try {
+      expect(mockTagSource({ ids: sourceId, tags: '日期错误待重跑' }).ok).toBe(true)
+      expect(mockSourceDetail({ sourceId })?.tags).toContain('日期错误待重跑')
+      expect(mockSetColor({ ids: sourceId, flag: 6 }).ok).toBe(true)
+      expect(mockSourceDetail({ sourceId })?.color).toBe('blue')
+      expect(mockTagSource({ ids: sourceId, action: 'clear' }).ok).toBe(true)
+      expect(mockSourceDetail({ sourceId })?.tags).toEqual([])
+      expect(mockSetColor({ ids: sourceId, flag: 0 }).ok).toBe(true)
+      expect(mockSourceDetail({ sourceId })?.color).toBeUndefined()
+    } finally {
+      const source = SOURCES.find((s) => s.sourceId === sourceId)
+      if (source) {
+        source.tags = before.tags
+        source.color = before.color
+      }
+    }
   })
 })

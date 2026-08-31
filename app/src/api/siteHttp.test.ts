@@ -100,7 +100,7 @@ describe('网站读取 HTTP 契约', () => {
 
   it('全局 mock 且未开生产新建时，siteCreate 走夹具不发 fetch', async () => {
     vi.stubEnv('VITE_API_MODE', 'mock')
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://127.0.0.1:9999')
     vi.stubEnv('VITE_SITE_CREATE_TARGET', '')
     const { siteApi } = await import('./index')
 

@@ -1,6 +1,7 @@
 import { mockRegistry } from './mock'
 import { ENDPOINT_PATHS, DANGER_ENDPOINTS, LIVE_ENDPOINTS } from './endpoints'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readStoredToken, triggerSessionExpired } from './auth'
+import { PRODUCTION_BACKEND_HOSTS } from '@/constants/backend'
 
 // 数据适配层：默认 mock。两种切真实后端的方式：
 // ①按端点：endpoints.ts 把某端点标 live:true 后自动切真实，其余仍走 mock —— 功能一个个上线用这个。
@@ -50,11 +51,10 @@ export function isDanger(endpoint: string): boolean {
 }
 
 // 生产写守卫（0812 计划 M0-4，2026-08-25 放宽为「可新建、禁改删」）：
-// 本地/联调会话可能把 VITE_API_PROXY_TARGET 指向生产（118.25.96.217）。
+// 本地默认代理就是生产（118.25.96.217）；133 测试机已废弃。
 // 允许：新建网站、新建源（含随源新建配置）、把新建源关联网站、创建编排元数据。
 // 禁止：改、删、启停、发抓取、换绑已有源、覆盖流程等。
 // 判定读当前实际连接的后端主机：VITE_API_PROXY_TARGET 与 vite.config.ts 的 proxy target 同源。
-const PRODUCTION_BACKEND_HOSTS = ['118.25.96.217']
 
 function currentBackendTarget(): string {
   const env = import.meta.env as Record<string, string | undefined>
@@ -98,15 +98,21 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   // 2026-08-28 拍板放开：节点配置的新建与保存（config/modify/updateConfig）。
   // 这个端点**新增和修改是同一个**（不带 configId = 新增，带 = 更新，见 config_api.md §二），
   // 放开它等于同时放开"改已有配置"，而配置可被多个节点/流程/源复用，一次保存会影响到所有引用方。
-  // UI 侧的防线是「保存配置」前的影响范围确认（SaveSharedConfigDialog）：按**源**计，
-  // 数据来自 source/sourcePaged 的 configId 反查（穿透流程，首节点配置与子步骤引用都命中）。
-  // 新建（还没有 configId）没有影响面，不拦。
+  // ⚠️ 2026-08-28 更新：保存前的影响范围**确认弹窗已按会议要求删除**（0828 §6.2，原话
+  // 「正常保存就保存了，不要有提示」）。现在 UI 上只在保存按钮旁挂一行灰字「N 个源在用」，
+  // 数据仍来自 source/sourcePaged 的 configId 反查（穿透流程，首节点配置与子步骤引用都命中），
+  // 但**不拦截**。共享配置没有回滚，改错了的退路是「复制节点」（0828 D02）。
   'config/modify/updateConfig',
-  // 2026-08-28 放开：复制配置（「另存为新配置」的第一步）。
+  // 2026-08-28 放开：复制配置。它现在是**「复制节点 = 新增一套配置」**（0828 D02）的实现，
+  // 原「另存为新配置」入口已删除。
   // 纯新增——复制出一条新配置，不改不删任何已有数据，与 site/add、snatch/snatchSave 同性质。
   // 之所以必须走它：updateConfig 不带 configId 并不会创建配置（实测），旧平台建配置也只有
   // 新建源向导 / source/genConfig / config/copyAll 三条路，前两条都会顺带动源。
   'config/copyAll',
+  // 2026-08-31 放开：源标签 / 颜色标识。旧平台 markBatch / markSourceFlag 即时写库
+  // （tags、usedFlag）；不放开则新平台只改 session overlay，旧平台刷新后看不到。
+  'source/tagSource',
+  'source/setColor',
 ])
 
 function isProductionWriteAllowed(httpEndpoint: string): boolean {

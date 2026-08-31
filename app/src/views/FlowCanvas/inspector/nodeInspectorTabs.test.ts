@@ -23,6 +23,12 @@ describe('nodeInspectorTabs', () => {
     ])
   })
 
+  it('can hide AI for the flow-center workspace', () => {
+    expect(nodeInspectorTabs(ordinaryNode, { includeAi: false }).map(([key]) => key)).toEqual([
+      'config', 'table', 'orchestration', 'params', 'task',
+    ])
+  })
+
   it('only exposes branch configuration for decision nodes', () => {
     expect(nodeInspectorTabs(decisionNode)).toEqual([['config', '分支配置']])
   })

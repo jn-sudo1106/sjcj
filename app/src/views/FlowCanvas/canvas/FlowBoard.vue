@@ -2,9 +2,10 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
+import { useDuplicateNode } from './useDuplicateNode'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
-import { flowApi, flowTemplateApi, type FlowTemplate } from '@/api'
+import { flowApi, flowCenterApi, type FlowRecord } from '@/api'
 import CanvasHeader from '../shared/CanvasHeader.vue'
 import AddNodePopover from './AddNodePopover.vue'
 import FlowXmlDialog from './FlowXmlDialog.vue'
@@ -21,7 +22,10 @@ import {
   type NodeConfig,
 } from './flowModel'
 
+const props = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
 const flow = useFlowStore()
+// 复制节点 = 新增一套配置（0828 D02）：副本必须绑一份新配置，不能沿用原 configId
+const duplicateNode = useDuplicateNode()
 const runtime = useRuntimeStore()
 const ui = useUiStore()
 const flowEl = ref<HTMLElement | null>(null)
@@ -34,7 +38,7 @@ const recommending = ref(false)
 
 // 编排对象切换器已升级为页面级源侧栏（0710 会议 B1），组件与接线整体迁至 index.vue
 
-function loadTemplateDefaults(template: FlowTemplate) {
+function loadTemplateDefaults(template: FlowRecord) {
   flow.load({
     id: flow.flowId,
     name: flow.flowName,
@@ -52,20 +56,20 @@ async function recommendTemplateFlow() {
   recommending.value = true
   try {
     const prompt = [flow.sourceCtx?.name, flow.sourceCfg?.url, flow.sourceCtx?.url].filter(Boolean).join(' ')
-    const [recommendation, templates] = await Promise.all([flowApi.flowRecommend(prompt), flowTemplateApi.list()])
+    const [recommendation, templates] = await Promise.all([flowApi.flowRecommend(prompt), flowCenterApi.list()])
     const template = (recommendation.templateId ? templates.find((item) => item.id === recommendation.templateId) : undefined)
       ?? templates.find((item) => item.id === 'preset-web-public')
     if (!template) {
-      ElMessage.info('暂未匹配到流程模板，请用「＋」手工添加节点，或从右上角选择模板。')
+      ElMessage.info('暂未匹配到可复用流程，请用「＋」手工添加节点，或从右上角选择流程。')
       return
     }
     if (flow.sourceCtx || flow.sourceCfg) flow.applyTemplate(template)
     else loadTemplateDefaults(template)
     ElMessage.success(recommendation.templateId
       ? `已推荐并应用「${template.name}」v${template.version}`
-      : `未识别具体场景，已应用默认模板「${template.name}」v${template.version}`)
+      : `未识别具体场景，已应用默认流程「${template.name}」v${template.version}`)
   } catch {
-    ElMessage.error('模板推荐异常')
+    ElMessage.error('流程推荐异常')
   } finally {
     recommending.value = false
   }
@@ -235,7 +239,7 @@ function menuAction(action: string) {
   closeMenu()
   if (action === 'config' && id) flow.select(id)
   else if (action === 'insert-node') openAddPopover(x, y, after)
-  else if (action === 'copy' && id) flow.duplicate(id)
+  else if (action === 'copy' && id) void duplicateNode(id)
   else if (action === 'move-up' && id) flow.move(id, -1)
   else if (action === 'move-down' && id) flow.move(id, 1)
   else if (action === 'toggle' && id) flow.toggleDisabled(id)
@@ -336,8 +340,8 @@ watch(
 </script>
 
 <template>
-  <main class="rc-canvas" @contextmenu="onPaneMenu" @click="closeMenu">
-    <CanvasHeader />
+  <main class="rc-canvas" :class="{ 'is-embedded': props.embedded }" @contextmenu="onPaneMenu" @click="closeMenu">
+    <CanvasHeader v-if="!props.embedded" />
 
     <button
       class="rc-node-library-toggle"
@@ -361,8 +365,8 @@ watch(
         <!-- 空白源画布引导卡 -->
         <div v-if="!flow.layout.nodes.length" class="rc-empty-cta">
           <div class="rc-empty-cta-title">空白编排画布</div>
-          <div class="rc-empty-cta-sub">可以用「＋」手工添加步骤，也可以按当前对象推荐流程模板，应用后再逐节点调整配置。</div>
-          <button class="rc-btn primary" type="button" :disabled="recommending" @click="recommendTemplateFlow">{{ recommending ? '推荐中…' : '智能推荐模板' }}</button>
+          <div class="rc-empty-cta-sub">可以用「＋」手工添加步骤，也可以按当前对象推荐可复用流程，应用后再逐节点调整。</div>
+          <button class="rc-btn primary" type="button" :disabled="recommending" @click="recommendTemplateFlow">{{ recommending ? '推荐中…' : '智能推荐流程' }}</button>
         </div>
 
         <!-- 终端 -->
@@ -428,6 +432,15 @@ watch(
           @click.stop="onNodeClick(n.id)"
           @contextmenu="onNodeMenu($event, n.id)"
         >
+          <!-- 删除按钮（0828 D05）：会上明确「那个节点上面要搞个叉」——删节点不该非得回右侧面板或右键菜单。
+               hover 才显形，避免每个节点常驻一个叉；右键菜单里的「删除节点」保留，同一个 store 动作。 -->
+          <button
+            class="rc-node-del"
+            type="button"
+            title="删除节点"
+            data-testid="node-delete"
+            @click.stop="flow.remove(n.id)"
+          >✕</button>
           <span v-if="runtime.nodeStates[n.id]" class="rc-run-badge" :class="runtime.nodeStates[n.id]">{{ runText(n.id) }}</span>
           <span v-else-if="n.cfg.disabled" class="rc-node-plan">已停止</span>
           <span v-else-if="n.cfg.planned" class="rc-node-plan">规划中</span>
@@ -515,6 +528,7 @@ watch(
 .rc-flow-xml { position: absolute; z-index: 30; right: 32px; bottom: 32px; height: 28px; padding: 0 10px; border-color: var(--rc-border); background: rgba(255, 255, 255, .9); color: var(--rc-text-2); font-size: 11px; }
 .rc-flow-xml:hover { border-color: #bfdbfe; background: #fff; color: var(--rc-primary-ink); }
 .rc-node-library-toggle { position: absolute; z-index: 31; top: 108px; left: 12px; width: 30px; height: 30px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; color: var(--rc-primary); font-size: 21px; font-weight: 400; line-height: 1; cursor: pointer; transition: border-color .12s, background .12s, color .12s; }
+.rc-canvas.is-embedded .rc-node-library-toggle { top: 12px; }
 .rc-node-library-toggle:hover, .rc-node-library-toggle.active { border-color: #93c5fd; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 
 .rc-flow { position: relative; width: 640px; margin: 56px auto 28px; }
@@ -544,6 +558,9 @@ watch(
 .rc-edge-cond-tag { position: absolute; transform: translate(-50%, 0); font-size: 9px; color: #b45309; white-space: nowrap; pointer-events: none; z-index: 21; }
 
 .rc-flow-node { position: absolute; width: 210px; min-height: 74px; padding: 10px 12px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; box-shadow: 0 3px 12px -8px rgba(15, 23, 42, 0.28); cursor: pointer; transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s; }
+.rc-node-del { position: absolute; top: 4px; right: 4px; z-index: 3; width: 18px; height: 18px; line-height: 1; border: 0; border-radius: 4px; background: transparent; color: var(--rc-faint); font-size: 11px; cursor: pointer; opacity: 0; transition: opacity .12s; }
+.rc-flow-node:hover .rc-node-del { opacity: 1; }
+.rc-node-del:hover { background: var(--rc-error-bg, #fef2f2); color: #b91c1c; }
 .rc-flow-node:hover { transform: translateY(-1px); border-color: #bfdbfe; }
 .rc-flow-node.active { border-color: var(--rc-primary); box-shadow: 0 0 0 2px #dbeafe, 0 10px 22px -12px rgba(37, 99, 235, 0.5); }
 .rc-flow-node.rule-node { border-color: #bfdbfe; background: #fbfdff; }
