@@ -13,9 +13,10 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, ruleApi, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
+import { entryApi, ruleApi, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
+import { promptCategoryGroupsForNode, resolvePromptCategoryForNode } from '../promptCategory'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import RuleTestDialog from '../RuleTestDialog.vue'
 
@@ -45,6 +46,8 @@ const codeEmptyHint = computed(() => (isRule.value ? '生成脚本后展示 Pyth
 // S6-1：编排工作区（合并原 RuleScriptDialog/RuleSystemPromptDialog）的文案分流
 const workbenchTitle = computed(() => (isRule.value ? '规则脚本工作区' : '抓取配置工作区'))
 const scriptLabel = computed(() => (isRule.value ? 'Python 脚本' : '抓取配置 XML'))
+const promptCategoryGroups = computed(() => promptCategoryGroupsForNode(cfg.value))
+const promptCategory = computed(() => resolvePromptCategoryForNode(cfg.value, orchCfg.value.promptCategory))
 
 // ---- 抓取配置 XML 轻解析（0804 S3-4，方案 §3.1 修正 B · 附录 §十）：仅非规则节点 ----
 // 只读动作链摘要（顶部展示）+ 保存前的字段一致性提示，不做可视化编辑（方案已拍板不做）。
@@ -134,6 +137,9 @@ function onDescribeChange(e: Event) {
 }
 function onSystemPromptChange(value: string) {
   patch({ systemPrompt: value })
+}
+function onPromptCategoryChange(value: PromptCategory) {
+  patch({ promptCategory: resolvePromptCategoryForNode(cfg.value, value) })
 }
 function onScriptChange(value: string) {
   patch({ script: value })
@@ -342,6 +348,8 @@ const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value
     :title="workbenchTitle"
     :script-label="scriptLabel"
     :system-prompt="orchCfg.systemPrompt ?? ''"
+    :prompt-category="promptCategory"
+    :prompt-category-groups="promptCategoryGroups"
     :script="orchCfg.script ?? ''"
     :script-path="orchCfg.scriptPath"
     :generate-label="generateLabel"
@@ -351,6 +359,7 @@ const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value
     :show-test="isRule"
     :can-test="canTest"
     @update:system-prompt="onSystemPromptChange"
+    @update:prompt-category="onPromptCategoryChange"
     @update:script="onScriptChange"
     @generate="onGenerateScript"
     @cancel-generate="onCancelGenerate"

@@ -13,12 +13,16 @@
 //     真正落盘由外部「保存脚本/配置」按钮触发（走 orchestrationSave 接口 + 二次确认，逻辑留在父组件不重复）。
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import type { PromptCategory } from '@/api'
+import type { PromptCategoryGroup } from './promptCategory'
 
 const props = defineProps<{
   open: boolean
   title: string
   scriptLabel: string
   systemPrompt: string
+  promptCategory: PromptCategory
+  promptCategoryGroups: PromptCategoryGroup[]
   script: string
   scriptPath?: string
   generateLabel: string
@@ -31,6 +35,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:open': [boolean]
   'update:systemPrompt': [string]
+  'update:promptCategory': [PromptCategory]
   'update:script': [string]
   generate: []
   'cancel-generate': []
@@ -44,9 +49,20 @@ function close() {
 
 // 系统提示词草稿：只在打开时从 props 重置，取消/关闭不回写
 const promptDraft = ref(props.systemPrompt)
-watch(() => props.open, (v) => { if (v) promptDraft.value = props.systemPrompt })
+const promptCategoryDraft = ref<PromptCategory>(props.promptCategory)
+const firstPromptCategory = computed(() => props.promptCategoryGroups[0]?.options[0]?.value ?? '自定义节点')
+watch(() => props.open, (v) => {
+  if (v) {
+    promptDraft.value = props.systemPrompt
+    promptCategoryDraft.value = props.promptCategory || firstPromptCategory.value
+  }
+})
+watch(() => props.promptCategory, (v) => {
+  if (props.open) promptCategoryDraft.value = v || firstPromptCategory.value
+})
 function savePrompt() {
   emit('update:systemPrompt', promptDraft.value)
+  emit('update:promptCategory', promptCategoryDraft.value)
   ElMessage.success('系统提示词已保存')
 }
 
@@ -97,6 +113,16 @@ const leftStyle = computed(() => ({ flex: `0 0 ${leftPct.value}%` }))
       <div class="wb-pane" :style="leftStyle">
         <div class="wb-pane-head">
           <b>系统提示词</b>
+          <el-select
+            v-model="promptCategoryDraft"
+            class="wb-category"
+            size="small"
+            :teleported="false"
+          >
+            <el-option-group v-for="group in promptCategoryGroups" :key="group.label" :label="group.label">
+              <el-option v-for="item in group.options" :key="item.value" :label="item.label" :value="item.value" />
+            </el-option-group>
+          </el-select>
           <button class="rc-btn primary" type="button" @click="savePrompt">保存</button>
         </div>
         <textarea
@@ -134,8 +160,9 @@ const leftStyle = computed(() => ({ flex: `0 0 ${leftPct.value}%` }))
 .wb-body { display: flex; align-items: stretch; height: 78vh; gap: 0; }
 .wb-pane { display: flex; flex-direction: column; min-width: 0; }
 .wb-pane-right { flex: 1 1 auto; }
-.wb-pane-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.wb-pane-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
 .wb-pane-head b { font-size: 13px; color: var(--rc-text); flex-shrink: 0; }
+.wb-category { width: 140px; flex: 0 0 140px; }
 .wb-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--rc-faint); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .wb-pane-actions { display: flex; gap: 8px; flex-shrink: 0; }
 .wb-textarea { flex: 1; width: 100%; margin: 0; border: 1px solid #dbe3ee; border-radius: 8px; background: #fff; color: var(--rc-text); font-size: 13px; line-height: 1.6; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 12px; outline: none; resize: none; box-sizing: border-box; }

@@ -88,6 +88,23 @@ export interface RuleOrchestrationItem {
   userCode?: string
 }
 
+export type PromptCategory =
+  | '网页抓取'
+  | 'APP抓取'
+  | '文件下载'
+  | 'Python抓取'
+  | '浏览器抓取'
+  | '公众号抓取'
+  | '网页登录'
+  | '数据处理'
+  | '决策分支'
+  | '分头处理'
+  | '规则处理'
+  | '指标引用'
+  | '提取数据发邮件'
+  | '异常告警'
+  | '自定义节点'
+
 /** 规则处理节点绑定的编排配置 */
 export interface RuleOrchestration {
   /** ref=查看已保存的编排；new=新建中（尚未保存元数据或未切到 ref） */
@@ -98,6 +115,8 @@ export interface RuleOrchestration {
   /** = 旧 nlDescribe；旧系统无独立「用户提示词」字段，本字段已兼任，不要另加 */
   describe: string
   systemPrompt?: string
+  /** 提示词分类（前端草稿字段）；按当前节点类型自动预填，随编排配置一起保存。 */
+  promptCategory?: PromptCategory
   /** 详情接口不返回脚本正文，需单独调读脚本端点后回填 */
   script?: string
   /** = 旧 codePath */

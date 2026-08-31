@@ -145,6 +145,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     await flushPromises()
 
     expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toBe('新的系统提示词')
+    expect(flow.configs['rule-1'].ruleCfg?.promptCategory).toBe('规则处理')
   })
 
   it('保存脚本：需二次确认，确认后调用 orchestrationSave 并写回 mode/ruleId/scriptPath', async () => {
