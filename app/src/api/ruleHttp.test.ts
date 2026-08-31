@@ -130,7 +130,42 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
     expect(result).toMatchObject({ ruleId: '173', scriptPath: '/code01/x.py' })
   })
 
-  it('orchestrationGenerate：数字 ruleId + live 时 POST form 流式，解析 MinIO 路径', async () => {
+  it('dataProcessGenerate：POST /api/answer/data-process，JSON body 生成脚本', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      script: 'def main(date, zb_value):\n    return {"end_date": "2025-01-01"}',
+      scriptPath: '/code01/20260801/abc.py',
+    }))
+    const { ruleApi } = await import('./index')
+
+    const result = await ruleApi.dataProcessGenerate({
+      description: '按字段生成',
+      configId: 184,
+      providerCode: 'DeepSeek',
+      model: 'deepseek-v4-flash',
+      sourceTable: 'sense_data.TB_email_XQ',
+      targetTable: 'sense_data.TB_INDICATOR_DATA',
+      inputFields: 'date:date,zb_value:zb_value',
+      outputFields: 'end_date:end_date,indicator_data:indicator_data',
+    })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/answer/data-process')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      description: '按字段生成',
+      configId: 184,
+      providerCode: 'DeepSeek',
+      model: 'deepseek-v4-flash',
+      sourceTable: 'sense_data.TB_email_XQ',
+      targetTable: 'sense_data.TB_INDICATOR_DATA',
+      inputFields: 'date:date,zb_value:zb_value',
+      outputFields: 'end_date:end_date,indicator_data:indicator_data',
+    })
+    expect(result.script).toContain('def main(date, zb_value)')
+    expect(result.scriptPath).toBe('/code01/20260801/abc.py')
+  })
+
+  it('orchestrationGenerate：xml 格式仍走旧 stream，解析 MinIO 路径', async () => {
     const streamText = [
       'def main(date, zb_value):',
       '    return {"end_date": date}',
@@ -158,6 +193,7 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
       ...sampleCfg,
       mode: 'ref',
       ruleId: '173',
+      format: 'xml',
       describe: '按字段生成',
       systemPrompt: '只返回 JSON',
     })

@@ -91,3 +91,14 @@ export function resolvePromptCategoryForNode(cfg?: NodeConfig, value?: PromptCat
   const options = promptCategoryGroupsForNode(cfg).flatMap((group) => group.options)
   return options.some((option) => option.value === value) ? value! : defaultPromptCategoryForNode(cfg)
 }
+
+export function promptListCategoryForNode(cfg?: NodeConfig): string {
+  if (cfg && collectorCapabilityOf(cfg)) return 'collect'
+  if (isRuleNode(cfg)) return 'rule'
+  const logicKind = cfg ? decisionOrParallelKind(cfg) : undefined
+  if (logicKind) return 'logic'
+  if (dataProcessLike(cfg)) return 'data_process'
+  if (metricLike(cfg)) return 'reference'
+  if (notifyLike(cfg)) return 'notify'
+  return 'other'
+}

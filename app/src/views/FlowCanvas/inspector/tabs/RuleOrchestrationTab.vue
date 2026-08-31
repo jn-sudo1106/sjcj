@@ -16,7 +16,8 @@ import { isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type N
 import { entryApi, ruleApi, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
-import { promptCategoryGroupsForNode, resolvePromptCategoryForNode } from '../promptCategory'
+import { buildDataProcessGeneratePayload } from '@/utils/flow/dataProcess'
+import { promptCategoryGroupsForNode, promptListCategoryForNode, resolvePromptCategoryForNode } from '../promptCategory'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import RuleTestDialog from '../RuleTestDialog.vue'
 
@@ -48,6 +49,7 @@ const workbenchTitle = computed(() => (isRule.value ? '规则脚本工作区' : 
 const scriptLabel = computed(() => (isRule.value ? 'Python 脚本' : '抓取配置 XML'))
 const promptCategoryGroups = computed(() => promptCategoryGroupsForNode(cfg.value))
 const promptCategory = computed(() => resolvePromptCategoryForNode(cfg.value, orchCfg.value.promptCategory))
+const promptListCategory = computed(() => promptListCategoryForNode(cfg.value))
 
 // ---- 抓取配置 XML 轻解析（0804 S3-4，方案 §3.1 修正 B · 附录 §十）：仅非规则节点 ----
 // 只读动作链摘要（顶部展示）+ 保存前的字段一致性提示，不做可视化编辑（方案已拍板不做）。
@@ -87,7 +89,7 @@ async function checkColumnConsistency(): Promise<boolean> {
 
 // 表字段：只读消费「表配置」Tab 已经选好的表——测试台需要按字段回填入参标签，见 RuleTestDialog。
 // 非规则节点的 orchCfg 没有 inputTableId/outputTableId，watch 里的字段拉取会静默 no-op，安全。
-const { inputFieldOptions } = useRuleTableFields(orchCfg)
+const { inputFieldOptions, outputFieldOptions } = useRuleTableFields(orchCfg)
 
 // 进入查看态时按 ruleId 回灌详情 + 缺正文时按 scriptPath 拉 MinIO（对齐旧 handleOpenRecord）
 const hydrateToken = ref('')
@@ -158,9 +160,19 @@ const generateAbort = ref<AbortController | null>(null)
 function onCancelGenerate() {
   generateAbort.value?.abort()
 }
-async function onGenerateScript() {
+async function onGenerateScript(
+  draft?: Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'modelProviderCode' | 'modelCode'>>,
+) {
   if (!orchCfg.value.describe.trim()) {
     ElMessage.warning(isRule.value ? '请先填写规则处理描述' : '请先填写抓取需求描述')
+    return
+  }
+  if (isRule.value && !cfg.value?.configId) {
+    ElMessage.warning('请先保存表配置，再生成脚本')
+    return
+  }
+  if (isRule.value && (!((draft?.modelProviderCode ?? orchCfg.value.modelProviderCode) || '').trim() || !((draft?.modelCode ?? orchCfg.value.modelCode) || '').trim())) {
+    ElMessage.warning('请先选择模型供应商和模型')
     return
   }
   if (isRule.value && (!orchCfg.value.inputFields?.length || !orchCfg.value.outputFields?.length)) {
@@ -172,7 +184,24 @@ async function onGenerateScript() {
   generateAbort.value = controller
   generating.value = true
   try {
-    const res = await ruleApi.orchestrationGenerate(orchCfg.value, controller.signal)
+    const genCfg = {
+      ...orchCfg.value,
+      ...draft,
+    }
+    const res = isRule.value
+      ? await ruleApi.dataProcessGenerate(buildDataProcessGeneratePayload({
+        description: genCfg.describe,
+        configId: Number(cfg.value?.configId ?? 0),
+        providerCode: genCfg.modelProviderCode ?? '',
+        model: genCfg.modelCode ?? '',
+        sourceTable: genCfg.inputTable ?? '',
+        targetTable: genCfg.outputTable ?? '',
+        inputFields: genCfg.inputFields ?? [],
+        outputFields: genCfg.outputFields ?? [],
+        inputFieldOptions: inputFieldOptions.value,
+        outputFieldOptions: outputFieldOptions.value,
+      }), controller.signal)
+      : await ruleApi.orchestrationGenerate(genCfg, controller.signal)
     patch({ script: res.script, scriptPath: res.scriptPath })
     ElMessage.success(isRule.value ? '脚本已生成' : '配置已生成')
   } catch (e) {
@@ -329,7 +358,7 @@ const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value
 
   <div class="rc-actions-row">
     <button class="rc-btn" type="button" @click="workbenchOpen = true">编辑系统提示词</button>
-    <button class="rc-btn primary" type="button" :disabled="generating" @click="onGenerateScript">
+    <button class="rc-btn primary" type="button" :disabled="generating" @click="() => onGenerateScript()">
       {{ generating ? '生成中...' : generateLabel }}
     </button>
     <button v-if="generating" class="rc-btn" type="button" @click="onCancelGenerate">取消</button>
@@ -357,7 +386,14 @@ const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value
     :script-label="scriptLabel"
     :system-prompt="orchCfg.systemPrompt ?? ''"
     :prompt-category="promptCategory"
+    :prompt-list-category="promptListCategory"
     :prompt-category-groups="promptCategoryGroups"
+    :input-table-name="orchCfg.inputTable"
+    :output-table-name="orchCfg.outputTable"
+    :input-fields="orchCfg.inputFields ?? []"
+    :output-fields="orchCfg.outputFields ?? []"
+    :input-field-options="inputFieldOptions"
+    :output-field-options="outputFieldOptions"
     :model-provider-code="orchCfg.modelProviderCode ?? ''"
     :model-code="orchCfg.modelCode ?? ''"
     :script="orchCfg.script ?? ''"

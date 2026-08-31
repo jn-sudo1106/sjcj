@@ -33,6 +33,13 @@ const MODEL_OPTIONS: Record<string, Array<{ modelCode: string; modelName: string
     { modelCode: 'gpt-4o-mini', modelName: 'gpt-4o-mini' },
   ],
 }
+const PROMPT_TEMPLATE = {
+  promptId: 1,
+  nodeType: 'rule_processing',
+  nodeTypeName: '规则处理',
+  category: 'rule',
+  systemPrompt: '源表={{source_table}}; 目标表={{output_table}}; 入参={{input_pair}}; 出参={{output_pair}}; 入参码={{input_fields}}; 出参码={{output_fields}}',
+}
 
 function mockAssets() {
   vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [INPUT_TABLE] })
@@ -57,6 +64,19 @@ function mockAssets() {
     if (url.startsWith('http://localhost:8080/api/model/default-models')) {
       const providerCode = new URL(url).searchParams.get('providerCode') || ''
       return new Response(JSON.stringify({ data: MODEL_OPTIONS[providerCode] ?? [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    if (url.startsWith('http://127.0.0.1:8080/api/prompt/list')) {
+      const parsed = new URL(url)
+      if (parsed.searchParams.get('category') === 'rule' && parsed.searchParams.get('node_type_name') === '规则处理') {
+        return new Response(JSON.stringify([PROMPT_TEMPLATE]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify([]), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
@@ -86,8 +106,11 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     flow.patchRuleConfig('rule-1', {
       mode: 'ref', ruleId: 'orch-173', name: '已有规则',
       dataSource: 'dp-wwdata', inputTable: 'sense_data.TB_JD_SKU_BASE', inputTableId: '2102154',
+      outputTable: 'sense_data.TB_JD_SKU_RESULT',
       inputFields: ['sku_id'], outputFields: ['sku_name'],
+      modelProviderCode: 'DeepSeek', modelCode: 'deepseek-chat',
     })
+    flow.configs['rule-1'].configId = '184'
     return { flow, wrapper }
   }
 
@@ -105,32 +128,45 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     // makeDefaultRuleOrchestration 默认带一条演示 describe，这里显式清空以测试校验守卫
     flow.patchRuleConfig('rule-1', { describe: '' })
     await flushPromises()
-    vi.spyOn(ruleApi, 'orchestrationGenerate')
+    vi.spyOn(ruleApi, 'dataProcessGenerate')
 
     const genBtn = wrapper.findAll('button').find((b) => b.text().includes('生成脚本'))!
     await genBtn.trigger('click')
     await flushPromises()
 
-    expect(ruleApi.orchestrationGenerate).not.toHaveBeenCalled()
+    expect(ruleApi.dataProcessGenerate).not.toHaveBeenCalled()
   })
 
   it('缺入参/出参字段时点生成脚本：不调用接口', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     flow.patchRuleConfig('rule-1', { inputFields: [], outputFields: [] })
     await flushPromises()
-    vi.spyOn(ruleApi, 'orchestrationGenerate')
+    vi.spyOn(ruleApi, 'dataProcessGenerate')
 
     const genBtn = wrapper.findAll('button').find((b) => b.text().includes('生成脚本'))!
     await genBtn.trigger('click')
     await flushPromises()
 
-    expect(ruleApi.orchestrationGenerate).not.toHaveBeenCalled()
+    expect(ruleApi.dataProcessGenerate).not.toHaveBeenCalled()
+  })
+
+  it('未保存表配置时点生成脚本：不调用接口', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.configs['rule-1'].configId = ''
+    await flushPromises()
+    vi.spyOn(ruleApi, 'dataProcessGenerate')
+
+    const genBtn = wrapper.findAll('button').find((b) => b.text().includes('生成脚本'))!
+    await genBtn.trigger('click')
+    await flushPromises()
+
+    expect(ruleApi.dataProcessGenerate).not.toHaveBeenCalled()
   })
 
   it('填写描述后生成脚本：写回 script/scriptPath，全屏查看/保存脚本随之启用', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     await flushPromises()
-    vi.spyOn(ruleApi, 'orchestrationGenerate').mockResolvedValue({
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockResolvedValue({
       script: 'def main(sku_id):\n    return {"sku_name": ""}',
       scriptPath: '/rules/generated/orch-173.py',
     })
@@ -140,6 +176,16 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     await genBtn.trigger('click')
     await flushPromises()
 
+    expect(ruleApi.dataProcessGenerate).toHaveBeenCalledWith(expect.objectContaining({
+      description: '按 sku_id 生成 sku_name',
+      configId: 184,
+      providerCode: 'DeepSeek',
+      model: 'deepseek-chat',
+      sourceTable: 'sense_data.TB_JD_SKU_BASE',
+      targetTable: 'sense_data.TB_JD_SKU_RESULT',
+      inputFields: '商品ID:sku_id',
+      outputFields: '商品名称:sku_name',
+    }), expect.anything())
     expect(flow.configs['rule-1'].ruleCfg?.script).toContain('def main')
     expect(flow.configs['rule-1'].ruleCfg?.scriptPath).toBe('/rules/generated/orch-173.py')
     const buttons = wrapper.findAll('button').filter((b) => ['全屏查看', '保存脚本'].includes(b.text()))
@@ -178,6 +224,24 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect(flow.configs['rule-1'].ruleCfg?.promptCategory).toBe('规则处理')
     expect(flow.configs['rule-1'].ruleCfg?.modelProviderCode).toBe('DeepSeek')
     expect(flow.configs['rule-1'].ruleCfg?.modelCode).toBe('deepseek-chat')
+  })
+
+  it('打开工作区后按提示词分类拉取模板并替换表配置占位符', async () => {
+    const { wrapper } = mountWithExistingRule()
+    await flushPromises()
+
+    const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
+    await editBtn.trigger('click')
+    await flushPromises()
+
+    const promptTextarea = wrapper.find('textarea.wb-textarea:not(.wb-code)')
+    expect(promptTextarea.element).toBeTruthy()
+    expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('源表=sense_data.TB_JD_SKU_BASE')
+    expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('目标表=sense_data.TB_JD_SKU_RESULT')
+    expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('入参=商品ID:sku_id')
+    expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('出参=商品名称:sku_name')
+    expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('入参码=sku_id')
+    expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('出参码=sku_name')
   })
 
   it('工作区加载模型供应商与模型，并在工作区里不再显示测试按钮', async () => {
@@ -226,6 +290,42 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
 
     expect(flow.configs['rule-1'].ruleCfg?.modelProviderCode).toBe('OpenAI')
     expect(flow.configs['rule-1'].ruleCfg?.modelCode).toBe('gpt-4o-mini')
+  })
+
+  it('工作区里直接生成时使用当前草稿里的模型供应商和模型', async () => {
+    const { wrapper } = mountWithExistingRule()
+    await flushPromises()
+
+    const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
+    await editBtn.trigger('click')
+    await flushPromises()
+
+    const providerSelect = wrapper.find('.wb-provider')
+    await providerSelect.trigger('click')
+    await flushPromises()
+    const openAiOption = wrapper.findAll('.el-select-dropdown__item').find((el) => el.text() === 'OpenAI')
+    expect(openAiOption).toBeTruthy()
+    await openAiOption!.trigger('click')
+    await flushPromises()
+
+    const generateSpy = vi.spyOn(ruleApi, 'dataProcessGenerate').mockResolvedValue({
+      script: 'def main(sku_id):\n    return {"sku_name": ""}',
+      scriptPath: '/rules/generated/orch-173.py',
+    })
+
+    const generateBtn = wrapper.findAll('.wb-pane-right .wb-pane-actions button').find((b) => b.text().includes('生成'))!
+    await generateBtn.trigger('click')
+    await flushPromises()
+
+    expect(generateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      configId: 184,
+      providerCode: 'OpenAI',
+      model: 'gpt-4o-mini',
+      sourceTable: 'sense_data.TB_JD_SKU_BASE',
+      targetTable: 'sense_data.TB_JD_SKU_RESULT',
+      inputFields: '商品ID:sku_id',
+      outputFields: '商品名称:sku_name',
+    }), expect.anything())
   })
 
   it('保存脚本：需二次确认，确认后调用 orchestrationSave 并写回 mode/ruleId/scriptPath', async () => {

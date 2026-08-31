@@ -13,8 +13,10 @@
 //     真正落盘由外部「保存脚本/配置」按钮触发（走 orchestrationSave 接口 + 二次确认，逻辑留在父组件不重复）。
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { fetchDefaultModels, fetchModelProviders, type ModelOption, type ModelProviderOption, type PromptCategory } from '@/api'
+import { fetchDefaultModels, fetchModelProviders, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleFieldOption, type RuleOrchestration } from '@/api'
+import { fetchPromptList } from '@/api/prompt'
 import type { PromptCategoryGroup } from './promptCategory'
+import { applyPromptTemplate } from '@/utils/flow/promptTemplate'
 
 const props = defineProps<{
   open: boolean
@@ -22,9 +24,16 @@ const props = defineProps<{
   scriptLabel: string
   systemPrompt: string
   promptCategory: PromptCategory
+  promptListCategory: string
   promptCategoryGroups: PromptCategoryGroup[]
   modelProviderCode?: string
   modelCode?: string
+  inputTableName?: string
+  outputTableName?: string
+  inputFields: string[]
+  outputFields: string[]
+  inputFieldOptions: RuleFieldOption[]
+  outputFieldOptions: RuleFieldOption[]
   script: string
   scriptPath?: string
   generateLabel: string
@@ -39,7 +48,7 @@ const emit = defineEmits<{
   'update:modelProviderCode': [string]
   'update:modelCode': [string]
   'update:script': [string]
-  generate: []
+  generate: [Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'modelProviderCode' | 'modelCode'>>]
   'cancel-generate': []
   save: []
 }>()
@@ -59,6 +68,9 @@ const providerLoading = ref(false)
 const modelLoading = ref(false)
 const providerError = ref('')
 const modelError = ref('')
+const promptLoading = ref(false)
+const promptError = ref('')
+let promptRequestSeq = 0
 const firstPromptCategory = computed(() => props.promptCategoryGroups[0]?.options[0]?.value ?? '自定义节点')
 function firstProviderCode() {
   return providerOptions.value[0]?.providerCode || ''
@@ -102,6 +114,33 @@ async function loadProviderModelOptions() {
     providerLoading.value = false
   }
 }
+async function loadPromptTemplate() {
+  const seq = ++promptRequestSeq
+  promptLoading.value = true
+  promptError.value = ''
+  try {
+    const list = await fetchPromptList(props.promptListCategory, promptCategoryDraft.value)
+    if (seq !== promptRequestSeq) return
+    const template = list[0]?.systemPrompt?.trim()
+    if (!template) {
+      promptError.value = '提示词模板为空'
+      return
+    }
+    promptDraft.value = applyPromptTemplate(template, {
+      inputTableName: props.inputTableName?.trim() || '',
+      outputTableName: props.outputTableName?.trim() || props.inputTableName?.trim() || '',
+      inputFields: props.inputFields,
+      outputFields: props.outputFields,
+      inputFieldOptions: props.inputFieldOptions,
+      outputFieldOptions: props.outputFieldOptions.length ? props.outputFieldOptions : props.inputFieldOptions,
+    })
+  } catch (e) {
+    if (seq !== promptRequestSeq) return
+    promptError.value = `提示词模板加载失败：${(e as Error)?.message ?? String(e)}`
+  } finally {
+    if (seq === promptRequestSeq) promptLoading.value = false
+  }
+}
 function syncLocalDrafts() {
   promptDraft.value = props.systemPrompt
   promptCategoryDraft.value = props.promptCategory || firstPromptCategory.value
@@ -112,6 +151,7 @@ watch(() => props.open, (v) => {
   if (v) {
     syncLocalDrafts()
     void loadProviderModelOptions()
+    void loadPromptTemplate()
   }
 })
 watch(() => props.promptCategory, (v) => {
@@ -131,6 +171,11 @@ function savePrompt() {
   ElMessage.success('系统提示词已保存')
 }
 
+async function onPromptCategoryChange(value: PromptCategory) {
+  promptCategoryDraft.value = value
+  await loadPromptTemplate()
+}
+
 async function onProviderChange(value: string) {
   modelProviderDraft.value = value
   await loadModels(value, modelDraft.value)
@@ -139,6 +184,14 @@ async function onProviderChange(value: string) {
 
 function onScriptInput(e: Event) {
   emit('update:script', (e.target as HTMLTextAreaElement).value)
+}
+function onGenerate() {
+  emit('generate', {
+    systemPrompt: promptDraft.value,
+    promptCategory: promptCategoryDraft.value,
+    modelProviderCode: modelProviderDraft.value,
+    modelCode: modelDraft.value,
+  })
 }
 async function copyScript() {
   try {
@@ -190,6 +243,7 @@ const leftStyle = computed(() => ({ flex: `0 0 ${leftPct.value}%` }))
             size="small"
             :teleported="false"
             popper-class="wb-popper"
+            @change="onPromptCategoryChange"
           >
             <el-option-group v-for="group in promptCategoryGroups" :key="group.label" :label="group.label">
               <el-option v-for="item in group.options" :key="item.value" :label="item.label" :value="item.value" />
@@ -217,9 +271,11 @@ const leftStyle = computed(() => ({ flex: `0 0 ${leftPct.value}%` }))
           >
             <el-option v-for="item in modelOptions" :key="item.modelCode" :label="item.modelName" :value="item.modelCode" />
           </el-select>
-          <button class="rc-btn primary" type="button" @click="savePrompt">保存</button>
+          <button class="rc-btn primary" type="button" :disabled="promptLoading || providerLoading || modelLoading" @click="savePrompt">保存</button>
         </div>
-        <div v-if="providerError || modelError" class="wb-help">{{ providerError || modelError }}</div>
+        <div v-if="promptLoading || promptError || providerError || modelError" class="wb-help">
+          {{ promptLoading ? '提示词模板加载中…' : (promptError || providerError || modelError) }}
+        </div>
         <textarea
           v-model="promptDraft"
           class="wb-textarea"
@@ -235,7 +291,7 @@ const leftStyle = computed(() => ({ flex: `0 0 ${leftPct.value}%` }))
           <span class="wb-path">{{ scriptPath || '未生成' }}</span>
           <div class="wb-pane-actions">
             <button class="rc-btn" type="button" :disabled="!script.trim()" @click="copyScript">复制</button>
-            <button class="rc-btn" type="button" :disabled="generating" @click="emit('generate')">
+            <button class="rc-btn" type="button" :disabled="generating" @click="onGenerate">
               {{ generating ? '生成中...' : generateLabel }}
             </button>
             <button v-if="generating" class="rc-btn" type="button" @click="emit('cancel-generate')">取消</button>

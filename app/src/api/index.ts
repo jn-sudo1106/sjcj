@@ -56,9 +56,12 @@ import {
   assertLegacySnatchSaveLogin,
   legacySnatchSavePayloadFromFlow,
 } from './legacyAdapters'
+import type { DataProcessGeneratePayload } from '@/utils/flow/dataProcess'
 export type { ModelProviderOption, ModelOption } from './types'
 import { encryptLegacyPayload } from './legacyCrypto'
 export { fetchModelProviders, fetchDefaultModels } from './model'
+export { fetchPromptList } from './prompt'
+export type { PromptTemplateItem } from './prompt'
 import { issueTagsForWrite } from '@/utils/sourceMark'
 
 export * from './types'
@@ -757,6 +760,27 @@ async function fetchRuleOrchestrationStream(
   return parseRuleOrchestrationStreamText(text)
 }
 
+async function fetchDataProcessGenerate(
+  payload: DataProcessGeneratePayload,
+  externalSignal?: AbortSignal,
+): Promise<RuleOrchestrationGenerateResult> {
+  const endpoint = 'rule/dataProcessGenerate'
+  try {
+    const result = await request<unknown>(endpoint, payload as unknown as Record<string, unknown>, {
+      method: 'POST',
+      httpEndpoint: '/api/answer/data-process',
+      timeoutMs: 120_000,
+      signal: externalSignal,
+    })
+    if (result && typeof result === 'object' && 'script' in (result as object)) {
+      return result as RuleOrchestrationGenerateResult
+    }
+    return ruleOrchestrationGenerateFromLegacy(result)
+  } catch (e) {
+    throw e instanceof ApiError ? e : new ApiError(endpoint, e)
+  }
+}
+
 // 规则资产（M3）
 export const ruleApi = {
   ruleGroups: () => request<RuleGroup[]>('rule/groupTree'),
@@ -886,6 +910,7 @@ export const ruleApi = {
       throw e instanceof ApiError ? e : new ApiError(endpoint, e)
     }
   },
+  dataProcessGenerate: fetchDataProcessGenerate,
   // req → 旧体 { rule_id, params, timeout }；响应 result 数组 → outputs（0801 §4.4）
   orchestrationTest: async (req: RuleOrchestrationTestRequest) => {
     const endpoint = 'rule/orchestrationTest'
