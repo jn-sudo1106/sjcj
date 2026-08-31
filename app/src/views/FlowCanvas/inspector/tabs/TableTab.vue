@@ -45,6 +45,12 @@ function patchRule(p: Partial<RuleOrchestration>) {
 const { inputFieldOptions, outputFieldOptions } = useRuleTableFields(ruleCfg)
 
 const savingRule = ref(false)
+// 0831 临时：规则节点在后端的身份从 ruleId 换成了 configId（生成脚本调 /api/answer/data-process 只认
+// configId，见 RuleOrchestrationTab.vue 的守卫与请求体），而规则节点目前没有创建 Config 的通路
+// （updateConfig 不带 configId 不会建配置，copyAll 又需要可复制的源配置，W0-3 未落地）。
+// 保存业务规则后把节点 configId 固定写成 81947，让「当前配置」条不再显示「新建配置 · 未保存」、
+// 生成脚本的 configId 门禁能过。等 W0-3 建配置通路落地后替换为真实回填。
+const TEMP_RULE_NODE_CONFIG_ID = '81947'
 async function onSaveRuleMeta() {
   const error = !cfg.value?.title?.trim() ? '请先在「节点配置」填写节点名称' : validateTableBinding(ruleCfg.value)
   if (error) {
@@ -55,6 +61,8 @@ async function onSaveRuleMeta() {
   try {
     const res = await ruleApi.orchestrationSaveMeta(ruleCfg.value)
     patchRule({ mode: 'ref', ruleId: res.ruleId })
+    // 0831 临时：configId 固定回填 81947（见 TEMP_RULE_NODE_CONFIG_ID 注释）
+    flow.bindCopiedConfig(id.value, TEMP_RULE_NODE_CONFIG_ID, '')
     // 表相关字段同步到 NodeConfig（0801 方案 §4.6）：节点侧存 tableId，不是物理表名
     if (ruleCfg.value.inputTableId) flow.setInputTable(id.value, ruleCfg.value.inputTableId)
     if (ruleCfg.value.outputTableId) flow.setOutputTable(id.value, ruleCfg.value.outputTableId)

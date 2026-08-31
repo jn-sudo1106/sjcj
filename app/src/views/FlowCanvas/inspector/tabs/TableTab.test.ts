@@ -96,6 +96,8 @@ describe('TableTab · 规则节点表/字段绑定（0804 S2-2 从编排配置�
 
     expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBeTruthy()
     expect(flow.configs['rule-1'].ruleCfg?.mode).toBe('ref')
+    // 0831 临时：保存成功后规则节点 configId 固定回填 81947（data-process 生成脚本只认 configId）
+    expect(flow.configs['rule-1'].configId).toBe('81947')
     // 表相关字段同步到 NodeConfig：节点侧存 tableId，不是物理表名（0801 方案 §4.6）
     expect(flow.configs['rule-1'].inputTable).toBe('2102154')
     expect(ruleApi.orchestrationSaveMeta).toHaveBeenCalledWith(

@@ -13,7 +13,7 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, ruleApi, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
+import { entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
 import { buildDataProcessGeneratePayload } from '@/utils/flow/dataProcess'
@@ -90,6 +90,68 @@ async function checkColumnConsistency(): Promise<boolean> {
 // 表字段：只读消费「表配置」Tab 已经选好的表——测试台需要按字段回填入参标签，见 RuleTestDialog。
 // 非规则节点的 orchCfg 没有 inputTableId/outputTableId，watch 里的字段拉取会静默 no-op，安全。
 const { inputFieldOptions, outputFieldOptions } = useRuleTableFields(orchCfg)
+
+const providerOptions = ref<ModelProviderOption[]>([])
+const modelOptions = ref<ModelOption[]>([])
+const providerLoading = ref(false)
+const modelLoading = ref(false)
+const providerError = ref('')
+const modelError = ref('')
+function firstProviderCode() {
+  return providerOptions.value[0]?.providerCode || ''
+}
+function firstModelCode() {
+  return modelOptions.value[0]?.modelCode || ''
+}
+async function loadModels(providerCode: string, preferredModelCode?: string) {
+  modelLoading.value = true
+  modelError.value = ''
+  try {
+    modelOptions.value = await fetchDefaultModels(providerCode)
+    const modelCode = modelOptions.value.find((item) => item.modelCode === preferredModelCode)?.modelCode || firstModelCode()
+    if (modelCode !== (orchCfg.value.modelCode || '')) patch({ modelCode })
+  } catch (e) {
+    modelOptions.value = []
+    patch({ modelCode: '' })
+    modelError.value = `模型加载失败：${(e as Error)?.message ?? String(e)}`
+  } finally {
+    modelLoading.value = false
+  }
+}
+async function loadProviderModelOptions() {
+  providerLoading.value = true
+  providerError.value = ''
+  try {
+    providerOptions.value = await fetchModelProviders()
+    const providerCode = providerOptions.value.find((item) => item.providerCode === orchCfg.value.modelProviderCode)?.providerCode || firstProviderCode()
+    if (providerCode !== (orchCfg.value.modelProviderCode || '')) patch({ modelProviderCode: providerCode })
+    if (!providerCode) {
+      modelOptions.value = []
+      patch({ modelCode: '' })
+      return
+    }
+    await loadModels(providerCode, orchCfg.value.modelCode)
+  } catch (e) {
+    providerOptions.value = []
+    modelOptions.value = []
+    patch({ modelProviderCode: '', modelCode: '' })
+    providerError.value = `模型供应商加载失败：${(e as Error)?.message ?? String(e)}`
+  } finally {
+    providerLoading.value = false
+  }
+}
+watch(
+  () => [id.value, isRule.value] as const,
+  () => { if (isRule.value) void loadProviderModelOptions() },
+  { immediate: true },
+)
+async function onMainModelProviderChange(value: string) {
+  patch({ modelProviderCode: value })
+  await loadModels(value, orchCfg.value.modelCode)
+}
+function onMainModelChange(value: string) {
+  patch({ modelCode: value })
+}
 
 // 进入查看态时按 ruleId 回灌详情 + 缺正文时按 scriptPath 拉 MinIO（对齐旧 handleOpenRecord）
 const hydrateToken = ref('')
@@ -188,8 +250,13 @@ async function onGenerateScript(
       ...orchCfg.value,
       ...draft,
     }
-    const res = isRule.value
-      ? await ruleApi.dataProcessGenerate(buildDataProcessGeneratePayload({
+    let res: Awaited<ReturnType<typeof ruleApi.orchestrationGenerate>>
+    if (isRule.value) {
+      // 流式回显（0831）：data-process 返回 text/plain 分块流，逐块写回 script，
+      // 脚本预览框 / 全屏工作台实时打字机效果；结束时再以解析后的干净正文 + scriptPath 覆盖。
+      // 生成中途失败/取消时保留已流出的部分内容（用户看得见生成到哪了）。
+      let streamed = ''
+      res = await ruleApi.dataProcessGenerate(buildDataProcessGeneratePayload({
         description: genCfg.describe,
         configId: Number(cfg.value?.configId ?? 0),
         providerCode: genCfg.modelProviderCode ?? '',
@@ -200,8 +267,18 @@ async function onGenerateScript(
         outputFields: genCfg.outputFields ?? [],
         inputFieldOptions: inputFieldOptions.value,
         outputFieldOptions: outputFieldOptions.value,
-      }), controller.signal)
-      : await ruleApi.orchestrationGenerate(genCfg, controller.signal)
+      }), {
+        signal: controller.signal,
+        onChunk: (delta) => {
+          streamed += delta
+          // 只剥开头的 ```python 围栏，让正文从第一行代码开始显示；
+          // 结尾围栏与「# 当前文件已保存到…」标记行由完成后的整体解析清理。
+          patch({ script: streamed.replace(/^```[a-zA-Z]*[ \t]*\n/, '') })
+        },
+      })
+    } else {
+      res = await ruleApi.orchestrationGenerate(genCfg, controller.signal)
+    }
     patch({ script: res.script, scriptPath: res.scriptPath })
     ElMessage.success(isRule.value ? '脚本已生成' : '配置已生成')
   } catch (e) {
@@ -357,12 +434,42 @@ const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value
   </template>
 
   <div class="rc-actions-row">
+    <label v-if="isRule" class="rc-inline-field" data-testid="main-model-provider">
+      <span>模型供应商</span>
+      <el-select
+        :model-value="orchCfg.modelProviderCode ?? ''"
+        class="rc-inline-select"
+        size="small"
+        :loading="providerLoading"
+        :teleported="false"
+        placeholder="请选择"
+        @change="onMainModelProviderChange"
+      >
+        <el-option v-for="item in providerOptions" :key="item.providerCode" :label="item.providerName" :value="item.providerCode" />
+      </el-select>
+    </label>
+    <label v-if="isRule" class="rc-inline-field" data-testid="main-model">
+      <span>模型</span>
+      <el-select
+        :model-value="orchCfg.modelCode ?? ''"
+        class="rc-inline-select rc-inline-select-model"
+        size="small"
+        :loading="modelLoading"
+        :disabled="!orchCfg.modelProviderCode || !providerOptions.length"
+        :teleported="false"
+        placeholder="请选择"
+        @change="onMainModelChange"
+      >
+        <el-option v-for="item in modelOptions" :key="item.modelCode" :label="item.modelName" :value="item.modelCode" />
+      </el-select>
+    </label>
     <button class="rc-btn" type="button" @click="workbenchOpen = true">编辑系统提示词</button>
     <button class="rc-btn primary" type="button" :disabled="generating" @click="() => onGenerateScript()">
       {{ generating ? '生成中...' : generateLabel }}
     </button>
     <button v-if="generating" class="rc-btn" type="button" @click="onCancelGenerate">取消</button>
   </div>
+  <div v-if="isRule && (providerError || modelError)" class="rc-help">{{ providerError || modelError }}</div>
   <div v-if="hydrating" class="rc-help">正在同步编排详情…</div>
 
   <div class="rc-list ni-rule-meta">
@@ -442,7 +549,10 @@ const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value
 .rc-switch-load-error span { min-width: 0; }
 .rc-switch-load-error button { flex: none; padding: 0; border: 0; background: transparent; color: var(--rc-primary); font-size: 10px; cursor: pointer; }
 .rc-switch-load-error button:hover { text-decoration: underline; }
-.rc-actions-row { display: flex; gap: 8px; margin-top: 12px; }
+.rc-actions-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.rc-inline-field { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--rc-muted); font-size: 11px; font-weight: 600; }
+.rc-inline-select { width: 132px; }
+.rc-inline-select-model { width: 168px; }
 .rc-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 11px; border: 1px solid #d5e2f2; border-radius: 7px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; }
 .rc-btn:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rc-btn.primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }

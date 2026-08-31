@@ -263,6 +263,24 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect(wrapper.findAll('.wb-pane-actions button').some((b) => b.text() === '测试')).toBe(false)
   })
 
+  it('主面板生成区展示模型供应商和模型下拉，并复用模型接口候选', async () => {
+    const { wrapper } = mountWithExistingRule()
+    await flushPromises()
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'http://localhost:8080/api/model/providers',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'http://localhost:8080/api/model/default-models?providerCode=DeepSeek',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(wrapper.find('[data-testid="main-model-provider"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="main-model"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('模型供应商')
+    expect(wrapper.text()).toContain('模型')
+  })
+
   it('切换模型供应商后刷新模型候选，保存时回写新的供应商/模型', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     await flushPromises()

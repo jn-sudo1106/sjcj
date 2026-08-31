@@ -28,6 +28,7 @@ import {
   paramToLegacy,
   isVruleNumericRuleId,
   parseRuleOrchestrationStreamText,
+  parseDataProcessStreamText,
   pickRuleIdFromComposeList,
   ruleOrchestrationDetailFromLegacy,
   ruleOrchestrationGenerateFormBody,
@@ -760,22 +761,79 @@ async function fetchRuleOrchestrationStream(
   return parseRuleOrchestrationStreamText(text)
 }
 
+/** data-process 生成脚本的流式选项：onChunk 收到增量文本（打字机效果） */
+export interface DataProcessGenerateOptions {
+  signal?: AbortSignal
+  onChunk?: (delta: string) => void
+}
+
 async function fetchDataProcessGenerate(
   payload: DataProcessGeneratePayload,
-  externalSignal?: AbortSignal,
+  options?: DataProcessGenerateOptions,
 ): Promise<RuleOrchestrationGenerateResult> {
   const endpoint = 'rule/dataProcessGenerate'
   try {
-    const result = await request<unknown>(endpoint, payload as unknown as Record<string, unknown>, {
-      method: 'POST',
-      httpEndpoint: '/api/answer/data-process',
-      timeoutMs: 120_000,
-      signal: externalSignal,
-    })
-    if (result && typeof result === 'object' && 'script' in (result as object)) {
-      return result as RuleOrchestrationGenerateResult
+    if (usesMockAdapter(endpoint)) {
+      const result = await request<unknown>(endpoint, payload as unknown as Record<string, unknown>, { mode: 'mock' })
+      if (result && typeof result === 'object' && 'script' in (result as object)) {
+        return result as RuleOrchestrationGenerateResult
+      }
+      return ruleOrchestrationGenerateFromLegacy(result)
     }
-    return ruleOrchestrationGenerateFromLegacy(result)
+    // 真实接口（0831 实测）：text/plain 分块流（markdown 代码围栏 + 末尾保存标记行），
+    // 不能走 request() 的 JSON 解析（会 SyntaxError）；对齐 fetchRuleOrchestrationStream 自管 fetch，
+    // 逐块回调 onChunk 供 UI 做打字机效果，完成后整体解析出 { script, scriptPath }。
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    const token = readStoredToken()
+    if (token) headers[ACCESS_TOKEN_HEADER] = token
+    const controller = new AbortController()
+    const onExternalAbort = () => controller.abort()
+    if (options?.signal) {
+      if (options.signal.aborted) controller.abort()
+      else options.signal.addEventListener('abort', onExternalAbort, { once: true })
+    }
+    const timeout = window.setTimeout(() => controller.abort(), 120_000)
+    let res: Response
+    try {
+      res = await fetch('/api/answer/data-process', {
+        method: 'POST',
+        credentials: 'include',
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      })
+    } finally {
+      window.clearTimeout(timeout)
+      options?.signal?.removeEventListener('abort', onExternalAbort)
+    }
+    if (isSessionExpiredRedirect(res)) {
+      triggerSessionExpired()
+      throw new Error('登录失效,请重新登录')
+    }
+    if (!res.ok) {
+      let detail = ''
+      try { detail = (await res.text()).trim() } catch { /* ignore */ }
+      throw new Error(detail ? `请求失败 ${res.status}: ${detail.slice(0, 200)}` : `请求失败 ${res.status}`)
+    }
+    let text = ''
+    if (res.body && typeof res.body.getReader === 'function') {
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        const delta = decoder.decode(value, { stream: true })
+        if (delta) {
+          text += delta
+          options?.onChunk?.(delta)
+        }
+      }
+      text += decoder.decode()
+    } else {
+      text = await res.text()
+      if (text) options?.onChunk?.(text)
+    }
+    return parseDataProcessStreamText(text)
   } catch (e) {
     throw e instanceof ApiError ? e : new ApiError(endpoint, e)
   }
