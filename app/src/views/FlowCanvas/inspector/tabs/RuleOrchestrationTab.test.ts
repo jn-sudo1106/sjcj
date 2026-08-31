@@ -20,6 +20,19 @@ const INPUT_TABLE: EntryType = {
     { prop: 'sku_name', desc: '商品名称', type: 'string', required: false, columnName: 'K2' },
   ],
 }
+const MODEL_PROVIDERS = [
+  { providerCode: 'DeepSeek', providerName: 'DeepSeek' },
+  { providerCode: 'OpenAI', providerName: 'OpenAI' },
+]
+const MODEL_OPTIONS: Record<string, Array<{ modelCode: string; modelName: string }>> = {
+  DeepSeek: [
+    { modelCode: 'deepseek-chat', modelName: 'deepseek-chat' },
+    { modelCode: 'deepseek-reasoner', modelName: 'deepseek-reasoner' },
+  ],
+  OpenAI: [
+    { modelCode: 'gpt-4o-mini', modelName: 'gpt-4o-mini' },
+  ],
+}
 
 function mockAssets() {
   vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [INPUT_TABLE] })
@@ -33,6 +46,23 @@ function mockAssets() {
   // Path B 回灌默认空操作，避免干扰既有用例；覆盖回灌行为的用例再单独 mock
   vi.spyOn(ruleApi, 'orchestrationDetail').mockResolvedValue({ mode: 'ref', describe: '' })
   vi.spyOn(ruleApi, 'orchestrationLoadScript').mockResolvedValue('')
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = typeof input === 'string' ? input : input instanceof Request ? input.url : input.toString()
+    if (url === 'http://localhost:8080/api/model/providers') {
+      return new Response(JSON.stringify({ data: MODEL_PROVIDERS }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    if (url.startsWith('http://localhost:8080/api/model/default-models')) {
+      const providerCode = new URL(url).searchParams.get('providerCode') || ''
+      return new Response(JSON.stringify({ data: MODEL_OPTIONS[providerCode] ?? [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    throw new Error(`unexpected fetch: ${url}`)
+  })
 }
 
 afterEach(() => vi.restoreAllMocks())
@@ -146,6 +176,56 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
 
     expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toBe('新的系统提示词')
     expect(flow.configs['rule-1'].ruleCfg?.promptCategory).toBe('规则处理')
+    expect(flow.configs['rule-1'].ruleCfg?.modelProviderCode).toBe('DeepSeek')
+    expect(flow.configs['rule-1'].ruleCfg?.modelCode).toBe('deepseek-chat')
+  })
+
+  it('工作区加载模型供应商与模型，并在工作区里不再显示测试按钮', async () => {
+    const { wrapper } = mountWithExistingRule()
+    await flushPromises()
+
+    const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
+    await editBtn.trigger('click')
+    await flushPromises()
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'http://localhost:8080/api/model/providers',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'http://localhost:8080/api/model/default-models?providerCode=DeepSeek',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(wrapper.findAll('.wb-pane-actions button').some((b) => b.text() === '测试')).toBe(false)
+  })
+
+  it('切换模型供应商后刷新模型候选，保存时回写新的供应商/模型', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    await flushPromises()
+
+    const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
+    await editBtn.trigger('click')
+    await flushPromises()
+
+    const providerSelect = wrapper.find('.wb-provider')
+    await providerSelect.trigger('click')
+    await flushPromises()
+    const openAiOption = wrapper.findAll('.el-select-dropdown__item').find((el) => el.text() === 'OpenAI')
+    expect(openAiOption).toBeTruthy()
+    await openAiOption!.trigger('click')
+    await flushPromises()
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'http://localhost:8080/api/model/default-models?providerCode=OpenAI',
+      expect.objectContaining({ method: 'GET' }),
+    )
+
+    const saveBtn = wrapper.findAll('button').find((b) => b.text() === '保存' && b.classes().includes('primary'))!
+    await saveBtn.trigger('click')
+    await flushPromises()
+
+    expect(flow.configs['rule-1'].ruleCfg?.modelProviderCode).toBe('OpenAI')
+    expect(flow.configs['rule-1'].ruleCfg?.modelCode).toBe('gpt-4o-mini')
   })
 
   it('保存脚本：需二次确认，确认后调用 orchestrationSave 并写回 mode/ruleId/scriptPath', async () => {

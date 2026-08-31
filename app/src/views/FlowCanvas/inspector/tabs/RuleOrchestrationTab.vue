@@ -100,15 +100,17 @@ async function hydrateViewFromServer() {
   hydrating.value = true
   hydrateToken.value = token
   try {
-    try {
-      const detail = await ruleApi.orchestrationDetail(ruleId)
-      const next: Partial<RuleOrchestration> = {}
-      // 服务端有值才覆盖，避免 saveMeta 后详情尚无 nlDescribe 时用空串抹掉本地草稿
-      // name 不在此列：规则名称 = 节点名称（0804 拍板），orchCfg 计算时已强制用 cfg.title 覆盖
-      if (detail.describe?.trim()) next.describe = detail.describe
-      if (detail.systemPrompt?.trim()) next.systemPrompt = detail.systemPrompt
-      if (detail.scriptPath?.trim()) next.scriptPath = detail.scriptPath
-      if (Object.keys(next).length) patch(next)
+      try {
+        const detail = await ruleApi.orchestrationDetail(ruleId)
+        const next: Partial<RuleOrchestration> = {}
+        // 服务端有值才覆盖，避免 saveMeta 后详情尚无 nlDescribe 时用空串抹掉本地草稿
+        // name 不在此列：规则名称 = 节点名称（0804 拍板），orchCfg 计算时已强制用 cfg.title 覆盖
+        if (detail.describe?.trim()) next.describe = detail.describe
+        if (detail.systemPrompt?.trim()) next.systemPrompt = detail.systemPrompt
+        if (detail.modelProviderCode?.trim()) next.modelProviderCode = detail.modelProviderCode
+        if (detail.modelCode?.trim()) next.modelCode = detail.modelCode
+        if (detail.scriptPath?.trim()) next.scriptPath = detail.scriptPath
+        if (Object.keys(next).length) patch(next)
     } catch {
       // 详情失败不阻塞；下面仍可凭本地 scriptPath 拉脚本
     }
@@ -140,6 +142,12 @@ function onSystemPromptChange(value: string) {
 }
 function onPromptCategoryChange(value: PromptCategory) {
   patch({ promptCategory: resolvePromptCategoryForNode(cfg.value, value) })
+}
+function onModelProviderChange(value: string) {
+  patch({ modelProviderCode: value })
+}
+function onModelChange(value: string) {
+  patch({ modelCode: value })
 }
 function onScriptChange(value: string) {
   patch({ script: value })
@@ -342,7 +350,7 @@ const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value
 
   <!-- S6-1（方案 §4.1）：合并原 RuleScriptDialog（只读脚本查看）+ RuleSystemPromptDialog（编辑系统提示词）
        为一个双栏工作区——两个入口按钮（编辑系统提示词/全屏查看）现在打开同一个弹层，左右两栏一屏对照，
-       面板内直接能生成/保存/测试，不用退出去。 -->
+       面板内直接能生成/保存，不用退出去。 -->
   <RuleWorkbenchDialog
     v-model:open="workbenchOpen"
     :title="workbenchTitle"
@@ -350,21 +358,22 @@ const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value
     :system-prompt="orchCfg.systemPrompt ?? ''"
     :prompt-category="promptCategory"
     :prompt-category-groups="promptCategoryGroups"
+    :model-provider-code="orchCfg.modelProviderCode ?? ''"
+    :model-code="orchCfg.modelCode ?? ''"
     :script="orchCfg.script ?? ''"
     :script-path="orchCfg.scriptPath"
     :generate-label="generateLabel"
     :save-label="saveLabel"
     :generating="generating"
     :saving="savingScript"
-    :show-test="isRule"
-    :can-test="canTest"
     @update:system-prompt="onSystemPromptChange"
     @update:prompt-category="onPromptCategoryChange"
+    @update:model-provider-code="onModelProviderChange"
+    @update:model-code="onModelChange"
     @update:script="onScriptChange"
     @generate="onGenerateScript"
     @cancel-generate="onCancelGenerate"
     @save="onSaveScript"
-    @test="testDialogOpen = true"
   />
   <RuleTestDialog
     v-if="isRule"

@@ -56,7 +56,9 @@ import {
   assertLegacySnatchSaveLogin,
   legacySnatchSavePayloadFromFlow,
 } from './legacyAdapters'
+export type { ModelProviderOption, ModelOption } from './types'
 import { encryptLegacyPayload } from './legacyCrypto'
+export { fetchModelProviders, fetchDefaultModels } from './model'
 import { issueTagsForWrite } from '@/utils/sourceMark'
 
 export * from './types'

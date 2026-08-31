@@ -563,6 +563,8 @@ export function ruleOrchestrationDetailFromLegacy(input: unknown): RuleOrchestra
     outputFields: splitCsv(record.outputFields),
     // 0803 追加，0804 起前端不再消费：仅作服务端归属租户的透传记录（保存元数据已固定用登录账号）
     userCode: record.userCode == null ? undefined : String(record.userCode),
+    modelProviderCode: record.providerCode == null ? undefined : String(record.providerCode),
+    modelCode: record.modelCode == null ? undefined : String(record.modelCode),
   }
 }
 
@@ -754,6 +756,8 @@ export function ruleOrchestrationGenerateToLegacy(cfg: RuleOrchestration): Legac
     ruleId: String(cfg.ruleId ?? ''),
     query: cfg.describe ?? '',
     userPrompt: (cfg.systemPrompt ?? '').trim() || DEFAULT_GENERATE_USER_PROMPT,
+    providerCode: cfg.modelProviderCode ?? '',
+    modelCode: cfg.modelCode ?? '',
   }
 }
 
@@ -764,6 +768,8 @@ export function ruleOrchestrationGenerateFormBody(cfg: RuleOrchestration): strin
   params.set('ruleId', String(legacy.ruleId ?? ''))
   params.set('query', String(legacy.query ?? ''))
   params.set('userPrompt', String(legacy.userPrompt ?? ''))
+  if (legacy.providerCode) params.set('providerCode', String(legacy.providerCode))
+  if (legacy.modelCode) params.set('modelCode', String(legacy.modelCode))
   return params.toString()
 }
 

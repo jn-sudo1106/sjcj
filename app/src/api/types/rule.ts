@@ -88,6 +88,16 @@ export interface RuleOrchestrationItem {
   userCode?: string
 }
 
+export interface ModelProviderOption {
+  providerCode: string
+  providerName: string
+}
+
+export interface ModelOption {
+  modelCode: string
+  modelName: string
+}
+
 export type PromptCategory =
   | '网页抓取'
   | 'APP抓取'
@@ -117,6 +127,10 @@ export interface RuleOrchestration {
   systemPrompt?: string
   /** 提示词分类（前端草稿字段）；按当前节点类型自动预填，随编排配置一起保存。 */
   promptCategory?: PromptCategory
+  /** 模型供应商（前端草稿字段）；由 /api/model/providers 提供。 */
+  modelProviderCode?: string
+  /** 模型（前端草稿字段）；由 /api/model/default-models 提供。 */
+  modelCode?: string
   /** 详情接口不返回脚本正文，需单独调读脚本端点后回填 */
   script?: string
   /** = 旧 codePath */
