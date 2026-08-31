@@ -12,10 +12,11 @@
 ## 快速开始
 
 ```bash
-cd app
 npm install
 npm run dev        # http://localhost:5173
 ```
+
+首次从根目录启动时会自动补装 `app/` 依赖。
 
 ## 设计文档（设计稿/）
 
