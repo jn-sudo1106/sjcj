@@ -24,8 +24,6 @@ describe('TaskView', () => {
 
     expect(wrapper.find('[data-testid="task-source-filter"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="task-process-rail"]').exists()).toBe(true)
-    expect(wrapper.get('[data-testid="task-view-banner"]').text()).toContain('数据视图')
-    expect(wrapper.find('[data-testid="task-goto-data"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="task-node-filter"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('列表抓取')
     expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('队列')

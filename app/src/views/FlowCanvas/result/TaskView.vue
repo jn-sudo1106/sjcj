@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { siteApi, sourceApi, type NodeRunStat, type Source, type Step, type TaskInst } from '@/api'
 import { useFlowStore } from '@/stores/flow'
@@ -12,7 +11,6 @@ import { nextStepTokens } from '@/utils/flow/nextStepFields'
 // 任务是源的运行事实：源画布下只看当前源；网站详情页（siteWide）聚合看全部源，不提供内部筛选。
 const props = defineProps<{ siteWide?: boolean }>()
 const flow = useFlowStore()
-const router = useRouter()
 const source = computed(() => flow.sourceCtx)
 const sourceId = computed(() => source.value?.sourceId ?? '')
 const siteId = computed(() => source.value?.siteId ?? '')
@@ -183,18 +181,6 @@ const nextStepHints = computed(() => {
   })
 })
 
-function openDataView() {
-  const navSiteId = siteId.value
-  void router.push({
-    path: '/canvas',
-    query: {
-      ...(navSiteId ? { siteId: navSiteId } : {}),
-      sourceId: sourceId.value,
-      view: 'data',
-      ...(filters.nodeId ? { nodeId: filters.nodeId } : {}),
-    },
-  })
-}
 </script>
 
 <template>
@@ -207,10 +193,6 @@ function openDataView() {
           <ProcessNodeRail :model-value="filters.nodeId" :layout="processLayout" @update:model-value="onSelectNode" />
         </div>
 
-        <div class="tv-banner" data-testid="task-view-banner">
-          这里是任务运行记录；要看节点产出的数据请去数据视图
-          <button v-if="!siteWide" class="tv-jump" type="button" data-testid="task-goto-data" @click="openDataView">打开数据视图 →</button>
-        </div>
         <p v-if="nextStepHints.length" class="tv-next-fields" data-testid="task-next-fields">
           下一节点会用到：{{ nextStepHints.join('、') }}
         </p>
@@ -264,9 +246,6 @@ function openDataView() {
 .tv-body { flex: 1; overflow: auto; padding: 12px; }
 .tv-process-rail { min-height: 80px; margin-bottom: 10px; overflow-x: auto; background: #f8fafc; border: 1px solid var(--rc-border-soft); border-radius: 6px; }
 .tv-filters, .tv-pager { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
-.tv-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #f8fafc; color: var(--rc-text-2); font-size: 12px; }
-.tv-jump { height: 24px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 999px; background: #fff; color: var(--rc-primary); font-size: 11.5px; cursor: pointer; }
-.tv-jump:hover { border-color: var(--rc-primary); background: var(--rc-primary-bg); }
 .tv-next-fields { margin: 0 0 10px; color: var(--rc-muted); font-size: 12px; }
 .tv-input { height: 28px; min-width: 112px; padding: 0 10px; color: var(--rc-text); border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; font-size: 12px; }
 .tv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; outline: none; }
