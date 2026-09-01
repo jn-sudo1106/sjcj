@@ -493,17 +493,21 @@ describe('旧平台新建源 HTTP 契约', () => {
     expect((fetchMock.mock.calls[1][1] as RequestInit).method).toBe('GET')
   })
 
-  it('GET /v1/source/tagSource：勾选源 ID + #标签，新增不带 action', async () => {
+  it('POST /v1/source/markBatch：勾选源 ID + #标签，flag/freq/notify 传 null（真实路径，2026-09-01 实测报错才发现 source/tagSource 是臆造的端点名）', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '标记成功' }))
     const { sourceApi } = await import('./index')
     const result = await sourceApi.tagSource(['src-1', 'src-2'], ['正文缺失'])
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     const parsed = new URL(url, 'http://local.test')
-    expect(parsed.pathname).toBe('/api/v1/source/tagSource')
-    expect(parsed.searchParams.get('ids')).toBe('src-1,src-2')
-    expect(parsed.searchParams.get('tags')).toBe('#正文缺失')
-    expect(parsed.searchParams.get('action')).toBeNull()
-    expect(init.method).toBe('GET')
+    expect(parsed.pathname).toBe('/api/v1/source/markBatch')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({
+      ids: ['src-1', 'src-2'],
+      flag: null,
+      freq: null,
+      notify: null,
+      tags: '#正文缺失',
+    })
     expect(result).toMatchObject({ ok: true, message: '标记成功' })
   })
 
@@ -550,7 +554,7 @@ describe('旧平台新建源 HTTP 契约', () => {
     expect(JSON.parse(String(init.body))).toEqual({ sourceId: 'src-1', usedFlag: 0 })
   })
 
-  it('日常 mock 模式且已标 live 时，setColor / tagSource 仍打真实接口，不被 mock 吃掉', async () => {
+  it('日常 mock 模式且已标 live 时，setColor / markBatch 仍打真实接口，不被 mock 吃掉', async () => {
     vi.stubEnv('VITE_API_MODE', 'mock')
     vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
@@ -563,7 +567,7 @@ describe('旧平台新建源 HTTP 契约', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(String(fetchMock.mock.calls[0][0])).toContain('/api/v1/source/setColor')
-    expect(String(fetchMock.mock.calls[1][0])).toContain('/api/v1/source/tagSource')
+    expect(String(fetchMock.mock.calls[1][0])).toContain('/api/v1/source/markBatch')
   })
 
   it('sourceTaskPaged 与源列表任务实例同一条 GET /v1/task/topTaskPaged，page/limit + sourceId/state/configId', async () => {

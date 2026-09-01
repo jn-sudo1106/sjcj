@@ -15,10 +15,16 @@ defineProps<{
 const emit = defineEmits<{
   save: [payload: { tags: string[] }]
   clearTags: []
+  /** 批量设置备注：整批覆盖成同一段文字，跟标签的"追加"不是一回事，所以是独立按钮独立提交，
+   *  不跟"设置标签"合并——合并到一起用户容易搞不清一次点击到底改了哪些字段。 */
+  setRemark: [remark: string]
+  /** 清空备注：跟"清空标签"对称，同样是整批覆盖成空——想清哪一个就点哪一个入口。 */
+  clearRemark: []
 }>()
 
 const tagSearch = ref('')
 const draftTags = ref<string[]>([])
+const remarkDraft = ref('')
 
 function chooseTag(tag: string) {
   draftTags.value = draftTags.value.includes(tag)
@@ -37,6 +43,13 @@ function save() {
   const typed = normalizeIssueTag(tagSearch.value)
   const tags = typed && !draftTags.value.includes(typed) ? [...draftTags.value, typed] : [...draftTags.value]
   emit('save', { tags })
+}
+
+function setRemark() {
+  const remark = remarkDraft.value.trim()
+  if (!remark) return
+  emit('setRemark', remark)
+  remarkDraft.value = ''
 }
 </script>
 
@@ -64,11 +77,26 @@ function save() {
         >{{ tag }}</button>
       </div>
     </div>
-    <button class="smp-save" type="button" data-testid="mark-save" @click="save">保存（{{ selectedCount }}）</button>
+    <button class="smp-save" type="button" data-testid="mark-save" @click="save">设置标签（{{ selectedCount }}）</button>
+    <div class="smp-body smp-remark">
+      <span class="smp-label">批量设置备注</span>
+      <label class="smp-create">
+        <input
+          v-model="remarkDraft"
+          data-testid="mark-remark-input"
+          placeholder="整批覆盖成这段文字"
+          @keydown.enter.prevent="setRemark"
+        />
+      </label>
+    </div>
+    <button class="smp-save" type="button" data-testid="mark-remark-save" :disabled="!remarkDraft.trim()" @click="setRemark">
+      设置备注（{{ selectedCount }}）
+    </button>
     <div class="smp-footer">
       <!-- 「清空标签」而不是「移除标签」（0831 F02）：它把整批的标签全清掉，不是挑一个删。
            要挑着删得走行内的「标签与备注」弹窗。 -->
       <button type="button" data-testid="mark-action-clear-tags" @click="emit('clearTags')">清空标签</button>
+      <button type="button" data-testid="mark-action-clear-remark" @click="emit('clearRemark')">清空备注</button>
     </div>
   </div>
 </template>
@@ -76,6 +104,8 @@ function save() {
 <style scoped>
 .smp { position: absolute; z-index: 20; top: 36px; left: 0; width: 276px; border: 1px solid #dce5f1; border-radius: 7px; background: #fff; box-shadow: 0 10px 26px rgba(15, 23, 42, .15); }
 .smp-body { display: grid; gap: 9px; padding: 11px; }
+.smp-remark { padding-top: 0; border-top: 1px solid #eef2f7; }
+.smp-save:disabled { opacity: .5; cursor: not-allowed; }
 .smp-create { display: flex; align-items: center; height: 31px; padding: 0 7px; border: 1px solid #dce5f1; border-radius: 5px; color: var(--rc-faint); }
 .smp-create input { min-width: 0; flex: 1; border: 0; outline: 0; color: var(--rc-text-2); font-size: 11px; background: transparent; }
 .smp-create button { width: 18px; height: 18px; padding: 0; border: 0; background: transparent; color: var(--rc-muted); cursor: pointer; font-size: 16px; line-height: 1; }

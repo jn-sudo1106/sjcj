@@ -526,15 +526,20 @@ export const sourceApi = {
   batchSchedule: (sourceIds: string[]) => assetMockRequest<Ack>('source/createJobs', { sourceIds }),
   changeFreqTag: (sourceIds: string[], freqTag: string) => assetMockRequest<Ack>('source/changeFreqTag', { sourceIds, freqTag }),
   markVerified: (sourceIds: string[], verified: string) => assetMockRequest<Ack>('source/markVerified', { sourceIds, verified }),
-  /** 源打标签。GET /v1/source/tagSource 只追加（旧 markBatch，tags 以 # 开头）。
-   *  清标没有 action=clear：旧备注弹窗用 updateSource 把 tags 写成空串覆盖。 */
+  /** 源打标签，只追加。2026-09-01 实测报错才发现 source/tagSource 是臆造的端点名，
+   *  真实后端从来没有这条路由（真机 GET 500）——对照旧平台 api/source.js 改回真实的
+   *  POST /v1/source/markBatch（markBatch(ids, flag, freq, notify, tags)，flag/freq/notify
+   *  三个源字段这里不动，传 null）。清标没有 action=clear：旧备注弹窗用 updateSource 把 tags
+   *  写成空串覆盖。 */
   tagSource: async (sourceIds: string[], tags: string[], action: 'add' | 'clear' = 'add'): Promise<Ack> => {
     if (action === 'clear') return clearSourceTags(sourceIds)
     const result = await request<unknown>('source/tagSource', { sourceIds, tags, action }, {
-      method: 'GET',
-      httpEndpoint: 'source/tagSource',
+      httpEndpoint: 'source/markBatch',
       httpParams: {
-        ids: sourceIds.join(','),
+        ids: sourceIds,
+        flag: null,
+        freq: null,
+        notify: null,
         tags: issueTagsForWrite(tags),
       },
     })

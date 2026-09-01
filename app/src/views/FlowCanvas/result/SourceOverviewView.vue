@@ -529,6 +529,55 @@ async function clearSelectedTags() {
   markToast.value = `已清除 ${ids.length} 个源的标签`
   lastSavedTag.value = ''
 }
+// 批量设置备注（0901，老平台也没有——这是新功能，不是迁移）：整批覆盖成同一段文字，
+// 跟标签"追加"不是一回事，所以独立于 saveMarks 单独提交，避免一次点击混着改两种语义不同的字段。
+// updateSource 是行级全量覆盖接口，没有批量端点（跟 changeSourceEnable 同款限制），只能逐个调；
+// 逐个调时把每行自己当前的标签原样带上，不然会被这次的 remark 提交顺带清空。
+async function batchSetRemark(remark: string) {
+  const ids = [...selectedIds.value]
+  if (!ids.length) return
+  try {
+    await Promise.all(ids.map((id) => {
+      const row = rows.value.find((item) => item.sourceId === id)
+      return sourceApi.updateSourceMark(id, { tags: row?.tags ?? [], remark })
+    }))
+  } catch (error) {
+    ElMessage.error(`批量设置备注失败：${error instanceof Error ? error.message : String(error)}`)
+    return
+  }
+  writeOverlay(ids, { remark })
+  closeMarkPopover()
+  markToast.value = `已设置 ${ids.length} 个源的备注`
+}
+
+// 清空备注：跟「清空标签」对称的入口，同样整批覆盖成空、需要二次确认——备注一旦清空
+// 拿不回来，跟清标签的破坏性一致，不能因为字段不同就少一道确认。
+async function clearSelectedRemark() {
+  const ids = [...selectedIds.value]
+  if (!ids.length) return
+  try {
+    await ElMessageBox.confirm(
+      `确认清空选中的 ${ids.length} 个源的备注？`,
+      '清空备注',
+      { type: 'warning', confirmButtonText: '确认清空', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await Promise.all(ids.map((id) => {
+      const row = rows.value.find((item) => item.sourceId === id)
+      return sourceApi.updateSourceMark(id, { tags: row?.tags ?? [], remark: '' })
+    }))
+  } catch (error) {
+    ElMessage.error(`清空备注失败：${error instanceof Error ? error.message : String(error)}`)
+    return
+  }
+  writeOverlay(ids, { remark: '' })
+  closeMarkPopover()
+  markToast.value = `已清空 ${ids.length} 个源的备注`
+}
+
 function viewMarkedBatch() {
   if (lastSavedTag.value) tagFilter.value = lastSavedTag.value
   markToast.value = ''
@@ -647,6 +696,8 @@ watch(() => props.currentSiteId, () => {
             :recent-tags="tagCandidates"
             @save="saveMarks"
             @clear-tags="clearSelectedTags"
+            @set-remark="batchSetRemark"
+            @clear-remark="clearSelectedRemark"
           />
         </div>
         <button class="sov-btn" type="button" data-testid="batch-enable" @click="batchToggleEnable(false)">启用</button>

@@ -125,7 +125,9 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'config/copyAll',
   // 2026-08-31 放开：源标签 / 颜色标识。旧平台 markBatch / markSourceFlag 即时写库
   // （tags、usedFlag）；不放开则新平台只改 session overlay，旧平台刷新后看不到。
-  'source/tagSource',
+  // 2026-09-01 改：白名单键跟 source/tagSource 一起放开时没意识到那个端点名是臆造的，
+  // 真实生产请求打的是 source/markBatch（见 endpoints.ts 同一条注释），键改成真实路径。
+  'source/markBatch',
   'source/setColor',
   // 2026-08-31 放开：流程画布步骤写入（节点名 / 进入条件 / 增删节点）。
   // 这几项在步骤上，不走配置。不放开则 UI 能点、确认后被写保护拦下，后端收不到。

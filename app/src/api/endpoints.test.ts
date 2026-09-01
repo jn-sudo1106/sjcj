@@ -11,8 +11,9 @@ describe('端点契约一致性', () => {
     expect(DANGER_ENDPOINTS.has('rule/publish')).toBe(true)
     expect(DANGER_ENDPOINTS.has('source/sourcePaged')).toBe(false)
   })
-  it('问题标记写入已标 live，日常 mock 模式也会打真实 tagSource / setColor', () => {
-    expect(LIVE_ENDPOINTS.has('source/tagSource')).toBe(true)
+  it('问题标记写入已标 live，日常 mock 模式也会打真实 markBatch / setColor（真实 path，不是逻辑名）', () => {
+    expect(LIVE_ENDPOINTS.has('source/markBatch')).toBe(true)
+    expect(LIVE_ENDPOINTS.has('source/tagSource')).toBe(false)
     expect(LIVE_ENDPOINTS.has('source/setColor')).toBe(true)
   })
   it('源启停 / 换网站 / 复制源已标 live（真实 path，不是逻辑名）', () => {

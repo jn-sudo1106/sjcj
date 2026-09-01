@@ -403,6 +403,100 @@ describe('SourceOverviewView · 标签', () => {
   })
 })
 
+// 批量设置备注（0901，新功能——旧平台源列表也只有单行「备注信息」弹窗，没有批量入口）。
+describe('SourceOverviewView · 批量设置备注', () => {
+  afterEach(() => {
+    localStorage.clear()
+    sessionStorage.clear()
+    vi.restoreAllMocks()
+  })
+
+  it('批量设置备注：每行原有标签原样带上，只覆盖 remark', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 2,
+      list: [{ ...source, tags: ['正文缺失'] }, { ...source, sourceId: 'src-2', tags: [] }],
+    })
+    const update = vi.spyOn(sourceApi, 'updateSourceMark').mockResolvedValue({ ok: true, message: 'ok' })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
+    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    await wrapper.get('[data-testid="source-check-src-2"]').setValue(true)
+    await wrapper.get('[data-testid="batch-mark"]').trigger('click')
+    await wrapper.get('[data-testid="mark-remark-input"]').setValue('批量验证正常')
+    await wrapper.get('[data-testid="mark-remark-save"]').trigger('click')
+    await flushPromises()
+
+    expect(update).toHaveBeenCalledWith('src-1', { tags: ['正文缺失'], remark: '批量验证正常' })
+    expect(update).toHaveBeenCalledWith('src-2', { tags: [], remark: '批量验证正常' })
+    expect(wrapper.get('[data-testid="source-mark-toast"]').text()).toContain('已设置 2 个源的备注')
+    wrapper.unmount()
+  })
+
+  it('备注框留空时保存按钮不可点', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ ...source }] })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
+    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    await wrapper.get('[data-testid="batch-mark"]').trigger('click')
+    expect(wrapper.get('[data-testid="mark-remark-save"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('批量设置备注失败时不改行上备注', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ ...source, remark: '原备注' }] })
+    vi.spyOn(sourceApi, 'updateSourceMark').mockRejectedValue(new Error('请求失败 500'))
+    const error = vi.spyOn(ElMessage, 'error')
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
+    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    await wrapper.get('[data-testid="batch-mark"]').trigger('click')
+    await wrapper.get('[data-testid="mark-remark-input"]').setValue('新备注')
+    await wrapper.get('[data-testid="mark-remark-save"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="source-remark-edit"]').text()).toBe('原备注')
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('请求失败 500'))
+    wrapper.unmount()
+  })
+
+  // 跟「清空标签」对称的入口：同样整批覆盖成空、同样需要二次确认。
+  it('确认后清空备注：每行原有标签原样带上，只把 remark 覆盖成空', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 1, list: [{ ...source, tags: ['正文缺失'], remark: '原备注' }],
+    })
+    const update = vi.spyOn(sourceApi, 'updateSourceMark').mockResolvedValue({ ok: true, message: 'ok' })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
+    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    await wrapper.get('[data-testid="batch-mark"]').trigger('click')
+    await wrapper.get('[data-testid="mark-action-clear-remark"]').trigger('click')
+    await flushPromises()
+
+    expect(confirm).toHaveBeenCalled()
+    expect(update).toHaveBeenCalledWith('src-1', { tags: ['正文缺失'], remark: '' })
+    expect(wrapper.get('[data-testid="source-remark-edit"]').text()).toBe('—')
+    expect(wrapper.get('[data-testid="source-mark-toast"]').text()).toContain('已清空 1 个源的备注')
+    wrapper.unmount()
+  })
+
+  it('取消清空备注时不发请求', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ ...source, remark: '原备注' }] })
+    const update = vi.spyOn(sourceApi, 'updateSourceMark')
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(new Error('cancel'))
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
+    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    await wrapper.get('[data-testid="batch-mark"]').trigger('click')
+    await wrapper.get('[data-testid="mark-action-clear-remark"]').trigger('click')
+    await flushPromises()
+
+    expect(update).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="source-remark-edit"]').text()).toBe('原备注')
+    wrapper.unmount()
+  })
+})
+
 // 2026-08-31 会上实测的缺陷：搜「内容重复」，开发人员当场说"他查到了，但是没返回"。
 // 服务端返回了行，客户端又按精确相等滤了一遍，滤成空列表，顺带把 total 改写成 0。
 // 这两条是红线——列表展示的行数和总数必须等于服务端给的，不允许本地再插一手。

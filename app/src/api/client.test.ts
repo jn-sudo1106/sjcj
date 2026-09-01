@@ -325,12 +325,13 @@ describe('生产写守卫', () => {
     expect(String(fetchMock.mock.calls[1][0])).toContain('/api/v1/source/nextStep2')
   })
 
-  it('连生产时，source/tagSource 与 source/setColor 在白名单内（问题标记入库，旧平台可见）', async () => {
+  it('连生产时，source/markBatch 与 source/setColor 在白名单内（问题标记入库，旧平台可见）', async () => {
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { request } = await import('./client')
 
-    await request('source/tagSource', { ids: '1', tags: '正文缺失', action: 'add' }, { method: 'GET', httpEndpoint: 'source/tagSource' })
+    // markBatch 才是真实路径（2026-09-01 实测报错才发现 source/tagSource 是臆造的端点名，真机 500）
+    await request('source/tagSource', { ids: ['1'], tags: '正文缺失' }, { httpEndpoint: 'source/markBatch' })
     await request('source/setColor', { ids: '1', flag: 2, isClear: 0 }, { method: 'GET', httpEndpoint: 'source/setColor' })
 
     expect(fetchMock).toHaveBeenCalledTimes(2)

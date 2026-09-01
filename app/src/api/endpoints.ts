@@ -70,7 +70,12 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/check/changeEnable', desc: '启停源检查', danger: true },
   { path: 'source/check/check-one', desc: '执行一次源检查', danger: true },
   { path: 'source/check/runNow', desc: '立即运行源检查', danger: true },
-  { path: 'source/tagSource', desc: '源打标签', danger: true, impl: true, live: true },
+  // 2026-09-01 实测报错：source/tagSource 在真实后端根本不存在（GET 500）——对照旧平台
+  // api/source.js 确认，打标签走的是 POST /v1/source/markBatch（markBatch(ids, flag, freq,
+  // notify, tags)），tagSource 这个端点名是臆造的，从没在旧平台出现过。live 标记挪到下面
+  // 真实路径的 source/markBatch 条目，这条只留给 mock。
+  { path: 'source/tagSource', desc: '源打标签', danger: true, impl: true },
+  { path: 'source/markBatch', desc: '批量打标签（源打标签真实路径，见上方 source/tagSource 的说明）', danger: true, live: true },
   // 0831 F03：当前查询条件下真实存在的标签（旧 querySourceTags）。读接口，无 danger。
   // 接它是为了看见**程序打进去**的标签——本机「最近使用」只记得手工打过的。
   { path: 'source/sourceTags', desc: '标签候选（按当前查询条件）', impl: true, live: true },
