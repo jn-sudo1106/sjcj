@@ -403,6 +403,18 @@ export function nodeInputTable(cfg: NodeConfig): string {
   return cfg.collectCfg?.inputTable || cfg.inputTable || ''
 }
 
+/**
+ * 节点有效输出表（0901）：显式值优先，未设置时按「输出表」编辑框自己的承诺
+ * （RuleTableFieldBinder.vue「默认 = 输入表」）取本节点当前输入表。
+ *
+ * 不能改 nodeOutputTable 本身兜底——upstreamOutputTable/分支锚点那批链路反查要判断的是
+ * 「这个节点有没有自己明确落过表」，兜底成输入表会让它们提前误判为"有"，链路血缘断在错误的节点上。
+ * 只在"这个节点自己最终会落到哪张表"的场景（画布连线标注、保存到后端）用这个。
+ */
+export function effectiveOutputTable(cfg: NodeConfig): string {
+  return nodeOutputTable(cfg) || nodeInputTable(cfg)
+}
+
 /** 节点任务队列统一读取口径（0706 调整4：队列归属统一收在 taskCfg，采集/非采集节点不再区分） */
 export function nodeTaskQueue(cfg: NodeConfig): string {
   return cfg.taskCfg?.queue || ''

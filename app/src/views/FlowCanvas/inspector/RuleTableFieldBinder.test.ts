@@ -86,6 +86,53 @@ describe('RuleTableFieldBinder · runSearch 防止旧请求覆盖新结果（req
   })
 })
 
+// 回读历史流程时「输入表」框直接显示裸 tableId（如 6200026）——因为 selected 只在用户
+// 这次会话里搜过/选过才有值，modelValue 自带的 inputTableId 从没被拿去填 selected，
+// renderOptions 里找不到对应 el-option，el-select 只能把裸值当文本兜底显示。
+describe('RuleTableFieldBinder · 回读历史流程不显示裸 tableId', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('挂载即用 modelValue 自带的物理表名兜底，不是裸 ID；entryDetail 到位后换成带业务名的完整 label', async () => {
+    let resolveDetail!: (v: EntryType) => void
+    vi.spyOn(entryApi, 'entryDetail').mockImplementation(
+      () => new Promise((resolve) => { resolveDetail = resolve }),
+    )
+
+    const wrapper = mountBinder({ inputTableId: '6200026', inputTable: 'sense_data.TB_RULE_IN' })
+    await flushPromises()
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vm = wrapper.vm as any
+    const inputSelect = () => wrapper.findAll('.rc-field').find((r) => r.find('label').text() === '输入表 *')!.find('.el-select')
+
+    expect(vm.inputTableSearch.selected.value.tableId).toBe('6200026')
+    expect(vm.inputTableSearch.selected.value.tableName).toBe('sense_data.TB_RULE_IN')
+    // 兜底阶段就已经不再是裸 ID——数据层面和实际渲染都要看
+    expect(vm.tableOptionLabel(vm.inputTableSearch.selected.value)).not.toBe('6200026')
+    expect(inputSelect().text()).not.toBe('6200026')
+
+    resolveDetail({ tableId: '6200026', tableName: 'sense_data.TB_RULE_IN', name: '规则输入表', fields: [] })
+    await flushPromises()
+
+    expect(vm.tableOptionLabel(vm.inputTableSearch.selected.value)).toBe('规则输入表 · sense_data.TB_RULE_IN')
+    // 实测坑（2026-09-01）：<el-option> 的 :key 只挂 tableId 时，Vue 复用同一个 vnode，
+    // el-select 内部缓存的显示文案不会跟着刷新——光测 selected.value 这个数据层面测不出这个问题，
+    // 必须断言真实渲染出来的文字。
+    expect(inputSelect().text()).toBe('规则输入表 · sense_data.TB_RULE_IN')
+  })
+
+  it('entryDetail 查询失败：保留兜底的物理表名，不回退成裸 ID', async () => {
+    vi.spyOn(entryApi, 'entryDetail').mockRejectedValue(new Error('网络错误'))
+
+    const wrapper = mountBinder({ inputTableId: '6200026', inputTable: 'sense_data.TB_RULE_IN' })
+    await flushPromises()
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vm = wrapper.vm as any
+    expect(vm.inputTableSearch.selected.value.tableName).toBe('sense_data.TB_RULE_IN')
+  })
+})
+
 describe('RuleTableFieldBinder · 新建表（0804 拍板：共用表配置的 TableEditDialog/entryApi）', () => {
   afterEach(() => vi.restoreAllMocks())
 

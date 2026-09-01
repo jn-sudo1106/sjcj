@@ -112,6 +112,32 @@ function useTableSearch() {
 const inputTableSearch = useTableSearch()
 const outputTableSearch = useTableSearch()
 
+// 回读历史流程：modelValue 里已经有 inputTableId/outputTableId，但 renderOptions 只认
+// 「用户在这次会话里搜过/选过」的表——回显时 selected 还是初始的 null，el-select 找不到
+// 对应 el-option 的 label，只能把裸 tableId 显示出来（就是「输入表」框里出现一串数字的原因）。
+// 先用 modelValue 自带的物理表名兜底垫上，再异步查 entryDetail 换成带业务名的完整 label；
+// 查询失败不影响可用性，兜底的物理表名已经比裸 ID 可读。
+//
+// 实测坑（2026-09-01）：只做上面这步还是会卡在兜底文案不动——tableId 没变时 <el-option> 的
+// :key 不变，Vue 复用同一个 vnode，el-select 内部缓存的"当前选中项 label"不会跟着 label 属性的
+// 新值重新取；下面两处 <el-option> 的 key 必须把 label 一起编进去，label 变了才会强制换新 vnode。
+async function hydrateSelected(search: ReturnType<typeof useTableSearch>, tableId: string | undefined, fallbackName: string | undefined) {
+  if (!tableId) {
+    search.selected.value = null
+    return
+  }
+  if (search.selected.value?.tableId === tableId) return
+  search.selected.value = { tableId, tableName: fallbackName || tableId, fields: [] }
+  try {
+    const detail = await entryApi.entryDetail(tableId)
+    if (detail && search.selected.value?.tableId === tableId) search.selected.value = detail
+  } catch {
+    // 保底的物理表名已经够用，查详情失败不打断编辑
+  }
+}
+watch(() => props.modelValue.inputTableId, (id) => { void hydrateSelected(inputTableSearch, id, props.modelValue.inputTable) }, { immediate: true })
+watch(() => props.modelValue.outputTableId, (id) => { void hydrateSelected(outputTableSearch, id, props.modelValue.outputTable) }, { immediate: true })
+
 function onInputTableFilter(query: string) {
   inputTableSearch.debouncedSearch(query)
 }
@@ -188,7 +214,7 @@ const outputExpanded = ref(false)
       >
         <el-option
           v-for="t in inputTableSearch.renderOptions.value"
-          :key="t.tableId"
+          :key="`${t.tableId}:${tableOptionLabel(t)}`"
           :label="tableOptionLabel(t)"
           :value="t.tableId"
         />
@@ -237,7 +263,7 @@ const outputExpanded = ref(false)
       >
         <el-option
           v-for="t in outputTableSearch.renderOptions.value"
-          :key="t.tableId"
+          :key="`${t.tableId}:${tableOptionLabel(t)}`"
           :label="tableOptionLabel(t)"
           :value="t.tableId"
         />

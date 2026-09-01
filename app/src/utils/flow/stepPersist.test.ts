@@ -123,6 +123,33 @@ describe('mergeStepForWrite', () => {
       configId: 1400586,
     })
   })
+
+  // 0901：规则节点「输出表」编辑框自己写着「默认 = 输入表」（RuleTableFieldBinder.vue），
+  // 只填了输入表、没碰输出表时，提交给后端的 outEntry 得兑现这句承诺，不能是空/陈旧值。
+  it('规则处理节点只填输入表、未落输出表：提交时输出表回退到输入表', () => {
+    const snapshot = stepFromLegacy({
+      itemConfig: 40604, sourceId: 430022404, name: '1400979-规则处理',
+      configId: 1400586, entryTypeId: 900, outEntry: null, itemId: -1,
+      context: 'K1,K2', lastStep: '0', isDelete: 1, type: 'entry',
+    }, '430022404')
+    const cfg = cloneConfig(NODE_CONFIGS.rule)
+    cfg.title = '1400979-规则处理'
+    cfg.configId = '1400586'
+    cfg.itemId = '173'
+    cfg.stepSourceId = '-1'
+    cfg.inputTable = '6200026'
+    cfg.outputTable = ''
+    const merged = mergeStepForWrite({
+      snapshot,
+      cfg,
+      nodeId: '40604',
+      sourceId: '430022404',
+    })
+    expect(stepToStepModifyPayload(merged)).toMatchObject({
+      entryTypeId: 6200026,
+      outEntry: 6200026,
+    })
+  })
 })
 
 describe('assertStepsPersistable（0828 W9-4）', () => {

@@ -6,9 +6,9 @@
 
 import type { Step } from '@/api'
 import {
+  effectiveOutputTable,
   nodeEntryCondition,
   nodeInputTable,
-  nodeOutputTable,
   type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { conditionsToExpr } from '@/utils/flow/conditionExpr'
@@ -86,7 +86,10 @@ export function mergeStepForWrite(args: {
     name: cfg.title.trim(),
     nodeType: snapshot?.nodeType,
     inputTable: nodeInputTable(cfg) || snapshot?.inputTable,
-    outputTable: nodeOutputTable(cfg) || snapshot?.outputTable,
+    // 0901：显式未落表时按「默认 = 输入表」取本节点自己的输入表，而不是把这个新建节点还
+    // 没配置过的空 outputTable 直接提交上去（旧写法遇到规则节点只填了输入表就会把 outputTable
+    // 提交成空/沿用创建时从上游继承来的陈旧值，跟编辑框「默认 = 输入表」的承诺对不上）。
+    outputTable: effectiveOutputTable(cfg) || snapshot?.outputTable,
     configId: cfg.configId || snapshot?.configId,
     mainConfig: snapshot?.mainConfig,
     flowCode: snapshot?.flowCode,

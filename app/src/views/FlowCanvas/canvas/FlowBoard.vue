@@ -6,12 +6,13 @@ import { useDuplicateNode } from './useDuplicateNode'
 import { useStepWrite } from './useStepWrite'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
-import { flowApi, flowCenterApi, type FlowRecord } from '@/api'
+import { entryApi, flowApi, flowCenterApi, type FlowRecord } from '@/api'
 import CanvasHeader from '../shared/CanvasHeader.vue'
 import AddNodePopover from './AddNodePopover.vue'
 import FlowXmlDialog from './FlowXmlDialog.vue'
 import { flowToXml } from '@/utils/flow/flowXml'
 import {
+  effectiveOutputTable,
   iconFor,
   isDataNode,
   isRuleNode,
@@ -88,15 +89,33 @@ const addPop = reactive<{ show: boolean; x: number; y: number; afterId: string; 
 })
 const nodePalette = reactive({ show: false, x: 0, y: 0 })
 
-// 连线表关系标注（Phase 4.2；0701 问题五升级；0707 连线配置撤掉后纯读节点级数据）：
-// 输出表 → 输入表（全节点落库 + 输入表自动继承后，链路血缘天然可标注）
+// 表 tableId → 可读 label 的缓存（0901）：这条标注之前直接把 tableId 拼进字符串显示
+// （比如「6200026 → ?」），用户看不出是哪张表。按 id 查一次 entryDetail 换成业务名
+// （没有业务名退物理表名），查询期间先显示 id 兜底，缓存后同一个 id 不重复查。
+// 标注本身是画布上的小字浮层，不叠 RuleTableFieldBinder 下拉里"业务名 · 物理表名"那种全称格式。
+const edgeTableLabelCache = reactive<Record<string, string>>({})
+const edgeTableLabelPending = new Set<string>()
+function edgeTableLabel(tableId: string): string {
+  if (!edgeTableLabelCache[tableId] && !edgeTableLabelPending.has(tableId)) {
+    edgeTableLabelPending.add(tableId)
+    entryApi.entryDetail(tableId)
+      .then((detail) => { edgeTableLabelCache[tableId] = detail ? (detail.name || detail.tableName) : tableId })
+      .catch(() => { edgeTableLabelCache[tableId] = tableId })
+  }
+  return edgeTableLabelCache[tableId] || tableId
+}
+
+// 连线表关系标注（Phase 4.2；0701 问题五升级；0707 连线配置撤掉后纯读节点级数据；0901 加有效输出表兜底）：
+// 输出表 → 输入表（全节点落库 + 输入表自动继承后，链路血缘天然可标注）。
+// 输出表用 effectiveOutputTable 而非 nodeOutputTable：节点自己没显式落表时，「输出表」编辑框
+// 本就承诺「默认 = 输入表」（见 RuleTableFieldBinder.vue），这里要跟那份承诺对上。
 function edgeTableTag(fromId: string, toId: string): string {
   const fromCfg = flow.configs[fromId]
   const toCfg = flow.configs[toId]
-  const out = fromCfg ? nodeOutputTable(fromCfg) : ''
+  const out = fromCfg ? effectiveOutputTable(fromCfg) : ''
   const inp = toCfg ? flow.effectiveInputTableFor(toId) : ''
   if (!out && !inp) return ''
-  return `${out || '?'} → ${inp || '?'}`
+  return `${out ? edgeTableLabel(out) : '?'} → ${inp ? edgeTableLabel(inp) : '?'}`
 }
 // 0707 优化·Phase6：节点级「进入条件」已退役（统一收进决策节点的 FlowBranchGroup 分支条件）；连线条件标签退役，仅保留表血缘标签。
 // 原 edgeConditionTag() 函数删除；分支条件摘要标签将在 6.4 阶段重做为分支连线标签。
@@ -465,7 +484,7 @@ watch(
             <div class="rc-node-foot"><span class="rc-chip">静态保留</span><span>{{ n.cfg.base[3]?.[1] || '待编排' }}</span></div>
           </template>
           <template v-else>
-            <div v-if="nodeOutputTable(n.cfg)" class="rc-node-table" :title="`输出表 ${nodeOutputTable(n.cfg)}`">⊞ {{ nodeOutputTable(n.cfg) }}</div>
+            <div v-if="effectiveOutputTable(n.cfg)" class="rc-node-table" :title="`输出表 ${edgeTableLabel(effectiveOutputTable(n.cfg))}`">⊞ {{ edgeTableLabel(effectiveOutputTable(n.cfg)) }}</div>
             <div class="rc-node-foot">
               <span class="rc-chip" :class="footClass(n.cfg)">{{ footFor(n.cfg).left }}</span>
               <span>{{ footFor(n.cfg).right }}</span>

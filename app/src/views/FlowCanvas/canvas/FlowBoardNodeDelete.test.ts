@@ -6,6 +6,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
+import { ElMessageBox } from 'element-plus'
 import FlowBoard from './FlowBoard.vue'
 import { useFlowStore } from '@/stores/flow'
 
@@ -34,7 +35,11 @@ async function mountBoard() {
 }
 
 describe('节点卡片删除叉', () => {
-  beforeEach(() => vi.restoreAllMocks())
+  // 2026-08-31 起 deleteCanvasNode 加了二次确认（useStepWrite.ts），删除叉点击不再同步生效。
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+  })
 
   it('每个节点卡片上都有删除叉', async () => {
     const { flow, wrapper } = await mountBoard()
@@ -49,6 +54,7 @@ describe('节点卡片删除叉', () => {
     const targetId = flow.layout.nodes.find((n) => n.id === 'web-list')!.id
     const card = wrapper.findAll('.rc-flow-node').find((c) => c.text().includes(flow.configs[targetId].title))!
     await card.find('[data-testid="node-delete"]').trigger('click')
+    await flushPromises()
 
     expect(flow.main).not.toContain(targetId)
     expect(flow.main.length).toBe(before - 1)
@@ -61,6 +67,7 @@ describe('节点卡片删除叉', () => {
     await wrapper.vm.$nextTick()
     const card = wrapper.findAll('.rc-flow-node').find((c) => c.text().includes(flow.configs['web-list'].title))!
     await card.find('[data-testid="node-delete"]').trigger('click')
+    await flushPromises()
     expect(flow.main).not.toContain('web-list')
   })
 })
