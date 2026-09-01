@@ -183,7 +183,9 @@ export function downloadXlsx(filename: string, rows: string[][], sheetName = 'Sh
   if (typeof document === 'undefined' || typeof URL === 'undefined' || !URL.createObjectURL) {
     throw new Error('downloadXlsx 只能在浏览器环境调用')
   }
-  const blob = new Blob([buildXlsx(rows, sheetName)], { type: XLSX_MIME })
+  // TS 5.x 下 Uint8Array<ArrayBufferLike> 与 BlobPart 的 ArrayBufferView 约束对不上，拷一份保证 buffer 是 ArrayBuffer。
+  const bytes = buildXlsx(rows, sheetName)
+  const blob = new Blob([bytes.slice()], { type: XLSX_MIME })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
