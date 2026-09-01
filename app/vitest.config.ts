@@ -16,6 +16,13 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/.claude/**', '**/dist/**'],
+    // 并发上限（2026-09-01）：Vitest 默认 maxWorkers = 可用核数 - 1（本机 10 核 → 9 个并发 fork）。
+    // 全量跑时，`src/api/*Http.test.ts` 等 `@vitest-environment jsdom` 文件会逐个 `vi.resetModules()` +
+    // 动态 import 整个 API 模块树（index→client→mock/endpoints/…），单个用例的 import/environment 开销很大；
+    // 9 个这样的重型 fork 同时跑会造成内存竞争与事件循环拥塞，偶发命中 5s 默认超时
+    // （即 ruleHttp/sourceHttp 的既有 flaky：`Test timed out in 5000ms`）。限到 4 个并发 fork，
+    // 显著降低峰值内存与拥塞，代价是墙钟略增；CI/核数不同的机器可自行调整。
+    maxWorkers: 4,
     // 测试固定跑 mock 模式，不受本地 .env.local（真实后端联调开关）影响；
     // 个别测试要模拟真实 HTTP 协议时用 vi.stubEnv('VITE_API_MODE', 'http') 显式覆盖。
     // 同理关掉「逐端点上线」逃逸（endpoints.ts 的 live 标记，见 client.ts）：那是给真实浏览器/生产用的机制，

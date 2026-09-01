@@ -5,7 +5,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessageBox } from 'element-plus'
 import FlowBoard from './FlowBoard.vue'
 import { useFlowStore } from '@/stores/flow'
 
@@ -44,11 +44,15 @@ describe('节点卡片删除叉', () => {
   })
 
   it('点叉删掉该节点，且不触发节点选中（@click.stop）', async () => {
+    // deleteCanvasNode 走 useStepWrite：非 confirmed 时先弹 ElMessageBox.confirm 确认框，
+    // jsdom 下没人点「确定」，不 mock 成 resolve 会永远挂起、flow.remove 不执行。
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     const { flow, wrapper } = await mountBoard()
     const before = flow.main.length
     const targetId = flow.layout.nodes.find((n) => n.id === 'web-list')!.id
     const card = wrapper.findAll('.rc-flow-node').find((c) => c.text().includes(flow.configs[targetId].title))!
     await card.find('[data-testid="node-delete"]').trigger('click')
+    await flushPromises()
 
     expect(flow.main).not.toContain(targetId)
     expect(flow.main.length).toBe(before - 1)
@@ -56,11 +60,13 @@ describe('节点卡片删除叉', () => {
   })
 
   it('删除节点只删流程里的引用，不动配置身份（0824-00 §5.3：删节点不删 Config）', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     const { flow, wrapper } = await mountBoard()
     flow.bindCopiedConfig('web-list', '1400774', '证券之星列表配置')
     await wrapper.vm.$nextTick()
     const card = wrapper.findAll('.rc-flow-node').find((c) => c.text().includes(flow.configs['web-list'].title))!
     await card.find('[data-testid="node-delete"]').trigger('click')
+    await flushPromises()
     expect(flow.main).not.toContain('web-list')
   })
 })
