@@ -306,7 +306,7 @@ watch(
          采集节点上做成只读 + 「编辑」弹窗，既不让用户以为底部按钮把整屏都存了。
          源 URL 按 0828 D07 / 0829：属于源，在左侧「源详情」只读展示并编辑，不在节点配置 Tab。
          规则节点的节点名称 = 规则名称，有自己的新建/选择已有流程（0805），保持原样直接编辑。 -->
-    <div class="rc-field"><label>节点名称{{ isRule ? '（= 规则名称）' : '' }}</label>
+    <div class="rc-field"><label>节点名称{{ isRule ? '（= 数据监控名称）' : '' }}</label>
       <div v-if="isRule" class="rc-input-group">
         <input class="rc-input" :value="cfg?.title" placeholder="新建：直接输入规则名称" @input="onTitle" />
         <button class="rc-input-btn" type="button" :disabled="applyingExisting" @click="selectExistingOpen = true">

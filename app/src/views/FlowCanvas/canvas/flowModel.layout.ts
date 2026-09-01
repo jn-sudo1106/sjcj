@@ -169,7 +169,9 @@ export function iconFor(cfg: NodeConfig): string {
   if (sub.indexOf('[WECHAT]') >= 0) return '185'
   if (cfg.kind === 'decision' || /决策|条件路径/.test(cfg.title + cfg.sub)) return 'IF'
   if (cfg.kind === 'parallel' || /分头|多路径并行/.test(cfg.title + cfg.sub)) return 'PAR'
-  if (/规则/.test(cfg.title)) return 'R'
+  // cfg.ruleCfg 是结构信号（isRuleNode 同款口径，见 flowModel.ts）：标题正则单独判会漏掉标题
+  // 不含"规则"二字的规则类节点（比如"数据监控"模板——0901 新增，配置直接复用 rule 种子）。
+  if (cfg.ruleCfg || /规则/.test(cfg.title)) return 'R'
   if (/指标/.test(cfg.title)) return 'M'
   if (/解析/.test(cfg.title)) return 'PARSE'
   if (/清洗/.test(cfg.title)) return 'CLEAN'
@@ -182,7 +184,7 @@ export function nodeClassFor(cfg: NodeConfig): string {
   if (cfg.planned) return 'planned'
   if (cfg.kind === 'decision' || /决策|条件路径/.test(cfg.title + cfg.sub)) return 'logic-node'
   if (cfg.kind === 'parallel' || /分头|多路径并行/.test(cfg.title + cfg.sub)) return 'parallel-node'
-  if (/规则/.test(cfg.title)) return 'rule-node'
+  if (cfg.ruleCfg || /规则/.test(cfg.title)) return 'rule-node'
   if (/校验/.test(cfg.title)) return 'check-node'
   if (/邮件|告警/.test(cfg.title)) return 'mail-node'
   return ''

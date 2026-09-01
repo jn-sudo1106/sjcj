@@ -580,7 +580,7 @@ export const NODE_CONFIGS: Record<string, NodeConfig> = normalizeNodeConfigs(NOD
 export const TEMPLATE_TO_NODE: Record<string, string> = {
   web: 'web-list', app: 'app-collect', file: 'web-detail', python: 'web-list', parse: 'file-parse', ocr: 'ocr',
   ai: 'ai-extract', map: 'field-map', clean: 'clean', dedupe: 'dedupe', check: 'check', process: 'process',
-  rule: 'rule', 'rule-trace': 'rule', metric: 'metric', mail: 'mail',
+  rule: 'rule', 'rule-trace': 'rule', monitor: 'rule', metric: 'metric', mail: 'mail',
   alert: 'alert', decision: 'decision', parallel: 'parallel', custom: 'custom',
   // 0711 R7/R8：两个独立的固定产物类型采集节点
   'browser-html': 'browser-html-collect', 'wechat-html': 'wechat-html-collect',
@@ -740,6 +740,11 @@ export const LIB_GROUPS: LibGroup[] = [
     // 规则 Trace 不是独立节点类型（无执行器/配置），已从添加面板移除；历史 template=rule-trace 仍映射到 rule
     title: '规则类', items: [
       { template: 'rule', code: 'RULE', badge: '320', name: '规则处理', desc: '规则组、表达式、配置', pill: 'p1' as Pill },
+      // 2026-09-01 新增：配置先复用 rule 种子（TEMPLATE_TO_NODE.monitor='rule'），跟「规则处理」
+      // 是同一套表/字段绑定、编排、任务配置——先跑通插入与保存，后续要分化再单独拆。旧平台的
+      // 「数据监控」是源列表的行内菜单项（跳去独立监控中心看某个源的数据），跟这里同名但不是一回事，
+      // 没有可抄的旧节点类型号，所以不给 badge。
+      { template: 'monitor', code: 'MON', name: '数据监控', desc: '按规则组、表达式监测数据，命中即标记异常', pill: 'p1' as Pill },
     ]
   },
   {

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useFlowStore } from './flow'
 import { mockFlowRecommend, mockNodeAiChat } from '../api/mock/flows'
-import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES, buildSourceSeed } from '@/views/FlowCanvas/canvas/flowModel'
+import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES, buildSourceSeed, isRuleNode, iconFor, nodeClassFor } from '@/views/FlowCanvas/canvas/flowModel'
 import { makePresetFlowTemplates } from '@/utils/flow/flowTemplates'
 import type { Source } from '../api'
 
@@ -1455,6 +1455,39 @@ describe('APP 抓取节点（0707 Phase 8）', () => {
     expect(f.configs[id].title).toBe('APP 抓取')
     expect(f.configs[id].collectCfg?.snatchType).toBe('[140] - App抓取')
     expect(f.configs[id].base.some(([label]) => label === '包名')).toBe(true)
+  })
+})
+
+// 2026-09-01 新增「数据监控」节点：用户明确要求配置先跟「规则处理」一样，
+// 复用同一套 rule 种子（TEMPLATE_TO_NODE.monitor='rule'），不单独起一套 Tab/字段逻辑。
+describe('数据监控节点（2026-09-01，配置同规则处理）', () => {
+  let f: ReturnType<typeof useFlowStore>
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    f = useFlowStore()
+    f.newFlow('standard')
+  })
+
+  it('节点库存在「数据监控」，映射到 rule 种子，插入后是结构意义上的规则节点', () => {
+    const ruleGroup = LIB_GROUPS.find((g) => g.title === '规则类')
+    expect(ruleGroup?.items.some((it) => it.template === 'monitor' && it.name === '数据监控')).toBe(true)
+    expect(TEMPLATE_TO_NODE.monitor).toBe('rule')
+
+    const upstreamId = f.main.find((id) => id !== 'start' && id !== 'end')!
+    const id = f.insertAfter(upstreamId, 'monitor')
+
+    expect(f.configs[id].title).toBe('数据监控')
+    // 结构信号而不是标题正则：改名不含"规则"二字也不会被误判成非规则节点
+    expect(isRuleNode(f.configs[id])).toBe(true)
+    // 跟「规则处理」共用 applyRuleStepDefaults：自动继承上游输出表作为本节点输入表
+    const upstreamTable = f.configs[upstreamId].collectCfg?.outputTable || f.configs[upstreamId].outputTable
+    expect(f.configs[id].ruleCfg?.inputTableId).toBe(upstreamTable)
+  })
+
+  it('画布图标/样式按结构信号识别为规则节点（不依赖标题含"规则"二字）', () => {
+    const id = f.insertAfter('start', 'monitor')
+    expect(iconFor(f.configs[id])).toBe('R')
+    expect(nodeClassFor(f.configs[id])).toBe('rule-node')
   })
 })
 
