@@ -24,6 +24,9 @@ const props = defineProps<{
     skip: number,
     queue: string,
   ) => Promise<{ message?: string; msg?: string }>
+  /** 调用方自己会在发送成功后弹提示时置 true，避免跟这里的默认提示重复弹两条
+   *  （如 SnatchLauncher 的 launch(opts.onSuccess) 场景：调用方消息更具体，这条通用的让路）。 */
+  suppressOwnSuccessToast?: boolean
 }>()
 
 const emit = defineEmits<{ refresh: [] }>()
@@ -105,7 +108,10 @@ function onSubmit() {
   for (const cfg of configKeys.value) {
     for (const p of params[cfg]) {
       if (!all.value && !p.check) continue
-      include.push(cfg + '_' + p.paramId)
+      // include 只放裸 paramId（旧平台 SourceParam.vue handleSubmit 同款：include.push(p.paramId)），
+      // 跟下面 out[cfg + '_' + p.paramId] 的 configId_paramId 拼接格式是两码事——后端真实报错验证过：
+      // include=1400917_150 会被判"参数格式错误"，只有裸 ID（include=150）才认。
+      include.push(p.paramId)
       const vs = p.curValues || []
       if (!vs.length) {
         hasError = true
@@ -123,12 +129,18 @@ function onSubmit() {
   props
     .callback(ids, out, all.value ? 1 : 0, include, skip.value, queue.value)
     .then((res) => {
-      ElNotification.success({
-        message:
-          '发送成功, 本次发送' + ids.length +
-          (queue.value ? ', 队列:-' + queue.value : '') +
-          ', 返回值:-' + (res?.message || (res as { msg?: string }).msg || ''),
-      })
+      if (!props.suppressOwnSuccessToast) {
+        // 旧写法"发送成功, 本次发送1, 返回值:-处理成功,本次处理1个源ID"把"成功"说了两遍，
+        // "返回值:-"更像是给自己看的调试标签——改成一句话说清"发了几个源"，后端原话当补充细节接上。
+        const backendMsg = res?.message || (res as { msg?: string }).msg
+        ElNotification.success({
+          title: '发送成功',
+          message:
+            `已发送 ${ids.length} 个源` +
+            (queue.value ? `，队列 ${queue.value}` : '') +
+            (backendMsg ? `：${backendMsg}` : ''),
+        })
+      }
       visible.value = false
       emit('refresh')
     })

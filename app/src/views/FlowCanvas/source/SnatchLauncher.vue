@@ -8,6 +8,9 @@ import { hasLoadParams, normalizeLoadParams } from './paramNormalize'
 const paramModalRef = ref<InstanceType<typeof SourceParamModal>>()
 // 真实发送成功后触发（弹框确认后 / 直发后都会调用），用于衔接流程视图的运行态模拟。
 let afterSend: (() => void) | undefined
+// 调用方传了 onSuccess 时，它自己的提示（如「已发起抓取 RUN-xxx」）比弹窗通用的「发送成功…」
+// 更具体，弹窗那条就该让路——不然一次发送弹两条提示（0901 生产实测反馈的真体验问题）。
+const suppressModalToast = ref(false)
 
 // 与 SourceParamModal 的 callback 契约一致：位置参数 (ids, param, all, include, skip, queue)。
 async function sendWithParamsCallback(
@@ -38,6 +41,7 @@ async function launch(
   opts: LaunchOptions = {},
 ): Promise<Awaited<ReturnType<typeof sourceApi.sendSnatchWithParam>> | undefined> {
   afterSend = opts.onSuccess
+  suppressModalToast.value = !!opts.onSuccess
   try {
     const raw = await sourceApi.loadParams([sourceId])
     const norm = normalizeLoadParams(raw)
@@ -65,5 +69,5 @@ defineExpose({ launch })
 </script>
 
 <template>
-  <SourceParamModal ref="paramModalRef" :callback="sendWithParamsCallback" />
+  <SourceParamModal ref="paramModalRef" :callback="sendWithParamsCallback" :suppress-own-success-toast="suppressModalToast" />
 </template>

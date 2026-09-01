@@ -36,6 +36,9 @@ const cc = computed<CollectConfig | undefined>(() => cfg.value?.collectCfg)
 
 const isDecisionOrParallel = computed(() => !!cfg.value && decisionOrParallelKind(cfg.value) !== undefined)
 const isRule = computed(() => isRuleNode(cfg.value))
+// 规则节点分两种「起名方式」：规则处理 / 数据监控，配置结构完全一样（复用同一套 rule 种子），
+// 差别只在标题——节点名称就是它自己的名字，所以按标题里含不含「数据监控」来判断提示文案该说哪个。
+const ruleKindLabel = computed(() => (cfg.value?.title?.includes('数据监控') ? '数据监控名称' : '规则处理名称'))
 const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
 const isLoginNode = computed(() => nodeCapability.value?.kind === 'login')
 
@@ -306,7 +309,7 @@ watch(
          采集节点上做成只读 + 「编辑」弹窗，既不让用户以为底部按钮把整屏都存了。
          源 URL 按 0828 D07 / 0829：属于源，在左侧「源详情」只读展示并编辑，不在节点配置 Tab。
          规则节点的节点名称 = 规则名称，有自己的新建/选择已有流程（0805），保持原样直接编辑。 -->
-    <div class="rc-field"><label>节点名称{{ isRule ? '（= 数据监控名称）' : '' }}</label>
+    <div class="rc-field"><label>节点名称{{ isRule ? `（= ${ruleKindLabel}）` : '' }}</label>
       <div v-if="isRule" class="rc-input-group">
         <input class="rc-input" :value="cfg?.title" placeholder="新建：直接输入规则名称" @input="onTitle" />
         <button class="rc-input-btn" type="button" :disabled="applyingExisting" @click="selectExistingOpen = true">

@@ -57,6 +57,13 @@ const outputFieldPool = computed(() => selectableFields(props.outputFieldOptions
 const allInputSelected = computed(() => inputFieldPool.value.length > 0 && inputFieldPool.value.every((f) => props.modelValue.inputFields?.includes(f.itemCode)))
 const allOutputSelected = computed(() => outputFieldPool.value.length > 0 && outputFieldPool.value.every((f) => props.modelValue.outputFields?.includes(f.itemCode)))
 
+// 折叠/展开按钮文案（收起已选字段那一排后，"选了多少个"这个信息只剩这一处能看到，展开态也不能丢）：
+// 全选说"已全选 N 个"；部分选说"已选 x/N 个"；一个没选说"共 N 个可选"；展开时额外带上"收起"提示操作。
+function fieldToggleLabel(expanded: boolean, allSelected: boolean, selectedCount: number, poolSize: number) {
+  const countText = allSelected ? `已全选 ${poolSize} 个` : selectedCount > 0 ? `已选 ${selectedCount}/${poolSize} 个` : `共 ${poolSize} 个可选`
+  return expanded ? `▾ 收起（${countText}）` : `▸ ${countText}`
+}
+
 // 字段默认全选（0804 拍板）：表选完、字段异步加载完成后自动勾满非系统字段，用户可以再手动取消。
 // 触发条件只看"字段池非空 + 当前未选任何字段"，不额外记"是不是刚选的表"——
 // 字段池一旦拉到手（父级按 tableId 缓存），这个 watch 源引用不再变化，之后用户清空选择也不会被重新勾上；
@@ -156,6 +163,13 @@ function tableOptionLabel(t: EntryType) {
   return `${t.name || t.tableName} · ${t.tableName}`
 }
 
+// 未显式选输出表时，占位文字直接展示会兑现成哪张表（跟 effectiveOutputTable 的口径一致），
+// 而不是一句不指名道姓的说明——不然用户看不出"默认"具体指的是哪张表。
+const outputTablePlaceholder = computed(() => {
+  const input = inputTableSearch.selected.value
+  return input ? `默认 = ${tableOptionLabel(input)}` : '默认 = 输入表；可输入筛选'
+})
+
 function onInputTableId(tableId: string | undefined | null) {
   const id = tableId ?? ''
   const table = inputTableSearch.renderOptions.value.find((t) => t.tableId === id)
@@ -228,12 +242,15 @@ const outputExpanded = ref(false)
     <div v-if="!modelValue.inputTableId" class="rc-readonly-hint">请先选择输入表</div>
     <template v-else>
       <div class="rc-tag-row">
-        <span v-if="!modelValue.inputFields?.length" class="rc-readonly-hint rc-tag-empty">未选择</span>
-        <span v-for="code in modelValue.inputFields" :key="code" class="rc-tag on" @click="toggleField('input', code)">
-          {{ inputFieldOptions.find((f) => f.itemCode === code)?.itemName ?? code }} ×
-        </span>
+        <!-- 展开时已选字段在下面的字段池里高亮，这里不再重复列一遍——避免字段多的时候占两排 -->
+        <template v-if="!inputExpanded">
+          <span v-if="!modelValue.inputFields?.length" class="rc-readonly-hint rc-tag-empty">未选择</span>
+          <span v-for="code in modelValue.inputFields" :key="code" class="rc-tag on" @click="toggleField('input', code)">
+            {{ inputFieldOptions.find((f) => f.itemCode === code)?.itemName ?? code }} ×
+          </span>
+        </template>
         <button class="rc-tag-toggle" type="button" @click="inputExpanded = !inputExpanded">
-          {{ inputExpanded ? '▾ 收起' : (allInputSelected ? `▸ 已全选 ${inputFieldPool.length} 个` : `▸ 共 ${inputFieldPool.length} 个可选`) }}
+          {{ fieldToggleLabel(inputExpanded, allInputSelected, modelValue.inputFields?.length ?? 0, inputFieldPool.length) }}
         </button>
         <button class="rc-tag-toggle" type="button" @click="showSystemFields = !showSystemFields">
           {{ showSystemFields ? '隐藏系统字段' : '显示系统字段' }}
@@ -259,7 +276,7 @@ const outputExpanded = ref(false)
         clearable
         :remote-method="onOutputTableFilter"
         :loading="outputTableSearch.loading.value"
-        placeholder="默认 = 输入表；可输入筛选"
+        :placeholder="outputTablePlaceholder"
         @update:model-value="onOutputTableId"
         @visible-change="onOutputTableVisible"
       >
@@ -291,12 +308,15 @@ const outputExpanded = ref(false)
     <div v-if="!modelValue.inputTableId" class="rc-readonly-hint">请先选择输入表</div>
     <template v-else>
       <div class="rc-tag-row">
-        <span v-if="!modelValue.outputFields?.length" class="rc-readonly-hint rc-tag-empty">未选择</span>
-        <span v-for="code in modelValue.outputFields" :key="code" class="rc-tag on" @click="toggleField('output', code)">
-          {{ outputFieldOptions.find((f) => f.itemCode === code)?.itemName ?? code }} ×
-        </span>
+        <!-- 展开时已选字段在下面的字段池里高亮，这里不再重复列一遍——避免字段多的时候占两排 -->
+        <template v-if="!outputExpanded">
+          <span v-if="!modelValue.outputFields?.length" class="rc-readonly-hint rc-tag-empty">未选择</span>
+          <span v-for="code in modelValue.outputFields" :key="code" class="rc-tag on" @click="toggleField('output', code)">
+            {{ outputFieldOptions.find((f) => f.itemCode === code)?.itemName ?? code }} ×
+          </span>
+        </template>
         <button class="rc-tag-toggle" type="button" @click="outputExpanded = !outputExpanded">
-          {{ outputExpanded ? '▾ 收起' : (allOutputSelected ? `▸ 已全选 ${outputFieldPool.length} 个` : `▸ 共 ${outputFieldPool.length} 个可选`) }}
+          {{ fieldToggleLabel(outputExpanded, allOutputSelected, modelValue.outputFields?.length ?? 0, outputFieldPool.length) }}
         </button>
       </div>
       <div v-if="outputExpanded" class="rc-tag-row rc-tag-pool">
