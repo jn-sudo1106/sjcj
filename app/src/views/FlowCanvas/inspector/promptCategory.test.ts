@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cloneConfig, NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
+import { buildSourceSeed, cloneConfig, NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
 import {
   defaultPromptCategoryForNode,
   promptCategoryGroupsForNode,
@@ -36,5 +36,25 @@ describe('promptCategory helpers', () => {
     expect(defaultPromptCategoryForNode(rule)).toBe('规则处理')
     expect(resolvePromptCategoryForNode(rule, '规则处理')).toBe('规则处理')
     expect(resolvePromptCategoryForNode(rule, '网页抓取')).toBe('规则处理')
+  })
+
+  it('数据监控节点（template=monitor）提示词分类为「数据监控」，与「规则处理」分开（2026-09-01）', () => {
+    const monitor = { ...cloneConfig(NODE_CONFIGS['rule']), template: 'monitor' }
+    expect(promptCategoryGroupsForNode(monitor).flatMap((g) => g.options.map((o) => o.value))).toEqual(['数据监控'])
+    expect(defaultPromptCategoryForNode(monitor)).toBe('数据监控')
+    expect(resolvePromptCategoryForNode(monitor, '数据监控')).toBe('数据监控')
+    // 即便草稿里还残留「规则处理」，也收敛回当前节点类型的默认「数据监控」
+    expect(resolvePromptCategoryForNode(monitor, '规则处理')).toBe('数据监控')
+  })
+
+  it('从后端步骤回读的数据监控节点（buildSourceSeed 按节点名补 template）分类仍是「数据监控」而非「规则处理」（2026-09-01）', () => {
+    const source = { sourceId: 's-mon', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: 'st1', sourceId: 's-mon', name: '列表抓取', inputTable: '-', outputTable: 'T1', nodeType: 'list', enabled: true },
+      { stepId: 'st2', sourceId: 's-mon', name: '数据监控', inputTable: 'T1', outputTable: 'T1', nodeType: 'entry', dependsOn: ['st1'], enabled: true },
+    ] as never)
+    const monitor = seed.configs.st2
+    expect(promptCategoryGroupsForNode(monitor).flatMap((g) => g.options.map((o) => o.value))).toEqual(['数据监控'])
+    expect(defaultPromptCategoryForNode(monitor)).toBe('数据监控')
   })
 })

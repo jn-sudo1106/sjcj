@@ -98,4 +98,22 @@ describe('nodeInspectorTabs', () => {
     const orchestration = nodeInspectorTabs(ordinaryNode).find(([key]) => key === 'orchestration')!
     expect(orchestration[2]).toBeUndefined()
   })
+
+  it('数据监控节点（template=monitor）不出参：编排 Tab 不因缺出参字段而禁用', () => {
+    const monitorBound = {
+      title: '数据监控', kind: 'node', template: 'monitor',
+      ruleCfg: { mode: 'new', describe: '', inputTableId: '2102154', inputFields: ['sku_id'], outputFields: [] },
+    } as unknown as NodeConfig
+    const orchestration = nodeInspectorTabs(monitorBound).find(([key]) => key === 'orchestration')!
+    expect(orchestration[2]).toBeUndefined()
+  })
+
+  it('数据监控节点未绑输入表/入参：编排 Tab 仍禁用', () => {
+    const monitorUnsaved = {
+      title: '数据监控', kind: 'node', template: 'monitor',
+      ruleCfg: { mode: 'new', describe: '' },
+    } as unknown as NodeConfig
+    const orchestration = nodeInspectorTabs(monitorUnsaved).find(([key]) => key === 'orchestration')!
+    expect(orchestration[2]).toBe('请先在「表配置」完成输入/输出表与字段选择')
+  })
 })

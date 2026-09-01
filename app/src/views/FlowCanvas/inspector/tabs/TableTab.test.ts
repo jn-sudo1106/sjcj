@@ -248,3 +248,83 @@ describe('TableTab · 去重列（0828 D11）', () => {
     expect(wrapper.text()).toContain('先选择输出表')
   })
 })
+
+// 数据监控节点（2026-09-01）：monitor 复用 rule 种子，但表配置不落表/不出参——隐藏「输出表」「出参字段」，
+// 换成「监控方法」复选下拉（MONITOR_METHODS）。靠 template='monitor' 结构信号区分（isMonitorNode）。
+describe('TableTab · 数据监控节点（2026-09-01，不落表/不出参 + 监控方法）', () => {
+  function mountOnMonitorNode() {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS['rule'])
+    cfg.template = 'monitor'
+    flow.configs['monitor-1'] = cfg
+    flow.select('monitor-1')
+    flow.setActiveTab('table')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    return { flow, wrapper }
+  }
+
+  it('不展示「输出表」「出参字段」，展示「监控方法」复选下拉', async () => {
+    mockAssets()
+    const { wrapper } = mountOnMonitorNode()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('入参字段')
+    expect(wrapper.text()).not.toContain('出参字段')
+    expect(wrapper.text()).not.toContain('输出表')
+    expect(wrapper.text()).toContain('监控方法')
+    expect(wrapper.find('[data-testid="monitor-methods-field"]').exists()).toBe(true)
+  })
+
+  it('选择监控方法写入节点 monitorMethods', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnMonitorNode()
+    await flushPromises()
+
+    const select = wrapper.find('[data-testid="monitor-methods-field"]').findComponent({ name: 'ElSelect' })
+    await select.vm.$emit('update:modelValue', ['数据延迟监控', '每日数据量监控'])
+    await flushPromises()
+
+    expect(flow.configs['monitor-1'].monitorMethods).toEqual(['数据延迟监控', '每日数据量监控'])
+  })
+
+  it('保存时把「监控方法 + 输入表」拼成规则处理描述，写入编排配置 Tab', async () => {
+    mockAssets()
+    vi.spyOn(ruleApi, 'orchestrationSaveMeta').mockResolvedValue({ ruleId: 'orch-monitor', message: '业务规则已保存' })
+    const { flow, wrapper } = mountOnMonitorNode()
+    flow.setTitle('monitor-1', '公众号文章监控')
+    flow.patchRuleConfig('monitor-1', {
+      inputTableId: '2102154', inputTable: 'sense_data.TB_JD_SKU_BASE',
+      inputFields: ['sku_id', 'sku_name'],
+    })
+    flow.setMonitorMethods('monitor-1', ['当日数据是否正常入库', '数据延迟监控'])
+    await flushPromises()
+
+    await wrapper.find('button.rc-btn.primary').trigger('click')
+    await flushPromises()
+
+    expect(flow.configs['monitor-1'].ruleCfg?.describe).toBe(
+      '我想对JD-商品基础进行如下监控：\n1.当日数据是否正常入库\n2.数据延迟监控',
+    )
+    expect(flow.activeTab).toBe('orchestration')
+  })
+
+  it('未选监控方法就保存：提示且不落 describe', async () => {
+    mockAssets()
+    vi.spyOn(ruleApi, 'orchestrationSaveMeta')
+    const { flow, wrapper } = mountOnMonitorNode()
+    flow.setTitle('monitor-1', '公众号文章监控')
+    flow.patchRuleConfig('monitor-1', {
+      inputTableId: '2102154', inputTable: 'sense_data.TB_JD_SKU_BASE',
+      inputFields: ['sku_id', 'sku_name'],
+    })
+    await flushPromises()
+
+    await wrapper.find('button.rc-btn.primary').trigger('click')
+    await flushPromises()
+
+    expect(ruleApi.orchestrationSaveMeta).not.toHaveBeenCalled()
+    // 未选监控方法时不生成监控描述，保留种子自带 describe 原样
+    expect(flow.configs['monitor-1'].ruleCfg?.describe).not.toContain('我想对')
+  })
+})

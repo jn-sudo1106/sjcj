@@ -24,6 +24,8 @@ const props = defineProps<{
   modelValue: BinderModel
   inputFieldOptions: RuleFieldOption[]
   outputFieldOptions: RuleFieldOption[]
+  /** 数据监控节点（2026-09-01）：隐藏「输出表」「出参字段」区块——monitor 不落表、不出参，只绑输入表/入参。 */
+  hideOutput?: boolean
 }>()
 const emit = defineEmits<{ 'update:modelValue': [Partial<BinderModel>] }>()
 
@@ -247,7 +249,7 @@ const outputExpanded = ref(false)
     </template>
   </div>
 
-  <div class="rc-field"><label>输出表（可选，默认使用输入表）</label>
+  <div v-if="!hideOutput" class="rc-field"><label>输出表（可选，默认使用输入表）</label>
     <div class="rc-select-row">
       <el-select
         class="rc-table-select"
@@ -285,7 +287,7 @@ const outputExpanded = ref(false)
     </div>
   </div>
 
-  <div class="rc-field"><label>出参字段 *</label>
+  <div v-if="!hideOutput" class="rc-field"><label>出参字段 *</label>
     <div v-if="!modelValue.inputTableId" class="rc-readonly-hint">请先选择输入表</div>
     <template v-else>
       <div class="rc-tag-row">

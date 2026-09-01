@@ -1,4 +1,4 @@
-import { collectorCapabilityOf, decisionOrParallelKind, isDataNode, isRuleNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { collectorCapabilityOf, decisionOrParallelKind, isDataNode, isMonitorNode, isRuleNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import type { PromptCategory } from '@/api'
 
 export interface PromptCategoryOption {
@@ -27,6 +27,8 @@ const LOGIC_OPTIONS: PromptCategoryOption[] = [
   { label: '分头处理', value: '分头处理' },
 ]
 const RULE_OPTIONS: PromptCategoryOption[] = [{ label: '规则处理', value: '规则处理' }]
+// 数据监控节点（monitor 复用 rule 种子，isRuleNode 也为真）：单独的提示词分类，不跟「规则处理」混用
+const MONITOR_OPTIONS: PromptCategoryOption[] = [{ label: '数据监控', value: '数据监控' }]
 const METRIC_OPTIONS: PromptCategoryOption[] = [{ label: '指标引用', value: '指标引用' }]
 const NOTIFY_OPTIONS: PromptCategoryOption[] = [
   { label: '提取数据发邮件', value: '提取数据发邮件' },
@@ -66,6 +68,8 @@ export function promptCategoryGroupsForNode(cfg?: NodeConfig): PromptCategoryGro
   if (cfg && collectorCapabilityOf(cfg)) {
     return [{ label: '采集类', options: COLLECTOR_OPTIONS }]
   }
+  // 先判 monitor 再判 rule：monitor 复用 rule 种子（isRuleNode 为真），须在规则分支之前截住，否则会落到「规则处理」
+  if (isMonitorNode(cfg)) return [{ label: '规则类', options: MONITOR_OPTIONS }]
   if (isRuleNode(cfg)) return [{ label: '规则类', options: RULE_OPTIONS }]
   const logicKind = cfg ? decisionOrParallelKind(cfg) : undefined
   if (logicKind) {
@@ -83,6 +87,7 @@ export function defaultPromptCategoryForNode(cfg?: NodeConfig): PromptCategory {
   const logicKind = cfg ? decisionOrParallelKind(cfg) : undefined
   if (logicKind === 'decision') return '决策分支'
   if (logicKind === 'parallel') return '分头处理'
+  if (isMonitorNode(cfg)) return '数据监控'
   if (isRuleNode(cfg)) return '规则处理'
   return promptCategoryGroupsForNode(cfg)[0]?.options[0]?.value ?? '自定义节点'
 }

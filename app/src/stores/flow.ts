@@ -405,11 +405,14 @@ export const useFlowStore = defineStore('flow', () => {
     return isFirstMainNode(main.value, configs, id)
   }
 
-  /** 旧平台「添加后续步骤 → 规则处理」：名称 `{前置配置ID}-规则处理`，规则 ID 默认 -1，输入表继承上游。 */
-  function applyRuleStepDefaults(cfg: NodeConfig, prevId: string, upstreamTable: string) {
+  /** 旧平台「添加后续步骤 → 规则处理」：名称 `{前置配置ID}-{类型名}`，规则 ID 默认 -1，输入表继承上游。
+   *  typeName 取模板名（TEMPLATE_TO_NAME）：规则处理→「规则处理」、数据监控→「数据监控」，
+   *  不再硬编码「规则处理」——monitor 复用 rule 种子（TEMPLATE_TO_NODE.monitor='rule'）也会走进本函数，
+   *  硬编码会把「数据监控」节点名顶成「规则处理」。 */
+  function applyRuleStepDefaults(cfg: NodeConfig, prevId: string, upstreamTable: string, typeName = '规则处理') {
     const prevConfigId = configs[prevId]?.configId
     if (prevConfigId) {
-      cfg.title = `${prevConfigId}-规则处理`
+      cfg.title = `${prevConfigId}-${typeName}`
       cfg.configName = cfg.title
     }
     if (!cfg.itemId) cfg.itemId = '-1'
@@ -427,13 +430,14 @@ export const useFlowStore = defineStore('flow', () => {
     const cfg = cloneConfig(NODE_CONFIGS[srcKey])
     if (template === 'decision') cfg.kind = 'decision'
     if (template === 'parallel') cfg.kind = 'parallel'
+    cfg.template = template
     const typeName = TEMPLATE_TO_NAME[template]
     if (typeName) cfg.title = typeName
     // 配置名 = 节点名（0828 D08/P4）：新节点直接带上，用户不必为"起名"多点一次。
     // 模板里可能带着上一份配置的身份，连 configId 一起清干净——新节点是新建态。
     delete cfg.configId
     cfg.configName = cfg.title
-    if (template === 'rule' || srcKey === 'rule') applyRuleStepDefaults(cfg, prevId, upstreamOutputTable(prevId))
+    if (template === 'rule' || srcKey === 'rule') applyRuleStepDefaults(cfg, prevId, upstreamOutputTable(prevId), typeName)
     if (cfg.collectCfg) {
       cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[template] ?? cfg.collectCfg.snatchType
       cfg.collectCfg.url = ''
@@ -475,6 +479,7 @@ export const useFlowStore = defineStore('flow', () => {
     if (!branch) return null
     const srcKey = TEMPLATE_TO_NODE[template] || 'web-list'
     const cfg = cloneConfig(NODE_CONFIGS[srcKey])
+    cfg.template = template
     const typeName = TEMPLATE_TO_NAME[template]
     if (typeName) cfg.title = typeName
     // 配置名 = 节点名（0828 D08/P4）：新节点直接带上，用户不必为"起名"多点一次。
@@ -483,7 +488,7 @@ export const useFlowStore = defineStore('flow', () => {
     cfg.configName = cfg.title
     if (template === 'rule' || srcKey === 'rule') {
       const prevInBranch = branch.chain.at(-1) || ownerId
-      applyRuleStepDefaults(cfg, prevInBranch, upstreamOutputTableInBranch(ownerId, branch))
+      applyRuleStepDefaults(cfg, prevInBranch, upstreamOutputTableInBranch(ownerId, branch), typeName)
     }
     if (cfg.collectCfg) {
       cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[template] ?? cfg.collectCfg.snatchType
@@ -1246,6 +1251,7 @@ export const useFlowStore = defineStore('flow', () => {
     patchSchedule: (id: string, patch: Partial<import('@/views/FlowCanvas/canvas/flowModel').CollectorSchedule>) => nodeStore.patchSchedule(id, patch),
     patchRuleConfig: (id: string, patch: Partial<RuleOrchestration>) => nodeStore.patchRuleConfig(id, patch),
     patchExecConfig: (id: string, patch: Partial<RuleOrchestration>) => nodeStore.patchExecConfig(id, patch),
+    setMonitorMethods: (id: string, methods: string[]) => nodeStore.setMonitorMethods(id, methods),
     setOutputTable: (id: string, tableId: string) => nodeStore.setOutputTable(id, tableId),
     setDedupMode: (id: string, mode: 'source' | 'table') => nodeStore.setDedupMode(id, mode),
     setOutFields: (id: string, fields: string[]) => nodeStore.setOutFields(id, fields),

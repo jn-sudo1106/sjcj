@@ -9,8 +9,8 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
-  collectorCapabilityOf, isRuleNode, makeDefaultRuleOrchestration,
-  fieldOptionsFromTableOrOutput,
+  collectorCapabilityOf, isRuleNode, isMonitorNode, makeDefaultRuleOrchestration,
+  fieldOptionsFromTableOrOutput, MONITOR_METHODS,
   type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, ruleApi, type RuleOrchestration } from '@/api'
@@ -29,6 +29,33 @@ const id = computed<string>(() => flow.selectedId)
 const cc = computed(() => cfg.value?.collectCfg)
 
 const isRule = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
+const isMonitor = computed(() => (cfg.value ? isMonitorNode(cfg.value) : false))
+
+// ---- 数据监控节点：监控方法复选（2026-09-01，monitor 不落表/不出参，只绑输入表 + 选监控方法） ----
+const monitorMethods = computed<string[]>(() => cfg.value?.monitorMethods ?? [])
+function setMonitorMethods(values: string[]) {
+  flow.setMonitorMethods(id.value, values ?? [])
+}
+
+// ---- 数据监控节点：保存时把「监控方法 + 输入表」拼成规则处理描述（2026-09-01）----
+// 格式：我想对{输入表名}进行如下监控：\n1.{方法1}\n2.{方法2}…，写入编排配置 Tab 的「规则处理描述」文本框。
+// 输入表名取业务名（EntryType.name），缺省退物理表名（tableName）——与 RuleTableFieldBinder 的表标签同口径。
+function buildMonitorDescribe(tableName: string, methods: string[]): string {
+  return [`我想对${tableName}进行如下监控：`, ...methods.map((m, i) => `${i + 1}.${m}`)].join('\n')
+}
+async function resolveMonitorTableName(): Promise<string> {
+  const tableId = ruleCfg.value.inputTableId?.trim()
+  if (!tableId) return ruleCfg.value.inputTable?.trim() || ''
+  // 优先用主壳已缓存的表清单（entryPaged）拿业务名，不在清单里再查详情，都拿不到退物理表名/tableId
+  const cached = tables.value.find((t) => t.tableId === tableId)
+  if (cached) return cached.name || cached.tableName
+  try {
+    const detail = await entryApi.entryDetail(tableId)
+    return detail?.name || detail?.tableName || ruleCfg.value.inputTable?.trim() || tableId
+  } catch {
+    return ruleCfg.value.inputTable?.trim() || tableId
+  }
+}
 
 // ---- 规则节点：表/字段绑定（0804 拍板：搬回表配置） ----
 const ruleCfg = computed<RuleOrchestration>(() => ({
@@ -51,10 +78,19 @@ const savingRule = ref(false)
 // 生成脚本的 configId 门禁能过。等 W0-3 建配置通路落地后替换为真实回填。
 const TEMP_RULE_NODE_CONFIG_ID = '81947'
 async function onSaveRuleMeta() {
-  const error = !cfg.value?.title?.trim() ? '请先在「节点配置」填写节点名称' : validateTableBinding(ruleCfg.value)
+  const error = !cfg.value?.title?.trim() ? '请先在「节点配置」填写节点名称' : validateTableBinding(ruleCfg.value, { requireOutput: !isMonitor.value })
   if (error) {
     ElMessage.warning(error)
     return
+  }
+  // 数据监控节点：把「监控方法 + 输入表」拼成规则处理描述，写入编排配置 Tab 的「规则处理描述」文本框
+  if (isMonitor.value) {
+    if (!monitorMethods.value.length) {
+      ElMessage.warning('请至少选择 1 个监控方法')
+      return
+    }
+    const tableName = await resolveMonitorTableName()
+    patchRule({ describe: buildMonitorDescribe(tableName, monitorMethods.value) })
   }
   savingRule.value = true
   try {
@@ -204,8 +240,24 @@ async function onTableSaved(tableId: string) {
       :model-value="ruleCfg"
       :input-field-options="inputFieldOptions"
       :output-field-options="outputFieldOptions"
+      :hide-output="isMonitor"
       @update:model-value="patchRule"
     />
+    <div v-if="isMonitor" class="rc-field" data-testid="monitor-methods-field">
+      <label>监控方法</label>
+      <el-select
+        class="rc-table-select"
+        :model-value="monitorMethods"
+        multiple
+        collapse-tags
+        collapse-tags-tooltip
+        clearable
+        placeholder="选择监控方法"
+        @update:model-value="setMonitorMethods"
+      >
+        <el-option v-for="m in MONITOR_METHODS" :key="m" :label="m" :value="m" />
+      </el-select>
+    </div>
     <div class="rc-actions-row">
       <button class="rc-btn primary" type="button" :disabled="savingRule" @click="onSaveRuleMeta">
         {{ savingRule ? '保存中...' : '保存并配置编排' }}
@@ -339,6 +391,16 @@ async function onTableSaved(tableId: string) {
 .rc-input-group .rc-select.grow { border-radius: 7px 0 0 7px; flex: 1; }
 .rc-select { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; }
 .rc-select:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
+.rc-table-select { width: 100%; }
+.rc-table-select :deep(.el-select__wrapper) {
+  min-height: 32px;
+  border-radius: 7px;
+  box-shadow: 0 0 0 1px #dbe3ee inset;
+  font-size: 12px;
+}
+.rc-table-select :deep(.el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px #60a5fa inset, 0 0 0 3px #dbeafe;
+}
 .rc-input-btn { white-space: nowrap; padding: 0 12px; border: 1px solid #dbe3ee; border-left: 0; background: #fff; color: var(--rc-primary); cursor: pointer; font-size: 12px; font-weight: 600; }
 .rc-input-btn:last-child { border-radius: 0 7px 7px 0; }
 .rc-input-btn:hover { background: var(--rc-primary-bg); }

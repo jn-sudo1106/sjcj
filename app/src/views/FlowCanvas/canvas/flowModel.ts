@@ -92,6 +92,10 @@ export interface NodeConfig {
   planned: boolean
   collect?: boolean
   kind?: NodeKind
+  /** 节点模板 key（LIB_GROUPS 里的 template，如 web/rule/monitor/decision…）。插入时写入，作结构信号区分
+   *  复用同一种子的节点类型——典型：monitor 与 rule 都映射 rule 种子，靠它区分「数据监控」与「规则处理」。
+   *  历史流程回读（从 Step 迁移）没有此字段，isMonitorNode 按 undefined 处理为普通规则节点。 */
+  template?: string
   /** 本节点引用的配置 ID（迁移数据来自 Step.configId）。0824-00 §1.1 的新模型里 FlowNode N:1 Config，
    *  节点必须且只能引用一个配置——这个字段就是那个引用。参数绑定/解绑要按它调 config/configParam* 接口。 */
   configId?: string
@@ -144,6 +148,8 @@ export interface NodeConfig {
   stepSourceId?: string
   /** 规则处理节点编排配置（0707 Phase 9：规则引擎 rule-orchestration） */
   ruleCfg?: RuleOrchestration
+  /** 数据监控节点「监控方法」多选值（2026-09-01）。仅 monitor 模板使用，候选值见 MONITOR_METHODS。 */
+  monitorMethods?: string[]
   /**
    * 非规则节点（采集/登录等）的编排配置（0804 S3-3，方案 §3.1 修正 C/D）：抓取配置 XML /
    * 登录配置，跟 ruleCfg 同构复用 RuleOrchestration（含 S3-2 加的 format 字段，此处恒为
@@ -509,6 +515,15 @@ export function decisionOrParallelKind(cfg: NodeConfig): 'decision' | 'parallel'
  */
 export function isRuleNode(cfg?: NodeConfig): boolean {
   return !!cfg?.ruleCfg
+}
+
+/**
+ * 数据监控节点判定（2026-09-01）：monitor 与 rule 复用同一个 rule 种子（TEMPLATE_TO_NODE.monitor='rule'），
+ * isRuleNode 对两者都为 true，区分靠插入时写入的 `template` 结构信号。历史流程回读没有 template，
+ * 按 undefined 处理为普通规则节点（monitor 是新增模板，历史不可能有）。命名/标题正则不可靠（用户可改名）。
+ */
+export function isMonitorNode(cfg?: NodeConfig): boolean {
+  return cfg?.template === 'monitor'
 }
 
 /**
