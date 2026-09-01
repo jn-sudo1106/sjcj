@@ -10,8 +10,16 @@ import ElementPlus, { ElMessageBox } from 'element-plus'
 import NodeInspector from '../NodeInspector.vue'
 import { useFlowStore } from '@/stores/flow'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { dataApi, entryApi, paramApi, ruleApi } from '@/api'
-import type { DataRow, EntryType } from '@/api'
+import { entryApi, paramApi, ruleApi } from '@/api'
+import type { EntryType } from '@/api'
+
+// 0901：测试脚本入口改为切到流程视图右侧「数据视图」tab（view=data），用 mock router 断言跳转目标
+const routerPush = vi.fn()
+const routerReplace = vi.fn()
+vi.mock('vue-router', () => ({
+  useRouter: () => ({ push: routerPush, replace: routerReplace }),
+  useRoute: () => ({ query: { sourceId: 's-1', siteId: 'site-9' } }),
+}))
 
 const INPUT_TABLE: EntryType = {
   tableId: '2102154', tableName: 'sense_data.TB_JD_SKU_BASE', name: 'JD-商品基础',
@@ -85,7 +93,10 @@ function mockAssets() {
   })
 }
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  routerPush.mockClear()
+})
 
 function mountOnRuleNode() {
   setActivePinia(createPinia())
@@ -437,13 +448,9 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
   })
 })
 
-// 0801 方案 §6.5：全屏测试台——左栏选行回填、右栏可改值执行、出参按记录横向铺开
-describe('RuleOrchestrationTab · 全屏测试台（拍板 #12）', () => {
-  const ROWS: DataRow[] = [
-    { dataId: '1000520', sourceId: 's1', title: '', summary: '', acceptState: 'accepted', values: { K1: '2025年', K2: '2月中旬' } },
-    { dataId: '1000521', sourceId: 's1', title: '', summary: '', acceptState: 'accepted', values: { K1: '2026年', K2: '3月上旬' } },
-  ]
-
+// 0901 需求变更：测试脚本入口从全屏测试台弹窗（RuleTestDialog，拍板 #12）改为切换到流程视图
+// 右侧面板的「数据视图」tab（view=data），保留当前源上下文，在画布右侧看节点产出数据。
+describe('RuleOrchestrationTab · 测试脚本切换数据视图', () => {
   function mountWithScript() {
     mockAssets()
     const { flow, wrapper } = mountOnRuleNode()
@@ -465,95 +472,17 @@ describe('RuleOrchestrationTab · 全屏测试台（拍板 #12）', () => {
     expect(disabledBtn.attributes('disabled')).toBeDefined()
   })
 
-  it('点击测试脚本打开全屏弹窗并自动加载数据行', async () => {
+  it('点击测试脚本切到数据视图 tab，保留当前源上下文并带上当前节点定位', async () => {
     const { wrapper } = mountWithScript()
     await flushPromises()
-    const rowSpy = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 2, list: ROWS })
 
     const testBtn = wrapper.findAll('button').find((b) => b.text() === '测试脚本')!
     expect(testBtn.attributes('disabled')).toBeUndefined()
     await testBtn.trigger('click')
     await flushPromises()
 
-    expect(rowSpy).toHaveBeenCalledWith(expect.objectContaining({ tableId: '2102154', page: 1, size: 20 }))
-    expect(wrapper.html()).toContain('1000520')
-    expect(wrapper.html()).toContain('1000521')
-  })
-
-  it('选中一行按 columnName 回填入参表单；执行调用 orchestrationTest 并展示多条出参', async () => {
-    const { wrapper } = mountWithScript()
-    await flushPromises()
-    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 2, list: ROWS })
-    vi.spyOn(ruleApi, 'orchestrationTest').mockResolvedValue({
-      success: true,
-      outputs: [{ sku_name: '2025年' }, { sku_name: '备用值' }],
-      executionTime: 0.12,
-    })
-
-    await wrapper.findAll('button').find((b) => b.text() === '测试脚本')!.trigger('click')
-    await flushPromises()
-
-    // S5-2：行选择从 radio 改成数据展示区尾列的「测试」按钮（DataQueryPanel 的 #columns-after 插槽）
-    const testRowBtn = wrapper.findAll('button').find((b) => b.text() === '测试')!
-    await testRowBtn.trigger('click')
-    await flushPromises()
-
-    // fields prop 只含 sku_id（columns 来自 ruleCfg.inputFields=['sku_id']），columnName 未知时回退原样，
-    // 这里断言入参表单已用选中行数据初始化（K1 对应 EntryType 里未声明 columnName 的字段时回退空串是预期行为，
-    // 关键是确认「点测试即选中即回填」这条主链路：表单值来自 mapRowToInputFields，而非手动敲入）。
-    const paramInput = wrapper.find('.rtd-param-row input')
-    expect(paramInput.exists()).toBe(true)
-
-    await paramInput.setValue('手动改的值')
-    const execBtn = wrapper.findAll('button').find((b) => b.text() === '执行')!
-    await execBtn.trigger('click')
-    await flushPromises()
-
-    expect(ruleApi.orchestrationTest).toHaveBeenCalledWith(expect.objectContaining({
-      ruleId: 'orch-173',
-      inputTable: 'sense_data.TB_JD_SKU_BASE',
-      rows: [{ sku_id: '手动改的值' }],
-    }))
-    expect(wrapper.html()).toContain('记录1')
-    expect(wrapper.html()).toContain('记录2')
-    expect(wrapper.html()).toContain('sku_name')
-  })
-
-  it('筛选条件 SQL：透传给 rowQueryPaged（S5-2 起改走 DataQueryPanel）', async () => {
-    const { wrapper } = mountWithScript()
-    await flushPromises()
-    const rowSpy = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
-
-    await wrapper.findAll('button').find((b) => b.text() === '测试脚本')!.trigger('click')
-    await flushPromises()
-
-    await wrapper.find('button[aria-controls="data-query-advanced"]').trigger('click')
-    await wrapper.find('input[placeholder*="条件表达式"]').setValue("K1='2025'")
-    await wrapper.findAll('button').find((b) => b.text() === '查询')!.trigger('click')
-    await flushPromises()
-
-    expect(rowSpy).toHaveBeenLastCalledWith(expect.objectContaining({ sql: "K1='2025'", page: 1 }))
-  })
-
-  it('查看详情展示选中行全部原始列', async () => {
-    const { wrapper } = mountWithScript()
-    await flushPromises()
-    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 2, list: ROWS })
-
-    await wrapper.findAll('button').find((b) => b.text() === '测试脚本')!.trigger('click')
-    await flushPromises()
-    await wrapper.findAll('button').find((b) => b.text() === '测试')!.trigger('click')
-    await flushPromises()
-
-    const detailBtn = wrapper.findAll('button').find((b) => b.text() === '查看详情')!
-    expect(detailBtn.attributes('disabled')).toBeUndefined()
-    await detailBtn.trigger('click')
-    await flushPromises()
-
-    // 详情弹窗是嵌套 el-dialog，用 append-to-body 避免层级问题，因此其内容会传送到 document.body，
-    // 不在 wrapper 自己的挂载子树里——断言要看 document.body，不是 wrapper.html()。
-    expect(document.body.innerHTML).toContain('2025年')
-    expect(document.body.innerHTML).toContain('2月中旬')
+    expect(routerReplace).toHaveBeenCalledWith({ path: '/canvas', query: { sourceId: 's-1', siteId: 'site-9', view: 'data', nodeId: 'rule-1' } })
+    expect(routerPush).not.toHaveBeenCalled()
   })
 })
 

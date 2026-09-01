@@ -11,6 +11,7 @@
 // 「引用已有规则」能力整体砍掉，复用需求交给模板功能承接（等于回退 edc08d1）。
 import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
 import { isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
@@ -21,9 +22,10 @@ import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
 import { buildDataProcessGeneratePayload } from '@/utils/flow/dataProcess'
 import { promptCategoryGroupsForNode, promptListCategoryForNode, resolvePromptCategoryForNode } from '../promptCategory'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
-import RuleTestDialog from '../RuleTestDialog.vue'
 
 const flow = useFlowStore()
+const router = useRouter()
+const route = useRoute()
 
 const id = computed<string>(() => flow.selectedId)
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
@@ -442,10 +444,16 @@ async function onApplySwitch() {
   }
 }
 
-// ---- 全屏测试台（L3，拍板 #12，见 §6.5）：仅规则节点——抓取配置的"测试"是真打开网页抓一次，
-// 跟脚本测试台的输入来源完全不同，测试台复用不了，本期不做（方案 §3.1 修正 D / §9.2-11）----
-const testDialogOpen = ref(false)
+// ---- 测试脚本：切换到流程视图右侧面板的「数据视图」tab（view=data），保留当前源上下文，
+// 并把当前编辑节点作为 nodeId 带上，让数据视图自动定位到该节点（而不是默认落首节点）——
+// ResultView 初始化时优先取 URL 的 nodeId query（queryNodeId），与「查看条件」深链同一套机制 ----
 const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value.inputTable)
+function goToDataView() {
+  const query: Record<string, string> = { ...route.query } as Record<string, string>
+  query.view = 'data'
+  if (id.value) query.nodeId = id.value
+  void router.replace({ path: '/canvas', query })
+}
 </script>
 
 <template>
@@ -527,7 +535,7 @@ const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value
   <textarea class="rc-code-box" readonly :value="orchCfg.script || codeEmptyHint" />
   <div class="rc-actions-row">
     <button class="rc-btn" type="button" :disabled="!orchCfg.script?.trim()" @click="workbenchOpen = true">全屏查看</button>
-    <button v-if="isRule" class="rc-btn" type="button" :disabled="!canTest" @click="testDialogOpen = true">测试脚本</button>
+    <button v-if="isRule" class="rc-btn" type="button" :disabled="!canTest" @click="goToDataView">测试脚本</button>
     <button class="rc-btn primary" type="button" :disabled="savingScript || !orchCfg.script?.trim()" @click="onSaveScript">
       {{ savingScript ? '保存中...' : saveLabel }}
     </button>
@@ -566,17 +574,6 @@ const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value
     @generate="onGenerateScript"
     @cancel-generate="onCancelGenerate"
     @save="onSaveScript"
-  />
-  <RuleTestDialog
-    v-if="isRule"
-    v-model:open="testDialogOpen"
-    :rule-id="orchCfg.ruleId"
-    :script="orchCfg.script || ''"
-    :input-table="orchCfg.inputTable || ''"
-    :input-table-id="orchCfg.inputTableId || ''"
-    :input-fields="orchCfg.inputFields ?? []"
-    :output-fields="orchCfg.outputFields ?? []"
-    :fields="inputFieldOptions"
   />
 </template>
 
