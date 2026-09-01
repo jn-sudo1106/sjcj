@@ -93,7 +93,7 @@ export function mergeStepForWrite(args: {
     itemId: cfg.itemId ?? snapshot?.itemId,
     extName: snapshot?.extName,
     url: snapshot?.url,
-    condition: condExprOf(cfg),
+    condition: condExprOf(cfg) ?? undefined,
     failAction: cfg.outputAdvanced?.failPolicy || snapshot?.failAction,
     dependsOn: lastStepIds?.length ? lastStepIds : undefined,
     contextMap: cfg.taskCfg?.contextMap ?? snapshot?.contextMap,

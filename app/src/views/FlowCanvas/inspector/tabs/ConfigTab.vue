@@ -202,7 +202,7 @@ async function onSelectExistingRule(rule: RuleOrchestrationItem) {
       }
     }
     flow.setTitle(id.value, detail.name || rule.name)
-    flow.setItemId(id.value, detail.ruleId)
+    if (detail.ruleId) flow.setItemId(id.value, detail.ruleId)
     flow.patchRuleConfig(id.value, {
       mode: 'ref',
       ruleId: detail.ruleId,

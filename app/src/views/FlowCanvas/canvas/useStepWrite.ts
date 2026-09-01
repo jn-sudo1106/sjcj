@@ -72,11 +72,10 @@ export function useStepWrite() {
     const inherited = createTemplateFromPrev(prev, sid, cfg.configId)
     const step = mergeStepForWrite({
       snapshot: {
+        ...inherited,
         stepId: '',
-        sourceId: inherited.sourceId,
         name: cfg.title.trim(),
         enabled: !cfg.disabled,
-        ...inherited,
       },
       cfg,
       nodeId,

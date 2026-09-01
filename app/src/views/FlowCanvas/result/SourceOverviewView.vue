@@ -270,7 +270,7 @@ async function launchSelected(skip: number) {
     const raw = await sourceApi.loadParams(ids)
     if (hasLoadParams(normalizeLoadParams(raw))) {
       launchOpen.value = false
-      paramModalRef.value?.showParam(raw, [...sendable, ...param].map((s) => ({ sourceId: s.sourceId, name: s.name })))
+      paramModalRef.value?.showParam(raw, [...sendable, ...param].map((s) => ({ sourceId: s.sourceId, name: s.name })), false)
       clearSelection()
       return
     }
