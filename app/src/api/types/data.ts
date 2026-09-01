@@ -183,6 +183,20 @@ export interface RowQuery extends PageQuery {
   sortOrder?: 'ascend' | 'descend'
 }
 
+/** 数据视图查询接口 /api/data-center/query 的返回结构（新版数据接口，按物理表名分页查表数据） */
+export interface DataCenterQueryResult {
+  database?: string
+  table?: string
+  total: number
+  pages?: number
+  pageNum?: number
+  pageSize?: number
+  /** 物理列名列表（ENTRY_ID / K1 / K2 ...） */
+  columns: string[]
+  /** 原始数据行（键 = 物理列名，如 { ENTRY_ID: 1300892, K1: '北京', ... }） */
+  rows: Record<string, unknown>[]
+}
+
 /* ---------------- M4 运行记录 ---------------- */
 
 export interface RunIndex {

@@ -4,7 +4,7 @@ import type {
   Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery, Step, SourceLoadParamsResult, SendSnatchWithParamPayload,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestRequest, RuleOrchestrationTestResult,
-  Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
+  Dataset, Measure, DataTableMeta, DataRow, RowQuery, DataCenterQueryResult, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   TaskInstQuery, SiteTableOption, SiteTablesResult,
   Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, CopySourceInput, SourceCloneRequest, SourceCloneResult,
@@ -1252,6 +1252,34 @@ async function rowQueryPagedAt(
   return { total: result.total, list: result.list.map(dataRowFromLegacy) }
 }
 
+/**
+ * 数据视图查询（新版数据接口 /api/data-center/query）。
+ * 该接口按物理表名（库名.表名）分页直查表数据，返回 {columns, rows, total}，与旧 entryDataPaged
+ * （AES 加密、按 entryTypeId + 多条件筛选）是两套后端。q.tableId 是 entryTypeId，而新接口要
+ * 物理表名，故先经 tableMeta 反查 tableName，拿不到时退用 tableId 原值兜底。
+ * 注：新接口当前只支持按表名分页，不支持 dataId/parentId/state/sql/sort 等筛选——筛选能力
+ * 由上层按需处理（演示/降级走 loadData 的 mock 回退分支）。
+ */
+async function dataCenterQueryAt(q: RowQuery): Promise<Paged<DataRow>> {
+  let table = q.tableId
+  try {
+    const meta = await dataApi.tableMeta(q.tableId)
+    if (meta?.tableName) table = meta.tableName
+  } catch {
+    // tableMeta 失败不阻断查询，退用 tableId 兜底
+  }
+  const result = await request<DataCenterQueryResult>('data/dataCenterQuery', {
+    pageNum: q.page ?? 1,
+    pageSize: q.size ?? 20,
+    table,
+  }, {
+    method: 'POST',
+    mode: 'http',
+    httpEndpoint: '/api/data-center/query',
+  })
+  return { total: result.total ?? 0, list: (result.rows ?? []).map(dataRowFromLegacy) }
+}
+
 function escapeFileResourceLike(value: string) {
   return value.replaceAll('\\', '\\\\').replaceAll("'", "''").replaceAll('%', '\\%').replaceAll('_', '\\_')
 }
@@ -1363,6 +1391,8 @@ export const dataApi = {
   rows: async (tableId: string) => (await dataApi.rowQueryPaged({ tableId, page: 1, size: 100 })).list,
   // 结果视图：按表 + 多条件 + 分页（独立端点，避免影响 /data 全局数据页）
   rowQueryPaged: (q: RowQuery, options: DataRequestOptions = {}) => rowQueryPagedAt('data/rowQueryPaged', q, options),
+  // 数据视图查询（新版数据接口 /api/data-center/query，直连本地 8080；结果视图「查询」按钮走这里）
+  dataCenterQuery: (q: RowQuery) => dataCenterQueryAt(q),
   tableMeta: async (tableId: string, options: DataRequestOptions = {}) => {
     // 对照真实源码 loadEntryTypeDetail：res.data 就是扁平的实体表记录（含 items[]），
     // curEntryType 只是旧前端本地变量名，响应体里没有这层包装，不需要解包

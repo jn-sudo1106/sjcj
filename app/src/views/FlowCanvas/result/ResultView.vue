@@ -590,7 +590,7 @@ async function loadData() {
     }
     let [metaRes, dataRes] = await Promise.allSettled([
       dataApi.tableMeta(selectedTable.value),
-      dataApi.rowQueryPaged(query),
+      dataApi.dataCenterQuery(query),
     ])
     if (id !== requestId) return
     // 真实请求失败时，先把失败原因留下来——它一直都在（client.ts 会把 4xx/5xx 响应体里的

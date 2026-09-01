@@ -285,6 +285,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'data/rowPaged', desc: '实体数据行', impl: true },
   { path: 'data/stats', desc: '数据查看 KPI', impl: true },
   { path: 'data/rowQueryPaged', desc: '结果视图：按表+筛选分页查询', impl: true },
+  { path: 'data/dataCenterQuery', desc: '结果视图：数据查询 → /api/data-center/query（按物理表名分页，新版数据接口）' },
   { path: 'data/tableMeta', desc: '单表 schema 元信息', impl: true },
   { path: 'data/rowUpdate', desc: '结果视图：行编辑保存', impl: true },
   // 以下 E 包新增方法暂无专属 mock handler（尚无 UI 消费），演示环境走 client.ts 的通用 fallback 兜底
