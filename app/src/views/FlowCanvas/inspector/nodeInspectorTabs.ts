@@ -1,4 +1,4 @@
-import { decisionOrParallelKind, isRuleNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { decisionOrParallelKind, isRuleNode, isMonitorNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
 
 export type NodeInspectorTab = 'config' | 'table' | 'params' | 'orchestration' | 'task' | 'ai'
@@ -29,7 +29,7 @@ export function nodeInspectorTabs(cfg?: NodeConfig, options: { includeAi?: boole
     ['task', '任务配置'],
     ...(options.includeAi === false ? [] : [['ai', 'AI 对话'] as NodeInspectorTabItem]),
   ]
-  if (isRule && validateTableBinding(cfg?.ruleCfg ?? { inputTableId: '', inputFields: [], outputFields: [] })) {
+  if (isRule && validateTableBinding(cfg?.ruleCfg ?? { inputTableId: '', inputFields: [], outputFields: [] }, { requireOutput: !isMonitorNode(cfg) })) {
     const orchestration = tabs.find((t) => t[0] === 'orchestration')!
     orchestration[2] = '请先在「表配置」完成输入/输出表与字段选择'
   }

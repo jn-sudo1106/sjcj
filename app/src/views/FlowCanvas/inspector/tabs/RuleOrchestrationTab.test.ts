@@ -108,6 +108,18 @@ function mountOnRuleNode() {
   return { flow, wrapper }
 }
 
+function mountOnMonitorNode() {
+  setActivePinia(createPinia())
+  const flow = useFlowStore()
+  const cfg = cloneConfig(NODE_CONFIGS['rule'])
+  cfg.template = 'monitor'
+  flow.configs['monitor-1'] = cfg
+  flow.select('monitor-1')
+  flow.setActiveTab('orchestration')
+  const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+  return { flow, wrapper }
+}
+
 // 0801 方案 §6.4：有 ruleId 后展开的「查看业务编排」——描述/生成脚本/全屏查看/编辑系统提示词/保存脚本
 // （0804 起这就是本 Tab 的全部内容，不再有 showBinder 两态切换）
 describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
@@ -159,6 +171,30 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     await flushPromises()
 
     expect(ruleApi.dataProcessGenerate).not.toHaveBeenCalled()
+  })
+
+  it('数据监控节点无出参字段仍能生成脚本（跳过出参校验）', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnMonitorNode()
+    flow.patchRuleConfig('monitor-1', {
+      mode: 'ref', ruleId: 'orch-mon-1',
+      describe: '我想对JD-商品基础表进行如下监控：\n1.当日数据是否正常入库',
+      dataSource: 'dp-wwdata', inputTable: 'sense_data.TB_JD_SKU_BASE', inputTableId: '2102154',
+      inputFields: ['sku_id'], outputFields: [],
+      modelProviderCode: 'DeepSeek', modelCode: 'deepseek-chat',
+    })
+    flow.configs['monitor-1'].configId = '184'
+    await flushPromises()
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockResolvedValue({
+      script: 'def main(sku_id):\n    return {}',
+      scriptPath: '/code01/184.py',
+    })
+
+    const genBtn = wrapper.findAll('button').find((b) => b.text().includes('生成脚本'))!
+    await genBtn.trigger('click')
+    await flushPromises()
+
+    expect(ruleApi.dataProcessGenerate).toHaveBeenCalled()
   })
 
   it('未保存表配置时点生成脚本：不调用接口', async () => {

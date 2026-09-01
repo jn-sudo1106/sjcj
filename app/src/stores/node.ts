@@ -327,6 +327,14 @@ export const useNodeStore = defineStore('node', () => {
     touchConfig(id)
   }
 
+  /** 数据监控节点「监控方法」多选值（2026-09-01）：落在节点上，走配置脏标记（后续随节点配置写入通路持久化）。 */
+  function setMonitorMethods(id: string, methods: string[]) {
+    const c = configs[id]
+    if (!c) return
+    c.monitorMethods = [...new Set(methods.filter(Boolean))]
+    touchConfig(id)
+  }
+
   return {
     // 状态
     selectedId,
@@ -351,6 +359,7 @@ export const useNodeStore = defineStore('node', () => {
     patchSchedule,
     patchRuleConfig,
     patchExecConfig,
+    setMonitorMethods,
     setOutputTable,
     setDedupMode,
     setOutFields,

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useFlowStore } from './flow'
 import { mockFlowRecommend, mockNodeAiChat } from '../api/mock/flows'
-import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES, buildSourceSeed, isRuleNode, iconFor, nodeClassFor } from '@/views/FlowCanvas/canvas/flowModel'
+import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES, buildSourceSeed, isRuleNode, isMonitorNode, iconFor, nodeClassFor } from '@/views/FlowCanvas/canvas/flowModel'
 import { makePresetFlowTemplates } from '@/utils/flow/flowTemplates'
 import type { Source } from '../api'
 
@@ -34,6 +34,9 @@ describe('flow store 编辑动作', () => {
     expect(f.configs[id].itemId).toBe('-1')
     expect(f.configs[id].inputTable).toBe('900')
     expect(f.configs[id].ruleCfg?.inputTableId).toBe('900')
+    // 规则处理节点不是数据监控节点（template 信号区分）
+    expect(f.configs[id].template).toBe('rule')
+    expect(isMonitorNode(f.configs[id])).toBe(false)
   })
 
   it('moveTo 重排且保持首尾终端', () => {
@@ -1479,6 +1482,9 @@ describe('数据监控节点（2026-09-01，配置同规则处理）', () => {
     expect(f.configs[id].title).toBe('数据监控')
     // 结构信号而不是标题正则：改名不含"规则"二字也不会被误判成非规则节点
     expect(isRuleNode(f.configs[id])).toBe(true)
+    // template 结构信号区分「数据监控」与「规则处理」（monitor 复用 rule 种子）
+    expect(f.configs[id].template).toBe('monitor')
+    expect(isMonitorNode(f.configs[id])).toBe(true)
     // 跟「规则处理」共用 applyRuleStepDefaults：自动继承上游输出表作为本节点输入表
     const upstreamTable = f.configs[upstreamId].collectCfg?.outputTable || f.configs[upstreamId].outputTable
     expect(f.configs[id].ruleCfg?.inputTableId).toBe(upstreamTable)
@@ -1488,6 +1494,31 @@ describe('数据监控节点（2026-09-01，配置同规则处理）', () => {
     const id = f.insertAfter('start', 'monitor')
     expect(iconFor(f.configs[id])).toBe('R')
     expect(nodeClassFor(f.configs[id])).toBe('rule-node')
+  })
+
+  it('上游有 configId 时，数据监控节点名保留「数据监控」而非被顶成「规则处理」（2026-09-01 修复）', () => {
+    const upstreamId = f.main.find((id) => id !== 'start' && id !== 'end')!
+    f.configs[upstreamId].configId = '1400979'
+    const id = f.insertAfter(upstreamId, 'monitor')!
+    expect(f.configs[id].title).toBe('1400979-数据监控')
+    expect(f.configs[id].configName).toBe('1400979-数据监控')
+    // 结构信号仍按规则节点识别（配置复用 rule 种子），仅命名不再顶成「规则处理」
+    expect(isRuleNode(f.configs[id])).toBe(true)
+  })
+
+  it('从后端步骤回读时，节点名「数据监控」补回 template=monitor，仍识别为监控节点（2026-09-01 修复）', () => {
+    // 新建 monitor 保存时 nodeType 继承前置步骤（这里是 list），后端 Step 无 template 字段；
+    // 回读靠 buildNodeForStep 的节点名识别补回结构信号，否则 isMonitorNode 恒 false。
+    const source = { sourceId: 's-mon', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: 'st1', sourceId: 's-mon', name: '列表抓取', inputTable: '-', outputTable: 'T1', nodeType: 'list', enabled: true },
+      { stepId: 'st2', sourceId: 's-mon', name: '数据监控', inputTable: 'T1', outputTable: 'T1', nodeType: 'entry', dependsOn: ['st1'], enabled: true },
+    ] as never)
+
+    const mon = seed.configs.st2
+    expect(isRuleNode(mon)).toBe(true)
+    expect(isMonitorNode(mon)).toBe(true)
+    expect(mon.template).toBe('monitor')
   })
 })
 

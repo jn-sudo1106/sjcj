@@ -772,12 +772,46 @@ export const TEMPLATE_TO_NAME: Record<string, string> = Object.fromEntries(
   LIB_GROUPS.flatMap((g) => g.items.map((it) => [it.template, it.name])),
 )
 
+// 数据监控节点「监控方法」候选值（2026-09-01 新增，monitor 模板专用）。
+// 旧平台的数据监控是源列表行内菜单（跳独立监控中心），没有可抄的节点类型号/枚举，这里按产品给的清单落。
+export const MONITOR_METHODS: readonly string[] = [
+  '当日数据是否正常入库',
+  '数据延迟监控',
+  '入库时间分布监控',
+  '最新数据时间监控',
+  '连续无数据天数监控',
+  '每日数据量监控',
+  '历史趋势稳定性监控',
+  '环比数据量波动监控',
+  '同比周期波动监控',
+  '分品类数据量趋势',
+  '核心字段为空监控',
+  '数据完整性监控',
+  '字段格式合法性监控',
+  '字符串值监控',
+  '单位规范性监控',
+  '价格异常监控',
+  '价格波动监控',
+  '涨跌幅阈值监控',
+  '品类覆盖率监控',
+  '今日与昨日差异监控',
+  '分系列数据量趋势',
+  '系列覆盖率监控',
+  '分品名数据量趋势',
+  '品名覆盖率监控',
+]
+
 // ---------- 流程构造器 ----------
 /**
  * item/next 返回的是后端步骤，而画布展示的是节点。这里保留后端给出的稳定 stepId，
  * 只把没有独立节点类型的历史字段转换成现有节点模板；这样流程视图不会再依赖页面自己生成的随机节点 ID。
  */
 function templateKeyForStep(step: Step, index: number): string {
+  const name = step.name || ''
+  // 数据监控节点（0901 新增，monitor 复用 rule 种子）从后端回读时，Step 没有独立的 nodeType 标识
+  // （新建时 nodeType 继承前置步骤，可能是 entry/list/detail），只能靠节点名识别，且必须优先于下方
+  // nodeType 别名映射——否则 nodeType='list'/'detail' 会把它错路由成采集/详情节点，丢掉 ruleCfg。
+  if (/数据监控/.test(name) && NODE_CONFIGS.rule) return 'rule'
   const explicit = String(step.nodeType ?? '').trim().toLowerCase()
   // NODE_CONFIGS 里登录模板注册的 key 是 'login-collect'，不是 'login'（下面三处此前都在查
   // 一个不存在的 key，恒为 falsy，登录节点路由从未真正生效过；2026-08-26 加 isLoginConfig 路由时
@@ -794,7 +828,6 @@ function templateKeyForStep(step: Step, index: number): string {
   // "登录"二字（该样本是"登陆"），名字正则会漏判；查不到时才回退到名字正则。
   if (step.isLoginConfig && NODE_CONFIGS['login-collect']) return 'login-collect'
 
-  const name = step.name || ''
   if (/登录/.test(name) && NODE_CONFIGS['login-collect']) return 'login-collect'
   if (/规则/.test(name) && NODE_CONFIGS.rule) return 'rule'
   if (/清洗/.test(name) && NODE_CONFIGS.clean) return 'clean'
@@ -912,6 +945,9 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
 function buildNodeForStep(source: Source, step: Step, index: number): NodeConfig {
   const cfg = cloneConfig(NODE_CONFIGS[templateKeyForStep(step, index)])
   cfg.title = step.name || (index === 0 ? '列表抓取' : '详情解析')
+  // 数据监控节点（monitor 复用 rule 种子）：后端 Step 无 template 字段，靠节点名补回结构信号，
+  // 让 isMonitorNode()（系统提示词分类 / 表配置监控方法 / 描述拼接等）在回读后仍能区分 monitor 与 rule。
+  if (/数据监控/.test(cfg.title)) cfg.template = 'monitor'
   if (cfg.collectCfg) {
     // 源级字段（源名称/分类/标签/登录/选用配置等）不再复制到节点：随 loadFromSource 整体挂到 flow.sourceCfg（0706 优化·源/节点配置分层）
     cfg.collectCfg.url = source.url
