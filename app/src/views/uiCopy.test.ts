@@ -393,10 +393,11 @@ describe('最新方案 UI 入口收口', () => {
   })
 
   it('规则节点使用独立的编排配置 Tab，节点配置 Tab 不再内嵌规则编排面板（0801 方案）', () => {
-    // 0804 S2-2：表/字段绑定搬去表配置 Tab；中间「保存并配置编排」已去掉，换 ruleId 在第一次生成脚本
-    // 0831（33e5b04）：data-process 生成脚本临时只认 configId，规则节点表配置 Tab 里又加回了这个按钮
-    // ——TableTab.test.ts 已有专门断言覆盖这个临时例外，这里不再重复锁死"不能有"。
+    // 0804 S2-2：表/字段绑定搬去表配置 Tab。0831 临时方案：data-process 生成脚本只认 configId，
+    // 表配置 Tab 临时保留「保存并配置编排」落 compose 并回填 configId=81947，再进编排配置 Tab——
+    // 0801 方案里「中间已去掉」的最终形态待临时方案撤除后恢复，此处按现状锁定为保留。
     expect(tableTab).toContain('RuleTableFieldBinder')
+    expect(tableTab).toContain('保存并配置编排')
     expect(ruleOrchestrationTab).toContain('查看业务编排')
     expect(ruleOrchestrationTab).not.toContain('保存业务规则')
     expect(ruleOrchestrationTab).not.toContain('修改表字段')
