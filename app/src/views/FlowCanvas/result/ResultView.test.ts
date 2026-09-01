@@ -8,6 +8,7 @@ import ProcessNodeRail from './ProcessNodeRail.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import { dataApi, isProductionBackend, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source } from '@/api'
 import { useFlowStore } from '@/stores/flow'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
 import type { NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 
@@ -51,13 +52,7 @@ const RowDetailFieldsStub = {
   props: ['fields', 'editing', 'values', 'compact', 'showEmpty', 'visibleProps'],
   template: '<div class="rdf-stub"><div v-for="f in (fields || [])" :key="f.key">{{ f.name }} {{ f.value }}</div></div>',
 }
-const DataCondBuilderStub = {
-  name: 'DataCondBuilder',
-  props: ['modelValue', 'fields'],
-  emits: ['update:modelValue'],
-  template: '<input data-testid="data-cond-sql" :value="modelValue" placeholder="SQL 条件" @input="$emit(\'update:modelValue\', $event.target.value)" />',
-}
-const STUBS = { CanvasHeader: true, ElDrawer: ElDrawerStub, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, DataCondBuilder: DataCondBuilderStub, SummaryDrawer: true }
+const STUBS = { CanvasHeader: true, ElDrawer: ElDrawerStub, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, SummaryDrawer: true }
 
 describe('ResultView', () => {
   afterEach(() => vi.restoreAllMocks())
@@ -566,6 +561,7 @@ describe('ResultView · 默认节点与默认列（0831 F09/F10）', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     localStorage.clear()
+    sessionStorage.clear()
   })
 
   it('默认选中首个节点，不是末端结果表', async () => {
@@ -573,6 +569,23 @@ describe('ResultView · 默认节点与默认列（0831 F09/F10）', () => {
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
     loadExecFixture(flow, current)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+
+    const wrapper = mountResultView()
+    await flushPromises()
+
+    expect(wrapper.findComponent(ProcessNodeRail).props('modelValue')).toBe('first')
+  })
+
+  it('再次进入数据视图仍落在首节点，不恢复上次停在末节点的快照', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    const ws = useWorkspaceStore()
+    ws.open('391007768', 'demo')
+    ws.saveSnapshot('391007768', { view: 'data', selectedNodeId: 'sink', page: 3 })
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
 

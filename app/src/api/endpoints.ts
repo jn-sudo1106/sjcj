@@ -31,7 +31,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 导致「删除源」表面上像是接了真实接口，实际仍然悄悄走 mock（旧平台 SITE 编辑同款踩坑，见 §site/update）。
   { path: 'source/deleteSource', desc: '删除源 → GET /v1/source/delete?ids=', danger: true, impl: true },
   { path: 'source/delete', desc: '删除源（真实路径，见上方 source/deleteSource 的说明）', danger: true, live: true },
-  { path: 'source/copySource', desc: '复制派生源', danger: true, impl: true },
+  // 2026-09-01：侧栏「按模板源添加」每天都在调。旧 GET /v1/source/copySource?sourceId&name&url&flag，
+  // 响应 data 通常是 null，新源 ID 靠复制前后 sourcePaged 差集定位。
+  { path: 'source/copySource', desc: '复制派生源（制作源副本 / 源+配置副本）', danger: true, impl: true, live: true },
   // 0706 优化·Phase3 新增（前端新流程，非 142 逆向清单原有项）：新建采集源两段式闸门
   { path: 'source/createSource', desc: '新建源（闸门创建，含 ID 查重）', impl: true },
   { path: 'source/sourceCopy', desc: '从现有源复制预填（模板复用，不落库）', impl: true },
@@ -315,9 +317,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'site/add', desc: '独立新建网站', danger: true },
   // 关系写入必须显式切 HTTP + 受控环境；不能因默认 mock 下的 live 机制误触发真实绑定。
   { path: 'source/bindSite', desc: '将源关联到网站', danger: true, impl: true },
-  // 批量版 bindSite（0812 计划 M4-5）；2026-08-15 生产环境已实测确认契约（Q4：无效 ID 静默跳过，
-  // 不是整批失败），同样不给默认 live，联调需显式切 HTTP + 受控环境。
-  { path: 'source/changeSite', desc: '批量关联/变更源所属网站', danger: true, impl: true },
+  // 批量版 bindSite（0812 计划 M4-5）；2026-08-15 生产实测契约（Q4：无效 ID 静默跳过，不是整批失败）。
+  // 2026-09-01：侧栏「导入已有源 / 更换网站」每天都在调，不标 live 等于界面骗人；UI 已有二次确认。
+  { path: 'source/changeSite', desc: '批量关联/变更源所属网站', danger: true, impl: true, live: true },
   { path: 'site/siteDetail', desc: '网站详情', impl: true },
   { path: 'site/createSite', desc: '新建采集：网站 + 首批源', impl: true },
   // 真实路径是 /v1/site/update（POST，body 为 cfg_site 实体），见旧前端 src/api/site.js:95。

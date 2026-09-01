@@ -7,7 +7,7 @@ import type {
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   TaskInstQuery, SiteTableOption, SiteTablesResult,
   Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
-  OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, SourceCloneRequest, SourceCloneResult,
+  OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, CopySourceInput, SourceCloneRequest, SourceCloneResult,
   FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
 } from './types'
 import type { FlowDef, FlowRecommendation } from '@/views/FlowCanvas/canvas/flowModel'
@@ -204,6 +204,63 @@ function idFromApiResult(result: unknown, keys: string[]): string | undefined {
   return undefined
 }
 
+async function sourcesByNameLike(name: string): Promise<Source[]> {
+  const trimmed = name.trim()
+  if (!trimmed) return []
+  const result = await request<unknown>('source/sourcePaged', { name: trimmed, size: 100 }, {
+    method: 'POST',
+    httpEndpoint: 'source/sourcePaged',
+    httpParams: {
+      pageNo: 1,
+      pageSize: 100,
+      page: 1,
+      limit: 100,
+      name: trimmed,
+    },
+  })
+  return sourcePageFromLegacy(result).list
+}
+
+/**
+ * 旧 `GET /v1/source/copySource`（`api/source.js`；`SourceList.vue` `handleCopySource`）。
+ * 文档出参 `data` 为 null，偶发 `msg` 带「源ID:」时顺手收下；否则靠 `copySourceAndLocate` 差集定位。
+ */
+async function copySource(input: CopySourceInput): Promise<Ack & { sourceId?: string }> {
+  const result = await request<unknown>('source/copySource', input as unknown as Record<string, unknown>, {
+    method: 'GET',
+    httpEndpoint: 'source/copySource',
+    httpParams: {
+      sourceId: input.sourceId,
+      name: input.name,
+      url: input.url,
+      flag: input.flag,
+    },
+  })
+  const ack = ackFromApiResult(result)
+  const sourceId = idFromApiResult(result, ['sourceId', 'id'])
+    ?? ack.message?.match(/源ID[:：]\s*([^\s,，]+)/)?.[1]
+  return sourceId ? { ...ack, sourceId } : ack
+}
+
+/**
+ * 复制源并定位新 ID。`copyAll` 同款：复制前后按名称各查一次，取新增那条。
+ * 不要按 `原名_copy` 回查——用户填的是新名称，且同名可能早就存在。
+ */
+async function copySourceAndLocate(input: CopySourceInput) {
+  const name = input.name.trim()
+  if (!input.sourceId) return { ok: false as const, message: '请选择要复制的源' }
+  if (!name) return { ok: false as const, message: '请填写新的源名称' }
+  const before = new Set((await sourcesByNameLike(name)).map((item) => item.sourceId))
+  const ack = await copySource({ ...input, name })
+  if (!ack.ok) return { ok: false as const, message: ack.message || '复制源失败' }
+  if (ack.sourceId && !before.has(ack.sourceId)) return { ok: true as const, sourceId: ack.sourceId, name }
+  const added = (await sourcesByNameLike(name)).filter((item) => !before.has(item.sourceId))
+  if (added.length !== 1) {
+    return { ok: false as const, message: `复制后无法唯一定位新源（匹配到 ${added.length} 条），请刷新源列表确认` }
+  }
+  return { ok: true as const, sourceId: added[0].sourceId, name: added[0].name }
+}
+
 function legacySnatchSavePayloadFromSource(site: Site, source: Source): LegacySnatchSaveRequest {
   return {
     sourceType: source.sourceType ?? '90',
@@ -374,7 +431,13 @@ export const sourceApi = {
   // 改为成功状态（0707 Review #1 修复：端点已登记但此前未封装，SourceTab 曾误用 changeSourceEnable）。
   // 注：endpoints.ts:54 只登记 path 无参数契约，按单源封装；批量场景由调用方循环（见 SourceTab.onOperate）。
   changeToSuccess: (sourceId: string) => assetMockRequest<Ack>('source/changeToSuccess', { sourceId }),
-  copySource: (sourceId: string) => assetMockRequest<Ack>('source/copySource', { sourceId }),
+  /**
+   * 复制源。旧 `GET /v1/source/copySource?sourceId&name&url&flag`（`SourceList.handleCopySource`）。
+   * `flag=1` 同时复制配置，`flag=0` 只复制源、共用原配置。响应 `data` 通常是 null，
+   * 新源 ID 请走 `copySourceAndLocate`，不要猜名字。
+   */
+  copySource,
+  copySourceAndLocate,
   /** 发起抓取；真实执行器的登录配置选择参数待 P0 契约确认，当前只沿用旧 sourceIds 请求。 */
   sendSnatch: (sourceIds: string[]) =>
     assetMockRequest<Ack>('source/sendSnatch', { sourceIds }),
@@ -758,6 +821,7 @@ export const siteApi = {
   sourceAdd: (siteId: string, source: Source, inherit = false) =>
     assetMockRequest<{ ok: boolean; message?: string; sourceId?: string }>('site/addSource', { siteId, source, inherit }),
   cloneSource: (requestBody: SourceCloneRequest) =>
+    // 侧栏「按模板源添加」已改走 source/copySource；本方法是自造 BFF，保留给旧测试与 mock。
     assetMockRequest<SourceCloneResult>('site/cloneSource', requestBody as unknown as Record<string, unknown>),
   sourceRemove: (siteId: string, sourceId: string) => assetMockRequest<Ack>('site/removeSource', { siteId, sourceId }),
   // 按网站批量导入源：一行一条「名称;URL」，导入后从空白流程开始。

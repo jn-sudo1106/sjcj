@@ -96,7 +96,15 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'source/nextStep2',
   // 2026-08-27 拍板放开：源换网站 / 删除源 / 网站重命名（侧栏右键菜单）。
   // source/delete 是**永久删除源**，本清单里破坏性最强的一条，UI 侧必须保留二次确认。
+  // 2026-09-01 补漏：当时注释写了「源换网站」但白名单只放了 delete，changeSite 打生产仍被拦。
   'source/delete',
+  'source/changeSite',
+  // 2026-09-01：源启停。日常已 live（httpEndpoint=source/changeEnable），漏加白名单则
+  // 生产顶栏「禁止改删」会拦，源视图批量启停点了后端收不到。
+  'source/changeEnable',
+  // 2026-09-01：复制源。侧栏「按模板源添加」原先打自造 BFF site/cloneSource（永远 mock）。
+  // 纯新增，与 snatchSave / copyAll 同性质；flag=1 会多出一套配置，不改原源。
+  'source/copySource',
   'site/update',
   // 2026-08-28 拍板放开：源重命名（source/updateSource，team_six bfbbcf7 已切真实请求，
   // 但漏加本白名单，导致打生产时被写保护拦下）。

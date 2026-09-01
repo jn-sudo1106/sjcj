@@ -15,6 +15,12 @@ describe('端点契约一致性', () => {
     expect(LIVE_ENDPOINTS.has('source/tagSource')).toBe(true)
     expect(LIVE_ENDPOINTS.has('source/setColor')).toBe(true)
   })
+  it('源启停 / 换网站 / 复制源已标 live（真实 path，不是逻辑名）', () => {
+    expect(LIVE_ENDPOINTS.has('source/changeEnable')).toBe(true)
+    expect(LIVE_ENDPOINTS.has('source/changeSourceEnable')).toBe(false)
+    expect(LIVE_ENDPOINTS.has('source/changeSite')).toBe(true)
+    expect(LIVE_ENDPOINTS.has('source/copySource')).toBe(true)
+  })
   it('步骤写接口已标 live，日常 mock 模式也会打真实 item/next', () => {
     expect(LIVE_ENDPOINTS.has('item/next/saveItemConfig')).toBe(true)
     expect(LIVE_ENDPOINTS.has('item/next/stepModify')).toBe(true)

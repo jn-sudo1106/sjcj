@@ -26,8 +26,7 @@ describe('TaskView', () => {
     expect(wrapper.find('[data-testid="task-process-rail"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="task-view-banner"]').text()).toContain('数据视图')
     expect(wrapper.find('[data-testid="task-goto-data"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="task-node-filter"]').exists()).toBe(true)
-    expect(wrapper.get('[data-testid="task-node-filter"]').text()).toContain('全部节点')
+    expect(wrapper.find('[data-testid="task-node-filter"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('列表抓取')
     expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('队列')
     expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('总任务数')
@@ -50,6 +49,7 @@ describe('TaskView', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="task-process-rail"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="task-node-filter"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('所属源')
   })
 })

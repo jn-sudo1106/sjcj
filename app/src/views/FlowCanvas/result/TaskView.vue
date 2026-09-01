@@ -130,6 +130,10 @@ watch(() => [filters.sourceId, filters.nodeId, filters.state] as const, ([nextSo
   void Promise.all([nextSourceId !== previous?.[0] ? loadNodeMetadata() : Promise.resolve(), loadTasks()])
 }, { immediate: true })
 
+function onSelectNode(id: string) {
+  filters.nodeId = filters.nodeId === id ? '' : id
+}
+
 function resetFilters() {
   filters.sourceId = props.siteWide ? '' : sourceId.value
   filters.nodeId = ''
@@ -200,7 +204,7 @@ function openDataView() {
       <div v-if="!source" class="tv-empty-row">{{ siteWide ? '该网站暂无源，无法查看任务。' : '任务视图仅在源详情下可用。' }}</div>
       <template v-else>
         <div v-if="!siteWide" class="tv-process-rail" data-testid="task-process-rail">
-          <ProcessNodeRail v-model="filters.nodeId" :layout="processLayout" />
+          <ProcessNodeRail :model-value="filters.nodeId" :layout="processLayout" @update:model-value="onSelectNode" />
         </div>
 
         <div class="tv-banner" data-testid="task-view-banner">
@@ -211,7 +215,7 @@ function openDataView() {
           下一节点会用到：{{ nextStepHints.join('、') }}
         </p>
         <div class="tv-filters">
-          <select v-model="filters.nodeId" class="tv-input" data-testid="task-node-filter" aria-label="流程节点">
+          <select v-if="siteWide" v-model="filters.nodeId" class="tv-input" data-testid="task-node-filter" aria-label="流程节点">
             <option value="">全部节点</option>
             <option v-for="step in filterSteps" :key="`${step.sourceId}-${step.stepId}`" :value="step.stepId">{{ showSourceColumn ? `${sourceNames[step.sourceId] || step.sourceId} · ${step.name}` : step.name }}</option>
           </select>

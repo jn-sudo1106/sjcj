@@ -435,14 +435,28 @@ async function submitAdd() {
     return
   }
   if (selectedTemplate.value) {
-    const res = await siteApi.cloneSource({
-      templateSourceId: selectedTemplate.value.sourceId,
-      targetSiteId: props.siteId,
-      target,
-    })
-    if (!res?.source) return
-    addedId = res.source.sourceId
-    ElMessage.success(`已复制源「${target.name}」的流程、相关配置和表结构（不复制数据）`)
+    try {
+      const copied = await sourceApi.copySourceAndLocate({
+        sourceId: selectedTemplate.value.sourceId,
+        name: target.name,
+        url: target.url,
+        flag: 1,
+      })
+      if (!copied.ok) {
+        ElMessage.warning(copied.message)
+        return
+      }
+      const bind = await sourceApi.changeSite([copied.sourceId], props.siteId)
+      if (!bind.ok) {
+        ElMessage.warning(bind.message || `源已复制（#${copied.sourceId}），但未能关联到当前网站，请用「导入已有源」`)
+        return
+      }
+      addedId = copied.sourceId
+      ElMessage.success(`已复制源「${target.name}」及配置`)
+    } catch (error) {
+      ElMessage.error(`复制源失败：${error instanceof Error ? error.message : String(error)}`)
+      return
+    }
   } else {
     const res = await siteApi.sourceAdd(
       props.siteId,
@@ -984,7 +998,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
           </div>
         </div>
         <div class="ssw-add-hint">
-          {{ selectedTemplate ? `将复制「${selectedTemplate.name}」的流程节点、相关配置和表结构，不复制数据与运行记录。` : '仅创建名称和 URL，流程从空白画布开始。' }}
+          {{ selectedTemplate ? `将复制「${selectedTemplate.name}」的源及配置到当前网站（旧平台「制作源+配置副本」），不复制表数据与运行记录。` : '仅创建名称和 URL，流程从空白画布开始。' }}
         </div>
       </template>
 

@@ -547,8 +547,13 @@ function laterRunnableIdsOnMain(
  * 首节点——按主链顺序找第一个跳过 start/end 占位、未停用、非规划中、非决策/分头的真实节点。
  * 只在主链上找：分支内节点天然有 owner 节点作为上游依赖，不可能是流程的入口。
  */
+/** 主链上第一个可跑节点。数据视图默认落点（0831 F09），不要拿 layout.nodes[0] 代替——那会把停用/规划中/决策节点算进去。 */
+export function firstRunnableNodeId(main: string[], configs: Record<string, NodeConfig>): string {
+  return main.find((nid) => isRunnableFlowNode(nid, configs)) ?? ''
+}
+
 export function isFirstRunnableNode(main: string[], configs: Record<string, NodeConfig>, id: string): boolean {
-  return main.find((nid) => isRunnableFlowNode(nid, configs)) === id
+  return firstRunnableNodeId(main, configs) === id
 }
 
 /**

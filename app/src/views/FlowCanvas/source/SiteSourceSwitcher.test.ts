@@ -36,8 +36,8 @@ function mockApis() {
   vi.spyOn(siteApi, 'siteSources').mockImplementation(async (siteId) => siteId === 'site-template' ? [{ ...templateSource }] : [{ ...source }])
   vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [templateSource] })
   vi.spyOn(siteApi, 'sourceAdd').mockResolvedValue({ ok: true, sourceId: 'source-new' })
-  vi.spyOn(siteApi, 'cloneSource').mockResolvedValue({
-    source: { ...source, sourceId: 'source-new', name: '复制源' }, flowId: 'flow-new', tableIdMap: {},
+  vi.spyOn(sourceApi, 'copySourceAndLocate').mockResolvedValue({
+    ok: true, sourceId: 'source-new', name: '复制源',
   })
   vi.spyOn(sourceApi, 'sourceUpdate').mockResolvedValue({ ok: true })
   vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({})
@@ -73,8 +73,15 @@ describe('SiteSourceSwitcher', () => {
     await inputs[0].setValue('默认复制源')
     await inputs[1].setValue('https://default.example.com')
     await wrapper.get('[data-testid="add-source-submit"]').trigger('click')
+    await flushPromises()
 
-    expect(siteApi.cloneSource).toHaveBeenCalledWith(expect.objectContaining({ templateSourceId: source.sourceId }))
+    expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith(expect.objectContaining({
+      sourceId: source.sourceId,
+      name: '默认复制源',
+      url: 'https://default.example.com',
+      flag: 1,
+    }))
+    expect(sourceApi.changeSite).toHaveBeenCalledWith(['source-new'], 'site-a')
   })
 
   it('可搜索并选择全部源作为模板，复制范围为源', async () => {
@@ -88,12 +95,15 @@ describe('SiteSourceSwitcher', () => {
     await flushPromises()
     await wrapper.get('[data-testid="source-template-option"]').trigger('click')
     await wrapper.get('[data-testid="add-source-submit"]').trigger('click')
+    await flushPromises()
 
-    expect(siteApi.cloneSource).toHaveBeenCalledWith({
-      templateSourceId: templateSource.sourceId,
-      targetSiteId: 'site-a',
-      target: { name: '复制源', url: 'https://copied.example.com' },
+    expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith({
+      sourceId: templateSource.sourceId,
+      name: '复制源',
+      url: 'https://copied.example.com',
+      flag: 1,
     })
+    expect(sourceApi.changeSite).toHaveBeenCalledWith(['source-new'], 'site-a')
     expect(siteApi.sourceAdd).not.toHaveBeenCalled()
   })
 
@@ -105,10 +115,24 @@ describe('SiteSourceSwitcher', () => {
     await inputs[1].setValue('https://blank.example.com')
     await wrapper.get('[data-testid="source-template-mode"]').setValue('blank')
     await wrapper.get('[data-testid="add-source-submit"]').trigger('click')
+    await flushPromises()
 
     expect(siteApi.sourceAdd).toHaveBeenCalledWith(
       'site-a', expect.objectContaining({ name: '空白源', url: 'https://blank.example.com' }), false,
     )
+    expect(sourceApi.copySourceAndLocate).not.toHaveBeenCalled()
+  })
+
+  it('按模板复制失败时不换网站', async () => {
+    const wrapper = await createWrapper()
+    vi.mocked(sourceApi.copySourceAndLocate).mockResolvedValueOnce({ ok: false, message: '复制后无法唯一定位新源' })
+    await wrapper.get('[title="添加源"]').trigger('click')
+    const inputs = wrapper.findAll('.ssw-add-input')
+    await inputs[0].setValue('复制源')
+    await wrapper.get('[data-testid="add-source-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(sourceApi.changeSite).not.toHaveBeenCalled()
   })
 
   // 0812 计划 M1-11：绑定已有源/仅展示未关联入口已删除，只保留新建源；
@@ -129,7 +153,8 @@ describe('SiteSourceSwitcher', () => {
     await wrapper.get('[title="添加源"]').trigger('click')
     await wrapper.get('[data-testid="add-source-submit"]').trigger('click')
 
-    expect(siteApi.cloneSource).not.toHaveBeenCalled()
+    expect(sourceApi.copySourceAndLocate).not.toHaveBeenCalled()
+    expect(sourceApi.changeSite).not.toHaveBeenCalled()
     expect(siteApi.sourceAdd).not.toHaveBeenCalled()
   })
 

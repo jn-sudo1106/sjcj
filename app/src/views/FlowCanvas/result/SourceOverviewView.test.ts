@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, shallowMount } from '@vue/test-utils'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import SourceOverviewView from './SourceOverviewView.vue'
 import { sourceApi, type Source } from '@/api'
+import * as xlsxExport from '@/utils/format/xlsxExport'
 
 const source: Source = {
   sourceId: 'src-1', name: '当前网站源', url: 'https://example.com', configId: 'cfg-1', mainTable: 'TB_1', owner: 'tester', state: 'C', siteId: 'site-current', dataCount: 3,
@@ -121,6 +122,58 @@ describe('SourceOverviewView · 勾选与批量', () => {
     expect(wrapper.find('[data-testid="source-batch-count"]').exists()).toBe(false)
   })
 
+  it('导出按当前查询条件分页收齐，不导当前页、也不看勾选', async () => {
+    const page1 = { ...source, sourceId: 'src-1', name: '当前页这条' }
+    const page2 = { ...source, sourceId: 'src-2', name: '下一页这条' }
+    const hidden = { ...source, sourceId: 'src-3', name: '第三页这条' }
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async (q) => {
+      // 列表页 size=20 只回当前页 1 条；导出走 collect 的 size=500，要带回全部命中
+      if ((q?.size ?? 20) <= 20) return { total: 3, list: [page1] }
+      return { total: 3, list: [page1, page2, hidden] }
+    })
+    const download = vi.spyOn(xlsxExport, 'downloadXlsx').mockImplementation(() => {})
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    await wrapper.get('[data-testid="source-overview-name"]').setValue('财经')
+    await wrapper.get('[data-testid="source-overview-tag"]').setValue('内容重复')
+    await wrapper.get('[data-testid="source-overview-remark"]').setValue('验证正常')
+    await wrapper.get('[data-testid="source-export"]').trigger('click')
+    await flushPromises()
+
+    const collectCalls = page.mock.calls.filter((call) => (call[0]?.size ?? 0) >= 500)
+    expect(collectCalls.length).toBeGreaterThanOrEqual(1)
+    expect(collectCalls[0]?.[0]).toEqual(expect.objectContaining({
+      siteIds: 'site-current',
+      name: '财经',
+      tags: ['#内容重复'],
+      remark: '验证正常',
+      page: 1,
+      size: 500,
+    }))
+    expect(collectCalls[0]?.[0]?.sourceIds).toBeUndefined()
+    expect(download).toHaveBeenCalledTimes(1)
+    expect(String(download.mock.calls[0]?.[0] ?? '')).toMatch(/\.xlsx$/)
+    const exported = download.mock.calls[0]?.[1] ?? []
+    const names = exported.map((row) => row[1]).join('\n')
+    expect(names).toContain('当前页这条')
+    expect(names).toContain('下一页这条')
+    expect(names).toContain('第三页这条')
+    wrapper.unmount()
+  })
+
+  it('查询、清空、发任务、导出都在筛选行右侧，导出是文字按钮', async () => {
+    const wrapper = await mountWithRows()
+    const actions = wrapper.get('[data-testid="source-overview-actions"]')
+    expect(actions.find('[data-testid="source-overview-search"]').text()).toBe('查询')
+    expect(actions.find('[data-testid="source-launch"]').exists()).toBe(true)
+    const exportBtn = actions.get('[data-testid="source-export"]')
+    expect(exportBtn.text()).toBe('导出')
+    expect(wrapper.find('.sov-summary [data-testid="source-launch"]').exists()).toBe(false)
+    expect(wrapper.find('.sov-summary [data-testid="source-export"]').exists()).toBe(false)
+  })
+
   it('勾选后走 selected 范围，确认后一次带多个 ids，all 恒为 0', async () => {
     const send = vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: '已下发' })
     vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({})
@@ -209,7 +262,7 @@ describe('SourceOverviewView · 标签', () => {
     expect(wrapper.get('[data-testid="source-issue-tags"]').text()).toContain('+1')
   })
 
-  it('标签筛选是输入框，查询时带 #tags', async () => {
+  it('标签筛选是下拉，查询时带 #tags', async () => {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [marked] })
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
     await flushPromises()
@@ -233,7 +286,24 @@ describe('SourceOverviewView · 标签', () => {
     expect(wrapper.get('[data-testid="source-issue-tags"]').text()).toContain('正文缺失')
     expect(wrapper.get('[data-testid="source-mark-toast"]').text()).toContain('已更新 1 个源')
     await wrapper.get('[data-testid="source-mark-view-batch"]').trigger('click')
-    expect((wrapper.get('[data-testid="source-overview-tag"]').element as HTMLInputElement).value).toBe('正文缺失')
+    expect((wrapper.get('[data-testid="source-overview-tag"]').element as HTMLSelectElement).value).toBe('正文缺失')
+    wrapper.unmount()
+  })
+
+  it('添加标记失败时不改行上标签，并带上接口错误', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ ...source }] })
+    vi.spyOn(sourceApi, 'tagSource').mockRejectedValue(new Error('请求失败 500: 标记失败'))
+    const error = vi.spyOn(ElMessage, 'error')
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
+    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    await wrapper.get('[data-testid="batch-mark"]').trigger('click')
+    await wrapper.get('[data-testid="mark-tag-正文缺失"]').trigger('click')
+    await wrapper.get('[data-testid="mark-save"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="source-issue-tags"]').text()).toBe('—')
+    expect(wrapper.find('[data-testid="source-mark-toast"]').exists()).toBe(false)
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('请求失败 500'))
     wrapper.unmount()
   })
 
@@ -388,7 +458,8 @@ describe('SourceOverviewView · 标签筛选不做客户端二次过滤（0831 X
 
     // 候选按当前查询条件取，所以要带上 siteIds
     expect(tags).toHaveBeenCalledWith(expect.objectContaining({ siteIds: 'site-current' }))
-    const options = wrapper.get('[data-testid="source-tag-candidates"]').findAll('option').map((o) => o.attributes('value'))
+    const options = wrapper.get('[data-testid="source-overview-tag"]').findAll('option').map((o) => o.text())
+    expect(options).toContain('全部')
     expect(options).toContain('程序打的标签')
     // 本机「最近使用」降级为输入辅助，仍然在，但不再是可选范围的上限
     expect(options).toContain('正文缺失')
@@ -403,7 +474,7 @@ describe('SourceOverviewView · 标签筛选不做客户端二次过滤（0831 X
 
     expect(wrapper.text()).toContain('当前网站源')
     expect(wrapper.find('.sov-empty').exists()).toBe(false)
-    const options = wrapper.get('[data-testid="source-tag-candidates"]').findAll('option').map((o) => o.attributes('value'))
+    const options = wrapper.get('[data-testid="source-overview-tag"]').findAll('option').map((o) => o.text())
     expect(options).toContain('正文缺失')
     wrapper.unmount()
   })

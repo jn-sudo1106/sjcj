@@ -7,11 +7,10 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery } from '@/api'
 import {
   buildHorizontalLayout, nodeOutputTable, nodeEntryCondition, conditionGroupLabel, conditionGroupIsSet,
-  isDecision, isParallel, isFirstRunnableNode, hasDirectSuccessor, hasAmbiguousInput, directPredecessorIds, type NodeConfig,
+  isDecision, isParallel, isFirstRunnableNode, firstRunnableNodeId, hasDirectSuccessor, hasAmbiguousInput, directPredecessorIds, type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
 import { confirmDanger } from '@/utils/confirmDanger'
-import DataCondBuilder from '@/components/data/DataCondBuilder.vue'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import DataGrid from './DataGrid.vue'
@@ -409,28 +408,21 @@ async function onSendMoreBatch() {
   )
 }
 
-// 默认选**首个**节点；有页签快照（0701 问题三）时优先恢复快照里的节点/过滤/页码。
-// 切换页签后旧节点 id 不在新流程里时也重置，避免表格变空。
-//
-// 0831 会议 F09 反转了 0812/0819「默认末端结果表」的拍板，别照旧注释改回去。
-// 会上原话：「我要看第一个节点的数据我还得点一下」——排查一条数据为什么没跑通，是从
-// 源头往下看的；默认落在末端等于每次都要先往回点。首节点常常只是一堆列表链接不好看，
-// 这一点由 F10 的「下一步字段」列收敛来补，两件事必须同批上，单改一个会更难看懂。
+// 默认选**首个可跑节点**。页签快照可以记住筛选，但不能把人送回上次停的末节点——
+// 0831 F09 会上原话：「我要看第一个节点的数据我还得点一下」。
+// URL `nodeId`（任务视图跳过来、查看条件深链）仍然优先。
 watch(
   allNodes,
   (nodes) => {
     if (!nodes.some((n) => n.id === selectedNodeId.value)) {
-      const snap = ws.snapshotOf(tabKey.value)
-      const snapId = snap?.selectedNodeId && nodes.some((n) => n.id === snap.selectedNodeId) ? snap.selectedNodeId : ''
+      const firstId = firstRunnableNodeId(flow.main, flow.configs) || nodes[0]?.id || ''
       const fromQuery = queryNodeId.value && nodes.some((n) => n.id === queryNodeId.value) ? queryNodeId.value : ''
-      selectedNodeId.value = fromQuery || snapId || nodes[0]?.id || ''
-      if (snapId) {
-        page.value = snap?.page ?? 1
-        if (snap?.filters) {
-          // 旧快照可能残留 sourceFilter 字段（0710 会议 C4 已删源筛选），只回填仍存在的键
-          const { dataId, parentId, state, sql } = snap.filters
-          Object.assign(filters, { dataId, parentId, state, sql })
-        }
+      selectedNodeId.value = fromQuery || firstId
+      const snap = ws.snapshotOf(tabKey.value)
+      if (!fromQuery && snap?.selectedNodeId === firstId && snap.filters) {
+        page.value = snap.page ?? 1
+        const { dataId, parentId, state, sql } = snap.filters
+        Object.assign(filters, { dataId, parentId, state, sql })
       } else {
         page.value = 1
       }
@@ -523,12 +515,6 @@ const presetCols = computed(() => nextStepColumns({
   branchGroups: flow.branchGroups,
   nodeId: selectedNodeId.value,
 }))
-const condFields = computed(() => (meta.value?.fields ?? []).map((field) => ({
-  prop: field.prop,
-  columnName: field.columnName,
-  desc: field.desc,
-  type: field.type,
-})))
 const rows = ref<DataRow[]>([])
 const total = ref(0)
 const loading = ref(false)
@@ -865,7 +851,7 @@ function onCellFile(path: string) {
           <option value="E">E 出错</option>
           <option value="L">L 处理中</option>
         </select>
-        <DataCondBuilder v-model="filters.sql" :fields="condFields" class="rv-input flex" />
+        <input v-model="filters.sql" class="rv-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
         <span class="rv-actions">
           <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
           <button class="rc-btn" type="button" @click="clearFilters">清空</button>

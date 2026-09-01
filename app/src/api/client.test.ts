@@ -375,12 +375,23 @@ describe('生产写守卫', () => {
     expect(fetchMock).toHaveBeenCalledTimes(4)
   })
 
-  it('连生产时，改删和换绑已有源仍拦截', async () => {
+  it('连生产时，源启停、换网站和复制源在白名单内（侧栏 / 源视图每天在用）', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
+    const { request } = await import('./client')
+
+    await request('source/changeEnable', { ids: '1', enable: 1 }, { method: 'GET', httpEndpoint: 'source/changeEnable' })
+    await request('source/changeSite', { ids: '1', siteId: '2' }, { method: 'GET', httpEndpoint: 'source/changeSite' })
+    await request('source/copySource', { sourceId: '1', name: 'x', url: 'http://x', flag: 1 }, { method: 'GET', httpEndpoint: 'source/copySource' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('连生产时，未放行的改删仍拦截', async () => {
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
     const { request } = await import('./client')
 
     await expect(request('site/updateSite', { siteId: '1' })).rejects.toThrow(/禁止改删/)
-    await expect(request('source/changeSite', { ids: '1', siteId: '2' }, { httpEndpoint: 'source/changeSite' })).rejects.toThrow(/禁止改删/)
     await expect(request('config/delete', { id: '1' })).rejects.toThrow(/禁止改删/)
     await expect(request('rule/orchestrationSave', {}, {
       httpEndpoint: '/vrule/ai/dashscope/script/edit',

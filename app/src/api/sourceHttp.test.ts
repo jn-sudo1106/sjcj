@@ -347,6 +347,112 @@ describe('旧平台新建源 HTTP 契约', () => {
     expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
   })
 
+  it('GET /v1/source/changeEnable：ids 逗号分隔，enable 极性反着（0 启用 / 1 停用）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '操作成功' }))
+    const { sourceApi } = await import('./index')
+
+    await expect(sourceApi.changeSourceEnableBatch(['430016398', '430016399'], true)).resolves.toMatchObject({ ok: true })
+    const enableOff = new URL(String(fetchMock.mock.calls[0][0]), 'http://local.test')
+    expect(enableOff.pathname).toBe('/api/v1/source/changeEnable')
+    expect(enableOff.searchParams.get('ids')).toBe('430016398,430016399')
+    expect(enableOff.searchParams.get('enable')).toBe('1')
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
+
+    fetchMock.mockClear()
+    await sourceApi.changeSourceEnable('430016398', false)
+    const enableOn = new URL(String(fetchMock.mock.calls[0][0]), 'http://local.test')
+    expect(enableOn.searchParams.get('ids')).toBe('430016398')
+    expect(enableOn.searchParams.get('enable')).toBe('0')
+  })
+
+  it('GET /v1/source/changeSite：一批源 ID + 目标网站', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '关联成功' }))
+    const { sourceApi } = await import('./index')
+
+    await expect(sourceApi.changeSite(['430016398', '430016399'], '4')).resolves.toMatchObject({ ok: true, message: '关联成功' })
+    const parsed = new URL(String(fetchMock.mock.calls[0][0]), 'http://local.test')
+    expect(parsed.pathname).toBe('/api/v1/source/changeSite')
+    expect(parsed.searchParams.get('ids')).toBe('430016398,430016399')
+    expect(parsed.searchParams.get('siteId')).toBe('4')
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
+  })
+
+  it('GET /v1/source/copySource：sourceId + name + url + flag', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, data: null }))
+    const { sourceApi } = await import('./index')
+
+    await expect(sourceApi.copySource({
+      sourceId: '430016398',
+      name: '复制源',
+      url: 'https://copied.example.com',
+      flag: 1,
+    })).resolves.toMatchObject({ ok: true })
+    const parsed = new URL(String(fetchMock.mock.calls[0][0]), 'http://local.test')
+    expect(parsed.pathname).toBe('/api/v1/source/copySource')
+    expect(parsed.searchParams.get('sourceId')).toBe('430016398')
+    expect(parsed.searchParams.get('name')).toBe('复制源')
+    expect(parsed.searchParams.get('url')).toBe('https://copied.example.com')
+    expect(parsed.searchParams.get('flag')).toBe('1')
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
+  })
+
+  it('copySourceAndLocate 按 ID 差集定位新源，不靠猜名字', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({
+        code: '0', count: 1,
+        data: [{ sourceId: 430016398, sourceName: '复制源', sourceUrl: 'https://old.example.com', configId: 1400917, entryTypeId: 1, author: 'a', isDelete: 0 }],
+      }))
+      .mockResolvedValueOnce(jsonResponse({ code: '0', msg: null, data: null }))
+      .mockResolvedValueOnce(jsonResponse({
+        code: '0', count: 2,
+        data: [
+          { sourceId: 430016398, sourceName: '复制源', sourceUrl: 'https://old.example.com', configId: 1400917, entryTypeId: 1, author: 'a', isDelete: 0 },
+          { sourceId: 430099999, sourceName: '复制源', sourceUrl: 'https://copied.example.com', configId: 1400999, entryTypeId: 1, author: 'a', isDelete: 0 },
+        ],
+      }))
+    const { sourceApi } = await import('./index')
+
+    const res = await sourceApi.copySourceAndLocate({
+      sourceId: '430016398',
+      name: '复制源',
+      url: 'https://copied.example.com',
+      flag: 1,
+    })
+    expect(String(fetchMock.mock.calls[1][0])).toContain('source/copySource')
+    expect(res).toMatchObject({ ok: true, sourceId: '430099999' })
+  })
+
+  it('copySourceAndLocate：msg 里带源 ID 时不再二次分页', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ code: '0', count: 0, data: [] }))
+      .mockResolvedValueOnce(jsonResponse({ code: '0', msg: '源ID:430099999', data: null }))
+    const { sourceApi } = await import('./index')
+
+    await expect(sourceApi.copySourceAndLocate({
+      sourceId: '430016398',
+      name: '新源',
+      url: 'https://copied.example.com',
+      flag: 0,
+    })).resolves.toMatchObject({ ok: true, sourceId: '430099999' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('copySourceAndLocate 定位不到唯一新源时不返回 ID', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ code: '0', count: 0, data: [] }))
+      .mockResolvedValueOnce(jsonResponse({ code: '0', msg: '操作成功', data: null }))
+      .mockResolvedValueOnce(jsonResponse({ code: '0', count: 0, data: [] }))
+    const { sourceApi } = await import('./index')
+
+    const res = await sourceApi.copySourceAndLocate({
+      sourceId: '430016398',
+      name: '新源',
+      url: 'https://copied.example.com',
+      flag: 1,
+    })
+    expect(res.ok).toBe(false)
+  })
+
   it('itemApi.stepModify：POST + JSON body（旧平台真实调用是 axios({method:"post", data}）', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '修改步骤成功' }))
     const { itemApi } = await import('./index')

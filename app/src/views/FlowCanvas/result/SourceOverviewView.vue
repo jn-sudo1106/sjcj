@@ -17,7 +17,7 @@ import EditSourceMarkDialog from './EditSourceMarkDialog.vue'
 import LaunchConfirmDialog from './LaunchConfirmDialog.vue'
 import SourceParamModal from '@/views/FlowCanvas/source/SourceParamModal.vue'
 import { hasLoadParams, normalizeLoadParams } from '@/views/FlowCanvas/source/paramNormalize'
-import { downloadCsv, toCsv } from '@/utils/format/csvExport'
+import { downloadXlsx } from '@/utils/format/xlsxExport'
 import {
   CollectLimitError,
   SOURCE_EXPORT_HEADER,
@@ -328,18 +328,25 @@ function closeLaunch() {
 }
 
 async function exportSources() {
+  // 0831 F08：按当前查询条件全量导出，不是当前页，也不是勾选项。
+  // 发任务在勾选时走 selected；导出始终走 currentQuery()，跟「查询」同一套字段。
+  const query = currentQuery()
   collectAbort = new AbortController()
-  collectProgress.value = '正在导出…'
+  collectProgress.value = '正在按查询条件收集…'
   try {
-    const sources = await collectAllUnderQuery(currentQuery(), {
+    const sources = await collectAllUnderQuery(query, {
       fetchPage: fetchSourcePage,
       signal: collectAbort.signal,
       onProgress: (got, all) => { collectProgress.value = `已获取 ${got.toLocaleString()} / ${all.toLocaleString()}` },
     })
-    const csv = toCsv([ [...SOURCE_EXPORT_HEADER], ...sources.map(sourceToExportRow) ])
+    if (!sources.length) {
+      ElMessage.warning('当前查询条件没有命中任何源')
+      return
+    }
+    const rows = [[...SOURCE_EXPORT_HEADER], ...sources.map(sourceToExportRow)]
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, '')
-    downloadCsv(`源列表_${props.currentSiteId || 'site'}_${date}.csv`, csv)
-    ElMessage.success(`已导出 ${sources.length} 个源`)
+    downloadXlsx(`源列表_${props.currentSiteId || 'site'}_${date}.xlsx`, rows, '源列表')
+    ElMessage.success(`已按当前查询条件导出 ${sources.length} 个源`)
   } catch (error) {
     if ((error as { name?: string }).name === 'AbortError') return
     if (error instanceof CollectLimitError) {
@@ -481,17 +488,22 @@ async function saveMarks(payload: { tags: string[] }) {
     ElMessage.warning('请选择或输入标签')
     return
   }
-  let failed = false
   try {
-    await sourceApi.tagSource(ids, payload.tags, 'add')
-  } catch {
-    failed = true
+    const ack = await sourceApi.tagSource(ids, payload.tags, 'add')
+    if (!ack?.ok) {
+      ElMessage.error(ack?.message || '打标签失败')
+      return
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    // 会话失效会另弹「请重新登录」，这里不再叠一条含糊的「写入未成功」
+    if (!detail.includes('登录失效')) ElMessage.error(`打标签失败：${detail}`)
+    return
   }
   writeOverlay(ids, { tags: payload.tags })
   localTags.value = rememberIssueTags(payload.tags)
   lastSavedTag.value = payload.tags[0] || ''
   closeMarkPopover()
-  if (failed) ElMessage.warning(`已更新 ${ids.length} 个源的标签，但写入未成功`)
   markToast.value = `已更新 ${ids.length} 个源的标签`
 }
 async function clearSelectedTags() {
@@ -602,29 +614,27 @@ watch(() => props.currentSiteId, () => {
         </select>
       </label>
       <label>标签
-        <!-- list 只做输入建议，不限制取值：程序打的标签未必在候选里，硬限制会让人筛不出来（F03） -->
-        <input
-          v-model="tagFilter"
-          list="source-tag-candidates"
-          data-testid="source-overview-tag"
-          placeholder="标签名称"
-          @keyup.enter="search"
-        />
-        <datalist id="source-tag-candidates" data-testid="source-tag-candidates">
-          <option v-for="tag in tagCandidates" :key="tag" :value="tag" />
-        </datalist>
+        <!-- 跟「状态」同一套原生 select。候选来自 sourceTags + 本机最近使用；
+             当前筛选项若不在候选里（查看这一批、程序刚打的）仍单独占一项，避免被下拉冲掉。 -->
+        <select v-model="tagFilter" data-testid="source-overview-tag" @change="search">
+          <option value="">全部</option>
+          <option v-if="tagFilter && !tagCandidates.includes(tagFilter)" :value="tagFilter">{{ tagFilter }}</option>
+          <option v-for="tag in tagCandidates" :key="tag" :value="tag">{{ tag }}</option>
+        </select>
       </label>
       <label>备注
         <input v-model="remarkFilter" data-testid="source-overview-remark" placeholder="备注关键字" @keyup.enter="search" />
       </label>
-      <button class="sov-btn primary" type="button" data-testid="source-overview-search" @click="search">查询</button>
-      <button class="sov-btn" type="button" @click="clearFilters">清空</button>
+      <div class="sov-filter-actions" data-testid="source-overview-actions">
+        <button class="sov-btn primary" type="button" data-testid="source-overview-search" @click="search">查询</button>
+        <button class="sov-btn" type="button" @click="clearFilters">清空</button>
+        <button class="sov-btn primary" type="button" data-testid="source-launch" @click="openLaunch">发任务</button>
+        <button class="sov-btn" type="button" data-testid="source-export" title="按当前查询条件导出全部命中的源，不是当前页或勾选项" @click="exportSources">导出</button>
+      </div>
     </div>
 
     <div class="sov-summary">
       <span>共 {{ total }} 个源</span>
-      <button class="sov-btn primary" type="button" data-testid="source-launch" @click="openLaunch">发任务</button>
-      <button class="sov-icon-btn" type="button" data-testid="source-export" title="导出当前筛选结果" aria-label="导出" @click="exportSources">⤓</button>
       <span v-if="collectProgress" class="sov-progress" data-testid="source-collect-progress">{{ collectProgress }}</span>
       <button v-if="failedBatches.length" class="sov-btn" type="button" data-testid="source-retry-failed" @click="retryFailedBatches">重试失败批次（{{ failedBatches.reduce((n, b) => n + b.ids.length, 0) }}）</button>
       <template v-if="selectMode">
@@ -758,10 +768,9 @@ watch(() => props.currentSiteId, () => {
 .sov-filter input, .sov-filter select { height: 30px; min-width: 116px; padding: 0 8px; border: 1px solid #dbe3ee; border-radius: 6px; color: var(--rc-text); background: #fff; font-size: 12px; }
 .sov-filter input:focus, .sov-filter select:focus { outline: 0; border-color: #60a5fa; box-shadow: 0 0 0 2px #dbeafe; }
 .sov-filter input:disabled { background: #f4f6f9; color: var(--rc-faint); cursor: not-allowed; }
+.sov-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
 .sov-btn { height: 30px; padding: 0 10px; border: 1px solid #d5e2f2; border-radius: 6px; background: #fff; color: var(--rc-text-2); cursor: pointer; font-size: 12px; font-weight: 600; }
 .sov-btn.primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }
-.sov-icon-btn { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid #d5e2f2; border-radius: 6px; background: #fff; color: var(--rc-text-2); cursor: pointer; font-size: 14px; }
-.sov-icon-btn:hover { border-color: var(--rc-primary); color: var(--rc-primary); }
 .sov-progress { color: var(--rc-muted); font-size: 11px; }
 .sov-btn:disabled { cursor: not-allowed; opacity: .5; }
 .sov-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--rc-text-2); font-size: 12px; }

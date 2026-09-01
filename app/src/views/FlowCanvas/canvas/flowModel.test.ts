@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  applyParamSourceUrlToFirstCollectNode, buildHorizontalLayout, directPredecessorIds, hasAmbiguousInput, hasDirectSuccessor, iconFor, isFirstRunnableNode, isRuleNode,
+  applyParamSourceUrlToFirstCollectNode, buildHorizontalLayout, directPredecessorIds, firstRunnableNodeId, hasAmbiguousInput, hasDirectSuccessor, iconFor, isFirstRunnableNode, isRuleNode,
   makeDefaultExecConfig, NODE_CONFIGS, normalizeNodeConfig, type FlowBranchGroup, type NodeConfig,
 } from './flowModel'
 import type { Source } from '@/api'
@@ -39,6 +39,13 @@ describe('isFirstRunnableNode（0812 计划 M2-10）', () => {
 
   it('主链没有真实节点时，任何 id 都不是首节点', () => {
     expect(isFirstRunnableNode(['start', 'end'], {}, 'start')).toBe(false)
+    expect(firstRunnableNodeId(['start', 'end'], {})).toBe('')
+  })
+
+  it('firstRunnableNodeId 跳过停用节点', () => {
+    const main = ['start', 'n1', 'n2', 'end']
+    const configs = { n1: cfg({ disabled: true }), n2: cfg({ title: '详情' }) }
+    expect(firstRunnableNodeId(main, configs)).toBe('n2')
   })
 })
 

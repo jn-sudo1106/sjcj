@@ -1,6 +1,6 @@
 // 源 + 网站 + 模板域（P1-3 拆 8 域 · source 域）
 // 包含 Source（源）/ Site（网站）/ Step（连线步骤）/ Task（任务实例）/
-//       SourceCategory（分类目录树）/ SourceCloneRequest/Result（克隆）/
+//       SourceCategory（分类目录树）/ CopySourceInput（复制源）/ SourceCloneRequest/Result（克隆）/
 //       SourceLog（源日志）/ SourceTaskQuery（任务视图查询）/
 //       CredentialRef（凭据引用）/ FlowNodeBinding/FlowDefinition/FlowRecord/FlowSaveInput（流程 4 件）/
 //       FileResourceRecord/Query（file_resource 文件资源 2 件）
@@ -412,6 +412,14 @@ export interface RawFileStats {
   total: number
   totalSize: number
   latestCreatedAt?: string
+}
+
+/** 旧 `GET /v1/source/copySource`。`flag=1` 同时复制配置，`flag=0` 只复制源、共用原配置。 */
+export interface CopySourceInput {
+  sourceId: string
+  name: string
+  url: string
+  flag: 0 | 1
 }
 
 export interface SourceCloneRequest {

@@ -24,12 +24,11 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { dataApi, parseNextStepReceipt, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail, type RowQuery } from '@/api'
 import {
-  buildHorizontalLayout, buildSourceSeed, effectiveInputTable, nodeOutputTable, isDecision, isParallel,
+  buildHorizontalLayout, buildSourceSeed, effectiveInputTable, firstRunnableNodeId, nodeOutputTable, isDecision, isParallel,
   hasDirectSuccessor, type NodeConfig, type BranchSeed, type FlowBranchGroup,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
 import { confirmDanger } from '@/utils/confirmDanger'
-import DataCondBuilder from '@/components/data/DataCondBuilder.vue'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import DataGrid from './DataGrid.vue'
 import FilePreview from './components/FilePreview.vue'
@@ -199,7 +198,9 @@ const effectiveTableId = computed(() => (selectedSourceId.value ? nodeTableId.va
 // 不是持久化的编辑页签。
 watch(allNodes, (nodes) => {
   if (!nodes.some((n) => n.id === selectedNodeId.value)) {
-    selectedNodeId.value = nodes[0]?.id || ''
+    selectedNodeId.value = (flowData.value
+      ? firstRunnableNodeId(flowData.value.main, flowData.value.configs)
+      : '') || nodes[0]?.id || ''
   }
 })
 
@@ -220,13 +221,6 @@ const presetCols = computed(() => (flowData.value
     nodeId: selectedNodeId.value,
   })
   : []))
-const condFields = computed(() => (meta.value?.fields ?? []).map((field) => ({
-  prop: field.prop,
-  columnName: field.columnName,
-  desc: field.desc,
-  type: field.type,
-})))
-
 // ---------- 全部源 / 具体源共用的查询 + 归并分页 ----------
 function inferTableMeta(tableId2: string, dataRows: DataRow[]): DataTableMeta {
   const samples = new Map<string, unknown>()
@@ -549,7 +543,7 @@ function onCellFile(path: string) {
           <option value="E">E 出错</option>
           <option value="L">L 处理中</option>
         </select>
-        <DataCondBuilder v-model="filters.sql" :fields="condFields" class="sdv2-input flex" />
+        <input v-model="filters.sql" class="sdv2-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
         <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
         <button class="rc-btn" type="button" @click="clearFilters">清空</button>
       </template>
