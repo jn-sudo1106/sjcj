@@ -2,7 +2,7 @@
 // 编排工作区（L3 全屏弹层，S6-1，方案 §4.1）：合并原来各自独立的 RuleScriptDialog（脚本查看，只读）+
 // RuleSystemPromptDialog（编辑系统提示词）——会议原话"是不是把它放到一个界面里面去，就是你脚本和那个
 // 东西，它能对应上""要两边能看到，不然的话这个东西一直卡在里面，啥也看不到"。
-// 左栏系统提示词 / 右栏脚本（或抓取配置 XML），中间可拖拽分隔；面板内直接放生成/保存/测试，
+// 左栏系统提示词 / 右栏脚本（或抓取配置 XML），中间可拖拽分隔；面板内直接放生成/保存，
 // 避免"看着提示词，要退出去才能生成"（方案 §4.1 改法 3）。
 //
 // 保存语义刻意保留两种不同颗粒度，跟合并前一致，没有为了"统一"而改变行为：
@@ -13,29 +13,44 @@
 //     真正落盘由外部「保存脚本/配置」按钮触发（走 orchestrationSave 接口 + 二次确认，逻辑留在父组件不重复）。
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { fetchDefaultModels, fetchModelProviders, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleFieldOption, type RuleOrchestration } from '@/api'
+import { fetchPromptList } from '@/api/prompt'
+import type { PromptCategoryGroup } from './promptCategory'
+import { applyPromptTemplate } from '@/utils/flow/promptTemplate'
 
 const props = defineProps<{
   open: boolean
   title: string
   scriptLabel: string
   systemPrompt: string
+  promptCategory: PromptCategory
+  promptListCategory: string
+  promptCategoryGroups: PromptCategoryGroup[]
+  modelProviderCode?: string
+  modelCode?: string
+  inputTableName?: string
+  outputTableName?: string
+  inputFields: string[]
+  outputFields: string[]
+  inputFieldOptions: RuleFieldOption[]
+  outputFieldOptions: RuleFieldOption[]
   script: string
   scriptPath?: string
   generateLabel: string
   saveLabel: string
   generating: boolean
   saving: boolean
-  showTest?: boolean
-  canTest?: boolean
 }>()
 const emit = defineEmits<{
   'update:open': [boolean]
   'update:systemPrompt': [string]
+  'update:promptCategory': [PromptCategory]
+  'update:modelProviderCode': [string]
+  'update:modelCode': [string]
   'update:script': [string]
-  generate: []
+  generate: [Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'modelProviderCode' | 'modelCode'>>]
   'cancel-generate': []
   save: []
-  test: []
 }>()
 
 function close() {
@@ -44,14 +59,139 @@ function close() {
 
 // 系统提示词草稿：只在打开时从 props 重置，取消/关闭不回写
 const promptDraft = ref(props.systemPrompt)
-watch(() => props.open, (v) => { if (v) promptDraft.value = props.systemPrompt })
+const promptCategoryDraft = ref<PromptCategory>(props.promptCategory)
+const modelProviderDraft = ref(props.modelProviderCode || '')
+const modelDraft = ref(props.modelCode || '')
+const providerOptions = ref<ModelProviderOption[]>([])
+const modelOptions = ref<ModelOption[]>([])
+const providerLoading = ref(false)
+const modelLoading = ref(false)
+const providerError = ref('')
+const modelError = ref('')
+const promptLoading = ref(false)
+const promptError = ref('')
+let promptRequestSeq = 0
+const firstPromptCategory = computed(() => props.promptCategoryGroups[0]?.options[0]?.value ?? '自定义节点')
+function firstProviderCode() {
+  return providerOptions.value[0]?.providerCode || ''
+}
+function firstModelCode() {
+  return modelOptions.value[0]?.modelCode || ''
+}
+async function loadModels(providerCode: string, preferredModelCode?: string) {
+  modelLoading.value = true
+  modelError.value = ''
+  try {
+    modelOptions.value = await fetchDefaultModels(providerCode)
+    modelDraft.value = modelOptions.value.find((item) => item.modelCode === preferredModelCode)?.modelCode || firstModelCode()
+  } catch (e) {
+    modelOptions.value = []
+    modelDraft.value = ''
+    modelError.value = `模型加载失败：${(e as Error)?.message ?? String(e)}`
+  } finally {
+    modelLoading.value = false
+  }
+}
+async function loadProviderModelOptions() {
+  providerLoading.value = true
+  providerError.value = ''
+  try {
+    providerOptions.value = await fetchModelProviders()
+    modelProviderDraft.value = providerOptions.value.find((item) => item.providerCode === modelProviderDraft.value)?.providerCode || firstProviderCode()
+    if (!modelProviderDraft.value) {
+      modelOptions.value = []
+      modelDraft.value = ''
+      return
+    }
+    await loadModels(modelProviderDraft.value, modelDraft.value)
+  } catch (e) {
+    providerOptions.value = []
+    modelOptions.value = []
+    modelProviderDraft.value = ''
+    modelDraft.value = ''
+    providerError.value = `模型供应商加载失败：${(e as Error)?.message ?? String(e)}`
+  } finally {
+    providerLoading.value = false
+  }
+}
+async function loadPromptTemplate() {
+  const seq = ++promptRequestSeq
+  promptLoading.value = true
+  promptError.value = ''
+  try {
+    const list = await fetchPromptList(props.promptListCategory, promptCategoryDraft.value)
+    if (seq !== promptRequestSeq) return
+    const template = list[0]?.systemPrompt?.trim()
+    if (!template) {
+      promptError.value = '提示词模板为空'
+      return
+    }
+    promptDraft.value = applyPromptTemplate(template, {
+      inputTableName: props.inputTableName?.trim() || '',
+      outputTableName: props.outputTableName?.trim() || props.inputTableName?.trim() || '',
+      inputFields: props.inputFields,
+      outputFields: props.outputFields,
+      inputFieldOptions: props.inputFieldOptions,
+      outputFieldOptions: props.outputFieldOptions.length ? props.outputFieldOptions : props.inputFieldOptions,
+    })
+  } catch (e) {
+    if (seq !== promptRequestSeq) return
+    promptError.value = `提示词模板加载失败：${(e as Error)?.message ?? String(e)}`
+  } finally {
+    if (seq === promptRequestSeq) promptLoading.value = false
+  }
+}
+function syncLocalDrafts() {
+  promptDraft.value = props.systemPrompt
+  promptCategoryDraft.value = props.promptCategory || firstPromptCategory.value
+  modelProviderDraft.value = props.modelProviderCode || ''
+  modelDraft.value = props.modelCode || ''
+}
+watch(() => props.open, (v) => {
+  if (v) {
+    syncLocalDrafts()
+    void loadProviderModelOptions()
+    void loadPromptTemplate()
+  }
+})
+watch(() => props.promptCategory, (v) => {
+  if (props.open) promptCategoryDraft.value = v || firstPromptCategory.value
+})
+watch(() => props.modelProviderCode, (v) => {
+  if (props.open) modelProviderDraft.value = v || firstProviderCode()
+})
+watch(() => props.modelCode, (v) => {
+  if (props.open) modelDraft.value = v || firstModelCode()
+})
 function savePrompt() {
   emit('update:systemPrompt', promptDraft.value)
+  emit('update:promptCategory', promptCategoryDraft.value)
+  emit('update:modelProviderCode', modelProviderDraft.value)
+  emit('update:modelCode', modelDraft.value)
   ElMessage.success('系统提示词已保存')
+}
+
+async function onPromptCategoryChange(value: PromptCategory) {
+  promptCategoryDraft.value = value
+  await loadPromptTemplate()
+}
+
+async function onProviderChange(value: string) {
+  modelProviderDraft.value = value
+  await loadModels(value, modelDraft.value)
+  if (!modelDraft.value) modelDraft.value = firstModelCode()
 }
 
 function onScriptInput(e: Event) {
   emit('update:script', (e.target as HTMLTextAreaElement).value)
+}
+function onGenerate() {
+  emit('generate', {
+    systemPrompt: promptDraft.value,
+    promptCategory: promptCategoryDraft.value,
+    modelProviderCode: modelProviderDraft.value,
+    modelCode: modelDraft.value,
+  })
 }
 async function copyScript() {
   try {
@@ -97,7 +237,44 @@ const leftStyle = computed(() => ({ flex: `0 0 ${leftPct.value}%` }))
       <div class="wb-pane" :style="leftStyle">
         <div class="wb-pane-head">
           <b>系统提示词</b>
-          <button class="rc-btn primary" type="button" @click="savePrompt">保存</button>
+          <el-select
+            v-model="promptCategoryDraft"
+            class="wb-category"
+            size="small"
+            :teleported="false"
+            popper-class="wb-popper"
+            @change="onPromptCategoryChange"
+          >
+            <el-option-group v-for="group in promptCategoryGroups" :key="group.label" :label="group.label">
+              <el-option v-for="item in group.options" :key="item.value" :label="item.label" :value="item.value" />
+            </el-option-group>
+          </el-select>
+          <el-select
+            v-model="modelProviderDraft"
+            class="wb-category wb-provider"
+            size="small"
+            :loading="providerLoading"
+            :teleported="false"
+            placeholder="模型供应商"
+            @change="onProviderChange"
+          >
+            <el-option v-for="item in providerOptions" :key="item.providerCode" :label="item.providerName" :value="item.providerCode" />
+          </el-select>
+          <el-select
+            v-model="modelDraft"
+            class="wb-category wb-model"
+            size="small"
+            :loading="modelLoading"
+            :disabled="!modelProviderDraft || !providerOptions.length"
+            :teleported="false"
+            placeholder="模型"
+          >
+            <el-option v-for="item in modelOptions" :key="item.modelCode" :label="item.modelName" :value="item.modelCode" />
+          </el-select>
+          <button class="rc-btn primary" type="button" :disabled="promptLoading || providerLoading || modelLoading" @click="savePrompt">保存</button>
+        </div>
+        <div v-if="promptLoading || promptError || providerError || modelError" class="wb-help">
+          {{ promptLoading ? '提示词模板加载中…' : (promptError || providerError || modelError) }}
         </div>
         <textarea
           v-model="promptDraft"
@@ -114,8 +291,7 @@ const leftStyle = computed(() => ({ flex: `0 0 ${leftPct.value}%` }))
           <span class="wb-path">{{ scriptPath || '未生成' }}</span>
           <div class="wb-pane-actions">
             <button class="rc-btn" type="button" :disabled="!script.trim()" @click="copyScript">复制</button>
-            <button v-if="showTest" class="rc-btn" type="button" :disabled="!canTest" @click="emit('test')">测试</button>
-            <button class="rc-btn" type="button" :disabled="generating" @click="emit('generate')">
+            <button class="rc-btn" type="button" :disabled="generating" @click="onGenerate">
               {{ generating ? '生成中...' : generateLabel }}
             </button>
             <button v-if="generating" class="rc-btn" type="button" @click="emit('cancel-generate')">取消</button>
@@ -134,8 +310,12 @@ const leftStyle = computed(() => ({ flex: `0 0 ${leftPct.value}%` }))
 .wb-body { display: flex; align-items: stretch; height: 78vh; gap: 0; }
 .wb-pane { display: flex; flex-direction: column; min-width: 0; }
 .wb-pane-right { flex: 1 1 auto; }
-.wb-pane-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.wb-pane-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
 .wb-pane-head b { font-size: 13px; color: var(--rc-text); flex-shrink: 0; }
+.wb-category { width: 132px; flex: 0 0 132px; }
+.wb-provider { width: 150px; flex-basis: 150px; }
+.wb-model { width: 170px; flex-basis: 170px; }
+.wb-help { margin: -2px 0 8px; color: var(--rc-faint); font-size: 11px; line-height: 1.4; }
 .wb-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--rc-faint); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .wb-pane-actions { display: flex; gap: 8px; flex-shrink: 0; }
 .wb-textarea { flex: 1; width: 100%; margin: 0; border: 1px solid #dbe3ee; border-radius: 8px; background: #fff; color: var(--rc-text); font-size: 13px; line-height: 1.6; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 12px; outline: none; resize: none; box-sizing: border-box; }

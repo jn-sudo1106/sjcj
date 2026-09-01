@@ -3,9 +3,9 @@
 // 0804 S2-2 拍板：规则节点的表/字段绑定从编排配置搬回这里，跟其他节点共用同一个 Tab——
 // 规则名称 = 节点名称（不再单独输入）；绑完输入/输出表与字段后即可进编排配置 Tab。
 // 非规则节点内容：输出表管理（采集类固定/可选）+ 非采集类产物明细三元表 + 表结构编辑弹窗。
-// 规则/采集节点都不在表配置中间再放一颗主保存按钮——底下已经有节点配置「保存」，两个会抢；
-// 换数字 ruleId 改到编排配置里第一次「生成脚本/生成配置」时自动 orchestrationSaveMeta。
-import { computed, reactive, watch } from 'vue'
+// 规则节点仍保留「保存并配置编排」：0831 data-process 生成脚本只认 configId，
+// 先在这里落 compose 并把 configId 临时回填 81947，再进编排配置 Tab。
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
@@ -13,7 +13,8 @@ import {
   fieldOptionsFromTableOrOutput,
   type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, type RuleOrchestration } from '@/api'
+import { entryApi, ruleApi, type RuleOrchestration } from '@/api'
+import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import TableEditDialog from '../TableEditDialog.vue'
 import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
@@ -41,6 +42,38 @@ function patchRule(p: Partial<RuleOrchestration>) {
   if (p.outputTableId !== undefined) flow.setOutputTable(id.value, p.outputTableId)
 }
 const { inputFieldOptions, outputFieldOptions } = useRuleTableFields(ruleCfg)
+
+const savingRule = ref(false)
+// 0831 临时：规则节点在后端的身份从 ruleId 换成了 configId（生成脚本调 /api/answer/data-process 只认
+// configId，见 RuleOrchestrationTab.vue 的守卫与请求体），而规则节点目前没有创建 Config 的通路
+// （updateConfig 不带 configId 不会建配置，copyAll 又需要可复制的源配置，W0-3 未落地）。
+// 保存业务规则后把节点 configId 固定写成 81947，让「当前配置」条不再显示「新建配置 · 未保存」、
+// 生成脚本的 configId 门禁能过。等 W0-3 建配置通路落地后替换为真实回填。
+const TEMP_RULE_NODE_CONFIG_ID = '81947'
+async function onSaveRuleMeta() {
+  const error = !cfg.value?.title?.trim() ? '请先在「节点配置」填写节点名称' : validateTableBinding(ruleCfg.value)
+  if (error) {
+    ElMessage.warning(error)
+    return
+  }
+  savingRule.value = true
+  try {
+    const res = await ruleApi.orchestrationSaveMeta(ruleCfg.value)
+    patchRule({ mode: 'ref', ruleId: res.ruleId })
+    // 0831 临时：configId 固定回填 81947（见 TEMP_RULE_NODE_CONFIG_ID 注释）
+    flow.bindCopiedConfig(id.value, TEMP_RULE_NODE_CONFIG_ID, '')
+    // 表相关字段同步到 NodeConfig（0801 方案 §4.6）：节点侧存 tableId，不是物理表名
+    if (ruleCfg.value.inputTableId) flow.setInputTable(id.value, ruleCfg.value.inputTableId)
+    if (ruleCfg.value.outputTableId) flow.setOutputTable(id.value, ruleCfg.value.outputTableId)
+    ElMessage.success(res.message || '业务规则已保存')
+    flow.setActiveTab('orchestration')
+  } catch (e) {
+    ElMessage.error(`保存业务规则失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    savingRule.value = false
+  }
+}
+
 
 const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
 
@@ -173,6 +206,11 @@ async function onTableSaved(tableId: string) {
       :output-field-options="outputFieldOptions"
       @update:model-value="patchRule"
     />
+    <div class="rc-actions-row">
+      <button class="rc-btn primary" type="button" :disabled="savingRule" @click="onSaveRuleMeta">
+        {{ savingRule ? '保存中...' : '保存并配置编排' }}
+      </button>
+    </div>
   </template>
 
   <template v-else>
@@ -313,8 +351,10 @@ async function onTableSaved(tableId: string) {
 .rc-cell-input:focus { border-color: #60a5fa; background: #fff; box-shadow: 0 0 0 2px #dbeafe; }
 .rc-row-del { width: 20px; height: 20px; border: 0; background: transparent; color: var(--rc-faint); font-size: 12px; cursor: pointer; border-radius: 4px; }
 .rc-row-del:hover { background: var(--rc-error-bg); color: #b91c1c; }
+.rc-actions-row { display: flex; gap: 8px; margin-top: 12px; }
 .rc-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 11px; border: 1px solid #d5e2f2; border-radius: 7px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; }
 .rc-btn:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.rc-btn.primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }
 .rc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .rc-help { color: var(--rc-faint); font-size: 10px; line-height: 1.5; margin-top: 6px; }
 .rc-segment { display: inline-flex; border: 1px solid #dbe3ee; border-radius: 7px; overflow: hidden; background: #fff; }

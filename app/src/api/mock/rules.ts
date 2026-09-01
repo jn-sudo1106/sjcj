@@ -348,6 +348,16 @@ function makeGenericRuleScript(inputFields: string[], outputFields: string[]): s
   return `def main(${args}):\n    return {${body}}`
 }
 
+function parseFieldCodes(text: string): string[] {
+  return text
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => item.split(':').pop() ?? item)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
 // S3-2 补充：采集节点抓取配置（XML 产物）的生成骨架，供 mock 模式下验证「XML 产物能存进 MinIO
 // 并读回，读回内容是合法 XML」这条验收——真机实测（§9.2-1）因后端 500 未能确认标记行是否附在
 // XML 末尾，故 mock 版本不模拟标记行（parseRuleOrchestrationStreamText/stripMinioMarkerLine
@@ -411,6 +421,19 @@ export function mockRuleOrchestrationGenerate(params?: Record<string, unknown>):
   }
 }
 
+export function mockDataProcessGenerate(params?: Record<string, unknown>): RuleOrchestrationGenerateResult {
+  const description = String(params?.description ?? '').trim()
+  const inputFields = parseFieldCodes(String(params?.inputFields ?? ''))
+  const outputFields = parseFieldCodes(String(params?.outputFields ?? ''))
+  const script = outputFields.length
+    ? makeGenericRuleScript(inputFields.length ? inputFields : ['content'], outputFields)
+    : makeRuleScript(description)
+  return {
+    script,
+    scriptPath: `/rules/generated/data-process-${Date.now()}.py`,
+  }
+}
+
 export function mockRuleOrchestrationTest(params?: Record<string, unknown>): RuleOrchestrationTestResult {
   const script = String(params?.script ?? '').trim()
   if (!script) return { success: false, error: '脚本为空', outputs: [], executionTime: 0 }
@@ -453,4 +476,3 @@ export function mockRuleOrchestrationSave(params?: Record<string, unknown>): Rul
   else ORCHESTRATIONS.unshift(item)
   return { ruleId, scriptPath, message: '规则脚本已保存（演示）' }
 }
-

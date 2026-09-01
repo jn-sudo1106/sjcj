@@ -17,6 +17,7 @@ export interface RequestOptions {
   timeoutMs?: number
   httpParams?: Record<string, unknown>
   httpEndpoint?: string
+  signal?: AbortSignal
   /** 额外的 URL query 参数；用于 POST 也需要 query 的场景（如旧 /v1 端点把 ids/all/skip/include/queue 放 query、body 仅放 param）。 */
   query?: Record<string, unknown>
 }
@@ -255,6 +256,11 @@ export async function request<T>(
     const url = paramsIn === 'query' ? appendQuery(resolvedPath, httpParams) : resolvedPath
     const requestUrl = options.query ? appendQuery(url, options.query) : url
     const controller = new AbortController()
+    const onExternalAbort = () => controller.abort()
+    if (options.signal) {
+      if (options.signal.aborted) controller.abort()
+      else options.signal.addEventListener('abort', onExternalAbort, { once: true })
+    }
     const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs ?? 20_000)
     if (paramsIn === 'body') headers['Content-Type'] = 'application/json'
     let res: Response
@@ -268,6 +274,7 @@ export async function request<T>(
       })
     } finally {
       window.clearTimeout(timeout)
+      options.signal?.removeEventListener('abort', onExternalAbort)
     }
     // S1（计划 §12.2）：会话失效以 302→logout.htm 落地，与 auth.ts authRequest 共用同一检测与处理器
     if (isSessionExpiredRedirect(res)) {

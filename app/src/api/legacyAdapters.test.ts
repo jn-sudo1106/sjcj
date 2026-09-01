@@ -19,6 +19,7 @@ import {
   paramToLegacy,
   ruleOrchestrationDetailFromLegacy,
   parseRuleOrchestrationStreamText,
+  parseDataProcessStreamText,
   stripMinioMarkerLine,
   pickRuleIdFromComposeList,
   isVruleNumericRuleId,
@@ -741,7 +742,14 @@ describe('规则编排模型适配（vrule，0801 方案 §4）', () => {
         inputFields: ['date', 'zb_value'],
         outputFields: ['end_date'],
       }),
-    ).toEqual({ ruleId: '173', query: '转换', userPrompt: 'sys' })
+    ).toEqual({ ruleId: '173', query: '转换', userPrompt: 'sys', providerCode: '', modelCode: '' })
+    // f624f67：模型供应商/模型字段透传（vrule stream 的 providerCode/modelCode form 字段）
+    expect(
+      ruleOrchestrationGenerateToLegacy({
+        mode: 'ref', ruleId: '173', describe: '转换', systemPrompt: 'sys',
+        modelProviderCode: 'DeepSeek', modelCode: 'deepseek-chat',
+      }),
+    ).toEqual({ ruleId: '173', query: '转换', userPrompt: 'sys', providerCode: 'DeepSeek', modelCode: 'deepseek-chat' })
     const emptyPrompt = ruleOrchestrationGenerateToLegacy({ mode: 'ref', ruleId: '173', describe: '转换', systemPrompt: '' })
     expect(emptyPrompt.userPrompt).toBeTruthy()
     expect(ruleOrchestrationGenerateFormBody({
@@ -790,6 +798,29 @@ describe('规则编排模型适配（vrule，0801 方案 §4）', () => {
       script: '<Config>\n  <Action id="1"/>\n</Config>',
       scriptPath: '/x/1.xml',
     })
+  })
+
+  // 0831 data-process 实测契约：markdown 代码围栏 + 「# 当前文件已保存到…」标记行
+  it('parseDataProcessStreamText：剥围栏与标记行，scriptPath 从「# 当前文件已保存到」行取出', () => {
+    const text = [
+      '```python',
+      'def process(sku_id):',
+      '    return {"sku_name": ""}',
+      '```',
+      '# 当前文件已保存到/code01/202608/1788176138061.py',
+    ].join('\n')
+    expect(parseDataProcessStreamText(text)).toEqual({
+      script: 'def process(sku_id):\n    return {"sku_name": ""}',
+      scriptPath: '/code01/202608/1788176138061.py',
+    })
+  })
+
+  it('parseDataProcessStreamText：无围栏时按纯文本处理，无标记行时 scriptPath 为空串', () => {
+    expect(parseDataProcessStreamText('def process(a):\n    return {"a": a}')).toEqual({
+      script: 'def process(a):\n    return {"a": a}',
+      scriptPath: '',
+    })
+    expect(() => parseDataProcessStreamText('```python\n```')).toThrow('生成脚本未返回内容')
   })
 
   it('pickRuleIdFromComposeList：按规则名+输入表匹配', () => {

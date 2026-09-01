@@ -268,6 +268,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'rule/orchestrationSaveMeta', desc: '规则编排保存业务规则元数据 → /vrule/api/custom-compose/save', danger: true, impl: true, live: true },
   { path: 'rule/orchestrationDetail', desc: '规则编排详情 → /vrule/api/custom-compose/getComposeById', impl: true, live: true },
   { path: 'rule/orchestrationLoadScript', desc: '读取规则脚本正文 → /vrule/ai/dashscope/code', impl: true, live: true },
+  { path: 'rule/dataProcessGenerate', desc: '规则处理生成脚本 → /api/answer/data-process', impl: true, live: true },
   // generate 已接真实流式（form-urlencoded）；需数字 ruleId（由 saveMeta live 提供）
   { path: 'rule/orchestrationGenerate', desc: '规则编排生成脚本 → /vrule/ai/dashscope/stream', impl: true, live: true },
   { path: 'rule/orchestrationTest', desc: '规则编排测试脚本 → /vrule/fastapi/execute/dynamic', impl: true, live: true },

@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 // 表配置 Tab：规则节点分支（0804 S2-2，从 RuleOrchestrationTab.test.ts 的「路径 A」迁移而来——
-// 表/字段绑定搬去了这里，跟非规则节点共用同一个 Tab）。中间「保存并配置编排」已去掉，
-// 换数字 ruleId 改到第一次生成脚本；绑完表字段即可解锁编排配置 Tab。
+// 表/字段绑定 +「保存并配置编排」在这里；0831 保存后临时回填 configId 81947 才能走 data-process。
 // 通过挂载整个 NodeInspector 测试（而非孤立挂载 TableTab），因为 useNodeInspectorAssets() 的
 // provide/inject 上下文由 NodeInspector 建立，脱离它调用会抛错（见 useNodeInspectorAssets.ts 设计约束）。
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -48,30 +47,32 @@ function orchestrationTab(wrapper: ReturnType<typeof mount>) {
 }
 
 describe('TableTab · 规则节点表/字段绑定（0804 S2-2 从编排配置搬回）', () => {
-  it('展示表/字段绑定表单，没有中间「保存并配置编排」', async () => {
+  it('展示表/字段绑定表单和保存按钮', async () => {
     mockAssets()
     const { wrapper } = mountOnRuleNode()
     await flushPromises()
 
     expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(true)
     expect(wrapper.text()).toContain('入参字段')
-    expect(wrapper.text()).not.toContain('保存并配置编排')
-    expect(wrapper.find('.rc-insp-foot button.rc-btn.primary').text()).toMatch(/保存/)
+    expect(wrapper.text()).toContain('保存并配置编排')
   })
 
-  it('未选表时编排配置 Tab 仍禁用，且不调用 orchestrationSaveMeta', async () => {
+  it('未填必填项就保存：不调用接口，编排配置 Tab 仍禁用', async () => {
     mockAssets()
     vi.spyOn(ruleApi, 'orchestrationSaveMeta')
     const { wrapper } = mountOnRuleNode()
+    await flushPromises()
+
+    await wrapper.find('button.rc-btn.primary').trigger('click')
     await flushPromises()
 
     expect(ruleApi.orchestrationSaveMeta).not.toHaveBeenCalled()
     expect(orchestrationTab(wrapper).attributes('disabled')).toBeDefined()
   })
 
-  it('选表后字段默认全选（0804 S2-3），同步 NodeConfig 输入表，解锁编排配置，不调用 saveMeta', async () => {
+  it('选表保存：字段默认全选（0804 S2-3），拿到 ruleId，同步输入表，回填 configId 81947，切到编排配置', async () => {
     mockAssets()
-    vi.spyOn(ruleApi, 'orchestrationSaveMeta')
+    vi.spyOn(ruleApi, 'orchestrationSaveMeta').mockResolvedValue({ ruleId: 'orch-999', message: '业务规则已保存' })
     const { flow, wrapper } = mountOnRuleNode()
     flow.setTitle('rule-1', '邮箱附件转换指标数据规则')
     await flushPromises()
@@ -91,14 +92,22 @@ describe('TableTab · 规则节点表/字段绑定（0804 S2-2 从编排配置�
 
     expect(flow.configs['rule-1'].ruleCfg?.inputFields).toEqual(['sku_id', 'sku_name'])
     expect(flow.configs['rule-1'].ruleCfg?.outputFields).toEqual(['sku_id', 'sku_name'])
+
+    await wrapper.find('button.rc-btn.primary').trigger('click')
+    await flushPromises()
+
+    expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBeTruthy()
+    expect(flow.configs['rule-1'].ruleCfg?.mode).toBe('ref')
+    // 0831 临时：保存成功后规则节点 configId 固定回填 81947（data-process 生成脚本只认 configId）
+    expect(flow.configs['rule-1'].configId).toBe('81947')
     expect(flow.configs['rule-1'].inputTable).toBe('2102154')
-    expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBeFalsy()
-    expect(ruleApi.orchestrationSaveMeta).not.toHaveBeenCalled()
-    expect(orchestrationTab(wrapper).attributes('disabled')).toBeUndefined()
-    expect(flow.activeTab).toBe('table')
+    expect(ruleApi.orchestrationSaveMeta).toHaveBeenCalledWith(
+      expect.objectContaining({ name: '邮箱附件转换指标数据规则' }),
+    )
+    expect(flow.activeTab).toBe('orchestration')
   })
 
-  it('已保存过的规则节点回到表配置：仍是可编辑表单，不是只读摘要，也没有中间保存按钮', async () => {
+  it('已保存过的规则节点回到表配置：仍是可编辑表单，不是只读摘要', async () => {
     mockAssets()
     const { flow, wrapper } = mountOnRuleNode()
     flow.patchRuleConfig('rule-1', {
@@ -111,7 +120,7 @@ describe('TableTab · 规则节点表/字段绑定（0804 S2-2 从编排配置�
     expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(true)
     expect(wrapper.text()).toContain('入参字段')
     expect(wrapper.text()).not.toContain('修改表字段')
-    expect(wrapper.text()).not.toContain('保存并配置编排')
+    expect(wrapper.text()).toContain('保存并配置编排')
   })
 })
 

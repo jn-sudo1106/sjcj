@@ -13,11 +13,13 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, ruleApi, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
+import { entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { isVruleNumericRuleId } from '@/api/legacyAdapters'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
+import { buildDataProcessGeneratePayload } from '@/utils/flow/dataProcess'
+import { promptCategoryGroupsForNode, promptListCategoryForNode, resolvePromptCategoryForNode } from '../promptCategory'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import RuleTestDialog from '../RuleTestDialog.vue'
 
@@ -47,6 +49,9 @@ const codeEmptyHint = computed(() => (isRule.value ? '生成脚本后展示 Pyth
 // S6-1：编排工作区（合并原 RuleScriptDialog/RuleSystemPromptDialog）的文案分流
 const workbenchTitle = computed(() => (isRule.value ? '规则脚本工作区' : '抓取配置工作区'))
 const scriptLabel = computed(() => (isRule.value ? 'Python 脚本' : '抓取配置 XML'))
+const promptCategoryGroups = computed(() => promptCategoryGroupsForNode(cfg.value))
+const promptCategory = computed(() => resolvePromptCategoryForNode(cfg.value, orchCfg.value.promptCategory))
+const promptListCategory = computed(() => promptListCategoryForNode(cfg.value))
 
 // ---- 抓取配置 XML 轻解析（0804 S3-4，方案 §3.1 修正 B · 附录 §十）：仅非规则节点 ----
 // 只读动作链摘要（顶部展示）+ 保存前的字段一致性提示，不做可视化编辑（方案已拍板不做）。
@@ -86,7 +91,69 @@ async function checkColumnConsistency(): Promise<boolean> {
 
 // 表字段：只读消费「表配置」Tab 已经选好的表——测试台需要按字段回填入参标签，见 RuleTestDialog。
 // 非规则节点的 orchCfg 没有 inputTableId/outputTableId，watch 里的字段拉取会静默 no-op，安全。
-const { inputFieldOptions } = useRuleTableFields(orchCfg)
+const { inputFieldOptions, outputFieldOptions } = useRuleTableFields(orchCfg)
+
+const providerOptions = ref<ModelProviderOption[]>([])
+const modelOptions = ref<ModelOption[]>([])
+const providerLoading = ref(false)
+const modelLoading = ref(false)
+const providerError = ref('')
+const modelError = ref('')
+function firstProviderCode() {
+  return providerOptions.value[0]?.providerCode || ''
+}
+function firstModelCode() {
+  return modelOptions.value[0]?.modelCode || ''
+}
+async function loadModels(providerCode: string, preferredModelCode?: string) {
+  modelLoading.value = true
+  modelError.value = ''
+  try {
+    modelOptions.value = await fetchDefaultModels(providerCode)
+    const modelCode = modelOptions.value.find((item) => item.modelCode === preferredModelCode)?.modelCode || firstModelCode()
+    if (modelCode !== (orchCfg.value.modelCode || '')) patch({ modelCode })
+  } catch (e) {
+    modelOptions.value = []
+    patch({ modelCode: '' })
+    modelError.value = `模型加载失败：${(e as Error)?.message ?? String(e)}`
+  } finally {
+    modelLoading.value = false
+  }
+}
+async function loadProviderModelOptions() {
+  providerLoading.value = true
+  providerError.value = ''
+  try {
+    providerOptions.value = await fetchModelProviders()
+    const providerCode = providerOptions.value.find((item) => item.providerCode === orchCfg.value.modelProviderCode)?.providerCode || firstProviderCode()
+    if (providerCode !== (orchCfg.value.modelProviderCode || '')) patch({ modelProviderCode: providerCode })
+    if (!providerCode) {
+      modelOptions.value = []
+      patch({ modelCode: '' })
+      return
+    }
+    await loadModels(providerCode, orchCfg.value.modelCode)
+  } catch (e) {
+    providerOptions.value = []
+    modelOptions.value = []
+    patch({ modelProviderCode: '', modelCode: '' })
+    providerError.value = `模型供应商加载失败：${(e as Error)?.message ?? String(e)}`
+  } finally {
+    providerLoading.value = false
+  }
+}
+watch(
+  () => [id.value, isRule.value] as const,
+  () => { if (isRule.value) void loadProviderModelOptions() },
+  { immediate: true },
+)
+async function onMainModelProviderChange(value: string) {
+  patch({ modelProviderCode: value })
+  await loadModels(value, orchCfg.value.modelCode)
+}
+function onMainModelChange(value: string) {
+  patch({ modelCode: value })
+}
 
 // 进入查看态时按 ruleId 回灌详情 + 缺正文时按 scriptPath 拉 MinIO（对齐旧 handleOpenRecord）
 const hydrateToken = ref('')
@@ -99,15 +166,17 @@ async function hydrateViewFromServer() {
   hydrating.value = true
   hydrateToken.value = token
   try {
-    try {
-      const detail = await ruleApi.orchestrationDetail(ruleId)
-      const next: Partial<RuleOrchestration> = {}
-      // 服务端有值才覆盖，避免 saveMeta 后详情尚无 nlDescribe 时用空串抹掉本地草稿
-      // name 不在此列：规则名称 = 节点名称（0804 拍板），orchCfg 计算时已强制用 cfg.title 覆盖
-      if (detail.describe?.trim()) next.describe = detail.describe
-      if (detail.systemPrompt?.trim()) next.systemPrompt = detail.systemPrompt
-      if (detail.scriptPath?.trim()) next.scriptPath = detail.scriptPath
-      if (Object.keys(next).length) patch(next)
+      try {
+        const detail = await ruleApi.orchestrationDetail(ruleId)
+        const next: Partial<RuleOrchestration> = {}
+        // 服务端有值才覆盖，避免 saveMeta 后详情尚无 nlDescribe 时用空串抹掉本地草稿
+        // name 不在此列：规则名称 = 节点名称（0804 拍板），orchCfg 计算时已强制用 cfg.title 覆盖
+        if (detail.describe?.trim()) next.describe = detail.describe
+        if (detail.systemPrompt?.trim()) next.systemPrompt = detail.systemPrompt
+        if (detail.modelProviderCode?.trim()) next.modelProviderCode = detail.modelProviderCode
+        if (detail.modelCode?.trim()) next.modelCode = detail.modelCode
+        if (detail.scriptPath?.trim()) next.scriptPath = detail.scriptPath
+        if (Object.keys(next).length) patch(next)
     } catch {
       // 详情失败不阻塞；下面仍可凭本地 scriptPath 拉脚本
     }
@@ -136,6 +205,15 @@ function onDescribeChange(e: Event) {
 }
 function onSystemPromptChange(value: string) {
   patch({ systemPrompt: value })
+}
+function onPromptCategoryChange(value: PromptCategory) {
+  patch({ promptCategory: resolvePromptCategoryForNode(cfg.value, value) })
+}
+function onModelProviderChange(value: string) {
+  patch({ modelProviderCode: value })
+}
+function onModelChange(value: string) {
+  patch({ modelCode: value })
 }
 function onScriptChange(value: string) {
   patch({ script: value })
@@ -191,9 +269,19 @@ async function ensureNumericRuleId(): Promise<string | undefined> {
     return undefined
   }
 }
-async function onGenerateScript() {
+async function onGenerateScript(
+  draft?: Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'modelProviderCode' | 'modelCode'>>,
+) {
   if (!orchCfg.value.describe.trim()) {
     ElMessage.warning(isRule.value ? '请先填写规则处理描述' : '请先填写抓取需求描述')
+    return
+  }
+  if (isRule.value && !cfg.value?.configId) {
+    ElMessage.warning('请先保存表配置，再生成脚本')
+    return
+  }
+  if (isRule.value && (!((draft?.modelProviderCode ?? orchCfg.value.modelProviderCode) || '').trim() || !((draft?.modelCode ?? orchCfg.value.modelCode) || '').trim())) {
+    ElMessage.warning('请先选择模型供应商和模型')
     return
   }
   if (isRule.value && (!orchCfg.value.inputFields?.length || !orchCfg.value.outputFields?.length)) {
@@ -207,7 +295,40 @@ async function onGenerateScript() {
   generateAbort.value = controller
   generating.value = true
   try {
-    const res = await ruleApi.orchestrationGenerate({ ...orchCfg.value, ruleId }, controller.signal)
+    const genCfg = {
+      ...orchCfg.value,
+      ...draft,
+      ruleId,
+    }
+    let res: Awaited<ReturnType<typeof ruleApi.orchestrationGenerate>>
+    if (isRule.value) {
+      // 流式回显（0831）：data-process 返回 text/plain 分块流，逐块写回 script，
+      // 脚本预览框 / 全屏工作台实时打字机效果；结束时再以解析后的干净正文 + scriptPath 覆盖。
+      // 生成中途失败/取消时保留已流出的部分内容（用户看得见生成到哪了）。
+      let streamed = ''
+      res = await ruleApi.dataProcessGenerate(buildDataProcessGeneratePayload({
+        description: genCfg.describe,
+        configId: Number(cfg.value?.configId ?? 0),
+        providerCode: genCfg.modelProviderCode ?? '',
+        model: genCfg.modelCode ?? '',
+        sourceTable: genCfg.inputTable ?? '',
+        targetTable: genCfg.outputTable ?? '',
+        inputFields: genCfg.inputFields ?? [],
+        outputFields: genCfg.outputFields ?? [],
+        inputFieldOptions: inputFieldOptions.value,
+        outputFieldOptions: outputFieldOptions.value,
+      }), {
+        signal: controller.signal,
+        onChunk: (delta) => {
+          streamed += delta
+          // 只剥开头的 ```python 围栏，让正文从第一行代码开始显示；
+          // 结尾围栏与「# 当前文件已保存到…」标记行由完成后的整体解析清理。
+          patch({ script: streamed.replace(/^```[a-zA-Z]*[ \t]*\n/, '') })
+        },
+      })
+    } else {
+      res = await ruleApi.orchestrationGenerate(genCfg, controller.signal)
+    }
     patch({ script: res.script, scriptPath: res.scriptPath })
     ElMessage.success(isRule.value ? '脚本已生成' : '配置已生成')
   } catch (e) {
@@ -362,12 +483,42 @@ const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value
   </template>
 
   <div class="rc-actions-row">
+    <label v-if="isRule" class="rc-inline-field" data-testid="main-model-provider">
+      <span>模型供应商</span>
+      <el-select
+        :model-value="orchCfg.modelProviderCode ?? ''"
+        class="rc-inline-select"
+        size="small"
+        :loading="providerLoading"
+        :teleported="false"
+        placeholder="请选择"
+        @change="onMainModelProviderChange"
+      >
+        <el-option v-for="item in providerOptions" :key="item.providerCode" :label="item.providerName" :value="item.providerCode" />
+      </el-select>
+    </label>
+    <label v-if="isRule" class="rc-inline-field" data-testid="main-model">
+      <span>模型</span>
+      <el-select
+        :model-value="orchCfg.modelCode ?? ''"
+        class="rc-inline-select rc-inline-select-model"
+        size="small"
+        :loading="modelLoading"
+        :disabled="!orchCfg.modelProviderCode || !providerOptions.length"
+        :teleported="false"
+        placeholder="请选择"
+        @change="onMainModelChange"
+      >
+        <el-option v-for="item in modelOptions" :key="item.modelCode" :label="item.modelName" :value="item.modelCode" />
+      </el-select>
+    </label>
     <button class="rc-btn" type="button" @click="workbenchOpen = true">编辑系统提示词</button>
-    <button class="rc-btn primary" type="button" :disabled="generating" @click="onGenerateScript">
+    <button class="rc-btn primary" type="button" :disabled="generating" @click="() => onGenerateScript()">
       {{ generating ? '生成中...' : generateLabel }}
     </button>
     <button v-if="generating" class="rc-btn" type="button" @click="onCancelGenerate">取消</button>
   </div>
+  <div v-if="isRule && (providerError || modelError)" class="rc-help">{{ providerError || modelError }}</div>
   <div v-if="hydrating" class="rc-help">正在同步编排详情…</div>
 
   <div class="rc-list ni-rule-meta">
@@ -384,26 +535,37 @@ const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value
 
   <!-- S6-1（方案 §4.1）：合并原 RuleScriptDialog（只读脚本查看）+ RuleSystemPromptDialog（编辑系统提示词）
        为一个双栏工作区——两个入口按钮（编辑系统提示词/全屏查看）现在打开同一个弹层，左右两栏一屏对照，
-       面板内直接能生成/保存/测试，不用退出去。 -->
+       面板内直接能生成/保存，不用退出去。 -->
   <RuleWorkbenchDialog
     v-model:open="workbenchOpen"
     :title="workbenchTitle"
     :script-label="scriptLabel"
     :system-prompt="orchCfg.systemPrompt ?? ''"
+    :prompt-category="promptCategory"
+    :prompt-list-category="promptListCategory"
+    :prompt-category-groups="promptCategoryGroups"
+    :input-table-name="orchCfg.inputTable"
+    :output-table-name="orchCfg.outputTable"
+    :input-fields="orchCfg.inputFields ?? []"
+    :output-fields="orchCfg.outputFields ?? []"
+    :input-field-options="inputFieldOptions"
+    :output-field-options="outputFieldOptions"
+    :model-provider-code="orchCfg.modelProviderCode ?? ''"
+    :model-code="orchCfg.modelCode ?? ''"
     :script="orchCfg.script ?? ''"
     :script-path="orchCfg.scriptPath"
     :generate-label="generateLabel"
     :save-label="saveLabel"
     :generating="generating"
     :saving="savingScript"
-    :show-test="isRule"
-    :can-test="canTest"
     @update:system-prompt="onSystemPromptChange"
+    @update:prompt-category="onPromptCategoryChange"
+    @update:model-provider-code="onModelProviderChange"
+    @update:model-code="onModelChange"
     @update:script="onScriptChange"
     @generate="onGenerateScript"
     @cancel-generate="onCancelGenerate"
     @save="onSaveScript"
-    @test="testDialogOpen = true"
   />
   <RuleTestDialog
     v-if="isRule"
@@ -436,7 +598,10 @@ const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value
 .rc-switch-load-error span { min-width: 0; }
 .rc-switch-load-error button { flex: none; padding: 0; border: 0; background: transparent; color: var(--rc-primary); font-size: 10px; cursor: pointer; }
 .rc-switch-load-error button:hover { text-decoration: underline; }
-.rc-actions-row { display: flex; gap: 8px; margin-top: 12px; }
+.rc-actions-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.rc-inline-field { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--rc-muted); font-size: 11px; font-weight: 600; }
+.rc-inline-select { width: 132px; }
+.rc-inline-select-model { width: 168px; }
 .rc-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 11px; border: 1px solid #d5e2f2; border-radius: 7px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; }
 .rc-btn:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rc-btn.primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }

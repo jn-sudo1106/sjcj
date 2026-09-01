@@ -130,7 +130,67 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
     expect(result).toMatchObject({ ruleId: '173', scriptPath: '/code01/x.py' })
   })
 
-  it('orchestrationGenerate：数字 ruleId + live 时 POST form 流式，解析 MinIO 路径', async () => {
+  it('dataProcessGenerate：POST /api/answer/data-process，JSON body 流式生成脚本（text/plain chunked）', async () => {
+    // 0831 实测契约：text/plain 分块流，markdown 代码围栏 + 末尾「# 当前文件已保存到…」标记行
+    const streamText = [
+      '```python',
+      'def main(date, zb_value):',
+      '    return {"end_date": "2025-01-01"}',
+      '```',
+      '# 当前文件已保存到/code01/20260801/abc.py',
+    ].join('\n')
+    const encoder = new TextEncoder()
+    const chunks = [encoder.encode(streamText.slice(0, 30)), encoder.encode(streamText.slice(30, 60)), encoder.encode(streamText.slice(60))]
+    let i = 0
+    const received: string[] = []
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: async () => (i < chunks.length ? { done: false, value: chunks[i++] } : { done: true, value: undefined }),
+        }),
+      },
+    } as unknown as Response)
+    // 打开 live 逃逸：vitest 默认 DISABLE_LIVE_ENDPOINTS=1，本用例要测真实 HTTP 路径
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    const { ruleApi } = await import('./index')
+
+    const result = await ruleApi.dataProcessGenerate({
+      description: '按字段生成',
+      configId: 184,
+      providerCode: 'DeepSeek',
+      model: 'deepseek-v4-flash',
+      sourceTable: 'sense_data.TB_email_XQ',
+      targetTable: 'sense_data.TB_INDICATOR_DATA',
+      inputFields: 'date:date,zb_value:zb_value',
+      outputFields: 'end_date:end_date,indicator_data:indicator_data',
+    }, { onChunk: (delta) => received.push(delta) })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/answer/data-process')
+    expect(init.method).toBe('POST')
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json')
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      description: '按字段生成',
+      configId: 184,
+      providerCode: 'DeepSeek',
+      model: 'deepseek-v4-flash',
+      sourceTable: 'sense_data.TB_email_XQ',
+      targetTable: 'sense_data.TB_INDICATOR_DATA',
+      inputFields: 'date:date,zb_value:zb_value',
+      outputFields: 'end_date:end_date,indicator_data:indicator_data',
+    })
+    // 增量回调拼起来等于完整流文本（打字机效果的数据源）
+    expect(received.join('')).toBe(streamText)
+    // 解析结果：围栏与标记行剥掉，scriptPath 抽出
+    expect(result.script).toBe('def main(date, zb_value):\n    return {"end_date": "2025-01-01"}')
+    expect(result.scriptPath).toBe('/code01/20260801/abc.py')
+  })
+
+  it('orchestrationGenerate：xml 格式仍走旧 stream，解析 MinIO 路径', async () => {
     const streamText = [
       'def main(date, zb_value):',
       '    return {"end_date": date}',
@@ -158,6 +218,7 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
       ...sampleCfg,
       mode: 'ref',
       ruleId: '173',
+      format: 'xml',
       describe: '按字段生成',
       systemPrompt: '只返回 JSON',
     })

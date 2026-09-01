@@ -598,6 +598,8 @@ export function ruleOrchestrationDetailFromLegacy(input: unknown): RuleOrchestra
     outputFields: splitCsv(record.outputFields),
     // 0803 追加，0804 起前端不再消费：仅作服务端归属租户的透传记录（保存元数据已固定用登录账号）
     userCode: record.userCode == null ? undefined : String(record.userCode),
+    modelProviderCode: record.providerCode == null ? undefined : String(record.providerCode),
+    modelCode: record.modelCode == null ? undefined : String(record.modelCode),
   }
 }
 
@@ -789,6 +791,8 @@ export function ruleOrchestrationGenerateToLegacy(cfg: RuleOrchestration): Legac
     ruleId: String(cfg.ruleId ?? ''),
     query: cfg.describe ?? '',
     userPrompt: (cfg.systemPrompt ?? '').trim() || DEFAULT_GENERATE_USER_PROMPT,
+    providerCode: cfg.modelProviderCode ?? '',
+    modelCode: cfg.modelCode ?? '',
   }
 }
 
@@ -799,6 +803,8 @@ export function ruleOrchestrationGenerateFormBody(cfg: RuleOrchestration): strin
   params.set('ruleId', String(legacy.ruleId ?? ''))
   params.set('query', String(legacy.query ?? ''))
   params.set('userPrompt', String(legacy.userPrompt ?? ''))
+  if (legacy.providerCode) params.set('providerCode', String(legacy.providerCode))
+  if (legacy.modelCode) params.set('modelCode', String(legacy.modelCode))
   return params.toString()
 }
 
@@ -812,6 +818,8 @@ export function isVruleNumericRuleId(ruleId?: string): boolean {
 const STREAM_SCRIPT_PATH_MARKERS = [
   '# [系统消息] 当前文件已经保存至MinIO：',
   '# [系统消息] 当前文件已经保存至MinIO:',
+  // data-process 生成脚本（0831 实测）：末行 `# 当前文件已保存到/code01/202608/xxx.py`
+  '# 当前文件已保存到',
 ]
 
 /**
@@ -859,6 +867,25 @@ export function parseRuleOrchestrationStreamText(text: string): RuleOrchestratio
     }
   }
   const { script, scriptPath } = stripMinioMarkerLine(text)
+  if (!script.trim()) throw new Error('生成脚本未返回内容')
+  return { script, scriptPath }
+}
+
+/**
+ * data-process 生成脚本的流式正文解析（0831 实测契约）：
+ * 响应为 text/plain 分块流，整体形如
+ * ```python
+ * def process(...):
+ *     ...
+ * ```
+ * # 当前文件已保存到/code01/202608/xxx.py
+ * 先剥末尾保存标记行拿 scriptPath，再剥 markdown 代码围栏拿纯 Python 正文。
+ * 围栏可能不存在（后端提示词变化时），此时按纯文本处理。
+ */
+export function parseDataProcessStreamText(text: string): RuleOrchestrationGenerateResult {
+  const { script: fenced, scriptPath } = stripMinioMarkerLine(text)
+  const fence = fenced.match(/^```[a-zA-Z]*[ \t]*\n([\s\S]*?)\n?```[ \t]*$/)
+  const script = fence ? fence[1] : fenced
   if (!script.trim()) throw new Error('生成脚本未返回内容')
   return { script, scriptPath }
 }
