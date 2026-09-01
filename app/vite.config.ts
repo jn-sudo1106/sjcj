@@ -39,12 +39,6 @@ export default defineConfig(({ mode }) => {
           target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://127.0.0.1:8080',
           changeOrigin: true,
         },
-        // 数据视图查询服务（0901）：新版数据接口 /api/data-center/query，与 data-process 同在本地
-        // 127.0.0.1:8080 上，联调走本地。同样按对象键插入顺序做前缀匹配，更长前缀必须在 '/api' 之前。
-        '/api/data-center': {
-          target: env.VITE_DATA_CENTER_PROXY_TARGET || 'http://127.0.0.1:8080',
-          changeOrigin: true,
-        },
         '/api': {
           target: proxyTarget,
           changeOrigin: true,

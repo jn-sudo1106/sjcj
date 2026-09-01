@@ -61,7 +61,7 @@ describe('ResultView', () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
-    const query = vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
 
     const wrapper = shallowMount(ResultView, {
@@ -83,7 +83,7 @@ describe('ResultView', () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
 
     const wrapper = shallowMount(ResultView, {
@@ -105,7 +105,7 @@ describe('ResultView', () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
 
     const wrapper = mountResultView()
@@ -125,9 +125,7 @@ describe('ResultView', () => {
     }
     useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
     vi.spyOn(dataApi, 'tableMeta').mockRejectedValue(new Error('业务类型不存在'))
-    const query = vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [row], total: 1 })
-    // 表结构失败会触发 loadData 的 mock 回退分支（仍走 rowQueryPaged 种子数据），需一并桩住
-    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [row], total: 1 })
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [row], total: 1 })
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
 
     const wrapper = shallowMount(ResultView, {
@@ -165,12 +163,8 @@ describe('ResultView · 查询失败的暴露方式（0819 N3）', () => {
     const current = mockSourceDetail({ sourceId: '391007768' })!
     useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
-    vi.spyOn(dataApi, 'dataCenterQuery').mockRejectedValue(
-      new Error("请求异常 [data/dataCenterQuery]: 请求失败 500: You have an error in your SQL syntax near 'title'"),
-    )
-    // 数据失败同样会触发 mock 回退分支（rowQueryPaged 种子数据）；桩成失败，保证真实报错不被演示数据盖掉
     vi.spyOn(dataApi, 'rowQueryPaged').mockRejectedValue(
-      new Error("请求异常 [data/dataCenterQuery]: 请求失败 500: You have an error in your SQL syntax near 'title'"),
+      new Error("请求异常 [data/rowQueryPaged]: 请求失败 500: You have an error in your SQL syntax near 'title'"),
     )
 
     const wrapper = mountResultView()
@@ -188,7 +182,7 @@ describe('ResultView · 查询失败的暴露方式（0819 N3）', () => {
     useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
     // 与上面那条"回退"用例同样的失败形态：表结构失败、数据成功
     vi.spyOn(dataApi, 'tableMeta').mockRejectedValue(new Error('业务类型不存在'))
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
 
     const wrapper = mountResultView()
     await flushPromises()
@@ -208,7 +202,7 @@ describe('ResultView · 大数据量保护（0819 N3-3）', () => {
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     // 所有查询都挂起不返回，模拟"大表查询很久没回来"
     const releases: ((v: { list: DataRow[]; total: number }) => void)[] = []
-    const query = vi.spyOn(dataApi, 'dataCenterQuery').mockImplementation(
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockImplementation(
       () => new Promise((resolve) => { releases.push(resolve) }),
     )
 
@@ -239,7 +233,7 @@ describe('ResultView · 查询条件的执行时机（0819 N3 前置修复）', 
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
-    const query = vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
 
     const wrapper = mountResultView()
@@ -292,7 +286,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     const flow = useFlowStore()
     flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
     const decId = flow.insertAfter('391007768-s2', 'decision')!
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
 
@@ -317,7 +311,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
     flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
 
@@ -337,7 +331,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
     loadSameTableFixture(flow, current)
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
 
@@ -364,7 +358,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
     loadDistinctTablesFixture(flow, current) // mid: 输入 T1 / 输出 T2，两张不同的表，唯一消费者（不掺歧义判定）
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
 
@@ -397,7 +391,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
 
     const wrapper = mountResultView()
@@ -417,7 +411,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
     loadExecFixture(flow, current)
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
 
     const wrapper = mountResultView()
@@ -456,7 +450,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     // 不再依赖 buildSourceSeed 按源名猜测补节点（该演示期逻辑 2026-08-26 已移除）。
     flow.configs[ruleNodeId] = cfg({ title: '规则处理', entryCondition: { logic: 'AND', items: [{ field: 'title', op: 'contains', value: '公告' }] } })
     flow.main.splice(2, 0, ruleNodeId)
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
 
@@ -491,7 +485,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
     flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
 
@@ -511,7 +505,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     const bg = flow.branchGroups.find((g) => g.ownerId === decId)!
     flow.setBranchCondition(decId, bg.branches[0].id, { logic: 'AND', items: [{ field: 'amount', op: 'gt', value: '0' }] })
     const childId = flow.addNodeToBranch(decId, bg.branches[0].id, 'web')!
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
 
@@ -538,7 +532,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
 
     let resolveStale: (() => void) | undefined
-    vi.spyOn(dataApi, 'dataCenterQuery').mockImplementation(async ({ tableId }) => {
+    vi.spyOn(dataApi, 'rowQueryPaged').mockImplementation(async ({ tableId }) => {
       if (tableId === '2102157') {
         // 391007768-s1 的输出表：故意卡住不返回，模拟"先发出的请求反而后到达"
         await new Promise<void>((resolve) => { resolveStale = resolve })
@@ -575,7 +569,7 @@ describe('ResultView · 默认节点与默认列（0831 F09/F10）', () => {
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
     loadExecFixture(flow, current)
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
 
     const wrapper = mountResultView()
@@ -592,7 +586,7 @@ describe('ResultView · 默认节点与默认列（0831 F09/F10）', () => {
     const ws = useWorkspaceStore()
     ws.open('391007768', 'demo')
     ws.saveSnapshot('391007768', { view: 'data', selectedNodeId: 'sink', page: 3 })
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
 
     const wrapper = mountResultView()
@@ -609,7 +603,7 @@ describe('ResultView · 默认节点与默认列（0831 F09/F10）', () => {
     // mid / mid2 都直接消费 first 的输出表，是 first 的后继（本 fixture 里 mid 在前）
     flow.configs.mid.taskCfg = { queue: '', urlRule: '', contextMap: ['K1'] }
     flow.configs.mid.entryCondition = { logic: 'AND', items: [{ field: 'author', op: 'notEmpty', value: '' }] }
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({
       tableId: 'T1', tableName: '列表', rowCount: 0,
       fields: [
@@ -630,7 +624,7 @@ describe('ResultView · 默认节点与默认列（0831 F09/F10）', () => {
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
     loadExecFixture(flow, current)
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
 
     const wrapper = mountResultView()
@@ -706,7 +700,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
       total: 2,
       list: [
         { dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' },
@@ -746,7 +740,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
       mid: cfg({ title: '详情', inputTable: 'T1', outputTable: 'T2' }),
       last: cfg({ title: '入库', inputTable: 'T2' }),
     })
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
 
@@ -775,7 +769,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
       total: 2,
       list: [
         { dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' },
@@ -817,7 +811,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
       total: 2,
       list: [
         { dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' },
@@ -847,7 +841,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
       total: 3,
       list: [
         { dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' },
@@ -882,7 +876,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    const query = vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
       total: 25,
       list: [{ dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' }],
     })
@@ -909,7 +903,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
     vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
     const nextStepBatch = vi.spyOn(dataApi, 'nextStepBatch').mockResolvedValue({ message: '已提交' })
 
@@ -937,7 +931,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
       total: 3,
       list: [
         { dataId: '101', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' },
@@ -966,7 +960,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
     const nextStepBatch = vi.spyOn(dataApi, 'nextStepBatch').mockResolvedValue({ message: '已提交' })
 
     const wrapper = mountResultView()
@@ -1000,7 +994,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
     vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
     const nextStepBatch = vi.spyOn(dataApi, 'nextStepBatch').mockResolvedValue({ message: '本次发送:200 条, 结果:,ok_39025: [200条]' })
 
@@ -1027,7 +1021,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
     vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
     vi.spyOn(dataApi, 'nextStepBatch').mockRejectedValue(new Error('错误信息:运行时异常'))
 
@@ -1047,7 +1041,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
 
     const wrapper = mountResultView()
@@ -1079,7 +1073,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
       total: 2,
       list: [
         { dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' },
@@ -1113,7 +1107,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
       total: 3,
       list: [
         { dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' },
@@ -1147,7 +1141,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
       total: 2,
       list: [
         { dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' },
@@ -1180,7 +1174,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
       total: 1,
       list: [{ dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' }],
     })
@@ -1216,7 +1210,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
       total: 1,
       list: [{ dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' }],
     })
@@ -1245,7 +1239,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
       total: 1,
       list: [{ dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' }],
     })
@@ -1272,7 +1266,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
     loadExecFixture(flow, current)
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
 
@@ -1298,7 +1292,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
       total: 1, list: [{ dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' }],
     })
     vi.mocked(ElMessageBox.confirm).mockRejectedValue('cancel')
@@ -1322,7 +1316,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
       total: 1, list: [{ dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' }],
     })
 
@@ -1352,7 +1346,7 @@ describe('ResultView · 上游数据下钻（M3-0B：旧平台 EntryList2.vue �
       dataId: 'd1', sourceId: current.sourceId, title: '详情行', summary: '', acceptState: 'accepted',
       values: {}, categoryId: 'TB_PARENT', parentId: 'p-9001',
     }
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [row], total: 1 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [row], total: 1 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
     const rowDetail = vi.spyOn(dataApi, 'rowDetail').mockResolvedValue({
@@ -1384,7 +1378,7 @@ describe('ResultView · 上游数据下钻（M3-0B：旧平台 EntryList2.vue �
     const flow = useFlowStore()
     flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
     const row: DataRow = { dataId: 'd2', sourceId: current.sourceId, title: '无父行', summary: '', acceptState: 'accepted', values: {}, parentId: '0' }
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [row], total: 1 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [row], total: 1 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
 
@@ -1403,7 +1397,7 @@ describe('ResultView · 上游数据下钻（M3-0B：旧平台 EntryList2.vue �
     flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
     const row1: DataRow = { dataId: 'd1', sourceId: current.sourceId, title: '行1', summary: '', acceptState: 'accepted', values: {}, categoryId: 'TB_PARENT', parentId: 'p-1' }
     const row2: DataRow = { dataId: 'd2', sourceId: current.sourceId, title: '行2', summary: '', acceptState: 'accepted', values: {} }
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: [row1, row2], total: 2 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [row1, row2], total: 2 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
     vi.spyOn(dataApi, 'rowDetail').mockResolvedValue({
@@ -1438,7 +1432,7 @@ describe('ResultView · 0831 详情翻条与末节点回上游', () => {
       { dataId: 'd1', sourceId: current.sourceId, title: '行1', summary: '', acceptState: 'accepted', values: {} },
       { dataId: 'd2', sourceId: current.sourceId, title: '行2', summary: '', acceptState: 'accepted', values: {} },
     ]
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({ list: rows, total: 2 })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: rows, total: 2 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
 
@@ -1464,7 +1458,7 @@ describe('ResultView · 0831 详情翻条与末节点回上游', () => {
     loadSameTableFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
       total: 1,
       list: [{ dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' }],
     })
@@ -1489,7 +1483,7 @@ describe('ResultView · 0831 详情翻条与末节点回上游', () => {
     loadExecFixture(flow, current)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'dataCenterQuery').mockResolvedValue({
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
       total: 2,
       list: [
         { dataId: 'c1', sourceId: current.sourceId, title: 'C1', summary: '', acceptState: 'pending', parentId: 'p9' },
