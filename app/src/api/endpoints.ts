@@ -37,8 +37,12 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/sourceCopy', desc: '从现有源复制预填（模板复用，不落库）', impl: true },
   // 0706 优化·Phase4 新增：任务视图 = 节点粒度运行记录（队列/总任务数/已处理数/状态）
   { path: 'source/nodeRunStats', desc: '源的节点粒度运行统计', impl: true },
-  { path: 'source/sourceTaskPaged', desc: '源任务实例分页（支持节点与状态筛选）', impl: true },
-  { path: 'source/changeSourceEnable', desc: '启用 / 停用源', danger: true, impl: true },
+  // 逻辑名：画布任务视图。真实路径是 task/topTaskPaged（与源列表任务实例同一接口，已 live）。
+  { path: 'source/sourceTaskPaged', desc: '源任务实例分页 → GET /v1/task/topTaskPaged', impl: true },
+  // 逻辑名。真实路径是 GET /v1/source/changeEnable（旧 api/source.js:11），live 必须标在
+  // 下面 source/changeEnable 那条上——usesMockAdapter 按真实 httpEndpoint 查表。
+  { path: 'source/changeSourceEnable', desc: '启用 / 停用源 → GET /v1/source/changeEnable', danger: true, impl: true },
+  { path: 'source/changeEnable', desc: '启用 / 停用源（真实路径，见上方 source/changeSourceEnable 的说明）', danger: true, live: true },
   { path: 'source/sendSnatch', desc: '发抓取', danger: true, impl: true, live: true },
   { path: 'snatch/snatchSave', desc: '旧平台新建源（Step1/2/3 一次性提交）', danger: true },
   { path: 'source/sendSnatchWithParam', desc: '带参发抓取', danger: true, impl: true, live: true },
@@ -65,7 +69,11 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/check/check-one', desc: '执行一次源检查', danger: true },
   { path: 'source/check/runNow', desc: '立即运行源检查', danger: true },
   { path: 'source/tagSource', desc: '源打标签', danger: true, impl: true, live: true },
-  { path: 'source/setColor', desc: '设颜色标识（旧 usedFlag）', danger: true, impl: true, live: true },
+  // 0831 F03：当前查询条件下真实存在的标签（旧 querySourceTags）。读接口，无 danger。
+  // 接它是为了看见**程序打进去**的标签——本机「最近使用」只记得手工打过的。
+  { path: 'source/sourceTags', desc: '标签候选（按当前查询条件）', impl: true, live: true },
+  // 0831 F01 起 UI 已无颜色入口；端点保留，旧平台仍在读写同一个 usedFlag。
+  { path: 'source/setColor', desc: '设颜色标识（旧 usedFlag，本平台已无 UI 入口）', danger: true, impl: true, live: true },
   { path: 'source/changeToSuccess', desc: '改为成功状态', danger: true },
   { path: 'source/saveJsonQuery', desc: '保存时 Json 查询' },
   { path: 'source/monitorQuery', desc: '源监控查询' },
@@ -85,7 +93,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/modify/updateConfig', desc: '修改配置', danger: true, impl: true, live: true },
   { path: 'config/copyAll', desc: '复制配置', danger: true, impl: true, live: true },
   { path: 'config/delete', desc: '删除配置', danger: true, impl: true, live: true },
-  { path: 'config/sendConfigTask', desc: '发配置', danger: true, impl: true, live: true },
+  { path: 'config/sendConfigTask', desc: '发配置（把配置下发成采集任务；不是保存，也不是发抓取）', danger: true, impl: true, live: true },
   { path: 'config/updateTopic', desc: '修改主题(队列)', danger: true, impl: true, live: true },
   { path: 'config/updateConfigPolicy', desc: '修改运行策略', danger: true, impl: true, live: true },
   { path: 'config/changeEnable', desc: '启停配置', danger: true, impl: true, live: true },
@@ -99,7 +107,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/configParamAdd', desc: '配置绑定参数', danger: true, impl: true, live: true },
   { path: 'config/configParamDel', desc: '配置解绑参数', danger: true, impl: true, live: true },
   { path: 'config/configActionPaged', desc: '配置操作日志分页', impl: true, live: true },
-  { path: 'config/clear', desc: '清配置缓存（同一端点也被参数「清除缓存」复用，已联调验证）', danger: true, impl: true, live: true },
+  { path: 'config/clear', desc: '清配置缓存（前端已下线，列表改刷新重查；同一端点也曾被参数清缓存复用）', danger: true, impl: true, live: true },
   { path: 'config/entryTypePagedView', desc: '实体表分页', impl: true, live: true },
   { path: 'config/queryEntryTypesGroup', desc: '按源加载实体表分组', live: true },
   { path: 'config/entryType', desc: '实体表详情', impl: true, live: true },
@@ -107,7 +115,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/entryTypeAddAll', desc: '新建实体表', danger: true, impl: true, live: true },
   { path: 'config/modifyEntryType', desc: '修改实体', danger: true, impl: true, live: true },
   { path: 'config/deleteEntryType', desc: '删除实体表', danger: true, impl: true, live: true },
-  { path: 'config/entry-type-clear', desc: '清除实体表缓存', danger: true, impl: true, live: true },
+  { path: 'config/entry-type-clear', desc: '清除实体表缓存（前端已下线，列表改刷新重查）', danger: true, impl: true, live: true },
   { path: 'config/entryTypeCopy', desc: '复制实体表', danger: true, impl: true, live: true },
   { path: 'config/checkTable', desc: '检查物理表结构', impl: true, live: true },
   { path: 'config/syncTable', desc: '同步物理表结构', danger: true, impl: true, live: true },
@@ -146,15 +154,17 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'entry/entryUpdate', desc: '手动修改实体数据', danger: true, live: true },
   { path: 'entry/batch/saveEntryOne', desc: '手动新增实体数据', danger: true, live: true },
   { path: 'entry/batch/uploadData', desc: '批量导入实体数据（Excel）', danger: true, impl: true, live: true },
-  { path: 'entry/entryExportAll', desc: '导出 Excel（URL 直开，同源 Cookie 鉴权）' },
+  { path: 'entry/entryExportAll', desc: '导出 Excel（URL 直开，同源 Cookie 鉴权）。0831 G7：旧 api/entry.js 没有这条，本平台 DataView 已在用；不标 live——exportUrl 不走 request()' },
 
   /* ── item/next 子步骤（目标 7 / 收录 5） ── */
   { path: 'item/next/nextConfigPaged', desc: '子步骤分页 / 流程图读取', impl: true, live: true },
   { path: 'item/next/configs/same', desc: '同资源配置（选择已有配置的候选来源，list1 同域 / list2 其它域）', impl: true, live: true },
-  { path: 'item/next/saveItemConfig', desc: '新增子步骤', danger: true },
-  { path: 'item/next/stepModify', desc: '修改子步骤', danger: true },
-  { path: 'item/next/enable', desc: '启停子步骤', danger: true },
-  { path: 'item/next/delete', desc: '删除子步骤', danger: true },
+  // 2026-08-31 联调：画布节点名 / 进入条件 / 增删节点走这 4 条，不走配置。
+  // payload 已按 2026-08-26 源 430016398 / itemConfig 40600 实测对过；标 live 后日常 mock 模式也会打真实后端。
+  { path: 'item/next/saveItemConfig', desc: '新增子步骤（POST query，不是 JSON body）', danger: true, live: true },
+  { path: 'item/next/stepModify', desc: '修改子步骤（节点名 / 进入条件 / lastStep；JSON body）', danger: true, live: true },
+  { path: 'item/next/enable', desc: '启停子步骤（GET ?id=&state=；0 启用 / 1 停用）', danger: true, live: true },
+  { path: 'item/next/delete', desc: '删除子步骤（GET ?id=itemConfig）', danger: true, live: true },
 
   /* ── job 抓取/定时任务（目标 7 / 收录 7） ── */
   { path: 'job/snatchJobPaged', desc: '抓取任务分页' },

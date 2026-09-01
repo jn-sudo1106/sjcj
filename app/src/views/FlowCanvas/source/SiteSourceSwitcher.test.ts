@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { ElMessageBox } from 'element-plus'
 import SiteSourceSwitcher from './SiteSourceSwitcher.vue'
 import ParamEditorDrawer from '@/components/param/ParamEditorDrawer.vue'
 import { siteApi, sourceApi, paramApi, type Source, type Param } from '@/api'
+import { useFlowStore } from '@/stores/flow'
+import { useWorkspaceStore } from '@/stores/workspace'
 
 const source: Source = {
   sourceId: 'source-a', siteId: 'site-a', name: '原源', url: 'https://example.com',
@@ -30,7 +33,7 @@ function mockApis() {
   vi.spyOn(siteApi, 'siteDetail').mockResolvedValue({
     siteId: 'site-a', name: '网站 A', category: '', owner: 'admin', sourceCount: 1, errorCount: 0,
   })
-  vi.spyOn(siteApi, 'siteSources').mockImplementation(async (siteId) => siteId === 'site-template' ? [templateSource] : [source])
+  vi.spyOn(siteApi, 'siteSources').mockImplementation(async (siteId) => siteId === 'site-template' ? [{ ...templateSource }] : [{ ...source }])
   vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [templateSource] })
   vi.spyOn(siteApi, 'sourceAdd').mockResolvedValue({ ok: true, sourceId: 'source-new' })
   vi.spyOn(siteApi, 'cloneSource').mockResolvedValue({
@@ -46,6 +49,8 @@ function mockApis() {
 }
 
 async function createWrapper() {
+  sessionStorage.clear()
+  setActivePinia(createPinia())
   mockApis()
   const wrapper = mount(SiteSourceSwitcher, {
     props: { siteId: 'site-a', activeKey: source.sourceId },
@@ -166,15 +171,66 @@ describe('SiteSourceSwitcher', () => {
     expect(wrapper.emitted('pickSite')).toBeTruthy()
   })
 
-  it('支持折叠源列表，并在线下方面板完整展示选中源的名称与源 ID', async () => {
+  it('支持折叠源列表，并在线下方面板完整展示选中源的名称、源 ID 与源 URL', async () => {
     const wrapper = await createWrapper()
     expect(wrapper.find('[data-testid="active-source-detail"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="active-source-full-name"]').text()).toBe(source.name)
     expect(wrapper.get('[data-testid="active-source-full-id"]').text()).toBe(source.sourceId)
+    expect(wrapper.get('[data-testid="active-source-url"]').text()).toBe(source.url)
+    expect(wrapper.text()).toContain('源 URL')
 
     // 点击折叠分割栏图标收起列表
     await wrapper.get('.ssw-section-toggle').trigger('click')
     expect(wrapper.find('.ssw-search').exists()).toBe(false)
+  })
+
+  it('源 URL 可复制，空地址时复制按钮禁用', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const wrapper = await createWrapper()
+    await wrapper.get('[data-testid="copy-source-url"]').trigger('click')
+    expect(writeText).toHaveBeenCalledWith(source.url)
+
+    mockApis()
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([{ ...source, url: '' }])
+    sessionStorage.clear()
+    setActivePinia(createPinia())
+    const empty = mount(SiteSourceSwitcher, {
+      props: { siteId: 'site-a', activeKey: source.sourceId },
+      global: {
+        stubs: { 'el-drawer': { template: '<div><slot /><slot name="footer" /></div>' } },
+        directives: { loading: {} },
+      },
+    })
+    await flushPromises()
+    expect(empty.get('[data-testid="active-source-url"]').text()).toBe('—')
+    expect((empty.get('[data-testid="copy-source-url"]').element as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('编辑源：改名称和 URL 后落库，同步侧栏与画布头，不切源', async () => {
+    const wrapper = await createWrapper()
+    const flow = useFlowStore()
+    const ws = useWorkspaceStore()
+    flow.sourceCtx = { ...source }
+    flow.sourceCfg = { ...source }
+    ws.open(source.sourceId, source.name)
+
+    await wrapper.get('[data-testid="edit-source"]').trigger('click')
+    expect(wrapper.find('[data-testid="edit-source-dialog"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="edit-source-name"]').setValue('改名后')
+    await wrapper.get('[data-testid="edit-source-url"]').setValue('https://new.example.com/list')
+    await wrapper.get('[data-testid="edit-source-save"]').trigger('click')
+    await flushPromises()
+
+    expect(sourceApi.sourceUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      sourceId: source.sourceId, name: '改名后', url: 'https://new.example.com/list',
+    }))
+    expect(wrapper.get('[data-testid="active-source-full-name"]').text()).toBe('改名后')
+    expect(wrapper.get('[data-testid="active-source-url"]').text()).toBe('https://new.example.com/list')
+    expect(flow.sourceCtx?.name).toBe('改名后')
+    expect(flow.sourceCtx?.url).toBe('https://new.example.com/list')
+    expect(ws.tabs.find((t) => t.sourceId === source.sourceId)?.name).toBe('改名后')
+    expect(wrapper.emitted('added')).toBeUndefined()
   })
 })
 

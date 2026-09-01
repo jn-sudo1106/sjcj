@@ -55,7 +55,7 @@ function onPick(config: Config) {
       type="button"
       :disabled="binding || !sourceId"
       data-testid="node-config-select"
-      :title="sourceId ? '从同资源配置里换一份' : '当前不是源画布，无法按源查同资源配置'"
+      :title="sourceId ? '更换本节点使用的配置' : '当前不是源画布，无法按源查同资源配置'"
       @click="pickerOpen = true"
     >{{ binding ? '绑定中…' : '更换' }}</button>
     <SelectExistingConfigDialog

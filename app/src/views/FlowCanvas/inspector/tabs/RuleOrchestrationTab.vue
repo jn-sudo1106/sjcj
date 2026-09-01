@@ -14,6 +14,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, ruleApi, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
+import { isVruleNumericRuleId } from '@/api/legacyAdapters'
+import { RULE_DATA_SOURCE } from '@/constants/rule'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
@@ -144,6 +146,51 @@ const generateAbort = ref<AbortController | null>(null)
 function onCancelGenerate() {
   generateAbort.value?.abort()
 }
+/** 表配置不再单独落 compose：第一次生成/套用时在这里换数字 ruleId。
+ *  规则节点同样要走：旧步骤「规则ID选择」回填的 `-1` 不是 vrule id，直接打 stream 会 400。 */
+async function resolveInputTableName(): Promise<string> {
+  if (!isRule.value) return ''
+  const named = orchCfg.value.inputTable?.trim()
+  if (named) return named
+  const tableId = orchCfg.value.inputTableId?.trim()
+  if (!tableId) return ''
+  try {
+    const entry = await entryApi.entryDetail(tableId)
+    const tableName = entry.tableName?.trim() || ''
+    if (tableName) patch({ inputTable: tableName })
+    return tableName
+  } catch {
+    return ''
+  }
+}
+async function ensureNumericRuleId(): Promise<string | undefined> {
+  if (isVruleNumericRuleId(orchCfg.value.ruleId)) return orchCfg.value.ruleId
+  // 已有非数字 id（mock orch-*）：生成接口会走 mock，不必再打 saveMeta。`-1` 除外。
+  const existing = orchCfg.value.ruleId?.trim()
+  if (existing && existing !== '-1') return existing
+  if (!cfg.value?.title?.trim()) {
+    ElMessage.warning('请先在「节点配置」填写节点名称')
+    return undefined
+  }
+  try {
+    const inputTable = await resolveInputTableName()
+    const res = await ruleApi.orchestrationSaveMeta({
+      ...orchCfg.value,
+      dataSource: RULE_DATA_SOURCE,
+      inputTable,
+      outputTable: isRule.value ? orchCfg.value.outputTable : outputTableId.value,
+    })
+    patch({ mode: 'ref', ruleId: res.ruleId })
+    if (!isVruleNumericRuleId(res.ruleId)) {
+      ElMessage.error('编排记录未返回有效 ruleId，无法生成配置')
+      return undefined
+    }
+    return res.ruleId
+  } catch (e) {
+    ElMessage.error(`保存编排记录失败：${(e as Error)?.message ?? String(e)}`)
+    return undefined
+  }
+}
 async function onGenerateScript() {
   if (!orchCfg.value.describe.trim()) {
     ElMessage.warning(isRule.value ? '请先填写规则处理描述' : '请先填写抓取需求描述')
@@ -153,12 +200,14 @@ async function onGenerateScript() {
     ElMessage.warning('请先在「表配置」完成入参/出参字段绑定')
     return
   }
+  const ruleId = await ensureNumericRuleId()
+  if (!ruleId) return
   generateAbort.value?.abort()
   const controller = new AbortController()
   generateAbort.value = controller
   generating.value = true
   try {
-    const res = await ruleApi.orchestrationGenerate(orchCfg.value, controller.signal)
+    const res = await ruleApi.orchestrationGenerate({ ...orchCfg.value, ruleId }, controller.signal)
     patch({ script: res.script, scriptPath: res.scriptPath })
     ElMessage.success(isRule.value ? '脚本已生成' : '配置已生成')
   } catch (e) {
@@ -243,11 +292,10 @@ const applyingSwitch = ref(false)
 async function onApplySwitch() {
   const target = switchOptions.value.find((o) => o.ruleId === switchSelected.value)
   if (!target) return
-  // 本节点必须已经有自己的编排记录（「表配置」保存过一次）才能切换套用，否则下面只拷内容不带
-  // ruleId 的做法没有落点——没有自己的 ruleId，点「生成脚本」时 dashscopeStream 会因 ruleId 不存在报错。
-  if (!orchCfg.value.ruleId) {
-    ElMessage.warning('请先在「表配置」保存一次，本节点有自己的编排记录后才能切换套用')
-    return
+  // 本节点必须已经有自己的编排记录才能切换套用，否则只拷内容不带 ruleId 没有落点。
+  // 表配置不再单独保存编排，缺数字 ruleId 时这里补一条 compose（规则/采集同一条路）。
+  if (!isVruleNumericRuleId(orchCfg.value.ruleId)) {
+    if (!(await ensureNumericRuleId())) return
   }
   applyingSwitch.value = true
   try {

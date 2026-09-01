@@ -27,6 +27,18 @@ describe('workspace 源详情多页签（优化 0701 问题三）', () => {
     expect(ws.tabs.length).toBe(MAX_SOURCE_TABS)
   })
 
+  it('renameTab：只改页签名，不切换活动页签、不新建', () => {
+    ws.open('s1', '源一')
+    ws.open('s2', '源二')
+    expect(ws.activeSourceId).toBe('s2')
+    ws.renameTab('s1', '源一改名')
+    expect(ws.tabs.find((t) => t.sourceId === 's1')?.name).toBe('源一改名')
+    expect(ws.activeSourceId).toBe('s2')
+    expect(ws.tabs.length).toBe(2)
+    ws.renameTab('missing', '不存在')
+    expect(ws.tabs.length).toBe(2)
+  })
+
   it('deactivate：让出活动页签，之前的页签不再被判定为已激活', () => {
     ws.open('s1', '源一')
     expect(ws.activeSourceId).toBe('s1')

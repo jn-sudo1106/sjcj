@@ -4,12 +4,15 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, type DataTableMeta, type DataRow, type EntryDetail } from '@/api'
+import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery } from '@/api'
 import {
   buildHorizontalLayout, nodeOutputTable, nodeEntryCondition, conditionGroupLabel, conditionGroupIsSet,
-  isDecision, isParallel, isFirstRunnableNode, hasAmbiguousInput, type NodeConfig,
+  isDecision, isParallel, isFirstRunnableNode, hasDirectSuccessor, hasAmbiguousInput, directPredecessorIds, type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
+import { nextStepColumns } from '@/utils/flow/nextStepFields'
 import { confirmDanger } from '@/utils/confirmDanger'
+import DataCondBuilder from '@/components/data/DataCondBuilder.vue'
+import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import DataGrid from './DataGrid.vue'
 import FilePreview from './components/FilePreview.vue'
@@ -18,6 +21,9 @@ import ProcessNodeRail from './ProcessNodeRail.vue'
 import { readRailOpen, writeRailOpen } from './railPref'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
+import RowDetailFields from './RowDetailFields.vue'
+import { fieldsFromShowItems, fieldsFromTableMeta } from './rowDetailFields'
+import { readFieldPreset, readShowEmpty, visibleDetailProps, writeFieldPreset, writeShowEmpty, type RowFieldPreset } from './rowDetailPrefs'
 
 // 数据视图只属于具体源流程（0812 计划 M2-4：网站"全部源"态改用独立的 SiteDataView.vue，
 // 不再靠 siteWide 布尔开关把两种数据流塞进同一个组件——那正是 M1-4 删掉的"代表源"问题的成因）。
@@ -30,6 +36,7 @@ const route = useRoute()
 const sourceId = computed(() => source.value?.sourceId ?? '')
 const siteId = computed(() => source.value?.siteId ?? '')
 const tabKey = computed(() => sourceId.value)
+const queryNodeId = computed(() => String(route.query.nodeId ?? ''))
 
 // 节点候选不再要求"必须有输出表"（0812 计划 M2-6，方案 §6.3）：结构节点（决策/分头）
 // 选中后走只读上下文 + 空态分支，不强行伪装成有数据的节点；候选就是流程里的全部真实节点。
@@ -79,10 +86,30 @@ function defaultScope(): 'output' | 'input' {
 }
 const selectedTable = computed(() => (scope.value === 'output' ? outputTableId.value : inputTableId.value))
 
-type ExecMode = 'fetch' | 'input' | 'none'
+// 节点手动执行（0824：末节点无发后续；有后继则从当前表勾行发给后继）：
+// 列表→详情的前一个节点往往只有输出表（如 900 TB_CNEWS），那张表的行就是要发给后继的数据，
+// 不能因为没有输入表就改成「发起抓取」并把勾选列拿掉。发起抓取仍在画布头 SnatchLauncher。
+// 后继无法唯一解析仍走 M2-14 阻断（旧 nextStep 没有 targetNodeId）。
+const isVerifiedFirstNode = computed(() => (selectedNodeId.value ? isFirstRunnableNode(flow.main, flow.configs, selectedNodeId.value) : false))
+const hasSuccessor = computed(() => (selectedNodeId.value ? hasDirectSuccessor(flow.main, flow.configs, selectedNodeId.value, flow.branchGroups) : false))
+const predecessorIds = computed(() => (selectedNodeId.value
+  ? directPredecessorIds(flow.main, flow.configs, selectedNodeId.value, flow.branchGroups)
+  : []))
+const predecessorId = computed(() => (predecessorIds.value.length === 1 ? predecessorIds.value[0] : ''))
+const predecessorTitle = computed(() => flow.configs[predecessorId.value]?.title || predecessorId.value)
+const predecessorTableId = computed(() => {
+  const cfg = predecessorId.value ? flow.configs[predecessorId.value] : undefined
+  if (!cfg) return ''
+  return nodeOutputTable(cfg) || flow.effectiveInputTableFor(predecessorId.value)
+})
+
+type ExecMode = 'fetch' | 'input' | 'none' | 'upstream'
 const execMode = computed<ExecMode>(() => {
   if (isStructuralNode.value || (!outputTableId.value && !inputTableId.value)) return 'none'
-  return inputTableId.value ? 'input' : 'fetch'
+  if (hasSuccessor.value) return 'input'
+  // 末节点：有唯一上游就能从上一节点重跑（0831 X7-B）。上游不唯一宁可不给入口。
+  if (predecessorId.value) return 'upstream'
+  return 'none'
 })
 
 // 进入条件 / 路径条件（M2-8）：大多数节点是"无"，只在真的有内容时才提示可展开，
@@ -139,37 +166,33 @@ function onScopeChange(next: 'output' | 'input') {
   selectedRowIds.value = []
 }
 
-// 节点手动执行（0812 计划 M2.2，方案 §6.7）：execMode 只描述"这个节点大概是什么类型"，
-// 真正能不能点执行按钮还要过 M2-10/M2-14 两道判定——execMode==='fetch' 不代表真的是流程
-// 拓扑意义上的首节点（可能只是恰好没有可解析的输入表），execMode==='input' 也不代表
-// nextStep 能确定唯一目标节点（旧接口没有 targetNodeId，输入表被多个节点共用时必须禁用）。
-const isVerifiedFirstNode = computed(() => (selectedNodeId.value ? isFirstRunnableNode(flow.main, flow.configs, selectedNodeId.value) : false))
 const isAmbiguousInput = computed(() => {
   if (execMode.value !== 'input' || !selectedNodeId.value) return false
   return hasAmbiguousInput(allNodes.value, flow.main, flow.branches, flow.configs, flow.branchGroups, selectedNodeId.value)
 })
-// 「只能在输入范围勾行发送」是 0812 会议的明确决定，不是实现方便：方案 §6.7-B（会议
-// 48:12～59:54）原文"首节点按源发起抓取，后续节点按输入表数据发起本节点任务，不能把两类
-// 动作做成同一个无上下文按钮"。语义是"让**本节点**处理这批输入数据"（节点视角），跟旧平台
-// EntryList2.vue 的"把当前这张表的行发去做下一步"（表视角）**是不同的模型，会议特意改的**。
-// 输出表的行不是本节点的输入，所以那边不给勾选框。
-// —— 2026-08-15 我一度按旧平台把这条限制去掉，是错的，已按会议记录恢复。
+// 有输入表的中间节点仍按 0812：只在输入 / 合并「输入·输出」tab 勾行（输出 tab 是本节点产物）。
+// 没有输入表的节点（典型列表首节点）当前表就是输出，0824 要从这里勾行发给后继，勾选列必须留着。
 const execDisabledReason = computed(() => {
   if (execMode.value === 'fetch' && !isVerifiedFirstNode.value) return '当前节点无输入表，暂不支持独立手动执行'
   if (execMode.value === 'input') {
     if (isAmbiguousInput.value) return '该输入表被多个节点共用，无法确定任务目标节点，暂不支持手动执行'
-    // sameTable 时只有一个合并 tab，没有"切到输入范围"这回事，天然满足。
-    if (!sameTable.value && scope.value !== 'input') return '请先切到"输入数据"范围并勾选记录'
+    if (inputTableId.value && !sameTable.value && scope.value !== 'input') return '请先切到"输入数据"范围并勾选记录'
     if (!selectedRowIds.value.length) return '请先勾选要发送的数据'
+  }
+  if (execMode.value === 'upstream') {
+    if (!selectedRowIds.value.length) return '请先勾选要从上一节点重跑的数据'
   }
   return ''
 })
 const canExecute = computed(() => execMode.value !== 'none' && !execDisabledReason.value)
-const canPickRows = computed(() => execMode.value === 'input' && !isAmbiguousInput.value && (sameTable.value || scope.value === 'input'))
-// 输入≠输出时，输出 tab 上的行不是本节点的输入（M2-14/§6.7-B 的限制），这里不该留一个
-// 点了才发现被禁用的按钮——改成就近说明去哪操作，而不是把理由藏进 disabled 按钮的 title
-// 里（正是这条改动的起因：2026-08-15 用户反馈"为什么输入输出一个有checkbox一个没有"）。
-const viewingOutputOnly = computed(() => execMode.value === 'input' && !sameTable.value && scope.value === 'output')
+const canPickRows = computed(() => {
+  if (isAmbiguousInput.value) return false
+  if (execMode.value === 'upstream') return true
+  return execMode.value === 'input' && (sameTable.value || scope.value === 'input' || !inputTableId.value)
+})
+// 输入≠输出、且确实有输入表可切时，输出 tab 改用说明文字。没有输入表就没有可切的「输入」，
+// 不能把发后续入口藏掉（列表节点输出 900 正是发给详情的那批行）。
+const viewingOutputOnly = computed(() => execMode.value === 'input' && !sameTable.value && scope.value === 'output' && !!inputTableId.value)
 
 const selectedRowIds = ref<string[]>([])
 
@@ -206,17 +229,24 @@ function showNextStepReceipt(res: { message?: string }) {
   }
 }
 // M3-0K：nextStep 失败时原始报错定位不到是哪个节点配错（旧平台节点条件语法出错会导致
-// 整条请求业务失败，见方案 §12.1B）。这里统一补上目标节点名；命中"运行时异常"这个
-// 后端固定措辞时才追加条件排查提示——写保护、网络失败等其他原因不应被误导成条件问题。
-// 抽成通用包装（不叫 runNextStep 了）是因为发全部后续/发大量后续调的是 nextStepBatch，
-// 同一个错误定位问题同样存在，不能只给逐行/本页两个入口修。
+// 整条请求业务失败，见方案 §12.1B）。这里统一补上当前节点名；命中后端固定措辞时才追加
+// 排查提示——写保护、网络失败等其他原因不应被误导成配置问题。
+function nextStepErrorHint(raw: string): string {
+  if (raw.includes('运行时异常')) return '（多为该节点的进入条件表达式写错，可检查节点配置里的进入条件）'
+  // 「没有详情配置」是后端按源上的 item/next 步骤链找后继时返回的真实 msg（client.test 用过）。
+  // 接口入参只有 sourceId + 当前表 + 行 ID，没有 targetNodeId，也不传 isMulti——
+  // 后继可以是规则节点（0812 §12.1B 实测 ok_39025 算法打标），不是必须详情页。
+  if (raw.includes('没有详情配置')) {
+    return '（发后续接口并不要求下一个节点必须是详情页。后端按源的步骤链找后继配置，找不到才会回这句。请核对后继步骤是否已保存且未删除；规则处理节点不用改「是否列表」。）'
+  }
+  return ''
+}
 async function withNodeErrorContext<T>(nodeName: string, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn()
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err)
-    const hint = raw.includes('运行时异常') ? '（多为该节点的进入条件表达式写错，可检查节点配置里的进入条件）' : ''
-    throw new Error(`目标节点"${nodeName}"处理失败：${raw}${hint}`)
+    throw new Error(`目标节点"${nodeName}"处理失败：${raw}${nextStepErrorHint(raw)}`)
   }
 }
 function runNextStep(ids: string[], tableId: string, nodeName: string) {
@@ -228,21 +258,50 @@ async function onSendNextStep() {
   const nodeName = selectedCfg.value?.title || selectedNodeId.value
   const ids = [...selectedRowIds.value]
   const tableId = selectedTable.value
-  // 旧平台两个不一样的方法：首节点按源"发起抓取"（sendSnatch），后续节点按输入数据
-  // "发后续任务"（nextStep）——0812 会议 53:40 原文明确是"两个不一样的方法"，统一叫
-  // "发起抓取"是我之前的误判，已按会议记录改回两个文案（M3-0A）。
+  // 0824：数据视图这条工具栏只发后续（nextStep）；按源抓取走画布头 SnatchLauncher，不走这里。
   await confirmDanger('发后续任务', `将对选中的 ${count} 条数据发起"${nodeName}"的后续处理任务，是否继续？`, async () => {
     const res = await runNextStep(ids, tableId, nodeName)
     selectedRowIds.value = []
     return res
   }, showNextStepReceipt)
 }
+
+async function onSendUpstream() {
+  if (execMode.value !== 'upstream' || !canExecute.value || !selectedTable.value || !selectedRowIds.value.length) return
+  const predName = predecessorTitle.value
+  const picked = rows.value.filter((row) => selectedRowIds.value.includes(row.dataId))
+  const sameTableAsPred = !!predecessorTableId.value && predecessorTableId.value === selectedTable.value
+  let tableId = selectedTable.value
+  let ids = [...selectedRowIds.value]
+  let skipped = 0
+  if (!sameTableAsPred) {
+    const withParent = picked.filter((row) => row.parentId && row.parentId !== '0')
+    skipped = picked.length - withParent.length
+    ids = [...new Set(withParent.map((row) => String(row.parentId)))]
+    tableId = predecessorTableId.value
+  }
+  if (!ids.length || !tableId) {
+    ElMessage.warning(skipped ? `${skipped} 条缺少父 ID，无法从上一节点重跑` : '没有可发送的数据')
+    return
+  }
+  const skipHint = skipped ? `（另有 ${skipped} 条缺少父 ID，已跳过）` : ''
+  await confirmDanger(
+    '从上一节点重跑',
+    `将从上一节点「${predName}」重新发起 ${ids.length} 条${skipHint}。重跑结果需等任务完成后刷新。是否继续？`,
+    async () => {
+      const res = await runNextStep(ids, tableId, predName)
+      selectedRowIds.value = []
+      return res
+    },
+    showNextStepReceipt,
+  )
+}
 // M3-0E：旧平台「发后续 ▾」下拉第二项 sendNextCurPage——取当页全部 ENTRY_ID 一次发送，
 // 免去手点勾选框；guard 跟逐行勾选发送同一套（canPickRows 决定能不能勾行，这里是"整页
 // 一起勾"，本质是同一件事）。成功后仅在确实还有下一页时才自动翻页，不像旧平台那样盲目
 // +1（可能翻到确定为空的页）。
 async function onSendCurrentPage() {
-  if (!canPickRows.value || !selectedTable.value || !rows.value.length) return
+  if (execMode.value !== 'input' || !canPickRows.value || !selectedTable.value || !rows.value.length) return
   const count = rows.value.length
   const nodeName = selectedCfg.value?.title || selectedNodeId.value
   const ids = rows.value.map((r) => r.dataId)
@@ -258,7 +317,7 @@ async function onSendCurrentPage() {
 // 「发后续 ▾」下拉：把发全部后续/发本页任务/发大量后续收进同一个菜单，对齐旧平台自己的
 // 布局（截图实测）。原来发后续任务+发本页任务两个按钮常驻，行里已经很挤，再加两个新按钮
 // 会更挤；旧平台自己也是"发后续任务"常驻 + 其余三项收进下拉，不是我们发明的形态。
-// 点击面板外关闭：跟 DataGrid.vue 的「列 ▾」同一套模式——全局 click 关闭，面板自己
+  // 点击面板外关闭：跟 DataGrid 工具行里「列」弹窗外点击同一类模式——全局 click 关闭，面板自己
 // @click.stop 防止点面板内部时被同一次事件冒泡关掉。
 //
 // 真实浏览器验收发现（2026-08-19）：这个按钮渲染在 DataGrid 的 #head 插槽里，而 #head
@@ -288,7 +347,7 @@ onBeforeUnmount(() => window.removeEventListener('click', onWindowClickAway))
 // 不含 dataId/parentId，旧平台 sendNextAll 本身就不认这两个字段）。数量不可调，唯一的
 // 防护就是确认框把量级说清楚，不能悄悄把 50 万条包装成"点一下就发"。
 async function onSendAllUnderFilter() {
-  if (!canPickRows.value || !selectedTable.value) return
+  if (execMode.value !== 'input' || !canPickRows.value || !selectedTable.value) return
   const nodeName = selectedCfg.value?.title || selectedNodeId.value
   const tableId = selectedTable.value
   await confirmDanger(
@@ -350,15 +409,21 @@ async function onSendMoreBatch() {
   )
 }
 
-// 默认选末端数据节点（最终结果表）；有页签快照（0701 问题三）时优先恢复快照里的节点/过滤/页码。
+// 默认选**首个**节点；有页签快照（0701 问题三）时优先恢复快照里的节点/过滤/页码。
 // 切换页签后旧节点 id 不在新流程里时也重置，避免表格变空。
+//
+// 0831 会议 F09 反转了 0812/0819「默认末端结果表」的拍板，别照旧注释改回去。
+// 会上原话：「我要看第一个节点的数据我还得点一下」——排查一条数据为什么没跑通，是从
+// 源头往下看的；默认落在末端等于每次都要先往回点。首节点常常只是一堆列表链接不好看，
+// 这一点由 F10 的「下一步字段」列收敛来补，两件事必须同批上，单改一个会更难看懂。
 watch(
   allNodes,
   (nodes) => {
     if (!nodes.some((n) => n.id === selectedNodeId.value)) {
       const snap = ws.snapshotOf(tabKey.value)
       const snapId = snap?.selectedNodeId && nodes.some((n) => n.id === snap.selectedNodeId) ? snap.selectedNodeId : ''
-      selectedNodeId.value = snapId || nodes.at(-1)?.id || ''
+      const fromQuery = queryNodeId.value && nodes.some((n) => n.id === queryNodeId.value) ? queryNodeId.value : ''
+      selectedNodeId.value = fromQuery || snapId || nodes[0]?.id || ''
       if (snapId) {
         page.value = snap?.page ?? 1
         if (snap?.filters) {
@@ -386,6 +451,10 @@ function onSelectNode(id: string) {
   sortField.value = ''
   sortOrder.value = ''
 }
+
+watch(queryNodeId, (id) => {
+  if (id && allNodes.value.some((n) => n.id === id)) onSelectNode(id)
+})
 
 // 条件改了但还没查：上一次的结果（尤其是失败态）此刻已经不对应输入框里的条件了。
 // 不清理的话表现极具误导性——2026-08-20 实测：输入一个错的条件回车失败后，
@@ -444,6 +513,22 @@ watch([selectedNodeId, page, () => ({ ...filters })], () => {
 
 // 表元 + 数据
 const meta = ref<DataTableMeta | null>(null)
+// 默认列收敛（0831 F10）：只显示后继节点真正会读到的字段。算不出来（末节点 / 三处配置都空）
+// 时返回空数组，DataGrid 据此退回全部列——现网大量源的 contextMap 和进入条件都还没填，
+// 这个功能对它们等于不生效，但不能让它们看到一张空表。
+const presetCols = computed(() => nextStepColumns({
+  columns: meta.value?.fields ?? [],
+  main: flow.main,
+  configs: flow.configs,
+  branchGroups: flow.branchGroups,
+  nodeId: selectedNodeId.value,
+}))
+const condFields = computed(() => (meta.value?.fields ?? []).map((field) => ({
+  prop: field.prop,
+  columnName: field.columnName,
+  desc: field.desc,
+  type: field.type,
+})))
 const rows = ref<DataRow[]>([])
 const total = ref(0)
 const loading = ref(false)
@@ -485,6 +570,7 @@ async function loadData() {
   // 行集合即将变化（换节点/范围/筛选/翻页），已勾选的行 id 不再对应当前展示内容，清空——
   // 不做"跨页累积勾选"，方案 §6.7-B 没有这个要求，避免带来"发的是哪些数据"的困惑。
   selectedRowIds.value = []
+  if (detail.visible) closeDetail()
   if (!selectedTable.value) {
     meta.value = null
     rows.value = []
@@ -596,21 +682,54 @@ function nextPage() {
   if (page.value * size.value < total.value) page.value += 1
 }
 
-// 详情 drawer
-const detail = reactive<{ visible: boolean; row: DataRow | null }>({ visible: false, row: null })
+function buildSummaryQuery(): RowQuery {
+  return {
+    tableId: selectedTable.value,
+    siteId: siteId.value || undefined,
+    sourceId: sourceId.value,
+    dataId: filters.dataId || undefined,
+    parentId: filters.parentId || undefined,
+    state: filters.state || undefined,
+    sql: filters.sql || undefined,
+  }
+}
+const summaryOpen = ref(false)
+
+// 详情 drawer：按当前页 index 翻，不跨页请求（0831 X4）。
+const detail = reactive<{ visible: boolean; index: number }>({ visible: false, index: -1 })
+const detailRow = computed(() => (detail.visible && detail.index >= 0 ? rows.value[detail.index] ?? null : null))
+const showEmpty = ref(readShowEmpty())
+watch(showEmpty, writeShowEmpty)
+const fieldPreset = ref<RowFieldPreset>(readFieldPreset(selectedTable.value))
+watch(selectedTable, (tableId) => { fieldPreset.value = readFieldPreset(tableId) })
+watch(fieldPreset, (preset) => writeFieldPreset(selectedTable.value, preset))
+watch(presetCols, (cols) => {
+  if (fieldPreset.value === 'next' && !cols.length) fieldPreset.value = 'filled'
+})
 const taskInst = reactive<{ visible: boolean; sourceId: string; parentId: string | null }>({ visible: false, sourceId: '', parentId: null })
-function onRowClick(r: DataRow) {
-  detail.row = r
-  detail.visible = true
+const editing = ref(false)
+function closeDetail() {
+  detail.visible = false
+  detail.index = -1
   editing.value = false
   closeParentDetail()
 }
+function openDetailAt(index: number) {
+  closeParentDetail()
+  editing.value = false
+  if (index < 0 || index >= rows.value.length) return
+  detail.index = index
+  detail.visible = true
+}
+function stepDetail(delta: number) {
+  openDetailAt(detail.index + delta)
+}
+function onRowClick(r: DataRow) {
+  openDetailAt(rows.value.findIndex((row) => row.dataId === r.dataId))
+}
 function onRowAction(r: DataRow, cmd: string) {
   if (cmd === 'detail') {
-    detail.row = r
-    detail.visible = true
-    editing.value = false
-    closeParentDetail()
+    openDetailAt(rows.value.findIndex((row) => row.dataId === r.dataId))
   } else if (cmd === 'tasks') {
     taskInst.sourceId = r.sourceId
     taskInst.parentId = r.dataId
@@ -625,13 +744,13 @@ function onRowAction(r: DataRow, cmd: string) {
 const parentDetail = ref<EntryDetail | null>(null)
 const parentLoading = ref(false)
 const parentError = ref('')
-const canDrillParent = computed(() => !!detail.row?.categoryId && !!detail.row?.parentId && detail.row.parentId !== '0')
+const canDrillParent = computed(() => !!detailRow.value?.categoryId && !!detailRow.value?.parentId && detailRow.value.parentId !== '0')
 async function openParentDetail() {
-  if (!detail.row?.categoryId || !detail.row?.parentId) return
+  if (!detailRow.value?.categoryId || !detailRow.value?.parentId) return
   parentLoading.value = true
   parentError.value = ''
   try {
-    const res = await dataApi.rowDetail(detail.row.categoryId, detail.row.parentId)
+    const res = await dataApi.rowDetail(detailRow.value.categoryId, detailRow.value.parentId)
     parentDetail.value = res
     if (!res) parentError.value = '未找到上游数据'
   } catch (error) {
@@ -644,47 +763,33 @@ function closeParentDetail() {
   parentDetail.value = null
   parentError.value = ''
 }
-function itemText(v: unknown): string {
-  if (v === undefined || v === null || v === '') return '—'
-  if (typeof v === 'object') return JSON.stringify(v)
-  return String(v)
-}
-
-// 行操作的"详情"复用列内容；为人类可读，做一份 prop → desc 映射
 // row.values 的键是旧平台物理列名（K1/K2...），不是 f.prop 这个逻辑字段名（如 "title"）——
 // 两者只在 f.columnName 上能对上，直接拿 f.prop 去 row.values 里取永远是 undefined。真实
 // bug，2026-08-14 生产环境实测发现：详情弹层每个字段都显示"—"，不是接口没数据，是取错了 key。
-const detailFields = computed(() => {
-  if (!detail.row || !meta.value) return [] as { label: string; prop: string; value: string }[]
-  return meta.value.fields.map((f) => ({
-    label: `${f.desc}（${f.prop}）`,
-    prop: f.prop,
-    value: String(detail.row?.values?.[f.columnName ?? f.prop] ?? '—'),
-  }))
-})
+const detailFields = computed(() => fieldsFromTableMeta(meta.value?.fields, detailRow.value?.values))
+const parentFields = computed(() => fieldsFromShowItems(parentDetail.value?.showItems))
+const detailVisibleProps = computed(() => visibleDetailProps(fieldPreset.value, detailFields.value, presetCols.value))
 
 // 行编辑（Phase 4.4）
-const editing = ref(false)
 const editValues = reactive<Record<string, string>>({})
 const saving = ref(false)
 function startEdit() {
-  if (!detail.row) return
+  if (!detailRow.value) return
   Object.keys(editValues).forEach((k) => delete editValues[k])
   // 复用 detailFields 已经按 columnName 取对的值，不再用 f.prop 重新取一遍错的。
-  detailFields.value.forEach((f) => { editValues[f.prop] = f.value === '—' ? '' : f.value })
+  detailFields.value.forEach((f) => { editValues[f.prop] = f.empty ? '' : f.value })
   editing.value = true
 }
 function cancelEdit() {
   editing.value = false
 }
 async function saveEdit() {
-  if (!detail.row || !selectedTable.value) return
+  if (!detailRow.value || !selectedTable.value) return
   saving.value = true
   try {
-    const res = await dataApi.rowUpdate(selectedTable.value, detail.row.dataId, { ...editValues })
+    const res = await dataApi.rowUpdate(selectedTable.value, detailRow.value.dataId, { ...editValues })
     if (res?.row) {
-      detail.row.values = res.row.values
-      const idx = rows.value.findIndex((r) => r.dataId === detail.row?.dataId)
+      const idx = detail.index
       if (idx >= 0) rows.value[idx] = { ...rows.value[idx], values: res.row.values }
     }
     ElMessage.success(res?.message || '已保存')
@@ -708,7 +813,7 @@ function onCellFile(path: string) {
 <template>
   <main class="rv-shell" :class="{ 'is-fullscreen': fullscreen }">
     <!-- 全屏是"只看数据"的模式：只有源信息头让位，节点轨道保留（它是唯一的节点选择器，
-         藏起来就没法切节点了）；筛选行与表头行（含发起抓取、输入/输出切换、分页、列 ▾）
+         藏起来就没法切节点了）；筛选行与表头行（含发起抓取、输入/输出切换、分页、列）
          全部保留——不然全屏就只能看不能用了。 -->
     <CanvasHeader v-if="!fullscreen" />
 
@@ -760,7 +865,7 @@ function onCellFile(path: string) {
           <option value="E">E 出错</option>
           <option value="L">L 处理中</option>
         </select>
-        <input v-model="filters.sql" class="rv-input flex" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%'）" />
+        <DataCondBuilder v-model="filters.sql" :fields="condFields" class="rv-input flex" />
         <span class="rv-actions">
           <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
           <button class="rc-btn" type="button" @click="clearFilters">清空</button>
@@ -811,7 +916,7 @@ function onCellFile(path: string) {
         </div>
       </div>
 
-      <!-- 表头内容走 DataGrid 的 #head 插槽，跟「列 ▾」和分页共用同一条横条。原来这里是
+      <!-- 表头内容走 DataGrid 的 #head 插槽，跟「列」和分页共用同一条横条。原来这里是
            独立的 .rv-tablehead(47px) + DataGrid 自己的列按钮行(33px) + .rv-pager(45px)
            三条横条，加起来 125px 全在挤数据区（2026-08-15 第十二次纠偏）。
            输入/输出切换紧挨着表名——这两个按钮控制的正是"表头显示的是哪张表"。 -->
@@ -820,12 +925,13 @@ function onCellFile(path: string) {
         :meta="meta"
         :rows="rows"
         :loading="loading"
-        :selected-id="detail.row?.dataId"
+        :selected-id="detailRow?.dataId"
         :selectable="canPickRows"
         :selected-ids="selectedRowIds"
         :sort-field="sortField"
         :sort-order="sortOrder"
         :allow-column-sort="allowColumnSort"
+        :preset-cols="presetCols"
         @sort-change="onSortChange"
         @update:selected-ids="selectedRowIds = $event"
         @file-click="onCellFile"
@@ -884,18 +990,15 @@ function onCellFile(path: string) {
             data-testid="data-exec-btn"
             :disabled="!canExecute"
             :title="execDisabledReason"
-            @click="execMode === 'fetch' ? onSendFetch() : onSendNextStep()"
-          >{{ execMode === 'fetch' ? '发起抓取' : '发后续任务' }}</button>
-          <!-- 「发后续 ▾」：发全部后续/发本页任务/发大量后续收进同一个菜单，对齐旧平台自己
-               的布局——不是三个常驻按钮堆在行里。触发按钮留在原位（跟表头其他内容同一行），
-               展开的面板 Teleport 到 body、position:fixed 定位，脱离 .dg-head 的裁剪盒子
-               （见上方 moreMenuOpen 声明处的说明）。 -->
-          <div v-if="canPickRows" class="rv-more-menu" @click.stop>
+            @click="execMode === 'fetch' ? onSendFetch() : execMode === 'upstream' ? onSendUpstream() : onSendNextStep()"
+          >{{ execMode === 'fetch' ? '发起抓取' : execMode === 'upstream' ? '从上一节点重跑' : '发后续任务' }}</button>
+          <!-- 「发后续 ▾」：发全部后续/发本页任务/发大量后续收进同一个菜单。末节点回上游不走这三项。 -->
+          <div v-if="execMode === 'input' && canPickRows" class="rv-more-menu" @click.stop>
             <button ref="moreToggleRef" class="rc-btn" type="button" data-testid="data-exec-more-toggle" @click="toggleMoreMenu">发后续 ▾</button>
           </div>
           <Teleport to="body">
             <div
-              v-if="moreMenuOpen && canPickRows"
+              v-if="moreMenuOpen && execMode === 'input' && canPickRows"
               class="rv-more-panel"
               :style="{ top: morePanelPos.top + 'px', left: morePanelPos.left + 'px' }"
               @click.stop
@@ -939,6 +1042,13 @@ function onCellFile(path: string) {
           <button
             class="rc-btn tiny"
             type="button"
+            data-testid="data-summary-btn"
+            title="按当前筛选条件统计"
+            @click="summaryOpen = true"
+          >统计</button>
+          <button
+            class="rc-btn tiny"
+            type="button"
             data-testid="data-fullscreen-toggle"
             :title="fullscreen ? '退出全屏（Esc）' : '全屏查看数据'"
             @click="fullscreen = !fullscreen"
@@ -948,14 +1058,14 @@ function onCellFile(path: string) {
     </template>
     <div v-else-if="selectedNodeId" class="rv-empty-scope" data-testid="data-node-empty">该节点不产生可查看的数据，也不提供手动执行入口</div>
 
-    <el-drawer v-model="detail.visible" :with-header="false" size="480px">
-      <div v-if="detail.row" class="rv-detail">
+    <el-drawer v-model="detail.visible" class="rv-detail-drawer" :with-header="false" size="560px">
+      <div v-if="detailRow" class="rv-detail">
         <div class="rv-d-head">
-          <div>
-            <div class="rv-d-title">{{ detail.row.title }}</div>
+          <div class="rv-d-head-main">
+            <div class="rv-d-title">{{ detailRow.title }}</div>
             <!-- 源 ID 跟数据 ID 并列：详情是"这条数据是什么"的完整视图，
                  光有数据 ID 看不出它属于哪个源（0819 会议 09:23～09:44）。 -->
-            <div class="rv-d-sub">数据 ID {{ detail.row.dataId }} · 源 ID {{ detail.row.sourceId || sourceId }}</div>
+            <div class="rv-d-sub">数据 ID {{ detailRow.dataId }} · 源 ID {{ detailRow.sourceId || sourceId }}</div>
             <button
               v-if="canDrillParent"
               type="button"
@@ -963,35 +1073,63 @@ function onCellFile(path: string) {
               data-testid="data-parent-drill"
               :disabled="parentLoading"
               @click="openParentDetail"
-            >父 ID {{ detail.row.parentId }} <span aria-hidden="true">↗</span></button>
+            >父 ID {{ detailRow.parentId }} <span aria-hidden="true">↗</span></button>
+            <div class="rv-d-tools">
+              <button
+                class="rc-btn tiny"
+                type="button"
+                data-testid="row-detail-prev"
+                :disabled="detail.index <= 0"
+                title="上一条"
+                @click="stepDetail(-1)"
+              >‹</button>
+              <span class="rv-d-pos" data-testid="row-detail-pos">{{ detail.index + 1 }}/{{ rows.length }}</span>
+              <button
+                class="rc-btn tiny"
+                type="button"
+                data-testid="row-detail-next"
+                :disabled="detail.index >= rows.length - 1"
+                :title="detail.index >= rows.length - 1 ? '本页最后一条，翻页后继续' : '下一条'"
+                @click="stepDetail(1)"
+              >›</button>
+              <label class="rv-d-empty">
+                <input v-model="showEmpty" type="checkbox" data-testid="row-detail-empty-toggle" />
+                显示空字段
+              </label>
+              <select
+                :value="fieldPreset"
+                class="rv-d-preset"
+                data-testid="row-detail-preset"
+                @change="fieldPreset = ($event.target as HTMLSelectElement).value as RowFieldPreset"
+              >
+                <option value="all">全部字段</option>
+                <option value="filled">仅非空</option>
+                <option v-if="presetCols.length" value="next">下一步字段</option>
+              </select>
+            </div>
           </div>
-          <button class="rc-btn ghost" type="button" @click="detail.visible = false">关闭</button>
+          <button class="rc-btn ghost rv-d-close" type="button" @click="closeDetail">关闭</button>
         </div>
-        <div v-if="parentError" class="rv-notice error">{{ parentError }}</div>
-        <div v-if="parentDetail" class="rv-parent-panel" data-testid="data-parent-panel">
-          <div class="rv-parent-panel-head">
-            <span>上游数据 · {{ parentDetail.row.dataId }}</span>
-            <button class="rc-btn ghost" type="button" @click="closeParentDetail">收起</button>
+        <div class="rv-d-body">
+          <div v-if="parentError" class="rv-notice error">{{ parentError }}</div>
+          <div v-if="parentDetail" class="rv-parent-panel" data-testid="data-parent-panel">
+            <div class="rv-parent-panel-head">
+              <span>上游数据 · {{ parentDetail.row.dataId }}</span>
+              <button class="rc-btn ghost" type="button" @click="closeParentDetail">收起</button>
+            </div>
+            <RowDetailFields compact :fields="parentFields" />
           </div>
-          <dl class="rc-kv">
-            <template v-for="item in parentDetail.showItems" :key="item.columnName">
-              <dt>{{ item.itemName || item.columnName }}</dt>
-              <dd>{{ itemText(item.value) }}</dd>
-            </template>
-          </dl>
+          <RowDetailFields
+            :key="detailRow.dataId"
+            :fields="detailFields"
+            :editing="editing"
+            :values="editValues"
+            :show-empty="showEmpty"
+            :visible-props="detailVisibleProps"
+            @update:field="editValues[$event.prop] = $event.value"
+            @file-click="onCellFile"
+          />
         </div>
-        <dl v-if="!editing" class="rc-kv">
-          <template v-for="f in detailFields" :key="f.label">
-            <dt>{{ f.label }}</dt>
-            <dd>{{ f.value }}</dd>
-          </template>
-        </dl>
-        <dl v-else class="rc-kv rc-kv-edit">
-          <template v-for="f in detailFields" :key="f.label">
-            <dt>{{ f.label }}</dt>
-            <dd><input class="rv-edit-input" v-model="editValues[f.prop]" /></dd>
-          </template>
-        </dl>
         <div class="rv-d-foot">
           <template v-if="editing">
             <button class="rc-btn primary" type="button" :disabled="saving" @click="saveEdit">{{ saving ? '保存中…' : '保存' }}</button>
@@ -999,7 +1137,7 @@ function onCellFile(path: string) {
           </template>
           <template v-else>
             <button class="rc-btn" type="button" @click="startEdit">编辑</button>
-            <button class="rc-btn" type="button" @click="onRowAction(detail.row, 'tasks')">查后续任务实例 ›</button>
+            <button class="rc-btn" type="button" @click="onRowAction(detailRow, 'tasks')">查后续任务实例 ›</button>
           </template>
         </div>
       </div>
@@ -1010,6 +1148,7 @@ function onCellFile(path: string) {
       :parent-id="taskInst.parentId"
       :can-write="false"
     />
+    <SummaryDrawer v-model="summaryOpen" :table-meta="meta" :build-query="buildSummaryQuery" :hit-count="total" />
     <SnatchLauncher ref="snatchLauncher" />
   </main>
 
@@ -1167,18 +1306,24 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
 /* 表头行里的按钮比筛选行矮一档，免得这条横条被撑高又把数据区挤回去。 */
 .rc-btn.tiny { height: 24px; padding: 0 10px; font-size: 11.5px; }
 
-.rv-detail { padding: 18px; }
-.rv-d-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-.rv-d-title { font-size: 14px; font-weight: 700; color: var(--rc-text); }
-.rv-d-sub { font-size: 11px; color: var(--rc-faint); margin-top: 3px; }
-.rv-d-foot { display: flex; gap: 8px; margin-top: 16px; }
+.rv-detail-drawer :deep(.el-drawer__body) { display: flex; flex-direction: column; height: 100%; padding: 0; overflow: hidden; }
+.rv-detail { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.rv-d-head { flex: none; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 16px 18px 12px; border-bottom: 1px solid var(--rc-border-soft); }
+.rv-d-head-main { min-width: 0; flex: 1; }
+.rv-d-close { flex: none; height: 28px; padding: 0 12px; font-size: 12px; white-space: nowrap; }
+.rv-d-title { font-size: 14px; font-weight: 700; color: var(--rc-text); line-height: 1.4; word-break: break-word; }
+.rv-d-sub { font-size: 11px; color: var(--rc-faint); margin-top: 4px; }
+.rv-d-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 18px 16px; }
+.rv-d-foot { flex: none; display: flex; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--rc-border-soft); background: #fff; }
 .rv-parent-link { margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; padding: 0; font-size: 11px; color: var(--rc-primary); cursor: pointer; }
 .rv-parent-link:hover { text-decoration: underline; }
 .rv-parent-link:disabled { opacity: .6; cursor: default; text-decoration: none; }
-.rv-parent-panel { margin-bottom: 14px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #f8fafc; padding: 10px 12px; }
-.rv-parent-panel-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 700; color: var(--rc-text-2); margin-bottom: 8px; }
-.rv-parent-panel .rc-kv { margin: 0; }
+.rv-parent-panel { margin: 6px 0 12px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #f8fafc; padding: 10px 12px; }
+.rv-parent-panel-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 700; color: var(--rc-text-2); margin-bottom: 4px; }
+.rv-d-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.rv-d-pos { color: var(--rc-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.rv-d-empty { display: inline-flex; align-items: center; gap: 4px; color: var(--rc-text-2); font-size: 11px; cursor: pointer; }
+.rv-d-preset { height: 24px; padding: 0 6px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text-2); font-size: 11px; }
+.ctx-summary :deep(.dcb) { flex: 1 1 320px; min-width: 180px; }
 .rc-btn.ghost { background: transparent; border-color: var(--rc-border); color: var(--rc-text-2); }
-.rv-edit-input { width: 100%; border: 1px solid #dbe3ee; border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 5px 8px; outline: none; }
-.rv-edit-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 </style>

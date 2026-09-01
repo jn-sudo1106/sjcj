@@ -40,6 +40,12 @@ const TOP_TABS = computed(() => nodeInspectorTabs(cfg.value, { includeAi: !props
 watch(() => props.hideAi, (hideAi) => {
   if (hideAi && flow.activeTab === 'ai') flow.setActiveTab('config')
 }, { immediate: true })
+watch(() => flow.selectedId, () => {
+  const current = TOP_TABS.value.find((t) => t[0] === flow.activeTab)
+  if (!current?.[2]) return
+  const fallback = TOP_TABS.value.find((t) => !t[2])
+  if (fallback) flow.setActiveTab(fallback[0])
+})
 
 // 配置绑定条（0824-00 §6.1）：一个 FlowNode 必须且只能引用一个 Config。
 // 本期只落骨架——configId 来自迁移回填（flowModel.ts NodeConfig.configId），
@@ -52,11 +58,7 @@ const configId = computed(() => cfg.value?.configId || '')
 const nodeConfigDirty = computed(() => flow.dirtyConfigNodes.includes(id.value))
 // 底部条常驻（不只在脏时出现）：新加的节点默认「新建配置」态，一个字段没改也要能保存一次拿 configId
 // （0824-00 §5.3）；脏标只影响文案和按钮可用性。
-// 配置名称必填（0824-06 §4）。校验只在**保存那一刻**做：面板上不打星号、不常驻红字提示，
-// 按钮也不因此禁用——点了保存才提示（2026-08-28 拍板，整个面板统一这个口径）。
-// 字段只在采集节点的「节点配置」Tab 上，没有该字段的节点不设门槛，
-// 否则规则/数据处理节点会被一个填不了的必填项永久挡住保存。
-const configNameMissing = computed(() => !!cfg.value?.collectCfg && !cfg.value?.configName)
+// 配置名称跟节点名走（新增/复制时已写上），不再在节点配置 Tab 里填；保存时若仍为空就用节点名补上。
 // 配置身份（新建 / 已有）由上面的配置绑定条表达，这里只说"有没有未提交的修改"，不重复也不夸大落库状态。
 const canSaveNodeConfig = computed(() => nodeConfigDirty.value || !configId.value)
 const footNote = computed(() => (nodeConfigDirty.value ? '节点配置有未保存修改' : '无未保存修改'))
@@ -104,13 +106,17 @@ watch([nodeConfigDirty, configId], ([dirty, cid]) => {
   if (dirty && cid) void ensureUsage(cid)
 }, { immediate: true })
 
+function ensureConfigNameFromTitle() {
+  const node = cfg.value
+  if (!node) return
+  const name = node.configName?.trim() || node.title.trim()
+  if (name && name !== node.configName) flow.setConfigName(id.value, name)
+}
+
 async function onSaveNodeConfig() {
   const node = cfg.value
   if (!node || saving.value) return
-  if (configNameMissing.value) {
-    ElMessage.warning('请先填写配置名称')
-    return
-  }
+  ensureConfigNameFromTitle()
   if (configId.value) {
     await doUpdateExistingConfig()
     return

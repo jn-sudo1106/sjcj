@@ -138,6 +138,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     compareLeftId.value = ''
   }
 
+  /** 改源名称时只改页签文案，不激活、不新建页签（侧栏编辑当前源用） */
+  function renameTab(sourceId: string, name: string) {
+    const tab = tabs.value.find((t) => t.sourceId === sourceId)
+    if (tab && name) tab.name = name
+  }
+
   function saveSnapshot(sourceId: string, patch: SourceTabSnapshot) {
     if (!tabs.value.some((t) => t.sourceId === sourceId)) return
     snapshots[sourceId] = { ...snapshots[sourceId], ...patch }
@@ -147,5 +153,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return snapshots[sourceId]
   }
 
-  return { tabs, activeSourceId, snapshots, compareSourceId, compareLeftId, open, activate, deactivate, close, saveSnapshot, snapshotOf, enterCompare, exitCompare }
+  return { tabs, activeSourceId, snapshots, compareSourceId, compareLeftId, open, activate, deactivate, close, renameTab, saveSnapshot, snapshotOf, enterCompare, exitCompare }
 })

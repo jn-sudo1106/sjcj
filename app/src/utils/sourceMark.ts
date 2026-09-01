@@ -22,11 +22,20 @@ export function normalizeIssueTag(raw: string): string {
   return raw.trim().replace(/^#+/, '').trim()
 }
 
+/**
+ * 分隔符除中英文逗号外补上中英文分号（0831 X0）：入库的标签串不只我们在写——
+ * 程序打标（会上「标签一般是程序来打的」）和旧平台历史数据都可能用 `;` 分隔，
+ * 只认逗号会把 `#a;#b` 整个当成一个标签名，之后无论怎么筛都对不上。
+ *
+ * **刻意不拆空白**：标签名里带空格是合法的（`日期错误 待重跑`），按空白拆会把它
+ * 劈成两个标签，而且只在"从后端读回来"这一侧劈——写出去时走的是数组分支不拆，
+ * 于是同一个标签存进去和读出来长得不一样。等 G6 实测确认了后端真实的分隔口径再动。
+ */
 export function parseIssueTags(value: unknown): string[] {
   const parts = Array.isArray(value)
     ? value.map(String)
     : typeof value === 'string'
-      ? value.split(/[，,]/)
+      ? value.split(/[，,;；]/)
       : []
   const seen = new Set<string>()
   const tags: string[] = []

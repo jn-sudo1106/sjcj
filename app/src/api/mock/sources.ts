@@ -399,6 +399,21 @@ function parseSourceIds(params?: Record<string, unknown>): string[] {
   return String(raw ?? '').split(/[，,\s]+/).map((id) => id.trim()).filter(Boolean)
 }
 
+/**
+ * 旧 querySourceTags（`POST /v1/source/sourceTags`）：当前查询条件下真实存在的标签。
+ * mock 里就按 siteIds / name 缩一下范围再把 tags 摊平去重——真实后端也是这个语义。
+ */
+export function mockSourceTags(params?: Record<string, unknown>): string[] {
+  const siteIds = String(params?.siteIds ?? params?.siteId ?? '').split(/[，,\s]+/).filter(Boolean)
+  const name = String(params?.name ?? '').trim()
+  const scoped = SOURCES.filter((source) => {
+    if (siteIds.length && !siteIds.includes(String(source.siteId))) return false
+    if (name && !source.name.includes(name)) return false
+    return true
+  })
+  return parseIssueTags(scoped.flatMap((source) => source.tags ?? []))
+}
+
 export function mockTagSource(params?: Record<string, unknown>): Ack {
   const ids = parseSourceIds(params)
   const action = String(params?.action ?? 'add') === 'clear' ? 'clear' : 'add'
@@ -589,8 +604,13 @@ export function mockSourceTaskPaged(params?: Record<string, unknown>): Paged<Tas
     )
   })
   const nodeId = String(params?.nodeId ?? '')
+  const configId = String(params?.configId ?? '')
   const state = String(params?.state ?? '')
-  const filtered = tasks.filter((task) => (!nodeId || task.node === nodeId) && (!state || task.state === state))
+  const filtered = tasks.filter((task) =>
+    (!nodeId || task.node === nodeId)
+    && (!configId || task.configId === configId)
+    && (!state || task.state === state),
+  )
   const page = Math.max(1, Number(params?.page ?? 1))
   const size = Math.max(1, Number(params?.size ?? 20))
   const start = (page - 1) * size

@@ -10,7 +10,7 @@ import ElementPlus from 'element-plus'
 import NodeInspector from '../NodeInspector.vue'
 import { useFlowStore } from '@/stores/flow'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, paramApi, ruleApi } from '@/api'
+import { entryApi, paramApi, ruleApi, configApi } from '@/api'
 import type { EntryType, RuleOrchestrationItem } from '@/api'
 
 const OUTPUT_TABLE: EntryType = {
@@ -51,6 +51,8 @@ describe('ConfigTab · 规则节点「选择已有规则」（0805）', () => {
     const { wrapper } = mountOnRuleNode()
     await flushPromises()
     expect(wrapper.findAll('button').some((b) => b.text() === '选择已有')).toBe(true)
+    expect(wrapper.text()).toContain('适用源')
+    expect(wrapper.text()).toContain('规则ID选择')
 
     setActivePinia(createPinia())
     const flow2 = useFlowStore()
@@ -98,6 +100,7 @@ describe('ConfigTab · 规则节点「选择已有规则」（0805）', () => {
     expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBe('173')
     expect(flow.configs['rule-1'].ruleCfg?.inputTableId).toBe('2102200')
     expect(flow.configs['rule-1'].inputTable).toBe('2102200')
+    expect(flow.configs['rule-1'].itemId).toBe('173')
   })
 
   it('反查输入表搜不到时：不阻塞，仍套用规则其余字段，只是给出提示', async () => {
@@ -129,6 +132,27 @@ describe('ConfigTab · 规则节点「选择已有规则」（0805）', () => {
 
     expect((titleInput.element as HTMLInputElement).value).toBe('')
     expect(flow.configs['rule-1'].title).toBe('')
+  })
+
+  it('适用源、规则ID选择回填并写入步骤字段，不写进 ruleCfg.ruleId', async () => {
+    mockAssets()
+    vi.spyOn(ruleApi, 'orchestrationOwnRules').mockResolvedValue([])
+    const { flow, wrapper } = mountOnRuleNode()
+    flow.configs['rule-1'].itemId = '-1'
+    flow.configs['rule-1'].stepSourceId = '430022404'
+    await flushPromises()
+
+    const sourceInput = wrapper.find('input[aria-label="适用源"]')
+    const itemInput = wrapper.find('[data-testid="rule-item-id"]')
+    expect((sourceInput.element as HTMLInputElement).value).toBe('430022404')
+    expect((itemInput.element as HTMLInputElement).value).toBe('-1')
+    expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBeFalsy()
+
+    await sourceInput.setValue('-1')
+    await itemInput.setValue('173')
+    expect(flow.configs['rule-1'].stepSourceId).toBe('-1')
+    expect(flow.configs['rule-1'].itemId).toBe('173')
+    expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBeFalsy()
   })
 })
 
@@ -293,5 +317,79 @@ describe('ConfigTab · 节点级定时策略', () => {
     const loginWrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
     await flushPromises()
     expect(loginWrapper.find('.ni-schedule').exists()).toBe(true)
+  })
+})
+
+describe('ConfigTab · 配置 URL 从 config/configDetail 回填', () => {
+  it('已有 configId 且节点上还没有 URL 时，读原始记录的 configUrl 填上，不置脏', async () => {
+    mockAssets()
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({
+      configId: 1400774,
+      configName: '证券之星列表配置',
+      configUrl: 'http://www.baidu.com',
+    })
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = { ...cloneConfig(NODE_CONFIGS['web-list']), configId: '1400774', configName: '证券之星列表配置' }
+    flow.select('web-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(configApi.configDetailRaw).toHaveBeenCalledWith('1400774')
+    expect(flow.configs['web-1'].configUrl).toBe('http://www.baidu.com')
+    expect(flow.configDirty).toBe(false)
+    expect((wrapper.find('[aria-label="URL"]').element as HTMLInputElement).value).toBe('http://www.baidu.com')
+    wrapper.unmount()
+  })
+
+  it('节点上已经有配置 URL 时不再请求', async () => {
+    mockAssets()
+    const detailRaw = vi.spyOn(configApi, 'configDetailRaw')
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = {
+      ...cloneConfig(NODE_CONFIGS['web-list']),
+      configId: '1400774',
+      configName: '证券之星列表配置',
+      configUrl: 'http://already.example/',
+    }
+    flow.select('web-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(detailRaw).not.toHaveBeenCalled()
+    expect((wrapper.find('[aria-label="URL"]').element as HTMLInputElement).value).toBe('http://already.example/')
+    wrapper.unmount()
+  })
+
+  it('节点上配置 URL 还是空字符串时，用详情里的真值补上', async () => {
+    mockAssets()
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({
+      success: true,
+      data: {
+        configId: 1400766,
+        configName: 'guancha-观察者网-金融科技',
+        configUrl: 'https://www.guancha.cn/jinrongkeji',
+      },
+    })
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = {
+      ...cloneConfig(NODE_CONFIGS['web-list']),
+      configId: '1400766',
+      configName: 'guancha-观察者网-金融科技',
+      configUrl: '',
+    }
+    flow.select('web-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(flow.configs['web-1'].configUrl).toBe('https://www.guancha.cn/jinrongkeji')
+    expect(flow.configDirty).toBe(false)
+    expect((wrapper.find('[aria-label="URL"]').element as HTMLInputElement).value).toBe('https://www.guancha.cn/jinrongkeji')
+    wrapper.unmount()
   })
 })

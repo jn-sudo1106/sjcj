@@ -16,6 +16,8 @@
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { dataApi, type DataRow, type RowQuery } from '@/api'
+import ColumnPickerDialog from '@/components/ColumnPickerDialog.vue'
+import { useColumnPicker } from '@/utils/table/useColumnPicker'
 
 export interface DataQueryColumn {
   /** 物理列名：对应 row.values[prop] 取值，也是排序时上报给后端的 sortField */
@@ -120,6 +122,26 @@ const size = ref(props.pageSize ?? 20)
 const loading = ref(false)
 // 动态列排序仅当 total ≤ 500000 时开放（方案 §1.5-5，跟 DataView 原逻辑一致）
 const allSort = computed(() => total.value <= 500000)
+
+const {
+  hidden: hiddenCols,
+  order: colOrder,
+  open: colPickerOpen,
+  visibleCount: colVisibleCount,
+  apply: applyColumnPrefs,
+} = useColumnPicker(
+  () => props.tableId,
+  () => props.columns.map((c) => c.prop),
+  { scope: 'dataquery' },
+)
+const visibleColumns = computed(() => {
+  const byProp = new Map(props.columns.map((c) => [c.prop, c]))
+  return colOrder.value
+    .map((prop) => byProp.get(prop))
+    .filter((c): c is DataQueryColumn => !!c && !hiddenCols.value.has(c.prop))
+})
+const pickerColumns = computed(() => props.columns.map((c) => ({ prop: c.prop, label: c.label })))
+const showColPicker = computed(() => props.columns.length > 0)
 
 function currentFilter(): Omit<DataQueryFilter, 'page' | 'size'> {
   const [startTime, endTime] = timeRange.value ?? []
@@ -333,7 +355,17 @@ function onRowClick(row: DataRow) {
       />
     </div>
 
-    <slot name="toolbar" :total="total" :rows="rows" />
+    <div class="dqp-table-tools">
+      <div class="dqp-table-tools-main"><slot name="toolbar" :total="total" :rows="rows" /></div>
+      <button
+        v-if="showColPicker"
+        class="rc-btn dqp-col-btn"
+        type="button"
+        data-testid="column-picker-btn"
+        :title="`列显示与顺序（已显 ${colVisibleCount}/${columns.length}）`"
+        @click="colPickerOpen = true"
+      >列 {{ colVisibleCount }}/{{ columns.length }}</button>
+    </div>
 
     <div v-loading="loading" class="rc-table-scroll dqp-table">
       <el-table
@@ -362,7 +394,7 @@ function onRowClick(row: DataRow) {
         <slot name="columns-before" :all-sort="allSort" />
 
         <el-table-column
-          v-for="col in columns"
+          v-for="col in visibleColumns"
           :key="col.prop"
           :prop="col.prop"
           :label="col.label"
@@ -398,6 +430,16 @@ function onRowClick(row: DataRow) {
         @size-change="onSizeChange"
       />
     </div>
+    <ColumnPickerDialog
+      :open="colPickerOpen"
+      :columns="pickerColumns"
+      :hidden="[...hiddenCols]"
+      :order="colOrder"
+      :identity-props="[]"
+      :min-visible="0"
+      @update:open="colPickerOpen = $event"
+      @confirm="applyColumnPrefs"
+    />
   </div>
 </template>
 
@@ -408,6 +450,9 @@ function onRowClick(row: DataRow) {
 .dqp-query-row { align-items: center; gap: 8px; padding-top: 4px; padding-bottom: 8px; }
 .dqp-advanced-toggle { white-space: nowrap; }
 .dqp-spacer { flex: 1; min-width: 8px; }
+.dqp-table-tools { display: flex; align-items: center; gap: 8px; }
+.dqp-table-tools-main { flex: 1; min-width: 0; }
+.dqp-col-btn { flex: none; }
 .dqp-quick-slot { display: inline-flex; flex: none; }
 .dqp-range { display: inline-flex; align-items: center; gap: 6px; }
 .dqp-range-sep { color: var(--rc-faint); }

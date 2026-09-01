@@ -58,19 +58,6 @@ function kindMeta(k: string) {
   return { cls: 'warn', text: '数据库' }
 }
 
-// 清除缓存（0721 会议 §六-2）：UI 入口去掉，写操作成功后静默补一次调用——0720 真实联调证实列表有
-// 服务端缓存层，编辑后不清缓存列表不刷新；失败不影响主流程（缓存清理是锦上添花，不是成败关键）。
-// 失败留 console.warn breadcrumb（07-24 复盘，呼应 07-23 review #12）：下次进列表看到旧数据时能快速定位。
-async function clearCacheSilently(paramIds: string[]) {
-  const validIds = paramIds.filter((id) => !!id)
-  if (!validIds.length) return
-  try {
-    await paramApi.clearParams(validIds)
-  } catch (error) {
-    console.warn('[ParamTab] clearCache failed', { paramIds: validIds, error })
-  }
-}
-
 function openCreate() { editor.param = null; editor.visible = true }
 async function openEdit(param: Param) {
   try {
@@ -85,7 +72,7 @@ async function openEdit(param: Param) {
     ElMessage.error(`加载参数详情失败：${error instanceof Error ? error.message : String(error)}`)
   }
 }
-async function onParamSaved(param: Param) { await clearCacheSilently([param.paramId]); await load() }
+async function onParamSaved() { await load() }
 
 async function openDetail(p: Param) {
   try {
@@ -131,7 +118,6 @@ async function onAddValues() {
   try {
     const r = await paramApi.addParamValues(drawer.param.paramId, values)
     ElMessage.success(r?.message || '操作已提交（演示）')
-    await clearCacheSilently([drawer.param.paramId])
     drawer.param = await paramApi.paramDetail(drawer.param.paramId) ?? drawer.param
     await load()
   } catch (error) {
@@ -149,7 +135,6 @@ async function onDeleteValue(valueId: string) {
     const result = await paramApi.deleteParamValue(valueId)
     ElMessage.success(result?.message || '参数值已删除')
     if (drawer.param) {
-      await clearCacheSilently([drawer.param.paramId])
       drawer.param = await paramApi.paramDetail(drawer.param.paramId) ?? drawer.param
     }
     await load()
@@ -168,7 +153,6 @@ async function onCopy(param: Param) {
   try {
     const result = await paramApi.paramCopy(param.paramId)
     ElMessage.success(result?.message || '复制成功，请查询最新 ID')
-    await clearCacheSilently([param.paramId])
     await load()
   } catch (error) {
     ElMessage.error(`复制参数失败：${error instanceof Error ? error.message : String(error)}`)
@@ -191,7 +175,6 @@ function togglePage(checked: boolean) {
     : selected.value.filter((id) => !pageIds.includes(id))
 }
 
-// 批量清除缓存按钮已下线（0721 会议 §六-2：UI 去入口）；批量删除仍保留，删除成功后照样补一次静默清缓存
 async function batchDelete() {
   if (!selected.value.length) {
     ElMessage.warning('请先选择参数')
@@ -209,7 +192,6 @@ async function batchDelete() {
   try {
     const result = await paramApi.deleteParams(selected.value)
     ElMessage.success(result?.message || '删除成功')
-    await clearCacheSilently(selected.value)
     selected.value = []
     await load()
   } catch (error) {

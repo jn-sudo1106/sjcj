@@ -82,3 +82,18 @@ describe('CanvasHeader · 返回源视图', () => {
     expect(wrapper.vm.$router.currentRoute.value.path).toBe('/collect')
   })
 })
+
+describe('CanvasHeader · 流程视图操作', () => {
+  it('不再提供同步到源入口', async () => {
+    const wrapper = await mountHeader()
+    const flow = useFlowStore()
+    flow.loadFromSource(
+      { sourceId: 'source-a', name: '源 A', url: 'https://x', configId: '', mainTable: 'T1', owner: 'admin', state: 'C', siteId: '7' } as never,
+      [], null,
+    )
+    await flushPromises()
+    expect(wrapper.findAll('button').map((b) => b.text()).join(' ')).not.toContain('同步到源')
+    expect(wrapper.text()).not.toContain('保存流程')
+    expect(wrapper.find('[data-testid="flow-save-status"]').exists()).toBe(true)
+  })
+})

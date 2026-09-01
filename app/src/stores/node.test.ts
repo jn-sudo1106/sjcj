@@ -240,6 +240,14 @@ describe('setEntryCondition', () => {
     n.setEntryCondition('web-list', undefined)
     expect(configs['web-list'].collectCfg?.entryCondition).toBeUndefined()
   })
+
+  it('进入条件置流程脏，不置配置脏（0828：条件在步骤上，走自动保存）', () => {
+    const { n } = setup()
+    n.setEntryCondition('web-list', { logic: 'AND', items: [{ field: 'a', op: 'eq', value: '1' }] })
+    expect(n.flowDirty).toBe(true)
+    expect(n.configDirty).toBe(false)
+    expect(n.flowRev).toBeGreaterThan(0)
+  })
 })
 
 describe('patchRuleConfig', () => {

@@ -88,6 +88,11 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'config/configParamAdd',
   'config/configParamDel',
   'source/sendSnatchWithParam',
+  // 2026-08-31 放开：数据视图「发后续任务」。旧平台 EntryList2 的 nextStep / nextStep2
+  // 即时下发后续处理；这边 UI 已有二次确认。不放开则按钮能点、确认后被写保护拦下，后端收不到。
+  // nextStep = 勾选/本页；nextStep2 = 发全部后续 / 发大量后续。与 sendSnatchWithParam 同性质（下发任务，不是改删配置）。
+  'source/nextStep',
+  'source/nextStep2',
   // 2026-08-27 拍板放开：源换网站 / 删除源 / 网站重命名（侧栏右键菜单）。
   // source/delete 是**永久删除源**，本清单里破坏性最强的一条，UI 侧必须保留二次确认。
   'source/delete',
@@ -113,6 +118,13 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   // （tags、usedFlag）；不放开则新平台只改 session overlay，旧平台刷新后看不到。
   'source/tagSource',
   'source/setColor',
+  // 2026-08-31 放开：流程画布步骤写入（节点名 / 进入条件 / 增删节点）。
+  // 这几项在步骤上，不走配置。不放开则 UI 能点、确认后被写保护拦下，后端收不到。
+  // saveItemConfig 是新增；stepModify / enable 是改；delete 是真删（UI 二次确认）。
+  'item/next/saveItemConfig',
+  'item/next/stepModify',
+  'item/next/enable',
+  'item/next/delete',
 ])
 
 function isProductionWriteAllowed(httpEndpoint: string): boolean {

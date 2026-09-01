@@ -56,6 +56,41 @@ function asRecord(value: unknown): LegacyRecord {
   return value && typeof value === 'object' ? (value as LegacyRecord) : {}
 }
 
+function hasLegacyConfigFields(record: LegacyRecord): boolean {
+  return record.configId != null || record.configName != null || record.configUrl != null || record.isMulti != null
+}
+
+/**
+ * config/configDetail 的真实外壳不统一：有的带 `code`（request 会拆 `data`），
+ * 有的只有 `{ success, data }`。后者整包落到适配层后，配置字段在 `data` 里，
+ * 顶层读 `configUrl` 会当成没有——旧 ConfigEdit 能看见 URL、画布却是空的。
+ */
+function unwrapLegacyConfigRecord(input: unknown): LegacyRecord {
+  let record = asRecord(input)
+  for (let i = 0; i < 2; i++) {
+    if (hasLegacyConfigFields(record)) break
+    const inner = record.data
+    if (!inner || typeof inner !== 'object' || Array.isArray(inner)) break
+    record = asRecord(inner)
+  }
+  return record
+}
+
+/** 给 configDetailRaw 用：去掉 success/data 外壳，落到旧配置字段。 */
+export function legacyConfigRecord(input: unknown): LegacyRecord {
+  return unwrapLegacyConfigRecord(input)
+}
+
+/**
+ * 旧配置 URL。旧 ConfigEdit 读的是 `config/configDetail` 原始记录的 `configUrl`；
+ * 适配后的 Config 模型用 `url`。两边都认，空字符串也算有值（显式清空过）。
+ */
+export function configUrlFromLegacy(input: unknown): string | undefined {
+  const record = unwrapLegacyConfigRecord(input)
+  const raw = record.configUrl ?? record.url
+  return raw == null ? undefined : String(raw)
+}
+
 function flowCollectorConfigs(def: FlowDef): NodeConfig[] {
   const ids = [...def.main, ...Object.keys(def.configs)]
   const seen = new Set<string>()
@@ -247,7 +282,7 @@ export function paramToLegacy(input: ParamInput | Param): LegacyRecord {
 }
 
 export function configFromLegacy(input: unknown): Config {
-  const record = asRecord(input)
+  const record = unwrapLegacyConfigRecord(input)
   if ('name' in record && 'enabled' in record) return record as unknown as Config
   const params = Array.isArray(record.params) ? record.params.map(configParamFromLegacy) : []
   const enable = Number(record.enable ?? 0)
@@ -268,7 +303,7 @@ export function configFromLegacy(input: unknown): Config {
     isDetail: multiMode !== undefined && multiMode !== 1,
     isLogin: templateCode === 'login',
     updatedAt: record.updateDt == null ? undefined : String(record.updateDt),
-    url: record.configUrl == null ? undefined : String(record.configUrl),
+    url: configUrlFromLegacy(record),
     entryTypeId: record.entryTypeId == null ? undefined : String(record.entryTypeId),
     inEntryTypeId: record.inEntryType == null ? undefined : String(record.inEntryType),
     domain: record.domain == null ? undefined : String(record.domain),
@@ -767,9 +802,10 @@ export function ruleOrchestrationGenerateFormBody(cfg: RuleOrchestration): strin
   return params.toString()
 }
 
-/** mock saveMeta 分配 orch-*；真实 vrule id 为纯数字。非数字 id 打真实 stream 会 400。 */
+/** mock saveMeta 分配 orch-*；真实 vrule id 为纯数字。非数字 id 打真实 stream 会 400。
+ *  `-1` 是旧步骤「规则ID选择」未选占位，不是 vrule compose id，不能拿去生成脚本。 */
 export function isVruleNumericRuleId(ruleId?: string): boolean {
-  return !!ruleId && /^\d+$/.test(String(ruleId))
+  return !!ruleId && /^\d+$/.test(String(ruleId)) && ruleId !== '0'
 }
 
 /** 流式正文末行 `# [系统消息] 当前文件已经保存至MinIO：{path}` → scriptPath（旧 extractCodeFile，全角/半角冒号都认） */
@@ -805,6 +841,23 @@ export function stripMinioMarkerLine(text: string): { script: string; scriptPath
 }
 
 export function parseRuleOrchestrationStreamText(text: string): RuleOrchestrationGenerateResult {
+  const trimmed = text.trim()
+  if (trimmed.startsWith('{')) {
+    try {
+      const record = JSON.parse(trimmed) as Record<string, unknown>
+      const script = record.script ?? record.scriptCode
+      if (!script) {
+        const code = record.code
+        const msg = record.msg ?? record.message ?? record.error
+        if (code != null && String(code) !== '0' && String(code) !== '200') {
+          throw new Error(String(msg || `生成脚本失败 [${code}]`))
+        }
+        if (typeof msg === 'string' && msg.trim()) throw new Error(msg)
+      }
+    } catch (e) {
+      if (!(e instanceof SyntaxError)) throw e
+    }
+  }
   const { script, scriptPath } = stripMinioMarkerLine(text)
   if (!script.trim()) throw new Error('生成脚本未返回内容')
   return { script, scriptPath }
@@ -822,19 +875,20 @@ export function ruleOrchestrationGenerateFromLegacy(input: unknown): RuleOrchest
 
 // 字段名对照旧 column.config.js TASK_LIST.base：actionName→typeName、nodeCode→node、
 // taskTopic→topic、updateDt→updatedAt（方案 §1.6-5 TaskInst）。
+// mock / 已适配记录可能已经是新字段名，legacy 键缺失时回退 typeName / node / topic / updatedAt。
 export function taskInstFromLegacy(input: unknown): TaskInst {
   const record = asRecord(input)
   return {
     taskId: String(record.taskId ?? ''),
     state: String(record.state ?? '') as TaskInst['state'],
-    typeName: record.actionName == null ? '' : String(record.actionName),
+    typeName: String(record.actionName ?? record.typeName ?? ''),
     taskName: record.taskName == null ? '' : String(record.taskName),
     sourceId: String(record.sourceId ?? ''),
     configId: record.configId == null ? undefined : String(record.configId),
-    node: record.nodeCode == null ? undefined : String(record.nodeCode),
-    topic: record.taskTopic == null ? undefined : String(record.taskTopic),
+    node: record.nodeCode != null ? String(record.nodeCode) : (record.node == null ? undefined : String(record.node)),
+    topic: record.taskTopic != null ? String(record.taskTopic) : (record.topic == null ? undefined : String(record.topic)),
     parentId: record.parentId == null ? undefined : String(record.parentId),
-    updatedAt: record.updateDt == null ? '' : String(record.updateDt),
+    updatedAt: String(record.updateDt ?? record.updatedAt ?? ''),
     taskSpecId: record.taskSpecId == null ? undefined : String(record.taskSpecId),
   }
 }

@@ -5,7 +5,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useUiStore } from '../../stores/ui'
 import { useWorkspaceStore } from '../../stores/workspace'
-import { flowApi, sourceApi, type Source, type Step } from '../../api'
+import { sourceApi, type Source, type Step } from '../../api'
+import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 import { useRuntimeStore } from '../../stores/runtime'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
 import LoginConfigSelectDialog from '@/views/FlowCanvas/launch/LoginConfigSelectDialog.vue'
@@ -26,6 +27,7 @@ import NewSiteWizard from './create/NewSiteWizard.vue'
 const route = useRoute()
 const router = useRouter()
 const flow = useFlowStore()
+const autosave = useFlowAutosave()
 const ui = useUiStore()
 const ws = useWorkspaceStore()
 const runtime = useRuntimeStore()
@@ -179,8 +181,7 @@ async function loadSourceFlow(sourceId: string) {
   // 不再读 flowApi.flowLoad 的本地草稿：flow/save 没有真实后端对应物（旧平台流程存在
   // item/next 子步骤里，没有"流程定义"这个接口），画布保存过一次后本地草稿会一直挡住
   // 真实拓扑，源改了/后端数据变了也看不出来。节点链始终来自真实的 sourceSteps。
-  // flowSave 仍然写本地草稿（不在这里删），"同步到源"功能读的正是这份草稿，两者不冲突：
-  // 草稿只用于显式同步操作，不再被当作这个源自己的真相。
+  // flowSave 仍然写本地草稿（不在这里删），但不再当作这个源自己的真相。
   sourceMissing.value = false
   // 首屏不等 config/configDetail 那一轮（withConfigDetails: false）：它必须等 nextConfigPaged
   // 出 configId 才能发，串在前面等于白等一个 RTT。步骤先到先画，补充字段随后回填。
@@ -249,38 +250,6 @@ async function backfillStepDetails(sourceId: string, steps: Step[]) {
   }
 }
 
-async function onSave() {
-  // 0824-00 §5.6：未保存配置的节点阻断流程保存，并把选中态定位过去
-  const pending = flow.dirtyConfigNodes[0]
-  if (pending) {
-    flow.select(pending)
-    ElMessage.warning(`节点「${flow.configs[pending]?.title || pending}」的配置尚未保存，请先在右侧保存节点配置`)
-    return
-  }
-  try {
-    // 「保存流程」= 只影响当前源的那一层（2026-08-28 拍板按影响范围分工，见 0824-11 §1）：
-    // 源字段（源 URL 等）走 source/updateSource 真落库；
-    // 步骤字段（节点名称 / 进入条件 / 拓扑）的写接口 item/next/* 前端还没实现，目前只进本地草稿。
-    const source = flow.sourceCfg
-    if (source) {
-      const res = await sourceApi.sourceUpdate(source)
-      if (!res?.ok) {
-        ElMessage.error(res?.message || '保存源信息失败')
-        return
-      }
-      flow.patchSourceCtx({ url: source.url })
-    }
-    const res = await flowApi.flowSave(flow.serialize())
-    if (!res?.ok) {
-      ElMessage.error(res?.message || '保存失败')
-      return
-    }
-    flow.markSaved()
-    ElMessage.success(source ? '源信息已保存；节点与拓扑改动待步骤接口接入后落库' : (res?.message || '流程已保存'))
-  } catch (e) {
-    ElMessage.error(`保存失败：${(e as Error).message ?? '未知错误'}，画布未清空，请重试`)
-  }
-}
 // 发起抓取（0714 会议 Task 4）：唯一完整执行入口——试跑作为独立概念/入口已删除，
 // 原来驱动运行态模拟的能力合并进这里；发起抓取请求成功后才驱动节点状态流转。
 // capturing：runtime.running 要等 sendSnatch 的 await 完之后才置真，中间有个真空窗口，
@@ -346,9 +315,17 @@ const snatchLauncher = ref<InstanceType<typeof SnatchLauncher>>()
 async function onStartCapture() {
   const s = flow.sourceCtx
   if (!s) return
-  // 门槛沿用原试跑的两条（0710 会议 D3）：流程配置保存完成、且没有正在进行的发起抓取
-  if (flow.dirty) {
-    ElMessage.warning('画布有未保存的改动，请先保存流程配置再发起抓取')
+  if (flow.flowDirty || autosave.status.value === 'saving' || autosave.status.value === 'error') {
+    await autosave.flush()
+  }
+  if (flow.flowDirty || autosave.status.value === 'error') {
+    ElMessage.warning('流程尚未保存，请点击头部「保存失败，点击重试」或稍候再发起抓取')
+    return
+  }
+  if (flow.configDirty) {
+    const pending = flow.dirtyConfigNodes[0]
+    flow.select(pending)
+    ElMessage.warning(`节点「${flow.configs[pending]?.title || pending}」的配置尚未保存，请先在右侧保存节点配置`)
     return
   }
   if (runtime.running || capturing.value) {
@@ -390,7 +367,6 @@ async function onStartCapture() {
 // "试跑"入口已删除（0714 会议 Task 4）：CanvasHeader 的"发起抓取"按钮通过同一条动作总线触发 onStartCapture
 function registerCanvasActions() {
   ui.clearActions()
-  ui.registerAction('保存', onSave)
   ui.registerAction('发起抓取', onStartCapture)
 }
 
@@ -427,6 +403,7 @@ async function enterFromRoute() {
 }
 onMounted(async () => {
   window.addEventListener('hashchange', syncActiveView)
+  autosave.bind()
   if (isGate.value) {
     ui.clearActions()
     return
@@ -452,6 +429,7 @@ onUnmounted(() => {
   onSplitEnd()
   ui.inspectorExpanded = false
   ui.clearActions()
+  autosave.unbind()
   flow.clearSourceCtx()
   flow.clearSiteCtx()
 })

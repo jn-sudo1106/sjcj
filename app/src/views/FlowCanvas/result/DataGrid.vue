@@ -2,6 +2,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { DataTableMeta, DataRow } from '@/api'
+import ColumnPickerDialog from '@/components/ColumnPickerDialog.vue'
+import { useColumnPicker } from '@/utils/table/useColumnPicker'
+import { IDENTITY_COL_PROPS } from '@/utils/table/columnPrefs'
 
 // withDefaults 是必须的：Vue 3 对 boolean 类型的 prop 有 casting 规则——未传时值是 false
 // 而不是 undefined，所以 `props.allowColumnSort !== false` 这种写法会把"没传"误判成"禁止排序"。
@@ -31,7 +34,11 @@ const props = withDefaults(defineProps<{
   /** 触底自动加载：为 true 时在滚动容器底部装一个哨兵，进入视口就 emit reach-end。
    *  调用方在数据耗尽 / 正在加载时把它置 false，观察器随之解除。 */
   autoLoadMore?: boolean
-}>(), { allowColumnSort: true })
+  /** 默认只显示这批列（0831 F10「下一步字段」，由 utils/flow/nextStepFields 算出）。
+   *  为空 / 全都不在当前表里时自动退回全部列——绝不因为配置没填就给一张空表。
+   *  用户在本表存过列偏好时以偏好为准，预设只作用于"没表过态"的首次打开。 */
+  presetCols?: string[]
+}>(), { allowColumnSort: true, presetCols: () => [] })
 const showActions = computed(() => !props.compact && !props.hideActions)
 
 // 排序（迁移旧平台 EntryList2.vue 的 @sort-change）：发给后端的是物理列名，
@@ -119,7 +126,7 @@ function toggleAll() {
 // 放出来"；09:23"你肯定要有个地方展示这个选在哪一个源"→ 09:33"在你这个数据节点里面、
 // 字段里面应该有"→ 09:44"不是源 ID，你的 430114955 这个 ID 应该有的"。
 // 故两列**默认可见**（N0 那批 ENTRY_ID 曾默认隐藏，与该要求相反，此处纠正）；
-// 嫌占地方的人从「列 ▾」自行关掉。
+// 嫌占地方的人从「列」弹窗自行关掉。
 // label 是列头显式文案，仅这两个合成列有：旧平台 EntryList2.vue 的固定列用的就是短标签
 // （ENTRY_ID 列 label="ENTRY_ID"、SOURCE_ID 列 label="源"），只有动态列才拼 itemName-columnName。
 // 跟着拼成「主键 ID-ENTRY_ID」会长到把列头挤成两行，也偏离旧平台。desc 仍保留给悬浮提示。
@@ -127,22 +134,40 @@ const ENTRY_ID_COL = { prop: 'ENTRY_ID', type: 'string', desc: '主键 ID', labe
 const SOURCE_ID_COL = { prop: 'SOURCE_ID', type: 'string', desc: '所属源 ID', label: '源' }
 const cols = computed(() => (props.meta ? [ENTRY_ID_COL, SOURCE_ID_COL, ...props.meta.fields] : []))
 
-// 列可见性控制（Phase 4.3）：切换表时重置，避免残留跟别的表同名字段冲突的隐藏状态
-const hiddenCols = ref<Set<string>>(new Set())
-watch(() => props.meta?.tableId, () => { hiddenCols.value = new Set() })
-const visibleCols = computed(() => cols.value.filter((f) => !hiddenCols.value.has(f.prop)))
-function toggleCol(prop: string) {
-  const next = new Set(hiddenCols.value)
-  if (next.has(prop)) next.delete(prop)
-  else next.add(prop)
-  hiddenCols.value = next
-}
-const colsMenuOpen = ref(false)
-function onWindowClick() {
-  colsMenuOpen.value = false
-}
-onMounted(() => window.addEventListener('click', onWindowClick))
-onBeforeUnmount(() => window.removeEventListener('click', onWindowClick))
+// 预设里认不出来的列先剔掉：presetCols 是按流程配置算的，可能引用了当前表没有的字段
+// （改过表结构、或后继节点读的是另一张表）。留着会让「下一步字段」按钮显示一个虚高的数字。
+// 两个身份列无条件并进来——不知道这行是哪条数据、属于哪个源，剩下的字段看了也没用
+// （0819 会议 08:16/09:23 要出来的就是这两列）；调用方不必自己记得带上。
+const effectivePreset = computed(() => {
+  if (!props.presetCols.length) return []
+  const known = new Set(cols.value.map((f) => f.prop))
+  const wanted = new Set(props.presetCols.filter((prop) => known.has(prop)))
+  if (!wanted.size) return []
+  for (const prop of IDENTITY_COL_PROPS) if (known.has(prop)) wanted.add(prop)
+  return cols.value.map((f) => f.prop).filter((prop) => wanted.has(prop))
+})
+const {
+  hidden: hiddenCols,
+  order: colOrder,
+  open: colPickerOpen,
+  visibleCount: colVisibleCount,
+  presetActive,
+  apply: applyColumnPrefs,
+  applyPreset,
+  showAll: showAllCols,
+} = useColumnPicker(
+  () => props.meta?.tableId ?? '',
+  () => cols.value.map((f) => f.prop),
+  { getPresetProps: () => effectivePreset.value },
+)
+const visibleCols = computed(() => {
+  const byProp = new Map(cols.value.map((f) => [f.prop, f]))
+  return colOrder.value
+    .map((prop) => byProp.get(prop))
+    .filter((f): f is (typeof cols.value)[number] => !!f && !hiddenCols.value.has(f.prop))
+})
+const pickerColumns = computed(() => cols.value.map((f) => ({ prop: f.prop, label: colLabel(f) })))
+const showColPicker = computed(() => cols.value.length > 1)
 // row.values 的键是旧平台的物理列名（K1/K2...），不是 tableMeta 给的逻辑字段名 f.prop
 // （比如 "title"）——这两个只在 f.columnName 里对得上，直接用 f.prop 去取永远是 undefined。
 // 真实 bug，2026-08-14 生产环境实测发现：详情弹层和表格本体所有字段都显示"—"，
@@ -224,23 +249,36 @@ function stateMeta(s?: string) {
 <template>
   <div class="dg-wrap" :class="{ compact }">
     <!-- 表头工具行：调用方可以用 #head 插槽把自己的表头内容（表名/行数/执行按钮/分页等）
-         塞进来，跟「列 ▾」共用同一条横条。原来「列 ▾」自己独占一条 33px、调用方的表头又
+         塞进来，跟「列」共用同一条横条。原来「列 ▾」自己独占一条 33px、调用方的表头又
          是另一条 47px、分页再一条 45px——三条横条摞起来把数据区挤没了
          （2026-08-15：数据视图一屏只看得到 6.2/20 行）。 -->
-    <div v-if="!compact && (cols.length > 1 || $slots.head)" class="dg-toolbar">
+    <div v-if="(!compact && (cols.length > 1 || $slots.head)) || (compact && showColPicker)" class="dg-toolbar">
       <div class="dg-head"><slot name="head" /></div>
       <!-- #head-right：不参与 .dg-head 横向滚动的常驻区。表头内容多到溢出时，#head 里的
            东西会被滚动条藏起来（2026-08-19 用户反馈：全屏按钮在最右边，得先拉滚动条才够
-           得着），像"全屏"这种任何时候都该点得到的开关放这里，跟「列 ▾」一样钉住。 -->
+           得着），像"全屏"这种任何时候都该点得到的开关放这里，跟「列」一样钉住。 -->
       <div v-if="$slots['head-right']" class="dg-head-right"><slot name="head-right" /></div>
-      <div v-if="cols.length > 1" class="dg-cols-menu" @click.stop>
-        <button class="dg-col-btn" type="button" @click="colsMenuOpen = !colsMenuOpen">列 ▾</button>
-        <div v-if="colsMenuOpen" class="dg-cols-panel">
-          <label v-for="f in cols" :key="f.prop" class="dg-col-item">
-            <input type="checkbox" :checked="!hiddenCols.has(f.prop)" @change="toggleCol(f.prop)" />
-            {{ colLabel(f) }}
-          </label>
-        </div>
+      <div v-if="showColPicker" class="dg-cols-menu">
+        <!-- 一键在「下一步字段」与「全部列」之间来回切。收进弹窗里就成了
+             开弹窗 → 全选 → 确定 三步，而这是看数据时最常来回按的一个开关。 -->
+        <button
+          v-if="effectivePreset.length"
+          class="dg-col-btn"
+          type="button"
+          data-testid="column-preset-toggle"
+          :title="presetActive
+            ? '当前只显示下一节点会用到的字段，点击展开全部列'
+            : `只显示下一节点会用到的 ${effectivePreset.length} 个字段`"
+          :class="{ on: presetActive }"
+          @click="presetActive ? showAllCols() : applyPreset()"
+        >{{ presetActive ? '全部列' : `下一步字段 ${effectivePreset.length}` }}</button>
+        <button
+          class="dg-col-btn"
+          type="button"
+          data-testid="column-picker-btn"
+          :title="`列显示与顺序（已显 ${colVisibleCount}/${cols.length}）`"
+          @click="colPickerOpen = true"
+        >列 {{ colVisibleCount }}/{{ cols.length }}</button>
       </div>
     </div>
     <div v-if="!cols.length && !loading" class="dg-empty">该节点暂无输出表 schema</div>
@@ -326,6 +364,16 @@ function stateMeta(s?: string) {
          没有把页子放上面的"）。此前分页并在 #head 里是为了省纵向空间，现在由顶部区
          收窄（N1-10）来补偿，两项必须同批，否则会卡在"分页下移了但空间没补回来"。 -->
     <div v-if="$slots.foot" class="dg-foot"><slot name="foot" /></div>
+    <ColumnPickerDialog
+      :open="colPickerOpen"
+      :columns="pickerColumns"
+      :hidden="[...hiddenCols]"
+      :order="colOrder"
+      :preset-props="effectivePreset"
+      preset-label="仅下一步字段"
+      @update:open="colPickerOpen = $event"
+      @confirm="applyColumnPrefs"
+    />
   </div>
 </template>
 
@@ -339,12 +387,10 @@ function stateMeta(s?: string) {
 /* 表格下方横条：跟 .dg-toolbar 同一套内边距与底色，视觉上把表格夹在中间 */
 .dg-foot { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 5px 12px; border-top: 1px solid var(--rc-border-soft); background: #fbfdff; }
 .dg-head > * { flex-shrink: 0; }
-.dg-cols-menu { position: relative; flex: none; }
+.dg-cols-menu { flex: none; display: flex; align-items: center; gap: 6px; }
 .dg-col-btn { height: 24px; padding: 0 9px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text-2); font-size: 11px; cursor: pointer; }
 .dg-col-btn:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
-.dg-cols-panel { position: absolute; right: 0; top: 28px; z-index: 30; min-width: 180px; max-height: 220px; overflow: auto; background: #fff; border: 1px solid var(--rc-border); border-radius: 8px; box-shadow: 0 16px 34px -16px rgba(15, 23, 42, 0.36); padding: 6px; }
-.dg-col-item { display: flex; align-items: center; gap: 6px; padding: 5px 6px; font-size: 11px; color: var(--rc-text-2); cursor: pointer; border-radius: 5px; white-space: nowrap; }
-.dg-col-item:hover { background: var(--rc-primary-bg); }
+.dg-col-btn.on { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .dg-scroll { flex: 1; overflow: auto; }
 .dg-sentinel { height: 1px; }
 .dg-table { width: 100%; border-collapse: collapse; font-size: 12px; }

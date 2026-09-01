@@ -261,12 +261,10 @@ export interface Step {
   /** 步骤模板编码（旧 flowCode，如 "WEB_SNATCH"）。实测样本中所有步骤取值一致，
    *  尚未见到非 WEB_SNATCH 的样本，无法确认完整枚举，仅做数据保留。 */
   flowCode?: string
-  /** 旧「使用属性」（旧 itemId）。2026-08-26 生产管理后台「关联-步骤」编辑面板实测确认：
-   *  这是"任务URL来源字段"的引用——反查出本步骤该从上一步产出的哪个字段取值去抓取
-   *  （如 itemId=9002 → 字段 K2/URL，itemId=9017 → 字段 K17/正文html路径）。仅首步骤
-   *  （无上游）没有这个值；同一 itemId 可能被多个步骤复用（见源 430016516 的 itemConfig
-   *  39935/39944 共用 itemId 4103139）。当前 nextConfigPaged 只返回 ID，未连字段展示名，
-   *  本仓库暂无消费方，仅做数据保留。 */
+  /** 旧步骤 itemId。采集后续步对应「任务URL来源字段」（2026-08-26 实测：itemId=9002 → 字段
+   *  K2/URL）；规则处理步骤对应旧表单「规则ID选择」（未选为 -1，与编排脚本 ruleId 不是同一字段）。
+   *  仅首步骤（无上游）可能没有这个值；同一 itemId 可能被多个步骤复用（见源 430016516 的
+   *  itemConfig 39935/39944 共用 itemId 4103139）。画布规则节点会回填并随 stepModify 写回。 */
   itemId?: string
   /** 旧「扩展名」（旧 extName）。实测样本全部为空，字段存在但含义和触发场景未验证。 */
   extName?: string
@@ -287,9 +285,12 @@ export interface Step {
    *  步骤名正则，这个字段才是可靠信号，查不到时才回退到名字正则。 */
   isLoginConfig?: boolean
   /** 本步骤 configId 对应配置的名称（旧 config.name），随 topic 一起由 sourceApi.sourceSteps 回填。
-   *  节点配置 Tab 的「配置名称」是必填项（0824-06 §4：config-meta，新建首次保存必填），
+   *  展示在检查器「当前配置」条；新增/复制节点时与节点名称一致。
    *  已有配置要显示后端真名——configDetail 在加载源时本来就逐个查过，这里只是把 name 一起带出来，不额外发请求。 */
   configName?: string
+  /** 本步骤配置自己的 URL（旧 config.configUrl），随 topic 一起由 sourceApi.sourceSteps 从 configDetail 回填。
+   *  与源 URL 不是同一份，见 NodeConfig.configUrl。 */
+  configUrl?: string
   /** 以下四项与 configName/topic 同批，由 sourceApi.sourceSteps 从 config/configDetail 回填。
    *  它们都是节点面板要展示、保存时又要原样回写的配置正文字段；不回填的话面板显示的是节点模板
    *  默认值，而「保存配置」会拿这个默认值把后端真值覆盖掉（2026-08-28 实测：配置 1400968
@@ -490,11 +491,13 @@ export interface SourceLog {
   at: string
 }
 
-/** 源任务视图查询：默认收窄当前源；不传 sourceId 时查询网站下全部源。 */
+/** 源任务视图查询：默认收窄当前源；不传 sourceId 时查询网站下全部源。
+ *  真实接口是 task/topTaskPaged：nodeId 只给 mock 按步骤筛；live 用该节点的 configId。 */
 export interface SourceTaskQuery extends PageQuery {
   siteId: string
   sourceId?: string
   nodeId?: string
+  configId?: string
   state?: RunState
 }
 

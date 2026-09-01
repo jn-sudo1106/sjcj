@@ -113,9 +113,10 @@ export const useFlowStore = defineStore('flow', () => {
     get: () => nodeStore.dirty,
     set: (v) => { nodeStore.dirty = v },
   })
-  // 双层脏状态（0824-00 §5.4）：configDirty 归「保存节点配置」，flowDirty 归「保存流程」
+  // 双层脏状态（0824-00 §5.4）：configDirty 归「保存节点配置」，flowDirty 归步骤自动保存
   const configDirty = computed(() => nodeStore.configDirty)
   const flowDirty = computed(() => nodeStore.flowDirty)
+  const flowRev = computed(() => nodeStore.flowRev)
   const dirtyConfigNodes = computed(() => nodeStore.dirtyConfigNodes)
 
   // ---- 流程核心状态 ----
@@ -404,6 +405,22 @@ export const useFlowStore = defineStore('flow', () => {
     return isFirstMainNode(main.value, configs, id)
   }
 
+  /** 旧平台「添加后续步骤 → 规则处理」：名称 `{前置配置ID}-规则处理`，规则 ID 默认 -1，输入表继承上游。 */
+  function applyRuleStepDefaults(cfg: NodeConfig, prevId: string, upstreamTable: string) {
+    const prevConfigId = configs[prevId]?.configId
+    if (prevConfigId) {
+      cfg.title = `${prevConfigId}-规则处理`
+      cfg.configName = cfg.title
+    }
+    if (!cfg.itemId) cfg.itemId = '-1'
+    const sid = sourceCfg.value?.sourceId || sourceCtx.value?.sourceId
+    if (sid && cfg.stepSourceId === undefined) cfg.stepSourceId = sid
+    if (upstreamTable) {
+      cfg.inputTable = cfg.inputTable || upstreamTable
+      if (cfg.ruleCfg && !cfg.ruleCfg.inputTableId) cfg.ruleCfg.inputTableId = upstreamTable
+    }
+  }
+
   // ---- 编辑动作 ----
   function insertAfter(prevId: string, template: string) {
     const srcKey = TEMPLATE_TO_NODE[template] || 'web-list'
@@ -416,6 +433,7 @@ export const useFlowStore = defineStore('flow', () => {
     // 模板里可能带着上一份配置的身份，连 configId 一起清干净——新节点是新建态。
     delete cfg.configId
     cfg.configName = cfg.title
+    if (template === 'rule' || srcKey === 'rule') applyRuleStepDefaults(cfg, prevId, upstreamOutputTable(prevId))
     if (cfg.collectCfg) {
       cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[template] ?? cfg.collectCfg.snatchType
       cfg.collectCfg.url = ''
@@ -463,6 +481,10 @@ export const useFlowStore = defineStore('flow', () => {
     // 模板里可能带着上一份配置的身份，连 configId 一起清干净——新节点是新建态。
     delete cfg.configId
     cfg.configName = cfg.title
+    if (template === 'rule' || srcKey === 'rule') {
+      const prevInBranch = branch.chain.at(-1) || ownerId
+      applyRuleStepDefaults(cfg, prevInBranch, upstreamOutputTableInBranch(ownerId, branch))
+    }
     if (cfg.collectCfg) {
       cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[template] ?? cfg.collectCfg.snatchType
       cfg.collectCfg.url = ''
@@ -489,8 +511,9 @@ export const useFlowStore = defineStore('flow', () => {
     // 副本不得继承原节点的 configId：一个节点只能引用一个配置，两个节点引用同一份配置时，
     // 在副本上改字段再保存就是在改原件（0828 D02「复制节点 = 新增一套配置」）。
     // 这里只保证"绝不指向原配置"；真正复制出一份新配置由调用方的 useDuplicateNode 异步完成。
+    // 配置名跟新节点名走，不沿用原配置名（否则「当前配置」条会显示成原件的名字）。
     delete cfg.configId
-    delete cfg.configName
+    cfg.configName = cfg.title
     const newId = `${id.split('-')[0]}-${seq++}`
     configs[newId] = cfg
     const idx = main.value.indexOf(id)
@@ -503,8 +526,9 @@ export const useFlowStore = defineStore('flow', () => {
   /**
    * 复制节点。**返回新节点 id**，调用方据此接着复制配置（见 useDuplicateNode）。
    *
-   * 副本**不继承 configId/configName**：`cloneConfig` 是整体深拷贝，原来把 configId 一起带走了，
+   * 副本**不继承 configId**：`cloneConfig` 是整体深拷贝，原来把 configId 一起带走了，
    * 结果两个节点引用同一份配置——在副本上改一个字段再保存，改的是原件。
+   * 配置名改成新节点名（标题已加「（复制）」），不沿用原配置名。
    * 0828 D02 把「复制节点」定为唯一的复用手段，这条路径会被高频触发，必须在 store 这一层就断干净：
    * 即使后续 config/copyAll 失败，副本也只会停在"未绑定配置"，不会污染原配置。
    */
@@ -513,7 +537,7 @@ export const useFlowStore = defineStore('flow', () => {
     const cfg = cloneConfig(configs[id])
     cfg.title = cfg.title.replace(/（复制）$/, '') + '（复制）'
     delete cfg.configId
-    delete cfg.configName
+    cfg.configName = cfg.title
     const newId = `${id}-copy-${seq++}`
     configs[newId] = cfg
     const idx = main.value.indexOf(id)
@@ -831,7 +855,30 @@ export const useFlowStore = defineStore('flow', () => {
    */
   function applyStepDetails(steps: Step[]): string[] {
     if (!sourceCfg.value) return []
+    sourceStore.rememberSteps(steps, 'merge')
     return applyStepDetailsToConfigs(configs, sourceCfg.value, steps)
+  }
+
+  /** 新建步骤落库后，把本地草稿 id 换成后端分配的 itemConfig。 */
+  function rebindNodeId(from: string, to: string): boolean {
+    if (!from || !to || from === to || !configs[from] || configs[to]) return false
+    configs[to] = configs[from]
+    delete configs[from]
+    const i = main.value.indexOf(from)
+    if (i >= 0) main.value[i] = to
+    for (const g of branchGroups) {
+      if (g.ownerId === from) g.ownerId = to
+      for (const b of g.branches) {
+        const j = b.chain.indexOf(from)
+        if (j >= 0) b.chain[j] = to
+      }
+    }
+    for (const b of branches) {
+      if (b.id === from) b.id = to
+    }
+    if (selectedId.value === from) selectedId.value = to
+    sourceStore.renameStepSnapshot(from, to)
+    return true
   }
 
   /** 保存配置：清该节点的 config 脏标，并把流程置脏（配置内容变了，流程需要重新提交） */
@@ -1132,9 +1179,11 @@ export const useFlowStore = defineStore('flow', () => {
     dirty,
     configDirty,
     flowDirty,
+    flowRev,
     dirtyConfigNodes,
     bindExistingConfig,
     applyStepDetails,
+    rebindNodeId,
     markNodeConfigSaved,
     selectedNode,
     // 布局
@@ -1188,6 +1237,7 @@ export const useFlowStore = defineStore('flow', () => {
     // 代理 node store 的操作
     touch: () => nodeStore.touchFlow(),
     markSaved: () => nodeStore.markSaved(),
+    markFlowSaved: () => nodeStore.markFlowSaved(),
     setTripleCell: (id: string, field: TripleField, rowIndex: number, colIndex: 0 | 1 | 2, value: string) => nodeStore.setTripleCell(id, field, rowIndex, colIndex, value),
     addTripleRow: (id: string, field: TripleField) => nodeStore.addTripleRow(id, field),
     removeTripleRow: (id: string, field: TripleField, rowIndex: number) => nodeStore.removeTripleRow(id, field, rowIndex),
@@ -1206,6 +1256,10 @@ export const useFlowStore = defineStore('flow', () => {
     setStructuredConfig: (id: string, value: string) => nodeStore.setStructuredConfig(id, value),
     setContentRules: (id: string, value: string) => nodeStore.setContentRules(id, value),
     setConfigName: (id: string, name: string) => nodeStore.setConfigName(id, name),
+    setConfigUrl: (id: string, url: string) => nodeStore.setConfigUrl(id, url),
+    hydrateConfigUrl: (id: string, url: string) => nodeStore.hydrateConfigUrl(id, url),
+    setItemId: (id: string, itemId: string) => nodeStore.setItemId(id, itemId),
+    setStepSourceId: (id: string, sourceId: string) => nodeStore.setStepSourceId(id, sourceId),
     setEntryCondition: (id: string, cond: ConditionGroup | undefined) => nodeStore.setEntryCondition(id, cond),
     setNodeDisabled: (id: string, disabled: boolean) => nodeStore.setNodeDisabled(id, disabled),
     setBaseRow: (id: string, index: number, value: string) => nodeStore.setBaseRow(id, index, value),

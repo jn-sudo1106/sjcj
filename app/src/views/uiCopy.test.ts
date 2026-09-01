@@ -21,6 +21,7 @@ import resultView from './FlowCanvas/result/ResultView.vue?raw'
 import siteSourceSwitcher from './FlowCanvas/source/SiteSourceSwitcher.vue?raw'
 import tableDialog from './FlowCanvas/inspector/TableEditDialog.vue?raw'
 import editNodeSourceDialog from './FlowCanvas/inspector/EditNodeSourceDialog.vue?raw'
+import editSourceDialog from './FlowCanvas/source/EditSourceDialog.vue?raw'
 import siteCardGrid from './CollectAssets/SiteCardGrid.vue?raw'
 import appModuleHead from '../layouts/AppModuleHead.vue?raw'
 import runtimeStore from '../stores/runtime.ts?raw'
@@ -75,18 +76,34 @@ describe('最新方案 UI 入口收口', () => {
     expect(configTab).toContain('<label>网页类型</label>')
   })
 
-  it('配置名称是节点配置里的必填项（0824-06 §4）', () => {
-    expect(configTab).toContain('配置名称')
-    expect(configTab).toContain('flow.setConfigName(')
+  it('节点配置 Tab 不展示配置名称（已在上方当前配置条展示）', () => {
+    expect(configTab).not.toContain('<label>配置名称</label>')
+    expect(configTab).not.toContain('flow.setConfigName(')
+    expect(nodeInspector).toContain('当前配置')
+    expect(nodeInspector).toContain('cfg.configName')
   })
 
-  it('非配置字段（节点名称/源 URL）在采集节点上只读，编辑收进弹窗', () => {
+  it('节点配置 Tab 展示配置 URL（旧平台配置编辑的 URL），不是源 URL', () => {
+    expect(configTab).toContain('<label>URL</label>')
+    expect(configTab).toContain('flow.setConfigUrl(')
+    expect(configTab).toContain('configApi.configDetailRaw')
+    expect(configTab).toContain('flow.hydrateConfigUrl(')
+    expect(configTab).not.toContain('collectUrlLabel')
+    expect(configTab).not.toContain('复制链接（演示）')
+    expect(configTab).not.toContain('<label>源 URL</label>')
+    // 源 URL 在画布头只读；改源名称/源 URL 走左侧「源详情」
+    expect(canvasHeader).toContain('s.url')
+    expect(configTab).not.toContain(':show-url')
+    expect(editNodeSourceDialog).toContain('编辑节点名称')
+    expect(editNodeSourceDialog).not.toContain('<label>源 URL</label>')
+  })
+
+  it('非配置字段（节点名称）在采集节点上只读，编辑收进弹窗', () => {
     // 0824-11 §1.2b：一个面板三种归属，底部「保存配置」只管配置那一层。
     // 面板上不摆分组标题也不内嵌保存按钮，改用参数源同款的「只读 + 编辑弹窗」。
     expect(configTab).toContain('EditNodeSourceDialog')
     expect(configTab).toContain('data-testid="edit-node-source"')
     expect(configTab).not.toContain('ni-section-hint')
-    // 面板上不再直接改这两个字段
     expect(configTab).not.toContain("setCC('url'")
     expect(configTab).not.toContain('flow.patchSource({ url:')
   })
@@ -98,13 +115,18 @@ describe('最新方案 UI 入口收口', () => {
     expect(editNodeSourceDialog).toMatch(/\.rc-field \{[^}]*background: transparent/)
   })
 
-  it('编辑弹窗把源 URL 落到源、节点名称落到流程（0824-11 §1.1b）', () => {
-    const dialog = editNodeSourceDialog
-    expect(dialog).toContain('sourceApi.sourceUpdate')
-    expect(dialog).toContain('flow.patchSource({ url:')
-    expect(dialog).toContain('flow.setTitle(')
-    // 步骤写接口没实现，不能假装节点名称已落库
-    expect(dialog).toContain('待步骤接口接入后落库')
+  it('节点名称弹窗只改节点名；源 URL 在左侧源详情落库（0824-11 §1.1b）', () => {
+    expect(editNodeSourceDialog).toContain('persistNodeName')
+    expect(editNodeSourceDialog).not.toContain('待步骤接口接入后落库')
+    expect(editNodeSourceDialog).not.toContain('sourceApi.sourceUpdate')
+    expect(editNodeSourceDialog).not.toContain('flow.patchSource({ url:')
+    expect(editSourceDialog).toContain('sourceApi.sourceUpdate')
+    expect(editSourceDialog).toContain('<label>源 URL</label>')
+    expect(siteSourceSwitcher).toContain('EditSourceDialog')
+    expect(flowCanvas).toContain('autosave.bind')
+    expect(flowCanvas).not.toContain('persistFlowSteps')
+    expect(flowCanvas).not.toContain('源信息与步骤已保存')
+    expect(flowCanvas).not.toContain('待步骤接口接入后落库')
   })
 
   // 展示叫「网页类型」（沿用新平台原有说法），落库仍是旧 isMulti 三态，一一对应，
@@ -233,7 +255,6 @@ describe('最新方案 UI 入口收口', () => {
 
   it('节点配置支持 APP 入口字段；任务参数由当前节点参数配置决定', () => {
     expect(configTab).toContain('APP 包名')
-    expect(configTab).toContain('collectUrlLabel')
     expect(taskTab).toContain('任务参数取值')
     expect(taskTab).toContain('availableTaskParamRefs')
     expect(taskTab).toContain('paramValues')
@@ -244,6 +265,7 @@ describe('最新方案 UI 入口收口', () => {
     // 定时策略已从采集运行设置中拆出，作为节点级配置保留，避免首节点位置分支影响其他节点。
     expect(nodeInspector).not.toContain('源信息（各节点共享）')
     expect(canvasHeader).not.toContain('@click="openEdit"')
+    expect(canvasHeader).not.toContain('同步到源')
     expect(canvasHeader).toContain('class="ch-canvas-actions"')
     expect(canvasHeader).toContain('v-if="view === \'flow\'" class="ch-actions"')
     expect(canvasHeader).toContain('v-if="view === \'flow\'" class="ch-canvas-actions"')
@@ -254,6 +276,7 @@ describe('最新方案 UI 入口收口', () => {
     expect(sourceBasicForm).not.toContain('选用配置 / 定时')
     expect(configTab).toContain('<TaskScheduleSettings')
     expect(collectorSettings).not.toContain('<TaskScheduleSettings')
+    expect(configTab).not.toContain('<RuntimePolicySummary')
   })
 
   it('切换源保留当前视图，视图按钮等待路由完成后再允许下一次切换', () => {
@@ -263,10 +286,14 @@ describe('最新方案 UI 入口收口', () => {
     expect(canvasHeader).not.toContain('switchingView')
   })
 
-  it('画布路由顶栏无动作，保存迁入画布 Header；运行记录使用发起抓取文案', () => {
+  it('画布路由顶栏无动作；步骤自动保存，不再放「保存流程」按钮（0828 W9-2/W9-3）', () => {
     expect(appModuleHead).toContain('canvas: [],')
     expect(appModuleHead).not.toContain("canvas: ['保存'")
-    expect(canvasHeader).toContain(`@click="ui.fireAction('保存')"`)
+    expect(canvasHeader).not.toContain(`@click="ui.fireAction('保存')"`)
+    expect(canvasHeader).not.toContain('保存流程')
+    expect(canvasHeader).toContain('保存中…')
+    expect(canvasHeader).toContain('已保存')
+    expect(canvasHeader).toContain('保存失败，点击重试')
     expect(runtimeStore).toContain('发起抓取落表')
     expect(runtimeStore).not.toContain('试跑落表')
   })
@@ -366,9 +393,9 @@ describe('最新方案 UI 入口收口', () => {
   })
 
   it('规则节点使用独立的编排配置 Tab，节点配置 Tab 不再内嵌规则编排面板（0801 方案）', () => {
-    // 0804 S2-2：表/字段绑定 + 保存业务规则搬去表配置 Tab，规则/采集节点共用同一个 TableTab
+    // 0804 S2-2：表/字段绑定搬去表配置 Tab；中间「保存并配置编排」已去掉，换 ruleId 在第一次生成脚本
     expect(tableTab).toContain('RuleTableFieldBinder')
-    expect(tableTab).toContain('保存并配置编排')
+    expect(tableTab).not.toContain('保存并配置编排')
     expect(ruleOrchestrationTab).toContain('查看业务编排')
     expect(ruleOrchestrationTab).not.toContain('保存业务规则')
     expect(ruleOrchestrationTab).not.toContain('修改表字段')

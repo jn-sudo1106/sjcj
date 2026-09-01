@@ -290,11 +290,11 @@ function canPreviewPath(field: FieldItem): boolean {
   <el-drawer :model-value="modelValue" :with-header="false" size="560px" @update:model-value="emit('update:modelValue', $event)">
     <div v-if="displayed" class="ffd-detail" data-testid="file-detail-drawer">
       <div class="ffd-head">
-        <div>
+        <div class="ffd-head-main">
           <div class="ffd-title">{{ title }}</div>
           <div class="ffd-sub">数据 ID {{ displayed.dataId }}<template v-if="sourceNameOf"> · 所属源 {{ sourceNameOf }}</template></div>
         </div>
-        <button class="rc-btn ghost" type="button" @click="close">关闭</button>
+        <button class="rc-btn ghost ffd-close" type="button" @click="close">关闭</button>
       </div>
 
       <div v-if="parentView" class="ffd-parent-bar" data-testid="file-detail-parent">
@@ -378,7 +378,9 @@ function canPreviewPath(field: FieldItem): boolean {
 <style scoped>
 .ffd-detail { padding: 18px; }
 .ffd-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-.ffd-title { font-size: 14px; font-weight: 700; color: var(--rc-text); }
+.ffd-head-main { min-width: 0; flex: 1; }
+.ffd-close { flex: none; height: 28px; padding: 0 12px; font-size: 12px; white-space: nowrap; }
+.ffd-title { font-size: 14px; font-weight: 700; color: var(--rc-text); line-height: 1.4; word-break: break-word; }
 .ffd-sub { margin-top: 3px; color: var(--rc-faint); font-size: 11px; }
 .ffd-parent-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--rc-border-soft); border-radius: 6px; background: #f8fafc; color: var(--rc-text-2); font-size: 12px; }
 .ffd-loading { margin-bottom: 8px; color: var(--rc-faint); font-size: 12px; }

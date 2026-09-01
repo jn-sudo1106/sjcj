@@ -22,6 +22,7 @@ import {
   mockLoadParams,
   mockSendSnatchWithParam,
   mockTagSource,
+  mockSourceTags,
   mockSetColor,
 } from './sources'
 import {
@@ -102,6 +103,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'source/changeFreqTag': mockAck,
   'source/markVerified': mockAck,
   'source/tagSource': mockTagSource,
+  'source/sourceTags': mockSourceTags,
   'source/setColor': mockSetColor,
   'source/generateConfig': mockAck,
 

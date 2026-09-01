@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import DataGrid from './DataGrid.vue'
+import { columnPrefsKey } from '@/utils/table/columnPrefs'
 
 // 按表头文字定位单元格：ENTRY_ID / SOURCE_ID 两个身份合成列固定占最前面，
 // 用 nth-child 写死列序号的断言会随它们的显隐而碎（0819 N1-5）。
@@ -12,6 +13,8 @@ function cellByHeader(wrapper: ReturnType<typeof mount>, header: string): string
   return wrapper.findAll('tbody tr:first-child td')[idx].text()
 }
 
+const GRID_STUBS = { ElDropdown: true, ColumnPickerDialog: true, ElDialog: true }
+
 describe('DataGrid', () => {
   it('全站范围传入源映射时显示所属源名称', () => {
     const wrapper = mount(DataGrid, {
@@ -20,7 +23,7 @@ describe('DataGrid', () => {
         rows: [{ dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted', values: { name: '数据 A' } }],
         sourceNames: { s1: '源 A' },
       },
-      global: { stubs: { ElDropdown: true } },
+      global: { stubs: GRID_STUBS },
     })
 
     expect(wrapper.text()).toContain('所属源')
@@ -33,7 +36,7 @@ describe('DataGrid', () => {
         meta: { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'title', columnName: 'K1', type: 'string', desc: '标题' }] },
         rows: [{ dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted', values: { K1: '真实标题' } }],
       },
-      global: { stubs: { ElDropdown: true } },
+      global: { stubs: GRID_STUBS },
     })
 
     // "状态"列本来就没传 state，会正常显示"—"，只断言标题格自己不是"—"
@@ -47,7 +50,7 @@ describe('DataGrid', () => {
         meta: { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'name', type: 'string', desc: '名称' }] },
         rows: [{ dataId: 'd1', title: '', summary: '', sourceId: '430016500', acceptState: 'accepted', values: { name: '数据 A' } }],
       },
-      global: { stubs: { ElDropdown: true } },
+      global: { stubs: GRID_STUBS },
     })
 
     // 这两个合成列用短标签，对齐旧平台固定列（ENTRY_ID 列 label="ENTRY_ID"、SOURCE_ID 列 label="源"）；
@@ -69,7 +72,7 @@ describe('DataGrid', () => {
         },
         rows: [],
       },
-      global: { stubs: { ElDropdown: true } },
+      global: { stubs: GRID_STUBS },
     })
 
     const heads = wrapper.findAll('thead th').map((th) => th.text().replace(/[↕↑↓]\s*$/, '').trim())
@@ -84,7 +87,7 @@ describe('DataGrid', () => {
         meta: { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'title', columnName: 'K1', type: 'string', desc: '标题' }] },
         rows: [],
       },
-      global: { stubs: { ElDropdown: true } },
+      global: { stubs: GRID_STUBS },
     })
     const th = wrapper.findAll('thead th').find((t) => t.text().startsWith('标题-K1'))!
 
@@ -109,7 +112,7 @@ describe('DataGrid', () => {
         rows: [],
         allowColumnSort: false,
       },
-      global: { stubs: { ElDropdown: true } },
+      global: { stubs: GRID_STUBS },
     })
 
     const kCol = wrapper.findAll('thead th').find((t) => t.text().startsWith('标题-K1'))!
@@ -137,7 +140,7 @@ describe('DataGrid', () => {
           values: { K6: '/qinlong/a/content.txt', K1: '普通标题', K2: 'https://example.com/x' },
         }],
       },
-      global: { stubs: { ElDropdown: true } },
+      global: { stubs: GRID_STUBS },
     })
 
     const cells = wrapper.findAll('[data-testid="data-file-cell"]')
@@ -155,7 +158,7 @@ describe('DataGrid', () => {
         meta: { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'K1', type: 'string', desc: 'K1' }] },
         rows: [{ dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted', values: { K1: '推断出的值' } }],
       },
-      global: { stubs: { ElDropdown: true } },
+      global: { stubs: GRID_STUBS },
     })
 
     expect(wrapper.text()).toContain('推断出的值')
@@ -167,7 +170,7 @@ describe('DataGrid', () => {
         meta: { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'name', type: 'string', desc: '名称' }] },
         rows: [{ dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted', values: { name: 'A' } }],
       },
-      global: { stubs: { ElDropdown: true } },
+      global: { stubs: GRID_STUBS },
     })
 
     expect(wrapper.findAll('input[type="checkbox"]')).toHaveLength(0)
@@ -185,7 +188,7 @@ describe('DataGrid', () => {
         selectable: true,
         selectedIds: [],
       },
-      global: { stubs: { ElDropdown: true } },
+      global: { stubs: GRID_STUBS },
     })
 
     const rowChecks = wrapper.findAll('.dg-select input[type="checkbox"]')
@@ -207,7 +210,7 @@ describe('DataGrid', () => {
         selectable: true,
         selectedIds: [],
       },
-      global: { stubs: { ElDropdown: true } },
+      global: { stubs: GRID_STUBS },
     })
 
     await wrapper.find('.dg-select input[type="checkbox"]').setValue(true)
@@ -223,7 +226,7 @@ describe('DataGrid · 复制单元格的值', () => {
         meta: { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'name', type: 'string', desc: '名称' }] },
         rows: [{ dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted', values: { name: '数据 A' } }],
       },
-      global: { stubs: { ElDropdown: true } },
+      global: { stubs: GRID_STUBS },
     })
   }
 
@@ -246,5 +249,164 @@ describe('DataGrid · 复制单元格的值', () => {
     await nameCell(wrapper).get('[data-testid="data-cell-copy"]').trigger('click')
     expect(writeText).toHaveBeenCalledWith('数据 A')
     expect(wrapper.emitted('row-click')).toBeUndefined()
+  })
+})
+
+describe('DataGrid · 列显示与顺序', () => {
+  afterEach(() => localStorage.clear())
+
+  const ElDialogStub = {
+    name: 'ElDialog',
+    props: ['modelValue', 'title'],
+    template: '<div v-if="modelValue" data-testid="column-picker-dialog"><slot /><slot name="footer" /></div>',
+  }
+
+  function mountPickerGrid() {
+    return mount(DataGrid, {
+      props: {
+        meta: {
+          tableId: 't-cols',
+          tableName: '表',
+          rowCount: 1,
+          fields: [
+            { prop: 'title', columnName: 'K1', type: 'string', desc: '标题' },
+            { prop: 'html', columnName: 'K17', type: 'string', desc: '正文html路径' },
+          ],
+        },
+        rows: [{
+          dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted' as const,
+          values: { K1: '标题A', K17: '—' },
+        }],
+      },
+      global: { stubs: { ElDropdown: true, ElDialog: ElDialogStub } },
+    })
+  }
+
+  it('工具行是「列 n/m」，点开弹窗后确定才改表头', async () => {
+    const wrapper = mountPickerGrid()
+    const btn = wrapper.get('[data-testid="column-picker-btn"]')
+    expect(btn.text()).toBe('列 4/4')
+    expect(wrapper.find('[data-testid="column-picker-dialog"]').exists()).toBe(false)
+
+    await btn.trigger('click')
+    const htmlRow = wrapper.findAll('.cpk-row').find((row) => row.text().includes('正文html路径-K17'))!
+    await htmlRow.get('input[type="checkbox"]').setValue(false)
+    expect(wrapper.findAll('thead th').map((th) => th.text())).toEqual(expect.arrayContaining(['正文html路径-K17↕']))
+
+    await wrapper.get('[data-testid="column-picker-ok"]').trigger('click')
+    const heads = wrapper.findAll('thead th').map((th) => th.text().replace(/[↕↑↓]\s*$/, '').trim())
+    expect(heads).not.toContain('正文html路径-K17')
+    expect(heads).toContain('标题-K1')
+    expect(btn.text()).toBe('列 3/4')
+  })
+
+  it('按 tableId 记住显隐，换表不串', async () => {
+    const wrapper = mountPickerGrid()
+    await wrapper.get('[data-testid="column-picker-btn"]').trigger('click')
+    const htmlRow = wrapper.findAll('.cpk-row').find((row) => row.text().includes('正文html路径-K17'))!
+    await htmlRow.get('input[type="checkbox"]').setValue(false)
+    await wrapper.get('[data-testid="column-picker-ok"]').trigger('click')
+    expect(JSON.parse(localStorage.getItem(columnPrefsKey('t-cols'))!).hidden).toContain('html')
+
+    await wrapper.setProps({
+      meta: {
+        tableId: 't-other',
+        tableName: '另一张',
+        rowCount: 0,
+        fields: [{ prop: 'html', columnName: 'K17', type: 'string', desc: '正文html路径' }],
+      },
+    })
+    const heads = wrapper.findAll('thead th').map((th) => th.text().replace(/[↕↑↓]\s*$/, '').trim())
+    expect(heads).toContain('正文html路径-K17')
+  })
+})
+
+describe('DataGrid · 下一步字段预设（0831 F10）', () => {
+  afterEach(() => localStorage.clear())
+
+  const ElDialogStub = {
+    name: 'ElDialog',
+    props: ['modelValue', 'title'],
+    template: '<div v-if="modelValue" data-testid="column-picker-dialog"><slot /><slot name="footer" /></div>',
+  }
+
+  const META = {
+    tableId: 't-preset',
+    tableName: '表',
+    rowCount: 1,
+    fields: [
+      { prop: 'title', columnName: 'K1', type: 'string', desc: '标题' },
+      { prop: 'url', columnName: 'K2', type: 'string', desc: '链接' },
+      { prop: 'body', columnName: 'K3', type: 'string', desc: '正文' },
+    ],
+  }
+
+  function mountGrid(presetCols: string[] = []) {
+    return mount(DataGrid, {
+      props: {
+        meta: META,
+        presetCols,
+        rows: [{
+          dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted' as const,
+          values: { K1: 'A', K2: 'B', K3: 'C' },
+        }],
+      },
+      global: { stubs: { ElDropdown: true, ElDialog: ElDialogStub } },
+    })
+  }
+
+  const heads = (w: ReturnType<typeof mountGrid>) =>
+    w.findAll('thead th').map((th) => th.text().replace(/[↕↑↓]\s*$/, '').trim())
+
+  it('首次打开默认只显示预设列，两个身份列一并保留', () => {
+    const wrapper = mountGrid(['title'])
+    expect(heads(wrapper)).toEqual(expect.arrayContaining(['ENTRY_ID', '源', '标题-K1']))
+    expect(heads(wrapper)).not.toContain('正文-K3')
+    expect(wrapper.get('[data-testid="column-picker-btn"]').text()).toBe('列 3/5')
+  })
+
+  it('预设为空时退回全部列，也不渲染切换按钮', () => {
+    const wrapper = mountGrid([])
+    expect(heads(wrapper)).toEqual(expect.arrayContaining(['标题-K1', '链接-K2', '正文-K3']))
+    expect(wrapper.find('[data-testid="column-preset-toggle"]').exists()).toBe(false)
+  })
+
+  it('预设引用了当前表没有的列时全部丢掉，等同没有预设', () => {
+    const wrapper = mountGrid(['ghost', 'K99'])
+    expect(heads(wrapper)).toEqual(expect.arrayContaining(['标题-K1', '链接-K2', '正文-K3']))
+    expect(wrapper.find('[data-testid="column-preset-toggle"]').exists()).toBe(false)
+  })
+
+  it('切换按钮在「全部列」与「下一步字段」之间来回，一次点击到位', async () => {
+    const wrapper = mountGrid(['title'])
+    const toggle = () => wrapper.get('[data-testid="column-preset-toggle"]')
+    expect(toggle().text()).toBe('全部列')
+
+    await toggle().trigger('click')
+    expect(heads(wrapper)).toContain('正文-K3')
+    expect(toggle().text()).toBe('下一步字段 3')
+
+    await toggle().trigger('click')
+    expect(heads(wrapper)).not.toContain('正文-K3')
+    expect(toggle().text()).toBe('全部列')
+  })
+
+  it('用户存过偏好后预设不再覆盖它——预设只是没表过态时的默认', async () => {
+    const first = mountGrid(['title'])
+    await first.get('[data-testid="column-preset-toggle"]').trigger('click') // 展开全部列并落盘
+
+    const second = mountGrid(['title'])
+    expect(heads(second)).toContain('正文-K3')
+  })
+
+  it('弹窗里有「仅下一步字段」快捷项', async () => {
+    const wrapper = mountGrid(['title'])
+    await wrapper.get('[data-testid="column-preset-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="column-picker-btn"]').trigger('click')
+
+    await wrapper.get('[data-testid="column-picker-preset"]').trigger('click')
+    await wrapper.get('[data-testid="column-picker-ok"]').trigger('click')
+    expect(heads(wrapper)).not.toContain('正文-K3')
+    expect(heads(wrapper)).toContain('标题-K1')
   })
 })

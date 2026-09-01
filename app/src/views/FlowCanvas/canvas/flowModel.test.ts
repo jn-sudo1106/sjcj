@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  applyParamSourceUrlToFirstCollectNode, buildHorizontalLayout, hasAmbiguousInput, iconFor, isFirstRunnableNode, isRuleNode,
+  applyParamSourceUrlToFirstCollectNode, buildHorizontalLayout, directPredecessorIds, hasAmbiguousInput, hasDirectSuccessor, iconFor, isFirstRunnableNode, isRuleNode,
   makeDefaultExecConfig, NODE_CONFIGS, normalizeNodeConfig, type FlowBranchGroup, type NodeConfig,
 } from './flowModel'
 import type { Source } from '@/api'
@@ -39,6 +39,63 @@ describe('isFirstRunnableNode（0812 计划 M2-10）', () => {
 
   it('主链没有真实节点时，任何 id 都不是首节点', () => {
     expect(isFirstRunnableNode(['start', 'end'], {}, 'start')).toBe(false)
+  })
+})
+
+describe('hasDirectSuccessor（0824：末节点无发后续）', () => {
+  it('线性 start-n1-n2-end：n1 有后继，n2 没有', () => {
+    const main = ['start', 'n1', 'n2', 'end']
+    const configs = { n1: cfg({ title: '抓取列表页' }), n2: cfg({ title: '解析详情页' }) }
+    expect(hasDirectSuccessor(main, configs, 'n1')).toBe(true)
+    expect(hasDirectSuccessor(main, configs, 'n2')).toBe(false)
+  })
+
+  it('跳过中间的停用 / 规划中节点，看到更后面的真实节点', () => {
+    const main = ['start', 'n1', 'skip', 'n2', 'end']
+    const disabled = { n1: cfg(), skip: cfg({ disabled: true }), n2: cfg() }
+    expect(hasDirectSuccessor(main, disabled, 'n1')).toBe(true)
+    expect(hasDirectSuccessor(main, disabled, 'n2')).toBe(false)
+    const planned = { n1: cfg(), skip: cfg({ planned: true }), n2: cfg() }
+    expect(hasDirectSuccessor(main, planned, 'n1')).toBe(true)
+  })
+
+  it('跳过中间的决策/分头，看到更后面的真实节点', () => {
+    const main = ['start', 'n1', 'dec', 'n2', 'end']
+    const configs = { n1: cfg(), dec: cfg({ kind: 'decision' }), n2: cfg() }
+    expect(hasDirectSuccessor(main, configs, 'n1')).toBe(true)
+    expect(hasDirectSuccessor(main, configs, 'n2')).toBe(false)
+  })
+
+  it('主链只有一个真实节点时没有后继', () => {
+    const main = ['start', 'n1', 'end']
+    expect(hasDirectSuccessor(main, { n1: cfg() }, 'n1')).toBe(false)
+  })
+
+  it('决策节点挂了可跑的分支 chain：上游和 owner 都有后继；分支叶子无汇合则没有', () => {
+    const main = ['start', 'n1', 'dec', 'end']
+    const configs = { n1: cfg(), dec: cfg({ kind: 'decision' }), b1: cfg({ title: '分支处理' }) }
+    const groups: FlowBranchGroup[] = [{ ownerId: 'dec', branches: [{ id: 'br1', label: 'IF', chain: ['b1'] }] }]
+    expect(hasDirectSuccessor(main, configs, 'n1', groups)).toBe(true)
+    expect(hasDirectSuccessor(main, configs, 'dec', groups)).toBe(true)
+    expect(hasDirectSuccessor(main, configs, 'b1', groups)).toBe(false)
+  })
+
+  it('分支 chain 内后一个节点、以及汇合点（owner 后的主链节点）都算后继', () => {
+    const main = ['start', 'dec', 'join', 'end']
+    const configs = { dec: cfg({ kind: 'decision' }), a: cfg(), b: cfg(), join: cfg() }
+    const groups: FlowBranchGroup[] = [{ ownerId: 'dec', branches: [{ id: 'br1', label: 'IF', chain: ['a', 'b'] }] }]
+    expect(hasDirectSuccessor(main, configs, 'a', groups)).toBe(true)
+    expect(hasDirectSuccessor(main, configs, 'b', groups)).toBe(true)
+    expect(hasDirectSuccessor(main, configs, 'join', groups)).toBe(false)
+  })
+})
+
+describe('directPredecessorIds（0831 X7-B）', () => {
+  it('是 directSuccessorIds 的反函数：n2 的前驱是 n1', () => {
+    const main = ['start', 'n1', 'n2', 'end']
+    const configs = { n1: cfg(), n2: cfg() }
+    expect(directPredecessorIds(main, configs, 'n2')).toEqual(['n1'])
+    expect(directPredecessorIds(main, configs, 'n1')).toEqual([])
   })
 })
 

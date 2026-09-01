@@ -6,6 +6,7 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { Source, Site, Step } from '../api'
+import { isWritableStepId } from '@/utils/flow/stepPersist'
 import type { FlowDef } from '@/views/FlowCanvas/canvas/flowModel'
 import {
   makeSiteBlankTemplate,
@@ -19,6 +20,8 @@ export const useSourceStore = defineStore('source', () => {
   const flowId = ref('flow-default')
   const flowName = ref('未命名流程')
   const sourceCtx = ref<Source | null>(null)
+  /** nextConfigPaged 原样快照，按 stepId（itemConfig）索引。stepModify 整包回写时用，避免只改名称把 url/itemId 写成 null。 */
+  const stepSnapshots = ref<Record<string, Step>>({})
   // 源级配置（0706 优化·源/节点配置分层）：sourceCtx 保留作只读上下文（是否绑定持久化源，驱动 UI 的「源模式」），
   // sourceCfg 是可编辑副本，供源信息编辑抽屉读写；load() 统一从 FlowDef.source 灌入，二者内容随加载同步、写入路径各自独立。
   const sourceCfg = ref<Source | null>(null)
@@ -54,15 +57,51 @@ export const useSourceStore = defineStore('source', () => {
     sourceCtx.value = { ...sourceCtx.value, ...withoutNodeCopies(patch as Record<string, unknown>) as Partial<Source> }
   }
 
+  function cloneStep(step: Step): Step {
+    return {
+      ...step,
+      dependsOn: step.dependsOn ? [...step.dependsOn] : undefined,
+      contextMap: step.contextMap ? [...step.contextMap] : undefined,
+      outColumns: step.outColumns ? [...step.outColumns] : undefined,
+    }
+  }
+
+  function rememberSteps(steps: Step[], mode: 'replace' | 'merge' = 'replace') {
+    const next = mode === 'replace' ? {} : { ...stepSnapshots.value }
+    for (const step of steps) {
+      if (!isWritableStepId(step.stepId)) continue
+      next[step.stepId] = cloneStep(step)
+    }
+    stepSnapshots.value = next
+  }
+
+  function forgetStep(stepId: string) {
+    if (!(stepId in stepSnapshots.value)) return
+    const next = { ...stepSnapshots.value }
+    delete next[stepId]
+    stepSnapshots.value = next
+  }
+
+  function renameStepSnapshot(from: string, to: string) {
+    const snap = stepSnapshots.value[from]
+    if (!snap || from === to) return
+    const next = { ...stepSnapshots.value }
+    delete next[from]
+    next[to] = { ...snap, stepId: to }
+    stepSnapshots.value = next
+  }
+
   function resetAllContext() {
     sourceCtx.value = null
     sourceCfg.value = null
     siteCtx.value = null
+    stepSnapshots.value = {}
   }
 
   function clearSourceCtx() {
     sourceCtx.value = null
     sourceCfg.value = null
+    stepSnapshots.value = {}
   }
 
   function clearSiteCtx() {
@@ -112,6 +151,7 @@ export const useSourceStore = defineStore('source', () => {
           source: sourceForCfg,
         }
     backfillConfigNames(def, steps)
+    rememberSteps(steps, 'replace')
     return { def, sourceCtx: sourceCtx.value }
   }
 
@@ -144,6 +184,7 @@ export const useSourceStore = defineStore('source', () => {
     const draft = JSON.parse(JSON.stringify(source)) as Source
     siteCtx.value = null
     sourceCtx.value = draft
+    stepSnapshots.value = {}
     return {
       id: source.sourceId,
       name: source.name || '未命名采集源',
@@ -189,7 +230,11 @@ export const useSourceStore = defineStore('source', () => {
     sourceCtx,
     sourceCfg,
     siteCtx,
+    stepSnapshots,
     // 操作
+    rememberSteps,
+    forgetStep,
+    renameStepSnapshot,
     patchSource,
     patchSourceCtx,
     resetAllContext,

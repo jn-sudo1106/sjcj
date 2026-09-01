@@ -222,7 +222,7 @@ describe('旧平台新建源 HTTP 契约', () => {
         { itemConfig: 40598, sourceId: -1, name: '1400935-详情', configId: 1400975, entryTypeId: 900, outEntry: 900, lastStep: '40597', context: 'K2,K17', isDelete: 0 },
       ],
     }))
-    fetchMock.mockResolvedValueOnce(jsonResponse({ code: null, data: { configId: 1400935, topic: 'news_snt', runPolicy: '{snatch:{retryCnt:3}}' }, msg: null, success: true }))
+    fetchMock.mockResolvedValueOnce(jsonResponse({ code: null, data: { configId: 1400935, configUrl: 'http://www.baidu.com', topic: 'news_snt', runPolicy: '{snatch:{retryCnt:3}}' }, msg: null, success: true }))
     fetchMock.mockResolvedValueOnce(jsonResponse({ code: null, data: { configId: 1400974, topic: 'dev_web_snatch_html_download' }, msg: null, success: true }))
     fetchMock.mockResolvedValueOnce(jsonResponse({ code: null, data: { configId: 1400975, topic: 'news_cont' }, msg: null, success: true }))
     const { sourceApi } = await import('./index')
@@ -230,11 +230,30 @@ describe('旧平台新建源 HTTP 契约', () => {
     const steps = await sourceApi.sourceSteps('430016821')
 
     expect(steps.map((s) => s.topic)).toEqual(['news_snt', 'dev_web_snatch_html_download', 'news_cont'])
+    expect(steps[0].configUrl).toBe('http://www.baidu.com')
     expect(steps[0].runPolicy).toBe('{snatch:{retryCnt:3}}')
     expect(fetchMock.mock.calls).toHaveLength(4)
     expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/config/configDetail?configId=1400935')
     expect(fetchMock.mock.calls[2][0]).toBe('/api/v1/config/configDetail?configId=1400974')
     expect(fetchMock.mock.calls[3][0]).toBe('/api/v1/config/configDetail?configId=1400975')
+  })
+
+  it('sourceSteps：configDetail 只有 success/data、没有 code 时仍回填 configUrl', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      code: 0,
+      data: [{ itemConfig: 0, sourceId: 430002329, name: 'guancha-观察者网-金融科技', configId: 1400766, outEntry: 900, lastStep: null, isDelete: 0 }],
+    }))
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      success: true,
+      data: { configId: 1400766, configName: 'guancha-观察者网-金融科技', configUrl: 'https://www.guancha.cn/jinrongkeji', isMulti: 1 },
+    }))
+    const { sourceApi } = await import('./index')
+
+    const steps = await sourceApi.sourceSteps('430002329')
+
+    expect(steps[0].configUrl).toBe('https://www.guancha.cn/jinrongkeji')
+    expect(steps[0].configName).toBe('guancha-观察者网-金融科技')
+    expect(steps[0].multiMode).toBe(1)
   })
 
   it('sourceSteps 按 configDetail.params 回填 paramBindings（取自 2026-08-26 生产实测：配置 1400774 绑了 baidu-密码=aaaa）', async () => {
@@ -357,6 +376,17 @@ describe('旧平台新建源 HTTP 契约', () => {
     expect(init.body).toBeUndefined()
   })
 
+  it('itemApi.enable / deleteStep：GET id + state（0 启用 / 1 停用）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: 'ok' }))
+    const { itemApi } = await import('./index')
+    await itemApi.enable('40600', '0')
+    expect(String(fetchMock.mock.calls[0][0])).toBe('/api/v1/item/next/enable?id=40600&state=0')
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
+    await itemApi.deleteStep('40600')
+    expect(String(fetchMock.mock.calls[1][0])).toBe('/api/v1/item/next/delete?id=40600')
+    expect((fetchMock.mock.calls[1][1] as RequestInit).method).toBe('GET')
+  })
+
   it('GET /v1/source/tagSource：勾选源 ID + #标签，新增不带 action', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '标记成功' }))
     const { sourceApi } = await import('./index')
@@ -428,6 +458,56 @@ describe('旧平台新建源 HTTP 契约', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(String(fetchMock.mock.calls[0][0])).toContain('/api/v1/source/setColor')
     expect(String(fetchMock.mock.calls[1][0])).toContain('/api/v1/source/tagSource')
+  })
+
+  it('sourceTaskPaged 与源列表任务实例同一条 GET /v1/task/topTaskPaged，page/limit + sourceId/state/configId', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      code: '0',
+      msg: null,
+      data: {
+        total: 1,
+        list: [{
+          taskId: '8348509120',
+          state: 'C',
+          actionName: '浏览器抓取',
+          taskName: '任务A',
+          sourceId: '161725',
+          configId: '70598',
+          updateDt: '2026-07-31 08:00',
+          nodeCode: 'node1',
+          taskTopic: 'topic1',
+        }],
+      },
+    }))
+    const { sourceApi } = await import('./index')
+
+    const result = await sourceApi.sourceTaskPaged({
+      siteId: '11',
+      sourceId: '161725',
+      configId: '70598',
+      state: 'C',
+      page: 2,
+      size: 30,
+    })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(init.method).toBe('GET')
+    expect(url).toContain('/api/v1/task/topTaskPaged')
+    expect(url).not.toContain('siteId=')
+    expect(url).not.toContain('nodeId=')
+    expect(url).toContain('page=2')
+    expect(url).toContain('limit=30')
+    expect(url).toContain('sourceId=161725')
+    expect(url).toContain('configId=70598')
+    expect(url).toContain('state=C')
+    expect(result.total).toBe(1)
+    expect(result.list[0]).toMatchObject({
+      taskId: '8348509120',
+      typeName: '浏览器抓取',
+      node: 'node1',
+      topic: 'topic1',
+      updatedAt: '2026-07-31 08:00',
+    })
   })
 
 })

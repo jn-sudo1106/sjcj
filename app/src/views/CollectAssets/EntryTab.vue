@@ -100,32 +100,15 @@ function openCreate() {
   editor.entry = null
   editor.visible = true
 }
-async function onEntrySaved(tableId: string) {
-  await clearCacheSilently([tableId])
+async function onEntrySaved() {
   await load()
-}
-
-// 清除缓存（同 0721 会议 §六-2 对参数列表的决定）：UI 入口去掉，写操作成功后静默补一次调用——
-// 真实联调证实列表有服务端缓存层，不清缓存列表不会自动刷新；失败不影响主流程。
-// 失败留 console.warn breadcrumb（07-24 复盘，呼应 07-23 review #12）：下次进列表看到旧数据时能快速定位。
-async function clearCacheSilently(tableIds: string[]) {
-  // 过滤空串：[''].length === 1（数组有 1 个元素即使内容为空），
-  // 不过滤会把空 ID 发给后端，看起来无副作用但后端日志会有杂音。
-  const validIds = tableIds.filter((id) => !!id)
-  if (!validIds.length) return
-  try {
-    await entryApi.clearCache(validIds)
-  } catch (error) {
-    // 静默吞错（用户体验：缓存没清掉不影响主流程）+ console.warn 留痕（开发定位）
-    console.warn('[EntryTab] clearCache failed', { tableIds: validIds, error })
-  }
 }
 
 async function confirmDanger(
   title: string,
   body: string,
   run: () => Promise<{ message?: string }>,
-  opts: { successFallback?: string; clearIds?: string[] } = {},
+  opts: { successFallback?: string } = {},
 ) {
   try {
     await ElMessageBox.confirm(body, title, { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '取消' })
@@ -135,7 +118,6 @@ async function confirmDanger(
   try {
     const r = await run()
     ElMessage.success(r?.message || opts.successFallback || '操作成功')
-    if (opts.clearIds?.length) await clearCacheSilently(opts.clearIds)
     await load()
   } catch (error) {
     ElMessage.error(`操作失败：${error instanceof Error ? error.message : String(error)}`)
@@ -161,7 +143,6 @@ async function onCopy(e: EntryType) {
   try {
     const ack = await entryApi.copyEntry(e.tableId, tableName)
     ElMessage.success(`复制成功:${ack?.message ?? ''}`)
-    await clearCacheSilently([e.tableId])
     await load()
   } catch (error) {
     ElMessage.error(`复制失败,返回值:${error instanceof Error ? error.message : String(error)}`)
@@ -193,7 +174,7 @@ async function onCheckTable(e: EntryType) {
   try {
     await entryApi.syncTable(e.tableId)
     ElMessage.success('物理表结构已更新')
-    await clearCacheSilently([e.tableId])
+    await load()
   } catch (error) {
     ElMessage.error(`同步失败：${error instanceof Error ? error.message : String(error)}`)
   }
@@ -204,7 +185,6 @@ function onCalc(e: EntryType) {
     '是否要强制计算数据表对应的源数据量',
     `如有手动删除表数据等操作，本次计算将强制修正源上数据量不一致的问题: ${e.tableId}`,
     () => entryApi.calcEntrySum(e.tableId),
-    { clearIds: [e.tableId] },
   )
 }
 function onRebuildIndex(e: EntryType) {
@@ -212,7 +192,6 @@ function onRebuildIndex(e: EntryType) {
     '重建去重索引(谨慎使用!!）',
     `如变更去重字段后，本次将重新计算历史数据的去重索引: ${e.tableId}`,
     () => entryApi.rebuildIndex(e.tableId),
-    { clearIds: [e.tableId] },
   )
 }
 function onState(e: EntryType) {
@@ -221,7 +200,7 @@ function onState(e: EntryType) {
     toAc ? '正式态确认' : '改为测试态',
     toAc ? '【无法删数据】设置为正式态' : '【注意:可从页面中删除】,改为测试态',
     () => entryApi.markEntryType(e.tableId, toAc ? 'AC' : 'C'),
-    { successFallback: '设置成功', clearIds: [e.tableId] },
+    { successFallback: '设置成功' },
   )
 }
 async function onExtractFields(e: EntryType) {
@@ -275,7 +254,6 @@ async function onBatchRebuild() {
   try {
     const result = await entryApi.rebuildTable(selected.value)
     ElMessage.success(`处理成功:${result?.message ?? ''}`)
-    await clearCacheSilently(selected.value)
     selected.value = []
     await load()
   } catch (error) {
@@ -298,7 +276,6 @@ async function onBatchDelete() {
   try {
     await entryApi.deleteEntries(selected.value)
     ElMessage.success(`删除成功，本次删除:${ids}`)
-    await clearCacheSilently(selected.value)
     selected.value = []
     await load()
   } catch (error) {

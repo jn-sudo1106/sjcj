@@ -13,6 +13,8 @@ import type {
 import type { FlowDef, FlowRecommendation } from '@/views/FlowCanvas/canvas/flowModel'
 import {
   configFromLegacy,
+  configUrlFromLegacy,
+  legacyConfigRecord,
   configLogFromLegacy,
   configPageFromLegacy,
   configParamFromLegacy,
@@ -57,7 +59,7 @@ import {
   legacySnatchSavePayloadFromFlow,
 } from './legacyAdapters'
 import { encryptLegacyPayload } from './legacyCrypto'
-import { issueTagsForWrite } from '@/utils/sourceMark'
+import { issueTagsForWrite, parseIssueTags } from '@/utils/sourceMark'
 
 export * from './types'
 export { isDanger, DANGER_ENDPOINTS, isMockMode, isProductionBackend, isProductionCreateEnabled } from './client'
@@ -66,6 +68,13 @@ export { parseNextStepReceipt, type NextStepReceipt, type NextStepReceiptEntry }
 // 对方后端尚未提供对应实现的资产能力强制走 Mock；网站读取链路已在 siteApi 单独切真实。
 const assetMockRequest = <T>(endpoint: string, params?: Record<string, unknown>) =>
   request<T>(endpoint, params, { mode: 'mock' })
+
+/** 源列表任务实例与画布任务视图共用：GET /v1/task/topTaskPaged 的分页解包。 */
+function unwrapTaskInstPage(result: unknown): { total: number; list: TaskInst[] } {
+  const list = Array.isArray(result) ? result : ((result as Paged<unknown> | null)?.list ?? [])
+  const total = Array.isArray(result) ? list.length : ((result as Paged<unknown> | null)?.total ?? list.length)
+  return { total, list: list.map(taskInstFromLegacy) }
+}
 
 async function legacySnatchSaveRequest(payload: LegacySnatchSaveRequest, options: Pick<RequestOptions, 'mode'> = {}): Promise<LegacySnatchSaveResult> {
   const result = await request<LegacySnatchSaveResult>('snatch/snatchSave', payload as unknown as Record<string, unknown>, {
@@ -79,7 +88,10 @@ async function legacySnatchSaveRequest(payload: LegacySnatchSaveRequest, options
 }
 
 /** 清颜色：旧 markSourceFlag(ids, 1, 1) 的 isClear=1 在现网 500。
- *  usedFlag===0 即无颜色（旧列表徽章条件）；先走能写成功的 setColor flag=0，失败再 updateSource。 */
+ *  usedFlag===0 即无颜色（旧列表徽章条件）；先走能写成功的 setColor flag=0，失败再 updateSource。
+ *
+ *  ⚠️ 2026-08-31 F01 起本平台**没有颜色 UI 入口**了，但这个函数和 setColor / colorFromLegacy
+ *  一律保留：旧平台还在读写同一个 usedFlag 字段，删掉这边只会让两边打架。 */
 async function clearSourceColor(sourceIds: string[]): Promise<Ack> {
   if (!sourceIds.length) return { ok: false, message: '请勾选要清除颜色标识的源' }
   try {
@@ -148,6 +160,24 @@ async function clearSourceTags(sourceIds: string[]): Promise<Ack> {
   return { ok: true, message: `已清除 ${sourceIds.length} 个源的标签` }
 }
 
+/**
+ * 启停源。真实路径 `GET /v1/source/changeEnable?ids=a,b&enable=0|1`（旧 `api/source.js:11,355-365`）。
+ *
+ * `enable` 的极性是**反的**：`0` 启用、`1` 禁用（旧 `SourceList.vue:25-32` 两个菜单项写死的），
+ * 与 `sourcePaged` 里 `enable=1` 表示"已停用"同一套口径。读着别扭但两边一致，不要"修正"。
+ *
+ * 它本来就是批量端点（ids 逗号分隔），单源只是批量的退化情况——调用方不需要自己循环。
+ */
+async function changeSourceEnableBatch(sourceIds: string[], disabled: boolean): Promise<Ack> {
+  if (!sourceIds.length) return { ok: false, message: '请勾选要启停的源' }
+  const result = await request<unknown>('source/changeSourceEnable', { sourceIds, disabled }, {
+    method: 'GET',
+    httpEndpoint: 'source/changeEnable',
+    httpParams: { ids: sourceIds.join(','), enable: disabled ? 1 : 0 },
+  })
+  return ackFromApiResult(result)
+}
+
 function ackFromApiResult(result: unknown): Ack {
   const record = result && typeof result === 'object' ? result as Record<string, unknown> : {}
   return {
@@ -198,9 +228,11 @@ function legacySnatchSavePayloadFromSource(site: Site, source: Source): LegacySn
 async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
   const configIds = [...new Set(steps.map((s) => s.configId).filter((id): id is string => !!id))]
   if (!configIds.length) return steps
-  const results = await Promise.allSettled(configIds.map((id) => configApi.configDetail(id)))
+  // 用原始记录而不是 Config 模型：配置 URL 在旧字段 `configUrl` 上（ConfigEdit 同款），
+  // 过一遍模型后再读 `url` 会在适配漏字段时把面板留空。
+  const results = await Promise.allSettled(configIds.map((id) => configApi.configDetailRaw(id)))
   type StepConfigDetail = {
-    topic?: string; configName?: string; isLoginConfig?: boolean; multiMode?: number
+    topic?: string; configName?: string; configUrl?: string; isLoginConfig?: boolean; multiMode?: number
     bizType?: string; dedupType?: string; codeRule?: string; contentRule?: string
     runPolicy?: string
     paramBindings?: Step['paramBindings']
@@ -208,19 +240,21 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
   const detailByConfigId = new Map<string, StepConfigDetail>()
   results.forEach((r, i) => {
     if (r.status !== 'fulfilled' || !r.value) return
+    const mapped = configFromLegacy(r.value)
     // multiMode 是旧 isMulti 的三态原值，只迁不展示（见 Step.multiMode 注释）。
     // params 是配置绑定的参数（旧「使用参数」表），configDetail 响应里就带着，不用另发请求。
-    const bindings = (r.value.params ?? []).map((p) => ({ paramId: p.paramId, value: p.valueShow || undefined }))
+    const bindings = (mapped.params ?? []).map((p) => ({ paramId: p.paramId, value: p.valueShow || undefined }))
     detailByConfigId.set(configIds[i], {
-      topic: r.value.topic || undefined,
-      configName: r.value.name || undefined,
-      bizType: r.value.templateCode || undefined,
-      dedupType: r.value.dedupType ?? undefined,
-      codeRule: r.value.codeRule || undefined,
-      contentRule: r.value.contentRule || undefined,
-      runPolicy: r.value.runPolicy || undefined,
-      isLoginConfig: r.value.isLogin,
-      multiMode: r.value.multiMode,
+      topic: mapped.topic || undefined,
+      configName: mapped.name || undefined,
+      configUrl: configUrlFromLegacy(r.value),
+      bizType: mapped.templateCode || undefined,
+      dedupType: mapped.dedupType ?? undefined,
+      codeRule: mapped.codeRule || undefined,
+      contentRule: mapped.contentRule || undefined,
+      runPolicy: mapped.runPolicy || undefined,
+      isLoginConfig: mapped.isLogin,
+      multiMode: mapped.multiMode,
       ...(bindings.length ? { paramBindings: bindings } : {}),
     })
   })
@@ -232,6 +266,7 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
       ...step,
       ...(detail.topic ? { topic: detail.topic } : {}),
       ...(detail.configName ? { configName: detail.configName } : {}),
+      ...(detail.configUrl !== undefined ? { configUrl: detail.configUrl } : {}),
       ...(detail.bizType ? { bizType: detail.bizType } : {}),
       ...(detail.dedupType !== undefined ? { dedupType: detail.dedupType } : {}),
       ...(detail.codeRule ? { codeRule: detail.codeRule } : {}),
@@ -276,6 +311,11 @@ export const sourceApi = {
         groupBy: p?.groupBy,
         sorted: p?.sorted ?? -1,
         tags: p?.tags ?? [],
+        // 0831 F04 备注检索。**后端支持**——生产源列表页（118.25.96.217:9999/source/source-list）
+        // 的筛选区就有「备注」。本地这份旧代码快照（2606-rule 分支）比线上旧，queryParam 里还没有，
+        // 别再照它下"后端不支持"的结论。字段名取旧列表列 `SourceList.vue:369` 的 prop。
+        // 旁边那个「责任人」（author）线上也有，但 0831 明确暂不做，别顺手加。
+        remark: p?.remark,
         flag: p?.flag,
         field: p?.field,
         type: p?.type,
@@ -323,8 +363,8 @@ export const sourceApi = {
   stepConfigDetails: (steps: Step[]) => attachStepConfigDetails(steps),
 
   // 写类 / 高危端点：首期 mock 仅回执，UI 统一二次确认占位（呼应权威方案读写边界）。
-  changeSourceEnable: (sourceId: string, disabled: boolean) =>
-    assetMockRequest<Ack>('source/changeSourceEnable', { sourceId, disabled }),
+  changeSourceEnable: (sourceId: string, disabled: boolean) => changeSourceEnableBatch([sourceId], disabled),
+  changeSourceEnableBatch,
   // 改为成功状态（0707 Review #1 修复：端点已登记但此前未封装，SourceTab 曾误用 changeSourceEnable）。
   // 注：endpoints.ts:54 只登记 path 无参数契约，按单源封装；批量场景由调用方循环（见 SourceTab.onOperate）。
   changeToSuccess: (sourceId: string) => assetMockRequest<Ack>('source/changeToSuccess', { sourceId }),
@@ -393,7 +433,22 @@ export const sourceApi = {
   },
   sourceLogs: (sourceId: string) => assetMockRequest<SourceLog[]>('source/logPaged', { sourceId }),
   sourceTasks: (sourceId: string) => assetMockRequest<TaskInst[]>('task/topTaskPaged', { sourceId }),
-  sourceTaskPaged: (q: SourceTaskQuery) => assetMockRequest<Paged<TaskInst>>('source/sourceTaskPaged', q),
+  /** 画布任务视图：与源列表/数据查看「任务实例」同一条 GET /v1/task/topTaskPaged。
+   *  逻辑名仍用 source/sourceTaskPaged，便于 vitest 关 live 时走 mock；真实路径按 httpEndpoint 判 live。 */
+  sourceTaskPaged: async (q: SourceTaskQuery): Promise<Paged<TaskInst>> => {
+    const result = await request<unknown>('source/sourceTaskPaged', q, {
+      method: 'GET',
+      httpEndpoint: 'task/topTaskPaged',
+      httpParams: {
+        page: q.page ?? 1,
+        limit: q.size ?? 20,
+        sourceId: q.sourceId,
+        configId: q.configId,
+        state: q.state,
+      },
+    })
+    return unwrapTaskInstPage(result)
+  },
   credentialRef: (refId: string) => assetMockRequest<CredentialRef | null>('source/credentialDetail', { refId }),
   // 批量导入（0707 Review #3 修复：deep/dir 此前被前端丢弃，现透传）。
   batchImport: (template: string, lines: string, opts?: { deep?: boolean; dir?: string }) =>
@@ -416,7 +471,57 @@ export const sourceApi = {
     })
     return ackFromApiResult(result)
   },
-  /** 设/清颜色标识。GET /v1/source/setColor 写入 usedFlag 1–8；清除写 flag=0（isClear=1 现网 500）。 */
+  /**
+   * 当前查询条件下真实存在的标签（旧 querySourceTags，`POST /v1/source/sourceTags`，
+   * `api/source.js:4,45-52`；旧平台用在 SourceSearch.vue:199-207 渲染 tag 云）。
+   *
+   * 入参就是 sourcePaged 那套查询条件，所以候选跟着筛选走。
+   * 这条比本机的「最近使用」重要：程序打进去的标签（会上「标签一般是程序来打的」）
+   * 永远不会出现在本机记录里，不接这个接口就等于看不见它们。
+   */
+  sourceTags: async (p?: PageQuery): Promise<string[]> => {
+    const result = await request<unknown>('source/sourceTags', p, {
+      method: 'POST',
+      httpEndpoint: 'source/sourceTags',
+      httpParams: {
+        ids: Array.isArray(p?.sourceIds) ? p.sourceIds.join(',') : (p?.sourceIds ?? p?.ids),
+        siteIds: p?.siteIds,
+        siteId: p?.siteId,
+        name: p?.name,
+        state: p?.state === 'all' ? undefined : p?.state,
+        enable: p?.enable,
+        remark: p?.remark,
+      },
+    })
+    return parseIssueTags(Array.isArray(result) ? result : [])
+  },
+  /**
+   * 只改标签与备注，不碰源的其他字段（0831 F02/F04）。
+   *
+   * 与旧平台「备注信息」弹窗（`SourceList.vue:1519-1561`）同一条接口、同样的 `dataIndex` 命名
+   * （tags / remark）。旧弹窗还带一个 `author`（责任人），0831 明确暂不做，所以这里不发它——
+   * 不发比发空串安全：万一 updateSource 真是全字段覆盖，发空串会把责任人抹掉。
+   *
+   * 刻意不复用 `sourceUpdate`：那个走 `sourceToLegacyParams(source)`，会把整个 Source 铺开成
+   * 几十个参数发出去，行内改一个标签不该有那么大的作用面。
+   *
+   * ⚠️ 门禁 G5 未实测：`updateSource` 到底是部分更新还是全字段覆盖没验过。旧平台十几年就这么调，
+   * 大概率是部分更新；真要是覆盖，少发字段反而更安全。实测方式见开发计划 G5。
+   */
+  updateSourceMark: async (sourceId: string, patch: { tags: string[]; remark: string }): Promise<Ack> => {
+    const result = await request<unknown>('source/updateSource', { sourceId, ...patch }, {
+      method: 'POST',
+      httpEndpoint: 'source/updateSource',
+      httpParams: {
+        sourceId,
+        tags: issueTagsForWrite(patch.tags),
+        remark: patch.remark,
+      },
+    })
+    return ackFromApiResult(result)
+  },
+  /** 设/清颜色标识。GET /v1/source/setColor 写入 usedFlag 1–8；清除写 flag=0（isClear=1 现网 500）。
+   *  0831 F01 起 UI 无入口，保留供旧平台数据兼容与将来的"颜色转标签"迁移，勿删。 */
   setColor: async (sourceIds: string[], flag: number | undefined, clear = false): Promise<Ack> => {
     if (clear) return clearSourceColor(sourceIds)
     const result = await request<unknown>('source/setColor', { sourceIds, flag, clear }, {
@@ -881,6 +986,14 @@ export const ruleApi = {
       if (signal?.aborted || (e instanceof DOMException && e.name === 'AbortError') || (e as Error)?.name === 'AbortError') {
         throw e instanceof ApiError ? e : new ApiError(endpoint, new Error('已取消生成'))
       }
+      // 默认 hybrid：真实 stream 挂了（生产 dashscope 4xx/超时）时回退 mock 骨架，避免「生成脚本」死路。
+      if (isMockMode()) {
+        const result = await request<unknown>(endpoint, { ruleCfg }, { mode: 'mock' })
+        if (result && typeof result === 'object' && 'script' in (result as object)) {
+          return result as RuleOrchestrationGenerateResult
+        }
+        return ruleOrchestrationGenerateFromLegacy(result)
+      }
       throw e instanceof ApiError ? e : new ApiError(endpoint, e)
     }
   },
@@ -1163,9 +1276,7 @@ export const dataApi = {
         parentId: q.parentId, fileId: q.fileId, taskSpecId: q.taskSpecId, state: q.state,
       },
     })
-    const list = Array.isArray(result) ? result : ((result as Paged<unknown> | null)?.list ?? [])
-    const total = Array.isArray(result) ? list.length : ((result as Paged<unknown> | null)?.total ?? list.length)
-    return { total, list: list.map(taskInstFromLegacy) }
+    return unwrapTaskInstPage(result)
   },
   // 重发任务实例：ids 逗号连接（危险，endpoints.ts 已登记 danger:true）
   resendTask: (taskIds: string[]) =>
@@ -1352,7 +1463,9 @@ export const configApi = {
    */
   configDetailRaw: async (configId: string) => {
     const result = await request<unknown>('config/configDetail', { configId }, { method: 'GET' })
-    return result && typeof result === 'object' && !('ok' in result) ? (result as Record<string, unknown>) : null
+    if (!result || typeof result !== 'object' || 'ok' in result) return null
+    const record = legacyConfigRecord(result)
+    return Object.keys(record).length ? record : null
   },
   /**
    * 配置名是否已被占用（精确同名）。
@@ -1390,29 +1503,43 @@ export const configApi = {
     }
     return { ok: true as const, configId: added[0].configId, name: added[0].name }
   },
+  /** 复制配置：生成一条 `原名_copy`。画布「复制节点」走 copyConfigAndLocate，不要直接调这个。 */
   copyAll: (configId: string) => request<Ack>('config/copyAll', { configId }, { method: 'GET', httpParams: { id: configId } }),
+  /** 删除配置（高危、永久）。旧配置列表批量删除；0828 口径：闲置配置由后端清理，前端不提供入口。 */
   deleteConfig: (configIds: string[] | string) => {
     const ids = Array.isArray(configIds) ? configIds : [configIds]
     return request<Ack>('config/delete', { configIds: ids }, { method: 'GET', httpParams: { ids } })
   },
+  /**
+   * 发配置（旧配置列表 / 源列表「发配置」）。把选定配置下发成采集任务，采集端才会按这份配置跑。
+   * 不是保存配置（那是 updateConfig），也不是立刻抓网页（那是 source/sendSnatchWithParam），
+   * 更不是 0828 D31 的规则发布 `rule/publish`。
+   */
   sendConfigTask: (configIds: string[] | string) => {
     const ids = Array.isArray(configIds) ? configIds : [configIds]
     return request<Ack>('config/sendConfigTask', { configIds: ids }, { method: 'GET', httpParams: { ids } })
   },
+  /** 批量改配置的主题（MQ 队列名）。旧配置列表「更改主题」；新平台队列改完走整份 updateConfig。 */
   updateTopic: (configIds: string[] | string, topic: string) => {
     const ids = Array.isArray(configIds) ? configIds : [configIds]
     return request<Ack>('config/updateTopic', { configIds: ids, topic }, { method: 'GET', httpParams: { ids, topic } })
   },
+  /** 改运行策略（重试/超时/并行数等，落在 runPolicy.snatch）。画布侧目前只读，没有调用方。 */
   updateConfigPolicy: (configId: string, policy: Record<string, unknown>) =>
     request<Ack>('config/updateConfigPolicy', { configId, policy }, {
       method: 'POST',
       paramsIn: 'query',
       httpParams: { configId, runPolicy: { snatch: policy } },
     }),
+  /** 清配置缓存。前端已下线：列表靠刷新重查，不再调用。旧配置列表与参数模块共用此端点。 */
   clearConfig: (configIds: string[] | string) => {
     const ids = Array.isArray(configIds) ? configIds : [configIds]
     return request<Ack>('config/clear', { configIds: ids }, { method: 'GET', httpParams: { ids } })
   },
+  /**
+   * 启停配置。旧列表 enable 口径：`0` = 启用、`1` = 停用（isDelete）。
+   * 0828：前端不提供入口。
+   */
   changeEnable: (configIds: string[], enabled: boolean) =>
     request<Ack>('config/changeEnable', { configIds, enabled }, {
       method: 'GET',
@@ -1498,6 +1625,7 @@ export const entryApi = {
     request<Ack>('config/rebuildIndex', { tableId }, { method: 'GET', httpParams: { entryTypeId: tableId } }),
   deleteEntries: (tableIds: string[]) =>
     request<Ack>('config/deleteEntryType', { tableIds }, { method: 'GET', httpParams: { ids: tableIds } }),
+  /** 清实体表缓存。前端已下线：列表靠刷新重查，不再调用。 */
   clearCache: (tableIds: string[]) =>
     request<Ack>('config/entry-type-clear', { tableIds }, { method: 'POST', paramsIn: 'query', httpParams: { ids: tableIds } }),
   copyEntry: (tableId: string, tableName: string) =>
@@ -1576,6 +1704,7 @@ export const paramApi = {
     request<Ack>('config/param-copy', { paramId }, { method: 'POST', paramsIn: 'query' }),
   deleteParams: (paramIds: string[]) =>
     request<Ack>('config/deleteParam', { paramIds }, { method: 'GET', httpParams: { ids: paramIds } }),
+  /** 清参数缓存（与配置清缓存同一端点）。前端已下线：列表靠刷新重查，不再调用。 */
   clearParams: (paramIds: string[]) =>
     request<Ack>('config/clear', { paramIds }, { method: 'GET', httpParams: { ids: paramIds } }),
 }
@@ -1647,30 +1776,29 @@ export const flowCenterApi = {
 
 // 子步骤（流程画布连线 = item/next）。未实现专属 mock，由 client fallback 回执。
 export const itemApi = {
-  /** 新建步骤。2026-08-26 核对旧平台前端源码（source-step.js）确认真实调用是
-   *  `axios({method:'post', params: parameter})`——POST 但走 query string，不是 JSON body，
-   *  所以这里显式 `paramsIn: 'query'`。未标 live，走 mock，不受此次改动影响；接口本身是真实
-   *  存在的（2026-08-26 已用测试源 430016398 实测 stepModify 姊妹接口验证过字段契约）。 */
+  /** 新建步骤。旧平台真实调用是 `axios({method:'post', params})`——POST 但走 query string，
+   *  不是 JSON body，所以这里显式 `paramsIn: 'query'`。响应 data 为 null，不回新 itemConfig，
+   *  调用方要再查 nextConfigPaged 用差集定位。新建默认停用，随后 enable(id, '0')。 */
   saveItemConfig: (step: Step) => request<Ack>('item/next/saveItemConfig', stepToSaveItemConfigPayload(step), {
     method: 'POST',
     httpEndpoint: 'item/next/saveItemConfig',
     paramsIn: 'query',
   }),
   /** 修改步骤。旧平台真实调用是 `axios({method:'post', data})`，JSON body。字段契约
-   *  2026-08-26 用测试源 430016398（itemConfig 40600）原样提交实测确认，提交前后
-   *  nextConfigPaged 回读比对完全一致，未改变任何真实数据。未标 live，走 mock。 */
+   *  2026-08-26 用测试源 430016398（itemConfig 40600）原样提交实测确认。
+   *  必须带齐快照字段（url / itemId / lastStep / mainConfig），只改 name/cond 也会整包提交。 */
   stepModify: (step: Step) => request<Ack>('item/next/stepModify', stepToStepModifyPayload(step), {
     method: 'POST',
     httpEndpoint: 'item/next/stepModify',
   }),
-  /** 启停步骤。旧平台真实调用是 GET，`params: {id, state}`（source-step.js changeStepState）。
-   *  state 的取值约定未核实过真实样本，调用方需按旧平台约定自行传入，这里不做语义假设。 */
+  /** 启停步骤。GET `id` + `state`。state：`'0'` 启用 / `'1'` 停用，与 isDelete 同口径。
+   *  后端操作日志文案可能写反，以 isDelete / enabled 为准。 */
   enable: (stepId: string, state: string) => request<Ack>('item/next/enable', { id: stepId, state }, {
     method: 'GET',
     httpEndpoint: 'item/next/enable',
     httpParams: { id: stepId, state },
   }),
-  /** 删除步骤。旧平台真实调用是 GET，`params: {id}`（source-step.js deleteItemConfig）。 */
+  /** 删除步骤。GET `id` = itemConfig。虚拟起点 0 和本地草稿 id 不要调。 */
   deleteStep: (stepId: string) => request<Ack>('item/next/delete', { id: stepId }, {
     method: 'GET',
     httpEndpoint: 'item/next/delete',

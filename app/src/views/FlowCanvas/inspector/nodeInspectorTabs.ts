@@ -1,4 +1,5 @@
 import { decisionOrParallelKind, isRuleNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
 
 export type NodeInspectorTab = 'config' | 'table' | 'params' | 'orchestration' | 'task' | 'ai'
 /** 第三个元素是禁用原因（悬浮提示文案）；不存在 = 可用 */
@@ -13,8 +14,8 @@ export type NodeInspectorTabItem = [NodeInspectorTab, string, string?]
  * 但采集节点的 URL 参数绑定（urlParamRefs/urlParamValues，管 $PARAM$_id 占位符取值）真的需要这个入口，
  * 手动拼 URL 没法替代——恢复入口，规则节点仍然没有（规则节点从没有过这个 Tab，不在本次改判范围）。
  *
- * S2-2 门禁：规则节点在「选完表字段并保存业务规则」（拿到 ruleId）之前，「编排配置」Tab 禁用——
- * 与会议「选表选字段→保存→才能进编排配置」的统一时序对齐（见开发方案 §2.2）。
+ * S2-2 门禁：规则节点在「表配置」绑完输入表与入参/出参字段之前，「编排配置」Tab 禁用。
+ * 换数字 ruleId 改到第一次生成脚本时 orchestrationSaveMeta，不再要求先点中间保存按钮。
  * 非规则节点暂不设门禁：抓取配置内容本身还没建（S3），提前拦反而挡住占位内容。
  */
 export function nodeInspectorTabs(cfg?: NodeConfig, options: { includeAi?: boolean } = {}): NodeInspectorTabItem[] {
@@ -28,9 +29,9 @@ export function nodeInspectorTabs(cfg?: NodeConfig, options: { includeAi?: boole
     ['task', '任务配置'],
     ...(options.includeAi === false ? [] : [['ai', 'AI 对话'] as NodeInspectorTabItem]),
   ]
-  if (isRule && !cfg?.ruleCfg?.ruleId) {
+  if (isRule && validateTableBinding(cfg?.ruleCfg ?? { inputTableId: '', inputFields: [], outputFields: [] })) {
     const orchestration = tabs.find((t) => t[0] === 'orchestration')!
-    orchestration[2] = '请先在「表配置」完成输入/输出表与字段选择并保存业务规则'
+    orchestration[2] = '请先在「表配置」完成输入/输出表与字段选择'
   }
   return tabs
 }

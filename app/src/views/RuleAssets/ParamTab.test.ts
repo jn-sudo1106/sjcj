@@ -31,7 +31,7 @@ describe('ParamTab 角色权限', () => {
     await flushPromises()
   }
 
-  it('admin 角色可见新建/编辑/复制/批量删除；"清除缓存"入口已下线（0721 会议 §六-2）', async () => {
+  it('admin 角色可见新建/编辑/复制/批量删除；无「清除缓存」入口（列表靠刷新重查）', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     mountTab()
@@ -59,21 +59,24 @@ describe('ParamTab 角色权限', () => {
     expect(wrapper.text()).toContain('详情')
   })
 
-  it('批量删除成功后静默补一次 config/clear（0721 会议 §六-2：UI 去入口，写操作后自动清缓存）', async () => {
+  it('批量删除成功后刷新列表，不再调 config/clear', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const pagedSpy = vi.spyOn(paramApi, 'paramPaged')
     const deleteSpy = vi.spyOn(paramApi, 'deleteParams').mockResolvedValue({ ok: true })
     const clearSpy = vi.spyOn(paramApi, 'clearParams').mockResolvedValue({ ok: true })
     mountTab()
     await waitForLoad()
+    const loadsBeforeDelete = pagedSpy.mock.calls.length
 
     await wrapper.get('th input[type="checkbox"]').setValue(true)
     await wrapper.get('.rc-btn.danger').trigger('click')
     await flushPromises()
 
     expect(deleteSpy).toHaveBeenCalled()
-    expect(clearSpy).toHaveBeenCalledWith(deleteSpy.mock.calls[0][0])
+    expect(clearSpy).not.toHaveBeenCalled()
+    expect(pagedSpy.mock.calls.length).toBeGreaterThan(loadsBeforeDelete)
   })
 
   it('admin 角色可见「绑定参数源」列，且 mock 派生出的 paramSourceRefs 正常渲染', async () => {
@@ -93,7 +96,7 @@ describe('ParamTab 角色权限', () => {
     expect(wrapper.text()).toContain('测试参数源')
   })
 
-  it('新建参数（onParamSaved）：保存后静默补一次 clearParams（0721 会议 §六-2）', async () => {
+  it('新建参数（onParamSaved）：保存后刷新列表，不再清缓存', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
@@ -101,35 +104,40 @@ describe('ParamTab 角色权限', () => {
       ok: true,
       param: { paramId: 'p-new-1', name: '新参数', kind: 'list', values: [] } as Param,
     })
+    const pagedSpy = vi.spyOn(paramApi, 'paramPaged')
     const clearSpy = vi.spyOn(paramApi, 'clearParams').mockResolvedValue({ ok: true })
     mountTab()
     await waitForLoad()
+    const loadsBeforeSave = pagedSpy.mock.calls.length
 
     const drawer = wrapper.findComponent({ name: 'ParamEditorDrawer' })
     drawer.vm.$emit('saved', { paramId: 'p-new-1', name: '新参数', kind: 'list' } as Param)
     await flushPromises()
 
-    expect(clearSpy).toHaveBeenCalledWith(['p-new-1'])
+    expect(clearSpy).not.toHaveBeenCalled()
+    expect(pagedSpy.mock.calls.length).toBeGreaterThan(loadsBeforeSave)
   })
 
-  it('复制参数（onCopy）：复制成功后静默补一次 clearParams', async () => {
+  it('复制参数（onCopy）：复制成功后刷新列表，不再清缓存', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
-    // paramCopy 真实返回 Ack（只有 ok/message/demo），不带 param 字段；测试断言只看 clearSpy，mock 形态不依赖返回体
     vi.spyOn(paramApi, 'paramCopy').mockResolvedValue({ ok: true, message: '复制成功' })
+    const pagedSpy = vi.spyOn(paramApi, 'paramPaged')
     const clearSpy = vi.spyOn(paramApi, 'clearParams').mockResolvedValue({ ok: true })
     mountTab()
     await waitForLoad()
+    const loadsBeforeCopy = pagedSpy.mock.calls.length
 
     const copyBtn = wrapper.findAll('button').find((b) => b.text() === '复制')!
     await copyBtn.trigger('click')
     await flushPromises()
 
-    expect(clearSpy).toHaveBeenCalled()
+    expect(clearSpy).not.toHaveBeenCalled()
+    expect(pagedSpy.mock.calls.length).toBeGreaterThan(loadsBeforeCopy)
   })
 
-  it('list 类型新增参数值（onAddValues）：新增后清该参数缓存', async () => {
+  it('list 类型新增参数值（onAddValues）：新增后刷新列表，不再清缓存', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: '北京\n上海' } as never)
@@ -154,10 +162,10 @@ describe('ParamTab 角色权限', () => {
     await addBtn.trigger('click')
     await flushPromises()
 
-    expect(clearSpy).toHaveBeenCalledWith(['p-list-1'])
+    expect(clearSpy).not.toHaveBeenCalled()
   })
 
-  it('list 类型删除参数值（onDeleteValue）：删除后清该参数缓存', async () => {
+  it('list 类型删除参数值（onDeleteValue）：删除后刷新列表，不再清缓存', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
@@ -182,6 +190,6 @@ describe('ParamTab 角色权限', () => {
     await delBtn.trigger('click')
     await flushPromises()
 
-    expect(clearSpy).toHaveBeenCalledWith(['p-list-1'])
+    expect(clearSpy).not.toHaveBeenCalled()
   })
 })

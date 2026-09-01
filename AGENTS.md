@@ -92,3 +92,14 @@ Review 报告 / 优化修改文档按命名建议放 `设计稿/设计方案/`�
 
 - 设计方案、开发计划等文档文件名统一将日期前缀放在最前面，便于按创建/会议日期检索。
 - 命名示例：`0810-数据查看与源视图_开发计划_2026-08-11.md`。
+
+### Git 远程仓库（2026-08-31）
+
+外网主仓迁到 CNB，内网 GitLab 保留为备用：
+
+- **origin fetch**：`https://cnb.cool/vanvdev/bee-soft/front-ce`（组 `vanvdev/bee-soft`，采集平台；私有仓）
+- **origin push（双写）**：同一条 `git push` 会推到 CNB 和内网 GitLab `http://47.120.11.60:50105/root/ce`
+- **ce（内网单独操作）**：`http://47.120.11.60:50105/root/ce`，需要只拉/只推内网时用
+- CNB Git 认证：用户名固定 `cnb`，密码为访问令牌；push 必须勾选「Git 客户端凭据」（`repo-code:rw`）。只读令牌不能推送。
+- **禁止**把令牌、账号密码写进 remote URL 或提交进仓库；认证走本机 credential helper / 环境变量。
+- `git pull` 只从 CNB 拉；`git push` 两边都推。某一边失败不会自动回滚另一边，需要再补推。

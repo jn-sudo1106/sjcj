@@ -162,6 +162,30 @@ describe('loadFromSource', () => {
     expect(withPersisted.def.main).toEqual(['start', 'end'])
   })
 
+  it('记住可落库步骤快照，忽略虚拟起点 0 和本地草稿 id；切源时替换', () => {
+    const s = useSourceStore()
+    s.loadFromSource(makeSource(), [
+      { stepId: '0', sourceId: 's1', name: '起点', enabled: true },
+      { stepId: '40600', sourceId: '-1', name: '1400917-详情', url: '$VAL$', itemId: '52000351', enabled: false },
+      { stepId: 'web-detail-3', sourceId: 's1', name: '草稿', enabled: true },
+    ] as never)
+    expect(Object.keys(s.stepSnapshots)).toEqual(['40600'])
+    expect(s.stepSnapshots['40600'].url).toBe('$VAL$')
+    expect(s.stepSnapshots['40600'].itemId).toBe('52000351')
+
+    s.loadFromSource(makeSource({ sourceId: 's2' }), [
+      { stepId: '40597', sourceId: '-1', name: '列表', enabled: true },
+    ] as never)
+    expect(Object.keys(s.stepSnapshots)).toEqual(['40597'])
+  })
+
+  it('resetAllContext / clearSourceCtx 清掉步骤快照', () => {
+    const s = useSourceStore()
+    s.loadFromSource(makeSource(), [{ stepId: '40600', sourceId: '-1', name: '详情', enabled: true }] as never)
+    s.resetAllContext()
+    expect(s.stepSnapshots).toEqual({})
+  })
+
   it('调用会先重置旧上下文（resetAllContext），不会残留上一次的 siteCtx', () => {
     const s = useSourceStore()
     s.setSiteDisplayCtx(makeSite())

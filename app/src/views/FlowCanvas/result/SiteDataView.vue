@@ -17,18 +17,20 @@
 // 跟"选表"一样的纯下拉（不复用流程画布的节点链路图/ProcessNodeRail，那是流程编排视角，这里
 // 只是顺手看一眼具体源的数据）。
 //
-// 这里是纯查看功能（2026-08-14 第四次修正）：不提供节点手动执行（发起抓取/发后续任务）、
-// 不展示输入/输出表切换和进入条件——那一整套属于流程编排/执行语境，跟"网站数据视图快速看
-// 一眼"的定位不符，真要执行任务走 ResultView.vue（具体源的流程结果视图）。列表的"所属源"列
-// 在具体源下每行都是同一个源，容易让人以为是跨源归并，改叫"所属节点"并去掉操作列，
-// 避免跟具体源自己的数据视图（ResultView.vue）混淆。
+// 这里默认是查看；0831 X6：具体源 + 当前表就是发后续那张表时，可以勾行发任务。
+// 全部源+选表仍只读（无法确定流程节点）。发起抓取 / 输入输出切换仍在 ResultView。
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { dataApi, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail } from '@/api'
+import { ElMessage } from 'element-plus'
+import { dataApi, parseNextStepReceipt, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail, type RowQuery } from '@/api'
 import {
   buildHorizontalLayout, buildSourceSeed, effectiveInputTable, nodeOutputTable, isDecision, isParallel,
-  type NodeConfig, type BranchSeed, type FlowBranchGroup,
+  hasDirectSuccessor, type NodeConfig, type BranchSeed, type FlowBranchGroup,
 } from '@/views/FlowCanvas/canvas/flowModel'
+import { nextStepColumns } from '@/utils/flow/nextStepFields'
+import { confirmDanger } from '@/utils/confirmDanger'
+import DataCondBuilder from '@/components/data/DataCondBuilder.vue'
+import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import DataGrid from './DataGrid.vue'
 import FilePreview from './components/FilePreview.vue'
 import { extFromName } from '@/utils/ossFile'
@@ -38,6 +40,9 @@ import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 import SiteTableSelect from './components/SiteTableSelect.vue'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import { initMergeState, mergeLoadMore, type MergeLoadMoreResult, type MergeSourceState } from './siteDataMerge'
+import RowDetailFields from './RowDetailFields.vue'
+import { fieldsFromShowItems, fieldsFromTableMeta } from './rowDetailFields'
+import { readFieldPreset, readShowEmpty, visibleDetailProps, writeFieldPreset, writeShowEmpty, type RowFieldPreset } from './rowDetailPrefs'
 
 const props = defineProps<{ siteId: string }>()
 const router = useRouter()
@@ -169,15 +174,32 @@ const isStructuralNode = computed(() => !!selectedCfg.value && (isDecision(selec
 const hasAnyTable = computed(() => !isStructuralNode.value && (!!outputTableId.value || !!inputTableId.value))
 // 纯查看，没有输入/输出切换：优先看输出表（节点产出的结果），没有输出表的节点看输入表。
 const nodeTableId = computed(() => outputTableId.value || inputTableId.value)
+const sameTable = computed(() => !!inputTableId.value && !!outputTableId.value && inputTableId.value === outputTableId.value)
+const hasSuccessor = computed(() => {
+  if (!selectedNodeId.value || !flowData.value) return false
+  return hasDirectSuccessor(flowData.value.main, flowData.value.configs, selectedNodeId.value, flowData.value.branchGroups)
+})
+// 具体源才开发任务：全部源+选表无法确定流程节点（0831 X6 / Q4）。
+// 输入≠输出时这张表是产出数据，跟 ResultView 一样不在这里勾发，请到源数据视图切输入。
+const canPickRows = computed(() => !!selectedSourceId.value && hasSuccessor.value && !isStructuralNode.value
+  && (sameTable.value || !inputTableId.value || !outputTableId.value))
+const selectedRowIds = ref<string[]>([])
+const launchDisabledReason = computed(() => {
+  if (!selectedSourceId.value) return '选表无法确定流程节点，请先选择具体源'
+  if (!canPickRows.value) return hasSuccessor.value ? '输入与输出不是同一张表，请到源数据视图勾选输入行' : '当前节点没有后继，无法发后续'
+  if (!selectedRowIds.value.length) return '请先勾选要发送的数据'
+  return ''
+})
 // 两种状态查的是同一套 rows/meta/分页，只是"当前要查哪张表"的来源不同：全部源来自选表，
 // 具体源来自选中节点的输出/输入表。
 const effectiveTableId = computed(() => (selectedSourceId.value ? nodeTableId.value : tableId.value))
 
-// 流程加载完成后选中末端节点（跟 ResultView 一致的默认值）；不做页签快照恢复——
-// 这里是网站数据视图里"顺手看一眼"的轻量入口，不是持久化的编辑页签。
+// 流程加载完成后选中**首个**节点（跟 ResultView 一致的默认值，0831 F09 反转了此前的
+// 「默认末端」）；不做页签快照恢复——这里是网站数据视图里"顺手看一眼"的轻量入口，
+// 不是持久化的编辑页签。
 watch(allNodes, (nodes) => {
   if (!nodes.some((n) => n.id === selectedNodeId.value)) {
-    selectedNodeId.value = nodes.at(-1)?.id || ''
+    selectedNodeId.value = nodes[0]?.id || ''
   }
 })
 
@@ -185,6 +207,25 @@ function onSelectNode(id: string) {
   if (!id || id === selectedNodeId.value) return
   selectedNodeId.value = id
 }
+
+// 默认列收敛（0831 F10），口径与 ResultView 完全一致；这里的流程数据是本组件局部拉的
+// flowData，不走全局 useFlowStore()。全部源（选表）态下没有节点上下文，算不出预设，
+// 自然退回全部列。
+const presetCols = computed(() => (flowData.value
+  ? nextStepColumns({
+    columns: meta.value?.fields ?? [],
+    main: flowData.value.main,
+    configs: flowData.value.configs,
+    branchGroups: flowData.value.branchGroups,
+    nodeId: selectedNodeId.value,
+  })
+  : []))
+const condFields = computed(() => (meta.value?.fields ?? []).map((field) => ({
+  prop: field.prop,
+  columnName: field.columnName,
+  desc: field.desc,
+  type: field.type,
+})))
 
 // ---------- 全部源 / 具体源共用的查询 + 归并分页 ----------
 function inferTableMeta(tableId2: string, dataRows: DataRow[]): DataTableMeta {
@@ -259,6 +300,8 @@ async function loadMore() {
 async function resetAndLoad() {
   const id = ++requestId
   rows.value = []
+  selectedRowIds.value = []
+  closeDetail()
   meta.value = null
   metaError.value = ''
   dataError.value = ''
@@ -360,18 +403,88 @@ function failedSourceText({ sourceId, error }: MergeLoadMoreResult<DataRow>['fai
   return `${name}（${sourceId}）：${reason}`
 }
 
-const detail = reactive<{ visible: boolean; row: DataRow | null }>({ visible: false, row: null })
+function showNextStepReceipt(res: { message?: string }) {
+  const receipt = parseNextStepReceipt(res?.message || '')
+  if (receipt.entries.length === 0) ElMessage.success(res?.message || '操作已提交（演示）')
+  else if (receipt.rejectCount > 0 && receipt.okCount === 0) ElMessage.warning(`已提交 ${receipt.submitted} 条，全部被目标节点的进入条件拒绝，未进入下一步`)
+  else if (receipt.rejectCount > 0) ElMessage.warning(`已提交 ${receipt.submitted} 条：${receipt.okCount} 条已进入下一步，${receipt.rejectCount} 条被进入条件拒绝`)
+  else ElMessage.success(`已提交 ${receipt.submitted} 条，${receipt.okCount} 条已进入下一步`)
+}
+
+async function onSendNextStep() {
+  if (!canPickRows.value || !effectiveTableId.value || !selectedRowIds.value.length) return
+  const groups = new Map<string, string[]>()
+  for (const id of selectedRowIds.value) {
+    const row = rows.value.find((item) => item.dataId === id)
+    const sourceId = row?.sourceId || selectedSourceId.value
+    if (!sourceId) continue
+    const list = groups.get(sourceId) ?? []
+    list.push(id)
+    groups.set(sourceId, list)
+  }
+  const sourceCount = groups.size
+  const rowCount = [...groups.values()].reduce((sum, ids) => sum + ids.length, 0)
+  const nodeName = selectedCfg.value?.title || selectedNodeId.value
+  const tableId = effectiveTableId.value
+  await confirmDanger(
+    '发后续任务',
+    `将对 ${sourceCount} 个源 · ${rowCount} 条数据发起「${nodeName}」的后续处理，是否继续？`,
+    async () => {
+      let last: { message?: string } = {}
+      for (const [sourceId, ids] of groups) {
+        last = await dataApi.nextStep(sourceId, tableId, ids)
+      }
+      selectedRowIds.value = []
+      return last
+    },
+    showNextStepReceipt,
+  )
+}
+
+function buildSummaryQuery(): RowQuery {
+  return {
+    tableId: effectiveTableId.value,
+    siteId: props.siteId || undefined,
+    sourceId: selectedSourceId.value || undefined,
+    dataId: filters.dataId || undefined,
+    parentId: filters.parentId || undefined,
+    state: filters.state || undefined,
+    sql: filters.sql || undefined,
+  }
+}
+const summaryOpen = ref(false)
+
+const detail = reactive<{ visible: boolean; index: number }>({ visible: false, index: -1 })
+const detailRow = computed(() => (detail.visible && detail.index >= 0 ? rows.value[detail.index] ?? null : null))
+const showEmpty = ref(readShowEmpty())
+watch(showEmpty, writeShowEmpty)
+const fieldPreset = ref<RowFieldPreset>(readFieldPreset(effectiveTableId.value))
+watch(effectiveTableId, (tableId) => { fieldPreset.value = readFieldPreset(tableId) })
+watch(fieldPreset, (preset) => writeFieldPreset(effectiveTableId.value, preset))
+watch(presetCols, (cols) => {
+  if (fieldPreset.value === 'next' && !cols.length) fieldPreset.value = 'filled'
+})
 const taskInst = reactive<{ visible: boolean; sourceId: string; parentId: string | null }>({ visible: false, sourceId: '', parentId: null })
-function onRowClick(row: DataRow) {
-  detail.row = row
-  detail.visible = true
+function closeDetail() {
+  detail.visible = false
+  detail.index = -1
   closeParentDetail()
+}
+function openDetailAt(index: number) {
+  closeParentDetail()
+  if (index < 0 || index >= rows.value.length) return
+  detail.index = index
+  detail.visible = true
+}
+function stepDetail(delta: number) {
+  openDetailAt(detail.index + delta)
+}
+function onRowClick(row: DataRow) {
+  openDetailAt(rows.value.findIndex((item) => item.dataId === row.dataId))
 }
 function onRowAction(row: DataRow, cmd: string) {
   if (cmd === 'detail') {
-    detail.row = row
-    detail.visible = true
-    closeParentDetail()
+    openDetailAt(rows.value.findIndex((item) => item.dataId === row.dataId))
   } else if (cmd === 'tasks') {
     taskInst.sourceId = row.sourceId
     taskInst.parentId = row.dataId
@@ -385,13 +498,13 @@ function onRowAction(row: DataRow, cmd: string) {
 const parentDetail = ref<EntryDetail | null>(null)
 const parentLoading = ref(false)
 const parentError = ref('')
-const canDrillParent = computed(() => !!detail.row?.categoryId && !!detail.row?.parentId && detail.row.parentId !== '0')
+const canDrillParent = computed(() => !!detailRow.value?.categoryId && !!detailRow.value?.parentId && detailRow.value.parentId !== '0')
 async function openParentDetail() {
-  if (!detail.row?.categoryId || !detail.row?.parentId) return
+  if (!detailRow.value?.categoryId || !detailRow.value?.parentId) return
   parentLoading.value = true
   parentError.value = ''
   try {
-    const res = await dataApi.rowDetail(detail.row.categoryId, detail.row.parentId)
+    const res = await dataApi.rowDetail(detailRow.value.categoryId, detailRow.value.parentId)
     parentDetail.value = res
     if (!res) parentError.value = '未找到上游数据'
   } catch (error) {
@@ -404,22 +517,12 @@ function closeParentDetail() {
   parentDetail.value = null
   parentError.value = ''
 }
-function parentItemText(v: unknown): string {
-  if (v === undefined || v === null || v === '') return '—'
-  if (typeof v === 'object') return JSON.stringify(v)
-  return String(v)
-}
 // row.values 的键是旧平台物理列名（K1/K2...），不是 f.prop 这个逻辑字段名（如 "title"）——
 // 两者只在 f.columnName 上能对上，直接拿 f.prop 去 row.values 里取永远是 undefined。真实
 // bug，2026-08-14 生产环境实测发现：详情弹层每个字段都显示"—"，不是接口没数据，是取错了 key。
-const detailFields = computed(() => {
-  if (!detail.row || !meta.value) return [] as { label: string; prop: string; value: string }[]
-  return meta.value.fields.map((f) => ({
-    label: `${f.desc}（${f.prop}）`,
-    prop: f.prop,
-    value: String(detail.row?.values?.[f.columnName ?? f.prop] ?? '—'),
-  }))
-})
+const detailFields = computed(() => fieldsFromTableMeta(meta.value?.fields, detailRow.value?.values))
+const parentFields = computed(() => fieldsFromShowItems(parentDetail.value?.showItems))
+const detailVisibleProps = computed(() => visibleDetailProps(fieldPreset.value, detailFields.value, presetCols.value))
 
 // 单元格里的文件预览（0819 N2-7）：路径类字段点开就地看内容，不用先跳到文件视图再找。
 // 用居中 dialog 而不是右侧抽屉——这是"看一眼就关"的操作型短流程，抽屉留给实体详情
@@ -446,7 +549,7 @@ function onCellFile(path: string) {
           <option value="E">E 出错</option>
           <option value="L">L 处理中</option>
         </select>
-        <input v-model="filters.sql" class="sdv2-input flex" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%'）" />
+        <DataCondBuilder v-model="filters.sql" :fields="condFields" class="sdv2-input flex" />
         <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
         <button class="rc-btn" type="button" @click="clearFilters">清空</button>
       </template>
@@ -469,7 +572,7 @@ function onCellFile(path: string) {
           :title="railOpen ? '收起流程节点轨道' : '展开流程节点轨道'"
           @click="railOpen = !railOpen"
         >{{ railOpen ? '收起流程' : '展开流程' }} <span class="arrow">▾</span></button>
-        <span class="sdv2-readonly">只读查看</span>
+        <span v-if="!canPickRows" class="sdv2-readonly">只读查看</span>
         <button
           type="button"
           class="sdv2-goto"
@@ -506,20 +609,24 @@ function onCellFile(path: string) {
         {{ failedSources.length }} 个源本次查询失败，结果可能不完整：{{ failedSources.map(failedSourceText).join('；') }}
       </div>
 
-      <!-- 表头内容走 DataGrid 的 #head 插槽，跟「列 ▾」共用同一条横条——参考 ResultView.vue
+      <!-- 表头内容走 DataGrid 的 #head 插槽，跟「列」共用同一条横条——参考 ResultView.vue
            的具体源数据视图（2026-08-15 第十二次纠偏）；这里此前是独立的 .sdv2-tablehead
-           单占一行，跟 DataGrid 自己的「列 ▾」行分开，同一类信息在两个数据视图里长得不一样。 -->
+           单占一行，跟 DataGrid 自己的「列」行分开，同一类信息在两个数据视图里长得不一样。 -->
       <DataGrid
         class="sdv2-grid"
         :meta="meta"
         :rows="rows"
         :loading="loading"
-        :selected-id="detail.row?.dataId"
+        :selected-id="detailRow?.dataId"
         :source-names="gridSourceNames"
         :source-col-label="selectedSourceId ? '所属节点' : undefined"
+        :preset-cols="presetCols"
+        :selectable="canPickRows"
+        :selected-ids="selectedRowIds"
         :auto-load-more="!allExhausted && !loadingMore && !autoLoadFailed"
         @reach-end="loadMore"
         :hide-actions="!!selectedSourceId"
+        @update:selected-ids="selectedRowIds = $event"
         @file-click="onCellFile"
         @row-click="onRowClick"
         @row-action="onRowAction"
@@ -527,8 +634,28 @@ function onCellFile(path: string) {
         <template #head>
           <span class="sdv2-tablename">{{ meta?.tableName || effectiveTableId }}</span>
           <span class="sdv2-count">已加载 {{ rows.length }} 条</span>
+          <span v-if="canPickRows" class="muted">已选 {{ selectedRowIds.length }} 条</span>
           <button
-            class="rc-btn tiny sdv2-fs-btn"
+            v-if="canPickRows"
+            class="rc-btn primary"
+            type="button"
+            data-testid="source-node-exec-btn"
+            :disabled="!!launchDisabledReason"
+            :title="launchDisabledReason"
+            @click="onSendNextStep"
+          >发后续任务</button>
+          <span v-else-if="!selectedSourceId" class="muted" :title="launchDisabledReason">选表无法发任务，请先选择具体源</span>
+        </template>
+        <template #head-right>
+          <button
+            class="rc-btn tiny"
+            type="button"
+            data-testid="site-data-summary-btn"
+            title="按当前筛选条件统计"
+            @click="summaryOpen = true"
+          >统计</button>
+          <button
+            class="rc-btn tiny"
             type="button"
             data-testid="site-data-fullscreen-toggle"
             :title="fullscreen ? '退出全屏（Esc）' : '全屏查看数据'"
@@ -552,13 +679,13 @@ function onCellFile(path: string) {
       </div>
     </template>
 
-    <el-drawer v-model="detail.visible" :with-header="false" size="480px">
-      <div v-if="detail.row" class="sdv2-detail">
+    <el-drawer v-model="detail.visible" class="sdv2-detail-drawer" :with-header="false" size="560px">
+      <div v-if="detailRow" class="sdv2-detail">
         <div class="sdv2-d-head">
-          <div>
-            <div class="sdv2-d-title">{{ detail.row.title }}</div>
+          <div class="sdv2-d-head-main">
+            <div class="sdv2-d-title">{{ detailRow.title }}</div>
             <div class="sdv2-d-sub">
-              数据 ID {{ detail.row.dataId }} · 源 ID {{ detail.row.sourceId }}<template v-if="!selectedSourceId && sourceNames[detail.row.sourceId]"> {{ sourceNames[detail.row.sourceId] }}</template>
+              数据 ID {{ detailRow.dataId }} · 源 ID {{ detailRow.sourceId }}<template v-if="!selectedSourceId && sourceNames[detailRow.sourceId]"> {{ sourceNames[detailRow.sourceId] }}</template>
             </div>
             <button
               v-if="canDrillParent"
@@ -567,29 +694,53 @@ function onCellFile(path: string) {
               data-testid="site-data-parent-drill"
               :disabled="parentLoading"
               @click="openParentDetail"
-            >父 ID {{ detail.row.parentId }} <span aria-hidden="true">↗</span></button>
+            >父 ID {{ detailRow.parentId }} <span aria-hidden="true">↗</span></button>
+            <div class="sdv2-d-tools">
+              <button class="rc-btn tiny" type="button" data-testid="row-detail-prev" :disabled="detail.index <= 0" title="上一条" @click="stepDetail(-1)">‹</button>
+              <span class="sdv2-d-pos" data-testid="row-detail-pos">{{ detail.index + 1 }}/{{ rows.length }}</span>
+              <button
+                class="rc-btn tiny"
+                type="button"
+                data-testid="row-detail-next"
+                :disabled="detail.index >= rows.length - 1"
+                :title="detail.index >= rows.length - 1 ? '本页最后一条，翻页后继续' : '下一条'"
+                @click="stepDetail(1)"
+              >›</button>
+              <label class="sdv2-d-empty">
+                <input v-model="showEmpty" type="checkbox" data-testid="row-detail-empty-toggle" />
+                显示空字段
+              </label>
+              <select
+                :value="fieldPreset"
+                class="sdv2-d-preset"
+                data-testid="row-detail-preset"
+                @change="fieldPreset = ($event.target as HTMLSelectElement).value as RowFieldPreset"
+              >
+                <option value="all">全部字段</option>
+                <option value="filled">仅非空</option>
+                <option v-if="presetCols.length" value="next">下一步字段</option>
+              </select>
+            </div>
           </div>
-          <button class="rc-btn ghost" type="button" @click="detail.visible = false">关闭</button>
+          <button class="rc-btn ghost sdv2-d-close" type="button" @click="closeDetail">关闭</button>
         </div>
-        <div v-if="parentError" class="sdv2-notice error">{{ parentError }}</div>
-        <div v-if="parentDetail" class="sdv2-parent-panel" data-testid="site-data-parent-panel">
-          <div class="sdv2-parent-panel-head">
-            <span>上游数据 · {{ parentDetail.row.dataId }}</span>
-            <button class="rc-btn ghost" type="button" @click="closeParentDetail">收起</button>
+        <div class="sdv2-d-body">
+          <div v-if="parentError" class="sdv2-notice error">{{ parentError }}</div>
+          <div v-if="parentDetail" class="sdv2-parent-panel" data-testid="site-data-parent-panel">
+            <div class="sdv2-parent-panel-head">
+              <span>上游数据 · {{ parentDetail.row.dataId }}</span>
+              <button class="rc-btn ghost" type="button" @click="closeParentDetail">收起</button>
+            </div>
+            <RowDetailFields compact :fields="parentFields" />
           </div>
-          <dl class="rc-kv">
-            <template v-for="item in parentDetail.showItems" :key="item.columnName">
-              <dt>{{ item.itemName || item.columnName }}</dt>
-              <dd>{{ parentItemText(item.value) }}</dd>
-            </template>
-          </dl>
+          <RowDetailFields
+            :key="detailRow.dataId"
+            :fields="detailFields"
+            :show-empty="showEmpty"
+            :visible-props="detailVisibleProps"
+            @file-click="onCellFile"
+          />
         </div>
-        <dl class="rc-kv">
-          <template v-for="f in detailFields" :key="f.label">
-            <dt>{{ f.label }}</dt>
-            <dd>{{ f.value }}</dd>
-          </template>
-        </dl>
       </div>
     </el-drawer>
     <TaskInstDialog
@@ -598,6 +749,7 @@ function onCellFile(path: string) {
       :parent-id="taskInst.parentId"
       :can-write="false"
     />
+    <SummaryDrawer v-model="summaryOpen" :table-meta="meta" :build-query="buildSummaryQuery" :hit-count="rows.length" />
   </main>
 
     <el-dialog v-model="filePreview.visible" :title="filePreview.name || '文件预览'" width="820px" top="6vh" append-to-body>
@@ -626,24 +778,29 @@ function onCellFile(path: string) {
 .sdv2-notice.warn { border-bottom-color: #fde68a; background: #fffbeb; color: #92400e; }
 .sdv2-tablename { font-family: var(--rc-mono, monospace); font-size: 12px; color: var(--rc-text-2); }
 .sdv2-count { font-size: 12px; color: var(--rc-faint); }
-.sdv2-fs-btn { margin-left: auto; }
+.sdv2-toolbar :deep(.dcb) { flex: 1; min-width: 200px; }
 .rc-btn.tiny { height: 24px; padding: 0 10px; font-size: 11.5px; }
 .sdv2-grid { flex: 1; min-height: 0; }
 .sdv2-foot { display: flex; justify-content: center; padding: 10px 12px; border-top: 1px solid var(--rc-border-soft); background: #fff; }
 .sdv2-foot .rc-btn { height: 28px; padding: 0 16px; font-size: 12px; }
 .muted { color: var(--rc-faint); font-size: 12px; }
-.sdv2-detail { padding: 18px; }
-.sdv2-d-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-.sdv2-d-title { font-size: 14px; font-weight: 700; color: var(--rc-text); }
-.sdv2-d-sub { font-size: 11px; color: var(--rc-faint); margin-top: 3px; }
+.sdv2-detail-drawer :deep(.el-drawer__body) { display: flex; flex-direction: column; height: 100%; padding: 0; overflow: hidden; }
+.sdv2-detail { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.sdv2-d-head { flex: none; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 16px 18px 12px; border-bottom: 1px solid var(--rc-border-soft); }
+.sdv2-d-head-main { min-width: 0; flex: 1; }
+.sdv2-d-close { flex: none; height: 28px; padding: 0 12px; font-size: 12px; white-space: nowrap; }
+.sdv2-d-title { font-size: 14px; font-weight: 700; color: var(--rc-text); line-height: 1.4; word-break: break-word; }
+.sdv2-d-sub { font-size: 11px; color: var(--rc-faint); margin-top: 4px; }
+.sdv2-d-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 18px 16px; }
 .sdv2-parent-link { margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; padding: 0; font-size: 11px; color: var(--rc-primary); cursor: pointer; }
 .sdv2-parent-link:hover { text-decoration: underline; }
 .sdv2-parent-link:disabled { opacity: .6; cursor: default; text-decoration: none; }
-.sdv2-parent-panel { margin-bottom: 14px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #f8fafc; padding: 10px 12px; }
-.sdv2-parent-panel-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 700; color: var(--rc-text-2); margin-bottom: 8px; }
-.sdv2-parent-panel .rc-kv { margin: 0; }
-.sdv2-notice { padding: 7px 12px; border-bottom: 1px solid #fde68a; background: #fffbeb; color: #92400e; font-size: 12px; }
-.sdv2-notice.error { border-bottom-color: #fecaca; background: #fef2f2; color: #b91c1c; }
+.sdv2-parent-panel { margin: 6px 0 12px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #f8fafc; padding: 10px 12px; }
+.sdv2-parent-panel-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 700; color: var(--rc-text-2); margin-bottom: 4px; }
+.sdv2-d-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.sdv2-d-pos { color: var(--rc-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.sdv2-d-empty { display: inline-flex; align-items: center; gap: 4px; color: var(--rc-text-2); font-size: 11px; cursor: pointer; }
+.sdv2-d-preset { height: 24px; padding: 0 6px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text-2); font-size: 11px; }
 .rc-btn.ghost { background: transparent; border-color: var(--rc-border); color: var(--rc-text-2); }
 
 /* 节点轨道：与 ResultView.vue 的 .rv-railbox 一套取值，两个数据视图的流程图观感必须一致

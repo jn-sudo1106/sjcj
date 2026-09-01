@@ -116,6 +116,36 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     buttons.forEach((b) => expect(b.attributes('disabled')).toBeUndefined())
   })
 
+  it('规则节点没有数字 ruleId（含旧步骤占位 -1）时，生成脚本先 saveMeta 再生成', async () => {
+    mockAssets()
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue(INPUT_TABLE)
+    const { flow, wrapper } = mountOnRuleNode()
+    flow.patchRuleConfig('rule-1', {
+      mode: 'new', ruleId: '-1',
+      describe: 'content 中包含地产二字时，tags 返回房地产',
+      inputTableId: '2102154', inputFields: ['sku_id'], outputFields: ['sku_name'],
+    })
+    await flushPromises()
+    const metaSpy = vi.spyOn(ruleApi, 'orchestrationSaveMeta').mockResolvedValue({ ruleId: '184', message: 'ok' })
+    vi.spyOn(ruleApi, 'orchestrationGenerate').mockResolvedValue({
+      script: 'def main(sku_id):\n    return {"sku_name": ""}',
+      scriptPath: '/code01/184.py',
+    })
+
+    const genBtn = wrapper.findAll('button').find((b) => b.text().includes('生成脚本'))!
+    await genBtn.trigger('click')
+    await flushPromises()
+
+    expect(metaSpy).toHaveBeenCalledWith(expect.objectContaining({
+      name: flow.configs['rule-1'].title,
+      inputFields: ['sku_id'],
+      outputFields: ['sku_name'],
+    }))
+    expect(ruleApi.orchestrationGenerate).toHaveBeenCalledWith(expect.objectContaining({ ruleId: '184' }), expect.anything())
+    expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBe('184')
+    expect(flow.configs['rule-1'].ruleCfg?.script).toContain('def main')
+  })
+
   it('全屏查看打开脚本弹窗，展示脚本正文', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     flow.patchRuleConfig('rule-1', { script: 'def main(sku_id):\n    return {}', scriptPath: '/x/y.py' })
@@ -350,21 +380,27 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     expect(wrapper.text()).toContain('配置路径')
   })
 
-  it('未填描述点生成配置：不调用接口；填写后生成写回 execCfg 而不是 ruleCfg', async () => {
+  it('未填描述点生成配置：不调用接口；填写后先落 compose 再生成，写回 execCfg 而不是 ruleCfg', async () => {
     const { flow, wrapper } = mountOnCollectorNode()
     await flushPromises()
     const genSpy = vi.spyOn(ruleApi, 'orchestrationGenerate')
+    const metaSpy = vi.spyOn(ruleApi, 'orchestrationSaveMeta')
 
     const genBtn = wrapper.findAll('button').find((b) => b.text().includes('生成配置'))!
     await genBtn.trigger('click')
     await flushPromises()
     expect(genSpy).not.toHaveBeenCalled()
+    expect(metaSpy).not.toHaveBeenCalled()
 
+    metaSpy.mockResolvedValue({ ruleId: '184', message: '业务规则已保存' })
     genSpy.mockResolvedValue({ script: '<Config>\n  <Action id="1"/>\n</Config>', scriptPath: '/rules/generated/x.xml' })
     await wrapper.find('textarea[placeholder*="描述抓取需求"]').setValue('打开列表页提取表格')
     await genBtn.trigger('click')
     await flushPromises()
 
+    expect(metaSpy).toHaveBeenCalledWith(expect.objectContaining({ name: flow.configs['web-1'].title, inputTable: '' }))
+    expect(genSpy).toHaveBeenCalledWith(expect.objectContaining({ ruleId: '184' }), expect.anything())
+    expect(flow.configs['web-1'].execCfg?.ruleId).toBe('184')
     expect(flow.configs['web-1'].execCfg?.script).toContain('<Config>')
     expect(flow.configs['web-1'].execCfg?.scriptPath).toBe('/rules/generated/x.xml')
     expect(flow.configs['web-1'].ruleCfg).toBeUndefined()
@@ -395,7 +431,7 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     flow.configs['web-1'] = cloneConfig(NODE_CONFIGS['web-list'])
     flow.select('web-1')
     flow.setActiveTab('orchestration')
-    // 本节点必须已经有自己的编排记录（「表配置」保存过一次）才允许切换套用
+    // 本节点必须已经有自己的编排记录才允许切换套用
     flow.patchExecConfig('web-1', { mode: 'ref', ruleId: '184', scriptPath: '/x/184.xml' })
     mockAssets()
     vi.spyOn(ruleApi, 'orchestrationPaged').mockResolvedValue({

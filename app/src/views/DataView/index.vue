@@ -11,7 +11,7 @@ import {
 import { useAuthStore } from '../../stores/auth'
 import DataQueryPanel, { type DataQueryColumn, type DataQueryFilter } from '@/components/DataQueryPanel.vue'
 import RowEditDialog from './RowEditDialog.vue'
-import SummaryDrawer from './SummaryDrawer.vue'
+import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import TaskInstDialog from './TaskInstDialog.vue'
 import StepDrawer from './StepDrawer.vue'
 import TableDetailDialog from './TableDetailDialog.vue'

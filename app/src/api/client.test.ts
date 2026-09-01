@@ -305,6 +305,26 @@ describe('生产写守卫', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  it('连生产时，source/nextStep 与 source/nextStep2 在白名单内（数据视图发后续，与发抓取同性质）', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '已提交', data: null }))
+    const { request } = await import('./client')
+
+    await request('data/nextStep', { sourceId: '1', tableId: '900', entryIds: ['1'] }, {
+      method: 'GET',
+      httpEndpoint: 'source/nextStep',
+      httpParams: { sourceId: '1', entryTypeId: '900', entryIds: '1' },
+    })
+    await request('data/nextStepBatch', { tableId: '900', sourceId: '1', size: 1, start: 0 }, {
+      method: 'POST',
+      httpEndpoint: 'source/nextStep2',
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/v1/source/nextStep')
+    expect(String(fetchMock.mock.calls[1][0])).toContain('/api/v1/source/nextStep2')
+  })
+
   it('连生产时，source/tagSource 与 source/setColor 在白名单内（问题标记入库，旧平台可见）', async () => {
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
@@ -324,6 +344,19 @@ describe('生产写守卫', () => {
     await request('config/copyAll', { configId: '1' }, { method: 'GET', httpParams: { id: '1' } })
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('连生产时，item/next 步骤写接口在白名单内（节点名 / 进入条件 / 增删节点）', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
+    const { request } = await import('./client')
+
+    await request('item/next/stepModify', { itemConfig: 40600 }, { method: 'POST', httpEndpoint: 'item/next/stepModify' })
+    await request('item/next/saveItemConfig', { name: 'x' }, { method: 'POST', httpEndpoint: 'item/next/saveItemConfig', paramsIn: 'query' })
+    await request('item/next/enable', { id: '40600', state: '0' }, { method: 'GET', httpEndpoint: 'item/next/enable' })
+    await request('item/next/delete', { id: '40600' }, { method: 'GET', httpEndpoint: 'item/next/delete' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(4)
   })
 
   it('连生产时，新建网站/源/配置及编排元数据在白名单内，正常放行', async () => {

@@ -44,16 +44,12 @@ function openDetail(c: Config) {
   drawer.cfg = c
   drawer.visible = true
 }
-// P3-1: confirmDanger 抽到 ConfirmButton 组件，4 个危险操作直接 inline 组件
-// onSend/onCopy/onClear/onDelete 4 个函数（保留 wrapper 处理参数），模板里用 ConfirmButton
+// 清缓存已下线：列表靠刷新重查，不再调 config/clear。
 function onSend(c: Config) {
   return configApi.sendConfigTask(c.configId)
 }
 function onCopy(c: Config) {
   return configApi.copyAll(c.configId)
-}
-function onClear(c: Config) {
-  return configApi.clearConfig(c.configId)
 }
 function onDelete(c: Config) {
   return configApi.deleteConfig(c.configId)
@@ -106,7 +102,6 @@ function onDelete(c: Config) {
               <el-button link type="primary" size="small" @click="openDetail(c)">详情</el-button>
               <ConfirmButton link type="primary" size="small" text="发配置" :title="`发配置：${c.name}`" :body="`将向「${c.name}」下发配置任务，是否继续？`" :action="() => onSend(c)" />
               <ConfirmButton link type="primary" size="small" text="复制" :title="`复制配置：${c.name}`" :body="`复制「${c.name}」？`" :action="() => onCopy(c)" />
-              <ConfirmButton link type="danger" size="small" text="清缓存" :title="`清配置缓存（高危）：${c.name}`" :body="`清除「${c.name}」配置缓存？`" :action="() => onClear(c)" />
             </td>
           </tr>
         </tbody>

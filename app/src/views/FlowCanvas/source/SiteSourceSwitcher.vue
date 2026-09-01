@@ -8,10 +8,16 @@ import { hasLoadParams } from './paramNormalize'
 import type { ParamGroupRef } from '@/utils/flow/urlParams'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
 import SiteEditorDialog from '@/views/CollectAssets/components/SiteEditorDialog.vue'
+import EditSourceDialog from './EditSourceDialog.vue'
 import { withoutComposition } from '@/utils/enterKey'
+import { useFlowStore } from '@/stores/flow'
+import { useWorkspaceStore } from '@/stores/workspace'
 
 const props = defineProps<{ siteId: string; activeKey: string }>()
 const emit = defineEmits<{ pick: [target: Source]; added: [Source]; compare: [rightId: string]; pickSite: [] }>()
+
+const flow = useFlowStore()
+const ws = useWorkspaceStore()
 
 const site = ref<Site | null>(null)
 const children = ref<Source[]>([])
@@ -33,13 +39,37 @@ const filtered = computed(() => {
 })
 const activeSource = computed(() => children.value.find((s) => s.sourceId === props.activeKey) || null)
 
-async function copyId(id: string) {
+async function copyText(text: string, label: string) {
+  if (!text) return
   try {
-    await navigator.clipboard.writeText(id)
-    ElMessage.success('已复制源 ID 到剪贴板')
+    await navigator.clipboard.writeText(text)
+    ElMessage.success(`已复制${label}到剪贴板`)
   } catch {
-    ElMessage.info(`源 ID: ${id}`)
+    ElMessage.info(`${label}: ${text}`)
   }
+}
+function copyId(id: string) {
+  void copyText(id, '源 ID')
+}
+function sourceDisplayUrl(s: Source) {
+  return s.kind === 'param' ? (s.urlTemplate || s.baseUrl || s.url || '') : (s.url || '')
+}
+function copySourceUrl(s: Source) {
+  void copyText(sourceDisplayUrl(s), '源 URL')
+}
+
+const editSourceOpen = ref(false)
+function applyEditedSource(updated: Source) {
+  const local = children.value.find((c) => c.sourceId === updated.sourceId)
+  if (local) {
+    local.name = updated.name
+    local.url = updated.url
+  }
+  if (flow.sourceCtx?.sourceId === updated.sourceId) {
+    if (updated.url !== flow.sourceCtx.url) flow.patchSource({ name: updated.name, url: updated.url })
+    flow.patchSourceCtx({ name: updated.name, url: updated.url })
+  }
+  ws.renameTab(updated.sourceId, updated.name)
 }
 
 function isErr(s: Source): boolean {
@@ -747,7 +777,16 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
       <!-- 选中源详情分割栏：点击源后完整展示源名称和源 ID -->
       <div v-if="activeSource" class="ssw-section-toggle ssw-detail-header" @click="detailExpanded = !detailExpanded">
         <span class="ssw-section-title">源详情</span>
-        <span class="ssw-section-icon">{{ detailExpanded ? '▼' : '▶' }}</span>
+        <span class="ssw-detail-head-right">
+          <button
+            class="ssw-copy-btn"
+            type="button"
+            data-testid="edit-source"
+            title="编辑源名称和源 URL"
+            @click.stop="editSourceOpen = true"
+          >编辑</button>
+          <span class="ssw-section-icon">{{ detailExpanded ? '▼' : '▶' }}</span>
+        </span>
       </div>
       <div v-if="activeSource && detailExpanded" class="ssw-active-detail" data-testid="active-source-detail">
         <div class="ssw-detail-field">
@@ -756,14 +795,24 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
         </div>
         <div class="ssw-detail-field">
           <span class="ssw-detail-label">源 ID</span>
-          <div class="ssw-detail-val id">
+          <div class="ssw-detail-val with-copy">
             <code data-testid="active-source-full-id">{{ activeSource.sourceId }}</code>
             <button class="ssw-copy-btn" type="button" title="复制源 ID" @click="copyId(activeSource.sourceId)">复制</button>
           </div>
         </div>
-        <div v-if="activeSource.url" class="ssw-detail-field">
-          <span class="ssw-detail-label">URL</span>
-          <div class="ssw-detail-val url" :title="activeSource.url">{{ activeSource.url }}</div>
+        <div class="ssw-detail-field">
+          <span class="ssw-detail-label">源 URL</span>
+          <div class="ssw-detail-val with-copy">
+            <span class="ssw-detail-url" data-testid="active-source-url" :title="sourceDisplayUrl(activeSource) || undefined">{{ sourceDisplayUrl(activeSource) || '—' }}</span>
+            <button
+              class="ssw-copy-btn"
+              type="button"
+              data-testid="copy-source-url"
+              title="复制源 URL"
+              :disabled="!sourceDisplayUrl(activeSource)"
+              @click="copySourceUrl(activeSource)"
+            >复制</button>
+          </div>
         </div>
       </div>
       <div class="ssw-foot">
@@ -782,6 +831,8 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
     </template>
     <button v-else class="ssw-expand" type="button" title="展开源侧栏" @click="collapsed = false">»</button>
   </aside>
+
+  <EditSourceDialog v-model:open="editSourceOpen" :source="activeSource" @saved="applyEditedSource" />
 
   <!-- 全局对比选择器（B4）：默认列本站其他源，输入即全局搜索（含跨站） -->
   <div v-if="cmp.show" class="ssw-cmp-pop" @click.stop>
@@ -1366,13 +1417,18 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
   word-break: break-all;
   line-height: 1.35;
 }
-.ssw-detail-val.id {
+.ssw-detail-head-right {
   display: flex;
   align-items: center;
+  gap: 6px;
+}
+.ssw-detail-val.with-copy {
+  display: flex;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 4px;
 }
-.ssw-detail-val.id code {
+.ssw-detail-val.with-copy code {
   font-family: monospace;
   font-size: 10px;
   color: #2563eb;
@@ -1393,15 +1449,22 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
   font-size: 10px;
   cursor: pointer;
 }
-.ssw-copy-btn:hover {
+.ssw-copy-btn:hover:not(:disabled) {
   background: #eff6ff;
   border-color: #93c5fd;
   color: var(--rc-primary-ink);
 }
-.ssw-detail-val.url {
+.ssw-copy-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.ssw-detail-url {
   color: var(--rc-faint);
   font-size: 10px;
   word-break: break-all;
+  line-height: 1.35;
+  flex: 1;
+  min-width: 0;
 }
 
 /* 批量导入弹窗（新增源 / 关联已有源共用一个入口，靠 tab 分） */

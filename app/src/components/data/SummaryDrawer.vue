@@ -7,6 +7,8 @@ const props = defineProps<{
   modelValue: boolean
   tableMeta: DataTableMeta | null
   buildQuery: () => RowQuery
+  /** 当前筛选命中行数，给用户预期；打开抽屉不发请求（大表会崩） */
+  hitCount?: number
 }>()
 const emit = defineEmits<{ 'update:modelValue': [boolean] }>()
 
@@ -70,7 +72,8 @@ function onExportCsv() {
 
 <template>
   <el-drawer v-model="visible" title="统计" size="900px">
-    <el-select v-model="summaryFields" multiple filterable placeholder="选择统计列" style="width: 100%" data-testid="summary-fields">
+    <p v-if="hitCount != null" class="sd-hit" data-testid="summary-hit-count">当前条件命中 {{ hitCount }} 行</p>
+    <el-select v-model="summaryFields" multiple filterable placeholder="选择统计列，选完再点统计" style="width: 100%" data-testid="summary-fields">
       <el-option v-for="f in fields" :key="f.columnName" :label="`${f.desc}(${f.columnName})`" :value="f.columnName!" />
     </el-select>
     <div class="sd-toolbar">
@@ -91,6 +94,7 @@ function onExportCsv() {
 </template>
 
 <style scoped>
+.sd-hit { margin: 0 0 10px; color: var(--rc-muted); font-size: 12px; }
 .sd-toolbar {
   display: flex;
   gap: 8px;

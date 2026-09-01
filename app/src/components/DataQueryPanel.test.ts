@@ -26,7 +26,10 @@ function mountPanel(props: Partial<InstanceType<typeof DataQueryPanel>['$props']
   })
 }
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  localStorage.clear()
+})
 
 describe('DataQueryPanel · 独立挂载', () => {
   it('挂载不报错，调用 expose 的 search() 触发查询', async () => {
@@ -163,5 +166,36 @@ describe('DataQueryPanel · 独立挂载', () => {
     const wrapper = mountPanel()
     expect(() => wrapper.vm.search()).not.toThrow()
     await flushPromises()
+  })
+
+  it('列弹窗确定后隐藏动态列', async () => {
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [ROW] })
+    const wrapper = mountPanel({
+      columns: [
+        { prop: 'K1', label: '标题-K1', sortable: true },
+        { prop: 'K17', label: '正文html路径-K17', sortable: true },
+      ],
+    })
+    wrapper.vm.search()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="column-picker-btn"]').text()).toBe('列 2/2')
+    expect(wrapper.text()).toContain('正文html路径-K17')
+
+    await wrapper.get('[data-testid="column-picker-btn"]').trigger('click')
+    await flushPromises()
+    const htmlRow = [...document.querySelectorAll('.cpk-row')].find((el) => el.textContent?.includes('正文html路径-K17'))
+    expect(htmlRow).toBeTruthy()
+    const box = htmlRow!.querySelector('input[type="checkbox"]') as HTMLInputElement
+    box.checked = false
+    box.dispatchEvent(new Event('change'))
+    await flushPromises()
+    const ok = [...document.querySelectorAll('[data-testid="column-picker-ok"]')].at(-1) as HTMLButtonElement
+    ok.click()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('正文html路径-K17')
+    expect(wrapper.text()).toContain('标题-K1')
+    expect(wrapper.get('[data-testid="column-picker-btn"]').text()).toBe('列 1/2')
+    wrapper.unmount()
   })
 })

@@ -343,11 +343,9 @@ describe('配置绑定条与节点配置脏状态条（0824-00 §5.4/§6.1）', 
   })
 })
 
-describe('配置名称必填与 AI 对话 Tab（0824-06 §4）', () => {
-  it('配置名称只在保存那一刻校验：面板不打星号、按钮不禁用，点了才提示', async () => {
+describe('配置名称跟随节点名，不在节点配置 Tab 填写', () => {
+  it('面板不展示配置名称输入；名称只出现在当前配置条', async () => {
     mockAssets()
-    const update = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: 'ok' })
-    const copy = vi.spyOn(configApi, 'copyConfigAndLocate')
     setActivePinia(createPinia())
     const flow = useFlowStore()
     flow.configs['web-1'] = cloneConfig(NODE_CONFIGS['web-list'])
@@ -355,22 +353,41 @@ describe('配置名称必填与 AI 对话 Tab（0824-06 §4）', () => {
 
     const w = mount(NodeInspector)
     await flushPromises()
-    // 面板上没有必填星号，也没有常驻红字提示
-    expect(w.text()).not.toContain('配置名称必填')
-    expect(w.find('.rc-inspector-body').text()).not.toContain('配置名称 *')
-
-    // 名称为空时按钮可点，但点了不发请求
-    const saveBtn = () => w.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存')!
-    expect(saveBtn().attributes('disabled')).toBeUndefined()
-    await saveBtn().trigger('click')
-    await flushPromises()
-    expect(update).not.toHaveBeenCalled()
-    expect(copy).not.toHaveBeenCalled()
+    expect(w.find('.rc-inspector-body').text()).not.toContain('配置名称')
+    expect(w.find('.rc-inspector-body [aria-label="配置名称"]').exists()).toBe(false)
+    // 源 URL 不在节点配置 Tab；配置自己的 URL（旧平台「配置编辑」）在
+    expect(w.find('.rc-inspector-body').text()).not.toContain('源 URL')
+    expect(w.find('.rc-inspector-body [aria-label="URL"]').exists()).toBe(true)
 
     flow.setConfigName('web-1', '公告列表配置')
     await flushPromises()
-    // 配置绑定条同步显示配置名称
     expect(w.find('.rc-config-bar').text()).toContain('公告列表配置')
+    w.unmount()
+  })
+
+  it('保存时配置名为空则用节点名补上，不再提示填写配置名称', async () => {
+    mockAssets()
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({ clearRule: '{"keep":1}' })
+    const update = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = { ...cloneConfig(NODE_CONFIGS['web-list']), configId: '1400774' }
+    flow.select('web-1')
+
+    const w = mount(NodeInspector)
+    await flushPromises()
+    flow.setDedupMode('web-1', 'table')
+    await flushPromises()
+
+    const saveBtn = () => w.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存')!
+    await saveBtn().trigger('click')
+    await flushPromises()
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(update.mock.calls[0][0]).toMatchObject({
+      configId: '1400774',
+      configName: '公告列表抓取',
+    })
+    expect(flow.configs['web-1'].configName).toBe('公告列表抓取')
     w.unmount()
   })
 
@@ -453,14 +470,16 @@ describe('保存已有配置：直接落库 + 使用范围灰字（0828 §6.2）
   })
 })
 
-// 旧平台在「结构化配置」旁挂了个一键填模板（旧前端 column.config.js:599 的 more/callback）：
-// 图标是问号，点下去其实往表单写 {"globals":["列ID"]}。我们做成显式按钮，不照抄那个坑。
-describe('结构化配置「配全局ID」一键填模板', () => {
-  async function openTableTab() {
+// 结构化配置空着时直接给出旧「配全局ID」模板，不再单独放按钮。
+describe('结构化配置默认全局ID模板', () => {
+  async function openTableTab(structuredConfig?: string) {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
-    flow.configs['web-1'] = { ...cloneConfig(NODE_CONFIGS['web-list']), configName: '公告列表配置' }
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.configName = '公告列表配置'
+    if (structuredConfig !== undefined) cfg.collectCfg!.structuredConfig = structuredConfig
+    flow.configs['web-1'] = cfg
     flow.select('web-1')
     const w = mount(NodeInspector)
     await flushPromises()
@@ -469,22 +488,20 @@ describe('结构化配置「配全局ID」一键填模板', () => {
     return { flow, w }
   }
 
-  it('空值时点一下填入全局ID模板', async () => {
+  it('空值时输入框直接是全局ID模板，没有「配全局ID」按钮', async () => {
     const { flow, w } = await openTableTab()
-    const btn = w.findAll('button').find((b) => b.text() === '配全局ID')
-    expect(btn).toBeTruthy()
-    await btn!.trigger('click')
-    expect(flow.configs['web-1'].collectCfg?.structuredConfig).toBe('{"globals":["列ID"]}')
+    const ta = w.findAll('textarea').find((t) => t.attributes('placeholder')?.includes('globals'))!
+    expect(ta.element.value).toBe('{"globals":["列ID"]}')
+    expect(w.findAll('button').some((b) => b.text() === '配全局ID')).toBe(false)
+    expect(flow.configs['web-1'].collectCfg?.structuredConfig).toBeUndefined()
+    expect(flow.configDirty).toBe(false)
     w.unmount()
   })
 
-  it('已有内容时不覆盖', async () => {
-    const { flow, w } = await openTableTab()
-    flow.setStructuredConfig('web-1', '{"mine":1}')
-    await flushPromises()
-    const btn = w.findAll('button').find((b) => b.text() === '配全局ID')!
-    await btn.trigger('click')
-    expect(flow.configs['web-1'].collectCfg?.structuredConfig).toBe('{"mine":1}')
+  it('已有内容时显示原值，不换成模板', async () => {
+    const { w } = await openTableTab('{"mine":1}')
+    const ta = w.findAll('textarea').find((t) => t.attributes('placeholder')?.includes('globals'))!
+    expect(ta.element.value).toBe('{"mine":1}')
     w.unmount()
   })
 })

@@ -8,6 +8,7 @@
 import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
+import { useStepWrite } from '@/views/FlowCanvas/canvas/useStepWrite'
 import { conditionGroupLabel, decisionOrParallelKind, type ConditionGroup, type FlowBranch, type FlowBranchGroup } from '@/views/FlowCanvas/canvas/flowModel'
 import ConditionRow from './ConditionRow.vue'
 import { type EntryType } from '@/api'
@@ -15,6 +16,7 @@ import { useEntryTableFieldsCache } from '@/composables/useEntryTableFieldsCache
 
 const props = defineProps<{ ownerId: string }>()
 const flow = useFlowStore()
+const { deleteCanvasNode } = useStepWrite()
 
 // entryPaged（表清单接口）不带字段级 schema，字段要按 tableId 单独查 entryDetail（见
 // useEntryTableFieldsCache 头注）；分支条件只需要 owner 节点 effectiveInputTable 这一张表。
@@ -74,7 +76,7 @@ function onMoveChain(b: FlowBranch, idx: number, dir: 'up' | 'down') {
 }
 /** 从分支内删除节点（同时从 configs 移除，0707 Phase6 统一策略） */
 function onRemoveChainNode(nodeId: string) {
-  flow.remove(nodeId)
+  void deleteCanvasNode(nodeId)
 }
 
 /** 分支子链摘要 */
@@ -93,7 +95,7 @@ async function onRemoveGroup() {
       '删除决策/分头',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
     )
-    flow.remove(props.ownerId)
+    await deleteCanvasNode(props.ownerId, { confirmed: true })
   } catch {/* canceled */}
 }
 </script>

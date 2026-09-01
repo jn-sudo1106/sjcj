@@ -25,6 +25,17 @@ describe('flow store 编辑动作', () => {
     expect(f.main[f.main.length - 1]).toBe('end')
   })
 
+  it('insertAfter(rule)：按旧「添加后续步骤 → 规则处理」用前置配置 ID 命名，规则 ID 默认 -1，输入表继承上游', () => {
+    f.configs['web-list'].configId = '1400979'
+    f.configs['web-list'].collectCfg!.outputTable = '900'
+    const id = f.insertAfter('web-list', 'rule')!
+    expect(f.configs[id].title).toBe('1400979-规则处理')
+    expect(f.configs[id].configName).toBe('1400979-规则处理')
+    expect(f.configs[id].itemId).toBe('-1')
+    expect(f.configs[id].inputTable).toBe('900')
+    expect(f.configs[id].ruleCfg?.inputTableId).toBe('900')
+  })
+
   it('moveTo 重排且保持首尾终端', () => {
     f.moveTo('web-list', 'ai-extract')
     const m = f.main
@@ -136,16 +147,18 @@ describe('复制节点 = 新增一套配置（0828 D02）', () => {
     f.newFlow('standard')
   })
 
-  it('副本不继承原节点的 configId/configName —— 否则改副本就是在改原配置', () => {
+  it('副本不继承原节点的 configId，配置名改成新节点名', () => {
     f.bindCopiedConfig('web-list', '1400774', '证券之星列表配置')
     expect(f.configs['web-list'].configId).toBe('1400774')
 
     const newId = f.duplicate('web-list')
     expect(newId).toBeTruthy()
     expect(f.configs[newId!].configId).toBeUndefined()
-    expect(f.configs[newId!].configName).toBeUndefined()
+    expect(f.configs[newId!].title).toContain('（复制）')
+    expect(f.configs[newId!].configName).toBe(f.configs[newId!].title)
     // 原节点不受影响
     expect(f.configs['web-list'].configId).toBe('1400774')
+    expect(f.configs['web-list'].configName).toBe('证券之星列表配置')
   })
 
   it('duplicate 返回新节点 id，供调用方接着复制配置', () => {
@@ -174,7 +187,10 @@ describe('复制节点 = 新增一套配置（0828 D02）', () => {
     f.duplicateNode('web-list')
     const copies = f.main.filter((id: string) => id !== 'web-list' && f.configs[id]?.title === f.configs['web-list'].title)
     expect(copies.length).toBeGreaterThan(0)
-    copies.forEach((id: string) => expect(f.configs[id].configId).toBeUndefined())
+    copies.forEach((id: string) => {
+      expect(f.configs[id].configId).toBeUndefined()
+      expect(f.configs[id].configName).toBe(f.configs[id].title)
+    })
   })
 })
 
@@ -716,6 +732,32 @@ describe('节点输入表 + 任务队列（优化 0701 问题五）', () => {
     expect(seed.configs['source:391000001'].collectCfg?.webKind).toBe('list')
     expect(seed.configs['source:391000001'].collectCfg?.url).toBe('http://x')
     expect(seed.configs['source:391000001'].collectCfg?.outputTable).toBe('T1')
+  })
+
+  it('规则处理步骤按旧 SourceStep 回填：适用源、规则ID、入参来源、输入/输出表（2026-08-31 源 430022404 / 40604）', () => {
+    const source = { sourceId: '430022404', name: '纽约市政府市长办公室新闻处_copy(0)', url: 'http://x', mainTable: '900' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: '0', sourceId: '430022404', name: '列表', inputTable: '-', outputTable: '900', configId: '1400979', enabled: true },
+      {
+        stepId: '40604', sourceId: '430022404', name: '1400979-规则处理',
+        inputTable: '900', outputTable: '2100249', configId: '1400586', configName: 'NYC HPD-住房发展新闻',
+        itemId: '-1', contextMap: ['K1', 'K2', 'K3', 'K4', 'K5'], enabled: false, dependsOn: ['0'],
+      },
+    ] as never)
+
+    const rule = seed.configs['40604']
+    expect(rule.ruleCfg).toBeTruthy()
+    expect(rule.collectCfg).toBeUndefined()
+    expect(rule.configId).toBe('1400586')
+    expect(rule.configName).toBe('NYC HPD-住房发展新闻')
+    expect(rule.itemId).toBe('-1')
+    expect(rule.stepSourceId).toBe('430022404')
+    expect(rule.inputTable).toBe('900')
+    expect(rule.outputTable).toBe('2100249')
+    expect(rule.ruleCfg?.inputTableId).toBe('900')
+    expect(rule.ruleCfg?.outputTableId).toBe('2100249')
+    expect(rule.taskCfg?.contextMap).toEqual(['K1', 'K2', 'K3', 'K4', 'K5'])
+    expect(rule.disabled).toBe(true)
   })
 
   it('参数源（0721 会议 T5）：空白画布新建的首个采集节点带出 urlTemplate，$PARAM$_id 自动识别为 urlParamRefs', () => {
@@ -1292,6 +1334,19 @@ describe('源级配置分层（0706 优化·源/节点配置分层）', () => {
     expect(f.sourceCtx?.sourceId).toBe('s1')
   })
 
+  it('rebindNodeId 把本地草稿 id 换成后端 itemConfig，并改选中态', () => {
+    f.newFlow('blank')
+    f.insertAfter('start', 'web')
+    const localId = f.selectedId
+    expect(localId).toMatch(/^web-/)
+    expect(f.rebindNodeId(localId, '40600')).toBe(true)
+    expect(f.configs['40600']?.title).toBeTruthy()
+    expect(f.configs[localId]).toBeUndefined()
+    expect(f.main).toContain('40600')
+    expect(f.main).not.toContain(localId)
+    expect(f.selectedId).toBe('40600')
+  })
+
   it('startDraftSource：空白模板进入有源草稿画布但不自动生成首节点', () => {
     f.startDraftSource({ sourceId: 'draft-1', name: '未命名采集源', url: '', configId: '', mainTable: '', owner: 'admin', state: 'C' })
 
@@ -1568,12 +1623,13 @@ describe('configDetail 异步回填（applyStepDetails）', () => {
 
   it('补充到达后回填配置名 / 队列 / 是否列表，且不置任何脏标', () => {
     const enriched = [
-      { ...bareSteps[0], configName: '公告列表配置', topic: 'q_list', multiMode: 1, runPolicy: '{"snatch":{"retryCnt":3}}' },
+      { ...bareSteps[0], configName: '公告列表配置', configUrl: 'http://www.baidu.com', topic: 'q_list', multiMode: 1, runPolicy: '{"snatch":{"retryCnt":3}}' },
       { ...bareSteps[1], configName: 'baidu-登陆配置', topic: 'q_login' },
     ]
     f.applyStepDetails(enriched as never)
 
     expect(f.configs['st-1'].configName).toBe('公告列表配置')
+    expect(f.configs['st-1'].configUrl).toBe('http://www.baidu.com')
     expect(f.configs['st-1'].taskCfg?.queue).toBe('q_list')
     expect(f.configs['st-1'].collectCfg?.multiMode).toBe(1)
     expect(f.configs['st-1'].runPolicy).toBe('{"snatch":{"retryCnt":3}}')
@@ -1617,7 +1673,7 @@ describe('源 URL 归源（0824-11 §1.1b）', () => {
     collectNodes.forEach((c) => expect(c.collectCfg?.url).toBe('https://new.example/list'))
   })
 
-  it('源 URL 归流程脏（保存流程管），不是配置脏', () => {
+  it('源 URL 归流程脏（步骤自动保存管），不是配置脏', () => {
     f.patchSource({ url: 'https://new.example/list' })
     expect(f.flowDirty).toBe(true)
     expect(f.configDirty).toBe(false)

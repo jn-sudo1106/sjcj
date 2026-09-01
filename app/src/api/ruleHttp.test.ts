@@ -190,6 +190,28 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
     expect(result.script).toContain('def main(date, zb_value)')
   })
 
+  it('orchestrationGenerate：hybrid 下真实 stream 失败时回退 mock 骨架', async () => {
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'mock')
+    vi.resetModules()
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => 'ruleId 不存在',
+    } as Response)
+    const { ruleApi } = await import('./index')
+
+    const result = await ruleApi.orchestrationGenerate({
+      ...sampleCfg,
+      mode: 'ref',
+      ruleId: '173',
+      describe: '按字段生成',
+    })
+
+    expect(fetchMock).toHaveBeenCalled()
+    expect(result.script).toContain('def main(date, zb_value)')
+  })
+
   it('orchestrationDetail：POST getComposeById?id=，映射 nlDescribe/codePath', async () => {
     vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
     vi.stubEnv('VITE_API_MODE', 'http')

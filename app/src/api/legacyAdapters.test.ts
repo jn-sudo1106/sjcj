@@ -3,6 +3,7 @@ import type { LegacySnatchSaveRequest } from './types/source'
 import {
   configFromLegacy,
   configToLegacy,
+  configUrlFromLegacy,
   dataRowFromLegacy,
   dataTableFromLegacy,
   entryDetailFromLegacy,
@@ -20,6 +21,7 @@ import {
   parseRuleOrchestrationStreamText,
   stripMinioMarkerLine,
   pickRuleIdFromComposeList,
+  isVruleNumericRuleId,
   ruleOrchestrationGenerateFormBody,
   ruleOrchestrationGenerateFromLegacy,
   ruleOrchestrationGenerateToLegacy,
@@ -33,6 +35,7 @@ import {
   assertLegacySnatchSaveLogin,
   legacySnatchSavePayloadFromFlow,
   parseNextStepReceipt,
+  taskInstFromLegacy,
 } from './legacyAdapters'
 
 describe('旧平台参数模型适配', () => {
@@ -207,6 +210,37 @@ describe('旧平台配置模型适配', () => {
     expect(configFromLegacy({ configId: 3, configName: 'c', isMulti: 2 })).toMatchObject({ isDetail: true, multiMode: 2 })
     // 没有原值时不臆断
     expect(configFromLegacy({ configId: 4, configName: 'd' })).toMatchObject({ isDetail: false, multiMode: undefined })
+  })
+
+  it('配置 URL 认旧字段 configUrl，也兼容已适配的 url', () => {
+    expect(configUrlFromLegacy({ configUrl: 'http://www.baidu.com' })).toBe('http://www.baidu.com')
+    expect(configUrlFromLegacy({ url: 'https://passport.baidu.com/' })).toBe('https://passport.baidu.com/')
+    expect(configUrlFromLegacy({ configUrl: 'http://from-config', url: 'http://from-model' })).toBe('http://from-config')
+    expect(configUrlFromLegacy({ configUrl: '' })).toBe('')
+    expect(configUrlFromLegacy({ configId: 1 })).toBeUndefined()
+    expect(configFromLegacy({ configId: 5, configName: 'x', url: 'http://only-url' }).url).toBe('http://only-url')
+  })
+
+  it('configDetail 只有 success/data、没有 code 时仍能读出配置 URL', () => {
+    // 旧 ConfigEdit 能显示 URL，画布却空：request() 只在有 code 时拆 data，这种外壳会整包落到适配层。
+    const envelope = {
+      success: true,
+      data: {
+        configId: 1400766,
+        configName: 'guancha-观察者网-金融科技',
+        configUrl: 'https://www.guancha.cn/jinrongkeji',
+        isMulti: 1,
+        topic: 'dev_web_snatch_5865',
+      },
+    }
+    expect(configUrlFromLegacy(envelope)).toBe('https://www.guancha.cn/jinrongkeji')
+    expect(configFromLegacy(envelope)).toMatchObject({
+      configId: '1400766',
+      name: 'guancha-观察者网-金融科技',
+      url: 'https://www.guancha.cn/jinrongkeji',
+      multiMode: 1,
+      topic: 'dev_web_snatch_5865',
+    })
   })
 })
 
@@ -739,6 +773,18 @@ describe('规则编排模型适配（vrule，0801 方案 §4）', () => {
     })
   })
 
+  it('parseRuleOrchestrationStreamText：JSON 业务失败信封要抛出 msg，不能当成脚本正文', () => {
+    expect(() => parseRuleOrchestrationStreamText('{"code":"400","msg":"ruleId 不存在"}')).toThrow(/ruleId 不存在/)
+  })
+
+  it('isVruleNumericRuleId：只认正整数，旧步骤占位 -1 / 虚拟起点 0 / orch-* 都不算', () => {
+    expect(isVruleNumericRuleId('173')).toBe(true)
+    expect(isVruleNumericRuleId('-1')).toBe(false)
+    expect(isVruleNumericRuleId('0')).toBe(false)
+    expect(isVruleNumericRuleId('orch-173')).toBe(false)
+    expect(isVruleNumericRuleId('')).toBe(false)
+  })
+
   it('stripMinioMarkerLine：与 parseRuleOrchestrationStreamText 共用同一实现，可独立单测（S3-2 抽函数）', () => {
     expect(stripMinioMarkerLine('<Config>\n  <Action id="1"/>\n</Config>\n# [系统消息] 当前文件已经保存至MinIO：/x/1.xml')).toEqual({
       script: '<Config>\n  <Action id="1"/>\n</Config>',
@@ -811,6 +857,46 @@ describe('旧平台源列表标记字段', () => {
       sourceId: '1',
       tags: ['正文缺失', '内容重复'],
       color: 'red',
+    })
+  })
+})
+
+describe('任务实例字段适配', () => {
+  it('对照旧 column.config TASK_LIST：actionName/nodeCode/taskTopic/updateDt', () => {
+    expect(taskInstFromLegacy({
+      taskId: '8348509120',
+      state: 'C',
+      actionName: '浏览器抓取',
+      taskName: '任务A',
+      sourceId: '161725',
+      configId: '70598',
+      nodeCode: 'node1',
+      taskTopic: 'topic1',
+      updateDt: '2026-07-31 08:00',
+    })).toMatchObject({
+      taskId: '8348509120',
+      typeName: '浏览器抓取',
+      node: 'node1',
+      topic: 'topic1',
+      updatedAt: '2026-07-31 08:00',
+    })
+  })
+
+  it('已经是新字段名的记录不丢 typeName/node/topic/updatedAt', () => {
+    expect(taskInstFromLegacy({
+      taskId: '1',
+      state: 'L',
+      typeName: '采集任务',
+      taskName: '列表抓取',
+      sourceId: '391007768',
+      node: '391007768-s1',
+      topic: 'queue_81909',
+      updatedAt: '2026-07-13 10:00',
+    })).toMatchObject({
+      typeName: '采集任务',
+      node: '391007768-s1',
+      topic: 'queue_81909',
+      updatedAt: '2026-07-13 10:00',
     })
   })
 })

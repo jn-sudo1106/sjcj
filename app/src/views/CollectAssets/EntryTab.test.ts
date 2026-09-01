@@ -76,7 +76,7 @@ describe('EntryTab · 表ID列表', () => {
     expect(pagedSpy).toHaveBeenCalledWith(expect.objectContaining({ entryTypeId: '2102157' }))
   })
 
-  it('admin 角色可见写入口白名单 [新建, 更多]；read 角色隐藏写入口但保留只读的「详情」；「清除缓存」入口已下线（0721 会议 §六-2）', async () => {
+  it('admin 角色可见写入口白名单 [新建, 更多]；read 角色隐藏写入口但保留只读的「详情」；无「清除缓存」入口', async () => {
     // 列表需至少 1 行——空列表时行内「更多」触发按钮本就不会渲染，白名单断言会假通过（见 REVIEW-2026-07-24 复盘）
     const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
     vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
@@ -105,7 +105,7 @@ describe('EntryTab · 表ID列表', () => {
     expect(wrapper.find('th input, th .el-checkbox').exists()).toBe(false)
   })
 
-  it('批量删除：confirm 文案含数量与 ids，成功后静默补一次清缓存、清空选中并刷新', async () => {
+  it('批量删除：confirm 文案含数量与 ids，成功后刷新列表，不再清缓存', async () => {
     const entries: EntryType[] = [
       { tableId: 't1', tableName: 'tb_a', fields: [] },
       { tableId: 't2', tableName: 'tb_b', fields: [] },
@@ -118,6 +118,7 @@ describe('EntryTab · 表ID列表', () => {
     auth.roles = ['admin']
     await mountTab()
     await waitForLoad()
+    const loadsBeforeDelete = pagedSpy.mock.calls.length
 
     const rowCheckbox = wrapper.findAllComponents({ name: 'ElCheckbox' }).find((c) => c.props('ariaLabel') === '选择表 t1')
     await rowCheckbox!.vm.$emit('change', true)
@@ -133,8 +134,8 @@ describe('EntryTab · 表ID列表', () => {
 
     expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('数量:1'), '提示', expect.anything())
     expect(deleteSpy).toHaveBeenCalledWith(['t1'])
-    expect(clearSpy).toHaveBeenCalledWith(['t1'])
-    expect(pagedSpy).toHaveBeenCalled()
+    expect(clearSpy).not.toHaveBeenCalled()
+    expect(pagedSpy.mock.calls.length).toBeGreaterThan(loadsBeforeDelete)
   })
 
   it('表ID列展示为纯文本，不是可点击链接（点表ID=自查行为交互反直觉，已去掉；深链接改为仅支持 URL 直达）', async () => {
@@ -185,28 +186,25 @@ describe('EntryTab · 表ID列表', () => {
     expect(writeText).toHaveBeenCalledWith('title:标题:1000\nauthor:作者:255')
   })
 
-  it('新建/编辑保存成功后静默补一次清缓存（同参数列表口径）', async () => {
+  it('新建/编辑保存成功后刷新列表，不再清缓存', async () => {
     const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
-    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
+    const pagedSpy = vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
     const clearSpy = vi.spyOn(entryApi, 'clearCache').mockResolvedValue({ ok: true })
     const auth = useAuthStore()
     auth.roles = ['admin']
     await mountTab()
     await waitForLoad()
+    const loadsBeforeSave = pagedSpy.mock.calls.length
 
     const editorDrawer = wrapper.findComponent({ name: 'EntryEditorDrawer' })
     editorDrawer.vm.$emit('saved', 't1')
     await flushPromises()
 
-    expect(clearSpy).toHaveBeenCalledWith(['t1'])
+    expect(clearSpy).not.toHaveBeenCalled()
+    expect(pagedSpy.mock.calls.length).toBeGreaterThan(loadsBeforeSave)
   })
 
-  // ---- 写操作后清缓存契约（0721 会议 §六-2）----
-  // 7 个写路径里只测了「批量删除」+「保存/编辑」= 2 个；以下补齐剩余 5 个。
-  // 5 个都断言：成功后 entryApi.clearCache 被以正确 tableIds 调用。
-  // 任一路径未来被漏掉 / 参数错 / 顺序错，CI 会发现。
-
-  it('复制新表：成功提示透传后端 msg 并静默补一次清缓存', async () => {
+  it('复制新表：成功提示透传后端 msg 并刷新列表', async () => {
     const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
     vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
     const copySpy = vi.spyOn(entryApi, 'copyEntry').mockResolvedValue({ ok: true, message: '复制成功' })
@@ -226,10 +224,10 @@ describe('EntryTab · 表ID列表', () => {
 
     expect(promptSpy).toHaveBeenCalled()
     expect(copySpy).toHaveBeenCalledWith('t1', 'tb_a_copy')
-    expect(clearSpy).toHaveBeenCalledWith(['t1'])
+    expect(clearSpy).not.toHaveBeenCalled()
   })
 
-  it('同步物理表结构：检查返回差异 SQL 时弹确认，确认后清缓存', async () => {
+  it('同步物理表结构：检查返回差异 SQL 时弹确认，确认后刷新列表', async () => {
     const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
     vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
     const checkSpy = vi.spyOn(entryApi, 'checkTable').mockResolvedValue(['ALTER TABLE t ADD COLUMN k1 varchar(255)'])
@@ -251,10 +249,10 @@ describe('EntryTab · 表ID列表', () => {
     expect(checkSpy).toHaveBeenCalledWith('t1')
     expect(confirmSpy).toHaveBeenCalled()
     expect(syncSpy).toHaveBeenCalledWith('t1')
-    expect(clearSpy).toHaveBeenCalledWith(['t1'])
+    expect(clearSpy).not.toHaveBeenCalled()
   })
 
-  it('重新计算数据量：二次确认后清缓存', async () => {
+  it('重新计算数据量：二次确认后刷新列表', async () => {
     const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
     vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
     const calcSpy = vi.spyOn(entryApi, 'calcEntrySum').mockResolvedValue({ ok: true, message: '计算成功' })
@@ -273,10 +271,10 @@ describe('EntryTab · 表ID列表', () => {
     await flushPromises()
 
     expect(calcSpy).toHaveBeenCalledWith('t1')
-    expect(clearSpy).toHaveBeenCalledWith(['t1'])
+    expect(clearSpy).not.toHaveBeenCalled()
   })
 
-  it('重建去重索引：二次确认后清缓存', async () => {
+  it('重建去重索引：二次确认后刷新列表', async () => {
     const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
     vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
     const rebuildSpy = vi.spyOn(entryApi, 'rebuildIndex').mockResolvedValue({ ok: true, message: '重建成功' })
@@ -295,10 +293,10 @@ describe('EntryTab · 表ID列表', () => {
     await flushPromises()
 
     expect(rebuildSpy).toHaveBeenCalledWith('t1')
-    expect(clearSpy).toHaveBeenCalledWith(['t1'])
+    expect(clearSpy).not.toHaveBeenCalled()
   })
 
-  it('正式表/测试表切换：二次确认后清缓存（以 C → AC 方向为例）', async () => {
+  it('正式表/测试表切换：二次确认后刷新列表（以 C → AC 方向为例）', async () => {
     // state='C' 才会显示「置为正式表」菜单项
     const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', state: 'C', fields: [] }]
     vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
@@ -318,10 +316,10 @@ describe('EntryTab · 表ID列表', () => {
     await flushPromises()
 
     expect(markSpy).toHaveBeenCalledWith('t1', 'AC')
-    expect(clearSpy).toHaveBeenCalledWith(['t1'])
+    expect(clearSpy).not.toHaveBeenCalled()
   })
 
-  it('批量重建：成功提示 + 清缓存 + 刷新列表（与批量删除同口径）', async () => {
+  it('批量重建：成功提示并刷新列表（与批量删除同口径）', async () => {
     const entries: EntryType[] = [
       { tableId: 't1', tableName: 'tb_a', fields: [] },
       { tableId: 't2', tableName: 'tb_b', fields: [] },
@@ -334,6 +332,7 @@ describe('EntryTab · 表ID列表', () => {
     auth.roles = ['admin']
     await mountTab()
     await waitForLoad()
+    const loadsBeforeRebuild = pagedSpy.mock.calls.length
 
     // 勾选第一行
     const rowCheckbox = wrapper.findAllComponents({ name: 'ElCheckbox' }).find((c) => c.props('ariaLabel') === '选择表 t1')
@@ -350,81 +349,7 @@ describe('EntryTab · 表ID列表', () => {
 
     expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('数量:1'), '检查表结构提示', expect.anything())
     expect(rebuildSpy).toHaveBeenCalledWith(['t1'])
-    expect(clearSpy).toHaveBeenCalledWith(['t1'])
-    expect(pagedSpy).toHaveBeenCalled()
-  })
-
-  // ---- clearCacheSilently 收尾契约（07-24 复盘 + #8 修复）----
-  // 07-24 review #8 修复：filter((id) => !!id) 过滤空串，避免空 ID 发给后端
-  // 07-24 review 07-23 #12 复发修复：catch 加 console.warn 留 breadcrumb
-  // 这两条都是「下次有人改回原样不会发现」类的隐患，必须有单测锁住
-
-  it('clearCacheSilently：空串 ID 不发给后端（[""].length === 1 不过滤就是 bug）', async () => {
-    const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
-    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
-    const clearSpy = vi.spyOn(entryApi, 'clearCache').mockResolvedValue({ ok: true })
-    const auth = useAuthStore()
-    auth.roles = ['admin']
-    await mountTab()
-    await waitForLoad()
-
-    // 清掉 mount 期间 EntryTab 主动调 clearCache 的计数（refresh/初始化场景会触发），
-    // 本测试只关心「emit(saved, '') 之后」是否有新增调用
-    clearSpy.mockClear()
-
-    // 模拟 EntryEditorDrawer 在新建（无 tableId）保存后的 emit('saved', '')
-    const editorDrawer = wrapper.findComponent({ name: 'EntryEditorDrawer' })
-    editorDrawer.vm.$emit('saved', '')
-    await flushPromises()
-
-    // 关键断言：空串被过滤，clearCache **不应该**被调用
     expect(clearSpy).not.toHaveBeenCalled()
-  })
-
-  it('clearCacheSilently：混合空串 + 有效 ID 时只传有效 ID 给后端', async () => {
-    const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
-    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
-    const clearSpy = vi.spyOn(entryApi, 'clearCache').mockResolvedValue({ ok: true })
-    const auth = useAuthStore()
-    auth.roles = ['admin']
-    await mountTab()
-    await waitForLoad()
-
-    // 模拟 emit('saved', ['t1', '', 't2']) 这种边界
-    const editorDrawer = wrapper.findComponent({ name: 'EntryEditorDrawer' })
-    editorDrawer.vm.$emit('saved', ['t1', '', 't2'] as unknown as string)
-    await flushPromises()
-
-    // 这里的行为取决于 onEntrySaved 实现——目前它只取一个 tableId 字符串参数
-    // 不应抛错，clearCache 也不应被以含空串的数组调用
-    if (clearSpy.mock.calls.length > 0) {
-      const lastCall = clearSpy.mock.calls[clearSpy.mock.calls.length - 1]
-      const passed = lastCall[0] as string[]
-      expect(passed).not.toContain('')
-    }
-  })
-
-  it('clearCacheSilently：API 失败时仍调 console.warn（不静默吞错）', async () => {
-    const entries: EntryType[] = [{ tableId: 't1', tableName: 'tb_a', fields: [] }]
-    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: entries })
-    vi.spyOn(entryApi, 'clearCache').mockRejectedValue(new Error('网络异常'))
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})  // 静默测试输出
-    const auth = useAuthStore()
-    auth.roles = ['admin']
-    await mountTab()
-    await waitForLoad()
-
-    const editorDrawer = wrapper.findComponent({ name: 'EntryEditorDrawer' })
-    editorDrawer.vm.$emit('saved', 't1')
-    await flushPromises()
-
-    // 关键断言：失败时 console.warn 留了 breadcrumb
-    // EntryTab.vue:119 实际只调 console.warn(msg, {tableIds, error}) 2 个参数，
-    // 不传第三参（test 原始 3 参断言与实现签名不一致，跑出来永远 fail）
-    expect(warnSpy).toHaveBeenCalledWith(
-      '[EntryTab] clearCache failed',
-      expect.objectContaining({ tableIds: ['t1'] }),
-    )
-    warnSpy.mockRestore()
+    expect(pagedSpy.mock.calls.length).toBeGreaterThan(loadsBeforeRebuild)
   })
 })

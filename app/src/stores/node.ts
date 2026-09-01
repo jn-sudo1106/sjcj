@@ -24,10 +24,12 @@ export const useNodeStore = defineStore('node', () => {
 
   // ---- 双层未保存标记（0824-00 §5.4）----
   // 节点配置表单改动 → configDirty，按节点记，由「保存节点配置」逐节点清；
-  // 节点增删/移动/连线/换配置/流程名 → flowDirty，由「保存流程」清。
+  // 节点增删/移动/连线/换配置/流程名/进入条件 → flowDirty，由步骤自动保存清。
   // dirty 保留为两者并集：发起抓取门槛、模板页恢复等老调用点语义不变。
   const dirtyConfigNodes = ref<string[]>([])
   const flowDirty = ref(false)
+  /** 每次 touchFlow 自增。自动保存要靠它重开防抖：flowDirty 已经是 true 时再改不会触发 watch。 */
+  const flowRev = ref(0)
   const configDirty = computed(() => dirtyConfigNodes.value.length > 0)
   const dirty = computed({
     get: () => configDirty.value || flowDirty.value,
@@ -44,6 +46,7 @@ export const useNodeStore = defineStore('node', () => {
   }
   function touchFlow() {
     flowDirty.value = true
+    flowRev.value += 1
   }
   /** 旧签名保留：现存调用点（flow store 的拓扑/流程名/源字段动作）都是流程级 */
   function touch() {
@@ -54,6 +57,9 @@ export const useNodeStore = defineStore('node', () => {
   }
   function markSaved() {
     dirtyConfigNodes.value = []
+    flowDirty.value = false
+  }
+  function markFlowSaved() {
     flowDirty.value = false
   }
 
@@ -243,15 +249,48 @@ export const useNodeStore = defineStore('node', () => {
     const target = c.collectCfg ?? c
     if (cond) target.entryCondition = cond
     else delete target.entryCondition
-    touchConfig(id)
+    // 进入条件在步骤上（0828 §2.7 / D20），不是配置。置 flowDirty 才能进自动保存。
+    touchFlow()
   }
 
-  /** 配置名称（config-meta，0824-06 §4）：新建配置首次保存必填，改已有配置的名字等于改共享配置名 */
+  /** 配置名称（config-meta）：新增/复制时与节点名一致；改已有配置的名字等于改共享配置名 */
   function setConfigName(id: string, name: string) {
     const c = configs[id]
     if (!c) return
     c.configName = name
     touchConfig(id)
+  }
+
+  /** 配置 URL（旧 configUrl）：改已有配置的 URL 等于改共享配置 */
+  function setConfigUrl(id: string, url: string) {
+    const c = configs[id]
+    if (!c) return
+    c.configUrl = url
+    touchConfig(id)
+  }
+
+  /** 规则 ID / 任务 URL 来源字段（步骤 itemId）。落在步骤上，走自动保存。 */
+  function setItemId(id: string, itemId: string) {
+    const c = configs[id]
+    if (!c) return
+    c.itemId = itemId.trim() || '-1'
+    touchFlow()
+  }
+
+  /** 适用源（步骤 sourceId）。-1 = 该配置下所有源。落在步骤上，走自动保存。 */
+  function setStepSourceId(id: string, sourceId: string) {
+    const c = configs[id]
+    if (!c) return
+    c.stepSourceId = sourceId.trim()
+    touchFlow()
+  }
+
+  /** 从 config/configDetail 回填配置 URL。这是读，不是用户改动，不置脏。
+   *  已有非空值不覆盖；空字符串视为还没取到，允许用详情里的真值补上。 */
+  function hydrateConfigUrl(id: string, url: string) {
+    const c = configs[id]
+    if (!c || c.configUrl) return
+    c.configUrl = url
   }
 
   function setNodeDisabled(id: string, disabled: boolean) {
@@ -295,6 +334,7 @@ export const useNodeStore = defineStore('node', () => {
     dirty,
     configDirty,
     flowDirty,
+    flowRev,
     dirtyConfigNodes,
     // 操作
     touch,
@@ -302,6 +342,7 @@ export const useNodeStore = defineStore('node', () => {
     touchFlow,
     markConfigSaved,
     markSaved,
+    markFlowSaved,
     setTripleCell,
     addTripleRow,
     removeTripleRow,
@@ -320,6 +361,10 @@ export const useNodeStore = defineStore('node', () => {
     setStructuredConfig,
     setContentRules,
     setConfigName,
+    setConfigUrl,
+    hydrateConfigUrl,
+    setItemId,
+    setStepSourceId,
     setEntryCondition,
     setNodeDisabled,
     setBaseRow,

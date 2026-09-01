@@ -8,7 +8,7 @@
 import { computed, watch } from 'vue'
 import { useFlowStore } from '@/stores/flow'
 import {
-  fieldOptionsFromTableOrOutput, nodeEntryCondition, nodeTaskQueue, collectorCapabilityOf,
+  fieldOptionsFromTableOrOutput, isRuleNode, nodeEntryCondition, nodeTaskQueue, collectorCapabilityOf,
   type ConditionGroup, type NodeConfig, type TaskParamValue,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import ConditionRow from '../ConditionRow.vue'
@@ -20,6 +20,7 @@ const { tables, params, ensureTableFields } = useNodeInspectorAssets()
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
 const id = computed<string>(() => flow.selectedId)
 const cc = computed(() => cfg.value?.collectCfg)
+const isRule = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
 
 const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
 
@@ -138,7 +139,7 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
     </div>
     <div v-else class="rc-readonly-hint">请先在当前节点的参数配置中绑定参数。</div>
   </div>
-  <div class="rc-field"><label>上下文来源</label>
+  <div class="rc-field"><label>{{ isRule ? '入参来源' : '上下文来源' }}</label>
     <el-select
       :model-value="contextMap"
       multiple

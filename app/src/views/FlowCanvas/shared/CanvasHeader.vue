@@ -6,10 +6,11 @@ import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { flowCenterApi, type FlowRecord } from '@/api'
 import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
-import SyncSourcesDialog from './SyncSourcesDialog.vue'
+import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 
 const flow = useFlowStore()
 const ui = useUiStore()
+const { status: saveStatus, savedClock, flush: retryFlowSave } = useFlowAutosave()
 const route = useRoute()
 const router = useRouter()
 
@@ -90,17 +91,6 @@ function srcSnatch() {
   ui.fireAction('发起抓取')
 }
 
-// 同步到源（0716）：把当前源已保存的流程批量覆盖到同网站其他源。
-// 永远同步已保存的版本——画布有未保存改动时先拦下，避免"画布上是 A、同步出去是 B"。
-const syncOpen = ref(false)
-function openSyncDialog() {
-  if (flow.dirty) {
-    ElMessage.warning('画布有未保存的改动，请先保存当前流程')
-    return
-  }
-  syncOpen.value = true
-}
-
 async function onSwitchFlow(command: string) {
   if (!command) return
   if (command === '__manage_flows__') {
@@ -160,12 +150,17 @@ async function onSwitchFlow(command: string) {
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <button v-if="src.siteId" class="rc-btn" type="button" title="把当前源已保存的流程覆盖到同网站其他源" @click="openSyncDialog">同步到源…</button>
-        <!-- 保存从 AppShell 顶栏迁入画布 Header（贴着它作用的画布）；与发起抓取同走动作总线，处理函数在 index.vue -->
-        <!-- 0824-00 §5.1/§5.4：与右侧「保存节点配置」区分开，这里只管流程级脏状态 -->
-        <button class="rc-btn primary" :class="{ dirty: flow.flowDirty }" type="button" :title="flow.flowDirty ? '流程有未保存修改' : undefined" @click="ui.fireAction('保存')">
-          保存流程
-        </button>
+        <!-- 0828 W9-2/D06：步骤接口已通，拓扑/进入条件防抖自动保存；不再放手动保存按钮。 -->
+        <span class="ch-save-status" data-testid="flow-save-status">
+          <template v-if="saveStatus === 'saving'">保存中…</template>
+          <template v-else-if="saveStatus === 'saved'">已保存 {{ savedClock }}</template>
+          <button
+            v-else-if="saveStatus === 'error'"
+            class="ch-save-retry"
+            type="button"
+            @click="void retryFlowSave()"
+          >保存失败，点击重试</button>
+        </span>
       </div>
       <!-- 「停用」0828 D24 移除：源启停统一在源视图的行操作里做，画布头只留运行入口。
            这里不做成禁用或隐藏——按钮整个删掉，避免同一能力两个入口。 -->
@@ -173,8 +168,6 @@ async function onSwitchFlow(command: string) {
         <button class="rc-btn primary" type="button" @click="srcSnatch">发起抓取</button>
       </div>
     </template>
-
-    <SyncSourcesDialog v-if="src.siteId" v-model:open="syncOpen" :site-id="src.siteId" :from-source="src" />
   </div>
 </template>
 
@@ -188,10 +181,11 @@ async function onSwitchFlow(command: string) {
 .ch-titlewrap { min-width: 0; }
 .ch-title { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; color: var(--rc-text); font-size: 13px; }
 .ch-sub { color: var(--rc-faint); font-size: 10px; margin-top: 1px; }
-.ch-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+.ch-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
 .ch-actions .rc-btn { height: 30px; padding: 0 11px; font-size: 12px; }
-.ch-actions .rc-btn.primary.dirty { position: relative; }
-.ch-actions .rc-btn.primary.dirty::after { content: ''; position: absolute; top: -3px; right: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--rc-warn); border: 1.5px solid #fff; }
+.ch-save-status { color: var(--rc-faint); font-size: 12px; min-height: 18px; min-width: 4em; }
+.ch-save-retry { border: 0; background: transparent; color: #b91c1c; font-size: 12px; cursor: pointer; padding: 0; }
+.ch-save-retry:hover { text-decoration: underline; }
 .ch-canvas-actions { position: absolute; z-index: 4; right: 32px; top: calc(100% + 18px); display: flex; gap: 6px; }
 .ch-canvas-actions .rc-btn { height: 30px; padding: 0 11px; font-size: 12px; }
 .rc-btn.ghost { height: 28px; padding: 0 10px; font-size: 12px; border-color: var(--rc-border); background: transparent; color: var(--rc-text-2); }

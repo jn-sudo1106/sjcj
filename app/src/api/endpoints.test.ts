@@ -15,6 +15,12 @@ describe('端点契约一致性', () => {
     expect(LIVE_ENDPOINTS.has('source/tagSource')).toBe(true)
     expect(LIVE_ENDPOINTS.has('source/setColor')).toBe(true)
   })
+  it('步骤写接口已标 live，日常 mock 模式也会打真实 item/next', () => {
+    expect(LIVE_ENDPOINTS.has('item/next/saveItemConfig')).toBe(true)
+    expect(LIVE_ENDPOINTS.has('item/next/stepModify')).toBe(true)
+    expect(LIVE_ENDPOINTS.has('item/next/enable')).toBe(true)
+    expect(LIVE_ENDPOINTS.has('item/next/delete')).toBe(true)
+  })
   it('所有已注册 mock 端点都在契约清单内', () => {
     for (const key of Object.keys(mockRegistry)) {
       expect(ENDPOINT_PATHS.has(key), `${key} 不在契约清单`).toBe(true)

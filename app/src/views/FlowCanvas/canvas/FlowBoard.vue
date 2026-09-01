@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useDuplicateNode } from './useDuplicateNode'
+import { useStepWrite } from './useStepWrite'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
 import { flowApi, flowCenterApi, type FlowRecord } from '@/api'
@@ -26,6 +27,7 @@ const props = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: fa
 const flow = useFlowStore()
 // 复制节点 = 新增一套配置（0828 D02）：副本必须绑一份新配置，不能沿用原 configId
 const duplicateNode = useDuplicateNode()
+const { deleteCanvasNode } = useStepWrite()
 const runtime = useRuntimeStore()
 const ui = useUiStore()
 const flowEl = ref<HTMLElement | null>(null)
@@ -244,14 +246,14 @@ function menuAction(action: string) {
   else if (action === 'move-down' && id) flow.move(id, 1)
   else if (action === 'toggle' && id) flow.toggleDisabled(id)
   else if (action === 'run-node' && id) runNode(id)
-  else if (action === 'delete' && id) flow.remove(id)
+  else if (action === 'delete' && id) void deleteCanvasNode(id)
 }
 
 // 单节点运行（右键菜单入口，S7-1 改判 0806）：与 NodeInspector 头部按钮同一套 runtime.runSingleNode，
 // 只是不用先选中/打开节点面板——右键即可发起，跟"上移/下移/运行 停止"这些既有的免选中操作放一起更顺手。
 function runNode(id: string) {
   if (flow.dirty) {
-    ElMessage.warning('画布有未保存的改动，请先保存流程配置再运行节点')
+    ElMessage.warning('画布有未保存的改动，请稍候自动保存完成后再运行节点')
     return
   }
   const { runId, reason } = runtime.runSingleNode(flow.serialize({ includeLoginPasswords: true }), id)
@@ -439,7 +441,7 @@ watch(
             type="button"
             title="删除节点"
             data-testid="node-delete"
-            @click.stop="flow.remove(n.id)"
+            @click.stop="void deleteCanvasNode(n.id)"
           >✕</button>
           <span v-if="runtime.nodeStates[n.id]" class="rc-run-badge" :class="runtime.nodeStates[n.id]">{{ runText(n.id) }}</span>
           <span v-else-if="n.cfg.disabled" class="rc-node-plan">已停止</span>

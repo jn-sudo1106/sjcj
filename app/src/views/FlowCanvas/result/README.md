@@ -7,7 +7,7 @@
 - SiteDetailView.vue: FileView/ResultView/TaskView 的容器
 - CompareSplit.vue: 对比分栏
 - CompareResultPane.vue: 对比结果面板（仅 CompareSplit 引用）
-- DataGrid.vue: 数据表格（ResultView / CompareResultPane / TableDataDialog 共用）
+- DataGrid.vue: 数据表格（ResultView / CompareResultPane / TableDataDialog / SiteDataView 共用）；「列」打开勾选+顺序弹窗
 - TableDataDialog.vue: 表格数据弹窗（包装 DataGrid）
 - ProcessNodeRail.vue: 进度节点轨（FileView/ResultView/TaskView 共用，result 内部共享）
 

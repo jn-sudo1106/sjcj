@@ -832,25 +832,41 @@ function rootStepForSource(source: Source): Step | null {
   }
 }
 
+function applyStepTaskFields(cfg: NodeConfig, step: Step) {
+  cfg.taskCfg = {
+    ...(cfg.taskCfg ?? { queue: '', urlRule: '' }),
+    ...(step.topic ? { queue: step.topic } : {}),
+    ...(step.urlSourceField !== undefined ? { urlSourceField: step.urlSourceField } : {}),
+    ...(step.urlRule !== undefined ? { urlRule: step.urlRule } : {}),
+    ...(step.contextMap !== undefined ? { contextMap: [...step.contextMap] } : {}),
+    ...(step.outColumns !== undefined ? { outColumns: [...step.outColumns] } : {}),
+  }
+}
+
+function applyRuleStepTables(cfg: NodeConfig, step: Step) {
+  if (!cfg.ruleCfg) return
+  const inputId = step.inputTable && step.inputTable !== '-' ? step.inputTable : ''
+  if (inputId) {
+    cfg.ruleCfg.inputTableId = cfg.ruleCfg.inputTableId || inputId
+  }
+  if (step.outputTable) {
+    cfg.ruleCfg.outputTableId = cfg.ruleCfg.outputTableId || step.outputTable
+  }
+}
+
 function applyStepMetadata(cfg: NodeConfig, step: Step) {
   cfg.disabled = !step.enabled
   if (step.configId) cfg.configId = step.configId
   if (step.configName) cfg.configName = step.configName
+  if (step.configUrl !== undefined) cfg.configUrl = step.configUrl
   if (step.runPolicy !== undefined) cfg.runPolicy = step.runPolicy
+  if (step.itemId !== undefined) cfg.itemId = step.itemId
+  if (step.sourceId !== undefined) cfg.stepSourceId = step.sourceId
   if (cfg.collectCfg) {
     cfg.collectCfg.entryCondition = step.condition
       ? { mode: 'expr', logic: 'AND', items: [], expr: step.condition }
       : undefined
-    cfg.taskCfg = {
-      ...(cfg.taskCfg ?? { queue: '', urlRule: '' }),
-      // 有真实 topic（旧 config.topic，见 sourceApi.sourceSteps 的 attachStepTopics）才覆盖队列；
-      // 查不到时保留节点模板默认队列，不能用空值覆盖出一个看起来更“真”的错误默认值。
-      ...(step.topic ? { queue: step.topic } : {}),
-      ...(step.urlSourceField !== undefined ? { urlSourceField: step.urlSourceField } : {}),
-      ...(step.urlRule !== undefined ? { urlRule: step.urlRule } : {}),
-      ...(step.contextMap !== undefined ? { contextMap: [...step.contextMap] } : {}),
-      ...(step.outColumns !== undefined ? { outColumns: [...step.outColumns] } : {}),
-    }
+    applyStepTaskFields(cfg, step)
     // 旧 isMulti 三态原值：只迁不展示（见 Step.multiMode 注释）。不要拿它去改 isDetail/webKind——
     // 网页类型已改为「节点类别」，走新平台自己的节点类型分类；旧平台与之对应的是抓取类型
     // （configType，如 90 网页抓取），不是 isMulti。这里只是把原值带在节点上不丢，供后续写回用。
@@ -876,6 +892,8 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
       : undefined
     if (step.inputTable !== undefined) cfg.inputTable = step.inputTable === '-' ? '' : step.inputTable
     if (step.outputTable !== undefined) cfg.outputTable = step.outputTable
+    applyStepTaskFields(cfg, step)
+    applyRuleStepTables(cfg, step)
   }
   if (step.failAction !== undefined) {
     cfg.outputAdvanced = {

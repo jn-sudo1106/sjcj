@@ -115,30 +115,62 @@ describe('SourceOverviewView · 勾选与批量', () => {
     expect(wrapper.get('[data-testid="source-batch-count"]').text()).toContain('已选 2')
   })
 
-  it('批量发抓取用同一个接口一次带多个 ids，不另起批量端点', async () => {
-    const send = vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: '已下发' })
-    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+  it('发任务按钮常驻，不勾选也能看到', async () => {
     const wrapper = await mountWithRows()
+    expect(wrapper.find('[data-testid="source-launch"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="source-batch-count"]').exists()).toBe(false)
+  })
+
+  it('勾选后走 selected 范围，确认后一次带多个 ids，all 恒为 0', async () => {
+    const send = vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: '已下发' })
+    vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({})
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 2, list: rows })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
     await wrapper.get('[data-testid="source-check-all"]').setValue(true)
-    await wrapper.get('[data-testid="batch-snatch"]').trigger('click')
+    await wrapper.get('[data-testid="source-launch"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="launch-confirm-dialog"]').text()).toContain('已勾选 2')
+    await wrapper.get('[data-testid="launch-confirm"]').trigger('click')
     await flushPromises()
     expect(send).toHaveBeenCalledTimes(1)
     expect(send.mock.calls[0][0].ids).toEqual(['src-1', 'src-2'])
+    expect(send.mock.calls[0][0].all).toBe(0)
+    wrapper.unmount()
   })
 
-  it('批量停用逐个调 changeSourceEnable，且确认后才发', async () => {
-    const toggle = vi.spyOn(sourceApi, 'changeSourceEnable').mockResolvedValue({ ok: true, message: 'ok' })
+  it('没勾选时按当前筛选收 ID 再发，all 仍是 0', async () => {
+    const send = vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: '已下发' })
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 2, list: rows })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
+    await wrapper.get('[data-testid="source-launch"]').trigger('click')
+    await flushPromises()
+    expect(page).toHaveBeenCalledWith(expect.objectContaining({ siteIds: 'site-current', page: 1, size: 500 }))
+    expect(wrapper.get('[data-testid="launch-confirm-dialog"]').text()).toContain('当前筛选')
+    await wrapper.get('[data-testid="launch-confirm"]').trigger('click')
+    await flushPromises()
+    expect(send.mock.calls[0][0].all).toBe(0)
+    expect(send.mock.calls[0][0].ids).toEqual(['src-1', 'src-2'])
+    wrapper.unmount()
+  })
+
+  // 0831 X1-11：changeEnable 本来就是批量端点（ids 逗号分隔），一次请求发全部 id，
+  // 不再逐个调——之前逐个调是因为适配层还是 mock 占位。
+  it('批量停用一次请求发全部 id，且确认后才发', async () => {
+    const toggle = vi.spyOn(sourceApi, 'changeSourceEnableBatch').mockResolvedValue({ ok: true, message: 'ok' })
     const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     const wrapper = await mountWithRows()
-    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    await wrapper.get('[data-testid="source-check-all"]').setValue(true)
     await wrapper.get('[data-testid="batch-disable"]').trigger('click')
     await flushPromises()
     expect(confirm).toHaveBeenCalled()
-    expect(toggle).toHaveBeenCalledWith('src-1', true)
+    expect(toggle).toHaveBeenCalledTimes(1)
+    expect(toggle).toHaveBeenCalledWith(['src-1', 'src-2'], true)
   })
 
   it('取消确认就不发请求', async () => {
-    const toggle = vi.spyOn(sourceApi, 'changeSourceEnable').mockResolvedValue({ ok: true, message: 'ok' })
+    const toggle = vi.spyOn(sourceApi, 'changeSourceEnableBatch').mockResolvedValue({ ok: true, message: 'ok' })
     vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(new Error('cancel'))
     const wrapper = await mountWithRows()
     await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
@@ -165,21 +197,19 @@ describe('SourceOverviewView · 标签', () => {
   const marked: Source = {
     ...source,
     tags: ['日期错误待重跑', '正文缺失', '内容重复'],
-    color: 'orange',
   }
 
-  it('筛选区和表格带标签 / 颜色标识列', async () => {
+  it('筛选区和表格带标签列', async () => {
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [marked] })
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
     await flushPromises()
     expect(wrapper.find('[data-testid="source-overview-tag"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="source-overview-color"]').exists()).toBe(true)
     expect(wrapper.findAll('th').map((th) => th.text())).toContain('标签')
     expect(wrapper.get('[data-testid="source-issue-tags"]').text()).toContain('日期错误待重跑')
     expect(wrapper.get('[data-testid="source-issue-tags"]').text()).toContain('+1')
   })
 
-  it('标签筛选是输入框，查询时带 #tags；颜色筛选带旧 flag 下标', async () => {
+  it('标签筛选是输入框，查询时带 #tags', async () => {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [marked] })
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
     await flushPromises()
@@ -187,17 +217,11 @@ describe('SourceOverviewView · 标签', () => {
     await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
     await flushPromises()
     expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ tags: ['#内容重复'] }))
-    await wrapper.get('[data-testid="source-overview-color"]').trigger('click')
-    expect(wrapper.get('[data-testid="source-overview-color-red"] .sov-mark-dot').attributes('style')).toMatch(/#ef4444|rgb\(239, 68, 68\)/)
-    await wrapper.get('[data-testid="source-overview-color-red"]').trigger('click')
-    await flushPromises()
-    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ flag: 1 }))
   })
 
   it('勾选后打开添加标记浮层，保存调用 tagSource，行上立刻出现标签', async () => {
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ ...source }] })
     const tag = vi.spyOn(sourceApi, 'tagSource').mockResolvedValue({ ok: true, message: 'ok' })
-    vi.spyOn(sourceApi, 'setColor').mockResolvedValue({ ok: true, message: 'ok' })
     const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
     await flushPromises()
     await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
@@ -224,8 +248,9 @@ describe('SourceOverviewView · 标签', () => {
     expect(wrapper.find('[data-testid="mark-tab-color"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="mark-action-menu"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="mark-action-add-tags"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="mark-action-clear-tags"]').text()).toBe('移除标签')
-    expect(wrapper.get('[data-testid="mark-action-clear-color"]').text()).toBe('清除颜色标识')
+    // 0831 F02：文案是「清空标签」不是「移除标签」——它清掉整批的全部标签，
+    // 「移除」会让人以为能挑一个删（那条路在行内弹窗里）
+    expect(wrapper.get('[data-testid="mark-action-clear-tags"]').text()).toBe('清空标签')
     wrapper.unmount()
   })
 
@@ -274,46 +299,271 @@ describe('SourceOverviewView · 标签', () => {
     wrapper.unmount()
   })
 
-  it('清除颜色标识不弹确认，直接 setColor', async () => {
+  // 0831 F01：颜色标识整块下线（会上「颜色重复了、根本记不得哪个是哪个」）。
+  // 这条锁的是「UI 上一个颜色控件都不许有」——适配层的 setColor 保留是另一回事，旧平台还在用。
+  it('筛选区、表格、打标弹窗里都没有任何颜色控件', async () => {
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ ...source, color: 'blue' }] })
-    const setColor = vi.spyOn(sourceApi, 'setColor').mockResolvedValue({ ok: true, message: 'ok' })
-    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
     await flushPromises()
+    expect(wrapper.find('[data-testid="source-overview-color"]').exists()).toBe(false)
+    // 旧数据带着 color/usedFlag 也不该渲染出残留色点
+    expect(wrapper.find('.sov-mark-dot').exists()).toBe(false)
+
     await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
     await wrapper.get('[data-testid="batch-mark"]').trigger('click')
-    await wrapper.get('[data-testid="mark-action-clear-color"]').trigger('click')
-    await flushPromises()
-    expect(confirm).not.toHaveBeenCalled()
-    expect(setColor).toHaveBeenCalledWith(['src-1'], undefined, true)
-    expect(wrapper.get('[data-testid="source-mark-toast"]').text()).toContain('已清除 1 个源的颜色标识')
+    expect(wrapper.find('[data-testid="mark-color-red"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="mark-color-none"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="mark-action-clear-color"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('清除颜色失败时不改行上圆点', async () => {
-    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ ...source, color: 'blue' }] })
-    vi.spyOn(sourceApi, 'setColor').mockRejectedValue(new Error('请求失败 500'))
-    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
-    await flushPromises()
-    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
-    await wrapper.get('[data-testid="batch-mark"]').trigger('click')
-    await wrapper.get('[data-testid="mark-action-clear-color"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('.sov-mark-dot').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="source-mark-toast"]').exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  it('发起抓取不会清掉刚打上的标签', async () => {
+  it('发任务不会清掉刚打上的标签', async () => {
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ ...source, tags: ['正文缺失'] }] })
+    vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({})
     vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: '已下发' })
-    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
     await flushPromises()
     await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
-    await wrapper.get('[data-testid="batch-snatch"]').trigger('click')
+    await wrapper.get('[data-testid="source-launch"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="launch-confirm"]').trigger('click')
     await flushPromises()
     expect(wrapper.get('[data-testid="source-issue-tags"]').text()).toContain('正文缺失')
     wrapper.unmount()
+  })
+})
+
+// 2026-08-31 会上实测的缺陷：搜「内容重复」，开发人员当场说"他查到了，但是没返回"。
+// 服务端返回了行，客户端又按精确相等滤了一遍，滤成空列表，顺带把 total 改写成 0。
+// 这两条是红线——列表展示的行数和总数必须等于服务端给的，不允许本地再插一手。
+describe('SourceOverviewView · 标签筛选不做客户端二次过滤（0831 X0）', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    sessionStorage.clear()
+  })
+
+  it('服务端按标签返回了行，就照原样展示，不因本地不匹配而滤空', async () => {
+    // 关键点：行上的 tags 与筛选词**不精确相等**（服务端可能是模糊/前缀匹配，
+    // 也可能行上根本没回 tags 字段）——这正是原来被滤空的形状
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 42,
+      list: [
+        { ...source, sourceId: 'src-1', name: '源一', tags: ['内容重复率高'] },
+        { ...source, sourceId: 'src-2', name: '源二', tags: undefined },
+      ],
+    })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="source-overview-tag"]').setValue('内容重复')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('tbody tr')).toHaveLength(2)
+    expect(wrapper.text()).toContain('源一')
+    expect(wrapper.text()).toContain('源二')
+  })
+
+  it('total 用服务端的，不按过滤后的行数改写——否则分页页数跟着错', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 42,
+      list: [{ ...source, tags: ['内容重复率高'] }],
+    })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="source-overview-tag"]').setValue('内容重复')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('共 42 个源')
+    expect(wrapper.text()).toContain('第 1 / 3 页') // 42 / 20，不是 1/1
+  })
+
+  it('标签候选来自服务端 sourceTags，程序打的标签也能出现在建议里（F03）', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source] })
+    const tags = vi.spyOn(sourceApi, 'sourceTags').mockResolvedValue(['程序打的标签'])
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
+
+    // 候选按当前查询条件取，所以要带上 siteIds
+    expect(tags).toHaveBeenCalledWith(expect.objectContaining({ siteIds: 'site-current' }))
+    const options = wrapper.get('[data-testid="source-tag-candidates"]').findAll('option').map((o) => o.attributes('value'))
+    expect(options).toContain('程序打的标签')
+    // 本机「最近使用」降级为输入辅助，仍然在，但不再是可选范围的上限
+    expect(options).toContain('正文缺失')
+    wrapper.unmount()
+  })
+
+  it('服务端标签候选挂了也能照常打标——候选只是输入辅助，不该拖垮整个视图', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source] })
+    vi.spyOn(sourceApi, 'sourceTags').mockRejectedValue(new Error('请求失败 500'))
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('当前网站源')
+    expect(wrapper.find('.sov-empty').exists()).toBe(false)
+    const options = wrapper.get('[data-testid="source-tag-candidates"]').findAll('option').map((o) => o.attributes('value'))
+    expect(options).toContain('正文缺失')
+    wrapper.unmount()
+  })
+
+  it('「查看这一批」仍能就地筛出刚打标的行，且按包含匹配（用户可能只输了半截词）', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 2,
+      list: [
+        { ...source, sourceId: 'src-1', name: '源一' },
+        { ...source, sourceId: 'src-2', name: '源二' },
+      ],
+    })
+    vi.spyOn(sourceApi, 'tagSource').mockResolvedValue({ ok: true, message: 'ok' })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    await wrapper.get('[data-testid="batch-mark"]').trigger('click')
+    await wrapper.get('[data-testid="mark-tag-search"]').setValue('内容重复率高')
+    await wrapper.get('[data-testid="mark-tag-add"]').trigger('click')
+    await wrapper.get('[data-testid="mark-save"]').trigger('click')
+    await flushPromises()
+
+    // 筛选词是半截的「内容重复」，标签是「内容重复率高」——精确相等会一条都留不下
+    await wrapper.get('[data-testid="source-overview-tag"]').setValue('内容重复')
+    await wrapper.get('[data-testid="source-mark-view-batch"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('tbody tr')).toHaveLength(1)
+    expect(wrapper.text()).toContain('源一')
+    wrapper.unmount()
+  })
+})
+
+// 会上「标签要能改能删」指的是删掉三个里的中间那个。批量条只能追加和清空，做不到，
+// 所以必须有行内这条路，而且它的语义是**覆盖**——这组测试锁的就是覆盖不被 merge 回来。
+describe('SourceOverviewView · 行内改标签与备注（0831 X1-C）', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    localStorage.clear()
+    sessionStorage.clear()
+  })
+
+  // 每次现造一份：overlay 会就地改写行对象（rows 里放的就是 list 里那几个对象），
+  // 共享一个字面量会让上一条用例的改动漏到下一条
+  const threeTags = (): Source => ({ ...source, tags: ['A标签', 'B标签', 'C标签'], remark: '原备注' })
+
+  async function openEditor(testid: 'source-mark-edit' | 'source-remark-edit') {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [threeTags()] })
+    vi.spyOn(sourceApi, 'sourceTags').mockResolvedValue([])
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
+    await wrapper.get(`[data-testid="${testid}"]`).trigger('click')
+    await flushPromises()
+    return wrapper
+  }
+
+  it('标签列和备注列打开的是同一个弹窗', async () => {
+    const fromTags = await openEditor('source-mark-edit')
+    expect(fromTags.find('[data-testid="edit-source-mark-dialog"]').exists()).toBe(true)
+    fromTags.unmount()
+
+    const fromRemark = await openEditor('source-remark-edit')
+    expect(fromRemark.find('[data-testid="edit-source-mark-dialog"]').exists()).toBe(true)
+    fromRemark.unmount()
+  })
+
+  it('删掉三个标签里的中间那个，提交的是剩下两个的完整列表，且只带 tags + remark', async () => {
+    const update = vi.spyOn(sourceApi, 'updateSourceMark').mockResolvedValue({ ok: true, message: 'ok' })
+    const wrapper = await openEditor('source-mark-edit')
+
+    await wrapper.get('[data-testid="edit-mark-remove-B标签"]').trigger('click')
+    await wrapper.get('[data-testid="edit-mark-save"]').trigger('click')
+    await flushPromises()
+
+    expect(update).toHaveBeenCalledWith('src-1', { tags: ['A标签', 'C标签'], remark: '原备注' })
+    // 行上立刻反映覆盖结果：B 标签不能因为本地 merge 又冒出来
+    const rowTags = wrapper.get('[data-testid="source-issue-tags"]').text()
+    expect(rowTags).toContain('A标签')
+    expect(rowTags).not.toContain('B标签')
+    wrapper.unmount()
+  })
+
+  it('改备注不动标签', async () => {
+    const update = vi.spyOn(sourceApi, 'updateSourceMark').mockResolvedValue({ ok: true, message: 'ok' })
+    const wrapper = await openEditor('source-remark-edit')
+
+    await wrapper.get('[data-testid="edit-mark-remark"]').setValue('验证正常')
+    await wrapper.get('[data-testid="edit-mark-save"]').trigger('click')
+    await flushPromises()
+
+    expect(update).toHaveBeenCalledWith('src-1', { tags: ['A标签', 'B标签', 'C标签'], remark: '验证正常' })
+    expect(wrapper.text()).toContain('验证正常')
+    wrapper.unmount()
+  })
+
+  it('敲了一半没回车就点保存的标签也算数', async () => {
+    const update = vi.spyOn(sourceApi, 'updateSourceMark').mockResolvedValue({ ok: true, message: 'ok' })
+    const wrapper = await openEditor('source-mark-edit')
+
+    await wrapper.get('[data-testid="edit-mark-tag-input"]').setValue('D标签')
+    await wrapper.get('[data-testid="edit-mark-save"]').trigger('click')
+    await flushPromises()
+
+    expect(update).toHaveBeenCalledWith('src-1', expect.objectContaining({ tags: ['A标签', 'B标签', 'C标签', 'D标签'] }))
+    wrapper.unmount()
+  })
+
+  it('保存失败时行上标签不变', async () => {
+    vi.spyOn(sourceApi, 'updateSourceMark').mockRejectedValue(new Error('请求失败 500'))
+    const wrapper = await openEditor('source-mark-edit')
+
+    await wrapper.get('[data-testid="edit-mark-remove-B标签"]').trigger('click')
+    await wrapper.get('[data-testid="edit-mark-save"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="source-issue-tags"]').text()).toContain('B标签')
+    wrapper.unmount()
+  })
+})
+
+// 后端是支持的：生产源列表页（118.25.96.217:9999/source/source-list）筛选区就有「备注」。
+// 本地那份旧代码快照比线上旧、queryParam 里没有 remark，一度让人误判成"新增能力、后端不支持"。
+describe('SourceOverviewView · 备注筛选（0831 X1-B）', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    sessionStorage.clear()
+  })
+
+  it('备注输入框可用，查询时把 remark 带进请求', async () => {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
+    await flushPromises()
+
+    const input = wrapper.get('[data-testid="source-overview-remark"]')
+    expect(input.attributes('disabled')).toBeUndefined()
+    await input.setValue('验证正常')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ remark: '验证正常' }))
+  })
+
+  it('清空后不再带 remark（空串不等于"搜空备注"）', async () => {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="source-overview-remark"]').setValue('验证正常')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await wrapper.get('[data-testid="source-overview-remark"]').setValue('')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ remark: undefined }))
+  })
+
+  // 责任人（author）线上也有，但 0831 明确暂不做——这条防止以后顺手加进来
+  it('不提供责任人筛选', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="source-overview-author"]').exists()).toBe(false)
   })
 })

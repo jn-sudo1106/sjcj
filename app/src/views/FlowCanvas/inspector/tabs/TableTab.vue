@@ -1,23 +1,19 @@
 <script setup lang="ts">
 // 表配置 Tab（P1-1 Step 4 · 从 NodeInspector.vue 拆出）。
 // 0804 S2-2 拍板：规则节点的表/字段绑定从编排配置搬回这里，跟其他节点共用同一个 Tab——
-// 规则名称 = 节点名称（不再单独输入）；点「保存并配置编排」校验通过后落业务规则并自动切到编排配置 Tab，
-// 与其他节点「选完表字段才能进编排配置」的统一时序对齐（见开发方案 §2.2）。
-// 非规则节点内容：输出表管理（采集类固定/可选）+ 非采集类产物明细三元表 + 表结构编辑弹窗；
-// 0804 S3-3 追加：非规则节点也需要在「生成配置」前落一条 vrule compose 记录换数字 ruleId
-// （isVruleNumericRuleId 约束，见 RuleOrchestrationTab.vue），跟规则节点同一套 orchestrationSaveMeta，
-// 只是 targetTable 传空——采集节点没有 vrule 输入表，S3-2 §9.2-2 已实测确认后端接受空 targetTable。
-import { computed, reactive, ref, watch } from 'vue'
+// 规则名称 = 节点名称（不再单独输入）；绑完输入/输出表与字段后即可进编排配置 Tab。
+// 非规则节点内容：输出表管理（采集类固定/可选）+ 非采集类产物明细三元表 + 表结构编辑弹窗。
+// 规则/采集节点都不在表配置中间再放一颗主保存按钮——底下已经有节点配置「保存」，两个会抢；
+// 换数字 ruleId 改到编排配置里第一次「生成脚本/生成配置」时自动 orchestrationSaveMeta。
+import { computed, reactive, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
-  collectorCapabilityOf, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig,
+  collectorCapabilityOf, isRuleNode, makeDefaultRuleOrchestration,
   fieldOptionsFromTableOrOutput,
   type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, ruleApi, type RuleOrchestration } from '@/api'
-import { RULE_DATA_SOURCE } from '@/constants/rule'
-import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
+import { entryApi, type RuleOrchestration } from '@/api'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import TableEditDialog from '../TableEditDialog.vue'
 import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
@@ -41,31 +37,10 @@ const ruleCfg = computed<RuleOrchestration>(() => ({
 }))
 function patchRule(p: Partial<RuleOrchestration>) {
   flow.patchRuleConfig(id.value, p)
+  if (p.inputTableId !== undefined) flow.setInputTable(id.value, p.inputTableId)
+  if (p.outputTableId !== undefined) flow.setOutputTable(id.value, p.outputTableId)
 }
 const { inputFieldOptions, outputFieldOptions } = useRuleTableFields(ruleCfg)
-
-const savingRule = ref(false)
-async function onSaveRuleMeta() {
-  const error = !cfg.value?.title?.trim() ? '请先在「节点配置」填写节点名称' : validateTableBinding(ruleCfg.value)
-  if (error) {
-    ElMessage.warning(error)
-    return
-  }
-  savingRule.value = true
-  try {
-    const res = await ruleApi.orchestrationSaveMeta(ruleCfg.value)
-    patchRule({ mode: 'ref', ruleId: res.ruleId })
-    // 表相关字段同步到 NodeConfig（0801 方案 §4.6）：节点侧存 tableId，不是物理表名
-    if (ruleCfg.value.inputTableId) flow.setInputTable(id.value, ruleCfg.value.inputTableId)
-    if (ruleCfg.value.outputTableId) flow.setOutputTable(id.value, ruleCfg.value.outputTableId)
-    ElMessage.success(res.message || '业务规则已保存')
-    flow.setActiveTab('orchestration')
-  } catch (e) {
-    ElMessage.error(`保存业务规则失败：${(e as Error)?.message ?? String(e)}`)
-  } finally {
-    savingRule.value = false
-  }
-}
 
 const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
 
@@ -156,20 +131,11 @@ function onTripleCell(field: TripleField, i: number, col: 0 | 1 | 2, e: Event) {
 // collectCfg，非采集类写 NodeConfig 顶层，两边取哪边由 setStructuredConfig 内部判断，本组件不用分支）。
 const structuredConfigValue = computed(() => cc.value?.structuredConfig ?? cfg.value?.structuredConfig ?? '')
 const contentRulesValue = computed(() => cc.value?.contentRules ?? cfg.value?.contentRules ?? '')
+// 空着时直接给出旧平台「配全局ID」模板，不用再点按钮填。后端已有 codeRule 时仍显示原值。
+const GLOBAL_ID_TEMPLATE = '{"globals":["列ID"]}'
+const structuredConfigDisplay = computed(() => structuredConfigValue.value.trim() || GLOBAL_ID_TEMPLATE)
 function onStructuredConfig(e: Event) {
   flow.setStructuredConfig(id.value, (e.target as HTMLTextAreaElement).value)
-}
-// 「配全局ID」：旧平台在结构化配置旁挂了个一键填模板（旧前端 column.config.js:599 的
-// more/callback，图标是问号但点下去其实是往表单里写 `{"globals":["列ID"]}`）。
-// 这里做成显式按钮而不是问号——问号点了会改数据是旧平台的坑，别照抄。
-// 已有内容时不覆盖，避免手滑清掉用户写好的规则。
-const GLOBAL_ID_TEMPLATE = '{"globals":["列ID"]}'
-function fillGlobalIdTemplate() {
-  if (structuredConfigValue.value.trim()) {
-    ElMessage.warning('结构化配置已有内容，未覆盖；如需重填请先清空')
-    return
-  }
-  flow.setStructuredConfig(id.value, GLOBAL_ID_TEMPLATE)
 }
 function onContentRules(e: Event) {
   flow.setContentRules(id.value, (e.target as HTMLTextAreaElement).value)
@@ -197,38 +163,6 @@ async function onTableSaved(tableId: string) {
   }
 }
 
-// ---- 非规则节点：编排配置准备（0804 S3-3）----
-const execCfg = computed<RuleOrchestration>(() => ({
-  ...makeDefaultExecConfig(),
-  ...cfg.value?.execCfg,
-  name: cfg.value?.title ?? '',
-}))
-function patchExec(p: Partial<RuleOrchestration>) {
-  flow.patchExecConfig(id.value, p)
-}
-const savingExec = ref(false)
-async function onSaveExecMeta() {
-  if (!cfg.value?.title?.trim()) {
-    ElMessage.warning('请先在「节点配置」填写节点名称')
-    return
-  }
-  savingExec.value = true
-  try {
-    const res = await ruleApi.orchestrationSaveMeta({
-      ...execCfg.value,
-      dataSource: RULE_DATA_SOURCE,
-      inputTable: '',
-      outputTable: nodeTableId.value,
-    })
-    patchExec({ mode: 'ref', ruleId: res.ruleId })
-    ElMessage.success(res.message || '编排配置已保存')
-    flow.setActiveTab('orchestration')
-  } catch (e) {
-    ElMessage.error(`保存失败：${(e as Error)?.message ?? String(e)}`)
-  } finally {
-    savingExec.value = false
-  }
-}
 </script>
 
 <template>
@@ -239,11 +173,6 @@ async function onSaveExecMeta() {
       :output-field-options="outputFieldOptions"
       @update:model-value="patchRule"
     />
-    <div class="rc-actions-row">
-      <button class="rc-btn primary" type="button" :disabled="savingRule" @click="onSaveRuleMeta">
-        {{ savingRule ? '保存中...' : '保存并配置编排' }}
-      </button>
-    </div>
   </template>
 
   <template v-else>
@@ -329,26 +258,17 @@ async function onSaveExecMeta() {
          步骤写入 payload 里（stepToStepModifyPayload 无此 key），目前只会写进本地流程草稿。
          也就是说勾与不勾对真实抓取零影响，展示出来只会让人以为配置生效了。等节点配置的
          写入通路真的打通再恢复。
-         注意：规则节点那套入参/出参字段绑定不受影响，它走 orchestrationSaveMeta →
+         注意：规则节点那套入参/出参字段绑定不受影响，第一次生成脚本时走 orchestrationSaveMeta →
          /vrule/api/custom-compose/save（live 且在生产写白名单里），是真生效的。 -->
     <!-- 结构化配置 + 正文规则（0804 S3-1）：不透明文本，具体 schema 由执行端解释。
          **名称保持「结构化配置」**（2026-08-28 确认）：旧平台 column.config.js 里 codeRule 的 title 就是它，
          0824-00 §6.3 计划改成「入库配置」的方向是反的——字段展示名跟旧平台走，改了反而对不上。 -->
     <div class="rc-field">
-      <label class="tt-label-row">
-        <span>结构化配置</span>
-        <button class="tt-fill" type="button" title="填入全局ID模板：{&quot;globals&quot;:[&quot;列ID&quot;]}" @click="fillGlobalIdTemplate">配全局ID</button>
-      </label>
-      <textarea class="rc-input" rows="2" placeholder="按输出表字段配置入库规则" :value="structuredConfigValue" @input="onStructuredConfig"></textarea>
+      <label><span>结构化配置</span></label>
+      <textarea class="rc-input" rows="2" placeholder='{"globals":["列ID"]}' :value="structuredConfigDisplay" @input="onStructuredConfig"></textarea>
     </div>
     <div class="rc-field"><label>正文规则</label>
       <textarea class="rc-input" rows="2" placeholder="按输出字段配置处理规则，一行一条，如 content=trim" :value="contentRulesValue" @input="onContentRules"></textarea>
-    </div>
-    <!-- 编排配置准备（0804 S3-3）：先落一条 vrule compose 记录换数字 ruleId，才能在「编排配置」生成抓取配置 -->
-    <div class="rc-actions-row">
-      <button class="rc-btn primary" type="button" :disabled="savingExec" @click="onSaveExecMeta">
-        {{ savingExec ? '保存中...' : '保存并配置编排' }}
-      </button>
     </div>
     <!-- 非采集类的产物明细表（采集类的产物即上方所选输出表，不重复维护一份 output 三元表） -->
     <template v-if="!cc">
@@ -372,10 +292,6 @@ async function onSaveExecMeta() {
 </template>
 
 <style scoped>
-.tt-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.tt-fill { border: 1px solid #d5e2f2; background: #fff; color: var(--rc-text-2); border-radius: 6px; font-size: 11px; padding: 2px 7px; cursor: pointer; }
-.tt-fill:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
-
 .rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 10px; }
 .rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }
 .rc-input { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; box-sizing: border-box; font-family: inherit; resize: vertical; }
@@ -397,10 +313,8 @@ async function onSaveExecMeta() {
 .rc-cell-input:focus { border-color: #60a5fa; background: #fff; box-shadow: 0 0 0 2px #dbeafe; }
 .rc-row-del { width: 20px; height: 20px; border: 0; background: transparent; color: var(--rc-faint); font-size: 12px; cursor: pointer; border-radius: 4px; }
 .rc-row-del:hover { background: var(--rc-error-bg); color: #b91c1c; }
-.rc-actions-row { display: flex; gap: 8px; margin-top: 12px; }
 .rc-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 11px; border: 1px solid #d5e2f2; border-radius: 7px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; }
 .rc-btn:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
-.rc-btn.primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }
 .rc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .rc-help { color: var(--rc-faint); font-size: 10px; line-height: 1.5; margin-top: 6px; }
 .rc-segment { display: inline-flex; border: 1px solid #dbe3ee; border-radius: 7px; overflow: hidden; background: #fff; }

@@ -24,6 +24,7 @@ function dedupToLegacy(mode?: 'source' | 'table'): string {
 export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
   cfg.configId = config.configId
   cfg.configName = config.name
+  cfg.configUrl = config.url ?? ''
   cfg.runPolicy = config.runPolicy
   const target = cfg.collectCfg ?? cfg
   target.structuredConfig = config.codeRule || undefined
@@ -89,6 +90,8 @@ export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown
   // templetCode='login' 就是这么被清掉的。有值才覆盖，没值就别碰。
   const edited: Record<string, unknown> = {
     configName: cfg.configName ?? '',
+    // 配置自己的 URL。绝不用 collectCfg.url（那是源 URL 的显示副本）。
+    ...(cfg.configUrl !== undefined ? { configUrl: cfg.configUrl } : {}),
     entryTypeId: (cc?.outputTable ?? cfg.outputTable) || undefined,
     inEntryType: (cc?.inputTable ?? cfg.inputTable) || undefined,
     isMulti: resolveMultiMode(cfg),
@@ -102,8 +105,8 @@ export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown
   }
   const payload: Record<string, unknown> = {
     ...base,
-    // configUrl 是配置自己的地址，跟源实际 URL 不是一回事（0824-02 §1.5：配置 81516 被 9 个源复用，
-    // 各源 sourceUrl 不同）。这里只带原值，绝不用节点上的源 URL 覆盖它。
+    // 配置自己的 URL 默认带 base 原值；节点上回填/编辑过（cfg.configUrl !== undefined）时由 edited 覆盖。
+    // 绝不用 collectCfg.url（源 URL）写进来（0824-02 §1.5：配置 81516 被 9 个源复用，各源地址不同）。
     configUrl: base.configUrl ?? '',
   }
   Object.entries(edited).forEach(([key, value]) => {

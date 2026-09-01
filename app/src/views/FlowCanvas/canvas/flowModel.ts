@@ -96,8 +96,11 @@ export interface NodeConfig {
    *  节点必须且只能引用一个配置——这个字段就是那个引用。参数绑定/解绑要按它调 config/configParam* 接口。 */
   configId?: string
   /** 本节点引用配置的名称（config-meta，0824-06 §4）。已有配置来自 config/configDetail 回填，
-   *  新建配置由用户在「节点配置 → 配置名称」填写，首次保存必填。 */
+   *  新增/复制节点时与节点名称一致，展示在检查器「当前配置」条，不在节点配置 Tab 里再填一遍。 */
   configName?: string
+  /** 配置自己的 URL（旧平台「配置编辑」的 URL = `configUrl`）。
+   *  与源 URL（`collectCfg.url` / `Source.url`）不是同一份：一份配置可被多个源复用，各源地址不同。 */
+  configUrl?: string
   disabled?: boolean
   base: [string, string][]
   fields: [string, string][]
@@ -129,6 +132,16 @@ export interface NodeConfig {
   schedule?: CollectorSchedule
   /** 配置的旧运行策略原文（config.runPolicy）。只读迁移，确认写契约前不从节点表单回写。 */
   runPolicy?: string
+  /**
+   * 旧步骤 `itemId`。规则处理节点对应旧表单「规则ID选择」（未选是 `-1`）；
+   * 采集后续步对应「任务 URL 来源字段」。写回 item/next 必须带上，缺了会被后端写成 null。
+   */
+  itemId?: string
+  /**
+   * 旧步骤「适用源」（`sourceId`）。`-1` 表示使用该配置的所有源。
+   * 与画布当前源（`flow.sourceCfg.sourceId`）不是同一层：步骤可以挂在 -1 上被多源共用。
+   */
+  stepSourceId?: string
   /** 规则处理节点编排配置（0707 Phase 9：规则引擎 rule-orchestration） */
   ruleCfg?: RuleOrchestration
   /**
@@ -487,19 +500,120 @@ export function isRuleNode(cfg?: NodeConfig): boolean {
 }
 
 /**
+ * nextStep 目标 / 流程入口口径的真实节点：跳过 start/end 占位、停用、规划中、决策/分头。
+ * 决策/分头不是发后续的落点，后继判定要看穿它们找到下一个真实节点（0824）。
+ */
+function isRunnableFlowNode(id: string, configs: Record<string, NodeConfig>): boolean {
+  if (id === 'start' || id === 'end') return false
+  const cfg = configs[id]
+  if (!cfg || cfg.disabled || cfg.planned) return false
+  if (isDecision(cfg) || isParallel(cfg)) return false
+  return true
+}
+
+/** 分支组里每条 chain 的首个真实节点。决策/分头的后继是"每条分支各一个"，不是一个。 */
+function branchGroupEntryIds(
+  ownerId: string,
+  branchGroups: FlowBranchGroup[],
+  configs: Record<string, NodeConfig>,
+): string[] {
+  const g = branchGroups.find((bg) => bg.ownerId === ownerId)
+  if (!g) return []
+  return g.branches
+    .map((b) => b.chain.find((nid) => isRunnableFlowNode(nid, configs)))
+    .filter((nid): nid is string => !!nid)
+}
+
+/** 从 fromId 之后的主链往后看：真实节点，或看穿决策/分头落到其分支 chain。 */
+function laterRunnableIdsOnMain(
+  main: string[],
+  configs: Record<string, NodeConfig>,
+  branchGroups: FlowBranchGroup[],
+  fromId: string,
+): string[] {
+  const idx = main.indexOf(fromId)
+  if (idx < 0) return []
+  for (let i = idx + 1; i < main.length; i++) {
+    const nid = main[i]
+    if (isRunnableFlowNode(nid, configs)) return [nid]
+    const entries = branchGroupEntryIds(nid, branchGroups, configs)
+    if (entries.length) return entries
+  }
+  return []
+}
+
+/**
  * 首个可执行节点判定（0812 计划 M2-10，方案 §6.7-A）：不能把所有"没有输入表"的节点都当成
  * 首节点——按主链顺序找第一个跳过 start/end 占位、未停用、非规划中、非决策/分头的真实节点。
  * 只在主链上找：分支内节点天然有 owner 节点作为上游依赖，不可能是流程的入口。
  */
 export function isFirstRunnableNode(main: string[], configs: Record<string, NodeConfig>, id: string): boolean {
-  const first = main.find((nid) => {
-    if (nid === 'start' || nid === 'end') return false
-    const cfg = configs[nid]
-    if (!cfg || cfg.disabled || cfg.planned) return false
-    if (isDecision(cfg) || isParallel(cfg)) return false
-    return true
-  })
-  return first === id
+  return main.find((nid) => isRunnableFlowNode(nid, configs)) === id
+}
+
+/**
+ * 是否有直接后继（0824：末节点无发后续）。末节点 = 已保存源流程里没有可发后续的下游，
+ * 不是 main 数组里的最后一个 id（起止占位、停用/规划中、决策/分头都要跳过）。
+ *
+ * 主链：后面还有真实节点，或后续结构节点挂了可跑的分支 chain，或自身就是带 chain 的 owner。
+ * 分支 chain 内：同链后续真实节点，或汇合点 = owner 之后的下一个主链真实节点；
+ * 分支叶子且汇合处也没有真实节点 → false（保守，不让用户任意选节点）。
+ */
+export function hasDirectSuccessor(
+  main: string[],
+  configs: Record<string, NodeConfig>,
+  id: string,
+  branchGroups: FlowBranchGroup[] = [],
+): boolean {
+  return directSuccessorIds(main, configs, id, branchGroups).length > 0
+}
+
+/**
+ * 直接后继的节点 id（0831 F10：数据视图要按"下一节点需要哪些字段"收敛默认列，
+ * 光知道"有没有后继"不够，得知道是谁）。判定口径与 `hasDirectSuccessor` 完全一致
+ * ——后者现在就是本函数的 `.length > 0`，两者不会各自漂移。
+ *
+ * 决策/分头下游返回**每条分支的首个真实节点**（多个），调用方按需取并集。
+ */
+export function directSuccessorIds(
+  main: string[],
+  configs: Record<string, NodeConfig>,
+  id: string,
+  branchGroups: FlowBranchGroup[] = [],
+): string[] {
+  const groups = branchGroups ?? []
+  for (const bg of groups) {
+    for (const b of bg.branches) {
+      const ci = b.chain.indexOf(id)
+      if (ci < 0) continue
+      for (let i = ci + 1; i < b.chain.length; i++) {
+        if (isRunnableFlowNode(b.chain[i], configs)) return [b.chain[i]]
+      }
+      // 分支叶子：汇合到 owner 之后的主链
+      return laterRunnableIdsOnMain(main, configs, groups, bg.ownerId)
+    }
+  }
+  if (!main.includes(id)) return []
+  const branchEntries = branchGroupEntryIds(id, groups, configs)
+  if (branchEntries.length) return branchEntries
+  return laterRunnableIdsOnMain(main, configs, groups, id)
+}
+
+/**
+ * 直接前驱（0831 X7-B：末节点从上一节点重跑）。
+ * 就是把 directSuccessorIds 反过来扫一遍——不另写一套拓扑，避免两套口径各自漂移。
+ */
+export function directPredecessorIds(
+  main: string[],
+  configs: Record<string, NodeConfig>,
+  id: string,
+  branchGroups: FlowBranchGroup[] = [],
+): string[] {
+  const seen = new Set<string>([...main])
+  for (const bg of branchGroups) {
+    for (const branch of bg.branches) branch.chain.forEach((nid) => seen.add(nid))
+  }
+  return [...seen].filter((nid) => nid !== id && isRunnableFlowNode(nid, configs) && directSuccessorIds(main, configs, nid, branchGroups).includes(id))
 }
 
 /**

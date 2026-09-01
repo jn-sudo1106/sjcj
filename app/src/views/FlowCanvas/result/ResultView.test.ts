@@ -40,18 +40,24 @@ const meta: DataTableMeta = {
 // 插槽，会让这些断言全部落空——换成显式 stub，保留 name/props/emits 供测试查询与触发。
 const DataGridStub = {
   name: 'DataGrid',
-  props: ['meta', 'rows', 'loading', 'selectedId', 'compact', 'hideActions', 'sourceNames', 'sourceColLabel', 'selectable', 'selectedIds'],
+  props: ['meta', 'rows', 'loading', 'selectedId', 'compact', 'hideActions', 'sourceNames', 'sourceColLabel', 'selectable', 'selectedIds', 'presetCols'],
   emits: ['row-click', 'row-action', 'update:selectedIds'],
-  // head-right 是"不随表头横向滚动"的常驻区（全屏按钮在里面），foot 是表格下方的横条
-  // （分页在里面，0819 N1-8 从 #head 移过去的）；stub 里都要渲染，否则依赖它们的断言
-  // 会全部落空。
   template: '<div class="dg-stub"><slot name="head" /><slot name="head-right" /><slot name="foot" /></div>',
 }
-// ElDrawer 用显式 stub（而非 `true` 全量 stub）：M3-0B 的上游数据下钻测试要点进详情
-// 抽屉内部找父 ID 链接，`true` 全量 stub 不渲染默认插槽，会让这些断言全部落空。
 const ElDrawerStub = { name: 'ElDrawer', props: ['modelValue'], template: '<div><slot /></div>' }
 const TaskInstDialogStub = { name: 'TaskInstDialog', props: ['modelValue', 'sourceId', 'parentId', 'canWrite'], template: '<div />' }
-const STUBS = { CanvasHeader: true, ElDrawer: ElDrawerStub, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub }
+const RowDetailFieldsStub = {
+  name: 'RowDetailFields',
+  props: ['fields', 'editing', 'values', 'compact', 'showEmpty', 'visibleProps'],
+  template: '<div class="rdf-stub"><div v-for="f in (fields || [])" :key="f.key">{{ f.name }} {{ f.value }}</div></div>',
+}
+const DataCondBuilderStub = {
+  name: 'DataCondBuilder',
+  props: ['modelValue', 'fields'],
+  emits: ['update:modelValue'],
+  template: '<input data-testid="data-cond-sql" :value="modelValue" placeholder="SQL 条件" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+}
+const STUBS = { CanvasHeader: true, ElDrawer: ElDrawerStub, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, DataCondBuilder: DataCondBuilderStub, SummaryDrawer: true }
 
 describe('ResultView', () => {
   afterEach(() => vi.restoreAllMocks())
@@ -146,7 +152,7 @@ describe('ResultView', () => {
 // 查询条件不绑回车（2026-08-20）：中文输入法上屏时也会发 Enter 的 keyup，而 Vue 的
 // @keyup.enter 不过滤 isComposing，实测会在打字打到一半时把半截条件当成回车查出去。
 async function typeSql(wrapper: ReturnType<typeof shallowMount>, sql: string) {
-  const input = wrapper.findAll('.ctx-summary input').find((i) => (i.attributes('placeholder') || '').includes('SQL'))!
+  const input = wrapper.get('[data-testid="data-cond-sql"]')
   await input.setValue(sql)
   return input
 }
@@ -305,7 +311,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     expect(wrapper.find('[data-testid="data-source-filter"]').exists()).toBe(false)
   })
 
-  it('首节点只有输出表：摘要行不出现可点的范围切换控件，执行方式是"按源抓取"', async () => {
+  it('首节点只有输出表：摘要行不出现可点的范围切换控件，从输出表勾行发后续（0824）', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
@@ -320,12 +326,12 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
 
     expect(wrapper.find('[data-testid="data-scope-output"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="data-scope-input"]').exists()).toBe(false)
-    // 「按源抓取」徽标已删除（2026-08-19，与按钮文案信息重复）：这里改由按钮文案
-    // 承担同一个断言——它现在是"这个节点按什么发"的唯一出处。
-    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发起抓取')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
+    expect(wrapper.find('[data-testid="data-exec-more-toggle"]').exists()).toBe(true)
   })
 
-  it('输入表===输出表（如规则处理节点）时，摘要行合并成一个 tab，行直接可勾选，不再有输入/输出切换（M3-0C 方案 A）', async () => {
+  it('输入表===输出表（如规则处理节点）时，摘要行合并成一个 tab，不再有输入/输出切换（M3-0C 方案 A）；该 fixture 的 mid 已是末节点，0831 改成从上一节点重跑', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
@@ -344,8 +350,12 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     expect(merged.exists()).toBe(true)
     expect(merged.text()).toContain('输入·输出')
     expect(wrapper.find('[data-testid="data-view-only-hint"]').exists()).toBe(false)
+    // 末节点：不发后续，但从上一节点重跑（0831 X7-B）
+    expect(wrapper.findComponent({ name: 'DataGrid' }).exists()).toBe(true)
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
-    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('从上一节点重跑')
+    expect(wrapper.find('[data-testid="data-exec-more-toggle"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('发后续任务')
   })
 
   it('输入表≠输出表（正常场景）时保留双 tab 切换，只有切到"输入"才能勾行，输出 tab 上改用说明文字代替禁用按钮（M3-0C：合并逻辑只对输入===输出生效，不影响这个更常见的场景）', async () => {
@@ -401,7 +411,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     expect(wrapper.find('[data-testid="data-process-rail"]').exists()).toBe(true)
   })
 
-  it('全屏：隐藏源信息头与节点轨道，但保留筛选与发起抓取；补出源名；Esc 退出', async () => {
+  it('全屏：隐藏源信息头，保留筛选与当前节点的执行入口；补出源名；Esc 退出', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
@@ -421,7 +431,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     // 让位的：只有源信息头
     expect(wrapper.findComponent({ name: 'CanvasHeader' }).exists()).toBe(false)
     // 保留的：节点轨道（0819 N1-2——它是唯一的节点选择器，全屏藏起来就没法切节点了）、
-    // 筛选条件、发起抓取——全屏不是"只能看不能用"
+    // 筛选条件、发后续入口——全屏不是"只能看不能用"
     expect(wrapper.find('[data-testid="data-process-rail"]').exists()).toBe(true)
     expect(wrapper.find('input[placeholder="数据 ID"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="data-exec-btn"]').exists()).toBe(true)
@@ -552,6 +562,66 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
   })
 })
 
+describe('ResultView · 默认节点与默认列（0831 F09/F10）', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    localStorage.clear()
+  })
+
+  it('默认选中首个节点，不是末端结果表', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+
+    const wrapper = mountResultView()
+    await flushPromises()
+
+    expect(wrapper.findComponent(ProcessNodeRail).props('modelValue')).toBe('first')
+  })
+
+  it('默认列取后继节点的上下文来源 + 进入条件字段，换算成当前表的 prop 传给表格', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    // mid / mid2 都直接消费 first 的输出表，是 first 的后继（本 fixture 里 mid 在前）
+    flow.configs.mid.taskCfg = { queue: '', urlRule: '', contextMap: ['K1'] }
+    flow.configs.mid.entryCondition = { logic: 'AND', items: [{ field: 'author', op: 'notEmpty', value: '' }] }
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({
+      tableId: 'T1', tableName: '列表', rowCount: 0,
+      fields: [
+        { prop: 'title', columnName: 'K1', type: 'string', desc: '标题' },
+        { prop: 'body', columnName: 'K2', type: 'string', desc: '正文' },
+        { prop: 'author', columnName: 'K3', type: 'string', desc: '作者' },
+      ],
+    })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('presetCols')).toEqual(['title', 'author'])
+  })
+
+  it('末节点算不出后继，预设为空——表格据此退回全部列', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'sink')
+
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('presetCols')).toEqual([])
+  })
+})
+
 // 规则处理节点（无 collectCfg）的固定 ID，供进入条件用例显式构造，不依赖种子自动补节点。
 const ruleNodeId = '391007768-rule-node'
 
@@ -561,21 +631,24 @@ function cfg(overrides: Partial<NodeConfig> = {}): NodeConfig {
 
 // 自定义一条干净的主链，绕开 391007768 demo 流程里 s1/规则处理输出表恰好撞同名的巧合，
 // 精确控制"唯一消费者 / 多消费者共用同一张输入表"两种场景：
-//   first(输出 T1，无输入，首节点) → mid(输入 T1，输出 T2) → last(输入 T2，唯一消费者)
+//   first(输出 T1，无输入，首节点) → mid(输入 T1，输出 T2) → last(输入 T2，唯一消费者) → sink(输入 T4，真末节点)
 //   mid2 单独把输入也显式设成 T1，跟 mid 撞车，制造 M2-14 的歧义场景
+//   0824：last 后面补 sink，让既有 nextStep 用例继续选 last 发后续；sink 才是没有后继的末节点。
 function loadExecFixture(flow: ReturnType<typeof useFlowStore>, current: Source) {
   flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
-  flow.main.splice(0, flow.main.length, 'start', 'first', 'mid', 'mid2', 'last', 'end')
+  flow.main.splice(0, flow.main.length, 'start', 'first', 'mid', 'mid2', 'last', 'sink', 'end')
   Object.assign(flow.configs, {
     first: cfg({ title: '抓取列表页', outputTable: 'T1' }),
     mid: cfg({ title: '处理A', inputTable: 'T1', outputTable: 'T2' }),
     mid2: cfg({ title: '处理B', inputTable: 'T1', outputTable: 'T3' }),
     last: cfg({ title: '入库', inputTable: 'T2' }),
+    sink: cfg({ title: '完成', inputTable: 'T4' }),
   })
 }
 
 // 干净的"输入≠输出、唯一消费者"场景（M3-0C）：跟 loadExecFixture 分开，避免复用 mid 时
 // 撞上 mid2 制造的 M2-14 歧义——这里就是想测"正常、不歧义"的双 tab 场景本身。
+// mid 后面还有 last，0824 仍展示发后续；last 才是末节点（本 fixture 的双 tab 用例选的是 mid）。
 function loadDistinctTablesFixture(flow: ReturnType<typeof useFlowStore>, current: Source) {
   flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
   flow.main.splice(0, flow.main.length, 'start', 'first', 'mid', 'last', 'end')
@@ -588,6 +661,7 @@ function loadDistinctTablesFixture(flow: ReturnType<typeof useFlowStore>, curren
 
 // 输入===输出（M3-0C）：mid 的输入表和输出表故意设成同一个值，且是 T1 唯一的消费者
 // （不掺 M2-14 的歧义判定，只测合并 tab 本身）。
+// 0824：这条链 first→mid，mid 已是末节点，不展示发后续。
 function loadSameTableFixture(flow: ReturnType<typeof useFlowStore>, current: Source) {
   flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
   flow.main.splice(0, flow.main.length, 'start', 'first', 'mid', 'end')
@@ -606,33 +680,73 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     document.querySelectorAll('.rv-more-panel').forEach((el) => el.remove())
   })
 
-  it('首节点展示"发起抓取"按钮，确认后调用 sendSnatch', async () => {
+  it('首节点只有输出表：勾选行后发后续任务，调用 nextStep（0824：列表行发给后继，不是按源抓取）', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
     loadExecFixture(flow, current)
-    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 2,
+      list: [
+        { dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' },
+        { dataId: 'd2', sourceId: current.sourceId, title: 'B', summary: '', acceptState: 'pending' },
+      ],
+    })
     vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
-    vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({})
-    const sendSnatch = vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: '已发起抓取' })
+    const sendSnatch = vi.spyOn(sourceApi, 'sendSnatchWithParam')
+    const nextStep = vi.spyOn(dataApi, 'nextStep').mockResolvedValue({ message: '已提交 2 条' })
 
     const wrapper = mountResultView()
     await flushPromises()
     await selectNode(wrapper, 'first')
 
-    const btn = wrapper.get('[data-testid="data-exec-btn"]')
-    // 首节点按源"发起抓取"，非首节点按输入数据"发后续任务"——旧平台本就是两个不一样的
-    // 方法（0812 会议 53:40），曾一度统一叫"发起抓取"是误判，已改回两个文案（M3-0A）。
-    expect(btn.text()).toBe('发起抓取')
-    expect((btn.element as HTMLButtonElement).disabled).toBe(false)
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
+    expect(wrapper.find('[data-testid="data-exec-more-toggle"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('已选 0 条')
 
-    await btn.trigger('click')
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['d1', 'd2'])
+    await flushPromises()
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
     await flushPromises()
 
-    expect(sendSnatch).toHaveBeenCalledWith(expect.objectContaining({ ids: [current.sourceId] }))
-    expect(ElMessage.success).toHaveBeenCalledWith('已发起抓取')
+    expect(sendSnatch).not.toHaveBeenCalled()
+    expect(nextStep).toHaveBeenCalledWith(current.sourceId, 'T1', ['d1', 'd2'])
+  })
+
+  it('首节点显式有输入表且后面还有后继：按钮是「发后续任务」，不是「发起抓取」（0824：前一个节点把行发给后一个）', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    flow.main.splice(0, flow.main.length, 'start', 'first', 'mid', 'last', 'end')
+    Object.assign(flow.configs, {
+      first: cfg({ title: '列表', inputTable: 'T0', outputTable: 'T1' }),
+      mid: cfg({ title: '详情', inputTable: 'T1', outputTable: 'T2' }),
+      last: cfg({ title: '入库', inputTable: 'T2' }),
+    })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'first')
+
+    // 0812 双 tab：有输入表时输出 tab 仍是本节点产物，不勾行；切到输入才发后续。
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(false)
+    expect(wrapper.find('[data-testid="data-exec-btn"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="data-view-only-hint"]').text()).toContain('本节点产出数据')
+
+    await wrapper.get('[data-testid="data-scope-input"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="data-view-only-hint"]').exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.find('[data-testid="data-exec-more-toggle"]').exists()).toBe(true)
   })
 
   it('非首节点、有效输入表只有唯一消费者时：切到输入数据勾选行后可以发后续任务，调用 nextStep', async () => {
@@ -675,6 +789,35 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
 
     expect(nextStep).toHaveBeenCalledWith(current.sourceId, 'T2', ['d1', 'd2'])
     expect(ElMessage.success).toHaveBeenCalledWith('已提交 2 条')
+  })
+
+  it('末节点没有直接后继：不展示发后续，改为从上一节点重跑（0831 X7-B）', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 2,
+      list: [
+        { dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' },
+        { dataId: 'd2', sourceId: current.sourceId, title: 'B', summary: '', acceptState: 'pending' },
+      ],
+    })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'sink')
+
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('从上一节点重跑')
+    expect(wrapper.find('[data-testid="data-exec-more-toggle"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('发后续任务')
+    const grid = wrapper.findComponent({ name: 'DataGrid' })
+    expect(grid.exists()).toBe(true)
+    expect(grid.props('selectable')).toBe(true)
+    expect(grid.props('rows')).toHaveLength(2)
+    expect(wrapper.find('.rv-tablecount').text()).toContain('行')
   })
 
   it('发本页任务（M3-0E）：不勾选也能一次性发当页全部行，并复用同一套回执解析', async () => {
@@ -1074,6 +1217,37 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     expect(ElMessage.error).toHaveBeenCalledWith('目标节点"入库"处理失败：生产环境写保护：端点不在允许清单')
   })
 
+  it('后端返回「没有详情配置」时不把后继误说成必须是详情页', async () => {
+    vi.mocked(ElMessage.success).mockClear()
+    vi.mocked(ElMessage.error).mockClear()
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 1,
+      list: [{ dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' }],
+    })
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
+    vi.spyOn(dataApi, 'nextStep').mockRejectedValue(new Error('请求异常 [data/nextStep]: 没有详情配置'))
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'last')
+    const grid = wrapper.findComponent({ name: 'DataGrid' })
+    await grid.vm.$emit('update:selectedIds', ['d1'])
+    await flushPromises()
+
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(ElMessage.error).toHaveBeenCalledWith(expect.stringContaining('没有详情配置'))
+    expect(ElMessage.error).toHaveBeenCalledWith(expect.stringContaining('并不要求下一个节点必须是详情页'))
+    expect(ElMessage.error).not.toHaveBeenCalledWith(expect.stringContaining('详情类配置'))
+  })
+
   it('有效输入表被多个节点共用（歧义）时禁用执行按钮并说明原因', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
@@ -1098,24 +1272,28 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(false)
   })
 
-  it('点击发起抓取后取消确认框：不调用 sendSnatch', async () => {
+  it('勾选后取消发后续确认框：不调用 nextStep', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
     loadExecFixture(flow, current)
-    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 1, list: [{ dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' }],
+    })
     vi.mocked(ElMessageBox.confirm).mockRejectedValue('cancel')
-    const sendSnatch = vi.spyOn(sourceApi, 'sendSnatchWithParam')
+    const nextStep = vi.spyOn(dataApi, 'nextStep')
 
     const wrapper = mountResultView()
     await flushPromises()
     await selectNode(wrapper, 'first')
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['d1'])
+    await flushPromises()
     await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
     await flushPromises()
 
-    expect(sendSnatch).not.toHaveBeenCalled()
+    expect(nextStep).not.toHaveBeenCalled()
   })
 
   it('切换节点会清空已勾选的行', async () => {
@@ -1226,5 +1404,90 @@ describe('ResultView · 上游数据下钻（M3-0B：旧平台 EntryList2.vue �
     await flushPromises()
 
     expect(wrapper.find('[data-testid="data-parent-panel"]').exists()).toBe(false)
+  })
+})
+
+describe('ResultView · 0831 详情翻条与末节点回上游', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('详情抽屉按当前页翻条，翻到最后一条时下一条禁用', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    const rows: DataRow[] = [
+      { dataId: 'd1', sourceId: current.sourceId, title: '行1', summary: '', acceptState: 'accepted', values: {} },
+      { dataId: 'd2', sourceId: current.sourceId, title: '行2', summary: '', acceptState: 'accepted', values: {} },
+    ]
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: rows, total: 2 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('row-click', rows[0])
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="row-detail-pos"]').text()).toBe('1/2')
+    expect((wrapper.get('[data-testid="row-detail-prev"]').element as HTMLButtonElement).disabled).toBe(true)
+    await wrapper.get('[data-testid="row-detail-next"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="row-detail-pos"]').text()).toBe('2/2')
+    const next = wrapper.get('[data-testid="row-detail-next"]')
+    expect((next.element as HTMLButtonElement).disabled).toBe(true)
+    expect(next.attributes('title')).toContain('本页最后一条')
+  })
+
+  it('同表末节点从上一节点重跑：nextStep 带当前表和勾选 ID', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadSameTableFixture(flow, current)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 1,
+      list: [{ dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' }],
+    })
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
+    const nextStep = vi.spyOn(dataApi, 'nextStep').mockResolvedValue({ message: '已提交 1 条' })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'mid')
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['d1'])
+    await flushPromises()
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(nextStep).toHaveBeenCalledWith(current.sourceId, 'T1', ['d1'])
+  })
+
+  it('异表末节点从上一节点重跑：用 parentId 去重后发到上游表', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 2,
+      list: [
+        { dataId: 'c1', sourceId: current.sourceId, title: 'C1', summary: '', acceptState: 'pending', parentId: 'p9' },
+        { dataId: 'c2', sourceId: current.sourceId, title: 'C2', summary: '', acceptState: 'pending', parentId: 'p9' },
+      ],
+    })
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
+    const nextStep = vi.spyOn(dataApi, 'nextStep').mockResolvedValue({ message: '已提交 1 条' })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'sink')
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['c1', 'c2'])
+    await flushPromises()
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(nextStep).toHaveBeenCalledWith(current.sourceId, 'T2', ['p9'])
   })
 })

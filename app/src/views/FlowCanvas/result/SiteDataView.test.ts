@@ -26,6 +26,8 @@ const stubs = {
   SiteSourceSelect: { name: 'SiteSourceSelect', template: '<div />', emits: ['update:modelValue'] },
   TaskInstDialog: { name: 'TaskInstDialog', props: ['modelValue', 'sourceId', 'parentId', 'canWrite'], template: '<div />' },
   ElDrawer: true,
+  ElDialog: { name: 'ElDialog', props: ['modelValue'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' },
+  SummaryDrawer: true,
 }
 
 function mountView(siteId = 'site-a') {
@@ -152,7 +154,7 @@ describe('SiteDataView · 全部源（表筛选）', () => {
     expect(rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ dataId: '123', sourceId: 'a' }))
   })
 
-  it('表名/行数走 DataGrid 的 #head 插槽，跟「列 ▾」同一条横条——不再是独立的 .sdv2-tablehead 单占一行（参考 ResultView.vue）', async () => {
+  it('表名/行数走 DataGrid 的 #head 插槽，跟「列」同一条横条——不再是独立的 .sdv2-tablehead 单占一行（参考 ResultView.vue)', async () => {
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
     vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['a'])
     const meta2Cols: DataTableMeta = {
@@ -171,7 +173,7 @@ describe('SiteDataView · 全部源（表筛选）', () => {
     expect(toolbar.text()).toContain('T1')
     expect(toolbar.text()).toContain('已加载 1 条')
     expect(toolbar.find('[data-testid="site-data-fullscreen-toggle"]').exists()).toBe(true)
-    expect(toolbar.text()).toContain('列 ▾')
+    expect(toolbar.find('[data-testid="column-picker-btn"]').exists()).toBe(true)
   })
 
   it('全屏切换：点击进入/退出全屏，Esc 也能退出（参考 ResultView.vue 具体源数据视图）', async () => {
@@ -397,11 +399,10 @@ describe('SiteDataView · 具体源（节点筛选，纯查看——2026-08-14 �
     const wrapper = mountView()
     await pickSource(wrapper, '391007768')
 
-    // 默认选中末端节点：详情解析（buildSourceSeed 按步骤拼出的最后一个真实节点）——
-    // 纯查看态没有节点摘要行了，选中的节点名只显示在下拉输入框的 placeholder 里。
+    // 默认选中**首个**节点：列表抓取（0831 F09 反转了此前的"默认末端"，与 ResultView 一致）。
     // 选中节点由轨道自己高亮，不再有下拉 placeholder 承载"当前是哪个节点"
-    expect(wrapper.get('[data-node-id="391007768-s2"]').classes()).toContain('active')
-    expect(wrapper.get('[data-node-id="391007768-s2"]').text()).toContain('详情解析')
+    expect(wrapper.get('[data-node-id="391007768-s1"]').classes()).toContain('active')
+    expect(wrapper.get('[data-node-id="391007768-s1"]').text()).toContain('列表抓取')
   })
 
   // 决策/分头节点此前只能靠本地草稿（flowApi.flowLoad 返回一个手工构造的 kind:'decision'
@@ -423,6 +424,19 @@ describe('SiteDataView · 具体源（节点筛选，纯查看——2026-08-14 �
     expect(wrapper.find('[data-testid="source-node-exec-btn"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('发起抓取')
     expect(wrapper.text()).not.toContain('发后续任务')
+  })
+
+  it('具体源 + 首节点（只有输出表）可以勾行发后续', async () => {
+    mockFlowFixture('391007768')
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [row('391007768', 'd1')] })
+
+    const wrapper = mountView()
+    await pickSource(wrapper, '391007768')
+    await selectNode(wrapper, 'first')
+
+    expect(wrapper.get('[data-testid="source-node-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
   })
 
   it('DataGrid「所属源」列在具体源下改叫「所属节点」，且不展示操作列（避免跟具体源自己的数据视图混淆）', async () => {
@@ -484,8 +498,8 @@ describe('SiteDataView · 具体源（节点筛选，纯查看——2026-08-14 �
     vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(mockSourceSteps({ sourceId: current.sourceId }))
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
 
-    // 按调用顺序区分：请求 #1（初始挂载默认节点）立即返回，#2（切到首节点）卡住，
-    // #3（切回末端节点）立即返回——验证 #2 迟到时不会覆盖 #3 已经展示的结果。
+    // 按调用顺序区分：请求 #1（初始挂载默认选中首节点）立即返回，#2（切到末端节点）卡住，
+    // #3（切回首节点）立即返回——验证 #2 迟到时不会覆盖 #3 已经展示的结果。
     let resolveStale: (() => void) | undefined
     let requestCount = 0
     vi.spyOn(dataApi, 'rowQueryPaged').mockImplementation(async () => {
@@ -498,10 +512,10 @@ describe('SiteDataView · 具体源（节点筛选，纯查看——2026-08-14 �
     })
 
     const wrapper = mountView()
-    await pickSource(wrapper, '391007768') // 请求 #1：初始挂载默认选中末端节点，立即返回 fresh
+    await pickSource(wrapper, '391007768') // 请求 #1：初始挂载默认选中首节点，立即返回 fresh
 
-    await selectNode(wrapper, '391007768-s1') // 请求 #2：切到首节点，卡住
-    await selectNode(wrapper, '391007768-s2') // 请求 #3：切回末端节点，立即返回
+    await selectNode(wrapper, '391007768-s2') // 请求 #2：切到末端节点，卡住
+    await selectNode(wrapper, '391007768-s1') // 请求 #3：切回首节点，立即返回
 
     const grid = () => wrapper.findComponent({ name: 'DataGrid' })
     expect(grid().props('rows')?.[0]?.dataId).toBe('fresh')

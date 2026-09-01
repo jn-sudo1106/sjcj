@@ -61,6 +61,8 @@ export default defineConfig(({ mode }) => {
           target: proxyTarget,
           changeOrigin: true,
           autoRewrite: true,
+          // 生成脚本是流式长请求（前端 120s abort），代理默认超时会先断开。
+          timeout: 180_000,
         },
       },
     },

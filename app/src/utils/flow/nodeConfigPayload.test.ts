@@ -34,6 +34,7 @@ describe('节点 ↔ 配置字段映射', () => {
 
     expect(cfg.configId).toBe('1400765')
     expect(cfg.configName).toBe('python详情解析器_900')
+    expect(cfg.configUrl).toBe('https://config-own-url.example/list')
     expect(cfg.collectCfg?.multiMode).toBe(2)
     expect(cfg.collectCfg?.bizType).toBe('news')
     expect(cfg.collectCfg?.outputTable).toBe('900')
@@ -79,6 +80,22 @@ describe('节点 ↔ 配置字段映射', () => {
     })
     // 源 URL 不进配置：payload 里没有任何等于节点源 URL 的字段
     expect(Object.values(payload)).not.toContain('http://finance.gog.cn/jrlc/index.shtml')
+  })
+
+  it('节点上改过配置 URL 时写入 payload，仍不用源 URL', () => {
+    const cfg = node()
+    applyConfigToNode(cfg, config)
+    cfg.configUrl = 'https://edited-config-url.example/'
+    const payload = buildConfigPayload(cfg, { configUrl: 'https://config-own-url.example/list' })
+    expect(payload.configUrl).toBe('https://edited-config-url.example/')
+    expect(Object.values(payload)).not.toContain('http://finance.gog.cn/jrlc/index.shtml')
+  })
+
+  it('节点没回填配置 URL 时保持后端原值', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    expect(cfg.configUrl).toBeUndefined()
+    const payload = buildConfigPayload(cfg, { configUrl: 'https://passport.baidu.com/' })
+    expect(payload.configUrl).toBe('https://passport.baidu.com/')
   })
 
   it('源内去重回写成空串（旧 snatchDrepeat 口径）', () => {

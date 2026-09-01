@@ -108,4 +108,20 @@ describe('TaskTab · 上下文来源（对齐旧平台）', () => {
     await flushPromises()
     expect(select(wrapper).props('disabled')).toBe(true)
   })
+
+  it('规则处理节点把同一字段标成「入参来源」，与旧步骤表单一致', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS['rule'])
+    cfg.inputTable = '900'
+    cfg.taskCfg = { queue: '', urlRule: '', contextMap: ['K1', 'K2'] }
+    flow.configs['rule-1'] = cfg
+    flow.select('rule-1')
+    flow.setActiveTab('task')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('入参来源')
+    expect(wrapper.text()).not.toContain('上下文来源')
+  })
 })

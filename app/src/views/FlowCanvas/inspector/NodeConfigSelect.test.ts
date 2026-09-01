@@ -12,7 +12,7 @@ import { configApi, type Config } from '@/api'
 
 const PICKED: Config = { configId: '1400774', name: '证券之星列表配置' } as Config
 const FULL_DETAIL: Config = {
-  configId: '1400774', name: '证券之星列表配置', entryTypeId: '2103330', topic: 'q-list',
+  configId: '1400774', name: '证券之星列表配置', url: 'http://www.baidu.com', entryTypeId: '2103330', topic: 'q-list',
 } as Config
 
 afterEach(() => vi.restoreAllMocks())
@@ -47,6 +47,7 @@ describe('更换配置', () => {
     expect(flow.configs['web-list'].configId).toBe('1400774')
     // 精简对象没有 entryTypeId，直接绑会把输出表写空——必须来自 configDetail
     expect(flow.configs['web-list'].collectCfg?.outputTable).toBe('2103330')
+    expect(flow.configs['web-list'].configUrl).toBe('http://www.baidu.com')
   })
 
   it('configDetail 读不到就不绑定，宁可不绑也不绑错', async () => {

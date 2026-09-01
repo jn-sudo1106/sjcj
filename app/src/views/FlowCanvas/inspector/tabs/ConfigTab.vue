@@ -3,7 +3,7 @@
 // 内容：决策/分头 → BranchEditor；采集 → URL/运行设置；规则节点仅「节点名称」
 // （表/字段在「表配置」，脚本在「编排配置」，见 RuleOrchestrationTab，0801 方案 §6.1）。
 // 跨节点字段映射那块（inmap，原节点配置里的一段表格）已整块删除（0804 拍板：没什么用，见开发方案 §2.4）。
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useDuplicateNode } from '@/views/FlowCanvas/canvas/useDuplicateNode'
@@ -11,11 +11,11 @@ import {
   BIZ_TYPE_OPTIONS, WEB_TYPE_OPTIONS, defaultMultiMode, decisionOrParallelKind, collectorCapabilityOf, isRuleNode,
   type CollectConfig, type CollectorSchedule, type LoginConfigRef, type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, ruleApi, type RuleOrchestrationItem } from '@/api'
+import { configApi, entryApi, ruleApi, type RuleOrchestrationItem } from '@/api'
+import { configUrlFromLegacy } from '@/api/legacyAdapters'
 import BranchEditor from '../BranchEditor.vue'
 import CollectorSettings, { type CollectorRuntimeSettings } from '../CollectorSettings.vue'
 import TaskScheduleSettings from '../TaskScheduleSettings.vue'
-import RuntimePolicySummary from '../RuntimePolicySummary.vue'
 import ParamSourceEditor, { type ParamSourceModel } from '@/views/FlowCanvas/source/ParamSourceEditor.vue'
 import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDialog.vue'
 import SelectExistingRuleDialog from '../SelectExistingRuleDialog.vue'
@@ -202,6 +202,7 @@ async function onSelectExistingRule(rule: RuleOrchestrationItem) {
       }
     }
     flow.setTitle(id.value, detail.name || rule.name)
+    flow.setItemId(id.value, detail.ruleId)
     flow.patchRuleConfig(id.value, {
       mode: 'ref',
       ruleId: detail.ruleId,
@@ -232,7 +233,6 @@ const appPackageName = computed(() => {
   const row = cfg.value?.base[appPackageRowIndex.value]
   return row?.[1] ?? ''
 })
-const collectUrlLabel = computed(() => (isAppCollect.value ? '接口地址' : '源 URL'))
 function onAppPackageChange(e: Event) {
   if (appPackageRowIndex.value < 0) return
   flow.setBaseRow(id.value, appPackageRowIndex.value, (e.target as HTMLInputElement).value)
@@ -261,17 +261,40 @@ function onMultiMode(e: Event) {
   flow.patchCollect(id.value, { multiMode: raw === '' ? undefined : Number(raw) })
 }
 
-const configName = computed(() => cfg.value?.configName ?? '')
-function onConfigName(e: Event) {
-  flow.setConfigName(id.value, (e.target as HTMLInputElement).value)
-}
-
-// 节点名称 / 源 URL 的编辑收进弹窗，落库也在弹窗里（见 EditNodeSourceDialog）
+// 节点名称的编辑收进弹窗（见 EditNodeSourceDialog）；源名称/源 URL 在左侧源详情改。
 const editNodeSourceOpen = ref(false)
 
 function onBizType(e: Event) {
   flow.patchCollect(id.value, { bizType: (e.target as HTMLSelectElement).value || undefined })
 }
+
+const configUrl = computed(() => cfg.value?.configUrl ?? '')
+function onConfigUrl(e: Event) {
+  flow.setConfigUrl(id.value, (e.target as HTMLInputElement).value)
+}
+
+// 配置 URL 跟旧 ConfigEdit 同一接口：GET config/configDetail → 原始记录的 configUrl。
+// 源加载时 attachStepConfigDetails 会回填；这里再读一次是为了当前已打开的节点
+//（HMR / 回填早于本字段接入）也能立刻填上，且不置脏。
+watch(
+  () => [id.value, cfg.value?.configId] as const,
+  async ([nodeId, cid]) => {
+    if (!nodeId || !cid) return
+    if (flow.configs[nodeId]?.configUrl) return
+    try {
+      const raw = await configApi.configDetailRaw(cid)
+      if (flow.selectedId !== nodeId) return
+      const current = flow.configs[nodeId]
+      if (!current || current.configId !== cid || current.configUrl) return
+      const url = configUrlFromLegacy(raw)
+      if (!url) return
+      flow.hydrateConfigUrl(nodeId, url)
+    } catch {
+      // 读不到保持空；保存仍走 base.configUrl 兜底，不会把后端真值抹掉
+    }
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -279,9 +302,9 @@ function onBizType(e: Event) {
        决策/分头节点直接交给 BranchEditor 接管（0707 优化·Phase6） -->
   <BranchEditor v-if="isDecisionOrParallel && id" :owner-id="id" :key="id" />
   <template v-else>
-    <!-- 节点名称 / 源 URL 不属于配置，底部「保存配置」不管它们（0824-11 §1.2b）。
-         采集节点上做成只读 + 「编辑」弹窗（与本文件参数源那块同款），既不让用户以为底部按钮
-         把整屏都存了，也不用摆一个分组标题把内部归属摊出来。
+    <!-- 节点名称不属于配置，底部「保存配置」不管它（0824-11 §1.2b）。
+         采集节点上做成只读 + 「编辑」弹窗，既不让用户以为底部按钮把整屏都存了。
+         源 URL 按 0828 D07 / 0829：属于源，在左侧「源详情」只读展示并编辑，不在节点配置 Tab。
          规则节点的节点名称 = 规则名称，有自己的新建/选择已有流程（0805），保持原样直接编辑。 -->
     <div class="rc-field"><label>节点名称{{ isRule ? '（= 规则名称）' : '' }}</label>
       <div v-if="isRule" class="rc-input-group">
@@ -296,14 +319,30 @@ function onBizType(e: Event) {
       </div>
       <input v-else class="rc-input" :value="cfg?.title" @input="onTitle" />
     </div>
-    <div v-if="cc && !isLoginNode" class="rc-field"><label>{{ collectUrlLabel }}</label>
-      <div class="rc-input-group">
-        <div class="rc-readonly">{{ cc.url }}</div>
-        <button class="rc-input-action" type="button" title="复制" @click="ElMessage.info('复制链接（演示）')">复制</button>
-        <button class="rc-input-action" type="button" title="打开" @click="ElMessage.info('打开链接（演示）')">↗</button>
+    <template v-if="isRule">
+      <div class="rc-field"><label>适用源</label>
+        <input
+          class="rc-input"
+          :value="cfg?.stepSourceId ?? ''"
+          placeholder="-1 表示该配置下所有源"
+          aria-label="适用源"
+          @input="flow.setStepSourceId(id, ($event.target as HTMLInputElement).value)"
+        />
+        <div class="rc-help">旧步骤「适用源」。填当前源 ID，或填 -1 表示使用该配置的所有源。</div>
       </div>
-    </div>
-    <EditNodeSourceDialog v-model:open="editNodeSourceOpen" :node-id="id" :show-url="!!cc && !isLoginNode" />
+      <div class="rc-field"><label>规则ID选择</label>
+        <input
+          class="rc-input"
+          :value="cfg?.itemId ?? '-1'"
+          placeholder="-1"
+          aria-label="规则ID选择"
+          data-testid="rule-item-id"
+          @input="flow.setItemId(id, ($event.target as HTMLInputElement).value)"
+        />
+        <div class="rc-help">旧步骤「规则ID选择」。未选规则时为 -1；点「选择已有」会写入所选规则的 ID。这是步骤字段，不是编排脚本的 ruleId。</div>
+      </div>
+    </template>
+    <EditNodeSourceDialog v-model:open="editNodeSourceOpen" :node-id="id" />
     <!-- 定时策略：采集节点挪到「运行设置」上方（见下）；非采集节点没有运行设置，仍留在这里 -->
     <details v-if="!cc" class="ni-schedule">
       <summary>定时策略</summary>
@@ -404,15 +443,16 @@ function onBizType(e: Event) {
           >{{ opt.label }}</option>
         </select>
       </div>
-      <!-- 配置名称（config-meta，0824-06 §4）：已有配置显示后端真名，新建配置必填 -->
-      <!-- 不打 *：整个面板都没有必填星号，统一在保存时校验并提示（2026-08-28） -->
-      <div class="rc-field"><label>配置名称</label>
+      <!-- 配置名称不在本 Tab 展示：上方「当前配置」条已经有名字。
+           新增/复制节点时配置名 = 节点名（见 flow.insertAfter / useDuplicateNode）。 -->
+      <!-- URL = 旧平台「配置编辑」的 configUrl，跟画布头上的源 URL 不是同一份。 -->
+      <div class="rc-field"><label>URL</label>
         <input
           class="rc-input"
-          :value="configName"
-          placeholder="新建配置：填写配置名称"
-          aria-label="配置名称"
-          @input="onConfigName"
+          :value="configUrl"
+          placeholder="配置 URL"
+          aria-label="URL"
+          @input="onConfigUrl"
         />
       </div>
       <!-- 业务类型（0804 S3-1）：跟上面的网页类型是两个独立字段，不要合并 -->
@@ -444,9 +484,7 @@ function onBizType(e: Event) {
       <CollectorSettings :model-value="runtimeSettings" :capability="nodeCapability" @update:model-value="onRuntimeSettingsChange" />
     </template>
 
-    <!-- 运行策略属于节点引用的 Config：配置中心入口弱化后，在流程右侧直接展示。
-         当前只读，避免在后端 updateConfigPolicy / runPolicy 映射未确认时制造“能改但存不了”的假象。 -->
-    <RuntimePolicySummary v-if="cfg?.configId" :raw="cfg.runPolicy" />
+    <!-- 运行策略（config.runPolicy）已迁到 RuntimePolicySummary.vue，2026-08-31 先不在节点配置展示。 -->
 
     <!-- 非采集非规则：基础字段 / 参数 / 试跑信息 -->
     <template v-if="!cc && !isRule">

@@ -1,0 +1,13 @@
+---
+description: Git remotes — CNB origin and intranet GitLab backup
+alwaysApply: true
+---
+
+# Git 远程仓库
+
+- `origin` fetch：外网 CNB `https://cnb.cool/vanvdev/bee-soft/front-ce`
+- `origin` push 双写：CNB + 内网 GitLab `http://47.120.11.60:50105/root/ce`
+- `ce`：只操作内网 GitLab 时用
+- CNB HTTPS 用户名固定 `cnb`，密码为访问令牌；push 需「Git 客户端凭据」（`repo-code:rw`）
+- 不要把令牌或账号密码写入 remote URL，也不要提交进仓库
+- `git pull` 只从 CNB 拉；`git push` 两边都推（一边失败需再补推）
