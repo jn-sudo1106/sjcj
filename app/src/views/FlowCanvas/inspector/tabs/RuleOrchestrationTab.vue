@@ -13,7 +13,7 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
-import { isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { isVruleNumericRuleId } from '@/api/legacyAdapters'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
@@ -30,6 +30,7 @@ const route = useRoute()
 const id = computed<string>(() => flow.selectedId)
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
 const isRule = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
+const isMonitor = computed(() => (cfg.value ? isMonitorNode(cfg.value) : false))
 const orchCfg = computed<RuleOrchestration>(() => ({
   ...(isRule.value ? makeDefaultRuleOrchestration() : makeDefaultExecConfig()),
   ...(isRule.value ? cfg.value?.ruleCfg : cfg.value?.execCfg),
@@ -286,8 +287,13 @@ async function onGenerateScript(
     ElMessage.warning('请先选择模型供应商和模型')
     return
   }
-  if (isRule.value && (!orchCfg.value.inputFields?.length || !orchCfg.value.outputFields?.length)) {
+  if (isRule.value && !isMonitor.value && (!orchCfg.value.inputFields?.length || !orchCfg.value.outputFields?.length)) {
     ElMessage.warning('请先在「表配置」完成入参/出参字段绑定')
+    return
+  }
+  // 数据监控节点无出参字段，只校验入参，跳过出参校验（2026-09-01）
+  if (isMonitor.value && !orchCfg.value.inputFields?.length) {
+    ElMessage.warning('请先在「表配置」完成入参字段绑定')
     return
   }
   const ruleId = await ensureNumericRuleId()
