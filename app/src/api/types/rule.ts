@@ -217,6 +217,13 @@ export interface RuleOrchestrationTestRequest {
   rows: Array<Record<string, string>>
 }
 
+/** 脚本测试请求：按文件路径执行当前行参数。 */
+export interface CodeExecuteRequest {
+  codePath: string
+  params: Record<string, string>
+  timeout: number
+}
+
 /** 一条输入可产出多条输出记录（实测：zb_value 与 zb_tb 同时有值 → 2 条），故为数组，非单对象 */
 export interface RuleOrchestrationTestResult {
   success: boolean

@@ -96,6 +96,7 @@ function mockAssets() {
 afterEach(() => {
   vi.restoreAllMocks()
   routerPush.mockClear()
+  routerReplace.mockClear()
 })
 
 function mountOnRuleNode() {
@@ -142,6 +143,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     const { wrapper } = mountWithExistingRule()
     await flushPromises()
 
+    expect(wrapper.find('textarea.rc-code-box').exists()).toBe(false)
     const buttons = wrapper.findAll('button').filter((b) => ['全屏查看', '保存脚本'].includes(b.text()))
     expect(buttons).toHaveLength(2)
     buttons.forEach((b) => expect(b.attributes('disabled')).toBeDefined())
@@ -283,6 +285,37 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     await flushPromises()
 
     expect(wrapper.html()).toContain('def main(sku_id)')
+  })
+
+  it('点击脚本路径打开工作区，展示脚本正文', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', { script: 'def main(sku_id):\n    return {}', scriptPath: '/x/y.py' })
+    await flushPromises()
+
+    const pathBtn = wrapper.find('button[title="/x/y.py"]')
+    await pathBtn.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.html()).toContain('def main(sku_id)')
+  })
+
+  it('点击测试脚本时会把 scriptPath 一并带到数据视图', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', { script: 'def main(sku_id):\n    return {}', scriptPath: '/code01/202609/1788326374508.py' })
+    await flushPromises()
+
+    const testBtn = wrapper.findAll('button').find((b) => b.text() === '测试脚本')!
+    await testBtn.trigger('click')
+    await flushPromises()
+
+    expect(routerReplace).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/canvas',
+      query: expect.objectContaining({
+        nodeId: 'rule-1',
+        view: 'data',
+        scriptPath: '/code01/202609/1788326374508.py',
+      }),
+    }))
   })
 
   it('编辑系统提示词：保存后写回 systemPrompt，取消不写回', async () => {
@@ -523,7 +556,16 @@ describe('RuleOrchestrationTab · 测试脚本切换数据视图', () => {
     await testBtn.trigger('click')
     await flushPromises()
 
-    expect(routerReplace).toHaveBeenCalledWith({ path: '/canvas', query: { sourceId: 's-1', siteId: 'site-9', view: 'data', nodeId: 'rule-1' } })
+    expect(routerReplace).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/canvas',
+      query: expect.objectContaining({
+        sourceId: 's-1',
+        siteId: 'site-9',
+        view: 'data',
+        nodeId: 'rule-1',
+        scriptPath: '/x/y.py',
+      }),
+    }))
     expect(routerPush).not.toHaveBeenCalled()
   })
 })

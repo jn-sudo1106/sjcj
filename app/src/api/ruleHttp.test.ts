@@ -108,6 +108,35 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
     expect(result.codeHash).toBe('abc')
   })
 
+  it('executeCode：POST /vrule/fastapi/execute/code，body 传 code_path / params / timeout', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      code: '0',
+      data: {
+        success: true,
+        result: [{ ok: true }],
+        message: 'done',
+      },
+    }))
+    const { ruleApi } = await import('./index')
+
+    const result = await ruleApi.executeCode({
+      codePath: '/code01/202609/1788327078099.py',
+      params: { content: '正文', title: '测试行' },
+      timeout: 300,
+    })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/vrule/fastapi/execute/code')
+    expect(init.method).toBe('POST')
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json')
+    expect(JSON.parse(String(init.body))).toEqual({
+      code_path: '/code01/202609/1788327078099.py',
+      params: { content: '正文', title: '测试行' },
+      timeout: 300,
+    })
+    expect(result).toMatchObject({ success: true, result: [{ ok: true }] })
+  })
+
   it('orchestrationSave：POST /vrule/ai/dashscope/script/edit，codeFileName/scriptCode', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { ruleApi } = await import('./index')

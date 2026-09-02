@@ -63,6 +63,10 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/oss/, ''),
         },
+        '/vrule/fastapi/execute/code': {
+          target: 'http://127.0.0.1:8000',
+          changeOrigin: true,
+        },
         // 规则编排 Sprint 4：saveMeta/test/saveScript 直连同机 vrule（0801 方案 §8.1）
         '/vrule': {
           target: proxyTarget,

@@ -6,7 +6,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import ResultView from './ResultView.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
-import { dataApi, isProductionBackend, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source } from '@/api'
+import { dataApi, isProductionBackend, ruleApi, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
@@ -15,10 +15,11 @@ import type { NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 // 只替换 isProductionBackend，其余照搬真实模块——现有用例的 vi.spyOn(dataApi, …)
 // 作用在同一个 dataApi 对象引用上，不受影响。
 const routerPush = vi.fn()
+const mockRouteQuery: Record<string, string> = { siteId: '1', sourceId: '391007768', view: 'data' }
 vi.mock('vue-router', () => ({
   useRouter: () => ({ push: routerPush }),
   // 跳转要透传当前 query（否则会丢 siteId，左侧源列表整个不渲染）
-  useRoute: () => ({ query: { siteId: '1', sourceId: '391007768', view: 'data' } }),
+  useRoute: () => ({ query: mockRouteQuery }),
 }))
 
 vi.mock('@/api', async (importOriginal) => {
@@ -46,16 +47,21 @@ const DataGridStub = {
   template: '<div class="dg-stub"><slot name="head" /><slot name="head-right" /><slot name="foot" /></div>',
 }
 const ElDrawerStub = { name: 'ElDrawer', props: ['modelValue'], template: '<div><slot /></div>' }
+const ElDialogStub = { name: 'ElDialog', props: ['modelValue'], template: '<div v-if="modelValue"><slot /></div>' }
 const TaskInstDialogStub = { name: 'TaskInstDialog', props: ['modelValue', 'sourceId', 'parentId', 'canWrite'], template: '<div />' }
 const RowDetailFieldsStub = {
   name: 'RowDetailFields',
   props: ['fields', 'editing', 'values', 'compact', 'showEmpty', 'visibleProps'],
   template: '<div class="rdf-stub"><div v-for="f in (fields || [])" :key="f.key">{{ f.name }} {{ f.value }}</div></div>',
 }
-const STUBS = { CanvasHeader: true, ElDrawer: ElDrawerStub, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, SummaryDrawer: true }
+const FilePreviewStub = { name: 'FilePreview', props: ['path', 'name', 'ext'], template: '<div data-testid="data-cell-file-preview">{{ path }}</div>' }
+const STUBS = { CanvasHeader: true, ElDrawer: ElDrawerStub, ElDialog: ElDialogStub, ElPagination: true, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, FilePreview: FilePreviewStub, SummaryDrawer: true }
 
 describe('ResultView', () => {
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => {
+    vi.restoreAllMocks()
+    delete mockRouteQuery.scriptPath
+  })
 
   it('以当前源流程展示无首尾节点的节点条，且只查当前源数据（不提供所属源筛选——本页始终锁定在进入时的具体源，2026-08-14 第五次纠偏去掉了容易让人切到同站其他源的下拉）', async () => {
     setActivePinia(createPinia())
@@ -77,6 +83,22 @@ describe('ResultView', () => {
     expect(wrapper.text()).not.toContain('开始')
     expect(wrapper.text()).not.toContain('完成')
     expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ siteId: current.siteId, sourceId: current.sourceId }))
+  })
+
+  it('带 scriptPath 进入数据视图时不会自动打开文件预览', async () => {
+    setActivePinia(createPinia())
+    mockRouteQuery.scriptPath = '/code01/202609/1788326374508.py'
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+
+    const wrapper = mountResultView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="data-cell-file-preview"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="script-test-dialog"]').exists()).toBe(false)
+    delete mockRouteQuery.scriptPath
   })
 
   it('数据视图筛选栏包含流程节点下拉框', async () => {
@@ -114,6 +136,54 @@ describe('ResultView', () => {
 
     const dialog = wrapper.findComponent({ name: 'TaskInstDialog' })
     expect(dialog.props()).toMatchObject({ modelValue: true, sourceId: current.sourceId, parentId: 'entry-1', canWrite: false })
+  })
+
+  it('测试脚本会把 scriptPath 和当前行参数一起送到执行接口，并展示返回结果', async () => {
+    setActivePinia(createPinia())
+    mockRouteQuery.scriptPath = '/code01/202609/1788327078099.py'
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 1,
+      list: [
+        {
+          dataId: 'row-1',
+          sourceId: current.sourceId,
+          title: '测试行',
+          summary: '',
+          acceptState: 'pending',
+          values: { K1: '正文', K2: 'AVC-清洁电器-线下市场月度监测数据报告（25.08）' },
+        },
+      ],
+    })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({
+      ...meta,
+      fields: [{ prop: 'content', type: 'string', desc: '内容', columnName: 'K1' }],
+    })
+    const execSpy = vi.spyOn(ruleApi, 'executeCode').mockResolvedValue({ success: true, outputs: [{ ok: true }] })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('row-click', {
+      dataId: 'row-1',
+      sourceId: current.sourceId,
+      title: '测试行',
+      summary: '',
+      acceptState: 'pending',
+      values: { K1: '正文', K2: 'AVC-清洁电器-线下市场月度监测数据报告（25.08）' },
+    })
+    await flushPromises()
+
+    await wrapper.findAll('button').find((b) => b.text() === '测试脚本')!.trigger('click')
+    await flushPromises()
+
+    expect(execSpy).toHaveBeenCalledWith({
+      codePath: '/code01/202609/1788327078099.py',
+      params: { content: '正文' },
+      timeout: 300,
+    })
+    expect(wrapper.text()).toContain('"success": true')
+    expect(wrapper.text()).toContain('"ok": true')
   })
 
   it('表结构接口异常时不阻断数据查询，并提示已回退到演示数据', async () => {
