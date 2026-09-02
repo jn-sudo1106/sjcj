@@ -4,6 +4,7 @@ import type {
   Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery, Step, SourceLoadParamsResult, SendSnatchWithParamPayload,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestRequest, RuleOrchestrationTestResult,
+  CodeExecuteRequest,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   TaskInstQuery, SiteTableOption, SiteTablesResult,
   Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
@@ -1182,6 +1183,29 @@ export const ruleApi = {
       return result as RuleOrchestrationTestResult
     }
     return ruleOrchestrationTestFromLegacy(result)
+  },
+  // 脚本测试：POST /vrule/fastapi/execute/code，按文件路径执行当前行参数
+  executeCode: async (req: CodeExecuteRequest) => {
+    const endpoint = 'rule/executeCode'
+    const opts = {
+      method: 'POST' as const,
+      httpEndpoint: '/vrule/fastapi/execute/code',
+      paramsIn: 'body' as const,
+      timeoutMs: req.timeout * 1000 + 5000,
+    }
+    const payload = {
+      code_path: req.codePath,
+      params: req.params,
+      timeout: req.timeout,
+    }
+    if (usesMockAdapter(endpoint, opts)) {
+      return request<unknown>(endpoint, payload, { mode: 'mock' })
+    }
+    try {
+      return await request<unknown>(endpoint, payload, opts)
+    } catch (e) {
+      throw e instanceof ApiError ? e : new ApiError(endpoint, e)
+    }
   },
   orchestrationSave: async (ruleCfg: RuleOrchestration) => {
     const result = await request<unknown>('rule/orchestrationSave', { ruleCfg }, {

@@ -48,7 +48,6 @@ const describePlaceholder = computed(() => (isRule.value ? '描述规则处理�
 const pathLabel = computed(() => (isRule.value ? '脚本路径' : '配置路径'))
 const generateLabel = computed(() => (isRule.value ? '生成脚本' : '生成配置'))
 const saveLabel = computed(() => (isRule.value ? '保存脚本' : '保存配置'))
-const codeEmptyHint = computed(() => (isRule.value ? '生成脚本后展示 Python 预览' : '生成配置后展示 XML 预览'))
 // S6-1：编排工作区（合并原 RuleScriptDialog/RuleSystemPromptDialog）的文案分流
 const workbenchTitle = computed(() => (isRule.value ? '规则脚本工作区' : '抓取配置工作区'))
 const scriptLabel = computed(() => (isRule.value ? 'Python 脚本' : '抓取配置 XML'))
@@ -221,6 +220,16 @@ function onModelChange(value: string) {
 function onScriptChange(value: string) {
   patch({ script: value })
 }
+async function openScriptContent() {
+  if (!orchCfg.value.script?.trim() && orchCfg.value.scriptPath?.trim()) {
+    await hydrateViewFromServer()
+  }
+  if (!orchCfg.value.script?.trim()) {
+    ElMessage.warning('脚本内容未加载')
+    return
+  }
+  workbenchOpen.value = true
+}
 
 const generating = ref(false)
 const generateAbort = ref<AbortController | null>(null)
@@ -325,6 +334,7 @@ async function onGenerateScript(
         outputFields: genCfg.outputFields ?? [],
         inputFieldOptions: inputFieldOptions.value,
         outputFieldOptions: outputFieldOptions.value,
+        systemPrompt: genCfg.systemPrompt ?? '',
       }), {
         signal: controller.signal,
         onChunk: (delta) => {
@@ -458,6 +468,7 @@ function goToDataView() {
   const query: Record<string, string> = { ...route.query } as Record<string, string>
   query.view = 'data'
   if (id.value) query.nodeId = id.value
+  if (orchCfg.value.scriptPath?.trim()) query.scriptPath = orchCfg.value.scriptPath.trim()
   void router.replace({ path: '/canvas', query })
 }
 </script>
@@ -536,9 +547,19 @@ function goToDataView() {
   <div v-if="hydrating" class="rc-help">正在同步编排详情…</div>
 
   <div class="rc-list ni-rule-meta">
-    <div class="rc-list-row"><b>{{ pathLabel }}</b><span>{{ orchCfg.scriptPath || '未生成' }}</span></div>
+    <div class="rc-list-row">
+      <b>{{ pathLabel }}</b>
+      <button
+        class="rc-link-btn"
+        type="button"
+        :disabled="!orchCfg.scriptPath?.trim()"
+        :title="orchCfg.scriptPath || '未生成'"
+        @click="openScriptContent"
+      >
+        {{ orchCfg.scriptPath || '未生成' }}
+      </button>
+    </div>
   </div>
-  <textarea class="rc-code-box" readonly :value="orchCfg.script || codeEmptyHint" />
   <div class="rc-actions-row">
     <button class="rc-btn" type="button" :disabled="!orchCfg.script?.trim()" @click="workbenchOpen = true">全屏查看</button>
     <button v-if="isRule" class="rc-btn" type="button" :disabled="!canTest" @click="goToDataView">测试脚本</button>
@@ -615,8 +636,10 @@ function goToDataView() {
 .rc-list-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 9px; border-top: 1px solid #eef2f7; font-size: 11px; color: var(--rc-text-2); }
 .rc-list-row:first-child { border-top: 0; }
 .rc-list-row b { color: var(--rc-text); font-weight: 600; flex-shrink: 0; }
-.rc-list-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+.rc-list-row span, .rc-link-btn { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+.rc-link-btn { border: 0; background: transparent; color: var(--rc-primary); font: inherit; cursor: pointer; padding: 0; }
+.rc-link-btn:hover { text-decoration: underline; }
+.rc-link-btn:disabled { color: var(--rc-faint); cursor: not-allowed; text-decoration: none; }
 .ni-rule-meta { margin: 10px 0 8px; }
-.rc-code-box { width: 100%; min-height: 112px; margin: 0; border: 1px solid #dbe3ee; border-radius: 8px; background: #0f172a; color: #dbeafe; font-size: 11px; line-height: 1.55; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 10px; overflow: auto; resize: vertical; box-sizing: border-box; }
 .rc-help { color: var(--rc-faint); font-size: 10px; line-height: 1.5; margin-top: 6px; }
 </style>

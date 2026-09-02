@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery } from '@/api'
+import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, ruleApi, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery } from '@/api'
 import {
   buildHorizontalLayout, nodeOutputTable, nodeEntryCondition, conditionGroupLabel, conditionGroupIsSet,
   isDecision, isParallel, isFirstRunnableNode, firstRunnableNodeId, hasDirectSuccessor, hasAmbiguousInput, directPredecessorIds, type NodeConfig,
@@ -36,6 +36,7 @@ const sourceId = computed(() => source.value?.sourceId ?? '')
 const siteId = computed(() => source.value?.siteId ?? '')
 const tabKey = computed(() => sourceId.value)
 const queryNodeId = computed(() => String(route.query.nodeId ?? ''))
+const queryScriptPath = computed(() => String(route.query.scriptPath ?? '').trim())
 
 // 节点候选不再要求"必须有输出表"（0812 计划 M2-6，方案 §6.3）：结构节点（决策/分头）
 // 选中后走只读上下文 + 空态分支，不强行伪装成有数据的节点；候选就是流程里的全部真实节点。
@@ -794,6 +795,52 @@ function onCellFile(path: string) {
   filePreview.name = path.split('/').pop() || ''
   filePreview.visible = true
 }
+const codeTest = reactive<{ visible: boolean; loading: boolean; error: string; output: string }>({
+  visible: false,
+  loading: false,
+  error: '',
+  output: '',
+})
+function buildCodeParams(): Record<string, string> {
+  const params: Record<string, string> = {}
+  for (const field of detailFields.value) {
+    params[field.prop] = field.empty ? '' : field.value
+  }
+  return params
+}
+function stringifyCodeResult(value: unknown): string {
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+async function onTestScript() {
+  if (!detailRow.value) return
+  const codePath = queryScriptPath.value
+  if (!codePath) {
+    ElMessage.warning('脚本路径为空')
+    return
+  }
+  codeTest.visible = true
+  codeTest.loading = true
+  codeTest.error = ''
+  codeTest.output = ''
+  try {
+    const result = await ruleApi.executeCode({
+      codePath,
+      params: buildCodeParams(),
+      timeout: 300,
+    })
+    codeTest.output = stringifyCodeResult(result)
+    ElMessage.success('脚本测试已完成')
+  } catch (error) {
+    codeTest.error = error instanceof Error ? error.message : String(error)
+  } finally {
+    codeTest.loading = false
+  }
+}
 </script>
 
 <template>
@@ -1124,6 +1171,9 @@ function onCellFile(path: string) {
           <template v-else>
             <button class="rc-btn" type="button" @click="startEdit">编辑</button>
             <button class="rc-btn" type="button" @click="onRowAction(detailRow, 'tasks')">查后续任务实例 ›</button>
+            <button class="rc-btn primary" type="button" :disabled="codeTest.loading || !queryScriptPath" @click="onTestScript">
+              {{ codeTest.loading ? '测试中…' : '测试脚本' }}
+            </button>
           </template>
         </div>
       </div>
@@ -1153,6 +1203,17 @@ function onCellFile(path: string) {
         style="height: min(72vh, 720px)"
         data-testid="data-cell-file-preview"
       />
+    </el-dialog>
+    <el-dialog v-model="codeTest.visible" title="脚本测试结果" width="820px" top="6vh" append-to-body data-testid="script-test-dialog">
+      <div class="rv-code-test">
+        <div class="rv-code-test-meta">
+          <span>脚本路径</span>
+          <b :title="queryScriptPath">{{ queryScriptPath || '未提供' }}</b>
+        </div>
+        <div v-if="codeTest.loading" class="rv-code-test-hint">测试中…</div>
+        <div v-else-if="codeTest.error" class="rv-code-test-hint error">{{ codeTest.error }}</div>
+        <pre v-else class="rv-code-test-output">{{ codeTest.output || '暂无返回结果' }}</pre>
+      </div>
     </el-dialog>
 </template>
 
@@ -1309,6 +1370,13 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
 .rv-d-sub { font-size: 11px; color: var(--rc-faint); margin-top: 4px; }
 .rv-d-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 18px 16px; }
 .rv-d-foot { flex: none; display: flex; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--rc-border-soft); background: #fff; }
+.rv-code-test { display: flex; flex-direction: column; gap: 10px; }
+.rv-code-test-meta { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--rc-text-2); }
+.rv-code-test-meta span { color: var(--rc-faint); font-size: 11px; }
+.rv-code-test-meta b { font-family: var(--rc-mono, monospace); word-break: break-all; }
+.rv-code-test-hint { padding: 14px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #f8fafc; color: var(--rc-text-2); font-size: 12px; line-height: 1.6; }
+.rv-code-test-hint.error { border-color: #fecaca; background: #fef2f2; color: #b91c1c; word-break: break-all; }
+.rv-code-test-output { margin: 0; padding: 14px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #0f172a; color: #dbeafe; font-family: var(--rc-mono, monospace); font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-all; min-height: 180px; }
 .rv-parent-link { margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; padding: 0; font-size: 11px; color: var(--rc-primary); cursor: pointer; }
 .rv-parent-link:hover { text-decoration: underline; }
 .rv-parent-link:disabled { opacity: .6; cursor: default; text-decoration: none; }

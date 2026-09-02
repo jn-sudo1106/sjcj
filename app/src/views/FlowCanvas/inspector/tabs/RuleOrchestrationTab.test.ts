@@ -96,6 +96,7 @@ function mockAssets() {
 afterEach(() => {
   vi.restoreAllMocks()
   routerPush.mockClear()
+  routerReplace.mockClear()
 })
 
 function mountOnRuleNode() {
@@ -132,6 +133,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
       outputTable: 'sense_data.TB_JD_SKU_RESULT',
       inputFields: ['sku_id'], outputFields: ['sku_name'],
       modelProviderCode: 'DeepSeek', modelCode: 'deepseek-chat',
+      systemPrompt: '生成 Python 脚本，返回 JSON',
     })
     flow.configs['rule-1'].configId = '184'
     return { flow, wrapper }
@@ -141,6 +143,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     const { wrapper } = mountWithExistingRule()
     await flushPromises()
 
+    expect(wrapper.find('textarea.rc-code-box').exists()).toBe(false)
     const buttons = wrapper.findAll('button').filter((b) => ['全屏查看', '保存脚本'].includes(b.text()))
     expect(buttons).toHaveLength(2)
     buttons.forEach((b) => expect(b.attributes('disabled')).toBeDefined())
@@ -232,6 +235,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
       targetTable: 'sense_data.TB_JD_SKU_RESULT',
       inputFields: '商品ID:sku_id',
       outputFields: '商品名称:sku_name',
+      systemPrompt: '生成 Python 脚本，返回 JSON',
     }), expect.anything())
     expect(flow.configs['rule-1'].ruleCfg?.script).toContain('def main')
     expect(flow.configs['rule-1'].ruleCfg?.scriptPath).toBe('/rules/generated/orch-173.py')
@@ -283,6 +287,37 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect(wrapper.html()).toContain('def main(sku_id)')
   })
 
+  it('点击脚本路径打开工作区，展示脚本正文', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', { script: 'def main(sku_id):\n    return {}', scriptPath: '/x/y.py' })
+    await flushPromises()
+
+    const pathBtn = wrapper.find('button[title="/x/y.py"]')
+    await pathBtn.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.html()).toContain('def main(sku_id)')
+  })
+
+  it('点击测试脚本时会把 scriptPath 一并带到数据视图', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', { script: 'def main(sku_id):\n    return {}', scriptPath: '/code01/202609/1788326374508.py' })
+    await flushPromises()
+
+    const testBtn = wrapper.findAll('button').find((b) => b.text() === '测试脚本')!
+    await testBtn.trigger('click')
+    await flushPromises()
+
+    expect(routerReplace).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/canvas',
+      query: expect.objectContaining({
+        nodeId: 'rule-1',
+        view: 'data',
+        scriptPath: '/code01/202609/1788326374508.py',
+      }),
+    }))
+  })
+
   it('编辑系统提示词：保存后写回 systemPrompt，取消不写回', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     await flushPromises()
@@ -306,7 +341,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
   })
 
   it('打开工作区后按提示词分类拉取模板并替换表配置占位符', async () => {
-    const { wrapper } = mountWithExistingRule()
+    const { flow, wrapper } = mountWithExistingRule()
     await flushPromises()
 
     const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
@@ -321,6 +356,10 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('出参=商品名称:sku_name')
     expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('入参码=sku_id')
     expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('出参码=sku_name')
+    // 拼接后的完整提示词同步写回 orchCfg.systemPrompt：生成脚本（data-process）入参 systemPrompt
+    // 取的就是这个完整值，无需用户在工作台点「保存」。
+    expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toContain('源表=sense_data.TB_JD_SKU_BASE')
+    expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toContain('入参=商品ID:sku_id')
   })
 
   it('工作区加载模型供应商与模型，并在工作区里不再显示测试按钮', async () => {
@@ -517,7 +556,16 @@ describe('RuleOrchestrationTab · 测试脚本切换数据视图', () => {
     await testBtn.trigger('click')
     await flushPromises()
 
-    expect(routerReplace).toHaveBeenCalledWith({ path: '/canvas', query: { sourceId: 's-1', siteId: 'site-9', view: 'data', nodeId: 'rule-1' } })
+    expect(routerReplace).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/canvas',
+      query: expect.objectContaining({
+        sourceId: 's-1',
+        siteId: 'site-9',
+        view: 'data',
+        nodeId: 'rule-1',
+        scriptPath: '/x/y.py',
+      }),
+    }))
     expect(routerPush).not.toHaveBeenCalled()
   })
 })

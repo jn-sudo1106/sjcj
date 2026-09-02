@@ -9,6 +9,7 @@ export interface DataProcessGeneratePayload {
   targetTable: string
   inputFields: string
   outputFields: string
+  systemPrompt: string
 }
 
 export interface DataProcessFieldOption {
@@ -27,6 +28,8 @@ export interface DataProcessGenerateInput {
   outputFields: string[]
   inputFieldOptions: Pick<RuleFieldOption, 'itemCode' | 'itemName'>[]
   outputFieldOptions: Pick<RuleFieldOption, 'itemCode' | 'itemName'>[]
+  /** 系统提示词：取自规则脚本工作区「系统提示词」文本框（RuleWorkbenchDialog 左栏草稿 → orchCfg.systemPrompt） */
+  systemPrompt: string
 }
 
 function selectFields(selected: string[], options: Pick<RuleFieldOption, 'itemCode' | 'itemName'>[]): DataProcessFieldOption[] {
@@ -51,5 +54,6 @@ export function buildDataProcessGeneratePayload(input: DataProcessGenerateInput)
     targetTable: input.targetTable,
     inputFields: joinPairs(inputFields),
     outputFields: joinPairs(outputFields),
+    systemPrompt: input.systemPrompt,
   }
 }

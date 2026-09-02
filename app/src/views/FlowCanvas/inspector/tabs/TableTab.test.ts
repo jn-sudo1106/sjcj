@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // 表配置 Tab：规则节点分支（0804 S2-2，从 RuleOrchestrationTab.test.ts 的「路径 A」迁移而来——
-// 表/字段绑定 +「保存并配置编排」在这里；0831 保存后临时回填 configId 81947 才能走 data-process。
+// 表/字段绑定在这里。「保存并配置编排」按钮已移除，换数字 ruleId 改在编排配置第一次生成脚本时
+// 自动 orchestrationSaveMeta。
 // 通过挂载整个 NodeInspector 测试（而非孤立挂载 TableTab），因为 useNodeInspectorAssets() 的
 // provide/inject 上下文由 NodeInspector 建立，脱离它调用会抛错（见 useNodeInspectorAssets.ts 设计约束）。
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -42,69 +43,15 @@ function mountOnRuleNode() {
   return { flow, wrapper }
 }
 
-function orchestrationTab(wrapper: ReturnType<typeof mount>) {
-  return wrapper.findAll('.rc-top-tab').find((b) => b.text() === '编排配置')!
-}
-
 describe('TableTab · 规则节点表/字段绑定（0804 S2-2 从编排配置搬回）', () => {
-  it('展示表/字段绑定表单和保存按钮', async () => {
+  it('展示表/字段绑定表单，不再有「保存并配置编排」按钮', async () => {
     mockAssets()
     const { wrapper } = mountOnRuleNode()
     await flushPromises()
 
     expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(true)
     expect(wrapper.text()).toContain('入参字段')
-    expect(wrapper.text()).toContain('保存并配置编排')
-  })
-
-  it('未填必填项就保存：不调用接口，编排配置 Tab 仍禁用', async () => {
-    mockAssets()
-    vi.spyOn(ruleApi, 'orchestrationSaveMeta')
-    const { wrapper } = mountOnRuleNode()
-    await flushPromises()
-
-    await wrapper.find('button.rc-btn.primary').trigger('click')
-    await flushPromises()
-
-    expect(ruleApi.orchestrationSaveMeta).not.toHaveBeenCalled()
-    expect(orchestrationTab(wrapper).attributes('disabled')).toBeDefined()
-  })
-
-  it('选表保存：字段默认全选（0804 S2-3），拿到 ruleId，同步输入表，回填 configId 81947，切到编排配置', async () => {
-    mockAssets()
-    vi.spyOn(ruleApi, 'orchestrationSaveMeta').mockResolvedValue({ ruleId: 'orch-999', message: '业务规则已保存' })
-    const { flow, wrapper } = mountOnRuleNode()
-    flow.setTitle('rule-1', '邮箱附件转换指标数据规则')
-    await flushPromises()
-
-    // 只在 Tab 正文里找：配置条上还有一个「本节点使用配置」选择器（0828 §2.1-2b），
-    // 按全局第一个 ElSelect 取会取到它。
-    const tableSelects = wrapper.find('.rc-inspector-body').findAllComponents({ name: 'ElSelect' })
-    expect(tableSelects.length).toBeGreaterThanOrEqual(1)
-    await tableSelects[0].vm.$emit('visible-change', true)
-    await flushPromises()
-    await tableSelects[0].vm.$emit('update:modelValue', '2102154')
-    // 表选中 → useRuleTableFields 异步拉字段 → RuleTableFieldBinder 的默认全选 watch 再回填 modelValue，
-    // 链路要经过好几轮微任务/响应式调度，单次 flushPromises 未必能追上，多等几轮。
-    await flushPromises()
-    await flushPromises()
-    await flushPromises()
-
-    expect(flow.configs['rule-1'].ruleCfg?.inputFields).toEqual(['sku_id', 'sku_name'])
-    expect(flow.configs['rule-1'].ruleCfg?.outputFields).toEqual(['sku_id', 'sku_name'])
-
-    await wrapper.find('button.rc-btn.primary').trigger('click')
-    await flushPromises()
-
-    expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBeTruthy()
-    expect(flow.configs['rule-1'].ruleCfg?.mode).toBe('ref')
-    // 0831 临时：保存成功后规则节点 configId 固定回填 81947（data-process 生成脚本只认 configId）
-    expect(flow.configs['rule-1'].configId).toBe('81947')
-    expect(flow.configs['rule-1'].inputTable).toBe('2102154')
-    expect(ruleApi.orchestrationSaveMeta).toHaveBeenCalledWith(
-      expect.objectContaining({ name: '邮箱附件转换指标数据规则' }),
-    )
-    expect(flow.activeTab).toBe('orchestration')
+    expect(wrapper.text()).not.toContain('保存并配置编排')
   })
 
   it('已保存过的规则节点回到表配置：仍是可编辑表单，不是只读摘要', async () => {
@@ -120,7 +67,7 @@ describe('TableTab · 规则节点表/字段绑定（0804 S2-2 从编排配置�
     expect(wrapper.findComponent({ name: 'ElSelect' }).exists()).toBe(true)
     expect(wrapper.text()).toContain('入参字段')
     expect(wrapper.text()).not.toContain('修改表字段')
-    expect(wrapper.text()).toContain('保存并配置编排')
+    expect(wrapper.text()).not.toContain('保存并配置编排')
   })
 })
 
@@ -181,6 +128,7 @@ describe('TableTab · 结构化配置 / 正文规则（0804 S3-1，0805 收窄�
 
 // 规则/采集节点表配置都不再放「保存并配置编排」（跟底部节点「保存」抢主按钮）；
 // 换数字 ruleId 改在编排配置第一次「生成脚本/生成配置」时自动 orchestrationSaveMeta。
+// 规则节点也去掉了该按钮（2026-09-02），表配置只负责绑表/字段，保存编排逻辑统一走编排配置 Tab。
 describe('TableTab · 不再展示「保存并配置编排」', () => {
   function mountOnCollectorNode() {
     setActivePinia(createPinia())
@@ -286,45 +234,5 @@ describe('TableTab · 数据监控节点（2026-09-01，不落表/不出参 + �
     await flushPromises()
 
     expect(flow.configs['monitor-1'].monitorMethods).toEqual(['数据延迟监控', '每日数据量监控'])
-  })
-
-  it('保存时把「监控方法 + 输入表」拼成规则处理描述，写入编排配置 Tab', async () => {
-    mockAssets()
-    vi.spyOn(ruleApi, 'orchestrationSaveMeta').mockResolvedValue({ ruleId: 'orch-monitor', message: '业务规则已保存' })
-    const { flow, wrapper } = mountOnMonitorNode()
-    flow.setTitle('monitor-1', '公众号文章监控')
-    flow.patchRuleConfig('monitor-1', {
-      inputTableId: '2102154', inputTable: 'sense_data.TB_JD_SKU_BASE',
-      inputFields: ['sku_id', 'sku_name'],
-    })
-    flow.setMonitorMethods('monitor-1', ['当日数据是否正常入库', '数据延迟监控'])
-    await flushPromises()
-
-    await wrapper.find('button.rc-btn.primary').trigger('click')
-    await flushPromises()
-
-    expect(flow.configs['monitor-1'].ruleCfg?.describe).toBe(
-      '我想对JD-商品基础进行如下监控：\n1.当日数据是否正常入库\n2.数据延迟监控',
-    )
-    expect(flow.activeTab).toBe('orchestration')
-  })
-
-  it('未选监控方法就保存：提示且不落 describe', async () => {
-    mockAssets()
-    vi.spyOn(ruleApi, 'orchestrationSaveMeta')
-    const { flow, wrapper } = mountOnMonitorNode()
-    flow.setTitle('monitor-1', '公众号文章监控')
-    flow.patchRuleConfig('monitor-1', {
-      inputTableId: '2102154', inputTable: 'sense_data.TB_JD_SKU_BASE',
-      inputFields: ['sku_id', 'sku_name'],
-    })
-    await flushPromises()
-
-    await wrapper.find('button.rc-btn.primary').trigger('click')
-    await flushPromises()
-
-    expect(ruleApi.orchestrationSaveMeta).not.toHaveBeenCalled()
-    // 未选监控方法时不生成监控描述，保留种子自带 describe 原样
-    expect(flow.configs['monitor-1'].ruleCfg?.describe).not.toContain('我想对')
   })
 })

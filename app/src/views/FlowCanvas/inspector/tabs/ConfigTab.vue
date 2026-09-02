@@ -333,17 +333,6 @@ watch(
         />
         <div class="rc-help">旧步骤「适用源」。填当前源 ID，或填 -1 表示使用该配置的所有源。</div>
       </div>
-      <div class="rc-field"><label>规则ID选择</label>
-        <input
-          class="rc-input"
-          :value="cfg?.itemId ?? '-1'"
-          placeholder="-1"
-          aria-label="规则ID选择"
-          data-testid="rule-item-id"
-          @input="flow.setItemId(id, ($event.target as HTMLInputElement).value)"
-        />
-        <div class="rc-help">旧步骤「规则ID选择」。未选规则时为 -1；点「选择已有」会写入所选规则的 ID。这是步骤字段，不是编排脚本的 ruleId。</div>
-      </div>
     </template>
     <EditNodeSourceDialog v-model:open="editNodeSourceOpen" :node-id="id" />
     <!-- 定时策略：采集节点挪到「运行设置」上方（见下）；非采集节点没有运行设置，仍留在这里 -->
