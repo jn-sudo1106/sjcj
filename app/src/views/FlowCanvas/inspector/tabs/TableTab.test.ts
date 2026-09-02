@@ -121,8 +121,51 @@ describe('TableTab · 结构化配置 / 正文规则（0804 S3-1，0805 收窄�
     expect(flow.configs['web-1'].inputFields).toEqual([])
     await wrapper.find('[data-testid="select-all-input-fields"]').trigger('click')
     expect(flow.configs['web-1'].inputFields).toEqual(['sku_id', 'sku_name'])
-    await wrapper.find('select').setValue('')
+    // 输入表下拉 0902 改成 el-select（原生 <select> 换成可搜索的），清空走 update:model-value
+    const inputTableSelect = wrapper.find('[data-testid="input-table-field"]').findComponent({ name: 'ElSelect' })
+    await inputTableSelect.vm.$emit('update:modelValue', '')
+    await flushPromises()
     expect(flow.configs['web-1'].inputFields).toBeUndefined()
+  })
+
+  // 0902：表会很多，下拉不一定翻得到——输入表/输出表都换成 el-select filterable remote，
+  // 按关键字查 entryApi.entryPaged，不再只认预加载的 100 张。
+  it('输入表下拉支持关键字搜索，选中结果写入 collectCfg.inputTable', async () => {
+    mockAssets()
+    const search = vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [INPUT_TABLE] })
+    const { flow, wrapper } = mountOnCollectorNode()
+    await flushPromises()
+
+    const inputTableSelect = wrapper.find('[data-testid="input-table-field"]').findComponent({ name: 'ElSelect' })
+    search.mockClear() // 清掉挂载时 useNodeInspectorAssets 预加载 100 张表那一次调用
+    // 打开下拉即以空关键字查一次，展示一个默认列表（size:30 与预加载的 size:100 区分开）
+    await inputTableSelect.vm.$emit('visible-change', true)
+    await flushPromises()
+    expect(search).toHaveBeenCalledWith({ name: undefined, size: 30 })
+
+    search.mockClear()
+    // remote-method 是传给 el-select 的 prop 函数，不是它 $emit 出来的事件——
+    // 拿 props 里那个函数直接调，跟 RuleTableFieldBinder.test.ts 的 onInputTableFilter 同一个思路。
+    const remoteMethod = inputTableSelect.props('remoteMethod') as (keyword: string) => void
+    remoteMethod('JD')
+    await new Promise((resolve) => setTimeout(resolve, 320)) // 防抖 300ms
+    await flushPromises()
+    expect(search).toHaveBeenCalledWith({ name: 'JD', size: 30 })
+
+    await inputTableSelect.vm.$emit('update:modelValue', INPUT_TABLE.tableId)
+    await flushPromises()
+    expect(flow.configs['web-1'].collectCfg?.inputTable).toBe(INPUT_TABLE.tableId)
+  })
+
+  it('输出表下拉同样支持搜索，选中结果写入 collectCfg.outputTable', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnCollectorNode()
+    await flushPromises()
+
+    const outputTableSelect = wrapper.find('[data-testid="output-table-field"]').findComponent({ name: 'ElSelect' })
+    await outputTableSelect.vm.$emit('update:modelValue', INPUT_TABLE.tableId)
+    await flushPromises()
+    expect(flow.configs['web-1'].collectCfg?.outputTable).toBe(INPUT_TABLE.tableId)
   })
 })
 

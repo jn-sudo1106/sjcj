@@ -5,7 +5,7 @@
 // 非规则节点内容：输出表管理（采集类固定/可选）+ 非采集类产物明细三元表 + 表结构编辑弹窗。
 // 规则节点表配置的保存按钮已移除（换数字 ruleId 改在编排配置第一次生成脚本时
 // 自动 orchestrationSaveMeta），表配置只负责绑表/字段。
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
@@ -13,7 +13,7 @@ import {
   fieldOptionsFromTableOrOutput, MONITOR_METHODS,
   type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, type RuleOrchestration } from '@/api'
+import { entryApi, type EntryType, type RuleOrchestration } from '@/api'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import TableEditDialog from '../TableEditDialog.vue'
 import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
@@ -82,10 +82,64 @@ function selectAllInputFields() {
 function clearAllInputFields() {
   flow.setInputFields(id.value, [])
 }
-function onInputTableChange(e: Event) {
-  const value = (e.target as HTMLSelectElement).value
-  if (cc.value) flow.patchCollect(id.value, { inputTable: value })
-  else flow.setInputTable(id.value, value)
+// 表下拉支持输入搜索（0902）：生产表数量远超一屏，useNodeInspectorAssets 只预加载 100 张，
+// 覆盖不了长尾——下拉里翻不到就以为表不存在。跟规则节点的表绑定（RuleTableFieldBinder.vue）
+// 同一套做法：el-select filterable remote，按关键字查 entryApi.entryPaged，不再只认预加载列表。
+// 没提成共享 composable——那边的 selected 还要带出业务名给 patch() 用，写法已经分叉，
+// 强行合并会牵连一个已经跑通的文件，这里保持局部实现，两处独立演化。
+function debounce<T extends (...args: never[]) => void>(fn: T, ms: number): T {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return ((...args: Parameters<T>) => {
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => fn(...args), ms)
+  }) as T
+}
+function useTableSearch() {
+  const results = ref<EntryType[]>([])
+  const loading = ref(false)
+  let requestSeq = 0
+  async function runSearch(keyword: string) {
+    const seq = ++requestSeq
+    loading.value = true
+    try {
+      const paged = await entryApi.entryPaged({ name: keyword || undefined, size: 30 })
+      if (seq !== requestSeq) return // 有更新的搜索已发出，丢弃这次的结果
+      results.value = paged.list
+    } catch (e) {
+      if (seq !== requestSeq) return
+      ElMessage.error(`搜索表失败：${(e as Error)?.message ?? String(e)}`)
+    } finally {
+      if (seq === requestSeq) loading.value = false
+    }
+  }
+  return { results, loading, runSearch, debouncedSearch: debounce(runSearch, 300) }
+}
+const inputTableSearch = useTableSearch()
+const outputTableSearch = useTableSearch()
+
+function tableOptionLabel(t: EntryType): string {
+  return `${t.tableId} · ${t.tableName}`
+}
+/** 当前值不在这次搜索结果里也要有个选项，不然下拉一打开就看不到已选的表；
+ *  预加载的 tables 里查得到就是正常 label，查不到才退化成裸 ID + 后缀说明（跟原来的
+ *  「（当前配置）」「（来自源步骤）」兜底文案同一个语义，只是从散落的 <option v-if> 收成一个函数）。 */
+function withCurrentOption(list: EntryType[], currentId: string, fallbackSuffix: string) {
+  const searchOptions = list.map((t) => ({ tableId: t.tableId, label: tableOptionLabel(t) }))
+  if (!currentId || searchOptions.some((o) => o.tableId === currentId)) return searchOptions
+  const known = tables.value.find((t) => t.tableId === currentId)
+  return [{ tableId: currentId, label: known ? tableOptionLabel(known) : `${currentId}（${fallbackSuffix}）` }, ...searchOptions]
+}
+const inputTableOptions = computed(() => withCurrentOption(inputTableSearch.results.value, ownInputTableId.value, '当前配置'))
+function onInputTableFilter(keyword: string) {
+  inputTableSearch.debouncedSearch(keyword)
+}
+function onInputTableVisible(open: boolean) {
+  if (open && !inputTableSearch.results.value.length) void inputTableSearch.runSearch('')
+}
+function onInputTableId(value: string | undefined | null) {
+  const v = value ?? ''
+  if (cc.value) flow.patchCollect(id.value, { inputTable: v })
+  else flow.setInputTable(id.value, v)
   flow.resetInputFields(id.value)
 }
 
@@ -120,8 +174,15 @@ function selectPresetTable(tableId: string) {
   else flow.setOutputTable(id.value, tableId)
 }
 
-function onOutputTableChange(e: Event) {
-  const v = (e.target as HTMLSelectElement).value
+const outputTableOptions = computed(() => withCurrentOption(outputTableSearch.results.value, nodeTableId.value, '来自源步骤'))
+function onOutputTableFilter(keyword: string) {
+  outputTableSearch.debouncedSearch(keyword)
+}
+function onOutputTableVisible(open: boolean) {
+  if (open && !outputTableSearch.results.value.length) void outputTableSearch.runSearch('')
+}
+function onOutputTableId(value: string | undefined | null) {
+  const v = value ?? ''
   if (cc.value) flow.patchCollect(id.value, { outputTable: v })
   else flow.setOutputTable(id.value, v)
 }
@@ -200,12 +261,21 @@ async function onTableSaved(tableId: string) {
 
   <template v-else>
     <template v-if="nodeCapability?.kind !== 'login'">
-      <div class="rc-field"><label>输入表</label>
-        <select class="rc-select" :value="ownInputTableId" @change="onInputTableChange">
-          <option value="">{{ inputTableLabel }}</option>
-          <option v-if="ownInputTableId && !tables.some((t) => t.tableId === ownInputTableId)" :value="ownInputTableId">{{ ownInputTableId }}（当前配置）</option>
-          <option v-for="t in tables" :key="t.tableId" :value="t.tableId">{{ t.tableId }} · {{ t.tableName }}</option>
-        </select>
+      <div class="rc-field" data-testid="input-table-field"><label>输入表</label>
+        <el-select
+          class="rc-table-select"
+          :model-value="ownInputTableId || undefined"
+          filterable
+          remote
+          clearable
+          :remote-method="onInputTableFilter"
+          :loading="inputTableSearch.loading.value"
+          :placeholder="inputTableLabel"
+          @update:model-value="onInputTableId"
+          @visible-change="onInputTableVisible"
+        >
+          <el-option v-for="t in inputTableOptions" :key="t.tableId" :label="t.label" :value="t.tableId" />
+        </el-select>
         <div v-if="!effectiveInputTableId" class="rc-help">暂无有效输入表；可显式选择输入表，或先配置上游输出表。</div>
       </div>
       <div v-if="inputTableFields.length" class="rc-field">
@@ -232,13 +302,21 @@ async function onTableSaved(tableId: string) {
     </template>
     <!-- 表配置：保留输出表管理入口，表结构通过「查看/编辑表」查看维护 -->
     <div class="rc-field"><label>输出表{{ nodeCapability?.outputMode === 'fixed' ? `（固定 · ${nodeCapability.label}，不可更改）` : (cc ? '' : '（本节点处理结果落此表，默认继承上游节点；结果视图可查数据）') }}</label>
-      <div class="rc-input-group">
-        <select class="rc-select grow" :value="nodeTableId" :disabled="nodeCapability?.outputMode === 'fixed'" @change="onOutputTableChange">
-          <option v-if="!cc" value="" disabled>请选择输出表</option>
-          <!-- 源步骤回填的表可能不在实体表清单里，补一个当前值选项避免下拉显示为空 -->
-          <option v-if="nodeTableId && !tables.some((t) => t.tableId === nodeTableId)" :value="nodeTableId">{{ nodeTableId }}（来自源步骤）</option>
-          <option v-for="t in tables" :key="t.tableId" :value="t.tableId">{{ t.tableId }} · {{ t.tableName }}</option>
-        </select>
+      <div class="rc-input-group" data-testid="output-table-field">
+        <el-select
+          class="rc-table-select grow"
+          :model-value="nodeTableId || undefined"
+          filterable
+          remote
+          :disabled="nodeCapability?.outputMode === 'fixed'"
+          :remote-method="onOutputTableFilter"
+          :loading="outputTableSearch.loading.value"
+          :placeholder="cc ? '请选择输出表' : '默认继承上游节点，可显式指定输出表'"
+          @update:model-value="onOutputTableId"
+          @visible-change="onOutputTableVisible"
+        >
+          <el-option v-for="t in outputTableOptions" :key="t.tableId" :label="t.label" :value="t.tableId" />
+        </el-select>
         <button class="rc-input-btn" type="button" @click="openEditTable">查看/编辑表</button>
         <button class="rc-input-btn" type="button" @click="openNewTable">新建表</button>
       </div>
@@ -325,6 +403,8 @@ async function onTableSaved(tableId: string) {
 .rc-select { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; }
 .rc-select:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .rc-table-select { width: 100%; }
+.rc-input-group .rc-table-select.grow { flex: 1; }
+.rc-input-group .rc-table-select.grow :deep(.el-select__wrapper) { border-radius: 7px 0 0 7px; }
 .rc-table-select :deep(.el-select__wrapper) {
   min-height: 32px;
   border-radius: 7px;
