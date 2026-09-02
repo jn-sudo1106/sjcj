@@ -856,8 +856,13 @@ function orderSourceSteps(steps: Step[]): Step[] {
   return ordered
 }
 
-/** 已保存源可能只有 source 根配置、没有 item/next 后续步骤；此时仍需在流程视图显示列表节点。 */
-function rootStepForSource(source: Source): Step | null {
+/**
+ * 已保存源可能只有 source 根配置、没有 item/next 后续步骤；此时仍需在流程视图显示列表节点。
+ * 导出：FlowCenter/FlowDetailDrawer.vue 的 deriveFromFlowConfig 也用它——flowId 模式的
+ * nextConfigPaged 天生不返回起点行（见 endpoints.ts 注释），不能靠 buildSourceSeed 里
+ * "steps 为空才兜底"这条走到，得在有真实子步骤时也显式拼出来，见那边的调用点。
+ */
+export function rootStepForSource(source: Source): Step | null {
   if (!source.url?.trim() || !source.mainTable?.trim()) return null
   return {
     stepId: `source:${source.sourceId}`,

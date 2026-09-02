@@ -7,7 +7,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FlowCenter from './index.vue'
-import { flowCenterApi, sourceApi, type FlowRecord } from '@/api'
+import { configApi, flowCenterApi, sourceApi, type FlowRecord } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 
@@ -285,38 +285,69 @@ describe('流程中心 · 可编辑工作区', () => {
   })
 
   // 存量流程（后端从 cs_config 灌进来的 735 条）flowConf 全是 null，但它们不是空流程——
-  // 真实结构在 cs_item_config 里。空定义时按关联源的步骤还原，并明确标注"尚未落库"。
-  it('flowConf 为空时按关联源的步骤还原画布，并提示这份定义还没写进流程', async () => {
-    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({
-      ...FLOWS[0], sourceCnt: 3, definition: { main: [], branches: [], configs: {} },
-    })
-    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
-      total: 3,
-      list: [{ sourceId: 'src-1', name: '关联源一', url: '', configId: 'cfg-1', mainTable: '', owner: '', state: 'C' }],
-    })
-    const steps = vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
-    const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 3 }])
-    await rows(w)[0].trigger('click')
-    await flushPromises()
-    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ flowId: 'flow-10086', size: 1 }))
-    expect(steps).toHaveBeenCalledWith('src-1')
-    const note = w.get('[data-testid="flow-derived-note"]').text()
-    expect(note).toContain('关联源一')
-    expect(note).toContain('尚未保存画布定义')
-    // 提示条不能把工作区顶掉——两者要并存
-    expect(w.find('[data-testid="embedded-flow-board"]').exists()).toBe(true)
-    w.unmount()
-  })
-
-  it('流程没有关联源时不去还原，就是一张空白画布且不显示还原提示', async () => {
+  // 真实结构在 cs_item_config 里，起点节点则来自这个流程自己的 config/configDetail（flowId===configId）。
+  // 空定义时按这份配置+子步骤还原，并明确标注"尚未落库"。0902 改造：不再依赖任何关联源。
+  it('flowConf 为空时按这个流程自己的配置还原画布，并提示这份定义还没写进流程', async () => {
     vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({
       ...FLOWS[0], sourceCnt: 0, definition: { main: [], branches: [], configs: {} },
     })
-    const paged = vi.spyOn(sourceApi, 'sourcePaged')
+    const detail = vi.spyOn(configApi, 'configDetail').mockResolvedValue({
+      configId: 'flow-10086', name: '这个流程自己的配置', url: 'https://example.com/list', entryTypeId: '2103330', enabled: true,
+    })
+    const steps = vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
     const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 0 }])
     await rows(w)[0].trigger('click')
     await flushPromises()
-    expect(paged).not.toHaveBeenCalled()
+    expect(detail).toHaveBeenCalledWith('flow-10086')
+    expect(steps).toHaveBeenCalledWith('flow-10086')
+    const note = w.get('[data-testid="flow-derived-note"]').text()
+    expect(note).toContain('#flow-10086')
+    expect(note).toContain('尚未保存画布定义')
+    // 提示条不能把工作区顶掉——两者要并存
+    expect(w.find('[data-testid="embedded-flow-board"]').exists()).toBe(true)
+    // loadFromSource 用的 stub 源 sourceId 是空串，会把 FlowDef.id 带成空——流程 XML 导出要用
+    // 真实 flowId（导入导出场景），这里必须纠正回来，不能是空串或 stub 源的 sourceId
+    expect(useFlowStore().flowId).toBe('flow-10086')
+    w.unmount()
+  })
+
+  // 2026-09-02 真机对比 zqrb 流程 #1400832 的流程中心视图与它关联源的流程视图发现：有真实
+  // 子步骤时起点节点整个消失了——buildSourceSeed 的 rootStepForSource 兜底只在 steps 为空时
+  // 触发，flowId 模式的 steps 又天生不含起点行，两条真实子步骤存在时正好落进这个空子。
+  it('flowConf 为空、但这个流程有真实子步骤时，起点节点也要跟子步骤一起还原，不能被子步骤顶掉', async () => {
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({
+      ...FLOWS[0], sourceCnt: 1, definition: { main: [], branches: [], configs: {} },
+    })
+    vi.spyOn(configApi, 'configDetail').mockResolvedValue({
+      configId: 'flow-10086', name: 'zqrb-证券日报网', url: 'http://www.zqrb.cn/jrjg/quanshang/index.html', entryTypeId: '900', enabled: true,
+    })
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([
+      { stepId: '40353', sourceId: '-1', name: '浏览器下载源码', outputTable: '900', configId: '1400764', enabled: false },
+      { stepId: '40354', sourceId: '-1', name: '1400759-详情', outputTable: '900', configId: '1400765', enabled: false },
+    ])
+    const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 1 }])
+    await rows(w)[0].trigger('click')
+    await flushPromises()
+    // 4 个真实节点：起点（配置现拼的列表抓取）+ 2 个真实子步骤 + start/end 之外的这些才算，
+    // main 应为 [start, 起点, 40353, 40354, end]，不能是 [start, 40353, 40354, end]
+    expect(useFlowStore().main.length).toBe(5)
+    expect(useFlowStore().main).toContain('40353')
+    expect(useFlowStore().main).toContain('40354')
+    expect(useFlowStore().main.indexOf('40353')).toBeGreaterThan(1) // 起点节点排在 40353 前面
+    w.unmount()
+  })
+
+  it('配置和步骤都没有内容时不去还原，就是一张空白画布且不显示还原提示', async () => {
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({
+      ...FLOWS[0], sourceCnt: 0, definition: { main: [], branches: [], configs: {} },
+    })
+    const detail = vi.spyOn(configApi, 'configDetail').mockResolvedValue(null)
+    const steps = vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
+    const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 0 }])
+    await rows(w)[0].trigger('click')
+    await flushPromises()
+    expect(detail).toHaveBeenCalledWith('flow-10086')
+    expect(steps).toHaveBeenCalledWith('flow-10086')
     expect(w.find('[data-testid="flow-derived-note"]').exists()).toBe(false)
     expect(w.find('[data-testid="embedded-flow-board"]').exists()).toBe(true)
     w.unmount()

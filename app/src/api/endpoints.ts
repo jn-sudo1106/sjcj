@@ -172,21 +172,31 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'entry/entryExportAll', desc: '导出 Excel（URL 直开，同源 Cookie 鉴权）。0831 G7：旧 api/entry.js 没有这条，本平台 DataView 已在用；不标 live——exportUrl 不走 request()' },
 
   /* ── item/next 子步骤（目标 7 / 收录 5） ── */
-  // 目前**只认 `sourceId`**：2026-09-02 实测传 configId / flowId / 不传参，一律返回 0 条。
-  // `svg=true` 会多返回一条 itemConfig=0 的主配置行——画布节点数 = 主配置 1 个 + 子步骤 N 个，
-  // 即不带 svg 时的 count + 1（实测源 430022404：stepCnt=1 → svg 模式 count=2）。
+  // 按 sourceId 查（原有用法）：`svg=true` 时列表首位会多出一条 itemConfig=0 的行。
+  // 2026-09-02 逐字段对比 3 个不同源实测确认：**这行不是 cs_item_config 里的真实记录**（没有
+  // itemId，真子步骤都有）——是接口拿"当前查的这个源自己的 configId"对应的 cs_config 记录，
+  // 现算拼出来的：configId/mainConfig/flowCode/outEntry 这些字段在不同源之间完全相同，只有
+  // name/url/sourceId 跟着传入的 sourceId 变（就是源名、源 URL）。以前在这套代码里管它叫
+  // "主配置行"是不准确的措辞——它从来不是一份配置，也不是流程级的东西，本质是"该源自己的
+  // configId 记录套壳成 itemConfig=0"，天然依赖"查的是哪个源"才算得出来。
+  // 画布节点数 = 这一行 1 个 + 子步骤 N 个，即不带 svg 时的 count + 1
+  // （实测源 430022404：stepCnt=1 → svg 模式 count=2）。
   //
-  // 🕗 待后端上线：按 `flowId` 取步骤（后端 2026-09-02 口头确认会加，字段沿用现有这套）。
-  //    上线后流程中心工作区可以一次取到流程结构，替掉现在
-  //    「flowId → sourcePaged 取任一源 → 按 sourceId 取步骤」的两跳
-  //    （见 FlowCenter/FlowDetailDrawer.vue 的 deriveFromSourceSteps）。
-  //    接的时候要先问清两件事，别想当然：
-  //    ① 一个流程挂 N 个源时返回什么——去重后的一份，还是每个源各一份（行上带 sourceId，
-  //       真按源重复的话前端得按 itemConfig 去重）；
-  //    ② svg=true 那条主配置行还在不在。
-  //    另：现在传 flowId 是**静默忽略并返回 0 条**（不是返回全量），所以"先按 flowId 探一次、
-  //    空了再回退两跳"这种自愈写法是安全的，等接口上线自动切换。
-  { path: 'item/next/nextConfigPaged', desc: '子步骤分页 / 流程图读取（现只认 sourceId；flowId 待后端上线）', impl: true, live: true },
+  // 按 flowId 查：2026-09-02 后端已上线（此前这里写的是"待上线"，联调后更新）。实测（流程
+  // 1400330，对照 5 个不同的关联源）恒不返回上面说的那一行，`svg` 参数在这个模式下不生效
+  // （带不带结果一样）。**这不是接口没做全，是这个概念在"不指定源"的语境下没有唯一答案**——
+  // 46 个源就有 46 种不同的 name/url，接口给不出"这个流程的那一行"，flowId 查询天生查不到
+  // 也查不该到。多源会不会把子步骤重复返回这个疑问也顺带排除了：子步骤记录挂在
+  // mainConfig（=configId=flowId）上、sourceId 恒为 -1，跟这个流程挂几个源无关，不存在重复。
+  // 结论：**flowId 查询替代不了 sourceId 查询，且永远不会有"flowId 版的这一行"**——
+  // flowId 查询本身可以直接用（对拿"这个流程有哪些真实子步骤"这件事是准的），只是给不出
+  // 起点节点。0902 后续：起点节点不必靠"任选一个关联源"这条路补——flowId===configId
+  // 对全部 735 条存量流程恒成立，直接查这个流程自己的 config/configDetail(flowId) 就有
+  // name/url/entryTypeId，够拼出起点节点，比"任选一个关联源"更准（用的是流程自己的字段，
+  // 不是某个源的），还不用查 sourceCnt>0 这个前提。FlowCenter/FlowDetailDrawer.vue 的
+  // deriveFromFlowConfig（还原历史流程画布）就是这么做的，不再走 sourcePaged/sourceSteps
+  // 两跳，也不再依赖任何具体的关联源。
+  { path: 'item/next/nextConfigPaged', desc: '子步骤分页 / 流程图读取（按 sourceId 或 flowId；flowId 天生查不到起点那一行，见上方注释）', impl: true, live: true },
   { path: 'item/next/configs/same', desc: '同资源配置（选择已有配置的候选来源，list1 同域 / list2 其它域）', impl: true, live: true },
   // 2026-08-31 联调：画布节点名 / 进入条件 / 增删节点走这 4 条，不走配置。
   // payload 已按 2026-08-26 源 430016398 / itemConfig 40600 实测对过；标 live 后日常 mock 模式也会打真实后端。
