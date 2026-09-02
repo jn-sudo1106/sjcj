@@ -25,7 +25,10 @@ async function clickQuery(wrapper: { findAll: (s: string) => { text: () => strin
 }
 
 describe('SiteFileView', () => {
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
 
   it('未选择网站时直接查询全部 file_resource，不按网站源关联过滤', async () => {
     vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
@@ -139,6 +142,41 @@ describe('SiteFileView', () => {
     expect(drawer.props('tableId')).toBe('file-resource')
     expect(drawer.props('tableName')).toBe('news-文件资源表')
     expect(wrapper.text()).toContain('已加载全部文件')
+  })
+
+  it('网站全部源滚动到表格底部时自动加载下一批，不再显示手动按钮', async () => {
+    let observerCallback: IntersectionObserverCallback | undefined
+    const observe = vi.fn()
+    const disconnect = vi.fn()
+    vi.stubGlobal('IntersectionObserver', vi.fn(function (callback: IntersectionObserverCallback) {
+      observerCallback = callback
+      return { observe, disconnect }
+    }))
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1', '源一')])
+    const rows = vi.spyOn(fileApi, 'resourceRows').mockImplementation(async (query) => ({
+      total: 21,
+      list: query.page === 1
+        ? Array.from({ length: 20 }, (_, index) => file('s1', `p1-${index}`, `one-${index}.html`))
+        : [file('s1', 'p2-1', 'next.html')],
+    }))
+
+    const wrapper = shallowMount(SiteFileView, {
+      props: { siteId: 'site-a' },
+      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+    })
+    await flushPromises()
+
+    expect(observe).toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="site-file-load-more"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="site-file-auto-load-status"]').text()).toContain('自动加载')
+
+    observerCallback?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver)
+    await flushPromises()
+
+    expect(rows).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 's1', page: 2 }))
+    expect(wrapper.text()).toContain('next.html')
   })
 
   it('明确展示失败源和接口错误，避免只有计数无法定位', async () => {

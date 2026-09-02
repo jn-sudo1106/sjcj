@@ -7,8 +7,8 @@ import CanvasHeader from './CanvasHeader.vue'
 import { useFlowStore } from '@/stores/flow'
 import { flowCenterApi } from '@/api'
 
-async function mountHeader() {
-  vi.spyOn(flowCenterApi, 'list').mockResolvedValue([])
+async function mountHeader(records: Awaited<ReturnType<typeof flowCenterApi.list>> = []) {
+  vi.spyOn(flowCenterApi, 'list').mockResolvedValue(records)
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: '/canvas', component: { template: '<div />' } }],
@@ -84,6 +84,33 @@ describe('CanvasHeader · 返回源视图', () => {
 })
 
 describe('CanvasHeader · 流程视图操作', () => {
+  it('流程切换默认展示 10 个，并支持按名称或 ID 搜索全部流程', async () => {
+    const records = Array.from({ length: 12 }, (_, index) => ({
+      id: `flow-${index + 1}`,
+      name: `流程 ${index + 1}`,
+      version: index + 1,
+      definition: { main: [], branches: [], configs: {}, branchGroups: [] },
+      updatedAt: '',
+    }))
+    const wrapper = await mountHeader(records as never)
+    const flow = useFlowStore()
+    flow.loadFromSource(
+      { sourceId: 'source-a', name: '源 A', url: 'https://x', configId: '', mainTable: 'T1', owner: 'admin', state: 'C' } as never,
+      [], null,
+    )
+    await flushPromises()
+
+    const input = wrapper.get('[data-testid="flow-switch-search"]')
+    await input.trigger('focus')
+    expect(wrapper.findAll('[data-testid="flow-switch-option"]')).toHaveLength(10)
+    expect(wrapper.text()).toContain('默认展示前 10 个')
+
+    await input.setValue('flow-12')
+    const options = wrapper.findAll('[data-testid="flow-switch-option"]')
+    expect(options).toHaveLength(1)
+    expect(options[0].text()).toContain('流程 12')
+  })
+
   it('不再提供同步到源入口', async () => {
     const wrapper = await mountHeader()
     const flow = useFlowStore()

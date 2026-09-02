@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowDown, Search } from '@element-plus/icons-vue'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { flowCenterApi, type FlowRecord } from '@/api'
@@ -26,13 +27,36 @@ onMounted(() => window.addEventListener('hashchange', syncView))
 onBeforeUnmount(() => window.removeEventListener('hashchange', syncView))
 
 const templates = ref<FlowRecord[]>([])
+const flowKeyword = ref('')
+const flowPickerOpen = ref(false)
 async function loadTemplates() {
   templates.value = await flowCenterApi.list()
 }
-function onTemplateDropdownVisible(visible: boolean) {
-  if (visible) void loadTemplates()
-}
 onMounted(() => { void loadTemplates() })
+
+const visibleTemplates = computed(() => {
+  const keyword = flowKeyword.value.trim().toLowerCase()
+  const matched = keyword
+    ? templates.value.filter((template) => template.name.toLowerCase().includes(keyword) || template.id.toLowerCase().includes(keyword))
+    : templates.value
+  return matched.slice(0, 10)
+})
+function openFlowPicker() {
+  flowPickerOpen.value = true
+}
+function closeFlowPicker() {
+  window.setTimeout(() => { flowPickerOpen.value = false }, 150)
+}
+function pickFlow(templateId: string) {
+  flowKeyword.value = ''
+  flowPickerOpen.value = false
+  void onSwitchFlow(templateId)
+}
+function manageFlows() {
+  flowKeyword.value = ''
+  flowPickerOpen.value = false
+  void onSwitchFlow('__manage_flows__')
+}
 
 // 顶部下拉是流程切换入口；内部沿用既有版本化接口，用户界面不再暴露“模板”概念。
 const appliedTemplateLabel = computed(() => {
@@ -137,19 +161,40 @@ async function onSwitchFlow(command: string) {
         <div class="ch-sub">{{ metaLine }}</div>
       </div>
       <div v-if="view === 'flow'" class="ch-actions">
-        <el-dropdown trigger="click" @command="onSwitchFlow" @visible-change="onTemplateDropdownVisible">
-          <button class="rc-btn" style="margin-right: 8px;" type="button">
-            {{ appliedTemplateLabel }} ▾
-          </button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item v-for="template in templates" :key="template.id" :command="template.id">
-                {{ template.name }} · v{{ template.version }}
-              </el-dropdown-item>
-              <el-dropdown-item divided command="__manage_flows__">管理流程…</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+        <div class="ch-flow-picker">
+          <div class="ch-flow-searchbox" :class="{ open: flowPickerOpen }">
+            <el-icon class="ch-flow-search-icon"><Search /></el-icon>
+            <input
+              v-model="flowKeyword"
+              class="ch-flow-search"
+              data-testid="flow-switch-search"
+              :placeholder="appliedTemplateLabel"
+              :title="appliedTemplateLabel"
+              aria-label="搜索并切换流程"
+              @focus="openFlowPicker"
+              @mousedown="openFlowPicker"
+              @blur="closeFlowPicker"
+            />
+            <el-icon class="ch-flow-chevron"><ArrowDown /></el-icon>
+          </div>
+          <div v-if="flowPickerOpen" class="ch-flow-options" data-testid="flow-switch-options">
+            <div v-if="!visibleTemplates.length" class="ch-flow-empty">没有匹配的流程</div>
+            <button
+              v-for="template in visibleTemplates"
+              :key="template.id"
+              type="button"
+              class="ch-flow-option"
+              :class="{ active: template.id === src.templateId }"
+              data-testid="flow-switch-option"
+              @mousedown.prevent="pickFlow(template.id)"
+            >
+              <span class="ch-flow-option-name">{{ template.name }}</span>
+              <span v-if="template.version != null" class="ch-flow-option-version">v{{ template.version }}</span>
+            </button>
+            <div v-if="!flowKeyword.trim() && templates.length > 10" class="ch-flow-limit">默认展示前 10 个，输入名称或 ID 搜索</div>
+            <button type="button" class="ch-flow-manage" @mousedown.prevent="manageFlows">管理流程…</button>
+          </div>
+        </div>
         <!-- 0828 W9-2/D06：步骤接口已通，拓扑/进入条件防抖自动保存；不再放手动保存按钮。 -->
         <span class="ch-save-status" data-testid="flow-save-status">
           <template v-if="saveStatus === 'saving'">保存中…</template>
@@ -172,7 +217,7 @@ async function onSwitchFlow(command: string) {
 </template>
 
 <style scoped>
-.rc-canvas-head { position: relative; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; flex-wrap: wrap; }
+.rc-canvas-head { position: relative; z-index: 20; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; flex-wrap: wrap; }
 .ch-switcher { display: inline-flex; padding: 2px; background: #f1f5f9; border: 1px solid var(--rc-border); border-radius: 7px; }
 .ch-seg { height: 26px; padding: 0 12px; border: 0; background: transparent; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 5px; }
 .ch-seg.on { background: var(--rc-primary); color: #fff; }
@@ -183,6 +228,23 @@ async function onSwitchFlow(command: string) {
 .ch-sub { color: var(--rc-faint); font-size: 10px; margin-top: 1px; }
 .ch-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
 .ch-actions .rc-btn { height: 30px; padding: 0 11px; font-size: 12px; }
+.ch-flow-picker { position: relative; width: 184px; margin-right: 4px; }
+.ch-flow-searchbox { display: flex; align-items: center; gap: 6px; box-sizing: border-box; height: 30px; padding: 0 8px; border: 1px solid #dbe3ee; border-radius: 7px; background: #f8fafc; color: var(--rc-faint); transition: border-color .15s, box-shadow .15s, background .15s; }
+.ch-flow-searchbox:focus-within { border-color: #60a5fa; background: #fff; box-shadow: 0 0 0 3px #dbeafe; }
+.ch-flow-search-icon, .ch-flow-chevron { flex: none; font-size: 13px; }
+.ch-flow-search { min-width: 0; flex: 1; height: 28px; padding: 0; border: 0; background: transparent; color: var(--rc-text); font-size: 12px; outline: none; text-overflow: ellipsis; }
+.ch-flow-search::placeholder { color: var(--rc-muted); opacity: 1; }
+.ch-flow-chevron { transition: transform .15s; }
+.ch-flow-searchbox.open .ch-flow-chevron { transform: rotate(180deg); }
+.ch-flow-options { position: absolute; z-index: 12; top: 34px; right: 0; width: 300px; overflow: hidden; border: 1px solid #dbe3ee; border-radius: 8px; background: #fff; box-shadow: 0 14px 32px -12px rgba(15, 23, 42, 0.28); }
+.ch-flow-option { display: flex; align-items: center; gap: 8px; width: 100%; height: 34px; padding: 0 10px; border: 0; border-bottom: 1px solid var(--rc-border-soft); background: #fff; color: var(--rc-text-2); font-size: 12px; text-align: left; cursor: pointer; }
+.ch-flow-option:hover, .ch-flow-option.active { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.ch-flow-option-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.ch-flow-option-version { flex: none; color: var(--rc-faint); font-family: var(--rc-mono, monospace); font-size: 10px; }
+.ch-flow-empty, .ch-flow-limit { padding: 9px 10px; color: var(--rc-faint); font-size: 11px; text-align: center; }
+.ch-flow-limit { border-bottom: 1px solid var(--rc-border-soft); }
+.ch-flow-manage { width: 100%; height: 32px; padding: 0 10px; border: 0; background: #fff; color: var(--rc-primary); font-size: 12px; text-align: left; cursor: pointer; }
+.ch-flow-manage:hover { background: var(--rc-primary-bg); }
 .ch-save-status { color: var(--rc-faint); font-size: 12px; min-height: 18px; min-width: 4em; }
 .ch-save-retry { border: 0; background: transparent; color: #b91c1c; font-size: 12px; cursor: pointer; padding: 0; }
 .ch-save-retry:hover { text-decoration: underline; }

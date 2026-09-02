@@ -2,7 +2,7 @@
 // 网站文件视图：具体网站下 file_resource 只支持单个 sourceId，所以网站“全部源”按源分页取数后做前端归并。
 // 未选择网站时直接查询 file_resource 全量范围，避免任务文件尚未完成网站关联时被过滤掉。
 // 不展示流程节点——网站没有唯一流程；选具体源仅收窄文件范围，仍默认展示该源全部文件。
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fileApi, siteApi, type DataTableMeta, type FileResourceRecord, type Source } from '@/api'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
@@ -43,11 +43,36 @@ const detail = reactive<{ visible: boolean; file: FileResourceRecord | null }>({
 // 网站“全部源”需要前端跨源归并，才只能提供加载更多。
 const usesDirectPaging = computed(() => !props.siteId || !!selectedSourceId.value)
 const maxPage = computed(() => Math.max(1, Math.ceil(total.value / size.value)))
+const tableWrapRef = ref<HTMLElement | null>(null)
+const loadMoreSentinelRef = ref<HTMLElement | null>(null)
 
 let mergeStates: MergeSourceState<FileResourceRecord>[] = []
 let candidateSourceIds: string[] = []
 let tableRequest = 0
 let queryRequest = 0
+let loadMoreObserver: IntersectionObserver | undefined
+
+function teardownLoadMoreObserver() {
+  loadMoreObserver?.disconnect()
+  loadMoreObserver = undefined
+}
+function setupLoadMoreObserver() {
+  teardownLoadMoreObserver()
+  if (usesDirectPaging.value || allExhausted.value || typeof IntersectionObserver === 'undefined') return
+  if (!tableWrapRef.value || !loadMoreSentinelRef.value) return
+  loadMoreObserver = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting) && !loading.value && !loadingMore.value && !allExhausted.value) {
+        void loadMore()
+      }
+    },
+    { root: tableWrapRef.value, rootMargin: '0px 0px 160px' },
+  )
+  loadMoreObserver.observe(loadMoreSentinelRef.value)
+}
+watch([tableWrapRef, loadMoreSentinelRef, usesDirectPaging, allExhausted], () => void nextTick(setupLoadMoreObserver), { flush: 'post' })
+onMounted(() => void nextTick(setupLoadMoreObserver))
+onBeforeUnmount(teardownLoadMoreObserver)
 
 async function loadResourceTable() {
   const requestId = ++tableRequest
@@ -103,7 +128,7 @@ async function fetchPage(sourceId: string, page: number, size: number): Promise<
 }
 
 async function loadMore(requestId = queryRequest) {
-  if (!candidateSourceIds.length || allExhausted.value) return
+  if (!candidateSourceIds.length || allExhausted.value || loadingMore.value) return
   loadingMore.value = true
   try {
     const result = await mergeLoadMore(mergeStates, PAGE_SIZE_OPTIONS[0], PAGE_SIZE_OPTIONS[0], fetchPage, MAX_PARALLEL_REQUESTS)
@@ -305,7 +330,7 @@ function openPreview(file: FileResourceRecord) {
         <span class="sfv-tablename">{{ table?.name || table?.tableName || 'file_resource' }}</span>
         <span class="sfv-count">{{ usesDirectPaging ? `共 ${total} 个文件` : `已加载 ${rows.length} 个文件` }}</span>
       </div>
-      <div class="sfv-table-wrap">
+      <div ref="tableWrapRef" class="sfv-table-wrap">
         <table class="rc-data-table sfv-table" v-loading="loading">
           <thead><tr><th>所属源</th><th>文件名-K1</th><th>展示名-K6</th><th>扩展名-K7</th><th class="num">大小-K4</th><th>MD5-K5</th><th>文件链接-K2</th><th>文件路径-K3</th><th>文本文件-K8</th><th>文本路径-K9</th><th class="num">文本大小-K10</th><th>状态</th><th>更新时间</th><th>生成时间</th><th>操作</th></tr></thead>
           <tbody>
@@ -343,8 +368,16 @@ function openPreview(file: FileResourceRecord) {
             <tr v-if="!rows.length && !loading"><td colspan="15" class="sfv-empty-row">没有匹配的文件</td></tr>
           </tbody>
         </table>
+        <div
+          v-if="!usesDirectPaging && !allExhausted"
+          ref="loadMoreSentinelRef"
+          class="sfv-load-sentinel"
+          data-testid="site-file-load-sentinel"
+          aria-hidden="true"
+        />
       </div>
       <div class="sfv-foot">
+        <!-- 只有直查分页才有准确总数；网站聚合模式滚动到底部时自动取下一批。 -->
         <template v-if="usesDirectPaging">
           <label class="muted">每页
             <select v-model.number="size" class="sfv-page-size" aria-label="每页条数" @change="changePageSize">
@@ -359,7 +392,7 @@ function openPreview(file: FileResourceRecord) {
           <button class="rc-btn" type="button" data-testid="site-file-jump" @click="goToPage">跳转</button>
         </template>
         <span v-else-if="allExhausted" class="muted">已加载全部文件</span>
-        <button v-else class="rc-btn" type="button" data-testid="site-file-load-more" :disabled="loadingMore" @click="loadMore()">{{ loadingMore ? '加载中…' : '加载更多' }}</button>
+        <span v-else class="muted" data-testid="site-file-auto-load-status">{{ loadingMore ? '加载中…' : '向下滚动自动加载更多' }}</span>
       </div>
     </template>
     <FileDetailDrawer
@@ -393,6 +426,7 @@ function openPreview(file: FileResourceRecord) {
 .sfv-tablename { font-family: var(--rc-mono, monospace); font-size: 12px; color: var(--rc-text-2); }
 .sfv-count, .muted { color: var(--rc-faint); font-size: 12px; }
 .sfv-table-wrap { flex: 1; min-height: 0; overflow: auto; }
+.sfv-load-sentinel { width: 1px; height: 1px; }
 .sfv-table { width: 100%; min-width: 1160px; border-collapse: separate; border-spacing: 0; }
 .sfv-table th { position: sticky; top: 0; z-index: 1; padding: 10px 12px; background: #f8fafc; color: #475569; font-size: 12px; font-weight: 600; text-align: left; white-space: nowrap; }
 .sfv-table td { padding: 10px 12px; border-top: 1px solid var(--rc-border-soft); color: var(--rc-text-2); font-size: 12px; }
