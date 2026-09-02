@@ -45,7 +45,7 @@ describe('流程模板 mock 持久化', () => {
       template: { id: original.id, name: '改名后的模板', definition: original.definition },
     })
 
-    expect(saved.version).toBe(original.version + 1)
+    expect(saved.version).toBe((original.version ?? 0) + 1)
     expect(mockFlowTemplateDetail({ id: original.id, version: original.version })?.name).toBe(original.name)
     expect(mockFlowTemplateDetail({ id: original.id, version: saved.version })?.name).toBe('改名后的模板')
     expect(mockFlowTemplateList().find((item) => item.id === original.id)?.version).toBe(saved.version)

@@ -1584,7 +1584,7 @@ describe('Task 5 流程模板绑定', () => {
     flow.patchCollect(fileId, { url: 'https://source.example.com/report.pdf' })
     const upgraded = {
       ...template,
-      version: template.version + 1,
+      version: (template.version ?? 0) + 1,
       definition: {
         ...template.definition,
         main: template.definition.main.filter((id) => id !== fileId),
