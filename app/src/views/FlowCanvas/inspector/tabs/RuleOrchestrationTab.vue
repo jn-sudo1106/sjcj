@@ -14,18 +14,20 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
 import { isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
+import { entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { isVruleNumericRuleId } from '@/api/legacyAdapters'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
 import { buildDataProcessGeneratePayload } from '@/utils/flow/dataProcess'
 import { promptCategoryGroupsForNode, promptListCategoryForNode, resolvePromptCategoryForNode } from '../promptCategory'
+import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 
 const flow = useFlowStore()
 const router = useRouter()
 const route = useRoute()
+const { tables } = useNodeInspectorAssets()
 
 const id = computed<string>(() => flow.selectedId)
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
@@ -43,7 +45,7 @@ function patch(p: Partial<RuleOrchestration>) {
 }
 
 // 文案分流：内容同构，只有措辞按节点类型切换
-const describeLabel = computed(() => (isRule.value ? '规则处理描述' : '抓取需求描述'))
+const describeLabel = computed(() => (isMonitor.value ? '数据监控描述' : isRule.value ? '规则处理描述' : '抓取需求描述'))
 const describePlaceholder = computed(() => (isRule.value ? '描述规则处理逻辑，如根据输入字段生成指标数值' : '描述抓取需求，如打开列表页提取表格前 20 行数据'))
 const pathLabel = computed(() => (isRule.value ? '脚本路径' : '配置路径'))
 const generateLabel = computed(() => (isRule.value ? '生成脚本' : '生成配置'))
@@ -54,6 +56,42 @@ const scriptLabel = computed(() => (isRule.value ? 'Python 脚本' : '抓取配�
 const promptCategoryGroups = computed(() => promptCategoryGroupsForNode(cfg.value))
 const promptCategory = computed(() => resolvePromptCategoryForNode(cfg.value, orchCfg.value.promptCategory))
 const promptListCategory = computed(() => promptListCategoryForNode(cfg.value))
+const describeTouched = ref(false)
+
+function formatTableLabel(table?: Pick<EntryType, 'name' | 'tableName'> | null): string {
+  const name = table?.name?.trim() || ''
+  const tableName = table?.tableName?.trim() || ''
+  if (name && tableName) return `${name}:${tableName}`
+  return name || tableName || ''
+}
+
+function resolveTableLabel(tableRef: string): string {
+  const ref = tableRef.trim()
+  if (!ref) return ''
+  const table = tables.value.find((item) => item.tableId === ref || item.tableName === ref || item.name === ref)
+  return formatTableLabel(table) || ref
+}
+
+const sourceTableName = computed(() => resolveTableLabel(
+  cfg.value?.collectCfg?.inputTable?.trim()
+  || cfg.value?.inputTable?.trim()
+  || orchCfg.value.inputTableId?.trim()
+  || orchCfg.value.inputTable?.trim()
+  || '',
+))
+
+watch(id, () => {
+  describeTouched.value = false
+}, { immediate: true })
+
+function buildMonitorDescribe() {
+  if (!isMonitor.value) return ''
+  const tableLabel = sourceTableName.value
+  const methods = (cfg.value?.monitorMethods ?? []).map((item) => item.trim()).filter(Boolean)
+  if (!tableLabel || !methods.length) return ''
+  return `我想对${tableLabel}进行如下监控：\n${methods.map((item, index) => `${index + 1}.${item}`).join('\n')}`
+}
+const monitorDescribeSeed = computed(() => buildMonitorDescribe())
 
 // ---- 抓取配置 XML 轻解析（0804 S3-4，方案 §3.1 修正 B · 附录 §十）：仅非规则节点 ----
 // 只读动作链摘要（顶部展示）+ 保存前的字段一致性提示，不做可视化编辑（方案已拍板不做）。
@@ -201,8 +239,18 @@ watch(
   () => { void hydrateViewFromServer() },
   { immediate: true },
 )
+watch(
+  () => [id.value, isMonitor.value, monitorDescribeSeed.value] as const,
+  () => {
+    if (!isMonitor.value || describeTouched.value) return
+    const autoDescribe = monitorDescribeSeed.value
+    if (autoDescribe && orchCfg.value.describe !== autoDescribe) patch({ describe: autoDescribe })
+  },
+  { immediate: true },
+)
 
 function onDescribeChange(e: Event) {
+  describeTouched.value = true
   patch({ describe: (e.target as HTMLTextAreaElement).value })
 }
 function onSystemPromptChange(value: string) {
@@ -285,7 +333,7 @@ async function onGenerateScript(
   draft?: Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'modelProviderCode' | 'modelCode'>>,
 ) {
   if (!orchCfg.value.describe.trim()) {
-    ElMessage.warning(isRule.value ? '请先填写规则处理描述' : '请先填写抓取需求描述')
+    ElMessage.warning(isMonitor.value ? '请先填写数据监控描述' : isRule.value ? '请先填写规则处理描述' : '请先填写抓取需求描述')
     return
   }
   if (isRule.value && !cfg.value?.configId) {
@@ -328,7 +376,7 @@ async function onGenerateScript(
         configId: Number(cfg.value?.configId ?? 0),
         providerCode: genCfg.modelProviderCode ?? '',
         model: genCfg.modelCode ?? '',
-        sourceTable: genCfg.inputTable ?? '',
+        sourceTable: sourceTableName.value,
         targetTable: genCfg.outputTable ?? '',
         inputFields: genCfg.inputFields ?? [],
         outputFields: genCfg.outputFields ?? [],
@@ -579,8 +627,10 @@ function goToDataView() {
     :prompt-category="promptCategory"
     :prompt-list-category="promptListCategory"
     :prompt-category-groups="promptCategoryGroups"
-    :input-table-name="orchCfg.inputTable"
+    :input-table-name="sourceTableName"
     :output-table-name="orchCfg.outputTable"
+    :source-id="isMonitor ? (cfg?.stepSourceId ?? '') : ''"
+    :source-cron="isMonitor ? (cfg?.schedule?.cron ?? '') : ''"
     :input-fields="orchCfg.inputFields ?? []"
     :output-fields="orchCfg.outputFields ?? []"
     :input-field-options="inputFieldOptions"

@@ -3,6 +3,8 @@ import type { RuleFieldOption } from '@/api'
 export interface PromptTemplateContext {
   inputTableName: string
   outputTableName: string
+  sourceId?: string
+  sourceCron?: string
   inputFields: string[]
   outputFields: string[]
   inputFieldOptions: RuleFieldOption[]
@@ -15,7 +17,7 @@ function escapeRegExp(text: string): string {
 
 function replaceToken(text: string, key: string, value: string): string {
   const bracePattern = new RegExp(escapeRegExp(`{{${key}}}`), 'g')
-  const barePattern = new RegExp(`\\b${escapeRegExp(key)}\\b`, 'g')
+  const barePattern = new RegExp(`\\b${escapeRegExp(key)}\\b(?!\\s*=)`, 'g')
   return text.replace(bracePattern, value).replace(barePattern, value)
 }
 
@@ -37,6 +39,8 @@ export function applyPromptTemplate(template: string, context: PromptTemplateCon
   const inputFields = selectFields(context.inputFields, context.inputFieldOptions)
   const outputFields = selectFields(context.outputFields, context.outputFieldOptions)
   return [
+    ['source_id', context.sourceId ?? ''],
+    ['source_cron', context.sourceCron ?? ''],
     ['source_table', context.inputTableName],
     ['target_table', context.outputTableName],
     ['input_table', context.inputTableName],
