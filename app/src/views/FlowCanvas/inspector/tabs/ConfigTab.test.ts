@@ -52,7 +52,6 @@ describe('ConfigTab · 规则节点「选择已有规则」（0805）', () => {
     await flushPromises()
     expect(wrapper.findAll('button').some((b) => b.text() === '选择已有')).toBe(true)
     expect(wrapper.text()).toContain('适用源')
-    expect(wrapper.text()).toContain('规则ID选择')
 
     setActivePinia(createPinia())
     const flow2 = useFlowStore()
@@ -134,7 +133,7 @@ describe('ConfigTab · 规则节点「选择已有规则」（0805）', () => {
     expect(flow.configs['rule-1'].title).toBe('')
   })
 
-  it('适用源、规则ID选择回填并写入步骤字段，不写进 ruleCfg.ruleId', async () => {
+  it('适用源回填并写入步骤字段，不写进 ruleCfg.ruleId', async () => {
     mockAssets()
     vi.spyOn(ruleApi, 'orchestrationOwnRules').mockResolvedValue([])
     const { flow, wrapper } = mountOnRuleNode()
@@ -143,15 +142,11 @@ describe('ConfigTab · 规则节点「选择已有规则」（0805）', () => {
     await flushPromises()
 
     const sourceInput = wrapper.find('input[aria-label="适用源"]')
-    const itemInput = wrapper.find('[data-testid="rule-item-id"]')
     expect((sourceInput.element as HTMLInputElement).value).toBe('430022404')
-    expect((itemInput.element as HTMLInputElement).value).toBe('-1')
     expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBeFalsy()
 
     await sourceInput.setValue('-1')
-    await itemInput.setValue('173')
     expect(flow.configs['rule-1'].stepSourceId).toBe('-1')
-    expect(flow.configs['rule-1'].itemId).toBe('173')
     expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBeFalsy()
   })
 })
