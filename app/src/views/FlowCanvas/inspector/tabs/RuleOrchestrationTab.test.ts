@@ -49,11 +49,12 @@ const PROMPT_TEMPLATE = {
   systemPrompt: '源表={{source_table}}; 目标表={{output_table}}; 入参={{input_pair}}; 出参={{output_pair}}; 入参码={{input_fields}}; 出参码={{output_fields}}',
 }
 
-function mockAssets() {
-  vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [INPUT_TABLE] })
+function mockAssets(inputTableName = INPUT_TABLE.name) {
+  const table = { ...INPUT_TABLE, name: inputTableName }
+  vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [table] })
   // 真实后端的表列表不带字段定义，选中表后另拉一次详情（entryApi.entryDetail）才有 fields——
   // 这里模拟同一张表，保证选表后的字段池仍是 INPUT_TABLE 的 2 个字段，而非 mock 兜底数据。
-  vi.spyOn(entryApi, 'entryDetail').mockResolvedValue(INPUT_TABLE)
+  vi.spyOn(entryApi, 'entryDetail').mockResolvedValue(table)
   vi.spyOn(paramApi, 'paramPaged').mockResolvedValue({ total: 0, list: [] })
   vi.spyOn(ruleApi, 'ruleGroups').mockResolvedValue([])
   vi.spyOn(ruleApi, 'rulePaged').mockResolvedValue({ total: 0, list: [] })
@@ -198,6 +199,28 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     await flushPromises()
 
     expect(ruleApi.dataProcessGenerate).toHaveBeenCalled()
+  })
+
+  it('数据监控节点显示数据监控描述', async () => {
+    mockAssets()
+    const { wrapper } = mountOnMonitorNode()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('数据监控描述')
+  })
+
+  it('数据监控节点进入编排配置时自动组装监控描述', async () => {
+    mockAssets('通用新闻表')
+    const { flow, wrapper } = mountOnMonitorNode()
+    flow.patchRuleConfig('monitor-1', {
+      inputTableId: '2102154',
+      inputTable: 'sense_data.TB_JD_SKU_BASE',
+    })
+    flow.setMonitorMethods('monitor-1', ['当日数据是否正常入库', '数据延迟监控'])
+    await flushPromises()
+
+    const textarea = wrapper.find('textarea.rc-input.rc-textarea').element as HTMLTextAreaElement
+    expect(textarea.value).toBe('我想对通用新闻表:sense_data.TB_JD_SKU_BASE进行如下监控：\n1.当日数据是否正常入库\n2.数据延迟监控')
   })
 
   it('未保存表配置时点生成脚本：不调用接口', async () => {
