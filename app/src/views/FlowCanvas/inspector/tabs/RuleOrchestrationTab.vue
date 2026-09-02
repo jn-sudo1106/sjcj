@@ -14,7 +14,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
 import { isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
+import { entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { isVruleNumericRuleId } from '@/api/legacyAdapters'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
@@ -58,18 +58,35 @@ const promptCategory = computed(() => resolvePromptCategoryForNode(cfg.value, or
 const promptListCategory = computed(() => promptListCategoryForNode(cfg.value))
 const describeTouched = ref(false)
 
+function formatTableLabel(table?: Pick<EntryType, 'name' | 'tableName'> | null): string {
+  const name = table?.name?.trim() || ''
+  const tableName = table?.tableName?.trim() || ''
+  if (name && tableName) return `${name}:${tableName}`
+  return name || tableName || ''
+}
+
+function resolveTableLabel(tableRef: string): string {
+  const ref = tableRef.trim()
+  if (!ref) return ''
+  const table = tables.value.find((item) => item.tableId === ref || item.tableName === ref || item.name === ref)
+  return formatTableLabel(table) || ref
+}
+
+const sourceTableName = computed(() => resolveTableLabel(
+  cfg.value?.collectCfg?.inputTable?.trim()
+  || cfg.value?.inputTable?.trim()
+  || orchCfg.value.inputTableId?.trim()
+  || orchCfg.value.inputTable?.trim()
+  || '',
+))
+
 watch(id, () => {
   describeTouched.value = false
 }, { immediate: true })
 
 function buildMonitorDescribe() {
   if (!isMonitor.value) return ''
-  const inputTableId = orchCfg.value.inputTableId?.trim()
-  const inputTable = orchCfg.value.inputTable?.trim()
-  const table = tables.value.find((item) => item.tableId === inputTableId)
-    ?? tables.value.find((item) => item.tableName === inputTable)
-    ?? tables.value.find((item) => item.name === inputTable)
-  const tableLabel = table ? `${table.name || table.tableName}:${table.tableName || table.name || ''}` : inputTable
+  const tableLabel = sourceTableName.value
   const methods = (cfg.value?.monitorMethods ?? []).map((item) => item.trim()).filter(Boolean)
   if (!tableLabel || !methods.length) return ''
   return `我想对${tableLabel}进行如下监控：\n${methods.map((item, index) => `${index + 1}.${item}`).join('\n')}`
@@ -359,7 +376,7 @@ async function onGenerateScript(
         configId: Number(cfg.value?.configId ?? 0),
         providerCode: genCfg.modelProviderCode ?? '',
         model: genCfg.modelCode ?? '',
-        sourceTable: genCfg.inputTable ?? '',
+        sourceTable: sourceTableName.value,
         targetTable: genCfg.outputTable ?? '',
         inputFields: genCfg.inputFields ?? [],
         outputFields: genCfg.outputFields ?? [],
@@ -610,8 +627,10 @@ function goToDataView() {
     :prompt-category="promptCategory"
     :prompt-list-category="promptListCategory"
     :prompt-category-groups="promptCategoryGroups"
-    :input-table-name="orchCfg.inputTable"
+    :input-table-name="sourceTableName"
     :output-table-name="orchCfg.outputTable"
+    :source-id="isMonitor ? (cfg?.stepSourceId ?? '') : ''"
+    :source-cron="isMonitor ? (cfg?.schedule?.cron ?? '') : ''"
     :input-fields="orchCfg.inputFields ?? []"
     :output-fields="orchCfg.outputFields ?? []"
     :input-field-options="inputFieldOptions"

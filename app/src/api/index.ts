@@ -911,8 +911,8 @@ async function fetchRuleOrchestrationStream(
     if (externalSignal.aborted) controller.abort()
     else externalSignal.addEventListener('abort', onExternalAbort, { once: true })
   }
-  // 生成可能较慢，放宽到 120s（旧页无超时，仅 AbortController 取消）
-  const timeout = window.setTimeout(() => controller.abort(), 120_000)
+  // 生成可能较慢，放宽到 5min（旧页无超时，仅 AbortController 取消）
+  const timeout = window.setTimeout(() => controller.abort(), 300_000)
   let res: Response
   try {
     res = await fetch('/vrule/ai/dashscope/stream', {
@@ -984,7 +984,8 @@ async function fetchDataProcessGenerate(
       if (options.signal.aborted) controller.abort()
       else options.signal.addEventListener('abort', onExternalAbort, { once: true })
     }
-    const timeout = window.setTimeout(() => controller.abort(), 120_000)
+    // 生成可能较慢，放宽到 5min（与 fetchRuleOrchestrationStream 对齐；旧页无超时，仅 AbortController 取消）
+    const timeout = window.setTimeout(() => controller.abort(), 300_000)
     let res: Response
     try {
       res = await fetch('/api/answer/data-process', {

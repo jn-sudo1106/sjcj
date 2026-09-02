@@ -30,6 +30,8 @@ const props = defineProps<{
   modelCode?: string
   inputTableName?: string
   outputTableName?: string
+  sourceId?: string
+  sourceCron?: string
   inputFields: string[]
   outputFields: string[]
   inputFieldOptions: RuleFieldOption[]
@@ -133,6 +135,8 @@ async function loadPromptTemplate() {
     const applied = applyPromptTemplate(template, {
       inputTableName: props.inputTableName?.trim() || '',
       outputTableName: props.outputTableName?.trim() || props.inputTableName?.trim() || '',
+      sourceId: props.sourceId?.trim() || '',
+      sourceCron: props.sourceCron?.trim() || '',
       inputFields: props.inputFields,
       outputFields: props.outputFields,
       inputFieldOptions: props.inputFieldOptions,

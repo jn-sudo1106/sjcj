@@ -48,9 +48,16 @@ const PROMPT_TEMPLATE = {
   category: 'rule',
   systemPrompt: '源表={{source_table}}; 目标表={{output_table}}; 入参={{input_pair}}; 出参={{output_pair}}; 入参码={{input_fields}}; 出参码={{output_fields}}',
 }
+const MONITOR_PROMPT_TEMPLATE = {
+  promptId: 2,
+  nodeType: 'rule_processing',
+  nodeTypeName: '数据监控',
+  category: 'rule',
+  systemPrompt: 'source_id={{source_id}}; source_cron={{source_cron}}; source_table={{source_table}}',
+}
 
-function mockAssets(inputTableName = INPUT_TABLE.name) {
-  const table = { ...INPUT_TABLE, name: inputTableName }
+function mockAssets(inputTableName = INPUT_TABLE.name, tableId = INPUT_TABLE.tableId, tableName = INPUT_TABLE.tableName) {
+  const table = { ...INPUT_TABLE, tableId, tableName, name: inputTableName }
   vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [table] })
   // 真实后端的表列表不带字段定义，选中表后另拉一次详情（entryApi.entryDetail）才有 fields——
   // 这里模拟同一张表，保证选表后的字段池仍是 INPUT_TABLE 的 2 个字段，而非 mock 兜底数据。
@@ -81,6 +88,12 @@ function mockAssets(inputTableName = INPUT_TABLE.name) {
       const parsed = new URL(url)
       if (parsed.searchParams.get('category') === 'rule' && parsed.searchParams.get('node_type_name') === '规则处理') {
         return new Response(JSON.stringify([PROMPT_TEMPLATE]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      if (parsed.searchParams.get('category') === 'rule' && parsed.searchParams.get('node_type_name') === '数据监控') {
+        return new Response(JSON.stringify([MONITOR_PROMPT_TEMPLATE]), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         })
@@ -254,7 +267,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
       configId: 184,
       providerCode: 'DeepSeek',
       model: 'deepseek-chat',
-      sourceTable: 'sense_data.TB_JD_SKU_BASE',
+      sourceTable: 'JD-商品基础:sense_data.TB_JD_SKU_BASE',
       targetTable: 'sense_data.TB_JD_SKU_RESULT',
       inputFields: '商品ID:sku_id',
       outputFields: '商品名称:sku_name',
@@ -373,7 +386,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
 
     const promptTextarea = wrapper.find('textarea.wb-textarea:not(.wb-code)')
     expect(promptTextarea.element).toBeTruthy()
-    expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('源表=sense_data.TB_JD_SKU_BASE')
+    expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('源表=JD-商品基础:sense_data.TB_JD_SKU_BASE')
     expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('目标表=sense_data.TB_JD_SKU_RESULT')
     expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('入参=商品ID:sku_id')
     expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('出参=商品名称:sku_name')
@@ -381,7 +394,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('出参码=sku_name')
     // 拼接后的完整提示词同步写回 orchCfg.systemPrompt：生成脚本（data-process）入参 systemPrompt
     // 取的就是这个完整值，无需用户在工作台点「保存」。
-    expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toContain('源表=sense_data.TB_JD_SKU_BASE')
+    expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toContain('源表=JD-商品基础:sense_data.TB_JD_SKU_BASE')
     expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toContain('入参=商品ID:sku_id')
   })
 
@@ -480,11 +493,29 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
       configId: 184,
       providerCode: 'OpenAI',
       model: 'gpt-4o-mini',
-      sourceTable: 'sense_data.TB_JD_SKU_BASE',
+      sourceTable: 'JD-商品基础:sense_data.TB_JD_SKU_BASE',
       targetTable: 'sense_data.TB_JD_SKU_RESULT',
       inputFields: '商品ID:sku_id',
       outputFields: '商品名称:sku_name',
     }), expect.anything())
+  })
+
+  it('数据监控节点工作区会把 source_id/source_cron/source_table 按表单值替换', async () => {
+    mockAssets('通用新闻表', '900', 'sense_data.TB_CNEWS')
+    const { flow, wrapper } = mountOnMonitorNode()
+    flow.setInputTable('monitor-1', '900')
+    flow.setStepSourceId('monitor-1', '391007796')
+    flow.patchSchedule('monitor-1', { cron: '0 0 12 * * *' })
+    await flushPromises()
+
+    const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
+    await editBtn.trigger('click')
+    await flushPromises()
+
+    const promptTextarea = wrapper.find('textarea.wb-textarea:not(.wb-code)')
+    expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('source_id=391007796')
+    expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('source_cron=0 0 12 * * *')
+    expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('source_table=通用新闻表:sense_data.TB_CNEWS')
   })
 
   it('保存脚本：需二次确认，确认后调用 orchestrationSave 并写回 mode/ruleId/scriptPath', async () => {
