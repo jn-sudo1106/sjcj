@@ -592,16 +592,6 @@ function bindSearch() {
   bindDlg.page = 1
   void loadBindCandidates()
 }
-function bindPrevPage() {
-  if (bindDlg.page <= 1) return
-  bindDlg.page -= 1
-  void loadBindCandidates()
-}
-function bindNextPage() {
-  if (bindDlg.page * BIND_PAGE_SIZE >= bindDlg.total) return
-  bindDlg.page += 1
-  void loadBindCandidates()
-}
 function toggleBindRow(sourceId: string) {
   const next = new Set(bindDlg.selected)
   if (next.has(sourceId)) next.delete(sourceId)
@@ -1097,10 +1087,20 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
             </tbody>
           </table>
         </div>
+        <!-- 分页与数据中心统一（DataQueryPanel 的 .dqp-pager 同款 el-pagination）。
+             弹窗里宽度有限，layout 去掉 sizes/jumper 只留翻页；页大小固定 BIND_PAGE_SIZE。 -->
         <div class="ssw-bind-pager">
-          <button class="rc-btn" type="button" :disabled="bindDlg.page <= 1" @click="bindPrevPage">上一页</button>
-          <span class="ssw-bind-muted">第 {{ bindDlg.page }} 页 · 共 {{ bindDlg.total }} 条</span>
-          <button class="rc-btn" type="button" :disabled="bindDlg.page * BIND_PAGE_SIZE >= bindDlg.total" @click="bindNextPage">下一页</button>
+          <el-pagination
+            data-testid="bind-pagination"
+            v-model:current-page="bindDlg.page"
+            :page-size="BIND_PAGE_SIZE"
+            :total="bindDlg.total"
+            layout="total, prev, pager, next"
+            background
+            small
+            :disabled="bindDlg.loading"
+            @current-change="loadBindCandidates"
+          />
         </div>
 
         <div class="ssw-add-hint">勾选源后点击"确认导入"即可批量导入到当前网站。</div>
@@ -1503,6 +1503,6 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 .ssw-bind-unbound { color: var(--rc-faint); font-size: 12px; }
 .ssw-bind-current { color: var(--rc-ok); font-size: 12px; font-weight: 600; }
 .ssw-bind-other { color: #d97706; font-size: 12px; font-weight: 600; }
-.ssw-bind-pager { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 10px 0 4px; }
+.ssw-bind-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 0 4px; }
 .ssw-bind-muted { font-size: 12px; color: var(--rc-muted); }
 </style>

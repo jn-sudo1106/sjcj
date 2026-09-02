@@ -31,10 +31,13 @@ const navGroups = computed(() =>
     .filter((g) => g.items.length > 0),
 )
 
+// 键必须与 TABS 的 key 一一对应：漏一个不会报错，只会渲染出一个空的 <el-icon> 占位方块。
+// 2026-09-02 把 TAB key 从 'flow' 改成 'flows'（对齐 /flows 路径）时漏改这里，流程中心的图标
+// 就这么没了。AppSidebar.test.ts 有一条用例锁死「每个 TAB 都有图标」。
 const navIcons: Record<string, Component> = {
   overview: Odometer,
   collect: Box,
-  flow: Connection,
+  flows: Connection,
   rules: Document,
   metrics: Histogram,
   data: DataAnalysis,

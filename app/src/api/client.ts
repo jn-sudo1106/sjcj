@@ -13,7 +13,13 @@ type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE'
 export interface RequestOptions {
   mode?: AdapterMode
   method?: HttpMethod
-  paramsIn?: 'query' | 'body'
+  /**
+   * 参数编码方式。默认 GET → query、其余 → body（JSON）。
+   * `form` = application/x-www-form-urlencoded，给**没有 @RequestBody 的 Spring 对象绑定**
+   * 端点用（如 config/add）：那类接口收 JSON 会**静默丢弃全部字段**——返回 success、记录也建了，
+   * 但每个字段都是 null。2026-09-02 在 config/add 上实测撞到，表单与 query 才能绑上。
+   */
+  paramsIn?: 'query' | 'body' | 'form'
   timeoutMs?: number
   httpParams?: Record<string, unknown>
   httpEndpoint?: string
@@ -123,6 +129,9 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   // 之所以必须走它：updateConfig 不带 configId 并不会创建配置（实测），旧平台建配置也只有
   // 新建源向导 / source/genConfig / config/copyAll 三条路，前两条都会顺带动源。
   'config/copyAll',
+  // 2026-09-02 放开：新增配置（config_api.md §十六）。纯新增，不改不删任何已有数据，
+  // 与 site/add、config/copyAll 同性质。画布新拉的节点第一次「保存」靠它拿 configId。
+  'config/add',
   // 2026-08-31 放开：源标签 / 颜色标识。旧平台 markBatch / markSourceFlag 即时写库
   // （tags、usedFlag）；不放开则新平台只改 session overlay，旧平台刷新后看不到。
   // 2026-09-01 改：白名单键跟 source/tagSource 一起放开时没意识到那个端点名是臆造的，
@@ -136,6 +145,19 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'item/next/stepModify',
   'item/next/enable',
   'item/next/delete',
+  // 2026-09-02 放开：流程（cs_flow）的全部写端点，为流程中心联调做准备。
+  // 这批比清单里其它项破坏面小得多：cs_flow 是后端新建的表，且**执行链路根本没接**——
+  // 旧平台 FlowList.vue 全页没有任何地方把 flowConf 下发/编译成 config，changeFlowBatch 也只是
+  // 把 cs_source.FLOW_ID 置上而已，执行器不读它。所以写坏了不会影响任何在跑的采集任务。
+  // saveFlow 新增与修改是同一个端点（不带 flowId = 新增）；deleteFlow 是逻辑删除（is_delete=-1 + state=D）。
+  'flow/saveFlow',
+  'flow/updateFlowConf',
+  'flow/deleteFlow',
+  'flow/changeFlowEnable',
+  // ⚠️ 唯一一条写**存量生产表**的：changeFlowBatch 改的是 cs_source.FLOW_ID，不是 cs_flow，
+  // 且单次上限 5000 条。虽然这个字段目前没有消费方，但它落在源表上，UI 侧必须保留二次确认 +
+  // 明确展示影响条数，不要做成"勾一片直接绑"。
+  'flow/changeFlowBatch',
 ])
 
 function isProductionWriteAllowed(httpEndpoint: string): boolean {
@@ -167,6 +189,20 @@ export function appendQuery(url: string, params?: Record<string, unknown>): stri
   })
   const text = query.toString()
   return text ? `${url}?${text}` : url
+}
+
+/** 表单编码。与 appendQuery 同一口径：跳过 undefined/null/''，数组按逗号串，对象序列化成 JSON。 */
+function formEncode(params: Record<string, unknown> | undefined): string {
+  const form = new URLSearchParams()
+  Object.entries(params ?? {}).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return
+    if (Array.isArray(value)) {
+      form.set(key, value.join(','))
+      return
+    }
+    form.set(key, typeof value === 'object' ? JSON.stringify(value) : String(value))
+  })
+  return form.toString()
 }
 
 function normalizeHttpPayload(endpoint: string, payload: unknown): unknown {
@@ -273,13 +309,16 @@ export async function request<T>(
     }
     const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs ?? 20_000)
     if (paramsIn === 'body') headers['Content-Type'] = 'application/json'
+    if (paramsIn === 'form') headers['Content-Type'] = 'application/x-www-form-urlencoded'
     let res: Response
     try {
       res = await fetch(requestUrl, {
         method,
         credentials: 'include',
         headers,
-        body: paramsIn === 'body' ? JSON.stringify(httpParams ?? {}) : undefined,
+        body: paramsIn === 'body'
+          ? JSON.stringify(httpParams ?? {})
+          : paramsIn === 'form' ? formEncode(httpParams) : undefined,
         signal: controller.signal,
       })
     } finally {

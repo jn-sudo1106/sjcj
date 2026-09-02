@@ -10,7 +10,6 @@ import GlobalSourceSelect from './components/GlobalSourceSelect.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
 import FilePreviewDrawer from './components/FilePreviewDrawer.vue'
 import { initMergeState, mergeLoadMore, type MergeSourceState, type MergeLoadMoreResult } from './siteDataMerge'
-import { withoutComposition } from '@/utils/enterKey'
 
 const props = defineProps<{ siteId?: string; initialSourceId?: string }>()
 
@@ -29,7 +28,6 @@ const rows = ref<FileResourceRecord[]>([])
 const filters = reactive({ fileName: '', ext: '', state: '', sql: '' })
 const page = ref(1)
 const size = ref(PAGE_SIZE_OPTIONS[0])
-const jumpPage = ref(1)
 const total = ref(0)
 const tableLoading = ref(false)
 const loading = ref(false)
@@ -42,7 +40,6 @@ const detail = reactive<{ visible: boolean; file: FileResourceRecord | null }>({
 // 全部网站或已收窄到单个源时，entryDataPaged 能返回准确 total，直接用常规分页；只有
 // 网站“全部源”需要前端跨源归并，才只能提供加载更多。
 const usesDirectPaging = computed(() => !props.siteId || !!selectedSourceId.value)
-const maxPage = computed(() => Math.max(1, Math.ceil(total.value / size.value)))
 const tableWrapRef = ref<HTMLElement | null>(null)
 const loadMoreSentinelRef = ref<HTMLElement | null>(null)
 
@@ -147,9 +144,12 @@ async function loadMore(requestId = queryRequest) {
 async function resetAndLoad(resetPage = true) {
   const requestId = ++queryRequest
   if (resetPage) page.value = 1
-  jumpPage.value = page.value
   rows.value = []
-  total.value = 0
+  // 翻页时**不能**把 total 清零：el-pagination 的 current-page 是受控的，看到 total=0
+  // 会立刻把页码夹回第 1 页并回发一次 current-change，于是翻页永远停在第 1 页
+  // （手写的上一页/下一页没这个问题，它直接读 page，不受 total 约束）。
+  // 只有换查询条件（resetPage=true）时才清，那时页码本来就要回到 1。
+  if (resetPage) total.value = 0
   failedSources.value = []
   allExhausted.value = false
   noCandidateSources.value = false
@@ -246,29 +246,14 @@ function openDetail(file: FileResourceRecord) {
   detail.file = file
   detail.visible = true
 }
-function previousPage() {
-  if (!usesDirectPaging.value || page.value <= 1) return
-  page.value -= 1
-  jumpPage.value = page.value
-  void resetAndLoad(false)
-}
-function nextPage() {
-  if (!usesDirectPaging.value || page.value >= maxPage.value) return
-  page.value += 1
-  jumpPage.value = page.value
+function onPageChange() {
+  if (!usesDirectPaging.value) return
   void resetAndLoad(false)
 }
 function changePageSize() {
   if (!usesDirectPaging.value) return
   page.value = 1
   void resetAndLoad()
-}
-function goToPage() {
-  if (!usesDirectPaging.value) return
-  const target = Math.min(maxPage.value, Math.max(1, Number(jumpPage.value) || 1))
-  page.value = target
-  jumpPage.value = target
-  void resetAndLoad(false)
 }
 
 watch(() => [props.siteId, props.initialSourceId] as const, () => {
@@ -280,7 +265,6 @@ watch(selectedSourceId, () => {
 })
 
 // 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
-const onEnterJump = withoutComposition(() => goToPage())
 
 // 点表格行开预览（2026-08-21 产品意见）：预览篇幅大，与「详情」的字段列表拆开各走各的抽屉。
 // 行尾「详情」按钮用 @click.stop，避免冒泡把预览一起打开。
@@ -377,19 +361,23 @@ function openPreview(file: FileResourceRecord) {
         />
       </div>
       <div class="sfv-foot">
-        <!-- 只有直查分页才有准确总数；网站聚合模式滚动到底部时自动取下一批。 -->
+        <!-- 分页与数据中心统一（DataQueryPanel 的 .dqp-pager 同款 el-pagination）。
+             只有直查分页（全平台 / 选定单个源）才有真实 total 可分页；网站聚合模式
+             是多源归并，没有可信的总数，滚动到表格底部时自动取下一批。 -->
         <template v-if="usesDirectPaging">
-          <label class="muted">每页
-            <select v-model.number="size" class="sfv-page-size" aria-label="每页条数" @change="changePageSize">
-              <option v-for="option in PAGE_SIZE_OPTIONS" :key="option" :value="option">{{ option }}</option>
-            </select>
-            条
-          </label>
-          <button class="rc-btn" type="button" data-testid="site-file-prev" :disabled="page <= 1 || loading" @click="previousPage">上一页</button>
-          <span class="muted">第 {{ page }} / {{ maxPage }} 页</span>
-          <button class="rc-btn" type="button" data-testid="site-file-next" :disabled="page >= maxPage || loading" @click="nextPage">下一页</button>
-          <input v-model.number="jumpPage" class="sfv-page-jump" type="number" min="1" :max="maxPage" aria-label="跳转页码" @keyup.enter="onEnterJump">
-          <button class="rc-btn" type="button" data-testid="site-file-jump" @click="goToPage">跳转</button>
+          <el-pagination
+            data-testid="site-file-pagination"
+            v-model:current-page="page"
+            v-model:page-size="size"
+            :total="total"
+            :page-sizes="PAGE_SIZE_OPTIONS"
+            layout="total, sizes, prev, pager, next, jumper"
+            background
+            small
+            :disabled="loading"
+            @current-change="onPageChange"
+            @size-change="changePageSize"
+          />
         </template>
         <span v-else-if="allExhausted" class="muted">已加载全部文件</span>
         <span v-else class="muted" data-testid="site-file-auto-load-status">{{ loadingMore ? '加载中…' : '向下滚动自动加载更多' }}</span>
@@ -438,9 +426,6 @@ function openPreview(file: FileResourceRecord) {
 .soft { color: var(--rc-faint); }
 .sfv-empty-row { padding: 40px 12px !important; color: var(--rc-faint) !important; text-align: center; }
 .sfv-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--rc-border-soft); }
-.sfv-page-size, .sfv-page-jump { height: 28px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; }
-.sfv-page-size { width: 54px; margin: 0 4px; }
-.sfv-page-jump { width: 54px; padding: 0 6px; }
 @media (max-width: 900px) {
   .sfv-toolbar :deep(.sss-wrap), .sfv-toolbar :deep(.gss-wrap) { min-width: 220px; width: auto; }
 }

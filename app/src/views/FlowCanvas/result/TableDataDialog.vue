@@ -15,7 +15,7 @@ const total = ref(0)
 const loading = ref(false)
 const filters = reactive({ dataId: '', state: '' })
 const page = ref(1)
-const size = 20
+const size = ref(20)
 
 const mergedRows = ref<DataRow[]>([])
 
@@ -30,7 +30,7 @@ async function load() {
       dataId: filters.dataId || undefined,
       state: filters.state || undefined,
       page: page.value,
-      size,
+      size: size.value,
     })
     rows.value = res?.list ?? []
     total.value = res?.total ?? 0
@@ -60,11 +60,10 @@ function runQuery() {
   page.value = 1
   load()
 }
-function prevPage() {
-  if (page.value > 1) page.value -= 1
-}
-function nextPage() {
-  if (page.value * size < total.value) page.value += 1
+/** 改每页条数后回到第 1 页。已经在第 1 页时 watch(page) 不会触发，得自己补一次查询。 */
+function onSizeChange() {
+  if (page.value === 1) void load()
+  else page.value = 1
 }
 function close() {
   emit('update:open', false)
@@ -100,11 +99,19 @@ const onEnterQuery = withoutComposition(() => runQuery())
 
       <DataGrid class="tdd-grid" :meta="meta" :rows="mergedRows" :loading="loading" hide-actions />
 
+      <!-- 分页与数据中心统一（DataQueryPanel 的 .dqp-pager 同款 el-pagination） -->
       <div class="tdd-pager">
-        <span class="muted">第 {{ page }} 页 · 每页 {{ size }}</span>
-        <span class="tdd-spacer" />
-        <button class="rc-btn" type="button" :disabled="page <= 1" @click="prevPage">上一页</button>
-        <button class="rc-btn" type="button" :disabled="page * size >= total" @click="nextPage">下一页</button>
+        <el-pagination
+          data-testid="table-data-pagination"
+          v-model:current-page="page"
+          v-model:page-size="size"
+          :total="total"
+          :page-sizes="[20, 40, 100, 200]"
+          layout="total, sizes, prev, pager, next, jumper"
+          background
+          small
+          @size-change="onSizeChange"
+        />
       </div>
     </div>
   </el-dialog>

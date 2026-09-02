@@ -109,12 +109,6 @@ function pickNode(n: BarNode) {
   if (!n.selectable) return
   selectedNodeId.value = n.id
 }
-function prevPage() {
-  if (page.value > 1) page.value -= 1
-}
-function nextPage() {
-  if (page.value * size < total.value) page.value += 1
-}
 
 // 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
 const onEnterQuery = withoutComposition(() => runQuery())
@@ -165,10 +159,19 @@ const onEnterQuery = withoutComposition(() => runQuery())
 
     <DataGrid class="cp-grid" :meta="meta" :rows="rows" :loading="loading" compact hide-actions />
 
+    <!-- 分页与数据中心统一（DataQueryPanel 的 .dqp-pager 同款 el-pagination）。
+         对比面板并排放两块，宽度紧张，所以 layout 去掉 sizes/jumper 只留翻页；
+         组件与样式仍是同一套。 -->
     <div class="cp-pager">
-      <button class="rc-btn" type="button" :disabled="page <= 1" @click="prevPage">上一页</button>
-      <span class="cp-page-info">第 {{ page }} 页</span>
-      <button class="rc-btn" type="button" :disabled="page * size >= total" @click="nextPage">下一页</button>
+      <el-pagination
+        data-testid="compare-pagination"
+        v-model:current-page="page"
+        :page-size="size"
+        :total="total"
+        layout="total, prev, pager, next"
+        background
+        small
+      />
     </div>
   </section>
 </template>
@@ -196,7 +199,5 @@ const onEnterQuery = withoutComposition(() => runQuery())
 .cp-tablename { font-family: var(--rc-mono, monospace); font-size: 11px; color: var(--rc-text-2); }
 .cp-tablecount { font-size: 11px; color: var(--rc-faint); }
 .cp-grid { flex: 1; min-height: 0; }
-.cp-pager { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 6px 10px; border-top: 1px solid var(--rc-border-soft); }
-.cp-pager .rc-btn { height: 26px; padding: 0 10px; font-size: 11px; }
-.cp-page-info { font-size: 11px; color: var(--rc-faint); }
+.cp-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--rc-border-soft); }
 </style>

@@ -21,7 +21,7 @@ const rows = ref<TaskInst[]>([])
 const total = ref(0)
 const loading = ref(false)
 const page = ref(1)
-const size = 20
+const size = ref(20)
 const filters = reactive({ sourceId: '', nodeId: '', state: '' })
 const processLayout = computed(() => buildHorizontalLayout(flow.main, flow.branches, flow.configs, flow.branchGroups, { includeTerminals: false }))
 const sourceNames = computed(() => Object.fromEntries(siteSources.value.map((item) => [item.sourceId, item.name])))
@@ -86,7 +86,7 @@ async function loadTasks() {
     configId: configIdForNode(filters.nodeId),
     state: (filters.state || undefined) as 'L' | 'C' | 'E' | undefined,
     page: page.value,
-    size,
+    size: size.value,
   }
   if (!query.siteId) {
     rows.value = []
@@ -161,13 +161,9 @@ function stateText(state: TaskInst['state']): string {
 function stateClass(state: TaskInst['state']): string {
   return state === 'L' ? 'run' : state === 'E' ? 'err' : 'ok'
 }
-function previousPage() {
-  page.value = Math.max(1, page.value - 1)
-  loadTasks()
-}
-function nextPage() {
-  if (page.value * size >= total.value) return
-  page.value += 1
+/** 改每页条数后回到第 1 页：旧页码在新的页大小下多半越界 */
+function onSizeChange() {
+  page.value = 1
   loadTasks()
 }
 
@@ -230,11 +226,20 @@ const nextStepHints = computed(() => {
             <tr v-if="!rows.length && !loading"><td :colspan="showSourceColumn ? 10 : 9" class="tv-empty-row">没有匹配的任务记录</td></tr>
           </tbody>
         </table>
+        <!-- 分页与数据中心统一（DataQueryPanel 的 .dqp-pager 同款 el-pagination） -->
         <div class="tv-pager">
-          <span class="muted">共 {{ total }} 条</span>
-          <button class="rc-btn" type="button" :disabled="page <= 1" @click="previousPage">上一页</button>
-          <span class="muted">第 {{ page }} 页</span>
-          <button class="rc-btn" type="button" :disabled="page * size >= total" @click="nextPage">下一页</button>
+          <el-pagination
+            data-testid="task-pagination"
+            v-model:current-page="page"
+            v-model:page-size="size"
+            :total="total"
+            :page-sizes="[20, 40, 100, 200]"
+            layout="total, sizes, prev, pager, next, jumper"
+            background
+            small
+            @current-change="loadTasks"
+            @size-change="onSizeChange"
+          />
         </div>
       </template>
     </div>
@@ -252,8 +257,7 @@ const nextStepHints = computed(() => {
 .tv-filters .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }
 .tv-table { width: 100%; }
 .tv-id, .tv-time { color: var(--rc-faint); font-family: var(--rc-mono, monospace); font-size: 11px; }
-.tv-pager .rc-btn { height: 26px; padding: 0 9px; font-size: 11px; }
-.tv-pager { justify-content: flex-end; margin-top: 10px; margin-bottom: 0; }
+.tv-pager { justify-content: flex-end; gap: 12px; padding: 10px 16px; margin-top: 0; margin-bottom: 0; border-top: 1px solid var(--rc-border-soft); }
 .tv-empty-row { padding: 28px 12px; color: var(--rc-faint); font-size: 12px; text-align: center; }
 .muted { color: var(--rc-faint); font-size: 12px; }
 </style>

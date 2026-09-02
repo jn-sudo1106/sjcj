@@ -8,7 +8,6 @@ import ProcessNodeRail from './ProcessNodeRail.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
 import FilePreviewDrawer from './components/FilePreviewDrawer.vue'
 import { buildHorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
-import { withoutComposition } from '@/utils/enterKey'
 
 // 文件视图只在具体源下挂载。真实旧平台 FileList2.vue 的链路是：
 // file_resource 表目录 → tableMeta → entryDataPaged；网站全部源仍由上层页面另行处理。
@@ -84,7 +83,6 @@ function selectNode(nodeId: string) {
   selectedNodeId.value = nodeId
   nodeFilterActive.value = true
   page.value = 1
-  jumpPage.value = 1
   if (table.value) void loadList()
 }
 
@@ -102,10 +100,8 @@ const error = ref('')
 const listError = ref('')
 const page = ref(1)
 const size = ref(20)
-const jumpPage = ref(1)
 const filters = reactive({ fileName: '', ext: '', state: '', sql: '' })
 const detail = reactive<{ visible: boolean; file: FileResourceRecord | null }>({ visible: false, file: null })
-const maxPage = computed(() => Math.max(1, Math.ceil(total.value / size.value)))
 
 let tableRequest = 0
 async function loadResourceTable() {
@@ -147,7 +143,6 @@ function onTableChange(tableId: string) {
   const candidate = tableCandidates.value.find((c) => c.tableId === tableId)
   if (!candidate) return
   page.value = 1
-  jumpPage.value = 1
   void selectTable(candidate)
 }
 let listRequest = 0
@@ -211,25 +206,8 @@ function safeExternalUrl(value: unknown): string {
     return ''
   }
 }
-function previousPage() {
-  page.value = Math.max(1, page.value - 1)
-  jumpPage.value = page.value
-  void loadList()
-}
-function nextPage() {
-  if (page.value * size.value >= total.value) return
-  page.value += 1
-  jumpPage.value = page.value
-  void loadList()
-}
 function changePageSize() {
   page.value = 1
-  jumpPage.value = 1
-  void loadList()
-}
-function goToPage() {
-  page.value = Math.min(maxPage.value, Math.max(1, Number(jumpPage.value) || 1))
-  jumpPage.value = page.value
   void loadList()
 }
 function openDetail(file: FileResourceRecord) {
@@ -240,7 +218,6 @@ function openDetail(file: FileResourceRecord) {
 
 watch(sourceId, () => {
   page.value = 1
-  jumpPage.value = 1
   nodeFilterActive.value = false
   // 先取步骤再查列表：步骤决定轨道是否支持节点筛选；首查始终只按源 ID 展示完整文件集。
   void loadSteps().then(() => loadResourceTable())
@@ -252,7 +229,6 @@ function resetFilters() {
   filters.state = ''
   filters.sql = ''
   page.value = 1
-  jumpPage.value = 1
   if (table.value) void loadList()
 }
 
@@ -263,12 +239,8 @@ function resetFilters() {
 // isComposing，绑了等于打字打到一半就把半截条件查出去。
 function runQuery() {
   page.value = 1
-  jumpPage.value = 1
   if (table.value) void loadList()
 }
-
-// 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
-const onEnterJump = withoutComposition(() => goToPage())
 
 // 点表格行开预览（2026-08-21 产品意见）：预览篇幅大，与「详情」的字段列表拆开各走各的抽屉。
 // 行尾「详情」按钮用 @click.stop，避免冒泡把预览一起打开。
@@ -361,16 +333,22 @@ function openPreview(file: FileResourceRecord) {
             <tr v-if="!rows.length && !loading"><td colspan="14" class="fv-empty-row">{{ listError || error || '没有匹配的文件' }}</td></tr>
           </tbody>
         </table>
+        <!-- 分页与数据中心统一（DataQueryPanel 的 .dqp-pager 同款 el-pagination）：
+             原来的「每页下拉 + 上一页/下一页 + 页码输入框 + 跳转按钮」六件套，
+             layout 里的 sizes/prev/next/jumper 各自对应，不丢能力。 -->
         <div class="fv-pager">
-          <label class="muted">每页
-            <select v-model.number="size" class="fv-page-size" aria-label="每页条数" @change="changePageSize"><option :value="20">20</option><option :value="50">50</option><option :value="100">100</option></select>
-            条
-          </label>
-          <button class="rc-btn" :disabled="page <= 1" @click="previousPage">上一页</button>
-          <span class="muted">第 {{ page }} / {{ maxPage }} 页</span>
-          <button class="rc-btn" :disabled="page >= maxPage" @click="nextPage">下一页</button>
-          <input v-model.number="jumpPage" class="fv-page-jump" type="number" min="1" :max="maxPage" aria-label="跳转页码" @keyup.enter="onEnterJump">
-          <button class="rc-btn" type="button" @click="goToPage">跳转</button>
+          <el-pagination
+            data-testid="file-pagination"
+            v-model:current-page="page"
+            v-model:page-size="size"
+            :total="total"
+            :page-sizes="[20, 40, 100, 200]"
+            layout="total, sizes, prev, pager, next, jumper"
+            background
+            small
+            @current-change="loadList"
+            @size-change="changePageSize"
+          />
         </div>
       </template>
     </div>
@@ -465,11 +443,7 @@ function openPreview(file: FileResourceRecord) {
 .fv-op { margin-right: 12px; padding: 0; border: 0; background: none; font-size: 13px; color: #3b82f6; text-decoration: none; font-weight: 500; cursor: pointer; transition: color 0.2s; }
 .fv-op:hover { color: #2563eb; text-decoration: underline; }
 
-.fv-pager { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-.fv-pager .rc-btn { height: 28px; padding: 0 10px; font-size: 12px; }
-.fv-page-size, .fv-page-jump { height: 28px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; }
-.fv-page-size { width: 54px; margin: 0 4px; }
-.fv-page-jump { width: 54px; padding: 0 6px; }
+.fv-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--rc-border-soft); }
 
 /* 新增自定义 SQL 输入框后 .fv-filters 四个筛选项 + 提示文案在窄容器下会被挤出可视区
    （原生 flex 默认 nowrap，且父级 overflow: visible，溢出部分既不换行也不能横向滚动，

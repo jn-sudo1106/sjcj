@@ -35,6 +35,18 @@ describe('AppSidebar', () => {
     expect(groupTitles).toContain('运维监控')
   })
 
+  // navIcons 是按 TAB key 索引的普通对象，漏一个不报错、只渲染成空图标方块。
+  // 2026-09-02 把 flow → flows 时就漏了，流程中心图标消失。这条把「每个 tab 都有图标」钉住。
+  it('每个 tab 都渲染出图标，没有空的图标位', async () => {
+    const { wrapper } = await mountAt('/overview')
+    const items = wrapper.findAll('.rc-nav-item')
+    expect(items.length).toBe(TABS.length)
+    const missing = items
+      .filter((item) => !item.find('.rc-nav-icon svg').exists())
+      .map((item) => item.text())
+    expect(missing).toEqual([])
+  })
+
   it('每个分组只渲染属于该 group 的 tab，不会出现空分组', async () => {
     const { wrapper } = await mountAt('/overview')
     const groups = wrapper.findAll('.rc-nav-group')

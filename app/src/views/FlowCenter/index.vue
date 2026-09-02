@@ -3,11 +3,12 @@
 // “配置中心/流程模板”不再作为用户概念；节点自身承载配置，内部 configId 只作技术标识。
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { flowApi, flowCenterApi, sourceApi, type FlowRecord } from '@/api'
+import { flowCenterApi, sourceApi, type FlowRecord } from '@/api'
 import { useUiStore } from '@/stores/ui'
-import { composeTemplateFlow, makeBlankTemplateDefinition, sanitizeTemplateDefinition } from '@/utils/flow/flowTemplates'
+import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
 import GlobalSourceSelect from '@/views/FlowCanvas/result/components/GlobalSourceSelect.vue'
 import FlowDetailDrawer from './FlowDetailDrawer.vue'
+import FlowSourcesDialog from './FlowSourcesDialog.vue'
 
 const ui = useUiStore()
 
@@ -15,31 +16,60 @@ const flows = ref<FlowRecord[]>([])
 const loading = ref(false)
 const loadError = ref('')
 const query = ref('')
-const sortBy = ref<'recent' | 'nodes'>('recent')
+// 排序在服务端。原来的「节点数最多」删了：节点数要解析 flowConf，而列表接口不返回它，
+// 那个选项分页之后只能对当前页做局部排序，跨页看是乱的。改成后端排序白名单里真有的两项。
+const sortBy = ref<'recent' | 'sourceCnt'>('recent')
 const activeId = ref('')
+/** 「使用源数」下钻弹窗的目标流程 */
+const sourcesFlow = ref<FlowRecord | null>(null)
 const applyFlow = ref<FlowRecord | null>(null)
 const applySourceId = ref('')
 const applying = ref(false)
 
-/** 节点数：definition.main 去掉 start/end 两个终端 */
-function nodeCount(t: FlowRecord): number {
-  return (t.definition?.main ?? []).filter((id) => id !== 'start' && id !== 'end').length
-}
-/** 流程内各节点引用的 configId，供「按配置搜索」用（0828 §2.11 规则④）*/
-function configIdsOf(t: FlowRecord): string[] {
-  return Object.values(t.definition?.configs ?? {}).map((c) => c.configId).filter(Boolean) as string[]
-}
-
+// 服务端分页：cs_flow 生产上已有 735 条（后端把存量配置整批灌进来了），一次拉全量不现实。
+// 检索也在服务端（flowPaged.keywords），所以翻页和搜索是同一条路径，只是 page/keywords 不同。
+const page = ref(1)
+const size = ref(20)
+const total = ref(0)
+/** 请求序号：快速连点翻页时，作废先返回的旧响应，避免列表停在上一页的数据上 */
+let loadSeq = 0
 async function load() {
+  const reqId = ++loadSeq
   loading.value = true
   loadError.value = ''
   try {
-    flows.value = await flowCenterApi.list()
+    const result = await flowCenterApi.paged({
+      page: page.value,
+      size: size.value,
+      keywords: query.value.trim() || undefined,
+      field: sortBy.value === 'sourceCnt' ? 'sourceCnt' : 'updateDt',
+      order: 'desc',
+    })
+    if (loadSeq !== reqId) return
+    flows.value = result.list
+    total.value = result.total
+    // 末页记录被删光时后端会回空列表，此时退回上一页，不要把用户晾在一张空表上
+    if (!result.list.length && page.value > 1 && result.total > 0) {
+      page.value = Math.min(page.value - 1, Math.max(1, Math.ceil(result.total / size.value)))
+      await load()
+    }
   } catch (e) {
     loadError.value = `流程列表加载失败：${(e as Error)?.message ?? String(e)}`
   } finally {
     loading.value = false
   }
+}
+/** 搜索/换页大小都要回到第 1 页，否则会停在一个新结果集里不存在的页码上 */
+function search() {
+  page.value = 1
+  void load()
+}
+/** 清空：条件、排序、页码一起回到初始态，再查一次（与文件中心「清空」同义） */
+function resetQuery() {
+  query.value = ''
+  sortBy.value = 'recent'
+  page.value = 1
+  void load()
 }
 onMounted(() => {
   void load()
@@ -47,45 +77,40 @@ onMounted(() => {
 })
 onUnmounted(() => ui.clearActions())
 
-// 搜索接受流程 ID / 名称 / 节点名 / 配置 ID —— 但**命中结果仍然是流程列表**（§2.11 规则②）：
-// 配置只能作为查询的输入，不作为结果集，否则就等于把「配置中心」又做回来了。
-const filtered = computed(() => {
-  const kw = query.value.trim().toLowerCase()
-  const rows = kw
-    ? flows.value.filter((t) =>
-      t.id.toLowerCase().includes(kw)
-        || t.name.toLowerCase().includes(kw)
-        || configIdsOf(t).some((id) => id.includes(kw))
-        || Object.values(t.definition?.configs ?? {}).some((c) => (c.title ?? '').toLowerCase().includes(kw)))
-    : [...flows.value]
-  return sortBy.value === 'nodes'
-    ? rows.sort((a, b) => nodeCount(b) - nodeCount(a))
-    : rows.sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
-})
+/**
+ * 搜索、排序、翻页**全在服务端**（flowPaged 的 keywords / field+order / page+limit）。
+ * 本地不再做任何过滤或重排——分页之后本地排序只能排当前这一页，跨页看到的顺序是错的。
+ *
+ * 0828 §2.11 规则④的「按配置 ID 反查流程」**已经删掉**：那条依赖 definition.configs，而列表
+ * 接口根本不返回 flowConf，本地永远筛不出结果，只会稳定地报「配置 #x 没有被任何流程引用」——
+ * 一句必然为假的话比没有这个功能糟得多。要恢复得后端在 flowPaged 上支持按 configId 过滤。
+ */
+const rows = computed(() => flows.value)
 
-/** 按配置 ID 搜时的结果说明；搜到 0 条要说清"配置存在但没有流程引用它"（§2.11 规则⑤）*/
-const searchIsConfigId = computed(() => /^\d{5,}$/.test(query.value.trim()))
-const searchNote = computed(() => {
-  if (!searchIsConfigId.value) return ''
-  const n = filtered.value.length
-  return n
-    ? `按配置 #${query.value.trim()} 反查，命中 ${n} 条流程`
-    : `配置 #${query.value.trim()} 没有被任何流程引用（它本身可能是存在的）`
-})
-
-const totals = computed(() => ({
-  flows: flows.value.length,
-  nodes: flows.value.reduce((sum, t) => sum + nodeCount(t), 0),
-}))
-
-const activeFlow = computed(() => flows.value.find((t) => t.id === activeId.value) ?? null)
+/**
+ * 工作区抽屉显示的流程**自己存一份**，不从 `flows` 里派生。
+ * 分页之后列表随时会被整页换掉（新建/删除后自动重查、翻页、搜索），派生的话
+ * 只要当前流程不在这一页就会变成 null，抽屉自己关掉——用户正编着流程，列表在背后
+ * 刷新一下，编辑面板没了。activeId 仍保留，只用于表格行高亮。
+ */
+const activeFlow = ref<FlowRecord | null>(null)
 function openFlow(t: FlowRecord) {
+  activeFlow.value = t
   activeId.value = t.id
+}
+function closeFlow() {
+  activeFlow.value = null
+  activeId.value = ''
 }
 
 function replaceFlow(saved: FlowRecord) {
-  flows.value = [saved, ...flows.value.filter((item) => item.id !== saved.id)]
+  // 本地先就位（抽屉/行内容立刻反映改动），再后台重查一次拿服务端的真实排序与总数
+  flows.value = flows.value.some((item) => item.id === saved.id)
+    ? flows.value.map((item) => (item.id === saved.id ? saved : item))
+    : [saved, ...flows.value]
+  activeFlow.value = saved
   activeId.value = saved.id
+  void load()
 }
 
 async function createFlow() {
@@ -102,17 +127,31 @@ async function createFlow() {
   }
 }
 
-async function copyFlow(flow: FlowRecord) {
+/**
+ * 删除流程。后端是**逻辑删除**（is_delete=-1 + state=D），删完不在列表和有效流程里出现。
+ * 二次确认里带上关联源数：真机上多数流程 sourceCnt=1，删掉之后那个源就没有流程归属了，
+ * 得让人看见影响面再决定。删除不解绑源（后端只改 cs_flow），所以措辞不承诺"源会被清理"。
+ */
+async function removeFlow(flow: FlowRecord) {
+  const bound = flow.sourceCnt
+  const impact = bound ? `该流程当前关联 ${bound} 个源，删除后这些源将不再归属任何流程。` : ''
   try {
-    const { value } = await ElMessageBox.prompt('复制会创建一条独立流程，后续修改互不影响。', '复制流程', {
-      inputValue: `${flow.name} - 副本`, inputPattern: /\S+/, inputErrorMessage: '请输入流程名称',
-      confirmButtonText: '复制', cancelButtonText: '取消',
-    })
-    const copied = await flowCenterApi.save({ name: value.trim(), definition: sanitizeTemplateDefinition(flow.definition) })
-    replaceFlow(copied)
-    ElMessage.success('流程已复制')
+    await ElMessageBox.confirm(
+      `确认删除流程「${flow.name}」（#${flow.id}）？${impact}`,
+      '删除流程',
+      { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' },
+    )
   } catch {
-    // 用户取消不提示。
+    return // 用户取消
+  }
+  try {
+    const ack = await flowCenterApi.remove([flow.id])
+    if (!ack.ok) throw new Error(ack.message || '删除失败')
+    if (activeId.value === flow.id) closeFlow()
+    ElMessage.success(`流程「${flow.name}」已删除`)
+    void load()
+  } catch (error) {
+    ElMessage.error(`删除失败：${(error as Error)?.message ?? String(error)}`)
   }
 }
 
@@ -125,7 +164,7 @@ async function confirmApply() {
   const target = applyFlow.value
   if (!target || applying.value) return
   if (!applySourceId.value) {
-    ElMessage.warning('请先选择要应用的源')
+    ElMessage.warning('请先选择要关联的源')
     return
   }
   applying.value = true
@@ -135,29 +174,25 @@ async function confirmApply() {
       ElMessage.error('没有找到该源，请重新选择')
       return
     }
+    // 文案按真实语义改过，别再退回「全量替换流程节点」那版：changeFlowBatch 写的只是
+    // cs_source.FLOW_ID 这一个字段，**不动源现有的配置和子步骤**，执行器也不读这个字段
+    // （旧平台没有任何把 flowConf 下发成 config 的实现）。原来那版文案是 mock 时代的语义，
+    // 那时 flowApi.flowSave 会把合成后的流程写进本地存储，看着像"替换了节点"。
     await ElMessageBox.confirm(
-      `应用「${target.name}」会全量替换源「${source.name || source.sourceId}」当前的流程节点，是否继续？`,
-      '应用流程到源',
-      { type: 'warning', confirmButtonText: '全量替换', cancelButtonText: '取消' },
+      `将源「${source.name || source.sourceId}」关联到流程「${target.name}」。`
+      + '这只记录关联关系，不会改动该源现有的采集配置与步骤，也不会立即按此流程运行。继续？',
+      '关联流程到源',
+      { type: 'warning', confirmButtonText: '确认关联', cancelButtonText: '取消' },
     )
-    const boundSource = {
-      ...source,
-      templateId: target.id,
-      templateVersion: target.version,
-      nodeBindings: {},
-    }
-    const definition = composeTemplateFlow(target, boundSource, {})
-    const [sourceAck, flowAck] = await Promise.all([
-      sourceApi.sourceUpdate(boundSource),
-      flowApi.flowSave(definition),
-    ])
-    if (!sourceAck.ok || !flowAck.ok) throw new Error(sourceAck.message || flowAck.message || '保存失败')
+    const ack = await flowCenterApi.bindSources([source.sourceId], target.id)
+    if (!ack.ok) throw new Error(ack.message || '关联失败')
     applyFlow.value = null
     applySourceId.value = ''
-    ElMessage.success(`已将「${target.name}」应用到源「${source.name || source.sourceId}」`)
+    ElMessage.success(`已把源「${source.name || source.sourceId}」关联到流程「${target.name}」`)
+    void load()
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
-    ElMessage.error(`应用失败：${(error as Error)?.message ?? String(error)}`)
+    ElMessage.error(`关联失败：${(error as Error)?.message ?? String(error)}`)
   } finally {
     applying.value = false
   }
@@ -166,32 +201,36 @@ async function confirmApply() {
 
 <template>
   <section class="fc-shell">
+    <!-- 检索条对齐数据中心 / 文件中心（SiteFileView 的 .sfv-toolbar）：同一套控件尺寸（28px）、
+         同一套 rc-btn，且同样是「填条件 → 点查询」而不是回车隐式触发。回车仍然可用，
+         但不再是唯一入口——之前只写在 placeholder 里，用户看不见。 -->
     <div class="fc-toolbar">
       <input
         v-model="query"
-        class="fc-search"
-        placeholder="搜索流程、节点或配置 ID"
+        class="fc-input fc-input-wide"
+        placeholder="流程名称 / 编码 / 描述 / 备注 / 标签"
+        aria-label="搜索流程"
         data-testid="flow-center-search"
+        @keyup.enter="search"
       />
-      <select v-model="sortBy" class="fc-select" aria-label="排序">
+      <select v-model="sortBy" class="fc-input" aria-label="排序" @change="search">
         <option value="recent">最近修改</option>
-        <option value="nodes">节点数最多</option>
+        <option value="sourceCnt">使用源数最多</option>
       </select>
+      <!-- 没有「刷新」按钮：它与「查询」是同一个请求，而且新建 / 保存 / 删除 / 关联之后
+           列表都会自动重查（见 replaceFlow / removeFlow / confirmApply），不需要人工手动刷。 -->
+      <button class="rc-btn primary" type="button" data-testid="flow-center-query" @click="search">查询</button>
+      <button class="rc-btn" type="button" data-testid="flow-center-reset" @click="resetQuery">清空</button>
       <div class="fc-metrics">
-        <span>流程 <b>{{ totals.flows }}</b></span>
-        <span>节点 <b>{{ totals.nodes }}</b></span>
+        <span>流程 <b>{{ total }}</b></span>
       </div>
-      <button class="fc-btn" type="button" title="刷新" :disabled="loading" @click="load">↻</button>
     </div>
-
-    <div v-if="searchNote" class="fc-search-note" data-testid="flow-center-search-note">{{ searchNote }}</div>
 
     <div class="fc-table-wrap" v-loading="loading">
       <table class="fc-table">
         <thead>
           <tr>
             <th>流程 ID / 名称</th>
-            <th style="width: 88px">节点数</th>
             <th style="width: 110px">使用源数</th>
             <th style="width: 150px">更新时间</th>
             <th style="width: 210px">操作</th>
@@ -199,7 +238,7 @@ async function confirmApply() {
         </thead>
         <tbody>
           <tr
-            v-for="t in filtered"
+            v-for="t in rows"
             :key="t.id"
             :class="{ active: t.id === activeId }"
             data-testid="flow-center-row"
@@ -207,50 +246,82 @@ async function confirmApply() {
           >
             <td>
               <div class="fc-name">
-                <b>{{ t.name }}</b>
-                <small>{{ t.id }} · v{{ t.version }}</small>
+                <b class="fc-name-link">{{ t.name }}</b>
+                <small>{{ t.version == null ? t.id : `${t.id} · v${t.version}` }}</small>
               </div>
             </td>
-            <td>{{ nodeCount(t) }} 个</td>
-            <!-- 使用源数：后端没有「按流程反查源」的接口（§4-⑦），不编造数字 -->
-            <td class="fc-muted" title="需后端提供按流程反查源的接口后才能统计">—</td>
+            <!-- 使用源数：flowPaged / flowDetail 都回填计算列 sourceCnt（口径 cs_source.IS_DELETE >= 0，
+                 含禁用源）。列表接口不返回 flowConf，所以节点数那列是 0，源数这列才是真的。 -->
+            <td :class="{ 'fc-muted': !t.sourceCnt }" data-testid="flow-source-cnt">
+              <button
+                v-if="t.sourceCnt"
+                class="fc-link"
+                type="button"
+                data-testid="flow-source-cnt-link"
+                :title="`查看流程「${t.name}」的关联源`"
+                @click.stop="sourcesFlow = t"
+              >{{ t.sourceCnt }} 个</button>
+              <!-- 0 个和字段缺失都不给点：点开必然是空表，白让人跑一趟 -->
+              <template v-else>{{ t.sourceCnt == null ? '—' : '0 个' }}</template>
+            </td>
             <td class="fc-muted">{{ t.updatedAt || '—' }}</td>
             <td>
               <div class="fc-actions">
                 <button class="fc-link" type="button" @click.stop="openFlow(t)">编辑</button>
-                <button class="fc-link" type="button" @click.stop="copyFlow(t)">复制</button>
-                <button class="fc-link" type="button" @click.stop="openApply(t)">应用到源</button>
+                <button class="fc-link" type="button" @click.stop="openApply(t)">关联到源</button>
+                <button class="fc-link danger" type="button" data-testid="flow-delete" @click.stop="removeFlow(t)">删除流程</button>
               </div>
             </td>
           </tr>
-          <tr v-if="!loading && !filtered.length">
-            <td colspan="5" class="fc-empty">
-              {{ loadError || (query ? '没有找到匹配的流程' : '暂无流程') }}
+          <tr v-if="!loading && !rows.length">
+            <td colspan="4" class="fc-empty">
+              {{ loadError || (query ? `没有找到匹配「${query}」的流程` : '暂无流程') }}
             </td>
           </tr>
         </tbody>
       </table>
     </div>
 
+    <!-- 分页与数据中心（DataQueryPanel 的 .dqp-pager）同一套：同样的 el-pagination、
+         同样的 layout / page-sizes / background+small，样式也照抄那边的容器。
+         别换回手写的上一页/下一页按钮——全站其余列表（规则资产、采集资产各 tab、数据中心
+         各弹窗）都是这个组件。 -->
+    <div class="fc-pager" data-testid="flow-center-pager">
+      <el-pagination
+        data-testid="flow-center-pagination"
+        v-model:current-page="page"
+        v-model:page-size="size"
+        :total="total"
+        :page-sizes="[20, 40, 100, 200]"
+        layout="total, sizes, prev, pager, next, jumper"
+        background
+        small
+        @current-change="load"
+        @size-change="search"
+      />
+    </div>
+
+    <FlowSourcesDialog :flow="sourcesFlow" @close="sourcesFlow = null" />
+
     <FlowDetailDrawer
       :flow="activeFlow"
-      @close="activeId = ''"
+      @close="closeFlow"
       @saved="replaceFlow"
       @apply="openApply"
     />
 
     <el-dialog
       :model-value="!!applyFlow"
-      title="应用流程到源"
+      title="关联流程到源"
       width="520px"
       destroy-on-close
       @close="applyFlow = null"
     >
-      <p class="fc-apply-note">选择目标源。确认后会使用当前流程的节点和配置全量替换目标源原流程。</p>
+      <p class="fc-apply-note">选择目标源。确认后只登记「该源属于此流程」这层关联关系，不改动源现有的采集配置与步骤。</p>
       <GlobalSourceSelect v-model="applySourceId" />
       <template #footer>
         <button class="fc-dialog-btn" type="button" @click="applyFlow = null">取消</button>
-        <button class="fc-dialog-btn primary" type="button" :disabled="applying" data-testid="flow-apply-confirm" @click="confirmApply">{{ applying ? '应用中…' : '确认应用' }}</button>
+        <button class="fc-dialog-btn primary" type="button" :disabled="applying" data-testid="flow-apply-confirm" @click="confirmApply">{{ applying ? '关联中…' : '确认关联' }}</button>
       </template>
     </el-dialog>
   </section>
@@ -258,14 +329,18 @@ async function confirmApply() {
 
 <style scoped>
 .fc-shell { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
-.fc-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
-.fc-search { flex: 0 1 300px; height: 30px; padding: 0 10px; border: 1px solid #dbe3ee; border-radius: 6px; font-size: 12px; outline: none; }
-.fc-search:focus { border-color: #60a5fa; box-shadow: 0 0 0 2px #dbeafe; }
-.fc-select { height: 30px; padding: 0 8px; border: 1px solid #dbe3ee; border-radius: 6px; font-size: 12px; background: #fff; }
+/* 以下三条与 SiteFileView 的 .sfv-toolbar / .sfv-input 保持同一组数值（28px 高、12px 字、
+   6px 圆角、focus 蓝边 + 3px 光晕）。改动时请两边一起改，否则数据中心/文件中心/流程中心会走形。 */
+.fc-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
+.fc-input { height: 28px; min-width: 112px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; outline: none; }
+.fc-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
+.fc-input-wide { flex: 0 1 300px; }
+.fc-toolbar .rc-btn { height: 28px; padding: 0 10px; font-size: 12px; }
 .fc-metrics { margin-left: auto; display: flex; gap: 14px; color: var(--rc-muted); font-size: 12px; }
 .fc-metrics b { color: var(--rc-text); }
-.fc-btn { height: 30px; min-width: 30px; border: 1px solid #dbe3ee; border-radius: 6px; background: #fff; color: var(--rc-text-2); cursor: pointer; }
+.fc-btn { height: 28px; min-width: 28px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text-2); font-size: 12px; cursor: pointer; }
 .fc-btn:hover:not(:disabled) { border-color: var(--rc-primary); color: var(--rc-primary-ink); }
+.fc-btn:disabled { opacity: .5; cursor: not-allowed; }
 .fc-search-note { padding: 7px 10px; border: 1px dashed #bfdbfe; border-radius: 7px; background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-size: 12px; }
 .fc-table-wrap { border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; overflow: auto; }
 .fc-table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -275,9 +350,13 @@ async function confirmApply() {
 .fc-table tbody tr:hover { background: var(--rc-primary-bg); }
 .fc-table tbody tr.active { background: var(--rc-primary-bg); box-shadow: inset 2px 0 0 var(--rc-primary); }
 .fc-name b { display: block; color: var(--rc-text); font-size: 13px; }
+/* 名称是这一列的可点主体（整行点开工作区），按链接给蓝色 */
+.fc-name b.fc-name-link { color: var(--rc-primary); }
 .fc-name small { color: var(--rc-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
 .fc-muted { color: var(--rc-faint); }
 .fc-link { border: 0; background: transparent; color: var(--rc-primary); font-size: 12px; cursor: pointer; padding: 0; }
+.fc-link.danger { color: #dc2626; }
+.fc-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--rc-border-soft); }
 .fc-actions { display: flex; align-items: center; gap: 12px; white-space: nowrap; }
 .fc-apply-note { margin: 0 0 12px; color: var(--rc-muted); font-size: 12px; line-height: 1.6; }
 .fc-dialog-btn { height: 32px; padding: 0 14px; border: 1px solid var(--rc-border); border-radius: 7px; background: #fff; color: var(--rc-text-2); cursor: pointer; }

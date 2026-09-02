@@ -528,6 +528,24 @@ describe('旧平台新建源 HTTP 契约', () => {
     ])
   })
 
+  // 上面那条「清标签 = 发空 tags」正是本条要防的事故：批量备注拿不到某条源的当前标签时，
+  // 若退化成空数组就等于顺手替用户点了一次「清空标签」。缺省时必须整个不带 tags 键。
+  it('updateSourceMark：tags 缺省时 body 不出现 tags 键，传了才写', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '修改成功' }))
+    const { sourceApi } = await import('./index')
+
+    await sourceApi.updateSourceMark('src-1', { remark: '只改备注' })
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(url, 'http://local.test').pathname).toBe('/api/v1/source/updateSource')
+    const body = JSON.parse(String(init.body))
+    expect('tags' in body).toBe(false)
+    expect(body).toEqual({ sourceId: 'src-1', remark: '只改备注' })
+
+    await sourceApi.updateSourceMark('src-2', { tags: ['正文缺失'], remark: '改备注保标签' })
+    expect(JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body)))
+      .toEqual({ sourceId: 'src-2', tags: '#正文缺失', remark: '改备注保标签' })
+  })
+
   it('GET /v1/source/setColor：设颜色带 isClear=0；清除写 flag=0，不带 isClear', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '标记成功' }))
     const { sourceApi } = await import('./index')

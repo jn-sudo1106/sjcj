@@ -403,6 +403,49 @@ describe('SourceOverviewView · 标签', () => {
   })
 })
 
+// 「勾选只可能来自当前页」是批量备注取原标签的前提（batchSetRemark 按 rows 找行）。
+// 这个前提由文件末尾的 watch(rows) 维持，离取标签的代码 400 行远——这里把它锁死：
+// 谁要是为了做跨页批量把那个 watcher 去掉，先在这条用例上红一次，别等线上把标签洗了才发现。
+describe('SourceOverviewView · 勾选不跨页', () => {
+  afterEach(() => {
+    localStorage.clear()
+    sessionStorage.clear()
+    vi.restoreAllMocks()
+  })
+
+  // 分页 0902 换成 el-pagination，测试环境里它不是真组件、点不动（见 ResultView.test.ts 同款说明）。
+  // 但要锁的不变量是「rows 被整份替换 → 勾选清空」，翻页和重新查询走的是同一条路径
+  // （都经 loadSources 重设 rows，由 watch(rows) 清勾选），这里用查询来验，等价。
+  it('列表重新加载后勾选被清空，批量条里不会残留上一批的源', async () => {
+    const page1 = { ...source, sourceId: 'src-1', tags: ['正文缺失'] }
+    const page2 = { ...source, sourceId: 'src-2', tags: ['内容重复'] }
+    vi.spyOn(sourceApi, 'sourcePaged')
+      .mockResolvedValueOnce({ total: 25, list: [page1] })
+      .mockResolvedValue({ total: 25, list: [page2] })
+    const update = vi.spyOn(sourceApi, 'updateSourceMark').mockResolvedValue({ ok: true, message: 'ok' })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    expect(wrapper.get('[data-testid="source-batch-count"]').text()).toContain('已选 1')
+
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="source-batch-count"]').exists()).toBe(false)
+
+    // 新一批里重新勾选后批量备注，只会命中新那条，且带的是它自己的标签
+    await wrapper.get('[data-testid="source-check-src-2"]').setValue(true)
+    await wrapper.get('[data-testid="batch-mark"]').trigger('click')
+    await wrapper.get('[data-testid="mark-remark-input"]').setValue('第二页备注')
+    await wrapper.get('[data-testid="mark-remark-save"]').trigger('click')
+    await flushPromises()
+
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(update).toHaveBeenCalledWith('src-2', { tags: ['内容重复'], remark: '第二页备注' })
+    wrapper.unmount()
+  })
+})
+
 // 批量设置备注（0901，新功能——旧平台源列表也只有单行「备注信息」弹窗，没有批量入口）。
 describe('SourceOverviewView · 批量设置备注', () => {
   afterEach(() => {
@@ -541,7 +584,9 @@ describe('SourceOverviewView · 标签筛选不做客户端二次过滤（0831 X
     await flushPromises()
 
     expect(wrapper.text()).toContain('共 42 个源')
-    expect(wrapper.text()).toContain('第 1 / 3 页') // 42 / 20，不是 1/1
+    // 分页 0902 统一成 el-pagination（页码文字不再由本组件渲染），改断言绑进去的 total：
+    // 42 而不是过滤后的 1，否则页数会从 3 页缩成 1 页。
+    expect(wrapper.get('[data-testid="source-pagination"]').attributes('total')).toBe('42')
   })
 
   it('标签候选来自服务端 sourceTags，程序打的标签也能出现在建议里（F03）', async () => {

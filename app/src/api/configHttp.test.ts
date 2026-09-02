@@ -49,6 +49,37 @@ describe('配置写入 HTTP 契约', () => {
     clearRule: '{"keep":1}',
   }
 
+  // config/add 是**唯一的"从零建配置"通路**（config_api.md §十六）。后端签名
+  // addConfig(ConfigWithBLOBs) 没有 @RequestBody，走 Spring 对象绑定——2026-09-02 生产实测：
+  // 发 JSON 会**静默失败**，返回「新增成功，id:xxx」、配置也确实建了，但 configName /
+  // configUrl / configType / isMulti 全是 null。表单和 query 才能绑上，这里锁死表单编码。
+  it('POST /v1/config/add：走表单编码，不是 JSON（发 JSON 会静默丢字段）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '新增成功，id:1400986', data: null }))
+    const { configApi } = await import('./index')
+    const created = await configApi.addConfig({ configName: '网页抓取', configType: 90, isMulti: 1, configUrl: '' })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(url, 'http://local.test').pathname).toBe('/api/v1/config/add')
+    expect(init.method).toBe('POST')
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/x-www-form-urlencoded')
+    const form = new URLSearchParams(String(init.body))
+    expect(form.get('configName')).toBe('网页抓取')
+    expect(form.get('configType')).toBe('90')
+    expect(form.get('isMulti')).toBe('1')
+    // 与 appendQuery 同口径：空串跳过，不要发一个空的 configUrl 去覆盖
+    expect(form.has('configUrl')).toBe(false)
+    // 新 configId 只在 msg 里，data 恒为 null
+    expect(created).toMatchObject({ ok: true, configId: '1400986' })
+  })
+
+  it('config/add 回执解析不出 configId 时算失败，不返回没有 ID 的"成功"', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '新增成功', data: null }))
+    const { configApi } = await import('./index')
+    const created = await configApi.addConfig({ configName: 'x' })
+    expect(created.ok).toBe(false)
+    expect(created.message).toContain('未能从回执解析出配置 ID')
+  })
+
   it('updateConfig 原样 POST 旧平台字段，一个都不能掉', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '操作成功' }))
     const { configApi } = await import('./index')

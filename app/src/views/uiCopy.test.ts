@@ -386,9 +386,12 @@ describe('最新方案 UI 入口收口', () => {
     expect(sourceBasicForm).not.toContain('使用已有配置')
   })
 
+  // 流程切换器从 el-dropdown 按钮改成了可搜索输入框（ch-flow-picker），已应用流程改为
+  // 输入框的 placeholder 呈现，原来的 `{{ appliedTemplateLabel }} ▾` 按钮不再存在。
+  // 这条锁的是「头上要显示当前已应用的流程」这个意图，不锁具体控件形态。
   it('源流程头展示已应用流程，且不展示负责人', () => {
     expect(canvasHeader).toContain('appliedTemplateLabel')
-    expect(canvasHeader).toContain('{{ appliedTemplateLabel }} ▾')
+    expect(canvasHeader).toContain(':placeholder="appliedTemplateLabel"')
     expect(canvasHeader).not.toContain('负责人 ${s.owner}')
   })
 

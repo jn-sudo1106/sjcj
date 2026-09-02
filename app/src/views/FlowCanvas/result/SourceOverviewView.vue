@@ -55,7 +55,6 @@ const sortField = ref('')
 const sortDirection = ref<'asc' | 'desc'>('asc')
 let sourceRequestSeq = 0
 
-const totalPages = computed(() => Math.max(1, Math.ceil(total.value / size.value)))
 
 function currentQuery(): SourceFilter {
   return {
@@ -126,14 +125,9 @@ function sortLabel(field: string) {
   if (sortField.value !== field) return '未排序'
   return sortDirection.value === 'asc' ? '升序' : '降序'
 }
-function previousPage() {
-  if (page.value <= 1) return
-  page.value -= 1
-  void loadSources()
-}
-function nextPage() {
-  if (page.value >= totalPages.value) return
-  page.value += 1
+/** 改每页条数后回到第 1 页：旧页码在新的页大小下多半越界 */
+function onPageSizeChange() {
+  page.value = 1
   void loadSources()
 }
 function sourceState(source: Source) {
@@ -533,13 +527,20 @@ async function clearSelectedTags() {
 // 跟标签"追加"不是一回事，所以独立于 saveMarks 单独提交，避免一次点击混着改两种语义不同的字段。
 // updateSource 是行级全量覆盖接口，没有批量端点（跟 changeSourceEnable 同款限制），只能逐个调；
 // 逐个调时把每行自己当前的标签原样带上，不然会被这次的 remark 提交顺带清空。
+//
+// 这里能按 `rows` 找到行，靠的是文件末尾那个 `watch(rows)` —— 它在每次列表重新加载（翻页 /
+// 重查 / 排序，`rows` 被整份替换）时清空勾选，所以勾选永远只可能来自当前页。这个前提离这里
+// 400 行远，一旦谁为了做「跨页批量」把那个 watcher 去掉，这里就会静默丢数据。故：
+// 查不到行时传 `undefined` = 整个不带 tags 字段，**绝不退化成空数组**——空数组会被
+// issueTagsForWrite 变成空串，而空串在两种后端语义下都等于「清空标签」（见 updateSourceMark 注释，
+// 以及 tagSource 的 clear 分支本身就是靠发空串实现的）。
 async function batchSetRemark(remark: string) {
   const ids = [...selectedIds.value]
   if (!ids.length) return
   try {
     await Promise.all(ids.map((id) => {
       const row = rows.value.find((item) => item.sourceId === id)
-      return sourceApi.updateSourceMark(id, { tags: row?.tags ?? [], remark })
+      return sourceApi.updateSourceMark(id, { tags: row?.tags, remark })
     }))
   } catch (error) {
     ElMessage.error(`批量设置备注失败：${error instanceof Error ? error.message : String(error)}`)
@@ -567,7 +568,8 @@ async function clearSelectedRemark() {
   try {
     await Promise.all(ids.map((id) => {
       const row = rows.value.find((item) => item.sourceId === id)
-      return sourceApi.updateSourceMark(id, { tags: row?.tags ?? [], remark: '' })
+      // 同 batchSetRemark：查不到行就不带 tags 字段，不能传空数组。
+      return sourceApi.updateSourceMark(id, { tags: row?.tags, remark: '' })
     }))
   } catch (error) {
     ElMessage.error(`清空备注失败：${error instanceof Error ? error.message : String(error)}`)
@@ -778,10 +780,21 @@ watch(() => props.currentSiteId, () => {
         </tbody>
       </table>
     </div>
+    <!-- 分页与数据中心统一（DataQueryPanel 的 .dqp-pager 同款 el-pagination）；
+         全站列表都用这一个组件，别换回手写的上一页/下一页按钮。 -->
     <div class="sov-pager">
-      <span>第 {{ page }} / {{ totalPages }} 页</span>
-      <button class="sov-btn" type="button" :disabled="page <= 1" @click="previousPage">上一页</button>
-      <button class="sov-btn" type="button" :disabled="page >= totalPages" @click="nextPage">下一页</button>
+      <el-pagination
+        data-testid="source-pagination"
+        v-model:current-page="page"
+        v-model:page-size="size"
+        :total="total"
+        :page-sizes="[20, 40, 100, 200]"
+        layout="total, sizes, prev, pager, next, jumper"
+        background
+        small
+        @current-change="loadSources"
+        @size-change="onPageSizeChange"
+      />
     </div>
     <div v-if="markToast" class="sov-toast" data-testid="source-mark-toast">
       <span>{{ markToast }}</span>
@@ -859,5 +872,5 @@ watch(() => props.currentSiteId, () => {
 .sov-link { border: 0; background: transparent; color: var(--rc-primary); cursor: pointer; font-size: 12px; font-weight: 600; }
 .sov-sort { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; }
 .sov-sort span { color: #94a3b8; font-size: 11px; }
-.sov-pager { display: flex; align-items: center; justify-content: flex-end; gap: 8px; color: var(--rc-faint); font-size: 11px; }
+.sov-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--rc-border-soft); }
 </style>

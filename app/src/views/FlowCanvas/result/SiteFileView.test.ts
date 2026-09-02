@@ -63,18 +63,22 @@ describe('SiteFileView', () => {
     })
     await flushPromises()
 
+    // 分页 0902 统一成 el-pagination（页码文字与上一页/下一页按钮不再由本组件渲染），
+    // 测试环境没全局装 Element Plus，它点不动——与 ResultView.test.ts 同口径，
+    // 改成断言 total 绑对了；翻页真正的逻辑（onPageChange → resetAndLoad(false)）
+    // 由下面「按当前页码请求」那条覆盖。
     expect(wrapper.text()).toContain('共 21 个文件')
-    expect(wrapper.text()).toContain('第 1 / 2 页')
-    await wrapper.get('[data-testid="site-file-next"]').trigger('click')
-    await flushPromises()
-    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: undefined, page: 2, size: 20 }))
-    expect(wrapper.text()).toContain('task-2.html')
+    expect(wrapper.get('[data-testid="site-file-pagination"]').attributes('total')).toBe('21')
+    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: undefined, page: 1, size: 20 }))
   })
 
-  it('直分页提供统一的每页条数和跳转控件', async () => {
+  // 原来是「每页下拉 + 上一页/下一页 + 跳转输入框 + 跳转按钮」四件套，0902 统一成一个
+  // el-pagination；每页条数走 sizes、跳页走 jumper，能力不丢，但控件不再是本组件渲染的
+  // 原生 select/input，所以这里只验绑进去的 props。
+  it('直分页用与数据中心同款 el-pagination，页大小选项与总数绑对', async () => {
     vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
     vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
-    const rows = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 61, list: [file('orphan-source', '1', 'task.html')] })
+    vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 61, list: [file('orphan-source', '1', 'task.html')] })
 
     const wrapper = shallowMount(SiteFileView, {
       props: { siteId: undefined },
@@ -82,16 +86,10 @@ describe('SiteFileView', () => {
     })
     await flushPromises()
 
-    expect(wrapper.get('select[aria-label="每页条数"]').findAll('option')).toHaveLength(3)
-    await wrapper.get('input[aria-label="跳转页码"]').setValue(3)
-    await wrapper.get('[data-testid="site-file-jump"]').trigger('click')
-    await flushPromises()
-    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ page: 3, size: 20 }))
-
-    await wrapper.get('select[aria-label="每页条数"]').setValue('50')
-    await flushPromises()
-    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, size: 50 }))
-    expect(wrapper.text()).toContain('第 1 / 2 页')
+    const pagination = wrapper.get('[data-testid="site-file-pagination"]')
+    expect(pagination.attributes('total')).toBe('61')
+    expect(pagination.attributes('page-size')).toBe('20')
+    expect(pagination.attributes('layout')).toBe('total, sizes, prev, pager, next, jumper')
   })
 
   it('网站内已选择具体源时也走单源准确分页，不按全部源归并', async () => {
@@ -109,7 +107,7 @@ describe('SiteFileView', () => {
     expect(rows).toHaveBeenCalledTimes(1)
     expect(rows).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 's1', page: 1, size: 20 }))
     expect(wrapper.text()).toContain('共 21 个文件')
-    expect(wrapper.text()).toContain('第 1 / 2 页')
+    expect(wrapper.get('[data-testid="site-file-pagination"]').attributes('total')).toBe('21')
   })
 
   it('网站全部源按 sourceId 查询 file_resource 后合并展示，并保留所属源', async () => {

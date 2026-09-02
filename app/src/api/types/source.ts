@@ -162,13 +162,23 @@ export interface FlowDefinition {
   branchGroups?: FlowBranchGroup[]
 }
 
-/** 流程中心使用的正式前端 DTO；真实后端接口到位前由兼容适配层读取旧 mock。 */
+/**
+ * 流程中心使用的正式前端 DTO。2026-09-02 起对接真实 `cs_flow`（/v1/flow/*）。
+ *
+ * `version` 是**可缺省**的：0818 配合事项 B4 要求的流程版本化（历史版本 / 回滚 / 指定版本下发 /
+ * 记录版本号 / 查版本落后的源）后端最终没有实现——`cs_flow` 没有 version 列，`flowDetail` 也没有
+ * version 入参，旧平台流程管理页同样全页无版本概念。真实流程读回来就是没有版本号，这里不造一个
+ * 假的 1 顶上；本地 mock 模板仍带版本，两边共用同一个类型，所以设成可选。
+ * 展示处一律 `version ? 'v' + version : ''`，不要输出 `vundefined`。
+ */
 export interface FlowRecord {
   id: string
   name: string
-  version: number
+  version?: number
   definition: FlowDefinition
   updatedAt: string
+  /** 关联源数量（后端计算列，口径 cs_source.IS_DELETE >= 0，含禁用源）；mock 不提供 */
+  sourceCnt?: number
 }
 
 export interface FlowSaveInput {

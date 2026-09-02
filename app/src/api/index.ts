@@ -50,6 +50,9 @@ import {
   sourceFromLegacy,
   sourceOptionFromLegacy,
   sourcePageFromLegacy,
+  flowFromLegacy,
+  flowPageFromLegacy,
+  flowToLegacy,
   sourceToLegacyParams,
   sourceStepsFromLegacy,
   stepToSaveItemConfigPayload,
@@ -363,6 +366,11 @@ export const sourceApi = {
         sourceUrl: p?.sourceUrl,
         entryTypeId: p?.entryTypeId,
         configId: p?.configId,
+        // 按流程反查源（流程中心「使用源数」下钻）。2026-09-02 生产实测确认后端认这个条件：
+        // 无条件 16929 条 → flowId=1400330 得 46 条（与该流程的 sourceCnt 一致）→ 传不存在的
+        // flowId 得 0 条。**不是静默忽略**，可以放心当过滤条件用。
+        // （注意 apis/source-site-api.md 里列的 sourceCond 参数表没写 flowId，那份文档比 flow 功能早。）
+        flowId: p?.flowId,
         count: p?.count,
         dataDate: p?.dataDate,
         enable: p?.enable,
@@ -582,13 +590,22 @@ export const sourceApi = {
    * ⚠️ 门禁 G5 未实测：`updateSource` 到底是部分更新还是全字段覆盖没验过。旧平台十几年就这么调，
    * 大概率是部分更新；真要是覆盖，少发字段反而更安全。实测方式见开发计划 G5。
    */
-  updateSourceMark: async (sourceId: string, patch: { tags: string[]; remark: string }): Promise<Ack> => {
+  /**
+   * 标签 + 备注的行级写入。`tags` **可缺省**：拿不到这条源当前的标签时（例如批量备注时
+   * 勾选来自别的分页、当前页数据里没有它），必须整个不传这个字段，不能退化成空数组——
+   * `issueTagsForWrite([])` 是空串，而空串在两种后端语义下都会把标签清掉：全量覆盖自不必说，
+   * 就算是 MyBatis-Plus 那种「null 不覆盖」的部分更新，`''` 也不是 null。
+   * 0831 后端接口需求 §3 定的策略正是「没答复之前少发字段」，空串属于多发。
+   * 旧平台批量备注同款做法（SourceList.vue:1755-1757 `if (row.tags !== undefined)`）。
+   * undefined 的字段会被 JSON.stringify 丢掉，body 里不会出现 tags 键。
+   */
+  updateSourceMark: async (sourceId: string, patch: { tags?: string[]; remark: string }): Promise<Ack> => {
     const result = await request<unknown>('source/updateSource', { sourceId, ...patch }, {
       method: 'POST',
       httpEndpoint: 'source/updateSource',
       httpParams: {
         sourceId,
-        tags: issueTagsForWrite(patch.tags),
+        tags: patch.tags === undefined ? undefined : issueTagsForWrite(patch.tags),
         remark: patch.remark,
       },
     })
@@ -1657,6 +1674,33 @@ export const configApi = {
     }
     return { ok: true as const, configId: added[0].configId, name: added[0].name }
   },
+  /**
+   * 新增配置（config_api.md §十六 `POST /v1/config/add`）。**唯一的"从零建配置"通路**——
+   * `updateConfig` 不带 configId 不会创建（0828 实测：返回 success 但无 CONF_ADD 流水）。
+   *
+   * 新 configId **只在 msg 里**（`"新增成功，id:1001"`），`data` 恒为 null，所以按文本解析；
+   * 解析不出来就明确报错，不返回一条没有 ID 的"成功"，那会让调用方把节点绑到 undefined 上。
+   */
+  addConfig: async (payload: Record<string, unknown>): Promise<{ ok: boolean; configId?: string; message?: string }> => {
+    const result = await request<unknown>('config/add', payload, {
+      method: 'POST',
+      httpEndpoint: 'config/add',
+      httpParams: payload,
+      // 必须是表单：后端 addConfig(ConfigWithBLOBs) 没有 @RequestBody，走 Spring 对象绑定。
+      // 2026-09-02 实测发 JSON 的后果是**静默失败**——返回「新增成功，id:xxx」、配置也确实建了，
+      // 但 configName / configUrl / configType / isMulti 全是 null。表单和 query 都能绑上，
+      // 选表单是因为配置带 BLOB 字段（codeRule / contentRule 等），走 query 有请求行长度风险。
+      paramsIn: 'form',
+    })
+    const ack = ackFromApiResult(result)
+    if (!ack.ok) return { ok: false, message: ack.message }
+    const configId = idFromApiResult(result, ['configId', 'id'])
+      ?? ack.message?.match(/id\s*[:：]\s*(\d+)/)?.[1]
+    if (!configId) {
+      return { ok: false, message: `配置已新增，但未能从回执解析出配置 ID（后端回执：${ack.message ?? '无'}），请刷新配置列表确认` }
+    }
+    return { ok: true, configId, message: ack.message }
+  },
   /** 复制配置：生成一条 `原名_copy`。画布「复制节点」走 copyConfigAndLocate，不要直接调这个。 */
   copyAll: (configId: string) => request<Ack>('config/copyAll', { configId }, { method: 'GET', httpParams: { id: configId } }),
   /** 删除配置（高危、永久）。旧配置列表批量删除；0828 口径：闲置配置由后端清理，前端不提供入口。 */
@@ -1920,12 +1964,105 @@ export const flowApi = {
     request<{ reply: string }>('flow/nodeAiChat', params),
 }
 
-// 流程中心正式 API 门面。真实 Flow CRUD 尚未提供时，底层暂时适配旧 flow-template mock；
-// 业务代码只依赖 FlowRecord/FlowSaveInput，不再扩散“流程模板”概念。
+/**
+ * 流程中心正式 API 门面。2026-09-02 起接真实 `cs_flow`（/v1/flow/*），不再走 flow-template mock。
+ * 业务代码只依赖 FlowRecord/FlowSaveInput，不扩散“流程模板”概念。
+ *
+ * 三件事先记在这儿，免得后面按旧印象改坏：
+ * 1. **没有版本**。0818 B4 要的版本化后端没做，`detail` 也就没有 version 入参了（原来那个参数
+ *    只有 mock 认，真实后端不认）。见 FlowRecord.version 的注释。
+ * 2. **列表不含 flowConf**。flowPaged / flowList 都不返回大字段，所以列表里每条的 definition
+ *    是空流程；要画布结构必须单独 `detail(id)`。
+ * 3. **绑定不驱动执行**。changeFlowBatch 只把 cs_source.FLOW_ID 置上，旧平台没有任何地方把
+ *    flowConf 下发成 config，执行器不读它。绑了流程 ≠ 源会按这个流程跑。
+ */
 export const flowCenterApi = {
-  list: () => request<FlowRecord[]>('flow-template/list'),
-  detail: (id: string, version?: number) => request<FlowRecord | null>('flow-template/detail', { id, version }),
-  save: (flow: FlowSaveInput) => request<FlowRecord>('flow-template/save', { template: flow }),
+  /**
+   * 分页 + 检索 + 排序，全部在服务端。
+   * `field` 走后端白名单（flowId/flowName/flowCode/flowType/siteId/categoryId/groupId/
+   * updateDt/createDt/sourceCnt），传白名单外的值后端会报参数错误。
+   * **注意没有「节点数」**：那要解析 flowConf，而列表接口根本不返回这个字段。
+   */
+  paged: async (cond: {
+    page?: number
+    size?: number
+    keywords?: string
+    field?: 'updateDt' | 'createDt' | 'flowName' | 'sourceCnt' | 'flowId'
+    order?: 'asc' | 'desc'
+  } = {}) => {
+    const result = await request<unknown>('flow/flowPaged', cond, {
+      method: 'POST',
+      httpEndpoint: 'flow/flowPaged',
+      httpParams: {
+        page: cond.page ?? 1,
+        limit: cond.size ?? 20,
+        keywords: cond.keywords || undefined,
+        field: cond.field ?? 'updateDt',
+        order: cond.order ?? 'desc',
+      },
+    })
+    return flowPageFromLegacy(result)
+  },
+  /** 批量删除流程（逻辑删除：is_delete=-1 + state=D）。高危，调用方必须已做二次确认。 */
+  remove: async (flowIds: string[]): Promise<Ack> => {
+    if (!flowIds.length) return { ok: false, message: '请先选择要删除的流程' }
+    const result = await request<unknown>('flow/deleteFlow', { ids: flowIds }, {
+      method: 'GET',
+      httpEndpoint: 'flow/deleteFlow',
+      httpParams: { ids: flowIds.join(',') },
+    })
+    return ackFromApiResult(result)
+  },
+  /** 下拉/选择器用：一次取回，**最多 500 条**。要完整分页请改用 paged。 */
+  list: async (): Promise<FlowRecord[]> => (await flowCenterApi.paged({ page: 1, size: 500 })).list,
+  detail: async (id: string): Promise<FlowRecord | null> => {
+    if (!id) return null
+    const result = await request<unknown>('flow/flowDetail', { flowId: id }, {
+      method: 'GET',
+      httpEndpoint: 'flow/flowDetail',
+      httpParams: { flowId: id },
+    })
+    return result ? flowFromLegacy(result) : null
+  },
+  /**
+   * 新增（不带 id）/ 修改（带 id）。响应 `data` 是 null，新 ID 只在 msg 里——
+   * 文案是「保存成功，id:1001」（旧平台 saveFlow 同款），所以新增后按 msg 取 ID 再回查详情。
+   * 取不到就直接报错，不返回一条 id 为空的假记录让调用方往列表里塞。
+   */
+  save: async (flow: FlowSaveInput): Promise<FlowRecord> => {
+    const name = flow.name.trim()
+    if (!name) throw new Error('流程名称不能为空')
+    const payload = flowToLegacy({ ...flow, name })
+    const result = await request<unknown>('flow/saveFlow', payload, {
+      method: 'POST',
+      httpEndpoint: 'flow/saveFlow',
+      httpParams: payload,
+    })
+    const ack = ackFromApiResult(result)
+    if (!ack.ok) throw new Error(ack.message || '保存流程失败')
+    const id = flow.id
+      || idFromApiResult(result, ['flowId', 'id'])
+      || ack.message?.match(/id\s*[:：]\s*(\d+)/)?.[1]
+    if (!id) throw new Error(`流程「${name}」已保存，但未能解析流程 ID（后端回执：${ack.message ?? '无'}），请刷新列表确认`)
+    const saved = await flowCenterApi.detail(id)
+    if (saved) return saved
+    return { id, name, definition: flow.definition, updatedAt: '' }
+  },
+  /**
+   * 把一批源绑到流程；`flowId` 传空表示解绑（后端约定 0 / 负数 / 不传 = 解绑）。
+   * sourceIds 走 **body**，不是 query——旧平台的 changeFlow（query 版）在批量上千时会撞
+   * Nginx/Tomcat 请求行上限触发 414/400，已被后端标废弃。单次上限 5000 条。
+   */
+  bindSources: async (sourceIds: string[], flowId?: string): Promise<Ack> => {
+    if (!sourceIds.length) return { ok: false, message: '请先选择要关联的源' }
+    if (sourceIds.length > 5000) return { ok: false, message: `单次最多关联 5000 个源，当前 ${sourceIds.length} 个` }
+    const result = await request<unknown>('flow/changeFlowBatch', { sourceIds, flowId }, {
+      method: 'POST',
+      httpEndpoint: 'flow/changeFlowBatch',
+      httpParams: { sourceIds: sourceIds.map(Number), flowId: flowId ? Number(flowId) : 0 },
+    })
+    return ackFromApiResult(result)
+  },
 }
 
 // 子步骤（流程画布连线 = item/next）。未实现专属 mock，由 client fallback 回执。

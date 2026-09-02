@@ -121,9 +121,48 @@ async function onSaveNodeConfig() {
     await doUpdateExistingConfig()
     return
   }
-  // 没有 configId 的节点还存不了：`updateConfig` 不带 configId 不会创建配置（实测，0824-11 §2.3），
-  // 而 copyAll 需要一个可复制的源配置。建配置通路见开发计划 W0-3（等基准配置 ID）。
-  ElMessage.warning('本节点还没有绑定配置，请先用配置条上的「更换」选一份')
+  await doCreateConfig()
+}
+
+/**
+ * 新拉的节点第一次「保存」= 建一份**独立的新配置**并绑到本节点（开发计划 W0-3）。
+ *
+ * 走 `config/add`（config_api.md §十六）——这是后端唯一的"从零建配置"通路：
+ *   · `updateConfig` 不带 configId **不会创建**（0828 实测：返回 success 但无 CONF_ADD 流水，
+ *     当时据此误判成"后端没有建配置接口"，其实是敲错了门）；
+ *   · `source/genConfig` 是源级批量（入参是源 ID 列表），给不了指定节点；
+ *   · `snatch/snatchSave` 的 newConfig=1 必然连带建一个源。
+ *
+ * 与「更换」的区别要分清：更换是**绑到一份已有配置**，多个节点共用、改一处影响所有引用方；
+ * 这里是新建一份只属于本节点的。
+ */
+async function doCreateConfig() {
+  const node = cfg.value
+  if (!node || saving.value) return
+  saving.value = true
+  try {
+    const payload = buildConfigPayload(node)
+    const created = await configApi.addConfig(payload)
+    if (!created.ok || !created.configId) {
+      ElMessage.error(created.message || '新增配置失败')
+      return
+    }
+    // 回查一次再绑：add 的回执只有 msg，拿不到落库后的完整记录（后端还会补 state/topic 等）。
+    const saved = await configApi.configDetail(created.configId)
+    if (!saved) {
+      // 配置确实建出来了，只是没绑上。说清楚 ID，让用户能用「更换」找回来，
+      // 不要假装成功——那会留下一份没人引用的孤儿配置，而且用户以为已经绑好了。
+      ElMessage.warning(`配置 #${created.configId} 已新建，但回查详情失败、未能绑定到本节点，请用配置条上的「更换」选中它`)
+      return
+    }
+    flow.bindExistingConfig(id.value, saved)
+    flow.markNodeConfigSaved(id.value)
+    ElMessage.success(`已新建配置 #${created.configId} 并绑定到本节点`)
+  } catch (e) {
+    reportWriteError('新增配置', e)
+  } finally {
+    saving.value = false
+  }
 }
 
 async function doUpdateExistingConfig() {
@@ -242,7 +281,7 @@ onMounted(async () => {
           class="rc-btn primary"
           type="button"
           :disabled="!canSaveNodeConfig || saving"
-          :title="nodeConfigDirty ? undefined : (configId ? '当前没有需要保存的修改' : '本节点还没有绑定配置')"
+          :title="configId ? (nodeConfigDirty ? undefined : '当前没有需要保存的修改') : '保存后会新建一份配置并绑定到本节点'"
           @click="onSaveNodeConfig"
         >{{ saving ? '保存中…' : '保存' }}</button>
       </div>

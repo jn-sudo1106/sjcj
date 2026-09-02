@@ -187,9 +187,13 @@ describe('FileView', () => {
     expect(drawer.props('tableId')).toBe('file-resource')
     expect(drawer.props('tableName')).toBe('news-文件资源表')
 
-    await wrapper.get('select[aria-label="每页条数"]').setValue('50')
-    await flushPromises()
-    expect(fileApi.resourceRows).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, size: 50 }))
+    // 分页 0902 统一成 el-pagination（原来的「每页」下拉 + 上一页/下一页 + 跳转输入框
+    // 六件套换成一个组件）。测试环境没有全局装 Element Plus，它不是真实组件实例、拿不到
+    // 也点不动——与 ResultView.test.ts 同一口径，改成断言绑进去的 props。
+    const pagination = wrapper.get('[data-testid="file-pagination"]')
+    expect(pagination.attributes('page-sizes')).toBe('20,40,100,200')
+    expect(pagination.attributes('page-size')).toBe('20')
+    expect(pagination.attributes('total')).toBe('101')
   })
 
   it('具体源文件查询失败时显示失败提示，不伪装成空结果', async () => {

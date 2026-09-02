@@ -63,7 +63,10 @@ const appliedTemplateLabel = computed(() => {
   const templateId = src.value?.templateId
   if (!templateId) return '切换流程'
   const template = templates.value.find((item) => item.id === templateId)
-  return template ? `${template.name} · v${src.value?.templateVersion ?? template.version}` : '切换流程'
+  if (!template) return '切换流程'
+  // 真实 cs_flow 没有版本号（见 FlowRecord.version 注释），拿不到就只显示流程名，不要 `vundefined`
+  const version = src.value?.templateVersion ?? template.version
+  return version == null ? template.name : `${template.name} · v${version}`
 })
 
 const statusMeta = computed(() => {

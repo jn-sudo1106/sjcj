@@ -169,7 +169,7 @@ export function composeTemplateFlow(
   return {
     id: source.sourceId,
     name: source.name || template.name,
-    version: `template-v${template.version}`,
+    version: template.version == null ? `flow-${template.id}` : `template-v${template.version}`,
     main: definition.main,
     branches: definition.branches,
     configs,

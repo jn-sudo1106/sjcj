@@ -30,7 +30,7 @@ import type {
   SummaryRow,
   TaskInst,
 } from './types'
-import type { LegacyLoginSubmission, LegacySnatchSaveRequest } from './types/source'
+import type { FlowDefinition, FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest } from './types/source'
 import type { FlowDef, NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { colorFromLegacy, parseIssueTags } from '@/utils/sourceMark'
 
@@ -1256,4 +1256,73 @@ export function parseNextStepReceipt(message: string): NextStepReceipt {
   }
   const sum = (status: 'ok' | 'reject') => entries.filter((e) => e.status === status).reduce((s, e) => s + e.count, 0)
   return { submitted, entries, okCount: sum('ok'), rejectCount: sum('reject'), raw: message }
+}
+
+/* ────────────── flow 流程（cs_flow，2026-09-02 接真实后端） ────────────── */
+
+/**
+ * `flowConf` 是后端眼里的**不透明大字段**——2026-09-02 通读旧平台确认：全仓库除了流程管理页
+ * 自己那个 JSON textarea，没有任何地方解析或渲染它，后端也只当字符串存取。所以结构由我们定，
+ * 唯一硬约束是「必须是合法 JSON」（旧平台保存前会 JSON.parse 校验）。
+ *
+ * 但读回来的东西不一定是我们写的：旧平台流程管理页的「重置模板」按钮会把它写成
+ * `{"states":{},"paths":{}}`（那是更早的画布格式，DEFAULT_CONF_JSON），人手改坏也有可能。
+ * 所以这里认不出形状就回退成空流程，**绝不让整页崩**——流程列表打不开比某条流程画布是空的严重得多。
+ */
+export function flowDefinitionFromConf(conf: unknown): FlowDefinition {
+  const blank: FlowDefinition = { main: [], branches: [], configs: {}, branchGroups: [] }
+  if (typeof conf !== 'string' || !conf.trim()) return blank
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(conf)
+  } catch {
+    return blank
+  }
+  const record = asRecord(parsed)
+  // 我们的结构以 main 数组为准；states/paths 那套（或任何别的形状）一律当空流程。
+  if (!Array.isArray(record.main)) return blank
+  return {
+    main: record.main.map(String),
+    branches: Array.isArray(record.branches) ? record.branches as FlowDefinition['branches'] : [],
+    configs: record.configs && typeof record.configs === 'object'
+      ? record.configs as FlowDefinition['configs']
+      : {},
+    branchGroups: Array.isArray(record.branchGroups)
+      ? record.branchGroups as FlowDefinition['branchGroups']
+      : [],
+  }
+}
+
+/** cs_flow 记录 → 前端 FlowRecord。列表接口不返回 flowConf，此时 definition 为空流程。 */
+export function flowFromLegacy(input: unknown): FlowRecord {
+  const record = asRecord(input)
+  return {
+    id: String(record.flowId ?? ''),
+    name: String(record.flowName ?? ''),
+    definition: flowDefinitionFromConf(record.flowConf),
+    updatedAt: record.updateDt == null ? '' : String(record.updateDt),
+    sourceCnt: legacyNumber(record.sourceCnt),
+    // version 刻意不填：cs_flow 没有这一列，见 FlowRecord 的注释。
+  }
+}
+
+export function flowPageFromLegacy(input: unknown): { total: number; list: FlowRecord[] } {
+  const record = asRecord(input)
+  const list = Array.isArray(input) ? input : (Array.isArray(record.list) ? record.list : [])
+  const total = Array.isArray(input) ? input.length : Number(record.total ?? list.length)
+  return { total, list: list.map(flowFromLegacy) }
+}
+
+/**
+ * 前端保存输入 → saveFlow 请求体。字段与提交口径照抄旧平台流程管理页
+ * （FlowList.vue submitEdit）：只提交可编辑字段，**不回传** state / isDelete / createDt /
+ * sourceCnt 这些系统字段，避免把后端维护的值覆盖掉。新增时不带 flowId。
+ */
+export function flowToLegacy(input: FlowSaveInput): LegacyRecord {
+  const payload: LegacyRecord = {
+    flowName: input.name.trim(),
+    flowConf: JSON.stringify(input.definition),
+  }
+  if (input.id) payload.flowId = input.id
+  return payload
 }

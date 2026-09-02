@@ -5,9 +5,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import FlowCenter from './index.vue'
-import { flowApi, flowCenterApi, sourceApi, type FlowRecord } from '@/api'
+import { flowCenterApi, sourceApi, type FlowRecord } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 
@@ -30,8 +30,8 @@ const FLOWS: FlowRecord[] = [
 
 afterEach(() => vi.restoreAllMocks())
 
-async function mountCenter() {
-  vi.spyOn(flowCenterApi, 'list').mockResolvedValue(FLOWS)
+async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length) {
+  vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total, list: flows })
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/flows', component: { template: '<div/>' } }, { path: '/rules', component: { template: '<div/>' } }] })
   await router.push('/flows'); await router.isReady()
   const pinia = createPinia(); setActivePinia(pinia)
@@ -57,74 +57,292 @@ const rows = (w: Awaited<ReturnType<typeof mountCenter>>) => w.findAll('[data-te
 const search = (w: Awaited<ReturnType<typeof mountCenter>>) => w.get('[data-testid="flow-center-search"]')
 
 describe('流程中心 · 列表', () => {
-  it('列出流程，节点数不算 start/end 两个终端', async () => {
+  it('列出流程', async () => {
     const w = await mountCenter()
     expect(rows(w).length).toBe(2)
-    expect(rows(w)[0].text()).toContain('2 个')
-  })
-
-  it('使用源数不编造：后端没有「按流程反查源」的接口，显示 —', async () => {
-    const w = await mountCenter()
-    expect(rows(w)[0].text()).toContain('—')
-  })
-
-  it('按流程名搜', async () => {
-    const w = await mountCenter()
-    await search(w).setValue('微信')
-    expect(rows(w).length).toBe(1)
-  })
-
-  it('按节点名（= 配置名）搜', async () => {
-    const w = await mountCenter()
-    await search(w).setValue('详情页')
-    expect(rows(w).length).toBe(1)
     expect(rows(w)[0].text()).toContain('新闻采集标准流程')
   })
 
-  // §2.11 规则②：配置只能作为搜索的输入，**命中结果仍然是流程列表**
-  it('按配置 ID 搜，结果仍是流程行，并说明是反查', async () => {
+  it('使用源数取后端计算列 sourceCnt；缺这个字段才显示 —', async () => {
+    const w = await mountCenter([
+      { ...FLOWS[0], sourceCnt: 12 },
+      { ...FLOWS[1], sourceCnt: undefined },
+    ])
+    const cells = w.findAll('[data-testid="flow-source-cnt"]')
+    expect(cells[0].text()).toBe('12 个')
+    expect(cells[1].text()).toBe('—')
+  })
+
+  // 0 个 / 字段缺失都不做成可点：点开必然是空表
+  it('只有源数大于 0 才可点下钻', async () => {
+    const w = await mountCenter([
+      { ...FLOWS[0], sourceCnt: 12 },
+      { ...FLOWS[1], sourceCnt: 0 },
+    ])
+    const cells = w.findAll('[data-testid="flow-source-cnt"]')
+    expect(cells[0].find('[data-testid="flow-source-cnt-link"]').exists()).toBe(true)
+    expect(cells[1].find('[data-testid="flow-source-cnt-link"]').exists()).toBe(false)
+    expect(cells[1].text()).toBe('0 个')
+  })
+
+  it('点使用源数按 flowId 拉该流程的源，且不会顺带打开工作区', async () => {
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 1,
+      list: [{ sourceId: 'src-1', name: '关联源', url: '', configId: '', mainTable: '', owner: '', state: 'C' }],
+    })
+    const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 12 }])
+    await w.get('[data-testid="flow-source-cnt-link"]').trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ flowId: 'flow-10086' }))
+    expect(w.get('[data-testid="flow-source-row"]').text()).toContain('关联源')
+    // 单元格上的 @click.stop：点数字不应该同时触发整行的"打开工作区"
+    expect(w.find('.fd-drawer').exists()).toBe(false)
+    w.unmount()
+  })
+
+  // 0902：服务端分页，且分页控件与数据中心统一成同一个 el-pagination
+  // （DataQueryPanel 的 .dqp-pager 同款 layout / page-sizes / background+small）。
+  // 项目没有全局装 Element Plus 插件（vitest.config.ts 无 setupFiles），测试环境里
+  // <el-pagination> 是未识别的自定义元素、拿不到组件实例，所以这里跟 ResultView.test.ts
+  // 同一口径：只断言"绑进去的 props 对不对"，不做点击交互。
+  it('分页用与数据中心同款 el-pagination，绑定后端总数与页大小', async () => {
+    const w = await mountCenter(FLOWS, 640)
+    const pagination = w.get('[data-testid="flow-center-pagination"]')
+    expect(pagination.attributes('total')).toBe('640')
+    expect(pagination.attributes('page-size')).toBe('20')
+    expect(pagination.attributes('page-sizes')).toBe('20,40,100,200')
+    expect(pagination.attributes('layout')).toBe('total, sizes, prev, pager, next, jumper')
+  })
+
+  // 0902：检索条对齐数据中心/文件中心，改成显式「查询」「清空」按钮（回车仍可用）
+  it('点查询按钮把关键字发给服务端', async () => {
     const w = await mountCenter()
-    await search(w).setValue('1400765')
+    const paged = vi.mocked(flowCenterApi.paged)
+    await search(w).setValue('微信')
+    paged.mockClear()
+    await w.get('[data-testid="flow-center-query"]').trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ page: 1, keywords: '微信' }))
+  })
+
+  it('点清空把条件、排序、页码一起复位并重查', async () => {
+    const w = await mountCenter(FLOWS, 640)
+    await search(w).setValue('微信')
+    await w.get('[data-testid="flow-center-query"]').trigger('click')
+    await flushPromises()
+    const paged = vi.mocked(flowCenterApi.paged)
+    paged.mockClear()
+    await w.get('[data-testid="flow-center-reset"]').trigger('click')
+    await flushPromises()
+    expect((search(w).element as HTMLInputElement).value).toBe('')
+    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ page: 1, keywords: undefined, field: 'updateDt' }))
+  })
+
+  // cs_flow 没有版本列，读回来 version 就是 undefined——不能渲染成 vundefined
+  it('没有版本号时只显示流程 ID', async () => {
+    const w = await mountCenter([{ ...FLOWS[0], version: undefined }])
+    expect(rows(w)[0].text()).toContain('flow-10086')
+    expect(rows(w)[0].text()).not.toContain('vundefined')
+  })
+
+  // 0902：搜索改走服务端 flowPaged.keywords（命中 flow_name/flow_code/flow_desc/remark/
+  // flow_tags/biz_type），回车触发。原来的本地过滤只能筛已加载的那一页，覆盖不到全量。
+  it('回车把关键字发给服务端，不在本地筛', async () => {
+    const w = await mountCenter()
+    const paged = vi.mocked(flowCenterApi.paged)
+    paged.mockClear()
+    await search(w).setValue('微信')
+    // 只输入不查询：不发请求，列表不动
+    expect(paged).not.toHaveBeenCalled()
+    expect(rows(w).length).toBe(2)
+
+    paged.mockResolvedValue({ total: 1, list: [FLOWS[1]] })
+    await search(w).trigger('keyup.enter')
+    await flushPromises()
+    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ keywords: '微信' }))
     expect(rows(w).length).toBe(1)
-    expect(w.get('[data-testid="flow-center-search-note"]').text()).toContain('命中 1 条流程')
   })
 
-  // §2.11 规则⑤：搜到 0 条不能笼统说「无结果」，要说清配置本身可能存在
-  it('配置没有被任何流程引用时给明确提示，而不是笼统的无结果', async () => {
+  it('搜不到时提示带上关键字', async () => {
     const w = await mountCenter()
-    await search(w).setValue('1409999')
-    expect(rows(w).length).toBe(0)
-    expect(w.get('[data-testid="flow-center-search-note"]').text()).toContain('没有被任何流程引用')
+    vi.mocked(flowCenterApi.paged).mockResolvedValue({ total: 0, list: [] })
+    await search(w).setValue('不存在的流程')
+    await search(w).trigger('keyup.enter')
+    await flushPromises()
+    expect(w.text()).toContain('没有找到匹配「不存在的流程」的流程')
   })
 
-  it('顶部新建流程动作会创建空白流程并直接打开工作区', async () => {
-    const created = { ...FLOWS[1], id: 'flow-new', name: '新流程', definition: { main: ['start', 'end'], branches: [], configs: {} } } as FlowRecord
+})
+
+// 0902：增删改之后列表自动重查，不再让用户去点「刷新」（那个按钮也删了）。
+describe('流程中心 · 自动刷新', () => {
+  it('工具条没有刷新按钮', async () => {
+    const w = await mountCenter()
+    const labels = w.get('.fc-toolbar').findAll('button').map((b) => b.text())
+    expect(labels).toEqual(['查询', '清空'])
+  })
+
+  it('新建流程后自动重查列表', async () => {
+    const created = { ...FLOWS[1], id: 'flow-new', name: '新流程' } as FlowRecord
     vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: '新流程', action: 'confirm' } as never)
-    const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue(created)
+    vi.spyOn(flowCenterApi, 'save').mockResolvedValue(created)
     const w = await mountCenter()
+    const paged = vi.mocked(flowCenterApi.paged)
+    paged.mockClear()
     useUiStore().fireAction('新建流程')
     await flushPromises()
-    expect(save).toHaveBeenCalledWith(expect.objectContaining({ name: '新流程' }))
-    expect(w.get('.fd-name').element).toHaveProperty('value', '新流程')
+    expect(paged).toHaveBeenCalled()
+    // 重查回来的列表里没有这条新流程也不能把工作区关掉
+    expect(w.find('.fd-name').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('删除后自动重查列表', async () => {
+    const w = await mountCenter()
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    vi.spyOn(flowCenterApi, 'remove').mockResolvedValue({ ok: true })
+    const paged = vi.mocked(flowCenterApi.paged)
+    paged.mockClear()
+    await w.get('[data-testid="flow-delete"]').trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenCalled()
+  })
+
+  // 列表随时会被整页换掉（自动重查 / 翻页 / 搜索）。工作区若从列表派生，只要当前流程
+  // 不在新的这一页，正在编辑的面板就会自己消失。用搜索换掉结果集来验，等价且不依赖分页控件。
+  it('列表被整页换掉后工作区不关', async () => {
+    const w = await mountCenter(FLOWS, 640)
+    await rows(w)[0].trigger('click')
+    expect(w.find('.fd-drawer').exists()).toBe(true)
+    vi.mocked(flowCenterApi.paged).mockResolvedValue({ total: 640, list: [FLOWS[1]] })
+    await w.get('[data-testid="flow-center-query"]').trigger('click')
+    await flushPromises()
+    expect(rows(w).length).toBe(1)
+    expect(w.find('.fd-drawer').exists()).toBe(true)
+    w.unmount()
+  })
+})
+
+// 0902 会议口径：操作列只保留 编辑 / 关联到源 / 删除流程，去掉「复制」。
+describe('流程中心 · 操作列', () => {
+  const actions = (w: Awaited<ReturnType<typeof mountCenter>>) =>
+    rows(w)[0].findAll('.fc-actions button').map((b) => b.text())
+
+  it('只有编辑、关联到源、删除流程三个操作', async () => {
+    const w = await mountCenter()
+    expect(actions(w)).toEqual(['编辑', '关联到源', '删除流程'])
+  })
+
+  it('删除前二次确认，并把关联源数写进确认文案', async () => {
+    const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 7 }])
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const remove = vi.spyOn(flowCenterApi, 'remove').mockResolvedValue({ ok: true })
+    await w.get('[data-testid="flow-delete"]').trigger('click')
+    await flushPromises()
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringContaining('关联 7 个源'),
+      '删除流程',
+      expect.anything(),
+    )
+    expect(remove).toHaveBeenCalledWith(['flow-10086'])
+  })
+
+  it('取消确认时不发删除请求', async () => {
+    const w = await mountCenter()
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    const remove = vi.spyOn(flowCenterApi, 'remove')
+    await w.get('[data-testid="flow-delete"]').trigger('click')
+    await flushPromises()
+    expect(remove).not.toHaveBeenCalled()
+  })
+
+  it('删除失败时抛后端原文，不谎报成功', async () => {
+    const w = await mountCenter()
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    vi.spyOn(flowCenterApi, 'remove').mockResolvedValue({ ok: false, message: '未找到流程ID，ids=flow-10086' })
+    const error = vi.spyOn(ElMessage, 'error')
+    await w.get('[data-testid="flow-delete"]').trigger('click')
+    await flushPromises()
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('未找到流程ID'))
   })
 })
 
 describe('流程中心 · 可编辑工作区', () => {
-  it('点行打开工作区，并把原流程载入复用画布', async () => {
-    const w = await mountCenter()
+  // 0902 联调修：列表走 flowPaged，不返回 flowConf，行上的 definition 恒为空流程。
+  // 工作区必须自己去 flowDetail 取完整定义，否则点开任何已有流程都是空画布，
+  // 一保存还会把真实 flowConf 覆盖成空。这两条用例的 detail 桩就是在锁这件事。
+  it('点行打开工作区：去 flowDetail 取完整定义载入画布，而不是用列表行的空 definition', async () => {
+    const detail = vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(FLOWS[0])
+    // 列表行只有空 definition，模拟真实 flowPaged 的返回
+    const w = await mountCenter([{ ...FLOWS[0], definition: { main: [], branches: [], configs: {} } }])
     await rows(w)[0].trigger('click')
+    await flushPromises()
+    expect(detail).toHaveBeenCalledWith('flow-10086')
     expect(w.find('.fd-drawer').exists()).toBe(true)
     expect(w.find('[data-testid="embedded-flow-board"]').exists()).toBe(true)
     expect(useFlowStore().main).toEqual(['start', 'web-list', 'web-detail', 'end'])
+    w.unmount()
+  })
+
+  // 存量流程（后端从 cs_config 灌进来的 735 条）flowConf 全是 null，但它们不是空流程——
+  // 真实结构在 cs_item_config 里。空定义时按关联源的步骤还原，并明确标注"尚未落库"。
+  it('flowConf 为空时按关联源的步骤还原画布，并提示这份定义还没写进流程', async () => {
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({
+      ...FLOWS[0], sourceCnt: 3, definition: { main: [], branches: [], configs: {} },
+    })
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 3,
+      list: [{ sourceId: 'src-1', name: '关联源一', url: '', configId: 'cfg-1', mainTable: '', owner: '', state: 'C' }],
+    })
+    const steps = vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
+    const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 3 }])
+    await rows(w)[0].trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ flowId: 'flow-10086', size: 1 }))
+    expect(steps).toHaveBeenCalledWith('src-1')
+    const note = w.get('[data-testid="flow-derived-note"]').text()
+    expect(note).toContain('关联源一')
+    expect(note).toContain('尚未保存画布定义')
+    // 提示条不能把工作区顶掉——两者要并存
+    expect(w.find('[data-testid="embedded-flow-board"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('流程没有关联源时不去还原，就是一张空白画布且不显示还原提示', async () => {
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({
+      ...FLOWS[0], sourceCnt: 0, definition: { main: [], branches: [], configs: {} },
+    })
+    const paged = vi.spyOn(sourceApi, 'sourcePaged')
+    const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 0 }])
+    await rows(w)[0].trigger('click')
+    await flushPromises()
+    expect(paged).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="flow-derived-note"]').exists()).toBe(false)
+    expect(w.find('[data-testid="embedded-flow-board"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('详情取不到时关掉工作区并报错，不拿空画布糊弄', async () => {
+    vi.spyOn(flowCenterApi, 'detail').mockRejectedValue(new Error('请求失败 500'))
+    const error = vi.spyOn(ElMessage, 'error')
+    const w = await mountCenter()
+    await rows(w)[0].trigger('click')
+    await flushPromises()
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('请求失败 500'))
+    expect(w.find('.fd-drawer').exists()).toBe(false)
+    w.unmount()
   })
 
   it('右侧直接复用节点设置，且流程中心不展示 AI 对话', async () => {
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(FLOWS[0])
     const w = await mountCenter()
     await rows(w)[0].trigger('click')
+    await flushPromises()
     const inspector = w.get('[data-testid="embedded-node-inspector"]')
     expect(inspector.text()).toContain('节点配置')
     expect(inspector.text()).toContain('任务配置')
     expect(w.find('.fd-drawer').text()).not.toContain('AI 对话')
+    w.unmount()
   })
 
   it('不再展示节点数/使用源/状态摘要块和只读节点摘要', async () => {
@@ -144,24 +362,40 @@ describe('流程中心 · 可编辑工作区', () => {
     expect(w.find('.fd-name').exists()).toBe(true)
   })
 
-  it('应用到源会清空旧绑定并以当前流程全量保存', async () => {
+  // 0902 改口径：关联 = changeFlowBatch 写 cs_source.FLOW_ID 这一个字段。
+  // 原来那版走 sourceUpdate + flowApi.flowSave，是 mock 时代"全量替换节点"的语义；
+  // 真实后端下 sourceUpdate 根本不发 templateId（sourceToLegacyParams 里没这个字段），
+  // 等于假绑定。这条用例同时锁住「不许再去动源本身」。
+  it('关联到源走 changeFlowBatch，且不改动源本身', async () => {
     vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({
       sourceId: 'source-1', name: '目标源', url: 'https://example.com', configId: '', mainTable: '', owner: '', state: 'C',
-      nodeBindings: { old: { outputTable: 'OLD' } },
     })
     const sourceUpdate = vi.spyOn(sourceApi, 'sourceUpdate').mockResolvedValue({ ok: true })
-    const flowSave = vi.spyOn(flowApi, 'flowSave').mockResolvedValue({ ok: true })
+    const bind = vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true })
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     const w = await mountCenter()
-    const apply = rows(w)[0].findAll('button').find((button) => button.text() === '应用到源')!
+    const apply = rows(w)[0].findAll('button').find((button) => button.text() === '关联到源')!
     await apply.trigger('click')
     await w.get('[data-testid="source-select-stub"]').setValue('source-1')
     await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
     await flushPromises()
-    expect(sourceUpdate).toHaveBeenCalledWith(expect.objectContaining({ nodeBindings: {}, templateId: 'flow-10086' }))
-    expect(flowSave).toHaveBeenCalledWith(expect.objectContaining({
-      main: ['start', 'web-list', 'web-detail', 'end'],
-      configs: expect.objectContaining({ 'web-list': expect.objectContaining({ configId: '1400774' }) }),
-    }))
+    expect(bind).toHaveBeenCalledWith(['source-1'], 'flow-10086')
+    expect(sourceUpdate).not.toHaveBeenCalled()
+  })
+
+  it('关联失败时把后端原文抛给用户，不谎报成功', async () => {
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({
+      sourceId: 'source-1', name: '目标源', url: '', configId: '', mainTable: '', owner: '', state: 'C',
+    })
+    vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: false, message: '目标流程不存在或已删除：flowId=10086' })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const error = vi.spyOn(ElMessage, 'error')
+    const w = await mountCenter()
+    const apply = rows(w)[0].findAll('button').find((button) => button.text() === '关联到源')!
+    await apply.trigger('click')
+    await w.get('[data-testid="source-select-stub"]').setValue('source-1')
+    await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
+    await flushPromises()
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('目标流程不存在或已删除'))
   })
 })

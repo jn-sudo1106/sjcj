@@ -99,6 +99,14 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/configDetail', desc: '配置详情', impl: true, live: true },
   { path: 'config/modify/updateConfig', desc: '修改配置', danger: true, impl: true, live: true },
   { path: 'config/copyAll', desc: '复制配置', danger: true, impl: true, live: true },
+  // 2026-09-02 config_api.md §十六补齐：**唯一的"从零建配置"接口**，语义是仅新增
+  // （configId 传了也被忽略，走自增），入参与 updateConfig 同一个 ConfigWithBLOBs 实体。
+  // 后端自动补 state=C / isDelete=0 / createDt / topic（缺省 dev_web_snatch_{用户名}），
+  // 并写一条 CONF_ADD 动作流水——这正解释了 0828 的实测困惑：当时用 updateConfig 不带
+  // configId 想新增，返回 success 但日志里没有 CONF_ADD，因为写 CONF_ADD 的是这条 add。
+  // ⚠️ 新 configId **只在 msg 文本里**（"新增成功，id:1001"），data 恒为 null，要自己解析。
+  // 旧平台 config.js 没封装它，所以照旧前端代码是找不到的。
+  { path: 'config/add', desc: '新增配置（仅新增，新 configId 在 msg 里）', danger: true, live: true },
   { path: 'config/delete', desc: '删除配置', danger: true, impl: true, live: true },
   { path: 'config/sendConfigTask', desc: '发配置（把配置下发成采集任务；不是保存，也不是发抓取）', danger: true, impl: true, live: true },
   { path: 'config/updateTopic', desc: '修改主题(队列)', danger: true, impl: true, live: true },
@@ -164,7 +172,21 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'entry/entryExportAll', desc: '导出 Excel（URL 直开，同源 Cookie 鉴权）。0831 G7：旧 api/entry.js 没有这条，本平台 DataView 已在用；不标 live——exportUrl 不走 request()' },
 
   /* ── item/next 子步骤（目标 7 / 收录 5） ── */
-  { path: 'item/next/nextConfigPaged', desc: '子步骤分页 / 流程图读取', impl: true, live: true },
+  // 目前**只认 `sourceId`**：2026-09-02 实测传 configId / flowId / 不传参，一律返回 0 条。
+  // `svg=true` 会多返回一条 itemConfig=0 的主配置行——画布节点数 = 主配置 1 个 + 子步骤 N 个，
+  // 即不带 svg 时的 count + 1（实测源 430022404：stepCnt=1 → svg 模式 count=2）。
+  //
+  // 🕗 待后端上线：按 `flowId` 取步骤（后端 2026-09-02 口头确认会加，字段沿用现有这套）。
+  //    上线后流程中心工作区可以一次取到流程结构，替掉现在
+  //    「flowId → sourcePaged 取任一源 → 按 sourceId 取步骤」的两跳
+  //    （见 FlowCenter/FlowDetailDrawer.vue 的 deriveFromSourceSteps）。
+  //    接的时候要先问清两件事，别想当然：
+  //    ① 一个流程挂 N 个源时返回什么——去重后的一份，还是每个源各一份（行上带 sourceId，
+  //       真按源重复的话前端得按 itemConfig 去重）；
+  //    ② svg=true 那条主配置行还在不在。
+  //    另：现在传 flowId 是**静默忽略并返回 0 条**（不是返回全量），所以"先按 flowId 探一次、
+  //    空了再回退两跳"这种自愈写法是安全的，等接口上线自动切换。
+  { path: 'item/next/nextConfigPaged', desc: '子步骤分页 / 流程图读取（现只认 sourceId；flowId 待后端上线）', impl: true, live: true },
   { path: 'item/next/configs/same', desc: '同资源配置（选择已有配置的候选来源，list1 同域 / list2 其它域）', impl: true, live: true },
   // 2026-08-31 联调：画布节点名 / 进入条件 / 增删节点走这 4 条，不走配置。
   // payload 已按 2026-08-26 源 430016398 / itemConfig 40600 实测对过；标 live 后日常 mock 模式也会打真实后端。
@@ -248,6 +270,26 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'flow-template/list', desc: '流程列表（临时兼容存储，版本化）', impl: true },
   { path: 'flow-template/detail', desc: '流程详情（临时兼容存储，可指定版本）', impl: true },
   { path: 'flow-template/save', desc: '保存流程（临时兼容存储）', impl: true },
+
+  /* ── flow 真实流程表 cs_flow（2026-09-02 接入，路径照抄旧平台 src/api/flow.js） ── */
+  // 上面 flow/save|load|list 与 flow-template/* 全是本平台早期自造的逻辑名，只留给 mock；
+  // 真实后端的八条在下面，live 标在真实 path 上（markBatch / site/update 同款踩坑，别标错地方）。
+  //
+  // ⚠️ 这八条标 live 时**尚未做过真实联调验证**——匿名探测被登录过滤器 302 拦下，无法确认部署状态。
+  // 依据是旧平台已把 /config/flow-list「流程管理」菜单上线（router.config.js:41）、
+  // 且 api/flow.js 里这八条路径在跑，所以按存在处理。第一次连真机务必先走一遍读接口，
+  // 特别是确认 sourcePaged 认不认 flowId（见 flowCenterApi.sourcesOfFlow 的注释）。与 nextStep2 同款口径。
+  { path: 'flow/flowPaged', desc: '流程分页 + 多条件检索（不含 flowConf，含计算列 sourceCnt）', live: true },
+  { path: 'flow/flowDetail', desc: '流程详情（含 flowConf 大字段与 sourceCnt）', live: true },
+  { path: 'flow/flowList', desc: '有效流程列表（下拉用，不含 flowConf）', live: true },
+  { path: 'flow/saveFlow', desc: '新增 / 修改流程（不带 flowId = 新增）', danger: true, live: true },
+  { path: 'flow/updateFlowConf', desc: '仅更新流程定义 flowConf（画布保存）', danger: true, live: true },
+  { path: 'flow/deleteFlow', desc: '批量删除流程（逻辑删除 is_delete=-1 + state=D）', danger: true, live: true },
+  // ⚠️ enable 极性与源相反：这里 0=启用 / 1=禁用，源的 changeEnable 同样是 0 启用——两边一致，
+  // 但与 cs_flow 自己的 is_delete=-1（已删除）三态并存，读代码时别混。
+  { path: 'flow/changeFlowEnable', desc: '批量启停流程（0 启用 / 1 禁用，仅改 is_delete）', danger: true, live: true },
+  // 绑定源到流程。写的是 **cs_source.FLOW_ID**（存量生产表），不是 cs_flow，单次上限 5000。
+  { path: 'flow/changeFlowBatch', desc: '批量关联 / 解绑源到流程（Body 版；flowId=0 为解绑）', danger: true, live: true },
 
   /* ── comm 导出（目标 1 / 收录 1） ── */
   { path: 'comm/export', desc: '导出' },

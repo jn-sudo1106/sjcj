@@ -36,6 +36,19 @@ describe('Phase 3.1 画布入口退役', () => {
     expect(redirect({ query: { siteId: '1' } })).toEqual({ path: '/tasks', query: { siteId: '1' } })
   })
 
+  // useActiveNavKey 拿 route.path 的第一段去 TABS 里查，查不到会静默回退 TABS[0]（采集资产总览）。
+  // 所以 key 与 path 段必须一致，否则那个模块的面包屑/侧栏高亮会指到别的模块，而且不报错。
+  it('每个 TAB 的 key 等于其 path 的第一段', () => {
+    const mismatched = TABS.filter((t) => t.key !== t.path.split('/')[1])
+    expect(mismatched.map((t) => `${t.key} ≠ ${t.path}`)).toEqual([])
+  })
+
+  it('流程中心走 /flows，面包屑能查到自己而不是回退到总览', () => {
+    const tab = TABS.find((t) => t.key === 'flows')
+    expect(tab?.label).toBe('流程中心')
+    expect(tab?.path).toBe('/flows')
+  })
+
   it('旧 /tools 路径兼容跳转到 /monitor，并保留查询条件', () => {
     const shell = router.options.routes.find((r) => r.path === '/')
     const monitorAlias = shell?.children?.find((r) => r.path === '/tools')
