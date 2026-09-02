@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { flowCenterApi, sourceApi, type FlowDefinition, type FlowRecord } from '@/api'
+import { configApi, flowCenterApi, type FlowDefinition, type FlowRecord, type Source } from '@/api'
 import { useFlowStore } from '@/stores/flow'
+import { rootStepForSource } from '@/views/FlowCanvas/canvas/flowModel'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
 import NodeInspector from '@/views/FlowCanvas/inspector/NodeInspector.vue'
 
@@ -52,38 +53,62 @@ function loadIntoWorkspace(flow: FlowRecord) {
 }
 
 /**
- * flowConf 为空时，按该流程**关联源的实际步骤**把画布还原出来。
+ * flowConf 为空时，按这个流程**自己的配置**（cs_config，configId=flowId）把画布还原出来。
  *
  * 背景：生产上 735 条流程是后端从 cs_config 整批灌进来的，flowConf 全是 null——但它们不是
- * 空流程，真实结构在 cs_item_config 里（节点 = 主配置 1 个 + 子步骤 N 个）。直接显示空画布
- * 等于告诉用户"这流程没内容"，而且一旦有人点保存，就把空定义写进去了。
+ * 空流程，真实结构在 cs_config/cs_item_config 里（起点节点 1 个 + 真实子步骤 N 个）。直接
+ * 显示空画布等于告诉用户"这流程没内容"，而且一旦有人点保存，就把空定义写进去了。
  *
- * 后端目前没有按 flow/config 查步骤的接口（nextConfigPaged 只认 sourceId），所以走两跳：
- * flowId → sourcePaged 取任一关联源 → 该源的 nextConfigPaged。
+ * 2026-09-02 后端上线 `nextConfigPaged?flowId=` 后联调验证过：这条查询恒不返回起点节点那
+ * 一行——不是接口没做全，是那一行天生不是 cs_item_config 的真实记录，是接口拿"当前查的
+ * 这个源自己的 configId"现算拼出来的（换个源查，name/url 全变，configId/mainConfig 却一直
+ * 相同）。既然 flowId=configId 对这批迁移数据是恒等式，起点节点该显示什么，直接问这个流程
+ * 自己的 `config/configDetail` 就有了——而且比"随手挑一个关联源顶替"更准：以前挑出来的
+ * 名字经常跟流程名对不上（比如 ins-adamgrant 流程挑到的某个关联源却叫 ins-Valuetainment），
+ * 换成这条以后不再要求这个流程必须有至少一个关联源（原来 sourceCnt=0 的流程直接放弃还原）。
  *
- * 🕗 待后端上线 `nextConfigPaged?flowId=`（2026-09-02 口头确认会加，字段沿用现有这套）后，
- *    这里可以收成一跳。改的时候注意两点，见 endpoints.ts 同名端点的注释：
- *    ① 一个流程挂 N 个源时是否会把步骤按源重复返回（要按 itemConfig 去重）；
- *    ② 还得有个 Source 才能喂 canvas.loadFromSource——真换成一跳的话，得先确认
- *       从步骤本身能不能拼出画布，或者仍然保留取一个源作为画布种子。
+ * `rootStepForSource(source)` 现成造一个"列表抓取"根节点，只要 `source.url`/`mainTable` 有值
+ * 就行，本来是给"全新源、还没配步骤"场景用的兜底，这里直接复用，构造一个不对应任何真实源的
+ * stub Source（`sourceId` 留空）。
+ *
+ * **不能指望 `buildSourceSeed` 自己的兜底分支触发**：那条分支只在 `steps.length === 0` 时才
+ * 退回 `rootStepForSource`——对"这个流程没有任何真实子步骤"的流程管用，但大多数存量流程是
+ * "有真实子步骤、缺的只是起点那一行"（flowId 模式天生不返回它），这种情况下 `steps` 非空，
+ * `buildSourceSeed` 会直接跳过 stub 起点，整个起点节点凭空消失（2026-09-02 真机对比 zqrb
+ * 流程 #1400832 的流程中心视图与它关联源的流程视图发现：后者靠 sourceId+svg 查询自带这一
+ * 行，前者整个没有）。所以起点节点必须在这里手动拼进 `steps` 数组最前面，不能依赖那条兜底。
  *
  * **刻意在 loadFromSource 之后清掉源上下文**：画布一旦挂上 sourceCtx，节点编辑会走步骤自动
- * 保存（item/next/*），那是在改那一个源的步骤，不是在改流程。这里只借它的结构，不接它的写路径。
+ * 保存（item/next/*）——这个 stub Source 连 sourceId 都是假的，更不能被当成真源写。
  */
-const derivedFromSource = ref<{ sourceId: string; name: string } | null>(null)
-async function deriveFromSourceSteps(flow: FlowRecord): Promise<boolean> {
-  if (!flow.sourceCnt) return false
-  const page = await sourceApi.sourcePaged({ flowId: flow.id, page: 1, size: 1 })
-  const source = page.list[0]
-  if (!source) return false
-  const steps = await sourceApi.sourceSteps(source.sourceId)
-  canvas.loadFromSource(source, steps)
+const derivedFromConfig = ref(false)
+async function deriveFromFlowConfig(flow: FlowRecord): Promise<boolean> {
+  const [config, steps] = await Promise.all([
+    configApi.configDetail(flow.id),
+    flowCenterApi.steps(flow.id),
+  ])
+  const stubSource: Source = {
+    sourceId: '',
+    name: config?.name || flow.name,
+    url: config?.url || '',
+    configId: flow.id,
+    mainTable: config?.entryTypeId || '',
+    owner: '',
+    state: 'C',
+  }
+  const rootStep = rootStepForSource(stubSource)
+  const seedSteps = rootStep ? [rootStep, ...steps] : steps
+  canvas.loadFromSource(stubSource, seedSteps)
+  // loadFromSource 把 FlowDef.id 设成了 source.sourceId（这里是空串，stub 源故意不担真源）——
+  // 流程 ID 必须显式纠正回来，不然「流程 XML」导出（flowId 要用于导入导出）会把它显示成空。
+  canvas.flowId = flow.id
   canvas.clearSourceCtx()
   canvas.clearSiteCtx()
   canvas.setFlowName(flow.name)
   name.value = flow.name
   canvas.markSaved()
-  derivedFromSource.value = { sourceId: source.sourceId, name: source.name || source.sourceId }
+  if (canvas.main.length <= 2) return false // 只有 start/end：配置和步骤都没给出任何真实节点
+  derivedFromConfig.value = true
   return true
 }
 
@@ -100,7 +125,7 @@ async function openFlowInWorkspace(flow: FlowRecord) {
   // 先用列表行把名字/头部铺上，画布等详情回来再填，避免闪一下旧流程的节点
   name.value = flow.name
   loadingDetail.value = true
-  derivedFromSource.value = null
+  derivedFromConfig.value = false
   try {
     const full = await flowCenterApi.detail(flow.id)
     if (reqId !== loadSeq) return
@@ -109,10 +134,10 @@ async function openFlowInWorkspace(flow: FlowRecord) {
       loadIntoWorkspace(record)
       return
     }
-    // 存量流程走这条：flowConf 空，但源上有真实步骤
-    const derived = await deriveFromSourceSteps(record).catch(() => false)
+    // 存量流程走这条：flowConf 空，但这个流程自己的 config/步骤有真实内容
+    const derived = await deriveFromFlowConfig(record).catch(() => false)
     if (reqId !== loadSeq) return
-    if (!derived) loadIntoWorkspace(record) // 确实没有关联源，那就是一张真空白画布
+    if (!derived) loadIntoWorkspace(record) // 配置和步骤都没给出内容，那就是一张真空白画布
   } catch (error) {
     if (reqId !== loadSeq) return
     // 取不到详情就不要拿空画布糊弄——那会让人以为流程是空的，一保存就真空了
@@ -176,10 +201,10 @@ async function applyToSource() {
     </header>
 
     <div v-if="loadingDetail" class="fd-loading" data-testid="flow-workspace-loading">正在加载流程定义…</div>
-    <!-- 还原态必须说明白：画布上这些节点还没写进流程本身，是照关联源的步骤画的。
+    <!-- 还原态必须说明白：画布上这些节点还没写进流程本身，是照这个流程自己的配置和步骤画的。
          不写这行的话，用户会以为流程里已经存着这份定义。 -->
-    <div v-if="!loadingDetail && derivedFromSource" class="fd-derived" data-testid="flow-derived-note">
-      该流程尚未保存画布定义，以下节点按关联源「{{ derivedFromSource.name }}」（{{ derivedFromSource.sourceId }}）的实际步骤还原，点「保存流程」后才会写入流程。
+    <div v-if="!loadingDetail && derivedFromConfig" class="fd-derived" data-testid="flow-derived-note">
+      该流程尚未保存画布定义，以下节点按这个流程自己的配置（#{{ flow?.id }}）还原，点「保存流程」后才会写入流程。
     </div>
     <div v-if="!loadingDetail" class="fd-workspace">
       <section class="fd-canvas" aria-label="流程节点">

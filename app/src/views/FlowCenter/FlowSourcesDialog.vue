@@ -96,7 +96,9 @@ function stateText(source: Source) {
               </div>
             </td>
             <td>{{ stateText(s) }}</td>
-            <!-- 步骤数 = sourcePaged 的 stepCnt（子步骤条数，不含主配置那一个节点） -->
+            <!-- 步骤数 = sourcePaged 的 stepCnt（真实子步骤条数，不含 nextConfigPaged 里那条
+                 按当前源现算出来的 itemConfig=0 起点行——那行不是 cs_item_config 的真实记录，
+                 见 endpoints.ts 里 item/next/nextConfigPaged 的注释） -->
             <td class="fs-muted">{{ s.stepCount == null ? '—' : s.stepCount }}</td>
             <td class="fs-muted">{{ s.dataCount == null ? '—' : s.dataCount.toLocaleString() }}</td>
             <td class="fs-muted">{{ s.lastTaskAt || '—' }}</td>

@@ -2087,6 +2087,23 @@ export const flowCenterApi = {
     })
     return ackFromApiResult(result)
   },
+  /**
+   * 这个流程自己的**真实**子步骤——不含起点节点：那一行天生不是 cs_item_config 的记录，
+   * 按 flowId 查询恒查不到（2026-09-02 逐字段对比 5 个不同源实测确认，见 endpoints.ts 里
+   * item/next/nextConfigPaged 的注释）。要还原完整画布得配合 configApi.configDetail(flowId)
+   * 拼出起点节点，FlowDetailDrawer.vue 的 deriveFromFlowConfig 就是这么用的。
+   * 子步骤记录自带 sourceId=-1（不挂在具体某个源上），stepFromLegacy 的 sourceId 兜底参数
+   * 用不上，传空串即可。
+   */
+  steps: async (flowId: string): Promise<Step[]> => {
+    const result = await request<unknown>('item/next/nextConfigPaged', { flowId }, {
+      method: 'GET',
+      httpEndpoint: 'item/next/nextConfigPaged',
+      httpParams: { flowId, page: 1, limit: 10000 },
+    })
+    const steps = sourceStepsFromLegacy(result, '')
+    return attachStepConfigDetails(steps)
+  },
 }
 
 // 子步骤（流程画布连线 = item/next）。未实现专属 mock，由 client fallback 回执。
