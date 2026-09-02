@@ -260,34 +260,30 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'file/fileProcess', desc: '文件后续处理', danger: true },
   { path: 'file/fileJsonPaged', desc: '原始 JSON 分页' },
 
-  /* ── flow 流程模板（目标 1 / 收录 5，含本系统流程持久化） ── */
+  /* ── flow 流程模板（目标 1 / 收录 5） ── */
+  // flow-template/list|detail|save 那套 localStorage 兼容存储（mockFlowTemplateList/Detail/Save）
+  // 已删除：2026-09-02 接了真实 cs_flow 后 flowCenterApi 全面改走 flow/flowPaged 等真实端点，
+  // flow-template/* 从那时起就没有任何调用方了。
+  // flow/save|load|list（这三个是更早的自造逻辑名，跟下面 cs_flow 真实端点里同名的 flow/saveFlow
+  // 等不是一回事）暂时留着——虽然代码里也没调用方了，但没在这次「删那三条」的范围内，
+  // 是否一起清理另外确认。
   { path: 'flow/templateCode', desc: '流程模板编码' },
   { path: 'flow/save', desc: '保存流程定义', impl: true },
   { path: 'flow/load', desc: '加载流程定义', impl: true },
   { path: 'flow/list', desc: '流程列表', impl: true },
   { path: 'flow/recommend', desc: '流程模板推荐（mock 意图匹配 / 二期 LLM 推荐）', impl: true },
   { path: 'flow/nodeAiChat', desc: '节点级 AI 对话（mock 关键词回复 / 二期 LLM，0701 问题八）', impl: true },
-  { path: 'flow-template/list', desc: '流程列表（临时兼容存储，版本化）', impl: true },
-  { path: 'flow-template/detail', desc: '流程详情（临时兼容存储，可指定版本）', impl: true },
-  { path: 'flow-template/save', desc: '保存流程（临时兼容存储）', impl: true },
 
   /* ── flow 真实流程表 cs_flow（2026-09-02 接入，路径照抄旧平台 src/api/flow.js） ── */
-  // 上面 flow/save|load|list 与 flow-template/* 全是本平台早期自造的逻辑名，只留给 mock；
-  // 真实后端的八条在下面，live 标在真实 path 上（markBatch / site/update 同款踩坑，别标错地方）。
-  //
-  // ⚠️ 这八条标 live 时**尚未做过真实联调验证**——匿名探测被登录过滤器 302 拦下，无法确认部署状态。
-  // 依据是旧平台已把 /config/flow-list「流程管理」菜单上线（router.config.js:41）、
-  // 且 api/flow.js 里这八条路径在跑，所以按存在处理。第一次连真机务必先走一遍读接口，
-  // 特别是确认 sourcePaged 认不认 flowId（见 flowCenterApi.sourcesOfFlow 的注释）。与 nextStep2 同款口径。
+  // 真实后端共八条，其中 flowList / updateFlowConf / changeFlowEnable 三条 2026-09-02 联调后
+  // 确认代码里没有任何调用方（flowCenterApi.list() 是拿 paged() 拼的；updateFlowConf 这种
+  // "只改 flowConf" 的专用端点从没被走过，保存永远用全量的 saveFlow；changeFlowEnable 没有
+  // 对应 UI，流程列表没有启停开关）——已删除注册，生产写白名单里配套的两条也一并删了
+  // （见 client.ts 同一次改动）。真要接这三个功能再照 flowPaged/saveFlow 的样子加回来。
   { path: 'flow/flowPaged', desc: '流程分页 + 多条件检索（不含 flowConf，含计算列 sourceCnt）', live: true },
   { path: 'flow/flowDetail', desc: '流程详情（含 flowConf 大字段与 sourceCnt）', live: true },
-  { path: 'flow/flowList', desc: '有效流程列表（下拉用，不含 flowConf）', live: true },
   { path: 'flow/saveFlow', desc: '新增 / 修改流程（不带 flowId = 新增）', danger: true, live: true },
-  { path: 'flow/updateFlowConf', desc: '仅更新流程定义 flowConf（画布保存）', danger: true, live: true },
   { path: 'flow/deleteFlow', desc: '批量删除流程（逻辑删除 is_delete=-1 + state=D）', danger: true, live: true },
-  // ⚠️ enable 极性与源相反：这里 0=启用 / 1=禁用，源的 changeEnable 同样是 0 启用——两边一致，
-  // 但与 cs_flow 自己的 is_delete=-1（已删除）三态并存，读代码时别混。
-  { path: 'flow/changeFlowEnable', desc: '批量启停流程（0 启用 / 1 禁用，仅改 is_delete）', danger: true, live: true },
   // 绑定源到流程。写的是 **cs_source.FLOW_ID**（存量生产表），不是 cs_flow，单次上限 5000。
   { path: 'flow/changeFlowBatch', desc: '批量关联 / 解绑源到流程（Body 版；flowId=0 为解绑）', danger: true, live: true },
 

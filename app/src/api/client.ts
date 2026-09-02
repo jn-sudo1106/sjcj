@@ -145,15 +145,18 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'item/next/stepModify',
   'item/next/enable',
   'item/next/delete',
-  // 2026-09-02 放开：流程（cs_flow）的全部写端点，为流程中心联调做准备。
+  // 2026-09-02 放开：流程（cs_flow）的写端点，为流程中心联调做准备。
   // 这批比清单里其它项破坏面小得多：cs_flow 是后端新建的表，且**执行链路根本没接**——
   // 旧平台 FlowList.vue 全页没有任何地方把 flowConf 下发/编译成 config，changeFlowBatch 也只是
   // 把 cs_source.FLOW_ID 置上而已，执行器不读它。所以写坏了不会影响任何在跑的采集任务。
   // saveFlow 新增与修改是同一个端点（不带 flowId = 新增）；deleteFlow 是逻辑删除（is_delete=-1 + state=D）。
+  //
+  // updateFlowConf / changeFlowEnable 两条 2026-09-02 联调后确认代码里没有调用方（见 endpoints.ts
+  // 同名端点的注释），连带从这份白名单删掉——留着一条没人调的写端点在生产白名单里，
+  // 是比端点表本身更容易被忽略的隐患：万一以后哪天真的接了、却没顺手核对这里，
+  // 反而是"看起来已经放行"，实际请求发出去才会被 ProductionWriteBlockedError 拦下。
   'flow/saveFlow',
-  'flow/updateFlowConf',
   'flow/deleteFlow',
-  'flow/changeFlowEnable',
   // ⚠️ 唯一一条写**存量生产表**的：changeFlowBatch 改的是 cs_source.FLOW_ID，不是 cs_flow，
   // 且单次上限 5000 条。虽然这个字段目前没有消费方，但它落在源表上，UI 侧必须保留二次确认 +
   // 明确展示影响条数，不要做成"勾一片直接绑"。
