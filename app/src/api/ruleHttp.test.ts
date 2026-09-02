@@ -167,6 +167,7 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
       targetTable: 'sense_data.TB_INDICATOR_DATA',
       inputFields: 'date:date,zb_value:zb_value',
       outputFields: 'end_date:end_date,indicator_data:indicator_data',
+      systemPrompt: '只返回 JSON',
     }, { onChunk: (delta) => received.push(delta) })
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
@@ -182,6 +183,7 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
       targetTable: 'sense_data.TB_INDICATOR_DATA',
       inputFields: 'date:date,zb_value:zb_value',
       outputFields: 'end_date:end_date,indicator_data:indicator_data',
+      systemPrompt: '只返回 JSON',
     })
     // 增量回调拼起来等于完整流文本（打字机效果的数据源）
     expect(received.join('')).toBe(streamText)

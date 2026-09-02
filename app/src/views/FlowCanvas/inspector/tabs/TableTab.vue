@@ -3,9 +3,9 @@
 // 0804 S2-2 拍板：规则节点的表/字段绑定从编排配置搬回这里，跟其他节点共用同一个 Tab——
 // 规则名称 = 节点名称（不再单独输入）；绑完输入/输出表与字段后即可进编排配置 Tab。
 // 非规则节点内容：输出表管理（采集类固定/可选）+ 非采集类产物明细三元表 + 表结构编辑弹窗。
-// 规则节点仍保留「保存并配置编排」：0831 data-process 生成脚本只认 configId，
-// 先在这里落 compose 并把 configId 临时回填 81947，再进编排配置 Tab。
-import { computed, reactive, ref, watch } from 'vue'
+// 规则节点表配置的保存按钮已移除（换数字 ruleId 改在编排配置第一次生成脚本时
+// 自动 orchestrationSaveMeta），表配置只负责绑表/字段。
+import { computed, reactive, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
@@ -13,8 +13,7 @@ import {
   fieldOptionsFromTableOrOutput, MONITOR_METHODS,
   type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, ruleApi, type RuleOrchestration } from '@/api'
-import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
+import { entryApi, type RuleOrchestration } from '@/api'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import TableEditDialog from '../TableEditDialog.vue'
 import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
@@ -37,26 +36,6 @@ function setMonitorMethods(values: string[]) {
   flow.setMonitorMethods(id.value, values ?? [])
 }
 
-// ---- 数据监控节点：保存时把「监控方法 + 输入表」拼成规则处理描述（2026-09-01）----
-// 格式：我想对{输入表名}进行如下监控：\n1.{方法1}\n2.{方法2}…，写入编排配置 Tab 的「规则处理描述」文本框。
-// 输入表名取业务名（EntryType.name），缺省退物理表名（tableName）——与 RuleTableFieldBinder 的表标签同口径。
-function buildMonitorDescribe(tableName: string, methods: string[]): string {
-  return [`我想对${tableName}进行如下监控：`, ...methods.map((m, i) => `${i + 1}.${m}`)].join('\n')
-}
-async function resolveMonitorTableName(): Promise<string> {
-  const tableId = ruleCfg.value.inputTableId?.trim()
-  if (!tableId) return ruleCfg.value.inputTable?.trim() || ''
-  // 优先用主壳已缓存的表清单（entryPaged）拿业务名，不在清单里再查详情，都拿不到退物理表名/tableId
-  const cached = tables.value.find((t) => t.tableId === tableId)
-  if (cached) return cached.name || cached.tableName
-  try {
-    const detail = await entryApi.entryDetail(tableId)
-    return detail?.name || detail?.tableName || ruleCfg.value.inputTable?.trim() || tableId
-  } catch {
-    return ruleCfg.value.inputTable?.trim() || tableId
-  }
-}
-
 // ---- 规则节点：表/字段绑定（0804 拍板：搬回表配置） ----
 const ruleCfg = computed<RuleOrchestration>(() => ({
   ...makeDefaultRuleOrchestration(),
@@ -69,47 +48,6 @@ function patchRule(p: Partial<RuleOrchestration>) {
   if (p.outputTableId !== undefined) flow.setOutputTable(id.value, p.outputTableId)
 }
 const { inputFieldOptions, outputFieldOptions } = useRuleTableFields(ruleCfg)
-
-const savingRule = ref(false)
-// 0831 临时：规则节点在后端的身份从 ruleId 换成了 configId（生成脚本调 /api/answer/data-process 只认
-// configId，见 RuleOrchestrationTab.vue 的守卫与请求体），而规则节点目前没有创建 Config 的通路
-// （updateConfig 不带 configId 不会建配置，copyAll 又需要可复制的源配置，W0-3 未落地）。
-// 保存业务规则后把节点 configId 固定写成 81947，让「当前配置」条不再显示「新建配置 · 未保存」、
-// 生成脚本的 configId 门禁能过。等 W0-3 建配置通路落地后替换为真实回填。
-const TEMP_RULE_NODE_CONFIG_ID = '81947'
-async function onSaveRuleMeta() {
-  const error = !cfg.value?.title?.trim() ? '请先在「节点配置」填写节点名称' : validateTableBinding(ruleCfg.value, { requireOutput: !isMonitor.value })
-  if (error) {
-    ElMessage.warning(error)
-    return
-  }
-  // 数据监控节点：把「监控方法 + 输入表」拼成规则处理描述，写入编排配置 Tab 的「规则处理描述」文本框
-  if (isMonitor.value) {
-    if (!monitorMethods.value.length) {
-      ElMessage.warning('请至少选择 1 个监控方法')
-      return
-    }
-    const tableName = await resolveMonitorTableName()
-    patchRule({ describe: buildMonitorDescribe(tableName, monitorMethods.value) })
-  }
-  savingRule.value = true
-  try {
-    const res = await ruleApi.orchestrationSaveMeta(ruleCfg.value)
-    patchRule({ mode: 'ref', ruleId: res.ruleId })
-    // 0831 临时：configId 固定回填 81947（见 TEMP_RULE_NODE_CONFIG_ID 注释）
-    flow.bindCopiedConfig(id.value, TEMP_RULE_NODE_CONFIG_ID, '')
-    // 表相关字段同步到 NodeConfig（0801 方案 §4.6）：节点侧存 tableId，不是物理表名
-    if (ruleCfg.value.inputTableId) flow.setInputTable(id.value, ruleCfg.value.inputTableId)
-    if (ruleCfg.value.outputTableId) flow.setOutputTable(id.value, ruleCfg.value.outputTableId)
-    ElMessage.success(res.message || '业务规则已保存')
-    flow.setActiveTab('orchestration')
-  } catch (e) {
-    ElMessage.error(`保存业务规则失败：${(e as Error)?.message ?? String(e)}`)
-  } finally {
-    savingRule.value = false
-  }
-}
-
 
 const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
 
@@ -257,11 +195,6 @@ async function onTableSaved(tableId: string) {
       >
         <el-option v-for="m in MONITOR_METHODS" :key="m" :label="m" :value="m" />
       </el-select>
-    </div>
-    <div class="rc-actions-row">
-      <button class="rc-btn primary" type="button" :disabled="savingRule" @click="onSaveRuleMeta">
-        {{ savingRule ? '保存中...' : '保存并配置编排' }}
-      </button>
     </div>
   </template>
 

@@ -126,7 +126,11 @@ async function loadPromptTemplate() {
       promptError.value = '提示词模板为空'
       return
     }
-    promptDraft.value = applyPromptTemplate(template, {
+    // 拼接后的完整提示词（角色定义+源表/入参+目标表/出参+核心逻辑+输出要求，占位符已替换为当前表/字段）。
+    // 同步写回父组件 orchCfg.systemPrompt：生成脚本（data-process）入参 systemPrompt 取的就是这个完整值，
+    // 确保即使用户没在工作台点「保存」，生成脚本时也能拿到拼接后的完整提示词而非种子默认值或未替换占位符的模板。
+    // 手动编辑的「取消不污染」仍由 savePrompt 显式 emit 保障——此处自动回写不算用户编辑。
+    const applied = applyPromptTemplate(template, {
       inputTableName: props.inputTableName?.trim() || '',
       outputTableName: props.outputTableName?.trim() || props.inputTableName?.trim() || '',
       inputFields: props.inputFields,
@@ -134,6 +138,8 @@ async function loadPromptTemplate() {
       inputFieldOptions: props.inputFieldOptions,
       outputFieldOptions: props.outputFieldOptions.length ? props.outputFieldOptions : props.inputFieldOptions,
     })
+    promptDraft.value = applied
+    emit('update:systemPrompt', applied)
   } catch (e) {
     if (seq !== promptRequestSeq) return
     promptError.value = `提示词模板加载失败：${(e as Error)?.message ?? String(e)}`

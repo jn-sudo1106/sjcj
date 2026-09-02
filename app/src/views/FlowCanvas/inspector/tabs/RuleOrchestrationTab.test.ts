@@ -132,6 +132,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
       outputTable: 'sense_data.TB_JD_SKU_RESULT',
       inputFields: ['sku_id'], outputFields: ['sku_name'],
       modelProviderCode: 'DeepSeek', modelCode: 'deepseek-chat',
+      systemPrompt: '生成 Python 脚本，返回 JSON',
     })
     flow.configs['rule-1'].configId = '184'
     return { flow, wrapper }
@@ -232,6 +233,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
       targetTable: 'sense_data.TB_JD_SKU_RESULT',
       inputFields: '商品ID:sku_id',
       outputFields: '商品名称:sku_name',
+      systemPrompt: '生成 Python 脚本，返回 JSON',
     }), expect.anything())
     expect(flow.configs['rule-1'].ruleCfg?.script).toContain('def main')
     expect(flow.configs['rule-1'].ruleCfg?.scriptPath).toBe('/rules/generated/orch-173.py')
@@ -306,7 +308,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
   })
 
   it('打开工作区后按提示词分类拉取模板并替换表配置占位符', async () => {
-    const { wrapper } = mountWithExistingRule()
+    const { flow, wrapper } = mountWithExistingRule()
     await flushPromises()
 
     const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
@@ -321,6 +323,10 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('出参=商品名称:sku_name')
     expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('入参码=sku_id')
     expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('出参码=sku_name')
+    // 拼接后的完整提示词同步写回 orchCfg.systemPrompt：生成脚本（data-process）入参 systemPrompt
+    // 取的就是这个完整值，无需用户在工作台点「保存」。
+    expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toContain('源表=sense_data.TB_JD_SKU_BASE')
+    expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toContain('入参=商品ID:sku_id')
   })
 
   it('工作区加载模型供应商与模型，并在工作区里不再显示测试按钮', async () => {

@@ -325,6 +325,7 @@ async function onGenerateScript(
         outputFields: genCfg.outputFields ?? [],
         inputFieldOptions: inputFieldOptions.value,
         outputFieldOptions: outputFieldOptions.value,
+        systemPrompt: genCfg.systemPrompt ?? '',
       }), {
         signal: controller.signal,
         onChunk: (delta) => {
