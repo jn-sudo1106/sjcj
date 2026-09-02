@@ -30,11 +30,12 @@ export async function fetchOssFile(path: string): Promise<ArrayBuffer> {
   return res.arrayBuffer()
 }
 
-export type PreviewKind = 'excel' | 'pdf' | 'image' | 'text' | 'none'
+export type PreviewKind = 'excel' | 'pdf' | 'image' | 'html' | 'text' | 'none'
 
 const EXCEL_EXT = new Set(['xlsx', 'xls', 'xlsm', 'csv'])
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
-const TEXT_EXT = new Set(['txt', 'json', 'xml', 'md', 'html', 'htm', 'log'])
+const HTML_EXT = new Set(['html', 'htm'])
+const TEXT_EXT = new Set(['txt', 'json', 'xml', 'md', 'log'])
 
 /**
  * 按扩展名决定用哪种预览器。
@@ -47,12 +48,15 @@ export function previewKindOf(ext?: string | null): PreviewKind {
   if (EXCEL_EXT.has(e)) return 'excel'
   if (e === 'pdf') return 'pdf'
   if (IMAGE_EXT.has(e)) return 'image'
+  if (HTML_EXT.has(e)) return 'html'
   if (TEXT_EXT.has(e)) return 'text'
   return 'none'
 }
 
 const MIME_BY_EXT: Record<string, string> = {
   pdf: 'application/pdf',
+  html: 'text/html;charset=utf-8',
+  htm: 'text/html;charset=utf-8',
   png: 'image/png',
   jpg: 'image/jpeg',
   jpeg: 'image/jpeg',

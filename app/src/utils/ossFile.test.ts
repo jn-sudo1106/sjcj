@@ -14,6 +14,8 @@ describe('previewKindOf', () => {
     expect(previewKindOf('.csv')).toBe('excel')
     expect(previewKindOf('pdf')).toBe('pdf')
     expect(previewKindOf('png')).toBe('image')
+    expect(previewKindOf('html')).toBe('html')
+    expect(previewKindOf('.HTM')).toBe('html')
     expect(previewKindOf('txt')).toBe('text')
   })
 
@@ -29,6 +31,7 @@ describe('mimeTypeOf', () => {
   // PDF 在 <iframe> 里整页显示 `%PDF-1.7 …` 二进制原文而不是渲染成文档。
   it('给 blob 用的 MIME，PDF 与图片都要有', () => {
     expect(mimeTypeOf('pdf')).toBe('application/pdf')
+    expect(mimeTypeOf('html')).toBe('text/html;charset=utf-8')
     expect(mimeTypeOf('.PDF')).toBe('application/pdf')
     expect(mimeTypeOf('jpg')).toBe('image/jpeg')
     expect(mimeTypeOf('jpeg')).toBe('image/jpeg')

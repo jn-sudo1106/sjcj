@@ -31,7 +31,7 @@ async function clickQuery(wrapper: { findAll: (s: string) => { text: () => strin
 }
 
 describe('FileView', () => {
-  // 文件列表现在挂在步骤列表之后（首查就要带首节点的 configId），步骤走 mock 通道有 120ms
+  // 文件列表现在挂在步骤列表之后（先判定是否支持节点筛选），步骤走 mock 通道有 120ms
   // 真实定时器，不打桩的话 flushPromises 追不上，列表会停在未加载态。
   beforeEach(() => vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([]))
   afterEach(() => vi.restoreAllMocks())
@@ -61,15 +61,14 @@ describe('FileView', () => {
       { stepId: '391007768-s2', sourceId: '391007768', name: '详情解析', configId: '1400765', enabled: true },
     ]
 
-    it('文件的 CONFIG_ID 能对上步骤时轨道可点，并按该步骤的 configId 查询', async () => {
+    it('文件的 CONFIG_ID 能对上步骤时轨道可点，首查仍展示该源全部文件', async () => {
       const bound = [{ ...files[0], configId: '1400765' }]
       const { wrapper, query } = await mountWith(bound, boundSteps)
 
-      expect(wrapper.find('[data-testid="file-rail-note"]').text()).toContain('点击节点')
+      expect(wrapper.find('[data-testid="file-rail-note"]').text()).toContain('默认展示该源全部文件')
       const rail = wrapper.findComponent({ name: 'ProcessNodeRail' })
       expect((rail.props('selectable') as () => boolean)()).toBe(true)
-      // 首节点是 s1，其 configId 为 1400774
-      expect(query.mock.calls.at(-1)?.[0]).toMatchObject({ configId: '1400774' })
+      expect(query.mock.calls.at(-1)?.[0].configId).toBeUndefined()
     })
 
     it('点击节点改选中并按该节点的 configId 重查（轨道的 update:modelValue 此前没接，点了没反应）', async () => {
@@ -95,8 +94,10 @@ describe('FileView', () => {
       expect(query.mock.calls.at(-1)?.[0].configId).toBeUndefined()
     })
 
-    it('节点下没有文件时不说"迁移数据"——那是另一回事', async () => {
+    it('主动按节点筛选后没有文件时不说"迁移数据"——那是另一回事', async () => {
       const { wrapper } = await mountWith([], boundSteps)
+      wrapper.findComponent({ name: 'ProcessNodeRail' }).vm.$emit('update:modelValue', '391007768-s1')
+      await flushPromises()
       expect(wrapper.find('[data-testid="file-rail-note"]').text()).toBe('该节点下暂无文件记录')
     })
   })

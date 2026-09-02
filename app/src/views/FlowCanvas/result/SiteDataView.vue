@@ -746,11 +746,19 @@ function onCellFile(path: string) {
     <SummaryDrawer v-model="summaryOpen" :table-meta="meta" :build-query="buildSummaryQuery" :hit-count="rows.length" />
   </main>
 
-    <el-dialog v-model="filePreview.visible" :title="filePreview.name || '文件预览'" width="820px" top="6vh" append-to-body>
+    <el-dialog
+      v-model="filePreview.visible"
+      :title="filePreview.name || '文件预览'"
+      width="92vw"
+      top="4vh"
+      :style="{ maxWidth: '1180px' }"
+      append-to-body
+    >
       <FilePreview
         :path="filePreview.path"
         :name="filePreview.name"
         :ext="extFromName(filePreview.name)"
+        style="height: min(72vh, 720px)"
         data-testid="site-data-cell-file-preview"
       />
     </el-dialog>

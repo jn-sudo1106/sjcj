@@ -1138,11 +1138,19 @@ function onCellFile(path: string) {
     <SnatchLauncher ref="snatchLauncher" />
   </main>
 
-    <el-dialog v-model="filePreview.visible" :title="filePreview.name || '文件预览'" width="820px" top="6vh" append-to-body>
+    <el-dialog
+      v-model="filePreview.visible"
+      :title="filePreview.name || '文件预览'"
+      width="92vw"
+      top="4vh"
+      :style="{ maxWidth: '1180px' }"
+      append-to-body
+    >
       <FilePreview
         :path="filePreview.path"
         :name="filePreview.name"
         :ext="extFromName(filePreview.name)"
+        style="height: min(72vh, 720px)"
         data-testid="data-cell-file-preview"
       />
     </el-dialog>

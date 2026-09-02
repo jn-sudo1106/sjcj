@@ -131,6 +131,8 @@ function onExcelError(e: unknown) {
         @error="onExcelError"
       />
       <iframe v-else-if="kind === 'pdf' && blobUrl" class="fp-frame" data-testid="file-preview-pdf" :src="blobUrl" title="PDF 预览" />
+      <!-- 采集到的页面属于不可信内容：用无权限 sandbox 渲染，既展示页面而不是源码，也禁止脚本接触应用。 -->
+      <iframe v-else-if="kind === 'html' && blobUrl" class="fp-frame" data-testid="file-preview-html" :src="blobUrl" sandbox="" referrerpolicy="no-referrer" title="HTML 预览" />
       <img v-else-if="kind === 'image' && blobUrl" class="fp-img" data-testid="file-preview-image" :src="blobUrl" :alt="name || '图片预览'" />
       <div v-else-if="kind === 'text'" class="fp-text" data-testid="file-preview-text">
         <div v-if="truncated" class="fp-hint">内容较长，仅显示前 2 MB</div>

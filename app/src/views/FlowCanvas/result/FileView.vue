@@ -19,6 +19,9 @@ const processLayout = computed(() =>
   buildHorizontalLayout(flow.main, flow.branches, flow.configs, flow.branchGroups, { includeTerminals: false }),
 )
 const selectedNodeId = ref('')
+// 首次打开先展示该源的完整文件集。流程轨道是用户主动收窄范围的入口，不能因为首节点被
+// 自动高亮就把它当作筛选条件；否则文件明明属于该源，却会在首节点没有产出时被全部隐藏。
+const nodeFilterActive = ref(false)
 
 // 文件与流程节点的归属关系（2026-08-22 生产实测确认）：
 // 文件行自带物理列 CONFIG_ID，它等于源子步骤的 Step.configId；而画布节点 ID 用的是
@@ -57,6 +60,7 @@ const railNote = computed(() => {
   if (!nodeFilterEnabled.value) {
     return '这些文件是迁移数据，未绑定本平台的流程节点，统一显示在首个步骤；新采集的文件会带上真实节点归属'
   }
+  if (!nodeFilterActive.value) return '默认展示该源全部文件；点击节点按产出该文件的步骤筛选'
   return rows.value.length === 0 && !loading.value ? '该节点下暂无文件记录' : '点击节点按产出该文件的步骤筛选'
 })
 
@@ -74,13 +78,15 @@ async function loadSteps() {
 watch(processLayout, (layout) => {
   selectedNodeId.value = layout.nodes[0]?.id ?? ''
 }, { immediate: true })
-// 选中节点变化时重新按该节点的 configId 查询；轨道只读时点不动，不会走到这里
-watch(selectedNodeId, () => {
+// 仅用户点击节点时开启 CONFIG_ID 筛选。即使用户点的是当前高亮的首节点，也要重新查询。
+function selectNode(nodeId: string) {
   if (!nodeFilterEnabled.value) return
+  selectedNodeId.value = nodeId
+  nodeFilterActive.value = true
   page.value = 1
   jumpPage.value = 1
   if (table.value) void loadList()
-})
+}
 
 type ResourceTable = Pick<DataTableMeta, 'tableId' | 'tableName'> & { name?: string; fields?: DataTableMeta['fields'] }
 const table = ref<ResourceTable | null>(null)
@@ -160,7 +166,7 @@ async function loadList(parentRequest = tableRequest) {
     fileName: filters.fileName || undefined,
     ext: filters.ext || undefined,
     sql: filters.sql || undefined,
-    configId: nodeFilterEnabled.value ? nodeToConfig.value.get(selectedNodeId.value) : undefined,
+    configId: nodeFilterActive.value && nodeFilterEnabled.value ? nodeToConfig.value.get(selectedNodeId.value) : undefined,
     page: page.value,
     size: size.value,
   }
@@ -235,8 +241,8 @@ function openDetail(file: FileResourceRecord) {
 watch(sourceId, () => {
   page.value = 1
   jumpPage.value = 1
-  // 先取步骤再查列表：首查就要带上首节点的 configId，否则第一屏是不带节点条件的全量，
-  // 跟轨道上的高亮对不上，用户看到的是"选了首节点却是全部文件"。
+  nodeFilterActive.value = false
+  // 先取步骤再查列表：步骤决定轨道是否支持节点筛选；首查始终只按源 ID 展示完整文件集。
   void loadSteps().then(() => loadResourceTable())
 }, { immediate: true })
 
@@ -286,7 +292,7 @@ function openPreview(file: FileResourceRecord) {
             :model-value="selectedNodeId"
             :layout="processLayout"
             :selectable="nodeSelectable"
-            @update:model-value="selectedNodeId = $event"
+            @update:model-value="selectNode"
           />
           <div class="fv-rail-note" data-testid="file-rail-note">{{ railNote }}</div>
         </div>
