@@ -11,7 +11,9 @@ import { useSourceStore } from '@/stores/source'
 import {
   assertStepsPersistable,
   isWritableStepId,
+  hasRealBranches,
   lastStepIdsFromCanvas,
+  persistableNodeIds,
   mergeStepForWrite,
 } from '@/utils/flow/stepPersist'
 
@@ -23,10 +25,30 @@ function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-function createTemplateFromPrev(prev: Step | undefined, sourceId: string, configId: string): Pick<Step, 'sourceId' | 'mainConfig' | 'url' | 'itemId' | 'flowCode' | 'nodeType'> {
+/**
+ * 新建步骤的模板：能从前置步骤继承的字段就继承，缺前置时按源级真值兜底。
+ *
+ * ⚠️ `mainConfig` **不能拿新节点自己的 configId 兜底**（2026-09-03 修）。它是"该步骤属于哪个源"
+ * 的锚点——`Source.mainConfig` 的注释写得很清楚：**同一源的所有步骤 mainConfig 相同**，
+ * 等于首步骤自身的 configId。`nextConfigPaged?sourceId=X` 就是靠它把步骤归到源名下的
+ * （cs_item_next 的 SOURCE_ID 恒为 -1，指望不上）。
+ *
+ * 之前这里写的是 `prev?.mainConfig ?? configId`：没有可落库前置时（prev 为 undefined），
+ * mainConfig 会被填成这个新节点自己的配置，步骤就挂在一个查不到的锚点上。
+ *
+ * ⚠️ **这是加固，不是已确认的故障根因。** 2026-09-03 线上报的
+ * 「新建步骤后无法唯一定位（匹配到 0 条）」尚未复现成功——按本假设写的用例在改前改后都通过，
+ * 说明那条路径走的是从 prev 继承，兜底分支没被触发。真正的根因还在查，别把这条当结论。
+ */
+function createTemplateFromPrev(
+  prev: Step | undefined,
+  sourceId: string,
+  configId: string,
+  sourceMainConfig: string | undefined,
+): Pick<Step, 'sourceId' | 'mainConfig' | 'url' | 'itemId' | 'flowCode' | 'nodeType'> {
   return {
     sourceId: prev?.sourceId ?? sourceId,
-    mainConfig: prev?.mainConfig ?? configId,
+    mainConfig: prev?.mainConfig ?? sourceMainConfig ?? configId,
     url: prev ? (prev.url ?? '$VAL$') : undefined,
     itemId: prev?.itemId,
     flowCode: prev?.flowCode,
@@ -54,7 +76,7 @@ export function useStepWrite() {
       cfg,
       nodeId,
       sourceId: sourceIdOf() || snapshot.sourceId,
-      lastStepIds: lastStepFromCanvas ? lastStepIdsFromCanvas(flow.main, nodeId) : undefined,
+      lastStepIds: lastStepFromCanvas ? lastStepIdsFromCanvas(flow.main, nodeId, flow.branchGroups) : undefined,
     })
     const ack = await itemApi.stepModify(step)
     assertOk(ack, '修改步骤失败')
@@ -66,10 +88,15 @@ export function useStepWrite() {
     if (!cfg?.configId) throw new Error(`节点「${cfg?.title || nodeId}」尚未绑定配置，无法新建步骤`)
     const sid = sourceIdOf()
     if (!sid) throw new Error('当前没有可保存的源')
-    const lastStepIds = lastStepIdsFromCanvas(flow.main, nodeId)
+    const lastStepIds = lastStepIdsFromCanvas(flow.main, nodeId, flow.branchGroups)
     const prevId = lastStepIds[0] !== '0' ? lastStepIds[0] : undefined
     const prev = prevId ? sourceStore.stepSnapshots[prevId] : undefined
-    const inherited = createTemplateFromPrev(prev, sid, cfg.configId)
+    // 源级锚点：优先用已有步骤的 mainConfig（同一源全都一样），其次用源自己的主配置。
+    // 两者都没有才退回节点自己的 configId——那是"这个源一个步骤都还没有"的首建场景。
+    const sourceMainConfig = Object.values(sourceStore.stepSnapshots).find((snap) => snap?.mainConfig)?.mainConfig
+      || flow.sourceCfg?.configId
+      || flow.sourceCtx?.configId
+    const inherited = createTemplateFromPrev(prev, sid, cfg.configId, sourceMainConfig)
     const step = mergeStepForWrite({
       snapshot: {
         ...inherited,
@@ -143,15 +170,25 @@ export function useStepWrite() {
     ElMessage.success('节点名称已保存')
   }
 
-  /** 自动保存：先新建缺 ID 的节点，再按画布回写已有步骤的名称/条件/lastStep。 */
+  /**
+   * 自动保存：先新建缺 ID 的节点，再按画布回写已有步骤的名称/条件/lastStep。
+   *
+   * ⚠️ **有真实分支的流程不重算 `lastStep`**（0903 YB-A 止血）。`buildSourceSeed` 目前把
+   * 子步骤一律拍成一条主链，分支流程在画布上是**假的直线**；据此重算前置会把
+   * 「40620 挂在 40597 下」改写成「挂在 40598 后面」，分支被静默拍平且不可逆。
+   * 名称、进入条件这些与拓扑无关的字段照常写。分支拓扑还原见 YB-B。
+   */
   async function persistFlowSteps(): Promise<{ created: number; updated: number }> {
     const sid = sourceIdOf()
     if (!sid) return { created: 0, updated: 0 }
-    assertStepsPersistable(flow.main, flow.configs)
+    assertStepsPersistable(flow.main, flow.configs, flow.branchGroups)
+    const branched = hasRealBranches(sourceStore.stepSnapshots)
     let created = 0
     let updated = 0
 
-    for (const id of [...flow.main]) {
+    // 0903 YB-B：遍历主链 **+ 各分支链**。只遍历 main 的话，分支里的节点改了名字会静默不保存
+    // ——界面显示"已保存"、后端没动，比拍平更难发现。
+    for (const id of persistableNodeIds(flow.main, flow.branchGroups)) {
       if (id === 'start' || id === 'end' || id === '0' || isWritableStepId(id)) continue
       const cfg = flow.configs[id]
       if (!cfg) continue
@@ -159,12 +196,14 @@ export function useStepWrite() {
       created += 1
     }
 
-    for (const id of flow.main) {
+    // 必须**重新取一遍**：createAndLocate 会把本地草稿 id 换成后端返回的真实 stepId
+    // （flow.rebindNodeId），沿用上面那份快照会拿着已经不存在的旧 id 去回写，新节点漏保存。
+    for (const id of persistableNodeIds(flow.main, flow.branchGroups)) {
       if (!isWritableStepId(id) || !flow.configs[id]) continue
       if (!sourceStore.stepSnapshots[id]) {
         throw new Error(`节点「${flow.configs[id].title || id}」缺少步骤快照，请刷新源后再保存`)
       }
-      await persistExisting(id, true)
+      await persistExisting(id, !branched)
       updated += 1
     }
 

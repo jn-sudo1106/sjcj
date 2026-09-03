@@ -148,7 +148,7 @@ export function legacySnatchSavePayloadFromFlow(
     sourceUrl: source?.url ?? sourceCfg?.url ?? loginCfg?.url ?? '',
     sourceName: source?.name ?? def.name,
     categoryId: source?.dirId ?? '',
-    proxy: source?.proxy ?? (useProxy ? '1' : ''),
+    proxy: source?.proxy ?? (useProxy ? ['1'] : undefined),
     keep: keep ? '1' : '',
     cron: sourceCfg?.cron ?? source?.cron ?? '',
     tags: source?.tags?.join(',') ?? '',

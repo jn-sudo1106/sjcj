@@ -89,7 +89,11 @@ const isSiteDetail = computed(() => !!route.query.siteId && !route.query.sourceI
 // v-else 的流程画布——URL 明明是 view=data，中间却要闪 240ms 流程视图（逐帧实测）。
 // 改成：有 sourceId 但 ctx 还没到位时渲染占位，不拿流程画布顶包。
 // 源之间互切不受影响（ctx 是上一个源，非空，照旧直接换）。
-const sourceMissing = ref(false)
+// 占位文案（2026-09-03 补）：原来只有「sourceDetail 正常返回 null」才会置成「源不存在」，
+// 请求本身抛异常（会话失效重定向、非 2xx、超时）时异常一路冒泡出 enterFromRoute 没人接，
+// 标志位保持初值，占位就永远停在「正在加载源…」——真实故障和加载中看起来一模一样。
+// 改成一个文案 ref：空串=加载中，非空=终态原因。
+const sourceLoadError = ref('')
 const awaitingSource = computed(() => !!route.query.sourceId && !flow.sourceCtx)
 const isDataView = computed(() => activeView.value === 'data' && !!flow.sourceCtx)
 const isTaskView = computed(() => activeView.value === 'task' && !!flow.sourceCtx)
@@ -113,6 +117,24 @@ const sidebarSiteId = computed(() => flow.sourceCtx?.siteId || String(route.quer
 // 网站详情页态下侧栏不应高亮任何具体源（内部代表源只是取数据用，不是用户在看的对象）
 const sidebarActiveKey = computed(() => (isSiteDetail.value ? '' : flow.sourceCtx?.sourceId ?? ''))
 async function confirmDiscardIfDirty(): Promise<boolean> {
+  // 没落库的草稿节点要单独说（0903）：`flow.dirty` 说的是"有改动"，而这里是**整个节点还不存在于
+  // 后端**——切走就永久没了，重进画布连痕迹都没有（buildSourceSeed 只认 sourceSteps 的步骤行）。
+  // 两种情况的后果差得远，提示不能共用一句"改动将丢弃"。
+  const draftId = firstUnboundDraftNodeId(flow.main, flow.configs)
+  if (draftId) {
+    const name = flow.configs[draftId]?.title || draftId
+    try {
+      await ElMessageBox.confirm(
+        `节点「${name}」还没有保存到后端，切换后会彻底消失——不是丢失改动，是整个节点没了。`
+        + '请先在右侧保存节点配置，等顶部显示「已保存」再切换。',
+        '有节点尚未保存',
+        { type: 'warning', confirmButtonText: '仍然切换', cancelButtonText: '返回保存' },
+      )
+      return true
+    } catch {
+      return false
+    }
+  }
   if (!flow.dirty) return true
   try {
     await ElMessageBox.confirm('当前画布有未保存的改动，切换将丢弃，是否继续？', '切换编排对象', {
@@ -183,15 +205,25 @@ async function loadSourceFlow(sourceId: string) {
   // item/next 子步骤里，没有"流程定义"这个接口），画布保存过一次后本地草稿会一直挡住
   // 真实拓扑，源改了/后端数据变了也看不出来。节点链始终来自真实的 sourceSteps。
   // flowSave 仍然写本地草稿（不在这里删），但不再当作这个源自己的真相。
-  sourceMissing.value = false
+  sourceLoadError.value = ''
   // 首屏不等 config/configDetail 那一轮（withConfigDetails: false）：它必须等 nextConfigPaged
   // 出 configId 才能发，串在前面等于白等一个 RTT。步骤先到先画，补充字段随后回填。
-  const [source, steps] = await Promise.all([
-    sourceApi.sourceDetail(sourceId),
-    sourceApi.sourceSteps(sourceId, { withConfigDetails: false }),
-  ])
+  let source: Source | null
+  let steps: Step[] | null
+  try {
+    ;[source, steps] = await Promise.all([
+      sourceApi.sourceDetail(sourceId),
+      sourceApi.sourceSteps(sourceId, { withConfigDetails: false }),
+    ])
+  } catch (error) {
+    // 异常不能再往外抛：调用方 enterFromRoute 的 promise 没人接，占位会永远停在「加载中」。
+    const detail = (error as Error)?.message ?? '网络异常'
+    sourceLoadError.value = `源加载失败：${detail}`
+    ElMessage.error(sourceLoadError.value)
+    return
+  }
   if (!source) {
-    sourceMissing.value = true
+    sourceLoadError.value = '源不存在或已被删除'
     ElMessage.error('源不存在')
     return
   }
@@ -460,8 +492,8 @@ onUnmounted(() => {
       />
       <div class="rc-canvas-main">
         <!-- key 用加载完成后的 ctx，避免切换时读到旧源数据。 -->
-        <div v-if="awaitingSource" class="rc-source-loading">
-          {{ sourceMissing ? '源不存在或已被删除' : '正在加载源…' }}
+        <div v-if="awaitingSource" class="rc-source-loading" :class="{ 'is-error': !!sourceLoadError }">
+          {{ sourceLoadError || '正在加载源…' }}
         </div>
         <SiteDetailView v-else-if="isSiteDetail" :key="sidebarSiteId" :site-id="sidebarSiteId" class="rc-flow-result" />
         <CompareSplit v-else-if="ws.compareSourceId" class="rc-flow-result" />
@@ -507,6 +539,7 @@ onUnmounted(() => {
 <style scoped>
 /* 两列骨架（0710 会议 B1）：高度收敛到 wrapper，一处管理页签条占位；子列全部 100% 撑满 */
 .rc-source-loading { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--rc-faint); font-size: 12px; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); }
+.rc-source-loading.is-error { color: var(--rc-error); }
 .rc-canvas-cols { display: flex; gap: 8px; align-items: stretch; height: calc(100vh - 168px); min-height: 600px; }
 .rc-canvas-cols.with-tabs { height: calc(100vh - 204px); min-height: 564px; }
 .rc-canvas-main { flex: 1; min-width: 0; min-height: 0; }

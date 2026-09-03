@@ -1,4 +1,12 @@
 <script setup lang="ts">
+// ⚠️ 死页面：**没有任何路由引用它**（`router/index.ts` 只挂了 `/flows` → `views/FlowCenter/index.vue`）。
+//
+// 0903 H24 确认「流程模板」保留为一等概念，但落点**不是**复活这个页面：模板是流程的一个
+// 属性（标记在流程上），模板与普通流程在同一个列表里用筛选区分，都在流程中心。
+// 再开一个"流程模板中心"就又回到了「配置中心 vs 流程中心」那种两套入口的老问题。
+//
+// 暂不删除：Y8-D 做流程模板管理时，这里的模板工作区交互（草稿/快照/切换确认）还可以参照。
+// **Y8-D 落地后应当删掉本文件**，不要让它一直躺在这儿被人误当成活代码改。
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { flowCenterApi, type FlowRecord, type FlowDefinition, type Site, type Source } from '../../api'

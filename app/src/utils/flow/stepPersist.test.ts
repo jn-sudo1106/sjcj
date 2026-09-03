@@ -4,10 +4,12 @@ import { cloneConfig, NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
 import {
   assertStepsPersistable,
   condExprOf,
+  hasRealBranches,
   isWritableStepId,
   lastStepIdsFromCanvas,
   mergeStepForWrite,
 } from './stepPersist'
+import type { Step } from '@/api'
 
 const MEASURED_40600 = stepFromLegacy({
   authConfig: null, bizType: null, cond: null, configId: 1400917, context: null,
@@ -149,6 +151,42 @@ describe('mergeStepForWrite', () => {
       entryTypeId: 6200026,
       outEntry: 6200026,
     })
+  })
+})
+
+// 0903 YB-A 止血：源 920663 的真实拓扑是 40597 ├─▶ 40598 / └─▶ 40620（两支同一前置），
+// 而画布把子步骤一律拍成直线。据画布重算 lastStep 会把 40620 从 40597 挪到 40598 后面——
+// 分支被静默拍平且不可逆。这组用例锁住"检测得出真分支"这件事，写回侧据此冻结 lastStep。
+describe('hasRealBranches（0903 YB-A）', () => {
+  const step = (stepId: string, dependsOn?: string[]): Step =>
+    ({ stepId, sourceId: '430016824', name: stepId, dependsOn, enabled: true }) as Step
+
+  it('两个步骤指向同一个前置 = 真分支', () => {
+    expect(hasRealBranches({
+      '40597': step('40597', ['0']),
+      '40598': step('40598', ['40597']),
+      '40620': step('40620', ['40597']),
+    })).toBe(true)
+  })
+
+  it('一条直链不是分支', () => {
+    expect(hasRealBranches({
+      '40597': step('40597', ['0']),
+      '40598': step('40598', ['40597']),
+      '40620': step('40620', ['40598']),
+    })).toBe(false)
+  })
+
+  it("多个步骤同为起点（lastStep='0'）不算分支——虚拟起点不是真实前置", () => {
+    expect(hasRealBranches({
+      a: step('a', ['0']),
+      b: step('b', ['0']),
+    })).toBe(false)
+  })
+
+  it('没有 dependsOn / 空快照都不算分支', () => {
+    expect(hasRealBranches({ a: step('a'), b: step('b') })).toBe(false)
+    expect(hasRealBranches({})).toBe(false)
   })
 })
 

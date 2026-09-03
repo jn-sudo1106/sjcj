@@ -48,7 +48,7 @@ import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats } from './monitor'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
-import { mockFlowSave, mockFlowLoad, mockFlowList, mockFlowRecommend, mockNodeAiChat } from './flows'
+import { mockFlowRecommend, mockNodeAiChat } from './flows'
 import {
   mockSitePaged,
   mockSiteSummary,
@@ -221,9 +221,6 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'overview/trend': mockOverviewTrend,
 
   // 流程定义持久化
-  'flow/save': mockFlowSave,
-  'flow/load': mockFlowLoad,
-  'flow/list': mockFlowList,
   'flow/recommend': mockFlowRecommend,
   'flow/nodeAiChat': mockNodeAiChat,
 

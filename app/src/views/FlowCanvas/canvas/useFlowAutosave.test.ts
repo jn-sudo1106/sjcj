@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises } from '@vue/test-utils'
+import { ElMessage } from 'element-plus'
 import { itemApi, sourceApi } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { FLOW_AUTOSAVE_MS, resetFlowAutosaveForTests, useFlowAutosave } from './useFlowAutosave'
@@ -79,12 +80,31 @@ describe('useFlowAutosave', () => {
     await vi.advanceTimersByTimeAsync(FLOW_AUTOSAVE_MS)
     expect(status.value).toBe('error')
     expect(modify).toHaveBeenCalledTimes(1)
+    // 0903：失败原来是个裸 catch，什么都不说——用户刚看过配置保存的绿色提示，
+    // 不会再去读头部那行小字，于是"保存成功了"就走了，节点其实根本没落库。
+    expect(vi.mocked(ElMessage.error)).toHaveBeenCalledWith(expect.stringContaining('写保护'))
     await vi.advanceTimersByTimeAsync(FLOW_AUTOSAVE_MS * 2)
     expect(modify).toHaveBeenCalledTimes(1)
     modify.mockResolvedValue({ ok: true, message: 'ok' })
     await flush()
     expect(modify).toHaveBeenCalledTimes(2)
     expect(status.value).toBe('saved')
+    unbind()
+  })
+
+  it('失败原因存进 lastError 供头部 title 展示，成功后清空', async () => {
+    const flow = loadTestSource()
+    const modify = vi.spyOn(itemApi, 'stepModify').mockRejectedValue(new Error('节点「X」尚未绑定配置，无法保存步骤'))
+    const { bind, unbind, lastError, flush } = useFlowAutosave()
+    bind()
+    flow.setTitle('40600', '改名')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(FLOW_AUTOSAVE_MS)
+    expect(lastError.value).toContain('尚未绑定配置')
+
+    modify.mockResolvedValue({ ok: true, message: 'ok' })
+    await flush()
+    expect(lastError.value).toBe('')
     unbind()
   })
 

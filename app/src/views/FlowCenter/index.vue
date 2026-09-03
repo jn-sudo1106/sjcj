@@ -1,6 +1,13 @@
 <script setup lang="ts">
 // 流程中心（0828 W6）：流程列表 + 可编辑流程工作区。
-// “配置中心/流程模板”不再作为用户概念；节点自身承载配置，内部 configId 只作技术标识。
+//
+// 「配置」不再作为独立的用户概念：节点自身承载配置，内部 configId 只作技术标识。
+// **但「流程模板」保留**（0903 H24，已与后端沟通）——它是取消"源内切换流程"之后，
+// 唯一保留的"流程从哪儿来"的入口。模板是流程的一个**属性**（标记在流程上），
+// 不是另一类对象：模板与普通流程在同一个列表里用筛选区分，不再开第二个中心页。
+// （`views/FlowTemplate/index.vue` 那个未被路由引用的死页面不会复活，见其文件头。）
+//
+// 这行注释此前写的是「配置中心/流程模板不再作为用户概念」，0903 会上推翻了后半句。
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { flowCenterApi, sourceApi, type FlowRecord } from '@/api'
@@ -174,13 +181,16 @@ async function confirmApply() {
       ElMessage.error('没有找到该源，请重新选择')
       return
     }
-    // 文案按真实语义改过，别再退回「全量替换流程节点」那版：changeFlowBatch 写的只是
-    // cs_source.FLOW_ID 这一个字段，**不动源现有的配置和子步骤**，执行器也不读这个字段
-    // （旧平台没有任何把 flowConf 下发成 config 的实现）。原来那版文案是 mock 时代的语义，
-    // 那时 flowApi.flowSave 会把合成后的流程写进本地存储，看着像"替换了节点"。
+    // ⚠️ 文案 2026-09-03 按后端答复重写。上一版写的是「这只记录关联关系，不会改动该源现有的
+    // 采集配置与步骤，也不会立即按此流程运行」——**那句已经是假话**：后端明确执行时按 FLOW_ID
+    // 反查后执行（「执行就按 flowID 去反选，去执行」），关联完就生效。配套口径见 0903 H01：
+    // 一个流程一套配置，可关联多个源，这些源**共用**它——所以关联之后改这个流程的配置，
+    // 会同时影响所有关联源。这是危险动作，必须在弹窗里说清楚。
+    //
+    // 多选关联（一次关联 N 个源）是 Y8-B，本次只修文案，交互仍是单选。
     await ElMessageBox.confirm(
       `将源「${source.name || source.sourceId}」关联到流程「${target.name}」。`
-      + '这只记录关联关系，不会改动该源现有的采集配置与步骤，也不会立即按此流程运行。继续？',
+      + '该源将共用此流程的配置并按它运行；此后修改这个流程的配置，会同时影响其它关联到它的源。继续？',
       '关联流程到源',
       { type: 'warning', confirmButtonText: '确认关联', cancelButtonText: '取消' },
     )

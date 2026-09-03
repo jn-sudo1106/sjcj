@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { DOMWrapper, flushPromises, shallowMount } from '@vue/test-utils'
+import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ResultView from './ResultView.vue'
@@ -56,6 +56,20 @@ const RowDetailFieldsStub = {
 }
 const FilePreviewStub = { name: 'FilePreview', props: ['path', 'name', 'ext'], template: '<div data-testid="data-cell-file-preview">{{ path }}</div>' }
 const STUBS = { CanvasHeader: true, ElDrawer: ElDrawerStub, ElDialog: ElDialogStub, ElPagination: true, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, FilePreview: FilePreviewStub, SummaryDrawer: true }
+
+function mountResultView() {
+  return shallowMount(ResultView, {
+    global: {
+      directives: { loading: {} },
+      // SnatchLauncher 需真实渲染：onSendFetch 通过它的 launch 走 loadParams→sendSnatchWithParam，
+      // 其孙级 SourceParamModal 在 shallowMount 下仍被桩（本测试只覆盖无参数的直发路径）。
+      //
+      // 0903 Y0-B：`teleport: false` 已去掉——它是给「发后续 ▾」那个 Teleport 到 body 的
+      // 展开面板准备的，面板随发本页/发大量两项一起删了，现在没有任何 Teleport 需要真实渲染。
+      stubs: { ...STUBS, SnatchLauncher },
+    },
+  })
+}
 
 describe('ResultView', () => {
   afterEach(() => {
@@ -326,27 +340,6 @@ describe('ResultView · 查询条件的执行时机（0819 N3 前置修复）', 
   })
 })
 
-function mountResultView() {
-  return shallowMount(ResultView, {
-    global: {
-      directives: { loading: {} },
-      // teleport: false——「发后续 ▾」的展开面板真实 Teleport 到 document.body 了
-      // （脱离 DataGrid 的 .dg-head 溢出裁剪盒子，见 ResultView.vue 里的说明），VTU
-      // 默认会把 <Teleport> 整个 stub 掉、内容根本不渲染，测不到真的点没点对。
-      // SnatchLauncher 需真实渲染：onSendFetch 通过它的 launch 走 loadParams→sendSnatchWithParam，
-      // 其孙级 SourceParamModal 在 shallowMount 下仍被桩（本测试只覆盖无参数的直发路径）。
-      stubs: { ...STUBS, teleport: false, SnatchLauncher },
-    },
-  })
-}
-// Teleport 出去的内容不在 wrapper 的 DOM 子树里，wrapper.get(...) 找不到，
-// 得直接查 document、用 DOMWrapper 包一层继续复用 .trigger()/.text() 这套 API。
-function teleported(selector: string) {
-  const el = document.querySelector(selector)
-  if (!el) throw new Error(`teleported element not found in document: ${selector}`)
-  return new DOMWrapper(el)
-}
-
 describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9）', () => {
   afterEach(() => vi.restoreAllMocks())
 
@@ -393,7 +386,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     expect(wrapper.find('[data-testid="data-scope-input"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
-    expect(wrapper.find('[data-testid="data-exec-more-toggle"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="data-exec-all-btn"]').exists()).toBe(true)
   })
 
   it('输入表===输出表（如规则处理节点）时，摘要行合并成一个 tab，不再有输入/输出切换（M3-0C 方案 A）；该 fixture 的 mid 已是末节点，0831 改成从上一节点重跑', async () => {
@@ -419,7 +412,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     expect(wrapper.findComponent({ name: 'DataGrid' }).exists()).toBe(true)
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
     expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('从上一节点重跑')
-    expect(wrapper.find('[data-testid="data-exec-more-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="data-exec-all-btn"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('发后续任务')
   })
 
@@ -787,7 +780,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
 
     expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
-    expect(wrapper.find('[data-testid="data-exec-more-toggle"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="data-exec-all-btn"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('已选 0 条')
 
     await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['d1', 'd2'])
@@ -829,7 +822,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     expect(wrapper.find('[data-testid="data-view-only-hint"]').exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
     expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
-    expect(wrapper.find('[data-testid="data-exec-more-toggle"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="data-exec-all-btn"]').exists()).toBe(true)
   })
 
   it('非首节点、有效输入表只有唯一消费者时：切到输入数据勾选行后可以发后续任务，调用 nextStep', async () => {
@@ -894,76 +887,13 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     await selectNode(wrapper, 'sink')
 
     expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('从上一节点重跑')
-    expect(wrapper.find('[data-testid="data-exec-more-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="data-exec-all-btn"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('发后续任务')
     const grid = wrapper.findComponent({ name: 'DataGrid' })
     expect(grid.exists()).toBe(true)
     expect(grid.props('selectable')).toBe(true)
     expect(grid.props('rows')).toHaveLength(2)
     expect(wrapper.find('.rv-tablecount').text()).toContain('行')
-  })
-
-  it('发本页任务（M3-0E）：不勾选也能一次性发当页全部行，并复用同一套回执解析', async () => {
-    vi.mocked(ElMessage.success).mockClear()
-    setActivePinia(createPinia())
-    const current = mockSourceDetail({ sourceId: '391007768' })!
-    const flow = useFlowStore()
-    loadExecFixture(flow, current)
-    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
-      total: 3,
-      list: [
-        { dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' },
-        { dataId: 'd2', sourceId: current.sourceId, title: 'B', summary: '', acceptState: 'pending' },
-        { dataId: 'd3', sourceId: current.sourceId, title: 'C', summary: '', acceptState: 'pending' },
-      ],
-    })
-    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
-    const nextStep = vi.spyOn(dataApi, 'nextStep').mockResolvedValue({ message: '本次发送:3 条, 结果:,ok_39025: [3条]' })
-
-    const wrapper = mountResultView()
-    await flushPromises()
-    await selectNode(wrapper, 'last')
-
-    // 「发本页任务」收进「发后续 ▾」下拉了，得先展开菜单才点得到（M3-0G 复议布局调整）。
-    await wrapper.get('[data-testid="data-exec-more-toggle"]').trigger('click')
-    // 旧平台「发本页任务」（sendNextCurPage）没有"先勾选"这个前置条件——不勾选任何行也能点。
-    const pageBtn = teleported('[data-testid="data-exec-page-btn"]')
-    expect((pageBtn.element as HTMLButtonElement).disabled).toBe(false)
-
-    await pageBtn.trigger('click')
-    await flushPromises()
-
-    expect(nextStep).toHaveBeenCalledWith(current.sourceId, 'T2', ['d1', 'd2', 'd3'])
-    expect(ElMessage.success).toHaveBeenCalledWith('已提交 3 条，3 条已进入下一步')
-  })
-
-  it('发本页任务成功后，若还有下一页则自动翻页；已是最后一页则停留原地', async () => {
-    setActivePinia(createPinia())
-    const current = mockSourceDetail({ sourceId: '391007768' })!
-    const flow = useFlowStore()
-    loadExecFixture(flow, current)
-    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
-      total: 25,
-      list: [{ dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' }],
-    })
-    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
-    vi.spyOn(dataApi, 'nextStep').mockResolvedValue({ message: '本次发送:1 条, 结果:,ok_39025: [1条]' })
-
-    const wrapper = mountResultView()
-    await flushPromises()
-    await selectNode(wrapper, 'last')
-    query.mockClear()
-
-    await wrapper.get('[data-testid="data-exec-more-toggle"]').trigger('click')
-    await teleported('[data-testid="data-exec-page-btn"]').trigger('click')
-    await flushPromises()
-
-    // total 25、每页 20，第 1 页发完确实还有第 2 页——应自动翻页重新查询。
-    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }))
   })
 
   it('发全部后续（M3-0G 复议）：走 nextStepBatch，硬编码 size=500000/start=0，带上当前筛选的 state/cond，不含 dataId/parentId', async () => {
@@ -983,8 +913,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     await wrapper.get('select.rv-input.st').setValue('E')
     await wrapper.get('input.rv-input.flex').setValue("K1 IS NULL")
 
-    await wrapper.get('[data-testid="data-exec-more-toggle"]').trigger('click')
-    await teleported('[data-testid="data-exec-all-btn"]').trigger('click')
+    await wrapper.get('[data-testid="data-exec-all-btn"]').trigger('click')
     await flushPromises()
 
     expect(nextStepBatch).toHaveBeenCalledWith({
@@ -994,97 +923,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     })
   })
 
-  it('发大量后续（M3-0G 复议）：打开面板会把「至该ID止」预填为当页最大 dataId', async () => {
-    setActivePinia(createPinia())
-    const current = mockSourceDetail({ sourceId: '391007768' })!
-    const flow = useFlowStore()
-    loadExecFixture(flow, current)
-    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
-      total: 3,
-      list: [
-        { dataId: '101', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' },
-        { dataId: '305', sourceId: current.sourceId, title: 'B', summary: '', acceptState: 'pending' },
-        { dataId: '204', sourceId: current.sourceId, title: 'C', summary: '', acceptState: 'pending' },
-      ],
-    })
-
-    const wrapper = mountResultView()
-    await flushPromises()
-    await selectNode(wrapper, 'last')
-
-    await wrapper.get('[data-testid="data-exec-more-toggle"]').trigger('click')
-    await teleported('[data-testid="data-exec-batch-toggle"]').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.find('[data-testid="data-sendmore-panel"]').exists()).toBe(true)
-    const endInput = wrapper.findAll('.rv-sendmore-field input').find((i) => (i.element as HTMLInputElement).placeholder === '不填则不限')!
-    expect((endInput.element as HTMLInputElement).value).toBe('305')
-  })
-
-  it('发大量后续（M3-0G 复议）：真实校验数量上限——旧平台"1-1W条"只是标签文字、代码里从没校验过，这里必须真拦', async () => {
-    setActivePinia(createPinia())
-    const current = mockSourceDetail({ sourceId: '391007768' })!
-    const flow = useFlowStore()
-    loadExecFixture(flow, current)
-    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
-    const nextStepBatch = vi.spyOn(dataApi, 'nextStepBatch').mockResolvedValue({ message: '已提交' })
-
-    const wrapper = mountResultView()
-    await flushPromises()
-    await selectNode(wrapper, 'last')
-    await wrapper.get('[data-testid="data-exec-more-toggle"]').trigger('click')
-    await teleported('[data-testid="data-exec-batch-toggle"]').trigger('click')
-    await flushPromises()
-
-    const sizeInput = wrapper.get('[data-testid="data-sendmore-size"]')
-    const submitBtn = wrapper.get('[data-testid="data-sendmore-submit"]')
-
-    await sizeInput.setValue('500000')
-    expect(wrapper.get('[data-testid="data-sendmore-error"]').text()).toContain('最多 10000 条')
-    expect((submitBtn.element as HTMLButtonElement).disabled).toBe(true)
-    await submitBtn.trigger('click')
-    expect(nextStepBatch).not.toHaveBeenCalled()
-
-    await sizeInput.setValue('0')
-    expect(wrapper.get('[data-testid="data-sendmore-error"]').text()).toContain('必须是 1 及以上的整数')
-
-    await sizeInput.setValue('abc')
-    expect(wrapper.get('[data-testid="data-sendmore-error"]').text()).toContain('必须是 1 及以上的整数')
-  })
-
-  it('发大量后续（M3-0G 复议）：数量合法时提交，走 nextStepBatch 并复用回执解析，成功后收起面板', async () => {
-    vi.mocked(ElMessage.success).mockClear()
-    setActivePinia(createPinia())
-    const current = mockSourceDetail({ sourceId: '391007768' })!
-    const flow = useFlowStore()
-    loadExecFixture(flow, current)
-    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
-    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
-    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
-    const nextStepBatch = vi.spyOn(dataApi, 'nextStepBatch').mockResolvedValue({ message: '本次发送:200 条, 结果:,ok_39025: [200条]' })
-
-    const wrapper = mountResultView()
-    await flushPromises()
-    await selectNode(wrapper, 'last')
-    await wrapper.get('[data-testid="data-exec-more-toggle"]').trigger('click')
-    await teleported('[data-testid="data-exec-batch-toggle"]').trigger('click')
-    await flushPromises()
-
-    await wrapper.get('[data-testid="data-sendmore-size"]').setValue('200')
-    await wrapper.get('[data-testid="data-sendmore-submit"]').trigger('click')
-    await flushPromises()
-
-    expect(nextStepBatch).toHaveBeenCalledWith(expect.objectContaining({ tableId: 'T2', sourceId: current.sourceId, size: 200, start: 0 }))
-    expect(ElMessage.success).toHaveBeenCalledWith('已提交 200 条，200 条已进入下一步')
-    expect(wrapper.find('[data-testid="data-sendmore-panel"]').exists()).toBe(false)
-  })
-
-  it('发全部后续/发大量后续失败时同样补上目标节点名（M3-0K 覆盖范围扩到批量接口，不止逐行/本页两个入口）', async () => {
+  it('发全部（当前条件）失败时同样补上目标节点名（M3-0K 覆盖范围扩到批量接口，不止逐行入口）', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
@@ -1098,8 +937,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     const wrapper = mountResultView()
     await flushPromises()
     await selectNode(wrapper, 'last')
-    await wrapper.get('[data-testid="data-exec-more-toggle"]').trigger('click')
-    await teleported('[data-testid="data-exec-all-btn"]').trigger('click')
+    await wrapper.get('[data-testid="data-exec-all-btn"]').trigger('click')
     await flushPromises()
 
     expect(ElMessage.error).toHaveBeenCalledWith(
@@ -1132,6 +970,63 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
 
     // size 变化后重新查询这条链路本身很薄（@size-change="runQuery"，一行调用），
     // runQuery 的正确性已经被"清空筛选"等其他测试路径间接覆盖，这里不重复验证。
+  })
+
+  // 0903 Y0-B 回归锁：发任务只留两档——「按勾选发」（data-exec-btn）和「按当前条件全部发」
+  // （data-exec-all-btn）。「发本页任务」「发大量后续」以及装它们的「发后续 ▾」下拉都已删除。
+  // 会上原话：「什么发本页发大量什么这是？不要把它全抄过来」。旧平台有这些按钮不是加回来的理由。
+  it('发任务只有两档，且不再有「发后续 ▾」下拉与发本页/发大量入口', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    loadExecFixture(useFlowStore(), current)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'first')
+
+    // 两档都在，且「发全部」是并排按钮而不是藏在下拉里（只剩一项还做成下拉是坏交互）
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.get('[data-testid="data-exec-all-btn"]').text()).toBe('发全部（命中 0 条）')
+
+    // 删掉的三个入口一个都不能回来
+    expect(wrapper.find('[data-testid="data-exec-more-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="data-exec-page-btn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="data-exec-batch-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="data-sendmore-panel"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('发本页')
+    expect(wrapper.text()).not.toContain('发大量')
+  })
+
+  // 0903：`nextStep2` 的参数里没有 dataId、更没有 parentId——填了这两个条件却照发，
+  // 发出去的是**整张表**，而按钮上写着"当前条件"。Y1 的「下级」跳转会自动填 父ID，
+  // 用户看到 5 行点「发全部」实际发几万条，所以这两个条件在场时必须禁用。
+  it('填了数据 ID / 父 ID 时「发全部」禁用，并说明该改用勾选', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    loadExecFixture(useFlowStore(), current)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    const batch = vi.spyOn(dataApi, 'nextStepBatch')
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'first')
+
+    const btn = () => wrapper.get('[data-testid="data-exec-all-btn"]')
+    expect(btn().attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('.rv-input.id').setValue('8809116')
+    await flushPromises()
+    expect(btn().attributes('disabled')).toBeDefined()
+    expect(btn().attributes('title')).toContain('不支持按数据 ID')
+
+    await btn().trigger('click')
+    await flushPromises()
+    expect(batch).not.toHaveBeenCalled()
   })
 
   it('发后续任务真实回执解析（M3-0J）：全部被目标节点进入条件拒绝时弹 warning，不能显示成功', async () => {

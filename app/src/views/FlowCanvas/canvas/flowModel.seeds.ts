@@ -838,6 +838,8 @@ function templateKeyForStep(step: Step, index: number): string {
 }
 
 /** 按 dependsOn（旧 lastStep）做稳定拓扑排序；无依赖或循环时保持接口返回顺序。
+ *  ⚠️ **排序 ≠ 拓扑**：这里只保证父节点排在子节点前面，不表达分叉。真实拓扑（主链 + 分支分组）
+ *  由 buildSourceSeed 另行按 dependsOn 构造（0903 YB-B）。
  *  注意 dependsOn 只是前置步骤 ID，不是 contextMap——后者是任务上下文字段（旧 context 字段），
  *  两者曾被误合并进同一个字段，2026-08-26 生产实测（源 430016821）后拆开，见 legacyAdapters.stepFromLegacy。 */
 function orderSourceSteps(steps: Step[]): Step[] {
@@ -1000,23 +1002,109 @@ export function applyStepDetails(
  * 源 → 链路种子（纯函数，从 flow store 的 loadFromSource 提取）：把源的子步骤编译为画布节点。
  * 分屏对比（Phase 5）用它独立构造第二栏的链路，不依赖/不污染全局 flow store。
  */
+/**
+ * 按 `dependsOn`（旧 `lastStep`）建真实拓扑（0903 YB-B）。
+ *
+ * **在此之前这里把子步骤一律推进 `main`、`branchGroups` 恒为空**，有分支的历史流程被画成
+ * 直线。真实源 920663 长这样：
+ *
+ * ```
+ * 920663 ──▶ 40597 ├─ _from=='api' && ... ──▶ 40598
+ *                  └─ K24=="正文抓取失败" ──▶ 40620
+ * ```
+ *
+ * **分叉点用的是那个普通采集节点本身当 `ownerId`，不合成决策节点。** 理由：
+ *   - 机制本来就不要求 owner 是结构节点（`buildHorizontalLayout` 只做 `hbranchGroupByOwner[id]`
+ *     查表、`branchGroupEntryIds` 只按 ownerId 找，都不检查 `isDecision`）；
+ *   - 合成节点会引入一个旧平台不存在、也没有 `itemConfig` 可落库的虚拟节点，还会在数据视图
+ *     的节点轨道上多出一个点不出数据的节点；
+ *   - 条件的归属不一样：我们的决策节点条件属于**分支**（`branch.condition`），旧平台条件属于
+ *     **目标步骤自己**（`entryCondition`，只有一个前驱时同样存在）。硬套等于把语义搬家，
+ *     两处都有值之后改一处必须同步另一处。旧平台也没有 ELSE 概念。
+ *
+ * 已知限制：**分支链内部再分叉（嵌套分叉）仍然会被拍平**——`buildHorizontalLayout` 只对
+ * `visibleMain` 上的节点查 owner，chain 里的 owner 画不出来。嵌套分叉的流程仍受
+ * `hasRealBranches` 的写回冻结保护（stepPersist.ts），不会被改坏，只是画得不准。
+ */
+function realParentOf(step: Step, known: Set<string>): string | undefined {
+  return (step.dependsOn ?? []).find((id) => id && id !== '0' && known.has(id))
+}
+
+/** 从某个步骤起沿单后继往下串；遇到嵌套分叉就把其后代按序摊平进同一条链（见上方限制说明）。 */
+function chainFrom(startId: string, childrenOf: Map<string, string[]>, placed: Set<string>): string[] {
+  const chain: string[] = []
+  const queue = [startId]
+  while (queue.length) {
+    const id = queue.shift()!
+    if (placed.has(id)) continue
+    placed.add(id)
+    chain.push(id)
+    queue.unshift(...(childrenOf.get(id) ?? []))
+  }
+  return chain
+}
+
 export function buildSourceSeed(source: Source, steps: Step[]): {
   main: string[]
   branches: import('./flowModel').BranchSeed[]
   configs: Record<string, NodeConfig>
+  branchGroups: import('./flowModel').FlowBranchGroup[]
 } {
   const configs: Record<string, NodeConfig> = {}
-  const main: string[] = ['start']
   const sourceSteps = steps.length ? orderSourceSteps(steps) : (rootStepForSource(source) ? [rootStepForSource(source)!] : [])
-  sourceSteps.forEach((step, i) => {
-    configs[step.stepId] = buildNodeForStep(source, step, i)
-    main.push(step.stepId)
-  })
+  sourceSteps.forEach((step, i) => { configs[step.stepId] = buildNodeForStep(source, step, i) })
+
+  const known = new Set(sourceSteps.map((step) => step.stepId))
+  const childrenOf = new Map<string, string[]>()
+  const roots: string[] = []
+  for (const step of sourceSteps) {
+    const parent = realParentOf(step, known)
+    if (parent) childrenOf.set(parent, [...(childrenOf.get(parent) ?? []), step.stepId])
+    else roots.push(step.stepId)
+  }
+
+  const main: string[] = ['start']
+  const branchGroups: import('./flowModel').FlowBranchGroup[] = []
+  const placed = new Set<string>()
+  // 主链：从第一个根节点沿**单后继**一路走，遇到分叉就停——旧平台的步骤没有汇合点概念
+  // （每个步骤只有一个 lastStep），分叉之下的一切都归各自的分支链。
+  let cursor: string | undefined = roots[0]
+  while (cursor && !placed.has(cursor)) {
+    placed.add(cursor)
+    main.push(cursor)
+    const owner: string = cursor
+    const kids: string[] = childrenOf.get(owner) ?? []
+    if (kids.length <= 1) {
+      cursor = kids[0]
+      continue
+    }
+    branchGroups.push({
+      ownerId: owner,
+      branches: kids.map((kid: string, i: number) => ({
+        id: `${owner}-b${i + 1}`,
+        // 分支名取目标步骤名：旧平台没有分支标签这个东西，拿目标节点名当标签最接近事实
+        label: configs[kid]?.title || `分支 ${i + 1}`,
+        // condition 刻意**不填**：条件属于目标步骤自己（configs[kid] 上的 entryCondition），
+        // 复制一份到分支上就有了两个真值来源，改一处必须同步另一处。连线上的条件文案由
+        // 渲染侧从目标节点读，不在这里搬家。
+        chain: chainFrom(kid, childrenOf, placed),
+      })),
+    })
+    cursor = undefined
+  }
+  // 兜底：`dependsOn` 指向集合外步骤的孤儿、以及成环时走不到的节点，一个都不能丢——
+  // 画得不准可以接受，节点凭空消失不行。
+  for (const step of sourceSteps) {
+    if (!placed.has(step.stepId)) {
+      placed.add(step.stepId)
+      main.push(step.stepId)
+    }
+  }
   main.push('end')
   // 节点链严格来自 item/next 的真实子步骤，不按源名称猜测补节点：
   // 这里曾按 /规则/ 匹配源名插入一个「规则处理」节点（演示期遗留），会让存量源的画布
   // 与旧平台拓扑不一致，且该虚构节点会混入流程保存结果。2026-08-26 移除。
-  return { main, branches: [], configs }
+  return { main, branches: [], configs, branchGroups }
 }
 
 /**

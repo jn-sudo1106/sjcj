@@ -32,7 +32,11 @@ import {
 } from './useSourceLaunch'
 
 const props = defineProps<{ currentSiteId: string }>()
-const emit = defineEmits<{ openSource: [source: Source] }>()
+const emit = defineEmits<{
+  openSource: [source: Source]
+  /** 点「数据量」这个数字（0903 Y1-15）：进这个源的数据视图，而不是流程视图 */
+  openSourceData: [source: Source]
+}>()
 
 // UI 状态筛选：停用是启停字段（enable=1），不是旧接口没有的 state=disabled，
 // 正常/运行中/异常需要额外带 enable=0 排除已停用记录（方案 §5.4 状态请求映射表）。
@@ -760,7 +764,20 @@ watch(() => props.currentSiteId, () => {
                 </span>
               </button>
             </td>
-            <td>{{ source.dataCount ?? '—' }}</td>
+            <!-- 数据量做成可点（0903 H11/Y1-15）：源视图是统计层、数据视图是明细层，
+                 会上「这个 7 代表着这个圆下面有 7 条数据」——那这个数字本身就该是入口。
+                 样式与数据视图里的「下级」条数保持一致（同为"点数字下钻一层"）。 -->
+            <td>
+              <button
+                v-if="source.dataCount"
+                class="sov-link sov-count-link"
+                type="button"
+                data-testid="source-data-count"
+                :title="`查看这 ${source.dataCount} 条数据`"
+                @click="emit('openSourceData', source)"
+              >{{ source.dataCount }}</button>
+              <template v-else>{{ source.dataCount ?? '—' }}</template>
+            </td>
             <td>{{ source.newInCount ?? '—' }}</td>
             <td>{{ source.successCount ?? '—' }}</td>
             <td>{{ source.lastTaskAt || '—' }}</td>
@@ -851,6 +868,7 @@ watch(() => props.currentSiteId, () => {
 .sov-empty { padding: 42px !important; text-align: center !important; color: var(--rc-faint) !important; }
 .sov-check-col { width: 34px; text-align: center; }
 .sov-check-col input { cursor: pointer; accent-color: var(--rc-primary); margin: 0; }
+.sov-count-link { font-weight: 600; }
 .sov-table tbody tr.picked { background: var(--rc-primary-bg); }
 .sov-batch-count { font-weight: 700; color: var(--rc-primary-ink); }
 .sov-mark-anchor { position: relative; }

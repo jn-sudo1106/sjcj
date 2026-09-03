@@ -270,17 +270,16 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'file/fileProcess', desc: '文件后续处理', danger: true },
   { path: 'file/fileJsonPaged', desc: '原始 JSON 分页' },
 
-  /* ── flow 流程模板（目标 1 / 收录 5） ── */
+  /* ── flow 自造逻辑端点（只剩推荐与节点 AI 两条） ── */
   // flow-template/list|detail|save 那套 localStorage 兼容存储（mockFlowTemplateList/Detail/Save）
   // 已删除：2026-09-02 接了真实 cs_flow 后 flowCenterApi 全面改走 flow/flowPaged 等真实端点，
   // flow-template/* 从那时起就没有任何调用方了。
-  // flow/save|load|list（这三个是更早的自造逻辑名，跟下面 cs_flow 真实端点里同名的 flow/saveFlow
-  // 等不是一回事）暂时留着——虽然代码里也没调用方了，但没在这次「删那三条」的范围内，
-  // 是否一起清理另外确认。
-  { path: 'flow/templateCode', desc: '流程模板编码' },
-  { path: 'flow/save', desc: '保存流程定义', impl: true },
-  { path: 'flow/load', desc: '加载流程定义', impl: true },
-  { path: 'flow/list', desc: '流程列表', impl: true },
+  //
+  // flow/save|load|list|templateCode 这四条 2026-09-03（Y0-7）一并删除：它们是更早的自造逻辑名，
+  // 跟下面 cs_flow 真实端点里的 flow/saveFlow 等不是一回事，且 grep 确认已无任何调用方
+  // （flowApi.flowSave/flowLoad/flowList 三个门面方法同批删除）。
+  // 注意 mock 层的 mockFlowSave/mockFlowLoad **函数本体保留**——api/mock/sites.ts 的建站/克隆
+  // 逻辑内部还在直接调它们，只是不再作为端点对外注册。
   { path: 'flow/recommend', desc: '流程模板推荐（mock 意图匹配 / 二期 LLM 推荐）', impl: true },
   { path: 'flow/nodeAiChat', desc: '节点级 AI 对话（mock 关键词回复 / 二期 LLM，0701 问题八）', impl: true },
 

@@ -1,4 +1,4 @@
-import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError, isMockMode, isProductionCreateEnabled, type RequestOptions } from './client'
+import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError, isMockMode, isProductionBackend, isProductionCreateEnabled, type RequestOptions } from './client'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readLoginUsername, readStoredToken, triggerSessionExpired } from './auth'
 import { createSseEventParser } from '@/utils/stream/sse'
 import type {
@@ -87,8 +87,28 @@ function unwrapTaskInstPage(result: unknown): { total: number; list: TaskInst[] 
   return { total, list: list.map(taskInstFromLegacy) }
 }
 
+/**
+ * snatchSave 的空值剥离（2026-09-03 生产实测两次踩雷后加）。
+ *
+ * 旧平台 SourceBuildForm 的 form 里，没填的字段是 `undefined`，`JSON.stringify` 直接丢掉——
+ * **后端从来没收到过这些 key**，于是它对空值毫无防御。我们这边照着"补齐字段"的直觉一律发 `''`，
+ * 每个都会在后端炸开，而且 Jackson/Spring 是遇到第一个就抛，只能一颗一颗踩：
+ *   - `proxy: ''`  → `Cannot coerce empty String ("") to element of ArrayList<String>`（DTO 是 List）
+ *   - `cron: ''`   → `Cron expression must consist of 6 fields (found 0 in "")`
+ * 后面还排着 `keep` / `loginTemplete` / `tags` / `sourceUrl`，同样是旧平台压根不发的字段。
+ *
+ * 所以不逐个补，在唯一发送点统一剥掉 `undefined` 和 `''`，等价于旧平台的行为。
+ * ⚠️ 空数组要留着：`params: []` 是旧平台**确实会发**的（parseParamObj(undefined) 返回 `[]`），
+ * 而 proxy 不用代理时由构造方给 `undefined`，不是 `[]`。
+ */
+function stripEmptyForSnatchSave(payload: LegacySnatchSaveRequest): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(payload as unknown as Record<string, unknown>).filter(([, v]) => v !== undefined && v !== ''),
+  )
+}
+
 async function legacySnatchSaveRequest(payload: LegacySnatchSaveRequest, options: Pick<RequestOptions, 'mode'> = {}): Promise<LegacySnatchSaveResult> {
-  const result = await request<LegacySnatchSaveResult>('snatch/snatchSave', payload as unknown as Record<string, unknown>, {
+  const result = await request<LegacySnatchSaveResult>('snatch/snatchSave', stripEmptyForSnatchSave(payload), {
     method: 'POST',
     httpEndpoint: 'snatch/snatchSave',
     ...options,
@@ -272,7 +292,7 @@ function legacySnatchSavePayloadFromSource(site: Site, source: Source): LegacySn
     sourceUrl: source.url ?? '',
     sourceName: source.name,
     categoryId: source.dirId ?? site.dirId ?? '',
-    proxy: source.proxy ?? (source.useProxy ? '1' : ''),
+    proxy: source.proxy ?? (source.useProxy ? ['1'] : undefined),
     keep: source.resume ? '1' : '',
     cron: source.cron ?? '',
     tags: source.tags?.join(',') ?? '',
@@ -715,8 +735,19 @@ export const siteApi = {
    */
   siteCreate: async (site: Site, sources: Source[] = []): Promise<SiteCreateResult> => {
     if (!isProductionCreateEnabled()) {
-      if (isMockMode()) {
+      // 已连生产后端却没开新建闸时，**不能**退回 mock（2026-09-03 实测踩到）：mock 只在浏览器本地
+      // 落库并回一个前端自造的假 ID（`site-123456` / `src-654321`，见 NewSiteWizard.suggestId），
+      // 而读取侧的 source/sourceDetail、item/next/nextConfigPaged、site/sources 都已经是 live，
+      // 拿假 ID 打真实后端必然查不到 —— 表现是画布卡在「正在加载源…」、侧栏「该网站暂无源」，
+      // 用户还以为建成功了。宁可当场拒绝，也别造出一个只有自己看得见的网站。
+      if (isMockMode() && !isProductionBackend()) {
         return assetMockRequest<SiteCreateResult>('site/createSite', { site, sources })
+      }
+      if (isMockMode()) {
+        return {
+          ok: false,
+          message: '当前已连生产后端但未开启新建通道：mock 只会造出查不到的假 ID。请以 VITE_SITE_CREATE_TARGET=production 启动后重试',
+        }
       }
       return { ok: false, message: '新建网站仅允许生产环境，请设置 VITE_SITE_CREATE_TARGET=production' }
     }
@@ -2042,9 +2073,6 @@ export const overviewApi = {
 
 // 流程定义持久化（流程画布保存 / 加载 / 多流程）
 export const flowApi = {
-  flowSave: (def: FlowDef) => request<Ack>('flow/save', { def }),
-  flowLoad: (id: string) => request<FlowDef | null>('flow/load', { id }),
-  flowList: () => request<{ id: string; name: string; updatedAt: string }[]>('flow/list'),
   flowRecommend: (prompt: string, intent?: string) =>
     request<FlowRecommendation>('flow/recommend', { prompt, intent }),
   // 节点级 AI 对话（0701 问题八）：mock 关键词回复，二期换真 LLM BFF，签名不变
@@ -2054,15 +2082,22 @@ export const flowApi = {
 
 /**
  * 流程中心正式 API 门面。2026-09-02 起接真实 `cs_flow`（/v1/flow/*），不再走 flow-template mock。
- * 业务代码只依赖 FlowRecord/FlowSaveInput，不扩散“流程模板”概念。
+ * 业务代码只依赖 FlowRecord/FlowSaveInput。「流程模板」是流程上的一个标记（0903 H24，字段待后端
+ * 答复 H7 后补），不是另一类对象，也不另起一套端点——读写都走 flowPaged / flowDetail / saveFlow。
  *
  * 三件事先记在这儿，免得后面按旧印象改坏：
  * 1. **没有版本**。0818 B4 要的版本化后端没做，`detail` 也就没有 version 入参了（原来那个参数
  *    只有 mock 认，真实后端不认）。见 FlowRecord.version 的注释。
  * 2. **列表不含 flowConf**。flowPaged / flowList 都不返回大字段，所以列表里每条的 definition
  *    是空流程；要画布结构必须单独 `detail(id)`。
- * 3. **绑定不驱动执行**。changeFlowBatch 只把 cs_source.FLOW_ID 置上，旧平台没有任何地方把
- *    flowConf 下发成 config，执行器不读它。绑了流程 ≠ 源会按这个流程跑。
+ * 3. **绑定即生效**（2026-09-03 后端答复订正）。执行时**按 `FLOW_ID` 反查后执行**——后端原话
+ *    「执行就按 flowID 去反选，去执行」。所以 changeFlowBatch 把 cs_source.FLOW_ID 置上之后，
+ *    这批源就会按该流程的那套配置跑，**不需要**再把 flowConf 下发成 config、也不需要顺带写
+ *    CONFIG_ID。配套口径见 0903 H01：一个流程一套配置，可以关联很多源，这些源**共用**它。
+ *
+ *    ⚠️ 这一条此前写的是「绑定不驱动执行……执行器不读它。绑了流程 ≠ 源会按这个流程跑」，
+ *    那是 mock 时代的推断，**已被后端答复推翻**。不要按旧注释的前提改代码——尤其别再去实现
+ *    "把流程实例化到每个源"那套：配置本来就挂在流程上，不需要为每个源复制一份。
  */
 export const flowCenterApi = {
   /**
