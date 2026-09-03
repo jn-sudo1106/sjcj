@@ -1284,6 +1284,18 @@ export const ruleApi = {
     return ruleOrchestrationSaveScriptFromLegacy(result, ruleCfg)
   },
 
+  // 2026-09-03：规则脚本工作区「保存脚本」按钮对接 POST /api/file/upload?fileId=<脚本路径>
+  // body={"body":"<脚本内容>"}，把脚本文本写到 scriptPath 指定的文件。
+  // 在 onSaveScript 中 orchestrationSave 成功后调用，fileId 用响应或配置里的 scriptPath。
+  fileUploadScript: async (fileId: string, body: string) => {
+    return request<Ack>('file/upload', { body }, {
+      method: 'POST',
+      httpEndpoint: '/api/file/upload',
+      paramsIn: 'body',
+      query: { fileId },
+    })
+  },
+
   // 写类 / 重操作：mock 仅回执，UI 二次确认占位
   publishRule: (ruleId: string) => request<Ack>('rule/publish', { ruleId }),
   runBatchTest: (ruleId: string) => request<Ack>('rule/runBatchTest', { ruleId }),

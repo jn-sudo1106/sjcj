@@ -168,6 +168,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'file/resourceRows': mockFileResourceRows,
   'file/filePaged': mockFilePaged,
   'file/fileStats': mockFileStats,
+  'file/upload': () => ({ ok: true, message: '文件已保存' }),
 
   // 规则资产（M3）
   'rule/groupTree': mockRuleGroups,
