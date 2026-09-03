@@ -8,7 +8,7 @@
 // 缓存逻辑放父级更省一次重复请求。
 // 0804 拍板：所属库固定为采集库（不再可选，见 RULE_DATA_SOURCE）；命名沿用节点标题，
 // 不再单独输入，「引用已有规则」能力一并砍掉（复用需求交给模板功能承接）。
-// 字段默认全选（0804 拍板，S2-3）：选完表、字段加载完成后自动勾满非系统字段，用户可再手动取消。
+// 入参字段默认全选；出参字段由用户明确勾选，避免新规则无意输出全部字段。
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { entryApi, type EntryType, type RuleFieldOption, type RuleOrchestration } from '@/api'
@@ -37,11 +37,7 @@ const DEFAULT_PRESET_TABLES = [
   { name: '社交舆情表', tableId: '2103300' },
 ]
 
-// 0804 S2-3 修正：只发真正改动的字段，不要在这里拿 props.modelValue 兜底铺满整个对象——
-// 父级（TableTab#patchRule → flow.patchRuleConfig）本来就按"合并到当前 store 状态"处理传入的 patch。
-// 之前这里 emit 的是 {...props.modelValue, ...p} 的整份快照：默认全选的入参/出参两个 watch
-// 在同一轮响应式刷新里各自基于同一份（尚未更新）props.modelValue 起算，先发的那次改动会被后发的
-// 快照覆盖回旧值——两个 watch 都改完，最终却只有一个生效。改成只发 p 这个真正的偏移量就不会互相踩。
+// 只发真正改动的字段，不拿 props.modelValue 兜底铺满整个对象；父级会把 patch 合并到当前 store 状态。
 function patch(p: Partial<BinderModel>) {
   emit('update:modelValue', p)
 }
@@ -64,7 +60,7 @@ function fieldToggleLabel(expanded: boolean, allSelected: boolean, selectedCount
   return expanded ? `▾ 收起（${countText}）` : `▸ ${countText}`
 }
 
-// 字段默认全选（0804 拍板）：表选完、字段异步加载完成后自动勾满非系统字段，用户可以再手动取消。
+// 入参字段默认全选（0804 拍板）：表选完、字段异步加载完成后自动勾满非系统字段，用户可以再手动取消。
 // 触发条件只看"字段池非空 + 当前未选任何字段"，不额外记"是不是刚选的表"——
 // 字段池一旦拉到手（父级按 tableId 缓存），这个 watch 源引用不再变化，之后用户清空选择也不会被重新勾上；
 // 回读历史流程（inputFields 已有值）同样不会被覆盖，因为条件直接不成立。
@@ -72,11 +68,6 @@ watch(() => props.inputFieldOptions, (options) => {
   if (!options.length || props.modelValue.inputFields?.length) return
   const codes = selectableFields(options).map((f) => f.itemCode)
   if (codes.length) patch({ inputFields: codes })
-})
-watch(() => props.outputFieldOptions, (options) => {
-  if (!options.length || props.modelValue.outputFields?.length) return
-  const codes = selectableFields(options).map((f) => f.itemCode)
-  if (codes.length) patch({ outputFields: codes })
 })
 
 function debounce<A extends unknown[]>(fn: (...args: A) => void, ms: number) {

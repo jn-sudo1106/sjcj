@@ -9,12 +9,13 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
-import { decisionOrParallelKind, isRuleNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { decisionOrParallelKind, isMonitorNode, isRuleNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
 import { configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
 import { provideNodeInspectorAssets } from './useNodeInspectorAssets'
 import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
 import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
+import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
 import NodeAiChat from './NodeAiChat.vue'
 import NodeConfigSelect from './NodeConfigSelect.vue'
 import TaskTab from './tabs/TaskTab.vue'
@@ -116,6 +117,17 @@ function ensureConfigNameFromTitle() {
 async function onSaveNodeConfig() {
   const node = cfg.value
   if (!node || saving.value) return
+  if (isRuleNode(node)) {
+    const bindingError = validateTableBinding(
+      node.ruleCfg ?? { inputTableId: '', inputFields: [], outputFields: [] },
+      { requireOutput: !isMonitorNode(node) },
+    )
+    if (bindingError) {
+      flow.setActiveTab('table')
+      ElMessage.warning(bindingError)
+      return
+    }
+  }
   ensureConfigNameFromTitle()
   if (configId.value) {
     await doUpdateExistingConfig()

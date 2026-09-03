@@ -7,6 +7,7 @@ import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDial
 import { useFlowStore } from '@/stores/flow'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
+import { ElMessage } from 'element-plus'
 
 function mockAssets() {
   vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 0, list: [] })
@@ -467,6 +468,36 @@ describe('保存已有配置：直接落库 + 使用范围灰字（0828 §6.2）
     await flushPromises()
     expect(w.find('[data-testid="config-usage-note"]').exists()).toBe(false)
     w.unmount()
+  })
+})
+
+describe('规则节点保存前校验', () => {
+  it('出参字段为空时提示勾选，并停留在表配置且不发保存请求', async () => {
+    mockAssets()
+    const warning = vi.spyOn(ElMessage, 'warning').mockImplementation(() => ({ close: () => {} }))
+    const create = vi.spyOn(configApi, 'addConfig')
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS.rule)
+    cfg.ruleCfg = {
+      ...cfg.ruleCfg!,
+      inputTableId: '2102154',
+      inputFields: ['sku_id'],
+      outputFields: [],
+    }
+    flow.configs['rule-1'] = cfg
+    flow.select('rule-1')
+    flow.setActiveTab('config')
+
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+    await wrapper.get('.rc-insp-foot .rc-btn.primary').trigger('click')
+    await flushPromises()
+
+    expect(warning).toHaveBeenCalledWith('请至少选择 1 个出参字段')
+    expect(flow.activeTab).toBe('table')
+    expect(create).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 })
 

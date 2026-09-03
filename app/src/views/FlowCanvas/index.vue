@@ -21,6 +21,7 @@ import SnatchLauncher from './source/SnatchLauncher.vue'
 import { nodeInspectorTabs } from './inspector/nodeInspectorTabs'
 import SiteDetailView from './result/SiteDetailView.vue'
 import { collectorCapabilityOf, type LoginConfigRef } from '@/views/FlowCanvas/canvas/flowModel'
+import { firstUnboundDraftNodeId } from '@/utils/flow/stepPersist'
 import { normalizeSourceView, normalizeSiteView, sourceViewFromHash } from '@/utils/url/workspaceRoute'
 import NewSiteWizard from './create/NewSiteWizard.vue'
 
@@ -317,6 +318,12 @@ async function onStartCapture() {
   if (!s) return
   if (flow.flowDirty || autosave.status.value === 'saving' || autosave.status.value === 'error') {
     await autosave.flush()
+  }
+  if (autosave.status.value === 'pending') {
+    const pendingNode = firstUnboundDraftNodeId(flow.main, flow.configs)
+    if (pendingNode) flow.select(pendingNode)
+    ElMessage.warning(`节点「${flow.configs[pendingNode || '']?.title || pendingNode || '新节点'}」尚未保存，请先在右侧保存节点配置`)
+    return
   }
   if (flow.flowDirty || autosave.status.value === 'error') {
     ElMessage.warning('流程尚未保存，请点击头部「保存失败，点击重试」或稍候再发起抓取')

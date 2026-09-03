@@ -18,6 +18,14 @@ export function isWritableStepId(id: string | undefined): boolean {
   return !!id && /^\d+$/.test(id) && id !== '0'
 }
 
+/** 返回首个尚未绑定配置的本地草稿节点；此时应等待配置保存，而不是报流程保存失败。 */
+export function firstUnboundDraftNodeId(main: string[], configs: Record<string, NodeConfig>): string | undefined {
+  return main.find((id) => {
+    if (id === 'start' || id === 'end' || id === '0' || isWritableStepId(id)) return false
+    return !!configs[id] && !configs[id].configId
+  })
+}
+
 /** 画布进入条件 → Step.cond。表达式模式用原文；字段模式按物理列名生成 Lua 风格语法。 */
 export function condExprOf(cfg: NodeConfig): string | null {
   const group = nodeEntryCondition(cfg)

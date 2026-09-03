@@ -200,7 +200,8 @@ async function onSwitchFlow(command: string) {
         </div>
         <!-- 0828 W9-2/D06：步骤接口已通，拓扑/进入条件防抖自动保存；不再放手动保存按钮。 -->
         <span class="ch-save-status" data-testid="flow-save-status">
-          <template v-if="saveStatus === 'saving'">保存中…</template>
+          <span v-if="saveStatus === 'pending'" class="ch-save-pending">请先保存节点配置</span>
+          <template v-else-if="saveStatus === 'saving'">保存中…</template>
           <template v-else-if="saveStatus === 'saved'">已保存 {{ savedClock }}</template>
           <button
             v-else-if="saveStatus === 'error'"
@@ -249,6 +250,7 @@ async function onSwitchFlow(command: string) {
 .ch-flow-manage { width: 100%; height: 32px; padding: 0 10px; border: 0; background: #fff; color: var(--rc-primary); font-size: 12px; text-align: left; cursor: pointer; }
 .ch-flow-manage:hover { background: var(--rc-primary-bg); }
 .ch-save-status { color: var(--rc-faint); font-size: 12px; min-height: 18px; min-width: 4em; }
+.ch-save-pending { color: var(--rc-warn); }
 .ch-save-retry { border: 0; background: transparent; color: #b91c1c; font-size: 12px; cursor: pointer; padding: 0; }
 .ch-save-retry:hover { text-decoration: underline; }
 .ch-canvas-actions { position: absolute; z-index: 4; right: 32px; top: calc(100% + 18px); display: flex; gap: 6px; }

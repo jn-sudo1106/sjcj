@@ -1,13 +1,14 @@
 // 流程步骤自动保存（0828 W9-2 / D06）：节点增删/移动/连线/换配置/进入条件后防抖 800ms 提交 item/next。
-// 头部状态文案：保存中… / 已保存 12:03 / 保存失败，点击重试。
+// 头部状态文案：请先保存节点配置 / 保存中… / 已保存 12:03 / 保存失败，点击重试。
 // 只清 flowDirty，不清配置脏标（右侧「保存节点配置」仍独立）。
 import { ref, watch, type WatchStopHandle } from 'vue'
 import { useFlowStore } from '@/stores/flow'
+import { firstUnboundDraftNodeId } from '@/utils/flow/stepPersist'
 import { useStepWrite } from './useStepWrite'
 
 export const FLOW_AUTOSAVE_MS = 800
 
-export type FlowSaveStatus = 'idle' | 'saving' | 'saved' | 'error'
+export type FlowSaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
 
 const status = ref<FlowSaveStatus>('idle')
 const savedClock = ref('')
@@ -47,6 +48,10 @@ export function useFlowAutosave() {
     const sourceId = flow.sourceCfg?.sourceId || flow.sourceCtx?.sourceId
     if (!sourceId) return
     if (inFlight) return
+    if (firstUnboundDraftNodeId(flow.main, flow.configs)) {
+      status.value = 'pending'
+      return
+    }
     pauseUntilRetry = false
     inFlight = true
     status.value = 'saving'

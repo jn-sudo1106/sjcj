@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises } from '@vue/test-utils'
-import { itemApi } from '@/api'
+import { itemApi, sourceApi } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { FLOW_AUTOSAVE_MS, resetFlowAutosaveForTests, useFlowAutosave } from './useFlowAutosave'
 import type { Step } from '@/api'
@@ -88,17 +88,34 @@ describe('useFlowAutosave', () => {
     unbind()
   })
 
-  it('新节点缺 configId 时不提交、不标已保存（0828 W9-4）', async () => {
+  it('新节点缺 configId 时等待配置保存，绑定后自动提交', async () => {
     const flow = loadTestSource()
     const modify = vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    const create = vi.spyOn(itemApi, 'saveItemConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'enable').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      SNAPSHOT,
+      { ...SNAPSHOT, stepId: '40601', name: '网页抓取', configId: '1400999', enabled: false },
+    ])
     const { bind, unbind, status } = useFlowAutosave()
     bind()
     flow.insertAfter('40600', 'web')
+    const localId = flow.selectedId
     await flushPromises()
     await vi.advanceTimersByTimeAsync(FLOW_AUTOSAVE_MS)
     expect(modify).not.toHaveBeenCalled()
-    expect(status.value).toBe('error')
+    expect(create).not.toHaveBeenCalled()
+    expect(status.value).toBe('pending')
     expect(flow.flowDirty).toBe(true)
+
+    flow.configs[localId].configId = '1400999'
+    flow.touch()
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(FLOW_AUTOSAVE_MS)
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(modify).toHaveBeenCalledTimes(2)
+    expect(status.value).toBe('saved')
+    expect(flow.flowDirty).toBe(false)
     unbind()
   })
 })

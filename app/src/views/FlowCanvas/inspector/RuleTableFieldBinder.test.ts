@@ -169,8 +169,8 @@ describe('RuleTableFieldBinder · 新建表（0804 拍板：共用表配置的 T
   })
 })
 
-// 字段默认全选（0804 拍板，S2-3）：选完表、字段异步加载完成后自动勾满非系统字段。
-describe('RuleTableFieldBinder · 字段默认全选（0804 S2-3）', () => {
+// 入参字段默认全选；出参字段从空选择开始，必须由用户明确勾选。
+describe('RuleTableFieldBinder · 字段默认选择', () => {
   const FIELDS: RuleFieldOption[] = [
     { itemCode: 'sku_id', itemName: '商品ID', columnName: 'K1', dataType: 'string', seq: 1 },
     { itemCode: 'sku_name', itemName: '商品名称', columnName: 'K2', dataType: 'string', seq: 2 },
@@ -193,7 +193,7 @@ describe('RuleTableFieldBinder · 字段默认全选（0804 S2-3）', () => {
     expect(lastEmittedPatch(wrapper)).toEqual({ inputFields: ['sku_id', 'sku_name'] })
   })
 
-  it('输出表未单独选（沿用输入表）：输出字段池随输入字段池一起到位，也一并自动全选', async () => {
+  it('输出表未单独选（沿用输入表）：输出字段池到位后仍保持空选', async () => {
     const wrapper = mountBinder({ inputTableId: 't1' })
     await flushPromises()
 
@@ -203,7 +203,7 @@ describe('RuleTableFieldBinder · 字段默认全选（0804 S2-3）', () => {
 
     const updates = (wrapper.emitted('update:modelValue') as Array<[Partial<RuleOrchestration>]>).map((c) => c[0])
     expect(updates).toContainEqual({ inputFields: ['sku_id', 'sku_name'] })
-    expect(updates).toContainEqual({ outputFields: ['sku_id', 'sku_name'] })
+    expect(updates.some((patch) => 'outputFields' in patch)).toBe(false)
   })
 
   it('已有 inputFields（历史流程回读）：字段池到位后不覆盖既有选择', async () => {
