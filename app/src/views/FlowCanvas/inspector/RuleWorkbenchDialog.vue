@@ -11,9 +11,9 @@
 //   - 脚本/配置：直接双向绑定（每次输入都 emit update:script），没有草稿概念——原来这块是只读的，
 //     S6-1 才第一次开放编辑，没有"取消"包袱要延续，直接绑定跟本应用其余文本框风格一致，更简单。
 //     真正落盘由外部「保存脚本/配置」按钮触发（走 orchestrationSave 接口 + 二次确认，逻辑留在父组件不重复）。
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { fetchDefaultModels, fetchModelProviders, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleFieldOption, type RuleOrchestration } from '@/api'
+import { fetchDefaultModels, fetchModelProviders, ruleApi, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleFieldOption, type RuleOrchestration } from '@/api'
 import { fetchPromptList } from '@/api/prompt'
 import type { PromptCategoryGroup } from './promptCategory'
 import { applyPromptTemplate } from '@/utils/flow/promptTemplate'
@@ -49,6 +49,8 @@ const props = defineProps<{
   isRule: boolean
   // 测试脚本是否可点（脚本非空且已绑输入表）
   canTest: boolean
+  // 预览表第一行数据，作为脚本测试入参（key=字段名，value=值）
+  firstRowParams?: Record<string, unknown>
   // 规则处理/数据监控节点：打开工作区时左栏默认展示描述（只读），系统提示词需点按钮展开
   describe: string
   describeLabel: string
@@ -314,6 +316,7 @@ watch(
               <el-option v-for="item in group.options" :key="item.value" :label="item.label" :value="item.value" />
             </el-option-group>
           </el-select>
+          <span>模型供应商</span>
           <el-select
             v-model="modelProviderDraft"
             class="wb-category wb-provider"
@@ -325,6 +328,7 @@ watch(
           >
             <el-option v-for="item in providerOptions" :key="item.providerCode" :label="item.providerName" :value="item.providerCode" />
           </el-select>
+          <span>模型</span>
           <el-select
             v-model="modelDraft"
             class="wb-category wb-model"
@@ -364,7 +368,6 @@ watch(
           <span class="wb-state">{{ streamStateLabel }}</span>
           <span class="wb-path">{{ scriptPath || '未生成' }}</span>
           <div class="wb-pane-actions">
-            <button class="rc-btn" type="button" :disabled="!script.trim()" @click="copyScript">复制</button>
             <button class="rc-btn" type="button" :disabled="generating" @click="onGenerate">
               {{ generating ? '生成中...' : generateLabel }}
             </button>
@@ -372,7 +375,7 @@ watch(
             <button class="rc-btn primary" type="button" :disabled="saving || !script.trim()" @click="emit('save')">
               {{ saving ? '保存中...' : saveLabel }}
             </button>
-            <button v-if="isRule" class="rc-btn" type="button" :disabled="!canTest" @click="emit('test')">测试脚本</button>
+            <button v-if="isRule" class="rc-btn" type="button" :disabled="!script.trim()" @click="emit('test')">测试脚本</button>
           </div>
         </div>
         <div v-if="thinking?.trim() || generating || generationState === 'done' || generationState === 'error'" class="wb-stream">

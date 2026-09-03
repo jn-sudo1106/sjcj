@@ -14,12 +14,13 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
 import { isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
+import { dataApi, entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type DataTableMeta, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { isVruleNumericRuleId } from '@/api/legacyAdapters'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
 import { buildDataProcessGeneratePayload } from '@/utils/flow/dataProcess'
+import DataQueryPanel, { type DataQueryColumn } from '@/components/DataQueryPanel.vue'
 import { promptCategoryGroupsForNode, promptListCategoryForNode, resolvePromptCategoryForNode } from '../promptCategory'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
@@ -403,12 +404,18 @@ async function onGenerateScript(
         onDone: (payload) => {
           generationState.value = 'done'
           generationMessage.value = payload.message || '保存完成'
+          // 流式接口在 onDone 提示里带回保存路径（如「已保存到/code01/202609/x.py」），
+          // 没有独立 scriptPath 字段——从 message 提取并 patch，否则「测试脚本」拿不到 codePath
+          const savedPath = (payload.message || '').match(/保存到\s*([^\s]+)/)?.[1]
+          if (savedPath) patch({ scriptPath: savedPath })
         },
       })
     } else {
       res = await ruleApi.orchestrationGenerate(genCfg, controller.signal)
     }
-    patch({ script: res.script, scriptPath: res.scriptPath })
+    // 流式分支的 scriptPath 由 onDone 从提示文本提取并 patch，res.scriptPath 为空——
+    // 这里只有 res.scriptPath 有值时才覆盖，避免把流式提取到的路径清空
+    patch({ script: res.script, ...(res.scriptPath ? { scriptPath: res.scriptPath } : {}) })
     if (isRule.value) generationMessage.value = generationMessage.value || '保存完成'
     ElMessage.success(isRule.value ? '脚本已生成' : '配置已生成')
   } catch (e) {
@@ -524,6 +531,32 @@ async function onApplySwitch() {
   }
 }
 
+// ---- 数据预览：复用 DataQueryPanel，按当前节点 inputTable 拉 3 行数据，
+// 列定义跟数据视图主表一致（从 dataApi.tableMeta 拼 columns），不开放状态筛选/勾选/快捷查询 ----
+const previewPanelRef = ref<InstanceType<typeof DataQueryPanel>>()
+const previewTableMeta = ref<DataTableMeta | null>(null)
+// 预览表第一行数据，作为脚本测试入参（点「测试脚本」时传给 RuleWorkbenchDialog）
+const previewFirstRow = ref<Record<string, unknown> | null>(null)
+function onPreviewLoaded(e: { rows: { values?: Record<string, unknown> }[]; total: number }) {
+  previewFirstRow.value = e.rows[0]?.values ?? null
+}
+const previewColumns = computed<DataQueryColumn[]>(() => (previewTableMeta.value?.fields ?? [])
+  .filter((f) => f.columnName || f.prop)
+  .map((f) => ({
+    prop: f.columnName ?? f.prop,
+    label: `${f.desc}-${f.columnName}`,
+    width: 120,
+    sortable: true,
+    hintProp: f.prop,
+  })))
+async function loadPreviewTableMeta() {
+  const tid = orchCfg.value.inputTableId
+  previewTableMeta.value = tid ? await dataApi.tableMeta(tid) : null
+}
+watch(() => orchCfg.value.inputTableId, () => {
+  void loadPreviewTableMeta().then(() => previewPanelRef.value?.search())
+}, { immediate: true })
+
 // ---- 测试脚本：切换到流程视图右侧面板的「数据视图」tab（view=data），保留当前源上下文，
 // 并把当前编辑节点作为 nodeId 带上，让数据视图自动定位到该节点（而不是默认落首节点）——
 // ResultView 初始化时优先取 URL 的 nodeId query（queryNodeId），与「查看条件」深链同一套机制 ----
@@ -538,6 +571,47 @@ function goToDataView() {
 </script>
 
 <template>
+  <div v-if="orchCfg.inputTableId" class="ni-section-title">数据预览</div>
+  <DataQueryPanel
+    v-if="orchCfg.inputTableId"
+    ref="previewPanelRef"
+    :table-id="orchCfg.inputTableId"
+    :columns="previewColumns"
+    :page-size="3"
+    @loaded="onPreviewLoaded"
+  >
+    <template #columns-before>
+      <el-table-column prop="dataId" label="ENTRY_ID" width="105" fixed="left" sortable="custom">
+        <template #default="{ row }">{{ row.dataId }}</template>
+      </el-table-column>
+      <el-table-column prop="sourceId" label="源" width="100" sortable="custom">
+        <template #default="{ row }">{{ row.sourceId || '—' }}</template>
+      </el-table-column>
+    </template>
+    <template #columns-after>
+      <el-table-column prop="state" label="状态" width="84">
+        <template #default="{ row }">{{ row.state || '—' }}</template>
+      </el-table-column>
+      <el-table-column prop="updateDt" label="更新" width="90" sortable="custom">
+        <template #default="{ row }">{{ row.updateDt || '—' }}</template>
+      </el-table-column>
+      <el-table-column prop="createDt" label="生成" width="90" sortable="custom">
+        <template #default="{ row }">{{ row.createDt || '—' }}</template>
+      </el-table-column>
+      <el-table-column label="任务" width="100">
+        <template #default="{ row }">{{ row.detailId || '—' }}</template>
+      </el-table-column>
+      <el-table-column prop="nextFlag" label="后续" width="70">
+        <template #default="{ row }">{{ row.nextFlag ?? '—' }}</template>
+      </el-table-column>
+      <el-table-column label="父ID" width="90">
+        <template #default="{ row }">{{ row.parentId || '—' }}</template>
+      </el-table-column>
+      <el-table-column label="原始" width="70">
+        <template #default="{ row }">{{ row.k0 ? '查看' : '—' }}</template>
+      </el-table-column>
+    </template>
+  </DataQueryPanel>
   <div class="ni-section-title">{{ isRule ? '查看业务编排' : '抓取配置' }}</div>
   <div class="rc-field">
     <textarea
@@ -572,35 +646,6 @@ function goToDataView() {
   </template>
 
   <div class="rc-actions-row">
-    <label v-if="isRule" class="rc-inline-field" data-testid="main-model-provider">
-      <span>模型供应商</span>
-      <el-select
-        :model-value="orchCfg.modelProviderCode ?? ''"
-        class="rc-inline-select"
-        size="small"
-        :loading="providerLoading"
-        :teleported="false"
-        placeholder="请选择"
-        @change="onMainModelProviderChange"
-      >
-        <el-option v-for="item in providerOptions" :key="item.providerCode" :label="item.providerName" :value="item.providerCode" />
-      </el-select>
-    </label>
-    <label v-if="isRule" class="rc-inline-field" data-testid="main-model">
-      <span>模型</span>
-      <el-select
-        :model-value="orchCfg.modelCode ?? ''"
-        class="rc-inline-select rc-inline-select-model"
-        size="small"
-        :loading="modelLoading"
-        :disabled="!orchCfg.modelProviderCode || !providerOptions.length"
-        :teleported="false"
-        placeholder="请选择"
-        @change="onMainModelChange"
-      >
-        <el-option v-for="item in modelOptions" :key="item.modelCode" :label="item.modelName" :value="item.modelCode" />
-      </el-select>
-    </label>
     <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
     <button v-if="generating" class="rc-btn" type="button" @click="onCancelGenerate">取消</button>
   </div>
