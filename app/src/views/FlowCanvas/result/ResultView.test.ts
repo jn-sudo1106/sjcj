@@ -989,7 +989,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
 
     // 两档都在，且「发全部」是并排按钮而不是藏在下拉里（只剩一项还做成下拉是坏交互）
     expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
-    expect(wrapper.get('[data-testid="data-exec-all-btn"]').text()).toBe('发全部（当前条件）')
+    expect(wrapper.get('[data-testid="data-exec-all-btn"]').text()).toBe('发全部（命中 0 条）')
 
     // 删掉的三个入口一个都不能回来
     expect(wrapper.find('[data-testid="data-exec-more-toggle"]').exists()).toBe(false)
@@ -998,6 +998,35 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     expect(wrapper.find('[data-testid="data-sendmore-panel"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('发本页')
     expect(wrapper.text()).not.toContain('发大量')
+  })
+
+  // 0903：`nextStep2` 的参数里没有 dataId、更没有 parentId——填了这两个条件却照发，
+  // 发出去的是**整张表**，而按钮上写着"当前条件"。Y1 的「下级」跳转会自动填 父ID，
+  // 用户看到 5 行点「发全部」实际发几万条，所以这两个条件在场时必须禁用。
+  it('填了数据 ID / 父 ID 时「发全部」禁用，并说明该改用勾选', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    loadExecFixture(useFlowStore(), current)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    const batch = vi.spyOn(dataApi, 'nextStepBatch')
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'first')
+
+    const btn = () => wrapper.get('[data-testid="data-exec-all-btn"]')
+    expect(btn().attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('.rv-input.id').setValue('8809116')
+    await flushPromises()
+    expect(btn().attributes('disabled')).toBeDefined()
+    expect(btn().attributes('title')).toContain('不支持按数据 ID')
+
+    await btn().trigger('click')
+    await flushPromises()
+    expect(batch).not.toHaveBeenCalled()
   })
 
   it('发后续任务真实回执解析（M3-0J）：全部被目标节点进入条件拒绝时弹 warning，不能显示成功', async () => {

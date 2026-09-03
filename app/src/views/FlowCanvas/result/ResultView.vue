@@ -311,16 +311,35 @@ async function onSendUpstream() {
 // 没有这个问题）。将来若要再往这行加第三个动作，**先想清楚它是不是真的和前两档并列**，
 // 不要为了塞按钮把下拉又请回来。
 // 发全部后续（M3-0G 复议，2026-08-19）：旧平台硬编码 size=500000、start=0，用户不填任何
-// 数量，只受当前筛选条件约束（sourceId 天然由具体源页面锁定，state/cond 取自筛选行——
-// 不含 dataId/parentId，旧平台 sendNextAll 本身就不认这两个字段）。数量不可调，唯一的
-// 防护就是确认框把量级说清楚，不能悄悄把 50 万条包装成"点一下就发"。
+// 数量，只受当前筛选条件约束（sourceId 天然由具体源页面锁定）。数量不可调，唯一的防护
+// 就是确认框把量级说清楚，不能悄悄把 50 万条包装成"点一下就发"。
+//
+// ⚠️ **「当前条件」是打折的**（0903 发现）：`nextStep2` 的参数里只有 state / cond / start /
+// end / nextFlag，**没有 dataId、更没有 parentId**。筛选区有 4 个框，这条只认其中 2 个
+// （状态、SQL 条件）。填了数据 ID 或父 ID 却照发，发出去的就是**整张表**，而按钮上写着
+// "当前条件"——名不副实且后果很大。
+//
+// 这个坑在 0903 Y1 之后被放大了：点「下级」条数会自动填上 `父 ID = 当前行` 再跳过去，
+// 用户看到 5 行、点「发全部」，实际发几万条。
+//
+// 现在的处置：**填了这两个条件就禁用**（下面的 sendAllBlockedReason），并在 title 里说明
+// 为什么、该改用什么。把 parentId 塞进 cond 拼成 `PARENT_ID='x'` 是另一条路，但那等于把
+// 用户没写过的条件偷偷混进他的 SQL，报错时会指向一个他没写过的东西，不做。
+// 要真正支持，需要后端在 nextStep2 上加 parentId（已并入 0903 后端需求 H9 一起问）。
+const sendAllBlockedReason = computed(() => {
+  if (filters.dataId && filters.parentId) return '「发全部」不支持按数据 ID / 父 ID 筛选，请改用勾选后「发后续任务」'
+  if (filters.dataId) return '「发全部」不支持按数据 ID 筛选，请改用勾选后「发后续任务」'
+  if (filters.parentId) return '「发全部」不支持按父 ID 筛选，请改用勾选后「发后续任务」'
+  return ''
+})
 async function onSendAllUnderFilter() {
   if (execMode.value !== 'input' || !canPickRows.value || !selectedTable.value) return
+  if (sendAllBlockedReason.value) return
   const nodeName = selectedCfg.value?.title || selectedNodeId.value
   const tableId = selectedTable.value
   await confirmDanger(
     '发全部后续',
-    `[实验性] 将对当前筛选条件下"${nodeName}"的全部数据发起后续处理（最多 500000 条，量级可能很大），是否继续？`,
+    `[实验性] 将对当前筛选条件下"${nodeName}"的全部数据发起后续处理（命中 ${total.value} 条，最多 500000 条），是否继续？`,
     () => withNodeErrorContext(nodeName, () => dataApi.nextStepBatch({
       tableId, sourceId: sourceId.value,
       state: filters.state || undefined,
@@ -995,14 +1014,17 @@ async function onTestScript() {
                原来是「发后续 ▾」下拉里装三项（发全部/发本页/发大量），后两项已删；
                只剩一项还做成下拉是坏交互（点一下才看见里面只有一个），改成并排按钮。
                末节点「从上一节点重跑」不走这一档，故 execMode === 'input' 仍是前提。 -->
+          <!-- 文案直接摆出命中数（0903）：用户的困惑本质是"看不出这个按钮要发多少"，
+               把 total 显示出来比任何说明都直接。禁用时 title 说明原因与替代做法。 -->
           <button
             v-if="execMode === 'input' && canPickRows"
             class="rc-btn"
             type="button"
             data-testid="data-exec-all-btn"
-            title="不按勾选，按当前筛选条件发全部"
+            :disabled="!!sendAllBlockedReason"
+            :title="sendAllBlockedReason || '不按勾选，按当前筛选条件发全部'"
             @click="onSendAllUnderFilter"
-          >发全部（当前条件）</button>
+          >发全部（命中 {{ total }} 条）</button>
         </template>
         <!-- 分页移到表格下方（0819 N1-8，会议 19:13"页子一般放下面"）。原先它并在 #head
              里是为了省纵向空间，现在由顶部区收窄（N1-10）补偿。 -->
