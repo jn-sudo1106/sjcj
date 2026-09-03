@@ -269,6 +269,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'file/fileStats', desc: '已废弃：新平台自造统计端点，无旧平台契约', impl: true },
   { path: 'file/fileProcess', desc: '文件后续处理', danger: true },
   { path: 'file/fileJsonPaged', desc: '原始 JSON 分页' },
+  // 2026-09-03：规则脚本工作区「保存脚本」按钮对接，POST /api/file/upload?fileId=<脚本路径>，
+  // body={"body":"<脚本内容>"}，把脚本内容写到 scriptPath 指定的文件。
+  { path: 'file/upload', desc: '上传/保存脚本文件（POST /api/file/upload?fileId=路径 body=内容）', danger: true, impl: true, live: true },
 
   /* ── flow 自造逻辑端点（只剩推荐与节点 AI 两条） ── */
   // flow-template/list|detail|save 那套 localStorage 兼容存储（mockFlowTemplateList/Detail/Save）

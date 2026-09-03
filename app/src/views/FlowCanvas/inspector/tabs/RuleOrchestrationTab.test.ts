@@ -663,12 +663,14 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     vi.spyOn(ruleApi, 'orchestrationSave').mockResolvedValue({
       ruleId: 'orch-173', scriptPath: '/x/y.py', message: '规则脚本已保存',
     })
+    vi.spyOn(ruleApi, 'fileUploadScript').mockResolvedValue({ ok: true, message: '文件已保存' })
 
     const saveScriptBtn = wrapper.findAll('button').find((b) => b.text().includes('保存脚本'))!
     await saveScriptBtn.trigger('click')
     await flushPromises()
 
     expect(ruleApi.orchestrationSave).toHaveBeenCalledTimes(1)
+    expect(ruleApi.fileUploadScript).toHaveBeenCalledWith('/x/y.py', 'def main(sku_id):\n    return {}')
     expect(flow.configs['rule-1'].ruleCfg?.mode).toBe('ref')
     expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBe('orch-173')
   })
@@ -679,12 +681,14 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     await flushPromises()
     vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
     vi.spyOn(ruleApi, 'orchestrationSave')
+    vi.spyOn(ruleApi, 'fileUploadScript')
 
     const saveScriptBtn = wrapper.findAll('button').find((b) => b.text().includes('保存脚本'))!
     await saveScriptBtn.trigger('click')
     await flushPromises()
 
     expect(ruleApi.orchestrationSave).not.toHaveBeenCalled()
+    expect(ruleApi.fileUploadScript).not.toHaveBeenCalled()
   })
 
   it('进入查看态：回灌详情描述，并在仅有 scriptPath 时拉取脚本正文', async () => {
@@ -817,12 +821,14 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     await flushPromises()
     const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     vi.spyOn(ruleApi, 'orchestrationSave').mockResolvedValue({ ruleId: '184', scriptPath: '/x/1.xml', message: '抓取配置已保存' })
+    vi.spyOn(ruleApi, 'fileUploadScript').mockResolvedValue({ ok: true, message: '文件已保存' })
 
     const saveBtn = wrapper.findAll('button').find((b) => b.text().includes('保存配置'))!
     await saveBtn.trigger('click')
     await flushPromises()
 
     expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('配置'), expect.stringContaining('抓取配置'), expect.anything())
+    expect(ruleApi.fileUploadScript).toHaveBeenCalledWith('/x/1.xml', '<Config/>')
     expect(flow.configs['web-1'].execCfg?.mode).toBe('ref')
     expect(flow.configs['web-1'].execCfg?.ruleId).toBe('184')
   })
@@ -936,6 +942,7 @@ describe('RuleOrchestrationTab · 抓取配置 XML 轻解析接入（S3-4）', (
     await flushPromises()
     const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
     const saveSpy = vi.spyOn(ruleApi, 'orchestrationSave')
+    vi.spyOn(ruleApi, 'fileUploadScript')
 
     const saveBtn = wrapper.findAll('button').find((b) => b.text().includes('保存配置'))!
     await saveBtn.trigger('click')
@@ -943,6 +950,7 @@ describe('RuleOrchestrationTab · 抓取配置 XML 轻解析接入（S3-4）', (
 
     expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('未知字段'), '字段一致性提示', expect.anything())
     expect(saveSpy).not.toHaveBeenCalled()
+    expect(ruleApi.fileUploadScript).not.toHaveBeenCalled()
   })
 
   it('保存前一致性校验：确认「仍要保存」后继续走正常保存流程', async () => {
@@ -952,12 +960,14 @@ describe('RuleOrchestrationTab · 抓取配置 XML 轻解析接入（S3-4）', (
     // 第一次 confirm 是一致性提示，第二次是既有的"保存后将绑定到该节点"确认，两次都要放行
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     vi.spyOn(ruleApi, 'orchestrationSave').mockResolvedValue({ ruleId: '184', scriptPath: '/x/1.xml', message: '' })
+    vi.spyOn(ruleApi, 'fileUploadScript').mockResolvedValue({ ok: true, message: '文件已保存' })
 
     const saveBtn = wrapper.findAll('button').find((b) => b.text().includes('保存配置'))!
     await saveBtn.trigger('click')
     await flushPromises()
 
     expect(ruleApi.orchestrationSave).toHaveBeenCalledTimes(1)
+    expect(ruleApi.fileUploadScript).toHaveBeenCalledWith('/x/1.xml', CAPTURE_XML)
     expect(flow.configs['web-1'].execCfg?.ruleId).toBe('184')
   })
 })

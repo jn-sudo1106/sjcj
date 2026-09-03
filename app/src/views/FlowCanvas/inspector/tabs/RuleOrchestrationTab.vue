@@ -462,6 +462,13 @@ async function onSaveScript() {
   try {
     const res = await ruleApi.orchestrationSave(orchCfg.value)
     patch({ mode: 'ref', ruleId: res.ruleId, scriptPath: res.scriptPath })
+    // 2026-09-03：orchestrationSave 成功后，再把脚本文本写到 scriptPath 指定的文件
+    //（POST /api/file/upload?fileId=<脚本路径> body={"body":"<脚本内容>"}）。
+    // fileId 优先用响应返回的 scriptPath（新建脚本时后端可能分配新路径），兜底用配置里的。
+    const fileId = res.scriptPath?.trim() || orchCfg.value.scriptPath?.trim() || ''
+    if (fileId) {
+      await ruleApi.fileUploadScript(fileId, orchCfg.value.script ?? '')
+    }
     ElMessage.success(res.message || (isRule.value ? '规则脚本已保存' : '抓取配置已保存'))
   } catch (e) {
     ElMessage.error(`保存失败：${(e as Error)?.message ?? String(e)}`)
