@@ -354,6 +354,36 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     }))
   })
 
+  it('打开工作区后默认展示描述（只读），系统提示词需点按钮展开', async () => {
+    const { wrapper } = mountWithExistingRule()
+    await flushPromises()
+
+    const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
+    await editBtn.trigger('click')
+    await flushPromises()
+
+    // 默认展示描述（只读），系统提示词编辑区隐藏
+    const describeTextarea = wrapper.find('textarea.wb-describe')
+    expect(describeTextarea.exists()).toBe(true)
+    expect((describeTextarea.element as HTMLTextAreaElement).value).toContain('content')
+    // 系统提示词编辑区未渲染
+    expect(wrapper.find('textarea.wb-textarea:not(.wb-code):not(.wb-describe)').exists()).toBe(false)
+    // 模型供应商和模型下拉框在描述视图下也可用，可直接切换
+    expect(wrapper.find('.wb-provider').exists()).toBe(true)
+    expect(wrapper.find('.wb-model').exists()).toBe(true)
+    // 切换按钮文案为「系统提示词」
+    const toggleBtn = wrapper.findAll('button').find((b) => b.text() === '系统提示词')!
+    expect(toggleBtn).toBeTruthy()
+
+    // 点按钮展开系统提示词编辑区，描述收起
+    await toggleBtn.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('textarea.wb-describe').exists()).toBe(false)
+    expect(wrapper.find('textarea.wb-textarea:not(.wb-code):not(.wb-describe)').exists()).toBe(true)
+    // 切换按钮文案变为描述标签
+    expect(wrapper.findAll('button').some((b) => b.text() === '规则处理描述')).toBe(true)
+  })
+
   it('编辑系统提示词：保存后写回 systemPrompt，取消不写回', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     await flushPromises()
@@ -362,9 +392,14 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     await editBtn.trigger('click')
     await flushPromises()
 
+    // 规则节点工作区默认展示描述（只读），需点「系统提示词」按钮切换到提示词编辑区
+    const toggleBtn = wrapper.findAll('button').find((b) => b.text() === '系统提示词')!
+    await toggleBtn.trigger('click')
+    await flushPromises()
+
     // S6-1：系统提示词编辑区从独立弹窗合并进 RuleWorkbenchDialog 左栏，class 从 .rspd-textarea 换成
     // .wb-textarea（右栏脚本框也用这个 class，加 .wb-code；左栏提示词没有，用 :not 精确定位）
-    const textarea = wrapper.find('textarea.wb-textarea:not(.wb-code)')
+    const textarea = wrapper.find('textarea.wb-textarea:not(.wb-code):not(.wb-describe)')
     await textarea.setValue('新的系统提示词')
     const saveBtn = wrapper.findAll('button').find((b) => b.text() === '保存' && b.classes().includes('primary'))!
     await saveBtn.trigger('click')
@@ -384,7 +419,12 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     await editBtn.trigger('click')
     await flushPromises()
 
-    const promptTextarea = wrapper.find('textarea.wb-textarea:not(.wb-code)')
+    // 规则节点工作区默认展示描述（只读），需点「系统提示词」按钮切换到提示词编辑区
+    const toggleBtn = wrapper.findAll('button').find((b) => b.text() === '系统提示词')!
+    await toggleBtn.trigger('click')
+    await flushPromises()
+
+    const promptTextarea = wrapper.find('textarea.wb-textarea:not(.wb-code):not(.wb-describe)')
     expect(promptTextarea.element).toBeTruthy()
     expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('源表=JD-商品基础:sense_data.TB_JD_SKU_BASE')
     expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('目标表=sense_data.TB_JD_SKU_RESULT')
@@ -443,6 +483,11 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     await editBtn.trigger('click')
     await flushPromises()
 
+    // 规则节点工作区默认展示描述（只读），需点「系统提示词」按钮切换到提示词编辑区
+    const toggleBtn = wrapper.findAll('button').find((b) => b.text() === '系统提示词')!
+    await toggleBtn.trigger('click')
+    await flushPromises()
+
     const providerSelect = wrapper.find('.wb-provider')
     await providerSelect.trigger('click')
     await flushPromises()
@@ -470,6 +515,11 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
 
     const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
     await editBtn.trigger('click')
+    await flushPromises()
+
+    // 规则节点工作区默认展示描述（只读），需点「系统提示词」按钮切换到提示词编辑区
+    const toggleBtn = wrapper.findAll('button').find((b) => b.text() === '系统提示词')!
+    await toggleBtn.trigger('click')
     await flushPromises()
 
     const providerSelect = wrapper.find('.wb-provider')
@@ -594,7 +644,12 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     await editBtn.trigger('click')
     await flushPromises()
 
-    const promptTextarea = wrapper.find('textarea.wb-textarea:not(.wb-code)')
+    // 数据监控节点工作区默认展示描述（只读），需点「系统提示词」按钮切换到提示词编辑区
+    const toggleBtn = wrapper.findAll('button').find((b) => b.text() === '系统提示词')!
+    await toggleBtn.trigger('click')
+    await flushPromises()
+
+    const promptTextarea = wrapper.find('textarea.wb-textarea:not(.wb-code):not(.wb-describe)')
     expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('source_id=391007796')
     expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('source_cron=0 0 12 * * *')
     expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('source_table=通用新闻表:sense_data.TB_CNEWS')

@@ -45,6 +45,10 @@ const props = defineProps<{
   saveLabel: string
   generating: boolean
   saving: boolean
+  // 规则处理/数据监控节点：打开工作区时左栏默认展示描述（只读），系统提示词需点按钮展开
+  describe: string
+  describeLabel: string
+  hidePromptByDefault: boolean
 }>()
 const emit = defineEmits<{
   'update:open': [boolean]
@@ -163,6 +167,7 @@ function syncLocalDrafts() {
 watch(() => props.open, (v) => {
   if (v) {
     syncLocalDrafts()
+    promptVisible.value = !props.hidePromptByDefault
     void loadProviderModelOptions()
     void loadPromptTemplate()
   }
@@ -217,6 +222,9 @@ async function copyScript() {
 
 // 中间拖拽分隔（左栏宽度百分比，25%~75% 夹住，跟 FlowCanvas/index.vue 的检查区分隔条同款交互）
 const leftPct = ref(42)
+// 左栏视图切换：规则处理/数据监控节点默认展示描述（只读），点「系统提示词」按钮切换到提示词编辑区
+const promptVisible = ref(!props.hidePromptByDefault)
+const showDescribeInLeft = computed(() => props.hidePromptByDefault && !promptVisible.value)
 const bodyEl = ref<HTMLElement>()
 const thinkingCollapsed = ref(false)
 let splitStartX = 0
@@ -284,8 +292,12 @@ watch(
     <div ref="bodyEl" class="wb-body">
       <div class="wb-pane" :style="leftStyle">
         <div class="wb-pane-head">
-          <b>系统提示词</b>
+          <b>{{ showDescribeInLeft ? describeLabel : '系统提示词' }}</b>
+          <button v-if="hidePromptByDefault" class="rc-btn" type="button" @click="promptVisible = !promptVisible">
+            {{ showDescribeInLeft ? '系统提示词' : describeLabel }}
+          </button>
           <el-select
+            v-if="!showDescribeInLeft"
             v-model="promptCategoryDraft"
             class="wb-category"
             size="small"
@@ -321,10 +333,18 @@ watch(
           </el-select>
           <button class="rc-btn primary" type="button" :disabled="promptLoading || providerLoading || modelLoading" @click="savePrompt">保存</button>
         </div>
-        <div v-if="promptLoading || promptError || providerError || modelError" class="wb-help">
-          {{ promptLoading ? '提示词模板加载中…' : (promptError || providerError || modelError) }}
+        <div v-if="providerError || modelError || (!showDescribeInLeft && (promptLoading || promptError))" class="wb-help">
+          {{ !showDescribeInLeft && promptLoading ? '提示词模板加载中…' : (promptError || providerError || modelError) }}
         </div>
         <textarea
+          v-if="showDescribeInLeft"
+          class="wb-textarea wb-describe"
+          :value="describe"
+          readonly
+          placeholder="暂无描述"
+        />
+        <textarea
+          v-else
           v-model="promptDraft"
           class="wb-textarea"
           placeholder="描述生成脚本时应遵循的约束，如入口函数签名、禁止访问外部网络等"
@@ -393,6 +413,8 @@ watch(
 .wb-stream-note.error { background: #fef2f2; color: #b91c1c; }
 .wb-textarea { flex: 1; width: 100%; margin: 0; border: 1px solid #dbe3ee; border-radius: 8px; background: #fff; color: var(--rc-text); font-size: 13px; line-height: 1.6; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 12px; outline: none; resize: none; box-sizing: border-box; }
 .wb-textarea:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
+.wb-describe { background: #f8fafc; color: var(--rc-text-2); cursor: default; }
+.wb-describe:focus { border-color: #dbe3ee; box-shadow: none; }
 .wb-code { background: #0f172a; color: #dbeafe; }
 .wb-code:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #1e3a5f; }
 .wb-splitter { flex: 0 0 10px; cursor: col-resize; position: relative; }
