@@ -48,7 +48,6 @@ function patch(p: Partial<RuleOrchestration>) {
 // 文案分流：内容同构，只有措辞按节点类型切换
 const describeLabel = computed(() => (isMonitor.value ? '数据监控描述' : isRule.value ? '规则处理描述' : '抓取需求描述'))
 const describePlaceholder = computed(() => (isRule.value ? '请使用自然语言描述你需要生成脚本的规则或转换关系' : '描述抓取需求，如打开列表页提取表格前 20 行数据'))
-const pathLabel = computed(() => (isRule.value ? '脚本路径' : '配置路径'))
 const generateLabel = computed(() => (isRule.value ? '生成脚本' : '生成配置'))
 const saveLabel = computed(() => (isRule.value ? '保存脚本' : '保存配置'))
 // S6-1：编排工作区（合并原 RuleScriptDialog/RuleSystemPromptDialog）的文案分流
@@ -188,13 +187,6 @@ watch(
   () => { if (isRule.value) void loadProviderModelOptions() },
   { immediate: true },
 )
-async function onMainModelProviderChange(value: string) {
-  patch({ modelProviderCode: value })
-  await loadModels(value, orchCfg.value.modelCode)
-}
-function onMainModelChange(value: string) {
-  patch({ modelCode: value })
-}
 
 // 进入查看态时按 ruleId 回灌详情 + 缺正文时按 scriptPath 拉 MinIO（对齐旧 handleOpenRecord）
 const hydrateToken = ref('')
@@ -260,8 +252,10 @@ function onSystemPromptChange(value: string) {
 function onPromptCategoryChange(value: PromptCategory) {
   patch({ promptCategory: resolvePromptCategoryForNode(cfg.value, value) })
 }
-function onModelProviderChange(value: string) {
+async function onModelProviderChange(value: string) {
   patch({ modelProviderCode: value })
+  // 换供应商必须重拉该供应商的模型列表，否则下拉里留着上一家的模型（原 onMainModelProviderChange 的行为）
+  await loadModels(value, orchCfg.value.modelCode)
 }
 function onModelChange(value: string) {
   patch({ modelCode: value })
@@ -269,17 +263,6 @@ function onModelChange(value: string) {
 function onScriptChange(value: string) {
   patch({ script: value })
 }
-async function openScriptContent() {
-  if (!orchCfg.value.script?.trim() && orchCfg.value.scriptPath?.trim()) {
-    await hydrateViewFromServer()
-  }
-  if (!orchCfg.value.script?.trim()) {
-    ElMessage.warning('脚本内容未加载')
-    return
-  }
-  workbenchOpen.value = true
-}
-
 const generating = ref(false)
 const generateAbort = ref<AbortController | null>(null)
 const thinkingText = ref('')

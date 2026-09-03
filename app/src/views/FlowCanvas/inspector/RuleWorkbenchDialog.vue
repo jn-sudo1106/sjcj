@@ -11,9 +11,9 @@
 //   - 脚本/配置：直接双向绑定（每次输入都 emit update:script），没有草稿概念——原来这块是只读的，
 //     S6-1 才第一次开放编辑，没有"取消"包袱要延续，直接绑定跟本应用其余文本框风格一致，更简单。
 //     真正落盘由外部「保存脚本/配置」按钮触发（走 orchestrationSave 接口 + 二次确认，逻辑留在父组件不重复）。
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { fetchDefaultModels, fetchModelProviders, ruleApi, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleFieldOption, type RuleOrchestration } from '@/api'
+import { fetchDefaultModels, fetchModelProviders, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleFieldOption, type RuleOrchestration } from '@/api'
 import { fetchPromptList } from '@/api/prompt'
 import type { PromptCategoryGroup } from './promptCategory'
 import { applyPromptTemplate } from '@/utils/flow/promptTemplate'
@@ -217,14 +217,6 @@ function onGenerate() {
     modelProviderCode: modelProviderDraft.value,
     modelCode: modelDraft.value,
   })
-}
-async function copyScript() {
-  try {
-    await navigator.clipboard.writeText(props.script)
-    ElMessage.success('已复制脚本内容')
-  } catch {
-    ElMessage.error('复制失败，请手动选中复制')
-  }
 }
 
 // 中间拖拽分隔（左栏宽度百分比，25%~75% 夹住，跟 FlowCanvas/index.vue 的检查区分隔条同款交互）
