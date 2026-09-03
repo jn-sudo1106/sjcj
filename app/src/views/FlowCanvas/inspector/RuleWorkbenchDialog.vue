@@ -11,7 +11,7 @@
 //   - 脚本/配置：直接双向绑定（每次输入都 emit update:script），没有草稿概念——原来这块是只读的，
 //     S6-1 才第一次开放编辑，没有"取消"包袱要延续，直接绑定跟本应用其余文本框风格一致，更简单。
 //     真正落盘由外部「保存脚本/配置」按钮触发（走 orchestrationSave 接口 + 二次确认，逻辑留在父组件不重复）。
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fetchDefaultModels, fetchModelProviders, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleFieldOption, type RuleOrchestration } from '@/api'
 import { fetchPromptList } from '@/api/prompt'
@@ -38,6 +38,9 @@ const props = defineProps<{
   outputFieldOptions: RuleFieldOption[]
   script: string
   scriptPath?: string
+  thinking?: string
+  generationState?: 'idle' | 'thinking' | 'content' | 'done' | 'error'
+  generationMessage?: string
   generateLabel: string
   saveLabel: string
   generating: boolean
@@ -215,6 +218,7 @@ async function copyScript() {
 // 中间拖拽分隔（左栏宽度百分比，25%~75% 夹住，跟 FlowCanvas/index.vue 的检查区分隔条同款交互）
 const leftPct = ref(42)
 const bodyEl = ref<HTMLElement>()
+const thinkingCollapsed = ref(false)
 let splitStartX = 0
 let splitStartPct = 0
 function onSplitMove(e: MouseEvent) {
@@ -239,6 +243,40 @@ function onSplitStart(e: MouseEvent) {
 }
 
 const leftStyle = computed(() => ({ flex: `0 0 ${leftPct.value}%` }))
+const streamStateLabel = computed(() => {
+  switch (props.generationState) {
+    case 'thinking': return '思考中'
+    case 'content': return '输出中'
+    case 'done': return '已完成'
+    case 'error': return '出错'
+    default: return props.generating ? '生成中' : '待生成'
+  }
+})
+const thinkingBodyRef = ref<HTMLElement | null>(null)
+async function scrollThinkingToBottom() {
+  await nextTick()
+  const el = thinkingBodyRef.value
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+}
+watch(
+  () => [props.open, props.generating, props.thinking, props.generationState] as const,
+  () => {
+    if (!props.open) return
+    if (props.generating || (props.thinking?.trim()) || props.generationState === 'done') thinkingCollapsed.value = false
+  },
+  { immediate: true },
+)
+watch(
+  () => [props.open, props.generating, props.thinking, props.generationState, thinkingCollapsed.value] as const,
+  () => {
+    if (!props.open || thinkingCollapsed.value) return
+    if (props.generating || props.thinking?.trim() || props.generationState === 'done' || props.generationState === 'error') {
+      void scrollThinkingToBottom()
+    }
+  },
+  { flush: 'post', immediate: true },
+)
 </script>
 
 <template>
@@ -298,6 +336,7 @@ const leftStyle = computed(() => ({ flex: `0 0 ${leftPct.value}%` }))
       <div class="wb-pane wb-pane-right">
         <div class="wb-pane-head">
           <b>{{ scriptLabel }}</b>
+          <span class="wb-state">{{ streamStateLabel }}</span>
           <span class="wb-path">{{ scriptPath || '未生成' }}</span>
           <div class="wb-pane-actions">
             <button class="rc-btn" type="button" :disabled="!script.trim()" @click="copyScript">复制</button>
@@ -309,6 +348,19 @@ const leftStyle = computed(() => ({ flex: `0 0 ${leftPct.value}%` }))
               {{ saving ? '保存中...' : saveLabel }}
             </button>
           </div>
+        </div>
+        <div v-if="thinking?.trim() || generating || generationState === 'done' || generationState === 'error'" class="wb-stream">
+          <button type="button" class="wb-stream-head" @click="thinkingCollapsed = !thinkingCollapsed">
+            <span>思考过程</span>
+            <span class="wb-stream-state">{{ streamStateLabel }}</span>
+            <span class="wb-stream-caret">{{ thinkingCollapsed ? '▸' : '▾' }}</span>
+          </button>
+          <div v-show="!thinkingCollapsed" ref="thinkingBodyRef" class="wb-stream-body">
+            <pre class="wb-stream-text">{{ thinking?.trim() || (generating ? '等待模型返回思考过程…' : '暂无思考过程') }}</pre>
+          </div>
+        </div>
+        <div v-if="generationMessage" class="wb-stream-note" :class="generationState">
+          {{ generationMessage }}
         </div>
         <textarea class="wb-textarea wb-code" :value="script" placeholder="点右上「生成」，或直接手写" @input="onScriptInput" />
       </div>
@@ -322,12 +374,23 @@ const leftStyle = computed(() => ({ flex: `0 0 ${leftPct.value}%` }))
 .wb-pane-right { flex: 1 1 auto; }
 .wb-pane-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
 .wb-pane-head b { font-size: 13px; color: var(--rc-text); flex-shrink: 0; }
+.wb-state { flex: none; padding: 2px 8px; border-radius: 999px; background: #e8f0ff; color: #1d4ed8; font-size: 11px; font-weight: 700; }
 .wb-category { width: 132px; flex: 0 0 132px; }
 .wb-provider { width: 150px; flex-basis: 150px; }
 .wb-model { width: 170px; flex-basis: 170px; }
 .wb-help { margin: -2px 0 8px; color: var(--rc-faint); font-size: 11px; line-height: 1.4; }
 .wb-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--rc-faint); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .wb-pane-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.wb-stream { margin: 0 0 10px; border: 1px solid #1e293b; border-radius: 8px; overflow: hidden; background: #0b1220; }
+.wb-stream-head { width: 100%; display: flex; align-items: center; gap: 8px; justify-content: space-between; padding: 8px 10px; border: 0; background: #111827; color: #e5eefc; font-size: 12px; font-weight: 700; cursor: pointer; text-align: left; }
+.wb-stream-head span:first-child { flex: 1; }
+.wb-stream-state { flex: none; color: #93c5fd; font-size: 11px; font-weight: 700; }
+.wb-stream-caret { flex: none; color: #93c5fd; }
+.wb-stream-body { max-height: 24vh; overflow-y: auto; padding: 10px; border-top: 1px solid #1e293b; }
+.wb-stream-text { margin: 0; color: #cbd5e1; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.wb-stream-note { margin: 0 0 10px; padding: 8px 10px; border-radius: 8px; background: #ecfdf5; color: #047857; font-size: 12px; font-weight: 600; }
+.wb-stream-note.done { background: #ecfdf5; color: #047857; }
+.wb-stream-note.error { background: #fef2f2; color: #b91c1c; }
 .wb-textarea { flex: 1; width: 100%; margin: 0; border: 1px solid #dbe3ee; border-radius: 8px; background: #fff; color: var(--rc-text); font-size: 13px; line-height: 1.6; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 12px; outline: none; resize: none; box-sizing: border-box; }
 .wb-textarea:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .wb-code { background: #0f172a; color: #dbeafe; }

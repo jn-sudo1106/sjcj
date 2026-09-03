@@ -500,6 +500,88 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     }), expect.anything())
   })
 
+  it('SSE 生成时会把 thinking 累积到思考面板，content 逐步写入代码区，done 显示完成提示', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', {
+      modelProviderCode: 'DeepSeek',
+      modelCode: 'deepseek-chat',
+      script: '',
+      scriptPath: '',
+    })
+    await flushPromises()
+
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
+      options?.onThinking?.('先确认输入表')
+      options?.onThinking?.('再确认字段')
+      options?.onContent?.('def main(date, zb_value):\n')
+      options?.onContent?.('    return {"end_date": "2025-01-01"}\n')
+      options?.onDone?.({ script: 'def main(date, zb_value):\n    return {"end_date": "2025-01-01"}', scriptPath: '/rules/generated/orch-173.py' })
+      return { script: 'def main(date, zb_value):\n    return {"end_date": "2025-01-01"}', scriptPath: '/rules/generated/orch-173.py' }
+    })
+
+    await wrapper.find('textarea[placeholder*="描述规则处理逻辑"]').setValue('按 sku_id 生成 sku_name')
+    const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
+    await editBtn.trigger('click')
+    await flushPromises()
+
+    const genBtn = wrapper.findAll('.wb-pane-right .wb-pane-actions button').find((b) => b.text().includes('生成'))!
+    await genBtn.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('思考过程')
+    expect(wrapper.text()).toContain('先确认输入表')
+    expect(wrapper.text()).toContain('再确认字段')
+    const codeTextarea = wrapper.find('textarea.wb-code')
+    expect((codeTextarea.element as HTMLTextAreaElement).value).toContain('def main(date, zb_value)')
+    expect(wrapper.text()).toContain('保存完成')
+  })
+
+  it('SSE 生成时思考面板会自动滚动到底部', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', {
+      modelProviderCode: 'DeepSeek',
+      modelCode: 'deepseek-chat',
+      script: '',
+      scriptPath: '',
+    })
+    await flushPromises()
+
+    const scrollSpy = vi.fn()
+    const scrollHeightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight')
+    const scrollTopDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTop')
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 480 })
+    Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
+      configurable: true,
+      get: () => 0,
+      set: scrollSpy,
+    })
+
+    try {
+      vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
+        options?.onThinking?.('第一段思考')
+        await flushPromises()
+        options?.onThinking?.('第二段思考')
+        return { script: 'def main(date, zb_value):\n    return {"end_date": "2025-01-01"}', scriptPath: '/rules/generated/orch-173.py' }
+      })
+
+      await wrapper.find('textarea[placeholder*="描述规则处理逻辑"]').setValue('按 sku_id 生成 sku_name')
+      const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
+      await editBtn.trigger('click')
+      await flushPromises()
+
+      const genBtn = wrapper.findAll('.wb-pane-right .wb-pane-actions button').find((b) => b.text().includes('生成'))!
+      await genBtn.trigger('click')
+      await flushPromises()
+
+      expect(scrollSpy).toHaveBeenCalledWith(480)
+    } finally {
+      if (scrollHeightDesc) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', scrollHeightDesc)
+      if (scrollTopDesc) Object.defineProperty(HTMLElement.prototype, 'scrollTop', scrollTopDesc)
+    }
+  })
+
   it('数据监控节点工作区会把 source_id/source_cron/source_table 按表单值替换', async () => {
     mockAssets('通用新闻表', '900', 'sense_data.TB_CNEWS')
     const { flow, wrapper } = mountOnMonitorNode()

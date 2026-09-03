@@ -281,6 +281,9 @@ async function openScriptContent() {
 
 const generating = ref(false)
 const generateAbort = ref<AbortController | null>(null)
+const thinkingText = ref('')
+const generationMessage = ref('')
+const generationState = ref<'idle' | 'thinking' | 'content' | 'done' | 'error'>('idle')
 function onCancelGenerate() {
   generateAbort.value?.abort()
 }
@@ -359,18 +362,19 @@ async function onGenerateScript(
   const controller = new AbortController()
   generateAbort.value = controller
   generating.value = true
+  thinkingText.value = ''
+  generationMessage.value = ''
+  generationState.value = 'idle'
+  patch({ script: '', scriptPath: '' })
   try {
     const genCfg = {
       ...orchCfg.value,
       ...draft,
       ruleId,
     }
+    let streamedScript = ''
     let res: Awaited<ReturnType<typeof ruleApi.orchestrationGenerate>>
     if (isRule.value) {
-      // 流式回显（0831）：data-process 返回 text/plain 分块流，逐块写回 script，
-      // 脚本预览框 / 全屏工作台实时打字机效果；结束时再以解析后的干净正文 + scriptPath 覆盖。
-      // 生成中途失败/取消时保留已流出的部分内容（用户看得见生成到哪了）。
-      let streamed = ''
       res = await ruleApi.dataProcessGenerate(buildDataProcessGeneratePayload({
         description: genCfg.describe,
         configId: Number(cfg.value?.configId ?? 0),
@@ -385,22 +389,34 @@ async function onGenerateScript(
         systemPrompt: genCfg.systemPrompt ?? '',
       }), {
         signal: controller.signal,
-        onChunk: (delta) => {
-          streamed += delta
-          // 只剥开头的 ```python 围栏，让正文从第一行代码开始显示；
-          // 结尾围栏与「# 当前文件已保存到…」标记行由完成后的整体解析清理。
-          patch({ script: streamed.replace(/^```[a-zA-Z]*[ \t]*\n/, '') })
+        onThinking: (delta) => {
+          if (!delta) return
+          generationState.value = 'thinking'
+          thinkingText.value = `${thinkingText.value}${delta}`
+        },
+        onContent: (delta) => {
+          if (!delta) return
+          generationState.value = 'content'
+          streamedScript += delta
+          patch({ script: streamedScript.replace(/^```[a-zA-Z]*[ \t]*\n/, '') })
+        },
+        onDone: (payload) => {
+          generationState.value = 'done'
+          generationMessage.value = payload.message || '保存完成'
         },
       })
     } else {
       res = await ruleApi.orchestrationGenerate(genCfg, controller.signal)
     }
     patch({ script: res.script, scriptPath: res.scriptPath })
+    if (isRule.value) generationMessage.value = generationMessage.value || '保存完成'
     ElMessage.success(isRule.value ? '脚本已生成' : '配置已生成')
   } catch (e) {
     if (controller.signal.aborted || (e as Error)?.message?.includes('已取消')) {
       ElMessage.info('已取消生成')
     } else {
+      generationState.value = 'error'
+      generationMessage.value = (e as Error)?.message ?? String(e)
       ElMessage.error(`生成${isRule.value ? '脚本' : '配置'}失败：${(e as Error)?.message ?? String(e)}`)
     }
   } finally {
@@ -631,6 +647,9 @@ function goToDataView() {
     :output-table-name="orchCfg.outputTable"
     :source-id="isMonitor ? (cfg?.stepSourceId ?? '') : ''"
     :source-cron="isMonitor ? (cfg?.schedule?.cron ?? '') : ''"
+    :thinking="thinkingText"
+    :generation-state="generationState"
+    :generation-message="generationMessage"
     :input-fields="orchCfg.inputFields ?? []"
     :output-fields="orchCfg.outputFields ?? []"
     :input-field-options="inputFieldOptions"
