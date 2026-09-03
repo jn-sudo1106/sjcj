@@ -99,6 +99,62 @@ describe('useStepWrite.persistFlowSteps', () => {
     expect(modify.mock.calls[0][0].url).toBe('$VAL$')
   })
 
+  // 0903 YB-A 止血。真实源 920663 的拓扑：40597 ├─▶ 40598 / └─▶ 40620（两支同一前置），
+  // 而 buildSourceSeed 把子步骤一律拍成直线，画布上看到的是 40597 → 40598 → 40620。
+  // 按画布重算 lastStep 会把 40620 从 40597 挪到 40598 后面——分支被静默拍平且不可逆。
+  it('快照里有真实分支时**不改写 lastStep**，只写名称/条件（分支不会被拍平）', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    const mk = (stepId: string, dependsOn: string[]): Step => ({
+      ...SNAPSHOT, stepId, name: `节点${stepId}`, dependsOn,
+    })
+    const steps = [mk('40597', ['0']), mk('40598', ['40597']), mk('40620', ['40597'])]
+    flow.loadFromSource(
+      { sourceId: '430016824', name: '明阳科技', url: 'http://x', configId: '1400935', mainTable: '6200026', owner: 'a', state: 'C' } as never,
+      steps,
+    )
+    source.rememberSteps(steps, 'replace')
+    // 画布确实被拍成了直线——这正是问题所在，先把它断言出来
+    expect(flow.main.filter((id: string) => /^\d+$/.test(id))).toEqual(['40597', '40598', '40620'])
+
+    const modify = vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    flow.setEntryCondition('40598', { mode: 'expr', logic: 'AND', items: [], expr: 'K6==nil' })
+
+    const { persistFlowSteps } = useStepWrite()
+    await persistFlowSteps()
+
+    const written = Object.fromEntries(modify.mock.calls.map(([step]) => [step.stepId, step.dependsOn]))
+    // 关键：40620 仍然挂在 40597 下，没有被改写成 40598
+    expect(written['40620']).toEqual(['40597'])
+    expect(written['40598']).toEqual(['40597'])
+    // 与拓扑无关的字段照常保存
+    expect(modify.mock.calls.find(([s]) => s.stepId === '40598')![0].condition).toBe('K6==nil')
+  })
+
+  it('没有分支的直链流程仍然按画布重算 lastStep（止血只作用于分支流程）', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    const mk = (stepId: string, dependsOn: string[]): Step => ({
+      ...SNAPSHOT, stepId, name: `节点${stepId}`, dependsOn,
+    })
+    // 快照里 b 的前置写的是 '0'，画布上 b 排在 a 后面 → 重算应得到 ['a' 的 id]
+    const steps = [mk('40597', ['0']), mk('40598', ['0'])]
+    flow.loadFromSource(
+      { sourceId: '430016824', name: '直链源', url: 'http://x', configId: '1400935', mainTable: '6200026', owner: 'a', state: 'C' } as never,
+      steps,
+    )
+    source.rememberSteps(steps, 'replace')
+
+    const modify = vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    const { persistFlowSteps } = useStepWrite()
+    await persistFlowSteps()
+
+    const written = Object.fromEntries(modify.mock.calls.map(([step]) => [step.stepId, step.dependsOn]))
+    expect(written['40598']).toEqual(['40597'])
+  })
+
   it('本地新节点有 configId 时 saveItemConfig + 差集定位 + enable', async () => {
     setActivePinia(createPinia())
     const { flow } = loadTestSource()

@@ -4,6 +4,7 @@
 import { computed, reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { applyConfigToNode } from '@/utils/flow/nodeConfigPayload'
+import { hasRealBranches } from '@/utils/flow/stepPersist'
 import {
   NODE_CONFIGS,
   TEMPLATE_TO_NODE,
@@ -1011,6 +1012,17 @@ export const useFlowStore = defineStore('flow', () => {
     return result
   }
 
+  /**
+   * 这个源的真实步骤里是否有分支（两个及以上步骤的 lastStep 指向同一个前置）。
+   *
+   * 画布目前把子步骤一律拍成直线（buildSourceSeed 的 branches 恒为 []），所以这个值为 true 时
+   * **画布展示的顺序不是真实拓扑**。两个用处：
+   *   ① 自动保存据此冻结 lastStep 回写（useStepWrite，0903 YB-A 止血）
+   *   ② 画布头据此显示只读提示，让用户知道看到的是拍平后的样子
+   * 分支拓扑还原见 YB-B；那之后这个开关应当随之退役。
+   */
+  const hasBranchedSteps = computed(() => hasRealBranches(sourceStore.stepSnapshots))
+
   function setFlowName(name: string) {
     sourceStore.setFlowName(name)
     nodeStore.touchFlow()
@@ -1242,6 +1254,7 @@ export const useFlowStore = defineStore('flow', () => {
     clearSiteCtx,
     setSiteDisplayCtx,
     startDraftSource,
+    hasBranchedSteps,
     applyTemplate,
     setFlowName,
     patchSource,

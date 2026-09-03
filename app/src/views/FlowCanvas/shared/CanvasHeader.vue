@@ -230,6 +230,13 @@ async function onSwitchFlow(command: string) {
       </div>
       <!-- 「停用」0828 D24 移除：源启停统一在源视图的行操作里做，画布头只留运行入口。
            这里不做成禁用或隐藏——按钮整个删掉，避免同一能力两个入口。 -->
+      <!-- 分支流程的只读提示（0903 YB-A/YB-3）：画布目前把子步骤一律拍成直线，
+           有分支的历史流程看到的顺序不是真实拓扑。既然展示的是假的，就必须说出来——
+           顺带说明"已有分支不会被改坏"，因为自动保存已经冻结了 lastStep 回写。 -->
+      <div v-if="view === 'flow' && flow.hasBranchedSteps" class="ch-branch-note" data-testid="flow-branch-flattened">
+        <span aria-hidden="true">⚠</span>
+        该流程含分支，画布暂按直线展示。已有的分支结构不会被改动；新增节点的位置以画布顺序为准。
+      </div>
       <div v-if="view === 'flow'" class="ch-canvas-actions" aria-label="源运行操作">
         <button class="rc-btn primary" type="button" @click="srcSnatch">发起抓取</button>
       </div>
@@ -266,6 +273,7 @@ async function onSwitchFlow(command: string) {
 .ch-flow-limit { border-bottom: 1px solid var(--rc-border-soft); }
 .ch-flow-manage { width: 100%; height: 32px; padding: 0 10px; border: 0; background: #fff; color: var(--rc-primary); font-size: 12px; text-align: left; cursor: pointer; }
 .ch-flow-manage:hover { background: var(--rc-primary-bg); }
+.ch-branch-note { display: flex; align-items: center; gap: 6px; width: 100%; margin-top: 6px; padding: 6px 9px; border: 1px solid #fde68a; border-radius: 6px; background: #fffbeb; color: #92400e; font-size: 11.5px; }
 .ch-save-status { color: var(--rc-faint); font-size: 12px; min-height: 18px; min-width: 4em; }
 .ch-save-pending { color: var(--rc-warn); }
 .ch-save-retry { border: 0; background: transparent; color: #b91c1c; font-size: 12px; cursor: pointer; padding: 0; }

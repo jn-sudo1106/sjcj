@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import CanvasHeader from './CanvasHeader.vue'
 import { useFlowStore } from '@/stores/flow'
+import { useSourceStore } from '@/stores/source'
 import { flowCenterApi } from '@/api'
 import { ElMessageBox } from 'element-plus'
 
@@ -160,6 +161,27 @@ describe('CanvasHeader · 流程视图操作', () => {
     expect(String(message)).toContain('生成属于本源的一套新配置')
     expect(String(message)).toContain('不影响该模板和其它源')
     expect(title).toBe('切换流程模板')
+  })
+
+  // 0903 YB-A/YB-3：画布把有分支的流程拍成直线展示，既然展示的是假的就必须说出来。
+  it('流程含分支时显示只读提示；直链流程不显示', async () => {
+    const wrapper = await mountHeader()
+    const flow = useFlowStore()
+    const mk = (stepId: string, dependsOn: string[]) =>
+      ({ stepId, sourceId: '430016824', name: stepId, dependsOn, enabled: true, inputTable: 'T', outputTable: 'T' })
+    const src = { sourceId: '430016824', name: '明阳科技', url: 'http://x', configId: '1400935', mainTable: 'T', owner: 'a', state: 'C' }
+
+    flow.loadFromSource(src as never, [mk('40597', ['0']), mk('40598', ['40597'])] as never, null)
+    useSourceStore().rememberSteps([mk('40597', ['0']), mk('40598', ['40597'])] as never, 'replace')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="flow-branch-flattened"]').exists()).toBe(false)
+
+    const branched = [mk('40597', ['0']), mk('40598', ['40597']), mk('40620', ['40597'])]
+    flow.loadFromSource(src as never, branched as never, null)
+    useSourceStore().rememberSteps(branched as never, 'replace')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="flow-branch-flattened"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('已有的分支结构不会被改动')
   })
 
   it('不再提供同步到源入口', async () => {

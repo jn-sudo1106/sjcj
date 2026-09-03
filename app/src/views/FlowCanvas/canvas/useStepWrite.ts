@@ -11,6 +11,7 @@ import { useSourceStore } from '@/stores/source'
 import {
   assertStepsPersistable,
   isWritableStepId,
+  hasRealBranches,
   lastStepIdsFromCanvas,
   mergeStepForWrite,
 } from '@/utils/flow/stepPersist'
@@ -143,11 +144,19 @@ export function useStepWrite() {
     ElMessage.success('节点名称已保存')
   }
 
-  /** 自动保存：先新建缺 ID 的节点，再按画布回写已有步骤的名称/条件/lastStep。 */
+  /**
+   * 自动保存：先新建缺 ID 的节点，再按画布回写已有步骤的名称/条件/lastStep。
+   *
+   * ⚠️ **有真实分支的流程不重算 `lastStep`**（0903 YB-A 止血）。`buildSourceSeed` 目前把
+   * 子步骤一律拍成一条主链，分支流程在画布上是**假的直线**；据此重算前置会把
+   * 「40620 挂在 40597 下」改写成「挂在 40598 后面」，分支被静默拍平且不可逆。
+   * 名称、进入条件这些与拓扑无关的字段照常写。分支拓扑还原见 YB-B。
+   */
   async function persistFlowSteps(): Promise<{ created: number; updated: number }> {
     const sid = sourceIdOf()
     if (!sid) return { created: 0, updated: 0 }
     assertStepsPersistable(flow.main, flow.configs)
+    const branched = hasRealBranches(sourceStore.stepSnapshots)
     let created = 0
     let updated = 0
 
@@ -164,7 +173,7 @@ export function useStepWrite() {
       if (!sourceStore.stepSnapshots[id]) {
         throw new Error(`节点「${flow.configs[id].title || id}」缺少步骤快照，请刷新源后再保存`)
       }
-      await persistExisting(id, true)
+      await persistExisting(id, !branched)
       updated += 1
     }
 
