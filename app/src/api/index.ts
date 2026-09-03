@@ -1,4 +1,4 @@
-import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError, isMockMode, isProductionCreateEnabled, type RequestOptions } from './client'
+import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError, isMockMode, isProductionBackend, isProductionCreateEnabled, type RequestOptions } from './client'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readLoginUsername, readStoredToken, triggerSessionExpired } from './auth'
 import { createSseEventParser } from '@/utils/stream/sse'
 import type {
@@ -87,8 +87,28 @@ function unwrapTaskInstPage(result: unknown): { total: number; list: TaskInst[] 
   return { total, list: list.map(taskInstFromLegacy) }
 }
 
+/**
+ * snatchSave 的空值剥离（2026-09-03 生产实测两次踩雷后加）。
+ *
+ * 旧平台 SourceBuildForm 的 form 里，没填的字段是 `undefined`，`JSON.stringify` 直接丢掉——
+ * **后端从来没收到过这些 key**，于是它对空值毫无防御。我们这边照着"补齐字段"的直觉一律发 `''`，
+ * 每个都会在后端炸开，而且 Jackson/Spring 是遇到第一个就抛，只能一颗一颗踩：
+ *   - `proxy: ''`  → `Cannot coerce empty String ("") to element of ArrayList<String>`（DTO 是 List）
+ *   - `cron: ''`   → `Cron expression must consist of 6 fields (found 0 in "")`
+ * 后面还排着 `keep` / `loginTemplete` / `tags` / `sourceUrl`，同样是旧平台压根不发的字段。
+ *
+ * 所以不逐个补，在唯一发送点统一剥掉 `undefined` 和 `''`，等价于旧平台的行为。
+ * ⚠️ 空数组要留着：`params: []` 是旧平台**确实会发**的（parseParamObj(undefined) 返回 `[]`），
+ * 而 proxy 不用代理时由构造方给 `undefined`，不是 `[]`。
+ */
+function stripEmptyForSnatchSave(payload: LegacySnatchSaveRequest): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(payload as unknown as Record<string, unknown>).filter(([, v]) => v !== undefined && v !== ''),
+  )
+}
+
 async function legacySnatchSaveRequest(payload: LegacySnatchSaveRequest, options: Pick<RequestOptions, 'mode'> = {}): Promise<LegacySnatchSaveResult> {
-  const result = await request<LegacySnatchSaveResult>('snatch/snatchSave', payload as unknown as Record<string, unknown>, {
+  const result = await request<LegacySnatchSaveResult>('snatch/snatchSave', stripEmptyForSnatchSave(payload), {
     method: 'POST',
     httpEndpoint: 'snatch/snatchSave',
     ...options,
@@ -272,7 +292,7 @@ function legacySnatchSavePayloadFromSource(site: Site, source: Source): LegacySn
     sourceUrl: source.url ?? '',
     sourceName: source.name,
     categoryId: source.dirId ?? site.dirId ?? '',
-    proxy: source.proxy ?? (source.useProxy ? '1' : ''),
+    proxy: source.proxy ?? (source.useProxy ? ['1'] : undefined),
     keep: source.resume ? '1' : '',
     cron: source.cron ?? '',
     tags: source.tags?.join(',') ?? '',
@@ -715,8 +735,19 @@ export const siteApi = {
    */
   siteCreate: async (site: Site, sources: Source[] = []): Promise<SiteCreateResult> => {
     if (!isProductionCreateEnabled()) {
-      if (isMockMode()) {
+      // 已连生产后端却没开新建闸时，**不能**退回 mock（2026-09-03 实测踩到）：mock 只在浏览器本地
+      // 落库并回一个前端自造的假 ID（`site-123456` / `src-654321`，见 NewSiteWizard.suggestId），
+      // 而读取侧的 source/sourceDetail、item/next/nextConfigPaged、site/sources 都已经是 live，
+      // 拿假 ID 打真实后端必然查不到 —— 表现是画布卡在「正在加载源…」、侧栏「该网站暂无源」，
+      // 用户还以为建成功了。宁可当场拒绝，也别造出一个只有自己看得见的网站。
+      if (isMockMode() && !isProductionBackend()) {
         return assetMockRequest<SiteCreateResult>('site/createSite', { site, sources })
+      }
+      if (isMockMode()) {
+        return {
+          ok: false,
+          message: '当前已连生产后端但未开启新建通道：mock 只会造出查不到的假 ID。请以 VITE_SITE_CREATE_TARGET=production 启动后重试',
+        }
       }
       return { ok: false, message: '新建网站仅允许生产环境，请设置 VITE_SITE_CREATE_TARGET=production' }
     }

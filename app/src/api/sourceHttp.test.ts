@@ -25,7 +25,10 @@ describe('旧平台新建源 HTTP 契约', () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '源ID:12345' }))
     const { sourceApi } = await import('./index')
     const payload = {
-      sourceType: 90, sourceUrl: 'https://example.com', sourceName: '公告源', categoryId: 'cat-1', proxy: '', keep: '', cron: '', tags: '',
+      sourceType: 90, sourceUrl: 'https://example.com', sourceName: '公告源', categoryId: 'cat-1',
+      // 未填的三个：旧平台 form 里是 undefined、根本不进 body；发 '' 会被后端逐个抛回来
+      // （proxy → ArrayList 强转失败，cron → Cron expression must consist of 6 fields，2026-09-03 生产实测）
+      proxy: undefined, keep: '', cron: '', tags: '',
       newConfig: '1' as const, isMulti: '1', loginTemplete: '1', entryTypeId: 'tb-1', params: [{ paramId: 'p-1' }],
       reqLogin: '1' as const, newLoginConfig: '1' as const, loginUrl: 'https://example.com/login', loginName: 'alice', loginPwd: 'secret',
     }
@@ -34,8 +37,33 @@ describe('旧平台新建源 HTTP 契约', () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toContain('/api/v1/snatch/snatchSave')
     expect(init.method).toBe('POST')
-    expect(JSON.parse(String(init.body))).toEqual(payload)
+    const body = JSON.parse(String(init.body))
+    // 空值被剥掉，其余字段名原样保持旧平台
+    expect(body).toEqual({
+      sourceType: 90, sourceUrl: 'https://example.com', sourceName: '公告源', categoryId: 'cat-1',
+      newConfig: '1', isMulti: '1', loginTemplete: '1', entryTypeId: 'tb-1', params: [{ paramId: 'p-1' }],
+      reqLogin: '1', newLoginConfig: '1', loginUrl: 'https://example.com/login', loginName: 'alice', loginPwd: 'secret',
+    })
+    expect(Object.keys(body)).not.toContain('proxy')
+    expect(Object.keys(body)).not.toContain('cron')
+    expect(Object.keys(body)).not.toContain('keep')
+    expect(Object.keys(body)).not.toContain('tags')
+    // 空数组不算空值：params 是旧平台确实会发的字段
+    expect(body.params).toEqual([{ paramId: 'p-1' }])
     expect(result).toMatchObject({ ok: true, message: '源ID:12345', sourceId: '12345' })
+  })
+
+  it('snatchSave 空数组字段照发：params 无参数时仍是 []，不被当空值剥掉', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '源ID:12346' }))
+    const { sourceApi } = await import('./index')
+
+    await sourceApi.snatchSaveAll({
+      sourceUrl: '', sourceName: '无参源', newConfig: '1', isMulti: '1', loginTemplete: '',
+      params: [], reqLogin: '0',
+    })
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body))
+    expect(body).toEqual({ sourceName: '无参源', newConfig: '1', isMulti: '1', params: [], reqLogin: '0' })
   })
 
   it('POST /v1/source/sourcePaged：把新分页/筛选字段转换为旧 payload，并映射列表字段', async () => {

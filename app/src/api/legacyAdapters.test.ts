@@ -132,7 +132,7 @@ describe('旧平台新建源登录字段适配', () => {
     } as never, { configId: 'login-2', newLoginConfig: '1', loginPwd: 'secret' })
 
     expect(payload).toMatchObject({
-      sourceType: 90, sourceUrl: 'https://example.com', sourceName: '公告源', categoryId: 'cat-1', proxy: '1', keep: '1',
+      sourceType: 90, sourceUrl: 'https://example.com', sourceName: '公告源', categoryId: 'cat-1', proxy: ['1'], keep: '1',
       tags: '公告,A股', newConfig: '1', isMulti: '1', loginTemplete: '1', entryTypeId: 'tb-1',
       params: [{ paramId: 'p-date' }], reqLogin: '1', newLoginConfig: '1',
       loginUrl: 'https://example.com/login-2', loginName: 'bob', loginPwd: 'secret',

@@ -112,6 +112,25 @@ describe('网站读取 HTTP 契约', () => {
     expect(result.ok).toBe(true)
   })
 
+  // 2026-09-03：连着生产后端却没开新建闸时，退回 mock 会造出只有本地看得见的假 ID，
+  // 而读取端点都已 live，画布必然卡在「正在加载源…」。必须当场拒绝而不是假装成功。
+  it('已连生产后端但未开新建闸时，siteCreate 拒绝而不退回夹具', async () => {
+    vi.stubEnv('VITE_API_MODE', 'mock')
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    vi.stubEnv('VITE_SITE_CREATE_TARGET', '')
+    const { siteApi } = await import('./index')
+
+    const result = await siteApi.siteCreate({
+      siteId: 'site-guard-1', name: '不该落 mock 的网站', category: '', owner: 'admin', sourceCount: 0, errorCount: 0,
+    }, [])
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('VITE_SITE_CREATE_TARGET=production')
+    expect(result.siteId).toBeUndefined()
+    expect(result.sourceId).toBeUndefined()
+  })
+
   it('全局 mock 时生产新建仍强制走 site/add，不依赖 VITE_API_MODE=http', async () => {
     vi.stubEnv('VITE_API_MODE', 'mock')
     vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '1')

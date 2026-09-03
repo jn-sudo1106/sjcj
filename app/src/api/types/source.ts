@@ -80,8 +80,8 @@ export interface Source {
   // ---- 源级配置（0706 优化·源/节点配置分层）：整条流程共享，编辑入口 = 源信息头编辑抽屉 / 新建源第一步 ----
   /** @deprecated 节点级缺省值；已双轨至 CollectConfig.useProxy */
   useProxy?: boolean // 是否使用代理
-  /** @deprecated 旧平台 snatchSave 请求字段，值为 '1' / ''。 */
-  proxy?: string
+  /** @deprecated 旧平台 snatchSave 请求字段，复选框数组：`['1']` / `[]`（见 LegacySnatchSaveRequest.proxy）。 */
+  proxy?: string[]
   /** @deprecated 节点级缺省值；已双轨至 CollectConfig.needLogin */
   needLogin?: boolean // 是否要求登陆（与 credentialRef 解耦：可先开关，后续再绑凭据）
   /** @deprecated 节点级缺省值；已双轨至 CollectConfig.loginUrl */
@@ -450,7 +450,15 @@ export interface LegacySnatchSaveRequest {
   sourceUrl: string
   sourceName: string
   categoryId?: string
-  proxy?: string
+  /**
+   * ⚠️ 数组，不是字符串。旧平台 Step1 的「使用代理」是 a-checkbox-group（值 `['1']` / `[]`），
+   * 而 SourceBuildForm.commitAll 只对 keep / isMulti / loginTemplete 跑了 parseToString，
+   * **唯独 proxy 不转**，原样以数组提交——后端 DTO 因此是 `List<String>`。
+   * 发字符串会被 Jackson 顶回来：`Cannot coerce empty String ("") to element of ArrayList<String>`
+   * （2026-09-03 生产实测，源保存整条失败但网站已经建了）。
+   */
+  proxy?: string[]
+  /** 与 proxy 同源的复选框，但 commitAll 转过字符串，后端收 String：'1' / ''。 */
   keep?: string
   cron?: string
   tags?: string
