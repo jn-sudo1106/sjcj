@@ -151,7 +151,9 @@ const SOURCE_ID_COL = { prop: 'SOURCE_ID', type: 'string', desc: '所属源 ID',
 // **首节点表整列是 `—`，但列仍然渲染**——不做"全空就隐藏"的特判：那会让同一个数据视图在
 // 不同节点之间列数忽多忽少，用户以为是自己把列关掉了。空值本身就是信息（这是链路起点）。
 const PARENT_ID_COL = { prop: 'PARENT_ID', type: 'string', desc: '父行 ID', label: 'PARENT_ID' }
-const cols = computed(() => (props.meta ? [ENTRY_ID_COL, SOURCE_ID_COL, PARENT_ID_COL, ...props.meta.fields] : []))
+// 列序：ENTRY_ID → PARENT_ID → 源（0903 会上定）。父 ID 紧挨主键——这两列是同一件事的
+// 两头（这行是谁 / 它从哪来），中间隔着「源」得来回扫视才对得上。
+const cols = computed(() => (props.meta ? [ENTRY_ID_COL, PARENT_ID_COL, SOURCE_ID_COL, ...props.meta.fields] : []))
 
 // 预设里认不出来的列先剔掉：presetCols 是按流程配置算的，可能引用了当前表没有的字段
 // （改过表结构、或后继节点读的是另一张表）。留着会让「下一步字段」按钮显示一个虚高的数字。

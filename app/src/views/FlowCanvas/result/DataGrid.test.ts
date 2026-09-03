@@ -266,6 +266,12 @@ describe('DataGrid · 数据层级（0903 H09/H10）', () => {
     return mount(DataGrid, { props: { meta, rows, ...props }, global: { stubs: GRID_STUBS } })
   }
 
+  // 0903 会上定的列序：父 ID 紧挨主键，不夹在「源」后面
+  it('列序是 ENTRY_ID → PARENT_ID → 源', () => {
+    const heads = mountGrid().findAll('thead th').map((th) => th.text().replace(/[↕↑↓]\s*$/, '').trim())
+    expect(heads.slice(0, 3)).toEqual(['ENTRY_ID', 'PARENT_ID', '源'])
+  })
+
   it('PARENT_ID 独立成列，有父行时显示父 ID', () => {
     expect(cellByHeader(mountGrid(), 'PARENT_ID')).toContain('p1')
   })
