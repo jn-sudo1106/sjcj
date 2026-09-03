@@ -32,6 +32,8 @@ import { confirmDanger } from '@/utils/confirmDanger'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import DataGrid from './DataGrid.vue'
 import FilePreview from './components/FilePreview.vue'
+import BackTraceSourcesDialog from './BackTraceSourcesDialog.vue'
+import { sendInBatches } from './useSourceLaunch'
 import { extFromName } from '@/utils/ossFile'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import { readRailOpen, writeRailOpen } from './railPref'
@@ -446,6 +448,46 @@ function buildSummaryQuery(): RowQuery {
     sql: filters.sql || undefined,
   }
 }
+
+// 按条件反查源（0903 Y2 / H12）：全部源数据视图是唯一"跨源看数据"的地方，反查的入口就该在这。
+// 复用 buildSummaryQuery——统计和反查问的是同一批数据，条件口径必须一致，不另拼一份。
+const backTraceQuery = ref<RowQuery | null>(null)
+/** 反查按钮的可用性：没有任何数据条件时反查等于"这张表涉及的所有源"，没有意义 */
+const canBackTrace = computed(() => !!effectiveTableId.value && !!(filters.sql || filters.state || filters.dataId || filters.parentId))
+const backTraceLabel = computed(() => [
+  filters.sql ? filters.sql : '',
+  filters.state ? `状态=${filters.state}` : '',
+  filters.dataId ? `数据ID=${filters.dataId}` : '',
+  filters.parentId ? `父ID=${filters.parentId}` : '',
+].filter(Boolean).join(' AND '))
+function openBackTrace() {
+  if (!canBackTrace.value) return
+  backTraceQuery.value = buildSummaryQuery()
+}
+function onBackTraceOpenSourceView(ids: string[]) {
+  backTraceQuery.value = null
+  // 带着源 ID 去源视图：那边的「源 ID」筛选框本来就收逗号分隔的多个 ID
+  void router.push({ path: '/canvas', query: { siteId: props.siteId, view: 'source', sourceIds: ids.join(',') } })
+}
+async function onBackTraceLaunch(ids: string[]) {
+  backTraceQuery.value = null
+  await confirmDanger(
+    '按反查结果发任务',
+    `将对反查出的 ${ids.length} 个源发起抓取。任务一旦提交无法撤回，是否继续？`,
+    async () => {
+      // all 恒为 0：旧平台这个字段是「所有参数」笛卡尔展开，不是「所有源」（0831 X2-A 的坑）。
+      // 反查出来的源不逐个查参数——真要带参得回源视图勾选后单独发。
+      const result = await sendInBatches(ids, (batch) =>
+        sourceApi.sendSnatchWithParam({ ids: batch, param: {}, all: 0, include: [], skip: 0 }))
+      if (result.failed.length) {
+        const failedCount = result.failed.reduce((n, item) => n + item.ids.length, 0)
+        return { message: `已提交 ${result.sent} 个源，${failedCount} 个失败：${result.failed[0].error}` }
+      }
+      return { message: `已提交 ${result.sent} 个源` }
+    },
+  )
+}
+
 const summaryOpen = ref(false)
 
 const detail = reactive<{ visible: boolean; index: number }>({ visible: false, index: -1 })
@@ -546,6 +588,16 @@ function onCellFile(path: string) {
         <input v-model="filters.sql" class="sdv2-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
         <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
         <button class="rc-btn" type="button" @click="clearFilters">清空</button>
+        <!-- 0903 Y2：会上「我不知道有哪些语言……你这个条件能带回去吗？」——筛出脏数据之后，
+             得知道这批数据来自哪些源才能整批重发。这是数据条件通向源的唯一一条路。 -->
+        <button
+          class="rc-btn"
+          type="button"
+          data-testid="site-data-backtrace"
+          :disabled="!canBackTrace"
+          :title="canBackTrace ? '按当前数据条件反查命中的源' : '先填至少一个数据条件（SQL / 状态 / 数据 ID / 父 ID）'"
+          @click="openBackTrace"
+        >按此条件反查源 →</button>
       </template>
     </div>
 
@@ -754,7 +806,14 @@ function onCellFile(path: string) {
       :style="{ maxWidth: '1180px' }"
       append-to-body
     >
-      <FilePreview
+      <BackTraceSourcesDialog
+      :query="backTraceQuery"
+      :condition-label="backTraceLabel"
+      @close="backTraceQuery = null"
+      @open-in-source-view="onBackTraceOpenSourceView"
+      @launch="onBackTraceLaunch"
+    />
+    <FilePreview
         :path="filePreview.path"
         :name="filePreview.name"
         :ext="extFromName(filePreview.name)"

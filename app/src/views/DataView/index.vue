@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, CopyDocument, QuestionFilled, Plus, Refresh } from '@element-plus/icons-vue'
 import {
@@ -19,6 +19,7 @@ import SourceDetailDrawer from './SourceDetailDrawer.vue'
 import MoreTablesDialog from './MoreTablesDialog.vue'
 import MoreSourcesDialog from './MoreSourcesDialog.vue'
 import DataImportDialog from './DataImportDialog.vue'
+import BackTraceSourcesDialog from '@/views/FlowCanvas/result/BackTraceSourcesDialog.vue'
 import { unsupportedNextStepBatchFilters } from './batchGuards'
 
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
@@ -160,6 +161,7 @@ function buildQuery(): RowQuery {
   return { tableId: tableId.value, sourceId: sourceId.value || undefined, ...panelFilter.value }
 }
 
+const router = useRouter()
 const selectedRowKeys = ref<string[]>([])
 
 async function onTableChange() {
@@ -301,13 +303,25 @@ function onMarkFormal() {
   )
 }
 
-async function onDistinctSource() {
-  try {
-    const ids = await dataApi.distinctSource(buildQuery())
-    await ElMessageBox.alert(ids.join(',') || '（无）', '展示当前条件下所有的源:')
-  } catch (error) {
-    ElMessage.error(`加载失败:${error instanceof Error ? error.message : String(error)}`)
-  }
+// 0903 Y2-8：原来这里是把 ID 拼成逗号串 alert 出来（旧平台「展示当前条件下所有的源」的 1:1 迁移）。
+// 一串 ID 看完只能手动去别处一个个查，等于把活推回给用户。改成打开反查弹窗，
+// 后面接得上「在源视图中打开」和「对这批源发任务」两条路。
+const backTraceQuery = ref<RowQuery | null>(null)
+const backTraceLabel = computed(() => {
+  const f = panelFilter.value as Record<string, unknown>
+  return [
+    f.sql ? String(f.sql) : '',
+    f.state ? `状态=${String(f.state)}` : '',
+    f.dataId ? `数据ID=${String(f.dataId)}` : '',
+    f.parentId ? `父ID=${String(f.parentId)}` : '',
+  ].filter(Boolean).join(' AND ')
+})
+function onBackTraceOpenSourceView(ids: string[]) {
+  backTraceQuery.value = null
+  void router.push({ path: '/canvas', query: { view: 'source', sourceIds: ids.join(',') } })
+}
+function onDistinctSource() {
+  backTraceQuery.value = buildQuery()
 }
 function onClearParent() {
   if (!canWrite.value) {
@@ -752,7 +766,7 @@ onMounted(async () => {
                 <el-dropdown-item @click="onMoreCommand('summary')">查看统计</el-dropdown-item>
                 <el-dropdown-item @click="onMoreCommand('sql')">{{ showSql ? '隐藏查询条件/SQL' : '查看查询条件/SQL' }}</el-dropdown-item>
                 <el-dropdown-item @click="onMoreCommand('steps')">展示处理步骤</el-dropdown-item>
-                <el-dropdown-item @click="onMoreCommand('distinct-source')">查看去重源 ID</el-dropdown-item>
+                <el-dropdown-item @click="onMoreCommand('distinct-source')">按此条件反查源</el-dropdown-item>
                 <el-dropdown-item v-if="canWrite" divided :disabled="!sourceId || !selectedRowKeys.length" @click="onClearParent">
                   清除父表后续标识
                 </el-dropdown-item>
@@ -906,6 +920,20 @@ onMounted(async () => {
         <button class="rc-btn" type="button" @click="apiOpen = false">关闭</button>
       </template>
     </el-dialog>
+
+    <BackTraceSourcesDialog
+
+      :query="backTraceQuery"
+
+      :condition-label="backTraceLabel"
+
+      @close="backTraceQuery = null"
+
+      @open-in-source-view="onBackTraceOpenSourceView"
+
+      @launch="backTraceQuery = null"
+
+    />
 
     <DataImportDialog
       v-model="importOpen"

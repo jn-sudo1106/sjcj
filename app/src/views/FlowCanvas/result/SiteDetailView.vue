@@ -18,6 +18,15 @@ import SiteFileView from './SiteFileView.vue'
 const props = defineProps<{ siteId: string }>()
 const route = useRoute()
 const router = useRouter()
+
+// 数据视图「按此条件反查源」跳过来时 URL 上带的那批源 ID（0903 Y2-4）。
+// 读一次就从 URL 上抹掉：留着的话用户在源视图改了别的条件再刷新，又会被这批旧 ID 拉回去。
+const initialSourceIds = ref(String(route.query.sourceIds ?? '').trim())
+if (initialSourceIds.value) {
+  const next = { ...route.query }
+  delete next.sourceIds
+  void router.replace({ path: route.path, query: next })
+}
 const flow = useFlowStore()
 
 const site = ref<Site | null>(null)
@@ -74,7 +83,7 @@ function openSourceData(source: Source) {
     </div>
     <div v-if="loadError" class="sdv-empty">{{ loadError }}</div>
     <template v-else>
-      <SourceOverviewView v-if="view === 'source'" :current-site-id="siteId" class="sdv-body" @open-source="openSource" @open-source-data="openSourceData" />
+      <SourceOverviewView v-if="view === 'source'" :current-site-id="siteId" :initial-source-ids="initialSourceIds" class="sdv-body" @open-source="openSource" @open-source-data="openSourceData" />
       <SiteDataView v-else-if="view === 'data'" :site-id="siteId" class="sdv-body" />
       <SiteFileView v-else-if="view === 'file'" :site-id="siteId" class="sdv-body" />
     </template>

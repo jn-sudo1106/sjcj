@@ -31,7 +31,12 @@ import {
   type SourceFilter,
 } from './useSourceLaunch'
 
-const props = defineProps<{ currentSiteId: string }>()
+// `initialSourceIds`：从数据视图「按此条件反查源」跳过来时带的那批源 ID（0903 Y2-4）。
+// 直接预填「源 ID」筛选框——那个框本来就收逗号分隔的多个 ID，不为反查另造一套筛选。
+//
+// 走 prop 而不是在这里 useRoute()：本组件此前完全不依赖 router，测试都是裸 shallowMount；
+// 为了一个初始值把整棵测试树都绑上 router 不划算，路由解析留在已经持有 route 的上层。
+const props = defineProps<{ currentSiteId: string; initialSourceIds?: string }>()
 const emit = defineEmits<{
   openSource: [source: Source]
   /** 点「数据量」这个数字（0903 Y1-15）：进这个源的数据视图，而不是流程视图 */
@@ -48,7 +53,7 @@ const page = ref(1)
 const size = ref(20)
 const loading = ref(false)
 const loadError = ref('')
-const sourceIds = ref('')
+const sourceIds = ref(props.initialSourceIds ?? '')
 const name = ref('')
 const statusFilter = ref<StatusFilter>('all')
 const tagFilter = ref('')

@@ -222,7 +222,10 @@ describe('DataView · 数据表页', () => {
     expect(body.text()).toContain('查看统计')
     expect(body.text()).toContain('查看查询条件/SQL')
     expect(body.text()).toContain('展示处理步骤')
-    expect(body.text()).toContain('查看去重源 ID')
+    // 0903 Y2-8：原来是「查看去重源 ID」（把 ID 拼成串 alert 出来），
+    // 改成打开反查弹窗，后面接得上「在源视图中打开」和「对这批源发任务」
+    expect(body.text()).toContain('按此条件反查源')
+    expect(body.text()).not.toContain('查看去重源 ID')
     expect(body.text()).toContain('清除父表后续标识')
     expect(body.text()).not.toContain('数据维护')
   })
