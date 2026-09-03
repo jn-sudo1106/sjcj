@@ -5,7 +5,9 @@ export interface ColumnPrefs {
   order: string[]
 }
 
-export const IDENTITY_COL_PROPS = ['ENTRY_ID', 'SOURCE_ID'] as const
+// 0903 Y1-5：PARENT_ID 并入身份列——它和 ENTRY_ID/SOURCE_ID 一样回答的是"这行是谁"，
+// 而不是业务内容；异表回溯要靠它，不能在「仅身份列」和「下一步字段」两个预设里被筛掉。
+export const IDENTITY_COL_PROPS = ['ENTRY_ID', 'SOURCE_ID', 'PARENT_ID'] as const
 
 export function columnPrefsKey(tableId: string, scope = 'datagrid'): string {
   return `jn.${scope}.cols.${tableId}`

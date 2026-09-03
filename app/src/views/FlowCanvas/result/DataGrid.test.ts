@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import DataGrid from './DataGrid.vue'
 import { columnPrefsKey } from '@/utils/table/columnPrefs'
+import type { DataRow } from '@/api'
 
 // 按表头文字定位单元格：ENTRY_ID / SOURCE_ID 两个身份合成列固定占最前面，
 // 用 nth-child 写死列序号的断言会随它们的显隐而碎（0819 N1-5）。
@@ -252,6 +253,80 @@ describe('DataGrid · 复制单元格的值', () => {
   })
 })
 
+// 0903 H09/H10：数据层级——PARENT_ID 列 + 「下级」条数列。
+// 会上要的是"每一层都能看到下一层有多少"：源视图那个 7 进去看到 7 行，这 7 行每行还该有
+// 自己的下级数。异表回溯（下游筛出问题行 → 回上游发任务）则全靠 PARENT_ID。
+describe('DataGrid · 数据层级（0903 H09/H10）', () => {
+  const meta = { tableId: 't1', tableName: '表', rowCount: 2, fields: [{ prop: 'title', columnName: 'K1', type: 'string', desc: '标题' }] }
+  const rows: DataRow[] = [
+    { dataId: 'd1', title: '', summary: '', sourceId: 's1', parentId: 'p1', acceptState: 'accepted', values: { K1: 'A' } },
+    { dataId: 'd2', title: '', summary: '', sourceId: 's1', parentId: '0', acceptState: 'accepted', values: { K1: 'B' } },
+  ]
+  function mountGrid(props: Record<string, unknown> = {}) {
+    return mount(DataGrid, { props: { meta, rows, ...props }, global: { stubs: GRID_STUBS } })
+  }
+
+  it('PARENT_ID 独立成列，有父行时显示父 ID', () => {
+    expect(cellByHeader(mountGrid(), 'PARENT_ID')).toContain('p1')
+  })
+
+  it("父 ID 为 '0'（后端表示没有父行）显示 —，不显示成一个可点的 0", () => {
+    const wrapper = mountGrid()
+    const idx = wrapper.findAll('thead th').findIndex((th) => th.text().replace(/[↕↑↓]\s*$/, '').trim() === 'PARENT_ID')
+    expect(wrapper.findAll('tbody tr')[1].findAll('td')[idx].text()).toBe('—')
+  })
+
+  it('首节点表整列为空时**列仍然渲染**——不做"全空就隐藏"的特判，否则同一个视图在不同节点之间列数忽多忽少', () => {
+    const wrapper = mountGrid({ rows: [{ ...rows[1] }] })
+    expect(wrapper.findAll('thead th').map((th) => th.text().replace(/[↕↑↓]\s*$/, '').trim())).toContain('PARENT_ID')
+  })
+
+  it('点父 ID 抛 parent-click，交给调用方去打开上游数据', async () => {
+    const wrapper = mountGrid()
+    await wrapper.get('[data-testid="data-parent-cell"]').trigger('click')
+    expect(wrapper.emitted('parent-click')?.[0]?.[0]).toMatchObject({ dataId: 'd1' })
+  })
+
+  it('showChildCol 为假（末节点 / 后继无输出表）时「下级」整列不渲染，而不是显示一列 —', () => {
+    expect(mountGrid().text()).not.toContain('下级')
+  })
+
+  it('有下级时显示条数并可点；为 0 显示 —', async () => {
+    const counts = new Map([
+      ['d1', { total: 7, byTarget: [{ nodeId: 'b', title: '抽取正文', tableId: 'T', count: 7 }] }],
+      ['d2', { total: 0, byTarget: [{ nodeId: 'b', title: '抽取正文', tableId: 'T', count: 0 }] }],
+    ])
+    const wrapper = mountGrid({ showChildCol: true, childCounts: counts })
+
+    const link = wrapper.get('[data-testid="data-child-count"]')
+    expect(link.text()).toBe('7')
+    await link.trigger('click')
+    expect(wrapper.emitted('child-click')?.[0]?.[0]).toMatchObject({ dataId: 'd1' })
+
+    expect(wrapper.findAll('[data-testid="data-child-count"]')).toHaveLength(1)
+  })
+
+  it('多后继时 tooltip 按节点拆开，单后继则只说合计', () => {
+    const counts = new Map([['d1', {
+      total: 7,
+      byTarget: [
+        { nodeId: 'b', title: '抽取正文', tableId: 'T1', count: 5 },
+        { nodeId: 'c', title: '图片下载', tableId: 'T2', count: 2 },
+      ],
+    }]])
+    const wrapper = mountGrid({ showChildCol: true, childCounts: counts })
+    expect(wrapper.get('[data-testid="data-child-count"]').attributes('title')).toBe('抽取正文 5 / 图片下载 2')
+  })
+
+  // Y1-14：统计是附加信息，挂了不该让人看不了数据
+  it('统计失败（childCounts=null）时只有这一列显示 ?，表格照常渲染', () => {
+    const wrapper = mountGrid({ showChildCol: true, childCounts: null, childCountsError: '统计接口 500' })
+    expect(wrapper.get('[data-testid="data-child-error"]').text()).toBe('?')
+    expect(wrapper.get('[data-testid="data-child-error"]').attributes('title')).toBe('统计接口 500')
+    expect(wrapper.text()).toContain('A')
+  })
+})
+
 describe('DataGrid · 列显示与顺序', () => {
   afterEach(() => localStorage.clear())
 
@@ -285,7 +360,7 @@ describe('DataGrid · 列显示与顺序', () => {
   it('工具行是「列 n/m」，点开弹窗后确定才改表头', async () => {
     const wrapper = mountPickerGrid()
     const btn = wrapper.get('[data-testid="column-picker-btn"]')
-    expect(btn.text()).toBe('列 4/4')
+    expect(btn.text()).toBe('列 5/5')
     expect(wrapper.find('[data-testid="column-picker-dialog"]').exists()).toBe(false)
 
     await btn.trigger('click')
@@ -297,7 +372,7 @@ describe('DataGrid · 列显示与顺序', () => {
     const heads = wrapper.findAll('thead th').map((th) => th.text().replace(/[↕↑↓]\s*$/, '').trim())
     expect(heads).not.toContain('正文html路径-K17')
     expect(heads).toContain('标题-K1')
-    expect(btn.text()).toBe('列 3/4')
+    expect(btn.text()).toBe('列 4/5')
   })
 
   it('按 tableId 记住显隐，换表不串', async () => {
@@ -358,11 +433,13 @@ describe('DataGrid · 下一步字段预设（0831 F10）', () => {
   const heads = (w: ReturnType<typeof mountGrid>) =>
     w.findAll('thead th').map((th) => th.text().replace(/[↕↑↓]\s*$/, '').trim())
 
-  it('首次打开默认只显示预设列，两个身份列一并保留', () => {
+  // 0903 Y1-5：身份列从两个（ENTRY_ID/源）变成三个——PARENT_ID 并进来了，
+  // 它和另外两个一样回答"这行是谁"，异表回溯全靠它，不能被预设筛掉。
+  it('首次打开默认只显示预设列，三个身份列一并保留', () => {
     const wrapper = mountGrid(['title'])
-    expect(heads(wrapper)).toEqual(expect.arrayContaining(['ENTRY_ID', '源', '标题-K1']))
+    expect(heads(wrapper)).toEqual(expect.arrayContaining(['ENTRY_ID', '源', 'PARENT_ID', '标题-K1']))
     expect(heads(wrapper)).not.toContain('正文-K3')
-    expect(wrapper.get('[data-testid="column-picker-btn"]').text()).toBe('列 3/5')
+    expect(wrapper.get('[data-testid="column-picker-btn"]').text()).toBe('列 4/6')
   })
 
   it('预设为空时退回全部列，也不渲染切换按钮', () => {
@@ -384,7 +461,7 @@ describe('DataGrid · 下一步字段预设（0831 F10）', () => {
 
     await toggle().trigger('click')
     expect(heads(wrapper)).toContain('正文-K3')
-    expect(toggle().text()).toBe('下一步字段 3')
+    expect(toggle().text()).toBe('下一步字段 4')
 
     await toggle().trigger('click')
     expect(heads(wrapper)).not.toContain('正文-K3')

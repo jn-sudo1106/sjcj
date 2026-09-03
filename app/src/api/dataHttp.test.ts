@@ -320,6 +320,23 @@ describe('数据详情 / 统计 / 后续 / 删除 API 旧平台 HTTP 契约（E 
     expect(rows).toEqual([{ K2: '161725', CNT: 42 }])
   })
 
+  // 0903 Y1-B：下级条数统计靠 summaryData 传 `sql: PARENT_ID IN (...)`，而旧后端读的是 `more`。
+  // 写成 `cond` 或 `sql` 会被**静默忽略**——请求成功、返回的却是全表分组，条数全错且没人报错。
+  // 这条锁住 sql → more 这一步换算，别让人顺手改成"看起来更合理"的字段名。
+  it('summaryData 的 sql 条件落到旧字段 more（改成 cond/sql 会被后端静默忽略）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, data: [] }))
+    const { dataApi } = await import('./index')
+
+    await dataApi.summaryData({ tableId: '1042', sql: "PARENT_ID IN ('1','2')" }, ['PARENT_ID'])
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>
+    expect(body.more).toBe("PARENT_ID IN ('1','2')")
+    expect(body).not.toHaveProperty('sql')
+    expect(body).not.toHaveProperty('cond')
+    expect(body.summaryFields).toBe('PARENT_ID')
+  })
+
   it('summaryData 兼容真实接口的空结果', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, data: [] }))
     const { dataApi } = await import('./index')

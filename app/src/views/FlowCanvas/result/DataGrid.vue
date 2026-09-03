@@ -5,6 +5,7 @@ import type { DataTableMeta, DataRow } from '@/api'
 import ColumnPickerDialog from '@/components/ColumnPickerDialog.vue'
 import { useColumnPicker } from '@/utils/table/useColumnPicker'
 import { IDENTITY_COL_PROPS } from '@/utils/table/columnPrefs'
+import type { ChildCountCell } from '@/utils/flow/childCounts'
 
 // withDefaults 是必须的：Vue 3 对 boolean 类型的 prop 有 casting 规则——未传时值是 false
 // 而不是 undefined，所以 `props.allowColumnSort !== false` 这种写法会把"没传"误判成"禁止排序"。
@@ -38,12 +39,20 @@ const props = withDefaults(defineProps<{
    *  为空 / 全都不在当前表里时自动退回全部列——绝不因为配置没填就给一张空表。
    *  用户在本表存过列偏好时以偏好为准，预设只作用于"没表过态"的首次打开。 */
   presetCols?: string[]
+  /** 「下级」列（0903 H10）：每行在后继节点里产出了几条。
+   *  `undefined` = 这个节点没有后继/后继没有输出表 → **整列不渲染**（不是显示一列 `—`）。
+   *  `null` = 统计请求失败 → 显示 `?`，主表照常渲染（Y1-14）。 */
+  childCounts?: Map<string, ChildCountCell> | null
+  /** 统计失败的原因，挂在 `?` 的 tooltip 上 */
+  childCountsError?: string
+  /** 「下级」列是否可用（由调用方按有无后继决定），false 时整列不渲染 */
+  showChildCol?: boolean
 }>(), { allowColumnSort: true, presetCols: () => [] })
 const showActions = computed(() => !props.compact && !props.hideActions)
 
 // 排序（迁移旧平台 EntryList2.vue 的 @sort-change）：发给后端的是物理列名，
 // 载荷拼装在 api/index.ts（field=`(列名+ 0)`、type=' ASC '/' DESC '），与旧平台一致。
-const FIXED_SORTABLE = new Set(['ENTRY_ID', 'SOURCE_ID', 'STATE'])
+const FIXED_SORTABLE = new Set(['ENTRY_ID', 'SOURCE_ID', 'PARENT_ID', 'STATE'])
 function sortKeyOf(field: { prop: string; columnName?: string }): string {
   return field.columnName || field.prop
 }
@@ -76,6 +85,10 @@ const emit = defineEmits<{
   (e: 'sort-change', field: string, order: 'ascend' | 'descend' | ''): void
   (e: 'reach-end'): void
   (e: 'file-click', path: string, field: { prop: string; desc?: string }): void
+  /** 点了 PARENT_ID 单元格里的父行 ID（0903 Y1-3）：调用方去打开那条上游数据 */
+  (e: 'parent-click', row: DataRow): void
+  /** 点了「下级」列的条数（0903 Y1-12）：调用方跳到后继节点并带上 父ID=本行 */
+  (e: 'child-click', row: DataRow, cell: ChildCountCell): void
 }>()
 
 // 触底加载（0819 N3-1，会议 10:39"是不是应该直接朝下滑动就加载更多啊？你这个要点还不麻烦吗"）。
@@ -132,7 +145,13 @@ function toggleAll() {
 // 跟着拼成「主键 ID-ENTRY_ID」会长到把列头挤成两行，也偏离旧平台。desc 仍保留给悬浮提示。
 const ENTRY_ID_COL = { prop: 'ENTRY_ID', type: 'string', desc: '主键 ID', label: 'ENTRY_ID' }
 const SOURCE_ID_COL = { prop: 'SOURCE_ID', type: 'string', desc: '所属源 ID', label: '源' }
-const cols = computed(() => (props.meta ? [ENTRY_ID_COL, SOURCE_ID_COL, ...props.meta.fields] : []))
+// PARENT_ID（0903 H09）：这行是上一节点哪条数据产出的。异表回溯（下游筛出问题行 → 回上游发
+// 任务）全靠它，会上「你少一个 parent id」指的就是这列。
+//
+// **首节点表整列是 `—`，但列仍然渲染**——不做"全空就隐藏"的特判：那会让同一个数据视图在
+// 不同节点之间列数忽多忽少，用户以为是自己把列关掉了。空值本身就是信息（这是链路起点）。
+const PARENT_ID_COL = { prop: 'PARENT_ID', type: 'string', desc: '父行 ID', label: 'PARENT_ID' }
+const cols = computed(() => (props.meta ? [ENTRY_ID_COL, SOURCE_ID_COL, PARENT_ID_COL, ...props.meta.fields] : []))
 
 // 预设里认不出来的列先剔掉：presetCols 是按流程配置算的，可能引用了当前表没有的字段
 // （改过表结构、或后继节点读的是另一张表）。留着会让「下一步字段」按钮显示一个虚高的数字。
@@ -230,13 +249,28 @@ async function copyCell(text: string) {
   ElMessageBox.alert(text, '复制失败，请手动选中复制', { confirmButtonText: '知道了' })
 }
 
+/** 父行 ID 是否是个真值：后端用 `'0'` 表示"没有父行"，跟空串同义，都不该显示成一个可点的 ID */
+function parentIdOf(row: DataRow): string {
+  const raw = row.parentId ? String(row.parentId) : ''
+  return raw && raw !== '0' ? raw : ''
+}
 function cellText(row: DataRow, field: { prop: string; columnName?: string }): string {
   if (field.prop === 'ENTRY_ID') return row.dataId || '—'
   if (field.prop === 'SOURCE_ID') return row.sourceId || '—'
+  if (field.prop === 'PARENT_ID') return parentIdOf(row) || '—'
   const v = row.values?.[field.columnName ?? field.prop]
   if (v === undefined || v === null) return '—'
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)
+}
+/** 这一行的下级明细。统计整体失败时 childCounts 是 null，返回 undefined 让模板显示 `?`。 */
+function childCellOf(row: DataRow): ChildCountCell | undefined {
+  return props.childCounts?.get(row.dataId)
+}
+/** 多后继时把「抽取正文 5 / 图片下载 2」拆开挂 tooltip；单后继就没必要重复一遍节点名 */
+function childCellTitle(cell: ChildCountCell): string {
+  if (cell.byTarget.length <= 1) return `查看这 ${cell.total} 条下级数据`
+  return cell.byTarget.map((t) => `${t.title} ${t.count}`).join(' / ')
 }
 function stateMeta(s?: string) {
   if (s === 'C') return { cls: 'ok', text: 'C' }
@@ -298,6 +332,9 @@ function stateMeta(s?: string) {
               :title="canSort(f) ? `${f.desc || f.prop}（点击排序）` : (f.desc || f.prop)"
               @click="onSort(f)"
             >{{ colLabel(f) }}<span v-if="canSort(f)" class="dg-sort-ind">{{ sortIndicator(f) }}</span></th>
+            <!-- 「下级」（0903 H10）：这行在后继节点里产出了几条。末节点 / 后继无输出表时
+                 整列不渲染——显示一整列 `—` 只会让人以为"数据没跑出来"。 -->
+            <th v-if="showChildCol" style="width:72px" title="这一行在下一节点产出了多少条数据">下级</th>
             <th v-if="!compact" style="width:64px">状态</th>
             <th v-if="showActions" style="width:80px">操作</th>
           </tr>
@@ -309,9 +346,19 @@ function stateMeta(s?: string) {
             </td>
             <td v-if="showSourceCol" :title="sourceLabel(r)">{{ sourceLabel(r) }}</td>
             <td v-for="f in visibleCols" :key="f.prop" class="dg-cell" :title="cellText(r, f)">
+              <!-- 父行 ID 做成可点（0903 Y1-3）：跟详情里那个「父 ID ↗」是同一个下钻，
+                   只是把入口挪到表格上，不用先点开详情再点一次。空值（'' 或 '0'）不可点。 -->
+              <button
+                v-if="f.prop === 'PARENT_ID' && parentIdOf(r)"
+                type="button"
+                class="dg-parent-cell"
+                data-testid="data-parent-cell"
+                :title="`查看上游数据 ${parentIdOf(r)}`"
+                @click.stop="emit('parent-click', r)"
+              >{{ parentIdOf(r) }} <span aria-hidden="true">↗</span></button>
               <!-- 路径类单元格做成可点：点开站内预览，不改变行点击（打开数据详情）的语义 -->
               <button
-                v-if="isFileCell(f, cellText(r, f))"
+                v-else-if="isFileCell(f, cellText(r, f))"
                 type="button"
                 class="dg-file-cell"
                 data-testid="data-file-cell"
@@ -339,6 +386,20 @@ function stateMeta(s?: string) {
                 </svg>
               </button>
             </td>
+            <td v-if="showChildCol" class="dg-child" @click.stop>
+              <!-- 统计整体失败：只有这一列变 `?`，表格照常看（Y1-14）——统计是附加信息，
+                   不该因为它挂了就让人看不了数据。 -->
+              <span v-if="childCounts === null" class="dg-child-err" data-testid="data-child-error" :title="childCountsError || '下级条数统计失败'">?</span>
+              <button
+                v-else-if="childCellOf(r) && childCellOf(r)!.total > 0"
+                type="button"
+                class="dg-child-link"
+                data-testid="data-child-count"
+                :title="childCellTitle(childCellOf(r)!)"
+                @click="emit('child-click', r, childCellOf(r)!)"
+              >{{ childCellOf(r)!.total }}</button>
+              <span v-else class="muted">—</span>
+            </td>
             <td v-if="!compact"><span class="rc-status" :class="stateMeta(r.state).cls">{{ stateMeta(r.state).text }}</span></td>
             <td v-if="showActions" class="dg-actions" @click.stop>
               <el-dropdown trigger="click" @command="(c: string) => emit('row-action', r, c)">
@@ -353,7 +414,7 @@ function stateMeta(s?: string) {
             </td>
           </tr>
           <tr v-if="!rows.length && !loading">
-            <td :colspan="visibleCols.length + (compact ? 0 : 1) + (showActions ? 1 : 0) + (showSourceCol ? 1 : 0) + (selectable ? 1 : 0)" class="dg-empty-cell">无符合条件的数据</td>
+            <td :colspan="visibleCols.length + (compact ? 0 : 1) + (showActions ? 1 : 0) + (showSourceCol ? 1 : 0) + (selectable ? 1 : 0) + (showChildCol ? 1 : 0)" class="dg-empty-cell">无符合条件的数据</td>
           </tr>
         </tbody>
       </table>
@@ -398,6 +459,12 @@ function stateMeta(s?: string) {
 .dg-copy { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); border: 0; background: rgba(255,255,255,.9); color: var(--rc-faint); font-size: 12px; line-height: 1; padding: 2px 4px; border-radius: 4px; cursor: pointer; opacity: 0; transition: opacity .12s; }
 .dg-cell:hover .dg-copy { opacity: 1; }
 .dg-copy:hover { color: var(--rc-primary); background: var(--rc-primary-bg); }
+.dg-child { text-align: center; }
+.dg-child-link { border: 0; background: transparent; padding: 0; color: var(--rc-primary); font: inherit; font-weight: 600; cursor: pointer; }
+.dg-child-link:hover { text-decoration: underline; }
+.dg-child-err { color: var(--rc-warn); cursor: help; }
+.dg-parent-cell { border: 0; background: transparent; padding: 0; color: var(--rc-primary); font: inherit; cursor: pointer; }
+.dg-parent-cell:hover { text-decoration: underline; }
 .dg-file-cell { max-width: 100%; padding: 0; border: 0; background: none; color: var(--rc-primary); font: inherit; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dg-file-cell:hover { text-decoration: underline; }
 .dg-sortable { cursor: pointer; user-select: none; }

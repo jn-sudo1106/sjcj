@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, ruleApi, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery } from '@/api'
@@ -10,6 +10,7 @@ import {
   isDecision, isParallel, isFirstRunnableNode, firstRunnableNodeId, hasDirectSuccessor, hasAmbiguousInput, directPredecessorIds, type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
+import { fetchChildCountsForPage, isPerRowMode, resolveChildTargets, type ChildCountCell } from '@/utils/flow/childCounts'
 import { confirmDanger } from '@/utils/confirmDanger'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
@@ -570,6 +571,70 @@ async function loadData() {
     }
   }
 }
+// ---- 「下级」条数（0903 H10/Y1-B）----
+// 每行在后继节点里产出了几条。整页一次 GROUP BY 拿回来，不是一行发一枪。
+const childTargets = computed(() => resolveChildTargets(
+  { main: flow.main, configs: flow.configs, branchGroups: flow.branchGroups },
+  selectedNodeId.value,
+))
+// 末节点 / 后继没有输出表 → 整列不渲染。显示一整列 `—` 会让人以为"数据没跑出来"，
+// 而实际是"这里本来就没有下一层"。
+const showChildCol = computed(() => childTargets.value.length > 0)
+const childCounts = ref<Map<string, ChildCountCell> | null>(null)
+const childCountsError = ref('')
+let childRequestId = 0
+async function loadChildCounts() {
+  const id = ++childRequestId
+  childCountsError.value = ''
+  if (!showChildCol.value || !rows.value.length) {
+    childCounts.value = new Map()
+    return
+  }
+  // 降级模式（H5 实测不通过时切 CHILD_COUNT_MODE）：整页预取会变成 20 次请求，翻页就打 20 枪。
+  // 那种情况下不预取，列显示 `—`，等 Y1 后续按行懒加载。
+  if (isPerRowMode()) {
+    childCounts.value = new Map()
+    return
+  }
+  const result = await fetchChildCountsForPage(childTargets.value, rows.value.map((r) => r.dataId))
+  if (id !== childRequestId) return
+  childCounts.value = result
+  if (result === null) childCountsError.value = '下级条数统计失败（不影响数据本身）'
+}
+// 统计跟在数据之后单独触发：它失败不能拖累主表，所以不并进 loadData 的 try 里。
+watch(rows, () => { void loadChildCounts() })
+watch(childTargets, () => { void loadChildCounts() })
+
+/**
+ * 点「下级」条数（Y1-12）：跳到后继节点，并把 `父 ID = 当前行` 带过去。
+ * 单后继直接跳；多后继（分支）先让用户选去哪一个——两个分支各有各的表，跳错了看到的是空表。
+ */
+async function onChildCountClick(row: DataRow, cell: ChildCountCell) {
+  const candidates = cell.byTarget.filter((t) => t.count > 0)
+  if (!candidates.length) return
+  let picked = candidates[0]
+  if (candidates.length > 1) {
+    try {
+      const { value } = await ElMessageBox.prompt(
+        candidates.map((t, i) => `${i + 1}. ${t.title}（${t.count} 条）`).join('\n'),
+        '这行的下级数据分布在多个节点，看哪一个？',
+        { inputPattern: /^\d+$/, inputErrorMessage: '请输入序号', inputValue: '1', confirmButtonText: '查看', cancelButtonText: '取消' },
+      )
+      picked = candidates[Number(value) - 1] ?? candidates[0]
+    } catch {
+      return
+    }
+  }
+  const beforeTable = selectedTable.value
+  const beforePage = page.value
+  onSelectNode(picked.nodeId)
+  filters.parentId = row.dataId
+  // `watch([selectedTable, page], loadData)` 已经覆盖了"换了表"和"回到第 1 页"两种情况；
+  // 只有**同表节点且本来就在第 1 页**时它不会触发，这时才手动查一次。
+  // 无脑再调一次 runQuery 会在换表时白发一个请求（两次结果还一样）。
+  if (selectedTable.value === beforeTable && page.value === beforePage) loadData()
+}
+
 watch([selectedTable, page], loadData, { immediate: false })
 onMounted(loadData)
 
@@ -649,12 +714,12 @@ const parentDetail = ref<EntryDetail | null>(null)
 const parentLoading = ref(false)
 const parentError = ref('')
 const canDrillParent = computed(() => !!detailRow.value?.categoryId && !!detailRow.value?.parentId && detailRow.value.parentId !== '0')
-async function openParentDetail() {
-  if (!detailRow.value?.categoryId || !detailRow.value?.parentId) return
+async function loadParentDetail(row: DataRow) {
+  if (!row.categoryId || !row.parentId || row.parentId === '0') return
   parentLoading.value = true
   parentError.value = ''
   try {
-    const res = await dataApi.rowDetail(detailRow.value.categoryId, detailRow.value.parentId)
+    const res = await dataApi.rowDetail(row.categoryId, row.parentId)
     parentDetail.value = res
     if (!res) parentError.value = '未找到上游数据'
   } catch (error) {
@@ -662,6 +727,19 @@ async function openParentDetail() {
   } finally {
     parentLoading.value = false
   }
+}
+/** 详情抽屉里的「父 ID ↗」 */
+async function openParentDetail() {
+  if (detailRow.value) await loadParentDetail(detailRow.value)
+}
+/**
+ * 表格里 PARENT_ID 单元格被点（0903 Y1-3）：先打开这一行的详情，再把上游面板展开。
+ * 走同一个 loadParentDetail，不另起一套"父行查看"——两个入口要是各查各的，
+ * 迟早在错误提示、空态、加载态上分叉。
+ */
+async function onParentCellClick(r: DataRow) {
+  openDetailAt(rows.value.findIndex((row) => row.dataId === r.dataId))
+  await loadParentDetail(r)
 }
 function closeParentDetail() {
   parentDetail.value = null
@@ -848,9 +926,14 @@ async function onTestScript() {
         :sort-order="sortOrder"
         :allow-column-sort="allowColumnSort"
         :preset-cols="presetCols"
+        :show-child-col="showChildCol"
+        :child-counts="childCounts"
+        :child-counts-error="childCountsError"
         @sort-change="onSortChange"
         @update:selected-ids="selectedRowIds = $event"
         @file-click="onCellFile"
+        @parent-click="onParentCellClick"
+        @child-click="onChildCountClick"
         @row-click="onRowClick"
         @row-action="onRowAction"
       >

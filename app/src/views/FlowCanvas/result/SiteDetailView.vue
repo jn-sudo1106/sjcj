@@ -53,6 +53,10 @@ function openSource(source: Source) {
   // 保留网站上下文，进入具体源后左侧仍需加载同网站的源树。
   void router.replace({ path: '/canvas', query: { siteId: props.siteId, sourceId: source.sourceId, view: 'flow' } })
 }
+/** 点源列表的「数据量」数字（0903 Y1-15）：直接落到数据视图，不用先进流程再切一次 */
+function openSourceData(source: Source) {
+  void router.replace({ path: '/canvas', query: { siteId: props.siteId, sourceId: source.sourceId, view: 'data' } })
+}
 </script>
 
 <template>
@@ -70,7 +74,7 @@ function openSource(source: Source) {
     </div>
     <div v-if="loadError" class="sdv-empty">{{ loadError }}</div>
     <template v-else>
-      <SourceOverviewView v-if="view === 'source'" :current-site-id="siteId" class="sdv-body" @open-source="openSource" />
+      <SourceOverviewView v-if="view === 'source'" :current-site-id="siteId" class="sdv-body" @open-source="openSource" @open-source-data="openSourceData" />
       <SiteDataView v-else-if="view === 'data'" :site-id="siteId" class="sdv-body" />
       <SiteFileView v-else-if="view === 'file'" :site-id="siteId" class="sdv-body" />
     </template>
