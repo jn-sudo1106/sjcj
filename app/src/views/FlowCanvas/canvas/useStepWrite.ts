@@ -25,10 +25,30 @@ function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-function createTemplateFromPrev(prev: Step | undefined, sourceId: string, configId: string): Pick<Step, 'sourceId' | 'mainConfig' | 'url' | 'itemId' | 'flowCode' | 'nodeType'> {
+/**
+ * 新建步骤的模板：能从前置步骤继承的字段就继承，缺前置时按源级真值兜底。
+ *
+ * ⚠️ `mainConfig` **不能拿新节点自己的 configId 兜底**（2026-09-03 修）。它是"该步骤属于哪个源"
+ * 的锚点——`Source.mainConfig` 的注释写得很清楚：**同一源的所有步骤 mainConfig 相同**，
+ * 等于首步骤自身的 configId。`nextConfigPaged?sourceId=X` 就是靠它把步骤归到源名下的
+ * （cs_item_next 的 SOURCE_ID 恒为 -1，指望不上）。
+ *
+ * 之前这里写的是 `prev?.mainConfig ?? configId`：没有可落库前置时（prev 为 undefined），
+ * mainConfig 会被填成这个新节点自己的配置，步骤就挂在一个查不到的锚点上。
+ *
+ * ⚠️ **这是加固，不是已确认的故障根因。** 2026-09-03 线上报的
+ * 「新建步骤后无法唯一定位（匹配到 0 条）」尚未复现成功——按本假设写的用例在改前改后都通过，
+ * 说明那条路径走的是从 prev 继承，兜底分支没被触发。真正的根因还在查，别把这条当结论。
+ */
+function createTemplateFromPrev(
+  prev: Step | undefined,
+  sourceId: string,
+  configId: string,
+  sourceMainConfig: string | undefined,
+): Pick<Step, 'sourceId' | 'mainConfig' | 'url' | 'itemId' | 'flowCode' | 'nodeType'> {
   return {
     sourceId: prev?.sourceId ?? sourceId,
-    mainConfig: prev?.mainConfig ?? configId,
+    mainConfig: prev?.mainConfig ?? sourceMainConfig ?? configId,
     url: prev ? (prev.url ?? '$VAL$') : undefined,
     itemId: prev?.itemId,
     flowCode: prev?.flowCode,
@@ -71,7 +91,12 @@ export function useStepWrite() {
     const lastStepIds = lastStepIdsFromCanvas(flow.main, nodeId, flow.branchGroups)
     const prevId = lastStepIds[0] !== '0' ? lastStepIds[0] : undefined
     const prev = prevId ? sourceStore.stepSnapshots[prevId] : undefined
-    const inherited = createTemplateFromPrev(prev, sid, cfg.configId)
+    // 源级锚点：优先用已有步骤的 mainConfig（同一源全都一样），其次用源自己的主配置。
+    // 两者都没有才退回节点自己的 configId——那是"这个源一个步骤都还没有"的首建场景。
+    const sourceMainConfig = Object.values(sourceStore.stepSnapshots).find((snap) => snap?.mainConfig)?.mainConfig
+      || flow.sourceCfg?.configId
+      || flow.sourceCtx?.configId
+    const inherited = createTemplateFromPrev(prev, sid, cfg.configId, sourceMainConfig)
     const step = mergeStepForWrite({
       snapshot: {
         ...inherited,

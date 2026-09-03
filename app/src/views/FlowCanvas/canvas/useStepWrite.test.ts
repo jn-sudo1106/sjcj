@@ -184,6 +184,45 @@ describe('useStepWrite.persistFlowSteps', () => {
     expect(flow.configs[localId]).toBeUndefined()
   })
 
+  // mainConfig 是"这个步骤属于哪个源"的锚点（见 Source.mainConfig 注释：同一源的所有步骤
+  // mainConfig 相同）。cs_item_next 的 SOURCE_ID 恒为 -1，指望不上，归属全靠它。
+  //
+  // ⚠️ 本用例锁的是"mainConfig 必须是源级锚点"这条不变量，**不是**对
+  // 「新建步骤后无法唯一定位（匹配到 0 条）」那个线上故障的复现——那个还没定位到（见
+  // createTemplateFromPrev 的注释）。本用例走的是从 prev 继承的路径，兜底分支未被覆盖。
+  it('新步骤的 mainConfig 是源级锚点（源主配置），不是节点自己的 configId', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    // 空步骤源：画布只有合成根节点，没有任何真实步骤，快照也是空的
+    flow.loadFromSource(
+      { sourceId: '430016398', name: 'test1', url: 'http://www.baidu.com/', configId: '1400917', mainTable: '6200026', owner: 'a', state: 'C' } as never,
+      [],
+    )
+    source.rememberSteps([], 'replace')
+    const rootId = flow.main.find((id: string) => id.startsWith('source:'))!
+    const localId = flow.insertAfter(rootId, 'rule')!
+    flow.configs[localId].configId = '1400992'
+
+    const create = vi.spyOn(itemApi, 'saveItemConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'enable').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    // 空步骤源上，画布合成的根节点本身也是一个待落库草稿——它会先被建一次，
+    // 所以两条都要能被差集唯一定位（靠 name 区分）。
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      { ...SNAPSHOT, stepId: '40601', name: flow.configs[rootId].title, configId: '1400917', mainConfig: '1400917' },
+      { ...SNAPSHOT, stepId: '40602', name: flow.configs[localId].title, configId: '1400992', mainConfig: '1400917' },
+    ])
+
+    const { persistFlowSteps } = useStepWrite()
+    await persistFlowSteps()
+
+    // 源的主配置是 1400917；写成新节点自己的 1400992 就会挂到查不到的锚点上
+    const ruleCall = create.mock.calls.find(([step]) => step.configId === '1400992')
+    expect(ruleCall, '规则节点应当被新建一次').toBeTruthy()
+    expect(ruleCall![0].mainConfig).toBe('1400917')
+  })
+
   it('本地新节点缺 configId 时整次保存拦下，不改已有步骤（0828 W9-4）', async () => {
     setActivePinia(createPinia())
     const { flow } = loadTestSource()
