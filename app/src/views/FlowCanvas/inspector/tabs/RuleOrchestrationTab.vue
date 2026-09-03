@@ -46,7 +46,7 @@ function patch(p: Partial<RuleOrchestration>) {
 
 // 文案分流：内容同构，只有措辞按节点类型切换
 const describeLabel = computed(() => (isMonitor.value ? '数据监控描述' : isRule.value ? '规则处理描述' : '抓取需求描述'))
-const describePlaceholder = computed(() => (isRule.value ? '描述规则处理逻辑，如根据输入字段生成指标数值' : '描述抓取需求，如打开列表页提取表格前 20 行数据'))
+const describePlaceholder = computed(() => (isRule.value ? '请使用自然语言描述你需要生成脚本的规则或转换关系' : '描述抓取需求，如打开列表页提取表格前 20 行数据'))
 const pathLabel = computed(() => (isRule.value ? '脚本路径' : '配置路径'))
 const generateLabel = computed(() => (isRule.value ? '生成脚本' : '生成配置'))
 const saveLabel = computed(() => (isRule.value ? '保存脚本' : '保存配置'))
@@ -539,7 +539,7 @@ function goToDataView() {
 
 <template>
   <div class="ni-section-title">{{ isRule ? '查看业务编排' : '抓取配置' }}</div>
-  <div class="rc-field"><label>{{ describeLabel }}</label>
+  <div class="rc-field">
     <textarea
       class="rc-input rc-textarea"
       :value="orchCfg.describe"
@@ -601,36 +601,11 @@ function goToDataView() {
         <el-option v-for="item in modelOptions" :key="item.modelCode" :label="item.modelName" :value="item.modelCode" />
       </el-select>
     </label>
-    <button class="rc-btn" type="button" @click="workbenchOpen = true">编辑系统提示词</button>
-    <button class="rc-btn primary" type="button" :disabled="generating" @click="() => onGenerateScript()">
-      {{ generating ? '生成中...' : generateLabel }}
-    </button>
+    <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
     <button v-if="generating" class="rc-btn" type="button" @click="onCancelGenerate">取消</button>
   </div>
   <div v-if="isRule && (providerError || modelError)" class="rc-help">{{ providerError || modelError }}</div>
   <div v-if="hydrating" class="rc-help">正在同步编排详情…</div>
-
-  <div class="rc-list ni-rule-meta">
-    <div class="rc-list-row">
-      <b>{{ pathLabel }}</b>
-      <button
-        class="rc-link-btn"
-        type="button"
-        :disabled="!orchCfg.scriptPath?.trim()"
-        :title="orchCfg.scriptPath || '未生成'"
-        @click="openScriptContent"
-      >
-        {{ orchCfg.scriptPath || '未生成' }}
-      </button>
-    </div>
-  </div>
-  <div class="rc-actions-row">
-    <button class="rc-btn" type="button" :disabled="!orchCfg.script?.trim()" @click="workbenchOpen = true">全屏查看</button>
-    <button v-if="isRule" class="rc-btn" type="button" :disabled="!canTest" @click="goToDataView">测试脚本</button>
-    <button class="rc-btn primary" type="button" :disabled="savingScript || !orchCfg.script?.trim()" @click="onSaveScript">
-      {{ savingScript ? '保存中...' : saveLabel }}
-    </button>
-  </div>
 
   <!-- S6-1（方案 §4.1）：合并原 RuleScriptDialog（只读脚本查看）+ RuleSystemPromptDialog（编辑系统提示词）
        为一个双栏工作区——两个入口按钮（编辑系统提示词/全屏查看）现在打开同一个弹层，左右两栏一屏对照，
@@ -662,6 +637,8 @@ function goToDataView() {
     :save-label="saveLabel"
     :generating="generating"
     :saving="savingScript"
+    :is-rule="isRule"
+    :can-test="canTest"
     :describe="orchCfg.describe ?? ''"
     :describe-label="describeLabel"
     :hide-prompt-by-default="isRule"
@@ -673,6 +650,7 @@ function goToDataView() {
     @generate="onGenerateScript"
     @cancel-generate="onCancelGenerate"
     @save="onSaveScript"
+    @test="goToDataView"
   />
 </template>
 

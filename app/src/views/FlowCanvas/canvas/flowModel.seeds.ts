@@ -73,7 +73,7 @@ export const DEFAULT_RULE_SYSTEM_PROMPT =
 export function makeDefaultRuleOrchestration(): RuleOrchestration {
   return {
     mode: 'new',
-    describe: 'content 中包含地产二字时，tags 返回房地产',
+    describe: '',
     systemPrompt: DEFAULT_RULE_SYSTEM_PROMPT,
     script: '',
     scriptPath: '',

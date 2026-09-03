@@ -45,6 +45,10 @@ const props = defineProps<{
   saveLabel: string
   generating: boolean
   saving: boolean
+  // 是否为规则处理节点（控制是否展示「测试脚本」按钮）
+  isRule: boolean
+  // 测试脚本是否可点（脚本非空且已绑输入表）
+  canTest: boolean
   // 规则处理/数据监控节点：打开工作区时左栏默认展示描述（只读），系统提示词需点按钮展开
   describe: string
   describeLabel: string
@@ -60,6 +64,7 @@ const emit = defineEmits<{
   generate: [Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'modelProviderCode' | 'modelCode'>>]
   'cancel-generate': []
   save: []
+  test: []
 }>()
 
 function close() {
@@ -367,6 +372,7 @@ watch(
             <button class="rc-btn primary" type="button" :disabled="saving || !script.trim()" @click="emit('save')">
               {{ saving ? '保存中...' : saveLabel }}
             </button>
+            <button v-if="isRule" class="rc-btn" type="button" :disabled="!canTest" @click="emit('test')">测试脚本</button>
           </div>
         </div>
         <div v-if="thinking?.trim() || generating || generationState === 'done' || generationState === 'error'" class="wb-stream">
