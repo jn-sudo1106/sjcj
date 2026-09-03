@@ -169,7 +169,10 @@ async function doCreateConfig() {
     }
     flow.bindExistingConfig(id.value, saved)
     flow.markNodeConfigSaved(id.value)
-    ElMessage.success(`已新建配置 #${created.configId} 并绑定到本节点`)
+    // 文案不能承诺没做到的事（0903）：这一步只落了**配置**，节点本身（item/next 步骤）由画布
+    // 自动保存另外落库。步骤没落成的话，重进画布这个节点就不存在了——而用户已经看到"成功"。
+    // 所以这里只说配置这一半，把"节点还在保存中"一并讲清楚，别让人以为万事大吉就走了。
+    ElMessage.success(`配置 #${created.configId} 已新建并绑定；节点正在保存，请留意顶部保存状态`)
   } catch (e) {
     reportWriteError('新增配置', e)
   } finally {

@@ -11,7 +11,7 @@ import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 
 const flow = useFlowStore()
 const ui = useUiStore()
-const { status: saveStatus, savedClock, flush: retryFlowSave } = useFlowAutosave()
+const { status: saveStatus, savedClock, lastError: saveError, flush: retryFlowSave } = useFlowAutosave()
 const route = useRoute()
 const router = useRouter()
 
@@ -220,10 +220,13 @@ async function onSwitchFlow(command: string) {
           <span v-if="saveStatus === 'pending'" class="ch-save-pending">请先保存节点配置</span>
           <template v-else-if="saveStatus === 'saving'">保存中…</template>
           <template v-else-if="saveStatus === 'saved'">已保存 {{ savedClock }}</template>
+          <!-- title 带上真实报错（0903）：原来失败只显示这六个字，排查时连是哪一步抛的都不知道 -->
           <button
             v-else-if="saveStatus === 'error'"
             class="ch-save-retry"
             type="button"
+            data-testid="flow-save-retry"
+            :title="saveError ? `保存失败：${saveError}（点击重试）` : '点击重试'"
             @click="void retryFlowSave()"
           >保存失败，点击重试</button>
         </span>

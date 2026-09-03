@@ -117,6 +117,24 @@ const sidebarSiteId = computed(() => flow.sourceCtx?.siteId || String(route.quer
 // 网站详情页态下侧栏不应高亮任何具体源（内部代表源只是取数据用，不是用户在看的对象）
 const sidebarActiveKey = computed(() => (isSiteDetail.value ? '' : flow.sourceCtx?.sourceId ?? ''))
 async function confirmDiscardIfDirty(): Promise<boolean> {
+  // 没落库的草稿节点要单独说（0903）：`flow.dirty` 说的是"有改动"，而这里是**整个节点还不存在于
+  // 后端**——切走就永久没了，重进画布连痕迹都没有（buildSourceSeed 只认 sourceSteps 的步骤行）。
+  // 两种情况的后果差得远，提示不能共用一句"改动将丢弃"。
+  const draftId = firstUnboundDraftNodeId(flow.main, flow.configs)
+  if (draftId) {
+    const name = flow.configs[draftId]?.title || draftId
+    try {
+      await ElMessageBox.confirm(
+        `节点「${name}」还没有保存到后端，切换后会**彻底消失**（不是丢失改动，是整个节点没了）。\n`
+        + '请先在右侧保存节点配置，等顶部显示「已保存」再切换。',
+        '有节点尚未保存',
+        { type: 'warning', confirmButtonText: '仍然切换', cancelButtonText: '返回保存' },
+      )
+      return true
+    } catch {
+      return false
+    }
+  }
   if (!flow.dirty) return true
   try {
     await ElMessageBox.confirm('当前画布有未保存的改动，切换将丢弃，是否继续？', '切换编排对象', {
