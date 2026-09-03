@@ -13,6 +13,7 @@ import {
   isWritableStepId,
   hasRealBranches,
   lastStepIdsFromCanvas,
+  persistableNodeIds,
   mergeStepForWrite,
 } from '@/utils/flow/stepPersist'
 
@@ -55,7 +56,7 @@ export function useStepWrite() {
       cfg,
       nodeId,
       sourceId: sourceIdOf() || snapshot.sourceId,
-      lastStepIds: lastStepFromCanvas ? lastStepIdsFromCanvas(flow.main, nodeId) : undefined,
+      lastStepIds: lastStepFromCanvas ? lastStepIdsFromCanvas(flow.main, nodeId, flow.branchGroups) : undefined,
     })
     const ack = await itemApi.stepModify(step)
     assertOk(ack, '修改步骤失败')
@@ -67,7 +68,7 @@ export function useStepWrite() {
     if (!cfg?.configId) throw new Error(`节点「${cfg?.title || nodeId}」尚未绑定配置，无法新建步骤`)
     const sid = sourceIdOf()
     if (!sid) throw new Error('当前没有可保存的源')
-    const lastStepIds = lastStepIdsFromCanvas(flow.main, nodeId)
+    const lastStepIds = lastStepIdsFromCanvas(flow.main, nodeId, flow.branchGroups)
     const prevId = lastStepIds[0] !== '0' ? lastStepIds[0] : undefined
     const prev = prevId ? sourceStore.stepSnapshots[prevId] : undefined
     const inherited = createTemplateFromPrev(prev, sid, cfg.configId)
@@ -155,12 +156,14 @@ export function useStepWrite() {
   async function persistFlowSteps(): Promise<{ created: number; updated: number }> {
     const sid = sourceIdOf()
     if (!sid) return { created: 0, updated: 0 }
-    assertStepsPersistable(flow.main, flow.configs)
+    assertStepsPersistable(flow.main, flow.configs, flow.branchGroups)
     const branched = hasRealBranches(sourceStore.stepSnapshots)
     let created = 0
     let updated = 0
 
-    for (const id of [...flow.main]) {
+    // 0903 YB-B：遍历主链 **+ 各分支链**。只遍历 main 的话，分支里的节点改了名字会静默不保存
+    // ——界面显示"已保存"、后端没动，比拍平更难发现。
+    for (const id of persistableNodeIds(flow.main, flow.branchGroups)) {
       if (id === 'start' || id === 'end' || id === '0' || isWritableStepId(id)) continue
       const cfg = flow.configs[id]
       if (!cfg) continue
@@ -168,7 +171,9 @@ export function useStepWrite() {
       created += 1
     }
 
-    for (const id of flow.main) {
+    // 必须**重新取一遍**：createAndLocate 会把本地草稿 id 换成后端返回的真实 stepId
+    // （flow.rebindNodeId），沿用上面那份快照会拿着已经不存在的旧 id 去回写，新节点漏保存。
+    for (const id of persistableNodeIds(flow.main, flow.branchGroups)) {
       if (!isWritableStepId(id) || !flow.configs[id]) continue
       if (!sourceStore.stepSnapshots[id]) {
         throw new Error(`节点「${flow.configs[id].title || id}」缺少步骤快照，请刷新源后再保存`)

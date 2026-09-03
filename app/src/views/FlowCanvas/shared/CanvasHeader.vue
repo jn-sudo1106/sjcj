@@ -230,12 +230,12 @@ async function onSwitchFlow(command: string) {
       </div>
       <!-- 「停用」0828 D24 移除：源启停统一在源视图的行操作里做，画布头只留运行入口。
            这里不做成禁用或隐藏——按钮整个删掉，避免同一能力两个入口。 -->
-      <!-- 分支流程的只读提示（0903 YB-A/YB-3）：画布目前把子步骤一律拍成直线，
-           有分支的历史流程看到的顺序不是真实拓扑。既然展示的是假的，就必须说出来——
-           顺带说明"已有分支不会被改坏"，因为自动保存已经冻结了 lastStep 回写。 -->
+      <!-- 分支流程的只读提示（0903 YB-A/YB-3，YB-B 后改文案）：画布已经能还原分支结构，
+           但**分支的挂接关系还不支持在画布上调整**——自动保存对分支流程冻结 lastStep 回写
+           （见 useStepWrite），拖动节点不会写回。不说这句话，用户会以为拖了就生效。 -->
       <div v-if="view === 'flow' && flow.hasBranchedSteps" class="ch-branch-note" data-testid="flow-branch-flattened">
         <span aria-hidden="true">⚠</span>
-        该流程含分支，画布暂按直线展示。已有的分支结构不会被改动；新增节点的位置以画布顺序为准。
+        该流程含分支。分支的挂接关系暂不支持在画布上调整——拖动节点不会写回后端，节点名称与进入条件照常保存。
       </div>
       <div v-if="view === 'flow'" class="ch-canvas-actions" aria-label="源运行操作">
         <button class="rc-btn primary" type="button" @click="srcSnatch">发起抓取</button>

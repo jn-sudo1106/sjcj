@@ -319,11 +319,31 @@ export function buildHorizontalLayout(
     if (!g) continue
     let cx = mainPos[id] ? mainPos[id].left : 0
     for (const b of g.branches) {
+      let prevPos: { left: number; top: number } | null = null
       for (const nid of b.chain) {
         if (!configs[nid]) continue
         const existing = nodes.find((n) => n.id === nid)
         if (existing) continue
         nodes.push({ id: nid, cfg: configs[nid], pos: { left: cx, top: chainYTop, width: HNODE_W, height: HNODE_H }, branch: true })
+        // 连线（0903 YB-7）：此前 chain 里的节点只被摆到 owner 下面那一行，**没有任何连线**
+        // ——三个盒子悬在那里看不出谁接谁。决策/分头的分支一直是这个样子，0903 还原历史
+        // 分支拓扑后同一个缺口更明显（920663 会出现 40597 与两支互不相连），一并补上。
+        if (!prevPos) {
+          // 链头 ← owner：从主链节点底部垂下去接到链头左上
+          const op = mainPos[id]
+          if (op) {
+            const ox = op.left + op.width / 2
+            const oy = axisY + HNODE_H / 2
+            const tx = cx + HNODE_W / 2
+            branchEdges.push({ d: `M${ox} ${oy} C${ox} ${(oy + chainYTop) / 2} ${tx} ${(oy + chainYTop) / 2} ${tx} ${chainYTop}`, rule: false })
+          }
+        } else {
+          // 链内相邻节点：同一行直连
+          const fx = prevPos.left + HNODE_W
+          const fy = chainYTop + HNODE_H / 2
+          branchEdges.push({ d: `M${fx} ${fy} L${cx} ${fy}`, rule: false })
+        }
+        prevPos = { left: cx, top: chainYTop }
         cx += HNODE_W + HGAP
         chainDx = Math.max(chainDx, cx)
       }

@@ -362,7 +362,14 @@ export interface FlowBranch {
 }
 
 export interface FlowBranchGroup {
-  /** 决策/分头节点 id；同一 FlowDef 内唯一 */
+  /**
+   * 分叉点节点 id；同一 FlowDef 内唯一。
+   *
+   * 通常是决策/分头节点，但**不限于**：0903 YB-B 还原历史流程的分支拓扑时，owner 就是那个
+   * 有多个后继的**普通采集节点**本身（不合成决策节点——旧平台没有这个概念，条件也挂在
+   * 目标步骤自己的 entryCondition 上而不是分支上）。`buildHorizontalLayout` 与
+   * `branchGroupEntryIds` 都只按 id 查表，不检查 isDecision。
+   */
   ownerId: string
   /** 决策 ≥2（含 ELSE，ELSE.condition 为 undefined）；分头 ≥2（condition 忽略） */
   branches: FlowBranch[]

@@ -102,7 +102,7 @@ describe('useStepWrite.persistFlowSteps', () => {
   // 0903 YB-A 止血。真实源 920663 的拓扑：40597 ├─▶ 40598 / └─▶ 40620（两支同一前置），
   // 而 buildSourceSeed 把子步骤一律拍成直线，画布上看到的是 40597 → 40598 → 40620。
   // 按画布重算 lastStep 会把 40620 从 40597 挪到 40598 后面——分支被静默拍平且不可逆。
-  it('快照里有真实分支时**不改写 lastStep**，只写名称/条件（分支不会被拍平）', async () => {
+  it('分支流程：拓扑还原成 40597 →{40598, 40620}，且写回时两支的 lastStep 都是 40597', async () => {
     setActivePinia(createPinia())
     const flow = useFlowStore()
     const source = useSourceStore()
@@ -115,8 +115,11 @@ describe('useStepWrite.persistFlowSteps', () => {
       steps,
     )
     source.rememberSteps(steps, 'replace')
-    // 画布确实被拍成了直线——这正是问题所在，先把它断言出来
-    expect(flow.main.filter((id: string) => /^\d+$/.test(id))).toEqual(['40597', '40598', '40620'])
+    // YB-B 之后画布还原出真实拓扑：主链只到分叉点，两支各自成 chain
+    expect(flow.main.filter((id: string) => /^\d+$/.test(id))).toEqual(['40597'])
+    expect(flow.branchGroups).toHaveLength(1)
+    expect(flow.branchGroups[0].ownerId).toBe('40597')
+    expect(flow.branchGroups[0].branches.map((b: { chain: string[] }) => b.chain)).toEqual([['40598'], ['40620']])
 
     const modify = vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
     flow.setEntryCondition('40598', { mode: 'expr', logic: 'AND', items: [], expr: 'K6==nil' })

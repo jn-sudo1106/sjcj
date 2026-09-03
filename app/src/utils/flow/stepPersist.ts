@@ -9,6 +9,7 @@ import {
   effectiveOutputTable,
   nodeEntryCondition,
   nodeInputTable,
+  type FlowBranchGroup,
   type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { conditionsToExpr } from '@/utils/flow/conditionExpr'
@@ -41,19 +42,25 @@ export function condExprOf(cfg: NodeConfig): string | null {
  * 自动保存前校验（0828 W9-4）：缺配置的新节点、lastStep 断链、成环都不提交。
  * 虚拟起点 `0` 和 start/end 占位不参与写入，也不按缺 configId 拦截。
  */
-export function assertStepsPersistable(main: string[], configs: Record<string, NodeConfig>): void {
-  for (const id of main) {
+export function assertStepsPersistable(
+  main: string[],
+  configs: Record<string, NodeConfig>,
+  branchGroups: FlowBranchGroup[] = [],
+): void {
+  // 0903 YB-B：分支链上的节点同样要过这道校验，否则"没绑配置的新节点"藏在分支里就溜过去了
+  const all = persistableNodeIds(main, branchGroups)
+  for (const id of all) {
     if (id === 'start' || id === 'end' || id === '0' || isWritableStepId(id)) continue
     const cfg = configs[id]
     if (!cfg) continue
     if (!cfg.title?.trim()) throw new Error('节点名称不能为空')
     if (!cfg.configId) throw new Error(`节点「${cfg.title || id}」尚未绑定配置，无法保存步骤`)
   }
-  const writable = main.filter((id) => isWritableStepId(id))
+  const writable = all.filter((id) => isWritableStepId(id))
   for (const id of writable) {
-    const pred = lastStepIdsFromCanvas(main, id)[0]
+    const pred = lastStepIdsFromCanvas(main, id, branchGroups)[0]
     if (pred === id) throw new Error('流程成环，无法保存')
-    if (pred && pred !== '0' && pred !== 'start' && !main.includes(pred)) {
+    if (pred && pred !== '0' && pred !== 'start' && !all.includes(pred)) {
       throw new Error(`流程在「${configs[id]?.title || id}」处断链，无法保存`)
     }
     const walk = new Set<string>()
@@ -61,7 +68,7 @@ export function assertStepsPersistable(main: string[], configs: Record<string, N
     while (cur && isWritableStepId(cur)) {
       if (walk.has(cur)) throw new Error('流程成环，无法保存')
       walk.add(cur)
-      cur = lastStepIdsFromCanvas(main, cur)[0]
+      cur = lastStepIdsFromCanvas(main, cur, branchGroups)[0]
     }
   }
 }
@@ -69,9 +76,8 @@ export function assertStepsPersistable(main: string[], configs: Record<string, N
 /**
  * 这批步骤里是否存在**真实分支**：两个及以上步骤的 `lastStep`（`dependsOn`）指向同一个前置。
  *
- * 为什么要问这件事（2026-09-03 走查源 920663 发现）：`buildSourceSeed` 目前把子步骤
- * **一律拍成一条主链**（`branches` 恒为 `[]`），有分支的历史流程会被画成直线。
- * 旧平台真实拓扑长这样：
+ * 为什么要问这件事（2026-09-03 走查源 920663 发现）：`buildSourceSeed` 当时把子步骤
+ * **一律拍成一条主链**，有分支的历史流程被画成直线。旧平台真实拓扑长这样：
  *
  * ```
  * 920663 ──▶ 40597 ├─ _from=='api' && ... ──▶ 40598
@@ -81,9 +87,15 @@ export function assertStepsPersistable(main: string[], configs: Record<string, N
  * 画布拍成 `40597 → 40598 → 40620` 之后，自动保存按画布位置重算 `lastStep`，会把
  * `40620.lastStep` 从 `40597` 改写成 `40598`——**分支被静默拍成链，且不可逆**。
  *
- * 在分支拓扑还原（YB-B）落地之前，检测到真分支就**冻结 `lastStep` 的写回**：
- * 画布上看到的顺序本来就不是真实拓扑，据此重算前置只会把对的数据改错。
- * 名称、进入条件这些与拓扑无关的字段照常保存。
+ * **YB-B 已经把拓扑还原了**（`buildSourceSeed` 按 `dependsOn` 建 `branchGroups`），
+ * 但这条冻结**继续保留**，原因有二：
+ *   ① **嵌套分叉仍然画不出来**——`buildHorizontalLayout` 只对主链上的节点查 owner，
+ *      分支链内部再分叉时那一段还是被摊平的，据画布重算前置仍会改错；
+ *   ② 还没有显式的"用户真的改过拓扑"标记（YB-2），只靠"值不一样"反推分不清
+ *      "用户拖动了节点" 和 "画布本来就画得不准"。
+ *
+ * 所以对有分支的流程一律不写 `lastStep`，名称、进入条件这些与拓扑无关的字段照常保存。
+ * 代价是分支流程的挂接关系暂时不能在画布上调整——画布头有对应提示，不是静默失效。
  */
 export function hasRealBranches(snapshots: Record<string, Step | undefined>): boolean {
   const childrenOf = new Map<string, number>()
@@ -98,14 +110,50 @@ export function hasRealBranches(snapshots: Record<string, Step | undefined>): bo
   return false
 }
 
-/** 主链上该节点的前置步骤：最近一个可落库 id，否则虚拟起点 0。 */
-export function lastStepIdsFromCanvas(main: string[], nodeId: string): string[] {
+/**
+ * 画布上所有可落库的节点 id：主链 + 各分支链（0903 YB-B）。
+ *
+ * **写回必须走这个而不是直接遍历 `main`**：分支还原之后，分支链里的节点不在 `main` 里，
+ * 只遍历 main 会让它们"改了名字静默不保存"——界面显示已保存、后端没动，比拍平更难发现。
+ */
+export function persistableNodeIds(main: string[], branchGroups: FlowBranchGroup[] = []): string[] {
+  const ids = [...main]
+  for (const group of branchGroups) {
+    for (const branch of group.branches) ids.push(...branch.chain)
+  }
+  return ids
+}
+
+/**
+ * 该节点的前置步骤：最近一个可落库 id，否则虚拟起点 0。
+ *
+ * 三种位置：
+ *   - 在主链上 → 往前找最近的可落库节点
+ *   - 在某条分支链的中间 → 在该链内往前找
+ *   - 在某条分支链的链头 → 前置是该分组的 **owner**（分叉点），owner 不可落库时继续往它前面找
+ */
+export function lastStepIdsFromCanvas(main: string[], nodeId: string, branchGroups: FlowBranchGroup[] = []): string[] {
   const idx = main.indexOf(nodeId)
-  if (idx <= 0) return ['0']
-  for (let i = idx - 1; i >= 0; i--) {
-    const id = main[i]
-    if (id === 'start') return ['0']
-    if (isWritableStepId(id)) return [id]
+  if (idx > 0) {
+    for (let i = idx - 1; i >= 0; i--) {
+      const id = main[i]
+      if (id === 'start') return ['0']
+      if (isWritableStepId(id)) return [id]
+    }
+    return ['0']
+  }
+  if (idx === 0) return ['0']
+  for (const group of branchGroups) {
+    for (const branch of group.branches) {
+      const ci = branch.chain.indexOf(nodeId)
+      if (ci < 0) continue
+      for (let i = ci - 1; i >= 0; i--) {
+        if (isWritableStepId(branch.chain[i])) return [branch.chain[i]]
+      }
+      if (isWritableStepId(group.ownerId)) return [group.ownerId]
+      // owner 自己还没落库（本地新建的分叉点）：继续沿 owner 往上找
+      return lastStepIdsFromCanvas(main, group.ownerId, branchGroups.filter((g) => g !== group))
+    }
   }
   return ['0']
 }

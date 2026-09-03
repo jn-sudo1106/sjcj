@@ -144,9 +144,12 @@ export const useSourceStore = defineStore('source', () => {
           id: source.sourceId,
           name: source.name,
           version: `source-v${source.version ?? 1}`,
-          main: buildSourceSeed(source, steps).main,
-          branches: buildSourceSeed(source, steps).branches,
-          configs: buildSourceSeed(source, steps).configs,
+          ...(() => {
+            // 一次算完再摊开：原来这里连调三次 buildSourceSeed，白算两遍；
+            // 0903 YB-B 加了 branchGroups 之后更不该重复构造（分支分组必须与 main/configs 同源）。
+            const seed = buildSourceSeed(source, steps)
+            return { main: seed.main, branches: seed.branches, configs: seed.configs, branchGroups: seed.branchGroups }
+          })(),
           updatedAt: source.updatedAt || '',
           source: sourceForCfg,
         }
