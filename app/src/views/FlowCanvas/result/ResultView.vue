@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, nextTick } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
@@ -296,52 +296,19 @@ async function onSendUpstream() {
     showNextStepReceipt,
   )
 }
-// M3-0E：旧平台「发后续 ▾」下拉第二项 sendNextCurPage——取当页全部 ENTRY_ID 一次发送，
-// 免去手点勾选框；guard 跟逐行勾选发送同一套（canPickRows 决定能不能勾行，这里是"整页
-// 一起勾"，本质是同一件事）。成功后仅在确实还有下一页时才自动翻页，不像旧平台那样盲目
-// +1（可能翻到确定为空的页）。
-async function onSendCurrentPage() {
-  if (execMode.value !== 'input' || !canPickRows.value || !selectedTable.value || !rows.value.length) return
-  const count = rows.value.length
-  const nodeName = selectedCfg.value?.title || selectedNodeId.value
-  const ids = rows.value.map((r) => r.dataId)
-  const tableId = selectedTable.value
-  await confirmDanger('发本页任务', `将对本页全部 ${count} 条数据发起"${nodeName}"的后续处理任务，是否继续？`, async () => {
-    const res = await runNextStep(ids, tableId, nodeName)
-    selectedRowIds.value = []
-    if (page.value * size.value < total.value) nextPage()
-    return res
-  }, showNextStepReceipt)
-}
-
-// 「发后续 ▾」下拉：把发全部后续/发本页任务/发大量后续收进同一个菜单，对齐旧平台自己的
-// 布局（截图实测）。原来发后续任务+发本页任务两个按钮常驻，行里已经很挤，再加两个新按钮
-// 会更挤；旧平台自己也是"发后续任务"常驻 + 其余三项收进下拉，不是我们发明的形态。
-  // 点击面板外关闭：跟 DataGrid 工具行里「列」弹窗外点击同一类模式——全局 click 关闭，面板自己
-// @click.stop 防止点面板内部时被同一次事件冒泡关掉。
+// ⚠️ 0903 Y0-B：**发任务只保留两档**——「按勾选发」和「按当前条件全部发」。
+// 「发本页任务」「发大量后续」两项已删除（会上原话：「什么发本页发大量什么这是？不要把它全抄
+// 过来」）。它们都是旧平台 EntryList2 的按钮，迁过来只是"能抄就抄"，语义和"发全部"高度重叠：
+// 发本页 = 发全部的一个任意子集（页大小决定，不是业务条件）；发大量 = 发全部再加一套跟主筛选
+// 不共用的独立字段，用户要在两套条件之间来回对照。**不要因为旧平台有就加回来。**
 //
-// 真实浏览器验收发现（2026-08-19）：这个按钮渲染在 DataGrid 的 #head 插槽里，而 #head
-// 的父容器 .dg-head 设了 overflow-x: auto——CSS 规范里 overflow-x 不是 visible 时
-// overflow-y 会被浏览器强制按 auto 处理，绝对定位的下拉面板往下延伸的部分被这个容器
-// 当成"内容溢出"裁掉了一截，出现滚动条、菜单显示不全。改成 Teleport 到 body、position:
-// fixed 跟随触发按钮的真实坐标，彻底脱离 .dg-head 的裁剪盒子，不是靠加 overflow:visible
-// 覆盖——那样反而会让 .dg-head 横向滚动条本身的意义（表头内容多时可横向滚）跟着失效。
-const moreMenuOpen = ref(false)
-const moreToggleRef = ref<HTMLElement | null>(null)
-const morePanelPos = reactive({ top: 0, left: 0 })
-async function toggleMoreMenu() {
-  moreMenuOpen.value = !moreMenuOpen.value
-  if (!moreMenuOpen.value) return
-  await nextTick()
-  const rect = moreToggleRef.value?.getBoundingClientRect()
-  if (rect) { morePanelPos.top = rect.bottom + 4; morePanelPos.left = rect.left }
-}
-function onWindowClickAway() {
-  moreMenuOpen.value = false
-}
-onMounted(() => window.addEventListener('click', onWindowClickAway))
-onBeforeUnmount(() => window.removeEventListener('click', onWindowClickAway))
-
+// 注意：`views/DataView/index.vue`（旧平台 EntryList2 的 1:1 迁移页）**不在此列**，
+// 那一页的按钮是迁移契约的一部分，保持原样。
+//
+// 收敛成两个并排按钮之后，原来那套「Teleport 到 body + fixed 定位」的下拉面板机制一并删除
+// （它存在的唯一原因是 .dg-head 的 overflow-x:auto 会裁掉绝对定位的下拉面板；没有面板就
+// 没有这个问题）。将来若要再往这行加第三个动作，**先想清楚它是不是真的和前两档并列**，
+// 不要为了塞按钮把下拉又请回来。
 // 发全部后续（M3-0G 复议，2026-08-19）：旧平台硬编码 size=500000、start=0，用户不填任何
 // 数量，只受当前筛选条件约束（sourceId 天然由具体源页面锁定，state/cond 取自筛选行——
 // 不含 dataId/parentId，旧平台 sendNextAll 本身就不认这两个字段）。数量不可调，唯一的
@@ -360,52 +327,6 @@ async function onSendAllUnderFilter() {
       size: 500000, start: 0,
     })),
     showNextStepReceipt,
-  )
-}
-
-// 发大量后续（M3-0G 复议）：旧平台面板字段 从该ID起/至该ID止/发送数量/状态过滤/后续标识/
-// 自定SQL条件——是一套独立于主查询筛选行的字段，不共用 filters（旧平台叫 state1/more，
-// 跟主查询的 state/more 是分开的两份状态）。
-// 真实校验补丁：旧平台"发送数量(1-1W条)"只是标签文字，代码里从没校验过，填多少都能发
-// （2026-08-18 读源码实测确认）。这里补上真实的 1-10000 上限，不再是摆设。
-const SEND_MORE_MAX = 10000
-const sendMoreOpen = ref(false)
-const sendMoreForm = reactive({ start: '', end: '', size: String(SEND_MORE_MAX / 2), state: '', nextFlag: '', cond: '' })
-const sendMoreSizeError = computed(() => {
-  const n = Number(sendMoreForm.size)
-  if (!sendMoreForm.size.trim() || !Number.isInteger(n) || n < 1) return '发送数量必须是 1 及以上的整数'
-  if (n > SEND_MORE_MAX) return `发送数量最多 ${SEND_MORE_MAX} 条`
-  return ''
-})
-function toggleSendMore() {
-  if (!sendMoreOpen.value) {
-    // 对齐旧平台 showSendMore：打开面板时把"至该ID止"预填成当页已加载数据里最大的 ID，
-    // 方便用户"从这里接着往后发"，不用自己去翻数据表格里的 ID。
-    const ids = rows.value.map((r) => Number(r.dataId)).filter((n) => !Number.isNaN(n))
-    if (ids.length) sendMoreForm.end = String(Math.max(...ids))
-  }
-  sendMoreOpen.value = !sendMoreOpen.value
-}
-async function onSendMoreBatch() {
-  if (!canPickRows.value || !selectedTable.value || sendMoreSizeError.value) return
-  const nodeName = selectedCfg.value?.title || selectedNodeId.value
-  const tableId = selectedTable.value
-  await confirmDanger(
-    '批量发后续',
-    `将按填写的条件对"${nodeName}"批量发起后续处理，最多 ${sendMoreForm.size} 条，是否继续？`,
-    () => withNodeErrorContext(nodeName, () => dataApi.nextStepBatch({
-      tableId, sourceId: sourceId.value,
-      state: sendMoreForm.state || undefined,
-      size: Number(sendMoreForm.size),
-      start: sendMoreForm.start ? Number(sendMoreForm.start) : 0,
-      end: sendMoreForm.end ? Number(sendMoreForm.end) : undefined,
-      nextFlag: sendMoreForm.nextFlag || undefined,
-      cond: sendMoreForm.cond || undefined,
-    })),
-    (res) => {
-      showNextStepReceipt(res)
-      sendMoreOpen.value = false
-    },
   )
 }
 
@@ -665,10 +586,6 @@ function clearFilters() {
   filters.sql = ''
   runQuery()
 }
-function nextPage() {
-  if (page.value * size.value < total.value) page.value += 1
-}
-
 function buildSummaryQuery(): RowQuery {
   return {
     tableId: selectedTable.value,
@@ -915,40 +832,6 @@ async function onTestScript() {
         <div v-if="dataError" class="rv-notice error" role="alert" :title="dataErrorFull || dataError">{{ dataError }}</div>
       </template>
 
-      <!-- 发大量后续（M3-0G 复议）：旧平台是"点开一个独立字段面板，跟主查询筛选行分开"，
-           不是主查询自己的一部分——字段名也刻意不撞（start/end/size 而不是复用 filters）。 -->
-      <div v-if="sendMoreOpen" class="rv-sendmore" data-testid="data-sendmore-panel">
-        <div class="rv-sendmore-field">
-          <label>从该 ID 起</label>
-          <input v-model="sendMoreForm.start" class="rv-input" placeholder="不填则从头开始" />
-        </div>
-        <div class="rv-sendmore-field">
-          <label>至该 ID 止</label>
-          <input v-model="sendMoreForm.end" class="rv-input" placeholder="不填则不限" />
-        </div>
-        <div class="rv-sendmore-field">
-          <label>发送数量（1～{{ SEND_MORE_MAX }}）</label>
-          <input v-model="sendMoreForm.size" class="rv-input" data-testid="data-sendmore-size" />
-        </div>
-        <div class="rv-sendmore-field">
-          <label>状态过滤</label>
-          <input v-model="sendMoreForm.state" class="rv-input" placeholder="表中 state 列" />
-        </div>
-        <div class="rv-sendmore-field">
-          <label>后续标识</label>
-          <input v-model="sendMoreForm.nextFlag" class="rv-input" placeholder="-1 未抓后续，1 已..." />
-        </div>
-        <div class="rv-sendmore-field flex">
-          <label>自定 SQL 条件</label>
-          <input v-model="sendMoreForm.cond" class="rv-input" placeholder="如 K1 IS NULL" />
-        </div>
-        <div class="rv-sendmore-actions">
-          <span v-if="sendMoreSizeError" class="rv-sendmore-error" data-testid="data-sendmore-error">{{ sendMoreSizeError }}</span>
-          <button class="rc-btn" type="button" @click="sendMoreOpen = false">取消</button>
-          <button class="rc-btn danger" type="button" data-testid="data-sendmore-submit" :disabled="!!sendMoreSizeError" @click="onSendMoreBatch">批量发后续</button>
-        </div>
-      </div>
-
       <!-- 表头内容走 DataGrid 的 #head 插槽，跟「列」和分页共用同一条横条。原来这里是
            独立的 .rv-tablehead(47px) + DataGrid 自己的列按钮行(33px) + .rv-pager(45px)
            三条横条，加起来 125px 全在挤数据区（2026-08-15 第十二次纠偏）。
@@ -1025,28 +908,18 @@ async function onTestScript() {
             :title="execDisabledReason"
             @click="execMode === 'fetch' ? onSendFetch() : execMode === 'upstream' ? onSendUpstream() : onSendNextStep()"
           >{{ execMode === 'fetch' ? '发起抓取' : execMode === 'upstream' ? '从上一节点重跑' : '发后续任务' }}</button>
-          <!-- 「发后续 ▾」：发全部后续/发本页任务/发大量后续收进同一个菜单。末节点回上游不走这三项。 -->
-          <div v-if="execMode === 'input' && canPickRows" class="rv-more-menu" @click.stop>
-            <button ref="moreToggleRef" class="rc-btn" type="button" data-testid="data-exec-more-toggle" @click="toggleMoreMenu">发后续 ▾</button>
-          </div>
-          <Teleport to="body">
-            <div
-              v-if="moreMenuOpen && execMode === 'input' && canPickRows"
-              class="rv-more-panel"
-              :style="{ top: morePanelPos.top + 'px', left: morePanelPos.left + 'px' }"
-              @click.stop
-            >
-              <button type="button" class="rv-more-item" data-testid="data-exec-all-btn" @click="onSendAllUnderFilter(); moreMenuOpen = false">发全部后续（当前条件下所有）</button>
-              <button
-                type="button"
-                class="rv-more-item"
-                data-testid="data-exec-page-btn"
-                :disabled="!rows.length"
-                @click="onSendCurrentPage(); moreMenuOpen = false"
-              >发本页任务</button>
-              <button type="button" class="rv-more-item" data-testid="data-exec-batch-toggle" @click="toggleSendMore(); moreMenuOpen = false">发大量后续</button>
-            </div>
-          </Teleport>
+          <!-- 0903 Y0-B：发任务只剩两档——主按钮（按勾选）+ 这一个「发全部（当前条件）」。
+               原来是「发后续 ▾」下拉里装三项（发全部/发本页/发大量），后两项已删；
+               只剩一项还做成下拉是坏交互（点一下才看见里面只有一个），改成并排按钮。
+               末节点「从上一节点重跑」不走这一档，故 execMode === 'input' 仍是前提。 -->
+          <button
+            v-if="execMode === 'input' && canPickRows"
+            class="rc-btn"
+            type="button"
+            data-testid="data-exec-all-btn"
+            title="不按勾选，按当前筛选条件发全部"
+            @click="onSendAllUnderFilter"
+          >发全部（当前条件）</button>
         </template>
         <!-- 分页移到表格下方（0819 N1-8，会议 19:13"页子一般放下面"）。原先它并在 #head
              里是为了省纵向空间，现在由顶部区收窄（N1-10）补偿。 -->
@@ -1317,26 +1190,9 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
 
 .rv-input { height: 28px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; font-size: 12px; outline: none; min-width: 110px; background: #fff; }
 
-.rv-more-menu { flex: none; }
-/* Teleport 到 body 后用 position:fixed + JS 算出的 top/left（见 toggleMoreMenu），
-   不能再用相对 .rv-more-menu 的 position:absolute——脱离原父级后没有定位基准了，
-   这正是要脱离的原因：.dg-head 的 overflow-x:auto 会强制 overflow-y 变 auto，
-   绝对定位在原位置会被那个裁剪盒子切掉一截、出现滚动条（2026-08-19 真实浏览器验收发现）。 */
 /* 61 不是随便挑的：.rv-shell.is-fullscreen 也是 60，全屏模式下打开这个菜单必须严格盖过它，
    不能靠"Teleport 到 body 末尾、DOM 顺序更靠后所以层叠更上"这种偶然性。 */
-.rv-more-panel { position: fixed; z-index: 61; min-width: 210px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; box-shadow: 0 12px 28px -12px rgba(15, 23, 42, 0.3); padding: 4px; }
-.rv-more-item { display: block; width: 100%; text-align: left; padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--rc-text-2); font-size: 12.5px; cursor: pointer; white-space: nowrap; }
-.rv-more-item:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
-.rv-more-item:disabled { opacity: .5; cursor: default; }
-.rv-more-item:hover:disabled { background: transparent; color: var(--rc-text-2); }
 
-.rv-sendmore { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; padding: 12px; margin-bottom: 10px; border: 1px solid #fde68a; border-radius: 8px; background: #fffbeb; }
-.rv-sendmore-field { display: flex; flex-direction: column; gap: 4px; }
-.rv-sendmore-field.flex { flex: 1; min-width: 200px; }
-.rv-sendmore-field label { font-size: 11px; color: var(--rc-text-2); font-weight: 600; }
-.rv-sendmore-field .rv-input { min-width: 0; width: 100%; }
-.rv-sendmore-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
-.rv-sendmore-error { color: #b91c1c; font-size: 12px; }
 /* 数据 ID / 父 ID 本来就是短数字，不用跟节点选择、状态这些下拉一样宽——
    窄一点给查询/清空腾地方，尽量跟筛选条件同一行（2026-08-15 第九次纠偏）。 */
 .rv-input.id { width: 78px; min-width: 0; flex: none; }

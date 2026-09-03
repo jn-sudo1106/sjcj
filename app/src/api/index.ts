@@ -1979,9 +1979,6 @@ export const overviewApi = {
 
 // 流程定义持久化（流程画布保存 / 加载 / 多流程）
 export const flowApi = {
-  flowSave: (def: FlowDef) => request<Ack>('flow/save', { def }),
-  flowLoad: (id: string) => request<FlowDef | null>('flow/load', { id }),
-  flowList: () => request<{ id: string; name: string; updatedAt: string }[]>('flow/list'),
   flowRecommend: (prompt: string, intent?: string) =>
     request<FlowRecommendation>('flow/recommend', { prompt, intent }),
   // 节点级 AI 对话（0701 问题八）：mock 关键词回复，二期换真 LLM BFF，签名不变
@@ -1991,15 +1988,22 @@ export const flowApi = {
 
 /**
  * 流程中心正式 API 门面。2026-09-02 起接真实 `cs_flow`（/v1/flow/*），不再走 flow-template mock。
- * 业务代码只依赖 FlowRecord/FlowSaveInput，不扩散“流程模板”概念。
+ * 业务代码只依赖 FlowRecord/FlowSaveInput。「流程模板」是流程上的一个标记（0903 H24，字段待后端
+ * 答复 H7 后补），不是另一类对象，也不另起一套端点——读写都走 flowPaged / flowDetail / saveFlow。
  *
  * 三件事先记在这儿，免得后面按旧印象改坏：
  * 1. **没有版本**。0818 B4 要的版本化后端没做，`detail` 也就没有 version 入参了（原来那个参数
  *    只有 mock 认，真实后端不认）。见 FlowRecord.version 的注释。
  * 2. **列表不含 flowConf**。flowPaged / flowList 都不返回大字段，所以列表里每条的 definition
  *    是空流程；要画布结构必须单独 `detail(id)`。
- * 3. **绑定不驱动执行**。changeFlowBatch 只把 cs_source.FLOW_ID 置上，旧平台没有任何地方把
- *    flowConf 下发成 config，执行器不读它。绑了流程 ≠ 源会按这个流程跑。
+ * 3. **绑定即生效**（2026-09-03 后端答复订正）。执行时**按 `FLOW_ID` 反查后执行**——后端原话
+ *    「执行就按 flowID 去反选，去执行」。所以 changeFlowBatch 把 cs_source.FLOW_ID 置上之后，
+ *    这批源就会按该流程的那套配置跑，**不需要**再把 flowConf 下发成 config、也不需要顺带写
+ *    CONFIG_ID。配套口径见 0903 H01：一个流程一套配置，可以关联很多源，这些源**共用**它。
+ *
+ *    ⚠️ 这一条此前写的是「绑定不驱动执行……执行器不读它。绑了流程 ≠ 源会按这个流程跑」，
+ *    那是 mock 时代的推断，**已被后端答复推翻**。不要按旧注释的前提改代码——尤其别再去实现
+ *    "把流程实例化到每个源"那套：配置本来就挂在流程上，不需要为每个源复制一份。
  */
 export const flowCenterApi = {
   /**

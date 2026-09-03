@@ -29,6 +29,10 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', syncView))
 const templates = ref<FlowRecord[]>([])
 const flowKeyword = ref('')
 const flowPickerOpen = ref(false)
+// TODO(Y8-24)：候选范围要改成「默认只列已标记为模板的流程」+ 一个「查看全部流程」切换项。
+// 现在没法做——`FlowRecord` 上还没有模板标记字段，后端也没答复 flowPaged 能不能按它过滤
+// （0903 后端需求 H7）。在那之前保持列全部流程，不要自己造一个前端筛：735 条存量分页之后
+// 前端只能筛当前页，跨页看到的结果是错的。
 async function loadTemplates() {
   templates.value = await flowCenterApi.list()
 }
@@ -58,12 +62,17 @@ function manageFlows() {
   void onSwitchFlow('__manage_flows__')
 }
 
-// 顶部下拉是流程切换入口；内部沿用既有版本化接口，用户界面不再暴露“模板”概念。
+// 顶部下拉 = **切换流程模板**（0903 H02）。
+//
+// 语义是「选一个模板 → 把模板里的那套配置复制出一套新的给当前源」，不是"让本源引用这个流程"。
+// 0903 会上原话：「这里面东西应该选流程模板，然后你再切换……不是切换那个源里面那种」。
+// 一度打算把这个下拉整个删掉（0903 设计方案初稿），后被推翻——要删的是"在已存在的源里换一个
+// 流程引用"这个动作，不是这个入口本身。
 const appliedTemplateLabel = computed(() => {
   const templateId = src.value?.templateId
-  if (!templateId) return '切换流程'
+  if (!templateId) return '切换流程模板'
   const template = templates.value.find((item) => item.id === templateId)
-  if (!template) return '切换流程'
+  if (!template) return '切换流程模板'
   // 真实 cs_flow 没有版本号（见 FlowRecord.version 注释），拿不到就只显示流程名，不要 `vundefined`
   const version = src.value?.templateVersion ?? template.version
   return version == null ? template.name : `${template.name} · v${version}`
@@ -126,20 +135,28 @@ async function onSwitchFlow(command: string) {
   }
   const template = templates.value.find((item) => item.id === command)
   if (!template || !src.value) return
-  if (flow.dirty) {
-    try {
-      await ElMessageBox.confirm(
-        '当前画布有未保存改动。切换流程会全量替换当前节点，是否继续？',
-        '切换流程',
-        { type: 'warning', confirmButtonText: '切换', cancelButtonText: '取消' },
-      )
-    } catch {
-      return
-    }
+  // 确认弹窗**恒弹**（0903 Y0-3）：原来只在 flow.dirty 时弹，等于"画布干净时静默替换全部节点"——
+  // 这个动作会为本源新建一整套配置，任何情况下都该让人先看一眼再点。
+  const nodeCount = flow.main.filter((id: string) => flow.configs[id]).length
+  try {
+    await ElMessageBox.confirm(
+      [
+        `将复制模板「${template.name}」的配置，生成属于本源的一套新配置。`,
+        nodeCount ? `当前 ${nodeCount} 个节点会被替换。` : '',
+        flow.dirty ? '当前画布有未保存改动，将一并丢弃。' : '',
+        '此操作不影响该模板和其它源。',
+      ].filter(Boolean).join(''),
+      '切换流程模板',
+      { type: 'warning', confirmButtonText: '复制并替换', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
   }
   const result = flow.applyTemplate(template)
   if (!result) return
-  ElMessage.success(`已应用流程「${template.name}」v${template.version}${result.cleared ? `，原 ${result.cleared} 个节点已替换` : ''}`)
+  // 真实 cs_flow 没有版本号（见 FlowRecord.version 注释），拿不到就只说流程名，不要 `vundefined`
+  const versionText = template.version == null ? '' : ` v${template.version}`
+  ElMessage.success(`已复制模板「${template.name}」${versionText}${result.cleared ? `，原 ${result.cleared} 个节点已替换` : ''}`)
 }
 
 </script>
@@ -173,7 +190,7 @@ async function onSwitchFlow(command: string) {
               data-testid="flow-switch-search"
               :placeholder="appliedTemplateLabel"
               :title="appliedTemplateLabel"
-              aria-label="搜索并切换流程"
+              aria-label="搜索并切换流程模板"
               @focus="openFlowPicker"
               @mousedown="openFlowPicker"
               @blur="closeFlowPicker"
@@ -181,7 +198,7 @@ async function onSwitchFlow(command: string) {
             <el-icon class="ch-flow-chevron"><ArrowDown /></el-icon>
           </div>
           <div v-if="flowPickerOpen" class="ch-flow-options" data-testid="flow-switch-options">
-            <div v-if="!visibleTemplates.length" class="ch-flow-empty">没有匹配的流程</div>
+            <div v-if="!visibleTemplates.length" class="ch-flow-empty">没有匹配的流程模板</div>
             <button
               v-for="template in visibleTemplates"
               :key="template.id"

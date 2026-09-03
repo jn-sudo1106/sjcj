@@ -982,6 +982,16 @@ export const useFlowStore = defineStore('flow', () => {
     load(flowDef)
   }
 
+  /**
+   * 应用一个流程模板到当前源：复制模板的节点，并把**模板里的那套配置复制出一套新的**给本源
+   * （0903 H03——「新增配置」的确切含义是复制，不是凭空建空配置，也不是引用模板的配置）。
+   *
+   * 这是「选流程模板」的**唯一实现**，两个调用方共用：
+   *   ① 源画布顶部的「切换流程模板」（`CanvasHeader.vue`）
+   *   ② 新建源时选模板（Y8-C，待做）
+   *
+   * 0903 设计方案初稿一度要求删掉画布头那个入口、连带清理这个方法——**已推翻**，勿删。
+   */
   function applyTemplate(template: FlowRecord): { retained: number; cleared: number } | null {
     const result = sourceStore.applyTemplate(template, configs)
     if (!result) {
