@@ -159,19 +159,27 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
     expect(result).toMatchObject({ ruleId: '173', scriptPath: '/code01/x.py' })
   })
 
-  it('dataProcessGenerate：POST /api/answer/data-process，JSON body 流式生成脚本（text/plain chunked）', async () => {
-    // 0831 实测契约：text/plain 分块流，markdown 代码围栏 + 末尾「# 当前文件已保存到…」标记行
+  it('dataProcessGenerate：POST /api/answer/data-process，按 SSE event/data 解析 thinking/content/done', async () => {
     const streamText = [
-      '```python',
-      'def main(date, zb_value):',
-      '    return {"end_date": "2025-01-01"}',
-      '```',
-      '# 当前文件已保存到/code01/20260801/abc.py',
+      'event: thinking',
+      'data: 正在确认输入表',
+      '',
+      'event: thinking',
+      'data: 正在确认字段',
+      '',
+      'event: content',
+      'data: def main(date, zb_value):',
+      'data:     return {"end_date": "2025-01-01"}',
+      '',
+      'event: done',
+      'data: {"scriptPath":"/code01/20260801/abc.py","message":"保存完成"}',
     ].join('\n')
     const encoder = new TextEncoder()
     const chunks = [encoder.encode(streamText.slice(0, 30)), encoder.encode(streamText.slice(30, 60)), encoder.encode(streamText.slice(60))]
     let i = 0
-    const received: string[] = []
+    const thinking: string[] = []
+    const content: string[] = []
+    const done: string[] = []
     fetchMock.mockResolvedValue({
       ok: true,
       status: 200,
@@ -197,7 +205,11 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
       inputFields: 'date:date,zb_value:zb_value',
       outputFields: 'end_date:end_date,indicator_data:indicator_data',
       systemPrompt: '只返回 JSON',
-    }, { onChunk: (delta) => received.push(delta) })
+    }, {
+      onThinking: (delta) => thinking.push(delta),
+      onContent: (delta) => content.push(delta),
+      onDone: (payload) => done.push(payload.message || payload.scriptPath || ''),
+    })
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('/api/answer/data-process')
@@ -214,9 +226,9 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
       outputFields: 'end_date:end_date,indicator_data:indicator_data',
       systemPrompt: '只返回 JSON',
     })
-    // 增量回调拼起来等于完整流文本（打字机效果的数据源）
-    expect(received.join('')).toBe(streamText)
-    // 解析结果：围栏与标记行剥掉，scriptPath 抽出
+    expect(thinking.join('')).toBe('正在确认输入表正在确认字段')
+    expect(content).toEqual(['def main(date, zb_value):\n    return {"end_date": "2025-01-01"}'])
+    expect(done).toEqual(['保存完成'])
     expect(result.script).toBe('def main(date, zb_value):\n    return {"end_date": "2025-01-01"}')
     expect(result.scriptPath).toBe('/code01/20260801/abc.py')
   })

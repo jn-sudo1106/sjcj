@@ -14,12 +14,13 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
 import { isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
+import { dataApi, entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type DataTableMeta, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { isVruleNumericRuleId } from '@/api/legacyAdapters'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
 import { buildDataProcessGeneratePayload } from '@/utils/flow/dataProcess'
+import DataQueryPanel, { type DataQueryColumn } from '@/components/DataQueryPanel.vue'
 import { promptCategoryGroupsForNode, promptListCategoryForNode, resolvePromptCategoryForNode } from '../promptCategory'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
@@ -46,7 +47,7 @@ function patch(p: Partial<RuleOrchestration>) {
 
 // 文案分流：内容同构，只有措辞按节点类型切换
 const describeLabel = computed(() => (isMonitor.value ? '数据监控描述' : isRule.value ? '规则处理描述' : '抓取需求描述'))
-const describePlaceholder = computed(() => (isRule.value ? '描述规则处理逻辑，如根据输入字段生成指标数值' : '描述抓取需求，如打开列表页提取表格前 20 行数据'))
+const describePlaceholder = computed(() => (isRule.value ? '请使用自然语言描述你需要生成脚本的规则或转换关系' : '描述抓取需求，如打开列表页提取表格前 20 行数据'))
 const pathLabel = computed(() => (isRule.value ? '脚本路径' : '配置路径'))
 const generateLabel = computed(() => (isRule.value ? '生成脚本' : '生成配置'))
 const saveLabel = computed(() => (isRule.value ? '保存脚本' : '保存配置'))
@@ -281,6 +282,9 @@ async function openScriptContent() {
 
 const generating = ref(false)
 const generateAbort = ref<AbortController | null>(null)
+const thinkingText = ref('')
+const generationMessage = ref('')
+const generationState = ref<'idle' | 'thinking' | 'content' | 'done' | 'error'>('idle')
 function onCancelGenerate() {
   generateAbort.value?.abort()
 }
@@ -359,18 +363,19 @@ async function onGenerateScript(
   const controller = new AbortController()
   generateAbort.value = controller
   generating.value = true
+  thinkingText.value = ''
+  generationMessage.value = ''
+  generationState.value = 'idle'
+  patch({ script: '', scriptPath: '' })
   try {
     const genCfg = {
       ...orchCfg.value,
       ...draft,
       ruleId,
     }
+    let streamedScript = ''
     let res: Awaited<ReturnType<typeof ruleApi.orchestrationGenerate>>
     if (isRule.value) {
-      // 流式回显（0831）：data-process 返回 text/plain 分块流，逐块写回 script，
-      // 脚本预览框 / 全屏工作台实时打字机效果；结束时再以解析后的干净正文 + scriptPath 覆盖。
-      // 生成中途失败/取消时保留已流出的部分内容（用户看得见生成到哪了）。
-      let streamed = ''
       res = await ruleApi.dataProcessGenerate(buildDataProcessGeneratePayload({
         description: genCfg.describe,
         configId: Number(cfg.value?.configId ?? 0),
@@ -385,22 +390,40 @@ async function onGenerateScript(
         systemPrompt: genCfg.systemPrompt ?? '',
       }), {
         signal: controller.signal,
-        onChunk: (delta) => {
-          streamed += delta
-          // 只剥开头的 ```python 围栏，让正文从第一行代码开始显示；
-          // 结尾围栏与「# 当前文件已保存到…」标记行由完成后的整体解析清理。
-          patch({ script: streamed.replace(/^```[a-zA-Z]*[ \t]*\n/, '') })
+        onThinking: (delta) => {
+          if (!delta) return
+          generationState.value = 'thinking'
+          thinkingText.value = `${thinkingText.value}${delta}`
+        },
+        onContent: (delta) => {
+          if (!delta) return
+          generationState.value = 'content'
+          streamedScript += delta
+          patch({ script: streamedScript.replace(/^```[a-zA-Z]*[ \t]*\n/, '') })
+        },
+        onDone: (payload) => {
+          generationState.value = 'done'
+          generationMessage.value = payload.message || '保存完成'
+          // 流式接口在 onDone 提示里带回保存路径（如「已保存到/code01/202609/x.py」），
+          // 没有独立 scriptPath 字段——从 message 提取并 patch，否则「测试脚本」拿不到 codePath
+          const savedPath = (payload.message || '').match(/保存到\s*([^\s]+)/)?.[1]
+          if (savedPath) patch({ scriptPath: savedPath })
         },
       })
     } else {
       res = await ruleApi.orchestrationGenerate(genCfg, controller.signal)
     }
-    patch({ script: res.script, scriptPath: res.scriptPath })
+    // 流式分支的 scriptPath 由 onDone 从提示文本提取并 patch，res.scriptPath 为空——
+    // 这里只有 res.scriptPath 有值时才覆盖，避免把流式提取到的路径清空
+    patch({ script: res.script, ...(res.scriptPath ? { scriptPath: res.scriptPath } : {}) })
+    if (isRule.value) generationMessage.value = generationMessage.value || '保存完成'
     ElMessage.success(isRule.value ? '脚本已生成' : '配置已生成')
   } catch (e) {
     if (controller.signal.aborted || (e as Error)?.message?.includes('已取消')) {
       ElMessage.info('已取消生成')
     } else {
+      generationState.value = 'error'
+      generationMessage.value = (e as Error)?.message ?? String(e)
       ElMessage.error(`生成${isRule.value ? '脚本' : '配置'}失败：${(e as Error)?.message ?? String(e)}`)
     }
   } finally {
@@ -508,6 +531,32 @@ async function onApplySwitch() {
   }
 }
 
+// ---- 数据预览：复用 DataQueryPanel，按当前节点 inputTable 拉 3 行数据，
+// 列定义跟数据视图主表一致（从 dataApi.tableMeta 拼 columns），不开放状态筛选/勾选/快捷查询 ----
+const previewPanelRef = ref<InstanceType<typeof DataQueryPanel>>()
+const previewTableMeta = ref<DataTableMeta | null>(null)
+// 预览表第一行数据，作为脚本测试入参（点「测试脚本」时传给 RuleWorkbenchDialog）
+const previewFirstRow = ref<Record<string, unknown> | null>(null)
+function onPreviewLoaded(e: { rows: { values?: Record<string, unknown> }[]; total: number }) {
+  previewFirstRow.value = e.rows[0]?.values ?? null
+}
+const previewColumns = computed<DataQueryColumn[]>(() => (previewTableMeta.value?.fields ?? [])
+  .filter((f) => f.columnName || f.prop)
+  .map((f) => ({
+    prop: f.columnName ?? f.prop,
+    label: `${f.desc}-${f.columnName}`,
+    width: 120,
+    sortable: true,
+    hintProp: f.prop,
+  })))
+async function loadPreviewTableMeta() {
+  const tid = orchCfg.value.inputTableId
+  previewTableMeta.value = tid ? await dataApi.tableMeta(tid) : null
+}
+watch(() => orchCfg.value.inputTableId, () => {
+  void loadPreviewTableMeta().then(() => previewPanelRef.value?.search())
+}, { immediate: true })
+
 // ---- 测试脚本：切换到流程视图右侧面板的「数据视图」tab（view=data），保留当前源上下文，
 // 并把当前编辑节点作为 nodeId 带上，让数据视图自动定位到该节点（而不是默认落首节点）——
 // ResultView 初始化时优先取 URL 的 nodeId query（queryNodeId），与「查看条件」深链同一套机制 ----
@@ -522,8 +571,49 @@ function goToDataView() {
 </script>
 
 <template>
+  <div v-if="orchCfg.inputTableId" class="ni-section-title">数据预览</div>
+  <DataQueryPanel
+    v-if="orchCfg.inputTableId"
+    ref="previewPanelRef"
+    :table-id="orchCfg.inputTableId"
+    :columns="previewColumns"
+    :page-size="3"
+    @loaded="onPreviewLoaded"
+  >
+    <template #columns-before>
+      <el-table-column prop="dataId" label="ENTRY_ID" width="105" fixed="left" sortable="custom">
+        <template #default="{ row }">{{ row.dataId }}</template>
+      </el-table-column>
+      <el-table-column prop="sourceId" label="源" width="100" sortable="custom">
+        <template #default="{ row }">{{ row.sourceId || '—' }}</template>
+      </el-table-column>
+    </template>
+    <template #columns-after>
+      <el-table-column prop="state" label="状态" width="84">
+        <template #default="{ row }">{{ row.state || '—' }}</template>
+      </el-table-column>
+      <el-table-column prop="updateDt" label="更新" width="90" sortable="custom">
+        <template #default="{ row }">{{ row.updateDt || '—' }}</template>
+      </el-table-column>
+      <el-table-column prop="createDt" label="生成" width="90" sortable="custom">
+        <template #default="{ row }">{{ row.createDt || '—' }}</template>
+      </el-table-column>
+      <el-table-column label="任务" width="100">
+        <template #default="{ row }">{{ row.detailId || '—' }}</template>
+      </el-table-column>
+      <el-table-column prop="nextFlag" label="后续" width="70">
+        <template #default="{ row }">{{ row.nextFlag ?? '—' }}</template>
+      </el-table-column>
+      <el-table-column label="父ID" width="90">
+        <template #default="{ row }">{{ row.parentId || '—' }}</template>
+      </el-table-column>
+      <el-table-column label="原始" width="70">
+        <template #default="{ row }">{{ row.k0 ? '查看' : '—' }}</template>
+      </el-table-column>
+    </template>
+  </DataQueryPanel>
   <div class="ni-section-title">{{ isRule ? '查看业务编排' : '抓取配置' }}</div>
-  <div class="rc-field"><label>{{ describeLabel }}</label>
+  <div class="rc-field">
     <textarea
       class="rc-input rc-textarea"
       :value="orchCfg.describe"
@@ -556,65 +646,11 @@ function goToDataView() {
   </template>
 
   <div class="rc-actions-row">
-    <label v-if="isRule" class="rc-inline-field" data-testid="main-model-provider">
-      <span>模型供应商</span>
-      <el-select
-        :model-value="orchCfg.modelProviderCode ?? ''"
-        class="rc-inline-select"
-        size="small"
-        :loading="providerLoading"
-        :teleported="false"
-        placeholder="请选择"
-        @change="onMainModelProviderChange"
-      >
-        <el-option v-for="item in providerOptions" :key="item.providerCode" :label="item.providerName" :value="item.providerCode" />
-      </el-select>
-    </label>
-    <label v-if="isRule" class="rc-inline-field" data-testid="main-model">
-      <span>模型</span>
-      <el-select
-        :model-value="orchCfg.modelCode ?? ''"
-        class="rc-inline-select rc-inline-select-model"
-        size="small"
-        :loading="modelLoading"
-        :disabled="!orchCfg.modelProviderCode || !providerOptions.length"
-        :teleported="false"
-        placeholder="请选择"
-        @change="onMainModelChange"
-      >
-        <el-option v-for="item in modelOptions" :key="item.modelCode" :label="item.modelName" :value="item.modelCode" />
-      </el-select>
-    </label>
-    <button class="rc-btn" type="button" @click="workbenchOpen = true">编辑系统提示词</button>
-    <button class="rc-btn primary" type="button" :disabled="generating" @click="() => onGenerateScript()">
-      {{ generating ? '生成中...' : generateLabel }}
-    </button>
+    <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
     <button v-if="generating" class="rc-btn" type="button" @click="onCancelGenerate">取消</button>
   </div>
   <div v-if="isRule && (providerError || modelError)" class="rc-help">{{ providerError || modelError }}</div>
   <div v-if="hydrating" class="rc-help">正在同步编排详情…</div>
-
-  <div class="rc-list ni-rule-meta">
-    <div class="rc-list-row">
-      <b>{{ pathLabel }}</b>
-      <button
-        class="rc-link-btn"
-        type="button"
-        :disabled="!orchCfg.scriptPath?.trim()"
-        :title="orchCfg.scriptPath || '未生成'"
-        @click="openScriptContent"
-      >
-        {{ orchCfg.scriptPath || '未生成' }}
-      </button>
-    </div>
-  </div>
-  <div class="rc-actions-row">
-    <button class="rc-btn" type="button" :disabled="!orchCfg.script?.trim()" @click="workbenchOpen = true">全屏查看</button>
-    <button v-if="isRule" class="rc-btn" type="button" :disabled="!canTest" @click="goToDataView">测试脚本</button>
-    <button class="rc-btn primary" type="button" :disabled="savingScript || !orchCfg.script?.trim()" @click="onSaveScript">
-      {{ savingScript ? '保存中...' : saveLabel }}
-    </button>
-  </div>
 
   <!-- S6-1（方案 §4.1）：合并原 RuleScriptDialog（只读脚本查看）+ RuleSystemPromptDialog（编辑系统提示词）
        为一个双栏工作区——两个入口按钮（编辑系统提示词/全屏查看）现在打开同一个弹层，左右两栏一屏对照，
@@ -631,6 +667,9 @@ function goToDataView() {
     :output-table-name="orchCfg.outputTable"
     :source-id="isMonitor ? (cfg?.stepSourceId ?? '') : ''"
     :source-cron="isMonitor ? (cfg?.schedule?.cron ?? '') : ''"
+    :thinking="thinkingText"
+    :generation-state="generationState"
+    :generation-message="generationMessage"
     :input-fields="orchCfg.inputFields ?? []"
     :output-fields="orchCfg.outputFields ?? []"
     :input-field-options="inputFieldOptions"
@@ -643,6 +682,11 @@ function goToDataView() {
     :save-label="saveLabel"
     :generating="generating"
     :saving="savingScript"
+    :is-rule="isRule"
+    :can-test="canTest"
+    :describe="orchCfg.describe ?? ''"
+    :describe-label="describeLabel"
+    :hide-prompt-by-default="isRule"
     @update:system-prompt="onSystemPromptChange"
     @update:prompt-category="onPromptCategoryChange"
     @update:model-provider-code="onModelProviderChange"
@@ -651,6 +695,7 @@ function goToDataView() {
     @generate="onGenerateScript"
     @cancel-generate="onCancelGenerate"
     @save="onSaveScript"
+    @test="goToDataView"
   />
 </template>
 

@@ -801,12 +801,12 @@ const codeTest = reactive<{ visible: boolean; loading: boolean; error: string; o
   error: '',
   output: '',
 })
-function buildCodeParams(): Record<string, string> {
-  const params: Record<string, string> = {}
-  for (const field of detailFields.value) {
+function buildCodeParams(row: { values?: Record<string, unknown> } | null): Record<string, string> {
+  const params: Record<string, unknown> = {}
+  for (const field of fieldsFromTableMeta(meta.value?.fields, row?.values)) {
     params[field.prop] = field.empty ? '' : field.value
   }
-  return params
+  return params as Record<string, string>
 }
 function stringifyCodeResult(value: unknown): string {
   if (typeof value === 'string') return value
@@ -817,7 +817,15 @@ function stringifyCodeResult(value: unknown): string {
   }
 }
 async function onTestScript() {
-  if (!detailRow.value) return
+  // 工具条触发时未打开行详情，回退到选中行第一行，再回退到本页第一行
+  const row = detailRow.value
+    ?? (selectedRowIds.value.length ? rows.value.find((r) => selectedRowIds.value.includes(r.dataId)) : null)
+    ?? rows.value[0]
+    ?? null
+  if (!row) {
+    ElMessage.warning('没有可测试的行数据')
+    return
+  }
   const codePath = queryScriptPath.value
   if (!codePath) {
     ElMessage.warning('脚本路径为空')
@@ -830,7 +838,7 @@ async function onTestScript() {
   try {
     const result = await ruleApi.executeCode({
       codePath,
-      params: buildCodeParams(),
+      params: buildCodeParams(row),
       timeout: 300,
     })
     codeTest.output = stringifyCodeResult(result)
@@ -1025,6 +1033,13 @@ async function onTestScript() {
             :title="execDisabledReason"
             @click="execMode === 'fetch' ? onSendFetch() : execMode === 'upstream' ? onSendUpstream() : onSendNextStep()"
           >{{ execMode === 'fetch' ? '发起抓取' : execMode === 'upstream' ? '从上一节点重跑' : '发后续任务' }}</button>
+          <button
+            v-if="queryScriptPath"
+            class="rc-btn primary"
+            type="button"
+            :disabled="codeTest.loading"
+            @click="onTestScript"
+          >{{ codeTest.loading ? '测试中…' : '测试脚本' }}</button>
           <!-- 「发后续 ▾」：发全部后续/发本页任务/发大量后续收进同一个菜单。末节点回上游不走这三项。 -->
           <div v-if="execMode === 'input' && canPickRows" class="rv-more-menu" @click.stop>
             <button ref="moreToggleRef" class="rc-btn" type="button" data-testid="data-exec-more-toggle" @click="toggleMoreMenu">发后续 ▾</button>
@@ -1170,10 +1185,6 @@ async function onTestScript() {
           </template>
           <template v-else>
             <button class="rc-btn" type="button" @click="startEdit">编辑</button>
-            <button class="rc-btn" type="button" @click="onRowAction(detailRow, 'tasks')">查后续任务实例 ›</button>
-            <button class="rc-btn primary" type="button" :disabled="codeTest.loading || !queryScriptPath" @click="onTestScript">
-              {{ codeTest.loading ? '测试中…' : '测试脚本' }}
-            </button>
           </template>
         </div>
       </div>
