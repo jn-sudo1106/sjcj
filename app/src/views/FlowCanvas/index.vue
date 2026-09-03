@@ -125,7 +125,7 @@ async function confirmDiscardIfDirty(): Promise<boolean> {
     const name = flow.configs[draftId]?.title || draftId
     try {
       await ElMessageBox.confirm(
-        `节点「${name}」还没有保存到后端，切换后会**彻底消失**（不是丢失改动，是整个节点没了）。\n`
+        `节点「${name}」还没有保存到后端，切换后会彻底消失——不是丢失改动，是整个节点没了。`
         + '请先在右侧保存节点配置，等顶部显示「已保存」再切换。',
         '有节点尚未保存',
         { type: 'warning', confirmButtonText: '仍然切换', cancelButtonText: '返回保存' },

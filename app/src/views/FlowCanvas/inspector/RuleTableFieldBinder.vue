@@ -301,7 +301,11 @@ const outputExpanded = ref(false)
       <div class="rc-tag-row">
         <!-- 展开时已选字段在下面的字段池里高亮，这里不再重复列一遍——避免字段多的时候占两排 -->
         <template v-if="!outputExpanded">
-          <span v-if="!modelValue.outputFields?.length" class="rc-readonly-hint rc-tag-empty">未选择</span>
+          <!-- 空态必须说清后果（0903）：出参字段默认不勾（会上口径「出参肯定就两三个，让他自己勾」），
+               而保存节点配置时它是必填。两者相加 = 新建规则节点第一次保存**必然**被拦，
+               而拦下来只有一个 3 秒就消失的 toast + 静默跳 tab，用户以为存上了、离开、节点就没了。
+               在字段本身写明"不选就存不了"，比事后弹一次提示有用得多。 -->
+          <span v-if="!modelValue.outputFields?.length" class="rc-readonly-hint rc-tag-empty rc-tag-required">未选择 · 至少选 1 个才能保存</span>
           <span v-for="code in modelValue.outputFields" :key="code" class="rc-tag on" @click="toggleField('output', code)">
             {{ outputFieldOptions.find((f) => f.itemCode === code)?.itemName ?? code }} ×
           </span>
@@ -344,6 +348,7 @@ const outputExpanded = ref(false)
 .rc-input-btn:hover { background: var(--rc-primary-bg); }
 .rc-readonly-hint { padding: 7px 9px; border: 1px dashed #dbe3ee; border-radius: 7px; background: #f8fafc; color: var(--rc-faint); font-size: 12px; }
 .rc-tag-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.rc-tag-required { color: #b91c1c; }
 .rc-tag-empty { padding: 4px 8px; }
 .rc-tag { display: inline-flex; align-items: center; padding: 4px 9px; border: 1px solid #dbe3ee; border-radius: 999px; background: #fff; color: var(--rc-text-2); font-size: 11px; cursor: pointer; user-select: none; }
 .rc-tag:hover { border-color: #bfdbfe; }
