@@ -1,5 +1,6 @@
 import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError, isMockMode, isProductionCreateEnabled, type RequestOptions } from './client'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readLoginUsername, readStoredToken, triggerSessionExpired } from './auth'
+import { createSseEventParser } from '@/utils/stream/sse'
 import type {
   Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery, Step, SourceLoadParamsResult, SendSnatchWithParamPayload,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
@@ -956,6 +957,10 @@ async function fetchRuleOrchestrationStream(
 /** data-process 生成脚本的流式选项：onChunk 收到增量文本（打字机效果） */
 export interface DataProcessGenerateOptions {
   signal?: AbortSignal
+  onThinking?: (delta: string) => void
+  onContent?: (delta: string) => void
+  onDone?: (payload: { message?: string; scriptPath?: string; script?: string }) => void
+  onEvent?: (event: { event: string; data: string }) => void
   onChunk?: (delta: string) => void
 }
 
@@ -972,10 +977,10 @@ async function fetchDataProcessGenerate(
       }
       return ruleOrchestrationGenerateFromLegacy(result)
     }
-    // 真实接口（0831 实测）：text/plain 分块流（markdown 代码围栏 + 末尾保存标记行），
-    // 不能走 request() 的 JSON 解析（会 SyntaxError）；对齐 fetchRuleOrchestrationStream 自管 fetch，
-    // 逐块回调 onChunk 供 UI 做打字机效果，完成后整体解析出 { script, scriptPath }。
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    // 真实接口（0903）：SSE 结构化事件流。POST 不能用原生 EventSource，改用 fetch + ReadableStream，
+    // 按 event/data 行解析 thinking/content/done，UI 负责思考面板和代码区回显；若后端仍回纯文本，
+    // 保留旧流式兜底。
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'text/event-stream' }
     const token = readStoredToken()
     if (token) headers[ACCESS_TOKEN_HEADER] = token
     const controller = new AbortController()
@@ -1009,6 +1014,44 @@ async function fetchDataProcessGenerate(
       throw new Error(detail ? `请求失败 ${res.status}: ${detail.slice(0, 200)}` : `请求失败 ${res.status}`)
     }
     let text = ''
+    const parser = createSseEventParser()
+    let structured = false
+    let content = ''
+    let scriptPath = ''
+    let doneMessage = ''
+    let doneScript = ''
+    const emitEvent = (event: { event: string; data: string }) => {
+      structured = true
+      options?.onEvent?.(event)
+      if (event.event === 'thinking') {
+        options?.onThinking?.(event.data)
+        return
+      }
+      if (event.event === 'content' || event.event === 'message') {
+        if (!event.data) return
+        content += event.data
+        options?.onContent?.(event.data)
+        options?.onChunk?.(event.data)
+        return
+      }
+      if (event.event === 'done') {
+        const trimmed = event.data.trim()
+        if (!trimmed) return
+        try {
+          const parsed = JSON.parse(trimmed) as Record<string, unknown>
+          if (parsed.message != null) doneMessage = String(parsed.message)
+          if (parsed.scriptPath != null) scriptPath = String(parsed.scriptPath)
+          if (parsed.script != null) doneScript = String(parsed.script)
+        } catch {
+          doneMessage = trimmed
+        }
+        return
+      }
+      if (event.data) {
+        options?.onContent?.(event.data)
+        options?.onChunk?.(event.data)
+      }
+    }
     if (res.body && typeof res.body.getReader === 'function') {
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
@@ -1018,15 +1061,35 @@ async function fetchDataProcessGenerate(
         const delta = decoder.decode(value, { stream: true })
         if (delta) {
           text += delta
-          options?.onChunk?.(delta)
+          const events = parser.push(delta)
+          for (const event of events) emitEvent(event)
         }
       }
-      text += decoder.decode()
+      const tail = decoder.decode()
+      if (tail) {
+        text += tail
+        const events = parser.push(tail)
+        for (const event of events) emitEvent(event)
+      }
     } else {
       text = await res.text()
-      if (text) options?.onChunk?.(text)
+      const events = parser.push(text)
+      for (const event of events) emitEvent(event)
     }
-    return parseDataProcessStreamText(text)
+    const tailEvents = parser.finish()
+    for (const event of tailEvents) emitEvent(event)
+    if (!structured) {
+      if (text) {
+        options?.onContent?.(text)
+        options?.onChunk?.(text)
+      }
+      return parseDataProcessStreamText(text)
+    }
+    const finalScript = doneScript || content
+    if (!finalScript.trim()) throw new Error('生成脚本未返回内容')
+    const result = { script: finalScript, scriptPath }
+    options?.onDone?.({ ...result, message: doneMessage })
+    return result
   } catch (e) {
     throw e instanceof ApiError ? e : new ApiError(endpoint, e)
   }
