@@ -5,6 +5,7 @@ import {
   assertStepsPersistable,
   condExprOf,
   hasRealBranches,
+  ruleStepContext,
   isWritableStepId,
   lastStepIdsFromCanvas,
   mergeStepForWrite,
@@ -187,6 +188,61 @@ describe('hasRealBranches（0903 YB-A）', () => {
   it('没有 dependsOn / 空快照都不算分支', () => {
     expect(hasRealBranches({ a: step('a'), b: step('b') })).toBe(false)
     expect(hasRealBranches({})).toBe(false)
+  })
+})
+
+// 2026-09-04 会上提出、后端已按此收：规则处理节点写步骤时有三处特殊口径。
+describe('规则节点写步骤（0904）', () => {
+  function ruleCfg(inputFields: string[], outputFields: string[]) {
+    const cfg = cloneConfig(NODE_CONFIGS.rule)
+    cfg.title = '规则处理'
+    cfg.configId = '1400998'
+    cfg.ruleCfg = { ...(cfg.ruleCfg ?? { mode: 'new', describe: '' }), inputTableId: '6200026', inputFields, outputFields }
+    return cfg
+  }
+  const snapshot = { ...MEASURED_40600, sourceId: '430016398', nodeType: 'entry' }
+
+  it('type 写 rule、适用源固定 -1', () => {
+    const step = mergeStepForWrite({
+      snapshot, cfg: ruleCfg(['title'], ['title']), nodeId: '40600', sourceId: '430016398',
+    })
+    expect(step.nodeType).toBe('rule')
+    expect(step.sourceId).toBe('-1')
+  })
+
+  it('表配置的入参/出参写进 context/outContext，且换成物理列名', () => {
+    const step = mergeStepForWrite({
+      snapshot,
+      cfg: ruleCfg(['title', 'url'], ['tags']),
+      nodeId: '40600',
+      sourceId: '430016398',
+      columnByItemCode: new Map([['title', 'K1'], ['url', 'K2'], ['tags', 'K3']]),
+    })
+    // 落库前的模型字段；stepToStepModifyPayload 会 join 成 "K1,K2"
+    expect(step.contextMap).toEqual(['K1', 'K2'])
+    expect(step.outColumns).toEqual(['K3'])
+    expect(stepToStepModifyPayload(step).context).toBe('K1,K2')
+    expect(stepToStepModifyPayload(step).outContext).toBe('K3')
+  })
+
+  // 换不到宁可写 itemCode：悄悄丢字段比写个认得出的值糟得多
+  it('拿不到列名映射时原样写 itemCode，不丢字段', () => {
+    const step = mergeStepForWrite({
+      snapshot, cfg: ruleCfg(['title', 'url'], ['tags']), nodeId: '40600', sourceId: '430016398',
+    })
+    expect(step.contextMap).toEqual(['title', 'url'])
+  })
+
+  it('非规则节点不受影响：仍走任务配置，sourceId/type 照旧', () => {
+    const cfg = cfgFromSnapshot()
+    const step = mergeStepForWrite({ snapshot, cfg, nodeId: '40600', sourceId: '430016398' })
+    expect(step.nodeType).toBe('entry')
+    expect(step.sourceId).toBe('430016398')
+  })
+
+  it('ruleStepContext：空数组/undefined 都返回 undefined（不写空串）', () => {
+    expect(ruleStepContext(undefined, undefined)).toBeUndefined()
+    expect(ruleStepContext([], new Map())).toBeUndefined()
   })
 })
 

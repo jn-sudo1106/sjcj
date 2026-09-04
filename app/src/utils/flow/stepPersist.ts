@@ -7,6 +7,7 @@
 import type { Step } from '@/api'
 import {
   effectiveOutputTable,
+  isRuleNode,
   nodeEntryCondition,
   nodeInputTable,
   type FlowBranchGroup,
@@ -158,6 +159,27 @@ export function lastStepIdsFromCanvas(main: string[], nodeId: string, branchGrou
   return ['0']
 }
 
+/**
+ * 规则处理节点写步骤时的三处特殊口径（2026-09-04 会上提出，后端已按此收）：
+ *
+ * | 字段 | 值 | 为什么 |
+ * |---|---|---|
+ * | `type` | `'rule'` | 默认是 `'entry'`；执行端按它区分要不要走规则引擎 |
+ * | `sourceId` | `'-1'` | 规则步骤不绑具体源（"适用源"默认全部），跟着源走会把它锁死在一个源上 |
+ * | `context` / `outContext` | 表配置的入参 / 出参 | 采集节点这两个字段来自任务配置；规则节点的入出参在**表配置**里（ruleCfg） |
+ *
+ * ⚠️ **存的是物理列名（K1,K2,K3），不是 itemCode**。`ruleCfg.inputFields/outputFields` 存的是
+ * itemCode（`RuleTableFieldBinder` 的 `toggleField` 传 `f.itemCode`），得靠表 schema 换一道；
+ * 换不到的原样保留——宁可写个认得出的 itemCode，也别悄悄丢掉一个字段。
+ */
+export function ruleStepContext(
+  codes: string[] | undefined,
+  columnByItemCode: Map<string, string> | undefined,
+): string[] | undefined {
+  if (!codes?.length) return undefined
+  return codes.map((code) => columnByItemCode?.get(code) || code)
+}
+
 export function mergeStepForWrite(args: {
   snapshot?: Step
   cfg: NodeConfig
@@ -165,14 +187,18 @@ export function mergeStepForWrite(args: {
   sourceId: string
   /** 传入则覆盖快照里的 lastStep（自动保存按画布重算）；改名即时写入不要传，以免改拓扑。 */
   lastStepIds?: string[] | null
+  /** 规则节点专用：itemCode → 物理列名，用来把表配置的入出参写成 K1,K2,K3（见 ruleStepContext） */
+  columnByItemCode?: Map<string, string>
 }): Step {
   const { snapshot, cfg, nodeId, sourceId } = args
+  const rule = isRuleNode(cfg) ? cfg.ruleCfg : undefined
   const lastStepIds = args.lastStepIds !== undefined ? args.lastStepIds : snapshot?.dependsOn
   return {
     stepId: isWritableStepId(nodeId) ? nodeId : '',
-    sourceId: cfg.stepSourceId ?? snapshot?.sourceId ?? sourceId,
+    // 规则步骤不绑具体源：适用源默认 -1
+    sourceId: rule ? '-1' : (cfg.stepSourceId ?? snapshot?.sourceId ?? sourceId),
     name: cfg.title.trim(),
-    nodeType: snapshot?.nodeType,
+    nodeType: rule ? 'rule' : snapshot?.nodeType,
     inputTable: nodeInputTable(cfg) || snapshot?.inputTable,
     // 0901：显式未落表时按「默认 = 输入表」取本节点自己的输入表，而不是把这个新建节点还
     // 没配置过的空 outputTable 直接提交上去（旧写法遇到规则节点只填了输入表就会把 outputTable
@@ -187,8 +213,13 @@ export function mergeStepForWrite(args: {
     condition: condExprOf(cfg) ?? undefined,
     failAction: cfg.outputAdvanced?.failPolicy || snapshot?.failAction,
     dependsOn: lastStepIds?.length ? lastStepIds : undefined,
-    contextMap: cfg.taskCfg?.contextMap ?? snapshot?.contextMap,
-    outColumns: cfg.taskCfg?.outColumns ?? snapshot?.outColumns,
+    // 规则节点的入出参在表配置里（ruleCfg），不是任务配置
+    contextMap: rule
+      ? ruleStepContext(rule.inputFields, args.columnByItemCode) ?? snapshot?.contextMap
+      : cfg.taskCfg?.contextMap ?? snapshot?.contextMap,
+    outColumns: rule
+      ? ruleStepContext(rule.outputFields, args.columnByItemCode) ?? snapshot?.outColumns
+      : cfg.taskCfg?.outColumns ?? snapshot?.outColumns,
     enabled: !cfg.disabled,
   }
 }

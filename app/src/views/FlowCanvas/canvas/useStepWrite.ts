@@ -5,7 +5,7 @@
 // 新建步骤响应不回 itemConfig，要再查 nextConfigPaged 用差集定位，并 enable?state=0
 // （新建默认停用）。虚拟起点 itemConfig=0 和本地草稿 id 不写。
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { itemApi, sourceApi, type Ack, type Step } from '@/api'
+import { entryApi, itemApi, sourceApi, type Ack, type Step } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import {
@@ -16,6 +16,7 @@ import {
   persistableNodeIds,
   mergeStepForWrite,
 } from '@/utils/flow/stepPersist'
+import { isRuleNode } from '@/views/FlowCanvas/canvas/flowModel'
 
 function assertOk(ack: Ack | null | undefined, fallback: string) {
   if (ack && 'ok' in ack && ack.ok === false) throw new Error(ack.message || fallback)
@@ -56,6 +57,31 @@ function createTemplateFromPrev(
   }
 }
 
+/**
+ * 规则节点写步骤要把表配置的入出参存成**物理列名**（`context`/`outContext` = "K1,K2,K3"），
+ * 而 `ruleCfg.inputFields/outputFields` 存的是 itemCode，得靠表 schema 换一道。
+ *
+ * 表字段只能按 tableId 单独查（`entryPaged` 的 items 恒为 null，见 useEntryTableFieldsCache 头注）。
+ * 这里按 tableId 记一份进程内缓存：一次保存里多个规则节点常常共用同一张输入表，
+ * 不缓存就会对同一张表连查好几次。查失败不缓存，允许下次重试——换不到就原样写 itemCode，
+ * 宁可写个认得出的值，也别悄悄丢字段。
+ */
+const columnMapCache = new Map<string, Map<string, string>>()
+async function columnMapFor(tableId: string | undefined): Promise<Map<string, string> | undefined> {
+  if (!tableId) return undefined
+  const cached = columnMapCache.get(tableId)
+  if (cached) return cached
+  try {
+    const detail = await entryApi.entryDetail(tableId)
+    const map = new Map<string, string>()
+    for (const field of detail.fields) if (field.columnName) map.set(field.prop, field.columnName)
+    columnMapCache.set(tableId, map)
+    return map
+  } catch {
+    return undefined
+  }
+}
+
 export function useStepWrite() {
   const flow = useFlowStore()
   const sourceStore = useSourceStore()
@@ -77,6 +103,7 @@ export function useStepWrite() {
       nodeId,
       sourceId: sourceIdOf() || snapshot.sourceId,
       lastStepIds: lastStepFromCanvas ? lastStepIdsFromCanvas(flow.main, nodeId, flow.branchGroups) : undefined,
+      columnByItemCode: await columnMapFor(isRuleNode(cfg) ? cfg.ruleCfg?.inputTableId : undefined),
     })
     const ack = await itemApi.stepModify(step)
     assertOk(ack, '修改步骤失败')
@@ -108,6 +135,7 @@ export function useStepWrite() {
       nodeId,
       sourceId: inherited.sourceId,
       lastStepIds,
+      columnByItemCode: await columnMapFor(isRuleNode(cfg) ? cfg.ruleCfg?.inputTableId : undefined),
     })
     const before = new Set([
       ...Object.keys(sourceStore.stepSnapshots),
