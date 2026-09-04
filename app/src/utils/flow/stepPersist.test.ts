@@ -193,11 +193,11 @@ describe('hasRealBranches（0903 YB-A）', () => {
 
 // 2026-09-04 会上提出、后端已按此收：规则处理节点写步骤时有三处特殊口径。
 describe('规则节点写步骤（0904）', () => {
-  function ruleCfg(inputFields: string[], outputFields: string[]) {
+  function ruleCfg(inputFields: string[], outputFields: string[], outputTableId?: string) {
     const cfg = cloneConfig(NODE_CONFIGS.rule)
     cfg.title = '规则处理'
     cfg.configId = '1400998'
-    cfg.ruleCfg = { ...(cfg.ruleCfg ?? { mode: 'new', describe: '' }), inputTableId: '6200026', inputFields, outputFields }
+    cfg.ruleCfg = { ...(cfg.ruleCfg ?? { mode: 'new', describe: '' }), inputTableId: '6200026', outputTableId, inputFields, outputFields }
     return cfg
   }
   const snapshot = { ...MEASURED_40600, sourceId: '430016398', nodeType: 'entry' }
@@ -234,6 +234,33 @@ describe('规则节点写步骤（0904）', () => {
     expect(step.outColumns).toEqual(['K3'])
     expect(stepToStepModifyPayload(step).context).toBe('K1,K2')
     expect(stepToStepModifyPayload(step).outContext).toBe('K3')
+  })
+
+  // 入参查输入表、出参查**输出表**（useRuleTableFields 的口径：没配输出表才回退到输入表）。
+  // 共用一张映射的话，输出表 ≠ 输入表时出参会全部换不到、悄悄退化成 itemCode。
+  it('输出表与输入表不同时：出参按输出表的映射换列名', () => {
+    const step = mergeStepForWrite({
+      snapshot,
+      cfg: ruleCfg(['title'], ['tags'], '6200099'),
+      nodeId: '40600',
+      sourceId: '430016398',
+      columnByItemCode: new Map([['title', 'K1']]),
+      // 输出表里 tags 是 K7，输入表里根本没有这个字段
+      outColumnByItemCode: new Map([['tags', 'K7']]),
+    })
+    expect(step.contextMap).toEqual(['K1'])
+    expect(step.outColumns).toEqual(['K7'])
+  })
+
+  it('没给输出表映射时退回输入表映射（= 没配输出表的常见情况）', () => {
+    const step = mergeStepForWrite({
+      snapshot,
+      cfg: ruleCfg(['title'], ['title']),
+      nodeId: '40600',
+      sourceId: '430016398',
+      columnByItemCode: new Map([['title', 'K1']]),
+    })
+    expect(step.outColumns).toEqual(['K1'])
   })
 
   // 换不到宁可写 itemCode：悄悄丢字段比写个认得出的值糟得多

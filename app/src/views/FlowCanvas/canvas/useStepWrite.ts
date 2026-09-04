@@ -82,6 +82,21 @@ async function columnMapFor(tableId: string | undefined): Promise<Map<string, st
   }
 }
 
+/**
+ * 规则节点的两张列名映射：入参查**输入表**、出参查**输出表**
+ * （`useRuleTableFields` 的口径：没配输出表才回退到输入表）。
+ * 两者共用一张的话，输出表 ≠ 输入表时出参会全部换不到、悄悄退化成 itemCode。
+ */
+async function ruleColumnMaps(cfg: { ruleCfg?: { inputTableId?: string; outputTableId?: string } }) {
+  const inputTableId = cfg.ruleCfg?.inputTableId
+  const outputTableId = cfg.ruleCfg?.outputTableId || inputTableId
+  const [columnByItemCode, outColumnByItemCode] = await Promise.all([
+    columnMapFor(inputTableId),
+    outputTableId === inputTableId ? columnMapFor(inputTableId) : columnMapFor(outputTableId),
+  ])
+  return { columnByItemCode, outColumnByItemCode }
+}
+
 export function useStepWrite() {
   const flow = useFlowStore()
   const sourceStore = useSourceStore()
@@ -103,7 +118,7 @@ export function useStepWrite() {
       nodeId,
       sourceId: sourceIdOf() || snapshot.sourceId,
       lastStepIds: lastStepFromCanvas ? lastStepIdsFromCanvas(flow.main, nodeId, flow.branchGroups) : undefined,
-      columnByItemCode: await columnMapFor(isRuleNode(cfg) ? cfg.ruleCfg?.inputTableId : undefined),
+      ...(isRuleNode(cfg) ? await ruleColumnMaps(cfg) : {}),
     })
     const ack = await itemApi.stepModify(step)
     assertOk(ack, '修改步骤失败')
@@ -135,7 +150,7 @@ export function useStepWrite() {
       nodeId,
       sourceId: inherited.sourceId,
       lastStepIds,
-      columnByItemCode: await columnMapFor(isRuleNode(cfg) ? cfg.ruleCfg?.inputTableId : undefined),
+      ...(isRuleNode(cfg) ? await ruleColumnMaps(cfg) : {}),
     })
     const before = new Set([
       ...Object.keys(sourceStore.stepSnapshots),

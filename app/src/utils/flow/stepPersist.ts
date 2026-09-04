@@ -174,6 +174,11 @@ export function lastStepIdsFromCanvas(main: string[], nodeId: string, branchGrou
  * ⚠️ **存的是物理列名（K1,K2,K3），不是 itemCode**。`ruleCfg.inputFields/outputFields` 存的是
  * itemCode（`RuleTableFieldBinder` 的 `toggleField` 传 `f.itemCode`），得靠表 schema 换一道；
  * 换不到的原样保留——宁可写个认得出的 itemCode，也别悄悄丢掉一个字段。
+ *
+ * ⚠️ **入参和出参查的是两张不同的表**：入参来自输入表，出参来自**输出表**
+ * （`useRuleTableFields`：`outputTableId ? fieldsOf(outputTableId) : inputFieldOptions`，
+ * 与 UI 上「输出表（可选，默认使用输入表）」一致）。两者共用一张映射的话，
+ * 输出表 ≠ 输入表时出参会全部换不到、悄悄退化成 itemCode。
  */
 export function ruleStepContext(
   codes: string[] | undefined,
@@ -190,8 +195,10 @@ export function mergeStepForWrite(args: {
   sourceId: string
   /** 传入则覆盖快照里的 lastStep（自动保存按画布重算）；改名即时写入不要传，以免改拓扑。 */
   lastStepIds?: string[] | null
-  /** 规则节点专用：itemCode → 物理列名，用来把表配置的入出参写成 K1,K2,K3（见 ruleStepContext） */
+  /** 规则节点专用：**输入表**的 itemCode → 物理列名，用于入参（context） */
   columnByItemCode?: Map<string, string>
+  /** 规则节点专用：**输出表**的 itemCode → 物理列名，用于出参（outContext）；缺省时退回输入表映射 */
+  outColumnByItemCode?: Map<string, string>
 }): Step {
   const { snapshot, cfg, nodeId, sourceId } = args
   const rule = isRuleNode(cfg) ? cfg.ruleCfg : undefined
@@ -220,7 +227,7 @@ export function mergeStepForWrite(args: {
       ? ruleStepContext(rule.inputFields, args.columnByItemCode) ?? snapshot?.contextMap
       : cfg.taskCfg?.contextMap ?? snapshot?.contextMap,
     outColumns: rule
-      ? ruleStepContext(rule.outputFields, args.columnByItemCode) ?? snapshot?.outColumns
+      ? ruleStepContext(rule.outputFields, args.outColumnByItemCode ?? args.columnByItemCode) ?? snapshot?.outColumns
       : cfg.taskCfg?.outColumns ?? snapshot?.outColumns,
     enabled: !cfg.disabled,
   }
