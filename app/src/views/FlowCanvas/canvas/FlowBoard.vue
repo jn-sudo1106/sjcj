@@ -147,9 +147,69 @@ function hasLoginConfig(cfg: NodeConfig): boolean {
 // 节点运行状态语义（0703 问题九）：待配置 → 运行 ↔ 停止；"运行"即业务口中"配置完成、点启动进入运行"的状态，
 // "停止"即"数据在此节点不处理"——均为纯文案层，disabled 字段名/序列化结构不变。
 // 与 runtime.isRunnable 同源判定：登录和规则节点按各自能力判断，不能只看输出表。
+/**
+ * 节点卡片上的表标签（2026-09-04 修）。
+ *
+ * 原来无条件用 `effectiveOutputTable`（= 输出表 || 输入表）并把结果标成「输出表 X」。
+ * 那条回退只对**非采集节点**成立——它们的输出表编辑框自己写着「默认继承上游节点」。
+ * **采集节点的编辑框写的是「请选择输出表」，输出表是必填的**，所以对采集节点做同样的回退
+ * 等于拿输入表冒充输出表：卡片显示「⊞ TEST_ADB」，底部却是「待配置」，看上去自相矛盾
+ * （用户原话：这里已经配置了，但是画布上的状态还是待配置）。实为配置 1400990 的
+ * `outEntry` 是 null、`entryTypeId`=6200026(TEST_ADB)，即只有输入表、没有输出表。
+ *
+ * 现在采集节点缺输出表时照实说：标成输入表、加 `→ ?`，跟「待配置」对得上。
+ */
+function tableChip(cfg: NodeConfig): { label: string; title: string; unset: boolean } | null {
+  const explicit = nodeOutputTable(cfg)
+  if (explicit) return { label: edgeTableLabel(explicit), title: `输出表 ${edgeTableLabel(explicit)}`, unset: false }
+  const fallback = effectiveOutputTable(cfg)
+  if (!fallback) return null
+  const label = edgeTableLabel(fallback)
+  // 非采集节点的回退是编辑框承诺过的，照旧当输出表显示
+  if (!cfg.collectCfg) return { label, title: `输出表 ${label}（未显式设置，默认继承上游）`, unset: false }
+  return { label, title: `输入表 ${label} · 尚未设置输出表`, unset: true }
+}
+
+/** 「待配置」到底缺什么——只写状态不写原因，用户没法自查。 */
+function missingFor(cfg: NodeConfig): string[] {
+  const miss: string[] = []
+  const collect = cfg.collectCfg
+  if (collect) {
+    if (!collectUrlOf(cfg)) miss.push('URL')
+    if (!hasLoginConfig(cfg)) miss.push('登录配置')
+    if (collectorCapabilityOf(cfg)?.kind !== 'login' && !collect.outputTable) miss.push('输出表')
+    return miss
+  }
+  if (isRuleNode(cfg)) {
+    if (!cfg.ruleCfg?.ruleId) miss.push('规则')
+    if (!cfg.ruleCfg?.script?.trim()) miss.push('脚本')
+    return miss
+  }
+  if (isDataNode(cfg) && !nodeOutputTable(cfg)) miss.push('输出表')
+  return miss
+}
+
+/**
+ * 采集节点的 URL 统一读取口径（2026-09-04 修）。
+ *
+ * `collectCfg.url` 是**源 URL**，只有源视图的 `buildSourceSeed` 会填它。
+ * 而节点配置 Tab 里用户看到、编辑、保存的那个「URL」是 **`cfg.configUrl`**
+ * （旧平台「配置编辑」的 configUrl，见 ConfigTab.vue:440 的注释）——两者本就不是一份。
+ *
+ * 只认 `collectCfg.url` 的后果：**流程视图里的采集节点永远是「待配置」**，因为那里没有源，
+ * 这个字段填不上。用户实例：流程 1400984 的「网页抓取测试01」右侧明明写着
+ * 「已有配置 #1400990」、URL = www.baidu.com，卡片却一直是待配置
+ * （实测该节点 configUrl='www.baidu.com'、collectCfg.url=''）。
+ *
+ * 判"配没配"要跟用户看到的那个字段对齐，所以两者取其一即可。
+ */
+function collectUrlOf(cfg: NodeConfig): string {
+  return cfg.collectCfg?.url || cfg.configUrl || ''
+}
+
 function footFor(cfg: NodeConfig) {
   const configured = cfg.collectCfg
-    ? !!(cfg.collectCfg.url && hasLoginConfig(cfg) && (collectorCapabilityOf(cfg)?.kind === 'login' || cfg.collectCfg.outputTable))
+    ? !!(collectUrlOf(cfg) && hasLoginConfig(cfg) && (collectorCapabilityOf(cfg)?.kind === 'login' || cfg.collectCfg.outputTable))
     : isRuleNode(cfg)
       ? !!(cfg.ruleCfg?.ruleId && cfg.ruleCfg.script?.trim())
     : isDataNode(cfg) && !!nodeOutputTable(cfg)
@@ -169,9 +229,11 @@ function footFor(cfg: NodeConfig) {
       : isDataNode(cfg)
         ? '待发起抓取'
         : '待配置'
+  const missing = left === '待配置' ? missingFor(cfg) : []
   return {
     left,
     right,
+    hint: missing.length ? `还缺：${missing.join('、')}` : '',
     warn: cfg.disabled || ((cfg.collect || isDataNode(cfg)) && !configured),
   }
 }
@@ -484,9 +546,9 @@ watch(
             <div class="rc-node-foot"><span class="rc-chip">静态保留</span><span>{{ n.cfg.base[3]?.[1] || '待编排' }}</span></div>
           </template>
           <template v-else>
-            <div v-if="effectiveOutputTable(n.cfg)" class="rc-node-table" :title="`输出表 ${edgeTableLabel(effectiveOutputTable(n.cfg))}`">⊞ {{ edgeTableLabel(effectiveOutputTable(n.cfg)) }}</div>
+            <div v-if="tableChip(n.cfg)" class="rc-node-table" :class="{ unset: tableChip(n.cfg)!.unset }" :title="tableChip(n.cfg)!.title">⊞ {{ tableChip(n.cfg)!.label }}{{ tableChip(n.cfg)!.unset ? ' → ?' : '' }}</div>
             <div class="rc-node-foot">
-              <span class="rc-chip" :class="footClass(n.cfg)">{{ footFor(n.cfg).left }}</span>
+              <span class="rc-chip" :class="footClass(n.cfg)" :title="footFor(n.cfg).hint">{{ footFor(n.cfg).left }}</span>
               <span>{{ footFor(n.cfg).right }}</span>
             </div>
           </template>
@@ -604,6 +666,7 @@ watch(
 .rc-flow-node.run-C { border-color: #86efac; }
 .rc-flow-node.run-E { border-color: #fca5a5; }
 .rc-node-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; color: var(--rc-muted); font-size: 10px; }
+.rc-node-table.unset { color: var(--rc-warn, #d98b25); }
 .rc-node-table { margin-top: 6px; font-size: 10px; color: var(--rc-faint); font-family: var(--rc-mono, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-node-brief { margin-top: 8px; color: var(--rc-muted); font-size: 10px; line-height: 1.45; }
 .rc-node-brief b { color: #334155; font-weight: 700; }

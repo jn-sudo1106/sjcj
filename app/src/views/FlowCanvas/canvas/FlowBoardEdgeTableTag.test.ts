@@ -78,7 +78,11 @@ describe('FlowBoard · 连线表关系标注', () => {
 
 // 节点卡片自己身上的「⊞ 输出表」角标（用户 2026-09-01 追加确认：跟连线标注同一套兜底+解析）。
 describe('FlowBoard · 节点卡片「⊞ 输出表」角标', () => {
-  it('节点自己没显式落输出表时也要按输入表兜底展示（此前 v-if 只认显式输出表，会整块不显示）', async () => {
+  // 2026-09-04 修正这条的口径：兜底展示要保留（不能整块消失），但**采集节点**不能把输入表
+  // 冒充成输出表——它的编辑框写的是「请选择输出表」，输出表必填。原来标成「输出表 X」，
+  // 卡片底部却是「待配置」，看上去自相矛盾（用户实例：流程 1400984 的「网页抓取测试01」，
+  // 配置 1400990 的 outEntry 为 null）。现在加 `→ ?` 并把 title 说成输入表。
+  it('采集节点没显式落输出表：角标仍显示（不整块消失），但标成输入表 + → ?，不冒充输出表', async () => {
     let resolveDetail!: (v: { tableId: string; tableName: string; name: string; fields: never[] }) => void
     vi.spyOn(entryApi, 'entryDetail').mockImplementation(
       () => new Promise((resolve) => { resolveDetail = resolve }),
@@ -95,10 +99,50 @@ describe('FlowBoard · 节点卡片「⊞ 输出表」角标', () => {
     const badge = () => card.find('.rc-node-table')
     // 兜底阶段：不再是"没显式落表就整块不显示"，裸 id 顶着也要能看到角标
     expect(badge().exists()).toBe(true)
-    expect(badge().text()).toBe('⊞ 6200026')
+    expect(badge().text()).toBe('⊞ 6200026 → ?')
+    expect(badge().attributes('title')).toBe('输入表 6200026 · 尚未设置输出表')
+    expect(badge().classes()).toContain('unset')
 
     resolveDetail({ tableId: '6200026', tableName: 'sense_data.T_6200026', name: '表-6200026', fields: [] })
     await flushPromises()
-    expect(card.find('.rc-node-table').text()).toBe('⊞ 表-6200026')
+    expect(card.find('.rc-node-table').text()).toBe('⊞ 表-6200026 → ?')
+
+    // 真的设上输出表后，角标恢复成正常的「输出表」口径
+    flow.configs[targetId].collectCfg!.outputTable = '6200026'
+    await wrapper.vm.$nextTick()
+    const settled = card.find('.rc-node-table')
+    expect(settled.text()).toBe('⊞ 表-6200026')
+    expect(settled.attributes('title')).toBe('输出表 表-6200026')
+    expect(settled.classes()).not.toContain('unset')
+  })
+
+  // 2026-09-04：流程视图里采集节点永远"待配置"的真因——只认 collectCfg.url（源 URL，
+  // 流程视图没有源、填不上），而用户在节点配置 Tab 里看到并编辑的 URL 是 cfg.configUrl。
+  it('绑了配置、URL 只在 configUrl 上时不算待配置（流程视图没有源 URL）', async () => {
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({ tableId: '6200026', tableName: 'sense_data.T_6200026', name: '表-6200026', fields: [] } as never)
+    const { flow, wrapper } = await mountBoard()
+    const targetId = flow.main.find((id) => id !== 'start' && id !== 'end')!
+    const cfg = flow.configs[targetId]
+    cfg.collectCfg!.url = ''            // 流程视图：没有源，源 URL 填不上
+    cfg.collectCfg!.outputTable = '6200026'
+    cfg.configId = '1400990'
+    cfg.configUrl = 'www.baidu.com'     // 节点配置 Tab 里显示的就是这个
+    await flushPromises()
+
+    const card = wrapper.findAll('.rc-flow-node').find((c) => c.text().includes(cfg.title))!
+    expect(card.findAll('.rc-chip').some((c) => c.text() === '待配置')).toBe(false)
+  })
+
+  it('「待配置」角标的 title 说明还缺什么（原来只有状态词，用户无从自查）', async () => {
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({ tableId: '6200026', tableName: 'sense_data.T_6200026', name: '表-6200026', fields: [] } as never)
+    const { flow, wrapper } = await mountBoard()
+    const targetId = flow.main.find((id) => id !== 'start' && id !== 'end')!
+    flow.configs[targetId].collectCfg!.url = 'www.baidu.com'
+    flow.configs[targetId].collectCfg!.outputTable = ''  // 只缺输出表
+    await flushPromises()
+
+    const card = wrapper.findAll('.rc-flow-node').find((c) => c.text().includes(flow.configs[targetId].title))!
+    const chip = card.findAll('.rc-chip').find((c) => c.text() === '待配置')!
+    expect(chip.attributes('title')).toBe('还缺：输出表')
   })
 })
