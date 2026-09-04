@@ -27,6 +27,28 @@ const router = useRouter()
 // 更坑的是网站源数恰好等于命中数时看起来"像是生效了"（实测踩到：都是 20）。
 //
 // 读到就从 URL 上抹掉：留着的话用户在源视图改了别的条件再刷新，又会被这批旧 ID 拉回去。
+/**
+ * 单源数据视图「按此条件反查源 →」带过来的数据条件（0903 Y2-7）。
+ * 与 initialSourceIds 同一套做法：在这里解析路由、读完抹掉 URL，子组件只收 prop
+ * （SiteDataView 的测试是裸挂载，没装 router）。
+ */
+const initialCondition = ref<{ tableId: string; sql?: string; state?: string; dataId?: string; parentId?: string } | null>(null)
+watch(() => route.query.condTable, (raw) => {
+  const tableId = String(raw ?? '').trim()
+  if (!tableId) return
+  const q = route.query
+  initialCondition.value = {
+    tableId,
+    sql: q.condSql ? String(q.condSql) : undefined,
+    state: q.condState ? String(q.condState) : undefined,
+    dataId: q.condDataId ? String(q.condDataId) : undefined,
+    parentId: q.condParentId ? String(q.condParentId) : undefined,
+  }
+  const next = { ...q }
+  for (const k of ['condTable', 'condSql', 'condState', 'condDataId', 'condParentId']) delete next[k]
+  void router.replace({ path: route.path, query: next })
+}, { immediate: true })
+
 const initialSourceIds = ref('')
 watch(() => route.query.sourceIds, (raw) => {
   const ids = String(raw ?? '').trim()
@@ -93,7 +115,7 @@ function openSourceData(source: Source) {
     <div v-if="loadError" class="sdv-empty">{{ loadError }}</div>
     <template v-else>
       <SourceOverviewView v-if="view === 'source'" :current-site-id="siteId" :initial-source-ids="initialSourceIds" class="sdv-body" @open-source="openSource" @open-source-data="openSourceData" />
-      <SiteDataView v-else-if="view === 'data'" :site-id="siteId" class="sdv-body" />
+      <SiteDataView v-else-if="view === 'data'" :site-id="siteId" :initial-condition="initialCondition" class="sdv-body" />
       <SiteFileView v-else-if="view === 'file'" :site-id="siteId" class="sdv-body" />
     </template>
   </main>

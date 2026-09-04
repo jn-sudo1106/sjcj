@@ -19,7 +19,7 @@
 //
 // 这里默认是查看；0831 X6：具体源 + 当前表就是发后续那张表时，可以勾行发任务。
 // 全部源+选表仍只读（无法确定流程节点）。发起抓取 / 输入输出切换仍在 ResultView。
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { dataApi, parseNextStepReceipt, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail, type RowQuery } from '@/api'
@@ -45,7 +45,15 @@ import RowDetailFields from './RowDetailFields.vue'
 import { fieldsFromShowItems, fieldsFromTableMeta } from './rowDetailFields'
 import { readFieldPreset, readShowEmpty, visibleDetailProps, writeFieldPreset, writeShowEmpty, type RowFieldPreset } from './rowDetailPrefs'
 
-const props = defineProps<{ siteId: string }>()
+/** 单源视图「按此条件反查源 →」带过来的数据条件（0903 Y2-7），由 SiteDetailView 从路由解析 */
+export interface SiteDataInitialCondition {
+  tableId: string
+  sql?: string
+  state?: string
+  dataId?: string
+  parentId?: string
+}
+const props = defineProps<{ siteId: string; initialCondition?: SiteDataInitialCondition | null }>()
 const router = useRouter()
 
 // 本视图与具体源结果视图（ResultView.vue）长得几乎一样——都是流程图选节点 + 数据表格——
@@ -144,6 +152,22 @@ const selectedNodeId = ref('')
 // 条件改了但还没查：上一次的结果此刻已经不对应输入框里的条件了。不清理的话表现极具
 // 误导性——失败后把输入框清空重打，那条报错和空表格一直挂着不走，看着像"边打字边查还一直报错"
 // （2026-08-20 实测，ResultView.vue 同源问题一并修）。
+// 从单源数据视图「按此条件反查源 →」带过来的条件（0903 Y2-7）。
+//
+// 走 prop 不走 useRoute()：本组件的测试全是裸 shallowMount，没装 router——
+// Y2-4 在 SourceOverviewView 上已经踩过一次同样的坑。路由解析留在持有 route 的 SiteDetailView。
+// 仍然用 watch 而不是只读初始值：同一棵组件树里换 query 不会重新挂载 setup。
+watch(() => props.initialCondition, (cond) => {
+  if (!cond?.tableId) return
+  tableId.value = cond.tableId
+  selectedSourceId.value = ''   // 反查要看的是"全部源"，不能停在某个具体源上
+  filters.sql = cond.sql ?? ''
+  filters.state = cond.state ?? ''
+  filters.dataId = cond.dataId ?? ''
+  filters.parentId = cond.parentId ?? ''
+  void nextTick(() => runQuery())
+}, { immediate: true, deep: true })
+
 const filtersDirty = ref(false)
 watch(() => ({ ...filters }), () => { filtersDirty.value = true })
 
@@ -534,13 +558,19 @@ function onRowAction(row: DataRow, cmd: string) {
 const parentDetail = ref<EntryDetail | null>(null)
 const parentLoading = ref(false)
 const parentError = ref('')
-const canDrillParent = computed(() => !!detailRow.value?.categoryId && !!detailRow.value?.parentId && detailRow.value.parentId !== '0')
+/**
+ * 父行所在的表 = **本节点的有效输入表**，不是本行自己的 `categoryId`（2026-09-04 修，与 ResultView 同因）。
+ * `categoryId` 是这一行自己在哪张表；同表链路下两者恰好相等，异表链路下拿它去查父行会 500
+ * （真实故障：源 430002879 父行在 6200023、子行在 900）。
+ */
+const parentTableId = computed(() => inputTableId.value || detailRow.value?.categoryId || '')
+const canDrillParent = computed(() => !!parentTableId.value && !!detailRow.value?.parentId && detailRow.value.parentId !== '0')
 async function openParentDetail() {
-  if (!detailRow.value?.categoryId || !detailRow.value?.parentId) return
+  if (!parentTableId.value || !detailRow.value?.parentId) return
   parentLoading.value = true
   parentError.value = ''
   try {
-    const res = await dataApi.rowDetail(detailRow.value.categoryId, detailRow.value.parentId)
+    const res = await dataApi.rowDetail(parentTableId.value, detailRow.value.parentId)
     parentDetail.value = res
     if (!res) parentError.value = '未找到上游数据'
   } catch (error) {

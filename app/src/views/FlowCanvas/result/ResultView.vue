@@ -670,6 +670,38 @@ function clearFilters() {
   filters.sql = ''
   runQuery()
 }
+/**
+ * 「按此条件反查源 →」（0903 Y2-7）。
+ *
+ * 单源视图里**不直接反查**——这里只有一个源，反查它自己没有意义。用户在这个页面问的是
+ * 「同样的脏数据，别的源上有没有」，那是全部源数据视图的事。所以这个按钮**带着条件跳过去**，
+ * 到那边再点反查，而不是在这里塞第二套反查 UI。
+ *
+ * 条件通过 URL 传：目标是另一棵组件树（SiteDetailView → SiteDataView），没有共享状态可用。
+ * 刻意**不带 sourceId**——带上就还是单源视图，跳了等于没跳。
+ */
+const canBackTrace = computed(() => !!selectedTable.value
+  && !!(filters.sql || filters.state || filters.dataId || filters.parentId))
+function openBackTraceInSiteView() {
+  if (!canBackTrace.value) return
+  if (!siteId.value) {
+    ElMessage.warning('该源没有所属网站，无法切到全部源数据视图')
+    return
+  }
+  void router.push({
+    path: '/canvas',
+    query: {
+      siteId: siteId.value,
+      view: 'data',
+      condTable: selectedTable.value,
+      ...(filters.sql ? { condSql: filters.sql } : {}),
+      ...(filters.state ? { condState: filters.state } : {}),
+      ...(filters.dataId ? { condDataId: filters.dataId } : {}),
+      ...(filters.parentId ? { condParentId: filters.parentId } : {}),
+    },
+  })
+}
+
 function buildSummaryQuery(): RowQuery {
   return {
     tableId: selectedTable.value,
@@ -732,13 +764,28 @@ function onRowAction(r: DataRow, cmd: string) {
 const parentDetail = ref<EntryDetail | null>(null)
 const parentLoading = ref(false)
 const parentError = ref('')
-const canDrillParent = computed(() => !!detailRow.value?.categoryId && !!detailRow.value?.parentId && detailRow.value.parentId !== '0')
+/**
+ * 父行所在的表 = **上游节点的输出表**，不是本行自己的 `categoryId`（2026-09-04 修）。
+ *
+ * `row.categoryId` 是这一行**自己**在哪张表。同表链路（父子都在 900）时两者恰好相等，
+ * 所以一直没暴露；异表链路下就是错的——真实故障：源 430002879「观察者网-财经」
+ * 父行 2790368 在 6200023、子行 8974800 在 900，拿 categoryId(900) 去查父行，
+ * 后端直接 500（`entryDetail?entryId=2790368&type=900`），
+ * 详情抽屉里飘一条红色「请求异常 [data/rowDetail]: 500」，而字段又照常显示（那些来自列表行），
+ * 用户不知道该信哪个。
+ *
+ * 优先用**本节点的有效输入表**（`inputTableId`）：父行正是写进这张表的。
+ * 比 `predecessorTableId` 稳——后者要求上游唯一，分叉汇合处会算不出来。两者都解析不出才退回 categoryId。
+ */
+const parentTableId = computed(() => inputTableId.value || predecessorTableId.value || detailRow.value?.categoryId || '')
+const canDrillParent = computed(() => !!parentTableId.value && !!detailRow.value?.parentId && detailRow.value.parentId !== '0')
 async function loadParentDetail(row: DataRow) {
-  if (!row.categoryId || !row.parentId || row.parentId === '0') return
+  const tableId = inputTableId.value || predecessorTableId.value || row.categoryId
+  if (!tableId || !row.parentId || row.parentId === '0') return
   parentLoading.value = true
   parentError.value = ''
   try {
-    const res = await dataApi.rowDetail(row.categoryId, row.parentId)
+    const res = await dataApi.rowDetail(tableId, row.parentId)
     parentDetail.value = res
     if (!res) parentError.value = '未找到上游数据'
   } catch (error) {
@@ -924,6 +971,15 @@ async function onTestScript() {
         <span class="rv-actions">
           <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
           <button class="rc-btn" type="button" @click="clearFilters">清空</button>
+          <!-- 0903 Y2-7：带着条件跳到全部源数据视图，在那儿才有"反查源"这件事 -->
+          <button
+            class="rc-btn"
+            type="button"
+            data-testid="data-backtrace-jump"
+            :disabled="!canBackTrace"
+            :title="canBackTrace ? '带着当前条件切到全部源数据视图，在那里反查哪些源命中' : '先填至少一个数据条件（SQL / 状态 / 数据 ID / 父 ID）'"
+            @click="openBackTraceInSiteView"
+          >按此条件反查源 →</button>
         </span>
       </template>
     </div>
