@@ -105,7 +105,7 @@ describe('BackTraceSourcesDialog（0903 Y2 / H12）', () => {
     vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(Array.from({ length: 1001 }, (_, i) => String(i)))
     const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
 
-    const wrapper = await mountDialog()
+    await mountDialog()
 
     // 1000 个 ID 按 200 一组补详情 = 5 次请求，不是 6 次（第 1001 个已被截掉）
     expect(paged).toHaveBeenCalledTimes(5)
