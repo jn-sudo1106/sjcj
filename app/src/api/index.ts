@@ -1162,15 +1162,8 @@ export const ruleApi = {
       throw e instanceof ApiError ? e : new ApiError(endpoint, e)
     }
   },
-  // 0805 追加（恢复 D3 砍掉的「引用已有规则」能力，但按会议原话"新建是新建、选是选"分开做，
-  // 不再混进规则名称输入框——见 ConfigTab.vue 的「选择已有规则」按钮）：只列当前登录账号自己的规则，
-  // 跟 orchestrationSaveMeta 默认 userCode 口径对齐（同一个人存的规则才该出现在他自己的候选列表里）。
-  // 复用 orchestrationPaged，不新增端点；接口不支持按 userCode 服务端过滤，客户端按 size:100 拉一页后过滤。
-  orchestrationOwnRules: async (): Promise<RuleOrchestrationItem[]> => {
-    const userCode = (readLoginUsername() || 'admin').trim()
-    const paged = await ruleApi.orchestrationPaged({ size: 100 })
-    return paged.list.filter((item) => item.userCode === userCode)
-  },
+  // 「引用已有规则」（0805 的 orchestrationOwnRules）**已删除**（2026-09-04）：它列的是旧规则
+  // 平台的 compose 记录，用户确认那个平台已废弃、现在统一走配置。要恢复得先接新平台的列表接口。
   // 路径 B 回灌：POST /vrule/api/custom-compose/getComposeById?id=（对齐旧 handleOpenRecord）
   orchestrationDetail: async (ruleId: string) => {
     const endpoint = 'rule/orchestrationDetail'
