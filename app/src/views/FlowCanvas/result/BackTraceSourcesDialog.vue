@@ -50,10 +50,19 @@ const emit = defineEmits<{
 const BACKTRACE_MAX = 2000
 /** 补详情的分组大小：ids 走 query string，太长会被网关截断 */
 const DETAIL_CHUNK = 200
+/** 反查取源 ID 时的分页大小，见 load() 里的说明；与 SiteDataView 的收窄逻辑取同一个值 */
+const DISTINCT_SIZE = 1000
 
 const loading = ref(false)
 const error = ref('')
 const sourceIds = ref<string[]>([])
+/**
+ * 服务端是否把结果截断了。判据是"返回条数正好等于我们要的上限"——
+ * `entryDistinctSource` 走的是分页参数（`buildLegacyRowQuery` 的 page/limit），
+ * 顶到 limit 就说明后面还有，本网站的源可能有一部分根本没被返回。
+ * 这属于后端需求 H6 的实证：2026-09-04 走查时用一个命中面很广的条件真的顶到了 1000。
+ */
+const truncated = ref(false)
 const rows = ref<Source[]>([])
 const selected = ref<string[]>([])
 
@@ -117,12 +126,20 @@ async function load(query: RowQuery) {
   loading.value = true
   error.value = ''
   sourceIds.value = []
+  truncated.value = false
   rows.value = []
   selected.value = []
   try {
-    const ids = await dataApi.distinctSource(query)
+    // ⚠️ **必须显式传 size**，否则 `buildLegacyRowQuery` 会退回分页默认值 20，
+    // 拿回来的只是全平台前 20 个源——共用表（TB_CNEWS 这种）全平台引用源远超 20，
+    // 本网站的源常常不在前 20 里，于是"命中的源一个都不属于当前网站"。
+    // 这是 2026-08-14 就在 SiteDataView 里踩过并写明的坑（那边同样显式传 1000），
+    // 本弹窗第一版忘了带，走查时表现成"反查结果里没有本网站的源"。
+    // 1000 是那次实测确认不截断的安全值；由本组件兜底，不指望每个调用方都记得。
+    const ids = await dataApi.distinctSource({ ...query, size: DISTINCT_SIZE })
     if (reqId !== seq) return
     sourceIds.value = ids
+    truncated.value = ids.length >= DISTINCT_SIZE
     if (!ids.length || ids.length > BACKTRACE_MAX) return
     await loadDetails(ids)
   } catch (e) {
@@ -182,6 +199,13 @@ function stateText(source: Source) {
           包含其它网站的源（另有 {{ otherSiteCount }} 个）
         </label>
       </div>
+    </div>
+
+    <!-- 截断是"结果不完整"，跟"命中太多"不是一回事：后者能看清单只是不便，
+         前者意味着本网站可能还有源没被返回，必须说出来，否则用户会以为反查全了。 -->
+    <div v-if="truncated && !loading && !error" class="bt-over" data-testid="backtrace-truncated">
+      服务端只返回了前 {{ DISTINCT_SIZE }} 个源（已达上限），结果可能不完整——
+      本网站可能还有命中的源没被返回。请收窄数据条件后再反查。
     </div>
 
     <!-- 超限：不展开清单，但不堵死——「看清单」降级成「按条件直接发」 -->

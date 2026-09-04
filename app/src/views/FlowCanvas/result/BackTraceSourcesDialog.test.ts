@@ -37,6 +37,26 @@ describe('BackTraceSourcesDialog（0903 Y2 / H12）', () => {
     expect(wrapper.text()).toContain('源 2')
   })
 
+  // 2026-09-04 走查踩到：不传 size 时 buildLegacyRowQuery 退回分页默认值 20，
+  // 反查只拿到全平台前 20 个源，本网站的源常常不在里面 → 表现成"命中的源都不属于当前网站"。
+  // SiteDataView 早就为同一个坑显式传了 1000，本弹窗第一版忘了。
+  it('反查必须显式传 size，避免退回分页默认值 20 只拿到前 20 个源', async () => {
+    const distinct = vi.spyOn(dataApi, 'distinctSource').mockResolvedValue([])
+    await mountDialog()
+    expect(distinct).toHaveBeenCalledWith(expect.objectContaining({ tableId: 't1', size: 1000 }))
+  })
+
+  // 顶到上限 = 结果不完整，跟"命中太多看不过来"不是一回事：本网站可能还有源没被返回。
+  // 2026-09-04 走查实证：一个命中面很广的条件真的返回了正好 1000 条。
+  it('返回条数顶到上限时提示结果可能不完整', async () => {
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(Array.from({ length: 1000 }, (_, i) => String(i)))
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+
+    const wrapper = await mountDialog()
+
+    expect(wrapper.get('[data-testid="backtrace-truncated"]').text()).toContain('可能不完整')
+  })
+
   it('命中 0 个：给空态，不发补详情的请求', async () => {
     vi.spyOn(dataApi, 'distinctSource').mockResolvedValue([])
     const paged = vi.spyOn(sourceApi, 'sourcePaged')
