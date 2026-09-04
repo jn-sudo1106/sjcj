@@ -311,12 +311,20 @@ export const ENDPOINTS: EndpointSpec[] = [
   // "只改 flowConf" 的专用端点从没被走过，保存永远用全量的 saveFlow；changeFlowEnable 没有
   // 对应 UI，流程列表没有启停开关）——已删除注册，生产写白名单里配套的两条也一并删了
   // （见 client.ts 同一次改动）。真要接这三个功能再照 flowPaged/saveFlow 的样子加回来。
-  { path: 'flow/flowPaged', desc: '流程分页 + 多条件检索（不含 flowConf，含计算列 sourceCnt）', live: true },
+  { path: 'flow/flowPaged', desc: '流程分页 + 多条件检索（不含 flowConf，含计算列 sourceCnt；templateFlag=0/1 服务端过滤模板，2026-09-04 实测生效）', live: true },
   { path: 'flow/flowDetail', desc: '流程详情（含 flowConf 大字段与 sourceCnt）', live: true },
   { path: 'flow/saveFlow', desc: '新增 / 修改流程（不带 flowId = 新增）', danger: true, live: true },
   { path: 'flow/deleteFlow', desc: '批量删除流程（逻辑删除 is_delete=-1 + state=D）', danger: true, live: true },
   // 绑定源到流程。写的是 **cs_source.FLOW_ID**（存量生产表），不是 cs_flow，单次上限 5000。
   { path: 'flow/changeFlowBatch', desc: '批量关联 / 解绑源到流程（Body 版；flowId=0 为解绑）', danger: true, live: true },
+  // 0903 Y8：后端把"复制"这件重活做掉了，前端不再自己逐个 saveItemConfig 建节点。
+  // 2026-09-04 探活确认三条都在（GET 探测答 "Request method 'GET' not supported" = 端点存在但仅 POST；
+  // flowTemplateList 走 GET，当前返回空数组，因为库里还没有任何流程被标成模板）。
+  { path: 'flow/copyFlow', desc: '复制流程（连 cs_item_config 步骤一起复制并重映射上下游；源是模板时新流程 refFlowId 回指模板；不复制根节点，后端自动建）', danger: true, live: true },
+  { path: 'flow/copyTemplateSteps', desc: '把模板下的普通步骤复制到目标流程（自动改 FLOW_ID、重映射上下游、根节点依赖保持 0、不复制模板自身根节点）', danger: true, live: true },
+  { path: 'flow/flowTemplateList', desc: '流程模板下拉候选（等价于 flowPaged + templateFlag=1，但不分页）', live: true },
+  // 只登记不接：旧平台「生成配置」入口，本平台没有对应场景（Y8-16）。
+  { path: 'source/genConfig', desc: '旧平台「生成配置」（SourceList.vue 的行操作）；本平台无调用方，仅登记备查' },
 
   /* ── comm 导出（目标 1 / 收录 1） ── */
   { path: 'comm/export', desc: '导出' },

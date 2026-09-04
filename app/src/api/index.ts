@@ -2121,6 +2121,9 @@ export const flowCenterApi = {
     keywords?: string
     field?: 'updateDt' | 'createDt' | 'flowName' | 'sourceCnt' | 'flowId'
     order?: 'asc' | 'desc'
+    /** 只看模板 / 只看普通流程；不传 = 全部。**服务端过滤**（2026-09-04 实测：传 1 得 0 条、
+     *  传 0 得 738 条）。不要改成本地筛——分页之后本地只能筛当前这一页，见 FlowCenter 的注释。 */
+    onlyTemplate?: boolean
   } = {}) => {
     const result = await request<unknown>('flow/flowPaged', cond, {
       method: 'POST',
@@ -2131,9 +2134,59 @@ export const flowCenterApi = {
         keywords: cond.keywords || undefined,
         field: cond.field ?? 'updateDt',
         order: cond.order ?? 'desc',
+        templateFlag: cond.onlyTemplate === undefined ? undefined : (cond.onlyTemplate ? 1 : 0),
       },
     })
     return flowPageFromLegacy(result)
+  },
+  /**
+   * 模板下拉候选（0903 H24）。等价于 `paged({ onlyTemplate: true })` 但不分页，
+   * 后端专门给了这条。**模板是流程的一个属性，不是另一类对象**——不要据此再造一个"模板中心"。
+   */
+  templates: async (): Promise<FlowRecord[]> => {
+    const result = await request<unknown>('flow/flowTemplateList', {}, {
+      method: 'GET',
+      httpEndpoint: 'flow/flowTemplateList',
+    })
+    return flowPageFromLegacy(result).list
+  },
+  /**
+   * 复制整个流程（含 `cs_item_config` 步骤，后端重映射上下游）。
+   * 源是模板时，新流程为普通流程且 `refFlowId` 自动回指模板；不复制根节点——目标流程
+   * 自己已有一条 `isRoot=1`，子步骤的 `lastStep='0'` 会自然落到它身上（2026-09-04 已核）。
+   * 新 ID 与 saveFlow 同款：回执 data 为 null，从 msg 里解析。
+   */
+  copy: async (flowId: string, flowName?: string): Promise<string> => {
+    if (!flowId) throw new Error('请先选择要复制的流程')
+    const payload: Record<string, unknown> = { flowId }
+    if (flowName?.trim()) payload.flowName = flowName.trim()
+    const result = await request<unknown>('flow/copyFlow', payload, {
+      method: 'POST',
+      httpEndpoint: 'flow/copyFlow',
+      httpParams: payload,
+    })
+    const ack = ackFromApiResult(result)
+    if (!ack.ok) throw new Error(ack.message || '复制流程失败')
+    const id = idFromApiResult(result, ['flowId', 'id']) || ack.message?.match(/id\s*[:：]\s*(\d+)/)?.[1]
+    if (!id) throw new Error(`流程已复制，但未能解析新流程 ID（后端回执：${ack.message ?? '无'}），请刷新列表确认`)
+    return id
+  },
+  /**
+   * 把模板下的普通步骤复制到一个**已存在**的目标流程（新建源选模板走这条）。
+   * 后端自动改 `FLOW_ID`、重映射步骤上下游、根节点依赖保持 `0`、不复制模板自身的根节点；
+   * 目标是普通流程时自动把 `refFlowId` 指向模板。
+   * 回执是「复制成功，共复制 N 个步骤」或明确错误（模板不存在 / 不是模板 / 目标不存在 / 复制到自身）。
+   */
+  copyTemplateSteps: async (templateFlowId: string, targetFlowId: string): Promise<Ack> => {
+    if (!templateFlowId || !targetFlowId) return { ok: false, message: '请先选择模板与目标流程' }
+    if (templateFlowId === targetFlowId) return { ok: false, message: '不能把模板复制到它自己' }
+    const payload = { templateFlowId, targetFlowId }
+    const result = await request<unknown>('flow/copyTemplateSteps', payload, {
+      method: 'POST',
+      httpEndpoint: 'flow/copyTemplateSteps',
+      httpParams: payload,
+    })
+    return ackFromApiResult(result)
   },
   /** 批量删除流程（逻辑删除：is_delete=-1 + state=D）。高危，调用方必须已做二次确认。 */
   remove: async (flowIds: string[]): Promise<Ack> => {

@@ -32,6 +32,10 @@ export interface Source {
   name: string
   url: string
   configId: string
+  /** 该源关联的流程（旧 `cs_source.FLOW_ID`）。**执行时后端按 FLOW_ID 反查配置后执行**
+   *  （0903 H1 答复），所以这个字段决定这个源实际跑哪一套配置。
+   *  2026-09-04 实测：`sourcePaged` 与 `sourceDetail` 都已返回（sourceDetail 是后端本次新加的）。 */
+  flowId?: string
   /** @deprecated 旧平台 snatchSave 请求字段；读取旧源时保留，业务层不再新写。 */
   sourceType?: string | number
   configId2?: string
@@ -179,12 +183,21 @@ export interface FlowRecord {
   updatedAt: string
   /** 关联源数量（后端计算列，口径 cs_source.IS_DELETE >= 0，含禁用源）；mock 不提供 */
   sourceCnt?: number
+  /** 是不是流程模板（旧 `templateFlag` 0/1）。**模板是流程的一个属性，不是另一类对象**——
+   *  模板与普通流程在同一个列表里，用 `flowPaged.templateFlag` 服务端过滤区分（0903 H24 / H7 答复）。
+   *  2026-09-04 实测：传 1 得 0 条、传 0 得 738 条，服务端过滤确实生效。 */
+  isTemplate?: boolean
+  /** 由哪个模板复制而来（旧 `refFlowId`）。`copyFlow` / `copyTemplateSteps` 会自动回指，
+   *  用于反查"谁用了这个模板"（此前只能看 sourceCnt，看不出来源）。 */
+  fromTemplateId?: string
 }
 
 export interface FlowSaveInput {
   id?: string
   name: string
   definition: FlowDefinition
+  /** 只在「标记/取消标记为模板」时传；不传则保持后端现值不变 */
+  isTemplate?: boolean
 }
 
 /** 网站 Site（0707 优化·Phase2）：父级，统一流程模板 + 批量工具，本身不实际采集运行；下辖多个源（Source.siteId） */
