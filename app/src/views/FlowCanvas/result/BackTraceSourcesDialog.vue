@@ -42,25 +42,23 @@ const emit = defineEmits<{
   launch: [sourceIds: string[]]
 }>()
 
-/**
- * 命中源上限。超过就不展开清单——`distinctSource` 只回 ID，补详情要按 200 一组打
- * `sourcePaged`，2000 个源就是 10 次请求；再多既慢也没人真去逐个看。
- * 超限时不是不让做，而是把"看清单"降级成"直接按条件全量发"，见模板里的超限分支。
- */
-const BACKTRACE_MAX = 2000
 /** 补详情的分组大小：ids 走 query string，太长会被网关截断 */
 const DETAIL_CHUNK = 200
-/** 反查取源 ID 时的分页大小，见 load() 里的说明；与 SiteDataView 的收窄逻辑取同一个值 */
-const DISTINCT_SIZE = 1000
+/**
+ * 反查愿意处理的源上限。与 SiteDataView 的收窄逻辑取同一个值（那边实测确认 1000 不被后端截断）。
+ * 实际请求会**多要一条**（见 load()）：只有真的拿回 1001 条，才说明后面还有、结果不完整。
+ * 要多少给多少地判"length >= 1000 就是截断"会在恰好 1000 个源时误报。
+ */
+const DISTINCT_LIMIT = 1000
 
 const loading = ref(false)
 const error = ref('')
 const sourceIds = ref<string[]>([])
 /**
- * 服务端是否把结果截断了。判据是"返回条数正好等于我们要的上限"——
+ * 结果是否**真的**被截断。多要一条来判：拿回 DISTINCT_LIMIT+1 条才算超出，
+ * 否则恰好 1000 个源时会误报"不完整"。
  * `entryDistinctSource` 走的是分页参数（`buildLegacyRowQuery` 的 page/limit），
- * 顶到 limit 就说明后面还有，本网站的源可能有一部分根本没被返回。
- * 这属于后端需求 H6 的实证：2026-09-04 走查时用一个命中面很广的条件真的顶到了 1000。
+ * 超出就说明后面还有，本网站的源可能有一部分根本没被返回——这是后端需求 H6 的实证。
  */
 const truncated = ref(false)
 const rows = ref<Source[]>([])
@@ -77,7 +75,6 @@ const hitCount = computed(() => sourceIds.value.length)
  * 曾经做过一个「包含其它网站的源」开关，会上决定去掉：用户是在**某个网站的**数据视图里
  * 点的反查，心里的范围就是这个网站；而且源视图锁死在当前网站内（0812 纠偏），
  * 跨网站的源既进不了源视图、发任务也不该在这里顺手发。
- * 其它网站的命中数仍然报出来一行灰字，只为解释"为什么命中数和你预期的不一样"。
  */
 const siteIdSet = computed(() => new Set(props.siteSourceIds ?? []))
 /** 命中源里属于当前网站的（没给源清单时不做区分，全部视为本网站） */
@@ -88,15 +85,11 @@ const inSiteRows = computed(() => (props.siteSourceIds?.length
   ? rows.value.filter((r) => siteIdSet.value.has(r.sourceId))
   : rows.value))
 /** 超限时不补详情，但靠源 ID 全集照样能算出跨网站数量 */
-const otherSiteCount = computed(() => hitCount.value - inSiteIds.value.length)
 /** 表格与所有动作的实际范围 = 本网站的命中源 */
 const visibleRows = computed(() => inSiteRows.value)
-const overLimit = computed(() => hitCount.value > BACKTRACE_MAX)
 /** 未勾选 = 全部命中；勾了就只对勾选的动作。与源视图「发任务」同一套口径（0831 F06） */
 const effectiveIds = computed(() => {
   if (selected.value.length) return selected.value
-  // 超限时没有 rows（不补详情），退回用 ID 集合——范围口径与非超限时保持一致
-  if (overLimit.value) return inSiteIds.value
   return visibleRows.value.map((r) => r.sourceId)
 })
 
@@ -135,12 +128,13 @@ async function load(query: RowQuery) {
     // 这是 2026-08-14 就在 SiteDataView 里踩过并写明的坑（那边同样显式传 1000），
     // 本弹窗第一版忘了带，走查时表现成"反查结果里没有本网站的源"。
     // 1000 是那次实测确认不截断的安全值；由本组件兜底，不指望每个调用方都记得。
-    const ids = await dataApi.distinctSource({ ...query, size: DISTINCT_SIZE })
+    // 多要一条用来区分"正好 1000"和"超过 1000"
+    const ids = await dataApi.distinctSource({ ...query, size: DISTINCT_LIMIT + 1 })
     if (reqId !== seq) return
-    sourceIds.value = ids
-    truncated.value = ids.length >= DISTINCT_SIZE
-    if (!ids.length || ids.length > BACKTRACE_MAX) return
-    await loadDetails(ids)
+    truncated.value = ids.length > DISTINCT_LIMIT
+    sourceIds.value = truncated.value ? ids.slice(0, DISTINCT_LIMIT) : ids
+    if (!sourceIds.value.length) return
+    await loadDetails(sourceIds.value)
   } catch (e) {
     if (reqId !== seq) return
     error.value = `反查源失败：${(e as Error)?.message ?? String(e)}`
@@ -189,29 +183,17 @@ function stateText(source: Source) {
       <div v-else-if="error" class="bt-state err" role="alert" data-testid="backtrace-error">{{ error }}</div>
       <div v-else class="bt-state" data-testid="backtrace-hit">
         命中 <b>{{ visibleRows.length }}</b> 个源<span v-if="selected.length">，已选 {{ selected.length }} 个</span>
-        <!-- 跨网站是常态不是异常：反查按表和条件搜全库，本来就会捞到别的网站的源。
-             默认只看当前网站——用户是在这个网站的数据视图里点的反查，心里的范围就是它。 -->
-        <span v-if="otherSiteCount > 0" class="bt-cross" data-testid="backtrace-cross-site">
-          （另有 {{ otherSiteCount }} 个命中源在其它网站，不在此处展示）
-        </span>
       </div>
     </div>
 
     <!-- 截断是"结果不完整"，跟"命中太多"不是一回事：后者能看清单只是不便，
          前者意味着本网站可能还有源没被返回，必须说出来，否则用户会以为反查全了。 -->
     <div v-if="truncated && !loading && !error" class="bt-over" data-testid="backtrace-truncated">
-      服务端只返回了前 {{ DISTINCT_SIZE }} 个源（已达上限），结果可能不完整——
-      本网站可能还有命中的源没被返回。请收窄数据条件后再反查。
+      命中源超过 {{ DISTINCT_LIMIT }} 个，只取了前 {{ DISTINCT_LIMIT }} 个——本网站可能还有命中的源没被返回。
+      请收窄数据条件后再反查。
     </div>
 
-    <!-- 超限：不展开清单，但不堵死——「看清单」降级成「按条件直接发」 -->
-    <div v-if="overLimit" class="bt-over" data-testid="backtrace-over-limit">
-      命中源过多（{{ hitCount }} 个），已超过展示上限 {{ BACKTRACE_MAX }}。
-      建议收窄数据条件后再反查；确实要全部处理的话，可以直接对本网站命中的
-      {{ inSiteIds.length }} 个源发任务。
-    </div>
-
-    <div v-else-if="!loading && !error && !hitCount" class="bt-empty" data-testid="backtrace-empty">
+    <div v-if="!loading && !error && !hitCount" class="bt-empty" data-testid="backtrace-empty">
       当前条件没有命中任何源。
     </div>
 
@@ -255,7 +237,7 @@ function stateText(source: Source) {
         class="rc-btn"
         type="button"
         data-testid="backtrace-open-source-view"
-        :disabled="!hitCount || overLimit || !inSiteIds.length"
+        :disabled="!inSiteIds.length"
         :title="inSiteIds.length ? '到源视图查看这批源，可以继续按源的条件筛选' : '当前网站没有命中的源'"
         @click="onOpenInSourceView"
       >在源视图中打开</button>
@@ -263,7 +245,7 @@ function stateText(source: Source) {
         class="rc-btn primary"
         type="button"
         data-testid="backtrace-launch"
-        :disabled="!hitCount"
+        :disabled="!visibleRows.length"
         @click="onLaunch"
       >对这 {{ effectiveIds.length }} 个源发任务</button>
     </template>
@@ -276,7 +258,6 @@ function stateText(source: Source) {
 .bt-cond code { padding: 1px 5px; border-radius: 4px; background: #f1f5f9; font-family: var(--rc-mono, monospace); }
 .bt-state { font-size: 12px; color: var(--rc-text-2); }
 .bt-state.err { color: #b91c1c; }
-.bt-cross { display: inline-flex; align-items: center; gap: 5px; color: #92400e; cursor: pointer; }
 .bt-over { padding: 12px; border: 1px solid #fde68a; border-radius: 8px; background: #fffbeb; color: #92400e; font-size: 12.5px; line-height: 1.7; }
 .bt-empty { padding: 24px; text-align: center; color: var(--rc-faint); font-size: 12.5px; }
 .bt-table-wrap { max-height: 46vh; overflow: auto; border: 1px solid var(--rc-border); border-radius: 8px; }

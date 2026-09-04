@@ -40,21 +40,31 @@ describe('BackTraceSourcesDialog（0903 Y2 / H12）', () => {
   // 2026-09-04 走查踩到：不传 size 时 buildLegacyRowQuery 退回分页默认值 20，
   // 反查只拿到全平台前 20 个源，本网站的源常常不在里面 → 表现成"命中的源都不属于当前网站"。
   // SiteDataView 早就为同一个坑显式传了 1000，本弹窗第一版忘了。
-  it('反查必须显式传 size，避免退回分页默认值 20 只拿到前 20 个源', async () => {
+  it('反查必须显式传 size（且多要一条），避免退回分页默认值 20 只拿到前 20 个源', async () => {
     const distinct = vi.spyOn(dataApi, 'distinctSource').mockResolvedValue([])
     await mountDialog()
-    expect(distinct).toHaveBeenCalledWith(expect.objectContaining({ tableId: 't1', size: 1000 }))
+    // 多要一条：只有真的拿回 1001 条才算超出，否则恰好 1000 个源会误报"不完整"
+    expect(distinct).toHaveBeenCalledWith(expect.objectContaining({ tableId: 't1', size: 1001 }))
   })
 
   // 顶到上限 = 结果不完整，跟"命中太多看不过来"不是一回事：本网站可能还有源没被返回。
   // 2026-09-04 走查实证：一个命中面很广的条件真的返回了正好 1000 条。
-  it('返回条数顶到上限时提示结果可能不完整', async () => {
+  it('恰好 1000 个源不算截断，不给不完整提示', async () => {
     vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(Array.from({ length: 1000 }, (_, i) => String(i)))
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
 
     const wrapper = await mountDialog()
 
-    expect(wrapper.get('[data-testid="backtrace-truncated"]').text()).toContain('可能不完整')
+    expect(wrapper.find('[data-testid="backtrace-truncated"]').exists()).toBe(false)
+  })
+
+  it('真的超过 1000 时才提示结果不完整，并只取前 1000 个', async () => {
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(Array.from({ length: 1001 }, (_, i) => String(i)))
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+
+    const wrapper = await mountDialog()
+
+    expect(wrapper.get('[data-testid="backtrace-truncated"]').text()).toContain('超过 1000')
   })
 
   it('命中 0 个：给空态，不发补详情的请求', async () => {
@@ -67,19 +77,17 @@ describe('BackTraceSourcesDialog（0903 Y2 / H12）', () => {
     expect(paged).not.toHaveBeenCalled()
   })
 
-  // 上限存在的意义是"别为了展示打十几次请求"，所以超限时**一条补详情的请求都不该发**
-  it('超过上限：不展开清单也不补详情，但仍留「直接发任务」这条路', async () => {
-    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(Array.from({ length: 2001 }, (_, i) => String(i)))
-    const paged = vi.spyOn(sourceApi, 'sourcePaged')
+  // 只有一个上限（DISTINCT_LIMIT）：取 ID 时就截在 1000，不再另设一个"命中太多不展开清单"的档。
+  // 之前两个上限并存（1000 / 2000），小的那个让大的永远触发不到，是死分支。
+  it('超过上限时只取前 1000 个，并照常展开清单', async () => {
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(Array.from({ length: 1001 }, (_, i) => String(i)))
+    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
 
     const wrapper = await mountDialog()
 
-    expect(wrapper.find('[data-testid="backtrace-over-limit"]').exists()).toBe(true)
-    expect(wrapper.findAll('[data-testid="backtrace-row"]')).toHaveLength(0)
-    expect(paged).not.toHaveBeenCalled()
-    // 「在源视图中打开」禁用（展不开），但发任务仍可用
-    expect(wrapper.get('[data-testid="backtrace-open-source-view"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-testid="backtrace-launch"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="backtrace-truncated"]').exists()).toBe(true)
+    // 1000 个 ID 按 200 一组补详情 = 5 次请求，不是 6 次（第 1001 个已被截掉）
+    expect(paged).toHaveBeenCalledTimes(5)
   })
 
   // 详情补齐失败不该把整个反查废掉——用户要的是"哪些源"，名称是锦上添花
@@ -106,7 +114,7 @@ describe('BackTraceSourcesDialog（0903 Y2 / H12）', () => {
   // 反查按表和 SQL 搜全库（entryDistinctSource 的载荷里没有 siteId），跨网站是常态。
   // 2026-09-04 拍板：**只保留本网站**——用户是在这个网站的数据视图里点的反查，
   // 心里的范围就是它；源视图也锁死在当前网站内（0812 纠偏），跨网站的源既进不去也不该在这里发。
-  it('只展示本网站的命中源，其它网站的只报个数不列出', async () => {
+  it('只展示本网站的命中源，其它网站的完全不出现', async () => {
     vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['1', '2', '3'])
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
       total: 3,
@@ -120,7 +128,8 @@ describe('BackTraceSourcesDialog（0903 Y2 / H12）', () => {
     await flushPromises()
 
     expect(wrapper.findAll('[data-testid="backtrace-row"]')).toHaveLength(2)
-    expect(wrapper.get('[data-testid="backtrace-cross-site"]').text()).toContain('另有 1 个')
+    // 其它网站的源既不列出、也不报数——反查的范围就是当前网站，多说一句反而让人分心
+    expect(wrapper.find('[data-testid="backtrace-cross-site"]').exists()).toBe(false)
     // 发任务与在源视图打开，作用范围都只是本网站那两个
     await wrapper.get('[data-testid="backtrace-launch"]').trigger('click')
     expect(wrapper.emitted('launch')![0]).toEqual([['1', '3']])
