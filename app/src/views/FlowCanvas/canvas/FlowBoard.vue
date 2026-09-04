@@ -181,8 +181,9 @@ function missingFor(cfg: NodeConfig): string[] {
     return miss
   }
   if (isRuleNode(cfg)) {
-    if (!cfg.ruleCfg?.ruleId) miss.push('规则')
-    if (!cfg.ruleCfg?.script?.trim()) miss.push('脚本')
+    // 用词跟 stores/flow.ts 的保存校验对齐（「尚未保存业务规则」/「尚未生成规则脚本」）
+    if (!cfg.ruleCfg?.ruleId) miss.push('业务规则')
+    if (!cfg.ruleCfg?.script?.trim()) miss.push('规则脚本')
     return miss
   }
   if (isDataNode(cfg) && !nodeOutputTable(cfg)) miss.push('输出表')
