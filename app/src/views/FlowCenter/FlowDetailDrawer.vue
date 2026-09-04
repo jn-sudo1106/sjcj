@@ -158,7 +158,7 @@ watch(() => props.flow?.id, () => {
   if (props.flow) void openFlowInWorkspace(props.flow)
 }, { immediate: true })
 
-async function persistFlow(showMessage = true): Promise<FlowRecord | null> {
+async function persistFlow(showMessage = true, isTemplate?: boolean): Promise<FlowRecord | null> {
   if (!props.flow || saving.value) return null
   const trimmed = name.value.trim()
   if (!trimmed) {
@@ -171,6 +171,7 @@ async function persistFlow(showMessage = true): Promise<FlowRecord | null> {
       id: props.flow.id,
       name: trimmed,
       definition: definitionFromCanvas(),
+      ...(isTemplate === undefined ? {} : { isTemplate }),
     })
     name.value = saved.name
     canvas.markSaved()
@@ -184,6 +185,24 @@ async function persistFlow(showMessage = true): Promise<FlowRecord | null> {
     return null
   } finally {
     saving.value = false
+  }
+}
+
+/**
+ * 标记 / 取消标记为模板（0903 H24）。抽屉里改走 persistFlow——它已经带着 flowId 与画布定义，
+ * 顺手把标记一起提交即可；**不要另发一次只带 templateFlag 的 saveFlow**，那是全量保存端点，
+ * 漏掉 definition 会把画布存空。
+ */
+const togglingTemplate = ref(false)
+async function toggleTemplate() {
+  if (!props.flow || togglingTemplate.value) return
+  const next = !props.flow.isTemplate
+  togglingTemplate.value = true
+  try {
+    const saved = await persistFlow(false, next)
+    if (saved) ElMessage.success(next ? '已标记为模板' : '已取消模板标记')
+  } finally {
+    togglingTemplate.value = false
   }
 }
 
@@ -201,7 +220,11 @@ async function applyToSource() {
       <div class="fd-title">
         <span class="fd-kicker">流程工作区</span>
         <input v-model="name" class="fd-name" aria-label="流程名称" @input="canvas.setFlowName(name)" />
-        <p>{{ flow.version == null ? flow.id : `${flow.id} · v${flow.version}` }} · 更新于 {{ flow.updatedAt || '—' }}</p>
+        <p>
+          {{ flow.version == null ? flow.id : `${flow.id} · v${flow.version}` }} · 更新于 {{ flow.updatedAt || '—' }}
+          <span v-if="flow.isTemplate" class="fd-badge" data-testid="flow-drawer-template-badge">模板</span>
+          <span v-else-if="flow.fromTemplateId" class="fd-badge ghost">来自模板 #{{ flow.fromTemplateId }}</span>
+        </p>
       </div>
       <button class="fd-close" type="button" title="关闭" @click="emit('close')">✕</button>
     </header>
@@ -222,7 +245,17 @@ async function applyToSource() {
     </div>
 
     <footer class="fd-foot">
-      <span class="fd-foot-note">节点配置在右侧直接修改；关联到源只登记归属关系，不改动源现有的配置与步骤。</span>
+      <!-- 这行原来写的是「关联到源只登记归属关系，不改动源现有的配置与步骤」，与 0903 H1 的
+           答复相反（「执行就按 flowID 去反选，去执行」）：绑定即生效，关联过来的源会**共用**
+           这个流程的配置。说的和做的相反比不说更糟，2026-09-04 改。 -->
+      <span class="fd-foot-note">节点配置在右侧直接修改；关联到源后，这些源将共用本流程的配置——此后改这里会同时影响它们。</span>
+      <button
+        class="fd-secondary"
+        type="button"
+        :disabled="saving || togglingTemplate"
+        data-testid="flow-drawer-toggle-template"
+        @click="toggleTemplate"
+      >{{ flow.isTemplate ? '取消模板' : '标记为模板' }}</button>
       <button class="fd-secondary" type="button" :disabled="saving" data-testid="flow-apply-to-source" @click="applyToSource">关联到源</button>
       <button class="fd-primary" type="button" :disabled="saving" data-testid="flow-save" @click="persistFlow()">{{ saving ? '保存中…' : '保存流程' }}</button>
     </footer>
@@ -230,6 +263,8 @@ async function applyToSource() {
 </template>
 
 <style scoped>
+.fd-badge { margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 11px; background: var(--rc-primary-soft, #eaf2ff); color: var(--rc-primary, #2f6fed); }
+.fd-badge.ghost { background: transparent; color: var(--rc-faint); border: 1px solid var(--rc-border-soft); }
 .fd-drawer { position: fixed; top: 56px; right: 0; bottom: 0; width: min(980px, calc(100vw - 256px)); max-width: 100vw; z-index: 40; display: flex; flex-direction: column; background: #fff; border-left: 1px solid var(--rc-border); box-shadow: -12px 0 32px -24px rgba(15, 23, 42, 0.48); }
 .fd-head { display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--rc-border-soft); }
 .fd-title { min-width: 0; }

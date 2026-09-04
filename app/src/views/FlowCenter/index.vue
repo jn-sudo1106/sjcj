@@ -26,6 +26,9 @@ const query = ref('')
 // 排序在服务端。原来的「节点数最多」删了：节点数要解析 flowConf，而列表接口不返回它，
 // 那个选项分页之后只能对当前页做局部排序，跨页看是乱的。改成后端排序白名单里真有的两项。
 const sortBy = ref<'recent' | 'sourceCnt'>('recent')
+// 范围：全部 / 仅模板 / 仅普通流程。**服务端过滤**（flowPaged.templateFlag，2026-09-04 实测生效）。
+// 不要改成本地筛——分页之后本地只能筛当前这一页，跨页结果是错的（见下方"搜索、排序、翻页全在服务端"那段）。
+const scope = ref<'all' | 'template' | 'normal'>('all')
 const activeId = ref('')
 /** 「使用源数」下钻弹窗的目标流程 */
 const sourcesFlow = ref<FlowRecord | null>(null)
@@ -51,6 +54,7 @@ async function load() {
       keywords: query.value.trim() || undefined,
       field: sortBy.value === 'sourceCnt' ? 'sourceCnt' : 'updateDt',
       order: 'desc',
+      onlyTemplate: scope.value === 'all' ? undefined : scope.value === 'template',
     })
     if (loadSeq !== reqId) return
     flows.value = result.list
@@ -81,6 +85,7 @@ function resetQuery() {
 onMounted(() => {
   void load()
   ui.registerAction('新建流程', () => { void createFlow() })
+  ui.registerAction('从模板新建', () => { void createFromTemplate() })
 })
 onUnmounted(() => ui.clearActions())
 
@@ -118,6 +123,76 @@ function replaceFlow(saved: FlowRecord) {
   activeFlow.value = saved
   activeId.value = saved.id
   void load()
+}
+
+/**
+ * 标记 / 取消标记为流程模板（0903 H24）。
+ *
+ * 走既有的 `flow/saveFlow`——它**新增和修改是同一个端点，带 flowId 才是修改**，
+ * 所以必须把当前流程的 id 与 definition 一起全量回传，漏了 id 会静默新建一条同名流程。
+ * 列表行的 definition 是空流程（flowPaged 不返回 flowConf），所以先 detail(id) 取全量再存，
+ * 否则标记一下就把画布清空了。
+ */
+async function toggleTemplate(t: FlowRecord) {
+  const next = !t.isTemplate
+  try {
+    await ElMessageBox.confirm(
+      next
+        ? `将把流程「${t.name}」标记为模板。模板会出现在「从模板新建」与新建源的候选里，供其它流程复制。`
+        : `将取消流程「${t.name}」的模板标记。已经从它复制出去的流程不受影响。`,
+      next ? '标记为模板' : '取消模板标记',
+      { confirmButtonText: '确定', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    const full = await flowCenterApi.detail(t.id)
+    if (!full) throw new Error('流程详情读取失败，未做任何修改')
+    const saved = await flowCenterApi.save({ id: full.id, name: full.name, definition: full.definition, isTemplate: next })
+    replaceFlow(saved)
+    ElMessage.success(next ? '已标记为模板' : '已取消模板标记')
+  } catch (e) {
+    ElMessage.error(`${next ? '标记' : '取消标记'}失败：${(e as Error)?.message ?? String(e)}`)
+  }
+}
+
+/**
+ * 从模板新建流程：走后端 `flow/copyFlow`，连 `cs_item_config` 步骤一起复制并重映射上下游，
+ * `refFlowId` 自动回指模板。**不要自己拼 saveFlow**——那只会建出一条空流程。
+ */
+async function createFromTemplate() {
+  let templates: FlowRecord[]
+  try {
+    templates = await flowCenterApi.templates()
+  } catch (e) {
+    ElMessage.error(`读取模板列表失败：${(e as Error)?.message ?? String(e)}`)
+    return
+  }
+  if (!templates.length) {
+    ElMessage.info('还没有流程被标记为模板。可以先在列表里对任一流程点「标记为模板」。')
+    return
+  }
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `将复制模板的全部节点与配置，生成一条新的普通流程（会记录它来自哪个模板）。可选模板：${templates.map((x) => `${x.name}(#${x.id})`).join('、')}`,
+      '从模板新建',
+      { inputValue: templates[0].id, inputPattern: /^\d+$/, inputErrorMessage: '请输入上面列出的模板 ID', confirmButtonText: '新建', cancelButtonText: '取消' },
+    )
+    const picked = templates.find((x) => x.id === String(value).trim())
+    if (!picked) {
+      ElMessage.error(`#${String(value).trim()} 不在模板列表里`)
+      return
+    }
+    const newId = await flowCenterApi.copy(picked.id, `${picked.name}_copy`)
+    const created = await flowCenterApi.detail(newId)
+    if (created) replaceFlow(created)
+    else void load()
+    ElMessage.success(`已从模板「${picked.name}」新建流程 #${newId}`)
+  } catch (e) {
+    if (e === 'cancel' || e === 'close') return
+    ElMessage.error(`从模板新建失败：${(e as Error)?.message ?? String(e)}`)
+  }
 }
 
 async function createFlow() {
@@ -227,6 +302,12 @@ async function confirmApply() {
         <option value="recent">最近修改</option>
         <option value="sourceCnt">使用源数最多</option>
       </select>
+      <!-- 范围过滤在服务端（flowPaged.templateFlag），不是本地筛 -->
+      <select v-model="scope" class="fc-input" aria-label="范围" data-testid="flow-center-scope" @change="search">
+        <option value="all">全部流程</option>
+        <option value="template">仅模板</option>
+        <option value="normal">仅普通流程</option>
+      </select>
       <!-- 没有「刷新」按钮：它与「查询」是同一个请求，而且新建 / 保存 / 删除 / 关联之后
            列表都会自动重查（见 replaceFlow / removeFlow / confirmApply），不需要人工手动刷。 -->
       <button class="rc-btn primary" type="button" data-testid="flow-center-query" @click="search">查询</button>
@@ -257,6 +338,14 @@ async function confirmApply() {
             <td>
               <div class="fc-name">
                 <b class="fc-name-link">{{ t.name }}</b>
+                <!-- 角标而不是新开一列：这张表的列已经够挤了 -->
+                <span v-if="t.isTemplate" class="fc-badge" data-testid="flow-template-badge" title="已标记为流程模板">模板</span>
+                <span
+                  v-else-if="t.fromTemplateId"
+                  class="fc-badge ghost"
+                  data-testid="flow-from-template"
+                  :title="`由模板 #${t.fromTemplateId} 复制而来`"
+                >来自 #{{ t.fromTemplateId }}</span>
                 <small>{{ t.version == null ? t.id : `${t.id} · v${t.version}` }}</small>
               </div>
             </td>
@@ -279,6 +368,9 @@ async function confirmApply() {
               <div class="fc-actions">
                 <button class="fc-link" type="button" @click.stop="openFlow(t)">编辑</button>
                 <button class="fc-link" type="button" @click.stop="openApply(t)">关联到源</button>
+                <button class="fc-link" type="button" data-testid="flow-toggle-template" @click.stop="toggleTemplate(t)">
+                  {{ t.isTemplate ? '取消模板' : '标记为模板' }}
+                </button>
                 <button class="fc-link danger" type="button" data-testid="flow-delete" @click.stop="removeFlow(t)">删除流程</button>
               </div>
             </td>
@@ -338,6 +430,8 @@ async function confirmApply() {
 </template>
 
 <style scoped>
+.fc-badge { margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 11px; line-height: 16px; background: var(--rc-primary-soft, #eaf2ff); color: var(--rc-primary, #2f6fed); }
+.fc-badge.ghost { background: transparent; color: var(--rc-faint, #98a2b3); border: 1px solid var(--rc-border, #e4e7ec); }
 .fc-shell { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
 /* 以下三条与 SiteFileView 的 .sfv-toolbar / .sfv-input 保持同一组数值（28px 高、12px 字、
    6px 圆角、focus 蓝边 + 3px 光晕）。改动时请两边一起改，否则数据中心/文件中心/流程中心会走形。 */
