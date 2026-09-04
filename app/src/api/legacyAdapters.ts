@@ -1104,6 +1104,7 @@ export function stepFromLegacy(input: unknown, sourceId: string): Step {
     flowCode: record.flowCode == null ? undefined : String(record.flowCode),
     itemId: record.itemId == null ? undefined : String(record.itemId),
     extName: record.extName == null ? undefined : String(record.extName),
+    isRoot: record.isRoot == null ? undefined : Number(record.isRoot) === 1,
     urlSourceField: record.urlSourceField == null ? undefined : String(record.urlSourceField),
     urlRule: record.urlRule == null ? undefined : String(record.urlRule),
     url: record.url == null ? undefined : String(record.url),

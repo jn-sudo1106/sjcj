@@ -2210,11 +2210,20 @@ export const flowCenterApi = {
    * 子步骤记录自带 sourceId=-1（不挂在具体某个源上），stepFromLegacy 的 sourceId 兜底参数
    * 用不上，传空串即可。
    */
+  /**
+   * 流程的步骤拓扑。**必须带 `svg=true`**（2026-09-04 改）：
+   * - 它会返回这个流程真实的根节点行（`isRoot=1`），不带就只有子步骤，前端得自己合成一个假起点，
+   *   名字和类型全是编的（旧平台拓扑图显示的是 `#41383` + 流程名，我们显示成「列表抓取/列表页」）；
+   * - 它还会**筛掉重复行**：同一个根位置上的多条起点、configId+lastStep 都相同的重复分支。
+   *   实测流程 1400935 不带 svg 有 6 条，带 svg 只剩 3 条 + 根——不带 svg 会把旧平台不画的
+   *   孤儿步骤也画出来。
+   * 另外 svg 模式下子步骤的 `lastStep` 会从哨兵 `'0'` 改写成根节点的真实 ID，拓扑天然连得上。
+   */
   steps: async (flowId: string): Promise<Step[]> => {
     const result = await request<unknown>('item/next/nextConfigPaged', { flowId }, {
       method: 'GET',
       httpEndpoint: 'item/next/nextConfigPaged',
-      httpParams: { flowId, page: 1, limit: 10000 },
+      httpParams: { flowId, page: 1, limit: 10000, svg: true },
     })
     const steps = sourceStepsFromLegacy(result, '')
     return attachStepConfigDetails(steps)

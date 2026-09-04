@@ -96,7 +96,13 @@ async function deriveFromFlowConfig(flow: FlowRecord): Promise<boolean> {
     owner: '',
     state: 'C',
   }
-  const rootStep = rootStepForSource(stubSource)
+  // 2026-09-04：`steps()` 改带 svg=true 后，后端会返回这个流程真实的根节点行（isRoot=1）。
+  // 有真根就用真根——它带着正确的名字（= 配置名，旧平台拓扑图显示的就是这个）和真实
+  // itemConfig；再合成一个假的只会把节点画成硬编码的「列表抓取 / 列表页」（stubSource 的
+  // rootStepForSource 无条件这么命名），跟旧平台对不上。实测流程 1400979：旧平台显示
+  // 「#41383 · 纽约市政府市长办公室新闻处_copy · 流程入口」，我们显示「列表抓取」。
+  // 只有后端没给根节点行时才退回合成（旧数据 / 接口异常）。
+  const rootStep = steps.some((step) => step.isRoot) ? null : rootStepForSource(stubSource)
   const seedSteps = rootStep ? [rootStep, ...steps] : steps
   canvas.loadFromSource(stubSource, seedSteps)
   // loadFromSource 把 FlowDef.id 设成了 source.sourceId（这里是空串，stub 源故意不担真源）——

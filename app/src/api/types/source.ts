@@ -278,6 +278,12 @@ export interface Step {
   itemId?: string
   /** 旧「扩展名」（旧 extName）。实测样本全部为空，字段存在但含义和触发场景未验证。 */
   extName?: string
+  /** 该步骤是不是这个流程的根节点（旧 `IS_ROOT=1`）。
+   *  **只有 `nextConfigPaged?flowId=&svg=true` 会返回这一行**——它是 `saveFlow` 新建流程时自动
+   *  建的真实 `cs_item_config` 记录（2026-09-04 抽查 5 个流程，每个恰好 1 条）。
+   *  `sourceId` 模式没有它，那边的起点是现算的 `itemConfig=0` 套壳行。两者占同一位置：
+   *  子步骤的 `lastStep` 在源视角是哨兵 `'0'`，在流程视角被后端改写成这条的真实 ID。 */
+  isRoot?: boolean
   /** 依赖的前置步骤 ID（旧 lastStep）；只用于拓扑排序，不是任务上下文字段。
    *  2026-08-26 生产实测（源 430016821）：lastStep 是单个步骤 itemConfig 值（如 "40597"），
    *  真实的上下文来源另在 context 字段（如 "K2,K17"），此前误把 lastStep 当成上下文来源用。 */
