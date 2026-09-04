@@ -68,18 +68,17 @@ const selected = ref<string[]>([])
 
 const hitCount = computed(() => sourceIds.value.length)
 /**
- * 是否把**其它网站**的命中源也算进来。**默认不跨网站。**
+ * **只看当前网站**（2026-09-04 拍板）。
  *
  * 反查本身一定是跨网站的：`entryDistinctSource` 的载荷里没有 siteId
- * （`buildLegacyRowQuery` 压根不映射它），它按表和 SQL 条件搜全库。做不到服务端按网站过滤，
- * 只能等 `sourcePaged` 把详情（含 siteId）补回来之后在前端筛。
+ * （`buildLegacyRowQuery` 压根不映射它），它按表和 SQL 条件搜全库——共用表
+ * （`TB_CNEWS` 这种）别的网站的源也往里写。做不到服务端按网站过滤，只能拿回来在前端筛。
  *
- * 默认关掉的理由：用户是在**某个网站的**数据视图里点的反查，他心里的范围就是这个网站；
- * 而且源视图锁死在当前网站内（0812 纠偏），跨网站的 ID 递过去只会查出一张空表
- * （实测踩到过：URL 上带着 20 个 ID，源视图显示"共 0 个源"）。
+ * 曾经做过一个「包含其它网站的源」开关，会上决定去掉：用户是在**某个网站的**数据视图里
+ * 点的反查，心里的范围就是这个网站；而且源视图锁死在当前网站内（0812 纠偏），
+ * 跨网站的源既进不了源视图、发任务也不该在这里顺手发。
+ * 其它网站的命中数仍然报出来一行灰字，只为解释"为什么命中数和你预期的不一样"。
  */
-const includeOtherSites = ref(false)
-watch(includeOtherSites, () => { selected.value = [] })
 const siteIdSet = computed(() => new Set(props.siteSourceIds ?? []))
 /** 命中源里属于当前网站的（没给源清单时不做区分，全部视为本网站） */
 const inSiteIds = computed(() => (props.siteSourceIds?.length
@@ -90,14 +89,14 @@ const inSiteRows = computed(() => (props.siteSourceIds?.length
   : rows.value))
 /** 超限时不补详情，但靠源 ID 全集照样能算出跨网站数量 */
 const otherSiteCount = computed(() => hitCount.value - inSiteIds.value.length)
-/** 表格与所有动作的实际范围 */
-const visibleRows = computed(() => (includeOtherSites.value ? rows.value : inSiteRows.value))
+/** 表格与所有动作的实际范围 = 本网站的命中源 */
+const visibleRows = computed(() => inSiteRows.value)
 const overLimit = computed(() => hitCount.value > BACKTRACE_MAX)
 /** 未勾选 = 全部命中；勾了就只对勾选的动作。与源视图「发任务」同一套口径（0831 F06） */
 const effectiveIds = computed(() => {
   if (selected.value.length) return selected.value
   // 超限时没有 rows（不补详情），退回用 ID 集合——范围口径与非超限时保持一致
-  if (overLimit.value) return includeOtherSites.value ? sourceIds.value : inSiteIds.value
+  if (overLimit.value) return inSiteIds.value
   return visibleRows.value.map((r) => r.sourceId)
 })
 
@@ -162,10 +161,8 @@ function toggleAll() {
 }
 
 function onOpenInSourceView() {
-  // 无论当前是不是"跨网站"视图，递给源视图的只能是本网站的：它查不到别的网站的源
-  const ids = effectiveIds.value.filter((id) => inSiteIds.value.includes(id))
-  if (!ids.length) return
-  emit('openInSourceView', ids)
+  if (!effectiveIds.value.length) return
+  emit('openInSourceView', [...effectiveIds.value])
 }
 function onLaunch() {
   if (!effectiveIds.value.length) {
@@ -194,10 +191,9 @@ function stateText(source: Source) {
         命中 <b>{{ visibleRows.length }}</b> 个源<span v-if="selected.length">，已选 {{ selected.length }} 个</span>
         <!-- 跨网站是常态不是异常：反查按表和条件搜全库，本来就会捞到别的网站的源。
              默认只看当前网站——用户是在这个网站的数据视图里点的反查，心里的范围就是它。 -->
-        <label v-if="otherSiteCount > 0 || includeOtherSites" class="bt-cross" data-testid="backtrace-cross-site">
-          <input v-model="includeOtherSites" type="checkbox" />
-          包含其它网站的源（另有 {{ otherSiteCount }} 个）
-        </label>
+        <span v-if="otherSiteCount > 0" class="bt-cross" data-testid="backtrace-cross-site">
+          （另有 {{ otherSiteCount }} 个命中源在其它网站，不在此处展示）
+        </span>
       </div>
     </div>
 
@@ -211,8 +207,8 @@ function stateText(source: Source) {
     <!-- 超限：不展开清单，但不堵死——「看清单」降级成「按条件直接发」 -->
     <div v-if="overLimit" class="bt-over" data-testid="backtrace-over-limit">
       命中源过多（{{ hitCount }} 个），已超过展示上限 {{ BACKTRACE_MAX }}。
-      建议收窄数据条件后再反查；确实要全部处理的话，可以直接对这
-      {{ includeOtherSites ? hitCount : inSiteIds.length }} 个源发任务。
+      建议收窄数据条件后再反查；确实要全部处理的话，可以直接对本网站命中的
+      {{ inSiteIds.length }} 个源发任务。
     </div>
 
     <div v-else-if="!loading && !error && !hitCount" class="bt-empty" data-testid="backtrace-empty">
@@ -220,7 +216,8 @@ function stateText(source: Source) {
     </div>
 
     <div v-else-if="!loading && !error && !visibleRows.length" class="bt-empty" data-testid="backtrace-none-in-site">
-      命中的 {{ hitCount }} 个源都不在当前网站。勾选上面的「包含其它网站的源」可以查看并对它们发任务。
+      当前网站没有命中任何源（全平台命中 {{ hitCount }} 个，都属于其它网站）。
+      反查按表和条件搜全库，而共用表里别的网站的源也在写——换个条件或到对应网站再试。
     </div>
 
     <div v-else-if="!loading && !error" class="bt-table-wrap">
@@ -259,9 +256,9 @@ function stateText(source: Source) {
         type="button"
         data-testid="backtrace-open-source-view"
         :disabled="!hitCount || overLimit || !inSiteIds.length"
-        :title="inSiteIds.length ? '到源视图查看这批源，可以继续按源的条件筛选（源视图只能看本网站，跨网站的不带过去）' : '命中的源都不在当前网站，源视图只能查看本网站的源'"
+        :title="inSiteIds.length ? '到源视图查看这批源，可以继续按源的条件筛选' : '当前网站没有命中的源'"
         @click="onOpenInSourceView"
-      >在源视图中打开{{ includeOtherSites && otherSiteCount ? `（仅本网站 ${inSiteIds.length} 个）` : '' }}</button>
+      >在源视图中打开</button>
       <button
         class="rc-btn primary"
         type="button"
