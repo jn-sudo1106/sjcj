@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
+import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
@@ -170,6 +172,7 @@ async function loadList(parentRequest = tableRequest) {
   try {
     const result = await fileApi.resourceRows(query)
     if (requestId !== listRequest || parentRequest !== tableRequest) return
+    rememberSqlCondition(query.tableId, query.sql)
     rows.value = result?.list ?? []
     total.value = result?.total ?? 0
   } catch {
@@ -284,7 +287,9 @@ function openPreview(file: FileResourceRecord) {
           <select v-model="filters.state" class="fv-input fv-input-fixed" aria-label="状态">
             <option value="">状态（不限）</option><option value="C">初始</option><option value="AC">被消重</option>
           </select>
-          <input v-model="filters.sql" class="fv-input" placeholder="自定义SQL, 如 K1 IS NULL" aria-label="自定义SQL">
+          <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="table?.tableId" :table-name="table?.tableName" class="fv-sql">
+            <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="fv-input" placeholder="自定义SQL, 如 K1 IS NULL" aria-label="自定义SQL">
+          </SqlConditionEditor>
           <button class="rc-btn primary" type="button" @click="runQuery">查询</button>
           <button class="rc-btn" type="button" @click="resetFilters">清空</button>
         </div>
@@ -366,6 +371,7 @@ function openPreview(file: FileResourceRecord) {
 </template>
 
 <style scoped>
+.fv-sql { flex: 1 1 190px; max-width: 300px; }
 .fv-shell {
   background: linear-gradient(145deg, #fafcff 0%, #ffffff 100%);
   border: 1px solid var(--rc-border);

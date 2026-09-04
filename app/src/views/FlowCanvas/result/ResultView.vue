@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
+import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -587,6 +589,7 @@ async function loadData() {
     // "真实数据接口暂不可用"，把"你的 SQL 条件写错了"说成"服务挂了"，用户完全无从判断。
     const failReason = (r: PromiseSettledResult<unknown>) =>
       (r.status === 'rejected' ? String((r.reason as Error)?.message || r.reason || '') : '')
+    const dataSucceeded = dataRes.status === 'fulfilled'
     const dataFail = failReason(dataRes)
     const metaFail = failReason(metaRes)
 
@@ -619,6 +622,7 @@ async function loadData() {
       metaError.value = `真实数据接口暂不可用，已切换到本地演示数据${metaFail || dataFail ? `（${briefError(metaFail || dataFail)}）` : ''}`
     }
     if (dataRes.status === 'fulfilled') {
+      if (dataSucceeded) rememberSqlCondition(query.tableId, query.sql)
       rows.value = dataRes.value.list ?? []
       total.value = dataRes.value.total ?? 0
     } else {
@@ -1046,7 +1050,9 @@ async function onTestScript() {
           <option value="E">E 出错</option>
           <option value="L">L 处理中</option>
         </select>
-        <input v-model="filters.sql" class="rv-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
+        <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="selectedTable" :table-name="meta?.tableName" class="rv-sql">
+          <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="rv-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
+        </SqlConditionEditor>
         <span class="rv-actions">
           <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
           <button class="rc-btn" type="button" @click="clearFilters">清空</button>
@@ -1367,6 +1373,7 @@ async function onTestScript() {
 </template>
 
 <style scoped>
+.ctx-summary .rv-sql { flex: 1 1 320px; min-width: 180px; width: auto; }
 .rv-shell { background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; height: 100%; display: flex; flex-direction: column; }
 /* 全屏：同一份 DOM 直接铺满视口，不复制模板也不套弹层。祖先链上没有 transform/filter/
    contain（已核对 AppShell.vue、FlowCanvas/index.vue），fixed 能正常逃逸；外层 .rc-shell

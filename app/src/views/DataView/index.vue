@@ -10,6 +10,7 @@ import {
 } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import DataQueryPanel, { type DataQueryColumn, type DataQueryFilter } from '@/components/DataQueryPanel.vue'
+import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
 import RowEditDialog from './RowEditDialog.vue'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import TaskInstDialog from './TaskInstDialog.vue'
@@ -803,7 +804,7 @@ onMounted(async () => {
             <label>发送数量(1-1W条)<el-input v-model="ySize" style="width: 100px" /></label>
             <label>状态过滤<el-input v-model="yState1" placeholder="表中state列" style="width: 110px" /></label>
             <label>后续标识<el-input v-model="yNextFlag" placeholder="-1未抓后续，1已抓" style="width: 130px" /></label>
-            <label>自定SQL条件<el-input v-model="yCond" placeholder="如 K1 IS NULL" style="width: 160px" /></label>
+            <label>自定SQL条件<SqlConditionEditor v-model="yCond" v-slot="{ value, update }" :table-id="tableId" style="width: 220px"><el-input :model-value="value" @update:model-value="update" placeholder="如 K1 IS NULL" /></SqlConditionEditor></label>
             <button class="rc-btn danger" type="button" @click="onSendYellowBatch">批量发后续</button>
           </div>
           <!-- 参考API（方案 §1.4-2）：展示 nextStep2 拼接 URL 供运营核对 -->

@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import SiteFileView from './SiteFileView.vue'
+import { readSqlConditions } from '@/utils/sqlConditionHistory'
 import FileDetailDrawer from './FileDetailDrawer.vue'
 import GlobalSourceSelect from './components/GlobalSourceSelect.vue'
 import { fileApi, siteApi, type FileResourceRecord, type Source } from '@/api'
@@ -24,7 +25,34 @@ async function clickQuery(wrapper: { findAll: (s: string) => { text: () => strin
   await wrapper.findAll('button').find((b) => b.text() === '查询')!.trigger('click')
 }
 
+afterEach(() => localStorage.clear())
+
 describe('SiteFileView', () => {
+  it('网站多源查询仅在全部成功时记录条件，部分源失败不记录', async () => {
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1', '源一'), source('s2', '源二')])
+    const query = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(SiteFileView, {
+      props: { siteId: 'site-a' },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
+    })
+    await flushPromises()
+    await wrapper.get('input[aria-label="自定义SQL"]').setValue('K1 IS NULL')
+    query.mockImplementation(async ({ sourceId }) => {
+      if (sourceId === 's2') throw new Error('SQL syntax')
+      return { total: 0, list: [] }
+    })
+    await clickQuery(wrapper)
+    await flushPromises()
+    expect(readSqlConditions(table.tableId)).toEqual([])
+    query.mockResolvedValue({ total: 0, list: [] })
+    await clickQuery(wrapper)
+    await flushPromises()
+    expect(readSqlConditions(table.tableId)).toEqual(['K1 IS NULL'])
+    wrapper.unmount()
+  })
+
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
@@ -38,7 +66,7 @@ describe('SiteFileView', () => {
 
     const wrapper = shallowMount(SiteFileView, {
       props: { siteId: undefined },
-      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
     })
     await flushPromises()
 
@@ -59,7 +87,7 @@ describe('SiteFileView', () => {
 
     const wrapper = shallowMount(SiteFileView, {
       props: { siteId: undefined },
-      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
     })
     await flushPromises()
 
@@ -82,7 +110,7 @@ describe('SiteFileView', () => {
 
     const wrapper = shallowMount(SiteFileView, {
       props: { siteId: undefined },
-      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
     })
     await flushPromises()
 
@@ -100,7 +128,7 @@ describe('SiteFileView', () => {
 
     const wrapper = shallowMount(SiteFileView, {
       props: { siteId: 'site-a', initialSourceId: 's1' },
-      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
     })
     await flushPromises()
 
@@ -121,7 +149,7 @@ describe('SiteFileView', () => {
 
     const wrapper = shallowMount(SiteFileView, {
       props: { siteId: 'site-a' },
-      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
     })
     await flushPromises()
 
@@ -162,7 +190,7 @@ describe('SiteFileView', () => {
 
     const wrapper = shallowMount(SiteFileView, {
       props: { siteId: 'site-a' },
-      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
     })
     await flushPromises()
 
@@ -188,7 +216,7 @@ describe('SiteFileView', () => {
 
     const wrapper = shallowMount(SiteFileView, {
       props: { siteId: 'site-a' },
-      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
     })
     await flushPromises()
 
@@ -203,7 +231,7 @@ describe('SiteFileView', () => {
 
     const wrapper = shallowMount(SiteFileView, {
       props: { siteId: undefined },
-      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
     })
     await flushPromises()
     const callsAfterMount = rows.mock.calls.length
@@ -220,6 +248,12 @@ describe('SiteFileView', () => {
     await clickQuery(wrapper)
     await flushPromises()
     expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ sql: 'K1 IS N' }))
+    expect(readSqlConditions(table.tableId)).toEqual(['K1 IS N'])
+    rows.mockRejectedValueOnce(new Error('SQL syntax'))
+    await sqlInput.setValue('bad sql')
+    await clickQuery(wrapper)
+    await flushPromises()
+    expect(readSqlConditions(table.tableId)).toEqual(['K1 IS N'])
   })
 
   it('清空筛选会一并清掉自定义 SQL 并重新查询', async () => {
@@ -229,7 +263,7 @@ describe('SiteFileView', () => {
 
     const wrapper = shallowMount(SiteFileView, {
       props: { siteId: undefined },
-      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
     })
     await flushPromises()
     const sqlInput = wrapper.get('input[aria-label="自定义SQL"]')
@@ -255,7 +289,7 @@ describe('SiteFileView', () => {
 
     const wrapper = shallowMount(SiteFileView, {
       props: { siteId: undefined },
-      global: { directives: { loading: {} }, stubs: { SiteSourceSelect: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
     })
     await flushPromises()
 

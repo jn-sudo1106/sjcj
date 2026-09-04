@@ -10,6 +10,7 @@ import ElementPlus from 'element-plus'
 import DataQueryPanel, { type DataQueryColumn } from './DataQueryPanel.vue'
 import { dataApi } from '@/api'
 import type { DataRow } from '@/api'
+import { readSqlConditions } from '@/utils/sqlConditionHistory'
 
 const COLUMNS: DataQueryColumn[] = [
   { prop: 'K1', label: '标题-K1', sortable: true },
@@ -32,6 +33,26 @@ afterEach(() => {
 })
 
 describe('DataQueryPanel · 独立挂载', () => {
+  it('历史只记录成功请求的快照：等待时改条件或切表不串历史，失败不记录，零行成功也记录', async () => {
+    let resolve!: (result: { list: DataRow[]; total: number }) => void
+    const spy = vi.spyOn(dataApi, 'rowQueryPaged').mockImplementationOnce(() => new Promise((done) => { resolve = done }))
+    const wrapper = mountPanel()
+    wrapper.vm.search({ sql: 'K1 IS NULL' })
+    expect(readSqlConditions('t1')).toEqual([])
+    await wrapper.find('button[aria-controls="data-query-advanced"]').trigger('click')
+    await wrapper.find('input[placeholder="条件表达式，如 CREATE_DT > CURDATE()"]').setValue('K2 IS NULL')
+    await wrapper.setProps({ tableId: 't2' })
+    resolve({ list: [], total: 0 })
+    await flushPromises()
+    expect(readSqlConditions('t1')).toEqual(['K1 IS NULL'])
+    expect(readSqlConditions('t2')).toEqual([])
+    spy.mockRejectedValueOnce(new Error('SQL syntax'))
+    wrapper.vm.search({ sql: 'bad sql' })
+    await flushPromises()
+    expect(readSqlConditions('t2')).toEqual([])
+    wrapper.unmount()
+  })
+
   it('挂载不报错，调用 expose 的 search() 触发查询', async () => {
     const spy = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [ROW] })
     const wrapper = mountPanel()

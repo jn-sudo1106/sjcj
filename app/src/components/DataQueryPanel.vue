@@ -16,6 +16,8 @@
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { dataApi, type DataRow, type RowQuery } from '@/api'
+import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
+import { readSqlConditions, rememberSqlCondition } from '@/utils/sqlConditionHistory'
 import ColumnPickerDialog from '@/components/ColumnPickerDialog.vue'
 import { useColumnPicker } from '@/utils/table/useColumnPicker'
 
@@ -57,7 +59,6 @@ export interface DataQueryFilter {
   size: number
 }
 
-const SQL_HISTORY_KEY = 'dataQueryPanel.sqlHistory'
 const STATE_OPTIONS = [
   { value: 'C', label: '初始（C）' },
   { value: 'AC', label: '已审核（AC）' },
@@ -95,23 +96,8 @@ const sortField = ref('')
 const sortOrder = ref<'ascend' | 'descend' | ''>('')
 const advancedOpen = ref(false)
 
-const sqlHistory = ref<string[]>(readSqlHistory())
-function readSqlHistory(): string[] {
-  try {
-    const raw = JSON.parse(localStorage.getItem(SQL_HISTORY_KEY) || '[]')
-    return Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : []
-  } catch {
-    return []
-  }
-}
-function saveSqlHistory(value: string) {
-  if (!value.trim()) return
-  const list = [value, ...sqlHistory.value.filter((v) => v !== value)].slice(0, 20)
-  sqlHistory.value = list
-  localStorage.setItem(SQL_HISTORY_KEY, JSON.stringify(list))
-}
 function querySqlHistory(queryString: string, cb: (results: { value: string }[]) => void) {
-  cb(sqlHistory.value.filter((v) => v.includes(queryString)).map((v) => ({ value: v })))
+  cb(readSqlConditions(props.tableId).filter((v) => v.includes(queryString)).map((v) => ({ value: v })))
 }
 
 // ---- 结果 / 分页 ----
@@ -168,6 +154,7 @@ async function loadRows() {
     emit('query-change', { ...filter, page: page.value, size: size.value })
     const query: RowQuery = { tableId: props.tableId, sourceId: props.sourceId || undefined, ...filter, page: page.value, size: size.value }
     const result = await dataApi.rowQueryPaged(query)
+    rememberSqlCondition(query.tableId, query.sql)
     rows.value = result.list
     total.value = result.total
     emit('update:selectedKeys', [])
@@ -195,7 +182,6 @@ function applyPatch(patch?: DataQueryFilterPatch) {
 /** 调用方（含内部按钮/输入框）触发一次查询：可选先合并一份筛选 patch，再重置到第 1 页查询 */
 function search(patch?: DataQueryFilterPatch) {
   applyPatch(patch)
-  if (sql.value.trim()) saveSqlHistory(sql.value.trim())
   page.value = 1
   void loadRows()
 }
@@ -346,13 +332,15 @@ function onRowClick(row: DataRow) {
         <span class="dqp-range-sep">－</span>
         <el-input v-model="maxId" placeholder="终止 ID" style="width: 100px" />
       </span>
-      <el-autocomplete
-        v-model="sql"
-        :fetch-suggestions="querySqlHistory"
-        clearable
-        placeholder="条件表达式，如 CREATE_DT > CURDATE()"
-        style="width: 320px"
-      />
+      <SqlConditionEditor v-model="sql" v-slot="{ value, update }" :table-id="tableId" style="width: 320px">
+        <el-autocomplete
+          :model-value="value"
+          @update:model-value="update"
+          :fetch-suggestions="querySqlHistory"
+          clearable
+          placeholder="条件表达式，如 CREATE_DT > CURDATE()"
+        />
+      </SqlConditionEditor>
     </div>
 
     <div class="dqp-table-tools">

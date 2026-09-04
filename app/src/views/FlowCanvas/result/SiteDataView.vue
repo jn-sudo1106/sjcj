@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
+import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 // 网站数据视图（0812 计划 M2-4/M2-5A + M2-3 交互纠偏，2026-08-14 第三次修正）。
 // 方案 §5.2/§6.5：全部源＝按表筛选，具体源＝按节点筛选，"页面任何时刻只展示表筛选或
 // 节点筛选中的一种"——但用户明确要求两种状态必须是"同一套"查询视图，只是可编辑字段
@@ -269,14 +271,14 @@ function inferTableMeta(tableId2: string, dataRows: DataRow[]): DataTableMeta {
   }
 }
 
-async function fetchPage(sourceId: string, page: number, size: number): Promise<DataRow[]> {
+async function fetchPage(sourceId: string, page: number, size: number, condition: { tableId: string; sql: string }): Promise<DataRow[]> {
   const result = await dataApi.rowQueryPaged({
-    tableId: effectiveTableId.value,
+    tableId: condition.tableId,
     sourceId,
     dataId: filters.dataId || undefined,
     parentId: filters.parentId || undefined,
     state: filters.state || undefined,
-    sql: filters.sql || undefined,
+    sql: condition.sql || undefined,
     page,
     size,
     // 排序参数已实测确认真实生效（2026-08-15，测试环境，见计划 §3.2 Q9）：不传/ascend/descend
@@ -297,9 +299,17 @@ async function loadMore() {
   autoLoadFailed.value = false
   loadingMore.value = true
   dataError.value = ''
+  const condition = { tableId: effectiveTableId.value, sql: filters.sql }
+  let queried = false
   try {
-    const result = await mergeLoadMore(mergeStates, PAGE_SIZE, PAGE_SIZE, fetchPage, MAX_PARALLEL_REQUESTS)
+    const result = await mergeLoadMore(mergeStates, PAGE_SIZE, PAGE_SIZE,
+      async (sourceId, page, size) => {
+        const list = await fetchPage(sourceId, page, size, condition)
+        queried = true
+        return list
+      }, MAX_PARALLEL_REQUESTS)
     if (id !== requestId) return
+    if (queried && !result.failedSources.length) rememberSqlCondition(condition.tableId, condition.sql)
     rows.value = [...rows.value, ...result.rows]
     failedSources.value = result.failedSources
     allExhausted.value = result.allExhausted
@@ -632,7 +642,9 @@ function onCellFile(path: string) {
           <option value="E">E 出错</option>
           <option value="L">L 处理中</option>
         </select>
-        <input v-model="filters.sql" class="sdv2-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
+        <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="effectiveTableId" :table-name="meta?.tableName" class="sdv2-sql">
+          <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="sdv2-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
+        </SqlConditionEditor>
         <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
         <button class="rc-btn" type="button" @click="clearFilters">清空</button>
         <!-- 0903 Y2：会上「我不知道有哪些语言……你这个条件能带回去吗？」——筛出脏数据之后，
@@ -875,6 +887,7 @@ function onCellFile(path: string) {
 </template>
 
 <style scoped>
+.sdv2-sql { flex: 1; min-width: 200px; }
 .sdv2-shell { background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; height: 100%; display: flex; flex-direction: column; }
 /* 全屏（参考 ResultView.vue）：fixed 铺满视口逃逸到父级布局之外，父级（SiteDetailView.vue
    的网站标题/页签）不需要跟着让位——position:fixed 本来就会跳出正常文档流。 */

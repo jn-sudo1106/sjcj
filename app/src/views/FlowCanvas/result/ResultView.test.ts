@@ -4,6 +4,7 @@ import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ResultView from './ResultView.vue'
+import { readSqlConditions } from '@/utils/sqlConditionHistory'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import { dataApi, isProductionBackend, ruleApi, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source } from '@/api'
@@ -55,7 +56,7 @@ const RowDetailFieldsStub = {
   template: '<div class="rdf-stub"><div v-for="f in (fields || [])" :key="f.key">{{ f.name }} {{ f.value }}</div></div>',
 }
 const FilePreviewStub = { name: 'FilePreview', props: ['path', 'name', 'ext'], template: '<div data-testid="data-cell-file-preview">{{ path }}</div>' }
-const STUBS = { CanvasHeader: true, ElDrawer: ElDrawerStub, ElDialog: ElDialogStub, ElPagination: true, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, FilePreview: FilePreviewStub, SummaryDrawer: true }
+const STUBS = { SqlConditionEditor: false, CanvasHeader: true, ElDrawer: ElDrawerStub, ElDialog: ElDialogStub, ElPagination: true, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, FilePreview: FilePreviewStub, SummaryDrawer: true }
 
 function mountResultView() {
   return shallowMount(ResultView, {
@@ -70,6 +71,8 @@ function mountResultView() {
     },
   })
 }
+
+afterEach(() => localStorage.clear())
 
 describe('ResultView', () => {
   afterEach(() => {
@@ -336,6 +339,16 @@ describe('ResultView · 查询条件的执行时机（0819 N3 前置修复）', 
     await wrapper.findAll('.rv-actions button').find((b) => b.text() === '查询')!.trigger('click')
     await flushPromises()
     expect(query.mock.calls.length).toBe(callsAfterMount + 1) // 只有点查询才查
+    const tableId = query.mock.calls.at(-1)![0].tableId
+    expect(readSqlConditions(tableId)).toEqual(["K1 LIKE '%工行%'"])
+    query.mockImplementation(async (_query, options) => {
+      if (options?.mode === 'mock') return { list: [], total: 0 }
+      throw new Error('SQL syntax')
+    })
+    await typeSql(wrapper, 'bad sql')
+    await wrapper.findAll('.rv-actions button').find((button) => button.text() === '查询')!.trigger('click')
+    await flushPromises()
+    expect(readSqlConditions(tableId)).toEqual(["K1 LIKE '%工行%'"])
     expect(wrapper.find('[data-testid="data-filters-dirty"]').exists()).toBe(false)
   })
 })
