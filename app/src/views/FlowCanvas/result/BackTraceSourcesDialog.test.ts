@@ -26,43 +26,75 @@ async function mountDialog(query: RowQuery | null = QUERY) {
 }
 
 describe('BackTraceSourcesDialog（0903 Y2 / H12）', () => {
-  it('命中若干源：展示命中数并补齐名称', async () => {
-    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['1', '2', '3'])
-    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 3, list: ['1', '2', '3'].map(makeSource) })
+  // 反查改成"把网站的源写进查询条件"（2026-09-04 重写）：
+  // 老做法是全表捞 ID 再前端取交集，而 entryDistinctSource 不认 siteId、按表搜全库，
+  // 共用表全平台命中动辄上千，分页一截本网站的源就整个不在返回里——
+  // 真实故障：数据列表里明明有 920663 的行，反查却说"命中 0 个源"。上限调多大都堵不住。
+  it('有网站源清单时：走 summaryEntryData 分组，把 SOURCE_ID IN 写进条件', async () => {
+    const summary = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([
+      { SOURCE_ID: '430016824', CNT: 5 } as never,
+    ])
+    const distinct = vi.spyOn(dataApi, 'distinctSource')
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [makeSource('430016824')] })
 
-    const wrapper = await mountDialog()
+    const wrapper = mount(BackTraceSourcesDialog, {
+      props: { query: QUERY, siteSourceIds: ['430016824', '430016398'] },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
 
-    expect(wrapper.get('[data-testid="backtrace-hit"]').text()).toContain('3')
-    expect(wrapper.findAll('[data-testid="backtrace-row"]')).toHaveLength(3)
-    expect(wrapper.text()).toContain('源 2')
+    // 不再全表捞 ID
+    expect(distinct).not.toHaveBeenCalled()
+    const [q, fields] = summary.mock.calls[0]
+    expect(fields).toEqual(['SOURCE_ID'])
+    expect(q.sql).toContain("K1 LIKE '%人保%'")
+    expect(q.sql).toContain("SOURCE_ID IN ('430016824','430016398')")
+
+    expect(wrapper.get('[data-testid="backtrace-hit"]').text()).toContain('1')
+    expect(wrapper.findAll('[data-testid="backtrace-row"]')).toHaveLength(1)
+    // 命中条数来自分组结果，比源的总数据量贴题
+    expect(wrapper.get('[data-testid="backtrace-row"]').text()).toContain('5')
   })
 
-  // 2026-09-04 走查踩到：不传 size 时 buildLegacyRowQuery 退回分页默认值 20，
-  // 反查只拿到全平台前 20 个源，本网站的源常常不在里面 → 表现成"命中的源都不属于当前网站"。
-  // SiteDataView 早就为同一个坑显式传了 1000，本弹窗第一版忘了。
-  it('反查必须显式传 size（且多要一条），避免退回分页默认值 20 只拿到前 20 个源', async () => {
-    const distinct = vi.spyOn(dataApi, 'distinctSource').mockResolvedValue([])
-    await mountDialog()
-    // 多要一条：只有真的拿回 1001 条才算超出，否则恰好 1000 个源会误报"不完整"
-    expect(distinct).toHaveBeenCalledWith(expect.objectContaining({ tableId: 't1', size: 1001 }))
-  })
-
-  // 顶到上限 = 结果不完整，跟"命中太多看不过来"不是一回事：本网站可能还有源没被返回。
-  // 2026-09-04 走查实证：一个命中面很广的条件真的返回了正好 1000 条。
-  it('恰好 1000 个源不算截断，不给不完整提示', async () => {
-    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(Array.from({ length: 1000 }, (_, i) => String(i)))
+  it('条件为空时也能只按网站源范围分组，不拼出畸形 SQL', async () => {
+    const summary = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([])
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
 
-    const wrapper = await mountDialog()
+    mount(BackTraceSourcesDialog, {
+      props: { query: { tableId: 't1' }, siteSourceIds: ['1'] },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
 
-    expect(wrapper.find('[data-testid="backtrace-truncated"]').exists()).toBe(false)
+    expect(summary.mock.calls[0][0].sql).toBe("SOURCE_ID IN ('1')")
   })
 
-  // 判据是**本网站**命中数顶到上限，不是全平台命中数：全平台命中经常上千（共用表里别的
-  // 网站的源也在写），而用户看到的是"命中 8 个源"——这时候弹"超过 1000 个"只会对不上号。
-  it('全平台超 1000 但本网站命中很少时：不提示不完整', async () => {
-    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(Array.from({ length: 1001 }, (_, i) => String(i)))
-    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [makeSource('7')] })
+  it('没给网站源清单时才退回全表 distinctSource', async () => {
+    const distinct = vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['9'])
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [makeSource('9')] })
+
+    await mountDialog()
+
+    expect(distinct).toHaveBeenCalled()
+  })
+
+  it('本网站的源都没命中：给空态', async () => {
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([])
+    const paged = vi.spyOn(sourceApi, 'sourcePaged')
+
+    const wrapper = mount(BackTraceSourcesDialog, {
+      props: { query: QUERY, siteSourceIds: ['1', '2'] },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="backtrace-empty"]').exists()).toBe(true)
+    expect(paged).not.toHaveBeenCalled()
+  })
+
+  it('补详情失败时仍列出源 ID，只是名称显示为未取到', async () => {
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([{ SOURCE_ID: '7', CNT: 2 } as never])
+    vi.spyOn(sourceApi, 'sourcePaged').mockRejectedValue(new Error('boom'))
 
     const wrapper = mount(BackTraceSourcesDialog, {
       props: { query: QUERY, siteSourceIds: ['7'] },
@@ -71,113 +103,36 @@ describe('BackTraceSourcesDialog（0903 Y2 / H12）', () => {
     await flushPromises()
 
     expect(wrapper.findAll('[data-testid="backtrace-row"]')).toHaveLength(1)
-    expect(wrapper.find('[data-testid="backtrace-truncated"]').exists()).toBe(false)
-  })
-
-  it('本网站命中数自己顶到上限时才提示不完整', async () => {
-    const ids = Array.from({ length: 1001 }, (_, i) => String(i))
-    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(ids)
-    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
-
-    // 全部 ID 都算本网站的 → inSiteIds 达到 1000 上限
-    const wrapper = mount(BackTraceSourcesDialog, {
-      props: { query: QUERY, siteSourceIds: ids },
-      global: { plugins: [ElementPlus] },
-    })
-    await flushPromises()
-
-    expect(wrapper.get('[data-testid="backtrace-truncated"]').text()).toContain('已达 1000 个上限')
-  })
-
-  it('命中 0 个：给空态，不发补详情的请求', async () => {
-    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue([])
-    const paged = vi.spyOn(sourceApi, 'sourcePaged')
-
-    const wrapper = await mountDialog()
-
-    expect(wrapper.find('[data-testid="backtrace-empty"]').exists()).toBe(true)
-    expect(paged).not.toHaveBeenCalled()
-  })
-
-  // 只有一个上限（DISTINCT_LIMIT）：取 ID 时就截在 1000，不再另设一个"命中太多不展开清单"的档。
-  // 之前两个上限并存（1000 / 2000），小的那个让大的永远触发不到，是死分支。
-  it('全平台超过上限时只取前 1000 个 ID 去补详情', async () => {
-    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(Array.from({ length: 1001 }, (_, i) => String(i)))
-    const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
-
-    await mountDialog()
-
-    // 1000 个 ID 按 200 一组补详情 = 5 次请求，不是 6 次（第 1001 个已被截掉）
-    expect(paged).toHaveBeenCalledTimes(5)
-  })
-
-  // 详情补齐失败不该把整个反查废掉——用户要的是"哪些源"，名称是锦上添花
-  it('补详情失败时仍列出源 ID，只是名称显示为未取到', async () => {
-    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['7', '8'])
-    vi.spyOn(sourceApi, 'sourcePaged').mockRejectedValue(new Error('boom'))
-
-    const wrapper = await mountDialog()
-
-    expect(wrapper.findAll('[data-testid="backtrace-row"]')).toHaveLength(2)
     expect(wrapper.text()).toContain('（未取到名称）')
     expect(wrapper.find('[data-testid="backtrace-error"]').exists()).toBe(false)
   })
 
   it('反查本身失败：显示错误，不显示空态', async () => {
-    vi.spyOn(dataApi, 'distinctSource').mockRejectedValue(new Error('网关超时'))
+    vi.spyOn(dataApi, 'summaryData').mockRejectedValue(new Error('网关超时'))
 
-    const wrapper = await mountDialog()
+    const wrapper = mount(BackTraceSourcesDialog, {
+      props: { query: QUERY, siteSourceIds: ['1'] },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
 
     expect(wrapper.get('[data-testid="backtrace-error"]').text()).toContain('网关超时')
     expect(wrapper.find('[data-testid="backtrace-empty"]').exists()).toBe(false)
   })
 
-  // 反查按表和 SQL 搜全库（entryDistinctSource 的载荷里没有 siteId），跨网站是常态。
-  // 2026-09-04 拍板：**只保留本网站**——用户是在这个网站的数据视图里点的反查，
-  // 心里的范围就是它；源视图也锁死在当前网站内（0812 纠偏），跨网站的源既进不去也不该在这里发。
-  it('只展示本网站的命中源，其它网站的完全不出现', async () => {
-    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['1', '2', '3'])
-    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
-      total: 3,
-      list: [makeSource('1'), makeSource('2'), makeSource('3')],
-    })
-
-    const wrapper = mount(BackTraceSourcesDialog, {
-      props: { query: QUERY, siteSourceIds: ['1', '3'] },
-      global: { plugins: [ElementPlus] },
-    })
-    await flushPromises()
-
-    expect(wrapper.findAll('[data-testid="backtrace-row"]')).toHaveLength(2)
-    // 其它网站的源既不列出、也不报数——反查的范围就是当前网站，多说一句反而让人分心
-    expect(wrapper.find('[data-testid="backtrace-cross-site"]').exists()).toBe(false)
-    // 发任务与在源视图打开，作用范围都只是本网站那两个
-    await wrapper.get('[data-testid="backtrace-launch"]').trigger('click')
-    expect(wrapper.emitted('launch')![0]).toEqual([['1', '3']])
-    await wrapper.get('[data-testid="backtrace-open-source-view"]').trigger('click')
-    expect(wrapper.emitted('openInSourceView')![0]).toEqual([['1', '3']])
-  })
-
-  it('本网站一个都没命中：给出解释性空态，动作禁用', async () => {
-    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['9'])
-    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [makeSource('9')] })
-
-    const wrapper = mount(BackTraceSourcesDialog, {
-      props: { query: QUERY, siteSourceIds: ['1', '3'] },
-      global: { plugins: [ElementPlus] },
-    })
-    await flushPromises()
-
-    expect(wrapper.get('[data-testid="backtrace-none-in-site"]').text()).toContain('都属于其它网站')
-    expect(wrapper.get('[data-testid="backtrace-open-source-view"]').attributes('disabled')).toBeDefined()
-  })
-
   // 与源视图「发任务」同一套口径（0831 F06）：不勾 = 全部
   it('未勾选时对全部命中源生效；勾选后只对勾选项', async () => {
-    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['1', '2', '3'])
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([
+      { SOURCE_ID: '1', CNT: 1 } as never, { SOURCE_ID: '2', CNT: 1 } as never, { SOURCE_ID: '3', CNT: 1 } as never,
+    ])
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 3, list: ['1', '2', '3'].map(makeSource) })
 
-    const wrapper = await mountDialog()
+    const wrapper = mount(BackTraceSourcesDialog, {
+      props: { query: QUERY, siteSourceIds: ['1', '2', '3'] },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
     await wrapper.get('[data-testid="backtrace-launch"]').trigger('click')
     expect(wrapper.emitted('launch')![0]).toEqual([['1', '2', '3']])
 

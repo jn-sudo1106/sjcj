@@ -54,12 +54,8 @@ const DISTINCT_LIMIT = 1000
 const loading = ref(false)
 const error = ref('')
 const sourceIds = ref<string[]>([])
-/**
- * 服务端返回的全平台命中源是否超过了 `DISTINCT_LIMIT`（多要一条来判，避免恰好 1000 时误报）。
- * `entryDistinctSource` 走的是分页参数（`buildLegacyRowQuery` 的 page/limit），
- * 超出就说明后面还有——这是后端需求 H6 的实证。
- */
-const rawTruncated = ref(false)
+/** 每个命中源各命中几条——`summaryEntryData` 顺带给的，比只知道"命中了"有用 */
+const hitCountBySource = ref<Map<string, number>>(new Map())
 const rows = ref<Source[]>([])
 const selected = ref<string[]>([])
 
@@ -84,18 +80,6 @@ const inSiteRows = computed(() => (props.siteSourceIds?.length
   ? rows.value.filter((r) => siteIdSet.value.has(r.sourceId))
   : rows.value))
 /** 超限时不补详情，但靠源 ID 全集照样能算出跨网站数量 */
-/**
- * 提示"结果不完整"的判据是**本网站命中数**顶到上限，不是全平台命中数（2026-09-04 拍板）。
- *
- * 全平台命中经常上千（共用表里别的网站的源也在写），但用户看到的是"命中 8 个源"——
- * 这时候弹一句"超过 1000 个"只会让人对不上号。
- *
- * ⚠️ **已知残留风险**：全平台被截到前 1000 时，本网站的源理论上可能有一部分排在 1000 名之外
- * 没被返回，此时本网站命中数不到 1000、提示也不出现，结果却是不全的。
- * 彻底解决要后端支持按 siteId 过滤 `entryDistinctSource`（后端需求 H6 一并提）。
- */
-const truncated = computed(() => rawTruncated.value && inSiteIds.value.length >= DISTINCT_LIMIT)
-
 /** 表格与所有动作的实际范围 = 本网站的命中源 */
 const visibleRows = computed(() => inSiteRows.value)
 /** 未勾选 = 全部命中；勾了就只对勾选的动作。与源视图「发任务」同一套口径（0831 F06） */
@@ -124,26 +108,52 @@ async function loadDetails(ids: string[]) {
 }
 
 let seq = 0
+/**
+ * 反查命中源。
+ *
+ * ⚠️ **不要用"全表捞 ID + 前端取交集"这条路**（2026-09-04 两次踩坑后重写）。
+ * `entryDistinctSource` 不认 siteId，按表和条件搜全库；共用表（TB_CNEWS 这种）全平台
+ * 命中源动辄上千，分页一截，本网站的源就可能整个不在返回里——表现成"数据列表里明明有
+ * 920663 的行，反查却说命中 0 个源"。**上限调多大都堵不住这个漏**，是做法本身错了。
+ *
+ * 正确做法：把网站的源**写进查询条件**，让服务端只在这批源里筛。
+ * `sql` 最终落到旧字段 `more`（原样拼进 WHERE），所以可以追加 `SOURCE_ID IN (...)`。
+ * 顺带用 `summaryEntryData` 按 SOURCE_ID 分组，一次请求就拿到"哪些源命中 + 各命中几条"，
+ * 比 `distinctSource` 只回 ID 更有用，也不再有截断问题（一个网站的源数量有限）。
+ *
+ * 没有源清单时（调用方没传）才退回全表 `distinctSource`——那种场景本来就没有网站范围可言。
+ */
 async function load(query: RowQuery) {
   const reqId = ++seq
   loading.value = true
   error.value = ''
   sourceIds.value = []
-  rawTruncated.value = false
+  hitCountBySource.value = new Map()
   rows.value = []
   selected.value = []
   try {
-    // ⚠️ **必须显式传 size**，否则 `buildLegacyRowQuery` 会退回分页默认值 20，
-    // 拿回来的只是全平台前 20 个源——共用表（TB_CNEWS 这种）全平台引用源远超 20，
-    // 本网站的源常常不在前 20 里，于是"命中的源一个都不属于当前网站"。
-    // 这是 2026-08-14 就在 SiteDataView 里踩过并写明的坑（那边同样显式传 1000），
-    // 本弹窗第一版忘了带，走查时表现成"反查结果里没有本网站的源"。
-    // 1000 是那次实测确认不截断的安全值；由本组件兜底，不指望每个调用方都记得。
-    // 多要一条用来区分"正好 1000"和"超过 1000"
-    const ids = await dataApi.distinctSource({ ...query, size: DISTINCT_LIMIT + 1 })
-    if (reqId !== seq) return
-    rawTruncated.value = ids.length > DISTINCT_LIMIT
-    sourceIds.value = rawTruncated.value ? ids.slice(0, DISTINCT_LIMIT) : ids
+    const scoped = props.siteSourceIds ?? []
+    if (scoped.length) {
+      const counts = new Map<string, number>()
+      // 源清单可能很长，IN 列表按 200 一组切，避免 SQL 过长被网关/后端截断
+      for (const group of chunk(scoped, DETAIL_CHUNK)) {
+        const inClause = `SOURCE_ID IN (${group.map((id) => `'${id}'`).join(',')})`
+        const sql = query.sql?.trim() ? `(${query.sql.trim()}) AND ${inClause}` : inClause
+        const summary = await dataApi.summaryData({ ...query, sql, size: group.length }, ['SOURCE_ID'])
+        if (reqId !== seq) return
+        // SummaryRow = { CNT, <分组列> }：分组列名就是 summaryFields 传的那个
+        for (const row of summary) {
+          const id = String(row.SOURCE_ID ?? '')
+          if (id && id !== 'null') counts.set(id, row.CNT)
+        }
+      }
+      hitCountBySource.value = counts
+      sourceIds.value = [...counts.keys()]
+    } else {
+      const ids = await dataApi.distinctSource({ ...query, size: DISTINCT_LIMIT + 1 })
+      if (reqId !== seq) return
+      sourceIds.value = ids.slice(0, DISTINCT_LIMIT)
+    }
     if (!sourceIds.value.length) return
     await loadDetails(sourceIds.value)
   } catch (e) {
@@ -197,19 +207,12 @@ function stateText(source: Source) {
       </div>
     </div>
 
-    <!-- 截断是"结果不完整"，跟"命中太多"不是一回事：后者能看清单只是不便，
-         前者意味着本网站可能还有源没被返回，必须说出来，否则用户会以为反查全了。 -->
-    <div v-if="truncated && !loading && !error" class="bt-over" data-testid="backtrace-truncated">
-      本网站命中源已达 {{ DISTINCT_LIMIT }} 个上限，结果可能不完整——请收窄数据条件后再反查。
-    </div>
-
     <div v-if="!loading && !error && !hitCount" class="bt-empty" data-testid="backtrace-empty">
       当前条件没有命中任何源。
     </div>
 
     <div v-else-if="!loading && !error && !visibleRows.length" class="bt-empty" data-testid="backtrace-none-in-site">
-      当前网站没有命中任何源（全平台命中 {{ hitCount }} 个，都属于其它网站）。
-      反查按表和条件搜全库，而共用表里别的网站的源也在写——换个条件或到对应网站再试。
+      当前网站的源里没有命中这个条件的。
     </div>
 
     <div v-else-if="!loading && !error" class="bt-table-wrap">
@@ -222,7 +225,7 @@ function stateText(source: Source) {
             <th>源 ID</th>
             <th>源名称</th>
             <th>状态</th>
-            <th>数据量</th>
+            <th>命中条数</th>
           </tr>
         </thead>
         <tbody>
@@ -234,7 +237,7 @@ function stateText(source: Source) {
             <!-- 详情补齐失败时名称为空，用一行灰字说明，不要显示成空白让人以为源坏了 -->
             <td>{{ row.name || '（未取到名称）' }}</td>
             <td>{{ stateText(row) }}</td>
-            <td>{{ row.dataCount ?? '—' }}</td>
+            <td>{{ hitCountBySource.get(row.sourceId) ?? '—' }}</td>
           </tr>
         </tbody>
       </table>
