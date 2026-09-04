@@ -7,7 +7,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, ruleApi, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery } from '@/api'
 import {
   buildHorizontalLayout, nodeOutputTable, nodeEntryCondition, conditionGroupLabel, conditionGroupIsSet,
-  isDecision, isParallel, isFirstRunnableNode, firstRunnableNodeId, hasDirectSuccessor, hasAmbiguousInput, directPredecessorIds, type NodeConfig,
+  isDecision, isParallel, isFirstRunnableNode, firstRunnableNodeId, hasDirectSuccessor, hasAmbiguousInput, directPredecessorIds, directSuccessorIdsIncludingDisabled, type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
 import { fetchChildCountsForPage, isPerRowMode, resolveChildTargets, type ChildCountCell } from '@/utils/flow/childCounts'
@@ -103,6 +103,23 @@ const predecessorTableId = computed(() => {
   const cfg = predecessorId.value ? flow.configs[predecessorId.value] : undefined
   if (!cfg) return ''
   return nodeOutputTable(cfg) || flow.effectiveInputTableFor(predecessorId.value)
+})
+
+/**
+ * 被停用的直接后继（2026-09-04）。
+ *
+ * `hasDirectSuccessor` 会跳过停用节点——这是对的，停用的节点不该被当成可发送目标。
+ * 但它把两件事压成了同一个"没有后继"：**真末节点** vs **后继存在但停用了**。
+ * 于是中间节点也会落到 `upstream` 分支，按钮写着「从上一节点重跑」——
+ * 实测：源 430016398 的规则处理节点后面挂着已停用的「1400917-详情」，
+ * 用户看到的是"这不是最后一个节点，为什么叫从上一节点重跑"。
+ *
+ * 这里不改判定（停用的后继确实不能发），只把原因说出来。
+ */
+const disabledSuccessorTitles = computed(() => {
+  if (!selectedNodeId.value) return []
+  const all = directSuccessorIdsIncludingDisabled(flow.main, flow.configs, selectedNodeId.value, flow.branchGroups)
+  return all.filter((id) => flow.configs[id]?.disabled).map((id) => flow.configs[id]?.title || id)
 })
 
 type ExecMode = 'fetch' | 'input' | 'none' | 'upstream'
@@ -1107,6 +1124,13 @@ async function onTestScript() {
             :title="execDisabledReason"
             @click="execMode === 'fetch' ? onSendFetch() : execMode === 'upstream' ? onSendUpstream() : onSendNextStep()"
           >{{ execMode === 'fetch' ? '发起抓取' : execMode === 'upstream' ? '从上一节点重跑' : '发后续任务' }}</button>
+          <!-- 「从上一节点重跑」出现在中间节点上会让人困惑（"这不是最后一个节点啊"）——
+               说清楚是后继被停用了，不是它变成了末节点。 -->
+          <span
+            v-if="execMode === 'upstream' && disabledSuccessorTitles.length"
+            class="muted"
+            data-testid="data-disabled-successor-hint"
+          >下游「{{ disabledSuccessorTitles.join('、') }}」已停用，无法发后续</span>
           <!-- 「测试脚本」来自规则处理那条线（origin/master）：有脚本路径时才出现，与发任务无关。 -->
           <button
             v-if="queryScriptPath"

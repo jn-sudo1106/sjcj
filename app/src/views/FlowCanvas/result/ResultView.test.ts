@@ -1061,6 +1061,49 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     expect(arg.query.sourceId).toBeUndefined()
   })
 
+  // 2026-09-04 用户实测提出：「这个节点不是最后一个节点，为什么叫从上一节点重跑」。
+  // 根因是 hasDirectSuccessor 会跳过停用节点（对的，停用的不能当发送目标），
+  // 但把"真末节点"和"后继存在但停用了"压成了同一个"没有后继"。判定不改，把原因说出来。
+  it('后继被停用时：仍是「从上一节点重跑」，但说明下游已停用', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+
+    // 用 mid（中间节点，有上游）：把它之后的全停用 → 没有可用后继，但它显然不是末节点。
+    // 不能用 first——它没有上游，execMode 会落到 'none'，按钮整个不渲染。
+    // 也不能只停 mid2：laterRunnableIdsOnMain 会往后走，把 last 当成后继。
+    for (const id of ['mid2', 'last', 'sink']) flow.configs[id].disabled = true
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'mid')
+
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('从上一节点重跑')
+    const hint = wrapper.get('[data-testid="data-disabled-successor-hint"]').text()
+    expect(hint).toContain('已停用')
+    expect(hint).toContain(flow.configs.mid2.title)
+  })
+
+  it('真末节点不显示"下游已停用"那句', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    loadExecFixture(useFlowStore(), current)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'sink')
+
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('从上一节点重跑')
+    expect(wrapper.find('[data-testid="data-disabled-successor-hint"]').exists()).toBe(false)
+  })
+
   it('发后续任务真实回执解析（M3-0J）：全部被目标节点进入条件拒绝时弹 warning，不能显示成功', async () => {
     vi.mocked(ElMessage.success).mockClear()
     vi.mocked(ElMessage.warning).mockClear()
