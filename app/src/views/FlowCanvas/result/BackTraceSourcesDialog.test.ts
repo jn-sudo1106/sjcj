@@ -58,13 +58,35 @@ describe('BackTraceSourcesDialog（0903 Y2 / H12）', () => {
     expect(wrapper.find('[data-testid="backtrace-truncated"]').exists()).toBe(false)
   })
 
-  it('真的超过 1000 时才提示结果不完整，并只取前 1000 个', async () => {
+  // 判据是**本网站**命中数顶到上限，不是全平台命中数：全平台命中经常上千（共用表里别的
+  // 网站的源也在写），而用户看到的是"命中 8 个源"——这时候弹"超过 1000 个"只会对不上号。
+  it('全平台超 1000 但本网站命中很少时：不提示不完整', async () => {
     vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(Array.from({ length: 1001 }, (_, i) => String(i)))
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [makeSource('7')] })
+
+    const wrapper = mount(BackTraceSourcesDialog, {
+      props: { query: QUERY, siteSourceIds: ['7'] },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="backtrace-row"]')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="backtrace-truncated"]').exists()).toBe(false)
+  })
+
+  it('本网站命中数自己顶到上限时才提示不完整', async () => {
+    const ids = Array.from({ length: 1001 }, (_, i) => String(i))
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(ids)
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
 
-    const wrapper = await mountDialog()
+    // 全部 ID 都算本网站的 → inSiteIds 达到 1000 上限
+    const wrapper = mount(BackTraceSourcesDialog, {
+      props: { query: QUERY, siteSourceIds: ids },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
 
-    expect(wrapper.get('[data-testid="backtrace-truncated"]').text()).toContain('超过 1000')
+    expect(wrapper.get('[data-testid="backtrace-truncated"]').text()).toContain('已达 1000 个上限')
   })
 
   it('命中 0 个：给空态，不发补详情的请求', async () => {
@@ -79,13 +101,12 @@ describe('BackTraceSourcesDialog（0903 Y2 / H12）', () => {
 
   // 只有一个上限（DISTINCT_LIMIT）：取 ID 时就截在 1000，不再另设一个"命中太多不展开清单"的档。
   // 之前两个上限并存（1000 / 2000），小的那个让大的永远触发不到，是死分支。
-  it('超过上限时只取前 1000 个，并照常展开清单', async () => {
+  it('全平台超过上限时只取前 1000 个 ID 去补详情', async () => {
     vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(Array.from({ length: 1001 }, (_, i) => String(i)))
     const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
 
     const wrapper = await mountDialog()
 
-    expect(wrapper.find('[data-testid="backtrace-truncated"]').exists()).toBe(true)
     // 1000 个 ID 按 200 一组补详情 = 5 次请求，不是 6 次（第 1001 个已被截掉）
     expect(paged).toHaveBeenCalledTimes(5)
   })

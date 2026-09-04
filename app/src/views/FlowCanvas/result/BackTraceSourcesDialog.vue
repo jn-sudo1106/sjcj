@@ -55,12 +55,11 @@ const loading = ref(false)
 const error = ref('')
 const sourceIds = ref<string[]>([])
 /**
- * 结果是否**真的**被截断。多要一条来判：拿回 DISTINCT_LIMIT+1 条才算超出，
- * 否则恰好 1000 个源时会误报"不完整"。
+ * 服务端返回的全平台命中源是否超过了 `DISTINCT_LIMIT`（多要一条来判，避免恰好 1000 时误报）。
  * `entryDistinctSource` 走的是分页参数（`buildLegacyRowQuery` 的 page/limit），
- * 超出就说明后面还有，本网站的源可能有一部分根本没被返回——这是后端需求 H6 的实证。
+ * 超出就说明后面还有——这是后端需求 H6 的实证。
  */
-const truncated = ref(false)
+const rawTruncated = ref(false)
 const rows = ref<Source[]>([])
 const selected = ref<string[]>([])
 
@@ -85,6 +84,18 @@ const inSiteRows = computed(() => (props.siteSourceIds?.length
   ? rows.value.filter((r) => siteIdSet.value.has(r.sourceId))
   : rows.value))
 /** 超限时不补详情，但靠源 ID 全集照样能算出跨网站数量 */
+/**
+ * 提示"结果不完整"的判据是**本网站命中数**顶到上限，不是全平台命中数（2026-09-04 拍板）。
+ *
+ * 全平台命中经常上千（共用表里别的网站的源也在写），但用户看到的是"命中 8 个源"——
+ * 这时候弹一句"超过 1000 个"只会让人对不上号。
+ *
+ * ⚠️ **已知残留风险**：全平台被截到前 1000 时，本网站的源理论上可能有一部分排在 1000 名之外
+ * 没被返回，此时本网站命中数不到 1000、提示也不出现，结果却是不全的。
+ * 彻底解决要后端支持按 siteId 过滤 `entryDistinctSource`（后端需求 H6 一并提）。
+ */
+const truncated = computed(() => rawTruncated.value && inSiteIds.value.length >= DISTINCT_LIMIT)
+
 /** 表格与所有动作的实际范围 = 本网站的命中源 */
 const visibleRows = computed(() => inSiteRows.value)
 /** 未勾选 = 全部命中；勾了就只对勾选的动作。与源视图「发任务」同一套口径（0831 F06） */
@@ -118,7 +129,7 @@ async function load(query: RowQuery) {
   loading.value = true
   error.value = ''
   sourceIds.value = []
-  truncated.value = false
+  rawTruncated.value = false
   rows.value = []
   selected.value = []
   try {
@@ -131,8 +142,8 @@ async function load(query: RowQuery) {
     // 多要一条用来区分"正好 1000"和"超过 1000"
     const ids = await dataApi.distinctSource({ ...query, size: DISTINCT_LIMIT + 1 })
     if (reqId !== seq) return
-    truncated.value = ids.length > DISTINCT_LIMIT
-    sourceIds.value = truncated.value ? ids.slice(0, DISTINCT_LIMIT) : ids
+    rawTruncated.value = ids.length > DISTINCT_LIMIT
+    sourceIds.value = rawTruncated.value ? ids.slice(0, DISTINCT_LIMIT) : ids
     if (!sourceIds.value.length) return
     await loadDetails(sourceIds.value)
   } catch (e) {
@@ -189,8 +200,7 @@ function stateText(source: Source) {
     <!-- 截断是"结果不完整"，跟"命中太多"不是一回事：后者能看清单只是不便，
          前者意味着本网站可能还有源没被返回，必须说出来，否则用户会以为反查全了。 -->
     <div v-if="truncated && !loading && !error" class="bt-over" data-testid="backtrace-truncated">
-      命中源超过 {{ DISTINCT_LIMIT }} 个，只取了前 {{ DISTINCT_LIMIT }} 个——本网站可能还有命中的源没被返回。
-      请收窄数据条件后再反查。
+      本网站命中源已达 {{ DISTINCT_LIMIT }} 个上限，结果可能不完整——请收窄数据条件后再反查。
     </div>
 
     <div v-if="!loading && !error && !hitCount" class="bt-empty" data-testid="backtrace-empty">
