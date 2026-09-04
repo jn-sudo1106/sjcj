@@ -218,7 +218,11 @@ function ackFromApiResult(result: unknown): Ack {
   }
 }
 
-function idFromApiResult(result: unknown, keys: string[]): string | undefined {
+/**
+ * 从回执里捞主键。写接口的回执长得五花八门（有的直接回 id、有的塞在 data、有的只在 msg 里提），
+ * 调用方按自己知道的键名顺序传进来。找不到返回 undefined，由调用方决定怎么兜底。
+ */
+export function idFromApiResult(result: unknown, keys: string[]): string | undefined {
   if (typeof result === 'string' || typeof result === 'number') return String(result)
   if (!result || typeof result !== 'object') return undefined
   const record = result as Record<string, unknown>

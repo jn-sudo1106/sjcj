@@ -109,7 +109,10 @@ describe('TaskTab · 上下文来源（对齐旧平台）', () => {
     expect(select(wrapper).props('disabled')).toBe(true)
   })
 
-  it('规则处理节点把同一字段标成「入参来源」，与旧步骤表单一致', async () => {
+  // 2026-09-04 会上：规则节点这一栏去掉——它的入参在「表配置」里选，
+  // 任务配置再来一个「入参来源」是同一件事的第二个入口，两处能填出不一致的值。
+  // 写入侧也已统一：规则节点的 context 取自 ruleCfg.inputFields（见 stepPersist）。
+  it('规则处理节点不显示这一栏（入参在表配置里选，避免两个入口）', async () => {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
@@ -121,7 +124,8 @@ describe('TaskTab · 上下文来源（对齐旧平台）', () => {
     flow.setActiveTab('task')
     const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
     await flushPromises()
-    expect(wrapper.text()).toContain('入参来源')
+    expect(wrapper.text()).not.toContain('入参来源')
     expect(wrapper.text()).not.toContain('上下文来源')
+    expect(wrapper.find('[data-testid="context-map-select"]').exists()).toBe(false)
   })
 })

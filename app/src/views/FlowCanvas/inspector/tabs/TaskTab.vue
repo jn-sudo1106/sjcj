@@ -139,7 +139,10 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
     </div>
     <div v-else class="rc-readonly-hint">请先在当前节点的参数配置中绑定参数。</div>
   </div>
-  <div class="rc-field"><label>{{ isRule ? '入参来源' : '上下文来源' }}</label>
+  <!-- 规则节点不显示这一栏（2026-09-04 会上）：它的入参在「表配置」里选，
+       这里再来一个「入参来源」是同一件事的第二个入口，两处能填出不一致的值。
+       写入侧也已经统一——规则节点的 context 取自 ruleCfg.inputFields（见 stepPersist）。 -->
+  <div v-if="!isRule" class="rc-field"><label>上下文来源</label>
     <el-select
       :model-value="contextMap"
       multiple

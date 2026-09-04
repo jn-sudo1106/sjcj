@@ -5,7 +5,7 @@
 // 新建步骤响应不回 itemConfig，要再查 nextConfigPaged 用差集定位，并 enable?state=0
 // （新建默认停用）。虚拟起点 itemConfig=0 和本地草稿 id 不写。
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { entryApi, itemApi, sourceApi, type Ack, type Step } from '@/api'
+import { entryApi, idFromApiResult, itemApi, sourceApi, type Ack, type Step } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import {
@@ -158,16 +158,42 @@ export function useStepWrite() {
     ])
     const ack = await itemApi.saveItemConfig(step)
     assertOk(ack, '新增步骤失败')
-    const steps = await sourceApi.sourceSteps(sid, { withConfigDetails: false })
-    const added = steps.filter((s) => isWritableStepId(s.stepId) && !before.has(s.stepId))
-    const wanted = cfg.title.trim()
-    const matched = added.length === 1
-      ? added
-      : added.filter((s) => s.name === wanted)
-    if (matched.length !== 1) {
-      throw new Error(`新建步骤后无法唯一定位（匹配到 ${matched.length} 条），请刷新画布确认`)
+
+    /**
+     * 认领刚建出来的那条步骤（2026-09-04 重排判据）。
+     *
+     * 为什么要认领：画布节点先以本地草稿 id 存在，落库后必须换成后端的 `itemConfig`，
+     * 否则之后改名、改进入条件都不知道该改哪条。**旧平台没有这一步**——它的步骤是弹窗表单，
+     * 提交完 `$emit('refresh')` 整表重查就完事，没有"本地草稿要跟后端 ID 对上"这回事。
+     * 所以这段没有可抄的实现，判据得自己选。
+     *
+     * 三级，从硬到软：
+     *   ① **回执直接带 ID**——最干净，连重查都省了。今天后端返不返未知（没人验过），
+     *      带了就走这条；哪天开始返了会自动升级，不用改代码。
+     *   ② 差集里 **itemConfig 最大的那条**。`itemConfig` 是后端自增主键，刚建的一定最大。
+     *   ③ 名字**只做校验**，不当判据。名字是用户随时能改的，默认值又天生重复
+     *      （同一前置下加两个规则节点都叫「1400917-规则处理」），拿它认身份本来就不牢靠——
+     *      原来 `added.length !== 1` 时靠名字过滤，撞名就抛「无法唯一定位」。
+     */
+    const ackId = idFromApiResult(ack, ['itemConfig', 'id', 'data'])
+    let created: Step | undefined
+    if (ackId && isWritableStepId(ackId)) {
+      const steps = await sourceApi.sourceSteps(sid, { withConfigDetails: false })
+      created = steps.find((s) => s.stepId === ackId)
     }
-    const created = matched[0]
+    if (!created) {
+      const steps = await sourceApi.sourceSteps(sid, { withConfigDetails: false })
+      const added = steps.filter((s) => isWritableStepId(s.stepId) && !before.has(s.stepId))
+      if (!added.length) {
+        throw new Error('新建步骤后没查到新增的步骤，请刷新画布确认')
+      }
+      created = added.reduce((a, b) => (Number(b.stepId) > Number(a.stepId) ? b : a))
+      const wanted = cfg.title.trim()
+      if (added.length > 1 && created.name !== wanted) {
+        // 不阻断：ID 最大那条就是刚建的，名字对不上多半是同名/改过名。留一行日志便于排查。
+        console.warn('[step-write] 差集里有多条新增，按 itemConfig 最大认领', { wanted, added: added.map((s) => `${s.stepId}:${s.name}`) })
+      }
+    }
     sourceStore.rememberSteps([created], 'merge')
     try {
       const enableAck = await itemApi.enable(created.stepId, '0')

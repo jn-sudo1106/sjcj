@@ -223,6 +223,55 @@ describe('useStepWrite.persistFlowSteps', () => {
     expect(ruleCall![0].mainConfig).toBe('1400917')
   })
 
+  // 2026-09-04：认领新建步骤的判据从"名字"换成三级（回执 ID → itemConfig 最大 → 名字只做校验）。
+  // 名字是用户随时能改的，默认值又天生重复（同一前置下加两个规则节点都叫「1400917-规则处理」），
+  // 拿它认身份本来就不牢靠——原来差集多于一条时靠名字过滤，撞名就抛「无法唯一定位」。
+  it('差集有多条同名新增时，按 itemConfig 最大认领，不再报"无法唯一定位"', async () => {
+    setActivePinia(createPinia())
+    const { flow } = loadTestSource()
+    const localId = flow.insertAfter('40600', 'web')!
+    flow.configs[localId].configId = '1400999'
+    const wanted = flow.configs[localId].title
+
+    vi.spyOn(itemApi, 'saveItemConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'enable').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    // 两条新增且同名——老逻辑在这里必抛
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      SNAPSHOT,
+      { ...SNAPSHOT, stepId: '40601', name: wanted },
+      { ...SNAPSHOT, stepId: '40602', name: wanted },
+    ])
+
+    const { persistFlowSteps } = useStepWrite()
+    await expect(persistFlowSteps()).resolves.toBeTruthy()
+    // 认领的是 id 最大那条
+    expect(flow.main).toContain('40602')
+  })
+
+  it('回执直接带 itemConfig 时优先用它，不靠差集', async () => {
+    setActivePinia(createPinia())
+    const { flow } = loadTestSource()
+    const localId = flow.insertAfter('40600', 'web')!
+    flow.configs[localId].configId = '1400999'
+
+    vi.spyOn(itemApi, 'saveItemConfig').mockResolvedValue({ ok: true, message: 'ok', itemConfig: '40777' } as never)
+    vi.spyOn(itemApi, 'enable').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    // 差集里 40888 更大；回执指名 40777，就该听回执的
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      SNAPSHOT,
+      { ...SNAPSHOT, stepId: '40777', name: '回执指定' },
+      { ...SNAPSHOT, stepId: '40888', name: '别的' },
+    ])
+
+    const { persistFlowSteps } = useStepWrite()
+    await persistFlowSteps()
+
+    expect(flow.main).toContain('40777')
+    expect(flow.main).not.toContain('40888')
+  })
+
   it('本地新节点缺 configId 时整次保存拦下，不改已有步骤（0828 W9-4）', async () => {
     setActivePinia(createPinia())
     const { flow } = loadTestSource()
