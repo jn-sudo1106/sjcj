@@ -42,6 +42,7 @@ import SiteTableSelect from './components/SiteTableSelect.vue'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import { initMergeState, mergeLoadMore, type MergeLoadMoreResult, type MergeSourceState } from './siteDataMerge'
 import RowDetailFields from './RowDetailFields.vue'
+import RowDetailSubs from './RowDetailSubs.vue'
 import { fieldsFromShowItems, fieldsFromTableMeta } from './rowDetailFields'
 import { readFieldPreset, readShowEmpty, visibleDetailProps, writeFieldPreset, writeShowEmpty, type RowFieldPreset } from './rowDetailPrefs'
 
@@ -556,6 +557,22 @@ function onRowAction(row: DataRow, cmd: string) {
 // 这边一直没补——筛选行有「父 ID」输入框能按父 ID 筛，但点不开任何一行的父数据，
 // 同一页面内口径不一致。categoryId/parentId 同样早就在 DataRow 里，只是没渲染入口。
 const parentDetail = ref<EntryDetail | null>(null)
+/**
+ * 本行详情（0904）：只为拿 `subs` / `subsCnt`。抽屉字段用列表行 + 表 meta 现拼，
+ * 不依赖它，所以失败静默即可。
+ */
+const rowDetail = ref<EntryDetail | null>(null)
+let rowDetailSeq = 0
+watch(detailRow, async (row) => {
+  const id = ++rowDetailSeq
+  rowDetail.value = null
+  if (!row || !effectiveTableId.value) return
+  try {
+    const res = await dataApi.rowDetail(effectiveTableId.value, row.dataId)
+    if (id === rowDetailSeq) rowDetail.value = res
+  } catch { /* 子表拿不到就不显示这一块 */ }
+})
+
 const parentLoading = ref(false)
 const parentError = ref('')
 /**
@@ -816,6 +833,9 @@ function onCellFile(path: string) {
             :visible-props="detailVisibleProps"
             @file-click="onCellFile"
           />
+          <!-- 下级数据（0904）：与上游面板对称。这里不给「查看全部」——
+               全部源视图没有 Y1 的下钻（它不锁定单一流程，跳不到"后继节点"）。 -->
+          <RowDetailSubs :subs="rowDetail?.subs" :subs-cnt="rowDetail?.subsCnt" :show-empty="showEmpty" />
         </div>
       </div>
     </el-drawer>

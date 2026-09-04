@@ -286,7 +286,7 @@ describe('数据详情 / 统计 / 后续 / 删除 API 旧平台 HTTP 契约（E 
     expect(detail?.row).toMatchObject({ dataId: '88231', sourceId: '161725' })
     expect(detail?.row.values).toEqual({ K1: '正文' })
     expect(detail?.showItems).toEqual([{ itemId: '1', columnName: 'K1', itemName: '正文', value: '正文' }])
-    expect(detail?.subs).toEqual([expect.objectContaining({ dataId: '88232' })])
+    expect(detail?.subs).toEqual([expect.objectContaining({ row: expect.objectContaining({ dataId: '88232' }) })])
   })
 
   it('distinctSource 复用 buildLegacyRowQuery（含 more/enable），GET 返回源 ID 数组', async () => {

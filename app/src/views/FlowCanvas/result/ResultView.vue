@@ -22,6 +22,7 @@ import { readRailOpen, writeRailOpen } from './railPref'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import RowDetailFields from './RowDetailFields.vue'
+import RowDetailSubs from './RowDetailSubs.vue'
 import { fieldsFromShowItems, fieldsFromTableMeta } from './rowDetailFields'
 import { readFieldPreset, readShowEmpty, visibleDetailProps, writeFieldPreset, writeShowEmpty, type RowFieldPreset } from './rowDetailPrefs'
 
@@ -794,6 +795,38 @@ async function loadParentDetail(row: DataRow) {
     parentLoading.value = false
   }
 }
+/**
+ * 本行详情（0904）：只为拿 `subs` / `subsCnt` 而发——抽屉里的字段一直是用列表行 + 表 meta
+ * 现拼的（`detailFields`），不依赖这个请求，所以它失败**不影响抽屉正常用**，静默即可。
+ * 旧平台 BaseDetail.vue 同样是打开详情才拉一次。
+ */
+const rowDetail = ref<EntryDetail | null>(null)
+let rowDetailSeq = 0
+async function loadRowDetail(row: DataRow | null) {
+  const id = ++rowDetailSeq
+  rowDetail.value = null
+  if (!row || !selectedTable.value) return
+  try {
+    const res = await dataApi.rowDetail(selectedTable.value, row.dataId)
+    if (id === rowDetailSeq) rowDetail.value = res
+  } catch { /* 子表拿不到就不显示这一块，不打扰用户 */ }
+}
+watch(detailRow, (row) => { void loadRowDetail(row) })
+
+/** 详情里「查看全部」：交给列表层——就是 Y1 那个下钻 */
+function onSubsViewAll() {
+  const row = detailRow.value
+  const cell = row ? childCounts.value?.get(row.dataId) : undefined
+  if (!row || !cell) return
+  closeDetail()
+  void onChildCountClick(row, cell)
+}
+/** 这行有没有可下钻的下级（决定「查看全部」出不出现） */
+function childCountFor(row: DataRow | null): boolean {
+  if (!row) return false
+  return !!childCounts.value?.get(row.dataId)?.byTarget.some((t) => t.count > 0)
+}
+
 /** 详情抽屉里的「父 ID ↗」 */
 async function openParentDetail() {
   if (detailRow.value) await loadParentDetail(detailRow.value)
@@ -1211,6 +1244,15 @@ async function onTestScript() {
             :visible-props="detailVisibleProps"
             @update:field="editValues[$event.prop] = $event.value"
             @file-click="onCellFile"
+          />
+          <!-- 下级数据（0904）：与上游面板对称，抽屉里顺序是 上游 → 本行 → 下游。
+               「查看全部」直接复用 Y1 的下钻——详情层看两眼，列表层看全部。 -->
+          <RowDetailSubs
+            :subs="rowDetail?.subs"
+            :subs-cnt="rowDetail?.subsCnt"
+            :show-empty="showEmpty"
+            :can-view-all="!!childCountFor(detailRow)"
+            @view-all="onSubsViewAll"
           />
         </div>
         <div class="rv-d-foot">

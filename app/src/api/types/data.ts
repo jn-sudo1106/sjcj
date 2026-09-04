@@ -147,10 +147,27 @@ export interface EntryDetailItem {
   value: unknown
 }
 
+/**
+ * 子行（下游数据）。后端 `entryDetail` 的 `subs` 里每条都是一个完整的详情对象——
+ * 自带 `showItems`（实测 24 个字段全带）和 `entryTypeId/entryTypeName`，
+ * 所以详情抽屉里展开子表**不需要再发请求**（旧平台 BaseDetail.vue 也是直接渲染它）。
+ */
+export interface EntrySubRow {
+  row: DataRow
+  showItems: EntryDetailItem[]
+  /** 子行所在表，异表链路下必须显示——用户得知道这是哪张表的数据 */
+  tableId?: string
+  tableName?: string
+}
 export interface EntryDetail {
   row: DataRow
   showItems: EntryDetailItem[]
-  subs?: DataRow[]
+  subs?: EntrySubRow[]
+  /**
+   * 子行**总数**。详情接口可能只带回前几条（旧平台界面上写的就是「本页展示子数据 3/6 条」），
+   * 用它跟 `subs.length` 比，才知道要不要给"查看全部"的出口。
+   */
+  subsCnt?: number
 }
 
 /** 统计行：动态分组列（键名取决于 summaryFields）+ 固定 CNT 计数列 */

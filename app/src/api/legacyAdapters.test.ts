@@ -557,7 +557,9 @@ describe('数据详情 / 统计行适配（E 包 T1c）', () => {
     expect(detail.row).toMatchObject({ dataId: '88231', sourceId: '161725' })
     expect(detail.row.values).toEqual({ K1: '正文' })
     expect(detail.showItems).toEqual([{ itemId: '1', columnName: 'K1', itemName: '正文', value: '正文' }])
-    expect(detail.subs).toEqual([expect.objectContaining({ dataId: '88232' })])
+    // 0904：subs 现在是 EntrySubRow（row + showItems + tableId/tableName），
+    // 不再是裸 DataRow——子行自带 24 个字段，摊平成 DataRow 会把它们全丢掉
+    expect(detail.subs).toEqual([expect.objectContaining({ row: expect.objectContaining({ dataId: '88232' }) })])
   })
 
   it('entryDetailFromLegacy：subs 缺失时为 undefined，不是空数组', () => {

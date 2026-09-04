@@ -5,6 +5,7 @@ import type {
   DataRow,
   DataTableMeta,
   EntryDetail,
+  EntrySubRow,
   EntryDetailItem,
   EntryField,
   EntryType,
@@ -546,14 +547,33 @@ export function dataRowFromLegacy(input: unknown): DataRow {
   }
 }
 
-/** 数据详情：entryDetail 返回行字段 + showItems（编辑表单反填用）+ subs（子列表） */
+/**
+ * 数据详情：行字段 + showItems（编辑表单反填用）+ subs（下游子行）+ subsCnt（子行总数）。
+ *
+ * `subs` 里每条是**完整详情对象**，自带 showItems / entryTypeId / entryTypeName
+ * （2026-09-04 生产实测：源 430002879 的父行 2790368 带回 2 条子行，各 24 个字段）。
+ * 原来这里只 `dataRowFromLegacy(sub)`，把子行的字段整个丢了——详情抽屉里只剩一个 ID，
+ * 而旧平台 BaseDetail.vue 是把这些字段全渲染出来的。
+ */
 export function entryDetailFromLegacy(input: unknown): EntryDetail {
   const record = asRecord(input)
-  const { showItems, subs, ...rowFields } = record
+  const { showItems, subs, subsCnt, ...rowFields } = record
   return {
     row: dataRowFromLegacy(rowFields),
     showItems: Array.isArray(showItems) ? showItems.map(showItemFromLegacy) : [],
-    subs: Array.isArray(subs) ? subs.map(dataRowFromLegacy) : undefined,
+    subs: Array.isArray(subs) ? subs.map(entrySubRowFromLegacy) : undefined,
+    subsCnt: subsCnt == null ? undefined : Number(subsCnt),
+  }
+}
+
+function entrySubRowFromLegacy(input: unknown): EntrySubRow {
+  const record = asRecord(input)
+  const { showItems, subs: _nestedSubs, ...rowFields } = record
+  return {
+    row: dataRowFromLegacy(rowFields),
+    showItems: Array.isArray(showItems) ? showItems.map(showItemFromLegacy) : [],
+    tableId: record.entryTypeId == null ? undefined : String(record.entryTypeId),
+    tableName: record.entryTypeName == null ? undefined : String(record.entryTypeName),
   }
 }
 

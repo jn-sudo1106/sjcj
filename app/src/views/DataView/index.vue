@@ -20,6 +20,7 @@ import MoreTablesDialog from './MoreTablesDialog.vue'
 import MoreSourcesDialog from './MoreSourcesDialog.vue'
 import DataImportDialog from './DataImportDialog.vue'
 import BackTraceSourcesDialog from '@/views/FlowCanvas/result/BackTraceSourcesDialog.vue'
+import RowDetailSubs from '@/views/FlowCanvas/result/RowDetailSubs.vue'
 import { unsupportedNextStepBatchFilters } from './batchGuards'
 
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
@@ -952,10 +953,9 @@ onMounted(async () => {
             <dd>{{ item.value ?? '—' }}</dd>
           </template>
         </dl>
-        <template v-if="detail.data.subs?.length">
-          <div class="dv-section">子列表</div>
-          <div v-for="sub in detail.data.subs" :key="sub.dataId" class="dv-sub-row">{{ sub.dataId }} · {{ sub.sourceId }}</div>
-        </template>
+        <!-- 0904：原来这里只渲染一行 `dataId · sourceId`，子行自带的 24 个字段全丢了，
+             也没有旧平台那个「本页展示子数据 3/6 条」的总数。换成与源画布数据视图同一个面板。 -->
+        <RowDetailSubs :subs="detail.data.subs" :subs-cnt="detail.data.subsCnt" />
       </template>
     </el-drawer>
 
@@ -1215,11 +1215,5 @@ onMounted(async () => {
   font-size: 13px;
   font-weight: 700;
   color: var(--rc-text);
-}
-.dv-sub-row {
-  padding: 6px 0;
-  border-bottom: 1px solid var(--rc-border-soft);
-  font-size: 12px;
-  color: var(--rc-text-2);
 }
 </style>
