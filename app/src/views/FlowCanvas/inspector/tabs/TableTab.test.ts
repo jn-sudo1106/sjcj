@@ -279,3 +279,42 @@ describe('TableTab · 数据监控节点（2026-09-01，不落表/不出参 + �
     expect(flow.configs['monitor-1'].monitorMethods).toEqual(['数据延迟监控', '每日数据量监控'])
   })
 })
+
+// 2026-09-04：规则节点「保存不了」的真因。
+// 写的时候 mergeStepForWrite 把 inputFields/outputFields（itemCode）换成物理列名存进步骤的
+// context/outContext；读回来 applyStepTaskFields 只把它们放进 taskCfg.contextMap/outColumns，
+// 没有人换回 itemCode 填到 ruleCfg —— 刷新后勾选全空，validateTableBinding 卡在
+// 「请至少选择 1 个入参字段」，nodeInspectorTabs 据此把「编排配置」整个 Tab 置灰。
+// 实测步骤 41672：后端 context='K1,K2,K3'、outContext='K1,K2,K3' 都在，前端却是 []。
+describe('TableTab · 回读时按 context/outContext 还原入出参勾选', () => {
+  it('步骤存的是列名 K1/K2，字段表到位后还原成 itemCode，并解除「编排配置」置灰', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnRuleNode()
+    const cfg = flow.configs['rule-1']
+    cfg.ruleCfg!.inputTableId = INPUT_TABLE.tableId
+    cfg.ruleCfg!.outputTableId = INPUT_TABLE.tableId
+    cfg.ruleCfg!.inputFields = []
+    cfg.ruleCfg!.outputFields = []
+    // 回读时 applyStepTaskFields 放进来的物理列名
+    cfg.taskCfg = { ...(cfg.taskCfg ?? { queue: '', urlRule: '' }), contextMap: ['K1', 'K2'], outColumns: ['K2'] }
+    await flushPromises()
+
+    expect(flow.configs['rule-1'].ruleCfg!.inputFields).toEqual(['sku_id', 'sku_name'])
+    expect(flow.configs['rule-1'].ruleCfg!.outputFields).toEqual(['sku_name'])
+
+    const orchestration = wrapper.findAll('.rc-top-tab').find((b) => b.text() === '编排配置')!
+    expect((orchestration.element as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('用户已经勾过就不覆盖（只补空，不改选择）', async () => {
+    mockAssets()
+    const { flow } = mountOnRuleNode()
+    const cfg = flow.configs['rule-1']
+    cfg.ruleCfg!.inputTableId = INPUT_TABLE.tableId
+    cfg.ruleCfg!.inputFields = ['sku_name']
+    cfg.taskCfg = { ...(cfg.taskCfg ?? { queue: '', urlRule: '' }), contextMap: ['K1', 'K2'] }
+    await flushPromises()
+
+    expect(flow.configs['rule-1'].ruleCfg!.inputFields).toEqual(['sku_name'])
+  })
+})

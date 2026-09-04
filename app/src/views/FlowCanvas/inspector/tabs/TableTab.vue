@@ -49,6 +49,50 @@ function patchRule(p: Partial<RuleOrchestration>) {
 }
 const { inputFieldOptions, outputFieldOptions } = useRuleTableFields(ruleCfg)
 
+/**
+ * 回读时把步骤里的入/出参**还原回勾选状态**（2026-09-04 修）。
+ *
+ * 写：`mergeStepForWrite` 把 `ruleCfg.inputFields/outputFields`（**itemCode**）换成物理列名
+ * 存进步骤的 `context`/`outContext`。读：`applyStepTaskFields` 只把它们放进 `taskCfg.contextMap`
+ * / `outColumns`，**没有人再换回 itemCode 填到 ruleCfg** —— 于是刷新后勾选全空。
+ *
+ * 后果不是"少显示两行勾"，是**规则节点保存不了**：`validateTableBinding` 卡在
+ * 「请至少选择 1 个入参字段」，`nodeInspectorTabs` 据此把「编排配置」整个 Tab 置灰。
+ * 实测步骤 41672：后端 `context='K1,K2,K3'`、`outContext='K1,K2,K3'` 都在，
+ * 前端 `inputFields`/`outputFields` 却都是 `[]`。
+ *
+ * 字段表是异步拉的，所以放在这里等 options 到位再补，且只在勾选为空时补——不覆盖用户的选择。
+ */
+function restoreFieldsFromColumns(
+  saved: string[] | undefined,
+  columns: string[] | undefined,
+  options: { itemCode: string; columnName?: string }[],
+): string[] | undefined {
+  if (saved?.length || !columns?.length || !options.length) return undefined
+  const byColumn = new Map(options.filter((f) => f.columnName).map((f) => [f.columnName as string, f.itemCode]))
+  // 存进去的可能是列名，也可能是列名解析不到时回退写下的 itemCode（见 ruleStepContext），两种都认
+  const known = new Set(options.map((f) => f.itemCode))
+  const restored = columns
+    .map((col) => byColumn.get(col) ?? (known.has(col) ? col : ''))
+    .filter(Boolean)
+  return restored.length ? restored : undefined
+}
+watch(
+  [inputFieldOptions, outputFieldOptions, () => cfg.value?.taskCfg?.contextMap, () => cfg.value?.taskCfg?.outColumns],
+  ([inOpts, outOpts, contextMap, outColumns]) => {
+    if (!isRule.value || !id.value) return
+    const patch: Partial<RuleOrchestration> = {}
+    const inputFields = restoreFieldsFromColumns(ruleCfg.value.inputFields, contextMap, inOpts)
+    if (inputFields) patch.inputFields = inputFields
+    if (!isMonitor.value) {
+      const outputFields = restoreFieldsFromColumns(ruleCfg.value.outputFields, outColumns, outOpts)
+      if (outputFields) patch.outputFields = outputFields
+    }
+    if (Object.keys(patch).length) patchRule(patch)
+  },
+  { immediate: true },
+)
+
 const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
 
 // ---- 非规则节点：统一输入表/输入字段配置（0806） ----
