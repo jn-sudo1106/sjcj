@@ -43,7 +43,6 @@
 // 采集类节点的读取优先级。**不要**在两边都定义然后不写辅助函数。
 
 import type { RuleOrchestration, Site, Source } from '@/api'
-import { effectiveInputTable } from './flowModel.layout'
 
 // 让外部通过 flowModel 访问的 api types（seeds / 外部代码常用）
 export type { RuleOrchestration, Site, Source } from '@/api'
@@ -700,26 +699,6 @@ export function directPredecessorIds(
   return [...seen].filter((nid) => nid !== id && isRunnableFlowNode(nid, configs) && directSuccessorIds(main, configs, nid, branchGroups).includes(id))
 }
 
-/**
- * 歧义下游节点判定（0812 计划 M2-14，方案 §6.7-B）：旧 `nextStep`/`nextStep2` 没有
- * `targetNodeId` 参数，如果同一张有效输入表被两个及以上节点共用，后端没法知道任务该发给
- * 哪一个，这种情况下手动执行必须禁用，不能假装按钮只会驱动当前选中的节点。
- * `nodes` 传调用方已经算好的候选节点列表（如 buildHorizontalLayout(...).nodes），避免这里
- * 重新遍历 main + 全部分支去重建一遍。
- */
-export function hasAmbiguousInput(
-  nodes: { id: string }[],
-  main: string[],
-  branches: BranchSeed[],
-  configs: Record<string, NodeConfig>,
-  branchGroups: FlowBranchGroup[],
-  id: string,
-): boolean {
-  const target = effectiveInputTable(main, branches, configs, id, branchGroups)
-  if (!target) return false
-  const consumers = nodes.filter((n) => effectiveInputTable(main, branches, configs, n.id, branchGroups) === target)
-  return consumers.length > 1
-}
 
 // ---------- 杂项（与 seeds/layout 无强耦合，独立放在 types 文件） ----------
 /**

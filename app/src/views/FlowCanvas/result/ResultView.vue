@@ -7,7 +7,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, ruleApi, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery } from '@/api'
 import {
   buildHorizontalLayout, nodeOutputTable, nodeEntryCondition, conditionGroupLabel, conditionGroupIsSet,
-  isDecision, isParallel, isFirstRunnableNode, firstRunnableNodeId, hasDirectSuccessor, hasAmbiguousInput, directPredecessorIds, directSuccessorIdsIncludingDisabled, type NodeConfig,
+  isDecision, isParallel, isFirstRunnableNode, firstRunnableNodeId, hasDirectSuccessor, directPredecessorIds, directSuccessorIds, directSuccessorIdsIncludingDisabled, type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
 import { fetchChildCountsForPage, isPerRowMode, resolveChildTargets, type ChildCountCell } from '@/utils/flow/childCounts'
@@ -185,16 +185,42 @@ function onScopeChange(next: 'output' | 'input') {
   selectedRowIds.value = []
 }
 
-const isAmbiguousInput = computed(() => {
-  if (execMode.value !== 'input' || !selectedNodeId.value) return false
-  return hasAmbiguousInput(allNodes.value, flow.main, flow.branches, flow.configs, flow.branchGroups, selectedNodeId.value)
+/**
+ * 同一张输入表挂多个后继时，这批数据会分流到哪几个节点（2026-09-04 重做）。
+ *
+ * **原来这里是一条阻断**（0812 M2-14）：只要输入表被多个节点共用就禁用勾选与手动执行，
+ * 理由是「旧 nextStep 没有 targetNodeId，后端没法知道任务该发给哪一个」。
+ *
+ * **这个前提是错的。** 后端按**各后继节点的进入条件**逐个求值来分流——2026-09-04 确认，
+ * 实例：源 yahoo 的两个后继入参都是 900，靠条件区分
+ *   `K19 == nil || K1=='guce' || K1==nil` → python正文提取(38779)
+ *   `K19 != nil && K6 == nil`             → python正文提取_dev(38878)
+ * 「同表多后继」是旧平台的**正常设计**，不是配置错误。
+ *
+ * 代价是这条阻断把很常见的形态整条链都锁死了：920663 那种一条链全在 TB_CNEWS 上的源，
+ * 除第一个节点外全都不能发任务（用户两次报「为什么这个节点没有勾选框」）。
+ *
+ * 现在不拦，改成执行前把分流去向说清楚。
+ */
+const branchTargets = computed(() => {
+  if (execMode.value !== 'input' || !selectedNodeId.value) return []
+  const ids = directSuccessorIds(flow.main, flow.configs, selectedNodeId.value, flow.branchGroups)
+  if (ids.length < 2) return []
+  return ids.map((id) => {
+    const cfg = flow.configs[id]
+    const group = cfg ? nodeEntryCondition(cfg) : undefined
+    return {
+      id,
+      title: cfg?.title || id,
+      condition: group && conditionGroupIsSet(group) ? conditionGroupLabel(group) : '无进入条件',
+    }
+  })
 })
 // 有输入表的中间节点仍按 0812：只在输入 / 合并「输入·输出」tab 勾行（输出 tab 是本节点产物）。
 // 没有输入表的节点（典型列表首节点）当前表就是输出，0824 要从这里勾行发给后继，勾选列必须留着。
 const execDisabledReason = computed(() => {
   if (execMode.value === 'fetch' && !isVerifiedFirstNode.value) return '当前节点无输入表，暂不支持独立手动执行'
   if (execMode.value === 'input') {
-    if (isAmbiguousInput.value) return '该输入表被多个节点共用，无法确定任务目标节点，暂不支持手动执行'
     if (inputTableId.value && !sameTable.value && scope.value !== 'input') return '请先切到"输入数据"范围并勾选记录'
     if (!selectedRowIds.value.length) return '请先勾选要发送的数据'
   }
@@ -205,7 +231,6 @@ const execDisabledReason = computed(() => {
 })
 const canExecute = computed(() => execMode.value !== 'none' && !execDisabledReason.value)
 const canPickRows = computed(() => {
-  if (isAmbiguousInput.value) return false
   if (execMode.value === 'upstream') return true
   return execMode.value === 'input' && (sameTable.value || scope.value === 'input' || !inputTableId.value)
 })
@@ -278,7 +303,11 @@ async function onSendNextStep() {
   const ids = [...selectedRowIds.value]
   const tableId = selectedTable.value
   // 0824：数据视图这条工具栏只发后续（nextStep）；按源抓取走画布头 SnatchLauncher，不走这里。
-  await confirmDanger('发后续任务', `将对选中的 ${count} 条数据发起"${nodeName}"的后续处理任务，是否继续？`, async () => {
+  // 多后继时说清去向：后端按各后继的进入条件分流，不是"发给某一个"（2026-09-04 确认）
+  const fanout = branchTargets.value.length
+    ? `\n这批数据会按各后继节点的进入条件分流到：${branchTargets.value.map((t) => `${t.title}（${t.condition}）`).join('、')}`
+    : ''
+  await confirmDanger('发后续任务', `将对选中的 ${count} 条数据发起"${nodeName}"的后续处理任务。${fanout}\n是否继续？`, async () => {
     const res = await runNextStep(ids, tableId, nodeName)
     selectedRowIds.value = []
     return res
@@ -1124,6 +1153,14 @@ async function onTestScript() {
             :title="execDisabledReason"
             @click="execMode === 'fetch' ? onSendFetch() : execMode === 'upstream' ? onSendUpstream() : onSendNextStep()"
           >{{ execMode === 'fetch' ? '发起抓取' : execMode === 'upstream' ? '从上一节点重跑' : '发后续任务' }}</button>
+          <!-- 同表多后继：不再拦，只说清会分流到哪几个（2026-09-04）。
+               原来这里是禁用勾选 + 一句藏在 title 里的"无法确定任务目标节点"，纯黑盒。 -->
+          <span
+            v-if="branchTargets.length"
+            class="muted"
+            data-testid="data-fanout-hint"
+            :title="branchTargets.map((t) => `${t.title}：${t.condition}`).join('\n')"
+          >按进入条件分流到 {{ branchTargets.length }} 个后继</span>
           <!-- 「从上一节点重跑」出现在中间节点上会让人困惑（"这不是最后一个节点啊"）——
                说清楚是后继被停用了，不是它变成了末节点。 -->
           <span

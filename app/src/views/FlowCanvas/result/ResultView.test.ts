@@ -1301,7 +1301,11 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     expect(ElMessage.error).not.toHaveBeenCalledWith(expect.stringContaining('详情类配置'))
   })
 
-  it('有效输入表被多个节点共用（歧义）时禁用执行按钮并说明原因', async () => {
+  // 2026-09-04 推翻 M2-14：原来"输入表被多个节点共用"直接禁用执行 + 不给勾选，
+  // 前提是"后端没法知道任务发给谁"。实际后端**按各后继节点的进入条件**逐个求值分流，
+  // 同表多后继是旧平台的正常形态（用户："每个分支都有进入条件的"）。
+  // 这条阻断把 920663 那类整条链共用一张表的源全锁死了。
+  it('输入表被多个节点共用不再禁用执行（后端按进入条件分流）', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
@@ -1312,18 +1316,54 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
 
     const wrapper = mountResultView()
     await flushPromises()
-    await selectNode(wrapper, 'mid') // mid 和 mid2 都显式声明输入表 T1，互相冲突
-
-    // 默认停在输出 tab，这时按钮直接不渲染（换成说明文字），先切到"输入"才看得到歧义判定。
+    await selectNode(wrapper, 'mid') // mid 和 mid2 都显式声明输入表 T1
     await wrapper.get('[data-testid="data-scope-input"]').trigger('click')
     await flushPromises()
 
+    // fixture 里 rowQueryPaged 返回空列表，按钮仍会因"没勾选"而禁用——这里要看的是
+    // 禁用**理由**不再是歧义，以及勾选列回来了（原来歧义判定排在"请先勾选"前面，掩盖了这点）。
     const btn = wrapper.get('[data-testid="data-exec-btn"]')
-    expect((btn.element as HTMLButtonElement).disabled).toBe(true)
-    expect(btn.attributes('title')).toContain('该输入表被多个节点共用')
-    // 歧义节点不允许勾选行（canPickRows 应为 false，不渲染勾选列）
-    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(false)
+    expect(btn.attributes('title')).toBe('请先勾选要发送的数据')
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
+    // mid 在主链上只有一个直接后继，谈不上分流，不该出提示
+    expect(wrapper.find('[data-testid="data-fanout-hint"]').exists()).toBe(false)
   })
+
+  it('一个节点分叉出多个后继时，提示会按进入条件分流到几个节点', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    // 把 mid 做成分叉点：两个分支各挂一个后继，各自带进入条件（对齐 yahoo 的真实形态）
+    flow.main.splice(0, flow.main.length, 'start', 'first', 'mid', 'last', 'end')
+    Object.assign(flow.configs, {
+      br1: cfg({ title: 'python正文提取', inputTable: 'T2' }),
+      br2: cfg({ title: 'python正文提取_dev', inputTable: 'T2' }),
+    })
+    flow.branchGroups.splice(0, flow.branchGroups.length, {
+      ownerId: 'mid',
+      branches: [
+        { label: '分支1', condition: { logic: 'and', items: [{ field: 'K19', op: 'isNull', value: '' }] }, chain: ['br1'] },
+        { label: '分支2', condition: { logic: 'and', items: [{ field: 'K6', op: 'isNull', value: '' }] }, chain: ['br2'] },
+      ],
+    } as never)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'mid')
+    await wrapper.get('[data-testid="data-scope-input"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="data-exec-btn"]').attributes('title')).toBe('请先勾选要发送的数据')
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
+    const hint = wrapper.get('[data-testid="data-fanout-hint"]')
+    expect(hint.text()).toContain('2 个后继')
+    expect(hint.attributes('title')).toContain('python正文提取_dev')
+  })
+
 
   it('勾选后取消发后续确认框：不调用 nextStep', async () => {
     setActivePinia(createPinia())
