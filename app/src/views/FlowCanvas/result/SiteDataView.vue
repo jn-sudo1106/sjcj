@@ -796,6 +796,14 @@ function onCellFile(path: string) {
       :can-write="false"
     />
     <SummaryDrawer v-model="summaryOpen" :table-meta="meta" :build-query="buildSummaryQuery" :hit-count="rows.length" />
+    <BackTraceSourcesDialog
+      :query="backTraceQuery"
+      :condition-label="backTraceLabel"
+      :site-source-ids="siteChildren.map((s) => s.sourceId)"
+      @close="backTraceQuery = null"
+      @open-in-source-view="onBackTraceOpenSourceView"
+      @launch="onBackTraceLaunch"
+    />
   </main>
 
     <el-dialog
@@ -806,14 +814,7 @@ function onCellFile(path: string) {
       :style="{ maxWidth: '1180px' }"
       append-to-body
     >
-      <BackTraceSourcesDialog
-      :query="backTraceQuery"
-      :condition-label="backTraceLabel"
-      @close="backTraceQuery = null"
-      @open-in-source-view="onBackTraceOpenSourceView"
-      @launch="onBackTraceLaunch"
-    />
-    <FilePreview
+      <FilePreview
         :path="filePreview.path"
         :name="filePreview.name"
         :ext="extFromName(filePreview.name)"

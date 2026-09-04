@@ -20,13 +20,22 @@ const route = useRoute()
 const router = useRouter()
 
 // 数据视图「按此条件反查源」跳过来时 URL 上带的那批源 ID（0903 Y2-4）。
-// 读一次就从 URL 上抹掉：留着的话用户在源视图改了别的条件再刷新，又会被这批旧 ID 拉回去。
-const initialSourceIds = ref(String(route.query.sourceIds ?? '').trim())
-if (initialSourceIds.value) {
+//
+// ⚠️ **必须 watch，不能只在 setup 里读一次**：从本页的数据视图点「在源视图中打开」时，
+// 路由只是 query 变了（view=data → view=source + sourceIds），本组件**没有重新挂载**，
+// setup 不会再跑一遍。只读一次的话 URL 上带着 ID、界面上却一个都没填——
+// 更坑的是网站源数恰好等于命中数时看起来"像是生效了"（实测踩到：都是 20）。
+//
+// 读到就从 URL 上抹掉：留着的话用户在源视图改了别的条件再刷新，又会被这批旧 ID 拉回去。
+const initialSourceIds = ref('')
+watch(() => route.query.sourceIds, (raw) => {
+  const ids = String(raw ?? '').trim()
+  if (!ids) return
+  initialSourceIds.value = ids
   const next = { ...route.query }
   delete next.sourceIds
   void router.replace({ path: route.path, query: next })
-}
+}, { immediate: true })
 const flow = useFlowStore()
 
 const site = ref<Site | null>(null)

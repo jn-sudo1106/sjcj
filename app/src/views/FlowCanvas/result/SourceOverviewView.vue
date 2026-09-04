@@ -54,6 +54,14 @@ const size = ref(20)
 const loading = ref(false)
 const loadError = ref('')
 const sourceIds = ref(props.initialSourceIds ?? '')
+// prop 变化也要生效：反查跳过来时本组件常常已经挂载着（同一个 SiteDetailView 里切视图），
+// 只把它当初始值用等于永远不生效。清空不跟随——那是用户自己在筛选框里的操作，别覆盖他。
+watch(() => props.initialSourceIds, (ids) => {
+  if (!ids || ids === sourceIds.value) return
+  sourceIds.value = ids
+  page.value = 1
+  void loadSources()
+})
 const name = ref('')
 const statusFilter = ref<StatusFilter>('all')
 const tagFilter = ref('')

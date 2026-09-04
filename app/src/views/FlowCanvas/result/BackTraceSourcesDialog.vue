@@ -20,6 +20,19 @@ const props = defineProps<{
   query: RowQuery | null
   /** 条件的人话描述，展示在弹窗头部，让用户确认反查的是不是他刚才筛的那批 */
   conditionLabel?: string
+  /**
+   * 当前网站下的源 ID 全集，用来判断哪些命中源算"本网站的"。
+   *
+   * **为什么反查会跨网站**：数据列表之所以是站内的，是前端拿网站源清单**逐源查再归并**
+   * （SiteDataView 的 candidateSourceIds），站内是枚举出来的；而 `entryDistinctSource`
+   * 是**一次全表查询**，只带 tableId + SQL，不带 sourceId/siteId——SiteDataView 自己的注释
+   * 早就写明「不按网站过滤，返回的是全平台写过这张表的源」。根子是表共用：
+   * `sense_data.TB_CNEWS` 这种表别的网站的源也往里写。
+   *
+   * 用源 ID 全集判定而不是看每行回填的 `siteId`：前者调用方现成就有（`siteChildren`），
+   * 不依赖 `sourcePaged` 一定回填 siteId，**而且超限不补详情时照样能判定**。
+   */
+  siteSourceIds?: string[]
 }>()
 const emit = defineEmits<{
   close: []
@@ -45,9 +58,39 @@ const rows = ref<Source[]>([])
 const selected = ref<string[]>([])
 
 const hitCount = computed(() => sourceIds.value.length)
+/**
+ * 是否把**其它网站**的命中源也算进来。**默认不跨网站。**
+ *
+ * 反查本身一定是跨网站的：`entryDistinctSource` 的载荷里没有 siteId
+ * （`buildLegacyRowQuery` 压根不映射它），它按表和 SQL 条件搜全库。做不到服务端按网站过滤，
+ * 只能等 `sourcePaged` 把详情（含 siteId）补回来之后在前端筛。
+ *
+ * 默认关掉的理由：用户是在**某个网站的**数据视图里点的反查，他心里的范围就是这个网站；
+ * 而且源视图锁死在当前网站内（0812 纠偏），跨网站的 ID 递过去只会查出一张空表
+ * （实测踩到过：URL 上带着 20 个 ID，源视图显示"共 0 个源"）。
+ */
+const includeOtherSites = ref(false)
+watch(includeOtherSites, () => { selected.value = [] })
+const siteIdSet = computed(() => new Set(props.siteSourceIds ?? []))
+/** 命中源里属于当前网站的（没给源清单时不做区分，全部视为本网站） */
+const inSiteIds = computed(() => (props.siteSourceIds?.length
+  ? sourceIds.value.filter((id) => siteIdSet.value.has(id))
+  : sourceIds.value))
+const inSiteRows = computed(() => (props.siteSourceIds?.length
+  ? rows.value.filter((r) => siteIdSet.value.has(r.sourceId))
+  : rows.value))
+/** 超限时不补详情，但靠源 ID 全集照样能算出跨网站数量 */
+const otherSiteCount = computed(() => hitCount.value - inSiteIds.value.length)
+/** 表格与所有动作的实际范围 */
+const visibleRows = computed(() => (includeOtherSites.value ? rows.value : inSiteRows.value))
 const overLimit = computed(() => hitCount.value > BACKTRACE_MAX)
 /** 未勾选 = 全部命中；勾了就只对勾选的动作。与源视图「发任务」同一套口径（0831 F06） */
-const effectiveIds = computed(() => (selected.value.length ? selected.value : sourceIds.value))
+const effectiveIds = computed(() => {
+  if (selected.value.length) return selected.value
+  // 超限时没有 rows（不补详情），退回用 ID 集合——范围口径与非超限时保持一致
+  if (overLimit.value) return includeOtherSites.value ? sourceIds.value : inSiteIds.value
+  return visibleRows.value.map((r) => r.sourceId)
+})
 
 function chunk<T>(list: T[], size: number): T[][] {
   const out: T[][] = []
@@ -98,12 +141,14 @@ function toggle(id: string) {
     : [...selected.value, id]
 }
 function toggleAll() {
-  selected.value = selected.value.length === rows.value.length ? [] : rows.value.map((r) => r.sourceId)
+  selected.value = selected.value.length === visibleRows.value.length ? [] : visibleRows.value.map((r) => r.sourceId)
 }
 
 function onOpenInSourceView() {
-  if (!effectiveIds.value.length) return
-  emit('openInSourceView', [...effectiveIds.value])
+  // 无论当前是不是"跨网站"视图，递给源视图的只能是本网站的：它查不到别的网站的源
+  const ids = effectiveIds.value.filter((id) => inSiteIds.value.includes(id))
+  if (!ids.length) return
+  emit('openInSourceView', ids)
 }
 function onLaunch() {
   if (!effectiveIds.value.length) {
@@ -129,18 +174,29 @@ function stateText(source: Source) {
       <div v-if="loading" class="bt-state">反查中…</div>
       <div v-else-if="error" class="bt-state err" role="alert" data-testid="backtrace-error">{{ error }}</div>
       <div v-else class="bt-state" data-testid="backtrace-hit">
-        命中 <b>{{ hitCount }}</b> 个源<span v-if="selected.length">，已选 {{ selected.length }} 个</span>
+        命中 <b>{{ visibleRows.length }}</b> 个源<span v-if="selected.length">，已选 {{ selected.length }} 个</span>
+        <!-- 跨网站是常态不是异常：反查按表和条件搜全库，本来就会捞到别的网站的源。
+             默认只看当前网站——用户是在这个网站的数据视图里点的反查，心里的范围就是它。 -->
+        <label v-if="otherSiteCount > 0 || includeOtherSites" class="bt-cross" data-testid="backtrace-cross-site">
+          <input v-model="includeOtherSites" type="checkbox" />
+          包含其它网站的源（另有 {{ otherSiteCount }} 个）
+        </label>
       </div>
     </div>
 
     <!-- 超限：不展开清单，但不堵死——「看清单」降级成「按条件直接发」 -->
     <div v-if="overLimit" class="bt-over" data-testid="backtrace-over-limit">
       命中源过多（{{ hitCount }} 个），已超过展示上限 {{ BACKTRACE_MAX }}。
-      建议收窄数据条件后再反查；确实要全部处理的话，可以直接对这 {{ hitCount }} 个源发任务。
+      建议收窄数据条件后再反查；确实要全部处理的话，可以直接对这
+      {{ includeOtherSites ? hitCount : inSiteIds.length }} 个源发任务。
     </div>
 
     <div v-else-if="!loading && !error && !hitCount" class="bt-empty" data-testid="backtrace-empty">
       当前条件没有命中任何源。
+    </div>
+
+    <div v-else-if="!loading && !error && !visibleRows.length" class="bt-empty" data-testid="backtrace-none-in-site">
+      命中的 {{ hitCount }} 个源都不在当前网站。勾选上面的「包含其它网站的源」可以查看并对它们发任务。
     </div>
 
     <div v-else-if="!loading && !error" class="bt-table-wrap">
@@ -148,7 +204,7 @@ function stateText(source: Source) {
         <thead>
           <tr>
             <th class="bt-check">
-              <input type="checkbox" :checked="selected.length === rows.length && !!rows.length" @change="toggleAll" />
+              <input type="checkbox" :checked="selected.length === visibleRows.length && !!visibleRows.length" @change="toggleAll" />
             </th>
             <th>源 ID</th>
             <th>源名称</th>
@@ -157,7 +213,7 @@ function stateText(source: Source) {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="row in rows" :key="row.sourceId" data-testid="backtrace-row">
+          <tr v-for="row in visibleRows" :key="row.sourceId" data-testid="backtrace-row">
             <td class="bt-check">
               <input type="checkbox" :checked="selected.includes(row.sourceId)" @change="toggle(row.sourceId)" />
             </td>
@@ -172,16 +228,16 @@ function stateText(source: Source) {
     </div>
 
     <template #footer>
-      <span class="bt-foot-hint">未勾选 = 对全部 {{ hitCount }} 个源生效</span>
+      <span class="bt-foot-hint">未勾选 = 对当前范围内全部 {{ visibleRows.length }} 个源生效</span>
       <button class="rc-btn" type="button" @click="emit('close')">取消</button>
       <button
         class="rc-btn"
         type="button"
         data-testid="backtrace-open-source-view"
-        :disabled="!hitCount || overLimit"
-        title="到源视图查看这批源，可以继续按源的条件筛选"
+        :disabled="!hitCount || overLimit || !inSiteIds.length"
+        :title="inSiteIds.length ? '到源视图查看这批源，可以继续按源的条件筛选（源视图只能看本网站，跨网站的不带过去）' : '命中的源都不在当前网站，源视图只能查看本网站的源'"
         @click="onOpenInSourceView"
-      >在源视图中打开</button>
+      >在源视图中打开{{ includeOtherSites && otherSiteCount ? `（仅本网站 ${inSiteIds.length} 个）` : '' }}</button>
       <button
         class="rc-btn primary"
         type="button"
@@ -199,6 +255,7 @@ function stateText(source: Source) {
 .bt-cond code { padding: 1px 5px; border-radius: 4px; background: #f1f5f9; font-family: var(--rc-mono, monospace); }
 .bt-state { font-size: 12px; color: var(--rc-text-2); }
 .bt-state.err { color: #b91c1c; }
+.bt-cross { display: inline-flex; align-items: center; gap: 5px; color: #92400e; cursor: pointer; }
 .bt-over { padding: 12px; border: 1px solid #fde68a; border-radius: 8px; background: #fffbeb; color: #92400e; font-size: 12.5px; line-height: 1.7; }
 .bt-empty { padding: 24px; text-align: center; color: var(--rc-faint); font-size: 12.5px; }
 .bt-table-wrap { max-height: 46vh; overflow: auto; border: 1px solid var(--rc-border); border-radius: 8px; }
