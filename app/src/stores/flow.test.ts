@@ -20,6 +20,26 @@ describe('flow store 编辑动作', () => {
     expect(f.main.length).toBe(before + 1)
   })
 
+  // 2026-09-04 会上提出：新建规则处理节点时，「适用源」默认 -1（= 该配置下所有源）。
+  // 规则步骤本来就不该绑死在某一个源上；其它节点仍默认当前源。
+  it('新建规则节点：适用源默认 -1（原来默认成当前源，等于新建出来就锁死）', () => {
+    f.loadFromSource(
+      { sourceId: '430016398', name: 'test1', url: 'http://x', configId: '1400917', mainTable: '6200026', owner: 'a', state: 'C' } as never,
+      [],
+    )
+    const ruleId = f.insertAfter(f.main[1], 'rule')!
+    expect(isRuleNode(f.configs[ruleId])).toBe(true)
+    expect(f.configs[ruleId].stepSourceId).toBe('-1')
+
+    // 数据监控复用同一条默认值路径（TEMPLATE_TO_NODE.monitor = 'rule'）
+    const monitorId = f.insertAfter(f.main[1], 'monitor')!
+    expect(f.configs[monitorId].stepSourceId).toBe('-1')
+
+    // 采集类节点不走这条路径，不该被带上 -1
+    const webId = f.insertAfter(f.main[1], 'web')!
+    expect(f.configs[webId].stepSourceId).not.toBe('-1')
+  })
+
   it('insertAfter(prevId=end) 保持 end 仍在最末（0707 Phase6 修复）', () => {
     f.insertAfter('end', 'web')
     expect(f.main[f.main.length - 1]).toBe('end')

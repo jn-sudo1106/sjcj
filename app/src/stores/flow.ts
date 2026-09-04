@@ -417,8 +417,12 @@ export const useFlowStore = defineStore('flow', () => {
       cfg.configName = cfg.title
     }
     if (!cfg.itemId) cfg.itemId = '-1'
-    const sid = sourceCfg.value?.sourceId || sourceCtx.value?.sourceId
-    if (sid && cfg.stepSourceId === undefined) cfg.stepSourceId = sid
+    // 适用源（步骤 sourceId）默认 `-1` = 该配置下所有源（2026-09-04 会上提出）。
+    // 本函数只在规则处理 / 数据监控节点上调用，这类步骤本来就不该绑死在某一个源上；
+    // 之前默认的是**当前源**，等于新建出来就锁死了。
+    // 只是默认值——用户在节点上改过就不动（`=== undefined` 的判断），
+    // 写入侧也一律以 `cfg.stepSourceId` 为准，不在那边写死（见 stepPersist.mergeStepForWrite）。
+    if (cfg.stepSourceId === undefined) cfg.stepSourceId = '-1'
     if (upstreamTable) {
       cfg.inputTable = cfg.inputTable || upstreamTable
       if (cfg.ruleCfg && !cfg.ruleCfg.inputTableId) cfg.ruleCfg.inputTableId = upstreamTable

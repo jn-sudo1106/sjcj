@@ -202,12 +202,23 @@ describe('规则节点写步骤（0904）', () => {
   }
   const snapshot = { ...MEASURED_40600, sourceId: '430016398', nodeType: 'entry' }
 
-  it('type 写 rule、适用源固定 -1', () => {
+  it('type 写 rule', () => {
     const step = mergeStepForWrite({
       snapshot, cfg: ruleCfg(['title'], ['title']), nodeId: '40600', sourceId: '430016398',
     })
     expect(step.nodeType).toBe('rule')
-    expect(step.sourceId).toBe('-1')
+  })
+
+  // 适用源 -1 是**新建节点时的默认值**，不是写死。写死会把用户改过的值冲掉——
+  // 所以写入侧一律以 cfg.stepSourceId 为准，默认值落在插入节点的地方（stores/flow.ts）。
+  it('适用源以节点上的值为准，写入侧不强制 -1', () => {
+    const withDefault = ruleCfg(['title'], ['title'])
+    withDefault.stepSourceId = '-1'
+    expect(mergeStepForWrite({ snapshot, cfg: withDefault, nodeId: '40600', sourceId: '430016398' }).sourceId).toBe('-1')
+
+    const changed = ruleCfg(['title'], ['title'])
+    changed.stepSourceId = '430016398'
+    expect(mergeStepForWrite({ snapshot, cfg: changed, nodeId: '40600', sourceId: '430016398' }).sourceId).toBe('430016398')
   })
 
   it('表配置的入参/出参写进 context/outContext，且换成物理列名', () => {
@@ -233,11 +244,10 @@ describe('规则节点写步骤（0904）', () => {
     expect(step.contextMap).toEqual(['title', 'url'])
   })
 
-  it('非规则节点不受影响：仍走任务配置，sourceId/type 照旧', () => {
+  it('非规则节点不受影响：仍走任务配置，type 照旧', () => {
     const cfg = cfgFromSnapshot()
     const step = mergeStepForWrite({ snapshot, cfg, nodeId: '40600', sourceId: '430016398' })
     expect(step.nodeType).toBe('entry')
-    expect(step.sourceId).toBe('430016398')
   })
 
   it('ruleStepContext：空数组/undefined 都返回 undefined（不写空串）', () => {

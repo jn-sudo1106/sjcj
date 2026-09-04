@@ -165,7 +165,10 @@ export function lastStepIdsFromCanvas(main: string[], nodeId: string, branchGrou
  * | 字段 | 值 | 为什么 |
  * |---|---|---|
  * | `type` | `'rule'` | 默认是 `'entry'`；执行端按它区分要不要走规则引擎 |
- * | `sourceId` | `'-1'` | 规则步骤不绑具体源（"适用源"默认全部），跟着源走会把它锁死在一个源上 |
+ * `sourceId`（适用源）**不在这里处理**：它只是新建规则节点时的**默认值**（-1 = 该配置下所有源），
+ * 用户可以改，改了就得听用户的。默认值落在插入节点的地方（`stores/flow.ts` 的 insert 路径），
+ * 这里照旧 `cfg.stepSourceId` 优先——写死成 -1 会把用户改过的值冲掉。
+ *
  * | `context` / `outContext` | 表配置的入参 / 出参 | 采集节点这两个字段来自任务配置；规则节点的入出参在**表配置**里（ruleCfg） |
  *
  * ⚠️ **存的是物理列名（K1,K2,K3），不是 itemCode**。`ruleCfg.inputFields/outputFields` 存的是
@@ -195,8 +198,7 @@ export function mergeStepForWrite(args: {
   const lastStepIds = args.lastStepIds !== undefined ? args.lastStepIds : snapshot?.dependsOn
   return {
     stepId: isWritableStepId(nodeId) ? nodeId : '',
-    // 规则步骤不绑具体源：适用源默认 -1
-    sourceId: rule ? '-1' : (cfg.stepSourceId ?? snapshot?.sourceId ?? sourceId),
+    sourceId: cfg.stepSourceId ?? snapshot?.sourceId ?? sourceId,
     name: cfg.title.trim(),
     nodeType: rule ? 'rule' : snapshot?.nodeType,
     inputTable: nodeInputTable(cfg) || snapshot?.inputTable,
