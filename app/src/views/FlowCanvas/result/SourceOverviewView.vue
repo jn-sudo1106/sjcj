@@ -4,6 +4,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { sourceApi, type Source } from '@/api'
+import { useLaunchJobStore } from '@/stores/launchJob'
 import {
   issueTagForWrite,
   mergeIssueTags,
@@ -192,6 +193,7 @@ const launchSending = ref(false)
 const launchScope = ref<LaunchScope | null>(null)
 const launchPreview = ref({ sendCount: 0, disabledCount: 0, paramCount: 0, paramNames: [] as string[] })
 const collectProgress = ref('')
+const job = useLaunchJobStore()
 const failedBatches = ref<{ ids: string[]; error: string }[]>([])
 /** query 模式在打开确认弹窗前就把可发送的 id 收齐，弹窗数字才能跟实际发送对得上 */
 let collectedSendableIds: string[] = []
@@ -301,13 +303,31 @@ async function launchSelected(skip: number) {
 }
 
 async function dispatchIds(ids: string[], skip: number) {
+  // 接入作业条（Y4-5）：整个提交过程可暂停 / 结束。同时只允许一个作业在跑——
+  // 并发批量提交既看不清进度，也容易把后端打满。
+  if (!job.start(`对 ${ids.length} 个源发任务`, ids.length, () => void retryFailedBatches())) {
+    ElMessage.warning('已有批量任务在进行中，请先在右下角的作业条上结束它')
+    return
+  }
   collectProgress.value = `发送中 0 / ${ids.length}`
   const result = await sendInBatches(ids, (batch) =>
     sourceApi.sendSnatchWithParam({ ids: batch, param: {}, all: 0, include: [], skip }),
-    { onBatch: (done, all) => { collectProgress.value = `发送中 ${done} / ${all}` } },
+    {
+      signal: job.signal,
+      onBatch: (done, all) => {
+        collectProgress.value = `发送中 ${done} / ${all}`
+        job.progress(done, all)
+      },
+    },
   )
+  job.finish(result)
   failedBatches.value = result.failed
   launchOpen.value = false
+  if (result.skipped.length) {
+    // 中止：说清哪些发出去了、哪些没发。**不写「已终止」**——发出去的收不回来
+    ElMessage.warning(`已停止提交后续批次：已发 ${result.sent} 个，${result.skipped.length} 个未提交。已提交的不会撤销。`)
+    return
+  }
   if (result.failed.length) {
     const failedCount = result.failed.reduce((n, item) => n + item.ids.length, 0)
     ElMessage.warning(`已发 ${result.sent} 个，失败 ${failedCount} 个。任务已下发的无法撤回，可重试失败批次。`)

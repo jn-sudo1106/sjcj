@@ -60,6 +60,52 @@ describe('chunkIds / sendInBatches', () => {
     expect(result.failed).toEqual([{ ids: ['2', '3'], error: '限流' }])
   })
 
+  // Y4-1：signal 三态。**能拦住的只有"还没提交的批次"**——已提交的不回滚，
+  // 服务端一侧没有 stop/cancel 端点（服务端级停止是 H3，未答复）。
+  it('中止：剩余批次不发，未提交的 ID 单独报出来', async () => {
+    const signal = { paused: false, aborted: false }
+    const send = vi.fn(async (ids: string[]) => {
+      if (ids[0] === '2') signal.aborted = true // 第 2 批发完就中止
+    })
+    const result = await sendInBatches(['0', '1', '2', '3', '4', '5'], send, { batchSize: 2, signal, pollMs: 0 })
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(result.sent).toBe(4)
+    expect(result.skipped).toEqual(['4', '5'])
+  })
+
+  it('暂停：卡在下一批之前，恢复后接着发完', async () => {
+    const signal = { paused: false, aborted: false }
+    const send = vi.fn(async (ids: string[]) => {
+      if (ids[0] === '0') signal.paused = true
+    })
+    const running = sendInBatches(['0', '1', '2', '3'], send, { batchSize: 2, signal, pollMs: 0 })
+    // 让暂停的等待循环转几圈，确认它**没有**偷偷把第 2 批发出去
+    for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0))
+    expect(send).toHaveBeenCalledTimes(1)
+
+    signal.paused = false
+    const result = await running
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(result.sent).toBe(4)
+    expect(result.skipped).toEqual([])
+  })
+
+  // 暂停中点「结束」必须停得下来，否则循环永远卡在等待里
+  it('暂停中被中止能退出，不会卡死在等待里', async () => {
+    const signal = { paused: true, aborted: false }
+    const running = sendInBatches(['0', '1'], vi.fn(), { batchSize: 1, signal, pollMs: 0 })
+    signal.aborted = true
+    signal.paused = false
+    const result = await running
+    expect(result.sent).toBe(0)
+    expect(result.skipped).toEqual(['0', '1'])
+  })
+
+  it('不传 signal 时行为不变，skipped 恒为空', async () => {
+    const result = await sendInBatches(['0', '1', '2'], vi.fn(), { batchSize: 2 })
+    expect(result.skipped).toEqual([])
+  })
+
   it('发出去的 send 由调用方负责，本函数不碰 all 字段——调用方必须恒传 0', async () => {
     const payloads: Array<{ ids: string[]; all: 0 | 1 }> = []
     await sendInBatches(['a', 'b'], async (ids) => {

@@ -124,9 +124,30 @@ export async function collectAllUnderQuery(
 
 export type FailedBatch = { ids: string[]; error: string }
 
+/**
+ * 批量提交的暂停/中止信号（Y4-1）。
+ *
+ * ⚠️ **能力边界**：这只拦得住"还没提交的批次"。循环在前端，我们能不发下一批；
+ * 已经提交出去的任务**不回滚、不撤销**——服务端一侧没有任何 stop/cancel 端点
+ * （2026-09-05 查 `endpoints.ts` 确认），服务端级停止是 H3，未答复。
+ * 所以调用方的文案必须是「已停止提交后续批次」，不能写「已终止」。
+ *
+ * 用可变对象而不是回调：`sendInBatches` 在每批**之前**读一次，调用方（作业条）
+ * 随时改字段即可，不必把 store 传进来。
+ */
+export type BatchSignal = {
+  /** 暂停：卡在当前批之前等待，不丢弃剩余批次 */
+  paused: boolean
+  /** 中止：剩余批次直接不发，函数返回 */
+  aborted: boolean
+}
+
 export type BatchLaunchResult = {
   sent: number
   failed: FailedBatch[]
+  /** 因中止而**从未提交**的 ID（Y4-6 结果条要把它和 failed 分开报：
+   *  失败是发了没成，未提交是压根没发，两者的补救动作不一样） */
+  skipped: string[]
 }
 
 /**
@@ -138,12 +159,28 @@ export type BatchLaunchResult = {
 export async function sendInBatches(
   ids: string[],
   send: (ids: string[]) => Promise<unknown>,
-  opts?: { batchSize?: number; onBatch?: (done: number, total: number) => void },
+  opts?: {
+    batchSize?: number
+    onBatch?: (done: number, total: number) => void
+    /** Y4-1：每批**之前**检查。aborted 立刻返回，paused 则等到恢复或中止 */
+    signal?: BatchSignal
+    /** 暂停时的轮询间隔；测试里传 0 免得空转等待 */
+    pollMs?: number
+  },
 ): Promise<BatchLaunchResult> {
   const batches = chunkIds(ids, opts?.batchSize ?? LAUNCH_BATCH_SIZE)
   const failed: FailedBatch[] = []
+  const signal = opts?.signal
   let sent = 0
+  let index = 0
   for (const batch of batches) {
+    // 检查点在**发之前**：暂停只推迟尚未发出的批次，不打断正在飞的那一个
+    // （请求已经出去了，等它回来才知道成没成，中途丢弃只会让统计对不上）。
+    while (signal?.paused && !signal.aborted) {
+      await new Promise((resolve) => setTimeout(resolve, opts?.pollMs ?? 120))
+    }
+    if (signal?.aborted) break
+    index += 1
     try {
       await send(batch)
       sent += batch.length
@@ -152,7 +189,7 @@ export async function sendInBatches(
     }
     opts?.onBatch?.(sent + failed.reduce((n, item) => n + item.ids.length, 0), ids.length)
   }
-  return { sent, failed }
+  return { sent, failed, skipped: batches.slice(index).flat() }
 }
 
 export const SOURCE_EXPORT_HEADER = [

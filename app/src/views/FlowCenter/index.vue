@@ -13,6 +13,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { flowCenterApi, sourceApi, type FlowRecord } from '@/api'
 import { Delete, Edit, Link, Star, StarFilled } from '@element-plus/icons-vue'
 import { useUiStore } from '@/stores/ui'
+import { useLaunchJobStore } from '@/stores/launchJob'
 import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
 import GlobalSourceSelect from '@/views/FlowCanvas/result/components/GlobalSourceSelect.vue'
 import FlowDetailDrawer from './FlowDetailDrawer.vue'
@@ -64,6 +65,7 @@ const applyProgress = ref('')
 /** changeFlowBatch 单次上限 5000（见 endpoints.ts）。按 500 一批串行，留足余量也便于展示进度。 */
 const BIND_BATCH_SIZE = 500
 const applying = ref(false)
+const job = useLaunchJobStore()
 
 // 服务端分页：cs_flow 生产上已有 735 条（后端把存量配置整批灌进来了），一次拉全量不现实。
 // 检索也在服务端（flowPaged.keywords），所以翻页和搜索是同一条路径，只是 page/keywords 不同。
@@ -336,10 +338,26 @@ async function confirmApply() {
       '关联流程到源',
       { type: 'warning', confirmButtonText: '确认关联', cancelButtonText: '取消' },
     )
+    // 多批时接作业条（Y8-14 / Y4-5），可中途暂停或停止提交后续批次。
+    // 单批没什么可暂停的，不去占用全局作业位。
+    const tracked = batches > 1
+    if (tracked && !job.start(`关联 ${ids.length} 个源到「${target.name}」`, ids.length)) {
+      ElMessage.warning('已有批量任务在进行中，请先在右下角的作业条上结束它')
+      return
+    }
     // 分批串行。**任一批失败就停下**并把已成功的条数如实报出来——继续发下去只会让
-    // "到底关联成功了几个"更难说清。
+    // "到底关联成功了几个"更难说清。（这点与 sendInBatches 的"失败继续"不同，
+    // 关联是改归属，半对半错比少做更难收拾。）
     let done = 0
+    let stopped = false
     for (let i = 0; i < ids.length; i += BIND_BATCH_SIZE) {
+      if (tracked) {
+        // 检查点在**发之前**：暂停只推迟还没发的批次，不打断正在飞的那一个
+        while (job.signal.paused && !job.signal.aborted) {
+          await new Promise((resolve) => setTimeout(resolve, 120))
+        }
+        if (job.signal.aborted) { stopped = true; break }
+      }
       const chunk = ids.slice(i, i + BIND_BATCH_SIZE)
       if (batches > 1) applyProgress.value = `已关联 ${done} / ${ids.length}`
       const ack = await flowCenterApi.bindSources(chunk, target.id)
@@ -350,13 +368,24 @@ async function confirmApply() {
         )
       }
       done += chunk.length
+      if (tracked) job.progress(done, ids.length)
+    }
+    if (tracked) job.finish({ sent: done, failed: [], skipped: ids.slice(done) })
+    applyProgress.value = ''
+    if (stopped) {
+      // 已关联的不回滚——bindSources 没有反向端点，硬回滚只会把归属改得更乱
+      ElMessage.warning(`已停止提交后续批次：${done} 个源已关联到「${target.name}」，其余 ${ids.length - done} 个未提交。已关联的不会撤销。`)
+      void load()
+      return
     }
     applyFlow.value = null
     applySourceIds.value = []
-    applyProgress.value = ''
     ElMessage.success(`已把 ${done} 个源关联到流程「${target.name}」`)
     void load()
   } catch (error) {
+    // 无论是用户取消还是提交失败，都得把作业条收掉——挂着一条永远"进行中"的
+    // 作业会把全局作业位一直占住，下次点批量就被"已有任务在进行中"挡回去。
+    if (job.busy) job.finish({ sent: 0, failed: [], skipped: [] }, 0)
     if (error === 'cancel' || error === 'close') return
     ElMessage.error(`关联失败：${(error as Error)?.message ?? String(error)}`)
   } finally {
