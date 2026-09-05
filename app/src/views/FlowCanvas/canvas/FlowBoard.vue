@@ -20,6 +20,7 @@ import {
   isParallel,
   nodeClassFor,
   nodeOutputTable,
+  nodeTypeLabel,
   collectorCapabilityOf,
   type NodeConfig,
 } from './flowModel'
@@ -606,8 +607,11 @@ watch(
 
           <div class="rc-node-top">
             <div class="rc-node-icon">{{ iconFor(n.cfg) }}</div>
-            <div>
+            <div class="rc-node-headtext">
               <div class="rc-node-title">{{ n.cfg.title }}</div>
+              <!-- 0904 I12（Z6-1）：节点类型写出来。原来只有左边那个 `90`/`R` 的数字徽标，
+                   没在这套系统里泡过的人认不出是什么（走查「每个节点你最好定一个类型吧」）。 -->
+              <div class="rc-node-type" data-testid="node-type-label">{{ nodeTypeLabel(n.cfg) }}</div>
             </div>
           </div>
 
@@ -734,7 +738,9 @@ watch(
 
 .rc-node-top { display: flex; align-items: center; gap: 8px; }
 .rc-node-icon { width: 30px; height: 30px; border-radius: 7px; background: var(--rc-primary-bg); color: var(--rc-primary-ink); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; flex: none; }
+.rc-node-headtext { min-width: 0; }
 .rc-node-title { font-size: 13px; font-weight: 700; color: var(--rc-text); }
+.rc-node-type { margin-top: 1px; font-size: 10px; color: var(--rc-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-node-plan { position: absolute; top: 8px; right: 8px; font-size: 9px; color: var(--rc-faint); border: 1px solid var(--rc-border); background: #f8fafc; border-radius: 5px; padding: 1px 5px; }
 .rc-run-badge { position: absolute; top: 8px; right: 8px; font-size: 9px; font-weight: 700; border-radius: 5px; padding: 1px 6px; }
 .rc-run-badge.L { background: var(--rc-primary-bg); color: var(--rc-primary); }

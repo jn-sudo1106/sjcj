@@ -157,6 +157,38 @@ export function cloneConfig(cfg: NodeConfig): NodeConfig {
 }
 
 // ---------- 节点 UI 辅助（与 buildHorizontalLayout 一起用） ----------
+/**
+ * 节点类型的**展示口径**（0904 I12 / Z6-1）。
+ *
+ * 走查原话「每个节点你最好定一个类型吧」——卡片上原来只有 `iconFor` 那个两三位数字徽标
+ * （`90` / `R` / `NODE`），没在这套系统里泡过的人根本认不出是什么。
+ *
+ * 判定优先级，从可靠到兜底：
+ *   1. **决策 / 分头**：结构节点，跟"抓取类型"不是一个维度；
+ *   2. **数据监控 / 规则处理**：靠 `template === 'monitor'`、`ruleCfg` 这类结构信号
+ *      （不是标题正则——"数据监控"标题里没有"规则"二字，正则会漏）；
+ *   3. **采集节点**：取 `snatchType` 的文案部分，即 `[90] - 网页抓取` → `网页抓取`。
+ *      这就是旧平台「抓取类型」，也是落库的 `configType`（2026-08-28 确认）。
+ *
+ * ⚠️ **这是显示集合，不是落库集合。** 「规则处理」「数据监控」**不在** `SNATCH_TYPES` 里，
+ * 也不该加进去——那份是 `configType` 的枚举，塞进去会顺着 `configTypeFrom()` 把规则节点的
+ * `configType` 写脏（实测规则配置 1400998 的 `configType` 本来就是 `null`）。
+ * 走查里产品说的是「那就加上呗……把它数据加加数据就行了」，方向与此相反，
+ * **已升成 0904 §9-Q8 待确认**；在拿到答复前按"只加显示、不加落库"执行。
+ */
+export function nodeTypeLabel(cfg: NodeConfig): string {
+  if (cfg.kind === 'decision') return '决策'
+  if (cfg.kind === 'parallel') return '分头'
+  if (cfg.template === 'monitor') return '数据监控'
+  if (cfg.ruleCfg) return '规则处理'
+  const snatch = cfg.collectCfg?.snatchType || ''
+  // `[90] - 网页抓取` → `网页抓取`；取不到就退回 sub 里括号后的部分
+  const named = snatch.split('-').slice(1).join('-').trim()
+  if (named) return named
+  const fromSub = (cfg.sub || '').replace(/^\[[^\]]*\]\s*/, '').split('·')[0].trim()
+  return fromSub || '数据处理'
+}
+
 export function iconFor(cfg: NodeConfig): string {
   const sub = cfg.sub || ''
   if (sub.indexOf('[90]') >= 0) return '90'
