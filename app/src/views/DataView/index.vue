@@ -830,7 +830,10 @@ onMounted(async () => {
             <label>发送数量(1-1W条)<el-input v-model="ySize" style="width: 100px" /></label>
             <label>状态过滤<el-input v-model="yState1" placeholder="表中state列" style="width: 110px" /></label>
             <label>后续标识<el-input v-model="yNextFlag" placeholder="-1未抓后续，1已抓" style="width: 130px" /></label>
-            <label>自定SQL条件<SqlConditionEditor v-model="yCond" v-slot="{ value, update }" :table-id="tableId" style="width: 220px"><el-input :model-value="value" @update:model-value="update" placeholder="如 K1 IS NULL" /></SqlConditionEditor></label>
+            <!-- 0904 I04（Z4）：SQL 条件框从 220px 加宽。走查原话「太小了……人家已经选条件了，
+                 他就不会看这个……你最好放过来放上去能看到全部就行了」。
+                 右端还叠了两个图标按钮（最近条件 / 放大），220px 下几乎看不到条件正文。 -->
+            <label>自定SQL条件<SqlConditionEditor v-model="yCond" v-slot="{ value, update }" :table-id="tableId" style="width: 360px"><el-input :model-value="value" @update:model-value="update" placeholder="如 K1 IS NULL" /></SqlConditionEditor></label>
             <button class="rc-btn danger" type="button" @click="onSendYellowBatch">批量发后续</button>
           </div>
           <!-- 参考API（方案 §1.4-2）：展示 nextStep2 拼接 URL 供运营核对 -->
