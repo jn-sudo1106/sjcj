@@ -834,6 +834,10 @@ function templateKeyForStep(step: Step, index: number): string {
   if (/去重/.test(name) && NODE_CONFIGS.dedupe) return 'dedupe'
   if (/校验/.test(name) && NODE_CONFIGS.check) return 'check'
   if (/详情|正文/.test(name)) return 'web-detail'
+  // 列表类 / 非列表类按 **isMulti** 判（2026-09-05 定案，见下方 multiMode 那段注释）：
+  // 后端自己的 `list`/`detail` 就是从它派生的，用它才跟旧平台一致。
+  // 只有拿不到时（configDetail 还没回填）才退回"第一个就是列表页"这种按位置猜。
+  if (step.multiMode !== undefined) return step.multiMode === 1 ? 'web-list' : 'web-detail'
   return index === 0 ? 'web-list' : 'web-detail'
 }
 
@@ -912,10 +916,23 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
       ? { mode: 'expr', logic: 'AND', items: [], expr: step.condition }
       : undefined
     applyStepTaskFields(cfg, step)
-    // 旧 isMulti 三态原值：只迁不展示（见 Step.multiMode 注释）。不要拿它去改 isDetail/webKind——
-    // 网页类型已改为「节点类别」，走新平台自己的节点类型分类；旧平台与之对应的是抓取类型
-    // （configType，如 90 网页抓取），不是 isMulti。这里只是把原值带在节点上不丢，供后续写回用。
-    if (step.multiMode !== undefined) cfg.collectCfg.multiMode = step.multiMode
+    // 旧 isMulti 三态：**它就是「列表页 / 详情页」的判据**（2026-09-05 实测定案）。
+    //
+    // 这里原来写着「不要拿它去改 isDetail/webKind——网页类型已改为『节点类别』，旧平台与之
+    // 对应的是抓取类型 configType，不是 isMulti」。**前半句是错的**：抽 10 条配置逐个对照，
+    // 后端返回的 `list`/`detail` 完全是从 isMulti 派生出来的——
+    //   isMulti=1 → list=true,  detail=false   （列表类）
+    //   isMulti=2 → list=false, detail=false   （非列表类，挂在父记录下的子步骤）
+    // 10/10 吻合，没有一条例外。不用它就只能按"是不是第一个节点"猜，而那个猜法对
+    // 1400979 这类 isMulti=2 的起点是错的（被画成「列表页」，实际非列表类）。
+    //
+    // 后半句（configType 是抓取类型）没问题，但那是**另一个维度**：configType 决定
+    // 网页抓取/Python抓取/OCR抓取，isMulti 决定列表/非列表。两者不冲突，各管各的。
+    if (step.multiMode !== undefined) {
+      cfg.collectCfg.multiMode = step.multiMode
+      cfg.collectCfg.isDetail = step.multiMode !== 1
+      cfg.collectCfg.webKind = step.multiMode === 1 ? 'list' : 'detail'
+    }
     // 配置正文里前端要展示 + 保存时要回写的字段（随 topic 一起从 configDetail 回填）。
     // 不写进节点的话，面板显示的是节点模板默认值，而保存会拿默认值覆盖后端真值。
     if (step.bizType !== undefined) cfg.collectCfg.bizType = step.bizType

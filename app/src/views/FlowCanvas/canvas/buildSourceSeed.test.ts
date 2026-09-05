@@ -152,3 +152,31 @@ describe('流程视图拓扑与旧平台对齐（真实流程 1400760）', () =>
     expect(numeric(seed.main).length + seed.branchGroups.reduce((n, g) => n + g.branches.reduce((m, b) => m + b.chain.length, 0), 0)).toBe(8)
   })
 })
+
+// 2026-09-05：「列表页 / 详情页」判据定案 —— 是旧 isMulti，不是"是不是第一个节点"。
+// 后端自己的 list/detail 就是从 isMulti 派生的（抽 10 条配置逐个对照，10/10 吻合）：
+//   isMulti=1 → list=true, detail=false（列表类）
+//   isMulti=2 → list=false, detail=false（非列表类）
+// 之前按位置猜，对 isMulti=2 的起点是错的：流程 1400979 的根被画成「列表页」，实际非列表类。
+describe('列表/详情按 isMulti 判（不是按位置猜）', () => {
+  const SRC = { sourceId: 's1', name: 'x', url: 'http://x.test/', configId: 'c1', mainTable: '900', owner: 'a', state: 'C' } as Source
+  const step = (stepId: string, name: string, multiMode?: number): Step =>
+    ({ stepId, sourceId: '-1', name, dependsOn: ['0'], inputTable: '900', outputTable: '900', enabled: true, multiMode }) as Step
+
+  it('isMulti=2 的第一个节点是非列表类，不能因为"排第一"就当成列表页', () => {
+    const seed = buildSourceSeed(SRC, [step('41383', '纽约市政府市长办公室新闻处_copy', 2)])
+    expect(seed.configs['41383'].collectCfg?.webKind).toBe('detail')
+    expect(seed.configs['41383'].collectCfg?.isDetail).toBe(true)
+  })
+
+  it('isMulti=1 的节点是列表类，哪怕它不排第一', () => {
+    const seed = buildSourceSeed(SRC, [step('40215', '起点', 2), step('40216', '列表解析', 1)])
+    expect(seed.configs['40216'].collectCfg?.webKind).toBe('list')
+    expect(seed.configs['40216'].collectCfg?.isDetail).toBe(false)
+  })
+
+  it('拿不到 isMulti 时（configDetail 还没回填）才退回按位置猜', () => {
+    const seed = buildSourceSeed(SRC, [step('40217', '某节点', undefined)])
+    expect(seed.configs['40217'].collectCfg?.webKind).toBe('list')
+  })
+})
