@@ -185,14 +185,18 @@ describe('流程中心 · 自动刷新', () => {
     expect(labels).toEqual(['查询', '清空'])
   })
 
+  // 0904 I17（Z7-5）：新建从 prompt 单输入框换成小表单（名称/分类/标签/描述），
+  // 所以不再 mock ElMessageBox.prompt，改成填表单再点提交。
   it('新建流程后自动重查列表', async () => {
     const created = { ...FLOWS[1], id: 'flow-new', name: '新流程' } as FlowRecord
-    vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: '新流程', action: 'confirm' } as never)
     vi.spyOn(flowCenterApi, 'save').mockResolvedValue(created)
     const w = await mountCenter()
     const paged = vi.mocked(flowCenterApi.paged)
     paged.mockClear()
     useUiStore().fireAction('新建流程')
+    await flushPromises()
+    await w.get('[data-testid="create-flow-name"]').setValue('新流程')
+    await w.get('[data-testid="create-flow-submit"]').trigger('click')
     await flushPromises()
     expect(paged).toHaveBeenCalled()
     // 重查回来的列表里没有这条新流程也不能把工作区关掉
@@ -516,6 +520,53 @@ describe('流程中心 · 关联到源（Y8-B 多选与分批）', () => {
     await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
     await flushPromises()
     expect(bind).not.toHaveBeenCalled()
+  })
+})
+
+// 0904 I17（Z7-5）：新建流程的小表单。
+describe('流程中心 · 新建流程表单（Z7-5）', () => {
+  it('分类/标签/描述都提交上去，标签统一成逗号串（中英文逗号、空格都收，去重去空）', async () => {
+    const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue(FLOWS[0])
+    const w = await mountCenter()
+    useUiStore().fireAction('新建流程')
+    await flushPromises()
+    await w.get('[data-testid="create-flow-name"]').setValue('带分类的流程')
+    await w.get('[data-testid="create-flow-tags"]').setValue('新闻， 财经  新闻')
+    await w.get('[data-testid="create-flow-desc"]').setValue('说明文字')
+    await w.get('[data-testid="create-flow-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({
+      name: '带分类的流程',
+      flowTags: '新闻,财经',
+      description: '说明文字',
+    }))
+  })
+
+  it('没填的项**不进 payload**：saveFlow 是全量保存，传空串是"清空"而不是"不管"', async () => {
+    const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue(FLOWS[0])
+    const w = await mountCenter()
+    useUiStore().fireAction('新建流程')
+    await flushPromises()
+    await w.get('[data-testid="create-flow-name"]').setValue('只有名字')
+    await w.get('[data-testid="create-flow-submit"]').trigger('click')
+    await flushPromises()
+
+    const payload = save.mock.calls[0][0] as unknown as Record<string, unknown>
+    expect('categoryId' in payload).toBe(false)
+    expect('flowTags' in payload).toBe(false)
+    expect('description' in payload).toBe(false)
+  })
+
+  it('名称为空不发请求', async () => {
+    const save = vi.spyOn(flowCenterApi, 'save')
+    const w = await mountCenter()
+    useUiStore().fireAction('新建流程')
+    await flushPromises()
+    await w.get('[data-testid="create-flow-name"]').setValue('   ')
+    await w.get('[data-testid="create-flow-submit"]').trigger('click')
+    await flushPromises()
+    expect(save).not.toHaveBeenCalled()
   })
 })
 

@@ -8,7 +8,7 @@
 // （`views/FlowTemplate/index.vue` 那个未被路由引用的死页面不会复活，见其文件头。）
 //
 // 这行注释此前写的是「配置中心/流程模板不再作为用户概念」，0903 会上推翻了后半句。
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { flowCenterApi, sourceApi, type FlowRecord } from '@/api'
 import { Delete, Edit, Link, Star, StarFilled } from '@element-plus/icons-vue'
@@ -118,7 +118,7 @@ function resetQuery() {
 onMounted(() => {
   void load()
   void loadCategories()
-  ui.registerAction('新建流程', () => { void createFlow() })
+  ui.registerAction('新建流程', () => { openCreateFlow() })
   ui.registerAction('从模板新建', () => { void createFromTemplate() })
 })
 onUnmounted(() => ui.clearActions())
@@ -229,18 +229,52 @@ async function createFromTemplate() {
   }
 }
 
+/**
+ * 新建流程（0904 I17 / Z7-5）：从 prompt 单输入框升级成小表单——名称 / 分类 / 标签 / 描述。
+ *
+ * **不做业务大类那一项**：`bizType` 在生产里一个值都没有（2026-09-05 抽 200 条流程实测），
+ * 取值集合无从"照抄后端"（0904 Q3 未答复）。枚举不自造是 0824-11 §1.2d 的规矩，
+ * 拿到集合前只在详情里只读展示，不提供选择。
+ *
+ * **描述不自动带网站**：存量 flowDesc 是后端从源/网站灌的，所以列表里能看到"描述都是网站"。
+ * 那些历史值如实展示不清洗，但本平台新建的不再继续产生这种驴唇不对马嘴的描述（I16-4）。
+ */
+const createForm = reactive({ open: false, name: '未命名流程', categoryId: '', tags: '', description: '', saving: false })
+function openCreateFlow() {
+  createForm.open = true
+  createForm.name = '未命名流程'
+  createForm.categoryId = ''
+  createForm.tags = ''
+  createForm.description = ''
+}
 async function createFlow() {
+  const name = createForm.name.trim()
+  if (!name) {
+    ElMessage.warning('请输入流程名称')
+    return
+  }
+  createForm.saving = true
   try {
-    const { value } = await ElMessageBox.prompt('新流程会从空白画布开始，可在工作区直接添加节点并修改节点配置。', '新建流程', {
-      inputValue: '未命名流程', inputPattern: /\S+/, inputErrorMessage: '请输入流程名称',
-      confirmButtonText: '新建', cancelButtonText: '取消',
+    const created = await flowCenterApi.save({
+      name,
+      definition: makeBlankTemplateDefinition(),
+      // 只传填了的：saveFlow 是全量保存，传空串是"清空"而不是"不管"
+      ...(createForm.categoryId ? { categoryId: createForm.categoryId } : {}),
+      ...(createForm.tags.trim() ? { flowTags: normalizeTags(createForm.tags) } : {}),
+      ...(createForm.description.trim() ? { description: createForm.description.trim() } : {}),
     })
-    const created = await flowCenterApi.save({ name: value.trim(), definition: makeBlankTemplateDefinition() })
+    createForm.open = false
     replaceFlow(created)
     ElMessage.success('流程已新建')
-  } catch {
-    // 用户取消不提示。
+  } catch (e) {
+    ElMessage.error(`新建流程失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    createForm.saving = false
   }
+}
+/** 标签输入统一成逗号串：中英文逗号、空格分隔都收，去重去空 */
+function normalizeTags(raw: string): string {
+  return [...new Set(raw.split(/[,，\s]+/).map((x) => x.trim()).filter(Boolean))].join(',')
 }
 
 /**
@@ -517,11 +551,45 @@ async function confirmApply() {
     <FlowSourcesDialog :flow="sourcesFlow" @close="sourcesFlow = null" />
 
     <FlowDetailDrawer
+      :categories="categories"
       :flow="activeFlow"
       @close="closeFlow"
       @saved="replaceFlow"
       @apply="openApply"
     />
+
+    <!-- 新建流程小表单（Z7-5）：名称必填，分类/标签/描述可选。
+         业务大类不给选——生产里 bizType 一个值都没有，枚举无从照抄（0904 Q3）。 -->
+    <el-dialog v-model="createForm.open" title="新建流程" width="480px" destroy-on-close>
+      <div class="fc-form">
+        <label class="fc-form-row">
+          <span>流程名称 <em>*</em></span>
+          <input v-model="createForm.name" class="fc-input" data-testid="create-flow-name" placeholder="必填" />
+        </label>
+        <label class="fc-form-row">
+          <span>分类</span>
+          <select v-model="createForm.categoryId" class="fc-input" data-testid="create-flow-category">
+            <option value="">不设置</option>
+            <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+          </select>
+        </label>
+        <label class="fc-form-row">
+          <span>标签</span>
+          <input v-model="createForm.tags" class="fc-input" data-testid="create-flow-tags" placeholder="多个用逗号或空格分隔" />
+        </label>
+        <label class="fc-form-row">
+          <span>描述</span>
+          <input v-model="createForm.description" class="fc-input" data-testid="create-flow-desc" placeholder="选填" />
+        </label>
+        <p class="fc-form-hint">新流程从空白画布开始，可在工作区直接添加节点并修改节点配置。</p>
+      </div>
+      <template #footer>
+        <button class="fc-dialog-btn" type="button" @click="createForm.open = false">取消</button>
+        <button class="fc-dialog-btn primary" type="button" :disabled="createForm.saving" data-testid="create-flow-submit" @click="createFlow">
+          {{ createForm.saving ? '新建中…' : '新建' }}
+        </button>
+      </template>
+    </el-dialog>
 
     <el-dialog
       :model-value="!!applyFlow"
@@ -546,6 +614,12 @@ async function confirmApply() {
 <style scoped>
 .fc-badge { margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 11px; line-height: 16px; background: var(--rc-primary-soft, #eaf2ff); color: var(--rc-primary, #2f6fed); }
 .fc-badge.ghost { background: transparent; color: var(--rc-faint, #98a2b3); border: 1px solid var(--rc-border, #e4e7ec); }
+.fc-form { display: flex; flex-direction: column; gap: 10px; }
+.fc-form-row { display: flex; align-items: center; gap: 10px; }
+.fc-form-row > span { flex: none; width: 68px; color: var(--rc-text-2); font-size: 13px; }
+.fc-form-row > span em { color: var(--rc-error, #d92d20); font-style: normal; }
+.fc-form-row .fc-input { flex: 1; min-width: 0; }
+.fc-form-hint { margin: 0; color: var(--rc-faint); font-size: 12px; }
 .fc-ellipsis { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fc-actions { display: flex; align-items: center; gap: 2px; }
 .fc-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--rc-muted, #64748b); cursor: pointer; }

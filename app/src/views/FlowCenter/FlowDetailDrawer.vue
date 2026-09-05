@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { configApi, flowCenterApi, type FlowDefinition, type FlowRecord, type Source } from '@/api'
 import { useFlowStore } from '@/stores/flow'
@@ -7,7 +7,10 @@ import { rootStepForSource } from '@/views/FlowCanvas/canvas/flowModel'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
 import NodeInspector from '@/views/FlowCanvas/inspector/NodeInspector.vue'
 
-const props = defineProps<{ flow: FlowRecord | null }>()
+// categories 由列表页透传（那边已经拉过一次 sourceCategories，抽屉不再重复请求）
+const props = withDefaults(defineProps<{ flow: FlowRecord | null; categories?: { id: string; name: string }[] }>(), {
+  categories: () => [],
+})
 const emit = defineEmits<{
   close: []
   saved: [flow: FlowRecord]
@@ -81,6 +84,22 @@ function loadIntoWorkspace(flow: FlowRecord) {
  * **刻意在 loadFromSource 之后清掉源上下文**：画布一旦挂上 sourceCtx，节点编辑会走步骤自动
  * 保存（item/next/*）——这个 stub Source 连 sourceId 都是假的，更不能被当成真源写。
  */
+/**
+ * 抽屉里可编辑的流程属性（0904 I16/I17 · Z7-5）：分类 / 标签 / 描述。
+ * 与名称一样随 flow 变化重置；**业务大类只读展示**——生产里 bizType 一个值都没有，
+ * 枚举无从照抄（0904 Q3），不给选。
+ */
+const metaForm = reactive({ categoryId: '', tags: '', description: '' })
+watch(() => props.flow?.id, () => {
+  metaForm.categoryId = props.flow?.categoryId ?? ''
+  metaForm.tags = props.flow?.flowTags ?? ''
+  metaForm.description = props.flow?.description ?? ''
+}, { immediate: true })
+/** 标签统一成逗号串：中英文逗号、空格分隔都收，去重去空（与新建表单同一口径） */
+function normalizeTags(raw: string): string {
+  return [...new Set(raw.split(/[,，\s]+/).map((x) => x.trim()).filter(Boolean))].join(',')
+}
+
 const derivedFromConfig = ref(false)
 async function deriveFromFlowConfig(flow: FlowRecord): Promise<boolean> {
   const [config, steps] = await Promise.all([
@@ -179,6 +198,11 @@ async function persistFlow(showMessage = true, isTemplate?: boolean): Promise<Fl
       name: trimmed,
       definition: definitionFromCanvas(),
       ...(isTemplate === undefined ? {} : { isTemplate }),
+      // 这三项在抽屉里可编辑，保存时一并提交。空串是有意义的（= 清空），
+      // 所以这里**不做"空就不传"**——与新建表单不同，那边空表示"没填过"。
+      categoryId: metaForm.categoryId,
+      flowTags: normalizeTags(metaForm.tags),
+      description: metaForm.description.trim(),
     })
     name.value = saved.name
     canvas.markSaved()
@@ -236,6 +260,28 @@ async function applyToSource() {
       <button class="fd-close" type="button" title="关闭" @click="emit('close')">✕</button>
     </header>
 
+    <!-- 流程属性（0904 I16/I17 · Z7-5）：分类 / 标签 / 描述可改，随「保存流程」一起提交。
+         业务大类只读——生产里 bizType 一个值都没有，枚举无从照抄（0904 Q3）。 -->
+    <div class="fd-meta">
+      <label class="fd-meta-item">
+        <span>分类</span>
+        <select v-model="metaForm.categoryId" class="fd-meta-input" data-testid="flow-meta-category">
+          <option value="">不设置</option>
+          <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+        </select>
+      </label>
+      <label class="fd-meta-item">
+        <span>标签</span>
+        <input v-model="metaForm.tags" class="fd-meta-input" data-testid="flow-meta-tags" placeholder="多个用逗号或空格分隔" />
+      </label>
+      <label class="fd-meta-item grow">
+        <span>描述</span>
+        <input v-model="metaForm.description" class="fd-meta-input" data-testid="flow-meta-desc" placeholder="选填" />
+      </label>
+      <span v-if="flow.bizType" class="fd-meta-ro" title="业务大类（只读）">大类 {{ flow.bizType }}</span>
+      <span v-if="flow.createdAt" class="fd-meta-ro">创建于 {{ flow.createdAt }}</span>
+    </div>
+
     <div v-if="loadingDetail" class="fd-loading" data-testid="flow-workspace-loading">正在加载流程定义…</div>
     <!-- 还原态必须说明白：画布上这些节点还没写进流程本身，是照这个流程自己的配置和步骤画的。
          不写这行的话，用户会以为流程里已经存着这份定义。 -->
@@ -270,6 +316,12 @@ async function applyToSource() {
 </template>
 
 <style scoped>
+.fd-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--rc-border-soft); }
+.fd-meta-item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--rc-text-2); }
+.fd-meta-item.grow { flex: 1; min-width: 180px; }
+.fd-meta-input { height: 26px; padding: 0 8px; border: 1px solid var(--rc-border); border-radius: 5px; font-size: 12px; background: #fff; }
+.fd-meta-item.grow .fd-meta-input { flex: 1; min-width: 0; }
+.fd-meta-ro { color: var(--rc-faint); font-size: 12px; }
 .fd-badge { margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 11px; background: var(--rc-primary-soft, #eaf2ff); color: var(--rc-primary, #2f6fed); }
 .fd-badge.ghost { background: transparent; color: var(--rc-faint); border: 1px solid var(--rc-border-soft); }
 .fd-drawer { position: fixed; top: 56px; right: 0; bottom: 0; width: min(980px, calc(100vw - 256px)); max-width: 100vw; z-index: 40; display: flex; flex-direction: column; background: #fff; border-left: 1px solid var(--rc-border); box-shadow: -12px 0 32px -24px rgba(15, 23, 42, 0.48); }
