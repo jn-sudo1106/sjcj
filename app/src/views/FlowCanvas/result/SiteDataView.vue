@@ -46,7 +46,7 @@ import RowDetailFields from './RowDetailFields.vue'
 import { fieldsFromShowItems, fieldsFromTableMeta } from './rowDetailFields'
 import { readFieldPreset, readShowEmpty, visibleDetailProps, writeFieldPreset, writeShowEmpty, type RowFieldPreset } from './rowDetailPrefs'
 
-/** 单源视图「按此条件反查源 →」带过来的数据条件（0903 Y2-7），由 SiteDetailView 从路由解析 */
+/** 单源视图「按条件查源 →」带过来的数据条件（0903 Y2-7），由 SiteDetailView 从路由解析 */
 export interface SiteDataInitialCondition {
   tableId: string
   sql?: string
@@ -153,7 +153,7 @@ const selectedNodeId = ref('')
 // 条件改了但还没查：上一次的结果此刻已经不对应输入框里的条件了。不清理的话表现极具
 // 误导性——失败后把输入框清空重打，那条报错和空表格一直挂着不走，看着像"边打字边查还一直报错"
 // （2026-08-20 实测，ResultView.vue 同源问题一并修）。
-// 从单源数据视图「按此条件反查源 →」带过来的条件（0903 Y2-7）。
+// 从单源数据视图「按条件查源 →」带过来的条件（0903 Y2-7）。
 //
 // 走 prop 不走 useRoute()：本组件的测试全是裸 shallowMount，没装 router——
 // Y2-4 在 SourceOverviewView 上已经踩过一次同样的坑。路由解析留在持有 route 的 SiteDetailView。
@@ -644,7 +644,7 @@ function onCellFile(path: string) {
           :disabled="!canBackTrace"
           :title="canBackTrace ? '按当前数据条件反查命中的源' : '先填至少一个数据条件（SQL / 状态 / 数据 ID / 父 ID）'"
           @click="openBackTrace"
-        >按此条件反查源 →</button>
+        >{{ backTracing ? '反查中…' : '按条件查源 →' }}</button>
       </template>
     </div>
 

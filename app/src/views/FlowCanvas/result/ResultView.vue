@@ -721,7 +721,8 @@ function clearFilters() {
   runQuery()
 }
 /**
- * 「按此条件反查源 →」（0903 Y2-7）。
+ * 「按条件查源 →」（0903 Y2-7 → 0904 Q1 改名，原名「按此条件反查源」被嫌奇怪：
+ * 「这名字起的奇怪，这是不是按源统计？」「按源查源列表」）。
  *
  * 单源视图里**不直接反查**——这里只有一个源，反查它自己没有意义。用户在这个页面问的是
  * 「同样的脏数据，别的源上有没有」，那是全部源数据视图的事。所以这个按钮**带着条件跳过去**，
@@ -1041,7 +1042,7 @@ async function onTestScript() {
             :disabled="!canBackTrace"
             :title="canBackTrace ? '带着当前条件切到全部源数据视图，在那里反查哪些源命中' : '先填至少一个数据条件（SQL / 状态 / 数据 ID / 父 ID）'"
             @click="openBackTraceInSiteView"
-          >按此条件反查源 →</button>
+          >按条件查源 →</button>
         </span>
       </template>
     </div>

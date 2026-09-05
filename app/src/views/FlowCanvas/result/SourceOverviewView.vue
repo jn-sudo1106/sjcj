@@ -31,7 +31,7 @@ import {
   type SourceFilter,
 } from './useSourceLaunch'
 
-// `initialSourceIds`：从数据视图「按此条件反查源」跳过来时带的那批源 ID（0903 Y2-4）。
+// `initialSourceIds`：从数据视图「按条件查源」跳过来时带的那批源 ID（0903 Y2-4）。
 // 直接预填「源 ID」筛选框——那个框本来就收逗号分隔的多个 ID，不为反查另造一套筛选。
 //
 // 走 prop 而不是在这里 useRoute()：本组件此前完全不依赖 router，测试都是裸 shallowMount；

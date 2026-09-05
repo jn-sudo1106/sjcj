@@ -19,7 +19,7 @@ const props = defineProps<{ siteId: string }>()
 const route = useRoute()
 const router = useRouter()
 
-// 数据视图「按此条件反查源」跳过来时 URL 上带的那批源 ID（0903 Y2-4）。
+// 数据视图「按条件查源」跳过来时 URL 上带的那批源 ID（0903 Y2-4）。
 //
 // ⚠️ **必须 watch，不能只在 setup 里读一次**：从本页的数据视图点「在源视图中打开」时，
 // 路由只是 query 变了（view=data → view=source + sourceIds），本组件**没有重新挂载**，
@@ -28,7 +28,7 @@ const router = useRouter()
 //
 // 读到就从 URL 上抹掉：留着的话用户在源视图改了别的条件再刷新，又会被这批旧 ID 拉回去。
 /**
- * 单源数据视图「按此条件反查源 →」带过来的数据条件（0903 Y2-7）。
+ * 单源数据视图「按条件查源 →」带过来的数据条件（0903 Y2-7）。
  * 与 initialSourceIds 同一套做法：在这里解析路由、读完抹掉 URL，子组件只收 prop
  * （SiteDataView 的测试是裸挂载，没装 router）。
  */
