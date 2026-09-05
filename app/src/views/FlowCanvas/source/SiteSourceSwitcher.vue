@@ -2,8 +2,15 @@
 // 源侧栏：页面级左侧固定栏，流程、数据、文件和任务视图共用。
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { siteApi, sourceApi, type Site, type SourceCategory, type Source } from '@/api'
+import { flowCenterApi, siteApi, sourceApi, type Site, type SourceCategory, type Source } from '@/api'
 import SourceParamModal from './SourceParamModal.vue'
+
+/**
+ * 0903 Y8-9：只控制**新增的第三步**（复制完把新源关联到被复制源的流程）。
+ * 已经在跑的复制功能（copySource?flag=1 + changeSite）不受它影响——关掉开关，复制照样可用，
+ * 只是不自动关联流程。实测通过后可以删掉这个常量。
+ */
+const ENABLE_SOURCE_COPY_BIND_FLOW = true
 import { hasLoadParams } from './paramNormalize'
 import type { ParamGroupRef } from '@/utils/flow/urlParams'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
@@ -452,7 +459,37 @@ async function submitAdd() {
         return
       }
       addedId = copied.sourceId
-      ElMessage.success(`已复制源「${target.name}」及配置`)
+      // 第三步（0903 Y8-6）：把新源关联到**被复制源所属的流程**。
+      // 前两步走的是旧平台的 copySource?flag=1（「制作源+配置副本」）——它复制的是源和配置，
+      // 并不会把新源挂到流程上。而 0903 H01 之后配置是挂在流程上的、执行按 FLOW_ID 反查
+      // （H1 答复），所以不补这一步，新源就是一个没有流程的孤儿。
+      //
+      // **三步递进，任一步失败都不回滚前面的**（Y8-7）：源已经建出来了，回滚等于删源，
+      // 风险比留着一个待手工关联的源高得多。所以这里失败只提示、不抛错。
+      // 被复制源的 flowId：列表接口（site/sources、sourcePaged）**不保证**带这个字段，
+      // 但 sourceDetail 一定带（2026-09-04 实测 430016824 → flowId 1400935）。所以列表上
+      // 拿不到就回查一次详情，而不是据此判定"这个源没有流程"——那会让第三步静默跳过。
+      let templateFlowId = selectedTemplate.value.flowId
+      if (ENABLE_SOURCE_COPY_BIND_FLOW && !templateFlowId) {
+        templateFlowId = (await sourceApi.sourceDetail(selectedTemplate.value.sourceId).catch(() => null))?.flowId
+      }
+      if (!ENABLE_SOURCE_COPY_BIND_FLOW) {
+        ElMessage.success(`已复制源「${target.name}」及配置`)
+      } else if (!templateFlowId) {
+        // sourceDetail/sourcePaged 都已返回 flowId（2026-09-04 实测），缺失只可能是这个源
+        // 本来就没关联流程——那就没有可关联的目标，不是错误。
+        ElMessage.success(`已复制源「${target.name}」及配置（被复制源未关联流程，新源也未关联）`)
+      } else {
+        const bound = await flowCenterApi.bindSources([copied.sourceId], templateFlowId)
+        if (bound.ok) {
+          ElMessage.success(`已复制源「${target.name}」及配置，并关联到流程 #${templateFlowId}`)
+        } else {
+          ElMessage.warning(
+            `源已复制并归入本网站（#${copied.sourceId}），但**未能关联到流程 #${templateFlowId}**`
+            + `（${bound.message || '原因未知'}），可在流程中心手动关联`,
+          )
+        }
+      }
     } catch (error) {
       ElMessage.error(`复制源失败：${error instanceof Error ? error.message : String(error)}`)
       return
@@ -954,9 +991,9 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
         <input v-model="addDlg.name" class="ssw-add-input" placeholder="请输入源名称" />
         <label class="ssw-field-label">源 URL <span>（可选）</span></label>
         <input v-model="addDlg.url" class="ssw-add-input" placeholder="请输入源 URL" />
-        <label class="ssw-field-label">复制配置来源</label>
+        <label class="ssw-field-label">复制流程</label>
         <select v-model="addDlg.templateMode" class="ssw-add-input" data-testid="source-template-mode" @change="onTemplateModeChange">
-          <option v-if="defaultTemplate" value="default">默认：本网站第一个源（{{ defaultTemplate.name }}）</option>
+          <option v-if="defaultTemplate" value="default">默认：本网站第一个源的流程（{{ defaultTemplate.name }}）</option>
           <option value="search">搜索并选择全部源</option>
           <option value="blank">空白模板</option>
         </select>
@@ -988,7 +1025,11 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
           </div>
         </div>
         <div class="ssw-add-hint">
-          {{ selectedTemplate ? `将复制「${selectedTemplate.name}」的源及配置到当前网站（旧平台「制作源+配置副本」），不复制表数据与运行记录。` : '仅创建名称和 URL，流程从空白画布开始。' }}
+          <!-- 界面上不出现旧平台的按钮名（「制作源+配置副本」）：用户看的是这个平台。
+               实现上走的确实是旧平台那条 copySource?flag=1，记在 submitAdd 的注释里。 -->
+          {{ selectedTemplate
+            ? `将复制「${selectedTemplate.name}」的流程（含其配置）到当前网站，并把新源关联到该流程；不复制表数据与运行记录。`
+            : '仅创建名称和 URL，流程从空白画布开始。' }}
         </div>
       </template>
 
