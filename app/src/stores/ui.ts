@@ -51,6 +51,12 @@ export const useUiStore = defineStore('ui', () => {
     inspectorCollapsed.value = !inspectorCollapsed.value
     if (inspectorCollapsed.value) inspectorExpanded.value = false
   }
+  /** 复位成"两边都展开"。给独立工作区（如流程中心抽屉）开场时用——
+   *  那是另一块界面，不该继承画布页上次留下的收起态。 */
+  function resetInspectorLayout() {
+    inspectorExpanded.value = false
+    inspectorCollapsed.value = false
+  }
   /** 切视图时套用该视图的默认布局（数据视图收起配置、流程视图展开） */
   function applyViewLayoutDefault(view: string) {
     inspectorExpanded.value = false
@@ -69,7 +75,7 @@ export const useUiStore = defineStore('ui', () => {
   return {
     registerAction, fireAction, clearActions,
     inspectorWidth, inspectorExpanded, inspectorCollapsed, setInspectorWidth,
-    toggleInspectorExpanded, toggleInspectorCollapsed, applyViewLayoutDefault,
+    toggleInspectorExpanded, toggleInspectorCollapsed, applyViewLayoutDefault, resetInspectorLayout,
     assetView, setAssetView,
   }
 })

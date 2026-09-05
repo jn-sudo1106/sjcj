@@ -3,6 +3,7 @@ import { reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { configApi, flowCenterApi, type FlowDefinition, type FlowRecord, type Source } from '@/api'
 import { useFlowStore } from '@/stores/flow'
+import { useUiStore } from '@/stores/ui'
 import { rootStepForSource } from '@/views/FlowCanvas/canvas/flowModel'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
 import NodeInspector from '@/views/FlowCanvas/inspector/NodeInspector.vue'
@@ -18,6 +19,7 @@ const emit = defineEmits<{
 }>()
 
 const canvas = useFlowStore()
+const ui = useUiStore()
 const name = ref('')
 const saving = ref(false)
 
@@ -91,6 +93,8 @@ function loadIntoWorkspace(flow: FlowRecord) {
  */
 const metaForm = reactive({ categoryId: '', tags: '', description: '' })
 watch(() => props.flow?.id, () => {
+  // 抽屉是独立的一块工作区，不该继承画布页上次留下的收起/展开状态（两边共用同一对 ui 标志）
+  ui.resetInspectorLayout()
   metaForm.categoryId = props.flow?.categoryId ?? ''
   metaForm.tags = props.flow?.flowTags ?? ''
   metaForm.description = props.flow?.description ?? ''
@@ -288,11 +292,34 @@ async function applyToSource() {
     <div v-if="!loadingDetail && derivedFromConfig" class="fd-derived" data-testid="flow-derived-note">
       该流程尚未保存画布定义，以下节点按这个流程自己的配置（#{{ flow?.id }}）还原，点「保存流程」后才会写入流程。
     </div>
-    <div v-if="!loadingDetail" class="fd-workspace">
-      <section class="fd-canvas" aria-label="流程节点">
+    <!-- 配置区的「展开 / 收起」两个按钮在 NodeInspector 里，改的是 ui 上那对全局标志。
+         抽屉原来是死的两列栅格，点了没反应（0905 反馈「这里的展开收起未生效」）——
+         这里跟画布页 rc-flow-shell 用同一套口径：展开＝画布收成窄条，收起＝配置区收成窄条。 -->
+    <div
+      v-if="!loadingDetail"
+      class="fd-workspace"
+      :class="{ expanded: ui.inspectorExpanded, 'insp-collapsed': ui.inspectorCollapsed }"
+    >
+      <button
+        v-if="ui.inspectorExpanded"
+        type="button"
+        class="fd-strip"
+        data-testid="flow-drawer-canvas-collapsed"
+        title="点击恢复画布"
+        @click="ui.toggleInspectorExpanded()"
+      >» 画布已收起</button>
+      <section v-else class="fd-canvas" aria-label="流程节点">
         <FlowBoard embedded />
       </section>
-      <section class="fd-inspector" aria-label="节点设置">
+      <button
+        v-if="ui.inspectorCollapsed"
+        type="button"
+        class="fd-strip"
+        data-testid="flow-drawer-inspector-collapsed"
+        title="点击展开节点配置"
+        @click="ui.toggleInspectorCollapsed()"
+      >« 节点配置</button>
+      <section v-else class="fd-inspector" aria-label="节点设置">
         <NodeInspector hide-ai />
       </section>
     </div>
@@ -336,7 +363,11 @@ async function applyToSource() {
 .fd-derived { padding: 8px 16px; border-bottom: 1px solid #fde68a; background: #fffbeb; color: #92400e; font-size: 12px; line-height: 1.5; }
 .fd-loading { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--rc-faint); font-size: 12px; background: #f4f7fb; }
 .fd-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(340px, 42%) minmax(420px, 1fr); gap: 10px; padding: 10px; background: #f4f7fb; }
+.fd-workspace.expanded { grid-template-columns: 36px minmax(0, 1fr); }
+.fd-workspace.insp-collapsed { grid-template-columns: minmax(0, 1fr) 36px; }
 .fd-canvas, .fd-inspector { min-width: 0; min-height: 0; }
+.fd-strip { min-width: 0; padding: 0; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; writing-mode: vertical-rl; }
+.fd-strip:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); border-color: #93c5fd; }
 .fd-foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--rc-border-soft); }
 .fd-foot-note { flex: 1; color: var(--rc-faint); font-size: 11px; }
 .fd-primary, .fd-secondary { height: 32px; padding: 0 14px; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; }

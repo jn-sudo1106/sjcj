@@ -6,6 +6,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { ElMessage } from 'element-plus'
 import FlowDetailDrawer from './FlowDetailDrawer.vue'
 import { flowCenterApi, type FlowRecord } from '@/api'
+import { useUiStore } from '@/stores/ui'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -20,6 +21,8 @@ const FLOW = {
 
 function mountDrawer(flow: FlowRecord = FLOW) {
   setActivePinia(createPinia())
+  // 抽屉一挂上就拉详情；不挡住的话 loadingDetail 一直是 true，工作区根本不渲染
+  vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(flow)
   return mount(FlowDetailDrawer, {
     props: { flow, categories: [{ id: '9009289', name: '财经' }, { id: '9009290', name: '公告' }] },
     global: {
@@ -85,5 +88,57 @@ describe('流程详情抽屉 · 属性编辑（Y9）', () => {
   it('业务大类不提供选择', () => {
     const w = mountDrawer()
     expect(w.find('[data-testid="flow-meta-biztype"]').exists()).toBe(false)
+  })
+})
+
+// 0905 反馈「这里的展开收起未生效」：那两个按钮在 NodeInspector 里，改的是 ui 上的全局标志，
+// 但抽屉原来是死的两列栅格，标志变了布局纹丝不动。
+describe('流程详情抽屉 · 展开/收起配置区', () => {
+  it('收起配置区后配置区换成窄条，点窄条能再展开', async () => {
+    const w = mountDrawer()
+    await flushPromises()
+    const ui = useUiStore()
+    expect(w.find('[aria-label="节点设置"]').exists()).toBe(true)
+
+    ui.toggleInspectorCollapsed()
+    await flushPromises()
+    expect(w.find('[aria-label="节点设置"]').exists()).toBe(false)
+    expect(w.get('.fd-workspace').classes()).toContain('insp-collapsed')
+
+    await w.get('[data-testid="flow-drawer-inspector-collapsed"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[aria-label="节点设置"]').exists()).toBe(true)
+  })
+
+  it('展开配置区后画布换成窄条，点窄条能恢复画布', async () => {
+    const w = mountDrawer()
+    await flushPromises()
+    const ui = useUiStore()
+
+    ui.toggleInspectorExpanded()
+    await flushPromises()
+    expect(w.find('[aria-label="流程节点"]').exists()).toBe(false)
+    expect(w.get('.fd-workspace').classes()).toContain('expanded')
+
+    await w.get('[data-testid="flow-drawer-canvas-collapsed"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[aria-label="流程节点"]').exists()).toBe(true)
+  })
+
+  // 抽屉和画布页共用同一对 ui 标志：从数据视图（默认收起配置）过来时不能把收起态带进抽屉
+  it('打开抽屉复位布局，不继承画布页留下的收起态', async () => {
+    setActivePinia(createPinia())
+    const ui = useUiStore()
+    ui.applyViewLayoutDefault('data')
+    expect(ui.inspectorCollapsed).toBe(true)
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(FLOW)
+
+    const w = mount(FlowDetailDrawer, {
+      props: { flow: FLOW, categories: [] },
+      global: { directives: { loading: {} }, stubs: { FlowBoard: { template: '<div />' }, NodeInspector: { template: '<div />' } } },
+    })
+    await flushPromises()
+    expect(ui.inspectorCollapsed).toBe(false)
+    expect(w.find('[aria-label="节点设置"]').exists()).toBe(true)
   })
 })
