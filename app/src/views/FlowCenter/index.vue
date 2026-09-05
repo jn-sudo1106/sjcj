@@ -11,6 +11,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { flowCenterApi, sourceApi, type FlowRecord } from '@/api'
+import { Delete, Edit, Link, Star, StarFilled } from '@element-plus/icons-vue'
 import { useUiStore } from '@/stores/ui'
 import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
 import GlobalSourceSelect from '@/views/FlowCanvas/result/components/GlobalSourceSelect.vue'
@@ -387,7 +388,7 @@ async function confirmApply() {
             <th style="width: 110px">使用源数</th>
             <th style="width: 140px">创建时间</th>
             <th style="width: 140px">更新时间</th>
-            <th style="width: 230px">操作</th>
+            <th style="width: 130px">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -440,16 +441,37 @@ async function confirmApply() {
             <td class="fc-muted">{{ t.updatedAt || '—' }}</td>
             <td>
               <div class="fc-actions">
-                <!-- 0904 I16（Z7-1）：文字链改按钮。走查原话「你把这些字……设计成按钮，
-                     删除流程就写的，感觉上个世纪的有很多字在里面」。
-                     按 AGENTS.md 的控件强调口径：主操作轻实心、次要描边、危险只描边不填色，
-                     不搞大面积实心色块。 -->
-                <button class="rc-btn sm primary" type="button" @click.stop="openFlow(t)">编辑</button>
-                <button class="rc-btn sm" type="button" @click.stop="openApply(t)">关联到源</button>
-                <button class="rc-btn sm" type="button" data-testid="flow-toggle-template" @click.stop="toggleTemplate(t)">
-                  {{ t.isTemplate ? '取消模板' : '标记为模板' }}
+                <!-- 0904 I16（Z7-1）：**图标按钮**，不是带文字的按钮。
+                     走查原话「你把这些字……设计成按钮，感觉上个世纪的有很多字在里面」——
+                     四个文字按钮塞进操作列会折成两行，比原来的文字链还糟（2026-09-05 第一版就是
+                     这么翻车的）。文案全部收进 title/aria-label，一行四个图标。 -->
+                <button class="fc-icon-btn" type="button" title="编辑流程" aria-label="编辑流程" @click.stop="openFlow(t)">
+                  <Edit />
                 </button>
-                <button class="rc-btn sm danger" type="button" data-testid="flow-delete" @click.stop="removeFlow(t)">删除</button>
+                <button class="fc-icon-btn" type="button" title="关联到源" aria-label="关联到源" @click.stop="openApply(t)">
+                  <Link />
+                </button>
+                <button
+                  class="fc-icon-btn"
+                  :class="{ on: t.isTemplate }"
+                  type="button"
+                  data-testid="flow-toggle-template"
+                  :title="t.isTemplate ? '取消模板标记' : '标记为模板'"
+                  :aria-label="t.isTemplate ? '取消模板标记' : '标记为模板'"
+                  @click.stop="toggleTemplate(t)"
+                >
+                  <component :is="t.isTemplate ? StarFilled : Star" />
+                </button>
+                <button
+                  class="fc-icon-btn danger"
+                  type="button"
+                  data-testid="flow-delete"
+                  title="删除流程"
+                  aria-label="删除流程"
+                  @click.stop="removeFlow(t)"
+                >
+                  <Delete />
+                </button>
               </div>
             </td>
           </tr>
@@ -514,10 +536,13 @@ async function confirmApply() {
 .fc-badge { margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 11px; line-height: 16px; background: var(--rc-primary-soft, #eaf2ff); color: var(--rc-primary, #2f6fed); }
 .fc-badge.ghost { background: transparent; color: var(--rc-faint, #98a2b3); border: 1px solid var(--rc-border, #e4e7ec); }
 .fc-ellipsis { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fc-actions { display: flex; flex-wrap: wrap; gap: 4px; }
-.fc-actions .rc-btn.sm { height: 24px; padding: 0 8px; font-size: 12px; }
-.fc-actions .rc-btn.sm.danger { color: var(--rc-error, #d92d20); border-color: var(--rc-border); background: #fff; }
-.fc-actions .rc-btn.sm.danger:hover { border-color: var(--rc-error, #d92d20); background: #fef3f2; }
+.fc-actions { display: flex; align-items: center; gap: 2px; }
+.fc-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--rc-muted, #64748b); cursor: pointer; }
+.fc-icon-btn svg { width: 15px; height: 15px; }
+.fc-icon-btn:hover { background: var(--rc-primary-bg, #eff6ff); color: var(--rc-primary, #2563eb); }
+.fc-icon-btn.on { color: var(--rc-primary, #2563eb); }
+.fc-icon-btn.danger:hover { background: #fef3f2; color: var(--rc-error, #d92d20); }
+.fc-icon-btn:focus-visible { outline: 2px solid var(--rc-primary, #2563eb); outline-offset: 1px; }
 .fc-shell { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
 /* 以下三条与 SiteFileView 的 .sfv-toolbar / .sfv-input 保持同一组数值（28px 高、12px 字、
    6px 圆角、focus 蓝边 + 3px 光晕）。改动时请两边一起改，否则数据中心/文件中心/流程中心会走形。 */

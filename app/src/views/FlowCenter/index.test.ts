@@ -230,19 +230,18 @@ describe('流程中心 · 自动刷新', () => {
 // 0903 H24（Y8-D）：加回「标记为模板 / 取消模板」——模板是流程的一个**属性**，
 // 就该在流程行上切换，不是另开一个模板中心页。
 describe('流程中心 · 操作列', () => {
+  // 0904 I16（Z7-1）：操作列是**图标按钮**，文案在 title/aria-label 上，按钮体内没有文字。
   const actions = (w: Awaited<ReturnType<typeof mountCenter>>) =>
-    rows(w)[0].findAll('.fc-actions button').map((b) => b.text())
+    rows(w)[0].findAll('.fc-actions button').map((b) => b.attributes('title'))
 
   it('操作列：编辑 / 关联到源 / 标记为模板 / 删除流程', async () => {
     const w = await mountCenter()
-    // 0904 I16（Z7-1）：文字链改按钮，「删除流程」缩成「删除」——列里已经全是流程，
-    // 每个按钮再带一遍"流程"两个字正是走查嫌弃的「感觉上个世纪的有很多字在里面」
-    expect(actions(w)).toEqual(['编辑', '关联到源', '标记为模板', '删除'])
+    expect(actions(w)).toEqual(['编辑流程', '关联到源', '标记为模板', '删除流程'])
   })
 
   it('已是模板的行，按钮文案变成「取消模板」', async () => {
     const w = await mountCenter([{ ...FLOWS[0], isTemplate: true }])
-    expect(actions(w)).toEqual(['编辑', '关联到源', '取消模板', '删除'])
+    expect(actions(w)).toEqual(['编辑流程', '关联到源', '取消模板标记', '删除流程'])
   })
 
   it('删除前二次确认，并把关联源数写进确认文案', async () => {
@@ -417,7 +416,7 @@ describe('流程中心 · 可编辑工作区', () => {
     const bind = vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true })
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     const w = await mountCenter()
-    const apply = rows(w)[0].findAll('button').find((button) => button.text() === '关联到源')!
+    const apply = rows(w)[0].findAll('button').find((button) => button.attributes('title') === '关联到源')!
     await apply.trigger('click')
     await w.get('[data-testid="source-select-stub"]').setValue('source-1')
     await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
@@ -434,7 +433,7 @@ describe('流程中心 · 可编辑工作区', () => {
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     const error = vi.spyOn(ElMessage, 'error')
     const w = await mountCenter()
-    const apply = rows(w)[0].findAll('button').find((button) => button.text() === '关联到源')!
+    const apply = rows(w)[0].findAll('button').find((button) => button.attributes('title') === '关联到源')!
     await apply.trigger('click')
     await w.get('[data-testid="source-select-stub"]').setValue('source-1')
     await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
@@ -447,7 +446,7 @@ describe('流程中心 · 可编辑工作区', () => {
 // changeFlowBatch 单次上限 5000（endpoints.ts），前端按 500 一批串行。
 describe('流程中心 · 关联到源（Y8-B 多选与分批）', () => {
   async function openApplyDialog(w: Awaited<ReturnType<typeof mountCenter>>) {
-    const apply = rows(w)[0].findAll('button').find((b) => b.text() === '关联到源')!
+    const apply = rows(w)[0].findAll('button').find((b) => b.attributes('title') === '关联到源')!
     await apply.trigger('click')
   }
 
