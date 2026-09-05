@@ -6,6 +6,7 @@
 // 服务端分页：单个流程下最多见过 46 个源，但存量是后端从配置整批灌过来的，不能假设一定小。
 import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { sourceApi, type FlowRecord, type Source } from '@/api'
 
 const props = defineProps<{ flow: FlowRecord | null }>()
@@ -58,6 +59,34 @@ function openSource(source: Source) {
   })
 }
 
+/**
+ * 「在源视图中查看全部」（0904 I16 / Z7-2）。走查原话：
+ * 「如果有 7 个怎么办？你要一个一个点过来嘛，还是点查看全部……你的详情里面点查看全部
+ *  就把全部带过来，然后你点一个，他如果一个就可以点」。
+ *
+ * **两个边界**：
+ * 1. 源视图锁死在单网站内（0812 纠偏），而一个流程的关联源理论上可跨网站
+ *    （`cs_flow.siteId` 只是流程自己的登记值，不是源的归属）。跨网站时不做聚合视图——
+ *    那违反源视图的边界——降级成提示，让用户在这个清单里逐个进。
+ * 2. **不把源 ID 拼进 URL**：一个流程最多见过 5439 个源（流程 1400976）。改传 flowId，
+ *    源视图那边按服务端条件筛（sourcePaged 认这个条件，见文件头注释）。
+ */
+function openAllInSourceView() {
+  const flow = props.flow
+  if (!flow) return
+  const sites = [...new Set(rows.value.map((r) => r.siteId).filter(Boolean))] as string[]
+  if (!sites.length) {
+    ElMessage.warning('这批源没有回填所属网站，无法定位到源视图，请在下面的清单里逐个进入')
+    return
+  }
+  if (sites.length > 1) {
+    ElMessage.warning(`该流程的源跨 ${sites.length} 个网站，源视图一次只能看一个网站，请在下面的清单里逐个进入`)
+    return
+  }
+  emit('close')
+  void router.push({ path: '/canvas', query: { siteId: sites[0], view: 'source', flowId: flow.id } })
+}
+
 function stateText(source: Source) {
   if (source.disabled) return '已停用'
   return source.state === 'E' ? '异常' : source.state === 'L' ? '运行中' : '正常'
@@ -75,6 +104,13 @@ function stateText(source: Source) {
     <div class="fs-head">
       <span v-if="!error">共 {{ total }} 个源</span>
       <span v-else class="fs-error">{{ error }}</span>
+      <button
+        v-if="!error && total > 1"
+        class="fs-viewall"
+        type="button"
+        data-testid="flow-sources-view-all"
+        @click="openAllInSourceView"
+      >在源视图中查看全部 {{ total }} 个源 →</button>
     </div>
     <div class="fs-table-wrap" v-loading="loading">
       <table class="fs-table">
@@ -127,6 +163,8 @@ function stateText(source: Source) {
 </template>
 
 <style scoped>
+.fs-viewall { margin-left: auto; border: 0; background: transparent; color: var(--rc-primary, #2563eb); font-size: 12px; cursor: pointer; }
+.fs-viewall:hover { text-decoration: underline; }
 .fs-head { margin-bottom: 8px; color: var(--rc-muted); font-size: 12px; }
 .fs-error { color: #dc2626; }
 .fs-table-wrap { max-height: 420px; overflow: auto; border: 1px solid var(--rc-border-soft); border-radius: 8px; }

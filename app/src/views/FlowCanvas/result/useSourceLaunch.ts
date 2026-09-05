@@ -16,6 +16,10 @@ export const LAUNCH_BATCH_SIZE = 500
 export type SourceFilter = {
   siteIds?: string
   sourceIds?: string
+  /** 按流程过滤（0904 I16 / Z7-2）。`sourcePaged` 服务端认这个条件——2026-09-02 实测
+   *  flowId=1400330 得 46 条、与该流程 sourceCnt 一致，传不存在的得 0 条，不是静默忽略。
+   *  用它而不是把源 ID 拼进 sourceIds：一个流程最多见过 5439 个源，拼 URL 不现实。 */
+  flowId?: string
   name?: string
   state?: string
   enable?: string
@@ -74,6 +78,7 @@ export function chunkIds(ids: string[], size = LAUNCH_BATCH_SIZE): string[][] {
 export function describeFilters(query: SourceFilter): string {
   const parts: string[] = []
   if (query.sourceIds) parts.push(`源 ID ${query.sourceIds}`)
+  if (query.flowId) parts.push(`流程 #${query.flowId}`)
   if (query.name) parts.push(`名称含「${query.name}」`)
   if (query.state === 'C') parts.push('状态=正常')
   else if (query.state === 'L') parts.push('状态=运行中')

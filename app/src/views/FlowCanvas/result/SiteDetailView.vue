@@ -58,6 +58,18 @@ watch(() => route.query.sourceIds, (raw) => {
   delete next.sourceIds
   void router.replace({ path: route.path, query: next })
 }, { immediate: true })
+/** 流程中心「查看全部关联源」带过来的流程 ID（0904 I16 / Z7-2）。与 sourceIds 同一套做法：
+ *  在这里解析、读完抹掉 URL，子组件只收 prop。 */
+const initialFlowId = ref('')
+watch(() => route.query.flowId, (raw) => {
+  const id = String(raw ?? '').trim()
+  if (!id) return
+  initialFlowId.value = id
+  const next = { ...route.query }
+  delete next.flowId
+  void router.replace({ path: route.path, query: next })
+}, { immediate: true })
+
 const flow = useFlowStore()
 
 const site = ref<Site | null>(null)
@@ -114,7 +126,7 @@ function openSourceData(source: Source) {
     </div>
     <div v-if="loadError" class="sdv-empty">{{ loadError }}</div>
     <template v-else>
-      <SourceOverviewView v-if="view === 'source'" :current-site-id="siteId" :initial-source-ids="initialSourceIds" class="sdv-body" @open-source="openSource" @open-source-data="openSourceData" />
+      <SourceOverviewView v-if="view === 'source'" :current-site-id="siteId" :initial-source-ids="initialSourceIds" :initial-flow-id="initialFlowId" class="sdv-body" @open-source="openSource" @open-source-data="openSourceData" />
       <SiteDataView v-else-if="view === 'data'" :site-id="siteId" :initial-condition="initialCondition" class="sdv-body" />
       <SiteFileView v-else-if="view === 'file'" :site-id="siteId" class="sdv-body" />
     </template>
