@@ -497,23 +497,34 @@ onUnmounted(() => {
         </div>
         <SiteDetailView v-else-if="isSiteDetail" :key="sidebarSiteId" :site-id="sidebarSiteId" class="rc-flow-result" />
         <CompareSplit v-else-if="ws.compareSourceId" class="rc-flow-result" />
-        <ResultView v-else-if="isDataView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
         <TaskView v-else-if="isTaskView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
         <FileView v-else-if="isFileView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
+        <!--
+          0904 I10（Z3-1）：**数据视图也挂进这套三栏**，不再整屏铺开。
+          结构 = 左源侧栏（`rc-canvas-cols` 那层，本来就固定）+ 中间可切换（流程 ↔ 数据）+ 右节点配置。
+          产品原话「就相当于只是中间这边去切换，然后这边是固定的」「流程节点里面不是可以三栏吗？
+          数据节点也是可以做成三栏的」。
+          **动机**：从配置区点「测试脚本」跳到数据视图后，右侧配置面板原来整个消失了
+          ——「你右边这个没有了，配置看不到了，所以到数据时候就看不到了」，
+          于是"边写规则边看数据"根本不成立。
+        -->
         <div
           v-else
           class="rc-flow-shell"
           :class="{ 'source-mode': !!flow.sourceCtx, expanded: ui.inspectorExpanded }"
           :style="{ '--insp-w': inspWidth }"
         >
-          <FlowBoard v-if="!ui.inspectorExpanded" />
+          <template v-if="!ui.inspectorExpanded">
+            <ResultView v-if="isDataView" :key="flow.sourceCtx?.sourceId" class="rc-flow-center" />
+            <FlowBoard v-else />
+          </template>
           <button
             v-else
             type="button"
             class="rc-canvas-collapsed"
-            title="点击恢复画布"
+            :title="isDataView ? '点击恢复数据' : '点击恢复画布'"
             @click="ui.toggleInspectorExpanded()"
-          >» 画布已收起</button>
+          >» {{ isDataView ? '数据已收起' : '画布已收起' }}</button>
           <div
             v-if="!ui.inspectorExpanded"
             class="rc-insp-splitter"
@@ -544,6 +555,8 @@ onUnmounted(() => {
 .rc-canvas-cols.with-tabs { height: calc(100vh - 204px); min-height: 564px; }
 .rc-canvas-main { flex: 1; min-width: 0; min-height: 0; }
 .rc-canvas-main > * { height: 100%; }
+/* 三栏里的中间列（数据视图）：自己滚，别把整个 shell 撑高 */
+.rc-flow-center { min-width: 0; min-height: 0; overflow: auto; }
 
 .rc-flow-shell {
   display: grid;
