@@ -10,7 +10,7 @@
 // 这行注释此前写的是「配置中心/流程模板不再作为用户概念」，0903 会上推翻了后半句。
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { flowCenterApi, type FlowRecord } from '@/api'
+import { flowCenterApi, sourceApi, type FlowRecord } from '@/api'
 import { useUiStore } from '@/stores/ui'
 import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
 import GlobalSourceSelect from '@/views/FlowCanvas/result/components/GlobalSourceSelect.vue'
@@ -29,6 +29,30 @@ const sortBy = ref<'recent' | 'sourceCnt'>('recent')
 // 范围：全部 / 仅模板 / 仅普通流程。**服务端过滤**（flowPaged.templateFlag，2026-09-04 实测生效）。
 // 不要改成本地筛——分页之后本地只能筛当前这一页，跨页结果是错的（见下方"搜索、排序、翻页全在服务端"那段）。
 const scope = ref<'all' | 'template' | 'normal'>('all')
+// 分类与标签筛选（0904 I17 / Z7-6）。**都是服务端筛**，不回退本地——分页之后本地只能筛
+// 当前这一页，跨页结果是错的（本文件上方那段口径）。
+// ⚠️ 标签的**请求参数名是 `tags`，不是 `flowTags`**：出参字段叫 flowTags，但入参用它会被
+// 静默忽略（2026-09-05 实测：乱填标签仍返回全部 740 条；换成 tags 才真的筛）。适配层已处理。
+const filterCategoryId = ref('')
+const filterTag = ref('')
+/** 目录候选：与源共用同一套 `category/categoryPaged`（根目录，子级按需展开这里不做） */
+const categories = ref<{ id: string; name: string }[]>([])
+const categoryNameById = computed(() => new Map(categories.value.map((c) => [c.id, c.name])))
+function categoryName(id?: string) {
+  if (!id) return ''
+  return categoryNameById.value.get(id) || `目录 ${id}`
+}
+/** `flowTags` 是逗号串；空值、纯空白项都要滤掉，否则会渲染出空芯片 */
+function tagsOf(t: FlowRecord): string[] {
+  return (t.flowTags || '').split(',').map((x) => x.trim()).filter(Boolean)
+}
+async function loadCategories() {
+  try {
+    categories.value = (await sourceApi.sourceCategories()).map((c) => ({ id: String(c.id), name: c.name }))
+  } catch {
+    // 目录取不到不影响列表：分类列退化成「目录 <id>」，筛选下拉只剩「全部分类」
+  }
+}
 const activeId = ref('')
 /** 「使用源数」下钻弹窗的目标流程 */
 const sourcesFlow = ref<FlowRecord | null>(null)
@@ -59,6 +83,8 @@ async function load() {
       field: sortBy.value === 'sourceCnt' ? 'sourceCnt' : 'updateDt',
       order: 'desc',
       onlyTemplate: scope.value === 'all' ? undefined : scope.value === 'template',
+      categoryId: filterCategoryId.value || undefined,
+      tag: filterTag.value.trim() || undefined,
     })
     if (loadSeq !== reqId) return
     flows.value = result.list
@@ -81,6 +107,8 @@ function search() {
 }
 /** 清空：条件、排序、页码一起回到初始态，再查一次（与文件中心「清空」同义） */
 function resetQuery() {
+  filterCategoryId.value = ''
+  filterTag.value = ''
   query.value = ''
   sortBy.value = 'recent'
   page.value = 1
@@ -88,6 +116,7 @@ function resetQuery() {
 }
 onMounted(() => {
   void load()
+  void loadCategories()
   ui.registerAction('新建流程', () => { void createFlow() })
   ui.registerAction('从模板新建', () => { void createFromTemplate() })
 })
@@ -327,6 +356,18 @@ async function confirmApply() {
       </select>
       <!-- 没有「刷新」按钮：它与「查询」是同一个请求，而且新建 / 保存 / 删除 / 关联之后
            列表都会自动重查（见 replaceFlow / removeFlow / confirmApply），不需要人工手动刷。 -->
+      <select v-model="filterCategoryId" class="fc-input" aria-label="分类" data-testid="flow-center-category" @change="search">
+        <option value="">全部分类</option>
+        <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+      </select>
+      <input
+        v-model="filterTag"
+        class="fc-input"
+        placeholder="标签"
+        aria-label="按标签筛选"
+        data-testid="flow-center-tag"
+        @keyup.enter="search"
+      />
       <button class="rc-btn primary" type="button" data-testid="flow-center-query" @click="search">查询</button>
       <button class="rc-btn" type="button" data-testid="flow-center-reset" @click="resetQuery">清空</button>
       <div class="fc-metrics">
@@ -338,10 +379,15 @@ async function confirmApply() {
       <table class="fc-table">
         <thead>
           <tr>
+            <!-- 列对齐旧平台「流程管理」（流程ID/名称/业务大类/源总数/目录ID/标签/描述/创建/更新），
+                 但不照搬全部：编码、状态、启停在本平台没有承载页面，搬过来只会是一列 `—`。 -->
             <th>流程 ID / 名称</th>
+            <th style="width: 170px">分类 / 标签</th>
+            <th style="width: 200px">描述</th>
             <th style="width: 110px">使用源数</th>
-            <th style="width: 150px">更新时间</th>
-            <th style="width: 210px">操作</th>
+            <th style="width: 140px">创建时间</th>
+            <th style="width: 140px">更新时间</th>
+            <th style="width: 230px">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -366,6 +412,16 @@ async function confirmApply() {
                 <small>{{ t.version == null ? t.id : `${t.id} · v${t.version}` }}</small>
               </div>
             </td>
+            <td class="fc-muted" data-testid="flow-cat-tags">
+              <template v-if="t.categoryId || t.flowTags">
+                <span v-if="t.categoryId" class="fc-badge ghost" :title="`目录 ${t.categoryId}`">{{ categoryName(t.categoryId) }}</span>
+                <span v-for="tag in tagsOf(t)" :key="tag" class="fc-badge ghost">{{ tag }}</span>
+              </template>
+              <template v-else>—</template>
+            </td>
+            <!-- 描述如实展示不清洗：存量里这个值是后端从源/网站灌的，所以会看到"描述都是网站"
+                 （0904 I16-4）。改的是**本平台新建流程不再自动带**，不是把历史值洗掉。 -->
+            <td class="fc-muted fc-ellipsis" :title="t.description || ''">{{ t.description || '—' }}</td>
             <!-- 使用源数：flowPaged / flowDetail 都回填计算列 sourceCnt（口径 cs_source.IS_DELETE >= 0，
                  含禁用源）。列表接口不返回 flowConf，所以节点数那列是 0，源数这列才是真的。 -->
             <td :class="{ 'fc-muted': !t.sourceCnt }" data-testid="flow-source-cnt">
@@ -380,20 +436,25 @@ async function confirmApply() {
               <!-- 0 个和字段缺失都不给点：点开必然是空表，白让人跑一趟 -->
               <template v-else>{{ t.sourceCnt == null ? '—' : '0 个' }}</template>
             </td>
+            <td class="fc-muted">{{ t.createdAt || '—' }}</td>
             <td class="fc-muted">{{ t.updatedAt || '—' }}</td>
             <td>
               <div class="fc-actions">
-                <button class="fc-link" type="button" @click.stop="openFlow(t)">编辑</button>
-                <button class="fc-link" type="button" @click.stop="openApply(t)">关联到源</button>
-                <button class="fc-link" type="button" data-testid="flow-toggle-template" @click.stop="toggleTemplate(t)">
+                <!-- 0904 I16（Z7-1）：文字链改按钮。走查原话「你把这些字……设计成按钮，
+                     删除流程就写的，感觉上个世纪的有很多字在里面」。
+                     按 AGENTS.md 的控件强调口径：主操作轻实心、次要描边、危险只描边不填色，
+                     不搞大面积实心色块。 -->
+                <button class="rc-btn sm primary" type="button" @click.stop="openFlow(t)">编辑</button>
+                <button class="rc-btn sm" type="button" @click.stop="openApply(t)">关联到源</button>
+                <button class="rc-btn sm" type="button" data-testid="flow-toggle-template" @click.stop="toggleTemplate(t)">
                   {{ t.isTemplate ? '取消模板' : '标记为模板' }}
                 </button>
-                <button class="fc-link danger" type="button" data-testid="flow-delete" @click.stop="removeFlow(t)">删除流程</button>
+                <button class="rc-btn sm danger" type="button" data-testid="flow-delete" @click.stop="removeFlow(t)">删除</button>
               </div>
             </td>
           </tr>
           <tr v-if="!loading && !rows.length">
-            <td colspan="4" class="fc-empty">
+            <td colspan="7" class="fc-empty">
               {{ loadError || (query ? `没有找到匹配「${query}」的流程` : '暂无流程') }}
             </td>
           </tr>
@@ -452,6 +513,11 @@ async function confirmApply() {
 <style scoped>
 .fc-badge { margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 11px; line-height: 16px; background: var(--rc-primary-soft, #eaf2ff); color: var(--rc-primary, #2f6fed); }
 .fc-badge.ghost { background: transparent; color: var(--rc-faint, #98a2b3); border: 1px solid var(--rc-border, #e4e7ec); }
+.fc-ellipsis { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fc-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.fc-actions .rc-btn.sm { height: 24px; padding: 0 8px; font-size: 12px; }
+.fc-actions .rc-btn.sm.danger { color: var(--rc-error, #d92d20); border-color: var(--rc-border); background: #fff; }
+.fc-actions .rc-btn.sm.danger:hover { border-color: var(--rc-error, #d92d20); background: #fef3f2; }
 .fc-shell { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
 /* 以下三条与 SiteFileView 的 .sfv-toolbar / .sfv-input 保持同一组数值（28px 高、12px 字、
    6px 圆角、focus 蓝边 + 3px 光晕）。改动时请两边一起改，否则数据中心/文件中心/流程中心会走形。 */

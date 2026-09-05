@@ -190,6 +190,26 @@ export interface FlowRecord {
   /** 由哪个模板复制而来（旧 `refFlowId`）。`copyFlow` / `copyTemplateSteps` 会自动回指，
    *  用于反查"谁用了这个模板"（此前只能看 sourceCnt，看不出来源）。 */
   fromTemplateId?: string
+
+  // ---- 0904 I17（Z7）：分类 / 标签 / 描述。后端 cs_flow 列全都现成，不新开表也不新开端点 ----
+  /** 目录分类（旧 `categoryId`）。与源用的是同一套目录（`category/categoryPaged`）。
+   *  2026-09-05 实测 200 条流程里只出现过一个值 `9009289`——**存量几乎没分过类**，
+   *  所以列表里大多显示 `—` 是正常的，不是没读到。 */
+  categoryId?: string
+  /** 业务大类（旧 `bizType`）。⚠️ **2026-09-05 实测 200 条流程全为空**，
+   *  生产里一个样本都没有，取值集合无从"照抄后端"（0904 Q3 仍未答复）。
+   *  所以**不做成枚举下拉**——枚举不自造是 0824-11 §1.2d 定的规矩，
+   *  在拿到集合前只读展示、不提供选择。 */
+  bizType?: string
+  /** 标签（旧 `flowTags`，逗号串）。与源标签同概念。实测存量同样全为空。 */
+  flowTags?: string
+  /** 流程描述（旧 `flowDesc`）。存量里这个值是后端从源/网站灌进来的，
+   *  所以会看到「描述都是网站」——**如实展示，不清洗**（0904 I16-4）。 */
+  description?: string
+  /** 备注（旧 `remark`）。`copyFlow` 会写「copy from 1400978」这类来源说明。 */
+  remark?: string
+  /** 创建时间（旧 `createDt`）。列表原来只有更新时间。 */
+  createdAt?: string
 }
 
 export interface FlowSaveInput {
@@ -198,6 +218,12 @@ export interface FlowSaveInput {
   definition: FlowDefinition
   /** 只在「标记/取消标记为模板」时传；不传则保持后端现值不变 */
   isTemplate?: boolean
+  /** 下面几项同理：**只有显式传了才提交**。saveFlow 是全量保存端点，
+   *  漏传等于让后端保持原值，传空串才是"清空"。 */
+  categoryId?: string
+  flowTags?: string
+  description?: string
+  remark?: string
 }
 
 /** 网站 Site（0707 优化·Phase2）：父级，统一流程模板 + 批量工具，本身不实际采集运行；下辖多个源（Source.siteId） */

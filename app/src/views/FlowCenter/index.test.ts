@@ -235,12 +235,14 @@ describe('流程中心 · 操作列', () => {
 
   it('操作列：编辑 / 关联到源 / 标记为模板 / 删除流程', async () => {
     const w = await mountCenter()
-    expect(actions(w)).toEqual(['编辑', '关联到源', '标记为模板', '删除流程'])
+    // 0904 I16（Z7-1）：文字链改按钮，「删除流程」缩成「删除」——列里已经全是流程，
+    // 每个按钮再带一遍"流程"两个字正是走查嫌弃的「感觉上个世纪的有很多字在里面」
+    expect(actions(w)).toEqual(['编辑', '关联到源', '标记为模板', '删除'])
   })
 
   it('已是模板的行，按钮文案变成「取消模板」', async () => {
     const w = await mountCenter([{ ...FLOWS[0], isTemplate: true }])
-    expect(actions(w)).toEqual(['编辑', '关联到源', '取消模板', '删除流程'])
+    expect(actions(w)).toEqual(['编辑', '关联到源', '取消模板', '删除'])
   })
 
   it('删除前二次确认，并把关联源数写进确认文案', async () => {

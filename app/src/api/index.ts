@@ -2124,6 +2124,14 @@ export const flowCenterApi = {
     /** 只看模板 / 只看普通流程；不传 = 全部。**服务端过滤**（2026-09-04 实测：传 1 得 0 条、
      *  传 0 得 738 条）。不要改成本地筛——分页之后本地只能筛当前这一页，见 FlowCenter 的注释。 */
     onlyTemplate?: boolean
+    /** 按目录分类过滤（`cs_flow.category_id`）。同样是服务端筛。 */
+    categoryId?: string
+    /** 按标签过滤。
+     *  ⚠️ **请求参数名是 `tags`，不是 `flowTags`**（2026-09-05 实测：出参字段叫 `flowTags`，
+     *  但入参用 `flowTags` 会被**静默忽略**——乱填一个标签仍返回全部 740 条；
+     *  换成 `tags` 才真的筛，给测试流程打上标签后传 `tags` 得 1 条）。
+     *  出入参不同名这种坑，写代码时按出参名猜必然踩。 */
+    tag?: string
   } = {}) => {
     const result = await request<unknown>('flow/flowPaged', cond, {
       method: 'POST',
@@ -2135,6 +2143,8 @@ export const flowCenterApi = {
         field: cond.field ?? 'updateDt',
         order: cond.order ?? 'desc',
         templateFlag: cond.onlyTemplate === undefined ? undefined : (cond.onlyTemplate ? 1 : 0),
+        categoryId: cond.categoryId || undefined,
+        tags: cond.tag || undefined,
       },
     })
     return flowPageFromLegacy(result)

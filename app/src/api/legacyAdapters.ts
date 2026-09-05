@@ -1326,6 +1326,12 @@ export function flowFromLegacy(input: unknown): FlowRecord {
     sourceCnt: legacyNumber(record.sourceCnt),
     isTemplate: record.templateFlag == null ? undefined : Number(record.templateFlag) === 1,
     fromTemplateId: record.refFlowId == null ? undefined : String(record.refFlowId),
+    categoryId: record.categoryId == null ? undefined : String(record.categoryId),
+    bizType: record.bizType == null ? undefined : String(record.bizType),
+    flowTags: record.flowTags == null ? undefined : String(record.flowTags),
+    description: record.flowDesc == null ? undefined : String(record.flowDesc),
+    remark: record.remark == null ? undefined : String(record.remark),
+    createdAt: record.createDt == null ? undefined : String(record.createDt),
     // version 刻意不填：cs_flow 没有这一列，见 FlowRecord 的注释。
   }
 }
@@ -1351,5 +1357,11 @@ export function flowToLegacy(input: FlowSaveInput): LegacyRecord {
   // 模板标记只在显式传了才提交。saveFlow 是**全量保存**，不传这个字段时后端保持原值；
   // 传 undefined 会被 JSON 丢掉，等价于不传——所以这里用 in 判断而不是真值判断。
   if (input.isTemplate !== undefined) payload.templateFlag = input.isTemplate ? 1 : 0
+  // 同 templateFlag：只有显式传了才进 payload。saveFlow 是全量保存，
+  // 不传 = 保持后端原值，传空串 = 清空——两者不能混。
+  if (input.categoryId !== undefined) payload.categoryId = input.categoryId || null
+  if (input.flowTags !== undefined) payload.flowTags = input.flowTags
+  if (input.description !== undefined) payload.flowDesc = input.description
+  if (input.remark !== undefined) payload.remark = input.remark
   return payload
 }
