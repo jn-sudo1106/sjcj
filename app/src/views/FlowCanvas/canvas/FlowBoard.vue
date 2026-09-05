@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useDuplicateNode } from './useDuplicateNode'
 import { useStepWrite } from './useStepWrite'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
-import { entryApi, flowApi, flowCenterApi, type FlowRecord } from '@/api'
+import { entryApi, flowApi, flowCenterApi, sourceApi, type FlowRecord } from '@/api'
 import CanvasHeader from '../shared/CanvasHeader.vue'
 import AddNodePopover from './AddNodePopover.vue'
 import FlowXmlDialog from './FlowXmlDialog.vue'
@@ -52,6 +52,70 @@ function loadTemplateDefaults(template: FlowRecord) {
     branchGroups: template.definition.branchGroups,
     updatedAt: template.updatedAt,
   })
+}
+
+/**
+ * 从流程模板套用（0903 Y8-C / H03）。
+ *
+ * **落点在画布，不在新建向导**（2026-09-04 用户订正：「新建选模板的时候不需要，进画布模式的
+ * 才需要」）。新建网站那一页只管建网站和源，套模板是进画布之后的事。
+ *
+ * H03 的口径是「新增配置」= 把模板里那套配置**复制出一套新的**给本源，不是引用模板。
+ * 所以走后端的复制端点，**不用** `flow.applyTemplate` 那套前端逐个建节点的老路（Y8-20 作废）：
+ *   - 本源已有流程 → `copyTemplateSteps(模板, 本源的流程)`，后端自动改 FLOW_ID、重映射上下游、
+ *     根节点依赖保持 0、不复制模板自身的根节点；
+ *   - 本源还没有流程 → 先 `copyFlow(模板)` 造一条，再把本源绑上去。
+ */
+const applyingTemplate = ref(false)
+async function applyFlowTemplate() {
+  const sourceId = flow.sourceCtx?.sourceId
+  if (!sourceId || applyingTemplate.value) return
+  applyingTemplate.value = true
+  try {
+    const templates = await flowCenterApi.templates()
+    if (!templates.length) {
+      ElMessage.info('还没有流程被标记为模板。可在流程中心对任一流程点「标记为模板」。')
+      return
+    }
+    const { value } = await ElMessageBox.prompt(
+      `将复制模板的节点，并把模板里的那套配置复制出一套新的给本源；改新配置不会影响模板和其它源。\n可选模板：${templates.map((t) => `${t.name}(#${t.id})`).join('、')}`,
+      '从流程模板套用',
+      { inputValue: templates[0].id, inputPattern: /^\d+$/, inputErrorMessage: '请输入上面列出的模板 ID', confirmButtonText: '套用', cancelButtonText: '取消' },
+    )
+    const picked = templates.find((t) => t.id === String(value).trim())
+    if (!picked) {
+      ElMessage.error(`#${String(value).trim()} 不在模板列表里`)
+      return
+    }
+    // 本源的流程：sourceCtx 上没有就回查一次详情（列表接口不保证带 flowId，sourceDetail 一定带）
+    let targetFlowId = flow.sourceCtx?.flowId
+    if (!targetFlowId) targetFlowId = (await sourceApi.sourceDetail(sourceId).catch(() => null))?.flowId
+    if (targetFlowId) {
+      const ack = await flowCenterApi.copyTemplateSteps(picked.id, targetFlowId)
+      if (!ack.ok) throw new Error(ack.message || '复制模板步骤失败')
+      ElMessage.success(ack.message || `已把模板「${picked.name}」的步骤复制到本源的流程`)
+    } else {
+      const newFlowId = await flowCenterApi.copy(picked.id, `${flow.sourceCtx?.name || sourceId}-流程`)
+      const bound = await flowCenterApi.bindSources([sourceId], newFlowId)
+      if (!bound.ok) {
+        ElMessage.warning(`已按模板复制出流程 #${newFlowId}，但未能关联到本源（${bound.message || '原因未知'}），可在流程中心手动关联`)
+        return
+      }
+      ElMessage.success(`已按模板「${picked.name}」新建流程 #${newFlowId} 并关联到本源`)
+    }
+    // 后端已经把步骤建好了，画布得重新按后端拓扑加载一次——沿用源视图进入时的同一条路径，
+    // 别在本地拼节点（那样 id 全是本地草稿，自动保存又会重复建一遍）。
+    const [detail, steps] = await Promise.all([
+      sourceApi.sourceDetail(sourceId),
+      sourceApi.sourceSteps(sourceId, { withConfigDetails: false }),
+    ])
+    if (detail) flow.loadFromSource(detail, steps ?? [], null)
+  } catch (e) {
+    if (e === 'cancel' || e === 'close') return
+    ElMessage.error(`套用模板失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    applyingTemplate.value = false
+  }
 }
 
 async function recommendTemplateFlow() {
@@ -449,8 +513,19 @@ watch(
         <!-- 空白源画布引导卡 -->
         <div v-if="!flow.layout.nodes.length" class="rc-empty-cta">
           <div class="rc-empty-cta-title">空白编排画布</div>
-          <div class="rc-empty-cta-sub">可以用「＋」手工添加步骤，也可以按当前对象推荐可复用流程，应用后再逐节点调整。</div>
-          <button class="rc-btn primary" type="button" :disabled="recommending" @click="recommendTemplateFlow">{{ recommending ? '推荐中…' : '智能推荐流程' }}</button>
+          <div class="rc-empty-cta-sub">可以用「＋」手工添加步骤，按当前对象推荐可复用流程，或直接套用一个已有的流程模板；应用后再逐节点调整。</div>
+          <div class="rc-empty-cta-btns">
+            <button class="rc-btn primary" type="button" :disabled="recommending" @click="recommendTemplateFlow">{{ recommending ? '推荐中…' : '智能推荐流程' }}</button>
+            <!-- 0903 Y8-C：从已标记的流程模板套用，走后端复制端点（H03：复制出一套新配置，不是引用） -->
+            <button
+              v-if="flow.sourceCtx"
+              class="rc-btn"
+              type="button"
+              data-testid="apply-flow-template"
+              :disabled="applyingTemplate"
+              @click="applyFlowTemplate"
+            >{{ applyingTemplate ? '套用中…' : '从流程模板套用' }}</button>
+          </div>
         </div>
 
         <!-- 终端 -->
@@ -628,6 +703,8 @@ watch(
 .rc-term { position: absolute; width: 150px; height: 34px; border: 1px solid var(--rc-border); border-radius: 18px; background: #fff; color: var(--rc-text-2); display: flex; align-items: center; justify-content: center; font-weight: 600; box-shadow: 0 2px 8px -5px rgba(15, 23, 42, 0.2); }
 
 .rc-empty-cta { position: absolute; left: 50%; top: 168px; transform: translateX(-50%); width: 340px; padding: 20px; text-align: center; border: 1px dashed #bfdbfe; border-radius: 12px; background: rgba(255, 255, 255, 0.92); box-shadow: 0 10px 30px -18px rgba(37, 99, 235, 0.5); }
+
+.rc-empty-cta-btns { display: flex; gap: 8px; justify-content: center; }
 .rc-empty-cta-title { font-size: 14px; font-weight: 800; color: var(--rc-text); }
 .rc-empty-cta-sub { margin: 7px 0 14px; font-size: 11px; line-height: 1.6; color: var(--rc-muted); }
 .rc-empty-cta .rc-btn { height: 34px; padding: 0 14px; font-size: 13px; }

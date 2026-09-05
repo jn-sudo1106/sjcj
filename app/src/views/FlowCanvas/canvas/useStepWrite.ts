@@ -15,6 +15,7 @@ import {
   lastStepIdsFromCanvas,
   persistableNodeIds,
   mergeStepForWrite,
+  isSyntheticRootId,
 } from '@/utils/flow/stepPersist'
 import { isRuleNode } from '@/views/FlowCanvas/canvas/flowModel'
 
@@ -258,7 +259,9 @@ export function useStepWrite() {
     // 0903 YB-B：遍历主链 **+ 各分支链**。只遍历 main 的话，分支里的节点改了名字会静默不保存
     // ——界面显示"已保存"、后端没动，比拍平更难发现。
     for (const id of persistableNodeIds(flow.main, flow.branchGroups)) {
-      if (id === 'start' || id === 'end' || id === '0' || isWritableStepId(id)) continue
+      // isSyntheticRootId：画布合成的虚拟起点不落库（2026-09-04）。它对应后端现算的
+      // itemConfig:0 那行，建成真实步骤会让首节点每进一次画布就多一个。
+      if (id === 'start' || id === 'end' || id === '0' || isSyntheticRootId(id) || isWritableStepId(id)) continue
       const cfg = flow.configs[id]
       if (!cfg) continue
       await createAndLocate(id)

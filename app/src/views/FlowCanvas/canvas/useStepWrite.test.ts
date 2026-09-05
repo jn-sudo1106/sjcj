@@ -322,3 +322,59 @@ describe('useStepWrite.deleteCanvasNode', () => {
     expect(source.stepSnapshots['40600']).toBeUndefined()
   })
 })
+
+// 2026-09-04：新建网站 / 新建源之后一进画布，自动保存把**画布合成的虚拟起点**
+// （rootStepForSource 造的 `source:<sourceId>`）当成新节点建了一条真实步骤。
+// 那个节点对应的是后端 `nextConfigPaged?sourceId=X&svg=true` **现算**的 itemConfig:0 行，
+// 不是 cs_item_config 里的记录——落库之后再进画布，后端照旧返回现算的那行、外加这条新建的，
+// 首节点就多出一个，且每进一次多一条。
+describe('useStepWrite · 画布合成的虚拟起点不落库', () => {
+  it('空步骤源：只建用户新加的节点，不建 source:xxx 这个合成起点', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    flow.loadFromSource(
+      { sourceId: '430016398', name: 'test1', url: 'http://www.baidu.com/', configId: '1400917', mainTable: '6200026', owner: 'a', state: 'C' } as never,
+      [],
+    )
+    source.rememberSteps([], 'replace')
+    const rootId = flow.main.find((id: string) => id.startsWith('source:'))!
+    const localId = flow.insertAfter(rootId, 'rule')!
+    flow.configs[localId].configId = '1400992'
+
+    const create = vi.spyOn(itemApi, 'saveItemConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'enable').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      { ...SNAPSHOT, stepId: '40602', name: flow.configs[localId].title, configId: '1400992', mainConfig: '1400917' },
+    ])
+
+    const { persistFlowSteps } = useStepWrite()
+    await persistFlowSteps()
+
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(create.mock.calls[0][0].configId).toBe('1400992')
+    // 合成起点的配置就是源自己的 configId——一旦它被建出来，就是那个"多出来的首节点"
+    expect(create.mock.calls.some(([step]) => step.configId === '1400917')).toBe(false)
+  })
+
+  it('画布上只有合成起点、用户什么都没加时：一条请求都不发', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    flow.loadFromSource(
+      { sourceId: '430016398', name: 'test1', url: 'http://www.baidu.com/', configId: '1400917', mainTable: '6200026', owner: 'a', state: 'C' } as never,
+      [],
+    )
+    source.rememberSteps([], 'replace')
+
+    const create = vi.spyOn(itemApi, 'saveItemConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
+
+    const { persistFlowSteps } = useStepWrite()
+    const result = await persistFlowSteps()
+
+    expect(create).not.toHaveBeenCalled()
+    expect(result).toEqual({ created: 0, updated: 0 })
+  })
+})

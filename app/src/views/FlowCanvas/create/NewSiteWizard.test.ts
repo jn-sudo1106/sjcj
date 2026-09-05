@@ -5,7 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import NewSiteWizard from './NewSiteWizard.vue'
-import { flowCenterApi, siteApi, type FlowRecord } from '@/api'
+import { siteApi } from '@/api'
 
 describe('NewSiteWizard', () => {
   let wrapper: VueWrapper
@@ -15,10 +15,7 @@ describe('NewSiteWizard', () => {
     vi.restoreAllMocks()
   })
 
-  const TEMPLATE = { id: 'flow-1', name: '新闻标准模板', definition: { main: [], branches: [], configs: {} }, updatedAt: '', isTemplate: true } as unknown as FlowRecord
-
-  async function mountWizard(templates: FlowRecord[] = []) {
-    vi.spyOn(flowCenterApi, 'templates').mockResolvedValue(templates)
+  async function mountWizard() {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
@@ -66,65 +63,6 @@ describe('NewSiteWizard', () => {
     await flushPromises()
     const inputs = wrapper.findAll('input.rc-input')
     expect((inputs[1].element as HTMLInputElement).value).toBe('向导测试站')
-  })
-
-  // 0903 Y8-C（H03）：这一页可以选流程模板。原注释「不在这一页选择流程、模板」已随之改掉。
-  it('默认只列已标记为模板的流程，且默认「不使用（空白画布）」', async () => {
-    const { wrapper } = await mountWizard([TEMPLATE])
-    const select = wrapper.get('[data-testid="new-site-template"]')
-    expect((select.element as HTMLSelectElement).value).toBe('')
-    expect(select.text()).toContain('不使用（空白画布）')
-    expect(select.text()).toContain('新闻标准模板')
-    expect(flowCenterApi.templates).toHaveBeenCalled()
-  })
-
-  it('切到「查看全部流程」时改查 paged，不再只列模板', async () => {
-    const { wrapper } = await mountWizard([TEMPLATE])
-    const paged = vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
-    await wrapper.get('[data-testid="new-site-template-scope"]').setValue('all')
-    await flushPromises()
-    expect(paged).toHaveBeenCalled()
-  })
-
-  it('选了模板：建站后走 copyFlow 复制出一套配置，再把新源整批关联上去', async () => {
-    vi.spyOn(siteApi, 'siteCreate').mockResolvedValue({ ok: true, siteId: '11825', sourceId: '9001' })
-    const copy = vi.spyOn(flowCenterApi, 'copy').mockResolvedValue('flow-new')
-    const bind = vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true })
-    const { wrapper } = await mountWizard([TEMPLATE])
-    await wrapper.get('input.rc-input').setValue('向导测试站')
-    await flushPromises()
-    await wrapper.get('[data-testid="new-site-template"]').setValue('flow-1')
-    await wrapper.get('.rc-btn.primary').trigger('click')
-    await flushPromises()
-
-    // H03：是把模板的配置**复制出一套**，不是引用模板，所以走 copyFlow 而不是 saveFlow
-    expect(copy).toHaveBeenCalledWith('flow-1', expect.stringContaining('向导测试站'))
-    // N 个源共用这一条新流程（0903 H01 的口径）
-    expect(bind).toHaveBeenCalledWith(expect.arrayContaining([expect.any(String)]), 'flow-new')
-  })
-
-  it('没选模板时不发任何流程请求', async () => {
-    vi.spyOn(siteApi, 'siteCreate').mockResolvedValue({ ok: true, siteId: '11825', sourceId: '9001' })
-    const copy = vi.spyOn(flowCenterApi, 'copy')
-    const { wrapper } = await mountWizard([TEMPLATE])
-    await wrapper.get('input.rc-input').setValue('向导测试站')
-    await flushPromises()
-    await wrapper.get('.rc-btn.primary').trigger('click')
-    await flushPromises()
-    expect(copy).not.toHaveBeenCalled()
-  })
-
-  it('套模板失败不阻断建站：网站已建好，只提示可进画布手工配', async () => {
-    vi.spyOn(siteApi, 'siteCreate').mockResolvedValue({ ok: true, siteId: '11825', sourceId: '9001' })
-    vi.spyOn(flowCenterApi, 'copy').mockRejectedValue(new Error('模板不存在'))
-    const { wrapper, router } = await mountWizard([TEMPLATE])
-    await wrapper.get('input.rc-input').setValue('向导测试站')
-    await flushPromises()
-    await wrapper.get('[data-testid="new-site-template"]').setValue('flow-1')
-    await wrapper.get('.rc-btn.primary').trigger('click')
-    await flushPromises()
-    // 照样进画布，没有因为模板失败把建站结果吞掉
-    expect(router.currentRoute.value.query.siteId).toBe('11825')
   })
 
   it('提交只创建网站和首批源，然后进入首个源画布', async () => {
