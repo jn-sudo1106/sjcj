@@ -10,7 +10,7 @@
 // 这行注释此前写的是「配置中心/流程模板不再作为用户概念」，0903 会上推翻了后半句。
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { flowCenterApi, sourceApi, type FlowRecord } from '@/api'
+import { flowCenterApi, type FlowRecord } from '@/api'
 import { useUiStore } from '@/stores/ui'
 import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
 import GlobalSourceSelect from '@/views/FlowCanvas/result/components/GlobalSourceSelect.vue'
@@ -33,7 +33,11 @@ const activeId = ref('')
 /** 「使用源数」下钻弹窗的目标流程 */
 const sourcesFlow = ref<FlowRecord | null>(null)
 const applyFlow = ref<FlowRecord | null>(null)
-const applySourceId = ref('')
+const applySourceIds = ref<string[]>([])
+/** 分批提交进度：「已关联 N / 总数」，只在分多批时展示 */
+const applyProgress = ref('')
+/** changeFlowBatch 单次上限 5000（见 endpoints.ts）。按 500 一批串行，留足余量也便于展示进度。 */
+const BIND_BATCH_SIZE = 500
 const applying = ref(false)
 
 // 服务端分页：cs_flow 生产上已有 735 条（后端把存量配置整批灌进来了），一次拉全量不现实。
@@ -239,41 +243,54 @@ async function removeFlow(flow: FlowRecord) {
 
 function openApply(flow: FlowRecord) {
   applyFlow.value = flow
-  applySourceId.value = ''
+  applySourceIds.value = []
+  applyProgress.value = ''
 }
 
 async function confirmApply() {
   const target = applyFlow.value
   if (!target || applying.value) return
-  if (!applySourceId.value) {
+  const ids = [...new Set(applySourceIds.value.filter(Boolean))]
+  if (!ids.length) {
     ElMessage.warning('请先选择要关联的源')
     return
   }
   applying.value = true
+  applyProgress.value = ''
   try {
-    const source = await sourceApi.sourceDetail(applySourceId.value)
-    if (!source) {
-      ElMessage.error('没有找到该源，请重新选择')
-      return
-    }
-    // ⚠️ 文案 2026-09-03 按后端答复重写。上一版写的是「这只记录关联关系，不会改动该源现有的
-    // 采集配置与步骤，也不会立即按此流程运行」——**那句已经是假话**：后端明确执行时按 FLOW_ID
-    // 反查后执行（「执行就按 flowID 去反选，去执行」），关联完就生效。配套口径见 0903 H01：
-    // 一个流程一套配置，可关联多个源，这些源**共用**它——所以关联之后改这个流程的配置，
-    // 会同时影响所有关联源。这是危险动作，必须在弹窗里说清楚。
-    //
-    // 多选关联（一次关联 N 个源）是 Y8-B，本次只修文案，交互仍是单选。
+    // ⚠️ 文案 2026-09-03 按后端答复重写，2026-09-04 改成多源版。上一版写的是「这只记录关联
+    // 关系，不会改动该源现有的采集配置与步骤，也不会立即按此流程运行」——**那句已经是假话**：
+    // 后端明确执行时按 FLOW_ID 反查后执行（「执行就按 flowID 去反选，去执行」），关联完就生效。
+    // 配套口径见 0903 H01：一个流程一套配置，可关联多个源，这些源**共用**它——所以关联之后
+    // 改这个流程的配置，会同时影响所有关联源。这是危险动作，必须在弹窗里说清楚。
+    const batches = Math.ceil(ids.length / BIND_BATCH_SIZE)
     await ElMessageBox.confirm(
-      `将源「${source.name || source.sourceId}」关联到流程「${target.name}」。`
-      + '该源将共用此流程的配置并按它运行；此后修改这个流程的配置，会同时影响其它关联到它的源。继续？',
+      `将把选中的 **${ids.length} 个源**关联到流程「${target.name}」。`
+      + `这 ${ids.length} 个源将共用该流程的配置并按它运行；此后修改这个流程的配置，会同时影响它们。`
+      + (batches > 1 ? `\n（将分 ${batches} 批提交，每批最多 ${BIND_BATCH_SIZE} 个）` : '')
+      + '\n继续？',
       '关联流程到源',
       { type: 'warning', confirmButtonText: '确认关联', cancelButtonText: '取消' },
     )
-    const ack = await flowCenterApi.bindSources([source.sourceId], target.id)
-    if (!ack.ok) throw new Error(ack.message || '关联失败')
+    // 分批串行。**任一批失败就停下**并把已成功的条数如实报出来——继续发下去只会让
+    // "到底关联成功了几个"更难说清。
+    let done = 0
+    for (let i = 0; i < ids.length; i += BIND_BATCH_SIZE) {
+      const chunk = ids.slice(i, i + BIND_BATCH_SIZE)
+      if (batches > 1) applyProgress.value = `已关联 ${done} / ${ids.length}`
+      const ack = await flowCenterApi.bindSources(chunk, target.id)
+      if (!ack.ok) {
+        throw new Error(
+          (ack.message || '关联失败')
+          + (done ? `（前 ${done} 个已关联成功，本批 ${chunk.length} 个未生效）` : ''),
+        )
+      }
+      done += chunk.length
+    }
     applyFlow.value = null
-    applySourceId.value = ''
-    ElMessage.success(`已把源「${source.name || source.sourceId}」关联到流程「${target.name}」`)
+    applySourceIds.value = []
+    applyProgress.value = ''
+    ElMessage.success(`已把 ${done} 个源关联到流程「${target.name}」`)
     void load()
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
@@ -419,11 +436,14 @@ async function confirmApply() {
       destroy-on-close
       @close="applyFlow = null"
     >
-      <p class="fc-apply-note">选择目标源。确认后只登记「该源属于此流程」这层关联关系，不改动源现有的采集配置与步骤。</p>
-      <GlobalSourceSelect v-model="applySourceId" />
+      <!-- 这行原来写「只登记关联关系，不改动源现有的采集配置与步骤」，与 0903 H1 答复相反，
+           2026-09-04 一并改掉（同 confirmApply 里的确认文案）。 -->
+      <p class="fc-apply-note">选择要关联的源，可多选。关联后这些源将<b>共用本流程的配置并按它运行</b>；此后修改这个流程的配置会同时影响它们。</p>
+      <GlobalSourceSelect v-model="applySourceIds" multiple />
+      <p v-if="applyProgress" class="fc-apply-note" data-testid="flow-apply-progress">{{ applyProgress }}</p>
       <template #footer>
         <button class="fc-dialog-btn" type="button" @click="applyFlow = null">取消</button>
-        <button class="fc-dialog-btn primary" type="button" :disabled="applying" data-testid="flow-apply-confirm" @click="confirmApply">{{ applying ? '关联中…' : '确认关联' }}</button>
+        <button class="fc-dialog-btn primary" type="button" :disabled="applying" data-testid="flow-apply-confirm" @click="confirmApply">{{ applying ? '关联中…' : (applySourceIds.length > 1 ? `确认关联（${applySourceIds.length} 个）` : '确认关联') }}</button>
       </template>
     </el-dialog>
   </section>

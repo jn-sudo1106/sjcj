@@ -42,9 +42,12 @@ async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length) {
       stubs: {
         FlowBoard: { props: ['embedded'], template: '<div data-testid="embedded-flow-board">流程画布</div>' },
         NodeInspector: { props: ['hideAi'], template: '<div data-testid="embedded-node-inspector">节点配置 表配置 编排配置 参数配置 任务配置</div>' },
+        // Y8-10 之后是多选：modelValue 是 string[]。stub 用逗号分隔的输入模拟多选。
         GlobalSourceSelect: {
-          props: ['modelValue'], emits: ['update:modelValue'],
-          template: '<input data-testid="source-select-stub" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+          // multiple 必须声明成 Boolean：无值属性 `multiple` 在未声明类型的 prop 上会变成
+          // 空字符串（假值），stub 就退回单选行为，测的东西和真组件对不上。
+          props: { modelValue: { type: [String, Array], default: '' }, multiple: { type: Boolean, default: false } }, emits: ['update:modelValue'],
+          template: '<input data-testid="source-select-stub" :value="Array.isArray(modelValue) ? modelValue.join(\',\') : modelValue" @input="$emit(\'update:modelValue\', multiple ? $event.target.value.split(\',\').filter(Boolean) : $event.target.value)" />',
         },
         'el-dialog': { props: ['modelValue'], template: '<div v-if="modelValue"><slot/><slot name="footer"/></div>' },
       },
@@ -435,6 +438,83 @@ describe('流程中心 · 可编辑工作区', () => {
     await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
     await flushPromises()
     expect(error).toHaveBeenCalledWith(expect.stringContaining('目标流程不存在或已删除'))
+  })
+})
+
+// 0903 Y8-B：关联到源改多选 + 分批提交。
+// changeFlowBatch 单次上限 5000（endpoints.ts），前端按 500 一批串行。
+describe('流程中心 · 关联到源（Y8-B 多选与分批）', () => {
+  async function openApplyDialog(w: Awaited<ReturnType<typeof mountCenter>>) {
+    const apply = rows(w)[0].findAll('button').find((b) => b.text() === '关联到源')!
+    await apply.trigger('click')
+  }
+
+  it('一次关联多个源，一批就够时只发一次请求', async () => {
+    const bind = vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const w = await mountCenter()
+    await openApplyDialog(w)
+    await w.get('[data-testid="source-select-stub"]').setValue('s1,s2,s3')
+    await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(bind).toHaveBeenCalledTimes(1)
+    expect(bind).toHaveBeenCalledWith(['s1', 's2', 's3'], 'flow-10086')
+  })
+
+  it('确认文案写明影响的源数与「共用配置」，不再说「不改动源现有配置」', async () => {
+    vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const w = await mountCenter()
+    await openApplyDialog(w)
+    await w.get('[data-testid="source-select-stub"]').setValue('s1,s2')
+    await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
+    await flushPromises()
+
+    const text = String(confirm.mock.calls[0][0])
+    expect(text).toContain('2 个源')
+    expect(text).toContain('共用')
+    expect(text).not.toContain('不改动源现有的采集配置')
+  })
+
+  it('超过 500 个按 500 一批切分，串行提交', async () => {
+    const bind = vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const ids = Array.from({ length: 1200 }, (_, i) => `s${i}`)
+    const w = await mountCenter()
+    await openApplyDialog(w)
+    await w.get('[data-testid="source-select-stub"]').setValue(ids.join(','))
+    await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(bind).toHaveBeenCalledTimes(3)
+    expect(bind.mock.calls.map((c) => (c[0] as string[]).length)).toEqual([500, 500, 200])
+  })
+
+  it('中途某批失败：停下不再发后续批次，并如实说明已成功多少个', async () => {
+    const bind = vi.spyOn(flowCenterApi, 'bindSources')
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: false, message: '目标流程不存在' })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const error = vi.spyOn(ElMessage, 'error').mockImplementation(() => undefined as never)
+    const ids = Array.from({ length: 1200 }, (_, i) => `s${i}`)
+    const w = await mountCenter()
+    await openApplyDialog(w)
+    await w.get('[data-testid="source-select-stub"]').setValue(ids.join(','))
+    await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(bind).toHaveBeenCalledTimes(2) // 第三批不再发
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('前 500 个已关联成功'))
+  })
+
+  it('一个源都没选时不发请求', async () => {
+    const bind = vi.spyOn(flowCenterApi, 'bindSources')
+    const w = await mountCenter()
+    await openApplyDialog(w)
+    await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
+    await flushPromises()
+    expect(bind).not.toHaveBeenCalled()
   })
 })
 
