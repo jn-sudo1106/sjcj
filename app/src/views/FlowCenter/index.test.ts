@@ -591,15 +591,16 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
   })
 
   it('「从模板新建」走 copyFlow，不是自己拼 saveFlow（后者只会建出空流程）', async () => {
-    await mountCenter()
-    const ui = useUiStore()
+    const w = await mountCenter()
     vi.spyOn(flowCenterApi, 'templates').mockResolvedValue([{ ...FLOWS[0], isTemplate: true }])
     vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: 'flow-10086' } as never)
     const copy = vi.spyOn(flowCenterApi, 'copy').mockResolvedValue('flow-99')
     vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({ ...FLOWS[0], id: 'flow-99' })
     const save = vi.spyOn(flowCenterApi, 'save')
 
-    ui.fireAction('从模板新建')
+    // 不走 ui.fireAction：那条路依赖"哪个组件实例最后注册了这个动作"，
+    // 多份 wrapper 未卸载时结果取决于挂载顺序，会随测试文件增减而飘。
+    await (w.vm.$ as unknown as { setupState: { createFromTemplate: () => Promise<void> } }).setupState.createFromTemplate()
     await flushPromises()
 
     expect(copy).toHaveBeenCalledWith('flow-10086', expect.stringContaining('_copy'))
@@ -607,13 +608,14 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
   })
 
   it('一个模板都没有时给出提示，不弹输入框', async () => {
-    await mountCenter()
-    const ui = useUiStore()
+    const w = await mountCenter()
     vi.spyOn(flowCenterApi, 'templates').mockResolvedValue([])
     const prompt = vi.spyOn(ElMessageBox, 'prompt')
     const info = vi.spyOn(ElMessage, 'info').mockImplementation(() => undefined as never)
 
-    ui.fireAction('从模板新建')
+    // 不走 ui.fireAction：那条路依赖"哪个组件实例最后注册了这个动作"，
+    // 多份 wrapper 未卸载时结果取决于挂载顺序，会随测试文件增减而飘。
+    await (w.vm.$ as unknown as { setupState: { createFromTemplate: () => Promise<void> } }).setupState.createFromTemplate()
     await flushPromises()
 
     expect(prompt).not.toHaveBeenCalled()

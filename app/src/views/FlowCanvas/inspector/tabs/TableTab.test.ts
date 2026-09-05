@@ -12,6 +12,7 @@ import NodeInspector from '../NodeInspector.vue'
 import { useFlowStore } from '@/stores/flow'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, paramApi, ruleApi } from '@/api'
+import { __resetPresetTableCache } from '@/composables/usePresetTables'
 import type { EntryType } from '@/api'
 
 const INPUT_TABLE: EntryType = {
@@ -316,5 +317,31 @@ describe('TableTab · 回读时按 context/outContext 还原入出参勾选', ()
     await flushPromises()
 
     expect(flow.configs['rule-1'].ruleCfg!.inputFields).toEqual(['sku_name'])
+  })
+})
+
+// 0903 欠账 A2：「常用默认表」那四个 ID 在真实后端全都不存在（2026-09-05 实测），
+// 点一下会把输出表设成无效 ID、出参变「共 0 个可选」，而界面不报错。
+describe('TableTab · 常用默认表按可用性过滤（A2）', () => {
+  it('表都查不到时整行不渲染，不留死按钮', async () => {
+    __resetPresetTableCache()
+    mockAssets()
+    // 输入表照常能查到，只有预设表查不到——用 tableId 区分
+    vi.spyOn(entryApi, 'entryDetail').mockImplementation(async (id) => {
+      if (id === INPUT_TABLE.tableId) return INPUT_TABLE
+      throw new Error(`未找到相关ID${id}`)
+    })
+    const { wrapper } = mountOnRuleNode()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="rule-table-presets"]').exists()).toBe(false)
+  })
+
+  it('表存在时照常显示', async () => {
+    __resetPresetTableCache()
+    mockAssets()
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue(INPUT_TABLE)
+    const { wrapper } = mountOnRuleNode()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="rule-table-presets"]').exists()).toBe(true)
   })
 })

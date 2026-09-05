@@ -15,6 +15,7 @@ import {
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, type EntryType, type RuleOrchestration } from '@/api'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
+import { usePresetTables } from '@/composables/usePresetTables'
 import TableEditDialog from '../TableEditDialog.vue'
 import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
@@ -200,12 +201,18 @@ const dedupColumns = computed<string[]>(() => {
   const table = tables.value.find((t) => t.tableId === nodeTableId.value)
   return (table?.fields ?? []).filter((f) => f.dedup).map((f) => f.prop)
 })
+// 常用默认表快捷选择（同事 e1f9290 加的，跟本文件其余的 0805 改造无关）。
+// 0903 欠账 A2：这四个 ID 全是硬编码，2026-09-05 实测**在真实后端一个都不存在**
+// （config/entryType 一律回「未找到相关ID…」），是 mock 里的 ID。点一下会把输出表设成
+// 无效 ID、出参变「共 0 个可选」，界面还不报错。改成渲染前逐个校验，只留真实存在的，
+// 一个不剩就整行不显示——见 composables/usePresetTables.ts。
 const DEFAULT_PRESET_TABLES = [
   { name: '资讯列表', tableId: '2103330' },
   { name: '资源表', tableId: '2101001' },
   { name: '评论交互表', tableId: '2102157' },
   { name: '社交舆情表', tableId: '2103300' },
 ]
+const { availablePresets } = usePresetTables(DEFAULT_PRESET_TABLES)
 
 // 输出字段勾选相关的 outputTableFields/savedOutFields/selectedFieldProps/toggleOutputField/
 // selectAllFields/clearAllFields 随「输出字段选择」区块一并撤掉（原因见下方模板处注释）。
@@ -364,10 +371,10 @@ async function onTableSaved(tableId: string) {
         <button class="rc-input-btn" type="button" @click="openEditTable">查看/编辑表</button>
         <button class="rc-input-btn" type="button" @click="openNewTable">新建表</button>
       </div>
-      <div class="rc-preset-tables" data-testid="table-presets">
+      <div v-if="availablePresets.length" class="rc-preset-tables" data-testid="table-presets">
         <span class="rc-preset-label">常用默认表：</span>
         <button
-          v-for="preset in DEFAULT_PRESET_TABLES"
+          v-for="preset in availablePresets"
           :key="preset.tableId"
           type="button"
           class="rc-preset-chip"

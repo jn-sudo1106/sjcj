@@ -13,6 +13,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { entryApi, type EntryType, type RuleFieldOption, type RuleOrchestration } from '@/api'
 import { isSystemField } from '@/utils/flow/ruleOrchestration'
+import { usePresetTables } from '@/composables/usePresetTables'
 import TableEditDialog from './TableEditDialog.vue'
 
 type BinderModel = Pick<
@@ -29,13 +30,18 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ 'update:modelValue': [Partial<BinderModel>] }>()
 
-// 常用默认表快捷选择（同事 e1f9290 加的，跟本文件其余的 0805 改造无关，原样保留）
+// 常用默认表快捷选择（同事 e1f9290 加的，跟本文件其余的 0805 改造无关）。
+// 0903 欠账 A2：这四个 ID 全是硬编码，2026-09-05 实测**在真实后端一个都不存在**
+// （config/entryType 一律回「未找到相关ID…」），是 mock 里的 ID。点一下会把输出表设成
+// 无效 ID、出参变「共 0 个可选」，界面还不报错。改成渲染前逐个校验，只留真实存在的，
+// 一个不剩就整行不显示——见 composables/usePresetTables.ts。
 const DEFAULT_PRESET_TABLES = [
   { name: '资讯列表', tableId: '2103330' },
   { name: '资源表', tableId: '2101001' },
   { name: '评论交互表', tableId: '2102157' },
   { name: '社交舆情表', tableId: '2103300' },
 ]
+const { availablePresets } = usePresetTables(DEFAULT_PRESET_TABLES)
 
 // 只发真正改动的字段，不拿 props.modelValue 兜底铺满整个对象；父级会把 patch 合并到当前 store 状态。
 function patch(p: Partial<BinderModel>) {
@@ -280,10 +286,10 @@ const outputExpanded = ref(false)
       </el-select>
       <button class="rc-input-btn" type="button" @click="openNewTable">＋ 新建表</button>
     </div>
-    <div class="rc-preset-tables" data-testid="rule-table-presets">
+    <div v-if="availablePresets.length" class="rc-preset-tables" data-testid="rule-table-presets">
       <span class="rc-preset-label">常用默认表：</span>
       <button
-        v-for="preset in DEFAULT_PRESET_TABLES"
+        v-for="preset in availablePresets"
         :key="preset.tableId"
         type="button"
         class="rc-preset-chip"
