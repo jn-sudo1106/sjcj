@@ -21,7 +21,6 @@ import MoreTablesDialog from './MoreTablesDialog.vue'
 import MoreSourcesDialog from './MoreSourcesDialog.vue'
 import DataImportDialog from './DataImportDialog.vue'
 import BackTraceSourcesDialog from '@/views/FlowCanvas/result/BackTraceSourcesDialog.vue'
-import RowDetailSubs from '@/views/FlowCanvas/result/RowDetailSubs.vue'
 import { unsupportedNextStepBatchFilters } from './batchGuards'
 
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
@@ -956,7 +955,8 @@ onMounted(async () => {
         </dl>
         <!-- 0904：原来这里只渲染一行 `dataId · sourceId`，子行自带的 24 个字段全丢了，
              也没有旧平台那个「本页展示子数据 3/6 条」的总数。换成与源画布数据视图同一个面板。 -->
-        <RowDetailSubs :subs="detail.data.subs" :subs-cnt="detail.data.subsCnt" />
+        <!-- 0904 I06：「下级数据」面板已撤（Z0-1）。detail.data 仍在用（行 + showItems），
+             只是不再罗列子行——下钻改走「带条件跳转 + 可返回」。 -->
       </template>
     </el-drawer>
 

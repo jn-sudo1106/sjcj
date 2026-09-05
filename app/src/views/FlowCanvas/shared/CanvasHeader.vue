@@ -167,8 +167,12 @@ async function onSwitchFlow(command: string) {
     <div class="ch-switcher">
       <button class="ch-seg" :class="{ on: view === 'flow' }" type="button" @click="switchView('flow')">流程视图</button>
       <button class="ch-seg" :class="{ on: view === 'data' }" type="button" @click="switchView('data')">数据视图</button>
-      <button class="ch-seg" :class="{ on: view === 'file' }" type="button" @click="switchView('file')">文件视图</button>
-      <button class="ch-seg" :class="{ on: view === 'task' }" type="button" @click="switchView('task')">任务视图</button>
+      <!-- 0904 I11：「文件视图 / 任务视图」两档**从切换器里去掉**（Z0-3）。
+           产品原话「文件和任务我觉得暂时吧，因为数据视图里面是包着文件的」——文件能力
+           已经在数据视图的单元格文件预览里（0819 N2-7），任务那条整批暂缓（0903 Y5，
+           入口等产品重新定，见 0904 §9-Q7）。
+           **路由与组件都不删**：FileView / TaskView 仍被别处使用，且旧深链 view=file/task
+           要能优雅落到数据视图，见 utils/url/workspaceRoute.ts 的 normalizeSourceView。 -->
     </div>
 
     <template v-if="src">

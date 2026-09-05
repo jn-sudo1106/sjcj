@@ -24,7 +24,6 @@ import { readRailOpen, writeRailOpen } from './railPref'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import RowDetailFields from './RowDetailFields.vue'
-import RowDetailSubs from './RowDetailSubs.vue'
 import { fieldsFromShowItems, fieldsFromTableMeta } from './rowDetailFields'
 import { readFieldPreset, readShowEmpty, visibleDetailProps, writeFieldPreset, writeShowEmpty, type RowFieldPreset } from './rowDetailPrefs'
 
@@ -845,37 +844,15 @@ async function loadParentDetail(row: DataRow) {
     parentLoading.value = false
   }
 }
-/**
- * 本行详情（0904）：只为拿 `subs` / `subsCnt` 而发——抽屉里的字段一直是用列表行 + 表 meta
- * 现拼的（`detailFields`），不依赖这个请求，所以它失败**不影响抽屉正常用**，静默即可。
- * 旧平台 BaseDetail.vue 同样是打开详情才拉一次。
- */
-const rowDetail = ref<EntryDetail | null>(null)
-let rowDetailSeq = 0
-async function loadRowDetail(row: DataRow | null) {
-  const id = ++rowDetailSeq
-  rowDetail.value = null
-  if (!row || !selectedTable.value) return
-  try {
-    const res = await dataApi.rowDetail(selectedTable.value, row.dataId)
-    if (id === rowDetailSeq) rowDetail.value = res
-  } catch { /* 子表拿不到就不显示这一块，不打扰用户 */ }
-}
-watch(detailRow, (row) => { void loadRowDetail(row) })
-
-/** 详情里「查看全部」：交给列表层——就是 Y1 那个下钻 */
-function onSubsViewAll() {
-  const row = detailRow.value
-  const cell = row ? childCounts.value?.get(row.dataId) : undefined
-  if (!row || !cell) return
-  closeDetail()
-  void onChildCountClick(row, cell)
-}
-/** 这行有没有可下钻的下级（决定「查看全部」出不出现） */
-function childCountFor(row: DataRow | null): boolean {
-  if (!row) return false
-  return !!childCounts.value?.get(row.dataId)?.byTarget.some((t) => t.count > 0)
-}
+// 0904 I06：详情抽屉里的「下级数据」面板**已删除**（Z0-1）。
+// 它 2026-09-04 才迁进来（commit 58d35e0），当天走查就被否掉——产品原话
+// 「这个不合理啊，这个不用你点，下级是点进去就这个条件才能下去，然后可以返回就行了」
+// 「你在这个下级之下，你那个详情的就不要了」。逐条罗列子行被形容为「看猴年马月」。
+//
+// **这不是误删回滚**：下钻的形态定为「带条件跳转 + 可返回」（Z2 做返回），
+// 详情层不再内嵌子表列表。随之删除的还有 RowDetailSubs.vue、rowDetail/loadRowDetail
+// （那个请求只为拿 subs/subsCnt，字段本来就是列表行 + 表 meta 现拼的）、onSubsViewAll、childCountFor。
+// 列表层的下级条数列与点击下钻（Y1）**保留不动**，那才是产品认可的入口。
 
 /** 详情抽屉里的「父 ID ↗」 */
 async function openParentDetail() {
@@ -1311,15 +1288,6 @@ async function onTestScript() {
             :visible-props="detailVisibleProps"
             @update:field="editValues[$event.prop] = $event.value"
             @file-click="onCellFile"
-          />
-          <!-- 下级数据（0904）：与上游面板对称，抽屉里顺序是 上游 → 本行 → 下游。
-               「查看全部」直接复用 Y1 的下钻——详情层看两眼，列表层看全部。 -->
-          <RowDetailSubs
-            :subs="rowDetail?.subs"
-            :subs-cnt="rowDetail?.subsCnt"
-            :show-empty="showEmpty"
-            :can-view-all="!!childCountFor(detailRow)"
-            @view-all="onSubsViewAll"
           />
         </div>
         <div class="rv-d-foot">
