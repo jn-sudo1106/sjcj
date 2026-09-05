@@ -651,6 +651,12 @@ export const MULTI_MODE_OPTIONS: { value: number; label: string }[] = [
  *
  * `legacy` 是旧平台该取值的原文，挂在 option 的 title 上，新旧平台逐字段核对时直接可见（0824-00 §9）。
  * MULTI_MODE_OPTIONS **不删**：它是旧平台三态原文的唯一来源，由 legacyEnums.test.ts 逐字锁死。
+ *
+ * ⚠️ **2026-09-05 复核，维持原样，不要再提。** 当时对着旧平台「配置编辑」的下拉逐项核过，
+ * 它确实是三项（`1.列表类[根据去重字段去重]` / `0.详情类[根据父ID去重]` /
+ * `2.更新父表[根据父ID更新父表]`），配置 1400761 选的就是第三项；我们只给两项、且把
+ * 0 和 2 都显示成「详情页」，**是 0828 明确要求的**，不是遗漏。
+ * 写回方向三态齐全（见 resolveMultiMode），所以数据不会写坏，差别只在显示措辞。
  */
 export const WEB_TYPE_OPTIONS: { value: number; label: string; desc: string; legacy: string }[] = [
   { value: 1, label: '列表页', desc: '分页、搜索结果、列表入口', legacy: '列表类[根据去重字段去重]' },
