@@ -48,9 +48,10 @@ watch([() => props.modelValue, () => props.tableId], () => { opened.value = fals
 <template>
   <span class="sql-condition-field">
     <slot :value="compactValue" :update="update" />
+    <!-- 只留图标按钮，不写「放大」两个字（2026-09-05）：条件框本来就窄，
+         这两个字白占宽度；图标 + title/aria-label 已经说清楚了。 -->
     <button class="sql-expand" type="button" aria-label="放大编辑 SQL 条件" title="放大编辑 SQL 条件" @click="open">
       <FullScreen aria-hidden="true" />
-      <span>放大</span>
     </button>
     <ElDialog
       v-model="opened"
@@ -111,7 +112,7 @@ watch([() => props.modelValue, () => props.tableId], () => { opened.value = fals
 .sql-condition-field :deep(.el-input), .sql-condition-field :deep(.el-autocomplete) { width: 100%; min-width: 0; }
 .sql-condition-field :deep(.el-input__wrapper) { padding-right: 58px; }
 .sql-condition-field :deep(.el-input__inner) { padding-right: 0; }
-.sql-expand { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; gap: 3px; padding: 3px 4px; border: 0; border-radius: 4px; background: var(--rc-surface, #fff); color: var(--rc-muted, #64748b); font-size: 12px; white-space: nowrap; cursor: pointer; }
+.sql-expand { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; justify-content: center; padding: 4px; border: 0; border-radius: 4px; background: var(--rc-surface, #fff); color: var(--rc-muted, #64748b); font-size: 12px; white-space: nowrap; cursor: pointer; }
 .sql-expand svg { width: 13px; height: 13px; }
 .sql-expand:hover { color: var(--rc-primary, #2563eb); background: var(--rc-primary-bg, #eff6ff); }
 .sql-expand:focus-visible { outline: 2px solid var(--rc-primary, #2563eb); outline-offset: 1px; }
