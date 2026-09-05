@@ -222,13 +222,24 @@ describe('DataView · 数据表页', () => {
     expect(body.text()).toContain('查看统计')
     expect(body.text()).toContain('查看查询条件/SQL')
     expect(body.text()).toContain('展示处理步骤')
-    // 0903 Y2-8：原来是「查看去重源 ID」（把 ID 拼成串 alert 出来），
-    // 改成打开反查弹窗，后面接得上「在源视图中打开」和「对这批源发任务」
-    expect(body.text()).toContain('按此条件反查源')
+    // 0904 I02（Z1-4）：反查源**从「更多」里放出来了**，工具栏直接有按钮
+    // （原话「我到时候把放出来」）——它是数据视图通往源视图的唯一通路，
+    // 藏在二级菜单里没人找得到。所以这里断言它**不在**下拉里。
+    expect(body.text()).not.toContain('按此条件反查源')
     expect(body.text()).not.toContain('查看去重源 ID')
     expect(body.text()).toContain('清除父表后续标识')
     expect(body.text()).not.toContain('数据维护')
   })
+  // 0904 I01/I02（Z1）：反查源从「弹窗中转」改成「一键直达源视图」。
+  // 会上原话「那你还不如把这个东西直接放到那个源列表」「你直接反向你不是直接跑两步？」
+  it('反查源入口在工具栏上，不在「更多」下拉里', async () => {
+    const w = await mountPage()
+    await waitForLoad()
+    const btn = w.find('[data-testid="data-back-trace"]')
+    expect(btn.exists()).toBe(true)
+    expect(btn.text()).toContain('查源')
+  })
+
 
   it('工具条按新增、导入、导出、更多与删除收敛，不显示夸张的危险操作按钮', async () => {
     const auth = useAuthStore()

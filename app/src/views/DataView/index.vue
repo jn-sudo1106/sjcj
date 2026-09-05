@@ -20,7 +20,7 @@ import SourceDetailDrawer from './SourceDetailDrawer.vue'
 import MoreTablesDialog from './MoreTablesDialog.vue'
 import MoreSourcesDialog from './MoreSourcesDialog.vue'
 import DataImportDialog from './DataImportDialog.vue'
-import BackTraceSourcesDialog from '@/views/FlowCanvas/result/BackTraceSourcesDialog.vue'
+import { backTraceSources, DISTINCT_LIMIT } from '@/utils/data/backTraceSources'
 import { unsupportedNextStepBatchFilters } from './batchGuards'
 
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
@@ -304,26 +304,44 @@ function onMarkFormal() {
   )
 }
 
-// 0903 Y2-8：原来这里是把 ID 拼成逗号串 alert 出来（旧平台「展示当前条件下所有的源」的 1:1 迁移）。
-// 一串 ID 看完只能手动去别处一个个查，等于把活推回给用户。改成打开反查弹窗，
-// 后面接得上「在源视图中打开」和「对这批源发任务」两条路。
-const backTraceQuery = ref<RowQuery | null>(null)
-const backTraceLabel = computed(() => {
+// 按条件反查源。三代形态：
+//   ① 0903 Y2-8 之前：把 ID 拼成逗号串 alert 出来（旧平台 1:1 迁移）——一串 ID 看完只能手动
+//      去别处一个个查，等于把活推回给用户；
+//   ② 0903 Y2-8：改成弹窗，列清单 + 「在源视图中打开」/「对这批源发任务」两条路；
+//   ③ **0904 I01（本次）：弹窗退役，点一下直达源视图。** 会上原话「那你还不如把这个东西
+//      直接放到那个源列表」「你直接反向你不是直接跑两步？」——中间那层没人要。
+//
+// 求命中源的算法在 `utils/data/backTraceSources.ts`。这里没有网站范围（数据查看页是全平台的），
+// 走的是它的兜底分支：全表 distinctSource + 上限截断判定。
+const backTracing = ref(false)
+async function onDistinctSource() {
+  if (backTracing.value) return
   const f = panelFilter.value as Record<string, unknown>
-  return [
-    f.sql ? String(f.sql) : '',
-    f.state ? `状态=${String(f.state)}` : '',
-    f.dataId ? `数据ID=${String(f.dataId)}` : '',
-    f.parentId ? `父ID=${String(f.parentId)}` : '',
-  ].filter(Boolean).join(' AND ')
-})
-function onBackTraceOpenSourceView(ids: string[]) {
-  backTraceQuery.value = null
-  void router.push({ path: '/canvas', query: { view: 'source', sourceIds: ids.join(',') } })
+  const hasCondition = !!(f.sql || f.state || f.dataId || f.parentId)
+  // 无条件 = 全部源（I01：「你不带条件就是查的所有的」），不必发请求。
+  // **落到采集资产而不是源视图**：源视图锁死在单个网站内（0812 纠偏），而数据查看页是
+  // 全平台的、没有网站锚点——`/canvas?view=source` 不带 siteId 会被路由兜底弹回 /collect，
+  // 与其靠这个意外，不如直接写明目的地。采集资产就是"所有源"该去的地方。
+  if (!hasCondition) {
+    void router.push({ path: '/collect' })
+    return
+  }
+  backTracing.value = true
+  try {
+    const { sourceIds, truncated } = await backTraceSources(buildQuery())
+    if (!sourceIds.length) {
+      ElMessage.info('当前条件没有命中任何源')
+      return
+    }
+    if (truncated) ElMessage.warning(`命中源超过 ${DISTINCT_LIMIT} 个，只带前 ${DISTINCT_LIMIT} 个到源视图`)
+    void router.push({ path: '/canvas', query: { view: 'source', sourceIds: sourceIds.join(',') } })
+  } catch (e) {
+    ElMessage.error(`反查源失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    backTracing.value = false
+  }
 }
-function onDistinctSource() {
-  backTraceQuery.value = buildQuery()
-}
+
 function onClearParent() {
   if (!canWrite.value) {
     ElMessage.error('仅管理员可清除父表后续标识')
@@ -760,6 +778,16 @@ onMounted(async () => {
               </el-dropdown-menu>
             </template>
           </el-dropdown>
+          <!-- 0904 I02：反查源从「更多」下拉里放出来（原话「我到时候把放出来」）。
+               它是数据视图通往源视图的唯一通路，藏在二级菜单里没人找得到。 -->
+          <button
+            class="rc-btn"
+            type="button"
+            data-testid="data-back-trace"
+            :disabled="backTracing || !tableId"
+            title="按当前查询条件找出这些数据来自哪些源，并直接在源视图中打开"
+            @click="onDistinctSource"
+          >{{ backTracing ? '反查中…' : '按条件查源 →' }}</button>
           <el-dropdown trigger="click">
             <button class="rc-btn" data-testid="data-more" type="button">更多<el-icon class="et-caret"><ArrowDown /></el-icon></button>
             <template #dropdown>
@@ -767,7 +795,6 @@ onMounted(async () => {
                 <el-dropdown-item @click="onMoreCommand('summary')">查看统计</el-dropdown-item>
                 <el-dropdown-item @click="onMoreCommand('sql')">{{ showSql ? '隐藏查询条件/SQL' : '查看查询条件/SQL' }}</el-dropdown-item>
                 <el-dropdown-item @click="onMoreCommand('steps')">展示处理步骤</el-dropdown-item>
-                <el-dropdown-item @click="onMoreCommand('distinct-source')">按此条件反查源</el-dropdown-item>
                 <el-dropdown-item v-if="canWrite" divided :disabled="!sourceId || !selectedRowKeys.length" @click="onClearParent">
                   清除父表后续标识
                 </el-dropdown-item>
@@ -922,19 +949,6 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <BackTraceSourcesDialog
-
-      :query="backTraceQuery"
-
-      :condition-label="backTraceLabel"
-
-      @close="backTraceQuery = null"
-
-      @open-in-source-view="onBackTraceOpenSourceView"
-
-      @launch="backTraceQuery = null"
-
-    />
 
     <DataImportDialog
       v-model="importOpen"

@@ -34,8 +34,7 @@ import { confirmDanger } from '@/utils/confirmDanger'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import DataGrid from './DataGrid.vue'
 import FilePreview from './components/FilePreview.vue'
-import BackTraceSourcesDialog from './BackTraceSourcesDialog.vue'
-import { sendInBatches } from './useSourceLaunch'
+import { backTraceSources } from '@/utils/data/backTraceSources'
 import { extFromName } from '@/utils/ossFile'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import { readRailOpen, writeRailOpen } from './railPref'
@@ -483,43 +482,45 @@ function buildSummaryQuery(): RowQuery {
   }
 }
 
-// 按条件反查源（0903 Y2 / H12）：全部源数据视图是唯一"跨源看数据"的地方，反查的入口就该在这。
+// 按条件反查源（0903 Y2 / H12 → 0904 I01 改为直达）。
+//
+// **弹窗那层已经拆掉**：会上原话「那你还不如把这个东西直接放到那个源列表」
+// 「你直接反向你不是直接跑两步？」——先弹窗看清单再决定去哪，是多余的一步。
+// 现在点一下就把命中的源写进源视图筛选直接落过去，看源、勾选、发任务都用源视图现成的能力。
+// 求命中源的算法原样保留在 `utils/data/backTraceSources.ts`（09-04 六轮修复换来的，别重写）。
+//
 // 复用 buildSummaryQuery——统计和反查问的是同一批数据，条件口径必须一致，不另拼一份。
-const backTraceQuery = ref<RowQuery | null>(null)
-/** 反查按钮的可用性：没有任何数据条件时反查等于"这张表涉及的所有源"，没有意义 */
-const canBackTrace = computed(() => !!effectiveTableId.value && !!(filters.sql || filters.state || filters.dataId || filters.parentId))
-const backTraceLabel = computed(() => [
-  filters.sql ? filters.sql : '',
-  filters.state ? `状态=${filters.state}` : '',
-  filters.dataId ? `数据ID=${filters.dataId}` : '',
-  filters.parentId ? `父ID=${filters.parentId}` : '',
-].filter(Boolean).join(' AND '))
-function openBackTrace() {
-  if (!canBackTrace.value) return
-  backTraceQuery.value = buildSummaryQuery()
-}
-function onBackTraceOpenSourceView(ids: string[]) {
-  backTraceQuery.value = null
-  // 带着源 ID 去源视图：那边的「源 ID」筛选框本来就收逗号分隔的多个 ID
-  void router.push({ path: '/canvas', query: { siteId: props.siteId, view: 'source', sourceIds: ids.join(',') } })
-}
-async function onBackTraceLaunch(ids: string[]) {
-  backTraceQuery.value = null
-  await confirmDanger(
-    '按反查结果发任务',
-    `将对反查出的 ${ids.length} 个源发起抓取。任务一旦提交无法撤回，是否继续？`,
-    async () => {
-      // all 恒为 0：旧平台这个字段是「所有参数」笛卡尔展开，不是「所有源」（0831 X2-A 的坑）。
-      // 反查出来的源不逐个查参数——真要带参得回源视图勾选后单独发。
-      const result = await sendInBatches(ids, (batch) =>
-        sourceApi.sendSnatchWithParam({ ids: batch, param: {}, all: 0, include: [], skip: 0 }))
-      if (result.failed.length) {
-        const failedCount = result.failed.reduce((n, item) => n + item.ids.length, 0)
-        return { message: `已提交 ${result.sent} 个源，${failedCount} 个失败：${result.failed[0].error}` }
-      }
-      return { message: `已提交 ${result.sent} 个源` }
-    },
-  )
+const backTracing = ref(false)
+/**
+ * 反查按钮的可用性。
+ *
+ * **不再要求"必须有条件"**（0904 I01）：产品明确「你不带条件就是查的所有的，
+ * 你带条件就是查这个条件下的」——无条件是合法语义，直接进源视图看全部源。
+ */
+const canBackTrace = computed(() => !!effectiveTableId.value)
+async function openBackTrace() {
+  if (!canBackTrace.value || backTracing.value) return
+  const hasCondition = !!(filters.sql || filters.state || filters.dataId || filters.parentId)
+  // 无条件 = 全部源：不必发请求，直接进源视图不带 sourceIds
+  if (!hasCondition) {
+    void router.push({ path: '/canvas', query: { siteId: props.siteId, view: 'source' } })
+    return
+  }
+  backTracing.value = true
+  try {
+    const { sourceIds } = await backTraceSources(buildSummaryQuery(), siteChildren.value.map((s) => s.sourceId))
+    if (!sourceIds.length) {
+      // 不跳：跳过去是一张空源列表，用户会以为源视图坏了
+      ElMessage.info('当前条件没有命中任何源')
+      return
+    }
+    // 带着源 ID 去源视图：那边的「源 ID」筛选框本来就收逗号分隔的多个 ID
+    void router.push({ path: '/canvas', query: { siteId: props.siteId, view: 'source', sourceIds: sourceIds.join(',') } })
+  } catch (e) {
+    ElMessage.error(`反查源失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    backTracing.value = false
+  }
 }
 
 const summaryOpen = ref(false)
@@ -844,14 +845,6 @@ function onCellFile(path: string) {
       :can-write="false"
     />
     <SummaryDrawer v-model="summaryOpen" :table-meta="meta" :build-query="buildSummaryQuery" :hit-count="rows.length" />
-    <BackTraceSourcesDialog
-      :query="backTraceQuery"
-      :condition-label="backTraceLabel"
-      :site-source-ids="siteChildren.map((s) => s.sourceId)"
-      @close="backTraceQuery = null"
-      @open-in-source-view="onBackTraceOpenSourceView"
-      @launch="onBackTraceLaunch"
-    />
   </main>
 
     <el-dialog
