@@ -31,15 +31,21 @@ const props = defineProps<{
 const emit = defineEmits<{ 'update:modelValue': [Partial<BinderModel>] }>()
 
 // 常用默认表快捷选择（同事 e1f9290 加的，跟本文件其余的 0805 改造无关）。
-// 0903 欠账 A2：这四个 ID 全是硬编码，2026-09-05 实测**在真实后端一个都不存在**
-// （config/entryType 一律回「未找到相关ID…」），是 mock 里的 ID。点一下会把输出表设成
-// 无效 ID、出参变「共 0 个可选」，界面还不报错。改成渲染前逐个校验，只留真实存在的，
-// 一个不剩就整行不显示——见 composables/usePresetTables.ts。
+// 0903 欠账 A2：原来这四个 ID（2103330/2101001/2102157/2103300）**在真实后端一个都不存在**
+// ——它们是 mock 里的 ID，这功能从来只在 mock 下成立。点一下会把输出表设成无效 ID、
+// 出参变「共 0 个可选」，界面还不报错。2026-09-05 换成下面这四张真实表。
+//
+// 名单仍是硬编码，所以**校验没有撤掉**（composables/usePresetTables.ts）：渲染前逐个问
+// 后端这张表在不在，只留存在的，一个不剩就整行不显示。换个环境这些 ID 同样可能失效，
+// 有校验兜着就不会再出现"点了没反应还不报错"。
 const DEFAULT_PRESET_TABLES = [
-  { name: '资讯列表', tableId: '2103330' },
-  { name: '资源表', tableId: '2101001' },
-  { name: '评论交互表', tableId: '2102157' },
-  { name: '社交舆情表', tableId: '2103300' },
+  // 前两张按实际用量定（2026-09-05 抽 11998 个源统计 entryTypeId）：
+  // 通用新闻表 6481 个源、公众号文章 5439 个，两张占 99.3%，断层明显。
+  // 后两张是业务指定的资源表（用户 2026-09-05 点名）。四张都已逐个校验存在且有字段。
+  { name: '通用新闻表', tableId: '900' },
+  { name: '公众号文章', tableId: '6200029' },
+  { name: '附件资源表', tableId: '6200020' },
+  { name: '图片资源文件表', tableId: '6200005' },
 ]
 const { availablePresets } = usePresetTables(DEFAULT_PRESET_TABLES)
 
