@@ -136,7 +136,14 @@ async function openFlowInWorkspace(flow: FlowRecord) {
     const full = await flowCenterApi.detail(flow.id)
     if (reqId !== loadSeq) return
     const record = full ?? flow
-    if (record.definition.main.length) {
+    // ⚠️ 判据是"有没有**真实节点**"，不是 main 非空（2026-09-04 修）。
+    // `makeBlankTemplateDefinition()` 产出的 main 是 ['start','end']——结构上非空、实际一个节点
+    // 都没有。按长度判会让**我们自己新建的流程永远走不到下面的还原分支**：saveFlow 在后端
+    // 自动建了一条 isRoot=1 的真实根节点（旧平台新增流程同样如此，实测 1400987/1400988/1400989
+    // 各恰好 1 条），而我们拿着这份空 flowConf 把它盖掉，画布显示 0 个节点，旧平台显示 1 个。
+    const hasRealNode = record.definition.main.some((id) => id !== 'start' && id !== 'end')
+      || (record.definition.branchGroups ?? []).some((g) => g.branches.some((b) => b.chain.length))
+    if (hasRealNode) {
       loadIntoWorkspace(record)
       return
     }

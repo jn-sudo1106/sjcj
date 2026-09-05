@@ -2160,10 +2160,14 @@ export const flowCenterApi = {
     if (!flowId) throw new Error('请先选择要复制的流程')
     const payload: Record<string, unknown> = { flowId }
     if (flowName?.trim()) payload.flowName = flowName.trim()
+    // ⚠️ `paramsIn: 'query'`：后端这两条复制端点是 `@RequestParam`，POST 但参数走 query string，
+    // 不是 JSON body（2026-09-05 实测：发 body 报 "Required request parameter 'flowId' ...
+    // is not present"）。跟 item/next/saveItemConfig 同一种写法。
     const result = await request<unknown>('flow/copyFlow', payload, {
       method: 'POST',
       httpEndpoint: 'flow/copyFlow',
       httpParams: payload,
+      paramsIn: 'query',
     })
     const ack = ackFromApiResult(result)
     if (!ack.ok) throw new Error(ack.message || '复制流程失败')
@@ -2185,6 +2189,7 @@ export const flowCenterApi = {
       method: 'POST',
       httpEndpoint: 'flow/copyTemplateSteps',
       httpParams: payload,
+      paramsIn: 'query',  // 同 copyFlow：@RequestParam，参数走 query
     })
     return ackFromApiResult(result)
   },
