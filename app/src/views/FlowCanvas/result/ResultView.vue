@@ -427,12 +427,20 @@ watch(
 function onSelectNode(id: string) {
   if (!id || id === selectedNodeId.value) return
   selectedNodeId.value = id
+  // 与右侧节点配置联动（0904 I10 / Z3-2，用户 2026-09-05 补充「点击中间的流程需要跟右侧联动」）：
+  // 三栏之后右侧常驻节点配置，点中间轨道上的节点，右边就该跟着换成这个节点的配置——
+  // 否则会出现"左边在看 A 的数据、右边在改 B 的配置"这种最容易误操作的状态。
+  flow.select(id)
   scope.value = defaultScope()
   page.value = 1
   selectedRowIds.value = []
   sortField.value = ''
   sortOrder.value = ''
 }
+// 反向联动：从画布切到数据视图时，右侧已经选中的节点应当就是中间默认看的那个。
+watch(() => flow.selectedId, (id) => {
+  if (id && id !== selectedNodeId.value && allNodes.value.some((n) => n.id === id)) onSelectNode(id)
+})
 
 watch(queryNodeId, (id) => {
   if (id && allNodes.value.some((n) => n.id === id)) onSelectNode(id)

@@ -27,6 +27,17 @@ export const useUiStore = defineStore('ui', () => {
     Number.isFinite(savedW) && savedW >= 372 ? Math.min(savedW, MAX_INSPECTOR_W) : null,
   )
   const inspectorExpanded = ref(false)
+  /**
+   * 右侧配置区**收起**（0904 I10 / Z3-2）。与 `inspectorExpanded` 是相反的两端：
+   *   - `inspectorExpanded` = 中间收起、配置区占满（原有）
+   *   - `inspectorCollapsed` = **配置区收起成窄条、中间占满**（本次新增）
+   * 两者互斥，由 `toggleInspectorCollapsed` / `toggleInspectorExpanded` 各自互相清掉。
+   *
+   * **数据视图默认收起**（用户 2026-09-05 指定）：进数据视图先把地方让给数据，
+   * 要看配置再点开；流程视图保持展开——那边配置本来就是主角。
+   * 不持久化：跟 `inspectorExpanded` 一样是临时布局状态。
+   */
+  const inspectorCollapsed = ref(false)
 
   function setInspectorWidth(px: number) {
     inspectorWidth.value = Math.round(Math.min(px, MAX_INSPECTOR_W))
@@ -34,6 +45,16 @@ export const useUiStore = defineStore('ui', () => {
   }
   function toggleInspectorExpanded() {
     inspectorExpanded.value = !inspectorExpanded.value
+    if (inspectorExpanded.value) inspectorCollapsed.value = false
+  }
+  function toggleInspectorCollapsed() {
+    inspectorCollapsed.value = !inspectorCollapsed.value
+    if (inspectorCollapsed.value) inspectorExpanded.value = false
+  }
+  /** 切视图时套用该视图的默认布局（数据视图收起配置、流程视图展开） */
+  function applyViewLayoutDefault(view: string) {
+    inspectorExpanded.value = false
+    inspectorCollapsed.value = view === 'data'
   }
 
   // 采集资产视图偏好（0707 优化·Phase3）：卡片（默认，网站粒度浏览）/ 表格（树形展开源，批量运维）
@@ -47,7 +68,8 @@ export const useUiStore = defineStore('ui', () => {
 
   return {
     registerAction, fireAction, clearActions,
-    inspectorWidth, inspectorExpanded, setInspectorWidth, toggleInspectorExpanded,
+    inspectorWidth, inspectorExpanded, inspectorCollapsed, setInspectorWidth,
+    toggleInspectorExpanded, toggleInspectorCollapsed, applyViewLayoutDefault,
     assetView, setAssetView,
   }
 })

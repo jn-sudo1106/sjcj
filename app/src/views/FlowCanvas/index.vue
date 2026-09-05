@@ -37,8 +37,20 @@ const activeView = ref(normalizeSourceView(route.query.view))
 function syncActiveView() {
   activeView.value = sourceViewFromHash(window.location.hash)
 }
+// 切视图时套用该视图的默认布局（Z3-2）：数据视图默认把右侧配置收起、地方让给数据；
+// 流程视图展开——那边配置本来就是主角。
+//
+// ⚠️ 不能拿 `activeView` 当"上一次的值"来比：它在 setup 里就已经按 URL 初始化过了，
+// 首帧（immediate）比较必然相等，默认布局一次都套不上（2026-09-05 实测踩到）。
+// 单独记一个"已套用过哪个视图"。
+let layoutAppliedFor: string | null = null
 watch(() => route.query.view, () => {
-  activeView.value = normalizeSourceView(route.query.view)
+  const next = normalizeSourceView(route.query.view)
+  if (next !== layoutAppliedFor) {
+    layoutAppliedFor = next
+    ui.applyViewLayoutDefault(next)
+  }
+  activeView.value = next
 }, { immediate: true })
 // 深链定位节点（0819 N4-1）：数据视图的「查看条件」不再就地展开，而是跳到流程画布并
 // 选中该节点、打开对应配置页签。
@@ -511,7 +523,7 @@ onUnmounted(() => {
         <div
           v-else
           class="rc-flow-shell"
-          :class="{ 'source-mode': !!flow.sourceCtx, expanded: ui.inspectorExpanded }"
+          :class="{ 'source-mode': !!flow.sourceCtx, expanded: ui.inspectorExpanded, 'insp-collapsed': ui.inspectorCollapsed }"
           :style="{ '--insp-w': inspWidth }"
         >
           <template v-if="!ui.inspectorExpanded">
@@ -532,7 +544,17 @@ onUnmounted(() => {
             @mousedown="onSplitStart"
           />
           <div v-else class="rc-insp-splitter placeholder" />
-          <NodeInspector />
+          <!-- 右侧配置区收起态（Z3-2）：数据视图默认走这条，把地方让给数据；
+               点窄条即可展开。与"中间收起"是相反的两端，互斥。 -->
+          <button
+            v-if="ui.inspectorCollapsed"
+            type="button"
+            class="rc-insp-collapsed"
+            data-testid="inspector-collapsed"
+            title="点击展开节点配置"
+            @click="ui.toggleInspectorCollapsed()"
+          >« 节点配置</button>
+          <NodeInspector v-else />
         </div>
       </div>
     </div>
@@ -567,6 +589,15 @@ onUnmounted(() => {
 .rc-flow-shell.source-mode { grid-template-columns: minmax(480px, 1fr) 6px var(--insp-w, 480px); }
 /* 展开态：画布收起为窄条（与左侧源侧栏收起态一致），配置区占满剩余空间 */
 .rc-flow-shell.expanded { grid-template-columns: 36px 6px minmax(0, 1fr); }
+/* 收起态：配置区缩成窄条（与上面的展开态左右对称），中间占满 */
+.rc-flow-shell.insp-collapsed { grid-template-columns: minmax(0, 1fr) 6px 36px; }
+.rc-insp-collapsed {
+  display: flex; align-items: center; justify-content: center;
+  writing-mode: vertical-rl; text-orientation: mixed;
+  width: 36px; padding: 0; border: 1px solid var(--rc-border); border-radius: var(--rc-radius);
+  background: #fff; color: var(--rc-muted); font-size: 12px; letter-spacing: 1px; cursor: pointer;
+}
+.rc-insp-collapsed:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); border-color: #93c5fd; }
 .rc-canvas-collapsed {
   display: flex; align-items: center; justify-content: center;
   writing-mode: vertical-rl; text-orientation: mixed;

@@ -242,6 +242,16 @@ onMounted(async () => {
             :title="ui.inspectorExpanded ? '还原配置区宽度' : '展开配置区，便于编辑表配置'"
             @click="ui.toggleInspectorExpanded()"
           >{{ ui.inspectorExpanded ? '⊟ 还原' : '⛶ 展开' }}</button>
+          <!-- 收起整个配置区（Z3-2）：收起后变成右侧一条窄边，点它再展开。
+               数据视图默认就是收起态，这里给的是"收回去"的那一半——
+               只有展开态能看到本按钮，收起态的入口在窄条本身。 -->
+          <button
+            class="rc-insp-expand"
+            type="button"
+            data-testid="inspector-collapse"
+            title="收起配置区，把宽度让给左边"
+            @click="ui.toggleInspectorCollapsed()"
+          >» 收起</button>
           <!-- 节点启停开关（0710 会议 D5）：停用=数据流经此节点时跳过不处理；逐节点验证通过后全开再定时跑 -->
           <label class="ni-enable-switch" :title="cfg.disabled ? '节点已停用：数据在此节点不处理，点击启用' : '节点运行中：点击停用（数据将跳过此节点）'">
             <input type="checkbox" :checked="!cfg.disabled" @change="flow.setNodeDisabled(id, !($event.target as HTMLInputElement).checked)" />

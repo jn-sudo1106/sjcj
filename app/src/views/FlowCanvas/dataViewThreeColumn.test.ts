@@ -52,12 +52,16 @@ async function mountCanvas(view: 'flow' | 'data') {
 }
 
 describe('数据视图的三栏骨架（Z3-1/Z3-2）', () => {
-  it('view=data 时数据视图在三栏里，**节点配置面板不能消失**', async () => {
+  it('view=data 时数据视图在三栏里，**节点配置一键可达**（不再整个消失）', async () => {
     const w = await mountCanvas('data')
     const shell = w.find('.rc-flow-shell')
     expect(shell.exists()).toBe(true)
     expect(shell.find('[data-testid="stub-result-view"]').exists()).toBe(true)
-    // 这条是本次改动的全部意义：跳到数据视图后右侧配置还在
+    // 这条是本次改动的全部意义：跳到数据视图后配置还在这一栏里——
+    // 默认收起成窄边（用户指定），点开就有，而不是像以前那样整屏铺开、右边什么都没有。
+    expect(shell.find('[data-testid="inspector-collapsed"]').exists()).toBe(true)
+    await shell.get('[data-testid="inspector-collapsed"]').trigger('click')
+    await flushPromises()
     expect(shell.find('[data-testid="stub-inspector"]').exists()).toBe(true)
     // 左源侧栏只在能解析出 siteId 时渲染（深链只带 sourceId 时靠 resolveOwnerSite 异步补），
     // 这条测试只锁三栏骨架，侧栏的出现时机另有用例覆盖，这里不断言。
@@ -76,8 +80,29 @@ describe('数据视图的三栏骨架（Z3-1/Z3-2）', () => {
     expect(shell.find('[data-testid="stub-inspector"]').exists()).toBe(true)
   })
 
+  it('数据视图**默认把右侧配置收起**，把宽度让给数据（用户 2026-09-05 指定）', async () => {
+    const w = await mountCanvas('data')
+    expect(useUiStore().inspectorCollapsed).toBe(true)
+    // 收起态渲染成一条可点的窄边，点它展开
+    expect(w.find('[data-testid="inspector-collapsed"]').exists()).toBe(true)
+    expect(w.find('[data-testid="stub-inspector"]').exists()).toBe(false)
+  })
+
+  it('流程视图不收起——那边配置本来就是主角', async () => {
+    await mountCanvas('flow')
+    expect(useUiStore().inspectorCollapsed).toBe(false)
+  })
+
+  it('点窄边即展开，配置面板回来', async () => {
+    const w = await mountCanvas('data')
+    await w.get('[data-testid="inspector-collapsed"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="stub-inspector"]').exists()).toBe(true)
+  })
+
   it('收起态的文案跟着当前视图走，不会在数据视图里说「画布已收起」', async () => {
     const w = await mountCanvas('data')
+    // 默认是"右侧收起"；这条测的是相反的那一端（中间收起），先切过去
     useUiStore().toggleInspectorExpanded()
     await flushPromises()
     const collapsed = w.find('.rc-canvas-collapsed')
