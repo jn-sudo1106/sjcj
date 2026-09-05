@@ -7,6 +7,7 @@ import { ElMessage } from 'element-plus'
 import { siteApi, type Site, type Source } from '@/api'
 import { useUiStore } from '@/stores/ui'
 import { firstSourceId } from '@/utils/url/workspaceRoute'
+import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
 import CategoryTreePicker, { type CategorySelection } from '@/views/FlowCanvas/source/CategoryTreePicker.vue'
 
 const router = useRouter()
@@ -79,7 +80,9 @@ async function onCreateAndEnter() {
   const sources: Source[] = rows.map((r) => ({
     sourceId: r.sourceId,
     name: r.name,
-    url: r.url,
+    // 0904 I15（Z8）：后端 url 必填，空了会报错。**不在前端加必填**（那是把后端的毛病
+    // 转嫁给用户），空的时候补一个一眼认得出的占位值；后端去掉必填后连同 helper 一起删。
+    url: urlOrPlaceholder(r.url, r.sourceId),
     configId: '',
     mainTable: '',
     owner: site.owner || 'admin',

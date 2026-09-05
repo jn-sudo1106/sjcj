@@ -12,6 +12,7 @@ import SourceParamModal from './SourceParamModal.vue'
  */
 const ENABLE_SOURCE_COPY_BIND_FLOW = true
 import { hasLoadParams } from './paramNormalize'
+import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
 import type { ParamGroupRef } from '@/utils/flow/urlParams'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
 import SiteEditorDialog from '@/views/CollectAssets/components/SiteEditorDialog.vue'
@@ -435,7 +436,9 @@ async function submitAdd() {
     return
   }
   const sourceId = `${props.siteId}-${Date.now().toString(36)}`
-  const target = { name: addDlg.name.trim(), url: addDlg.url.trim() }
+  // 0904 I15（Z8）：URL 空了补占位值，不做前端必填。复制源那条路也走它——
+  // copySource 同样会经后端的必填校验。
+  const target = { name: addDlg.name.trim(), url: urlOrPlaceholder(addDlg.url, sourceId) }
   let addedId = sourceId
   if (addDlg.templateMode === 'search' && !selectedTemplate.value) {
     ElMessage.warning('请先选择模板源，或切换为空白模板')
