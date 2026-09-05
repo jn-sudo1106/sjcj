@@ -445,33 +445,44 @@ async function confirmApply() {
                      走查原话「你把这些字……设计成按钮，感觉上个世纪的有很多字在里面」——
                      四个文字按钮塞进操作列会折成两行，比原来的文字链还糟（2026-09-05 第一版就是
                      这么翻车的）。文案全部收进 title/aria-label，一行四个图标。 -->
-                <button class="fc-icon-btn" type="button" title="编辑流程" aria-label="编辑流程" @click.stop="openFlow(t)">
-                  <Edit />
-                </button>
-                <button class="fc-icon-btn" type="button" title="关联到源" aria-label="关联到源" @click.stop="openApply(t)">
-                  <Link />
-                </button>
-                <button
-                  class="fc-icon-btn"
-                  :class="{ on: t.isTemplate }"
-                  type="button"
-                  data-testid="flow-toggle-template"
-                  :title="t.isTemplate ? '取消模板标记' : '标记为模板'"
-                  :aria-label="t.isTemplate ? '取消模板标记' : '标记为模板'"
-                  @click.stop="toggleTemplate(t)"
-                >
-                  <component :is="t.isTemplate ? StarFilled : Star" />
-                </button>
-                <button
-                  class="fc-icon-btn danger"
-                  type="button"
-                  data-testid="flow-delete"
-                  title="删除流程"
-                  aria-label="删除流程"
-                  @click.stop="removeFlow(t)"
-                >
-                  <Delete />
-                </button>
+                <!-- 图标按钮必须配悬停提示，否则光看图标不知道是干什么的（用户 2026-09-05）。
+                     用 el-tooltip 而不是原生 title：原生要悬停约 1 秒才出、样式也弱。
+                     title/aria-label 仍然保留——屏幕阅读器读的是它，不是 tooltip。 -->
+                <el-tooltip content="编辑流程" placement="top" :show-after="120">
+                  <button class="fc-icon-btn" type="button" title="编辑流程" aria-label="编辑流程" @click.stop="openFlow(t)">
+                    <Edit />
+                  </button>
+                </el-tooltip>
+                <el-tooltip content="关联到源" placement="top" :show-after="120">
+                  <button class="fc-icon-btn" type="button" title="关联到源" aria-label="关联到源" @click.stop="openApply(t)">
+                    <Link />
+                  </button>
+                </el-tooltip>
+                <el-tooltip :content="t.isTemplate ? '取消模板标记' : '标记为模板'" placement="top" :show-after="120">
+                  <button
+                    class="fc-icon-btn"
+                    :class="{ on: t.isTemplate }"
+                    type="button"
+                    data-testid="flow-toggle-template"
+                    :title="t.isTemplate ? '取消模板标记' : '标记为模板'"
+                    :aria-label="t.isTemplate ? '取消模板标记' : '标记为模板'"
+                    @click.stop="toggleTemplate(t)"
+                  >
+                    <component :is="t.isTemplate ? StarFilled : Star" />
+                  </button>
+                </el-tooltip>
+                <el-tooltip content="删除流程" placement="top" :show-after="120">
+                  <button
+                    class="fc-icon-btn danger"
+                    type="button"
+                    data-testid="flow-delete"
+                    title="删除流程"
+                    aria-label="删除流程"
+                    @click.stop="removeFlow(t)"
+                  >
+                    <Delete />
+                  </button>
+                </el-tooltip>
               </div>
             </td>
           </tr>
