@@ -714,7 +714,8 @@ export const siteApi = {
       httpParams: {
         page: p?.page ?? 1,
         limit: p?.size ?? 20,
-        name: p?.keyword || undefined,
+        name: p?.name ?? p?.keyword ?? undefined,
+        sourceName: p?.sourceName ?? undefined,
         state: state === 'error' ? 'ERROR' : undefined,
       },
     })

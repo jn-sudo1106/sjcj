@@ -43,6 +43,21 @@ describe('网站读取 HTTP 契约', () => {
     })] })
   })
 
+  it('sitePaged 分别透传网站名和源名，供列表实现二者任一命中', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', count: 0, data: [] }))
+    const { siteApi } = await import('./index')
+
+    await siteApi.sitePaged({ page: 1, size: 1000, name: '新浪', sourceName: '明阳科技' })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body))).toEqual({
+      page: 1,
+      limit: 1000,
+      name: '新浪',
+      sourceName: '明阳科技',
+    })
+  })
+
   it('siteSummary 用 GET 获取真实顶部统计，并映射 errorCnt', async () => {
     fetchMock.mockResolvedValue(jsonResponse({
       code: '0', data: { total: 3, sourceTotal: 12536, notifyCount: 2, errorCnt: 2731 },

@@ -28,8 +28,8 @@ const emit = defineEmits<{
   'refresh': []
 }>()
 
-function onKeywordInput(e: Event) {
-  emit('update:keyword', (e.target as HTMLInputElement).value)
+function onKeywordInput(value: string) {
+  emit('update:keyword', value)
 }
 
 function categoryLabel(category: SourceCategory, child = false) {
@@ -44,7 +44,7 @@ function categoryLabel(category: SourceCategory, child = false) {
       :model-value="keyword"
       :prefix-icon="Search"
       clearable
-      placeholder="搜索网站名 / 源名 / 责任人"
+      placeholder="搜索网站名 / 源名"
       class="ca-search"
       @input="onKeywordInput"
     />

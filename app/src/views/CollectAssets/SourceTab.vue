@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { sourceApi, siteApi, type Site, type SourceCategory } from '@/api'
@@ -45,15 +45,30 @@ const editorSite = ref<Site | null>(null)
 async function loadList() {
   loading.value = true
   try {
-    const res = await siteApi.sitePaged({
+    const filters = {
       category: categoryFilter.value,
-      keyword: keyword.value,
       tag: tagFilter.value,
       state: stateFilter.value,
       sort: sortBy.value,
-      page: page.value,
-      size: size.value,
-    })
+    }
+    const search = keyword.value.trim()
+    let res
+    if (search) {
+      // 旧 sitePaged 把网站名和源名拆成 name/sourceName，两个条件一起传会变成 AND。
+      // 合并搜索需要分别查询，再按网站去重后统一排序、分页。
+      const searchSize = 1000
+      const [bySite, bySource] = await Promise.all([
+        siteApi.sitePaged({ ...filters, name: search, page: 1, size: searchSize }),
+        siteApi.sitePaged({ ...filters, sourceName: search, page: 1, size: searchSize }),
+      ])
+      const matched = [...new Map([...bySite.list, ...bySource.list].map((site) => [site.siteId, site])).values()]
+      if (sortBy.value === 'name') matched.sort((a, b) => a.name.localeCompare(b.name, 'zh'))
+      else matched.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+      const start = (page.value - 1) * size.value
+      res = { total: matched.length, list: matched.slice(start, start + size.value) }
+    } else {
+      res = await siteApi.sitePaged({ ...filters, page: page.value, size: size.value })
+    }
     sites.value = res.list
     total.value = res.total
   } catch {
@@ -134,6 +149,7 @@ function onKeywordChange() {
   clearTimeout(kwTimer)
   kwTimer = setTimeout(() => resetAndLoad(), 300)
 }
+watch(keyword, onKeywordChange)
 
 // ---- 批量操作 ----
 function requireSelection(): boolean {
@@ -247,7 +263,6 @@ onUnmounted(() => {
       :stats="stats"
       :view="view"
       :has-filter="hasFilter"
-      @update:keyword="onKeywordChange"
       @filter-change="resetAndLoad"
       @clear-filters="clearFilters"
       @refresh="refreshAll"

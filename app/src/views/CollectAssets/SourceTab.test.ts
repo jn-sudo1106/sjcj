@@ -68,6 +68,17 @@ describe('SourceTab 加载与初始筛选', () => {
 })
 
 describe('SourceTab 筛选状态', () => {
+  it('源名搜索返回所属网站，不会只按网站名查询后得到空列表', async () => {
+    const { wrapper } = await mountAt()
+
+    await wrapper.get('.ca-search input').setValue('多语种公告监控 - 法文')
+    expect(wrapper.findComponent({ name: 'FilterToolbar' }).props('keyword')).toBe('多语种公告监控 - 法文')
+    await vi.waitFor(() => {
+      const sites = wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]
+      expect(sites.map((site) => site.siteId)).toEqual(['site-lang-demo'])
+    })
+  })
+
   it('hasFilter 在任一筛选条件非默认时为 true', async () => {
     const { wrapper } = await mountAt()
     const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
