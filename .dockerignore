@@ -1,0 +1,26 @@
+# Node
+node_modules
+**/node_modules
+.pnpm-store
+app/node_modules
+app/dist
+
+# Git / IDE
+.git
+.github
+.cursor
+.workbuddy
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist
+tmp
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
