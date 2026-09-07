@@ -35,6 +35,31 @@ const ExcelViewer = defineAsyncComponent(async () => {
 const AUTO_LOAD_LIMIT = 20 * 1024 * 1024
 const TEXT_LIMIT = 2 * 1024 * 1024
 
+// 采集下来的 content.html 里的 CSS/图片都是相对源站的路径，在 blob URL 的 sandbox iframe 里
+// 一律解析不到 → 满屏蓝链裸文本。
+// 1) 有源站地址（externalUrl）时前置 <base href>，让相对 CSS/图片回源站加载，尽量还原原页面。
+//    sandbox="" 仍禁脚本/表单/同源，只放行样式表和图片这类子资源，风险与「原始地址↗」一致。
+// 2) 再前置一段兜底排版：源站 CSS 加载不到 / 已改版时，至少像一篇能读的文章。
+// 纯 ASCII，直接以字节前置，不解码原文、不动编码。
+const HTML_PREVIEW_STYLE
+  = '<style>html{font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:#1f2328;background:#fff}'
+  + 'body{max-width:820px;margin:0 auto;padding:24px 20px 48px;word-wrap:break-word}'
+  + 'img,video,table{max-width:100%;height:auto}table{border-collapse:collapse}td,th{border:1px solid #d0d7de;padding:6px 10px}'
+  + 'a{color:#0969da}h1,h2,h3{line-height:1.3}pre{white-space:pre-wrap;background:#f6f8fa;padding:12px;border-radius:6px;overflow:auto}</style>'
+
+function toHttpUrl(value?: string | null): string {
+  try {
+    const u = new URL(String(value ?? '').trim())
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : ''
+  } catch {
+    return ''
+  }
+}
+function htmlPreviewHead(base?: string | null): string {
+  const b = toHttpUrl(base)
+  return (b ? `<base href="${b.replace(/"/g, '&quot;')}">` : '') + HTML_PREVIEW_STYLE
+}
+
 const effectiveExt = computed(() => props.ext || extFromName(props.name))
 const kind = computed<PreviewKind>(() => previewKindOf(effectiveExt.value))
 const sizeNum = computed(() => {
@@ -83,7 +108,10 @@ async function load() {
       releaseBlob()
       // 必须带 MIME：无类型的 blob URL 会被当成 text/plain，PDF 在 <iframe> 里
       // 显示成 `%PDF-1.7 …` 的二进制原文（2026-08-24 实测）。
-      blobUrl.value = URL.createObjectURL(new Blob([buf], { type: mimeTypeOf(effectiveExt.value) }))
+      const parts = kind.value === 'html'
+        ? [new TextEncoder().encode(htmlPreviewHead(props.externalUrl)), buf]
+        : [buf]
+      blobUrl.value = URL.createObjectURL(new Blob(parts, { type: mimeTypeOf(effectiveExt.value) }))
     }
   } catch (e) {
     // 不静默失败：把原因摆出来，同时下方仍保留下载与「新窗口打开」两条退路
