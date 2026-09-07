@@ -195,6 +195,98 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect(modelRow.classes()).toContain('nowrap')
   })
 
+  it('主面板生成脚本时在下方流式展示思考过程和结果', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', { describe: '按 sku_id 生成 sku_name', script: '', scriptPath: '' })
+    await flushPromises()
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
+      options?.onThinking?.('先分析规则描述\n')
+      options?.onContent?.('def main(sku_id):\n')
+      options?.onContent?.('    return {"sku_name": sku_id}\n')
+      options?.onDone?.({ scriptPath: '/rules/generated/orch-173.py', message: '保存完成' })
+      return { script: 'def main(sku_id):\n    return {"sku_name": sku_id}\n', scriptPath: '/rules/generated/orch-173.py' }
+    })
+
+    const genBtn = wrapper.find('[data-testid="main-generate-script"]')
+    await genBtn.trigger('click')
+    await flushPromises()
+
+    expect(ruleApi.dataProcessGenerate).toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="main-stream-thinking"]').text()).toContain('先分析规则描述')
+    expect(wrapper.find('[data-testid="main-stream-result"]').text()).toContain('def main(sku_id)')
+    expect(wrapper.find('[data-testid="main-stream-result"]').text()).toContain('return {"sku_name": sku_id}')
+  })
+
+  it('主面板思考过程流式追加时会自动滚动到底部', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', { describe: '按 sku_id 生成 sku_name', script: '', scriptPath: '' })
+    await flushPromises()
+
+    const scrollSpy = vi.fn()
+    const scrollHeightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight')
+    const scrollTopDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTop')
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 520 })
+    Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
+      configurable: true,
+      get: () => 0,
+      set: scrollSpy,
+    })
+
+    try {
+      vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
+        options?.onThinking?.('第一段思考\n')
+        await flushPromises()
+        options?.onThinking?.('第二段思考\n')
+        return { script: 'def main(sku_id):\n    return {"sku_name": sku_id}\n', scriptPath: '/rules/generated/orch-173.py' }
+      })
+
+      await wrapper.find('[data-testid="main-generate-script"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="main-stream-thinking"]').text()).toContain('第二段思考')
+      expect(scrollSpy).toHaveBeenCalledWith(520)
+    } finally {
+      if (scrollHeightDesc) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', scrollHeightDesc)
+      if (scrollTopDesc) Object.defineProperty(HTMLElement.prototype, 'scrollTop', scrollTopDesc)
+    }
+  })
+
+  it('主面板生成结果流式追加时会自动滚动到底部', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', { describe: '按 sku_id 生成 sku_name', script: '', scriptPath: '' })
+    await flushPromises()
+
+    const scrollSpy = vi.fn()
+    const scrollHeightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight')
+    const scrollTopDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTop')
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 680 })
+    Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
+      configurable: true,
+      get: () => 0,
+      set(value) {
+        if (this.classList.contains('rc-main-result-code')) scrollSpy(value)
+      },
+    })
+
+    try {
+      vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
+        options?.onContent?.('def main(sku_id):\n')
+        await flushPromises()
+        options?.onContent?.('    return {"sku_name": sku_id}\n')
+        return { script: 'def main(sku_id):\n    return {"sku_name": sku_id}\n', scriptPath: '/rules/generated/orch-173.py' }
+      })
+
+      await wrapper.find('[data-testid="main-generate-script"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="main-stream-result"]').text()).toContain('return {"sku_name": sku_id}')
+      expect(scrollSpy).toHaveBeenCalledWith(680)
+    } finally {
+      if (scrollHeightDesc) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', scrollHeightDesc)
+      if (scrollTopDesc) Object.defineProperty(HTMLElement.prototype, 'scrollTop', scrollTopDesc)
+    }
+  })
+
   it('未填描述就点生成脚本：不调用接口', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     // makeDefaultRuleOrchestration 默认带一条演示 describe，这里显式清空以测试校验守卫

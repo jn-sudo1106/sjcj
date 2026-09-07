@@ -9,7 +9,7 @@
 // 编排配置只消费已经选好的表/字段，不重复展示可编辑摘要。
 // 0804 拍板：规则名称 = 节点名称，不再单独输入（下面 orchCfg 计算时强制用 cfg.title 覆盖）；
 // 「引用已有规则」能力整体砍掉，复用需求交给模板功能承接（等于回退 edc08d1）。
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
@@ -267,6 +267,40 @@ const generateAbort = ref<AbortController | null>(null)
 const thinkingText = ref('')
 const generationMessage = ref('')
 const generationState = ref<'idle' | 'thinking' | 'content' | 'done' | 'error'>('idle')
+const mainThinkingRef = ref<HTMLElement | null>(null)
+const mainResultRef = ref<HTMLElement | null>(null)
+async function scrollMainThinkingToBottom() {
+  await nextTick()
+  const el = mainThinkingRef.value
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+}
+async function scrollMainResultToBottom() {
+  await nextTick()
+  const el = mainResultRef.value
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+}
+watch(
+  () => [thinkingText.value, generating.value, generationState.value] as const,
+  () => {
+    if (!isRule.value) return
+    if (generating.value || thinkingText.value.trim() || generationState.value === 'done' || generationState.value === 'error') {
+      void scrollMainThinkingToBottom()
+    }
+  },
+  { flush: 'post' },
+)
+watch(
+  () => [orchCfg.value.script, generating.value, generationState.value] as const,
+  () => {
+    if (!isRule.value) return
+    if (generating.value || orchCfg.value.script?.trim() || generationState.value === 'content' || generationState.value === 'done') {
+      void scrollMainResultToBottom()
+    }
+  },
+  { flush: 'post' },
+)
 function onCancelGenerate() {
   generateAbort.value?.abort()
 }
@@ -593,6 +627,20 @@ function goToDataView() {
       {{ generating ? '生成中...' : generateLabel }}
     </button>
   </div>
+  <div v-if="isRule && (generating || thinkingText.trim() || generationState === 'done' || generationState === 'error')" class="rc-main-stream" data-testid="main-stream-thinking">
+    <div class="rc-main-stream-head">
+      <span>思考过程</span>
+      <span>{{ generationState === 'error' ? '出错' : generating ? '生成中' : '已完成' }}</span>
+    </div>
+    <pre ref="mainThinkingRef" class="rc-main-stream-text">{{ thinkingText.trim() || (generating ? '等待模型返回思考过程…' : '暂无思考过程') }}</pre>
+  </div>
+  <div v-if="isRule && (orchCfg.script?.trim() || generationState === 'content' || generationState === 'done')" class="rc-main-result" data-testid="main-stream-result">
+    <div class="rc-main-result-head">
+      <span>生成结果</span>
+      <span v-if="generationMessage">{{ generationMessage }}</span>
+    </div>
+    <pre ref="mainResultRef" class="rc-main-result-code">{{ orchCfg.script?.trim() || '等待模型输出结果…' }}</pre>
+  </div>
 
   <template v-if="!isRule">
     <!-- 只读动作链摘要（0804 S3-4，方案 §3.1）：按 NextActionId 链表走出来的执行顺序，不可编辑 -->
@@ -693,6 +741,16 @@ function goToDataView() {
 .rc-inline-select { flex: 1 1 auto; width: auto; min-width: 96px; max-width: 150px; }
 .rc-inline-select-model { min-width: 126px; max-width: 190px; }
 .rc-model-row > .rc-btn { flex: 0 0 auto; white-space: nowrap; min-width: 82px; margin-left: auto; }
+.rc-main-stream, .rc-main-result { margin: 10px 0 12px; border: 1px solid #dbe3ee; border-radius: 8px; overflow: hidden; background: #fff; }
+.rc-main-stream { border-color: #1e293b; background: #0b1220; }
+.rc-main-stream-head, .rc-main-result-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; font-size: 12px; font-weight: 700; }
+.rc-main-stream-head { background: #111827; color: #e5eefc; }
+.rc-main-stream-head span:last-child { color: #93c5fd; font-size: 11px; }
+.rc-main-result-head { background: #f8fafc; color: var(--rc-text); border-bottom: 1px solid #eef2f7; }
+.rc-main-result-head span:last-child { color: #047857; font-size: 11px; }
+.rc-main-stream-text, .rc-main-result-code { margin: 0; max-height: 180px; overflow: auto; padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.rc-main-stream-text { color: #cbd5e1; border-top: 1px solid #1e293b; }
+.rc-main-result-code { color: #dbeafe; background: #0f172a; }
 .rc-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 11px; border: 1px solid #d5e2f2; border-radius: 7px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; }
 .rc-btn:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rc-btn.primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }
