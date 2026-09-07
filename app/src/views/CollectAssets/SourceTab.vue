@@ -123,17 +123,6 @@ async function refreshAll() {
 }
 
 // ---- 筛选辅助 ----
-const hasFilter = computed(
-  () => !!categoryFilter.value || !!keyword.value || !!tagFilter.value || stateFilter.value !== 'all',
-)
-function clearFilters() {
-  categoryFilter.value = ''
-  keyword.value = ''
-  tagFilter.value = ''
-  stateFilter.value = 'all'
-  resetAndLoad()
-}
-
 // ---- 视图偏好 ----
 const view = computed(() => ui.assetView)
 function setView(v: 'card' | 'table') {
@@ -262,9 +251,7 @@ onUnmounted(() => {
       :total="total"
       :stats="stats"
       :view="view"
-      :has-filter="hasFilter"
       @filter-change="resetAndLoad"
-      @clear-filters="clearFilters"
       @refresh="refreshAll"
       @set-view="setView"
     />

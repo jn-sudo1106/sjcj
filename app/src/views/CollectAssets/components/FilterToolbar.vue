@@ -13,7 +13,6 @@ defineProps<{
   total: number
   stats: { total: number; error: number; notify: number }
   view: 'card' | 'table'
-  hasFilter: boolean
 }>()
 
 const emit = defineEmits<{
@@ -24,7 +23,6 @@ const emit = defineEmits<{
   'update:sortBy': [value: 'updated' | 'name']
   'setView': [value: 'card' | 'table']
   'filterChange': []
-  'clearFilters': []
   'refresh': []
 }>()
 
@@ -67,7 +65,6 @@ function categoryLabel(category: SourceCategory, child = false) {
       <el-option label="最近修改" value="updated" />
       <el-option label="名称" value="name" />
     </el-select>
-    <el-button v-if="hasFilter" text class="ca-clear-filter" @click="emit('clearFilters')">清空</el-button>
     <div class="ca-stats">
       <el-tag type="info" effect="plain" class="stat-tag">网站 <b>{{ total }}</b></el-tag>
       <el-tag type="info" effect="plain" class="stat-tag">源 <b>{{ stats.total }}</b></el-tag>
@@ -110,7 +107,6 @@ function categoryLabel(category: SourceCategory, child = false) {
 .stat-tag b { font-weight: 800; font-size: 13px; margin-left: 3px; }
 .ca-spacer { flex: 1; min-width: 12px; }
 
-.ca-clear-filter { flex: none; padding: 0 4px; height: 30px; font-size: 12px; }
 .ca-view-toggle {
   display: inline-flex;
   gap: 0;

@@ -79,29 +79,6 @@ describe('SourceTab 筛选状态', () => {
     })
   })
 
-  it('hasFilter 在任一筛选条件非默认时为 true', async () => {
-    const { wrapper } = await mountAt()
-    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-    expect(toolbar.props('hasFilter')).toBe(false)
-    await toolbar.vm.$emit('update:keyword', '公告')
-    await flushPromises()
-    expect(wrapper.findComponent({ name: 'FilterToolbar' }).props('hasFilter')).toBe(true)
-  })
-
-  it('clear-filters 事件重置全部筛选条件并重新加载', async () => {
-    const { wrapper } = await mountAt()
-    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-    await toolbar.vm.$emit('update:keyword', '公告')
-    await toolbar.vm.$emit('update:state-filter', 'error')
-    await flushPromises()
-    expect(wrapper.findComponent({ name: 'FilterToolbar' }).props('hasFilter')).toBe(true)
-
-    await wrapper.findComponent({ name: 'FilterToolbar' }).vm.$emit('clear-filters')
-    await flushPromises()
-    const toolbarAfter = wrapper.findComponent({ name: 'FilterToolbar' })
-    expect(toolbarAfter.props('hasFilter')).toBe(false)
-    expect(toolbarAfter.props('stateFilter')).toBe('all')
-  })
 })
 
 describe('SourceTab 视图切换', () => {
