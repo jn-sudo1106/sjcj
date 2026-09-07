@@ -182,21 +182,40 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 画布节点数 = 这一行 1 个 + 子步骤 N 个，即不带 svg 时的 count + 1
   // （实测源 430022404：stepCnt=1 → svg 模式 count=2）。
   //
-  // 按 flowId 查：2026-09-02 后端已上线（此前这里写的是"待上线"，联调后更新）。实测（流程
-  // 1400330，对照 5 个不同的关联源）恒不返回上面说的那一行，`svg` 参数在这个模式下不生效
-  // （带不带结果一样）。**这不是接口没做全，是这个概念在"不指定源"的语境下没有唯一答案**——
-  // 46 个源就有 46 种不同的 name/url，接口给不出"这个流程的那一行"，flowId 查询天生查不到
-  // 也查不该到。多源会不会把子步骤重复返回这个疑问也顺带排除了：子步骤记录挂在
-  // mainConfig（=configId=flowId）上、sourceId 恒为 -1，跟这个流程挂几个源无关，不存在重复。
-  // 结论：**flowId 查询替代不了 sourceId 查询，且永远不会有"flowId 版的这一行"**——
-  // flowId 查询本身可以直接用（对拿"这个流程有哪些真实子步骤"这件事是准的），只是给不出
-  // 起点节点。0902 后续：起点节点不必靠"任选一个关联源"这条路补——flowId===configId
-  // 对全部 735 条存量流程恒成立，直接查这个流程自己的 config/configDetail(flowId) 就有
-  // name/url/entryTypeId，够拼出起点节点，比"任选一个关联源"更准（用的是流程自己的字段，
-  // 不是某个源的），还不用查 sourceCnt>0 这个前提。FlowCenter/FlowDetailDrawer.vue 的
-  // deriveFromFlowConfig（还原历史流程画布）就是这么做的，不再走 sourcePaged/sourceSteps
-  // 两跳，也不再依赖任何具体的关联源。
-  { path: 'item/next/nextConfigPaged', desc: '子步骤分页 / 流程图读取（按 sourceId 或 flowId；flowId 天生查不到起点那一行，见上方注释）', impl: true, live: true },
+  // ⚠️ 上一段结尾原来写的"画布节点数 = 不带 svg 时的 count + 1"**是错的**，2026-09-04 实测推翻，
+  // 见下面「svg 会筛行」。
+  //
+  // 按 flowId 查（2026-09-04 重新实测，**推翻 09-02 的结论**）：
+  // 09-02 这里写的是"恒不返回起点那一行，svg 参数在 flowId 模式下不生效"。**两句都不成立。**
+  // `flowId=F&svg=true` 会返回一条 **`isRoot: 1` 的真实 cs_item_config 行**——这就是
+  // `flow_api.md` 说的 saveFlow 自动建的那条根节点。实测 5 个流程（1400330/1400935/1400977/
+  // 1400979/1400984）**每个都恰好有 1 条**。它的形状：
+  //   itemConfig=41352(真实ID) / isRoot=1 / itemId=null / sourceId=null / lastStep=null
+  //   / name=配置名 / configId=mainConfig=flowId / type='entry' / flowCode='WEB_SNATCH' / outEntry=900
+  //
+  // **它和 sourceId 模式那行 itemConfig=0 不是同一条记录，但占同一个位置**：对同一个流程
+  // 1400935，两种查法的子节点完全相同（40597/40598/40620），差别只在起点长什么样、以及
+  // 子节点的 lastStep 指向谁——
+  //   sourceId=430016824&svg=true → 起点 itemConfig=0（现算套壳，带源名/源URL），40597.lastStep='0'
+  //   flowId=1400935&svg=true     → 起点 itemConfig=41352（真实行，带流程名），40597.lastStep='41352'
+  // 即 **`lastStep='0'` 是"挂在根上"的哨兵值**，flowId 模式下后端把它改写成真实根节点 ID。
+  //
+  // **`svg=true` 还会筛掉行，不只是加一行。** 流程 1400935：不带 svg 返回 6 条
+  // （40589/40596/40597/40598/40599/40620），带 svg 只剩 40597/40598/40620 + 根。被筛掉的是
+  // 另外两条 lastStep='0' 的（40589/40596，同一个根位置上的重复起点）和 40599（configId 与
+  // lastStep 都跟 40598 相同的重复分支）。**画布看到的是后端整理过的单一连通拓扑，不是全量。**
+  // 要"这个流程/源底下到底有哪些行"必须不带 svg 查。
+  //
+  // **sourceId 不带 svg 查到的又是另一个集合**：源 430016824 返回 5 条 SOURCE_ID=430016824 的
+  // 步骤（mainConfig=1400278/1400982），跟流程 1400935 的步骤零交集，画布上永远看不见。
+  // 这批是 09-03 修 mainConfig 兜底之前建的规则节点留下的（见 useStepWrite.ts 的 mainConfig 注释）。
+  //
+  // 多源会不会把子步骤重复返回这个疑问已排除：子步骤挂在 mainConfig（=configId=flowId）上、
+  // sourceId 恒为 -1，跟这个流程挂几个源无关。
+  // flowId===configId 对全部 735 条存量流程恒成立。FlowCenter/FlowDetailDrawer.vue 的
+  // deriveFromFlowConfig（还原历史流程画布）直接查流程自己的 config/configDetail(flowId) 拼起点，
+  // 不走 sourcePaged/sourceSteps 两跳，也不依赖任何具体的关联源。
+  { path: 'item/next/nextConfigPaged', desc: '子步骤分页 / 流程图读取（按 sourceId 或 flowId；svg=true 既加起点行也筛重复行，两种模式的起点不是同一条记录，见上方注释）', impl: true, live: true },
   { path: 'item/next/configs/same', desc: '同资源配置（选择已有配置的候选来源，list1 同域 / list2 其它域）', impl: true, live: true },
   // 2026-08-31 联调：画布节点名 / 进入条件 / 增删节点走这 4 条，不走配置。
   // payload 已按 2026-08-26 源 430016398 / itemConfig 40600 实测对过；标 live 后日常 mock 模式也会打真实后端。
@@ -292,12 +311,20 @@ export const ENDPOINTS: EndpointSpec[] = [
   // "只改 flowConf" 的专用端点从没被走过，保存永远用全量的 saveFlow；changeFlowEnable 没有
   // 对应 UI，流程列表没有启停开关）——已删除注册，生产写白名单里配套的两条也一并删了
   // （见 client.ts 同一次改动）。真要接这三个功能再照 flowPaged/saveFlow 的样子加回来。
-  { path: 'flow/flowPaged', desc: '流程分页 + 多条件检索（不含 flowConf，含计算列 sourceCnt）', live: true },
+  { path: 'flow/flowPaged', desc: '流程分页 + 多条件检索（不含 flowConf，含计算列 sourceCnt；templateFlag=0/1 服务端过滤模板，2026-09-04 实测生效）', live: true },
   { path: 'flow/flowDetail', desc: '流程详情（含 flowConf 大字段与 sourceCnt）', live: true },
   { path: 'flow/saveFlow', desc: '新增 / 修改流程（不带 flowId = 新增）', danger: true, live: true },
   { path: 'flow/deleteFlow', desc: '批量删除流程（逻辑删除 is_delete=-1 + state=D）', danger: true, live: true },
   // 绑定源到流程。写的是 **cs_source.FLOW_ID**（存量生产表），不是 cs_flow，单次上限 5000。
   { path: 'flow/changeFlowBatch', desc: '批量关联 / 解绑源到流程（Body 版；flowId=0 为解绑）', danger: true, live: true },
+  // 0903 Y8：后端把"复制"这件重活做掉了，前端不再自己逐个 saveItemConfig 建节点。
+  // 2026-09-04 探活确认三条都在（GET 探测答 "Request method 'GET' not supported" = 端点存在但仅 POST；
+  // flowTemplateList 走 GET，当前返回空数组，因为库里还没有任何流程被标成模板）。
+  { path: 'flow/copyFlow', desc: '复制流程（连 cs_item_config 步骤一起复制并重映射上下游；源是模板时新流程 refFlowId 回指模板；不复制根节点，后端自动建）', danger: true, live: true },
+  { path: 'flow/copyTemplateSteps', desc: '把模板下的普通步骤复制到目标流程（自动改 FLOW_ID、重映射上下游、根节点依赖保持 0、不复制模板自身根节点）', danger: true, live: true },
+  { path: 'flow/flowTemplateList', desc: '流程模板下拉候选（等价于 flowPaged + templateFlag=1，但不分页）', live: true },
+  // 只登记不接：旧平台「生成配置」入口，本平台没有对应场景（Y8-16）。
+  { path: 'source/genConfig', desc: '旧平台「生成配置」（SourceList.vue 的行操作）；本平台无调用方，仅登记备查' },
 
   /* ── comm 导出（目标 1 / 收录 1） ── */
   { path: 'comm/export', desc: '导出' },

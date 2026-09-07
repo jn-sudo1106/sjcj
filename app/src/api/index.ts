@@ -714,7 +714,8 @@ export const siteApi = {
       httpParams: {
         page: p?.page ?? 1,
         limit: p?.size ?? 20,
-        name: p?.keyword || undefined,
+        name: p?.name ?? p?.keyword ?? undefined,
+        sourceName: p?.sourceName ?? undefined,
         state: state === 'error' ? 'ERROR' : undefined,
       },
     })
@@ -1162,15 +1163,8 @@ export const ruleApi = {
       throw e instanceof ApiError ? e : new ApiError(endpoint, e)
     }
   },
-  // 0805 追加（恢复 D3 砍掉的「引用已有规则」能力，但按会议原话"新建是新建、选是选"分开做，
-  // 不再混进规则名称输入框——见 ConfigTab.vue 的「选择已有规则」按钮）：只列当前登录账号自己的规则，
-  // 跟 orchestrationSaveMeta 默认 userCode 口径对齐（同一个人存的规则才该出现在他自己的候选列表里）。
-  // 复用 orchestrationPaged，不新增端点；接口不支持按 userCode 服务端过滤，客户端按 size:100 拉一页后过滤。
-  orchestrationOwnRules: async (): Promise<RuleOrchestrationItem[]> => {
-    const userCode = (readLoginUsername() || 'admin').trim()
-    const paged = await ruleApi.orchestrationPaged({ size: 100 })
-    return paged.list.filter((item) => item.userCode === userCode)
-  },
+  // 「引用已有规则」（0805 的 orchestrationOwnRules）**已删除**（2026-09-04）：它列的是旧规则
+  // 平台的 compose 记录，用户确认那个平台已废弃、现在统一走配置。要恢复得先接新平台的列表接口。
   // 路径 B 回灌：POST /vrule/api/custom-compose/getComposeById?id=（对齐旧 handleOpenRecord）
   orchestrationDetail: async (ruleId: string) => {
     const endpoint = 'rule/orchestrationDetail'
@@ -2128,6 +2122,17 @@ export const flowCenterApi = {
     keywords?: string
     field?: 'updateDt' | 'createDt' | 'flowName' | 'sourceCnt' | 'flowId'
     order?: 'asc' | 'desc'
+    /** 只看模板 / 只看普通流程；不传 = 全部。**服务端过滤**（2026-09-04 实测：传 1 得 0 条、
+     *  传 0 得 738 条）。不要改成本地筛——分页之后本地只能筛当前这一页，见 FlowCenter 的注释。 */
+    onlyTemplate?: boolean
+    /** 按目录分类过滤（`cs_flow.category_id`）。同样是服务端筛。 */
+    categoryId?: string
+    /** 按标签过滤。
+     *  ⚠️ **请求参数名是 `tags`，不是 `flowTags`**（2026-09-05 实测：出参字段叫 `flowTags`，
+     *  但入参用 `flowTags` 会被**静默忽略**——乱填一个标签仍返回全部 740 条；
+     *  换成 `tags` 才真的筛，给测试流程打上标签后传 `tags` 得 1 条）。
+     *  出入参不同名这种坑，写代码时按出参名猜必然踩。 */
+    tag?: string
   } = {}) => {
     const result = await request<unknown>('flow/flowPaged', cond, {
       method: 'POST',
@@ -2138,9 +2143,66 @@ export const flowCenterApi = {
         keywords: cond.keywords || undefined,
         field: cond.field ?? 'updateDt',
         order: cond.order ?? 'desc',
+        templateFlag: cond.onlyTemplate === undefined ? undefined : (cond.onlyTemplate ? 1 : 0),
+        categoryId: cond.categoryId || undefined,
+        tags: cond.tag || undefined,
       },
     })
     return flowPageFromLegacy(result)
+  },
+  /**
+   * 模板下拉候选（0903 H24）。等价于 `paged({ onlyTemplate: true })` 但不分页，
+   * 后端专门给了这条。**模板是流程的一个属性，不是另一类对象**——不要据此再造一个"模板中心"。
+   */
+  templates: async (): Promise<FlowRecord[]> => {
+    const result = await request<unknown>('flow/flowTemplateList', {}, {
+      method: 'GET',
+      httpEndpoint: 'flow/flowTemplateList',
+    })
+    return flowPageFromLegacy(result).list
+  },
+  /**
+   * 复制整个流程（含 `cs_item_config` 步骤，后端重映射上下游）。
+   * 源是模板时，新流程为普通流程且 `refFlowId` 自动回指模板；不复制根节点——目标流程
+   * 自己已有一条 `isRoot=1`，子步骤的 `lastStep='0'` 会自然落到它身上（2026-09-04 已核）。
+   * 新 ID 与 saveFlow 同款：回执 data 为 null，从 msg 里解析。
+   */
+  copy: async (flowId: string, flowName?: string): Promise<string> => {
+    if (!flowId) throw new Error('请先选择要复制的流程')
+    const payload: Record<string, unknown> = { flowId }
+    if (flowName?.trim()) payload.flowName = flowName.trim()
+    // ⚠️ `paramsIn: 'query'`：后端这两条复制端点是 `@RequestParam`，POST 但参数走 query string，
+    // 不是 JSON body（2026-09-05 实测：发 body 报 "Required request parameter 'flowId' ...
+    // is not present"）。跟 item/next/saveItemConfig 同一种写法。
+    const result = await request<unknown>('flow/copyFlow', payload, {
+      method: 'POST',
+      httpEndpoint: 'flow/copyFlow',
+      httpParams: payload,
+      paramsIn: 'query',
+    })
+    const ack = ackFromApiResult(result)
+    if (!ack.ok) throw new Error(ack.message || '复制流程失败')
+    const id = idFromApiResult(result, ['flowId', 'id']) || ack.message?.match(/id\s*[:：]\s*(\d+)/)?.[1]
+    if (!id) throw new Error(`流程已复制，但未能解析新流程 ID（后端回执：${ack.message ?? '无'}），请刷新列表确认`)
+    return id
+  },
+  /**
+   * 把模板下的普通步骤复制到一个**已存在**的目标流程（新建源选模板走这条）。
+   * 后端自动改 `FLOW_ID`、重映射步骤上下游、根节点依赖保持 `0`、不复制模板自身的根节点；
+   * 目标是普通流程时自动把 `refFlowId` 指向模板。
+   * 回执是「复制成功，共复制 N 个步骤」或明确错误（模板不存在 / 不是模板 / 目标不存在 / 复制到自身）。
+   */
+  copyTemplateSteps: async (templateFlowId: string, targetFlowId: string): Promise<Ack> => {
+    if (!templateFlowId || !targetFlowId) return { ok: false, message: '请先选择模板与目标流程' }
+    if (templateFlowId === targetFlowId) return { ok: false, message: '不能把模板复制到它自己' }
+    const payload = { templateFlowId, targetFlowId }
+    const result = await request<unknown>('flow/copyTemplateSteps', payload, {
+      method: 'POST',
+      httpEndpoint: 'flow/copyTemplateSteps',
+      httpParams: payload,
+      paramsIn: 'query',  // 同 copyFlow：@RequestParam，参数走 query
+    })
+    return ackFromApiResult(result)
   },
   /** 批量删除流程（逻辑删除：is_delete=-1 + state=D）。高危，调用方必须已做二次确认。 */
   remove: async (flowIds: string[]): Promise<Ack> => {
@@ -2210,11 +2272,20 @@ export const flowCenterApi = {
    * 子步骤记录自带 sourceId=-1（不挂在具体某个源上），stepFromLegacy 的 sourceId 兜底参数
    * 用不上，传空串即可。
    */
+  /**
+   * 流程的步骤拓扑。**必须带 `svg=true`**（2026-09-04 改）：
+   * - 它会返回这个流程真实的根节点行（`isRoot=1`），不带就只有子步骤，前端得自己合成一个假起点，
+   *   名字和类型全是编的（旧平台拓扑图显示的是 `#41383` + 流程名，我们显示成「列表抓取/列表页」）；
+   * - 它还会**筛掉重复行**：同一个根位置上的多条起点、configId+lastStep 都相同的重复分支。
+   *   实测流程 1400935 不带 svg 有 6 条，带 svg 只剩 3 条 + 根——不带 svg 会把旧平台不画的
+   *   孤儿步骤也画出来。
+   * 另外 svg 模式下子步骤的 `lastStep` 会从哨兵 `'0'` 改写成根节点的真实 ID，拓扑天然连得上。
+   */
   steps: async (flowId: string): Promise<Step[]> => {
     const result = await request<unknown>('item/next/nextConfigPaged', { flowId }, {
       method: 'GET',
       httpEndpoint: 'item/next/nextConfigPaged',
-      httpParams: { flowId, page: 1, limit: 10000 },
+      httpParams: { flowId, page: 1, limit: 10000, svg: true },
     })
     const steps = sourceStepsFromLegacy(result, '')
     return attachStepConfigDetails(steps)

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
+import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 // 网站文件视图：具体网站下 file_resource 只支持单个 sourceId，所以网站“全部源”按源分页取数后做前端归并。
 // 未选择网站时直接查询 file_resource 全量范围，避免任务文件尚未完成网站关联时被过滤掉。
 // 不展示流程节点——网站没有唯一流程；选具体源仅收窄文件范围，仍默认展示该源全部文件。
@@ -108,16 +110,15 @@ function onTableChange(tableId: string) {
   void selectTable(candidate)
 }
 
-async function fetchPage(sourceId: string, page: number, size: number): Promise<FileResourceRecord[]> {
-  if (!table.value) return []
+async function fetchPage(sourceId: string, page: number, size: number, condition: { tableId: string; sql: string }): Promise<FileResourceRecord[]> {
   const result = await fileApi.resourceRows({
-    tableId: table.value.tableId,
+    tableId: condition.tableId,
     // 全部网站范围用一次不带 sourceId 的查询，不能把“全部”伪装成某个源。
     sourceId: sourceId || undefined,
     state: filters.state || undefined,
     fileName: filters.fileName || undefined,
     ext: filters.ext || undefined,
-    sql: filters.sql || undefined,
+    sql: condition.sql || undefined,
     page,
     size,
   })
@@ -125,11 +126,19 @@ async function fetchPage(sourceId: string, page: number, size: number): Promise<
 }
 
 async function loadMore(requestId = queryRequest) {
-  if (!candidateSourceIds.length || allExhausted.value || loadingMore.value) return
+  if (!table.value || !candidateSourceIds.length || allExhausted.value || loadingMore.value) return
   loadingMore.value = true
+  const condition = { tableId: table.value.tableId, sql: filters.sql }
+  let queried = false
   try {
-    const result = await mergeLoadMore(mergeStates, PAGE_SIZE_OPTIONS[0], PAGE_SIZE_OPTIONS[0], fetchPage, MAX_PARALLEL_REQUESTS)
+    const result = await mergeLoadMore(mergeStates, PAGE_SIZE_OPTIONS[0], PAGE_SIZE_OPTIONS[0],
+      async (sourceId, page, size) => {
+        const list = await fetchPage(sourceId, page, size, condition)
+        queried = true
+        return list
+      }, MAX_PARALLEL_REQUESTS)
     if (requestId !== queryRequest) return
+    if (queried && !result.failedSources.length) rememberSqlCondition(condition.tableId, condition.sql)
     rows.value = [...rows.value, ...result.rows]
     failedSources.value = result.failedSources
     allExhausted.value = result.allExhausted
@@ -176,7 +185,7 @@ async function resetAndLoad(resetPage = true) {
       return
     }
     if (usesDirectPaging.value) {
-      const result = await fileApi.resourceRows({
+      const query = {
         tableId: table.value.tableId,
         sourceId: selectedSourceId.value || undefined,
         state: filters.state || undefined,
@@ -185,8 +194,10 @@ async function resetAndLoad(resetPage = true) {
         sql: filters.sql || undefined,
         page: page.value,
         size: size.value,
-      })
+      }
+      const result = await fileApi.resourceRows(query)
       if (requestId !== queryRequest) return
+      rememberSqlCondition(query.tableId, query.sql)
       rows.value = result.list
       total.value = result.total
       allExhausted.value = true
@@ -298,7 +309,9 @@ function openPreview(file: FileResourceRecord) {
       <select v-model="filters.state" class="sfv-input" aria-label="状态">
         <option value="">状态（不限）</option><option value="C">初始</option><option value="AC">被消重</option>
       </select>
-      <input v-model="filters.sql" class="sfv-input" placeholder="自定义SQL, 如 K1 IS NULL" aria-label="自定义SQL">
+      <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="table?.tableId" :table-name="table?.tableName" class="sfv-sql">
+        <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="sfv-input" placeholder="自定义SQL, 如 K1 IS NULL" aria-label="自定义SQL">
+      </SqlConditionEditor>
       <button class="rc-btn primary" type="button" @click="runQuery">查询</button>
       <button class="rc-btn" type="button" @click="clearFilters">清空</button>
     </div>
@@ -397,6 +410,7 @@ function openPreview(file: FileResourceRecord) {
 </template>
 
 <style scoped>
+.sfv-sql { flex: 0 1 260px; min-width: 180px; }
 .sfv-shell { display: flex; flex-direction: column; height: 100%; overflow: hidden; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); }
 /* 默认就换行（2026-08-20）：原先 nowrap、只在 ≤900px 的断点才 wrap，中间宽度区间会把
    筛选条件挤出容器；筛选行横向滚动很难用——「查询」按钮会被滚出视野。 */

@@ -8,10 +8,12 @@
 // （`views/FlowTemplate/index.vue` 那个未被路由引用的死页面不会复活，见其文件头。）
 //
 // 这行注释此前写的是「配置中心/流程模板不再作为用户概念」，0903 会上推翻了后半句。
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { flowCenterApi, sourceApi, type FlowRecord } from '@/api'
+import { Delete, Edit, Link, Star, StarFilled } from '@element-plus/icons-vue'
 import { useUiStore } from '@/stores/ui'
+import { useLaunchJobStore } from '@/stores/launchJob'
 import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
 import GlobalSourceSelect from '@/views/FlowCanvas/result/components/GlobalSourceSelect.vue'
 import FlowDetailDrawer from './FlowDetailDrawer.vue'
@@ -26,12 +28,44 @@ const query = ref('')
 // 排序在服务端。原来的「节点数最多」删了：节点数要解析 flowConf，而列表接口不返回它，
 // 那个选项分页之后只能对当前页做局部排序，跨页看是乱的。改成后端排序白名单里真有的两项。
 const sortBy = ref<'recent' | 'sourceCnt'>('recent')
+// 范围：全部 / 仅模板 / 仅普通流程。**服务端过滤**（flowPaged.templateFlag，2026-09-04 实测生效）。
+// 不要改成本地筛——分页之后本地只能筛当前这一页，跨页结果是错的（见下方"搜索、排序、翻页全在服务端"那段）。
+const scope = ref<'all' | 'template' | 'normal'>('all')
+// 分类与标签筛选（0904 I17 / Z7-6）。**都是服务端筛**，不回退本地——分页之后本地只能筛
+// 当前这一页，跨页结果是错的（本文件上方那段口径）。
+// ⚠️ 标签的**请求参数名是 `tags`，不是 `flowTags`**：出参字段叫 flowTags，但入参用它会被
+// 静默忽略（2026-09-05 实测：乱填标签仍返回全部 740 条；换成 tags 才真的筛）。适配层已处理。
+const filterCategoryId = ref('')
+const filterTag = ref('')
+/** 目录候选：与源共用同一套 `category/categoryPaged`（根目录，子级按需展开这里不做） */
+const categories = ref<{ id: string; name: string }[]>([])
+const categoryNameById = computed(() => new Map(categories.value.map((c) => [c.id, c.name])))
+function categoryName(id?: string) {
+  if (!id) return ''
+  return categoryNameById.value.get(id) || `目录 ${id}`
+}
+/** `flowTags` 是逗号串；空值、纯空白项都要滤掉，否则会渲染出空芯片 */
+function tagsOf(t: FlowRecord): string[] {
+  return (t.flowTags || '').split(',').map((x) => x.trim()).filter(Boolean)
+}
+async function loadCategories() {
+  try {
+    categories.value = (await sourceApi.sourceCategories()).map((c) => ({ id: String(c.id), name: c.name }))
+  } catch {
+    // 目录取不到不影响列表：分类列退化成「目录 <id>」，筛选下拉只剩「全部分类」
+  }
+}
 const activeId = ref('')
 /** 「使用源数」下钻弹窗的目标流程 */
 const sourcesFlow = ref<FlowRecord | null>(null)
 const applyFlow = ref<FlowRecord | null>(null)
-const applySourceId = ref('')
+const applySourceIds = ref<string[]>([])
+/** 分批提交进度：「已关联 N / 总数」，只在分多批时展示 */
+const applyProgress = ref('')
+/** changeFlowBatch 单次上限 5000（见 endpoints.ts）。按 500 一批串行，留足余量也便于展示进度。 */
+const BIND_BATCH_SIZE = 500
 const applying = ref(false)
+const job = useLaunchJobStore()
 
 // 服务端分页：cs_flow 生产上已有 735 条（后端把存量配置整批灌进来了），一次拉全量不现实。
 // 检索也在服务端（flowPaged.keywords），所以翻页和搜索是同一条路径，只是 page/keywords 不同。
@@ -51,6 +85,9 @@ async function load() {
       keywords: query.value.trim() || undefined,
       field: sortBy.value === 'sourceCnt' ? 'sourceCnt' : 'updateDt',
       order: 'desc',
+      onlyTemplate: scope.value === 'all' ? undefined : scope.value === 'template',
+      categoryId: filterCategoryId.value || undefined,
+      tag: filterTag.value.trim() || undefined,
     })
     if (loadSeq !== reqId) return
     flows.value = result.list
@@ -73,6 +110,8 @@ function search() {
 }
 /** 清空：条件、排序、页码一起回到初始态，再查一次（与文件中心「清空」同义） */
 function resetQuery() {
+  filterCategoryId.value = ''
+  filterTag.value = ''
   query.value = ''
   sortBy.value = 'recent'
   page.value = 1
@@ -80,7 +119,9 @@ function resetQuery() {
 }
 onMounted(() => {
   void load()
-  ui.registerAction('新建流程', () => { void createFlow() })
+  void loadCategories()
+  ui.registerAction('新建流程', () => { openCreateFlow() })
+  ui.registerAction('从模板新建', () => { void createFromTemplate() })
 })
 onUnmounted(() => ui.clearActions())
 
@@ -120,18 +161,122 @@ function replaceFlow(saved: FlowRecord) {
   void load()
 }
 
-async function createFlow() {
+/**
+ * 标记 / 取消标记为流程模板（0903 H24）。
+ *
+ * 走既有的 `flow/saveFlow`——它**新增和修改是同一个端点，带 flowId 才是修改**，
+ * 所以必须把当前流程的 id 与 definition 一起全量回传，漏了 id 会静默新建一条同名流程。
+ * 列表行的 definition 是空流程（flowPaged 不返回 flowConf），所以先 detail(id) 取全量再存，
+ * 否则标记一下就把画布清空了。
+ */
+async function toggleTemplate(t: FlowRecord) {
+  const next = !t.isTemplate
   try {
-    const { value } = await ElMessageBox.prompt('新流程会从空白画布开始，可在工作区直接添加节点并修改节点配置。', '新建流程', {
-      inputValue: '未命名流程', inputPattern: /\S+/, inputErrorMessage: '请输入流程名称',
-      confirmButtonText: '新建', cancelButtonText: '取消',
+    await ElMessageBox.confirm(
+      next
+        ? `将把流程「${t.name}」标记为模板。模板会出现在「从模板新建」与新建源的候选里，供其它流程复制。`
+        : `将取消流程「${t.name}」的模板标记。已经从它复制出去的流程不受影响。`,
+      next ? '标记为模板' : '取消模板标记',
+      { confirmButtonText: '确定', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    const full = await flowCenterApi.detail(t.id)
+    if (!full) throw new Error('流程详情读取失败，未做任何修改')
+    const saved = await flowCenterApi.save({ id: full.id, name: full.name, definition: full.definition, isTemplate: next })
+    replaceFlow(saved)
+    ElMessage.success(next ? '已标记为模板' : '已取消模板标记')
+  } catch (e) {
+    ElMessage.error(`${next ? '标记' : '取消标记'}失败：${(e as Error)?.message ?? String(e)}`)
+  }
+}
+
+/**
+ * 从模板新建流程：走后端 `flow/copyFlow`，连 `cs_item_config` 步骤一起复制并重映射上下游，
+ * `refFlowId` 自动回指模板。**不要自己拼 saveFlow**——那只会建出一条空流程。
+ */
+async function createFromTemplate() {
+  let templates: FlowRecord[]
+  try {
+    templates = await flowCenterApi.templates()
+  } catch (e) {
+    ElMessage.error(`读取模板列表失败：${(e as Error)?.message ?? String(e)}`)
+    return
+  }
+  if (!templates.length) {
+    ElMessage.info('还没有流程被标记为模板。可以先在列表里对任一流程点「标记为模板」。')
+    return
+  }
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `将复制模板的全部节点与配置，生成一条新的普通流程（会记录它来自哪个模板）。可选模板：${templates.map((x) => `${x.name}(#${x.id})`).join('、')}`,
+      '从模板新建',
+      { inputValue: templates[0].id, inputPattern: /^\d+$/, inputErrorMessage: '请输入上面列出的模板 ID', confirmButtonText: '新建', cancelButtonText: '取消' },
+    )
+    const picked = templates.find((x) => x.id === String(value).trim())
+    if (!picked) {
+      ElMessage.error(`#${String(value).trim()} 不在模板列表里`)
+      return
+    }
+    const newId = await flowCenterApi.copy(picked.id, `${picked.name}_copy`)
+    const created = await flowCenterApi.detail(newId)
+    if (created) replaceFlow(created)
+    else void load()
+    ElMessage.success(`已从模板「${picked.name}」新建流程 #${newId}`)
+  } catch (e) {
+    if (e === 'cancel' || e === 'close') return
+    ElMessage.error(`从模板新建失败：${(e as Error)?.message ?? String(e)}`)
+  }
+}
+
+/**
+ * 新建流程（0904 I17 / Z7-5）：从 prompt 单输入框升级成小表单——名称 / 分类 / 标签 / 描述。
+ *
+ * **不做业务大类那一项**：`bizType` 在生产里一个值都没有（2026-09-05 抽 200 条流程实测），
+ * 取值集合无从"照抄后端"（0904 Q3 未答复）。枚举不自造是 0824-11 §1.2d 的规矩，
+ * 拿到集合前只在详情里只读展示，不提供选择。
+ *
+ * **描述不自动带网站**：存量 flowDesc 是后端从源/网站灌的，所以列表里能看到"描述都是网站"。
+ * 那些历史值如实展示不清洗，但本平台新建的不再继续产生这种驴唇不对马嘴的描述（I16-4）。
+ */
+const createForm = reactive({ open: false, name: '未命名流程', categoryId: '', tags: '', description: '', saving: false })
+function openCreateFlow() {
+  createForm.open = true
+  createForm.name = '未命名流程'
+  createForm.categoryId = ''
+  createForm.tags = ''
+  createForm.description = ''
+}
+async function createFlow() {
+  const name = createForm.name.trim()
+  if (!name) {
+    ElMessage.warning('请输入流程名称')
+    return
+  }
+  createForm.saving = true
+  try {
+    const created = await flowCenterApi.save({
+      name,
+      definition: makeBlankTemplateDefinition(),
+      // 只传填了的：saveFlow 是全量保存，传空串是"清空"而不是"不管"
+      ...(createForm.categoryId ? { categoryId: createForm.categoryId } : {}),
+      ...(createForm.tags.trim() ? { flowTags: normalizeTags(createForm.tags) } : {}),
+      ...(createForm.description.trim() ? { description: createForm.description.trim() } : {}),
     })
-    const created = await flowCenterApi.save({ name: value.trim(), definition: makeBlankTemplateDefinition() })
+    createForm.open = false
     replaceFlow(created)
     ElMessage.success('流程已新建')
-  } catch {
-    // 用户取消不提示。
+  } catch (e) {
+    ElMessage.error(`新建流程失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    createForm.saving = false
   }
+}
+/** 标签输入统一成逗号串：中英文逗号、空格分隔都收，去重去空 */
+function normalizeTags(raw: string): string {
+  return [...new Set(raw.split(/[,，\s]+/).map((x) => x.trim()).filter(Boolean))].join(',')
 }
 
 /**
@@ -164,43 +309,83 @@ async function removeFlow(flow: FlowRecord) {
 
 function openApply(flow: FlowRecord) {
   applyFlow.value = flow
-  applySourceId.value = ''
+  applySourceIds.value = []
+  applyProgress.value = ''
 }
 
 async function confirmApply() {
   const target = applyFlow.value
   if (!target || applying.value) return
-  if (!applySourceId.value) {
+  const ids = [...new Set(applySourceIds.value.filter(Boolean))]
+  if (!ids.length) {
     ElMessage.warning('请先选择要关联的源')
     return
   }
   applying.value = true
+  applyProgress.value = ''
   try {
-    const source = await sourceApi.sourceDetail(applySourceId.value)
-    if (!source) {
-      ElMessage.error('没有找到该源，请重新选择')
-      return
-    }
-    // ⚠️ 文案 2026-09-03 按后端答复重写。上一版写的是「这只记录关联关系，不会改动该源现有的
-    // 采集配置与步骤，也不会立即按此流程运行」——**那句已经是假话**：后端明确执行时按 FLOW_ID
-    // 反查后执行（「执行就按 flowID 去反选，去执行」），关联完就生效。配套口径见 0903 H01：
-    // 一个流程一套配置，可关联多个源，这些源**共用**它——所以关联之后改这个流程的配置，
-    // 会同时影响所有关联源。这是危险动作，必须在弹窗里说清楚。
-    //
-    // 多选关联（一次关联 N 个源）是 Y8-B，本次只修文案，交互仍是单选。
+    // ⚠️ 文案 2026-09-03 按后端答复重写，2026-09-04 改成多源版。上一版写的是「这只记录关联
+    // 关系，不会改动该源现有的采集配置与步骤，也不会立即按此流程运行」——**那句已经是假话**：
+    // 后端明确执行时按 FLOW_ID 反查后执行（「执行就按 flowID 去反选，去执行」），关联完就生效。
+    // 配套口径见 0903 H01：一个流程一套配置，可关联多个源，这些源**共用**它——所以关联之后
+    // 改这个流程的配置，会同时影响所有关联源。这是危险动作，必须在弹窗里说清楚。
+    const batches = Math.ceil(ids.length / BIND_BATCH_SIZE)
     await ElMessageBox.confirm(
-      `将源「${source.name || source.sourceId}」关联到流程「${target.name}」。`
-      + '该源将共用此流程的配置并按它运行；此后修改这个流程的配置，会同时影响其它关联到它的源。继续？',
+      `将把选中的 **${ids.length} 个源**关联到流程「${target.name}」。`
+      + `这 ${ids.length} 个源将共用该流程的配置并按它运行；此后修改这个流程的配置，会同时影响它们。`
+      + (batches > 1 ? `\n（将分 ${batches} 批提交，每批最多 ${BIND_BATCH_SIZE} 个）` : '')
+      + '\n继续？',
       '关联流程到源',
       { type: 'warning', confirmButtonText: '确认关联', cancelButtonText: '取消' },
     )
-    const ack = await flowCenterApi.bindSources([source.sourceId], target.id)
-    if (!ack.ok) throw new Error(ack.message || '关联失败')
+    // 多批时接作业条（Y8-14 / Y4-5），可中途暂停或停止提交后续批次。
+    // 单批没什么可暂停的，不去占用全局作业位。
+    const tracked = batches > 1
+    if (tracked && !job.start(`关联 ${ids.length} 个源到「${target.name}」`, ids.length)) {
+      ElMessage.warning('已有批量任务在进行中，请先在右下角的作业条上结束它')
+      return
+    }
+    // 分批串行。**任一批失败就停下**并把已成功的条数如实报出来——继续发下去只会让
+    // "到底关联成功了几个"更难说清。（这点与 sendInBatches 的"失败继续"不同，
+    // 关联是改归属，半对半错比少做更难收拾。）
+    let done = 0
+    let stopped = false
+    for (let i = 0; i < ids.length; i += BIND_BATCH_SIZE) {
+      if (tracked) {
+        // 检查点在**发之前**：暂停只推迟还没发的批次，不打断正在飞的那一个
+        while (job.signal.paused && !job.signal.aborted) {
+          await new Promise((resolve) => setTimeout(resolve, 120))
+        }
+        if (job.signal.aborted) { stopped = true; break }
+      }
+      const chunk = ids.slice(i, i + BIND_BATCH_SIZE)
+      if (batches > 1) applyProgress.value = `已关联 ${done} / ${ids.length}`
+      const ack = await flowCenterApi.bindSources(chunk, target.id)
+      if (!ack.ok) {
+        throw new Error(
+          (ack.message || '关联失败')
+          + (done ? `（前 ${done} 个已关联成功，本批 ${chunk.length} 个未生效）` : ''),
+        )
+      }
+      done += chunk.length
+      if (tracked) job.progress(done, ids.length)
+    }
+    if (tracked) job.finish({ sent: done, failed: [], skipped: ids.slice(done) })
+    applyProgress.value = ''
+    if (stopped) {
+      // 已关联的不回滚——bindSources 没有反向端点，硬回滚只会把归属改得更乱
+      ElMessage.warning(`已停止提交后续批次：${done} 个源已关联到「${target.name}」，其余 ${ids.length - done} 个未提交。已关联的不会撤销。`)
+      void load()
+      return
+    }
     applyFlow.value = null
-    applySourceId.value = ''
-    ElMessage.success(`已把源「${source.name || source.sourceId}」关联到流程「${target.name}」`)
+    applySourceIds.value = []
+    ElMessage.success(`已把 ${done} 个源关联到流程「${target.name}」`)
     void load()
   } catch (error) {
+    // 无论是用户取消还是提交失败，都得把作业条收掉——挂着一条永远"进行中"的
+    // 作业会把全局作业位一直占住，下次点批量就被"已有任务在进行中"挡回去。
+    if (job.busy) job.finish({ sent: 0, failed: [], skipped: [] }, 0)
     if (error === 'cancel' || error === 'close') return
     ElMessage.error(`关联失败：${(error as Error)?.message ?? String(error)}`)
   } finally {
@@ -227,8 +412,26 @@ async function confirmApply() {
         <option value="recent">最近修改</option>
         <option value="sourceCnt">使用源数最多</option>
       </select>
+      <!-- 范围过滤在服务端（flowPaged.templateFlag），不是本地筛 -->
+      <select v-model="scope" class="fc-input" aria-label="范围" data-testid="flow-center-scope" @change="search">
+        <option value="all">全部流程</option>
+        <option value="template">仅模板</option>
+        <option value="normal">仅普通流程</option>
+      </select>
       <!-- 没有「刷新」按钮：它与「查询」是同一个请求，而且新建 / 保存 / 删除 / 关联之后
            列表都会自动重查（见 replaceFlow / removeFlow / confirmApply），不需要人工手动刷。 -->
+      <select v-model="filterCategoryId" class="fc-input" aria-label="分类" data-testid="flow-center-category" @change="search">
+        <option value="">全部分类</option>
+        <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+      </select>
+      <input
+        v-model="filterTag"
+        class="fc-input"
+        placeholder="标签"
+        aria-label="按标签筛选"
+        data-testid="flow-center-tag"
+        @keyup.enter="search"
+      />
       <button class="rc-btn primary" type="button" data-testid="flow-center-query" @click="search">查询</button>
       <button class="rc-btn" type="button" data-testid="flow-center-reset" @click="resetQuery">清空</button>
       <div class="fc-metrics">
@@ -240,10 +443,15 @@ async function confirmApply() {
       <table class="fc-table">
         <thead>
           <tr>
+            <!-- 列对齐旧平台「流程管理」（流程ID/名称/业务大类/源总数/目录ID/标签/描述/创建/更新），
+                 但不照搬全部：编码、状态、启停在本平台没有承载页面，搬过来只会是一列 `—`。 -->
             <th>流程 ID / 名称</th>
+            <th style="width: 170px">分类 / 标签</th>
+            <th style="width: 200px">描述</th>
             <th style="width: 110px">使用源数</th>
-            <th style="width: 150px">更新时间</th>
-            <th style="width: 210px">操作</th>
+            <th style="width: 140px">创建时间</th>
+            <th style="width: 140px">更新时间</th>
+            <th style="width: 130px">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -257,9 +465,27 @@ async function confirmApply() {
             <td>
               <div class="fc-name">
                 <b class="fc-name-link">{{ t.name }}</b>
+                <!-- 角标而不是新开一列：这张表的列已经够挤了 -->
+                <span v-if="t.isTemplate" class="fc-badge" data-testid="flow-template-badge" title="已标记为流程模板">模板</span>
+                <span
+                  v-else-if="t.fromTemplateId"
+                  class="fc-badge ghost"
+                  data-testid="flow-from-template"
+                  :title="`由模板 #${t.fromTemplateId} 复制而来`"
+                >来自 #{{ t.fromTemplateId }}</span>
                 <small>{{ t.version == null ? t.id : `${t.id} · v${t.version}` }}</small>
               </div>
             </td>
+            <td class="fc-muted" data-testid="flow-cat-tags">
+              <template v-if="t.categoryId || t.flowTags">
+                <span v-if="t.categoryId" class="fc-badge ghost" :title="`目录 ${t.categoryId}`">{{ categoryName(t.categoryId) }}</span>
+                <span v-for="tag in tagsOf(t)" :key="tag" class="fc-badge ghost">{{ tag }}</span>
+              </template>
+              <template v-else>—</template>
+            </td>
+            <!-- 描述如实展示不清洗：存量里这个值是后端从源/网站灌的，所以会看到"描述都是网站"
+                 （0904 I16-4）。改的是**本平台新建流程不再自动带**，不是把历史值洗掉。 -->
+            <td class="fc-muted fc-ellipsis" :title="t.description || ''">{{ t.description || '—' }}</td>
             <!-- 使用源数：flowPaged / flowDetail 都回填计算列 sourceCnt（口径 cs_source.IS_DELETE >= 0，
                  含禁用源）。列表接口不返回 flowConf，所以节点数那列是 0，源数这列才是真的。 -->
             <td :class="{ 'fc-muted': !t.sourceCnt }" data-testid="flow-source-cnt">
@@ -274,17 +500,57 @@ async function confirmApply() {
               <!-- 0 个和字段缺失都不给点：点开必然是空表，白让人跑一趟 -->
               <template v-else>{{ t.sourceCnt == null ? '—' : '0 个' }}</template>
             </td>
+            <td class="fc-muted">{{ t.createdAt || '—' }}</td>
             <td class="fc-muted">{{ t.updatedAt || '—' }}</td>
             <td>
               <div class="fc-actions">
-                <button class="fc-link" type="button" @click.stop="openFlow(t)">编辑</button>
-                <button class="fc-link" type="button" @click.stop="openApply(t)">关联到源</button>
-                <button class="fc-link danger" type="button" data-testid="flow-delete" @click.stop="removeFlow(t)">删除流程</button>
+                <!-- 0904 I16（Z7-1）：**图标按钮**，不是带文字的按钮。
+                     走查原话「你把这些字……设计成按钮，感觉上个世纪的有很多字在里面」——
+                     四个文字按钮塞进操作列会折成两行，比原来的文字链还糟（2026-09-05 第一版就是
+                     这么翻车的）。文案全部收进 title/aria-label，一行四个图标。 -->
+                <!-- 图标按钮必须配悬停提示，否则光看图标不知道是干什么的（用户 2026-09-05）。
+                     用 el-tooltip 而不是原生 title：原生要悬停约 1 秒才出、样式也弱。
+                     title/aria-label 仍然保留——屏幕阅读器读的是它，不是 tooltip。 -->
+                <el-tooltip content="编辑流程" placement="top" :show-after="120">
+                  <button class="fc-icon-btn" type="button" title="编辑流程" aria-label="编辑流程" @click.stop="openFlow(t)">
+                    <Edit />
+                  </button>
+                </el-tooltip>
+                <el-tooltip content="关联到源" placement="top" :show-after="120">
+                  <button class="fc-icon-btn" type="button" title="关联到源" aria-label="关联到源" @click.stop="openApply(t)">
+                    <Link />
+                  </button>
+                </el-tooltip>
+                <el-tooltip :content="t.isTemplate ? '取消模板标记' : '标记为模板'" placement="top" :show-after="120">
+                  <button
+                    class="fc-icon-btn"
+                    :class="{ on: t.isTemplate }"
+                    type="button"
+                    data-testid="flow-toggle-template"
+                    :title="t.isTemplate ? '取消模板标记' : '标记为模板'"
+                    :aria-label="t.isTemplate ? '取消模板标记' : '标记为模板'"
+                    @click.stop="toggleTemplate(t)"
+                  >
+                    <component :is="t.isTemplate ? StarFilled : Star" />
+                  </button>
+                </el-tooltip>
+                <el-tooltip content="删除流程" placement="top" :show-after="120">
+                  <button
+                    class="fc-icon-btn danger"
+                    type="button"
+                    data-testid="flow-delete"
+                    title="删除流程"
+                    aria-label="删除流程"
+                    @click.stop="removeFlow(t)"
+                  >
+                    <Delete />
+                  </button>
+                </el-tooltip>
               </div>
             </td>
           </tr>
           <tr v-if="!loading && !rows.length">
-            <td colspan="4" class="fc-empty">
+            <td colspan="7" class="fc-empty">
               {{ loadError || (query ? `没有找到匹配「${query}」的流程` : '暂无流程') }}
             </td>
           </tr>
@@ -314,11 +580,45 @@ async function confirmApply() {
     <FlowSourcesDialog :flow="sourcesFlow" @close="sourcesFlow = null" />
 
     <FlowDetailDrawer
+      :categories="categories"
       :flow="activeFlow"
       @close="closeFlow"
       @saved="replaceFlow"
       @apply="openApply"
     />
+
+    <!-- 新建流程小表单（Z7-5）：名称必填，分类/标签/描述可选。
+         业务大类不给选——生产里 bizType 一个值都没有，枚举无从照抄（0904 Q3）。 -->
+    <el-dialog v-model="createForm.open" title="新建流程" width="480px" destroy-on-close>
+      <div class="fc-form">
+        <label class="fc-form-row">
+          <span>流程名称 <em>*</em></span>
+          <input v-model="createForm.name" class="fc-input" data-testid="create-flow-name" placeholder="必填" />
+        </label>
+        <label class="fc-form-row">
+          <span>分类</span>
+          <select v-model="createForm.categoryId" class="fc-input" data-testid="create-flow-category">
+            <option value="">不设置</option>
+            <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+          </select>
+        </label>
+        <label class="fc-form-row">
+          <span>标签</span>
+          <input v-model="createForm.tags" class="fc-input" data-testid="create-flow-tags" placeholder="多个用逗号或空格分隔" />
+        </label>
+        <label class="fc-form-row">
+          <span>描述</span>
+          <input v-model="createForm.description" class="fc-input" data-testid="create-flow-desc" placeholder="选填" />
+        </label>
+        <p class="fc-form-hint">新流程从空白画布开始，可在工作区直接添加节点并修改节点配置。</p>
+      </div>
+      <template #footer>
+        <button class="fc-dialog-btn" type="button" @click="createForm.open = false">取消</button>
+        <button class="fc-dialog-btn primary" type="button" :disabled="createForm.saving" data-testid="create-flow-submit" @click="createFlow">
+          {{ createForm.saving ? '新建中…' : '新建' }}
+        </button>
+      </template>
+    </el-dialog>
 
     <el-dialog
       :model-value="!!applyFlow"
@@ -327,17 +627,36 @@ async function confirmApply() {
       destroy-on-close
       @close="applyFlow = null"
     >
-      <p class="fc-apply-note">选择目标源。确认后只登记「该源属于此流程」这层关联关系，不改动源现有的采集配置与步骤。</p>
-      <GlobalSourceSelect v-model="applySourceId" />
+      <!-- 这行原来写「只登记关联关系，不改动源现有的采集配置与步骤」，与 0903 H1 答复相反，
+           2026-09-04 一并改掉（同 confirmApply 里的确认文案）。 -->
+      <p class="fc-apply-note">选择要关联的源，可多选。关联后这些源将<b>共用本流程的配置并按它运行</b>；此后修改这个流程的配置会同时影响它们。</p>
+      <GlobalSourceSelect v-model="applySourceIds" multiple />
+      <p v-if="applyProgress" class="fc-apply-note" data-testid="flow-apply-progress">{{ applyProgress }}</p>
       <template #footer>
         <button class="fc-dialog-btn" type="button" @click="applyFlow = null">取消</button>
-        <button class="fc-dialog-btn primary" type="button" :disabled="applying" data-testid="flow-apply-confirm" @click="confirmApply">{{ applying ? '关联中…' : '确认关联' }}</button>
+        <button class="fc-dialog-btn primary" type="button" :disabled="applying" data-testid="flow-apply-confirm" @click="confirmApply">{{ applying ? '关联中…' : (applySourceIds.length > 1 ? `确认关联（${applySourceIds.length} 个）` : '确认关联') }}</button>
       </template>
     </el-dialog>
   </section>
 </template>
 
 <style scoped>
+.fc-badge { margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 11px; line-height: 16px; background: var(--rc-primary-soft, #eaf2ff); color: var(--rc-primary, #2f6fed); }
+.fc-badge.ghost { background: transparent; color: var(--rc-faint, #98a2b3); border: 1px solid var(--rc-border, #e4e7ec); }
+.fc-form { display: flex; flex-direction: column; gap: 10px; }
+.fc-form-row { display: flex; align-items: center; gap: 10px; }
+.fc-form-row > span { flex: none; width: 68px; color: var(--rc-text-2); font-size: 13px; }
+.fc-form-row > span em { color: var(--rc-error, #d92d20); font-style: normal; }
+.fc-form-row .fc-input { flex: 1; min-width: 0; }
+.fc-form-hint { margin: 0; color: var(--rc-faint); font-size: 12px; }
+.fc-ellipsis { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fc-actions { display: flex; align-items: center; gap: 2px; }
+.fc-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--rc-muted, #64748b); cursor: pointer; }
+.fc-icon-btn svg { width: 15px; height: 15px; }
+.fc-icon-btn:hover { background: var(--rc-primary-bg, #eff6ff); color: var(--rc-primary, #2563eb); }
+.fc-icon-btn.on { color: var(--rc-primary, #2563eb); }
+.fc-icon-btn.danger:hover { background: #fef3f2; color: var(--rc-error, #d92d20); }
+.fc-icon-btn:focus-visible { outline: 2px solid var(--rc-primary, #2563eb); outline-offset: 1px; }
 .fc-shell { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
 /* 以下三条与 SiteFileView 的 .sfv-toolbar / .sfv-input 保持同一组数值（28px 高、12px 字、
    6px 圆角、focus 蓝边 + 3px 光晕）。改动时请两边一起改，否则数据中心/文件中心/流程中心会走形。 */

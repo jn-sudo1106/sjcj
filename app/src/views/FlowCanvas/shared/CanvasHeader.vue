@@ -29,12 +29,21 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', syncView))
 const templates = ref<FlowRecord[]>([])
 const flowKeyword = ref('')
 const flowPickerOpen = ref(false)
-// TODO(Y8-24)：候选范围要改成「默认只列已标记为模板的流程」+ 一个「查看全部流程」切换项。
-// 现在没法做——`FlowRecord` 上还没有模板标记字段，后端也没答复 flowPaged 能不能按它过滤
-// （0903 后端需求 H7）。在那之前保持列全部流程，不要自己造一个前端筛：735 条存量分页之后
-// 前端只能筛当前页，跨页看到的结果是错的。
+/**
+ * 候选**只列已标记为模板的流程**（0903 Y8-24，2026-09-05 落地）。
+ *
+ * 这个下拉叫「切换流程模板」，之前却把 740 条流程全列出来——用户当场提出
+ * 「这里的切换流程模板要展示为模板类型的流程，非模板类型不展示」。
+ *
+ * 原来做不了是因为 `FlowRecord` 上没有模板标记、后端也没答复能不能按它过滤（0903 H7）。
+ * **两个前提都已解除**：H7 答复标记是 `templateFlag`(0/1) 且 `flowPaged` 支持服务端过滤，
+ * `FlowRecord.isTemplate` 也已接上（acb2c4e）。这里改走 `flowCenterApi.templates()`
+ * （后端专给的 `flowTemplateList`，不分页）。
+ *
+ * **仍然不做前端筛**：那条老口径没变——存量 740 条分页之后前端只能筛当前页，跨页是错的。
+ */
 async function loadTemplates() {
-  templates.value = await flowCenterApi.list()
+  templates.value = await flowCenterApi.templates()
 }
 onMounted(() => { void loadTemplates() })
 
@@ -167,6 +176,10 @@ async function onSwitchFlow(command: string) {
     <div class="ch-switcher">
       <button class="ch-seg" :class="{ on: view === 'flow' }" type="button" @click="switchView('flow')">流程视图</button>
       <button class="ch-seg" :class="{ on: view === 'data' }" type="button" @click="switchView('data')">数据视图</button>
+      <!-- ⚠️ 「文件视图 / 任务视图」**保留**。2026-09-05 一度按 0904 I11 把这两档删掉，是**读反了**：
+           产品原话「文件和任务我觉得暂时吧，因为数据视图里面是包着文件的」——"暂时吧"是
+           **暂时留着**，不是暂时去掉（当时开发问的是"这块不要了"，产品没有顺着答"对"）。
+           删掉后用户当场提出「不是，任务视图和文件视图呢」，已还原。0904 纪要 I11 同步订正。 -->
       <button class="ch-seg" :class="{ on: view === 'file' }" type="button" @click="switchView('file')">文件视图</button>
       <button class="ch-seg" :class="{ on: view === 'task' }" type="button" @click="switchView('task')">任务视图</button>
     </div>
@@ -198,7 +211,12 @@ async function onSwitchFlow(command: string) {
             <el-icon class="ch-flow-chevron"><ArrowDown /></el-icon>
           </div>
           <div v-if="flowPickerOpen" class="ch-flow-options" data-testid="flow-switch-options">
-            <div v-if="!visibleTemplates.length" class="ch-flow-empty">没有匹配的流程模板</div>
+            <!-- 区分两种空：一个模板都没有 vs 搜索没搜到。前者要告诉用户去哪儿标记，
+                 后者只是关键词不匹配——都说「没有匹配的流程模板」会让人以为是搜错了。 -->
+            <div v-if="!templates.length" class="ch-flow-empty" data-testid="flow-picker-empty">
+              还没有流程被标记为模板。可在流程中心对任一流程点「标记为模板」。
+            </div>
+            <div v-else-if="!visibleTemplates.length" class="ch-flow-empty">没有匹配的流程模板</div>
             <button
               v-for="template in visibleTemplates"
               :key="template.id"

@@ -11,14 +11,13 @@ import {
   BIZ_TYPE_OPTIONS, WEB_TYPE_OPTIONS, defaultMultiMode, decisionOrParallelKind, collectorCapabilityOf, isRuleNode,
   type CollectConfig, type CollectorSchedule, type LoginConfigRef, type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
-import { configApi, entryApi, ruleApi, type RuleOrchestrationItem } from '@/api'
+import { configApi } from '@/api'
 import { configUrlFromLegacy } from '@/api/legacyAdapters'
 import BranchEditor from '../BranchEditor.vue'
 import CollectorSettings, { type CollectorRuntimeSettings } from '../CollectorSettings.vue'
 import TaskScheduleSettings from '../TaskScheduleSettings.vue'
 import ParamSourceEditor, { type ParamSourceModel } from '@/views/FlowCanvas/source/ParamSourceEditor.vue'
 import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDialog.vue'
-import SelectExistingRuleDialog from '../SelectExistingRuleDialog.vue'
 import EditNodeSourceDialog from '../EditNodeSourceDialog.vue'
 
 // 参数源（0803 调整）：本区域默认只读摘要，编辑收进「编辑」按钮弹出的 EditParamSourceDialog——
@@ -183,53 +182,10 @@ function onTitle(e: Event) {
   flow.setTitle(id.value, (e.target as HTMLInputElement).value)
 }
 
-// 选择已有规则（0805 恢复 D3 砍掉的能力，分开做：节点名称输入框只管"新建/改名"，
-// 这个按钮 + 弹窗单独管"选"，见方案 §1.3 会议原话"新建是新建、选是选"）。
-const selectExistingOpen = ref(false)
-const applyingExisting = ref(false)
-async function onSelectExistingRule(rule: RuleOrchestrationItem) {
-  applyingExisting.value = true
-  try {
-    const detail = await ruleApi.orchestrationDetail(rule.ruleId)
-    // 详情只带物理表名（inputTable），要反查成 entryType 的 tableId 才能跟 NodeConfig/表配置打通——
-    // 现在表来源已经改回 entryApi（0805），直接按物理表名去搜，取第一个物理表名精确匹配的。
-    let inputTableId = ''
-    if (detail.inputTable) {
-      try {
-        const found = (await entryApi.entryPaged({ name: detail.inputTable, size: 20 })).list
-          .find((t) => t.tableName === detail.inputTable)
-        inputTableId = found?.tableId ?? ''
-        if (!inputTableId) ElMessage.warning(`该规则原关联表「${detail.inputTable}」搜不到，请到「表配置」手动重新选择输入表`)
-      } catch {
-        ElMessage.warning('反查输入表失败，请到「表配置」手动重新选择输入表')
-      }
-    }
-    flow.setTitle(id.value, detail.name || rule.name)
-    if (detail.ruleId) flow.setItemId(id.value, detail.ruleId)
-    flow.patchRuleConfig(id.value, {
-      mode: 'ref',
-      ruleId: detail.ruleId,
-      describe: detail.describe,
-      systemPrompt: detail.systemPrompt,
-      scriptPath: detail.scriptPath,
-      script: detail.script,
-      enabled: detail.enabled,
-      dataSource: detail.dataSource,
-      inputTable: detail.inputTable,
-      inputTableId,
-      inputFields: detail.inputFields,
-      outputFields: detail.outputFields,
-      outputTable: '',
-      outputTableId: '',
-    })
-    if (inputTableId) flow.setInputTable(id.value, inputTableId)
-    ElMessage.success(`已选择规则「${detail.name || rule.name}」`)
-  } catch (e) {
-    ElMessage.error(`加载规则详情失败：${(e as Error)?.message ?? String(e)}`)
-  } finally {
-    applyingExisting.value = false
-  }
-}
+// 「选择已有规则」已删除（2026-09-04）：它列的是旧规则平台的 compose 记录
+// （ruleApi.orchestrationOwnRules → /vrule/ai/dashscope/list/compose）。用户确认那个平台
+// 已废弃、现在接的是 217 那套，所以这个入口选出来的东西没有意义。0805 加它是为了恢复
+// D3 砍掉的「引用已有规则」，会议原话"新建是新建、选是选"——要恢复得先接新平台的列表接口。
 const isAppCollect = computed(() => Boolean(cc.value && /APP/.test(`${cfg.value?.title ?? ''}${cfg.value?.sub ?? ''}${cc.value.snatchType}`)))
 const appPackageRowIndex = computed(() => cfg.value?.base.findIndex((row: [string, string]) => row[0] === '包名') ?? -1)
 const appPackageName = computed(() => {
@@ -308,13 +264,10 @@ watch(
     <!-- 节点名称不属于配置，底部「保存配置」不管它（0824-11 §1.2b）。
          采集节点上做成只读 + 「编辑」弹窗，既不让用户以为底部按钮把整屏都存了。
          源 URL 按 0828 D07 / 0829：属于源，在左侧「源详情」只读展示并编辑，不在节点配置 Tab。
-         规则节点的节点名称 = 规则名称，有自己的新建/选择已有流程（0805），保持原样直接编辑。 -->
+         规则节点的节点名称 = 规则名称，直接编辑（「选择已有」入口 2026-09-04 已删，见下方注释）。 -->
     <div class="rc-field"><label>节点名称{{ isRule ? `（= ${ruleKindLabel}）` : '' }}</label>
       <div v-if="isRule" class="rc-input-group">
-        <input class="rc-input" :value="cfg?.title" placeholder="新建：直接输入规则名称" @input="onTitle" />
-        <button class="rc-input-btn" type="button" :disabled="applyingExisting" @click="selectExistingOpen = true">
-          {{ applyingExisting ? '加载中...' : '选择已有' }}
-        </button>
+        <input class="rc-input" :value="cfg?.title" placeholder="直接输入规则名称" @input="onTitle" />
       </div>
       <div v-else-if="cc" class="rc-input-group">
         <div class="rc-readonly">{{ cfg?.title }}</div>
@@ -340,7 +293,6 @@ watch(
       <summary>定时策略</summary>
       <TaskScheduleSettings :model-value="scheduleSettings" @update:model-value="onScheduleChange" />
     </details>
-    <SelectExistingRuleDialog v-if="isRule" v-model:open="selectExistingOpen" @select="onSelectExistingRule" />
 
     <template v-if="cc">
       <div v-if="isAppCollect" class="rc-field"><label>APP 包名</label>

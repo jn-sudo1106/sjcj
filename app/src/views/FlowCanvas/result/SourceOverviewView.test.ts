@@ -1,10 +1,16 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, shallowMount } from '@vue/test-utils'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SourceOverviewView from './SourceOverviewView.vue'
 import { sourceApi, type Source } from '@/api'
 import * as xlsxExport from '@/utils/format/xlsxExport'
+import { createPinia, setActivePinia } from 'pinia'
+
+// 本组件用到了 launchJob store（Y4-5 批量提交作业条）。这里的 mount 都是裸挂载、
+// 没装 pinia 插件，所以在每个用例前设一个活动 pinia 就够——store 是在 setup 里
+// 直接 useXxxStore() 拿的，不经过 app.use()。每个用例一个新实例，作业态不串。
+beforeEach(() => setActivePinia(createPinia()))
 
 const source: Source = {
   sourceId: 'src-1', name: '当前网站源', url: 'https://example.com', configId: 'cfg-1', mainTable: 'TB_1', owner: 'tester', state: 'C', siteId: 'site-current', dataCount: 3,

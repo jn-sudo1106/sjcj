@@ -11,18 +11,13 @@ import NodeInspector from '../NodeInspector.vue'
 import { useFlowStore } from '@/stores/flow'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, paramApi, ruleApi, configApi } from '@/api'
-import type { EntryType, RuleOrchestrationItem } from '@/api'
+import type { EntryType } from '@/api'
 
 const OUTPUT_TABLE: EntryType = {
   tableId: '2102200', tableName: 'sense_data.TB_EXISTING', name: '既有规则输入表',
   fields: [{ prop: 'sku_id', desc: '商品ID', type: 'string', required: false, columnName: 'K1' }],
 }
 
-const EXISTING_RULE: RuleOrchestrationItem = {
-  ruleId: '173', name: '邮箱附件转换指标数据规则', describe: '转换描述', script: 'def main():\n    return {}',
-  scriptPath: '/code01/a.py', enabled: true, createdAt: '2026-07-01', dataSource: 'dp-wwdata',
-  inputTable: 'sense_data.TB_EXISTING', inputFields: ['sku_id'], outputFields: ['sku_id'], userCode: 'admin',
-}
 
 function mockAssets() {
   vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [OUTPUT_TABLE] })
@@ -44,89 +39,14 @@ function mountOnRuleNode() {
   return { flow, wrapper }
 }
 
-describe('ConfigTab · 规则节点「选择已有规则」（0805）', () => {
-  it('规则节点：节点名称旁有「选择已有」按钮；非规则节点没有', async () => {
-    mockAssets()
-    vi.spyOn(ruleApi, 'orchestrationOwnRules').mockResolvedValue([])
-    const { wrapper } = mountOnRuleNode()
-    await flushPromises()
-    expect(wrapper.findAll('button').some((b) => b.text() === '选择已有')).toBe(true)
-    expect(wrapper.text()).toContain('适用源')
-
-    setActivePinia(createPinia())
-    const flow2 = useFlowStore()
-    flow2.configs['web-1'] = cloneConfig(NODE_CONFIGS['web-list'])
-    flow2.select('web-1')
-    flow2.setActiveTab('config')
-    const wrapper2 = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
-    await flushPromises()
-    expect(wrapper2.findAll('button').some((b) => b.text() === '选择已有')).toBe(false)
-  })
-
-  it('点「选择已有」打开弹窗，列出 orchestrationOwnRules 返回的规则', async () => {
-    mockAssets()
-    vi.spyOn(ruleApi, 'orchestrationOwnRules').mockResolvedValue([EXISTING_RULE])
-    const { wrapper } = mountOnRuleNode()
-    await flushPromises()
-
-    await wrapper.findAll('button').find((b) => b.text() === '选择已有')!.trigger('click')
-    await flushPromises()
-
-    expect(ruleApi.orchestrationOwnRules).toHaveBeenCalledTimes(1)
-    expect(wrapper.text()).toContain('邮箱附件转换指标数据规则')
-  })
-
-  it('选中一项：拉详情、反查表 ID、写回 title + ruleCfg，弹窗关闭', async () => {
-    mockAssets()
-    vi.spyOn(ruleApi, 'orchestrationOwnRules').mockResolvedValue([EXISTING_RULE])
-    vi.spyOn(ruleApi, 'orchestrationDetail').mockResolvedValue({
-      mode: 'ref', ruleId: '173', name: '邮箱附件转换指标数据规则', describe: '转换描述',
-      systemPrompt: '提示词', scriptPath: '/code01/a.py', script: 'def main():\n    return {}',
-      enabled: true, dataSource: 'dp-wwdata', inputTable: 'sense_data.TB_EXISTING',
-      inputFields: ['sku_id'], outputFields: ['sku_id'],
-    })
-    const { flow, wrapper } = mountOnRuleNode()
-    await flushPromises()
-
-    await wrapper.findAll('button').find((b) => b.text() === '选择已有')!.trigger('click')
-    await flushPromises()
-    await wrapper.findAll('button').find((b) => b.text().includes('邮箱附件转换指标数据规则'))!.trigger('click')
-    await flushPromises()
-
-    expect(ruleApi.orchestrationDetail).toHaveBeenCalledWith('173')
-    expect(flow.configs['rule-1'].title).toBe('邮箱附件转换指标数据规则')
-    expect(flow.configs['rule-1'].ruleCfg?.mode).toBe('ref')
-    expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBe('173')
-    expect(flow.configs['rule-1'].ruleCfg?.inputTableId).toBe('2102200')
-    expect(flow.configs['rule-1'].inputTable).toBe('2102200')
-    expect(flow.configs['rule-1'].itemId).toBe('173')
-  })
-
-  it('反查输入表搜不到时：不阻塞，仍套用规则其余字段，只是给出提示', async () => {
-    mockAssets()
-    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 0, list: [] }) // 搜不到匹配的表
-    vi.spyOn(ruleApi, 'orchestrationOwnRules').mockResolvedValue([EXISTING_RULE])
-    vi.spyOn(ruleApi, 'orchestrationDetail').mockResolvedValue({
-      mode: 'ref', ruleId: '173', name: '邮箱附件转换指标数据规则', describe: '转换描述',
-      inputTable: 'sense_data.TB_EXISTING', scriptPath: '/code01/a.py',
-    })
-    const { flow, wrapper } = mountOnRuleNode()
-    await flushPromises()
-
-    await wrapper.findAll('button').find((b) => b.text() === '选择已有')!.trigger('click')
-    await flushPromises()
-    await wrapper.findAll('button').find((b) => b.text().includes('邮箱附件转换指标数据规则'))!.trigger('click')
-    await flushPromises()
-
-    expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBe('173')
-    expect(flow.configs['rule-1'].ruleCfg?.inputTableId).toBe('')
-  })
-
+// 「选择已有规则」入口 2026-09-04 已删除（旧规则平台废弃，现在统一走配置），
+// 原来那 4 条用例（按钮存在 / 打开弹窗 / 选中回填 / 反查表失败提示）随之删除。
+describe('ConfigTab · 规则节点', () => {
   it('规则节点名称允许暂时清空，保存校验再提示必填', async () => {
     const { flow, wrapper } = mountOnRuleNode()
     await flushPromises()
 
-    const titleInput = wrapper.find('input[placeholder="新建：直接输入规则名称"]')
+    const titleInput = wrapper.find('input[placeholder="直接输入规则名称"]')
     await titleInput.setValue('')
 
     expect((titleInput.element as HTMLInputElement).value).toBe('')
@@ -135,7 +55,6 @@ describe('ConfigTab · 规则节点「选择已有规则」（0805）', () => {
 
   it('适用源回填并写入步骤字段，不写进 ruleCfg.ruleId', async () => {
     mockAssets()
-    vi.spyOn(ruleApi, 'orchestrationOwnRules').mockResolvedValue([])
     const { flow, wrapper } = mountOnRuleNode()
     flow.configs['rule-1'].itemId = '-1'
     flow.configs['rule-1'].stepSourceId = '430022404'

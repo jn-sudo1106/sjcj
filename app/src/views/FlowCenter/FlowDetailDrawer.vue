@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { configApi, flowCenterApi, type FlowDefinition, type FlowRecord, type Source } from '@/api'
 import { useFlowStore } from '@/stores/flow'
+import { useUiStore } from '@/stores/ui'
 import { rootStepForSource } from '@/views/FlowCanvas/canvas/flowModel'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
 import NodeInspector from '@/views/FlowCanvas/inspector/NodeInspector.vue'
 
-const props = defineProps<{ flow: FlowRecord | null }>()
+// categories 由列表页透传（那边已经拉过一次 sourceCategories，抽屉不再重复请求）
+const props = withDefaults(defineProps<{ flow: FlowRecord | null; categories?: { id: string; name: string }[] }>(), {
+  categories: () => [],
+})
 const emit = defineEmits<{
   close: []
   saved: [flow: FlowRecord]
@@ -15,6 +19,7 @@ const emit = defineEmits<{
 }>()
 
 const canvas = useFlowStore()
+const ui = useUiStore()
 const name = ref('')
 const saving = ref(false)
 
@@ -81,6 +86,24 @@ function loadIntoWorkspace(flow: FlowRecord) {
  * **刻意在 loadFromSource 之后清掉源上下文**：画布一旦挂上 sourceCtx，节点编辑会走步骤自动
  * 保存（item/next/*）——这个 stub Source 连 sourceId 都是假的，更不能被当成真源写。
  */
+/**
+ * 抽屉里可编辑的流程属性（0904 I16/I17 · Z7-5）：分类 / 标签 / 描述。
+ * 与名称一样随 flow 变化重置；**业务大类只读展示**——生产里 bizType 一个值都没有，
+ * 枚举无从照抄（0904 Q3），不给选。
+ */
+const metaForm = reactive({ categoryId: '', tags: '', description: '' })
+watch(() => props.flow?.id, () => {
+  // 抽屉是独立的一块工作区，不该继承画布页上次留下的收起/展开状态（两边共用同一对 ui 标志）
+  ui.resetInspectorLayout()
+  metaForm.categoryId = props.flow?.categoryId ?? ''
+  metaForm.tags = props.flow?.flowTags ?? ''
+  metaForm.description = props.flow?.description ?? ''
+}, { immediate: true })
+/** 标签统一成逗号串：中英文逗号、空格分隔都收，去重去空（与新建表单同一口径） */
+function normalizeTags(raw: string): string {
+  return [...new Set(raw.split(/[,，\s]+/).map((x) => x.trim()).filter(Boolean))].join(',')
+}
+
 const derivedFromConfig = ref(false)
 async function deriveFromFlowConfig(flow: FlowRecord): Promise<boolean> {
   const [config, steps] = await Promise.all([
@@ -96,7 +119,13 @@ async function deriveFromFlowConfig(flow: FlowRecord): Promise<boolean> {
     owner: '',
     state: 'C',
   }
-  const rootStep = rootStepForSource(stubSource)
+  // 2026-09-04：`steps()` 改带 svg=true 后，后端会返回这个流程真实的根节点行（isRoot=1）。
+  // 有真根就用真根——它带着正确的名字（= 配置名，旧平台拓扑图显示的就是这个）和真实
+  // itemConfig；再合成一个假的只会把节点画成硬编码的「列表抓取 / 列表页」（stubSource 的
+  // rootStepForSource 无条件这么命名），跟旧平台对不上。实测流程 1400979：旧平台显示
+  // 「#41383 · 纽约市政府市长办公室新闻处_copy · 流程入口」，我们显示「列表抓取」。
+  // 只有后端没给根节点行时才退回合成（旧数据 / 接口异常）。
+  const rootStep = steps.some((step) => step.isRoot) ? null : rootStepForSource(stubSource)
   const seedSteps = rootStep ? [rootStep, ...steps] : steps
   canvas.loadFromSource(stubSource, seedSteps)
   // loadFromSource 把 FlowDef.id 设成了 source.sourceId（这里是空串，stub 源故意不担真源）——
@@ -130,7 +159,14 @@ async function openFlowInWorkspace(flow: FlowRecord) {
     const full = await flowCenterApi.detail(flow.id)
     if (reqId !== loadSeq) return
     const record = full ?? flow
-    if (record.definition.main.length) {
+    // ⚠️ 判据是"有没有**真实节点**"，不是 main 非空（2026-09-04 修）。
+    // `makeBlankTemplateDefinition()` 产出的 main 是 ['start','end']——结构上非空、实际一个节点
+    // 都没有。按长度判会让**我们自己新建的流程永远走不到下面的还原分支**：saveFlow 在后端
+    // 自动建了一条 isRoot=1 的真实根节点（旧平台新增流程同样如此，实测 1400987/1400988/1400989
+    // 各恰好 1 条），而我们拿着这份空 flowConf 把它盖掉，画布显示 0 个节点，旧平台显示 1 个。
+    const hasRealNode = record.definition.main.some((id) => id !== 'start' && id !== 'end')
+      || (record.definition.branchGroups ?? []).some((g) => g.branches.some((b) => b.chain.length))
+    if (hasRealNode) {
       loadIntoWorkspace(record)
       return
     }
@@ -152,7 +188,7 @@ watch(() => props.flow?.id, () => {
   if (props.flow) void openFlowInWorkspace(props.flow)
 }, { immediate: true })
 
-async function persistFlow(showMessage = true): Promise<FlowRecord | null> {
+async function persistFlow(showMessage = true, isTemplate?: boolean): Promise<FlowRecord | null> {
   if (!props.flow || saving.value) return null
   const trimmed = name.value.trim()
   if (!trimmed) {
@@ -165,6 +201,12 @@ async function persistFlow(showMessage = true): Promise<FlowRecord | null> {
       id: props.flow.id,
       name: trimmed,
       definition: definitionFromCanvas(),
+      ...(isTemplate === undefined ? {} : { isTemplate }),
+      // 这三项在抽屉里可编辑，保存时一并提交。空串是有意义的（= 清空），
+      // 所以这里**不做"空就不传"**——与新建表单不同，那边空表示"没填过"。
+      categoryId: metaForm.categoryId,
+      flowTags: normalizeTags(metaForm.tags),
+      description: metaForm.description.trim(),
     })
     name.value = saved.name
     canvas.markSaved()
@@ -178,6 +220,24 @@ async function persistFlow(showMessage = true): Promise<FlowRecord | null> {
     return null
   } finally {
     saving.value = false
+  }
+}
+
+/**
+ * 标记 / 取消标记为模板（0903 H24）。抽屉里改走 persistFlow——它已经带着 flowId 与画布定义，
+ * 顺手把标记一起提交即可；**不要另发一次只带 templateFlag 的 saveFlow**，那是全量保存端点，
+ * 漏掉 definition 会把画布存空。
+ */
+const togglingTemplate = ref(false)
+async function toggleTemplate() {
+  if (!props.flow || togglingTemplate.value) return
+  const next = !props.flow.isTemplate
+  togglingTemplate.value = true
+  try {
+    const saved = await persistFlow(false, next)
+    if (saved) ElMessage.success(next ? '已标记为模板' : '已取消模板标记')
+  } finally {
+    togglingTemplate.value = false
   }
 }
 
@@ -195,10 +255,36 @@ async function applyToSource() {
       <div class="fd-title">
         <span class="fd-kicker">流程工作区</span>
         <input v-model="name" class="fd-name" aria-label="流程名称" @input="canvas.setFlowName(name)" />
-        <p>{{ flow.version == null ? flow.id : `${flow.id} · v${flow.version}` }} · 更新于 {{ flow.updatedAt || '—' }}</p>
+        <p>
+          {{ flow.version == null ? flow.id : `${flow.id} · v${flow.version}` }} · 更新于 {{ flow.updatedAt || '—' }}
+          <span v-if="flow.isTemplate" class="fd-badge" data-testid="flow-drawer-template-badge">模板</span>
+          <span v-else-if="flow.fromTemplateId" class="fd-badge ghost">来自模板 #{{ flow.fromTemplateId }}</span>
+        </p>
       </div>
       <button class="fd-close" type="button" title="关闭" @click="emit('close')">✕</button>
     </header>
+
+    <!-- 流程属性（0904 I16/I17 · Z7-5）：分类 / 标签 / 描述可改，随「保存流程」一起提交。
+         业务大类只读——生产里 bizType 一个值都没有，枚举无从照抄（0904 Q3）。 -->
+    <div class="fd-meta">
+      <label class="fd-meta-item">
+        <span>分类</span>
+        <select v-model="metaForm.categoryId" class="fd-meta-input" data-testid="flow-meta-category">
+          <option value="">不设置</option>
+          <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+        </select>
+      </label>
+      <label class="fd-meta-item">
+        <span>标签</span>
+        <input v-model="metaForm.tags" class="fd-meta-input" data-testid="flow-meta-tags" placeholder="多个用逗号或空格分隔" />
+      </label>
+      <label class="fd-meta-item grow">
+        <span>描述</span>
+        <input v-model="metaForm.description" class="fd-meta-input" data-testid="flow-meta-desc" placeholder="选填" />
+      </label>
+      <span v-if="flow.bizType" class="fd-meta-ro" title="业务大类（只读）">大类 {{ flow.bizType }}</span>
+      <span v-if="flow.createdAt" class="fd-meta-ro">创建于 {{ flow.createdAt }}</span>
+    </div>
 
     <div v-if="loadingDetail" class="fd-loading" data-testid="flow-workspace-loading">正在加载流程定义…</div>
     <!-- 还原态必须说明白：画布上这些节点还没写进流程本身，是照这个流程自己的配置和步骤画的。
@@ -206,17 +292,50 @@ async function applyToSource() {
     <div v-if="!loadingDetail && derivedFromConfig" class="fd-derived" data-testid="flow-derived-note">
       该流程尚未保存画布定义，以下节点按这个流程自己的配置（#{{ flow?.id }}）还原，点「保存流程」后才会写入流程。
     </div>
-    <div v-if="!loadingDetail" class="fd-workspace">
-      <section class="fd-canvas" aria-label="流程节点">
+    <!-- 配置区的「展开 / 收起」两个按钮在 NodeInspector 里，改的是 ui 上那对全局标志。
+         抽屉原来是死的两列栅格，点了没反应（0905 反馈「这里的展开收起未生效」）——
+         这里跟画布页 rc-flow-shell 用同一套口径：展开＝画布收成窄条，收起＝配置区收成窄条。 -->
+    <div
+      v-if="!loadingDetail"
+      class="fd-workspace"
+      :class="{ expanded: ui.inspectorExpanded, 'insp-collapsed': ui.inspectorCollapsed }"
+    >
+      <button
+        v-if="ui.inspectorExpanded"
+        type="button"
+        class="fd-strip"
+        data-testid="flow-drawer-canvas-collapsed"
+        title="点击恢复画布"
+        @click="ui.toggleInspectorExpanded()"
+      >» 画布已收起</button>
+      <section v-else class="fd-canvas" aria-label="流程节点">
         <FlowBoard embedded />
       </section>
-      <section class="fd-inspector" aria-label="节点设置">
+      <button
+        v-if="ui.inspectorCollapsed"
+        type="button"
+        class="fd-strip"
+        data-testid="flow-drawer-inspector-collapsed"
+        title="点击展开节点配置"
+        @click="ui.toggleInspectorCollapsed()"
+      >« 节点配置</button>
+      <section v-else class="fd-inspector" aria-label="节点设置">
         <NodeInspector hide-ai />
       </section>
     </div>
 
     <footer class="fd-foot">
-      <span class="fd-foot-note">节点配置在右侧直接修改；关联到源只登记归属关系，不改动源现有的配置与步骤。</span>
+      <!-- 这行原来写的是「关联到源只登记归属关系，不改动源现有的配置与步骤」，与 0903 H1 的
+           答复相反（「执行就按 flowID 去反选，去执行」）：绑定即生效，关联过来的源会**共用**
+           这个流程的配置。说的和做的相反比不说更糟，2026-09-04 改。 -->
+      <span class="fd-foot-note">节点配置在右侧直接修改；关联到源后，这些源将共用本流程的配置——此后改这里会同时影响它们。</span>
+      <button
+        class="fd-secondary"
+        type="button"
+        :disabled="saving || togglingTemplate"
+        data-testid="flow-drawer-toggle-template"
+        @click="toggleTemplate"
+      >{{ flow.isTemplate ? '取消模板' : '标记为模板' }}</button>
       <button class="fd-secondary" type="button" :disabled="saving" data-testid="flow-apply-to-source" @click="applyToSource">关联到源</button>
       <button class="fd-primary" type="button" :disabled="saving" data-testid="flow-save" @click="persistFlow()">{{ saving ? '保存中…' : '保存流程' }}</button>
     </footer>
@@ -224,6 +343,14 @@ async function applyToSource() {
 </template>
 
 <style scoped>
+.fd-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--rc-border-soft); }
+.fd-meta-item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--rc-text-2); }
+.fd-meta-item.grow { flex: 1; min-width: 180px; }
+.fd-meta-input { height: 26px; padding: 0 8px; border: 1px solid var(--rc-border); border-radius: 5px; font-size: 12px; background: #fff; }
+.fd-meta-item.grow .fd-meta-input { flex: 1; min-width: 0; }
+.fd-meta-ro { color: var(--rc-faint); font-size: 12px; }
+.fd-badge { margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 11px; background: var(--rc-primary-soft, #eaf2ff); color: var(--rc-primary, #2f6fed); }
+.fd-badge.ghost { background: transparent; color: var(--rc-faint); border: 1px solid var(--rc-border-soft); }
 .fd-drawer { position: fixed; top: 56px; right: 0; bottom: 0; width: min(980px, calc(100vw - 256px)); max-width: 100vw; z-index: 40; display: flex; flex-direction: column; background: #fff; border-left: 1px solid var(--rc-border); box-shadow: -12px 0 32px -24px rgba(15, 23, 42, 0.48); }
 .fd-head { display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--rc-border-soft); }
 .fd-title { min-width: 0; }
@@ -236,7 +363,11 @@ async function applyToSource() {
 .fd-derived { padding: 8px 16px; border-bottom: 1px solid #fde68a; background: #fffbeb; color: #92400e; font-size: 12px; line-height: 1.5; }
 .fd-loading { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--rc-faint); font-size: 12px; background: #f4f7fb; }
 .fd-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(340px, 42%) minmax(420px, 1fr); gap: 10px; padding: 10px; background: #f4f7fb; }
+.fd-workspace.expanded { grid-template-columns: 36px minmax(0, 1fr); }
+.fd-workspace.insp-collapsed { grid-template-columns: minmax(0, 1fr) 36px; }
 .fd-canvas, .fd-inspector { min-width: 0; min-height: 0; }
+.fd-strip { min-width: 0; padding: 0; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; writing-mode: vertical-rl; }
+.fd-strip:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); border-color: #93c5fd; }
 .fd-foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--rc-border-soft); }
 .fd-foot-note { flex: 1; color: var(--rc-faint); font-size: 11px; }
 .fd-primary, .fd-secondary { height: 32px; padding: 0 14px; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; }

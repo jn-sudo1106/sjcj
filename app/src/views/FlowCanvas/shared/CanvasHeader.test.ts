@@ -14,8 +14,10 @@ vi.mock('element-plus', async (importOriginal) => {
   return { ...actual, ElMessage: { success: vi.fn(), warning: vi.fn(), error: vi.fn() }, ElMessageBox: { confirm: vi.fn() } }
 })
 
-async function mountHeader(records: Awaited<ReturnType<typeof flowCenterApi.list>> = []) {
-  vi.spyOn(flowCenterApi, 'list').mockResolvedValue(records)
+// 0903 Y8-24（2026-09-05）：候选改成**只列已标记为模板的流程**，走 flowCenterApi.templates()
+// （后端专给的 flowTemplateList），不再拉全部流程。
+async function mountHeader(records: Awaited<ReturnType<typeof flowCenterApi.templates>> = []) {
+  vi.spyOn(flowCenterApi, 'templates').mockResolvedValue(records)
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: '/canvas', component: { template: '<div />' } }],
@@ -195,5 +197,30 @@ describe('CanvasHeader · 流程视图操作', () => {
     expect(wrapper.findAll('button').map((b) => b.text()).join(' ')).not.toContain('同步到源')
     expect(wrapper.text()).not.toContain('保存流程')
     expect(wrapper.find('[data-testid="flow-save-status"]').exists()).toBe(true)
+  })
+})
+
+// 0903 Y8-24（2026-09-05 落地）：这个下拉叫「切换流程模板」，之前却把 740 条流程全列出来。
+// 用户原话「这里的切换流程模板要展示为模板类型的流程，非模板类型不展示」。
+describe('CanvasHeader · 切换流程模板只列模板', () => {
+  it('走 templates()（服务端只回模板），不再拉全部流程', async () => {
+    const list = vi.spyOn(flowCenterApi, 'list')
+    await mountHeader([])
+    expect(flowCenterApi.templates).toHaveBeenCalled()
+    // 关键：不能顺手也把全部流程拉回来再前端筛——存量 740 条分页后本地只能筛当前页
+    expect(list).not.toHaveBeenCalled()
+  })
+
+  it('一个模板都没有时给出说明，不是一个空下拉', async () => {
+    const w = await mountHeader([])
+    // 整个下拉在 `v-if="src"` 里——不先挂上源，picker 根本不渲染
+    useFlowStore().loadFromSource(
+      { sourceId: 'source-a', name: '源', url: 'https://x.test/', configId: '', mainTable: 'T1', owner: 'admin', state: 'C' },
+      [],
+    )
+    await flushPromises()
+    await w.get('[data-testid="flow-switch-search"]').trigger('focus')
+    await flushPromises()
+    expect(w.find('[data-testid="flow-picker-empty"]').text()).toContain('还没有流程被标记为模板')
   })
 })

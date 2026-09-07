@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useDuplicateNode } from './useDuplicateNode'
 import { useStepWrite } from './useStepWrite'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
-import { entryApi, flowApi, flowCenterApi, type FlowRecord } from '@/api'
+import { entryApi, flowApi, flowCenterApi, sourceApi, type FlowRecord } from '@/api'
 import CanvasHeader from '../shared/CanvasHeader.vue'
 import AddNodePopover from './AddNodePopover.vue'
 import FlowXmlDialog from './FlowXmlDialog.vue'
@@ -20,6 +20,7 @@ import {
   isParallel,
   nodeClassFor,
   nodeOutputTable,
+  nodeTypeLabel,
   collectorCapabilityOf,
   type NodeConfig,
 } from './flowModel'
@@ -52,6 +53,70 @@ function loadTemplateDefaults(template: FlowRecord) {
     branchGroups: template.definition.branchGroups,
     updatedAt: template.updatedAt,
   })
+}
+
+/**
+ * 从流程模板套用（0903 Y8-C / H03）。
+ *
+ * **落点在画布，不在新建向导**（2026-09-04 用户订正：「新建选模板的时候不需要，进画布模式的
+ * 才需要」）。新建网站那一页只管建网站和源，套模板是进画布之后的事。
+ *
+ * H03 的口径是「新增配置」= 把模板里那套配置**复制出一套新的**给本源，不是引用模板。
+ * 所以走后端的复制端点，**不用** `flow.applyTemplate` 那套前端逐个建节点的老路（Y8-20 作废）：
+ *   - 本源已有流程 → `copyTemplateSteps(模板, 本源的流程)`，后端自动改 FLOW_ID、重映射上下游、
+ *     根节点依赖保持 0、不复制模板自身的根节点；
+ *   - 本源还没有流程 → 先 `copyFlow(模板)` 造一条，再把本源绑上去。
+ */
+const applyingTemplate = ref(false)
+async function applyFlowTemplate() {
+  const sourceId = flow.sourceCtx?.sourceId
+  if (!sourceId || applyingTemplate.value) return
+  applyingTemplate.value = true
+  try {
+    const templates = await flowCenterApi.templates()
+    if (!templates.length) {
+      ElMessage.info('还没有流程被标记为模板。可在流程中心对任一流程点「标记为模板」。')
+      return
+    }
+    const { value } = await ElMessageBox.prompt(
+      `将复制模板的节点，并把模板里的那套配置复制出一套新的给本源；改新配置不会影响模板和其它源。\n可选模板：${templates.map((t) => `${t.name}(#${t.id})`).join('、')}`,
+      '从流程模板套用',
+      { inputValue: templates[0].id, inputPattern: /^\d+$/, inputErrorMessage: '请输入上面列出的模板 ID', confirmButtonText: '套用', cancelButtonText: '取消' },
+    )
+    const picked = templates.find((t) => t.id === String(value).trim())
+    if (!picked) {
+      ElMessage.error(`#${String(value).trim()} 不在模板列表里`)
+      return
+    }
+    // 本源的流程：sourceCtx 上没有就回查一次详情（列表接口不保证带 flowId，sourceDetail 一定带）
+    let targetFlowId = flow.sourceCtx?.flowId
+    if (!targetFlowId) targetFlowId = (await sourceApi.sourceDetail(sourceId).catch(() => null))?.flowId
+    if (targetFlowId) {
+      const ack = await flowCenterApi.copyTemplateSteps(picked.id, targetFlowId)
+      if (!ack.ok) throw new Error(ack.message || '复制模板步骤失败')
+      ElMessage.success(ack.message || `已把模板「${picked.name}」的步骤复制到本源的流程`)
+    } else {
+      const newFlowId = await flowCenterApi.copy(picked.id, `${flow.sourceCtx?.name || sourceId}-流程`)
+      const bound = await flowCenterApi.bindSources([sourceId], newFlowId)
+      if (!bound.ok) {
+        ElMessage.warning(`已按模板复制出流程 #${newFlowId}，但未能关联到本源（${bound.message || '原因未知'}），可在流程中心手动关联`)
+        return
+      }
+      ElMessage.success(`已按模板「${picked.name}」新建流程 #${newFlowId} 并关联到本源`)
+    }
+    // 后端已经把步骤建好了，画布得重新按后端拓扑加载一次——沿用源视图进入时的同一条路径，
+    // 别在本地拼节点（那样 id 全是本地草稿，自动保存又会重复建一遍）。
+    const [detail, steps] = await Promise.all([
+      sourceApi.sourceDetail(sourceId),
+      sourceApi.sourceSteps(sourceId, { withConfigDetails: false }),
+    ])
+    if (detail) flow.loadFromSource(detail, steps ?? [], null)
+  } catch (e) {
+    if (e === 'cancel' || e === 'close') return
+    ElMessage.error(`套用模板失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    applyingTemplate.value = false
+  }
 }
 
 async function recommendTemplateFlow() {
@@ -147,9 +212,70 @@ function hasLoginConfig(cfg: NodeConfig): boolean {
 // 节点运行状态语义（0703 问题九）：待配置 → 运行 ↔ 停止；"运行"即业务口中"配置完成、点启动进入运行"的状态，
 // "停止"即"数据在此节点不处理"——均为纯文案层，disabled 字段名/序列化结构不变。
 // 与 runtime.isRunnable 同源判定：登录和规则节点按各自能力判断，不能只看输出表。
+/**
+ * 节点卡片上的表标签（2026-09-04 修）。
+ *
+ * 原来无条件用 `effectiveOutputTable`（= 输出表 || 输入表）并把结果标成「输出表 X」。
+ * 那条回退只对**非采集节点**成立——它们的输出表编辑框自己写着「默认继承上游节点」。
+ * **采集节点的编辑框写的是「请选择输出表」，输出表是必填的**，所以对采集节点做同样的回退
+ * 等于拿输入表冒充输出表：卡片显示「⊞ TEST_ADB」，底部却是「待配置」，看上去自相矛盾
+ * （用户原话：这里已经配置了，但是画布上的状态还是待配置）。实为配置 1400990 的
+ * `outEntry` 是 null、`entryTypeId`=6200026(TEST_ADB)，即只有输入表、没有输出表。
+ *
+ * 现在采集节点缺输出表时照实说：标成输入表、加 `→ ?`，跟「待配置」对得上。
+ */
+function tableChip(cfg: NodeConfig): { label: string; title: string; unset: boolean } | null {
+  const explicit = nodeOutputTable(cfg)
+  if (explicit) return { label: edgeTableLabel(explicit), title: `输出表 ${edgeTableLabel(explicit)}`, unset: false }
+  const fallback = effectiveOutputTable(cfg)
+  if (!fallback) return null
+  const label = edgeTableLabel(fallback)
+  // 非采集节点的回退是编辑框承诺过的，照旧当输出表显示
+  if (!cfg.collectCfg) return { label, title: `输出表 ${label}（未显式设置，默认继承上游）`, unset: false }
+  return { label, title: `输入表 ${label} · 尚未设置输出表`, unset: true }
+}
+
+/** 「待配置」到底缺什么——只写状态不写原因，用户没法自查。 */
+function missingFor(cfg: NodeConfig): string[] {
+  const miss: string[] = []
+  const collect = cfg.collectCfg
+  if (collect) {
+    if (!collectUrlOf(cfg)) miss.push('URL')
+    if (!hasLoginConfig(cfg)) miss.push('登录配置')
+    if (collectorCapabilityOf(cfg)?.kind !== 'login' && !collect.outputTable) miss.push('输出表')
+    return miss
+  }
+  if (isRuleNode(cfg)) {
+    // 用词跟 stores/flow.ts 的保存校验对齐（「尚未保存业务规则」/「尚未生成规则脚本」）
+    if (!cfg.ruleCfg?.ruleId) miss.push('业务规则')
+    if (!cfg.ruleCfg?.script?.trim()) miss.push('规则脚本')
+    return miss
+  }
+  if (isDataNode(cfg) && !nodeOutputTable(cfg)) miss.push('输出表')
+  return miss
+}
+
+/**
+ * 采集节点的 URL 统一读取口径（2026-09-04 修）。
+ *
+ * `collectCfg.url` 是**源 URL**，只有源视图的 `buildSourceSeed` 会填它。
+ * 而节点配置 Tab 里用户看到、编辑、保存的那个「URL」是 **`cfg.configUrl`**
+ * （旧平台「配置编辑」的 configUrl，见 ConfigTab.vue:440 的注释）——两者本就不是一份。
+ *
+ * 只认 `collectCfg.url` 的后果：**流程视图里的采集节点永远是「待配置」**，因为那里没有源，
+ * 这个字段填不上。用户实例：流程 1400984 的「网页抓取测试01」右侧明明写着
+ * 「已有配置 #1400990」、URL = www.baidu.com，卡片却一直是待配置
+ * （实测该节点 configUrl='www.baidu.com'、collectCfg.url=''）。
+ *
+ * 判"配没配"要跟用户看到的那个字段对齐，所以两者取其一即可。
+ */
+function collectUrlOf(cfg: NodeConfig): string {
+  return cfg.collectCfg?.url || cfg.configUrl || ''
+}
+
 function footFor(cfg: NodeConfig) {
   const configured = cfg.collectCfg
-    ? !!(cfg.collectCfg.url && hasLoginConfig(cfg) && (collectorCapabilityOf(cfg)?.kind === 'login' || cfg.collectCfg.outputTable))
+    ? !!(collectUrlOf(cfg) && hasLoginConfig(cfg) && (collectorCapabilityOf(cfg)?.kind === 'login' || cfg.collectCfg.outputTable))
     : isRuleNode(cfg)
       ? !!(cfg.ruleCfg?.ruleId && cfg.ruleCfg.script?.trim())
     : isDataNode(cfg) && !!nodeOutputTable(cfg)
@@ -169,9 +295,11 @@ function footFor(cfg: NodeConfig) {
       : isDataNode(cfg)
         ? '待发起抓取'
         : '待配置'
+  const missing = left === '待配置' ? missingFor(cfg) : []
   return {
     left,
     right,
+    hint: missing.length ? `还缺：${missing.join('、')}` : '',
     warn: cfg.disabled || ((cfg.collect || isDataNode(cfg)) && !configured),
   }
 }
@@ -386,8 +514,19 @@ watch(
         <!-- 空白源画布引导卡 -->
         <div v-if="!flow.layout.nodes.length" class="rc-empty-cta">
           <div class="rc-empty-cta-title">空白编排画布</div>
-          <div class="rc-empty-cta-sub">可以用「＋」手工添加步骤，也可以按当前对象推荐可复用流程，应用后再逐节点调整。</div>
-          <button class="rc-btn primary" type="button" :disabled="recommending" @click="recommendTemplateFlow">{{ recommending ? '推荐中…' : '智能推荐流程' }}</button>
+          <div class="rc-empty-cta-sub">可以用「＋」手工添加步骤，按当前对象推荐可复用流程，或直接套用一个已有的流程模板；应用后再逐节点调整。</div>
+          <div class="rc-empty-cta-btns">
+            <button class="rc-btn primary" type="button" :disabled="recommending" @click="recommendTemplateFlow">{{ recommending ? '推荐中…' : '智能推荐流程' }}</button>
+            <!-- 0903 Y8-C：从已标记的流程模板套用，走后端复制端点（H03：复制出一套新配置，不是引用） -->
+            <button
+              v-if="flow.sourceCtx"
+              class="rc-btn"
+              type="button"
+              data-testid="apply-flow-template"
+              :disabled="applyingTemplate"
+              @click="applyFlowTemplate"
+            >{{ applyingTemplate ? '套用中…' : '从流程模板套用' }}</button>
+          </div>
         </div>
 
         <!-- 终端 -->
@@ -468,8 +607,11 @@ watch(
 
           <div class="rc-node-top">
             <div class="rc-node-icon">{{ iconFor(n.cfg) }}</div>
-            <div>
+            <div class="rc-node-headtext">
               <div class="rc-node-title">{{ n.cfg.title }}</div>
+              <!-- 0904 I12（Z6-1）：节点类型写出来。原来只有左边那个 `90`/`R` 的数字徽标，
+                   没在这套系统里泡过的人认不出是什么（走查「每个节点你最好定一个类型吧」）。 -->
+              <div class="rc-node-type" data-testid="node-type-label">{{ nodeTypeLabel(n.cfg) }}</div>
             </div>
           </div>
 
@@ -484,9 +626,9 @@ watch(
             <div class="rc-node-foot"><span class="rc-chip">静态保留</span><span>{{ n.cfg.base[3]?.[1] || '待编排' }}</span></div>
           </template>
           <template v-else>
-            <div v-if="effectiveOutputTable(n.cfg)" class="rc-node-table" :title="`输出表 ${edgeTableLabel(effectiveOutputTable(n.cfg))}`">⊞ {{ edgeTableLabel(effectiveOutputTable(n.cfg)) }}</div>
+            <div v-if="tableChip(n.cfg)" class="rc-node-table" :class="{ unset: tableChip(n.cfg)!.unset }" :title="tableChip(n.cfg)!.title">⊞ {{ tableChip(n.cfg)!.label }}{{ tableChip(n.cfg)!.unset ? ' → ?' : '' }}</div>
             <div class="rc-node-foot">
-              <span class="rc-chip" :class="footClass(n.cfg)">{{ footFor(n.cfg).left }}</span>
+              <span class="rc-chip" :class="footClass(n.cfg)" :title="footFor(n.cfg).hint">{{ footFor(n.cfg).left }}</span>
               <span>{{ footFor(n.cfg).right }}</span>
             </div>
           </template>
@@ -565,6 +707,8 @@ watch(
 .rc-term { position: absolute; width: 150px; height: 34px; border: 1px solid var(--rc-border); border-radius: 18px; background: #fff; color: var(--rc-text-2); display: flex; align-items: center; justify-content: center; font-weight: 600; box-shadow: 0 2px 8px -5px rgba(15, 23, 42, 0.2); }
 
 .rc-empty-cta { position: absolute; left: 50%; top: 168px; transform: translateX(-50%); width: 340px; padding: 20px; text-align: center; border: 1px dashed #bfdbfe; border-radius: 12px; background: rgba(255, 255, 255, 0.92); box-shadow: 0 10px 30px -18px rgba(37, 99, 235, 0.5); }
+
+.rc-empty-cta-btns { display: flex; gap: 8px; justify-content: center; }
 .rc-empty-cta-title { font-size: 14px; font-weight: 800; color: var(--rc-text); }
 .rc-empty-cta-sub { margin: 7px 0 14px; font-size: 11px; line-height: 1.6; color: var(--rc-muted); }
 .rc-empty-cta .rc-btn { height: 34px; padding: 0 14px; font-size: 13px; }
@@ -594,7 +738,9 @@ watch(
 
 .rc-node-top { display: flex; align-items: center; gap: 8px; }
 .rc-node-icon { width: 30px; height: 30px; border-radius: 7px; background: var(--rc-primary-bg); color: var(--rc-primary-ink); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; flex: none; }
+.rc-node-headtext { min-width: 0; }
 .rc-node-title { font-size: 13px; font-weight: 700; color: var(--rc-text); }
+.rc-node-type { margin-top: 1px; font-size: 10px; color: var(--rc-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-node-plan { position: absolute; top: 8px; right: 8px; font-size: 9px; color: var(--rc-faint); border: 1px solid var(--rc-border); background: #f8fafc; border-radius: 5px; padding: 1px 5px; }
 .rc-run-badge { position: absolute; top: 8px; right: 8px; font-size: 9px; font-weight: 700; border-radius: 5px; padding: 1px 6px; }
 .rc-run-badge.L { background: var(--rc-primary-bg); color: var(--rc-primary); }
@@ -604,6 +750,7 @@ watch(
 .rc-flow-node.run-C { border-color: #86efac; }
 .rc-flow-node.run-E { border-color: #fca5a5; }
 .rc-node-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; color: var(--rc-muted); font-size: 10px; }
+.rc-node-table.unset { color: var(--rc-warn, #d98b25); }
 .rc-node-table { margin-top: 6px; font-size: 10px; color: var(--rc-faint); font-family: var(--rc-mono, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-node-brief { margin-top: 8px; color: var(--rc-muted); font-size: 10px; line-height: 1.45; }
 .rc-node-brief b { color: #334155; font-weight: 700; }

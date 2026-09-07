@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import SiteDataView from './SiteDataView.vue'
+import { readSqlConditions } from '@/utils/sqlConditionHistory'
 import { dataApi, siteApi, sourceApi } from '@/api'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
 import type { DataRow, DataTableMeta, Source, Step } from '@/api'
@@ -70,6 +71,8 @@ function mockFlowFixture(sourceId = '391007768') {
   ]
   vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps)
 }
+
+afterEach(() => localStorage.clear())
 
 describe('SiteDataView · 全部源（表筛选）', () => {
   afterEach(() => vi.restoreAllMocks())
@@ -240,7 +243,7 @@ describe('SiteDataView · 全部源（表筛选）', () => {
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('ok'), source('bad')])
     vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['ok', 'bad'])
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
-    vi.spyOn(dataApi, 'rowQueryPaged').mockImplementation(async ({ sourceId }) => {
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockImplementation(async ({ sourceId }) => {
       if (sourceId === 'bad') throw new Error('boom')
       return { total: 0, list: [row('ok', '1')] }
     })
@@ -250,6 +253,15 @@ describe('SiteDataView · 全部源（表筛选）', () => {
 
     expect(wrapper.find('[data-testid="site-data-partial-fail"]').text()).toContain('源-bad（bad）：boom')
     expect(wrapper.text()).toContain('已加载 1 条')
+    await wrapper.get('.sdv2-sql input').setValue('K1 IS NULL')
+    await wrapper.findAll('button').find((button) => button.text() === '查询')!.trigger('click')
+    await flushPromises()
+    expect(readSqlConditions('t1')).toEqual([])
+    query.mockResolvedValue({ total: 0, list: [] })
+    await wrapper.findAll('button').find((button) => button.text() === '查询')!.trigger('click')
+    await flushPromises()
+    expect(readSqlConditions('t1')).toEqual(['K1 IS NULL'])
+    wrapper.unmount()
   })
 
   it('网站全部源查询并发最多为 4，避免大量源同时占满请求', async () => {

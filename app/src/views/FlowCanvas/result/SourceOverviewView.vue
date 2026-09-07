@@ -4,6 +4,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { sourceApi, type Source } from '@/api'
+import { useLaunchJobStore } from '@/stores/launchJob'
 import {
   issueTagForWrite,
   mergeIssueTags,
@@ -31,12 +32,16 @@ import {
   type SourceFilter,
 } from './useSourceLaunch'
 
-// `initialSourceIds`：从数据视图「按此条件反查源」跳过来时带的那批源 ID（0903 Y2-4）。
+// `initialSourceIds`：从数据视图「按条件查源」跳过来时带的那批源 ID（0903 Y2-4）。
 // 直接预填「源 ID」筛选框——那个框本来就收逗号分隔的多个 ID，不为反查另造一套筛选。
 //
 // 走 prop 而不是在这里 useRoute()：本组件此前完全不依赖 router，测试都是裸 shallowMount；
 // 为了一个初始值把整棵测试树都绑上 router 不划算，路由解析留在已经持有 route 的上层。
-const props = defineProps<{ currentSiteId: string; initialSourceIds?: string }>()
+/** `initialFlowId`：从流程中心「查看全部关联源」跳过来时带的流程 ID（0904 I16 / Z7-2）。
+ *  **不用 sourceIds 传**：一个流程最多见过 5439 个源（流程 1400976），拼进 URL 不现实；
+ *  `sourcePaged` 本来就认 flowId 这个服务端条件（2026-09-02 实测：flowId=1400330 得 46 条、
+ *  与该流程 sourceCnt 一致，传不存在的得 0 条，不是静默忽略）。 */
+const props = defineProps<{ currentSiteId: string; initialSourceIds?: string; initialFlowId?: string }>()
 const emit = defineEmits<{
   openSource: [source: Source]
   /** 点「数据量」这个数字（0903 Y1-15）：进这个源的数据视图，而不是流程视图 */
@@ -54,6 +59,8 @@ const size = ref(20)
 const loading = ref(false)
 const loadError = ref('')
 const sourceIds = ref(props.initialSourceIds ?? '')
+const flowFilterId = ref(props.initialFlowId ?? '')
+watch(() => props.initialFlowId, (id) => { flowFilterId.value = id ?? '' })
 // prop 变化也要生效：反查跳过来时本组件常常已经挂载着（同一个 SiteDetailView 里切视图），
 // 只把它当初始值用等于永远不生效。清空不跟随——那是用户自己在筛选框里的操作，别覆盖他。
 watch(() => props.initialSourceIds, (ids) => {
@@ -77,6 +84,7 @@ function currentQuery(): SourceFilter {
   return {
     siteIds: props.currentSiteId || undefined,
     sourceIds: sourceIds.value || undefined,
+    flowId: flowFilterId.value || undefined,
     name: name.value || undefined,
     state: statusFilter.value === 'all' || statusFilter.value === 'disabled' ? undefined : statusFilter.value,
     enable: statusFilter.value === 'disabled' ? '1' : statusFilter.value === 'all' ? undefined : '0',
@@ -122,6 +130,7 @@ function search() {
 }
 function clearFilters() {
   sourceIds.value = ''
+  flowFilterId.value = ''
   name.value = ''
   statusFilter.value = 'all'
   tagFilter.value = ''
@@ -184,6 +193,7 @@ const launchSending = ref(false)
 const launchScope = ref<LaunchScope | null>(null)
 const launchPreview = ref({ sendCount: 0, disabledCount: 0, paramCount: 0, paramNames: [] as string[] })
 const collectProgress = ref('')
+const job = useLaunchJobStore()
 const failedBatches = ref<{ ids: string[]; error: string }[]>([])
 /** query 模式在打开确认弹窗前就把可发送的 id 收齐，弹窗数字才能跟实际发送对得上 */
 let collectedSendableIds: string[] = []
@@ -293,13 +303,31 @@ async function launchSelected(skip: number) {
 }
 
 async function dispatchIds(ids: string[], skip: number) {
+  // 接入作业条（Y4-5）：整个提交过程可暂停 / 结束。同时只允许一个作业在跑——
+  // 并发批量提交既看不清进度，也容易把后端打满。
+  if (!job.start(`对 ${ids.length} 个源发任务`, ids.length, () => void retryFailedBatches())) {
+    ElMessage.warning('已有批量任务在进行中，请先在右下角的作业条上结束它')
+    return
+  }
   collectProgress.value = `发送中 0 / ${ids.length}`
   const result = await sendInBatches(ids, (batch) =>
     sourceApi.sendSnatchWithParam({ ids: batch, param: {}, all: 0, include: [], skip }),
-    { onBatch: (done, all) => { collectProgress.value = `发送中 ${done} / ${all}` } },
+    {
+      signal: job.signal,
+      onBatch: (done, all) => {
+        collectProgress.value = `发送中 ${done} / ${all}`
+        job.progress(done, all)
+      },
+    },
   )
+  job.finish(result)
   failedBatches.value = result.failed
   launchOpen.value = false
+  if (result.skipped.length) {
+    // 中止：说清哪些发出去了、哪些没发。**不写「已终止」**——发出去的收不回来
+    ElMessage.warning(`已停止提交后续批次：已发 ${result.sent} 个，${result.skipped.length} 个未提交。已提交的不会撤销。`)
+    return
+  }
   if (result.failed.length) {
     const failedCount = result.failed.reduce((n, item) => n + item.ids.length, 0)
     ElMessage.warning(`已发 ${result.sent} 个，失败 ${failedCount} 个。任务已下发的无法撤回，可重试失败批次。`)
@@ -694,6 +722,12 @@ watch(() => props.currentSiteId, () => {
         <input v-model="remarkFilter" data-testid="source-overview-remark" placeholder="备注关键字" @keyup.enter="search" />
       </label>
       <div class="sov-filter-actions" data-testid="source-overview-actions">
+        <!-- 从流程中心「查看全部关联源」跳过来时的过滤芯片（0904 I16 / Z7-2）。
+             这条件不在任何输入框里，不显式标出来用户会以为"这个网站就这几个源"。 -->
+        <span v-if="flowFilterId" class="sov-chip" data-testid="source-flow-chip">
+          按流程 #{{ flowFilterId }} 过滤
+          <button type="button" class="sov-chip-x" title="取消按流程过滤" @click="flowFilterId = ''; search()">✕</button>
+        </span>
         <button class="sov-btn primary" type="button" data-testid="source-overview-search" @click="search">查询</button>
         <button class="sov-btn" type="button" @click="clearFilters">清空</button>
         <button class="sov-btn primary" type="button" data-testid="source-launch" @click="openLaunch">发任务</button>
@@ -864,6 +898,9 @@ watch(() => props.currentSiteId, () => {
 .sov-filter input:disabled { background: #f4f6f9; color: var(--rc-faint); cursor: not-allowed; }
 .sov-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
 .sov-btn { height: 30px; padding: 0 10px; border: 1px solid #d5e2f2; border-radius: 6px; background: #fff; color: var(--rc-text-2); cursor: pointer; font-size: 12px; font-weight: 600; }
+
+.sov-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 12px; background: var(--rc-primary-bg, #eff6ff); color: var(--rc-primary-ink, #1d4ed8); font-size: 12px; }
+.sov-chip-x { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 11px; padding: 0; }
 .sov-btn.primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }
 .sov-progress { color: var(--rc-muted); font-size: 11px; }
 .sov-btn:disabled { cursor: not-allowed; opacity: .5; }

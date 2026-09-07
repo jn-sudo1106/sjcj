@@ -2,10 +2,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import SiteSourceSwitcher from './SiteSourceSwitcher.vue'
 import ParamEditorDrawer from '@/components/param/ParamEditorDrawer.vue'
-import { siteApi, sourceApi, paramApi, type Source, type Param } from '@/api'
+import { flowCenterApi, siteApi, sourceApi, paramApi, type Source, type Param } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
 
@@ -43,6 +43,8 @@ function mockApis() {
   vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({})
   vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: 'ok' })
   vi.spyOn(sourceApi, 'changeSite').mockResolvedValue({ ok: true, message: '已关联' })
+  vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...templateSource })
+  vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true, message: '已关联' })
   vi.spyOn(paramApi, 'paramPaged').mockResolvedValue({ total: 2, list: [param913, param912] })
   vi.spyOn(paramApi, 'paramDetail').mockImplementation(async (id) => ({ 913: param913, 912: param912 }[id] ?? null))
   vi.spyOn(paramApi, 'genValues').mockImplementation(async (id) => paramSample[id] ?? [])
@@ -593,5 +595,57 @@ describe('SiteSourceSwitcher · 导入已有源（M4-5）', () => {
     table = wrapper.get('[data-testid="bind-source-table"]')
     expect(table.text()).toContain('别站的源')
     expect(table.text()).toContain('已在本站的源')
+  })
+})
+
+// 0903 Y8-A：复制源之后补第三步——把新源关联到**被复制源所属的流程**。
+// 前两步（copySource?flag=1 + changeSite）复制的是源与配置，不会把新源挂到流程上；
+// 而 0903 H01 之后配置挂在流程上、执行按 FLOW_ID 反查，不补这步新源就是没有流程的孤儿。
+describe('SiteSourceSwitcher · 复制源后关联到流程（Y8-A）', () => {
+  async function copyWithTemplate(wrapper: Awaited<ReturnType<typeof createWrapper>>) {
+    await wrapper.get('[title="添加源"]').trigger('click')
+    const inputs = wrapper.findAll('.ssw-add-input')
+    await inputs[0].setValue('复制源')
+    await inputs[1].setValue('https://copied.example.com')
+    await wrapper.get('[data-testid="add-source-submit"]').trigger('click')
+    await flushPromises()
+  }
+
+  it('复制成功后调 bindSources，flowId 取自被复制源', async () => {
+    const wrapper = await createWrapper()
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...source, flowId: 'flow-777' })
+    await copyWithTemplate(wrapper)
+    expect(flowCenterApi.bindSources).toHaveBeenCalledWith(['source-new'], 'flow-777')
+  })
+
+  it('列表上没带 flowId 时回查 sourceDetail，不据此判定"没有流程"', async () => {
+    const wrapper = await createWrapper()
+    const detail = vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...source, flowId: 'flow-888' })
+    await copyWithTemplate(wrapper)
+    expect(detail).toHaveBeenCalledWith(source.sourceId)
+    expect(flowCenterApi.bindSources).toHaveBeenCalledWith(['source-new'], 'flow-888')
+  })
+
+  it('第三步失败不影响前两步的结果，只提示可去流程中心手动关联', async () => {
+    const wrapper = await createWrapper()
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...source, flowId: 'flow-777' })
+    vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: false, message: '流程不存在' })
+    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
+    await copyWithTemplate(wrapper)
+
+    // 前两步照常发生，没有回滚（源已经建出来了，回滚等于删源）
+    expect(sourceApi.copySourceAndLocate).toHaveBeenCalled()
+    expect(sourceApi.changeSite).toHaveBeenCalledWith(['source-new'], 'site-a')
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('可在流程中心手动关联'))
+  })
+
+  it('被复制源本来就没有流程时不报错，只说明新源也未关联', async () => {
+    const wrapper = await createWrapper()
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...source, flowId: undefined })
+    const ok = vi.spyOn(ElMessage, 'success').mockImplementation(() => undefined as never)
+    await copyWithTemplate(wrapper)
+
+    expect(flowCenterApi.bindSources).not.toHaveBeenCalled()
+    expect(ok).toHaveBeenCalledWith(expect.stringContaining('未关联流程'))
   })
 })

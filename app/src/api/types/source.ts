@@ -32,6 +32,10 @@ export interface Source {
   name: string
   url: string
   configId: string
+  /** 该源关联的流程（旧 `cs_source.FLOW_ID`）。**执行时后端按 FLOW_ID 反查配置后执行**
+   *  （0903 H1 答复），所以这个字段决定这个源实际跑哪一套配置。
+   *  2026-09-04 实测：`sourcePaged` 与 `sourceDetail` 都已返回（sourceDetail 是后端本次新加的）。 */
+  flowId?: string
   /** @deprecated 旧平台 snatchSave 请求字段；读取旧源时保留，业务层不再新写。 */
   sourceType?: string | number
   configId2?: string
@@ -179,12 +183,47 @@ export interface FlowRecord {
   updatedAt: string
   /** 关联源数量（后端计算列，口径 cs_source.IS_DELETE >= 0，含禁用源）；mock 不提供 */
   sourceCnt?: number
+  /** 是不是流程模板（旧 `templateFlag` 0/1）。**模板是流程的一个属性，不是另一类对象**——
+   *  模板与普通流程在同一个列表里，用 `flowPaged.templateFlag` 服务端过滤区分（0903 H24 / H7 答复）。
+   *  2026-09-04 实测：传 1 得 0 条、传 0 得 738 条，服务端过滤确实生效。 */
+  isTemplate?: boolean
+  /** 由哪个模板复制而来（旧 `refFlowId`）。`copyFlow` / `copyTemplateSteps` 会自动回指，
+   *  用于反查"谁用了这个模板"（此前只能看 sourceCnt，看不出来源）。 */
+  fromTemplateId?: string
+
+  // ---- 0904 I17（Z7）：分类 / 标签 / 描述。后端 cs_flow 列全都现成，不新开表也不新开端点 ----
+  /** 目录分类（旧 `categoryId`）。与源用的是同一套目录（`category/categoryPaged`）。
+   *  2026-09-05 实测 200 条流程里只出现过一个值 `9009289`——**存量几乎没分过类**，
+   *  所以列表里大多显示 `—` 是正常的，不是没读到。 */
+  categoryId?: string
+  /** 业务大类（旧 `bizType`）。⚠️ **2026-09-05 实测 200 条流程全为空**，
+   *  生产里一个样本都没有，取值集合无从"照抄后端"（0904 Q3 仍未答复）。
+   *  所以**不做成枚举下拉**——枚举不自造是 0824-11 §1.2d 定的规矩，
+   *  在拿到集合前只读展示、不提供选择。 */
+  bizType?: string
+  /** 标签（旧 `flowTags`，逗号串）。与源标签同概念。实测存量同样全为空。 */
+  flowTags?: string
+  /** 流程描述（旧 `flowDesc`）。存量里这个值是后端从源/网站灌进来的，
+   *  所以会看到「描述都是网站」——**如实展示，不清洗**（0904 I16-4）。 */
+  description?: string
+  /** 备注（旧 `remark`）。`copyFlow` 会写「copy from 1400978」这类来源说明。 */
+  remark?: string
+  /** 创建时间（旧 `createDt`）。列表原来只有更新时间。 */
+  createdAt?: string
 }
 
 export interface FlowSaveInput {
   id?: string
   name: string
   definition: FlowDefinition
+  /** 只在「标记/取消标记为模板」时传；不传则保持后端现值不变 */
+  isTemplate?: boolean
+  /** 下面几项同理：**只有显式传了才提交**。saveFlow 是全量保存端点，
+   *  漏传等于让后端保持原值，传空串才是"清空"。 */
+  categoryId?: string
+  flowTags?: string
+  description?: string
+  remark?: string
 }
 
 /** 网站 Site（0707 优化·Phase2）：父级，统一流程模板 + 批量工具，本身不实际采集运行；下辖多个源（Source.siteId） */
@@ -278,6 +317,12 @@ export interface Step {
   itemId?: string
   /** 旧「扩展名」（旧 extName）。实测样本全部为空，字段存在但含义和触发场景未验证。 */
   extName?: string
+  /** 该步骤是不是这个流程的根节点（旧 `IS_ROOT=1`）。
+   *  **只有 `nextConfigPaged?flowId=&svg=true` 会返回这一行**——它是 `saveFlow` 新建流程时自动
+   *  建的真实 `cs_item_config` 记录（2026-09-04 抽查 5 个流程，每个恰好 1 条）。
+   *  `sourceId` 模式没有它，那边的起点是现算的 `itemConfig=0` 套壳行。两者占同一位置：
+   *  子步骤的 `lastStep` 在源视角是哨兵 `'0'`，在流程视角被后端改写成这条的真实 ID。 */
+  isRoot?: boolean
   /** 依赖的前置步骤 ID（旧 lastStep）；只用于拓扑排序，不是任务上下文字段。
    *  2026-08-26 生产实测（源 430016821）：lastStep 是单个步骤 itemConfig 值（如 "40597"），
    *  真实的上下文来源另在 context 字段（如 "K2,K17"），此前误把 lastStep 当成上下文来源用。 */

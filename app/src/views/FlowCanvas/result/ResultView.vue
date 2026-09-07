@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
+import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -7,7 +9,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, ruleApi, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery } from '@/api'
 import {
   buildHorizontalLayout, nodeOutputTable, nodeEntryCondition, conditionGroupLabel, conditionGroupIsSet,
-  isDecision, isParallel, isFirstRunnableNode, firstRunnableNodeId, hasDirectSuccessor, hasAmbiguousInput, directPredecessorIds, type NodeConfig,
+  isDecision, isParallel, isFirstRunnableNode, firstRunnableNodeId, hasDirectSuccessor, directPredecessorIds, directSuccessorIds, directSuccessorIdsIncludingDisabled, type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
 import { fetchChildCountsForPage, isPerRowMode, resolveChildTargets, type ChildCountCell } from '@/utils/flow/childCounts'
@@ -22,7 +24,6 @@ import { readRailOpen, writeRailOpen } from './railPref'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import RowDetailFields from './RowDetailFields.vue'
-import RowDetailSubs from './RowDetailSubs.vue'
 import { fieldsFromShowItems, fieldsFromTableMeta } from './rowDetailFields'
 import { readFieldPreset, readShowEmpty, visibleDetailProps, writeFieldPreset, writeShowEmpty, type RowFieldPreset } from './rowDetailPrefs'
 
@@ -105,6 +106,23 @@ const predecessorTableId = computed(() => {
   return nodeOutputTable(cfg) || flow.effectiveInputTableFor(predecessorId.value)
 })
 
+/**
+ * 被停用的直接后继（2026-09-04）。
+ *
+ * `hasDirectSuccessor` 会跳过停用节点——这是对的，停用的节点不该被当成可发送目标。
+ * 但它把两件事压成了同一个"没有后继"：**真末节点** vs **后继存在但停用了**。
+ * 于是中间节点也会落到 `upstream` 分支，按钮写着「从上一节点重跑」——
+ * 实测：源 430016398 的规则处理节点后面挂着已停用的「1400917-详情」，
+ * 用户看到的是"这不是最后一个节点，为什么叫从上一节点重跑"。
+ *
+ * 这里不改判定（停用的后继确实不能发），只把原因说出来。
+ */
+const disabledSuccessorTitles = computed(() => {
+  if (!selectedNodeId.value) return []
+  const all = directSuccessorIdsIncludingDisabled(flow.main, flow.configs, selectedNodeId.value, flow.branchGroups)
+  return all.filter((id) => flow.configs[id]?.disabled).map((id) => flow.configs[id]?.title || id)
+})
+
 type ExecMode = 'fetch' | 'input' | 'none' | 'upstream'
 const execMode = computed<ExecMode>(() => {
   if (isStructuralNode.value || (!outputTableId.value && !inputTableId.value)) return 'none'
@@ -168,16 +186,42 @@ function onScopeChange(next: 'output' | 'input') {
   selectedRowIds.value = []
 }
 
-const isAmbiguousInput = computed(() => {
-  if (execMode.value !== 'input' || !selectedNodeId.value) return false
-  return hasAmbiguousInput(allNodes.value, flow.main, flow.branches, flow.configs, flow.branchGroups, selectedNodeId.value)
+/**
+ * 同一张输入表挂多个后继时，这批数据会分流到哪几个节点（2026-09-04 重做）。
+ *
+ * **原来这里是一条阻断**（0812 M2-14）：只要输入表被多个节点共用就禁用勾选与手动执行，
+ * 理由是「旧 nextStep 没有 targetNodeId，后端没法知道任务该发给哪一个」。
+ *
+ * **这个前提是错的。** 后端按**各后继节点的进入条件**逐个求值来分流——2026-09-04 确认，
+ * 实例：源 yahoo 的两个后继入参都是 900，靠条件区分
+ *   `K19 == nil || K1=='guce' || K1==nil` → python正文提取(38779)
+ *   `K19 != nil && K6 == nil`             → python正文提取_dev(38878)
+ * 「同表多后继」是旧平台的**正常设计**，不是配置错误。
+ *
+ * 代价是这条阻断把很常见的形态整条链都锁死了：920663 那种一条链全在 TB_CNEWS 上的源，
+ * 除第一个节点外全都不能发任务（用户两次报「为什么这个节点没有勾选框」）。
+ *
+ * 现在不拦，改成执行前把分流去向说清楚。
+ */
+const branchTargets = computed(() => {
+  if (execMode.value !== 'input' || !selectedNodeId.value) return []
+  const ids = directSuccessorIds(flow.main, flow.configs, selectedNodeId.value, flow.branchGroups)
+  if (ids.length < 2) return []
+  return ids.map((id) => {
+    const cfg = flow.configs[id]
+    const group = cfg ? nodeEntryCondition(cfg) : undefined
+    return {
+      id,
+      title: cfg?.title || id,
+      condition: group && conditionGroupIsSet(group) ? conditionGroupLabel(group) : '无进入条件',
+    }
+  })
 })
 // 有输入表的中间节点仍按 0812：只在输入 / 合并「输入·输出」tab 勾行（输出 tab 是本节点产物）。
 // 没有输入表的节点（典型列表首节点）当前表就是输出，0824 要从这里勾行发给后继，勾选列必须留着。
 const execDisabledReason = computed(() => {
   if (execMode.value === 'fetch' && !isVerifiedFirstNode.value) return '当前节点无输入表，暂不支持独立手动执行'
   if (execMode.value === 'input') {
-    if (isAmbiguousInput.value) return '该输入表被多个节点共用，无法确定任务目标节点，暂不支持手动执行'
     if (inputTableId.value && !sameTable.value && scope.value !== 'input') return '请先切到"输入数据"范围并勾选记录'
     if (!selectedRowIds.value.length) return '请先勾选要发送的数据'
   }
@@ -188,7 +232,6 @@ const execDisabledReason = computed(() => {
 })
 const canExecute = computed(() => execMode.value !== 'none' && !execDisabledReason.value)
 const canPickRows = computed(() => {
-  if (isAmbiguousInput.value) return false
   if (execMode.value === 'upstream') return true
   return execMode.value === 'input' && (sameTable.value || scope.value === 'input' || !inputTableId.value)
 })
@@ -261,7 +304,11 @@ async function onSendNextStep() {
   const ids = [...selectedRowIds.value]
   const tableId = selectedTable.value
   // 0824：数据视图这条工具栏只发后续（nextStep）；按源抓取走画布头 SnatchLauncher，不走这里。
-  await confirmDanger('发后续任务', `将对选中的 ${count} 条数据发起"${nodeName}"的后续处理任务，是否继续？`, async () => {
+  // 多后继时说清去向：后端按各后继的进入条件分流，不是"发给某一个"（2026-09-04 确认）
+  const fanout = branchTargets.value.length
+    ? `\n这批数据会按各后继节点的进入条件分流到：${branchTargets.value.map((t) => `${t.title}（${t.condition}）`).join('、')}`
+    : ''
+  await confirmDanger('发后续任务', `将对选中的 ${count} 条数据发起"${nodeName}"的后续处理任务。${fanout}\n是否继续？`, async () => {
     const res = await runNextStep(ids, tableId, nodeName)
     selectedRowIds.value = []
     return res
@@ -380,12 +427,20 @@ watch(
 function onSelectNode(id: string) {
   if (!id || id === selectedNodeId.value) return
   selectedNodeId.value = id
+  // 与右侧节点配置联动（0904 I10 / Z3-2，用户 2026-09-05 补充「点击中间的流程需要跟右侧联动」）：
+  // 三栏之后右侧常驻节点配置，点中间轨道上的节点，右边就该跟着换成这个节点的配置——
+  // 否则会出现"左边在看 A 的数据、右边在改 B 的配置"这种最容易误操作的状态。
+  flow.select(id)
   scope.value = defaultScope()
   page.value = 1
   selectedRowIds.value = []
   sortField.value = ''
   sortOrder.value = ''
 }
+// 反向联动：从画布切到数据视图时，右侧已经选中的节点应当就是中间默认看的那个。
+watch(() => flow.selectedId, (id) => {
+  if (id && id !== selectedNodeId.value && allNodes.value.some((n) => n.id === id)) onSelectNode(id)
+})
 
 watch(queryNodeId, (id) => {
   if (id && allNodes.value.some((n) => n.id === id)) onSelectNode(id)
@@ -541,6 +596,7 @@ async function loadData() {
     // "真实数据接口暂不可用"，把"你的 SQL 条件写错了"说成"服务挂了"，用户完全无从判断。
     const failReason = (r: PromiseSettledResult<unknown>) =>
       (r.status === 'rejected' ? String((r.reason as Error)?.message || r.reason || '') : '')
+    const dataSucceeded = dataRes.status === 'fulfilled'
     const dataFail = failReason(dataRes)
     const metaFail = failReason(metaRes)
 
@@ -573,6 +629,7 @@ async function loadData() {
       metaError.value = `真实数据接口暂不可用，已切换到本地演示数据${metaFail || dataFail ? `（${briefError(metaFail || dataFail)}）` : ''}`
     }
     if (dataRes.status === 'fulfilled') {
+      if (dataSucceeded) rememberSqlCondition(query.tableId, query.sql)
       rows.value = dataRes.value.list ?? []
       total.value = dataRes.value.total ?? 0
     } else {
@@ -672,7 +729,8 @@ function clearFilters() {
   runQuery()
 }
 /**
- * 「按此条件反查源 →」（0903 Y2-7）。
+ * 「按条件查源 →」（0903 Y2-7 → 0904 Q1 改名，原名「按此条件反查源」被嫌奇怪：
+ * 「这名字起的奇怪，这是不是按源统计？」「按源查源列表」）。
  *
  * 单源视图里**不直接反查**——这里只有一个源，反查它自己没有意义。用户在这个页面问的是
  * 「同样的脏数据，别的源上有没有」，那是全部源数据视图的事。所以这个按钮**带着条件跳过去**，
@@ -795,37 +853,15 @@ async function loadParentDetail(row: DataRow) {
     parentLoading.value = false
   }
 }
-/**
- * 本行详情（0904）：只为拿 `subs` / `subsCnt` 而发——抽屉里的字段一直是用列表行 + 表 meta
- * 现拼的（`detailFields`），不依赖这个请求，所以它失败**不影响抽屉正常用**，静默即可。
- * 旧平台 BaseDetail.vue 同样是打开详情才拉一次。
- */
-const rowDetail = ref<EntryDetail | null>(null)
-let rowDetailSeq = 0
-async function loadRowDetail(row: DataRow | null) {
-  const id = ++rowDetailSeq
-  rowDetail.value = null
-  if (!row || !selectedTable.value) return
-  try {
-    const res = await dataApi.rowDetail(selectedTable.value, row.dataId)
-    if (id === rowDetailSeq) rowDetail.value = res
-  } catch { /* 子表拿不到就不显示这一块，不打扰用户 */ }
-}
-watch(detailRow, (row) => { void loadRowDetail(row) })
-
-/** 详情里「查看全部」：交给列表层——就是 Y1 那个下钻 */
-function onSubsViewAll() {
-  const row = detailRow.value
-  const cell = row ? childCounts.value?.get(row.dataId) : undefined
-  if (!row || !cell) return
-  closeDetail()
-  void onChildCountClick(row, cell)
-}
-/** 这行有没有可下钻的下级（决定「查看全部」出不出现） */
-function childCountFor(row: DataRow | null): boolean {
-  if (!row) return false
-  return !!childCounts.value?.get(row.dataId)?.byTarget.some((t) => t.count > 0)
-}
+// 0904 I06：详情抽屉里的「下级数据」面板**已删除**（Z0-1）。
+// 它 2026-09-04 才迁进来（commit 58d35e0），当天走查就被否掉——产品原话
+// 「这个不合理啊，这个不用你点，下级是点进去就这个条件才能下去，然后可以返回就行了」
+// 「你在这个下级之下，你那个详情的就不要了」。逐条罗列子行被形容为「看猴年马月」。
+//
+// **这不是误删回滚**：下钻的形态定为「带条件跳转 + 可返回」（Z2 做返回），
+// 详情层不再内嵌子表列表。随之删除的还有 RowDetailSubs.vue、rowDetail/loadRowDetail
+// （那个请求只为拿 subs/subsCnt，字段本来就是列表行 + 表 meta 现拼的）、onSubsViewAll、childCountFor。
+// 列表层的下级条数列与点击下钻（Y1）**保留不动**，那才是产品认可的入口。
 
 /** 详情抽屉里的「父 ID ↗」 */
 async function openParentDetail() {
@@ -1000,7 +1036,9 @@ async function onTestScript() {
           <option value="E">E 出错</option>
           <option value="L">L 处理中</option>
         </select>
-        <input v-model="filters.sql" class="rv-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
+        <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="selectedTable" :table-name="meta?.tableName" class="rv-sql">
+          <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="rv-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
+        </SqlConditionEditor>
         <span class="rv-actions">
           <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
           <button class="rc-btn" type="button" @click="clearFilters">清空</button>
@@ -1012,7 +1050,7 @@ async function onTestScript() {
             :disabled="!canBackTrace"
             :title="canBackTrace ? '带着当前条件切到全部源数据视图，在那里反查哪些源命中' : '先填至少一个数据条件（SQL / 状态 / 数据 ID / 父 ID）'"
             @click="openBackTraceInSiteView"
-          >按此条件反查源 →</button>
+          >按条件查源 →</button>
         </span>
       </template>
     </div>
@@ -1107,6 +1145,21 @@ async function onTestScript() {
             :title="execDisabledReason"
             @click="execMode === 'fetch' ? onSendFetch() : execMode === 'upstream' ? onSendUpstream() : onSendNextStep()"
           >{{ execMode === 'fetch' ? '发起抓取' : execMode === 'upstream' ? '从上一节点重跑' : '发后续任务' }}</button>
+          <!-- 同表多后继：不再拦，只说清会分流到哪几个（2026-09-04）。
+               原来这里是禁用勾选 + 一句藏在 title 里的"无法确定任务目标节点"，纯黑盒。 -->
+          <span
+            v-if="branchTargets.length"
+            class="muted"
+            data-testid="data-fanout-hint"
+            :title="branchTargets.map((t) => `${t.title}：${t.condition}`).join('\n')"
+          >按进入条件分流到 {{ branchTargets.length }} 个后继</span>
+          <!-- 「从上一节点重跑」出现在中间节点上会让人困惑（"这不是最后一个节点啊"）——
+               说清楚是后继被停用了，不是它变成了末节点。 -->
+          <span
+            v-if="execMode === 'upstream' && disabledSuccessorTitles.length"
+            class="muted"
+            data-testid="data-disabled-successor-hint"
+          >下游「{{ disabledSuccessorTitles.join('、') }}」已停用，无法发后续</span>
           <!-- 「测试脚本」来自规则处理那条线（origin/master）：有脚本路径时才出现，与发任务无关。 -->
           <button
             v-if="queryScriptPath"
@@ -1245,15 +1298,6 @@ async function onTestScript() {
             @update:field="editValues[$event.prop] = $event.value"
             @file-click="onCellFile"
           />
-          <!-- 下级数据（0904）：与上游面板对称，抽屉里顺序是 上游 → 本行 → 下游。
-               「查看全部」直接复用 Y1 的下钻——详情层看两眼，列表层看全部。 -->
-          <RowDetailSubs
-            :subs="rowDetail?.subs"
-            :subs-cnt="rowDetail?.subsCnt"
-            :show-empty="showEmpty"
-            :can-view-all="!!childCountFor(detailRow)"
-            @view-all="onSubsViewAll"
-          />
         </div>
         <div class="rv-d-foot">
           <template v-if="editing">
@@ -1306,6 +1350,7 @@ async function onTestScript() {
 </template>
 
 <style scoped>
+.ctx-summary .rv-sql { flex: 1 1 320px; min-width: 180px; width: auto; }
 .rv-shell { background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; height: 100%; display: flex; flex-direction: column; }
 /* 全屏：同一份 DOM 直接铺满视口，不复制模板也不套弹层。祖先链上没有 transform/filter/
    contain（已核对 AppShell.vue、FlowCanvas/index.vue），fixed 能正常逃逸；外层 .rc-shell

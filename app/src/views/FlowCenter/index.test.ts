@@ -42,9 +42,12 @@ async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length) {
       stubs: {
         FlowBoard: { props: ['embedded'], template: '<div data-testid="embedded-flow-board">流程画布</div>' },
         NodeInspector: { props: ['hideAi'], template: '<div data-testid="embedded-node-inspector">节点配置 表配置 编排配置 参数配置 任务配置</div>' },
+        // Y8-10 之后是多选：modelValue 是 string[]。stub 用逗号分隔的输入模拟多选。
         GlobalSourceSelect: {
-          props: ['modelValue'], emits: ['update:modelValue'],
-          template: '<input data-testid="source-select-stub" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+          // multiple 必须声明成 Boolean：无值属性 `multiple` 在未声明类型的 prop 上会变成
+          // 空字符串（假值），stub 就退回单选行为，测的东西和真组件对不上。
+          props: { modelValue: { type: [String, Array], default: '' }, multiple: { type: Boolean, default: false } }, emits: ['update:modelValue'],
+          template: '<input data-testid="source-select-stub" :value="Array.isArray(modelValue) ? modelValue.join(\',\') : modelValue" @input="$emit(\'update:modelValue\', multiple ? $event.target.value.split(\',\').filter(Boolean) : $event.target.value)" />',
         },
         'el-dialog': { props: ['modelValue'], template: '<div v-if="modelValue"><slot/><slot name="footer"/></div>' },
       },
@@ -182,14 +185,18 @@ describe('流程中心 · 自动刷新', () => {
     expect(labels).toEqual(['查询', '清空'])
   })
 
+  // 0904 I17（Z7-5）：新建从 prompt 单输入框换成小表单（名称/分类/标签/描述），
+  // 所以不再 mock ElMessageBox.prompt，改成填表单再点提交。
   it('新建流程后自动重查列表', async () => {
     const created = { ...FLOWS[1], id: 'flow-new', name: '新流程' } as FlowRecord
-    vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: '新流程', action: 'confirm' } as never)
     vi.spyOn(flowCenterApi, 'save').mockResolvedValue(created)
     const w = await mountCenter()
     const paged = vi.mocked(flowCenterApi.paged)
     paged.mockClear()
     useUiStore().fireAction('新建流程')
+    await flushPromises()
+    await w.get('[data-testid="create-flow-name"]').setValue('新流程')
+    await w.get('[data-testid="create-flow-submit"]').trigger('click')
     await flushPromises()
     expect(paged).toHaveBeenCalled()
     // 重查回来的列表里没有这条新流程也不能把工作区关掉
@@ -224,13 +231,21 @@ describe('流程中心 · 自动刷新', () => {
 })
 
 // 0902 会议口径：操作列只保留 编辑 / 关联到源 / 删除流程，去掉「复制」。
+// 0903 H24（Y8-D）：加回「标记为模板 / 取消模板」——模板是流程的一个**属性**，
+// 就该在流程行上切换，不是另开一个模板中心页。
 describe('流程中心 · 操作列', () => {
+  // 0904 I16（Z7-1）：操作列是**图标按钮**，文案在 title/aria-label 上，按钮体内没有文字。
   const actions = (w: Awaited<ReturnType<typeof mountCenter>>) =>
-    rows(w)[0].findAll('.fc-actions button').map((b) => b.text())
+    rows(w)[0].findAll('.fc-actions button').map((b) => b.attributes('title'))
 
-  it('只有编辑、关联到源、删除流程三个操作', async () => {
+  it('操作列：编辑 / 关联到源 / 标记为模板 / 删除流程', async () => {
     const w = await mountCenter()
-    expect(actions(w)).toEqual(['编辑', '关联到源', '删除流程'])
+    expect(actions(w)).toEqual(['编辑流程', '关联到源', '标记为模板', '删除流程'])
+  })
+
+  it('已是模板的行，按钮文案变成「取消模板」', async () => {
+    const w = await mountCenter([{ ...FLOWS[0], isTemplate: true }])
+    expect(actions(w)).toEqual(['编辑流程', '关联到源', '取消模板标记', '删除流程'])
   })
 
   it('删除前二次确认，并把关联源数写进确认文案', async () => {
@@ -405,7 +420,7 @@ describe('流程中心 · 可编辑工作区', () => {
     const bind = vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true })
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     const w = await mountCenter()
-    const apply = rows(w)[0].findAll('button').find((button) => button.text() === '关联到源')!
+    const apply = rows(w)[0].findAll('button').find((button) => button.attributes('title') === '关联到源')!
     await apply.trigger('click')
     await w.get('[data-testid="source-select-stub"]').setValue('source-1')
     await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
@@ -422,11 +437,240 @@ describe('流程中心 · 可编辑工作区', () => {
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     const error = vi.spyOn(ElMessage, 'error')
     const w = await mountCenter()
-    const apply = rows(w)[0].findAll('button').find((button) => button.text() === '关联到源')!
+    const apply = rows(w)[0].findAll('button').find((button) => button.attributes('title') === '关联到源')!
     await apply.trigger('click')
     await w.get('[data-testid="source-select-stub"]').setValue('source-1')
     await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
     await flushPromises()
     expect(error).toHaveBeenCalledWith(expect.stringContaining('目标流程不存在或已删除'))
+  })
+})
+
+// 0903 Y8-B：关联到源改多选 + 分批提交。
+// changeFlowBatch 单次上限 5000（endpoints.ts），前端按 500 一批串行。
+describe('流程中心 · 关联到源（Y8-B 多选与分批）', () => {
+  async function openApplyDialog(w: Awaited<ReturnType<typeof mountCenter>>) {
+    const apply = rows(w)[0].findAll('button').find((b) => b.attributes('title') === '关联到源')!
+    await apply.trigger('click')
+  }
+
+  it('一次关联多个源，一批就够时只发一次请求', async () => {
+    const bind = vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const w = await mountCenter()
+    await openApplyDialog(w)
+    await w.get('[data-testid="source-select-stub"]').setValue('s1,s2,s3')
+    await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(bind).toHaveBeenCalledTimes(1)
+    expect(bind).toHaveBeenCalledWith(['s1', 's2', 's3'], 'flow-10086')
+  })
+
+  it('确认文案写明影响的源数与「共用配置」，不再说「不改动源现有配置」', async () => {
+    vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const w = await mountCenter()
+    await openApplyDialog(w)
+    await w.get('[data-testid="source-select-stub"]').setValue('s1,s2')
+    await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
+    await flushPromises()
+
+    const text = String(confirm.mock.calls[0][0])
+    expect(text).toContain('2 个源')
+    expect(text).toContain('共用')
+    expect(text).not.toContain('不改动源现有的采集配置')
+  })
+
+  it('超过 500 个按 500 一批切分，串行提交', async () => {
+    const bind = vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const ids = Array.from({ length: 1200 }, (_, i) => `s${i}`)
+    const w = await mountCenter()
+    await openApplyDialog(w)
+    await w.get('[data-testid="source-select-stub"]').setValue(ids.join(','))
+    await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(bind).toHaveBeenCalledTimes(3)
+    expect(bind.mock.calls.map((c) => (c[0] as string[]).length)).toEqual([500, 500, 200])
+  })
+
+  it('中途某批失败：停下不再发后续批次，并如实说明已成功多少个', async () => {
+    const bind = vi.spyOn(flowCenterApi, 'bindSources')
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: false, message: '目标流程不存在' })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const error = vi.spyOn(ElMessage, 'error').mockImplementation(() => undefined as never)
+    const ids = Array.from({ length: 1200 }, (_, i) => `s${i}`)
+    const w = await mountCenter()
+    await openApplyDialog(w)
+    await w.get('[data-testid="source-select-stub"]').setValue(ids.join(','))
+    await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(bind).toHaveBeenCalledTimes(2) // 第三批不再发
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('前 500 个已关联成功'))
+  })
+
+  it('一个源都没选时不发请求', async () => {
+    const bind = vi.spyOn(flowCenterApi, 'bindSources')
+    const w = await mountCenter()
+    await openApplyDialog(w)
+    await w.get('[data-testid="flow-apply-confirm"]').trigger('click')
+    await flushPromises()
+    expect(bind).not.toHaveBeenCalled()
+  })
+})
+
+// 0904 I17（Z7-5）：新建流程的小表单。
+describe('流程中心 · 新建流程表单（Z7-5）', () => {
+  it('分类/标签/描述都提交上去，标签统一成逗号串（中英文逗号、空格都收，去重去空）', async () => {
+    const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue(FLOWS[0])
+    const w = await mountCenter()
+    useUiStore().fireAction('新建流程')
+    await flushPromises()
+    await w.get('[data-testid="create-flow-name"]').setValue('带分类的流程')
+    await w.get('[data-testid="create-flow-tags"]').setValue('新闻， 财经  新闻')
+    await w.get('[data-testid="create-flow-desc"]').setValue('说明文字')
+    await w.get('[data-testid="create-flow-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({
+      name: '带分类的流程',
+      flowTags: '新闻,财经',
+      description: '说明文字',
+    }))
+  })
+
+  it('没填的项**不进 payload**：saveFlow 是全量保存，传空串是"清空"而不是"不管"', async () => {
+    const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue(FLOWS[0])
+    const w = await mountCenter()
+    useUiStore().fireAction('新建流程')
+    await flushPromises()
+    await w.get('[data-testid="create-flow-name"]').setValue('只有名字')
+    await w.get('[data-testid="create-flow-submit"]').trigger('click')
+    await flushPromises()
+
+    const payload = save.mock.calls[0][0] as unknown as Record<string, unknown>
+    expect('categoryId' in payload).toBe(false)
+    expect('flowTags' in payload).toBe(false)
+    expect('description' in payload).toBe(false)
+  })
+
+  it('名称为空不发请求', async () => {
+    const save = vi.spyOn(flowCenterApi, 'save')
+    const w = await mountCenter()
+    useUiStore().fireAction('新建流程')
+    await flushPromises()
+    await w.get('[data-testid="create-flow-name"]').setValue('   ')
+    await w.get('[data-testid="create-flow-submit"]').trigger('click')
+    await flushPromises()
+    expect(save).not.toHaveBeenCalled()
+  })
+})
+
+// 0903 Y8-D 流程模板管理（H24）。模板是流程的一个**属性**（cs_flow.templateFlag），
+// 不是另一类对象——不复活 FlowTemplate 那个死页面，模板和普通流程同一张表用筛选区分。
+describe('流程中心 · 流程模板（Y8-D）', () => {
+  it('范围下拉走服务端过滤（flowPaged.onlyTemplate），不是本地筛', async () => {
+    const w = await mountCenter()
+    const paged = vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+
+    await w.get('[data-testid="flow-center-scope"]').setValue('template')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ onlyTemplate: true }))
+
+    await w.get('[data-testid="flow-center-scope"]').setValue('normal')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ onlyTemplate: false }))
+
+    // 「全部」不传这个字段，而不是传 undefined 以外的什么值
+    await w.get('[data-testid="flow-center-scope"]').setValue('all')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ onlyTemplate: undefined }))
+  })
+
+  it('模板行有角标；由模板复制而来的行显示来源', async () => {
+    const w = await mountCenter([
+      { ...FLOWS[0], isTemplate: true },
+      { ...FLOWS[1], fromTemplateId: 'flow-10086' },
+    ])
+    expect(w.findAll('[data-testid="flow-template-badge"]')).toHaveLength(1)
+    expect(w.get('[data-testid="flow-from-template"]').text()).toContain('flow-10086')
+  })
+
+  it('标记为模板：先取全量详情再 saveFlow，且必须带 id（否则会静默新建一条同名流程）', async () => {
+    const w = await mountCenter()
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const detail = vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(FLOWS[0])
+    const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue({ ...FLOWS[0], isTemplate: true })
+
+    await w.get('[data-testid="flow-toggle-template"]').trigger('click')
+    await flushPromises()
+
+    // 列表行的 definition 是空的（flowPaged 不返回 flowConf），不先取详情就会把画布存空
+    expect(detail).toHaveBeenCalledWith('flow-10086')
+    expect(save).toHaveBeenCalledWith({
+      id: 'flow-10086',
+      name: FLOWS[0].name,
+      definition: FLOWS[0].definition,
+      isTemplate: true,
+    })
+  })
+
+  it('取消确认时不发保存请求', async () => {
+    const w = await mountCenter()
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(new Error('cancel'))
+    const save = vi.spyOn(flowCenterApi, 'save')
+    await w.get('[data-testid="flow-toggle-template"]').trigger('click')
+    await flushPromises()
+    expect(save).not.toHaveBeenCalled()
+  })
+
+  it('详情读不回来时不保存，避免把 definition 存成空', async () => {
+    const w = await mountCenter()
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(null)
+    const save = vi.spyOn(flowCenterApi, 'save')
+    const err = vi.spyOn(ElMessage, 'error').mockImplementation(() => undefined as never)
+
+    await w.get('[data-testid="flow-toggle-template"]').trigger('click')
+    await flushPromises()
+
+    expect(save).not.toHaveBeenCalled()
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('未做任何修改'))
+  })
+
+  it('「从模板新建」走 copyFlow，不是自己拼 saveFlow（后者只会建出空流程）', async () => {
+    const w = await mountCenter()
+    vi.spyOn(flowCenterApi, 'templates').mockResolvedValue([{ ...FLOWS[0], isTemplate: true }])
+    vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: 'flow-10086' } as never)
+    const copy = vi.spyOn(flowCenterApi, 'copy').mockResolvedValue('flow-99')
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({ ...FLOWS[0], id: 'flow-99' })
+    const save = vi.spyOn(flowCenterApi, 'save')
+
+    // 不走 ui.fireAction：那条路依赖"哪个组件实例最后注册了这个动作"，
+    // 多份 wrapper 未卸载时结果取决于挂载顺序，会随测试文件增减而飘。
+    await (w.vm.$ as unknown as { setupState: { createFromTemplate: () => Promise<void> } }).setupState.createFromTemplate()
+    await flushPromises()
+
+    expect(copy).toHaveBeenCalledWith('flow-10086', expect.stringContaining('_copy'))
+    expect(save).not.toHaveBeenCalled()
+  })
+
+  it('一个模板都没有时给出提示，不弹输入框', async () => {
+    const w = await mountCenter()
+    vi.spyOn(flowCenterApi, 'templates').mockResolvedValue([])
+    const prompt = vi.spyOn(ElMessageBox, 'prompt')
+    const info = vi.spyOn(ElMessage, 'info').mockImplementation(() => undefined as never)
+
+    // 不走 ui.fireAction：那条路依赖"哪个组件实例最后注册了这个动作"，
+    // 多份 wrapper 未卸载时结果取决于挂载顺序，会随测试文件增减而飘。
+    await (w.vm.$ as unknown as { setupState: { createFromTemplate: () => Promise<void> } }).setupState.createFromTemplate()
+    await flushPromises()
+
+    expect(prompt).not.toHaveBeenCalled()
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('还没有流程被标记为模板'))
   })
 })

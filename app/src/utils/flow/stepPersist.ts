@@ -20,10 +20,31 @@ export function isWritableStepId(id: string | undefined): boolean {
   return !!id && /^\d+$/.test(id) && id !== '0'
 }
 
+/**
+ * 画布合成的**虚拟起点**（`rootStepForSource` 造的 `source:<sourceId>`）。
+ *
+ * **它绝不能落库**（2026-09-04 修）。源视图的起点在后端是 `nextConfigPaged?sourceId=X&svg=true`
+ * **现算拼出来**的那行 `itemConfig: 0`——把源自己的 config 套壳成一个节点，不是
+ * `cs_item_config` 里的真实记录。前端这个合成节点占的就是那一行的位置。
+ *
+ * 之前没排除它，导致**新建网站/新建源后一进画布，自动保存就把这个虚拟起点当成新节点
+ * `saveItemConfig` 建了一条真实步骤**。下次再进来，后端照旧返回现算的 `itemConfig:0`，
+ * 外加这条新建的真实行 —— 画布上就多出一个同名首节点，且每来一次多一条。
+ * （生产数据里已有这个形状：流程 1400760 不带 svg 的 13 条里，40206/40211 都是 `lastStep='0'`
+ * 的"根位置"步骤；1400935 更有 40589/40596/40597 三条并列。是不是全由此而来没法追溯，
+ * 但机制对得上。）
+ *
+ * 用户在它后面加的节点不受影响：`lastStepIdsFromCanvas` 找不到可落库前置时返回哨兵 `'0'`，
+ * 正是"挂在根上"的正确写法。
+ */
+export function isSyntheticRootId(id: string | undefined): boolean {
+  return !!id && id.startsWith('source:')
+}
+
 /** 返回首个尚未绑定配置的本地草稿节点；此时应等待配置保存，而不是报流程保存失败。 */
 export function firstUnboundDraftNodeId(main: string[], configs: Record<string, NodeConfig>): string | undefined {
   return main.find((id) => {
-    if (id === 'start' || id === 'end' || id === '0' || isWritableStepId(id)) return false
+    if (id === 'start' || id === 'end' || id === '0' || isSyntheticRootId(id) || isWritableStepId(id)) return false
     return !!configs[id] && !configs[id].configId
   })
 }
@@ -51,7 +72,7 @@ export function assertStepsPersistable(
   // 0903 YB-B：分支链上的节点同样要过这道校验，否则"没绑配置的新节点"藏在分支里就溜过去了
   const all = persistableNodeIds(main, branchGroups)
   for (const id of all) {
-    if (id === 'start' || id === 'end' || id === '0' || isWritableStepId(id)) continue
+    if (id === 'start' || id === 'end' || id === '0' || isSyntheticRootId(id) || isWritableStepId(id)) continue
     const cfg = configs[id]
     if (!cfg) continue
     if (!cfg.title?.trim()) throw new Error('节点名称不能为空')

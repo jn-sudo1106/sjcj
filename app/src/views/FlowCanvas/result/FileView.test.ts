@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import FileView from './FileView.vue'
+import { readSqlConditions } from '@/utils/sqlConditionHistory'
 import FileDetailDrawer from './FileDetailDrawer.vue'
 import FilePreviewDrawer from './components/FilePreviewDrawer.vue'
 import { fileApi, sourceApi, type FileResourceRecord } from '@/api'
@@ -30,6 +31,8 @@ async function clickQuery(wrapper: { findAll: (s: string) => { text: () => strin
   await wrapper.findAll('button').find((b) => b.text() === '查询')!.trigger('click')
 }
 
+afterEach(() => localStorage.clear())
+
 describe('FileView', () => {
   // 文件列表现在挂在步骤列表之后（先判定是否支持节点筛选），步骤走 mock 通道有 120ms
   // 真实定时器，不打桩的话 flushPromises 追不上，列表会停在未加载态。
@@ -50,7 +53,7 @@ describe('FileView', () => {
       vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
       const query = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ list: rows, total: rows.length })
       const wrapper = shallowMount(FileView, {
-        global: { directives: { loading: {} }, stubs: { CanvasHeader: true } },
+        global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, CanvasHeader: true } },
       })
       await flushPromises()
       return { wrapper, query }
@@ -111,7 +114,7 @@ describe('FileView', () => {
     const query = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ list: files, total: 1 })
 
     const wrapper = shallowMount(FileView, {
-      global: { directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, CanvasHeader: true } },
     })
     await flushPromises()
 
@@ -135,7 +138,7 @@ describe('FileView', () => {
     useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
 
     const wrapper = shallowMount(FileView, {
-      global: { directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, CanvasHeader: true } },
     })
     await new Promise((resolve) => setTimeout(resolve, 500))
     await flushPromises()
@@ -152,7 +155,7 @@ describe('FileView', () => {
     vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ list: files, total: 1 })
 
     const wrapper = shallowMount(FileView, {
-      global: { directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, CanvasHeader: true } },
     })
     await flushPromises()
 
@@ -173,7 +176,7 @@ describe('FileView', () => {
     vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ list: [row], total: 101 })
 
     const wrapper = shallowMount(FileView, {
-      global: { directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, CanvasHeader: true } },
     })
     await flushPromises()
 
@@ -205,7 +208,7 @@ describe('FileView', () => {
     vi.spyOn(fileApi, 'resourceRows').mockRejectedValue(new Error('500'))
 
     const wrapper = shallowMount(FileView, {
-      global: { directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, CanvasHeader: true } },
     })
     await flushPromises()
 
@@ -222,7 +225,7 @@ describe('FileView', () => {
     const query = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ list: files, total: 1 })
 
     const wrapper = shallowMount(FileView, {
-      global: { directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, CanvasHeader: true } },
     })
     await flushPromises()
     const callsAfterMount = query.mock.calls.length
@@ -239,6 +242,12 @@ describe('FileView', () => {
     await clickQuery(wrapper)
     await flushPromises()
     expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ sql: 'K1 IS N' }))
+    expect(readSqlConditions(table.tableId)).toEqual(['K1 IS N'])
+    query.mockRejectedValueOnce(new Error('SQL syntax'))
+    await sqlInput.setValue('bad sql')
+    await clickQuery(wrapper)
+    await flushPromises()
+    expect(readSqlConditions(table.tableId)).toEqual(['K1 IS N'])
   })
 
   it('检测到多张 file_resource 表时给出手动选择的下拉，而不是报错停住（对齐旧平台 loadEntryTypes1 的表ID选择器）', async () => {
@@ -251,7 +260,7 @@ describe('FileView', () => {
     const query = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ list: files, total: 1 })
 
     const wrapper = shallowMount(FileView, {
-      global: { directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, CanvasHeader: true } },
     })
     await flushPromises()
 
@@ -278,7 +287,7 @@ describe('FileView', () => {
     vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ list: files, total: 1 })
 
     const wrapper = shallowMount(FileView, {
-      global: { directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, CanvasHeader: true } },
     })
     await flushPromises()
 
@@ -295,7 +304,7 @@ describe('FileView', () => {
     vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ list: files, total: 1 })
 
     const wrapper = shallowMount(FileView, {
-      global: { directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, CanvasHeader: true } },
     })
     await flushPromises()
 

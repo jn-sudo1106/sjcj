@@ -4,6 +4,7 @@ import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ResultView from './ResultView.vue'
+import { readSqlConditions } from '@/utils/sqlConditionHistory'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import { dataApi, isProductionBackend, ruleApi, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source } from '@/api'
@@ -55,7 +56,7 @@ const RowDetailFieldsStub = {
   template: '<div class="rdf-stub"><div v-for="f in (fields || [])" :key="f.key">{{ f.name }} {{ f.value }}</div></div>',
 }
 const FilePreviewStub = { name: 'FilePreview', props: ['path', 'name', 'ext'], template: '<div data-testid="data-cell-file-preview">{{ path }}</div>' }
-const STUBS = { CanvasHeader: true, ElDrawer: ElDrawerStub, ElDialog: ElDialogStub, ElPagination: true, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, FilePreview: FilePreviewStub, SummaryDrawer: true }
+const STUBS = { SqlConditionEditor: false, CanvasHeader: true, ElDrawer: ElDrawerStub, ElDialog: ElDialogStub, ElPagination: true, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, FilePreview: FilePreviewStub, SummaryDrawer: true }
 
 function mountResultView() {
   return shallowMount(ResultView, {
@@ -70,6 +71,8 @@ function mountResultView() {
     },
   })
 }
+
+afterEach(() => localStorage.clear())
 
 describe('ResultView', () => {
   afterEach(() => {
@@ -336,6 +339,16 @@ describe('ResultView · 查询条件的执行时机（0819 N3 前置修复）', 
     await wrapper.findAll('.rv-actions button').find((b) => b.text() === '查询')!.trigger('click')
     await flushPromises()
     expect(query.mock.calls.length).toBe(callsAfterMount + 1) // 只有点查询才查
+    const tableId = query.mock.calls.at(-1)![0].tableId
+    expect(readSqlConditions(tableId)).toEqual(["K1 LIKE '%工行%'"])
+    query.mockImplementation(async (_query, options) => {
+      if (options?.mode === 'mock') return { list: [], total: 0 }
+      throw new Error('SQL syntax')
+    })
+    await typeSql(wrapper, 'bad sql')
+    await wrapper.findAll('.rv-actions button').find((button) => button.text() === '查询')!.trigger('click')
+    await flushPromises()
+    expect(readSqlConditions(tableId)).toEqual(["K1 LIKE '%工行%'"])
     expect(wrapper.find('[data-testid="data-filters-dirty"]').exists()).toBe(false)
   })
 })
@@ -1061,6 +1074,49 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     expect(arg.query.sourceId).toBeUndefined()
   })
 
+  // 2026-09-04 用户实测提出：「这个节点不是最后一个节点，为什么叫从上一节点重跑」。
+  // 根因是 hasDirectSuccessor 会跳过停用节点（对的，停用的不能当发送目标），
+  // 但把"真末节点"和"后继存在但停用了"压成了同一个"没有后继"。判定不改，把原因说出来。
+  it('后继被停用时：仍是「从上一节点重跑」，但说明下游已停用', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+
+    // 用 mid（中间节点，有上游）：把它之后的全停用 → 没有可用后继，但它显然不是末节点。
+    // 不能用 first——它没有上游，execMode 会落到 'none'，按钮整个不渲染。
+    // 也不能只停 mid2：laterRunnableIdsOnMain 会往后走，把 last 当成后继。
+    for (const id of ['mid2', 'last', 'sink']) flow.configs[id].disabled = true
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'mid')
+
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('从上一节点重跑')
+    const hint = wrapper.get('[data-testid="data-disabled-successor-hint"]').text()
+    expect(hint).toContain('已停用')
+    expect(hint).toContain(flow.configs.mid2.title)
+  })
+
+  it('真末节点不显示"下游已停用"那句', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    loadExecFixture(useFlowStore(), current)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'sink')
+
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('从上一节点重跑')
+    expect(wrapper.find('[data-testid="data-disabled-successor-hint"]').exists()).toBe(false)
+  })
+
   it('发后续任务真实回执解析（M3-0J）：全部被目标节点进入条件拒绝时弹 warning，不能显示成功', async () => {
     vi.mocked(ElMessage.success).mockClear()
     vi.mocked(ElMessage.warning).mockClear()
@@ -1258,7 +1314,11 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     expect(ElMessage.error).not.toHaveBeenCalledWith(expect.stringContaining('详情类配置'))
   })
 
-  it('有效输入表被多个节点共用（歧义）时禁用执行按钮并说明原因', async () => {
+  // 2026-09-04 推翻 M2-14：原来"输入表被多个节点共用"直接禁用执行 + 不给勾选，
+  // 前提是"后端没法知道任务发给谁"。实际后端**按各后继节点的进入条件**逐个求值分流，
+  // 同表多后继是旧平台的正常形态（用户："每个分支都有进入条件的"）。
+  // 这条阻断把 920663 那类整条链共用一张表的源全锁死了。
+  it('输入表被多个节点共用不再禁用执行（后端按进入条件分流）', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
@@ -1269,18 +1329,54 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
 
     const wrapper = mountResultView()
     await flushPromises()
-    await selectNode(wrapper, 'mid') // mid 和 mid2 都显式声明输入表 T1，互相冲突
-
-    // 默认停在输出 tab，这时按钮直接不渲染（换成说明文字），先切到"输入"才看得到歧义判定。
+    await selectNode(wrapper, 'mid') // mid 和 mid2 都显式声明输入表 T1
     await wrapper.get('[data-testid="data-scope-input"]').trigger('click')
     await flushPromises()
 
+    // fixture 里 rowQueryPaged 返回空列表，按钮仍会因"没勾选"而禁用——这里要看的是
+    // 禁用**理由**不再是歧义，以及勾选列回来了（原来歧义判定排在"请先勾选"前面，掩盖了这点）。
     const btn = wrapper.get('[data-testid="data-exec-btn"]')
-    expect((btn.element as HTMLButtonElement).disabled).toBe(true)
-    expect(btn.attributes('title')).toContain('该输入表被多个节点共用')
-    // 歧义节点不允许勾选行（canPickRows 应为 false，不渲染勾选列）
-    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(false)
+    expect(btn.attributes('title')).toBe('请先勾选要发送的数据')
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
+    // mid 在主链上只有一个直接后继，谈不上分流，不该出提示
+    expect(wrapper.find('[data-testid="data-fanout-hint"]').exists()).toBe(false)
   })
+
+  it('一个节点分叉出多个后继时，提示会按进入条件分流到几个节点', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    // 把 mid 做成分叉点：两个分支各挂一个后继，各自带进入条件（对齐 yahoo 的真实形态）
+    flow.main.splice(0, flow.main.length, 'start', 'first', 'mid', 'last', 'end')
+    Object.assign(flow.configs, {
+      br1: cfg({ title: 'python正文提取', inputTable: 'T2' }),
+      br2: cfg({ title: 'python正文提取_dev', inputTable: 'T2' }),
+    })
+    flow.branchGroups.splice(0, flow.branchGroups.length, {
+      ownerId: 'mid',
+      branches: [
+        { label: '分支1', condition: { logic: 'and', items: [{ field: 'K19', op: 'isNull', value: '' }] }, chain: ['br1'] },
+        { label: '分支2', condition: { logic: 'and', items: [{ field: 'K6', op: 'isNull', value: '' }] }, chain: ['br2'] },
+      ],
+    } as never)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'mid')
+    await wrapper.get('[data-testid="data-scope-input"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="data-exec-btn"]').attributes('title')).toBe('请先勾选要发送的数据')
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
+    const hint = wrapper.get('[data-testid="data-fanout-hint"]')
+    expect(hint.text()).toContain('2 个后继')
+    expect(hint.attributes('title')).toContain('python正文提取_dev')
+  })
+
 
   it('勾选后取消发后续确认框：不调用 nextStep', async () => {
     setActivePinia(createPinia())

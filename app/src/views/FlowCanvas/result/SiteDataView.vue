@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
+import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 // 网站数据视图（0812 计划 M2-4/M2-5A + M2-3 交互纠偏，2026-08-14 第三次修正）。
 // 方案 §5.2/§6.5：全部源＝按表筛选，具体源＝按节点筛选，"页面任何时刻只展示表筛选或
 // 节点筛选中的一种"——但用户明确要求两种状态必须是"同一套"查询视图，只是可编辑字段
@@ -32,8 +34,7 @@ import { confirmDanger } from '@/utils/confirmDanger'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import DataGrid from './DataGrid.vue'
 import FilePreview from './components/FilePreview.vue'
-import BackTraceSourcesDialog from './BackTraceSourcesDialog.vue'
-import { sendInBatches } from './useSourceLaunch'
+import { backTraceSources } from '@/utils/data/backTraceSources'
 import { extFromName } from '@/utils/ossFile'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import { readRailOpen, writeRailOpen } from './railPref'
@@ -42,11 +43,10 @@ import SiteTableSelect from './components/SiteTableSelect.vue'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import { initMergeState, mergeLoadMore, type MergeLoadMoreResult, type MergeSourceState } from './siteDataMerge'
 import RowDetailFields from './RowDetailFields.vue'
-import RowDetailSubs from './RowDetailSubs.vue'
 import { fieldsFromShowItems, fieldsFromTableMeta } from './rowDetailFields'
 import { readFieldPreset, readShowEmpty, visibleDetailProps, writeFieldPreset, writeShowEmpty, type RowFieldPreset } from './rowDetailPrefs'
 
-/** 单源视图「按此条件反查源 →」带过来的数据条件（0903 Y2-7），由 SiteDetailView 从路由解析 */
+/** 单源视图「按条件查源 →」带过来的数据条件（0903 Y2-7），由 SiteDetailView 从路由解析 */
 export interface SiteDataInitialCondition {
   tableId: string
   sql?: string
@@ -153,7 +153,7 @@ const selectedNodeId = ref('')
 // 条件改了但还没查：上一次的结果此刻已经不对应输入框里的条件了。不清理的话表现极具
 // 误导性——失败后把输入框清空重打，那条报错和空表格一直挂着不走，看着像"边打字边查还一直报错"
 // （2026-08-20 实测，ResultView.vue 同源问题一并修）。
-// 从单源数据视图「按此条件反查源 →」带过来的条件（0903 Y2-7）。
+// 从单源数据视图「按条件查源 →」带过来的条件（0903 Y2-7）。
 //
 // 走 prop 不走 useRoute()：本组件的测试全是裸 shallowMount，没装 router——
 // Y2-4 在 SourceOverviewView 上已经踩过一次同样的坑。路由解析留在持有 route 的 SiteDetailView。
@@ -269,14 +269,14 @@ function inferTableMeta(tableId2: string, dataRows: DataRow[]): DataTableMeta {
   }
 }
 
-async function fetchPage(sourceId: string, page: number, size: number): Promise<DataRow[]> {
+async function fetchPage(sourceId: string, page: number, size: number, condition: { tableId: string; sql: string }): Promise<DataRow[]> {
   const result = await dataApi.rowQueryPaged({
-    tableId: effectiveTableId.value,
+    tableId: condition.tableId,
     sourceId,
     dataId: filters.dataId || undefined,
     parentId: filters.parentId || undefined,
     state: filters.state || undefined,
-    sql: filters.sql || undefined,
+    sql: condition.sql || undefined,
     page,
     size,
     // 排序参数已实测确认真实生效（2026-08-15，测试环境，见计划 §3.2 Q9）：不传/ascend/descend
@@ -297,9 +297,17 @@ async function loadMore() {
   autoLoadFailed.value = false
   loadingMore.value = true
   dataError.value = ''
+  const condition = { tableId: effectiveTableId.value, sql: filters.sql }
+  let queried = false
   try {
-    const result = await mergeLoadMore(mergeStates, PAGE_SIZE, PAGE_SIZE, fetchPage, MAX_PARALLEL_REQUESTS)
+    const result = await mergeLoadMore(mergeStates, PAGE_SIZE, PAGE_SIZE,
+      async (sourceId, page, size) => {
+        const list = await fetchPage(sourceId, page, size, condition)
+        queried = true
+        return list
+      }, MAX_PARALLEL_REQUESTS)
     if (id !== requestId) return
+    if (queried && !result.failedSources.length) rememberSqlCondition(condition.tableId, condition.sql)
     rows.value = [...rows.value, ...result.rows]
     failedSources.value = result.failedSources
     allExhausted.value = result.allExhausted
@@ -474,43 +482,45 @@ function buildSummaryQuery(): RowQuery {
   }
 }
 
-// 按条件反查源（0903 Y2 / H12）：全部源数据视图是唯一"跨源看数据"的地方，反查的入口就该在这。
+// 按条件反查源（0903 Y2 / H12 → 0904 I01 改为直达）。
+//
+// **弹窗那层已经拆掉**：会上原话「那你还不如把这个东西直接放到那个源列表」
+// 「你直接反向你不是直接跑两步？」——先弹窗看清单再决定去哪，是多余的一步。
+// 现在点一下就把命中的源写进源视图筛选直接落过去，看源、勾选、发任务都用源视图现成的能力。
+// 求命中源的算法原样保留在 `utils/data/backTraceSources.ts`（09-04 六轮修复换来的，别重写）。
+//
 // 复用 buildSummaryQuery——统计和反查问的是同一批数据，条件口径必须一致，不另拼一份。
-const backTraceQuery = ref<RowQuery | null>(null)
-/** 反查按钮的可用性：没有任何数据条件时反查等于"这张表涉及的所有源"，没有意义 */
-const canBackTrace = computed(() => !!effectiveTableId.value && !!(filters.sql || filters.state || filters.dataId || filters.parentId))
-const backTraceLabel = computed(() => [
-  filters.sql ? filters.sql : '',
-  filters.state ? `状态=${filters.state}` : '',
-  filters.dataId ? `数据ID=${filters.dataId}` : '',
-  filters.parentId ? `父ID=${filters.parentId}` : '',
-].filter(Boolean).join(' AND '))
-function openBackTrace() {
-  if (!canBackTrace.value) return
-  backTraceQuery.value = buildSummaryQuery()
-}
-function onBackTraceOpenSourceView(ids: string[]) {
-  backTraceQuery.value = null
-  // 带着源 ID 去源视图：那边的「源 ID」筛选框本来就收逗号分隔的多个 ID
-  void router.push({ path: '/canvas', query: { siteId: props.siteId, view: 'source', sourceIds: ids.join(',') } })
-}
-async function onBackTraceLaunch(ids: string[]) {
-  backTraceQuery.value = null
-  await confirmDanger(
-    '按反查结果发任务',
-    `将对反查出的 ${ids.length} 个源发起抓取。任务一旦提交无法撤回，是否继续？`,
-    async () => {
-      // all 恒为 0：旧平台这个字段是「所有参数」笛卡尔展开，不是「所有源」（0831 X2-A 的坑）。
-      // 反查出来的源不逐个查参数——真要带参得回源视图勾选后单独发。
-      const result = await sendInBatches(ids, (batch) =>
-        sourceApi.sendSnatchWithParam({ ids: batch, param: {}, all: 0, include: [], skip: 0 }))
-      if (result.failed.length) {
-        const failedCount = result.failed.reduce((n, item) => n + item.ids.length, 0)
-        return { message: `已提交 ${result.sent} 个源，${failedCount} 个失败：${result.failed[0].error}` }
-      }
-      return { message: `已提交 ${result.sent} 个源` }
-    },
-  )
+const backTracing = ref(false)
+/**
+ * 反查按钮的可用性。
+ *
+ * **不再要求"必须有条件"**（0904 I01）：产品明确「你不带条件就是查的所有的，
+ * 你带条件就是查这个条件下的」——无条件是合法语义，直接进源视图看全部源。
+ */
+const canBackTrace = computed(() => !!effectiveTableId.value)
+async function openBackTrace() {
+  if (!canBackTrace.value || backTracing.value) return
+  const hasCondition = !!(filters.sql || filters.state || filters.dataId || filters.parentId)
+  // 无条件 = 全部源：不必发请求，直接进源视图不带 sourceIds
+  if (!hasCondition) {
+    void router.push({ path: '/canvas', query: { siteId: props.siteId, view: 'source' } })
+    return
+  }
+  backTracing.value = true
+  try {
+    const { sourceIds } = await backTraceSources(buildSummaryQuery(), siteChildren.value.map((s) => s.sourceId))
+    if (!sourceIds.length) {
+      // 不跳：跳过去是一张空源列表，用户会以为源视图坏了
+      ElMessage.info('当前条件没有命中任何源')
+      return
+    }
+    // 带着源 ID 去源视图：那边的「源 ID」筛选框本来就收逗号分隔的多个 ID
+    void router.push({ path: '/canvas', query: { siteId: props.siteId, view: 'source', sourceIds: sourceIds.join(',') } })
+  } catch (e) {
+    ElMessage.error(`反查源失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    backTracing.value = false
+  }
 }
 
 const summaryOpen = ref(false)
@@ -557,21 +567,9 @@ function onRowAction(row: DataRow, cmd: string) {
 // 这边一直没补——筛选行有「父 ID」输入框能按父 ID 筛，但点不开任何一行的父数据，
 // 同一页面内口径不一致。categoryId/parentId 同样早就在 DataRow 里，只是没渲染入口。
 const parentDetail = ref<EntryDetail | null>(null)
-/**
- * 本行详情（0904）：只为拿 `subs` / `subsCnt`。抽屉字段用列表行 + 表 meta 现拼，
- * 不依赖它，所以失败静默即可。
- */
-const rowDetail = ref<EntryDetail | null>(null)
-let rowDetailSeq = 0
-watch(detailRow, async (row) => {
-  const id = ++rowDetailSeq
-  rowDetail.value = null
-  if (!row || !effectiveTableId.value) return
-  try {
-    const res = await dataApi.rowDetail(effectiveTableId.value, row.dataId)
-    if (id === rowDetailSeq) rowDetail.value = res
-  } catch { /* 子表拿不到就不显示这一块 */ }
-})
+// 0904 I06：详情抽屉里的「下级数据」面板已删除（Z0-1，与 ResultView 同批）。
+// 这个 rowDetail 请求当时只为拿 subs/subsCnt——抽屉字段一直是列表行 + 表 meta 现拼的，
+// 面板撤掉后它没有任何消费方，一并删。下钻改走「带条件跳转 + 可返回」。
 
 const parentLoading = ref(false)
 const parentError = ref('')
@@ -632,7 +630,9 @@ function onCellFile(path: string) {
           <option value="E">E 出错</option>
           <option value="L">L 处理中</option>
         </select>
-        <input v-model="filters.sql" class="sdv2-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
+        <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="effectiveTableId" :table-name="meta?.tableName" class="sdv2-sql">
+          <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="sdv2-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
+        </SqlConditionEditor>
         <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
         <button class="rc-btn" type="button" @click="clearFilters">清空</button>
         <!-- 0903 Y2：会上「我不知道有哪些语言……你这个条件能带回去吗？」——筛出脏数据之后，
@@ -644,7 +644,7 @@ function onCellFile(path: string) {
           :disabled="!canBackTrace"
           :title="canBackTrace ? '按当前数据条件反查命中的源' : '先填至少一个数据条件（SQL / 状态 / 数据 ID / 父 ID）'"
           @click="openBackTrace"
-        >按此条件反查源 →</button>
+        >{{ backTracing ? '反查中…' : '按条件查源 →' }}</button>
       </template>
     </div>
 
@@ -835,7 +835,6 @@ function onCellFile(path: string) {
           />
           <!-- 下级数据（0904）：与上游面板对称。这里不给「查看全部」——
                全部源视图没有 Y1 的下钻（它不锁定单一流程，跳不到"后继节点"）。 -->
-          <RowDetailSubs :subs="rowDetail?.subs" :subs-cnt="rowDetail?.subsCnt" :show-empty="showEmpty" />
         </div>
       </div>
     </el-drawer>
@@ -846,14 +845,6 @@ function onCellFile(path: string) {
       :can-write="false"
     />
     <SummaryDrawer v-model="summaryOpen" :table-meta="meta" :build-query="buildSummaryQuery" :hit-count="rows.length" />
-    <BackTraceSourcesDialog
-      :query="backTraceQuery"
-      :condition-label="backTraceLabel"
-      :site-source-ids="siteChildren.map((s) => s.sourceId)"
-      @close="backTraceQuery = null"
-      @open-in-source-view="onBackTraceOpenSourceView"
-      @launch="onBackTraceLaunch"
-    />
   </main>
 
     <el-dialog
@@ -875,6 +866,7 @@ function onCellFile(path: string) {
 </template>
 
 <style scoped>
+.sdv2-sql { flex: 1; min-width: 200px; }
 .sdv2-shell { background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; height: 100%; display: flex; flex-direction: column; }
 /* 全屏（参考 ResultView.vue）：fixed 铺满视口逃逸到父级布局之外，父级（SiteDetailView.vue
    的网站标题/页签）不需要跟着让位——position:fixed 本来就会跳出正常文档流。 */

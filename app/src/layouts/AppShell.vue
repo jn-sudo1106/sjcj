@@ -6,6 +6,8 @@
 import AppTopBar from './AppTopBar.vue'
 import AppSidebar from './AppSidebar.vue'
 import AppModuleHead from './AppModuleHead.vue'
+// 批量提交作业条（Y4-3）：挂在布局层，切页签/跳路由都不消失
+import LaunchJobBar from '@/components/LaunchJobBar.vue'
 </script>
 
 <template>
@@ -23,6 +25,8 @@ import AppModuleHead from './AppModuleHead.vue'
         </main>
       </section>
     </div>
+
+    <LaunchJobBar />
   </div>
 </template>
 

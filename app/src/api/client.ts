@@ -146,9 +146,13 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'item/next/enable',
   'item/next/delete',
   // 2026-09-02 放开：流程（cs_flow）的写端点，为流程中心联调做准备。
-  // 这批比清单里其它项破坏面小得多：cs_flow 是后端新建的表，且**执行链路根本没接**——
-  // 旧平台 FlowList.vue 全页没有任何地方把 flowConf 下发/编译成 config，changeFlowBatch 也只是
-  // 把 cs_source.FLOW_ID 置上而已，执行器不读它。所以写坏了不会影响任何在跑的采集任务。
+  //
+  // ⚠️ 2026-09-03 后端答复推翻了本段原先的免责理由。原文写的是「执行链路根本没接……
+  // changeFlowBatch 只是把 cs_source.FLOW_ID 置上而已，执行器不读它，写坏了不会影响任何
+  // 在跑的采集任务」——**这是错的**。后端原话「执行就按 flowID 去反选，去执行」：
+  // 绑定即生效，关联到哪个流程，这个源就按那个流程的配置跑。所以 changeFlowBatch 是
+  // 实打实会改变生产采集行为的写操作，下面那条单独的警告仍然成立且更重要。
+  // saveFlow / deleteFlow 只动 cs_flow 自身，破坏面确实较小。
   // saveFlow 新增与修改是同一个端点（不带 flowId = 新增）；deleteFlow 是逻辑删除（is_delete=-1 + state=D）。
   //
   // updateFlowConf / changeFlowEnable 两条 2026-09-02 联调后确认代码里没有调用方（见 endpoints.ts
@@ -158,9 +162,16 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'flow/saveFlow',
   'flow/deleteFlow',
   // ⚠️ 唯一一条写**存量生产表**的：changeFlowBatch 改的是 cs_source.FLOW_ID，不是 cs_flow，
-  // 且单次上限 5000 条。虽然这个字段目前没有消费方，但它落在源表上，UI 侧必须保留二次确认 +
-  // 明确展示影响条数，不要做成"勾一片直接绑"。
+  // 且单次上限 5000 条。**这个字段有消费方**——执行器按 FLOW_ID 反查配置后执行（2026-09-03
+  // 后端答复），改它等于改这批源实际跑的那套配置。UI 侧必须保留二次确认 + 明确展示影响条数，
+  // 不要做成"勾一片直接绑"。
   'flow/changeFlowBatch',
+  // 2026-09-04 放开（0903 Y8）：两条复制端点，都是**纯新增**。
+  // copyFlow 建一条新流程并把 cs_item_config 步骤复制过去；copyTemplateSteps 往一个已存在的
+  // 目标流程里加步骤。两者都不改不删任何已有流程/步骤（不复制根节点，目标流程自己那条
+  // isRoot=1 保持不动）。与 config/copyAll、source/copySource 同性质。
+  'flow/copyFlow',
+  'flow/copyTemplateSteps',
 ])
 
 function isProductionWriteAllowed(httpEndpoint: string): boolean {
