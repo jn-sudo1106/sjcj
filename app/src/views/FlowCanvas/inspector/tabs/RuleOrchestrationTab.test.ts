@@ -163,6 +163,15 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     buttons.forEach((b) => expect(b.attributes('disabled')).toBeDefined())
   })
 
+  it('规则处理节点编排配置页不显示数据预览表格', async () => {
+    const { wrapper } = mountWithExistingRule()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('数据预览')
+    expect(wrapper.find('.dqp').exists()).toBe(false)
+    expect(wrapper.text()).toContain('查看业务编排')
+  })
+
   it('未填描述就点生成脚本：不调用接口', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     // makeDefaultRuleOrchestration 默认带一条演示 describe，这里显式清空以测试校验守卫

@@ -14,13 +14,12 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
 import { isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { dataApi, entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type DataTableMeta, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
+import { entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { isVruleNumericRuleId } from '@/api/legacyAdapters'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
 import { buildDataProcessGeneratePayload } from '@/utils/flow/dataProcess'
-import DataQueryPanel, { type DataQueryColumn } from '@/components/DataQueryPanel.vue'
 import { promptCategoryGroupsForNode, promptListCategoryForNode, resolvePromptCategoryForNode } from '../promptCategory'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
@@ -521,32 +520,6 @@ async function onApplySwitch() {
   }
 }
 
-// ---- 数据预览：复用 DataQueryPanel，按当前节点 inputTable 拉 3 行数据，
-// 列定义跟数据视图主表一致（从 dataApi.tableMeta 拼 columns），不开放状态筛选/勾选/快捷查询 ----
-const previewPanelRef = ref<InstanceType<typeof DataQueryPanel>>()
-const previewTableMeta = ref<DataTableMeta | null>(null)
-// 预览表第一行数据，作为脚本测试入参（点「测试脚本」时传给 RuleWorkbenchDialog）
-const previewFirstRow = ref<Record<string, unknown> | null>(null)
-function onPreviewLoaded(e: { rows: { values?: Record<string, unknown> }[]; total: number }) {
-  previewFirstRow.value = e.rows[0]?.values ?? null
-}
-const previewColumns = computed<DataQueryColumn[]>(() => (previewTableMeta.value?.fields ?? [])
-  .filter((f) => f.columnName || f.prop)
-  .map((f) => ({
-    prop: f.columnName ?? f.prop,
-    label: `${f.desc}-${f.columnName}`,
-    width: 120,
-    sortable: true,
-    hintProp: f.prop,
-  })))
-async function loadPreviewTableMeta() {
-  const tid = orchCfg.value.inputTableId
-  previewTableMeta.value = tid ? await dataApi.tableMeta(tid) : null
-}
-watch(() => orchCfg.value.inputTableId, () => {
-  void loadPreviewTableMeta().then(() => previewPanelRef.value?.search())
-}, { immediate: true })
-
 // ---- 测试脚本：切换到流程视图右侧面板的「数据视图」tab（view=data），保留当前源上下文，
 // 并把当前编辑节点作为 nodeId 带上，让数据视图自动定位到该节点（而不是默认落首节点）——
 // ResultView 初始化时优先取 URL 的 nodeId query（queryNodeId），与「查看条件」深链同一套机制 ----
@@ -561,47 +534,6 @@ function goToDataView() {
 </script>
 
 <template>
-  <div v-if="orchCfg.inputTableId" class="ni-section-title">数据预览</div>
-  <DataQueryPanel
-    v-if="orchCfg.inputTableId"
-    ref="previewPanelRef"
-    :table-id="orchCfg.inputTableId"
-    :columns="previewColumns"
-    :page-size="3"
-    @loaded="onPreviewLoaded"
-  >
-    <template #columns-before>
-      <el-table-column prop="dataId" label="ENTRY_ID" width="105" fixed="left" sortable="custom">
-        <template #default="{ row }">{{ row.dataId }}</template>
-      </el-table-column>
-      <el-table-column prop="sourceId" label="源" width="100" sortable="custom">
-        <template #default="{ row }">{{ row.sourceId || '—' }}</template>
-      </el-table-column>
-    </template>
-    <template #columns-after>
-      <el-table-column prop="state" label="状态" width="84">
-        <template #default="{ row }">{{ row.state || '—' }}</template>
-      </el-table-column>
-      <el-table-column prop="updateDt" label="更新" width="90" sortable="custom">
-        <template #default="{ row }">{{ row.updateDt || '—' }}</template>
-      </el-table-column>
-      <el-table-column prop="createDt" label="生成" width="90" sortable="custom">
-        <template #default="{ row }">{{ row.createDt || '—' }}</template>
-      </el-table-column>
-      <el-table-column label="任务" width="100">
-        <template #default="{ row }">{{ row.detailId || '—' }}</template>
-      </el-table-column>
-      <el-table-column prop="nextFlag" label="后续" width="70">
-        <template #default="{ row }">{{ row.nextFlag ?? '—' }}</template>
-      </el-table-column>
-      <el-table-column label="父ID" width="90">
-        <template #default="{ row }">{{ row.parentId || '—' }}</template>
-      </el-table-column>
-      <el-table-column label="原始" width="70">
-        <template #default="{ row }">{{ row.k0 ? '查看' : '—' }}</template>
-      </el-table-column>
-    </template>
-  </DataQueryPanel>
   <div class="ni-section-title">{{ isRule ? '查看业务编排' : '抓取配置' }}</div>
   <div class="rc-field">
     <textarea
