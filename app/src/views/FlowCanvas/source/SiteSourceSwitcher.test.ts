@@ -531,7 +531,7 @@ describe('SiteSourceSwitcher · 导入已有源（M4-5）', () => {
     await flushPromises()
 
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceIds: ['src-unbound'] }))
-    expect(sourceApi.changeSite).toHaveBeenCalledWith(['src-unbound'], 'site-a')
+    expect(sourceApi.changeSite).toHaveBeenCalledWith(['src-unbound'], 'site-a', expect.any(Function))
     expect(wrapper.find('[data-testid="bind-source-table"]').exists()).toBe(false) // 弹窗已关闭
   })
 
@@ -549,7 +549,7 @@ describe('SiteSourceSwitcher · 导入已有源（M4-5）', () => {
     await flushPromises()
 
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceIds: ['src-unbound', 'ghost-id-not-real'] }))
-    expect(sourceApi.changeSite).toHaveBeenCalledWith(['src-unbound'], 'site-a')
+    expect(sourceApi.changeSite).toHaveBeenCalledWith(['src-unbound'], 'site-a', expect.any(Function))
   })
 
   it('按源ID批量导入：命中的源已属其他网站时，同样先弹二次确认再提交', async () => {
@@ -567,7 +567,7 @@ describe('SiteSourceSwitcher · 导入已有源（M4-5）', () => {
     await flushPromises()
 
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining('别的网站'), '确认导入', expect.anything())
-    expect(sourceApi.changeSite).toHaveBeenCalledWith(['src-other'], 'site-a')
+    expect(sourceApi.changeSite).toHaveBeenCalledWith(['src-other'], 'site-a', expect.any(Function))
   })
 
   it('勾选"仅展示未关联"走服务端 siteIds=-1 过滤，翻页/总数按过滤后口径（不再前端过滤当前页）', async () => {

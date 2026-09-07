@@ -5,7 +5,7 @@ import SiteFileView from './SiteFileView.vue'
 import { readSqlConditions } from '@/utils/sqlConditionHistory'
 import FileDetailDrawer from './FileDetailDrawer.vue'
 import GlobalSourceSelect from './components/GlobalSourceSelect.vue'
-import { fileApi, siteApi, type FileResourceRecord, type Source } from '@/api'
+import { dataApi, fileApi, siteApi, type FileResourceRecord, type Source } from '@/api'
 
 const table = { tableId: 'file-resource', tableName: 'sense_data.tb_news_file_resource', name: 'news-文件资源表', rowCount: 40, fields: [] }
 function source(sourceId: string, name: string): Source {
@@ -32,6 +32,7 @@ describe('SiteFileView', () => {
     vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
     vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1', '源一'), source('s2', '源二')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue([]) // 收窄失败→退回网站全部源
     const query = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 0, list: [] })
     const wrapper = shallowMount(SiteFileView, {
       props: { siteId: 'site-a' },
@@ -124,6 +125,7 @@ describe('SiteFileView', () => {
     vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
     vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1', '源一'), source('s2', '源二')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue([]) // 收窄失败→退回网站全部源
     const rows = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 21, list: [file('s1', '1', 'one.html')] })
 
     const wrapper = shallowMount(SiteFileView, {
@@ -142,6 +144,7 @@ describe('SiteFileView', () => {
     vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
     vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1', '源一'), source('s2', '源二')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue([]) // 收窄失败→退回网站全部源
     const rows = vi.spyOn(fileApi, 'resourceRows').mockImplementation(async (query) => ({
       total: 1,
       list: query.sourceId === 's1' ? [file('s1', '20', 'one.html')] : [file('s2', '30', 'two.html')],
@@ -170,6 +173,25 @@ describe('SiteFileView', () => {
     expect(wrapper.text()).toContain('已加载全部文件')
   })
 
+  it('全部源用 distinctSource 收窄候选源，只查真正有文件的源（源多的网站不逐个打）', async () => {
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1', '源一'), source('s2', '源二'), source('s3', '源三')])
+    const distinct = vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['s2', 'not-in-site'])
+    const rows = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 1, list: [file('s2', '30', 'two.html')] })
+
+    shallowMount(SiteFileView, {
+      props: { siteId: 'site-a' },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
+    })
+    await flushPromises()
+
+    expect(distinct).toHaveBeenCalledWith(expect.objectContaining({ tableId: 'file-resource', size: 1000 }))
+    // s2 属于本站且有文件 → 只查它；s1/s3 不在 distinct 结果里，not-in-site 不属于本站
+    expect(rows).toHaveBeenCalledTimes(1)
+    expect(rows).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 's2' }))
+  })
+
   it('网站全部源滚动到表格底部时自动加载下一批，不再显示手动按钮', async () => {
     let observerCallback: IntersectionObserverCallback | undefined
     const observe = vi.fn()
@@ -181,6 +203,7 @@ describe('SiteFileView', () => {
     vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
     vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1', '源一')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue([]) // 收窄失败→退回网站全部源
     const rows = vi.spyOn(fileApi, 'resourceRows').mockImplementation(async (query) => ({
       total: 21,
       list: query.page === 1
@@ -209,6 +232,7 @@ describe('SiteFileView', () => {
     vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
     vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1', '源一'), source('s2', '源二')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue([]) // 收窄失败→退回网站全部源
     vi.spyOn(fileApi, 'resourceRows').mockImplementation(async (query) => {
       if (query.sourceId === 's1') throw new Error('请求失败 500')
       return { total: 1, list: [file('s2', '30', 'two.html')] }

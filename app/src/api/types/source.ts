@@ -51,8 +51,14 @@ export interface Source {
   lastTaskAt?: string // 上次任务
   lastSuccessAt?: string // 上次成功
   dataCount?: number // 数据
-  newInCount?: number // 新入
-  successCount?: number // 成功
+  /**
+   * @deprecated 真实后端 source/sourcePaged 不返回「新入/成功」计数（Source 实体只有 dataCnt/jobCnt/alarmCnt
+   * 和 lastInsert/lastSuccess 时间，见 设计稿/source-api.md）。旧平台的「新入/成功」列是 lastInsert/lastSuccess
+   * 的相对时间——UI 已改用 lastInsertAt/lastSuccessAt + timeAgo()。这两个字段目前只有 mock 在填，勿再据此加展示。
+   */
+  newInCount?: number
+  /** @deprecated 见 newInCount。 */
+  successCount?: number
   /** 旧平台 lastInsert：最近一次新入数据时间。 */
   lastInsertAt?: string
   /** 旧平台 jobCnt/categoryId：详情中保留原有运行摘要口径。 */

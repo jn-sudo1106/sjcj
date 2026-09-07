@@ -64,6 +64,11 @@ const isInitialSourceConfig = computed(() => {
     && !!source?.configId
     && configId.value === source.configId
     && (nodeId === '0' || nodeId.startsWith('source:'))
+    // 跑过的源（有任务 / 成功记录或已入库数据）不是"随源刚建"——首节点配置对它就是「已有配置」。
+    // 首节点配置 == 源自身 configId 对新老源都恒真，光靠它会把所有已有源都误标「新建配置」。
+    && !source.lastTaskAt
+    && !source.lastSuccessAt
+    && !(Number(source.dataCount) > 0)
 })
 const configOriginText = computed(() => {
   if (!configId.value) return '新建配置 · 未保存'

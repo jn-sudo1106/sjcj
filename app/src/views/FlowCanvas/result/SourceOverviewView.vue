@@ -19,6 +19,7 @@ import LaunchConfirmDialog from './LaunchConfirmDialog.vue'
 import SourceParamModal from '@/views/FlowCanvas/source/SourceParamModal.vue'
 import { hasLoadParams, normalizeLoadParams } from '@/views/FlowCanvas/source/paramNormalize'
 import { downloadXlsx } from '@/utils/format/xlsxExport'
+import { timeAgo } from '@/utils/format/relativeTime'
 import {
   CollectLimitError,
   SOURCE_EXPORT_HEADER,
@@ -793,7 +794,10 @@ watch(() => props.currentSiteId, () => {
             </td>
             <td>{{ source.sourceId }}</td>
             <td class="sov-name" :title="source.name"><button class="sov-link sov-source-link" type="button" data-testid="source-overview-source-link" @click="emit('openSource', source)">{{ source.name }}</button></td>
-            <td class="sov-url" :title="source.url">{{ source.url || '—' }}</td>
+            <td class="sov-url" :title="source.url">
+              <a v-if="source.url" :href="source.url" target="_blank" rel="noopener noreferrer" @click.stop>{{ source.url }}</a>
+              <template v-else>—</template>
+            </td>
             <td>{{ source.mainTable || '—' }}</td>
             <td>
               <!-- 标签列与备注列都点开同一个弹窗：想删掉某一个标签只有这条路（批量条只能追加/清空） -->
@@ -825,8 +829,10 @@ watch(() => props.currentSiteId, () => {
               >{{ source.dataCount }}</button>
               <template v-else>{{ source.dataCount ?? '—' }}</template>
             </td>
-            <td>{{ source.newInCount ?? '—' }}</td>
-            <td>{{ source.successCount ?? '—' }}</td>
+            <!-- 「新入 / 成功」对齐旧平台：显示最近入库 / 最近成功时间的相对描述（旧平台就是「N 天前」），
+                 hover 看精确时间。右侧「最近任务 / 最近成功」保留绝对时间。 -->
+            <td :title="source.lastInsertAt || ''">{{ timeAgo(source.lastInsertAt) }}</td>
+            <td :title="source.lastSuccessAt || ''">{{ timeAgo(source.lastSuccessAt) }}</td>
             <td>{{ source.lastTaskAt || '—' }}</td>
             <td>{{ source.lastSuccessAt || '—' }}</td>
             <td><span class="sov-state" :class="{ error: source.state === 'E' && !source.disabled, muted: source.disabled }">{{ sourceState(source) }}</span></td>
@@ -915,6 +921,8 @@ watch(() => props.currentSiteId, () => {
 .sov-name { max-width: 190px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-text) !important; font-weight: 600; }
 .sov-source-link { display: block; max-width: 190px; overflow: hidden; padding: 0; text-align: left; text-overflow: ellipsis; }
 .sov-url { max-width: 220px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-primary) !important; }
+.sov-url a { color: inherit; text-decoration: none; }
+.sov-url a:hover { text-decoration: underline; }
 .sov-empty { padding: 42px !important; text-align: center !important; color: var(--rc-faint) !important; }
 .sov-check-col { width: 34px; text-align: center; }
 .sov-check-col input { cursor: pointer; accent-color: var(--rc-primary); margin: 0; }

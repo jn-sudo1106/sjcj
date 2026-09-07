@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 源侧栏：页面级左侧固定栏，流程、数据、文件和任务视图共用。
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { flowCenterApi, siteApi, sourceApi, type Site, type SourceCategory, type Source } from '@/api'
 import SourceParamModal from './SourceParamModal.vue'
 
@@ -29,12 +29,16 @@ const ws = useWorkspaceStore()
 
 const site = ref<Site | null>(null)
 const children = ref<Source[]>([])
-async function load() {
-  ;[site.value, children.value] = await Promise.all([siteApi.siteDetail(props.siteId), siteApi.siteSources(props.siteId)])
+async function load(force = false) {
+  ;[site.value, children.value] = await Promise.all([
+    siteApi.siteDetail(props.siteId),
+    siteApi.siteSources(props.siteId, { force }),
+  ])
 }
-onMounted(load)
-watch(() => props.siteId, load)
-defineExpose({ reload: load })
+onMounted(() => load())
+watch(() => props.siteId, () => load())
+// 外部（新建源、改配置等）触发的刷新要拿最新数据，绕过 siteSources 的短缓存
+defineExpose({ reload: () => load(true) })
 
 const collapsed = ref(false)
 const listExpanded = ref(true)
@@ -45,6 +49,21 @@ const filtered = computed(() => {
   if (!q) return children.value
   return children.value.filter((s) => s.name.toLowerCase().includes(q) || s.sourceId.toLowerCase().includes(q))
 })
+// 分页渲染：源多的网站（实测 6496 个）一次性铺 6496 行会把 #app DOM 顶到 29 万节点，
+// 首屏渲染和之后每次响应式刷新都被拖慢。只渲染前 shownCount 行，滚到底再追加一页。
+const LIST_PAGE = 120
+const shownCount = ref(LIST_PAGE)
+const visibleRows = computed(() => filtered.value.slice(0, shownCount.value))
+watch([kw, children], () => { shownCount.value = LIST_PAGE })
+function onListScroll(e: Event) {
+  const el = e.target as HTMLElement
+  if (
+    shownCount.value < filtered.value.length &&
+    el.scrollTop + el.clientHeight >= el.scrollHeight - 240
+  ) {
+    shownCount.value += LIST_PAGE
+  }
+}
 const activeSource = computed(() => children.value.find((s) => s.sourceId === props.activeKey) || null)
 
 async function copyText(text: string, label: string) {
@@ -303,7 +322,7 @@ async function openSiteEdit() {
   siteEditDlg.show = true
 }
 function onSiteEditSaved() {
-  void load()
+  void load(true)
 }
 
 // ---- ＋添加源（0812 会议纠偏：删除"绑定已有源/仅展示未关联"模式，只保留新建；
@@ -421,7 +440,7 @@ async function submitParamSource() {
   const addedId = res.sourceId || sourceId
   ElMessage.success(`已添加参数源「${name}」：源列表只存 1 条记录，发任务时将展开为 ${(paramEditorRef.value?.totalCount ?? 0).toLocaleString('en-US')} 个 URL`)
   closeAdd()
-  await load()
+  await load(true)
   const added = children.value.find((c) => c.sourceId === addedId)
   if (added) emit('added', added)
 }
@@ -508,7 +527,7 @@ async function submitAdd() {
     ElMessage.success(`已添加源「${target.name}」（空白流程，请先编排）`)
   }
   closeAdd()
-  await load()
+  await load(true)
   const added = children.value.find((c) => c.sourceId === addedId)
   if (added) emit('added', added)
 }
@@ -647,7 +666,7 @@ async function confirmCrossSiteIfNeeded(candidates: Source[]): Promise<boolean> 
   const names = crossSite.map((s) => `「${s.name}」（当前属于${s.siteName || s.siteId}）`).join('、')
   try {
     await ElMessageBox.confirm(
-      `其中 ${crossSite.length} 个源已属于其他网站：${names}，导入后会改为属于「${site.value?.name ?? '当前网站'}」，是否继续？`,
+      `本次共导入 ${candidates.length} 个源到「${site.value?.name ?? '当前网站'}」，其中 ${crossSite.length} 个当前已属于其他网站，导入后会改为属于本网站：${names}。是否继续？`,
       '确认导入',
       { type: 'warning', confirmButtonText: '确认导入', cancelButtonText: '取消' },
     )
@@ -669,7 +688,7 @@ async function submitBind() {
     }
     ElMessage.success(res.message || `已导入 ${bindDlg.selected.size} 个源到「${site.value?.name ?? '当前网站'}」`)
     closeBatch()
-    await load()
+    await load(true)
   } finally {
     bindDlg.submitting = false
   }
@@ -697,18 +716,40 @@ async function submitByIds() {
       return
     }
     if (!(await confirmCrossSiteIfNeeded(found))) return
-    const submitRes = await sourceApi.changeSite(found.map((s) => s.sourceId), props.siteId)
-    if (!submitRes?.ok) {
-      ElMessage.warning(submitRes?.message || '导入失败，请重试')
-      return
-    }
-    let msg = submitRes.message || `已导入 ${found.length} 个源到「${site.value?.name ?? '当前网站'}」`
-    if (missing.length) msg += `；${missing.length} 个源 ID 未找到：${missing.join('、')}`
-    ElMessage.success(msg)
+
+    // 确认后立即关弹窗，导入在后台跑：大批量会分片、耗时几分钟，用一条常驻通知显示进度。
+    const total = found.length
     idImport.text = ''
     idImport.open = false
     closeBatch()
-    await load()
+    const progress = ref(0)
+    const progressNote = ElNotification({
+      title: '批量导入进行中',
+      message: h(() => h('span', `已导入 ${progress.value} / ${total} 个源，请勿关闭页面…`)),
+      duration: 0,
+      showClose: false,
+      type: 'info',
+    })
+    let submitRes: Awaited<ReturnType<typeof sourceApi.changeSite>>
+    try {
+      submitRes = await sourceApi.changeSite(
+        found.map((s) => s.sourceId),
+        props.siteId,
+        (done) => { progress.value = done },
+      )
+    } finally {
+      progressNote.close()
+    }
+    await load(true)
+
+    let msg = submitRes.message || `已导入 ${total} 个源到「${site.value?.name ?? '当前网站'}」`
+    if (missing.length) msg += `；${missing.length} 个源 ID 未找到：${missing.join('、')}`
+    if (submitRes.ok) ElNotification.success({ title: '批量导入完成', message: msg })
+    else ElNotification.warning({ title: '批量导入部分失败', message: msg, duration: 0 })
+  } catch (e) {
+    // 请求被网关拒（如 URL 过长的 431/414）或后端 5xx 时，changeSite/sourcePaged 会抛出，
+    // 之前没有 catch，异常静默冒泡，界面看着像"点了没反应"。
+    ElMessage.error(`导入失败：${e instanceof Error ? e.message : String(e)}`)
   } finally {
     idImport.loading = false
   }
@@ -728,7 +769,7 @@ async function submitImport() {
   }
   ElMessage.success(res?.message || '批量导入已提交（演示）')
   closeBatch()
-  await load()
+  await load(true)
 }
 
 // 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）
@@ -758,7 +799,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
       </div>
       <template v-if="listExpanded">
         <input v-model="kw" class="ssw-search" placeholder="搜索源" />
-        <div class="ssw-list">
+        <div class="ssw-list" @scroll.passive="onListScroll">
           <div v-if="!kw" class="ssw-row" :class="{ active: !activeKey }">
             <button
               class="ssw-row-all-btn"
@@ -775,7 +816,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
               </div>
             </button>
           </div>
-          <div v-for="c in filtered" :key="c.sourceId" class="ssw-row" :class="{ active: activeKey === c.sourceId }">
+          <div v-for="c in visibleRows" :key="c.sourceId" class="ssw-row" :class="{ active: activeKey === c.sourceId }">
             <template v-if="rename.sourceId === c.sourceId">
               <input
                 v-model="rename.name"
@@ -815,6 +856,9 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
             >⇔</button>
           </div>
           <div v-if="!filtered.length" class="ssw-empty">{{ kw ? '没有匹配的源' : '该网站暂无源' }}</div>
+          <div v-else-if="visibleRows.length < filtered.length" class="ssw-more-hint">
+            已显示 {{ visibleRows.length }} / {{ filtered.length }}，向下滚动加载更多
+          </div>
         </div>
       </template>
 
@@ -1280,6 +1324,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 .ssw-row:hover .ssw-row-cmp { visibility: visible; }
 .ssw-row-cmp:hover { background: #fff; color: var(--rc-primary); }
 .ssw-empty { padding: 14px 8px; text-align: center; font-size: 11px; color: var(--rc-faint); }
+.ssw-more-hint { padding: 8px; text-align: center; font-size: 11px; color: var(--rc-faint); }
 
 .ssw-foot { flex: none; display: flex; gap: 6px; padding: 6px 8px 8px; border-top: 1px solid var(--rc-border-soft); }
 .ssw-foot-btn {

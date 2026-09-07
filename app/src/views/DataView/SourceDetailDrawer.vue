@@ -81,10 +81,6 @@ watch([() => props.modelValue, () => props.sourceId], async ([open, sourceId]) =
           <dd>{{ state.source.dataCount ?? '—' }}</dd>
           <dt>最新</dt>
           <dd>{{ state.source.lastInsertAt || '—' }}</dd>
-          <dt>最近新增</dt>
-          <dd>{{ state.source.newInCount ?? '—' }}</dd>
-          <dt>最近成功</dt>
-          <dd>{{ state.source.successCount ?? '—' }}</dd>
           <dt>定时</dt>
           <dd>{{ state.source.jobCount ?? '—' }}</dd>
           <dt>步骤</dt>

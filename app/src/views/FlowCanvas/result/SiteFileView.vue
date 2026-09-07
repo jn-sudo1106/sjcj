@@ -6,7 +6,7 @@ import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 // 不展示流程节点——网站没有唯一流程；选具体源仅收窄文件范围，仍默认展示该源全部文件。
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { fileApi, siteApi, type DataTableMeta, type FileResourceRecord, type Source } from '@/api'
+import { dataApi, fileApi, siteApi, type DataTableMeta, type FileResourceRecord, type Source } from '@/api'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import GlobalSourceSelect from './components/GlobalSourceSelect.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
@@ -16,7 +16,7 @@ import { initMergeState, mergeLoadMore, type MergeSourceState, type MergeLoadMor
 const props = defineProps<{ siteId?: string; initialSourceId?: string }>()
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100]
-const MAX_PARALLEL_REQUESTS = 4
+const MAX_PARALLEL_REQUESTS = 8
 
 const selectedSourceId = ref(props.initialSourceId ?? '')
 const siteSources = ref<Source[]>([])
@@ -172,9 +172,23 @@ async function resetAndLoad(resetPage = true) {
       const sources = await siteApi.siteSources(props.siteId)
       if (requestId !== queryRequest) return
       siteSources.value = sources
-      candidateSourceIds = selectedSourceId.value
-        ? sources.filter((source) => source.sourceId === selectedSourceId.value).map((source) => source.sourceId)
-        : sources.map((source) => source.sourceId)
+      if (selectedSourceId.value) {
+        candidateSourceIds = sources.filter((source) => source.sourceId === selectedSourceId.value).map((source) => source.sourceId)
+      } else {
+        // 「全部源」逐个查 file_resource：源多的网站（实测 6496 个）会打上千次请求、页面卡在
+        // 「正在定位…」。先用 distinctSource 收窄到真正在这张表里有文件的源（与 SiteDataView 同款），
+        // 查不到 / 报错再退回网站全部源。size 传大值取全量（默认 20 会漏，见 SiteDataView 同注释）。
+        let distinctIds: string[] | null = null
+        try {
+          distinctIds = await dataApi.distinctSource({ tableId: table.value.tableId, size: 1000 })
+        } catch {
+          distinctIds = null
+        }
+        if (requestId !== queryRequest) return
+        const siteSourceIds = new Set(sources.map((source) => source.sourceId))
+        const scoped = distinctIds?.filter((sid) => siteSourceIds.has(sid)) ?? []
+        candidateSourceIds = scoped.length ? scoped : sources.map((source) => source.sourceId)
+      }
     } else {
       siteSources.value = []
       // mergeLoadMore 仍可复用分页/加载更多状态；空字符串在 fetchPage 中转换为 undefined。

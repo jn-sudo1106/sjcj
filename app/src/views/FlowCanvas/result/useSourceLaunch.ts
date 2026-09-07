@@ -206,8 +206,9 @@ export function sourceToExportRow(source: Source): string[] {
     source.remark || '',
     sourceStatusLabel(source),
     source.dataCount == null ? '' : String(source.dataCount),
-    source.newInCount == null ? '' : String(source.newInCount),
-    source.successCount == null ? '' : String(source.successCount),
+    // 「新入 / 成功」= 最近入库 / 最近成功时间（对齐旧平台；导出留精确时间戳而非「N 天前」）
+    source.lastInsertAt || '',
+    source.lastSuccessAt || '',
     source.lastTaskAt || '',
     source.lastSuccessAt || '',
   ]

@@ -293,6 +293,32 @@ describe('配置绑定条与节点配置脏状态条（0824-00 §5.4/§6.1）', 
     w.unmount()
   })
 
+  it('跑过的已有源：首节点配置 == 源 configId 也标「已有配置」，不因导入 / 打开老源误标「新建配置」', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.loadFromSource(
+      {
+        sourceId: '430016943', name: '*ST东智-新闻动态-002175', url: 'https://www.guanglu.com.cn/news.php?id=4',
+        configId: '1400935', mainTable: '', owner: 'admin', state: 'C',
+        // 有任务 / 成功记录 → 不是随源刚建
+        lastTaskAt: '2026-08-31 15:00:10', lastSuccessAt: '2026-08-31 20:58:56', dataCount: 15,
+      },
+      [{
+        stepId: '0', sourceId: '430016943', name: '*ST东智-新闻动态-002175', configId: '1400935',
+        outputTable: '', enabled: true,
+      }],
+    )
+
+    const w = mount(NodeInspector)
+    await flushPromises()
+    const bar = w.find('.rc-config-bar')
+    expect(bar.text()).toContain('#1400935')
+    expect(bar.text()).toContain('已有配置')
+    expect(bar.text()).not.toContain('新建配置')
+    w.unmount()
+  })
+
   it('决策节点不参与配置绑定，不显示配置条', async () => {
     mockAssets()
     setActivePinia(createPinia())

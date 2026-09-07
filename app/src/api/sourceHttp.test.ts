@@ -405,6 +405,34 @@ describe('旧平台新建源 HTTP 契约', () => {
     expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe('GET')
   })
 
+  it('GET /v1/source/changeSite：超过分片阈值时串行拆成多次请求，汇总成一个 Ack', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '关联成功' }))
+    const { sourceApi } = await import('./index')
+
+    const ids = Array.from({ length: 700 }, (_, i) => String(430000000 + i))
+    await expect(sourceApi.changeSite(ids, '4')).resolves.toMatchObject({ ok: true })
+    // 700 / 300 → 3 片：300 + 300 + 100
+    expect(fetchMock.mock.calls).toHaveLength(3)
+    const counts = fetchMock.mock.calls.map(
+      ([url]) => new URL(String(url), 'http://local.test').searchParams.get('ids')!.split(',').length,
+    )
+    expect(counts).toEqual([300, 300, 100])
+  })
+
+  it('GET /v1/source/changeSite：某一片被网关拒（431）时不整批失败，回执汇总成功/失败条数', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ code: '0' }))
+      .mockResolvedValueOnce({ ok: false, status: 431, text: async () => 'Request Header Fields Too Large' } as Response)
+      .mockResolvedValue(jsonResponse({ code: '0' }))
+    const { sourceApi } = await import('./index')
+
+    const ids = Array.from({ length: 700 }, (_, i) => String(430000000 + i))
+    const res = await sourceApi.changeSite(ids, '4')
+    expect(res.ok).toBe(false)
+    expect(res.message).toContain('成功 400 个')
+    expect(res.message).toContain('失败 300 个')
+  })
+
   it('GET /v1/source/copySource：sourceId + name + url + flag', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, data: null }))
     const { sourceApi } = await import('./index')

@@ -371,6 +371,11 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
   })
 }
 
+// changeSite 是 GET，ids 拼在 URL query 里；一次上千个源会把请求行撑到几十 KB，被网关以
+// 414/431 拒掉（2026-09-07 实测：6496 个源 → 431 Request Header Fields Too Large）。
+// 超过这个数就在 changeSite 内部串行分片提交，单片 ~300 个 ID（约 3–6KB URL，稳在各网关默认上限内）。
+const CHANGE_SITE_CHUNK = 300
+
 // 类型化接口：每个方法一一对应一个真实 /v1 端点。后续按 142 个端点逐域补全。
 export const sourceApi = {
   sourcePaged: async (p?: PageQuery) => {
@@ -508,13 +513,49 @@ export const sourceApi = {
   /** 批量把已有源关联/迁到某个网站（0812 计划 M4-5，bindSite 的多源版）；真实端点，调用方需在
    *  同一环境完成受控写入。2026-08-15 生产环境实测确认（Q4）：批次里混无效源 ID 不会导致整批
    *  失败，会静默跳过继续处理有效项，响应只有整批一个 success，没有逐条结果。 */
-  changeSite: async (sourceIds: string[], siteId: string): Promise<Ack> => {
-    const result = await request<unknown>('source/changeSite', { ids: sourceIds, siteId }, {
-      method: 'GET',
-      httpEndpoint: 'source/changeSite',
-      httpParams: { ids: sourceIds.join(','), siteId },
-    })
-    return ackFromApiResult(result)
+  changeSite: async (
+    sourceIds: string[],
+    siteId: string,
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<Ack> => {
+    const callOnce = async (ids: string[]): Promise<Ack> => {
+      const result = await request<unknown>('source/changeSite', { ids, siteId }, {
+        method: 'GET',
+        httpEndpoint: 'source/changeSite',
+        httpParams: { ids: ids.join(','), siteId },
+        // 一片几百个源，后端逐条改归属会超过默认 20s（2026-09-07 实测 300 个 → 客户端 20s 超时
+        // net::ERR_ABORTED，但后端其实已写入）。给足 2 分钟，让客户端能收到整批回执。
+        timeoutMs: 120_000,
+      })
+      return ackFromApiResult(result)
+    }
+    if (sourceIds.length <= CHANGE_SITE_CHUNK) {
+      const ack = await callOnce(sourceIds)
+      onProgress?.(sourceIds.length, sourceIds.length)
+      return ack
+    }
+
+    // 分片串行提交（不并发：避免网关限流 / 后端锁竞争），逐片累计，最后汇总成一个 Ack。
+    const chunks: string[][] = []
+    for (let i = 0; i < sourceIds.length; i += CHANGE_SITE_CHUNK) {
+      chunks.push(sourceIds.slice(i, i + CHANGE_SITE_CHUNK))
+    }
+    let succeeded = 0
+    let failed = 0
+    for (const chunk of chunks) {
+      try {
+        if ((await callOnce(chunk)).ok) succeeded += chunk.length
+        else failed += chunk.length
+      } catch {
+        failed += chunk.length
+      }
+      onProgress?.(succeeded + failed, sourceIds.length)
+    }
+    if (!failed) return { ok: true, message: `已导入 ${succeeded} 个源（分 ${chunks.length} 批提交）` }
+    return {
+      ok: false,
+      message: `共 ${sourceIds.length} 个源分 ${chunks.length} 批提交：成功 ${succeeded} 个、失败 ${failed} 个，请对失败部分重试`,
+    }
   },
   /** 旧平台新建源的一次性提交；请求体字段严格沿用 Step1/2/3 的 snatchSave 契约。 */
   snatchSaveAll: (payload: LegacySnatchSaveRequest) => legacySnatchSaveRequest(payload),
@@ -683,6 +724,12 @@ export const sourceApi = {
 // 数据查询阶段通过 entryDistinctSource + siteSources（失败/空结果时回退逐源查询）判断。
 const siteTablesCache = new Map<string, Promise<SiteTablesResult>>()
 
+// 同一 siteId 的 site/sources 在建站画布里会被侧栏、数据视图、选表器等前后脚各拉一遍，
+// 每遍几千行要 8~36s。共享进行中的请求，并短暂缓存（10s）覆盖「侧栏刚拉完，切到数据视图又拉」
+// 这种紧邻场景；写后要读新数据的调用方传 { force: true } 绕过。
+const siteSourcesCache = new Map<string, { at: number; promise: Promise<Source[]> }>()
+const SITE_SOURCES_TTL = 10_000
+
 async function loadSiteTables(
   siteId: string,
   onProgress?: (tables: SiteTableOption[]) => void,
@@ -694,10 +741,26 @@ async function loadSiteTables(
     onProgress?.([])
     return { tables: [], sourceCount: 0, overThreshold: false, failedSourceIds: [] }
   }
-  const group = await dataApi.entryTypesGroup(sourceIds.join(','))
-  for (const entry of [...group.list1, ...group.list2, ...group.list3]) {
-    if (!tableMap.has(entry.tableId)) {
-      tableMap.set(entry.tableId, { tableId: entry.tableId, tableName: entry.tableName, name: entry.name })
+  // queryEntryTypesGroup 把 sourceId 逗号串拼进 GET URL：源多的网站（实测 6496 个 → URL ~78KB）
+  // 会被网关以 431/414 拒掉。分片查询、按 tableId 去重合并（这个接口本来就返回全站表目录的并集，
+  // 分片不影响结果）。分片按 6 路并发跑（纯读接口，无锁竞争顾虑）：6496 个源 22 片，串行要 20s+，
+  // 并发后约 4 波。
+  const ENTRY_GROUP_CHUNK = 300
+  const ENTRY_GROUP_CONCURRENCY = 6
+  const chunks: string[][] = []
+  for (let i = 0; i < sourceIds.length; i += ENTRY_GROUP_CHUNK) {
+    chunks.push(sourceIds.slice(i, i + ENTRY_GROUP_CHUNK))
+  }
+  for (let i = 0; i < chunks.length; i += ENTRY_GROUP_CONCURRENCY) {
+    const groups = await Promise.all(
+      chunks.slice(i, i + ENTRY_GROUP_CONCURRENCY).map((chunk) => dataApi.entryTypesGroup(chunk.join(','))),
+    )
+    for (const group of groups) {
+      for (const entry of [...group.list1, ...group.list2, ...group.list3]) {
+        if (!tableMap.has(entry.tableId)) {
+          tableMap.set(entry.tableId, { tableId: entry.tableId, tableName: entry.tableName, name: entry.name })
+        }
+      }
     }
   }
   const tables = [...tableMap.values()]
@@ -854,14 +917,31 @@ export const siteApi = {
     })
     return ackFromApiResult(result)
   },
-  siteSources: async (siteId: string) => {
-    const result = await request<Paged<unknown> | Source[]>('site/sourcesOfSite', { siteId }, {
-      method: 'GET',
-      httpEndpoint: 'site/sources',
-      httpParams: { siteId, page: 1, limit: 1000 },
+  siteSources: (siteId: string, options: { force?: boolean } = {}): Promise<Source[]> => {
+    const cached = siteSourcesCache.get(siteId)
+    if (!options.force && cached && Date.now() - cached.at < SITE_SOURCES_TTL) return cached.promise
+    const promise = (async () => {
+      const result = await request<Paged<unknown> | Source[]>('site/sourcesOfSite', { siteId }, {
+        method: 'GET',
+        httpEndpoint: 'site/sources',
+        // limit 取 10000（与 sourceSteps / sourceCategories 的「一次取全」口径一致）：
+        // 1000 会把源多的网站截断，侧栏「源列表 (N)」只显示前 1000 个（2026-09-07 实测 6496 个源的站）。
+        httpParams: { siteId, page: 1, limit: 10000 },
+        // 几千行一次拉回来，默认 20s 会超时（实测 6496 行侧栏偶发 signal aborted → 源列表 (0)）。
+        timeoutMs: 60_000,
+      })
+      const list = Array.isArray(result) ? result : result.list
+      return list.map(siteSourceFromLegacy)
+    })()
+    siteSourcesCache.set(siteId, { at: Date.now(), promise })
+    void promise.catch(() => {
+      // 失败态不留缓存，允许下次重试
+      if (siteSourcesCache.get(siteId)?.promise === promise) siteSourcesCache.delete(siteId)
     })
-    const list = Array.isArray(result) ? result : result.list
-    return list.map(siteSourceFromLegacy)
+    return promise
+  },
+  refreshSiteSources: (siteId: string) => {
+    siteSourcesCache.delete(siteId)
   },
   // 网站范围表聚合（M2-1）：同一 siteId 的并发/重复调用共享同一个进行中的请求；
   // 只有触发首次请求的调用方能实时收到 onProgress，后到的调用方直接等最终结果。
