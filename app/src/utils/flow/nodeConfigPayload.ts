@@ -51,12 +51,21 @@ export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
  */
 /**
  * 节点类型 → 配置的 `configType`（= 旧平台「抓取类型」，2026-08-28 确认）。
- * 节点上以 `[90] - 网页抓取` 这样的展示串存在（TEMPLATE_TO_SNATCH），这里取出编号。
- * 取值范围由 canvas/legacyEnums.test.ts 锁死为后端字典 config/sourceTypes 的 11 个编号。
+ * 采集节点上以 `[90] - 网页抓取` 这样的展示串存在（TEMPLATE_TO_SNATCH），这里取出编号。
+ * 取值范围由 canvas/legacyEnums.test.ts 锁死为后端字典 config/sourceTypes 的编号。
  * 解析不出编号就返回 undefined——按"有值才覆盖"的原则保留 base 原值，绝不猜一个写进去。
+ *
+ * 规则 / 数据监控节点没有 `collectCfg`（自然也没有 snatchType 展示串），**2026-09-07 前**
+ * 这里对它们恒返回 undefined——当时字典没有对应编号，写一个臆造值等于把
+ * `1400998`（实测 configType 为 `null`）之类的真实样本盖成错的（0904 §9-Q8 未决）。
+ * 现在后端字典已经真的补上 `600 - 规则处理` / `700 - 数据监控`，直接按结构信号写死这两个值：
+ * `cfg.template === 'monitor'` 判在 `cfg.ruleCfg` 前面——monitor 节点复用 rule 种子，
+ * 两个信号同时为真，必须让更具体的 monitor 赢，否则 700 永远走不到。
  */
-function configTypeFrom(snatchType: string | undefined): number | undefined {
-  const code = snatchType?.match(/^\[(\d+)\]/)?.[1]
+function configTypeFrom(cfg: NodeConfig): number | undefined {
+  if (cfg.template === 'monitor') return 700
+  if (cfg.ruleCfg) return 600
+  const code = cfg.collectCfg?.snatchType?.match(/^\[(\d+)\]/)?.[1]
   return code ? Number(code) : undefined
 }
 
@@ -96,7 +105,7 @@ export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown
     inEntryType: (cc?.inputTable ?? cfg.inputTable) || undefined,
     isMulti: resolveMultiMode(cfg),
     // 节点类型（0828 W0-7）：此前**完全没写**，导致复制出来的配置类型永远停在被复制那份上。
-    configType: configTypeFrom(cc?.snatchType),
+    configType: configTypeFrom(cfg),
     templetCode: cc?.bizType || undefined,
     topic: cfg.taskCfg?.queue || undefined,
     snatchDrepeat: dedupToLegacy(cc?.dedupMode ?? cfg.dedupMode),

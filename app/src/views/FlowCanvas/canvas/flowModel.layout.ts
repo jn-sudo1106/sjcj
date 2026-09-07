@@ -170,11 +170,12 @@ export function cloneConfig(cfg: NodeConfig): NodeConfig {
  *   3. **采集节点**：取 `snatchType` 的文案部分，即 `[90] - 网页抓取` → `网页抓取`。
  *      这就是旧平台「抓取类型」，也是落库的 `configType`（2026-08-28 确认）。
  *
- * ⚠️ **这是显示集合，不是落库集合。** 「规则处理」「数据监控」**不在** `SNATCH_TYPES` 里，
- * 也不该加进去——那份是 `configType` 的枚举，塞进去会顺着 `configTypeFrom()` 把规则节点的
- * `configType` 写脏（实测规则配置 1400998 的 `configType` 本来就是 `null`）。
- * 走查里产品说的是「那就加上呗……把它数据加加数据就行了」，方向与此相反，
- * **已升成 0904 §9-Q8 待确认**；在拿到答复前按"只加显示、不加落库"执行。
+ * 2026-09-07 更新：「规则处理」「数据监控」**现在也在** `SNATCH_TYPES` 里了（`600`/`700`）。
+ * 此前这里认为它们不该进字典——理由是规则配置 1400998 的 `configType` 实测为 `null`，
+ * 字典是落库枚举，臆造值会写脏（0904 §9-Q8 待确认，与产品口头「把它数据加加数据就行了」
+ * 的要求方向相反）。重查 `config/sourceTypes` 发现后端已经真补上这两条，编号与名字
+ * 跟这里的展示文案逐字对上，Q8 就此解掉：`configTypeFrom()`（nodeConfigPayload.ts）现在
+ * 会给 monitor/rule 节点写 700/600，不再是"只加显示、不加落库"。
  */
 export function nodeTypeLabel(cfg: NodeConfig): string {
   if (cfg.kind === 'decision') return '决策'

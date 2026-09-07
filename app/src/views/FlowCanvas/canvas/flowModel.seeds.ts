@@ -592,7 +592,7 @@ export const TEMPLATE_TO_NODE: Record<string, string> = {
  * 抓取类型 = **节点类型** = 配置的 `configType`（2026-08-28 确认）。
  *
  * 取值**照抄后端字典** `GET /v1/config/sourceTypes`（旧 `api/source-type.js` 的 allSourceTypes），
- * 2026-08-28 在生产实测拉取，共 11 条，按 seq 排序如下。
+ * 2026-08-28 在生产实测拉取，当时共 11 条，按 seq 排序如下。
  *
  * 此前这里是硬编码的臆造值，实测查出三处错（0824-11 §1.2d 同类问题）：
  *   - `[95] - APP 抓取` / `[95] - 文件下载`：**后端没有 95**。真实 App 抓取是 **140**；
@@ -604,6 +604,14 @@ export const TEMPLATE_TO_NODE: Record<string, string> = {
  * 生产分布实测（2026-08-28，1050 条配置抽样 600 条）：**全部是 90**，
  * 连「通用浏览器下载」（#1400232）也是 90——浏览器/公众号/文件下载/登录都不是独立类型，
  * 区分在别的字段上（登录是 `templetCode='login'`，见 §1.2d）。
+ *
+ * **2026-09-07 新增 600/700（Z6-3，回应 0904 §9-Q8）**：产品当时口头要求「规则处理」也该有
+ * 自己的抓取类型，方案原定「不加字典，只加显示层」——理由是规则配置 `1400998` 的 `configType`
+ * 实测为 `null`，字典是落库枚举，臆造一个值会顺着 `configTypeFrom()` 写脏。这次重查
+ * `GET config/sourceTypes` **后端已经真的补上了 `600 - 规则处理` / `700 - 数据监控`**，
+ * 与我们自己 `nodeTypeLabel()` 里一直用的两个显示文案逐字对上——不是巧合，直接把 Q8/Q4 一起
+ * 解掉：字典可以加，configType 该写 600（规则处理）/ 700（数据监控），不必再等后端另行确认
+ * "该写什么值"。
  */
 export const SNATCH_TYPES = [
   '[160] - Mail抓取',
@@ -617,6 +625,8 @@ export const SNATCH_TYPES = [
   '[170] - Python抓取',
   '[300] - 校验类',
   '[400] - 提取数据发邮件',
+  '[600] - 规则处理',
+  '[700] - 数据监控',
 ]
 
 export const WEB_KIND_OPTIONS: { value: 'list' | 'detail' | 'attachment'; label: string; desc: string }[] = [
@@ -825,7 +835,12 @@ function templateKeyForStep(step: Step, index: number): string {
   const explicitAliases: Record<string, string> = {
     list: 'web-list', 'web-list': 'web-list', 'web_list': 'web-list',
     detail: 'web-detail', 'web-detail': 'web-detail', 'web_detail': 'web-detail',
-    login: 'login-collect', 'rule': 'rule', 'clean': 'clean', 'dedupe': 'dedupe', 'check': 'check',
+    login: 'login-collect', 'rule': 'rule',
+    // monitor 复用 rule 的节点键（TEMPLATE_TO_NODE.monitor='rule'）；没有这条的话，
+    // 一个 nodeType='monitor' 但名字没含"数据监控"的存量步骤会漏到下面的通用正则，
+    // 被错路由成采集/详情节点，丢掉 ruleCfg（Z6-2，2026-09-07）。
+    monitor: 'rule',
+    'clean': 'clean', 'dedupe': 'dedupe', 'check': 'check',
   }
   if (explicitAliases[explicit] && NODE_CONFIGS[explicitAliases[explicit]]) return explicitAliases[explicit]
 
@@ -975,9 +990,15 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
 function buildNodeForStep(source: Source, step: Step, index: number): NodeConfig {
   const cfg = cloneConfig(NODE_CONFIGS[templateKeyForStep(step, index)])
   cfg.title = step.name || (index === 0 ? '列表抓取' : '详情解析')
-  // 数据监控节点（monitor 复用 rule 种子）：后端 Step 无 template 字段，靠节点名补回结构信号，
-  // 让 isMonitorNode()（系统提示词分类 / 表配置监控方法 / 描述拼接等）在回读后仍能区分 monitor 与 rule。
-  if (/数据监控/.test(cfg.title)) cfg.template = 'monitor'
+  // 数据监控节点（monitor 复用 rule 种子）：后端 Step 无独立 template 字段，靠别的信号补回
+  // cfg.template='monitor'，让 isMonitorNode()（系统提示词分类 / 表配置监控方法 / 描述拼接等）
+  // 在回读后仍能区分 monitor 与 rule。
+  // 优先级（Z6-2，2026-09-07）：**nodeType 显式为 'monitor' 时权威**，覆盖标题正则——
+  // 用户可能把节点改名成不含"数据监控"的名字，这时只有 nodeType 还能说清它的真实类型。
+  // 只信 'monitor' 这一个值：新建时 nodeType 会继承前置步骤（entry/list/detail 之类），
+  // 那些是不可信的默认值，不能反过来当权威覆盖标题猜测。
+  if (String(step.nodeType ?? '').trim().toLowerCase() === 'monitor') cfg.template = 'monitor'
+  else if (/数据监控/.test(cfg.title)) cfg.template = 'monitor'
   if (cfg.collectCfg) {
     // 源级字段（源名称/分类/标签/登录/选用配置等）不再复制到节点：随 loadFromSource 整体挂到 flow.sourceCfg（0706 优化·源/节点配置分层）
     cfg.collectCfg.url = source.url

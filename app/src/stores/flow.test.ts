@@ -1540,6 +1540,33 @@ describe('数据监控节点（2026-09-01，配置同规则处理）', () => {
     expect(isMonitorNode(mon)).toBe(true)
     expect(mon.template).toBe('monitor')
   })
+
+  // Z6-2（2026-09-07）：nodeType='monitor' 现在也是可信信号，跟标题正则谁先谁后要钉死。
+  it('nodeType 显式为 monitor 时权威：用户改了名字，不含"数据监控"也仍识别为监控节点', () => {
+    const source = { sourceId: 's-mon2', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: 'st1', sourceId: 's-mon2', name: '列表抓取', inputTable: '-', outputTable: 'T1', nodeType: 'list', enabled: true },
+      // 名字改成了"异常预警"，不含"数据监控"——只有 nodeType 还说得清它的真实类型
+      { stepId: 'st2', sourceId: 's-mon2', name: '异常预警', inputTable: 'T1', outputTable: 'T1', nodeType: 'monitor', dependsOn: ['st1'], enabled: true },
+    ] as never)
+
+    const mon = seed.configs.st2
+    expect(isRuleNode(mon)).toBe(true)
+    expect(isMonitorNode(mon)).toBe(true)
+    expect(mon.template).toBe('monitor')
+  })
+
+  // 存量步骤的 nodeType 继承自前置步骤（entry/list/detail 之类），不是可信信号——
+  // 这类值不该越过标题正则反而把普通采集节点错判成监控节点。
+  it('nodeType 是继承来的默认值（非 monitor）时不影响判定，标题正则仍生效', () => {
+    const source = { sourceId: 's-mon3', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: 'st1', sourceId: 's-mon3', name: '列表抓取', inputTable: '-', outputTable: 'T1', nodeType: 'list', enabled: true },
+      { stepId: 'st2', sourceId: 's-mon3', name: '数据监控', inputTable: 'T1', outputTable: 'T1', nodeType: 'list', dependsOn: ['st1'], enabled: true },
+    ] as never)
+
+    expect(seed.configs.st2.template).toBe('monitor')
+  })
 })
 
 describe('节点级 AI 对话 mock 回复（优化 0701 问题八）', () => {

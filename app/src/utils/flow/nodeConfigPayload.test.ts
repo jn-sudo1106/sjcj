@@ -174,9 +174,18 @@ describe('configType（节点类型 = 旧「抓取类型」，0828 W0-7）', () 
     expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(90)
   })
 
-  it('非采集节点没有 snatchType，同样保留 base 原值', () => {
+  // 2026-09-07（Z6-3）：后端字典补上 600/700 后不再是"保留 base"，改成按结构信号写死。
+  it('规则处理节点没有 snatchType，按结构信号（ruleCfg）写 600', () => {
     const cfg = cloneConfig(NODE_CONFIGS['rule'])
-    expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(90)
+    expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(600)
+  })
+
+  it('数据监控节点（template=monitor，同样复用 rule 种子）写 700，不是 600', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['rule'])
+    cfg.template = 'monitor'
+    // monitor 也带着 ruleCfg（复用同一颗种子）——必须让更具体的 monitor 信号赢，
+    // 否则两个信号都为真时永远落到 600，700 走不到。
+    expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(700)
   })
 })
 
