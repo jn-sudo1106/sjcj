@@ -39,6 +39,12 @@ export default defineConfig(({ mode }) => {
           target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://127.0.0.1:8080',
           changeOrigin: true,
         },
+        // 脚本文件下载接口与 data-process 使用同一台 8080 服务；
+        // 必须放在通用 '/api' 之前，否则会被转发到业务后端并返回 404。
+        '/api/file/download': {
+          target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://127.0.0.1:8080',
+          changeOrigin: true,
+        },
         '/api': {
           target: proxyTarget,
           changeOrigin: true,

@@ -460,4 +460,21 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
     expect(script).toContain('def main(date)')
   })
 
+  it('fileDownloadScript：GET /api/file/download 按 fileId 读取纯文本', async () => {
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => 'def main():\n    return {"ok": True}',
+    } as Response)
+    const { ruleApi } = await import('./index')
+
+    const script = await ruleApi.fileDownloadScript('/code01/202609/1788761803128.py')
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/file/download?fileId=%2Fcode01%2F202609%2F1788761803128.py')
+    expect(script).toContain('def main()')
+  })
+
 })
