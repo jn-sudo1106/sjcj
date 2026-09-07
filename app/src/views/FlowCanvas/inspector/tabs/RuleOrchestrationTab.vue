@@ -293,9 +293,13 @@ watch(
   () => {
     if (!isRule.value && !isMonitor.value) return
     if (promptPrefillDone.value) return
-    if (!sourceTableName.value) return
-    if (!orchCfg.value.inputFields?.length) return
-    if (isRule.value && !orchCfg.value.outputFields?.length) return
+    // 数据监控节点进入编排 Tab 时即拼接系统提示词，与脚本编辑弹窗的行为一致——
+    // 弹窗 loadPromptTemplate 无条件调用，这里也不卡 sourceTableName/inputFields。
+    if (isRule.value && !isMonitor.value) {
+      if (!sourceTableName.value) return
+      if (!orchCfg.value.inputFields?.length) return
+      if (!orchCfg.value.outputFields?.length) return
+    }
     void (async () => {
       const applied = await loadPromptTemplateForNode({
         promptListCategory: promptListCategory.value,
@@ -555,6 +559,7 @@ async function onGenerateScript(
         inputFieldOptions: inputFieldOptions.value,
         outputFieldOptions: outputFieldOptions.value,
         systemPrompt: genCfg.systemPrompt ?? '',
+        checkRule: isMonitor.value ? (cfg.value?.monitorMethods ?? []).join(',') || undefined : undefined,
       }), {
         signal: controller.signal,
         onThinking: (delta) => {

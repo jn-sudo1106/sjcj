@@ -333,6 +333,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
       modelProviderCode: 'DeepSeek', modelCode: 'deepseek-chat',
     })
     flow.configs['monitor-1'].configId = '184'
+    flow.setMonitorMethods('monitor-1', ['当日数据是否正常入库', '数据延迟监控'])
     await flushPromises()
     vi.spyOn(ruleApi, 'dataProcessGenerate').mockResolvedValue({
       script: 'def main(sku_id):\n    return {}',
@@ -344,6 +345,8 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     await flushPromises()
 
     expect(ruleApi.dataProcessGenerate).toHaveBeenCalled()
+    const call = (ruleApi.dataProcessGenerate as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]
+    expect(call[0]).toHaveProperty('checkRule', '当日数据是否正常入库,数据延迟监控')
   })
 
   it('数据监控节点显示数据监控描述', async () => {

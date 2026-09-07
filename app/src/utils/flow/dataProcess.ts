@@ -10,6 +10,8 @@ export interface DataProcessGeneratePayload {
   inputFields: string
   outputFields: string
   systemPrompt: string
+  /** 数据监控方法拼接（逗号分隔），仅 monitor 节点传入 */
+  checkRule?: string
 }
 
 export interface DataProcessFieldOption {
@@ -55,5 +57,6 @@ export function buildDataProcessGeneratePayload(input: DataProcessGenerateInput)
     inputFields: joinPairs(inputFields),
     outputFields: joinPairs(outputFields),
     systemPrompt: input.systemPrompt,
+    checkRule: input.checkRule,
   }
 }
