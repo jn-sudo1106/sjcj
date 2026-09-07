@@ -13,7 +13,7 @@ import {
   fieldOptionsFromTableOrOutput, MONITOR_METHODS,
   type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, type EntryType, type RuleOrchestration } from '@/api'
+import { configApi, entryApi, type EntryType, type RuleOrchestration } from '@/api'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { usePresetTables } from '@/composables/usePresetTables'
 import TableEditDialog from '../TableEditDialog.vue'
@@ -36,6 +36,33 @@ const monitorMethods = computed<string[]>(() => cfg.value?.monitorMethods ?? [])
 function setMonitorMethods(values: string[]) {
   flow.setMonitorMethods(id.value, values ?? [])
 }
+
+// 监控方法随 config 的 checkRule 落库（逗号分隔，拼接见 RuleOrchestrationTab.onGenerateScript）。
+// 进表配置时本地勾选为空且节点已绑配置，就按 configDetail 原始记录的 checkRule 回填——
+// 与 restoreFieldsFromColumns 同一原则：只补不覆盖，用户改过就以本地为准。
+const checkRuleRestoreToken = ref('')
+watch(
+  () => [id.value, isMonitor.value, cfg.value?.configId ?? '', cfg.value?.monitorMethods?.length ?? 0] as const,
+  ([nid, monitor, configId, methodCount]) => {
+    if (!monitor || !configId || methodCount) return
+    const token = `${nid}:${configId}`
+    if (checkRuleRestoreToken.value === token) return
+    checkRuleRestoreToken.value = token
+    void (async () => {
+      try {
+        const record = await configApi.configDetailRaw(String(configId))
+        const saved = String(record?.checkRule ?? '').trim()
+        if (!saved) return
+        const known = new Set(MONITOR_METHODS)
+        const restored = saved.split(',').map((m) => m.trim()).filter((m) => m && known.has(m))
+        if (restored.length) flow.setMonitorMethods(String(nid), restored)
+      } catch {
+        // 回填失败不阻塞表配置，用户仍可手动勾选
+      }
+    })()
+  },
+  { immediate: true },
+)
 
 // ---- 规则节点：表/字段绑定（0804 拍板：搬回表配置） ----
 const ruleCfg = computed<RuleOrchestration>(() => ({

@@ -11,7 +11,7 @@ import ElementPlus from 'element-plus'
 import NodeInspector from '../NodeInspector.vue'
 import { useFlowStore } from '@/stores/flow'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, paramApi, ruleApi } from '@/api'
+import { configApi, entryApi, paramApi, ruleApi } from '@/api'
 import { __resetPresetTableCache } from '@/composables/usePresetTables'
 import type { EntryType } from '@/api'
 
@@ -298,6 +298,33 @@ describe('TableTab · 数据监控节点（2026-09-01，不落表/不出参 + �
     await flushPromises()
 
     expect(flow.configs['monitor-1'].monitorMethods).toEqual(['数据延迟监控', '每日数据量监控'])
+  })
+
+  // 监控方法随 config 的 checkRule 落库（逗号分隔）：本地勾选为空且节点已绑配置时，
+  // 按 configDetail 原始记录的 checkRule 回填，且只勾 MONITOR_METHODS 候选内的值。
+  it('进表配置时按 configDetail 的 checkRule 回填勾选（逗号分隔，过滤未知项）', async () => {
+    mockAssets()
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({
+      configId: '184', checkRule: '当日数据是否正常入库, 数据延迟监控,不存在的监控',
+    })
+    const { flow } = mountOnMonitorNode()
+    flow.configs['monitor-1'].configId = '184'
+    await flushPromises()
+
+    expect(configApi.configDetailRaw).toHaveBeenCalledWith('184')
+    expect(flow.configs['monitor-1'].monitorMethods).toEqual(['当日数据是否正常入库', '数据延迟监控'])
+  })
+
+  it('本地已勾选过监控方法时不回填，不调 configDetailRaw', async () => {
+    mockAssets()
+    const detailRaw = vi.spyOn(configApi, 'configDetailRaw')
+    const { flow } = mountOnMonitorNode()
+    flow.configs['monitor-1'].configId = '184'
+    flow.setMonitorMethods('monitor-1', ['数据延迟监控'])
+    await flushPromises()
+
+    expect(detailRaw).not.toHaveBeenCalled()
+    expect(flow.configs['monitor-1'].monitorMethods).toEqual(['数据延迟监控'])
   })
 })
 
