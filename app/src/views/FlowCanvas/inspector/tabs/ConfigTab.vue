@@ -223,6 +223,16 @@ function onMultiMode(e: Event) {
 // 节点名称的编辑收进弹窗（见 EditNodeSourceDialog）；源名称/源 URL 在左侧源详情改。
 const editNodeSourceOpen = ref(false)
 
+watch(
+  () => [id.value, isRule.value, cfg.value?.stepSourceId] as const,
+  ([nodeId, ruleNode, stepSourceId]) => {
+    if (!nodeId || !ruleNode) return
+    if (stepSourceId !== undefined && stepSourceId.trim()) return
+    flow.setStepSourceId(nodeId, '-1')
+  },
+  { immediate: true },
+)
+
 function onBizType(e: Event) {
   flow.patchCollect(id.value, { bizType: (e.target as HTMLSelectElement).value || undefined })
 }
@@ -275,18 +285,6 @@ watch(
       </div>
       <input v-else class="rc-input" :value="cfg?.title" @input="onTitle" />
     </div>
-    <template v-if="isRule">
-      <div class="rc-field"><label>适用源</label>
-        <input
-          class="rc-input"
-          :value="cfg?.stepSourceId ?? ''"
-          placeholder="-1 表示该配置下所有源"
-          aria-label="适用源"
-          @input="flow.setStepSourceId(id, ($event.target as HTMLInputElement).value)"
-        />
-        <div class="rc-help">旧步骤「适用源」。填当前源 ID，或填 -1 表示使用该配置的所有源。</div>
-      </div>
-    </template>
     <EditNodeSourceDialog v-model:open="editNodeSourceOpen" :node-id="id" />
     <!-- 定时策略：采集节点挪到「运行设置」上方（见下）；非采集节点没有运行设置，仍留在这里 -->
     <details v-if="!cc" class="ni-schedule">
