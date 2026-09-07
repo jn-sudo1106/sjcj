@@ -256,9 +256,6 @@ function onTripleCell(field: TripleField, i: number, col: 0 | 1 | 2, e: Event) {
 // collectCfg，非采集类写 NodeConfig 顶层，两边取哪边由 setStructuredConfig 内部判断，本组件不用分支）。
 const structuredConfigValue = computed(() => cc.value?.structuredConfig ?? cfg.value?.structuredConfig ?? '')
 const contentRulesValue = computed(() => cc.value?.contentRules ?? cfg.value?.contentRules ?? '')
-// 空着时直接给出旧平台「配全局ID」模板，不用再点按钮填。后端已有 codeRule 时仍显示原值。
-const GLOBAL_ID_TEMPLATE = '{"globals":["列ID"]}'
-const structuredConfigDisplay = computed(() => structuredConfigValue.value.trim() || GLOBAL_ID_TEMPLATE)
 function onStructuredConfig(e: Event) {
   flow.setStructuredConfig(id.value, (e.target as HTMLTextAreaElement).value)
 }
@@ -423,7 +420,7 @@ async function onTableSaved(tableId: string) {
          0824-00 §6.3 计划改成「入库配置」的方向是反的——字段展示名跟旧平台走，改了反而对不上。 -->
     <div class="rc-field">
       <label><span>结构化配置</span></label>
-      <textarea class="rc-input" rows="2" placeholder='{"globals":["列ID"]}' :value="structuredConfigDisplay" @input="onStructuredConfig"></textarea>
+      <textarea class="rc-input" rows="2" placeholder='{"globals":["列ID"]}' :value="structuredConfigValue" @input="onStructuredConfig"></textarea>
     </div>
     <div class="rc-field"><label>正文规则</label>
       <textarea class="rc-input" rows="2" placeholder="按输出字段配置处理规则，一行一条，如 content=trim" :value="contentRulesValue" @input="onContentRules"></textarea>

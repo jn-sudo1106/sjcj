@@ -218,11 +218,14 @@ describe('setStructuredConfig / setContentRules（0804 S3-1）', () => {
     expect(configs['rule-1'].contentRules).toBe('summary=truncate(200)')
   })
 
-  it('传空字符串时清空为 undefined（不留空字符串占位）', () => {
+  it('传空字符串时保留明确清空状态，供保存载荷覆盖后端旧值', () => {
     const { n, configs } = setup()
     n.setStructuredConfig('web-list', '{"table":"T1"}')
+    n.setContentRules('web-list', 'content=trim')
     n.setStructuredConfig('web-list', '')
-    expect(configs['web-list'].collectCfg?.structuredConfig).toBeUndefined()
+    n.setContentRules('web-list', '')
+    expect(configs['web-list'].collectCfg?.structuredConfig).toBe('')
+    expect(configs['web-list'].collectCfg?.contentRules).toBe('')
   })
 })
 

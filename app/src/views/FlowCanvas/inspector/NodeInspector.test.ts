@@ -264,6 +264,35 @@ describe('配置绑定条与节点配置脏状态条（0824-00 §5.4/§6.1）', 
     w.unmount()
   })
 
+  it('新建采集的虚拟首节点显示「新建配置」，不因后端已分配 configId 误标为「已有配置」', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.loadFromSource(
+      {
+        sourceId: '430023000', name: '测试网站0907', url: 'http://placeholder.invalid/source',
+        configId: '1401001', mainTable: '', owner: 'admin', state: 'C',
+      },
+      [{
+        stepId: '0', sourceId: '430023000', name: '测试网站0907', configId: '1401001',
+        outputTable: '', enabled: true,
+      }],
+    )
+
+    const w = mount(NodeInspector)
+    await flushPromises()
+    const bar = w.find('.rc-config-bar')
+    expect(bar.text()).toContain('#1401001')
+    expect(bar.text()).toContain('新建配置')
+    expect(bar.text()).not.toContain('已有配置')
+
+    // 换成别的配置后才属于“已有配置”。
+    flow.configs['0'].configId = '1400999'
+    await flushPromises()
+    expect(bar.text()).toContain('已有配置')
+    w.unmount()
+  })
+
   it('决策节点不参与配置绑定，不显示配置条', async () => {
     mockAssets()
     setActivePinia(createPinia())
@@ -501,8 +530,8 @@ describe('规则节点保存前校验', () => {
   })
 })
 
-// 结构化配置空着时直接给出旧「配全局ID」模板，不再单独放按钮。
-describe('结构化配置默认全局ID模板', () => {
+// 结构化配置空着时只显示 placeholder，不能把默认模板当成真实值塞回输入框，否则用户删不掉。
+describe('结构化配置全局ID提示', () => {
   async function openTableTab(structuredConfig?: string) {
     mockAssets()
     setActivePinia(createPinia())
@@ -519,10 +548,11 @@ describe('结构化配置默认全局ID模板', () => {
     return { flow, w }
   }
 
-  it('空值时输入框直接是全局ID模板，没有「配全局ID」按钮', async () => {
+  it('空值时输入框保持为空，只用 placeholder 提示全局ID模板', async () => {
     const { flow, w } = await openTableTab()
     const ta = w.findAll('textarea').find((t) => t.attributes('placeholder')?.includes('globals'))!
-    expect(ta.element.value).toBe('{"globals":["列ID"]}')
+    expect(ta.element.value).toBe('')
+    expect(ta.attributes('placeholder')).toBe('{"globals":["列ID"]}')
     expect(w.findAll('button').some((b) => b.text() === '配全局ID')).toBe(false)
     expect(flow.configs['web-1'].collectCfg?.structuredConfig).toBeUndefined()
     expect(flow.configDirty).toBe(false)

@@ -148,6 +148,17 @@ describe('buildConfigPayload 不覆盖节点上没有的字段（2026-08-28 回�
     // 没改的仍是原值
     expect(payload.contentRule).toBe('{"py_name":"zx_translate"}')
   })
+
+  it('节点上明确清空入库配置和正文规则时，以空字符串覆盖后端原值', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.configName = 'baidu-登陆'
+    cfg.collectCfg!.structuredConfig = ''
+    cfg.collectCfg!.contentRules = ''
+    const payload = buildConfigPayload(cfg, base)
+
+    expect(payload.codeRule).toBe('')
+    expect(payload.contentRule).toBe('')
+  })
 })
 
 describe('configType（节点类型 = 旧「抓取类型」，0828 W0-7）', () => {

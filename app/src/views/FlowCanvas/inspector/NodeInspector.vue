@@ -54,6 +54,21 @@ watch(() => flow.selectedId, () => {
 // 决策/分头节点只有「分支配置」，不参与配置绑定。
 const isBranchNode = computed(() => !!cfg.value && decisionOrParallelKind(cfg.value) !== undefined)
 const configId = computed(() => cfg.value?.configId || '')
+// sourceId 视角下，后端会把源自身的 config 套成 itemConfig=0 的虚拟首节点。
+// 新建采集走 snatchSave(newConfig=1)，这份配置就是随源刚创建的；仅凭“已有 configId”把它
+// 标成「已有配置」会误导成复用了历史配置。更换为其它 configId 后才属于「已有配置」。
+const isInitialSourceConfig = computed(() => {
+  const source = flow.sourceCfg ?? flow.sourceCtx
+  const nodeId = id.value
+  return !!configId.value
+    && !!source?.configId
+    && configId.value === source.configId
+    && (nodeId === '0' || nodeId.startsWith('source:'))
+})
+const configOriginText = computed(() => {
+  if (!configId.value) return '新建配置 · 未保存'
+  return isInitialSourceConfig.value ? '新建配置' : '已有配置'
+})
 
 // 双层脏状态（0824-00 §5.4）：本条只管当前节点的配置表单；流程脏标在画布 Header。
 const nodeConfigDirty = computed(() => flow.dirtyConfigNodes.includes(id.value))
@@ -267,7 +282,7 @@ onMounted(async () => {
         <span class="cb-label">当前配置</span>
         <span v-if="cfg?.configName" class="cb-name" :title="cfg.configName">{{ cfg.configName }}</span>
         <span v-if="configId" class="cb-id" :title="`配置 ID ${configId}`">#{{ configId }}</span>
-        <span class="cb-origin" :class="{ fresh: !configId }">{{ configId ? '已有配置' : '新建配置 · 未保存' }}</span>
+        <span class="cb-origin" :class="{ fresh: !configId || isInitialSourceConfig }">{{ configOriginText }}</span>
         <NodeConfigSelect v-if="id" :node-id="id" />
       </div>
 
