@@ -56,6 +56,20 @@ describe('网站—源模型（0707 优化·Phase2）· 汇总统计', () => {
     expect(mockSitePaged({ keyword: 'dev_zhonghe', size: 999 }).list.length).toBeGreaterThan(0)
   })
 
+  it('sitePaged：分类筛选支持逗号分隔多值（多选口径，任一命中即保留）', () => {
+    // 单选（存量行为不回归）：基金类下 4 个站（支付宝/天天基金/雪球……按 categoryPath 前缀）
+    const single = mockSitePaged({ category: '/基金类', size: 999 }).list.map((s) => s.siteId)
+    expect(single).toContain('site-zfb')
+    expect(single).toContain('site-ttfund')
+    expect(single.every((id) => !['site-weibo', 'site-news'].includes(id))).toBe(true)
+    // 多选：基金类 + 舆情类 的并集
+    const multi = mockSitePaged({ category: '/基金类,/舆情类', size: 999 }).list.map((s) => s.siteId)
+    expect(multi).toContain('site-zfb')
+    expect(multi).toContain('site-weibo')
+    // 空串 = 全部
+    expect(mockSitePaged({ category: '', size: 999 }).total).toBe(mockSitePaged({ size: 999 }).total)
+  })
+
   it('sourcesOfSite：语言演示源并入通用 SOURCES（按 sourceId 各处可查，不再触发 SOURCES[0] 兜底误加载）', () => {
     const langSources = mockSiteSourcesOf({ siteId: 'site-lang-demo' })
     expect(langSources.length).toBe(24)

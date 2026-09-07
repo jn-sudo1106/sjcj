@@ -98,8 +98,9 @@ function withAggregate(seed: Omit<Site, 'sourceCount' | 'errorCount'>): Site {
 
 function matches(site: Site, p?: Record<string, unknown>): boolean {
   if (!p) return true
-  const category = String(p.category ?? '')
-  if (category && !site.categoryPath?.startsWith(category) && site.category !== category) return false
+  // 分类筛选是多选：category 按逗号分隔携带多个目录 ID（与旧契约 categoryIds 同形），任一命中即保留
+  const categories = String(p.category ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  if (categories.length && !categories.some((c) => site.categoryPath?.startsWith(c) || site.category === c)) return false
   const siteName = String(p.name ?? '').trim().toLowerCase()
   if (siteName && !site.name.toLowerCase().includes(siteName)) return false
   const sourceName = String(p.sourceName ?? '').trim().toLowerCase()

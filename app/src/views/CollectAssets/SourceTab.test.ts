@@ -79,6 +79,31 @@ describe('SourceTab 筛选状态', () => {
     })
   })
 
+  it('分类多选回传 id 数组，查询时拼成旧契约 categoryIds 的逗号串', async () => {
+    const { wrapper } = await mountAt()
+    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
+    await toolbar.vm.$emit('update:categoryFilter', ['/基金类', '/舆情类'])
+    await toolbar.vm.$emit('filterChange')
+    await flushPromises()
+    expect(toolbar.props('categoryFilter')).toEqual(['/基金类', '/舆情类'])
+    // mock 按逗号多值过滤：基金类 + 舆情类的并集站点都回来了
+    await vi.waitFor(() => {
+      const sites = wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]
+      const ids = sites.map((site) => site.siteId)
+      expect(ids).toContain('site-zfb')
+      expect(ids).toContain('site-weibo')
+    })
+  })
+
+  it('总览按分类下钻（?category=）预置进多选筛选', async () => {
+    const { wrapper } = await mountAt({ category: '/基金类' })
+    expect(wrapper.findComponent({ name: 'FilterToolbar' }).props('categoryFilter')).toEqual(['/基金类'])
+    await vi.waitFor(() => {
+      const sites = wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]
+      expect(sites.map((site) => site.siteId)).toContain('site-zfb')
+    })
+  })
+
 })
 
 describe('SourceTab 视图切换', () => {

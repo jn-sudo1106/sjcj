@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { Search, Grid, List, Refresh } from '@element-plus/icons-vue'
-import type { SourceCategory } from '@/api'
+import { sourceApi, type SourceCategory } from '@/api'
 
-defineProps<{
+const props = defineProps<{
   keyword: string
-  categoryFilter: string
+  categoryFilter: string[]
   tagFilter: string
   stateFilter: string
   sortBy: 'updated' | 'name'
@@ -17,7 +17,7 @@ defineProps<{
 
 const emit = defineEmits<{
   'update:keyword': [value: string]
-  'update:categoryFilter': [value: string]
+  'update:categoryFilter': [value: string[]]
   'update:tagFilter': [value: string]
   'update:stateFilter': [value: string]
   'update:sortBy': [value: 'updated' | 'name']
@@ -30,9 +30,33 @@ function onKeywordInput(value: string) {
   emit('update:keyword', value)
 }
 
-function categoryLabel(category: SourceCategory, child = false) {
-  const prefix = child ? ' └ ' : ''
-  return `${prefix}${category.name}${category.count == null ? '' : `（${category.count}）`}`
+// 分类筛选是树形多选（旧平台目录树勾选语义；选中值是目录 ID 数组，空数组 = 全部）。
+// 清空/异常值回传 []，与旧筛选值口径一致。
+function onCategoryChange(value: unknown) {
+  const ids = Array.isArray(value) ? value.map((v) => String(v)) : []
+  emit('update:categoryFilter', ids)
+  emit('filterChange')
+}
+
+// 旧分类接口首屏只返回根节点；树节点展开时按 parentId 懒加载子级。
+// 与 MoreSourcesDialog 的分类树同一加载口径：children 已在数据里时直接用，避免重复请求。
+async function loadCategoryChildren(
+  node: { level: number; data: SourceCategory },
+  resolve: (nodes: SourceCategory[]) => void,
+) {
+  if (node.level === 0) {
+    resolve(props.categories)
+    return
+  }
+  if (node.data.children?.length) {
+    resolve(node.data.children)
+    return
+  }
+  try {
+    resolve(await sourceApi.sourceCategories(node.data.id))
+  } catch {
+    resolve([])
+  }
 }
 </script>
 
@@ -46,13 +70,35 @@ function categoryLabel(category: SourceCategory, child = false) {
       class="ca-search"
       @input="onKeywordInput"
     />
-    <el-select :model-value="categoryFilter" placeholder="全部分类" style="width: 150px" clearable @update:model-value="(v: string) => { emit('update:categoryFilter', v); emit('filterChange') }">
-      <el-option label="全部分类" value="" />
-      <template v-for="g in categories" :key="g.id">
-        <el-option :label="categoryLabel(g)" :value="g.id" />
-        <el-option v-for="c in g.children" :key="c.id" :label="categoryLabel(c, true)" :value="c.id" />
+    <!-- 分类树：多级目录按需展开（首屏根节点 + 一层子级由列表页预取，更深层级展开时懒加载）。
+         多选复选框用 Element Plus 标准样式（与表格选择列等全站 checkbox 一致，主题色由全局
+         tokens 统一）；check-strictly 让父子独立勾选——子级是懒加载的，级联勾选会把未加载的
+         孙级 ID 漏出 categoryIds，后端 IN 匹配会漏数据。 -->
+    <el-tree-select
+      :model-value="categoryFilter"
+      placeholder="全部分类"
+      class="ca-category"
+      popper-class="ca-category-popper"
+      clearable
+      multiple
+      collapse-tags
+      collapse-tags-tooltip
+      :max-collapse-tags="1"
+      check-strictly
+      :data="categories"
+      :props="{ label: 'name', children: 'children' }"
+      node-key="id"
+      lazy
+      :load="loadCategoryChildren"
+      @update:model-value="onCategoryChange"
+    >
+      <template #default="{ data }">
+        <span class="ca-category-node">
+          <span>{{ data.name }}</span>
+          <span v-if="data.count != null" class="ca-category-count">{{ data.count }}</span>
+        </span>
       </template>
-    </el-select>
+    </el-tree-select>
     <el-select :model-value="tagFilter" placeholder="全部标签" style="width: 130px" clearable @update:model-value="(v: string) => { emit('update:tagFilter', v); emit('filterChange') }">
       <el-option label="全部标签" value="" />
       <el-option v-for="t in allTags" :key="t" :label="t" :value="t" />
@@ -96,6 +142,9 @@ function categoryLabel(category: SourceCategory, child = false) {
 .ca-search { width: 250px; flex: 0 0 250px; }
 .ca-search :deep(.el-input__wrapper) { border-radius: 6px; min-height: 34px; box-shadow: 0 0 0 1px var(--rc-border) inset; }
 .ca-search :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #bfdbfe inset; }
+.ca-category { width: 150px; flex: 0 0 150px; }
+.ca-category-node { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.ca-category-count { color: var(--rc-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .ca-stats {
   display: flex;
   align-items: center;
@@ -151,4 +200,10 @@ function categoryLabel(category: SourceCategory, child = false) {
   .ca-stats { order: 2; flex: 1 1 100%; }
   .ca-stats span:first-child { padding-left: 0; }
 }
+</style>
+
+<style>
+/* 分类树下拉面板 teleport 到 body，无法 scoped；输入框 150px 放不下多级缩进，
+   面板单独放宽（13.6 寸基准，不覆盖页面）。 */
+.ca-category-popper { min-width: 248px; }
 </style>

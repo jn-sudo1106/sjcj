@@ -5,9 +5,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
+import ElementPlus from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FlowCenter from './index.vue'
-import { configApi, flowCenterApi, sourceApi, type FlowRecord } from '@/api'
+import { configApi, flowCenterApi, sourceApi, type FlowRecord, type SourceCategory } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 
@@ -32,12 +33,24 @@ afterEach(() => vi.restoreAllMocks())
 
 async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length) {
   vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total, list: flows })
+  // 分类目录在测试里必须可预期：sourceCategories 走 live 端点（category/categoryPaged），
+  // 测试环境下 fetch 失败会把分类吞成空列表。这里给一棵两级树覆盖（按 parentId 查任意层级的子级）。
+  vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId?: string) => {
+    const tree: SourceCategory[] = [
+      { id: 'c1', name: '财经', children: [{ id: 'c1-1', name: '公告' }, { id: 'c1-2', name: '行情' }] },
+      { id: 'c2', name: '舆情', children: [{ id: 'c2-1', name: '微博' }] },
+    ]
+    if (!parentId) return tree
+    const findChildren = (nodes: SourceCategory[]): SourceCategory[] =>
+      nodes.flatMap((n) => (n.id === parentId ? (n.children ?? []) : findChildren(n.children ?? [])))
+    return findChildren(tree)
+  })
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/flows', component: { template: '<div/>' } }, { path: '/rules', component: { template: '<div/>' } }] })
   await router.push('/flows'); await router.isReady()
   const pinia = createPinia(); setActivePinia(pinia)
   const wrapper = mount(FlowCenter, {
     global: {
-      plugins: [pinia, router],
+      plugins: [pinia, router, ElementPlus],
       directives: { loading: {} },
       stubs: {
         FlowBoard: { props: ['embedded'], template: '<div data-testid="embedded-flow-board">流程画布</div>' },
@@ -50,6 +63,12 @@ async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length) {
           template: '<input data-testid="source-select-stub" :value="Array.isArray(modelValue) ? modelValue.join(\',\') : modelValue" @input="$emit(\'update:modelValue\', multiple ? $event.target.value.split(\',\').filter(Boolean) : $event.target.value)" />',
         },
         'el-dialog': { props: ['modelValue'], template: '<div v-if="modelValue"><slot/><slot name="footer"/></div>' },
+        // 装了 ElementPlus 插件后 el-pagination 解析成真组件，prop 不再以 attribute 落在
+        // DOM 上（「绑定后端总数与页大小」那条用 attributes() 断言）。stub 成透明元素保持原断言。
+        'el-pagination': {
+          props: ['total', 'pageSize', 'pageSizes'],
+          template: '<div data-testid="flow-center-pagination" :total="total" :page-size="pageSize" :page-sizes="(pageSizes || []).join(\',\')" />',
+        },
       },
     },
   })
@@ -672,5 +691,77 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
 
     expect(prompt).not.toHaveBeenCalled()
     expect(info).toHaveBeenCalledWith(expect.stringContaining('还没有流程被标记为模板'))
+  })
+})
+
+// 分类筛选：多级目录树 + 多选。单选/不选走服务端 categoryId 单值契约（flow_api.md 实测归档）；
+// 多选（≥2）由前端拉全量本地筛（flowPaged 的 categoryId 是 Integer 精确匹配，没有多值契约）。
+describe('流程中心 · 分类树多选', () => {
+  it('分类筛选是树形多选下拉：多级数据进树 + 懒加载 + check-strictly', async () => {
+    const w = await mountCenter()
+    const treeSelect = w.findComponent({ name: 'ElTreeSelect' })
+    expect(treeSelect.exists()).toBe(true)
+    expect(treeSelect.props('multiple')).toBe(true)
+    expect(treeSelect.props('checkStrictly')).toBe(true)
+    expect(typeof treeSelect.props('load')).toBe('function')
+    // 首屏两级数据进树（loadCategories 预取了一层子级）
+    const data = treeSelect.props('data') as { id: string; children?: unknown[] }[]
+    expect(data.length).toBeGreaterThan(0)
+    expect(data.some((c) => (c.children ?? []).length > 0)).toBe(true)
+    // 样式契约：fc-category 的 28px 高/12px 字覆盖必须命中 .el-select__wrapper（EP 2.5+ 的
+    // select 结构；写成 .el-input__wrapper 会整段静默失效，视觉退回 EP 默认 32px/14px）。
+    // EP 升级若改结构，这条断言先红，避免样式漂移无人发现。
+    expect(treeSelect.element.classList.contains('fc-category')).toBe(true)
+    expect(treeSelect.element.querySelector(':scope > .el-select__wrapper')).toBeTruthy()
+  })
+
+  it('单个分类仍走服务端 categoryId 单值契约', async () => {
+    const w = await mountCenter()
+    const paged = vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+    const setup = (w.vm.$ as unknown as { setupState: { onFilterCategoryChange: (v: unknown) => void } }).setupState
+
+    setup.onFilterCategoryChange(['/基金类'])
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ categoryId: '/基金类' }))
+  })
+
+  it('多选（≥2）改为前端拉全量本地筛：逐页请求不带 categoryId，命中分类的流程保留', async () => {
+    // 三条流程分属三个分类；多选其中两个分类时，第三条被滤掉
+    const flows = [
+      { ...FLOWS[0], id: 'f1', categoryId: 'c1', updatedAt: '2026-09-01 10:00' },
+      { ...FLOWS[0], id: 'f2', categoryId: 'c2', updatedAt: '2026-09-02 10:00' },
+      { ...FLOWS[0], id: 'f3', categoryId: 'c3', updatedAt: '2026-09-03 10:00' },
+    ] as FlowRecord[]
+    const paged = vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 3, list: flows })
+    const w = await mountCenter(flows)
+    const setup = (w.vm.$ as unknown as { setupState: { onFilterCategoryChange: (v: unknown) => void } }).setupState
+
+    setup.onFilterCategoryChange(['c1', 'c2'])
+    await flushPromises()
+
+    // 逐页全量请求：不带 categoryId（服务端没有多值契约）
+    const lastCall = paged.mock.lastCall?.[0] as Record<string, unknown> | undefined
+    expect(lastCall).toBeTruthy()
+    expect('categoryId' in (lastCall ?? {})).toBe(false)
+    expect(lastCall).toMatchObject({ page: 1, size: 100 })
+    const rowIds = w.findAll('[data-testid="flow-center-row"]').map((r) => r.text())
+    expect(rowIds.length).toBe(2)
+    expect(rowIds[0]).toContain('f2') // updateDt 倒序：c2 比 c1 新
+    expect(rowIds.some((t) => t.includes('f3'))).toBe(false)
+  })
+
+  it('多选翻页走本地分页：total 是过滤后的口径', async () => {
+    const flows = Array.from({ length: 25 }, (_, i) => ({
+      ...FLOWS[0], id: `f${i}`, categoryId: i % 2 ? 'c1' : 'c2', updatedAt: `2026-09-01 10:${String(i).padStart(2, '0')}`,
+    })) as FlowRecord[]
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 25, list: flows })
+    const w = await mountCenter(flows)
+    const setup = (w.vm.$ as unknown as { setupState: { onFilterCategoryChange: (v: unknown) => void; load: () => Promise<void> } }).setupState
+
+    setup.onFilterCategoryChange(['c1', 'c2'])
+    await flushPromises()
+    // 25 条全命中两个分类，total = 25；当前页 20 条
+    expect(w.text()).toContain('流程 25')
+    expect(w.findAll('[data-testid="flow-center-row"]').length).toBe(20)
   })
 })

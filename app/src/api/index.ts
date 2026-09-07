@@ -709,6 +709,7 @@ async function loadSiteTables(
 export const siteApi = {
   sitePaged: async (p?: PageQuery) => {
     const state = String(p?.state ?? '')
+    const category = String(p?.category ?? '')
     const result = await request<Paged<unknown>>('site/sitePaged', p, {
       method: 'POST',
       httpParams: {
@@ -717,6 +718,9 @@ export const siteApi = {
         name: p?.name ?? p?.keyword ?? undefined,
         sourceName: p?.sourceName ?? undefined,
         state: state === 'error' ? 'ERROR' : undefined,
+        // 旧 SiteList 契约：分类筛选走 categoryIds（逗号分隔目录 ID 串；本页单选，传单个 ID）。
+        // 不透传的话分类筛选在真实后端下静默失效（mock 恰好按路径前缀匹配，掩盖过这个问题）。
+        categoryIds: category || undefined,
       },
     })
     return sitePageFromLegacy(result)

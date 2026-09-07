@@ -25,7 +25,8 @@ const stats = reactive({ total: 0, error: 0, notify: 0 })
 
 // ---- 筛选 ----
 const keyword = ref('')
-const categoryFilter = ref('')
+// 分类多选（目录 ID 数组，空 = 全部）；查询时拼成旧契约 categoryIds 的逗号串
+const categoryFilter = ref<string[]>([])
 const tagFilter = ref('')
 const stateFilter = ref('all')
 const sortBy = ref<'updated' | 'name'>('updated')
@@ -46,7 +47,7 @@ async function loadList() {
   loading.value = true
   try {
     const filters = {
-      category: categoryFilter.value,
+      category: categoryFilter.value.join(','),
       tag: tagFilter.value,
       state: stateFilter.value,
       sort: sortBy.value,
@@ -81,7 +82,14 @@ async function loadList() {
 }
 async function loadCategories() {
   try {
-    categories.value = await sourceApi.sourceCategories()
+    // 旧分类接口首屏只返回根节点（categoryPaged 不带 parentId 的实测行为，画布侧
+    // SiteSourceSwitcher 同款修法）：再按 parentId 并行补一层子级，查询树首屏两级立即可见，
+    // SiteEditorDialog 的两级分类下拉也有选项。更深层级由 FilterToolbar 分类树展开时懒加载。
+    const roots = await sourceApi.sourceCategories()
+    await Promise.all(roots.map(async (root) => {
+      root.children = await sourceApi.sourceCategories(root.id)
+    }))
+    categories.value = roots
   } catch {
     ElMessage.warning('加载分类失败')
     categories.value = []
@@ -226,6 +234,10 @@ function openNewFlowCanvas() {
 onMounted(() => {
   const qs = String(route.query.state ?? '')
   if (VALID_STATES.includes(qs)) stateFilter.value = qs
+  // 总览「资产类型分布」按分类下钻（DistributionPanel 带来的 ?category=<id>）——此前没接，
+  // 下钻过来分类筛选是静默丢的。多选口径下预置成一个勾选项。
+  const qc = String(route.query.category ?? '')
+  if (qc) categoryFilter.value = qc.split(',').map((s) => s.trim()).filter(Boolean)
   loadCategories()
   loadStats()
   loadTagOptions()

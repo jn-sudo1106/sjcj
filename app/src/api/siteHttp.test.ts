@@ -58,6 +58,20 @@ describe('网站读取 HTTP 契约', () => {
     })
   })
 
+  it('sitePaged 把分类筛选映射为旧契约的 categoryIds；未选分类不携带该字段', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', count: 0, data: [] }))
+    const { siteApi } = await import('./index')
+
+    await siteApi.sitePaged({ page: 1, size: 20, category: '1400935' })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body))).toEqual({ page: 1, limit: 20, categoryIds: '1400935' })
+
+    await siteApi.sitePaged({ page: 1, size: 20 })
+    const [, noCategory] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(JSON.parse(String(noCategory.body))).not.toHaveProperty('categoryIds')
+  })
+
   it('siteSummary 用 GET 获取真实顶部统计，并映射 errorCnt', async () => {
     fetchMock.mockResolvedValue(jsonResponse({
       code: '0', data: { total: 3, sourceTotal: 12536, notifyCount: 2, errorCnt: 2731 },
@@ -222,7 +236,7 @@ describe('网站读取 HTTP 契约', () => {
     const result = await siteApi.siteSources('11')
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toContain('/api/v1/site/sources?siteId=11&page=1&limit=1000')
+    expect(url).toContain('/api/v1/site/sources?siteId=11&page=1&limit=10000')
     expect(init.method).toBe('GET')
     expect(result).toEqual([expect.objectContaining({
       sourceId: '101', name: '财经源', url: 'https://example.com', siteId: '11', dataCount: 12, alarm: true, disabled: false,

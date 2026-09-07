@@ -10,7 +10,7 @@
 // 这行注释此前写的是「配置中心/流程模板不再作为用户概念」，0903 会上推翻了后半句。
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { flowCenterApi, sourceApi, type FlowRecord } from '@/api'
+import { flowCenterApi, sourceApi, type FlowRecord, type SourceCategory } from '@/api'
 import { Delete, Edit, Link, Star, StarFilled } from '@element-plus/icons-vue'
 import { useUiStore } from '@/stores/ui'
 import { useLaunchJobStore } from '@/stores/launchJob'
@@ -35,24 +35,70 @@ const scope = ref<'all' | 'template' | 'normal'>('all')
 // 当前这一页，跨页结果是错的（本文件上方那段口径）。
 // ⚠️ 标签的**请求参数名是 `tags`，不是 `flowTags`**：出参字段叫 flowTags，但入参用它会被
 // 静默忽略（2026-09-05 实测：乱填标签仍返回全部 740 条；换成 tags 才真的筛）。适配层已处理。
-const filterCategoryId = ref('')
+const filterCategoryIds = ref<string[]>([])
 const filterTag = ref('')
-/** 目录候选：与源共用同一套 `category/categoryPaged`（根目录，子级按需展开这里不做） */
-const categories = ref<{ id: string; name: string }[]>([])
-const categoryNameById = computed(() => new Map(categories.value.map((c) => [c.id, c.name])))
+/** 目录候选：与源共用同一套 `category/categoryPaged`。树形（根 + 预取一层子级，更深层级
+ *  在筛选树里懒加载）——此前只取根节点平铺，下拉里看不到子级目录。 */
+const categories = ref<SourceCategory[]>([])
+/** 树 → id→name 映射（表格分类徽标用，任意层级都可解析名字） */
+const categoryNameById = computed(() => {
+  const map = new Map<string, string>()
+  const walk = (nodes: SourceCategory[]) => nodes.forEach((n) => {
+    map.set(n.id, n.name)
+    if (n.children?.length) walk(n.children)
+  })
+  walk(categories.value)
+  return map
+})
 function categoryName(id?: string) {
   if (!id) return ''
   return categoryNameById.value.get(id) || `目录 ${id}`
 }
+/** 树 → 扁平单选候选（新建表单 / 详情抽屉的编辑下拉；标签带父级路径「父 / 子」） */
+const categoryOptions = computed(() => {
+  const out: { id: string; name: string }[] = []
+  const walk = (nodes: SourceCategory[], prefix: string) => nodes.forEach((n) => {
+    const label = prefix ? `${prefix} / ${n.name}` : n.name
+    out.push({ id: n.id, name: label })
+    if (n.children?.length) walk(n.children, label)
+  })
+  walk(categories.value, '')
+  return out
+})
 /** `flowTags` 是逗号串；空值、纯空白项都要滤掉，否则会渲染出空芯片 */
 function tagsOf(t: FlowRecord): string[] {
   return (t.flowTags || '').split(',').map((x) => x.trim()).filter(Boolean)
 }
 async function loadCategories() {
   try {
-    categories.value = (await sourceApi.sourceCategories()).map((c) => ({ id: String(c.id), name: c.name }))
+    // 旧分类接口首屏只返回根节点（categoryPaged 实测行为，采集资产页同款修法）：
+    // 再按 parentId 并行补一层子级，筛选树首屏两级立即可见；更深层级展开时懒加载。
+    const roots = await sourceApi.sourceCategories()
+    await Promise.all(roots.map(async (root) => {
+      root.children = await sourceApi.sourceCategories(root.id)
+    }))
+    categories.value = roots
   } catch {
     // 目录取不到不影响列表：分类列退化成「目录 <id>」，筛选下拉只剩「全部分类」
+  }
+}
+// 筛选树懒加载：与采集资产 FilterToolbar / MoreSourcesDialog 同一加载口径。
+async function loadCategoryChildren(
+  node: { level: number; data: SourceCategory },
+  resolve: (nodes: SourceCategory[]) => void,
+) {
+  if (node.level === 0) {
+    resolve(categories.value)
+    return
+  }
+  if (node.data.children?.length) {
+    resolve(node.data.children)
+    return
+  }
+  try {
+    resolve(await sourceApi.sourceCategories(node.data.id))
+  } catch {
+    resolve([])
   }
 }
 const activeId = ref('')
@@ -79,6 +125,14 @@ async function load() {
   loading.value = true
   loadError.value = ''
   try {
+    // 分类多选（≥2 个）走前端合并：flowPaged 的 categoryId 是**单值 Integer 精确匹配**
+    // （flow_api.md 实测归档；旧平台流程列表自己也是树多选、筛选只取第一个分类），
+    // 后端没有多分类过滤契约。流程量小（列表不含 flowConf 大字段，~740 条），
+    // 拉全量后本地筛 + 本地排序 + 本地分页。单选/不选仍走服务端单值契约，零损耗。
+    if (filterCategoryIds.value.length >= 2) {
+      await loadWithMultiCategory(reqId)
+      return
+    }
     const result = await flowCenterApi.paged({
       page: page.value,
       size: size.value,
@@ -86,7 +140,7 @@ async function load() {
       field: sortBy.value === 'sourceCnt' ? 'sourceCnt' : 'updateDt',
       order: 'desc',
       onlyTemplate: scope.value === 'all' ? undefined : scope.value === 'template',
-      categoryId: filterCategoryId.value || undefined,
+      categoryId: filterCategoryIds.value[0] || undefined,
       tag: filterTag.value.trim() || undefined,
     })
     if (loadSeq !== reqId) return
@@ -100,17 +154,61 @@ async function load() {
   } catch (e) {
     loadError.value = `流程列表加载失败：${(e as Error)?.message ?? String(e)}`
   } finally {
-    loading.value = false
+    if (loadSeq === reqId) loading.value = false
   }
+}
+
+/**
+ * 多分类筛选的本地合并路径。其余条件（关键字 / 范围 / 标签 / 排序字段）照旧走服务端——
+ * 逐页拉全量后按分类集合本地过滤，再本地排序分页。关键点：
+ * - 分类之间互斥（一条流程只挂一个 categoryId），过滤后总数 = 命中行数，分页口径不失真；
+ * - 排序字段与服务端同款：updateDt（字符串时间）或 sourceCnt，均为倒序；
+ * - MAX_PAGES 上限防 total 与实际返回不一致时死循环。
+ */
+const MULTI_FETCH_SIZE = 100
+const MULTI_MAX_PAGES = 100
+async function loadWithMultiCategory(reqId: number) {
+  const idSet = new Set(filterCategoryIds.value)
+  const all: FlowRecord[] = []
+  for (let p = 1; p <= MULTI_MAX_PAGES; p++) {
+    const result = await flowCenterApi.paged({
+      page: p,
+      size: MULTI_FETCH_SIZE,
+      keywords: query.value.trim() || undefined,
+      field: sortBy.value === 'sourceCnt' ? 'sourceCnt' : 'updateDt',
+      order: 'desc',
+      onlyTemplate: scope.value === 'all' ? undefined : scope.value === 'template',
+      tag: filterTag.value.trim() || undefined,
+    })
+    if (loadSeq !== reqId) return
+    all.push(...result.list)
+    if (all.length >= result.total || !result.list.length) break
+  }
+  const filtered = all.filter((f) => idSet.has(String(f.categoryId ?? '')))
+  if (sortBy.value === 'sourceCnt') {
+    filtered.sort((a, b) => (b.sourceCnt ?? 0) - (a.sourceCnt ?? 0))
+  } else {
+    filtered.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+  }
+  total.value = filtered.length
+  const maxPage = Math.max(1, Math.ceil(filtered.length / size.value))
+  if (page.value > maxPage) page.value = maxPage
+  const start = (page.value - 1) * size.value
+  flows.value = filtered.slice(start, start + size.value)
 }
 /** 搜索/换页大小都要回到第 1 页，否则会停在一个新结果集里不存在的页码上 */
 function search() {
   page.value = 1
   void load()
 }
+/** 分类树勾选/清空回传（多选，id 数组；空数组 = 全部） */
+function onFilterCategoryChange(value: unknown) {
+  filterCategoryIds.value = Array.isArray(value) ? value.map((v) => String(v)) : []
+  search()
+}
 /** 清空：条件、排序、页码一起回到初始态，再查一次（与文件中心「清空」同义） */
 function resetQuery() {
-  filterCategoryId.value = ''
+  filterCategoryIds.value = []
   filterTag.value = ''
   query.value = ''
   sortBy.value = 'recent'
@@ -420,10 +518,28 @@ async function confirmApply() {
       </select>
       <!-- 没有「刷新」按钮：它与「查询」是同一个请求，而且新建 / 保存 / 删除 / 关联之后
            列表都会自动重查（见 replaceFlow / removeFlow / confirmApply），不需要人工手动刷。 -->
-      <select v-model="filterCategoryId" class="fc-input" aria-label="分类" data-testid="flow-center-category" @change="search">
-        <option value="">全部分类</option>
-        <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
-      </select>
+      <!-- 分类树多选：复选框用 Element Plus 标准样式（与全站一致）；check-strictly 父子独立
+           勾选——子级懒加载下级联勾选会漏掉未加载的孙级。单选/清空走服务端 categoryId 单值
+           契约，多选（≥2）由 load() 转前端拉全量本地筛。 -->
+      <el-tree-select
+        :model-value="filterCategoryIds"
+        placeholder="全部分类"
+        class="fc-category"
+        popper-class="fc-category-popper"
+        clearable
+        multiple
+        collapse-tags
+        collapse-tags-tooltip
+        :max-collapse-tags="1"
+        check-strictly
+        :data="categories"
+        :props="{ label: 'name', children: 'children' }"
+        node-key="id"
+        lazy
+        :load="loadCategoryChildren"
+        data-testid="flow-center-category"
+        @update:model-value="onFilterCategoryChange"
+      />
       <input
         v-model="filterTag"
         class="fc-input"
@@ -580,7 +696,7 @@ async function confirmApply() {
     <FlowSourcesDialog :flow="sourcesFlow" @close="sourcesFlow = null" />
 
     <FlowDetailDrawer
-      :categories="categories"
+      :categories="categoryOptions"
       :flow="activeFlow"
       @close="closeFlow"
       @saved="replaceFlow"
@@ -599,7 +715,7 @@ async function confirmApply() {
           <span>分类</span>
           <select v-model="createForm.categoryId" class="fc-input" data-testid="create-flow-category">
             <option value="">不设置</option>
-            <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+            <option v-for="c in categoryOptions" :key="c.id" :value="c.id">{{ c.name }}</option>
           </select>
         </label>
         <label class="fc-form-row">
@@ -663,6 +779,16 @@ async function confirmApply() {
 .fc-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
 .fc-input { height: 28px; min-width: 112px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; outline: none; }
 .fc-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
+/* 分类树多选下拉：视觉对齐 fc-input（28px 高、同边框圆角、12px 字号、focus 同款蓝边+光晕，
+   见上方 777 行注释的统一数值组）。⚠️ EP 2.5+ 的 select 结构是 .el-select__wrapper，
+   不是 .el-input__wrapper——写错选择器覆盖会整段静默失效。复选框保持 Element Plus 标准样式。 */
+.fc-category { width: 150px; flex: 0 0 150px; }
+.fc-category :deep(.el-select__wrapper) { min-height: 28px; padding: 0 8px; border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; box-shadow: 0 0 0 1px var(--rc-border) inset; }
+.fc-category :deep(.el-select__wrapper:hover) { box-shadow: 0 0 0 1px #bfdbfe inset; }
+.fc-category :deep(.el-select__wrapper.is-focused) { box-shadow: 0 0 0 1px #60a5fa inset, 0 0 0 3px #dbeafe; }
+.fc-category :deep(.el-select__placeholder) { color: var(--rc-faint); font-size: 12px; }
+.fc-category :deep(.el-select__caret) { color: var(--rc-muted); font-size: 12px; }
+.fc-category :deep(.el-tag) { height: 18px; padding: 0 5px; font-size: 11px; }
 .fc-input-wide { flex: 0 1 300px; }
 .fc-toolbar .rc-btn { height: 28px; padding: 0 10px; font-size: 12px; }
 .fc-metrics { margin-left: auto; display: flex; gap: 14px; color: var(--rc-muted); font-size: 12px; }
@@ -692,4 +818,12 @@ async function confirmApply() {
 .fc-dialog-btn.primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }
 .fc-dialog-btn:disabled { opacity: .55; cursor: not-allowed; }
 .fc-empty { padding: 44px; text-align: center; color: var(--rc-faint); }
+</style>
+
+<style>
+/* 分类树下拉面板 teleport 到 body，无法 scoped；输入框 150px 放不下多级缩进，
+   面板单独放宽（13.6 寸基准，不覆盖页面）。树节点字号对齐工具栏的 12px，
+   复选框保持 Element Plus 标准样式（与全站一致）。 */
+.fc-category-popper { min-width: 248px; }
+.fc-category-popper .el-tree-node__label { font-size: 12px; }
 </style>
