@@ -608,10 +608,14 @@ const detailVisibleProps = computed(() => visibleDetailProps(fieldPreset.value, 
 // 单元格里的文件预览（0819 N2-7）：路径类字段点开就地看内容，不用先跳到文件视图再找。
 // 用居中 dialog 而不是右侧抽屉——这是"看一眼就关"的操作型短流程，抽屉留给实体详情
 // （项目弹层规范）。预览器与文件详情共用一个组件，取数、降级、下载全在里面。
-const filePreview = reactive({ visible: false, path: '', name: '' })
+const filePreview = reactive({ visible: false, path: '', name: '', url: '' })
 function onCellFile(path: string) {
   filePreview.path = path
   filePreview.name = path.split('/').pop() || ''
+  // 采集页 content.html 的相对资源要回源站取——把行里的原始 URL 带给预览器做 <base>
+  filePreview.url = detailFields.value.find((f) => f.prop === 'url')?.href
+    || detailFields.value.find((f) => f.href)?.href
+    || ''
   filePreview.visible = true
 }
 </script>
@@ -859,6 +863,7 @@ function onCellFile(path: string) {
         :path="filePreview.path"
         :name="filePreview.name"
         :ext="extFromName(filePreview.name)"
+        :external-url="filePreview.url"
         style="height: min(72vh, 720px)"
         data-testid="site-data-cell-file-preview"
       />
