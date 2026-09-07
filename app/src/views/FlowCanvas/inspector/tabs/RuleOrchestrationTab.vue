@@ -14,13 +14,14 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
 import { isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
+import { configApi, entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { isVruleNumericRuleId } from '@/api/legacyAdapters'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
 import { buildDataProcessGeneratePayload } from '@/utils/flow/dataProcess'
 import { promptCategoryGroupsForNode, promptListCategoryForNode, resolvePromptCategoryForNode } from '../promptCategory'
+import { loadPromptTemplateForNode } from '../promptTemplateLoader'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 
@@ -78,6 +79,50 @@ const sourceTableName = computed(() => resolveTableLabel(
   || orchCfg.value.inputTable?.trim()
   || '',
 ))
+
+function readRawTextField(value: unknown, keys: string[]): string {
+  const readObject = (record: Record<string, unknown>): string => {
+    for (const key of keys) {
+      const raw = record[key]
+      if (raw == null) continue
+      const text = String(raw).trim()
+      if (text) return text
+    }
+    return ''
+  }
+  if (value == null) return ''
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (!text) return ''
+    if (/^[{\[]/.test(text)) {
+      try {
+        const parsed = JSON.parse(text)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return readObject(parsed as Record<string, unknown>) || text
+        }
+      } catch {
+        // 不是 JSON 就按原文本看
+      }
+    }
+    return text
+  }
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    return readObject(value as Record<string, unknown>)
+  }
+  return ''
+}
+
+function resolveConfigDetailPrefill(raw: Record<string, unknown>): { describe: string; scriptPath: string; script: string } {
+  const describe = readRawTextField(raw.snatchConf, ['description', 'describe', 'nlDescribe'])
+  const codeRuleValue = raw.codeRule
+  const codeRuleText = readRawTextField(codeRuleValue, ['scriptPath', 'codePath', 'codeFileName', 'path'])
+  const scriptText = (codeRuleValue && typeof codeRuleValue === 'object' && !Array.isArray(codeRuleValue))
+    ? readRawTextField(codeRuleValue, ['script', 'scriptCode', 'code', 'body', 'content'])
+    : ''
+  const codeRuleRaw = String(codeRuleValue ?? '').trim()
+  const scriptPath = codeRuleText || (/^[^\n]+\.[a-z0-9]+$/i.test(codeRuleRaw) ? codeRuleRaw : '')
+  return { describe, scriptPath, script: scriptText }
+}
 
 watch(id, () => {
   describeTouched.value = false
@@ -187,6 +232,91 @@ watch(
   { immediate: true },
 )
 
+const promptPrefillDone = ref(false)
+watch(
+  () => [id.value, isRule.value, isMonitor.value] as const,
+  () => {
+    promptPrefillDone.value = false
+  },
+  { immediate: true },
+)
+
+const configDetailPrefillToken = ref('')
+watch(
+  () => [id.value, isRule.value, cfg.value?.configId] as const,
+  () => {
+    configDetailPrefillToken.value = ''
+  },
+  { immediate: true },
+)
+watch(
+  () => [id.value, isRule.value, cfg.value?.configId] as const,
+  () => {
+    if (!isRule.value) return
+    const configId = cfg.value?.configId?.trim()
+    if (!configId) return
+    const token = `${id.value}:${configId}`
+    if (configDetailPrefillToken.value === token) return
+    void (async () => {
+      try {
+        const raw = await configApi.configDetailRaw(configId)
+        if (configDetailPrefillToken.value === token) return
+        const prefill = raw ? resolveConfigDetailPrefill(raw) : { describe: '', scriptPath: '', script: '' }
+        const next: Partial<RuleOrchestration> = {}
+        if (prefill.describe) next.describe = prefill.describe
+        if (prefill.scriptPath) next.scriptPath = prefill.scriptPath
+        if (prefill.script) next.script = prefill.script
+        if (Object.keys(next).length) patch(next)
+        if (prefill.scriptPath && !prefill.script) {
+          const loadedScript = await ruleApi.fileDownloadScript(prefill.scriptPath).catch(() => '')
+          if (loadedScript.trim()) patch({ script: loadedScript })
+        }
+        configDetailPrefillToken.value = token
+      } catch {
+        // 详情回填失败不阻断编排页，其它回填逻辑仍可继续。
+      }
+    })()
+  },
+  { immediate: true },
+)
+watch(
+  () => [
+    id.value,
+    isRule.value,
+    isMonitor.value,
+    sourceTableName.value,
+    promptCategory.value,
+    promptListCategory.value,
+    orchCfg.value.inputFields?.join(',') ?? '',
+    orchCfg.value.outputFields?.join(',') ?? '',
+  ] as const,
+  () => {
+    if (!isRule.value && !isMonitor.value) return
+    if (promptPrefillDone.value) return
+    if (!sourceTableName.value) return
+    if (!orchCfg.value.inputFields?.length) return
+    if (isRule.value && !orchCfg.value.outputFields?.length) return
+    void (async () => {
+      const applied = await loadPromptTemplateForNode({
+        promptListCategory: promptListCategory.value,
+        promptCategory: promptCategory.value,
+        inputTableName: sourceTableName.value,
+        outputTableName: orchCfg.value.outputTable?.trim() || sourceTableName.value,
+        sourceId: isMonitor.value ? (cfg.value?.stepSourceId ?? '') : '',
+        sourceCron: isMonitor.value ? (cfg.value?.schedule?.cron ?? '') : '',
+        inputFields: orchCfg.value.inputFields ?? [],
+        outputFields: orchCfg.value.outputFields ?? [],
+        inputFieldOptions: inputFieldOptions.value,
+        outputFieldOptions: outputFieldOptions.value.length ? outputFieldOptions.value : inputFieldOptions.value,
+      })
+      if (!applied) return
+      if (applied !== orchCfg.value.systemPrompt) patch({ systemPrompt: applied })
+      promptPrefillDone.value = true
+    })()
+  },
+  { immediate: true },
+)
+
 // 进入查看态时按 ruleId 回灌详情 + 缺正文时按 scriptPath 拉 MinIO（对齐旧 handleOpenRecord）
 const hydrateToken = ref('')
 const hydrating = ref(false)
@@ -216,7 +346,7 @@ async function hydrateViewFromServer() {
     const path = (stored?.scriptPath || orchCfg.value.scriptPath || '').trim()
     if (path && !stored?.script?.trim()) {
       try {
-        const script = await ruleApi.orchestrationLoadScript(path)
+        const script = await ruleApi.fileDownloadScript(path)
         if (script.trim()) patch({ script })
       } catch (e) {
         ElMessage.warning(`加载失败：${(e as Error)?.message ?? String(e)}`)
@@ -269,6 +399,13 @@ const generationMessage = ref('')
 const generationState = ref<'idle' | 'thinking' | 'content' | 'done' | 'error'>('idle')
 const mainThinkingRef = ref<HTMLElement | null>(null)
 const mainResultRef = ref<HTMLElement | null>(null)
+function formatResultLabel(value: string): string {
+  const text = value.trim()
+  if (!text) return ''
+  return text.replace(/^#?\s*(?:当前文件已保存到|保存到)\s*/, '')
+}
+const mainResultLabel = computed(() => formatResultLabel(orchCfg.value.scriptPath?.trim() || generationMessage.value))
+const loadingResultScript = ref(false)
 async function scrollMainThinkingToBottom() {
   await nextTick()
   const el = mainThinkingRef.value
@@ -280,6 +417,20 @@ async function scrollMainResultToBottom() {
   const el = mainResultRef.value
   if (!el) return
   el.scrollTop = el.scrollHeight
+}
+async function loadResultScriptFromFile() {
+  const fileId = orchCfg.value.scriptPath?.trim() || mainResultLabel.value
+  if (!fileId || loadingResultScript.value) return
+  loadingResultScript.value = true
+  try {
+    const script = await ruleApi.fileDownloadScript(fileId)
+    if (script.trim()) patch({ script })
+    ElMessage.success('脚本已回填')
+  } catch (e) {
+    ElMessage.error((e as Error)?.message ?? String(e))
+  } finally {
+    loadingResultScript.value = false
+  }
 }
 watch(
   () => [thinkingText.value, generating.value, generationState.value] as const,
@@ -637,7 +788,15 @@ function goToDataView() {
   <div v-if="isRule && (orchCfg.script?.trim() || generationState === 'content' || generationState === 'done')" class="rc-main-result" data-testid="main-stream-result">
     <div class="rc-main-result-head">
       <span>生成结果</span>
-      <span v-if="generationMessage">{{ generationMessage }}</span>
+      <button
+        v-if="mainResultLabel"
+        class="rc-main-result-link"
+        type="button"
+        :disabled="loadingResultScript"
+        @click="loadResultScriptFromFile"
+      >
+        {{ mainResultLabel }}
+      </button>
     </div>
     <pre ref="mainResultRef" class="rc-main-result-code">{{ orchCfg.script?.trim() || '等待模型输出结果…' }}</pre>
   </div>
@@ -733,6 +892,8 @@ function goToDataView() {
 .rc-switch-load-error span { min-width: 0; }
 .rc-switch-load-error button { flex: none; padding: 0; border: 0; background: transparent; color: var(--rc-primary); font-size: 10px; cursor: pointer; }
 .rc-switch-load-error button:hover { text-decoration: underline; }
+.rc-main-result-link { margin: 0; padding: 0; border: 0; background: transparent; color: #047857; font-size: 11px; font-weight: 700; cursor: pointer; text-align: right; }
+.rc-main-result-link:disabled { opacity: 0.6; cursor: not-allowed; }
 .rc-model-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: -2px 0 12px; min-width: 0; }
 .rc-model-row.nowrap { flex-wrap: nowrap; }
 .rc-model-fields { display: inline-flex; align-items: center; flex: 1 1 auto; flex-wrap: nowrap; gap: 10px; min-width: 0; overflow: hidden; }

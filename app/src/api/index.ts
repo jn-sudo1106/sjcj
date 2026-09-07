@@ -1287,6 +1287,21 @@ export const ruleApi = {
       throw e instanceof ApiError ? e : new ApiError(endpoint, e)
     }
   },
+  // 下载脚本正文：GET /api/file/download?fileId=（响应纯文本/原文）
+  fileDownloadScript: async (fileId: string) => {
+    const endpoint = 'file/download'
+    const path = fileId.trim()
+    if (!path) throw new Error('文件路径为空')
+    if (usesMockAdapter(endpoint)) {
+      const result = await request<unknown>(endpoint, { fileId: path }, { mode: 'mock' })
+      return String(result ?? '')
+    }
+    try {
+      return await fetchVruleText(`/api/file/download?fileId=${encodeURIComponent(path)}`, { method: 'GET' })
+    } catch (e) {
+      throw e instanceof ApiError ? e : new ApiError(endpoint, e)
+    }
+  },
   // 路径 A：保存业务规则元数据换 ruleId。
   // mock 收 { cfg, userCode }；live → POST /vrule/api/custom-compose/save。
   // 旧页保存成功不读响应体、只刷列表；响应无 id 时再 GET list/compose 按名称回查。

@@ -53,18 +53,15 @@ describe('ConfigTab · 规则节点', () => {
     expect(flow.configs['rule-1'].title).toBe('')
   })
 
-  it('适用源回填并写入步骤字段，不写进 ruleCfg.ruleId', async () => {
+  it('规则节点隐藏适用源字段，未设置时默认写入 -1', async () => {
     mockAssets()
     const { flow, wrapper } = mountOnRuleNode()
     flow.configs['rule-1'].itemId = '-1'
-    flow.configs['rule-1'].stepSourceId = '430022404'
+    flow.configs['rule-1'].stepSourceId = undefined
     await flushPromises()
 
-    const sourceInput = wrapper.find('input[aria-label="适用源"]')
-    expect((sourceInput.element as HTMLInputElement).value).toBe('430022404')
-    expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBeFalsy()
-
-    await sourceInput.setValue('-1')
+    expect(wrapper.find('input[aria-label="适用源"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('适用源')
     expect(flow.configs['rule-1'].stepSourceId).toBe('-1')
     expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBeFalsy()
   })

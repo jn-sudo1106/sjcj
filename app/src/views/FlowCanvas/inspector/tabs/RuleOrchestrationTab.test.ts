@@ -10,7 +10,7 @@ import ElementPlus, { ElMessageBox } from 'element-plus'
 import NodeInspector from '../NodeInspector.vue'
 import { useFlowStore } from '@/stores/flow'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, paramApi, ruleApi } from '@/api'
+import { configApi, entryApi, paramApi, ruleApi } from '@/api'
 import type { EntryType } from '@/api'
 
 // 0901：测试脚本入口改为切到流程视图右侧「数据视图」tab（view=data），用 mock router 断言跳转目标
@@ -135,6 +135,13 @@ function mountOnMonitorNode() {
   return { flow, wrapper }
 }
 
+async function openWorkbench(wrapper: ReturnType<typeof mountOnRuleNode>['wrapper']) {
+  const scriptBtn = wrapper.findAll('button').find((b) => b.text() === '脚本编辑')
+  if (!scriptBtn) throw new Error('脚本编辑按钮不存在')
+  await scriptBtn.trigger('click')
+  await flushPromises()
+}
+
 // 0801 方案 §6.4：有 ruleId 后展开的「查看业务编排」——描述/生成脚本/全屏查看/编辑系统提示词/保存脚本
 // （0804 起这就是本 Tab 的全部内容，不再有 showBinder 两态切换）
 describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
@@ -213,6 +220,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
 
     expect(ruleApi.dataProcessGenerate).toHaveBeenCalled()
     expect(wrapper.find('[data-testid="main-stream-thinking"]').text()).toContain('先分析规则描述')
+    expect(wrapper.find('.rc-main-result-head').text()).toContain('/rules/generated/orch-173.py')
     expect(wrapper.find('[data-testid="main-stream-result"]').text()).toContain('def main(sku_id)')
     expect(wrapper.find('[data-testid="main-stream-result"]').text()).toContain('return {"sku_name": sku_id}')
   })
@@ -482,9 +490,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     const { wrapper } = mountWithExistingRule()
     await flushPromises()
 
-    const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
-    await editBtn.trigger('click')
-    await flushPromises()
+    await openWorkbench(wrapper)
 
     // 默认展示描述（只读），系统提示词编辑区隐藏
     const describeTextarea = wrapper.find('textarea.wb-describe')
@@ -512,9 +518,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     const { flow, wrapper } = mountWithExistingRule()
     await flushPromises()
 
-    const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
-    await editBtn.trigger('click')
-    await flushPromises()
+    await openWorkbench(wrapper)
 
     // 规则节点工作区默认展示描述（只读），需点「系统提示词」按钮切换到提示词编辑区
     const toggleBtn = wrapper.findAll('button').find((b) => b.text() === '系统提示词')!
@@ -539,9 +543,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     const { flow, wrapper } = mountWithExistingRule()
     await flushPromises()
 
-    const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
-    await editBtn.trigger('click')
-    await flushPromises()
+    await openWorkbench(wrapper)
 
     // 规则节点工作区默认展示描述（只读），需点「系统提示词」按钮切换到提示词编辑区
     const toggleBtn = wrapper.findAll('button').find((b) => b.text() === '系统提示词')!
@@ -562,13 +564,21 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toContain('入参=商品ID:sku_id')
   })
 
+  it('进入编排配置页时自动拼接系统提示词并写回配置', async () => {
+    const { flow } = mountWithExistingRule()
+    await flushPromises()
+
+    expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toContain('源表=JD-商品基础:sense_data.TB_JD_SKU_BASE')
+    expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toContain('目标表=sense_data.TB_JD_SKU_RESULT')
+    expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toContain('入参=商品ID:sku_id')
+    expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toContain('出参=商品名称:sku_name')
+  })
+
   it('工作区加载模型供应商与模型，并在工作区里不再显示测试按钮', async () => {
     const { wrapper } = mountWithExistingRule()
     await flushPromises()
 
-    const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
-    await editBtn.trigger('click')
-    await flushPromises()
+    await openWorkbench(wrapper)
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       'http://localhost:8080/api/model/providers',
@@ -603,9 +613,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     const { flow, wrapper } = mountWithExistingRule()
     await flushPromises()
 
-    const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
-    await editBtn.trigger('click')
-    await flushPromises()
+    await openWorkbench(wrapper)
 
     // 规则节点工作区默认展示描述（只读），需点「系统提示词」按钮切换到提示词编辑区
     const toggleBtn = wrapper.findAll('button').find((b) => b.text() === '系统提示词')!
@@ -637,9 +645,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     const { wrapper } = mountWithExistingRule()
     await flushPromises()
 
-    const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
-    await editBtn.trigger('click')
-    await flushPromises()
+    await openWorkbench(wrapper)
 
     // 规则节点工作区默认展示描述（只读），需点「系统提示词」按钮切换到提示词编辑区
     const toggleBtn = wrapper.findAll('button').find((b) => b.text() === '系统提示词')!
@@ -695,9 +701,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     })
 
     await wrapper.find('textarea[placeholder*="描述规则处理逻辑"]').setValue('按 sku_id 生成 sku_name')
-    const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
-    await editBtn.trigger('click')
-    await flushPromises()
+    await openWorkbench(wrapper)
 
     const genBtn = wrapper.findAll('.wb-pane-right .wb-pane-actions button').find((b) => b.text().includes('生成'))!
     await genBtn.trigger('click')
@@ -733,17 +737,15 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     })
 
     try {
-      vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
-        options?.onThinking?.('第一段思考')
-        await flushPromises()
-        options?.onThinking?.('第二段思考')
-        return { script: 'def main(date, zb_value):\n    return {"end_date": "2025-01-01"}', scriptPath: '/rules/generated/orch-173.py' }
-      })
-
-      await wrapper.find('textarea[placeholder*="描述规则处理逻辑"]').setValue('按 sku_id 生成 sku_name')
-      const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
-      await editBtn.trigger('click')
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
+      options?.onThinking?.('第一段思考')
       await flushPromises()
+      options?.onThinking?.('第二段思考')
+      return { script: 'def main(date, zb_value):\n    return {"end_date": "2025-01-01"}', scriptPath: '/rules/generated/orch-173.py' }
+    })
+
+    await wrapper.find('textarea[placeholder*="描述规则处理逻辑"]').setValue('按 sku_id 生成 sku_name')
+    await openWorkbench(wrapper)
 
       const genBtn = wrapper.findAll('.wb-pane-right .wb-pane-actions button').find((b) => b.text().includes('生成'))!
       await genBtn.trigger('click')
@@ -764,9 +766,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     flow.patchSchedule('monitor-1', { cron: '0 0 12 * * *' })
     await flushPromises()
 
-    const editBtn = wrapper.findAll('button').find((b) => b.text() === '编辑系统提示词')!
-    await editBtn.trigger('click')
-    await flushPromises()
+    await openWorkbench(wrapper)
 
     // 数据监控节点工作区默认展示描述（只读），需点「系统提示词」按钮切换到提示词编辑区
     const toggleBtn = wrapper.findAll('button').find((b) => b.text() === '系统提示词')!
@@ -824,7 +824,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
       systemPrompt: '服务端提示词',
       scriptPath: '/code01/a.py',
     })
-    vi.spyOn(ruleApi, 'orchestrationLoadScript').mockResolvedValue('def main():\n    return {}')
+    vi.spyOn(ruleApi, 'fileDownloadScript').mockResolvedValue('def main():\n    return {}')
     const { flow, wrapper } = mountOnRuleNode()
     flow.patchRuleConfig('rule-1', {
       mode: 'ref', ruleId: '173', name: '已有规则',
@@ -835,10 +835,117 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     await flushPromises()
 
     expect(ruleApi.orchestrationDetail).toHaveBeenCalledWith('173')
-    expect(ruleApi.orchestrationLoadScript).toHaveBeenCalledWith('/code01/a.py')
+    expect(ruleApi.fileDownloadScript).toHaveBeenCalledWith('/code01/a.py')
+    expect(ruleApi.orchestrationLoadScript).not.toHaveBeenCalled()
     expect(flow.configs['rule-1'].ruleCfg?.describe).toBe('服务端描述')
     expect(flow.configs['rule-1'].ruleCfg?.script).toContain('def main')
     expect(wrapper.text()).toContain('查看业务编排')
+  })
+
+  it('进入编排配置时会从 configDetailRaw 回填描述、路径和脚本正文', async () => {
+    mockAssets()
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({
+      snatchConf: { description: '我想对通用新闻表进行如下监控：\n1.当日数据是否正常入库\n2.数据延迟监控' },
+      codeRule: {
+        scriptPath: '/code01/202609/1788333914232.py',
+        content: 'def main():\n    return {"ok": True}\n',
+      },
+    } as never)
+    vi.spyOn(ruleApi, 'orchestrationLoadScript').mockResolvedValue('')
+
+    const { flow, wrapper } = mountOnRuleNode()
+    flow.patchRuleConfig('rule-1', {
+      mode: 'ref',
+      ruleId: '173',
+      name: '已有规则',
+      dataSource: 'dp-wwdata',
+      inputTable: 'sense_data.TB_CNEWS',
+      inputTableId: '2102154',
+      describe: '',
+      script: '',
+      scriptPath: '',
+    })
+    flow.configs['rule-1'].configId = '1400998'
+    await flushPromises()
+    await openWorkbench(wrapper)
+    await flushPromises()
+
+    expect(configApi.configDetailRaw).toHaveBeenCalledWith('1400998')
+    expect(wrapper.find('textarea.wb-describe').element).toHaveProperty(
+      'value',
+      '我想对通用新闻表进行如下监控：\n1.当日数据是否正常入库\n2.数据延迟监控',
+    )
+    expect(wrapper.find('.wb-path').text()).toBe('/code01/202609/1788333914232.py')
+    expect((wrapper.find('textarea.wb-code').element as HTMLTextAreaElement).value).toContain('def main():')
+    expect((wrapper.find('textarea.wb-code').element as HTMLTextAreaElement).value).toContain('"ok": True')
+    expect(wrapper.find('.rc-main-result-head').text()).toContain('/code01/202609/1788333914232.py')
+  })
+
+  it('进入编排配置时若 codeRule 只有路径，会自动下载脚本正文并写回结果框', async () => {
+    mockAssets()
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({
+      snatchConf: { description: '我想对通用新闻表进行如下监控：\n1.当日数据是否正常入库\n2.数据延迟监控' },
+      codeRule: '/code01/202609/1788761803128.py',
+    } as never)
+    vi.spyOn(ruleApi, 'fileDownloadScript').mockResolvedValue('def main():\n    return {"hello": "world"}\n')
+
+    const { flow, wrapper } = mountOnRuleNode()
+    flow.patchRuleConfig('rule-1', {
+      mode: 'ref',
+      ruleId: '173',
+      name: '已有规则',
+      dataSource: 'dp-wwdata',
+      inputTable: 'sense_data.TB_CNEWS',
+      inputTableId: '2102154',
+      describe: '',
+      script: '',
+      scriptPath: '',
+    })
+    flow.configs['rule-1'].configId = '1400998'
+    await flushPromises()
+    await openWorkbench(wrapper)
+    await flushPromises()
+
+    expect(ruleApi.fileDownloadScript).toHaveBeenCalledWith('/code01/202609/1788761803128.py')
+    expect((wrapper.find('textarea.wb-code').element as HTMLTextAreaElement).value).toContain('def main():')
+    expect((wrapper.find('textarea.wb-code').element as HTMLTextAreaElement).value).toContain('"hello": "world"')
+    expect(wrapper.find('.rc-main-result-code').text()).toContain('def main():')
+  })
+
+  it('点击生成结果文件名时会调用文件下载接口并回填脚本正文', async () => {
+    mockAssets()
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({
+      snatchConf: { description: '我想对通用新闻表进行如下监控：\n1.当日数据是否正常入库\n2.数据延迟监控' },
+      codeRule: {
+        scriptPath: '/code01/202609/1788761803128.py',
+        content: 'def main():\n    pass\n',
+      },
+    } as never)
+    vi.spyOn(ruleApi, 'fileDownloadScript').mockResolvedValue('def main():\n    return {"hello": "world"}\n')
+
+    const { flow, wrapper } = mountOnRuleNode()
+    flow.patchRuleConfig('rule-1', {
+      mode: 'ref',
+      ruleId: '173',
+      name: '已有规则',
+      dataSource: 'dp-wwdata',
+      inputTable: 'sense_data.TB_CNEWS',
+      inputTableId: '2102154',
+      describe: '',
+      script: '',
+      scriptPath: '',
+    })
+    flow.configs['rule-1'].configId = '1400998'
+    await flushPromises()
+    await openWorkbench(wrapper)
+    await flushPromises()
+
+    await wrapper.find('.rc-main-result-link').trigger('click')
+    await flushPromises()
+
+    expect(ruleApi.fileDownloadScript).toHaveBeenCalledWith('/code01/202609/1788761803128.py')
+    expect((wrapper.find('textarea.wb-code').element as HTMLTextAreaElement).value).toContain('def main():')
+    expect((wrapper.find('textarea.wb-code').element as HTMLTextAreaElement).value).toContain('"hello": "world"')
   })
 })
 

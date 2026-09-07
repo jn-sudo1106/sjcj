@@ -14,9 +14,8 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fetchDefaultModels, fetchModelProviders, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleFieldOption, type RuleOrchestration } from '@/api'
-import { fetchPromptList } from '@/api/prompt'
 import type { PromptCategoryGroup } from './promptCategory'
-import { applyPromptTemplate } from '@/utils/flow/promptTemplate'
+import { loadPromptTemplateForNode } from './promptTemplateLoader'
 
 const props = defineProps<{
   open: boolean
@@ -135,18 +134,9 @@ async function loadPromptTemplate() {
   promptLoading.value = true
   promptError.value = ''
   try {
-    const list = await fetchPromptList(props.promptListCategory, promptCategoryDraft.value)
-    if (seq !== promptRequestSeq) return
-    const template = list[0]?.systemPrompt?.trim()
-    if (!template) {
-      promptError.value = '提示词模板为空'
-      return
-    }
-    // 拼接后的完整提示词（角色定义+源表/入参+目标表/出参+核心逻辑+输出要求，占位符已替换为当前表/字段）。
-    // 同步写回父组件 orchCfg.systemPrompt：生成脚本（data-process）入参 systemPrompt 取的就是这个完整值，
-    // 确保即使用户没在工作台点「保存」，生成脚本时也能拿到拼接后的完整提示词而非种子默认值或未替换占位符的模板。
-    // 手动编辑的「取消不污染」仍由 savePrompt 显式 emit 保障——此处自动回写不算用户编辑。
-    const applied = applyPromptTemplate(template, {
+    const applied = await loadPromptTemplateForNode({
+      promptListCategory: props.promptListCategory,
+      promptCategory: promptCategoryDraft.value,
       inputTableName: props.inputTableName?.trim() || '',
       outputTableName: props.outputTableName?.trim() || props.inputTableName?.trim() || '',
       sourceId: props.sourceId?.trim() || '',
@@ -156,6 +146,15 @@ async function loadPromptTemplate() {
       inputFieldOptions: props.inputFieldOptions,
       outputFieldOptions: props.outputFieldOptions.length ? props.outputFieldOptions : props.inputFieldOptions,
     })
+    if (seq !== promptRequestSeq) return
+    if (!applied) {
+      promptError.value = '提示词模板为空'
+      return
+    }
+    // 拼接后的完整提示词（角色定义+源表/入参+目标表/出参+核心逻辑+输出要求，占位符已替换为当前表/字段）。
+    // 同步写回父组件 orchCfg.systemPrompt：生成脚本（data-process）入参 systemPrompt 取的就是这个完整值，
+    // 确保即使用户没在工作台点「保存」，生成脚本时也能拿到拼接后的完整提示词而非种子默认值或未替换占位符的模板。
+    // 手动编辑的「取消不污染」仍由 savePrompt 显式 emit 保障——此处自动回写不算用户编辑。
     promptDraft.value = applied
     emit('update:systemPrompt', applied)
   } catch (e) {
