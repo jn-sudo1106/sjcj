@@ -172,6 +172,29 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect(wrapper.text()).toContain('查看业务编排')
   })
 
+  it('脚本编辑按钮显示在查看业务编排标题行右侧', async () => {
+    const { wrapper } = mountWithExistingRule()
+    await flushPromises()
+
+    const titleRow = wrapper.find('.ni-section-title-row')
+    expect(titleRow.exists()).toBe(true)
+    expect(titleRow.text()).toContain('查看业务编排')
+    expect(titleRow.find('button').text()).toBe('脚本编辑')
+    expect(wrapper.find('.rc-actions-row button').exists()).toBe(false)
+  })
+
+  it('生成脚本按钮显示在模型下拉行右侧', async () => {
+    const { wrapper } = mountWithExistingRule()
+    await flushPromises()
+
+    const modelRow = wrapper.find('.rc-model-row')
+    expect(modelRow.exists()).toBe(true)
+    expect(modelRow.find('[data-testid="main-model-provider"]').exists()).toBe(true)
+    expect(modelRow.find('[data-testid="main-model"]').exists()).toBe(true)
+    expect(modelRow.find('[data-testid="main-generate-script"]').text()).toBe('生成脚本')
+    expect(modelRow.classes()).toContain('nowrap')
+  })
+
   it('未填描述就点生成脚本：不调用接口', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     // makeDefaultRuleOrchestration 默认带一条演示 describe，这里显式清空以测试校验守卫

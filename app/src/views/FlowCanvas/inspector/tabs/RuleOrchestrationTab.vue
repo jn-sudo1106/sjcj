@@ -534,7 +534,13 @@ function goToDataView() {
 </script>
 
 <template>
-  <div class="ni-section-title">{{ isRule ? '查看业务编排' : '抓取配置' }}</div>
+  <div class="ni-section-title ni-section-title-row">
+    <span>{{ isRule ? '查看业务编排' : '抓取配置' }}</span>
+    <span class="ni-section-actions">
+      <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
+      <button v-if="generating" class="rc-btn" type="button" @click="onCancelGenerate">取消</button>
+    </span>
+  </div>
   <div class="rc-field">
     <textarea
       class="rc-input rc-textarea"
@@ -542,6 +548,50 @@ function goToDataView() {
       :placeholder="describePlaceholder"
       @input="onDescribeChange"
     />
+  </div>
+  <div v-if="isRule" class="rc-model-row nowrap">
+    <span class="rc-model-fields">
+      <label class="rc-inline-field">
+        <span>模型供应商</span>
+        <el-select
+          :model-value="orchCfg.modelProviderCode ?? ''"
+          class="rc-inline-select"
+          size="small"
+          :loading="providerLoading"
+          :teleported="false"
+          placeholder="模型供应商"
+          data-testid="main-model-provider"
+          @change="onModelProviderChange"
+        >
+          <el-option v-for="item in providerOptions" :key="item.providerCode" :label="item.providerName" :value="item.providerCode" />
+        </el-select>
+      </label>
+      <label class="rc-inline-field">
+        <span>模型</span>
+        <el-select
+          :model-value="orchCfg.modelCode ?? ''"
+          class="rc-inline-select rc-inline-select-model"
+          size="small"
+          :loading="modelLoading"
+          :disabled="!orchCfg.modelProviderCode || !providerOptions.length"
+          :teleported="false"
+          placeholder="模型"
+          data-testid="main-model"
+          @change="onModelChange"
+        >
+          <el-option v-for="item in modelOptions" :key="item.modelCode" :label="item.modelName" :value="item.modelCode" />
+        </el-select>
+      </label>
+    </span>
+    <button
+      class="rc-btn primary"
+      type="button"
+      :disabled="generating"
+      data-testid="main-generate-script"
+      @click="onGenerateScript()"
+    >
+      {{ generating ? '生成中...' : generateLabel }}
+    </button>
   </div>
 
   <template v-if="!isRule">
@@ -567,10 +617,6 @@ function goToDataView() {
     </div>
   </template>
 
-  <div class="rc-actions-row">
-    <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
-    <button v-if="generating" class="rc-btn" type="button" @click="onCancelGenerate">取消</button>
-  </div>
   <div v-if="isRule && (providerError || modelError)" class="rc-help">{{ providerError || modelError }}</div>
   <div v-if="hydrating" class="rc-help">正在同步编排详情…</div>
 
@@ -639,16 +685,23 @@ function goToDataView() {
 .rc-switch-load-error span { min-width: 0; }
 .rc-switch-load-error button { flex: none; padding: 0; border: 0; background: transparent; color: var(--rc-primary); font-size: 10px; cursor: pointer; }
 .rc-switch-load-error button:hover { text-decoration: underline; }
-.rc-actions-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.rc-inline-field { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--rc-muted); font-size: 11px; font-weight: 600; }
-.rc-inline-select { width: 132px; }
-.rc-inline-select-model { width: 168px; }
+.rc-model-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: -2px 0 12px; min-width: 0; }
+.rc-model-row.nowrap { flex-wrap: nowrap; }
+.rc-model-fields { display: inline-flex; align-items: center; flex: 1 1 auto; flex-wrap: nowrap; gap: 10px; min-width: 0; overflow: hidden; }
+.rc-inline-field { display: inline-flex; align-items: center; flex: 1 1 0; gap: 6px; min-width: 0; color: var(--rc-muted); font-size: 11px; font-weight: 600; }
+.rc-inline-field > span { flex: 0 0 auto; white-space: nowrap; }
+.rc-inline-select { flex: 1 1 auto; width: auto; min-width: 96px; max-width: 150px; }
+.rc-inline-select-model { min-width: 126px; max-width: 190px; }
+.rc-model-row > .rc-btn { flex: 0 0 auto; white-space: nowrap; min-width: 82px; margin-left: auto; }
 .rc-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 11px; border: 1px solid #d5e2f2; border-radius: 7px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; }
 .rc-btn:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rc-btn.primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }
 .rc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .ni-section-title { margin: 16px 0 8px; padding-top: 12px; border-top: 1px dashed var(--rc-border-soft); color: var(--rc-muted); font-size: 12px; font-weight: 700; }
 .ni-section-title:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.ni-section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ni-section-actions { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; flex: none; }
+.ni-section-title-row .rc-btn { height: 28px; padding: 0 10px; font-size: 12px; }
 .rc-list { border: 1px solid #eef2f7; border-radius: 8px; overflow: hidden; }
 .rc-list-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 9px; border-top: 1px solid #eef2f7; font-size: 11px; color: var(--rc-text-2); }
 .rc-list-row:first-child { border-top: 0; }
