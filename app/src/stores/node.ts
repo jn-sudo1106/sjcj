@@ -232,14 +232,15 @@ export const useNodeStore = defineStore('node', () => {
     const c = configs[id]
     if (!c) return
     const target = c.collectCfg ?? c
-    target.structuredConfig = value || undefined
+    // 空字符串表示用户明确清空；undefined 才表示该字段尚未回填、保存时应保留后端原值。
+    target.structuredConfig = value
     touchConfig(id)
   }
   function setContentRules(id: string, value: string) {
     const c = configs[id]
     if (!c) return
     const target = c.collectCfg ?? c
-    target.contentRules = value || undefined
+    target.contentRules = value
     touchConfig(id)
   }
 

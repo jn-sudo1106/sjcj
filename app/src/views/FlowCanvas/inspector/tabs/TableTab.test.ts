@@ -110,6 +110,26 @@ describe('TableTab · 结构化配置 / 正文规则（0804 S3-1，0805 收窄�
     expect(flow.configs['web-1'].structuredConfig).toBeUndefined()
   })
 
+  it('结构化配置和正文规则可清空，空值不会被默认文案重新填回', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnCollectorNode()
+    flow.configs['web-1'].collectCfg!.structuredConfig = '{"globals":["列ID"]}'
+    flow.configs['web-1'].collectCfg!.contentRules = 'content=trim'
+    await flushPromises()
+
+    const textareas = wrapper.findAll('textarea')
+    const structuredInput = textareas.find((t) => t.attributes('placeholder')?.includes('globals'))!
+    const contentRuleInput = textareas.find((t) => t.attributes('placeholder')?.includes('content=trim'))!
+    await structuredInput.setValue('')
+    await contentRuleInput.setValue('')
+
+    expect(structuredInput.element.value).toBe('')
+    expect(contentRuleInput.element.value).toBe('')
+    expect(flow.configs['web-1'].collectCfg?.structuredConfig).toBe('')
+    expect(flow.configs['web-1'].collectCfg?.contentRules).toBe('')
+    expect(flow.configDirty).toBe(true)
+  })
+
   it('非规则节点：表配置展示输入表/输入字段，默认全选且切换表后恢复默认', async () => {
     mockAssets()
     const { flow, wrapper } = mountOnCollectorNode()

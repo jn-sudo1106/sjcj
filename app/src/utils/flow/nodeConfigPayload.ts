@@ -27,8 +27,8 @@ export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
   cfg.configUrl = config.url ?? ''
   cfg.runPolicy = config.runPolicy
   const target = cfg.collectCfg ?? cfg
-  target.structuredConfig = config.codeRule || undefined
-  target.contentRules = config.contentRule || undefined
+  target.structuredConfig = config.codeRule ?? undefined
+  target.contentRules = config.contentRule ?? undefined
   if (cfg.collectCfg) {
     cfg.collectCfg.multiMode = config.multiMode
     cfg.collectCfg.bizType = config.templateCode || undefined
@@ -100,8 +100,9 @@ export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown
     templetCode: cc?.bizType || undefined,
     topic: cfg.taskCfg?.queue || undefined,
     snatchDrepeat: dedupToLegacy(cc?.dedupMode ?? cfg.dedupMode),
-    codeRule: source.structuredConfig || undefined,
-    contentRule: source.contentRules || undefined,
+    // 空字符串是用户明确删除，必须写回后端；只有 undefined 才代表“尚未回填，保留 base”。
+    codeRule: source.structuredConfig,
+    contentRule: source.contentRules,
   }
   const payload: Record<string, unknown> = {
     ...base,
