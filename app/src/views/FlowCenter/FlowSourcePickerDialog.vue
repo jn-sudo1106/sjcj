@@ -36,12 +36,20 @@ const error = ref('')
 
 const idImport = reactive({ open: false, text: '', loading: false })
 
+// 「全选全部」一次把当前筛选下的所有源都选中（翻页选不完）。数量上限兜底：
+// changeFlowBatch 单次 5000、前端按 500 分批，2 万以内都能收拾；再多先让用户收窄条件。
+const SELECT_ALL_PAGE = 1000
+const SELECT_ALL_MAX = 20_000
+const selectingAll = ref(false)
+
 // 选中态：modelValue 直接透传，另存名字缓存好在标签上显示
+const CHIP_LIMIT = 15
 const selectedSet = computed(() => new Set(props.modelValue))
 const nameCache = ref(new Map<string, string>())
 const selectedChips = computed(() =>
-  props.modelValue.map((id) => ({ id, name: nameCache.value.get(id) || '' })),
+  props.modelValue.slice(0, CHIP_LIMIT).map((id) => ({ id, name: nameCache.value.get(id) || '' })),
 )
+const chipsMore = computed(() => Math.max(0, props.modelValue.length - CHIP_LIMIT))
 function setSelected(ids: string[]) {
   emit('update:modelValue', [...new Set(ids)])
 }
@@ -58,6 +66,41 @@ function pickPage() {
 }
 function clearSelected() {
   setSelected([])
+  chipsExpanded.value = false
+}
+
+// 当前筛选（源名称 + 所属流程；「仅看未关联」是本页过滤，这里按 flowId 一并排除）下全选。
+async function pickAllMatching() {
+  if (selectingAll.value) return
+  if (total.value > SELECT_ALL_MAX) {
+    ElMessage.warning(`匹配 ${total.value} 个，太多了——请先用「源名称」或「所属流程」收窄`)
+    return
+  }
+  selectingAll.value = true
+  try {
+    const collected: Source[] = []
+    for (let p = 1; collected.length < total.value; p++) {
+      const res = await sourceApi.sourcePaged({
+        keyword: keyword.value.trim() || undefined,
+        flowId: flowFilter.value || undefined,
+        page: p,
+        size: SELECT_ALL_PAGE,
+      })
+      if (!res.list.length) break
+      collected.push(...res.list)
+      if (res.list.length < SELECT_ALL_PAGE) break
+    }
+    const picked = onlyUnbound.value && props.flow
+      ? collected.filter((s) => String(s.flowId ?? '') !== String(props.flow!.id))
+      : collected
+    picked.forEach((s) => nameCache.value.set(s.sourceId, s.name))
+    setSelected([...props.modelValue, ...picked.map((s) => s.sourceId)])
+    ElMessage.success(`已选中全部 ${picked.length} 个源`)
+  } catch (e) {
+    ElMessage.error(`全选失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    selectingAll.value = false
+  }
 }
 
 // 「仅看未关联到本流程」是本页客户端过滤：翻页只对当前页生效，够用（是"别重复挑已绑的"，
@@ -150,11 +193,16 @@ async function submitByIds() {
   }
 }
 
+// 选中多了就把标签墙收起来，只留一行汇总，点「展开」再看
+const chipsExpanded = ref(false)
+const showChips = computed(() => props.modelValue.length > 0 && (props.modelValue.length <= CHIP_LIMIT || chipsExpanded.value))
+
 watch(() => props.flow?.id, (id) => {
   if (!id) return
   keyword.value = ''
   flowFilter.value = ''
   onlyUnbound.value = false
+  chipsExpanded.value = false
   page.value = 1
   idImport.open = false
   idImport.text = ''
@@ -204,7 +252,6 @@ watch(() => props.flow?.id, (id) => {
       <button class="fsp-btn" type="button" @click="idImport.open = !idImport.open">
         {{ idImport.open ? '收起 ID 批量检索' : 'ID 批量检索' }}
       </button>
-      <span class="fsp-selected" data-testid="fsp-selected-count">已选 {{ modelValue.length }}</span>
     </div>
 
     <div v-if="idImport.open" class="fsp-idimport">
@@ -214,21 +261,37 @@ watch(() => props.flow?.id, (id) => {
       </button>
     </div>
 
-    <div v-if="selectedChips.length" class="fsp-chips" data-testid="fsp-chips">
+    <div class="fsp-selbar">
+      <button type="button" class="fsp-linkbtn" data-testid="fsp-pick-page" @click="pickPage">全选本页</button>
+      <button
+        v-if="total > visibleRows.length"
+        type="button"
+        class="fsp-linkbtn"
+        data-testid="fsp-pick-all"
+        :disabled="selectingAll"
+        @click="pickAllMatching"
+      >{{ selectingAll ? '取全部中…' : `全选全部（共 ${total} 条）` }}</button>
+      <span class="fsp-selbar-gap" />
+      <span class="fsp-selected" data-testid="fsp-selected-count">已选 {{ modelValue.length }}</span>
+      <button v-if="modelValue.length > CHIP_LIMIT" type="button" class="fsp-linkbtn" @click="chipsExpanded = !chipsExpanded">
+        {{ chipsExpanded ? '收起' : '展开' }}
+      </button>
+      <button v-if="modelValue.length" type="button" class="fsp-linkbtn" @click="clearSelected">清空</button>
+    </div>
+
+    <div v-if="showChips" class="fsp-chips" data-testid="fsp-chips">
       <span v-for="c in selectedChips" :key="c.id" class="fsp-chip">
         {{ c.name || c.id }}
         <button type="button" class="fsp-chip-x" @click="toggle({ sourceId: c.id } as Source)">✕</button>
       </span>
-      <button type="button" class="fsp-chip-clear" @click="clearSelected">清空（{{ selectedChips.length }}）</button>
+      <span v-if="chipsMore" class="fsp-chip-more">…等 {{ chipsMore }} 个</span>
     </div>
 
     <div class="fsp-table-wrap" v-loading="loading">
       <table class="fsp-table">
         <thead>
           <tr>
-            <th class="fsp-check-col">
-              <button type="button" class="fsp-linkbtn" data-testid="fsp-pick-page" @click="pickPage">全选本页</button>
-            </th>
+            <th class="fsp-check-col" />
             <th>源 ID</th><th>源名称</th><th>网站</th><th>状态</th><th>当前流程</th>
           </tr>
         </thead>
@@ -288,17 +351,19 @@ watch(() => props.flow?.id, (id) => {
 .fsp-flow { width: 220px; }
 .fsp-flow :deep(.el-select__wrapper) { min-height: 28px; font-size: 12px; }
 .fsp-check { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--rc-text-2); }
-.fsp-selected { margin-left: auto; font-size: 12px; color: var(--rc-primary); }
+.fsp-selbar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; padding: 6px 10px; border: 1px solid var(--rc-border-soft); border-radius: 7px; background: #f8fafc; font-size: 12px; }
+.fsp-selbar-gap { flex: 1; }
+.fsp-selected { color: var(--rc-primary); font-weight: 600; }
 .fsp-btn { height: 28px; padding: 0 12px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text-2); font-size: 12px; cursor: pointer; }
 .fsp-btn:hover:not(:disabled) { border-color: var(--rc-primary); color: var(--rc-primary-ink); }
 .fsp-btn.primary { background: var(--rc-primary); border-color: var(--rc-primary); color: #fff; }
 .fsp-btn:disabled { opacity: .5; cursor: not-allowed; }
 .fsp-idimport { display: flex; gap: 8px; margin-bottom: 8px; }
 .fsp-idbox { flex: 1; padding: 6px 8px; border: 1px solid var(--rc-border); border-radius: 6px; font-size: 12px; resize: vertical; }
-.fsp-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.fsp-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; max-height: 88px; overflow-y: auto; }
 .fsp-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border-radius: 10px; background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-size: 11px; }
 .fsp-chip-x { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 10px; padding: 0; }
-.fsp-chip-clear { border: 0; background: transparent; color: var(--rc-faint); font-size: 11px; cursor: pointer; }
+.fsp-chip-more { align-self: center; color: var(--rc-faint); font-size: 11px; }
 .fsp-table-wrap { max-height: 44vh; overflow: auto; border: 1px solid var(--rc-border-soft); border-radius: 8px; }
 .fsp-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .fsp-table th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: var(--rc-text-2); font-weight: 700; text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rc-border); }
@@ -309,7 +374,9 @@ watch(() => props.flow?.id, (id) => {
 .fsp-check-col { width: 60px; text-align: center; }
 .fsp-mono { font-family: var(--rc-mono, monospace); color: var(--rc-faint); }
 .fsp-empty { padding: 24px 12px; text-align: center; color: var(--rc-faint); }
-.fsp-linkbtn { border: 0; background: transparent; color: var(--rc-primary); font-size: 11px; cursor: pointer; padding: 0; }
+.fsp-linkbtn { border: 0; background: transparent; color: var(--rc-primary); font-size: 12px; cursor: pointer; padding: 0; }
+.fsp-linkbtn:hover:not(:disabled) { text-decoration: underline; }
+.fsp-linkbtn:disabled { color: var(--rc-faint); cursor: not-allowed; }
 .fsp-flowtag { padding: 1px 6px; border-radius: 4px; font-size: 10px; white-space: nowrap; }
 .fsp-flowtag.self { background: var(--rc-ok-bg, #ecfdf5); color: var(--rc-ok, #059669); border: 1px solid currentColor; }
 .fsp-flowtag.other { background: #fffbeb; color: #b45309; border: 1px solid #fcd34d; }

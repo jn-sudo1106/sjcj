@@ -48,6 +48,37 @@ describe('FlowSourcePickerDialog', () => {
     expect(w.emitted('update:modelValue')!.at(-1)![0]).toEqual(['a', 'b'])
   })
 
+  it('全选全部：拉当前筛选下的所有源选中，尊重「仅看未关联到本流程」', async () => {
+    const paged = vi.spyOn(sourceApi, 'sourcePaged')
+      .mockResolvedValueOnce({ total: 50, list: [src('a'), src('b')] }) // 初始 load（还有更多页 → 全选全部按钮出现）
+      .mockResolvedValueOnce({ total: 3, list: [src('a', { flowId: 'flow-1' }), src('b'), src('c')] }) // 全选全部一次取回
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+
+    const w = mountDlg([])
+    await flushPromises()
+    await w.get('[data-testid="fsp-only-unbound"]').setValue(true)
+    await w.get('[data-testid="fsp-pick-all"]').trigger('click')
+    await flushPromises()
+
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, size: 1000 }))
+    // a 已绑本流程（flow-1）被「仅看未关联」排除
+    expect(w.emitted('update:modelValue')!.at(-1)![0]).toEqual(['b', 'c'])
+  })
+
+  it('选中超过 15 个：标签墙收起成汇总行，可展开', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+    const many = Array.from({ length: 20 }, (_, i) => `s${i}`)
+
+    const w = mountDlg(many)
+    await flushPromises()
+    expect(w.get('[data-testid="fsp-selected-count"]').text()).toContain('20')
+    expect(w.find('[data-testid="fsp-chips"]').exists()).toBe(false) // 默认收起
+    await w.findAll('.fsp-linkbtn').find((b) => b.text() === '展开')!.trigger('click')
+    expect(w.find('[data-testid="fsp-chips"]').exists()).toBe(true)
+    expect(w.get('[data-testid="fsp-chips"]').text()).toContain('…等 5 个') // 20 - 15
+  })
+
   it('所属流程筛选 → sourcePaged 带 flowId', async () => {
     const paged = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
     vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
