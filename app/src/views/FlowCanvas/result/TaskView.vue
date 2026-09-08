@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { siteApi, sourceApi, type NodeRunStat, type Source, type Step, type TaskInst } from '@/api'
 import { useFlowStore } from '@/stores/flow'
@@ -76,8 +76,25 @@ function configIdForNode(nodeId: string): string | undefined {
   return filterSteps.value.find((step) => step.stepId === nodeId)?.configId || undefined
 }
 
+// 任务视图无自动刷新时，「运行中」的任务会一直挂在旧快照上（后端跑完了界面不知道）。
+// 列表里只要还有 state==='L' 的任务，就每 10s 静默重拉一次，全部 C/E 后自动停。
+const REFRESH_MS = 10_000
+let pollTimer: ReturnType<typeof setInterval> | undefined
+const autoRefreshing = computed(() => rows.value.some((t) => t.state === 'L'))
+function stopPoll() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = undefined }
+}
+function syncPoll() {
+  if (autoRefreshing.value && !pollTimer) {
+    pollTimer = setInterval(() => void loadTasks({ silent: true }), REFRESH_MS)
+  } else if (!autoRefreshing.value) {
+    stopPoll()
+  }
+}
+onUnmounted(stopPoll)
+
 let taskRequest = 0
-async function loadTasks() {
+async function loadTasks(opts: { silent?: boolean } = {}) {
   const requestId = ++taskRequest
   const query = {
     siteId: siteId.value,
@@ -91,21 +108,26 @@ async function loadTasks() {
   if (!query.siteId) {
     rows.value = []
     total.value = 0
+    stopPoll()
     return
   }
-  loading.value = true
+  if (!opts.silent) loading.value = true
   try {
     const result = await sourceApi.sourceTaskPaged(query)
     if (requestId !== taskRequest) return
     rows.value = result?.list ?? []
     total.value = result?.total ?? 0
+    syncPoll()
   } catch {
     if (requestId !== taskRequest) return
-    rows.value = []
-    total.value = 0
-    ElMessage.warning('加载任务记录失败')
+    if (!opts.silent) {
+      rows.value = []
+      total.value = 0
+      ElMessage.warning('加载任务记录失败')
+    }
+    // 静默轮询失败不清空列表、不打扰，下个周期再试
   } finally {
-    if (requestId === taskRequest) loading.value = false
+    if (requestId === taskRequest && !opts.silent) loading.value = false
   }
 }
 
@@ -204,6 +226,10 @@ const nextStepHints = computed(() => {
             <option value="E">异常</option>
           </select>
           <button class="rc-btn" type="button" @click="resetFilters">清空</button>
+          <button class="rc-btn" type="button" data-testid="task-refresh" :disabled="loading" @click="() => loadTasks()">刷新</button>
+          <span v-if="autoRefreshing" class="tv-auto" data-testid="task-auto-refresh">
+            <span class="tv-spin" />有任务运行中，每 10 秒自动刷新
+          </span>
         </div>
 
         <table class="rc-data-table tv-table" data-testid="source-task-table" v-loading="loading">
@@ -220,7 +246,11 @@ const nextStepHints = computed(() => {
               <td>{{ nodeRun(task.sourceId, task.node)?.totalTasks ?? '—' }}</td>
               <td>{{ nodeRun(task.sourceId, task.node)?.processedTasks ?? '—' }}</td>
               <td>{{ task.typeName }}</td>
-              <td><span class="rc-status" :class="stateClass(task.state)">{{ stateText(task.state) }}</span></td>
+              <td>
+                <span class="rc-status" :class="stateClass(task.state)">
+                  <span v-if="task.state === 'L'" class="tv-spin" />{{ stateText(task.state) }}
+                </span>
+              </td>
               <td class="tv-time">{{ task.updatedAt || '—' }}</td>
             </tr>
             <tr v-if="!rows.length && !loading"><td :colspan="showSourceColumn ? 10 : 9" class="tv-empty-row">没有匹配的任务记录</td></tr>
@@ -237,7 +267,7 @@ const nextStepHints = computed(() => {
             layout="total, sizes, prev, pager, next, jumper"
             background
             small
-            @current-change="loadTasks"
+            @current-change="() => loadTasks()"
             @size-change="onSizeChange"
           />
         </div>
@@ -260,4 +290,9 @@ const nextStepHints = computed(() => {
 .tv-pager { justify-content: flex-end; gap: 12px; padding: 10px 16px; margin-top: 0; margin-bottom: 0; border-top: 1px solid var(--rc-border-soft); }
 .tv-empty-row { padding: 28px 12px; color: var(--rc-faint); font-size: 12px; text-align: center; }
 .muted { color: var(--rc-faint); font-size: 12px; }
+.tv-auto { display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; color: var(--rc-muted); font-size: 11px; }
+.tv-spin { display: inline-block; width: 9px; height: 9px; margin-right: 4px; border: 1.5px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: tv-spin 0.7s linear infinite; vertical-align: -1px; }
+.rc-status.run .tv-spin { border-color: currentColor; border-top-color: transparent; }
+@keyframes tv-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .tv-spin { animation-duration: 2s; } }
 </style>
