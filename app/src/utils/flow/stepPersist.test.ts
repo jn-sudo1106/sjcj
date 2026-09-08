@@ -209,6 +209,19 @@ describe('规则节点写步骤（0904）', () => {
     expect(step.nodeType).toBe('rule')
   })
 
+  // monitor 复用 rule 种子（isRuleNode 同样为 true），但 nodeType 必须写 'monitor' 落库：
+  // 否则刷新回读后只能靠标题正则兜底恢复 template，节点一改名 isMonitorNode 即失效，
+  // 保存脚本时同步 ck_source（/api/source/*）会被静默跳过。
+  it('monitor 节点 type 写 monitor（优先于 rule，改名后仍可恢复）', () => {
+    const cfg = ruleCfg(['title'], ['title'])
+    cfg.template = 'monitor'
+    cfg.title = '库存监控' // 改名后不含「数据监控」，回读只能靠 nodeType
+    const step = mergeStepForWrite({
+      snapshot, cfg, nodeId: '40600', sourceId: '430016398',
+    })
+    expect(step.nodeType).toBe('monitor')
+  })
+
   // 适用源 -1 是**新建节点时的默认值**，不是写死。写死会把用户改过的值冲掉——
   // 所以写入侧一律以 cfg.stepSourceId 为准，默认值落在插入节点的地方（stores/flow.ts）。
   it('适用源以节点上的值为准，写入侧不强制 -1', () => {

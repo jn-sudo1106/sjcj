@@ -5,6 +5,7 @@ import type {
   Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery, Step, SourceLoadParamsResult, SendSnatchWithParamPayload,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestRequest, RuleOrchestrationTestResult,
+  CkSourcePayload, CkSourceRecord,
   CodeExecuteRequest,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   TaskInstQuery, SiteTableOption, SiteTablesResult,
@@ -1216,6 +1217,25 @@ async function fetchDataProcessGenerate(
 }
 
 // 规则资产（M3）
+// ck_source 监控源配置（2026-09-05，vanv-data-engine SourceController）：
+// 数据监控节点保存时同步落库。list 按 sourceId 查存在性（SOURCE_ID 不唯一，可能多行）；
+// insert 返回自增主键；update 按 sourceId 匹配，body 里为 null 的字段保留原列值。
+export const ckSourceApi = {
+  list: (sourceId: string) =>
+    request<CkSourceRecord[]>('monitor/ckSourceList', { sourceId }, {
+      method: 'GET',
+      httpEndpoint: '/api/source/list',
+    }),
+  insert: (source: CkSourcePayload) =>
+    request<number>('monitor/ckSourceInsert', source as unknown as Record<string, unknown>, {
+      httpEndpoint: '/api/source/insert',
+    }),
+  update: (source: CkSourcePayload) =>
+    request<boolean>('monitor/ckSourceUpdate', source as unknown as Record<string, unknown>, {
+      httpEndpoint: '/api/source/update',
+    }),
+}
+
 export const ruleApi = {
   ruleGroups: () => request<RuleGroup[]>('rule/groupTree'),
   rulePaged: (p?: PageQuery) => request<Paged<Rule>>('rule/rulePaged', p),

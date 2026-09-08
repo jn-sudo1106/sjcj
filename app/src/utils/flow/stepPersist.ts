@@ -7,6 +7,7 @@
 import type { Step } from '@/api'
 import {
   effectiveOutputTable,
+  isMonitorNode,
   isRuleNode,
   nodeEntryCondition,
   nodeInputTable,
@@ -228,7 +229,11 @@ export function mergeStepForWrite(args: {
     stepId: isWritableStepId(nodeId) ? nodeId : '',
     sourceId: cfg.stepSourceId ?? snapshot?.sourceId ?? sourceId,
     name: cfg.title.trim(),
-    nodeType: rule ? 'rule' : snapshot?.nodeType,
+    // monitor 必须排在 rule 前面：monitor 节点复用 rule 种子（isRuleNode 也为 true），
+    // 恒写 'rule' 会让 monitor 类型信息不落库，回读后只能靠标题正则兜底——节点一改名
+    // （如"库存监控"）template 就恢复不出来，isMonitorNode=false，数据监控节点专属逻辑
+    // （表配置监控方法回填、保存时同步 ck_source 等）全部静默失效。
+    nodeType: isMonitorNode(cfg) ? 'monitor' : rule ? 'rule' : snapshot?.nodeType,
     inputTable: nodeInputTable(cfg) || snapshot?.inputTable,
     // 0901：显式未落表时按「默认 = 输入表」取本节点自己的输入表，而不是把这个新建节点还
     // 没配置过的空 outputTable 直接提交上去（旧写法遇到规则节点只填了输入表就会把 outputTable

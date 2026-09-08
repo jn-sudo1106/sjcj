@@ -20,6 +20,7 @@ import { RULE_DATA_SOURCE } from '@/constants/rule'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
 import { buildDataProcessGeneratePayload } from '@/utils/flow/dataProcess'
+import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { promptCategoryGroupsForNode, promptListCategoryForNode, resolvePromptCategoryForNode } from '../promptCategory'
 import { loadPromptTemplateForNode } from '../promptTemplateLoader'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
@@ -607,6 +608,7 @@ async function onGenerateScript(
 const workbenchOpen = ref(false)
 
 const savingScript = ref(false)
+
 async function onSaveScript() {
   if (!orchCfg.value.script?.trim()) {
     ElMessage.warning(isRule.value ? '请先生成脚本' : '请先生成配置')
@@ -640,6 +642,16 @@ async function onSaveScript() {
     const fileId = res.scriptPath?.trim() || orchCfg.value.scriptPath?.trim() || ''
     if (fileId) {
       await ruleApi.fileUploadScript(fileId, orchCfg.value.script ?? '')
+    }
+    // 数据监控节点：脚本保存成功后同步 ck_source（失败不回滚，单独提示）。
+    // 同步实现在 utils/flow/monitorCkSource.ts——2026-09-07 起 NodeInspector 底部「保存」
+    //（编排配置 Tab）也触发同一条同步，两处共用保证 payload 口径一致。
+    if (isMonitor.value) {
+      try {
+        await syncMonitorCkSource(flow.sourceCfg?.sourceId, cfg.value)
+      } catch (e) {
+        ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
+      }
     }
     ElMessage.success(res.message || (isRule.value ? '规则脚本已保存' : '抓取配置已保存'))
   } catch (e) {

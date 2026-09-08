@@ -15,6 +15,7 @@ import { configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
 import { provideNodeInspectorAssets } from './useNodeInspectorAssets'
 import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
 import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
+import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
 import NodeAiChat from './NodeAiChat.vue'
 import NodeConfigSelect from './NodeConfigSelect.vue'
@@ -149,11 +150,17 @@ async function onSaveNodeConfig() {
     }
   }
   ensureConfigNameFromTitle()
-  if (configId.value) {
-    await doUpdateExistingConfig()
-    return
+  const saved = configId.value ? await doUpdateExistingConfig() : await doCreateConfig()
+  // 数据监控节点在编排配置 Tab 点底部「保存」（2026-09-07 补）：配置保存成功后同步 ck_source
+  //（vanv-data-engine /api/source/*，按 sourceId 无则 insert、有则 update）。与 RuleOrchestrationTab
+  //「保存脚本」后的同步同一条逻辑（utils/flow/monitorCkSource.ts）；失败不回滚配置保存，单独提示。
+  if (saved && tab.value === 'orchestration' && isMonitorNode(node)) {
+    try {
+      await syncMonitorCkSource(flow.sourceCfg?.sourceId, node)
+    } catch (e) {
+      ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
+    }
   }
-  await doCreateConfig()
 }
 
 /**
@@ -168,16 +175,16 @@ async function onSaveNodeConfig() {
  * 与「更换」的区别要分清：更换是**绑到一份已有配置**，多个节点共用、改一处影响所有引用方；
  * 这里是新建一份只属于本节点的。
  */
-async function doCreateConfig() {
+async function doCreateConfig(): Promise<boolean> {
   const node = cfg.value
-  if (!node || saving.value) return
+  if (!node || saving.value) return false
   saving.value = true
   try {
     const payload = buildConfigPayload(node)
     const created = await configApi.addConfig(payload)
     if (!created.ok || !created.configId) {
       ElMessage.error(created.message || '新增配置失败')
-      return
+      return false
     }
     // 回查一次再绑：add 的回执只有 msg，拿不到落库后的完整记录（后端还会补 state/topic 等）。
     const saved = await configApi.configDetail(created.configId)
@@ -185,7 +192,7 @@ async function doCreateConfig() {
       // 配置确实建出来了，只是没绑上。说清楚 ID，让用户能用「更换」找回来，
       // 不要假装成功——那会留下一份没人引用的孤儿配置，而且用户以为已经绑好了。
       ElMessage.warning(`配置 #${created.configId} 已新建，但回查详情失败、未能绑定到本节点，请用配置条上的「更换」选中它`)
-      return
+      return false
     }
     flow.bindExistingConfig(id.value, saved)
     flow.markNodeConfigSaved(id.value)
@@ -193,16 +200,18 @@ async function doCreateConfig() {
     // 自动保存另外落库。步骤没落成的话，重进画布这个节点就不存在了——而用户已经看到"成功"。
     // 所以这里只说配置这一半，把"节点还在保存中"一并讲清楚，别让人以为万事大吉就走了。
     ElMessage.success(`配置 #${created.configId} 已新建并绑定；节点正在保存，请留意顶部保存状态`)
+    return true
   } catch (e) {
     reportWriteError('新增配置', e)
+    return false
   } finally {
     saving.value = false
   }
 }
 
-async function doUpdateExistingConfig() {
+async function doUpdateExistingConfig(): Promise<boolean> {
   const node = cfg.value
-  if (!node || saving.value) return
+  if (!node || saving.value) return false
   saving.value = true
   try {
     const base = await baseRecordFor(configId.value)
@@ -210,12 +219,14 @@ async function doUpdateExistingConfig() {
     const ack = await configApi.updateConfig(payload as never)
     if (ack && 'ok' in ack && !ack.ok) {
       ElMessage.error(ack.message || '保存配置失败')
-      return
+      return false
     }
     flow.markNodeConfigSaved(id.value)
     ElMessage.success(ack?.message || `配置 #${configId.value} 已保存`)
+    return true
   } catch (e) {
     reportWriteError('保存配置', e)
+    return false
   } finally {
     saving.value = false
   }

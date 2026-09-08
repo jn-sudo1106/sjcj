@@ -172,6 +172,32 @@ export interface RuleOrchestration {
 }
 
 /**
+ * ck_source 监控源配置（vanv-data-engine CkSource 实体，2026-09-05）。
+ * 数据监控节点保存时同步落库：按 sourceId 查存在性，无则 insert、有则 update。
+ * ID/时间戳/统计列由数据库维护，前端只写业务字段。
+ */
+export interface CkSourcePayload {
+  /** 当前流程的源 ID（cs_source.SOURCE_ID，Long） */
+  sourceId: number
+  /** 节点名称 */
+  name?: string
+  /** cron 表达式（节点配置的调度 cron） */
+  schedule?: string
+  /** 表配置的输入表物理表名 */
+  tableName?: string
+  /** 监控方法 + 编排配置序列化后的 JSON 字符串 */
+  checkConf?: string
+  /** 运行状态：仅 insert 时由前端默认传 'E'（启用）；update 不传，由后台任务维护 */
+  state?: string
+}
+
+/** ck_source 行（list 返回；update/insert 只关心调用成败，不需要回读） */
+export interface CkSourceRecord extends CkSourcePayload {
+  id: number
+  lastMsg?: string
+}
+
+/**
  * 非规则节点（采集/登录等，S3-3 起）的执行配置数据模型（方案 §3.1 修正 C/D，计划 S3-2）。
  * 字段语义对齐 RuleOrchestration 的同名概念（见下方 ≙ 标注），复用同一套生成/保存/读取接口——
  * S3-3 接入时把 NodeExecConfig 映射成 RuleOrchestration 形状再调用 ruleApi，不新增端点。

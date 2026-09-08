@@ -360,6 +360,11 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'rule/orchestrationGenerate', desc: '规则编排生成脚本 → /vrule/ai/dashscope/stream', impl: true, live: true },
   { path: 'rule/orchestrationTest', desc: '规则编排测试脚本 → /vrule/fastapi/execute/dynamic', impl: true, live: true },
   { path: 'rule/orchestrationSave', desc: '规则编排保存脚本 → /vrule/ai/dashscope/script/edit', danger: true, impl: true, live: true },
+  // ck_source 监控源配置（vanv-data-engine SourceController，2026-09-05）：数据监控节点保存时
+  // 按 sourceId 查存在性，无则 insert、有则 update。走 /api/source 代理（同 data-process 8080 服务）。
+  { path: 'monitor/ckSourceList', desc: '监控源配置查询 → /api/source/list', impl: true, live: true },
+  { path: 'monitor/ckSourceInsert', desc: '监控源配置新增 → /api/source/insert', impl: true, live: true },
+  { path: 'monitor/ckSourceUpdate', desc: '监控源配置更新 → /api/source/update', impl: true, live: true },
   { path: 'rule/publish', desc: '发布规则', danger: true, impl: true },
   { path: 'rule/runBatchTest', desc: '跑批测', impl: true },
   // 运行记录 / 数据查看 / 监控（服务层聚合）

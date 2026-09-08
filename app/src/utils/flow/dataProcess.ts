@@ -32,6 +32,8 @@ export interface DataProcessGenerateInput {
   outputFieldOptions: Pick<RuleFieldOption, 'itemCode' | 'itemName'>[]
   /** 系统提示词：取自规则脚本工作区「系统提示词」文本框（RuleWorkbenchDialog 左栏草稿 → orchCfg.systemPrompt） */
   systemPrompt: string
+  /** 数据监控方法拼接（逗号分隔），仅 monitor 节点传入 */
+  checkRule?: string
 }
 
 function selectFields(selected: string[], options: Pick<RuleFieldOption, 'itemCode' | 'itemName'>[]): DataProcessFieldOption[] {
