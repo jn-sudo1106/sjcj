@@ -131,7 +131,7 @@ function openSourceData(s: Source) {
   openSourceCanvas(s, 'data')
 }
 function openSiteCanvas(site: Site, view?: 'data') {
-  router.push({ path: '/canvas', query: { siteId: site.siteId, ...(view ? { view } : {}) } })
+  router.push({ path: '/canvas', query: { siteId: site.siteId, view: view ?? 'source' } })
 }
 function openSiteData(site: Site) {
   router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data' } })

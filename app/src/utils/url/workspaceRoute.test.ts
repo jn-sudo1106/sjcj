@@ -17,6 +17,7 @@ describe('源工作区路由', () => {
 
   it('源视图只属于网站详情，源路由不会进入该视图', () => {
     expect(normalizeSiteView('source')).toBe('source')
+    expect(normalizeSiteView(undefined)).toBe('source')
     expect(normalizeSourceView('source')).toBe('flow')
   })
 })

@@ -88,7 +88,7 @@ describe('网站读取 HTTP 契约', () => {
 
   it('siteDetail 用 GET，并兼容详情的 sourceCount 与站级错误兜底', async () => {
     fetchMock.mockResolvedValue(jsonResponse({
-      code: '0', data: { siteId: 11, siteName: '财经网站', sourceCount: 4, siteHealth: 'ERROR' },
+      code: '0', data: { siteId: 11, siteName: '财经网站', sourceCount: 4, siteHealth: 'ERROR', dataTotal: 42 },
     }))
     const { siteApi } = await import('./index')
 
@@ -97,7 +97,7 @@ describe('网站读取 HTTP 契约', () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toContain('/api/v1/site/detail?siteId=11')
     expect(init.method).toBe('GET')
-    expect(result).toMatchObject({ siteId: '11', name: '财经网站', sourceCount: 4, errorCount: 4 })
+    expect(result).toMatchObject({ siteId: '11', name: '财经网站', sourceCount: 4, errorCount: 4, dataCount: 42 })
   })
 
   it('siteCreate 在 API 层按 site/add → snatchSave → bindSite 顺序落库', async () => {
@@ -241,6 +241,18 @@ describe('网站读取 HTTP 契约', () => {
     expect(result).toEqual([expect.objectContaining({
       sourceId: '101', name: '财经源', url: 'https://example.com', siteId: '11', dataCount: 12, alarm: true, disabled: false,
     })])
+  })
+
+  it('siteSourcePreview 只请求卡片首屏需要的小分页', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      code: '0', count: 1, data: [{ sourceId: 101, sourceName: '财经源', sourceUrl: '', state: 'C' }],
+    }))
+    const { siteApi } = await import('./index')
+
+    await siteApi.siteSourcePreview('11', 4)
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/v1/site/sources?siteId=11&page=1&limit=4')
   })
 
   it('后端业务失败保留响应文案', async () => {

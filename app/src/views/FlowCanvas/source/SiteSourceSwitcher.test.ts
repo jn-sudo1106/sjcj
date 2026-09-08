@@ -34,6 +34,7 @@ function mockApis() {
     siteId: 'site-a', name: '网站 A', category: '', owner: 'admin', sourceCount: 1, errorCount: 0,
   })
   vi.spyOn(siteApi, 'siteSources').mockImplementation(async (siteId) => siteId === 'site-template' ? [{ ...templateSource }] : [{ ...source }])
+  vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([{ ...source }])
   vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [templateSource] })
   vi.spyOn(siteApi, 'sourceAdd').mockResolvedValue({ ok: true, sourceId: 'source-new' })
   vi.spyOn(sourceApi, 'copySourceAndLocate').mockResolvedValue({
@@ -220,6 +221,7 @@ describe('SiteSourceSwitcher', () => {
 
     mockApis()
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([{ ...source, url: '' }])
+    vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([{ ...source, url: '' }])
     sessionStorage.clear()
     setActivePinia(createPinia())
     const empty = mount(SiteSourceSwitcher, {
@@ -647,5 +649,68 @@ describe('SiteSourceSwitcher · 复制源后关联到流程（Y8-A）', () => {
 
     expect(flowCenterApi.bindSources).not.toHaveBeenCalled()
     expect(ok).toHaveBeenCalledWith(expect.stringContaining('未关联流程'))
+  })
+})
+
+// 强刷与快速切站的竞态（2026-09-07 修复）：force 路径原来没有 loadSeq 防护——
+// 网站编辑保存触发 load(true) 后立刻切到另一站，慢的强刷响应回来会把新站数据覆盖掉。
+describe('SiteSourceSwitcher · 强刷竞态防护', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('强刷响应晚于切站时，旧站数据不覆盖新站', async () => {
+    sessionStorage.clear()
+    setActivePinia(createPinia())
+    const detailOf = (name: string) => ({ siteId: 'site-x', name, category: '', owner: 'admin', sourceCount: 1, errorCount: 0 })
+    // site-a 的响应被 gate 挂起（模拟慢），site-b 正常返回
+    let releaseA: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => { releaseA = resolve })
+    vi.spyOn(siteApi, 'siteDetail').mockImplementation(async (siteId) => {
+      if (siteId === 'site-a') { await gate; return detailOf('网站 A') }
+      return detailOf('网站 B')
+    })
+    vi.spyOn(siteApi, 'siteSources').mockImplementation(async (siteId) => {
+      if (siteId === 'site-a') { await gate; return [{ ...source }] }
+      return [{ ...source, sourceId: 'source-b', siteId: 'site-b', name: 'B 站源' }]
+    })
+    vi.spyOn(siteApi, 'siteSourcePreview').mockImplementation(async (siteId) =>
+      siteId === 'site-a' ? [{ ...source }] : [{ ...source, sourceId: 'source-b', siteId: 'site-b', name: 'B 站源' }])
+
+    const wrapper = mount(SiteSourceSwitcher, {
+      props: { siteId: 'site-a', activeKey: source.sourceId },
+      global: { stubs: { 'el-drawer': { template: '<div><slot /><slot name="footer" /></div>' } }, directives: { loading: {} } },
+    })
+    // 初始加载（非 force）用 preview——site-a 的 detail 仍被 gate 卡着，先放行完成首屏
+    releaseA?.()
+    await flushPromises()
+
+    // 强刷 site-a：detail/sources 对 site-a 重新挂起（gate2）
+    let release2: (() => void) | undefined
+    const gate2 = new Promise<void>((resolve) => { release2 = resolve })
+    const detailSpy = vi.spyOn(siteApi, 'siteDetail').mockImplementation(async (siteId) => {
+      if (siteId === 'site-a') { await gate2; return detailOf('网站 A') }
+      return detailOf('网站 B')
+    })
+    vi.spyOn(siteApi, 'siteSources').mockImplementation(async (siteId) => {
+      if (siteId === 'site-a') { await gate2; return [{ ...source }] }
+      return [{ ...source, sourceId: 'source-b', siteId: 'site-b', name: 'B 站源' }]
+    })
+    // 触发 force 加载（不 await，模拟用户点保存后立刻切站）
+    void (wrapper.vm as unknown as { reload: () => Promise<void> }).reload()
+    await wrapper.setProps({ siteId: 'site-b' })
+    await flushPromises()
+
+    // 此时显示的应该是 site-b 的数据
+    expect(wrapper.text()).toContain('网站 B')
+    expect(wrapper.text()).toContain('B 站源')
+
+    // 强刷的旧站响应这时才回来
+    release2?.()
+    await flushPromises()
+
+    // 关键断言：旧站（网站 A）的晚到响应不能覆盖新站（网站 B）
+    expect(detailSpy).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('网站 B')
+    expect(wrapper.text()).not.toContain('网站 A')
+    wrapper.unmount()
   })
 })

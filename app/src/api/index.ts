@@ -731,6 +731,17 @@ const siteTablesCache = new Map<string, Promise<SiteTablesResult>>()
 const siteSourcesCache = new Map<string, { at: number; promise: Promise<Source[]> }>()
 const SITE_SOURCES_TTL = 10_000
 
+async function requestSiteSources(siteId: string, limit: number, timeoutMs?: number): Promise<Source[]> {
+  const result = await request<Paged<unknown> | Source[]>('site/sourcesOfSite', { siteId }, {
+    method: 'GET',
+    httpEndpoint: 'site/sources',
+    httpParams: { siteId, page: 1, limit },
+    timeoutMs,
+  })
+  const list = Array.isArray(result) ? result : result.list
+  return list.map(siteSourceFromLegacy)
+}
+
 async function loadSiteTables(
   siteId: string,
   onProgress?: (tables: SiteTableOption[]) => void,
@@ -922,17 +933,10 @@ export const siteApi = {
     const cached = siteSourcesCache.get(siteId)
     if (!options.force && cached && Date.now() - cached.at < SITE_SOURCES_TTL) return cached.promise
     const promise = (async () => {
-      const result = await request<Paged<unknown> | Source[]>('site/sourcesOfSite', { siteId }, {
-        method: 'GET',
-        httpEndpoint: 'site/sources',
-        // limit 取 10000（与 sourceSteps / sourceCategories 的「一次取全」口径一致）：
-        // 1000 会把源多的网站截断，侧栏「源列表 (N)」只显示前 1000 个（2026-09-07 实测 6496 个源的站）。
-        httpParams: { siteId, page: 1, limit: 10000 },
-        // 几千行一次拉回来，默认 20s 会超时（实测 6496 行侧栏偶发 signal aborted → 源列表 (0)）。
-        timeoutMs: 60_000,
-      })
-      const list = Array.isArray(result) ? result : result.list
-      return list.map(siteSourceFromLegacy)
+      // limit 取 10000（与 sourceSteps / sourceCategories 的「一次取全」口径一致）：
+      // 1000 会把源多的网站截断，侧栏「源列表 (N)」只显示前 1000 个（2026-09-07 实测 6496 个源的站）。
+      // 几千行一次拉回来，默认 20s 会超时（实测 6496 行侧栏偶发 signal aborted → 源列表 (0)）。
+      return requestSiteSources(siteId, 10000, 60_000)
     })()
     siteSourcesCache.set(siteId, { at: Date.now(), promise })
     void promise.catch(() => {
@@ -940,6 +944,15 @@ export const siteApi = {
       if (siteSourcesCache.get(siteId)?.promise === promise) siteSourcesCache.delete(siteId)
     })
     return promise
+  },
+  // 采集资产卡片首屏只展示 4 个源 chip，不应为了这 4 个名字下载单站数千条完整源对象。
+  // 若画布等页面刚拉过全量则直接切片复用；否则走同一真实端点的小分页请求。
+  siteSourcePreview: (siteId: string, limit = 4): Promise<Source[]> => {
+    const cached = siteSourcesCache.get(siteId)
+    if (cached && Date.now() - cached.at < SITE_SOURCES_TTL) {
+      return cached.promise.then((list) => list.slice(0, limit))
+    }
+    return requestSiteSources(siteId, limit)
   },
   refreshSiteSources: (siteId: string) => {
     siteSourcesCache.delete(siteId)

@@ -29,11 +29,41 @@ const ws = useWorkspaceStore()
 
 const site = ref<Site | null>(null)
 const children = ref<Source[]>([])
+const childrenHydrating = ref(false)
+let loadSeq = 0
 async function load(force = false) {
-  ;[site.value, children.value] = await Promise.all([
+  const id = ++loadSeq
+  if (force) {
+    const [detail, all] = await Promise.all([
+      siteApi.siteDetail(props.siteId),
+      siteApi.siteSources(props.siteId, { force: true }),
+    ])
+    // 强刷响应慢，回来时可能已切到别的站（watch 已推进 loadSeq）——晚到的旧站数据直接丢弃。
+    if (id !== loadSeq) return
+    site.value = detail
+    children.value = all
+    childrenHydrating.value = false
+    return
+  }
+
+  // 左侧首屏最多渲染 120 行，不必先等单站 6496 条完整响应。先取同等大小的预览让网站页
+  // 立即可用，再后台补齐完整列表；右侧源视图自己的 sourcePaged(20) 可同时快速返回。
+  const [detail, preview] = await Promise.all([
     siteApi.siteDetail(props.siteId),
-    siteApi.siteSources(props.siteId, { force }),
+    siteApi.siteSourcePreview(props.siteId, LIST_PAGE),
   ])
+  if (id !== loadSeq) return
+  site.value = detail
+  children.value = preview
+  childrenHydrating.value = preview.length < (detail?.sourceCount ?? preview.length)
+  if (!childrenHydrating.value) return
+  void siteApi.siteSources(props.siteId).then((all) => {
+    if (id !== loadSeq) return
+    children.value = all
+    childrenHydrating.value = false
+  }).catch(() => {
+    if (id === loadSeq) childrenHydrating.value = false
+  })
 }
 onMounted(() => load())
 watch(() => props.siteId, () => load())
@@ -794,7 +824,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
         <button class="ssw-collapse" type="button" title="收起侧栏" @click="collapsed = true">«</button>
       </div>
       <div class="ssw-section-toggle" @click="listExpanded = !listExpanded">
-        <span class="ssw-section-title">源列表 ({{ children.length }})</span>
+        <span class="ssw-section-title">源列表 ({{ site?.sourceCount ?? children.length }})</span>
         <span class="ssw-section-icon">{{ listExpanded ? '▼' : '▶' }}</span>
       </div>
       <template v-if="listExpanded">
@@ -859,6 +889,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
           <div v-else-if="visibleRows.length < filtered.length" class="ssw-more-hint">
             已显示 {{ visibleRows.length }} / {{ filtered.length }}，向下滚动加载更多
           </div>
+          <div v-else-if="childrenHydrating" class="ssw-more-hint">已显示首批 {{ children.length }} 个源，正在后台加载完整列表…</div>
         </div>
       </template>
 

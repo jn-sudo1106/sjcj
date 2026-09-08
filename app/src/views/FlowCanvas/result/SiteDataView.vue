@@ -68,6 +68,9 @@ function openSourceView() {
 
 const PAGE_SIZE = 20
 const MAX_PARALLEL_REQUESTS = 4
+// 全部源首屏若一次激活全部候选源，top-K 归并必须等数百/数千个首屏请求全部返回才展示。
+// 每次只把一小批源加入归并，先给出可用数据；滚动/“加载更多”时继续扫描后续源。
+const SOURCE_SCAN_BATCH = 20
 
 // 全屏（参考 ResultView.vue 的具体源数据视图）：整个面板 position:fixed 铺满视口，不复制
 // 模板、不引入弹层。轨道在全屏下不做任何自动折叠——它是唯一的节点选择器，藏起来就没法
@@ -106,6 +109,7 @@ const gridSourceNames = computed<Record<string, string>>(() => (selectedSourceId
 
 let mergeStates: MergeSourceState[] = []
 let candidateSourceIds: string[] = []
+let candidateCursor = 0
 let requestId = 0
 
 // ---------- 具体源：本地流程数据 + 节点选择（不碰全局 useFlowStore()） ----------
@@ -300,6 +304,14 @@ async function loadMore() {
   const condition = { tableId: effectiveTableId.value, sql: filters.sql }
   let queried = false
   try {
+    // 具体源一次激活完；全部源每轮最多新增 SOURCE_SCAN_BATCH 个，避免首屏等待所有源。
+    const nextCursor = selectedSourceId.value
+      ? candidateSourceIds.length
+      : Math.min(candidateCursor + SOURCE_SCAN_BATCH, candidateSourceIds.length)
+    if (nextCursor > candidateCursor) {
+      mergeStates.push(...initMergeState(candidateSourceIds.slice(candidateCursor, nextCursor)))
+      candidateCursor = nextCursor
+    }
     const result = await mergeLoadMore(mergeStates, PAGE_SIZE, PAGE_SIZE,
       async (sourceId, page, size) => {
         const list = await fetchPage(sourceId, page, size, condition)
@@ -310,7 +322,7 @@ async function loadMore() {
     if (queried && !result.failedSources.length) rememberSqlCondition(condition.tableId, condition.sql)
     rows.value = [...rows.value, ...result.rows]
     failedSources.value = result.failedSources
-    allExhausted.value = result.allExhausted
+    allExhausted.value = candidateCursor >= candidateSourceIds.length && result.allExhausted
     if (!meta.value && rows.value.length) meta.value = inferTableMeta(effectiveTableId.value, rows.value)
     if (result.rows.length === 0 && result.failedSources.length && !result.allExhausted) {
       dataError.value = '本次未能取到新数据，可能是相关源暂时查询失败，请点击“加载更多”重试'
@@ -344,6 +356,7 @@ async function resetAndLoad() {
   noCandidateSources.value = false
   mergeStates = []
   candidateSourceIds = []
+  candidateCursor = 0
   const tid = effectiveTableId.value
   if (!tid) return
   loading.value = true
@@ -355,18 +368,22 @@ async function resetAndLoad() {
     } else {
       // 全部源：先收窄源集合（方案 §6.2.2）：问这张表实际有哪些源的数据，跟当前网站源集合取交集。
       // 收窄本身失败不阻断整体查询，退回用网站全部源（请求量更大，但结果仍然正确）。
-      siteChildren.value = await siteApi.siteSources(props.siteId)
-      if (id !== requestId) return
       // ⚠️ entryDistinctSource 不按网站过滤，返回的是全平台写过这张表的源；不传 size 会退回
       // buildLegacyRowQuery 的分页默认值 20（真实 bug，2026-08-14 生产环境实测发现：某些共用表
       // 全平台引用源数超过 20，本网站的源恰好不在前 20 个里，交集算出来是空的，页面误报"没有可
       // 查询的源"）。size 传大值取全量，1000 是 Q10 已实测确认不截断的安全值。
       let distinctIds: string[] | null = null
-      try {
-        distinctIds = await dataApi.distinctSource({ tableId: tid, size: 1000 })
-      } catch {
-        distinctIds = null
-      }
+      ;[siteChildren.value, distinctIds] = await Promise.all([
+        siteApi.siteSources(props.siteId),
+        dataApi.distinctSource({
+          tableId: tid,
+          dataId: filters.dataId || undefined,
+          parentId: filters.parentId || undefined,
+          state: filters.state || undefined,
+          sql: filters.sql || undefined,
+          size: 1000,
+        }).catch(() => null),
+      ])
       if (id !== requestId) return
       const siteSourceIds = new Set(siteChildren.value.map((s) => s.sourceId))
       const scopedDistinctIds = distinctIds?.filter((sid) => siteSourceIds.has(sid)) ?? []
@@ -375,7 +392,6 @@ async function resetAndLoad() {
       // 让 entryDataPaged 进行真实查询，避免把 TB_CNEWS 这类有效表提前判成不可查。
       candidateSourceIds = scopedDistinctIds.length ? scopedDistinctIds : [...siteSourceIds]
     }
-    mergeStates = initMergeState(candidateSourceIds)
     if (!candidateSourceIds.length) {
       noCandidateSources.value = true
       return
@@ -731,6 +747,7 @@ function onCellFile(path: string) {
         <template #head>
           <span class="sdv2-tablename">{{ meta?.tableName || effectiveTableId }}</span>
           <span class="sdv2-count">已加载 {{ rows.length }} 条</span>
+          <span v-if="!selectedSourceId && candidateSourceIds.length" class="muted">已扫描 {{ candidateCursor }}/{{ candidateSourceIds.length }} 个源</span>
           <span v-if="canPickRows" class="muted">已选 {{ selectedRowIds.length }} 条</span>
           <button
             v-if="canPickRows"

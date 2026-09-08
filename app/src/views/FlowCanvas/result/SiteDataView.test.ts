@@ -288,6 +288,28 @@ describe('SiteDataView · 全部源（表筛选）', () => {
     expect(wrapper.text()).toContain('已加载 5 条')
   })
 
+  it('大源量网站首屏只扫描 20 个候选源，加载更多再继续下一批', async () => {
+    const sources = Array.from({ length: 45 }, (_, index) => source(`s${index + 1}`))
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue(sources)
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(sources.map((item) => item.sourceId))
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockImplementation(async ({ sourceId }) => ({
+      total: 1, list: [row(String(sourceId), '1')],
+    }))
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+
+    expect(query).toHaveBeenCalledTimes(20)
+    expect(wrapper.text()).toContain('已扫描 20/45 个源')
+
+    await wrapper.get('[data-testid="site-data-load-more"]').trigger('click')
+    await flushPromises()
+
+    expect(query).toHaveBeenCalledTimes(40)
+    expect(wrapper.text()).toContain('已扫描 40/45 个源')
+  })
+
   it('切换网站时清空已选的表', async () => {
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
     vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['a'])
