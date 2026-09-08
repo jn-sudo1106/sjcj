@@ -391,7 +391,7 @@ export const sourceApi = {
         page: p?.page ?? 1,
         limit: p?.size ?? 20,
         ids,
-        siteId: p?.siteId,
+        // 只发复数 siteIds：source-api.md §1.1 明确后端不读单数 siteId（传 -1 查未关联源也走复数）
         siteIds: p?.siteIds,
         sourceId: p?.sourceId,
         name: p?.name ?? p?.keyword,
@@ -636,7 +636,6 @@ export const sourceApi = {
       httpParams: {
         ids: Array.isArray(p?.sourceIds) ? p.sourceIds.join(',') : (p?.sourceIds ?? p?.ids),
         siteIds: p?.siteIds,
-        siteId: p?.siteId,
         name: p?.name,
         state: p?.state === 'all' ? undefined : p?.state,
         enable: p?.enable,

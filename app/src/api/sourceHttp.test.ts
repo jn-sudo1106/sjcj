@@ -101,7 +101,6 @@ describe('旧平台新建源 HTTP 契约', () => {
       configId: '81516',
       category: '资讯',
       enable: '0',
-      siteId: '11',
       siteIds: '-1',
       field: 'dataCnt',
       sorted: 1,
@@ -121,7 +120,6 @@ describe('旧平台新建源 HTTP 契约', () => {
       configId: '81516',
       categorys: '资讯',
       enable: '0',
-      siteId: '11',
       siteIds: '-1',
       notify: '',
       field: 'dataCnt',
@@ -129,6 +127,8 @@ describe('旧平台新建源 HTTP 契约', () => {
       tags: [],
     })
     expect(JSON.parse(String(init.body))).not.toHaveProperty('state')
+    // 单数 siteId 后端不读（source-api.md §1.1），不透传
+    expect(JSON.parse(String(init.body))).not.toHaveProperty('siteId')
     expect(result).toEqual({
       total: 1,
       list: [expect.objectContaining({
