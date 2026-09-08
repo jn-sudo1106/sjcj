@@ -386,8 +386,8 @@ function menuAction(action: string) {
   const x = menu.x
   const y = menu.y
   closeMenu()
-  if (action === 'config' && id) flow.select(id)
-  else if (action === 'insert-node') openAddPopover(x, y, after)
+  // 右键时 onNodeMenu 已 flow.select(id)，节点即已选中/面板即已打开，无需再给「配置节点」入口
+  if (action === 'insert-node') openAddPopover(x, y, after)
   else if (action === 'copy' && id) void duplicateNode(id)
   else if (action === 'move-up' && id) flow.move(id, -1)
   else if (action === 'move-down' && id) flow.move(id, 1)
@@ -642,7 +642,6 @@ watch(
     <!-- 右键菜单 -->
     <div v-if="menu.show" class="rc-node-menu" :style="{ left: menu.x + 'px', top: menu.y + 'px' }" @click.stop>
       <template v-if="menu.nodeId">
-        <button type="button" @click="menuAction('config')">配置节点</button>
         <button type="button" @click="menuAction('insert-node')">添加节点</button>
         <div class="sep" />
         <button type="button" @click="menuAction('copy')">复制节点</button>
