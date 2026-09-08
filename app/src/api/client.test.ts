@@ -283,16 +283,26 @@ describe('生产写守卫', () => {
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
     const { request, ProductionWriteBlockedError } = await import('./client')
 
-    await expect(request('task/resetTaskInsts', { ids: '1' })).rejects.toThrow(/写保护|不在允许清单/)
+    await expect(request('dataset/delete', { id: '1' })).rejects.toThrow(/写保护|不在允许清单/)
     expect(fetchMock).not.toHaveBeenCalled()
 
     // 拦截发生在网络请求之前，抛出的错误信息里必须点名具体端点，方便排查是哪次调用被挡
     try {
-      await request('task/resetTaskInsts', { ids: '1' })
+      await request('dataset/delete', { id: '1' })
     } catch (e) {
-      expect((e as Error).message).toContain('task/resetTaskInsts')
+      expect((e as Error).message).toContain('dataset/delete')
     }
     void ProductionWriteBlockedError
+  })
+
+  it('连生产时，task/resetTaskInsts 在白名单内（任务重发，只重排队不改删，2026-08-13 实测）', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, data: null }))
+    const { request } = await import('./client')
+
+    await request('task/resetTaskInsts', { ids: '1' }, { method: 'GET', httpParams: { ids: '1' } })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('连生产时，config/modify/updateConfig 在白名单内（2026-08-28 拍板放开新建+保存配置）', async () => {

@@ -172,6 +172,10 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   // isRoot=1 保持不动）。与 config/copyAll、source/copySource 同性质。
   'flow/copyFlow',
   'flow/copyTemplateSteps',
+  // 2026-09-08 放开：任务实例重发（task/resetTaskInsts，画布任务视图行内「重发」）。
+  // 只把选中任务重置为待发送重新排队，不改不删任何配置/源/流程。2026-08-13 测试环境实测：
+  // E / L 都能重跑、都变 W1、响应无逐条结果、无效 ID 静默忽略、幂等。UI 侧保留二次确认。
+  'task/resetTaskInsts',
 ])
 
 function isProductionWriteAllowed(httpEndpoint: string): boolean {

@@ -244,7 +244,9 @@ export const ENDPOINTS: EndpointSpec[] = [
 
   /* ── task 任务实例（目标 2 / 收录 2） ── */
   { path: 'task/topTaskPaged', desc: '任务实例分页（运行记录事实源）', impl: true, live: true },
-  { path: 'task/resetTaskInsts', desc: '重置任务实例', danger: true },
+  // 2026-08-13 测试环境实测放行：E / L 都能重跑、都变 W1、响应无逐条结果、无效 ID 静默忽略、幂等。
+  // live-only（同 source/delete 等）：无专属 mock handler，靠真实后端。
+  { path: 'task/resetTaskInsts', desc: '重置任务实例', danger: true, live: true },
 
   /* ── dataset 指标数据集（目标 9 / 收录 9） ── */
   { path: 'dataset/datasetPaged', desc: '数据集分页', impl: true },
