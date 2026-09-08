@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { siteApi, sourceApi, type NodeRunStat, type Source, type Step, type TaskInst } from '@/api'
+import { dataApi, siteApi, sourceApi, type NodeRunStat, type Source, type Step, type TaskInst } from '@/api'
 import { useFlowStore } from '@/stores/flow'
+import { useAuthStore } from '@/stores/auth'
+import { confirmDanger } from '@/utils/confirmDanger'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import { buildHorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
@@ -77,21 +79,25 @@ function configIdForNode(nodeId: string): string | undefined {
 }
 
 // 任务视图无自动刷新时，「运行中」的任务会一直挂在旧快照上（后端跑完了界面不知道）。
-// 列表里只要还有「活跃的」state==='L' 任务，就每 10s 静默重拉一次，全部 C/E 后自动停。
+// 列表里只要还有 state==='L' 的任务，就每 10s 静默重拉一次，全部 C/E 后自动停。
 const REFRESH_MS = 10_000
-// 超过这个分钟数没更新的「运行中」任务，判为失联（后端 worker 挂了不会把 L 翻成 E）：
-// 不再为它轮询，并在行上标「疑似卡住」——真实成败要看源的「上次成功」和数据视图。
-const STUCK_MIN = 30
 let pollTimer: ReturnType<typeof setInterval> | undefined
-function staleMinutes(task: TaskInst): number {
-  const t = new Date(String(task.updatedAt || '').replace(' ', 'T')).getTime()
-  return Number.isNaN(t) ? 0 : Math.floor((Date.now() - t) / 60_000)
+const autoRefreshing = computed(() => rows.value.some((t) => t.state === 'L'))
+
+// 重发 = task/resetTaskInsts（danger:true）。写入口对非 admin 隐藏，与 TaskInstDialog 同口径。
+const auth = useAuthStore()
+const canWrite = computed(() => auth.role === 'admin')
+function resendTask(task: TaskInst) {
+  void confirmDanger(
+    '重发任务',
+    `将把任务 ${task.taskId}（${task.taskName || '—'}）重置为待发送，重新排队执行，是否继续？`,
+    () => dataApi.resendTask([task.taskId]),
+    (res) => {
+      ElMessage.success(res?.message || `任务 ${task.taskId} 已重置为待发送`)
+      void loadTasks()
+    },
+  )
 }
-function isStuck(task: TaskInst): boolean {
-  return task.state === 'L' && staleMinutes(task) >= STUCK_MIN
-}
-const autoRefreshing = computed(() => rows.value.some((t) => t.state === 'L' && !isStuck(t)))
-const stuckCount = computed(() => rows.value.filter(isStuck).length)
 function stopPoll() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = undefined }
 }
@@ -241,14 +247,11 @@ const nextStepHints = computed(() => {
           <span v-if="autoRefreshing" class="tv-auto" data-testid="task-auto-refresh">
             <span class="tv-spin" />有任务运行中，每 10 秒自动刷新
           </span>
-          <span v-if="stuckCount" class="tv-stuck-note" data-testid="task-stuck-note">
-            {{ stuckCount }} 个任务超过 {{ STUCK_MIN }} 分钟无更新（疑似失联）——本轮成败请看源的「上次成功」时间与数据视图
-          </span>
         </div>
 
         <table class="rc-data-table tv-table" data-testid="source-task-table" v-loading="loading">
           <thead>
-            <tr><th>任务 ID</th><th v-if="showSourceColumn">所属源</th><th>流程节点</th><th>任务名称</th><th>队列</th><th>总任务数</th><th>已处理数</th><th>类型</th><th>状态</th><th>更新时间</th></tr>
+            <tr><th>任务 ID</th><th v-if="showSourceColumn">所属源</th><th>流程节点</th><th>任务名称</th><th>队列</th><th>总任务数</th><th>已处理数</th><th>类型</th><th>状态</th><th>更新时间</th><th v-if="canWrite">操作</th></tr>
           </thead>
           <tbody>
             <tr v-for="task in rows" :key="task.taskId">
@@ -261,18 +264,16 @@ const nextStepHints = computed(() => {
               <td>{{ nodeRun(task.sourceId, task.node)?.processedTasks ?? '—' }}</td>
               <td>{{ task.typeName }}</td>
               <td>
-                <span class="rc-status" :class="[stateClass(task.state), { stuck: isStuck(task) }]">
-                  <span v-if="task.state === 'L' && !isStuck(task)" class="tv-spin" />{{ stateText(task.state) }}
+                <span class="rc-status" :class="stateClass(task.state)">
+                  <span v-if="task.state === 'L'" class="tv-spin" />{{ stateText(task.state) }}
                 </span>
-                <span
-                  v-if="isStuck(task)"
-                  class="tv-stuck-tag"
-                  title="该任务超过 30 分钟没有状态更新，后端很可能已失联（worker 挂了不会把「运行中」翻成「异常」）。这一轮到底成没成，看源头部的「上次成功」时间、以及数据 / 文件视图里有没有新数据落库。"
-                >疑似卡住</span>
               </td>
               <td class="tv-time">{{ task.updatedAt || '—' }}</td>
+              <td v-if="canWrite">
+                <button class="tv-resend" type="button" data-testid="task-resend" @click="resendTask(task)">重发</button>
+              </td>
             </tr>
-            <tr v-if="!rows.length && !loading"><td :colspan="showSourceColumn ? 10 : 9" class="tv-empty-row">没有匹配的任务记录</td></tr>
+            <tr v-if="!rows.length && !loading"><td :colspan="(showSourceColumn ? 10 : 9) + (canWrite ? 1 : 0)" class="tv-empty-row">没有匹配的任务记录</td></tr>
           </tbody>
         </table>
         <!-- 分页与数据中心统一（DataQueryPanel 的 .dqp-pager 同款 el-pagination） -->
@@ -310,9 +311,8 @@ const nextStepHints = computed(() => {
 .tv-empty-row { padding: 28px 12px; color: var(--rc-faint); font-size: 12px; text-align: center; }
 .muted { color: var(--rc-faint); font-size: 12px; }
 .tv-auto { display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; color: var(--rc-muted); font-size: 11px; }
-.tv-stuck-note { margin-left: 4px; color: #b45309; font-size: 11px; }
-.rc-status.stuck { color: var(--rc-faint); }
-.tv-stuck-tag { margin-left: 6px; padding: 1px 6px; border: 1px solid #fcd34d; border-radius: 4px; background: #fffbeb; color: #b45309; font-size: 10px; white-space: nowrap; cursor: help; }
+.tv-resend { border: 0; background: transparent; padding: 0; color: var(--rc-primary); font-size: 12px; cursor: pointer; }
+.tv-resend:hover { text-decoration: underline; }
 .tv-spin { display: inline-block; width: 9px; height: 9px; margin-right: 4px; border: 1.5px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: tv-spin 0.7s linear infinite; vertical-align: -1px; }
 .rc-status.run .tv-spin { border-color: currentColor; border-top-color: transparent; }
 @keyframes tv-spin { to { transform: rotate(360deg); } }

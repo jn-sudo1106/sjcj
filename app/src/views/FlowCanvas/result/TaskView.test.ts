@@ -3,10 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
+import { ElMessageBox } from 'element-plus'
 import TaskView from './TaskView.vue'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
-import { sourceApi, type TaskInst } from '@/api'
+import { dataApi, sourceApi, type TaskInst } from '@/api'
 import { useFlowStore } from '@/stores/flow'
+import { useAuthStore } from '@/stores/auth'
 
 const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
 
@@ -37,7 +39,7 @@ describe('TaskView', () => {
     wrapper.unmount()
   })
 
-  it('有「活跃运行中」任务时每 10s 自动刷新，全部完成后停；「刷新」按钮手动重拉', async () => {
+  it('有「运行中」任务时每 10s 自动刷新，全部完成后停；「刷新」按钮手动重拉', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-08T10:00:00'))
     setActivePinia(createPinia())
@@ -78,37 +80,37 @@ describe('TaskView', () => {
     vi.useRealTimers()
   })
 
-  it('「运行中」但超过 30 分钟没更新：标「疑似卡住」、不再为它轮询', async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-09-08T13:00:00'))
+  it('admin 每行有「重发」，二次确认后调 dataApi.resendTask 并刷新；read 角色无操作列', async () => {
     setActivePinia(createPinia())
     await router.push('/canvas')
+    const auth = useAuthStore()
+    auth.roles = ['admin']
     const source = mockSourceDetail({ sourceId: '391007768' })!
     useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
 
-    // 3 小时没更新
-    const stuck: TaskInst[] = [
-      { taskId: 't-stuck', state: 'L', typeName: '浏览器抓取', taskName: '掉队任务', sourceId: source.sourceId, updatedAt: '2026-09-08 09:54' },
-    ]
-    const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 1, list: stuck })
+    vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
+      total: 1,
+      list: [{ taskId: 't1', state: 'L', typeName: '浏览器抓取', taskName: '掉队任务', sourceId: source.sourceId, updatedAt: '2026-09-08 09:54' }],
+    })
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const resend = vi.spyOn(dataApi, 'resendTask').mockResolvedValue({ message: 'ok' })
 
     const wrapper = shallowMount(TaskView, {
       global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
     })
-    await vi.advanceTimersByTimeAsync(200)
+    await new Promise((resolve) => setTimeout(resolve, 150))
     await flushPromises()
-    const calls = paged.mock.calls.length
 
-    expect(wrapper.find('[data-testid="task-stuck-note"]').exists()).toBe(true)
-    expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('疑似卡住')
-    // 失联任务不触发自动刷新
-    expect(wrapper.find('[data-testid="task-auto-refresh"]').exists()).toBe(false)
-    await vi.advanceTimersByTimeAsync(30_000)
+    await wrapper.get('[data-testid="task-resend"]').trigger('click')
     await flushPromises()
-    expect(paged.mock.calls.length).toBe(calls)
+    expect(confirm).toHaveBeenCalled()
+    expect(resend).toHaveBeenCalledWith(['t1'])
+
+    auth.roles = ['read']
+    await flushPromises()
+    expect(wrapper.find('[data-testid="task-resend"]').exists()).toBe(false)
 
     wrapper.unmount()
-    vi.useRealTimers()
   })
 
   it('网站详情页（site-wide）聚合查看全部源任务，不展示流程节点条', async () => {
