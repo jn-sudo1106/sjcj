@@ -728,7 +728,7 @@ const siteTablesCache = new Map<string, Promise<SiteTablesResult>>()
 // 同一 siteId 的 site/sources 在建站画布里会被侧栏、数据视图、选表器等前后脚各拉一遍，
 // 每遍几千行要 8~36s。共享进行中的请求，并短暂缓存（10s）覆盖「侧栏刚拉完，切到数据视图又拉」
 // 这种紧邻场景；写后要读新数据的调用方传 { force: true } 绕过。
-const siteSourcesCache = new Map<string, { at: number; promise: Promise<Source[]> }>()
+const siteSourcesCache = new Map<string, { at: number; promise: Promise<Source[]>; value?: Source[] }>()
 const SITE_SOURCES_TTL = 10_000
 
 async function requestSiteSources(siteId: string, limit: number, timeoutMs?: number): Promise<Source[]> {
@@ -747,8 +747,10 @@ async function loadSiteTables(
   onProgress?: (tables: SiteTableOption[]) => void,
 ): Promise<SiteTablesResult> {
   const tableMap = new Map<string, SiteTableOption>()
-  const sources = await siteApi.siteSources(siteId)
-  const sourceIds = sources.map((source) => source.sourceId.trim()).filter(Boolean)
+  // 表选择首屏只需要尽快拿到常用表，不应等待单站几千条完整源列表。先用与左侧首屏同量的
+  // 120 条源构建可用目录；完整源列表到达后在后台补查其余源，并通过 onProgress 增量更新。
+  const preview = await siteApi.siteSourcePreview(siteId, 120)
+  const sourceIds = preview.map((source) => source.sourceId.trim()).filter(Boolean)
   if (!sourceIds.length) {
     onProgress?.([])
     return { tables: [], sourceCount: 0, overThreshold: false, failedSourceIds: [] }
@@ -759,25 +761,38 @@ async function loadSiteTables(
   // 并发后约 4 波。
   const ENTRY_GROUP_CHUNK = 300
   const ENTRY_GROUP_CONCURRENCY = 6
-  const chunks: string[][] = []
-  for (let i = 0; i < sourceIds.length; i += ENTRY_GROUP_CHUNK) {
-    chunks.push(sourceIds.slice(i, i + ENTRY_GROUP_CHUNK))
-  }
-  for (let i = 0; i < chunks.length; i += ENTRY_GROUP_CONCURRENCY) {
-    const groups = await Promise.all(
-      chunks.slice(i, i + ENTRY_GROUP_CONCURRENCY).map((chunk) => dataApi.entryTypesGroup(chunk.join(','))),
-    )
-    for (const group of groups) {
-      for (const entry of [...group.list1, ...group.list2, ...group.list3]) {
-        if (!tableMap.has(entry.tableId)) {
-          tableMap.set(entry.tableId, { tableId: entry.tableId, tableName: entry.tableName, name: entry.name })
+  const appendTables = async (ids: string[]) => {
+    const chunks: string[][] = []
+    for (let i = 0; i < ids.length; i += ENTRY_GROUP_CHUNK) chunks.push(ids.slice(i, i + ENTRY_GROUP_CHUNK))
+    for (let i = 0; i < chunks.length; i += ENTRY_GROUP_CONCURRENCY) {
+      const groups = await Promise.all(
+        chunks.slice(i, i + ENTRY_GROUP_CONCURRENCY).map((chunk) => dataApi.entryTypesGroup(chunk.join(','))),
+      )
+      for (const group of groups) {
+        for (const entry of [...group.list1, ...group.list2, ...group.list3]) {
+          if (!tableMap.has(entry.tableId)) {
+            tableMap.set(entry.tableId, { tableId: entry.tableId, tableName: entry.tableName, name: entry.name })
+          }
         }
       }
+      onProgress?.([...tableMap.values()])
     }
   }
-  const tables = [...tableMap.values()]
-  onProgress?.(tables)
-  return { tables, sourceCount: sourceIds.length, overThreshold: false, failedSourceIds: [] }
+  await appendTables(sourceIds)
+  const quickResult: SiteTablesResult = {
+    tables: [...tableMap.values()], sourceCount: sourceIds.length, overThreshold: false, failedSourceIds: [],
+  }
+  // 不 await：首批目录一到，选择器立即结束 loading。完整目录在同一组件生命周期内渐进补齐。
+  void siteApi.siteSources(siteId).then(async (sources) => {
+    const previewIds = new Set(sourceIds)
+    const remainingIds = sources.map((source) => source.sourceId.trim()).filter((id) => id && !previewIds.has(id))
+    if (remainingIds.length) await appendTables(remainingIds)
+    quickResult.tables = [...tableMap.values()]
+    quickResult.sourceCount = sources.length
+  }).catch(() => {
+    // 首批目录已经可用；后台补全失败不把选择器重新打回错误态。
+  })
+  return quickResult
 }
 
 // 网站—源父子模型（0707 优化·Phase2）：网站=统一流程模板+批量工具（不运行），源=运行实体
@@ -931,14 +946,23 @@ export const siteApi = {
   },
   siteSources: (siteId: string, options: { force?: boolean } = {}): Promise<Source[]> => {
     const cached = siteSourcesCache.get(siteId)
-    if (!options.force && cached && Date.now() - cached.at < SITE_SOURCES_TTL) return cached.promise
+    // 进行中的完整请求无论耗时多久都必须复用；TTL 只约束已经完成的值，否则一个 36s 请求
+    // 到第 10s 后会被侧栏/选表器再次各发一遍，越慢重复请求越多。
+    if (!options.force && cached && (!cached.value || Date.now() - cached.at < SITE_SOURCES_TTL)) return cached.promise
     const promise = (async () => {
       // limit 取 10000（与 sourceSteps / sourceCategories 的「一次取全」口径一致）：
       // 1000 会把源多的网站截断，侧栏「源列表 (N)」只显示前 1000 个（2026-09-07 实测 6496 个源的站）。
       // 几千行一次拉回来，默认 20s 会超时（实测 6496 行侧栏偶发 signal aborted → 源列表 (0)）。
       return requestSiteSources(siteId, 10000, 60_000)
     })()
-    siteSourcesCache.set(siteId, { at: Date.now(), promise })
+    const entry: { at: number; promise: Promise<Source[]>; value?: Source[] } = { at: Date.now(), promise }
+    siteSourcesCache.set(siteId, entry)
+    void promise.then((value) => {
+      if (siteSourcesCache.get(siteId)?.promise === promise) {
+        entry.value = value
+        entry.at = Date.now()
+      }
+    }).catch(() => {})
     void promise.catch(() => {
       // 失败态不留缓存，允许下次重试
       if (siteSourcesCache.get(siteId)?.promise === promise) siteSourcesCache.delete(siteId)
@@ -949,9 +973,10 @@ export const siteApi = {
   // 若画布等页面刚拉过全量则直接切片复用；否则走同一真实端点的小分页请求。
   siteSourcePreview: (siteId: string, limit = 4): Promise<Source[]> => {
     const cached = siteSourcesCache.get(siteId)
-    if (cached && Date.now() - cached.at < SITE_SOURCES_TTL) {
-      return cached.promise.then((list) => list.slice(0, limit))
+    if (cached?.value && Date.now() - cached.at < SITE_SOURCES_TTL) {
+      return Promise.resolve(cached.value.slice(0, limit))
     }
+    // 完整列表仍在请求中时也单独发轻量预览；不能跟着 cached.promise 等几十秒，否则预览失去意义。
     return requestSiteSources(siteId, limit)
   },
   refreshSiteSources: (siteId: string) => {

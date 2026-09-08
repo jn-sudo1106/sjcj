@@ -14,6 +14,10 @@ function group(entries: { tableId: string; tableName: string; name?: string }[])
 function sources(...sourceIds: string[]): Source[] {
   return sourceIds.map((sourceId) => ({ sourceId, name: `源-${sourceId}`, url: '', configId: '', mainTable: '', owner: '', state: 'C' }))
 }
+function mockSiteSources(list: Source[]) {
+  vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue(list.slice(0, 120))
+  vi.spyOn(siteApi, 'siteSources').mockResolvedValue(list)
+}
 
 describe('siteApi.siteTables', () => {
   afterEach(() => vi.restoreAllMocks())
@@ -24,7 +28,7 @@ describe('siteApi.siteTables', () => {
       { tableId: 't1', tableName: 'T1' },
       { tableId: 't3', tableName: 'T3', name: '表三' },
     ]))
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue(sources('s1', 's2'))
+    mockSiteSources(sources('s1', 's2'))
 
     const result = await siteApi.siteTables('site-x', { force: true })
 
@@ -38,14 +42,14 @@ describe('siteApi.siteTables', () => {
   })
 
   it('目录请求失败时整体失败，不伪造部分源失败提示', async () => {
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue(sources('s1'))
+    mockSiteSources(sources('s1'))
     vi.spyOn(dataApi, 'entryTypesGroup').mockRejectedValue(new Error('boom'))
 
     await expect(siteApi.siteTables('site-catalog-fail', { force: true })).rejects.toThrow('boom')
   })
 
   it('一次读取网站源列表，并将多个 sourceId 传给表目录接口', async () => {
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue(sources('430016502', '430016501', '430016398'))
+    mockSiteSources(sources('430016502', '430016501', '430016398'))
     const entryTypesGroup = vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue(group([{ tableId: 't1', tableName: 'T1' }]))
 
     const result = await siteApi.siteTables('site-huge', { force: true })
@@ -55,8 +59,28 @@ describe('siteApi.siteTables', () => {
     expect(entryTypesGroup).toHaveBeenCalledWith('430016502,430016501,430016398')
   })
 
+  it('完整源列表很慢时先用 120 条预览返回表目录，后台再补齐', async () => {
+    const preview = sources('s1')
+    let resolveFull!: (value: Source[]) => void
+    vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue(preview)
+    vi.spyOn(siteApi, 'siteSources').mockReturnValue(new Promise((resolve) => { resolveFull = resolve }))
+    vi.spyOn(dataApi, 'entryTypesGroup').mockImplementation(async (ids) => group([
+      String(ids).includes('s2') ? { tableId: 't2', tableName: 'T2' } : { tableId: 't1', tableName: 'T1' },
+    ]))
+    const snapshots: string[][] = []
+
+    const result = await siteApi.siteTables('site-progressive', {
+      force: true,
+      onProgress: (tables) => snapshots.push(tables.map((table) => table.tableId)),
+    })
+
+    expect(result.tables.map((table) => table.tableId)).toEqual(['t1'])
+    resolveFull(sources('s1', 's2'))
+    await vi.waitFor(() => expect(snapshots.at(-1)).toEqual(['t1', 't2']))
+  })
+
   it('网站没有源时不回退查询全局表目录', async () => {
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([])
+    mockSiteSources([])
     const entryTypesGroup = vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue(group([{ tableId: 't1', tableName: 'T1' }]))
 
     const result = await siteApi.siteTables('site-empty', { force: true })
@@ -67,7 +91,7 @@ describe('siteApi.siteTables', () => {
   })
 
   it('同一 siteId 重复调用命中缓存，不重复发起查询', async () => {
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue(sources('s1'))
+    mockSiteSources(sources('s1'))
     const entryTypesGroup = vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue(group([{ tableId: 't1', tableName: 'T1' }]))
 
     await siteApi.siteTables('site-cache', { force: true })
@@ -78,7 +102,7 @@ describe('siteApi.siteTables', () => {
   })
 
   it('refreshSiteTables 清缓存后下一次调用会重新查询', async () => {
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue(sources('s1'))
+    mockSiteSources(sources('s1'))
     const entryTypesGroup = vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue(group([{ tableId: 't1', tableName: 'T1' }]))
 
     await siteApi.siteTables('site-refresh', { force: true })
@@ -89,7 +113,7 @@ describe('siteApi.siteTables', () => {
   })
 
   it('onProgress 收到最终目录', async () => {
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue(sources('s1'))
+    mockSiteSources(sources('s1'))
     vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue(group([
       { tableId: 't1', tableName: 'T1' },
       { tableId: 't2', tableName: 'T2' },
@@ -103,7 +127,7 @@ describe('siteApi.siteTables', () => {
   })
 
   it('查询失败时不缓存失败结果，允许下次重新尝试', async () => {
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue(sources('s1'))
+    mockSiteSources(sources('s1'))
     const entryTypesGroup = vi.spyOn(dataApi, 'entryTypesGroup')
       .mockRejectedValueOnce(new Error('network down'))
       .mockResolvedValueOnce(group([{ tableId: 't1', tableName: 'T1' }]))
