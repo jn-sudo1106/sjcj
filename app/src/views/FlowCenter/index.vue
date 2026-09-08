@@ -15,7 +15,7 @@ import { Delete, Edit, Link, Star, StarFilled } from '@element-plus/icons-vue'
 import { useUiStore } from '@/stores/ui'
 import { useLaunchJobStore } from '@/stores/launchJob'
 import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
-import GlobalSourceSelect from '@/views/FlowCanvas/result/components/GlobalSourceSelect.vue'
+import FlowSourcePickerDialog from './FlowSourcePickerDialog.vue'
 import FlowDetailDrawer from './FlowDetailDrawer.vue'
 import FlowSourcesDialog from './FlowSourcesDialog.vue'
 
@@ -736,23 +736,14 @@ async function confirmApply() {
       </template>
     </el-dialog>
 
-    <el-dialog
-      :model-value="!!applyFlow"
-      title="关联流程到源"
-      width="520px"
-      destroy-on-close
+    <FlowSourcePickerDialog
+      :flow="applyFlow"
+      v-model="applySourceIds"
+      :submitting="applying"
+      :progress="applyProgress"
+      @confirm="confirmApply"
       @close="applyFlow = null"
-    >
-      <!-- 这行原来写「只登记关联关系，不改动源现有的采集配置与步骤」，与 0903 H1 答复相反，
-           2026-09-04 一并改掉（同 confirmApply 里的确认文案）。 -->
-      <p class="fc-apply-note">选择要关联的源，可多选。关联后这些源将<b>共用本流程的配置并按它运行</b>；此后修改这个流程的配置会同时影响它们。</p>
-      <GlobalSourceSelect v-model="applySourceIds" multiple />
-      <p v-if="applyProgress" class="fc-apply-note" data-testid="flow-apply-progress">{{ applyProgress }}</p>
-      <template #footer>
-        <button class="fc-dialog-btn" type="button" @click="applyFlow = null">取消</button>
-        <button class="fc-dialog-btn primary" type="button" :disabled="applying" data-testid="flow-apply-confirm" @click="confirmApply">{{ applying ? '关联中…' : (applySourceIds.length > 1 ? `确认关联（${applySourceIds.length} 个）` : '确认关联') }}</button>
-      </template>
-    </el-dialog>
+    />
   </section>
 </template>
 

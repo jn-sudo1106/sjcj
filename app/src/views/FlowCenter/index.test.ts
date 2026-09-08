@@ -55,12 +55,15 @@ async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length) {
       stubs: {
         FlowBoard: { props: ['embedded'], template: '<div data-testid="embedded-flow-board">流程画布</div>' },
         NodeInspector: { props: ['hideAi'], template: '<div data-testid="embedded-node-inspector">节点配置 表配置 编排配置 参数配置 任务配置</div>' },
-        // Y8-10 之后是多选：modelValue 是 string[]。stub 用逗号分隔的输入模拟多选。
-        GlobalSourceSelect: {
-          // multiple 必须声明成 Boolean：无值属性 `multiple` 在未声明类型的 prop 上会变成
-          // 空字符串（假值），stub 就退回单选行为，测的东西和真组件对不上。
-          props: { modelValue: { type: [String, Array], default: '' }, multiple: { type: Boolean, default: false } }, emits: ['update:modelValue'],
-          template: '<input data-testid="source-select-stub" :value="Array.isArray(modelValue) ? modelValue.join(\',\') : modelValue" @input="$emit(\'update:modelValue\', multiple ? $event.target.value.split(\',\').filter(Boolean) : $event.target.value)" />',
+        // 选源弹窗：真组件在 FlowSourcePickerDialog.test.ts 单独测。这里只关心 confirmApply
+        // 的分批 / changeFlowBatch / 错误处理，stub 出「设 modelValue + 触发 confirm」两个口子。
+        FlowSourcePickerDialog: {
+          props: { flow: { default: null }, modelValue: { type: Array, default: () => [] }, submitting: Boolean, progress: String },
+          emits: ['update:modelValue', 'confirm', 'close'],
+          template: '<div v-if="flow">'
+            + '<input data-testid="source-select-stub" :value="modelValue.join(\',\')" @input="$emit(\'update:modelValue\', $event.target.value.split(\',\').filter(Boolean))" />'
+            + '<button data-testid="flow-apply-confirm" @click="$emit(\'confirm\')">确认关联</button>'
+            + '</div>',
         },
         'el-dialog': { props: ['modelValue'], template: '<div v-if="modelValue"><slot/><slot name="footer"/></div>' },
         // 装了 ElementPlus 插件后 el-pagination 解析成真组件，prop 不再以 attribute 落在
