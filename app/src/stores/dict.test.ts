@@ -5,7 +5,7 @@
 //  - load 成功但返回空数组 → 保持快照 + warn（空字典会架空 configType 校验）；
 //  - load 失败 → 保持快照 + warn；
 //  - 模板映射越界（编号不在字典）→ warn 含 orphans。
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { configApi } from '@/api'
 import { SNATCH_TYPES, TEMPLATE_TO_SNATCH } from '@/views/FlowCanvas/canvas/flowModel'
@@ -20,7 +20,7 @@ vi.mock('@/api', () => ({
 const mockedSourceTypes = vi.mocked(configApi.sourceTypes)
 
 describe('useDictStore 抓取类型字典', () => {
-  let warnSpy: ReturnType<typeof vi.spyOn>
+  let warnSpy: MockInstance<typeof console.warn>
 
   beforeEach(() => {
     setActivePinia(createPinia())
