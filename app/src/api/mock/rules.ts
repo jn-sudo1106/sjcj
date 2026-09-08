@@ -408,6 +408,28 @@ export function mockRuleOrchestrationLoadScript(params?: Record<string, unknown>
   return existing?.script ?? `# mock script for ${path}\ndef main():\n    return {}`
 }
 
+/** 按 fileId 读脚本正文（对齐 GET /api/file/download，响应就是纯文本本身）。
+ *  与 orchestrationLoadScript 同源：编排里登记过 scriptPath 的直接回它的 script，
+ *  没登记过的回合成脚本——和真实文件服务的「有文件回文件、没文件 404」语义对齐到可演示的程度。 */
+export function mockFileDownloadScript(params?: Record<string, unknown>): string {
+  const path = String(params?.fileId ?? '')
+  const existing = ORCHESTRATIONS.find((item) => item.scriptPath === path)
+  return existing?.script ?? `# mock script for ${path}\ndef main():\n    return {}`
+}
+
+/** 按文件路径执行脚本（对齐 POST /vrule/fastapi/execute/code，ResultView 脚本测试用）。
+ *  mock 不真的执行 Python：回显入参行 + code_path/demo 字段，让「脚本测试」弹窗有可读输出；
+ *  success 语义与 orchestrationTest 一致（拿 params 行回填，认不出的标 demo- 前缀）。 */
+export function mockExecuteCode(params?: Record<string, unknown>): Record<string, unknown> {
+  const codePath = String(params?.code_path ?? '')
+  const row = (Array.isArray(params?.params) ? {} : params?.params ?? {}) as Record<string, unknown>
+  return {
+    code_path: codePath,
+    ...row,
+    demo: `mock-executed ${codePath}`,
+  }
+}
+
 export function mockRuleOrchestrationGenerate(params?: Record<string, unknown>): RuleOrchestrationGenerateResult {
   const cfg = ((params?.ruleCfg ?? params) || {}) as RuleOrchestration
   const describe = String(cfg.describe ?? '').trim()

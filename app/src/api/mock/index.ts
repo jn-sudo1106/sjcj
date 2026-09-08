@@ -37,6 +37,8 @@ import {
   mockRuleOrchestrationSaveMeta,
   mockRuleOrchestrationDetail,
   mockRuleOrchestrationLoadScript,
+  mockFileDownloadScript,
+  mockExecuteCode,
   mockDataProcessGenerate,
   mockRuleOrchestrationGenerate,
   mockRuleOrchestrationTest,
@@ -45,7 +47,7 @@ import {
 import { mockDatasets, mockMeasures, mockMetricStats } from './metrics'
 import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate, mockEntryDataUpload } from './dataview'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
-import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats } from './monitor'
+import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourceInsert, mockCkSourceUpdate } from './monitor'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
 import { mockFlowRecommend, mockNodeAiChat } from './flows'
@@ -182,6 +184,8 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'rule/orchestrationSaveMeta': mockRuleOrchestrationSaveMeta,
   'rule/orchestrationDetail': mockRuleOrchestrationDetail,
   'rule/orchestrationLoadScript': mockRuleOrchestrationLoadScript,
+  'file/download': mockFileDownloadScript,
+  'rule/executeCode': mockExecuteCode,
   'rule/dataProcessGenerate': mockDataProcessGenerate,
   'rule/orchestrationGenerate': mockRuleOrchestrationGenerate,
   'rule/orchestrationTest': mockRuleOrchestrationTest,
@@ -213,6 +217,10 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'source/check/syncPaged': mockSync,
   'monitor/alarmPaged': mockAlarms,
   'monitor/stats': mockMonitorStats,
+  // ck_source 监控源配置（数据监控节点保存同步，2026-09-05）
+  'monitor/ckSourceList': mockCkSourceList,
+  'monitor/ckSourceInsert': mockCkSourceInsert,
+  'monitor/ckSourceUpdate': mockCkSourceUpdate,
 
   // 工作台（首页摘要）
   'workbench/summary': mockWorkbenchSummary,

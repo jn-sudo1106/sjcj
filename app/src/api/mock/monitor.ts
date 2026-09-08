@@ -1,3 +1,4 @@
+import type { CkSourcePayload, CkSourceRecord } from '../types/rule'
 import type { HealthCard, MqQueue, SyncRow, AlarmRow } from '../types'
 
 const HEALTH: HealthCard[] = [
@@ -45,4 +46,41 @@ export function mockMonitorStats(): { healthText: string; queueAlarms: number; c
     cacheWindow: '1 min',
     dangerOpen: 0,
   }
+}
+
+// ck_source 监控源配置（vanv-data-engine SourceController，2026-09-05）：数据监控节点保存时
+// syncMonitorCkSource 走 list → 有则 update / 无则 insert。mock 用内存表复刻这个往返，
+// 自增 id 模拟 insert 返回主键；update 按 sourceId 全行匹配（后端语义），命中数>0 返回 true。
+const CK_SOURCE_STORE: CkSourceRecord[] = []
+let ckSourceNextId = 1
+
+export function mockCkSourceList(params?: Record<string, unknown>): CkSourceRecord[] {
+  const sourceId = String(params?.sourceId ?? '')
+  return CK_SOURCE_STORE.filter((row) => String(row.sourceId) === sourceId)
+}
+
+export function mockCkSourceInsert(params?: Record<string, unknown>): number {
+  const record: CkSourceRecord = {
+    ...(params as unknown as CkSourcePayload),
+    id: ckSourceNextId++,
+  }
+  CK_SOURCE_STORE.push(record)
+  return record.id
+}
+
+export function mockCkSourceUpdate(params?: Record<string, unknown>): boolean {
+  const payload = params as unknown as CkSourcePayload
+  // 后端语义：body 里为 null 的字段保留原列值 → 用传了的字段覆盖，没传的留旧值
+  let hit = 0
+  for (const row of CK_SOURCE_STORE) {
+    if (row.sourceId !== payload.sourceId) continue
+    Object.assign(row, {
+      ...(payload.name != null ? { name: payload.name } : {}),
+      ...(payload.schedule != null ? { schedule: payload.schedule } : {}),
+      ...(payload.tableName != null ? { tableName: payload.tableName } : {}),
+      ...(payload.checkConf != null ? { checkConf: payload.checkConf } : {}),
+    })
+    hit++
+  }
+  return hit > 0
 }
