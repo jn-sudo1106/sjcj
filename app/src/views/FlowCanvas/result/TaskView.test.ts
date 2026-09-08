@@ -37,15 +37,17 @@ describe('TaskView', () => {
     wrapper.unmount()
   })
 
-  it('列表里有「运行中」任务时每 10s 自动刷新，全部完成后停；「刷新」按钮手动重拉', async () => {
+  it('有「活跃运行中」任务时每 10s 自动刷新，全部完成后停；「刷新」按钮手动重拉', async () => {
     vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-08T10:00:00'))
     setActivePinia(createPinia())
     await router.push('/canvas')
     const source = mockSourceDetail({ sourceId: '391007768' })!
     useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
 
+    // 刚更新过（1 分钟前）→ 视为活跃，参与轮询
     const running: TaskInst[] = [
-      { taskId: 't1', state: 'L', typeName: '浏览器抓取', taskName: '进行中', sourceId: source.sourceId, updatedAt: '2026-09-08 09:54' },
+      { taskId: 't1', state: 'L', typeName: '浏览器抓取', taskName: '进行中', sourceId: source.sourceId, updatedAt: '2026-09-08 09:59' },
     ]
     const done: TaskInst[] = [{ ...running[0], state: 'C' }]
     const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 1, list: running })
@@ -58,22 +60,52 @@ describe('TaskView', () => {
     const initialCalls = paged.mock.calls.length
     expect(wrapper.find('[data-testid="task-auto-refresh"]').exists()).toBe(true)
 
-    // 10s 后自动重拉；这次返回全部完成
     paged.mockResolvedValue({ total: 1, list: done })
     await vi.advanceTimersByTimeAsync(10_000)
     await flushPromises()
     expect(paged.mock.calls.length).toBe(initialCalls + 1)
     expect(wrapper.find('[data-testid="task-auto-refresh"]').exists()).toBe(false)
 
-    // 全部完成后不再自动拉
     await vi.advanceTimersByTimeAsync(30_000)
     await flushPromises()
     expect(paged.mock.calls.length).toBe(initialCalls + 1)
 
-    // 「刷新」按钮仍可手动重拉
     await wrapper.get('[data-testid="task-refresh"]').trigger('click')
     await flushPromises()
     expect(paged.mock.calls.length).toBe(initialCalls + 2)
+
+    wrapper.unmount()
+    vi.useRealTimers()
+  })
+
+  it('「运行中」但超过 30 分钟没更新：标「疑似卡住」、不再为它轮询', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-08T13:00:00'))
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const source = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+
+    // 3 小时没更新
+    const stuck: TaskInst[] = [
+      { taskId: 't-stuck', state: 'L', typeName: '浏览器抓取', taskName: '掉队任务', sourceId: source.sourceId, updatedAt: '2026-09-08 09:54' },
+    ]
+    const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 1, list: stuck })
+
+    const wrapper = shallowMount(TaskView, {
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await vi.advanceTimersByTimeAsync(200)
+    await flushPromises()
+    const calls = paged.mock.calls.length
+
+    expect(wrapper.find('[data-testid="task-stuck-note"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('疑似卡住')
+    // 失联任务不触发自动刷新
+    expect(wrapper.find('[data-testid="task-auto-refresh"]').exists()).toBe(false)
+    await vi.advanceTimersByTimeAsync(30_000)
+    await flushPromises()
+    expect(paged.mock.calls.length).toBe(calls)
 
     wrapper.unmount()
     vi.useRealTimers()

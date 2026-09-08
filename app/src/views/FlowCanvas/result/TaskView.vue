@@ -77,10 +77,21 @@ function configIdForNode(nodeId: string): string | undefined {
 }
 
 // 任务视图无自动刷新时，「运行中」的任务会一直挂在旧快照上（后端跑完了界面不知道）。
-// 列表里只要还有 state==='L' 的任务，就每 10s 静默重拉一次，全部 C/E 后自动停。
+// 列表里只要还有「活跃的」state==='L' 任务，就每 10s 静默重拉一次，全部 C/E 后自动停。
 const REFRESH_MS = 10_000
+// 超过这个分钟数没更新的「运行中」任务，判为失联（后端 worker 挂了不会把 L 翻成 E）：
+// 不再为它轮询，并在行上标「疑似卡住」——真实成败要看源的「上次成功」和数据视图。
+const STUCK_MIN = 30
 let pollTimer: ReturnType<typeof setInterval> | undefined
-const autoRefreshing = computed(() => rows.value.some((t) => t.state === 'L'))
+function staleMinutes(task: TaskInst): number {
+  const t = new Date(String(task.updatedAt || '').replace(' ', 'T')).getTime()
+  return Number.isNaN(t) ? 0 : Math.floor((Date.now() - t) / 60_000)
+}
+function isStuck(task: TaskInst): boolean {
+  return task.state === 'L' && staleMinutes(task) >= STUCK_MIN
+}
+const autoRefreshing = computed(() => rows.value.some((t) => t.state === 'L' && !isStuck(t)))
+const stuckCount = computed(() => rows.value.filter(isStuck).length)
 function stopPoll() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = undefined }
 }
@@ -230,6 +241,9 @@ const nextStepHints = computed(() => {
           <span v-if="autoRefreshing" class="tv-auto" data-testid="task-auto-refresh">
             <span class="tv-spin" />有任务运行中，每 10 秒自动刷新
           </span>
+          <span v-if="stuckCount" class="tv-stuck-note" data-testid="task-stuck-note">
+            {{ stuckCount }} 个任务超过 {{ STUCK_MIN }} 分钟无更新（疑似失联）——本轮成败请看源的「上次成功」时间与数据视图
+          </span>
         </div>
 
         <table class="rc-data-table tv-table" data-testid="source-task-table" v-loading="loading">
@@ -247,9 +261,14 @@ const nextStepHints = computed(() => {
               <td>{{ nodeRun(task.sourceId, task.node)?.processedTasks ?? '—' }}</td>
               <td>{{ task.typeName }}</td>
               <td>
-                <span class="rc-status" :class="stateClass(task.state)">
-                  <span v-if="task.state === 'L'" class="tv-spin" />{{ stateText(task.state) }}
+                <span class="rc-status" :class="[stateClass(task.state), { stuck: isStuck(task) }]">
+                  <span v-if="task.state === 'L' && !isStuck(task)" class="tv-spin" />{{ stateText(task.state) }}
                 </span>
+                <span
+                  v-if="isStuck(task)"
+                  class="tv-stuck-tag"
+                  title="该任务超过 30 分钟没有状态更新，后端很可能已失联（worker 挂了不会把「运行中」翻成「异常」）。这一轮到底成没成，看源头部的「上次成功」时间、以及数据 / 文件视图里有没有新数据落库。"
+                >疑似卡住</span>
               </td>
               <td class="tv-time">{{ task.updatedAt || '—' }}</td>
             </tr>
@@ -291,6 +310,9 @@ const nextStepHints = computed(() => {
 .tv-empty-row { padding: 28px 12px; color: var(--rc-faint); font-size: 12px; text-align: center; }
 .muted { color: var(--rc-faint); font-size: 12px; }
 .tv-auto { display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; color: var(--rc-muted); font-size: 11px; }
+.tv-stuck-note { margin-left: 4px; color: #b45309; font-size: 11px; }
+.rc-status.stuck { color: var(--rc-faint); }
+.tv-stuck-tag { margin-left: 6px; padding: 1px 6px; border: 1px solid #fcd34d; border-radius: 4px; background: #fffbeb; color: #b45309; font-size: 10px; white-space: nowrap; cursor: help; }
 .tv-spin { display: inline-block; width: 9px; height: 9px; margin-right: 4px; border: 1.5px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: tv-spin 0.7s linear infinite; vertical-align: -1px; }
 .rc-status.run .tv-spin { border-color: currentColor; border-top-color: transparent; }
 @keyframes tv-spin { to { transform: rotate(360deg); } }
