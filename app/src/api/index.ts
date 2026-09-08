@@ -2015,11 +2015,10 @@ export const configApi = {
       paramsIn: 'query',
       httpParams: { configId, runPolicy: { snatch: policy } },
     }),
-  /** 清配置缓存。前端已下线：列表靠刷新重查，不再调用。旧配置列表与参数模块共用此端点。 */
-  clearConfig: (configIds: string[] | string) => {
-    const ids = Array.isArray(configIds) ? configIds : [configIds]
-    return request<Ack>('config/clear', { configIds: ids }, { method: 'GET', httpParams: { ids } })
-  },
+  // 2026-09-08 删除 clearConfig 封装：2026-08-11 长期约定（AGENTS.md 弹窗约定）下，前端不提供
+  // 清缓存入口；列表靠刷新重查。config/clear 端点本身保留在契约清单（danger=true）作写保护。
+  // paramApi.clearParams 仍保留：被 ParamTab.test.ts 5 个回归测试 + 1 个 HTTP 契约测试钉死
+  // "不再调 config/clear"，是有意的回归保护。
   /**
    * 启停配置。旧列表 enable 口径：`0` = 启用、`1` = 停用（isDelete）。
    * 0828：前端不提供入口。

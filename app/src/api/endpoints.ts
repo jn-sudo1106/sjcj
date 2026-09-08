@@ -122,7 +122,12 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/configParamAdd', desc: '配置绑定参数', danger: true, impl: true, live: true },
   { path: 'config/configParamDel', desc: '配置解绑参数', danger: true, impl: true, live: true },
   { path: 'config/configActionPaged', desc: '配置操作日志分页', impl: true, live: true },
-  { path: 'config/clear', desc: '清配置缓存（前端已下线，列表改刷新重查；同一端点也曾被参数清缓存复用）', danger: true, impl: true, live: true },
+  // 2026-09-08 按 0908 核对结论下线：2026-08-11 长期约定（AGENTS.md）弹窗不提供「清缓存」入口、
+  // 列表统一刷新重查。configApi.clearConfig 已删（无调用方），paramApi.clearParams 仍保留
+  // （被 ParamTab.test.ts 5 个回归测试 + 1 个 HTTP 契约测试钉死"不再调 config/clear"），
+  // 未来真要做清缓存请照本条 + client.ts:158 的教训恢复注册与白名单。
+  // 保留为 danger 契约记录：留在 DANGER_ENDPOINTS 中，生产写保护仍会拦误用。
+  { path: 'config/clear', desc: '清配置/参数缓存（前端已下线；configApi.clearConfig 封装 2026-09-08 删除，paramApi.clearParams 保留作回归测试桩）', danger: true },
   { path: 'config/entryTypePagedView', desc: '实体表分页', impl: true, live: true },
   { path: 'config/queryEntryTypesGroup', desc: '按源加载实体表分组', live: true },
   { path: 'config/entryType', desc: '实体表详情', impl: true, live: true },

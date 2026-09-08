@@ -135,7 +135,9 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
     { sourceType: '170', typeName: 'Python 抓取' },
   ],
   'config/configActionPaged': mockConfigActionLogs,
-  'config/clear': mockAck,
+  // 'config/clear' 2026-09-08 下线：configApi.clearConfig 已删，mock handler 一并删；
+  // paramApi.clearParams 仍会路由到此 path（mock 模式走 fallback 通用占位，http 模式打真实后端）。
+  // 端点本身保留在契约清单（endpoints.ts · danger=true）作写保护 + 记录用途。
 
   // 采集资产 · 实体表（M5）
   'config/entryTypePagedView': mockEntryPaged,
