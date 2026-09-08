@@ -32,6 +32,16 @@ function quoteValue(value: string): string {
   return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`
 }
 
+/** 纯数字值不加引号（NEXT_FLAG == 40597 这类运行时标记/任务规格 ID 比较是裸数字，
+ *  加引号后执行侧 '40597' != 40597 就不生效了）。代价：`K2 == '12345'` 这种"看着像数字的
+ *  字符串"往返后会变成裸数字——真实条件里没见过这种写法（值都是 'api'/'pdf' 之类文本）。 */
+function isNumericLiteral(value: string): boolean {
+  return /^-?\d+(?:\.\d+)?$/.test(value)
+}
+function emitValue(value: string): string {
+  return isNumericLiteral(value) ? value : quoteValue(value)
+}
+
 function unquoteValue(raw: string): string {
   const body = raw.slice(1, -1)
   return body.replace(/\\(['\\])/g, '$1')
@@ -44,10 +54,10 @@ export function conditionTermToExpr(field: string, op: ConditionOp, value: strin
     case 'notEmpty': return `${field} != nil`
     case 'contains': return `string.contains(${field},${quoteValue(value)})`
     case 'notContains': return `!string.contains(${field},${quoteValue(value)})`
-    case 'eq': return `${field} == ${quoteValue(value)}`
-    case 'ne': return `${field} != ${quoteValue(value)}`
-    case 'gt': return `${field} > ${quoteValue(value)}`
-    case 'lt': return `${field} < ${quoteValue(value)}`
+    case 'eq': return `${field} == ${emitValue(value)}`
+    case 'ne': return `${field} != ${emitValue(value)}`
+    case 'gt': return `${field} > ${emitValue(value)}`
+    case 'lt': return `${field} < ${emitValue(value)}`
   }
 }
 
@@ -93,23 +103,28 @@ function splitTopLevel(expr: string): { parts: string[]; joiners: string[] } | n
 
 const IDENT = "[A-Za-z_][A-Za-z0-9_]*"
 const STR = "'(?:[^'\\\\]|\\\\.)*'"
+// 值可以是单引号字符串或裸数字（NEXT_FLAG == 40597）
+const VAL = `(?:${STR}|-?\\d+(?:\\.\\d+)?)`
 const TERM_PATTERNS: { re: RegExp; op: ConditionOp; hasValue: boolean }[] = [
   { re: new RegExp(`^(${IDENT})\\s*==\\s*nil$`), op: 'isEmpty', hasValue: false },
   // != 与 Lua 的 ~= 都收：真实数据用 !=，~= 是 Lua 原生写法，读进来不报错更稳
   { re: new RegExp(`^(${IDENT})\\s*(?:!=|~=)\\s*nil$`), op: 'notEmpty', hasValue: false },
   { re: new RegExp(`^!\\s*string\\.contains\\(\\s*(${IDENT})\\s*,\\s*(${STR})\\s*\\)$`), op: 'notContains', hasValue: true },
   { re: new RegExp(`^string\\.contains\\(\\s*(${IDENT})\\s*,\\s*(${STR})\\s*\\)$`), op: 'contains', hasValue: true },
-  { re: new RegExp(`^(${IDENT})\\s*==\\s*(${STR})$`), op: 'eq', hasValue: true },
-  { re: new RegExp(`^(${IDENT})\\s*(?:!=|~=)\\s*(${STR})$`), op: 'ne', hasValue: true },
-  { re: new RegExp(`^(${IDENT})\\s*>\\s*(${STR})$`), op: 'gt', hasValue: true },
-  { re: new RegExp(`^(${IDENT})\\s*<\\s*(${STR})$`), op: 'lt', hasValue: true },
+  { re: new RegExp(`^(${IDENT})\\s*==\\s*(${VAL})$`), op: 'eq', hasValue: true },
+  { re: new RegExp(`^(${IDENT})\\s*(?:!=|~=)\\s*(${VAL})$`), op: 'ne', hasValue: true },
+  { re: new RegExp(`^(${IDENT})\\s*>\\s*(${VAL})$`), op: 'gt', hasValue: true },
+  { re: new RegExp(`^(${IDENT})\\s*<\\s*(${VAL})$`), op: 'lt', hasValue: true },
 ]
 
 function parseTerm(raw: string): ParsedCondition | null {
   const term = raw.trim()
   for (const { re, op, hasValue } of TERM_PATTERNS) {
     const m = re.exec(term)
-    if (m) return { field: m[1], op, value: hasValue ? unquoteValue(m[2]) : '' }
+    if (!m) continue
+    if (!hasValue) return { field: m[1], op, value: '' }
+    // 裸数字原样、带引号的去引号
+    return { field: m[1], op, value: m[2].startsWith("'") ? unquoteValue(m[2]) : m[2] }
   }
   return null
 }

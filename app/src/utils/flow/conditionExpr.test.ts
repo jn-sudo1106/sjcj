@@ -48,6 +48,25 @@ describe('parseConditionExpr · 真实生产表达式', () => {
       ],
     })
   })
+
+  it('NEXT_FLAG == 40597 → 裸数字比较也能解析（运行时标记 / 任务规格 ID）', () => {
+    expect(parseConditionExpr('NEXT_FLAG == 40597')).toEqual({
+      logic: 'AND', items: [{ field: 'NEXT_FLAG', op: 'eq', value: '40597' }],
+    })
+  })
+
+  it("_from == 'api' && K17 != nil && string.contains(K17,'qinlong') && !string.contains(K2,'pdf') && NEXT_FLAG == 40597 → 混字符串/函数/裸数字五项全解析（生产真实 cond）", () => {
+    expect(parseConditionExpr("_from == 'api' && K17 != nil && string.contains(K17,'qinlong') && !string.contains(K2,'pdf') && NEXT_FLAG == 40597")).toEqual({
+      logic: 'AND',
+      items: [
+        { field: '_from', op: 'eq', value: 'api' },
+        { field: 'K17', op: 'notEmpty', value: '' },
+        { field: 'K17', op: 'contains', value: 'qinlong' },
+        { field: 'K2', op: 'notContains', value: 'pdf' },
+        { field: 'NEXT_FLAG', op: 'eq', value: '40597' },
+      ],
+    })
+  })
 })
 
 describe('parseConditionExpr · 解析不了的一律返回 null（宁可只读也不要解析错）', () => {
@@ -101,6 +120,12 @@ describe('conditionsToExpr · 生成真实语法', () => {
   it('值里的单引号转义，不会截断表达式', () => {
     expect(conditionsToExpr([{ field: 'K2', op: 'eq', value: "it's" }], 'AND')).toBe("K2 == 'it\\'s'")
   })
+
+  it('纯数字值不加引号（NEXT_FLAG == 40597，加引号执行侧就不生效）；非数字仍加引号', () => {
+    expect(conditionsToExpr([{ field: 'NEXT_FLAG', op: 'eq', value: '40597' }], 'AND')).toBe('NEXT_FLAG == 40597')
+    expect(conditionsToExpr([{ field: 'K5', op: 'gt', value: '100' }], 'AND')).toBe('K5 > 100')
+    expect(conditionsToExpr([{ field: '_from', op: 'eq', value: 'api' }], 'AND')).toBe("_from == 'api'")
+  })
 })
 
 describe('round-trip：解析→生成 语义不变', () => {
@@ -112,6 +137,8 @@ describe('round-trip：解析→生成 语义不变', () => {
     'K12==nil || K15 ==nil',
     'K2 !=nil && K18==nil',
     "K17 != nil && !string.contains(K2,'weixin.qq')",
+    'NEXT_FLAG == 40597',
+    "_from == 'api' && K17 != nil && string.contains(K17,'qinlong') && !string.contains(K2,'pdf') && NEXT_FLAG == 40597",
   ]
   it.each(samples)('%s 解析后重新生成，再解析结果一致', (expr) => {
     const parsed = parseConditionExpr(expr)!
