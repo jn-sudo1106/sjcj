@@ -55,14 +55,21 @@ async function loadList() {
     const search = keyword.value.trim()
     let res
     if (search) {
-      // 旧 sitePaged 把网站名和源名拆成 name/sourceName，两个条件一起传会变成 AND。
-      // 合并搜索需要分别查询，再按网站去重后统一排序、分页。
-      const searchSize = 1000
-      const [bySite, bySource] = await Promise.all([
-        siteApi.sitePaged({ ...filters, name: search, page: 1, size: searchSize }),
-        siteApi.sitePaged({ ...filters, sourceName: search, page: 1, size: searchSize }),
+      // 真实 site/sitePaged 只按网站名筛，sourceName 传了也不生效（会原样返回整页，
+      // 旧实现的并集因此把不相关网站也带出来）。源名匹配改走 source/sourcePaged?name=
+      // （已生产实测可用），取命中源的 siteId，再与本页其它筛选后的网站列表求交集。
+      const searchSize = 2000
+      const [sitePage, matchedSources] = await Promise.all([
+        siteApi.sitePaged({ ...filters, page: 1, size: searchSize }),
+        sourceApi.sourcePaged({ name: search, page: 1, size: searchSize }),
       ])
-      const matched = [...new Map([...bySite.list, ...bySource.list].map((site) => [site.siteId, site])).values()]
+      const kw = search.toLowerCase()
+      const siteIdsBySource = new Set(
+        matchedSources.list.map((s) => s.siteId).filter((id): id is string => !!id),
+      )
+      const matched = sitePage.list.filter(
+        (site) => site.name.toLowerCase().includes(kw) || siteIdsBySource.has(site.siteId),
+      )
       if (sortBy.value === 'name') matched.sort((a, b) => a.name.localeCompare(b.name, 'zh'))
       else matched.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
       const start = (page.value - 1) * size.value

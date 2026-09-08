@@ -43,19 +43,16 @@ describe('网站读取 HTTP 契约', () => {
     })] })
   })
 
-  it('sitePaged 分别透传网站名和源名，供列表实现二者任一命中', async () => {
+  it('sitePaged 只透传网站名，不带 sourceName（真实后端忽略它并原样返回整页）', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', count: 0, data: [] }))
     const { siteApi } = await import('./index')
 
     await siteApi.sitePaged({ page: 1, size: 1000, name: '新浪', sourceName: '明阳科技' })
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(JSON.parse(String(init.body))).toEqual({
-      page: 1,
-      limit: 1000,
-      name: '新浪',
-      sourceName: '明阳科技',
-    })
+    const body = JSON.parse(String(init.body))
+    expect(body).toEqual({ page: 1, limit: 1000, name: '新浪' })
+    expect(body).not.toHaveProperty('sourceName')
   })
 
   it('sitePaged 把分类筛选映射为旧契约的 categoryIds；未选分类不携带该字段', async () => {

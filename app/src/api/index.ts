@@ -806,7 +806,9 @@ export const siteApi = {
         page: p?.page ?? 1,
         limit: p?.size ?? 20,
         name: p?.name ?? p?.keyword ?? undefined,
-        sourceName: p?.sourceName ?? undefined,
+        // 源名筛选**不**走这里：真实 site/sitePaged 只按网站名筛，传 sourceName 会被忽略并原样
+        // 返回整页（旧实现的 name∪sourceName 并集因此把无关网站也带出来）。源名匹配改由调用方
+        // 走 source/sourcePaged?name= 取 siteId 交集，见 SourceTab.loadList。
         state: state === 'error' ? 'ERROR' : undefined,
         // 旧 SiteList 契约：分类筛选走 categoryIds（逗号分隔目录 ID 串；本页单选，传单个 ID）。
         // 不透传的话分类筛选在真实后端下静默失效（mock 恰好按路径前缀匹配，掩盖过这个问题）。
