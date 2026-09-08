@@ -20,7 +20,10 @@ async function mountHeader(records: Awaited<ReturnType<typeof flowCenterApi.temp
   vi.spyOn(flowCenterApi, 'templates').mockResolvedValue(records)
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: '/canvas', component: { template: '<div />' } }],
+    routes: [
+      { path: '/canvas', component: { template: '<div />' } },
+      { path: '/flows', component: { template: '<div />' } },
+    ],
   })
   await router.push({ path: '/canvas', query: { sourceId: 'source-a' } })
   await router.isReady()
@@ -58,6 +61,36 @@ describe('CanvasHeader · 参数源摘要（0721 会议 T5）', () => {
     await flushPromises()
 
     expect(wrapper.get('.ch-sub').text()).toBe('参数源 · http://base-$PARAM$_913-$PARAM$_912 · 2 个参数占位符')
+  })
+
+  it('源带 flowId：摘要行显示「所属流程」，查到名字用名字，点击带 q 跳流程中心', async () => {
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({ id: '1400935', name: '上市公司-配置' } as never)
+    const wrapper = await mountHeader()
+    const flow = useFlowStore()
+    flow.loadFromSource(
+      { sourceId: 'source-a', name: '*ST东智', url: 'https://e.com', configId: '1400935', flowId: '1400935', mainTable: '', owner: 'admin', state: 'C' } as never,
+      [],
+    )
+    await flushPromises()
+
+    const link = wrapper.get('[data-testid="owning-flow"]')
+    expect(link.text()).toBe('所属流程：上市公司-配置')
+    await link.trigger('click')
+    await flushPromises()
+    const r = (wrapper.vm as unknown as { $router: { currentRoute: { value: { path: string; query: Record<string, string> } } } }).$router
+    expect(r.currentRoute.value.path).toBe('/flows')
+    expect(r.currentRoute.value.query.q).toBe('上市公司-配置')
+  })
+
+  it('源没有 flowId：不显示「所属流程」', async () => {
+    const wrapper = await mountHeader()
+    const flow = useFlowStore()
+    flow.loadFromSource(
+      { sourceId: 'source-a', name: '游离源', url: 'https://e.com', configId: '', mainTable: '', owner: 'admin', state: 'C' } as never,
+      [],
+    )
+    await flushPromises()
+    expect(wrapper.find('[data-testid="owning-flow"]').exists()).toBe(false)
   })
 })
 

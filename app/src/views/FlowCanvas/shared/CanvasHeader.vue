@@ -105,6 +105,28 @@ const metaLine = computed(() => {
   const primary = s.kind === 'param' ? `参数源 · ${s.urlTemplate || s.baseUrl || ''} · ${s.paramRefs?.length ?? 0} 个参数占位符` : s.url
   return [primary, s.lastSuccessAt ? `上次成功 ${s.lastSuccessAt}` : ''].filter(Boolean).join(' · ')
 })
+
+// 所属流程：源上带 flowId（sourceDetail 已补，0903 §H8），流程名要单查一次 flow/detail；
+// 查不到就退化成 `#<id>`。切源时按 flowId 变化重查，回来慢了也不会写串。
+const owningFlowName = ref('')
+watch(() => src.value?.flowId, async (fid) => {
+  owningFlowName.value = ''
+  if (!fid) return
+  const want = String(fid)
+  try {
+    const rec = await flowCenterApi.detail(want)
+    if (String(src.value?.flowId ?? '') === want) owningFlowName.value = rec?.name ?? ''
+  } catch { /* 保留 ID 展示 */ }
+}, { immediate: true })
+const owningFlowLabel = computed(() => {
+  const fid = src.value?.flowId
+  return fid ? (owningFlowName.value || `#${fid}`) : ''
+})
+function openOwningFlow() {
+  const fid = src.value?.flowId
+  if (!fid) return
+  router.push({ path: '/flows', query: { q: owningFlowName.value || String(fid) } })
+}
 /**
  * 返回源视图（0828 W5-6/7 合并）。
  *
@@ -191,7 +213,19 @@ async function onSwitchFlow(command: string) {
           <span class="rc-status" :class="statusMeta.cls">{{ statusMeta.text }}</span>
           <span v-if="src.externalChanged" class="rc-status warn">外部变更待确认</span>
         </div>
-        <div class="ch-sub">{{ metaLine }}</div>
+        <div class="ch-sub">
+          <span>{{ metaLine }}</span>
+          <template v-if="src.flowId">
+            <span class="ch-sub-sep">·</span>
+            <button
+              class="ch-flow-link"
+              type="button"
+              data-testid="owning-flow"
+              title="在流程中心查看这个流程"
+              @click="openOwningFlow"
+            >所属流程：{{ owningFlowLabel }}</button>
+          </template>
+        </div>
       </div>
       <div v-if="view === 'flow'" class="ch-actions">
         <div class="ch-flow-picker">
@@ -275,6 +309,9 @@ async function onSwitchFlow(command: string) {
 .ch-titlewrap { min-width: 0; }
 .ch-title { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; color: var(--rc-text); font-size: 13px; }
 .ch-sub { color: var(--rc-faint); font-size: 10px; margin-top: 1px; }
+.ch-sub-sep { margin: 0 4px; }
+.ch-flow-link { border: 0; background: transparent; padding: 0; color: var(--rc-primary); font-size: inherit; cursor: pointer; }
+.ch-flow-link:hover { text-decoration: underline; }
 .ch-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
 .ch-actions .rc-btn { height: 30px; padding: 0 11px; font-size: 12px; }
 .ch-flow-picker { position: relative; width: 184px; margin-right: 4px; }

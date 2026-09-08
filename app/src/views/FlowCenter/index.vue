@@ -9,6 +9,7 @@
 //
 // 这行注释此前写的是「配置中心/流程模板不再作为用户概念」，0903 会上推翻了后半句。
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { flowCenterApi, sourceApi, type FlowRecord, type SourceCategory } from '@/api'
 import { Delete, Edit, Link, Star, StarFilled } from '@element-plus/icons-vue'
@@ -215,7 +216,11 @@ function resetQuery() {
   page.value = 1
   void load()
 }
+const route = useRoute()
 onMounted(() => {
+  // 画布头「所属流程：xxx」跳过来带 ?q=流程名/ID，预填搜索
+  const q = String(route.query.q ?? '').trim()
+  if (q) query.value = q
   void load()
   void loadCategories()
   ui.registerAction('新建流程', () => { openCreateFlow() })
