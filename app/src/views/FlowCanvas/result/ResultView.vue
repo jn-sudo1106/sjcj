@@ -55,23 +55,19 @@ const filters = reactive({ dataId: '', parentId: '', state: '', sql: '' })
 
 /**
  * 从网站汇总的「按条件查源」命中列表点进某个源时带过来的条件（2026-09-09）。
- *
  * 侧栏那一行写着「906 条」，进来看到的就得是那 906 条，否则那个数字是误导。
- * 与 SiteDetailView 里同名的一套 query 参数对称（那边是本页往外跳时写的），用完即从 URL
- * 抹掉——留着的话，之后手动清空筛选、刷新页面又会被重新灌回来。
+ *
+ * 走 store 而不是 URL：本视图按 sourceId 做 key，源→源切换会销毁重建，用 query 传会撞上
+ * 「旧实例先填完条件顺手抹掉 query、新实例挂载时已读不到」的竞态——表现为点第一个源
+ * 好使、再点别的源条件就没了。store 里那份取走即清，只应用一次。
  */
-watch(() => route.query.condTable, (raw) => {
-  const tableId = String(raw ?? '').trim()
-  if (!tableId) return
-  const q = route.query
-  filters.sql = q.condSql ? String(q.condSql) : ''
-  filters.state = q.condState ? String(q.condState) : ''
-  filters.dataId = q.condDataId ? String(q.condDataId) : ''
-  filters.parentId = q.condParentId ? String(q.condParentId) : ''
-  const next = { ...q }
-  for (const k of ['condTable', 'condSql', 'condState', 'condDataId', 'condParentId']) delete next[k]
-  void router.replace({ path: route.path, query: next })
-}, { immediate: true })
+const pendingCondition = ws.takePendingSourceCondition()
+if (pendingCondition) {
+  filters.sql = pendingCondition.sql ?? ''
+  filters.state = pendingCondition.state ?? ''
+  filters.dataId = pendingCondition.dataId ?? ''
+  filters.parentId = pendingCondition.parentId ?? ''
+}
 
 // 节点轨道默认展开：轨道是"这个源的流程长什么样"的上下文，进页面第一眼就该看到；
 // 想把这 96px 让给数据的人自己收起来。真要大量看数据走全屏，不靠默认折叠常规页面

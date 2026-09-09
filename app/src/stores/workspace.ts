@@ -182,6 +182,25 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return cur && cur.siteId === siteId && cur.hits.length ? cur.condition : null
   }
 
+  /**
+   * 待应用到具体源数据视图的条件（2026-09-09）。切源时放进来，ResultView 取走即清。
+   *
+   * **为什么不走 URL**：一开始是用 `cond*` query 传的，但具体源视图按 sourceId 做 key，
+   * 源→源切换时会销毁重建，于是撞上竞态——旧实例先收到路由变化、填完条件顺手把 query
+   * 抹掉，紧接着新实例挂载时 URL 上已经没有 `cond*` 了，筛选框就是空的。
+   * 表现为「点第一个源好使，再点别的源条件就没了」。放 store 里没有这个先后问题。
+   */
+  const pendingSourceCondition = ref<BackTraceCondition | null>(null)
+  function setPendingSourceCondition(cond: BackTraceCondition | null) {
+    pendingSourceCondition.value = cond
+  }
+  /** 取走并清空——只应用一次，之后用户自己改的筛选不该被再次覆盖。 */
+  function takePendingSourceCondition(): BackTraceCondition | null {
+    const cur = pendingSourceCondition.value
+    pendingSourceCondition.value = null
+    return cur
+  }
+
   /** 改源名称时只改页签文案，不激活、不新建页签（侧栏编辑当前源用） */
   function renameTab(sourceId: string, name: string) {
     const tab = tabs.value.find((t) => t.sourceId === sourceId)
@@ -197,5 +216,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return snapshots[sourceId]
   }
 
-  return { tabs, activeSourceId, snapshots, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, renameTab, saveSnapshot, snapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf, backTraceConditionOf }
+  return { tabs, activeSourceId, snapshots, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, renameTab, saveSnapshot, snapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf, backTraceConditionOf, setPendingSourceCondition, takePendingSourceCondition }
 })

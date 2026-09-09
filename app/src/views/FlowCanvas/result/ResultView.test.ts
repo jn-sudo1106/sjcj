@@ -86,7 +86,6 @@ describe('ResultView', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     delete mockRouteQuery.scriptPath
-    for (const k of ['condTable', 'condSql', 'condState', 'condDataId', 'condParentId']) delete mockRouteQuery[k]
   })
 
   it('以当前源流程展示无首尾节点的节点条，且只查当前源数据（不提供所属源筛选——本页始终锁定在进入时的具体源，2026-08-14 第五次纠偏去掉了容易让人切到同站其他源的下拉）', async () => {
@@ -1715,25 +1714,24 @@ describe('ResultView · 删除数据', () => {
 })
 
 // 从网站汇总「按条件查源」的命中列表点进某个源（2026-09-09）：侧栏那一行写着「906 条」，
-// 进来看到的就得是那 906 条，所以条件随 URL 带过来并自动填进筛选框。
+// 进来看到的就得是那 906 条。条件走 store 不走 URL——本视图按 sourceId 做 key，源→源切换
+// 会销毁重建，用 query 传会撞上「旧实例抹掉 query、新实例读不到」的竞态。
 describe('ResultView · 带条件进来', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-    routerReplace.mockClear()
-    for (const k of ['condTable', 'condSql', 'condState', 'condDataId', 'condParentId']) delete mockRouteQuery[k]
-  })
+  afterEach(() => vi.restoreAllMocks())
 
-  it('URL 上的 cond* 参数填进筛选框，并作为查询条件发出去', async () => {
+  function mountWithPending(cond: { tableId: string; sql?: string; state?: string } | null) {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
-    mockRouteQuery.condTable = '900'
-    mockRouteQuery.condSql = 'K1 IS NULL'
-    mockRouteQuery.condState = 'E'
+    const ws = useWorkspaceStore()
+    if (cond) ws.setPendingSourceCondition(cond)
+    return { wrapper: mountResultView(), query, ws }
+  }
 
-    const wrapper = mountResultView()
+  it('把待应用条件填进筛选框，并作为查询条件发出去', async () => {
+    const { wrapper, query } = mountWithPending({ tableId: '900', sql: 'K1 IS NULL', state: 'E' })
     await flushPromises()
 
     expect((wrapper.get('input.rv-input.flex').element as HTMLInputElement).value).toBe('K1 IS NULL')
@@ -1741,21 +1739,18 @@ describe('ResultView · 带条件进来', () => {
     expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ sql: 'K1 IS NULL', state: 'E' }))
   })
 
-  it('用完把 cond* 从 URL 抹掉——留着的话清空筛选后一刷新又被灌回来', async () => {
-    setActivePinia(createPinia())
-    const current = mockSourceDetail({ sourceId: '391007768' })!
-    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
-    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
-    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
-    mockRouteQuery.condTable = '900'
-    mockRouteQuery.condSql = 'K1 IS NULL'
-
-    mountResultView()
+  it('取走即清，只应用一次——之后用户自己改的筛选不会被再次覆盖', async () => {
+    const { ws } = mountWithPending({ tableId: '900', sql: 'K1 IS NULL' })
     await flushPromises()
 
-    const replaced = routerReplace.mock.calls.at(-1)?.[0] as { query?: Record<string, unknown> } | undefined
-    expect(replaced?.query).toBeDefined()
-    expect(Object.keys(replaced!.query!)).not.toContain('condSql')
-    expect(Object.keys(replaced!.query!)).not.toContain('condTable')
+    expect(ws.takePendingSourceCondition()).toBeNull()
+  })
+
+  it('没有待应用条件时筛选框保持空（普通切源不受影响）', async () => {
+    const { wrapper, query } = mountWithPending(null)
+    await flushPromises()
+
+    expect((wrapper.get('input.rv-input.flex').element as HTMLInputElement).value).toBe('')
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ sql: undefined }))
   })
 })
