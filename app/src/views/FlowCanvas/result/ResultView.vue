@@ -92,7 +92,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onWindowKeydown))
 // 节点上下文（0812 计划 M2-8）：输出表统一口径 + 有效输入表（显式覆盖优先，否则继承上游输出表）。
 const selectedCfg = computed<NodeConfig | undefined>(() => allNodes.value.find((n) => n.id === selectedNodeId.value)?.cfg)
 const visibleFieldProps = computed<string[] | undefined>(() => {
-  if (ui.inspectorCollapsed) return undefined
+  if (ui.inspectorCollapsed || !ui.inspectorFieldFilterActive) return undefined
   const inputFields = selectedCfg.value?.ruleCfg?.inputFields ?? selectedCfg.value?.inputFields ?? []
   return inputFields.length ? [...inputFields] : undefined
 })
@@ -522,7 +522,9 @@ watch(
 // 手动切节点（节点轨道 / 下拉框都走这一个入口，0812 计划 M2-9）：范围、页码、条件展开态
 // 一并重置，不残留上一个节点的浏览状态串到新节点上。
 function onSelectNode(id: string) {
-  if (!id || id === selectedNodeId.value) return
+  if (!id) return
+  ui.clearInspectorFieldFilter()
+  if (id === selectedNodeId.value) return
   selectedNodeId.value = id
   // 与右侧节点配置联动（0904 I10 / Z3-2，用户 2026-09-05 补充「点击中间的流程需要跟右侧联动」）：
   // 三栏之后右侧常驻节点配置，点中间轨道上的节点，右边就该跟着换成这个节点的配置——
@@ -1267,6 +1269,7 @@ async function onTestScript() {
         :allow-column-sort="allowColumnSort"
         :preset-cols="presetCols"
         :visible-field-props="visibleFieldProps"
+        :force-all-columns="!ui.inspectorFieldFilterActive"
         :show-child-col="showChildCol"
         :allow-row-delete="isTestTable"
         :child-counts="childCounts"

@@ -38,6 +38,9 @@ export const useUiStore = defineStore('ui', () => {
    * 不持久化：跟 `inspectorExpanded` 一样是临时布局状态。
    */
   const inspectorCollapsed = ref(false)
+  // 只在数据视图点右侧窄条「节点配置」主动展开时，ResultView 才按当前节点入参字段收窄列。
+  // 点数据视图里的流程节点只是切换查看对象，表格仍应展示完整字段。
+  const inspectorFieldFilterActive = ref(false)
 
   function setInspectorWidth(px: number) {
     inspectorWidth.value = Math.round(Math.min(px, MAX_INSPECTOR_W))
@@ -46,21 +49,29 @@ export const useUiStore = defineStore('ui', () => {
   function toggleInspectorExpanded() {
     inspectorExpanded.value = !inspectorExpanded.value
     if (inspectorExpanded.value) inspectorCollapsed.value = false
+    inspectorFieldFilterActive.value = false
   }
   function toggleInspectorCollapsed() {
+    const openingInspector = inspectorCollapsed.value
     inspectorCollapsed.value = !inspectorCollapsed.value
     if (inspectorCollapsed.value) inspectorExpanded.value = false
+    inspectorFieldFilterActive.value = openingInspector
+  }
+  function clearInspectorFieldFilter() {
+    inspectorFieldFilterActive.value = false
   }
   /** 复位成"两边都展开"。给独立工作区（如流程中心抽屉）开场时用——
    *  那是另一块界面，不该继承画布页上次留下的收起态。 */
   function resetInspectorLayout() {
     inspectorExpanded.value = false
     inspectorCollapsed.value = false
+    inspectorFieldFilterActive.value = false
   }
   /** 切视图时套用该视图的默认布局（数据视图收起配置、流程视图展开） */
   function applyViewLayoutDefault(view: string) {
     inspectorExpanded.value = false
     inspectorCollapsed.value = view === 'data'
+    inspectorFieldFilterActive.value = false
   }
 
   // 采集资产视图偏好（0707 优化·Phase3）：卡片（默认，网站粒度浏览）/ 表格（树形展开源，批量运维）
@@ -75,7 +86,8 @@ export const useUiStore = defineStore('ui', () => {
   return {
     registerAction, fireAction, clearActions,
     inspectorWidth, inspectorExpanded, inspectorCollapsed, setInspectorWidth,
-    toggleInspectorExpanded, toggleInspectorCollapsed, applyViewLayoutDefault, resetInspectorLayout,
+    inspectorFieldFilterActive, toggleInspectorExpanded, toggleInspectorCollapsed, clearInspectorFieldFilter,
+    applyViewLayoutDefault, resetInspectorLayout,
     assetView, setAssetView,
   }
 })

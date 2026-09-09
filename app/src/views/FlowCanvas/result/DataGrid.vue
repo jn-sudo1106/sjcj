@@ -41,6 +41,8 @@ const props = withDefaults(defineProps<{
   presetCols?: string[]
   /** 强制只显示这批字段。未传时按列偏好/预设正常显示。 */
   visibleFieldProps?: string[]
+  /** 临时强制展示全部列，不改写用户本地列偏好。 */
+  forceAllColumns?: boolean
   /** 「下级」列（0903 H10）：每行在后继节点里产出了几条。
    *  `undefined` = 这个节点没有后继/后继没有输出表 → **整列不渲染**（不是显示一列 `—`）。
    *  `null` = 统计请求失败 → 显示 `?`，主表照常渲染（Y1-14）。 */
@@ -79,7 +81,12 @@ function onSort(field: { prop: string; columnName?: string }) {
   if (props.sortOrder === 'ascend') return emit('sort-change', key, 'descend')
   emit('sort-change', '', '')
 }
-const showSourceCol = computed(() => !!props.sourceNames)
+const strictFieldOnly = computed(() => !!props.visibleFieldProps?.length)
+const showSelectCol = computed(() => !!props.selectable && !strictFieldOnly.value)
+const showSourceCol = computed(() => !!props.sourceNames && !strictFieldOnly.value)
+const showChildDataCol = computed(() => !!props.showChildCol && !strictFieldOnly.value)
+const showStatusCol = computed(() => !props.compact && !strictFieldOnly.value)
+const showActionCol = computed(() => showActions.value && !strictFieldOnly.value)
 function sourceLabel(row: DataRow): string {
   return props.sourceNames?.[row.sourceId] ?? row.sourceId
 }
@@ -160,12 +167,17 @@ const PARENT_ID_COL = { prop: 'PARENT_ID', type: 'string', desc: '父行 ID', la
 // 两头（这行是谁 / 它从哪来），中间隔着「源」得来回扫视才对得上。
 type GridColumn = DataTableMeta['fields'][number] | typeof ENTRY_ID_COL | typeof PARENT_ID_COL | typeof SOURCE_ID_COL
 const allCols = computed<GridColumn[]>(() => (props.meta ? [ENTRY_ID_COL, PARENT_ID_COL, SOURCE_ID_COL, ...props.meta.fields] : []))
+const identityColSet = new Set<string>(IDENTITY_COL_PROPS)
+function isIdentityCol(field: { prop: string; columnName?: string }): boolean {
+  return identityColSet.has(field.prop.toUpperCase()) || identityColSet.has((field.columnName ?? '').toUpperCase())
+}
 const visibleFieldSet = computed(() => new Set(props.visibleFieldProps ?? []))
 const cols = computed(() => {
   if (!props.visibleFieldProps?.length) return allCols.value
-  return allCols.value.filter((field) =>
-    visibleFieldSet.value.has(field.prop) || visibleFieldSet.value.has('columnName' in field ? field.columnName ?? '' : ''),
-  )
+  return allCols.value.filter((field) => {
+    if (isIdentityCol(field)) return false
+    return visibleFieldSet.value.has(field.prop) || visibleFieldSet.value.has('columnName' in field ? field.columnName ?? '' : '')
+  })
 })
 
 // 预设里认不出来的列先剔掉：presetCols 是按流程配置算的，可能引用了当前表没有的字段
@@ -173,6 +185,7 @@ const cols = computed(() => {
 // 两个身份列无条件并进来——不知道这行是哪条数据、属于哪个源，剩下的字段看了也没用
 // （0819 会议 08:16/09:23 要出来的就是这两列）；调用方不必自己记得带上。
 const effectivePreset = computed(() => {
+  if (props.forceAllColumns) return []
   if (!props.presetCols.length) return []
   const known = new Set(cols.value.map((f) => f.prop))
   const wanted = new Set(props.presetCols.filter((prop) => known.has(prop)))
@@ -198,10 +211,19 @@ const visibleCols = computed(() => {
   const byProp = new Map(cols.value.map((f) => [f.prop, f]))
   return colOrder.value
     .map((prop) => byProp.get(prop))
-    .filter((f): f is (typeof cols.value)[number] => !!f && !hiddenCols.value.has(f.prop))
+    .filter((f): f is (typeof cols.value)[number] => !!f && (props.forceAllColumns || !hiddenCols.value.has(f.prop)))
 })
+const displayVisibleCount = computed(() => (props.forceAllColumns ? cols.value.length : colVisibleCount.value))
 const pickerColumns = computed(() => cols.value.map((f) => ({ prop: f.prop, label: colLabel(f) })))
 const showColPicker = computed(() => cols.value.length > 1)
+const emptyColspan = computed(() =>
+  visibleCols.value.length
+  + (showStatusCol.value ? 1 : 0)
+  + (showActionCol.value ? 1 : 0)
+  + (showSourceCol.value ? 1 : 0)
+  + (showSelectCol.value ? 1 : 0)
+  + (showChildDataCol.value ? 1 : 0),
+)
 // row.values 的键是旧平台的物理列名（K1/K2...），不是 tableMeta 给的逻辑字段名 f.prop
 // （比如 "title"）——这两个只在 f.columnName 里对得上，直接用 f.prop 去取永远是 undefined。
 // 真实 bug，2026-08-14 生产环境实测发现：详情弹层和表格本体所有字段都显示"—"，
@@ -325,9 +347,9 @@ function stateMeta(s?: string) {
           class="dg-col-btn"
           type="button"
           data-testid="column-picker-btn"
-          :title="`列显示与顺序（已显 ${colVisibleCount}/${cols.length}）`"
+          :title="`列显示与顺序（已显 ${displayVisibleCount}/${cols.length}）`"
           @click="colPickerOpen = true"
-        >列 {{ colVisibleCount }}/{{ cols.length }}</button>
+        >列 {{ displayVisibleCount }}/{{ cols.length }}</button>
       </div>
     </div>
     <div v-if="!cols.length && !loading" class="dg-empty">该节点暂无输出表 schema</div>
@@ -335,7 +357,7 @@ function stateMeta(s?: string) {
       <table class="dg-table dg-sticky-table">
         <thead>
           <tr>
-            <th v-if="selectable" class="dg-sticky-head" style="width:36px" @click.stop>
+            <th v-if="showSelectCol" class="dg-sticky-head" style="width:36px" @click.stop>
               <input type="checkbox" :checked="allChecked" :indeterminate="someChecked" @change="toggleAll" />
             </th>
             <th v-if="showSourceCol" class="dg-sticky-head" style="width:140px">{{ sourceColLabel || '所属源' }}</th>
@@ -350,14 +372,14 @@ function stateMeta(s?: string) {
             >{{ colLabel(f) }}<span v-if="canSort(f)" class="dg-sort-ind">{{ sortIndicator(f) }}</span></th>
             <!-- 「下级」（0903 H10）：这行在后继节点里产出了几条。末节点 / 后继无输出表时
                  整列不渲染——显示一整列 `—` 只会让人以为"数据没跑出来"。 -->
-            <th v-if="showChildCol" class="dg-sticky-head" style="width:72px" title="这一行在下一节点产出了多少条数据">下级</th>
-            <th v-if="!compact" class="dg-sticky-head" style="width:64px">状态</th>
-            <th v-if="showActions" class="dg-sticky-head" style="width:80px">操作</th>
+            <th v-if="showChildDataCol" class="dg-sticky-head" style="width:72px" title="这一行在下一节点产出了多少条数据">下级</th>
+            <th v-if="showStatusCol" class="dg-sticky-head" style="width:64px">状态</th>
+            <th v-if="showActionCol" class="dg-sticky-head" style="width:80px">操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="r in rows" :key="r.dataId" :class="{ active: selectedId === r.dataId }" @click="emit('row-click', r)">
-            <td v-if="selectable" class="dg-select" @click.stop>
+            <td v-if="showSelectCol" class="dg-select" @click.stop>
               <input type="checkbox" :checked="selectedSet.has(r.dataId)" @change="toggleRow(r.dataId)" />
             </td>
             <td v-if="showSourceCol" :title="sourceLabel(r)">{{ sourceLabel(r) }}</td>
@@ -402,7 +424,7 @@ function stateMeta(s?: string) {
                 </svg>
               </button>
             </td>
-            <td v-if="showChildCol" class="dg-child" @click.stop>
+            <td v-if="showChildDataCol" class="dg-child" @click.stop>
               <!-- 统计整体失败：只有这一列变 `?`，表格照常看（Y1-14）——统计是附加信息，
                    不该因为它挂了就让人看不了数据。 -->
               <span v-if="childCounts === null" class="dg-child-err" data-testid="data-child-error" :title="childCountsError || '下级条数统计失败'">?</span>
@@ -416,8 +438,8 @@ function stateMeta(s?: string) {
               >{{ childCellOf(r)!.total }}</button>
               <span v-else class="muted">—</span>
             </td>
-            <td v-if="!compact"><span class="rc-status" :class="stateMeta(r.state).cls">{{ stateMeta(r.state).text }}</span></td>
-            <td v-if="showActions" class="dg-actions" @click.stop>
+            <td v-if="showStatusCol"><span class="rc-status" :class="stateMeta(r.state).cls">{{ stateMeta(r.state).text }}</span></td>
+            <td v-if="showActionCol" class="dg-actions" @click.stop>
               <el-dropdown trigger="click" @command="(c: string) => emit('row-action', r, c)">
                 <span class="dg-act-btn">操作 ▾</span>
                 <template #dropdown>
@@ -431,7 +453,7 @@ function stateMeta(s?: string) {
             </td>
           </tr>
           <tr v-if="!rows.length && !loading">
-            <td :colspan="visibleCols.length + (compact ? 0 : 1) + (showActions ? 1 : 0) + (showSourceCol ? 1 : 0) + (selectable ? 1 : 0) + (showChildCol ? 1 : 0)" class="dg-empty-cell">无符合条件的数据</td>
+            <td :colspan="emptyColspan" class="dg-empty-cell">无符合条件的数据</td>
           </tr>
         </tbody>
       </table>
