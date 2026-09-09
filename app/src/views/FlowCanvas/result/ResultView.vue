@@ -1336,12 +1336,14 @@ async function onTestScript() {
                重置到第 1 页再重新查——跟 watch([selectedTable, page], loadData) 分工：
                page 变化交给 watch，size 变化这里手动触发（watch 没监听 size，故意的，
                避免 v-model 更新 page/size 时被同一次操作触发两次查询）。 -->
+          <!-- layout 带 total（2026-09-09）：`:total` 一直传着，只是没在 layout 里列出来，
+               分页器左边那块就一直空着。全项目 20 个分页器里 18 个都带 total，这里是漏的。 -->
           <el-pagination
             v-model:current-page="page"
             v-model:page-size="size"
             :total="total"
             :page-sizes="PAGE_SIZES"
-            layout="sizes, prev, pager, next"
+            layout="total, sizes, prev, pager, next"
             small
             data-testid="data-pagination"
             @size-change="runQuery"
