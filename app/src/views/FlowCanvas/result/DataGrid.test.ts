@@ -506,3 +506,30 @@ describe('DataGrid · 下一步字段预设（0831 F10）', () => {
     expect(heads(wrapper)).toContain('标题-K1')
   })
 })
+
+// 行内删除（2026-09-09 随源数据视图迁入删除功能一起加）。表格自己不判断表能不能删——
+// 表状态（tableMeta.state）在调用方手里，这里只按 allowRowDelete 渲染。
+describe('DataGrid · 行内删除单条', () => {
+  const MENU_STUBS = {
+    ColumnPickerDialog: true,
+    ElDialog: true,
+    ElDropdown: { name: 'ElDropdown', template: '<div><slot /><slot name="dropdown" /></div>' },
+    ElDropdownMenu: { name: 'ElDropdownMenu', template: '<div><slot /></div>' },
+    ElDropdownItem: { name: 'ElDropdownItem', props: ['command', 'divided'], template: '<div class="dg-item"><slot /></div>' },
+  }
+  const props = {
+    meta: { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'name', type: 'string', desc: '名称' }] },
+    rows: [{ dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted', values: {} }] as DataRow[],
+  }
+
+  it('allowRowDelete 为真才出现，默认不出现', () => {
+    const off = mount(DataGrid, { props, global: { stubs: MENU_STUBS } })
+    expect(off.text()).not.toContain('删除单条')
+
+    const on = mount(DataGrid, { props: { ...props, allowRowDelete: true }, global: { stubs: MENU_STUBS } })
+    expect(on.text()).toContain('删除单条【无法恢复】')
+    expect(on.text()).toContain('详情')
+    expect(on.text()).toContain('查后续任务实例')
+  })
+})
+

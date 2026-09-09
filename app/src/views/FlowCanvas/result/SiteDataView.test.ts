@@ -7,6 +7,8 @@
 // 更多，不是具体源单独一套总数/上一页下一页）、同一套筛选行位置，只是可编辑字段不同。
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import SiteDataView from './SiteDataView.vue'
 import { readSqlConditions } from '@/utils/sqlConditionHistory'
@@ -29,9 +31,15 @@ const stubs = {
   ElDrawer: true,
   ElDialog: { name: 'ElDialog', props: ['modelValue'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' },
   SummaryDrawer: true,
+  // 「按条件查源」旁边的 ⋯ 下拉（0909）：默认桩不渲染插槽，菜单项断言不到
+  ElDropdown: { name: 'ElDropdown', template: '<div><slot /><slot name="dropdown" /></div>' },
+  ElDropdownMenu: { name: 'ElDropdownMenu', template: '<div><slot /></div>' },
+  ElDropdownItem: { name: 'ElDropdownItem', props: ['disabled', 'divided'], template: '<div class="el-dropdown-item"><slot /></div>' },
 }
 
 function mountView(siteId = 'site-a') {
+  // 反查命中源写进 workspace store 供侧栏消费（0909），组件里用了 useWorkspaceStore
+  setActivePinia(createPinia())
   return mount(SiteDataView, { props: { siteId }, global: { stubs } })
 }
 
@@ -86,9 +94,11 @@ describe('SiteDataView · 全部源（表筛选）', () => {
     expect(distinctSource).not.toHaveBeenCalled()
   })
 
-  it('选表后收窄源集合（siteSources ∩ distinctSource），并查询到数据', async () => {
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a'), source('b'), source('c')])
-    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['a', 'b', 'not-in-site'])
+  // 2026-09-09：候选源只在本网站范围内算，不再问 entryDistinctSource「全库这张表有哪些源」
+  // 再取交集——那个接口不认 siteId，共用大表下必被上限截断，本网站的源会整个漏掉。
+  it('无条件选表时候选源就是网站的源，不再走 distinctSource 取交集', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a'), source('b')])
+    const distinctSource = vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['a'])
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     const rowQueryPaged = vi.spyOn(dataApi, 'rowQueryPaged').mockImplementation(async ({ sourceId }) => ({
       total: 0, list: sourceId === 'a' ? [row('a', '10')] : [row('b', '20')],
@@ -97,32 +107,39 @@ describe('SiteDataView · 全部源（表筛选）', () => {
     const wrapper = mountView()
     await pickTable(wrapper)
 
-    // 只应该查 a 和 b（c 被 distinctSource 排除，not-in-site 不属于本网站）
-    const queried = new Set(rowQueryPaged.mock.calls.map((call) => call[0].sourceId))
-    expect(queried).toEqual(new Set(['a', 'b']))
+    // b 不在 distinctSource 的返回里，但它属于本网站，照样要查——否则它的数据就凭空消失了
+    expect(new Set(rowQueryPaged.mock.calls.map((call) => call[0].sourceId))).toEqual(new Set(['a', 'b']))
+    expect(distinctSource).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('已加载 2 条')
   })
 
-  it('查 distinctSource 时要传大 size 取全量，不能用默认分页 20（真实 bug：全平台共用表的引用源数一旦超过 20，本网站的源可能不在默认返回范围内，交集算出来会是空的）', async () => {
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
-    const distinctSource = vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['a'])
+  it('带条件时用 summaryEntryData 在本网站源里精确收窄，把候选压到真正命中的那些', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a'), source('b'), source('c')])
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
-    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [row('a', '1')] })
+    const summary = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([{ SOURCE_ID: 'c', CNT: 5 }] as never)
+    const rowQueryPaged = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
 
     const wrapper = mountView()
     await pickTable(wrapper)
+    await wrapper.get('input[placeholder="数据 ID"]').setValue('123')
+    await wrapper.get('button.primary').trigger('click')
+    await flushPromises()
 
-    expect(distinctSource).toHaveBeenCalledWith(expect.objectContaining({ size: 1000 }))
+    expect(summary).toHaveBeenCalled()
+    expect(rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: 'c' }))
   })
 
-  it('distinctSource 收窄失败时退回网站全部源，不整体不可用', async () => {
+  it('精确收窄失败时退回网站全部源，不整体不可用', async () => {
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
-    vi.spyOn(dataApi, 'distinctSource').mockRejectedValue(new Error('boom'))
+    vi.spyOn(dataApi, 'summaryData').mockRejectedValue(new Error('boom'))
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     const rowQueryPaged = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [row('a', '1')] })
 
     const wrapper = mountView()
     await pickTable(wrapper)
+    await wrapper.get('input[placeholder="数据 ID"]').setValue('123')
+    await wrapper.get('button.primary').trigger('click')
+    await flushPromises()
 
     expect(rowQueryPaged).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'a' }))
     expect(wrapper.text()).toContain('已加载 1 条')
@@ -144,7 +161,7 @@ describe('SiteDataView · 全部源（表筛选）', () => {
 
   it('查询条件原样透传给每个源', async () => {
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
-    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['a'])
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([{ SOURCE_ID: 'a', CNT: 1 }] as never)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     const rowQueryPaged = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
 
@@ -241,7 +258,10 @@ describe('SiteDataView · 全部源（表筛选）', () => {
 
   it('部分源查询失败时显示提示，不影响已成功源的数据展示', async () => {
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('ok'), source('bad')])
-    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['ok', 'bad'])
+    // 后半段会填 SQL 条件再查，那时走精确收窄——两个源都命中，候选集合保持不变
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([
+      { SOURCE_ID: 'ok', CNT: 1 }, { SOURCE_ID: 'bad', CNT: 1 },
+    ] as never)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     const query = vi.spyOn(dataApi, 'rowQueryPaged').mockImplementation(async ({ sourceId }) => {
       if (sourceId === 'bad') throw new Error('boom')
@@ -650,3 +670,182 @@ describe('SiteDataView · 上游数据下钻（M3-0H）', () => {
     expect(wrapper.find('[data-testid="site-data-parent-panel"]').exists()).toBe(false)
   })
 })
+
+// 按条件查源（0909 改落点）：命中源从「跳到源视图」改成「写进左侧源侧栏」。
+// 会上原话「就是要再加到左边最好」「因为我点一个源又要进去」——跳过去只是换个地方看列表，
+// 挨个排查问题源还得在两个视图之间来回跳。
+// 2026-09-09：归并视图逐源懒加载，自己算不出总量，表头一直只有「已加载 N 条」（加载进度）。
+// 用户问的"一共多少条"看不到——旧平台分页器上那个「共 7030 条」没迁过来。
+// 收窄用的 summaryEntryData 本来就按源分组带 CNT，求和即总数，不额外发请求。
+describe('SiteDataView · 命中总条数', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('带条件时直接用收窄那步的分组计数求和，不为总数再发一轮', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1'), source('s2')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([
+      { SOURCE_ID: 's1', CNT: 7000 }, { SOURCE_ID: 's2', CNT: 30 },
+    ] as never)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    await wrapper.get('input[placeholder="数据 ID"]').setValue('1')
+    await wrapper.get('button.primary').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="site-data-total"]').text()).toBe('共 7,030 条')
+  })
+
+  // 2026-09-09 修正：上一版不带条件时不显示总数（"不值得为一个数字先付一轮请求"），
+  // 想窄了——「一共多少条」跟有没有筛选条件无关，进来就该看得到。改成后台补算。
+  it('不带条件时也算总数，只是放后台不挡着数据先出来', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const summary = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([
+      { SOURCE_ID: 's1', CNT: 4321 },
+    ] as never)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [row('s1', '1')] })
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    await flushPromises()
+
+    expect(summary).toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="site-data-total"]').text()).toBe('共 4,321 条')
+    expect(wrapper.text()).toContain('已加载 1 条')
+  })
+
+  it('后台补算失败就不显示，不拿个错数字糊弄——数据本身照常展示', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'summaryData').mockRejectedValue(new Error('boom'))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [row('s1', '1')] })
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="site-data-total"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('已加载 1 条')
+  })
+
+  it('收窄失败时不显示总数，不拿个错数字糊弄', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'summaryData').mockRejectedValue(new Error('boom'))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    await wrapper.get('input[placeholder="数据 ID"]').setValue('1')
+    await wrapper.get('button.primary').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="site-data-total"]').exists()).toBe(false)
+  })
+})
+
+describe('SiteDataView · 按条件查源', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  async function backTraceReady() {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1'), source('s2'), source('s3')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['s1', 's2', 's3'])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    // 反查主路径：summaryEntryData 按 SOURCE_ID 分组，一次拿到「哪些源 + 各命中几条」
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([
+      { SOURCE_ID: 's2', CNT: 3 },
+      { SOURCE_ID: 's1', CNT: 12 },
+    ] as never)
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    await wrapper.get('input.sdv2-input.flex').setValue("K1 IS NULL")
+    return wrapper
+  }
+
+  it('命中源写进 workspace store 供侧栏消费，按命中条数从多到少排', async () => {
+    const wrapper = await backTraceReady()
+    await wrapper.get('[data-testid="site-data-backtrace"]').trigger('click')
+    await flushPromises()
+
+    const ws = useWorkspaceStore()
+    expect(ws.backTraceHitsOf('site-a')).toEqual([
+      { sourceId: 's1', count: 12 },
+      { sourceId: 's2', count: 3 },
+    ])
+  })
+
+  // 侧栏那一行写着「12 条」，点进去看到的就得是那 12 条，否则数字是误导
+  it('把产生这批命中的条件一并记下，供点侧栏源时带进具体源数据视图', async () => {
+    const wrapper = await backTraceReady()
+    await wrapper.get('[data-testid="site-data-backtrace"]').trigger('click')
+    await flushPromises()
+
+    expect(useWorkspaceStore().backTraceConditionOf('site-a')).toEqual({
+      tableId: 't1', sql: 'K1 IS NULL', state: undefined, dataId: undefined, parentId: undefined,
+    })
+  })
+
+  it('命中态清掉后条件也不再供给（别把过期条件带进源里）', async () => {
+    const wrapper = await backTraceReady()
+    await wrapper.get('[data-testid="site-data-backtrace"]').trigger('click')
+    await flushPromises()
+    const ws = useWorkspaceStore()
+    expect(ws.backTraceConditionOf('site-a')).not.toBeNull()
+
+    ws.clearBackTraceHits()
+    expect(ws.backTraceConditionOf('site-a')).toBeNull()
+  })
+
+  it('命中态按 siteId 隔离：切到别的网站就不适用了，侧栏拿不到', async () => {
+    const wrapper = await backTraceReady()
+    await wrapper.get('[data-testid="site-data-backtrace"]').trigger('click')
+    await flushPromises()
+
+    const ws = useWorkspaceStore()
+    expect(ws.backTraceHitsOf('site-a')).toHaveLength(2)
+    expect(ws.backTraceHitsOf('site-other')).toEqual([])
+  })
+
+  it('没填任何数据条件时不发请求，只提示——无条件反查等于把全部源填回去，没意义', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['s1'])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    const summary = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([])
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    await flushPromises()
+    // 选表时后台会补算一次总数，也走 summaryData——这里只关心点按钮之后有没有再发
+    const before = summary.mock.calls.length
+    await wrapper.get('[data-testid="site-data-backtrace"]').trigger('click')
+    await flushPromises()
+
+    expect(summary.mock.calls.length).toBe(before)
+    expect(useWorkspaceStore().backTraceHitsOf('site-a')).toEqual([])
+  })
+
+  it('点「查询」清掉侧栏命中态——那是上一次条件的快照，条件一改就过期', async () => {
+    const wrapper = await backTraceReady()
+    await wrapper.get('[data-testid="site-data-backtrace"]').trigger('click')
+    await flushPromises()
+    const ws = useWorkspaceStore()
+    expect(ws.backTraceHitsOf('site-a')).toHaveLength(2)
+
+    await wrapper.get('button.primary').trigger('click')
+    await flushPromises()
+
+    expect(ws.backTraceHitsOf('site-a')).toEqual([])
+  })
+
+  it('旧的「跳源视图」收进 ⋯ 下拉当第二条路：反查完要批量发任务时那边的勾选更好使', async () => {
+    const wrapper = await backTraceReady()
+    expect(wrapper.find('[data-testid="site-data-backtrace-more"]').exists()).toBe(true)
+    const item = wrapper.findAll('.el-dropdown-item').find((i) => i.text().includes('源视图'))
+    expect(item).toBeTruthy()
+  })
+})
+

@@ -280,8 +280,11 @@ describe('最新方案 UI 入口收口', () => {
   })
 
   it('切换源保留当前视图，视图按钮等待路由完成后再允许下一次切换', () => {
-    expect(flowCanvas).toContain('const view = normalizeSourceView(route.query.view)')
-    expect(flowCanvas).toContain("void router.replace({ path: '/canvas', query: { ...(target.siteId ? { siteId: target.siteId } : {}), sourceId: target.sourceId, view } })")
+    // 切源仍带着当前视图走（2026-09-09 起多一条例外：从「按条件查源」的命中态点进来时
+    // 强制 data 并带上条件，见 onSwitchTarget 里的注释）
+    expect(flowCanvas).toContain("view: cond ? 'data' : normalizeSourceView(route.query.view)")
+    expect(flowCanvas).toContain('sourceId: target.sourceId,')
+    expect(flowCanvas).toContain("void router.replace({")
     expect(canvasHeader).toContain("void router.replace({ path: '/canvas', query })")
     expect(canvasHeader).not.toContain('switchingView')
   })

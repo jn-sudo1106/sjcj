@@ -53,6 +53,22 @@ const scope = ref<'output' | 'input'>('output')
 const page = ref(1)
 const filters = reactive({ dataId: '', parentId: '', state: '', sql: '' })
 
+/**
+ * 从网站汇总的「按条件查源」命中列表点进某个源时带过来的条件（2026-09-09）。
+ * 侧栏那一行写着「906 条」，进来看到的就得是那 906 条，否则那个数字是误导。
+ *
+ * 走 store 而不是 URL：本视图按 sourceId 做 key，源→源切换会销毁重建，用 query 传会撞上
+ * 「旧实例先填完条件顺手抹掉 query、新实例挂载时已读不到」的竞态——表现为点第一个源
+ * 好使、再点别的源条件就没了。store 里那份取走即清，只应用一次。
+ */
+const pendingCondition = ws.takePendingSourceCondition()
+if (pendingCondition) {
+  filters.sql = pendingCondition.sql ?? ''
+  filters.state = pendingCondition.state ?? ''
+  filters.dataId = pendingCondition.dataId ?? ''
+  filters.parentId = pendingCondition.parentId ?? ''
+}
+
 // 节点轨道默认展开：轨道是"这个源的流程长什么样"的上下文，进页面第一眼就该看到；
 // 想把这 96px 让给数据的人自己收起来。真要大量看数据走全屏，不靠默认折叠常规页面
 // 换那几行（2026-08-15 定案）。
@@ -394,6 +410,81 @@ async function onSendAllUnderFilter() {
       size: 500000, start: 0,
     })),
     showNextStepReceipt,
+  )
+}
+
+// ---- 删除数据（2026-09-09 从数据中心迁入）----
+// 数据中心那套下拉共 9 项，这里**只迁 4 项**：删除该源当日/所有、删除选中、行内删单条。
+// 刻意不迁的两类：
+//   ① 「清空表数据【当日/全量】」——不带 sourceId 的整表删除。在源视图里危险性质变了：
+//      selectedTable 是节点的输入/输出表，同网站多个源共用一张表是常态（详情节点都写 900），
+//      在「某个源」的页面上点一下清掉全网站所有源的数据，杀伤范围远超这个页面的语义。
+//      表是主语的动作留在数据中心。
+//   ② 「设为正式表」——表级配置切换，不是数据视图的职责。
+// 与数据中心一致的门禁：仅测试表可删（方案 §1.4-4）。
+const isTestTable = computed(() => meta.value?.state === 'C')
+
+/** 删除后统一回到第 1 页重查：删掉的行可能横跨当前页，留在原页会看到空洞或错位的分页。 */
+function afterDelete() {
+  selectedRowIds.value = []
+  runQuery()
+}
+
+function onDeleteSelected() {
+  if (!selectedRowIds.value.length || !selectedTable.value) return
+  const tableId = selectedTable.value
+  const ids = [...selectedRowIds.value]
+  void confirmDanger(
+    '警告',
+    `[实验性]，批量删除选中的数据,共[${ids.length} ] 条记录? 表:${tableId}`,
+    async () => {
+      const r = await dataApi.rowDeleteBatch(tableId, ids)
+      if (r.success === 0) ElMessage.warning('未能改变数据, 可能原因:\n【未找到对应ID】')
+      return { message: `成功，删:${r.success}, 共:${r.all}, 未找到:${r.not_found}` }
+    },
+    (res) => {
+      ElMessage.success(res?.message || '删除成功')
+      afterDelete()
+    },
+  )
+}
+
+/** all=0 当日 / all=1 所有。始终带 sourceId——这个页面就是单源视图，不提供跨源删除。 */
+function onDeleteByRange(all: 0 | 1) {
+  if (!selectedTable.value || !sourceId.value) return
+  const tableId = selectedTable.value
+  const sid = sourceId.value
+  const rangeText = all === 1 ? '所有' : '当天'
+  void confirmDanger(
+    '确认删除',
+    `确认删除该源【${rangeText}】数据，源[${source.value?.name || sid}], 表:${tableId}，注意删除后无法恢复`,
+    async () => {
+      const r = await dataApi.rowDelete(tableId, { sourceId: sid, all })
+      if (!r.success) ElMessage.warning('未能改变数据, 可能原因:\n【数据超过14天或未找到对应ID】')
+      return { message: `删除该源[${all === 1 ? '所有' : '当日'}]成功，清除条数:${r.success ?? 0}` }
+    },
+    (res) => {
+      ElMessage.success(res?.message || '删除成功')
+      afterDelete()
+    },
+  )
+}
+
+function onDeleteOne(row: DataRow) {
+  if (!selectedTable.value) return
+  const tableId = selectedTable.value
+  void confirmDanger(
+    '确认删除',
+    `确认删除一条:${row.dataId} / 是否确认删除数据？ 【删除后无法恢复】`,
+    async () => {
+      const r = await dataApi.rowDelete(tableId, { sourceId: row.sourceId || sourceId.value, all: 1, entryId: row.dataId })
+      if (!r.success) ElMessage.warning('未能改变数据, 可能原因:\n【数据超过14天或未找到对应ID】')
+      return { message: '删除成功' }
+    },
+    (res) => {
+      ElMessage.success(res?.message || '删除成功')
+      afterDelete()
+    },
   )
 }
 
@@ -812,6 +903,8 @@ function onRowAction(r: DataRow, cmd: string) {
     taskInst.sourceId = r.sourceId
     taskInst.parentId = r.dataId
     taskInst.visible = true
+  } else if (cmd === 'delete') {
+    onDeleteOne(r)
   }
 }
 
@@ -922,7 +1015,6 @@ const filePreview = reactive({ visible: false, path: '', name: '', url: '' })
 function onCellFile(path: string) {
   filePreview.path = path
   filePreview.name = path.split('/').pop() || ''
-  // 采集页 content.html 的相对资源要回源站取——把行里的原始 URL 带给预览器做 <base>
   filePreview.url = detailFields.value.find((f) => f.prop === 'url')?.href
     || detailFields.value.find((f) => f.href)?.href
     || ''
@@ -1047,6 +1139,11 @@ async function onTestScript() {
         <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="selectedTable" :table-name="meta?.tableName" class="rv-sql">
           <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="rv-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
         </SqlConditionEditor>
+        <!-- 强制换行（0909）：不加这个，分行点随窗口宽度漂——SQL 框是 flex:1 1 320px，
+             窄一点它收缩到 min-width，「查询/清空」就被吸到第一行末尾，操作组独占第二行
+             右端、左边空一大片；宽一点又是另一种排法。钉成「第一行只放条件、第二行左查询
+             右操作」，两组都是动作、各占一端，空间也不浪费。 -->
+        <span class="rv-linebreak" aria-hidden="true"></span>
         <span class="rv-actions">
           <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
           <button class="rc-btn" type="button" @click="clearFilters">清空</button>
@@ -1060,85 +1157,12 @@ async function onTestScript() {
             @click="openBackTraceInSiteView"
           >按条件查源 →</button>
         </span>
-      </template>
-    </div>
-
-    <template v-if="hasAnyTable">
-      <!-- 条件已改但未执行：盖住上一次的结果状态，避免把旧的失败/空表当成当前条件的结果 -->
-      <div v-if="slowQuery" class="rv-notice" role="status" data-testid="data-slow-query">查询较慢，可缩小条件范围再试；本次请求仍在等待结果</div>
-      <div v-else-if="filtersDirty && !loading" class="rv-notice" role="status" data-testid="data-filters-dirty">查询条件已修改，点「查询」执行</div>
-      <template v-else>
-        <div v-if="metaError" class="rv-notice" role="status">{{ metaError }}</div>
-        <div v-if="dataError" class="rv-notice error" role="alert" :title="dataErrorFull || dataError">{{ dataError }}</div>
-      </template>
-
-      <!-- 表头内容走 DataGrid 的 #head 插槽，跟「列」和分页共用同一条横条。原来这里是
-           独立的 .rv-tablehead(47px) + DataGrid 自己的列按钮行(33px) + .rv-pager(45px)
-           三条横条，加起来 125px 全在挤数据区（2026-08-15 第十二次纠偏）。
-           输入/输出切换紧挨着表名——这两个按钮控制的正是"表头显示的是哪张表"。 -->
-      <DataGrid
-        class="rv-grid"
-        :meta="meta"
-        :rows="rows"
-        :loading="loading"
-        :selected-id="detailRow?.dataId"
-        :selectable="canPickRows"
-        :selected-ids="selectedRowIds"
-        :sort-field="sortField"
-        :sort-order="sortOrder"
-        :allow-column-sort="allowColumnSort"
-        :preset-cols="presetCols"
-        :show-child-col="showChildCol"
-        :child-counts="childCounts"
-        :child-counts-error="childCountsError"
-        @sort-change="onSortChange"
-        @update:selected-ids="selectedRowIds = $event"
-        @file-click="onCellFile"
-        @parent-click="onParentCellClick"
-        @child-click="onChildCountClick"
-        @row-click="onRowClick"
-        @row-action="onRowAction"
-      >
-        <template #head>
-          <!-- 输入表===输出表：会议要的"展示看输出/发送用输入"两件事落在同一张表上，
-               双 tab 自我矛盾，合并成一个（M3-0C 方案 A）；标签写"输入·输出"明示这张表
-               两个身份都占，不是随便挑了一个名字。 -->
-          <span v-if="sameTable" class="ctx-piece" data-testid="data-scope-merged"><span class="k">输入·输出</span><span class="v code">{{ inputTableId }}</span></span>
-          <template v-else>
-            <template v-if="inputTableId">
-              <button
-                v-if="scopeSwitchable"
-                type="button"
-                class="ctx-piece scope-piece"
-                :class="{ active: scope === 'input' }"
-                data-testid="data-scope-input"
-                @click="onScopeChange('input')"
-              ><span class="k">输入</span><span class="v code">{{ inputTableId }}</span></button>
-              <span v-else class="ctx-piece"><span class="k">输入</span><span class="v code">{{ inputTableId }}</span></span>
-            </template>
-            <template v-if="outputTableId">
-              <span v-if="inputTableId" class="ctx-sep">·</span>
-              <button
-                v-if="scopeSwitchable"
-                type="button"
-                class="ctx-piece scope-piece"
-                :class="{ active: scope === 'output' }"
-                data-testid="data-scope-output"
-                @click="onScopeChange('output')"
-              ><span class="k">输出</span><span class="v code">{{ outputTableId }}</span></button>
-              <span v-else class="ctx-piece"><span class="k">输出</span><span class="v code">{{ outputTableId }}</span></span>
-            </template>
-          </template>
-          <!-- 「按源抓取 / 按输入数据执行」徽标已删除（2026-08-19）：它当初存在是因为
-               08-14 那阵执行按钮文案一度统一成"发起抓取"、不分首节点/后续节点，需要
-               额外说明这个节点按什么发；M3-0A 把按钮文案改回两种之后（发起抓取 /
-               发后续任务），这层信息就被按钮本身接管了——左边还有「输入·输出 表ID」，
-               三处说同一件事。禁用/输出 tab 场景的解释也已经由按钮 title 和
-               data-view-only-hint 承担，删掉它还能给这行让出 93px。 -->
-          <!-- 表名是这行里最长、也最可省略的一项（实测 sense_data.TB_TB_NEWS_TAGS 独占
-               188px）：允许它收缩并省略号截断，完整值走 title 悬浮看，把宽度让给按钮。 -->
-          <span class="rv-tablename" :title="meta?.tableName || selectedTable || ''">{{ meta?.tableName || selectedTable || '—' }}</span>
-          <span class="rv-tablecount">{{ total.toLocaleString() }} 行</span>
+        <!-- 数据操作组（0909 第二次重排，用户「把操作列的放一行」）：发任务/删除是「查出这批
+             数据之后对它动手」，跟查询条件同一语境，放筛选行右端；表头行只留「这张表是什么 +
+             怎么看它」。这三个按钮最宽（发全部带命中数、删除数据带下拉箭头），压在表头行上
+             实测把那条横条撑到横向滚动——第一次重排只搬走了窄按钮，没解决溢出。
+             「已选 N 条」跟着走：它唯一的用途就是告诉你「发后续任务」会发几条。 -->
+        <span class="rv-data-ops">
           <span v-if="canPickRows" class="muted">已选 {{ selectedRowIds.length }} 条</span>
           <!-- 输入≠输出、当前看的是输出 tab：这批行不是本节点的输入，不给一个点了才发现
                被禁用的按钮，直接说清楚去哪操作（M3-0C，对应用户"为什么一个有checkbox一个
@@ -1191,30 +1215,106 @@ async function onTestScript() {
             :title="sendAllBlockedReason || '不按勾选，按当前筛选条件发全部'"
             @click="onSendAllUnderFilter"
           >发全部（命中 {{ total }} 条）</button>
-        </template>
-        <!-- 分页移到表格下方（0819 N1-8，会议 19:13"页子一般放下面"）。原先它并在 #head
-             里是为了省纵向空间，现在由顶部区收窄（N1-10）补偿。 -->
-        <template #foot>
-          <!-- 简化分页：页码文字 + 独立页大小下拉 + 上一页/下一页两个按钮四个元素合并成
-               一个 el-pagination（2026-08-19，用户反馈"分页那块也散"）。size 变化时
-               v-model:page-size 已经把 size.value 设好了，@size-change 只需要把页
-               重置到第 1 页再重新查——跟 watch([selectedTable, page], loadData) 分工：
-               page 变化交给 watch，size 变化这里手动触发（watch 没监听 size，故意的，
-               避免 v-model 更新 page/size 时被同一次操作触发两次查询）。 -->
-          <el-pagination
-            v-model:current-page="page"
-            v-model:page-size="size"
-            :total="total"
-            :page-sizes="PAGE_SIZES"
-            layout="sizes, prev, pager, next"
-            small
-            data-testid="data-pagination"
-            @size-change="runQuery"
-          />
-        </template>
+          <!-- 删除数据（2026-09-09 从数据中心迁入）：跟发任务并排——都是「对这批数据动手」。
+               仅测试表出现（meta.state === 'C'），与数据中心同一道门禁。
+               标红（.danger）：它是这组里唯一不可撤销的操作，跟旁边的发任务按钮必须一眼分得开。
+               （0909 重排前它一度去过红——当时它挤在一排 24px 的统计/全屏中间，红色让它在
+               尺寸断层上格外刺眼；现在同组同规格，这个顾虑不存在了。） -->
+          <el-dropdown v-if="isTestTable" trigger="click">
+            <button class="rc-btn tiny danger" type="button" data-testid="data-delete">删除数据 <span class="arrow">▾</span></button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item :disabled="!selectedRowIds.length" @click="onDeleteSelected">删除选中的数据</el-dropdown-item>
+                <el-dropdown-item divided @click="onDeleteByRange(0)">删除该源-当日数据</el-dropdown-item>
+                <el-dropdown-item @click="onDeleteByRange(1)">删除该源-所有数据</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </span>
+      </template>
+    </div>
 
-        <!-- 全屏放在不随 #head 横向滚动的常驻区：表头内容一多，原来它在最右边会被滚动条
-             藏起来，得先拉滚动条才够得着（2026-08-19 用户反馈）。 -->
+    <template v-if="hasAnyTable">
+      <!-- 条件已改但未执行：盖住上一次的结果状态，避免把旧的失败/空表当成当前条件的结果 -->
+      <div v-if="slowQuery" class="rv-notice" role="status" data-testid="data-slow-query">查询较慢，可缩小条件范围再试；本次请求仍在等待结果</div>
+      <div v-else-if="filtersDirty && !loading" class="rv-notice" role="status" data-testid="data-filters-dirty">查询条件已修改，点「查询」执行</div>
+      <template v-else>
+        <div v-if="metaError" class="rv-notice" role="status">{{ metaError }}</div>
+        <div v-if="dataError" class="rv-notice error" role="alert" :title="dataErrorFull || dataError">{{ dataError }}</div>
+      </template>
+
+      <!-- 表头内容走 DataGrid 的 #head 插槽，跟「列」和分页共用同一条横条。原来这里是
+           独立的 .rv-tablehead(47px) + DataGrid 自己的列按钮行(33px) + .rv-pager(45px)
+           三条横条，加起来 125px 全在挤数据区（2026-08-15 第十二次纠偏）。
+           输入/输出切换紧挨着表名——这两个按钮控制的正是"表头显示的是哪张表"。 -->
+      <DataGrid
+        class="rv-grid"
+        :meta="meta"
+        :rows="rows"
+        :loading="loading"
+        :selected-id="detailRow?.dataId"
+        :selectable="canPickRows"
+        :selected-ids="selectedRowIds"
+        :sort-field="sortField"
+        :sort-order="sortOrder"
+        :allow-column-sort="allowColumnSort"
+        :preset-cols="presetCols"
+        :show-child-col="showChildCol"
+        :allow-row-delete="isTestTable"
+        :child-counts="childCounts"
+        :child-counts-error="childCountsError"
+        @sort-change="onSortChange"
+        @update:selected-ids="selectedRowIds = $event"
+        @file-click="onCellFile"
+        @parent-click="onParentCellClick"
+        @child-click="onChildCountClick"
+        @row-click="onRowClick"
+        @row-action="onRowAction"
+      >
+        <template #head>
+          <!-- 输入表===输出表：会议要的"展示看输出/发送用输入"两件事落在同一张表上，
+               双 tab 自我矛盾，合并成一个（M3-0C 方案 A）；标签写"输入·输出"明示这张表
+               两个身份都占，不是随便挑了一个名字。 -->
+          <span v-if="sameTable" class="ctx-piece" data-testid="data-scope-merged"><span class="k">输入·输出</span><span class="v code">{{ inputTableId }}</span></span>
+          <template v-else>
+            <template v-if="inputTableId">
+              <button
+                v-if="scopeSwitchable"
+                type="button"
+                class="ctx-piece scope-piece"
+                :class="{ active: scope === 'input' }"
+                data-testid="data-scope-input"
+                @click="onScopeChange('input')"
+              ><span class="k">输入</span><span class="v code">{{ inputTableId }}</span></button>
+              <span v-else class="ctx-piece"><span class="k">输入</span><span class="v code">{{ inputTableId }}</span></span>
+            </template>
+            <template v-if="outputTableId">
+              <span v-if="inputTableId" class="ctx-sep">·</span>
+              <button
+                v-if="scopeSwitchable"
+                type="button"
+                class="ctx-piece scope-piece"
+                :class="{ active: scope === 'output' }"
+                data-testid="data-scope-output"
+                @click="onScopeChange('output')"
+              ><span class="k">输出</span><span class="v code">{{ outputTableId }}</span></button>
+              <span v-else class="ctx-piece"><span class="k">输出</span><span class="v code">{{ outputTableId }}</span></span>
+            </template>
+          </template>
+          <!-- 「按源抓取 / 按输入数据执行」徽标已删除（2026-08-19）：它当初存在是因为
+               08-14 那阵执行按钮文案一度统一成"发起抓取"、不分首节点/后续节点，需要
+               额外说明这个节点按什么发；M3-0A 把按钮文案改回两种之后（发起抓取 /
+               发后续任务），这层信息就被按钮本身接管了——左边还有「输入·输出 表ID」，
+               三处说同一件事。禁用/输出 tab 场景的解释也已经由按钮 title 和
+               data-view-only-hint 承担，删掉它还能给这行让出 93px。 -->
+          <!-- 表名是这行里最长、也最可省略的一项（实测 sense_data.TB_TB_NEWS_TAGS 独占
+               188px）：允许它收缩并省略号截断，完整值走 title 悬浮看，把宽度让给按钮。 -->
+          <span class="rv-tablename" :title="meta?.tableName || selectedTable || ''">{{ meta?.tableName || selectedTable || '—' }}</span>
+          <span class="rv-tablecount">{{ total.toLocaleString() }} 行</span>
+        </template>
+        <!-- 视图控制回到 #head-right（0909 第二次重排）：这是 DataGrid 不随 .dg-head 横向
+             滚动的常驻区，当初正是为「全屏」这类任何时候都该点得到的开关设的。它右边紧邻
+             DataGrid 自己的列菜单（下一步字段 / 列 N/M），四个按钮同宽同高，连成一组。 -->
         <template #head-right>
           <button
             class="rc-btn tiny"
@@ -1231,6 +1331,29 @@ async function onTestScript() {
             @click="fullscreen = !fullscreen"
           >{{ fullscreen ? '⤡ 退出全屏' : '⤢ 全屏' }}</button>
         </template>
+        <!-- 分页移到表格下方（0819 N1-8，会议 19:13"页子一般放下面"）。原先它并在 #head
+             里是为了省纵向空间，现在由顶部区收窄（N1-10）补偿。 -->
+        <template #foot>
+          <!-- 简化分页：页码文字 + 独立页大小下拉 + 上一页/下一页两个按钮四个元素合并成
+               一个 el-pagination（2026-08-19，用户反馈"分页那块也散"）。size 变化时
+               v-model:page-size 已经把 size.value 设好了，@size-change 只需要把页
+               重置到第 1 页再重新查——跟 watch([selectedTable, page], loadData) 分工：
+               page 变化交给 watch，size 变化这里手动触发（watch 没监听 size，故意的，
+               避免 v-model 更新 page/size 时被同一次操作触发两次查询）。 -->
+          <!-- layout 带 total（2026-09-09）：`:total` 一直传着，只是没在 layout 里列出来，
+               分页器左边那块就一直空着。全项目 20 个分页器里 18 个都带 total，这里是漏的。 -->
+          <el-pagination
+            v-model:current-page="page"
+            v-model:page-size="size"
+            :total="total"
+            :page-sizes="PAGE_SIZES"
+            layout="total, sizes, prev, pager, next"
+            small
+            data-testid="data-pagination"
+            @size-change="runQuery"
+          />
+        </template>
+
       </DataGrid>
     </template>
     <div v-else-if="selectedNodeId" class="rv-empty-scope" data-testid="data-node-empty">该节点不产生可查看的数据，也不提供手动执行入口</div>
@@ -1470,6 +1593,14 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
 .rv-input.flex { flex: none; width: 220px; min-width: 0; font-family: var(--rc-mono, monospace); }
 .rv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .ctx-summary .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }
+/* 数据操作组（发起抓取/发后续/从上一节点重跑/测试脚本/发全部/删除数据 + 各自的说明文字）：
+   钉在筛选行右端。margin-left:auto 在 .ctx-summary 的 wrap 行内把它推到最右；窄屏 wrap 到
+   下一行时自然左对齐，不做额外处理——响应式下让位比硬撑更好。
+   按钮尺寸由上面的 .ctx-summary .rc-btn（28px）统一接管，跟同行的「查询/清空」一致；
+   删除数据那个 .tiny 也一并拉齐，这行不再有 24px 的邻居。 */
+.rv-linebreak { flex-basis: 100%; height: 0; margin: 0; padding: 0; }
+.rv-data-ops { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.ctx-summary .rc-btn.tiny { height: 28px; padding: 0 12px; font-size: 12px; }
 
 /* 表头内容现在渲染在 DataGrid 的 #head 插槽里（那条横条由 .dg-toolbar 负责排版），
    这里只留下内容本身的样式，不再有独立的 .rv-tablehead / .rv-pager 横条。 */

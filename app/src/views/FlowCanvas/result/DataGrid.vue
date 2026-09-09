@@ -47,6 +47,9 @@ const props = withDefaults(defineProps<{
   childCountsError?: string
   /** 「下级」列是否可用（由调用方按有无后继决定），false 时整列不渲染 */
   showChildCol?: boolean
+  /** 行内操作里是否给「删除单条」。仅测试表（tableMeta.state === 'C'）该为 true，
+   *  由调用方判定——表状态在调用方手里，表格不去猜。 */
+  allowRowDelete?: boolean
 }>(), { allowColumnSort: true, presetCols: () => [] })
 const showActions = computed(() => !props.compact && !props.hideActions)
 
@@ -411,6 +414,7 @@ function stateMeta(s?: string) {
                   <el-dropdown-menu>
                     <el-dropdown-item command="detail">详情</el-dropdown-item>
                     <el-dropdown-item command="tasks">查后续任务实例</el-dropdown-item>
+                    <el-dropdown-item v-if="allowRowDelete" divided command="delete">删除单条【无法恢复】</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -474,6 +478,10 @@ function stateMeta(s?: string) {
 .dg-sortable:hover { color: var(--rc-primary); }
 .dg-sort-ind { margin-left: 4px; opacity: .35; font-size: 10px; }
 .dg-sorted .dg-sort-ind { opacity: 1; color: var(--rc-primary); }
+/* z-index 必须显式给（2026-09-09）：th 虽是 sticky，但默认 z-index:auto，而单元格
+   .dg-cell 为了放复制按钮是 position:relative，同为 auto 时按 DOM 先后决定层叠——
+   tbody 在 thead 之后，于是数据行画在表头上面；td 背景又是透明的，滚动时就成了
+   表头文字与数据文字叠在一起（全部源 / 具体源两个数据视图都复现）。 */
 .dg-table th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; position: sticky; top: 0; z-index: 2; background: #f8fafc; color: var(--rc-text-2); font-weight: 700; text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rc-border); font-family: var(--rc-mono, monospace); }
 .dg-table td { padding: 8px 10px; border-bottom: 1px solid var(--rc-border-soft); color: var(--rc-text); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dg-table tbody tr { cursor: pointer; }

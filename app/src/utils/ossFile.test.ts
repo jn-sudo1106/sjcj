@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { extFromName, fetchOssFile, mimeTypeOf, ossFileUrl, previewKindOf } from './ossFile'
+import { extFromName, fetchOssFile, mimeTypeOf, ossFileUrl, ossPublicUrl, previewKindOf } from './ossFile'
 
 describe('ossFileUrl', () => {
   it('路径原样拼接，不做 encodeURIComponent（旧平台亦然，两种写法后端都认）', () => {
@@ -69,5 +69,20 @@ describe('fetchOssFile', () => {
   it('失败时带上状态码抛出，不静默返回空内容', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) }))
     await expect(fetchOssFile('/qinlong/a.xlsx')).rejects.toThrow('HTTP 500')
+  })
+})
+
+describe('ossPublicUrl（2026-09-09：html 走新窗口打开的独立 origin，与旧平台一致）', () => {
+  it('把业务后端端口换成 OSS 的 9102，产出绝对地址——不是同源的 /oss 前缀', () => {
+    const url = ossPublicUrl('/qinlong/dds/20260908/x.html')
+    expect(url).toMatch(/^https?:\/\//)
+    expect(url).toContain(':9102/api/oss/download?fileId=/qinlong/dds/20260908/x.html')
+    expect(url.startsWith('/oss')).toBe(false)
+  })
+
+  it('与同源取数地址是两条路：fetch 仍走 /oss（跨源读字节会被 CORS 拒），新窗口才走绝对地址', () => {
+    const path = '/qinlong/a.html'
+    expect(ossFileUrl(path)).toBe('/oss/api/oss/download?fileId=/qinlong/a.html')
+    expect(ossPublicUrl(path)).not.toBe(ossFileUrl(path))
   })
 })

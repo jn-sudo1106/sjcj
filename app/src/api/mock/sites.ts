@@ -103,8 +103,6 @@ function matches(site: Site, p?: Record<string, unknown>): boolean {
   if (categories.length && !categories.some((c) => site.categoryPath?.startsWith(c) || site.category === c)) return false
   const siteName = String(p.name ?? '').trim().toLowerCase()
   if (siteName && !site.name.toLowerCase().includes(siteName)) return false
-  const sourceName = String(p.sourceName ?? '').trim().toLowerCase()
-  if (sourceName && !sourcesOfSite(site.siteId).some((source) => source.name.toLowerCase().includes(sourceName))) return false
   const kw = String(p.keyword ?? '').trim().toLowerCase()
   if (kw && ![
     site.name,

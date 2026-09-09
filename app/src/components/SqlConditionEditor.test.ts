@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, ref } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus, { ElDialog } from 'element-plus'
@@ -33,6 +33,20 @@ async function edit(value: string) {
  * 单跑这个文件够快所以看不出问题，**全量跑时会间歇失败**（2026-09-05 实测两种表现：
  * `button.click()` 报 undefined、`textarea().value` 报 null）。用 vi.waitFor 兜住。
  */
+/**
+ * 取弹窗「最近条件」下拉里的第一条历史。
+ *
+ * 必须 waitFor：ElDropdown 的菜单是异步 teleport 到 body 再由 popper 定位的，
+ * `flushPromises()` 只刷微任务等不到它——单独跑这个文件时通常已经挂好了，全量跑
+ * （CPU 吃紧）就会扑空拿到 null，表现为随机失败。
+ */
+async function recentConditionItem() {
+  return vi.waitFor(() => {
+    const el = document.querySelector<HTMLElement>('.sql-recent-condition')
+    if (!el) throw new Error('最近条件下拉还没挂上')
+    return el
+  })
+}
 async function clickDialogButton(text: string) {
   const button = await vi.waitFor(() => {
     const found = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')]
@@ -62,6 +76,10 @@ async function openDialog(wrapper: ReturnType<typeof setup>) {
     if (!document.querySelector('.sql-editor')) throw new Error('放大弹窗还没挂上')
   })
 }
+// 进来先清一次（2026-09-09）：本文件与 utils/sqlConditionHistory.test.ts 用了同一批表键
+// （900/901），同 worker 下共享 localStorage，只在 afterEach 清会依赖上一个文件收拾干净。
+// 测试不该建立在别人清理到位的前提上。
+beforeEach(() => localStorage.clear())
 afterEach(() => {
   mounted.splice(0).forEach((wrapper) => wrapper.unmount())
   document.body.innerHTML = ''
@@ -81,7 +99,7 @@ describe('SQL 条件放大编辑', () => {
     rememberSqlCondition('901', 'K2 IS NULL')
     await openDialog(wrapper)
     await clickDialogButton('最近条件')
-    const item = document.querySelector<HTMLElement>('.sql-recent-condition')!
+    const item = await recentConditionItem()
     expect(item.textContent).toBe(sql)
     item.click()
     await flushPromises()
@@ -98,6 +116,17 @@ describe('SQL 条件放大编辑', () => {
     await clickDialogButton('确认')
     expect(wrapper.vm.sql).toBe(sql)
     expect(readSqlConditions('900')).toEqual([])
+  })
+
+  // 2026-09-09：整段从数据库客户端复制过来最常发生在放大弹窗里，那种语句多半带结尾分号，
+  // 而查询框收的是拼进 WHERE 的片段，带分号后端直接报错。
+  it('确认时削掉末尾分号；字符串字面量里的分号与换行原样保留', async () => {
+    const wrapper = setup()
+    await openDialog(wrapper)
+    const sql = "K2 NOT LIKE '%weixin%'\nAND K1 LIKE '%a;b%';"
+    await edit(sql)
+    await clickDialogButton('确认')
+    expect(wrapper.vm.sql).toBe("K2 NOT LIKE '%weixin%'\nAND K1 LIKE '%a;b%'")
   })
 
   it('打开带原条件和表信息，编辑草稿不改原框；应用原样保留换行和引号', async () => {
@@ -199,5 +228,54 @@ describe('紧凑行的最近条件（Z4）', () => {
     await wrapper.get('[aria-label="最近使用的 SQL 条件"]').trigger('click')
     await flushPromises()
     expect(document.body.textContent).toContain('暂无最近条件，成功查询后自动记录')
+  })
+})
+
+// 2026-09-09 生产实测的真实故障：多行 SQL 粘进紧凑框，HTML 规范把 <input> 里的换行
+// 直接剥掉（不是换成空格），`2\nAND` 成了 `2AND`，后端报「传到的条件含有非法注入风险」。
+describe('SqlConditionEditor · 粘贴多行 SQL', () => {
+  function pasteInto(wrapper: ReturnType<typeof setup>, text: string, at = 0) {
+    const input = wrapper.get('input').element as HTMLInputElement
+    input.selectionStart = at
+    input.selectionEnd = at
+    const e = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
+    Object.defineProperty(e, 'clipboardData', { value: { getData: () => text } })
+    input.dispatchEvent(e)
+    return e
+  }
+
+  it('换行换成空格，不让它被浏览器剥成黏连的 `2AND`', async () => {
+    const wrapper = setup()
+    wrapper.vm.sql = ''
+    await flushPromises()
+
+    const e = pasteInto(wrapper, "k17 <> 2\nAND k2 NOT LIKE '%weixin%'")
+    await flushPromises()
+
+    expect(e.defaultPrevented).toBe(true)
+    expect(wrapper.vm.sql).toBe("k17 <> 2 AND k2 NOT LIKE '%weixin%'")
+    expect(wrapper.vm.sql).not.toContain('2AND')
+  })
+
+  it('单行粘贴不干预，交给浏览器默认行为（否则会和 v-model 打架）', async () => {
+    const wrapper = setup()
+    wrapper.vm.sql = ''
+    await flushPromises()
+
+    const e = pasteInto(wrapper, 'K1 IS NULL')
+    await flushPromises()
+
+    expect(e.defaultPrevented).toBe(false)
+  })
+
+  it('按光标位置插入，不覆盖已有内容', async () => {
+    const wrapper = setup()
+    wrapper.vm.sql = 'AB'
+    await flushPromises()
+
+    pasteInto(wrapper, 'x\ny', 1)
+    await flushPromises()
+
+    expect(wrapper.vm.sql).toBe('Ax yB')
   })
 })

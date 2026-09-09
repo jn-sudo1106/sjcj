@@ -35,6 +35,7 @@ import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import DataGrid from './DataGrid.vue'
 import FilePreview from './components/FilePreview.vue'
 import { backTraceSources } from '@/utils/data/backTraceSources'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { extFromName } from '@/utils/ossFile'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import { readRailOpen, writeRailOpen } from './railPref'
@@ -98,6 +99,35 @@ const dataError = ref('')
 const failedSources = ref<MergeLoadMoreResult<DataRow>['failedSources']>([])
 const allExhausted = ref(false)
 const noCandidateSources = ref(false)
+/**
+ * 当前条件命中的总条数（2026-09-09）。`null` = 这次查询没有这个数（没带条件、或收窄失败）。
+ *
+ * 归并视图是逐源懒加载的，自己永远算不出总量，表头一直只有「已加载 N 条」——那是加载进度，
+ * 用户问的"一共多少条"看不到（旧平台分页器上的「共 7030 条」）。这个数从收窄那步的
+ * summaryEntryData 分组计数求和而来，不额外发请求。
+ */
+const totalHits = ref<number | null>(null)
+/** 总数正在后台算。用于区分「还没算出来」和「算不出来」——两者都没有数字，但一个该等一个别等。 */
+const totalHitsLoading = ref(false)
+
+/**
+ * 后台补算总条数：把源集合分片写进条件问 summaryEntryData，各组 CNT 求和。
+ * 与 loadData 共用 requestId 防竞态——切表/改条件后旧的那轮算完也不该再写进来。
+ */
+async function computeTotalHits(reqId: number, sourceIds: string[]) {
+  if (!sourceIds.length) return
+  totalHitsLoading.value = true
+  try {
+    const r = await backTraceSources(buildSummaryQuery(), sourceIds)
+    if (reqId !== requestId) return
+    totalHits.value = [...r.hitCountBySource.values()].reduce((a, b) => a + b, 0)
+  } catch {
+    // 算不出来就不显示，不拿个错数字糊弄；数据本身照常展示
+    if (reqId === requestId) totalHits.value = null
+  } finally {
+    if (reqId === requestId) totalHitsLoading.value = false
+  }
+}
 
 const siteChildren = ref<Source[]>([])
 const sourceNames = computed<Record<string, string>>(() => Object.fromEntries(siteChildren.value.map((s) => [s.sourceId, s.name])))
@@ -365,32 +395,48 @@ async function resetAndLoad() {
     if (selectedSourceId.value) {
       // 具体源：候选源集合永远只有它自己，退化成单源归并，复用同一套分页逻辑。
       candidateSourceIds = [selectedSourceId.value]
+      totalHits.value = null
+      totalHitsLoading.value = false
     } else {
-      // 全部源：先收窄源集合（方案 §6.2.2）：问这张表实际有哪些源的数据，跟当前网站源集合取交集。
-      // 收窄本身失败不阻断整体查询，退回用网站全部源（请求量更大，但结果仍然正确）。
-      // ⚠️ entryDistinctSource 不按网站过滤，返回的是全平台写过这张表的源；不传 size 会退回
-      // buildLegacyRowQuery 的分页默认值 20（真实 bug，2026-08-14 生产环境实测发现：某些共用表
-      // 全平台引用源数超过 20，本网站的源恰好不在前 20 个里，交集算出来是空的，页面误报"没有可
-      // 查询的源"）。size 传大值取全量，1000 是 Q10 已实测确认不截断的安全值。
-      let distinctIds: string[] | null = null
-      ;[siteChildren.value, distinctIds] = await Promise.all([
-        siteApi.siteSources(props.siteId),
-        dataApi.distinctSource({
-          tableId: tid,
-          dataId: filters.dataId || undefined,
-          parentId: filters.parentId || undefined,
-          state: filters.state || undefined,
-          sql: filters.sql || undefined,
-          size: 1000,
-        }).catch(() => null),
-      ])
+      // 全部源：候选源**只在本网站范围内算**（2026-09-09 定案，用户原话「明确点，肯定是
+      // 这个网站下的」）。
+      //
+      // 原来这里先问 entryDistinctSource「这张表有哪些源的数据」再跟网站源取交集。那个接口
+      // 按表和条件搜**全库、不认 siteId**，共用大表下必被上限截断，本网站的源整个排在名单
+      // 之外——实测同一条件 size=1000 返 1000、size=5000 返 5000，上限调多大都堵不住。
+      // 后果极隐蔽：侧栏反查说命中 276 个源，数据列表只扫了 122 个、凑出 10 条，另外
+      // 154 个源的数据凭空消失，页面上没有任何异常提示。
+      //
+      // 现在两条路都限定在网站的源集合里：
+      //   · 带条件：用与「按条件查源」同一套精确收窄（把网站源写进查询条件分片问
+      //     summaryEntryData，服务端只在这批源里筛，不存在截断），把候选压到真正命中的那些；
+      //   · 不带条件：直接用网站全部源。此时数据密集，归并查询本来就是扫到够一页就停，
+      //     不值得为收窄先付一轮请求。
+      siteChildren.value = await siteApi.siteSources(props.siteId)
       if (id !== requestId) return
-      const siteSourceIds = new Set(siteChildren.value.map((s) => s.sourceId))
-      const scopedDistinctIds = distinctIds?.filter((sid) => siteSourceIds.has(sid)) ?? []
-      // entryDistinctSource 只是优化候选源的接口，不是“没有数据”的最终判定。
-      // 旧接口可能因分页、数据口径或表级记录异常返回空集合；空集合时回退到网站全部源，
-      // 让 entryDataPaged 进行真实查询，避免把 TB_CNEWS 这类有效表提前判成不可查。
-      candidateSourceIds = scopedDistinctIds.length ? scopedDistinctIds : [...siteSourceIds]
+      const siteSourceIds = siteChildren.value.map((s) => s.sourceId)
+      const hasCondition = !!(filters.sql || filters.state || filters.dataId || filters.parentId)
+      if (hasCondition && siteSourceIds.length) {
+        const exact = await backTraceSources(buildSummaryQuery(), siteSourceIds).catch(() => null)
+        if (id !== requestId) return
+        // 收窄失败不阻断整体查询，退回网站全部源（请求量更大，但结果仍然正确）
+        candidateSourceIds = exact?.sourceIds.length ? exact.sourceIds : siteSourceIds
+        // 总数是白捡的（2026-09-09）：收窄用的 summaryEntryData 本来就按 SOURCE_ID 分了组、
+        // 每组带 CNT，加起来就是当前条件命中的总条数，不必为它再发一次请求。
+        // 归并视图是逐源懒加载的，自己永远算不出总数——在此之前表头只有「已加载 N 条」，
+        // 那是加载进度不是总量，旧平台分页器上那个「共 7030 条」一直没迁过来。
+        totalHits.value = exact ? [...exact.hitCountBySource.values()].reduce((a, b) => a + b, 0) : null
+        totalHitsLoading.value = false
+      } else {
+        candidateSourceIds = siteSourceIds
+        // 不带条件时没有收窄那一步，总数**另起一轮异步补算**（2026-09-09 修正）。
+        // 上一版这里是直接不显示总数，理由是"不值得为一个数字先付一轮请求"——想窄了：
+        // 「一共多少条」跟有没有筛选条件无关，进来就该看得到。
+        // 放异步是因为分片统计要 ceil(源数/200) 个请求（6496 个源 = 33 个），
+        // 同步等会把数据展示也拖住；现在数据先出来，总数算好了再补上。
+        totalHits.value = null
+        void computeTotalHits(id, siteSourceIds)
+      }
     }
     if (!candidateSourceIds.length) {
       noCandidateSources.value = true
@@ -433,6 +479,10 @@ watch(() => props.siteId, () => {
 })
 
 function runQuery() {
+  // 点「查询」就把侧栏的命中态清掉（2026-09-09，用户原话「点击查询后左侧的条件就要去掉了，
+  // 不能带着」）：那份名单是**上一次**反查按**当时**条件算出来的快照，条件一改就过期了。
+  // 留着它，侧栏显示的源和眼前这批数据对不上，人会以为是查询出了问题。
+  ws.clearBackTraceHits()
   void resetAndLoad()
 }
 function clearFilters() {
@@ -506,6 +556,7 @@ function buildSummaryQuery(): RowQuery {
 // 求命中源的算法原样保留在 `utils/data/backTraceSources.ts`（09-04 六轮修复换来的，别重写）。
 //
 // 复用 buildSummaryQuery——统计和反查问的是同一批数据，条件口径必须一致，不另拼一份。
+const ws = useWorkspaceStore()
 const backTracing = ref(false)
 /**
  * 反查按钮的可用性。
@@ -514,29 +565,65 @@ const backTracing = ref(false)
  * 你带条件就是查这个条件下的」——无条件是合法语义，直接进源视图看全部源。
  */
 const canBackTrace = computed(() => !!effectiveTableId.value)
-async function openBackTrace() {
-  if (!canBackTrace.value || backTracing.value) return
+/** 反查一次，把命中源交给调用方。无条件 / 空结果都返回 null，由调用方决定怎么提示。 */
+async function runBackTrace(): Promise<{ sourceIds: string[]; hitCountBySource: Map<string, number> } | null> {
   const hasCondition = !!(filters.sql || filters.state || filters.dataId || filters.parentId)
-  // 无条件 = 全部源：不必发请求，直接进源视图不带 sourceIds
   if (!hasCondition) {
-    void router.push({ path: '/canvas', query: { siteId: props.siteId, view: 'source' } })
-    return
+    ElMessage.info('先填至少一个数据条件（SQL / 状态 / 数据 ID / 父 ID），再按条件查源')
+    return null
   }
   backTracing.value = true
   try {
-    const { sourceIds } = await backTraceSources(buildSummaryQuery(), siteChildren.value.map((s) => s.sourceId))
+    const { sourceIds, hitCountBySource } = await backTraceSources(
+      buildSummaryQuery(),
+      siteChildren.value.map((s) => s.sourceId),
+    )
     if (!sourceIds.length) {
-      // 不跳：跳过去是一张空源列表，用户会以为源视图坏了
       ElMessage.info('当前条件没有命中任何源')
-      return
+      return null
     }
-    // 带着源 ID 去源视图：那边的「源 ID」筛选框本来就收逗号分隔的多个 ID
-    void router.push({ path: '/canvas', query: { siteId: props.siteId, view: 'source', sourceIds: sourceIds.join(',') } })
+    return { sourceIds, hitCountBySource }
   } catch (e) {
     ElMessage.error(`反查源失败：${(e as Error)?.message ?? String(e)}`)
+    return null
   } finally {
     backTracing.value = false
   }
+}
+
+/**
+ * 主路径（0909 改）：命中源写进**左侧源侧栏**，人留在数据视图。
+ *
+ * 原来是 router.push 到源视图。会上原话「就是要再加到左边最好」「因为我点一个源又要进去」
+ * ——跳过去只是换了个地方看列表，挨个排查问题源还是得在两个视图之间来回跳。
+ * 写侧栏之后，侧栏收窄成命中的这几个源、按命中条数从多到少排，点一个看一个，不用离开。
+ */
+async function openBackTrace() {
+  if (!canBackTrace.value || backTracing.value) return
+  const hit = await runBackTrace()
+  if (!hit) return
+  ws.setBackTraceHits(
+    props.siteId,
+    hit.sourceIds.map((sourceId) => ({ sourceId, count: hit.hitCountBySource.get(sourceId) ?? 0 })),
+    // 条件一并记下：点侧栏某个源进去时要带过去，否则侧栏那个「906 条」跟进去看到的对不上
+    {
+      tableId: effectiveTableId.value,
+      sql: filters.sql || undefined,
+      state: filters.state || undefined,
+      dataId: filters.dataId || undefined,
+      parentId: filters.parentId || undefined,
+    },
+  )
+  ElMessage.success(`命中 ${hit.sourceIds.length} 个源，已填进左侧源列表`)
+}
+
+/** 第二条路：仍旧跳源视图。反查完要批量发任务 / 批量改标签时，那边的勾选和批量条更好使。 */
+async function openBackTraceInSourceView() {
+  if (!canBackTrace.value || backTracing.value) return
+  const hit = await runBackTrace()
+  if (!hit) return
+  // 那边的「源 ID」筛选框本来就收逗号分隔的多个 ID
+  void router.push({ path: '/canvas', query: { siteId: props.siteId, view: 'source', sourceIds: hit.sourceIds.join(',') } })
 }
 
 const summaryOpen = ref(false)
@@ -661,10 +748,20 @@ function onCellFile(path: string) {
           class="rc-btn"
           type="button"
           data-testid="site-data-backtrace"
-          :disabled="!canBackTrace"
-          :title="canBackTrace ? '按当前数据条件反查命中的源' : '先填至少一个数据条件（SQL / 状态 / 数据 ID / 父 ID）'"
+          :disabled="!canBackTrace || backTracing"
+          :title="canBackTrace ? '按当前数据条件反查命中的源，结果填进左侧源列表' : '先选一张表'"
           @click="openBackTrace"
-        >{{ backTracing ? '反查中…' : '按条件查源 →' }}</button>
+        >{{ backTracing ? '反查中…' : '按条件查源 ←' }}</button>
+        <!-- 反查完还想批量发任务 / 批量改标签时，源视图的勾选与批量条仍然有用，
+             所以旧的跳转不删，收进下拉当第二条路（0909）。 -->
+        <el-dropdown trigger="click">
+          <button class="rc-btn" type="button" data-testid="site-data-backtrace-more" :disabled="!canBackTrace || backTracing">⋯</button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item @click="openBackTraceInSourceView">在源视图打开（可勾选批量发任务）</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </template>
     </div>
 
@@ -746,7 +843,9 @@ function onCellFile(path: string) {
       >
         <template #head>
           <span class="sdv2-tablename">{{ meta?.tableName || effectiveTableId }}</span>
-          <span class="sdv2-count">已加载 {{ rows.length }} 条</span>
+          <span v-if="totalHits !== null" class="sdv2-count" data-testid="site-data-total">共 {{ totalHits.toLocaleString() }} 条</span>
+          <span v-else-if="totalHitsLoading" class="muted" data-testid="site-data-total-loading">总数统计中…</span>
+          <span class="sdv2-count" :class="{ muted: totalHits !== null }">已加载 {{ rows.length }} 条</span>
           <span v-if="!selectedSourceId && candidateSourceIds.length" class="muted">已扫描 {{ candidateCursor }}/{{ candidateSourceIds.length }} 个源</span>
           <span v-if="canPickRows" class="muted">已选 {{ selectedRowIds.length }} 条</span>
           <button

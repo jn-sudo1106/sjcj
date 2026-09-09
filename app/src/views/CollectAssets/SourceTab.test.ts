@@ -7,7 +7,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import SourceTab from './SourceTab.vue'
 import { useUiStore } from '@/stores/ui'
-import { sourceApi } from '@/api'
+import { sourceApi, siteApi } from '@/api'
 
 vi.mock('element-plus', async (importOriginal) => {
   const actual = await importOriginal<typeof import('element-plus')>()
@@ -93,6 +93,34 @@ describe('SourceTab 筛选状态', () => {
       expect(ids).toContain('site-zfb')
       expect(ids).toContain('site-weibo')
     })
+  })
+
+  it('源名搜索不透传 sourceName 给 sitePaged（真实后端不生效会带出无关网站），改用 sourcePaged 的 siteId 交集', async () => {
+    const siteSpy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({
+      total: 2,
+      list: [
+        { siteId: 'site-a', name: '新浪财经', category: '', categoryPath: '', owner: 'x', sourceCount: 2, errorCount: 0, updatedAt: '2026-09-01' },
+        { siteId: 'site-b', name: '某某网站', category: '', categoryPath: '', owner: 'x', sourceCount: 1, errorCount: 0, updatedAt: '2026-09-02' },
+      ],
+    } as never)
+    const srcSpy = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 1,
+      list: [{ sourceId: 's1', name: '明阳科技公告', url: '', configId: '', mainTable: '', owner: '', state: 'C', siteId: 'site-b' }],
+    } as never)
+
+    const { wrapper } = await mountAt()
+    await wrapper.get('.ca-search input').setValue('明阳科技')
+
+    await vi.waitFor(() => {
+      const sites = wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]
+      expect(sites.map((site) => site.siteId)).toEqual(['site-b'])
+    })
+    // sitePaged 从不带 sourceName；源名匹配走 sourcePaged?name=
+    expect(siteSpy.mock.calls.every(([arg]) => !(arg as Record<string, unknown> | undefined)?.sourceName)).toBe(true)
+    expect(srcSpy).toHaveBeenCalledWith(expect.objectContaining({ name: '明阳科技' }))
+
+    siteSpy.mockRestore()
+    srcSpy.mockRestore()
   })
 
   it('总览按分类下钻（?category=）预置进多选筛选', async () => {

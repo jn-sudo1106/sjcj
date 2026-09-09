@@ -11,7 +11,7 @@
 //
 // 真实类型分布（文件中心首页 20 行）：xlsx 13 / pdf 7 / txt 0，故 Excel 是主力路径。
 import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue'
-import { extFromName, fetchOssFile, mimeTypeOf, previewKindOf, type PreviewKind } from '@/utils/ossFile'
+import { extFromName, fetchOssFile, mimeTypeOf, ossPublicUrl, previewKindOf, type PreviewKind } from '@/utils/ossFile'
 
 const props = defineProps<{
   /** K3 文件路径（OSS 上的路径），站内预览的唯一来源 */
@@ -35,31 +35,28 @@ const ExcelViewer = defineAsyncComponent(async () => {
 const AUTO_LOAD_LIMIT = 20 * 1024 * 1024
 const TEXT_LIMIT = 2 * 1024 * 1024
 
-// 采集下来的 content.html 里的 CSS/图片都是相对源站的路径，在 blob URL 的 sandbox iframe 里
-// 一律解析不到 → 满屏蓝链裸文本。
-// 1) 有源站地址（externalUrl）时前置 <base href>，让相对 CSS/图片回源站加载，尽量还原原页面。
-//    sandbox="" 仍禁脚本/表单/同源，只放行样式表和图片这类子资源，风险与「原始地址↗」一致。
-// 2) 再前置一段兜底排版：源站 CSS 加载不到 / 已改版时，至少像一篇能读的文章。
-// 纯 ASCII，直接以字节前置，不解码原文、不动编码。
-const HTML_PREVIEW_STYLE
-  = '<style>html{font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:#1f2328;background:#fff}'
-  + 'body{max-width:820px;margin:0 auto;padding:24px 20px 48px;word-wrap:break-word}'
-  + 'img,video,table{max-width:100%;height:auto}table{border-collapse:collapse}td,th{border:1px solid #d0d7de;padding:6px 10px}'
-  + 'a{color:#0969da}h1,h2,h3{line-height:1.3}pre{white-space:pre-wrap;background:#f6f8fa;padding:12px;border-radius:6px;overflow:auto}</style>'
-
-function toHttpUrl(value?: string | null): string {
-  try {
-    const u = new URL(String(value ?? '').trim())
-    return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : ''
-  } catch {
-    return ''
-  }
-}
-function htmlPreviewHead(base?: string | null): string {
-  const b = toHttpUrl(base)
-  return (b ? `<base href="${b.replace(/"/g, '&quot;')}">` : '') + HTML_PREVIEW_STYLE
-}
-
+// HTML 预览**不 fetch 字节、不做任何改写**，iframe 直接指向 OSS 的独立 origin 绝对地址
+// （2026-09-09 定案，用户原话「不要加任何样式，该什么样就是什么样」「旧平台怎样我们就怎样」）。
+//
+// 为什么 html 必须走绝对地址，而其余类型继续走 blob：
+//   采集页的正文常常要靠**页面自己的脚本**才显示（实测三友医疗这类 Next.js 站点：正文完整
+//   躺在静态 HTML 里，但祖先 div 是 display:none，由页面脚本解除）。而 blob URL 的 origin
+//   继承创建它的页面，也就是我们自己——于是两头堵死：
+//     · 不给 allow-same-origin → opaque origin → 脚本一碰 localStorage 就 SecurityError，
+//       正文永远出不来；
+//     · 给 allow-same-origin → 它拿到的是**我们的** origin，采集来的不可信脚本就能读
+//       localStorage 里的登录 token。
+//   iframe 直接指向 9102 那个绝对地址就绕开了这道题：文档 origin 是 118.25.96.217:9102
+//   本身，与本应用天然不同源，脚本正常跑、正文正常显示，却碰不到我们的任何东西。
+//   这里的 sandbox="allow-scripts allow-same-origin" 也因此是安全的——同时给这两项只有在
+//   iframe 与父页面**同源**时才能脱出沙箱，而这里恰恰跨源。
+//   顺带：原注释里「必须先 fetch 成 blob，否则带 Cookie 会让 OSS 返回 500」只对同源代理成立，
+//   跨站 iframe 根本不会带上我们的 cookie。
+//
+// 拆掉过的两层包装（都是被这个问题逼出来的补丁，现已删除）：
+//  1) 一段兜底排版 <style>（15px 正文、body 限宽 820px 居中、表格描边…）；
+//  2) <base href="源站">——它让源站 CSS 加载成功，而那套 CSS 在没有 JS 时正好把正文压在
+//     自己的 loading 遮罩底下，加了反而更看不到正文。
 const effectiveExt = computed(() => props.ext || extFromName(props.name))
 const kind = computed<PreviewKind>(() => previewKindOf(effectiveExt.value))
 const sizeNum = computed(() => {
@@ -67,6 +64,8 @@ const sizeNum = computed(() => {
   return Number.isFinite(n) && n > 0 ? n : 0
 })
 const oversize = computed(() => sizeNum.value > AUTO_LOAD_LIMIT)
+/** html 走 OSS 独立 origin 的绝对地址，不经 fetch，也不受体积上限约束（浏览器自己流式加载）。 */
+const htmlSrc = computed(() => (kind.value === 'html' && props.path ? ossPublicUrl(props.path) : ''))
 
 const loading = ref(false)
 const error = ref('')
@@ -89,8 +88,9 @@ function reset() {
   forced.value = false
 }
 
-/** 能预览、有路径、且（没超限或用户点了"仍要预览"）才真正去取 */
-const shouldLoad = computed(() => !!props.path && kind.value !== 'none' && (!oversize.value || forced.value))
+/** 能预览、有路径、且（没超限或用户点了"仍要预览"）才真正去取。
+ *  html 不在此列——它由 iframe 自己按绝对地址加载，前端不碰字节。 */
+const shouldLoad = computed(() => !!props.path && kind.value !== 'none' && kind.value !== 'html' && (!oversize.value || forced.value))
 
 async function load() {
   if (!shouldLoad.value || !props.path) return
@@ -108,10 +108,7 @@ async function load() {
       releaseBlob()
       // 必须带 MIME：无类型的 blob URL 会被当成 text/plain，PDF 在 <iframe> 里
       // 显示成 `%PDF-1.7 …` 的二进制原文（2026-08-24 实测）。
-      const parts = kind.value === 'html'
-        ? [new TextEncoder().encode(htmlPreviewHead(props.externalUrl)), buf]
-        : [buf]
-      blobUrl.value = URL.createObjectURL(new Blob(parts, { type: mimeTypeOf(effectiveExt.value) }))
+      blobUrl.value = URL.createObjectURL(new Blob([buf], { type: mimeTypeOf(effectiveExt.value) }))
     }
   } catch (e) {
     // 不静默失败：把原因摆出来，同时下方仍保留下载与「新窗口打开」两条退路
@@ -159,8 +156,15 @@ function onExcelError(e: unknown) {
         @error="onExcelError"
       />
       <iframe v-else-if="kind === 'pdf' && blobUrl" class="fp-frame" data-testid="file-preview-pdf" :src="blobUrl" title="PDF 预览" />
-      <!-- 采集到的页面属于不可信内容：用无权限 sandbox 渲染，既展示页面而不是源码，也禁止脚本接触应用。 -->
-      <iframe v-else-if="kind === 'html' && blobUrl" class="fp-frame" data-testid="file-preview-html" :src="blobUrl" sandbox="" referrerpolicy="no-referrer" title="HTML 预览" />
+      <!-- 采集到的页面属于不可信内容：用无权限 sandbox 渲染，既展示页面而不是源码，也禁止脚本接触应用。
+           2026-09-09 试过放开 allow-scripts（想让 Next.js 这类站点水合出正文），当场实测无效并已回退：
+           不带 allow-same-origin 时文档是 opaque origin，脚本一碰 localStorage / document.cookie
+           就抛 SecurityError（本机实测），框架运行时必然踩到，水合中断，照样停在骨架屏；
+           而要让它真能跑就得补 allow-same-origin，那样 blob 文档与本应用同源，
+           采集来的不可信脚本就能读我们的 localStorage（含登录 token）、操作父页面 DOM——这条不能给。
+           结论：JS 渲染的站点在站内预览里看不到正文是架构决定的，正文请看 content_path 那个 txt，
+           要看原貌走「原始地址 ↗」。 -->
+      <iframe v-else-if="kind === 'html' && htmlSrc" class="fp-frame" data-testid="file-preview-html" :src="htmlSrc" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer" title="HTML 预览" />
       <img v-else-if="kind === 'image' && blobUrl" class="fp-img" data-testid="file-preview-image" :src="blobUrl" :alt="name || '图片预览'" />
       <div v-else-if="kind === 'text'" class="fp-text" data-testid="file-preview-text">
         <div v-if="truncated" class="fp-hint">内容较长，仅显示前 2 MB</div>
@@ -173,6 +177,9 @@ function onExcelError(e: unknown) {
          「原始地址」走 K2，指向源站，仅新窗口打开。 -->
     <div v-if="path || externalUrl" class="fp-foot">
       <a v-if="path" class="rc-btn" :href="`/oss/api/oss/download?fileId=${path}`" :download="name || ''" data-testid="file-preview-download">下载</a>
+      <!-- 兜底：生产若是 https，页面里嵌 http 的 iframe 会被混合内容策略拦掉（弹窗空白），
+           但新窗口打开是顶级导航，不受这条限制——留着这个按钮，那种情况下不至于卡死。 -->
+      <a v-if="htmlSrc" class="rc-btn" :href="htmlSrc" target="_blank" rel="noopener noreferrer" data-testid="file-preview-open-window">新窗口打开 ↗</a>
       <a v-if="externalUrl" class="rc-btn" :href="externalUrl" target="_blank" rel="noopener noreferrer" data-testid="file-preview-external">原始地址 ↗</a>
     </div>
   </div>

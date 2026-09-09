@@ -160,8 +160,23 @@ async function confirmDiscardIfDirty(): Promise<boolean> {
 // 切换只改路由，加载统一走 route watcher → enterFromRoute；视图随身携带（切源不切视图，0710 会议第 7/10 条）
 async function onSwitchTarget(target: Source) {
   if (!(await confirmDiscardIfDirty())) return
-  const view = normalizeSourceView(route.query.view)
-  void router.replace({ path: '/canvas', query: { ...(target.siteId ? { siteId: target.siteId } : {}), sourceId: target.sourceId, view } })
+  // 从「按条件查源」的命中态点进来（2026-09-09）：强制进数据视图并把产生这批命中的条件
+  // 一并带过去。侧栏那一行写着「906 条」，进去看到的就得是那 906 条——不带条件的话
+  // 看到的是这个源的全部数据，那个数字反而成了误导。
+  // siteId 以 target 为准、路由兜底：侧栏本来就是当前网站的，缺了它跳过去整个源侧栏不渲染
+  const siteId = target.siteId || String(route.query.siteId ?? '')
+  const cond = siteId ? ws.backTraceConditionOf(siteId) : null
+  // 条件走 store 不走 URL：具体源视图按 sourceId 做 key，源→源切换会销毁重建，
+  // 用 query 传会撞上「旧实例抹掉 query、新实例读不到」的竞态（见 store 里的注释）。
+  ws.setPendingSourceCondition(cond)
+  void router.replace({
+    path: '/canvas',
+    query: {
+      ...(siteId ? { siteId } : {}),
+      sourceId: target.sourceId,
+      view: cond ? 'data' : normalizeSourceView(route.query.view),
+    },
+  })
 }
 function onSwitchAdded(s: Source) {
   onSwitchTarget(s)

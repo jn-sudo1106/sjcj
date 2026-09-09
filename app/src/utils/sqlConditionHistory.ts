@@ -1,3 +1,5 @@
+import { stripTrailingSemicolon } from './sqlCondition'
+
 // 各查询入口共用，按表隔离；仅在查询成功后调用 rememberSqlCondition。
 const PREFIX = 'sqlConditionHistory.v1:'
 const LIMIT = 10
@@ -15,7 +17,9 @@ export function readSqlConditions(tableId?: string): string[] {
 }
 
 export function rememberSqlCondition(tableId: string | undefined, sql?: string) {
-  const value = sql?.trim()
+  // 削掉末尾分号再存（2026-09-09）：历史记录会被原样回填到查询框，存脏的等于把问题
+  // 反复喂回来。API 层虽有兜底，但列表里显示带分号的条件本身就让人以为那样是对的。
+  const value = sql ? stripTrailingSemicolon(sql.trim()) : ''
   if (!tableId || !value) return
   try {
     const recent = [value, ...readSqlConditions(tableId).filter((item) => item !== value)].slice(0, LIMIT)

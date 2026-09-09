@@ -30,6 +30,22 @@ export interface SourceTabSnapshot {
   page?: number
 }
 
+/** 反查命中的一个源：`count` 来自 summaryEntryData 的分组计数（该源命中几条数据） */
+export interface BackTraceHit {
+  sourceId: string
+  count: number
+}
+
+/** 产生这批命中的查询条件。点侧栏某个源进具体源数据视图时要原样带过去——
+ *  侧栏写着「906 条」，进去看到的就得是那 906 条，否则这个数字是误导。 */
+export interface BackTraceCondition {
+  tableId: string
+  sql?: string
+  state?: string
+  dataId?: string
+  parentId?: string
+}
+
 export const MAX_SOURCE_TABS = 8
 const SS_KEY = 'rc-source-tabs'
 
@@ -65,6 +81,16 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   // 属临时查看态，不做 sessionStorage 持久化（刷新即退出对比，回到单栏）。
   const compareSourceId = ref<string>('')
   const compareLeftId = ref<string>('')
+  /**
+   * 按数据条件反查出的命中源（2026-09-09）：数据视图写入，源侧栏消费。
+   *
+   * 会上原话「就是要再加到左边最好」「因为我点一个源又要进去」——反查结果原来是跳到源视图，
+   * 想挨个排查问题源就得在两个视图之间来回跳。改成写侧栏后，人留在数据视图里点着看。
+   *
+   * 带 siteId 是因为侧栏跟着网站走：切到别的网站，这批命中源就不适用了，得自动失效。
+   * 与 compareSourceId 同属临时查看态，不做 sessionStorage 持久化（刷新即回到全部源）。
+   */
+  const backTraceHits = ref<{ siteId: string; hits: BackTraceHit[]; condition: BackTraceCondition } | null>(null)
 
   let persistTimer: ReturnType<typeof setTimeout> | null = null
   watch(
@@ -138,6 +164,43 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     compareLeftId.value = ''
   }
 
+  /** 命中条数从多到少——问题最严重的源排最前，一眼看出先查谁。 */
+  function setBackTraceHits(siteId: string, hits: BackTraceHit[], condition: BackTraceCondition) {
+    backTraceHits.value = { siteId, hits: [...hits].sort((a, b) => b.count - a.count), condition }
+  }
+  function clearBackTraceHits() {
+    backTraceHits.value = null
+  }
+  /** 侧栏取本网站的命中源；网站对不上（切过站了）当作没有。 */
+  function backTraceHitsOf(siteId: string): BackTraceHit[] {
+    const cur = backTraceHits.value
+    return cur && cur.siteId === siteId ? cur.hits : []
+  }
+  /** 点侧栏命中源切进具体源时，把产生这批命中的条件一并带过去。 */
+  function backTraceConditionOf(siteId: string): BackTraceCondition | null {
+    const cur = backTraceHits.value
+    return cur && cur.siteId === siteId && cur.hits.length ? cur.condition : null
+  }
+
+  /**
+   * 待应用到具体源数据视图的条件（2026-09-09）。切源时放进来，ResultView 取走即清。
+   *
+   * **为什么不走 URL**：一开始是用 `cond*` query 传的，但具体源视图按 sourceId 做 key，
+   * 源→源切换时会销毁重建，于是撞上竞态——旧实例先收到路由变化、填完条件顺手把 query
+   * 抹掉，紧接着新实例挂载时 URL 上已经没有 `cond*` 了，筛选框就是空的。
+   * 表现为「点第一个源好使，再点别的源条件就没了」。放 store 里没有这个先后问题。
+   */
+  const pendingSourceCondition = ref<BackTraceCondition | null>(null)
+  function setPendingSourceCondition(cond: BackTraceCondition | null) {
+    pendingSourceCondition.value = cond
+  }
+  /** 取走并清空——只应用一次，之后用户自己改的筛选不该被再次覆盖。 */
+  function takePendingSourceCondition(): BackTraceCondition | null {
+    const cur = pendingSourceCondition.value
+    pendingSourceCondition.value = null
+    return cur
+  }
+
   /** 改源名称时只改页签文案，不激活、不新建页签（侧栏编辑当前源用） */
   function renameTab(sourceId: string, name: string) {
     const tab = tabs.value.find((t) => t.sourceId === sourceId)
@@ -153,5 +216,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return snapshots[sourceId]
   }
 
-  return { tabs, activeSourceId, snapshots, compareSourceId, compareLeftId, open, activate, deactivate, close, renameTab, saveSnapshot, snapshotOf, enterCompare, exitCompare }
+  return { tabs, activeSourceId, snapshots, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, renameTab, saveSnapshot, snapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf, backTraceConditionOf, setPendingSourceCondition, takePendingSourceCondition }
 })

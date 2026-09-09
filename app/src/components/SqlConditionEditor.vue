@@ -4,6 +4,7 @@ import { computed, ref, watch } from 'vue'
 import { ElButton, ElDialog, ElDropdown, ElDropdownItem, ElDropdownMenu } from 'element-plus'
 import { ArrowDown, Clock, FullScreen } from '@element-plus/icons-vue'
 import { clearSqlConditions, readSqlConditions } from '@/utils/sqlConditionHistory'
+import { stripTrailingSemicolon } from '@/utils/sqlCondition'
 
 const props = defineProps<{
   modelValue: string
@@ -51,13 +52,42 @@ function update(value: string) {
   emit('update:modelValue', value)
 }
 
+/**
+ * 往紧凑框里**粘贴多行 SQL**（2026-09-09 生产实测的真实故障）。
+ *
+ * HTML 规范里 `<input>` 的值净化算法是「剥掉换行符」，不是「换成空格」——多行条件粘进来
+ * 就成了 `…'9009349')and k24 !=''AND k17 <> 2AND k2 …`：括号、引号、数字与后面的 AND
+ * 黏成一个词。后端 SQL 解析不了，报的还是一句误导人的「传到的条件含有非法注入风险」，
+ * 用户完全看不出是自己粘贴时掉了换行。实测同一条件把换行换成空格就正常返回。
+ *
+ * 拦在组件根元素上是为了**不改任何调用点**：input 由各调用方通过 slot 自己渲染，
+ * 但 paste 事件会冒泡到这里。放大弹窗那个 textarea 天生支持多行，且 ElDialog 挂在
+ * body 上、不在本组件子树内，不会被这里拦到，多行原文照旧保留。
+ */
+function onPaste(e: ClipboardEvent) {
+  const text = e.clipboardData?.getData('text') ?? ''
+  if (!/[\r\n]/.test(text)) return
+  const el = e.target as HTMLInputElement | null
+  if (!el || typeof el.selectionStart !== 'number') return
+  e.preventDefault()
+  // 紧凑框显示的是 compactValue（换行已按 1:1 换成空格），所以选区下标与 modelValue 对得上
+  const start = el.selectionStart ?? 0
+  const end = el.selectionEnd ?? start
+  const cur = props.modelValue
+  emit('update:modelValue', cur.slice(0, start) + text.replace(/\r\n|\r|\n/g, ' ') + cur.slice(end))
+}
+
 function open() {
   draft.value = props.modelValue
   refreshRecent()
   opened.value = true
 }
 function apply() {
-  emit('update:modelValue', draft.value)
+  // 确认时削掉末尾分号（2026-09-09）：从数据库客户端整段复制过来的语句常带着它，
+  // 而这里的输入是拼进 WHERE 的片段，带分号后端直接报错。
+  // **只在这里做、不在 update() 里做**——紧凑行每次按键都会走 update，
+  // 输入过程中的 `K2 LIKE '%;` 是合法中间态，当场削掉会把用户正在打的字符吃掉。
+  emit('update:modelValue', stripTrailingSemicolon(draft.value))
   opened.value = false
 }
 // 外部清空、切表时丢弃旧草稿，避免应用到另一个查询上下文。
@@ -65,7 +95,7 @@ watch([() => props.modelValue, () => props.tableId], () => { opened.value = fals
 </script>
 
 <template>
-  <span class="sql-condition-field">
+  <span class="sql-condition-field" @paste="onPaste">
     <slot :value="compactValue" :update="update" />
     <!-- 右端两个图标按钮：最近条件、放大编辑。
          **都不写文字**（2026-09-05）：条件框本来就窄，字白占宽度；title/aria-label 说清楚即可。

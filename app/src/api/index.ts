@@ -1,3 +1,4 @@
+import { stripTrailingSemicolon } from '@/utils/sqlCondition'
 import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError, isMockMode, isProductionBackend, isProductionCreateEnabled, type RequestOptions } from './client'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readLoginUsername, readStoredToken, triggerSessionExpired } from './auth'
 import { createSseEventParser } from '@/utils/stream/sse'
@@ -391,7 +392,7 @@ export const sourceApi = {
         page: p?.page ?? 1,
         limit: p?.size ?? 20,
         ids,
-        siteId: p?.siteId,
+        // 只发复数 siteIds：source-api.md §1.1 明确后端不读单数 siteId（传 -1 查未关联源也走复数）
         siteIds: p?.siteIds,
         sourceId: p?.sourceId,
         name: p?.name ?? p?.keyword,
@@ -636,7 +637,6 @@ export const sourceApi = {
       httpParams: {
         ids: Array.isArray(p?.sourceIds) ? p.sourceIds.join(',') : (p?.sourceIds ?? p?.ids),
         siteIds: p?.siteIds,
-        siteId: p?.siteId,
         name: p?.name,
         state: p?.state === 'all' ? undefined : p?.state,
         enable: p?.enable,
@@ -806,7 +806,9 @@ export const siteApi = {
         page: p?.page ?? 1,
         limit: p?.size ?? 20,
         name: p?.name ?? p?.keyword ?? undefined,
-        sourceName: p?.sourceName ?? undefined,
+        // 源名筛选**不**走这里：真实 site/sitePaged 只按网站名筛，传 sourceName 会被忽略并原样
+        // 返回整页（旧实现的 name∪sourceName 并集因此把无关网站也带出来）。源名匹配改由调用方
+        // 走 source/sourcePaged?name= 取 siteId 交集，见 SourceTab.loadList。
         state: state === 'error' ? 'ERROR' : undefined,
         // 旧 SiteList 契约：分类筛选走 categoryIds（逗号分隔目录 ID 串；本页单选，传单个 ID）。
         // 不透传的话分类筛选在真实后端下静默失效（mock 恰好按路径前缀匹配，掩盖过这个问题）。
@@ -1518,7 +1520,10 @@ function buildLegacyMore(q: RowQuery) {
   const parts: string[] = []
   if (q.startTime) parts.push(`CREATE_DT >= '${escapeLegacySqlString(q.startTime)}'`)
   if (q.endTime) parts.push(`CREATE_DT <= '${escapeLegacySqlString(q.endTime)}'`)
-  if (q.sql?.trim()) parts.push(q.startTime || q.endTime ? `(${q.sql.trim()})` : q.sql.trim())
+  // 末尾分号在这里必然出错：条件是拼进 WHERE 的片段，带时间范围时还会被包成 `(条件;)`。
+  // 用户从数据库客户端复制语句过来常常带着它（2026-09-09 实测报错）。
+  const sql = q.sql ? stripTrailingSemicolon(q.sql.trim()) : ''
+  if (sql) parts.push(q.startTime || q.endTime ? `(${sql})` : sql)
   return parts.join(' AND ') || undefined
 }
 
@@ -1581,7 +1586,8 @@ function fileResourceSql(q: FileResourceQuery): string | undefined {
   if (q.configId?.trim()) parts.push(`CONFIG_ID = '${escapeFileResourceLike(q.configId.trim())}'`)
   // 自定义 SQL（对齐旧平台 FileList2.vue 的"自定义SQL, 如 K1 IS NULL"，此前迁移遗漏，见 M3-2 补漏）：
   // 用户输入可能本身含 OR，加括号后再与其他条件 AND，避免优先级被吃掉。
-  if (q.sql?.trim()) parts.push(`(${q.sql.trim()})`)
+  const customSql = q.sql ? stripTrailingSemicolon(q.sql.trim()) : ''
+  if (customSql) parts.push(`(${customSql})`)
   return parts.join(' AND ') || undefined
 }
 
@@ -1764,7 +1770,8 @@ export const dataApi = {
         data: encryptLegacyPayload({
           entryTypeId: params.tableId, sourceId: params.sourceId, state: params.state,
           size: params.size, start: params.start, end: params.end,
-          nextFlag: params.nextFlag, cond: params.cond,
+          nextFlag: params.nextFlag,
+          cond: params.cond ? stripTrailingSemicolon(params.cond.trim()) || undefined : params.cond,
         }),
       },
     }),

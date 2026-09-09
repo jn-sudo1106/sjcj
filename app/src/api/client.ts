@@ -172,6 +172,14 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   // isRoot=1 保持不动）。与 config/copyAll、source/copySource 同性质。
   'flow/copyFlow',
   'flow/copyTemplateSteps',
+  // 2026-09-09 拍板放开：数据删除（entry/entryDelete 单条/该源 × 当日/全量、
+  // entry/entryDeleteBatch 按 IDs 批量）。源数据视图这轮迁入了数据中心的删除入口，
+  // 两个端点本来就 live，不放开则生产上按钮能点、确认后被写保护拦下、后端收不到——
+  // 跟 source/nextStep 当初同款的「界面骗人」。
+  // 破坏性与 source/delete 同级（永久删数据，不可撤销），两处入口都保留二次确认，
+  // 且 UI 侧只在测试表（tableMeta.state === 'C'）显示。
+  'entry/entryDelete',
+  'entry/entryDeleteBatch',
   // 2026-09-08 放开：任务实例重发（task/resetTaskInsts，画布任务视图行内「重发」）。
   // 只把选中任务重置为待发送重新排队，不改不删任何配置/源/流程。2026-08-13 测试环境实测：
   // E / L 都能重跑、都变 W1、响应无逐条结果、无效 ID 静默忽略、幂等。UI 侧保留二次确认。
