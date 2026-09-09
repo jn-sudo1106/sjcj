@@ -705,6 +705,28 @@ describe('SiteDataView · 按条件查源', () => {
     ])
   })
 
+  // 侧栏那一行写着「12 条」，点进去看到的就得是那 12 条，否则数字是误导
+  it('把产生这批命中的条件一并记下，供点侧栏源时带进具体源数据视图', async () => {
+    const wrapper = await backTraceReady()
+    await wrapper.get('[data-testid="site-data-backtrace"]').trigger('click')
+    await flushPromises()
+
+    expect(useWorkspaceStore().backTraceConditionOf('site-a')).toEqual({
+      tableId: 't1', sql: 'K1 IS NULL', state: undefined, dataId: undefined, parentId: undefined,
+    })
+  })
+
+  it('命中态清掉后条件也不再供给（别把过期条件带进源里）', async () => {
+    const wrapper = await backTraceReady()
+    await wrapper.get('[data-testid="site-data-backtrace"]').trigger('click')
+    await flushPromises()
+    const ws = useWorkspaceStore()
+    expect(ws.backTraceConditionOf('site-a')).not.toBeNull()
+
+    ws.clearBackTraceHits()
+    expect(ws.backTraceConditionOf('site-a')).toBeNull()
+  })
+
   it('命中态按 siteId 隔离：切到别的网站就不适用了，侧栏拿不到', async () => {
     const wrapper = await backTraceReady()
     await wrapper.get('[data-testid="site-data-backtrace"]').trigger('click')

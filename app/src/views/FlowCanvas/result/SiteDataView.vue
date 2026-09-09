@@ -561,6 +561,14 @@ async function openBackTrace() {
   ws.setBackTraceHits(
     props.siteId,
     hit.sourceIds.map((sourceId) => ({ sourceId, count: hit.hitCountBySource.get(sourceId) ?? 0 })),
+    // 条件一并记下：点侧栏某个源进去时要带过去，否则侧栏那个「906 条」跟进去看到的对不上
+    {
+      tableId: effectiveTableId.value,
+      sql: filters.sql || undefined,
+      state: filters.state || undefined,
+      dataId: filters.dataId || undefined,
+      parentId: filters.parentId || undefined,
+    },
   )
   ElMessage.success(`命中 ${hit.sourceIds.length} 个源，已填进左侧源列表`)
 }

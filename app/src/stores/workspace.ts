@@ -36,6 +36,16 @@ export interface BackTraceHit {
   count: number
 }
 
+/** 产生这批命中的查询条件。点侧栏某个源进具体源数据视图时要原样带过去——
+ *  侧栏写着「906 条」，进去看到的就得是那 906 条，否则这个数字是误导。 */
+export interface BackTraceCondition {
+  tableId: string
+  sql?: string
+  state?: string
+  dataId?: string
+  parentId?: string
+}
+
 export const MAX_SOURCE_TABS = 8
 const SS_KEY = 'rc-source-tabs'
 
@@ -80,7 +90,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
    * 带 siteId 是因为侧栏跟着网站走：切到别的网站，这批命中源就不适用了，得自动失效。
    * 与 compareSourceId 同属临时查看态，不做 sessionStorage 持久化（刷新即回到全部源）。
    */
-  const backTraceHits = ref<{ siteId: string; hits: BackTraceHit[] } | null>(null)
+  const backTraceHits = ref<{ siteId: string; hits: BackTraceHit[]; condition: BackTraceCondition } | null>(null)
 
   let persistTimer: ReturnType<typeof setTimeout> | null = null
   watch(
@@ -155,8 +165,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   /** 命中条数从多到少——问题最严重的源排最前，一眼看出先查谁。 */
-  function setBackTraceHits(siteId: string, hits: BackTraceHit[]) {
-    backTraceHits.value = { siteId, hits: [...hits].sort((a, b) => b.count - a.count) }
+  function setBackTraceHits(siteId: string, hits: BackTraceHit[], condition: BackTraceCondition) {
+    backTraceHits.value = { siteId, hits: [...hits].sort((a, b) => b.count - a.count), condition }
   }
   function clearBackTraceHits() {
     backTraceHits.value = null
@@ -165,6 +175,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   function backTraceHitsOf(siteId: string): BackTraceHit[] {
     const cur = backTraceHits.value
     return cur && cur.siteId === siteId ? cur.hits : []
+  }
+  /** 点侧栏命中源切进具体源时，把产生这批命中的条件一并带过去。 */
+  function backTraceConditionOf(siteId: string): BackTraceCondition | null {
+    const cur = backTraceHits.value
+    return cur && cur.siteId === siteId && cur.hits.length ? cur.condition : null
   }
 
   /** 改源名称时只改页签文案，不激活、不新建页签（侧栏编辑当前源用） */
@@ -182,5 +197,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return snapshots[sourceId]
   }
 
-  return { tabs, activeSourceId, snapshots, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, renameTab, saveSnapshot, snapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf }
+  return { tabs, activeSourceId, snapshots, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, renameTab, saveSnapshot, snapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf, backTraceConditionOf }
 })

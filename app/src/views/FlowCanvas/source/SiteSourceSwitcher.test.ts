@@ -731,7 +731,7 @@ describe('SiteSourceSwitcher · 按条件查源的命中态', () => {
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue(many)
     vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue(many)
     const ws = useWorkspaceStore()
-    if (hits.length) ws.setBackTraceHits(siteId, hits)
+    if (hits.length) ws.setBackTraceHits(siteId, hits, { tableId: '900', sql: "K1 IS NULL" })
     const wrapper = mount(SiteSourceSwitcher, {
       props: { siteId: 'site-a', activeKey: '' },
       global: {

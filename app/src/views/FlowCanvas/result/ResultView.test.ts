@@ -16,11 +16,13 @@ import type { NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 // 只替换 isProductionBackend，其余照搬真实模块——现有用例的 vi.spyOn(dataApi, …)
 // 作用在同一个 dataApi 对象引用上，不受影响。
 const routerPush = vi.fn()
+// replace 是「带条件进来」用的：cond* 参数消费完要从 URL 抹掉（2026-09-09）
+const routerReplace = vi.fn()
 const mockRouteQuery: Record<string, string> = { siteId: '1', sourceId: '391007768', view: 'data' }
 vi.mock('vue-router', () => ({
-  useRouter: () => ({ push: routerPush }),
+  useRouter: () => ({ push: routerPush, replace: routerReplace }),
   // 跳转要透传当前 query（否则会丢 siteId，左侧源列表整个不渲染）
-  useRoute: () => ({ query: mockRouteQuery }),
+  useRoute: () => ({ query: mockRouteQuery, path: '/canvas' }),
 }))
 
 vi.mock('@/api', async (importOriginal) => {
@@ -84,6 +86,7 @@ describe('ResultView', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     delete mockRouteQuery.scriptPath
+    for (const k of ['condTable', 'condSql', 'condState', 'condDataId', 'condParentId']) delete mockRouteQuery[k]
   })
 
   it('以当前源流程展示无首尾节点的节点条，且只查当前源数据（不提供所属源筛选——本页始终锁定在进入时的具体源，2026-08-14 第五次纠偏去掉了容易让人切到同站其他源的下拉）', async () => {
@@ -1708,5 +1711,51 @@ describe('ResultView · 删除数据', () => {
     await flushPromises()
 
     expect(rowDelete).toHaveBeenCalledWith('T2', { sourceId: current.sourceId, all: 1, entryId: 'e9' })
+  })
+})
+
+// 从网站汇总「按条件查源」的命中列表点进某个源（2026-09-09）：侧栏那一行写着「906 条」，
+// 进来看到的就得是那 906 条，所以条件随 URL 带过来并自动填进筛选框。
+describe('ResultView · 带条件进来', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    routerReplace.mockClear()
+    for (const k of ['condTable', 'condSql', 'condState', 'condDataId', 'condParentId']) delete mockRouteQuery[k]
+  })
+
+  it('URL 上的 cond* 参数填进筛选框，并作为查询条件发出去', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    mockRouteQuery.condTable = '900'
+    mockRouteQuery.condSql = 'K1 IS NULL'
+    mockRouteQuery.condState = 'E'
+
+    const wrapper = mountResultView()
+    await flushPromises()
+
+    expect((wrapper.get('input.rv-input.flex').element as HTMLInputElement).value).toBe('K1 IS NULL')
+    expect((wrapper.get('select.rv-input.st').element as HTMLSelectElement).value).toBe('E')
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ sql: 'K1 IS NULL', state: 'E' }))
+  })
+
+  it('用完把 cond* 从 URL 抹掉——留着的话清空筛选后一刷新又被灌回来', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    mockRouteQuery.condTable = '900'
+    mockRouteQuery.condSql = 'K1 IS NULL'
+
+    mountResultView()
+    await flushPromises()
+
+    const replaced = routerReplace.mock.calls.at(-1)?.[0] as { query?: Record<string, unknown> } | undefined
+    expect(replaced?.query).toBeDefined()
+    expect(Object.keys(replaced!.query!)).not.toContain('condSql')
+    expect(Object.keys(replaced!.query!)).not.toContain('condTable')
   })
 })
