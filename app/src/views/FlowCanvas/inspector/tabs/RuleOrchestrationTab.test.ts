@@ -777,6 +777,17 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect(wrapper.text()).toContain('模型')
   })
 
+  it('主面板模型下拉挂载到 body，避免被模型行的 overflow 裁剪', async () => {
+    const { wrapper } = mountWithExistingRule()
+    await flushPromises()
+
+    const providerSelect = wrapper.find('[data-testid="main-model-provider"]').findComponent({ name: 'ElSelect' })
+    const modelSelect = wrapper.find('[data-testid="main-model"]').findComponent({ name: 'ElSelect' })
+
+    expect(providerSelect.props('teleported')).not.toBe(false)
+    expect(modelSelect.props('teleported')).not.toBe(false)
+  })
+
   it('切换模型供应商后刷新模型候选，保存时回写新的供应商/模型', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     await flushPromises()
