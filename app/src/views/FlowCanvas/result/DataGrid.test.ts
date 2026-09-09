@@ -508,7 +508,7 @@ describe('DataGrid · 下一步字段预设（0831 F10）', () => {
 })
 
 describe('DataGrid · 强制业务列显示', () => {
-  it('传入 visibleFieldProps 时只展示指定业务字段，身份列仍保留', () => {
+  it('传入 visibleFieldProps 时只展示指定字段，其他字段全部隐藏', () => {
     const wrapper = mount(DataGrid, {
       props: {
         meta: {
@@ -529,7 +529,10 @@ describe('DataGrid · 强制业务列显示', () => {
     })
 
     const heads = wrapper.findAll('thead th').map((th) => th.text().replace(/[↕↑↓]\s*$/, '').trim())
-    expect(heads).toEqual(expect.arrayContaining(['ENTRY_ID', 'PARENT_ID', '源', '编码-K1']))
+    expect(heads).toEqual(['编码-K1', '状态', '操作'])
+    expect(heads).not.toContain('ENTRY_ID')
+    expect(heads).not.toContain('PARENT_ID')
+    expect(heads).not.toContain('源')
     expect(heads).not.toContain('名称-K2')
     expect(heads).not.toContain('URL-K3')
     expect(wrapper.text()).toContain('1121250')
