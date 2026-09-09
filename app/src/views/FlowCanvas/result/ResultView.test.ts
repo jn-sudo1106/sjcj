@@ -43,7 +43,7 @@ const meta: DataTableMeta = {
 // 插槽，会让这些断言全部落空——换成显式 stub，保留 name/props/emits 供测试查询与触发。
 const DataGridStub = {
   name: 'DataGrid',
-  props: ['meta', 'rows', 'loading', 'selectedId', 'compact', 'hideActions', 'sourceNames', 'sourceColLabel', 'selectable', 'selectedIds', 'presetCols'],
+  props: ['meta', 'rows', 'loading', 'selectedId', 'compact', 'hideActions', 'sourceNames', 'sourceColLabel', 'selectable', 'selectedIds', 'presetCols', 'allowRowDelete'],
   emits: ['row-click', 'row-action', 'update:selectedIds'],
   template: '<div class="dg-stub"><slot name="head" /><slot name="head-right" /><slot name="foot" /></div>',
 }
@@ -56,7 +56,13 @@ const RowDetailFieldsStub = {
   template: '<div class="rdf-stub"><div v-for="f in (fields || [])" :key="f.key">{{ f.name }} {{ f.value }}</div></div>',
 }
 const FilePreviewStub = { name: 'FilePreview', props: ['path', 'name', 'ext'], template: '<div data-testid="data-cell-file-preview">{{ path }}</div>' }
-const STUBS = { SqlConditionEditor: false, CanvasHeader: true, ElDrawer: ElDrawerStub, ElDialog: ElDialogStub, ElPagination: true, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, FilePreview: FilePreviewStub, SummaryDrawer: true }
+// 删除数据下拉（2026-09-09）：shallowMount 默认桩不渲染插槽，菜单项一条都断言不到。
+// 显式桩把默认插槽（触发按钮）和 #dropdown（菜单）都摊平渲染；item 保持单根，
+// 模板上的 @click 走 attrs fallthrough，跟真实 ElDropdownItem 一样能点。
+const ElDropdownStub = { name: 'ElDropdown', template: '<div><slot /><slot name="dropdown" /></div>' }
+const ElDropdownMenuStub = { name: 'ElDropdownMenu', template: '<div><slot /></div>' }
+const ElDropdownItemStub = { name: 'ElDropdownItem', props: ['disabled', 'divided'], template: '<div class="el-dropdown-item"><slot /></div>' }
+const STUBS = { ElDropdown: ElDropdownStub, ElDropdownMenu: ElDropdownMenuStub, ElDropdownItem: ElDropdownItemStub, SqlConditionEditor: false, CanvasHeader: true, ElDrawer: ElDrawerStub, ElDialog: ElDialogStub, ElPagination: true, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, FilePreview: FilePreviewStub, SummaryDrawer: true }
 
 function mountResultView() {
   return shallowMount(ResultView, {
@@ -1595,5 +1601,112 @@ describe('ResultView · 0831 详情翻条与末节点回上游', () => {
     await flushPromises()
 
     expect(nextStep).toHaveBeenCalledWith(current.sourceId, 'T2', ['p9'])
+  })
+})
+
+// 删除数据（2026-09-09 从数据中心迁入）。数据中心那套下拉共 9 项，这里只迁 4 项：
+// 删除该源当日/所有、删除选中、行内删单条。整表清空与设为正式表**刻意不迁**，
+// 理由见 ResultView.vue 里同名注释（源视图里表常被同网站多个源共用，整表删跨源杀伤）。
+describe('ResultView · 删除数据', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  // 按文案取菜单项：SqlConditionEditor 的"最近条件"下拉也渲染 el-dropdown-item，
+  // 位置索引会随它有没有历史记录而漂。
+  function menuItem(wrapper: ReturnType<typeof shallowMount>, text: string) {
+    const hit = wrapper.findAll('.el-dropdown-item').find((i) => i.text() === text)
+    if (!hit) throw new Error(`菜单里没有「${text}」`)
+    return hit
+  }
+
+  async function mountForDelete(state: string | undefined = 'C') {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({ ...meta, state })
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'last')
+    return { wrapper, current }
+  }
+
+  it('删除入口仅测试表出现：state=C 有，正式表 AC 整块不渲染（与数据中心同一道门禁）', async () => {
+    const { wrapper } = await mountForDelete('C')
+    expect(wrapper.find('[data-testid="data-delete"]').exists()).toBe(true)
+    wrapper.unmount()
+
+    const formal = await mountForDelete('AC')
+    expect(formal.wrapper.find('[data-testid="data-delete"]').exists()).toBe(false)
+  })
+
+  it('只迁该源范围的三项，不提供整表清空和设为正式表——源视图里表常被同站多个源共用，整表删会跨源', async () => {
+    const { wrapper } = await mountForDelete()
+    const menu = wrapper.find('[data-testid="data-delete"]').element.parentElement!
+    expect(menu.textContent).toContain('删除选中的数据')
+    expect(menu.textContent).toContain('删除该源-当日数据')
+    expect(menu.textContent).toContain('删除该源-所有数据')
+    expect(menu.textContent).not.toContain('清空表数据')
+    expect(menu.textContent).not.toContain('设为正式表')
+  })
+
+  it('删除该源-所有数据：带当前节点的表与本页锁定的 sourceId，all=1，删完回第 1 页重查', async () => {
+    const { wrapper, current } = await mountForDelete()
+    const rowDelete = vi.spyOn(dataApi, 'rowDelete').mockResolvedValue({ success: 12 })
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+
+    await menuItem(wrapper, '删除该源-所有数据').trigger('click')
+    await flushPromises()
+
+    expect(rowDelete).toHaveBeenCalledWith('T2', { sourceId: current.sourceId, all: 1 })
+    expect(query).toHaveBeenCalled()
+  })
+
+  it('删除该源-当日数据：同一入口只差 all=0', async () => {
+    const { wrapper, current } = await mountForDelete()
+    const rowDelete = vi.spyOn(dataApi, 'rowDelete').mockResolvedValue({ success: 3 })
+
+    await menuItem(wrapper, '删除该源-当日数据').trigger('click')
+    await flushPromises()
+
+    expect(rowDelete).toHaveBeenCalledWith('T2', { sourceId: current.sourceId, all: 0 })
+  })
+
+  it('删除选中：把勾选的行 ID 交给 rowDeleteBatch，删完清空勾选', async () => {
+    const { wrapper } = await mountForDelete()
+    const batch = vi.spyOn(dataApi, 'rowDeleteBatch').mockResolvedValue({ success: 2, all: 2, not_found: 0 })
+    const grid = wrapper.findComponent({ name: 'DataGrid' })
+    await grid.vm.$emit('update:selectedIds', ['e1', 'e2'])
+    await flushPromises()
+
+    await menuItem(wrapper, '删除选中的数据').trigger('click')
+    await flushPromises()
+
+    expect(batch).toHaveBeenCalledWith('T2', ['e1', 'e2'])
+    expect(grid.props('selectedIds')).toEqual([])
+  })
+
+  it('删除返回 success=0（超 14 天或找不到 ID）弹 warning，不能只报成功', async () => {
+    const { wrapper } = await mountForDelete()
+    vi.spyOn(dataApi, 'rowDelete').mockResolvedValue({ success: 0 })
+
+    await menuItem(wrapper, '删除该源-所有数据').trigger('click')
+    await flushPromises()
+
+    expect(ElMessage.warning).toHaveBeenCalled()
+  })
+
+  it('行内「删除单条」：走 row-action delete，带 entryId 与该行自己的源 ID；测试表标志透传给 DataGrid', async () => {
+    const { wrapper, current } = await mountForDelete()
+    const rowDelete = vi.spyOn(dataApi, 'rowDelete').mockResolvedValue({ success: 1 })
+    const grid = wrapper.findComponent({ name: 'DataGrid' })
+    expect(grid.props('allowRowDelete')).toBe(true)
+
+    await grid.vm.$emit('row-action', { dataId: 'e9', sourceId: current.sourceId } as DataRow, 'delete')
+    await flushPromises()
+
+    expect(rowDelete).toHaveBeenCalledWith('T2', { sourceId: current.sourceId, all: 1, entryId: 'e9' })
   })
 })

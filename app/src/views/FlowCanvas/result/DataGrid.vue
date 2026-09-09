@@ -47,6 +47,9 @@ const props = withDefaults(defineProps<{
   childCountsError?: string
   /** 「下级」列是否可用（由调用方按有无后继决定），false 时整列不渲染 */
   showChildCol?: boolean
+  /** 行内操作里是否给「删除单条」。仅测试表（tableMeta.state === 'C'）该为 true，
+   *  由调用方判定——表状态在调用方手里，表格不去猜。 */
+  allowRowDelete?: boolean
 }>(), { allowColumnSort: true, presetCols: () => [] })
 const showActions = computed(() => !props.compact && !props.hideActions)
 
@@ -410,6 +413,7 @@ function stateMeta(s?: string) {
                   <el-dropdown-menu>
                     <el-dropdown-item command="detail">详情</el-dropdown-item>
                     <el-dropdown-item command="tasks">查后续任务实例</el-dropdown-item>
+                    <el-dropdown-item v-if="allowRowDelete" divided command="delete">删除单条【无法恢复】</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
