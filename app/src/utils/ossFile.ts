@@ -1,3 +1,5 @@
+import { DEFAULT_API_PROXY_TARGET } from '@/constants/backend'
+
 /**
  * 原始文件（Excel / PDF / 图片 / 文本）的取用地址与字节流。
  *
@@ -14,6 +16,20 @@
 /** OSS 路径 → 同源可取地址。路径原样拼接，不做 encodeURIComponent（旧平台亦然，实测两种都可用）。 */
 export function ossFileUrl(path: string): string {
   return `/oss/api/oss/download?fileId=${path}`
+}
+
+/**
+ * OSS 路径 → **独立 origin 的绝对地址**，只用于「新窗口打开」，不能用于 fetch（跨源会被 CORS 拒）。
+ *
+ * 端口规则跟 vite.config.ts 的 `/oss` 代理同源同宗：OSS 服务在业务后端同机的 9102 端口。
+ * 这里不复用 `ossFileUrl` 的同源前缀是刻意的——同源恰恰是问题所在：
+ * 采集回来的页面在我们自己的 origin 下打开，它的脚本就能读 localStorage 里的登录 token。
+ * 旧平台（EntryList2.vue 的 `<a target="_blank">`）打开的是 9102 这个**独立 origin**，
+ * 与它的前端（9999）天然隔离，页面脚本正常跑、正文正常显示，又碰不到主应用。这里照搬。
+ */
+export function ossPublicUrl(path: string): string {
+  const target = import.meta.env.VITE_API_PROXY_TARGET || DEFAULT_API_PROXY_TARGET
+  return `${String(target).replace(/:\d+$/, ':9102')}/api/oss/download?fileId=${path}`
 }
 
 /**

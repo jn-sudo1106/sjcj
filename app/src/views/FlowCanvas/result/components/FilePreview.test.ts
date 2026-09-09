@@ -11,52 +11,54 @@ function bufOf(s: string): ArrayBuffer {
 afterEach(() => vi.restoreAllMocks())
 
 describe('FilePreview', () => {
-  it('html 预览：给采集页注入兜底排版样式再渲染，原始字节不动', async () => {
-    const created: Blob[] = []
-    vi.spyOn(URL, 'createObjectURL').mockImplementation((b: Blob | MediaSource) => {
-      created.push(b as Blob)
-      return 'blob:mock'
-    })
+  it('html 预览：iframe 直接指向 OSS 独立 origin 的绝对地址，前端不 fetch 字节、不造 blob', async () => {
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock')
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
-    vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(bufOf('<html><body><a href="/x">链接</a></body></html>'))
+    const fetchOss = vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(bufOf('<html></html>'))
 
-    const wrapper = mount(FilePreview, { props: { path: '/data/content.html', name: 'content.html', ext: 'html' } })
+    const wrapper = mount(FilePreview, { props: { path: '/qinlong/dds/a.html', name: 'a.html', ext: 'html' } })
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="file-preview-html"]').exists()).toBe(true)
-    expect(created).toHaveLength(1)
-    const html = await created[0].text()
-    expect(html.startsWith('<style>')).toBe(true)
-    expect(html).toContain('max-width:820px')
-    expect(html).toContain('<html><body><a href="/x">链接</a></body></html>')
-    expect(created[0].type).toContain('text/html')
+    const frame = wrapper.find('[data-testid="file-preview-html"]')
+    expect(frame.exists()).toBe(true)
+    // 绝对地址（独立 origin），不是同源 /oss 前缀，也不是 blob:
+    expect(frame.attributes('src')).toContain(':9102/api/oss/download?fileId=/qinlong/dds/a.html')
+    expect(frame.attributes('src')).toMatch(/^https?:\/\//)
+    // 跨源文档保留自己的 origin：这两项同时给，只有同源时才可能脱出沙箱，这里恰恰跨源
+    expect(frame.attributes('sandbox')).toBe('allow-scripts allow-same-origin')
+    // html 不再经过取字节那条路
+    expect(fetchOss).not.toHaveBeenCalled()
+    expect(createObjectURL).not.toHaveBeenCalled()
   })
 
-  it('html 预览：给了源站地址时前置 <base href>，让相对资源回源站；非法地址忽略', async () => {
+  it('html 预览：底部给「新窗口打开」兜底——生产若是 https，页面内嵌 http iframe 会被混合内容拦掉', async () => {
+    vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(bufOf('<html></html>'))
+    const wrapper = mount(FilePreview, { props: { path: '/qinlong/dds/a.html', name: 'a.html', ext: 'html' } })
+    await flushPromises()
+
+    const open = wrapper.find('[data-testid="file-preview-open-window"]')
+    expect(open.exists()).toBe(true)
+    expect(open.attributes('href')).toContain(':9102/api/oss/download?fileId=/qinlong/dds/a.html')
+    expect(open.attributes('target')).toBe('_blank')
+    expect(open.attributes('rel')).toContain('noopener')
+  })
+
+  it('非 html（如 pdf）仍走取字节 + blob：跨源直取会被 CORS 拒，只有同源 /oss 拿得到字节', async () => {
     const created: Blob[] = []
     vi.spyOn(URL, 'createObjectURL').mockImplementation((b: Blob | MediaSource) => {
       created.push(b as Blob)
       return 'blob:mock'
     })
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
-    vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(bufOf('<body>x</body>'))
+    const fetchOss = vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(bufOf('%PDF-1.7'))
 
-    const w1 = mount(FilePreview, {
-      props: { path: '/c.html', name: 'c.html', ext: 'html', externalUrl: 'https://www.sanyoumed.com/zh/news/abc' },
-    })
+    const wrapper = mount(FilePreview, { props: { path: '/qinlong/a.pdf', name: 'a.pdf', ext: 'pdf' } })
     await flushPromises()
-    const h1 = await created[0].text()
-    expect(h1.startsWith('<base href="https://www.sanyoumed.com/zh/news/abc">')).toBe(true)
-    expect(h1).toContain('<style>')
-    w1.unmount()
 
-    created.length = 0
-    const w2 = mount(FilePreview, {
-      props: { path: '/c.html', name: 'c.html', ext: 'html', externalUrl: 'javascript:alert(1)' },
-    })
-    await flushPromises()
-    expect((await created[0].text()).startsWith('<style>')).toBe(true)
-    w2.unmount()
+    expect(fetchOss).toHaveBeenCalledWith('/qinlong/a.pdf')
+    expect(created).toHaveLength(1)
+    expect(created[0].type).toContain('pdf')
+    expect(wrapper.find('[data-testid="file-preview-pdf"]').attributes('src')).toBe('blob:mock')
   })
 
   it('pdf 预览：不注入样式，原样 blob', async () => {
