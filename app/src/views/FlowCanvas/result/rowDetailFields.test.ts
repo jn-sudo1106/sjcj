@@ -80,3 +80,33 @@ describe('RowDetailFields', () => {
     expect(wrapper.text()).toContain('编辑时展示全部字段')
   })
 })
+
+// 物理列名 K1/K2…（2026-09-09）：写 SQL 条件、配规则用的是它，详情此前只有 prop，
+// 与表格列头「标题-K1」对不上。
+describe('详情字段的物理列名', () => {
+  it('fieldsFromTableMeta 带出 columnName，右侧渲染成「prop · K1」', () => {
+    expect(fields.find((f) => f.prop === 'title')?.columnName).toBe('K1')
+    expect(fields.find((f) => f.prop === 'url')?.columnName).toBe('K2')
+
+    const wrapper = mount(RowDetailFields, { props: { fields, showEmpty: true } })
+    const head = wrapper.find('[data-testid="row-detail-field-title"] .rdf-code')
+    expect(head.text().replace(/\s+/g, ' ')).toBe('title · K1')
+  })
+
+  it('showItems 路径的 code 本来就是 K 名，不再重复塞 columnName（否则渲染成「K1 · K1」）', () => {
+    const built = fieldsFromShowItems([{ columnName: 'K1', itemName: '标题', value: '上游标题' }])
+    expect(built[0].code).toBe('K1')
+    expect(built[0].columnName).toBeUndefined()
+
+    const wrapper = mount(RowDetailFields, { props: { fields: built, showEmpty: true } })
+    expect(wrapper.find('.rdf-code').text().replace(/\s+/g, ' ')).toBe('K1')
+  })
+
+  it('没有 columnName 的字段只显示 code，不留孤零零的分隔点', () => {
+    const built = fieldsFromTableMeta([{ prop: 'ENTRY_ID', type: 'string', desc: '数据 ID' }], { ENTRY_ID: '1' })
+    expect(built[0].columnName).toBeUndefined()
+    const wrapper = mount(RowDetailFields, { props: { fields: built, showEmpty: true } })
+    expect(wrapper.find('.rdf-code').text().trim()).toBe('ENTRY_ID')
+    expect(wrapper.find('.rdf-code').text()).not.toContain('·')
+  })
+})

@@ -51,7 +51,12 @@ function onEdit(prop: string, event: Event) {
     >
       <div class="rdf-field-head">
         <span class="rdf-name">{{ field.name }}</span>
-        <span class="rdf-code">{{ field.code }}</span>
+        <!-- 右侧字段标识：prop · K1（2026-09-09）。K 名单独着色并加粗一档——
+             写 SQL 条件、配规则用的都是物理列名，prop 只是逻辑名，可操作的那个要更醒目。
+             没有 columnName 的字段（固定列、旧 showItems 路径）只显示 code，不留空分隔点。 -->
+        <span class="rdf-code">
+          {{ field.code }}<template v-if="field.columnName"><span class="rdf-code-sep"> · </span><span class="rdf-col">{{ field.columnName }}</span></template>
+        </span>
       </div>
       <input
         v-if="editing"
@@ -92,6 +97,8 @@ function onEdit(prop: string, event: Event) {
 .rdf-field-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .rdf-name { font-size: 12px; font-weight: 600; color: var(--rc-text); }
 .rdf-code { flex: none; color: var(--rc-faint); font-family: var(--rc-mono, monospace); font-size: 11px; }
+.rdf-code-sep { opacity: .6; }
+.rdf-col { color: var(--rc-text-2); font-weight: 600; }
 .rdf-value { margin-top: 4px; color: var(--rc-text-2); font-size: 12px; line-height: 1.45; word-break: break-all; }
 .rdf-link { color: var(--rc-primary); text-decoration: none; }
 .rdf-link:hover { text-decoration: underline; }

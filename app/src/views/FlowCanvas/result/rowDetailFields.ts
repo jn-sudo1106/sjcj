@@ -6,6 +6,10 @@ export interface RowDetailField {
   name: string
   code: string
   prop: string
+  /** 物理列名（K1/K2…）。写 SQL 条件、配规则用的是它，不是 prop——详情里单独摆出来
+   *  （2026-09-09）。表格列头一直是「中文名-K1」，详情此前只有 prop，两处对不上。
+   *  固定列（ENTRY_ID/SOURCE_ID 等）与旧 showItems 路径可能没有，故可选。 */
+  columnName?: string
   value: string
   empty: boolean
   href?: string
@@ -58,6 +62,7 @@ export function fieldsFromTableMeta(
       name: field.desc || field.prop,
       code: field.prop,
       prop: field.prop,
+      columnName: field.columnName || undefined,
       value,
       empty,
       href: href || undefined,
@@ -72,6 +77,8 @@ export function fieldsFromShowItems(items: EntryDetailItem[] | undefined): RowDe
     const value = formatDetailValue(raw)
     const empty = isBlankDetailValue(raw)
     const href = safeHttpUrl(raw)
+    // 这条路径（旧 entryDetail 的 showItems）本来就只给得出 columnName，code 即 K 名；
+    // 不再重复塞 columnName，否则详情里会渲染成「K1 · K1」。
     return {
       key: item.itemId ?? item.columnName,
       name: item.itemName || item.columnName,
