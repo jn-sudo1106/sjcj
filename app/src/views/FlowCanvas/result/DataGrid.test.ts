@@ -82,6 +82,19 @@ describe('DataGrid', () => {
     expect(heads).toContain('推断列-inferred') // 没有 columnName 的推断列退回 prop
   })
 
+  it('滚动时表头保持在数据行上方，不被表格内容覆盖', () => {
+    const wrapper = mount(DataGrid, {
+      props: {
+        meta: { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'title', columnName: 'K1', type: 'string', desc: '标题' }] },
+        rows: [{ dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted', values: { K1: '真实标题' } }],
+      },
+      global: { stubs: GRID_STUBS },
+    })
+
+    expect(wrapper.get('.dg-table').classes()).toContain('dg-sticky-table')
+    expect(wrapper.get('.dg-table th').classes()).toContain('dg-sticky-head')
+  })
+
   it('点列头排序：三态循环升→降→取消，派发的是物理列名（迁移旧平台 EntryList2.vue 的 @sort-change）', async () => {
     const wrapper = mount(DataGrid, {
       props: {
