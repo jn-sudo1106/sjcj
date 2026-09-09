@@ -30,6 +30,37 @@ describe('实体数据 API 旧平台 HTTP 契约', () => {
     vi.unstubAllEnvs()
   })
 
+  // 2026-09-09：用户从数据库客户端复制的条件常带结尾分号，而这里是拼进 WHERE 的片段，
+  // 带时间范围时还会被包成 `(条件;)`——后端直接报错。清理落在 API 层而不是输入框，
+  // 因为深链（按条件查源跳转）和 SQL 历史记录都会绕过输入框。
+  it('SQL 条件末尾的分号在发出前削掉，字符串字面量里的分号原样保留', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, count: 0, data: [] }))
+    const { dataApi } = await import('./index')
+
+    await dataApi.rowQueryPaged({
+      tableId: '900',
+      sql: "k2 NOT LIKE '%weixin%' AND k1 LIKE '%a;b%';",
+    })
+
+    const payload = decryptBody((fetchMock.mock.calls[0] as [string, RequestInit])[1])
+    expect(payload.more).toBe("k2 NOT LIKE '%weixin%' AND k1 LIKE '%a;b%'")
+  })
+
+  it('带时间范围时条件会被包进括号，分号必须在包之前就削掉，否则成了 `(条件;)`', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, count: 0, data: [] }))
+    const { dataApi } = await import('./index')
+
+    await dataApi.rowQueryPaged({
+      tableId: '900',
+      startTime: '2026-09-01 00:00:00',
+      sql: 'K1 IS NULL;',
+    })
+
+    const payload = decryptBody((fetchMock.mock.calls[0] as [string, RequestInit])[1])
+    expect(payload.more).toBe("CREATE_DT >= '2026-09-01 00:00:00' AND (K1 IS NULL)")
+    expect(String(payload.more)).not.toContain(';')
+  })
+
   it('entryDataPaged 用 POST + AES 单字段体，SQL 条件走 more（不是 sql）', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, count: 0, data: [] }))
     const { dataApi } = await import('./index')

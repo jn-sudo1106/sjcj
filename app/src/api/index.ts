@@ -1,3 +1,4 @@
+import { stripTrailingSemicolon } from '@/utils/sqlCondition'
 import { request, BASE_URL, appendQuery, usesMockAdapter, ApiError, isMockMode, isProductionBackend, isProductionCreateEnabled, type RequestOptions } from './client'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readLoginUsername, readStoredToken, triggerSessionExpired } from './auth'
 import { createSseEventParser } from '@/utils/stream/sse'
@@ -1517,7 +1518,10 @@ function buildLegacyMore(q: RowQuery) {
   const parts: string[] = []
   if (q.startTime) parts.push(`CREATE_DT >= '${escapeLegacySqlString(q.startTime)}'`)
   if (q.endTime) parts.push(`CREATE_DT <= '${escapeLegacySqlString(q.endTime)}'`)
-  if (q.sql?.trim()) parts.push(q.startTime || q.endTime ? `(${q.sql.trim()})` : q.sql.trim())
+  // 末尾分号在这里必然出错：条件是拼进 WHERE 的片段，带时间范围时还会被包成 `(条件;)`。
+  // 用户从数据库客户端复制语句过来常常带着它（2026-09-09 实测报错）。
+  const sql = q.sql ? stripTrailingSemicolon(q.sql.trim()) : ''
+  if (sql) parts.push(q.startTime || q.endTime ? `(${sql})` : sql)
   return parts.join(' AND ') || undefined
 }
 
@@ -1580,7 +1584,8 @@ function fileResourceSql(q: FileResourceQuery): string | undefined {
   if (q.configId?.trim()) parts.push(`CONFIG_ID = '${escapeFileResourceLike(q.configId.trim())}'`)
   // 自定义 SQL（对齐旧平台 FileList2.vue 的"自定义SQL, 如 K1 IS NULL"，此前迁移遗漏，见 M3-2 补漏）：
   // 用户输入可能本身含 OR，加括号后再与其他条件 AND，避免优先级被吃掉。
-  if (q.sql?.trim()) parts.push(`(${q.sql.trim()})`)
+  const customSql = q.sql ? stripTrailingSemicolon(q.sql.trim()) : ''
+  if (customSql) parts.push(`(${customSql})`)
   return parts.join(' AND ') || undefined
 }
 
@@ -1763,7 +1768,8 @@ export const dataApi = {
         data: encryptLegacyPayload({
           entryTypeId: params.tableId, sourceId: params.sourceId, state: params.state,
           size: params.size, start: params.start, end: params.end,
-          nextFlag: params.nextFlag, cond: params.cond,
+          nextFlag: params.nextFlag,
+          cond: params.cond ? stripTrailingSemicolon(params.cond.trim()) || undefined : params.cond,
         }),
       },
     }),
