@@ -286,6 +286,46 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
     expect(result.script).toBe('def process():    return {"ok": True}')
   })
 
+  it('dataProcessGenerate：响应体流式读取期间触发外部 abort 会中断 reader', async () => {
+    let requestSignal: AbortSignal | undefined
+    fetchMock.mockImplementation(async (_input: unknown, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => ({
+            read: () => new Promise((_resolve, reject) => {
+              requestSignal?.addEventListener('abort', () => reject(requestSignal?.reason), { once: true })
+            }),
+          }),
+        },
+      } as unknown as Response
+    })
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    const { ruleApi } = await import('./index')
+    const externalController = new AbortController()
+    const pending = ruleApi.dataProcessGenerate({
+      description: '按字段生成',
+      configId: 184,
+      providerCode: 'DeepSeek',
+      model: 'deepseek-v4-flash',
+      sourceTable: 'sense_data.TB_email_XQ',
+      targetTable: 'sense_data.TB_INDICATOR_DATA',
+      inputFields: 'date:date',
+      outputFields: 'ok:ok',
+      systemPrompt: '只返回 Python',
+    }, { signal: externalController.signal })
+
+    await vi.waitFor(() => expect(requestSignal).toBeDefined())
+    externalController.abort()
+    await vi.waitFor(() => expect(requestSignal?.aborted).toBe(true))
+
+    await expect(pending).rejects.toBeDefined()
+  })
+
   it('orchestrationGenerate：xml 格式仍走旧 stream，解析 MinIO 路径', async () => {
     const streamText = [
       'def main(date, zb_value):',

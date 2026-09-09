@@ -227,6 +227,59 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(wrapper.find('[data-testid="main-stream-result"]').text()).toContain('return {"sku_name": sku_id}')
   })
 
+  it('主面板生成中点击取消：中断请求并保留已输出的脚本', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', { describe: '按 sku_id 生成 sku_name', script: '', scriptPath: '' })
+    await flushPromises()
+    let requestSignal: AbortSignal | undefined
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
+      requestSignal = options?.signal
+      options?.onContent?.('def main(sku_id):\n')
+      await new Promise<never>((_resolve, reject) => {
+        requestSignal?.addEventListener('abort', () => reject(new Error('请求已取消')), { once: true })
+      })
+      throw new Error('请求未被取消')
+    })
+
+    await wrapper.find('[data-testid="main-generate-script"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="main-stream-result"]').text()).toContain('def main(sku_id):')
+
+    const generateButton = wrapper.find('[data-testid="main-generate-script"]')
+    expect(generateButton.attributes('aria-label')).toBe('取消生成脚本')
+    await generateButton.trigger('click')
+    await flushPromises()
+
+    expect(requestSignal?.aborted).toBe(true)
+    expect(wrapper.find('[data-testid="main-stream-result"]').text()).toContain('def main(sku_id):')
+  })
+
+  it('主面板生成中按钮切换为停止图标并可点击取消', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', { describe: '按 sku_id 生成 sku_name', script: '', scriptPath: '' })
+    await flushPromises()
+    let requestSignal: AbortSignal | undefined
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
+      requestSignal = options?.signal
+      await new Promise<never>((_resolve, reject) => {
+        requestSignal?.addEventListener('abort', () => reject(new Error('请求已取消')), { once: true })
+      })
+      throw new Error('请求未被取消')
+    })
+
+    const generateButton = wrapper.find('[data-testid="main-generate-script"]')
+    await generateButton.trigger('click')
+    await flushPromises()
+
+    expect(generateButton.attributes('aria-label')).toBe('取消生成脚本')
+    expect(generateButton.find('[data-testid="stop-generation-icon"]').exists()).toBe(true)
+    expect(generateButton.find('[data-testid="stop-generation-icon"]').element.childElementCount).toBe(0)
+    await generateButton.trigger('click')
+    await flushPromises()
+
+    expect(requestSignal?.aborted).toBe(true)
+  })
+
   it('主面板生成结果原样保留流式脚本的首尾空白、空格和缩进', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     const script = ' \ndef process():\n    return {"ok": True}\n'

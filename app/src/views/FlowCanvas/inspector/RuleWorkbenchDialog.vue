@@ -217,6 +217,13 @@ function onGenerate() {
     modelCode: modelDraft.value,
   })
 }
+function onGenerateClick() {
+  if (props.generating) {
+    emit('cancel-generate')
+    return
+  }
+  onGenerate()
+}
 
 // 中间拖拽分隔（左栏宽度百分比，25%~75% 夹住，跟 FlowCanvas/index.vue 的检查区分隔条同款交互）
 const leftPct = ref(42)
@@ -359,10 +366,17 @@ watch(
           <span class="wb-state">{{ streamStateLabel }}</span>
           <span class="wb-path">{{ scriptPath || '未生成' }}</span>
           <div class="wb-pane-actions">
-            <button class="rc-btn" type="button" :disabled="generating" @click="onGenerate">
-              {{ generating ? '生成中...' : generateLabel }}
+            <button
+              class="rc-btn"
+              :class="{ 'is-generating': generating }"
+              type="button"
+              :aria-label="generating ? '取消生成脚本' : generateLabel"
+              :title="generating ? '取消生成脚本' : generateLabel"
+              @click="onGenerateClick"
+            >
+              <span v-if="generating" class="rc-stop-icon" data-testid="stop-generation-icon" aria-hidden="true" />
+              <template v-else>{{ generateLabel }}</template>
             </button>
-            <button v-if="generating" class="rc-btn" type="button" @click="emit('cancel-generate')">取消</button>
             <button class="rc-btn primary" type="button" :disabled="saving || !script.trim()" @click="emit('save')">
               {{ saving ? '保存中...' : saveLabel }}
             </button>
@@ -424,4 +438,6 @@ watch(
 .rc-btn.primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }
 .rc-btn:hover { border-color: #bfdbfe; }
 .rc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.rc-btn.is-generating { width: 32px; padding: 0; }
+.rc-stop-icon { display: block; width: 10px; height: 10px; border-radius: 1px; background: currentColor; }
 </style>

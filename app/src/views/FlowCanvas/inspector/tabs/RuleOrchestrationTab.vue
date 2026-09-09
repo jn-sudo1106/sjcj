@@ -758,7 +758,6 @@ function goToDataView() {
     <span>{{ isRule ? '设置业务规则' : '抓取配置' }}</span>
     <span class="ni-section-actions">
       <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
-      <button v-if="generating" class="rc-btn" type="button" @click="onCancelGenerate">取消</button>
     </span>
   </div>
   <div class="rc-field">
@@ -804,11 +803,14 @@ function goToDataView() {
     <button
       class="rc-btn primary"
       type="button"
-      :disabled="generating"
+      :class="{ 'is-generating': generating }"
       data-testid="main-generate-script"
-      @click="onGenerateScript()"
+      :aria-label="generating ? '取消生成脚本' : generateLabel"
+      :title="generating ? '取消生成脚本' : generateLabel"
+      @click="generating ? onCancelGenerate() : onGenerateScript()"
     >
-      {{ generating ? '生成中...' : generateLabel }}
+      <span v-if="generating" class="rc-stop-icon" data-testid="stop-generation-icon" aria-hidden="true" />
+      <template v-else>{{ generateLabel }}</template>
     </button>
     <button
       class="rc-btn"
@@ -943,6 +945,8 @@ function goToDataView() {
 .rc-inline-select { flex: 1 1 auto; width: auto; min-width: 0; max-width: 150px; }
 .rc-inline-select-model { min-width: 0; max-width: 170px; }
 .rc-model-row > .rc-btn { flex: 0 0 auto; white-space: nowrap; min-width: 72px; padding: 0 9px; margin-left: auto; }
+.rc-model-row > .rc-btn.is-generating { min-width: 32px; width: 32px; padding: 0; }
+.rc-stop-icon { display: block; width: 10px; height: 10px; border-radius: 1px; background: currentColor; }
 .rc-main-stream, .rc-main-result { margin: 10px 0 12px; border: 1px solid #dbe3ee; border-radius: 8px; overflow: hidden; background: #fff; }
 .rc-main-stream { border-color: #1e293b; background: #0b1220; }
 .rc-main-stream-head, .rc-main-result-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; font-size: 12px; font-weight: 700; }
