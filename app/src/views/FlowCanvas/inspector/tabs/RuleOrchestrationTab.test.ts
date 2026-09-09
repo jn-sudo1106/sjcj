@@ -144,9 +144,9 @@ async function openWorkbench(wrapper: ReturnType<typeof mountOnRuleNode>['wrappe
   await flushPromises()
 }
 
-// 0801 方案 §6.4：有 ruleId 后展开的「查看业务编排」——描述/生成脚本/全屏查看/编辑系统提示词/保存脚本
+// 0801 方案 §6.4：有 ruleId 后展开的「设置业务规则」——描述/生成脚本/全屏查看/编辑系统提示词/保存脚本
 // （0804 起这就是本 Tab 的全部内容，不再有 showBinder 两态切换）
-describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
+describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
   function mountWithExistingRule() {
     mockAssets()
     const { flow, wrapper } = mountOnRuleNode()
@@ -178,16 +178,16 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
 
     expect(wrapper.text()).not.toContain('数据预览')
     expect(wrapper.find('.dqp').exists()).toBe(false)
-    expect(wrapper.text()).toContain('查看业务编排')
+    expect(wrapper.text()).toContain('设置业务规则')
   })
 
-  it('脚本编辑按钮显示在查看业务编排标题行右侧', async () => {
+  it('脚本编辑按钮显示在设置业务规则标题行右侧', async () => {
     const { wrapper } = mountWithExistingRule()
     await flushPromises()
 
     const titleRow = wrapper.find('.ni-section-title-row')
     expect(titleRow.exists()).toBe(true)
-    expect(titleRow.text()).toContain('查看业务编排')
+    expect(titleRow.text()).toContain('设置业务规则')
     expect(titleRow.find('button').text()).toBe('脚本编辑')
     expect(wrapper.find('.rc-actions-row button').exists()).toBe(false)
   })
@@ -225,6 +225,107 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect(wrapper.find('.rc-main-result-head').text()).toContain('/rules/generated/orch-173.py')
     expect(wrapper.find('[data-testid="main-stream-result"]').text()).toContain('def main(sku_id)')
     expect(wrapper.find('[data-testid="main-stream-result"]').text()).toContain('return {"sku_name": sku_id}')
+  })
+
+  it('主面板生成中点击取消：中断请求并保留已输出的脚本', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', { describe: '按 sku_id 生成 sku_name', script: '', scriptPath: '' })
+    await flushPromises()
+    let requestSignal: AbortSignal | undefined
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
+      requestSignal = options?.signal
+      options?.onContent?.('def main(sku_id):\n')
+      await new Promise<never>((_resolve, reject) => {
+        requestSignal?.addEventListener('abort', () => reject(new Error('请求已取消')), { once: true })
+      })
+      throw new Error('请求未被取消')
+    })
+
+    await wrapper.find('[data-testid="main-generate-script"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="main-stream-result"]').text()).toContain('def main(sku_id):')
+
+    const generateButton = wrapper.find('[data-testid="main-generate-script"]')
+    expect(generateButton.attributes('aria-label')).toBe('取消生成脚本')
+    await generateButton.trigger('click')
+    await flushPromises()
+
+    expect(requestSignal?.aborted).toBe(true)
+    expect(wrapper.find('[data-testid="main-stream-result"]').text()).toContain('def main(sku_id):')
+  })
+
+  it('主面板生成中按钮切换为停止图标并可点击取消', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', { describe: '按 sku_id 生成 sku_name', script: '', scriptPath: '' })
+    await flushPromises()
+    let requestSignal: AbortSignal | undefined
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
+      requestSignal = options?.signal
+      await new Promise<never>((_resolve, reject) => {
+        requestSignal?.addEventListener('abort', () => reject(new Error('请求已取消')), { once: true })
+      })
+      throw new Error('请求未被取消')
+    })
+
+    const generateButton = wrapper.find('[data-testid="main-generate-script"]')
+    await generateButton.trigger('click')
+    await flushPromises()
+
+    expect(generateButton.attributes('aria-label')).toBe('取消生成脚本')
+    expect(generateButton.find('[data-testid="stop-generation-icon"]').exists()).toBe(true)
+    expect(generateButton.find('[data-testid="stop-generation-icon"]').element.childElementCount).toBe(0)
+    await generateButton.trigger('click')
+    await flushPromises()
+
+    expect(requestSignal?.aborted).toBe(true)
+  })
+
+  it('生成前正在准备规则 ID 时按钮也立即切换为停止图标', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnRuleNode()
+    flow.patchRuleConfig('rule-1', {
+      mode: 'new',
+      ruleId: '-1',
+      describe: '按 sku_id 生成 sku_name',
+      inputTableId: '2102154',
+      inputFields: ['sku_id'],
+      outputFields: ['sku_name'],
+      modelProviderCode: 'DeepSeek',
+      modelCode: 'deepseek-chat',
+    })
+    flow.configs['rule-1'].configId = '184'
+    await flushPromises()
+
+    let releaseSaveMeta!: (value: { ruleId: string; message: string }) => void
+    vi.spyOn(ruleApi, 'orchestrationSaveMeta').mockImplementation(
+      () => new Promise((resolve) => { releaseSaveMeta = resolve }),
+    )
+
+    const generateButton = wrapper.find('[data-testid="main-generate-script"]')
+    await generateButton.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(generateButton.attributes('aria-label')).toBe('取消生成脚本')
+    expect(generateButton.find('[data-testid="stop-generation-icon"]').exists()).toBe(true)
+
+    releaseSaveMeta({ ruleId: '184', message: 'ok' })
+    await flushPromises()
+  })
+
+  it('主面板生成结果原样保留流式脚本的首尾空白、空格和缩进', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    const script = ' \ndef process():\n    return {"ok": True}\n'
+    flow.patchRuleConfig('rule-1', { describe: '按 sku_id 生成 sku_name', script: '', scriptPath: '' })
+    await flushPromises()
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
+      options?.onContent?.(script)
+      return { script, scriptPath: '/rules/generated/orch-173.py' }
+    })
+
+    await wrapper.find('[data-testid="main-generate-script"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.rc-main-result-code').element.textContent).toBe(script)
   })
 
   it('主面板思考过程流式追加时会自动滚动到底部', async () => {
@@ -514,12 +615,42 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect(listSpy).not.toHaveBeenCalled()
   })
 
-  it('数据监控节点显示数据监控描述', async () => {
+  it('数据监控节点显示描述输入框', async () => {
     mockAssets()
     const { wrapper } = mountOnMonitorNode()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('数据监控描述')
+    expect(wrapper.find('textarea.rc-input.rc-textarea').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="monitor-methods-field"]').exists()).toBe(true)
+  })
+
+  it('数据监控节点在设置业务规则上方展示监控方法并写入节点配置', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnMonitorNode()
+    await flushPromises()
+
+    const monitorField = wrapper.find('[data-testid="monitor-methods-field"]')
+    expect(monitorField.exists()).toBe(true)
+    expect(monitorField.element.compareDocumentPosition(wrapper.find('.ni-section-title').element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    const select = monitorField.findComponent({ name: 'ElSelect' })
+    await select.vm.$emit('update:modelValue', ['数据延迟监控', '每日数据量监控'])
+    await flushPromises()
+
+    expect(flow.configs['monitor-1'].monitorMethods).toEqual(['数据延迟监控', '每日数据量监控'])
+  })
+
+  it('数据监控节点进入编排配置时按 checkRule 回填监控方法', async () => {
+    mockAssets()
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({
+      configId: '184', checkRule: '当日数据是否正常入库, 数据延迟监控,不存在的监控',
+    })
+    const { flow } = mountOnMonitorNode()
+    flow.configs['monitor-1'].configId = '184'
+    await flushPromises()
+
+    expect(configApi.configDetailRaw).toHaveBeenCalledWith('184')
+    expect(flow.configs['monitor-1'].monitorMethods).toEqual(['当日数据是否正常入库', '数据延迟监控'])
   })
 
   it('数据监控节点进入编排配置时自动组装监控描述', async () => {
@@ -777,6 +908,17 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect(wrapper.text()).toContain('模型')
   })
 
+  it('主面板模型下拉挂载到 body，避免被模型行的 overflow 裁剪', async () => {
+    const { wrapper } = mountWithExistingRule()
+    await flushPromises()
+
+    const providerSelect = wrapper.find('[data-testid="main-model-provider"]').findComponent({ name: 'ElSelect' })
+    const modelSelect = wrapper.find('[data-testid="main-model"]').findComponent({ name: 'ElSelect' })
+
+    expect(providerSelect.props('teleported')).not.toBe(false)
+    expect(modelSelect.props('teleported')).not.toBe(false)
+  })
+
   it('切换模型供应商后刷新模型候选，保存时回写新的供应商/模型', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     await flushPromises()
@@ -1007,7 +1149,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect(ruleApi.orchestrationLoadScript).not.toHaveBeenCalled()
     expect(flow.configs['rule-1'].ruleCfg?.describe).toBe('服务端描述')
     expect(flow.configs['rule-1'].ruleCfg?.script).toContain('def main')
-    expect(wrapper.text()).toContain('查看业务编排')
+    expect(wrapper.text()).toContain('设置业务规则')
   })
 
   it('进入编排配置时会从 configDetailRaw 回填描述、路径和脚本正文', async () => {
@@ -1080,7 +1222,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect(wrapper.find('.rc-main-result-code').text()).toContain('def main():')
   })
 
-  it('点击生成结果文件名时会调用文件下载接口并回填脚本正文', async () => {
+  it('点击生成结果文件名时会把脚本下载到本地，文件名取路径最后一段', async () => {
     mockAssets()
     vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({
       snatchConf: { description: '我想对通用新闻表进行如下监控：\n1.当日数据是否正常入库\n2.数据延迟监控' },
@@ -1090,6 +1232,30 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
       },
     } as never)
     vi.spyOn(ruleApi, 'fileDownloadScript').mockResolvedValue('def main():\n    return {"hello": "world"}\n')
+
+    // 拦截 createObjectURL：把 Blob 内容读出来后用同步桩 URL 代替，避免 jsdom 真的去 fetch blob:
+    const captured: { name: string | null; text: string }[] = []
+    const stubUrl = 'blob:stub'
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(((blob: Blob) => {
+      void blob.text().then((text) => {
+        captured.push({ name: stubDownloadName, text })
+      })
+      return stubUrl
+    }) as typeof URL.createObjectURL)
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    let stubDownloadName = ''
+    const origCreate = document.createElement.bind(document)
+    const createSpy = vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = origCreate(tag) as HTMLElement
+      if (tag === 'a') {
+        Object.defineProperty(el, 'download', {
+          configurable: true,
+          get() { return stubDownloadName },
+          set(v: string) { stubDownloadName = v },
+        })
+      }
+      return el
+    })
 
     const { flow, wrapper } = mountOnRuleNode()
     flow.patchRuleConfig('rule-1', {
@@ -1110,10 +1276,19 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
 
     await wrapper.find('.rc-main-result-link').trigger('click')
     await flushPromises()
+    // 等 blob.text() 这个微任务 resolve
+    await new Promise((r) => setTimeout(r, 0))
+    await flushPromises()
 
     expect(ruleApi.fileDownloadScript).toHaveBeenCalledWith('/code01/202609/1788761803128.py')
-    expect((wrapper.find('textarea.wb-code').element as HTMLTextAreaElement).value).toContain('def main():')
-    expect((wrapper.find('textarea.wb-code').element as HTMLTextAreaElement).value).toContain('"hello": "world"')
+    expect(captured.length).toBe(1)
+    expect(captured[0].name).toBe('1788761803128.py')
+    expect(captured[0].text).toContain('def main():')
+    expect(captured[0].text).toContain('"hello": "world"')
+    // 不要再回填到工作台脚本编辑器
+    expect((wrapper.find('textarea.wb-code').element as HTMLTextAreaElement).value).not.toContain('"hello": "world"')
+
+    createSpy.mockRestore()
   })
 })
 
@@ -1139,6 +1314,39 @@ describe('RuleOrchestrationTab · 测试脚本切换数据视图', () => {
     await flushPromises()
     const disabledBtn = wrapper.findAll('button').find((b) => b.text() === '测试脚本')!
     expect(disabledBtn.attributes('disabled')).toBeDefined()
+  })
+
+  it('已有脚本路径且仅绑定输入表 ID 时测试脚本按钮可用', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnRuleNode()
+    flow.patchRuleConfig('rule-1', {
+      mode: 'ref',
+      ruleId: 'orch-173',
+      inputTableId: '2102154',
+      script: '',
+      scriptPath: '/code01/202609/1788326374508.py',
+    })
+    await flushPromises()
+
+    const testBtn = wrapper.findAll('button').find((b) => b.text() === '测试脚本')!
+    expect(testBtn.attributes('disabled')).toBeUndefined()
+  })
+
+  it('脚本工作区中的测试脚本按钮与主面板使用相同启用条件', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnRuleNode()
+    flow.patchRuleConfig('rule-1', {
+      mode: 'ref',
+      ruleId: 'orch-173',
+      inputTableId: '2102154',
+      script: '',
+      scriptPath: '/code01/202609/1788326374508.py',
+    })
+    await openWorkbench(wrapper)
+
+    const workbench = wrapper.findComponent(RuleWorkbenchDialog)
+    const workbenchTest = workbench.findAll('.wb-pane-actions button').find((b) => b.text() === '测试脚本')!
+    expect(workbenchTest.attributes('disabled')).toBeUndefined()
   })
 
   it('点击测试脚本切到数据视图 tab，保留当前源上下文并带上当前节点定位', async () => {

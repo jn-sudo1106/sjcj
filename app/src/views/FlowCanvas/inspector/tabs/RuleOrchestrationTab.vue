@@ -13,7 +13,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
-import { isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { configApi, entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { isVruleNumericRuleId } from '@/api/legacyAdapters'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
@@ -58,6 +58,38 @@ const promptCategoryGroups = computed(() => promptCategoryGroupsForNode(cfg.valu
 const promptCategory = computed(() => resolvePromptCategoryForNode(cfg.value, orchCfg.value.promptCategory))
 const promptListCategory = computed(() => promptListCategoryForNode(cfg.value))
 const describeTouched = ref(false)
+
+// 数据监控节点：监控方法与规则描述同属编排语义，放在「设置业务规则」上方。
+const monitorMethods = computed<string[]>(() => cfg.value?.monitorMethods ?? [])
+function setMonitorMethods(values: string[]) {
+  flow.setMonitorMethods(id.value, values ?? [])
+}
+
+// 监控方法随 config 的 checkRule 落库（逗号分隔，生成脚本时仍按原口径传给后端）。
+// 本地已有勾选时不覆盖；否则按当前配置详情回填已保存的候选项。
+const checkRuleRestoreToken = ref('')
+watch(
+  () => [id.value, isMonitor.value, cfg.value?.configId ?? '', cfg.value?.monitorMethods?.length ?? 0] as const,
+  ([nid, monitor, configId, methodCount]) => {
+    if (!monitor || !configId || methodCount) return
+    const token = `${nid}:${configId}`
+    if (checkRuleRestoreToken.value === token) return
+    checkRuleRestoreToken.value = token
+    void (async () => {
+      try {
+        const record = await configApi.configDetailRaw(String(configId))
+        const saved = String(record?.checkRule ?? '').trim()
+        if (!saved) return
+        const known = new Set(MONITOR_METHODS)
+        const restored = saved.split(',').map((m) => m.trim()).filter((m) => m && known.has(m))
+        if (restored.length) flow.setMonitorMethods(String(nid), restored)
+      } catch {
+        // 回填失败不阻断编排配置，用户仍可手动选择。
+      }
+    })()
+  },
+  { immediate: true },
+)
 
 function formatTableLabel(table?: Pick<EntryType, 'name' | 'tableName'> | null): string {
   const name = table?.name?.trim() || ''
@@ -423,14 +455,32 @@ async function scrollMainResultToBottom() {
   if (!el) return
   el.scrollTop = el.scrollHeight
 }
-async function loadResultScriptFromFile() {
+// 点击「生成结果」路径按钮时，把脚本下载到本地，文件名取路径最后一段（如 1788931403322.py）。
+// 之前叫 loadResultScriptFromFile，做的是回填编辑器；本次改为本地下载，不再改 orchCfg.script。
+function basenameOfPath(p: string): string {
+  const trimmed = p.replace(/[?#].*$/, '').replace(/\/+$/, '')
+  const slash = trimmed.lastIndexOf('/')
+  const base = slash >= 0 ? trimmed.slice(slash + 1) : trimmed
+  return base || 'script.txt'
+}
+async function downloadResultScriptToLocal() {
   const fileId = orchCfg.value.scriptPath?.trim() || mainResultLabel.value
   if (!fileId || loadingResultScript.value) return
   loadingResultScript.value = true
   try {
     const script = await ruleApi.fileDownloadScript(fileId)
-    if (script.trim()) patch({ script })
-    ElMessage.success('脚本已回填')
+    const fileName = basenameOfPath(fileId)
+    const blob = new Blob([script], { type: 'text/plain;charset=utf-8' })
+    const objectUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = objectUrl
+    a.download = fileName
+    a.style.display = 'none'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(objectUrl)
+    ElMessage.success(`已下载到本地：${fileName}`)
   } catch (e) {
     ElMessage.error((e as Error)?.message ?? String(e))
   } finally {
@@ -529,8 +579,6 @@ async function onGenerateScript(
     ElMessage.warning('请先在「表配置」完成入参字段绑定')
     return
   }
-  const ruleId = await ensureNumericRuleId()
-  if (!ruleId) return
   generateAbort.value?.abort()
   const controller = new AbortController()
   generateAbort.value = controller
@@ -540,6 +588,9 @@ async function onGenerateScript(
   generationState.value = 'idle'
   patch({ script: '', scriptPath: '' })
   try {
+    const ruleId = await ensureNumericRuleId()
+    if (!ruleId) return
+    if (controller.signal.aborted) throw new Error('已取消生成')
     const genCfg = {
       ...orchCfg.value,
       ...draft,
@@ -572,7 +623,7 @@ async function onGenerateScript(
           if (!delta) return
           generationState.value = 'content'
           streamedScript += delta
-          patch({ script: streamedScript.replace(/^```[a-zA-Z]*[ \t]*\n/, '') })
+          patch({ script: streamedScript })
         },
         onDone: (payload) => {
           generationState.value = 'done'
@@ -725,7 +776,16 @@ async function onApplySwitch() {
 // ---- 测试脚本：切换到流程视图右侧面板的「数据视图」tab（view=data），保留当前源上下文，
 // 并把当前编辑节点作为 nodeId 带上，让数据视图自动定位到该节点（而不是默认落首节点）——
 // ResultView 初始化时优先取 URL 的 nodeId query（queryNodeId），与「查看条件」深链同一套机制 ----
-const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value.inputTable)
+const canTest = computed(() => {
+  const hasScript = !!(orchCfg.value.script?.trim() || orchCfg.value.scriptPath?.trim())
+  const hasInputTable = !!(
+    orchCfg.value.inputTable?.trim()
+    || orchCfg.value.inputTableId?.trim()
+    || cfg.value?.inputTable?.trim()
+    || cfg.value?.collectCfg?.inputTable?.trim()
+  )
+  return hasScript && hasInputTable
+})
 function goToDataView() {
   const query: Record<string, string> = { ...route.query } as Record<string, string>
   query.view = 'data'
@@ -736,11 +796,25 @@ function goToDataView() {
 </script>
 
 <template>
+  <div v-if="isMonitor" class="rc-field rc-monitor-methods-field" data-testid="monitor-methods-field">
+    <label>监控方法</label>
+    <el-select
+      class="rc-monitor-methods-select"
+      :model-value="monitorMethods"
+      multiple
+      collapse-tags
+      collapse-tags-tooltip
+      clearable
+      placeholder="选择监控方法"
+      @update:model-value="setMonitorMethods"
+    >
+      <el-option v-for="m in MONITOR_METHODS" :key="m" :label="m" :value="m" />
+    </el-select>
+  </div>
   <div class="ni-section-title ni-section-title-row">
-    <span>{{ isRule ? '查看业务编排' : '抓取配置' }}</span>
+    <span>{{ isRule ? '设置业务规则' : '抓取配置' }}</span>
     <span class="ni-section-actions">
       <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
-      <button v-if="generating" class="rc-btn" type="button" @click="onCancelGenerate">取消</button>
     </span>
   </div>
   <div class="rc-field">
@@ -760,7 +834,6 @@ function goToDataView() {
           class="rc-inline-select"
           size="small"
           :loading="providerLoading"
-          :teleported="false"
           placeholder="模型供应商"
           data-testid="main-model-provider"
           @change="onModelProviderChange"
@@ -776,7 +849,6 @@ function goToDataView() {
           size="small"
           :loading="modelLoading"
           :disabled="!orchCfg.modelProviderCode || !providerOptions.length"
-          :teleported="false"
           placeholder="模型"
           data-testid="main-model"
           @change="onModelChange"
@@ -788,11 +860,23 @@ function goToDataView() {
     <button
       class="rc-btn primary"
       type="button"
-      :disabled="generating"
+      :class="{ 'is-generating': generating }"
       data-testid="main-generate-script"
-      @click="onGenerateScript()"
+      :aria-label="generating ? '取消生成脚本' : generateLabel"
+      :title="generating ? '取消生成脚本' : generateLabel"
+      @click="generating ? onCancelGenerate() : onGenerateScript()"
     >
-      {{ generating ? '生成中...' : generateLabel }}
+      <span v-if="generating" class="rc-stop-icon" data-testid="stop-generation-icon" aria-hidden="true" />
+      <template v-else>{{ generateLabel }}</template>
+    </button>
+    <button
+      class="rc-btn"
+      type="button"
+      :disabled="!canTest"
+      data-testid="main-test-script"
+      @click="goToDataView"
+    >
+      测试脚本
     </button>
   </div>
   <div v-if="isRule && (generating || thinkingText.trim() || generationState === 'done' || generationState === 'error')" class="rc-main-stream" data-testid="main-stream-thinking">
@@ -810,12 +894,12 @@ function goToDataView() {
         class="rc-main-result-link"
         type="button"
         :disabled="loadingResultScript"
-        @click="loadResultScriptFromFile"
+        @click="downloadResultScriptToLocal"
       >
         {{ mainResultLabel }}
       </button>
     </div>
-    <pre ref="mainResultRef" class="rc-main-result-code">{{ orchCfg.script?.trim() || '等待模型输出结果…' }}</pre>
+    <pre ref="mainResultRef" class="rc-main-result-code">{{ orchCfg.script || '等待模型输出结果…' }}</pre>
   </div>
 
   <template v-if="!isRule">
@@ -911,14 +995,15 @@ function goToDataView() {
 .rc-switch-load-error button:hover { text-decoration: underline; }
 .rc-main-result-link { margin: 0; padding: 0; border: 0; background: transparent; color: #047857; font-size: 11px; font-weight: 700; cursor: pointer; text-align: right; }
 .rc-main-result-link:disabled { opacity: 0.6; cursor: not-allowed; }
-.rc-model-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: -2px 0 12px; min-width: 0; }
-.rc-model-row.nowrap { flex-wrap: nowrap; }
-.rc-model-fields { display: inline-flex; align-items: center; flex: 1 1 auto; flex-wrap: nowrap; gap: 10px; min-width: 0; overflow: hidden; }
-.rc-inline-field { display: inline-flex; align-items: center; flex: 1 1 0; gap: 6px; min-width: 0; color: var(--rc-muted); font-size: 11px; font-weight: 600; }
+.rc-model-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: -2px 0 12px; min-width: 0; flex-wrap: wrap; }
+.rc-model-fields { display: inline-flex; align-items: center; flex: 1 1 auto; flex-wrap: wrap; gap: 10px; min-width: 0; overflow: hidden; }
+.rc-inline-field { display: inline-flex; align-items: center; flex: 1 1 130px; gap: 6px; min-width: 0; color: var(--rc-muted); font-size: 11px; font-weight: 600; }
 .rc-inline-field > span { flex: 0 0 auto; white-space: nowrap; }
-.rc-inline-select { flex: 1 1 auto; width: auto; min-width: 96px; max-width: 150px; }
-.rc-inline-select-model { min-width: 126px; max-width: 190px; }
-.rc-model-row > .rc-btn { flex: 0 0 auto; white-space: nowrap; min-width: 82px; margin-left: auto; }
+.rc-inline-select { flex: 1 1 auto; width: auto; min-width: 0; max-width: 150px; }
+.rc-inline-select-model { min-width: 0; max-width: 170px; }
+.rc-model-row > .rc-btn { flex: 0 0 auto; white-space: nowrap; min-width: 72px; padding: 0 9px; margin-left: auto; }
+.rc-model-row > .rc-btn.is-generating { min-width: 32px; width: 32px; padding: 0; }
+.rc-stop-icon { display: block; width: 10px; height: 10px; border-radius: 1px; background: currentColor; }
 .rc-main-stream, .rc-main-result { margin: 10px 0 12px; border: 1px solid #dbe3ee; border-radius: 8px; overflow: hidden; background: #fff; }
 .rc-main-stream { border-color: #1e293b; background: #0b1220; }
 .rc-main-stream-head, .rc-main-result-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; font-size: 12px; font-weight: 700; }

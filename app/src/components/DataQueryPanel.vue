@@ -146,7 +146,7 @@ function currentFilter(): Omit<DataQueryFilter, 'page' | 'size'> {
   }
 }
 
-async function loadRows() {
+async function loadRows(preserveSelection = false) {
   if (!props.tableId) return
   loading.value = true
   try {
@@ -157,7 +157,10 @@ async function loadRows() {
     rememberSqlCondition(query.tableId, query.sql)
     rows.value = result.list
     total.value = result.total
-    emit('update:selectedKeys', [])
+    const nextSelection = preserveSelection
+      ? (props.selectedKeys ?? []).filter((key) => result.list.some((row) => row.dataId === key))
+      : []
+    emit('update:selectedKeys', nextSelection)
     emit('loaded', { rows: result.list, total: result.total })
   } catch (error) {
     ElMessage.error(`查询失败:${String(error instanceof Error ? error.message : error).slice(0, 100)}`)
@@ -200,8 +203,8 @@ function clearFilters() {
   search()
 }
 /** 不改筛选条件/页码，原样重查一次（如外部数据变了但筛选条件没变） */
-function refresh() {
-  void loadRows()
+function refresh(options?: { preserveSelection?: boolean }) {
+  void loadRows(options?.preserveSelection !== false)
 }
 
 function onPageChange(p: number) {

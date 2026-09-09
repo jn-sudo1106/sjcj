@@ -322,16 +322,17 @@ function stateMeta(s?: string) {
     </div>
     <div v-if="!cols.length && !loading" class="dg-empty">该节点暂无输出表 schema</div>
     <div v-else ref="scrollRef" class="dg-scroll" v-loading="loading">
-      <table class="dg-table">
+      <table class="dg-table dg-sticky-table">
         <thead>
           <tr>
-            <th v-if="selectable" style="width:36px" @click.stop>
+            <th v-if="selectable" class="dg-sticky-head" style="width:36px" @click.stop>
               <input type="checkbox" :checked="allChecked" :indeterminate="someChecked" @change="toggleAll" />
             </th>
-            <th v-if="showSourceCol" style="width:140px">{{ sourceColLabel || '所属源' }}</th>
+            <th v-if="showSourceCol" class="dg-sticky-head" style="width:140px">{{ sourceColLabel || '所属源' }}</th>
             <th
               v-for="f in visibleCols"
               :key="f.prop"
+              class="dg-sticky-head"
               :style="{ minWidth: compact ? '96px' : '120px' }"
               :class="{ 'dg-sortable': canSort(f), 'dg-sorted': sortField === sortKeyOf(f) }"
               :title="canSort(f) ? `${f.desc || f.prop}（点击排序）` : (f.desc || f.prop)"
@@ -339,9 +340,9 @@ function stateMeta(s?: string) {
             >{{ colLabel(f) }}<span v-if="canSort(f)" class="dg-sort-ind">{{ sortIndicator(f) }}</span></th>
             <!-- 「下级」（0903 H10）：这行在后继节点里产出了几条。末节点 / 后继无输出表时
                  整列不渲染——显示一整列 `—` 只会让人以为"数据没跑出来"。 -->
-            <th v-if="showChildCol" style="width:72px" title="这一行在下一节点产出了多少条数据">下级</th>
-            <th v-if="!compact" style="width:64px">状态</th>
-            <th v-if="showActions" style="width:80px">操作</th>
+            <th v-if="showChildCol" class="dg-sticky-head" style="width:72px" title="这一行在下一节点产出了多少条数据">下级</th>
+            <th v-if="!compact" class="dg-sticky-head" style="width:64px">状态</th>
+            <th v-if="showActions" class="dg-sticky-head" style="width:80px">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -460,7 +461,7 @@ function stateMeta(s?: string) {
 .dg-col-btn.on { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .dg-scroll { flex: 1; overflow: auto; }
 .dg-sentinel { height: 1px; }
-.dg-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.dg-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; }
 .dg-cell { position: relative; }
 .dg-copy { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); border: 0; background: rgba(255,255,255,.9); color: var(--rc-faint); font-size: 12px; line-height: 1; padding: 2px 4px; border-radius: 4px; cursor: pointer; opacity: 0; transition: opacity .12s; }
 .dg-cell:hover .dg-copy { opacity: 1; }

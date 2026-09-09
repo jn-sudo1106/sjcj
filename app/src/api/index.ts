@@ -1161,96 +1161,98 @@ async function fetchDataProcessGenerate(
         body: JSON.stringify(payload),
         signal: controller.signal,
       })
+      if (isSessionExpiredRedirect(res)) {
+        triggerSessionExpired()
+        throw new Error('登录失效,请重新登录')
+      }
+      if (!res.ok) {
+        let detail = ''
+        try { detail = (await res.text()).trim() } catch { /* ignore */ }
+        throw new Error(detail ? `请求失败 ${res.status}: ${detail.slice(0, 200)}` : `请求失败 ${res.status}`)
+      }
+      let text = ''
+      // vanv-data-engine 的 ServerSentEvent 序列化结果是 `data:<正文>`，没有 SSE
+      // 规范中的可选分隔空格；data 后的首个空格可能就是 Python token/缩进的一部分。
+      const parser = createSseEventParser({ preserveDataLeadingSpace: true })
+      let structured = false
+      let content = ''
+      let scriptPath = ''
+      let doneMessage = ''
+      let doneScript = ''
+      const emitEvent = (event: { event: string; data: string }) => {
+        structured = true
+        options?.onEvent?.(event)
+        if (event.event === 'thinking') {
+          options?.onThinking?.(event.data)
+          return
+        }
+        if (event.event === 'content' || event.event === 'message') {
+          if (!event.data) return
+          content += event.data
+          options?.onContent?.(event.data)
+          options?.onChunk?.(event.data)
+          return
+        }
+        if (event.event === 'done') {
+          const trimmed = event.data.trim()
+          if (!trimmed) return
+          try {
+            const parsed = JSON.parse(trimmed) as Record<string, unknown>
+            if (parsed.message != null) doneMessage = String(parsed.message)
+            if (parsed.scriptPath != null) scriptPath = String(parsed.scriptPath)
+            if (parsed.script != null) doneScript = String(parsed.script)
+          } catch {
+            doneMessage = trimmed
+          }
+          return
+        }
+        if (event.data) {
+          options?.onContent?.(event.data)
+          options?.onChunk?.(event.data)
+        }
+      }
+      if (res.body && typeof res.body.getReader === 'function') {
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          const delta = decoder.decode(value, { stream: true })
+          if (delta) {
+            text += delta
+            const events = parser.push(delta)
+            for (const event of events) emitEvent(event)
+          }
+        }
+        const tail = decoder.decode()
+        if (tail) {
+          text += tail
+          const events = parser.push(tail)
+          for (const event of events) emitEvent(event)
+        }
+      } else {
+        text = await res.text()
+        const events = parser.push(text)
+        for (const event of events) emitEvent(event)
+      }
+      const tailEvents = parser.finish()
+      for (const event of tailEvents) emitEvent(event)
+      if (!structured) {
+        if (text) {
+          options?.onContent?.(text)
+          options?.onChunk?.(text)
+        }
+        return parseDataProcessStreamText(text)
+      }
+      const finalScript = doneScript || content
+      if (!finalScript.trim()) throw new Error('生成脚本未返回内容')
+      const result = { script: finalScript, scriptPath }
+      options?.onDone?.({ ...result, message: doneMessage })
+      return result
     } finally {
       window.clearTimeout(timeout)
       options?.signal?.removeEventListener('abort', onExternalAbort)
     }
-    if (isSessionExpiredRedirect(res)) {
-      triggerSessionExpired()
-      throw new Error('登录失效,请重新登录')
-    }
-    if (!res.ok) {
-      let detail = ''
-      try { detail = (await res.text()).trim() } catch { /* ignore */ }
-      throw new Error(detail ? `请求失败 ${res.status}: ${detail.slice(0, 200)}` : `请求失败 ${res.status}`)
-    }
-    let text = ''
-    const parser = createSseEventParser()
-    let structured = false
-    let content = ''
-    let scriptPath = ''
-    let doneMessage = ''
-    let doneScript = ''
-    const emitEvent = (event: { event: string; data: string }) => {
-      structured = true
-      options?.onEvent?.(event)
-      if (event.event === 'thinking') {
-        options?.onThinking?.(event.data)
-        return
-      }
-      if (event.event === 'content' || event.event === 'message') {
-        if (!event.data) return
-        content += event.data
-        options?.onContent?.(event.data)
-        options?.onChunk?.(event.data)
-        return
-      }
-      if (event.event === 'done') {
-        const trimmed = event.data.trim()
-        if (!trimmed) return
-        try {
-          const parsed = JSON.parse(trimmed) as Record<string, unknown>
-          if (parsed.message != null) doneMessage = String(parsed.message)
-          if (parsed.scriptPath != null) scriptPath = String(parsed.scriptPath)
-          if (parsed.script != null) doneScript = String(parsed.script)
-        } catch {
-          doneMessage = trimmed
-        }
-        return
-      }
-      if (event.data) {
-        options?.onContent?.(event.data)
-        options?.onChunk?.(event.data)
-      }
-    }
-    if (res.body && typeof res.body.getReader === 'function') {
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        const delta = decoder.decode(value, { stream: true })
-        if (delta) {
-          text += delta
-          const events = parser.push(delta)
-          for (const event of events) emitEvent(event)
-        }
-      }
-      const tail = decoder.decode()
-      if (tail) {
-        text += tail
-        const events = parser.push(tail)
-        for (const event of events) emitEvent(event)
-      }
-    } else {
-      text = await res.text()
-      const events = parser.push(text)
-      for (const event of events) emitEvent(event)
-    }
-    const tailEvents = parser.finish()
-    for (const event of tailEvents) emitEvent(event)
-    if (!structured) {
-      if (text) {
-        options?.onContent?.(text)
-        options?.onChunk?.(text)
-      }
-      return parseDataProcessStreamText(text)
-    }
-    const finalScript = doneScript || content
-    if (!finalScript.trim()) throw new Error('生成脚本未返回内容')
-    const result = { script: finalScript, scriptPath }
-    options?.onDone?.({ ...result, message: doneMessage })
-    return result
   } catch (e) {
     throw e instanceof ApiError ? e : new ApiError(endpoint, e)
   }

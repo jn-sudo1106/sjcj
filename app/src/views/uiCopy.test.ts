@@ -404,7 +404,7 @@ describe('最新方案 UI 入口收口', () => {
     // 生成脚本时自动 orchestrationSaveMeta，表配置只负责绑表/字段。
     expect(tableTab).toContain('RuleTableFieldBinder')
     expect(tableTab).not.toContain('保存并配置编排')
-    expect(ruleOrchestrationTab).toContain('查看业务编排')
+    expect(ruleOrchestrationTab).toContain('设置业务规则')
     expect(ruleOrchestrationTab).not.toContain('保存业务规则')
     expect(ruleOrchestrationTab).not.toContain('修改表字段')
     expect(ruleTableFieldBinder).toContain('输入表')

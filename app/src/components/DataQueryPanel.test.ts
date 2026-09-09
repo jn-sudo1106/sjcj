@@ -162,6 +162,24 @@ describe('DataQueryPanel · 独立挂载', () => {
     expect(wrapper2.find('th .el-checkbox, th input[type="checkbox"]').exists()).toBe(false)
   })
 
+  it('刷新后保留当前结果中仍存在的勾选项，普通查询仍清空勾选', async () => {
+    const spy = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [ROW] })
+    const wrapper = mountPanel({ selectable: true, selectedKeys: ['1'] })
+
+    wrapper.vm.refresh()
+    await flushPromises()
+
+    const emitted = wrapper.emitted('update:selectedKeys')!
+    expect(emitted[emitted.length - 1][0]).toEqual(['1'])
+
+    wrapper.vm.search()
+    await flushPromises()
+
+    const afterSearch = wrapper.emitted('update:selectedKeys')!
+    expect(afterSearch[afterSearch.length - 1][0]).toEqual([])
+    expect(spy).toHaveBeenCalledTimes(2)
+  })
+
   it('点击行：emit row-click 带上该行数据', async () => {
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [ROW] })
     const wrapper = mountPanel()

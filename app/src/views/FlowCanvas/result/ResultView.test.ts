@@ -811,6 +811,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
 
     expect(sendSnatch).not.toHaveBeenCalled()
     expect(nextStep).toHaveBeenCalledWith(current.sourceId, 'T1', ['d1', 'd2'])
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectedIds')).toEqual(['d1', 'd2'])
   })
 
   it('首节点显式有输入表且后面还有后继：按钮是「发后续任务」，不是「发起抓取」（0824：前一个节点把行发给后一个）', async () => {

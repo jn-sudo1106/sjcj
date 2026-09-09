@@ -8,7 +8,11 @@ export interface SseEventParser {
   finish: () => SseEvent[]
 }
 
-export function createSseEventParser(): SseEventParser {
+export interface SseEventParserOptions {
+  preserveDataLeadingSpace?: boolean
+}
+
+export function createSseEventParser(options: SseEventParserOptions = {}): SseEventParser {
   let buffer = ''
   let currentEvent = 'message'
   let dataLines: string[] = []
@@ -29,7 +33,9 @@ export function createSseEventParser(): SseEventParser {
     const colonIndex = line.indexOf(':')
     const field = colonIndex === -1 ? line : line.slice(0, colonIndex)
     let value = colonIndex === -1 ? '' : line.slice(colonIndex + 1)
-    if (value.startsWith(' ')) value = value.slice(1)
+    if (!options.preserveDataLeadingSpace || field !== 'data') {
+      if (value.startsWith(' ')) value = value.slice(1)
+    }
     switch (field) {
       case 'event':
         currentEvent = value || 'message'
