@@ -280,6 +280,38 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(requestSignal?.aborted).toBe(true)
   })
 
+  it('生成前正在准备规则 ID 时按钮也立即切换为停止图标', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnRuleNode()
+    flow.patchRuleConfig('rule-1', {
+      mode: 'new',
+      ruleId: '-1',
+      describe: '按 sku_id 生成 sku_name',
+      inputTableId: '2102154',
+      inputFields: ['sku_id'],
+      outputFields: ['sku_name'],
+      modelProviderCode: 'DeepSeek',
+      modelCode: 'deepseek-chat',
+    })
+    flow.configs['rule-1'].configId = '184'
+    await flushPromises()
+
+    let releaseSaveMeta!: (value: { ruleId: string; message: string }) => void
+    vi.spyOn(ruleApi, 'orchestrationSaveMeta').mockImplementation(
+      () => new Promise((resolve) => { releaseSaveMeta = resolve }),
+    )
+
+    const generateButton = wrapper.find('[data-testid="main-generate-script"]')
+    await generateButton.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(generateButton.attributes('aria-label')).toBe('取消生成脚本')
+    expect(generateButton.find('[data-testid="stop-generation-icon"]').exists()).toBe(true)
+
+    releaseSaveMeta({ ruleId: '184', message: 'ok' })
+    await flushPromises()
+  })
+
   it('主面板生成结果原样保留流式脚本的首尾空白、空格和缩进', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     const script = ' \ndef process():\n    return {"ok": True}\n'
@@ -1282,6 +1314,39 @@ describe('RuleOrchestrationTab · 测试脚本切换数据视图', () => {
     await flushPromises()
     const disabledBtn = wrapper.findAll('button').find((b) => b.text() === '测试脚本')!
     expect(disabledBtn.attributes('disabled')).toBeDefined()
+  })
+
+  it('已有脚本路径且仅绑定输入表 ID 时测试脚本按钮可用', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnRuleNode()
+    flow.patchRuleConfig('rule-1', {
+      mode: 'ref',
+      ruleId: 'orch-173',
+      inputTableId: '2102154',
+      script: '',
+      scriptPath: '/code01/202609/1788326374508.py',
+    })
+    await flushPromises()
+
+    const testBtn = wrapper.findAll('button').find((b) => b.text() === '测试脚本')!
+    expect(testBtn.attributes('disabled')).toBeUndefined()
+  })
+
+  it('脚本工作区中的测试脚本按钮与主面板使用相同启用条件', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnRuleNode()
+    flow.patchRuleConfig('rule-1', {
+      mode: 'ref',
+      ruleId: 'orch-173',
+      inputTableId: '2102154',
+      script: '',
+      scriptPath: '/code01/202609/1788326374508.py',
+    })
+    await openWorkbench(wrapper)
+
+    const workbench = wrapper.findComponent(RuleWorkbenchDialog)
+    const workbenchTest = workbench.findAll('.wb-pane-actions button').find((b) => b.text() === '测试脚本')!
+    expect(workbenchTest.attributes('disabled')).toBeUndefined()
   })
 
   it('点击测试脚本切到数据视图 tab，保留当前源上下文并带上当前节点定位', async () => {

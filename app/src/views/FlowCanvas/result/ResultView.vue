@@ -310,7 +310,6 @@ async function onSendNextStep() {
     : ''
   await confirmDanger('发后续任务', `将对选中的 ${count} 条数据发起"${nodeName}"的后续处理任务。${fanout}\n是否继续？`, async () => {
     const res = await runNextStep(ids, tableId, nodeName)
-    selectedRowIds.value = []
     return res
   }, showNextStepReceipt)
 }

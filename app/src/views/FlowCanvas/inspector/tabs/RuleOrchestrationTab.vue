@@ -579,8 +579,6 @@ async function onGenerateScript(
     ElMessage.warning('请先在「表配置」完成入参字段绑定')
     return
   }
-  const ruleId = await ensureNumericRuleId()
-  if (!ruleId) return
   generateAbort.value?.abort()
   const controller = new AbortController()
   generateAbort.value = controller
@@ -590,6 +588,9 @@ async function onGenerateScript(
   generationState.value = 'idle'
   patch({ script: '', scriptPath: '' })
   try {
+    const ruleId = await ensureNumericRuleId()
+    if (!ruleId) return
+    if (controller.signal.aborted) throw new Error('已取消生成')
     const genCfg = {
       ...orchCfg.value,
       ...draft,
@@ -775,7 +776,16 @@ async function onApplySwitch() {
 // ---- 测试脚本：切换到流程视图右侧面板的「数据视图」tab（view=data），保留当前源上下文，
 // 并把当前编辑节点作为 nodeId 带上，让数据视图自动定位到该节点（而不是默认落首节点）——
 // ResultView 初始化时优先取 URL 的 nodeId query（queryNodeId），与「查看条件」深链同一套机制 ----
-const canTest = computed(() => !!orchCfg.value.script?.trim() && !!orchCfg.value.inputTable)
+const canTest = computed(() => {
+  const hasScript = !!(orchCfg.value.script?.trim() || orchCfg.value.scriptPath?.trim())
+  const hasInputTable = !!(
+    orchCfg.value.inputTable?.trim()
+    || orchCfg.value.inputTableId?.trim()
+    || cfg.value?.inputTable?.trim()
+    || cfg.value?.collectCfg?.inputTable?.trim()
+  )
+  return hasScript && hasInputTable
+})
 function goToDataView() {
   const query: Record<string, string> = { ...route.query } as Record<string, string>
   query.view = 'data'

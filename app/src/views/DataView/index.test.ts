@@ -359,7 +359,10 @@ describe('DataView · 数据表页', () => {
 
     expect(wrapper.text()).toContain('已选择')
     await wrapper.findAll('button').find((b) => b.text() === '发后续任务')!.trigger('click')
+    await flushPromises()
     expect(nextStepSpy).toHaveBeenCalledWith('600519', 't1', ['88231'])
+    expect(dataApi.rowQueryPaged).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('已选择')
 
     await wrapper.findAll('.dv-batch .dv-link').find((el) => el.text() === '取消选择')!.trigger('click')
     await flushPromises()

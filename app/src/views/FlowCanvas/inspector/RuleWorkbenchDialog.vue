@@ -380,7 +380,7 @@ watch(
             <button class="rc-btn primary" type="button" :disabled="saving || !script.trim()" @click="emit('save')">
               {{ saving ? '保存中...' : saveLabel }}
             </button>
-            <button v-if="isRule" class="rc-btn" type="button" :disabled="!script.trim()" @click="emit('test')">测试脚本</button>
+            <button v-if="isRule" class="rc-btn" type="button" :disabled="!canTest" @click="emit('test')">测试脚本</button>
           </div>
         </div>
         <div v-if="thinking?.trim() || generating || generationState === 'done' || generationState === 'error'" class="wb-stream">

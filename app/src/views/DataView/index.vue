@@ -501,14 +501,18 @@ function openTaskInstByRow(row: DataRow) {
 }
 
 // ---- 选中批量条：发后续任务 / 更多批量操作 ----
-function onNextStepSelected() {
+async function onNextStepSelected() {
   if (!selectedRowKeys.value.length) {
     ElMessage.error('请选择要操作的数据')
     return
   }
-  dataApi.nextStep(sourceId.value, tableId.value, selectedRowKeys.value)
-    .then((r) => ElMessage.success(`发送成功:${r.message ?? ''}`))
-    .catch((err) => ElMessage.error(`发送失败,原因: [${err instanceof Error ? err.message : String(err)}]`))
+  try {
+    const r = await dataApi.nextStep(sourceId.value, tableId.value, selectedRowKeys.value)
+    ElMessage.success(`发送成功:${r.message ?? ''}`)
+    await panelRef.value?.refresh({ preserveSelection: true })
+  } catch (err) {
+    ElMessage.error(`发送失败,原因: [${err instanceof Error ? err.message : String(err)}]`)
+  }
 }
 function onNextStepAll() {
   if (unsupportedBatchFilters.value.length) {
