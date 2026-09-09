@@ -674,6 +674,61 @@ describe('SiteDataView · 上游数据下钻（M3-0H）', () => {
 // 按条件查源（0909 改落点）：命中源从「跳到源视图」改成「写进左侧源侧栏」。
 // 会上原话「就是要再加到左边最好」「因为我点一个源又要进去」——跳过去只是换个地方看列表，
 // 挨个排查问题源还得在两个视图之间来回跳。
+// 2026-09-09：归并视图逐源懒加载，自己算不出总量，表头一直只有「已加载 N 条」（加载进度）。
+// 用户问的"一共多少条"看不到——旧平台分页器上那个「共 7030 条」没迁过来。
+// 收窄用的 summaryEntryData 本来就按源分组带 CNT，求和即总数，不额外发请求。
+describe('SiteDataView · 命中总条数', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('带条件时把收窄那步的分组计数求和当总数显示，不额外发请求', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1'), source('s2')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const summary = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([
+      { SOURCE_ID: 's1', CNT: 7000 }, { SOURCE_ID: 's2', CNT: 30 },
+    ] as never)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    await wrapper.get('input[placeholder="数据 ID"]').setValue('1')
+    await wrapper.get('button.primary').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="site-data-total"]').text()).toBe('共 7,030 条')
+    // 总数来自收窄那一轮，没有为它多发请求
+    expect(summary).toHaveBeenCalledTimes(1)
+  })
+
+  it('不带条件时不显示总数——那时不做收窄，不为一个数字单发一轮请求', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const summary = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([] as never)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [row('s1', '1')] })
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+
+    expect(wrapper.find('[data-testid="site-data-total"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('已加载 1 条')
+    expect(summary).not.toHaveBeenCalled()
+  })
+
+  it('收窄失败时不显示总数，不拿个错数字糊弄', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'summaryData').mockRejectedValue(new Error('boom'))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    await wrapper.get('input[placeholder="数据 ID"]').setValue('1')
+    await wrapper.get('button.primary').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="site-data-total"]').exists()).toBe(false)
+  })
+})
+
 describe('SiteDataView · 按条件查源', () => {
   afterEach(() => vi.restoreAllMocks())
 

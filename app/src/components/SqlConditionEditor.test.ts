@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, ref } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus, { ElDialog } from 'element-plus'
@@ -33,6 +33,20 @@ async function edit(value: string) {
  * 单跑这个文件够快所以看不出问题，**全量跑时会间歇失败**（2026-09-05 实测两种表现：
  * `button.click()` 报 undefined、`textarea().value` 报 null）。用 vi.waitFor 兜住。
  */
+/**
+ * 取弹窗「最近条件」下拉里的第一条历史。
+ *
+ * 必须 waitFor：ElDropdown 的菜单是异步 teleport 到 body 再由 popper 定位的，
+ * `flushPromises()` 只刷微任务等不到它——单独跑这个文件时通常已经挂好了，全量跑
+ * （CPU 吃紧）就会扑空拿到 null，表现为随机失败。
+ */
+async function recentConditionItem() {
+  return vi.waitFor(() => {
+    const el = document.querySelector<HTMLElement>('.sql-recent-condition')
+    if (!el) throw new Error('最近条件下拉还没挂上')
+    return el
+  })
+}
 async function clickDialogButton(text: string) {
   const button = await vi.waitFor(() => {
     const found = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')]
@@ -62,6 +76,10 @@ async function openDialog(wrapper: ReturnType<typeof setup>) {
     if (!document.querySelector('.sql-editor')) throw new Error('放大弹窗还没挂上')
   })
 }
+// 进来先清一次（2026-09-09）：本文件与 utils/sqlConditionHistory.test.ts 用了同一批表键
+// （900/901），同 worker 下共享 localStorage，只在 afterEach 清会依赖上一个文件收拾干净。
+// 测试不该建立在别人清理到位的前提上。
+beforeEach(() => localStorage.clear())
 afterEach(() => {
   mounted.splice(0).forEach((wrapper) => wrapper.unmount())
   document.body.innerHTML = ''
@@ -81,7 +99,7 @@ describe('SQL 条件放大编辑', () => {
     rememberSqlCondition('901', 'K2 IS NULL')
     await openDialog(wrapper)
     await clickDialogButton('最近条件')
-    const item = document.querySelector<HTMLElement>('.sql-recent-condition')!
+    const item = await recentConditionItem()
     expect(item.textContent).toBe(sql)
     item.click()
     await flushPromises()

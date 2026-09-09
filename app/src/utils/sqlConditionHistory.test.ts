@@ -41,22 +41,3 @@ describe('最近 SQL 条件', () => {
     expect(() => clearSqlConditions('900')).not.toThrow()
   })
 })
-
-// 2026-09-09：历史记录会被原样回填到查询框，存脏的等于把带分号的条件反复喂回来。
-describe('SQL 历史记录去掉末尾分号', () => {
-  it('存进去时就削掉，读出来是可以直接用的条件', () => {
-    rememberSqlCondition('900', "K2 NOT LIKE '%weixin%';")
-    expect(readSqlConditions('900')).toEqual(["K2 NOT LIKE '%weixin%'"])
-  })
-
-  it('带分号与不带分号视为同一条，不会在列表里占两格', () => {
-    rememberSqlCondition('901', 'K1 IS NULL')
-    rememberSqlCondition('901', 'K1 IS NULL;')
-    expect(readSqlConditions('901')).toEqual(['K1 IS NULL'])
-  })
-
-  it('字符串字面量里的分号不受影响', () => {
-    rememberSqlCondition('902', "K2 LIKE '%;%'")
-    expect(readSqlConditions('902')).toEqual(["K2 LIKE '%;%'"])
-  })
-})

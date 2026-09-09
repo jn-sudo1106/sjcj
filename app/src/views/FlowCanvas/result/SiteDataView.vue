@@ -99,6 +99,14 @@ const dataError = ref('')
 const failedSources = ref<MergeLoadMoreResult<DataRow>['failedSources']>([])
 const allExhausted = ref(false)
 const noCandidateSources = ref(false)
+/**
+ * 当前条件命中的总条数（2026-09-09）。`null` = 这次查询没有这个数（没带条件、或收窄失败）。
+ *
+ * 归并视图是逐源懒加载的，自己永远算不出总量，表头一直只有「已加载 N 条」——那是加载进度，
+ * 用户问的"一共多少条"看不到（旧平台分页器上的「共 7030 条」）。这个数从收窄那步的
+ * summaryEntryData 分组计数求和而来，不额外发请求。
+ */
+const totalHits = ref<number | null>(null)
 
 const siteChildren = ref<Source[]>([])
 const sourceNames = computed<Record<string, string>>(() => Object.fromEntries(siteChildren.value.map((s) => [s.sourceId, s.name])))
@@ -366,6 +374,7 @@ async function resetAndLoad() {
     if (selectedSourceId.value) {
       // 具体源：候选源集合永远只有它自己，退化成单源归并，复用同一套分页逻辑。
       candidateSourceIds = [selectedSourceId.value]
+      totalHits.value = null
     } else {
       // 全部源：候选源**只在本网站范围内算**（2026-09-09 定案，用户原话「明确点，肯定是
       // 这个网站下的」）。
@@ -390,8 +399,15 @@ async function resetAndLoad() {
         if (id !== requestId) return
         // 收窄失败不阻断整体查询，退回网站全部源（请求量更大，但结果仍然正确）
         candidateSourceIds = exact?.sourceIds.length ? exact.sourceIds : siteSourceIds
+        // 总数是白捡的（2026-09-09）：收窄用的 summaryEntryData 本来就按 SOURCE_ID 分了组、
+        // 每组带 CNT，加起来就是当前条件命中的总条数，不必为它再发一次请求。
+        // 归并视图是逐源懒加载的，自己永远算不出总数——在此之前表头只有「已加载 N 条」，
+        // 那是加载进度不是总量，旧平台分页器上那个「共 7030 条」一直没迁过来。
+        totalHits.value = exact ? [...exact.hitCountBySource.values()].reduce((a, b) => a + b, 0) : null
       } else {
         candidateSourceIds = siteSourceIds
+        // 不带条件时不做收窄，也就没有这个数——显示「已加载 N 条」即可，不为总数单发一轮请求
+        totalHits.value = null
       }
     }
     if (!candidateSourceIds.length) {
@@ -799,7 +815,8 @@ function onCellFile(path: string) {
       >
         <template #head>
           <span class="sdv2-tablename">{{ meta?.tableName || effectiveTableId }}</span>
-          <span class="sdv2-count">已加载 {{ rows.length }} 条</span>
+          <span v-if="totalHits !== null" class="sdv2-count" data-testid="site-data-total">共 {{ totalHits.toLocaleString() }} 条</span>
+          <span class="sdv2-count" :class="{ muted: totalHits !== null }">已加载 {{ rows.length }} 条</span>
           <span v-if="!selectedSourceId && candidateSourceIds.length" class="muted">已扫描 {{ candidateCursor }}/{{ candidateSourceIds.length }} 个源</span>
           <span v-if="canPickRows" class="muted">已选 {{ selectedRowIds.length }} 条</span>
           <button
