@@ -100,6 +100,17 @@ describe('SQL 条件放大编辑', () => {
     expect(readSqlConditions('900')).toEqual([])
   })
 
+  // 2026-09-09：整段从数据库客户端复制过来最常发生在放大弹窗里，那种语句多半带结尾分号，
+  // 而查询框收的是拼进 WHERE 的片段，带分号后端直接报错。
+  it('确认时削掉末尾分号；字符串字面量里的分号与换行原样保留', async () => {
+    const wrapper = setup()
+    await openDialog(wrapper)
+    const sql = "K2 NOT LIKE '%weixin%'\nAND K1 LIKE '%a;b%';"
+    await edit(sql)
+    await clickDialogButton('确认')
+    expect(wrapper.vm.sql).toBe("K2 NOT LIKE '%weixin%'\nAND K1 LIKE '%a;b%'")
+  })
+
   it('打开带原条件和表信息，编辑草稿不改原框；应用原样保留换行和引号', async () => {
     const wrapper = setup()
     await openDialog(wrapper)

@@ -4,6 +4,7 @@ import { computed, ref, watch } from 'vue'
 import { ElButton, ElDialog, ElDropdown, ElDropdownItem, ElDropdownMenu } from 'element-plus'
 import { ArrowDown, Clock, FullScreen } from '@element-plus/icons-vue'
 import { clearSqlConditions, readSqlConditions } from '@/utils/sqlConditionHistory'
+import { stripTrailingSemicolon } from '@/utils/sqlCondition'
 
 const props = defineProps<{
   modelValue: string
@@ -57,7 +58,11 @@ function open() {
   opened.value = true
 }
 function apply() {
-  emit('update:modelValue', draft.value)
+  // 确认时削掉末尾分号（2026-09-09）：从数据库客户端整段复制过来的语句常带着它，
+  // 而这里的输入是拼进 WHERE 的片段，带分号后端直接报错。
+  // **只在这里做、不在 update() 里做**——紧凑行每次按键都会走 update，
+  // 输入过程中的 `K2 LIKE '%;` 是合法中间态，当场削掉会把用户正在打的字符吃掉。
+  emit('update:modelValue', stripTrailingSemicolon(draft.value))
   opened.value = false
 }
 // 外部清空、切表时丢弃旧草稿，避免应用到另一个查询上下文。
