@@ -572,7 +572,7 @@ async function onGenerateScript(
           if (!delta) return
           generationState.value = 'content'
           streamedScript += delta
-          patch({ script: streamedScript.replace(/^```[a-zA-Z]*[ \t]*\n/, '') })
+          patch({ script: streamedScript })
         },
         onDone: (payload) => {
           generationState.value = 'done'
@@ -813,7 +813,7 @@ function goToDataView() {
         {{ mainResultLabel }}
       </button>
     </div>
-    <pre ref="mainResultRef" class="rc-main-result-code">{{ orchCfg.script?.trim() || '等待模型输出结果…' }}</pre>
+    <pre ref="mainResultRef" class="rc-main-result-code">{{ orchCfg.script || '等待模型输出结果…' }}</pre>
   </div>
 
   <template v-if="!isRule">

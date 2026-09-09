@@ -1173,7 +1173,9 @@ async function fetchDataProcessGenerate(
       throw new Error(detail ? `请求失败 ${res.status}: ${detail.slice(0, 200)}` : `请求失败 ${res.status}`)
     }
     let text = ''
-    const parser = createSseEventParser()
+    // vanv-data-engine 的 ServerSentEvent 序列化结果是 `data:<正文>`，没有 SSE
+    // 规范中的可选分隔空格；data 后的首个空格可能就是 Python token/缩进的一部分。
+    const parser = createSseEventParser({ preserveDataLeadingSpace: true })
     let structured = false
     let content = ''
     let scriptPath = ''

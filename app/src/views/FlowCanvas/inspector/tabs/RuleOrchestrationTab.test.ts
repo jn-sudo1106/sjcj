@@ -227,6 +227,22 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect(wrapper.find('[data-testid="main-stream-result"]').text()).toContain('return {"sku_name": sku_id}')
   })
 
+  it('主面板生成结果原样保留流式脚本的首尾空白、空格和缩进', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    const script = ' \ndef process():\n    return {"ok": True}\n'
+    flow.patchRuleConfig('rule-1', { describe: '按 sku_id 生成 sku_name', script: '', scriptPath: '' })
+    await flushPromises()
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
+      options?.onContent?.(script)
+      return { script, scriptPath: '/rules/generated/orch-173.py' }
+    })
+
+    await wrapper.find('[data-testid="main-generate-script"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.rc-main-result-code').element.textContent).toBe(script)
+  })
+
   it('主面板思考过程流式追加时会自动滚动到底部', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     flow.patchRuleConfig('rule-1', { describe: '按 sku_id 生成 sku_name', script: '', scriptPath: '' })

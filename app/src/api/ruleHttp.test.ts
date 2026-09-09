@@ -162,17 +162,17 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
   it('dataProcessGenerate：POST /api/answer/data-process，按 SSE event/data 解析 thinking/content/done', async () => {
     const streamText = [
       'event: thinking',
-      'data: 正在确认输入表',
+      'data:正在确认输入表',
       '',
       'event: thinking',
-      'data: 正在确认字段',
+      'data:正在确认字段',
       '',
       'event: content',
-      'data: def main(date, zb_value):',
-      'data:     return {"end_date": "2025-01-01"}',
+      'data:def process(date, zb_value):',
+      'data:    return {"end_date": "2025-01-01"}',
       '',
       'event: done',
-      'data: {"scriptPath":"/code01/20260801/abc.py","message":"保存完成"}',
+      'data:{"scriptPath":"/code01/20260801/abc.py","message":"保存完成"}',
     ].join('\n')
     const encoder = new TextEncoder()
     const chunks = [encoder.encode(streamText.slice(0, 30)), encoder.encode(streamText.slice(30, 60)), encoder.encode(streamText.slice(60))]
@@ -227,10 +227,63 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
       systemPrompt: '只返回 JSON',
     })
     expect(thinking.join('')).toBe('正在确认输入表正在确认字段')
-    expect(content).toEqual(['def main(date, zb_value):\n    return {"end_date": "2025-01-01"}'])
+    expect(content).toEqual(['def process(date, zb_value):\n    return {"end_date": "2025-01-01"}'])
     expect(done).toEqual(['保存完成'])
-    expect(result.script).toBe('def main(date, zb_value):\n    return {"end_date": "2025-01-01"}')
+    expect(result.script).toBe('def process(date, zb_value):\n    return {"end_date": "2025-01-01"}')
     expect(result.scriptPath).toBe('/code01/20260801/abc.py')
+  })
+
+  it('dataProcessGenerate：保留后端 data: 后正文中的 token 空格和 Python 缩进', async () => {
+    const streamText = [
+      'event:content',
+      'data:def',
+      '',
+      'event:content',
+      'data: process():',
+      '',
+      'event:content',
+      'data:    return {"ok": True}',
+      '',
+      'event:done',
+      'data:{"scriptPath":"/code01/202609/generated.py"}',
+    ].join('\n')
+    const encoder = new TextEncoder()
+    let read = false
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (read) return { done: true, value: undefined }
+            read = true
+            return { done: false, value: encoder.encode(streamText) }
+          },
+        }),
+      },
+    } as unknown as Response)
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    const { ruleApi } = await import('./index')
+
+    const content: string[] = []
+    const result = await ruleApi.dataProcessGenerate({
+      description: '按字段生成',
+      configId: 184,
+      providerCode: 'DeepSeek',
+      model: 'deepseek-v4-flash',
+      sourceTable: 'sense_data.TB_email_XQ',
+      targetTable: 'sense_data.TB_INDICATOR_DATA',
+      inputFields: 'date:date',
+      outputFields: 'ok:ok',
+      systemPrompt: '只返回 Python',
+    }, {
+      onContent: (delta) => content.push(delta),
+    })
+
+    expect(content).toEqual(['def', ' process():', '    return {"ok": True}'])
+    expect(result.script).toBe('def process():    return {"ok": True}')
   })
 
   it('orchestrationGenerate：xml 格式仍走旧 stream，解析 MinIO 路径', async () => {
