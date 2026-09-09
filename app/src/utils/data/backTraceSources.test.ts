@@ -25,6 +25,28 @@ describe('backTraceSources · 有网站范围（把源写进查询条件）', ()
     expect(fields).toEqual(['SOURCE_ID'])
   })
 
+  // 2026-09-09 生产实测：末尾分号必须在**包括号之前**削掉。包成 `(条件) AND IN(...)` 之后
+  // 末尾字符已经是 `)`，API 层 buildLegacyMore 里那道清理就够不着，分号会被裹在中间
+  // （`LOWER(TRIM(k23));) AND SOURCE_ID IN (…)`），后端报「传到的条件含有非法注入风险」。
+  // 普通查询没有这层包装，所以同一条件在数据列表里查得好好的，只有反查报错。
+  it('用户条件末尾的分号在包进括号前就削掉，不会变成 `;)`', async () => {
+    const summary = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([] as never)
+
+    await backTraceSources({ tableId: '900', sql: "K1 IS NULL;" } as RowQuery, ['s1'])
+
+    const passed = (summary.mock.calls[0][0] as RowQuery).sql ?? ''
+    expect(passed).toBe("(K1 IS NULL) AND SOURCE_ID IN ('s1')")
+    expect(passed).not.toContain(';')
+  })
+
+  it('字符串字面量里的分号照常保留，只削末尾', async () => {
+    const summary = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([] as never)
+
+    await backTraceSources({ tableId: '900', sql: "K2 LIKE '%;%';" } as RowQuery, ['s1'])
+
+    expect((summary.mock.calls[0][0] as RowQuery).sql).toBe("(K2 LIKE '%;%') AND SOURCE_ID IN ('s1')")
+  })
+
   it('没有原始 sql 时只下 IN 子句，不产生 "() AND"', async () => {
     const summary = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([] as never)
     await backTraceSources({ tableId: '900' } as RowQuery, ['s1'])

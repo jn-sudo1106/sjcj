@@ -212,3 +212,53 @@ describe('紧凑行的最近条件（Z4）', () => {
     expect(document.body.textContent).toContain('暂无最近条件，成功查询后自动记录')
   })
 })
+
+// 2026-09-09 生产实测的真实故障：多行 SQL 粘进紧凑框，HTML 规范把 <input> 里的换行
+// 直接剥掉（不是换成空格），`2\nAND` 成了 `2AND`，后端报「传到的条件含有非法注入风险」。
+describe('SqlConditionEditor · 粘贴多行 SQL', () => {
+  function pasteInto(wrapper: ReturnType<typeof setup>, text: string, at = 0) {
+    const input = wrapper.get('input').element as HTMLInputElement
+    input.selectionStart = at
+    input.selectionEnd = at
+    const e = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
+    Object.defineProperty(e, 'clipboardData', { value: { getData: () => text } })
+    Object.defineProperty(e, 'target', { value: input })
+    input.dispatchEvent(e)
+    return e
+  }
+
+  it('换行换成空格，不让它被浏览器剥成黏连的 `2AND`', async () => {
+    const wrapper = setup()
+    wrapper.vm.sql = ''
+    await flushPromises()
+
+    const e = pasteInto(wrapper, "k17 <> 2\nAND k2 NOT LIKE '%weixin%'")
+    await flushPromises()
+
+    expect(e.defaultPrevented).toBe(true)
+    expect(wrapper.vm.sql).toBe("k17 <> 2 AND k2 NOT LIKE '%weixin%'")
+    expect(wrapper.vm.sql).not.toContain('2AND')
+  })
+
+  it('单行粘贴不干预，交给浏览器默认行为（否则会和 v-model 打架）', async () => {
+    const wrapper = setup()
+    wrapper.vm.sql = ''
+    await flushPromises()
+
+    const e = pasteInto(wrapper, 'K1 IS NULL')
+    await flushPromises()
+
+    expect(e.defaultPrevented).toBe(false)
+  })
+
+  it('按光标位置插入，不覆盖已有内容', async () => {
+    const wrapper = setup()
+    wrapper.vm.sql = 'AB'
+    await flushPromises()
+
+    pasteInto(wrapper, 'x\ny', 1)
+    await flushPromises()
+
+    expect(wrapper.vm.sql).toBe('Ax yB')
+  })
+})

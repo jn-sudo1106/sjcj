@@ -13,6 +13,7 @@
 // ——中间那层"先弹窗看清单、再决定去哪"没人要，点一下就该落到源视图。
 // 弹窗没了，但下面这套求命中源的算法是 09-04 六轮修复换来的，一个字都不能丢，所以抽成纯函数。
 import { dataApi, type RowQuery } from '@/api'
+import { stripTrailingSemicolon } from '@/utils/sqlCondition'
 
 /** `SOURCE_ID IN (...)` 分组大小：整串最终拼进 SQL，太长会被网关/后端截断 */
 const IN_CHUNK = 200
@@ -65,9 +66,15 @@ export async function backTraceSources(query: RowQuery, scopedSourceIds?: string
     }
   }
   const counts = new Map<string, number>()
+  // 削末尾分号必须在**这里**做，不能只靠 API 层（2026-09-09 生产实测）：下面把用户条件
+  // 包成 `(条件) AND SOURCE_ID IN (...)` 之后，末尾字符已经是 `)`，buildLegacyMore 里
+  // 那道清理就匹配不到了，分号被裹在括号中间 —— `LOWER(TRIM(k23));) AND SOURCE_ID IN (…)`。
+  // 后端 SQL 解析不了，报的是一句误导人的「传到的条件含有非法注入风险」。
+  // 普通查询没有这层包装，所以同一条件在数据列表里查得好好的，只有反查报错。
+  const userSql = stripTrailingSemicolon(query.sql?.trim() ?? '')
   for (const group of chunk(scoped, IN_CHUNK)) {
     const inClause = `SOURCE_ID IN (${group.map((id) => `'${id}'`).join(',')})`
-    const sql = query.sql?.trim() ? `(${query.sql.trim()}) AND ${inClause}` : inClause
+    const sql = userSql ? `(${userSql}) AND ${inClause}` : inClause
     const summary = await dataApi.summaryData({ ...query, sql, size: group.length }, ['SOURCE_ID'])
     // SummaryRow = { CNT, <分组列> }：分组列名就是 summaryFields 传进去的那个
     for (const row of summary) {
