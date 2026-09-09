@@ -17,6 +17,7 @@ import {
   isParallel,
   isDataNode,
   isRuleNode,
+  isMonitorNode,
   nodeOutputTable,
   effectiveInputTable,
   isFirstMainNode,
@@ -132,7 +133,7 @@ export const useFlowStore = defineStore('flow', () => {
   let seq = 1
 
   // S6-3（方案 §4.4）：删节点待清理资源清单——本期只收集不真删，见 remove() 里的调用点。
-  // scriptPath 对应脚本/配置文件（MinIO），configId 对应业务规则或编排记录在后端的 ruleId。
+  // scriptPath 对应脚本/配置文件（MinIO），configId 对应当前节点绑定的配置。
   interface NodeCleanupResource {
     nodeId: string
     nodeTitle: string
@@ -143,7 +144,7 @@ export const useFlowStore = defineStore('flow', () => {
   function collectCleanupResources(id: string, cfg: NodeConfig | undefined): NodeCleanupResource | null {
     if (!cfg) return null
     const scriptPath = cfg.ruleCfg?.scriptPath || cfg.execCfg?.scriptPath || undefined
-    const configId = cfg.ruleCfg?.ruleId || cfg.execCfg?.ruleId || undefined
+    const configId = cfg.configId || undefined
     if (!scriptPath && !configId) return null
     return { nodeId: id, nodeTitle: cfg.title, scriptPath, configId }
   }
@@ -1135,11 +1136,11 @@ export const useFlowStore = defineStore('flow', () => {
         // 规则处理节点走独立校验（0801 方案 §9.1）：默认输出表=输入表，NodeConfig.outputTable
         // 未显式指定时留空是正常状态，不能套用其他数据节点「缺少输出表」那条通用检查。
         const ruleCfg = c.ruleCfg
-        if (!ruleCfg?.ruleId) {
-          errs.push(`「${c.title}」尚未保存业务规则`)
+        if (!ruleCfg || !c.configId) {
+          errs.push(`「${c.title}」请先保存表配置`)
         } else {
           if (!ruleCfg.inputFields?.length) errs.push(`「${c.title}」缺少入参字段`)
-          if (!ruleCfg.outputFields?.length) errs.push(`「${c.title}」缺少出参字段`)
+          if (!isMonitorNode(c) && !ruleCfg.outputFields?.length) errs.push(`「${c.title}」缺少出参字段`)
           if (!ruleCfg.script?.trim()) errs.push(`「${c.title}」尚未生成规则脚本`)
         }
       } else if (!c.disabled && isDataNode(c) && !c.outputTable) {

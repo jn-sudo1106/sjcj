@@ -11,7 +11,8 @@ function makeDef(): FlowDef {
     id: 'login-1', loginUrl: 'https://example.com/login', loginName: 'main-user', loginPwd: 'pwd-1', newLoginConfig: '1', authConfig: '', enabled: true,
   }]
   login.collectCfg!.defaultLoginConfigId = 'login-1'
-  rule.ruleCfg = { ...rule.ruleCfg!, ruleId: '173', script: 'def main(value): return value' }
+  rule.configId = '1400998'
+  rule.ruleCfg = { ...rule.ruleCfg!, script: 'def main(value): return value' }
   if (web.collectCfg) web.collectCfg.outputTable = ''
   return {
     id: 'runtime-test', name: 'runtime-test', version: 'test',
@@ -35,7 +36,7 @@ describe('runtime 节点能力校验', () => {
     vi.runAllTimers()
   })
 
-  it('规则节点不依赖 NodeConfig.outputTable，已有规则脚本即可运行', () => {
+  it('规则节点不依赖 ruleId，已有 configId 和规则脚本即可运行', () => {
     vi.useFakeTimers()
     setActivePinia(createPinia())
     const runtime = useRuntimeStore()

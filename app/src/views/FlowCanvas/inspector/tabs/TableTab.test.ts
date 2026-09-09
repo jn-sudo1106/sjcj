@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 // 表配置 Tab：规则节点分支（0804 S2-2，从 RuleOrchestrationTab.test.ts 的「路径 A」迁移而来——
-// 表/字段绑定在这里。「保存并配置编排」按钮已移除，换数字 ruleId 改在编排配置第一次生成脚本时
-// 自动 orchestrationSaveMeta。
+// 表/字段绑定在这里。「保存并配置编排」按钮已移除，生成脚本使用节点保存后的 configId。
 // 通过挂载整个 NodeInspector 测试（而非孤立挂载 TableTab），因为 useNodeInspectorAssets() 的
 // provide/inject 上下文由 NodeInspector 建立，脱离它调用会抛错（见 useNodeInspectorAssets.ts 设计约束）。
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -58,8 +57,9 @@ describe('TableTab · 规则节点表/字段绑定（0804 S2-2 从编排配置�
   it('已保存过的规则节点回到表配置：仍是可编辑表单，不是只读摘要', async () => {
     mockAssets()
     const { flow, wrapper } = mountOnRuleNode()
+    flow.configs['rule-1'].configId = '1400998'
     flow.patchRuleConfig('rule-1', {
-      mode: 'ref', ruleId: 'orch-173',
+      mode: 'ref',
       inputTable: 'sense_data.TB_JD_SKU_BASE', inputTableId: '2102154',
       inputFields: ['sku_id'], outputFields: ['sku_name'],
     })
@@ -191,8 +191,8 @@ describe('TableTab · 结构化配置 / 正文规则（0804 S3-1，0805 收窄�
 })
 
 // 规则/采集节点表配置都不再放「保存并配置编排」（跟底部节点「保存」抢主按钮）；
-// 换数字 ruleId 改在编排配置第一次「生成脚本/生成配置」时自动 orchestrationSaveMeta。
-// 规则节点也去掉了该按钮（2026-09-02），表配置只负责绑表/字段，保存编排逻辑统一走编排配置 Tab。
+// 规则节点也去掉了该按钮（2026-09-02），表配置只负责绑表/字段，保存走节点底部主按钮。
+// 旧采集配置的 compose 记录仍由编排配置 Tab 处理。
 describe('TableTab · 不再展示「保存并配置编排」', () => {
   function mountOnCollectorNode() {
     setActivePinia(createPinia())

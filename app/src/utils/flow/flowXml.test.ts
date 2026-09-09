@@ -119,7 +119,8 @@ describe('flowXml', () => {
     expect(xml).toContain('<schedule scheduleType="daily" scheduleTime="08:00" cron="" weekdays="1,3,5" />')
     expect(xml).toContain('<monitorMethod id="row_count" />')
     expect(xml).toContain('<monitorMethod id="null_rate" />')
-    expect(xml).toContain('<rule mode="ref" ruleId="rule-9" name="规则处理" format="python" enabled="true">')
+    expect(xml).toContain('<rule mode="ref" name="规则处理" format="python" enabled="true">')
+    expect(xml).not.toContain('ruleId=')
     expect(xml).toContain('<describe>清洗标题</describe>')
     expect(xml).toContain('<script>print(&quot;hello &amp; &lt;world&gt;&quot;)</script>')
     // 代理密码绝不能出现在导出文件里——只带 ip/port/account

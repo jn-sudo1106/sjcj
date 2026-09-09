@@ -23,7 +23,7 @@ export function ruleFieldOptionFromEntryField(field: EntryField): RuleFieldOptio
 
 /**
  * 表/字段绑定校验（0804 S2-2 从 RuleOrchestrationTab#validateMeta 抽成纯函数）：
- * 编排配置 Tab 门禁用这份判断；换数字 ruleId 在第一次生成脚本时 orchestrationSaveMeta。
+ * 编排配置 Tab 门禁用这份判断；生成脚本使用节点已保存的 configId。
  * 节点名称（= 规则名称）是否填写不在这里判断——那是节点配置的事，调用方另行检查。
  */
 export function validateTableBinding(

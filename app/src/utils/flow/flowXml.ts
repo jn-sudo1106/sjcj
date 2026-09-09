@@ -43,7 +43,6 @@ function conditionXml(condition: ConditionGroup | undefined, depth: number, tag 
 function ruleOrchestrationXml(tag: string, ro: RuleOrchestration, depth: number): string[] {
   const lines = [line(depth, `<${tag}${attrs({
     mode: ro.mode,
-    ruleId: ro.ruleId,
     name: ro.name,
     format: ro.format,
     enabled: ro.enabled,

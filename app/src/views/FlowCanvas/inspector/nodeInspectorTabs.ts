@@ -15,7 +15,7 @@ export type NodeInspectorTabItem = [NodeInspectorTab, string, string?]
  * 手动拼 URL 没法替代——恢复入口，规则节点仍然没有（规则节点从没有过这个 Tab，不在本次改判范围）。
  *
  * S2-2 门禁：规则节点在「表配置」绑完输入表与入参/出参字段之前，「编排配置」Tab 禁用。
- * 换数字 ruleId 改到第一次生成脚本时 orchestrationSaveMeta，不再要求先点中间保存按钮。
+ * 生成脚本使用节点已保存的 configId，不再要求先点中间保存按钮。
  * 非规则节点暂不设门禁：抓取配置内容本身还没建（S3），提前拦反而挡住占位内容。
  */
 export function nodeInspectorTabs(cfg?: NodeConfig, options: { includeAi?: boolean } = {}): NodeInspectorTabItem[] {

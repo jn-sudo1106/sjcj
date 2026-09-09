@@ -348,50 +348,6 @@ watch(
   { immediate: true },
 )
 
-// 进入查看态时按 ruleId 回灌详情 + 缺正文时按 scriptPath 拉 MinIO（对齐旧 handleOpenRecord）
-const hydrateToken = ref('')
-const hydrating = ref(false)
-async function hydrateViewFromServer() {
-  const ruleId = orchCfg.value.ruleId
-  if (!ruleId) return
-  const token = `${id.value}:${ruleId}`
-  if (hydrateToken.value === token || hydrating.value) return
-  hydrating.value = true
-  hydrateToken.value = token
-  try {
-      try {
-        const detail = await ruleApi.orchestrationDetail(ruleId)
-        const next: Partial<RuleOrchestration> = {}
-        // 服务端有值才覆盖，避免 saveMeta 后详情尚无 nlDescribe 时用空串抹掉本地草稿
-        // name 不在此列：规则名称 = 节点名称（0804 拍板），orchCfg 计算时已强制用 cfg.title 覆盖
-        if (detail.describe?.trim()) next.describe = detail.describe
-        if (detail.systemPrompt?.trim()) next.systemPrompt = detail.systemPrompt
-        if (detail.modelProviderCode?.trim()) next.modelProviderCode = detail.modelProviderCode
-        if (detail.modelCode?.trim()) next.modelCode = detail.modelCode
-        if (detail.scriptPath?.trim()) next.scriptPath = detail.scriptPath
-        if (Object.keys(next).length) patch(next)
-    } catch {
-      // 详情失败不阻塞；下面仍可凭本地 scriptPath 拉脚本
-    }
-    const stored = isRule.value ? cfg.value?.ruleCfg : cfg.value?.execCfg
-    const path = (stored?.scriptPath || orchCfg.value.scriptPath || '').trim()
-    if (path && !stored?.script?.trim()) {
-      try {
-        const script = await ruleApi.fileDownloadScript(path)
-        if (script.trim()) patch({ script })
-      } catch (e) {
-        ElMessage.warning(`加载失败：${(e as Error)?.message ?? String(e)}`)
-      }
-    }
-  } finally {
-    hydrating.value = false
-  }
-}
-watch(
-  () => [id.value, isRule.value, orchCfg.value.ruleId] as const,
-  () => { void hydrateViewFromServer() },
-  { immediate: true },
-)
 watch(
   () => [id.value, isMonitor.value, monitorDescribeSeed.value] as const,
   () => {
@@ -504,8 +460,7 @@ watch(
 function onCancelGenerate() {
   generateAbort.value?.abort()
 }
-/** 表配置不再单独落 compose：第一次生成/套用时在这里换数字 ruleId。
- *  规则节点同样要走：旧步骤「规则ID选择」回填的 `-1` 不是 vrule id，直接打 stream 会 400。 */
+/** 仅非规则节点的旧 XML 抓取配置复用还依赖 compose ruleId；规则/监控节点生成脚本走 configId。 */
 async function resolveInputTableName(): Promise<string> {
   if (!isRule.value) return ''
   const named = orchCfg.value.inputTable?.trim()
@@ -521,7 +476,7 @@ async function resolveInputTableName(): Promise<string> {
     return ''
   }
 }
-async function ensureNumericRuleId(): Promise<string | undefined> {
+async function ensureLegacyComposeRuleId(): Promise<string | undefined> {
   if (isVruleNumericRuleId(orchCfg.value.ruleId)) return orchCfg.value.ruleId
   // 已有非数字 id（mock orch-*）：生成接口会走 mock，不必再打 saveMeta。`-1` 除外。
   const existing = orchCfg.value.ruleId?.trim()
@@ -582,13 +537,15 @@ async function onGenerateScript(
   generationState.value = 'idle'
   patch({ script: '', scriptPath: '' })
   try {
-    const ruleId = await ensureNumericRuleId()
-    if (!ruleId) return
+    const legacyRuleId = !isRule.value ? await ensureLegacyComposeRuleId() : undefined
+    if (!isRule.value && !legacyRuleId) return
     if (controller.signal.aborted) throw new Error('已取消生成')
+    const currentOrchCfg = { ...orchCfg.value }
+    if (isRule.value) delete currentOrchCfg.ruleId
     const genCfg = {
-      ...orchCfg.value,
+      ...currentOrchCfg,
       ...draft,
-      ruleId,
+      ...(legacyRuleId ? { ruleId: legacyRuleId } : {}),
     }
     let streamedScript = ''
     let res: Awaited<ReturnType<typeof ruleApi.orchestrationGenerate>>
@@ -682,7 +639,7 @@ async function onSaveScript() {
   savingScript.value = true
   try {
     const res = await ruleApi.orchestrationSave(orchCfg.value)
-    patch({ mode: 'ref', ruleId: res.ruleId, scriptPath: res.scriptPath })
+    patch({ mode: 'ref', scriptPath: res.scriptPath })
     // 2026-09-03：orchestrationSave 成功后，再把脚本文本写到 scriptPath 指定的文件
     //（POST /api/file/upload?fileId=<脚本路径> body={"body":"<脚本内容>"}）。
     // fileId 优先用响应返回的 scriptPath（新建脚本时后端可能分配新路径），兜底用配置里的。
@@ -740,10 +697,9 @@ const applyingSwitch = ref(false)
 async function onApplySwitch() {
   const target = switchOptions.value.find((o) => o.ruleId === switchSelected.value)
   if (!target) return
-  // 本节点必须已经有自己的编排记录才能切换套用，否则只拷内容不带 ruleId 没有落点。
-  // 表配置不再单独保存编排，缺数字 ruleId 时这里补一条 compose（规则/采集同一条路）。
+  // 非规则节点必须有自己的旧 compose 记录才能切换套用，否则只拷内容不带 ruleId 没有落点。
   if (!isVruleNumericRuleId(orchCfg.value.ruleId)) {
-    if (!(await ensureNumericRuleId())) return
+    if (!(await ensureLegacyComposeRuleId())) return
   }
   applyingSwitch.value = true
   try {
@@ -752,8 +708,8 @@ async function onApplySwitch() {
     const script = sourceScriptPath ? await ruleApi.orchestrationLoadScript(sourceScriptPath).catch(() => '') : ''
     // 只拷内容当草稿，ruleId/scriptPath 不跟着换——这两个决定「保存脚本」实际写去哪，沿用源节点的
     // 会直接覆盖它的文件/数据库记录，不是"另存"（后端实测：/script/edit 按 scriptPath 原地覆盖写
-    // 文件，跟 ruleId 无关；生成脚本按 ruleId saveOrUpdate 数据库记录，也是更新不是新建，见
-    // vanv-rule-center DashScopeServiceImpl）。scriptPath 清空，强制先点一次「生成脚本」换成本节点
+    // 文件，跟 ruleId 无关；旧 XML 生成按 ruleId saveOrUpdate 数据库记录，也是更新不是新建。
+    // scriptPath 清空，强制先点一次「生成配置」换成本节点
     // 自己的新文件，才允许「保存脚本」（onSaveScript 的 scriptPath 非空校验兜底）。
     patch({
       describe: detail.describe || target.describe || '',
@@ -964,8 +920,6 @@ function onTestScript() {
   </template>
 
   <div v-if="isRule && (providerError || modelError)" class="rc-help">{{ providerError || modelError }}</div>
-  <div v-if="hydrating" class="rc-help">正在同步编排详情…</div>
-
   <!-- S6-1（方案 §4.1）：合并原 RuleScriptDialog（只读脚本查看）+ RuleSystemPromptDialog（编辑系统提示词）
        为一个双栏工作区——两个入口按钮（编辑系统提示词/全屏查看）现在打开同一个弹层，左右两栏一屏对照，
        面板内直接能生成/保存，不用退出去。 -->

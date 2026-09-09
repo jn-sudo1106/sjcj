@@ -3,8 +3,7 @@
 // 0804 S2-2 拍板：规则节点的表/字段绑定从编排配置搬回这里，跟其他节点共用同一个 Tab——
 // 规则名称 = 节点名称（不再单独输入）；绑完输入/输出表与字段后即可进编排配置 Tab。
 // 非规则节点内容：输出表管理（采集类固定/可选）+ 非采集类产物明细三元表 + 表结构编辑弹窗。
-// 规则节点表配置的保存按钮已移除（换数字 ruleId 改在编排配置第一次生成脚本时
-// 自动 orchestrationSaveMeta），表配置只负责绑表/字段。
+// 规则节点表配置的保存按钮已移除；生成脚本使用节点已保存的 configId，表配置只负责绑表/字段。
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
@@ -392,8 +391,7 @@ async function onTableSaved(tableId: string) {
          步骤写入 payload 里（stepToStepModifyPayload 无此 key），目前只会写进本地流程草稿。
          也就是说勾与不勾对真实抓取零影响，展示出来只会让人以为配置生效了。等节点配置的
          写入通路真的打通再恢复。
-         注意：规则节点那套入参/出参字段绑定不受影响，第一次生成脚本时走 orchestrationSaveMeta →
-         /vrule/api/custom-compose/save（live 且在生产写白名单里），是真生效的。 -->
+         注意：规则节点那套入参/出参字段绑定不受影响，生成脚本时走 data-process，是真生效的。 -->
     <!-- 结构化配置 + 正文规则（0804 S3-1）：不透明文本，具体 schema 由执行端解释。
          **名称保持「结构化配置」**（2026-08-28 确认）：旧平台 column.config.js 里 codeRule 的 title 就是它，
          0824-00 §6.3 计划改成「入库配置」的方向是反的——字段展示名跟旧平台走，改了反而对不上。 -->

@@ -246,8 +246,8 @@ function missingFor(cfg: NodeConfig): string[] {
     return miss
   }
   if (isRuleNode(cfg)) {
-    // 用词跟 stores/flow.ts 的保存校验对齐（「尚未保存业务规则」/「尚未生成规则脚本」）
-    if (!cfg.ruleCfg?.ruleId) miss.push('业务规则')
+    // 用词跟 stores/flow.ts 的保存校验对齐（「请先保存表配置」/「尚未生成规则脚本」）
+    if (!cfg.configId) miss.push('表配置')
     if (!cfg.ruleCfg?.script?.trim()) miss.push('规则脚本')
     return miss
   }
@@ -277,7 +277,7 @@ function footFor(cfg: NodeConfig) {
   const configured = cfg.collectCfg
     ? !!(collectUrlOf(cfg) && hasLoginConfig(cfg) && (collectorCapabilityOf(cfg)?.kind === 'login' || cfg.collectCfg.outputTable))
     : isRuleNode(cfg)
-      ? !!(cfg.ruleCfg?.ruleId && cfg.ruleCfg.script?.trim())
+      ? !!(cfg.configId && cfg.ruleCfg?.script?.trim())
     : isDataNode(cfg) && !!nodeOutputTable(cfg)
   const left = cfg.disabled
     ? '已停止'

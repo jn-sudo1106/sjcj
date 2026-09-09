@@ -898,24 +898,26 @@ describe('validateFlow：规则处理节点发布门禁（0801 方案 §9.1）',
     f.newFlow('standard')
   })
 
-  it('未保存业务规则（无 ruleId）：报「尚未保存业务规则」，不报「缺少输出表」', () => {
+  it('未保存表配置（无 configId）：报「请先保存表配置」，不报「缺少输出表」', () => {
     const errs = f.validateFlow()
-    expect(errs).toContain('「规则引擎处理」尚未保存业务规则')
+    expect(errs).toContain('「规则引擎处理」请先保存表配置')
     expect(errs.some((e) => e.includes('规则引擎处理') && e.includes('缺少输出表'))).toBe(false)
   })
 
-  it('有 ruleId 但字段/脚本不全：分别报缺入参、缺出参、未生成脚本', () => {
-    f.patchRuleConfig('rule', { mode: 'ref', ruleId: 'orch-1', inputFields: [], outputFields: [], script: '' })
+  it('有 configId 但字段/脚本不全：分别报缺入参、缺出参、未生成脚本', () => {
+    f.configs.rule.configId = '1400998'
+    f.patchRuleConfig('rule', { mode: 'ref', inputFields: [], outputFields: [], script: '' })
     const errs = f.validateFlow()
     expect(errs).toContain('「规则引擎处理」缺少入参字段')
     expect(errs).toContain('「规则引擎处理」缺少出参字段')
     expect(errs).toContain('「规则引擎处理」尚未生成规则脚本')
-    expect(errs).not.toContain('「规则引擎处理」尚未保存业务规则')
+    expect(errs).not.toContain('「规则引擎处理」请先保存表配置')
   })
 
-  it('ruleId + 入参 + 出参 + 脚本齐全：不报任何规则相关错误', () => {
+  it('configId + 入参 + 出参 + 脚本齐全：不报任何规则相关错误', () => {
+    f.configs.rule.configId = '1400998'
     f.patchRuleConfig('rule', {
-      mode: 'ref', ruleId: 'orch-1', inputFields: ['sku_id'], outputFields: ['sku_name'],
+      mode: 'ref', inputFields: ['sku_id'], outputFields: ['sku_name'],
       script: 'def main(sku_id):\n    return {"sku_name": sku_id}',
     })
     const errs = f.validateFlow()
@@ -1176,21 +1178,23 @@ describe('决策/分头分支段 store 操作（0707 Phase6·6.2）', () => {
   })
 
   // S6-3（方案 §4.4）：技术指导明确"暂时别删"——本期删节点只收集待清理资源清单，不真的调删除接口。
-  it('remove(带 scriptPath/ruleId 的规则节点)：待清理清单记下 scriptPath + configId，节点仍正常删除', () => {
+  it('remove(带 scriptPath/configId 的规则节点)：待清理清单记下 scriptPath + configId，节点仍正常删除', () => {
     const id = f.insertAfter('start', 'rule')
-    f.patchRuleConfig(id, { mode: 'ref', ruleId: 'orch-173', scriptPath: '/rules/orch-173.py' })
+    f.configs[id].configId = '1400998'
+    f.patchRuleConfig(id, { mode: 'ref', scriptPath: '/rules/orch-173.py' })
     expect(f.pendingCleanup).toHaveLength(0)
 
     f.remove(id)
 
     expect(f.configs[id]).toBeUndefined() // 节点本身照常删除，S6-3 不影响这条
     expect(f.pendingCleanup).toHaveLength(1)
-    expect(f.pendingCleanup[0]).toMatchObject({ nodeId: id, scriptPath: '/rules/orch-173.py', configId: 'orch-173' })
+    expect(f.pendingCleanup[0]).toMatchObject({ nodeId: id, scriptPath: '/rules/orch-173.py', configId: '1400998' })
   })
 
-  it('remove(非规则节点，execCfg 带 scriptPath/ruleId)：同样记待清理清单', () => {
+  it('remove(非规则节点，execCfg 带 scriptPath 且节点有 configId)：同样记待清理清单', () => {
     const id = f.insertAfter('start', 'web')
-    f.patchExecConfig(id, { mode: 'ref', ruleId: '184', scriptPath: '/x/184.xml' })
+    f.configs[id].configId = '184'
+    f.patchExecConfig(id, { mode: 'ref', scriptPath: '/x/184.xml' })
 
     f.remove(id)
 
@@ -1198,7 +1202,7 @@ describe('决策/分头分支段 store 操作（0707 Phase6·6.2）', () => {
     expect(f.pendingCleanup[0]).toMatchObject({ nodeId: id, scriptPath: '/x/184.xml', configId: '184' })
   })
 
-  it('remove(从没保存过业务规则/编排的节点)：没有 scriptPath/ruleId 就不记入清单', () => {
+  it('remove(从没保存过配置的节点)：没有 scriptPath/configId 就不记入清单', () => {
     const id = f.insertAfter('start', 'web')
     f.remove(id)
     expect(f.pendingCleanup).toHaveLength(0)

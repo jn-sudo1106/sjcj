@@ -144,14 +144,14 @@ async function openWorkbench(wrapper: ReturnType<typeof mountOnRuleNode>['wrappe
   await flushPromises()
 }
 
-// 0801 方案 §6.4：有 ruleId 后展开的「设置业务规则」——描述/生成脚本/全屏查看/编辑系统提示词/保存脚本
+// 0801 方案 §6.4：规则节点的「设置业务规则」——描述/生成脚本/全屏查看/编辑系统提示词/保存脚本
 // （0804 起这就是本 Tab 的全部内容，不再有 showBinder 两态切换）
 describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
   function mountWithExistingRule() {
     mockAssets()
     const { flow, wrapper } = mountOnRuleNode()
     flow.patchRuleConfig('rule-1', {
-      mode: 'ref', ruleId: 'orch-173', name: '已有规则',
+      mode: 'ref', name: '已有规则',
       dataSource: 'dp-wwdata', inputTable: 'sense_data.TB_JD_SKU_BASE', inputTableId: '2102154',
       outputTable: 'sense_data.TB_JD_SKU_RESULT',
       inputFields: ['sku_id'], outputFields: ['sku_name'],
@@ -280,12 +280,11 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(requestSignal?.aborted).toBe(true)
   })
 
-  it('生成前正在准备规则 ID 时按钮也立即切换为停止图标', async () => {
+  it('data-process 生成中按钮立即切换为停止图标', async () => {
     mockAssets()
     const { flow, wrapper } = mountOnRuleNode()
     flow.patchRuleConfig('rule-1', {
       mode: 'new',
-      ruleId: '-1',
       describe: '按 sku_id 生成 sku_name',
       inputTableId: '2102154',
       inputFields: ['sku_id'],
@@ -296,9 +295,10 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     flow.configs['rule-1'].configId = '184'
     await flushPromises()
 
-    let releaseSaveMeta!: (value: { ruleId: string; message: string }) => void
-    vi.spyOn(ruleApi, 'orchestrationSaveMeta').mockImplementation(
-      () => new Promise((resolve) => { releaseSaveMeta = resolve }),
+    let releaseGenerate!: (value: { script: string; scriptPath: string }) => void
+    vi.spyOn(ruleApi, 'orchestrationSaveMeta')
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(
+      () => new Promise((resolve) => { releaseGenerate = resolve }),
     )
 
     const generateButton = wrapper.find('[data-testid="main-generate-script"]')
@@ -307,8 +307,9 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
 
     expect(generateButton.attributes('aria-label')).toBe('取消生成脚本')
     expect(generateButton.find('[data-testid="stop-generation-icon"]').exists()).toBe(true)
+    expect(ruleApi.orchestrationSaveMeta).not.toHaveBeenCalled()
 
-    releaseSaveMeta({ ruleId: '184', message: 'ok' })
+    releaseGenerate({ script: 'def main():\n    return {}', scriptPath: '/code01/184.py' })
     await flushPromises()
   })
 
@@ -710,19 +711,19 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     buttons.forEach((b) => expect(b.attributes('disabled')).toBeUndefined())
   })
 
-  it('规则节点没有数字 ruleId（含旧步骤占位 -1）时，生成脚本先 saveMeta 再走 data-process', async () => {
+  it('规则节点没有 ruleId 时，生成脚本直接走 data-process，不先调用 saveMeta', async () => {
     mockAssets()
     vi.spyOn(entryApi, 'entryDetail').mockResolvedValue(INPUT_TABLE)
     const { flow, wrapper } = mountOnRuleNode()
     flow.patchRuleConfig('rule-1', {
-      mode: 'new', ruleId: '-1',
+      mode: 'new',
       describe: 'content 中包含地产二字时，tags 返回房地产',
       inputTableId: '2102154', inputFields: ['sku_id'], outputFields: ['sku_name'],
       modelProviderCode: 'DeepSeek', modelCode: 'deepseek-chat',
     })
     flow.configs['rule-1'].configId = '184'
     await flushPromises()
-    const metaSpy = vi.spyOn(ruleApi, 'orchestrationSaveMeta').mockResolvedValue({ ruleId: '184', message: 'ok' })
+    const metaSpy = vi.spyOn(ruleApi, 'orchestrationSaveMeta')
     vi.spyOn(ruleApi, 'dataProcessGenerate').mockResolvedValue({
       script: 'def main(sku_id):\n    return {"sku_name": ""}',
       scriptPath: '/code01/184.py',
@@ -732,13 +733,12 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await genBtn.trigger('click')
     await flushPromises()
 
-    expect(metaSpy).toHaveBeenCalledWith(expect.objectContaining({
-      name: flow.configs['rule-1'].title,
-      inputFields: ['sku_id'],
-      outputFields: ['sku_name'],
-    }))
-    expect(ruleApi.dataProcessGenerate).toHaveBeenCalled()
-    expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBe('184')
+    expect(metaSpy).not.toHaveBeenCalled()
+    expect(ruleApi.dataProcessGenerate).toHaveBeenCalledWith(expect.objectContaining({
+      configId: 184,
+      inputFields: '商品ID:sku_id',
+      outputFields: '商品名称:sku_name',
+    }), expect.anything())
     expect(flow.configs['rule-1'].ruleCfg?.script).toContain('def main')
   })
 
@@ -1120,24 +1120,28 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('source_table=通用新闻表:sense_data.TB_CNEWS')
   })
 
-  it('保存脚本：需二次确认，确认后调用 orchestrationSave 并写回 mode/ruleId/scriptPath', async () => {
+  it('保存脚本：需二次确认，确认后调用 orchestrationSave 并写回 mode/scriptPath，不写回 ruleId', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     flow.patchRuleConfig('rule-1', { script: 'def main(sku_id):\n    return {}', scriptPath: '/x/y.py' })
+    delete flow.configs['rule-1'].ruleCfg!.ruleId
     await flushPromises()
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     vi.spyOn(ruleApi, 'orchestrationSave').mockResolvedValue({
-      ruleId: 'orch-173', scriptPath: '/x/y.py', message: '规则脚本已保存',
+      ruleId: 'legacy-should-not-write-back', scriptPath: '/x/y.py', message: '规则脚本已保存',
     })
     vi.spyOn(ruleApi, 'fileUploadScript').mockResolvedValue({ ok: true, message: '文件已保存' })
 
-    const saveScriptBtn = wrapper.findAll('button').find((b) => b.text().includes('保存脚本'))!
+    await openWorkbench(wrapper)
+    const workbench = wrapper.findComponent(RuleWorkbenchDialog)
+    const saveScriptBtn = workbench.findAll('.wb-pane-actions button').find((b) => b.text().includes('保存脚本'))!
     await saveScriptBtn.trigger('click')
     await flushPromises()
 
     expect(ruleApi.orchestrationSave).toHaveBeenCalledTimes(1)
     expect(ruleApi.fileUploadScript).toHaveBeenCalledWith('/x/y.py', 'def main(sku_id):\n    return {}')
     expect(flow.configs['rule-1'].ruleCfg?.mode).toBe('ref')
-    expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBe('orch-173')
+    expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBeUndefined()
+    expect(flow.configs['rule-1'].ruleCfg?.scriptPath).toBe('/x/y.py')
   })
 
   it('保存脚本：取消确认框则不调用接口', async () => {
@@ -1330,7 +1334,7 @@ describe('RuleOrchestrationTab · 测试脚本切换数据视图', () => {
     mockAssets()
     const { flow, wrapper } = mountOnRuleNode()
     flow.patchRuleConfig('rule-1', {
-      mode: 'ref', ruleId: 'orch-173', name: '已有规则',
+      mode: 'ref', name: '已有规则',
       dataSource: 'dp-wwdata', inputTable: 'sense_data.TB_JD_SKU_BASE', inputTableId: '2102154',
       inputFields: ['sku_id'], outputFields: ['sku_name'],
       script: 'def main(sku_id):\n    return {"sku_name": sku_id}', scriptPath: '/x/y.py',
@@ -1338,10 +1342,11 @@ describe('RuleOrchestrationTab · 测试脚本切换数据视图', () => {
     return { flow, wrapper }
   }
 
-  it('已有 ruleId 但未生成脚本时测试脚本按钮禁用', async () => {
+  it('已有输入表但未生成脚本时测试脚本按钮禁用', async () => {
     mockAssets()
     const { flow, wrapper } = mountOnRuleNode()
-    flow.patchRuleConfig('rule-1', { mode: 'ref', ruleId: 'orch-173', inputTable: 'sense_data.TB_JD_SKU_BASE' })
+    flow.configs['rule-1'].configId = '184'
+    flow.patchRuleConfig('rule-1', { mode: 'ref', inputTable: 'sense_data.TB_JD_SKU_BASE' })
     await flushPromises()
     const disabledBtn = wrapper.findAll('button').find((b) => b.text() === '测试脚本')!
     expect(disabledBtn.attributes('disabled')).toBeDefined()
@@ -1352,7 +1357,6 @@ describe('RuleOrchestrationTab · 测试脚本切换数据视图', () => {
     const { flow, wrapper } = mountOnRuleNode()
     flow.patchRuleConfig('rule-1', {
       mode: 'ref',
-      ruleId: 'orch-173',
       inputTableId: '2102154',
       script: '',
       scriptPath: '/code01/202609/1788326374508.py',

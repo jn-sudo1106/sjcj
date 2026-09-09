@@ -45,7 +45,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
       }
       if (capability?.kind !== 'login' && !c.collectCfg.outputTable) return false
     } else if (isRuleNode(c)) {
-      if (!c.ruleCfg?.ruleId || !c.ruleCfg.script?.trim()) return false
+      if (!c.configId || !c.ruleCfg?.script?.trim()) return false
     } else if (isDataNode(c) && !nodeOutputTable(c)) {
       return false
     }

@@ -145,4 +145,17 @@ describe('FlowBoard · 节点卡片「⊞ 输出表」角标', () => {
     const chip = card.findAll('.rc-chip').find((c) => c.text() === '待配置')!
     expect(chip.attributes('title')).toBe('还缺：输出表')
   })
+
+  it('规则节点已有 configId 和脚本时不再因为缺 ruleId 显示待配置', async () => {
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({ tableId: '6200026', tableName: 'sense_data.T_6200026', name: '表-6200026', fields: [] } as never)
+    const { flow, wrapper } = await mountBoard()
+    const ruleId = flow.main.find((id) => flow.configs[id]?.ruleCfg)!
+    flow.configs[ruleId].configId = '1400998'
+    delete flow.configs[ruleId].ruleCfg!.ruleId
+    flow.patchRuleConfig(ruleId, { script: 'def main():\n    return {}' })
+    await flushPromises()
+
+    const card = wrapper.findAll('.rc-flow-node').find((c) => c.text().includes(flow.configs[ruleId].title))!
+    expect(card.findAll('.rc-chip').some((c) => c.text() === '待配置')).toBe(false)
+  })
 })
