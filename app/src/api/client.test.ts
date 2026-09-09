@@ -315,6 +315,27 @@ describe('生产写守卫', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  it('连生产时，entry/entryDelete 与 entry/entryDeleteBatch 在白名单内（源数据视图删除数据，2026-09-09 放开）', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: { success: 1 } }))
+    const { request } = await import('./client')
+
+    await request('data/rowDelete', { tableId: '900', sourceId: '1', all: 1 }, {
+      method: 'GET',
+      httpEndpoint: 'entry/entryDelete',
+      httpParams: { entryTypeId: '900', sourceId: '1', all: 1, key: 9 },
+    })
+    await request('data/rowDeleteBatch', { tableId: '900', ids: ['1'] }, {
+      method: 'POST',
+      httpEndpoint: 'entry/entryDeleteBatch',
+      httpParams: { ids: ['1'], entryTypeId: '900' },
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/v1/entry/entryDelete')
+    expect(String(fetchMock.mock.calls[1][0])).toContain('/api/v1/entry/entryDeleteBatch')
+  })
+
   it('连生产时，source/nextStep 与 source/nextStep2 在白名单内（数据视图发后续，与发抓取同性质）', async () => {
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '已提交', data: null }))
