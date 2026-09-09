@@ -10,10 +10,10 @@ import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
   collectorCapabilityOf, isRuleNode, isMonitorNode, makeDefaultRuleOrchestration,
-  fieldOptionsFromTableOrOutput, MONITOR_METHODS,
+  fieldOptionsFromTableOrOutput,
   type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
-import { configApi, entryApi, type EntryType, type RuleOrchestration } from '@/api'
+import { entryApi, type EntryType, type RuleOrchestration } from '@/api'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { usePresetTables } from '@/composables/usePresetTables'
 import TableEditDialog from '../TableEditDialog.vue'
@@ -30,39 +30,6 @@ const cc = computed(() => cfg.value?.collectCfg)
 
 const isRule = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
 const isMonitor = computed(() => (cfg.value ? isMonitorNode(cfg.value) : false))
-
-// ---- 数据监控节点：监控方法复选（2026-09-01，monitor 不落表/不出参，只绑输入表 + 选监控方法） ----
-const monitorMethods = computed<string[]>(() => cfg.value?.monitorMethods ?? [])
-function setMonitorMethods(values: string[]) {
-  flow.setMonitorMethods(id.value, values ?? [])
-}
-
-// 监控方法随 config 的 checkRule 落库（逗号分隔，拼接见 RuleOrchestrationTab.onGenerateScript）。
-// 进表配置时本地勾选为空且节点已绑配置，就按 configDetail 原始记录的 checkRule 回填——
-// 与 restoreFieldsFromColumns 同一原则：只补不覆盖，用户改过就以本地为准。
-const checkRuleRestoreToken = ref('')
-watch(
-  () => [id.value, isMonitor.value, cfg.value?.configId ?? '', cfg.value?.monitorMethods?.length ?? 0] as const,
-  ([nid, monitor, configId, methodCount]) => {
-    if (!monitor || !configId || methodCount) return
-    const token = `${nid}:${configId}`
-    if (checkRuleRestoreToken.value === token) return
-    checkRuleRestoreToken.value = token
-    void (async () => {
-      try {
-        const record = await configApi.configDetailRaw(String(configId))
-        const saved = String(record?.checkRule ?? '').trim()
-        if (!saved) return
-        const known = new Set(MONITOR_METHODS)
-        const restored = saved.split(',').map((m) => m.trim()).filter((m) => m && known.has(m))
-        if (restored.length) flow.setMonitorMethods(String(nid), restored)
-      } catch {
-        // 回填失败不阻塞表配置，用户仍可手动勾选
-      }
-    })()
-  },
-  { immediate: true },
-)
 
 // ---- 规则节点：表/字段绑定（0804 拍板：搬回表配置） ----
 const ruleCfg = computed<RuleOrchestration>(() => ({
@@ -323,21 +290,6 @@ async function onTableSaved(tableId: string) {
       :hide-output="isMonitor"
       @update:model-value="patchRule"
     />
-    <div v-if="isMonitor" class="rc-field" data-testid="monitor-methods-field">
-      <label>监控方法</label>
-      <el-select
-        class="rc-table-select"
-        :model-value="monitorMethods"
-        multiple
-        collapse-tags
-        collapse-tags-tooltip
-        clearable
-        placeholder="选择监控方法"
-        @update:model-value="setMonitorMethods"
-      >
-        <el-option v-for="m in MONITOR_METHODS" :key="m" :label="m" :value="m" />
-      </el-select>
-    </div>
   </template>
 
   <template v-else>

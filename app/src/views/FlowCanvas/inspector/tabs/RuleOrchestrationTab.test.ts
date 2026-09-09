@@ -583,12 +583,42 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(listSpy).not.toHaveBeenCalled()
   })
 
-  it('数据监控节点显示数据监控描述', async () => {
+  it('数据监控节点显示描述输入框', async () => {
     mockAssets()
     const { wrapper } = mountOnMonitorNode()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('数据监控描述')
+    expect(wrapper.find('textarea.rc-input.rc-textarea').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="monitor-methods-field"]').exists()).toBe(true)
+  })
+
+  it('数据监控节点在设置业务规则上方展示监控方法并写入节点配置', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnMonitorNode()
+    await flushPromises()
+
+    const monitorField = wrapper.find('[data-testid="monitor-methods-field"]')
+    expect(monitorField.exists()).toBe(true)
+    expect(monitorField.element.compareDocumentPosition(wrapper.find('.ni-section-title').element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    const select = monitorField.findComponent({ name: 'ElSelect' })
+    await select.vm.$emit('update:modelValue', ['数据延迟监控', '每日数据量监控'])
+    await flushPromises()
+
+    expect(flow.configs['monitor-1'].monitorMethods).toEqual(['数据延迟监控', '每日数据量监控'])
+  })
+
+  it('数据监控节点进入编排配置时按 checkRule 回填监控方法', async () => {
+    mockAssets()
+    vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({
+      configId: '184', checkRule: '当日数据是否正常入库, 数据延迟监控,不存在的监控',
+    })
+    const { flow } = mountOnMonitorNode()
+    flow.configs['monitor-1'].configId = '184'
+    await flushPromises()
+
+    expect(configApi.configDetailRaw).toHaveBeenCalledWith('184')
+    expect(flow.configs['monitor-1'].monitorMethods).toEqual(['当日数据是否正常入库', '数据延迟监控'])
   })
 
   it('数据监控节点进入编排配置时自动组装监控描述', async () => {

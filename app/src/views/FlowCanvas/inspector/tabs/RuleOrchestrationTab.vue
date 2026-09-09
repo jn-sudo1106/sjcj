@@ -13,7 +13,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
-import { isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { configApi, entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { isVruleNumericRuleId } from '@/api/legacyAdapters'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
@@ -58,6 +58,38 @@ const promptCategoryGroups = computed(() => promptCategoryGroupsForNode(cfg.valu
 const promptCategory = computed(() => resolvePromptCategoryForNode(cfg.value, orchCfg.value.promptCategory))
 const promptListCategory = computed(() => promptListCategoryForNode(cfg.value))
 const describeTouched = ref(false)
+
+// 数据监控节点：监控方法与规则描述同属编排语义，放在「设置业务规则」上方。
+const monitorMethods = computed<string[]>(() => cfg.value?.monitorMethods ?? [])
+function setMonitorMethods(values: string[]) {
+  flow.setMonitorMethods(id.value, values ?? [])
+}
+
+// 监控方法随 config 的 checkRule 落库（逗号分隔，生成脚本时仍按原口径传给后端）。
+// 本地已有勾选时不覆盖；否则按当前配置详情回填已保存的候选项。
+const checkRuleRestoreToken = ref('')
+watch(
+  () => [id.value, isMonitor.value, cfg.value?.configId ?? '', cfg.value?.monitorMethods?.length ?? 0] as const,
+  ([nid, monitor, configId, methodCount]) => {
+    if (!monitor || !configId || methodCount) return
+    const token = `${nid}:${configId}`
+    if (checkRuleRestoreToken.value === token) return
+    checkRuleRestoreToken.value = token
+    void (async () => {
+      try {
+        const record = await configApi.configDetailRaw(String(configId))
+        const saved = String(record?.checkRule ?? '').trim()
+        if (!saved) return
+        const known = new Set(MONITOR_METHODS)
+        const restored = saved.split(',').map((m) => m.trim()).filter((m) => m && known.has(m))
+        if (restored.length) flow.setMonitorMethods(String(nid), restored)
+      } catch {
+        // 回填失败不阻断编排配置，用户仍可手动选择。
+      }
+    })()
+  },
+  { immediate: true },
+)
 
 function formatTableLabel(table?: Pick<EntryType, 'name' | 'tableName'> | null): string {
   const name = table?.name?.trim() || ''
@@ -754,6 +786,21 @@ function goToDataView() {
 </script>
 
 <template>
+  <div v-if="isMonitor" class="rc-field rc-monitor-methods-field" data-testid="monitor-methods-field">
+    <label>监控方法</label>
+    <el-select
+      class="rc-monitor-methods-select"
+      :model-value="monitorMethods"
+      multiple
+      collapse-tags
+      collapse-tags-tooltip
+      clearable
+      placeholder="选择监控方法"
+      @update:model-value="setMonitorMethods"
+    >
+      <el-option v-for="m in MONITOR_METHODS" :key="m" :label="m" :value="m" />
+    </el-select>
+  </div>
   <div class="ni-section-title ni-section-title-row">
     <span>{{ isRule ? '设置业务规则' : '抓取配置' }}</span>
     <span class="ni-section-actions">
