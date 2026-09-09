@@ -367,31 +367,32 @@ async function resetAndLoad() {
       // 具体源：候选源集合永远只有它自己，退化成单源归并，复用同一套分页逻辑。
       candidateSourceIds = [selectedSourceId.value]
     } else {
-      // 全部源：先收窄源集合（方案 §6.2.2）：问这张表实际有哪些源的数据，跟当前网站源集合取交集。
-      // 收窄本身失败不阻断整体查询，退回用网站全部源（请求量更大，但结果仍然正确）。
-      // ⚠️ entryDistinctSource 不按网站过滤，返回的是全平台写过这张表的源；不传 size 会退回
-      // buildLegacyRowQuery 的分页默认值 20（真实 bug，2026-08-14 生产环境实测发现：某些共用表
-      // 全平台引用源数超过 20，本网站的源恰好不在前 20 个里，交集算出来是空的，页面误报"没有可
-      // 查询的源"）。size 传大值取全量，1000 是 Q10 已实测确认不截断的安全值。
-      let distinctIds: string[] | null = null
-      ;[siteChildren.value, distinctIds] = await Promise.all([
-        siteApi.siteSources(props.siteId),
-        dataApi.distinctSource({
-          tableId: tid,
-          dataId: filters.dataId || undefined,
-          parentId: filters.parentId || undefined,
-          state: filters.state || undefined,
-          sql: filters.sql || undefined,
-          size: 1000,
-        }).catch(() => null),
-      ])
+      // 全部源：候选源**只在本网站范围内算**（2026-09-09 定案，用户原话「明确点，肯定是
+      // 这个网站下的」）。
+      //
+      // 原来这里先问 entryDistinctSource「这张表有哪些源的数据」再跟网站源取交集。那个接口
+      // 按表和条件搜**全库、不认 siteId**，共用大表下必被上限截断，本网站的源整个排在名单
+      // 之外——实测同一条件 size=1000 返 1000、size=5000 返 5000，上限调多大都堵不住。
+      // 后果极隐蔽：侧栏反查说命中 276 个源，数据列表只扫了 122 个、凑出 10 条，另外
+      // 154 个源的数据凭空消失，页面上没有任何异常提示。
+      //
+      // 现在两条路都限定在网站的源集合里：
+      //   · 带条件：用与「按条件查源」同一套精确收窄（把网站源写进查询条件分片问
+      //     summaryEntryData，服务端只在这批源里筛，不存在截断），把候选压到真正命中的那些；
+      //   · 不带条件：直接用网站全部源。此时数据密集，归并查询本来就是扫到够一页就停，
+      //     不值得为收窄先付一轮请求。
+      siteChildren.value = await siteApi.siteSources(props.siteId)
       if (id !== requestId) return
-      const siteSourceIds = new Set(siteChildren.value.map((s) => s.sourceId))
-      const scopedDistinctIds = distinctIds?.filter((sid) => siteSourceIds.has(sid)) ?? []
-      // entryDistinctSource 只是优化候选源的接口，不是“没有数据”的最终判定。
-      // 旧接口可能因分页、数据口径或表级记录异常返回空集合；空集合时回退到网站全部源，
-      // 让 entryDataPaged 进行真实查询，避免把 TB_CNEWS 这类有效表提前判成不可查。
-      candidateSourceIds = scopedDistinctIds.length ? scopedDistinctIds : [...siteSourceIds]
+      const siteSourceIds = siteChildren.value.map((s) => s.sourceId)
+      const hasCondition = !!(filters.sql || filters.state || filters.dataId || filters.parentId)
+      if (hasCondition && siteSourceIds.length) {
+        const exact = await backTraceSources(buildSummaryQuery(), siteSourceIds).catch(() => null)
+        if (id !== requestId) return
+        // 收窄失败不阻断整体查询，退回网站全部源（请求量更大，但结果仍然正确）
+        candidateSourceIds = exact?.sourceIds.length ? exact.sourceIds : siteSourceIds
+      } else {
+        candidateSourceIds = siteSourceIds
+      }
     }
     if (!candidateSourceIds.length) {
       noCandidateSources.value = true
@@ -434,6 +435,10 @@ watch(() => props.siteId, () => {
 })
 
 function runQuery() {
+  // 点「查询」就把侧栏的命中态清掉（2026-09-09，用户原话「点击查询后左侧的条件就要去掉了，
+  // 不能带着」）：那份名单是**上一次**反查按**当时**条件算出来的快照，条件一改就过期了。
+  // 留着它，侧栏显示的源和眼前这批数据对不上，人会以为是查询出了问题。
+  ws.clearBackTraceHits()
   void resetAndLoad()
 }
 function clearFilters() {

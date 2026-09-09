@@ -222,7 +222,6 @@ describe('SqlConditionEditor · 粘贴多行 SQL', () => {
     input.selectionEnd = at
     const e = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
     Object.defineProperty(e, 'clipboardData', { value: { getData: () => text } })
-    Object.defineProperty(e, 'target', { value: input })
     input.dispatchEvent(e)
     return e
   }
