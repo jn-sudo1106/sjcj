@@ -35,6 +35,7 @@ import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import DataGrid from './DataGrid.vue'
 import FilePreview from './components/FilePreview.vue'
 import { backTraceSources } from '@/utils/data/backTraceSources'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { extFromName } from '@/utils/ossFile'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import { readRailOpen, writeRailOpen } from './railPref'
@@ -506,6 +507,7 @@ function buildSummaryQuery(): RowQuery {
 // 求命中源的算法原样保留在 `utils/data/backTraceSources.ts`（09-04 六轮修复换来的，别重写）。
 //
 // 复用 buildSummaryQuery——统计和反查问的是同一批数据，条件口径必须一致，不另拼一份。
+const ws = useWorkspaceStore()
 const backTracing = ref(false)
 /**
  * 反查按钮的可用性。
@@ -514,29 +516,57 @@ const backTracing = ref(false)
  * 你带条件就是查这个条件下的」——无条件是合法语义，直接进源视图看全部源。
  */
 const canBackTrace = computed(() => !!effectiveTableId.value)
-async function openBackTrace() {
-  if (!canBackTrace.value || backTracing.value) return
+/** 反查一次，把命中源交给调用方。无条件 / 空结果都返回 null，由调用方决定怎么提示。 */
+async function runBackTrace(): Promise<{ sourceIds: string[]; hitCountBySource: Map<string, number> } | null> {
   const hasCondition = !!(filters.sql || filters.state || filters.dataId || filters.parentId)
-  // 无条件 = 全部源：不必发请求，直接进源视图不带 sourceIds
   if (!hasCondition) {
-    void router.push({ path: '/canvas', query: { siteId: props.siteId, view: 'source' } })
-    return
+    ElMessage.info('先填至少一个数据条件（SQL / 状态 / 数据 ID / 父 ID），再按条件查源')
+    return null
   }
   backTracing.value = true
   try {
-    const { sourceIds } = await backTraceSources(buildSummaryQuery(), siteChildren.value.map((s) => s.sourceId))
+    const { sourceIds, hitCountBySource } = await backTraceSources(
+      buildSummaryQuery(),
+      siteChildren.value.map((s) => s.sourceId),
+    )
     if (!sourceIds.length) {
-      // 不跳：跳过去是一张空源列表，用户会以为源视图坏了
       ElMessage.info('当前条件没有命中任何源')
-      return
+      return null
     }
-    // 带着源 ID 去源视图：那边的「源 ID」筛选框本来就收逗号分隔的多个 ID
-    void router.push({ path: '/canvas', query: { siteId: props.siteId, view: 'source', sourceIds: sourceIds.join(',') } })
+    return { sourceIds, hitCountBySource }
   } catch (e) {
     ElMessage.error(`反查源失败：${(e as Error)?.message ?? String(e)}`)
+    return null
   } finally {
     backTracing.value = false
   }
+}
+
+/**
+ * 主路径（0909 改）：命中源写进**左侧源侧栏**，人留在数据视图。
+ *
+ * 原来是 router.push 到源视图。会上原话「就是要再加到左边最好」「因为我点一个源又要进去」
+ * ——跳过去只是换了个地方看列表，挨个排查问题源还是得在两个视图之间来回跳。
+ * 写侧栏之后，侧栏收窄成命中的这几个源、按命中条数从多到少排，点一个看一个，不用离开。
+ */
+async function openBackTrace() {
+  if (!canBackTrace.value || backTracing.value) return
+  const hit = await runBackTrace()
+  if (!hit) return
+  ws.setBackTraceHits(
+    props.siteId,
+    hit.sourceIds.map((sourceId) => ({ sourceId, count: hit.hitCountBySource.get(sourceId) ?? 0 })),
+  )
+  ElMessage.success(`命中 ${hit.sourceIds.length} 个源，已填进左侧源列表`)
+}
+
+/** 第二条路：仍旧跳源视图。反查完要批量发任务 / 批量改标签时，那边的勾选和批量条更好使。 */
+async function openBackTraceInSourceView() {
+  if (!canBackTrace.value || backTracing.value) return
+  const hit = await runBackTrace()
+  if (!hit) return
+  // 那边的「源 ID」筛选框本来就收逗号分隔的多个 ID
+  void router.push({ path: '/canvas', query: { siteId: props.siteId, view: 'source', sourceIds: hit.sourceIds.join(',') } })
 }
 
 const summaryOpen = ref(false)
@@ -661,10 +691,20 @@ function onCellFile(path: string) {
           class="rc-btn"
           type="button"
           data-testid="site-data-backtrace"
-          :disabled="!canBackTrace"
-          :title="canBackTrace ? '按当前数据条件反查命中的源' : '先填至少一个数据条件（SQL / 状态 / 数据 ID / 父 ID）'"
+          :disabled="!canBackTrace || backTracing"
+          :title="canBackTrace ? '按当前数据条件反查命中的源，结果填进左侧源列表' : '先选一张表'"
           @click="openBackTrace"
-        >{{ backTracing ? '反查中…' : '按条件查源 →' }}</button>
+        >{{ backTracing ? '反查中…' : '按条件查源 ←' }}</button>
+        <!-- 反查完还想批量发任务 / 批量改标签时，源视图的勾选与批量条仍然有用，
+             所以旧的跳转不删，收进下拉当第二条路（0909）。 -->
+        <el-dropdown trigger="click">
+          <button class="rc-btn" type="button" data-testid="site-data-backtrace-more" :disabled="!canBackTrace || backTracing">⋯</button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item @click="openBackTraceInSourceView">在源视图打开（可勾选批量发任务）</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </template>
     </div>
 

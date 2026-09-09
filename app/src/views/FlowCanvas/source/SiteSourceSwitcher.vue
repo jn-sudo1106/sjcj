@@ -74,17 +74,34 @@ const collapsed = ref(false)
 const listExpanded = ref(true)
 const detailExpanded = ref(true)
 const kw = ref('')
+/**
+ * 按数据条件反查出的命中源（2026-09-09）。数据视图点「按条件查源」后写进 store，
+ * 侧栏在此收窄成"只显示这批源"，按命中条数从多到少排——问题最严重的排最前。
+ *
+ * 为什么不复用搜索框：`kw` 是单关键词子串匹配（name/sourceId 任一包含即可），
+ * 喂不进一批 ID；硬拼成 "a|b|c" 还得改匹配规则，两件事的语义也不一样
+ * （搜索是"我记得名字里有这几个字"，命中是"就这些源，别的别显示"）。
+ */
+const hits = computed(() => ws.backTraceHitsOf(props.siteId))
+const hitCountBy = computed(() => new Map(hits.value.map((h) => [h.sourceId, h.count])))
+const hitFiltered = computed(() => {
+  if (!hits.value.length) return children.value
+  const order = new Map(hits.value.map((h, i) => [h.sourceId, i]))
+  return children.value
+    .filter((s) => order.has(s.sourceId))
+    .sort((a, b) => (order.get(a.sourceId) ?? 0) - (order.get(b.sourceId) ?? 0))
+})
 const filtered = computed(() => {
   const q = kw.value.trim().toLowerCase()
-  if (!q) return children.value
-  return children.value.filter((s) => s.name.toLowerCase().includes(q) || s.sourceId.toLowerCase().includes(q))
+  if (!q) return hitFiltered.value
+  return hitFiltered.value.filter((s) => s.name.toLowerCase().includes(q) || s.sourceId.toLowerCase().includes(q))
 })
 // 分页渲染：源多的网站（实测 6496 个）一次性铺 6496 行会把 #app DOM 顶到 29 万节点，
 // 首屏渲染和之后每次响应式刷新都被拖慢。只渲染前 shownCount 行，滚到底再追加一页。
 const LIST_PAGE = 120
 const shownCount = ref(LIST_PAGE)
 const visibleRows = computed(() => filtered.value.slice(0, shownCount.value))
-watch([kw, children], () => { shownCount.value = LIST_PAGE })
+watch([kw, children, hitFiltered], () => { shownCount.value = LIST_PAGE })
 function onListScroll(e: Event) {
   const el = e.target as HTMLElement
   if (
@@ -828,9 +845,15 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
         <span class="ssw-section-icon">{{ listExpanded ? '▼' : '▶' }}</span>
       </div>
       <template v-if="listExpanded">
-        <input v-model="kw" class="ssw-search" placeholder="搜索源" />
+        <!-- 反查命中态（2026-09-09）：列表已收窄到条件命中的源，给一条明确的出口，
+             否则用户会以为侧栏坏了——6496 个源突然只剩十几个。 -->
+        <div v-if="hits.length" class="ssw-hit-bar" data-testid="sidebar-backtrace-bar">
+          <span class="ssw-hit-text">条件命中 {{ hits.length }} 个源</span>
+          <button class="ssw-hit-clear" type="button" title="恢复显示全部源" @click="ws.clearBackTraceHits()">✕</button>
+        </div>
+        <input v-model="kw" class="ssw-search" :placeholder="hits.length ? '在命中的源里搜索' : '搜索源'" />
         <div class="ssw-list" @scroll.passive="onListScroll">
-          <div v-if="!kw" class="ssw-row" :class="{ active: !activeKey }">
+          <div v-if="!kw && !hits.length" class="ssw-row" :class="{ active: !activeKey }">
             <button
               class="ssw-row-all-btn"
               type="button"
@@ -876,6 +899,12 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
                 </div>
                 <div class="ssw-row-id">{{ c.sourceId }}</div>
               </div>
+              <span
+                v-if="hitCountBy.get(c.sourceId)"
+                class="ssw-hit-count"
+                data-testid="sidebar-hit-count"
+                :title="`该源命中 ${hitCountBy.get(c.sourceId)} 条`"
+              >{{ hitCountBy.get(c.sourceId) }}</span>
             </button>
             <button
               v-if="canCompare && c.sourceId !== activeKey"
@@ -885,7 +914,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
               @click.stop="emit('compare', c.sourceId)"
             >⇔</button>
           </div>
-          <div v-if="!filtered.length" class="ssw-empty">{{ kw ? '没有匹配的源' : '该网站暂无源' }}</div>
+          <div v-if="!filtered.length" class="ssw-empty">{{ kw ? '没有匹配的源' : (hits.length ? '命中的源不在当前列表里' : '该网站暂无源') }}</div>
           <div v-else-if="visibleRows.length < filtered.length" class="ssw-more-hint">
             已显示 {{ visibleRows.length }} / {{ filtered.length }}，向下滚动加载更多
           </div>
@@ -1278,6 +1307,12 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 .ssw-collapse { flex: none; border: 0; background: transparent; color: var(--rc-faint); font-size: 13px; cursor: pointer; width: 20px; height: 24px; border-radius: 5px; }
 .ssw-collapse:hover { background: #f1f5f9; color: var(--rc-text); }
 
+.ssw-hit-bar { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 0 8px 6px; padding: 5px 8px; border: 1px solid #bfdbfe; border-radius: 6px; background: var(--rc-primary-bg); }
+.ssw-hit-text { color: var(--rc-primary-ink); font-size: 11px; font-weight: 600; }
+.ssw-hit-clear { flex: none; border: 0; background: transparent; color: var(--rc-primary-ink); font-size: 12px; line-height: 1; cursor: pointer; }
+.ssw-hit-clear:hover { color: var(--rc-error); }
+/* 命中条数：跟在源名右侧，数字越大越靠前（列表已按它排序），一眼看出先查谁 */
+.ssw-hit-count { flex: none; margin-left: 6px; padding: 1px 6px; border-radius: 9px; background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-size: 10px; font-weight: 700; font-family: var(--rc-mono, monospace); }
 .ssw-search {
   flex: none;
   height: 28px;

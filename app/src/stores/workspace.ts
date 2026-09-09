@@ -30,6 +30,12 @@ export interface SourceTabSnapshot {
   page?: number
 }
 
+/** 反查命中的一个源：`count` 来自 summaryEntryData 的分组计数（该源命中几条数据） */
+export interface BackTraceHit {
+  sourceId: string
+  count: number
+}
+
 export const MAX_SOURCE_TABS = 8
 const SS_KEY = 'rc-source-tabs'
 
@@ -65,6 +71,16 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   // 属临时查看态，不做 sessionStorage 持久化（刷新即退出对比，回到单栏）。
   const compareSourceId = ref<string>('')
   const compareLeftId = ref<string>('')
+  /**
+   * 按数据条件反查出的命中源（2026-09-09）：数据视图写入，源侧栏消费。
+   *
+   * 会上原话「就是要再加到左边最好」「因为我点一个源又要进去」——反查结果原来是跳到源视图，
+   * 想挨个排查问题源就得在两个视图之间来回跳。改成写侧栏后，人留在数据视图里点着看。
+   *
+   * 带 siteId 是因为侧栏跟着网站走：切到别的网站，这批命中源就不适用了，得自动失效。
+   * 与 compareSourceId 同属临时查看态，不做 sessionStorage 持久化（刷新即回到全部源）。
+   */
+  const backTraceHits = ref<{ siteId: string; hits: BackTraceHit[] } | null>(null)
 
   let persistTimer: ReturnType<typeof setTimeout> | null = null
   watch(
@@ -138,6 +154,19 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     compareLeftId.value = ''
   }
 
+  /** 命中条数从多到少——问题最严重的源排最前，一眼看出先查谁。 */
+  function setBackTraceHits(siteId: string, hits: BackTraceHit[]) {
+    backTraceHits.value = { siteId, hits: [...hits].sort((a, b) => b.count - a.count) }
+  }
+  function clearBackTraceHits() {
+    backTraceHits.value = null
+  }
+  /** 侧栏取本网站的命中源；网站对不上（切过站了）当作没有。 */
+  function backTraceHitsOf(siteId: string): BackTraceHit[] {
+    const cur = backTraceHits.value
+    return cur && cur.siteId === siteId ? cur.hits : []
+  }
+
   /** 改源名称时只改页签文案，不激活、不新建页签（侧栏编辑当前源用） */
   function renameTab(sourceId: string, name: string) {
     const tab = tabs.value.find((t) => t.sourceId === sourceId)
@@ -153,5 +182,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return snapshots[sourceId]
   }
 
-  return { tabs, activeSourceId, snapshots, compareSourceId, compareLeftId, open, activate, deactivate, close, renameTab, saveSnapshot, snapshotOf, enterCompare, exitCompare }
+  return { tabs, activeSourceId, snapshots, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, renameTab, saveSnapshot, snapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf }
 })

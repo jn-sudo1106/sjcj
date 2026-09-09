@@ -7,6 +7,8 @@
 // 更多，不是具体源单独一套总数/上一页下一页）、同一套筛选行位置，只是可编辑字段不同。
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import SiteDataView from './SiteDataView.vue'
 import { readSqlConditions } from '@/utils/sqlConditionHistory'
@@ -29,9 +31,15 @@ const stubs = {
   ElDrawer: true,
   ElDialog: { name: 'ElDialog', props: ['modelValue'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' },
   SummaryDrawer: true,
+  // 「按条件查源」旁边的 ⋯ 下拉（0909）：默认桩不渲染插槽，菜单项断言不到
+  ElDropdown: { name: 'ElDropdown', template: '<div><slot /><slot name="dropdown" /></div>' },
+  ElDropdownMenu: { name: 'ElDropdownMenu', template: '<div><slot /></div>' },
+  ElDropdownItem: { name: 'ElDropdownItem', props: ['disabled', 'divided'], template: '<div class="el-dropdown-item"><slot /></div>' },
 }
 
 function mountView(siteId = 'site-a') {
+  // 反查命中源写进 workspace store 供侧栏消费（0909），组件里用了 useWorkspaceStore
+  setActivePinia(createPinia())
   return mount(SiteDataView, { props: { siteId }, global: { stubs } })
 }
 
@@ -648,5 +656,73 @@ describe('SiteDataView · 上游数据下钻（M3-0H）', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="site-data-parent-panel"]').exists()).toBe(false)
+  })
+})
+
+// 按条件查源（0909 改落点）：命中源从「跳到源视图」改成「写进左侧源侧栏」。
+// 会上原话「就是要再加到左边最好」「因为我点一个源又要进去」——跳过去只是换个地方看列表，
+// 挨个排查问题源还得在两个视图之间来回跳。
+describe('SiteDataView · 按条件查源', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  async function backTraceReady() {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1'), source('s2'), source('s3')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['s1', 's2', 's3'])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    // 反查主路径：summaryEntryData 按 SOURCE_ID 分组，一次拿到「哪些源 + 各命中几条」
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([
+      { SOURCE_ID: 's2', CNT: 3 },
+      { SOURCE_ID: 's1', CNT: 12 },
+    ] as never)
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    await wrapper.get('input.sdv2-input.flex').setValue("K1 IS NULL")
+    return wrapper
+  }
+
+  it('命中源写进 workspace store 供侧栏消费，按命中条数从多到少排', async () => {
+    const wrapper = await backTraceReady()
+    await wrapper.get('[data-testid="site-data-backtrace"]').trigger('click')
+    await flushPromises()
+
+    const ws = useWorkspaceStore()
+    expect(ws.backTraceHitsOf('site-a')).toEqual([
+      { sourceId: 's1', count: 12 },
+      { sourceId: 's2', count: 3 },
+    ])
+  })
+
+  it('命中态按 siteId 隔离：切到别的网站就不适用了，侧栏拿不到', async () => {
+    const wrapper = await backTraceReady()
+    await wrapper.get('[data-testid="site-data-backtrace"]').trigger('click')
+    await flushPromises()
+
+    const ws = useWorkspaceStore()
+    expect(ws.backTraceHitsOf('site-a')).toHaveLength(2)
+    expect(ws.backTraceHitsOf('site-other')).toEqual([])
+  })
+
+  it('没填任何数据条件时不发请求，只提示——无条件反查等于把全部源填回去，没意义', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['s1'])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    const summary = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([])
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    await wrapper.get('[data-testid="site-data-backtrace"]').trigger('click')
+    await flushPromises()
+
+    expect(summary).not.toHaveBeenCalled()
+    expect(useWorkspaceStore().backTraceHitsOf('site-a')).toEqual([])
+  })
+
+  it('旧的「跳源视图」收进 ⋯ 下拉当第二条路：反查完要批量发任务时那边的勾选更好使', async () => {
+    const wrapper = await backTraceReady()
+    expect(wrapper.find('[data-testid="site-data-backtrace-more"]').exists()).toBe(true)
+    const item = wrapper.findAll('.el-dropdown-item').find((i) => i.text().includes('源视图'))
+    expect(item).toBeTruthy()
   })
 })

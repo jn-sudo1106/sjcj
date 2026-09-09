@@ -714,3 +714,70 @@ describe('SiteSourceSwitcher · 强刷竞态防护', () => {
     wrapper.unmount()
   })
 })
+
+// 反查命中态（0909）：数据视图「按条件查源」把命中源写进 store，侧栏在此收窄。
+// 会上原话「就是要再加到左边最好」「因为我点一个源又要进去」。
+describe('SiteSourceSwitcher · 按条件查源的命中态', () => {
+  const many = [
+    { ...source, sourceId: 's1', name: '源一' },
+    { ...source, sourceId: 's2', name: '源二' },
+    { ...source, sourceId: 's3', name: '源三' },
+  ]
+
+  async function mountWithHits(hits: { sourceId: string; count: number }[], siteId = 'site-a') {
+    sessionStorage.clear()
+    setActivePinia(createPinia())
+    mockApis()
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue(many)
+    vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue(many)
+    const ws = useWorkspaceStore()
+    if (hits.length) ws.setBackTraceHits(siteId, hits)
+    const wrapper = mount(SiteSourceSwitcher, {
+      props: { siteId: 'site-a', activeKey: '' },
+      global: {
+        stubs: { 'el-drawer': { template: '<div><slot /><slot name="footer" /></div>' } },
+        directives: { loading: {} },
+      },
+    })
+    await flushPromises()
+    return { wrapper, ws }
+  }
+
+  it('只显示命中的源，并按命中条数从多到少排——问题最严重的排最前', async () => {
+    const { wrapper } = await mountWithHits([{ sourceId: 's3', count: 2 }, { sourceId: 's1', count: 40 }])
+
+    const names = wrapper.findAll('.ssw-row-name').map((n) => n.text())
+    expect(names).toEqual(['源一', '源三'])
+    expect(wrapper.text()).not.toContain('源二')
+  })
+
+  it('每行带上该源命中几条', async () => {
+    const { wrapper } = await mountWithHits([{ sourceId: 's1', count: 40 }, { sourceId: 's3', count: 2 }])
+    expect(wrapper.findAll('[data-testid="sidebar-hit-count"]').map((n) => n.text())).toEqual(['40', '2'])
+  })
+
+  it('给一条明确的出口：显示命中个数 + ✕ 恢复全部源', async () => {
+    const { wrapper, ws } = await mountWithHits([{ sourceId: 's1', count: 40 }])
+    const bar = wrapper.get('[data-testid="sidebar-backtrace-bar"]')
+    expect(bar.text()).toContain('条件命中 1 个源')
+
+    await bar.get('button').trigger('click')
+    await flushPromises()
+    expect(ws.backTraceHitsOf('site-a')).toEqual([])
+    // 恢复全部源，「全部（不根据源 ID 过滤）」那一行也随之回来——命中态下它是藏起来的
+    expect(wrapper.findAll('.ssw-row-name').map((n) => n.text())).toEqual(['全部', '源一', '源二', '源三'])
+  })
+
+  it('命中态属于另一个网站时不生效，侧栏照常显示全部源', async () => {
+    const { wrapper } = await mountWithHits([{ sourceId: 's1', count: 40 }], 'site-other')
+    expect(wrapper.find('[data-testid="sidebar-backtrace-bar"]').exists()).toBe(false)
+    expect(wrapper.findAll('.ssw-row-name').map((n) => n.text())).toEqual(['全部', '源一', '源二', '源三'])
+  })
+
+  it('没有命中态时一切照旧（不显示提示条、不显示条数、保留「全部」行）', async () => {
+    const { wrapper } = await mountWithHits([])
+    expect(wrapper.find('[data-testid="sidebar-backtrace-bar"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="sidebar-hit-count"]').exists()).toBe(false)
+    expect(wrapper.findAll('.ssw-row-name').map((n) => n.text())).toEqual(['全部', '源一', '源二', '源三'])
+  })
+})
