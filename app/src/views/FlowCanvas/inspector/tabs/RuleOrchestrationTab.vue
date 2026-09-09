@@ -653,6 +653,8 @@ async function onGenerateScript(
 const workbenchOpen = ref(false)
 
 const savingScript = ref(false)
+const codeTestLoading = ref(false)
+const codeTestResult = ref('')
 
 async function onSaveScript() {
   if (!orchCfg.value.script?.trim()) {
@@ -767,11 +769,11 @@ async function onApplySwitch() {
   }
 }
 
-// ---- 测试脚本：切换到流程视图右侧面板的「数据视图」tab（view=data），保留当前源上下文，
-// 并把当前编辑节点作为 nodeId 带上，让数据视图自动定位到该节点（而不是默认落首节点）——
-// ResultView 初始化时优先取 URL 的 nodeId query（queryNodeId），与「查看条件」深链同一套机制 ----
+// ---- 测试脚本：普通规则处理仍切换到「数据视图」tab；数据监控脚本不需要行参数，直接执行 codePath ----
 const canTest = computed(() => {
   const hasScript = !!(orchCfg.value.script?.trim() || orchCfg.value.scriptPath?.trim())
+  const hasScriptPath = !!orchCfg.value.scriptPath?.trim()
+  if (isMonitor.value) return hasScriptPath
   const hasInputTable = !!(
     orchCfg.value.inputTable?.trim()
     || orchCfg.value.inputTableId?.trim()
@@ -780,12 +782,47 @@ const canTest = computed(() => {
   )
   return hasScript && hasInputTable
 })
+function formatCodeTestResult(result: unknown): string {
+  if (typeof result === 'string') return result
+  try {
+    return JSON.stringify(result, null, 2)
+  } catch {
+    return String(result)
+  }
+}
+async function executeMonitorCode() {
+  const codePath = orchCfg.value.scriptPath?.trim()
+  if (!codePath) {
+    ElMessage.warning('请先生成脚本')
+    return
+  }
+  codeTestLoading.value = true
+  codeTestResult.value = ''
+  try {
+    const result = await ruleApi.executeCode({ codePath, timeout: 300 })
+    codeTestResult.value = formatCodeTestResult(result)
+    ElMessage.success('测试脚本执行完成')
+  } catch (e) {
+    const message = (e as Error)?.message ?? String(e)
+    codeTestResult.value = message
+    ElMessage.error(`测试脚本失败：${message}`)
+  } finally {
+    codeTestLoading.value = false
+  }
+}
 function goToDataView() {
   const query: Record<string, string> = { ...route.query } as Record<string, string>
   query.view = 'data'
   if (id.value) query.nodeId = id.value
   if (orchCfg.value.scriptPath?.trim()) query.scriptPath = orchCfg.value.scriptPath.trim()
   void router.replace({ path: '/canvas', query })
+}
+function onTestScript() {
+  if (isMonitor.value) {
+    void executeMonitorCode()
+    return
+  }
+  goToDataView()
 }
 </script>
 
@@ -868,9 +905,9 @@ function goToDataView() {
       type="button"
       :disabled="!canTest"
       data-testid="main-test-script"
-      @click="goToDataView"
+      @click="onTestScript"
     >
-      测试脚本
+      {{ codeTestLoading ? '测试中...' : '测试脚本' }}
     </button>
   </div>
   <div v-if="isRule && (generating || thinkingText.trim() || generationState === 'done' || generationState === 'error')" class="rc-main-stream" data-testid="main-stream-thinking">
@@ -894,6 +931,13 @@ function goToDataView() {
       </button>
     </div>
     <pre ref="mainResultRef" class="rc-main-result-code">{{ orchCfg.script || '等待模型输出结果…' }}</pre>
+  </div>
+  <div v-if="isMonitor && (codeTestLoading || codeTestResult)" class="rc-main-result" data-testid="monitor-test-result">
+    <div class="rc-main-result-head">
+      <span>测试结果</span>
+      <span>{{ codeTestLoading ? '执行中' : '已完成' }}</span>
+    </div>
+    <pre class="rc-main-result-code">{{ codeTestResult || '等待接口返回结果…' }}</pre>
   </div>
 
   <template v-if="!isRule">
@@ -965,7 +1009,7 @@ function goToDataView() {
     @generate="onGenerateScript"
     @cancel-generate="onCancelGenerate"
     @save="onSaveScript"
-    @test="goToDataView"
+    @test="onTestScript"
   />
 </template>
 

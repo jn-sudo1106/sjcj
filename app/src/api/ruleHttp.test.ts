@@ -137,6 +137,28 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
     expect(result).toMatchObject({ success: true, result: [{ ok: true }] })
   })
 
+  it('executeCode：未传 params 时 body 不带 params 字段', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      code: '0',
+      data: {
+        success: true,
+        result: [{ ok: true }],
+      },
+    }))
+    const { ruleApi } = await import('./index')
+
+    await ruleApi.executeCode({
+      codePath: '/code01/202609/1788774054213.py',
+      timeout: 300,
+    })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body))).toEqual({
+      code_path: '/code01/202609/1788774054213.py',
+      timeout: 300,
+    })
+  })
+
   it('orchestrationSave：POST /vrule/ai/dashscope/script/edit，codeFileName/scriptCode', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { ruleApi } = await import('./index')

@@ -1447,11 +1447,11 @@ export const ruleApi = {
       paramsIn: 'body' as const,
       timeoutMs: req.timeout * 1000 + 5000,
     }
-    const payload = {
+    const payload: { code_path: string; params?: Record<string, string>; timeout: number } = {
       code_path: req.codePath,
-      params: req.params,
       timeout: req.timeout,
     }
+    if (req.params) payload.params = req.params
     if (usesMockAdapter(endpoint, opts)) {
       return request<unknown>(endpoint, payload, { mode: 'mock' })
     }

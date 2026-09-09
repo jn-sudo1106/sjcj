@@ -246,7 +246,7 @@ export interface RuleOrchestrationTestRequest {
 /** 脚本测试请求：按文件路径执行当前行参数。 */
 export interface CodeExecuteRequest {
   codePath: string
-  params: Record<string, string>
+  params?: Record<string, string>
   timeout: number
 }
 

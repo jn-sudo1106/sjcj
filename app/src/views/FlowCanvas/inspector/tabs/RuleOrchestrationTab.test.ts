@@ -1401,6 +1401,36 @@ describe('RuleOrchestrationTab · 测试脚本切换数据视图', () => {
     }))
     expect(routerPush).not.toHaveBeenCalled()
   })
+
+  it('数据监控节点点击测试脚本直接执行 codePath，不跳转数据视图并展示返回结果', async () => {
+    mockAssets()
+    const executeSpy = vi.spyOn(ruleApi, 'executeCode').mockResolvedValue({
+      success: true,
+      result: [{ status: 'ok' }],
+    })
+    const { flow, wrapper } = mountOnMonitorNode()
+    flow.patchRuleConfig('monitor-1', {
+      mode: 'ref',
+      ruleId: '1400997',
+      inputTableId: '2102154',
+      inputFields: ['sku_id'],
+      script: '',
+      scriptPath: '/code01/202609/1788774054213.py',
+    })
+    await flushPromises()
+
+    const testBtn = wrapper.findAll('button').find((b) => b.text() === '测试脚本')!
+    expect(testBtn.attributes('disabled')).toBeUndefined()
+    await testBtn.trigger('click')
+    await flushPromises()
+
+    expect(executeSpy).toHaveBeenCalledWith({
+      codePath: '/code01/202609/1788774054213.py',
+      timeout: 300,
+    })
+    expect(routerReplace).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="monitor-test-result"]').text()).toContain('"status": "ok"')
+  })
 })
 
 // 0804 S3-3：非规则节点（采集）复用同一个 Tab，内容换成抓取配置 XML，走 execCfg 而不是 ruleCfg。
