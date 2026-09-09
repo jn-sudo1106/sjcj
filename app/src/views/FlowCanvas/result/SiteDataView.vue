@@ -107,6 +107,27 @@ const noCandidateSources = ref(false)
  * summaryEntryData 分组计数求和而来，不额外发请求。
  */
 const totalHits = ref<number | null>(null)
+/** 总数正在后台算。用于区分「还没算出来」和「算不出来」——两者都没有数字，但一个该等一个别等。 */
+const totalHitsLoading = ref(false)
+
+/**
+ * 后台补算总条数：把源集合分片写进条件问 summaryEntryData，各组 CNT 求和。
+ * 与 loadData 共用 requestId 防竞态——切表/改条件后旧的那轮算完也不该再写进来。
+ */
+async function computeTotalHits(reqId: number, sourceIds: string[]) {
+  if (!sourceIds.length) return
+  totalHitsLoading.value = true
+  try {
+    const r = await backTraceSources(buildSummaryQuery(), sourceIds)
+    if (reqId !== requestId) return
+    totalHits.value = [...r.hitCountBySource.values()].reduce((a, b) => a + b, 0)
+  } catch {
+    // 算不出来就不显示，不拿个错数字糊弄；数据本身照常展示
+    if (reqId === requestId) totalHits.value = null
+  } finally {
+    if (reqId === requestId) totalHitsLoading.value = false
+  }
+}
 
 const siteChildren = ref<Source[]>([])
 const sourceNames = computed<Record<string, string>>(() => Object.fromEntries(siteChildren.value.map((s) => [s.sourceId, s.name])))
@@ -375,6 +396,7 @@ async function resetAndLoad() {
       // 具体源：候选源集合永远只有它自己，退化成单源归并，复用同一套分页逻辑。
       candidateSourceIds = [selectedSourceId.value]
       totalHits.value = null
+      totalHitsLoading.value = false
     } else {
       // 全部源：候选源**只在本网站范围内算**（2026-09-09 定案，用户原话「明确点，肯定是
       // 这个网站下的」）。
@@ -404,10 +426,16 @@ async function resetAndLoad() {
         // 归并视图是逐源懒加载的，自己永远算不出总数——在此之前表头只有「已加载 N 条」，
         // 那是加载进度不是总量，旧平台分页器上那个「共 7030 条」一直没迁过来。
         totalHits.value = exact ? [...exact.hitCountBySource.values()].reduce((a, b) => a + b, 0) : null
+        totalHitsLoading.value = false
       } else {
         candidateSourceIds = siteSourceIds
-        // 不带条件时不做收窄，也就没有这个数——显示「已加载 N 条」即可，不为总数单发一轮请求
+        // 不带条件时没有收窄那一步，总数**另起一轮异步补算**（2026-09-09 修正）。
+        // 上一版这里是直接不显示总数，理由是"不值得为一个数字先付一轮请求"——想窄了：
+        // 「一共多少条」跟有没有筛选条件无关，进来就该看得到。
+        // 放异步是因为分片统计要 ceil(源数/200) 个请求（6496 个源 = 33 个），
+        // 同步等会把数据展示也拖住；现在数据先出来，总数算好了再补上。
         totalHits.value = null
+        void computeTotalHits(id, siteSourceIds)
       }
     }
     if (!candidateSourceIds.length) {
@@ -816,6 +844,7 @@ function onCellFile(path: string) {
         <template #head>
           <span class="sdv2-tablename">{{ meta?.tableName || effectiveTableId }}</span>
           <span v-if="totalHits !== null" class="sdv2-count" data-testid="site-data-total">共 {{ totalHits.toLocaleString() }} 条</span>
+          <span v-else-if="totalHitsLoading" class="muted" data-testid="site-data-total-loading">总数统计中…</span>
           <span class="sdv2-count" :class="{ muted: totalHits !== null }">已加载 {{ rows.length }} 条</span>
           <span v-if="!selectedSourceId && candidateSourceIds.length" class="muted">已扫描 {{ candidateCursor }}/{{ candidateSourceIds.length }} 个源</span>
           <span v-if="canPickRows" class="muted">已选 {{ selectedRowIds.length }} 条</span>

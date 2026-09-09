@@ -680,10 +680,10 @@ describe('SiteDataView · 上游数据下钻（M3-0H）', () => {
 describe('SiteDataView · 命中总条数', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('带条件时把收窄那步的分组计数求和当总数显示，不额外发请求', async () => {
+  it('带条件时直接用收窄那步的分组计数求和，不为总数再发一轮', async () => {
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1'), source('s2')])
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
-    const summary = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([
       { SOURCE_ID: 's1', CNT: 7000 }, { SOURCE_ID: 's2', CNT: 30 },
     ] as never)
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
@@ -695,22 +695,39 @@ describe('SiteDataView · 命中总条数', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-testid="site-data-total"]').text()).toBe('共 7,030 条')
-    // 总数来自收窄那一轮，没有为它多发请求
-    expect(summary).toHaveBeenCalledTimes(1)
   })
 
-  it('不带条件时不显示总数——那时不做收窄，不为一个数字单发一轮请求', async () => {
+  // 2026-09-09 修正：上一版不带条件时不显示总数（"不值得为一个数字先付一轮请求"），
+  // 想窄了——「一共多少条」跟有没有筛选条件无关，进来就该看得到。改成后台补算。
+  it('不带条件时也算总数，只是放后台不挡着数据先出来', async () => {
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1')])
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
-    const summary = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([] as never)
+    const summary = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([
+      { SOURCE_ID: 's1', CNT: 4321 },
+    ] as never)
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [row('s1', '1')] })
 
     const wrapper = mountView()
     await pickTable(wrapper)
+    await flushPromises()
+
+    expect(summary).toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="site-data-total"]').text()).toBe('共 4,321 条')
+    expect(wrapper.text()).toContain('已加载 1 条')
+  })
+
+  it('后台补算失败就不显示，不拿个错数字糊弄——数据本身照常展示', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'summaryData').mockRejectedValue(new Error('boom'))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [row('s1', '1')] })
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    await flushPromises()
 
     expect(wrapper.find('[data-testid="site-data-total"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('已加载 1 条')
-    expect(summary).not.toHaveBeenCalled()
   })
 
   it('收窄失败时不显示总数，不拿个错数字糊弄', async () => {
@@ -801,10 +818,13 @@ describe('SiteDataView · 按条件查源', () => {
 
     const wrapper = mountView()
     await pickTable(wrapper)
+    await flushPromises()
+    // 选表时后台会补算一次总数，也走 summaryData——这里只关心点按钮之后有没有再发
+    const before = summary.mock.calls.length
     await wrapper.get('[data-testid="site-data-backtrace"]').trigger('click')
     await flushPromises()
 
-    expect(summary).not.toHaveBeenCalled()
+    expect(summary.mock.calls.length).toBe(before)
     expect(useWorkspaceStore().backTraceHitsOf('site-a')).toEqual([])
   })
 
