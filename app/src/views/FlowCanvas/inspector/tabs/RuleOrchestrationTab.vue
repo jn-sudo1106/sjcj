@@ -265,15 +265,6 @@ watch(
   { immediate: true },
 )
 
-const promptPrefillDone = ref(false)
-watch(
-  () => [id.value, isRule.value, isMonitor.value] as const,
-  () => {
-    promptPrefillDone.value = false
-  },
-  { immediate: true },
-)
-
 const configDetailPrefillToken = ref('')
 watch(
   () => [id.value, isRule.value, cfg.value?.configId] as const,
@@ -312,6 +303,7 @@ watch(
   },
   { immediate: true },
 )
+let promptRefreshSeq = 0
 watch(
   () => [
     id.value,
@@ -322,10 +314,12 @@ watch(
     promptListCategory.value,
     orchCfg.value.inputFields?.join(',') ?? '',
     orchCfg.value.outputFields?.join(',') ?? '',
+    inputFieldOptions.value.map((field) => `${field.itemCode}:${field.itemName}`).join(','),
+    outputFieldOptions.value.map((field) => `${field.itemCode}:${field.itemName}`).join(','),
   ] as const,
   () => {
     if (!isRule.value && !isMonitor.value) return
-    if (promptPrefillDone.value) return
+    const refreshSeq = ++promptRefreshSeq
     // 数据监控节点进入编排 Tab 时即拼接系统提示词，与脚本编辑弹窗的行为一致——
     // 弹窗 loadPromptTemplate 无条件调用，这里也不卡 sourceTableName/inputFields。
     if (isRule.value && !isMonitor.value) {
@@ -347,8 +341,8 @@ watch(
         outputFieldOptions: outputFieldOptions.value.length ? outputFieldOptions.value : inputFieldOptions.value,
       })
       if (!applied) return
+      if (refreshSeq !== promptRefreshSeq) return
       if (applied !== orchCfg.value.systemPrompt) patch({ systemPrompt: applied })
-      promptPrefillDone.value = true
     })()
   },
   { immediate: true },

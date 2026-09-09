@@ -935,9 +935,14 @@ const codeTest = reactive<{ visible: boolean; loading: boolean; error: string; o
   output: '',
 })
 function buildCodeParams(row: { values?: Record<string, unknown> } | null): Record<string, string> {
+  const inputFields = selectedCfg.value?.ruleCfg?.inputFields ?? []
+  if (!inputFields.length) return {}
+
   const params: Record<string, unknown> = {}
-  for (const field of fieldsFromTableMeta(meta.value?.fields, row?.values)) {
-    params[field.prop] = field.empty ? '' : field.value
+  for (const field of meta.value?.fields ?? []) {
+    if (!inputFields.includes(field.prop) && !inputFields.includes(field.columnName ?? '')) continue
+    const raw = row?.values?.[field.columnName ?? field.prop]
+    params[field.prop] = raw == null ? '' : String(raw)
   }
   return params as Record<string, string>
 }

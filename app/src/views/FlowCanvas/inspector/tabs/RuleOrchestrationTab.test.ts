@@ -55,7 +55,7 @@ const MONITOR_PROMPT_TEMPLATE = {
   nodeType: 'rule_processing',
   nodeTypeName: '数据监控',
   category: 'rule',
-  systemPrompt: 'source_id={{source_id}}; source_cron={{source_cron}}; source_table={{source_table}}',
+  systemPrompt: 'source_id={{source_id}}; source_cron={{source_cron}}; source_table={{source_table}}; 入参={{input_pair}}; 出参={{output_pair}}',
 }
 
 function mockAssets(inputTableName = INPUT_TABLE.name, tableId = INPUT_TABLE.tableId, tableName = INPUT_TABLE.tableName) {
@@ -871,6 +871,37 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toContain('目标表=sense_data.TB_JD_SKU_RESULT')
     expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toContain('入参=商品ID:sku_id')
     expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toContain('出参=商品名称:sku_name')
+  })
+
+  it('表配置字段变化后，规则处理系统提示词按最新入参和出参重新拼接', async () => {
+    const { flow } = mountWithExistingRule()
+    await flushPromises()
+
+    flow.patchRuleConfig('rule-1', { inputFields: ['sku_name'], outputFields: ['sku_id'] })
+    await flushPromises()
+
+    expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toContain('入参=商品名称:sku_name')
+    expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toContain('出参=商品ID:sku_id')
+    expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).not.toContain('入参=商品ID:sku_id')
+    expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).not.toContain('出参=商品名称:sku_name')
+  })
+
+  it('表配置字段变化后，数据监控系统提示词按最新入参重新拼接', async () => {
+    mockAssets('通用新闻表')
+    const { flow } = mountOnMonitorNode()
+    flow.patchRuleConfig('monitor-1', {
+      inputTableId: INPUT_TABLE.tableId,
+      inputTable: INPUT_TABLE.tableName,
+      inputFields: ['sku_id'],
+      outputFields: [],
+    })
+    await flushPromises()
+
+    flow.patchRuleConfig('monitor-1', { inputFields: ['sku_name'] })
+    await flushPromises()
+
+    expect(flow.configs['monitor-1'].ruleCfg?.systemPrompt).toContain('入参=商品名称:sku_name')
+    expect(flow.configs['monitor-1'].ruleCfg?.systemPrompt).not.toContain('入参=商品ID:sku_id')
   })
 
   it('工作区加载模型供应商与模型，并在工作区里不再显示测试按钮', async () => {

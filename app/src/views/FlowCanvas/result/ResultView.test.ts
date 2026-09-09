@@ -159,7 +159,15 @@ describe('ResultView', () => {
     setActivePinia(createPinia())
     mockRouteQuery.scriptPath = '/code01/202609/1788327078099.py'
     const current = mockSourceDetail({ sourceId: '391007768' })!
-    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    const flow = useFlowStore()
+    flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    flow.configs['391007768-s1'].ruleCfg = {
+      mode: 'ref',
+      describe: '',
+      inputTableId: '2102157',
+      inputFields: ['content'],
+      outputFields: [],
+    }
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
       total: 1,
       list: [
@@ -201,6 +209,59 @@ describe('ResultView', () => {
     })
     expect(wrapper.text()).toContain('"success": true')
     expect(wrapper.text()).toContain('"ok": true')
+  })
+
+  it('测试脚本只发送表配置选中的入参字段，不把当前行其他字段拼入 params', async () => {
+    setActivePinia(createPinia())
+    mockRouteQuery.scriptPath = '/code01/202609/1788941858106.py'
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    flow.configs.last = cfg({
+      title: '规则处理',
+      inputTable: 'T2',
+      ruleCfg: {
+        mode: 'ref',
+        describe: '',
+        inputTableId: 'T2',
+        inputFields: ['code'],
+        outputFields: ['result'],
+      },
+    })
+    const row = {
+      dataId: 'row-1',
+      sourceId: current.sourceId,
+      title: '测试行',
+      summary: '',
+      acceptState: 'pending' as const,
+      values: { K1: '1121250', K2: '万微测试', K3: '执行成功' },
+    }
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [row] })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({
+      ...meta,
+      tableId: 'T2',
+      fields: [
+        { prop: 'code', type: 'string', desc: '编码', columnName: 'K1' },
+        { prop: 'name', type: 'string', desc: '名称', columnName: 'K2' },
+        { prop: 'url', type: 'string', desc: 'URL', columnName: 'K3' },
+      ],
+    })
+    const execSpy = vi.spyOn(ruleApi, 'executeCode').mockResolvedValue({ success: true, outputs: [] })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'last')
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('row-click', row)
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text() === '测试脚本')!.trigger('click')
+    await flushPromises()
+
+    expect(execSpy).toHaveBeenCalledWith({
+      codePath: '/code01/202609/1788941858106.py',
+      params: { code: '1121250' },
+      timeout: 300,
+    })
   })
 
   it('表结构接口异常时不阻断数据查询，并提示已回退到演示数据', async () => {
