@@ -18,19 +18,19 @@ import { stripTrailingSemicolon } from '@/utils/sqlCondition'
 /** `SOURCE_ID IN (...)` 分组大小：整串最终拼进 SQL，太长会被网关/后端截断 */
 const IN_CHUNK = 200
 /**
- * 没有网站范围时的兜底上限。与 SiteDataView 的收窄逻辑取同一个值（实测 1000 不被后端截断）。
- * 实际请求**多要一条**：只有真的拿回 1001 条，才说明后面还有、结果不完整。
- * 要多少给多少地判「length >= 1000 就是截断」会在恰好 1000 个源时误报。
+ * 取「这张表有哪些源」时的上限。0909 实测 `TB_CNEWS` 全集 8358 个，传 10000/20000/50000
+ * 返回一致，说明已取全、没被截断；留一倍余量。
+ *
+ * 旧的 `DISTINCT_LIMIT = 1000`（"按条件反查"的截断线）已随旧兜底分支一起退役：那条路
+ * 是拿 `entryDistinctSource` 的返回当命中源，而它压根不过滤，截不截断都没意义。
  */
-export const DISTINCT_LIMIT = 1000
+const TABLE_SOURCES_LIMIT = 20000
 
 export interface BackTraceResult {
   /** 命中的源 ID（有网站范围时已限定在该网站内） */
   sourceIds: string[]
-  /** 每个源各命中几条；走兜底分支（无网站范围）时为空 Map——那条路只回 ID */
+  /** 每个源各命中几条 */
   hitCountBySource: Map<string, number>
-  /** 兜底分支下结果是否被上限截断 */
-  truncated: boolean
 }
 
 function chunk<T>(list: T[], size: number): T[][] {
@@ -75,21 +75,22 @@ function chunk<T>(list: T[], size: number): T[][] {
  * @param scopedSourceIds 当前网站的源 ID 全集。**传了就按它限定**；不传才退回全表
  *   `distinctSource`——那种场景本来就没有网站范围可言（如全平台数据查看页）。
  *
- *   ⚠️ **不传时这个函数是不准的**（0909 实测后确认，尚未修）：兜底分支用的正是
- *   `entryDistinctSource`，而它不应用条件（见上），返回的是整张表的源而非命中的源。
- *   目前只有数据中心 `views/DataView/index.vue` 的「按条件查源」走这条，那里是全平台
- *   视角、拿不到源集合，没法照搬"把源写进条件"的做法。要修得先定方案（分片拉全表源，
- *   还是干脆引导用户去具体网站下反查），别默默把它当成能用的。
+ *   不传时（数据中心那条路）**范围就是这张表**：先不带条件问一次 `entryDistinctSource`
+ *   拿到表的源全集，再走同一套精确收窄。0909 之前这里是直接把 `entryDistinctSource` 的
+ *   返回当命中源用的，而它不应用条件，等于把"这张表的所有源"当成了"命中的源"。
+ *   代价是请求数：表的源多时按 200 一组切，`TB_CNEWS` 这种 8358 个源要 42 个请求。
  */
 export async function backTraceSources(query: RowQuery, scopedSourceIds?: string[]): Promise<BackTraceResult> {
-  const scoped = scopedSourceIds ?? []
+  let scoped = scopedSourceIds ?? []
   if (!scoped.length) {
-    const ids = await dataApi.distinctSource({ ...query, size: DISTINCT_LIMIT + 1 })
-    return {
-      sourceIds: ids.slice(0, DISTINCT_LIMIT),
-      hitCountBySource: new Map(),
-      truncated: ids.length > DISTINCT_LIMIT,
-    }
+    // 没给源集合（数据中心那条路）：**范围就是这张表**——数据中心本来就是按表走的，
+    // 不存在"全平台没有锚点"的问题，表的源全集就是天然的范围。
+    //
+    // 这里仍然用 `entryDistinctSource`，但用法变了：不再指望它"按条件反查"（实测它压根
+    // 不过滤，见顶部），只拿它做一件它真能做的事——**给出这张表有哪些源**。不带条件请求，
+    // 拿到全集后再走下面那套精确收窄，与有网站范围时同一条路径。
+    scoped = await dataApi.distinctSource({ tableId: query.tableId, size: TABLE_SOURCES_LIMIT })
+    if (!scoped.length) return { sourceIds: [], hitCountBySource: new Map() }
   }
   const counts = new Map<string, number>()
   // 削末尾分号必须在**这里**做，不能只靠 API 层（2026-09-09 生产实测）：下面把用户条件
@@ -108,5 +109,5 @@ export async function backTraceSources(query: RowQuery, scopedSourceIds?: string
       if (id && id !== 'null') counts.set(id, row.CNT)
     }
   }
-  return { sourceIds: [...counts.keys()], hitCountBySource: counts, truncated: false }
+  return { sourceIds: [...counts.keys()], hitCountBySource: counts }
 }

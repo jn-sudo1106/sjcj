@@ -2,7 +2,7 @@
 // 这些用例是从 BackTraceSourcesDialog.test.ts 迁过来的——**弹窗可以拆，但 09-04 六轮修复
 // 换来的这套算法一个字都不能丢**，尤其是"把网站的源写进查询条件"那条。
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { backTraceSources, DISTINCT_LIMIT } from './backTraceSources'
+import { backTraceSources } from './backTraceSources'
 import { dataApi, type RowQuery } from '@/api'
 
 const QUERY = { tableId: '900', sql: "K1 LIKE '%金融%'" } as RowQuery
@@ -76,22 +76,45 @@ describe('backTraceSources · 有网站范围（把源写进查询条件）', ()
   })
 })
 
-describe('backTraceSources · 无网站范围（兜底走全表 distinctSource）', () => {
-  it('多要一条来判定截断：正好 1000 个不算截断', async () => {
-    const ids = Array.from({ length: DISTINCT_LIMIT }, (_, i) => `s${i}`)
-    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(ids)
+// 数据中心那条路：不传源集合，范围就是**这张表**（数据中心本来就是按表走的）。
+// 0909 之前这里直接把 entryDistinctSource 的返回当命中源用，而它压根不应用条件，
+// 等于把「这张表的所有源」当成了「命中的源」。
+describe('backTraceSources · 无网站范围（范围 = 这张表）', () => {
+  it('先不带条件取表的源全集，再走同一套精确收窄——不再拿 distinctSource 的返回当命中源', async () => {
+    const distinct = vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['s1', 's2', 's3'])
+    const summary = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([
+      { SOURCE_ID: 's2', CNT: 4 },
+    ] as never)
+
     const r = await backTraceSources(QUERY)
-    expect(r.truncated).toBe(false)
-    expect(r.sourceIds).toHaveLength(DISTINCT_LIMIT)
+
+    // 取全集这一步只带表，不带用户条件（带了也没用，该接口不过滤）
+    const probe = distinct.mock.calls[0][0] as RowQuery & { size?: number }
+    expect(probe.tableId).toBe(QUERY.tableId)
+    expect(probe.sql).toBeUndefined()
+    // 真正筛命中的是 summaryEntryData：把源全集写进条件
+    expect((summary.mock.calls[0][0] as RowQuery).sql).toBe("(K1 LIKE '%金融%') AND SOURCE_ID IN ('s1','s2','s3')")
+    expect(r.sourceIds).toEqual(['s2'])
+    expect(r.hitCountBySource.get('s2')).toBe(4)
   })
 
-  it('拿回 1001 个才算真截断，且只保留前 1000', async () => {
-    const ids = Array.from({ length: DISTINCT_LIMIT + 1 }, (_, i) => `s${i}`)
-    const distinct = vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(ids)
+  it('取全集要传足够大的上限——实测 TB_CNEWS 有 8358 个源，1000 那条老截断线不够用', async () => {
+    const distinct = vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['s1'])
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([] as never)
+
+    await backTraceSources(QUERY)
+
+    const size = (distinct.mock.calls[0][0] as RowQuery & { size?: number }).size ?? 0
+    expect(size).toBeGreaterThanOrEqual(10000)
+  })
+
+  it('表里一个源都没有时直接返回空，不再空发一轮 summaryEntryData', async () => {
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue([])
+    const summary = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([] as never)
+
     const r = await backTraceSources(QUERY)
-    expect(r.truncated).toBe(true)
-    expect(r.sourceIds).toHaveLength(DISTINCT_LIMIT)
-    // 必须显式多要一条，否则恰好 1000 个源时会误报截断
-    expect((distinct.mock.calls[0][0] as RowQuery & { size?: number }).size).toBe(DISTINCT_LIMIT + 1)
+
+    expect(r.sourceIds).toEqual([])
+    expect(summary).not.toHaveBeenCalled()
   })
 })

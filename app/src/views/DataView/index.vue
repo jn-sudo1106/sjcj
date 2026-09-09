@@ -20,7 +20,7 @@ import SourceDetailDrawer from './SourceDetailDrawer.vue'
 import MoreTablesDialog from './MoreTablesDialog.vue'
 import MoreSourcesDialog from './MoreSourcesDialog.vue'
 import DataImportDialog from './DataImportDialog.vue'
-import { backTraceSources, DISTINCT_LIMIT } from '@/utils/data/backTraceSources'
+import { backTraceSources } from '@/utils/data/backTraceSources'
 import { unsupportedNextStepBatchFilters } from './batchGuards'
 
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
@@ -328,12 +328,11 @@ async function onDistinctSource() {
   }
   backTracing.value = true
   try {
-    const { sourceIds, truncated } = await backTraceSources(buildQuery())
+    const { sourceIds } = await backTraceSources(buildQuery())
     if (!sourceIds.length) {
       ElMessage.info('当前条件没有命中任何源')
       return
     }
-    if (truncated) ElMessage.warning(`命中源超过 ${DISTINCT_LIMIT} 个，只带前 ${DISTINCT_LIMIT} 个到源视图`)
     void router.push({ path: '/canvas', query: { view: 'source', sourceIds: sourceIds.join(',') } })
   } catch (e) {
     ElMessage.error(`反查源失败：${(e as Error)?.message ?? String(e)}`)
