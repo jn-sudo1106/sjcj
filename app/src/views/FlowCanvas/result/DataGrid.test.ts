@@ -507,6 +507,37 @@ describe('DataGrid · 下一步字段预设（0831 F10）', () => {
   })
 })
 
+describe('DataGrid · 强制业务列显示', () => {
+  it('传入 visibleFieldProps 时只展示指定业务字段，身份列仍保留', () => {
+    const wrapper = mount(DataGrid, {
+      props: {
+        meta: {
+          tableId: 'T2', tableName: '规则输入', rowCount: 1,
+          fields: [
+            { prop: 'code', columnName: 'K1', type: 'string', desc: '编码' },
+            { prop: 'name', columnName: 'K2', type: 'string', desc: '名称' },
+            { prop: 'url', columnName: 'K3', type: 'string', desc: 'URL' },
+          ],
+        },
+        visibleFieldProps: ['code'],
+        rows: [{
+          dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted' as const,
+          values: { K1: '1121250', K2: '万微测试', K3: '执行成功' },
+        }],
+      },
+      global: { stubs: GRID_STUBS },
+    })
+
+    const heads = wrapper.findAll('thead th').map((th) => th.text().replace(/[↕↑↓]\s*$/, '').trim())
+    expect(heads).toEqual(expect.arrayContaining(['ENTRY_ID', 'PARENT_ID', '源', '编码-K1']))
+    expect(heads).not.toContain('名称-K2')
+    expect(heads).not.toContain('URL-K3')
+    expect(wrapper.text()).toContain('1121250')
+    expect(wrapper.text()).not.toContain('万微测试')
+    expect(wrapper.text()).not.toContain('执行成功')
+  })
+})
+
 // 行内删除（2026-09-09 随源数据视图迁入删除功能一起加）。表格自己不判断表能不能删——
 // 表状态（tableMeta.state）在调用方手里，这里只按 allowRowDelete 渲染。
 describe('DataGrid · 行内删除单条', () => {
@@ -532,4 +563,3 @@ describe('DataGrid · 行内删除单条', () => {
     expect(on.text()).toContain('查后续任务实例')
   })
 })
-

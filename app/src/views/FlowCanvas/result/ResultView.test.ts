@@ -9,6 +9,7 @@ import ProcessNodeRail from './ProcessNodeRail.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import { dataApi, isProductionBackend, ruleApi, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source } from '@/api'
 import { useFlowStore } from '@/stores/flow'
+import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
 import type { NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
@@ -45,7 +46,7 @@ const meta: DataTableMeta = {
 // 插槽，会让这些断言全部落空——换成显式 stub，保留 name/props/emits 供测试查询与触发。
 const DataGridStub = {
   name: 'DataGrid',
-  props: ['meta', 'rows', 'loading', 'selectedId', 'compact', 'hideActions', 'sourceNames', 'sourceColLabel', 'selectable', 'selectedIds', 'presetCols', 'allowRowDelete'],
+  props: ['meta', 'rows', 'loading', 'selectedId', 'compact', 'hideActions', 'sourceNames', 'sourceColLabel', 'selectable', 'selectedIds', 'presetCols', 'visibleFieldProps', 'allowRowDelete'],
   emits: ['row-click', 'row-action', 'update:selectedIds'],
   template: '<div class="dg-stub"><slot name="head" /><slot name="head-right" /><slot name="foot" /></div>',
 }
@@ -777,6 +778,36 @@ describe('ResultView · 默认节点与默认列（0831 F09/F10）', () => {
     await selectNode(wrapper, 'sink')
 
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('presetCols')).toEqual([])
+  })
+
+  it('展开节点配置时，数据表只展示当前节点表配置的入参字段', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    flow.configs.mid.ruleCfg = {
+      mode: 'ref',
+      describe: '',
+      inputTableId: 'T1',
+      inputFields: ['title'],
+      outputFields: ['body'],
+    }
+    useUiStore().inspectorCollapsed = false
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({
+      tableId: 'T1', tableName: '列表', rowCount: 0,
+      fields: [
+        { prop: 'title', columnName: 'K1', type: 'string', desc: '标题' },
+        { prop: 'body', columnName: 'K2', type: 'string', desc: '正文' },
+        { prop: 'url', columnName: 'K3', type: 'string', desc: '链接' },
+      ],
+    })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'mid')
+
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('visibleFieldProps')).toEqual(['title'])
   })
 })
 

@@ -5,6 +5,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
+import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, ruleApi, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery } from '@/api'
 import {
@@ -30,6 +31,7 @@ import { readFieldPreset, readShowEmpty, visibleDetailProps, writeFieldPreset, w
 // 数据视图只属于具体源流程（0812 计划 M2-4：网站"全部源"态改用独立的 SiteDataView.vue，
 // 不再靠 siteWide 布尔开关把两种数据流塞进同一个组件——那正是 M1-4 删掉的"代表源"问题的成因）。
 const flow = useFlowStore()
+const ui = useUiStore()
 const ws = useWorkspaceStore()
 
 const source = computed(() => flow.sourceCtx)
@@ -89,6 +91,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onWindowKeydown))
 
 // 节点上下文（0812 计划 M2-8）：输出表统一口径 + 有效输入表（显式覆盖优先，否则继承上游输出表）。
 const selectedCfg = computed<NodeConfig | undefined>(() => allNodes.value.find((n) => n.id === selectedNodeId.value)?.cfg)
+const visibleFieldProps = computed<string[] | undefined>(() => {
+  if (ui.inspectorCollapsed) return undefined
+  const inputFields = selectedCfg.value?.ruleCfg?.inputFields ?? selectedCfg.value?.inputFields ?? []
+  return inputFields.length ? [...inputFields] : undefined
+})
 const outputTableId = computed(() => (selectedCfg.value ? nodeOutputTable(selectedCfg.value) : ''))
 const inputTableId = computed(() => (selectedNodeId.value ? flow.effectiveInputTableFor(selectedNodeId.value) : ''))
 const isStructuralNode = computed(() => !!selectedCfg.value && (isDecision(selectedCfg.value) || isParallel(selectedCfg.value)))
@@ -1259,6 +1266,7 @@ async function onTestScript() {
         :sort-order="sortOrder"
         :allow-column-sort="allowColumnSort"
         :preset-cols="presetCols"
+        :visible-field-props="visibleFieldProps"
         :show-child-col="showChildCol"
         :allow-row-delete="isTestTable"
         :child-counts="childCounts"

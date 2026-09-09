@@ -39,6 +39,8 @@ const props = withDefaults(defineProps<{
    *  为空 / 全都不在当前表里时自动退回全部列——绝不因为配置没填就给一张空表。
    *  用户在本表存过列偏好时以偏好为准，预设只作用于"没表过态"的首次打开。 */
   presetCols?: string[]
+  /** 强制只显示这批业务字段；身份列始终保留。未传时按列偏好/预设正常显示。 */
+  visibleFieldProps?: string[]
   /** 「下级」列（0903 H10）：每行在后继节点里产出了几条。
    *  `undefined` = 这个节点没有后继/后继没有输出表 → **整列不渲染**（不是显示一列 `—`）。
    *  `null` = 统计请求失败 → 显示 `?`，主表照常渲染（Y1-14）。 */
@@ -156,7 +158,16 @@ const SOURCE_ID_COL = { prop: 'SOURCE_ID', type: 'string', desc: '所属源 ID',
 const PARENT_ID_COL = { prop: 'PARENT_ID', type: 'string', desc: '父行 ID', label: 'PARENT_ID' }
 // 列序：ENTRY_ID → PARENT_ID → 源（0903 会上定）。父 ID 紧挨主键——这两列是同一件事的
 // 两头（这行是谁 / 它从哪来），中间隔着「源」得来回扫视才对得上。
-const cols = computed(() => (props.meta ? [ENTRY_ID_COL, PARENT_ID_COL, SOURCE_ID_COL, ...props.meta.fields] : []))
+type GridColumn = DataTableMeta['fields'][number] | typeof ENTRY_ID_COL | typeof PARENT_ID_COL | typeof SOURCE_ID_COL
+const identityColProps = new Set<string>(IDENTITY_COL_PROPS)
+const allCols = computed<GridColumn[]>(() => (props.meta ? [ENTRY_ID_COL, PARENT_ID_COL, SOURCE_ID_COL, ...props.meta.fields] : []))
+const visibleFieldSet = computed(() => new Set(props.visibleFieldProps ?? []))
+const cols = computed(() => {
+  if (!props.visibleFieldProps?.length) return allCols.value
+  return allCols.value.filter((field) =>
+    identityColProps.has(field.prop) || visibleFieldSet.value.has(field.prop) || visibleFieldSet.value.has('columnName' in field ? field.columnName ?? '' : ''),
+  )
+})
 
 // 预设里认不出来的列先剔掉：presetCols 是按流程配置算的，可能引用了当前表没有的字段
 // （改过表结构、或后继节点读的是另一张表）。留着会让「下一步字段」按钮显示一个虚高的数字。
