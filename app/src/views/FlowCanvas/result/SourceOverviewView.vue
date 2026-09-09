@@ -792,7 +792,10 @@ watch(() => props.currentSiteId, () => {
                 @change="toggleRow(source.sourceId)"
               />
             </td>
-            <td>{{ source.sourceId }}</td>
+            <!-- 源 ID 与源名称走同一个入口（2026-09-09）：两列指的是同一个源，
+                 名称能点、ID 不能点没有道理——用户拿 ID 认源比拿名称更多（名称长且相似，
+                 ID 才是唯一标识）。等宽字体保持 ID 的可读性与列表其它 ID 一致。 -->
+            <td><button class="sov-link sov-id-link" type="button" data-testid="source-overview-id-link" :title="`打开源 ${source.sourceId} 的详情`" @click="emit('openSource', source)">{{ source.sourceId }}</button></td>
             <td class="sov-name" :title="source.name"><button class="sov-link sov-source-link" type="button" data-testid="source-overview-source-link" @click="emit('openSource', source)">{{ source.name }}</button></td>
             <td class="sov-url" :title="source.url">
               <a v-if="source.url" :href="source.url" target="_blank" rel="noopener noreferrer" @click.stop>{{ source.url }}</a>
@@ -927,6 +930,7 @@ watch(() => props.currentSiteId, () => {
 .sov-check-col { width: 34px; text-align: center; }
 .sov-check-col input { cursor: pointer; accent-color: var(--rc-primary); margin: 0; }
 .sov-count-link { font-weight: 600; }
+.sov-id-link { padding: 0; font-family: var(--rc-mono, monospace); }
 .sov-table tbody tr.picked { background: var(--rc-primary-bg); }
 .sov-batch-count { font-weight: 700; color: var(--rc-primary-ink); }
 .sov-mark-anchor { position: relative; }

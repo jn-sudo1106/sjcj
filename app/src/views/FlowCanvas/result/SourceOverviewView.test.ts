@@ -80,6 +80,18 @@ describe('SourceOverviewView', () => {
     expect(wrapper.emitted('openSource')?.[0]).toEqual([source])
   })
 
+  // 2026-09-09：两列指的是同一个源，名称能点、ID 不能点没道理——拿 ID 认源比拿名称更多。
+  it('源 ID 与源名称走同一个入口，点哪个都打开源详情', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-1' } })
+    await flushPromises()
+
+    const idLink = wrapper.get('[data-testid="source-overview-id-link"]')
+    expect(idLink.text()).toBe(source.sourceId)
+    await idLink.trigger('click')
+    expect(wrapper.emitted('openSource')?.[0]).toEqual([source])
+  })
+
   it('切换网站时重新按新 siteIds 查询，页码重置', async () => {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source] })
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
