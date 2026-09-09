@@ -144,9 +144,9 @@ async function openWorkbench(wrapper: ReturnType<typeof mountOnRuleNode>['wrappe
   await flushPromises()
 }
 
-// 0801 方案 §6.4：有 ruleId 后展开的「查看业务编排」——描述/生成脚本/全屏查看/编辑系统提示词/保存脚本
+// 0801 方案 §6.4：有 ruleId 后展开的「设置业务规则」——描述/生成脚本/全屏查看/编辑系统提示词/保存脚本
 // （0804 起这就是本 Tab 的全部内容，不再有 showBinder 两态切换）
-describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
+describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
   function mountWithExistingRule() {
     mockAssets()
     const { flow, wrapper } = mountOnRuleNode()
@@ -178,16 +178,16 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
 
     expect(wrapper.text()).not.toContain('数据预览')
     expect(wrapper.find('.dqp').exists()).toBe(false)
-    expect(wrapper.text()).toContain('查看业务编排')
+    expect(wrapper.text()).toContain('设置业务规则')
   })
 
-  it('脚本编辑按钮显示在查看业务编排标题行右侧', async () => {
+  it('脚本编辑按钮显示在设置业务规则标题行右侧', async () => {
     const { wrapper } = mountWithExistingRule()
     await flushPromises()
 
     const titleRow = wrapper.find('.ni-section-title-row')
     expect(titleRow.exists()).toBe(true)
-    expect(titleRow.text()).toContain('查看业务编排')
+    expect(titleRow.text()).toContain('设置业务规则')
     expect(titleRow.find('button').text()).toBe('脚本编辑')
     expect(wrapper.find('.rc-actions-row button').exists()).toBe(false)
   })
@@ -1034,7 +1034,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect(ruleApi.orchestrationLoadScript).not.toHaveBeenCalled()
     expect(flow.configs['rule-1'].ruleCfg?.describe).toBe('服务端描述')
     expect(flow.configs['rule-1'].ruleCfg?.script).toContain('def main')
-    expect(wrapper.text()).toContain('查看业务编排')
+    expect(wrapper.text()).toContain('设置业务规则')
   })
 
   it('进入编排配置时会从 configDetailRaw 回填描述、路径和脚本正文', async () => {
@@ -1107,7 +1107,7 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
     expect(wrapper.find('.rc-main-result-code').text()).toContain('def main():')
   })
 
-  it('点击生成结果文件名时会调用文件下载接口并回填脚本正文', async () => {
+  it('点击生成结果文件名时会把脚本下载到本地，文件名取路径最后一段', async () => {
     mockAssets()
     vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({
       snatchConf: { description: '我想对通用新闻表进行如下监控：\n1.当日数据是否正常入库\n2.数据延迟监控' },
@@ -1117,6 +1117,30 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
       },
     } as never)
     vi.spyOn(ruleApi, 'fileDownloadScript').mockResolvedValue('def main():\n    return {"hello": "world"}\n')
+
+    // 拦截 createObjectURL：把 Blob 内容读出来后用同步桩 URL 代替，避免 jsdom 真的去 fetch blob:
+    const captured: { name: string | null; text: string }[] = []
+    const stubUrl = 'blob:stub'
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(((blob: Blob) => {
+      void blob.text().then((text) => {
+        captured.push({ name: stubDownloadName, text })
+      })
+      return stubUrl
+    }) as typeof URL.createObjectURL)
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    let stubDownloadName = ''
+    const origCreate = document.createElement.bind(document)
+    const createSpy = vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = origCreate(tag) as HTMLElement
+      if (tag === 'a') {
+        Object.defineProperty(el, 'download', {
+          configurable: true,
+          get() { return stubDownloadName },
+          set(v: string) { stubDownloadName = v },
+        })
+      }
+      return el
+    })
 
     const { flow, wrapper } = mountOnRuleNode()
     flow.patchRuleConfig('rule-1', {
@@ -1137,10 +1161,19 @@ describe('RuleOrchestrationTab · 路径 B（查看业务编排）', () => {
 
     await wrapper.find('.rc-main-result-link').trigger('click')
     await flushPromises()
+    // 等 blob.text() 这个微任务 resolve
+    await new Promise((r) => setTimeout(r, 0))
+    await flushPromises()
 
     expect(ruleApi.fileDownloadScript).toHaveBeenCalledWith('/code01/202609/1788761803128.py')
-    expect((wrapper.find('textarea.wb-code').element as HTMLTextAreaElement).value).toContain('def main():')
-    expect((wrapper.find('textarea.wb-code').element as HTMLTextAreaElement).value).toContain('"hello": "world"')
+    expect(captured.length).toBe(1)
+    expect(captured[0].name).toBe('1788761803128.py')
+    expect(captured[0].text).toContain('def main():')
+    expect(captured[0].text).toContain('"hello": "world"')
+    // 不要再回填到工作台脚本编辑器
+    expect((wrapper.find('textarea.wb-code').element as HTMLTextAreaElement).value).not.toContain('"hello": "world"')
+
+    createSpy.mockRestore()
   })
 })
 

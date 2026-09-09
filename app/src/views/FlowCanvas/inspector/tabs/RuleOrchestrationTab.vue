@@ -423,14 +423,32 @@ async function scrollMainResultToBottom() {
   if (!el) return
   el.scrollTop = el.scrollHeight
 }
-async function loadResultScriptFromFile() {
+// 点击「生成结果」路径按钮时，把脚本下载到本地，文件名取路径最后一段（如 1788931403322.py）。
+// 之前叫 loadResultScriptFromFile，做的是回填编辑器；本次改为本地下载，不再改 orchCfg.script。
+function basenameOfPath(p: string): string {
+  const trimmed = p.replace(/[?#].*$/, '').replace(/\/+$/, '')
+  const slash = trimmed.lastIndexOf('/')
+  const base = slash >= 0 ? trimmed.slice(slash + 1) : trimmed
+  return base || 'script.txt'
+}
+async function downloadResultScriptToLocal() {
   const fileId = orchCfg.value.scriptPath?.trim() || mainResultLabel.value
   if (!fileId || loadingResultScript.value) return
   loadingResultScript.value = true
   try {
     const script = await ruleApi.fileDownloadScript(fileId)
-    if (script.trim()) patch({ script })
-    ElMessage.success('脚本已回填')
+    const fileName = basenameOfPath(fileId)
+    const blob = new Blob([script], { type: 'text/plain;charset=utf-8' })
+    const objectUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = objectUrl
+    a.download = fileName
+    a.style.display = 'none'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(objectUrl)
+    ElMessage.success(`已下载到本地：${fileName}`)
   } catch (e) {
     ElMessage.error((e as Error)?.message ?? String(e))
   } finally {
@@ -737,7 +755,7 @@ function goToDataView() {
 
 <template>
   <div class="ni-section-title ni-section-title-row">
-    <span>{{ isRule ? '查看业务编排' : '抓取配置' }}</span>
+    <span>{{ isRule ? '设置业务规则' : '抓取配置' }}</span>
     <span class="ni-section-actions">
       <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
       <button v-if="generating" class="rc-btn" type="button" @click="onCancelGenerate">取消</button>
@@ -792,6 +810,15 @@ function goToDataView() {
     >
       {{ generating ? '生成中...' : generateLabel }}
     </button>
+    <button
+      class="rc-btn"
+      type="button"
+      :disabled="!canTest"
+      data-testid="main-test-script"
+      @click="goToDataView"
+    >
+      测试脚本
+    </button>
   </div>
   <div v-if="isRule && (generating || thinkingText.trim() || generationState === 'done' || generationState === 'error')" class="rc-main-stream" data-testid="main-stream-thinking">
     <div class="rc-main-stream-head">
@@ -808,7 +835,7 @@ function goToDataView() {
         class="rc-main-result-link"
         type="button"
         :disabled="loadingResultScript"
-        @click="loadResultScriptFromFile"
+        @click="downloadResultScriptToLocal"
       >
         {{ mainResultLabel }}
       </button>
@@ -909,14 +936,13 @@ function goToDataView() {
 .rc-switch-load-error button:hover { text-decoration: underline; }
 .rc-main-result-link { margin: 0; padding: 0; border: 0; background: transparent; color: #047857; font-size: 11px; font-weight: 700; cursor: pointer; text-align: right; }
 .rc-main-result-link:disabled { opacity: 0.6; cursor: not-allowed; }
-.rc-model-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: -2px 0 12px; min-width: 0; }
-.rc-model-row.nowrap { flex-wrap: nowrap; }
-.rc-model-fields { display: inline-flex; align-items: center; flex: 1 1 auto; flex-wrap: nowrap; gap: 10px; min-width: 0; overflow: hidden; }
-.rc-inline-field { display: inline-flex; align-items: center; flex: 1 1 0; gap: 6px; min-width: 0; color: var(--rc-muted); font-size: 11px; font-weight: 600; }
+.rc-model-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: -2px 0 12px; min-width: 0; flex-wrap: wrap; }
+.rc-model-fields { display: inline-flex; align-items: center; flex: 1 1 auto; flex-wrap: wrap; gap: 10px; min-width: 0; overflow: hidden; }
+.rc-inline-field { display: inline-flex; align-items: center; flex: 1 1 130px; gap: 6px; min-width: 0; color: var(--rc-muted); font-size: 11px; font-weight: 600; }
 .rc-inline-field > span { flex: 0 0 auto; white-space: nowrap; }
-.rc-inline-select { flex: 1 1 auto; width: auto; min-width: 96px; max-width: 150px; }
-.rc-inline-select-model { min-width: 126px; max-width: 190px; }
-.rc-model-row > .rc-btn { flex: 0 0 auto; white-space: nowrap; min-width: 82px; margin-left: auto; }
+.rc-inline-select { flex: 1 1 auto; width: auto; min-width: 0; max-width: 150px; }
+.rc-inline-select-model { min-width: 0; max-width: 170px; }
+.rc-model-row > .rc-btn { flex: 0 0 auto; white-space: nowrap; min-width: 72px; padding: 0 9px; margin-left: auto; }
 .rc-main-stream, .rc-main-result { margin: 10px 0 12px; border: 1px solid #dbe3ee; border-radius: 8px; overflow: hidden; background: #fff; }
 .rc-main-stream { border-color: #1e293b; background: #0b1220; }
 .rc-main-stream-head, .rc-main-result-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; font-size: 12px; font-weight: 700; }
