@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -82,6 +82,14 @@ function mountResultView() {
 }
 
 afterEach(() => localStorage.clear())
+
+// 0910 会议 §2-2/2-3 之后，节点轨道与四个筛选维度都默认收起。下面绝大多数用例验证的是
+// 查询、执行、节点切换的**逻辑**，不是折叠这个 UI，所以统一让两者保持展开，
+// 免得每条都先点两次。折叠行为本身在文件末尾单独成组测（那几条自己控制这两个偏好）。
+beforeEach(() => {
+  localStorage.setItem('rc.dataview.result.railOpen', '1')
+  localStorage.setItem('rc.dataview.result.filterBarOpen', '1')
+})
 
 describe('ResultView', () => {
   afterEach(() => {
@@ -533,7 +541,10 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     expect(wrapper.find('[data-testid="data-pagination"]').exists()).toBe(true)
   })
 
-  it('节点轨道默认展开，点「流程」可收起再展开（2026-08-15 定案：默认展开，折叠是手动出口，不靠默认折叠换那几行数据）', async () => {
+  // 默认值已于 0910 会议 §2-2 翻成收起（推翻 08-15「不靠默认折叠换那几行」的定案），
+  // 由上面的 beforeEach 喂成展开态；这条现在验证的是**开合本身**能来回切。
+  // 「默认收起」在文件末尾的折叠组里单独测。
+  it('轨道能收起再展开', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
@@ -1881,5 +1892,84 @@ describe('ResultView · 带条件进来', () => {
 
     expect((wrapper.get('input.rv-input.flex').element as HTMLInputElement).value).toBe('')
     expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ sql: undefined }))
+  })
+})
+
+// 布局折叠（0910 会议 §2-2「点数据视图时自动收起上方流程配置区域」+
+// §2-3「把『展开流程』及下方查询表折叠至单行」）。
+// 主干行只留：筛选开关、查询，以及整组数据操作（发任务/删除留在外面——那是这个页面的
+// 主要动作，藏起来比藏筛选条件更伤）。轨道开合按钮不在这一行，它浮在轨道区右上角。
+describe('ResultView · 布局折叠', () => {
+  afterEach(() => vi.restoreAllMocks())
+  // 覆盖文件级那两条"保持展开"——这一组要测的正是默认收起
+  beforeEach(() => {
+    localStorage.removeItem('rc.dataview.result.railOpen')
+    localStorage.removeItem('rc.dataview.result.filterBarOpen')
+  })
+
+  async function mountAtNode() {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const wrapper = mountResultView()
+    await flushPromises()
+    return wrapper
+  }
+
+  it('默认收起：流程轨道和四个筛选维度都不占地方，查询与数据操作仍留在外面', async () => {
+    const wrapper = await mountAtNode()
+
+    expect(wrapper.find('[data-testid="data-process-rail"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="data-filter-bar"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="data-cond-sql"]').exists()).toBe(false)
+    expect(wrapper.find('input[placeholder="数据 ID"]').exists()).toBe(false)
+    // 主干行保留的：筛选开关 + 查询
+    expect(wrapper.find('[data-testid="data-rail-toggle"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="data-filter-toggle"]').exists()).toBe(true)
+    expect(wrapper.findAll('button').some((b) => b.text() === '查询')).toBe(true)
+  })
+
+  // 收起后开合按钮不能跟着消失，否则就没法再展开、也没法切节点（0819 N1-2 踩过一次：
+  // 「流程图是唯一的节点选择器」）。按钮浮在轨道区右上角，与全部源视图同构。
+  it('轨道收起时「展开流程」按钮仍在，点它把轨道展开', async () => {
+    const wrapper = await mountAtNode()
+
+    const toggle = wrapper.get('[data-testid="data-rail-toggle"]')
+    expect(toggle.text()).toContain('展开流程')
+
+    await toggle.trigger('click')
+    expect(wrapper.find('[data-testid="data-process-rail"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="data-rail-toggle"]').text()).toContain('收起流程')
+  })
+
+  it('点「筛选」展开四个筛选维度，再点收起', async () => {
+    const wrapper = await mountAtNode()
+
+    await wrapper.get('[data-testid="data-filter-toggle"]').trigger('click')
+    expect(wrapper.find('[data-testid="data-cond-sql"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="data-backtrace-jump"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="data-filter-toggle"]').trigger('click')
+    expect(wrapper.find('[data-testid="data-cond-sql"]').exists()).toBe(false)
+  })
+
+  // 这条是折叠能不能成立的前提：条件藏起来之后得有东西说明它还生效，
+  // 否则用户看到数据变少只会当成 bug。
+  it('收起时用角标显示还有几个条件生效', async () => {
+    const wrapper = await mountAtNode()
+    const toggle = () => wrapper.get('[data-testid="data-filter-toggle"]')
+    expect(toggle().text()).toBe('筛选')
+    expect(toggle().classes()).not.toContain('on')
+
+    await toggle().trigger('click')
+    await wrapper.get('input[placeholder="数据 ID"]').setValue('123')
+    await wrapper.get('select.rv-input.st').setValue('C')
+    await toggle().trigger('click')
+
+    expect(wrapper.find('input[placeholder="数据 ID"]').exists()).toBe(false)
+    expect(toggle().text()).toContain('2')
+    expect(toggle().classes()).toContain('on')
   })
 })

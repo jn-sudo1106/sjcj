@@ -21,7 +21,7 @@ import DataGrid from './DataGrid.vue'
 import FilePreview from './components/FilePreview.vue'
 import { extFromName } from '@/utils/ossFile'
 import ProcessNodeRail from './ProcessNodeRail.vue'
-import { readRailOpen, writeRailOpen } from './railPref'
+import { readResultRailOpen, writeResultRailOpen, readFilterBarOpen, writeFilterBarOpen } from './resultLayoutPref'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import RowDetailFields from './RowDetailFields.vue'
@@ -71,11 +71,25 @@ if (pendingCondition) {
   filters.parentId = pendingCondition.parentId ?? ''
 }
 
-// 节点轨道默认展开：轨道是"这个源的流程长什么样"的上下文，进页面第一眼就该看到；
-// 想把这 96px 让给数据的人自己收起来。真要大量看数据走全屏，不靠默认折叠常规页面
-// 换那几行（2026-08-15 定案）。
-const railOpen = ref(readRailOpen())
-watch(railOpen, writeRailOpen)
+// 节点轨道**默认收起**（0910 会议 §2-2「点数据视图时自动收起上方流程配置区域」）。
+// 这条推翻了 2026-08-15 的定案（原话是"不靠默认折叠常规页面换那几行"，理由是轨道
+// 是流程上下文、第一眼就该看到）——会上给的新权衡是：进数据视图的人是来看数据的，
+// 那 96px 应该先归数据，想看流程的人点一下展开。
+//
+// 收起后仍要能展开：开合按钮站在主干行左端（0910 定案）。曾试过让它浮在轨道区右上角
+// 与全部源视图同构，但那样收起时得靠 .rv-railbox 的 min-height 留一条 32px 窄带专门
+// 托住按钮——一整行高度只换一个按钮，而主干行左边又只剩「筛选」「查询」两个，空了半边。
+// 代价：收起状态下看不出当前在哪个节点（与全部源视图现状一致），暂按会上口径保留。
+const railOpen = ref(readResultRailOpen())
+watch(railOpen, writeResultRailOpen)
+// 筛选条件区的折叠（0910 会议 §2-3）。主干行只留每次都用的：节点入口、筛选开关、查询，
+// 外加整组数据操作（发任务/删除——那是这个页面的主要动作，藏起来比藏筛选条件更伤）。
+const filtersOpen = ref(readFilterBarOpen())
+watch(filtersOpen, writeFilterBarOpen)
+// 收起时唯一能说明"筛选还生效着"的东西。没有它，用户设完条件一折叠，回头看到数据变少
+// 会当成 bug——条件本身此刻是看不见的。所以角标不是装饰，是这个折叠能成立的前提。
+const activeFilterCount = computed(() =>
+  [filters.dataId, filters.parentId, filters.state, filters.sql].filter(Boolean).length)
 // 全屏：整个面板 position:fixed 铺满视口，不复制模板、不引入弹层——详情抽屉本来就渲染在
 // .rv-shell 内部，会跟着一起进全屏；祖先链上没有 transform/filter/contain，fixed 能正常
 // 逃逸到视口（已核对 AppShell.vue / FlowCanvas/index.vue）。
@@ -1101,71 +1115,56 @@ async function onTestScript() {
          而且这两个都是"这个节点的上下文"，跟下面那行"怎么查"不是一回事
          （2026-08-15 第十三次纠偏：原来把它俩塞进筛选行，等于把一组筛选条件劈成两半）。
          收起后 .rv-railbox 靠 min-height 留出一条窄带，展开按钮不会跟着消失。 -->
-    <div v-if="selectedNodeId" class="rv-railbox">
-      <div v-if="railOpen" class="rv-bar" data-testid="data-process-rail">
+    <div v-if="selectedNodeId && railOpen" class="rv-railbox">
+      <div class="rv-bar" data-testid="data-process-rail">
         <ProcessNodeRail :model-value="selectedNodeId" :layout="processLayout" @update:model-value="onSelectNode" />
         <div v-if="!allNodes.length" class="rv-bar-empty">当前流程没有可查看数据的节点</div>
       </div>
-      <div class="rv-rail-ctl">
-        <button
-          type="button"
-          class="rv-rail-toggle"
-          :class="{ open: railOpen }"
-          data-testid="data-rail-toggle"
-          :title="railOpen ? '收起流程节点轨道' : '展开流程节点轨道'"
-          @click="railOpen = !railOpen"
-        >{{ railOpen ? '收起流程' : '展开流程' }} <span class="arrow">▾</span></button>
-        <button
-          v-if="hasCond"
-          type="button"
-          class="ctx-toggle"
-          data-testid="data-node-condition-link"
-          title="到流程画布查看该节点的完整配置与条件"
-          @click="openNodeCondition"
-        >查看条件 <span class="arrow">↗</span></button>
-      </div>
     </div>
 
-    <!-- 这一行只放"怎么查"：各个筛选条件 + 查询/清空。节点选择归流程图（0819 会议 05:13
-         "上面那个和下面那个不是两个都有了吗？只要有一个就行了"——原来这里还有一个与轨道
-         完全同步的节点下拉，同一件事两个控件，已删）；节点上下文（折叠开关、查看条件）在
-         轨道上，输入/输出/执行方式在下面的表头行，各归各位。 -->
+    <!-- 主干行（0910 重排）：左端是节点上下文（展开流程 / 查看条件），中间「查询」+「筛选」，
+         右端是数据操作。四个筛选维度收进「筛选」抽屉，输入/输出/执行方式在下面的表头行。
+         节点选择归流程图（0819 会议 05:13"上面那个和下面那个不是两个都有了吗？只要有一个
+         就行了"——原来这里还有一个与轨道完全同步的节点下拉，同一件事两个控件，已删）。 -->
     <!-- 查询条件一律点「查询」执行，不绑回车（2026-08-20 决定）。原先绑了 @keyup.enter，
          但中文输入法上屏时也会发 Enter 的 keyup，而 Vue 的 @keyup.enter 不过滤 isComposing——
          实测打字打到一半就被当成回车查了一次，条件只输了半截，结果还看不出是怎么来的。 -->
     <div v-if="selectedNodeId" class="ctx-summary" data-testid="data-node-context">
       <!-- 全屏时源信息头被藏起来了，这里把源名补回来，否则看不出在看哪个源的数据。 -->
       <span v-if="fullscreen" class="rv-fs-source" :title="source?.name || sourceId">{{ source?.name || sourceId }}</span>
+      <!-- 轨道开合与「查看条件」放在主干行左端（0910）。它们一度浮在轨道区右上角——
+           那样收起后得靠 .rv-railbox 的 min-height 留一条 32px 窄带专门托住按钮，
+           一整行的高度只换一个按钮；而主干行左边又只剩「筛选」「查询」两个，空了半边。
+           挪到这里两个问题一起解决，代价是规格必须跟这一行看齐（28px 方角），
+           不能再用轨道条上那种 24px 胶囊——胶囊夹在一排方角按钮中间会参差扎眼。 -->
+      <button
+        type="button"
+        class="rv-rail-toggle"
+        :class="{ open: railOpen }"
+        data-testid="data-rail-toggle"
+        :title="railOpen ? '收起流程节点轨道' : '展开流程节点轨道'"
+        @click="railOpen = !railOpen"
+      >{{ railOpen ? '收起流程' : '展开流程' }} <span class="arrow">▾</span></button>
+      <button
+        v-if="hasCond"
+        type="button"
+        class="ctx-toggle"
+        data-testid="data-node-condition-link"
+        title="到流程画布查看该节点的完整配置与条件"
+        @click="openNodeCondition"
+      >查看条件 <span class="arrow">↗</span></button>
       <template v-if="hasAnyTable">
-        <input v-model="filters.dataId" class="rv-input id" placeholder="数据 ID" />
-        <input v-model="filters.parentId" class="rv-input id" placeholder="父 ID" />
-        <select v-model="filters.state" class="rv-input st">
-          <option value="">状态（全部）</option>
-          <option value="C">C 成功</option>
-          <option value="E">E 出错</option>
-          <option value="L">L 处理中</option>
-        </select>
-        <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="selectedTable" :table-name="meta?.tableName" class="rv-sql">
-          <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="rv-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
-        </SqlConditionEditor>
-        <!-- 强制换行（0909）：不加这个，分行点随窗口宽度漂——SQL 框是 flex:1 1 320px，
-             窄一点它收缩到 min-width，「查询/清空」就被吸到第一行末尾，操作组独占第二行
-             右端、左边空一大片；宽一点又是另一种排法。钉成「第一行只放条件、第二行左查询
-             右操作」，两组都是动作、各占一端，空间也不浪费。 -->
-        <span class="rv-linebreak" aria-hidden="true"></span>
         <span class="rv-actions">
           <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
-          <button class="rc-btn" type="button" @click="clearFilters">清空</button>
-          <!-- 0903 Y2-7：带着条件跳到全部源数据视图，在那儿才有"反查源"这件事 -->
-          <button
-            class="rc-btn"
-            type="button"
-            data-testid="data-backtrace-jump"
-            :disabled="!canBackTrace"
-            :title="canBackTrace ? '带着当前条件切到全部源数据视图，在那里反查哪些源命中' : '先填至少一个数据条件（SQL / 状态 / 数据 ID / 父 ID）'"
-            @click="openBackTraceInSiteView"
-          >按条件查源 →</button>
         </span>
+        <button
+          type="button"
+          class="rv-filter-toggle"
+          :class="{ on: activeFilterCount > 0, open: filtersOpen }"
+          data-testid="data-filter-toggle"
+          :title="filtersOpen ? '收起筛选条件' : '展开筛选条件（数据 ID / 父 ID / 状态 / SQL）'"
+          @click="filtersOpen = !filtersOpen"
+        >筛选<span v-if="activeFilterCount" class="n">{{ activeFilterCount }}</span></button>
         <!-- 数据操作组（0909 第二次重排，用户「把操作列的放一行」）：发任务/删除是「查出这批
              数据之后对它动手」，跟查询条件同一语境，放筛选行右端；表头行只留「这张表是什么 +
              怎么看它」。这三个按钮最宽（发全部带命中数、删除数据带下拉箭头），压在表头行上
@@ -1241,6 +1240,34 @@ async function onTestScript() {
           </el-dropdown>
         </span>
       </template>
+    </div>
+
+    <!-- 筛选抽屉：四个筛选维度 + 清空 + 反查跳转。它们是"偶尔才改一次"的东西，
+         常驻一整行不划算；而主干行上的动作（查询、发任务、删除）每次都用，留在外面。
+         这里不再需要 0909 那个 .rv-linebreak 强制换行——分行点漂移的根源是条件与动作
+         挤在同一个 flex 容器里，现在两者本就分属两行了。 -->
+    <div v-if="selectedNodeId && hasAnyTable && filtersOpen" class="ctx-summary rv-filterbar" data-testid="data-filter-bar">
+      <input v-model="filters.dataId" class="rv-input id" placeholder="数据 ID" />
+      <input v-model="filters.parentId" class="rv-input id" placeholder="父 ID" />
+      <select v-model="filters.state" class="rv-input st">
+        <option value="">状态（全部）</option>
+        <option value="C">C 成功</option>
+        <option value="E">E 出错</option>
+        <option value="L">L 处理中</option>
+      </select>
+      <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="selectedTable" :table-name="meta?.tableName" class="rv-sql">
+        <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="rv-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
+      </SqlConditionEditor>
+      <button class="rc-btn" type="button" @click="clearFilters">清空</button>
+      <!-- 0903 Y2-7：带着条件跳到全部源数据视图，在那儿才有"反查源"这件事 -->
+      <button
+        class="rc-btn"
+        type="button"
+        data-testid="data-backtrace-jump"
+        :disabled="!canBackTrace"
+        :title="canBackTrace ? '带着当前条件切到全部源数据视图，在那里反查哪些源命中' : '先填至少一个数据条件（SQL / 状态 / 数据 ID / 父 ID）'"
+        @click="openBackTraceInSiteView"
+      >按条件查源 →</button>
     </div>
 
     <template v-if="hasAnyTable">
@@ -1502,16 +1529,29 @@ async function onTestScript() {
 .rv-shell.is-fullscreen { position: fixed; inset: 0; z-index: 60; height: 100vh; border: 0; border-radius: 0; }
 
 /* 轨道容器：控件浮在轨道右上角（.rv-bar 自己会横向滚动，控件必须放在滚动容器外面，
-   否则会跟着内容滚走）。收起轨道后靠 min-height 留一条窄带，展开按钮不会一起消失。 */
-.rv-railbox { position: relative; min-height: 32px; border-bottom: 1px solid var(--rc-border-soft); background: #f8fafc; }
-.rv-rail-ctl { position: absolute; top: 4px; right: 10px; z-index: 2; display: flex; align-items: center; gap: 6px; }
+   否则会跟着内容滚走）。0910 起收起时整块不渲染：开合按钮已挪到主干行，
+   原先靠 min-height 留的那条 32px 窄带纯粹是为托住按钮，按钮走了它就只是占地方。 */
+.rv-railbox { position: relative; border-bottom: 1px solid var(--rc-border-soft); background: #f8fafc; }
 
-/* 折叠开关：默认展开（轨道是"这个源的流程长什么样"的上下文），想把 96px 让给数据的人
-   自己收。控件长在它所控制的轨道上，不塞进下面那行筛选条件里。 */
-.rv-rail-toggle { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 999px; background: #fff; color: var(--rc-text-2); font-size: 11.5px; cursor: pointer; }
+/* 折叠开关：0910 起默认收起（会议 §2-2），按钮站在主干行左端，
+   所以规格跟这一行的其余按钮一致（28px / 6px 圆角 / 12px）。
+   **不要改回 24px 胶囊**——那是给"浮在轨道右上角、不与任何按钮同排"设计的；
+   放进这一行会夹在一排方角按钮中间参差扎眼（0910 两种都实测过）。 */
+.rv-rail-toggle { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 700; cursor: pointer; }
 .rv-rail-toggle:hover { border-color: var(--rc-primary); color: var(--rc-primary-ink); }
-.rv-rail-toggle .arrow { display: inline-block; transition: transform .18s ease; }
+.rv-rail-toggle .arrow { display: inline-block; flex: none; color: var(--rc-faint); transition: transform .18s ease; }
 .rv-rail-toggle.open .arrow { transform: rotate(180deg); }
+
+/* 筛选开关：没有条件时安静；一旦有条件生效就整体变主色并挂出数字——
+   收起状态下这是唯一说明"还有筛选在起作用"的信号。 */
+.rv-filter-toggle { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 700; cursor: pointer; }
+.rv-filter-toggle:hover { border-color: var(--rc-primary); color: var(--rc-primary-ink); }
+.rv-filter-toggle.open { background: #f1f5f9; }
+.rv-filter-toggle.on { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.rv-filter-toggle .n { display: inline-block; min-width: 16px; padding: 0 4px; border-radius: 999px; background: var(--rc-primary); color: #fff; font-family: var(--rc-mono, monospace); font-size: 10.5px; line-height: 16px; text-align: center; }
+
+/* 筛选抽屉：主干行的延伸，靠底色表示从属关系，不做成独立卡片。 */
+.rv-filterbar { background: #f8fafc; }
 
 /* 全屏下源信息头被藏起来，用这个补回"在看哪个源"。 */
 .rv-fs-source { flex: none; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 700; color: var(--rc-text); }
@@ -1586,7 +1626,8 @@ button.ctx-piece.scope-piece { border: 0; background: transparent; font: inherit
 button.ctx-piece.scope-piece:hover { opacity: .85; background: var(--rc-border-soft); }
 button.ctx-piece.scope-piece.active { opacity: 1; background: var(--rc-primary-bg); }
 button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v { color: var(--rc-primary-ink); }
-.ctx-toggle { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border: 1px solid #fde68a; border-radius: 999px; background: #fffbeb; color: #92400e; font-size: 11.5px; font-weight: 700; cursor: pointer; }
+/* 跟开合按钮同组，一起站在主干行上，规格随行（配色保留：黄＝跳出本页去画布看配置）。 */
+.ctx-toggle { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 12px; border: 1px solid #fde68a; border-radius: var(--rc-radius-sm); background: #fffbeb; color: #92400e; font-size: 12px; font-weight: 700; cursor: pointer; }
 .ctx-toggle:hover { border-color: #fbbf24; }
 .ctx-toggle .arrow { display: inline-block; transition: transform .18s ease; }
 .rv-empty-scope { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px 12px; text-align: center; color: var(--rc-faint); font-size: 12px; }
@@ -1609,7 +1650,6 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
    下一行时自然左对齐，不做额外处理——响应式下让位比硬撑更好。
    按钮尺寸由上面的 .ctx-summary .rc-btn（28px）统一接管，跟同行的「查询/清空」一致；
    删除数据那个 .tiny 也一并拉齐，这行不再有 24px 的邻居。 */
-.rv-linebreak { flex-basis: 100%; height: 0; margin: 0; padding: 0; }
 .rv-data-ops { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
 .ctx-summary .rc-btn.tiny { height: 28px; padding: 0 12px; font-size: 12px; }
 
