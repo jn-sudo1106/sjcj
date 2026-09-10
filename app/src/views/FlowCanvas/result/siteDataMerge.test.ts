@@ -130,6 +130,36 @@ describe('siteDataMerge：多源 top-K 归并', () => {
     expect(second.rows).toEqual([])
   })
 
+  it('源多、每源行数少：分多次 load more 直到 buffer 全清空，allExhausted 才为 true，一行不漏', async () => {
+    // 复现 2026-09-10 生产 bug：15 个源共 32 条数据，每轮只取 count=5。
+    // 一轮 mergeLoadMore 弹够 5 条就返回，各源 buffer 里还压着已从后端取回、没弹出的行；
+    // 旧实现只看 s.exhausted 就报 allExhausted=true，调用方停在半路，剩下的行凭空消失。
+    const data: Record<string, DataRow[]> = {}
+    let total = 0
+    for (let i = 0; i < 15; i += 1) {
+      const n = (i % 3) + 1 // 1~3 条/源
+      data[`s${i}`] = Array.from({ length: n }, (_, k) => row(`s${i}`, 1000 - i * 10 - k))
+      total += n
+    }
+    const backend = fakeBackend(data)
+    const states = initMergeState(Object.keys(data))
+
+    const collected: DataRow[] = []
+    let guard = 0
+    for (;;) {
+      const r = await mergeLoadMore(states, 5, 5, backend)
+      collected.push(...r.rows)
+      if (r.allExhausted) break
+      expect((guard += 1)).toBeLessThan(50) // 不收敛就是又回归了
+    }
+
+    expect(collected).toHaveLength(total)
+    expect(new Set(collected.map((r) => r.dataId)).size).toBe(total) // 不重
+    // 全局降序
+    const keys = collected.map((r) => Number(r.dataId))
+    expect([...keys].sort((a, b) => b - a)).toEqual(keys)
+  })
+
   it('空源列表直接返回空结果，不报错', async () => {
     const fetchPage = vi.fn()
     const result = await mergeLoadMore(initMergeState([]), 10, 20, fetchPage)

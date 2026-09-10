@@ -107,5 +107,11 @@ export async function mergeLoadMore<T extends MergeRow>(
     rows.push(picked)
   }
   const failedSources = states.filter((s) => s.failed).map((s) => ({ sourceId: s.sourceId, error: s.error || '请求失败' }))
-  return { rows, states, failedSourceIds: [...failedSourceIds], failedSources, allExhausted: states.every((s) => s.exhausted) }
+  // allExhausted 要同时满足两条：① 每个源都没有更多页可取（s.exhausted）；② 每个源 buffer 里
+  // 已取回但还没弹出的行也都清空了。只看 s.exhausted 会漏 ②：一轮 mergeLoadMore 弹够 count 条
+  // 就返回，各源 buffer 里常留着已经从后端取回的行；此时若报 allExhausted=true，调用方就停在
+  // 半路，那些行再也不会被 append 进结果——表现为表头「共 488 条」但只加载 220 条就显示
+  // 「已加载全部数据」（2026-09-10 生产实测，测试网站0907 / TB_CNEWS，源多、每源行数少时必现）。
+  const allExhausted = states.every((s) => s.exhausted && s.buffer.length === 0)
+  return { rows, states, failedSourceIds: [...failedSourceIds], failedSources, allExhausted }
 }
