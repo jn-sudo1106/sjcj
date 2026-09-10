@@ -9,6 +9,7 @@ import type {
   CkSourcePayload, CkSourceRecord,
   CodeExecuteRequest,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
+  SourceCheck, SourceCheckLog, SourceCheckQuery, SourceCheckLogQuery,
   TaskInstQuery, SiteTableOption, SiteTablesResult,
   Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, CopySourceInput, SourceCloneRequest, SourceCloneResult,
@@ -81,6 +82,16 @@ export { parseNextStepReceipt, type NextStepReceipt, type NextStepReceiptEntry }
 // 对方后端尚未提供对应实现的资产能力强制走 Mock；网站读取链路已在 siteApi 单独切真实。
 const assetMockRequest = <T>(endpoint: string, params?: Record<string, unknown>) =>
   request<T>(endpoint, params, { mode: 'mock' })
+
+/**
+ * 分页解包：后端有时给 { total, list }，有时直接给数组（无总数时以本页长度兜底）。
+ * 与 unwrapTaskInstPage 同一口径，只是不做行映射——字段名与后端一致的接口直接用它。
+ */
+function unwrapPage<T>(result: unknown): Paged<T> {
+  const list = (Array.isArray(result) ? result : ((result as Paged<unknown> | null)?.list ?? [])) as T[]
+  const total = Array.isArray(result) ? list.length : ((result as Paged<unknown> | null)?.total ?? list.length)
+  return { total, list }
+}
 
 /** 源列表任务实例与画布任务视图共用：GET /v1/task/topTaskPaged 的分页解包。 */
 function unwrapTaskInstPage(result: unknown): { total: number; list: TaskInst[] } {
@@ -1848,6 +1859,61 @@ export const monitorApi = {
   alarms: () => request<AlarmRow[]>('monitor/alarmPaged'),
   monitorStats: () =>
     request<{ healthText: string; queueAlarms: number; cacheWindow: string; dangerOpen: number }>('monitor/stats'),
+}
+
+/**
+ * 源监控（数据源告警）。0910 从旧平台 MonitorList 迁入，接口对齐 api/monitor.js。
+ *
+ * 分页参数注意：旧平台发出去的是 `page` / `limit`，不是 `pageNo` / `pageSize`
+ * （它在 api 层临时改了名再发），这里直接按后端认的名字传。
+ *
+ * ⚠️ `sourceId` 是**单值**，一次只能查一个源——网站底下几千个源查不出来。
+ * 故本期只支持"选中具体源"，全部源态由视图层拦住（0910 拍板，后端后续加 siteId）。
+ */
+export const sourceCheckApi = {
+  paged: async (q: SourceCheckQuery): Promise<Paged<SourceCheck>> => {
+    const result = await request<unknown>('source/check/paged', q, {
+      method: 'GET',
+      httpParams: {
+        sourceId: q.sourceId,
+        enable: q.enable || undefined,
+        state: q.state || undefined,
+        name: q.name || undefined,
+        page: q.page ?? 1,
+        limit: q.size ?? 20,
+      },
+    })
+    return unwrapPage<SourceCheck>(result)
+  },
+  pagedLogs: async (q: SourceCheckLogQuery): Promise<Paged<SourceCheckLog>> => {
+    const result = await request<unknown>('source/check/paged-logs', q, {
+      method: 'GET',
+      httpParams: {
+        sourceId: q.sourceId,
+        jobId: q.jobId,
+        state: q.state || undefined,
+        name: q.name || undefined,
+        page: q.page ?? 1,
+        limit: q.size ?? 20,
+      },
+    })
+    return unwrapPage<SourceCheckLog>(result)
+  },
+  /** 启停。enable 传后端口径：0=在用、1=停用，与 isDelete 同义（不是布尔） */
+  changeEnable: async (ids: string[], enable: 0 | 1): Promise<Ack> => {
+    const result = await request<unknown>('source/check/changeEnable', { ids, enable }, {
+      method: 'GET',
+      httpParams: { ids: ids.join(','), enable },
+    })
+    return ackFromApiResult(result)
+  },
+  runNow: async (ids: string[]): Promise<Ack> => {
+    const result = await request<unknown>('source/check/runNow', { ids }, {
+      method: 'GET',
+      httpParams: { ids: ids.join(',') },
+    })
+    return ackFromApiResult(result)
+  },
 }
 
 /**

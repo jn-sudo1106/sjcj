@@ -47,7 +47,7 @@ import {
 import { mockDatasets, mockMeasures, mockMetricStats } from './metrics'
 import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate, mockEntryDataUpload } from './dataview'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
-import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourceInsert, mockCkSourceUpdate } from './monitor'
+import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckLogs } from './monitor'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
 import { mockFlowRecommend, mockNodeAiChat } from './flows'
@@ -217,6 +217,9 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'monitor/health': mockHealth,
   'mq/queuePaged': mockMq,
   'source/check/syncPaged': mockSync,
+  // 源监控（数据源告警，0910 迁入）
+  'source/check/paged': mockSourceCheckPaged,
+  'source/check/paged-logs': mockSourceCheckLogs,
   'monitor/alarmPaged': mockAlarms,
   'monitor/stats': mockMonitorStats,
   // ck_source 监控源配置（数据监控节点保存同步，2026-09-05）

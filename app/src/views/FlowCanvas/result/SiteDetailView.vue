@@ -14,6 +14,7 @@ import { normalizeSiteView } from '@/utils/url/workspaceRoute'
 import SourceOverviewView from './SourceOverviewView.vue'
 import SiteDataView from './SiteDataView.vue'
 import SiteFileView from './SiteFileView.vue'
+import SiteMonitorView from './SiteMonitorView.vue'
 
 const props = defineProps<{ siteId: string }>()
 const route = useRoute()
@@ -97,7 +98,7 @@ onUnmounted(() => {
 })
 
 const view = computed(() => normalizeSiteView(route.query.view))
-function switchView(target: 'source' | 'data' | 'file') {
+function switchView(target: 'source' | 'data' | 'file' | 'monitor') {
   if (view.value === target) return
   void router.replace({ path: '/canvas', query: { siteId: props.siteId, view: target } })
 }
@@ -122,6 +123,7 @@ function openSourceData(source: Source) {
         <button class="sdv-seg" :class="{ on: view === 'source' }" type="button" data-testid="site-source-view" @click="switchView('source')">源视图</button>
         <button class="sdv-seg" :class="{ on: view === 'data' }" type="button" data-testid="site-data-view" @click="switchView('data')">数据视图</button>
         <button class="sdv-seg" :class="{ on: view === 'file' }" type="button" data-testid="site-file-view" @click="switchView('file')">文件视图</button>
+        <button class="sdv-seg" :class="{ on: view === 'monitor' }" type="button" data-testid="site-monitor-view" @click="switchView('monitor')">监控视图</button>
       </div>
     </div>
     <div v-if="loadError" class="sdv-empty">{{ loadError }}</div>
@@ -129,6 +131,7 @@ function openSourceData(source: Source) {
       <SourceOverviewView v-if="view === 'source'" :current-site-id="siteId" :initial-source-ids="initialSourceIds" :initial-flow-id="initialFlowId" class="sdv-body" @open-source="openSource" @open-source-data="openSourceData" />
       <SiteDataView v-else-if="view === 'data'" :site-id="siteId" :initial-condition="initialCondition" class="sdv-body" />
       <SiteFileView v-else-if="view === 'file'" :site-id="siteId" class="sdv-body" />
+      <SiteMonitorView v-else-if="view === 'monitor'" :site-id="siteId" class="sdv-body" />
     </template>
   </main>
 </template>

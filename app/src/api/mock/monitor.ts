@@ -1,5 +1,5 @@
 import type { CkSourcePayload, CkSourceRecord } from '../types/rule'
-import type { HealthCard, MqQueue, SyncRow, AlarmRow } from '../types'
+import type { HealthCard, MqQueue, SyncRow, AlarmRow, SourceCheck, SourceCheckLog, Paged } from '../types'
 
 const HEALTH: HealthCard[] = [
   { key: 'qinglong', name: '执行器（青龙）', status: 'ok', detail: '4 / 5 节点在线' },
@@ -83,4 +83,67 @@ export function mockCkSourceUpdate(params?: Record<string, unknown>): boolean {
     hit++
   }
   return hit > 0
+}
+
+// ---------- 源监控（0910 迁入，第一期只读 + 开关） ----------
+// 覆盖三种要看的形态：告警中、正常、已停用。lastMsg 保留旧平台那种
+// `时间---[X]:文本` 的前缀，好验证视图有没有把重复的时间戳剥掉。
+const CHECKS: SourceCheck[] = [
+  {
+    id: 'ck-1', isDelete: 0, state: 'E', name: '日增量监控',
+    lastMsg: '2026-09-09 11:00:46---[X]:今日酒价百容酒价监控-日增量-异常, 数量:0',
+    tableName: 'sense_data.tb_jjjk', schedule: '0 0 * * * ?',
+    nextRun: '2026-09-09 12:00:00', lastRun: '2026-09-09 11:00:19',
+    sourceId: '391007770', checkConf: '{"timeType":"day","minSize":"1"}',
+  },
+  {
+    id: 'ck-2', isDelete: 0, state: 'C', name: '小时增量监控',
+    lastMsg: '2026-09-09 11:00:12---正常, 数量:1240',
+    tableName: 'sense_data.tb_cnews', schedule: '0 0 * * * ?',
+    nextRun: '2026-09-09 12:00:00', lastRun: '2026-09-09 11:00:12',
+    sourceId: '391007770', checkConf: '{"timeType":"hour","minSize":"100"}',
+  },
+  {
+    id: 'ck-3', isDelete: 1, state: 'C', name: '全量比对（已停用）',
+    lastMsg: '2026-09-01 03:00:05---正常, 数量:88231',
+    tableName: 'sense_data.tb_cnews', schedule: '0 0 3 * * ?',
+    nextRun: '—', lastRun: '2026-09-01 03:00:05',
+    sourceId: '391007770', checkConf: '{}',
+  },
+]
+
+export function mockSourceCheckPaged(params?: Record<string, unknown>): Paged<SourceCheck> {
+  const enable = String(params?.enable ?? '')
+  const state = String(params?.state ?? '')
+  const name = String(params?.name ?? '')
+  const list = CHECKS.filter((c) => (!enable || String(c.isDelete) === enable)
+    && (!state || c.state === state)
+    && (!name || c.name.includes(name)))
+  return { total: list.length, list }
+}
+
+export function mockSourceCheckLogs(params?: Record<string, unknown>): Paged<SourceCheckLog> {
+  const state = String(params?.state ?? '')
+  const sourceId = String(params?.sourceId ?? '391007770')
+  // 造够两页，好验证分页器真的在翻
+  const all: SourceCheckLog[] = Array.from({ length: 26 }, (_, i) => {
+    const hour = String(23 - (i % 24)).padStart(2, '0')
+    const bad = i % 3 === 0
+    return {
+      logId: `log-${i + 1}`,
+      createDt: `2026-09-09 ${hour}:00:${String(10 + (i % 40)).padStart(2, '0')}`,
+      logMsg: bad
+        ? `2026-09-09 ${hour}:00:46---[X]:今日酒价百容酒价监控-日增量-异常, 数量:0`
+        : `2026-09-09 ${hour}:00:12---正常, 数量:${1200 + i}`,
+      name: '今日酒价百容酒价监控-日增量',
+      state: bad ? 'E' : 'C',
+      logType: bad ? '出错' : '正常',
+      tableName: 'sense_data.tb_jjjk',
+      sourceId,
+    }
+  })
+  const filtered = state ? all.filter((l) => l.state === state) : all
+  const page = Number(params?.page ?? 1)
+  const limit = Number(params?.limit ?? 20)
+  return { total: filtered.length, list: filtered.slice((page - 1) * limit, page * limit) }
 }
