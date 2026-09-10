@@ -266,10 +266,3 @@ export interface RuleOrchestrationSaveMetaResult {
   ruleId: string
   message?: string
 }
-
-/** 保存脚本（路径 B，对应旧 dashscope/script/edit） */
-export interface RuleOrchestrationSaveResult {
-  ruleId: string
-  scriptPath: string
-  message?: string
-}

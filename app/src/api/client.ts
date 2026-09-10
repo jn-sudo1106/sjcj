@@ -23,6 +23,8 @@ export interface RequestOptions {
   timeoutMs?: number
   httpParams?: Record<string, unknown>
   httpEndpoint?: string
+  /** 响应编码。json-or-text 用于后端成功时可能返回纯文本路径的文件接口。 */
+  responseType?: 'json' | 'json-or-text'
   signal?: AbortSignal
   /** 额外的 URL query 参数；用于 POST 也需要 query 的场景（如旧 /v1 端点把 ids/all/skip/include/queue 放 query、body 仅放 param）。 */
   query?: Record<string, unknown>
@@ -184,6 +186,8 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   // 只把选中任务重置为待发送重新排队，不改不删任何配置/源/流程。2026-08-13 测试环境实测：
   // E / L 都能重跑、都变 W1、响应无逐条结果、无效 ID 静默忽略、幂等。UI 侧保留二次确认。
   'task/resetTaskInsts',
+  // 2026-09-10：按需求放开规则脚本/抓取配置保存，直接写入文件服务。
+  '/api/file/upload',
 ])
 
 function isProductionWriteAllowed(httpEndpoint: string): boolean {
@@ -380,7 +384,18 @@ export async function request<T>(
     // 只在正文真为空时按 null 处理（走各 xxxFromLegacy 适配器的空输入兜底分支）；
     // 非空但解析失败仍然是真实错误，照样往外抛，不吞掉。
     const bodyText = await res.text()
-    const body = bodyText.trim() ? JSON.parse(bodyText) : null
+    let body: unknown = null
+    if (bodyText.trim()) {
+      if (options.responseType === 'json-or-text') {
+        try {
+          body = JSON.parse(bodyText)
+        } catch {
+          body = { ok: true, message: bodyText }
+        }
+      } else {
+        body = JSON.parse(bodyText)
+      }
+    }
     return normalizeHttpPayload(httpEndpoint, body) as T
   } catch (e) {
     throw new ApiError(endpoint, e)

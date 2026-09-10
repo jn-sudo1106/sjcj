@@ -159,26 +159,32 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
     })
   })
 
-  it('orchestrationSave：POST /vrule/ai/dashscope/script/edit，codeFileName/scriptCode', async () => {
+  it('fileUploadScript：POST /api/file/upload，fileId 和脚本文本都在 JSON body', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
     const { ruleApi } = await import('./index')
 
-    const result = await ruleApi.orchestrationSave({
-      ...sampleCfg,
-      mode: 'ref',
-      ruleId: '173',
-      scriptPath: '/code01/x.py',
-      script: 'def main(date):\n    return {}',
-    })
+    const script = 'import json\n\ndef main(code, name):\n    return {"命中": code == "1121250", "名称": name}'
+    await ruleApi.fileUploadScript('/code01/202609/1789022685732.py', script)
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('/vrule/ai/dashscope/script/edit')
+    expect(url).toBe('/api/file/upload')
+    expect(init.method).toBe('POST')
     expect(JSON.parse(String(init.body))).toEqual({
-      ruleId: '173',
-      codeFileName: '/code01/x.py',
-      scriptCode: 'def main(date):\n    return {}',
+      fileId: '/code01/202609/1789022685732.py',
+      body: script,
     })
-    expect(result).toMatchObject({ ruleId: '173', scriptPath: '/code01/x.py' })
+  })
+
+  it('fileUploadScript：接口返回纯文本脚本路径时按成功处理，不尝试 JSON.parse', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => '/code01/202609/1789022685732.py',
+    } as Response)
+    const { ruleApi } = await import('./index')
+
+    await expect(ruleApi.fileUploadScript('/code01/202609/1789022685732.py', 'def main():\n    return {}'))
+      .resolves.toMatchObject({ ok: true, message: '/code01/202609/1789022685732.py' })
   })
 
   it('dataProcessGenerate：POST /api/answer/data-process，按 SSE event/data 解析 thinking/content/done', async () => {

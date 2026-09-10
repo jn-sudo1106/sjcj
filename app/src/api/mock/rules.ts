@@ -9,7 +9,6 @@ import type {
   RuleOrchestrationGenerateResult,
   RuleOrchestrationItem,
   RuleOrchestrationSaveMetaResult,
-  RuleOrchestrationSaveResult,
   RuleOrchestrationTestResult,
 } from '../types'
 
@@ -478,23 +477,4 @@ export function mockRuleOrchestrationTest(params?: Record<string, unknown>): Rul
     outputs: [{ tags }],
     executionTime: 0.018,
   }
-}
-
-export function mockRuleOrchestrationSave(params?: Record<string, unknown>): RuleOrchestrationSaveResult {
-  const cfg = ((params?.ruleCfg ?? params) || {}) as RuleOrchestration
-  const existing = cfg.ruleId ? ORCHESTRATIONS.find((item) => item.ruleId === cfg.ruleId) : undefined
-  const ruleId = existing?.ruleId ?? `orch-${orchestrationSeq++}`
-  const scriptPath = cfg.scriptPath || `/rules/generated/${ruleId}.${cfg.format === 'xml' ? 'xml' : 'py'}`
-  const item: RuleOrchestrationItem = {
-    ruleId,
-    name: cfg.name || `规则编排 ${ruleId}`,
-    describe: cfg.describe || '',
-    script: cfg.script || '',
-    scriptPath,
-    enabled: cfg.enabled ?? true,
-    createdAt: existing?.createdAt ?? '2026-07-08 13:30',
-  }
-  if (existing) Object.assign(existing, item)
-  else ORCHESTRATIONS.unshift(item)
-  return { ruleId, scriptPath, message: '规则脚本已保存（演示）' }
 }

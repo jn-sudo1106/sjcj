@@ -162,14 +162,15 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     return { flow, wrapper }
   }
 
-  it('未生成脚本时，全屏查看/保存脚本按钮禁用', async () => {
+  it('未生成脚本时，工作区保存脚本按钮禁用', async () => {
     const { wrapper } = mountWithExistingRule()
     await flushPromises()
 
-    expect(wrapper.find('textarea.rc-code-box').exists()).toBe(false)
-    const buttons = wrapper.findAll('button').filter((b) => ['全屏查看', '保存脚本'].includes(b.text()))
-    expect(buttons).toHaveLength(2)
-    buttons.forEach((b) => expect(b.attributes('disabled')).toBeDefined())
+    await openWorkbench(wrapper)
+    const workbench = wrapper.findComponent(RuleWorkbenchDialog)
+    expect(workbench.find('textarea.wb-code').exists()).toBe(true)
+    const saveButton = workbench.findAll('.wb-pane-actions button').find((b) => b.text().includes('保存脚本'))!
+    expect(saveButton.attributes('disabled')).toBeDefined()
   })
 
   it('规则处理节点编排配置页不显示数据预览表格', async () => {
@@ -471,7 +472,6 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       sourceId: '430016501', name: '源', url: '', configId: '', mainTable: '', owner: '', state: 'C',
     }
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
-    vi.spyOn(ruleApi, 'orchestrationSave').mockResolvedValue({ ruleId: '184', scriptPath: '/code01/184.py', message: 'ok' })
     vi.spyOn(ruleApi, 'fileUploadScript').mockResolvedValue({ ok: true, message: '文件已保存' })
     return { flow, wrapper }
   }
@@ -681,7 +681,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(ruleApi.dataProcessGenerate).not.toHaveBeenCalled()
   })
 
-  it('填写描述后生成脚本：写回 script/scriptPath，全屏查看/保存脚本随之启用', async () => {
+  it('填写描述后生成脚本：写回 script/scriptPath，工作区保存脚本随之启用', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     await flushPromises()
     vi.spyOn(ruleApi, 'dataProcessGenerate').mockResolvedValue({
@@ -689,7 +689,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       scriptPath: '/rules/generated/orch-173.py',
     })
 
-    await wrapper.find('textarea[placeholder*="描述规则处理逻辑"]').setValue('按 sku_id 生成 sku_name')
+    await wrapper.find('textarea[placeholder*="自然语言描述"]').setValue('按 sku_id 生成 sku_name')
     const genBtn = wrapper.findAll('button').find((b) => b.text().includes('生成脚本'))!
     await genBtn.trigger('click')
     await flushPromises()
@@ -703,7 +703,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       targetTable: 'sense_data.TB_JD_SKU_RESULT',
       inputFields: '商品ID:sku_id',
       outputFields: '商品名称:sku_name',
-      systemPrompt: '生成 Python 脚本，返回 JSON',
+      systemPrompt: expect.stringContaining('源表=JD-商品基础:sense_data.TB_JD_SKU_BASE'),
     }), expect.anything())
     expect(flow.configs['rule-1'].ruleCfg?.script).toContain('def main')
     expect(flow.configs['rule-1'].ruleCfg?.scriptPath).toBe('/rules/generated/orch-173.py')
@@ -764,6 +764,20 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await flushPromises()
 
     expect(wrapper.html()).toContain('def main(sku_id)')
+  })
+
+  it('已有脚本重新打开工作区时，状态显示已生成而不是待生成', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', {
+      script: 'def main(sku_id):\n    return {}',
+      scriptPath: '/code01/202609/1789022685732.py',
+    })
+    await flushPromises()
+
+    await openWorkbench(wrapper)
+    await flushPromises()
+
+    expect(wrapper.find('.wb-state').text()).toBe('已生成')
   })
 
   it('点击测试脚本时会把 scriptPath 一并带到数据视图', async () => {
@@ -1120,15 +1134,12 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('source_table=通用新闻表:sense_data.TB_CNEWS')
   })
 
-  it('保存脚本：需二次确认，确认后调用 orchestrationSave 并写回 mode/scriptPath，不写回 ruleId', async () => {
+  it('保存脚本：需二次确认，确认后调用 fileUploadScript', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     flow.patchRuleConfig('rule-1', { script: 'def main(sku_id):\n    return {}', scriptPath: '/x/y.py' })
     delete flow.configs['rule-1'].ruleCfg!.ruleId
     await flushPromises()
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
-    vi.spyOn(ruleApi, 'orchestrationSave').mockResolvedValue({
-      ruleId: 'legacy-should-not-write-back', scriptPath: '/x/y.py', message: '规则脚本已保存',
-    })
     vi.spyOn(ruleApi, 'fileUploadScript').mockResolvedValue({ ok: true, message: '文件已保存' })
 
     await openWorkbench(wrapper)
@@ -1137,7 +1148,6 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await saveScriptBtn.trigger('click')
     await flushPromises()
 
-    expect(ruleApi.orchestrationSave).toHaveBeenCalledTimes(1)
     expect(ruleApi.fileUploadScript).toHaveBeenCalledWith('/x/y.py', 'def main(sku_id):\n    return {}')
     expect(flow.configs['rule-1'].ruleCfg?.mode).toBe('ref')
     expect(flow.configs['rule-1'].ruleCfg?.ruleId).toBeUndefined()
@@ -1149,14 +1159,14 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     flow.patchRuleConfig('rule-1', { script: 'def main(sku_id):\n    return {}', scriptPath: '/x/y.py' })
     await flushPromises()
     vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
-    vi.spyOn(ruleApi, 'orchestrationSave')
     vi.spyOn(ruleApi, 'fileUploadScript')
 
-    const saveScriptBtn = wrapper.findAll('button').find((b) => b.text().includes('保存脚本'))!
+    await openWorkbench(wrapper)
+    const workbench = wrapper.findComponent(RuleWorkbenchDialog)
+    const saveScriptBtn = workbench.findAll('.wb-pane-actions button').find((b) => b.text().includes('保存脚本'))!
     await saveScriptBtn.trigger('click')
     await flushPromises()
 
-    expect(ruleApi.orchestrationSave).not.toHaveBeenCalled()
     expect(ruleApi.fileUploadScript).not.toHaveBeenCalled()
   })
 
@@ -1492,20 +1502,21 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     flow.patchExecConfig('web-1', { script: '<Config/>', scriptPath: '/x/1.xml' })
     await flushPromises()
     const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
-    vi.spyOn(ruleApi, 'orchestrationSave').mockResolvedValue({ ruleId: '184', scriptPath: '/x/1.xml', message: '抓取配置已保存' })
     vi.spyOn(ruleApi, 'fileUploadScript').mockResolvedValue({ ok: true, message: '文件已保存' })
 
-    const saveBtn = wrapper.findAll('button').find((b) => b.text().includes('保存配置'))!
+    await openWorkbench(wrapper)
+    const workbench = wrapper.findComponent(RuleWorkbenchDialog)
+    const saveBtn = workbench.findAll('.wb-pane-actions button').find((b) => b.text().includes('保存配置'))!
     await saveBtn.trigger('click')
     await flushPromises()
 
     expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('配置'), expect.stringContaining('抓取配置'), expect.anything())
     expect(ruleApi.fileUploadScript).toHaveBeenCalledWith('/x/1.xml', '<Config/>')
     expect(flow.configs['web-1'].execCfg?.mode).toBe('ref')
-    expect(flow.configs['web-1'].execCfg?.ruleId).toBe('184')
+    expect(flow.configs['web-1'].execCfg?.ruleId).toBeUndefined()
   })
 
-  // S6-2 联调后端实测（vanv-rule-center DashScopeServiceImpl）：/script/edit 按 scriptPath 原地覆盖写
+  // 切换已有配置后必须清空 scriptPath，避免保存时覆盖源节点的文件。
   // 文件、生成脚本按 ruleId saveOrUpdate 数据库记录，都是"改已有"不是"建新的"——切换只能拷内容当草稿，
   // ruleId/scriptPath 不能跟着换成源记录的，否则后面一保存/一重新生成就把源记录的文件或数据库行覆盖了。
   it('切换已有配置：下拉只列出 .xml 结尾的既有记录，应用后回灌 describe/script，但 ruleId 保留本节点自己的、scriptPath 清空', async () => {
@@ -1613,7 +1624,6 @@ describe('RuleOrchestrationTab · 抓取配置 XML 轻解析接入（S3-4）', (
     flow.patchExecConfig('web-1', { script: CAPTURE_XML, scriptPath: '/x/1.xml' })
     await flushPromises()
     const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
-    const saveSpy = vi.spyOn(ruleApi, 'orchestrationSave')
     vi.spyOn(ruleApi, 'fileUploadScript')
 
     const saveBtn = wrapper.findAll('button').find((b) => b.text().includes('保存配置'))!
@@ -1621,7 +1631,6 @@ describe('RuleOrchestrationTab · 抓取配置 XML 轻解析接入（S3-4）', (
     await flushPromises()
 
     expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('未知字段'), '字段一致性提示', expect.anything())
-    expect(saveSpy).not.toHaveBeenCalled()
     expect(ruleApi.fileUploadScript).not.toHaveBeenCalled()
   })
 
@@ -1631,15 +1640,13 @@ describe('RuleOrchestrationTab · 抓取配置 XML 轻解析接入（S3-4）', (
     await flushPromises()
     // 第一次 confirm 是一致性提示，第二次是既有的"保存后将绑定到该节点"确认，两次都要放行
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
-    vi.spyOn(ruleApi, 'orchestrationSave').mockResolvedValue({ ruleId: '184', scriptPath: '/x/1.xml', message: '' })
     vi.spyOn(ruleApi, 'fileUploadScript').mockResolvedValue({ ok: true, message: '文件已保存' })
 
     const saveBtn = wrapper.findAll('button').find((b) => b.text().includes('保存配置'))!
     await saveBtn.trigger('click')
     await flushPromises()
 
-    expect(ruleApi.orchestrationSave).toHaveBeenCalledTimes(1)
     expect(ruleApi.fileUploadScript).toHaveBeenCalledWith('/x/1.xml', CAPTURE_XML)
-    expect(flow.configs['web-1'].execCfg?.ruleId).toBe('184')
+    expect(flow.configs['web-1'].execCfg?.ruleId).toBeUndefined()
   })
 })

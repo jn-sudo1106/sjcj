@@ -45,6 +45,12 @@ export default defineConfig(({ mode }) => {
           target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://127.0.0.1:8080',
           changeOrigin: true,
         },
+        // 脚本保存接口与文件下载使用同一台 8080 文件服务；
+        // 必须放在通用 '/api' 之前，否则保存请求会被转发到业务后端。
+        '/api/file/upload': {
+          target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://127.0.0.1:8080',
+          changeOrigin: true,
+        },
         // ck_source 监控源配置（vanv-data-engine SourceController，2026-09-05）：数据监控节点
         // 保存时同步落库，与 data-process 同一台 8080 服务；同样必须排在通用 '/api' 之前。
         '/api/source': {

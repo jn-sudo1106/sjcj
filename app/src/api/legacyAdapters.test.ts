@@ -28,8 +28,6 @@ import {
   ruleOrchestrationGenerateToLegacy,
   ruleOrchestrationSaveMetaFromLegacy,
   ruleOrchestrationSaveMetaToLegacy,
-  ruleOrchestrationSaveScriptFromLegacy,
-  ruleOrchestrationSaveScriptToLegacy,
   ruleOrchestrationTestFromLegacy,
   ruleOrchestrationTestToLegacy,
   summaryRowFromLegacy,
@@ -693,45 +691,10 @@ describe('规则编排模型适配（vrule，0801 方案 §4）', () => {
     expect(result.error).toBe('脚本为空')
   })
 
-  it('ruleOrchestrationSaveScriptToLegacy：映射为旧接口固定字段名 codeFileName/scriptCode', () => {
-    const body = ruleOrchestrationSaveScriptToLegacy({
-      ruleId: '173',
-      scriptPath: '/code01/20260801/123.py',
-      script: 'def main(date):\n    return {}',
-    })
-    expect(body).toEqual({
-      ruleId: '173',
-      codeFileName: '/code01/20260801/123.py',
-      scriptCode: 'def main(date):\n    return {}',
-    })
-  })
-
-  // S3-2：format 默认 'python'，扩展名已匹配时零回归；未传 format 的既有调用方（规则节点）行为不变。
-  it('ruleOrchestrationSaveScriptToLegacy：format 缺省或已匹配扩展名时原样透传，不匹配时纠正后缀', () => {
-    const cfg = { ruleId: '9', scriptPath: '/rules/generated/9.py', script: 'x' }
-    expect(ruleOrchestrationSaveScriptToLegacy(cfg).codeFileName).toBe('/rules/generated/9.py')
-    expect(ruleOrchestrationSaveScriptToLegacy(cfg, 'python').codeFileName).toBe('/rules/generated/9.py')
-    expect(ruleOrchestrationSaveScriptToLegacy(cfg, 'xml').codeFileName).toBe('/rules/generated/9.xml')
-    expect(ruleOrchestrationSaveScriptToLegacy({ ruleId: '9', scriptPath: '', script: 'x' }, 'xml').codeFileName).toBe('')
-  })
-
   it('ruleOrchestrationSaveMetaFromLegacy：兼容裸 id / {id} / {ruleId}', () => {
     expect(ruleOrchestrationSaveMetaFromLegacy(173)).toEqual({ ruleId: '173', message: '业务规则已保存' })
     expect(ruleOrchestrationSaveMetaFromLegacy({ id: 173, msg: 'ok' })).toEqual({ ruleId: '173', message: 'ok' })
     expect(ruleOrchestrationSaveMetaFromLegacy({ ruleId: 'orch-1' }).ruleId).toBe('orch-1')
-  })
-
-  it('ruleOrchestrationSaveScriptFromLegacy：缺省回退请求侧 path', () => {
-    expect(ruleOrchestrationSaveScriptFromLegacy(null, { ruleId: '173', scriptPath: '/a.py' })).toEqual({
-      ruleId: '173',
-      scriptPath: '/a.py',
-      message: '规则脚本已保存',
-    })
-    expect(ruleOrchestrationSaveScriptFromLegacy({ codePath: '/b.py' }, { ruleId: '173', scriptPath: '/a.py' })).toEqual({
-      ruleId: '173',
-      scriptPath: '/b.py',
-      message: undefined,
-    })
   })
 
   it('ruleOrchestrationGenerateToLegacy：form 字段 ruleId/query/userPrompt（缺省用兜底，避免 400）', () => {

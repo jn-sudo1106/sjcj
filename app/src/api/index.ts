@@ -5,7 +5,7 @@ import { createSseEventParser } from '@/utils/stream/sse'
 import type {
   Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery, Step, SourceLoadParamsResult, SendSnatchWithParamPayload,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
-  RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationSaveResult, RuleOrchestrationTestRequest, RuleOrchestrationTestResult,
+  RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationTestRequest, RuleOrchestrationTestResult,
   CkSourcePayload, CkSourceRecord,
   CodeExecuteRequest,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
@@ -43,8 +43,6 @@ import {
   ruleOrchestrationListFromLegacy,
   ruleOrchestrationSaveMetaFromLegacy,
   ruleOrchestrationSaveMetaToLegacy,
-  ruleOrchestrationSaveScriptFromLegacy,
-  ruleOrchestrationSaveScriptToLegacy,
   ruleOrchestrationTestFromLegacy,
   ruleOrchestrationTestToLegacy,
   siteFromLegacy,
@@ -1472,28 +1470,14 @@ export const ruleApi = {
       throw e instanceof ApiError ? e : new ApiError(endpoint, e)
     }
   },
-  orchestrationSave: async (ruleCfg: RuleOrchestration) => {
-    const result = await request<unknown>('rule/orchestrationSave', { ruleCfg }, {
-      method: 'POST',
-      httpEndpoint: '/vrule/ai/dashscope/script/edit',
-      // format 缺省即 'python'（规则节点零回归）；采集节点抓取配置传 'xml'，codeFileName 后缀跟着纠正（S3-2/S3-3）
-      httpParams: ruleOrchestrationSaveScriptToLegacy(ruleCfg, ruleCfg.format ?? 'python'),
-    })
-    if (result && typeof result === 'object' && 'scriptPath' in (result as object) && 'ruleId' in (result as object)) {
-      return result as RuleOrchestrationSaveResult
-    }
-    return ruleOrchestrationSaveScriptFromLegacy(result, ruleCfg)
-  },
-
-  // 2026-09-03：规则脚本工作区「保存脚本」按钮对接 POST /api/file/upload?fileId=<脚本路径>
-  // body={"body":"<脚本内容>"}，把脚本文本写到 scriptPath 指定的文件。
-  // 在 onSaveScript 中 orchestrationSave 成功后调用，fileId 用响应或配置里的 scriptPath。
+  // 2026-09-10：规则脚本工作区「保存脚本」对接 POST /api/file/upload，
+  // JSON body={"fileId":"<脚本路径>","body":"<脚本内容>"}。
   fileUploadScript: async (fileId: string, body: string) => {
-    return request<Ack>('file/upload', { body }, {
+    return request<Ack>('file/upload', { fileId, body }, {
       method: 'POST',
       httpEndpoint: '/api/file/upload',
       paramsIn: 'body',
-      query: { fileId },
+      responseType: 'json-or-text',
     })
   },
 

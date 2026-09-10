@@ -56,14 +56,14 @@ describe('业务 API 真实请求鉴权', () => {
     fetchMock.mockResolvedValue({ ok: true, status: 200, redirected: false, url: '', text: async () => '' } as Response)
     const { request } = await import('./client')
 
-    await expect(request('rule/orchestrationSave', {})).resolves.toBeNull()
+    await expect(request('file/upload', {})).resolves.toBeNull()
   })
 
   it('2xx 但响应体是非空的非法 JSON：仍然抛错，不静默吞掉', async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 200, redirected: false, url: '', text: async () => '不是 JSON' } as Response)
     const { request } = await import('./client')
 
-    await expect(request('rule/orchestrationSave', {})).rejects.toThrow()
+    await expect(request('file/upload', {})).rejects.toThrow()
   })
 
   // M3-0K（2026-08-18 实测）：业务失败常见形态是 HTTP 200 + envelope code!=='0'，不是传输层 5xx；
@@ -425,11 +425,23 @@ describe('生产写守卫', () => {
 
     await expect(request('site/updateSite', { siteId: '1' })).rejects.toThrow(/禁止改删/)
     await expect(request('config/delete', { id: '1' })).rejects.toThrow(/禁止改删/)
-    await expect(request('rule/orchestrationSave', {}, {
-      httpEndpoint: '/vrule/ai/dashscope/script/edit',
-    })).rejects.toThrow(/禁止改删/)
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  it('连生产时，文件上传端点直接放行，旧脚本编辑端点不再放行', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
+    const { request } = await import('./client')
+
+    await request('file/upload', {}, {
+      httpEndpoint: '/api/file/upload',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await expect(request('file/upload', {}, {
+      httpEndpoint: '/vrule/ai/dashscope/script/edit',
+      method: 'POST',
+    })).rejects.toThrow(/禁止改删/)
+})
 
   it('非 danger 端点即使连生产也不受影响（只读请求正常发出）', async () => {
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')

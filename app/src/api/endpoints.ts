@@ -299,9 +299,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'file/fileStats', desc: '已废弃：新平台自造统计端点，无旧平台契约', impl: true },
   { path: 'file/fileProcess', desc: '文件后续处理', danger: true },
   { path: 'file/fileJsonPaged', desc: '原始 JSON 分页' },
-  // 2026-09-03：规则脚本工作区「保存脚本」按钮对接，POST /api/file/upload?fileId=<脚本路径>，
-  // body={"body":"<脚本内容>"}，把脚本内容写到 scriptPath 指定的文件。
-  { path: 'file/upload', desc: '上传/保存脚本文件（POST /api/file/upload?fileId=路径 body=内容）', danger: true, impl: true, live: true },
+  // 2026-09-10：规则脚本工作区「保存脚本」对接，POST /api/file/upload，
+  // JSON body={"fileId":"<脚本路径>","body":"<脚本内容>"}。
+  { path: 'file/upload', desc: '上传/保存脚本文件（POST /api/file/upload，JSON body=fileId + 内容）', danger: true, impl: true, live: true },
   // 2026-09-07：规则脚本工作区结果框按 fileId 拉脚本正文。
   { path: 'file/download', desc: '下载脚本文件正文（GET /api/file/download?fileId=路径）', impl: true, live: true },
 
@@ -353,7 +353,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'rule/evaluate', desc: '函数测试器求值', impl: true },
   // TODO(REVIEW-2026-08-04 P2 #8)：desc 里的真实路径和 index.ts 里 httpEndpoint 硬编码的字符串是两份
   // 拷贝，改路径要改两处（这里 + rule/orchestrationSaveMeta/orchestrationDetail/orchestrationGenerate/
-  // orchestrationTest/orchestrationSave 等其它 vrule 端点同样重复）。可以给 ENDPOINTS 表加一个
+  // orchestrationTest 等其它 vrule 端点同样重复）。可以给 ENDPOINTS 表加一个
   // httpEndpoint 字段统一管理、desc 只负责人话描述，但这个改动会触及全部 impl:true 端点的写法，
   // 影响面不止 vrule 这几个，值得单独立一个 PR 做，这里先留个标记。
   { path: 'rule/orchestrationPaged', desc: '规则编排列表 → /vrule/ai/dashscope/list/compose', impl: true, live: true },
@@ -370,7 +370,6 @@ export const ENDPOINTS: EndpointSpec[] = [
   // generate 已接真实流式（form-urlencoded）；需数字 ruleId（由 saveMeta live 提供）
   { path: 'rule/orchestrationGenerate', desc: '规则编排生成脚本 → /vrule/ai/dashscope/stream', impl: true, live: true },
   { path: 'rule/orchestrationTest', desc: '规则编排测试脚本 → /vrule/fastapi/execute/dynamic', impl: true, live: true },
-  { path: 'rule/orchestrationSave', desc: '规则编排保存脚本 → /vrule/ai/dashscope/script/edit', danger: true, impl: true, live: true },
   // ck_source 监控源配置（vanv-data-engine SourceController，2026-09-05）：数据监控节点保存时
   // 按 sourceId 查存在性，无则 insert、有则 update。走 /api/source 代理（同 data-process 8080 服务）。
   { path: 'monitor/ckSourceList', desc: '监控源配置查询 → /api/source/list', impl: true, live: true },

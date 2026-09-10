@@ -42,7 +42,6 @@ import {
   mockDataProcessGenerate,
   mockRuleOrchestrationGenerate,
   mockRuleOrchestrationTest,
-  mockRuleOrchestrationSave,
 } from './rules'
 import { mockDatasets, mockMeasures, mockMetricStats } from './metrics'
 import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate, mockEntryDataUpload } from './dataview'
@@ -191,7 +190,6 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'rule/dataProcessGenerate': mockDataProcessGenerate,
   'rule/orchestrationGenerate': mockRuleOrchestrationGenerate,
   'rule/orchestrationTest': mockRuleOrchestrationTest,
-  'rule/orchestrationSave': mockRuleOrchestrationSave,
   'rule/publish': mockAck,
   'rule/runBatchTest': mockAck,
 

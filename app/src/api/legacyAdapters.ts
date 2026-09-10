@@ -19,7 +19,6 @@ import type {
   RuleOrchestrationGenerateResult,
   RuleOrchestrationItem,
   RuleOrchestrationSaveMetaResult,
-  RuleOrchestrationSaveResult,
   RuleOrchestrationTestRequest,
   RuleOrchestrationTestResult,
   Site,
@@ -717,25 +716,6 @@ export function ruleOrchestrationTestFromLegacy(input: unknown): RuleOrchestrati
 }
 
 /**
- * 保存脚本（路径 B，POST dashscope/script/edit）：codeFileName/scriptCode 是旧接口固定字段名。
- * format（S3-2，默认 'python'，零回归）：仅在 scriptPath 的扩展名跟 format 对不上时纠正后缀
- * （如 XML 抓取配置误带 .py 路径），scriptPath 为空或扩展名已匹配时原样透传，不影响规则节点现有行为。
- */
-export function ruleOrchestrationSaveScriptToLegacy(
-  cfg: Pick<RuleOrchestration, 'ruleId' | 'scriptPath' | 'script'>,
-  format: 'python' | 'xml' = 'python',
-): LegacyRecord {
-  const ext = format === 'xml' ? '.xml' : '.py'
-  const path = cfg.scriptPath ?? ''
-  const codeFileName = path && !path.endsWith(ext) ? path.replace(/\.[^./\\]*$/, '') + ext : path
-  return {
-    ruleId: cfg.ruleId,
-    codeFileName,
-    scriptCode: cfg.script,
-  }
-}
-
-/**
  * 保存元数据响应 → { ruleId, message }。
  * 兼容：裸 id / { id } / { ruleId } / envelope 已被 client.normalizeHttpPayload 剥掉后的 data。
  * 旧页保存成功后不读响应体、只刷列表——若响应无 id，调用方再走 list/compose 回查。
@@ -773,26 +753,6 @@ export function pickRuleIdFromComposeList(
   if (byName?.id != null) return String(byName.id)
   // 列表默认按创建时间倒序：取第一条数字 id 兜底（仅在名称匹配失败时）
   return undefined
-}
-
-/** 保存脚本响应 → { ruleId, scriptPath, message }；缺省回退请求侧已有值 */
-export function ruleOrchestrationSaveScriptFromLegacy(
-  input: unknown,
-  cfg: Pick<RuleOrchestration, 'ruleId' | 'scriptPath'>,
-): RuleOrchestrationSaveResult {
-  if (input == null || (typeof input === 'object' && !Object.keys(asRecord(input)).length)) {
-    return {
-      ruleId: String(cfg.ruleId ?? ''),
-      scriptPath: String(cfg.scriptPath ?? ''),
-      message: '规则脚本已保存',
-    }
-  }
-  const record = asRecord(input)
-  return {
-    ruleId: String(record.ruleId ?? record.id ?? cfg.ruleId ?? ''),
-    scriptPath: String(record.scriptPath ?? record.codePath ?? record.codeFileName ?? cfg.scriptPath ?? ''),
-    message: record.message == null && record.msg == null ? undefined : String(record.message ?? record.msg),
-  }
 }
 
 /**

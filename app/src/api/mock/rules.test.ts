@@ -3,7 +3,6 @@ import {
   mockEvaluate,
   mockRuleOrchestrationGenerate,
   mockRuleOrchestrationPaged,
-  mockRuleOrchestrationSave,
   mockRuleOrchestrationTest,
 } from './rules'
 
@@ -64,14 +63,6 @@ describe('规则编排 mock（0707 Phase 9）', () => {
       outputs: [{ tags: ['房地产'] }],
     })
 
-    const saved = mockRuleOrchestrationSave({
-      mode: 'new',
-      describe: '正文 content 包含地产时加标签房地产',
-      script: generated.script,
-      scriptPath: generated.scriptPath,
-    })
-    expect(saved.ruleId).toMatch(/^orch-/)
-    expect(saved.scriptPath).toBe(generated.scriptPath)
   })
 
   // 走 RuleTableFieldBinder 选定字段的路径（0801 方案）：不能永远吐旧「地产」演示脚本/tags 出参，

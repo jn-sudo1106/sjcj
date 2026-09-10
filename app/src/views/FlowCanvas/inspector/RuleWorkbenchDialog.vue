@@ -10,7 +10,7 @@
 //     （只在本组件内部提交草稿，emit update:systemPrompt，不打后端；打开时从 props.systemPrompt 重置草稿）。
 //   - 脚本/配置：直接双向绑定（每次输入都 emit update:script），没有草稿概念——原来这块是只读的，
 //     S6-1 才第一次开放编辑，没有"取消"包袱要延续，直接绑定跟本应用其余文本框风格一致，更简单。
-//     真正落盘由外部「保存脚本/配置」按钮触发（走 orchestrationSave 接口 + 二次确认，逻辑留在父组件不重复）。
+//     真正落盘由外部「保存脚本/配置」按钮触发（走 fileUploadScript 接口 + 二次确认，逻辑留在父组件不重复）。
 import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fetchDefaultModels, fetchModelProviders, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleFieldOption, type RuleOrchestration } from '@/api'
@@ -262,7 +262,7 @@ const streamStateLabel = computed(() => {
     case 'content': return '输出中'
     case 'done': return '已完成'
     case 'error': return '出错'
-    default: return props.generating ? '生成中' : '待生成'
+    default: return props.generating ? '生成中' : props.script.trim() ? '已生成' : '待生成'
   }
 })
 const thinkingBodyRef = ref<HTMLElement | null>(null)

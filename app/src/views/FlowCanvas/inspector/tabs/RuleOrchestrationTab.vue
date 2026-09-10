@@ -618,10 +618,8 @@ async function onSaveScript() {
     ElMessage.warning(isRule.value ? '请先生成脚本' : '请先生成配置')
     return
   }
-  // S6-2 联调后端实测（vanv-rule-center DashScopeServiceImpl.editGenerateCode）：/script/edit 按
-  // scriptPath 直接原地覆盖写文件，不认 ruleId，也不会新建——scriptPath 为空等于拿空文件名去覆盖，
-  // 明显不对。S6-1 开放手写脚本前，script 非空必然等价于已经点过一次「生成脚本」（两者一起写入），
-  // 这条守卫本来隐式成立；手写脚本之后不再成立，必须显式补上。
+  // 文件服务按 scriptPath 原地覆盖写文件；scriptPath 为空时不能确定写入目标。
+  // 开放手写脚本后，script 非空不再等价于已经生成过文件路径，因此这里必须显式校验。
   if (!orchCfg.value.scriptPath?.trim()) {
     ElMessage.warning(isRule.value ? '请先点「生成脚本」换一个本节点自己的文件路径，再保存' : '请先点「生成配置」换一个本节点自己的文件路径，再保存')
     return
@@ -638,15 +636,10 @@ async function onSaveScript() {
   }
   savingScript.value = true
   try {
-    const res = await ruleApi.orchestrationSave(orchCfg.value)
-    patch({ mode: 'ref', scriptPath: res.scriptPath })
-    // 2026-09-03：orchestrationSave 成功后，再把脚本文本写到 scriptPath 指定的文件
-    //（POST /api/file/upload?fileId=<脚本路径> body={"body":"<脚本内容>"}）。
-    // fileId 优先用响应返回的 scriptPath（新建脚本时后端可能分配新路径），兜底用配置里的。
-    const fileId = res.scriptPath?.trim() || orchCfg.value.scriptPath?.trim() || ''
-    if (fileId) {
-      await ruleApi.fileUploadScript(fileId, orchCfg.value.script ?? '')
-    }
+    // 保存脚本文本直接写入当前节点的 scriptPath，不再调用已废弃的编排脚本编辑接口。
+    const fileId = orchCfg.value.scriptPath.trim()
+    const res = await ruleApi.fileUploadScript(fileId, orchCfg.value.script ?? '')
+    patch({ mode: 'ref', scriptPath: fileId })
     // 数据监控节点：脚本保存成功后同步 ck_source（失败不回滚，单独提示）。
     // 同步实现在 utils/flow/monitorCkSource.ts——2026-09-07 起 NodeInspector 底部「保存」
     //（编排配置 Tab）也触发同一条同步，两处共用保证 payload 口径一致。
@@ -707,8 +700,8 @@ async function onApplySwitch() {
     const sourceScriptPath = detail.scriptPath || target.scriptPath
     const script = sourceScriptPath ? await ruleApi.orchestrationLoadScript(sourceScriptPath).catch(() => '') : ''
     // 只拷内容当草稿，ruleId/scriptPath 不跟着换——这两个决定「保存脚本」实际写去哪，沿用源节点的
-    // 会直接覆盖它的文件/数据库记录，不是"另存"（后端实测：/script/edit 按 scriptPath 原地覆盖写
-    // 文件，跟 ruleId 无关；旧 XML 生成按 ruleId saveOrUpdate 数据库记录，也是更新不是新建。
+    // 会直接覆盖它的文件，不是"另存"（文件服务按 scriptPath 原地覆盖写，
+    // 跟 ruleId 无关）。
     // scriptPath 清空，强制先点一次「生成配置」换成本节点
     // 自己的新文件，才允许「保存脚本」（onSaveScript 的 scriptPath 非空校验兜底）。
     patch({
