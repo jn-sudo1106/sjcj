@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
 # 阶段 1：构建 Vue 3 静态产物
-# node:22-alpine 与项目 vite 8 / vue-tsc 3 的 Node 版本要求对齐
-FROM node:22-alpine AS builder
+# node:22-slim_amd64 与项目 vite 8 / vue-tsc 3 的 Node 版本要求对齐
+FROM node:22-slim_amd64 AS builder
 
 WORKDIR /build
 
