@@ -32,7 +32,17 @@ async function edit(value: string) {
  * Element Plus 的弹窗/下拉走 teleport + 过渡，挂载不是同步的；`flushPromises()` 只刷微任务，
  * 单跑这个文件够快所以看不出问题，**全量跑时会间歇失败**（2026-09-05 实测两种表现：
  * `button.click()` 报 undefined、`textarea().value` 报 null）。用 vi.waitFor 兜住。
+ *
+ * 光加 waitFor 还不够，**超时也得放宽**：vi.waitFor 默认只等 1000ms，全量跑时多个 worker
+ * 抢 CPU，teleport + 过渡挂完常常超过这个数，于是 waitFor 自己超时，报成"下拉还没挂上"
+ * ——看着像组件坏了，其实只是没等够（2026-09-10 实测复现：全量跑必现于 recentConditionItem，
+ * 同一条用例单跑 6 次全过）。放宽超时不会拖慢单跑：元素挂上就立刻返回，等不到才是真失败。
+ *
+ * 但**不能顶到 5000**：vitest 单条用例的默认超时也是 5000ms，waitFor 等满就变成整条用例超时
+ * （报 "Test timed out in 5000ms"），把"下拉没挂上"这个真正有用的信息盖掉了。留出余量到 3s，
+ * 既够全量跑时挂载用，失败时也还能报出是哪个元素没等到。
  */
+const WAIT = { timeout: 3000, interval: 20 }
 /**
  * 取弹窗「最近条件」下拉里的第一条历史。
  *
@@ -45,7 +55,7 @@ async function recentConditionItem() {
     const el = document.querySelector<HTMLElement>('.sql-recent-condition')
     if (!el) throw new Error('最近条件下拉还没挂上')
     return el
-  })
+  }, WAIT)
 }
 async function clickDialogButton(text: string) {
   const button = await vi.waitFor(() => {
@@ -53,7 +63,7 @@ async function clickDialogButton(text: string) {
       .find((item) => item.textContent?.trim() === text)
     if (!found) throw new Error(`弹窗里没找到按钮：${text}`)
     return found
-  })
+  }, WAIT)
   button.click()
   await flushPromises()
 }
@@ -74,7 +84,7 @@ async function openDialog(wrapper: ReturnType<typeof setup>) {
   await flushPromises()
   await vi.waitFor(() => {
     if (!document.querySelector('.sql-editor')) throw new Error('放大弹窗还没挂上')
-  })
+  }, WAIT)
 }
 // 进来先清一次（2026-09-09）：本文件与 utils/sqlConditionHistory.test.ts 用了同一批表键
 // （900/901），同 worker 下共享 localStorage，只在 afterEach 清会依赖上一个文件收拾干净。
@@ -158,7 +168,7 @@ describe('SQL 条件放大编辑', () => {
       document.querySelector<HTMLButtonElement>('.el-dialog__headerbtn')!.click()
     }
     await flushPromises()
-    await vi.waitFor(() => expect(wrapper.findComponent(ElDialog).props('modelValue')).toBe(false))
+    await vi.waitFor(() => expect(wrapper.findComponent(ElDialog).props('modelValue')).toBe(false), WAIT)
     expect(wrapper.vm.sql).toBe('K1 IS NULL')
     await openDialog(wrapper)
     expect(textarea().value).toBe('K1 IS NULL')
@@ -170,7 +180,7 @@ describe('SQL 条件放大编辑', () => {
     await edit('K2 IS NULL')
     wrapper.vm.tableId = '901'
     await flushPromises()
-    await vi.waitFor(() => expect(wrapper.findComponent(ElDialog).props('modelValue')).toBe(false))
+    await vi.waitFor(() => expect(wrapper.findComponent(ElDialog).props('modelValue')).toBe(false), WAIT)
     expect(wrapper.vm.sql).toBe('K1 IS NULL')
     await openDialog(wrapper)
     await edit('')
