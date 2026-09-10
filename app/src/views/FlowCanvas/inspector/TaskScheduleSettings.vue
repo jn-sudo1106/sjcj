@@ -1,6 +1,6 @@
 <script setup lang="ts">
 
-import { computed, watch } from 'vue'
+import { computed } from 'vue'
 import type { CollectorSchedule } from '@/views/FlowCanvas/canvas/flowModel'
 
 const props = defineProps<{ modelValue: CollectorSchedule }>()
@@ -48,15 +48,16 @@ function toggleWeekday(day: number) {
   const weekdays = props.modelValue.weekdays ?? []
   patchWithCron({ weekdays: weekdays.includes(day) ? weekdays.filter((item) => item !== day) : [...weekdays, day].sort() })
 }
-watch(
-  () => [props.modelValue.scheduleType, props.modelValue.scheduleTime, props.modelValue.weekdays?.join(',')] as const,
-  () => {
-    if (isCustomCron.value) return
-    const cron = cronFor(props.modelValue)
-    if (cron !== props.modelValue.cron) patch({ cron })
-  },
-  { immediate: true },
-)
+// 这里原本有一个 `immediate: true` 的 watch，负责"scheduleType/时间变了就把 cron 重算回去"。
+// 它是「节点没动却一直提示未保存」的根源（2026-09-10 实测）：cronFor 对空值全有兜底
+// （scheduleType 缺省当「每天」、时间缺省当 0:0），所以**打开一个从没配过定时的节点**时，
+// 它算出 "0 0 0 * * ?"、与存着的 undefined 不等，于是 immediate 那一轮就 patch 了一笔，
+// 一路 flow.patchSchedule → touchConfig，把节点标成脏的。用户什么都没碰，底部却常驻
+// 「节点配置有未保存修改」，切换编排对象还要被拦一次"改动将丢弃"。
+//
+// 删掉它不会让 cron 失同步：用户真正改动的两条路径（onInput / toggleWeekday）都走
+// patchWithCron，那里本来就用 cronFor(next) 算好了 cron 一起提交。显示用的推导值走
+// cronValue 这个 computed，本就不需要写回 store——把"显示值"写进数据，才是这个 bug 的本质。
 </script>
 
 <template>
