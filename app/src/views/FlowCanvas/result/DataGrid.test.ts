@@ -54,10 +54,10 @@ describe('DataGrid', () => {
       global: { stubs: GRID_STUBS },
     })
 
-    // 这两个合成列用短标签，对齐旧平台固定列（ENTRY_ID 列 label="ENTRY_ID"、SOURCE_ID 列 label="源"）；
-    // 跟动态列一样拼成「主键 ID-ENTRY_ID」会长到把列头挤成两行
+    // ENTRY_ID 保持短标签（它本身就是物理列名，拼成「主键 ID-ENTRY_ID」既长又重复）；
+    // 「源」在 2026-09-10 会上改为「源-SOURCE_ID」，与其余列的「标题-K1」同一体例
     expect(cellByHeader(wrapper, 'ENTRY_ID')).toBe('d1')
-    expect(cellByHeader(wrapper, '源')).toBe('430016500')
+    expect(cellByHeader(wrapper, '源-SOURCE_ID')).toBe('430016500')
   })
 
   it('列头是「中文名-物理列名」，对齐旧平台 EntryList2.vue 的 itemName-columnName——SQL 条件框拼的是物理列名，界面不暴露它就等于把人往坑里引', () => {
@@ -282,7 +282,7 @@ describe('DataGrid · 数据层级（0903 H09/H10）', () => {
   // 0903 会上定的列序：父 ID 紧挨主键，不夹在「源」后面
   it('列序是 ENTRY_ID → PARENT_ID → 源', () => {
     const heads = mountGrid().findAll('thead th').map((th) => th.text().replace(/[↕↑↓]\s*$/, '').trim())
-    expect(heads.slice(0, 3)).toEqual(['ENTRY_ID', 'PARENT_ID', '源'])
+    expect(heads.slice(0, 3)).toEqual(['ENTRY_ID', 'PARENT_ID', '源-SOURCE_ID'])
   })
 
   it('PARENT_ID 独立成列，有父行时显示父 ID', () => {
@@ -456,7 +456,7 @@ describe('DataGrid · 下一步字段预设（0831 F10）', () => {
   // 它和另外两个一样回答"这行是谁"，异表回溯全靠它，不能被预设筛掉。
   it('首次打开默认只显示预设列，三个身份列一并保留', () => {
     const wrapper = mountGrid(['title'])
-    expect(heads(wrapper)).toEqual(expect.arrayContaining(['ENTRY_ID', '源', 'PARENT_ID', '标题-K1']))
+    expect(heads(wrapper)).toEqual(expect.arrayContaining(['ENTRY_ID', '源-SOURCE_ID', 'PARENT_ID', '标题-K1']))
     expect(heads(wrapper)).not.toContain('正文-K3')
     expect(wrapper.get('[data-testid="column-picker-btn"]').text()).toBe('列 4/6')
   })

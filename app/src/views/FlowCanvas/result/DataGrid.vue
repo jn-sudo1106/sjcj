@@ -18,8 +18,9 @@ const props = withDefaults(defineProps<{
   hideActions?: boolean
   /** 网站粒度数据视图「所属源」列（0707 优化·Phase5）：传入才渲染，id → 名称映射 */
   sourceNames?: Record<string, string>
-  /** 该列表头文案，默认"所属源"；具体源·节点筛选场景下每行都是同一个源，改叫"所属节点"
-   *  避免看着像跨源归并（那是全部源模式的语义），跟真正的具体源数据视图混淆。 */
+  /** 该列表头文案，默认"所属源-SOURCE_NAME"；具体源·节点筛选场景下每行都是同一个源，
+   *  改叫"所属节点"避免看着像跨源归并（那是全部源模式的语义），跟真正的具体源数据视图混淆。
+   *  「所属节点」展示的是节点名而非源名，所以不跟着拼 SOURCE_NAME。 */
   sourceColLabel?: string
   /** 行勾选（0812 计划 M2-12：具体源"输入数据"页签勾行发后续任务）；不传时不渲染勾选列，
    *  不影响其余用法（全部源归并视图、输出数据页签都不需要勾选）。 */
@@ -154,9 +155,12 @@ function toggleAll() {
 // 嫌占地方的人从「列」弹窗自行关掉。
 // label 是列头显式文案，仅这两个合成列有：旧平台 EntryList2.vue 的固定列用的就是短标签
 // （ENTRY_ID 列 label="ENTRY_ID"、SOURCE_ID 列 label="源"），只有动态列才拼 itemName-columnName。
-// 跟着拼成「主键 ID-ENTRY_ID」会长到把列头挤成两行，也偏离旧平台。desc 仍保留给悬浮提示。
+// ENTRY_ID/PARENT_ID 保持短标签：它们本身就是物理列名，拼成「主键 ID-ENTRY_ID」既长又重复。
+// 「源」原本也是短标签，2026-09-10 会上改为「源-SOURCE_ID」：单独一个「源」字与其余列的
+// 「标题-K1」「URL-K2」不是一个体例，用户看不出该拿哪个名字往 SQL 条件框里写。
+// desc 仍保留给悬浮提示。
 const ENTRY_ID_COL = { prop: 'ENTRY_ID', type: 'string', desc: '主键 ID', label: 'ENTRY_ID' }
-const SOURCE_ID_COL = { prop: 'SOURCE_ID', type: 'string', desc: '所属源 ID', label: '源' }
+const SOURCE_ID_COL = { prop: 'SOURCE_ID', type: 'string', desc: '所属源 ID', label: '源-SOURCE_ID' }
 // PARENT_ID（0903 H09）：这行是上一节点哪条数据产出的。异表回溯（下游筛出问题行 → 回上游发
 // 任务）全靠它，会上「你少一个 parent id」指的就是这列。
 //
@@ -360,7 +364,7 @@ function stateMeta(s?: string) {
             <th v-if="showSelectCol" class="dg-sticky-head" style="width:36px" @click.stop>
               <input type="checkbox" :checked="allChecked" :indeterminate="someChecked" @change="toggleAll" />
             </th>
-            <th v-if="showSourceCol" class="dg-sticky-head" style="width:140px">{{ sourceColLabel || '所属源' }}</th>
+            <th v-if="showSourceCol" class="dg-sticky-head" style="width:180px">{{ sourceColLabel || '所属源-SOURCE_NAME' }}</th>
             <th
               v-for="f in visibleCols"
               :key="f.prop"
