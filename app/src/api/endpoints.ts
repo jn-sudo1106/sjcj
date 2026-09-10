@@ -62,7 +62,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/changeFreqTag', desc: '频率标识', danger: true, impl: true },
   { path: 'source/markVerified', desc: '人工核验标记', danger: true, impl: true },
   { path: 'source/generateConfig', desc: '生成新配置并应用', danger: true, impl: true },
-  { path: 'source/check/paged', desc: '源检查列表', impl: true, live: true },
+  // 源监控（数据源告警）整组**一律不开 live**：2026-09-10 确认后端这套接口要重做，
+  // 路径与字段都会变。前端实现按旧平台 api/monitor.js 的口径先落着（UI 已完工），
+  // 接口定稿后再逐个对齐并放行——**不要把这几条当成漏标的 live 补上去**。
+  { path: 'source/check/paged', desc: '源检查列表', impl: true },
   { path: 'source/check/syncPaged', desc: '同步状态列表', impl: true },
   { path: 'source/check/add', desc: '新增源检查', danger: true },
   { path: 'source/check/update', desc: '修改源检查', danger: true },
@@ -70,7 +73,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/check/changeEnable', desc: '启停源检查', danger: true, impl: true },
   { path: 'source/check/check-one', desc: '执行一次源检查', danger: true },
   { path: 'source/check/runNow', desc: '立即运行源检查', danger: true, impl: true },
-  { path: 'source/check/paged-logs', desc: '源检查历史日志', impl: true, live: true },
+  { path: 'source/check/paged-logs', desc: '源检查历史日志', impl: true },
   // 2026-09-01 实测报错：source/tagSource 在真实后端根本不存在（GET 500）——对照旧平台
   // api/source.js 确认，打标签走的是 POST /v1/source/markBatch（markBatch(ids, flag, freq,
   // notify, tags)），tagSource 这个端点名是臆造的，从没在旧平台出现过。live 标记挪到下面

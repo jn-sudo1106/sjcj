@@ -1864,6 +1864,14 @@ export const monitorApi = {
 /**
  * 源监控（数据源告警）。0910 从旧平台 MonitorList 迁入，接口对齐 api/monitor.js。
  *
+ * ⚠️ **这套接口契约是临时的**：2026-09-10 确认后端要重做，路径与字段都会变，
+ * 所以整组端点都不开 live（见 endpoints.ts 同名分组的说明），页面暂走 mock。
+ * 下面的参数名、字段映射全部照旧平台口径写的，**接口定稿后需逐项对齐**——
+ * 尤其是分页参数（现按后端认的 page/limit 传，不是 pageNo/pageSize）、
+ * isDelete 的反向语义、以及 lastMsg 那串带时间戳前缀的文本格式。
+ * UI 层不受影响：SiteMonitorView / CheckLogDialog 只消费 SourceCheck / SourceCheckLog
+ * 这两个类型，接口怎么变都只需要改这一层的映射。
+ *
  * 分页参数注意：旧平台发出去的是 `page` / `limit`，不是 `pageNo` / `pageSize`
  * （它在 api 层临时改了名再发），这里直接按后端认的名字传。
  *
