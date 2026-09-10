@@ -36,19 +36,32 @@ export default defineConfig(({ mode }) => {
         // 127.0.0.1:8080。注意 Vite 代理按对象键插入顺序做前缀匹配，这条更长的前缀
         // 必须放在下面的 '/api' 之前才会被优先命中；切换目标用 VITE_DATA_PROCESS_PROXY_TARGET。
         '/api/answer/data-process': {
-          target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://127.0.0.1:8080',
+          target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://192.168.1.31:8040',
           changeOrigin: true,
         },
         // 脚本文件下载接口与 data-process 使用同一台 8080 服务；
         // 必须放在通用 '/api' 之前，否则会被转发到业务后端并返回 404。
         '/api/file/download': {
-          target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://127.0.0.1:8080',
+          target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://192.168.1.31:8040',
           changeOrigin: true,
         },
         // ck_source 监控源配置（vanv-data-engine SourceController，2026-09-05）：数据监控节点
         // 保存时同步落库，与 data-process 同一台 8080 服务；同样必须排在通用 '/api' 之前。
         '/api/source': {
-          target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://127.0.0.1:8080',
+          target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://192.168.1.31:8040',
+          changeOrigin: true,
+        },
+        // 提示词模板列表（规则节点工作区，2026-09-10 迁移自硬编码 127.0.0.1:8080）：与
+        // data-process 同一台 8080 服务；前缀必须排在通用 '/api' 之前，否则会被业务后端
+        // （9999）兜底并返回 404。切换目标用 VITE_DATA_PROCESS_PROXY_TARGET。
+        '/api/prompt': {
+          target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://192.168.1.31:8040',
+          changeOrigin: true,
+        },
+        // 模型供应商 / 模型候选（规则节点工作区，2026-09-10 迁移自硬编码 localhost:8080）：
+        // 与 data-process 同一台 8080 服务；前缀必须排在通用 '/api' 之前，理由同 /api/prompt。
+        '/api/model': {
+          target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://192.168.1.31:8040',
           changeOrigin: true,
         },
         '/api': {
@@ -76,7 +89,7 @@ export default defineConfig(({ mode }) => {
           rewrite: (path) => path.replace(/^\/oss/, ''),
         },
         '/vrule/fastapi/execute/code': {
-          target: 'http://127.0.0.1:8000',
+          target: 'http://192.168.1.31:8000',
           changeOrigin: true,
         },
         // 规则编排 Sprint 4：saveMeta/test/saveScript 直连同机 vrule（0801 方案 §8.1）

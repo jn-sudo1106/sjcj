@@ -18,7 +18,8 @@ export interface PromptTemplateItem {
   updatedBy?: string | null
 }
 
-const PROMPT_API_BASE = 'http://127.0.0.1:8080/api/prompt'
+// 与 data-process 服务同源（同机 8080 端口），通过 Vite 代理 + Nginx 反代转发；切换目标用 VITE_DATA_PROCESS_PROXY_TARGET
+const PROMPT_API_BASE = '/api/prompt'
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? value as Record<string, unknown> : {}

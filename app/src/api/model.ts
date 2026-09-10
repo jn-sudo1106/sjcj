@@ -8,7 +8,8 @@ export interface ModelOption {
   modelName: string
 }
 
-const MODEL_API_BASE = 'http://localhost:8080/api/model'
+// 与 data-process 服务同源（同机 8080 端口），通过 Vite 代理 + Nginx 反代转发；切换目标用 VITE_DATA_PROCESS_PROXY_TARGET
+const MODEL_API_BASE = '/api/model'
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? value as Record<string, unknown> : {}

@@ -73,21 +73,21 @@ function mockAssets(inputTableName = INPUT_TABLE.name, tableId = INPUT_TABLE.tab
   vi.spyOn(ruleApi, 'orchestrationLoadScript').mockResolvedValue('')
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = typeof input === 'string' ? input : input instanceof Request ? input.url : input.toString()
-    if (url === 'http://localhost:8080/api/model/providers') {
+    if (url === '/api/model/providers') {
       return new Response(JSON.stringify({ data: MODEL_PROVIDERS }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
     }
-    if (url.startsWith('http://localhost:8080/api/model/default-models')) {
-      const providerCode = new URL(url).searchParams.get('providerCode') || ''
+    if (url.startsWith('/api/model/default-models')) {
+      const providerCode = new URL(url, 'http://localhost').searchParams.get('providerCode') || ''
       return new Response(JSON.stringify({ data: MODEL_OPTIONS[providerCode] ?? [] }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
     }
-    if (url.startsWith('http://127.0.0.1:8080/api/prompt/list')) {
-      const parsed = new URL(url)
+    if (url.startsWith('/api/prompt/list')) {
+      const parsed = new URL(url, 'http://localhost')
       if (parsed.searchParams.get('category') === 'rule' && parsed.searchParams.get('node_type_name') === '规则处理') {
         return new Response(JSON.stringify([PROMPT_TEMPLATE]), {
           status: 200,
@@ -911,11 +911,11 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await openWorkbench(wrapper)
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      'http://localhost:8080/api/model/providers',
+      '/api/model/providers',
       expect.objectContaining({ method: 'GET' }),
     )
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      'http://localhost:8080/api/model/default-models?providerCode=DeepSeek',
+      '/api/model/default-models?providerCode=DeepSeek',
       expect.objectContaining({ method: 'GET' }),
     )
     expect(wrapper.findAll('.wb-pane-actions button').some((b) => b.text() === '测试')).toBe(false)
@@ -926,11 +926,11 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await flushPromises()
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      'http://localhost:8080/api/model/providers',
+      '/api/model/providers',
       expect.objectContaining({ method: 'GET' }),
     )
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      'http://localhost:8080/api/model/default-models?providerCode=DeepSeek',
+      '/api/model/default-models?providerCode=DeepSeek',
       expect.objectContaining({ method: 'GET' }),
     )
     expect(wrapper.find('[data-testid="main-model-provider"]').exists()).toBe(true)
@@ -970,7 +970,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await flushPromises()
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      'http://localhost:8080/api/model/default-models?providerCode=OpenAI',
+      '/api/model/default-models?providerCode=OpenAI',
       expect.objectContaining({ method: 'GET' }),
     )
 
