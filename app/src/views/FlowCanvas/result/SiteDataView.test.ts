@@ -849,3 +849,65 @@ describe('SiteDataView · 按条件查源', () => {
   })
 })
 
+
+// 每次加载条数可选（0910 会议 §1-2）。会上原话是"改成可配置的分页加载，可选 20/100/200"，
+// 确认过语义：调的是表格每次追加多少行，不是每个源向后端要多少条——后者跟着放大，
+// 在源多的网站上请求体积和内存直接翻十倍，用户要的只是"一屏多看点"。
+describe('SiteDataView · 每次加载条数', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  function mockOneBigSource() {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['a'])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const sizes: number[] = []
+    let seq = 0
+    vi.spyOn(dataApi, 'rowQueryPaged').mockImplementation(async ({ size = 0 }) => {
+      sizes.push(size)
+      return { total: 9999, list: Array.from({ length: size }, () => row('a', String(++seq))) }
+    })
+    return sizes
+  }
+
+  it('默认一次 20 行；改成 100 后再加载追加 100 行，而每源每页仍固定取 20 条', async () => {
+    const sizes = mockOneBigSource()
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    expect(wrapper.text()).toContain('已加载 20 条')
+
+    await wrapper.get('[data-testid="site-data-append-size"]').setValue('100')
+    await wrapper.get('[data-testid="site-data-load-more"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已加载 120 条')
+    // 这条是本功能的核心约定：无论用户选多少，向后端要的每页条数不变
+    expect([...new Set(sizes)]).toEqual([20])
+  })
+
+  it('改动只影响下一次加载，不清空已经加载出来的行', async () => {
+    mockOneBigSource()
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    expect(wrapper.text()).toContain('已加载 20 条')
+
+    await wrapper.get('[data-testid="site-data-append-size"]').setValue('200')
+    await flushPromises()
+    // 选完还没点加载更多：已加载的 20 行必须原地不动
+    expect(wrapper.text()).toContain('已加载 20 条')
+  })
+
+  it('选择被记住：换一个网站重新进来仍是上次选的条数', async () => {
+    mockOneBigSource()
+
+    const first = mountView('site-a')
+    await pickTable(first)
+    await first.get('[data-testid="site-data-append-size"]').setValue('200')
+    await flushPromises()
+
+    const second = mountView('site-b')
+    await pickTable(second)
+    expect(second.text()).toContain('已加载 200 条')
+  })
+})

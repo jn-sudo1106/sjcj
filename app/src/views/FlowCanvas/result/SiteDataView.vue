@@ -39,6 +39,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { extFromName } from '@/utils/ossFile'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import { readRailOpen, writeRailOpen } from './railPref'
+import { APPEND_SIZE_OPTIONS, readAppendSize, writeAppendSize } from './pageSizePref'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 import SiteTableSelect from './components/SiteTableSelect.vue'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
@@ -67,7 +68,17 @@ function openSourceView() {
   void router.push({ path: '/canvas', query: { siteId: props.siteId, sourceId: selectedSourceId.value, view: 'data' } })
 }
 
-const PAGE_SIZE = 20
+// 每个源向后端要多少条（固定）。0910 会议把「每次加载条数」做成可选之后，这个值刻意
+// 不跟着用户的选择走：用户选 100 是想"一屏多看点"，若透传成"每源每页取 100 条"，
+// 源多的网站请求体积和内存直接翻五倍，反而更卡。两件事在此拆开。
+const SOURCE_PAGE_SIZE = 20
+// 表格每次追加多少行（用户可选，见 pageSizePref.ts）。改动只影响下一次加载，
+// 不重置已经加载出来的行——用户是滚到一半才嫌慢/嫌少的，清空重来等于惩罚他。
+const appendSize = ref(readAppendSize())
+function onAppendSizeChange(size: number) {
+  appendSize.value = size
+  writeAppendSize(size)
+}
 const MAX_PARALLEL_REQUESTS = 4
 // 全部源首屏若一次激活全部候选源，top-K 归并必须等数百/数千个首屏请求全部返回才展示。
 // 每次只把一小批源加入归并，先给出可用数据；滚动/“加载更多”时继续扫描后续源。
@@ -342,7 +353,7 @@ async function loadMore() {
       mergeStates.push(...initMergeState(candidateSourceIds.slice(candidateCursor, nextCursor)))
       candidateCursor = nextCursor
     }
-    const result = await mergeLoadMore(mergeStates, PAGE_SIZE, PAGE_SIZE,
+    const result = await mergeLoadMore(mergeStates, appendSize.value, SOURCE_PAGE_SIZE,
       async (sourceId, page, size) => {
         const list = await fetchPage(sourceId, page, size, condition)
         queried = true
@@ -889,6 +900,21 @@ function onCellFile(path: string) {
           data-testid="site-data-load-more"
           @click="loadMore"
         >加载更多</button>
+        <!-- 每次加载条数（0910 会议 §1-2）：放在「加载更多」旁边而不是顶部计数区——
+             用户是在这里才产生"一次少了/多了"的念头的，顶部那条横条也已经很挤。
+             已全部加载完时不再显示：那时它调不动任何东西，只会让人以为还能再点出数据。 -->
+        <label v-if="!allExhausted" class="sdv2-pagesize">
+          每次
+          <select
+            :value="appendSize"
+            data-testid="site-data-append-size"
+            :disabled="loadingMore"
+            @change="onAppendSizeChange(Number(($event.target as HTMLSelectElement).value))"
+          >
+            <option v-for="n in APPEND_SIZE_OPTIONS" :key="n" :value="n">{{ n }}</option>
+          </select>
+          条
+        </label>
       </div>
     </template>
 
@@ -1006,8 +1032,11 @@ function onCellFile(path: string) {
 .sdv2-toolbar :deep(.dcb) { flex: 1; min-width: 200px; }
 .rc-btn.tiny { height: 24px; padding: 0 10px; font-size: 11.5px; }
 .sdv2-grid { flex: 1; min-height: 0; }
-.sdv2-foot { display: flex; justify-content: center; padding: 10px 12px; border-top: 1px solid var(--rc-border-soft); background: #fff; }
+.sdv2-foot { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 10px 12px; border-top: 1px solid var(--rc-border-soft); background: #fff; }
 .sdv2-foot .rc-btn { height: 28px; padding: 0 16px; font-size: 12px; }
+.sdv2-pagesize { display: inline-flex; align-items: center; gap: 5px; color: var(--rc-faint); font-size: 12px; }
+.sdv2-pagesize select { height: 24px; padding: 0 4px; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); background: #fff; color: var(--rc-text-2); font-size: 12px; cursor: pointer; }
+.sdv2-pagesize select:disabled { cursor: default; opacity: 0.6; }
 .muted { color: var(--rc-faint); font-size: 12px; }
 .sdv2-detail-drawer :deep(.el-drawer__body) { display: flex; flex-direction: column; height: 100%; padding: 0; overflow: hidden; }
 .sdv2-detail { display: flex; flex-direction: column; min-height: 0; flex: 1; }
