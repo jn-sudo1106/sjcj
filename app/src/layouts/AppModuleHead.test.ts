@@ -14,6 +14,7 @@ function makeRouter() {
     history: createMemoryHistory(),
     routes: [
       { path: '/overview', component: { template: '<div />' } },
+      { path: '/collect', component: { template: '<div />' } },
       { path: '/rules', component: { template: '<div />' } },
       { path: '/canvas', component: { template: '<div />' } },
     ],
@@ -65,6 +66,40 @@ describe('AppModuleHead 面包屑 / 标题', () => {
     flow.setSiteDisplayCtx({ siteId: 'site1', name: '网站A', category: '', owner: '', sourceCount: 0, errorCount: 0 } as never)
     await flushPromises()
     expect(lastCrumb(wrapper)).toBe('网站A') // siteCtx 同时存在时优先于 sourceCtx（见 0714 会议 Task 3）
+  })
+})
+
+// 面包屑跳转（2026-09-10 会上提）：此前三级全是死文本，从网站详情回列表只能靠浏览器后退。
+describe('AppModuleHead 面包屑跳转', () => {
+  it('网站详情里点中间段「采集资产」回模块列表页——canvas 已被 useActiveNavKey 映射回 collect', async () => {
+    const { wrapper, router } = await mountAt('/canvas', { siteId: 'site1' })
+    const links = wrapper.findAll('.rc-bc-link')
+    expect(links.map((l) => l.text())).toEqual(['青龙智能采集中心', '采集资产'])
+
+    await links[1].trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/collect')
+  })
+
+  it('点首段回总览', async () => {
+    const { wrapper, router } = await mountAt('/rules')
+    await wrapper.findAll('.rc-bc-link')[0].trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/overview')
+  })
+
+  it('末项是当前位置，不做成可点——点了原地刷新没有意义', async () => {
+    const { wrapper } = await mountAt('/canvas', { mode: 'new' })
+    // 末项仍是 h1（标题语义），且不在可点集合里
+    expect(wrapper.findAll('.rc-bc > *').at(-1)!.element.tagName).toBe('H1')
+    expect(wrapper.findAll('.rc-bc-link').map((l) => l.text())).not.toContain('新建采集')
+  })
+
+  it('已经在总览页时点首段不重复导航（vue-router 会报 duplicated navigation）', async () => {
+    const { wrapper, router } = await mountAt('/overview')
+    await wrapper.findAll('.rc-bc-link')[0].trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/overview')
   })
 })
 

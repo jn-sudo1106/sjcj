@@ -60,6 +60,18 @@ const activeActions = computed(() => {
   return pageActions[actionKey.value] ?? []
 })
 
+// 面包屑跳转：首项固定回总览（'/' 本身就 redirect 到 /overview），中间项回当前模块列表页。
+// 中间项只在画布路由下出现，此时 useActiveNavKey 已把 canvas 映射回 collect，
+// current.path 就是 /collect——不需要再为画布单独判一次。
+function goHome() {
+  if (route.path === '/overview') return
+  void router.push('/overview')
+}
+function goModule() {
+  if (route.path === current.value.path) return
+  void router.push(current.value.path)
+}
+
 function firePageAction(action: string) {
   // 「新建采集」是采集资产的全局入口，不能依赖「网站列表」子页注册回调；
   // 否则切到参数/模板等二级页后旧组件卸载，顶栏按钮会变成空操作。
@@ -77,16 +89,18 @@ function firePageAction(action: string) {
        无障碍与 SEO 语义不丢。动作按钮同时收到这一行，与面包屑平齐。
        整块高度由约 55px 降到约 24px。 -->
   <div class="rc-module-head">
-    <div class="rc-bc">
-      <span>青龙智能采集中心</span>
+    <!-- 面包屑各级可点回跳（2026-09-10 会上提）：在网站详情里点「采集资产」应当回到列表，
+         此前三级全是死文本，唯一的退路是浏览器后退。末项是当前位置，保持不可点。 -->
+    <nav class="rc-bc" aria-label="面包屑">
+      <button type="button" class="rc-bc-link" @click="goHome">青龙智能采集中心</button>
       <span>/</span>
       <template v-if="isSourceCanvas">
-        <span>{{ current.label }}</span>
+        <button type="button" class="rc-bc-link" @click="goModule">{{ current.label }}</button>
         <span>/</span>
-        <h1>{{ sourceCrumb }}</h1>
+        <h1 aria-current="page">{{ sourceCrumb }}</h1>
       </template>
-      <h1 v-else>{{ current.label }}</h1>
-    </div>
+      <h1 v-else aria-current="page">{{ current.label }}</h1>
+    </nav>
     <div class="rc-module-actions">
       <button
         v-for="action in activeActions"
@@ -120,6 +134,30 @@ function firePageAction(action: string) {
   color: var(--rc-muted);
   font-size: 13px;
   min-width: 0;
+}
+
+/* 可点的前几级：外观必须与不可点的分隔符完全一致，只靠 hover 暴露可点性——
+   常驻下划线会让面包屑看着像一行链接，比现在更吵。 */
+.rc-bc-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.rc-bc-link:hover {
+  color: var(--rc-primary);
+  text-decoration: underline;
+}
+
+.rc-bc-link:focus-visible {
+  outline: 2px solid var(--rc-primary);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 
 /* 末项（当前位置）高亮：它现在是 h1，样式上仍与面包屑其余部分一致，只是加重 */
