@@ -8,13 +8,16 @@ import AppSidebar from './AppSidebar.vue'
 import AppModuleHead from './AppModuleHead.vue'
 // 批量提交作业条（Y4-3）：挂在布局层，切页签/跳路由都不消失
 import LaunchJobBar from '@/components/LaunchJobBar.vue'
+import { useUiStore } from '@/stores/ui'
+
+const ui = useUiStore()
 </script>
 
 <template>
   <div class="rc-app">
     <AppTopBar />
 
-    <div class="rc-shell">
+    <div class="rc-shell" :class="{ 'nav-collapsed': ui.navCollapsed }">
       <AppSidebar />
 
       <section class="rc-main">
@@ -61,9 +64,13 @@ import LaunchJobBar from '@/components/LaunchJobBar.vue'
   position: relative;
   z-index: 21;
   display: grid;
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: 184px 1fr;
   min-height: 0;
   overflow: hidden;
+}
+
+.rc-shell.nav-collapsed {
+  grid-template-columns: 64px 1fr;
 }
 
 .rc-main {
@@ -91,7 +98,8 @@ import LaunchJobBar from '@/components/LaunchJobBar.vue'
     overflow: auto;
   }
 
-  .rc-shell {
+  .rc-shell,
+  .rc-shell.nav-collapsed {
     grid-template-columns: 1fr;
     overflow: visible;
   }

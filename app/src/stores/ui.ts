@@ -83,11 +83,20 @@ export const useUiStore = defineStore('ui', () => {
     localStorage.setItem(ASSET_VIEW_KEY, v)
   }
 
+  // 左侧主导航「收起侧栏」：收起后只留图标窄条，中间区域让出更多宽度。持久化（属于用户长期偏好，跟 assetView 一类）。
+  const NAV_COLLAPSED_KEY = 'rc-nav-collapsed'
+  const navCollapsed = ref(localStorage.getItem(NAV_COLLAPSED_KEY) === '1')
+  function toggleNavCollapsed() {
+    navCollapsed.value = !navCollapsed.value
+    localStorage.setItem(NAV_COLLAPSED_KEY, navCollapsed.value ? '1' : '0')
+  }
+
   return {
     registerAction, fireAction, clearActions,
     inspectorWidth, inspectorExpanded, inspectorCollapsed, setInspectorWidth,
     inspectorFieldFilterActive, toggleInspectorExpanded, toggleInspectorCollapsed, clearInspectorFieldFilter,
     applyViewLayoutDefault, resetInspectorLayout,
     assetView, setAssetView,
+    navCollapsed, toggleNavCollapsed,
   }
 })

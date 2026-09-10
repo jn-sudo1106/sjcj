@@ -2,6 +2,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import AppSidebar from './AppSidebar.vue'
@@ -20,7 +21,9 @@ async function mountAt(path: string, query?: Record<string, string>) {
   const router = makeRouter()
   await router.push({ path, query })
   await router.isReady()
-  const wrapper = mount(AppSidebar, { global: { plugins: [router, ElementPlus] } })
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const wrapper = mount(AppSidebar, { global: { plugins: [pinia, router, ElementPlus] } })
   await flushPromises()
   return { wrapper, router }
 }
@@ -78,6 +81,20 @@ describe('AppSidebar', () => {
     await rulesItem.trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.path).toBe('/rules')
+  })
+
+  it('点「收起侧栏」切换 collapsed 态，按钮文案随之变化', async () => {
+    const { wrapper } = await mountAt('/overview')
+    const btn = wrapper.find('.rc-collapse')
+    expect(wrapper.find('.rc-sidenav').classes()).not.toContain('collapsed')
+    expect(btn.text()).toContain('收起侧栏')
+
+    await btn.trigger('click')
+    expect(wrapper.find('.rc-sidenav').classes()).toContain('collapsed')
+    expect(btn.text()).not.toContain('收起侧栏')
+
+    await btn.trigger('click')
+    expect(wrapper.find('.rc-sidenav').classes()).not.toContain('collapsed')
   })
 
   it('监控中心是正式入口，旧监控路径不再出现在侧栏', async () => {

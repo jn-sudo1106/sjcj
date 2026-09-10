@@ -7,10 +7,13 @@ import { useRouter } from 'vue-router'
 import { Box, Clock, Connection, DataAnalysis, Document, Files, Histogram, Monitor, Odometer } from '@element-plus/icons-vue'
 import { TABS } from '@/router/tabs'
 import { useActiveNavKey } from '@/composables/useActiveNavKey'
+import { useUiStore } from '@/stores/ui'
 
 const router = useRouter()
 
 const activeKey = useActiveNavKey()
+
+const ui = useUiStore()
 
 const groupLabels = {
   home: '首页',
@@ -48,32 +51,46 @@ const navIcons: Record<string, Component> = {
 </script>
 
 <template>
-  <aside class="rc-sidenav">
+  <aside class="rc-sidenav" :class="{ collapsed: ui.navCollapsed }">
     <nav v-for="group in navGroups" :key="group.key" class="rc-nav-group" :aria-label="group.label">
       <div class="rc-nav-title">{{ group.label }}</div>
-      <button
+      <el-tooltip
         v-for="t in group.items"
         :key="t.key"
-        class="rc-nav-item"
-        :class="{ active: t.key === activeKey }"
-        type="button"
-        @click="router.push(t.path)"
+        :content="t.label"
+        placement="right"
+        :show-after="120"
+        :disabled="!ui.navCollapsed"
       >
-        <span class="rc-nav-icon"
-          ><el-icon><component :is="navIcons[t.key]" /></el-icon
-        ></span>
-        <span>{{ t.label }}</span>
-      </button>
+        <button
+          class="rc-nav-item"
+          :class="{ active: t.key === activeKey }"
+          type="button"
+          @click="router.push(t.path)"
+        >
+          <span class="rc-nav-icon"
+            ><el-icon><component :is="navIcons[t.key]" /></el-icon
+          ></span>
+          <span class="rc-nav-label">{{ t.label }}</span>
+        </button>
+      </el-tooltip>
     </nav>
-    <button class="rc-collapse" type="button">‹ 收起侧栏</button>
+    <button
+      class="rc-collapse"
+      type="button"
+      :title="ui.navCollapsed ? '展开侧栏' : '收起侧栏'"
+      @click="ui.toggleNavCollapsed()"
+    >
+      {{ ui.navCollapsed ? '›' : '‹ 收起侧栏' }}
+    </button>
   </aside>
 </template>
 
 <style scoped>
 .rc-sidenav {
-  width: 220px;
-  min-width: 220px;
-  max-width: 220px;
+  width: 184px;
+  min-width: 184px;
+  max-width: 184px;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -161,5 +178,48 @@ const navIcons: Record<string, Component> = {
   font-size: 12px;
   text-align: left;
   cursor: pointer;
+}
+
+/* 收起态：只留图标窄条 */
+.rc-sidenav.collapsed {
+  width: 64px;
+  min-width: 64px;
+  max-width: 64px;
+  padding: 16px 8px;
+}
+
+.rc-sidenav.collapsed .rc-nav-title,
+.rc-sidenav.collapsed .rc-nav-label {
+  display: none;
+}
+
+.rc-sidenav.collapsed .rc-nav-item {
+  justify-content: center;
+  padding: 0;
+}
+
+.rc-sidenav.collapsed .rc-collapse {
+  text-align: center;
+  font-size: 16px;
+}
+
+@media (max-width: 980px) {
+  /* 移动端侧栏本就是单列全宽，收起态无意义，强制展开显示 */
+  .rc-sidenav.collapsed {
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    padding: 16px 12px;
+  }
+
+  .rc-sidenav.collapsed .rc-nav-title,
+  .rc-sidenav.collapsed .rc-nav-label {
+    display: initial;
+  }
+
+  .rc-sidenav.collapsed .rc-nav-item {
+    justify-content: flex-start;
+    padding: 0 10px;
+  }
 }
 </style>
