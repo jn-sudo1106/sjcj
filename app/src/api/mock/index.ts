@@ -220,6 +220,10 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   // 源监控（数据源告警，0910 迁入）
   'source/check/paged': mockSourceCheckPaged,
   'source/check/paged-logs': mockSourceCheckLogs,
+  // 写操作只回执，不改上面那份只读样本——mock 下反复点开关不该越点越乱
+  'source/check/changeEnable': (p?: Record<string, unknown>) =>
+    ({ ok: true, demo: true, message: Number(p?.enable) === 0 ? '已启用（演示）' : '已停用（演示）' }),
+  'source/check/runNow': () => ({ ok: true, demo: true, message: '已触发校验（演示）' }),
   'monitor/alarmPaged': mockAlarms,
   'monitor/stats': mockMonitorStats,
   // ck_source 监控源配置（数据监控节点保存同步，2026-09-05）
