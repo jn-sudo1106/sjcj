@@ -18,12 +18,18 @@ function setup() {
   mounted.push(wrapper)
   return wrapper
 }
-function textarea() {
-  return document.querySelector<HTMLTextAreaElement>('[aria-label="SQL 条件编辑区"]')!
+/** 编辑区同样要等：弹窗内容由 ElDialog 异步渲染，点完下拉项后还会重渲一次。 */
+async function textarea() {
+  return vi.waitFor(() => {
+    const el = document.querySelector<HTMLTextAreaElement>('[aria-label="SQL 条件编辑区"]')
+    if (!el) throw new Error('SQL 编辑区还没挂上')
+    return el
+  }, WAIT)
 }
 async function edit(value: string) {
-  textarea().value = value
-  textarea().dispatchEvent(new Event('input', { bubbles: true }))
+  const el = await textarea()
+  el.value = value
+  el.dispatchEvent(new Event('input', { bubbles: true }))
   await flushPromises()
 }
 /**
@@ -38,11 +44,17 @@ async function edit(value: string) {
  * ——看着像组件坏了，其实只是没等够（2026-09-10 实测复现：全量跑必现于 recentConditionItem，
  * 同一条用例单跑 6 次全过）。放宽超时不会拖慢单跑：元素挂上就立刻返回，等不到才是真失败。
  *
- * 但**不能顶到 5000**：vitest 单条用例的默认超时也是 5000ms，waitFor 等满就变成整条用例超时
- * （报 "Test timed out in 5000ms"），把"下拉没挂上"这个真正有用的信息盖掉了。留出余量到 3s，
- * 既够全量跑时挂载用，失败时也还能报出是哪个元素没等到。
+ * **必须给用例超时留出余量**：waitFor 等满而用例先超时的话，报的是
+ * "Test timed out in 5000ms"，把"哪个元素没挂上"这个真正有用的信息盖掉。
+ * 一度只敢给到 3s（当时用例超时还是默认的 5s），机器有负载时仍然不够；
+ * 2026-09-11 把全局 testTimeout 抬到 15s 之后，这里同步放宽到 8s。
+ *
+ * 同日补齐：文件里剩下的裸 `querySelector(...)!`（textarea / .el-dialog__headerbtn /
+ * .el-dropdown-menu__item / .sql-recent-condition-compact）也一并改成等元素出现。
+ * 超时压住之后，真正炸出来的正是它们——`textarea()` 返回 null，报
+ * `Cannot read properties of null`，与本注释开头 0905 记录的表现一模一样。
  */
-const WAIT = { timeout: 3000, interval: 20 }
+const WAIT = { timeout: 8000, interval: 20 }
 /**
  * 取弹窗「最近条件」下拉里的第一条历史。
  *
@@ -72,7 +84,12 @@ async function clickDialogButton(text: string) {
  * 所以统一走右上角关闭；点遮罩在 jsdom 里不便模拟。
  */
 async function closeDialog() {
-  document.querySelector<HTMLButtonElement>('.el-dialog__headerbtn')!.click()
+  const btn = await vi.waitFor(() => {
+    const el = document.querySelector<HTMLButtonElement>('.el-dialog__headerbtn')
+    if (!el) throw new Error('弹窗关闭按钮还没挂上')
+    return el
+  }, WAIT)
+  btn.click()
   await flushPromises()
 }
 /**
@@ -113,16 +130,20 @@ describe('SQL 条件放大编辑', () => {
     expect(item.textContent).toBe(sql)
     item.click()
     await flushPromises()
-    expect(textarea().value).toBe(sql)
+    expect((await textarea()).value).toBe(sql)
     expect(wrapper.vm.sql).toBe('K1 IS NULL')
     await clickDialogButton('最近条件')
-    const clear = [...document.querySelectorAll<HTMLElement>('.el-dropdown-menu__item')]
-      .find((el) => el.textContent?.includes('清空当前表'))!
+    const clear = await vi.waitFor(() => {
+      const el = [...document.querySelectorAll<HTMLElement>('.el-dropdown-menu__item')]
+        .find((item) => item.textContent?.includes('清空当前表'))
+      if (!el) throw new Error('「清空当前表」菜单项还没挂上')
+      return el
+    }, WAIT)
     clear.click()
     await flushPromises()
     expect(readSqlConditions('900')).toEqual([])
     expect(readSqlConditions('901')).toEqual(['K2 IS NULL'])
-    expect(textarea().value).toBe(sql)
+    expect((await textarea()).value).toBe(sql)
     await clickDialogButton('确认')
     expect(wrapper.vm.sql).toBe(sql)
     expect(readSqlConditions('900')).toEqual([])
@@ -142,7 +163,7 @@ describe('SQL 条件放大编辑', () => {
   it('打开带原条件和表信息，编辑草稿不改原框；应用原样保留换行和引号', async () => {
     const wrapper = setup()
     await openDialog(wrapper)
-    expect(textarea().value).toBe('K1 IS NULL')
+    expect((await textarea()).value).toBe('K1 IS NULL')
     expect(document.body.textContent).toContain('TB_CNEWS（900）')
     const sql = "K1 LIKE '%金融%'\nAND (K2 IS NULL OR K5 = '证券时报')"
     await edit(sql)
@@ -151,7 +172,7 @@ describe('SQL 条件放大编辑', () => {
     expect(wrapper.vm.sql).toBe(sql)
     expect((wrapper.get('input').element as HTMLInputElement).value).toBe(sql.replace(/\n/g, ' '))
     await openDialog(wrapper)
-    expect(textarea().value).toBe(sql)
+    expect((await textarea()).value).toBe(sql)
   })
 
   // 0904 I05：「取消」按钮已删除——「点一下外面就取消掉了，一般都没有取消」。
@@ -161,17 +182,21 @@ describe('SQL 条件放大编辑', () => {
     await openDialog(wrapper)
     await edit('K2 IS NULL')
     if (action === 'Escape') {
-      textarea().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      ;(await textarea()).dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     } else if (action === '__never__') {
       await clickDialogButton(action)
     } else {
-      document.querySelector<HTMLButtonElement>('.el-dialog__headerbtn')!.click()
+      ;(await vi.waitFor(() => {
+        const el = document.querySelector<HTMLButtonElement>('.el-dialog__headerbtn')
+        if (!el) throw new Error('弹窗关闭按钮还没挂上')
+        return el
+      }, WAIT)).click()
     }
     await flushPromises()
     await vi.waitFor(() => expect(wrapper.findComponent(ElDialog).props('modelValue')).toBe(false), WAIT)
     expect(wrapper.vm.sql).toBe('K1 IS NULL')
     await openDialog(wrapper)
-    expect(textarea().value).toBe('K1 IS NULL')
+    expect((await textarea()).value).toBe('K1 IS NULL')
   })
 
   it('切表关闭旧草稿，允许主动应用空条件', async () => {
@@ -201,7 +226,7 @@ describe('SQL 条件放大编辑', () => {
     await flushPromises()
     const sql = "K1 LIKE '%金融%'\nAND K5 IS NOT NULL"
     await edit(sql)
-    textarea().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    ;(await textarea()).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     await clickDialogButton('确认')
     expect(query).not.toHaveBeenCalled()
     expect(readSqlConditions('900')).toEqual([])
@@ -222,7 +247,11 @@ describe('紧凑行的最近条件（Z4）', () => {
 
     await wrapper.get('[aria-label="最近使用的 SQL 条件"]').trigger('click')
     await flushPromises()
-    const item = document.querySelector<HTMLElement>('.sql-recent-condition-compact')!
+    const item = await vi.waitFor(() => {
+      const el = document.querySelector<HTMLElement>('.sql-recent-condition-compact')
+      if (!el) throw new Error('紧凑行的最近条件还没挂上')
+      return el
+    }, WAIT)
     expect(item.textContent).toBe("K7 = 'x'")
     item.click()
     await flushPromises()

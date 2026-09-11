@@ -23,6 +23,15 @@ export default defineConfig({
     // （即 ruleHttp/sourceHttp 的既有 flaky：`Test timed out in 5000ms`）。限到 4 个并发 fork，
     // 显著降低峰值内存与拥塞，代价是墙钟略增；CI/核数不同的机器可自行调整。
     maxWorkers: 4,
+    // 用例超时从默认 5s 抬到 15s（2026-09-11）。上面那段拥塞并没有被 maxWorkers=4 根治：
+    // 机器另有负载时（开着 dev server、或同时跑第二个 vitest），jsdom 文件里等 Element Plus
+    // teleport + 过渡挂载的用例仍会撞上 5s，报成 `Test timed out in 5000ms`——看着像组件坏了，
+    // 其实只是没等够。实测：机器空闲时全量三次全过，双进程并发时必现。
+    //
+    // **改这个数时必须同时看 SqlConditionEditor.test.ts 的 WAIT**：那里的 vi.waitFor 超时
+    // 必须明显小于这个值，否则 waitFor 还没来得及报"等不到哪个元素"，整条用例就先超时了，
+    // 错误信息反而更没用（2026-09-11 就这么踩过一次：WAIT 抬到 8s 而这里还是默认 5s）。
+    testTimeout: 15_000,
     // 测试固定跑 mock 模式，不受本地 .env.local（真实后端联调开关）影响；
     // 个别测试要模拟真实 HTTP 协议时用 vi.stubEnv('VITE_API_MODE', 'http') 显式覆盖。
     // 同理关掉「逐端点上线」逃逸（endpoints.ts 的 live 标记，见 client.ts）：那是给真实浏览器/生产用的机制，
