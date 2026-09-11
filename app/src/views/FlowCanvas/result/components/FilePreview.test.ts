@@ -26,7 +26,9 @@ describe('FilePreview', () => {
     expect(frame.attributes('src')).toMatch(/^https?:\/\//)
     // 跨源文档保留自己的 origin：这两项同时给，只有同源时才可能脱出沙箱，这里恰恰跨源
     expect(frame.attributes('sandbox')).toBe('allow-scripts allow-same-origin')
-    // html 不再经过取字节那条路
+    // 渲染这条路不取字节、不造 blob——iframe 自己按绝对地址加载。
+    // （2026-09-11 起另有一次"抓砸了"探测会读文件头部，走 fetchOssFileHead，
+    //   只读几十 KB 且不参与渲染，与这里断言的渲染路径是两回事。）
     expect(fetchOss).not.toHaveBeenCalled()
     expect(createObjectURL).not.toHaveBeenCalled()
   })
@@ -75,5 +77,49 @@ describe('FilePreview', () => {
 
     expect(wrapper.find('[data-testid="file-preview-pdf"]').exists()).toBe(true)
     expect(await created[0].text()).toBe('%PDF-1.7 fake')
+  })
+
+  // 2026-09-11 生产实测：一篇微信文章的存档点开只有「mp.weixin.qq.com 拒绝了我们的连接请求」。
+  // 不是预览坏了，是这条数据采坏了——采集被反爬拦下，验证页被当成正文入了库。
+  // 这里锁住两件事：判出来时不渲染 iframe（否则就是那片 Chrome 错误页），
+  // 以及文案的**主语是采集不是预览**（说"无法预览"等于替对方站点背锅）。
+  it('存档是反爬验证页时，说清是采集被拦，而不是渲染成一片错误页', async () => {
+    vi.spyOn(ossFile, 'fetchOssFileHead').mockResolvedValue(bufOf(
+      '<html><body><div>环境异常</div><p>当前环境异常，完成验证后即可继续访问。</p></body></html>',
+    ))
+    const wrapper = mount(FilePreview, { props: { path: '/qinlong/dds/a.html', name: 'a.html', ext: 'html' } })
+    await flushPromises()
+
+    const blocked = wrapper.find('[data-testid="file-preview-blocked"]')
+    expect(blocked.exists()).toBe(true)
+    expect(blocked.text()).toContain('采集时被对方站点拦下')
+    expect(blocked.text()).not.toContain('无法预览')
+    // 引述存档里的原话当证据，比我们自己转述有说服力
+    expect(blocked.text()).toContain('完成验证后即可继续访问')
+    // 不渲染 iframe：渲染了就会跳去原站被 X-Frame-Options 拒，变成看不懂的错误页
+    expect(wrapper.find('[data-testid="file-preview-html"]').exists()).toBe(false)
+    // 三条出路仍在（下载 / 打开存档 / 看原文）——被拦时它们才是用户真正要点的
+    expect(wrapper.find('[data-testid="file-preview-download"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="file-preview-open-window"]').exists()).toBe(true)
+  })
+
+  it('正常文章照常渲染 iframe，不被误判', async () => {
+    vi.spyOn(ossFile, 'fetchOssFileHead').mockResolvedValue(bufOf(
+      `<html><body><h1>技术跃迁筑行业新生态</h1><div>${'正文内容。'.repeat(80)}</div></body></html>`,
+    ))
+    const wrapper = mount(FilePreview, { props: { path: '/qinlong/dds/b.html', name: 'b.html', ext: 'html' } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="file-preview-blocked"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="file-preview-html"]').exists()).toBe(true)
+  })
+
+  // 体积已知且在 MB 级时连探都不探：正常文章不该为这个功能多付一次请求
+  it('大体积 html 不做探测', async () => {
+    const head = vi.spyOn(ossFile, 'fetchOssFileHead').mockResolvedValue(bufOf('<html></html>'))
+    mount(FilePreview, { props: { path: '/qinlong/dds/c.html', name: 'c.html', ext: 'html', size: 3 * 1024 * 1024 } })
+    await flushPromises()
+
+    expect(head).not.toHaveBeenCalled()
   })
 })

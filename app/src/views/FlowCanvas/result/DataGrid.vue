@@ -97,7 +97,7 @@ const emit = defineEmits<{
   (e: 'update:selectedIds', ids: string[]): void
   (e: 'sort-change', field: string, order: 'ascend' | 'descend' | ''): void
   (e: 'reach-end'): void
-  (e: 'file-click', path: string, field: { prop: string; desc?: string }): void
+  (e: 'file-click', path: string, field: { prop: string; desc?: string }, sourceUrl: string): void
   /** 点了 PARENT_ID 单元格里的父行 ID（0903 Y1-3）：调用方去打开那条上游数据 */
   (e: 'parent-click', row: DataRow): void
   /** 点了「下级」列的条数（0903 Y1-12）：调用方跳到后继节点并带上 父ID=本行 */
@@ -248,6 +248,24 @@ function isFileCell(field: { prop: string; desc?: string }, value: string): bool
   const label = String(field.desc || '')
   return code.includes('path') || code.includes('minio')
     || label.includes('地址') || label.includes('路径') || label.includes('图片')
+}
+
+/**
+ * 取这一行的原文地址（K2 那类 url 字段），随 file-click 一起交给预览器。
+ *
+ * 由 DataGrid 算是因为只有它同时握着 meta 与 row：调用方拿到的只是一个文件路径，
+ * 此前它们从「详情抽屉当前行」去找 url——而直接点单元格预览时详情根本没打开，
+ * 于是永远取不到，预览弹窗里的「原始地址 ↗」按钮就一直不渲染
+ * （2026-09-11 实测：采集被拦的存档预览不出来，恰恰最需要这个按钮跳去看原文）。
+ */
+function sourceUrlOf(row: DataRow): string {
+  const fields = props.meta?.fields ?? []
+  const urlField = fields.find((f) => f.prop === 'url')
+    || fields.find((f) => (f.desc || '').toUpperCase().includes('URL'))
+  const direct = urlField ? cellText(row, urlField) : ''
+  if (/^https?:/i.test(direct)) return direct
+  // 兜底：schema 里认不出 url 字段时，取该行第一个 http 值
+  return Object.values(row.values ?? {}).find((v) => typeof v === 'string' && /^https?:/i.test(v)) as string ?? ''
 }
 
 function colLabel(field: { prop: string; desc?: string; columnName?: string; label?: string }): string {
@@ -405,7 +423,7 @@ function stateMeta(s?: string) {
                 class="dg-file-cell"
                 data-testid="data-file-cell"
                 :title="`预览 ${cellText(r, f)}`"
-                @click.stop="emit('file-click', cellText(r, f), f)"
+                @click.stop="emit('file-click', cellText(r, f), f, sourceUrlOf(r))"
               >📄 {{ cellText(r, f) }}</button>
               <template v-else>{{ cellText(r, f) }}</template>
               <!-- 复制该格的值（0828 D27）。会上原话「人家有的时候他只需要复制这个值」。

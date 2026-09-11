@@ -46,6 +46,42 @@ export async function fetchOssFile(path: string): Promise<ArrayBuffer> {
   return res.arrayBuffer()
 }
 
+/**
+ * 只取文件开头的若干字节。
+ *
+ * 用流式读取而不是 Range 请求：OSS 那边是否支持 Range 没有把握，而流式读到够了就
+ * `cancel()`，即便服务端整份吐出来也会在传够之后断开连接，**不会把 3MB 的正文整份拉完**。
+ * 这一条很关键——HTML 存档的探测（见 utils/blockedArchive.ts）对每次预览都要跑一次，
+ * 若按整份下载，正常文章会被下两遍（探测一次、iframe 再一次）。
+ */
+export async function fetchOssFileHead(path: string, maxBytes: number): Promise<ArrayBuffer> {
+  const res = await fetch(ossFileUrl(path), { credentials: 'omit' })
+  if (!res.ok) throw new Error(`取文件失败（HTTP ${res.status}）`)
+  if (!res.body) return (await res.arrayBuffer()).slice(0, maxBytes)
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let received = 0
+  try {
+    while (received < maxBytes) {
+      const { done, value } = await reader.read()
+      if (done) break
+      chunks.push(value)
+      received += value.length
+    }
+  } finally {
+    // 读够就掐断，剩下的字节不再落地
+    void reader.cancel().catch(() => {})
+  }
+  const out = new Uint8Array(Math.min(received, maxBytes))
+  let at = 0
+  for (const c of chunks) {
+    if (at >= out.length) break
+    out.set(c.subarray(0, out.length - at), at)
+    at += c.length
+  }
+  return out.buffer
+}
+
 export type PreviewKind = 'excel' | 'pdf' | 'image' | 'html' | 'text' | 'none'
 
 const EXCEL_EXT = new Set(['xlsx', 'xls', 'xlsm', 'csv'])

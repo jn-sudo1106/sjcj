@@ -1035,10 +1035,14 @@ async function saveEdit() {
 // 用居中 dialog 而不是右侧抽屉——这是"看一眼就关"的操作型短流程，抽屉留给实体详情
 // （项目弹层规范）。预览器与文件详情共用一个组件，取数、降级、下载全在里面。
 const filePreview = reactive({ visible: false, path: '', name: '', url: '' })
-function onCellFile(path: string) {
+// sourceUrl 由 DataGrid 从被点的那一行算好带过来（2026-09-11）。此前是从 detailFields
+// 取——那是详情抽屉当前行的字段，直接点单元格时详情没开，于是永远取不到，
+// 预览里的「原始地址 ↗」一直不显示。
+function onCellFile(path: string, _field?: unknown, sourceUrl = '') {
   filePreview.path = path
   filePreview.name = path.split('/').pop() || ''
-  filePreview.url = detailFields.value.find((f) => f.prop === 'url')?.href
+  filePreview.url = sourceUrl
+    || detailFields.value.find((f) => f.prop === 'url')?.href
     || detailFields.value.find((f) => f.href)?.href
     || ''
   filePreview.visible = true

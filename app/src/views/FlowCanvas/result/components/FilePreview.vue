@@ -11,7 +11,11 @@
 //
 // 真实类型分布（文件中心首页 20 行）：xlsx 13 / pdf 7 / txt 0，故 Excel 是主力路径。
 import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue'
-import { extFromName, fetchOssFile, mimeTypeOf, ossPublicUrl, previewKindOf, type PreviewKind } from '@/utils/ossFile'
+import { extFromName, fetchOssFile, fetchOssFileHead, mimeTypeOf, ossPublicUrl, previewKindOf, type PreviewKind } from '@/utils/ossFile'
+import {
+  BLOCKED_ARCHIVE_SIZE_LIMIT, BLOCKED_ARCHIVE_SNIFF_BYTES, detectBlockedArchive,
+  type BlockedArchiveVerdict,
+} from '@/utils/blockedArchive'
 
 const props = defineProps<{
   /** K3 文件路径（OSS 上的路径），站内预览的唯一来源 */
@@ -69,6 +73,9 @@ const htmlSrc = computed(() => (kind.value === 'html' && props.path ? ossPublicU
 
 const loading = ref(false)
 const error = ref('')
+// 采集被拦判定（2026-09-11）：只对"体积小得不像正文"的 HTML 存档做，正常的 MB 级文章
+// 一个字节都不多读。判出来是为了把话说对——见 utils/blockedArchive.ts 顶部。
+const blocked = ref<BlockedArchiveVerdict | null>(null)
 const forced = ref(false)
 const buffer = ref<ArrayBuffer | null>(null)
 const blobUrl = ref('')
@@ -86,6 +93,26 @@ function reset() {
   truncated.value = false
   error.value = ''
   forced.value = false
+  blocked.value = null
+}
+
+/**
+ * HTML 存档的"抓砸了"探测。**只在体积粗筛命中时才发这一次请求**：
+ * 正常文章 3MB 级直接跳过，渲染路径一如既往交给 iframe（0909 定案：html 不 fetch 字节，
+ * 由 iframe 按 OSS 绝对地址自己加载）。这里读到的字节只用于判定，不参与渲染。
+ */
+async function sniffBlocked() {
+  if (kind.value !== 'html' || !props.path) return
+  // 体积已知且明显不小时跳过：正常文章都在 MB 级，没必要探。
+  // 体积未知时照样探——调用方目前并不传 size，而**只读头部**，代价就是几十 KB。
+  if (sizeNum.value > BLOCKED_ARCHIVE_SIZE_LIMIT) return
+  try {
+    const buf = await fetchOssFileHead(props.path, BLOCKED_ARCHIVE_SNIFF_BYTES)
+    const verdict = detectBlockedArchive(new TextDecoder('utf-8').decode(buf))
+    if (verdict.blocked) blocked.value = verdict
+  } catch {
+    // 探测失败不影响预览：照常渲染 iframe，退回改动前的行为
+  }
 }
 
 /** 能预览、有路径、且（没超限或用户点了"仍要预览"）才真正去取。
@@ -121,6 +148,7 @@ async function load() {
 watch(() => [props.path, props.ext, props.name] as const, () => {
   reset()
   void load()
+  void sniffBlocked()
 }, { immediate: true })
 watch(forced, (on) => { if (on) void load() })
 onBeforeUnmount(releaseBlob)
@@ -146,6 +174,18 @@ function onExcelError(e: unknown) {
     <div v-else-if="loading" class="fp-hint" data-testid="file-preview-loading">加载中…</div>
 
     <div v-else-if="error" class="fp-hint error" data-testid="file-preview-error">{{ error }}</div>
+
+    <!-- 采集时被对方站点拦下（2026-09-11）。
+         **文案的主语必须是采集，不能写"无法预览"**——后者会让人以为是本系统的能力问题，
+         而真正该被看见的是这条数据没抓到正文。引述存档里的原话，比我们转述更有说服力。 -->
+    <div v-else-if="blocked" class="fp-blocked" data-testid="file-preview-blocked">
+      <div class="fp-blocked-title">这条数据采集时被对方站点拦下了</div>
+      <p class="fp-blocked-body">
+        存档里是一张拦截/验证页，不是文章正文<template v-if="sizeNum">（仅 {{ (sizeNum / 1024).toFixed(0) }} KB，同类正文通常在 MB 级）</template>。
+      </p>
+      <p v-if="blocked.hint" class="fp-blocked-quote">「{{ blocked.hint }}」</p>
+      <p class="fp-blocked-body muted">这不代表原文打不开——原文多半正常，只是这次没采到。</p>
+    </div>
 
     <template v-else>
       <ExcelViewer
@@ -186,6 +226,14 @@ function onExcelError(e: unknown) {
 </template>
 
 <style scoped>
+/* 采集被拦：说明块而不是错误块——用中性的琥珀色，不要红。红色会读成"系统出错了"，
+   而这里要传达的是"数据没采到"，两者归因完全不同。 */
+.fp-blocked { padding: 28px 24px; text-align: center; }
+.fp-blocked-title { font-size: 14px; font-weight: 700; color: #92400e; margin-bottom: 8px; }
+.fp-blocked-body { margin: 0 auto 6px; max-width: 46em; font-size: 12.5px; color: var(--rc-text-2); line-height: 1.7; }
+.fp-blocked-body.muted { color: var(--rc-faint); }
+.fp-blocked-quote { margin: 10px auto; max-width: 46em; padding: 8px 12px; border-left: 3px solid #fbbf24; background: #fffbeb; color: #92400e; font-size: 12px; text-align: left; word-break: break-all; }
+
 .fp-wrap { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
 .fp-hint { display: flex; align-items: center; gap: 10px; padding: 14px; border-radius: 8px; background: #f8fafc; color: var(--rc-text-2); font-size: 12px; }
 .fp-hint.error { background: #fef2f2; color: #b91c1c; word-break: break-all; }
