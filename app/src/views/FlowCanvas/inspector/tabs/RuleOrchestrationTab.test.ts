@@ -1433,7 +1433,7 @@ describe('RuleOrchestrationTab · 测试脚本切换数据视图', () => {
     expect(routerPush).not.toHaveBeenCalled()
   })
 
-  it('数据监控节点点击测试脚本直接执行 codePath，不跳转数据视图并展示返回结果', async () => {
+  it('数据监控节点点击测试脚本直接执行 codePath，并在弹窗展示返回结果', async () => {
     mockAssets()
     const executeSpy = vi.spyOn(ruleApi, 'executeCode').mockResolvedValue({
       success: true,
@@ -1460,7 +1460,8 @@ describe('RuleOrchestrationTab · 测试脚本切换数据视图', () => {
       timeout: 300,
     })
     expect(routerReplace).not.toHaveBeenCalled()
-    expect(wrapper.get('[data-testid="monitor-test-result"]').text()).toContain('"status": "ok"')
+    expect(wrapper.find('[data-testid="monitor-test-result"]').exists()).toBe(false)
+    expect(document.body.querySelector('[data-testid="monitor-script-test-dialog"]')?.textContent).toContain('"status": "ok"')
   })
 })
 

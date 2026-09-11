@@ -615,6 +615,8 @@ const workbenchOpen = ref(false)
 const savingScript = ref(false)
 const codeTestLoading = ref(false)
 const codeTestResult = ref('')
+const codeTestError = ref('')
+const monitorCodeTestVisible = ref(false)
 
 async function onSaveScript() {
   if (!orchCfg.value.script?.trim()) {
@@ -748,15 +750,17 @@ async function executeMonitorCode() {
     ElMessage.warning('请先生成脚本')
     return
   }
+  monitorCodeTestVisible.value = true
   codeTestLoading.value = true
   codeTestResult.value = ''
+  codeTestError.value = ''
   try {
     const result = await ruleApi.executeCode({ codePath, timeout: 300 })
     codeTestResult.value = formatCodeTestResult(result)
     ElMessage.success('测试脚本执行完成')
   } catch (e) {
     const message = (e as Error)?.message ?? String(e)
-    codeTestResult.value = message
+    codeTestError.value = message
     ElMessage.error(`测试脚本失败：${message}`)
   } finally {
     codeTestLoading.value = false
@@ -884,13 +888,17 @@ function onTestScript() {
     </div>
     <pre v-if="generating || generationState === 'content' || generationState === 'error'" ref="mainResultRef" class="rc-main-result-code">{{ orchCfg.script || '等待模型输出结果…' }}</pre>
   </div>
-  <div v-if="isMonitor && (codeTestLoading || codeTestResult)" class="rc-main-result" data-testid="monitor-test-result">
-    <div class="rc-main-result-head">
-      <span>测试结果</span>
-      <span>{{ codeTestLoading ? '执行中' : '已完成' }}</span>
+  <el-dialog v-model="monitorCodeTestVisible" title="脚本测试结果" width="820px" top="6vh" append-to-body data-testid="monitor-script-test-dialog">
+    <div class="rc-code-test">
+      <div class="rc-code-test-meta">
+        <span>脚本路径</span>
+        <b :title="orchCfg.scriptPath">{{ orchCfg.scriptPath || '未提供' }}</b>
+      </div>
+      <div v-if="codeTestLoading" class="rc-code-test-hint">测试中…</div>
+      <div v-else-if="codeTestError" class="rc-code-test-hint error">{{ codeTestError }}</div>
+      <pre v-else class="rc-code-test-output">{{ codeTestResult || '暂无返回结果' }}</pre>
     </div>
-    <pre class="rc-main-result-code">{{ codeTestResult || '等待接口返回结果…' }}</pre>
-  </div>
+  </el-dialog>
 
   <template v-if="!isRule">
     <!-- 只读动作链摘要（0804 S3-4，方案 §3.1）：按 NextActionId 链表走出来的执行顺序，不可编辑 -->
@@ -1002,6 +1010,13 @@ function onTestScript() {
 .rc-main-stream-text, .rc-main-result-code { margin: 0; max-height: 180px; overflow: auto; padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 .rc-main-stream-text { color: #cbd5e1; border-top: 1px solid #1e293b; }
 .rc-main-result-code { color: #dbeafe; background: #0f172a; }
+.rc-code-test { display: flex; flex-direction: column; gap: 10px; }
+.rc-code-test-meta { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--rc-text-2); }
+.rc-code-test-meta span { color: var(--rc-faint); font-size: 11px; }
+.rc-code-test-meta b { font-family: var(--rc-mono, monospace); word-break: break-all; }
+.rc-code-test-hint { padding: 14px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #f8fafc; color: var(--rc-text-2); font-size: 12px; line-height: 1.6; }
+.rc-code-test-hint.error { border-color: #fecaca; background: #fef2f2; color: #b91c1c; word-break: break-all; }
+.rc-code-test-output { margin: 0; padding: 14px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #0f172a; color: #dbeafe; font-family: var(--rc-mono, monospace); font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-all; min-height: 180px; }
 .rc-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 11px; border: 1px solid #d5e2f2; border-radius: 7px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; }
 .rc-btn:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rc-btn.primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }
