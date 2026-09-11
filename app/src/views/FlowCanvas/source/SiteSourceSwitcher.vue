@@ -101,6 +101,24 @@ const filtered = computed(() => {
 const LIST_PAGE = 120
 const shownCount = ref(LIST_PAGE)
 const visibleRows = computed(() => filtered.value.slice(0, shownCount.value))
+/**
+ * 标题上那个数字（2026-09-11）。
+ *
+ * 原先恒取 sourceCount，于是反查命中后标题写着「源列表 (6496)」、列表里却只有 40 行，
+ * 两个数字当面打架——本块加反查命中条时的理由正是"别让人以为侧栏坏了"，可标题这半边
+ * 一直没跟上。列表被收窄（命中 / 搜索）时改说「40 / 6496」：前一个是眼前有多少，
+ * 后一个留住总量这个上下文。
+ *
+ * 只在收窄时才加分母：源还在加载时 filtered 是空的，无条件显示分数会闪一下「0 / 6496」。
+ */
+const listNarrowed = computed(() => !!hits.value.length || !!kw.value.trim())
+const listCountLabel = computed(() => {
+  // 收窄时分母取 children 而不是 sourceCount：**分子分母必须同源**。分子是从 children
+  // 一路过滤下来的，而 sourceCount 来自 siteDetail 接口，两者在加载中或接口不同步时会
+  // 对不上，显示出「2 / 1」这种分子大于分母的荒谬值（2026-09-11 被测试当场抓到）。
+  if (listNarrowed.value) return `${filtered.value.length} / ${children.value.length}`
+  return String(site.value?.sourceCount ?? children.value.length)
+})
 watch([kw, children, hitFiltered], () => { shownCount.value = LIST_PAGE })
 function onListScroll(e: Event) {
   const el = e.target as HTMLElement
@@ -841,7 +859,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
         <button class="ssw-collapse" type="button" title="收起侧栏" @click="collapsed = true">«</button>
       </div>
       <div class="ssw-section-toggle" @click="listExpanded = !listExpanded">
-        <span class="ssw-section-title">源列表 ({{ site?.sourceCount ?? children.length }})</span>
+        <span class="ssw-section-title">源列表 ({{ listCountLabel }})</span>
         <span class="ssw-section-icon">{{ listExpanded ? '▼' : '▶' }}</span>
       </div>
       <template v-if="listExpanded">

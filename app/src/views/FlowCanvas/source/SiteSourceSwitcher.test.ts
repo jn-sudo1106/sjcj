@@ -768,6 +768,26 @@ describe('SiteSourceSwitcher · 按条件查源的命中态', () => {
     expect(wrapper.findAll('.ssw-row-name').map((n) => n.text())).toEqual(['全部', '源一', '源二', '源三'])
   })
 
+  // 标题那个数字原先恒取 sourceCount：命中后写着「源列表 (6496)」而列表只有 40 行，
+  // 两个数字当面打架，让人以为侧栏没加载完（2026-09-11）。
+  it('列表被收窄时标题说清"眼前有多少 / 总共多少"', async () => {
+    const { wrapper } = await mountWithHits([{ sourceId: 's1', count: 40 }, { sourceId: 's3', count: 2 }])
+    expect(wrapper.get('.ssw-section-title').text()).toBe('源列表 (2 / 3)')
+  })
+
+  // 非收窄态沿用既有口径：取 siteDetail 给的 sourceCount（本 fixture 里是 1），
+  // 不改成 children.length——那是"这个网站有多少源"的权威数字。
+  it('没有收窄时标题只显示总数，不画蛇添足', async () => {
+    const { wrapper } = await mountWithHits([], 'site-other')
+    expect(wrapper.get('.ssw-section-title').text()).toBe('源列表 (1)')
+  })
+
+  it('在命中的源里再搜索，标题跟着变小', async () => {
+    const { wrapper } = await mountWithHits([{ sourceId: 's1', count: 40 }, { sourceId: 's3', count: 2 }])
+    await wrapper.get('.ssw-search').setValue('源一')
+    expect(wrapper.get('.ssw-section-title').text()).toBe('源列表 (1 / 3)')
+  })
+
   it('命中态属于另一个网站时不生效，侧栏照常显示全部源', async () => {
     const { wrapper } = await mountWithHits([{ sourceId: 's1', count: 40 }], 'site-other')
     expect(wrapper.find('[data-testid="sidebar-backtrace-bar"]').exists()).toBe(false)
