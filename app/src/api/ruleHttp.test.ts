@@ -314,6 +314,138 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
     expect(result.script).toBe('def process():    return {"ok": True}')
   })
 
+  it('dataProcessGenerate：带 Excel 时发送 request JSON Blob 和单个 file，不手动设置 multipart Content-Type', async () => {
+    const streamText = [
+      'event: content',
+      'data:def process():',
+      '',
+      'event: done',
+      'data:# 当前文件已保存到/code01/202609/generated.py',
+    ].join('\n')
+    const encoder = new TextEncoder()
+    let read = false
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (read) return { done: true, value: undefined }
+            read = true
+            return { done: false, value: encoder.encode(streamText) }
+          },
+        }),
+      },
+    } as unknown as Response)
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    const { ruleApi } = await import('./index')
+    const file = new File(['date,name'], 'orders.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+
+    const result = await ruleApi.dataProcessGenerate({
+      description: '根据 Excel 生成 Python',
+      configId: 184,
+      providerCode: 'OpenAI',
+      model: 'gpt-5',
+      sourceTable: '订单表',
+      targetTable: '订单结果表',
+      inputFields: '日期:date',
+      outputFields: '标题:title',
+      systemPrompt: '只返回 Python',
+    }, { file })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect((init.headers as Record<string, string>)['Content-Type']).toBeUndefined()
+    expect(init.body).toBeInstanceOf(FormData)
+    const form = init.body as FormData
+    const requestPart = form.get('request')
+    expect(requestPart).toBeInstanceOf(Blob)
+    expect((requestPart as Blob).type).toBe('application/json')
+    await expect((requestPart as Blob).text()).resolves.toContain('"configId":184')
+    expect(form.get('file')).toBe(file)
+    expect(result).toMatchObject({
+      script: 'def process():',
+      scriptPath: '/code01/202609/generated.py',
+    })
+  })
+
+  it('dataProcessGenerate：收到 done 后忽略后续 content 事件', async () => {
+    const streamText = [
+      'event: content',
+      'data:def process():',
+      '',
+      'event: done',
+      'data:{"scriptPath":"/code01/202609/generated.py"}',
+      '',
+      'event: content',
+      'data:SHOULD_NOT_BE_APPENDED',
+    ].join('\n')
+    const encoder = new TextEncoder()
+    let read = false
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (read) return { done: true, value: undefined }
+            read = true
+            return { done: false, value: encoder.encode(streamText) }
+          },
+        }),
+      },
+    } as unknown as Response)
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    const { ruleApi } = await import('./index')
+
+    const result = await ruleApi.dataProcessGenerate({
+      description: '根据 Excel 生成 Python',
+      configId: 184,
+      providerCode: 'OpenAI',
+      model: 'gpt-5',
+      sourceTable: '订单表',
+      targetTable: '订单结果表',
+      inputFields: '日期:date',
+      outputFields: '标题:title',
+      systemPrompt: '只返回 Python',
+    })
+
+    expect(result.script).toBe('def process():')
+    expect(result.script).not.toContain('SHOULD_NOT_BE_APPENDED')
+  })
+
+  it('dataProcessGenerate：HTTP 400 优先展示后端 error 字段', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 400,
+      clone: () => ({
+        json: async () => ({ error: 'Excel 文件格式不支持' }),
+      }),
+      text: async () => JSON.stringify({ error: 'Excel 文件格式不支持' }),
+    } as unknown as Response)
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    const { ruleApi } = await import('./index')
+
+    await expect(ruleApi.dataProcessGenerate({
+      description: '根据 Excel 生成 Python',
+      configId: 184,
+      providerCode: 'OpenAI',
+      model: 'gpt-5',
+      sourceTable: '订单表',
+      targetTable: '订单结果表',
+      inputFields: '日期:date',
+      outputFields: '标题:title',
+      systemPrompt: '只返回 Python',
+    })).rejects.toThrow('Excel 文件格式不支持')
+  })
+
   it('dataProcessGenerate：响应体流式读取期间触发外部 abort 会中断 reader', async () => {
     let requestSignal: AbortSignal | undefined
     fetchMock.mockImplementation(async (_input: unknown, init?: RequestInit) => {

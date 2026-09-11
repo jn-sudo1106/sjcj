@@ -11,6 +11,7 @@
 // 「引用已有规则」能力整体砍掉，复用需求交给模板功能承接（等于回退 edc08d1）。
 import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Delete, UploadFilled } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
 import { isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
@@ -384,6 +385,10 @@ const generateAbort = ref<AbortController | null>(null)
 const thinkingText = ref('')
 const generationMessage = ref('')
 const generationState = ref<'idle' | 'thinking' | 'content' | 'done' | 'error'>('idle')
+const selectedExcelFile = ref<File | null>(null)
+const excelFileError = ref('')
+const excelFileInput = ref<HTMLInputElement | null>(null)
+const MAX_EXCEL_FILE_SIZE = 10 * 1024 * 1024
 const mainThinkingRef = ref<HTMLElement | null>(null)
 const mainResultRef = ref<HTMLElement | null>(null)
 function formatResultLabel(value: string): string {
@@ -460,6 +465,34 @@ watch(
 function onCancelGenerate() {
   generateAbort.value?.abort()
 }
+function formatExcelFileSize(size: number): string {
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+function onExcelFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  excelFileError.value = ''
+  if (!file) return
+  if (!/\.(?:xls|xlsx)$/i.test(file.name)) {
+    selectedExcelFile.value = null
+    excelFileError.value = '仅支持 .xls 或 .xlsx 文件'
+    input.value = ''
+    return
+  }
+  if (file.size > MAX_EXCEL_FILE_SIZE) {
+    selectedExcelFile.value = null
+    excelFileError.value = 'Excel 文件不能超过 10MB'
+    input.value = ''
+    return
+  }
+  selectedExcelFile.value = file
+}
+function removeExcelFile() {
+  selectedExcelFile.value = null
+  excelFileError.value = ''
+  if (excelFileInput.value) excelFileInput.value.value = ''
+}
 /** 仅非规则节点的旧 XML 抓取配置复用还依赖 compose ruleId；规则/监控节点生成脚本走 configId。 */
 async function resolveInputTableName(): Promise<string> {
   if (!isRule.value) return ''
@@ -505,7 +538,7 @@ async function ensureLegacyComposeRuleId(): Promise<string | undefined> {
   }
 }
 async function onGenerateScript(
-  draft?: Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'modelProviderCode' | 'modelCode'>>,
+  draft?: Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'modelProviderCode' | 'modelCode'>> & { file?: File },
 ) {
   if (!orchCfg.value.describe.trim()) {
     ElMessage.warning(isMonitor.value ? '请先填写数据监控描述' : isRule.value ? '请先填写规则处理描述' : '请先填写抓取需求描述')
@@ -564,6 +597,7 @@ async function onGenerateScript(
         systemPrompt: genCfg.systemPrompt ?? '',
         checkRule: isMonitor.value ? (cfg.value?.monitorMethods ?? []).join(',') || undefined : undefined,
       }), {
+        file: selectedExcelFile.value ?? undefined,
         signal: controller.signal,
         onThinking: (delta) => {
           if (!delta) return
@@ -812,7 +846,7 @@ function onTestScript() {
       @input="onDescribeChange"
     />
   </div>
-  <div v-if="isRule" class="rc-model-row nowrap">
+  <div v-if="isRule" class="rc-model-row">
     <span class="rc-model-fields">
       <label class="rc-inline-field">
         <span>模型供应商</span>
@@ -844,6 +878,20 @@ function onTestScript() {
         </el-select>
       </label>
     </span>
+  </div>
+  <div v-if="isRule" class="rc-generation-actions" data-testid="rule-generation-actions">
+    <input
+      ref="excelFileInput"
+      class="rc-file-input"
+      data-testid="main-excel-file-input"
+      type="file"
+      accept=".xls,.xlsx"
+      @change="onExcelFileChange"
+    />
+    <button class="rc-btn rc-upload-btn" type="button" data-testid="main-upload-excel" @click="excelFileInput?.click()">
+      <UploadFilled aria-hidden="true" />
+      <span>{{ selectedExcelFile ? '更换 Excel' : '上传 Excel' }}</span>
+    </button>
     <button
       class="rc-btn primary"
       type="button"
@@ -865,6 +913,16 @@ function onTestScript() {
     >
       {{ codeTestLoading ? '测试中...' : '测试脚本' }}
     </button>
+  </div>
+  <div v-if="isRule && (selectedExcelFile || excelFileError)" class="rc-file-summary">
+    <div v-if="selectedExcelFile" class="rc-file-selected">
+      <span class="rc-file-name" :title="selectedExcelFile.name">{{ selectedExcelFile.name }}</span>
+      <span class="rc-file-size">{{ formatExcelFileSize(selectedExcelFile.size) }}</span>
+      <button type="button" class="rc-file-remove" title="移除 Excel 文件" aria-label="移除 Excel 文件" @click="removeExcelFile">
+        <Delete aria-hidden="true" />
+      </button>
+    </div>
+    <span v-if="excelFileError" class="rc-file-error">{{ excelFileError }}</span>
   </div>
   <div v-if="isRule && generationState !== 'done' && (generating || thinkingText.trim() || generationState === 'error')" class="rc-main-stream" data-testid="main-stream-thinking">
     <div class="rc-main-stream-head">
@@ -991,14 +1049,26 @@ function onTestScript() {
 .rc-switch-load-error button:hover { text-decoration: underline; }
 .rc-main-result-link { margin: 0; padding: 0; border: 0; background: transparent; color: #047857; font-size: 11px; font-weight: 700; cursor: pointer; text-align: right; }
 .rc-main-result-link:disabled { opacity: 0.6; cursor: not-allowed; }
-.rc-model-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: -2px 0 12px; min-width: 0; flex-wrap: wrap; }
-.rc-model-fields { display: inline-flex; align-items: center; flex: 1 1 auto; flex-wrap: wrap; gap: 10px; min-width: 0; overflow: hidden; }
-.rc-inline-field { display: inline-flex; align-items: center; flex: 1 1 130px; gap: 6px; min-width: 0; color: var(--rc-muted); font-size: 11px; font-weight: 600; }
+.rc-model-row { display: block; margin: -2px 0 8px; min-width: 0; }
+.rc-model-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 10px; min-width: 0; }
+.rc-inline-field { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 6px; min-width: 0; color: var(--rc-muted); font-size: 11px; font-weight: 600; }
 .rc-inline-field > span { flex: 0 0 auto; white-space: nowrap; }
-.rc-inline-select { flex: 1 1 auto; width: auto; min-width: 0; max-width: 150px; }
-.rc-inline-select-model { min-width: 0; max-width: 170px; }
-.rc-model-row > .rc-btn { flex: 0 0 auto; white-space: nowrap; min-width: 72px; padding: 0 9px; margin-left: auto; }
-.rc-model-row > .rc-btn.is-generating { min-width: 32px; width: 32px; padding: 0; }
+.rc-inline-select { width: 100%; min-width: 0; }
+.rc-inline-select-model { min-width: 0; }
+.rc-generation-actions { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; min-width: 0; }
+.rc-generation-actions > .rc-btn { flex: 1 1 0; min-width: 0; white-space: nowrap; }
+.rc-generation-actions > .rc-btn.is-generating { flex: 0 0 32px; width: 32px; padding: 0; }
+.rc-upload-btn { gap: 6px; }
+.rc-upload-btn svg { width: 14px; height: 14px; }
+.rc-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.rc-file-summary { margin: -2px 0 10px; min-width: 0; }
+.rc-file-selected { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; padding: 4px 6px 4px 9px; border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc; color: var(--rc-text-2); font-size: 11px; }
+.rc-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-file-size { flex: none; color: var(--rc-faint); font-variant-numeric: tabular-nums; }
+.rc-file-remove { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0; background: transparent; color: var(--rc-muted); cursor: pointer; }
+.rc-file-remove:hover { color: #dc2626; }
+.rc-file-remove svg { width: 14px; height: 14px; }
+.rc-file-error { color: #b91c1c; font-size: 11px; line-height: 1.4; }
 .rc-stop-icon { display: block; width: 10px; height: 10px; border-radius: 1px; background: currentColor; }
 .rc-main-stream, .rc-main-result { margin: 10px 0 12px; border: 1px solid #dbe3ee; border-radius: 8px; overflow: hidden; background: #fff; }
 .rc-main-stream { border-color: #1e293b; background: #0b1220; }

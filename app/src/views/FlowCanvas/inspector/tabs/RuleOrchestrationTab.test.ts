@@ -15,6 +15,11 @@ import { configApi, entryApi, paramApi, ruleApi, ckSourceApi } from '@/api'
 import type { EntryType } from '@/api'
 import { useSourceStore } from '@/stores/source'
 
+async function selectFile(input: ReturnType<ReturnType<typeof mount>['find']>, file: File) {
+  Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
+  await input.trigger('change')
+}
+
 // 0901：测试脚本入口改为切到流程视图右侧「数据视图」tab（view=data），用 mock router 断言跳转目标
 const routerPush = vi.fn()
 const routerReplace = vi.fn()
@@ -193,7 +198,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(wrapper.find('.rc-actions-row button').exists()).toBe(false)
   })
 
-  it('生成脚本按钮显示在模型下拉行右侧', async () => {
+  it('模型供应商和模型位于同一行', async () => {
     const { wrapper } = mountWithExistingRule()
     await flushPromises()
 
@@ -201,8 +206,23 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(modelRow.exists()).toBe(true)
     expect(modelRow.find('[data-testid="main-model-provider"]').exists()).toBe(true)
     expect(modelRow.find('[data-testid="main-model"]').exists()).toBe(true)
-    expect(modelRow.find('[data-testid="main-generate-script"]').text()).toBe('生成脚本')
-    expect(modelRow.classes()).toContain('nowrap')
+    expect(modelRow.find('[data-testid="main-generate-script"]').exists()).toBe(false)
+  })
+
+  it('规则处理动作区：上传 Excel、生成脚本、测试脚本位于模型行下方并保持同一行', async () => {
+    const { wrapper } = mountWithExistingRule()
+    await flushPromises()
+
+    const modelRow = wrapper.find('.rc-model-row')
+    const actionRow = wrapper.find('[data-testid="rule-generation-actions"]')
+    expect(modelRow.find('[data-testid="main-model-provider"]').exists()).toBe(true)
+    expect(modelRow.find('[data-testid="main-model"]').exists()).toBe(true)
+    expect(modelRow.find('[data-testid="main-generate-script"]').exists()).toBe(false)
+    expect(actionRow.exists()).toBe(true)
+    expect(actionRow.find('[data-testid="main-upload-excel"]').exists()).toBe(true)
+    expect(actionRow.find('[data-testid="main-generate-script"]').exists()).toBe(true)
+    expect(actionRow.find('[data-testid="main-test-script"]').exists()).toBe(true)
+    expect(actionRow.findAll('button')).toHaveLength(3)
   })
 
   it('进入编排配置时已有脚本仅显示生成结果和脚本路径', async () => {
@@ -1085,6 +1105,50 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     const codeTextarea = wrapper.find('textarea.wb-code')
     expect((codeTextarea.element as HTMLTextAreaElement).value).toContain('def main(date, zb_value)')
     expect(wrapper.text()).toContain('保存完成')
+  })
+
+  it('脚本工作区：只接受单个 Excel 且超过 10MB 时拒绝选择', async () => {
+    mockAssets()
+    const { wrapper } = mountWithExistingRule()
+    await flushPromises()
+    const fileInput = wrapper.find('input[data-testid="main-excel-file-input"]')
+    expect(fileInput.exists()).toBe(true)
+    const invalid = new File(['text'], 'rules.csv', { type: 'text/csv' })
+    await selectFile(fileInput, invalid)
+    expect(wrapper.text()).toContain('仅支持 .xls 或 .xlsx 文件')
+    expect(wrapper.text()).not.toContain('rules.csv')
+
+    const oversized = new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'rules.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+    await selectFile(fileInput, oversized)
+    expect(wrapper.text()).toContain('Excel 文件不能超过 10MB')
+    expect(wrapper.text()).not.toContain('rules.xlsx')
+  })
+
+  it('脚本工作区：选择 Excel 后生成请求携带文件并可移除', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', { describe: '根据 Excel 字段生成处理脚本' })
+    const generateSpy = vi.spyOn(ruleApi, 'dataProcessGenerate').mockResolvedValue({
+      script: 'def process():\n    return {}',
+      scriptPath: '/code01/202609/generated.py',
+    })
+    await flushPromises()
+    const file = new File(['date,name'], 'orders.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+    const fileInput = wrapper.find('input[data-testid="main-excel-file-input"]')
+    await selectFile(fileInput, file)
+    expect(wrapper.text()).toContain('orders.xlsx')
+
+    const generateButton = wrapper.find('[data-testid="main-generate-script"]')
+    await generateButton.trigger('click')
+    await flushPromises()
+    expect(generateSpy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ file }))
+
+    await wrapper.find('.rc-file-remove').trigger('click')
+    expect(wrapper.text()).not.toContain('orders.xlsx')
   })
 
   it('SSE 生成时思考面板会自动滚动到底部', async () => {

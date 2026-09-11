@@ -1126,6 +1126,7 @@ async function fetchRuleOrchestrationStream(
 
 /** data-process 生成脚本的流式选项：onChunk 收到增量文本（打字机效果） */
 export interface DataProcessGenerateOptions {
+  file?: File
   signal?: AbortSignal
   onThinking?: (delta: string) => void
   onContent?: (delta: string) => void
@@ -1150,7 +1151,8 @@ async function fetchDataProcessGenerate(
     // 真实接口（0903）：SSE 结构化事件流。POST 不能用原生 EventSource，改用 fetch + ReadableStream，
     // 按 event/data 行解析 thinking/content/done，UI 负责思考面板和代码区回显；若后端仍回纯文本，
     // 保留旧流式兜底。
-    const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'text/event-stream' }
+    const headers: Record<string, string> = { Accept: 'text/event-stream' }
+    if (!options?.file) headers['Content-Type'] = 'application/json'
     const token = readStoredToken()
     if (token) headers[ACCESS_TOKEN_HEADER] = token
     const controller = new AbortController()
@@ -1167,7 +1169,14 @@ async function fetchDataProcessGenerate(
         method: 'POST',
         credentials: 'include',
         headers,
-        body: JSON.stringify(payload),
+        body: options?.file
+          ? (() => {
+              const formData = new FormData()
+              formData.append('request', new Blob([JSON.stringify(payload)], { type: 'application/json' }))
+              formData.append('file', options.file as File)
+              return formData
+            })()
+          : JSON.stringify(payload),
         signal: controller.signal,
       })
       if (isSessionExpiredRedirect(res)) {
@@ -1176,7 +1185,16 @@ async function fetchDataProcessGenerate(
       }
       if (!res.ok) {
         let detail = ''
-        try { detail = (await res.text()).trim() } catch { /* ignore */ }
+        try {
+          const raw = await res.text()
+          try {
+            const parsed = JSON.parse(raw) as Record<string, unknown>
+            detail = String(parsed.error ?? parsed.message ?? parsed.msg ?? '')
+          } catch {
+            detail = raw.trim()
+          }
+        } catch { /* ignore */ }
+        if (!detail && res.status === 413) detail = '文件或请求体超过大小限制，请压缩或更换文件'
         throw new Error(detail ? `请求失败 ${res.status}: ${detail.slice(0, 200)}` : `请求失败 ${res.status}`)
       }
       let text = ''
@@ -1188,9 +1206,11 @@ async function fetchDataProcessGenerate(
       let scriptPath = ''
       let doneMessage = ''
       let doneScript = ''
+      let doneSeen = false
       const emitEvent = (event: { event: string; data: string }) => {
         structured = true
         options?.onEvent?.(event)
+        if (doneSeen) return
         if (event.event === 'thinking') {
           options?.onThinking?.(event.data)
           return
@@ -1203,6 +1223,7 @@ async function fetchDataProcessGenerate(
           return
         }
         if (event.event === 'done') {
+          doneSeen = true
           const trimmed = event.data.trim()
           if (!trimmed) return
           try {
@@ -1212,6 +1233,9 @@ async function fetchDataProcessGenerate(
             if (parsed.script != null) doneScript = String(parsed.script)
           } catch {
             doneMessage = trimmed
+          }
+          if (!scriptPath) {
+            scriptPath = doneMessage.match(/(?:当前文件已保存到|保存到|保存至)\s*([^\s]+)/)?.[1] || ''
           }
           return
         }
