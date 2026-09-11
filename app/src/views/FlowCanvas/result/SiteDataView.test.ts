@@ -11,6 +11,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import SiteDataView from './SiteDataView.vue'
+import DataGrid from './DataGrid.vue'
 import { readSqlConditions } from '@/utils/sqlConditionHistory'
 import { dataApi, siteApi, sourceApi } from '@/api'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
@@ -909,5 +910,70 @@ describe('SiteDataView · 每次加载条数', () => {
     const second = mountView('site-b')
     await pickTable(second)
     expect(second.text()).toContain('已加载 200 条')
+  })
+})
+
+// 列头排序（2026-09-11）。此前这个视图根本没接 DataGrid 的 sort-change——列头画着 ↕、
+// 点了毫无反应，而隔壁具体源视图是好的。只开放 ENTRY_ID：归并键固定取 dataId，
+// 按别的列排出来的全局顺序是假的。
+describe('SiteDataView · 列头排序', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  async function mountWithRows() {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [row('a', '1')] })
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    return { wrapper, query }
+  }
+
+  it('默认按 ENTRY_ID 降序，并把方向发给后端', async () => {
+    const { query } = await mountWithRows()
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ sortField: 'ENTRY_ID', sortOrder: 'descend' }))
+  })
+
+  it('点 ENTRY_ID 列头切成升序：重新查询且方向跟着变', async () => {
+    const { wrapper, query } = await mountWithRows()
+    const grid = wrapper.findComponent(DataGrid)
+    expect(grid.props('sortableProps')).toEqual(['ENTRY_ID'])
+
+    grid.vm.$emit('sort-change', 'ENTRY_ID', 'ascend')
+    await flushPromises()
+
+    expect(grid.props('sortOrder')).toBe('ascend')
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ sortOrder: 'ascend' }))
+  })
+
+  // DataGrid 是三态（升→降→取消），归并视图没有"不排序"这一态，压成两态：取消＝翻方向。
+  // 不这么做点列头会原地打转——sortField 固定 ENTRY_ID + 初始降序，第一次点就落进第三态。
+  it('收到三态里的"取消"时翻到另一个方向，而不是停在原地', async () => {
+    const { wrapper, query } = await mountWithRows()
+    const grid = wrapper.findComponent(DataGrid)
+
+    grid.vm.$emit('sort-change', '', '')
+    await flushPromises()
+    expect(grid.props('sortOrder')).toBe('ascend')
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ sortOrder: 'ascend' }))
+
+    grid.vm.$emit('sort-change', '', '')
+    await flushPromises()
+    expect(grid.props('sortOrder')).toBe('descend')
+  })
+
+  // 走真实点击路径（而不是直接 emit）：上面那个 bug 就是因为测试只 emit、
+  // 没经过 DataGrid 的三态计算，才没被拦住
+  it('真的点 ENTRY_ID 列头能在升降之间切换', async () => {
+    const { wrapper } = await mountWithRows()
+    const clean = (t: string) => t.replace(/[↕↑↓]\s*$/, '').trim()
+    const th = wrapper.findAll('.dg-table thead th').find((x) => clean(x.text()) === 'ENTRY_ID')!
+
+    await th.trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent(DataGrid).props('sortOrder')).toBe('ascend')
+
+    await th.trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent(DataGrid).props('sortOrder')).toBe('descend')
   })
 })

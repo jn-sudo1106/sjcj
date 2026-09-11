@@ -182,3 +182,41 @@ describe('siteDataMerge：多源 top-K 归并', () => {
     expect(result.rows.map((r) => r.dataId)).toEqual(['50', '45', '30', '10'])
   })
 })
+
+// 2026-09-11：列头排序接上之后，归并必须能按两个方向弹。原先 mergeKey/popMax/sortDesc
+// 三处都写死降序，升序时会弹出最大的那条，顺序整个反过来。
+describe('mergeLoadMore · 归并方向', () => {
+  // 三个源各自有序，合起来的全局顺序才是归并要保证的东西
+  const pages: Record<string, { dataId: string }[][]> = {
+    a: [[{ dataId: '10' }, { dataId: '7' }]],
+    b: [[{ dataId: '9' }, { dataId: '3' }]],
+    c: [[{ dataId: '8' }, { dataId: '1' }]],
+  }
+  const fetchPage = async (sourceId: string, page: number) => pages[sourceId][page - 1] ?? []
+
+  it('默认降序：全局从大到小', async () => {
+    const states = initMergeState<{ dataId: string }>(['a', 'b', 'c'])
+    const r = await mergeLoadMore(states, 6, 2, fetchPage)
+    expect(r.rows.map((x) => x.dataId)).toEqual(['10', '9', '8', '7', '3', '1'])
+  })
+
+  it('升序：全局从小到大，而不是把降序结果倒过来', async () => {
+    // 升序时每个源自己的分页也按升序给（与 fetchPage 传的 sortOrder 一致），
+    // 这是归并成立的前提
+    const asc: Record<string, { dataId: string }[][]> = {
+      a: [[{ dataId: '7' }, { dataId: '10' }]],
+      b: [[{ dataId: '3' }, { dataId: '9' }]],
+      c: [[{ dataId: '1' }, { dataId: '8' }]],
+    }
+    const states = initMergeState<{ dataId: string }>(['a', 'b', 'c'])
+    const r = await mergeLoadMore(states, 6, 2, async (s, p) => asc[s][p - 1] ?? [], Infinity, 'ascend')
+    expect(r.rows.map((x) => x.dataId)).toEqual(['1', '3', '7', '8', '9', '10'])
+  })
+
+  it('升序下同样能正确报告取完', async () => {
+    const states = initMergeState<{ dataId: string }>(['a'])
+    const r = await mergeLoadMore(states, 10, 2, async (_s, p) => (p === 1 ? [{ dataId: '1' }] : []), Infinity, 'ascend')
+    expect(r.rows).toHaveLength(1)
+    expect(r.allExhausted).toBe(true)
+  })
+})

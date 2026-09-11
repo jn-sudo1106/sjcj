@@ -36,13 +36,16 @@ function mergeKey<T extends MergeRow>(row: T): number {
   return Number.isFinite(n) ? n : 0
 }
 
-function sortDesc<T extends MergeRow>(rows: T[]): T[] {
-  return [...rows].sort((a, b) => mergeKey(b) - mergeKey(a))
+/** 归并方向。只有这一个维度可调——归并键固定是 dataId(ENTRY_ID)，见本文件顶部说明。 */
+export type MergeOrder = 'ascend' | 'descend'
+
+function sortRows<T extends MergeRow>(rows: T[], order: MergeOrder): T[] {
+  return [...rows].sort((a, b) => (order === 'ascend' ? mergeKey(a) - mergeKey(b) : mergeKey(b) - mergeKey(a)))
 }
 
 export type FetchPage<T extends MergeRow = DataRow> = (sourceId: string, page: number, size: number) => Promise<T[]>
 
-async function refill<T extends MergeRow>(states: MergeSourceState<T>[], size: number, fetchPage: FetchPage<T>, maxParallel: number): Promise<void> {
+async function refill<T extends MergeRow>(states: MergeSourceState<T>[], size: number, fetchPage: FetchPage<T>, maxParallel: number, order: MergeOrder): Promise<void> {
   // 已经标记 failed 的源本轮不重试，避免一个持续报错的源在同一次 load more 里被反复打；
   // failed 会在下一次 mergeLoadMore 调用开头统一重置，下次点"加载更多"会再给一次机会。
   const needRefill = states.filter((s) => !s.exhausted && !s.failed && s.buffer.length === 0)
@@ -52,7 +55,7 @@ async function refill<T extends MergeRow>(states: MergeSourceState<T>[], size: n
     while (next < needRefill.length) {
       const s = needRefill[next++]
       try {
-        const rows = sortDesc(await fetchPage(s.sourceId, s.nextPage, size))
+        const rows = sortRows(await fetchPage(s.sourceId, s.nextPage, size), order)
         s.buffer = rows
         s.nextPage += 1
         s.exhausted = rows.length < size
@@ -64,12 +67,19 @@ async function refill<T extends MergeRow>(states: MergeSourceState<T>[], size: n
   }))
 }
 
-/** 弹出当前所有源 buffer 里归并键最大的一条；调用前必须先 refill，否则会漏掉刚好 buffer 空的源。 */
-function popMax<T extends MergeRow>(states: MergeSourceState<T>[]): T | null {
+/**
+ * 弹出当前所有源 buffer 里**排在最前**的一条：降序取最大、升序取最小。
+ * 调用前必须先 refill，否则会漏掉刚好 buffer 空的源。
+ */
+function popNext<T extends MergeRow>(states: MergeSourceState<T>[], order: MergeOrder): T | null {
   let best: MergeSourceState<T> | null = null
   for (const s of states) {
     if (!s.buffer.length) continue
-    if (!best || mergeKey(s.buffer[0]) > mergeKey(best.buffer[0])) best = s
+    if (!best) { best = s; continue }
+    const ahead = order === 'ascend'
+      ? mergeKey(s.buffer[0]) < mergeKey(best.buffer[0])
+      : mergeKey(s.buffer[0]) > mergeKey(best.buffer[0])
+    if (ahead) best = s
   }
   return best ? (best.buffer.shift() ?? null) : null
 }
@@ -95,14 +105,15 @@ export async function mergeLoadMore<T extends MergeRow>(
   size: number,
   fetchPage: FetchPage<T>,
   maxParallel = Number.POSITIVE_INFINITY,
+  order: MergeOrder = 'descend',
 ): Promise<MergeLoadMoreResult<T>> {
   states.forEach((s) => { s.failed = false; s.error = '' })
   const rows: T[] = []
   const failedSourceIds = new Set<string>()
   while (rows.length < count) {
-    await refill(states, size, fetchPage, maxParallel)
+    await refill(states, size, fetchPage, maxParallel, order)
     states.forEach((s) => { if (s.failed) failedSourceIds.add(s.sourceId) })
-    const picked = popMax(states)
+    const picked = popNext(states, order)
     if (!picked) break
     rows.push(picked)
   }

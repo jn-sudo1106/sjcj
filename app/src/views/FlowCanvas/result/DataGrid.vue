@@ -33,6 +33,8 @@ const props = withDefaults(defineProps<{
    *  （watch pageForm.total → allSort），大表按无索引的业务列排序会拖垮库。
    *  ENTRY_ID / SOURCE_ID / 状态这些固定列不受此限制，旧平台也是始终可排。 */
   allowColumnSort?: boolean
+  /** 可排序列白名单（物理列名）。不传＝沿用 allowColumnSort + FIXED_SORTABLE 的老口径。 */
+  sortableProps?: string[]
   /** 触底自动加载：为 true 时在滚动容器底部装一个哨兵，进入视口就 emit reach-end。
    *  调用方在数据耗尽 / 正在加载时把它置 false，观察器随之解除。 */
   autoLoadMore?: boolean
@@ -65,6 +67,10 @@ function sortKeyOf(field: { prop: string; columnName?: string }): string {
   return field.columnName || field.prop
 }
 function canSort(field: { prop: string; columnName?: string }): boolean {
+  // sortableProps 是白名单，给"只有个别列能真排"的场景用（网站汇总的归并视图：
+  // 归并键固定是 ENTRY_ID，按别的列排出来的顺序是假的）。传了就只认它，
+  // 连 FIXED_SORTABLE 也不放行——那几个在归并视图下同样排不了。
+  if (props.sortableProps) return props.sortableProps.includes(sortKeyOf(field))
   return FIXED_SORTABLE.has(sortKeyOf(field)) || props.allowColumnSort
 }
 function sortIndicator(field: { prop: string; columnName?: string }): string {

@@ -43,7 +43,7 @@ import { APPEND_SIZE_OPTIONS, readAppendSize, writeAppendSize } from './pageSize
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 import SiteTableSelect from './components/SiteTableSelect.vue'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
-import { initMergeState, mergeLoadMore, type MergeLoadMoreResult, type MergeSourceState } from './siteDataMerge'
+import { initMergeState, mergeLoadMore, type MergeLoadMoreResult, type MergeOrder, type MergeSourceState } from './siteDataMerge'
 import RowDetailFields from './RowDetailFields.vue'
 import { fieldsFromShowItems, fieldsFromTableMeta } from './rowDetailFields'
 import { readFieldPreset, readShowEmpty, visibleDetailProps, writeFieldPreset, writeShowEmpty, type RowFieldPreset } from './rowDetailPrefs'
@@ -71,6 +71,30 @@ function openSourceView() {
 // 每个源向后端要多少条（固定）。0910 会议把「每次加载条数」做成可选之后，这个值刻意
 // 不跟着用户的选择走：用户选 100 是想"一屏多看点"，若透传成"每源每页取 100 条"，
 // 源多的网站请求体积和内存直接翻五倍，反而更卡。两件事在此拆开。
+/**
+ * 列头排序（2026-09-11）。此前这个视图**根本没接** DataGrid 的 sort-change——列头照常
+ * 画着 ↕、点了却毫无反应，而隔壁具体源视图是好的，纯属漏接。
+ *
+ * 只开放 ENTRY_ID 一列：这里是多源 top-K 归并，归并键固定取 dataId(=ENTRY_ID)，
+ * 只有按它排出来的全局顺序才是真的。若放开业务列，后端会按该列排、前端却仍按 dataId
+ * 弹出，结果是"每个源内部排好了、合起来还是乱的"——比现在点了没反应更糟，
+ * 因为它看着像生效了。要支持任意列得先改造归并键，那是另一件事。
+ */
+const SORTABLE_PROPS = ['ENTRY_ID']
+const sortOrder = ref<MergeOrder>('descend')
+function onSortChange(_field: string, order: 'ascend' | 'descend' | '') {
+  // DataGrid 走的是三态循环（升 → 降 → 取消），但归并视图**没有"不排序"这一态**：
+  // 归并每弹一条都要比较归并键，方向必须确定。所以这里把三态压成两态——
+  // 收到"取消"就翻到另一个方向。
+  //
+  // 不这么做的话点列头会原地打转：sortField 固定是 ENTRY_ID、初始又是降序，
+  // DataGrid 那边一算就落进第三态发出 ('', '')，若把它当成"回到默认降序"，
+  // 就永远切不到升序（2026-09-11 实测，先前版本正是这个毛病）。
+  if (order === 'ascend' || order === 'descend') sortOrder.value = order
+  else sortOrder.value = sortOrder.value === 'descend' ? 'ascend' : 'descend'
+  void resetAndLoad()
+}
+
 const SOURCE_PAGE_SIZE = 20
 // 表格每次追加多少行（用户可选，见 pageSizePref.ts）。改动只影响下一次加载，
 // 不重置已经加载出来的行——用户是滚到一半才嫌慢/嫌少的，清空重来等于惩罚他。
@@ -328,7 +352,9 @@ async function fetchPage(sourceId: string, page: number, size: number, condition
     // 三次真实调用返回了方向相反的不同批次数据，不是静默忽略。客户端二次排序兜底仍保留
     // （siteDataMerge.ts），但已不再是"建立在未验证假设上"，是多源归并后的防御性再排序。
     sortField: 'ENTRY_ID',
-    sortOrder: 'descend',
+    // 必须与归并方向一致：归并假设每个源返回的分页本身就按归并键有序（见 siteDataMerge.ts
+    // 顶部），后端排一个方向、前端归并另一个方向，弹出来的顺序就是错的。
+    sortOrder: sortOrder.value,
   })
   return result.list
 }
@@ -358,7 +384,7 @@ async function loadMore() {
         const list = await fetchPage(sourceId, page, size, condition)
         queried = true
         return list
-      }, MAX_PARALLEL_REQUESTS)
+      }, MAX_PARALLEL_REQUESTS, sortOrder.value)
     if (id !== requestId) return
     if (queried && !result.failedSources.length) rememberSqlCondition(condition.tableId, condition.sql)
     rows.value = [...rows.value, ...result.rows]
@@ -848,6 +874,10 @@ function onCellFile(path: string, _field?: unknown, sourceUrl = '') {
         :selectable="canPickRows"
         :selected-ids="selectedRowIds"
         :auto-load-more="!allExhausted && !loadingMore && !autoLoadFailed"
+        :sort-field="'ENTRY_ID'"
+        :sort-order="sortOrder"
+        :sortable-props="SORTABLE_PROPS"
+        @sort-change="onSortChange"
         @reach-end="loadMore"
         :hide-actions="!!selectedSourceId"
         @update:selected-ids="selectedRowIds = $event"
