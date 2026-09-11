@@ -42,3 +42,32 @@ describe('detectBlockedArchive', () => {
     expect(t).toBe('正文')
   })
 })
+
+// 2026-09-11 实测踩到的：某些存档里关键词只出现在 script / 属性中，可见文本里没有。
+// 此前会从文本开头硬切当"原话"，切出的是「视频 小程序 赞，轻点两下取消赞」这类页脚碎词，
+// 弹窗上引述了一堆标点和无关词，看着像乱码。
+describe('detectBlockedArchive · 引述只取可见文本里的原话', () => {
+  it('关键词只在 script 里时不引述，改按"没有正文"表述', () => {
+    const html = `<html><head><script>var captchaTip='请稍后重试'</script></head>`
+      + `<body><div>： ， 。 视频 小程序 赞 ，轻点两下取消赞 在看</div></body></html>`
+    const v = detectBlockedArchive(html)
+    expect(v.blocked).toBe(true)
+    expect(v.reason).toBe('thin')
+    // 关键：不要把页脚碎词当原话引出来
+    expect(v.hint).toBe('')
+    expect(v.textLength).toBeGreaterThan(0)
+  })
+
+  it('认出拦截文案时带上 reason=pattern 与原话', () => {
+    const v = detectBlockedArchive('<html><body><p>当前环境异常，完成验证后即可继续访问。</p></body></html>')
+    expect(v.reason).toBe('pattern')
+    expect(v.hint).toContain('完成验证后即可继续访问')
+    // 引述截到句末，不拖上后面的碎词
+    expect(v.hint.endsWith('。')).toBe(true)
+  })
+
+  it('正文够长且关键词只在源码里时不判为被拦', () => {
+    const html = `<html><head><script>var t='人机验证'</script></head><body>${'正文内容。'.repeat(80)}</body></html>`
+    expect(detectBlockedArchive(html).blocked).toBe(false)
+  })
+})

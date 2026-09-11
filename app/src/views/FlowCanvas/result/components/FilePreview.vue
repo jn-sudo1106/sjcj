@@ -181,9 +181,12 @@ function onExcelError(e: unknown) {
     <div v-else-if="blocked" class="fp-blocked" data-testid="file-preview-blocked">
       <div class="fp-blocked-title">这条数据采集时被对方站点拦下了</div>
       <p class="fp-blocked-body">
-        存档里是一张拦截/验证页，不是文章正文<template v-if="sizeNum">（仅 {{ (sizeNum / 1024).toFixed(0) }} KB，同类正文通常在 MB 级）</template>。
+        <template v-if="blocked.reason === 'pattern'">存档里是一张拦截/验证页，不是文章正文</template>
+        <template v-else>存档里没有正文，只有 {{ blocked.textLength }} 个字的页面框架</template><template v-if="sizeNum">（仅 {{ (sizeNum / 1024).toFixed(0) }} KB，同类正文通常在 MB 级）</template>。
       </p>
-      <p v-if="blocked.hint" class="fp-blocked-quote">「{{ blocked.hint }}」</p>
+      <!-- 只有真从**可见文本**里认出拦截提示时才引述；否则没有原话可引，
+           硬引会引出「视频 小程序 赞」这类页脚碎词（2026-09-11 实测踩过）。 -->
+      <p v-if="blocked.reason === 'pattern' && blocked.hint" class="fp-blocked-quote">「{{ blocked.hint }}」</p>
       <p class="fp-blocked-body muted">这不代表原文打不开——原文多半正常，只是这次没采到。</p>
     </div>
 
@@ -228,11 +231,11 @@ function onExcelError(e: unknown) {
 <style scoped>
 /* 采集被拦：说明块而不是错误块——用中性的琥珀色，不要红。红色会读成"系统出错了"，
    而这里要传达的是"数据没采到"，两者归因完全不同。 */
-.fp-blocked { padding: 28px 24px; text-align: center; }
+.fp-blocked { flex: 1; min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 28px 24px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fffdf7; text-align: center; }
 .fp-blocked-title { font-size: 14px; font-weight: 700; color: #92400e; margin-bottom: 8px; }
 .fp-blocked-body { margin: 0 auto 6px; max-width: 46em; font-size: 12.5px; color: var(--rc-text-2); line-height: 1.7; }
 .fp-blocked-body.muted { color: var(--rc-faint); }
-.fp-blocked-quote { margin: 10px auto; max-width: 46em; padding: 8px 12px; border-left: 3px solid #fbbf24; background: #fffbeb; color: #92400e; font-size: 12px; text-align: left; word-break: break-all; }
+.fp-blocked-quote { margin: 10px 0; max-width: 46em; padding: 8px 12px; border-left: 3px solid #fbbf24; background: #fffbeb; color: #92400e; font-size: 12px; text-align: left; word-break: break-all; }
 
 .fp-wrap { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
 .fp-hint { display: flex; align-items: center; gap: 10px; padding: 14px; border-radius: 8px; background: #f8fafc; color: var(--rc-text-2); font-size: 12px; }

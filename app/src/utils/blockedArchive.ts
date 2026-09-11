@@ -59,8 +59,16 @@ export function visibleTextOf(html: string): string {
 export interface BlockedArchiveVerdict {
   /** 判定为"采集时被拦下"，存档里不是正文 */
   blocked: boolean
-  /** 命中的特征文案，用于在界面上引述原文，比我们自己转述更有说服力 */
+  /**
+   * 判定依据。两种要分开，因为界面上该说的话不一样：
+   *  - `pattern` 认出了拦截文案，能引述原话当证据；
+   *  - `thin`    只是正文短得不像文章，**没有原话可引**。
+   */
+  reason: 'pattern' | 'thin' | ''
+  /** 仅 reason=pattern 时有值：存档里那句拦截提示的原文 */
   hint: string
+  /** 存档里可见文本的字数，reason=thin 时用来说明"短到什么程度" */
+  textLength: number
 }
 
 /**
@@ -74,19 +82,29 @@ export interface BlockedArchiveVerdict {
  */
 export function detectBlockedArchive(html: string): BlockedArchiveVerdict {
   const text = visibleTextOf(html)
-  const hit = BLOCKED_PATTERNS.find((p) => text.includes(p) || html.includes(p))
+  const thin = text.length > 0 && text.length < THIN_TEXT_CHARS
+
+  // 只认**出现在可见文本里**的命中：关键词若只在 script 或属性里（比如页面自带的
+  // 验证码 SDK 变量名），界面上就没有原话可引，硬从文本开头切会切出
+  // 「视频 小程序 赞，轻点两下取消赞」这类页脚碎词，引述看着像乱码（2026-09-11 实测）。
+  const hit = BLOCKED_PATTERNS.find((p) => text.includes(p))
   if (hit) {
-    // 把命中处那句话摘出来当证据，比只报"命中关键词"有用。
-    // **截到句末为止**：拦截页正文后面常跟着「视频 小程序 赞…」这类页脚碎词，
-    // 按固定长度硬切会把它们一起带进来，引述看着像乱码。
-    const at = text.indexOf(hit)
-    const from = at >= 0 ? Math.max(0, at - 10) : 0
+    // 截到句末为止，同样是为了别把后面的页脚碎词带进来
+    const from = Math.max(0, text.indexOf(hit) - 10)
     const window = text.slice(from, from + 80)
     const end = window.search(/[。！？.!?]/)
-    return { blocked: true, hint: (end > 0 ? window.slice(0, end + 1) : window.slice(0, 40)).trim() }
+    return {
+      blocked: true,
+      reason: 'pattern',
+      hint: (end > 0 ? window.slice(0, end + 1) : window.slice(0, 40)).trim(),
+      textLength: text.length,
+    }
   }
-  if (text.length > 0 && text.length < THIN_TEXT_CHARS) {
-    return { blocked: true, hint: text }
+
+  // 正文短得不像文章：也判被拦，但没有原话可引，只报"短到什么程度"。
+  // 关键词只在源码里命中的情况也落到这里——那种存档同样是空壳。
+  if (thin || BLOCKED_PATTERNS.some((p) => html.includes(p))) {
+    return { blocked: thin, reason: thin ? 'thin' : '', hint: '', textLength: text.length }
   }
-  return { blocked: false, hint: '' }
+  return { blocked: false, reason: '', hint: '', textLength: text.length }
 }
