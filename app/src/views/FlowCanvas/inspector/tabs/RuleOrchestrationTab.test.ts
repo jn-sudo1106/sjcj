@@ -205,7 +205,20 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(modelRow.classes()).toContain('nowrap')
   })
 
-  it('主面板生成脚本时在下方流式展示思考过程和结果', async () => {
+  it('进入编排配置时已有脚本仅显示生成结果和脚本路径', async () => {
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', {
+      script: 'def main(sku_id):\n    return {"sku_name": sku_id}\n',
+      scriptPath: '/rules/saved/orch-173.py',
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="main-stream-result"]').exists()).toBe(true)
+    expect(wrapper.find('.rc-main-result-head').text()).toContain('/rules/saved/orch-173.py')
+    expect(wrapper.find('.rc-main-result-code').exists()).toBe(false)
+  })
+
+  it('主面板生成脚本完成后保留生成结果和脚本路径，但隐藏思考与脚本预览', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     flow.patchRuleConfig('rule-1', { describe: '按 sku_id 生成 sku_name', script: '', scriptPath: '' })
     await flushPromises()
@@ -222,10 +235,11 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await flushPromises()
 
     expect(ruleApi.dataProcessGenerate).toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="main-stream-thinking"]').text()).toContain('先分析规则描述')
+    expect(wrapper.find('[data-testid="main-stream-thinking"]').exists()).toBe(false)
     expect(wrapper.find('.rc-main-result-head').text()).toContain('/rules/generated/orch-173.py')
-    expect(wrapper.find('[data-testid="main-stream-result"]').text()).toContain('def main(sku_id)')
-    expect(wrapper.find('[data-testid="main-stream-result"]').text()).toContain('return {"sku_name": sku_id}')
+    expect(wrapper.find('[data-testid="main-stream-result"]').exists()).toBe(true)
+    expect(wrapper.find('.rc-main-result-code').exists()).toBe(false)
+    expect(flow.configs['rule-1'].ruleCfg?.script).toContain('def main(sku_id)')
   })
 
   it('主面板生成中点击取消：中断请求并保留已输出的脚本', async () => {
@@ -314,7 +328,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await flushPromises()
   })
 
-  it('主面板生成结果原样保留流式脚本的首尾空白、空格和缩进', async () => {
+  it('生成接口未触发 onDone 时，成功返回后仍隐藏脚本预览', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     const script = ' \ndef process():\n    return {"ok": True}\n'
     flow.patchRuleConfig('rule-1', { describe: '按 sku_id 生成 sku_name', script: '', scriptPath: '' })
@@ -327,7 +341,9 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await wrapper.find('[data-testid="main-generate-script"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('.rc-main-result-code').element.textContent).toBe(script)
+    expect(wrapper.find('.rc-main-result-head').text()).toContain('/rules/generated/orch-173.py')
+    expect(wrapper.find('.rc-main-result-code').exists()).toBe(false)
+    expect(flow.configs['rule-1'].ruleCfg?.script).toBe(script)
   })
 
   it('主面板思考过程流式追加时会自动滚动到底部', async () => {
@@ -392,7 +408,8 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       await wrapper.find('[data-testid="main-generate-script"]').trigger('click')
       await flushPromises()
 
-      expect(wrapper.find('[data-testid="main-stream-result"]').text()).toContain('return {"sku_name": sku_id}')
+      expect(flow.configs['rule-1'].ruleCfg?.script).toContain('return {"sku_name": sku_id}')
+      expect(wrapper.find('.rc-main-result-code').exists()).toBe(false)
       expect(scrollSpy).toHaveBeenCalledWith(680)
     } finally {
       if (scrollHeightDesc) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', scrollHeightDesc)

@@ -591,7 +591,10 @@ async function onGenerateScript(
     // 流式分支的 scriptPath 由 onDone 从提示文本提取并 patch，res.scriptPath 为空——
     // 这里只有 res.scriptPath 有值时才覆盖，避免把流式提取到的路径清空
     patch({ script: res.script, ...(res.scriptPath ? { scriptPath: res.scriptPath } : {}) })
-    if (isRule.value) generationMessage.value = generationMessage.value || '保存完成'
+    if (isRule.value) {
+      generationState.value = 'done'
+      generationMessage.value = generationMessage.value || '保存完成'
+    }
     ElMessage.success(isRule.value ? '脚本已生成' : '配置已生成')
   } catch (e) {
     if (controller.signal.aborted || (e as Error)?.message?.includes('已取消')) {
@@ -859,7 +862,7 @@ function onTestScript() {
       {{ codeTestLoading ? '测试中...' : '测试脚本' }}
     </button>
   </div>
-  <div v-if="isRule && (generating || thinkingText.trim() || generationState === 'done' || generationState === 'error')" class="rc-main-stream" data-testid="main-stream-thinking">
+  <div v-if="isRule && generationState !== 'done' && (generating || thinkingText.trim() || generationState === 'error')" class="rc-main-stream" data-testid="main-stream-thinking">
     <div class="rc-main-stream-head">
       <span>思考过程</span>
       <span>{{ generationState === 'error' ? '出错' : generating ? '生成中' : '已完成' }}</span>
@@ -879,7 +882,7 @@ function onTestScript() {
         {{ mainResultLabel }}
       </button>
     </div>
-    <pre ref="mainResultRef" class="rc-main-result-code">{{ orchCfg.script || '等待模型输出结果…' }}</pre>
+    <pre v-if="generating || generationState === 'content' || generationState === 'error'" ref="mainResultRef" class="rc-main-result-code">{{ orchCfg.script || '等待模型输出结果…' }}</pre>
   </div>
   <div v-if="isMonitor && (codeTestLoading || codeTestResult)" class="rc-main-result" data-testid="monitor-test-result">
     <div class="rc-main-result-head">
