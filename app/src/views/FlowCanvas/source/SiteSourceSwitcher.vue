@@ -20,6 +20,8 @@ import EditSourceDialog from './EditSourceDialog.vue'
 import { withoutComposition } from '@/utils/enterKey'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { csvDateTag, downloadCsv, toCsv } from '@/utils/csv'
+import { Close, Download } from '@element-plus/icons-vue'
 
 const props = defineProps<{ siteId: string; activeKey: string }>()
 const emit = defineEmits<{ pick: [target: Source]; added: [Source]; compare: [rightId: string]; pickSite: [] }>()
@@ -111,6 +113,21 @@ const visibleRows = computed(() => filtered.value.slice(0, shownCount.value))
  *
  * 只在收窄时才加分母：源还在加载时 filtered 是空的，无条件显示分数会闪一下「0 / 6496」。
  */
+/**
+ * 把命中的源导出成 CSV（2026-09-11）。
+ *
+ * 这批源是前端算出来的（反查命中 + 可能再叠加了搜索），后端没有对应的导出接口，
+ * 所以在前端拼文件——与数据视图那个「导出 Excel」不是一回事，那个是甩 URL 给后端。
+ *
+ * 导的是**眼前这份列表**而不是全部命中：标题上写着多少就导多少，所见即所得；
+ * 想要全部命中，把搜索词清掉即可。
+ */
+function exportHits() {
+  const rows = filtered.value.map((s) => [s.sourceId, s.name, hitCountBy.value.get(s.sourceId) ?? ''])
+  const csv = toCsv(['源 ID', '源名称', '命中条数'], rows)
+  downloadCsv(`${site.value?.name || '网站'}_条件命中源_${csvDateTag()}`, csv)
+}
+
 const listNarrowed = computed(() => !!hits.value.length || !!kw.value.trim())
 const listCountLabel = computed(() => {
   // 收窄时分母取 children 而不是 sourceCount：**分子分母必须同源**。分子是从 children
@@ -866,8 +883,27 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
         <!-- 反查命中态（2026-09-09）：列表已收窄到条件命中的源，给一条明确的出口，
              否则用户会以为侧栏坏了——6496 个源突然只剩十几个。 -->
         <div v-if="hits.length" class="ssw-hit-bar" data-testid="sidebar-backtrace-bar">
-          <span class="ssw-hit-text">条件命中 {{ hits.length }} 个源</span>
-          <button class="ssw-hit-clear" type="button" title="恢复显示全部源" @click="ws.clearBackTraceHits()">✕</button>
+          <span class="ssw-hit-text">命中 {{ hits.length }} 个源</span>
+          <!-- 导出与 ✕ 归在一处：两者都是"对这批命中源的操作"。
+               图标按钮沿用流程中心 .fc-icon-btn 的样式（无边框、hover 才出底色），
+               文字按钮在 200px 的侧栏里会把这一条挤到折行（2026-09-11 实测三位数就折）。
+               导的是**眼前这份列表**（含搜索过滤），与标题上的数字一致，所见即所得。 -->
+          <button
+            class="ssw-icon-btn"
+            type="button"
+            data-testid="sidebar-hit-export"
+            :title="`导出当前列表的 ${filtered.length} 个源（CSV：源 ID / 源名称 / 命中条数）`"
+            aria-label="导出命中的源"
+            @click="exportHits()"
+          ><el-icon><Download /></el-icon></button>
+          <button
+            class="ssw-icon-btn"
+            type="button"
+            data-testid="sidebar-hit-clear"
+            title="恢复显示全部源"
+            aria-label="恢复显示全部源"
+            @click="ws.clearBackTraceHits()"
+          ><el-icon><Close /></el-icon></button>
         </div>
         <input v-model="kw" class="ssw-search" :placeholder="hits.length ? '在命中的源里搜索' : '搜索源'" />
         <div class="ssw-list" @scroll.passive="onListScroll">
@@ -1325,10 +1361,16 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 .ssw-collapse { flex: none; border: 0; background: transparent; color: var(--rc-faint); font-size: 13px; cursor: pointer; width: 20px; height: 24px; border-radius: 5px; }
 .ssw-collapse:hover { background: #f1f5f9; color: var(--rc-text); }
 
-.ssw-hit-bar { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 0 8px 6px; padding: 5px 8px; border: 1px solid #bfdbfe; border-radius: 6px; background: var(--rc-primary-bg); }
-.ssw-hit-text { color: var(--rc-primary-ink); font-size: 11px; font-weight: 600; }
-.ssw-hit-clear { flex: none; border: 0; background: transparent; color: var(--rc-primary-ink); font-size: 12px; line-height: 1; cursor: pointer; }
-.ssw-hit-clear:hover { color: var(--rc-error); }
+.ssw-hit-bar { display: flex; align-items: center; gap: 6px; margin: 0 8px 6px; padding: 5px 8px; border: 1px solid #bfdbfe; border-radius: 6px; background: var(--rc-primary-bg); }
+/* 文字挤不下时省略，**不许折行**：折了会把整条顶成两行，右边两个按钮跟着错位
+   （2026-09-11 实测，源数是三位数时就会发生）。按钮 flex:none 固定，让位的永远是文字。 */
+.ssw-hit-text { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--rc-primary-ink); font-size: 11px; font-weight: 600; }
+/* 与流程中心 .fc-icon-btn 同一套：24px 见方、无边框、hover 才出底色。
+   侧栏只有 200px，两个文字按钮会把命中条挤到折行。 */
+.ssw-icon-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--rc-primary-ink); cursor: pointer; }
+.ssw-icon-btn :deep(svg) { width: 14px; height: 14px; }
+.ssw-icon-btn:hover { background: #fff; color: var(--rc-primary); }
+.ssw-icon-btn:focus-visible { outline: 2px solid var(--rc-primary); outline-offset: 1px; }
 /* 命中条数：跟在源名右侧，数字越大越靠前（列表已按它排序），一眼看出先查谁 */
 .ssw-hit-count { flex: none; margin-left: 6px; padding: 1px 6px; border-radius: 9px; background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-size: 10px; font-weight: 700; font-family: var(--rc-mono, monospace); }
 .ssw-search {

@@ -759,13 +759,37 @@ describe('SiteSourceSwitcher · 按条件查源的命中态', () => {
   it('给一条明确的出口：显示命中个数 + ✕ 恢复全部源', async () => {
     const { wrapper, ws } = await mountWithHits([{ sourceId: 's1', count: 40 }])
     const bar = wrapper.get('[data-testid="sidebar-backtrace-bar"]')
-    expect(bar.text()).toContain('条件命中 1 个源')
+    expect(bar.text()).toContain('命中 1 个源')
 
-    await bar.get('button').trigger('click')
+    // 按 testid 取而不是 bar.get('button')——条上还有「导出」，取第一个会点错（2026-09-11）
+    await bar.get('[data-testid="sidebar-hit-clear"]').trigger('click')
     await flushPromises()
     expect(ws.backTraceHitsOf('site-a')).toEqual([])
     // 恢复全部源，「全部（不根据源 ID 过滤）」那一行也随之回来——命中态下它是藏起来的
     expect(wrapper.findAll('.ssw-row-name').map((n) => n.text())).toEqual(['全部', '源一', '源二', '源三'])
+  })
+
+  // 导出的是**眼前这份列表**（含搜索过滤），与标题上的数字一致，所见即所得
+  it('导出命中的源：源 ID / 源名称 / 命中条数，按列表当前顺序', async () => {
+    const { wrapper } = await mountWithHits([{ sourceId: 's3', count: 2 }, { sourceId: 's1', count: 40 }])
+    const csv: string[] = []
+    const createURL = vi.spyOn(URL, 'createObjectURL').mockImplementation((b) => {
+      void (b as Blob).text().then((t) => csv.push(t))
+      return 'blob:mock'
+    })
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+
+    await wrapper.get('[data-testid="sidebar-hit-export"]').trigger('click')
+    await flushPromises()
+
+    expect(createURL).toHaveBeenCalled()
+    expect(click).toHaveBeenCalled()
+    // 列表按命中条数从多到少排，导出跟着这个顺序
+    expect(csv[0]).toContain('源 ID,源名称,命中条数')
+    expect(csv[0]).toContain('s1,源一,40')
+    expect(csv[0]).toContain('s3,源三,2')
+    expect(csv[0]).not.toContain('源二')
   })
 
   // 标题那个数字原先恒取 sourceCount：命中后写着「源列表 (6496)」而列表只有 40 行，
