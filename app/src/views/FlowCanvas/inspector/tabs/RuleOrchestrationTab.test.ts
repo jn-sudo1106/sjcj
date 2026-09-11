@@ -1527,6 +1527,19 @@ describe('RuleOrchestrationTab · 测试脚本切换数据视图', () => {
     expect(wrapper.find('[data-testid="monitor-test-result"]').exists()).toBe(false)
     expect(document.body.querySelector('[data-testid="monitor-script-test-dialog"]')?.textContent).toContain('"status": "ok"')
   })
+
+  it('数据监控节点在生成结果下方展示告警配置，规则处理节点不展示', async () => {
+    mockAssets()
+    const { wrapper: monitorWrapper } = mountOnMonitorNode()
+    await flushPromises()
+    expect(monitorWrapper.find('[data-testid="monitor-alert-config"]').exists()).toBe(true)
+    expect(monitorWrapper.find('[data-testid="alert-policy-row"]').text()).toContain('数据延迟超过阈值')
+
+    mockAssets()
+    const { wrapper: ruleWrapper } = mountOnRuleNode()
+    await flushPromises()
+    expect(ruleWrapper.find('[data-testid="monitor-alert-config"]').exists()).toBe(false)
+  })
 })
 
 // 0804 S3-3：非规则节点（采集）复用同一个 Tab，内容换成抓取配置 XML，走 execCfg 而不是 ruleCfg。

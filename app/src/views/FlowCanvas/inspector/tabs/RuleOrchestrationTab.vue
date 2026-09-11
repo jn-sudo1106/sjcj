@@ -26,6 +26,7 @@ import { promptCategoryGroupsForNode, promptListCategoryForNode, resolvePromptCa
 import { loadPromptTemplateForNode } from '../promptTemplateLoader'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
+import AlertConfigPanel from '../AlertConfigPanel.vue'
 
 const flow = useFlowStore()
 const router = useRouter()
@@ -957,6 +958,13 @@ function onTestScript() {
       <pre v-else class="rc-code-test-output">{{ codeTestResult || '暂无返回结果' }}</pre>
     </div>
   </el-dialog>
+  <AlertConfigPanel
+    v-if="isMonitor"
+    :node-id="id"
+    :node-title="cfg?.title ?? ''"
+    :source-label="sourceTableName"
+    :script-path="orchCfg.scriptPath"
+  />
 
   <template v-if="!isRule">
     <!-- 只读动作链摘要（0804 S3-4，方案 §3.1）：按 NextActionId 链表走出来的执行顺序，不可编辑 -->
