@@ -125,11 +125,12 @@ describe('流程详情抽屉 · 展开/收起配置区', () => {
     expect(w.find('[aria-label="流程节点"]').exists()).toBe(true)
   })
 
-  // 抽屉和画布页共用同一对 ui 标志：从数据视图（默认收起配置）过来时不能把收起态带进抽屉
+  // 抽屉和画布页共用同一对 ui 标志：画布页手动收起配置后，不能把收起态带进抽屉
   it('打开抽屉复位布局，不继承画布页留下的收起态', async () => {
     setActivePinia(createPinia())
     const ui = useUiStore()
     ui.applyViewLayoutDefault('data')
+    ui.toggleInspectorCollapsed()
     expect(ui.inspectorCollapsed).toBe(true)
     vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(FLOW)
 

@@ -37,8 +37,7 @@ const activeView = ref(normalizeSourceView(route.query.view))
 function syncActiveView() {
   activeView.value = sourceViewFromHash(window.location.hash)
 }
-// 切视图时套用该视图的默认布局（Z3-2）：数据视图默认把右侧配置收起、地方让给数据；
-// 流程视图展开——那边配置本来就是主角。
+// 切视图时套用默认布局（Z3-2）：流程和数据视图都保留右侧节点配置。
 //
 // ⚠️ 不能拿 `activeView` 当"上一次的值"来比：它在 setup 里就已经按 URL 初始化过了，
 // 首帧（immediate）比较必然相等，默认布局一次都套不上（2026-09-05 实测踩到）。
@@ -559,8 +558,8 @@ onUnmounted(() => {
             @mousedown="onSplitStart"
           />
           <div v-else class="rc-insp-splitter placeholder" />
-          <!-- 右侧配置区收起态（Z3-2）：数据视图默认走这条，把地方让给数据；
-               点窄条即可展开。与"中间收起"是相反的两端，互斥。 -->
+          <!-- 右侧配置区收起态（Z3-2）：点窄条即可展开。
+               与"中间收起"是相反的两端，互斥。 -->
           <button
             v-if="ui.inspectorCollapsed"
             type="button"

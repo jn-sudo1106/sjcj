@@ -274,7 +274,6 @@ onMounted(async () => {
             @click="ui.toggleInspectorExpanded()"
           >{{ ui.inspectorExpanded ? '⊟ 还原' : '⛶ 展开' }}</button>
           <!-- 收起整个配置区（Z3-2）：收起后变成右侧一条窄边，点它再展开。
-               数据视图默认就是收起态，这里给的是"收回去"的那一半——
                只有展开态能看到本按钮，收起态的入口在窄条本身。 -->
           <button
             class="rc-insp-expand"
