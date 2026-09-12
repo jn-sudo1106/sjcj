@@ -29,7 +29,32 @@ const FLOWS: FlowRecord[] = [
   } as unknown as FlowRecord,
 ]
 
-afterEach(() => vi.restoreAllMocks())
+// 用例结束要**把组件卸掉**（2026-09-12）。原先只清 mock，48 个用例挂出来的实例全留在
+// document 上越堆越多；弹层走 teleport 挂到 body，实例一多就互相干扰——全量跑时
+// 「名称为空不发请求」（靠后的用例）等 5 秒都等不到新建表单，而单跑这个文件 48/48 全过。
+// 同一套清理 SqlConditionEditor.test.ts 里早就有了。
+const mountedWrappers: { unmount: () => void }[] = []
+afterEach(() => {
+  mountedWrappers.splice(0).forEach((w) => w.unmount())
+  document.body.innerHTML = ''
+  vi.restoreAllMocks()
+})
+
+/**
+ * 打开「新建流程」小表单，并**等它真的挂上**。
+ *
+ * fireAction 之后只 flushPromises 是不够的：那只刷微任务，而表单在弹层里由 Element Plus
+ * 异步渲染。单跑这个文件通常已经挂好，全量跑（多 worker 抢 CPU）就会扑空，
+ * 报 `Unable to get [data-testid="create-flow-name"]`——看着像组件坏了，其实只是没等够
+ * （2026-09-12 实测：单跑 48/48 全过，全量跑偶发这一条）。
+ */
+async function openCreateForm(w: { find: (s: string) => { exists: () => boolean } }) {
+  useUiStore().fireAction('新建流程')
+  await flushPromises()
+  await vi.waitFor(() => {
+    if (!w.find('[data-testid="create-flow-name"]').exists()) throw new Error('新建流程表单还没挂上')
+  }, { timeout: 5000, interval: 20 })
+}
 
 async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length) {
   vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total, list: flows })
@@ -76,6 +101,7 @@ async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length) {
     },
   })
   await flushPromises()
+  mountedWrappers.push(wrapper)
   return wrapper
 }
 const rows = (w: Awaited<ReturnType<typeof mountCenter>>) => w.findAll('[data-testid="flow-center-row"]')
@@ -215,8 +241,7 @@ describe('流程中心 · 自动刷新', () => {
     const w = await mountCenter()
     const paged = vi.mocked(flowCenterApi.paged)
     paged.mockClear()
-    useUiStore().fireAction('新建流程')
-    await flushPromises()
+    await openCreateForm(w)
     await w.get('[data-testid="create-flow-name"]').setValue('新流程')
     await w.get('[data-testid="create-flow-submit"]').trigger('click')
     await flushPromises()
@@ -550,8 +575,7 @@ describe('流程中心 · 新建流程表单（Z7-5）', () => {
   it('分类/标签/描述都提交上去，标签统一成逗号串（中英文逗号、空格都收，去重去空）', async () => {
     const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue(FLOWS[0])
     const w = await mountCenter()
-    useUiStore().fireAction('新建流程')
-    await flushPromises()
+    await openCreateForm(w)
     await w.get('[data-testid="create-flow-name"]').setValue('带分类的流程')
     await w.get('[data-testid="create-flow-tags"]').setValue('新闻， 财经  新闻')
     await w.get('[data-testid="create-flow-desc"]').setValue('说明文字')
@@ -568,8 +592,7 @@ describe('流程中心 · 新建流程表单（Z7-5）', () => {
   it('没填的项**不进 payload**：saveFlow 是全量保存，传空串是"清空"而不是"不管"', async () => {
     const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue(FLOWS[0])
     const w = await mountCenter()
-    useUiStore().fireAction('新建流程')
-    await flushPromises()
+    await openCreateForm(w)
     await w.get('[data-testid="create-flow-name"]').setValue('只有名字')
     await w.get('[data-testid="create-flow-submit"]').trigger('click')
     await flushPromises()
@@ -583,8 +606,7 @@ describe('流程中心 · 新建流程表单（Z7-5）', () => {
   it('名称为空不发请求', async () => {
     const save = vi.spyOn(flowCenterApi, 'save')
     const w = await mountCenter()
-    useUiStore().fireAction('新建流程')
-    await flushPromises()
+    await openCreateForm(w)
     await w.get('[data-testid="create-flow-name"]').setValue('   ')
     await w.get('[data-testid="create-flow-submit"]').trigger('click')
     await flushPromises()
