@@ -503,7 +503,12 @@ export function entryTypeGroupFromLegacy(input: unknown): EntryTypeGroup {
 
 export function dataRowFromLegacy(input: unknown): DataRow {
   const record = asRecord(input)
-  if ('dataId' in record && 'acceptState' in record) return record as unknown as DataRow
+  if ('dataId' in record && 'acceptState' in record) {
+    const r = record as unknown as DataRow
+    if (!r.updateDt) r.updateDt = (record.UPDATE_DT ?? record.updateDt ?? record.update_dt ?? record.UPDATE_TIME ?? record.updateTime) as string | undefined
+    if (!r.createDt) r.createDt = (record.CREATE_DT ?? record.createDt ?? record.create_dt ?? record.CREATE_TIME ?? record.createTime) as string | undefined
+    return r
+  }
   // 旧 entryDataPaged 行的系统物理列（见「单表数据查看迁移」方案 §1.2）；
   // K0 是原始 JSON ID 也属系统列，K1 起才是动态值列。TASK_ID/RUN_ID 为 mock 遗留，随 T1c 移除。
   const systemKeys = new Set([
@@ -519,6 +524,8 @@ export function dataRowFromLegacy(input: unknown): DataRow {
     .map(([key, value]) => `${key}: ${String(value ?? '')}`)
     .join(' · ')
   const str = (value: unknown) => (value == null ? undefined : String(value))
+  const rawUpdateDt = record.UPDATE_DT ?? record.updateDt ?? record.update_dt ?? record.UPDATE_TIME ?? record.updateTime ?? record.UPDATED_AT ?? record.updated_at
+  const rawCreateDt = record.CREATE_DT ?? record.createDt ?? record.create_dt ?? record.CREATE_TIME ?? record.createTime ?? record.CREATED_AT ?? record.created_at
   return {
     dataId: String(record.ENTRY_ID ?? record.entryId ?? ''),
     sourceId: String(record.SOURCE_ID ?? record.sourceId ?? ''),
@@ -528,8 +535,8 @@ export function dataRowFromLegacy(input: unknown): DataRow {
     categoryId: str(record.CATEGORY_ID),
     state: str(record.STATE),
     nextFlag: str(record.NEXT_FLAG),
-    createDt: str(record.CREATE_DT),
-    updateDt: str(record.UPDATE_DT),
+    createDt: str(rawCreateDt),
+    updateDt: str(rawUpdateDt),
     k0: str(record.K0),
     seq: str(record.SEQ),
     times: str(record.TIMES),

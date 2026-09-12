@@ -189,6 +189,23 @@ describe('实体数据 API 旧平台 HTTP 契约', () => {
     expect(payload.type).toBe(' DESC ')
   })
 
+  it('排序：UPDATE_DT 与 updateDt 映射并直接按列名排序，不作数值化 hack', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, count: 0, data: [] }))
+    const { dataApi } = await import('./index')
+
+    await dataApi.rowQueryPaged({ tableId: '1042', sortField: 'UPDATE_DT', sortOrder: 'descend' })
+    let payload = decryptBody(fetchMock.mock.calls[0][1] as RequestInit)
+    expect(payload.sorted).toBe('0')
+    expect(payload.field).toBe('UPDATE_DT')
+    expect(payload.type).toBe(' DESC ')
+
+    await dataApi.rowQueryPaged({ tableId: '1042', sortField: 'updateDt', sortOrder: 'descend' })
+    payload = decryptBody(fetchMock.mock.calls[1][1] as RequestInit)
+    expect(payload.sorted).toBe('0')
+    expect(payload.field).toBe('UPDATE_DT')
+    expect(payload.type).toBe(' DESC ')
+  })
+
   it('无排序时 sorted 为字符串 "0"，不带 field/type', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, count: 0, data: [] }))
     const { dataApi } = await import('./index')

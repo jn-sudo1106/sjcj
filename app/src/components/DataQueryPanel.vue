@@ -66,16 +66,24 @@ const STATE_OPTIONS = [
   { value: 'E', label: '异常（E）' },
 ]
 
-const props = defineProps<{
-  tableId: string
-  sourceId?: string
-  columns: DataQueryColumn[]
-  /** 数据查看页专属的业务状态筛选；规则试跑等复用场景不展示。 */
-  showState?: boolean
-  selectable?: boolean
-  selectedKeys?: string[]
-  pageSize?: number
-}>()
+const props = withDefaults(
+  defineProps<{
+    tableId: string
+    sourceId?: string
+    columns: DataQueryColumn[]
+    /** 数据查看页专属的业务状态筛选；规则试跑等复用场景不展示。 */
+    showState?: boolean
+    selectable?: boolean
+    selectedKeys?: string[]
+    pageSize?: number
+    defaultSortField?: string
+    defaultSortOrder?: 'ascend' | 'descend' | ''
+  }>(),
+  {
+    defaultSortField: '',
+    defaultSortOrder: '',
+  },
+)
 const emit = defineEmits<{
   'row-click': [row: DataRow]
   'update:selectedKeys': [string[]]
@@ -92,8 +100,15 @@ const nextFlag = ref('')
 const minId = ref('')
 const maxId = ref('')
 const sql = ref('')
-const sortField = ref('')
-const sortOrder = ref<'ascend' | 'descend' | ''>('')
+const sortField = ref(props.defaultSortField)
+const sortOrder = ref<'ascend' | 'descend' | ''>(props.defaultSortOrder)
+const defaultTableSort = computed(() => {
+  if (!props.defaultSortField || !props.defaultSortOrder) return undefined
+  return {
+    prop: props.defaultSortField,
+    order: props.defaultSortOrder === 'ascend' ? 'ascending' : 'descending',
+  }
+})
 const advancedOpen = ref(false)
 
 function querySqlHistory(queryString: string, cb: (results: { value: string }[]) => void) {
@@ -198,8 +213,8 @@ function clearFilters() {
   nextFlag.value = ''
   minId.value = ''
   maxId.value = ''
-  sortField.value = ''
-  sortOrder.value = ''
+  sortField.value = props.defaultSortField
+  sortOrder.value = props.defaultSortOrder
   search()
 }
 /** 不改筛选条件/页码，原样重查一次（如外部数据变了但筛选条件没变） */
@@ -361,6 +376,7 @@ function onRowClick(row: DataRow) {
     <div v-loading="loading" class="rc-table-scroll dqp-table">
       <el-table
         :data="rows"
+        :default-sort="defaultTableSort"
         style="width: 100%"
         show-overflow-tooltip
         empty-text="没有查询到符合条件的记录"

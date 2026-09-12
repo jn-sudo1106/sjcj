@@ -7,12 +7,13 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, ruleApi, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery } from '@/api'
+import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, ruleApi, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery, type Step } from '@/api'
 import {
   buildHorizontalLayout, nodeOutputTable, nodeEntryCondition, conditionGroupLabel, conditionGroupIsSet,
   isDecision, isParallel, isFirstRunnableNode, firstRunnableNodeId, hasDirectSuccessor, directPredecessorIds, directSuccessorIds, directSuccessorIdsIncludingDisabled, type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
+import { fetchNextStepConfig } from '@/utils/flow/nextStepConfig'
 import { fetchChildCountsForPage, isPerRowMode, resolveChildTargets, type ChildCountCell } from '@/utils/flow/childCounts'
 import { confirmDanger } from '@/utils/confirmDanger'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
@@ -254,13 +255,39 @@ const branchTargets = computed(() => {
     }
   })
 })
-// 有输入表的中间节点仍按 0812：只在输入 / 合并「输入·输出」tab 勾行（输出 tab 是本节点产物）。
-// 没有输入表的节点（典型列表首节点）当前表就是输出，0824 要从这里勾行发给后继，勾选列必须留着。
+const successorIds = computed(() => {
+  if (!selectedNodeId.value) return []
+  return directSuccessorIds(flow.main, flow.configs, selectedNodeId.value, flow.branchGroups)
+})
+const successorTitles = computed(() => {
+  return successorIds.value.map((id) => flow.configs[id]?.title || id).join('、')
+})
+const successorTableId = computed(() => {
+  if (!successorIds.value.length) return ''
+  return flow.effectiveInputTableFor(successorIds.value[0]) || outputTableId.value
+})
+
+const isCurrentNodeAction = computed(() => {
+  return execMode.value === 'input' && scope.value === 'input' && !sameTable.value && !!outputTableId.value
+})
+
+const actionBtnText = computed(() => {
+  if (execMode.value === 'fetch') return '发起抓取'
+  if (execMode.value === 'upstream') return '从上一节点重跑'
+  if (execMode.value === 'input') {
+    return isCurrentNodeAction.value ? '发起本节点任务' : '发后续任务'
+  }
+  return '发后续任务'
+})
+
+// 发后续任务（0824/0912）：发后续是发给直接后继节点处理当前节点产出的输出数据。
 const execDisabledReason = computed(() => {
   if (execMode.value === 'fetch' && !isVerifiedFirstNode.value) return '当前节点无输入表，暂不支持独立手动执行'
   if (execMode.value === 'input') {
-    if (inputTableId.value && !sameTable.value && scope.value !== 'input') return '请先切到"输入数据"范围并勾选记录'
     if (!selectedRowIds.value.length) return '请先勾选要发送的数据'
+    if (!isCurrentNodeAction.value && !successorTableId.value && !outputTableId.value) {
+      return '后续节点无有效输入表，无法发后续'
+    }
   }
   if (execMode.value === 'upstream') {
     if (!selectedRowIds.value.length) return '请先勾选要从上一节点重跑的数据'
@@ -270,11 +297,9 @@ const execDisabledReason = computed(() => {
 const canExecute = computed(() => execMode.value !== 'none' && !execDisabledReason.value)
 const canPickRows = computed(() => {
   if (execMode.value === 'upstream') return true
-  return execMode.value === 'input' && (sameTable.value || scope.value === 'input' || !inputTableId.value)
+  if (execMode.value === 'input') return true
+  return false
 })
-// 输入≠输出、且确实有输入表可切时，输出 tab 改用说明文字。没有输入表就没有可切的「输入」，
-// 不能把发后续入口藏掉（列表节点输出 900 正是发给详情的那批行）。
-const viewingOutputOnly = computed(() => execMode.value === 'input' && !sameTable.value && scope.value === 'output' && !!inputTableId.value)
 
 const selectedRowIds = ref<string[]>([])
 
@@ -335,20 +360,89 @@ function runNextStep(ids: string[], tableId: string, nodeName: string) {
   return withNodeErrorContext(nodeName, () => dataApi.nextStep(sourceId.value, tableId, ids))
 }
 async function onSendNextStep() {
-  if (execMode.value !== 'input' || !canExecute.value || !selectedTable.value || !selectedRowIds.value.length) return
+  if (execMode.value !== 'input' || !canExecute.value || !selectedRowIds.value.length) return
   const count = selectedRowIds.value.length
-  const nodeName = selectedCfg.value?.title || selectedNodeId.value
   const ids = [...selectedRowIds.value]
-  const tableId = selectedTable.value
-  // 0824：数据视图这条工具栏只发后续（nextStep）；按源抓取走画布头 SnatchLauncher，不走这里。
-  // 多后继时说清去向：后端按各后继的进入条件分流，不是"发给某一个"（2026-09-04 确认）
-  const fanout = branchTargets.value.length
-    ? `\n这批数据会按各后继节点的进入条件分流到：${branchTargets.value.map((t) => `${t.title}（${t.condition}）`).join('、')}`
-    : ''
-  await confirmDanger('发后续任务', `将对选中的 ${count} 条数据发起"${nodeName}"的后续处理任务。${fanout}\n是否继续？`, async () => {
-    const res = await runNextStep(ids, tableId, nodeName)
-    return res
-  }, showNextStepReceipt)
+
+  // 如果是在"输入"Tab（且输入≠输出）：这是发起本节点任务！
+  if (isCurrentNodeAction.value) {
+    const nodeName = selectedCfg.value?.title || selectedNodeId.value
+    const tableId = inputTableId.value
+    if (!tableId) return
+    await confirmDanger(
+      '发起本节点任务',
+      `将对选中的 ${count} 条数据发起当前节点「${nodeName}」的处理任务。\n是否继续？`,
+      async () => {
+        const res = await runNextStep(ids, tableId, nodeName)
+        return res
+      },
+      showNextStepReceipt,
+    )
+    return
+  }
+
+  // 否则是在"输出"Tab 或 sameTable：这是发后续任务！
+  // 严格根据当前节点请求流程的下一个节点配置（nextConfigPaged）去发任务！
+  const fallbackSteps: Step[] = Object.entries(flow.configs).map(([id, cfg]) => ({
+    stepId: id,
+    sourceId: sourceId.value,
+    name: cfg.title,
+    configId: cfg.configId,
+    inputTable: cfg.collectCfg?.inputTable || cfg.ruleCfg?.inputTableId,
+    outputTable: cfg.collectCfg?.outputTable || cfg.ruleCfg?.outputTableId,
+    enabled: !cfg.disabled,
+  }))
+
+  let nextInfo: Awaited<ReturnType<typeof fetchNextStepConfig>> | undefined
+  try {
+    nextInfo = await fetchNextStepConfig(sourceId.value, selectedNodeId.value, fallbackSteps)
+  } catch {
+    // ignore
+  }
+
+  if (nextInfo?.allDisabled) {
+    ElMessage.warning(nextInfo.reason || '后续节点已停用，无法发起后续任务')
+    return
+  }
+
+  if (nextInfo && !nextInfo.hasNext && !hasSuccessor.value) {
+    ElMessage.warning(nextInfo.reason || '当前节点在流程中没有后续节点配置，无法发后续')
+    return
+  }
+
+  const tableId = (nextInfo?.hasNext ? nextInfo.targetTableId : undefined) || successorTableId.value || outputTableId.value || selectedTable.value
+  if (!tableId) return
+  const targetNodeName = (nextInfo?.hasNext ? nextInfo.targetNodeName : undefined) || successorTitles.value || '后续节点'
+
+  const targetConfigId = nextInfo?.hasNext ? nextInfo.targetConfigId : (successorIds.value.length ? flow.configs[successorIds.value[0]]?.configId : undefined)
+  const targetStepId = nextInfo?.hasNext ? nextInfo.targetStepId : (successorIds.value.length ? successorIds.value[0] : undefined)
+
+  const hasOptions = Boolean(targetConfigId || (targetStepId && /^\d+$/.test(targetStepId)))
+  const configOptions = hasOptions ? {
+    ...(targetConfigId ? { configId: targetConfigId } : {}),
+    ...(targetStepId && /^\d+$/.test(targetStepId) ? {
+      itemConfig: targetStepId,
+      stepId: targetStepId,
+      nextStep: targetStepId,
+    } : {}),
+  } : undefined
+
+  const fanout = (nextInfo?.branchHint ? `\n这批数据会按各后继节点的进入条件分流到：${nextInfo.branchHint}` : '') ||
+    (branchTargets.value.length ? `\n这批数据会按各后继节点的进入条件分流到：${branchTargets.value.map((t) => `${t.title}（${t.condition}）`).join('、')}` : '')
+
+  await confirmDanger(
+    '发后续任务',
+    `将对选中的 ${count} 条数据发起后续节点「${targetNodeName}」的处理任务。${fanout}\n是否继续？`,
+    async () => {
+      const res = await withNodeErrorContext(targetNodeName, () =>
+        configOptions
+          ? dataApi.nextStep(sourceId.value, tableId, ids, configOptions)
+          : dataApi.nextStep(sourceId.value, tableId, ids),
+      )
+      return res
+    },
+    showNextStepReceipt,
+  )
 }
 
 async function onSendUpstream() {
@@ -417,15 +511,67 @@ const sendAllBlockedReason = computed(() => {
   return ''
 })
 async function onSendAllUnderFilter() {
-  if (execMode.value !== 'input' || !canPickRows.value || !selectedTable.value) return
+  if (execMode.value !== 'input' || !canPickRows.value) return
   if (sendAllBlockedReason.value) return
-  const nodeName = selectedCfg.value?.title || selectedNodeId.value
-  const tableId = selectedTable.value
+
+  if (isCurrentNodeAction.value) {
+    const nodeName = selectedCfg.value?.title || selectedNodeId.value
+    const tableId = inputTableId.value
+    if (!tableId) return
+    await confirmDanger(
+      '发全部本节点',
+      `[实验性] 将对当前筛选条件下"${nodeName}"的全部输入数据发起处理（命中 ${total.value} 条，最多 500000 条），是否继续？`,
+      () => withNodeErrorContext(nodeName, () => dataApi.nextStepBatch({
+        tableId, sourceId: sourceId.value,
+        state: filters.state || undefined,
+        cond: filters.sql || undefined,
+        size: 500000, start: 0,
+      })),
+      showNextStepReceipt,
+    )
+    return
+  }
+
+  const fallbackSteps: Step[] = Object.entries(flow.configs).map(([id, cfg]) => ({
+    stepId: id,
+    sourceId: sourceId.value,
+    name: cfg.title,
+    configId: cfg.configId,
+    inputTable: cfg.collectCfg?.inputTable || cfg.ruleCfg?.inputTableId,
+    outputTable: cfg.collectCfg?.outputTable || cfg.ruleCfg?.outputTableId,
+    enabled: !cfg.disabled,
+  }))
+
+  let nextInfo: Awaited<ReturnType<typeof fetchNextStepConfig>> | undefined
+  try {
+    nextInfo = await fetchNextStepConfig(sourceId.value, selectedNodeId.value, fallbackSteps)
+  } catch {
+    // ignore
+  }
+
+  if (nextInfo?.allDisabled) {
+    ElMessage.warning(nextInfo.reason || '后续节点已停用，无法发起后续任务')
+    return
+  }
+
+  if (nextInfo && !nextInfo.hasNext && !hasSuccessor.value) {
+    ElMessage.warning(nextInfo.reason || '当前节点在流程中没有后续节点配置，无法发全部后续')
+    return
+  }
+
+  const tableId = (nextInfo?.hasNext ? nextInfo.targetTableId : undefined) || successorTableId.value || outputTableId.value || selectedTable.value
+  if (!tableId) return
+  const targetNodeName = (nextInfo?.hasNext ? nextInfo.targetNodeName : undefined) || successorTitles.value || '后续节点'
   await confirmDanger(
     '发全部后续',
-    `[实验性] 将对当前筛选条件下"${nodeName}"的全部数据发起后续处理（命中 ${total.value} 条，最多 500000 条），是否继续？`,
-    () => withNodeErrorContext(nodeName, () => dataApi.nextStepBatch({
+    `[实验性] 将对当前筛选条件下"${targetNodeName}"的全部数据发起后续处理（命中 ${total.value} 条，最多 500000 条），是否继续？`,
+    () => withNodeErrorContext(targetNodeName, () => dataApi.nextStepBatch({
       tableId, sourceId: sourceId.value,
+      ...(nextInfo?.targetConfigId ? { configId: nextInfo.targetConfigId } : {}),
+      ...(nextInfo?.targetStepId && /^\d+$/.test(nextInfo.targetStepId) ? {
+        itemConfig: nextInfo.targetStepId,
+        stepId: nextInfo.targetStepId,
+      } : {}),
       state: filters.state || undefined,
       cond: filters.sql || undefined,
       size: 500000, start: 0,
@@ -509,8 +655,8 @@ function onDeleteOne(row: DataRow) {
   )
 }
 
-// 默认选**首个可跑节点**。页签快照可以记住筛选，但不能把人送回上次停的末节点——
-// 0831 F09 会上原话：「我要看第一个节点的数据我还得点一下」。
+// 默认选**首个可跑节点**。页签快照恢复用户上次选中的节点、筛选与页码。
+// 解决切换到任务视图/其他视图再切回时选中的节点被重置为初始节点的问题。
 // URL `nodeId`（任务视图跳过来、查看条件深链）仍然优先。
 watch(
   allNodes,
@@ -518,12 +664,19 @@ watch(
     if (!nodes.some((n) => n.id === selectedNodeId.value)) {
       const firstId = firstRunnableNodeId(flow.main, flow.configs) || nodes[0]?.id || ''
       const fromQuery = queryNodeId.value && nodes.some((n) => n.id === queryNodeId.value) ? queryNodeId.value : ''
-      selectedNodeId.value = fromQuery || firstId
       const snap = ws.snapshotOf(tabKey.value)
-      if (!fromQuery && snap?.selectedNodeId === firstId && snap.filters) {
-        page.value = snap.page ?? 1
-        const { dataId, parentId, state, sql } = snap.filters
-        Object.assign(filters, { dataId, parentId, state, sql })
+      const snapId = snap?.selectedNodeId && nodes.some((n) => n.id === snap.selectedNodeId) ? snap.selectedNodeId : ''
+      const targetId = fromQuery || snapId || firstId
+      selectedNodeId.value = targetId
+      if (targetId && flow.selectedId !== targetId) {
+        flow.select(targetId)
+      }
+      if (!fromQuery && snapId === targetId) {
+        page.value = snap?.page ?? 1
+        if (snap?.filters) {
+          const { dataId, parentId, state, sql } = snap.filters
+          Object.assign(filters, { dataId, parentId, state, sql })
+        }
       } else {
         page.value = 1
       }
@@ -1176,19 +1329,15 @@ async function onTestScript() {
              「已选 N 条」跟着走：它唯一的用途就是告诉你「发后续任务」会发几条。 -->
         <span class="rv-data-ops">
           <span v-if="canPickRows" class="muted">已选 {{ selectedRowIds.length }} 条</span>
-          <!-- 输入≠输出、当前看的是输出 tab：这批行不是本节点的输入，不给一个点了才发现
-               被禁用的按钮，直接说清楚去哪操作（M3-0C，对应用户"为什么一个有checkbox一个
-               没有"的反馈）。 -->
-          <span v-if="viewingOutputOnly" class="muted" data-testid="data-view-only-hint">本节点产出数据；如需发起本节点任务，请切到"输入"勾选</span>
           <button
-            v-else-if="execMode !== 'none'"
+            v-if="execMode !== 'none'"
             class="rc-btn primary"
             type="button"
             data-testid="data-exec-btn"
             :disabled="!canExecute"
             :title="execDisabledReason"
             @click="execMode === 'fetch' ? onSendFetch() : execMode === 'upstream' ? onSendUpstream() : onSendNextStep()"
-          >{{ execMode === 'fetch' ? '发起抓取' : execMode === 'upstream' ? '从上一节点重跑' : '发后续任务' }}</button>
+          >{{ actionBtnText }}</button>
           <!-- 同表多后继：不再拦，只说清会分流到哪几个（2026-09-04）。
                原来这里是禁用勾选 + 一句藏在 title 里的"无法确定任务目标节点"，纯黑盒。 -->
           <span
@@ -1224,7 +1373,7 @@ async function onTestScript() {
             type="button"
             data-testid="data-exec-all-btn"
             :disabled="!!sendAllBlockedReason"
-            :title="sendAllBlockedReason || '不按勾选，按当前筛选条件发全部'"
+            :title="sendAllBlockedReason || (isCurrentNodeAction ? '不按勾选，按当前筛选条件发起本节点全部数据' : '不按勾选，按当前筛选条件发全部后续')"
             @click="onSendAllUnderFilter"
           >发全部（命中 {{ total }} 条）</button>
           <!-- 删除数据（2026-09-09 从数据中心迁入）：跟发任务并排——都是「对这批数据动手」。

@@ -239,6 +239,10 @@ function buildRows(sourceId: string, n: number, gen: (i: number) => Record<strin
   return Array.from({ length: n }, (_, i): DataRow => {
     const v = gen(i)
     const dataId = String(v['feed_id-K1'])
+    const baseMin = (i * 17) % 60
+    const baseHr = (10 + (i % 8)) % 24
+    const updateTimeStr = `2026-09-12 ${String(baseHr).padStart(2, '0')}:${String(baseMin).padStart(2, '0')}:00`
+    const createTimeStr = `2026-09-11 ${String(baseHr).padStart(2, '0')}:${String(baseMin).padStart(2, '0')}:00`
     return {
       dataId,
       title: String(v['content-K5'] ?? dataId).slice(0, 40),
@@ -249,6 +253,8 @@ function buildRows(sourceId: string, n: number, gen: (i: number) => Record<strin
       acceptState: i % 7 === 0 ? 'pending' : i % 11 === 0 ? 'rejected' : 'accepted',
       state: i % 13 === 0 ? 'E' : 'C',
       parentId: String(v.parent_id ?? ''),
+      createDt: createTimeStr,
+      updateDt: updateTimeStr,
       values: v,
     }
   })

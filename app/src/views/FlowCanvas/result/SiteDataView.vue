@@ -24,12 +24,13 @@ import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { dataApi, parseNextStepReceipt, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail, type RowQuery } from '@/api'
+import { dataApi, parseNextStepReceipt, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail, type RowQuery, type Step } from '@/api'
 import {
   buildHorizontalLayout, buildSourceSeed, effectiveInputTable, firstRunnableNodeId, nodeOutputTable, isDecision, isParallel,
-  hasDirectSuccessor, type NodeConfig, type BranchSeed, type FlowBranchGroup,
+  hasDirectSuccessor, directSuccessorIds, type NodeConfig, type BranchSeed, type FlowBranchGroup,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
+import { fetchNextStepConfig } from '@/utils/flow/nextStepConfig'
 import { confirmDanger } from '@/utils/confirmDanger'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import DataGrid from './DataGrid.vue'
@@ -249,6 +250,12 @@ const sameTable = computed(() => !!inputTableId.value && !!outputTableId.value &
 const hasSuccessor = computed(() => {
   if (!selectedNodeId.value || !flowData.value) return false
   return hasDirectSuccessor(flowData.value.main, flowData.value.configs, selectedNodeId.value, flowData.value.branchGroups)
+})
+const successorTableId = computed(() => {
+  if (!selectedNodeId.value || !flowData.value) return ''
+  const succIds = directSuccessorIds(flowData.value.main, flowData.value.configs, selectedNodeId.value, flowData.value.branchGroups)
+  if (!succIds.length) return ''
+  return effectiveInputTable(flowData.value.main, flowData.value.branches, flowData.value.configs, succIds[0], flowData.value.branchGroups) || outputTableId.value
 })
 // 具体源才开发任务：全部源+选表无法确定流程节点（0831 X6 / Q4）。
 // 输入≠输出时这张表是产出数据，跟 ResultView 一样不在这里勾发，请到源数据视图切输入。
@@ -530,15 +537,44 @@ async function onSendNextStep() {
   }
   const sourceCount = groups.size
   const rowCount = [...groups.values()].reduce((sum, ids) => sum + ids.length, 0)
-  const nodeName = selectedCfg.value?.title || selectedNodeId.value
-  const tableId = effectiveTableId.value
+  let nextConfigInfo
+  if (selectedSourceId.value) {
+    const fallbackSteps: Step[] = flowData.value
+      ? Object.entries(flowData.value.configs).map(([id, cfg]) => ({
+          stepId: id,
+          sourceId: selectedSourceId.value,
+          name: cfg.title,
+          configId: cfg.configId,
+          inputTable: cfg.collectCfg?.inputTable || cfg.ruleCfg?.inputTableId,
+          outputTable: cfg.collectCfg?.outputTable || cfg.ruleCfg?.outputTableId,
+          enabled: !cfg.disabled,
+        }))
+      : []
+    try {
+      nextConfigInfo = await fetchNextStepConfig(selectedSourceId.value, selectedNodeId.value, fallbackSteps)
+    } catch {
+      // fallback
+    }
+    if (nextConfigInfo && !nextConfigInfo.hasNext) {
+      ElMessage.warning(nextConfigInfo.reason || '当前节点在流程中没有后续节点配置，无法发后续')
+      return
+    }
+  }
+  const targetNodeName = nextConfigInfo?.targetNodeName || selectedCfg.value?.title || selectedNodeId.value
+  const tableId = nextConfigInfo?.targetTableId || successorTableId.value || effectiveTableId.value
+  const configOptions = {
+    configId: nextConfigInfo?.targetConfigId,
+    itemConfig: nextConfigInfo?.targetStepId,
+    stepId: nextConfigInfo?.targetStepId,
+    nextStep: nextConfigInfo?.targetStepId,
+  }
   await confirmDanger(
     '发后续任务',
-    `将对 ${sourceCount} 个源 · ${rowCount} 条数据发起「${nodeName}」的后续处理，是否继续？`,
+    `将对 ${sourceCount} 个源 · ${rowCount} 条数据发起后续节点「${targetNodeName}」的处理任务，是否继续？`,
     async () => {
       let last: { message?: string } = {}
       for (const [sourceId, ids] of groups) {
-        last = await dataApi.nextStep(sourceId, tableId, ids)
+        last = await dataApi.nextStep(sourceId, tableId, ids, configOptions)
       }
       selectedRowIds.value = []
       return last

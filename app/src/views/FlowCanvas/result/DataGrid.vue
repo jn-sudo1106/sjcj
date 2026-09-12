@@ -60,7 +60,7 @@ const showActions = computed(() => !props.compact && !props.hideActions)
 
 // 排序（迁移旧平台 EntryList2.vue 的 @sort-change）：发给后端的是物理列名，
 // 载荷拼装在 api/index.ts（field=`(列名+ 0)`、type=' ASC '/' DESC '），与旧平台一致。
-const FIXED_SORTABLE = new Set(['ENTRY_ID', 'SOURCE_ID', 'PARENT_ID', 'STATE'])
+const FIXED_SORTABLE = new Set(['ENTRY_ID', 'SOURCE_ID', 'PARENT_ID', 'STATE', 'UPDATE_DT', 'CREATE_DT'])
 function sortKeyOf(field: { prop: string; columnName?: string }): string {
   return field.columnName || field.prop
 }
@@ -167,10 +167,11 @@ const SOURCE_ID_COL = { prop: 'SOURCE_ID', type: 'string', desc: '所属源 ID',
 // **首节点表整列是 `—`，但列仍然渲染**——不做"全空就隐藏"的特判：那会让同一个数据视图在
 // 不同节点之间列数忽多忽少，用户以为是自己把列关掉了。空值本身就是信息（这是链路起点）。
 const PARENT_ID_COL = { prop: 'PARENT_ID', type: 'string', desc: '父行 ID', label: 'PARENT_ID' }
-// 列序：ENTRY_ID → PARENT_ID → 源（0903 会上定）。父 ID 紧挨主键——这两列是同一件事的
-// 两头（这行是谁 / 它从哪来），中间隔着「源」得来回扫视才对得上。
-type GridColumn = DataTableMeta['fields'][number] | typeof ENTRY_ID_COL | typeof PARENT_ID_COL | typeof SOURCE_ID_COL
-const allCols = computed<GridColumn[]>(() => (props.meta ? [ENTRY_ID_COL, PARENT_ID_COL, SOURCE_ID_COL, ...props.meta.fields] : []))
+const UPDATE_DT_COL = { prop: 'UPDATE_DT', type: 'string', desc: '更新时间', label: '更新时间-UPDATE_DT' }
+const CREATE_DT_COL = { prop: 'CREATE_DT', type: 'string', desc: '创建时间', label: '创建时间-CREATE_DT' }
+// 列序：ENTRY_ID → PARENT_ID → 源 → 更新时间 → 创建时间
+type GridColumn = DataTableMeta['fields'][number] | typeof ENTRY_ID_COL | typeof PARENT_ID_COL | typeof SOURCE_ID_COL | typeof UPDATE_DT_COL | typeof CREATE_DT_COL
+const allCols = computed<GridColumn[]>(() => (props.meta ? [ENTRY_ID_COL, PARENT_ID_COL, SOURCE_ID_COL, UPDATE_DT_COL, CREATE_DT_COL, ...props.meta.fields] : []))
 const identityColSet = new Set<string>(IDENTITY_COL_PROPS)
 function isIdentityCol(field: { prop: string; columnName?: string }): boolean {
   return identityColSet.has(field.prop.toUpperCase()) || identityColSet.has((field.columnName ?? '').toUpperCase())
@@ -317,6 +318,8 @@ function cellText(row: DataRow, field: { prop: string; columnName?: string }): s
   if (field.prop === 'ENTRY_ID') return row.dataId || '—'
   if (field.prop === 'SOURCE_ID') return row.sourceId || '—'
   if (field.prop === 'PARENT_ID') return parentIdOf(row) || '—'
+  if (field.prop === 'UPDATE_DT') return row.updateDt || (row.values?.UPDATE_DT as string) || '—'
+  if (field.prop === 'CREATE_DT') return row.createDt || (row.values?.CREATE_DT as string) || '—'
   const v = row.values?.[field.columnName ?? field.prop]
   if (v === undefined || v === null) return '—'
   if (typeof v === 'object') return JSON.stringify(v)

@@ -646,7 +646,7 @@ const panelColumns = computed<DataQueryColumn[]>(() => dynamicColumns.value.map(
   hintProp: f.prop,
 })))
 function formatDateTime(value?: string) {
-  return value ? value.slice(0, 16) : '—'
+  return value ? (value.length > 19 ? value.slice(0, 19) : value) : '—'
 }
 // 相对时间（方案 §1.5-4/§4.3：timeago + hover 绝对时间 title）
 function timeAgo(value?: string): string {
@@ -731,6 +731,8 @@ onMounted(async () => {
       :columns="panelColumns"
       show-state
       :selectable="canWrite"
+      default-sort-field="updateDt"
+      default-sort-order="descend"
       v-model:selected-keys="selectedRowKeys"
       @query-change="onPanelQueryChange"
       @loaded="onPanelLoaded"
@@ -854,6 +856,16 @@ onMounted(async () => {
             <span v-else>—</span>
           </template>
         </el-table-column>
+        <el-table-column prop="updateDt" label="更新时间" width="165" sortable="custom">
+          <template #default="{ row }">
+            <span :title="row.updateDt ? `${row.updateDt} (${timeAgo(row.updateDt)})` : '—'">{{ formatDateTime(row.updateDt) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="createDt" label="创建时间" width="165" sortable="custom">
+          <template #default="{ row }">
+            <span :title="row.createDt ? `${row.createDt} (${timeAgo(row.createDt)})` : '—'">{{ formatDateTime(row.createDt) }}</span>
+          </template>
+        </el-table-column>
       </template>
 
       <template #columns-after>
@@ -863,12 +875,6 @@ onMounted(async () => {
               {{ row.state || '—' }}
             </el-tag>
           </template>
-        </el-table-column>
-        <el-table-column prop="updateDt" label="更新" width="90" sortable="custom">
-          <template #default="{ row }"><span :title="formatDateTime(row.updateDt)">{{ timeAgo(row.updateDt) }}</span></template>
-        </el-table-column>
-        <el-table-column prop="createDt" label="生成" width="90" sortable="custom">
-          <template #default="{ row }"><span :title="formatDateTime(row.createDt)">{{ timeAgo(row.createDt) }}</span></template>
         </el-table-column>
         <el-table-column label="任务" width="100">
           <template #default="{ row }">
@@ -968,6 +974,10 @@ onMounted(async () => {
     <el-drawer v-model="detail.visible" title="数据表详情" size="480px">
       <template v-if="detail.data">
         <dl class="rc-kv">
+          <dt>创建时间</dt>
+          <dd>{{ detail.data.row.createDt || '—' }}</dd>
+          <dt>更新时间</dt>
+          <dd>{{ detail.data.row.updateDt || '—' }}</dd>
           <template v-for="item in detail.data.showItems" :key="item.itemId ?? item.columnName">
             <dt>{{ item.itemName || item.columnName }}</dt>
             <dd>{{ item.value ?? '—' }}</dd>

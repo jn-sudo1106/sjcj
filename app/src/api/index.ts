@@ -1522,7 +1522,23 @@ function buildLegacyMore(q: RowQuery) {
   return parts.join(' AND ') || undefined
 }
 
+const SORT_FIELD_MAP: Record<string, string> = {
+  updateDt: 'UPDATE_DT',
+  createDt: 'CREATE_DT',
+  dataId: 'ENTRY_ID',
+  sourceId: 'SOURCE_ID',
+  parentId: 'PARENT_ID',
+  state: 'STATE',
+}
+
+function resolveSortField(field?: string): string | undefined {
+  if (!field) return undefined
+  return SORT_FIELD_MAP[field] ?? field
+}
+
 function buildLegacyRowQuery(q: RowQuery) {
+  const mappedField = resolveSortField(q.sortField)
+  const isTimeField = mappedField === 'UPDATE_DT' || mappedField === 'CREATE_DT'
   return {
     page: q.page ?? 1,
     limit: q.size ?? 20,
@@ -1541,8 +1557,9 @@ function buildLegacyRowQuery(q: RowQuery) {
     // 对照真实源码 EntryList2.vue：该页排序一律走 field/type 数值化 hack（含 ENTRY_ID 本身），
     // sorted 恒为 '0'；entry.js 里 sortField==='ENTRY_ID' 触发 sorted±1 的分支是给另一套表格组件
     // （s-table/AntD sorter）准备的，此页从不设置 sortField/sortOrder，是死分支，不迁移。
+    // 时间列（UPDATE_DT/CREATE_DT）直接使用物理列名排序，不需要 (+ 0) 数值化。
     sorted: '0',
-    field: q.sortField ? `(${q.sortField}+ 0)` : undefined,
+    field: mappedField ? (isTimeField ? mappedField : `(${mappedField}+ 0)`) : undefined,
     type: q.sortField ? (q.sortOrder === 'descend' ? ' DESC ' : ' ASC ') : undefined,
     enable: '0',
   }
@@ -1745,17 +1762,35 @@ export const dataApi = {
       httpEndpoint: 'task/resetTaskInsts',
       httpParams: { ids: taskIds.join(',') },
     }),
-  // 发选中/本页后续：entryIds 逗号连接（危险）
-  nextStep: (sourceId: string, tableId: string, entryIds: string[]) =>
-    request<{ message?: string }>('data/nextStep', { sourceId, tableId, entryIds }, {
+  // 发选中/本页后续：entryIds 逗号连接（危险）。同时带上后续步骤/配置标识（configId / itemConfig / stepId / nextStep）
+  nextStep: (
+    sourceId: string,
+    tableId: string,
+    entryIds: string[],
+    configOptions?: string | { configId?: string; itemConfig?: string; stepId?: string; nextStep?: string },
+  ) => {
+    const opts = typeof configOptions === 'string'
+      ? { configId: configOptions }
+      : (configOptions ?? {})
+    return request<{ message?: string }>('data/nextStep', { sourceId, tableId, entryIds, ...opts }, {
       method: 'GET',
       httpEndpoint: 'source/nextStep',
-      httpParams: { sourceId, entryTypeId: tableId, entryIds: entryIds.join(',') },
-    }),
+      httpParams: {
+        sourceId,
+        entryTypeId: tableId,
+        entryIds: entryIds.join(','),
+        ...(opts.configId ? { configId: opts.configId } : {}),
+        ...(opts.itemConfig ? { itemConfig: opts.itemConfig } : {}),
+        ...(opts.stepId ? { stepId: opts.stepId } : {}),
+        ...(opts.nextStep ? { nextStep: opts.nextStep } : {}),
+      },
+    })
+  },
   // 大批量后续：POST AES，180s 超时（危险）
   nextStepBatch: (params: {
     tableId: string; sourceId?: string; state?: string
     size: number; start: number; end?: number; nextFlag?: string; cond?: string
+    configId?: string; itemConfig?: string; stepId?: string
   }) =>
     request<{ message?: string }>('data/nextStepBatch', params, {
       method: 'POST',
@@ -1766,6 +1801,9 @@ export const dataApi = {
           entryTypeId: params.tableId, sourceId: params.sourceId, state: params.state,
           size: params.size, start: params.start, end: params.end,
           nextFlag: params.nextFlag,
+          configId: params.configId,
+          itemConfig: params.itemConfig,
+          stepId: params.stepId,
           cond: params.cond ? stripTrailingSemicolon(params.cond.trim()) || undefined : params.cond,
         }),
       },

@@ -507,7 +507,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     expect(wrapper.text()).not.toContain('发后续任务')
   })
 
-  it('输入表≠输出表（正常场景）时保留双 tab 切换，只有切到"输入"才能勾行，输出 tab 上改用说明文字代替禁用按钮（M3-0C：合并逻辑只对输入===输出生效，不影响这个更常见的场景）', async () => {
+  it('输入表≠输出表（正常场景）时保留双 tab 切换，输出 tab 允许勾选发后续任务，切到"输入"可勾选发起本节点任务', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
@@ -525,17 +525,15 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     const inputBtn = wrapper.get('[data-testid="data-scope-input"]')
     expect(outputBtn.classes()).toContain('active') // 默认先看输出
 
-    // 输出 tab：这批行不是本节点的输入，不给禁用按钮，给说明文字
-    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(false)
-    expect(wrapper.find('[data-testid="data-exec-btn"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="data-view-only-hint"]').text()).toContain('本节点产出数据')
+    // 输出 tab：本节点产出数据，发给后续节点，默认允许勾选并显示发后续任务按钮
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
 
     await inputBtn.trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="data-view-only-hint"]').exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
-    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发起本节点任务')
     // 分页简化成一个 el-pagination（2026-08-19），不再是"第 N 页"文字——这里只确认
     // 分页控件确实渲染了，具体交互由下面 M3-0F 那组测试单独覆盖。
     expect(wrapper.find('[data-testid="data-pagination"]').exists()).toBe(true)
@@ -735,7 +733,7 @@ describe('ResultView · 默认节点与默认列（0831 F09/F10）', () => {
     expect(wrapper.findComponent(ProcessNodeRail).props('modelValue')).toBe('first')
   })
 
-  it('再次进入数据视图仍落在首节点，不恢复上次停在末节点的快照', async () => {
+  it('再次进入数据视图恢复快照中选中的节点与页码', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
@@ -743,13 +741,47 @@ describe('ResultView · 默认节点与默认列（0831 F09/F10）', () => {
     const ws = useWorkspaceStore()
     ws.open('391007768', 'demo')
     ws.saveSnapshot('391007768', { view: 'data', selectedNodeId: 'sink', page: 3 })
-    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
 
     const wrapper = mountResultView()
     await flushPromises()
 
+    expect(wrapper.findComponent(ProcessNodeRail).props('modelValue')).toBe('sink')
+    expect(query.mock.calls.at(-1)![0].page).toBe(3)
+  })
+
+  it('数据视图选定节点后切到任务视图再切回，保持选中的节点不重置为初始节点', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    const ws = useWorkspaceStore()
+    ws.open('391007768', 'demo')
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+
+    // 首次进入：默认是首节点
+    let wrapper = mountResultView()
+    await flushPromises()
     expect(wrapper.findComponent(ProcessNodeRail).props('modelValue')).toBe('first')
+
+    // 用户在数据视图中选择了中间节点 mid
+    wrapper.findComponent(ProcessNodeRail).vm.$emit('update:modelValue', 'mid')
+    await flushPromises()
+    expect(wrapper.findComponent(ProcessNodeRail).props('modelValue')).toBe('mid')
+    expect(ws.snapshotOf('391007768')?.selectedNodeId).toBe('mid')
+
+    // 模拟切到任务视图（组件销毁卸载）
+    wrapper.unmount()
+    await flushPromises()
+
+    // 模拟再切回数据视图（组件重新挂载）
+    wrapper = mountResultView()
+    await flushPromises()
+
+    // 应当保持选中的 mid 节点，而不是变回 first
+    expect(wrapper.findComponent(ProcessNodeRail).props('modelValue')).toBe('mid')
   })
 
   it('默认列取后继节点的上下文来源 + 进入条件字段，换算成当前表的 prop 传给表格', async () => {
@@ -972,17 +1004,16 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     await flushPromises()
     await selectNode(wrapper, 'first')
 
-    // 0812 双 tab：有输入表时输出 tab 仍是本节点产物，不勾行；切到输入才发后续。
-    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(false)
-    expect(wrapper.find('[data-testid="data-exec-btn"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="data-view-only-hint"]').text()).toContain('本节点产出数据')
+    // 输出 tab：本节点产物发给后续 mid 节点，默认可勾选且按钮是发后续任务
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.find('[data-testid="data-exec-all-btn"]').exists()).toBe(true)
 
     await wrapper.get('[data-testid="data-scope-input"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="data-view-only-hint"]').exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
-    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发起本节点任务')
     expect(wrapper.find('[data-testid="data-exec-all-btn"]').exists()).toBe(true)
   })
 
@@ -1024,7 +1055,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     await btnAfter.trigger('click')
     await flushPromises()
 
-    expect(nextStep).toHaveBeenCalledWith(current.sourceId, 'T2', ['d1', 'd2'])
+    expect(nextStep).toHaveBeenCalledWith(current.sourceId, 'T4', ['d1', 'd2'])
     expect(ElMessage.success).toHaveBeenCalledWith('已提交 2 条')
   })
 
@@ -1078,7 +1109,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     await flushPromises()
 
     expect(nextStepBatch).toHaveBeenCalledWith({
-      tableId: 'T2', sourceId: current.sourceId,
+      tableId: 'T4', sourceId: current.sourceId,
       state: 'E', cond: 'K1 IS NULL',
       size: 500000, start: 0,
     })
@@ -1102,7 +1133,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     await flushPromises()
 
     expect(ElMessage.error).toHaveBeenCalledWith(
-      '目标节点"入库"处理失败：错误信息:运行时异常（多为该节点的进入条件表达式写错，可检查节点配置里的进入条件）',
+      '目标节点"完成"处理失败：错误信息:运行时异常（多为该节点的进入条件表达式写错，可检查节点配置里的进入条件）',
     )
   })
 
@@ -1398,7 +1429,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
 
     expect(ElMessage.success).not.toHaveBeenCalled()
     expect(ElMessage.error).toHaveBeenCalledWith(
-      "目标节点\"入库\"处理失败：错误信息:运行时异常：<Long, 1> can't be a left value for assignment.（多为该节点的进入条件表达式写错，可检查节点配置里的进入条件）",
+      "目标节点\"完成\"处理失败：错误信息:运行时异常：<Long, 1> can't be a left value for assignment.（多为该节点的进入条件表达式写错，可检查节点配置里的进入条件）",
     )
   })
 
@@ -1428,7 +1459,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
     await flushPromises()
 
-    expect(ElMessage.error).toHaveBeenCalledWith('目标节点"入库"处理失败：生产环境写保护：端点不在允许清单')
+    expect(ElMessage.error).toHaveBeenCalledWith('目标节点"完成"处理失败：生产环境写保护：端点不在允许清单')
   })
 
   it('后端返回「没有详情配置」时不把后继误说成必须是详情页', async () => {
@@ -1971,5 +2002,52 @@ describe('ResultView · 布局折叠', () => {
     expect(wrapper.find('input[placeholder="数据 ID"]').exists()).toBe(false)
     expect(toggle().text()).toContain('2')
     expect(toggle().classes()).toContain('on')
+  })
+
+  it('发后续任务时：根据 nextConfigPaged 步骤链路取得下一个节点配置，并使用下一个节点的输入表与配置 ID 发起任务', async () => {
+    setActivePinia(createPinia())
+    const current = {
+      sourceId: '430006252',
+      name: '测试源430006252',
+      siteId: 'site-1',
+      mainTable: '900',
+    } as any
+    const flow = useFlowStore()
+    const { useSourceStore } = await import('@/stores/source')
+    const sourceStore = useSourceStore()
+
+    const steps = [
+      { stepId: '0', sourceId: '430006252', name: '起点列表', isRoot: true, outputTable: '900', enabled: true },
+      { stepId: '40597', sourceId: '430006252', name: '中间步骤1', configId: '1400974', inputTable: '900', outputTable: '900', dependsOn: ['0'], enabled: true },
+      { stepId: '40598', sourceId: '430006252', name: '后续步骤2', configId: '1400975', inputTable: '901', outputTable: '901', dependsOn: ['40597'], enabled: true },
+    ]
+    flow.loadFromSource(current, steps)
+    sourceStore.rememberSteps(steps, 'replace')
+
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
+    const nextStepSpy = vi.spyOn(dataApi, 'nextStep').mockResolvedValue({ message: '已提交 1 条' })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await wrapper.get('[data-testid="data-rail-toggle"]').trigger('click')
+    await selectNode(wrapper, '40597')
+
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['8688522'])
+    await flushPromises()
+
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+    await flushPromises()
+
+    // 必须发给后续步骤 40598 的输入表 901、configId 1400975 及步骤 ID 40598，而不是当前步骤自己的 900
+    expect(nextStepSpy).toHaveBeenCalledWith(
+      '430006252',
+      '901',
+      ['8688522'],
+      expect.objectContaining({
+        configId: '1400975',
+        itemConfig: '40598',
+        stepId: '40598',
+      }),
+    )
   })
 })
