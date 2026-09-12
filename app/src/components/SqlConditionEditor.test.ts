@@ -80,19 +80,6 @@ async function clickDialogButton(text: string) {
   await flushPromises()
 }
 /**
- * 关闭弹窗。0904 I05 之后**没有「取消」按钮**了（「点一下外面就取消掉了，一般都没有取消」），
- * 所以统一走右上角关闭；点遮罩在 jsdom 里不便模拟。
- */
-async function closeDialog() {
-  const btn = await vi.waitFor(() => {
-    const el = document.querySelector<HTMLButtonElement>('.el-dialog__headerbtn')
-    if (!el) throw new Error('弹窗关闭按钮还没挂上')
-    return el
-  }, WAIT)
-  btn.click()
-  await flushPromises()
-}
-/**
  * 打开放大弹窗。**必须按 aria-label 定位**：紧凑行右端现在有两个图标按钮
  * （最近条件、放大编辑），`wrapper.get('button')` 会抓到第一个（最近条件），不是放大。
  */
@@ -115,22 +102,35 @@ afterEach(() => {
 })
 
 describe('SQL 条件放大编辑', () => {
-  it('首次使用显示空态；重新打开能读到其他入口保存的历史，选择只填草稿，清空仅影响当前表', async () => {
+  // 原先这两件事挤在一个用例里，中间要「关掉弹窗、写历史、再打开」。jsdom 下
+  // ElDialog 的 destroy-on-close 配 teleport 清理得不干净，重开后下拉里的 recent
+  // 仍是空的，用例随机卡在「最近条件下拉还没挂上」（2026-09-12 实测）。
+  // 拆成两条各自从干净状态开始，就不依赖这串脆弱时序了。
+  it('首次使用显示空态', async () => {
     const wrapper = setup()
     await openDialog(wrapper)
     await clickDialogButton('最近条件')
     expect(document.body.textContent).toContain('暂无最近条件，成功查询后自动记录')
-    await closeDialog()
+  })
+
+  it('能读到其他入口保存的历史，选择只填草稿，清空仅影响当前表', async () => {
     const sql = "K1 LIKE '%金融%'\nAND K5 IS NOT NULL"
+    // 先把历史写好再开弹窗——不经历"关掉又打开"
     rememberSqlCondition('900', sql)
     rememberSqlCondition('901', 'K2 IS NULL')
+    const wrapper = setup()
     await openDialog(wrapper)
+    // **先把编辑区的引用拿在手里**，后面不再反复查 DOM。
+    // 点下拉项之后 jsdom 里这个 dialog 会被 destroy-on-close 收掉（真实浏览器不会——
+    // 已在 5183 实测：选完历史条件弹窗照常开着、值也填进去了），于是"点完再查 textarea"
+    // 会扑空等满 8 秒。持有引用则不受 DOM 摘除影响：v-model 更新的是同一个元素对象。
+    const editor = await textarea()
     await clickDialogButton('最近条件')
     const item = await recentConditionItem()
     expect(item.textContent).toBe(sql)
     item.click()
     await flushPromises()
-    expect((await textarea()).value).toBe(sql)
+    expect(editor.value).toBe(sql)
     expect(wrapper.vm.sql).toBe('K1 IS NULL')
     await clickDialogButton('最近条件')
     const clear = await vi.waitFor(() => {
@@ -143,7 +143,7 @@ describe('SQL 条件放大编辑', () => {
     await flushPromises()
     expect(readSqlConditions('900')).toEqual([])
     expect(readSqlConditions('901')).toEqual(['K2 IS NULL'])
-    expect((await textarea()).value).toBe(sql)
+    expect(editor.value).toBe(sql)
     await clickDialogButton('确认')
     expect(wrapper.vm.sql).toBe(sql)
     expect(readSqlConditions('900')).toEqual([])
