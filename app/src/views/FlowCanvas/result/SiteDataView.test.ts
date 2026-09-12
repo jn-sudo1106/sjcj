@@ -936,7 +936,7 @@ describe('SiteDataView · 列头排序', () => {
   it('点 ENTRY_ID 列头切成升序：重新查询且方向跟着变', async () => {
     const { wrapper, query } = await mountWithRows()
     const grid = wrapper.findComponent(DataGrid)
-    expect(grid.props('sortableProps')).toEqual(['ENTRY_ID'])
+    expect(grid.props('sortableProps')).toContain('ENTRY_ID')
 
     grid.vm.$emit('sort-change', 'ENTRY_ID', 'ascend')
     await flushPromises()
@@ -975,5 +975,57 @@ describe('SiteDataView · 列头排序', () => {
     await th.trigger('click')
     await flushPromises()
     expect(wrapper.findComponent(DataGrid).props('sortOrder')).toBe('descend')
+  })
+})
+
+// 可排序列白名单（2026-09-11 扩展）。能排的前提是**内容为纯数字**——后端排序拼的是
+// `(列名 + 0)`，文本列全得 0、日期列只取前导数字。meta 的 type 全是 'string'，指望不上。
+describe('SiteDataView · 哪些列可排', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  // 有真实字段的表：K1 标题（文本）、K3 发布时间（日期）、K7 正文大小（数字）
+  const richMeta: DataTableMeta = {
+    tableId: 't1', tableName: 'T1', rowCount: 0,
+    fields: [
+      { prop: 'title', columnName: 'K1', type: 'string', desc: '标题' },
+      { prop: 'publish_date', columnName: 'K3', type: 'string', desc: '发布时间' },
+      { prop: 'content_size', columnName: 'K7', type: 'string', desc: '正文大小' },
+    ],
+  }
+
+  async function mountRich() {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(richMeta)
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [row('a', '1')] })
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    return { wrapper, query }
+  }
+  const clean = (t: string) => t.replace(/[↕↑↓]\s*$/, '').trim()
+  const headOf = (wrapper: ReturnType<typeof mountView>, label: string) =>
+    wrapper.findAll('.dg-table thead th').find((th) => clean(th.text()).startsWith(label))
+
+  it('身份列与数字业务列可排：ENTRY_ID / PARENT_ID / 源 / 正文大小', async () => {
+    const { wrapper } = await mountRich()
+    for (const label of ['ENTRY_ID', 'PARENT_ID', '源-SOURCE_ID', '正文大小-K7']) {
+      expect(headOf(wrapper, label)?.classes(), label).toContain('dg-sortable')
+    }
+  })
+
+  // 这条是防回归的重点：`(K3+0)` 只取前导数字 → 按年份排，同年几万条内部全乱，
+  // 而界面看着像排好了。一旦有人往白名单里加日期列，这里会红。
+  it('日期列与文本列不可排——数值化排序对它们是错的', async () => {
+    const { wrapper } = await mountRich()
+    expect(headOf(wrapper, '发布时间-K3')?.classes()).not.toContain('dg-sortable')
+    expect(headOf(wrapper, '标题-K1')?.classes()).not.toContain('dg-sortable')
+  })
+
+  it('点正文大小列头：发给后端与归并用的都是物理列名 K7', async () => {
+    const { wrapper, query } = await mountRich()
+    await headOf(wrapper, '正文大小-K7')!.trigger('click')
+    await flushPromises()
+
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ sortField: 'K7', sortOrder: 'ascend' }))
+    expect(wrapper.findComponent(DataGrid).props('sortField')).toBe('K7')
   })
 })

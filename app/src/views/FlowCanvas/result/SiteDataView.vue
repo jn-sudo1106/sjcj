@@ -80,9 +80,26 @@ function openSourceView() {
  * 弹出，结果是"每个源内部排好了、合起来还是乱的"——比现在点了没反应更糟，
  * 因为它看着像生效了。要支持任意列得先改造归并键，那是另一件事。
  */
-const SORTABLE_PROPS = ['ENTRY_ID']
+// 白名单按**内容是不是纯数字**来定，不是按 meta 的 type——实测 type 全是 'string'，
+// 连 K7「正文大小」(值 "2979") 也是，完全不可用。
+// 这里只收确定为数值的列：三个身份列 + 正文大小/文件大小。
+// **不要往里加日期列**（K3 '2025-07-30'）：后端 `(K3+0)` 只取前导数字，排出来是按年份，
+// 同年的几万条内部全乱——界面上却看着像排好了，比不排更坏。文本列同理，全部得 0。
+// prop 与物理列名都认：白名单写 content_size，而 emit/归并用的是 K7。
+const SORTABLE_PROPS = ['ENTRY_ID', 'PARENT_ID', 'SOURCE_ID', 'content_size', 'filesize']
+//
+// ⚠️ 一个继承下来的限制，排序只是让它更显眼：**归并只在"已激活的源池"内有序**。
+// 源是分批进池的（SOURCE_SCAN_BATCH 每轮 20 个），所以首屏排出来的是这 20 个源里的
+// 前 N 条，不是全网站的前 N 条；继续往下加载、后面的源进池后，可能出现比前面更小/更大的值。
+// 2026-09-11 实测：按 SOURCE_ID 升序，首屏第一条是 430016944，而网站里存在更小的
+// 430016928——它那时还没进池。
+//
+// 按 ENTRY_ID 排时这个偏差不明显（ENTRY_ID 全局递增、各源分布均匀），换成业务列就看得出来。
+// 根治要等后端支持按网站维度查询（见本文件顶部 §6.2.1 R1 的说明），那之后整套归并都可以删掉；
+// 在此之前不要试图用"先扫完所有源再排"来修——6496 个源全扫一遍是几百个串行请求。
+const sortField = ref('ENTRY_ID')
 const sortOrder = ref<MergeOrder>('descend')
-function onSortChange(_field: string, order: 'ascend' | 'descend' | '') {
+function onSortChange(field: string, order: 'ascend' | 'descend' | '') {
   // DataGrid 走的是三态循环（升 → 降 → 取消），但归并视图**没有"不排序"这一态**：
   // 归并每弹一条都要比较归并键，方向必须确定。所以这里把三态压成两态——
   // 收到"取消"就翻到另一个方向。
@@ -90,8 +107,13 @@ function onSortChange(_field: string, order: 'ascend' | 'descend' | '') {
   // 不这么做的话点列头会原地打转：sortField 固定是 ENTRY_ID、初始又是降序，
   // DataGrid 那边一算就落进第三态发出 ('', '')，若把它当成"回到默认降序"，
   // 就永远切不到升序（2026-09-11 实测，先前版本正是这个毛病）。
-  if (order === 'ascend' || order === 'descend') sortOrder.value = order
-  else sortOrder.value = sortOrder.value === 'descend' ? 'ascend' : 'descend'
+  if (order === 'ascend' || order === 'descend') {
+    sortField.value = field
+    sortOrder.value = order
+  } else {
+    // 取消态：同一列翻方向（换列时 DataGrid 会直接给 ascend，走不到这里）
+    sortOrder.value = sortOrder.value === 'descend' ? 'ascend' : 'descend'
+  }
   void resetAndLoad()
 }
 
@@ -351,7 +373,7 @@ async function fetchPage(sourceId: string, page: number, size: number, condition
     // 排序参数已实测确认真实生效（2026-08-15，测试环境，见计划 §3.2 Q9）：不传/ascend/descend
     // 三次真实调用返回了方向相反的不同批次数据，不是静默忽略。客户端二次排序兜底仍保留
     // （siteDataMerge.ts），但已不再是"建立在未验证假设上"，是多源归并后的防御性再排序。
-    sortField: 'ENTRY_ID',
+    sortField: sortField.value,
     // 必须与归并方向一致：归并假设每个源返回的分页本身就按归并键有序（见 siteDataMerge.ts
     // 顶部），后端排一个方向、前端归并另一个方向，弹出来的顺序就是错的。
     sortOrder: sortOrder.value,
@@ -384,7 +406,7 @@ async function loadMore() {
         const list = await fetchPage(sourceId, page, size, condition)
         queried = true
         return list
-      }, MAX_PARALLEL_REQUESTS, sortOrder.value)
+      }, { maxParallel: MAX_PARALLEL_REQUESTS, order: sortOrder.value, sortField: sortField.value })
     if (id !== requestId) return
     if (queried && !result.failedSources.length) rememberSqlCondition(condition.tableId, condition.sql)
     rows.value = [...rows.value, ...result.rows]
@@ -874,7 +896,7 @@ function onCellFile(path: string, _field?: unknown, sourceUrl = '') {
         :selectable="canPickRows"
         :selected-ids="selectedRowIds"
         :auto-load-more="!allExhausted && !loadingMore && !autoLoadFailed"
-        :sort-field="'ENTRY_ID'"
+        :sort-field="sortField"
         :sort-order="sortOrder"
         :sortable-props="SORTABLE_PROPS"
         @sort-change="onSortChange"

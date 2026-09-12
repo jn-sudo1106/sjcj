@@ -136,7 +136,7 @@ async function loadMore(requestId = queryRequest) {
         const list = await fetchPage(sourceId, page, size, condition)
         queried = true
         return list
-      }, MAX_PARALLEL_REQUESTS)
+      }, { maxParallel: MAX_PARALLEL_REQUESTS })
     if (requestId !== queryRequest) return
     if (queried && !result.failedSources.length) rememberSqlCondition(condition.tableId, condition.sql)
     rows.value = [...rows.value, ...result.rows]

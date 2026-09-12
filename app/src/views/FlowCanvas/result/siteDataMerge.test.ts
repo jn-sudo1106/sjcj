@@ -92,7 +92,7 @@ describe('siteDataMerge：多源 top-K 归并', () => {
       return [row(sourceId, Number(sourceId.slice(1)))]
     }
 
-    await mergeLoadMore(initMergeState(['s1', 's2', 's3', 's4']), 4, 1, fetchPage, 2)
+    await mergeLoadMore(initMergeState(['s1', 's2', 's3', 's4']), 4, 1, fetchPage, { maxParallel: 2 })
 
     expect(peak).toBe(2)
   })
@@ -209,13 +209,13 @@ describe('mergeLoadMore · 归并方向', () => {
       c: [[{ dataId: '1' }, { dataId: '8' }]],
     }
     const states = initMergeState<{ dataId: string }>(['a', 'b', 'c'])
-    const r = await mergeLoadMore(states, 6, 2, async (s, p) => asc[s][p - 1] ?? [], Infinity, 'ascend')
+    const r = await mergeLoadMore(states, 6, 2, async (s, p) => asc[s][p - 1] ?? [], { order: 'ascend' })
     expect(r.rows.map((x) => x.dataId)).toEqual(['1', '3', '7', '8', '9', '10'])
   })
 
   it('升序下同样能正确报告取完', async () => {
     const states = initMergeState<{ dataId: string }>(['a'])
-    const r = await mergeLoadMore(states, 10, 2, async (_s, p) => (p === 1 ? [{ dataId: '1' }] : []), Infinity, 'ascend')
+    const r = await mergeLoadMore(states, 10, 2, async (_s, p) => (p === 1 ? [{ dataId: '1' }] : []), { order: 'ascend' })
     expect(r.rows).toHaveLength(1)
     expect(r.allExhausted).toBe(true)
   })

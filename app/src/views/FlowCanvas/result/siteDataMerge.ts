@@ -11,6 +11,8 @@ import type { DataRow } from '@/api'
 
 export interface MergeRow {
   dataId: string
+  /** 按业务列归并时从这里取值；键是物理列名（K7/K22…），与后端 sortField 同一套 */
+  values?: Record<string, unknown>
 }
 
 export interface MergeSourceState<T extends MergeRow = DataRow> {
@@ -31,21 +33,39 @@ export function initMergeState<T extends MergeRow = DataRow>(sourceIds: string[]
   return sourceIds.map((sourceId) => ({ sourceId, buffer: [], nextPage: 1, exhausted: false, failed: false, error: '' }))
 }
 
-function mergeKey<T extends MergeRow>(row: T): number {
-  const n = Number(row.dataId)
+/**
+ * 归并键。**恒为数值**，因为后端的排序也是数值化的——载荷拼的是 `(列名 + 0)`
+ * （见 api/index.ts，旧平台 EntryList2 同款 hack）。两边语义必须一致，否则后端按
+ * 一种顺序返回、前端按另一种弹出，归并结果会静默错位。
+ *
+ * 所以 parseFloat 而不是 Number：MySQL 的 `'12abc' + 0` 得 12、`'abc' + 0` 得 0，
+ * parseFloat 的行为与之对应，Number('12abc') 却是 NaN。
+ *
+ * 也正因为只能数值化比较，**可排序的列必须是纯数字列**。文本列排出来全是 0，
+ * 日期列如 '2025-07-30' 会退化成按年份排——看着像排好了其实是错的，
+ * 这类列不能进白名单（见 SiteDataView 的 SORTABLE_PROPS）。
+ */
+function mergeKey<T extends MergeRow>(row: T, field: string): number {
+  if (field === 'ENTRY_ID') {
+    const n = Number(row.dataId)
+    return Number.isFinite(n) ? n : 0
+  }
+  const n = parseFloat(String(row.values?.[field] ?? ''))
   return Number.isFinite(n) ? n : 0
 }
 
 /** 归并方向。只有这一个维度可调——归并键固定是 dataId(ENTRY_ID)，见本文件顶部说明。 */
 export type MergeOrder = 'ascend' | 'descend'
 
-function sortRows<T extends MergeRow>(rows: T[], order: MergeOrder): T[] {
-  return [...rows].sort((a, b) => (order === 'ascend' ? mergeKey(a) - mergeKey(b) : mergeKey(b) - mergeKey(a)))
+function sortRows<T extends MergeRow>(rows: T[], order: MergeOrder, field: string): T[] {
+  return [...rows].sort((a, b) => (order === 'ascend'
+    ? mergeKey(a, field) - mergeKey(b, field)
+    : mergeKey(b, field) - mergeKey(a, field)))
 }
 
 export type FetchPage<T extends MergeRow = DataRow> = (sourceId: string, page: number, size: number) => Promise<T[]>
 
-async function refill<T extends MergeRow>(states: MergeSourceState<T>[], size: number, fetchPage: FetchPage<T>, maxParallel: number, order: MergeOrder): Promise<void> {
+async function refill<T extends MergeRow>(states: MergeSourceState<T>[], size: number, fetchPage: FetchPage<T>, maxParallel: number, order: MergeOrder, field: string): Promise<void> {
   // 已经标记 failed 的源本轮不重试，避免一个持续报错的源在同一次 load more 里被反复打；
   // failed 会在下一次 mergeLoadMore 调用开头统一重置，下次点"加载更多"会再给一次机会。
   const needRefill = states.filter((s) => !s.exhausted && !s.failed && s.buffer.length === 0)
@@ -55,7 +75,7 @@ async function refill<T extends MergeRow>(states: MergeSourceState<T>[], size: n
     while (next < needRefill.length) {
       const s = needRefill[next++]
       try {
-        const rows = sortRows(await fetchPage(s.sourceId, s.nextPage, size), order)
+        const rows = sortRows(await fetchPage(s.sourceId, s.nextPage, size), order, field)
         s.buffer = rows
         s.nextPage += 1
         s.exhausted = rows.length < size
@@ -71,17 +91,26 @@ async function refill<T extends MergeRow>(states: MergeSourceState<T>[], size: n
  * 弹出当前所有源 buffer 里**排在最前**的一条：降序取最大、升序取最小。
  * 调用前必须先 refill，否则会漏掉刚好 buffer 空的源。
  */
-function popNext<T extends MergeRow>(states: MergeSourceState<T>[], order: MergeOrder): T | null {
+function popNext<T extends MergeRow>(states: MergeSourceState<T>[], order: MergeOrder, field: string): T | null {
   let best: MergeSourceState<T> | null = null
   for (const s of states) {
     if (!s.buffer.length) continue
     if (!best) { best = s; continue }
     const ahead = order === 'ascend'
-      ? mergeKey(s.buffer[0]) < mergeKey(best.buffer[0])
-      : mergeKey(s.buffer[0]) > mergeKey(best.buffer[0])
+      ? mergeKey(s.buffer[0], field) < mergeKey(best.buffer[0], field)
+      : mergeKey(s.buffer[0], field) > mergeKey(best.buffer[0], field)
     if (ahead) best = s
   }
   return best ? (best.buffer.shift() ?? null) : null
+}
+
+export interface MergeLoadMoreOptions {
+  /** 同时在飞的请求数上限 */
+  maxParallel?: number
+  /** 归并方向，缺省降序 */
+  order?: MergeOrder
+  /** 归并键取哪个物理列，缺省 ENTRY_ID（＝取 dataId）。必须与发给后端的 sortField 一致。 */
+  sortField?: string
 }
 
 export interface MergeLoadMoreResult<T extends MergeRow = DataRow> {
@@ -104,16 +133,16 @@ export async function mergeLoadMore<T extends MergeRow>(
   count: number,
   size: number,
   fetchPage: FetchPage<T>,
-  maxParallel = Number.POSITIVE_INFINITY,
-  order: MergeOrder = 'descend',
+  opts: MergeLoadMoreOptions = {},
 ): Promise<MergeLoadMoreResult<T>> {
+  const { maxParallel = Number.POSITIVE_INFINITY, order = 'descend', sortField = 'ENTRY_ID' } = opts
   states.forEach((s) => { s.failed = false; s.error = '' })
   const rows: T[] = []
   const failedSourceIds = new Set<string>()
   while (rows.length < count) {
-    await refill(states, size, fetchPage, maxParallel, order)
+    await refill(states, size, fetchPage, maxParallel, order, sortField)
     states.forEach((s) => { if (s.failed) failedSourceIds.add(s.sourceId) })
-    const picked = popNext(states, order)
+    const picked = popNext(states, order, sortField)
     if (!picked) break
     rows.push(picked)
   }

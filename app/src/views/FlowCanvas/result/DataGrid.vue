@@ -70,7 +70,9 @@ function canSort(field: { prop: string; columnName?: string }): boolean {
   // sortableProps 是白名单，给"只有个别列能真排"的场景用（网站汇总的归并视图：
   // 归并键固定是 ENTRY_ID，按别的列排出来的顺序是假的）。传了就只认它，
   // 连 FIXED_SORTABLE 也不放行——那几个在归并视图下同样排不了。
-  if (props.sortableProps) return props.sortableProps.includes(sortKeyOf(field))
+  // prop 与物理列名都认：调用方按 prop 写白名单更稳（content_size 跨表含义一致，
+  // 而 K7 在不同表里可能是别的字段），但发给后端和归并用的仍是物理列名。
+  if (props.sortableProps) return props.sortableProps.includes(field.prop) || props.sortableProps.includes(sortKeyOf(field))
   return FIXED_SORTABLE.has(sortKeyOf(field)) || props.allowColumnSort
 }
 function sortIndicator(field: { prop: string; columnName?: string }): string {
