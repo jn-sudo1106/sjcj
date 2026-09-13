@@ -95,4 +95,65 @@ describe('nextStepConfig · 根据当前节点与 nextConfigPaged 解析下一�
     expect(res.targetStepId).toBe('40598')
     expect(res.targetTableId).toBe('901')
   })
+
+  it('真实生产场景：选择html网页下载节点（dev_web_snatch_html_download）发后续，定位到html解析（news_cont）', () => {
+    const prodSteps: Step[] = [
+      {
+        stepId: '0',
+        sourceId: '430016821',
+        name: '上市公司-配置',
+        configId: '1400935',
+        topic: 'news_snt',
+        isRoot: true,
+        outputTable: '900',
+        enabled: true,
+      },
+      {
+        stepId: '40597',
+        sourceId: '430016821',
+        name: '1400935-详情',
+        configId: '1400974',
+        topic: 'dev_web_snatch_html_download',
+        inputTable: '900',
+        outputTable: '900',
+        dependsOn: ['0'],
+        enabled: true,
+      },
+      {
+        stepId: '40598',
+        sourceId: '430016821',
+        name: '1400935-详情',
+        configId: '1400975',
+        topic: 'news_cont',
+        inputTable: '900',
+        outputTable: '900',
+        dependsOn: ['40597'],
+        enabled: true,
+      },
+    ]
+
+    const res = resolveNextStepConfigFromSteps(prodSteps, '40597')
+    expect(res.hasNext).toBe(true)
+    expect(res.targetStepId).toBe('40598')
+    expect(res.targetConfigId).toBe('1400975')
+    expect(res.nextStep?.topic).toBe('news_cont')
+    expect(res.nextStep?.topic).not.toBe('dev_web_snatch_html_download')
+  })
+
+  it('节点 ID 即使是非数字别名，只要携带 currentConfig 也能精准定位到后继 news_cont', () => {
+    const prodSteps: Step[] = [
+      { stepId: '0', sourceId: '1', name: '列表', configId: '100', topic: 'news_snt', isRoot: true, outputTable: '900', enabled: true },
+      { stepId: '40597', sourceId: '1', name: '下载', configId: '1400974', topic: 'dev_web_snatch_html_download', inputTable: '900', outputTable: '900', dependsOn: ['0'], enabled: true },
+      { stepId: '40598', sourceId: '1', name: '解析', configId: '1400975', topic: 'news_cont', inputTable: '900', outputTable: '900', dependsOn: ['40597'], enabled: true },
+    ]
+
+    const res = resolveNextStepConfigFromSteps(prodSteps, 'web-download-node', {
+      configId: '1400974',
+      queue: 'dev_web_snatch_html_download',
+    })
+    expect(res.hasNext).toBe(true)
+    expect(res.targetStepId).toBe('40598')
+    expect(res.targetConfigId).toBe('1400975')
+    expect(res.nextStep?.topic).toBe('news_cont')
+  })
 })

@@ -7,7 +7,7 @@ import ResultView from './ResultView.vue'
 import { readSqlConditions } from '@/utils/sqlConditionHistory'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
-import { dataApi, isProductionBackend, ruleApi, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source } from '@/api'
+import { dataApi, isProductionBackend, ruleApi, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source, type Step } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -64,7 +64,7 @@ const FilePreviewStub = { name: 'FilePreview', props: ['path', 'name', 'ext'], t
 // 模板上的 @click 走 attrs fallthrough，跟真实 ElDropdownItem 一样能点。
 const ElDropdownStub = { name: 'ElDropdown', template: '<div><slot /><slot name="dropdown" /></div>' }
 const ElDropdownMenuStub = { name: 'ElDropdownMenu', template: '<div><slot /></div>' }
-const ElDropdownItemStub = { name: 'ElDropdownItem', props: ['disabled', 'divided'], template: '<div class="el-dropdown-item"><slot /></div>' }
+const ElDropdownItemStub = { name: 'ElDropdownItem', props: ['disabled', 'divided'], template: '<div class="el-dropdown-item" :disabled="disabled ? \'\' : undefined"><slot /></div>' }
 const STUBS = { ElDropdown: ElDropdownStub, ElDropdownMenu: ElDropdownMenuStub, ElDropdownItem: ElDropdownItemStub, SqlConditionEditor: false, CanvasHeader: true, ElDrawer: ElDrawerStub, ElDialog: ElDialogStub, ElPagination: true, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, FilePreview: FilePreviewStub, SummaryDrawer: true }
 
 function mountResultView() {
@@ -83,12 +83,8 @@ function mountResultView() {
 
 afterEach(() => localStorage.clear())
 
-// 0910 会议 §2-2/2-3 之后，节点轨道与四个筛选维度都默认收起。下面绝大多数用例验证的是
-// 查询、执行、节点切换的**逻辑**，不是折叠这个 UI，所以统一让两者保持展开，
-// 免得每条都先点两次。折叠行为本身在文件末尾单独成组测（那几条自己控制这两个偏好）。
 beforeEach(() => {
   localStorage.setItem('rc.dataview.result.railOpen', '1')
-  localStorage.setItem('rc.dataview.result.filterBarOpen', '1')
 })
 
 describe('ResultView', () => {
@@ -583,7 +579,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     // 保留的：节点轨道（0819 N1-2——它是唯一的节点选择器，全屏藏起来就没法切节点了）、
     // 筛选条件、发后续入口——全屏不是"只能看不能用"
     expect(wrapper.find('[data-testid="data-process-rail"]').exists()).toBe(true)
-    expect(wrapper.find('input[placeholder="数据 ID"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="data-cond-sql"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="data-exec-btn"]').exists()).toBe(true)
     // 源信息头没了，源名要在筛选行补回来，否则看不出在看哪个源的数据
     expect(wrapper.find('.rv-fs-source').text()).toBe(current.name)
@@ -595,14 +591,11 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     expect(wrapper.find('[data-testid="data-process-rail"]').exists()).toBe(true)
   })
 
-  it('节点自身设置了进入条件时出现「查看条件」，点击跳到流程画布的该节点配置——不再就地展开（0819 N4-1，会议 21:06"直接点它，然后就跳过去，不要在这边搞个东西起来"）', async () => {
+  it('流程节点的「查看条件」入口已去掉，不再渲染查看条件按钮', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
     flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
-    // 显式插一个规则处理节点（无 collectCfg）：采集节点的进入条件走 collectCfg.entryCondition，
-    // 直接赋值 cfg.entryCondition 会被 nodeEntryCondition() 的 collectCfg 优先读取口径吃掉。
-    // 不再依赖 buildSourceSeed 按源名猜测补节点（该演示期逻辑 2026-08-26 已移除）。
     flow.configs[ruleNodeId] = cfg({ title: '规则处理', entryCondition: { logic: 'AND', items: [{ field: 'title', op: 'contains', value: '公告' }] } })
     flow.main.splice(2, 0, ruleNodeId)
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
@@ -613,29 +606,11 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     await flushPromises()
     await selectNode(wrapper, ruleNodeId)
 
-    expect(wrapper.find('[data-testid="data-node-condition-link"]').exists()).toBe(true)
-    // 就地展开的条件区已删除
+    expect(wrapper.find('[data-testid="data-node-condition-link"]').exists()).toBe(false)
     expect(wrapper.find('.ctx-detail').exists()).toBe(false)
-
-    routerPush.mockClear()
-    await wrapper.find('[data-testid="data-node-condition-link"]').trigger('click')
-
-    expect(routerPush).toHaveBeenCalledWith(expect.objectContaining({
-      path: '/canvas',
-      query: expect.objectContaining({
-        // siteId 必须带上（值可能来自源详情，也可能来自当前路由）：左侧源列表的渲染
-        // 条件依赖它，丢了整个侧栏都不渲染
-        siteId: expect.stringMatching(/.+/),
-        sourceId: '391007768',
-        view: 'flow',
-        nodeId: ruleNodeId,
-        // 进入条件的编辑界面在「任务配置」页，不是节点配置页
-        tab: 'task',
-      }),
-    }))
   })
 
-  it('没有进入条件也不在任何分支上的节点，摘要行不出现"查看条件"（没内容不留空展开区）', async () => {
+  it('没有进入条件也不在任何分支上的节点，不出现"查看条件"', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
@@ -648,10 +623,10 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     await flushPromises()
     await selectNode(wrapper, '391007768-s1')
 
-    expect(wrapper.find('.ctx-toggle').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="data-node-condition-link"]').exists()).toBe(false)
   })
 
-  it('分支上的节点同样出现「查看条件」入口，跳转带上该节点 id（路径条件由分支条件决定，内容到画布里看）', async () => {
+  it('分支上的节点同样不出现「查看条件」入口', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
@@ -668,14 +643,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     await flushPromises()
     await selectNode(wrapper, childId)
 
-    // 分支上的节点自身没有进入条件，靠路径条件（分支条件）也应给出入口
-    expect(wrapper.find('[data-testid="data-node-condition-link"]').exists()).toBe(true)
-
-    routerPush.mockClear()
-    await wrapper.find('[data-testid="data-node-condition-link"]').trigger('click')
-    expect(routerPush).toHaveBeenCalledWith(expect.objectContaining({
-      query: expect.objectContaining({ nodeId: childId, view: 'flow', tab: 'task' }),
-    }))
+    expect(wrapper.find('[data-testid="data-node-condition-link"]').exists()).toBe(false)
   })
 
   it('快速切换节点时只有最后一次请求的结果生效，过期响应到达也不会覆盖当前展示（请求竞态保护）', async () => {
@@ -1102,8 +1070,8 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     const wrapper = mountResultView()
     await flushPromises()
     await selectNode(wrapper, 'last')
-    await wrapper.get('select.rv-input.st').setValue('E')
-    await wrapper.get('input.rv-input.flex').setValue("K1 IS NULL")
+    ;(wrapper.vm as any).filters.state = 'E'
+    await wrapper.get('[data-testid="data-cond-sql"]').setValue("K1 IS NULL")
 
     await wrapper.get('[data-testid="data-exec-all-btn"]').trigger('click')
     await flushPromises()
@@ -1211,7 +1179,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     const btn = () => wrapper.get('[data-testid="data-exec-all-btn"]')
     expect(btn().attributes('disabled')).toBeUndefined()
 
-    await wrapper.get('.rv-input.id').setValue('8809116')
+    ;(wrapper.vm as any).filters.dataId = '8809116'
     await flushPromises()
     expect(btn().attributes('disabled')).toBeDefined()
     expect(btn().attributes('title')).toContain('不支持按数据 ID')
@@ -1906,7 +1874,7 @@ describe('ResultView · 带条件进来', () => {
     await flushPromises()
 
     expect((wrapper.get('input.rv-input.flex').element as HTMLInputElement).value).toBe('K1 IS NULL')
-    expect((wrapper.get('select.rv-input.st').element as HTMLSelectElement).value).toBe('E')
+    expect((wrapper.vm as any).filters.state).toBe('E')
     expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ sql: 'K1 IS NULL', state: 'E' }))
   })
 
@@ -1930,12 +1898,10 @@ describe('ResultView · 带条件进来', () => {
 // §2-3「把『展开流程』及下方查询表折叠至单行」）。
 // 主干行只留：筛选开关、查询，以及整组数据操作（发任务/删除留在外面——那是这个页面的
 // 主要动作，藏起来比藏筛选条件更伤）。轨道开合按钮不在这一行，它浮在轨道区右上角。
-describe('ResultView · 布局折叠', () => {
+describe('ResultView · 布局与操作', () => {
   afterEach(() => vi.restoreAllMocks())
-  // 覆盖文件级那两条"保持展开"——这一组要测的正是默认收起
   beforeEach(() => {
     localStorage.removeItem('rc.dataview.result.railOpen')
-    localStorage.removeItem('rc.dataview.result.filterBarOpen')
   })
 
   async function mountAtNode() {
@@ -1949,16 +1915,14 @@ describe('ResultView · 布局折叠', () => {
     return wrapper
   }
 
-  it('默认收起：流程轨道和四个筛选维度都不占地方，查询与数据操作仍留在外面', async () => {
+  it('默认收起流程轨道，默认展示 SQL 查询条件，筛选按钮已去掉', async () => {
     const wrapper = await mountAtNode()
 
     expect(wrapper.find('[data-testid="data-process-rail"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="data-filter-bar"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="data-cond-sql"]').exists()).toBe(false)
-    expect(wrapper.find('input[placeholder="数据 ID"]').exists()).toBe(false)
-    // 主干行保留的：筛选开关 + 查询
+    expect(wrapper.find('[data-testid="data-filter-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="data-cond-sql"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="data-rail-toggle"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="data-filter-toggle"]').exists()).toBe(true)
     expect(wrapper.findAll('button').some((b) => b.text() === '查询')).toBe(true)
   })
 
@@ -1972,36 +1936,27 @@ describe('ResultView · 布局折叠', () => {
 
     await toggle.trigger('click')
     expect(wrapper.find('[data-testid="data-process-rail"]').exists()).toBe(true)
-    expect(wrapper.get('[data-testid="data-rail-toggle"]').text()).toContain('收起流程')
+    expect(wrapper.get('[data-testid="data-rail-toggle"]').attributes('title')).toBe('收起流程')
+    await wrapper.get('[data-testid="data-rail-toggle"]').trigger('click')
+    expect(wrapper.find('[data-testid="data-process-rail"]').exists()).toBe(false)
   })
 
-  it('点「筛选」展开四个筛选维度，再点收起', async () => {
+  it('输入 SQL 查询条件后点击清空，条件被清空', async () => {
     const wrapper = await mountAtNode()
+    await wrapper.get('[data-testid="data-cond-sql"]').setValue("K1 LIKE '%测试%'")
+    expect((wrapper.get('[data-testid="data-cond-sql"]').element as HTMLInputElement).value).toBe("K1 LIKE '%测试%'")
 
-    await wrapper.get('[data-testid="data-filter-toggle"]').trigger('click')
-    expect(wrapper.find('[data-testid="data-cond-sql"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="data-backtrace-jump"]').exists()).toBe(true)
-
-    await wrapper.get('[data-testid="data-filter-toggle"]').trigger('click')
-    expect(wrapper.find('[data-testid="data-cond-sql"]').exists()).toBe(false)
+    const clearBtn = wrapper.findAll('button').find((b) => b.text() === '清空')
+    expect(clearBtn).toBeDefined()
+    await clearBtn!.trigger('click')
+    expect((wrapper.get('[data-testid="data-cond-sql"]').element as HTMLInputElement).value).toBe('')
   })
 
-  // 这条是折叠能不能成立的前提：条件藏起来之后得有东西说明它还生效，
-  // 否则用户看到数据变少只会当成 bug。
-  it('收起时用角标显示还有几个条件生效', async () => {
+  it('发后续任务与发全部按钮合并，提供主按钮与下拉发全部选项', async () => {
     const wrapper = await mountAtNode()
-    const toggle = () => wrapper.get('[data-testid="data-filter-toggle"]')
-    expect(toggle().text()).toBe('筛选')
-    expect(toggle().classes()).not.toContain('on')
-
-    await toggle().trigger('click')
-    await wrapper.get('input[placeholder="数据 ID"]').setValue('123')
-    await wrapper.get('select.rv-input.st').setValue('C')
-    await toggle().trigger('click')
-
-    expect(wrapper.find('input[placeholder="数据 ID"]').exists()).toBe(false)
-    expect(toggle().text()).toContain('2')
-    expect(toggle().classes()).toContain('on')
+    expect(wrapper.find('[data-testid="data-exec-btn"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="data-exec-all-btn"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="data-exec-split-arrow"]').exists()).toBe(true)
   })
 
   it('发后续任务时：根据 nextConfigPaged 步骤链路取得下一个节点配置，并使用下一个节点的输入表与配置 ID 发起任务', async () => {
@@ -2043,7 +1998,70 @@ describe('ResultView · 布局折叠', () => {
       '430006252',
       '901',
       ['8688522'],
-      '1400975',
+      expect.objectContaining({
+        configId: '1400975',
+        itemConfig: '40598',
+        stepId: '40598',
+        nextStep: '40598',
+      }),
+    )
+  })
+
+  it('选择html网页下载节点发后续任务，发送给html解析节点（news_cont / 40598），不发给自己（dev_web_snatch_html_download）', async () => {
+    const current: Source = {
+      sourceId: '430016821',
+      name: '上市公司-测试',
+      url: 'http://example.com',
+      owner: 'test',
+      state: 'C',
+      mainTable: '900',
+      configId: '1400935',
+    }
+    const flow = useFlowStore()
+    const { useSourceStore } = await import('@/stores/source')
+    const sourceStore = useSourceStore()
+
+    const steps: Step[] = [
+      { stepId: '0', sourceId: '430016821', name: '上市公司-配置', isRoot: true, outputTable: '900', enabled: true, topic: 'news_snt', configId: '1400935' },
+      { stepId: '40597', sourceId: '430016821', name: 'html网页下载', configId: '1400974', inputTable: '900', outputTable: '900', dependsOn: ['0'], enabled: true, topic: 'dev_web_snatch_html_download' },
+      { stepId: '40598', sourceId: '430016821', name: 'html解析', configId: '1400975', inputTable: '900', outputTable: '900', dependsOn: ['40597'], enabled: true, topic: 'news_cont' },
+    ]
+    flow.loadFromSource(current, steps)
+    sourceStore.rememberSteps(steps, 'replace')
+
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
+    const nextStepSpy = vi.spyOn(dataApi, 'nextStep').mockResolvedValue({ message: '已提交 1 条' })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await wrapper.get('[data-testid="data-rail-toggle"]').trigger('click')
+    await selectNode(wrapper, '40597')
+
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['1001'])
+    await flushPromises()
+
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+    await flushPromises()
+
+    // 必须发送给 html解析 节点（itemConfig/stepId=40598, configId=1400975），绝对不能发送给当前 40597
+    expect(nextStepSpy).toHaveBeenCalledWith(
+      '430016821',
+      '900',
+      ['1001'],
+      expect.objectContaining({
+        configId: '1400975',
+        itemConfig: '40598',
+        stepId: '40598',
+        nextStep: '40598',
+      }),
+    )
+    expect(nextStepSpy).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        itemConfig: '40597',
+      }),
     )
   })
 })

@@ -3,11 +3,12 @@ import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
 import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElIcon, ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowUp } from '@element-plus/icons-vue'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, ruleApi, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery } from '@/api'
+import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, ruleApi, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery, type Step } from '@/api'
 import {
   buildHorizontalLayout, nodeOutputTable, nodeEntryCondition, conditionGroupLabel, conditionGroupIsSet,
   isDecision, isParallel, isFirstRunnableNode, firstRunnableNodeId, hasDirectSuccessor, directPredecessorIds, directSuccessorIds, directSuccessorIdsIncludingDisabled, type NodeConfig,
@@ -22,7 +23,7 @@ import DataGrid from './DataGrid.vue'
 import FilePreview from './components/FilePreview.vue'
 import { extFromName } from '@/utils/ossFile'
 import ProcessNodeRail from './ProcessNodeRail.vue'
-import { readResultRailOpen, writeResultRailOpen, readFilterBarOpen, writeFilterBarOpen } from './resultLayoutPref'
+import { readResultRailOpen, writeResultRailOpen } from './resultLayoutPref'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import RowDetailFields from './RowDetailFields.vue'
@@ -83,14 +84,6 @@ if (pendingCondition) {
 // 代价：收起状态下看不出当前在哪个节点（与全部源视图现状一致），暂按会上口径保留。
 const railOpen = ref(readResultRailOpen())
 watch(railOpen, writeResultRailOpen)
-// 筛选条件区的折叠（0910 会议 §2-3）。主干行只留每次都用的：节点入口、筛选开关、查询，
-// 外加整组数据操作（发任务/删除——那是这个页面的主要动作，藏起来比藏筛选条件更伤）。
-const filtersOpen = ref(readFilterBarOpen())
-watch(filtersOpen, writeFilterBarOpen)
-// 收起时唯一能说明"筛选还生效着"的东西。没有它，用户设完条件一折叠，回头看到数据变少
-// 会当成 bug——条件本身此刻是看不见的。所以角标不是装饰，是这个折叠能成立的前提。
-const activeFilterCount = computed(() =>
-  [filters.dataId, filters.parentId, filters.state, filters.sql].filter(Boolean).length)
 // 全屏：整个面板 position:fixed 铺满视口，不复制模板、不引入弹层——详情抽屉本来就渲染在
 // .rv-shell 内部，会跟着一起进全屏；祖先链上没有 transform/filter/contain，fixed 能正常
 // 逃逸到视口（已核对 AppShell.vue / FlowCanvas/index.vue）。
@@ -169,53 +162,6 @@ const execMode = computed<ExecMode>(() => {
   if (predecessorId.value) return 'upstream'
   return 'none'
 })
-
-// 进入条件 / 路径条件（M2-8）：大多数节点是"无"，只在真的有内容时才提示可展开，
-// 不产生一个空着也占位的展开按钮。上游节点不在这里重复展示——节点轨道的连线本身
-// 就是流程图，这里只放轨道上看不出来的、节点配置里才有的东西（0813 评审定案）。
-const entryConditionLabel = computed(() => {
-  const cfg = selectedCfg.value
-  if (!cfg) return ''
-  const group = nodeEntryCondition(cfg)
-  return conditionGroupIsSet(group) ? conditionGroupLabel(group) : ''
-})
-const pathConditionLabel = computed(() => {
-  const id = selectedNodeId.value
-  if (!id) return ''
-  for (const bg of flow.branchGroups) {
-    const branch = bg.branches.find((b) => b.chain.includes(id))
-    if (branch && conditionGroupIsSet(branch.condition)) return `${conditionGroupLabel(branch.condition)}（${branch.label}）`
-  }
-  return ''
-})
-const hasCond = computed(() => !!entryConditionLabel.value || !!pathConditionLabel.value)
-
-// 「查看条件」改为跳转到流程画布的节点配置（0819 N4-1）。会议 21:06："你看它可能不止那么
-// 简单，可能会稍微复杂一点，直接点它，然后就跳过去，不要在这边搞个东西起来，不是很奇怪吗"
-// ——就地展开只能塞下一行摘要，真要看清条件还是得去配置面板，索性直接送过去。
-// entryConditionLabel / pathConditionLabel 保留：它们决定这个入口要不要出现（没条件的节点
-// 不给一个点过去什么都没有的按钮），文案里也用来提示条件类型。
-function openNodeCondition() {
-  if (!selectedNodeId.value) return
-  // siteId 必须带上：左侧源列表的渲染条件是 sidebarSiteId（flow.sourceCtx?.siteId
-  // || route.query.siteId），跳转时丢了它整个源侧栏都不渲染。
-  // 这里原先只取 source.value?.siteId——mock 的源详情带这个字段，生产上的真实源详情
-  // 不带，于是单测一路绿灯、真实环境跳过去左栏就空了。故再兜一层当前路由上的 siteId。
-  const navSiteId = siteId.value || String(route.query.siteId ?? '')
-  void router.push({
-    path: '/canvas',
-    query: {
-      ...(navSiteId ? { siteId: navSiteId } : {}),
-      sourceId: sourceId.value,
-      view: 'flow',
-      nodeId: selectedNodeId.value,
-      // 进入条件的编辑界面在「任务配置」页（TaskTab.vue 的 ConditionRow），不是节点配置页。
-      // 例外：决策/分头节点在 nodeInspectorTabs 里只有「分支配置」一个页签（key 仍是
-      // config），跳 task 会落到不存在的页签。
-      tab: isStructuralNode.value ? 'config' : 'task',
-    },
-  })
-}
 
 function onScopeChange(next: 'output' | 'input') {
   if (scope.value === next) return
@@ -361,8 +307,38 @@ async function withNodeErrorContext<T>(nodeName: string, fn: () => Promise<T>): 
     throw new Error(`目标节点"${nodeName}"处理失败：${raw}${nextStepErrorHint(raw)}`)
   }
 }
-function runNextStep(ids: string[], tableId: string, nodeName: string) {
-  return withNodeErrorContext(nodeName, () => dataApi.nextStep(sourceId.value, tableId, ids))
+function buildCurrentFallbackSteps(): Step[] {
+  return Object.entries(flow.configs).map(([id, cfg]) => ({
+    stepId: (cfg as any).stepId || id,
+    sourceId: sourceId.value,
+    name: cfg.title,
+    configId: cfg.configId,
+    inputTable: cfg.collectCfg?.inputTable || cfg.ruleCfg?.inputTableId || cfg.inputTable,
+    outputTable: cfg.collectCfg?.outputTable || cfg.ruleCfg?.outputTableId || cfg.outputTable,
+    enabled: !cfg.disabled,
+    topic: cfg.taskCfg?.queue,
+    dependsOn: directPredecessorIds(flow.main, flow.configs, id, flow.branchGroups),
+  }))
+}
+
+function buildCurrentConfigHint() {
+  return {
+    configId: selectedCfg.value?.configId,
+    stepId: (selectedCfg.value as any)?.stepId || (/^\d+$/.test(selectedNodeId.value) ? selectedNodeId.value : undefined),
+    title: selectedCfg.value?.title,
+    queue: selectedCfg.value?.taskCfg?.queue,
+  }
+}
+
+function runNextStep(
+  ids: string[],
+  tableId: string,
+  nodeName: string,
+  configOptions?: { configId?: string; itemConfig?: string; stepId?: string; nextStep?: string },
+) {
+  return withNodeErrorContext(nodeName, () =>
+    configOptions ? dataApi.nextStep(sourceId.value, tableId, ids, configOptions) : dataApi.nextStep(sourceId.value, tableId, ids),
+  )
 }
 async function onSendNextStep() {
   if (execMode.value !== 'input' || !canExecute.value || !selectedRowIds.value.length) return
@@ -374,11 +350,18 @@ async function onSendNextStep() {
     const nodeName = selectedCfg.value?.title || selectedNodeId.value
     const tableId = inputTableId.value
     if (!tableId) return
+    const currentStepId = /^\d+$/.test(selectedNodeId.value) ? selectedNodeId.value : (selectedCfg.value as any)?.stepId
+    const hasCurrentStepId = currentStepId && /^\d+$/.test(currentStepId)
+    const currentOptions = {
+      ...(selectedCfg.value?.configId ? { configId: selectedCfg.value.configId } : {}),
+      ...(hasCurrentStepId ? { itemConfig: currentStepId, stepId: currentStepId, nextStep: currentStepId } : {}),
+    }
+    const hasCurrentOpts = Object.keys(currentOptions).length > 0
     await confirmDanger(
       '发起本节点任务',
       `将对选中的 ${count} 条数据发起当前节点「${nodeName}」的处理任务。\n是否继续？`,
       async () => {
-        const res = await runNextStep(ids, tableId, nodeName)
+        const res = await runNextStep(ids, tableId, nodeName, hasCurrentOpts ? currentOptions : undefined)
         return res
       },
       showNextStepReceipt,
@@ -390,7 +373,7 @@ async function onSendNextStep() {
   // 必须根据当前节点请求流程的下一个节点配置（nextConfigPaged）去发任务！
   let nextInfo: Awaited<ReturnType<typeof fetchNextStepConfig>> | undefined
   try {
-    nextInfo = await fetchNextStepConfig(sourceId.value, selectedNodeId.value)
+    nextInfo = await fetchNextStepConfig(sourceId.value, selectedNodeId.value, buildCurrentFallbackSteps(), buildCurrentConfigHint())
   } catch {
     // ignore
   }
@@ -405,19 +388,32 @@ async function onSendNextStep() {
     return
   }
 
+  const firstSuccId = successorIds.value[0]
+  const firstSuccCfg = firstSuccId ? flow.configs[firstSuccId] : undefined
+  const fallbackSuccConfigId = firstSuccCfg?.configId
+  const fallbackSuccStepId = (firstSuccCfg as any)?.stepId || (firstSuccId && /^\d+$/.test(firstSuccId) ? firstSuccId : undefined)
+
   const tableId = (nextInfo?.hasNext ? nextInfo.targetTableId : undefined) || successorTableId.value || outputTableId.value || selectedTable.value
   if (!tableId) return
   const targetNodeName = (nextInfo?.hasNext ? nextInfo.targetNodeName : undefined) || successorTitles.value || '后续节点'
-  const configId = nextInfo?.hasNext ? nextInfo.targetConfigId : undefined
+  const targetConfigId = (nextInfo?.hasNext ? nextInfo.targetConfigId : undefined) || fallbackSuccConfigId
+  const targetStepId = (nextInfo?.hasNext ? nextInfo.targetStepId : undefined) || fallbackSuccStepId
+  const hasTargetStepId = targetStepId && /^\d+$/.test(targetStepId)
   const fanout = (nextInfo?.branchHint ? `\n这批数据会按各后继节点的进入条件分流到：${nextInfo.branchHint}` : '') ||
     (branchTargets.value.length ? `\n这批数据会按各后继节点的进入条件分流到：${branchTargets.value.map((t) => `${t.title}（${t.condition}）`).join('、')}` : '')
+
+  const configOptions = {
+    ...(targetConfigId ? { configId: targetConfigId } : {}),
+    ...(hasTargetStepId ? { itemConfig: targetStepId, stepId: targetStepId, nextStep: targetStepId } : {}),
+  }
+  const hasOpts = Object.keys(configOptions).length > 0
 
   await confirmDanger(
     '发后续任务',
     `将对选中的 ${count} 条数据发起后续节点「${targetNodeName}」的处理任务。${fanout}\n是否继续？`,
     async () => {
       const res = await withNodeErrorContext(targetNodeName, () =>
-        configId ? dataApi.nextStep(sourceId.value, tableId, ids, configId) : dataApi.nextStep(sourceId.value, tableId, ids),
+        hasOpts ? dataApi.nextStep(sourceId.value, tableId, ids, configOptions) : dataApi.nextStep(sourceId.value, tableId, ids),
       )
       return res
     },
@@ -444,11 +440,20 @@ async function onSendUpstream() {
     return
   }
   const skipHint = skipped ? `（另有 ${skipped} 条缺少父 ID，已跳过）` : ''
+  const predId = predecessorId.value
+  const predCfg = predId ? flow.configs[predId] : undefined
+  const predStepId = (predCfg as any)?.stepId || (predId && /^\d+$/.test(predId) ? predId : undefined)
+  const hasPredStepId = predStepId && /^\d+$/.test(predStepId)
+  const predOptions = {
+    ...(predCfg?.configId ? { configId: predCfg.configId } : {}),
+    ...(hasPredStepId ? { itemConfig: predStepId, stepId: predStepId, nextStep: predStepId } : {}),
+  }
+  const hasPredOpts = Object.keys(predOptions).length > 0
   await confirmDanger(
     '从上一节点重跑',
     `将从上一节点「${predName}」重新发起 ${ids.length} 条${skipHint}。重跑结果需等任务完成后刷新。是否继续？`,
     async () => {
-      const res = await runNextStep(ids, tableId, predName)
+      const res = await runNextStep(ids, tableId, predName, hasPredOpts ? predOptions : undefined)
       selectedRowIds.value = []
       return res
     },
@@ -498,11 +503,14 @@ async function onSendAllUnderFilter() {
     const nodeName = selectedCfg.value?.title || selectedNodeId.value
     const tableId = inputTableId.value
     if (!tableId) return
+    const currentStepId = /^\d+$/.test(selectedNodeId.value) ? selectedNodeId.value : (selectedCfg.value as any)?.stepId
     await confirmDanger(
       '发全部本节点',
       `[实验性] 将对当前筛选条件下"${nodeName}"的全部输入数据发起处理（命中 ${total.value} 条，最多 500000 条），是否继续？`,
       () => withNodeErrorContext(nodeName, () => dataApi.nextStepBatch({
         tableId, sourceId: sourceId.value,
+        ...(selectedCfg.value?.configId ? { configId: selectedCfg.value.configId } : {}),
+        ...(currentStepId ? { itemConfig: currentStepId, stepId: currentStepId } : {}),
         state: filters.state || undefined,
         cond: filters.sql || undefined,
         size: 500000, start: 0,
@@ -514,7 +522,7 @@ async function onSendAllUnderFilter() {
 
   let nextInfo: Awaited<ReturnType<typeof fetchNextStepConfig>> | undefined
   try {
-    nextInfo = await fetchNextStepConfig(sourceId.value, selectedNodeId.value)
+    nextInfo = await fetchNextStepConfig(sourceId.value, selectedNodeId.value, buildCurrentFallbackSteps(), buildCurrentConfigHint())
   } catch {
     // ignore
   }
@@ -529,16 +537,23 @@ async function onSendAllUnderFilter() {
     return
   }
 
+  const firstSuccId = successorIds.value[0]
+  const firstSuccCfg = firstSuccId ? flow.configs[firstSuccId] : undefined
+  const fallbackSuccConfigId = firstSuccCfg?.configId
+  const fallbackSuccStepId = (firstSuccCfg as any)?.stepId || (firstSuccId && /^\d+$/.test(firstSuccId) ? firstSuccId : undefined)
+
   const tableId = (nextInfo?.hasNext ? nextInfo.targetTableId : undefined) || successorTableId.value || outputTableId.value || selectedTable.value
   if (!tableId) return
   const targetNodeName = (nextInfo?.hasNext ? nextInfo.targetNodeName : undefined) || successorTitles.value || '后续节点'
-  const configId = nextInfo?.hasNext ? nextInfo.targetConfigId : undefined
+  const targetConfigId = (nextInfo?.hasNext ? nextInfo.targetConfigId : undefined) || fallbackSuccConfigId
+  const targetStepId = (nextInfo?.hasNext ? nextInfo.targetStepId : undefined) || fallbackSuccStepId
   await confirmDanger(
     '发全部后续',
     `[实验性] 将对当前筛选条件下"${targetNodeName}"的全部数据发起后续处理（命中 ${total.value} 条，最多 500000 条），是否继续？`,
     () => withNodeErrorContext(targetNodeName, () => dataApi.nextStepBatch({
       tableId, sourceId: sourceId.value,
-      ...(configId ? { configId } : {}),
+      ...(targetConfigId ? { configId: targetConfigId } : {}),
+      ...(targetStepId && /^\d+$/.test(targetStepId) ? { itemConfig: targetStepId, stepId: targetStepId } : {}),
       state: filters.state || undefined,
       cond: filters.sql || undefined,
       size: 500000, start: 0,
@@ -1244,9 +1259,19 @@ async function onTestScript() {
         <ProcessNodeRail :model-value="selectedNodeId" :layout="processLayout" @update:model-value="onSelectNode" />
         <div v-if="!allNodes.length" class="rv-bar-empty">当前流程没有可查看数据的节点</div>
       </div>
+      <div class="rv-rail-ctl">
+        <button
+          type="button"
+          class="rv-rail-icon-btn"
+          data-testid="data-rail-toggle"
+          title="收起流程"
+          aria-label="收起流程"
+          @click="railOpen = false"
+        ><el-icon :size="14"><ArrowUp /></el-icon></button>
+      </div>
     </div>
 
-    <!-- 主干行（0910 重排）：左端是节点上下文（展开流程 / 查看条件），中间「查询」+「筛选」，
+    <!-- 主干行（0910 重排）：左端是节点展开流程入口，中间「查询」+「筛选」，
          右端是数据操作。四个筛选维度收进「筛选」抽屉，输入/输出/执行方式在下面的表头行。
          节点选择归流程图（0819 会议 05:13"上面那个和下面那个不是两个都有了吗？只要有一个
          就行了"——原来这里还有一个与轨道完全同步的节点下拉，同一件事两个控件，已删）。 -->
@@ -1256,55 +1281,67 @@ async function onTestScript() {
     <div v-if="selectedNodeId" class="ctx-summary" data-testid="data-node-context">
       <!-- 全屏时源信息头被藏起来了，这里把源名补回来，否则看不出在看哪个源的数据。 -->
       <span v-if="fullscreen" class="rv-fs-source" :title="source?.name || sourceId">{{ source?.name || sourceId }}</span>
-      <!-- 轨道开合与「查看条件」放在主干行左端（0910）。它们一度浮在轨道区右上角——
-           那样收起后得靠 .rv-railbox 的 min-height 留一条 32px 窄带专门托住按钮，
-           一整行的高度只换一个按钮；而主干行左边又只剩「筛选」「查询」两个，空了半边。
-           挪到这里两个问题一起解决，代价是规格必须跟这一行看齐（28px 方角），
-           不能再用轨道条上那种 24px 胶囊——胶囊夹在一排方角按钮中间会参差扎眼。 -->
+      <!-- 流程轨道展开时收起按钮合并在轨道区右上角；轨道收起时在主干行左端保留展开按钮。 -->
       <button
+        v-if="!railOpen"
         type="button"
         class="rv-rail-toggle"
-        :class="{ open: railOpen }"
         data-testid="data-rail-toggle"
-        :title="railOpen ? '收起流程节点轨道' : '展开流程节点轨道'"
-        @click="railOpen = !railOpen"
-      >{{ railOpen ? '收起流程' : '展开流程' }} <span class="arrow">▾</span></button>
-      <button
-        v-if="hasCond"
-        type="button"
-        class="ctx-toggle"
-        data-testid="data-node-condition-link"
-        title="到流程画布查看该节点的完整配置与条件"
-        @click="openNodeCondition"
-      >查看条件 <span class="arrow">↗</span></button>
+        title="展开流程节点轨道"
+        @click="railOpen = true"
+      >展开流程 <span class="arrow">▾</span></button>
       <template v-if="hasAnyTable">
+        <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="selectedTable" :table-name="meta?.tableName" class="rv-sql">
+          <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="rv-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
+        </SqlConditionEditor>
         <span class="rv-actions">
           <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
+          <button class="rc-btn" type="button" @click="clearFilters">清空</button>
+          <!-- 0903 Y2-7：带着条件跳到全部源数据视图，在那里反查哪些源命中 -->
+          <button
+            class="rc-btn"
+            type="button"
+            data-testid="data-backtrace-jump"
+            :disabled="!canBackTrace"
+            :title="canBackTrace ? '带着当前条件切到全部源数据视图，在那里反查哪些源命中' : '先填至少一个数据条件（如 SQL 条件）'"
+            @click="openBackTraceInSiteView"
+          >按条件查源 →</button>
         </span>
-        <button
-          type="button"
-          class="rv-filter-toggle"
-          :class="{ on: activeFilterCount > 0, open: filtersOpen }"
-          data-testid="data-filter-toggle"
-          :title="filtersOpen ? '收起筛选条件' : '展开筛选条件（数据 ID / 父 ID / 状态 / SQL）'"
-          @click="filtersOpen = !filtersOpen"
-        >筛选<span v-if="activeFilterCount" class="n">{{ activeFilterCount }}</span></button>
-        <!-- 数据操作组（0909 第二次重排，用户「把操作列的放一行」）：发任务/删除是「查出这批
-             数据之后对它动手」，跟查询条件同一语境，放筛选行右端；表头行只留「这张表是什么 +
-             怎么看它」。这三个按钮最宽（发全部带命中数、删除数据带下拉箭头），压在表头行上
-             实测把那条横条撑到横向滚动——第一次重排只搬走了窄按钮，没解决溢出。
-             「已选 N 条」跟着走：它唯一的用途就是告诉你「发后续任务」会发几条。 -->
+        <!-- 数据操作组：发后续任务与发全部合并为组合操作按钮 -->
         <span class="rv-data-ops">
           <span v-if="canPickRows" class="muted">已选 {{ selectedRowIds.length }} 条</span>
-          <button
-            v-if="execMode !== 'none'"
-            class="rc-btn primary"
-            type="button"
-            data-testid="data-exec-btn"
-            :disabled="!canExecute"
-            :title="execDisabledReason"
-            @click="execMode === 'fetch' ? onSendFetch() : execMode === 'upstream' ? onSendUpstream() : onSendNextStep()"
-          >{{ actionBtnText }}</button>
+          <div v-if="execMode !== 'none'" class="rc-btn-group">
+            <button
+              class="rc-btn primary"
+              type="button"
+              data-testid="data-exec-btn"
+              :disabled="!canExecute"
+              :title="execDisabledReason"
+              @click="execMode === 'fetch' ? onSendFetch() : execMode === 'upstream' ? onSendUpstream() : onSendNextStep()"
+            >{{ actionBtnText }}</button>
+            <el-dropdown
+              v-if="execMode === 'input' && canPickRows"
+              trigger="click"
+              :teleported="false"
+            >
+              <button
+                class="rc-btn primary rv-split-arrow"
+                type="button"
+                data-testid="data-exec-split-arrow"
+                title="更多执行选项"
+              ><span class="arrow">▾</span></button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item
+                    data-testid="data-exec-all-btn"
+                    :disabled="!!sendAllBlockedReason"
+                    :title="sendAllBlockedReason || (isCurrentNodeAction ? '不按勾选，按当前筛选条件发起本节点全部数据' : '不按勾选，按当前筛选条件发全部后续')"
+                    @click="onSendAllUnderFilter"
+                  >发全部（命中 {{ total }} 条）</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
           <!-- 同表多后继：不再拦，只说清会分流到哪几个（2026-09-04）。
                原来这里是禁用勾选 + 一句藏在 title 里的"无法确定任务目标节点"，纯黑盒。 -->
           <span
@@ -1328,26 +1365,9 @@ async function onTestScript() {
             :disabled="codeTest.loading"
             @click="onTestScript"
           >{{ codeTest.loading ? '测试中…' : '测试脚本' }}</button>
-          <!-- 0903 Y0-B：发任务只剩两档——主按钮（按勾选）+ 这一个「发全部」。
-               原来是「发后续 ▾」下拉里装三项（发全部/发本页/发大量），后两项已删；
-               只剩一项还做成下拉是坏交互（点一下才看见里面只有一个），改成并排按钮。
-               末节点「从上一节点重跑」不走这一档，故 execMode === 'input' 仍是前提。 -->
-          <!-- 文案直接摆出命中数（0903）：用户的困惑本质是"看不出这个按钮要发多少"，
-               把 total 显示出来比任何说明都直接。禁用时 title 说明原因与替代做法。 -->
-          <button
-            v-if="execMode === 'input' && canPickRows"
-            class="rc-btn"
-            type="button"
-            data-testid="data-exec-all-btn"
-            :disabled="!!sendAllBlockedReason"
-            :title="sendAllBlockedReason || (isCurrentNodeAction ? '不按勾选，按当前筛选条件发起本节点全部数据' : '不按勾选，按当前筛选条件发全部后续')"
-            @click="onSendAllUnderFilter"
-          >发全部（命中 {{ total }} 条）</button>
           <!-- 删除数据（2026-09-09 从数据中心迁入）：跟发任务并排——都是「对这批数据动手」。
                仅测试表出现（meta.state === 'C'），与数据中心同一道门禁。
-               标红（.danger）：它是这组里唯一不可撤销的操作，跟旁边的发任务按钮必须一眼分得开。
-               （0909 重排前它一度去过红——当时它挤在一排 24px 的统计/全屏中间，红色让它在
-               尺寸断层上格外刺眼；现在同组同规格，这个顾虑不存在了。） -->
+               标红（.danger）：它是这组里唯一不可撤销的操作，跟旁边的发任务按钮必须一眼分得开。 -->
           <el-dropdown v-if="isTestTable" trigger="click">
             <button class="rc-btn tiny danger" type="button" data-testid="data-delete">删除数据 <span class="arrow">▾</span></button>
             <template #dropdown>
@@ -1360,34 +1380,6 @@ async function onTestScript() {
           </el-dropdown>
         </span>
       </template>
-    </div>
-
-    <!-- 筛选抽屉：四个筛选维度 + 清空 + 反查跳转。它们是"偶尔才改一次"的东西，
-         常驻一整行不划算；而主干行上的动作（查询、发任务、删除）每次都用，留在外面。
-         这里不再需要 0909 那个 .rv-linebreak 强制换行——分行点漂移的根源是条件与动作
-         挤在同一个 flex 容器里，现在两者本就分属两行了。 -->
-    <div v-if="selectedNodeId && hasAnyTable && filtersOpen" class="ctx-summary rv-filterbar" data-testid="data-filter-bar">
-      <input v-model="filters.dataId" class="rv-input id" placeholder="数据 ID" />
-      <input v-model="filters.parentId" class="rv-input id" placeholder="父 ID" />
-      <select v-model="filters.state" class="rv-input st">
-        <option value="">状态（全部）</option>
-        <option value="C">C 成功</option>
-        <option value="E">E 出错</option>
-        <option value="L">L 处理中</option>
-      </select>
-      <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="selectedTable" :table-name="meta?.tableName" class="rv-sql">
-        <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="rv-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
-      </SqlConditionEditor>
-      <button class="rc-btn" type="button" @click="clearFilters">清空</button>
-      <!-- 0903 Y2-7：带着条件跳到全部源数据视图，在那儿才有"反查源"这件事 -->
-      <button
-        class="rc-btn"
-        type="button"
-        data-testid="data-backtrace-jump"
-        :disabled="!canBackTrace"
-        :title="canBackTrace ? '带着当前条件切到全部源数据视图，在那里反查哪些源命中' : '先填至少一个数据条件（SQL / 状态 / 数据 ID / 父 ID）'"
-        @click="openBackTraceInSiteView"
-      >按条件查源 →</button>
     </div>
 
     <template v-if="hasAnyTable">
@@ -1649,29 +1641,17 @@ async function onTestScript() {
 .rv-shell.is-fullscreen { position: fixed; inset: 0; z-index: 60; height: 100vh; border: 0; border-radius: 0; }
 
 /* 轨道容器：控件浮在轨道右上角（.rv-bar 自己会横向滚动，控件必须放在滚动容器外面，
-   否则会跟着内容滚走）。0910 起收起时整块不渲染：开合按钮已挪到主干行，
-   原先靠 min-height 留的那条 32px 窄带纯粹是为托住按钮，按钮走了它就只是占地方。 */
+   否则会跟着内容滚走）。收起流程按钮合并在轨道区右上角，不额外占用一行的空间。 */
 .rv-railbox { position: relative; border-bottom: 1px solid var(--rc-border-soft); background: #f8fafc; }
+.rv-rail-ctl { position: absolute; top: 6px; right: 10px; z-index: 2; display: flex; align-items: center; gap: 6px; }
+.rv-rail-icon-btn { width: 24px; height: 24px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); background: #fff; color: var(--rc-text-2); cursor: pointer; transition: all 0.15s ease; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04); }
+.rv-rail-icon-btn:hover { border-color: var(--rc-primary); color: var(--rc-primary-ink); background: var(--rc-primary-bg); }
 
-/* 折叠开关：0910 起默认收起（会议 §2-2），按钮站在主干行左端，
-   所以规格跟这一行的其余按钮一致（28px / 6px 圆角 / 12px）。
-   **不要改回 24px 胶囊**——那是给"浮在轨道右上角、不与任何按钮同排"设计的；
-   放进这一行会夹在一排方角按钮中间参差扎眼（0910 两种都实测过）。 */
+/* 折叠开关：默认收起，展开后收起按钮置于轨道区右上角；收起时在主干行左端保留展开按钮。 */
 .rv-rail-toggle { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 700; cursor: pointer; }
 .rv-rail-toggle:hover { border-color: var(--rc-primary); color: var(--rc-primary-ink); }
 .rv-rail-toggle .arrow { display: inline-block; flex: none; color: var(--rc-faint); transition: transform .18s ease; }
 .rv-rail-toggle.open .arrow { transform: rotate(180deg); }
-
-/* 筛选开关：没有条件时安静；一旦有条件生效就整体变主色并挂出数字——
-   收起状态下这是唯一说明"还有筛选在起作用"的信号。 */
-.rv-filter-toggle { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 700; cursor: pointer; }
-.rv-filter-toggle:hover { border-color: var(--rc-primary); color: var(--rc-primary-ink); }
-.rv-filter-toggle.open { background: #f1f5f9; }
-.rv-filter-toggle.on { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
-.rv-filter-toggle .n { display: inline-block; min-width: 16px; padding: 0 4px; border-radius: 999px; background: var(--rc-primary); color: #fff; font-family: var(--rc-mono, monospace); font-size: 10.5px; line-height: 16px; text-align: center; }
-
-/* 筛选抽屉：主干行的延伸，靠底色表示从属关系，不做成独立卡片。 */
-.rv-filterbar { background: #f8fafc; }
 
 /* 全屏下源信息头被藏起来，用这个补回"在看哪个源"。 */
 .rv-fs-source { flex: none; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 700; color: var(--rc-text); }
@@ -1746,10 +1726,6 @@ button.ctx-piece.scope-piece { border: 0; background: transparent; font: inherit
 button.ctx-piece.scope-piece:hover { opacity: .85; background: var(--rc-border-soft); }
 button.ctx-piece.scope-piece.active { opacity: 1; background: var(--rc-primary-bg); }
 button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v { color: var(--rc-primary-ink); }
-/* 跟开合按钮同组，一起站在主干行上，规格随行（配色保留：黄＝跳出本页去画布看配置）。 */
-.ctx-toggle { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 12px; border: 1px solid #fde68a; border-radius: var(--rc-radius-sm); background: #fffbeb; color: #92400e; font-size: 12px; font-weight: 700; cursor: pointer; }
-.ctx-toggle:hover { border-color: #fbbf24; }
-.ctx-toggle .arrow { display: inline-block; transition: transform .18s ease; }
 .rv-empty-scope { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px 12px; text-align: center; color: var(--rc-faint); font-size: 12px; }
 
 .rv-input { height: 28px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; font-size: 12px; outline: none; min-width: 110px; background: #fff; }
@@ -1772,6 +1748,13 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
    删除数据那个 .tiny 也一并拉齐，这行不再有 24px 的邻居。 */
 .rv-data-ops { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
 .ctx-summary .rc-btn.tiny { height: 28px; padding: 0 12px; font-size: 12px; }
+
+/* 发后续任务与发全部的组合操作按钮 */
+.rc-btn-group { display: inline-flex; align-items: stretch; vertical-align: middle; }
+.rc-btn-group > .rc-btn:first-child:not(:last-child) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.rc-btn-group :deep(.el-dropdown) { display: inline-flex; }
+.rc-btn-group .rv-split-arrow { height: 28px; padding: 0 8px; border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid rgba(255, 255, 255, 0.35); display: inline-flex; align-items: center; justify-content: center; }
+.rc-btn-group .rv-split-arrow:disabled { opacity: 0.6; cursor: not-allowed; }
 
 /* 表头内容现在渲染在 DataGrid 的 #head 插槽里（那条横条由 .dg-toolbar 负责排版），
    这里只留下内容本身的样式，不再有独立的 .rv-tablehead / .rv-pager 横条。 */

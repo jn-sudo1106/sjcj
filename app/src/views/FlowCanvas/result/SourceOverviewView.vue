@@ -773,12 +773,15 @@ watch(() => props.currentSiteId, () => {
                 @change="toggleAll"
               />
             </th>
-            <th><button class="sov-sort" type="button" :title="sortLabel('SOURCE_ID')" @click="toggleSort('SOURCE_ID')">源 ID <span>{{ sortField === 'SOURCE_ID' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕' }}</span></button></th>
+            <th><button class="sov-sort" type="button" data-testid="sort-source-id" :title="sortLabel('SOURCE_ID')" @click="toggleSort('SOURCE_ID')">源 ID <span>{{ sortField === 'SOURCE_ID' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕' }}</span></button></th>
             <th>源名称</th>
             <th>URL</th><th>主表</th>
             <th>标签</th>
-            <th><button class="sov-sort" type="button" :title="sortLabel('DATA_CNT')" @click="toggleSort('DATA_CNT')">数据 <span>{{ sortField === 'DATA_CNT' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕' }}</span></button></th>
-            <th>新入</th><th>成功</th><th>最近任务</th><th>最近成功</th><th>状态</th><th>备注</th>
+            <th><button class="sov-sort" type="button" data-testid="sort-data-cnt" :title="sortLabel('DATA_CNT')" @click="toggleSort('DATA_CNT')">数据 <span>{{ sortField === 'DATA_CNT' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕' }}</span></button></th>
+            <th>新入</th><th>成功</th>
+            <th><button class="sov-sort" type="button" data-testid="sort-last-task" :title="sortLabel('LAST_RUN')" @click="toggleSort('LAST_RUN')">最近任务 <span>{{ sortField === 'LAST_RUN' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕' }}</span></button></th>
+            <th><button class="sov-sort" type="button" data-testid="sort-last-success" :title="sortLabel('LAST_SUCCESS')" @click="toggleSort('LAST_SUCCESS')">最近成功 <span>{{ sortField === 'LAST_SUCCESS' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕' }}</span></button></th>
+            <th>状态</th><th>备注</th>
           </tr>
         </thead>
         <tbody>

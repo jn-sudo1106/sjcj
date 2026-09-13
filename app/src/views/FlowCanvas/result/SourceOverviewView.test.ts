@@ -795,3 +795,96 @@ describe('SourceOverviewView · 备注筛选（0831 X1-B）', () => {
     expect(wrapper.find('[data-testid="source-overview-author"]').exists()).toBe(false)
   })
 })
+
+describe('SourceOverviewView · 任务与成功时间排序', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    sessionStorage.clear()
+  })
+
+  it('支持按「最近任务」排序：升序 -> 降序 -> 取消排序', async () => {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
+    await flushPromises()
+
+    const btn = wrapper.get('[data-testid="sort-last-task"]')
+    expect(btn.text()).toContain('最近任务 ↕')
+    expect(btn.attributes('title')).toBe('未排序')
+
+    // 1. 点击升序
+    await btn.trigger('click')
+    await flushPromises()
+    expect(btn.text()).toContain('最近任务 ↑')
+    expect(btn.attributes('title')).toBe('升序')
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
+      field: 'LAST_RUN',
+      sorted: 1,
+      type: 'ASC',
+    }))
+
+    // 2. 再次点击降序
+    await btn.trigger('click')
+    await flushPromises()
+    expect(btn.text()).toContain('最近任务 ↓')
+    expect(btn.attributes('title')).toBe('降序')
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
+      field: 'LAST_RUN',
+      sorted: -1,
+      type: 'DESC',
+    }))
+
+    // 3. 第三次点击取消排序
+    await btn.trigger('click')
+    await flushPromises()
+    expect(btn.text()).toContain('最近任务 ↕')
+    expect(btn.attributes('title')).toBe('未排序')
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
+      field: undefined,
+      sorted: undefined,
+      type: undefined,
+    }))
+  })
+
+  it('支持按「最近成功」排序：升序 -> 降序 -> 取消排序', async () => {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
+    await flushPromises()
+
+    const btn = wrapper.get('[data-testid="sort-last-success"]')
+    expect(btn.text()).toContain('最近成功 ↕')
+    expect(btn.attributes('title')).toBe('未排序')
+
+    // 1. 点击升序
+    await btn.trigger('click')
+    await flushPromises()
+    expect(btn.text()).toContain('最近成功 ↑')
+    expect(btn.attributes('title')).toBe('升序')
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
+      field: 'LAST_SUCCESS',
+      sorted: 1,
+      type: 'ASC',
+    }))
+
+    // 2. 再次点击降序
+    await btn.trigger('click')
+    await flushPromises()
+    expect(btn.text()).toContain('最近成功 ↓')
+    expect(btn.attributes('title')).toBe('降序')
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
+      field: 'LAST_SUCCESS',
+      sorted: -1,
+      type: 'DESC',
+    }))
+
+    // 3. 第三次点击取消排序
+    await btn.trigger('click')
+    await flushPromises()
+    expect(btn.text()).toContain('最近成功 ↕')
+    expect(btn.attributes('title')).toBe('未排序')
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
+      field: undefined,
+      sorted: undefined,
+      type: undefined,
+    }))
+  })
+})

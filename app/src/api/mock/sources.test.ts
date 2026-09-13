@@ -44,6 +44,20 @@ describe('source mock 筛选', () => {
       SOURCES.splice(SOURCES.indexOf(unassigned), 1)
     }
   })
+
+  it('支持按 field (LAST_RUN, LAST_SUCCESS) 排序', () => {
+    const ascRun = mockSourcePaged({ field: 'LAST_RUN', type: 'ASC', size: 999 }).list
+    expect(ascRun.length).toBeGreaterThan(1)
+    for (let i = 1; i < ascRun.length; i++) {
+      expect((ascRun[i].lastTaskAt ?? '') >= (ascRun[i - 1].lastTaskAt ?? '')).toBe(true)
+    }
+
+    const descSuccess = mockSourcePaged({ field: 'LAST_SUCCESS', type: 'DESC', size: 999 }).list
+    expect(descSuccess.length).toBeGreaterThan(1)
+    for (let i = 1; i < descSuccess.length; i++) {
+      expect((descSuccess[i].lastSuccessAt ?? '') <= (descSuccess[i - 1].lastSuccessAt ?? '')).toBe(true)
+    }
+  })
 })
 
 describe('新建 / 编辑源（0706 Phase3/4）', () => {

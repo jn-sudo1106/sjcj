@@ -25,6 +25,13 @@ export interface ResolvedNextStepConfig {
   reason?: string
 }
 
+export interface CurrentNodeConfigHint {
+  configId?: string
+  stepId?: string
+  title?: string
+  queue?: string
+}
+
 /**
  * 根据 item/next/nextConfigPaged 返回的步骤列表与当前选中的节点 ID，
  * 精准定位流程的下一个节点配置（Next Step Config）。
@@ -36,6 +43,7 @@ export interface ResolvedNextStepConfig {
 export function resolveNextStepConfigFromSteps(
   steps: Step[],
   currentNodeId: string,
+  currentConfig?: CurrentNodeConfigHint,
 ): ResolvedNextStepConfig {
   if (!steps || steps.length === 0) {
     return {
@@ -58,10 +66,25 @@ export function resolveNextStepConfigFromSteps(
     curIdStr === 'start' ||
     curIdStr.startsWith('source:')
 
-  // 2. 查找当前节点对应的步骤（按 stepId 或 configId 匹配）
-  const currentStep = steps.find(
+  // 2. 查找当前节点对应的步骤（按 stepId 或 configId 匹配，未匹配时按 currentConfig 线索兜底）
+  let currentStep = steps.find(
     (s) => String(s.stepId) === curIdStr || (s.configId && String(s.configId) === curIdStr),
   )
+
+  if (!currentStep && currentConfig) {
+    const hintStepId = currentConfig.stepId ? String(currentConfig.stepId).trim() : ''
+    const hintConfigId = currentConfig.configId ? String(currentConfig.configId).trim() : ''
+    const hintQueue = currentConfig.queue ? String(currentConfig.queue).trim() : ''
+    const hintTitle = currentConfig.title ? String(currentConfig.title).trim() : ''
+
+    currentStep = steps.find((s) => {
+      if (hintStepId && String(s.stepId) === hintStepId) return true
+      if (hintConfigId && s.configId && String(s.configId) === hintConfigId) return true
+      if (hintQueue && s.topic && s.topic === hintQueue) return true
+      if (hintTitle && s.name && s.name === hintTitle) return true
+      return false
+    })
+  }
 
   const isRootNode = isExplicitRoot || Boolean(currentStep && (currentStep.isRoot || currentStep.stepId === '0'))
 
@@ -160,6 +183,7 @@ export async function fetchNextStepConfig(
   sourceId: string,
   currentNodeId: string,
   fallbackSteps?: Step[],
+  currentConfig?: CurrentNodeConfigHint,
 ): Promise<ResolvedNextStepConfig> {
   let steps: Step[] = []
 
@@ -197,5 +221,5 @@ export async function fetchNextStepConfig(
     steps = fallbackSteps
   }
 
-  return resolveNextStepConfigFromSteps(steps, currentNodeId)
+  return resolveNextStepConfigFromSteps(steps, currentNodeId, currentConfig)
 }

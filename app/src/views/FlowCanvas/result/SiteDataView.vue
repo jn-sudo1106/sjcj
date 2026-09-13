@@ -27,7 +27,7 @@ import { ElMessage } from 'element-plus'
 import { dataApi, parseNextStepReceipt, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail, type RowQuery, type Step } from '@/api'
 import {
   buildHorizontalLayout, buildSourceSeed, effectiveInputTable, firstRunnableNodeId, nodeOutputTable, isDecision, isParallel,
-  hasDirectSuccessor, directSuccessorIds, type NodeConfig, type BranchSeed, type FlowBranchGroup,
+  hasDirectSuccessor, directSuccessorIds, directPredecessorIds, type NodeConfig, type BranchSeed, type FlowBranchGroup,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
 import { fetchNextStepConfig } from '@/utils/flow/nextStepConfig'
@@ -539,8 +539,9 @@ async function onSendNextStep() {
   const rowCount = [...groups.values()].reduce((sum, ids) => sum + ids.length, 0)
   let nextConfigInfo
   if (selectedSourceId.value) {
-    const fallbackSteps: Step[] = flowData.value
-      ? Object.entries(flowData.value.configs).map(([id, cfg]) => ({
+    const currentFlow = flowData.value
+    const fallbackSteps: Step[] = currentFlow
+      ? Object.entries(currentFlow.configs).map(([id, cfg]) => ({
           stepId: id,
           sourceId: selectedSourceId.value,
           name: cfg.title,
@@ -548,10 +549,18 @@ async function onSendNextStep() {
           inputTable: cfg.collectCfg?.inputTable || cfg.ruleCfg?.inputTableId,
           outputTable: cfg.collectCfg?.outputTable || cfg.ruleCfg?.outputTableId,
           enabled: !cfg.disabled,
+          topic: cfg.taskCfg?.queue,
+          dependsOn: directPredecessorIds(currentFlow.main, currentFlow.configs, id, currentFlow.branchGroups),
         }))
       : []
+    const currentConfigHint = {
+      configId: selectedCfg.value?.configId,
+      stepId: (selectedCfg.value as any)?.stepId || (/^\d+$/.test(selectedNodeId.value) ? selectedNodeId.value : undefined),
+      title: selectedCfg.value?.title,
+      queue: selectedCfg.value?.taskCfg?.queue,
+    }
     try {
-      nextConfigInfo = await fetchNextStepConfig(selectedSourceId.value, selectedNodeId.value, fallbackSteps)
+      nextConfigInfo = await fetchNextStepConfig(selectedSourceId.value, selectedNodeId.value, fallbackSteps, currentConfigHint)
     } catch {
       // fallback
     }
