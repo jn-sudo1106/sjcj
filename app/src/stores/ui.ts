@@ -33,7 +33,8 @@ export const useUiStore = defineStore('ui', () => {
    *   - `inspectorCollapsed` = **配置区收起成窄条、中间占满**（本次新增）
    * 两者互斥，由 `toggleInspectorCollapsed` / `toggleInspectorExpanded` 各自互相清掉。
    *
-   * 流程视图和数据视图都默认展开，切换数据时仍可继续查看和编辑节点配置。
+   * 数据视图默认收起配置区（让出表格空间），点窄条「节点配置」可随时展开；
+   * 流程视图默认展开配置区。
    * 不持久化：跟 `inspectorExpanded` 一样是临时布局状态。
    */
   const inspectorCollapsed = ref(false)
@@ -66,10 +67,10 @@ export const useUiStore = defineStore('ui', () => {
     inspectorCollapsed.value = false
     inspectorFieldFilterActive.value = false
   }
-  /** 切视图时复位默认布局：中间和右侧配置区均展开。 */
-  function applyViewLayoutDefault(_view: string) {
+  /** 切视图时套用默认布局：数据视图默认收起配置区（让出表格空间），流程视图默认展开配置区。 */
+  function applyViewLayoutDefault(view: string) {
     inspectorExpanded.value = false
-    inspectorCollapsed.value = false
+    inspectorCollapsed.value = view === 'data'
     inspectorFieldFilterActive.value = false
   }
 

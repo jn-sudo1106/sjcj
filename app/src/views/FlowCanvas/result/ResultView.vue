@@ -622,8 +622,8 @@ function onDeleteOne(row: DataRow) {
   )
 }
 
-// 默认选**首个可跑节点**。页签快照可以记住筛选，但不能把人送回上次停的末节点——
-// 0831 F09 会上原话：「我要看第一个节点的数据我还得点一下」。
+// 默认选**首个可跑节点**。页签快照恢复用户上次选中的节点、筛选与页码。
+// 解决切换到任务视图/其他视图再切回时选中的节点被重置为初始节点的问题。
 // URL `nodeId`（任务视图跳过来、查看条件深链）仍然优先。
 watch(
   allNodes,
@@ -631,12 +631,19 @@ watch(
     if (!nodes.some((n) => n.id === selectedNodeId.value)) {
       const firstId = firstRunnableNodeId(flow.main, flow.configs) || nodes[0]?.id || ''
       const fromQuery = queryNodeId.value && nodes.some((n) => n.id === queryNodeId.value) ? queryNodeId.value : ''
-      selectedNodeId.value = fromQuery || firstId
       const snap = ws.snapshotOf(tabKey.value)
-      if (!fromQuery && snap?.selectedNodeId === firstId && snap.filters) {
-        page.value = snap.page ?? 1
-        const { dataId, parentId, state, sql } = snap.filters
-        Object.assign(filters, { dataId, parentId, state, sql })
+      const snapId = snap?.selectedNodeId && nodes.some((n) => n.id === snap.selectedNodeId) ? snap.selectedNodeId : ''
+      const targetId = fromQuery || snapId || firstId
+      selectedNodeId.value = targetId
+      if (targetId && flow.selectedId !== targetId) {
+        flow.select(targetId)
+      }
+      if (!fromQuery && snapId === targetId) {
+        page.value = snap?.page ?? 1
+        if (snap?.filters) {
+          const { dataId, parentId, state, sql } = snap.filters
+          Object.assign(filters, { dataId, parentId, state, sql })
+        }
       } else {
         page.value = 1
       }

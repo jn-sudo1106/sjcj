@@ -591,6 +591,7 @@ export const sourceApi = {
   /** 画布任务视图：与源列表/数据查看「任务实例」同一条 GET /v1/task/topTaskPaged。
    *  逻辑名仍用 source/sourceTaskPaged，便于 vitest 关 live 时走 mock；真实路径按 httpEndpoint 判 live。 */
   sourceTaskPaged: async (q: SourceTaskQuery): Promise<Paged<TaskInst>> => {
+    const topic = q.topic || q.queue
     const result = await request<unknown>('source/sourceTaskPaged', q, {
       method: 'GET',
       httpEndpoint: 'task/topTaskPaged',
@@ -600,6 +601,9 @@ export const sourceApi = {
         sourceId: q.sourceId,
         configId: q.configId,
         state: q.state,
+        taskTopic: topic,
+        topic,
+        queue: topic,
       },
     })
     return unwrapTaskInstPage(result)
@@ -1744,6 +1748,7 @@ export const dataApi = {
   },
   // 任务实例分页（方案 §1.6-5 TaskInst）：GET，参数按旧 page/limit 口径（task.js 内部由 pageNo/pageSize 映射而来）
   taskInstPaged: async (q: TaskInstQuery): Promise<{ total: number; list: TaskInst[] }> => {
+    const topic = q.topic || q.queue
     const result = await request<unknown>('data/taskInstPaged', q, {
       method: 'GET',
       httpEndpoint: 'task/topTaskPaged',
@@ -1751,6 +1756,7 @@ export const dataApi = {
         page: q.page ?? 1, limit: q.size ?? 20,
         taskId: q.taskId, sourceId: q.sourceId, configId: q.configId,
         parentId: q.parentId, fileId: q.fileId, taskSpecId: q.taskSpecId, state: q.state,
+        taskTopic: topic, topic, queue: topic,
       },
     })
     return unwrapTaskInstPage(result)

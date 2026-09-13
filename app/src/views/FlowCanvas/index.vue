@@ -37,7 +37,7 @@ const activeView = ref(normalizeSourceView(route.query.view))
 function syncActiveView() {
   activeView.value = sourceViewFromHash(window.location.hash)
 }
-// 切视图时套用默认布局（Z3-2）：流程和数据视图都保留右侧节点配置。
+// 切视图时套用默认布局（Z3-2）：数据视图默认收起右侧配置区让出表格空间，流程视图默认展开配置区。
 //
 // ⚠️ 不能拿 `activeView` 当"上一次的值"来比：它在 setup 里就已经按 URL 初始化过了，
 // 首帧（immediate）比较必然相等，默认布局一次都套不上（2026-09-05 实测踩到）。

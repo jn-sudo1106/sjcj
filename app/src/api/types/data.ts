@@ -258,4 +258,6 @@ export interface TaskInstQuery extends PageQuery {
   fileId?: string
   taskSpecId?: string
   state?: string
+  queue?: string
+  topic?: string
 }

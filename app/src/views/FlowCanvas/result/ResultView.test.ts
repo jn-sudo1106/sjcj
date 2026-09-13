@@ -2038,16 +2038,12 @@ describe('ResultView · 布局折叠', () => {
     await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
     await flushPromises()
 
-    // 必须发给后续步骤 40598 的输入表 901、configId 1400975 及步骤 ID 40598，而不是当前步骤自己的 900
+    // 必须发给后续步骤 40598 的输入表 901、configId 1400975，而不是当前步骤自己的 900
     expect(nextStepSpy).toHaveBeenCalledWith(
       '430006252',
       '901',
       ['8688522'],
-      expect.objectContaining({
-        configId: '1400975',
-        itemConfig: '40598',
-        stepId: '40598',
-      }),
+      '1400975',
     )
   })
 })

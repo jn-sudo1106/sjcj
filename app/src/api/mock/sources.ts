@@ -606,10 +606,12 @@ export function mockSourceTaskPaged(params?: Record<string, unknown>): Paged<Tas
   const nodeId = String(params?.nodeId ?? '')
   const configId = String(params?.configId ?? '')
   const state = String(params?.state ?? '')
+  const queue = String(params?.queue ?? params?.topic ?? params?.taskTopic ?? '').trim()
   const filtered = tasks.filter((task) =>
     (!nodeId || task.node === nodeId)
     && (!configId || task.configId === configId)
-    && (!state || task.state === state),
+    && (!state || task.state === state)
+    && (!queue || (task.topic && task.topic.includes(queue))),
   )
   const page = Math.max(1, Number(params?.page ?? 1))
   const size = Math.max(1, Number(params?.size ?? 20))

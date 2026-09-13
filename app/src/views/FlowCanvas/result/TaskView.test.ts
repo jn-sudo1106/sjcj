@@ -131,4 +131,49 @@ describe('TaskView', () => {
     expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('所属源')
     wrapper.unmount()
   })
+
+  it('支持按队列名筛选任务，点击队列单元格可快速填入/切换筛选', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const source = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+
+    const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
+      total: 2,
+      list: [
+        { taskId: 't1', topic: 'queue_download', state: 'C', typeName: '下载', taskName: '任务1', sourceId: source.sourceId, updatedAt: '2026-09-08 10:00' },
+        { taskId: 't2', topic: 'queue_parse', state: 'C', typeName: '解析', taskName: '任务2', sourceId: source.sourceId, updatedAt: '2026-09-08 10:01' },
+      ],
+    })
+
+    const wrapper = shallowMount(TaskView, {
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await flushPromises()
+
+    const queueInput = wrapper.find<HTMLInputElement>('[data-testid="task-queue-filter"]')
+    expect(queueInput.exists()).toBe(true)
+
+    // 输入队列名过滤
+    await queueInput.setValue('queue_download')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ queue: 'queue_download', topic: 'queue_download' }))
+
+    // 点击表格中的 queue_parse 单元格快速切换
+    const parseCell = wrapper.findAll('.tv-queue-clickable').find((el) => el.text() === 'queue_parse')
+    expect(parseCell).toBeDefined()
+    await parseCell!.trigger('click')
+    await flushPromises()
+    expect(queueInput.element.value).toBe('queue_parse')
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ queue: 'queue_parse', topic: 'queue_parse' }))
+
+    // 再次点击同一单元格取消筛选
+    await parseCell!.trigger('click')
+    await flushPromises()
+    expect(queueInput.element.value).toBe('')
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ queue: undefined, topic: undefined }))
+
+    wrapper.unmount()
+  })
 })
