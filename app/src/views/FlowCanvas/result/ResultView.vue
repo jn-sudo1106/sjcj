@@ -1169,17 +1169,28 @@ async function saveEdit() {
 // 单元格里的文件预览（0819 N2-7）：路径类字段点开就地看内容，不用先跳到文件视图再找。
 // 用居中 dialog 而不是右侧抽屉——这是"看一眼就关"的操作型短流程，抽屉留给实体详情
 // （项目弹层规范）。预览器与文件详情共用一个组件，取数、降级、下载全在里面。
-const filePreview = reactive({ visible: false, path: '', name: '', url: '' })
+const filePreview = reactive({ visible: false, path: '', name: '', url: '', ext: '' })
 // sourceUrl 由 DataGrid 从被点的那一行算好带过来（2026-09-11）。此前是从 detailFields
 // 取——那是详情抽屉当前行的字段，直接点单元格时详情没开，于是永远取不到，
 // 预览里的「原始地址 ↗」一直不显示。
-function onCellFile(path: string, _field?: unknown, sourceUrl = '') {
+function onCellFile(path: string, field?: unknown, sourceUrl = '') {
   filePreview.path = path
   filePreview.name = path.split('/').pop() || ''
   filePreview.url = sourceUrl
     || detailFields.value.find((f) => f.prop === 'url')?.href
     || detailFields.value.find((f) => f.href)?.href
     || ''
+  const f = field as { prop?: string; columnName?: string; desc?: string } | undefined
+  const col = (f?.columnName || '').toUpperCase()
+  const prop = (f?.prop || '').toLowerCase()
+  const desc = f?.desc || ''
+  if (col === 'K17' || prop === 'html' || desc.includes('html')) {
+    filePreview.ext = 'html'
+  } else if (col === 'K6' || prop.includes('content') || desc.includes('正文')) {
+    filePreview.ext = 'txt'
+  } else {
+    filePreview.ext = ''
+  }
   filePreview.visible = true
 }
 const codeTest = reactive<{ visible: boolean; loading: boolean; error: string; output: string }>({
@@ -1599,7 +1610,6 @@ async function onTestScript() {
     />
     <SummaryDrawer v-model="summaryOpen" :table-meta="meta" :build-query="buildSummaryQuery" :hit-count="total" />
     <SnatchLauncher ref="snatchLauncher" />
-  </main>
 
     <el-dialog
       v-model="filePreview.visible"
@@ -1612,7 +1622,7 @@ async function onTestScript() {
       <FilePreview
         :path="filePreview.path"
         :name="filePreview.name"
-        :ext="extFromName(filePreview.name)"
+        :ext="filePreview.ext || extFromName(filePreview.name)"
         :external-url="filePreview.url"
         style="height: min(72vh, 720px)"
         data-testid="data-cell-file-preview"
@@ -1629,11 +1639,12 @@ async function onTestScript() {
         <pre v-else class="rv-code-test-output">{{ codeTest.output || '暂无返回结果' }}</pre>
       </div>
     </el-dialog>
+  </main>
 </template>
 
 <style scoped>
 .ctx-summary .rv-sql { flex: 1 1 320px; min-width: 180px; width: auto; }
-.rv-shell { background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; height: 100%; display: flex; flex-direction: column; }
+.rv-shell { min-width: 0; min-height: 0; width: 100%; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; height: 100%; display: flex; flex-direction: column; }
 /* 全屏：同一份 DOM 直接铺满视口，不复制模板也不套弹层。祖先链上没有 transform/filter/
    contain（已核对 AppShell.vue、FlowCanvas/index.vue），fixed 能正常逃逸；外层 .rc-shell
    的 z-index 是 21、顶栏是 20，所以这里盖得住顶栏。详情抽屉渲染在 .rv-shell 内部，

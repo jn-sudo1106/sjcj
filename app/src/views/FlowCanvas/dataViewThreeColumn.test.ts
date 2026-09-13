@@ -105,4 +105,25 @@ describe('数据视图的三栏骨架（Z3-1/Z3-2）', () => {
     expect(collapsed.text()).toContain('数据已收起')
     expect(collapsed.text()).not.toContain('画布')
   })
+
+  it('收起节点配置时容器具备 insp-collapsed 与 source-mode 类，且分割条变为 placeholder', async () => {
+    const w = await mountCanvas('data')
+    const shell = w.find('.rc-flow-shell')
+    expect(shell.classes()).toContain('insp-collapsed')
+    expect(shell.classes()).toContain('source-mode')
+    expect(shell.find('.rc-insp-splitter.placeholder').exists()).toBe(true)
+
+    // 展开配置面板后，去掉 insp-collapsed 类，分割条恢复可交互
+    await w.get('[data-testid="inspector-collapsed"]').trigger('click')
+    await flushPromises()
+    expect(shell.classes()).not.toContain('insp-collapsed')
+    expect(shell.find('.rc-insp-splitter.placeholder').exists()).toBe(false)
+    expect(shell.find('.rc-insp-splitter').exists()).toBe(true)
+
+    // 再次收起配置面板
+    useUiStore().toggleInspectorCollapsed()
+    await flushPromises()
+    expect(shell.classes()).toContain('insp-collapsed')
+    expect(shell.find('.rc-insp-splitter.placeholder').exists()).toBe(true)
+  })
 })

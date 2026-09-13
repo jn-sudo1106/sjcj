@@ -379,7 +379,7 @@ describe('DataGrid · 列显示与顺序', () => {
   it('工具行是「列 n/m」，点开弹窗后确定才改表头', async () => {
     const wrapper = mountPickerGrid()
     const btn = wrapper.get('[data-testid="column-picker-btn"]')
-    expect(btn.text()).toBe('列 5/5')
+    expect(btn.text()).toBe('列 7/7')
     expect(wrapper.find('[data-testid="column-picker-dialog"]').exists()).toBe(false)
 
     await btn.trigger('click')
@@ -391,7 +391,7 @@ describe('DataGrid · 列显示与顺序', () => {
     const heads = wrapper.findAll('thead th').map((th) => th.text().replace(/[↕↑↓]\s*$/, '').trim())
     expect(heads).not.toContain('正文html路径-K17')
     expect(heads).toContain('标题-K1')
-    expect(btn.text()).toBe('列 4/5')
+    expect(btn.text()).toBe('列 6/7')
   })
 
   it('按 tableId 记住显隐，换表不串', async () => {
@@ -458,7 +458,7 @@ describe('DataGrid · 下一步字段预设（0831 F10）', () => {
     const wrapper = mountGrid(['title'])
     expect(heads(wrapper)).toEqual(expect.arrayContaining(['ENTRY_ID', '源-SOURCE_ID', 'PARENT_ID', '标题-K1']))
     expect(heads(wrapper)).not.toContain('正文-K3')
-    expect(wrapper.get('[data-testid="column-picker-btn"]').text()).toBe('列 4/6')
+    expect(wrapper.get('[data-testid="column-picker-btn"]').text()).toBe('列 4/8')
   })
 
   it('预设为空时退回全部列，也不渲染切换按钮', () => {
@@ -510,7 +510,7 @@ describe('DataGrid · 下一步字段预设（0831 F10）', () => {
     })
 
     expect(heads(wrapper)).toEqual(expect.arrayContaining(['标题-K1', '链接-K2', '正文-K3']))
-    expect(wrapper.get('[data-testid="column-picker-btn"]').text()).toBe('列 6/6')
+    expect(wrapper.get('[data-testid="column-picker-btn"]').text()).toBe('列 8/8')
     expect(wrapper.find('[data-testid="column-preset-toggle"]').exists()).toBe(false)
     expect(localStorage.getItem(columnPrefsKey('t-preset'))).toBeNull()
   })

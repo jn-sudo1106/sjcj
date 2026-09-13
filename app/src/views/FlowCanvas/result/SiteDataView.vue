@@ -767,17 +767,28 @@ const detailVisibleProps = computed(() => visibleDetailProps(fieldPreset.value, 
 // 单元格里的文件预览（0819 N2-7）：路径类字段点开就地看内容，不用先跳到文件视图再找。
 // 用居中 dialog 而不是右侧抽屉——这是"看一眼就关"的操作型短流程，抽屉留给实体详情
 // （项目弹层规范）。预览器与文件详情共用一个组件，取数、降级、下载全在里面。
-const filePreview = reactive({ visible: false, path: '', name: '', url: '' })
+const filePreview = reactive({ visible: false, path: '', name: '', url: '', ext: '' })
 // sourceUrl 由 DataGrid 从被点的那一行算好带过来（2026-09-11）。此前是从 detailFields
 // 取——那是详情抽屉当前行的字段，直接点单元格时详情没开，于是永远取不到，
 // 预览里的「原始地址 ↗」一直不显示。
-function onCellFile(path: string, _field?: unknown, sourceUrl = '') {
+function onCellFile(path: string, field?: unknown, sourceUrl = '') {
   filePreview.path = path
   filePreview.name = path.split('/').pop() || ''
   filePreview.url = sourceUrl
     || detailFields.value.find((f) => f.prop === 'url')?.href
     || detailFields.value.find((f) => f.href)?.href
     || ''
+  const f = field as { prop?: string; columnName?: string; desc?: string } | undefined
+  const col = (f?.columnName || '').toUpperCase()
+  const prop = (f?.prop || '').toLowerCase()
+  const desc = f?.desc || ''
+  if (col === 'K17' || prop === 'html' || desc.includes('html')) {
+    filePreview.ext = 'html'
+  } else if (col === 'K6' || prop.includes('content') || desc.includes('正文')) {
+    filePreview.ext = 'txt'
+  } else {
+    filePreview.ext = ''
+  }
   filePreview.visible = true
 }
 </script>
@@ -1052,7 +1063,7 @@ function onCellFile(path: string, _field?: unknown, sourceUrl = '') {
       <FilePreview
         :path="filePreview.path"
         :name="filePreview.name"
-        :ext="extFromName(filePreview.name)"
+        :ext="filePreview.ext || extFromName(filePreview.name)"
         :external-url="filePreview.url"
         style="height: min(72vh, 720px)"
         data-testid="site-data-cell-file-preview"
