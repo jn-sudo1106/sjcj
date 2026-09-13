@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { copyToClipboard } from '@/utils/clipboard'
 import type { DataTableMeta, DataRow } from '@/api'
 import ColumnPickerDialog from '@/components/ColumnPickerDialog.vue'
 import { useColumnPicker } from '@/utils/table/useColumnPicker'
@@ -277,36 +277,9 @@ function colLabel(field: { prop: string; desc?: string; columnName?: string; lab
 
 /**
  * 复制单元格的值（0828 D27）。
- *
- * `navigator.clipboard` 在非 HTTPS / 非安全上下文里不可用（内网 http 部署就是这种），
- * 所以要有回退；两条都失败时把值弹出来让用户自己选，不静默失败。
  */
 async function copyCell(text: string) {
-  if (!text) return
-  try {
-    await navigator.clipboard.writeText(text)
-    ElMessage.success('已复制')
-    return
-  } catch {
-    // 落到下面的兜底
-  }
-  try {
-    const ta = document.createElement('textarea')
-    ta.value = text
-    ta.style.position = 'fixed'
-    ta.style.opacity = '0'
-    document.body.appendChild(ta)
-    ta.select()
-    const ok = document.execCommand('copy')
-    document.body.removeChild(ta)
-    if (ok) {
-      ElMessage.success('已复制')
-      return
-    }
-  } catch {
-    // 继续兜底
-  }
-  ElMessageBox.alert(text, '复制失败，请手动选中复制', { confirmButtonText: '知道了' })
+  await copyToClipboard(text)
 }
 
 /** 父行 ID 是否是个真值：后端用 `'0'` 表示"没有父行"，跟空串同义，都不该显示成一个可点的 ID */

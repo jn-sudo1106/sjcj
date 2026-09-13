@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import RowDetailFields from './RowDetailFields.vue'
 import { fieldsFromShowItems, fieldsFromTableMeta, isBlankDetailValue, safeHttpUrl } from './rowDetailFields'
@@ -109,4 +109,58 @@ describe('详情字段的物理列名', () => {
     expect(wrapper.find('.rdf-code').text().trim()).toBe('ENTRY_ID')
     expect(wrapper.find('.rdf-code').text()).not.toContain('·')
   })
+
+  it('传入 row 时自动补出 ENTRY_ID 字段，且渲染排在最前面', () => {
+    const built = fieldsFromTableMeta(
+      [{ prop: 'title', type: 'string', desc: '标题', columnName: 'K1' }],
+      { K1: '新闻标题' },
+      { dataId: '430114955', sourceId: 'src-1' } as any,
+    )
+    expect(built[0]).toMatchObject({
+      prop: 'ENTRY_ID',
+      code: 'ENTRY_ID',
+      name: 'ENTRY_ID',
+      value: '430114955',
+      empty: false,
+    })
+    const wrapper = mount(RowDetailFields, { props: { fields: built, showEmpty: true } })
+    expect(wrapper.find('[data-testid="row-detail-field-ENTRY_ID"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="row-detail-field-ENTRY_ID"]').text()).toContain('430114955')
+  })
+
+  it('fieldsFromShowItems 传入 row 时同样自动补出 ENTRY_ID', () => {
+    const built = fieldsFromShowItems(
+      [{ columnName: 'K1', itemName: '标题', value: '上游标题' }],
+      { dataId: 'parent-999' } as any,
+    )
+    expect(built[0]).toMatchObject({
+      prop: 'ENTRY_ID',
+      code: 'ENTRY_ID',
+      value: 'parent-999',
+    })
+  })
+
+  it('点击字段复制按钮，调用 copyToClipboard 复制字段值', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const wrapper = mount(RowDetailFields, { props: { fields, showEmpty: true } })
+    const copyBtn = wrapper.find('[data-testid="row-detail-field-title"] [data-testid="row-detail-copy"]')
+    expect(copyBtn.exists()).toBe(true)
+    await copyBtn.trigger('click')
+    expect(writeText).toHaveBeenCalledWith('年轻人的超拉风小钢炮')
+  })
+
+  it('点击复制全部 JSON 按钮，调用 copyToClipboard 复制所有已填字段 JSON', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const wrapper = mount(RowDetailFields, { props: { fields } })
+    const copyAllBtn = wrapper.find('[data-testid="row-detail-copy-all"]')
+    expect(copyAllBtn.exists()).toBe(true)
+    await copyAllBtn.trigger('click')
+    expect(writeText).toHaveBeenCalled()
+    const payload = JSON.parse(writeText.mock.calls[0][0])
+    expect(payload.title).toBe('年轻人的超拉风小钢炮')
+    expect(payload.url).toBe('https://www.hxdsb.com/a/123')
+  })
 })
+

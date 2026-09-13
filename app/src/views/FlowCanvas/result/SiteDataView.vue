@@ -48,6 +48,11 @@ import { initMergeState, mergeLoadMore, type MergeLoadMoreResult, type MergeSour
 import RowDetailFields from './RowDetailFields.vue'
 import { fieldsFromShowItems, fieldsFromTableMeta } from './rowDetailFields'
 import { readFieldPreset, readShowEmpty, visibleDetailProps, writeFieldPreset, writeShowEmpty, type RowFieldPreset } from './rowDetailPrefs'
+import { copyToClipboard } from '@/utils/clipboard'
+
+function copyText(val: string, label?: string) {
+  void copyToClipboard(val, label)
+}
 
 /** 单源视图「按条件查源 →」带过来的数据条件（0903 Y2-7），由 SiteDetailView 从路由解析 */
 export interface SiteDataInitialCondition {
@@ -102,6 +107,17 @@ const tableId = ref('')
 const selectedSourceId = ref('')
 const meta = ref<DataTableMeta | null>(null)
 const metaError = ref('')
+const queryFields = computed(() => {
+  const dynamic = meta.value?.fields ?? []
+  const systemCols = [
+    { prop: 'ENTRY_ID', columnName: 'ENTRY_ID', desc: '主键 ID', type: 'string' },
+    { prop: 'PARENT_ID', columnName: 'PARENT_ID', desc: '父行 ID', type: 'string' },
+    { prop: 'SOURCE_ID', columnName: 'SOURCE_ID', desc: '所属源 ID', type: 'string' },
+    { prop: 'UPDATE_DT', columnName: 'UPDATE_DT', desc: '更新时间', type: 'string' },
+    { prop: 'CREATE_DT', columnName: 'CREATE_DT', desc: '创建时间', type: 'string' },
+  ]
+  return [...systemCols, ...dynamic]
+})
 const filters = reactive({ dataId: '', parentId: '', state: '', sql: '' })
 
 const rows = ref<DataRow[]>([])
@@ -760,8 +776,8 @@ function closeParentDetail() {
 // row.values 的键是旧平台物理列名（K1/K2...），不是 f.prop 这个逻辑字段名（如 "title"）——
 // 两者只在 f.columnName 上能对上，直接拿 f.prop 去 row.values 里取永远是 undefined。真实
 // bug，2026-08-14 生产环境实测发现：详情弹层每个字段都显示"—"，不是接口没数据，是取错了 key。
-const detailFields = computed(() => fieldsFromTableMeta(meta.value?.fields, detailRow.value?.values))
-const parentFields = computed(() => fieldsFromShowItems(parentDetail.value?.showItems))
+const detailFields = computed(() => fieldsFromTableMeta(meta.value?.fields, detailRow.value?.values, detailRow.value))
+const parentFields = computed(() => fieldsFromShowItems(parentDetail.value?.showItems, parentDetail.value?.row))
 const detailVisibleProps = computed(() => visibleDetailProps(fieldPreset.value, detailFields.value, presetCols.value))
 
 // 单元格里的文件预览（0819 N2-7）：路径类字段点开就地看内容，不用先跳到文件视图再找。
@@ -807,8 +823,8 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
           <option value="E">E 出错</option>
           <option value="L">L 处理中</option>
         </select>
-        <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="effectiveTableId" :table-name="meta?.tableName" class="sdv2-sql">
-          <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="sdv2-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
+        <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="effectiveTableId" :table-name="meta?.tableName" :fields="queryFields" class="sdv2-sql">
+          <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="sdv2-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，可点右端漏斗按字段查询（如 K23 = '...'）" />
         </SqlConditionEditor>
         <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
         <button class="rc-btn" type="button" @click="clearFilters">清空</button>
@@ -983,7 +999,25 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
           <div class="sdv2-d-head-main">
             <div class="sdv2-d-title">{{ detailRow.title }}</div>
             <div class="sdv2-d-sub">
-              数据 ID {{ detailRow.dataId }} · 源 ID {{ detailRow.sourceId }}<template v-if="!selectedSourceId && sourceNames[detailRow.sourceId]"> {{ sourceNames[detailRow.sourceId] }}</template>
+              <span class="sdv2-d-sub-item">
+                <span>ENTRY_ID {{ detailRow.dataId }}</span>
+                <button
+                  v-if="detailRow.dataId"
+                  type="button"
+                  class="sdv2-sub-copy"
+                  data-testid="row-detail-head-copy-entry"
+                  title="复制 ENTRY_ID"
+                  @click="copyText(detailRow.dataId, 'ENTRY_ID')"
+                >
+                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path
+                      d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
+                      fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+              </span>
+              <span> · 源 ID {{ detailRow.sourceId }}<template v-if="!selectedSourceId && sourceNames[detailRow.sourceId]"> {{ sourceNames[detailRow.sourceId] }}</template></span>
             </div>
             <button
               v-if="canDrillParent"
@@ -1026,7 +1060,24 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
           <div v-if="parentError" class="sdv2-notice error">{{ parentError }}</div>
           <div v-if="parentDetail" class="sdv2-parent-panel" data-testid="site-data-parent-panel">
             <div class="sdv2-parent-panel-head">
-              <span>上游数据 · {{ parentDetail.row.dataId }}</span>
+              <span class="sdv2-d-sub-item">
+                <span>上游数据 · ENTRY_ID {{ parentDetail.row.dataId }}</span>
+                <button
+                  v-if="parentDetail.row.dataId"
+                  type="button"
+                  class="sdv2-sub-copy"
+                  data-testid="row-detail-parent-copy-entry"
+                  title="复制上游 ENTRY_ID"
+                  @click="copyText(parentDetail.row.dataId, '上游 ENTRY_ID')"
+                >
+                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path
+                      d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
+                      fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+              </span>
               <button class="rc-btn ghost" type="button" @click="closeParentDetail">收起</button>
             </div>
             <RowDetailFields compact :fields="parentFields" />
@@ -1104,6 +1155,22 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
 .sdv2-d-close { flex: none; height: 28px; padding: 0 12px; font-size: 12px; white-space: nowrap; }
 .sdv2-d-title { font-size: 14px; font-weight: 700; color: var(--rc-text); line-height: 1.4; word-break: break-word; }
 .sdv2-d-sub { font-size: 11px; color: var(--rc-faint); margin-top: 4px; }
+.sdv2-d-sub-item { display: inline-flex; align-items: center; gap: 4px; }
+.sdv2-sub-copy {
+  border: 0;
+  background: transparent;
+  color: var(--rc-faint);
+  padding: 1px 3px;
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.5;
+  transition: opacity .12s, color .12s, background-color .12s;
+}
+.sdv2-d-sub-item:hover .sdv2-sub-copy { opacity: 1; }
+.sdv2-sub-copy:hover { color: var(--rc-primary); background: var(--rc-primary-bg); }
 .sdv2-d-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 18px 16px; }
 .sdv2-parent-link { margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; padding: 0; font-size: 11px; color: var(--rc-primary); cursor: pointer; }
 .sdv2-parent-link:hover { text-decoration: underline; }

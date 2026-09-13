@@ -350,7 +350,7 @@ function onRowClick(row: DataRow) {
         <span class="dqp-range-sep">－</span>
         <el-input v-model="maxId" placeholder="终止 ID" style="width: 100px" />
       </span>
-      <SqlConditionEditor v-model="sql" v-slot="{ value, update }" :table-id="tableId" style="width: 320px">
+      <SqlConditionEditor v-model="sql" v-slot="{ value, update }" :table-id="tableId" :fields="columns" style="width: 320px">
         <el-autocomplete
           :model-value="value"
           @update:model-value="update"

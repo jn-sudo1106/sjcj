@@ -29,6 +29,11 @@ import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import RowDetailFields from './RowDetailFields.vue'
 import { fieldsFromShowItems, fieldsFromTableMeta } from './rowDetailFields'
 import { readFieldPreset, readShowEmpty, visibleDetailProps, writeFieldPreset, writeShowEmpty, type RowFieldPreset } from './rowDetailPrefs'
+import { copyToClipboard } from '@/utils/clipboard'
+
+function copyText(val: string, label?: string) {
+  void copyToClipboard(val, label)
+}
 
 // 数据视图只属于具体源流程（0812 计划 M2-4：网站"全部源"态改用独立的 SiteDataView.vue，
 // 不再靠 siteWide 布尔开关把两种数据流塞进同一个组件——那正是 M1-4 删掉的"代表源"问题的成因）。
@@ -761,6 +766,17 @@ const presetCols = computed(() => nextStepColumns({
   branchGroups: flow.branchGroups,
   nodeId: selectedNodeId.value,
 }))
+const queryFields = computed(() => {
+  const dynamic = meta.value?.fields ?? []
+  const systemCols = [
+    { prop: 'ENTRY_ID', columnName: 'ENTRY_ID', desc: '主键 ID', type: 'string' },
+    { prop: 'PARENT_ID', columnName: 'PARENT_ID', desc: '父行 ID', type: 'string' },
+    { prop: 'SOURCE_ID', columnName: 'SOURCE_ID', desc: '所属源 ID', type: 'string' },
+    { prop: 'UPDATE_DT', columnName: 'UPDATE_DT', desc: '更新时间', type: 'string' },
+    { prop: 'CREATE_DT', columnName: 'CREATE_DT', desc: '创建时间', type: 'string' },
+  ]
+  return [...systemCols, ...dynamic]
+})
 const rows = ref<DataRow[]>([])
 const total = ref(0)
 const loading = ref(false)
@@ -1133,8 +1149,8 @@ function closeParentDetail() {
 // row.values 的键是旧平台物理列名（K1/K2...），不是 f.prop 这个逻辑字段名（如 "title"）——
 // 两者只在 f.columnName 上能对上，直接拿 f.prop 去 row.values 里取永远是 undefined。真实
 // bug，2026-08-14 生产环境实测发现：详情弹层每个字段都显示"—"，不是接口没数据，是取错了 key。
-const detailFields = computed(() => fieldsFromTableMeta(meta.value?.fields, detailRow.value?.values))
-const parentFields = computed(() => fieldsFromShowItems(parentDetail.value?.showItems))
+const detailFields = computed(() => fieldsFromTableMeta(meta.value?.fields, detailRow.value?.values, detailRow.value))
+const parentFields = computed(() => fieldsFromShowItems(parentDetail.value?.showItems, parentDetail.value?.row))
 const detailVisibleProps = computed(() => visibleDetailProps(fieldPreset.value, detailFields.value, presetCols.value))
 
 // 行编辑（Phase 4.4）
@@ -1302,8 +1318,8 @@ async function onTestScript() {
         @click="railOpen = true"
       >展开流程 <span class="arrow">▾</span></button>
       <template v-if="hasAnyTable">
-        <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="selectedTable" :table-name="meta?.tableName" class="rv-sql">
-          <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="rv-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
+        <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="selectedTable" :table-name="meta?.tableName" :fields="queryFields" class="rv-sql">
+          <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="rv-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，可点右端漏斗按字段查询（如 K23 = '...'）" />
         </SqlConditionEditor>
         <span class="rv-actions">
           <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
@@ -1524,9 +1540,29 @@ async function onTestScript() {
         <div class="rv-d-head">
           <div class="rv-d-head-main">
             <div class="rv-d-title">{{ detailRow.title }}</div>
-            <!-- 源 ID 跟数据 ID 并列：详情是"这条数据是什么"的完整视图，
-                 光有数据 ID 看不出它属于哪个源（0819 会议 09:23～09:44）。 -->
-            <div class="rv-d-sub">数据 ID {{ detailRow.dataId }} · 源 ID {{ detailRow.sourceId || sourceId }}</div>
+            <!-- 源 ID 跟 ENTRY_ID 并列：详情是"这条数据是什么"的完整视图，
+                 光有 ENTRY_ID 看不出它属于哪个源（0819 会议 09:23～09:44）。 -->
+            <div class="rv-d-sub">
+              <span class="rv-d-sub-item">
+                <span>ENTRY_ID {{ detailRow.dataId }}</span>
+                <button
+                  v-if="detailRow.dataId"
+                  type="button"
+                  class="rv-sub-copy"
+                  data-testid="row-detail-head-copy-entry"
+                  title="复制 ENTRY_ID"
+                  @click="copyText(detailRow.dataId, 'ENTRY_ID')"
+                >
+                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path
+                      d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
+                      fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+              </span>
+              <span> · 源 ID {{ detailRow.sourceId || sourceId }}</span>
+            </div>
             <button
               v-if="canDrillParent"
               type="button"
@@ -1575,7 +1611,24 @@ async function onTestScript() {
           <div v-if="parentError" class="rv-notice error">{{ parentError }}</div>
           <div v-if="parentDetail" class="rv-parent-panel" data-testid="data-parent-panel">
             <div class="rv-parent-panel-head">
-              <span>上游数据 · {{ parentDetail.row.dataId }}</span>
+              <span class="rv-d-sub-item">
+                <span>上游数据 · ENTRY_ID {{ parentDetail.row.dataId }}</span>
+                <button
+                  v-if="parentDetail.row.dataId"
+                  type="button"
+                  class="rv-sub-copy"
+                  data-testid="row-detail-parent-copy-entry"
+                  title="复制上游 ENTRY_ID"
+                  @click="copyText(parentDetail.row.dataId, '上游 ENTRY_ID')"
+                >
+                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path
+                      d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
+                      fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+              </span>
               <button class="rc-btn ghost" type="button" @click="closeParentDetail">收起</button>
             </div>
             <RowDetailFields compact :fields="parentFields" />
@@ -1789,6 +1842,22 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
 .rv-d-close { flex: none; height: 28px; padding: 0 12px; font-size: 12px; white-space: nowrap; }
 .rv-d-title { font-size: 14px; font-weight: 700; color: var(--rc-text); line-height: 1.4; word-break: break-word; }
 .rv-d-sub { font-size: 11px; color: var(--rc-faint); margin-top: 4px; }
+.rv-d-sub-item { display: inline-flex; align-items: center; gap: 4px; }
+.rv-sub-copy {
+  border: 0;
+  background: transparent;
+  color: var(--rc-faint);
+  padding: 1px 3px;
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.5;
+  transition: opacity .12s, color .12s, background-color .12s;
+}
+.rv-d-sub-item:hover .rv-sub-copy { opacity: 1; }
+.rv-sub-copy:hover { color: var(--rc-primary); background: var(--rc-primary-bg); }
 .rv-d-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 18px 16px; }
 .rv-d-foot { flex: none; display: flex; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--rc-border-soft); background: #fff; }
 .rv-code-test { display: flex; flex-direction: column; gap: 10px; }
