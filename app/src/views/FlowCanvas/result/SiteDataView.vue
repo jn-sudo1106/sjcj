@@ -24,12 +24,13 @@ import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { dataApi, parseNextStepReceipt, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail, type RowQuery } from '@/api'
+import { dataApi, parseNextStepReceipt, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail, type RowQuery, type Step } from '@/api'
 import {
   buildHorizontalLayout, buildSourceSeed, effectiveInputTable, firstRunnableNodeId, nodeOutputTable, isDecision, isParallel,
-  hasDirectSuccessor, type NodeConfig, type BranchSeed, type FlowBranchGroup,
+  hasDirectSuccessor, directSuccessorIds, directPredecessorIds, type NodeConfig, type BranchSeed, type FlowBranchGroup,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
+import { fetchNextStepConfig } from '@/utils/flow/nextStepConfig'
 import { confirmDanger } from '@/utils/confirmDanger'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import DataGrid from './DataGrid.vue'
@@ -47,6 +48,11 @@ import { initMergeState, mergeLoadMore, type MergeLoadMoreResult, type MergeOrde
 import RowDetailFields from './RowDetailFields.vue'
 import { fieldsFromShowItems, fieldsFromTableMeta } from './rowDetailFields'
 import { readFieldPreset, readShowEmpty, visibleDetailProps, writeFieldPreset, writeShowEmpty, type RowFieldPreset } from './rowDetailPrefs'
+import { copyToClipboard } from '@/utils/clipboard'
+
+function copyText(val: string, label?: string) {
+  void copyToClipboard(val, label)
+}
 
 /** 单源视图「按条件查源 →」带过来的数据条件（0903 Y2-7），由 SiteDetailView 从路由解析 */
 export interface SiteDataInitialCondition {
@@ -147,6 +153,17 @@ const tableId = ref('')
 const selectedSourceId = ref('')
 const meta = ref<DataTableMeta | null>(null)
 const metaError = ref('')
+const queryFields = computed(() => {
+  const dynamic = meta.value?.fields ?? []
+  const systemCols = [
+    { prop: 'ENTRY_ID', columnName: 'ENTRY_ID', desc: '主键 ID', type: 'string' },
+    { prop: 'PARENT_ID', columnName: 'PARENT_ID', desc: '父行 ID', type: 'string' },
+    { prop: 'SOURCE_ID', columnName: 'SOURCE_ID', desc: '所属源 ID', type: 'string' },
+    { prop: 'UPDATE_DT', columnName: 'UPDATE_DT', desc: '更新时间', type: 'string' },
+    { prop: 'CREATE_DT', columnName: 'CREATE_DT', desc: '创建时间', type: 'string' },
+  ]
+  return [...systemCols, ...dynamic]
+})
 const filters = reactive({ dataId: '', parentId: '', state: '', sql: '' })
 
 const rows = ref<DataRow[]>([])
@@ -295,6 +312,12 @@ const sameTable = computed(() => !!inputTableId.value && !!outputTableId.value &
 const hasSuccessor = computed(() => {
   if (!selectedNodeId.value || !flowData.value) return false
   return hasDirectSuccessor(flowData.value.main, flowData.value.configs, selectedNodeId.value, flowData.value.branchGroups)
+})
+const successorTableId = computed(() => {
+  if (!selectedNodeId.value || !flowData.value) return ''
+  const succIds = directSuccessorIds(flowData.value.main, flowData.value.configs, selectedNodeId.value, flowData.value.branchGroups)
+  if (!succIds.length) return ''
+  return effectiveInputTable(flowData.value.main, flowData.value.branches, flowData.value.configs, succIds[0], flowData.value.branchGroups) || outputTableId.value
 })
 // 具体源才开发任务：全部源+选表无法确定流程节点（0831 X6 / Q4）。
 // 输入≠输出时这张表是产出数据，跟 ResultView 一样不在这里勾发，请到源数据视图切输入。
@@ -578,15 +601,53 @@ async function onSendNextStep() {
   }
   const sourceCount = groups.size
   const rowCount = [...groups.values()].reduce((sum, ids) => sum + ids.length, 0)
-  const nodeName = selectedCfg.value?.title || selectedNodeId.value
-  const tableId = effectiveTableId.value
+  let nextConfigInfo
+  if (selectedSourceId.value) {
+    const currentFlow = flowData.value
+    const fallbackSteps: Step[] = currentFlow
+      ? Object.entries(currentFlow.configs).map(([id, cfg]) => ({
+          stepId: id,
+          sourceId: selectedSourceId.value,
+          name: cfg.title,
+          configId: cfg.configId,
+          inputTable: cfg.collectCfg?.inputTable || cfg.ruleCfg?.inputTableId,
+          outputTable: cfg.collectCfg?.outputTable || cfg.ruleCfg?.outputTableId,
+          enabled: !cfg.disabled,
+          topic: cfg.taskCfg?.queue,
+          dependsOn: directPredecessorIds(currentFlow.main, currentFlow.configs, id, currentFlow.branchGroups),
+        }))
+      : []
+    const currentConfigHint = {
+      configId: selectedCfg.value?.configId,
+      stepId: (selectedCfg.value as any)?.stepId || (/^\d+$/.test(selectedNodeId.value) ? selectedNodeId.value : undefined),
+      title: selectedCfg.value?.title,
+      queue: selectedCfg.value?.taskCfg?.queue,
+    }
+    try {
+      nextConfigInfo = await fetchNextStepConfig(selectedSourceId.value, selectedNodeId.value, fallbackSteps, currentConfigHint)
+    } catch {
+      // fallback
+    }
+    if (nextConfigInfo && !nextConfigInfo.hasNext) {
+      ElMessage.warning(nextConfigInfo.reason || '当前节点在流程中没有后续节点配置，无法发后续')
+      return
+    }
+  }
+  const targetNodeName = nextConfigInfo?.targetNodeName || selectedCfg.value?.title || selectedNodeId.value
+  const tableId = nextConfigInfo?.targetTableId || successorTableId.value || effectiveTableId.value
+  const configOptions = {
+    configId: nextConfigInfo?.targetConfigId,
+    itemConfig: nextConfigInfo?.targetStepId,
+    stepId: nextConfigInfo?.targetStepId,
+    nextStep: nextConfigInfo?.targetStepId,
+  }
   await confirmDanger(
     '发后续任务',
-    `将对 ${sourceCount} 个源 · ${rowCount} 条数据发起「${nodeName}」的后续处理，是否继续？`,
+    `将对 ${sourceCount} 个源 · ${rowCount} 条数据发起后续节点「${targetNodeName}」的处理任务，是否继续？`,
     async () => {
       let last: { message?: string } = {}
       for (const [sourceId, ids] of groups) {
-        last = await dataApi.nextStep(sourceId, tableId, ids)
+        last = await dataApi.nextStep(sourceId, tableId, ids, configOptions)
       }
       selectedRowIds.value = []
       return last
@@ -763,24 +824,35 @@ function closeParentDetail() {
 // row.values 的键是旧平台物理列名（K1/K2...），不是 f.prop 这个逻辑字段名（如 "title"）——
 // 两者只在 f.columnName 上能对上，直接拿 f.prop 去 row.values 里取永远是 undefined。真实
 // bug，2026-08-14 生产环境实测发现：详情弹层每个字段都显示"—"，不是接口没数据，是取错了 key。
-const detailFields = computed(() => fieldsFromTableMeta(meta.value?.fields, detailRow.value?.values))
-const parentFields = computed(() => fieldsFromShowItems(parentDetail.value?.showItems))
+const detailFields = computed(() => fieldsFromTableMeta(meta.value?.fields, detailRow.value?.values, detailRow.value))
+const parentFields = computed(() => fieldsFromShowItems(parentDetail.value?.showItems, parentDetail.value?.row))
 const detailVisibleProps = computed(() => visibleDetailProps(fieldPreset.value, detailFields.value, presetCols.value))
 
 // 单元格里的文件预览（0819 N2-7）：路径类字段点开就地看内容，不用先跳到文件视图再找。
 // 用居中 dialog 而不是右侧抽屉——这是"看一眼就关"的操作型短流程，抽屉留给实体详情
 // （项目弹层规范）。预览器与文件详情共用一个组件，取数、降级、下载全在里面。
-const filePreview = reactive({ visible: false, path: '', name: '', url: '' })
+const filePreview = reactive({ visible: false, path: '', name: '', url: '', ext: '' })
 // sourceUrl 由 DataGrid 从被点的那一行算好带过来（2026-09-11）。此前是从 detailFields
 // 取——那是详情抽屉当前行的字段，直接点单元格时详情没开，于是永远取不到，
 // 预览里的「原始地址 ↗」一直不显示。
-function onCellFile(path: string, _field?: unknown, sourceUrl = '') {
+function onCellFile(path: string, field?: unknown, sourceUrl = '') {
   filePreview.path = path
   filePreview.name = path.split('/').pop() || ''
   filePreview.url = sourceUrl
     || detailFields.value.find((f) => f.prop === 'url')?.href
     || detailFields.value.find((f) => f.href)?.href
     || ''
+  const f = field as { prop?: string; columnName?: string; desc?: string } | undefined
+  const col = (f?.columnName || '').toUpperCase()
+  const prop = (f?.prop || '').toLowerCase()
+  const desc = f?.desc || ''
+  if (col === 'K17' || prop === 'html' || desc.includes('html')) {
+    filePreview.ext = 'html'
+  } else if (col === 'K6' || prop.includes('content') || desc.includes('正文')) {
+    filePreview.ext = 'txt'
+  } else {
+    filePreview.ext = ''
+  }
   filePreview.visible = true
 }
 </script>
@@ -799,8 +871,8 @@ function onCellFile(path: string, _field?: unknown, sourceUrl = '') {
           <option value="E">E 出错</option>
           <option value="L">L 处理中</option>
         </select>
-        <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="effectiveTableId" :table-name="meta?.tableName" class="sdv2-sql">
-          <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="sdv2-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，用列头上的物理列名（如 K1 LIKE '%关键词%')" />
+        <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="effectiveTableId" :table-name="meta?.tableName" :fields="queryFields" class="sdv2-sql">
+          <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="sdv2-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，可点右端漏斗按字段查询（如 K23 = '...'）" />
         </SqlConditionEditor>
         <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
         <button class="rc-btn" type="button" @click="clearFilters">清空</button>
@@ -979,7 +1051,25 @@ function onCellFile(path: string, _field?: unknown, sourceUrl = '') {
           <div class="sdv2-d-head-main">
             <div class="sdv2-d-title">{{ detailRow.title }}</div>
             <div class="sdv2-d-sub">
-              数据 ID {{ detailRow.dataId }} · 源 ID {{ detailRow.sourceId }}<template v-if="!selectedSourceId && sourceNames[detailRow.sourceId]"> {{ sourceNames[detailRow.sourceId] }}</template>
+              <span class="sdv2-d-sub-item">
+                <span>ENTRY_ID {{ detailRow.dataId }}</span>
+                <button
+                  v-if="detailRow.dataId"
+                  type="button"
+                  class="sdv2-sub-copy"
+                  data-testid="row-detail-head-copy-entry"
+                  title="复制 ENTRY_ID"
+                  @click="copyText(detailRow.dataId, 'ENTRY_ID')"
+                >
+                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path
+                      d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
+                      fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+              </span>
+              <span> · 源 ID {{ detailRow.sourceId }}<template v-if="!selectedSourceId && sourceNames[detailRow.sourceId]"> {{ sourceNames[detailRow.sourceId] }}</template></span>
             </div>
             <button
               v-if="canDrillParent"
@@ -1022,7 +1112,24 @@ function onCellFile(path: string, _field?: unknown, sourceUrl = '') {
           <div v-if="parentError" class="sdv2-notice error">{{ parentError }}</div>
           <div v-if="parentDetail" class="sdv2-parent-panel" data-testid="site-data-parent-panel">
             <div class="sdv2-parent-panel-head">
-              <span>上游数据 · {{ parentDetail.row.dataId }}</span>
+              <span class="sdv2-d-sub-item">
+                <span>上游数据 · ENTRY_ID {{ parentDetail.row.dataId }}</span>
+                <button
+                  v-if="parentDetail.row.dataId"
+                  type="button"
+                  class="sdv2-sub-copy"
+                  data-testid="row-detail-parent-copy-entry"
+                  title="复制上游 ENTRY_ID"
+                  @click="copyText(parentDetail.row.dataId, '上游 ENTRY_ID')"
+                >
+                  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                    <path
+                      d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
+                      fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+              </span>
               <button class="rc-btn ghost" type="button" @click="closeParentDetail">收起</button>
             </div>
             <RowDetailFields compact :fields="parentFields" />
@@ -1059,7 +1166,7 @@ function onCellFile(path: string, _field?: unknown, sourceUrl = '') {
       <FilePreview
         :path="filePreview.path"
         :name="filePreview.name"
-        :ext="extFromName(filePreview.name)"
+        :ext="filePreview.ext || extFromName(filePreview.name)"
         :external-url="filePreview.url"
         style="height: min(72vh, 720px)"
         data-testid="site-data-cell-file-preview"
@@ -1100,6 +1207,22 @@ function onCellFile(path: string, _field?: unknown, sourceUrl = '') {
 .sdv2-d-close { flex: none; height: 28px; padding: 0 12px; font-size: 12px; white-space: nowrap; }
 .sdv2-d-title { font-size: 14px; font-weight: 700; color: var(--rc-text); line-height: 1.4; word-break: break-word; }
 .sdv2-d-sub { font-size: 11px; color: var(--rc-faint); margin-top: 4px; }
+.sdv2-d-sub-item { display: inline-flex; align-items: center; gap: 4px; }
+.sdv2-sub-copy {
+  border: 0;
+  background: transparent;
+  color: var(--rc-faint);
+  padding: 1px 3px;
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.5;
+  transition: opacity .12s, color .12s, background-color .12s;
+}
+.sdv2-d-sub-item:hover .sdv2-sub-copy { opacity: 1; }
+.sdv2-sub-copy:hover { color: var(--rc-primary); background: var(--rc-primary-bg); }
 .sdv2-d-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 18px 16px; }
 .sdv2-parent-link { margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; padding: 0; font-size: 11px; color: var(--rc-primary); cursor: pointer; }
 .sdv2-parent-link:hover { text-decoration: underline; }

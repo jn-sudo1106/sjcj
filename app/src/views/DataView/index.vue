@@ -22,6 +22,7 @@ import MoreSourcesDialog from './MoreSourcesDialog.vue'
 import DataImportDialog from './DataImportDialog.vue'
 import { backTraceSources } from '@/utils/data/backTraceSources'
 import { unsupportedNextStepBatchFilters } from './batchGuards'
+import { copyToClipboard } from '@/utils/clipboard'
 
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
 // 本文件覆盖数据范围/快捷查询/结果工具条/批量条/动态列表格/分页/数据详情抽屉/手动添加/手动修改/统计/
@@ -417,16 +418,26 @@ const apiReturns = computed(() => [
 ])
 
 async function copyApiUrl() {
-  if (!navigator.clipboard?.writeText) {
-    ElMessage.warning('当前环境不支持复制，请手动复制')
-    return
+  await copyToClipboard(apiIdFetchUrl.value, 'API 地址')
+}
+
+function copyText(val: string, label?: string) {
+  void copyToClipboard(val, label)
+}
+
+function copyDetailJson() {
+  if (!detail.data) return
+  const payload: Record<string, unknown> = {
+    ENTRY_ID: detail.data.row.dataId,
+    SOURCE_ID: detail.data.row.sourceId,
+    CREATE_DT: detail.data.row.createDt,
+    UPDATE_DT: detail.data.row.updateDt,
   }
-  try {
-    await navigator.clipboard.writeText(apiIdFetchUrl.value)
-    ElMessage.success('API 地址已复制')
-  } catch {
-    ElMessage.error('复制失败，请手动复制')
+  for (const item of detail.data.showItems || []) {
+    const key = item.columnName || item.itemName || item.itemId || 'item'
+    payload[key] = item.value
   }
+  void copyToClipboard(JSON.stringify(payload, null, 2), '全部字段 JSON')
 }
 
 function onShowApi() {
@@ -646,7 +657,7 @@ const panelColumns = computed<DataQueryColumn[]>(() => dynamicColumns.value.map(
   hintProp: f.prop,
 })))
 function formatDateTime(value?: string) {
-  return value ? value.slice(0, 16) : '—'
+  return value ? (value.length > 19 ? value.slice(0, 19) : value) : '—'
 }
 // 相对时间（方案 §1.5-4/§4.3：timeago + hover 绝对时间 title）
 function timeAgo(value?: string): string {
@@ -731,6 +742,8 @@ onMounted(async () => {
       :columns="panelColumns"
       show-state
       :selectable="canWrite"
+      default-sort-field="updateDt"
+      default-sort-order="descend"
       v-model:selected-keys="selectedRowKeys"
       @query-change="onPanelQueryChange"
       @loaded="onPanelLoaded"
@@ -836,7 +849,7 @@ onMounted(async () => {
             <!-- 0904 I04（Z4）：SQL 条件框从 220px 加宽。走查原话「太小了……人家已经选条件了，
                  他就不会看这个……你最好放过来放上去能看到全部就行了」。
                  右端还叠了两个图标按钮（最近条件 / 放大），220px 下几乎看不到条件正文。 -->
-            <label>自定SQL条件<SqlConditionEditor v-model="yCond" v-slot="{ value, update }" :table-id="tableId" style="width: 360px"><el-input :model-value="value" @update:model-value="update" placeholder="如 K1 IS NULL" /></SqlConditionEditor></label>
+            <label>自定SQL条件<SqlConditionEditor v-model="yCond" v-slot="{ value, update }" :table-id="tableId" :fields="dynamicColumns" style="width: 360px"><el-input :model-value="value" @update:model-value="update" placeholder="如 K1 IS NULL" /></SqlConditionEditor></label>
             <button class="rc-btn danger" type="button" @click="onSendYellowBatch">批量发后续</button>
           </div>
           <!-- 参考API（方案 §1.4-2）：展示 nextStep2 拼接 URL 供运营核对 -->
@@ -854,6 +867,16 @@ onMounted(async () => {
             <span v-else>—</span>
           </template>
         </el-table-column>
+        <el-table-column prop="updateDt" label="更新时间" width="165" sortable="custom">
+          <template #default="{ row }">
+            <span :title="row.updateDt ? `${row.updateDt} (${timeAgo(row.updateDt)})` : '—'">{{ formatDateTime(row.updateDt) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="createDt" label="创建时间" width="165" sortable="custom">
+          <template #default="{ row }">
+            <span :title="row.createDt ? `${row.createDt} (${timeAgo(row.createDt)})` : '—'">{{ formatDateTime(row.createDt) }}</span>
+          </template>
+        </el-table-column>
       </template>
 
       <template #columns-after>
@@ -863,12 +886,6 @@ onMounted(async () => {
               {{ row.state || '—' }}
             </el-tag>
           </template>
-        </el-table-column>
-        <el-table-column prop="updateDt" label="更新" width="90" sortable="custom">
-          <template #default="{ row }"><span :title="formatDateTime(row.updateDt)">{{ timeAgo(row.updateDt) }}</span></template>
-        </el-table-column>
-        <el-table-column prop="createDt" label="生成" width="90" sortable="custom">
-          <template #default="{ row }"><span :title="formatDateTime(row.createDt)">{{ timeAgo(row.createDt) }}</span></template>
         </el-table-column>
         <el-table-column label="任务" width="100">
           <template #default="{ row }">
@@ -967,9 +984,79 @@ onMounted(async () => {
     <!-- 数据详情抽屉（只读） -->
     <el-drawer v-model="detail.visible" title="数据表详情" size="480px">
       <template v-if="detail.data">
+        <div class="dv-detail-toolbar">
+          <button class="rc-btn sm" type="button" data-testid="detail-copy-json" @click="copyDetailJson">
+            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+              <path
+                d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
+                fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
+              />
+            </svg>
+            复制全部 JSON
+          </button>
+        </div>
         <dl class="rc-kv">
+          <dt class="dv-detail-dt">
+            <span>ENTRY_ID</span>
+            <button
+              v-if="detail.data.row.dataId"
+              type="button"
+              class="dv-copy-btn"
+              title="复制 ENTRY_ID"
+              data-testid="detail-copy-entry-id"
+              @click="copyText(detail.data.row.dataId, 'ENTRY_ID')"
+            >
+              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                <path
+                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
+                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+          </dt>
+          <dd>{{ detail.data.row.dataId || '—' }}</dd>
+          <dt class="dv-detail-dt">
+            <span>源 ID</span>
+            <button
+              v-if="detail.data.row.sourceId"
+              type="button"
+              class="dv-copy-btn"
+              title="复制 源 ID"
+              data-testid="detail-copy-source-id"
+              @click="copyText(detail.data.row.sourceId, '源 ID')"
+            >
+              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                <path
+                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
+                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+          </dt>
+          <dd>{{ detail.data.row.sourceId || '—' }}</dd>
+          <dt>创建时间</dt>
+          <dd>{{ detail.data.row.createDt || '—' }}</dd>
+          <dt>更新时间</dt>
+          <dd>{{ detail.data.row.updateDt || '—' }}</dd>
           <template v-for="item in detail.data.showItems" :key="item.itemId ?? item.columnName">
-            <dt>{{ item.itemName || item.columnName }}</dt>
+            <dt class="dv-detail-dt">
+              <span>{{ item.itemName || item.columnName }}</span>
+              <button
+                v-if="item.value !== undefined && item.value !== null && item.value !== ''"
+                type="button"
+                class="dv-copy-btn"
+                :title="`复制 ${item.itemName || item.columnName}`"
+                data-testid="detail-copy-item"
+                @click="copyText(String(item.value), item.itemName || item.columnName)"
+              >
+                <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                  <path
+                    d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
+                    fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+            </dt>
             <dd>{{ item.value ?? '—' }}</dd>
           </template>
         </dl>
@@ -1236,5 +1323,40 @@ onMounted(async () => {
   font-size: 13px;
   font-weight: 700;
   color: var(--rc-text);
+}
+.dv-detail-toolbar {
+  margin-bottom: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+.dv-detail-toolbar .rc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.dv-detail-dt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.dv-copy-btn {
+  border: 0;
+  background: transparent;
+  color: var(--rc-faint);
+  padding: 1px 3px;
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.45;
+  transition: opacity .12s, color .12s, background-color .12s;
+}
+.dv-detail-dt:hover .dv-copy-btn {
+  opacity: 1;
+}
+.dv-copy-btn:hover {
+  color: var(--rc-primary);
+  background: var(--rc-primary-bg);
 }
 </style>

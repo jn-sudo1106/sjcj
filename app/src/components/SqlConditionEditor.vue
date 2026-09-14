@@ -1,24 +1,348 @@
 <script setup lang="ts">
-// 保留调用方原有输入控件（含 autocomplete），只统一放大编辑与草稿回填。
+// 保留调用方原有输入控件（含 autocomplete），统一字段选择、智能联想、放大编辑与草稿回填。
 import { computed, ref, watch } from 'vue'
-import { ElButton, ElDialog, ElDropdown, ElDropdownItem, ElDropdownMenu } from 'element-plus'
-import { ArrowDown, Clock, FullScreen } from '@element-plus/icons-vue'
+import {
+  ElButton,
+  ElDialog,
+  ElDropdown,
+  ElDropdownItem,
+  ElDropdownMenu,
+  ElInput,
+  ElPopover,
+} from 'element-plus'
+import { ArrowDown, Clock, Filter, FullScreen, Search } from '@element-plus/icons-vue'
 import { clearSqlConditions, readSqlConditions } from '@/utils/sqlConditionHistory'
 import { stripTrailingSemicolon } from '@/utils/sqlCondition'
+import { dataApi } from '@/api'
+
+export interface SqlFieldItem {
+  prop: string
+  columnName?: string
+  desc?: string
+  label?: string
+  type?: string
+  sample?: string
+}
+
+export interface NormalizedSqlField {
+  columnName: string
+  desc: string
+  label: string
+  type?: string
+}
 
 const props = defineProps<{
   modelValue: string
   tableId?: string
   tableName?: string
+  fields?: SqlFieldItem[]
 }>()
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
+const root = ref<HTMLElement>()
 const opened = ref(false)
 const draft = ref('')
 const editor = ref<HTMLTextAreaElement>()
 const recent = ref<string[]>([])
+const fetchedFields = ref<SqlFieldItem[]>([])
+const loadingFields = ref(false)
+
+// 字段选择 Popover 状态
+const fieldPopoverOpen = ref(false)
+const fieldSearch = ref('')
+const fieldSearchInputRef = ref<InstanceType<typeof ElInput>>()
+
+// 放大弹窗中字段搜索
+const dialogFieldSearch = ref('')
+
+// 智能联想下拉建议
+const showSuggestions = ref(false)
+const inlineSuggestions = ref<{ field: NormalizedSqlField; snippet: string; label: string; op: string }[]>([])
+const activeSuggestionIndex = ref(0)
+
 function refreshRecent() {
   recent.value = readSqlConditions(props.tableId)
 }
+
+async function ensureFields() {
+  if (props.fields && props.fields.length > 0) return
+  if (!props.tableId) return
+  loadingFields.value = true
+  try {
+    const res = await dataApi.tableMeta(props.tableId)
+    if (res?.fields) {
+      fetchedFields.value = res.fields
+    }
+  } catch {
+    // 忽略加载错误
+  } finally {
+    loadingFields.value = false
+  }
+}
+
+function onFieldPopoverShow() {
+  ensureFields()
+  requestAnimationFrame(() => {
+    fieldSearchInputRef.value?.focus()
+  })
+}
+
+const normalizedFields = computed<NormalizedSqlField[]>(() => {
+  const list = (props.fields && props.fields.length > 0) ? props.fields : fetchedFields.value
+  if (!list.length) return []
+  return list.map((f) => {
+    const columnName = (f.columnName || f.prop || '').trim()
+    const desc = (f.desc || f.label || '').trim()
+    let label = ''
+    if (f.label) {
+      label = f.label
+    } else if (desc && desc.toUpperCase() !== columnName.toUpperCase()) {
+      label = `${desc} (${columnName})`
+    } else {
+      label = columnName
+    }
+    return {
+      columnName,
+      desc: desc || columnName,
+      label,
+      type: f.type,
+    }
+  }).filter((f) => Boolean(f.columnName))
+})
+
+const hasFieldsOrTable = computed(() => normalizedFields.value.length > 0 || Boolean(props.tableId))
+
+const filteredFields = computed(() => {
+  const q = fieldSearch.value.trim().toLowerCase()
+  if (!q) return normalizedFields.value
+  return normalizedFields.value.filter((f) =>
+    f.columnName.toLowerCase().includes(q) ||
+    f.desc.toLowerCase().includes(q) ||
+    f.label.toLowerCase().includes(q)
+  )
+})
+
+const dialogFilteredFields = computed(() => {
+  const q = dialogFieldSearch.value.trim().toLowerCase()
+  if (!q) return normalizedFields.value
+  return normalizedFields.value.filter((f) =>
+    f.columnName.toLowerCase().includes(q) ||
+    f.desc.toLowerCase().includes(q) ||
+    f.label.toLowerCase().includes(q)
+  )
+})
+
+function buildConditionSnippet(col: string, op: string) {
+  let snippet = ''
+  let cursorOffset = 0
+  switch (op) {
+    case '= ':
+    case '=':
+    case "= ''":
+      snippet = `${col} = ''`
+      cursorOffset = snippet.length - 1
+      break
+    case 'LIKE':
+    case "LIKE '%%'":
+      snippet = `${col} LIKE '%%'`
+      cursorOffset = snippet.length - 2
+      break
+    case 'IS NOT NULL':
+      snippet = `${col} IS NOT NULL`
+      cursorOffset = snippet.length
+      break
+    case 'IS NULL':
+      snippet = `${col} IS NULL`
+      cursorOffset = snippet.length
+      break
+    case '<>':
+    case "<> ''":
+      snippet = `${col} <> ''`
+      cursorOffset = snippet.length - 1
+      break
+    default:
+      snippet = `${col} = ''`
+      cursorOffset = snippet.length - 1
+  }
+  return { snippet, cursorOffset }
+}
+
+/**
+ * 在紧凑行上应用选中的字段条件。
+ * 若已有条件，自动以 AND 拼接；插入后将光标聚焦于引号中，便于直接粘贴或键入值。
+ */
+function applyFieldConditionCompact(field: NormalizedSqlField, op: string = "= ''") {
+  const { snippet, cursorOffset } = buildConditionSnippet(field.columnName, op)
+  const cur = props.modelValue.trim()
+  let nextVal = ''
+  let cursorTarget = 0
+
+  if (!cur) {
+    nextVal = snippet
+    cursorTarget = cursorOffset
+  } else if (/\b(AND|OR)\s*$/i.test(cur)) {
+    nextVal = `${cur} ${snippet}`
+    cursorTarget = cur.length + 1 + cursorOffset
+  } else {
+    nextVal = `${cur} AND ${snippet}`
+    cursorTarget = cur.length + 5 + cursorOffset
+  }
+
+  emit('update:modelValue', nextVal)
+  fieldPopoverOpen.value = false
+
+  requestAnimationFrame(() => {
+    const input = root.value?.querySelector('input')
+    if (input) {
+      input.focus()
+      input.setSelectionRange(cursorTarget, cursorTarget)
+    }
+  })
+}
+
+/**
+ * 放大弹窗中点击字段插入草稿。
+ */
+function insertFieldToDraft(field: NormalizedSqlField, op: string = "= ''") {
+  const { snippet, cursorOffset } = buildConditionSnippet(field.columnName, op)
+  const ta = editor.value
+  if (!ta) {
+    draft.value = draft.value ? `${draft.value} AND ${snippet}` : snippet
+    return
+  }
+
+  const start = ta.selectionStart ?? draft.value.length
+  const end = ta.selectionEnd ?? start
+  const before = draft.value.slice(0, start)
+  const after = draft.value.slice(end)
+
+  let prefix = ''
+  if (before.trim().length > 0 && !/\b(AND|OR)\s*$/i.test(before.trim())) {
+    prefix = ' AND '
+  }
+
+  const inserted = prefix + snippet
+  draft.value = before + inserted + after
+
+  requestAnimationFrame(() => {
+    ta.focus()
+    const target = start + prefix.length + cursorOffset
+    ta.setSelectionRange(target, target)
+  })
+}
+
+// 智能键入联想
+function checkInlineSuggestions(el: HTMLInputElement) {
+  if (!normalizedFields.value.length) {
+    showSuggestions.value = false
+    return
+  }
+  const val = el.value
+  const pos = el.selectionStart ?? val.length
+  const before = val.slice(0, pos)
+
+  // 引号未闭合时不提示
+  const singleQuotes = (before.match(/'/g) || []).length
+  if (singleQuotes % 2 !== 0) {
+    showSuggestions.value = false
+    return
+  }
+
+  // 提取光标前的单词/词组
+  const match = before.match(/([a-zA-Z0-9_\u4e00-\u9fa5]+)$/)
+  if (!match) {
+    showSuggestions.value = false
+    return
+  }
+
+  const word = match[1].toLowerCase()
+  const SQL_KEYWORDS = new Set(['and', 'or', 'not', 'is', 'null', 'like', 'in', 'between', 'where', 'select', 'from'])
+  if (SQL_KEYWORDS.has(word)) {
+    showSuggestions.value = false
+    return
+  }
+
+  const matched = normalizedFields.value.filter((f) =>
+    f.columnName.toLowerCase().startsWith(word) ||
+    f.desc.toLowerCase().includes(word)
+  )
+
+  if (!matched.length) {
+    showSuggestions.value = false
+    return
+  }
+
+  const list: typeof inlineSuggestions.value = []
+  for (const f of matched.slice(0, 4)) {
+    list.push({
+      field: f,
+      op: "= ''",
+      snippet: `${f.columnName} = ''`,
+      label: `${f.columnName} = '' (${f.desc})`,
+    })
+    list.push({
+      field: f,
+      op: "LIKE '%%'",
+      snippet: `${f.columnName} LIKE '%%'`,
+      label: `${f.columnName} LIKE '%%' (${f.desc})`,
+    })
+  }
+  inlineSuggestions.value = list.slice(0, 6)
+  activeSuggestionIndex.value = 0
+  showSuggestions.value = true
+}
+
+function applyInlineSuggestion(item: typeof inlineSuggestions.value[0]) {
+  const input = root.value?.querySelector('input')
+  if (!input) return
+  const val = input.value
+  const pos = input.selectionStart ?? val.length
+  const before = val.slice(0, pos)
+  const after = val.slice(pos)
+
+  const replacedBefore = before.replace(/([a-zA-Z0-9_\u4e00-\u9fa5]+)$/, item.snippet)
+  const nextVal = replacedBefore + after
+
+  emit('update:modelValue', nextVal)
+  showSuggestions.value = false
+
+  requestAnimationFrame(() => {
+    input.focus()
+    const { cursorOffset } = buildConditionSnippet(item.field.columnName, item.op)
+    const newPos = replacedBefore.length - item.snippet.length + cursorOffset
+    input.setSelectionRange(newPos, newPos)
+  })
+}
+
+function onInputNative(e: Event) {
+  const el = e.target as HTMLInputElement
+  if (!el || typeof el.selectionStart !== 'number') return
+  checkInlineSuggestions(el)
+}
+
+function onKeyDown(e: KeyboardEvent) {
+  if (!showSuggestions.value || !inlineSuggestions.value.length) return
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    activeSuggestionIndex.value = (activeSuggestionIndex.value + 1) % inlineSuggestions.value.length
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    activeSuggestionIndex.value = (activeSuggestionIndex.value - 1 + inlineSuggestions.value.length) % inlineSuggestions.value.length
+  } else if (e.key === 'Enter' || e.key === 'Tab') {
+    if (showSuggestions.value) {
+      e.preventDefault()
+      applyInlineSuggestion(inlineSuggestions.value[activeSuggestionIndex.value])
+    }
+  } else if (e.key === 'Escape') {
+    showSuggestions.value = false
+  }
+}
+
+function onBlur() {
+  setTimeout(() => {
+    showSuggestions.value = false
+  }, 200)
+}
+
 function selectRecent(command: number | 'clear') {
   if (command === 'clear') {
     clearSqlConditions(props.tableId)
@@ -80,6 +404,7 @@ function onPaste(e: ClipboardEvent) {
 function open() {
   draft.value = props.modelValue
   refreshRecent()
+  ensureFields()
   opened.value = true
 }
 function apply() {
@@ -91,17 +416,127 @@ function apply() {
   opened.value = false
 }
 // 外部清空、切表时丢弃旧草稿，避免应用到另一个查询上下文。
-watch([() => props.modelValue, () => props.tableId], () => { opened.value = false })
+watch([() => props.modelValue, () => props.tableId], () => {
+  opened.value = false
+  showSuggestions.value = false
+  fetchedFields.value = []
+})
 </script>
 
 <template>
-  <span class="sql-condition-field" @paste="onPaste">
+  <span
+    ref="root"
+    class="sql-condition-field"
+    @paste="onPaste"
+    @input="onInputNative"
+    @keydown="onKeyDown"
+    @focusout="onBlur"
+  >
     <slot :value="compactValue" :update="update" />
-    <!-- 右端两个图标按钮：最近条件、放大编辑。
-         **都不写文字**（2026-09-05）：条件框本来就窄，字白占宽度；title/aria-label 说清楚即可。
-         两者是**两件事**（0904 I04 原话「放大是放大，最近条件是最近条件，这两个不一个东西」），
-         所以最近条件在紧凑行独立可用，不必先放大。 -->
+
+    <!-- 智能联想下拉建议（键入字段时触发） -->
+    <div
+      v-if="showSuggestions && inlineSuggestions.length"
+      class="sql-inline-suggestions"
+      role="listbox"
+    >
+      <div
+        v-for="(item, idx) in inlineSuggestions"
+        :key="item.label"
+        class="sql-suggestion-item"
+        :class="{ active: idx === activeSuggestionIndex }"
+        @mousedown.prevent="applyInlineSuggestion(item)"
+      >
+        <span class="sql-sug-snippet">{{ item.snippet }}</span>
+        <span class="sql-sug-desc">{{ item.field.desc }}</span>
+      </div>
+    </div>
+
+    <!-- 右端图标按钮：字段选择、最近条件、放大编辑 -->
     <span class="sql-actions">
+      <!-- 字段快捷查询/插入（漏斗图标） -->
+      <ElPopover
+        v-if="hasFieldsOrTable"
+        v-model:visible="fieldPopoverOpen"
+        trigger="click"
+        :width="360"
+        placement="bottom-end"
+        popper-class="sql-field-popover"
+        :teleported="true"
+        @show="onFieldPopoverShow"
+      >
+        <template #reference>
+          <button
+            class="sql-icon-btn sql-field-btn"
+            type="button"
+            aria-label="按字段查询"
+            title="按字段查询 / 插入字段条件"
+          >
+            <Filter aria-hidden="true" />
+          </button>
+        </template>
+        <div class="sql-field-panel">
+          <div class="sql-field-head">
+            <div class="sql-field-title">
+              <span>按字段查询</span>
+              <span v-if="filteredFields.length" class="sql-field-count">（{{ filteredFields.length }}个字段）</span>
+            </div>
+            <ElInput
+              ref="fieldSearchInputRef"
+              v-model="fieldSearch"
+              placeholder="搜索列名或字段说明（如 K23、正文）"
+              size="small"
+              clearable
+              :prefix-icon="Search"
+              class="sql-field-search"
+            />
+          </div>
+          <div v-if="loadingFields" class="sql-field-empty">正在加载字段信息…</div>
+          <div v-else-if="!filteredFields.length" class="sql-field-empty">
+            {{ normalizedFields.length ? '未匹配到字段' : '当前表暂无可查询字段' }}
+          </div>
+          <div v-else class="sql-field-list">
+            <div
+              v-for="f in filteredFields"
+              :key="f.columnName"
+              class="sql-field-row"
+              :title="`点击插入 ${f.columnName} = ''`"
+              @click="applyFieldConditionCompact(f, '= \'\'')"
+            >
+              <span class="sql-field-badge">{{ f.columnName }}</span>
+              <span class="sql-field-desc">{{ f.desc }}</span>
+              <div class="sql-field-op-group" @click.stop>
+                <button
+                  type="button"
+                  class="sql-field-op"
+                  title="等于"
+                  @click="applyFieldConditionCompact(f, '= \'\'')"
+                >=</button>
+                <button
+                  type="button"
+                  class="sql-field-op"
+                  title="包含 (LIKE)"
+                  @click="applyFieldConditionCompact(f, 'LIKE \'%%\'')"
+                >LIKE</button>
+                <button
+                  type="button"
+                  class="sql-field-op"
+                  title="非空"
+                  @click="applyFieldConditionCompact(f, 'IS NOT NULL')"
+                >非空</button>
+                <button
+                  type="button"
+                  class="sql-field-op"
+                  title="为空"
+                  @click="applyFieldConditionCompact(f, 'IS NULL')"
+                >为空</button>
+              </div>
+            </div>
+          </div>
+          <div class="sql-field-foot">点击行插入「= ''」，光标自动定位在引号中</div>
+        </div>
+      </ElPopover>
+
       <ElDropdown trigger="click" :max-height="280" @visible-change="refreshRecent" @command="selectRecentCompact">
         <button class="sql-icon-btn" type="button" aria-label="最近使用的 SQL 条件" title="最近使用的 SQL 条件">
           <Clock aria-hidden="true" />
@@ -110,8 +545,6 @@ watch([() => props.modelValue, () => props.tableId], () => { opened.value = fals
           <ElDropdownMenu>
             <ElDropdownItem v-if="!recent.length" disabled>暂无最近条件，成功查询后自动记录</ElDropdownItem>
             <ElDropdownItem v-for="(condition, index) in recent" :key="condition" :command="index">
-              <!-- class 与弹窗里那份**故意不同**：两个下拉的菜单都挂在 body 上，
-                   同名 class 会让选择器（和测试）分不清是哪一个 -->
               <span class="sql-recent-condition-compact" :title="condition">{{ condition }}</span>
             </ElDropdownItem>
             <ElDropdownItem v-if="recent.length" command="clear" divided>清空当前表的最近条件</ElDropdownItem>
@@ -122,8 +555,7 @@ watch([() => props.modelValue, () => props.tableId], () => { opened.value = fals
         <FullScreen aria-hidden="true" />
       </button>
     </span>
-    <!-- close-on-click-modal 保持默认的 true（0904 I05）：产品原话
-         「点一下外面就取消掉了，一般都没有取消」——点遮罩即关，所以也不留「取消」按钮。 -->
+
     <ElDialog
       v-model="opened"
       title="SQL 条件"
@@ -153,6 +585,32 @@ watch([() => props.modelValue, () => props.tableId], () => { opened.value = fals
             </template>
           </ElDropdown>
         </div>
+
+        <!-- 弹窗内的字段快捷插入栏 -->
+        <div v-if="normalizedFields.length" class="sql-dialog-fields-bar">
+          <div class="sql-dialog-fields-head">
+            <span class="sql-dialog-fields-title">点击字段快捷插入：</span>
+            <input
+              v-model="dialogFieldSearch"
+              class="sql-dialog-fields-search"
+              placeholder="过滤字段..."
+            />
+          </div>
+          <div class="sql-dialog-fields-tags">
+            <button
+              v-for="f in dialogFilteredFields"
+              :key="f.columnName"
+              type="button"
+              class="sql-dialog-field-tag"
+              :title="`插入 ${f.columnName} = ''`"
+              @click="insertFieldToDraft(f, '= \'\'')"
+            >
+              <span class="tag-col">{{ f.columnName }}</span>
+              <span class="tag-desc">{{ f.desc }}</span>
+            </button>
+          </div>
+        </div>
+
         <textarea
           ref="editor"
           v-model="draft"
@@ -167,8 +625,6 @@ watch([() => props.modelValue, () => props.tableId], () => { opened.value = fals
         <div class="sql-editor-footer">
           <span class="sql-hint">确认后回填查询框，不会自动查询</span>
           <div class="sql-editor-actions">
-            <!-- 0904 I05：产品原话「来确定吧，没什么应用条件，就是确定……
-                 或者没有取消这个确定，然后点一下外面就取消掉了，一般都没有取消」 -->
             <ElButton type="primary" @click="apply">确认</ElButton>
           </div>
         </div>
@@ -179,15 +635,52 @@ watch([() => props.modelValue, () => props.tableId], () => { opened.value = fals
 
 <style scoped>
 .sql-condition-field { position: relative; display: inline-flex; align-items: center; width: 240px; min-width: 0; max-width: 100%; vertical-align: middle; }
-.sql-condition-field :deep(input) { width: 100%; min-width: 0; max-width: none; padding-right: 60px; }
+.sql-condition-field :deep(input) { width: 100%; min-width: 0; max-width: none; padding-right: 80px; }
 .sql-condition-field :deep(.el-input), .sql-condition-field :deep(.el-autocomplete) { width: 100%; min-width: 0; }
-.sql-condition-field :deep(.el-input__wrapper) { padding-right: 58px; }
+.sql-condition-field :deep(.el-input__wrapper) { padding-right: 78px; }
 .sql-condition-field :deep(.el-input__inner) { padding-right: 0; }
 .sql-actions { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; gap: 1px; }
 .sql-icon-btn { display: inline-flex; align-items: center; justify-content: center; padding: 4px; border: 0; border-radius: 4px; background: var(--rc-surface, #fff); color: var(--rc-muted, #64748b); cursor: pointer; }
 .sql-icon-btn svg { width: 13px; height: 13px; }
 .sql-icon-btn:hover { color: var(--rc-primary, #2563eb); background: var(--rc-primary-bg, #eff6ff); }
 .sql-icon-btn:focus-visible { outline: 2px solid var(--rc-primary, #2563eb); outline-offset: 1px; }
+
+/* 字段选择面板与操作 */
+.sql-field-btn { color: var(--rc-muted, #64748b); }
+.sql-field-panel { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.sql-field-head { display: flex; flex-direction: column; gap: 6px; }
+.sql-field-title { display: flex; align-items: center; justify-content: space-between; font-weight: 600; color: var(--rc-text, #0f172a); }
+.sql-field-count { font-weight: normal; font-size: 11px; color: var(--rc-muted, #64748b); }
+.sql-field-search { width: 100%; }
+.sql-field-empty { padding: 12px 0; text-align: center; color: var(--rc-muted, #64748b); font-size: 12px; }
+.sql-field-list { display: flex; flex-direction: column; gap: 3px; max-height: 240px; overflow-y: auto; overscroll-behavior: contain; }
+.sql-field-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px; border-radius: 4px; cursor: pointer; transition: background 0.15s; }
+.sql-field-row:hover { background: var(--rc-primary-bg, #eff6ff); }
+.sql-field-badge { display: inline-block; padding: 1px 5px; border-radius: 3px; background: #e2e8f0; color: #334155; font-family: var(--rc-mono, monospace); font-size: 11px; font-weight: 600; flex-shrink: 0; }
+.sql-field-desc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--rc-text, #0f172a); }
+.sql-field-op-group { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.sql-field-op { padding: 1px 5px; border: 1px solid var(--rc-border, #cbd5e1); border-radius: 3px; background: #fff; color: var(--rc-muted, #64748b); font-size: 11px; cursor: pointer; }
+.sql-field-op:hover { border-color: var(--rc-primary, #2563eb); color: var(--rc-primary, #2563eb); background: #f8fafc; }
+.sql-field-foot { font-size: 11px; color: var(--rc-muted, #94a3b8); margin-top: 2px; }
+
+/* 智能联想下拉建议 */
+.sql-inline-suggestions { position: absolute; top: calc(100% + 4px); left: 0; right: 0; min-width: 220px; max-height: 180px; overflow-y: auto; z-index: 2050; background: #fff; border: 1px solid var(--rc-border, #cbd5e1); border-radius: 6px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+.sql-suggestion-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.sql-suggestion-item:hover, .sql-suggestion-item.active { background: var(--rc-primary-bg, #eff6ff); color: var(--rc-primary, #2563eb); }
+.sql-sug-snippet { font-family: var(--rc-mono, monospace); font-weight: 500; }
+.sql-sug-desc { font-size: 11px; color: var(--rc-muted, #64748b); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 弹窗中的快捷字段栏 */
+.sql-dialog-fields-bar { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; background: #f8fafc; border: 1px solid var(--rc-border, #e2e8f0); border-radius: 6px; }
+.sql-dialog-fields-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sql-dialog-fields-title { font-size: 12px; color: var(--rc-text, #334155); font-weight: 500; }
+.sql-dialog-fields-search { width: 140px; height: 22px; padding: 0 6px; border: 1px solid var(--rc-border, #cbd5e1); border-radius: 4px; font-size: 11px; background: #fff; }
+.sql-dialog-fields-tags { display: flex; flex-wrap: wrap; gap: 4px; max-height: 84px; overflow-y: auto; }
+.sql-dialog-field-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border: 1px solid var(--rc-border, #cbd5e1); border-radius: 4px; background: #fff; font-size: 11px; cursor: pointer; transition: all 0.15s; }
+.sql-dialog-field-tag:hover { border-color: var(--rc-primary, #2563eb); background: var(--rc-primary-bg, #eff6ff); color: var(--rc-primary, #2563eb); }
+.sql-dialog-field-tag .tag-col { font-family: var(--rc-mono, monospace); font-weight: 600; color: #2563eb; }
+.sql-dialog-field-tag .tag-desc { color: #475569; }
+
 .sql-editor-body { display: flex; flex-direction: column; gap: 12px; }
 .sql-editor-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .sql-editor-head :deep(.el-dropdown) { margin-left: auto; }

@@ -130,7 +130,6 @@ describe('流程详情抽屉 · 展开/收起配置区', () => {
     setActivePinia(createPinia())
     const ui = useUiStore()
     ui.applyViewLayoutDefault('data')
-    ui.toggleInspectorCollapsed()
     expect(ui.inspectorCollapsed).toBe(true)
     vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(FLOW)
 

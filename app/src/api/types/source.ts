@@ -576,6 +576,8 @@ export interface SourceTaskQuery extends PageQuery {
   nodeId?: string
   configId?: string
   state?: RunState
+  queue?: string
+  topic?: string
 }
 
 /** 旧平台 /v1/config/loadParams 返回：每个配置下挂的一组抓取参数定义。 */

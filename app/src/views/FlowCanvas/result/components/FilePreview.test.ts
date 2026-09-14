@@ -45,6 +45,28 @@ describe('FilePreview', () => {
     expect(open.attributes('rel')).toContain('noopener')
   })
 
+  it('正文文本文件（如 K6 的 .txt）：同样提供「新窗口打开」且直连 9102 端口', async () => {
+    vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(new TextEncoder().encode('正文内容').buffer)
+    const wrapper = mount(FilePreview, { props: { path: '/qinlong/dds/content.txt', name: 'content.txt', ext: 'txt' } })
+    await flushPromises()
+
+    const open = wrapper.find('[data-testid="file-preview-open-window"]')
+    expect(open.exists()).toBe(true)
+    expect(open.attributes('href')).toContain(':9102/api/oss/download?fileId=/qinlong/dds/content.txt')
+    expect(open.attributes('target')).toBe('_blank')
+  })
+
+  it('文本文件当同源 /oss 接口失败时，自动回退到直连 iframe 渲染而不报错中断', async () => {
+    vi.spyOn(ossFile, 'fetchOssFile').mockRejectedValue(new Error('取文件失败（HTTP 404）'))
+    const wrapper = mount(FilePreview, { props: { path: '/qinlong/dds/content.txt', name: 'content.txt', ext: 'txt' } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="file-preview-error"]').exists()).toBe(false)
+    const frame = wrapper.find('[data-testid="file-preview-frame"]')
+    expect(frame.exists()).toBe(true)
+    expect(frame.attributes('src')).toContain(':9102/api/oss/download?fileId=/qinlong/dds/content.txt')
+  })
+
   it('非 html（如 pdf）仍走取字节 + blob：跨源直取会被 CORS 拒，只有同源 /oss 拿得到字节', async () => {
     const created: Blob[] = []
     vi.spyOn(URL, 'createObjectURL').mockImplementation((b: Blob | MediaSource) => {

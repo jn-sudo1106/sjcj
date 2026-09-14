@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { copyToClipboard } from '@/utils/clipboard'
 import type { RowDetailField } from './rowDetailFields'
 
 const props = withDefaults(defineProps<{
@@ -34,13 +35,45 @@ const hiddenEmpty = computed(() => (!props.editing && !props.showEmpty ? emptyCo
 function onEdit(prop: string, event: Event) {
   emit('update:field', { prop, value: (event.target as HTMLInputElement).value })
 }
+
+function onCopy(value: string, name?: string) {
+  void copyToClipboard(value, name)
+}
+
+function onCopyAll() {
+  const result: Record<string, string> = {}
+  for (const f of visibleFields.value) {
+    if (!f.empty && f.value) {
+      result[f.prop || f.code] = f.value
+    }
+  }
+  void copyToClipboard(JSON.stringify(result, null, 2), 'JSON')
+}
 </script>
 
 <template>
   <div class="rdf" :class="{ compact }">
     <div v-if="fields.length" class="rdf-toolbar">
-      <span class="rdf-count">已填 {{ filledCount }} / {{ scopedFields.length }}</span>
-      <span v-if="editing" class="rdf-edit-hint">编辑时展示全部字段</span>
+      <div class="rdf-toolbar-left">
+        <span class="rdf-count">已填 {{ filledCount }} / {{ scopedFields.length }}</span>
+        <span v-if="editing" class="rdf-edit-hint">编辑时展示全部字段</span>
+      </div>
+      <button
+        v-if="!editing && filledCount > 0"
+        type="button"
+        class="rdf-copy-all"
+        data-testid="row-detail-copy-all"
+        title="复制当前所有字段为 JSON"
+        @click="onCopyAll"
+      >
+        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+          <path
+            d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
+            fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
+          />
+        </svg>
+        <span>复制全部 JSON</span>
+      </button>
     </div>
     <div
       v-for="field in visibleFields"
@@ -50,16 +83,33 @@ function onEdit(prop: string, event: Event) {
       :data-testid="`row-detail-field-${field.prop}`"
     >
       <div class="rdf-field-head">
-        <span class="rdf-name">{{ field.name }}</span>
+        <div class="rdf-name-wrap">
+          <span class="rdf-name">{{ field.name }}</span>
+          <button
+            v-if="!editing && field.value && !field.empty"
+            type="button"
+            class="rdf-copy"
+            data-testid="row-detail-copy"
+            :title="`复制 ${field.name}`"
+            @click.stop="onCopy(field.value, field.name)"
+          >
+            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+              <path
+                d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
+                fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
         <!-- 右侧字段标识：prop · K1（2026-09-09）。K 名单独着色并加粗一档——
              写 SQL 条件、配规则用的都是物理列名，prop 只是逻辑名，可操作的那个要更醒目。
              没有 columnName 的字段（固定列、旧 showItems 路径）只显示 code，不留空分隔点。 -->
         <span class="rdf-code">
-          {{ field.code }}<template v-if="field.columnName"><span class="rdf-code-sep"> · </span><span class="rdf-col">{{ field.columnName }}</span></template>
+          {{ field.code }}<template v-if="field.columnName && field.columnName !== field.code"><span class="rdf-code-sep"> · </span><span class="rdf-col">{{ field.columnName }}</span></template>
         </span>
       </div>
       <input
-        v-if="editing"
+        v-if="editing && field.prop !== 'ENTRY_ID'"
         class="rdf-input"
         :value="values[field.prop] ?? ''"
         :aria-label="field.name"
@@ -90,12 +140,47 @@ function onEdit(prop: string, event: Event) {
 
 <style scoped>
 .rdf-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.rdf-toolbar-left { display: flex; align-items: center; gap: 8px; }
 .rdf-count { color: var(--rc-faint); font-size: 11px; }
 .rdf-edit-hint { color: var(--rc-muted); font-size: 11px; }
+.rdf-copy-all {
+  border: 1px solid var(--rc-border-soft);
+  background: #fff;
+  color: var(--rc-text-2);
+  font-size: 11px;
+  border-radius: 4px;
+  padding: 2px 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all .15s;
+}
+.rdf-copy-all:hover {
+  border-color: #bfdbfe;
+  background: var(--rc-primary-bg);
+  color: var(--rc-primary-ink);
+}
 .rdf-field { padding: 9px 0; border-bottom: 1px solid var(--rc-border-soft); }
 .rdf-field.empty .rdf-value { color: var(--rc-faint); }
 .rdf-field-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.rdf-name-wrap { display: inline-flex; align-items: center; gap: 6px; }
 .rdf-name { font-size: 12px; font-weight: 600; color: var(--rc-text); }
+.rdf-copy {
+  border: 0;
+  background: transparent;
+  color: var(--rc-faint);
+  padding: 2px 3px;
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.45;
+  transition: opacity .12s, color .12s, background-color .12s;
+}
+.rdf-field:hover .rdf-copy { opacity: 1; }
+.rdf-copy:hover { color: var(--rc-primary); background: var(--rc-primary-bg); }
 .rdf-code { flex: none; color: var(--rc-faint); font-family: var(--rc-mono, monospace); font-size: 11px; }
 .rdf-code-sep { opacity: .6; }
 .rdf-col { color: var(--rc-text-2); font-weight: 600; }

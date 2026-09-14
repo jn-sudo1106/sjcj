@@ -237,4 +237,29 @@ describe('DataQueryPanel · 独立挂载', () => {
     expect(wrapper.get('[data-testid="column-picker-btn"]').text()).toBe('列 1/2')
     wrapper.unmount()
   })
+
+  it('支持 defaultSortField 与 defaultSortOrder：初次查询与清空重置均带默认排序', async () => {
+    const spy = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [ROW] })
+    const wrapper = mountPanel({
+      defaultSortField: 'updateDt',
+      defaultSortOrder: 'descend',
+    })
+    wrapper.vm.search()
+    await flushPromises()
+
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({
+      sortField: 'updateDt',
+      sortOrder: 'descend',
+    }))
+
+    wrapper.vm.clearFilters()
+    await flushPromises()
+
+    expect(spy).toHaveBeenLastCalledWith(expect.objectContaining({
+      sortField: 'updateDt',
+      sortOrder: 'descend',
+    }))
+    wrapper.unmount()
+  })
 })
+

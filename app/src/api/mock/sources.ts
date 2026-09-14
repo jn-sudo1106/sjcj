@@ -239,6 +239,30 @@ function matches(s: Source, p?: Record<string, unknown>): boolean {
 
 export function mockSourcePaged(params?: Record<string, unknown>): Paged<Source> {
   const filtered = SOURCES.filter((s) => matches(s, params))
+  const field = String(params?.field ?? '')
+  const type = String(params?.type ?? '').toUpperCase()
+  if (field) {
+    filtered.sort((a, b) => {
+      let valA: string | number = ''
+      let valB: string | number = ''
+      if (field === 'SOURCE_ID' || field === 'sourceId') {
+        valA = a.sourceId
+        valB = b.sourceId
+      } else if (field === 'DATA_CNT' || field === 'dataCnt') {
+        valA = a.dataCount ?? 0
+        valB = b.dataCount ?? 0
+      } else if (field === 'LAST_RUN' || field === 'lastRun') {
+        valA = a.lastTaskAt ?? ''
+        valB = b.lastTaskAt ?? ''
+      } else if (field === 'LAST_SUCCESS' || field === 'lastSuccess') {
+        valA = a.lastSuccessAt ?? ''
+        valB = b.lastSuccessAt ?? ''
+      }
+      if (valA === valB) return 0
+      const cmp = valA > valB ? 1 : -1
+      return type === 'DESC' ? -cmp : cmp
+    })
+  }
   const page = Number(params?.page ?? 1)
   const size = Number(params?.size ?? 20)
   const start = (page - 1) * size
@@ -606,10 +630,12 @@ export function mockSourceTaskPaged(params?: Record<string, unknown>): Paged<Tas
   const nodeId = String(params?.nodeId ?? '')
   const configId = String(params?.configId ?? '')
   const state = String(params?.state ?? '')
+  const queue = String(params?.queue ?? params?.topic ?? params?.taskTopic ?? '').trim()
   const filtered = tasks.filter((task) =>
     (!nodeId || task.node === nodeId)
     && (!configId || task.configId === configId)
-    && (!state || task.state === state),
+    && (!state || task.state === state)
+    && (!queue || (task.topic && task.topic.includes(queue))),
   )
   const page = Math.max(1, Number(params?.page ?? 1))
   const size = Math.max(1, Number(params?.size ?? 20))

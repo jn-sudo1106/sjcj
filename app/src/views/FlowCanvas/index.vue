@@ -37,7 +37,7 @@ const activeView = ref(normalizeSourceView(route.query.view))
 function syncActiveView() {
   activeView.value = sourceViewFromHash(window.location.hash)
 }
-// 切视图时套用默认布局（Z3-2）：流程和数据视图都保留右侧节点配置。
+// 切视图时套用默认布局（Z3-2）：数据视图默认收起右侧配置区让出表格空间，流程视图默认展开配置区。
 //
 // ⚠️ 不能拿 `activeView` 当"上一次的值"来比：它在 setup 里就已经按 URL 初始化过了，
 // 首帧（immediate）比较必然相等，默认布局一次都套不上（2026-09-05 实测踩到）。
@@ -552,7 +552,7 @@ onUnmounted(() => {
             @click="ui.toggleInspectorExpanded()"
           >» {{ isDataView ? '数据已收起' : '画布已收起' }}</button>
           <div
-            v-if="!ui.inspectorExpanded"
+            v-if="!ui.inspectorExpanded && !ui.inspectorCollapsed"
             class="rc-insp-splitter"
             title="拖动调整配置区宽度"
             @mousedown="onSplitStart"
@@ -602,9 +602,11 @@ onUnmounted(() => {
 }
 .rc-flow-shell.source-mode { grid-template-columns: minmax(480px, 1fr) 6px var(--insp-w, 480px); }
 /* 展开态：画布收起为窄条（与左侧源侧栏收起态一致），配置区占满剩余空间 */
-.rc-flow-shell.expanded { grid-template-columns: 36px 6px minmax(0, 1fr); }
+.rc-flow-shell.expanded,
+.rc-flow-shell.source-mode.expanded { grid-template-columns: 36px 6px minmax(0, 1fr); }
 /* 收起态：配置区缩成窄条（与上面的展开态左右对称），中间占满 */
-.rc-flow-shell.insp-collapsed { grid-template-columns: minmax(0, 1fr) 6px 36px; }
+.rc-flow-shell.insp-collapsed,
+.rc-flow-shell.source-mode.insp-collapsed { grid-template-columns: minmax(0, 1fr) 6px 36px; }
 .rc-insp-collapsed {
   display: flex; align-items: center; justify-content: center;
   writing-mode: vertical-rl; text-orientation: mixed;
@@ -635,18 +637,26 @@ onUnmounted(() => {
 .rc-insp-splitter.placeholder { cursor: default; pointer-events: none; }
 .rc-insp-splitter.placeholder::before { background: transparent; }
 
-/* 13 寸视口：保留画布与配置区并排，同时给右侧 Tab 留出完整的可读宽度。 */
+/* 13 寸视口：保留画布与配置区并排，同时给右侧 Tab 留出完整的可读宽度。
+   收起与展开态必须具有最高优先级，防止被常规 source-mode 宽度覆盖。 */
 @media (max-width: 1400px) and (min-width: 1241px) {
-  .rc-flow-shell,
-  .rc-flow-shell.source-mode { grid-template-columns: minmax(360px, 1fr) 6px minmax(360px, 400px); }
+  .rc-flow-shell:not(.expanded):not(.insp-collapsed),
+  .rc-flow-shell.source-mode:not(.expanded):not(.insp-collapsed) { grid-template-columns: minmax(360px, 1fr) 6px minmax(360px, 400px); }
+  .rc-flow-shell.expanded,
+  .rc-flow-shell.source-mode.expanded { grid-template-columns: 36px 6px minmax(0, 1fr); }
+  .rc-flow-shell.insp-collapsed,
+  .rc-flow-shell.source-mode.insp-collapsed { grid-template-columns: minmax(0, 1fr) 6px 36px; }
 }
 
 @media (max-width: 1240px) {
   .rc-canvas-cols, .rc-canvas-cols.with-tabs { height: auto; min-height: 0; }
   .rc-flow-shell,
   .rc-flow-shell.source-mode,
-  .rc-flow-shell.expanded { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .rc-flow-shell.expanded,
+  .rc-flow-shell.insp-collapsed { grid-template-columns: minmax(0, 1fr); height: auto; }
   .rc-insp-splitter { display: none; }
-  .rc-flow-shell > :last-child { grid-column: 1 / -1; min-height: 520px; }
+  .rc-flow-shell > :last-child { grid-column: 1 / -1; }
+  .rc-flow-shell > :last-child:not(.rc-insp-collapsed) { min-height: 520px; }
+  .rc-flow-shell > .rc-insp-collapsed { width: 100%; height: 36px; writing-mode: horizontal-tb; }
 }
 </style>

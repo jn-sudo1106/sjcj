@@ -24,13 +24,31 @@ const total = ref(0)
 const loading = ref(false)
 const page = ref(1)
 const size = ref(20)
-const filters = reactive({ sourceId: '', nodeId: '', state: '' })
+const filters = reactive({ sourceId: '', nodeId: '', state: '', queue: '' })
 const processLayout = computed(() => buildHorizontalLayout(flow.main, flow.branches, flow.configs, flow.branchGroups, { includeTerminals: false }))
 const sourceNames = computed(() => Object.fromEntries(siteSources.value.map((item) => [item.sourceId, item.name])))
 const showSourceColumn = computed(() => !filters.sourceId)
 const filterSteps = computed(() => {
   const sourceIds = filters.sourceId ? [filters.sourceId] : siteSources.value.map((source) => source.sourceId)
   return sourceIds.flatMap((id) => (stepsBySource.value[id] ?? []).map((step) => ({ ...step, sourceId: id })))
+})
+const availableQueues = computed(() => {
+  const set = new Set<string>()
+  for (const step of filterSteps.value) {
+    if (step.topic) set.add(step.topic)
+  }
+  for (const runs of Object.values(nodeRunsBySource.value)) {
+    for (const run of runs) {
+      if (run.queue) set.add(run.queue)
+    }
+  }
+  for (const cfg of Object.values(flow.configs)) {
+    if (cfg.taskCfg?.queue) set.add(cfg.taskCfg.queue)
+  }
+  for (const row of rows.value) {
+    if (row.topic) set.add(row.topic)
+  }
+  return Array.from(set).filter(Boolean).sort()
 })
 
 let metadataRequest = 0
@@ -119,6 +137,8 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
     nodeId: filters.nodeId || undefined,
     configId: configIdForNode(filters.nodeId),
     state: (filters.state || undefined) as 'L' | 'C' | 'E' | undefined,
+    queue: filters.queue?.trim() || undefined,
+    topic: filters.queue?.trim() || undefined,
     page: page.value,
     size: size.value,
   }
@@ -153,6 +173,7 @@ watch(sourceId, async () => {
   filters.sourceId = props.siteWide ? '' : sourceId.value
   filters.nodeId = ''
   filters.state = ''
+  filters.queue = ''
   await loadSiteSources()
 }, { immediate: true })
 
@@ -162,7 +183,7 @@ watch(filterSteps, () => {
   }
 })
 
-watch(() => [filters.sourceId, filters.nodeId, filters.state] as const, ([nextSourceId], previous) => {
+watch(() => [filters.sourceId, filters.nodeId, filters.state, filters.queue] as const, ([nextSourceId], previous) => {
   page.value = 1
   void Promise.all([nextSourceId !== previous?.[0] ? loadNodeMetadata() : Promise.resolve(), loadTasks()])
 }, { immediate: true })
@@ -171,10 +192,17 @@ function onSelectNode(id: string) {
   filters.nodeId = filters.nodeId === id ? '' : id
 }
 
+function onSelectQueue(q?: string) {
+  const target = q && q !== '—' ? q.trim() : ''
+  if (!target) return
+  filters.queue = filters.queue === target ? '' : target
+}
+
 function resetFilters() {
   filters.sourceId = props.siteWide ? '' : sourceId.value
   filters.nodeId = ''
   filters.state = ''
+  filters.queue = ''
 }
 
 function nodeName(task: TaskInst): string {
@@ -242,6 +270,17 @@ const nextStepHints = computed(() => {
             <option value="L">运行中</option>
             <option value="E">异常</option>
           </select>
+          <input
+            v-model="filters.queue"
+            class="tv-input tv-queue-input"
+            data-testid="task-queue-filter"
+            placeholder="队列名筛选"
+            list="task-queue-options"
+            aria-label="队列名"
+          />
+          <datalist id="task-queue-options">
+            <option v-for="q in availableQueues" :key="q" :value="q" />
+          </datalist>
           <button class="rc-btn" type="button" @click="resetFilters">清空</button>
           <button class="rc-btn" type="button" data-testid="task-refresh" :disabled="loading" @click="() => loadTasks()">刷新</button>
           <span v-if="autoRefreshing" class="tv-auto" data-testid="task-auto-refresh">
@@ -259,7 +298,14 @@ const nextStepHints = computed(() => {
               <td v-if="showSourceColumn">{{ sourceNames[task.sourceId] || task.sourceId }}</td>
               <td>{{ nodeName(task) }}</td>
               <td>{{ task.taskName }}</td>
-              <td>{{ queueName(task) }}</td>
+              <td
+                class="tv-queue-cell"
+                :class="{ 'tv-queue-clickable': queueName(task) !== '—' }"
+                :title="queueName(task) !== '—' ? '点击按此队列筛选' : undefined"
+                @click="onSelectQueue(queueName(task))"
+              >
+                {{ queueName(task) }}
+              </td>
               <td>{{ nodeRun(task.sourceId, task.node)?.totalTasks ?? '—' }}</td>
               <td>{{ nodeRun(task.sourceId, task.node)?.processedTasks ?? '—' }}</td>
               <td>{{ task.typeName }}</td>
@@ -304,6 +350,9 @@ const nextStepHints = computed(() => {
 .tv-next-fields { margin: 0 0 10px; color: var(--rc-muted); font-size: 12px; }
 .tv-input { height: 28px; min-width: 112px; padding: 0 10px; color: var(--rc-text); border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; font-size: 12px; }
 .tv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; outline: none; }
+.tv-queue-input { min-width: 130px; }
+.tv-queue-clickable { cursor: pointer; color: var(--rc-primary); }
+.tv-queue-clickable:hover { text-decoration: underline; }
 .tv-filters .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }
 .tv-table { width: 100%; }
 .tv-id, .tv-time { color: var(--rc-faint); font-family: var(--rc-mono, monospace); font-size: 11px; }

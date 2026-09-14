@@ -11,7 +11,7 @@
 //
 // 真实类型分布（文件中心首页 20 行）：xlsx 13 / pdf 7 / txt 0，故 Excel 是主力路径。
 import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue'
-import { extFromName, fetchOssFile, fetchOssFileHead, mimeTypeOf, ossPublicUrl, previewKindOf, type PreviewKind } from '@/utils/ossFile'
+import { extFromName, fetchOssFile, fetchOssFileHead, mimeTypeOf, ossFileUrl, ossPublicUrl, previewKindOf, type PreviewKind } from '@/utils/ossFile'
 import {
   BLOCKED_ARCHIVE_SIZE_LIMIT, BLOCKED_ARCHIVE_SNIFF_BYTES, detectBlockedArchive,
   type BlockedArchiveVerdict,
@@ -70,6 +70,8 @@ const sizeNum = computed(() => {
 const oversize = computed(() => sizeNum.value > AUTO_LOAD_LIMIT)
 /** html 走 OSS 独立 origin 的绝对地址，不经 fetch，也不受体积上限约束（浏览器自己流式加载）。 */
 const htmlSrc = computed(() => (kind.value === 'html' && props.path ? ossPublicUrl(props.path) : ''))
+/** 任何带有效 OSS 路径的文件（含 K17 html、K6 正文 txt 等）均提供独立端口直连地址，供「新窗口打开」 */
+const publicFileUrl = computed(() => (props.path ? ossPublicUrl(props.path) : ''))
 
 const loading = ref(false)
 const error = ref('')
@@ -77,6 +79,7 @@ const error = ref('')
 // 一个字节都不多读。判出来是为了把话说对——见 utils/blockedArchive.ts 顶部。
 const blocked = ref<BlockedArchiveVerdict | null>(null)
 const forced = ref(false)
+const fallbackToFrame = ref(false)
 const buffer = ref<ArrayBuffer | null>(null)
 const blobUrl = ref('')
 const text = ref('')
@@ -94,6 +97,7 @@ function reset() {
   error.value = ''
   forced.value = false
   blocked.value = null
+  fallbackToFrame.value = false
 }
 
 /**
@@ -138,8 +142,12 @@ async function load() {
       blobUrl.value = URL.createObjectURL(new Blob([buf], { type: mimeTypeOf(effectiveExt.value) }))
     }
   } catch (e) {
-    // 不静默失败：把原因摆出来，同时下方仍保留下载与「新窗口打开」两条退路
-    error.value = e instanceof Error ? e.message : String(e)
+    // 文本或直连文件：同源 /oss 代理取字节流失败（如生产环境未配置 /oss 反代）时，平滑回退到 9102 直连框架预览
+    if (kind.value === 'text' && publicFileUrl.value) {
+      fallbackToFrame.value = true
+    } else {
+      error.value = e instanceof Error ? e.message : String(e)
+    }
   } finally {
     loading.value = false
   }
@@ -162,8 +170,9 @@ function onExcelError(e: unknown) {
   <div class="fp-wrap">
     <div v-if="!path" class="fp-hint" data-testid="file-preview-nopath">该文件未提供可访问地址，无法预览</div>
 
-    <div v-else-if="kind === 'none'" class="fp-hint" data-testid="file-preview-unsupported">
-      该类型不支持站内预览（{{ ext || extFromName(name) || '未知类型' }}），可下载后查看
+    <div v-else-if="kind === 'none' && !fallbackToFrame" class="fp-hint" data-testid="file-preview-unsupported">
+      <span>该类型不支持站内直接解析（{{ ext || extFromName(name) || '未知类型' }}），可下载后查看</span>
+      <button v-if="publicFileUrl" class="rc-btn" type="button" @click="fallbackToFrame = true">在框架中打开</button>
     </div>
 
     <div v-else-if="oversize && !forced" class="fp-hint" data-testid="file-preview-oversize">
@@ -173,12 +182,15 @@ function onExcelError(e: unknown) {
 
     <div v-else-if="loading" class="fp-hint" data-testid="file-preview-loading">加载中…</div>
 
-    <div v-else-if="error" class="fp-hint error" data-testid="file-preview-error">{{ error }}</div>
+    <div v-else-if="error && !fallbackToFrame" class="fp-hint error" data-testid="file-preview-error">
+      <span>{{ error }}</span>
+      <button v-if="publicFileUrl" class="rc-btn" type="button" style="margin-left: 8px" @click="fallbackToFrame = true">使用直连框架预览</button>
+    </div>
 
     <!-- 采集时被对方站点拦下（2026-09-11）。
          **文案的主语必须是采集，不能写"无法预览"**——后者会让人以为是本系统的能力问题，
          而真正该被看见的是这条数据没抓到正文。引述存档里的原话，比我们转述更有说服力。 -->
-    <div v-else-if="blocked" class="fp-blocked" data-testid="file-preview-blocked">
+    <div v-else-if="blocked && !forced" class="fp-blocked" data-testid="file-preview-blocked">
       <div class="fp-blocked-title">这条数据采集时被对方站点拦下了</div>
       <p class="fp-blocked-body">
         <template v-if="blocked.reason === 'pattern'">存档里是一张拦截/验证页，不是文章正文</template>
@@ -188,6 +200,7 @@ function onExcelError(e: unknown) {
            硬引会引出「视频 小程序 赞」这类页脚碎词（2026-09-11 实测踩过）。 -->
       <p v-if="blocked.reason === 'pattern' && blocked.hint" class="fp-blocked-quote">「{{ blocked.hint }}」</p>
       <p class="fp-blocked-body muted">这不代表原文打不开——原文多半正常，只是这次没采到。</p>
+      <button class="rc-btn" type="button" style="margin-top: 10px" @click="forced = true">仍要预览页面</button>
     </div>
 
     <template v-else>
@@ -209,20 +222,21 @@ function onExcelError(e: unknown) {
            要看原貌走「原始地址 ↗」。 -->
       <iframe v-else-if="kind === 'html' && htmlSrc" class="fp-frame" data-testid="file-preview-html" :src="htmlSrc" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer" title="HTML 预览" />
       <img v-else-if="kind === 'image' && blobUrl" class="fp-img" data-testid="file-preview-image" :src="blobUrl" :alt="name || '图片预览'" />
-      <div v-else-if="kind === 'text'" class="fp-text" data-testid="file-preview-text">
+      <div v-else-if="kind === 'text' && text" class="fp-text" data-testid="file-preview-text">
         <div v-if="truncated" class="fp-hint">内容较长，仅显示前 2 MB</div>
         <pre>{{ text }}</pre>
       </div>
+      <!-- 文本直连回退 / 无法同源读取时的框架直连回退（直连 9102 端口，与新窗口打开同款地址） -->
+      <iframe v-else-if="(kind === 'text' || fallbackToFrame) && publicFileUrl" class="fp-frame" data-testid="file-preview-frame" :src="publicFileUrl" title="文件预览" />
     </template>
 
     <!-- 两条退路始终在：预览失败、类型不支持、或用户就是想拿原件时都用得上。
          下载走同源 OSS 地址（<a download> 是导航，不受同源读取限制）；
          「原始地址」走 K2，指向源站，仅新窗口打开。 -->
     <div v-if="path || externalUrl" class="fp-foot">
-      <a v-if="path" class="rc-btn" :href="`/oss/api/oss/download?fileId=${path}`" :download="name || ''" data-testid="file-preview-download">下载</a>
-      <!-- 兜底：生产若是 https，页面里嵌 http 的 iframe 会被混合内容策略拦掉（弹窗空白），
-           但新窗口打开是顶级导航，不受这条限制——留着这个按钮，那种情况下不至于卡死。 -->
-      <a v-if="htmlSrc" class="rc-btn" :href="htmlSrc" target="_blank" rel="noopener noreferrer" data-testid="file-preview-open-window">新窗口打开 ↗</a>
+      <a v-if="path" class="rc-btn" :href="ossFileUrl(path)" :download="name || ''" data-testid="file-preview-download">下载</a>
+      <!-- 兜底与直连：新窗口打开为顶级导航，不受同源读取限制；K17 html 与 K6 正文文本等所有 OSS 路径均支持直接新窗口打开 -->
+      <a v-if="publicFileUrl" class="rc-btn" :href="publicFileUrl" target="_blank" rel="noopener noreferrer" data-testid="file-preview-open-window">新窗口打开 ↗</a>
       <a v-if="externalUrl" class="rc-btn" :href="externalUrl" target="_blank" rel="noopener noreferrer" data-testid="file-preview-external">原始地址 ↗</a>
     </div>
   </div>

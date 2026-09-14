@@ -1,4 +1,4 @@
-import type { DataTableMeta, EntryDetailItem } from '@/api'
+import type { DataRow, DataTableMeta, EntryDetailItem } from '@/api'
 
 /** 数据行详情字段：画布数据视图 / 网站数据视图共用。 */
 export interface RowDetailField {
@@ -49,10 +49,36 @@ export function isOssFilePath(field: { prop?: string; desc?: string }, value: st
 export function fieldsFromTableMeta(
   fields: DataTableMeta['fields'] | undefined,
   values: Record<string, unknown> | undefined,
+  row?: Partial<DataRow> | null,
 ): RowDetailField[] {
-  if (!fields?.length) return []
-  return fields.map((field) => {
-    const raw = values?.[field.columnName ?? field.prop]
+  const mergedValues: Record<string, unknown> = { ...(values ?? {}) }
+  if (row) {
+    if (row.dataId !== undefined) mergedValues.ENTRY_ID = row.dataId
+    if (row.parentId !== undefined) mergedValues.PARENT_ID = row.parentId
+    if (row.sourceId !== undefined) mergedValues.SOURCE_ID = row.sourceId
+    if (row.updateDt !== undefined) mergedValues.UPDATE_DT = row.updateDt
+    if (row.createDt !== undefined) mergedValues.CREATE_DT = row.createDt
+  }
+
+  const rawFields = fields ?? []
+  const hasEntryId = rawFields.some(
+    (f) => f.prop.toUpperCase() === 'ENTRY_ID' || f.columnName?.toUpperCase() === 'ENTRY_ID',
+  )
+
+  const effectiveFields = [...rawFields]
+  const entryIdVal = mergedValues.ENTRY_ID ?? mergedValues.entry_id ?? row?.dataId ?? values?.ENTRY_ID ?? values?.entry_id ?? values?.dataId
+  if (!hasEntryId && entryIdVal !== undefined) {
+    effectiveFields.unshift({
+      prop: 'ENTRY_ID',
+      columnName: 'ENTRY_ID',
+      desc: 'ENTRY_ID',
+      type: 'string',
+    })
+  }
+
+  if (!effectiveFields.length) return []
+  return effectiveFields.map((field) => {
+    const raw = mergedValues[field.columnName ?? field.prop] ?? mergedValues[field.prop]
     const value = formatDetailValue(raw)
     const empty = isBlankDetailValue(raw)
     const href = safeHttpUrl(raw)
@@ -62,7 +88,7 @@ export function fieldsFromTableMeta(
       name: field.desc || field.prop,
       code: field.prop,
       prop: field.prop,
-      columnName: field.columnName || undefined,
+      columnName: (field.columnName && field.columnName !== field.prop) ? field.columnName : undefined,
       value,
       empty,
       href: href || undefined,
@@ -71,15 +97,35 @@ export function fieldsFromTableMeta(
   })
 }
 
-export function fieldsFromShowItems(items: EntryDetailItem[] | undefined): RowDetailField[] {
-  return (items ?? []).map((item) => {
+export function fieldsFromShowItems(
+  items: EntryDetailItem[] | undefined,
+  row?: Partial<DataRow> | null,
+): RowDetailField[] {
+  const list = items ?? []
+  const hasEntryId = list.some(
+    (item) => item.columnName?.toUpperCase() === 'ENTRY_ID' || item.itemId?.toUpperCase() === 'ENTRY_ID',
+  )
+  const result: RowDetailField[] = []
+
+  if (!hasEntryId && row?.dataId !== undefined) {
+    result.push({
+      key: 'ENTRY_ID',
+      name: 'ENTRY_ID',
+      code: 'ENTRY_ID',
+      prop: 'ENTRY_ID',
+      value: formatDetailValue(row.dataId),
+      empty: isBlankDetailValue(row.dataId),
+    })
+  }
+
+  for (const item of list) {
     const raw = item.value
     const value = formatDetailValue(raw)
     const empty = isBlankDetailValue(raw)
     const href = safeHttpUrl(raw)
     // 这条路径（旧 entryDetail 的 showItems）本来就只给得出 columnName，code 即 K 名；
     // 不再重复塞 columnName，否则详情里会渲染成「K1 · K1」。
-    return {
+    result.push({
       key: item.itemId ?? item.columnName,
       name: item.itemName || item.columnName,
       code: item.columnName,
@@ -87,6 +133,7 @@ export function fieldsFromShowItems(items: EntryDetailItem[] | undefined): RowDe
       value,
       empty,
       href: href || undefined,
-    }
-  })
+    })
+  }
+  return result
 }

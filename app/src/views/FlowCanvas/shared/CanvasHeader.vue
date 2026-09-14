@@ -144,7 +144,10 @@ function backToSourceView() {
   else router.push('/collect')
 }
 function switchView(target: 'flow' | 'data' | 'task' | 'file') {
-  if (view.value === target) return
+  if (view.value === target) {
+    if (target === 'data') ui.applyViewLayoutDefault('data')
+    return
+  }
   const query = { ...route.query }
   if (target === 'flow') delete query.view
   else query.view = target

@@ -318,3 +318,113 @@ describe('SqlConditionEditor · 粘贴多行 SQL', () => {
     expect(wrapper.vm.sql).toBe('Ax yB')
   })
 })
+
+describe('按字段查询与字段智能联想', () => {
+  function setupWithFields(fields = [
+    { prop: 'title', columnName: 'K1', desc: '标题' },
+    { prop: 'url', columnName: 'K2', desc: '网址' },
+    { prop: 'content_path', columnName: 'K6', desc: '正文路径' },
+    { prop: 'content_md5', columnName: 'K23', desc: '正文MD5' },
+    { prop: 'ENTRY_ID', columnName: 'ENTRY_ID', desc: '主键 ID' },
+  ]) {
+    const wrapper = mount(defineComponent({
+      components: { SqlConditionEditor },
+      setup: () => ({ sql: ref(''), tableId: ref('900'), fields: ref(fields) }),
+      template: '<SqlConditionEditor v-model="sql" v-slot="{ value, update }" :table-id="tableId" :fields="fields" table-name="TB_CNEWS"><input :value="value" @input="update($event.target.value)" aria-label="查询条件" /></SqlConditionEditor>',
+    }), { attachTo: document.body, global: { plugins: [ElementPlus], stubs: { transition: false } } })
+    mounted.push(wrapper)
+    return wrapper
+  }
+
+  it('传入 fields 时渲染「按字段查询」按钮，点击弹出字段列表并展示列名与说明', async () => {
+    const wrapper = setupWithFields()
+    const btn = wrapper.find('[aria-label="按字段查询"]')
+    expect(btn.exists()).toBe(true)
+
+    await btn.trigger('click')
+    await flushPromises()
+
+    await vi.waitFor(() => {
+      const el = document.querySelector<HTMLElement>('.sql-field-row')
+      if (!el) throw new Error('字段列表还没挂上')
+      return el
+    }, WAIT)
+
+    expect(document.body.textContent).toContain('正文MD5')
+    expect(document.body.textContent).toContain('K23')
+  })
+
+  it('点击字段行默认插入 = 条件，已有条件时自动以 AND 拼接', async () => {
+    const wrapper = setupWithFields()
+    await wrapper.find('[aria-label="按字段查询"]').trigger('click')
+    await flushPromises()
+
+    const k23Row = await vi.waitFor(() => {
+      const el = [...document.querySelectorAll<HTMLElement>('.sql-field-row')]
+        .find((item) => item.textContent?.includes('K23'))
+      if (!el) throw new Error('K23 字段行还没挂上')
+      return el
+    }, WAIT)
+
+    k23Row.click()
+    await flushPromises()
+
+    expect(wrapper.vm.sql).toBe("K23 = ''")
+
+    // 第二次点击插入 K1，自动拼上 AND
+    await wrapper.find('[aria-label="按字段查询"]').trigger('click')
+    await flushPromises()
+
+    const k1Row = await vi.waitFor(() => {
+      const el = [...document.querySelectorAll<HTMLElement>('.sql-field-row')]
+        .find((item) => item.textContent?.includes('K1'))
+      if (!el) throw new Error('K1 字段行还没挂上')
+      return el
+    }, WAIT)
+
+    k1Row.click()
+    await flushPromises()
+
+    expect(wrapper.vm.sql).toBe("K23 = '' AND K1 = ''")
+  })
+
+  it('点击操作符按钮（如 LIKE、非空）插入对应的条件片段', async () => {
+    const wrapper = setupWithFields()
+    await wrapper.find('[aria-label="按字段查询"]').trigger('click')
+    await flushPromises()
+
+    const likeBtn = await vi.waitFor(() => {
+      const el = [...document.querySelectorAll<HTMLElement>('.sql-field-row')]
+        .find((item) => item.textContent?.includes('K6'))
+        ?.querySelector<HTMLButtonElement>('button[title*="LIKE"]')
+      if (!el) throw new Error('K6 LIKE 按钮还没挂上')
+      return el
+    }, WAIT)
+
+    likeBtn.click()
+    await flushPromises()
+
+    expect(wrapper.vm.sql).toBe("K6 LIKE '%%'")
+  })
+
+  it('放大弹窗中展示字段标签栏，点击字段插入编辑草稿', async () => {
+    const wrapper = setupWithFields()
+    await openDialog(wrapper)
+
+    const tag = await vi.waitFor(() => {
+      const el = [...document.querySelectorAll<HTMLElement>('.sql-dialog-field-tag')]
+        .find((item) => item.textContent?.includes('K23'))
+      if (!el) throw new Error('K23 弹窗标签还没挂上')
+      return el
+    }, WAIT)
+
+    tag.click()
+    await flushPromises()
+
+    expect((await textarea()).value).toBe("K23 = ''")
+
+    await clickDialogButton('确认')
+    expect(wrapper.vm.sql).toBe("K23 = ''")
+  })
+})
+

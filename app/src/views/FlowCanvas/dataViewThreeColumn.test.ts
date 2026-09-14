@@ -52,14 +52,14 @@ async function mountCanvas(view: 'flow' | 'data') {
 }
 
 describe('数据视图的三栏骨架（Z3-1/Z3-2）', () => {
-  it('view=data 时数据视图在三栏里，节点配置默认展开', async () => {
+  it('view=data 时数据视图在三栏里，节点配置默认收起', async () => {
     const w = await mountCanvas('data')
     const shell = w.find('.rc-flow-shell')
     expect(shell.exists()).toBe(true)
     expect(shell.find('[data-testid="stub-result-view"]').exists()).toBe(true)
-    expect(useUiStore().inspectorCollapsed).toBe(false)
-    expect(shell.find('[data-testid="stub-inspector"]').exists()).toBe(true)
-    expect(shell.find('[data-testid="inspector-collapsed"]').exists()).toBe(false)
+    expect(useUiStore().inspectorCollapsed).toBe(true)
+    expect(shell.find('[data-testid="stub-inspector"]').exists()).toBe(false)
+    expect(shell.find('[data-testid="inspector-collapsed"]').exists()).toBe(true)
   })
 
   it('中间那一栏是**切换**关系：数据视图下不同时渲染画布', async () => {
@@ -75,11 +75,11 @@ describe('数据视图的三栏骨架（Z3-1/Z3-2）', () => {
     expect(shell.find('[data-testid="stub-inspector"]').exists()).toBe(true)
   })
 
-  it('数据视图默认保留右侧配置，不继承隐藏状态', async () => {
+  it('数据视图默认收起右侧配置让出表格空间', async () => {
     const w = await mountCanvas('data')
-    expect(useUiStore().inspectorCollapsed).toBe(false)
-    expect(w.find('[data-testid="inspector-collapsed"]').exists()).toBe(false)
-    expect(w.find('[data-testid="stub-inspector"]').exists()).toBe(true)
+    expect(useUiStore().inspectorCollapsed).toBe(true)
+    expect(w.find('[data-testid="inspector-collapsed"]').exists()).toBe(true)
+    expect(w.find('[data-testid="stub-inspector"]').exists()).toBe(false)
   })
 
   it('流程视图不收起——那边配置本来就是主角', async () => {
@@ -89,12 +89,11 @@ describe('数据视图的三栏骨架（Z3-1/Z3-2）', () => {
 
   it('点窄边即展开，配置面板回来', async () => {
     const w = await mountCanvas('data')
-    useUiStore().toggleInspectorCollapsed()
-    await flushPromises()
     expect(w.find('[data-testid="inspector-collapsed"]').exists()).toBe(true)
     await w.get('[data-testid="inspector-collapsed"]').trigger('click')
     await flushPromises()
     expect(w.find('[data-testid="stub-inspector"]').exists()).toBe(true)
+    expect(useUiStore().inspectorCollapsed).toBe(false)
   })
 
   it('收起态的文案跟着当前视图走，不会在数据视图里说「画布已收起」', async () => {
@@ -105,5 +104,26 @@ describe('数据视图的三栏骨架（Z3-1/Z3-2）', () => {
     const collapsed = w.find('.rc-canvas-collapsed')
     expect(collapsed.text()).toContain('数据已收起')
     expect(collapsed.text()).not.toContain('画布')
+  })
+
+  it('收起节点配置时容器具备 insp-collapsed 与 source-mode 类，且分割条变为 placeholder', async () => {
+    const w = await mountCanvas('data')
+    const shell = w.find('.rc-flow-shell')
+    expect(shell.classes()).toContain('insp-collapsed')
+    expect(shell.classes()).toContain('source-mode')
+    expect(shell.find('.rc-insp-splitter.placeholder').exists()).toBe(true)
+
+    // 展开配置面板后，去掉 insp-collapsed 类，分割条恢复可交互
+    await w.get('[data-testid="inspector-collapsed"]').trigger('click')
+    await flushPromises()
+    expect(shell.classes()).not.toContain('insp-collapsed')
+    expect(shell.find('.rc-insp-splitter.placeholder').exists()).toBe(false)
+    expect(shell.find('.rc-insp-splitter').exists()).toBe(true)
+
+    // 再次收起配置面板
+    useUiStore().toggleInspectorCollapsed()
+    await flushPromises()
+    expect(shell.classes()).toContain('insp-collapsed')
+    expect(shell.find('.rc-insp-splitter.placeholder').exists()).toBe(true)
   })
 })

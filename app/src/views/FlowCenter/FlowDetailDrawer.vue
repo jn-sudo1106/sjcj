@@ -376,6 +376,8 @@ async function applyToSource() {
 .fd-primary:disabled, .fd-secondary:disabled { opacity: .55; cursor: not-allowed; }
 @media (max-width: 980px) {
   .fd-drawer { width: 100vw; }
-  .fd-workspace { grid-template-columns: minmax(320px, 44%) minmax(360px, 1fr); overflow-x: auto; }
+  .fd-workspace:not(.expanded):not(.insp-collapsed) { grid-template-columns: minmax(320px, 44%) minmax(360px, 1fr); overflow-x: auto; }
+  .fd-workspace.expanded { grid-template-columns: 36px minmax(0, 1fr); }
+  .fd-workspace.insp-collapsed { grid-template-columns: minmax(0, 1fr) 36px; }
 }
 </style>
