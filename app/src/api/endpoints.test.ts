@@ -25,6 +25,9 @@ describe('端点契约一致性', () => {
   it('源检查分页已按监控视图真实契约放行 live', () => {
     expect(LIVE_ENDPOINTS.has('source/check/paged')).toBe(true)
   })
+  it('源检查日志分页已按监控日志真实契约放行 live', () => {
+    expect(LIVE_ENDPOINTS.has('source/check/paged-logs')).toBe(true)
+  })
   it('步骤写接口已标 live，日常 mock 模式也会打真实 item/next', () => {
     expect(LIVE_ENDPOINTS.has('item/next/saveItemConfig')).toBe(true)
     expect(LIVE_ENDPOINTS.has('item/next/stepModify')).toBe(true)

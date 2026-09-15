@@ -1919,7 +1919,7 @@ export const monitorApi = {
  * ⚠️ **这套接口契约大部分仍是临时的**：2026-09-10 确认后端要重做，路径与字段都会变。
  * 0914 用户提供了 source/check/paged 的真实调用契约，已先放行监控视图首屏列表；
  * 其余端点暂不 live（见 endpoints.ts 同名分组说明）。下面的参数名、字段映射除 paged
- * 已按 0914 口径外，其余仍照旧平台口径写，**接口定稿后需逐项对齐**——
+ * 与 pagedLogs 已按 0915 口径外，其余仍照旧平台口径写，**接口定稿后需逐项对齐**——
  * 尤其是分页参数（现按后端认的 page/limit 传，不是 pageNo/pageSize）、
  * isDelete 的反向语义、以及 lastMsg 那串带时间戳前缀的文本格式。
  * UI 层不受影响：SiteMonitorView / CheckLogDialog 只消费 SourceCheck / SourceCheckLog
@@ -1955,7 +1955,7 @@ export const sourceCheckApi = {
         state: q.state || undefined,
         name: q.name || undefined,
         page: q.page ?? 1,
-        limit: q.size ?? 20,
+        limit: q.size ?? 10,
       },
     })
     return unwrapPage<SourceCheckLog>(result)

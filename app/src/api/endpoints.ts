@@ -73,7 +73,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/check/changeEnable', desc: '启停源检查', danger: true, impl: true },
   { path: 'source/check/check-one', desc: '执行一次源检查', danger: true },
   { path: 'source/check/runNow', desc: '立即运行源检查', danger: true, impl: true },
-  { path: 'source/check/paged-logs', desc: '源检查历史日志', impl: true },
+  { path: 'source/check/paged-logs', desc: '源检查历史日志', impl: true, live: true },
   // 2026-09-01 实测报错：source/tagSource 在真实后端根本不存在（GET 500）——对照旧平台
   // api/source.js 确认，打标签走的是 POST /v1/source/markBatch（markBatch(ids, flag, freq,
   // notify, tags)），tagSource 这个端点名是臆造的，从没在旧平台出现过。live 标记挪到下面
@@ -166,7 +166,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'entry/queryEntryType', desc: '实体数据动态表结构', live: true },
   { path: 'entry/entryDetail', desc: '实体数据详情', live: true },
   { path: 'entry/entryDistinctSource', desc: '实体数据按源去重', live: true },
-  // 0812 已在 115.227.21.133 以当前表 + 发布时间字段验证真实请求；空结果属于正常响应。
+  // 0812 已在 118.25.96.217 以当前表 + 发布时间字段验证真实请求；空结果属于正常响应。
   { path: 'entry/summaryEntryData', desc: '实体数据汇总', live: true },
   // re-save 未见明确真实联调验证记录，暂不标 live
   { path: 'entry/re-save', desc: '重存实体数据', danger: true },

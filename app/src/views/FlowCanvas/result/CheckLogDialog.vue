@@ -16,7 +16,7 @@ const filters = reactive({ state: '', name: '' })
 const rows = ref<SourceCheckLog[]>([])
 const total = ref(0)
 const page = ref(1)
-const PAGE_SIZE = 20
+const PAGE_SIZE = 10
 const loading = ref(false)
 const error = ref('')
 
