@@ -51,6 +51,14 @@ describe('SiteSourceSelect', () => {
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['s1'])
   })
 
+  it('开启 defaultFirst 时加载完成自动选中第一个源', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1', '源一'), source('s2', '源二')])
+    const wrapper = mount(SiteSourceSelect, { props: { siteId: 'site-default', modelValue: '', defaultFirst: true } })
+    await flushPromises()
+
+    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['s1'])
+  })
+
   it('已选具体源时，点开下拉点"全部源"选项能清空回到全部源（不额外放一个常驻按钮，只有下拉这一个入口）', async () => {
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1', '源一')])
     const wrapper = await mountSelect('s1')

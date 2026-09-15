@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import SiteMonitorView from './SiteMonitorView.vue'
-import { sourceCheckApi, type SourceCheck } from '@/api'
+import { siteApi, sourceCheckApi, type Source, type SourceCheck } from '@/api'
 
 function check(over: Partial<SourceCheck> = {}): SourceCheck {
   return {
@@ -15,6 +15,10 @@ function check(over: Partial<SourceCheck> = {}): SourceCheck {
     sourceId: 's1', checkConf: '{}',
     ...over,
   }
+}
+
+function source(id: string, name = `源${id}`): Source {
+  return { sourceId: id, name, url: '', configId: '', mainTable: '', owner: 'admin', state: 'C' }
 }
 
 const stubs = {
@@ -31,6 +35,11 @@ const stubs = {
 
 function mountView(siteId = 'site-a') {
   return mount(SiteMonitorView, { props: { siteId }, global: { stubs, directives: { loading: {} } } })
+}
+function mountViewWithSourceSelect(siteId = 'site-auto') {
+  const { SiteSourceSelect, ...stubsWithoutSourceSelect } = stubs
+  void SiteSourceSelect
+  return mount(SiteMonitorView, { props: { siteId }, global: { stubs: stubsWithoutSourceSelect, directives: { loading: {} } } })
 }
 async function pickSource(wrapper: ReturnType<typeof mountView>, sourceId = 's1') {
   await wrapper.findComponent({ name: 'SiteSourceSelect' }).vm.$emit('update:modelValue', sourceId)
@@ -56,7 +65,7 @@ describe('SiteMonitorView', () => {
     const wrapper = mountView()
     await pickSource(wrapper)
 
-    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 's1', page: 1 }))
+    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 's1', page: 1, size: 10 }))
     expect(wrapper.find('[data-testid="site-monitor-need-source"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('共 1 条监控')
 
@@ -66,6 +75,22 @@ describe('SiteMonitorView', () => {
     await flushPromises()
 
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'E', name: '增量' }))
+  })
+
+  it('进入监控视图时默认选择第一个源，并用 page=1、limit=10 的口径查询', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('391007770', 'baodu'), source('391007768', 'test1')])
+    const paged = vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 1, list: [check({ sourceId: '391007770' })] })
+
+    const wrapper = mountViewWithSourceSelect('site-auto-first')
+    await flushPromises()
+
+    expect(paged).toHaveBeenCalledWith(expect.objectContaining({
+      sourceId: '391007770',
+      page: 1,
+      size: 10,
+    }))
+    expect(wrapper.find('[data-testid="site-monitor-need-source"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('共 1 条监控')
   })
 
   it('告警行整行标记，执行结果剥掉与「上次」重复的时间戳前缀', async () => {

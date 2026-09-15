@@ -4,7 +4,8 @@
 // **只支持选中具体源**：后端 source/check/paged 的 sourceId 是单值，一次查不出一个网站
 // 底下几千个源。前端逐源归并的路子在数据视图已经踩过——几百个串行请求、20 秒超时告警、
 // 总数还算不准，不在这里重演。全部源态直接提示先选一个源；等后端加上 siteId，
-// 这里只换查询参数，下面整套列表不用动（0910 拍板）。
+// 0914 调整：进入监控视图默认选中当前网站第一个源，按 sourceId 拉 source/check/paged；
+// 若网站没有源，仍保留空态提示。
 //
 // 第一期不做：加监控 / 编辑 / 删除 / 批量操作。那批的表单有 15+ 字段，含条件 SQL 与
 // 校验规则脚本，跟"看告警"不是一个粒度，单独一期做。
@@ -22,7 +23,7 @@ const filters = reactive({ enable: '', state: '', name: '' })
 const rows = ref<SourceCheck[]>([])
 const total = ref(0)
 const page = ref(1)
-const PAGE_SIZE = 20
+const PAGE_SIZE = 10
 const loading = ref(false)
 const error = ref('')
 const switching = ref('')
@@ -128,7 +129,7 @@ function openLogs(row: SourceCheck) {
 <template>
   <main class="smv-shell">
     <div class="smv-toolbar">
-      <SiteSourceSelect v-model="selectedSourceId" :site-id="siteId" />
+      <SiteSourceSelect v-model="selectedSourceId" :site-id="siteId" default-first />
       <template v-if="selectedSourceId">
         <select v-model="filters.enable" class="smv-input" aria-label="在用">
           <option value="">在用（全部）</option>

@@ -62,10 +62,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/changeFreqTag', desc: '频率标识', danger: true, impl: true },
   { path: 'source/markVerified', desc: '人工核验标记', danger: true, impl: true },
   { path: 'source/generateConfig', desc: '生成新配置并应用', danger: true, impl: true },
-  // 源监控（数据源告警）整组**一律不开 live**：2026-09-10 确认后端这套接口要重做，
-  // 路径与字段都会变。前端实现按旧平台 api/monitor.js 的口径先落着（UI 已完工），
-  // 接口定稿后再逐个对齐并放行——**不要把这几条当成漏标的 live 补上去**。
-  { path: 'source/check/paged', desc: '源检查列表', impl: true },
+  // 源监控（数据源告警）除已单独确认的分页查询外暂不开 live：2026-09-10 确认后端这套接口要重做，
+  // 路径与字段都会变。0914 用户提供 source/check/paged 真实调用契约（sourceId/page/limit），
+  // 仅先放行监控视图首屏列表；其余写接口和日志接口等接口定稿后再逐个对齐并放行。
+  { path: 'source/check/paged', desc: '源检查列表', impl: true, live: true },
   { path: 'source/check/syncPaged', desc: '同步状态列表', impl: true },
   { path: 'source/check/add', desc: '新增源检查', danger: true },
   { path: 'source/check/update', desc: '修改源检查', danger: true },

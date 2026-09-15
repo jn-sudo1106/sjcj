@@ -5,7 +5,9 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { siteApi, type Source } from '@/api'
 
-const props = defineProps<{ siteId: string; modelValue: string }>()
+const props = withDefaults(defineProps<{ siteId: string; modelValue: string; defaultFirst?: boolean }>(), {
+  defaultFirst: false,
+})
 const emit = defineEmits<{ 'update:modelValue': [sourceId: string] }>()
 
 const sources = ref<Source[]>([])
@@ -31,6 +33,9 @@ async function load() {
     const result = await siteApi.siteSources(props.siteId)
     if (id !== requestId) return
     sources.value = result
+    if (props.defaultFirst && !props.modelValue && result[0]?.sourceId) {
+      emit('update:modelValue', result[0].sourceId)
+    }
   } catch (err) {
     if (id !== requestId) return
     error.value = err instanceof Error ? err.message : String(err)

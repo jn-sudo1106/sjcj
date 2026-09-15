@@ -195,6 +195,35 @@ describe('旧平台新建源 HTTP 契约', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/source/sourceSame?sourceId=391003979')
   })
 
+  it('GET /v1/source/check/paged：监控视图按 sourceId + page/limit 查询，默认 limit=10', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      code: '0',
+      count: 1,
+      data: [{
+        id: 7,
+        sourceId: 391007770,
+        name: '编码监控',
+        state: 'C',
+        isDelete: 0,
+        tableName: 'sense_data.TB_TEST_ADB',
+      }],
+    }))
+    const { sourceCheckApi } = await import('./index')
+
+    const result = await sourceCheckApi.paged({ sourceId: '391007770', page: 1 })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const requestUrl = new URL(url, 'http://local.test')
+    expect(init.method).toBe('GET')
+    expect(requestUrl.pathname).toBe('/api/v1/source/check/paged')
+    expect(requestUrl.searchParams.get('sourceId')).toBe('391007770')
+    expect(requestUrl.searchParams.get('page')).toBe('1')
+    expect(requestUrl.searchParams.get('limit')).toBe('10')
+    expect(requestUrl.searchParams.has('size')).toBe(false)
+    expect(result.total).toBe(1)
+    expect(result.list[0]).toMatchObject({ name: '编码监控' })
+  })
+
   it('GET /v1/category/categoryPaged：首屏和子级读取都按旧 parentId 契约请求', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({
       code: '0',
