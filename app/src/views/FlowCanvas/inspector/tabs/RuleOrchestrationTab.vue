@@ -14,7 +14,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, UploadFilled } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
-import { isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { configApi, entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { isVruleNumericRuleId } from '@/api/legacyAdapters'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
@@ -65,6 +65,9 @@ const describeTouched = ref(false)
 const monitorMethods = computed<string[]>(() => cfg.value?.monitorMethods ?? [])
 function setMonitorMethods(values: string[]) {
   flow.setMonitorMethods(id.value, values ?? [])
+}
+function setMonitorAlertConfig(config: MonitorAlertConfig) {
+  flow.setMonitorAlertConfig(id.value, config)
 }
 
 // 监控方法随 config 的 checkRule 落库（逗号分隔，生成脚本时仍按原口径传给后端）。
@@ -964,6 +967,7 @@ function onTestScript() {
     :node-title="cfg?.title ?? ''"
     :source-label="sourceTableName"
     :script-path="orchCfg.scriptPath"
+    @update:alert-config="setMonitorAlertConfig"
   />
 
   <template v-if="!isRule">

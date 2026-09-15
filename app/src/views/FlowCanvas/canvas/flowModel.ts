@@ -149,12 +149,38 @@ export interface NodeConfig {
   ruleCfg?: RuleOrchestration
   /** 数据监控节点「监控方法」多选值（2026-09-01）。仅 monitor 模板使用，候选值见 MONITOR_METHODS。 */
   monitorMethods?: string[]
+  /** 数据监控节点告警配置快照：由告警配置面板维护，保存 ck_source.check_conf 时合并进去。 */
+  alertConfig?: MonitorAlertConfig
   /**
    * 非规则节点（采集/登录等）的编排配置（0804 S3-3，方案 §3.1 修正 C/D）：抓取配置 XML /
    * 登录配置，跟 ruleCfg 同构复用 RuleOrchestration（含 S3-2 加的 format 字段，此处恒为
    * 'xml'），只是换个字段名——不能直接塞进 ruleCfg，否则 isRuleNode() 会把这类节点误判成规则节点。
    */
   execCfg?: RuleOrchestration
+}
+
+export interface MonitorAlertChannelConfig {
+  type: 'email' | 'dingtalk'
+  enabled: boolean
+  target?: string
+}
+
+export interface MonitorAlertPolicyConfig {
+  name: string
+  metric: string
+  operator: string
+  threshold: string
+  consecutiveCount: number
+  repeatMinutes: number
+  recoveryNotify: boolean
+  enabled: boolean
+  channelTypes: Array<'email' | 'dingtalk'>
+}
+
+export interface MonitorAlertConfig {
+  enabled: boolean
+  policies: MonitorAlertPolicyConfig[]
+  channels: MonitorAlertChannelConfig[]
 }
 
 type InputMappingLike = InputMapping | LegacyTriple

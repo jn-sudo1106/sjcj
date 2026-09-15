@@ -1280,6 +1280,7 @@ export const useFlowStore = defineStore('flow', () => {
     patchRuleConfig: (id: string, patch: Partial<RuleOrchestration>) => nodeStore.patchRuleConfig(id, patch),
     patchExecConfig: (id: string, patch: Partial<RuleOrchestration>) => nodeStore.patchExecConfig(id, patch),
     setMonitorMethods: (id: string, methods: string[]) => nodeStore.setMonitorMethods(id, methods),
+    setMonitorAlertConfig: (id: string, config: import('@/views/FlowCanvas/canvas/flowModel').MonitorAlertConfig) => nodeStore.setMonitorAlertConfig(id, config),
     setOutputTable: (id: string, tableId: string) => nodeStore.setOutputTable(id, tableId),
     setDedupMode: (id: string, mode: 'source' | 'table') => nodeStore.setDedupMode(id, mode),
     setOutFields: (id: string, fields: string[]) => nodeStore.setOutFields(id, fields),
