@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { firstSourceId, normalizeSiteView, normalizeSourceView, sourceViewFromHash } from './workspaceRoute'
+import { firstSourceId, normalizeSiteMonitorTab, normalizeSiteView, normalizeSourceView, sourceViewFromHash } from './workspaceRoute'
 
 describe('源工作区路由', () => {
   it('未指定视图时默认流程视图', () => {
@@ -18,6 +18,14 @@ describe('源工作区路由', () => {
   it('数据监控节点可进入监控配置视图', () => {
     expect(normalizeSourceView('monitor-config')).toBe('monitor-config')
     expect(sourceViewFromHash('#/canvas?sourceId=src-a&view=monitor-config')).toBe('monitor-config')
+  })
+
+  // 0916：监控视图内部再分「监控结果 / 监控配置」两个子 Tab，非法值一律回落到监控结果。
+  it('监控视图子 Tab 只认 config，其余回落监控结果', () => {
+    expect(normalizeSiteMonitorTab('config')).toBe('config')
+    expect(normalizeSiteMonitorTab('result')).toBe('result')
+    expect(normalizeSiteMonitorTab(undefined)).toBe('result')
+    expect(normalizeSiteMonitorTab('monitor-config')).toBe('result')
   })
 
   it('源视图只属于网站详情，源路由不会进入该视图', () => {

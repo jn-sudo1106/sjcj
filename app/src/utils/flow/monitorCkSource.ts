@@ -78,6 +78,40 @@ function buildCheckConf(
 }
 
 /**
+ * 只同步**告警配置**（监控视图 → 监控配置 Tab，2026-09-16）。
+ *
+ * 与 syncMonitorCkSource 的差别在写入范围：那个入口手里是画布上的完整节点，checkConf 整包重建
+ *（monitorMethods / orchestration / 告警字段一起写）；监控配置 Tab 只有告警面板，节点是从步骤
+ * 种子拼出来的骨架——拿它的默认值整包写，会把线上监控真实的监控方法、脚本路径、输入表覆盖掉。
+ * 所以已有行**只合入告警相关的几个键**（minSize/cond/notifyOn/notifyType，见 alertCheckConfOf），
+ * 其余字段原样保留；该源还没有 ck_source 行时退回 syncMonitorCkSource 的建行口径
+ *（没有旧配置可覆盖，按节点信息建一行是对的）。失败向上抛，由调用方决定提示策略。
+ *
+ * ⚠️ 写入范围仍是**整个 sourceId**：/api/source/update 只按 sourceId 匹配，命中多行就一起改
+ *（2026-09-16 实测：一个带数据监控节点的源在 ck_source 里有 4 行同名记录）。这一点与
+ * syncMonitorCkSource 完全一致——告警配置在这套模型里是源级的，本来就不按行区分。
+ */
+export async function syncMonitorAlertConfig(
+  sourceId: string | undefined,
+  node: NodeConfig | undefined,
+  alertConfig: MonitorAlertConfig | undefined,
+): Promise<void> {
+  const trimmed = sourceId?.trim()
+  if (!trimmed) throw new Error('缺少源 ID')
+  const existing = await ckSourceApi.list(trimmed)
+  if (!existing.length) {
+    await syncMonitorCkSource(trimmed, node ? { ...node, alertConfig } : undefined)
+    return
+  }
+  const previousConf = parseCheckConf(existing[0]?.checkConf)
+  const updated = await ckSourceApi.update({
+    sourceId: Number(trimmed),
+    checkConf: JSON.stringify({ ...previousConf, ...alertCheckConfOf(alertConfig, previousConf) }),
+  })
+  if (!updated) throw new Error('按 sourceId 未命中任何行')
+}
+
+/**
  * 按 sourceId 同步 ck_source：无则 insert、有则 update。
  * 字段：sourceId=流程源ID、name=节点名称、schedule=cron、tableName=输入表、
  * checkConf=监控方法+编排配置序列化的 JSON。失败向上抛，由调用方决定提示与回滚策略。

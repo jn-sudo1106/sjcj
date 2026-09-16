@@ -24,6 +24,8 @@ function source(id: string, name = `源${id}`): Source {
 const stubs = {
   SiteSourceSelect: { name: 'SiteSourceSelect', template: '<div />', emits: ['update:modelValue'] },
   CheckLogDialog: { name: 'CheckLogDialog', props: ['modelValue', 'check'], template: '<div />' },
+  // 配置 Tab 自己会拉 sourceDetail/sourceSteps，容器用例里只关心挂没挂上，不看它的内部行为
+  SiteMonitorConfigView: { name: 'SiteMonitorConfigView', props: ['siteId', 'sourceId'], template: '<div data-testid="config-panel" />' },
   ElSwitch: {
     name: 'ElSwitch',
     props: ['modelValue', 'loading', 'disabled'],
@@ -149,6 +151,47 @@ describe('SiteMonitorView', () => {
     await flushPromises()
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: 's1' }))
     expect(paged.mock.lastCall?.[0]).not.toHaveProperty('state')
+  })
+
+  // 0916：监控视图拆成「监控结果 / 监控配置」两 Tab，当前展示的那张表整体落进第一个 Tab。
+  it('默认停在监控结果，点监控配置才挂上配置面板并往外抛 update:tab', async () => {
+    vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 1, list: [check()] })
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="site-monitor-tab-result"]').classes()).toContain('on')
+    expect(wrapper.find('[data-testid="config-panel"]').exists()).toBe(false)
+    expect(wrapper.find('.smv-table').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="site-monitor-tab-config"]').trigger('click')
+    expect(wrapper.get('[data-testid="site-monitor-tab-config"]').classes()).toContain('on')
+    expect(wrapper.find('[data-testid="config-panel"]').exists()).toBe(true)
+    expect(wrapper.find('.smv-table').exists()).toBe(false)
+    // URL 落点交给上层（SiteDetailView），容器只负责把选择抛出去
+    expect(wrapper.emitted('update:tab')?.at(-1)).toEqual(['config'])
+  })
+
+  it('tab 传 config 时直接停在监控配置（深链/刷新）', async () => {
+    vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = mount(SiteMonitorView, {
+      props: { siteId: 'site-a', tab: 'config' as const },
+      global: { stubs, directives: { loading: {} } },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="config-panel"]').exists()).toBe(true)
+    expect(wrapper.find('.smv-table').exists()).toBe(false)
+  })
+
+  it('两个 Tab 共用选中的源：结果里选的源，切到配置不用再选一次', async () => {
+    vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = mountViewWithSourceSelect()
+    await flushPromises()
+    await wrapper.findComponent({ name: 'SiteSourceSelect' }).vm.$emit('update:modelValue', 's1')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="site-monitor-tab-config"]').trigger('click')
+    expect(wrapper.findComponent({ name: 'SiteMonitorConfigView' }).props('sourceId')).toBe('s1')
   })
 
   it('查询失败时给出错误而不是空表格假装没事', async () => {

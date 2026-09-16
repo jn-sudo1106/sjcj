@@ -10,7 +10,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { siteApi, type Site, type Source } from '@/api'
 import { useFlowStore } from '@/stores/flow'
-import { normalizeSiteView } from '@/utils/url/workspaceRoute'
+import { normalizeSiteMonitorTab, normalizeSiteView, type SiteMonitorTab } from '@/utils/url/workspaceRoute'
 import SourceOverviewView from './SourceOverviewView.vue'
 import SiteDataView from './SiteDataView.vue'
 import SiteFileView from './SiteFileView.vue'
@@ -100,7 +100,16 @@ onUnmounted(() => {
 const view = computed(() => normalizeSiteView(route.query.view))
 function switchView(target: 'source' | 'data' | 'file' | 'monitor') {
   if (view.value === target) return
+  // 换视图整包换 query：监控视图的子 Tab（monitorTab）跟着一起清掉，下次进来回到「监控结果」。
   void router.replace({ path: '/canvas', query: { siteId: props.siteId, view: target } })
+}
+/** 监控视图的子 Tab（0916）：URL 是唯一真相，刷新/深链/前进后退都停在同一档。 */
+const monitorTab = computed<SiteMonitorTab>(() => normalizeSiteMonitorTab(route.query.monitorTab))
+function switchMonitorTab(tab: SiteMonitorTab) {
+  const query = { ...route.query }
+  if (tab === 'result') delete query.monitorTab
+  else query.monitorTab = tab
+  void router.replace({ path: route.path, query })
 }
 function openSource(source: Source) {
   // 保留网站上下文，进入具体源后左侧仍需加载同网站的源树。
@@ -131,7 +140,7 @@ function openSourceData(source: Source) {
       <SourceOverviewView v-if="view === 'source'" :current-site-id="siteId" :initial-source-ids="initialSourceIds" :initial-flow-id="initialFlowId" class="sdv-body" @open-source="openSource" @open-source-data="openSourceData" />
       <SiteDataView v-else-if="view === 'data'" :site-id="siteId" :initial-condition="initialCondition" class="sdv-body" />
       <SiteFileView v-else-if="view === 'file'" :site-id="siteId" class="sdv-body" />
-      <SiteMonitorView v-else-if="view === 'monitor'" :site-id="siteId" class="sdv-body" />
+      <SiteMonitorView v-else-if="view === 'monitor'" :site-id="siteId" :tab="monitorTab" class="sdv-body" @update:tab="switchMonitorTab" />
     </template>
   </main>
 </template>

@@ -86,6 +86,45 @@ describe('SiteDetailView', () => {
     expect(flow.sourceCtx).toBeNull()
   })
 
+  // 0916：监控视图内部拆了「监控结果 / 监控配置」两 Tab，子 Tab 跟 view 一样落 URL——
+  // 刷新和深链要回得到同一档，所以由持有 route 的本组件解析与回写。
+  it('监控视图的子 Tab 由 URL 决定，切换时写回 monitorTab', async () => {
+    setActivePinia(createPinia())
+    await router.push({ path: '/canvas', query: { siteId: 'site-zfb', view: 'monitor' } })
+    const wrapper = shallowMount(SiteDetailView, {
+      props: { siteId: 'site-zfb' },
+      global: {
+        plugins: [router],
+        stubs: { SourceOverviewView: true, SiteDataView: true, SiteMonitorResultView: true, SiteMonitorConfigView: true },
+      },
+    })
+    await flushPromises()
+
+    const monitor = wrapper.findComponent({ name: 'SiteMonitorView' })
+    expect(monitor.props('tab')).toBe('result')
+
+    // 子 Tab 条在容器内部，shallowMount 下取不到它的 DOM，这里验证接线：抛上来就得写进 URL
+    await monitor.vm.$emit('update:tab', 'config')
+    await flushPromises()
+    expect(router.currentRoute.value.query).toMatchObject({ siteId: 'site-zfb', view: 'monitor', monitorTab: 'config' })
+    expect(wrapper.findComponent({ name: 'SiteMonitorView' }).props('tab')).toBe('config')
+  })
+
+  it('深链带 monitorTab=config 时直接停在监控配置', async () => {
+    setActivePinia(createPinia())
+    await router.push({ path: '/canvas', query: { siteId: 'site-zfb', view: 'monitor', monitorTab: 'config' } })
+    const wrapper = shallowMount(SiteDetailView, {
+      props: { siteId: 'site-zfb' },
+      global: {
+        plugins: [router],
+        stubs: { SourceOverviewView: true, SiteDataView: true, SiteMonitorResultView: true, SiteMonitorConfigView: true },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.findComponent({ name: 'SiteMonitorView' }).props('tab')).toBe('config')
+  })
+
   // 0812 计划 M1-5：快速切网站时，先发出的旧网站请求不能覆盖后发出的新网站已经展示的数据。
   // mock 请求内置 120ms setTimeout 延迟，flushPromises 只推进微任务、推不动它，
   // 用假时钟显式推进宏任务队列才能确定性地等到两次请求都真正 resolve。
