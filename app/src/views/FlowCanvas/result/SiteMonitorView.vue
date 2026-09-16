@@ -1,15 +1,12 @@
 <script setup lang="ts">
 // 监控视图（0910 从旧平台「数据源告警」MonitorList 迁入，第一期只读 + 开关）。
 //
-// **只支持选中具体源**：后端 source/check/paged 的 sourceId 是单值，一次查不出一个网站
-// 底下几千个源。前端逐源归并的路子在数据视图已经踩过——几百个串行请求、20 秒超时告警、
-// 总数还算不准，不在这里重演。全部源态直接提示先选一个源；等后端加上 siteId，
-// 0914 调整：进入监控视图默认选中当前网站第一个源，按 sourceId 拉 source/check/paged；
-// 若网站没有源，仍保留空态提示。
+// 0916 调整：进入监控视图先按后端分页契约查询整页监控，只传 page/limit；用户主动选中
+// 具体源或筛选后，再把 sourceId / 筛选条件并入查询。
 //
 // 第一期不做：加监控 / 编辑 / 删除 / 批量操作。那批的表单有 15+ 字段，含条件 SQL 与
 // 校验规则脚本，跟"看告警"不是一个粒度，单独一期做。
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { sourceCheckApi, type SourceCheck } from '@/api'
 import { confirmDanger } from '@/utils/confirmDanger'
@@ -33,22 +30,18 @@ const alarmCount = computed(() => rows.value.filter((r) => r.state === 'E').leng
 const onlyAlarm = computed(() => filters.state === 'E')
 
 async function load() {
-  if (!selectedSourceId.value) {
-    rows.value = []
-    total.value = 0
-    return
-  }
   loading.value = true
   error.value = ''
   try {
-    const result = await sourceCheckApi.paged({
-      sourceId: selectedSourceId.value,
-      enable: filters.enable,
-      state: filters.state,
-      name: filters.name.trim(),
+    const query = {
       page: page.value,
       size: PAGE_SIZE,
-    })
+      ...(selectedSourceId.value ? { sourceId: selectedSourceId.value } : {}),
+      ...(filters.enable ? { enable: filters.enable } : {}),
+      ...(filters.state ? { state: filters.state } : {}),
+      ...(filters.name.trim() ? { name: filters.name.trim() } : {}),
+    }
+    const result = await sourceCheckApi.paged(query)
     rows.value = result.list
     total.value = result.total
   } catch (e) {
@@ -81,7 +74,13 @@ watch(selectedSourceId, () => {
   void load()
 })
 watch(() => props.siteId, () => {
+  const hadSource = !!selectedSourceId.value
   selectedSourceId.value = ''
+  page.value = 1
+  if (!hadSource) void load()
+})
+onMounted(() => {
+  void load()
 })
 
 // isDelete 的语义是反的：**0 才是在用**（旧平台在 loadData 里转了一道 enabled = isDelete === 0）。
@@ -129,7 +128,7 @@ function openLogs(row: SourceCheck) {
 <template>
   <main class="smv-shell">
     <div class="smv-toolbar">
-      <SiteSourceSelect v-model="selectedSourceId" :site-id="siteId" default-first />
+      <SiteSourceSelect v-model="selectedSourceId" :site-id="siteId" />
       <template v-if="selectedSourceId">
         <select v-model="filters.enable" class="smv-input" aria-label="在用">
           <option value="">在用（全部）</option>
@@ -147,12 +146,7 @@ function openLogs(row: SourceCheck) {
       </template>
     </div>
 
-    <!-- 全部源态：接口的 sourceId 是单值，查不出整站。与其逐源归并（数据视图已证明会炸），
-         不如把话说清楚，让用户先选一个源。 -->
-    <div v-if="!selectedSourceId" class="smv-empty" data-testid="site-monitor-need-source">
-      监控按源配置，请先在上方选择一个具体源
-    </div>
-    <div v-else-if="error" class="smv-empty">{{ error }}</div>
+    <div v-if="error" class="smv-empty">{{ error }}</div>
     <template v-else>
       <div class="smv-summary">
         <span class="smv-count">共 {{ total.toLocaleString() }} 条监控</span>
@@ -203,7 +197,7 @@ function openLogs(row: SourceCheck) {
               </td>
             </tr>
             <tr v-if="!rows.length && !loading">
-              <td colspan="7" class="smv-empty-cell">该源还没有配置监控</td>
+              <td colspan="7" class="smv-empty-cell">{{ selectedSourceId ? '该源还没有配置监控' : '暂无监控配置' }}</td>
             </tr>
           </tbody>
         </table>

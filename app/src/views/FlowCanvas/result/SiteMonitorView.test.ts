@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // 监控视图（0910 从旧平台「数据源告警」迁入，第一期只读 + 开关）。
-// 这里验证接线：全部源态拦住、按源查询、告警标记、启停的 isDelete 反向语义、日志弹窗传参。
+// 这里验证接线：首屏分页、按源查询、告警标记、启停的 isDelete 反向语义、日志弹窗传参。
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import SiteMonitorView from './SiteMonitorView.vue'
@@ -49,15 +49,15 @@ async function pickSource(wrapper: ReturnType<typeof mountView>, sourceId = 's1'
 afterEach(() => vi.restoreAllMocks())
 
 describe('SiteMonitorView', () => {
-  // 后端 source/check/paged 的 sourceId 是单值，一个网站几千个源查不出来。
-  // 与其像数据视图那样逐源归并（已证明会炸），不如把话说清楚。
-  it('全部源态不发请求，提示先选一个具体源', async () => {
-    const paged = vi.spyOn(sourceCheckApi, 'paged')
+  it('进入监控视图首屏只按分页查询，不带 sourceId 和筛选条件', async () => {
+    const paged = vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 1, list: [check()] })
     const wrapper = mountView()
     await flushPromises()
 
-    expect(paged).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="site-monitor-need-source"]').exists()).toBe(true)
+    expect(paged).toHaveBeenCalledTimes(1)
+    expect(paged).toHaveBeenCalledWith({ page: 1, size: 10 })
+    expect(wrapper.find('[data-testid="site-monitor-need-source"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('共 1 条监控')
   })
 
   it('选中源后按该源查询，筛选条件一并透传', async () => {
@@ -77,18 +77,15 @@ describe('SiteMonitorView', () => {
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'E', name: '增量' }))
   })
 
-  it('进入监控视图时默认选择第一个源，并用 page=1、limit=10 的口径查询', async () => {
+  it('进入监控视图不默认选择第一个源，避免首屏带 sourceId 查询', async () => {
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('391007770', 'baodu'), source('391007768', 'test1')])
     const paged = vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 1, list: [check({ sourceId: '391007770' })] })
 
     const wrapper = mountViewWithSourceSelect('site-auto-first')
     await flushPromises()
 
-    expect(paged).toHaveBeenCalledWith(expect.objectContaining({
-      sourceId: '391007770',
-      page: 1,
-      size: 10,
-    }))
+    expect(paged).toHaveBeenCalledTimes(1)
+    expect(paged).toHaveBeenCalledWith({ page: 1, size: 10 })
     expect(wrapper.find('[data-testid="site-monitor-need-source"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('共 1 条监控')
   })
@@ -150,7 +147,8 @@ describe('SiteMonitorView', () => {
 
     await wrapper.get('[data-testid="site-monitor-only-alarm"]').trigger('click')
     await flushPromises()
-    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ state: '' }))
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: 's1' }))
+    expect(paged.mock.lastCall?.[0]).not.toHaveProperty('state')
   })
 
   it('查询失败时给出错误而不是空表格假装没事', async () => {
