@@ -63,6 +63,7 @@ export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
  * 两个信号同时为真，必须让更具体的 monitor 赢，否则 700 永远走不到。
  */
 function configTypeFrom(cfg: NodeConfig): number | undefined {
+  if (cfg.template === 'data-validation') return 800
   if (cfg.template === 'monitor') return 700
   if (cfg.ruleCfg) return 600
   const code = cfg.collectCfg?.snatchType?.match(/^\[(\d+)\]/)?.[1]

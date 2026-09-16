@@ -336,6 +336,7 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
   const results = await Promise.allSettled(configIds.map((id) => configApi.configDetailRaw(id)))
   type StepConfigDetail = {
     topic?: string; configName?: string; configUrl?: string; isLoginConfig?: boolean; multiMode?: number
+    configType?: string
     bizType?: string; dedupType?: string; codeRule?: string; contentRule?: string
     runPolicy?: string
     paramBindings?: Step['paramBindings']
@@ -358,6 +359,7 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
       runPolicy: mapped.runPolicy || undefined,
       isLoginConfig: mapped.isLogin,
       multiMode: mapped.multiMode,
+      configType: mapped.configType,
       ...(bindings.length ? { paramBindings: bindings } : {}),
     })
   })

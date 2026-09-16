@@ -8,7 +8,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
-  collectorCapabilityOf, isRuleNode, isMonitorNode, makeDefaultRuleOrchestration,
+  collectorCapabilityOf, isRuleNode, isMonitorNode, isDataValidationNode, makeDefaultRuleOrchestration,
   fieldOptionsFromTableOrOutput,
   type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
@@ -29,6 +29,7 @@ const cc = computed(() => cfg.value?.collectCfg)
 
 const isRule = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
 const isMonitor = computed(() => (cfg.value ? isMonitorNode(cfg.value) : false))
+const isDataValidation = computed(() => (cfg.value ? isDataValidationNode(cfg.value) : false))
 
 // ---- 规则节点：表/字段绑定（0804 拍板：搬回表配置） ----
 const ruleCfg = computed<RuleOrchestration>(() => ({
@@ -286,7 +287,7 @@ async function onTableSaved(tableId: string) {
       :model-value="ruleCfg"
       :input-field-options="inputFieldOptions"
       :output-field-options="outputFieldOptions"
-      :hide-output="isMonitor"
+      :hide-output="isMonitor || isDataValidation"
       @update:model-value="patchRule"
     />
   </template>

@@ -558,6 +558,11 @@ export function isMonitorNode(cfg?: NodeConfig): boolean {
   return cfg?.template === 'monitor'
 }
 
+/** 数据校验节点判定：复用规则种子，但不带数据监控的告警语义。 */
+export function isDataValidationNode(cfg?: NodeConfig): boolean {
+  return cfg?.template === 'data-validation'
+}
+
 /**
  * nextStep 目标 / 流程入口口径的真实节点：跳过 start/end 占位、停用、规划中、决策/分头。
  * 决策/分头不是发后续的落点，后继判定要看穿它们找到下一个真实节点（0824）。

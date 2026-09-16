@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useFlowStore } from './flow'
 import { mockFlowRecommend, mockNodeAiChat } from '../api/mock/flows'
-import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES, buildSourceSeed, isRuleNode, isMonitorNode, iconFor, nodeClassFor } from '@/views/FlowCanvas/canvas/flowModel'
+import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES, buildSourceSeed, isRuleNode, isMonitorNode, isDataValidationNode, iconFor, nodeClassFor } from '@/views/FlowCanvas/canvas/flowModel'
 import { makePresetFlowTemplates } from '@/utils/flow/flowTemplates'
 import type { Source } from '../api'
 
@@ -1570,6 +1570,37 @@ describe('数据监控节点（2026-09-01，配置同规则处理）', () => {
     ] as never)
 
     expect(seed.configs.st2.template).toBe('monitor')
+  })
+})
+
+describe('数据校验节点（sourceType=800，配置参考数据监控）', () => {
+  let f: ReturnType<typeof useFlowStore>
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    f = useFlowStore()
+    f.newFlow('standard')
+  })
+
+  it('节点库存在数据校验，复用 rule 种子但使用独立 template', () => {
+    const ruleGroup = LIB_GROUPS.find((g) => g.title === '规则类')
+    expect(ruleGroup?.items.some((it) => it.template === 'data-validation' && it.name === '数据校验')).toBe(true)
+    expect(TEMPLATE_TO_NODE['data-validation']).toBe('rule')
+    const upstreamId = f.main.find((id) => id !== 'start' && id !== 'end')!
+    const id = f.insertAfter(upstreamId, 'data-validation')!
+    expect(f.configs[id].title).toBe('数据校验')
+    expect(f.configs[id].template).toBe('data-validation')
+    expect(isRuleNode(f.configs[id])).toBe(true)
+    expect(isDataValidationNode(f.configs[id])).toBe(true)
+  })
+
+  it('按 sourceType=800 回读为数据校验节点', () => {
+    const source = { sourceId: 's-validation', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: 'st1', sourceId: 's-validation', name: '列表抓取', inputTable: '-', outputTable: 'T1', nodeType: 'list', enabled: true },
+      { stepId: 'st2', sourceId: 's-validation', name: '字段检查', inputTable: 'T1', outputTable: 'T1', configType: '800', nodeType: 'entry', dependsOn: ['st1'], enabled: true },
+    ] as never)
+    expect(seed.configs.st2.template).toBe('data-validation')
+    expect(isDataValidationNode(seed.configs.st2)).toBe(true)
   })
 })
 

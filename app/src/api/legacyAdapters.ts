@@ -1061,6 +1061,7 @@ export function stepFromLegacy(input: unknown, sourceId: string): Step {
     nodeType: record.nodeType == null && record.nodeKind == null && record.type == null && record.template == null
       ? undefined
       : String(record.nodeType ?? record.nodeKind ?? record.type ?? record.template),
+    configType: record.configType == null ? undefined : String(record.configType),
     inputTable: record.inputTable == null && record.entryTypeId == null
       ? undefined
       : String(record.inputTable ?? record.entryTypeId),

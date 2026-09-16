@@ -222,6 +222,16 @@ describe('规则节点写步骤（0904）', () => {
     expect(step.nodeType).toBe('monitor')
   })
 
+  it('数据校验节点 type 写 data-validation（优先于 rule，改名后仍可恢复）', () => {
+    const cfg = ruleCfg(['title'], ['title'])
+    cfg.template = 'data-validation'
+    cfg.title = '字段检查'
+    const step = mergeStepForWrite({
+      snapshot, cfg, nodeId: '40600', sourceId: '430016398',
+    })
+    expect(step.nodeType).toBe('data-validation')
+  })
+
   // 适用源 -1 是**新建节点时的默认值**，不是写死。写死会把用户改过的值冲掉——
   // 所以写入侧一律以 cfg.stepSourceId 为准，默认值落在插入节点的地方（stores/flow.ts）。
   it('适用源以节点上的值为准，写入侧不强制 -1', () => {

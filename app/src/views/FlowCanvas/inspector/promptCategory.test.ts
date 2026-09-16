@@ -47,6 +47,13 @@ describe('promptCategory helpers', () => {
     expect(resolvePromptCategoryForNode(monitor, '规则处理')).toBe('数据监控')
   })
 
+  it('数据校验节点（template=data-validation）提示词分类为「数据校验」', () => {
+    const validation = { ...cloneConfig(NODE_CONFIGS['rule']), template: 'data-validation' }
+    expect(promptCategoryGroupsForNode(validation).flatMap((g) => g.options.map((o) => o.value))).toEqual(['数据校验'])
+    expect(defaultPromptCategoryForNode(validation)).toBe('数据校验')
+    expect(resolvePromptCategoryForNode(validation, '规则处理')).toBe('数据校验')
+  })
+
   it('从后端步骤回读的数据监控节点（buildSourceSeed 按节点名补 template）分类仍是「数据监控」而非「规则处理」（2026-09-01）', () => {
     const source = { sourceId: 's-mon', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
     const seed = buildSourceSeed(source, [

@@ -580,7 +580,7 @@ export const NODE_CONFIGS: Record<string, NodeConfig> = normalizeNodeConfigs(NOD
 export const TEMPLATE_TO_NODE: Record<string, string> = {
   web: 'web-list', app: 'app-collect', file: 'web-detail', python: 'web-list', parse: 'file-parse', ocr: 'ocr',
   ai: 'ai-extract', map: 'field-map', clean: 'clean', dedupe: 'dedupe', check: 'check', process: 'process',
-  rule: 'rule', 'rule-trace': 'rule', monitor: 'rule', metric: 'metric', mail: 'mail',
+  rule: 'rule', 'rule-trace': 'rule', monitor: 'rule', 'data-validation': 'rule', metric: 'metric', mail: 'mail',
   alert: 'alert', decision: 'decision', parallel: 'parallel', custom: 'custom',
   // 0711 R7/R8：两个独立的固定产物类型采集节点
   'browser-html': 'browser-html-collect', 'wechat-html': 'wechat-html-collect',
@@ -627,6 +627,7 @@ export const SNATCH_TYPES = [
   '[400] - 提取数据发邮件',
   '[600] - 规则处理',
   '[700] - 数据监控',
+  '[800] - 数据校验',
 ]
 
 export const WEB_KIND_OPTIONS: { value: 'list' | 'detail' | 'attachment'; label: string; desc: string }[] = [
@@ -721,6 +722,7 @@ export const TEMPLATE_TO_SNATCH: Record<string, string> = {
   'browser-html': '[90] - 网页抓取',
   'wechat-html': '[90] - 网页抓取',
   login: '[90] - 网页抓取',
+  'data-validation': '[800] - 数据校验',
 }
 
 // 左侧节点库分组
@@ -761,6 +763,7 @@ export const LIB_GROUPS: LibGroup[] = [
       // 「数据监控」是源列表的行内菜单项（跳去独立监控中心看某个源的数据），跟这里同名但不是一回事，
       // 没有可抄的旧节点类型号，所以不给 badge。
       { template: 'monitor', code: 'MON', name: '数据监控', desc: '按规则组、表达式监测数据，命中即标记异常', pill: 'p1' as Pill },
+      { template: 'data-validation', code: '800', name: '数据校验', desc: '按规则组、表达式校验数据质量', pill: 'p1' as Pill },
     ]
   },
   {
@@ -827,7 +830,7 @@ function templateKeyForStep(step: Step, index: number): string {
   // 数据监控节点（0901 新增，monitor 复用 rule 种子）从后端回读时，Step 没有独立的 nodeType 标识
   // （新建时 nodeType 继承前置步骤，可能是 entry/list/detail），只能靠节点名识别，且必须优先于下方
   // nodeType 别名映射——否则 nodeType='list'/'detail' 会把它错路由成采集/详情节点，丢掉 ruleCfg。
-  if (/数据监控/.test(name) && NODE_CONFIGS.rule) return 'rule'
+  if ((/数据监控/.test(name) || /数据校验/.test(name)) && NODE_CONFIGS.rule) return 'rule'
   const explicit = String(step.nodeType ?? '').trim().toLowerCase()
   // NODE_CONFIGS 里登录模板注册的 key 是 'login-collect'，不是 'login'（下面三处此前都在查
   // 一个不存在的 key，恒为 falsy，登录节点路由从未真正生效过；2026-08-26 加 isLoginConfig 路由时
@@ -840,9 +843,11 @@ function templateKeyForStep(step: Step, index: number): string {
     // 一个 nodeType='monitor' 但名字没含"数据监控"的存量步骤会漏到下面的通用正则，
     // 被错路由成采集/详情节点，丢掉 ruleCfg（Z6-2，2026-09-07）。
     monitor: 'rule',
+    'data-validation': 'rule', validation: 'rule',
     'clean': 'clean', 'dedupe': 'dedupe', 'check': 'check',
   }
   if (explicitAliases[explicit] && NODE_CONFIGS[explicitAliases[explicit]]) return explicitAliases[explicit]
+  if (step.configType === '800' && NODE_CONFIGS.rule) return 'rule'
 
   // isLoginConfig 来自 configDetail.templetCode（见 attachStepConfigDetails），是比步骤名正则
   // 更可靠的信号：2026-08-26 生产实测配置 1400968「baidu-登陆」证明登录步骤的名字未必含
@@ -997,8 +1002,9 @@ function buildNodeForStep(source: Source, step: Step, index: number): NodeConfig
   // 用户可能把节点改名成不含"数据监控"的名字，这时只有 nodeType 还能说清它的真实类型。
   // 只信 'monitor' 这一个值：新建时 nodeType 会继承前置步骤（entry/list/detail 之类），
   // 那些是不可信的默认值，不能反过来当权威覆盖标题猜测。
-  if (String(step.nodeType ?? '').trim().toLowerCase() === 'monitor') cfg.template = 'monitor'
-  else if (/数据监控/.test(cfg.title)) cfg.template = 'monitor'
+  const nodeType = String(step.nodeType ?? '').trim().toLowerCase()
+  if (nodeType === 'monitor' || step.configType === '700' || /数据监控/.test(cfg.title)) cfg.template = 'monitor'
+  else if (nodeType === 'data-validation' || nodeType === 'validation' || step.configType === '800' || /数据校验/.test(cfg.title)) cfg.template = 'data-validation'
   if (cfg.collectCfg) {
     // 源级字段（源名称/分类/标签/登录/选用配置等）不再复制到节点：随 loadFromSource 整体挂到 flow.sourceCfg（0706 优化·源/节点配置分层）
     cfg.collectCfg.url = source.url
@@ -1032,7 +1038,11 @@ export function applyStepDetails(
     if (!current) return
     const shouldBeLogin = !!step.isLoginConfig
     const isLogin = collectorCapabilityOf(current)?.kind === 'login'
-    if (shouldBeLogin && !isLogin) {
+    const shouldBeDataValidation = step.configType === '800'
+      || ['data-validation', 'validation'].includes(String(step.nodeType ?? '').trim().toLowerCase())
+      || /数据校验/.test(step.name)
+    const isDataValidation = current.template === 'data-validation'
+    if ((shouldBeLogin && !isLogin) || (shouldBeDataValidation && !isDataValidation)) {
       configs[step.stepId] = buildNodeForStep(source, step, i)
       rebuilt.push(step.stepId)
       return
