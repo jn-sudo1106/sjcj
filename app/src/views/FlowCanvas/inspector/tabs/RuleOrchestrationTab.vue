@@ -309,6 +309,17 @@ watch(
   },
   { immediate: true },
 )
+/**
+ * 系统提示词 / 工作台里 `{{source_id}}` 的取值：**画布当前正在编辑的那个源**，
+ * 也就是左侧源列表里选中的那个（`flow.sourceCfg`，个别场景它为空时取 `flow.sourceCtx` 兜底）。
+ *
+ * 不能用节点的 `stepSourceId`：那是旧步骤的「适用源」，规则处理 / 数据监控节点按设计默认
+ * `-1`（表示该配置下所有源共用，见 flowModel.ts 的字段注释），拼进提示词就成了
+ * `source_id=-1`——监控脚本里拿这个 ID 去查数据必然查不到（2026-09-16 实测踩到）。
+ * 两者不是同一层，别互相顶替。
+ */
+const promptSourceId = computed(() => flow.sourceCfg?.sourceId || flow.sourceCtx?.sourceId || '')
+
 let promptRefreshSeq = 0
 watch(
   () => [
@@ -317,6 +328,7 @@ watch(
     isMonitor.value,
     isDataValidation.value,
     sourceTableName.value,
+    promptSourceId.value,
     promptCategory.value,
     promptListCategory.value,
     orchCfg.value.inputFields?.join(',') ?? '',
@@ -340,7 +352,7 @@ watch(
         promptCategory: promptCategory.value,
         inputTableName: sourceTableName.value,
         outputTableName: orchCfg.value.outputTable?.trim() || sourceTableName.value,
-        sourceId: isMonitor.value ? (cfg.value?.stepSourceId ?? '') : '',
+        sourceId: isMonitor.value ? promptSourceId.value : '',
         sourceCron: isMonitor.value ? (cfg.value?.schedule?.cron ?? '') : '',
         inputFields: orchCfg.value.inputFields ?? [],
         outputFields: orchCfg.value.outputFields ?? [],
@@ -1009,7 +1021,7 @@ function onTestScript() {
     :prompt-category-groups="promptCategoryGroups"
     :input-table-name="sourceTableName"
     :output-table-name="orchCfg.outputTable"
-    :source-id="isMonitor ? (cfg?.stepSourceId ?? '') : ''"
+    :source-id="isMonitor ? promptSourceId : ''"
     :source-cron="isMonitor ? (cfg?.schedule?.cron ?? '') : ''"
     :thinking="thinkingText"
     :generation-state="generationState"

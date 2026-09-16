@@ -1200,11 +1200,15 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     }
   })
 
-  it('数据监控节点工作区会把 source_id/source_cron/source_table 按表单值替换', async () => {
+  // 2026-09-16 修：source_id 取**画布当前源**（左侧源列表里选中的那个），不是节点自己的
+  // 「适用源」stepSourceId——后者按设计默认 `-1`（该配置下所有源共用），拼进提示词就是
+  // `source_id=-1`，监控脚本拿它去查数据必然落空。
+  it('数据监控节点工作区把 source_id 拼成画布当前源，而不是步骤的适用源 -1', async () => {
     mockAssets('通用新闻表', '900', 'sense_data.TB_CNEWS')
     const { flow, wrapper } = mountOnMonitorNode()
     flow.setInputTable('monitor-1', '900')
-    flow.setStepSourceId('monitor-1', '391007796')
+    flow.setStepSourceId('monitor-1', '-1')   // 规则/数据监控节点的默认「适用源」，不该出现在提示词里
+    flow.patchSource({ sourceId: '430016398', name: 'test1' })
     flow.patchSchedule('monitor-1', { cron: '0 0 12 * * *' })
     await flushPromises()
 
@@ -1216,9 +1220,29 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await flushPromises()
 
     const promptTextarea = wrapper.find('textarea.wb-textarea:not(.wb-code):not(.wb-describe)')
-    expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('source_id=391007796')
-    expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('source_cron=0 0 12 * * *')
-    expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('source_table=通用新闻表:sense_data.TB_CNEWS')
+    const prompt = (promptTextarea.element as HTMLTextAreaElement).value
+    expect(prompt).toContain('source_id=430016398')
+    expect(prompt).not.toContain('source_id=-1')
+    expect(prompt).toContain('source_cron=0 0 12 * * *')
+    expect(prompt).toContain('source_table=通用新闻表:sense_data.TB_CNEWS')
+  })
+
+  it('画布没绑源时 source_id 留空，不会退回写成 -1', async () => {
+    mockAssets('通用新闻表', '900', 'sense_data.TB_CNEWS')
+    const { flow, wrapper } = mountOnMonitorNode()
+    flow.setInputTable('monitor-1', '900')
+    flow.setStepSourceId('monitor-1', '-1')
+    await flushPromises()
+
+    await openWorkbench(wrapper)
+    const toggleBtn = wrapper.findAll('button').find((b) => b.text() === '系统提示词')!
+    await toggleBtn.trigger('click')
+    await flushPromises()
+
+    const promptTextarea = wrapper.find('textarea.wb-textarea:not(.wb-code):not(.wb-describe)')
+    const prompt = (promptTextarea.element as HTMLTextAreaElement).value
+    expect(prompt).toContain('source_id=;')
+    expect(prompt).not.toContain('source_id=-1')
   })
 
   it('保存脚本：需二次确认，确认后调用 fileUploadScript', async () => {
