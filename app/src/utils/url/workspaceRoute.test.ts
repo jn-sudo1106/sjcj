@@ -15,6 +15,11 @@ describe('源工作区路由', () => {
     expect(sourceViewFromHash('#/canvas?sourceId=src-a')).toBe('flow')
   })
 
+  it('数据监控节点可进入监控配置视图', () => {
+    expect(normalizeSourceView('monitor-config')).toBe('monitor-config')
+    expect(sourceViewFromHash('#/canvas?sourceId=src-a&view=monitor-config')).toBe('monitor-config')
+  })
+
   it('源视图只属于网站详情，源路由不会进入该视图', () => {
     expect(normalizeSiteView('source')).toBe('source')
     expect(normalizeSiteView(undefined)).toBe('source')

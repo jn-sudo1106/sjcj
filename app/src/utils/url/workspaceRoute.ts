@@ -1,6 +1,6 @@
 import type { Source } from '@/api'
 
-export type SourceWorkspaceView = 'flow' | 'data' | 'file' | 'task'
+export type SourceWorkspaceView = 'flow' | 'data' | 'file' | 'task' | 'monitor-config'
 // 网站详情页（0812 会议纠偏）：网站汇总态没有任务页签，任务只在具体源和一级任务中心查看。
 // monitor（数据源告警）2026-09-10 接入，枚举位此前已占好。
 export type SiteWorkspaceView = 'source' | 'data' | 'file' | 'monitor'
@@ -10,7 +10,7 @@ export function firstSourceId(sources: Pick<Source, 'sourceId'>[]): string {
 }
 
 export function normalizeSourceView(view: unknown): SourceWorkspaceView {
-  return view === 'flow' || view === 'data' || view === 'task' || view === 'file' ? view : 'flow'
+  return view === 'flow' || view === 'data' || view === 'task' || view === 'file' || view === 'monitor-config' ? view : 'flow'
 }
 
 export function normalizeSiteView(view: unknown): SiteWorkspaceView {
