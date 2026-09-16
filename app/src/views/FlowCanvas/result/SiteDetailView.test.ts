@@ -40,8 +40,10 @@ describe('SiteDetailView', () => {
     expect(router.currentRoute.value.query).toMatchObject({ siteId: 'site-zfb', sourceId: 'source-a', view: 'flow' })
   })
 
-  // 0812 计划 M1-2：网站汇总态不再有任务页签，任务只在具体源和一级任务中心查看。
-  it('网站汇总态没有任务页签，只有源/数据/文件三个切换项', async () => {
+  // 0915-05（2026-09-16）：本用例原来断言的是 0812 计划 M1-2「网站汇总态没有任务页签」，
+  // 该结论已被 0915 会议推翻（发完任务不知道跑在哪个源上，任务中心又不区分网站），
+  // 改为断言五个切换项齐全、且任务视图排在监控视图左侧。
+  it('网站汇总态有源/数据/文件/任务/监控五个切换项，任务在监控左侧', async () => {
     setActivePinia(createPinia())
     await router.push({ path: '/canvas', query: { siteId: 'site-zfb', view: 'data' } })
     const wrapper = shallowMount(SiteDetailView, {
@@ -50,11 +52,30 @@ describe('SiteDetailView', () => {
     })
     await flushPromises()
 
-    expect(wrapper.text()).not.toContain('任务视图')
     expect(wrapper.get('[data-testid="site-source-view"]').text()).toBe('源视图')
     expect(wrapper.get('[data-testid="site-data-view"]').text()).toBe('数据视图')
     expect(wrapper.get('[data-testid="site-file-view"]').text()).toBe('文件视图')
+    expect(wrapper.get('[data-testid="site-task-view"]').text()).toBe('任务视图')
+    expect(wrapper.get('[data-testid="site-monitor-view"]').text()).toBe('监控视图')
+    // 顺序：任务在监控左边（产品 2026-09-16 指定）
+    const segs = wrapper.findAll('.sdv-seg').map((btn) => btn.text())
+    expect(segs.indexOf('任务视图')).toBe(segs.indexOf('监控视图') - 1)
     expect(wrapper.find('site-data-view-stub').exists()).toBe(true)
+  })
+
+  it('切到任务视图时以 siteWide 模式挂载 TaskView 并把 siteId 传进去', async () => {
+    setActivePinia(createPinia())
+    await router.push({ path: '/canvas', query: { siteId: 'site-zfb', view: 'task' } })
+    const wrapper = shallowMount(SiteDetailView, {
+      props: { siteId: 'site-zfb' },
+      global: { plugins: [router], stubs: { SourceOverviewView: true, TaskView: true } },
+    })
+    await flushPromises()
+
+    const taskView = wrapper.find('task-view-stub')
+    expect(taskView.exists()).toBe(true)
+    expect(taskView.attributes('siteid')).toBe('site-zfb')
+    expect(taskView.attributes('sitewide')).toBeDefined()
   })
 
   it('网站文件页不再展示开发中占位，改为网站范围文件列表', async () => {

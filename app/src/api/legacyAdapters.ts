@@ -926,7 +926,10 @@ export function siteFromLegacy(input: unknown): Site {
     categoryPath: categoryPath || undefined,
     dirId: record.categoryId == null ? undefined : String(record.categoryId),
     owner: '',
-    tags: [],
+    // 0915-14：后端 2026-09-16 给 cfg_site 加了 tags 列（此前这里一直硬编码空数组，
+    // 卡片上那块标签区因此从没显示过东西）。入库形态是**分号分隔、不带 `#`**（如 `测试;服务`），
+    // 与源标签（`#a,#b`）不是一套；parseIssueTags 认 [，,;；] 所以读可以共用。
+    tags: parseIssueTags(record.tags),
     sourceCount,
     errorCount,
     updatedAt: record.updateDt == null ? undefined : String(record.updateDt),

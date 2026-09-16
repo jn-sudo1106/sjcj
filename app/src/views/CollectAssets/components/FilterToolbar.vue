@@ -107,7 +107,9 @@ async function loadCategoryChildren(
       <el-option label="全部状态" value="all" />
       <el-option label="有异常源" value="error" />
     </el-select>
-    <el-select :model-value="sortBy" style="width: 120px" @update:model-value="(v: 'updated' | 'name') => emit('update:sortBy', v)">
+    <!-- 排序同样要 emit filterChange：少了它，改排序只更新 sortBy、列表不重新加载，
+         下拉框变了而卡片顺序纹丝不动（旁边标签/状态两个 select 一直是这么配的，这里原先漏了）。 -->
+    <el-select :model-value="sortBy" style="width: 120px" @update:model-value="(v: 'updated' | 'name') => { emit('update:sortBy', v); emit('filterChange') }">
       <el-option label="最近修改" value="updated" />
       <el-option label="名称" value="name" />
     </el-select>

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { LegacySnatchSaveRequest } from './types/source'
 import {
   configFromLegacy,
+  siteFromLegacy,
   configToLegacy,
   configUrlFromLegacy,
   dataRowFromLegacy,
@@ -894,5 +895,17 @@ describe('任务实例字段适配', () => {
       topic: 'queue_81909',
       updatedAt: '2026-07-13 10:00',
     })
+  })
+})
+
+// 0915-14：后端 2026-09-16 给 cfg_site 加了 tags 列（在此之前这里硬编码空数组）
+describe('siteFromLegacy 的标签', () => {
+  it('分号分隔的入库形态拆成数组，不带 # 前缀', () => {
+    const site = siteFromLegacy({ siteId: 1, siteName: '新浪财经1', tags: '测试;服务', sourceCnt: 2 })
+    expect(site.tags).toEqual(['测试', '服务'])
+  })
+
+  it('没有标签时是空数组，不是 undefined', () => {
+    expect(siteFromLegacy({ siteId: 2, siteName: '新浪3', tags: null, sourceCnt: 0 }).tags).toEqual([])
   })
 })

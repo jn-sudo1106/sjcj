@@ -428,6 +428,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 仍悄悄落回 mock（mockSiteUpdate 还是旧的 category/owner 必填形状，传新形状直接 `.trim()` 报错）。
   { path: 'site/updateSite', desc: '编辑网站基本信息 → POST /v1/site/update', danger: true, impl: true },
   { path: 'site/update', desc: '编辑网站基本信息（真实路径，见上方 site/updateSite 的说明）', danger: true, live: true },
+  // 0915-14：后端 2026-09-16 交付的网站标签两件套——本条给候选清单，筛选走 sitePaged 的 tags 入参。
+  // 返回的是**拆分去重后的数组**（如 ["服务","测试"]），不是各站原始的分号串。
+  { path: 'site/siteTags', desc: '全局已用网站标签（候选清单）', live: true },
   { path: 'site/sourcesOfSite', desc: '网站下的源列表', impl: true },
   { path: 'site/addSource', desc: '网站下新增源（默认继承统一流程）', impl: true },
   { path: 'site/cloneSource', desc: '复制源流程、配置和表结构（不复制数据与运行实例）', danger: true, impl: true },

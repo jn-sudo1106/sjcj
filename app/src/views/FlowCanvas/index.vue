@@ -261,6 +261,8 @@ async function loadSourceFlow(sourceId: string) {
   // 不记下来的话切到别的网站的源，左侧源列表会整块消失。只在拿得到时写，别用空值覆盖已有的。
   const ownerSiteId = source.siteId || String(route.query.siteId ?? '') || ws.snapshotOf(source.sourceId)?.siteId || ''
   if (ownerSiteId) ws.saveSnapshot(source.sourceId, { siteId: ownerSiteId })
+  // 0915-02：源态下「全部」页签同样常驻——0915-03 的钻取闭环要靠它回到网站数据视图
+  if (ownerSiteId) ws.ensureSiteTab(ownerSiteId)
   else void resolveOwnerSite(source.sourceId)
   void backfillStepDetails(sourceId, steps ?? [])
 }
@@ -439,14 +441,13 @@ async function enterFromRoute() {
   const siteId = String(route.query.siteId ?? '')
   const sourceId = String(route.query.sourceId ?? '')
   if (siteId && !sourceId) {
-    // 旧网站任务链接（0812 计划 M1-3）：网站汇总态任务页签已删除，跳转到运行记录；
-    // M3-11 已完成（0819 N4-2）：「运行记录」改名「任务中心」，路径同步为 /tasks。
-    if (route.query.view === 'task') {
-      await router.replace({ path: '/tasks', query: { siteId } })
-      return
-    }
+    // 0915-05（2026-09-16）：这里原本把网站态的 view=task 重定向到一级任务中心 /tasks
+    // （0812 计划 M1-3「网站汇总态任务页签已删除」）。该结论已被 0915 会议推翻——
+    // 任务中心不区分网站，产品要的是"本网站、不分源"的任务视图，页签已恢复，故删除重定向。
     // 网站详情页（0714 会议 Task 3）：不再重定向到第一个源，本身就是一个页面；
     // 加载（含"该网站暂无源"兜底）交给 SiteDetailView 自己处理，这里只管路由归一化和顶部动作栏。
+    // 0915-02：进网站态即登记「全部」页签（名字等 SiteDetailView 拿到 site/detail 再补）。
+    ws.ensureSiteTab(siteId)
     const view = normalizeSiteView(route.query.view)
     if (route.query.view !== view) await router.replace({ path: '/canvas', query: { siteId, view } })
     else ui.clearActions()
@@ -504,9 +505,10 @@ onUnmounted(() => {
   <NewSiteWizard v-if="isGate" />
 
   <template v-else>
-    <SourceTabsBar v-if="flow.sourceCtx" />
+    <!-- 0915-02：网站聚合态也要有页签条（「全部」页签就挂在这），不能再只看 sourceCtx -->
+    <SourceTabsBar v-if="flow.sourceCtx || ws.siteTabs.length" />
     <!-- 两列布局（0710 会议 B1）：左列源侧栏（页面级，在视图层之上），右列内容区随流程/数据/任务视图切换 -->
-    <div class="rc-canvas-cols" :class="{ 'with-tabs': !!flow.sourceCtx }">
+    <div class="rc-canvas-cols" :class="{ 'with-tabs': !!flow.sourceCtx || !!ws.siteTabs.length }">
       <SiteSourceSwitcher
         v-if="sidebarSiteId"
         :site-id="sidebarSiteId"

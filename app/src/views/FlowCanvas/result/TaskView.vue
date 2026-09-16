@@ -10,12 +10,36 @@ import ProcessNodeRail from './ProcessNodeRail.vue'
 import { buildHorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepTokens } from '@/utils/flow/nextStepFields'
 
-// 任务是源的运行事实：源画布下只看当前源；网站详情页（siteWide）聚合看全部源，不提供内部筛选。
-const props = defineProps<{ siteWide?: boolean }>()
+// 任务是源的运行事实：源画布下只看当前源；网站详情页（siteWide）聚合看全部源。
+//
+// 0915-05（2026-09-16）：`siteWide` 此前只有单测在用，页面上没有任何入口渲染过它。
+// 接进网站详情页时补了两处——① siteId 不能再只从 `flow.sourceCtx` 取（网站态压根没有 sourceCtx，
+// 取到空串会被 loadTasks 的守卫短路成空列表）；② 空态判定同理，见下方 hasContext。
+const props = defineProps<{ siteWide?: boolean; siteId?: string }>()
 const flow = useFlowStore()
 const source = computed(() => flow.sourceCtx)
 const sourceId = computed(() => source.value?.sourceId ?? '')
-const siteId = computed(() => source.value?.siteId ?? '')
+// 网站态由 props 给；源态仍从当前源的上下文取。
+const siteId = computed(() => props.siteId || source.value?.siteId || '')
+/** 有没有查询上下文：网站态只要有 siteId，源态要有 sourceCtx。 */
+const hasContext = computed(() => (props.siteWide ? !!siteId.value : !!source.value))
+
+/**
+ * 网站级聚合查询的后端就绪开关（0915-05 / 后端需求 B15）。
+ *
+ * 2026-09-16 生产实测：`task/topTaskPaged` **只认 sourceId，不认 siteId** ——
+ * `?siteId=11` 与 `?siteId=4` 都返回 `count: 0`，`?sourceId=430016944` 返回 122 条。
+ * `sourceApi.sourceTaskPaged` 的 httpParams（`api/index.ts:598`）里也从来没有 siteId 这一项。
+ *
+ * 在后端支持之前，网站态发这个请求必然得 0 条，页面会显示"没有匹配的任务记录"——
+ * 那是**误导**（看着像这个网站没任务，实为接口不支持）。所以这里直接不发请求，给明确说明。
+ *
+ * **后端加上 siteId 后**：把本常量改成 `true`，并在 `api/index.ts:598` 的 httpParams 里补 `siteId`，
+ * 页面即恢复正常查询；本文件其余逻辑无需改动。
+ */
+const SITE_WIDE_BACKEND_READY = false
+/** 网站态、且没有收窄到具体源时，聚合查询不可用。 */
+const siteWidePending = computed(() => !!props.siteWide && !SITE_WIDE_BACKEND_READY && !filters.sourceId)
 const siteSources = ref<Source[]>([])
 const stepsBySource = ref<Record<string, Step[]>>({})
 const nodeRunsBySource = ref<Record<string, NodeRunStat[]>>({})
@@ -54,7 +78,13 @@ const availableQueues = computed(() => {
 let metadataRequest = 0
 async function loadNodeMetadata() {
   const requestId = ++metadataRequest
-  const sourceIds = filters.sourceId ? [filters.sourceId] : siteSources.value.map((source) => source.sourceId)
+  // ⚠️ 网站态**未选定具体源时不拉**：这里是每个源两个请求（steps + nodeRuns），
+  // 而一个网站可以有 6496 个源（实测「上市公司(已复核)」），照源态的写法会打出一万多个请求。
+  // 代价是未选源时「流程节点」列退回展示原始节点标识、队列名只认 task.topic——
+  // 选定某个源后即恢复完整信息，这是本视图里唯一需要节点元数据的场景。
+  const sourceIds = filters.sourceId
+    ? [filters.sourceId]
+    : props.siteWide ? [] : siteSources.value.map((source) => source.sourceId)
   if (!sourceIds.length) {
     stepsBySource.value = {}
     nodeRunsBySource.value = {}
@@ -77,6 +107,11 @@ async function loadNodeMetadata() {
 }
 
 async function loadSiteSources() {
+  // 聚合查询用不了时连源列表也不必拉：大站这一条是 6496 行的响应，拉回来没有任何消费方。
+  if (siteWidePending.value) {
+    siteSources.value = []
+    return
+  }
   const currentSiteId = siteId.value
   try {
     const result = currentSiteId ? await siteApi.siteSources(currentSiteId) : []
@@ -142,7 +177,7 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
     page: page.value,
     size: size.value,
   }
-  if (!query.siteId) {
+  if (!query.siteId || siteWidePending.value) {
     rows.value = []
     total.value = 0
     stopPoll()
@@ -168,7 +203,7 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
   }
 }
 
-watch(sourceId, async () => {
+watch([siteId, sourceId], async () => {
   page.value = 1
   filters.sourceId = props.siteWide ? '' : sourceId.value
   filters.nodeId = ''
@@ -250,7 +285,15 @@ const nextStepHints = computed(() => {
   <main class="tv-shell">
     <CanvasHeader v-if="!siteWide" />
     <div class="tv-body">
-      <div v-if="!source" class="tv-empty-row">{{ siteWide ? '该网站暂无源，无法查看任务。' : '任务视图仅在源详情下可用。' }}</div>
+      <div v-if="!hasContext" class="tv-empty-row">{{ siteWide ? '未指定网站，无法查看任务。' : '任务视图仅在源详情下可用。' }}</div>
+      <div v-else-if="siteWidePending" class="tv-pending" data-testid="task-site-wide-pending">
+        <p class="tv-pending-main">按网站聚合查看任务，后端接口尚未支持。</p>
+        <p class="tv-pending-sub">
+          任务查询接口目前只能按<b>单个源</b>过滤（实测传网站 ID 返回 0 条），
+          所以这里暂时列不出本网站全部源的任务。后端支持后本页会自动恢复。
+        </p>
+        <p class="tv-pending-sub">临时办法：从左侧源列表点进具体的源，在该源的「任务视图」里查看。</p>
+      </div>
       <template v-else>
         <div v-if="!siteWide" class="tv-process-rail" data-testid="task-process-rail">
           <ProcessNodeRail :model-value="filters.nodeId" :layout="processLayout" @update:model-value="onSelectNode" />
@@ -351,6 +394,9 @@ const nextStepHints = computed(() => {
 .tv-input { height: 28px; min-width: 112px; padding: 0 10px; color: var(--rc-text); border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; font-size: 12px; }
 .tv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; outline: none; }
 .tv-queue-input { min-width: 130px; }
+.tv-pending { padding: 28px 24px; border: 1px dashed var(--rc-border); border-radius: 8px; background: var(--rc-primary-bg, #f8fafc); }
+.tv-pending-main { margin: 0 0 8px; color: var(--rc-text-2); font-size: 13px; font-weight: 600; }
+.tv-pending-sub { margin: 0 0 6px; color: var(--rc-faint); font-size: 12px; line-height: 1.7; }
 .tv-queue-clickable { cursor: pointer; color: var(--rc-primary); }
 .tv-queue-clickable:hover { text-decoration: underline; }
 .tv-filters .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }

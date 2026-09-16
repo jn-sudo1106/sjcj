@@ -201,3 +201,42 @@ describe('新建采集', () => {
     expect(router.currentRoute.value.query).toEqual({ mode: 'new' })
   })
 })
+
+// 真实后端 site/sitePaged **不支持排序**：field/sorted、orderBy、sort/order 五种参数名
+// 2026-09-16 生产实测全部无效，恒按 siteId 升序返回。「最近修改」只能前端排——所以这里
+// 让接口回一份乱序数据，锁住"前端确实排过"，不能靠 mock 层自己排好而假阳性。
+describe('SourceTab 排序', () => {
+  // ui store 的 assetView 持久化在 localStorage，前面「切换卡片/表格视图」那个用例会把它留成
+  // table，导致这里挂出来的是 TableView、找不到 SiteCardGrid。清掉，回到默认卡片视图。
+  beforeEach(() => localStorage.clear())
+
+  const unordered = [
+    { siteId: 's-old', name: '旧站', sourceCount: 1, errorCount: 0, updatedAt: '2026-07-20 16:57:32', tags: [] },
+    { siteId: 's-new', name: '新站', sourceCount: 1, errorCount: 0, updatedAt: '2026-09-16 14:09:24', tags: [] },
+    { siteId: 's-mid', name: '中站', sourceCount: 1, errorCount: 0, updatedAt: '2026-09-03 15:54:37', tags: [] },
+  ]
+
+  it('默认「最近修改」：即使接口返回乱序，也按编辑时间倒序渲染', async () => {
+    const spy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 3, list: [...unordered] as never })
+    const { wrapper } = await mountAt()
+
+    const sites = wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]
+    expect(sites.map((s) => s.siteId)).toEqual(['s-new', 's-mid', 's-old'])
+    spy.mockRestore()
+  })
+
+  it('切到「名称」排序时按网站名排，不再看编辑时间', async () => {
+    const spy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 3, list: [...unordered] as never })
+    const { wrapper } = await mountAt()
+
+    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
+    toolbar.vm.$emit('update:sortBy', 'name')
+    toolbar.vm.$emit('filterChange')
+    await flushPromises()
+
+    const sites = wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]
+    // localeCompare('zh') 按拼音：旧(jiu) < 新(xin) < 中(zhong)
+    expect(sites.map((s) => s.siteId)).toEqual(['s-old', 's-new', 's-mid'])
+    spy.mockRestore()
+  })
+})

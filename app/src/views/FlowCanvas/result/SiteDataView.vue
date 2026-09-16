@@ -64,6 +64,9 @@ export interface SiteDataInitialCondition {
 }
 const props = defineProps<{ siteId: string; initialCondition?: SiteDataInitialCondition | null }>()
 const router = useRouter()
+// 0915-03 起，页签/快照/待应用条件都要用到它，声明必须早于第一个使用点
+// （原来在文件中段，钻取相关的函数在它前面，immediate watch 里调会撞 TDZ）
+const ws = useWorkspaceStore()
 
 // 本视图与具体源结果视图（ResultView.vue）长得几乎一样——都是流程图选节点 + 数据表格——
 // 但能力不同：这里是纯查看，发起抓取/发后续/输入输出切换都在那边。2026-08-20 拍板保持
@@ -72,6 +75,64 @@ const router = useRouter()
 function openSourceView() {
   if (!selectedSourceId.value) return
   void router.push({ path: '/canvas', query: { siteId: props.siteId, sourceId: selectedSourceId.value, view: 'data' } })
+}
+
+// ---- 钻取闭环（0915-03）----
+// 会上原话：「最好方法就跟他打开网站一样，这个源就是一个网站。我点这个源，就像开一个网页标签」
+// ——点数据行里的源，在**当前页**开一个源页签、把查询条件一起带过去；看完点回「全部」页签，
+// 这边的表和条件原样还在。在此之前这条动线是「按条件查源 → 点源 → 跳走 → 回来重查一遍」。
+
+/** 当前查询条件的指纹：换了表或任一条件，收窄出来的命中源名单就不再成立。 */
+const conditionKey = computed(() => [
+  effectiveTableId.value, filters.sql, filters.state, filters.dataId, filters.parentId,
+].join('|'))
+
+/** 把「全部」这边的现场存进网站页签快照，供点回来时复现。 */
+function saveSiteScene(narrowed?: { sourceIds: string[]; totalHits: number | null }) {
+  ws.saveSiteSnapshot(props.siteId, {
+    view: 'data',
+    tableId: tableId.value,
+    filters: { ...filters },
+    // 命中源名单太长就不存：sessionStorage 每次写入都要整份序列化，几千个 ID 不值得；
+    // 而且那种规模基本等于全站，收窄本来也没省下什么。
+    ...(narrowed && narrowed.sourceIds.length <= NARROWED_CACHE_MAX
+      ? { narrowed: { key: conditionKey.value, ...narrowed } }
+      : {}),
+  })
+}
+const NARROWED_CACHE_MAX = 2000
+
+function onSourceClick(row: DataRow) {
+  const sourceId = row.sourceId
+  if (!sourceId) return
+  const name = sourceNames.value[sourceId] || sourceId
+  // 条件走 store 不走 URL：源→源切换时旧实例会先收到路由变化、填完条件顺手把 query 抹掉，
+  // 表现为"点第一个源好使，点第二个条件就没了"（见 workspace.ts pendingSourceCondition 的注释）。
+  // 接收端 ResultView 已实现 takePendingSourceCondition()，这边只负责放进去。
+  ws.setPendingSourceCondition({
+    tableId: effectiveTableId.value,
+    sql: filters.sql || undefined,
+    state: filters.state || undefined,
+    dataId: filters.dataId || undefined,
+    parentId: filters.parentId || undefined,
+  })
+  saveSiteScene()
+  if (!ws.open(sourceId, name)) {
+    ElMessage.warning('页签已达上限（8 个），请先关闭部分页签再打开新的源')
+  }
+  void router.push({ path: '/canvas', query: { siteId: props.siteId, sourceId, view: 'data' } })
+}
+
+/** 点回「全部」页签时复现上次的表与条件（数据行不恢复，按条件重查首屏）。 */
+const sceneRestored = ref(false)
+function restoreSiteScene(): boolean {
+  const snap = ws.siteSnapshotOf(props.siteId)
+  if (!snap?.tableId) return false
+  tableId.value = snap.tableId
+  selectedSourceId.value = ''
+  if (snap.filters) Object.assign(filters, snap.filters)
+  sceneRestored.value = true
+  return true
 }
 
 // 每个源向后端要多少条（固定）。0910 会议把「每次加载条数」做成可选之后，这个值刻意
@@ -267,7 +328,13 @@ const selectedNodeId = ref('')
 // Y2-4 在 SourceOverviewView 上已经踩过一次同样的坑。路由解析留在持有 route 的 SiteDetailView。
 // 仍然用 watch 而不是只读初始值：同一棵组件树里换 query 不会重新挂载 setup。
 watch(() => props.initialCondition, (cond) => {
-  if (!cond?.tableId) return
+  if (!cond?.tableId) {
+    // 0915-03：没人从外面带条件进来时，尝试复现上次在「全部」这边的现场
+    // （点源页签走开又点回来属于这条路径）。只在本网站的首次进入做一次，
+    // 之后不再自动恢复，否则会盖掉用户正在改的筛选。
+    if (!sceneRestored.value && restoreSiteScene()) void nextTick(() => runQuery())
+    return
+  }
   tableId.value = cond.tableId
   selectedSourceId.value = ''   // 反查要看的是"全部源"，不能停在某个具体源上
   filters.sql = cond.sql ?? ''
@@ -499,8 +566,19 @@ async function resetAndLoad() {
       const siteSourceIds = siteChildren.value.map((s) => s.sourceId)
       const hasCondition = !!(filters.sql || filters.state || filters.dataId || filters.parentId)
       if (hasCondition && siteSourceIds.length) {
-        const exact = await backTraceSources(buildSummaryQuery(), siteSourceIds).catch(() => null)
+        // 0915-03：同一套条件的收窄结果直接复用——6496 个源的网站实测要几十秒，
+        // 从源页签点回「全部」每次都重算一遍等于这条动线没法用。指纹一变就照常重算。
+        // 命中过缓存就跳过收窄这一步，其余流程（表结构、归并加载）照常走——
+        // ⚠️ 不能在这里 return：后面还要 tableMeta，提前返回会让表头列渲染不出来。
+        const cached = ws.siteSnapshotOf(props.siteId)?.narrowed
+        const hitCache = !!cached && cached.key === conditionKey.value && cached.sourceIds.length > 0
+        const exact = hitCache ? null : await backTraceSources(buildSummaryQuery(), siteSourceIds).catch(() => null)
         if (id !== requestId) return
+        if (hitCache && cached) {
+          candidateSourceIds = cached.sourceIds
+          totalHits.value = cached.totalHits
+          totalHitsLoading.value = false
+        } else {
         // 收窄失败不阻断整体查询，退回网站全部源（请求量更大，但结果仍然正确）
         candidateSourceIds = exact?.sourceIds.length ? exact.sourceIds : siteSourceIds
         // 总数是白捡的（2026-09-09）：收窄用的 summaryEntryData 本来就按 SOURCE_ID 分了组、
@@ -509,6 +587,9 @@ async function resetAndLoad() {
         // 那是加载进度不是总量，旧平台分页器上那个「共 7030 条」一直没迁过来。
         totalHits.value = exact ? [...exact.hitCountBySource.values()].reduce((a, b) => a + b, 0) : null
         totalHitsLoading.value = false
+        // 存进网站页签快照，供从源页签点回「全部」时复用（0915-03）
+        if (exact?.sourceIds.length) saveSiteScene({ sourceIds: candidateSourceIds, totalHits: totalHits.value })
+        }
       } else {
         candidateSourceIds = siteSourceIds
         // 不带条件时没有收窄那一步，总数**另起一轮异步补算**（2026-09-09 修正）。
@@ -558,6 +639,9 @@ watch(selectedSourceId, (id) => {
 watch(() => props.siteId, () => {
   tableId.value = ''
   selectedSourceId.value = ''
+  // 每个网站各有各的现场（0915-03）：换网站要重新按新网站的快照恢复一次
+  sceneRestored.value = false
+  if (restoreSiteScene()) void nextTick(() => runQuery())
 })
 
 function runQuery() {
@@ -676,7 +760,6 @@ function buildSummaryQuery(): RowQuery {
 // 求命中源的算法原样保留在 `utils/data/backTraceSources.ts`（09-04 六轮修复换来的，别重写）。
 //
 // 复用 buildSummaryQuery——统计和反查问的是同一批数据，条件口径必须一致，不另拼一份。
-const ws = useWorkspaceStore()
 const backTracing = ref(false)
 /**
  * 反查按钮的可用性。
@@ -974,6 +1057,8 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
         @sort-change="onSortChange"
         @reach-end="loadMore"
         :hide-actions="!!selectedSourceId"
+        :source-clickable="!selectedSourceId"
+        @source-click="onSourceClick"
         @update:selected-ids="selectedRowIds = $event"
         @file-click="onCellFile"
         @row-click="onRowClick"

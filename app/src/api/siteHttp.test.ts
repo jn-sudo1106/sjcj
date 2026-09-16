@@ -37,7 +37,10 @@ describe('网站读取 HTTP 契约', () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toContain('/api/v1/site/sitePaged')
     expect(init.method).toBe('POST')
-    expect(JSON.parse(String(init.body))).toEqual({ page: 2, limit: 30, name: '财经', state: 'ERROR' })
+    // POST 但参数在 query：真实后端不读 JSON body（2026-09-16 生产实测，见 index.ts 注释）
+    expect(init.body).toBeUndefined()
+    expect(Object.fromEntries(new URL(String(url), 'http://local.test').searchParams))
+      .toEqual({ page: '2', limit: '30', name: '财经', state: 'ERROR' })
     expect(result).toEqual({ total: 1, list: [expect.objectContaining({
       siteId: '11', name: '财经网站', category: '新闻', categoryPath: '/新闻/财经', sourceCount: 3, errorCount: 1,
     })] })
@@ -49,10 +52,10 @@ describe('网站读取 HTTP 契约', () => {
 
     await siteApi.sitePaged({ page: 1, size: 1000, name: '新浪', sourceName: '明阳科技' })
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    const body = JSON.parse(String(init.body))
-    expect(body).toEqual({ page: 1, limit: 1000, name: '新浪' })
-    expect(body).not.toHaveProperty('sourceName')
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const query = new URL(String(url), 'http://local.test').searchParams
+    expect(Object.fromEntries(query)).toEqual({ page: '1', limit: '1000', name: '新浪' })
+    expect(query.has('sourceName')).toBe(false)
   })
 
   it('sitePaged 把分类筛选映射为旧契约的 categoryIds；未选分类不携带该字段', async () => {
@@ -61,12 +64,25 @@ describe('网站读取 HTTP 契约', () => {
 
     await siteApi.sitePaged({ page: 1, size: 20, category: '1400935' })
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(JSON.parse(String(init.body))).toEqual({ page: 1, limit: 20, categoryIds: '1400935' })
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(Object.fromEntries(new URL(String(url), 'http://local.test').searchParams))
+      .toEqual({ page: '1', limit: '20', categoryIds: '1400935' })
 
     await siteApi.sitePaged({ page: 1, size: 20 })
-    const [, noCategory] = fetchMock.mock.calls[1] as [string, RequestInit]
-    expect(JSON.parse(String(noCategory.body))).not.toHaveProperty('categoryIds')
+    const [noCategoryUrl] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(new URL(String(noCategoryUrl), 'http://local.test').searchParams.has('categoryIds')).toBe(false)
+  })
+
+  // 分类筛选在真实后端下长期静默失效的根因：参数发在了 JSON body 里，而后端只读 query。
+  // 2026-09-16 生产实测：body 传 name/limit/categoryIds 一律无效，恒返回全量第一页。
+  it('sitePaged 多选分类用逗号拼进同一个 categoryIds（后端 OR 语义）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', count: 0, data: [] }))
+    const { siteApi } = await import('./index')
+
+    await siteApi.sitePaged({ page: 1, size: 20, category: '9009005,9009336' })
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(String(url), 'http://local.test').searchParams.get('categoryIds')).toBe('9009005,9009336')
   })
 
   it('siteSummary 用 GET 获取真实顶部统计，并映射 errorCnt', async () => {

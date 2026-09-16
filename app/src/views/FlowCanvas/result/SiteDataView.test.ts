@@ -1029,3 +1029,108 @@ describe('SiteDataView · 哪些列可排', () => {
     expect(wrapper.findComponent(DataGrid).props('sortField')).toBe('K7')
   })
 })
+
+// 0915-03 钻取闭环：数据里点源 → 当页开源页签（条件带过去）→ 点回「全部」现场还在
+describe('SiteDataView 钻取闭环', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  async function mountWithRouter(siteId = 'site-a') {
+    setActivePinia(createPinia())
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
+    await router.push(`/canvas?siteId=${siteId}&view=data`)
+    await router.isReady()
+    const wrapper = mount(SiteDataView, { props: { siteId }, global: { plugins: [router], stubs } })
+    return { wrapper, router, ws: useWorkspaceStore() }
+  }
+
+  it('点数据行的源：开源页签、把条件放进 store、跳到该源的数据视图', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [row('a', '1')] })
+
+    const { wrapper, router, ws } = await mountWithRouter()
+    await pickTable(wrapper)
+    await wrapper.get('input[placeholder="数据 ID"]').setValue('123')
+    await wrapper.get('button.primary').trigger('click')
+    await flushPromises()
+
+    await wrapper.findComponent(DataGrid).vm.$emit('source-click', row('a', '1'))
+    await flushPromises()
+
+    // ① 开了页签
+    expect(ws.tabs.map((t) => t.sourceId)).toEqual(['a'])
+    // ② 条件走 store 带过去（不走 URL，见组件里的说明）
+    expect(ws.takePendingSourceCondition()).toMatchObject({ tableId: 't1', dataId: '123' })
+    // ③ 跳到该源的数据视图，siteId 一并带上（否则左侧源列表会空）
+    expect(router.currentRoute.value.query).toMatchObject({ siteId: 'site-a', sourceId: 'a', view: 'data' })
+  })
+
+  it('离开前把现场存进网站页签快照：表 + 条件', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [row('a', '1')] })
+
+    const { wrapper, ws } = await mountWithRouter()
+    ws.ensureSiteTab('site-a', '网站 A')
+    await pickTable(wrapper)
+    await wrapper.get('input[placeholder="数据 ID"]').setValue('123')
+    await wrapper.get('button.primary').trigger('click')
+    await flushPromises()
+
+    await wrapper.findComponent(DataGrid).vm.$emit('source-click', row('a', '1'))
+    await flushPromises()
+
+    const snap = ws.siteSnapshotOf('site-a')
+    expect(snap?.tableId).toBe('t1')
+    expect(snap?.filters).toMatchObject({ dataId: '123' })
+    expect(snap?.view).toBe('data')
+  })
+
+  it('点回「全部」时按快照复现表与条件并自动重查', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    // 恢复出来的条件里有 dataId，会走一次收窄，这里一并 mock 掉
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([{ SOURCE_ID: 'a', CNT: 1 }] as never)
+    const rowQueryPaged = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [row('a', '9')] })
+
+    setActivePinia(createPinia())
+    const ws = useWorkspaceStore()
+    ws.ensureSiteTab('site-a', '网站 A')
+    ws.saveSiteSnapshot('site-a', { view: 'data', tableId: 't1', filters: { dataId: '123', parentId: '', state: '', sql: '' } })
+
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
+    await router.push('/canvas?siteId=site-a&view=data')
+    const wrapper = mount(SiteDataView, { props: { siteId: 'site-a' }, global: { plugins: [router], stubs } })
+    await flushPromises()
+
+    // 条件回到输入框，并且真的按它查过一轮
+    expect((wrapper.get('input[placeholder="数据 ID"]').element as HTMLInputElement).value).toBe('123')
+    expect(rowQueryPaged).toHaveBeenCalled()
+  })
+
+  it('同一套条件的收窄结果直接复用缓存，不再重算（大站一次要几十秒）', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a'), source('b'), source('c')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const summary = vi.spyOn(dataApi, 'summaryData').mockResolvedValue([{ SOURCE_ID: 'c', CNT: 5 }] as never)
+    const rowQueryPaged = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+
+    setActivePinia(createPinia())
+    const ws = useWorkspaceStore()
+    ws.ensureSiteTab('site-a', '网站 A')
+    ws.saveSiteSnapshot('site-a', {
+      view: 'data', tableId: 't1',
+      filters: { dataId: '123', parentId: '', state: '', sql: '' },
+      narrowed: { key: 't1|||123|', sourceIds: ['c'], totalHits: 5 },
+    })
+
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
+    await router.push('/canvas?siteId=site-a&view=data')
+    const wrapper = mount(SiteDataView, { props: { siteId: 'site-a' }, global: { plugins: [router], stubs } })
+    await flushPromises()
+
+    // 命中缓存：不再问 summaryData，直接只查缓存里那个源
+    expect(summary).not.toHaveBeenCalled()
+    expect(rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: 'c' }))
+    expect(wrapper.text()).toContain('共 5 条')
+  })
+})

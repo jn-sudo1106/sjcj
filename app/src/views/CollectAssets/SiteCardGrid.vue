@@ -2,12 +2,16 @@
 // 采集资产卡片视图（0707 优化·Phase3；样式对齐 设计稿/原型设计/采集中心卡片样式.png）：
 // 一张卡 = 一个采集网站，渐变图标瓦片 + 源 chips + 标签 + 底部统计。
 // 源可能很多（0707 会后澄清）：chips 只显示前几个，其余收进「+N」浮层，浮层内可搜索。
-import { onMounted, reactive, watch } from 'vue'
+import { onMounted, onUnmounted, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { siteApi, type Site, type Source } from '../../api'
 import { siteIcon } from '@/utils/visual/siteVisual'
+import { visibleIssueTags } from '@/utils/sourceMark'
 
 const props = defineProps<{ sites: Site[] }>()
+// 编辑网站信息由父组件（SourceTab）统一挂 SiteEditorDialog —— 表格视图走的也是这个事件，
+// 两个视图共用一份弹窗状态，不在卡片里再挂一个（0915-01）。
+const emit = defineEmits<{ 'open-editor': [site: Site] }>()
 const router = useRouter()
 
 const CHIP_LIMIT = 4
@@ -87,6 +91,10 @@ function openSite(site: Site) {
 function openSiteData(site: Site) {
   router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data' } })
 }
+/** 卡片上显示前 2 个标签 + 「+N」（0915-14），与源卡片同口径 */
+function visibleTagsOf(site: Site) {
+  return visibleIssueTags(site.tags)
+}
 function isErr(s: Source): boolean {
   return !s.disabled && s.state === 'E'
 }
@@ -115,12 +123,74 @@ function filteredChildren(siteId: string) {
 function pickOverflow(s: Source) {
   openSource(s)
 }
+
+// ---- 卡片操作菜单（0915-01）----
+// 入口有两个、菜单只有一份：hover 浮出的「⋯」与右键卡片。右键是源侧栏既有的模式
+// （SiteSourceSwitcher 的网站名/源行都是右键出菜单），「⋯」补可发现性——纯右键没人想得到去试，
+// 触控设备也没有右键。
+//
+// 菜单挂在 .scg-grid 下而**不是卡片内部**：卡片 hover 时有 `transform: translateY(-2px)`，
+// 而 transform 会让内部 position:fixed 的元素改以该卡片为包含块定位，菜单会飘到错误的位置。
+const menu = reactive<{ show: boolean; x: number; y: number; site: Site | null }>({ show: false, x: 0, y: 0, site: null })
+const MENU_W = 132
+const MENU_H = 44
+
+function openMenu(event: MouseEvent, site: Site) {
+  const el = event.currentTarget as HTMLElement | null
+  // 点「⋯」时贴着按钮弹出，右键时落在鼠标位置
+  const fromButton = !!el?.classList.contains('scg-more')
+  const rect = el?.getBoundingClientRect()
+  const x = fromButton && rect ? rect.left : event.clientX
+  const y = fromButton && rect ? rect.bottom + 4 : event.clientY
+  // 夹在视口内，避免贴边的卡片把菜单顶出屏幕
+  menu.x = Math.max(8, Math.min(x, window.innerWidth - MENU_W - 8))
+  menu.y = Math.max(8, Math.min(y, window.innerHeight - MENU_H - 8))
+  menu.site = site
+  menu.show = true
+}
+function closeMenu() {
+  menu.show = false
+  menu.site = null
+}
+function onEditSite() {
+  const site = menu.site
+  closeMenu()
+  if (site) emit('open-editor', site)
+}
+function onGlobalKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') closeMenu()
+}
+onMounted(() => {
+  document.addEventListener('click', closeMenu)
+  document.addEventListener('keydown', onGlobalKeydown)
+  window.addEventListener('scroll', closeMenu, true)
+})
+onUnmounted(() => {
+  document.removeEventListener('click', closeMenu)
+  document.removeEventListener('keydown', onGlobalKeydown)
+  window.removeEventListener('scroll', closeMenu, true)
+})
 </script>
 
 <template>
   <div class="scg-grid">
-    <div v-for="site in sites" :key="site.siteId" class="scg-card" title="进入网站源视图" @click="openSite(site)">
+    <div
+      v-for="site in sites"
+      :key="site.siteId"
+      class="scg-card"
+      title="进入网站源视图"
+      @click="openSite(site)"
+      @contextmenu.prevent.stop="openMenu($event, site)"
+    >
       <span v-if="site.errorCount > 0" class="scg-dot" :title="`${site.errorCount} 个源出错`" />
+      <button
+        class="scg-more"
+        type="button"
+        data-testid="site-card-more"
+        title="更多操作"
+        aria-label="更多操作"
+        @click.stop="openMenu($event, site)"
+      >⋯</button>
       <div class="scg-head">
         <span class="scg-icon"><el-icon :size="20"><component :is="siteIcon(site)" /></el-icon></span>
         <div class="scg-title">
@@ -188,8 +258,11 @@ function pickOverflow(s: Source) {
         <span v-if="childrenCache[site.siteId] && !childrenCache[site.siteId].length" class="scg-empty">暂无源</span>
       </div>
 
-      <div v-if="site.tags?.length" class="scg-tags">
-        <span v-for="t in site.tags" :key="t" class="scg-tag">{{ t }}</span>
+      <!-- 0915-14：标签终于有数据了（后端 2026-09-16 给 cfg_site 加了 tags 列，在此之前这块恒为空）。
+           只显示前两个 + 「+N」，与源卡片的 visibleIssueTags 同口径，标签多了不撑变形。 -->
+      <div v-if="site.tags?.length" class="scg-tags" data-testid="site-card-tags">
+        <span v-for="t in visibleTagsOf(site).shown" :key="t" class="scg-tag">{{ t }}</span>
+        <span v-if="visibleTagsOf(site).extra" class="scg-tag more" :title="site.tags.join('、')">+{{ visibleTagsOf(site).extra }}</span>
       </div>
 
       <!-- 底部行：数据量点进数据视图。 -->
@@ -205,6 +278,17 @@ function pickOverflow(s: Source) {
     </div>
 
     <div v-if="!sites.length" class="scg-empty-state">没有匹配的网站</div>
+
+    <!-- 只有「编辑网站信息」一项：进入网站左击卡片即可，删除是高危操作不与改名同菜单（0915-01） -->
+    <div
+      v-if="menu.show"
+      class="scg-card-menu"
+      data-testid="site-card-menu"
+      :style="{ left: `${menu.x}px`, top: `${menu.y}px` }"
+      @click.stop
+    >
+      <button type="button" data-testid="site-card-menu-edit" @click="onEditSite">编辑网站信息</button>
+    </div>
   </div>
 
 
@@ -228,7 +312,29 @@ function pickOverflow(s: Source) {
   transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
 }
 .scg-card:hover { border-color: #bfdbfe; box-shadow: 0 8px 24px rgba(0,0,0,0.04); transform: translateY(-2px); }
-.scg-dot { position: absolute; top: 14px; right: 14px; width: 8px; height: 8px; border-radius: 50%; background: var(--rc-error); }
+.scg-dot { position: absolute; top: 14px; right: 14px; width: 8px; height: 8px; border-radius: 50%; background: var(--rc-error); transition: right 0.12s; }
+/* 「⋯」占住右上角，出错红点在 hover 时让出位置（两者都在右上，不让位会叠在一起） */
+.scg-card:hover .scg-dot { right: 34px; }
+.scg-more {
+  position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: 6px; background: transparent;
+  color: var(--rc-faint); font-size: 15px; line-height: 1; cursor: pointer;
+  opacity: 0; transition: opacity 0.12s, background 0.12s, color 0.12s, border-color 0.12s;
+}
+.scg-card:hover .scg-more, .scg-more:focus-visible { opacity: 1; }
+.scg-more:hover { background: var(--rc-primary-bg); border-color: #93c5fd; color: var(--rc-primary-ink); }
+/* 视觉对齐源侧栏的右键菜单（.ssw-row-menu），两处是同一种交互 */
+.scg-card-menu {
+  position: fixed; z-index: 92; min-width: 112px; padding: 4px;
+  background: #fff; border: 1px solid var(--rc-border); border-radius: 7px;
+  box-shadow: 0 12px 28px -12px rgba(15, 23, 42, 0.38);
+}
+.scg-card-menu button {
+  display: block; width: 100%; padding: 6px 10px; border: 0; border-radius: 5px;
+  background: transparent; color: var(--rc-text-2); font-size: 12px; text-align: left; cursor: pointer;
+}
+.scg-card-menu button:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 
 .scg-head { display: flex; align-items: center; gap: 11px; }
 .scg-icon {
@@ -269,6 +375,7 @@ function pickOverflow(s: Source) {
 .scg-empty { font-size: 11px; color: var(--rc-faint); }
 
 .scg-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.scg-tag.more { background: transparent; color: var(--rc-faint); }
 .scg-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; color: #b45309; background: #fef3c7; border-radius: 5px; padding: 2px 7px; }
 .scg-tag::before { content: ''; width: 6px; height: 6px; border-radius: 2px; background: #f59e0b; }
 

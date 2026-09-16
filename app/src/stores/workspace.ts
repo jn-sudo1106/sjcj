@@ -30,6 +30,44 @@ export interface SourceTabSnapshot {
   page?: number
 }
 
+/**
+ * 网站页签（0915-02）：页签条上代表「某个网站的全部源」的那一项。
+ *
+ * 会上原话「你点个源，上面有 3 个 tab…**全部没有放在 tab 上**」——在此之前，
+ * 网站聚合态既不在页签条里、页签条本身也不渲染（`index.vue` 用 `flow.sourceCtx` 当渲染条件），
+ * 于是从"全部"点进某个源后，想回去只能先回网站列表再点一次网站。
+ *
+ * **可以有多个**（2026-09-16 修正）：初版只留一个、跟着当前网站走，但源页签本来就允许跨网站
+ * （`SourceTabsBar.navTo` 特意带 `snap.siteId` 就是为此），于是点一下别的网站的源，
+ * 上一个网站的「全部」连同它的快照一起没了，想回去只能从网站列表重来。
+ * 既然源页签能跨站，网站上下文本来就不止一个。
+ */
+export interface SiteTab {
+  siteId: string
+  name: string
+}
+
+/** 网站页签的浏览状态：点源页签走开、再点回「全部」时要复现的现场。 */
+export interface SiteTabSnapshot {
+  /** 网站态停在哪个视图（source/data/file/task/monitor），点回「全部」时恢复 */
+  view?: string
+  /** 数据视图停在哪张表（0915-03）。不存就等于没回到原来的地方 */
+  tableId?: string
+  /** 数据视图的筛选条件（0915-03）——这是用户"好不容易查出来的那批" */
+  filters?: { dataId: string; parentId: string; state: string; sql: string }
+  /**
+   * 「按条件查源」收窄出的命中源（0915-03）。
+   *
+   * 带 `key`（表 + 四个条件拼出的指纹）是因为这份名单**只对产生它的那套条件成立**：
+   * 条件一改就必须重算，拿旧名单去查会少扫掉一批源，而页面上看不出任何异常。
+   * 缓存它的理由是收窄一次的代价——6496 个源的网站实测要几十秒，回来一次等一次没法用。
+   *
+   * **不存已加载的数据行**：网站态是多源归并滚动加载，恢复"已加载 3000 条"要重放整个
+   * 归并过程，代价远大于收益。回来后按条件重查首屏即可。
+   */
+  narrowed?: { key: string; sourceIds: string[]; totalHits: number | null }
+}
+
 /** 反查命中的一个源：`count` 来自 summaryEntryData 的分组计数（该源命中几条数据） */
 export interface BackTraceHit {
   sourceId: string
@@ -46,13 +84,23 @@ export interface BackTraceCondition {
   parentId?: string
 }
 
-export const MAX_SOURCE_TABS = 8
+/**
+ * 页签总额度（2026-09-16 定）：**源页签与网站页签合计**不超过这个数。
+ * 分开计数会让页签条最多排到 12+ 项，"多了也不好拉"——横向滚动找页签比重新打开还慢。
+ */
+export const MAX_WORKSPACE_TABS = 8
+/** @deprecated 沿用旧名给既有引用，语义已变成"总额度"，新代码用 MAX_WORKSPACE_TABS */
+export const MAX_SOURCE_TABS = MAX_WORKSPACE_TABS
 const SS_KEY = 'rc-source-tabs'
 
 interface PersistShape {
   tabs: SourceTab[]
   activeSourceId: string
   snapshots: Record<string, SourceTabSnapshot>
+  /** 0915-02 新增。**老存档里没有这两个字段**，读取端必须容忍缺失——
+   *  直接当必填解析会让升级前打开过页面的用户刷新后整排页签消失。 */
+  siteTabs?: SiteTab[]
+  siteSnapshots?: Record<string, SiteTabSnapshot>
 }
 
 function readPersisted(): PersistShape {
@@ -63,12 +111,21 @@ function readPersisted(): PersistShape {
       const tabs = Array.isArray(p.tabs)
         ? p.tabs.filter((t): t is SourceTab => !!t && typeof t.sourceId === 'string' && typeof t.name === 'string')
         : []
-      return { tabs, activeSourceId: p.activeSourceId || '', snapshots: p.snapshots || {} }
+      const siteTabs = Array.isArray(p.siteTabs)
+        ? p.siteTabs.filter((t): t is SiteTab => !!t && typeof t.siteId === 'string' && typeof t.name === 'string')
+        : []
+      return {
+        tabs,
+        activeSourceId: p.activeSourceId || '',
+        snapshots: p.snapshots || {},
+        siteTabs,
+        siteSnapshots: p.siteSnapshots || {},
+      }
     }
   } catch {
     /* 损坏的存储直接丢弃 */
   }
-  return { tabs: [], activeSourceId: '', snapshots: {} }
+  return { tabs: [], activeSourceId: '', snapshots: {}, siteTabs: [], siteSnapshots: {} }
 }
 
 export const useWorkspaceStore = defineStore('workspace', () => {
@@ -76,6 +133,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const tabs = ref<SourceTab[]>(persisted.tabs)
   const activeSourceId = ref<string>(persisted.activeSourceId)
   const snapshots = reactive<Record<string, SourceTabSnapshot>>(persisted.snapshots)
+  const siteTabs = ref<SiteTab[]>(persisted.siteTabs ?? [])
+  const siteSnapshots = reactive<Record<string, SiteTabSnapshot>>(persisted.siteSnapshots ?? {})
   // 分屏对比（0701 问题三 · 方案 C；0710 会议 B4 与页签解耦）：compareLeftId（左栏）/ compareSourceId（右栏）
   // 都是真实 sourceId，不要求对应已打开的页签——右栏按 id 直接加载，入口在源侧栏（同站 ⇔ + 全局选择器）。
   // 属临时查看态，不做 sessionStorage 持久化（刷新即退出对比，回到单栏）。
@@ -94,11 +153,17 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   let persistTimer: ReturnType<typeof setTimeout> | null = null
   watch(
-    [tabs, activeSourceId, () => snapshots],
+    [tabs, activeSourceId, () => snapshots, siteTabs, () => siteSnapshots],
     () => {
       if (persistTimer) clearTimeout(persistTimer)
       persistTimer = setTimeout(() => {
-        sessionStorage.setItem(SS_KEY, JSON.stringify({ tabs: tabs.value, activeSourceId: activeSourceId.value, snapshots }))
+        sessionStorage.setItem(SS_KEY, JSON.stringify({
+          tabs: tabs.value,
+          activeSourceId: activeSourceId.value,
+          snapshots,
+          siteTabs: siteTabs.value,
+          siteSnapshots,
+        }))
         persistTimer = null
       }, PERSIST_DEBOUNCE_MS)
     },
@@ -114,7 +179,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       return true
     }
     // 超出上限时仍需切到该源，否则页签条会停在上一个活动页签上，与实际画布内容对不上
-    if (tabs.value.length >= MAX_SOURCE_TABS) {
+    if (tabs.value.length + siteTabs.value.length >= MAX_WORKSPACE_TABS) {
       activeSourceId.value = sourceId
       return false
     }
@@ -201,6 +266,49 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return cur
   }
 
+  /**
+   * 记下当前网站页签（0915-02）。幂等：
+   * - 换了网站 → 整体替换，并丢掉上一个网站的快照（它的视图状态对新网站没有意义）；
+   * - 同一个网站 → 只在拿到更好的名字时更新文案。
+   *
+   * `name` 可缺省：深链直接进某个源时只有 siteId，名字要等 `site/detail` 回来才知道，
+   * 那时再调一次本函数补上，别用 siteId 把已有的名字覆盖掉。
+   */
+  function ensureSiteTab(siteId: string, name?: string): boolean {
+    if (!siteId) return false
+    const exist = siteTabs.value.find((t) => t.siteId === siteId)
+    if (exist) {
+      // 名字只往"更好"的方向改：深链进源时只有 siteId，等 site/detail 回来才补得上真名，
+      // 那之后再传 siteId 进来不能把真名盖回去。
+      if (name && name !== siteId && exist.name !== name) exist.name = name
+      return true
+    }
+    // 额度与源页签共用。满了就静默不建——它是路由变化时自动调的，弹提示会连着弹；
+    // 用户关掉几个页签后再进这个网站，「全部」自然就回来了。
+    if (tabs.value.length + siteTabs.value.length >= MAX_WORKSPACE_TABS) return false
+    siteTabs.value.push({ siteId, name: name || siteId })
+    return true
+  }
+  /** 关闭网站页签。该网站名下的源页签**不受影响**——它们各自快照里记着 siteId，照常能用。 */
+  function closeSiteTab(siteId: string) {
+    const idx = siteTabs.value.findIndex((t) => t.siteId === siteId)
+    if (idx < 0) return
+    siteTabs.value.splice(idx, 1)
+    delete siteSnapshots[siteId]
+  }
+  function clearSiteTabs() {
+    for (const t of siteTabs.value) delete siteSnapshots[t.siteId]
+    siteTabs.value = []
+  }
+  function saveSiteSnapshot(siteId: string, patch: SiteTabSnapshot) {
+    // 只给页签条上真实存在的网站记快照，避免额度满时写进一堆永远读不到的数据
+    if (!siteId || !siteTabs.value.some((t) => t.siteId === siteId)) return
+    siteSnapshots[siteId] = { ...siteSnapshots[siteId], ...patch }
+  }
+  function siteSnapshotOf(siteId: string): SiteTabSnapshot | undefined {
+    return siteSnapshots[siteId]
+  }
+
   /** 改源名称时只改页签文案，不激活、不新建页签（侧栏编辑当前源用） */
   function renameTab(sourceId: string, name: string) {
     const tab = tabs.value.find((t) => t.sourceId === sourceId)
@@ -216,5 +324,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return snapshots[sourceId]
   }
 
-  return { tabs, activeSourceId, snapshots, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, renameTab, saveSnapshot, snapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf, backTraceConditionOf, setPendingSourceCondition, takePendingSourceCondition }
+  return { tabs, activeSourceId, snapshots, siteTabs, siteSnapshots, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, renameTab, saveSnapshot, snapshotOf, ensureSiteTab, closeSiteTab, clearSiteTabs, saveSiteSnapshot, siteSnapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf, backTraceConditionOf, setPendingSourceCondition, takePendingSourceCondition }
 })

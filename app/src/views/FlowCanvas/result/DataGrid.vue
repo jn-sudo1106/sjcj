@@ -18,6 +18,9 @@ const props = withDefaults(defineProps<{
   hideActions?: boolean
   /** 网站粒度数据视图「所属源」列（0707 优化·Phase5）：传入才渲染，id → 名称映射 */
   sourceNames?: Record<string, string>
+  /** 源列可点（0915-03）：只有网站态的「全部源」视图给 true——点一下在新页签打开那个源。
+   *  单源视图里这一列要么隐藏、要么改标「所属节点」，点了没有意义。 */
+  sourceClickable?: boolean
   /** 该列表头文案，默认"所属源-SOURCE_NAME"；具体源·节点筛选场景下每行都是同一个源，
    *  改叫"所属节点"避免看着像跨源归并（那是全部源模式的语义），跟真正的具体源数据视图混淆。
    *  「所属节点」展示的是节点名而非源名，所以不跟着拼 SOURCE_NAME。 */
@@ -102,6 +105,7 @@ function sourceLabel(row: DataRow): string {
 const emit = defineEmits<{
   (e: 'row-click', row: DataRow): void
   (e: 'row-action', row: DataRow, cmd: string): void
+  (e: 'source-click', row: DataRow): void
   (e: 'update:selectedIds', ids: string[]): void
   (e: 'sort-change', field: string, order: 'ascend' | 'descend' | ''): void
   (e: 'reach-end'): void
@@ -120,6 +124,23 @@ const scrollRef = ref<HTMLElement | null>(null)
 const sentinelRef = ref<HTMLElement | null>(null)
 let endObserver: IntersectionObserver | undefined
 
+/**
+ * 容器不可滚动时，自动加载最多再触发几次（2026-09-16 修）。
+ *
+ * **窄屏（≤980px）下 `.dg-scroll` 根本不会滚动**：`AppShell.vue` 的移动端分支把 `.rc-app`
+ * 从 `height:100vh; overflow:hidden` 改成 `height:auto; overflow:auto`（整页滚动布局），
+ * 高度约束链一断，本组件的 `flex:1 + overflow:auto` 就失效——容器跟着内容长，
+ * `scrollHeight === clientHeight`，于是**哨兵永远 intersecting**，reach-end 无限触发，
+ * 一路把整张表拉完（实测 6131 条的表：300+ 请求、6000+ 行 DOM、页面高 15 万 px、越来越卡）。
+ * 桌面宽度下容器正常限高，加载一批就把哨兵推出视口，从来不会踩到。
+ *
+ * 不能直接"不可滚动就不加载"：首屏本来就可能填不满一屏，那时正需要自动续几批。
+ * 所以给一个上限——5 批足够填满任何窄屏，封顶后交给「加载更多」按钮（它一直都在）。
+ * 用户手动滚动视为"还想要更多"，计数清零。
+ */
+const MAX_AUTO_ROUNDS_UNSCROLLABLE = 5
+let autoRoundsWhenUnscrollable = 0
+
 function teardownObserver() {
   endObserver?.disconnect()
   endObserver = undefined
@@ -130,14 +151,37 @@ function setupObserver() {
   if (!props.autoLoadMore || typeof IntersectionObserver === 'undefined') return
   if (!scrollRef.value || !sentinelRef.value) return
   endObserver = new IntersectionObserver(
-    (entries) => { if (entries.some((e) => e.isIntersecting)) emit('reach-end') },
+    (entries) => {
+      if (!entries.some((e) => e.isIntersecting)) return
+      const el = scrollRef.value
+      if (!el) return
+      // +1 容差：内容与容器等高时四舍五入可能差出零点几像素
+      if (el.scrollHeight > el.clientHeight + 1) {
+        autoRoundsWhenUnscrollable = 0
+        emit('reach-end')
+        return
+      }
+      if (autoRoundsWhenUnscrollable >= MAX_AUTO_ROUNDS_UNSCROLLABLE) return
+      autoRoundsWhenUnscrollable += 1
+      emit('reach-end')
+    },
     { root: scrollRef.value, rootMargin: '120px' },
   )
   endObserver.observe(sentinelRef.value)
 }
+/** 用户主动翻页面 = 还想看更多，把封顶计数放开（窄屏下滚的是整页，不是容器） */
+function onUserScrollAnywhere() {
+  autoRoundsWhenUnscrollable = 0
+}
 watch(() => props.autoLoadMore, () => void nextTick(setupObserver))
-onMounted(() => void nextTick(setupObserver))
-onBeforeUnmount(teardownObserver)
+onMounted(() => {
+  void nextTick(setupObserver)
+  window.addEventListener('scroll', onUserScrollAnywhere, { passive: true, capture: true })
+})
+onBeforeUnmount(() => {
+  teardownObserver()
+  window.removeEventListener('scroll', onUserScrollAnywhere, { capture: true })
+})
 
 const selectedSet = computed(() => new Set(props.selectedIds ?? []))
 const allChecked = computed(() => props.rows.length > 0 && props.rows.every((r) => selectedSet.value.has(r.dataId)))
@@ -388,7 +432,16 @@ function stateMeta(s?: string) {
             <td v-if="showSelectCol" class="dg-select" @click.stop>
               <input type="checkbox" :checked="selectedSet.has(r.dataId)" @change="toggleRow(r.dataId)" />
             </td>
-            <td v-if="showSourceCol" :title="sourceLabel(r)">{{ sourceLabel(r) }}</td>
+            <td v-if="showSourceCol" :title="sourceClickable && r.sourceId ? `在新页签打开源 ${sourceLabel(r)}` : sourceLabel(r)">
+              <button
+                v-if="sourceClickable && r.sourceId"
+                type="button"
+                class="dg-source-cell"
+                data-testid="data-source-name-cell"
+                @click.stop="emit('source-click', r)"
+              >{{ sourceLabel(r) }} <span aria-hidden="true">↗</span></button>
+              <template v-else>{{ sourceLabel(r) }}</template>
+            </td>
             <td v-for="f in visibleCols" :key="f.prop" class="dg-cell" :title="cellText(r, f)">
               <!-- 父行 ID 做成可点（0903 Y1-3）：跟详情里那个「父 ID ↗」是同一个下钻，
                    只是把入口挪到表格上，不用先点开详情再点一次。空值（'' 或 '0'）不可点。 -->
@@ -400,6 +453,16 @@ function stateMeta(s?: string) {
                 :title="`查看上游数据 ${parentIdOf(r)}`"
                 @click.stop="emit('parent-click', r)"
               >{{ parentIdOf(r) }} <span aria-hidden="true">↗</span></button>
+              <!-- 源 ID 做成可点（0915-03）：会上原话「我点这个源…就像打开一个网页标签」——
+                   点一下在新页签打开这个源，当前查询条件跟着带过去，人不离开这一页。 -->
+              <button
+                v-else-if="sourceClickable && f.prop === 'SOURCE_ID' && r.sourceId"
+                type="button"
+                class="dg-source-cell"
+                data-testid="data-source-id-cell"
+                :title="`在新页签打开源 ${r.sourceId}（带上当前查询条件）`"
+                @click.stop="emit('source-click', r)"
+              >{{ r.sourceId }} <span aria-hidden="true">↗</span></button>
               <!-- 路径类单元格做成可点：点开站内预览，不改变行点击（打开数据详情）的语义 -->
               <button
                 v-else-if="isFileCell(f, cellText(r, f))"
@@ -508,6 +571,13 @@ function stateMeta(s?: string) {
 .dg-child-link { border: 0; background: transparent; padding: 0; color: var(--rc-primary); font: inherit; font-weight: 600; cursor: pointer; }
 .dg-child-link:hover { text-decoration: underline; }
 .dg-child-err { color: var(--rc-warn); cursor: help; }
+/* 源 ID / 源名可点：与「父 ID ↗」同一种"可下钻"的视觉语言 */
+.dg-source-cell {
+  border: 0; background: transparent; padding: 0; cursor: pointer;
+  color: var(--rc-primary); font-size: inherit; font-family: inherit;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dg-source-cell:hover { text-decoration: underline; }
 .dg-parent-cell { border: 0; background: transparent; padding: 0; color: var(--rc-primary); font: inherit; cursor: pointer; }
 .dg-parent-cell:hover { text-decoration: underline; }
 .dg-file-cell { max-width: 100%; padding: 0; border: 0; background: none; color: var(--rc-primary); font: inherit; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

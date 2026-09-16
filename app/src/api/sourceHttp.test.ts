@@ -281,6 +281,51 @@ describe('旧平台新建源 HTTP 契约', () => {
     expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/category/categoryPaged?page=1&limit=10000&allSub=false&parentId=1')
   })
 
+  // site/sitePaged 的 categoryIds 只精确匹配本级、不含子级，categoryPaged 的 allSub 参数又是死的
+  // （2026-09-16 实测 true/false 都只返回根节点），所以「选父分类连子分类一起筛」靠前端 BFS 展开。
+  describe('expandCategoryIds：把选中分类展开成自身 + 全部后代', () => {
+    const categoryPage = (rows: { id: number; parentId: number }[]) =>
+      jsonResponse({ code: '0', data: rows.map((r) => ({ categoryId: r.id, categoryName: `分类${r.id}`, parentId: r.parentId })) })
+
+    it('逐层拉子树，返回自身 + 各级后代', async () => {
+      fetchMock
+        .mockResolvedValueOnce(categoryPage([{ id: 20, parentId: 10 }, { id: 21, parentId: 10 }])) // 10 的子级
+        .mockResolvedValueOnce(categoryPage([{ id: 30, parentId: 20 }]))                          // 20 的子级
+        .mockResolvedValueOnce(categoryPage([]))                                                  // 21 无子级
+        .mockResolvedValueOnce(categoryPage([]))                                                  // 30 无子级
+      const { expandCategoryIds } = await import('./index')
+
+      await expect(expandCategoryIds(['10'])).resolves.toEqual(['10', '20', '21', '30'])
+    })
+
+    it('没选分类时不发请求', async () => {
+      const { expandCategoryIds } = await import('./index')
+
+      await expect(expandCategoryIds([])).resolves.toEqual([])
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('单个分类拉子级失败只少那一支，不让整个筛选炸掉', async () => {
+      fetchMock
+        .mockRejectedValueOnce(new Error('boom'))                        // 10 的子级拉失败
+        .mockResolvedValueOnce(categoryPage([{ id: 40, parentId: 11 }])) // 11 正常
+        .mockResolvedValueOnce(categoryPage([]))
+      const { expandCategoryIds } = await import('./index')
+
+      await expect(expandCategoryIds(['10', '11'])).resolves.toEqual(['10', '11', '40'])
+    })
+
+    it('父子关系成环时不死循环', async () => {
+      // 10 的子级是 20，20 的子级又回指 10
+      fetchMock
+        .mockResolvedValueOnce(categoryPage([{ id: 20, parentId: 10 }]))
+        .mockResolvedValueOnce(categoryPage([{ id: 10, parentId: 20 }]))
+      const { expandCategoryIds } = await import('./index')
+
+      await expect(expandCategoryIds(['10'])).resolves.toEqual(['10', '20'])
+    })
+  })
+
   it('GET /v1/item/next/nextConfigPaged：按旧步骤字段映射流程节点', async () => {
     fetchMock.mockResolvedValue(jsonResponse({
       code: '0',
@@ -492,6 +537,80 @@ describe('旧平台新建源 HTTP 契约', () => {
     expect(res.ok).toBe(false)
     expect(res.message).toContain('成功 400 个')
     expect(res.message).toContain('失败 300 个')
+  })
+
+  // 2026-09-16 部署站（wan 网关）实测：1073 个源分 4 批全部收不到回执，界面报「成功 0 个、
+  // 失败 1073 个」，而后端一个不少地写进去了。判定改成回查实际归属，不再凭异常定成败。
+  const timeoutError = () => new DOMException('The operation was aborted.', 'AbortError')
+  const siteSourcesResponse = (ids: string[]) =>
+    jsonResponse({ code: '0', count: ids.length, data: ids.map((id) => ({ sourceId: Number(id), sourceName: `源${id}` })) })
+
+  it('GET /v1/source/changeSite：分片全部超时但后端已写入时，回查实际归属判成功（不误报失败）', async () => {
+    const ids = Array.from({ length: 700 }, (_, i) => String(430000000 + i))
+    fetchMock
+      .mockRejectedValueOnce(timeoutError())
+      .mockRejectedValueOnce(timeoutError())
+      .mockRejectedValueOnce(timeoutError())
+      .mockResolvedValueOnce(siteSourcesResponse(ids))
+    const { sourceApi } = await import('./index')
+
+    const res = await sourceApi.changeSite(ids, '4')
+    expect(res.ok).toBe(true)
+    expect(res.message).toContain('已导入 700 个源')
+    // 3 片提交 + 1 次回查；回查只发一次，不逐片查
+    expect(fetchMock.mock.calls).toHaveLength(4)
+    const probe = new URL(String(fetchMock.mock.calls[3][0]), 'http://local.test')
+    expect(probe.pathname).toBe('/api/v1/site/sources')
+    expect(probe.searchParams.get('siteId')).toBe('4')
+  })
+
+  it('GET /v1/source/changeSite：超时后回查只落地一部分，按实际条数汇总', async () => {
+    const ids = Array.from({ length: 700 }, (_, i) => String(430000000 + i))
+    fetchMock
+      .mockRejectedValueOnce(timeoutError())
+      .mockRejectedValueOnce(timeoutError())
+      .mockRejectedValueOnce(timeoutError())
+      .mockResolvedValueOnce(siteSourcesResponse(ids.slice(0, 400)))
+    const { sourceApi } = await import('./index')
+
+    const res = await sourceApi.changeSite(ids, '4')
+    expect(res.ok).toBe(false)
+    expect(res.message).toContain('成功 400 个')
+    expect(res.message).toContain('失败 300 个')
+  })
+
+  it('GET /v1/source/changeSite：4xx 是网关当场拒绝，请求没到后端，不浪费一次回查', async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 431, text: async () => 'Request Header Fields Too Large' } as Response)
+    const { sourceApi } = await import('./index')
+
+    const ids = Array.from({ length: 700 }, (_, i) => String(430000000 + i))
+    const res = await sourceApi.changeSite(ids, '4')
+    expect(res.ok).toBe(false)
+    expect(res.message).toContain('失败 700 个')
+    // 只有 3 次分片请求，没有第 4 次 site/sources 回查
+    expect(fetchMock.mock.calls).toHaveLength(3)
+  })
+
+  it('GET /v1/source/changeSite：不分片的小批量超时后同样回查，全部落地则判成功', async () => {
+    const ids = Array.from({ length: 200 }, (_, i) => String(430000000 + i))
+    fetchMock
+      .mockRejectedValueOnce(timeoutError())
+      .mockResolvedValueOnce(siteSourcesResponse(ids))
+    const { sourceApi } = await import('./index')
+
+    const res = await sourceApi.changeSite(ids, '4')
+    expect(res.ok).toBe(true)
+    expect(res.message).toContain('已导入 200 个源')
+  })
+
+  it('GET /v1/source/changeSite：不分片且一个都没落地时抛回原异常，保留 431 等错误原文', async () => {
+    const ids = Array.from({ length: 200 }, (_, i) => String(430000000 + i))
+    fetchMock
+      .mockRejectedValueOnce(timeoutError())
+      .mockResolvedValueOnce(siteSourcesResponse([]))
+    const { sourceApi } = await import('./index')
+
+    await expect(sourceApi.changeSite(ids, '4')).rejects.toThrow('The operation was aborted.')
   })
 
   it('GET /v1/source/copySource：sourceId + name + url + flag', async () => {

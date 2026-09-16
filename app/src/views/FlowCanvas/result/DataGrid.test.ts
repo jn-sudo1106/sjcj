@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import DataGrid from './DataGrid.vue'
 import { columnPrefsKey } from '@/utils/table/columnPrefs'
 import type { DataRow } from '@/api'
@@ -605,5 +605,100 @@ describe('DataGrid · 行内删除单条', () => {
     expect(on.text()).toContain('删除单条【无法恢复】')
     expect(on.text()).toContain('详情')
     expect(on.text()).toContain('查后续任务实例')
+  })
+})
+
+// 0915-03：源列可点——点一下在新页签打开那个源
+describe('DataGrid 源列可点', () => {
+  const meta = { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'name', type: 'string', desc: '名称' }] }
+  const rows = [{ dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted' as const, values: { name: '数据 A' } }]
+  function mountGrid(props: Record<string, unknown> = {}) {
+    return mount(DataGrid, { props: { meta, rows, sourceNames: { s1: '源一' }, ...props }, global: { stubs: GRID_STUBS } })
+  }
+
+  it('默认（单源视图）源 ID 是纯文本，点了没有意义就不给可点样式', () => {
+    const wrapper = mountGrid()
+    expect(wrapper.find('[data-testid="data-source-id-cell"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="data-source-name-cell"]').exists()).toBe(false)
+  })
+
+  it('sourceClickable 时源 ID 与源名都可点，点击抛出该行', async () => {
+    const wrapper = mountGrid({ sourceClickable: true })
+    await wrapper.get('[data-testid="data-source-id-cell"]').trigger('click')
+    expect(wrapper.emitted('source-click')?.[0]?.[0]).toMatchObject({ sourceId: 's1' })
+
+    await wrapper.get('[data-testid="data-source-name-cell"]').trigger('click')
+    expect(wrapper.emitted('source-click')).toHaveLength(2)
+  })
+
+  it('点源不触发行点击（否则会同时弹出数据详情）', async () => {
+    const wrapper = mountGrid({ sourceClickable: true })
+    await wrapper.get('[data-testid="data-source-id-cell"]').trigger('click')
+    expect(wrapper.emitted('row-click')).toBeUndefined()
+  })
+})
+
+// 2026-09-16：窄屏（≤980px）下 AppShell 切成整页滚动布局，.dg-scroll 的高度约束链断掉，
+// scrollHeight === clientHeight 永不可滚动 → 哨兵永远 intersecting → 自动加载把整表拉完。
+describe('DataGrid 自动加载的封顶', () => {
+  const meta = { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'name', type: 'string', desc: '名称' }] }
+  const rows = [{ dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted' as const, values: { name: 'A' } }]
+
+  /** 装一个假的 IntersectionObserver，把回调抓出来手动触发 */
+  function stubObserver() {
+    const cbs: Array<(entries: { isIntersecting: boolean }[]) => void> = []
+    class FakeIO {
+      constructor(cb: (entries: { isIntersecting: boolean }[]) => void) { cbs.push(cb) }
+      observe() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('IntersectionObserver', FakeIO)
+    return { fire: () => cbs.forEach((cb) => cb([{ isIntersecting: true }])) }
+  }
+
+  /** 让滚动容器报告"可滚动 / 不可滚动" */
+  function setScrollable(wrapper: ReturnType<typeof mount>, scrollable: boolean) {
+    const el = wrapper.get('.dg-scroll').element as HTMLElement
+    Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
+    Object.defineProperty(el, 'scrollHeight', { value: scrollable ? 2000 : 500, configurable: true })
+  }
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('容器可滚动时（桌面）不封顶，每次触底都继续加载', async () => {
+    const { fire } = stubObserver()
+    const wrapper = mount(DataGrid, { props: { meta, rows, autoLoadMore: true }, global: { stubs: GRID_STUBS } })
+    await flushPromises()
+    setScrollable(wrapper, true)
+
+    for (let i = 0; i < 12; i += 1) fire()
+    expect(wrapper.emitted('reach-end')).toHaveLength(12)
+    wrapper.unmount()
+  })
+
+  it('容器不可滚动时（窄屏整页滚动）最多自动加载 5 批', async () => {
+    const { fire } = stubObserver()
+    const wrapper = mount(DataGrid, { props: { meta, rows, autoLoadMore: true }, global: { stubs: GRID_STUBS } })
+    await flushPromises()
+    setScrollable(wrapper, false)
+
+    for (let i = 0; i < 40; i += 1) fire()
+    expect(wrapper.emitted('reach-end')).toHaveLength(5)
+    wrapper.unmount()
+  })
+
+  it('用户滚动页面后放开封顶（还想看更多）', async () => {
+    const { fire } = stubObserver()
+    const wrapper = mount(DataGrid, { props: { meta, rows, autoLoadMore: true }, global: { stubs: GRID_STUBS } })
+    await flushPromises()
+    setScrollable(wrapper, false)
+
+    for (let i = 0; i < 10; i += 1) fire()
+    expect(wrapper.emitted('reach-end')).toHaveLength(5)
+
+    window.dispatchEvent(new Event('scroll'))
+    for (let i = 0; i < 10; i += 1) fire()
+    expect(wrapper.emitted('reach-end')).toHaveLength(10)
+    wrapper.unmount()
   })
 })

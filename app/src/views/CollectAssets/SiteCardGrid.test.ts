@@ -85,3 +85,56 @@ describe('SiteCardGrid 大源量加载', () => {
     expect(router.currentRoute.value.query).toMatchObject({ siteId: 'site-1', view: 'source' })
   })
 })
+
+// 0915-01：卡片视图此前是唯一没有编辑入口的地方（表格视图有铅笔按钮，
+// 源侧栏有右键菜单）。菜单只 emit 事件，弹窗仍由父组件 SourceTab 统一挂。
+describe('SiteCardGrid 卡片操作菜单', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('点「⋯」打开菜单，选「编辑网站信息」向父组件抛出该网站', async () => {
+    vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([])
+    const { wrapper } = await mountGrid()
+
+    expect(wrapper.find('[data-testid="site-card-menu"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="site-card-more"]').trigger('click')
+    expect(wrapper.find('[data-testid="site-card-menu"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="site-card-menu-edit"]').trigger('click')
+    expect(wrapper.emitted('open-editor')?.[0]).toEqual([site])
+    // 选完即关
+    expect(wrapper.find('[data-testid="site-card-menu"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('右键卡片打开同一个菜单，且不会冒泡成「进入网站」', async () => {
+    vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([])
+    const { wrapper, router } = await mountGrid()
+
+    await wrapper.get('.scg-card').trigger('contextmenu')
+    expect(wrapper.find('[data-testid="site-card-menu"]').exists()).toBe(true)
+    // 右键不该触发卡片本身的跳转
+    expect(router.currentRoute.value.query.siteId).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('点「⋯」不会冒泡到卡片跳转（否则点编辑会先跳进网站）', async () => {
+    vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([])
+    const { wrapper, router } = await mountGrid()
+
+    await wrapper.get('[data-testid="site-card-more"]').trigger('click')
+    expect(router.currentRoute.value.query.siteId).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('按 Esc 关闭菜单', async () => {
+    vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([])
+    const { wrapper } = await mountGrid()
+
+    await wrapper.get('[data-testid="site-card-more"]').trigger('click')
+    expect(wrapper.find('[data-testid="site-card-menu"]').exists()).toBe(true)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+    expect(wrapper.find('[data-testid="site-card-menu"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})

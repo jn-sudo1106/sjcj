@@ -143,3 +143,94 @@ describe('workspace 分屏对比（0710 会议 B4：与页签解耦，左右均�
     expect(ws.compareLeftId).toBe('')
   })
 })
+
+// 0915-02：网站页签（页签条上的「全部 · 网站名」），可多个、可关闭、与源页签共用 8 个额度
+describe('网站页签', () => {
+  beforeEach(() => {
+    sessionStorage.clear()
+    setActivePinia(createPinia())
+  })
+
+  it('ensureSiteTab 幂等：同一网站只往"更好的名字"方向更新', () => {
+    const ws = useWorkspaceStore()
+    ws.ensureSiteTab('site-1')
+    expect(ws.siteTabs).toEqual([{ siteId: 'site-1', name: 'site-1' }])
+
+    ws.ensureSiteTab('site-1', '新浪财经')
+    expect(ws.siteTabs[0].name).toBe('新浪财经')
+    // 深链只拿得到 siteId 时不能把真名盖回去
+    ws.ensureSiteTab('site-1')
+    expect(ws.siteTabs[0].name).toBe('新浪财经')
+  })
+
+  it('多个网站各自成页签、各自留快照，互不覆盖', () => {
+    const ws = useWorkspaceStore()
+    ws.ensureSiteTab('site-1', '新浪财经')
+    ws.saveSiteSnapshot('site-1', { view: 'data' })
+    ws.ensureSiteTab('site-2', '天天基金')
+    ws.saveSiteSnapshot('site-2', { view: 'monitor' })
+
+    expect(ws.siteTabs.map((t) => t.name)).toEqual(['新浪财经', '天天基金'])
+    // 关键回归：开了第二个网站不能把第一个的快照冲掉（跨网站开源页签时会踩到）
+    expect(ws.siteSnapshotOf('site-1')).toEqual({ view: 'data' })
+    expect(ws.siteSnapshotOf('site-2')).toEqual({ view: 'monitor' })
+  })
+
+  it('关闭网站页签会连同它的快照一起丢掉', () => {
+    const ws = useWorkspaceStore()
+    ws.ensureSiteTab('site-1', '新浪财经')
+    ws.saveSiteSnapshot('site-1', { view: 'data' })
+    ws.closeSiteTab('site-1')
+    expect(ws.siteTabs).toEqual([])
+    expect(ws.siteSnapshotOf('site-1')).toBeUndefined()
+  })
+
+  it('与源页签共用 8 个额度：满了以后网站页签静默不建、源页签也开不进来', () => {
+    const ws = useWorkspaceStore()
+    ws.ensureSiteTab('site-1', '新浪财经')
+    ws.ensureSiteTab('site-2', '天天基金')
+    for (let i = 0; i < 6; i += 1) expect(ws.open(`s${i}`, `源 ${i}`)).toBe(true)
+    expect(ws.tabs.length + ws.siteTabs.length).toBe(8)
+
+    // 再开第 9 个：源页签返回 false（调用方负责提示），网站页签静默 false
+    expect(ws.open('s6', '源 6')).toBe(false)
+    expect(ws.ensureSiteTab('site-3', '第三个网站')).toBe(false)
+    expect(ws.siteTabs).toHaveLength(2)
+
+    // 腾出位置后就能建
+    ws.close('s0')
+    expect(ws.ensureSiteTab('site-3', '第三个网站')).toBe(true)
+  })
+
+  it('saveSiteSnapshot 只认页签条上真实存在的网站', () => {
+    const ws = useWorkspaceStore()
+    ws.ensureSiteTab('site-1', '新浪财经')
+    ws.saveSiteSnapshot('site-other', { view: 'file' })
+    expect(ws.siteSnapshotOf('site-other')).toBeUndefined()
+  })
+
+  it('网站页签随 sessionStorage 恢复', async () => {
+    const ws = useWorkspaceStore()
+    ws.ensureSiteTab('site-1', '新浪财经')
+    ws.saveSiteSnapshot('site-1', { view: 'monitor' })
+    await new Promise((resolve) => setTimeout(resolve, 400))
+
+    setActivePinia(createPinia())
+    const next = useWorkspaceStore()
+    expect(next.siteTabs).toEqual([{ siteId: 'site-1', name: '新浪财经' }])
+    expect(next.siteSnapshotOf('site-1')).toEqual({ view: 'monitor' })
+  })
+
+  it('读得懂没有网站页签字段的老存档（升级前存的），不能整份丢弃', () => {
+    sessionStorage.setItem('rc-source-tabs', JSON.stringify({
+      tabs: [{ sourceId: 's1', name: '源一' }],
+      activeSourceId: 's1',
+      snapshots: { s1: { view: 'data' } },
+    }))
+    setActivePinia(createPinia())
+    const ws = useWorkspaceStore()
+    expect(ws.tabs).toEqual([{ sourceId: 's1', name: '源一' }])
+    expect(ws.activeSourceId).toBe('s1')
+    expect(ws.siteTabs).toEqual([])
+  })
+})

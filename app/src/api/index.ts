@@ -14,6 +14,7 @@ import type {
   Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, CopySourceInput, SourceCloneRequest, SourceCloneResult,
   FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
+  SourceCategory,
 } from './types'
 import type { FlowDef, FlowRecommendation } from '@/views/FlowCanvas/canvas/flowModel'
 import {
@@ -387,6 +388,39 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
 // 超过这个数就在 changeSite 内部串行分片提交，单片 ~300 个 ID（约 3–6KB URL，稳在各网关默认上限内）。
 const CHANGE_SITE_CHUNK = 300
 
+/**
+ * 请求没拿到回执**不等于**后端没写入，所以 changeSite 不能凭异常直接判失败。
+ *
+ * 2026-09-07 就实测过「客户端 20s 超时 net::ERR_ABORTED，但后端其实已写入」，当时的修法
+ * 是把单片 `timeoutMs` 提到 120s——那只治住了 dev 直连。2026-09-16 部署站（wan 网关）复现：
+ * 1073 个源分 4 批，**4 批全报失败、后端却一个不少地写进去了**（网关自己的超时比前端 120s 短，
+ * 前端等不到回执）。界面于是提示「成功 0 个、失败 1073 个，请对失败部分重试」，全是误报，
+ * 还会诱导用户去重跑一遍已经成功的导入。
+ *
+ * 判定改成回查该网站下的实际归属。只在「没拿到明确 HTTP 响应」时才查：
+ * 4xx 是网关/客户端当场拒绝（431 URL 过长、414 等），请求根本没到后端，回查纯属白等几十秒；
+ * 超时、连接断开、5xx 则后端可能已经执行完了，必须查。
+ */
+function mayHaveLandedDespiteError(error: unknown): boolean {
+  // HTTP 状态挂在 client.ts 构造的原始 Error 上，而 request() 会把它包进 ApiError 的 cause
+  // （client.ts:401），所以要顺着 cause 链找，不能只看最外层——只看外层的话 status 恒为
+  // undefined，431 也会白白多查一次归属。
+  let current: unknown = error
+  for (let depth = 0; current && depth < 5; depth++) {
+    const status = (current as { status?: unknown }).status
+    if (typeof status === 'number') return status < 400 || status >= 500
+    current = (current as { cause?: unknown }).cause
+  }
+  // 没有 HTTP 状态 = 压根没拿到响应（超时 / 连接断开），后端很可能已经写完了
+  return true
+}
+
+/** 回查这批源里实际已经挂到目标网站的部分。绕开 siteSourcesCache：回查要的就是最新归属。 */
+async function landedInSite(siteId: string, candidates: string[]): Promise<string[]> {
+  const actual = new Set((await requestSiteSources(siteId, 10000, 60_000)).map((s) => s.sourceId))
+  return candidates.filter((id) => actual.has(id))
+}
+
 // 类型化接口：每个方法一一对应一个真实 /v1 端点。后续按 142 个端点逐域补全。
 export const sourceApi = {
   sourcePaged: async (p?: PageQuery) => {
@@ -541,9 +575,23 @@ export const sourceApi = {
       return ackFromApiResult(result)
     }
     if (sourceIds.length <= CHANGE_SITE_CHUNK) {
-      const ack = await callOnce(sourceIds)
-      onProgress?.(sourceIds.length, sourceIds.length)
-      return ack
+      try {
+        const ack = await callOnce(sourceIds)
+        onProgress?.(sourceIds.length, sourceIds.length)
+        return ack
+      } catch (error) {
+        if (!mayHaveLandedDespiteError(error)) throw error
+        const landed = await landedInSite(siteId, sourceIds).catch(() => [] as string[])
+        onProgress?.(sourceIds.length, sourceIds.length)
+        // 一个都没落地时抛回原异常：431 URL 过长 / 5xx 的原文对调用方的错误提示有用，
+        // 换成自造的「失败 N 个」反而丢信息。
+        if (!landed.length) throw error
+        if (landed.length === sourceIds.length) return { ok: true, message: `已导入 ${landed.length} 个源（未收到回执，按实际归属核对）` }
+        return {
+          ok: false,
+          message: `共 ${sourceIds.length} 个源：成功 ${landed.length} 个、失败 ${sourceIds.length - landed.length} 个，请对失败部分重试`,
+        }
+      }
     }
 
     // 分片串行提交（不并发：避免网关限流 / 后端锁竞争），逐片累计，最后汇总成一个 Ack。
@@ -553,14 +601,23 @@ export const sourceApi = {
     }
     let succeeded = 0
     let failed = 0
+    // 没拿到回执的片：成败不当场算，攒到最后一次性回查（大站 site/sources 一次 8~36s，
+    // 逐片查会把一次导入拖成几分钟）。
+    const unconfirmed: string[] = []
     for (const chunk of chunks) {
       try {
         if ((await callOnce(chunk)).ok) succeeded += chunk.length
         else failed += chunk.length
-      } catch {
-        failed += chunk.length
+      } catch (error) {
+        if (mayHaveLandedDespiteError(error)) unconfirmed.push(...chunk)
+        else failed += chunk.length
       }
-      onProgress?.(succeeded + failed, sourceIds.length)
+      onProgress?.(succeeded + failed + unconfirmed.length, sourceIds.length)
+    }
+    if (unconfirmed.length) {
+      const landed = await landedInSite(siteId, unconfirmed).catch(() => [] as string[])
+      succeeded += landed.length
+      failed += unconfirmed.length - landed.length
     }
     if (!failed) return { ok: true, message: `已导入 ${succeeded} 个源（分 ${chunks.length} 批提交）` }
     return {
@@ -733,6 +790,60 @@ export const sourceApi = {
   },
 }
 
+// 分类子级缓存：categoryPaged 一次只给一层，展开子树要按 parentId 逐层拉，同一个父节点
+// 在一次会话里只拉一次。失败不留缓存，允许下次重试。
+const categoryChildrenCache = new Map<string, Promise<SourceCategory[]>>()
+const CATEGORY_EXPAND_CONCURRENCY = 8
+
+function cachedCategoryChildren(parentId: string): Promise<SourceCategory[]> {
+  const cached = categoryChildrenCache.get(parentId)
+  if (cached) return cached
+  const promise = sourceApi.sourceCategories(parentId)
+  categoryChildrenCache.set(parentId, promise)
+  void promise.catch(() => {
+    if (categoryChildrenCache.get(parentId) === promise) categoryChildrenCache.delete(parentId)
+  })
+  return promise
+}
+
+/**
+ * 把选中的分类 ID 展开成「自身 + 全部后代」，给 site/sitePaged 的 categoryIds 用。
+ *
+ * 后端 `categoryIds` 是**精确匹配 CATEGORY_ID、不含子级**（2026-09-16 生产实测）：选父分类
+ * 「财经资讯」(9009005) 只出直接挂在它名下的 1 个网站，子分类「市场主体」(9009336) 下的 4 个
+ * 站一个都看不到，跟用户对目录树的预期不符。后端也没有「含子级」开关——`categoryPaged` 的
+ * `allSub` 参数实测是死的（true/false 都只返回 5 个根节点），所以子树只能前端自己 BFS 拉。
+ *
+ * 实测「财经资讯」：81 个后代、82 次请求、约 2s（8 路并发）；展开后筛出 6 个网站。
+ * 分类总量 159 个、最深 4 层，属于一次性可接受的量；缓存命中后第二次几乎零开销。
+ */
+export async function expandCategoryIds(ids: string[]): Promise<string[]> {
+  if (!ids.length) return []
+  const collected = new Set(ids)
+  let frontier = ids
+  // 实测最深 4 层；给到 8 层纯粹是防脏数据把父子关系连成环时死循环（collected 去重已能拦住，
+  // 这里是第二道闸）。
+  for (let depth = 0; frontier.length && depth < 8; depth++) {
+    const next: string[] = []
+    for (let i = 0; i < frontier.length; i += CATEGORY_EXPAND_CONCURRENCY) {
+      const batch = frontier.slice(i, i + CATEGORY_EXPAND_CONCURRENCY).map(
+        // 单个分类拉子级失败不该让整个筛选失败：最坏结果是少筛出它那一支，
+        // 比直接报错、整页空白要好。
+        (id) => cachedCategoryChildren(id).catch(() => [] as SourceCategory[]),
+      )
+      for (const children of await Promise.all(batch)) {
+        for (const child of children) {
+          if (!child.id || collected.has(child.id)) continue
+          collected.add(child.id)
+          next.push(child.id)
+        }
+      }
+    }
+    frontier = next
+  }
+  return [...collected]
+}
+
 // 网站表选择（0812 计划 M2-1）：config/queryEntryTypesGroup 支持逗号分隔的 sourceId，
 // 一个网站只请求一次目录，避免为每个源重复请求同一份表目录。网站范围只在选表后的真实
 // 数据查询阶段通过 entryDistinctSource + siteSources（失败/空结果时回退逐源查询）判断。
@@ -815,6 +926,12 @@ export const siteApi = {
     const category = String(p?.category ?? '')
     const result = await request<Paged<unknown>>('site/sitePaged', p, {
       method: 'POST',
+      // **POST 但参数走 query**：真实后端只读 query string，JSON body 整个不看。
+      // 2026-09-16 生产实测：body 里传 `name:'新浪'` / `limit:2` / `categoryIds:'9009005'`
+      // 一律无效，恒返回全量第一页；同样的键挪到 query 立刻生效（name=新浪→3 条、limit=2→2 条、
+      // categoryIds=9009005→1 条）。少这一行，分类筛选 / 网站名筛选 / 分页三个都是**静默失效**，
+      // 网站少时完全看不出来，界面表现就是「选了分类，卡片一个没少」。
+      paramsIn: 'query',
       httpParams: {
         page: p?.page ?? 1,
         limit: p?.size ?? 20,
@@ -823,12 +940,22 @@ export const siteApi = {
         // 返回整页（旧实现的 name∪sourceName 并集因此把无关网站也带出来）。源名匹配改由调用方
         // 走 source/sourcePaged?name= 取 siteId 交集，见 SourceTab.loadList。
         state: state === 'error' ? 'ERROR' : undefined,
-        // 旧 SiteList 契约：分类筛选走 categoryIds（逗号分隔目录 ID 串；本页单选，传单个 ID）。
-        // 不透传的话分类筛选在真实后端下静默失效（mock 恰好按路径前缀匹配，掩盖过这个问题）。
+        // 旧 SiteList 契约：分类筛选走 categoryIds，逗号分隔可传多个，OR 语义
+        // （实测 9009005,9009336 → 5 条 = 两个分类各自的并集）。
+        // ⚠️ 后端是**精确匹配 CATEGORY_ID，不含子级**：选父分类「财经资讯」(9009005) 只出
+        // 直接挂在它名下的网站，子分类「市场主体」(9009336) 下的 4 个站不会带出来。
         categoryIds: category || undefined,
+        // 0915-14：按标签筛（后端 2026-09-16 加的 tags 入参）。
+        // ⚠️ 实测是**子串匹配**——`服务` 会把 `服务号` 一起筛出来，已反馈后端改精确匹配（B10-2）。
+        tags: (p?.tag as string) || (p?.tags as string) || undefined,
       },
     })
     return sitePageFromLegacy(result)
+  },
+  /** 全局已用网站标签（0915-14）。后端返回的就是拆分去重后的数组，不用前端再聚合。 */
+  siteTags: async (): Promise<string[]> => {
+    const result = await request<unknown>('site/siteTags', undefined, { method: 'GET' })
+    return Array.isArray(result) ? result.map((t) => String(t)).filter(Boolean) : []
   },
   siteSummary: async (): Promise<SiteSummary> => {
     const result = await request<unknown>('site/summary', undefined, { method: 'GET' })
@@ -947,7 +1074,7 @@ export const siteApi = {
    *  Site.owner 恒为 ''），旧平台真实网站编辑表单（SiteList.vue submitEdit）也没有这一项——
    *  之前塞进 httpParams 的 author 是没有实据的猜测，已删掉，改成只提交 siteId/siteName/categoryId。
    *  categoryId 字段名对齐旧平台 CATEGORY 列配置（dataIndex: 'categoryId'）。 */
-  siteUpdate: async (site: Pick<Site, 'siteId' | 'name' | 'dirId'>): Promise<Ack> => {
+  siteUpdate: async (site: Pick<Site, 'siteId' | 'name' | 'dirId' | 'tags'>): Promise<Ack> => {
     const result = await request<unknown>('site/updateSite', { site }, {
       method: 'POST',
       httpEndpoint: 'site/update',
@@ -955,6 +1082,13 @@ export const siteApi = {
         siteId: Number(site.siteId),
         siteName: site.name,
         ...(site.dirId ? { categoryId: Number(site.dirId) } : {}),
+        // 0915-14 标签：**分号分隔、不带 `#`**，与源标签的 `issueTagsForWrite`（会补 `#`）不是一套，
+        // 所以这里自己 join，不复用那个函数。
+        //
+        // `undefined` = 本次不动标签（调用方没管这个字段）；后端对没传的字段不会清空。
+        // ⚠️ 空数组会拼成空串，而**空串被后端当作"未提供"跳过**（2026-09-16 实测，
+        // 旧平台删最后一个标签同样失败）——即"清到零个"做不到，UI 上要禁掉最后一个标签的删除。
+        ...(site.tags === undefined ? {} : { tags: site.tags.join(';') }),
       },
     })
     return ackFromApiResult(result)

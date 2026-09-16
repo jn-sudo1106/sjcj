@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { sourceApi, siteApi, type Site, type SourceCategory } from '@/api'
+import { sourceApi, siteApi, expandCategoryIds, type Site, type SourceCategory } from '@/api'
 import { useUiStore } from '@/stores/ui'
 import { confirmDanger } from '@/utils/confirmDanger'
 import SiteCardGrid from './SiteCardGrid.vue'
@@ -43,48 +43,67 @@ const editorVisible = ref(false)
 const editorSite = ref<Site | null>(null)
 
 // ---- 加载 ----
+// 网站列表一次全量拉回来，排序和分页都在前端做。两个原因：
+// 1. 真实后端**不支持排序**——`field`/`sorted`、`orderBy`、`sort`/`order` 五种参数名
+//    2026-09-16 生产实测全部无效，恒按 siteId 升序返回。「最近修改 / 名称」只能前端排。
+// 2. 后端分页 + 前端排序 = 只能把当前页那 10 条重排一遍，跨页顺序还是乱的。
+// cfg_site 的行很轻（没有 flowConf 那类大字段），网站量级也远小于源（当前 10 个），
+// 一次拉 2000 条成本可以接受。关键词搜索分支本来就是这么做的，这里把两条路合成一条。
+const LIST_FETCH_SIZE = 2000
+
+function sortSites(list: Site[]): Site[] {
+  return [...list].sort(sortBy.value === 'name'
+    ? (a, b) => a.name.localeCompare(b.name, 'zh')
+    // updatedAt 是 'YYYY-MM-DD HH:mm:ss'，定长且高位在前，字符串倒序即时间倒序
+    : (a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+}
+
+// 筛选条件连着变（改关键词又马上改分类、翻页）会有多次 loadList 同时在飞，
+// 而它们的完成顺序跟发起顺序无关——慢的那次后回来就会把新结果盖掉，列表显示的是过期内容。
+// 只认最后一次发起的请求，其余的结果直接丢弃。
+let listRequestSeq = 0
+
 async function loadList() {
+  const seq = ++listRequestSeq
   loading.value = true
   try {
+    // 勾一个分类要连它下面的子分类一起筛（后端 categoryIds 只精确匹配本级，不含子级；
+    // 分类树又是懒加载的，未展开的子级 ID 前端手里没有）——交给 expandCategoryIds 把子树拉全。
     const filters = {
-      category: categoryFilter.value.join(','),
+      category: (await expandCategoryIds(categoryFilter.value)).join(','),
       tag: tagFilter.value,
       state: stateFilter.value,
       sort: sortBy.value,
     }
     const search = keyword.value.trim()
-    let res
+    // 源名匹配走 source/sourcePaged?name= 取命中源的 siteId，再与网站列表求交集：
+    // 真实 site/sitePaged 只按网站名筛，传 sourceName 会被忽略并原样返回整页
+    // （旧实现的 name∪sourceName 并集因此把无关网站也带了出来）。
+    const [sitePage, matchedSources] = await Promise.all([
+      siteApi.sitePaged({ ...filters, page: 1, size: LIST_FETCH_SIZE }),
+      search ? sourceApi.sourcePaged({ name: search, page: 1, size: LIST_FETCH_SIZE }) : undefined,
+    ])
+    let list = sitePage.list
     if (search) {
-      // 真实 site/sitePaged 只按网站名筛，sourceName 传了也不生效（会原样返回整页，
-      // 旧实现的并集因此把不相关网站也带出来）。源名匹配改走 source/sourcePaged?name=
-      // （已生产实测可用），取命中源的 siteId，再与本页其它筛选后的网站列表求交集。
-      const searchSize = 2000
-      const [sitePage, matchedSources] = await Promise.all([
-        siteApi.sitePaged({ ...filters, page: 1, size: searchSize }),
-        sourceApi.sourcePaged({ name: search, page: 1, size: searchSize }),
-      ])
       const kw = search.toLowerCase()
       const siteIdsBySource = new Set(
-        matchedSources.list.map((s) => s.siteId).filter((id): id is string => !!id),
+        (matchedSources?.list ?? []).map((s) => s.siteId).filter((id): id is string => !!id),
       )
-      const matched = sitePage.list.filter(
-        (site) => site.name.toLowerCase().includes(kw) || siteIdsBySource.has(site.siteId),
-      )
-      if (sortBy.value === 'name') matched.sort((a, b) => a.name.localeCompare(b.name, 'zh'))
-      else matched.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
-      const start = (page.value - 1) * size.value
-      res = { total: matched.length, list: matched.slice(start, start + size.value) }
-    } else {
-      res = await siteApi.sitePaged({ ...filters, page: page.value, size: size.value })
+      list = list.filter((site) => site.name.toLowerCase().includes(kw) || siteIdsBySource.has(site.siteId))
     }
-    sites.value = res.list
-    total.value = res.total
+    list = sortSites(list)
+    if (seq !== listRequestSeq) return
+    const start = (page.value - 1) * size.value
+    sites.value = list.slice(start, start + size.value)
+    total.value = list.length
   } catch {
+    if (seq !== listRequestSeq) return
     ElMessage.warning('加载网站列表失败')
     sites.value = []
     total.value = 0
   } finally {
-    loading.value = false
+    // 已经有更新的请求在飞时不要关 loading，否则转圈会提前消失
+    if (seq === listRequestSeq) loading.value = false
   }
 }
 async function loadCategories() {
@@ -116,12 +135,10 @@ async function loadStats() {
 }
 async function loadTagOptions() {
   try {
-    // TODO: 后端加 /api/site/tags 轻量接口替代（性能审查 P0-2）
-    // 当前用 size: 999 拉全量只为取 tags 去重集合，数据量大时浪费
-    const res = await siteApi.sitePaged({ size: 999 })
-    const set = new Set<string>()
-    res.list.forEach((s) => (s.tags ?? []).forEach((t) => set.add(t)))
-    allTags.value = [...set].sort()
+    // 0915-14：改用后端 2026-09-16 交付的 site/siteTags（返回的就是拆分去重后的数组）。
+    // 此前是 sitePaged({size:999}) 拉全量网站再前端聚合——那个 TODO（性能审查 P0-2）到此为止；
+    // 而且在后端加 tags 字段之前，聚合出来的集合**恒为空**，这个下拉一直是个空壳。
+    allTags.value = await siteApi.siteTags()
   } catch {
     ElMessage.warning('加载标签选项失败')
     allTags.value = []
@@ -286,7 +303,7 @@ onUnmounted(() => {
 
     <!-- 卡片视图 -->
     <div v-if="view === 'card'" v-loading="loading" class="ca-card-body">
-      <SiteCardGrid :sites="sites" />
+      <SiteCardGrid :sites="sites" @open-editor="openSiteEditor" />
     </div>
 
     <!-- 表格视图 -->
