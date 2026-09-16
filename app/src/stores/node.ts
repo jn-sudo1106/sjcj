@@ -12,6 +12,7 @@ import {
   type CollectConfig,
   type CollectorSchedule,
   type ConditionGroup,
+  type MonitorAlertConfig,
   type TaskConfig,
   type TripleField,
   type RuleOrchestration,
@@ -336,6 +337,14 @@ export const useNodeStore = defineStore('node', () => {
     touchConfig(id)
   }
 
+  /** 数据监控节点告警配置快照：落在节点配置上，保存 ck_source.check_conf 时读取。 */
+  function setMonitorAlertConfig(id: string, config: MonitorAlertConfig) {
+    const c = configs[id]
+    if (!c) return
+    c.alertConfig = JSON.parse(JSON.stringify(config)) as MonitorAlertConfig
+    touchConfig(id)
+  }
+
   return {
     // 状态
     selectedId,
@@ -361,6 +370,7 @@ export const useNodeStore = defineStore('node', () => {
     patchRuleConfig,
     patchExecConfig,
     setMonitorMethods,
+    setMonitorAlertConfig,
     setOutputTable,
     setDedupMode,
     setOutFields,

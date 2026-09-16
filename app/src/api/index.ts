@@ -337,6 +337,7 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
   const results = await Promise.allSettled(configIds.map((id) => configApi.configDetailRaw(id)))
   type StepConfigDetail = {
     topic?: string; configName?: string; configUrl?: string; isLoginConfig?: boolean; multiMode?: number
+    configType?: string
     bizType?: string; dedupType?: string; codeRule?: string; contentRule?: string
     runPolicy?: string
     paramBindings?: Step['paramBindings']
@@ -359,6 +360,7 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
       runPolicy: mapped.runPolicy || undefined,
       isLoginConfig: mapped.isLogin,
       multiMode: mapped.multiMode,
+      configType: mapped.configType,
       ...(bindings.length ? { paramBindings: bindings } : {}),
     })
   })
@@ -2051,7 +2053,7 @@ export const monitorApi = {
  * 源监控（数据源告警）。0910 从旧平台 MonitorList 迁入，接口对齐 api/monitor.js。
  *
  * ⚠️ **这套接口契约大部分仍是临时的**：2026-09-10 确认后端要重做，路径与字段都会变。
- * 0914 用户提供了 source/check/paged 的真实调用契约，已先放行监控视图首屏列表；
+ * 0916 用户提供了 source/check/paged 的真实调用契约，首屏只传 page/limit；
  * 其余端点暂不 live（见 endpoints.ts 同名分组说明）。下面的参数名、字段映射除 paged
  * 与 pagedLogs 已按 0915 口径外，其余仍照旧平台口径写，**接口定稿后需逐项对齐**——
  * 尤其是分页参数（现按后端认的 page/limit 传，不是 pageNo/pageSize）、
@@ -2062,8 +2064,7 @@ export const monitorApi = {
  * 分页参数注意：旧平台发出去的是 `page` / `limit`，不是 `pageNo` / `pageSize`
  * （它在 api 层临时改了名再发），这里直接按后端认的名字传。
  *
- * ⚠️ `sourceId` 是**单值**，一次只能查一个源——网站底下几千个源查不出来。
- * 故本期只支持"选中具体源"，全部源态由视图层拦住（0910 拍板，后端后续加 siteId）。
+ * `sourceId` 是可选单值：首屏不传 sourceId，用户主动选择具体源后再透传。
  */
 export const sourceCheckApi = {
   paged: async (q: SourceCheckQuery): Promise<Paged<SourceCheck>> => {

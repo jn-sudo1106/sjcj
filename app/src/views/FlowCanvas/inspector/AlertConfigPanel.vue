@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import type { MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
 
 type ChannelType = 'email' | 'dingtalk'
 type AlertLevel = 'critical' | 'warning' | 'info'
@@ -53,6 +54,9 @@ const props = defineProps<{
   nodeTitle: string
   sourceLabel: string
   scriptPath?: string
+}>()
+const emit = defineEmits<{
+  'update:alert-config': [config: MonitorAlertConfig]
 }>()
 
 const enabled = ref(true)
@@ -110,6 +114,36 @@ const policies = ref<AlertPolicy[]>([
 ])
 
 const activePolicies = computed(() => policies.value.filter((policy) => policy.enabled).length)
+
+function alertConfigSnapshot(): MonitorAlertConfig {
+  return {
+    enabled: enabled.value,
+    policies: policies.value.map((policy) => ({
+      name: policy.name,
+      metric: policy.metric,
+      operator: policy.operator,
+      threshold: policy.threshold,
+      consecutiveCount: policy.consecutiveCount,
+      repeatMinutes: policy.repeatMinutes,
+      recoveryNotify: policy.recoveryNotify,
+      enabled: policy.enabled,
+      channelTypes: policy.channelIds
+        .map((id) => channels.value.find((channel) => channel.id === id)?.type)
+        .filter((type): type is ChannelType => type === 'email' || type === 'dingtalk'),
+    })),
+    channels: channels.value.map((channel) => ({
+      type: channel.type,
+      enabled: channel.enabled,
+      target: channel.type === 'email' ? channel.recipients : channel.webhook,
+    })),
+  }
+}
+
+function syncAlertConfig() {
+  emit('update:alert-config', alertConfigSnapshot())
+}
+
+watch(enabled, syncAlertConfig, { immediate: true })
 
 function levelText(level: AlertLevel): string {
   return level === 'critical' ? '严重' : level === 'warning' ? '警告' : '信息'
@@ -199,15 +233,18 @@ function savePolicy() {
   if (index >= 0) policies.value[index] = next
   else policies.value.push(next)
   policyDialogVisible.value = false
+  syncAlertConfig()
   ElMessage.success(editingPolicyId.value ? '告警策略已更新' : '告警策略已添加')
 }
 
 function togglePolicy(policy: AlertPolicy) {
   policy.enabled = !policy.enabled
+  syncAlertConfig()
 }
 
 function removePolicy(policy: AlertPolicy) {
   policies.value = policies.value.filter((item) => item.id !== policy.id)
+  syncAlertConfig()
   ElMessage.success('告警策略已删除')
 }
 
@@ -260,6 +297,7 @@ function saveChannel() {
     channel.target = `Webhook 已配置 · ${channel.atAll ? '@所有人' : channel.phones ? '@指定成员' : '不@人'}`
   }
   channelDialogVisible.value = false
+  syncAlertConfig()
   ElMessage.success(`${channelText(channel.type)}渠道已保存`)
 }
 </script>

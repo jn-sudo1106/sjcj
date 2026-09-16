@@ -9,7 +9,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
-import { decisionOrParallelKind, isMonitorNode, isRuleNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { decisionOrParallelKind, isDataValidationNode, isMonitorNode, isRuleNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
 import { configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
 import { provideNodeInspectorAssets } from './useNodeInspectorAssets'
@@ -141,7 +141,7 @@ async function onSaveNodeConfig() {
   if (isRuleNode(node)) {
     const bindingError = validateTableBinding(
       node.ruleCfg ?? { inputTableId: '', inputFields: [], outputFields: [] },
-      { requireOutput: !isMonitorNode(node) },
+      { requireOutput: !isMonitorNode(node) && !isDataValidationNode(node) },
     )
     if (bindingError) {
       flow.setActiveTab('table')

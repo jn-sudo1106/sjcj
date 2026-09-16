@@ -16,6 +16,7 @@ import SourceTabsBar from './source/SourceTabsBar.vue'
 import CompareSplit from './result/CompareSplit.vue'
 import TaskView from './result/TaskView.vue'
 import FileView from './result/FileView.vue'
+import MonitorConfigView from './result/MonitorConfigView.vue'
 import SiteSourceSwitcher from './source/SiteSourceSwitcher.vue'
 import SnatchLauncher from './source/SnatchLauncher.vue'
 import { nodeInspectorTabs } from './inspector/nodeInspectorTabs'
@@ -110,6 +111,7 @@ const isDataView = computed(() => activeView.value === 'data' && !!flow.sourceCt
 const isTaskView = computed(() => activeView.value === 'task' && !!flow.sourceCtx)
 // 文件视图只挂源层（0711 R11：文件视图只有源才有）：网站态 URL 带 view=file 同理重定向回流程视图
 const isFileView = computed(() => activeView.value === 'file' && !!flow.sourceCtx)
+const isMonitorConfigView = computed(() => activeView.value === 'monitor-config' && !!flow.sourceCtx)
 
 
 // 视图快照按源页签保存，避免切换源后丢失当前视图。
@@ -117,7 +119,13 @@ watch(
   () => [route.query.sourceId, route.query.view, flow.sourceCtx?.sourceId] as const,
   ([qSrc, v, ctxSrc]) => {
     if (!qSrc || ctxSrc !== String(qSrc)) return
-    ws.saveSnapshot(ctxSrc, { view: v === 'data' ? 'data' : v === 'task' ? 'task' : v === 'file' ? 'file' : 'flow' })
+    ws.saveSnapshot(ctxSrc, {
+      view: v === 'data' ? 'data'
+        : v === 'task' ? 'task'
+          : v === 'file' ? 'file'
+            : v === 'monitor-config' ? 'monitor-config'
+              : 'flow',
+    })
   },
   { immediate: true },
 )
@@ -527,6 +535,7 @@ onUnmounted(() => {
         <CompareSplit v-else-if="ws.compareSourceId" class="rc-flow-result" />
         <TaskView v-else-if="isTaskView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
         <FileView v-else-if="isFileView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
+        <MonitorConfigView v-else-if="isMonitorConfigView" :key="`${flow.sourceCtx?.sourceId}-${flow.selectedId}`" class="rc-flow-result" />
         <!--
           0904 I10（Z3-1）：**数据视图也挂进这套三栏**，不再整屏铺开。
           结构 = 左源侧栏（`rc-canvas-cols` 那层，本来就固定）+ 中间可切换（流程 ↔ 数据）+ 右节点配置。

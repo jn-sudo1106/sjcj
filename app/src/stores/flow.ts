@@ -18,6 +18,7 @@ import {
   isDataNode,
   isRuleNode,
   isMonitorNode,
+  isDataValidationNode,
   nodeOutputTable,
   effectiveInputTable,
   isFirstMainNode,
@@ -1140,7 +1141,7 @@ export const useFlowStore = defineStore('flow', () => {
           errs.push(`「${c.title}」请先保存表配置`)
         } else {
           if (!ruleCfg.inputFields?.length) errs.push(`「${c.title}」缺少入参字段`)
-          if (!isMonitorNode(c) && !ruleCfg.outputFields?.length) errs.push(`「${c.title}」缺少出参字段`)
+          if (!isMonitorNode(c) && !isDataValidationNode(c) && !ruleCfg.outputFields?.length) errs.push(`「${c.title}」缺少出参字段`)
           if (!ruleCfg.script?.trim()) errs.push(`「${c.title}」尚未生成规则脚本`)
         }
       } else if (!c.disabled && isDataNode(c) && !c.outputTable) {
@@ -1280,6 +1281,7 @@ export const useFlowStore = defineStore('flow', () => {
     patchRuleConfig: (id: string, patch: Partial<RuleOrchestration>) => nodeStore.patchRuleConfig(id, patch),
     patchExecConfig: (id: string, patch: Partial<RuleOrchestration>) => nodeStore.patchExecConfig(id, patch),
     setMonitorMethods: (id: string, methods: string[]) => nodeStore.setMonitorMethods(id, methods),
+    setMonitorAlertConfig: (id: string, config: import('@/views/FlowCanvas/canvas/flowModel').MonitorAlertConfig) => nodeStore.setMonitorAlertConfig(id, config),
     setOutputTable: (id: string, tableId: string) => nodeStore.setOutputTable(id, tableId),
     setDedupMode: (id: string, mode: 'source' | 'table') => nodeStore.setDedupMode(id, mode),
     setOutFields: (id: string, fields: string[]) => nodeStore.setOutFields(id, fields),

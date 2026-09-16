@@ -8,6 +8,7 @@ import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import { flowCenterApi } from '@/api'
 import { ElMessageBox } from 'element-plus'
+import { cloneConfig, isMonitorNode, NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
 
 vi.mock('element-plus', async (importOriginal) => {
   const actual = await importOriginal<typeof import('element-plus')>()
@@ -126,6 +127,48 @@ describe('CanvasHeader · 返回源视图', () => {
 })
 
 describe('CanvasHeader · 流程视图操作', () => {
+  it('选中数据监控节点时，在任务视图后显示监控配置页签并可切换', async () => {
+    const wrapper = await mountHeader()
+    const flow = useFlowStore()
+    flow.loadFromSource(
+      { sourceId: 'source-a', name: '源 A', url: 'https://x', configId: '', mainTable: 'T1', owner: 'admin', state: 'C' } as never,
+      [], null,
+    )
+    const monitorId = 'monitor-test'
+    const monitor = cloneConfig(NODE_CONFIGS.rule)
+    monitor.template = 'monitor'
+    monitor.title = '数据监控'
+    flow.configs[monitorId] = monitor
+    flow.main.splice(1, 0, monitorId)
+    flow.select(monitorId)
+    await flushPromises()
+
+    expect(isMonitorNode(flow.selectedNode)).toBe(true)
+    const tab = wrapper.get('[data-testid="monitor-config-view"]')
+    expect(tab.text()).toBe('监控配置')
+    expect(wrapper.findAll('.ch-seg').at(-1)?.text()).toBe('监控配置')
+
+    await tab.trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.$router.currentRoute.value.query.view).toBe('monitor-config')
+  })
+
+  it('选中普通规则节点时不显示监控配置页签', async () => {
+    const wrapper = await mountHeader()
+    const flow = useFlowStore()
+    flow.loadFromSource(
+      { sourceId: 'source-a', name: '源 A', url: 'https://x', configId: '', mainTable: 'T1', owner: 'admin', state: 'C' } as never,
+      [], null,
+    )
+    const ruleId = 'rule-test'
+    flow.configs[ruleId] = cloneConfig(NODE_CONFIGS.rule)
+    flow.main.splice(1, 0, ruleId)
+    flow.select(ruleId)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="monitor-config-view"]').exists()).toBe(false)
+  })
+
   it('流程模板切换默认展示 10 个，并支持按名称或 ID 搜索', async () => {
     const records = Array.from({ length: 12 }, (_, index) => ({
       id: `flow-${index + 1}`,

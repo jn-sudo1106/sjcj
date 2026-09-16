@@ -289,6 +289,8 @@ export interface Step {
   name: string
   /** 旧接口若返回节点类型，保留给流程视图选择节点模板；缺失时由名称/位置兼容推断。 */
   nodeType?: string
+  /** 配置详情中的 configType；用于回读没有明确 nodeType 的规则型节点。 */
+  configType?: string
   inputTable?: string // 步骤输入表
   outputTable?: string // 步骤输出表
   configId?: string // 本步骤使用配置

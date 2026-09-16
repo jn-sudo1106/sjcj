@@ -114,4 +114,13 @@ describe('nodeInspectorTabs', () => {
     const orchestration = nodeInspectorTabs(monitorUnsaved).find(([key]) => key === 'orchestration')!
     expect(orchestration[2]).toBe('请先在「表配置」完成输入/输出表与字段选择')
   })
+
+  it('数据校验节点未绑输入表/入参：编排 Tab 仍禁用，但不要求出参字段', () => {
+    const validation = {
+      title: '数据校验', kind: 'node', template: 'data-validation',
+      ruleCfg: { mode: 'new', describe: '', inputTableId: '2102154', inputFields: ['sku_id'], outputFields: [] },
+    } as unknown as NodeConfig
+    const orchestration = nodeInspectorTabs(validation).find(([key]) => key === 'orchestration')!
+    expect(orchestration[2]).toBeUndefined()
+  })
 })

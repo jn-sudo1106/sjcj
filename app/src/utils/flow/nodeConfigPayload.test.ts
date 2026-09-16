@@ -187,6 +187,12 @@ describe('configType（节点类型 = 旧「抓取类型」，0828 W0-7）', () 
     // 否则两个信号都为真时永远落到 600，700 走不到。
     expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(700)
   })
+
+  it('数据校验节点（template=data-validation）写 800，不是 600', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['rule'])
+    cfg.template = 'data-validation'
+    expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(800)
+  })
 })
 
 describe('isMulti 落库推导（2026-08-28：「更新父表」不由用户选）', () => {

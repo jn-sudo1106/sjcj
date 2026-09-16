@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // 监控视图（0910 从旧平台「数据源告警」迁入，第一期只读 + 开关）。
-// 这里验证接线：全部源态拦住、按源查询、告警标记、启停的 isDelete 反向语义、日志弹窗传参。
+// 这里验证接线：首屏分页、按源查询、告警标记、启停的 isDelete 反向语义、日志弹窗传参。
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import SiteMonitorView from './SiteMonitorView.vue'
@@ -24,6 +24,8 @@ function source(id: string, name = `源${id}`): Source {
 const stubs = {
   SiteSourceSelect: { name: 'SiteSourceSelect', template: '<div />', emits: ['update:modelValue'] },
   CheckLogDialog: { name: 'CheckLogDialog', props: ['modelValue', 'check'], template: '<div />' },
+  // 配置 Tab 自己会拉 sourceDetail/sourceSteps，容器用例里只关心挂没挂上，不看它的内部行为
+  SiteMonitorConfigView: { name: 'SiteMonitorConfigView', props: ['siteId', 'sourceId'], template: '<div data-testid="config-panel" />' },
   ElSwitch: {
     name: 'ElSwitch',
     props: ['modelValue', 'loading', 'disabled'],
@@ -49,15 +51,15 @@ async function pickSource(wrapper: ReturnType<typeof mountView>, sourceId = 's1'
 afterEach(() => vi.restoreAllMocks())
 
 describe('SiteMonitorView', () => {
-  // 后端 source/check/paged 的 sourceId 是单值，一个网站几千个源查不出来。
-  // 与其像数据视图那样逐源归并（已证明会炸），不如把话说清楚。
-  it('全部源态不发请求，提示先选一个具体源', async () => {
-    const paged = vi.spyOn(sourceCheckApi, 'paged')
+  it('进入监控视图首屏只按分页查询，不带 sourceId 和筛选条件', async () => {
+    const paged = vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 1, list: [check()] })
     const wrapper = mountView()
     await flushPromises()
 
-    expect(paged).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="site-monitor-need-source"]').exists()).toBe(true)
+    expect(paged).toHaveBeenCalledTimes(1)
+    expect(paged).toHaveBeenCalledWith({ page: 1, size: 10 })
+    expect(wrapper.find('[data-testid="site-monitor-need-source"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('共 1 条监控')
   })
 
   it('选中源后按该源查询，筛选条件一并透传', async () => {
@@ -77,18 +79,15 @@ describe('SiteMonitorView', () => {
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'E', name: '增量' }))
   })
 
-  it('进入监控视图时默认选择第一个源，并用 page=1、limit=10 的口径查询', async () => {
+  it('进入监控视图不默认选择第一个源，避免首屏带 sourceId 查询', async () => {
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('391007770', 'baodu'), source('391007768', 'test1')])
     const paged = vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 1, list: [check({ sourceId: '391007770' })] })
 
     const wrapper = mountViewWithSourceSelect('site-auto-first')
     await flushPromises()
 
-    expect(paged).toHaveBeenCalledWith(expect.objectContaining({
-      sourceId: '391007770',
-      page: 1,
-      size: 10,
-    }))
+    expect(paged).toHaveBeenCalledTimes(1)
+    expect(paged).toHaveBeenCalledWith({ page: 1, size: 10 })
     expect(wrapper.find('[data-testid="site-monitor-need-source"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('共 1 条监控')
   })
@@ -150,7 +149,49 @@ describe('SiteMonitorView', () => {
 
     await wrapper.get('[data-testid="site-monitor-only-alarm"]').trigger('click')
     await flushPromises()
-    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ state: '' }))
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: 's1' }))
+    expect(paged.mock.lastCall?.[0]).not.toHaveProperty('state')
+  })
+
+  // 0916：监控视图拆成「监控结果 / 监控配置」两 Tab，当前展示的那张表整体落进第一个 Tab。
+  it('默认停在监控结果，点监控配置才挂上配置面板并往外抛 update:tab', async () => {
+    vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 1, list: [check()] })
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="site-monitor-tab-result"]').classes()).toContain('on')
+    expect(wrapper.find('[data-testid="config-panel"]').exists()).toBe(false)
+    expect(wrapper.find('.smv-table').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="site-monitor-tab-config"]').trigger('click')
+    expect(wrapper.get('[data-testid="site-monitor-tab-config"]').classes()).toContain('on')
+    expect(wrapper.find('[data-testid="config-panel"]').exists()).toBe(true)
+    expect(wrapper.find('.smv-table').exists()).toBe(false)
+    // URL 落点交给上层（SiteDetailView），容器只负责把选择抛出去
+    expect(wrapper.emitted('update:tab')?.at(-1)).toEqual(['config'])
+  })
+
+  it('tab 传 config 时直接停在监控配置（深链/刷新）', async () => {
+    vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = mount(SiteMonitorView, {
+      props: { siteId: 'site-a', tab: 'config' as const },
+      global: { stubs, directives: { loading: {} } },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="config-panel"]').exists()).toBe(true)
+    expect(wrapper.find('.smv-table').exists()).toBe(false)
+  })
+
+  it('两个 Tab 共用选中的源：结果里选的源，切到配置不用再选一次', async () => {
+    vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = mountViewWithSourceSelect()
+    await flushPromises()
+    await wrapper.findComponent({ name: 'SiteSourceSelect' }).vm.$emit('update:modelValue', 's1')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="site-monitor-tab-config"]').trigger('click')
+    expect(wrapper.findComponent({ name: 'SiteMonitorConfigView' }).props('sourceId')).toBe('s1')
   })
 
   it('查询失败时给出错误而不是空表格假装没事', async () => {

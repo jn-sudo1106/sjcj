@@ -8,6 +8,7 @@ import { useUiStore } from '@/stores/ui'
 import { flowCenterApi, type FlowRecord } from '@/api'
 import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
+import { isMonitorNode } from '@/views/FlowCanvas/canvas/flowModel'
 
 const flow = useFlowStore()
 const ui = useUiStore()
@@ -143,7 +144,13 @@ function backToSourceView() {
   if (siteId) router.push({ path: '/canvas', query: { siteId, view: 'source' } })
   else router.push('/collect')
 }
-function switchView(target: 'flow' | 'data' | 'task' | 'file') {
+const showMonitorConfigView = computed(() => isMonitorNode(flow.selectedNode))
+
+watch([view, showMonitorConfigView], ([current, show]) => {
+  if (current === 'monitor-config' && !show) switchView('flow')
+}, { immediate: true })
+
+function switchView(target: SourceWorkspaceView) {
   if (view.value === target) {
     if (target === 'data') ui.applyViewLayoutDefault('data')
     return
@@ -207,6 +214,14 @@ async function onSwitchFlow(command: string) {
            删掉后用户当场提出「不是，任务视图和文件视图呢」，已还原。0904 纪要 I11 同步订正。 -->
       <button class="ch-seg" :class="{ on: view === 'file' }" type="button" @click="switchView('file')">文件视图</button>
       <button class="ch-seg" :class="{ on: view === 'task' }" type="button" @click="switchView('task')">任务视图</button>
+      <button
+        v-if="showMonitorConfigView"
+        class="ch-seg"
+        :class="{ on: view === 'monitor-config' }"
+        type="button"
+        data-testid="monitor-config-view"
+        @click="switchView('monitor-config')"
+      >监控配置</button>
     </div>
 
     <template v-if="src">

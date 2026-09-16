@@ -50,7 +50,7 @@ function navTo(key: string) {
   const snap = ws.snapshotOf(key)
   // 流程视图也必须显式带上 view=flow。否则 index.vue 会先补全 URL，
   // 但 sourceId 未变化，路由监听不会再次触发实际的 source 加载。
-  const view = snap?.view === 'data' || snap?.view === 'task' || snap?.view === 'file' || snap?.view === 'flow'
+  const view = snap?.view === 'data' || snap?.view === 'task' || snap?.view === 'file' || snap?.view === 'flow' || snap?.view === 'monitor-config'
     ? snap.view
     : 'flow'
   // 必须带上 siteId，否则切到别的网站下的源时左侧源列表会空：

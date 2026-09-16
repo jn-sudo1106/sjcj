@@ -63,8 +63,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/markVerified', desc: '人工核验标记', danger: true, impl: true },
   { path: 'source/generateConfig', desc: '生成新配置并应用', danger: true, impl: true },
   // 源监控（数据源告警）除已单独确认的分页查询外暂不开 live：2026-09-10 确认后端这套接口要重做，
-  // 路径与字段都会变。0914 用户提供 source/check/paged 真实调用契约（sourceId/page/limit），
-  // 仅先放行监控视图首屏列表；其余写接口和日志接口等接口定稿后再逐个对齐并放行。
+  // 路径与字段都会变。0916 用户提供 source/check/paged 真实调用契约（首屏 page/limit，
+  // 选源后再带 sourceId），仅先放行监控视图列表；其余写接口等接口定稿后再逐个对齐并放行。
   { path: 'source/check/paged', desc: '源检查列表', impl: true, live: true },
   { path: 'source/check/syncPaged', desc: '同步状态列表', impl: true },
   { path: 'source/check/add', desc: '新增源检查', danger: true },

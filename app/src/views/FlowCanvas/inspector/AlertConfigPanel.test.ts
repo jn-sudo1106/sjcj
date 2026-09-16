@@ -16,6 +16,16 @@ function mountPanel() {
   })
 }
 
+function lastInput(testId: string): HTMLInputElement {
+  const items = Array.from(document.body.querySelectorAll(`[data-testid="${testId}"]`))
+  return items.at(-1) as HTMLInputElement
+}
+
+function lastElement(testId: string): HTMLElement {
+  const items = Array.from(document.body.querySelectorAll(`[data-testid="${testId}"]`))
+  return items.at(-1) as HTMLElement
+}
+
 describe('AlertConfigPanel', () => {
   it('展示默认策略、邮件和钉钉渠道，并支持启停策略', async () => {
     const wrapper = mountPanel()
@@ -86,5 +96,33 @@ describe('AlertConfigPanel', () => {
 
     expect(wrapper.get('[data-testid="alert-channel-dingtalk"]').text()).toContain('Webhook 已配置')
     expect(wrapper.get('[data-testid="alert-channel-dingtalk"]').text()).not.toContain('demo-secret')
+  })
+
+  it('策略或渠道保存后向父组件同步规范化告警配置', async () => {
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="alert-channel-edit-email"]').trigger('click')
+    const recipients = lastInput('alert-email-recipients')
+    recipients.value = 'alarm@example.com'
+    recipients.dispatchEvent(new Event('input', { bubbles: true }))
+    lastElement('alert-save-channel').dispatchEvent(new Event('click', { bubbles: true }))
+    await flushPromises()
+
+    const emitted = wrapper.emitted('update:alert-config')?.at(-1)?.[0]
+    expect(emitted).toMatchObject({
+      enabled: true,
+      policies: [{
+        name: '数据延迟超过阈值',
+        metric: 'delay_minutes',
+        operator: 'gt',
+        threshold: '30',
+        enabled: true,
+        channelTypes: ['email', 'dingtalk'],
+      }],
+      channels: expect.arrayContaining([
+        expect.objectContaining({ type: 'email', enabled: true, target: 'alarm@example.com' }),
+      ]),
+    })
   })
 })

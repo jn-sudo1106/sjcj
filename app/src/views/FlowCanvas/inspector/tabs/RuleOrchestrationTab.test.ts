@@ -544,6 +544,9 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     const payload = (ckSourceApi.insert as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as { checkConf: string }
     const conf = JSON.parse(payload.checkConf)
     expect(conf.monitorMethods).toEqual(['当日数据是否正常入库', '数据延迟监控'])
+    expect(conf.minSize).toBe('30')
+    expect(conf.notifyOn).toBe('error')
+    expect(conf.notifyType).toBe('mail')
     // describe 会被「进入编排配置时自动组装监控描述」覆盖成完整模板，断言包含监控方法与脚本路径即可
     expect(conf.orchestration).toMatchObject({ scriptPath: '/code01/184.py' })
     expect(String(conf.orchestration.describe)).toContain('数据延迟监控')
@@ -610,6 +613,9 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     const payload = (insert as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as { checkConf: string }
     const conf = JSON.parse(payload.checkConf)
     expect(conf.monitorMethods).toEqual(['当日数据是否正常入库', '数据延迟监控'])
+    expect(conf.minSize).toBe('30')
+    expect(conf.notifyOn).toBe('error')
+    expect(conf.notifyType).toBe('mail')
     expect(conf.orchestration).toMatchObject({ scriptPath: '/code01/184.py' })
     expect(conf.orchestration).not.toHaveProperty('systemPrompt')
     expect(conf.orchestration).not.toHaveProperty('script')

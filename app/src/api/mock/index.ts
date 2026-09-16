@@ -132,6 +132,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
     { sourceType: '150', typeName: 'OCR 识别' },
     { sourceType: '155', typeName: 'AI 提取' },
     { sourceType: '170', typeName: 'Python 抓取' },
+    { sourceType: '800', typeName: '数据校验' },
   ],
   'config/configActionPaged': mockConfigActionLogs,
   // 'config/clear' 2026-09-08 下线：configApi.clearConfig 已删，mock handler 一并删；

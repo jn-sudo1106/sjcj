@@ -14,7 +14,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, UploadFilled } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
-import { isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { isDataValidationNode, isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { configApi, entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { isVruleNumericRuleId } from '@/api/legacyAdapters'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
@@ -37,6 +37,7 @@ const id = computed<string>(() => flow.selectedId)
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
 const isRule = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
 const isMonitor = computed(() => (cfg.value ? isMonitorNode(cfg.value) : false))
+const isDataValidation = computed(() => (cfg.value ? isDataValidationNode(cfg.value) : false))
 const orchCfg = computed<RuleOrchestration>(() => ({
   ...(isRule.value ? makeDefaultRuleOrchestration() : makeDefaultExecConfig()),
   ...(isRule.value ? cfg.value?.ruleCfg : cfg.value?.execCfg),
@@ -49,7 +50,7 @@ function patch(p: Partial<RuleOrchestration>) {
 }
 
 // 文案分流：内容同构，只有措辞按节点类型切换
-const describeLabel = computed(() => (isMonitor.value ? '数据监控描述' : isRule.value ? '规则处理描述' : '抓取需求描述'))
+const describeLabel = computed(() => (isMonitor.value ? '数据监控描述' : isDataValidation.value ? '数据校验描述' : isRule.value ? '规则处理描述' : '抓取需求描述'))
 const describePlaceholder = computed(() => (isRule.value ? '请使用自然语言描述你需要生成脚本的规则或转换关系' : '描述抓取需求，如打开列表页提取表格前 20 行数据'))
 const generateLabel = computed(() => (isRule.value ? '生成脚本' : '生成配置'))
 const saveLabel = computed(() => (isRule.value ? '保存脚本' : '保存配置'))
@@ -65,6 +66,9 @@ const describeTouched = ref(false)
 const monitorMethods = computed<string[]>(() => cfg.value?.monitorMethods ?? [])
 function setMonitorMethods(values: string[]) {
   flow.setMonitorMethods(id.value, values ?? [])
+}
+function setMonitorAlertConfig(config: MonitorAlertConfig) {
+  flow.setMonitorAlertConfig(id.value, config)
 }
 
 // 监控方法随 config 的 checkRule 落库（逗号分隔，生成脚本时仍按原口径传给后端）。
@@ -311,6 +315,7 @@ watch(
     id.value,
     isRule.value,
     isMonitor.value,
+    isDataValidation.value,
     sourceTableName.value,
     promptCategory.value,
     promptListCategory.value,
@@ -320,11 +325,11 @@ watch(
     outputFieldOptions.value.map((field) => `${field.itemCode}:${field.itemName}`).join(','),
   ] as const,
   () => {
-    if (!isRule.value && !isMonitor.value) return
+    if (!isRule.value && !isMonitor.value && !isDataValidation.value) return
     const refreshSeq = ++promptRefreshSeq
     // 数据监控节点进入编排 Tab 时即拼接系统提示词，与脚本编辑弹窗的行为一致——
     // 弹窗 loadPromptTemplate 无条件调用，这里也不卡 sourceTableName/inputFields。
-    if (isRule.value && !isMonitor.value) {
+    if (isRule.value && !isMonitor.value && !isDataValidation.value) {
       if (!sourceTableName.value) return
       if (!orchCfg.value.inputFields?.length) return
       if (!orchCfg.value.outputFields?.length) return
@@ -542,7 +547,7 @@ async function onGenerateScript(
   draft?: Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'modelProviderCode' | 'modelCode'>> & { file?: File },
 ) {
   if (!orchCfg.value.describe.trim()) {
-    ElMessage.warning(isMonitor.value ? '请先填写数据监控描述' : isRule.value ? '请先填写规则处理描述' : '请先填写抓取需求描述')
+    ElMessage.warning(isMonitor.value ? '请先填写数据监控描述' : isDataValidation.value ? '请先填写数据校验描述' : isRule.value ? '请先填写规则处理描述' : '请先填写抓取需求描述')
     return
   }
   if (isRule.value && !cfg.value?.configId) {
@@ -553,12 +558,12 @@ async function onGenerateScript(
     ElMessage.warning('请先选择模型供应商和模型')
     return
   }
-  if (isRule.value && !isMonitor.value && (!orchCfg.value.inputFields?.length || !orchCfg.value.outputFields?.length)) {
+  if (isRule.value && !isMonitor.value && !isDataValidation.value && (!orchCfg.value.inputFields?.length || !orchCfg.value.outputFields?.length)) {
     ElMessage.warning('请先在「表配置」完成入参/出参字段绑定')
     return
   }
   // 数据监控节点无出参字段，只校验入参，跳过出参校验（2026-09-01）
-  if (isMonitor.value && !orchCfg.value.inputFields?.length) {
+  if ((isMonitor.value || isDataValidation.value) && !orchCfg.value.inputFields?.length) {
     ElMessage.warning('请先在「表配置」完成入参字段绑定')
     return
   }
@@ -762,7 +767,7 @@ async function onApplySwitch() {
 const canTest = computed(() => {
   const hasScript = !!(orchCfg.value.script?.trim() || orchCfg.value.scriptPath?.trim())
   const hasScriptPath = !!orchCfg.value.scriptPath?.trim()
-  if (isMonitor.value) return hasScriptPath
+  if (isMonitor.value || isDataValidation.value) return hasScriptPath
   const hasInputTable = !!(
     orchCfg.value.inputTable?.trim()
     || orchCfg.value.inputTableId?.trim()
@@ -809,7 +814,7 @@ function goToDataView() {
   void router.replace({ path: '/canvas', query })
 }
 function onTestScript() {
-  if (isMonitor.value) {
+  if (isMonitor.value || isDataValidation.value) {
     void executeMonitorCode()
     return
   }
@@ -964,6 +969,7 @@ function onTestScript() {
     :node-title="cfg?.title ?? ''"
     :source-label="sourceTableName"
     :script-path="orchCfg.scriptPath"
+    @update:alert-config="setMonitorAlertConfig"
   />
 
   <template v-if="!isRule">
