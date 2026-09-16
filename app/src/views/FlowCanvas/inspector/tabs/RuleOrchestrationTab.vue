@@ -22,6 +22,7 @@ import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
 import { buildDataProcessGeneratePayload } from '@/utils/flow/dataProcess'
 import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
+import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
 import { promptCategoryGroupsForNode, promptListCategoryForNode, resolvePromptCategoryForNode } from '../promptCategory'
 import { loadPromptTemplateForNode } from '../promptTemplateLoader'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
@@ -320,6 +321,16 @@ watch(
  */
 const promptSourceId = computed(() => flow.sourceCfg?.sourceId || flow.sourceCtx?.sourceId || '')
 
+/**
+ * 系统提示词里 `{{source_cron}}` 的取值：**节点配置 Tab「定时策略」里那个 cron 框的值**
+ *（节点 → collectCfg → 源 三层合并 + 策略推导，见 utils/flow/scheduleCron.ts）。
+ *
+ * 与 ck_source.SCHEDULE 落库值同源（utils/flow/monitorCkSource.ts 用同一个函数）——
+ * 之前这里直接读 `node.schedule.cron`，节点只选过「每天 08:00」这类策略时那个字段可能是空的，
+ * 于是界面显示 `0 0 8 * * ?`、提示词里却是空。
+ */
+const sourceCron = computed(() => nodeScheduleCron(cfg.value, flow.sourceCfg))
+
 let promptRefreshSeq = 0
 watch(
   () => [
@@ -353,7 +364,7 @@ watch(
         inputTableName: sourceTableName.value,
         outputTableName: orchCfg.value.outputTable?.trim() || sourceTableName.value,
         sourceId: isMonitor.value ? promptSourceId.value : '',
-        sourceCron: isMonitor.value ? (cfg.value?.schedule?.cron ?? '') : '',
+        sourceCron: isMonitor.value ? sourceCron.value : '',
         inputFields: orchCfg.value.inputFields ?? [],
         outputFields: orchCfg.value.outputFields ?? [],
         inputFieldOptions: inputFieldOptions.value,
@@ -700,9 +711,10 @@ async function onSaveScript() {
     // 数据监控节点：脚本保存成功后同步 ck_source（失败不回滚，单独提示）。
     // 同步实现在 utils/flow/monitorCkSource.ts——2026-09-07 起 NodeInspector 底部「保存」
     //（编排配置 Tab）也触发同一条同步，两处共用保证 payload 口径一致。
+    // 源一并传进去：节点没配过定时时，节点配置 Tab 展示的就是源上的 cron，落库要用同一个值。
     if (isMonitor.value) {
       try {
-        await syncMonitorCkSource(flow.sourceCfg?.sourceId, cfg.value)
+        await syncMonitorCkSource(flow.sourceCfg?.sourceId, cfg.value, flow.sourceCfg)
       } catch (e) {
         ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
       }
@@ -1022,7 +1034,7 @@ function onTestScript() {
     :input-table-name="sourceTableName"
     :output-table-name="orchCfg.outputTable"
     :source-id="isMonitor ? promptSourceId : ''"
-    :source-cron="isMonitor ? (cfg?.schedule?.cron ?? '') : ''"
+    :source-cron="isMonitor ? sourceCron : ''"
     :thinking="thinkingText"
     :generation-state="generationState"
     :generation-message="generationMessage"

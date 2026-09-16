@@ -70,7 +70,9 @@ export function mockCkSourceInsert(params?: Record<string, unknown>): number {
 
 export function mockCkSourceUpdate(params?: Record<string, unknown>): boolean {
   const payload = params as unknown as CkSourcePayload
-  // 后端语义：body 里为 null 的字段保留原列值 → 用传了的字段覆盖，没传的留旧值
+  // 后端语义：body 里为 null 的字段保留原列值 → 用传了的字段覆盖，没传的留旧值。
+  // 可写字段对齐后端 SourceService.updateBySourceId 的 wrapper.set 清单（CREATE_DT 不在其中：
+  // 那一列 update 永不修改）。
   let hit = 0
   for (const row of CK_SOURCE_STORE) {
     if (row.sourceId !== payload.sourceId) continue
@@ -79,6 +81,9 @@ export function mockCkSourceUpdate(params?: Record<string, unknown>): boolean {
       ...(payload.schedule != null ? { schedule: payload.schedule } : {}),
       ...(payload.tableName != null ? { tableName: payload.tableName } : {}),
       ...(payload.checkConf != null ? { checkConf: payload.checkConf } : {}),
+      ...(payload.state != null ? { state: payload.state } : {}),
+      ...(payload.isDelete != null ? { isDelete: payload.isDelete } : {}),
+      ...(payload.ver != null ? { ver: payload.ver } : {}),
     })
     hit++
   }

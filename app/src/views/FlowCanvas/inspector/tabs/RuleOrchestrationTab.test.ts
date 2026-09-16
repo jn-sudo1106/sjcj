@@ -566,10 +566,20 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await triggerWorkbenchSave(wrapper)
 
     expect(insertSpy).not.toHaveBeenCalled()
-    // update 不带 state：运行状态由后台任务维护，前端不覆盖
+    // 2026-09-16 口径：update 与 insert 同一份 payload，state/isDelete/createDt/ver 都带上，
+    // schedule 取节点配置 Tab 的 cron、tableName 取表配置 Tab 的输入表。
     const updatePayload = (ckSourceApi.update as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as Record<string, unknown>
-    expect(updatePayload.state).toBeUndefined()
-    expect(ckSourceApi.update).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 430016501, name: '库存监控' }))
+    expect(updatePayload).toMatchObject({
+      sourceId: 430016501,
+      name: '库存监控',
+      schedule: '0 0 8 * * ?',
+      tableName: 'sense_data.TB_JD_SKU_BASE',
+      state: 'E',
+      isDelete: 1,
+      ver: 12,
+    })
+    // ISO-8601（后端 LocalDateTime 只认这个；带空格的旧写法会被 400 拒掉）
+    expect(String(updatePayload.createDt)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/)
   })
 
   it('流程未绑源（无 sourceId）时保存脚本不同步 ck_source', async () => {
