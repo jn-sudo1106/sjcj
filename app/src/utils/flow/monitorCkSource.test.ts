@@ -76,7 +76,7 @@ describe('syncMonitorCkSource', () => {
       tableName: 'sense_data.TB_JD_SKU_BASE',
       // 2026-09-16 口径：update 也要带这几个固定值（不是只有 insert 才带 state）
       state: 'E',
-      isDelete: 1,
+      isDelete: 0,
       ver: 12,
     })
     // ISO-8601（后端 LocalDateTime 只认这个；带空格的旧写法会被 400 拒掉）
@@ -99,7 +99,7 @@ describe('syncMonitorCkSource', () => {
     await syncMonitorCkSource('430016501', makeMonitorNode())
 
     const payload = insert.mock.calls[0][0]
-    expect(payload).toMatchObject({ state: 'E', isDelete: 1, ver: 12 })
+    expect(payload).toMatchObject({ state: 'E', isDelete: 0, ver: 12 })
     // ISO-8601（后端 LocalDateTime 只认这个；带空格的旧写法会被 400 拒掉）
     expect(String(payload.createDt)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/)
     const conf = JSON.parse(payload.checkConf ?? '{}')

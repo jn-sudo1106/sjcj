@@ -17,13 +17,13 @@ import { nodeScheduleCron } from './scheduleCron'
  * 不是「只有新建才写」。这四个字段之外，运行状态类字段（LAST_RUN/NEXT_RUN/LOCK_STATE 等）
  * 一概不传——后端 SourceService 只写非空字段，不传即保留原值。
  *
- * ⚠️ IS_DELETE 在这个库里 **0 才是在用**：旧平台监控列表 `enabled = isDelete === 0`、
- * 调度侧筛选 `coalesce(IS_DELETE, 0) = 0` 都是这个方向（`sourceCheckApi.changeEnable` 的
- * 0=在用 / 1=停用 同源）。这里按对齐后的口径写 1；如果实际要的是「保存后即出现在在用列表」，
- * 改这一个常量即可（写入点只有下方 payload 一处）。
+ * IS_DELETE 写 **0 = 在用**：这张表里 1 才是停用/逻辑删除（旧平台监控列表
+ * `enabled = isDelete === 0`、调度侧筛选 `coalesce(IS_DELETE, 0) = 0`、告警面板的
+ * `sourceCheckApi.changeEnable` 0=在用/1=停用 都是这个方向）。写 1 会让刚保存的监控
+ * 直接落在「停用」态、也不会被排期，所以这里必须是 0。
  */
 const CK_SOURCE_STATE = 'E'
-const CK_SOURCE_IS_DELETE = 1
+const CK_SOURCE_IS_DELETE = 0
 const CK_SOURCE_VER = 12
 
 /**

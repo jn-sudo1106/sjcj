@@ -575,7 +575,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       schedule: '0 0 8 * * ?',
       tableName: 'sense_data.TB_JD_SKU_BASE',
       state: 'E',
-      isDelete: 1,
+      isDelete: 0,
       ver: 12,
     })
     // ISO-8601（后端 LocalDateTime 只认这个；带空格的旧写法会被 400 拒掉）
