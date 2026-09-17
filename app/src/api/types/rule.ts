@@ -176,21 +176,27 @@ export interface RuleOrchestration {
 /**
  * ck_source 监控源配置（vanv-data-engine CkSource 实体，2026-09-05）。
  * 数据监控节点保存时同步落库：按 sourceId 查存在性，无则 insert、有则 update。
- * ID/时间戳/统计列由数据库维护，前端只写业务字段。
+ * 后端 SourceService 只写**非空**字段（为 null 的保留原列值），所以这里带上来的每个字段都会落库。
  */
 export interface CkSourcePayload {
   /** 当前流程的源 ID（cs_source.SOURCE_ID，Long） */
   sourceId: number
   /** 节点名称 */
   name?: string
-  /** cron 表达式（节点配置的调度 cron） */
+  /** cron 表达式（节点配置 Tab「定时策略」里显示的 cron：节点 → collectCfg → 源 合并推导） */
   schedule?: string
-  /** 表配置的输入表物理表名 */
+  /** 表配置的输入表物理表名（只有表 ID 时前端回查表详情取物理名） */
   tableName?: string
   /** 监控方法 + 编排配置序列化后的 JSON 字符串 */
   checkConf?: string
-  /** 运行状态：仅 insert 时由前端默认传 'E'（启用）；update 不传，由后台任务维护 */
+  /** 运行状态，保存时固定写 'E'（见 utils/flow/monitorCkSource.ts 的取值说明） */
   state?: string
+  /** 逻辑删除/启停：本表 0=在用、1=停用（与 sourceCheckApi.changeEnable 的 0/1 同向） */
+  isDelete?: number
+  /** 创建时间 ISO-8601 本地时间 `YYYY-MM-DDTHH:mm:ss`（后端是 LocalDateTime，只认 ISO 格式）；update 不写这一列，只在 insert 生效 */
+  createDt?: string
+  /** 配置版本号（调度侧参与 job_version 计算） */
+  ver?: number
 }
 
 /** ck_source 行（list 返回；update/insert 只关心调用成败，不需要回读） */

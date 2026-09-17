@@ -13,6 +13,7 @@ import {
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { configApi } from '@/api'
 import { configUrlFromLegacy } from '@/api/legacyAdapters'
+import { mergeScheduleSettings } from '@/utils/flow/scheduleCron'
 import BranchEditor from '../BranchEditor.vue'
 import CollectorSettings, { type CollectorRuntimeSettings } from '../CollectorSettings.vue'
 import TaskScheduleSettings from '../TaskScheduleSettings.vue'
@@ -140,15 +141,9 @@ function removeLoginConfig(config: LoginConfigRef) {
   patchLoginConfigs(loginConfigs.value.filter((item) => item.id !== config.id))
 }
 
-const scheduleSettings = computed<CollectorSchedule>(() => {
-  const s = flow.sourceCfg
-  return {
-    scheduleType: cfg.value?.schedule?.scheduleType ?? cc.value?.scheduleType ?? s?.scheduleType,
-    scheduleTime: cfg.value?.schedule?.scheduleTime ?? cc.value?.scheduleTime ?? s?.scheduleTime,
-    weekdays: cfg.value?.schedule?.weekdays ?? cc.value?.weekdays ?? s?.weekdays,
-    cron: cfg.value?.schedule?.cron ?? cc.value?.cron ?? s?.cron,
-  }
-})
+// 定时设置三层取值（节点 → 节点 collectCfg → 源）抽在 utils/flow/scheduleCron.ts：
+// 保存编排配置时写的 ck_source.SCHEDULE 用的是同一个函数，两处不能各写一份。
+const scheduleSettings = computed<CollectorSchedule>(() => mergeScheduleSettings(cfg.value, flow.sourceCfg))
 function onScheduleChange(patch: Partial<CollectorSchedule>) {
   flow.patchSchedule(id.value, patch)
 }

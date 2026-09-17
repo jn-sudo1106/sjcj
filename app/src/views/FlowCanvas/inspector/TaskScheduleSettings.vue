@@ -2,6 +2,7 @@
 
 import { computed } from 'vue'
 import type { CollectorSchedule } from '@/views/FlowCanvas/canvas/flowModel'
+import { cronForSchedule } from '@/utils/flow/scheduleCron'
 
 const props = defineProps<{ modelValue: CollectorSchedule }>()
 const emit = defineEmits<{ 'update:modelValue': [patch: Partial<CollectorSchedule>] }>()
@@ -13,33 +14,14 @@ const TRADING_DAYS = [1, 2, 3, 4, 5]
 function patch(value: Partial<CollectorSchedule>) {
   emit('update:modelValue', value)
 }
-function normalizeTime(time?: string): [number, number] {
-  const [hour, minute] = String(time || '').split(':').map((item) => Number(item))
-  return [
-    Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : 0,
-    Number.isInteger(minute) && minute >= 0 && minute <= 59 ? minute : 0,
-  ]
-}
-function cronFor(settings: CollectorSchedule): string {
-  const type = settings.scheduleType || '每天'
-  if (type === '自定义 cron') return settings.cron ?? ''
-  const [hour, minute] = normalizeTime(settings.scheduleTime)
-  if (type === '每5分钟一次') return '0 */5 * * * ?'
-  if (type === '每小时') return `0 ${minute} * * * ?`
-  if (type === '每周') {
-    const weekdays = settings.weekdays?.length ? settings.weekdays : [1]
-    return `0 ${minute} ${hour} ? * ${weekdays.join(',')}`
-  }
-  if (type === '交易日定时') return `0 ${minute} ${hour} ? * 1-5`
-  return `0 ${minute} ${hour} * * ?`
-}
+// cron 推导口径抽在 utils/flow/scheduleCron.ts（本组件显示、编排配置保存落库共用一份）。
 const isCustomCron = computed(() => props.modelValue.scheduleType === '自定义 cron')
-const cronValue = computed(() => isCustomCron.value ? props.modelValue.cron ?? '' : cronFor(props.modelValue))
+const cronValue = computed(() => isCustomCron.value ? props.modelValue.cron ?? '' : cronForSchedule(props.modelValue))
 function patchWithCron(value: Partial<CollectorSchedule>) {
   const next = { ...props.modelValue, ...value }
   const normalized = next.scheduleType === '交易日定时' ? { ...value, weekdays: TRADING_DAYS } : value
   if (next.scheduleType === '交易日定时') next.weekdays = TRADING_DAYS
-  patch(next.scheduleType === '自定义 cron' ? normalized : { ...normalized, cron: cronFor(next) })
+  patch(next.scheduleType === '自定义 cron' ? normalized : { ...normalized, cron: cronForSchedule(next) })
 }
 function onInput(key: 'scheduleType' | 'scheduleTime' | 'cron', e: Event) {
   patchWithCron({ [key]: (e.target as HTMLInputElement).value })

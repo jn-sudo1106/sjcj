@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ckSourceApi } from '@/api'
+import { ckSourceApi, entryApi } from '@/api'
 import type { NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { syncMonitorAlertConfig, syncMonitorCkSource } from './monitorCkSource'
 
@@ -74,7 +74,13 @@ describe('syncMonitorCkSource', () => {
       name: '库存监控',
       schedule: '0 0 8 * * ?',
       tableName: 'sense_data.TB_JD_SKU_BASE',
+      // 2026-09-16 口径：update 也要带这几个固定值（不是只有 insert 才带 state）
+      state: 'E',
+      isDelete: 0,
+      ver: 12,
     })
+    // ISO-8601（后端 LocalDateTime 只认这个；带空格的旧写法会被 400 拒掉）
+    expect(String(payload.createDt)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/)
     const conf = JSON.parse(payload.checkConf ?? '{}')
     expect(conf.customKeep).toBe('keep-me')
     expect(conf.minSize).toBe('30')
@@ -93,12 +99,79 @@ describe('syncMonitorCkSource', () => {
     await syncMonitorCkSource('430016501', makeMonitorNode())
 
     const payload = insert.mock.calls[0][0]
-    expect(payload.state).toBe('E')
+    expect(payload).toMatchObject({ state: 'E', isDelete: 0, ver: 12 })
+    // ISO-8601（后端 LocalDateTime 只认这个；带空格的旧写法会被 400 拒掉）
+    expect(String(payload.createDt)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/)
     const conf = JSON.parse(payload.checkConf ?? '{}')
     expect(conf.minSize).toBe('30')
     expect(conf.startDt).toBe('DATE_SUB(CURDATE(), INTERVAL 1 DAY)')
     expect(conf.notifyOn).toBe('error')
     expect(conf.notifyType).toBe('mail')
+  })
+
+  // 节点配置 Tab 的 cron 框对非「自定义 cron」的策略显示的是**推导值**，store 里不一定有 cron。
+  // 保存必须落这个推导值，否则出现「界面显示 0 0 8 * * ?、ck_source.SCHEDULE 是空」。
+  it('schedule 按节点配置 Tab 的定时策略推导，不依赖 store 里已存的 cron', async () => {
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
+    const insert = vi.spyOn(ckSourceApi, 'insert').mockResolvedValue(1)
+
+    await syncMonitorCkSource('430016501', makeMonitorNode({
+      schedule: { scheduleType: '每天', scheduleTime: '08:00', weekdays: [], cron: '' },
+    }))
+
+    expect(insert.mock.calls[0][0]).toMatchObject({ schedule: '0 0 8 * * ?' })
+  })
+
+  // 节点没配过定时 → 节点配置 Tab 显示的是源上的定时，落库要用同一个值。
+  it('节点没配定时时用画布当前源的定时设置', async () => {
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
+    const insert = vi.spyOn(ckSourceApi, 'insert').mockResolvedValue(1)
+
+    await syncMonitorCkSource('430016501', makeMonitorNode({ schedule: undefined }), {
+      scheduleType: '交易日定时', scheduleTime: '08:30', weekdays: [1, 2, 3, 4, 5], cron: '',
+    })
+
+    expect(insert.mock.calls[0][0]).toMatchObject({ schedule: '0 30 8 ? * 1-5' })
+  })
+
+  // 一点定时都没配时，节点配置 Tab 那个 cron 框显示的是「每天 0:0」的兜底推导值——
+  // 保存按界面口径照写，不再留空（空串等于这条监控不会被排期）。
+  it('定时一点没配时 schedule 取节点配置 Tab 的兜底显示值', async () => {
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
+    const insert = vi.spyOn(ckSourceApi, 'insert').mockResolvedValue(1)
+
+    await syncMonitorCkSource('430016501', makeMonitorNode({ schedule: undefined, collectCfg: undefined }))
+
+    expect(insert.mock.calls[0][0]).toMatchObject({ schedule: '0 0 0 * * ?' })
+  })
+
+  // 流程重新加载后只剩输入表 ID（物理表名不落步骤），表配置 Tab 显示的是那张表，
+  // 落库也要拿到它的物理表名，而不是把 ID 写进 TABLE_NAME 或者写空。
+  it('只有输入表 ID 时回查表详情取物理表名', async () => {
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
+    const insert = vi.spyOn(ckSourceApi, 'insert').mockResolvedValue(1)
+    const detail = vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({
+      tableId: '2102154', tableName: 'sense_data.TB_JD_SKU_BASE', name: '酒价基础表', fields: [],
+    })
+
+    await syncMonitorCkSource('430016501', makeMonitorNode({
+      ruleCfg: { mode: 'ref', scriptPath: '/code01/184.py', describe: '', inputTable: '', inputTableId: '2102154' },
+    }))
+
+    expect(detail).toHaveBeenCalledWith('2102154')
+    expect(insert.mock.calls[0][0]).toMatchObject({ tableName: 'sense_data.TB_JD_SKU_BASE' })
+  })
+
+  it('回查表详情失败时 tableName 留空，不抛出去打断保存', async () => {
+    vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
+    const insert = vi.spyOn(ckSourceApi, 'insert').mockResolvedValue(1)
+    vi.spyOn(entryApi, 'entryDetail').mockRejectedValue(new Error('表详情不可用'))
+
+    await syncMonitorCkSource('430016501', makeMonitorNode({
+      ruleCfg: { mode: 'ref', scriptPath: '/code01/184.py', describe: '', inputTable: '', inputTableId: '2102154' },
+    }))
+
+    expect(insert.mock.calls[0][0]).toMatchObject({ tableName: '' })
   })
 })
 

@@ -154,9 +154,10 @@ async function onSaveNodeConfig() {
   // 数据监控节点在编排配置 Tab 点底部「保存」（2026-09-07 补）：配置保存成功后同步 ck_source
   //（vanv-data-engine /api/source/*，按 sourceId 无则 insert、有则 update）。与 RuleOrchestrationTab
   //「保存脚本」后的同步同一条逻辑（utils/flow/monitorCkSource.ts）；失败不回滚配置保存，单独提示。
+  // 源一并传进去：节点没配过定时时，节点配置 Tab 展示的就是源上的 cron，落库要用同一个值。
   if (saved && tab.value === 'orchestration' && isMonitorNode(node)) {
     try {
-      await syncMonitorCkSource(flow.sourceCfg?.sourceId, node)
+      await syncMonitorCkSource(flow.sourceCfg?.sourceId, node, flow.sourceCfg)
     } catch (e) {
       ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
     }

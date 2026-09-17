@@ -225,6 +225,22 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(actionRow.findAll('button')).toHaveLength(3)
   })
 
+  // 0917 产品口径：数据监控节点不要「上传 Excel」样本文件入口（画布 / 监控视图两处一致），
+  // 规则处理节点保留——那里的 Excel 是给"按样本生成规则脚本"用的。
+  it('数据监控节点动作区只有生成脚本与测试脚本，没有上传 Excel', async () => {
+    mockAssets()
+    const { wrapper } = mountOnMonitorNode()
+    await flushPromises()
+
+    const actionRow = wrapper.find('[data-testid="rule-generation-actions"]')
+    expect(actionRow.exists()).toBe(true)
+    expect(actionRow.find('[data-testid="main-upload-excel"]').exists()).toBe(false)
+    expect(actionRow.find('[data-testid="main-excel-file-input"]').exists()).toBe(false)
+    expect(actionRow.find('[data-testid="main-generate-script"]').exists()).toBe(true)
+    expect(actionRow.find('[data-testid="main-test-script"]').exists()).toBe(true)
+    expect(actionRow.findAll('button')).toHaveLength(2)
+  })
+
   it('进入编排配置时已有脚本仅显示生成结果和脚本路径', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     flow.patchRuleConfig('rule-1', {
@@ -566,10 +582,20 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await triggerWorkbenchSave(wrapper)
 
     expect(insertSpy).not.toHaveBeenCalled()
-    // update 不带 state：运行状态由后台任务维护，前端不覆盖
+    // 2026-09-16 口径：update 与 insert 同一份 payload，state/isDelete/createDt/ver 都带上，
+    // schedule 取节点配置 Tab 的 cron、tableName 取表配置 Tab 的输入表。
     const updatePayload = (ckSourceApi.update as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as Record<string, unknown>
-    expect(updatePayload.state).toBeUndefined()
-    expect(ckSourceApi.update).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 430016501, name: '库存监控' }))
+    expect(updatePayload).toMatchObject({
+      sourceId: 430016501,
+      name: '库存监控',
+      schedule: '0 0 8 * * ?',
+      tableName: 'sense_data.TB_JD_SKU_BASE',
+      state: 'E',
+      isDelete: 0,
+      ver: 12,
+    })
+    // ISO-8601（后端 LocalDateTime 只认这个；带空格的旧写法会被 400 拒掉）
+    expect(String(updatePayload.createDt)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/)
   })
 
   it('流程未绑源（无 sourceId）时保存脚本不同步 ck_source', async () => {
@@ -1200,11 +1226,15 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     }
   })
 
-  it('数据监控节点工作区会把 source_id/source_cron/source_table 按表单值替换', async () => {
+  // 2026-09-16 修：source_id 取**画布当前源**（左侧源列表里选中的那个），不是节点自己的
+  // 「适用源」stepSourceId——后者按设计默认 `-1`（该配置下所有源共用），拼进提示词就是
+  // `source_id=-1`，监控脚本拿它去查数据必然落空。
+  it('数据监控节点工作区把 source_id 拼成画布当前源，而不是步骤的适用源 -1', async () => {
     mockAssets('通用新闻表', '900', 'sense_data.TB_CNEWS')
     const { flow, wrapper } = mountOnMonitorNode()
     flow.setInputTable('monitor-1', '900')
-    flow.setStepSourceId('monitor-1', '391007796')
+    flow.setStepSourceId('monitor-1', '-1')   // 规则/数据监控节点的默认「适用源」，不该出现在提示词里
+    flow.patchSource({ sourceId: '430016398', name: 'test1' })
     flow.patchSchedule('monitor-1', { cron: '0 0 12 * * *' })
     await flushPromises()
 
@@ -1216,9 +1246,29 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await flushPromises()
 
     const promptTextarea = wrapper.find('textarea.wb-textarea:not(.wb-code):not(.wb-describe)')
-    expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('source_id=391007796')
-    expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('source_cron=0 0 12 * * *')
-    expect((promptTextarea.element as HTMLTextAreaElement).value).toContain('source_table=通用新闻表:sense_data.TB_CNEWS')
+    const prompt = (promptTextarea.element as HTMLTextAreaElement).value
+    expect(prompt).toContain('source_id=430016398')
+    expect(prompt).not.toContain('source_id=-1')
+    expect(prompt).toContain('source_cron=0 0 12 * * *')
+    expect(prompt).toContain('source_table=通用新闻表:sense_data.TB_CNEWS')
+  })
+
+  it('画布没绑源时 source_id 留空，不会退回写成 -1', async () => {
+    mockAssets('通用新闻表', '900', 'sense_data.TB_CNEWS')
+    const { flow, wrapper } = mountOnMonitorNode()
+    flow.setInputTable('monitor-1', '900')
+    flow.setStepSourceId('monitor-1', '-1')
+    await flushPromises()
+
+    await openWorkbench(wrapper)
+    const toggleBtn = wrapper.findAll('button').find((b) => b.text() === '系统提示词')!
+    await toggleBtn.trigger('click')
+    await flushPromises()
+
+    const promptTextarea = wrapper.find('textarea.wb-textarea:not(.wb-code):not(.wb-describe)')
+    const prompt = (promptTextarea.element as HTMLTextAreaElement).value
+    expect(prompt).toContain('source_id=;')
+    expect(prompt).not.toContain('source_id=-1')
   })
 
   it('保存脚本：需二次确认，确认后调用 fileUploadScript', async () => {

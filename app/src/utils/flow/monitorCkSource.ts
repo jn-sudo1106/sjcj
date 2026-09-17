@@ -2,13 +2,42 @@
 // 数据监控节点保存时按当前流程的 sourceId 查 ck_source（GET /api/source/list），
 // 无则 insert、有则 update。NodeInspector 底部「保存」（编排配置 Tab）与
 // RuleOrchestrationTab「保存脚本」两条保存路径共用，抽在这里保证 payload 口径一致。
-import { ckSourceApi } from '@/api'
+import { ckSourceApi, entryApi } from '@/api'
 import {
   makeDefaultRuleOrchestration,
+  type CollectorSchedule,
   type MonitorAlertConfig,
   type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
-import type { RuleOrchestration } from '@/api'
+import type { CkSourcePayload, RuleOrchestration } from '@/api'
+import { nodeScheduleCron } from './scheduleCron'
+
+/**
+ * ck_source 落库时的固定值（2026-09-16 定下的写入口径）：insert / update 都要带上，
+ * 不是「只有新建才写」。这四个字段之外，运行状态类字段（LAST_RUN/NEXT_RUN/LOCK_STATE 等）
+ * 一概不传——后端 SourceService 只写非空字段，不传即保留原值。
+ *
+ * IS_DELETE 写 **0 = 在用**：这张表里 1 才是停用/逻辑删除（旧平台监控列表
+ * `enabled = isDelete === 0`、调度侧筛选 `coalesce(IS_DELETE, 0) = 0`、告警面板的
+ * `sourceCheckApi.changeEnable` 0=在用/1=停用 都是这个方向）。写 1 会让刚保存的监控
+ * 直接落在「停用」态、也不会被排期，所以这里必须是 0。
+ */
+const CK_SOURCE_STATE = 'E'
+const CK_SOURCE_IS_DELETE = 0
+const CK_SOURCE_VER = 12
+
+/**
+ * ck_source.CREATE_DT 的文本格式：**ISO-8601 本地时间** `YYYY-MM-DDTHH:mm:ss`。
+ *
+ * 后端 CkSource.createDt 是 `LocalDateTime`，Spring 默认的 Jackson（JSR-310）只认 ISO-8601，
+ * 带空格的旧平台写法 `2026-09-16 18:24:38` 会在反序列化阶段就抛 HttpMessageNotReadableException，
+ * 接口直接 400 Bad Request（不写库、也没有任何业务错误信息，实测 2026-09-16）。
+ * 不带时区是因为 LocalDateTime 本身无时区语义，带上 Z 会被当成字面量解析成本地时间。
+ */
+function formatDateTime(date: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`
+}
 
 /**
  * 数据监控节点的编排配置快照（monitor 复用 rule 种子，isRule 恒 true → ruleCfg）。
@@ -19,6 +48,30 @@ export function monitorOrchestrationOf(node: NodeConfig | undefined): RuleOrches
     ...makeDefaultRuleOrchestration(),
     ...node?.ruleCfg,
     name: node?.title ?? '',
+  }
+}
+
+/**
+ * tableName = 表配置 Tab 里选中的**输入表**。
+ *
+ * 用户手选表时组件写的是物理表名（`ruleCfg.inputTable`，如 `sense_data.TB_JD_SKU_BASE`），
+ * 但流程重新加载后只剩表 ID（步骤里存的是 `inputTable`/`inputTableId`，物理名不落步骤，
+ * 见 flowModel.seeds 的 applyRuleStepTables），所以只有 ID 时回查一次表详情取物理名。
+ * 查询失败不阻塞保存——这个字段查不到就留空，比整次保存回滚强。
+ */
+async function resolveInputTableName(node: NodeConfig | undefined, orch: RuleOrchestration): Promise<string> {
+  const named = orch.inputTable?.trim()
+  if (named) return named
+  const tableId = orch.inputTableId?.trim()
+    || node?.collectCfg?.inputTable?.trim()
+    || node?.inputTable?.trim()
+    || ''
+  if (!tableId) return ''
+  try {
+    const entry = await entryApi.entryDetail(tableId)
+    return entry?.tableName?.trim() || ''
+  } catch {
+    return ''
   }
 }
 
@@ -112,11 +165,28 @@ export async function syncMonitorAlertConfig(
 }
 
 /**
- * 按 sourceId 同步 ck_source：无则 insert、有则 update。
- * 字段：sourceId=流程源ID、name=节点名称、schedule=cron、tableName=输入表、
- * checkConf=监控方法+编排配置序列化的 JSON。失败向上抛，由调用方决定提示与回滚策略。
+ * 按 sourceId 同步 ck_source：无则 insert、有则 update。两条保存路径（编排配置 Tab 底部「保存」、
+ * 「保存脚本」）都走这里。
+ *
+ * 字段口径（2026-09-16 对齐后）：
+ *   sourceId=流程源ID、name=节点名称、
+ *   schedule=**节点配置 Tab「定时策略」里那个 cron**（节点 → collectCfg → 源 三层合并 + 策略推导，
+ *   见 scheduleCron.ts，不是直接读 node.schedule.cron；三层都没配过时取界面兜底值
+ *   `0 0 0 * * ?`，不再留空——调度侧要求 SCHEDULE 非空），
+ *   tableName=**表配置 Tab 选中的输入表**物理名（只有表 ID 时回查一次表详情）、
+ *   checkConf=监控方法+编排配置序列化的 JSON、
+ *   state/isDelete/createDt/ver 按上面的固定值补齐。
+ *
+ * `sourceSchedule` 传画布当前源（flow.sourceCfg）：节点没配过定时时，节点配置 Tab 显示的就是
+ * 源上的定时，保存就该写同一个值，否则出现「界面有 cron、落库是空」。
+ *
+ * 失败向上抛，由调用方决定提示与回滚策略。
  */
-export async function syncMonitorCkSource(sourceId: string | undefined, node: NodeConfig | undefined): Promise<void> {
+export async function syncMonitorCkSource(
+  sourceId: string | undefined,
+  node: NodeConfig | undefined,
+  sourceSchedule?: CollectorSchedule | null,
+): Promise<void> {
   const trimmed = sourceId?.trim()
   if (!trimmed) return // 流程未绑源（草稿态）时跳过，不阻塞保存
   const orchCfg = monitorOrchestrationOf(node)
@@ -125,19 +195,22 @@ export async function syncMonitorCkSource(sourceId: string | undefined, node: No
   const { systemPrompt: _omitPrompt, script: _omitScript, ...orchestration } = orchCfg
   const existing = await ckSourceApi.list(trimmed)
   const previousConf = parseCheckConf(existing[0]?.checkConf)
-  const payload = {
+  const payload: CkSourcePayload = {
     sourceId: Number(trimmed),
     name: node?.title ?? '',
-    schedule: node?.schedule?.cron ?? '',
-    tableName: orchCfg.inputTable ?? '',
+    schedule: nodeScheduleCron(node, sourceSchedule),
+    tableName: await resolveInputTableName(node, orchCfg),
     checkConf: buildCheckConf(node, orchestration, previousConf),
+    state: CK_SOURCE_STATE,
+    isDelete: CK_SOURCE_IS_DELETE,
+    createDt: formatDateTime(new Date()),
+    ver: CK_SOURCE_VER,
   }
   if (existing.length) {
-    // update 不带 state：后端 body 里为 null 的字段保留原列值，运行状态由后台任务维护，前端不覆盖。
     const updated = await ckSourceApi.update(payload)
     if (!updated) throw new Error('按 sourceId 未命中任何行')
     return
   }
-  // insert 默认 state='E'（启用）：新建的监控源记录直接进入可调度状态（2026-09-07 约定）。
-  await ckSourceApi.insert({ ...payload, state: 'E' })
+  // insert 与 update 同一份 payload：新建的监控源记录直接进入可调度状态（2026-09-07 约定）。
+  await ckSourceApi.insert(payload)
 }

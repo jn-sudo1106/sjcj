@@ -127,7 +127,7 @@ describe('CanvasHeader · 返回源视图', () => {
 })
 
 describe('CanvasHeader · 流程视图操作', () => {
-  it('选中数据监控节点时，在任务视图后显示监控配置页签并可切换', async () => {
+  it('监控视图页签常驻，位于任务视图之后，选中数据监控节点时可切换', async () => {
     const wrapper = await mountHeader()
     const flow = useFlowStore()
     flow.loadFromSource(
@@ -145,15 +145,15 @@ describe('CanvasHeader · 流程视图操作', () => {
 
     expect(isMonitorNode(flow.selectedNode)).toBe(true)
     const tab = wrapper.get('[data-testid="monitor-config-view"]')
-    expect(tab.text()).toBe('监控配置')
-    expect(wrapper.findAll('.ch-seg').at(-1)?.text()).toBe('监控配置')
+    expect(tab.text()).toBe('监控视图')
+    expect(wrapper.findAll('.ch-seg').at(-1)?.text()).toBe('监控视图')
 
     await tab.trigger('click')
     await flushPromises()
     expect(wrapper.vm.$router.currentRoute.value.query.view).toBe('monitor-config')
   })
 
-  it('选中普通规则节点时不显示监控配置页签', async () => {
+  it('选中普通规则节点时页签仍在，切到监控视图不会被弹回流程视图（0917 常驻）', async () => {
     const wrapper = await mountHeader()
     const flow = useFlowStore()
     flow.loadFromSource(
@@ -166,7 +166,20 @@ describe('CanvasHeader · 流程视图操作', () => {
     flow.select(ruleId)
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="monitor-config-view"]').exists()).toBe(false)
+    const tab = wrapper.get('[data-testid="monitor-config-view"]')
+    expect(tab.text()).toBe('监控视图')
+
+    await tab.trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.$router.currentRoute.value.query.view).toBe('monitor-config')
+
+    // 选中节点换成非监控节点也不该把视图弹回流程视图
+    const otherRuleId = 'rule-test-2'
+    flow.configs[otherRuleId] = cloneConfig(NODE_CONFIGS.rule)
+    flow.main.splice(2, 0, otherRuleId)
+    flow.select(otherRuleId)
+    await flushPromises()
+    expect(wrapper.vm.$router.currentRoute.value.query.view).toBe('monitor-config')
   })
 
   it('流程模板切换默认展示 10 个，并支持按名称或 ID 搜索', async () => {
