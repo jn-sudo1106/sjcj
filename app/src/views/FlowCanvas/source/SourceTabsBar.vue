@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
-import { useWorkspaceStore, type SiteTab, type SourceTab } from '@/stores/workspace'
+import { useWorkspaceStore, type OrderedTab, type WorkspaceTabRef } from '@/stores/workspace'
 import { useFlowStore } from '@/stores/flow'
 
 // 源详情工作区页签条（优化 0701 问题三 · 方案 B）：多个源并存为可关闭页签,视觉对齐原系统使用习惯。
@@ -16,6 +16,12 @@ import { useFlowStore } from '@/stores/flow'
 //     把上一个网站的入口和快照一起弄丢；
 //  ② **占额度、可关闭**：与源页签共用 8 个总额度（"多了也不好拉"——页签条横向滚动找页签
 //     比重新打开还慢），既然占额度，就得能关。
+//
+// 2026-09-17 走查两处：
+//  ③ **两类页签混排**（ws.orderedTabs）：原来网站页签固定占左边一段、且新项落在组尾，
+//     而源页签新项落在组首——同一条页签条上两套排法。现在统一成"后打开的在左"；
+//  ④ **关掉页签落到右邻**，不再甩回网站列表。原来只有源页签这么做，网站页签一关就跳
+//     /collect，"明明旁边还开着好几个页签，怎么把我踢出去了"。
 const ws = useWorkspaceStore()
 const flow = useFlowStore()
 const router = useRouter()
@@ -30,20 +36,32 @@ function isSiteActive(siteId: string) {
 }
 
 /** 点「全部」：回到该网站的聚合视图，并恢复上次停留的视图（默认源视图）。 */
-function goSiteAll(tab: SiteTab) {
-  if (isSiteActive(tab.siteId)) return
-  const view = ws.siteSnapshotOf(tab.siteId)?.view || 'source'
+function goSiteAll(siteId: string) {
+  if (isSiteActive(siteId)) return
+  const view = ws.siteSnapshotOf(siteId)?.view || 'source'
   ws.deactivate() // 让出源页签的激活态，否则页签条上会同时有两个高亮
-  void router.push({ path: '/canvas', query: { siteId: tab.siteId, view } })
+  void router.push({ path: '/canvas', query: { siteId, view } })
+}
+
+/** 关掉页签后落到接任的那个；一个都不剩才回网站列表。 */
+function goNext(next: WorkspaceTabRef | null) {
+  if (!next) {
+    router.push('/collect')
+    return
+  }
+  if (next.kind === 'site') goSiteAll(next.id)
+  else {
+    ws.activate(next.id)
+    navTo(next.id)
+  }
 }
 
 /** 关掉某个网站页签。名下的源页签不动——它们各自记着 siteId，照常能切。 */
-function onCloseSite(tab: SiteTab) {
-  const wasActive = isSiteActive(tab.siteId)
-  ws.closeSiteTab(tab.siteId)
-  if (!wasActive) return
-  // 关掉的正是当前所在的网站：没有别的地方可待，回网站列表
-  router.push('/collect')
+function onCloseSite(siteId: string) {
+  const wasActive = isSiteActive(siteId)
+  const next = ws.closeSiteTab(siteId)
+  if (!wasActive || onList.value) return
+  goNext(next)
 }
 
 function navTo(key: string) {
@@ -60,10 +78,23 @@ function navTo(key: string) {
   router.push({ path: '/canvas', query: { ...(siteId ? { siteId } : {}), sourceId: key, view } })
 }
 
-function onActivate(t: SourceTab) {
-  if (!onList.value && t.sourceId === ws.activeSourceId) return
-  ws.activate(t.sourceId)
-  navTo(t.sourceId)
+function onActivate(sourceId: string) {
+  if (!onList.value && !onSiteAll.value && sourceId === ws.activeSourceId) return
+  ws.activate(sourceId)
+  navTo(sourceId)
+}
+
+/** 页签条上点任意一项：按类型分发。 */
+function onTabClick(t: OrderedTab) {
+  if (t.kind === 'site') goSiteAll(t.id)
+  else onActivate(t.id)
+}
+function onTabClose(t: OrderedTab) {
+  if (t.kind === 'site') onCloseSite(t.id)
+  else void onClose(t)
+}
+function isActive(t: OrderedTab) {
+  return t.kind === 'site' ? isSiteActive(t.id) : !onList.value && !onSiteAll.value && t.id === ws.activeSourceId
 }
 
 function goList() {
@@ -72,9 +103,9 @@ function goList() {
   router.push('/collect')
 }
 
-async function onClose(t: SourceTab) {
+async function onClose(t: OrderedTab) {
   // 关闭活动页签且画布有未保存改动 → 先确认（其余页签的状态只是快照，无未保存概念）
-  if (t.sourceId === ws.activeSourceId && flow.dirty) {
+  if (t.id === ws.activeSourceId && flow.dirty) {
     try {
       await ElMessageBox.confirm(`「${t.name}」画布有未保存的改动，关闭页签将丢弃，是否继续？`, '关闭页签', {
         type: 'warning',
@@ -85,12 +116,11 @@ async function onClose(t: SourceTab) {
       return
     }
   }
-  const wasActive = t.sourceId === ws.activeSourceId
-  const next = ws.close(t.sourceId)
+  const wasActive = t.id === ws.activeSourceId
+  const next = ws.close(t.id)
   // 在源列表页关闭页签只更新页签条，不跳转；在源详情页关闭活动页签才切换到相邻页签/回列表
   if (!wasActive || onList.value) return
-  if (next) navTo(next)
-  else router.push('/collect')
+  goNext(next)
 }
 
 // 清空全部页签（0707 采集资产样式优化，对齐原型稿「6/8 清空」）：正在画布且有未保存改动时先确认
@@ -113,8 +143,9 @@ async function onCloseAll() {
 }
 
 // ---- 拖动排序（2026-09-17 走查要求）----
-// 只有源页签可拖：「网站列表」是固定入口，「全部 · xxx」是另一类上下文，
-// 跟源页签混排没有意义，所以它们不带 draggable。
+// 「网站列表」是固定入口，不参与排序；其余（含「全部 · xxx」）都可拖——
+// 两类页签既然已经混排在一条序列里，只让一类能拖就成了另一种说不清的区别对待。
+// 下标是 ws.orderedTabs 里的，store 落位后重写整条 seq。
 const dragFrom = ref<number | null>(null)
 const dropTo = ref<number | null>(null)
 
@@ -154,26 +185,12 @@ function onDragEnd() {
       <span class="rc-src-tab-name">网站列表</span>
     </button>
     <button
-      v-for="st in ws.siteTabs"
-      :key="st.siteId"
-      class="rc-src-tab site-tab"
-      :class="{ on: isSiteActive(st.siteId) }"
-      type="button"
-      role="tab"
-      data-testid="site-all-tab"
-      :aria-selected="isSiteActive(st.siteId)"
-      :title="`${st.name} · 全部源`"
-      @click="goSiteAll(st)"
-    >
-      <span class="rc-src-tab-name">全部 · {{ st.name }}</span>
-      <i class="rc-src-tab-x" aria-label="关闭页签" data-testid="site-all-tab-close" @click.stop="onCloseSite(st)">×</i>
-    </button>
-    <button
-      v-for="(t, i) in ws.tabs"
-      :key="t.sourceId"
+      v-for="(t, i) in ws.orderedTabs"
+      :key="`${t.kind}:${t.id}`"
       class="rc-src-tab"
       :class="{
-        on: !onList && !onSiteAll && t.sourceId === ws.activeSourceId,
+        'site-tab': t.kind === 'site',
+        on: isActive(t),
         dragging: dragFrom === i,
         'drop-before': dropTo === i && dragFrom !== null && dragFrom > i,
         'drop-after': dropTo === i && dragFrom !== null && dragFrom < i,
@@ -181,17 +198,23 @@ function onDragEnd() {
       type="button"
       role="tab"
       draggable="true"
-      :aria-selected="!onList && !onSiteAll && t.sourceId === ws.activeSourceId"
-      :title="`${t.name} · ${t.sourceId}`"
-      @click="onActivate(t)"
+      :data-testid="t.kind === 'site' ? 'site-all-tab' : undefined"
+      :aria-selected="isActive(t)"
+      :title="t.kind === 'site' ? `${t.name} · 全部源` : `${t.name} · ${t.id}`"
+      @click="onTabClick(t)"
       @dragstart="onDragStart(i, $event)"
       @dragover.prevent="dropTo = i"
       @dragleave="dropTo === i && (dropTo = null)"
       @drop.prevent="onDrop(i)"
       @dragend="onDragEnd"
     >
-      <span class="rc-src-tab-name">{{ t.name }}</span>
-      <i class="rc-src-tab-x" aria-label="关闭页签" @click.stop="onClose(t)">×</i>
+      <span class="rc-src-tab-name">{{ t.kind === 'site' ? `全部 · ${t.name}` : t.name }}</span>
+      <i
+        class="rc-src-tab-x"
+        aria-label="关闭页签"
+        :data-testid="t.kind === 'site' ? 'site-all-tab-close' : undefined"
+        @click.stop="onTabClose(t)"
+      >×</i>
     </button>
     </div>
     <div class="rc-src-tabs-actions">

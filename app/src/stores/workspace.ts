@@ -1,4 +1,4 @@
-import { reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 
 // 单写入口防抖：连续触发折叠到一次写入，sessionStorage 不必每个 keystroke 都重写
@@ -10,6 +10,8 @@ const PERSIST_DEBOUNCE_MS = 300
 export interface SourceTab {
   sourceId: string
   name: string
+  /** 页签条上的排序号，**越大越靠左**（= 越晚打开）。见 orderedTabs。老存档没有这个字段，按 0 处理。 */
+  seq?: number
 }
 
 export interface SourceTabSnapshot {
@@ -45,6 +47,17 @@ export interface SourceTabSnapshot {
 export interface SiteTab {
   siteId: string
   name: string
+  /** 同 SourceTab.seq——网站页签和源页签排在同一条序列里，不再分成两段。 */
+  seq?: number
+}
+
+/** 页签条上的一项，混排后用它指代「哪个页签」，不再假设一定是源。 */
+export type WorkspaceTabRef = { kind: 'site' | 'source'; id: string }
+
+/** 渲染用的一项：混排后的页签条顺序里的一格。 */
+export interface OrderedTab extends WorkspaceTabRef {
+  name: string
+  seq: number
 }
 
 /** 网站页签的浏览状态：点源页签走开、再点回「全部」时要复现的现场。 */
@@ -135,6 +148,41 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const snapshots = reactive<Record<string, SourceTabSnapshot>>(persisted.snapshots)
   const siteTabs = ref<SiteTab[]>(persisted.siteTabs ?? [])
   const siteSnapshots = reactive<Record<string, SiteTabSnapshot>>(persisted.siteSnapshots ?? {})
+
+  /**
+   * 页签条顺序（2026-09-17 走查）：**源页签与网站页签混排在同一条序列里**，后打开的在左。
+   *
+   * 之前是两段——网站页签一组、源页签一组，且两组的新项落点还相反（网站 push 到组尾、
+   * 源 unshift 到组首）。同一条页签条上两套排法，用户没法预期新页签会出现在哪。
+   *
+   * 用 seq 而不是"把两个数组并成一个"：`tabs` / `siteTabs` 各自还挂着快照、额度、
+   * 重命名等一堆按类型分的逻辑，合并数组要动的地方远多于收益。数组只当身份表，
+   * **顺序一律以 seq 为准**（含关闭后找右邻，见 neighborOf）。
+   */
+  let seqCounter = Math.max(
+    0,
+    ...persisted.tabs.map((t) => t.seq ?? 0),
+    ...(persisted.siteTabs ?? []).map((t) => t.seq ?? 0),
+  )
+  function nextSeq() {
+    return ++seqCounter
+  }
+  const orderedTabs = computed<OrderedTab[]>(() => [
+    ...siteTabs.value.map((t) => ({ kind: 'site' as const, id: t.siteId, name: t.name, seq: t.seq ?? 0 })),
+    ...tabs.value.map((t) => ({ kind: 'source' as const, id: t.sourceId, name: t.name, seq: t.seq ?? 0 })),
+  ].sort((a, b) => b.seq - a.seq))
+
+  function sameRef(a: WorkspaceTabRef, b: WorkspaceTabRef) {
+    return a.kind === b.kind && a.id === b.id
+  }
+  /** 关掉某一项后该落到哪：混排顺序里的右邻，没有右邻取左邻，都没有返回 null。 */
+  function neighborOf(target: WorkspaceTabRef): WorkspaceTabRef | null {
+    const list = orderedTabs.value
+    const idx = list.findIndex((t) => sameRef(t, target))
+    if (idx < 0) return null
+    const next = list[idx + 1] ?? list[idx - 1]
+    return next ? { kind: next.kind, id: next.id } : null
+  }
   // 分屏对比（0701 问题三 · 方案 C；0710 会议 B4 与页签解耦）：compareLeftId（左栏）/ compareSourceId（右栏）
   // 都是真实 sourceId，不要求对应已打开的页签——右栏按 id 直接加载，入口在源侧栏（同站 ⇔ + 全局选择器）。
   // 属临时查看态，不做 sessionStorage 持久化（刷新即退出对比，回到单栏）。
@@ -183,23 +231,41 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       activeSourceId.value = sourceId
       return false
     }
-    // 插到最前而不是追加（2026-09-17 走查要求）：页签条从左往右读，新开的排最左，
-    // 一打开就在眼前；追加到末尾的话，页签一多新页签会落在横向滚动区外，还得滚过去找。
-    tabs.value.unshift({ sourceId, name: name || sourceId })
+    // 新页签排最左（2026-09-17 走查要求）：页签条从左往右读，一打开就在眼前；追加到末尾的话，
+    // 页签一多新页签会落在横向滚动区外，还得滚过去找。实际顺序由 seq 决定（与网站页签混排），
+    // 数组这边一并 unshift 只是让两者不打架。
+    tabs.value.unshift({ sourceId, name: name || sourceId, seq: nextSeq() })
     activeSourceId.value = sourceId
     return true
   }
 
   /**
-   * 拖拽调整源页签顺序。`from`/`to` 都是 `tabs` 里的下标，越界直接忽略。
+   * 拖拽调整页签顺序。`from`/`to` 是**混排后**（orderedTabs）的下标，越界直接忽略。
    * 只管顺序，不动 activeSourceId——拖动不等于切换，拖完还停在原来那个页签上。
+   *
+   * 落位后把整条序列的 seq 重写一遍（左端最大），这样"新开的排最左"和"手动拖过的顺序"
+   * 用的是同一套规则，不会出现拖完再开一个新页签、顺序又乱掉的情况。
    */
   function moveTab(from: number, to: number) {
+    const list = orderedTabs.value
     if (from === to) return
-    if (from < 0 || from >= tabs.value.length) return
-    if (to < 0 || to >= tabs.value.length) return
-    const [moved] = tabs.value.splice(from, 1)
-    tabs.value.splice(to, 0, moved)
+    if (from < 0 || from >= list.length) return
+    if (to < 0 || to >= list.length) return
+    const next = [...list]
+    const [moved] = next.splice(from, 1)
+    next.splice(to, 0, moved)
+    const top = next.length
+    next.forEach((item, i) => {
+      const seq = top - i
+      if (item.kind === 'source') {
+        const tab = tabs.value.find((t) => t.sourceId === item.id)
+        if (tab) tab.seq = seq
+      } else {
+        const tab = siteTabs.value.find((t) => t.siteId === item.id)
+        if (tab) tab.seq = seq
+      }
+    })
+    seqCounter = Math.max(seqCounter, top)
   }
 
   function activate(sourceId: string) {
@@ -211,19 +277,24 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     activeSourceId.value = ''
   }
 
-  /** 关闭页签：关闭活动页签时激活右邻（无则左邻）；返回下一个活动 sourceId（'' 表示已无页签） */
-  function close(sourceId: string): string {
+  /**
+   * 关闭源页签。返回接任的页签（混排顺序里的右邻，无则左邻，都没有则 null）。
+   *
+   * 右邻**可能是网站页签**——页签条混排之后，"右边那个"本来就不保证是源。
+   * 所以返回的是 WorkspaceTabRef 而不是 sourceId：调用方按 kind 决定往哪跳。
+   */
+  function close(sourceId: string): WorkspaceTabRef | null {
     const idx = tabs.value.findIndex((t) => t.sourceId === sourceId)
-    if (idx < 0) return activeSourceId.value
+    if (idx < 0) return null
+    const next = neighborOf({ kind: 'source', id: sourceId })
     tabs.value.splice(idx, 1)
     delete snapshots[sourceId]
     if (activeSourceId.value === sourceId) {
-      const next = tabs.value[idx] ?? tabs.value[idx - 1]
-      activeSourceId.value = next?.sourceId ?? ''
+      activeSourceId.value = next?.kind === 'source' ? next.id : ''
       // 关闭活动页签即离开当前对比上下文（0710 会议 B4：对比与页签解耦，仅此场景联动退出）
       exitCompare()
     }
-    return activeSourceId.value
+    return next
   }
 
   /**
@@ -300,15 +371,22 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     // 额度与源页签共用。满了就静默不建——它是路由变化时自动调的，弹提示会连着弹；
     // 用户关掉几个页签后再进这个网站，「全部」自然就回来了。
     if (tabs.value.length + siteTabs.value.length >= MAX_WORKSPACE_TABS) return false
-    siteTabs.value.push({ siteId, name: name || siteId })
+    // 跟源页签同一条序列、同一个方向：新开的排最左（2026-09-17）。原来这里是 push，
+    // 于是网站页签越新越靠右、源页签越新越靠左，同一条页签条上两套排法。
+    siteTabs.value.unshift({ siteId, name: name || siteId, seq: nextSeq() })
     return true
   }
-  /** 关闭网站页签。该网站名下的源页签**不受影响**——它们各自快照里记着 siteId，照常能用。 */
-  function closeSiteTab(siteId: string) {
+  /**
+   * 关闭网站页签。该网站名下的源页签**不受影响**——它们各自快照里记着 siteId，照常能用。
+   * 返回接任的页签，口径与 close() 完全一致（2026-09-17：关掉「全部」不该被甩回网站列表）。
+   */
+  function closeSiteTab(siteId: string): WorkspaceTabRef | null {
     const idx = siteTabs.value.findIndex((t) => t.siteId === siteId)
-    if (idx < 0) return
+    if (idx < 0) return null
+    const next = neighborOf({ kind: 'site', id: siteId })
     siteTabs.value.splice(idx, 1)
     delete siteSnapshots[siteId]
+    return next
   }
   function clearSiteTabs() {
     for (const t of siteTabs.value) delete siteSnapshots[t.siteId]
@@ -338,5 +416,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return snapshots[sourceId]
   }
 
-  return { tabs, activeSourceId, snapshots, siteTabs, siteSnapshots, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, moveTab, renameTab, saveSnapshot, snapshotOf, ensureSiteTab, closeSiteTab, clearSiteTabs, saveSiteSnapshot, siteSnapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf, backTraceConditionOf, setPendingSourceCondition, takePendingSourceCondition }
+  return { tabs, activeSourceId, snapshots, siteTabs, siteSnapshots, orderedTabs, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, moveTab, renameTab, saveSnapshot, snapshotOf, ensureSiteTab, closeSiteTab, clearSiteTabs, saveSiteSnapshot, siteSnapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf, backTraceConditionOf, setPendingSourceCondition, takePendingSourceCondition }
 })

@@ -116,8 +116,10 @@ describe('SourceTabsBar 的「全部」页签', () => {
 
     const tabs = wrapper.findAll('[data-testid="site-all-tab"]')
     expect(tabs).toHaveLength(2)
+    // 后打开的排最左（2026-09-17，与源页签同一个方向）
+    expect(tabs.map((t) => t.text())).toEqual(['全部 · 天天基金×', '全部 · 新浪财经×'])
 
-    await tabs[1].trigger('click')
+    await tabs[0].trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.query).toEqual({ siteId: 'site-2', view: 'monitor' })
     expect(ws.activeSourceId).toBe('')
@@ -149,13 +151,45 @@ describe('SourceTabsBar 的「全部」页签', () => {
     ws.ensureSiteTab('site-2', '天天基金')
     await flushPromises()
 
-    await wrapper.findAll('[data-testid="site-all-tab-close"]')[1].trigger('click')
+    // 顺序是 [天天基金(site-2), 新浪财经(site-1)]，当前停在 site-1，所以下标 0 才是"非当前"
+    await wrapper.findAll('[data-testid="site-all-tab-close"]')[0].trigger('click')
     await flushPromises()
     expect(ws.siteTabs.map((t) => t.name)).toEqual(['新浪财经'])
     expect(router.currentRoute.value.query).toEqual({ siteId: 'site-1', view: 'source' })
   })
 
-  it('× 关掉当前所在的网站：回网站列表', async () => {
+  // 2026-09-17：关掉当前页签落到右邻，跟源页签一个口径——旁边还开着别的页签却把人甩回
+  // 网站列表，是"明明还有地方可待却被踢出去"。
+  it('× 关掉当前网站：落到右邻的网站页签，不回网站列表', async () => {
+    const { wrapper, router, ws } = await mountBar({ siteId: 'site-2', view: 'source' })
+    ws.ensureSiteTab('site-1', '新浪财经')
+    ws.ensureSiteTab('site-2', '天天基金')
+    ws.saveSiteSnapshot('site-1', { view: 'data' })
+    await flushPromises()
+
+    // 顺序 [天天基金(site-2), 新浪财经(site-1)]，关掉当前的 site-2
+    await wrapper.findAll('[data-testid="site-all-tab-close"]')[0].trigger('click')
+    await flushPromises()
+    expect(ws.siteTabs.map((t) => t.name)).toEqual(['新浪财经'])
+    expect(router.currentRoute.value.path).toBe('/canvas')
+    expect(router.currentRoute.value.query).toEqual({ siteId: 'site-1', view: 'data' })
+  })
+
+  it('× 关掉当前网站：右邻是源页签时切到那个源', async () => {
+    const { wrapper, router, ws } = await mountBar({ siteId: 'site-1', view: 'source' })
+    ws.open('source-a', '源 A')
+    ws.ensureSiteTab('site-1', '新浪财经') // 后开 → 排最左，右邻是 source-a
+    await flushPromises()
+
+    await wrapper.get('[data-testid="site-all-tab-close"]').trigger('click')
+    await flushPromises()
+    expect(ws.siteTabs).toEqual([])
+    expect(router.currentRoute.value.path).toBe('/canvas')
+    expect(router.currentRoute.value.query.sourceId).toBe('source-a')
+    expect(ws.activeSourceId).toBe('source-a')
+  })
+
+  it('× 关掉当前所在的网站：一个页签都不剩才回网站列表', async () => {
     const { wrapper, router, ws } = await mountBar({ siteId: 'site-1', view: 'source' })
     ws.ensureSiteTab('site-1', '新浪财经')
     await flushPromises()

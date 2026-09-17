@@ -53,9 +53,10 @@ describe('workspace 源详情多页签（优化 0701 问题三）', () => {
     // 新页签插最前（2026-09-17），所以此刻顺序是 s3 · s2 · s1
     expect(ws.tabs.map((t) => t.sourceId)).toEqual(['s3', 's2', 's1'])
     ws.activate('s2')
-    expect(ws.close('s2')).toBe('s1') // 右邻
-    expect(ws.close('s1')).toBe('s3') // 无右邻 → 左邻
-    expect(ws.close('s3')).toBe('') // 关完
+    // 返回接任页签的引用而不是 sourceId：混排之后右邻可能是网站页签（2026-09-17）
+    expect(ws.close('s2')).toEqual({ kind: 'source', id: 's1' }) // 右邻
+    expect(ws.close('s1')).toEqual({ kind: 'source', id: 's3' }) // 无右邻 → 左邻
+    expect(ws.close('s3')).toBeNull() // 关完
     expect(ws.tabs.length).toBe(0)
   })
 
@@ -72,6 +73,7 @@ describe('workspace 源详情多页签（优化 0701 问题三）', () => {
     expect(ws.activeSourceId).toBe('s1')
   })
 
+  // 下标是**混排后**（orderedTabs）的，store 落位后重写整条 seq
   it('moveTab：拖动调整顺序，越界忽略，不改变活动页签', () => {
     ws.open('s1', '源一')
     ws.open('s2', '源二')
@@ -79,9 +81,9 @@ describe('workspace 源详情多页签（优化 0701 问题三）', () => {
     ws.activate('s2')
 
     ws.moveTab(0, 2) // 把 s3 拖到最后
-    expect(ws.tabs.map((t) => t.sourceId)).toEqual(['s2', 's1', 's3'])
+    expect(ws.orderedTabs.map((t) => t.id)).toEqual(['s2', 's1', 's3'])
     ws.moveTab(2, 0) // 再拖回最前
-    expect(ws.tabs.map((t) => t.sourceId)).toEqual(['s3', 's2', 's1'])
+    expect(ws.orderedTabs.map((t) => t.id)).toEqual(['s3', 's2', 's1'])
 
     // 拖动不等于切换：活动页签始终没变
     expect(ws.activeSourceId).toBe('s2')
@@ -90,13 +92,39 @@ describe('workspace 源详情多页签（优化 0701 问题三）', () => {
     ws.moveTab(1, 1)
     ws.moveTab(-1, 0)
     ws.moveTab(0, 99)
-    expect(ws.tabs.map((t) => t.sourceId)).toEqual(['s3', 's2', 's1'])
+    expect(ws.orderedTabs.map((t) => t.id)).toEqual(['s3', 's2', 's1'])
+  })
+
+  // 2026-09-17：网站页签与源页签排在同一条序列里，后打开的在左；
+  // 关掉一个就落到它右边那个，哪怕右边是另一类页签。
+  it('orderedTabs：两类页签按打开先后混排，新的在左', () => {
+    ws.open('s1', '源一')
+    ws.ensureSiteTab('site-1', '新浪财经')
+    ws.open('s2', '源二')
+
+    expect(ws.orderedTabs.map((t) => `${t.kind}:${t.id}`)).toEqual(['source:s2', 'site:site-1', 'source:s1'])
+    // 关掉最左的源页签 → 右邻是网站页签
+    expect(ws.close('s2')).toEqual({ kind: 'site', id: 'site-1' })
+    // 关掉网站页签 → 右邻是剩下那个源页签
+    expect(ws.closeSiteTab('site-1')).toEqual({ kind: 'source', id: 's1' })
+    expect(ws.closeSiteTab('site-1')).toBeNull() // 已经不在了
+  })
+
+  it('moveTab 拖过网站页签也成立，拖完再开新页签仍排最左', () => {
+    ws.open('s1', '源一')
+    ws.ensureSiteTab('site-1', '新浪财经')
+    ws.open('s2', '源二') // s2 · site-1 · s1
+
+    ws.moveTab(0, 2) // 把 s2 拖到最后
+    expect(ws.orderedTabs.map((t) => t.id)).toEqual(['site-1', 's1', 's2'])
+    ws.open('s3', '源三')
+    expect(ws.orderedTabs.map((t) => t.id)).toEqual(['s3', 'site-1', 's1', 's2'])
   })
 
   it('close：关闭非活动页签不改变活动页签', () => {
     ws.open('s1', '源一')
     ws.open('s2', '源二')
-    expect(ws.close('s1')).toBe('s2')
+    expect(ws.close('s1')).toEqual({ kind: 'source', id: 's2' })
     expect(ws.activeSourceId).toBe('s2')
   })
 
@@ -190,7 +218,7 @@ describe('网站页签', () => {
   it('ensureSiteTab 幂等：同一网站只往"更好的名字"方向更新', () => {
     const ws = useWorkspaceStore()
     ws.ensureSiteTab('site-1')
-    expect(ws.siteTabs).toEqual([{ siteId: 'site-1', name: 'site-1' }])
+    expect(ws.siteTabs).toEqual([expect.objectContaining({ siteId: 'site-1', name: 'site-1' })])
 
     ws.ensureSiteTab('site-1', '新浪财经')
     expect(ws.siteTabs[0].name).toBe('新浪财经')
@@ -206,7 +234,8 @@ describe('网站页签', () => {
     ws.ensureSiteTab('site-2', '天天基金')
     ws.saveSiteSnapshot('site-2', { view: 'monitor' })
 
-    expect(ws.siteTabs.map((t) => t.name)).toEqual(['新浪财经', '天天基金'])
+    // 新开的排最左（与源页签同一个方向，2026-09-17 改；原来这里是 push 到组尾）
+    expect(ws.siteTabs.map((t) => t.name)).toEqual(['天天基金', '新浪财经'])
     // 关键回归：开了第二个网站不能把第一个的快照冲掉（跨网站开源页签时会踩到）
     expect(ws.siteSnapshotOf('site-1')).toEqual({ view: 'data' })
     expect(ws.siteSnapshotOf('site-2')).toEqual({ view: 'monitor' })
@@ -253,7 +282,7 @@ describe('网站页签', () => {
 
     setActivePinia(createPinia())
     const next = useWorkspaceStore()
-    expect(next.siteTabs).toEqual([{ siteId: 'site-1', name: '新浪财经' }])
+    expect(next.siteTabs).toEqual([expect.objectContaining({ siteId: 'site-1', name: '新浪财经' })])
     expect(next.siteSnapshotOf('site-1')).toEqual({ view: 'monitor' })
   })
 
@@ -265,7 +294,9 @@ describe('网站页签', () => {
     }))
     setActivePinia(createPinia())
     const ws = useWorkspaceStore()
+    // 老存档没有 seq，不能因此丢弃或报错——orderedTabs 按 0 处理
     expect(ws.tabs).toEqual([{ sourceId: 's1', name: '源一' }])
+    expect(ws.orderedTabs.map((t) => t.id)).toEqual(['s1'])
     expect(ws.activeSourceId).toBe('s1')
     expect(ws.siteTabs).toEqual([])
   })
