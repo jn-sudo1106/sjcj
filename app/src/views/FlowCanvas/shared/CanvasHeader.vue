@@ -8,7 +8,6 @@ import { useUiStore } from '@/stores/ui'
 import { flowCenterApi, type FlowRecord } from '@/api'
 import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
-import { isMonitorNode } from '@/views/FlowCanvas/canvas/flowModel'
 
 const flow = useFlowStore()
 const ui = useUiStore()
@@ -144,12 +143,9 @@ function backToSourceView() {
   if (siteId) router.push({ path: '/canvas', query: { siteId, view: 'source' } })
   else router.push('/collect')
 }
-const showMonitorConfigView = computed(() => isMonitorNode(flow.selectedNode))
-
-watch([view, showMonitorConfigView], ([current, show]) => {
-  if (current === 'monitor-config' && !show) switchView('flow')
-}, { immediate: true })
-
+// 0917：监控视图页签改为**常驻**，跟流程/数据/文件/任务四档一样，选中的是不是数据监控节点都显示。
+// 之前按 `isMonitorNode(flow.selectedNode)` 显隐，还配了一条"选中非监控节点就弹回流程视图"的兜底；
+// 产品口径是这五个视图平级——点任意节点都能停在监控视图上（非同类型节点时面板内给提示，见 MonitorConfigView）。
 function switchView(target: SourceWorkspaceView) {
   if (view.value === target) {
     if (target === 'data') ui.applyViewLayoutDefault('data')
@@ -214,14 +210,17 @@ async function onSwitchFlow(command: string) {
            删掉后用户当场提出「不是，任务视图和文件视图呢」，已还原。0904 纪要 I11 同步订正。 -->
       <button class="ch-seg" :class="{ on: view === 'file' }" type="button" @click="switchView('file')">文件视图</button>
       <button class="ch-seg" :class="{ on: view === 'task' }" type="button" @click="switchView('task')">任务视图</button>
+      <!-- 监控视图（0917 常驻）：原来按 `v-if=isMonitorNode(选中节点)` 显隐，选中普通规则节点就整档消失，
+           视觉上像"页签跑到别处去了"。现在跟前面四档一样常驻，节点类型只影响面板内容。
+           0917 更名：「监控配置」→「监控视图」——这一档跟流程/数据/文件/任务平级，叫"配置"会被当成
+           某个节点的配置面板入口；档内实际展示的告警面板才叫配置。 -->
       <button
-        v-if="showMonitorConfigView"
         class="ch-seg"
         :class="{ on: view === 'monitor-config' }"
         type="button"
         data-testid="monitor-config-view"
         @click="switchView('monitor-config')"
-      >监控配置</button>
+      >监控视图</button>
     </div>
 
     <template v-if="src">

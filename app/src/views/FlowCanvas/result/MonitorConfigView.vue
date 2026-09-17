@@ -39,7 +39,11 @@ function setAlertConfig(config: MonitorAlertConfig) {
         :script-path="scriptPath"
         @update:alert-config="setAlertConfig"
       />
-      <div v-else class="mcv-empty">请选择数据监控节点后配置监控告警。</div>
+      <!-- 页签常驻（0917）后，这一档在选中非数据监控节点时也会被点开：先说清"当前这个节点不是监控节点"，
+           再给下一步动作，别只丢一句"请选择数据监控节点"让人以为是页面坏了。 -->
+      <div v-else class="mcv-empty">
+        当前节点不是数据监控节点，请选择数据监控节点后配置监控告警。
+      </div>
     </div>
   </main>
 </template>
