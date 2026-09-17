@@ -23,6 +23,16 @@ export interface ResolvedNextStepConfig {
   branchHint?: string
   /** 未能发后续的原因（若无后继） */
   reason?: string
+  /**
+   * 当前节点之后的**全部下游步骤**（启用的），按层序、去重，含直接后继。
+   *
+   * 2026-09-17 生产实测定下的口径：`source/nextStep` 传**单个** `stepId` 时后端只发那一个、
+   * **不会**沿链路把下游带上（实测发 40598 后 41685 数据监控纹丝不动）；
+   * 传逗号分隔的多个 stepId 则按步骤分别派发，回执自己分组
+   * （`本次发送:1 条, 结果:,ok_40598: [1条],ok_41685: [1条]`）。
+   * 所以「从这个节点往后整条跑一遍」必须由前端把下游算全再一次传过去。
+   */
+  downstreamSteps: Step[]
 }
 
 export interface CurrentNodeConfigHint {
@@ -30,6 +40,39 @@ export interface CurrentNodeConfigHint {
   stepId?: string
   title?: string
   queue?: string
+}
+
+/**
+ * 从 `fromStepIds` 出发，沿 `dependsOn` 把**全部下游步骤**收集出来（广度优先，保持层序）。
+ *
+ * **停用的步骤会截断该分支**，不是跳过它继续往下收：它不跑就没有输出，它下游那些节点
+ * 拿不到数据，发过去只是空转一遍。所以遇到停用就停在那里，别把后面的也拖进来。
+ * `seen` 同时兼作环保护——脏数据里出现 A→B→A 时不会死循环。
+ */
+export function collectDownstreamSteps(steps: Step[], fromStepIds: string[]): Step[] {
+  const byId = new Map(steps.map((s) => [String(s.stepId), s]))
+  const seen = new Set(fromStepIds.map(String))
+  const out: Step[] = []
+  let frontier = fromStepIds.map(String)
+
+  while (frontier.length) {
+    const next: string[] = []
+    for (const id of frontier) {
+      const step = byId.get(id)
+      // 停用：本身不发，也不再往它下游走
+      if (!step || step.enabled === false) continue
+      out.push(step)
+      for (const candidate of steps) {
+        const cid = String(candidate.stepId)
+        if (seen.has(cid)) continue
+        if (!candidate.dependsOn?.includes(id)) continue
+        seen.add(cid)
+        next.push(cid)
+      }
+    }
+    frontier = next
+  }
+  return out
 }
 
 /**
@@ -50,6 +93,7 @@ export function resolveNextStepConfigFromSteps(
       hasNext: false,
       disabledTitles: [],
       nextSteps: [],
+      downstreamSteps: [],
       targetNodeName: '',
       reason: '当前源未配置任何步骤节点',
     }
@@ -127,6 +171,7 @@ export function resolveNextStepConfigFromSteps(
       hasNext: false,
       disabledTitles: [],
       nextSteps: [],
+      downstreamSteps: [],
       targetNodeName: '',
       reason: '当前节点在流程中没有后续节点配置，无法发后续任务',
     }
@@ -143,6 +188,7 @@ export function resolveNextStepConfigFromSteps(
       allDisabled: true,
       disabledTitles,
       nextSteps: directSuccessors,
+      downstreamSteps: [],
       targetNodeName: directSuccessors.map((s) => s.name || s.stepId).join('、'),
       reason: `后续节点（${disabledTitles.join('、')}）已停用，无法发起后续任务`,
     }
@@ -172,6 +218,7 @@ export function resolveNextStepConfigFromSteps(
     targetStepId,
     targetNodeName,
     branchHint,
+    downstreamSteps: collectDownstreamSteps(steps, enabledSuccessors.map((s) => String(s.stepId))),
   }
 }
 

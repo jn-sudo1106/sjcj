@@ -745,13 +745,24 @@ async function sendNextStepFor(groups: Map<string, string[]>, opts: { clearSelec
       return
     }
   }
-  const targetNodeName = nextConfigInfo?.targetNodeName || selectedCfg.value?.title || selectedNodeId.value
+  // 发**整条下游**，不是只发直接后继（2026-09-17 定，与 ResultView 同口径）。
+  // 后端实测：传单个 stepId 只发那一个、不会沿链路带下游；传逗号串则按步骤分别派发，
+  // 回执自己分组（`本次发送:1 条, 结果:,ok_40598: [1条],ok_41685: [1条]`）。
+  // 算不出下游时退回单个后继，保持旧行为。
+  const downstreamIds = (nextConfigInfo?.downstreamSteps ?? [])
+    .map((step) => String(step.stepId))
+    .filter((id) => /^\d+$/.test(id))
+  const targetStepIds = downstreamIds.length ? downstreamIds.join(',') : nextConfigInfo?.targetStepId
+  // 文案要跟实际发送的范围一致：发整条下游就把下游都列出来
+  const downstreamNames = (nextConfigInfo?.downstreamSteps ?? []).map((step) => step.name || step.stepId).filter(Boolean)
+  const targetNodeName = (downstreamNames.length ? downstreamNames.join('、') : '')
+    || nextConfigInfo?.targetNodeName || selectedCfg.value?.title || selectedNodeId.value
   const tableId = nextConfigInfo?.targetTableId || successorTableId.value || effectiveTableId.value
   const configOptions = {
     configId: nextConfigInfo?.targetConfigId,
-    itemConfig: nextConfigInfo?.targetStepId,
-    stepId: nextConfigInfo?.targetStepId,
-    nextStep: nextConfigInfo?.targetStepId,
+    itemConfig: targetStepIds,
+    stepId: targetStepIds,
+    nextStep: targetStepIds,
   }
   await confirmDanger(
     '发后续任务',

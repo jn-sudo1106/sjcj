@@ -157,3 +157,76 @@ describe('nextStepConfig · 根据当前节点与 nextConfigPaged 解析下一�
     expect(res.nextStep?.topic).toBe('news_cont')
   })
 })
+
+// 2026-09-17 定的口径：发后续 = 发**当前节点之后的整条下游**，不是只发直接后继。
+// 依据是同日生产实测：source/nextStep 传单个 stepId 时后端只发那一个、不会沿链路带下游
+// （发 40598 后 41685 数据监控纹丝不动）；传逗号串则按步骤分别派发，回执自己分组
+// （`本次发送:1 条, 结果:,ok_40598: [1条],ok_41685: [1条]`）。
+describe('collectDownstreamSteps · 收集整条下游', () => {
+  // 与生产源 430006252 同构：起点 → 40597 下载 → 40598 解析 → 41685 数据监控
+  const chain: Step[] = [
+    { stepId: '0', sourceId: '1', name: '起点', isRoot: true, outputTable: '900', enabled: true },
+    { stepId: '40597', sourceId: '1', name: 'html网页下载', configId: '1400974', inputTable: '900', outputTable: '900', dependsOn: ['0'], enabled: true },
+    { stepId: '40598', sourceId: '1', name: 'html解析', configId: '1400975', inputTable: '900', outputTable: '900', dependsOn: ['40597'], enabled: true },
+    { stepId: '41685', sourceId: '1', name: '数据监控', configId: '1401006', inputTable: '900', outputTable: '900', dependsOn: ['40598'], enabled: true },
+  ]
+
+  it('站在起点发全部三个；站在中间只发它之后的，不含自己', () => {
+    expect(resolveNextStepConfigFromSteps(chain, '0').downstreamSteps.map((s) => s.stepId))
+      .toEqual(['40597', '40598', '41685'])
+    // 不含 40597 自己——把当前节点再跑一遍正是 9/12 那个 bug 的表现
+    expect(resolveNextStepConfigFromSteps(chain, '40597').downstreamSteps.map((s) => s.stepId))
+      .toEqual(['40598', '41685'])
+    expect(resolveNextStepConfigFromSteps(chain, '40598').downstreamSteps.map((s) => s.stepId))
+      .toEqual(['41685'])
+  })
+
+  it('末节点没有下游，照旧给不可发的原因', () => {
+    const res = resolveNextStepConfigFromSteps(chain, '41685')
+    expect(res.hasNext).toBe(false)
+    expect(res.downstreamSteps).toEqual([])
+  })
+
+  it('直接后继被停用时整条发不出去，照旧给「已停用」的原因', () => {
+    const withDisabled = chain.map((s) => (s.stepId === '40598' ? { ...s, enabled: false } : s))
+    const res = resolveNextStepConfigFromSteps(withDisabled, '40597')
+    expect(res.hasNext).toBe(false)
+    expect(res.allDisabled).toBe(true)
+    expect(res.downstreamSteps).toEqual([])
+  })
+
+  it('链路中间停用会截断该分支：它不跑就没有输出，它下游发过去只是空转', () => {
+    // 40598 启用、41685 停用、41685 后面还挂一个 X
+    const withTail: Step[] = [
+      ...chain.map((s) => (s.stepId === '41685' ? { ...s, enabled: false } : s)),
+      { stepId: 'x', sourceId: '1', name: '监控之后', dependsOn: ['41685'], enabled: true },
+    ]
+    const ids = resolveNextStepConfigFromSteps(withTail, '40597').downstreamSteps.map((s) => s.stepId)
+    expect(ids).toEqual(['40598'])
+    expect(ids).not.toContain('41685')
+    expect(ids).not.toContain('x')
+  })
+
+  it('多分支时两条支路的下游都收进来', () => {
+    const forked: Step[] = [
+      ...chain.slice(0, 2),
+      { stepId: 'b1', sourceId: '1', name: '分支一', dependsOn: ['40597'], enabled: true },
+      { stepId: 'b1x', sourceId: '1', name: '分支一的下游', dependsOn: ['b1'], enabled: true },
+      { stepId: 'b2', sourceId: '1', name: '分支二', dependsOn: ['40597'], enabled: true },
+    ]
+    const ids = resolveNextStepConfigFromSteps(forked, '40597').downstreamSteps.map((s) => s.stepId)
+    expect(ids).toEqual(expect.arrayContaining(['b1', 'b2', 'b1x']))
+  })
+
+  it('父子关系成环时不死循环', () => {
+    const cyclic: Step[] = [
+      { stepId: 'a', sourceId: '1', name: 'A', dependsOn: ['0'], enabled: true },
+      { stepId: 'b', sourceId: '1', name: 'B', dependsOn: ['a'], enabled: true },
+      { stepId: 'a2', sourceId: '1', name: '回指 A', dependsOn: ['b'], enabled: true },
+    ]
+    // b 的下游 a2 又指回 b 所在的链路，seen 兜住不重复入队
+    const cyclic2 = cyclic.map((s) => (s.stepId === 'a2' ? { ...s, dependsOn: ['b'], stepId: 'a' } : s))
+    const ids = resolveNextStepConfigFromSteps(cyclic2, '0').downstreamSteps.map((s) => s.stepId)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+})

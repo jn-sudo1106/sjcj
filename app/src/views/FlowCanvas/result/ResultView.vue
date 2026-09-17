@@ -400,10 +400,21 @@ async function onSendNextStep() {
 
   const tableId = (nextInfo?.hasNext ? nextInfo.targetTableId : undefined) || successorTableId.value || outputTableId.value || selectedTable.value
   if (!tableId) return
-  const targetNodeName = (nextInfo?.hasNext ? nextInfo.targetNodeName : undefined) || successorTitles.value || '后续节点'
+  // 文案要跟实际发送的范围一致：发整条下游就把下游都列出来，不能只报直接后继的名字
+  const downstreamNames = (nextInfo?.downstreamSteps ?? []).map((s) => s.name || s.stepId).filter(Boolean)
+  const targetNodeName = (downstreamNames.length ? downstreamNames.join('、') : '')
+    || (nextInfo?.hasNext ? nextInfo.targetNodeName : undefined) || successorTitles.value || '后续节点'
   const targetConfigId = (nextInfo?.hasNext ? nextInfo.targetConfigId : undefined) || fallbackSuccConfigId
-  const targetStepId = (nextInfo?.hasNext ? nextInfo.targetStepId : undefined) || fallbackSuccStepId
-  const hasTargetStepId = targetStepId && /^\d+$/.test(targetStepId)
+  // 发**整条下游**，不是只发直接后继（2026-09-17 定）。后端实测：传单个 stepId 只发那一个，
+  // 不会沿链路带下游；传逗号串则按步骤分别派发。算不出下游时退回单个后继，保持旧行为。
+  const downstreamIds = (nextInfo?.downstreamSteps ?? [])
+    .map((s) => String(s.stepId))
+    .filter((id) => /^\d+$/.test(id))
+  const singleStepId = (nextInfo?.hasNext ? nextInfo.targetStepId : undefined) || fallbackSuccStepId
+  const targetStepId = downstreamIds.length
+    ? downstreamIds.join(',')
+    : singleStepId
+  const hasTargetStepId = !!targetStepId && /^[\d,]+$/.test(targetStepId)
   const fanout = (nextInfo?.branchHint ? `\n这批数据会按各后继节点的进入条件分流到：${nextInfo.branchHint}` : '') ||
     (branchTargets.value.length ? `\n这批数据会按各后继节点的进入条件分流到：${branchTargets.value.map((t) => `${t.title}（${t.condition}）`).join('、')}` : '')
 
