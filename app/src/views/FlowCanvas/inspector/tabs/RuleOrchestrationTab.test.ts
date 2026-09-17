@@ -198,6 +198,133 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(wrapper.find('.rc-actions-row button').exists()).toBe(false)
   })
 
+  // 0917 产品口径：OCR 抓取节点不给「脚本编辑」入口（这一类不在这里生成 Python 脚本），
+  // 标题行只剩「抓取配置」。其它节点类型不受影响（上面那条规则节点的用例仍要求有这个按钮）。
+  it('OCR 抓取节点的标题行没有脚本编辑按钮', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS['ocr'])
+    flow.configs['ocr-1'] = cfg
+    flow.select('ocr-1')
+    flow.setActiveTab('orchestration')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const titleRow = wrapper.find('.ni-section-title-row')
+    expect(titleRow.exists()).toBe(true)
+    expect(titleRow.text()).toContain('抓取配置')
+    expect(titleRow.find('button').exists()).toBe(false)
+    expect(wrapper.find('.ni-section-actions').exists()).toBe(false)
+  })
+
+  // 0917 OCR 识别试跑：选图 → 转 base64 → 调 /ocr → 展示识别文本
+  describe('OCR 识别试跑（OCR 抓取节点）', () => {
+    function mountOnOcrNode() {
+      mockAssets()
+      setActivePinia(createPinia())
+      const flow = useFlowStore()
+      flow.configs['ocr-1'] = cloneConfig(NODE_CONFIGS['ocr'])
+      flow.select('ocr-1')
+      flow.setActiveTab('orchestration')
+      const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+      return { flow, wrapper }
+    }
+
+    const OCR_RESPONSE = {
+      status: 'success',
+      message: 'ok',
+      data: { result: { data: [
+        { block_id: '1', row_id: '1', element_value: 'Body' },
+        { block_id: '2', row_id: '2', element_value: 'Cookie' },
+      ] } },
+    }
+
+    function mockOcrFetch(payload: unknown = OCR_RESPONSE, status = 200) {
+      return vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(payload), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+    }
+
+    /** 转 base64 走 FileReader（jsdom 里是宏任务），flushPromises 不等它——显式让出一小段时间。 */
+    async function waitForOcrRequest() {
+      await flushPromises()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      await flushPromises()
+    }
+
+    it('OCR 节点显示图片上传入口，规则节点不显示', async () => {
+      const { wrapper } = mountOnOcrNode()
+      await flushPromises()
+      expect(wrapper.find('[data-testid="ocr-recognize-field"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="ocr-pick-image"]').exists()).toBe(true)
+      // 没选图时「开始识别」不可点
+      expect(wrapper.get('[data-testid="ocr-recognize"]').attributes('disabled')).toBeDefined()
+    })
+
+    it('选图后转 base64 调 /ocr，并把识别文本按行贴出来', async () => {
+      const { wrapper } = mountOnOcrNode()
+      await flushPromises()
+      // ⚠️ 必须挂载之后再接管 fetch：mockAssets() 自己也会 spy fetch（画布上的提示词/模型请求），
+      // 先装的话会被它顶掉，断言就永远看到 0 次调用。
+      const fetchSpy = mockOcrFetch()
+
+      const file = new File(['fake-png'], 'shot.png', { type: 'image/png' })
+      await selectFile(wrapper.find('input[data-testid="ocr-image-input"]'), file)
+      await flushPromises()
+
+      await wrapper.get('[data-testid="ocr-recognize"]').trigger('click')
+      await waitForOcrRequest()
+
+      const ocrCalls = fetchSpy.mock.calls.filter(([url]) => url === '/ocr')
+      expect(ocrCalls).toHaveLength(1)
+      const [, init] = ocrCalls[0]
+      // 裸 base64：jsdom 的 readAsDataURL 给的是 data:image/png;base64,<b64>，前缀必须被剥掉
+      expect(JSON.parse(String(init?.body))).toEqual({ image: 'ZmFrZS1wbmc=' })
+
+      const result = wrapper.get('[data-testid="ocr-result"]')
+      expect(result.text()).toContain('识别文本（2 块）')
+      expect(result.find('.ocr-result-text').text()).toBe('Body\nCookie')
+      // 原始返回可展开（契约以后变了也有兜底）
+      expect(wrapper.find('[data-testid="ocr-raw"]').exists()).toBe(false)
+      await wrapper.findAll('.rc-link-btn').find((b) => b.text() === '查看原始返回')!.trigger('click')
+      expect(wrapper.get('[data-testid="ocr-raw"]').text()).toContain('"element_value": "Body"')
+    })
+
+    it('非图片文件被拒，不发请求', async () => {
+      const { wrapper } = mountOnOcrNode()
+      await flushPromises()
+      const fetchSpy = mockOcrFetch()
+
+      await selectFile(
+        wrapper.find('input[data-testid="ocr-image-input"]'),
+        new File(['x'], 'rules.csv', { type: 'text/csv' }),
+      )
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="ocr-file-error"]').text()).toContain('只支持图片文件')
+      expect(fetchSpy.mock.calls.filter(([url]) => url === '/ocr')).toHaveLength(0)
+      expect(wrapper.get('[data-testid="ocr-recognize"]').attributes('disabled')).toBeDefined()
+    })
+
+    it('识别失败时给出错误，不显示结果区', async () => {
+      const { wrapper } = mountOnOcrNode()
+      await flushPromises()
+      mockOcrFetch({ status: 'error', message: '图片格式不支持', data: {} })
+
+      await selectFile(
+        wrapper.find('input[data-testid="ocr-image-input"]'),
+        new File(['fake-png'], 'shot.png', { type: 'image/png' }),
+      )
+      await wrapper.get('[data-testid="ocr-recognize"]').trigger('click')
+      await waitForOcrRequest()
+
+      expect(wrapper.get('[data-testid="ocr-error"]').text()).toContain('图片格式不支持')
+      expect(wrapper.find('[data-testid="ocr-result"]').exists()).toBe(false)
+    })
+  })
+
   it('模型供应商和模型位于同一行', async () => {
     const { wrapper } = mountWithExistingRule()
     await flushPromises()

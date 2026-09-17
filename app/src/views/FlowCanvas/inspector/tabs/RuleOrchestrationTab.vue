@@ -13,11 +13,12 @@
 // 0917：编辑对象不再写死 useFlowStore()，改从 nodeEditorContext 取——**网站汇总态的监控视图
 // （监控视图 → 监控配置）直接复用本 Tab 渲染同一套界面**，改动落在它自己那份按源拼的种子上。
 // 画布侧没 provide 那个上下文，走默认实现（读写 flow store），行为不变。
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, UploadFilled } from '@element-plus/icons-vue'
+import { Delete, Picture, UploadFilled } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
-import { isDataValidationNode, isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { recognizeImage, readImageAsBase64, ocrTextOf, type OcrBlock } from '@/api/ocr'
+import { isDataValidationNode, isMonitorNode, isOcrNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { useNodeEditorContext } from '../nodeEditorContext'
 import { configApi, entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { isVruleNumericRuleId } from '@/api/legacyAdapters'
@@ -46,6 +47,113 @@ const { tables } = useNodeInspectorAssets()
 const isRule = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
 const isMonitor = computed(() => (cfg.value ? isMonitorNode(cfg.value) : false))
 const isDataValidation = computed(() => (cfg.value ? isDataValidationNode(cfg.value) : false))
+/**
+ * OCR 抓取节点不提供「脚本编辑」入口（0917 产品口径）：这一类不在这里生成 Python 脚本，
+ * 工作区（描述 / 系统提示词 / 脚本正文 / 生成 / 保存）整个入口都收掉，只留抓取配置本身的字段。
+ * 判定走 isOcrNode()——新建的节点看 template、后端回读的节点看类型编号，两处都要认。
+ */
+const isOcr = computed(() => isOcrNode(cfg.value))
+
+// ---- OCR 识别试跑（0917 第一版，仅 OCR 抓取节点）----
+// 图片只在本组件内存里流转：选图 → 转 base64 → 调 /ocr → 展示识别文本。
+// 暂不写入节点配置（也不落库）：这一步是"先能试出来"，图要不要跟着节点存、识别结果怎么用
+// 到生成脚本上，等口径定了再接（接口契约见 api/ocr.ts 头注）。
+const ocrFileInput = ref<HTMLInputElement | null>(null)
+const ocrFile = ref<File | null>(null)
+const ocrPreviewUrl = ref('')
+const ocrFileError = ref('')
+const ocrRunning = ref(false)
+const ocrError = ref('')
+const ocrBlocks = ref<OcrBlock[]>([])
+const ocrRawText = ref('')
+const ocrTextVisible = ref(false)
+const OCR_MAX_FILE_SIZE = 10 * 1024 * 1024
+
+const ocrText = computed(() => ocrTextOf(ocrBlocks.value))
+const ocrBlockCount = computed(() => ocrBlocks.value.filter((block) => block.text.trim()).length)
+
+function formatFileSize(size: number): string {
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function releaseOcrPreview() {
+  if (ocrPreviewUrl.value) URL.revokeObjectURL(ocrPreviewUrl.value)
+  ocrPreviewUrl.value = ''
+}
+
+/** 换图/切节点时把上一条结果一起清掉：结果与图片是一对，留着上一张的识别文本会误导。 */
+function clearOcrImage() {
+  releaseOcrPreview()
+  ocrFile.value = null
+  ocrFileError.value = ''
+  ocrError.value = ''
+  ocrBlocks.value = []
+  ocrRawText.value = ''
+  ocrTextVisible.value = false
+  if (ocrFileInput.value) ocrFileInput.value.value = ''
+}
+
+async function onOcrFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  ocrFileError.value = ''
+  if (!file) return
+  if (!file.type.startsWith('image/')) {
+    input.value = ''
+    ocrFileError.value = '只支持图片文件（PNG / JPG 等）'
+    return
+  }
+  if (file.size > OCR_MAX_FILE_SIZE) {
+    input.value = ''
+    ocrFileError.value = `图片不能超过 ${Math.round(OCR_MAX_FILE_SIZE / 1024 / 1024)}MB`
+    return
+  }
+  releaseOcrPreview()
+  ocrFile.value = file
+  ocrPreviewUrl.value = URL.createObjectURL(file)
+  // 换图即作废上一次结果
+  ocrError.value = ''
+  ocrBlocks.value = []
+  ocrRawText.value = ''
+  ocrTextVisible.value = false
+}
+
+async function runOcrRecognize() {
+  const file = ocrFile.value
+  if (!file || ocrRunning.value) return
+  ocrRunning.value = true
+  ocrError.value = ''
+  ocrBlocks.value = []
+  ocrRawText.value = ''
+  try {
+    const base64 = await readImageAsBase64(file)
+    const result = await recognizeImage(base64)
+    ocrBlocks.value = result.blocks
+    ocrRawText.value = JSON.stringify(result.raw, null, 2)
+    ElMessage.success(`识别完成：${ocrTextOf(result.blocks).length} 字`)
+  } catch (e) {
+    ocrError.value = `识别失败：${(e as Error)?.message ?? String(e)}`
+    ElMessage.error(ocrError.value)
+  } finally {
+    ocrRunning.value = false
+  }
+}
+
+async function copyOcrText() {
+  const text = ocrText.value
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('识别文本已复制')
+  } catch {
+    ElMessage.warning('复制失败，请手动选择文本')
+  }
+}
+
+// 切节点（NodeInspector 里本组件不带 key，是复用的）时清空 OCR 状态，避免串到下一个节点上
+watch(id, () => { clearOcrImage() })
+onBeforeUnmount(releaseOcrPreview)
 const orchCfg = computed<RuleOrchestration>(() => ({
   ...(isRule.value ? makeDefaultRuleOrchestration() : makeDefaultExecConfig()),
   ...(isRule.value ? cfg.value?.ruleCfg : cfg.value?.execCfg),
@@ -870,9 +978,61 @@ function onTestScript() {
   </div>
   <div class="ni-section-title ni-section-title-row">
     <span>{{ isRule ? '设置业务规则' : '抓取配置' }}</span>
-    <span class="ni-section-actions">
+    <span v-if="!isOcr" class="ni-section-actions">
       <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
     </span>
+  </div>
+  <!-- OCR 识别试跑（0917 第一版）：选图 → 转 base64 → 调 OCR 服务 → 把识别文本贴出来。
+       图片只存在本组件的内存里（切节点即清），暂不落节点配置；要不要随之落库等口径确定。 -->
+  <div v-if="isOcr" class="rc-field ocr-field" data-testid="ocr-recognize-field">
+    <label>OCR 识别</label>
+    <div class="ocr-picker">
+      <input
+        ref="ocrFileInput"
+        class="rc-file-input"
+        data-testid="ocr-image-input"
+        type="file"
+        accept="image/*"
+        @change="onOcrFileChange"
+      />
+      <button class="rc-btn" type="button" data-testid="ocr-pick-image" @click="ocrFileInput?.click()">
+        <Picture aria-hidden="true" />
+        <span>{{ ocrFile ? '更换图片' : '选择图片' }}</span>
+      </button>
+      <span class="ocr-hint">PNG / JPG，最大 {{ Math.round(OCR_MAX_FILE_SIZE / 1024 / 1024) }}MB，识别时转 base64</span>
+    </div>
+    <div v-if="ocrFile" class="ocr-preview">
+      <img v-if="ocrPreviewUrl" class="ocr-thumb" :src="ocrPreviewUrl" :alt="ocrFile.name">
+      <span class="ocr-file-name" :title="ocrFile.name">{{ ocrFile.name }}</span>
+      <span class="ocr-file-size">{{ formatFileSize(ocrFile.size) }}</span>
+      <button class="ocr-remove" type="button" title="移除图片" aria-label="移除图片" @click="clearOcrImage">
+        <Delete aria-hidden="true" />
+      </button>
+    </div>
+    <div v-if="ocrFileError" class="ocr-error" data-testid="ocr-file-error">{{ ocrFileError }}</div>
+    <div class="ocr-actions">
+      <button
+        class="rc-btn primary"
+        type="button"
+        data-testid="ocr-recognize"
+        :disabled="!ocrFile || ocrRunning"
+        @click="runOcrRecognize"
+      >{{ ocrRunning ? '识别中…' : '开始识别' }}</button>
+      <span v-if="ocrError" class="ocr-error" data-testid="ocr-error">{{ ocrError }}</span>
+    </div>
+    <div v-if="ocrText" class="ocr-result" data-testid="ocr-result">
+      <div class="ocr-result-head">
+        <span>识别文本（{{ ocrBlockCount }} 块）</span>
+        <span class="ocr-result-actions">
+          <button class="rc-link-btn" type="button" @click="ocrTextVisible = !ocrTextVisible">
+            {{ ocrTextVisible ? '收起原文' : '查看原始返回' }}
+          </button>
+          <button class="rc-link-btn" type="button" @click="copyOcrText">复制</button>
+        </span>
+      </div>
+      <pre class="ocr-result-text">{{ ocrText }}</pre>
+      <pre v-if="ocrTextVisible && ocrRawText" class="ocr-result-raw" data-testid="ocr-raw">{{ ocrRawText }}</pre>
+    </div>
   </div>
   <div class="rc-field">
     <textarea
@@ -1120,6 +1280,30 @@ function onTestScript() {
 .rc-file-remove:hover { color: #dc2626; }
 .rc-file-remove svg { width: 14px; height: 14px; }
 .rc-file-error { color: #b91c1c; font-size: 11px; line-height: 1.4; }
+/* ---- OCR 识别试跑 ---- */
+.ocr-field { padding: 0; border: 0; background: transparent; }
+.ocr-picker { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 图标必须显式定尺寸：Element Plus 的 svg 默认按 1em 撑到 25px 上下，会把按钮内容挤窄，
+   文字变成一个字一行、上下溢出把相邻控件盖住（0917 实测踩到）。同款写法见上面的 .rc-upload-btn svg。 */
+.ocr-picker .rc-btn { height: 30px; padding: 0 11px; font-size: 12px; flex: none; white-space: nowrap; }
+.ocr-picker .rc-btn svg { width: 14px; height: 14px; flex: none; }
+.ocr-picker .rc-btn span { white-space: nowrap; }
+.ocr-hint { color: var(--rc-faint); font-size: 10.5px; }
+.ocr-preview { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 6px 8px; border: 1px solid #dbe3ee; border-radius: 8px; background: #f8fafc; }
+.ocr-thumb { width: 44px; height: 44px; object-fit: cover; border: 1px solid #dbe3ee; border-radius: 6px; background: #fff; flex: none; }
+.ocr-file-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--rc-text-2); font-size: 11.5px; }
+.ocr-file-size { flex: none; color: var(--rc-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.ocr-remove { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0; background: transparent; color: var(--rc-muted); cursor: pointer; flex: none; }
+.ocr-remove:hover { color: #dc2626; }
+.ocr-remove svg { width: 14px; height: 14px; }
+.ocr-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.ocr-actions .rc-btn { height: 30px; padding: 0 12px; font-size: 12px; }
+.ocr-error { color: #b91c1c; font-size: 11px; line-height: 1.5; word-break: break-all; }
+.ocr-result { margin-top: 10px; border: 1px solid #dbe3ee; border-radius: 8px; overflow: hidden; background: #fff; }
+.ocr-result-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; border-bottom: 1px solid #eef2f7; background: #f8fafc; color: var(--rc-text); font-size: 12px; font-weight: 700; }
+.ocr-result-actions { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; }
+.ocr-result-text { margin: 0; max-height: 260px; overflow: auto; padding: 10px; color: var(--rc-text); font-size: 12px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+.ocr-result-raw { margin: 0; max-height: 220px; overflow: auto; padding: 10px; border-top: 1px dashed var(--rc-border-soft); background: #0f172a; color: #dbeafe; font-family: var(--rc-mono, monospace); font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
 .rc-stop-icon { display: block; width: 10px; height: 10px; border-radius: 1px; background: currentColor; }
 .rc-main-stream, .rc-main-result { margin: 10px 0 12px; border: 1px solid #dbe3ee; border-radius: 8px; overflow: hidden; background: #fff; }
 .rc-main-stream { border-color: #1e293b; background: #0b1220; }

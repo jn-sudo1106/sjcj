@@ -57,6 +57,13 @@ export default defineConfig(({ mode }) => {
           target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://127.0.0.1:8080',
           changeOrigin: true,
         },
+        // OCR 识别（OCR抓取节点，2026-09-17）：独立部署的第三方服务，**不在业务后端上**，
+        // 浏览器直连它是跨源（CORS 会拦），所以收进同源：页面请求 /ocr → 转发到 OCR 服务 /ocr。
+        // 切换目标用 VITE_OCR_PROXY_TARGET；生产环境要由 Nginx 反代同一个 /ocr 前缀。
+        '/ocr': {
+          target: env.VITE_OCR_PROXY_TARGET || 'http://118.25.96.217:4864',
+          changeOrigin: true,
+        },
         // 提示词模板列表（规则节点工作区，2026-09-10 迁移自硬编码 127.0.0.1:8080）：与
         // data-process 同一台 8080 服务；前缀必须排在通用 '/api' 之前，否则会被业务后端
         // （9999）兜底并返回 404。切换目标用 VITE_DATA_PROCESS_PROXY_TARGET。
