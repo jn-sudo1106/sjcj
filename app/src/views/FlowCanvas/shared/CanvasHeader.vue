@@ -7,6 +7,7 @@ import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { flowCenterApi, type FlowRecord } from '@/api'
 import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
+import { toExternalHref } from '@/utils/url/externalUrl'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 
 const flow = useFlowStore()
@@ -113,22 +114,10 @@ const lastSuccessText = computed(() => (src.value?.lastSuccessAt ? `上次成功
  * 摘要行里的 URL 可点开（2026-09-17 用户提）：看到地址就想去原站核对一下，
  * 之前只能选中复制再贴到地址栏。
  *
- * 只认 http/https，其余（javascript:、data: 等）一律不给链接——这个地址来自采集源配置，
- * 不是我们生成的，当成外部输入处理。参数源的摘要是「参数源 · 模板 · N 个占位符」，
- * 本来就不是个能打开的地址，也走不到这里。
+ * 参数源的摘要是「参数源 · 模板 · N 个占位符」，不是个能打开的地址，不给链接。
+ * 其余交给 toExternalHref 把关（只放行 http/https）。
  */
-const openableUrl = computed(() => {
-  const s = src.value
-  if (!s || s.kind === 'param') return ''
-  const raw = String(s.url ?? '').trim()
-  if (!raw) return ''
-  try {
-    const parsed = new URL(raw)
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : ''
-  } catch {
-    return ''
-  }
-})
+const openableUrl = computed(() => (src.value && src.value.kind !== 'param' ? toExternalHref(src.value.url) : ''))
 
 // 所属流程：源上带 flowId（sourceDetail 已补，0903 §H8），流程名要单查一次 flow/detail；
 // 查不到就退化成 `#<id>`。切源时按 flowId 变化重查，回来慢了也不会写串。

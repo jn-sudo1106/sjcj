@@ -212,6 +212,38 @@ describe('SiteSourceSwitcher', () => {
     expect(wrapper.find('.ssw-search').exists()).toBe(false)
   })
 
+  // 2026-09-17：地址要能直接点开去原站核对，不用先复制再贴地址栏
+  it('源 URL 是可点开的外链，新窗口打开且带 noopener', async () => {
+    const wrapper = await createWrapper()
+    const link = wrapper.get('[data-testid="active-source-url"]')
+    expect(link.element.tagName).toBe('A')
+    expect(link.attributes('href')).toBe(source.url + '/')
+    expect(link.attributes('target')).toBe('_blank')
+    expect(link.attributes('rel')).toContain('noopener')
+  })
+
+  // 地址来自采集源配置，不是我们生成的——当外部输入看待，只放行 http/https
+  it('非 http(s) 的地址不给链接，仍按纯文本展示', async () => {
+    mockApis()
+    const weird = { ...source, url: 'javascript:alert(1)' }
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([weird])
+    vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([weird])
+    sessionStorage.clear()
+    setActivePinia(createPinia())
+    const wrapper = mount(SiteSourceSwitcher, {
+      props: { siteId: 'site-a', activeKey: source.sourceId },
+      global: {
+        stubs: { 'el-drawer': { template: '<div><slot /><slot name="footer" /></div>' } },
+        directives: { loading: {} },
+      },
+    })
+    await flushPromises()
+
+    const el = wrapper.get('[data-testid="active-source-url"]')
+    expect(el.element.tagName).toBe('SPAN')
+    expect(el.text()).toBe('javascript:alert(1)')
+  })
+
   it('源 URL 可复制，空地址时复制按钮禁用', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })

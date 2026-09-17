@@ -13,6 +13,7 @@ import SourceParamModal from './SourceParamModal.vue'
 const ENABLE_SOURCE_COPY_BIND_FLOW = true
 import { hasLoadParams } from './paramNormalize'
 import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
+import { toExternalHref } from '@/utils/url/externalUrl'
 import type { ParamGroupRef } from '@/utils/flow/urlParams'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
 import SiteEditorDialog from '@/views/CollectAssets/components/SiteEditorDialog.vue'
@@ -162,6 +163,13 @@ function copyId(id: string) {
 }
 function sourceDisplayUrl(s: Source) {
   return s.kind === 'param' ? (s.urlTemplate || s.baseUrl || s.url || '') : (s.url || '')
+}
+/**
+ * 源 URL 可点开（2026-09-17 用户提，与 CanvasHeader 摘要行同批）：看到地址就想去原站核对。
+ * 参数源这里展示的是 urlTemplate（带 $PARAM$ 占位符），不是能打开的地址，不给链接。
+ */
+function sourceOpenUrl(s: Source) {
+  return s.kind === 'param' ? '' : toExternalHref(s.url)
 }
 function copySourceUrl(s: Source) {
   void copyText(sourceDisplayUrl(s), '源 URL')
@@ -1014,7 +1022,15 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
               :show-after="120"
               popper-class="rc-tip-longtext"
             >
-              <span class="ssw-detail-url" data-testid="active-source-url">{{ sourceDisplayUrl(activeSource) }}</span>
+              <a
+                v-if="sourceOpenUrl(activeSource)"
+                class="ssw-detail-url ssw-detail-link"
+                :href="sourceOpenUrl(activeSource)"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="active-source-url"
+              >{{ sourceDisplayUrl(activeSource) }}</a>
+              <span v-else class="ssw-detail-url" data-testid="active-source-url">{{ sourceDisplayUrl(activeSource) }}</span>
             </el-tooltip>
             <span v-else class="ssw-detail-url" data-testid="active-source-url">—</span>
             <button
@@ -1698,6 +1714,10 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
   opacity: 0.45;
   cursor: not-allowed;
 }
+/* 平时跟旁边的灰字一样低调，悬浮才显出是个链接——这里是背景信息区，
+   不该为一个链接把整块的视觉重量抬上去（同 CanvasHeader.ch-sub-link）。 */
+.ssw-detail-link { text-decoration: none; }
+.ssw-detail-link:hover { color: var(--rc-primary); text-decoration: underline; }
 .ssw-detail-url {
   color: var(--rc-faint);
   font-size: 10px;
