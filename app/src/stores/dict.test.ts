@@ -82,8 +82,11 @@ describe('useDictStore 抓取类型字典', () => {
 
     const driftWarn = warnSpy.mock.calls.map((c) => String(c[0])).find((m) => m.includes('字典与本地快照不一致'))
     expect(driftWarn).toBeDefined()
-    // 本地多出 12 条（快照 13 - 后端 1）
-    expect(driftWarn).toMatch(/本地多出 12 条/)
+    // 条数从快照推导、不写死：这里测的是**告警文案**，不是快照该有几条。
+    // 原来硬编码 12（当时快照 13 条），`cdf8398 新增数据校验节点` 往 SNATCH_TYPES 加了
+    // 「[800] - 数据校验」就把它挂了——而那次改动本身没问题（legacyEnums.test.ts 的
+    // REAL_SOURCE_TYPES 同步了）。后端 mock 只给 90，其余快照条目都算「本地多出」。
+    expect(driftWarn).toMatch(new RegExp(`本地多出 ${SNATCH_TYPES.length - 1} 条`))
   })
 
   it('后端返回空数组：保持快照 + 告警', async () => {
