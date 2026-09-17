@@ -1449,15 +1449,33 @@ describe('「落表输出」节点移除（优化 0701 问题四）', () => {
     expect(titles).toEqual(['文件下载', '数据处理'])
   })
 
-  it('数据处理节点是唯一的新增入口，文件下载预置不再引用旧节点类型', () => {
+  it('数据处理组只保留通用入口 + 字典里独立编号的类型，文件下载预置不再引用旧节点类型', () => {
     expect(LIB_GROUPS.map((group) => group.title)).toEqual(expect.not.arrayContaining(['解析结构化', '数据清洗', '数据校验']))
-    expect(LIB_GROUPS.find((group) => group.title === '数据处理')?.items).toEqual([
-      expect.objectContaining({ template: 'process', name: '数据处理' }),
+    // 2026-09-17：0714 那次"三组细分节点收敛成一个通用入口"的结论，只对被砍掉的
+    // 解析结构化/清洗/去重/字段映射 仍然成立；后端字典里 300/700/710/720 是独立编号的类型，
+    // 用户要求全部可见可选，所以它们回到了清单里。
+    expect(LIB_GROUPS.find((group) => group.title === '数据处理')?.items.map((it) => it.name)).toEqual([
+      '数据处理', '校验类', '视频提取音频', '音频提取文字', '文章生成摘要',
     ])
 
     const flow = mockFlowRecommend({ intent: 'file-parse' }).flow
     const titles = nodeIds(flow.main).map((id) => flow.configs[id].title)
     expect(titles).not.toEqual(expect.arrayContaining(['文件解析', '字段抽取']))
+  })
+
+  // 2026-09-17：节点库必须与后端字典逐条对齐（用户口径：17 条类型都能看见、都能选）
+  it('节点库覆盖后端字典全部 17 条抓取类型', () => {
+    const items = LIB_GROUPS.flatMap((g) => g.items)
+    const numeric = new Set(items.map((it) => Number(it.badge ?? it.code)).filter((n) => Number.isInteger(n)))
+    for (const code of [90, 110, 120, 130, 140, 150, 160, 170, 300, 400, 500, 600, 610, 620, 700, 710, 720]) {
+      expect(numeric.has(code), `节点库缺少类型 ${code}`).toBe(true)
+    }
+    // 每个条目都得能落到一个存在的节点种子上，否则点了没反应
+    items.forEach((it) => {
+      const seedKey = TEMPLATE_TO_NODE[it.template]
+      expect(seedKey, `模板 ${it.template} 没有种子映射`).toBeTruthy()
+      expect(NODE_CONFIGS[seedKey], `模板 ${it.template} 映射到了不存在的种子 ${seedKey}`).toBeTruthy()
+    })
   })
 })
 
@@ -1482,6 +1500,56 @@ describe('APP 抓取节点（0707 Phase 8）', () => {
     expect(f.configs[id].title).toBe('APP 抓取')
     expect(f.configs[id].collectCfg?.snatchType).toBe('[140] - App抓取')
     expect(f.configs[id].base.some(([label]) => label === '包名')).toBe(true)
+  })
+})
+
+// 2026-09-17：与后端 source_type 字典对齐后新增的类型，插入后必须带上正确的节点类型
+// （采集类看 collectCfg.snatchType，其它看 template → configType 映射）。
+describe('节点类型补齐（2026-09-17，与后端 source_type 对齐）', () => {
+  let f: ReturnType<typeof useFlowStore>
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    f = useFlowStore()
+    f.newFlow('blank')
+  })
+
+  it.each([
+    ['excel', 'EXCEL抓取', '[110] - EXCEL抓取'],
+    ['doc', 'DOC抓取', '[120] - DOC抓取'],
+    ['pdf', 'PDF抓取', '[130] - PDF抓取'],
+    ['mail-collect', 'Mail抓取', '[160] - Mail抓取'],
+    ['news', '资讯抓取', '[500] - 资讯抓取'],
+  ])('插入 %s：节点名与抓取类型都对上', (template, title, snatchType) => {
+    expect(TEMPLATE_TO_SNATCH[template]).toBe(snatchType)
+    const id = f.insertAfter('start', template)
+    expect(f.configs[id].template).toBe(template)
+    expect(f.configs[id].title).toBe(title)
+    expect(f.configs[id].collectCfg?.snatchType).toBe(snatchType)
+  })
+
+  // OCR 沿用历史上的处理型种子（有 OCR 引擎/文件来源那套字段，没有源 URL），
+  // 所以它跟 700/710/720 一样靠 template → configType 落 150（见 nodeConfigPayload.test.ts）。
+  it.each([
+    ['ocr', 'OCR抓取'],
+    ['video-audio', '视频提取音频'],
+    ['audio-text', '音频提取文字'],
+    ['article-summary', '文章生成摘要'],
+    ['check', '校验类'],
+  ])('插入 %s：名字取节点库条目，节点上没有采集配置', (template, title) => {
+    const id = f.insertAfter('start', template)
+    expect(f.configs[id].template).toBe(template)
+    expect(f.configs[id].title).toBe(title)
+    expect(f.configs[id].collectCfg).toBeUndefined()
+  })
+
+  it('徽标取节点自己的类型编号（新类型不再退化成 NODE）', () => {
+    const videoId = f.insertAfter('start', 'video-audio')
+    expect(iconFor(f.configs[videoId])).toBe('700')
+    const excelId = f.insertAfter('start', 'excel')
+    expect(iconFor(f.configs[excelId])).toBe('110')
+    // 用户改过抓取类型的节点按改后的算（snatchType 优先于种子里的 sub）
+    f.configs[excelId].collectCfg!.snatchType = '[130] - PDF抓取'
+    expect(iconFor(f.configs[excelId])).toBe('130')
   })
 })
 

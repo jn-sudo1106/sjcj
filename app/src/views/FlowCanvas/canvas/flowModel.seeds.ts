@@ -454,8 +454,113 @@ const NODE_CONFIG_SEEDS = {
     params: [['parse_mode', 'enum', '全文/表格/图片'], ['page_range', 'string', '1-*'], ['sheet_name', 'string', '全部']],
     output: [['parsed_text', 'longtext', '解析文本'], ['parsed_tables', 'json', '表格结构'], ['parse_trace', 'json', '解析日志']],
   },
+  // ---- 2026-09-17 补齐后端字典里其余抓取类型（110/120/130/150/160/500） ----
+  // 都是**采集类**节点（与网页抓取同构：有 collectCfg、走源 URL + 表/队列），只是类型不同。
+  // 与 python 复用 'web-list' 的那套不一样：各自给一份种子，卡片上的类型副标题（sub 里的
+  // `[编号]`）才对得上——iconFor() 就是读 sub 取徽标的。
+  'excel-collect': {
+    title: 'EXCEL抓取', sub: '[110] EXCEL抓取 · 表格文件', status: '待配置', planned: false, collect: true,
+    base: [['源 URL', 'https://example.com/data.xlsx'], ['源名称', 'EXCEL 数据源'], ['文件类型', 'XLS/XLSX'], ['定时策略', '30 8 * * 1-5']],
+    fields: [['Sheet', '全部'], ['表头行', '第 1 行'], ['使用代理', '否'], ['源标签', '']],
+    inmap: [['row', '表格行', '逐行输出']],
+    params: [['sheet_name', 'string', '全部'], ['header_row', 'number', '1']],
+    output: [['row_data', 'json', '表格行数据'], ['sheet_name', 'string', '来源 Sheet']],
+    collectCfg: {
+      snatchType: '[110] - EXCEL抓取', url: 'https://example.com/data.xlsx',
+      webKind: 'attachment',
+      outputTable: '', inputTable: '', inputParams: [],
+      isDetail: false,
+    },
+    taskCfg: { queue: 'excel.collect', urlRule: '' },
+  },
+  'doc-collect': {
+    title: 'DOC抓取', sub: '[120] DOC抓取 · 文档文件', status: '待配置', planned: false, collect: true,
+    base: [['源 URL', 'https://example.com/report.doc'], ['源名称', 'DOC 数据源'], ['文件类型', 'DOC/DOCX'], ['定时策略', '30 8 * * 1-5']],
+    fields: [['解析段落', '开启'], ['保留表格', '开启'], ['使用代理', '否'], ['源标签', '']],
+    inmap: [['paragraph', '段落', '逐段输出']],
+    params: [['with_table', 'boolean', 'true']],
+    output: [['doc_text', 'longtext', '文档正文'], ['doc_tables', 'json', '文档表格']],
+    collectCfg: {
+      snatchType: '[120] - DOC抓取', url: 'https://example.com/report.doc',
+      webKind: 'attachment',
+      outputTable: '', inputTable: '', inputParams: [],
+      isDetail: false,
+    },
+    taskCfg: { queue: 'doc.collect', urlRule: '' },
+  },
+  'pdf-collect': {
+    title: 'PDF抓取', sub: '[130] PDF抓取 · 版式文件', status: '待配置', planned: false, collect: true,
+    base: [['源 URL', 'https://example.com/report.pdf'], ['源名称', 'PDF 数据源'], ['文件类型', 'PDF'], ['定时策略', '30 8 * * 1-5']],
+    fields: [['按页解析', '开启'], ['保留版面', '开启'], ['使用代理', '否'], ['源标签', '']],
+    inmap: [['page', '页', '逐页输出']],
+    params: [['page_range', 'string', '1-*']],
+    output: [['pdf_text', 'longtext', 'PDF 文本'], ['page_count', 'number', '页数']],
+    collectCfg: {
+      snatchType: '[130] - PDF抓取', url: 'https://example.com/report.pdf',
+      webKind: 'attachment',
+      outputTable: '', inputTable: '', inputParams: [],
+      isDetail: false,
+    },
+    taskCfg: { queue: 'pdf.collect', urlRule: '' },
+  },
+  'mail-collect': {
+    title: 'Mail抓取', sub: '[160] Mail抓取 · 邮件正文与附件', status: '待配置', planned: false, collect: true,
+    base: [['收件配置', '信箱 / 文件夹'], ['源名称', 'Mail 数据源'], ['产物', '邮件正文 + 附件'], ['定时策略', '0 */1 * * *']],
+    fields: [['抓取范围', '未读 / 指定主题'], ['附件下载', '开启'], ['使用代理', '否'], ['源标签', '']],
+    inmap: [['mail', '邮件', '逐封输出']],
+    params: [['folder', 'string', 'INBOX'], ['unread_only', 'boolean', 'true']],
+    output: [['mail_subject', 'string', '主题'], ['mail_body', 'longtext', '正文'], ['attachments', 'json', '附件列表']],
+    collectCfg: {
+      snatchType: '[160] - Mail抓取', url: '',
+      webKind: 'list',
+      outputTable: '', inputTable: '', inputParams: [],
+      isDetail: false,
+    },
+    taskCfg: { queue: 'mail.collect', urlRule: '' },
+  },
+  'news-collect': {
+    title: '资讯抓取', sub: '[500] 资讯抓取 · 源配置', status: '待配置', planned: false, collect: true,
+    base: [['源 URL', 'https://example.com/news'], ['源名称', '资讯数据源'], ['源分类', '资讯'], ['定时策略', '30 8 * * 1-5']],
+    fields: [['使用代理', '否'], ['断点续爬', '开启'], ['源标签', '资讯']],
+    inmap: [['page', '序列参数', '1..20']],
+    params: [['page', 'sequence', '1..20']],
+    output: [['detail_url', 'url', '详情页入口'], ['title', 'string', '标题'], ['publish_time', 'date', '发布时间']],
+    collectCfg: {
+      snatchType: '[500] - 资讯抓取', url: 'https://example.com/news',
+      webKind: 'list',
+      outputTable: '', inputTable: '', inputParams: [],
+      isDetail: false,
+    },
+    taskCfg: { queue: 'news.collect', urlRule: '' },
+  },
+  // ---- 2026-09-17 补齐 700/710/720：媒体与摘要类（数据处理型，没有 collectCfg） ----
+  // 与「数据处理」一样是通用处理节点：不绑采集能力，进出都是上游产物。
+  'video-audio': {
+    title: '视频提取音频', sub: '[700] 视频提取音频 · 媒体处理', status: '待配置', planned: false,
+    base: [['视频来源', '← 上游节点产物'], ['输出格式', 'mp3'], ['采样率', '16k'], ['失败策略', '记录并跳过']],
+    fields: [['音轨', '默认音轨'], ['切片时长', '不切片'], ['保留视频', '否'], ['能力状态', '通用处理节点']],
+    inmap: [['video_file', '← 上游节点.video_file', '视频文件']],
+    params: [['audio_format', 'enum', 'mp3/wav'], ['sample_rate', 'string', '16k']],
+    output: [['audio_file', 'file', '音频文件'], ['duration', 'number', '时长（秒）']],
+  },
+  'audio-text': {
+    title: '音频提取文字', sub: '[710] 音频提取文字 · 语音转写', status: '待配置', planned: false,
+    base: [['音频来源', '← 上游节点产物'], ['识别语言', '中文 + 英文'], ['输出策略', '分段文本'], ['失败策略', '记录并跳过']],
+    fields: [['说话人分离', '关闭'], ['时间戳', '保留'], ['置信度阈值', '0.8'], ['能力状态', '通用处理节点']],
+    inmap: [['audio_file', '← 上游节点.audio_file', '音频文件']],
+    params: [['language', 'enum', 'zh,en'], ['min_confidence', 'number', '0.8']],
+    output: [['asr_text', 'longtext', '转写文本'], ['segments', 'json', '分段与时间戳']],
+  },
+  'article-summary': {
+    title: '文章生成摘要', sub: '[720] 文章生成摘要 · 文本生成', status: '待配置', planned: false,
+    base: [['文本来源', '← 上游节点产物'], ['摘要长度', '200 字以内'], ['输出策略', '摘要 + 关键词'], ['失败策略', '记录并跳过']],
+    fields: [['关键词数量', '5'], ['保留小标题', '开启'], ['模型策略', '待配置'], ['能力状态', '通用处理节点']],
+    inmap: [['content', '← 上游节点.content', '正文']],
+    params: [['max_length', 'number', '200'], ['keyword_count', 'number', '5']],
+    output: [['summary', 'longtext', '摘要'], ['keywords', 'json', '关键词']],
+  },
   ocr: {
-    title: 'OCR 识别', sub: '[150] OCR 识别 · 执行器待确认', status: '规划中（待执行器）', planned: true,
+    title: 'OCR抓取', sub: '[150] OCR抓取 · 执行器待确认', status: '规划中（待执行器）', planned: true,
     base: [['OCR 引擎', '待数据中心确认'], ['文件来源', '← 文件解析 / 原始图片'], ['输出表', 'ocr_text_result'], ['置信度阈值', '0.82']],
     fields: [['低置信度处理', '进入人工复核'], ['语言', '中文 + 英文'], ['版面保留', '开启'], ['能力状态', '页面可见，执行器待确认']],
     inmap: [['image_file', '← 文件下载.source_file', '图片或扫描件'], ['page_image', '← 文件解析.page_image', '页面图片']],
@@ -586,13 +691,15 @@ export const TEMPLATE_TO_NODE: Record<string, string> = {
   'browser-html': 'browser-html-collect', 'wechat-html': 'wechat-html-collect',
   // S4-1：网页登录，独立节点类型（方案 §6.1）
   login: 'login-collect',
+  // 2026-09-17 补齐后端字典里其余类型：抓取类各给一份采集种子，媒体/摘要类给处理型种子
+  excel: 'excel-collect', doc: 'doc-collect', pdf: 'pdf-collect', 'mail-collect': 'mail-collect',
+  news: 'news-collect', 'video-audio': 'video-audio', 'audio-text': 'audio-text', 'article-summary': 'article-summary',
 }
 
 /**
  * 抓取类型 = **节点类型** = 配置的 `configType`（2026-08-28 确认）。
  *
- * 取值**照抄后端字典** `GET /v1/config/sourceTypes`（旧 `api/source-type.js` 的 allSourceTypes），
- * 2026-08-28 在生产实测拉取，当时共 11 条，按 seq 排序如下。
+ * 取值**照抄后端字典** `GET /v1/config/sourceTypes`（旧 `api/source-type.js` 的 allSourceTypes）。
  *
  * 此前这里是硬编码的臆造值，实测查出三处错（0824-11 §1.2d 同类问题）：
  *   - `[95] - APP 抓取` / `[95] - 文件下载`：**后端没有 95**。真实 App 抓取是 **140**；
@@ -605,29 +712,30 @@ export const TEMPLATE_TO_NODE: Record<string, string> = {
  * 连「通用浏览器下载」（#1400232）也是 90——浏览器/公众号/文件下载/登录都不是独立类型，
  * 区分在别的字段上（登录是 `templetCode='login'`，见 §1.2d）。
  *
- * **2026-09-07 新增 600/700（Z6-3，回应 0904 §9-Q8）**：产品当时口头要求「规则处理」也该有
- * 自己的抓取类型，方案原定「不加字典，只加显示层」——理由是规则配置 `1400998` 的 `configType`
- * 实测为 `null`，字典是落库枚举，臆造一个值会顺着 `configTypeFrom()` 写脏。这次重查
- * `GET config/sourceTypes` **后端已经真的补上了 `600 - 规则处理` / `700 - 数据监控`**，
- * 与我们自己 `nodeTypeLabel()` 里一直用的两个显示文案逐字对上——不是巧合，直接把 Q8/Q4 一起
- * 解掉：字典可以加，configType 该写 600（规则处理）/ 700（数据监控），不必再等后端另行确认
- * "该写什么值"。
+ * **2026-09-17 与后端表重新对齐（用户提供 source_type/type_name 全量）**：
+ *   - 补上原先没有的 110/120/130/150/160/500 与 700/710/720，凑齐 17 条；
+ *   - **数据监控从 700 改成 610、数据校验从 800 改成 620**（2026-09-07 那次据 `config/sourceTypes`
+ *     写死 600/700/800，现在后端表里 700 已经另有其主——「视频提取音频」——所以必须改，
+ *     否则监控节点保存会把类型写成视频提取音频）。回读侧对 700/800 保留兼容，见 buildNodeForStep。
  */
 export const SNATCH_TYPES = [
-  '[160] - Mail抓取',
   '[90] - 网页抓取',
-  '[500] - 资讯抓取',
   '[110] - EXCEL抓取',
   '[120] - DOC抓取',
   '[130] - PDF抓取',
   '[140] - App抓取',
   '[150] - OCR抓取',
+  '[160] - Mail抓取',
   '[170] - Python抓取',
   '[300] - 校验类',
   '[400] - 提取数据发邮件',
+  '[500] - 资讯抓取',
   '[600] - 规则处理',
-  '[700] - 数据监控',
-  '[800] - 数据校验',
+  '[610] - 数据监控',
+  '[620] - 数据校验',
+  '[700] - 视频提取音频',
+  '[710] - 音频提取文字',
+  '[720] - 文章生成摘要',
 ]
 
 export const WEB_KIND_OPTIONS: { value: 'list' | 'detail' | 'attachment'; label: string; desc: string }[] = [
@@ -704,35 +812,59 @@ export function defaultMultiMode(cfg: NodeConfig): number {
 export const CONFIG_STRATEGY_OPTIONS = ['增量', '全量', '按需触发']
 
 /**
- * 模板 → 默认抓取类型（新插入采集节点用）。取值必须出自 SNATCH_TYPES，见其注释。
+ * 模板 → 默认抓取类型。取值必须出自 SNATCH_TYPES，见其注释。
  *
  * 浏览器抓取 / 公众号抓取 / 文件下载 / 网页登录**都归 90 网页抓取**——2026-08-28 生产实测：
  * 后端字典里没有它们各自的类型，「通用浏览器下载」#1400232 的 configType 就是 90，
  * 抽样 600 条配置也全是 90。它们的差异体现在别的字段上（登录是 `templetCode='login'`），
  * 不是靠 configType 区分。**不要再为它们臆造 `[BROWSER]`/`[WECHAT]`/`[LOGIN]` 这类伪代码。**
+ *
+ * 2026-09-17 补齐其余类型（110/120/130/160/500/700/710/720），并把 `data-validation` 从
+ * `[800]` 改成字典里的 `[620]`；`mail` 之前挂的是 `[160] - Mail抓取`，但它的节点库条目是
+ * 「提取数据发邮件」（400），两者对不上——邮件抓取另开了 `mail-collect` 模板，这里按 400 写。
  */
 export const TEMPLATE_TO_SNATCH: Record<string, string> = {
   web: '[90] - 网页抓取',
   app: '[140] - App抓取',
   python: '[170] - Python抓取',
   ocr: '[150] - OCR抓取',
-  mail: '[160] - Mail抓取',
+  excel: '[110] - EXCEL抓取',
+  doc: '[120] - DOC抓取',
+  pdf: '[130] - PDF抓取',
+  'mail-collect': '[160] - Mail抓取',
+  news: '[500] - 资讯抓取',
   // 以下四类后端没有独立 configType，统一按网页抓取落库
   file: '[90] - 网页抓取',
   'browser-html': '[90] - 网页抓取',
   'wechat-html': '[90] - 网页抓取',
   login: '[90] - 网页抓取',
-  'data-validation': '[800] - 数据校验',
+  rule: '[600] - 规则处理',
+  monitor: '[610] - 数据监控',
+  'data-validation': '[620] - 数据校验',
+  mail: '[400] - 提取数据发邮件',
+  check: '[300] - 校验类',
+  'video-audio': '[700] - 视频提取音频',
+  'audio-text': '[710] - 音频提取文字',
+  'article-summary': '[720] - 文章生成摘要',
 }
 
 // 左侧节点库分组
 export const LIB_GROUPS: LibGroup[] = [
   {
+    // 2026-09-17：与后端 source_type 字典逐条对齐，17 条抓取类型全部可选（用户口径）。
+    // 条目上的 code 就是字典编号；badge 只给后端没有独立编号的几类（浏览器/公众号/登录）
+    // 或旧平台习惯叫法（LOGIN），它优先于 code 显示。
     title: '采集类', items: [
       { template: 'web', code: '90', name: '网页抓取', desc: '源 URL、配置、子步骤', pill: 'p1' as Pill },
+      { template: 'excel', code: '110', name: 'EXCEL抓取', desc: 'XLS/XLSX 表格文件采集', pill: 'p1' as Pill },
+      { template: 'doc', code: '120', name: 'DOC抓取', desc: 'DOC/DOCX 文档采集', pill: 'p1' as Pill },
+      { template: 'pdf', code: '130', name: 'PDF抓取', desc: 'PDF 版式文件采集', pill: 'p1' as Pill },
       { template: 'app', code: '140', name: 'APP 抓取', desc: '包名、接口地址、移动端参数', pill: 'p1' as Pill },
-      { template: 'file', code: '90', name: '文件下载', desc: '附件、原始文件、入库', pill: 'p1' as Pill },
+      { template: 'ocr', code: '150', name: 'OCR抓取', desc: '图片/扫描件文字识别，待执行器确认', pill: 'p2' as Pill },
+      { template: 'mail-collect', code: '160', name: 'Mail抓取', desc: '邮件正文与附件采集', pill: 'p1' as Pill },
       { template: 'python', code: '170', name: 'Python 抓取', desc: '青龙脚本、待确认权限', pill: 'p2' as Pill },
+      { template: 'news', code: '500', name: '资讯抓取', desc: '资讯站点列表 + 详情采集', pill: 'p1' as Pill },
+      { template: 'file', code: '90', name: '文件下载', desc: '附件、原始文件、入库', pill: 'p1' as Pill },
       // 0711 R7/R8：抓 HTML 文件，输出表/队列固定，不可编辑
       { template: 'browser-html', code: 'BROWSER', badge: '180', name: '浏览器抓取', desc: '渲染并保存 HTML，固定表/队列', pill: 'p1' as Pill },
       { template: 'wechat-html', code: 'WECHAT', badge: '185', name: '公众号抓取', desc: '公众号页面采集，固定表/队列', pill: 'p1' as Pill },
@@ -743,8 +875,16 @@ export const LIB_GROUPS: LibGroup[] = [
   {
     // 0714 会议：去掉「解析结构化/数据清洗/数据校验」三组细分节点，收敛为一个通用「数据处理」入口
     // （原 parse/ocr/ai/map/clean/dedupe/check 的节点定义仍保留在 NODE_CONFIG_SEEDS 里，历史节点不受影响）
+    //
+    // 2026-09-17 局部回补：后端字典里 300 校验类 / 700 视频提取音频 / 710 音频提取文字 /
+    // 720 文章生成摘要 都是**独立节点类型**，用户要求全部可见可选，所以这四条回到清单里。
+    // 「收敛成一个通用入口」的结论在"清洗/去重/字段映射"那几条上仍然成立，没有回退。
     title: '数据处理', items: [
       { template: 'process', code: 'PROC', name: '数据处理', desc: '清洗、去重、校验、结构化等，按需自定义配置', pill: 'p1' as Pill },
+      { template: 'check', code: '300', name: '校验类', desc: '质量门禁、完整性与重复率校验', pill: 'p1' as Pill },
+      { template: 'video-audio', code: '700', name: '视频提取音频', desc: '视频抽音轨，输出音频文件', pill: 'p1' as Pill },
+      { template: 'audio-text', code: '710', name: '音频提取文字', desc: '语音转写为文本，保留分段', pill: 'p1' as Pill },
+      { template: 'article-summary', code: '720', name: '文章生成摘要', desc: '长文压缩为摘要与关键词', pill: 'p1' as Pill },
     ]
   },
   {
@@ -757,13 +897,14 @@ export const LIB_GROUPS: LibGroup[] = [
   {
     // 规则 Trace 不是独立节点类型（无执行器/配置），已从添加面板移除；历史 template=rule-trace 仍映射到 rule
     title: '规则类', items: [
-      { template: 'rule', code: 'RULE', badge: '320', name: '规则处理', desc: '规则组、表达式、配置', pill: 'p1' as Pill },
+      { template: 'rule', code: '600', name: '规则处理', desc: '规则组、表达式、配置', pill: 'p1' as Pill },
       // 2026-09-01 新增：配置先复用 rule 种子（TEMPLATE_TO_NODE.monitor='rule'），跟「规则处理」
       // 是同一套表/字段绑定、编排、任务配置——先跑通插入与保存，后续要分化再单独拆。旧平台的
-      // 「数据监控」是源列表的行内菜单项（跳去独立监控中心看某个源的数据），跟这里同名但不是一回事，
-      // 没有可抄的旧节点类型号，所以不给 badge。
-      { template: 'monitor', code: 'MON', name: '数据监控', desc: '按规则组、表达式监测数据，命中即标记异常', pill: 'p1' as Pill },
-      { template: 'data-validation', code: '800', name: '数据校验', desc: '按规则组、表达式校验数据质量', pill: 'p1' as Pill },
+      // 「数据监控」是源列表的行内菜单项（跳去独立监控中心看某个源的数据），跟这里同名但不是一回事。
+      // 编号 2026-09-17 按后端字典订正：610 数据监控 / 620 数据校验（此前误挂 700/800，
+      // 而 700 现在是「视频提取音频」）。
+      { template: 'monitor', code: '610', name: '数据监控', desc: '按规则组、表达式监测数据，命中即标记异常', pill: 'p1' as Pill },
+      { template: 'data-validation', code: '620', name: '数据校验', desc: '按规则组、表达式校验数据质量', pill: 'p1' as Pill },
     ]
   },
   {
@@ -847,7 +988,26 @@ function templateKeyForStep(step: Step, index: number): string {
     'clean': 'clean', 'dedupe': 'dedupe', 'check': 'check',
   }
   if (explicitAliases[explicit] && NODE_CONFIGS[explicitAliases[explicit]]) return explicitAliases[explicit]
-  if (step.configType === '800' && NODE_CONFIGS.rule) return 'rule'
+  // 数据校验节点：620 是字典现值，800 是 2026-09-07～09-17 本前端写出去的存量值。
+  if ((step.configType === '620' || step.configType === '800') && NODE_CONFIGS.rule) return 'rule'
+
+  // 抓取类型（configType）→ 节点种子：2026-09-17 补齐字典里其余类型，让历史步骤回读时
+  // 落到对应的节点形态上（110 表格 / 120 文档 / 130 PDF / 150 OCR / 160 邮件 / 500 资讯 /
+  // 700 视频转音频 / 710 语音转文字 / 720 摘要 / 300 校验类）。查表命中才走，否则维持原兜底。
+  const byConfigType: Record<string, string> = {
+    '110': 'excel-collect',
+    '120': 'doc-collect',
+    '130': 'pdf-collect',
+    '150': 'ocr',
+    '160': 'mail-collect',
+    '300': 'check',
+    '500': 'news-collect',
+    '700': 'video-audio',
+    '710': 'audio-text',
+    '720': 'article-summary',
+  }
+  const routed = step.configType ? byConfigType[step.configType] : undefined
+  if (routed && NODE_CONFIGS[routed]) return routed
 
   // isLoginConfig 来自 configDetail.templetCode（见 attachStepConfigDetails），是比步骤名正则
   // 更可靠的信号：2026-08-26 生产实测配置 1400968「baidu-登陆」证明登录步骤的名字未必含
@@ -1002,9 +1162,18 @@ function buildNodeForStep(source: Source, step: Step, index: number): NodeConfig
   // 用户可能把节点改名成不含"数据监控"的名字，这时只有 nodeType 还能说清它的真实类型。
   // 只信 'monitor' 这一个值：新建时 nodeType 会继承前置步骤（entry/list/detail 之类），
   // 那些是不可信的默认值，不能反过来当权威覆盖标题猜测。
+  //
+  // 编号（2026-09-17）：字典里 610=数据监控、620=数据校验、700=视频提取音频。
+  // `800` 只作为**存量兼容**留着——它是 2026-09-07～09-17 本前端自己写出去的值，如今字典里
+  // 根本没有 800，所以见到它只能理解成"那段时间写的数据校验节点"，不会跟别的类型撞车。
+  // `700` 则**不能**再当监控认：它在字典里已经另有其主（视频提取音频），
+  // 于是老监控节点只靠名字/ nodeType 兜底（新建的监控节点名就是「数据监控」，能覆盖绝大多数）。
   const nodeType = String(step.nodeType ?? '').trim().toLowerCase()
-  if (nodeType === 'monitor' || step.configType === '700' || /数据监控/.test(cfg.title)) cfg.template = 'monitor'
-  else if (nodeType === 'data-validation' || nodeType === 'validation' || step.configType === '800' || /数据校验/.test(cfg.title)) cfg.template = 'data-validation'
+  const looksMonitor = nodeType === 'monitor' || step.configType === '610' || /数据监控/.test(cfg.title)
+  const looksValidation = nodeType === 'data-validation' || nodeType === 'validation'
+    || step.configType === '620' || step.configType === '800' || /数据校验/.test(cfg.title)
+  if (looksMonitor) cfg.template = 'monitor'
+  else if (looksValidation) cfg.template = 'data-validation'
   if (cfg.collectCfg) {
     // 源级字段（源名称/分类/标签/登录/选用配置等）不再复制到节点：随 loadFromSource 整体挂到 flow.sourceCfg（0706 优化·源/节点配置分层）
     cfg.collectCfg.url = source.url
@@ -1310,7 +1479,7 @@ export const PRESET_INTENTS: PresetIntent[] = [
     rationale: '识别为「文件下载解析」：下载文件后交由数据处理节点完成解析、字段抽取等配置；每个节点的结果自动落表。',
     build: () =>
       buildFlow('文件下载解析链路', [
-        { template: 'file', name: '文件下载', patch: { webKind: 'attachment', isDetail: false, snatchType: '[95] - 文件下载' } },
+        { template: 'file', name: '文件下载', patch: { webKind: 'attachment', isDetail: false, snatchType: '[90] - 网页抓取' } },
         { template: 'process', name: '数据处理' },
       ]),
   },

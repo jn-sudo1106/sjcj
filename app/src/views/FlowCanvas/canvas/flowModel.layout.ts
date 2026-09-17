@@ -192,14 +192,17 @@ export function nodeTypeLabel(cfg: NodeConfig): string {
 
 export function iconFor(cfg: NodeConfig): string {
   const sub = cfg.sub || ''
-  if (sub.indexOf('[90]') >= 0) return '90'
+  // 徽标优先取**节点自己的类型编号**：collectCfg.snatchType 最准（用户改过类型的节点也跟得上），
+  // 其次看 sub 开头的 `[编号]`。2026-09-17 起字典有 17 条，一条条硬编码必然漏
+  // （110/120/130/500/700/710/720 这些新类型当时都会退化成 NODE）。
+  const typedCode = cfg.collectCfg?.snatchType?.match(/^\[(\d+)\]/)?.[1] || sub.match(/^\[(\d+)\]/)?.[1]
+  if (typedCode) return typedCode
+  // 后端字典里没有的伪代码，只服务存量节点（新建不会再产生，见 flowModel.seeds.ts 的 SNATCH_TYPES 注释）
   if (sub.indexOf('[95]') >= 0) return '95'
-  if (sub.indexOf('[150]') >= 0) return '150'
   if (sub.indexOf('[155]') >= 0) return '155'
-  if (sub.indexOf('[300]') >= 0) return '300'
-  if (sub.indexOf('[400]') >= 0) return '400'
   if (sub.indexOf('[BROWSER]') >= 0) return '180'
   if (sub.indexOf('[WECHAT]') >= 0) return '185'
+  if (sub.indexOf('[LOGIN]') >= 0) return 'LOGIN'
   if (cfg.kind === 'decision' || /决策|条件路径/.test(cfg.title + cfg.sub)) return 'IF'
   if (cfg.kind === 'parallel' || /分头|多路径并行/.test(cfg.title + cfg.sub)) return 'PAR'
   // cfg.ruleCfg 是结构信号（isRuleNode 同款口径，见 flowModel.ts）：标题正则单独判会漏掉标题

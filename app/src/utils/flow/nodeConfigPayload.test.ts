@@ -174,24 +174,44 @@ describe('configType（节点类型 = 旧「抓取类型」，0828 W0-7）', () 
     expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(90)
   })
 
-  // 2026-09-07（Z6-3）：后端字典补上 600/700 后不再是"保留 base"，改成按结构信号写死。
+  // 2026-09-07（Z6-3）：后端字典补上 600/700 后不再是"保留 base"，改成按模板写死。
+  // 2026-09-17 订正编号：610 数据监控 / 620 数据校验（700 已另有其主——视频提取音频）。
   it('规则处理节点没有 snatchType，按结构信号（ruleCfg）写 600', () => {
     const cfg = cloneConfig(NODE_CONFIGS['rule'])
     expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(600)
   })
 
-  it('数据监控节点（template=monitor，同样复用 rule 种子）写 700，不是 600', () => {
+  it('数据监控节点（template=monitor，同样复用 rule 种子）写 610，不是 600', () => {
     const cfg = cloneConfig(NODE_CONFIGS['rule'])
     cfg.template = 'monitor'
-    // monitor 也带着 ruleCfg（复用同一颗种子）——必须让更具体的 monitor 信号赢，
-    // 否则两个信号都为真时永远落到 600，700 走不到。
-    expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(700)
+    // monitor 也带着 ruleCfg（复用同一颗种子）——必须让更具体的模板信号赢，
+    // 否则两个信号都为真时永远落到 600，610 走不到。
+    expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(610)
   })
 
-  it('数据校验节点（template=data-validation）写 800，不是 600', () => {
+  it('数据校验节点（template=data-validation）写 620，不是 600', () => {
     const cfg = cloneConfig(NODE_CONFIGS['rule'])
     cfg.template = 'data-validation'
-    expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(800)
+    expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(620)
+  })
+
+  // 2026-09-17：字典里其余类型各自成节点，落库编号跟随后端表。
+  // 采集类按 snatchType 取（110/120/130/160/500），非采集类按模板表取（150/300/700/710/720）。
+  it.each([
+    ['excel-collect', 'excel', 110],
+    ['doc-collect', 'doc', 120],
+    ['pdf-collect', 'pdf', 130],
+    ['mail-collect', 'mail-collect', 160],
+    ['news-collect', 'news', 500],
+    ['ocr', 'ocr', 150],
+    ['check', 'check', 300],
+    ['video-audio', 'video-audio', 700],
+    ['audio-text', 'audio-text', 710],
+    ['article-summary', 'article-summary', 720],
+  ])('新类型节点 %s（template=%s）写 %i', (seedKey, template, expected) => {
+    const cfg = cloneConfig(NODE_CONFIGS[seedKey])
+    cfg.template = template
+    expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(expected)
   })
 })
 

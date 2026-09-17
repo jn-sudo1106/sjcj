@@ -55,16 +55,31 @@ export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
  * 取值范围由 canvas/legacyEnums.test.ts 锁死为后端字典 config/sourceTypes 的编号。
  * 解析不出编号就返回 undefined——按"有值才覆盖"的原则保留 base 原值，绝不猜一个写进去。
  *
- * 规则 / 数据监控节点没有 `collectCfg`（自然也没有 snatchType 展示串），**2026-09-07 前**
- * 这里对它们恒返回 undefined——当时字典没有对应编号，写一个臆造值等于把
- * `1400998`（实测 configType 为 `null`）之类的真实样本盖成错的（0904 §9-Q8 未决）。
- * 现在后端字典已经真的补上 `600 - 规则处理` / `700 - 数据监控`，直接按结构信号写死这两个值：
- * `cfg.template === 'monitor'` 判在 `cfg.ruleCfg` 前面——monitor 节点复用 rule 种子，
- * 两个信号同时为真，必须让更具体的 monitor 赢，否则 700 永远走不到。
+ * 规则 / 数据监控这类节点没有 `collectCfg`（自然也没有 snatchType 展示串），**2026-09-07 前**
+ * 这里对它们恒返回 undefined——当时字典没有对应编号，写一个臆造值等于把 `1400998`
+ * （实测 configType 为 `null`）之类的真实样本盖成错的（0904 §9-Q8 未决）。现在按模板写死。
+ *
+ * **2026-09-17 编号订正**：字典里 610=数据监控、620=数据校验，700 已经另有其主
+ *（视频提取音频）。此前写 700/800 的话，监控节点保存下来会变成"视频提取音频"、
+ * 校验节点写一个字典里不存在的 800，所以这次一并改掉。
+ * 判断顺序：先查模板表（monitor 复用 rule 种子，`ruleCfg` 也为真，必须让模板信号赢），
+ * 再退回 `ruleCfg → 600`，最后按 snatchType 取编号。
  */
+const TEMPLATE_CONFIG_TYPE: Record<string, number> = {
+  rule: 600,
+  monitor: 610,
+  'data-validation': 620,
+  'video-audio': 700,
+  'audio-text': 710,
+  'article-summary': 720,
+  check: 300,
+  mail: 400,
+  ocr: 150,
+}
+
 function configTypeFrom(cfg: NodeConfig): number | undefined {
-  if (cfg.template === 'data-validation') return 800
-  if (cfg.template === 'monitor') return 700
+  const byTemplate = cfg.template ? TEMPLATE_CONFIG_TYPE[cfg.template] : undefined
+  if (byTemplate) return byTemplate
   if (cfg.ruleCfg) return 600
   const code = cfg.collectCfg?.snatchType?.match(/^\[(\d+)\]/)?.[1]
   return code ? Number(code) : undefined
