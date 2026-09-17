@@ -5,7 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useUiStore } from '../../stores/ui'
 import { useWorkspaceStore } from '../../stores/workspace'
-import { sourceApi, type Source, type Step } from '../../api'
+import { siteApi, sourceApi, type Source, type Step } from '../../api'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 import { useRuntimeStore } from '../../stores/runtime'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
@@ -270,9 +270,32 @@ async function loadSourceFlow(sourceId: string) {
   const ownerSiteId = source.siteId || String(route.query.siteId ?? '') || ws.snapshotOf(source.sourceId)?.siteId || ''
   if (ownerSiteId) ws.saveSnapshot(source.sourceId, { siteId: ownerSiteId })
   // 0915-02：源态下「全部」页签同样常驻——0915-03 的钻取闭环要靠它回到网站数据视图
-  if (ownerSiteId) ws.ensureSiteTab(ownerSiteId)
+  if (ownerSiteId) void ensureSiteTabNamed(ownerSiteId)
   else void resolveOwnerSite(source.sourceId)
   void backfillStepDetails(sourceId, steps ?? [])
+}
+
+/**
+ * 建「全部 · 网站名」页签，并把名字补上（2026-09-17）。
+ *
+ * `ensureSiteTab` 只拿到 siteId 时用 siteId 顶着当名字，指望 `SiteDetailView` 拿到
+ * `site/detail` 后再调一次把真名补上——但 **SiteDetailView 只在网站态才挂载**。
+ * 从源进来（深链、点源页签、数据钻取）时它根本不挂，于是页签一直显示「全部 · 11」这种裸 ID，
+ * 看不出是哪个网站。这里自己补一次。
+ *
+ * 补名失败就维持 ID：页签本身是能用的（点进去照样回网站态），不值得为一个名字报错打扰用户。
+ */
+async function ensureSiteTabNamed(siteId: string) {
+  // 没建成（额度满）就别白查一次接口
+  if (!ws.ensureSiteTab(siteId)) return
+  // 已经有真名（之前进过这个网站）就不重复请求
+  if (ws.siteTabs.find((t) => t.siteId === siteId)?.name !== siteId) return
+  try {
+    const detail = await siteApi.siteDetail(siteId)
+    if (detail?.name) ws.ensureSiteTab(siteId, detail.name)
+  } catch {
+    /* 名字补不上，页签照常可用 */
+  }
 }
 
 /**
@@ -300,6 +323,8 @@ async function resolveOwnerSite(sourceId: string) {
     if (String(route.query.sourceId ?? '') !== String(sourceId)) return
     ws.saveSnapshot(sourceId, { siteId })
     flow.patchSourceCtx({ siteId })
+    // 反查出来了才建得了「全部」页签——上面那条路径（source.siteId 直接可用）已经建过
+    void ensureSiteTabNamed(String(siteId))
   } catch {
     // 反查失败不影响主流程：左侧列表保持空态，用户仍可从网站列表进入
   }
