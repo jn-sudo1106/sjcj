@@ -439,7 +439,7 @@ function stateMeta(s?: string) {
                 class="dg-source-cell"
                 data-testid="data-source-name-cell"
                 @click.stop="emit('source-click', r)"
-              >{{ sourceLabel(r) }} <span aria-hidden="true">↗</span></button>
+              >{{ sourceLabel(r) }}</button>
               <template v-else>{{ sourceLabel(r) }}</template>
             </td>
             <td v-for="f in visibleCols" :key="f.prop" class="dg-cell" :title="cellText(r, f)">
@@ -452,7 +452,7 @@ function stateMeta(s?: string) {
                 data-testid="data-parent-cell"
                 :title="`查看上游数据 ${parentIdOf(r)}`"
                 @click.stop="emit('parent-click', r)"
-              >{{ parentIdOf(r) }} <span aria-hidden="true">↗</span></button>
+              >{{ parentIdOf(r) }}</button>
               <!-- 源 ID 做成可点（0915-03）：会上原话「我点这个源…就像打开一个网页标签」——
                    点一下在新页签打开这个源，当前查询条件跟着带过去，人不离开这一页。 -->
               <button
@@ -462,7 +462,7 @@ function stateMeta(s?: string) {
                 data-testid="data-source-id-cell"
                 :title="`在新页签打开源 ${r.sourceId}（带上当前查询条件）`"
                 @click.stop="emit('source-click', r)"
-              >{{ r.sourceId }} <span aria-hidden="true">↗</span></button>
+              >{{ r.sourceId }}</button>
               <!-- 路径类单元格做成可点：点开站内预览，不改变行点击（打开数据详情）的语义 -->
               <button
                 v-else-if="isFileCell(f, cellText(r, f))"
@@ -571,7 +571,10 @@ function stateMeta(s?: string) {
 .dg-child-link { border: 0; background: transparent; padding: 0; color: var(--rc-primary); font: inherit; font-weight: 600; cursor: pointer; }
 .dg-child-link:hover { text-decoration: underline; }
 .dg-child-err { color: var(--rc-warn); cursor: help; }
-/* 源 ID / 源名可点：与「父 ID ↗」同一种"可下钻"的视觉语言 */
+/* 源 ID / 源名 / 父 ID 可点：蓝色 + 悬停下划线 + 手型光标。
+   2026-09-17 去掉了文字后缀的 ↗——整列每行都挂一个箭头太吵（用户走查原话「很丑」），
+   而这三种单元格本来就已经是蓝色可点样式，箭头不承担额外信息。
+   详情抽屉里的「父 ID ↗」保留：那里是孤立的一个按钮，不存在成列重复的问题。 */
 .dg-source-cell {
   border: 0; background: transparent; padding: 0; cursor: pointer;
   color: var(--rc-primary); font-size: inherit; font-family: inherit;

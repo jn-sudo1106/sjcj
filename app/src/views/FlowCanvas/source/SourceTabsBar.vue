@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { useWorkspaceStore, type SiteTab, type SourceTab } from '@/stores/workspace'
@@ -111,6 +111,30 @@ async function onCloseAll() {
   ws.clearSiteTabs()
   if (!onList.value) router.push('/collect')
 }
+
+// ---- 拖动排序（2026-09-17 走查要求）----
+// 只有源页签可拖：「网站列表」是固定入口，「全部 · xxx」是另一类上下文，
+// 跟源页签混排没有意义，所以它们不带 draggable。
+const dragFrom = ref<number | null>(null)
+const dropTo = ref<number | null>(null)
+
+function onDragStart(index: number, e: DragEvent) {
+  dragFrom.value = index
+  if (!e.dataTransfer) return
+  e.dataTransfer.effectAllowed = 'move'
+  // Firefox 不设 data 就不触发后续的 drag 事件
+  e.dataTransfer.setData('text/plain', String(index))
+}
+
+function onDrop(index: number) {
+  if (dragFrom.value !== null) ws.moveTab(dragFrom.value, index)
+  onDragEnd()
+}
+
+function onDragEnd() {
+  dragFrom.value = null
+  dropTo.value = null
+}
 </script>
 
 <template>
@@ -145,15 +169,26 @@ async function onCloseAll() {
       <i class="rc-src-tab-x" aria-label="关闭页签" data-testid="site-all-tab-close" @click.stop="onCloseSite(st)">×</i>
     </button>
     <button
-      v-for="t in ws.tabs"
+      v-for="(t, i) in ws.tabs"
       :key="t.sourceId"
       class="rc-src-tab"
-      :class="{ on: !onList && !onSiteAll && t.sourceId === ws.activeSourceId }"
+      :class="{
+        on: !onList && !onSiteAll && t.sourceId === ws.activeSourceId,
+        dragging: dragFrom === i,
+        'drop-before': dropTo === i && dragFrom !== null && dragFrom > i,
+        'drop-after': dropTo === i && dragFrom !== null && dragFrom < i,
+      }"
       type="button"
       role="tab"
+      draggable="true"
       :aria-selected="!onList && !onSiteAll && t.sourceId === ws.activeSourceId"
       :title="`${t.name} · ${t.sourceId}`"
       @click="onActivate(t)"
+      @dragstart="onDragStart(i, $event)"
+      @dragover.prevent="dropTo = i"
+      @dragleave="dropTo === i && (dropTo = null)"
+      @drop.prevent="onDrop(i)"
+      @dragend="onDragEnd"
     >
       <span class="rc-src-tab-name">{{ t.name }}</span>
       <i class="rc-src-tab-x" aria-label="关闭页签" @click.stop="onClose(t)">×</i>
@@ -189,6 +224,12 @@ async function onCloseAll() {
   transition: border-color 0.12s, background 0.12s, color 0.12s;
 }
 .rc-src-tab:hover { border-color: #93c5fd; color: var(--rc-primary-ink); }
+/* 拖动排序：被拖的那个淡出，目标位置用一条竖线指示落点在它的哪一侧。
+   用 box-shadow 画线而不是 border，避免改变盒宽让整排页签跟着抖。 */
+.rc-src-tab[draggable='true'] { cursor: grab; }
+.rc-src-tab.dragging { opacity: 0.4; cursor: grabbing; }
+.rc-src-tab.drop-before { box-shadow: -3px 0 0 0 var(--rc-primary); }
+.rc-src-tab.drop-after { box-shadow: 3px 0 0 0 var(--rc-primary); }
 .rc-src-tab.on { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-weight: 700; }
 .rc-src-tab.list-tab { padding-right: 12px; font-weight: 700; }
 /* 「全部」排在源页签之前，字重与「网站列表」一致，和普通源页签区分开 */

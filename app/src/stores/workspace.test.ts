@@ -50,11 +50,47 @@ describe('workspace 源详情多页签（优化 0701 问题三）', () => {
     ws.open('s1', '源一')
     ws.open('s2', '源二')
     ws.open('s3', '源三')
+    // 新页签插最前（2026-09-17），所以此刻顺序是 s3 · s2 · s1
+    expect(ws.tabs.map((t) => t.sourceId)).toEqual(['s3', 's2', 's1'])
     ws.activate('s2')
-    expect(ws.close('s2')).toBe('s3') // 右邻
-    expect(ws.close('s3')).toBe('s1') // 无右邻 → 左邻
-    expect(ws.close('s1')).toBe('') // 关完
+    expect(ws.close('s2')).toBe('s1') // 右邻
+    expect(ws.close('s1')).toBe('s3') // 无右邻 → 左邻
+    expect(ws.close('s3')).toBe('') // 关完
     expect(ws.tabs.length).toBe(0)
+  })
+
+  // 2026-09-17 走查：页签条从左往右读，新开的排最左一打开就在眼前；
+  // 追加到末尾的话页签一多就落在横向滚动区外，还得滚过去找。
+  it('open：新页签插在最前，不是追加到末尾', () => {
+    ws.open('s1', '源一')
+    ws.open('s2', '源二')
+    ws.open('s3', '源三')
+    expect(ws.tabs.map((t) => t.sourceId)).toEqual(['s3', 's2', 's1'])
+    // 重复打开已有页签只激活，不改变它的位置
+    ws.open('s1', '源一')
+    expect(ws.tabs.map((t) => t.sourceId)).toEqual(['s3', 's2', 's1'])
+    expect(ws.activeSourceId).toBe('s1')
+  })
+
+  it('moveTab：拖动调整顺序，越界忽略，不改变活动页签', () => {
+    ws.open('s1', '源一')
+    ws.open('s2', '源二')
+    ws.open('s3', '源三') // s3 · s2 · s1
+    ws.activate('s2')
+
+    ws.moveTab(0, 2) // 把 s3 拖到最后
+    expect(ws.tabs.map((t) => t.sourceId)).toEqual(['s2', 's1', 's3'])
+    ws.moveTab(2, 0) // 再拖回最前
+    expect(ws.tabs.map((t) => t.sourceId)).toEqual(['s3', 's2', 's1'])
+
+    // 拖动不等于切换：活动页签始终没变
+    expect(ws.activeSourceId).toBe('s2')
+
+    // 越界 / 原地不动都安全
+    ws.moveTab(1, 1)
+    ws.moveTab(-1, 0)
+    ws.moveTab(0, 99)
+    expect(ws.tabs.map((t) => t.sourceId)).toEqual(['s3', 's2', 's1'])
   })
 
   it('close：关闭非活动页签不改变活动页签', () => {
@@ -96,7 +132,7 @@ describe('workspace 源详情多页签（优化 0701 问题三）', () => {
     await new Promise((r) => setTimeout(r, 350))
     setActivePinia(createPinia())
     const ws2 = useWorkspaceStore()
-    expect(ws2.tabs.map((t) => t.sourceId)).toEqual(['s1', 's2'])
+    expect(ws2.tabs.map((t) => t.sourceId)).toEqual(['s2', 's1']) // 新页签插最前
     expect(ws2.activeSourceId).toBe('s2')
     expect(ws2.snapshotOf('s2')).toEqual({ view: 'data', page: 2 })
   })

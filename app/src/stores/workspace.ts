@@ -183,9 +183,23 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       activeSourceId.value = sourceId
       return false
     }
-    tabs.value.push({ sourceId, name: name || sourceId })
+    // 插到最前而不是追加（2026-09-17 走查要求）：页签条从左往右读，新开的排最左，
+    // 一打开就在眼前；追加到末尾的话，页签一多新页签会落在横向滚动区外，还得滚过去找。
+    tabs.value.unshift({ sourceId, name: name || sourceId })
     activeSourceId.value = sourceId
     return true
+  }
+
+  /**
+   * 拖拽调整源页签顺序。`from`/`to` 都是 `tabs` 里的下标，越界直接忽略。
+   * 只管顺序，不动 activeSourceId——拖动不等于切换，拖完还停在原来那个页签上。
+   */
+  function moveTab(from: number, to: number) {
+    if (from === to) return
+    if (from < 0 || from >= tabs.value.length) return
+    if (to < 0 || to >= tabs.value.length) return
+    const [moved] = tabs.value.splice(from, 1)
+    tabs.value.splice(to, 0, moved)
   }
 
   function activate(sourceId: string) {
@@ -324,5 +338,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return snapshots[sourceId]
   }
 
-  return { tabs, activeSourceId, snapshots, siteTabs, siteSnapshots, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, renameTab, saveSnapshot, snapshotOf, ensureSiteTab, closeSiteTab, clearSiteTabs, saveSiteSnapshot, siteSnapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf, backTraceConditionOf, setPendingSourceCondition, takePendingSourceCondition }
+  return { tabs, activeSourceId, snapshots, siteTabs, siteSnapshots, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, moveTab, renameTab, saveSnapshot, snapshotOf, ensureSiteTab, closeSiteTab, clearSiteTabs, saveSiteSnapshot, siteSnapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf, backTraceConditionOf, setPendingSourceCondition, takePendingSourceCondition }
 })
