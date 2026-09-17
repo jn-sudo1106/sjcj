@@ -191,6 +191,18 @@ function clearSelection() {
 // 勾了 = 只发勾上的。`all` 恒为 0，那是「所有参数」不是「所有源」。
 const launchOpen = ref(false)
 const launchSending = ref(false)
+/**
+ * 勾了这个数以内、且没有参数要填，就直接发，不弹确认（2026-09-17 对齐旧平台）。
+ *
+ * 旧 `SourceList.sendBatch` 的三档口径（读代码 + 生产实测两次都验过）：
+ *   有参数            → 弹参数框
+ *   无参数 + ≤2 个     → **直接发**，只有成功提示
+ *   无参数 + >2 个     → 一句话确认「是否确定要发送抓取任务，本次[ N ]条?」
+ *
+ * 我们原来不分情况一律先弹 LaunchConfirmDialog，勾一个源也要点两次才发得出去。
+ * 顺序也反了：旧平台先探参数再决定弹不弹，我们是先弹、确认后才探参数。
+ */
+const DIRECT_SEND_MAX = 2
 const launchScope = ref<LaunchScope | null>(null)
 const launchPreview = ref({ sendCount: 0, disabledCount: 0, paramCount: 0, paramNames: [] as string[] })
 const collectProgress = ref('')
@@ -228,6 +240,26 @@ async function openLaunch() {
     }
     if (!sendable.length && !param.length) {
       ElMessage.warning('选中的源都已停用，无法发任务')
+      return
+    }
+    // 先探参数，再决定弹不弹——顺序与旧平台一致（见 DIRECT_SEND_MAX 的说明）
+    const ids = [...sendable, ...param].map((s) => s.sourceId)
+    let needParams = false
+    try {
+      const raw = await sourceApi.loadParams(ids)
+      needParams = hasLoadParams(normalizeLoadParams(raw))
+      if (needParams) {
+        paramModalRef.value?.showParam(raw, [...sendable, ...param].map((s) => ({ sourceId: s.sourceId, name: s.name })), false)
+        clearSelection()
+        return
+      }
+    } catch (error) {
+      ElMessage.error(`读取参数失败：${error instanceof Error ? error.message : String(error)}`)
+      return
+    }
+    // 无参数且只勾了少量：直接发。skip 用默认 0，跟旧平台 sendBatch 不传 skip 等价。
+    if (ids.length <= DIRECT_SEND_MAX) {
+      await dispatchIds(ids, 0)
       return
     }
     launchOpen.value = true
@@ -270,36 +302,34 @@ async function openLaunch() {
   }
 }
 
-async function confirmLaunch(skip: number) {
+/**
+ * 确认发送。`skip`（登陆策略）恒传 0——它属于参数弹窗，批量发抓取这条路旧平台也不传，
+ * 后端默认即 0，理由见 LaunchConfirmDialog 顶部说明。
+ */
+async function confirmLaunch() {
   const scope = launchScope.value
   if (!scope || launchSending.value) return
   launchSending.value = true
   collectProgress.value = ''
   try {
-    if (scope.mode === 'selected') await launchSelected(skip)
-    else await dispatchIds(collectedSendableIds, skip)
+    if (scope.mode === 'selected') await launchSelected(0)
+    else await dispatchIds(collectedSendableIds, 0)
   } finally {
     launchSending.value = false
     collectProgress.value = ''
   }
 }
 
+/**
+ * 确认弹窗点「确认发送」后的实际提交。
+ *
+ * 这里**不再探参数**：openLaunch 已经先探过一轮，有参数的直接走了参数框、根本不会开这个弹窗，
+ * 能走到这儿的一定是无参数且勾了 >DIRECT_SEND_MAX 个。再探一次纯属多发一次请求。
+ */
 async function launchSelected(skip: number) {
   const { sendable, param } = partitionLaunchTargets(selectedSources.value)
   const ids = [...sendable, ...param].map((s) => s.sourceId)
   if (!ids.length) return
-  try {
-    const raw = await sourceApi.loadParams(ids)
-    if (hasLoadParams(normalizeLoadParams(raw))) {
-      launchOpen.value = false
-      paramModalRef.value?.showParam(raw, [...sendable, ...param].map((s) => ({ sourceId: s.sourceId, name: s.name })), false)
-      clearSelection()
-      return
-    }
-  } catch (error) {
-    ElMessage.error(`读取参数失败：${error instanceof Error ? error.message : String(error)}`)
-    return
-  }
   await dispatchIds(ids, skip)
 }
 

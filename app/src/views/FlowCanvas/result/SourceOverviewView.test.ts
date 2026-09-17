@@ -192,7 +192,9 @@ describe('SourceOverviewView · 勾选与批量', () => {
     expect(wrapper.find('.sov-summary [data-testid="source-export"]').exists()).toBe(false)
   })
 
-  it('勾选后走 selected 范围，确认后一次带多个 ids，all 恒为 0', async () => {
+  // 2026-09-17 对齐旧平台：无参数且勾选 ≤2 个时直接发，不再先弹确认
+  // （旧 SourceList.sendBatch 的口径，读代码 + 生产实测两次都验过）。
+  it('勾选 2 个且无参数：直接发，不弹确认，all 恒为 0、skip 走默认', async () => {
     const send = vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: '已下发' })
     vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({})
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 2, list: rows })
@@ -201,12 +203,34 @@ describe('SourceOverviewView · 勾选与批量', () => {
     await wrapper.get('[data-testid="source-check-all"]').setValue(true)
     await wrapper.get('[data-testid="source-launch"]').trigger('click')
     await flushPromises()
-    expect(wrapper.get('[data-testid="launch-confirm-dialog"]').text()).toContain('已勾选 2')
-    await wrapper.get('[data-testid="launch-confirm"]').trigger('click')
-    await flushPromises()
+
+    expect(wrapper.find('[data-testid="launch-confirm-dialog"]').exists()).toBe(false)
     expect(send).toHaveBeenCalledTimes(1)
     expect(send.mock.calls[0][0].ids).toEqual(['src-1', 'src-2'])
     expect(send.mock.calls[0][0].all).toBe(0)
+    expect(send.mock.calls[0][0].skip).toBe(0)
+    wrapper.unmount()
+  })
+
+  it('勾选超过 2 个仍然先确认——批量发出去收不回来', async () => {
+    const many = [...rows, { ...source, sourceId: 'src-3', name: '第三个源' }]
+    const send = vi.spyOn(sourceApi, 'sendSnatchWithParam').mockResolvedValue({ ok: true, message: '已下发' })
+    vi.spyOn(sourceApi, 'loadParams').mockResolvedValue({})
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 3, list: many })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
+    await wrapper.get('[data-testid="source-check-all"]').setValue(true)
+    await wrapper.get('[data-testid="source-launch"]').trigger('click')
+    await flushPromises()
+
+    // 确认前不发
+    expect(wrapper.get('[data-testid="launch-confirm-dialog"]').text()).toContain('本次 3 条')
+    expect(send).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-testid="launch-confirm"]').trigger('click')
+    await flushPromises()
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send.mock.calls[0][0].ids).toEqual(['src-1', 'src-2', 'src-3'])
     wrapper.unmount()
   })
 
@@ -412,9 +436,8 @@ describe('SourceOverviewView · 标签', () => {
     const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
     await flushPromises()
     await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
+    // 勾 1 个、无参数 → 直接发，没有确认框可点
     await wrapper.get('[data-testid="source-launch"]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-testid="launch-confirm"]').trigger('click')
     await flushPromises()
     expect(wrapper.get('[data-testid="source-issue-tags"]').text()).toContain('正文缺失')
     wrapper.unmount()
