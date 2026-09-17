@@ -198,24 +198,44 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(wrapper.find('.rc-actions-row button').exists()).toBe(false)
   })
 
-  // 0917 产品口径：OCR 抓取节点不给「脚本编辑」入口（这一类不在这里生成 Python 脚本），
-  // 标题行只剩「抓取配置」。其它节点类型不受影响（上面那条规则节点的用例仍要求有这个按钮）。
-  it('OCR 抓取节点的标题行没有脚本编辑按钮', async () => {
+  // 0917 产品口径：OCR 抓取 / 视频转音频 / 语音转文字 / 文章摘要这几类不给「脚本编辑」入口
+  //（这几类不需要生成脚本），标题行只剩「抓取配置」。其它节点类型不受影响
+  //（上面那条规则节点的用例仍要求有这个按钮）。清单在 flowModel 的 isScriptlessNode()。
+  it.each([
+    ['ocr', 'OCR抓取'],
+    ['video-audio', '视频提取音频'],
+    ['audio-text', '音频提取文字'],
+    ['article-summary', '文章生成摘要'],
+  ])('%s 节点（%s）的标题行没有脚本编辑按钮', async (seedKey, label) => {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
-    const cfg = cloneConfig(NODE_CONFIGS['ocr'])
-    flow.configs['ocr-1'] = cfg
-    flow.select('ocr-1')
+    flow.configs['x-1'] = cloneConfig(NODE_CONFIGS[seedKey])
+    flow.select('x-1')
     flow.setActiveTab('orchestration')
     const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
     await flushPromises()
 
     const titleRow = wrapper.find('.ni-section-title-row')
-    expect(titleRow.exists()).toBe(true)
+    expect(titleRow.exists(), label).toBe(true)
     expect(titleRow.text()).toContain('抓取配置')
-    expect(titleRow.find('button').exists()).toBe(false)
+    expect(titleRow.find('button').exists(), label).toBe(false)
     expect(wrapper.find('.ni-section-actions').exists()).toBe(false)
+  })
+
+  it('采集类节点（网页抓取）仍然保留脚本编辑按钮', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['x-1'] = cloneConfig(NODE_CONFIGS['web-list'])
+    flow.select('x-1')
+    flow.setActiveTab('orchestration')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const titleRow = wrapper.find('.ni-section-title-row')
+    expect(titleRow.text()).toContain('抓取配置')
+    expect(titleRow.find('button').text()).toBe('脚本编辑')
   })
 
   // 0917 OCR 识别试跑：选图 → 转 base64 → 调 /ocr → 展示识别文本
@@ -322,6 +342,304 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
 
       expect(wrapper.get('[data-testid="ocr-error"]').text()).toContain('图片格式不支持')
       expect(wrapper.find('[data-testid="ocr-result"]').exists()).toBe(false)
+    })
+  })
+
+  // 0917 语音转文字试跑：上传音频 → multipart 调 /api/speech/transcriptions → 展示转写文本
+  describe('语音转文字试跑（音频提取文字节点）', () => {
+    function mountOnAudioTextNode() {
+      mockAssets()
+      setActivePinia(createPinia())
+      const flow = useFlowStore()
+      flow.configs['audio-1'] = cloneConfig(NODE_CONFIGS['audio-text'])
+      flow.select('audio-1')
+      flow.setActiveTab('orchestration')
+      const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+      return { flow, wrapper }
+    }
+
+    function mockSpeechFetch(payload: unknown = { text: '第一段。第二段。', duration: 65.4, traceId: 'trace-1' }, status = 200) {
+      return vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(payload), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+    }
+
+    it('音频提取文字节点显示上传入口，且没有脚本编辑按钮', async () => {
+      const { wrapper } = mountOnAudioTextNode()
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="audio-transcribe-field"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="audio-pick-file"]').text()).toContain('上传音频')
+      expect(wrapper.find('.ni-section-title-row button').exists()).toBe(false)
+      // 没选文件时不能点「开始转写」
+      expect(wrapper.get('[data-testid="audio-transcribe"]').attributes('disabled')).toBeDefined()
+    })
+
+    it('上传音频后带语言调 /api/speech/transcriptions，并展示转写文本', async () => {
+      const { wrapper } = mountOnAudioTextNode()
+      await flushPromises()
+      const fetchSpy = mockSpeechFetch()
+
+      const input = wrapper.find('input[data-testid="audio-file-input"]')
+      await selectFile(input, new File(['audio-bytes'], 'meeting.mp3', { type: 'audio/mpeg' }))
+      await wrapper.get('select[data-testid="audio-language"]').setValue('zh')
+      await wrapper.get('[data-testid="audio-transcribe"]').trigger('click')
+      await flushPromises()
+      await flushPromises()
+
+      const calls = fetchSpy.mock.calls.filter(([url]) => url === '/api/speech/transcriptions')
+      expect(calls).toHaveLength(1)
+      const form = calls[0][1]?.body as FormData
+      expect((form.get('file') as File).name).toBe('meeting.mp3')
+      await expect((form.get('request') as Blob).text()).resolves.toBe('{"language":"zh"}')
+
+      expect(wrapper.get('[data-testid="audio-result-text"]').text()).toBe('第一段。第二段。')
+      expect(wrapper.get('[data-testid="audio-result"]').text()).toContain('01:05')
+      expect(wrapper.get('[data-testid="audio-result"]').text()).toContain('trace-1')
+    })
+
+    it('不选语言时不带 request 部分', async () => {
+      const { wrapper } = mountOnAudioTextNode()
+      await flushPromises()
+      const fetchSpy = mockSpeechFetch()
+
+      await selectFile(
+        wrapper.find('input[data-testid="audio-file-input"]'),
+        new File(['audio-bytes'], 'meeting.mp3', { type: 'audio/mpeg' }),
+      )
+      await wrapper.get('[data-testid="audio-transcribe"]').trigger('click')
+      await flushPromises()
+
+      const form = fetchSpy.mock.calls.find(([url]) => url === '/api/speech/transcriptions')?.[1]?.body as FormData
+      expect(form.get('request')).toBeNull()
+    })
+
+    it('非音频后缀被本地拦下，不发请求', async () => {
+      const { wrapper } = mountOnAudioTextNode()
+      await flushPromises()
+      const fetchSpy = mockSpeechFetch()
+
+      await selectFile(
+        wrapper.find('input[data-testid="audio-file-input"]'),
+        new File(['x'], 'notes.txt', { type: 'text/plain' }),
+      )
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="audio-file-error"]').text()).toContain('不支持的音频格式')
+      expect(fetchSpy.mock.calls.filter(([url]) => url === '/api/speech/transcriptions')).toHaveLength(0)
+      expect(wrapper.get('[data-testid="audio-transcribe"]').attributes('disabled')).toBeDefined()
+    })
+
+    it('转写失败时透出后端 error 文案，不显示结果区', async () => {
+      const { wrapper } = mountOnAudioTextNode()
+      await flushPromises()
+      mockSpeechFetch({ error: 'cfg_llm_config 中没有启用的供应商 MiniMax，无法调用 MiniMax 语音识别' }, 502)
+
+      await selectFile(
+        wrapper.find('input[data-testid="audio-file-input"]'),
+        new File(['audio-bytes'], 'meeting.mp3', { type: 'audio/mpeg' }),
+      )
+      await wrapper.get('[data-testid="audio-transcribe"]').trigger('click')
+      await flushPromises()
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="audio-error"]').text()).toContain('没有启用的供应商 MiniMax')
+      expect(wrapper.find('[data-testid="audio-result"]').exists()).toBe(false)
+    })
+
+    // 2026-09-17 实测踩到：MiniMax 单段上限 500 秒，660.1s 的音频被上游 400 拒回。
+    // 现在本地先读时长拦一道，别让它白跑一趟。
+    it('时长超过 500 秒：本地拦下并禁用转写，不发请求', async () => {
+      class FakeAudio {
+        preload = ''
+        onloadedmetadata: (() => void) | null = null
+        onerror: (() => void) | null = null
+        src = ''
+        duration = 660.1
+        removeAttribute() { /* noop */ }
+        constructor() { window.setTimeout(() => this.onloadedmetadata?.(), 0) }
+      }
+      vi.stubGlobal('Audio', FakeAudio)
+      vi.stubGlobal('URL', { ...URL, createObjectURL: () => 'blob:fake', revokeObjectURL: () => {} })
+      try {
+        const { wrapper } = mountOnAudioTextNode()
+        await flushPromises()
+        const fetchSpy = mockSpeechFetch()
+
+        await selectFile(
+          wrapper.find('input[data-testid="audio-file-input"]'),
+          new File(['audio-bytes'], 'long.mp3', { type: 'audio/mpeg' }),
+        )
+        await flushPromises()
+        await new Promise((resolve) => setTimeout(resolve, 20))
+
+        expect(wrapper.get('[data-testid="audio-file-error"]').text()).toContain('超过单段上限 08:20')
+        const btn = wrapper.get('[data-testid="audio-transcribe"]')
+        expect(btn.attributes('disabled')).toBeDefined()
+        await btn.trigger('click')
+        await flushPromises()
+        expect(fetchSpy.mock.calls.filter(([url]) => url === '/api/speech/transcriptions')).toHaveLength(0)
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('时长在上限内：正常转写，预览里显示时长', async () => {
+      class FakeAudio {
+        preload = ''
+        onloadedmetadata: (() => void) | null = null
+        onerror: (() => void) | null = null
+        src = ''
+        duration = 125
+        removeAttribute() { /* noop */ }
+        constructor() { window.setTimeout(() => this.onloadedmetadata?.(), 0) }
+      }
+      vi.stubGlobal('Audio', FakeAudio)
+      vi.stubGlobal('URL', { ...URL, createObjectURL: () => 'blob:fake', revokeObjectURL: () => {} })
+      try {
+        const { wrapper } = mountOnAudioTextNode()
+        await flushPromises()
+        mockSpeechFetch()
+
+        await selectFile(
+          wrapper.find('input[data-testid="audio-file-input"]'),
+          new File(['audio-bytes'], 'meeting.mp3', { type: 'audio/mpeg' }),
+        )
+        await flushPromises()
+        await new Promise((resolve) => setTimeout(resolve, 20))
+
+        expect(wrapper.get('.ocr-file-size').text()).toContain('02:05')
+        expect(wrapper.get('[data-testid="audio-transcribe"]').attributes('disabled')).toBeUndefined()
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+  })
+
+  // 0917 视频提取音频试跑：上传视频 → multipart 调 /api/media/extract-audio → 音频试听/下载
+  describe('视频提取音频试跑（视频提取音频节点）', () => {
+    function mountOnVideoAudioNode() {
+      mockAssets()
+      setActivePinia(createPinia())
+      const flow = useFlowStore()
+      flow.configs['video-1'] = cloneConfig(NODE_CONFIGS['video-audio'])
+      flow.select('video-1')
+      flow.setActiveTab('orchestration')
+      const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+      return { flow, wrapper }
+    }
+
+    function mockMediaFetch(impl?: () => Response) {
+      return vi.spyOn(globalThis, 'fetch').mockImplementation(async () => (impl ? impl() : new Response(
+        new Uint8Array([1, 2, 3, 4]),
+        {
+          status: 200,
+          headers: {
+            'Content-Type': 'audio/mpeg',
+            'Content-Disposition': "attachment; filename=meeting.mp3; filename*=UTF-8''meeting.mp3",
+          },
+        },
+      )))
+    }
+
+    it('视频提取音频节点显示上传入口与参数，且没有脚本编辑按钮', async () => {
+      const { wrapper } = mountOnVideoAudioNode()
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="video-extract-field"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="video-pick-file"]').text()).toContain('上传视频')
+      expect(wrapper.find('.ni-section-title-row button').exists()).toBe(false)
+      // 输出格式 / 码率 / 采样率 / 声道 都在，且默认是 mp3
+      expect((wrapper.get('[data-testid="media-format"]').element as HTMLSelectElement).value).toBe('mp3')
+      expect(wrapper.find('[data-testid="media-bitrate"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="media-sampling-rate"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="media-channels"]').exists()).toBe(true)
+      // 没选文件不能点提取
+      expect(wrapper.get('[data-testid="video-extract"]').attributes('disabled')).toBeDefined()
+    })
+
+    it('上传视频后按参数调接口，拿到音频流并给出试听与下载', async () => {
+      const { wrapper } = mountOnVideoAudioNode()
+      await flushPromises()
+      const fetchSpy = mockMediaFetch()
+
+      await selectFile(
+        wrapper.find('input[data-testid="video-file-input"]'),
+        new File(['video-bytes'], 'meeting.mp4', { type: 'video/mp4' }),
+      )
+      await wrapper.get('select[data-testid="media-format"]').setValue('wav')
+      await wrapper.get('select[data-testid="media-sampling-rate"]').setValue('16000')
+      await wrapper.get('[data-testid="video-extract"]').trigger('click')
+      await flushPromises()
+      await flushPromises()
+
+      const calls = fetchSpy.mock.calls.filter(([url]) => url === '/api/media/extract-audio')
+      expect(calls).toHaveLength(1)
+      const form = calls[0][1]?.body as FormData
+      expect((form.get('file') as File).name).toBe('meeting.mp4')
+      await expect((form.get('request') as Blob).text()).resolves.toBe('{"format":"wav","samplingRate":16000}')
+
+      const result = wrapper.get('[data-testid="video-result"]')
+      expect(result.text()).toContain('meeting.mp3')
+      expect(result.find('[data-testid="video-audio-player"]').exists()).toBe(true)
+      expect(result.text()).toContain('下载')
+    })
+
+    it('勾选上传到文件服务时展示 fileId', async () => {
+      const { wrapper } = mountOnVideoAudioNode()
+      await flushPromises()
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
+        fileId: '/media01/202609/abc.mp3', filename: 'meeting.mp3', format: 'mp3', size: 16629, duration: 12.3,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+      await selectFile(
+        wrapper.find('input[data-testid="video-file-input"]'),
+        new File(['video-bytes'], 'meeting.mp4', { type: 'video/mp4' }),
+      )
+      await wrapper.get('input[data-testid="media-upload-switch"]').setValue(true)
+      await wrapper.get('[data-testid="video-extract"]').trigger('click')
+      await flushPromises()
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="video-upload-result"]').text()).toContain('已上传到文件服务')
+      expect(wrapper.get('[data-testid="video-file-id"]').text()).toContain('/media01/202609/abc.mp3')
+      expect(wrapper.find('[data-testid="video-audio-player"]').exists()).toBe(false)
+    })
+
+    it('非视频后缀被本地拦下，不发请求', async () => {
+      const { wrapper } = mountOnVideoAudioNode()
+      await flushPromises()
+      const fetchSpy = mockMediaFetch()
+
+      await selectFile(
+        wrapper.find('input[data-testid="video-file-input"]'),
+        new File(['x'], 'audio.mp3', { type: 'audio/mpeg' }),
+      )
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="video-file-error"]').text()).toContain('不支持的视频格式')
+      expect(fetchSpy.mock.calls.filter(([url]) => url === '/api/media/extract-audio')).toHaveLength(0)
+      expect(wrapper.get('[data-testid="video-extract"]').attributes('disabled')).toBeDefined()
+    })
+
+    it('视频没有音轨（422）时透出后端文案，不显示结果区', async () => {
+      const { wrapper } = mountOnVideoAudioNode()
+      await flushPromises()
+      mockMediaFetch(() => new Response(JSON.stringify({ error: '视频不包含音频轨道，无法提取音频' }), {
+        status: 422, headers: { 'Content-Type': 'application/json' },
+      }))
+
+      await selectFile(
+        wrapper.find('input[data-testid="video-file-input"]'),
+        new File(['video-bytes'], 'silent.mp4', { type: 'video/mp4' }),
+      )
+      await wrapper.get('[data-testid="video-extract"]').trigger('click')
+      await flushPromises()
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="video-error"]').text()).toContain('视频不包含音频轨道')
+      expect(wrapper.find('[data-testid="video-result"]').exists()).toBe(false)
     })
   })
 

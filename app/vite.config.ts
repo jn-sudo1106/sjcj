@@ -64,6 +64,23 @@ export default defineConfig(({ mode }) => {
           target: env.VITE_OCR_PROXY_TARGET || 'http://118.25.96.217:4864',
           changeOrigin: true,
         },
+        // 语音转文字（音频提取文字节点，2026-09-17）：接口在 vanv-data-engine 的 speech 包，
+        // 与 data-process 服务同一台 8080；前缀必须排在通用 '/api' 之前，否则会被业务后端
+        // （9999）兜底并返回 404。切换目标用 VITE_DATA_PROCESS_PROXY_TARGET。
+        '/api/speech': {
+          target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://127.0.0.1:8080',
+          changeOrigin: true,
+          // 转写是同步长请求（后端读超时 3 分钟），代理默认超时会先断开
+          timeout: 200_000,
+        },
+        // 视频提取音频（视频提取音频节点，2026-09-17）：接口在 vanv-data-engine 的 media 包，
+        // 同一台 8080；理由同 /api/speech（必须排在通用 '/api' 之前）。
+        // 转码同步执行、后端超时默认 5 分钟，代理给足时间。
+        '/api/media': {
+          target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://127.0.0.1:8080',
+          changeOrigin: true,
+          timeout: 330_000,
+        },
         // 提示词模板列表（规则节点工作区，2026-09-10 迁移自硬编码 127.0.0.1:8080）：与
         // data-process 同一台 8080 服务；前缀必须排在通用 '/api' 之前，否则会被业务后端
         // （9999）兜底并返回 404。切换目标用 VITE_DATA_PROCESS_PROXY_TARGET。

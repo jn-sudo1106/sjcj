@@ -564,18 +564,47 @@ export function isDataValidationNode(cfg?: NodeConfig): boolean {
 }
 
 /**
- * OCR 抓取节点判定（2026-09-17 新增；编排配置 Tab 用它决定要不要给「脚本编辑」入口）。
- *
- * **不能只看 `template`**：`template` 只在插入时（insertAfter）以及后端回读的
- * monitor / data-validation 两条分支上被写入，其它类型回读后是 undefined——
- * 只看它，从后端读回来的 OCR 节点又会冒出脚本编辑按钮。
- * 所以第二条判据取节点种子副标题里的类型编号 `[150]`（ocr 种子的 sub 是
- * `[150] OCR抓取 · 执行器待确认`），与 iconFor() / nodeTypeLabel() 认类型的方式一致。
+ * 节点类型判定：**不能只看 `template`**——`template` 只在插入时（insertAfter）以及后端回读的
+ * monitor / data-validation 两条分支上被写入，其它类型回读后是 undefined。
+ * 所以再兜底一条：节点种子副标题里的类型编号，如 ocr 种子的 `[150] OCR抓取 · 执行器待确认`
+ *（与 iconFor() / nodeTypeLabel() 认类型的方式一致）。
  */
-export function isOcrNode(cfg?: NodeConfig): boolean {
+function hasNodeTypeCode(cfg: NodeConfig | undefined, template: string, code: string): boolean {
   if (!cfg) return false
-  if (cfg.template === 'ocr') return true
-  return /\[150\]/.test(cfg.sub ?? '')
+  return cfg.template === template || (cfg.sub ?? '').includes(`[${code}]`)
+}
+
+/** OCR 抓取节点（编排配置 Tab 用它决定要不要给「OCR 识别」试跑区）。 */
+export function isOcrNode(cfg?: NodeConfig): boolean {
+  return hasNodeTypeCode(cfg, 'ocr', '150')
+}
+
+/** 音频提取文字节点（编排配置 Tab 用它决定要不要给「上传音频转文字」试跑区）。 */
+export function isAudioTextNode(cfg?: NodeConfig): boolean {
+  return hasNodeTypeCode(cfg, 'audio-text', '710')
+}
+
+/** 视频提取音频节点（编排配置 Tab 用它决定要不要给「上传视频抽音轨」试跑区）。 */
+export function isVideoAudioNode(cfg?: NodeConfig): boolean {
+  return hasNodeTypeCode(cfg, 'video-audio', '700')
+}
+
+/**
+ * 「不给脚本编辑入口」的节点类型（2026-09-17 产品口径，用户逐个点掉后收敛成这张清单）。
+ *
+ * 这几类不在编排配置里生成脚本：OCR 识别、视频转音频、语音转文字、文章摘要都是现成的
+ * 媒体 / 文本处理能力，既不需要写 Python 规则脚本，也没有可编辑的抓取配置 XML——
+ * 工作区（描述 / 系统提示词 / 脚本正文 / 生成 / 保存）整个入口收掉，只留本类型自己的字段。
+ * 想把某类加进来 / 拿出去，只改这两张表即可。
+ */
+const SCRIPTLESS_TEMPLATES = new Set(['ocr', 'video-audio', 'audio-text', 'article-summary'])
+const SCRIPTLESS_TYPE_CODES = ['150', '700', '710', '720']
+
+export function isScriptlessNode(cfg?: NodeConfig): boolean {
+  if (!cfg) return false
+  if (cfg.template && SCRIPTLESS_TEMPLATES.has(cfg.template)) return true
+  const sub = cfg.sub ?? ''
+  return SCRIPTLESS_TYPE_CODES.some((code) => sub.includes(`[${code}]`))
 }
 
 /**
