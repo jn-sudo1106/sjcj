@@ -157,6 +157,12 @@ describe('describeFilters / 导出行', () => {
     expect(describeFilters({})).toBe('当前网站全部源')
   })
 
+  // 源 URL 是独立于名称的条件，「按条件发任务」的确认文案必须带上它，
+  // 否则用户以为只按名称筛，实际发出去的范围是两者取交集
+  it('名称与 URL 是两个条件，都列进人话描述', () => {
+    expect(describeFilters({ name: '盛科', sourceUrl: 'centec' })).toBe('名称含「盛科」，URL 含「centec」')
+  })
+
   it('标签用顿号连且不带 #——导出给人看，不回写', () => {
     const row = sourceToExportRow(src('1', { tags: ['正文缺失', '内容重复'], remark: '验证正常' }))
     expect(row[4]).toBe('正文缺失、内容重复')

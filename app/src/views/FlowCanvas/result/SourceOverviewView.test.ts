@@ -157,6 +157,7 @@ describe('SourceOverviewView · 勾选与批量', () => {
     await wrapper.get('[data-testid="source-overview-name"]').setValue('财经')
     await wrapper.get('[data-testid="source-overview-tag"]').setValue('内容重复')
     await wrapper.get('[data-testid="source-overview-remark"]').setValue('验证正常')
+    await wrapper.get('[data-testid="source-overview-url"]').setValue('centec')
     await wrapper.get('[data-testid="source-export"]').trigger('click')
     await flushPromises()
 
@@ -165,6 +166,8 @@ describe('SourceOverviewView · 勾选与批量', () => {
     expect(collectCalls[0]?.[0]).toEqual(expect.objectContaining({
       siteIds: 'site-current',
       name: '财经',
+      // URL 与名称是后端两个独立条件（sourceUrl / name），一起发、取交集
+      sourceUrl: 'centec',
       tags: ['#内容重复'],
       remark: '验证正常',
       page: 1,

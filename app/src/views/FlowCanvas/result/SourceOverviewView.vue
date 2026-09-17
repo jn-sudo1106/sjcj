@@ -71,6 +71,11 @@ watch(() => props.initialSourceIds, (ids) => {
   void loadSources()
 })
 const name = ref('')
+// 源 URL 单独一格，**不跟源名称并成一个框**（2026-09-17 定）：后端是两个独立条件，
+// 没有「名称 or URL」这种合并语义。并成一个框就只能前端猜该发哪个参数，而两者互不覆盖
+// ——实测 name=centec 命中 0 条、sourceUrl=centec 命中 1 条，猜错就是静默漏结果。
+// 分开还能组合（同时给取交集），合并做不到。
+const urlFilter = ref('')
 const statusFilter = ref<StatusFilter>('all')
 const tagFilter = ref('')
 // 备注：生产源列表页筛选区就有，后端认 remark（旧列表列同名）。本地那份旧代码快照比线上旧，
@@ -87,6 +92,7 @@ function currentQuery(): SourceFilter {
     sourceIds: sourceIds.value || undefined,
     flowId: flowFilterId.value || undefined,
     name: name.value || undefined,
+    sourceUrl: urlFilter.value || undefined,
     state: statusFilter.value === 'all' || statusFilter.value === 'disabled' ? undefined : statusFilter.value,
     enable: statusFilter.value === 'disabled' ? '1' : statusFilter.value === 'all' ? undefined : '0',
     tags: tagFilter.value ? [issueTagForWrite(tagFilter.value)].filter(Boolean) : [],
@@ -133,6 +139,7 @@ function clearFilters() {
   sourceIds.value = ''
   flowFilterId.value = ''
   name.value = ''
+  urlFilter.value = ''
   statusFilter.value = 'all'
   tagFilter.value = ''
   remarkFilter.value = ''
@@ -730,6 +737,9 @@ watch(() => props.currentSiteId, () => {
       </label>
       <label>源名称
         <input v-model="name" data-testid="source-overview-name" placeholder="源名称" @keyup.enter="search" />
+      </label>
+      <label>源 URL
+        <input v-model="urlFilter" data-testid="source-overview-url" placeholder="URL 关键字，如 centec" @keyup.enter="search" />
       </label>
       <label>状态
         <select v-model="statusFilter" data-testid="source-overview-state" @change="search">

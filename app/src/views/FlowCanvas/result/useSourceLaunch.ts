@@ -21,6 +21,10 @@ export type SourceFilter = {
    *  用它而不是把源 ID 拼进 sourceIds：一个流程最多见过 5439 个源，拼 URL 不现实。 */
   flowId?: string
   name?: string
+  /** 按源 URL 子串过滤（2026-09-17）。后端 `sourcePaged` 的 `sourceUrl`，与 `name` 是两个
+   *  独立条件、同时给则取交集——实测 name=盛科 4 条、sourceUrl=centec 1 条、两者同给 1 条、
+   *  互斥组合 0 条。注意后端**不认** `url`（传了等于没传，1073 条原样返回）。 */
+  sourceUrl?: string
   state?: string
   enable?: string
   tags?: string[]
@@ -80,6 +84,7 @@ export function describeFilters(query: SourceFilter): string {
   if (query.sourceIds) parts.push(`源 ID ${query.sourceIds}`)
   if (query.flowId) parts.push(`流程 #${query.flowId}`)
   if (query.name) parts.push(`名称含「${query.name}」`)
+  if (query.sourceUrl) parts.push(`URL 含「${query.sourceUrl}」`)
   if (query.state === 'C') parts.push('状态=正常')
   else if (query.state === 'L') parts.push('状态=运行中')
   else if (query.state === 'E') parts.push('状态=异常')
