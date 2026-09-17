@@ -20,7 +20,8 @@ import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 // 只是顺手看一眼具体源的数据）。
 //
 // 这里默认是查看；0831 X6：具体源 + 当前表就是发后续那张表时，可以勾行发任务。
-// 全部源+选表仍只读（无法确定流程节点）。发起抓取 / 输入输出切换仍在 ResultView。
+// 全部源+选表同样能勾行发后续（2026-09-17）——流程节点在发送时按表逐源反查，见 resolveNextStepFor。
+// 发起抓取 / 输入输出切换仍在 ResultView。
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -30,11 +31,10 @@ import {
   hasDirectSuccessor, directSuccessorIds, directPredecessorIds, type NodeConfig, type BranchSeed, type FlowBranchGroup,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
-import { fetchNextStepConfig } from '@/utils/flow/nextStepConfig'
+import { fetchNextStepConfig, resolveNextStepConfigFromSteps, type ResolvedNextStepConfig } from '@/utils/flow/nextStepConfig'
 import { confirmDanger } from '@/utils/confirmDanger'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import DataGrid from './DataGrid.vue'
-import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import FilePreview from './components/FilePreview.vue'
 import { backTraceSources } from '@/utils/data/backTraceSources'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -387,13 +387,16 @@ const successorTableId = computed(() => {
   if (!succIds.length) return ''
   return effectiveInputTable(flowData.value.main, flowData.value.branches, flowData.value.configs, succIds[0], flowData.value.branchGroups) || outputTableId.value
 })
-// 具体源才开发任务：全部源+选表无法确定流程节点（0831 X6 / Q4）。
 // 输入≠输出时这张表是产出数据，跟 ResultView 一样不在这里勾发，请到源数据视图切输入。
-const canPickRows = computed(() => !!selectedSourceId.value && hasSuccessor.value && !isStructuralNode.value
-  && (sameTable.value || !inputTableId.value || !outputTableId.value))
+// 全部源态没有节点上下文可判（0831 X6 当时因此整个关掉勾选），但后继其实不必依赖页面上下文——
+// 按「这张表是谁产出的」逐源反查就能算出来，所以 2026-09-17 放开，判定挪到发送时（resolveNextStepFor）。
+const canPickRows = computed(() => {
+  if (!selectedSourceId.value) return true
+  return hasSuccessor.value && !isStructuralNode.value
+    && (sameTable.value || !inputTableId.value || !outputTableId.value)
+})
 const selectedRowIds = ref<string[]>([])
 const launchDisabledReason = computed(() => {
-  if (!selectedSourceId.value) return '选表无法确定流程节点，请先选择具体源'
   if (!canPickRows.value) return hasSuccessor.value ? '输入与输出不是同一张表，请到源数据视图勾选输入行' : '当前节点没有后继，无法发后续'
   if (!selectedRowIds.value.length) return '请先勾选要发送的数据'
   return ''
@@ -673,47 +676,19 @@ function showNextStepReceipt(res: { message?: string }) {
   else ElMessage.success(`已提交 ${receipt.submitted} 条，${receipt.okCount} 条已进入下一步`)
 }
 
-async function onSendNextStep() {
-  if (!canPickRows.value || !effectiveTableId.value || !selectedRowIds.value.length) return
-  const groups = new Map<string, string[]>()
-  for (const id of selectedRowIds.value) {
-    const row = rows.value.find((item) => item.dataId === id)
-    const sourceId = row?.sourceId || selectedSourceId.value
-    if (!sourceId) continue
-    const list = groups.get(sourceId) ?? []
-    list.push(id)
-    groups.set(sourceId, list)
-  }
-  await sendNextStepFor(groups, { clearSelection: true })
-}
-
 /**
- * 行尾「发后续任务（本行）」（0915-04）：只发这一行，其余与顶部按钮完全一致。
+ * 解析「从当前这张表往后该跑哪些步骤」，**逐源**算。
  *
- * 前提跟勾选发送同一个 `canPickRows`——必须已收窄到具体源，否则解析不出后继节点配置
- * （见 sendNextStepFor 里 selectedSourceId 那段）。菜单项本身也受同一个开关控制，
- * 这里再挡一次是防止条件在菜单弹开后变化。
- */
-async function onSendRowNextStep(row: DataRow) {
-  if (!canPickRows.value || !effectiveTableId.value) return
-  const sourceId = row.sourceId || selectedSourceId.value
-  if (!sourceId || !row.dataId) return
-  await sendNextStepFor(new Map([[sourceId, [row.dataId]]]))
-}
-
-/**
- * 发后续任务的唯一实现。`groups` 是 `sourceId → dataId[]`。
+ * 具体源态：节点就是页面上选中的那个，步骤接口取不到时用画布快照兜底。
+ * 全部源态：页面上只有一张表、没有流程上下文，就按「谁的输出表是它」反查出产出这批数据的
+ * 步骤，再从那里往后收下游。各源的流程并不一样（同一张表在 A 源后面接清洗、在 B 源后面
+ * 直接入库都可能），所以不能解析一次套给所有源。
  *
- * 顶部按钮传勾选行（可能跨多个源），行尾菜单传单独一行——两者除了数据来源没有任何区别。
- * 后继节点解析、确认文案、回执分组解析都在这里，**不要为行尾再复制一份**：
- * 回执那段尤其不能分叉，后端回的「本次发送 N 条」是提交条数，被目标节点进入条件拒绝的
- * 也算在里面，少解析一次就会把「全部被拒」显示成「全部成功」。
+ * 算不出来就返回 undefined，让调用方跳过这个源——**不能退化成「不传步骤 ID」**：
+ * 实测后端在没有步骤参数时会发给该源的**所有**步骤、含当前节点自己，等于顺带重抓一遍
+ * （2026-09-17 生产实测：回执 ok_40597 / ok_40598 / ok_41685 三条全中）。
  */
-async function sendNextStepFor(groups: Map<string, string[]>, opts: { clearSelection?: boolean } = {}) {
-  if (!groups.size) return
-  const sourceCount = groups.size
-  const rowCount = [...groups.values()].reduce((sum, ids) => sum + ids.length, 0)
-  let nextConfigInfo
+async function resolveNextStepFor(sourceId: string): Promise<ResolvedNextStepConfig | undefined> {
   if (selectedSourceId.value) {
     const currentFlow = flowData.value
     const fallbackSteps: Step[] = currentFlow
@@ -736,44 +711,91 @@ async function sendNextStepFor(groups: Map<string, string[]>, opts: { clearSelec
       queue: selectedCfg.value?.taskCfg?.queue,
     }
     try {
-      nextConfigInfo = await fetchNextStepConfig(selectedSourceId.value, selectedNodeId.value, fallbackSteps, currentConfigHint)
+      return await fetchNextStepConfig(selectedSourceId.value, selectedNodeId.value, fallbackSteps, currentConfigHint)
     } catch {
-      // fallback
-    }
-    if (nextConfigInfo && !nextConfigInfo.hasNext) {
-      ElMessage.warning(nextConfigInfo.reason || '当前节点在流程中没有后续节点配置，无法发后续')
-      return
+      return undefined
     }
   }
-  // 发**整条下游**，不是只发直接后继（2026-09-17 定，与 ResultView 同口径）。
-  // 后端实测：传单个 stepId 只发那一个、不会沿链路带下游；传逗号串则按步骤分别派发，
-  // 回执自己分组（`本次发送:1 条, 结果:,ok_40598: [1条],ok_41685: [1条]`）。
-  // 算不出下游时退回单个后继，保持旧行为。
-  const downstreamIds = (nextConfigInfo?.downstreamSteps ?? [])
-    .map((step) => String(step.stepId))
-    .filter((id) => /^\d+$/.test(id))
-  const targetStepIds = downstreamIds.length ? downstreamIds.join(',') : nextConfigInfo?.targetStepId
-  // 文案要跟实际发送的范围一致：发整条下游就把下游都列出来
-  const downstreamNames = (nextConfigInfo?.downstreamSteps ?? []).map((step) => step.name || step.stepId).filter(Boolean)
-  const targetNodeName = (downstreamNames.length ? downstreamNames.join('、') : '')
-    || nextConfigInfo?.targetNodeName || selectedCfg.value?.title || selectedNodeId.value
-  const tableId = nextConfigInfo?.targetTableId || successorTableId.value || effectiveTableId.value
-  const configOptions = {
-    configId: nextConfigInfo?.targetConfigId,
-    itemConfig: targetStepIds,
-    stepId: targetStepIds,
-    nextStep: targetStepIds,
+
+  let steps: Step[] = []
+  try {
+    steps = await sourceApi.sourceSteps(sourceId, { withConfigDetails: false })
+  } catch {
+    return undefined
   }
+  if (!steps.length) return undefined
+  const table = String(effectiveTableId.value)
+  // 先按输出表认：这批行是那个步骤产出的。认不到再按输入表——抓取类首节点常常输入输出同一张表，
+  // 而处理节点的输出表才是它的产物，先输出后输入的顺序不会把下游节点误认成产出者。
+  const current = steps.find((s) => String(s.outputTable || '') === table)
+    ?? steps.find((s) => String(s.inputTable || '') === table)
+  if (!current) return undefined
+  return resolveNextStepConfigFromSteps(steps, String(current.stepId))
+}
+
+/**
+ * 勾选行发后续任务：按 `sourceId` 分组，逐源解析后继、逐源发送。
+ *
+ * 发的是**整条下游**而不是只发直接后继（2026-09-17 定，与 ResultView 同口径）：后端实测传
+ * 单个 stepId 只发那一个、不会沿链路带下游；传逗号串则按步骤分别派发，回执自己分组
+ * （`本次发送:1 条, 结果:,ok_40598: [1条],ok_41685: [1条]`）。
+ */
+async function onSendNextStep() {
+  if (!canPickRows.value || !effectiveTableId.value || !selectedRowIds.value.length) return
+  const groups = new Map<string, string[]>()
+  for (const id of selectedRowIds.value) {
+    const row = rows.value.find((item) => item.dataId === id)
+    const sourceId = row?.sourceId || selectedSourceId.value
+    if (!sourceId) continue
+    const list = groups.get(sourceId) ?? []
+    list.push(id)
+    groups.set(sourceId, list)
+  }
+  if (!groups.size) return
+
+  const plans: Array<{ sourceId: string; ids: string[]; tableId: string; options: Record<string, string | undefined>; names: string[] }> = []
+  const skipped: string[] = []
+  for (const [sourceId, ids] of groups) {
+    const info = await resolveNextStepFor(sourceId)
+    if (!info?.hasNext) {
+      skipped.push(`${sourceNames.value[sourceId] || sourceId}：${info?.reason || '未能解析出后续节点'}`)
+      continue
+    }
+    const downstreamIds = (info.downstreamSteps ?? []).map((step) => String(step.stepId)).filter((id) => /^\d+$/.test(id))
+    const targetStepIds = downstreamIds.length ? downstreamIds.join(',') : info.targetStepId
+    if (!targetStepIds) {
+      skipped.push(`${sourceNames.value[sourceId] || sourceId}：后续节点没有可用的步骤 ID`)
+      continue
+    }
+    const names = (info.downstreamSteps ?? []).map((step) => step.name || step.stepId).filter(Boolean)
+    plans.push({
+      sourceId,
+      ids,
+      tableId: info.targetTableId || successorTableId.value || effectiveTableId.value,
+      options: { configId: info.targetConfigId, itemConfig: targetStepIds, stepId: targetStepIds, nextStep: targetStepIds },
+      // 文案要跟实际发送的范围一致：发整条下游就把下游都列出来
+      names: names.length ? names : [info.targetNodeName].filter(Boolean),
+    })
+  }
+  if (!plans.length) {
+    ElMessage.warning(skipped[0] || '未能解析出后续节点，无法发后续')
+    return
+  }
+
+  // 条数按**真正会发**的算，跳过的源单独说——别让确认框里的数字跟实际发出去的对不上
+  const rowCount = plans.reduce((sum, plan) => sum + plan.ids.length, 0)
+  const allNames = [...new Set(plans.flatMap((plan) => plan.names))]
+  const nodeText = allNames.length <= 3 ? allNames.join('、') : `${allNames.slice(0, 3).join('、')} 等 ${allNames.length} 个节点`
+  const skipHint = skipped.length ? `\n${skipped.length} 个源没有可发的后续节点，已跳过：${skipped.slice(0, 3).join('；')}` : ''
   await confirmDanger(
     '发后续任务',
-    `将对 ${sourceCount} 个源 · ${rowCount} 条数据发起后续节点「${targetNodeName}」的处理任务，是否继续？`,
+    `将对 ${plans.length} 个源 · ${rowCount} 条数据发起后续节点「${nodeText}」的处理任务，是否继续？${skipHint}`,
     async () => {
       let last: { message?: string } = {}
-      for (const [sourceId, ids] of groups) {
-        last = await dataApi.nextStep(sourceId, tableId, ids, configOptions)
+      for (const plan of plans) {
+        last = await dataApi.nextStep(plan.sourceId, plan.tableId, plan.ids, plan.options)
       }
-      // 行尾菜单没用到勾选，别把用户已经勾好的行清掉
-      if (opts.clearSelection) selectedRowIds.value = []
+      selectedRowIds.value = []
       return last
     },
     showNextStepReceipt,
@@ -906,55 +928,7 @@ function onRowAction(row: DataRow, cmd: string) {
     taskInst.sourceId = row.sourceId
     taskInst.parentId = row.dataId
     taskInst.visible = true
-  } else if (cmd === 'row-next-step') {
-    void onSendRowNextStep(row)
-  } else if (cmd === 'row-launch') {
-    void onLaunchRowSource(row)
   }
-}
-
-// ---- 0915-04 行尾「对该源发抓取…」----
-const snatchLauncher = ref<InstanceType<typeof SnatchLauncher>>()
-
-/**
- * 不能直接发抓取的源：`sourceId → 原因`。
- *
- * 只挡**停用**的源——发了也不会跑。**参数源不挡**：`SnatchLauncher.launch()` 会先 loadParams，
- * 有参数就弹框让人填，单源场景本来就该走这条路（具体源数据视图的「发起抓取」一直是这么做的，
- * 见 ResultView.onSendFetch）。方案 §2.2 里写的「参数源禁用」出自批量发送那套
- * （partitionLaunchTargets 服务的是 LaunchConfirmDialog，一次几百个源没法逐个填参数），
- * 挪到单行上就成了无谓的拦截。
- */
-const launchBlocked = computed(() => {
-  const map = new Map<string, string>()
-  for (const src of siteChildren.value) {
-    if (src.disabled) map.set(src.sourceId, `源「${src.name}」已停用，请先启用再发抓取`)
-  }
-  return map
-})
-
-/**
- * 对这一行所属的**整个源**发起抓取。
- *
- * 确认文案必须点明作用域：它和「这一行」没有关系，作用于该源全部数据。
- * 不加 admin 门禁——同页面顶部的「发后续任务」同为写操作、也没有这道门禁，
- * 只在行尾单独加会让同一个页面自相矛盾；写入风险由 confirmDanger 的二次确认兜住。
- */
-async function onLaunchRowSource(row: DataRow) {
-  const sourceId = row.sourceId || selectedSourceId.value
-  if (!sourceId) return
-  const blocked = launchBlocked.value.get(sourceId)
-  if (blocked) {
-    ElMessage.warning(blocked)
-    return
-  }
-  const name = sourceNames.value[sourceId] || sourceId
-  await confirmDanger(
-    '发起抓取',
-    `将对源「${name}」（${sourceId}）发起抓取，作用于该源全部数据，不只是当前这条。是否继续？`,
-    async () => snatchLauncher.value?.launch(sourceId, { onSuccess: () => ElMessage.success('已发起抓取') }),
-    () => {},
-  )
 }
 
 // 上游数据下钻（M3-0H）：ResultView.vue 已有的 M3-0B 只落在具体源流程页，网站数据视图
@@ -1144,10 +1118,7 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
         :sortable-props="SORTABLE_PROPS"
         @sort-change="onSortChange"
         @reach-end="loadMore"
-        :allow-row-next-step="canPickRows"
-        :allow-row-launch="true"
-        :launch-blocked="launchBlocked"
-        :hide-actions="!!selectedSourceId && !canPickRows"
+        :hide-actions="!!selectedSourceId"
         :source-clickable="!selectedSourceId"
         @source-click="onSourceClick"
         @update:selected-ids="selectedRowIds = $event"
@@ -1171,7 +1142,6 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
             :title="launchDisabledReason"
             @click="onSendNextStep"
           >发后续任务</button>
-          <span v-else-if="!selectedSourceId" class="muted" :title="launchDisabledReason">选表无法发任务，请先选择具体源</span>
         </template>
         <template #head-right>
           <button
@@ -1351,7 +1321,6 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
 
     <!-- 行尾「对该源发抓取…」用它：loadParams → 有参数弹框 / 无参数直发，
          与具体源数据视图的「发起抓取」同一条路径（ResultView 也是挂这个组件）。 -->
-    <SnatchLauncher ref="snatchLauncher" />
 </template>
 
 <style scoped>

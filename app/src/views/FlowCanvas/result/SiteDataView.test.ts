@@ -1139,57 +1139,104 @@ describe('SiteDataView 钻取闭环', () => {
 // 0915-04：行尾「对该源发抓取…」。两个语义作用域差一个数量级，这里守住的是
 // ①确认文案必须点明作用域是整个源 ②停用源挡在发送之前 ③走的是 SnatchLauncher 那条路
 // （loadParams → 有参数弹框 / 无参数直发），不是自己另发一遍接口。
-describe('SiteDataView · 行尾对该源发抓取', () => {
-  // 跟文件里其他 describe 同一口径。漏了它，spy 会跨用例累积——
-  // 上一个用例 spy 过 ElMessageBox.confirm 并调用了一次，下一个用例的
-  // `not.toHaveBeenCalled()` 就会拿到那次陈旧计数（单跑通过、全跑失败）。
+// 全部源态勾行发后续（2026-09-17）：此前这里是只读的，理由是"选表无法确定流程节点"。
+// 节点其实反查得出来——哪个步骤的输出表是这张表，它就是产出者。各源流程不同，所以
+// 必须逐源解析、逐源发送，不能解析一次套给所有源，更不能省掉步骤 ID 让后端自己散发
+// （那会连当前节点一起重跑，见 SiteDataView.resolveNextStepFor 的实测记录）。
+describe('SiteDataView · 全部源勾选发后续任务', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  // a 源：t1 →(10) 清洗 →(11) 入库；b 源：t1 →(20) 归档（只有一级下游）
+  const stepsBySource: Record<string, Step[]> = {
+    a: [
+      { stepId: '1', sourceId: 'a', name: '抓取', outputTable: 't1', enabled: true },
+      { stepId: '10', sourceId: 'a', name: '清洗', inputTable: 't1', outputTable: 't2', enabled: true, dependsOn: ['1'] },
+      { stepId: '11', sourceId: 'a', name: '入库', inputTable: 't2', enabled: true, dependsOn: ['10'] },
+    ],
+    b: [
+      { stepId: '2', sourceId: 'b', name: '抓取', outputTable: 't1', enabled: true },
+      { stepId: '20', sourceId: 'b', name: '归档', inputTable: 't1', enabled: true, dependsOn: ['2'] },
+    ],
+  }
+
   async function mountWithRows() {
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([
-      source('a'),
-      { ...source('b'), disabled: true },
-    ])
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a'), source('b')])
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 2, list: [row('a', 'd1'), row('b', 'd2')] })
+    vi.spyOn(sourceApi, 'sourceSteps').mockImplementation(async (sourceId: string) => stepsBySource[sourceId] ?? [])
     const wrapper = mountView()
     await flushPromises()
     await pickTable(wrapper)
     return wrapper
   }
 
-  it('确认文案点明作用域是该源全部数据，取消则不发送', async () => {
+  async function pickRowsAndSend(wrapper: ReturnType<typeof mount>, ids: string[]) {
+    await wrapper.findComponent(DataGrid).vm.$emit('update:selectedIds', ids)
+    await wrapper.get('[data-testid="source-node-exec-btn"]').trigger('click')
+    await flushPromises()
+  }
+
+  it('没收窄到具体源也能勾选发送，按源分组各发各的下游步骤', async () => {
+    const wrapper = await mountWithRows()
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const next = vi.spyOn(dataApi, 'nextStep').mockResolvedValue({ message: '本次发送:1 条' })
+
+    await pickRowsAndSend(wrapper, ['d1', 'd2'])
+
+    expect(next).toHaveBeenCalledTimes(2)
+    const [aCall, bCall] = next.mock.calls
+    expect(aCall[0]).toBe('a')
+    expect(aCall[2]).toEqual(['d1'])
+    // 整条下游：清洗 + 入库，逗号串一次传过去
+    expect((aCall[3] as { stepId?: string }).stepId).toBe('10,11')
+    expect(bCall[0]).toBe('b')
+    expect(bCall[2]).toEqual(['d2'])
+    expect((bCall[3] as { stepId?: string }).stepId).toBe('20')
+  })
+
+  it('确认文案列出各源的下游节点名与真正会发的条数', async () => {
     const wrapper = await mountWithRows()
     const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
-    const send = vi.spyOn(sourceApi, 'sendSnatchWithParam')
+    const next = vi.spyOn(dataApi, 'nextStep')
 
-    await wrapper.findComponent(DataGrid).vm.$emit('row-action', row('a', 'd1'), 'row-launch')
-    await flushPromises()
+    await pickRowsAndSend(wrapper, ['d1', 'd2'])
 
-    const text = String(confirm.mock.calls[0]?.[0] ?? '')
-    expect(text).toContain('源-a')      // 源名
-    expect(text).toContain('a')          // 源 ID
-    expect(text).toContain('该源全部数据')
-    expect(text).toContain('不只是当前这条')
-    expect(send).not.toHaveBeenCalled()  // 取消了就不该发
+    const text = String(confirm.mock.calls.at(-1)?.[0] ?? '')
+    expect(text).toContain('2 个源')
+    expect(text).toContain('2 条数据')
+    expect(text).toContain('清洗')
+    expect(text).toContain('入库')
+    expect(text).toContain('归档')
+    expect(next).not.toHaveBeenCalled()
   })
 
-  it('停用的源挡在发送之前，连确认框都不弹', async () => {
+  it('解析不出后继的源被跳过，其余照发，确认文案里说明跳了几个', async () => {
     const wrapper = await mountWithRows()
+    // b 源只有产出这张表的那一步，后面什么都没接
+    vi.spyOn(sourceApi, 'sourceSteps').mockImplementation(async (sourceId: string) =>
+      sourceId === 'b' ? [{ stepId: '2', sourceId: 'b', name: '抓取', outputTable: 't1', enabled: true }] : stepsBySource[sourceId])
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const next = vi.spyOn(dataApi, 'nextStep').mockResolvedValue({ message: '本次发送:1 条' })
+
+    await pickRowsAndSend(wrapper, ['d1', 'd2'])
+
+    const text = String(confirm.mock.calls.at(-1)?.[0] ?? '')
+    expect(text).toContain('1 个源')
+    expect(text).toContain('1 条数据')
+    expect(text).toContain('已跳过')
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(next.mock.calls[0][0]).toBe('a')
+  })
+
+  it('所有源都解析不出后继时给提示，一条都不发、也不弹确认框', async () => {
+    const wrapper = await mountWithRows()
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
     const confirm = vi.spyOn(ElMessageBox, 'confirm')
-    const send = vi.spyOn(sourceApi, 'sendSnatchWithParam')
-    await wrapper.findComponent(DataGrid).vm.$emit('row-action', row('b', 'd2'), 'row-launch')
-    await flushPromises()
+    const next = vi.spyOn(dataApi, 'nextStep')
+
+    await pickRowsAndSend(wrapper, ['d1', 'd2'])
 
     expect(confirm).not.toHaveBeenCalled()
-    expect(send).not.toHaveBeenCalled()
-  })
-
-  it('把停用源作为 launchBlocked 传给表格，让菜单项自己灰掉', async () => {
-    const wrapper = await mountWithRows()
-    const blocked = wrapper.findComponent(DataGrid).props('launchBlocked') as Map<string, string>
-    expect(blocked.has('b')).toBe(true)
-    expect(blocked.get('b')).toContain('已停用')
-    expect(blocked.has('a')).toBe(false)
+    expect(next).not.toHaveBeenCalled()
   })
 })
