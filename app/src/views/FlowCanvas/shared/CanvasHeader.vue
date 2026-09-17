@@ -100,12 +100,15 @@ const statusMeta = computed(() => {
 // 摘要头只展示运行所需信息；源 ID、分类和标签不在此处暴露。
 // 参数源（0721 会议 T5）：只读摘要——普通源的 url 换成"参数源 · 模板 · N 个参数占位符"；
 // 具体每个参数的真实取值数需要逐个查详情，摘要头不为此额外发请求，只读 paramRefs 数量。
-const metaLine = computed(() => {
+const primaryMeta = computed(() => {
   const s = src.value
   if (!s) return ''
-  const primary = s.kind === 'param' ? `参数源 · ${s.urlTemplate || s.baseUrl || ''} · ${s.paramRefs?.length ?? 0} 个参数占位符` : s.url
-  return [primary, s.lastSuccessAt ? `上次成功 ${s.lastSuccessAt}` : ''].filter(Boolean).join(' · ')
+  return s.kind === 'param' ? `参数源 · ${s.urlTemplate || s.baseUrl || ''} · ${s.paramRefs?.length ?? 0} 个参数占位符` : s.url
 })
+// 「上次成功」单独拆出来，别再跟 URL 拼成一个字符串：公众号那类 URL 有 200+ 字符
+// （`mp.weixin.qq.com/s?__biz=…&chksm=…&scene=…`），拼在一起会把时间和后面的「所属流程」
+// 一起挤到换行甚至看不见（2026-09-17 走查）。拆开后 URL 单行省略，这两项始终可见。
+const lastSuccessText = computed(() => (src.value?.lastSuccessAt ? `上次成功 ${src.value.lastSuccessAt}` : ''))
 
 // 所属流程：源上带 flowId（sourceDetail 已补，0903 §H8），流程名要单查一次 flow/detail；
 // 查不到就退化成 `#<id>`。切源时按 flowId 变化重查，回来慢了也不会写串。
@@ -232,7 +235,22 @@ async function onSwitchFlow(command: string) {
           <span v-if="src.externalChanged" class="rc-status warn">外部变更待确认</span>
         </div>
         <div class="ch-sub">
-          <span>{{ metaLine }}</span>
+          <!-- 用 el-tooltip 不用原生 title：URL 单行省略后，全文只能靠悬浮看，
+               而原生提示要等约 1 秒才出、长 URL 还会被拉成横穿屏幕的一条（见 tokens.css）。 -->
+          <el-tooltip
+            v-if="primaryMeta"
+            :content="primaryMeta"
+            placement="bottom-start"
+            :show-after="120"
+            popper-class="rc-tip-longtext"
+          >
+            <span class="ch-sub-url">{{ primaryMeta }}</span>
+          </el-tooltip>
+          <span v-else class="ch-sub-url"></span>
+          <template v-if="lastSuccessText">
+            <span class="ch-sub-sep">·</span>
+            <span class="ch-sub-fixed">{{ lastSuccessText }}</span>
+          </template>
           <template v-if="src.flowId">
             <span class="ch-sub-sep">·</span>
             <button
@@ -326,9 +344,15 @@ async function onSwitchFlow(command: string) {
 .ch-seg:disabled { color: var(--rc-faint); cursor: not-allowed; }
 .ch-titlewrap { min-width: 0; }
 .ch-title { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; color: var(--rc-text); font-size: 13px; }
-.ch-sub { color: var(--rc-faint); font-size: 10px; margin-top: 1px; }
-.ch-sub-sep { margin: 0 4px; }
-.ch-flow-link { border: 0; background: transparent; padding: 0; color: var(--rc-primary); font-size: inherit; cursor: pointer; }
+/* 一行放下：URL 可压缩省略，时间和「所属流程」不参与压缩（flex: none），
+   这样再长的 URL 也挤不掉它们。 */
+.ch-sub { display: flex; align-items: center; min-width: 0; color: var(--rc-faint); font-size: 10px; margin-top: 1px; }
+.ch-sub-url { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-sub-fixed { flex: none; }
+.ch-sub-sep { flex: none; margin: 0 4px; }
+/* flex: none + nowrap：默认的 0 1 auto 会让它跟着被压缩，长 URL 下它会被挤到 52px 宽、
+   「所属流程：振江集团-603507」折成三行，把整条摘要撑高（2026-09-17 走查）。压缩只由 URL 段承担。 */
+.ch-flow-link { flex: none; white-space: nowrap; border: 0; background: transparent; padding: 0; color: var(--rc-primary); font-size: inherit; cursor: pointer; }
 .ch-flow-link:hover { text-decoration: underline; }
 .ch-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
 .ch-actions .rc-btn { height: 30px; padding: 0 11px; font-size: 12px; }

@@ -590,3 +590,14 @@ textarea {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* 长文本悬浮提示（URL 等）。el-tooltip 的浮层挂在 body 上、不在组件 scoped 作用域内，
+   所以样式只能落在全局这一份。
+   默认浮层是单行不换行的，公众号那类 200+ 字符的 URL
+   （`mp.weixin.qq.com/s?__biz=…&chksm=…&scene=…`）会被拉成一条横穿屏幕的窄带，
+   比截断还难读。限宽 + break-all 让它规规矩矩折成几行。 */
+.rc-tip-longtext {
+  max-width: 520px !important;
+  line-height: 1.55;
+  word-break: break-all;
+}

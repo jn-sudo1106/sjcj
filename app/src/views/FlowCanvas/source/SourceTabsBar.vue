@@ -175,8 +175,13 @@ async function onCloseAll() {
 .rc-src-tabs { display: flex; align-items: center; gap: 10px; padding: 0 0 10px; }
 /* 页签区：可滚动、可收缩（min-width:0 是关键，否则 flex 子项按内容宽度撑开，右侧操作区会被挤出屏幕） */
 .rc-src-tabs-scroll { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; overflow-x: auto; scrollbar-width: thin; }
-/* 操作区：钉在右端，不随页签滚动，满额时也一眼可点 */
-.rc-src-tabs-actions { flex: none; display: flex; align-items: center; gap: 8px; }
+/* 操作区：钉在右端，不随页签滚动，满额时也一眼可点。
+   ⚠️ 高度锁成页签的 30px 且顶部对齐，别改回单纯的 align-items:center——
+   页签排满时 .rc-src-tabs-scroll 会冒出横向滚动条（约 11px），把它从 30px 撑到 41px，
+   父级的 align-items:center 于是按「含滚动条」的高度给本区居中，视觉上「n/8 清空」
+   比页签低半个滚动条（2026-09-17 实测 5.5px）。页签没排满时没有滚动条、看不出来，
+   所以这个错位只在满额状态复现。 */
+.rc-src-tabs-actions { flex: none; display: flex; align-items: center; gap: 8px; align-self: flex-start; height: 30px; }
 .rc-src-tab {
   display: inline-flex; align-items: center; gap: 6px; max-width: 220px; flex: none; height: 30px;
   padding: 0 8px 0 12px; border: 1px solid var(--rc-border); border-radius: 8px;

@@ -1005,7 +1005,18 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
         <div class="ssw-detail-field">
           <span class="ssw-detail-label">源 URL</span>
           <div class="ssw-detail-val with-copy">
-            <span class="ssw-detail-url" data-testid="active-source-url" :title="sourceDisplayUrl(activeSource) || undefined">{{ sourceDisplayUrl(activeSource) || '—' }}</span>
+            <!-- 三行封顶后全文靠悬浮看，所以用 el-tooltip 而不是原生 title（原生要等约 1 秒、
+                 长 URL 还会被拉成横穿屏幕的一条，见 tokens.css 的 .rc-tip-longtext）。 -->
+            <el-tooltip
+              v-if="sourceDisplayUrl(activeSource)"
+              :content="sourceDisplayUrl(activeSource)"
+              placement="top-start"
+              :show-after="120"
+              popper-class="rc-tip-longtext"
+            >
+              <span class="ssw-detail-url" data-testid="active-source-url">{{ sourceDisplayUrl(activeSource) }}</span>
+            </el-tooltip>
+            <span v-else class="ssw-detail-url" data-testid="active-source-url">—</span>
             <button
               class="ssw-copy-btn"
               type="button"
@@ -1694,6 +1705,13 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
   line-height: 1.35;
   flex: 1;
   min-width: 0;
+  /* 封顶 3 行：公众号那类 URL 有 200+ 字符，光 break-all 会折出十几行，把下面的
+     「添加源 / 对比 / 批量导入」整个顶出可视区（2026-09-17 走查）。
+     截断不丢信息——完整地址在 title 悬浮里，右边还有「复制」按钮。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 /* 批量导入弹窗（新增源 / 关联已有源共用一个入口，靠 tab 分） */
