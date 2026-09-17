@@ -589,6 +589,11 @@ export function isVideoAudioNode(cfg?: NodeConfig): boolean {
   return hasNodeTypeCode(cfg, 'video-audio', '700')
 }
 
+/** 文章生成摘要节点（编排配置 Tab 用它决定要不要给「上传文字生成摘要」区）。 */
+export function isArticleSummaryNode(cfg?: NodeConfig): boolean {
+  return hasNodeTypeCode(cfg, 'article-summary', '720')
+}
+
 /**
  * 「不给脚本编辑入口」的节点类型（2026-09-17 产品口径，用户逐个点掉后收敛成这张清单）。
  *

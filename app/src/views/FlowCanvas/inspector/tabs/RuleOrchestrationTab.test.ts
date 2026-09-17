@@ -10,7 +10,7 @@ import ElementPlus, { ElMessageBox } from 'element-plus'
 import NodeInspector from '../NodeInspector.vue'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import { useFlowStore } from '@/stores/flow'
-import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT, NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { configApi, entryApi, paramApi, ruleApi, ckSourceApi } from '@/api'
 import type { EntryType } from '@/api'
 import { useSourceStore } from '@/stores/source'
@@ -640,6 +640,171 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
 
       expect(wrapper.get('[data-testid="video-error"]').text()).toContain('视频不包含音频轨道')
       expect(wrapper.find('[data-testid="video-result"]').exists()).toBe(false)
+    })
+  })
+
+  // 0917 文章生成摘要：上传/粘贴正文 → 系统提示词取 cfg_llm_node_prompt → 调 /api/answer/data-process
+  describe('文章生成摘要（文章生成摘要节点）', () => {
+    const ARTICLE_TEMPLATE = {
+      promptId: 3,
+      nodeType: 'article_summary',
+      nodeTypeName: '文章生成摘要',
+      category: 'rule',
+      systemPrompt: '你是一名专业的文章摘要生成助手，请为下面的文章生成 100~300 字摘要。',
+      version: 1,
+      isActive: 1,
+      isDefault: 1,
+    }
+
+    /** 按真实后端的两跳响应打桩：/api/model/providers、/api/model/default-models、/api/prompt/list */
+    function mockArticleApis(promptRows: unknown[] = [ARTICLE_TEMPLATE]) {
+      const calls: string[] = []
+      const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input)
+        calls.push(url)
+        const json = (data: unknown) => new Response(JSON.stringify(data), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        })
+        if (url === '/api/model/providers') return json({ data: MODEL_PROVIDERS })
+        if (url.startsWith('/api/model/default-models')) {
+          const code = new URL(url, 'http://localhost').searchParams.get('providerCode') || ''
+          return json({ data: MODEL_OPTIONS[code] ?? [] })
+        }
+        if (url.startsWith('/api/prompt/list')) return json(promptRows)
+        return json([])
+      })
+      return { spy, calls, promptCalls: () => calls.filter((u) => u.startsWith('/api/prompt/list')) }
+    }
+
+    /**
+     * ⚠️ 顺序要紧：mockAssets() 自己也会 spy fetch（画布上的资产/提示词请求），
+     * 必须先让它装完，再用 mockArticleApis 接管，否则挂载期的提示词/模型请求都被它兜住、断言永远为空。
+     */
+    function mountOnArticleNode(promptRows: unknown[] = [ARTICLE_TEMPLATE]) {
+      mockAssets()
+      const api = mockArticleApis(promptRows)
+      setActivePinia(createPinia())
+      const flow = useFlowStore()
+      flow.configs['article-1'] = cloneConfig(NODE_CONFIGS['article-summary'])
+      flow.select('article-1')
+      flow.setActiveTab('orchestration')
+      const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+      return { flow, wrapper, ...api }
+    }
+
+    it('显示上传文本 / 模型选择 / 生成入口，且没有脚本编辑按钮', async () => {
+      const { wrapper } = mountOnArticleNode()
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="article-summary-field"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="article-pick-file"]').text()).toContain('上传文本')
+      expect(wrapper.find('[data-testid="article-model-provider"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="article-model"]').exists()).toBe(true)
+      expect(wrapper.find('.ni-section-title-row button').exists()).toBe(false)
+      // 没有正文不能生成
+      expect(wrapper.get('[data-testid="article-generate"]').attributes('disabled')).toBeDefined()
+    })
+
+    it('进 Tab 就按 category=rule + node_type_name=文章生成摘要 取提示词并写到节点上', async () => {
+      const { flow, wrapper, promptCalls } = mountOnArticleNode()
+      await flushPromises()
+      await flushPromises()
+
+      expect(promptCalls()[0]).toContain('category=rule')
+      expect(decodeURIComponent(promptCalls()[0])).toContain('node_type_name=文章生成摘要')
+      expect(flow.configs['article-1'].execCfg?.systemPrompt).toBe(ARTICLE_TEMPLATE.systemPrompt)
+      // 只读展示实际会发出去的那一份
+      await wrapper.get('[data-testid="article-prompt-toggle"]').trigger('click')
+      expect(wrapper.get('[data-testid="article-prompt-text"]').text()).toContain('文章摘要生成助手')
+    })
+
+    it('提示词表里没有这一行时给出明确提示且不允许生成', async () => {
+      const { flow, wrapper } = mountOnArticleNode([])
+      await flushPromises()
+      await flushPromises()
+
+      // 取不到模板时节点保留种子默认（抓取配置那套），页面必须明确说清不能生成
+      expect(flow.configs['article-1'].execCfg?.systemPrompt).toBe(DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT)
+      await wrapper.get('[data-testid="article-text"]').setValue('这是一篇测试文章。')
+      await flushPromises()
+      expect(wrapper.get('[data-testid="article-generate"]').attributes('disabled')).toBeDefined()
+    })
+
+    it('粘贴正文后生成：data-process 入参带正文与提示词表里的系统提示词，结果流式落进结果区', async () => {
+      const { wrapper } = mountOnArticleNode()
+      await flushPromises()
+      await flushPromises()
+
+      const generateSpy = vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
+        options?.onThinking?.('分析中…')
+        options?.onContent?.('**摘要：** ')
+        options?.onContent?.('这是一段测试摘要。')
+        options?.onDone?.({ message: '保存完成' })
+        return { script: '', scriptPath: '' }
+      })
+
+      await wrapper.get('[data-testid="article-text"]').setValue('  这是一篇测试文章的正文，用于摘要生成。  ')
+      // 模型供应商 / 模型来自 /api/model/*（挂载时已加载）
+      await flushPromises()
+      await wrapper.get('[data-testid="article-generate"]').trigger('click')
+      await flushPromises()
+      await flushPromises()
+
+      expect(generateSpy).toHaveBeenCalledTimes(1)
+      const payload = generateSpy.mock.calls[0][0]
+      expect(payload.description).toBe('  这是一篇测试文章的正文，用于摘要生成。  ')
+      expect(payload.systemPrompt).toBe(ARTICLE_TEMPLATE.systemPrompt)
+      expect(payload.providerCode).toBe('DeepSeek')
+      expect(payload.model).toBe('deepseek-chat')
+      // 后端 data-process 硬校验 sourceTable / inputFields 非空（targetTable / outputFields 可选），
+      // 文章摘要没有表与字段，按"正文来源"如实填占位值（详见组件里的注释）
+      expect(payload.sourceTable).toBe('文章文本')
+      expect(payload.inputFields).toBe('正文:article_text')
+      expect(payload.targetTable).toBe('')
+      expect(payload.outputFields).toBe('')
+
+      expect(wrapper.get('[data-testid="article-summary-text"]').text()).toContain('这是一段测试摘要')
+      expect(wrapper.get('[data-testid="article-result"]').text()).toContain('摘要')
+    })
+
+    it('切换模型供应商后重新拉该供应商的模型候选，并写回节点', async () => {
+      const { flow, wrapper } = mountOnArticleNode()
+      await flushPromises()
+      await flushPromises()
+
+      // 挂载时已按默认供应商（DeepSeek）选中第一个模型
+      expect(flow.configs['article-1'].execCfg?.modelProviderCode).toBe('DeepSeek')
+      expect(flow.configs['article-1'].execCfg?.modelCode).toBe('deepseek-chat')
+
+      // 走 el-select 的 change（jsdom 里点选项不稳，直接发组件事件＝同一条处理路径）
+      const providerSelect = wrapper.findAllComponents({ name: 'ElSelect' })[0]
+      providerSelect.vm.$emit('change', 'OpenAI')
+      await flushPromises()
+      await flushPromises()
+
+      expect(flow.configs['article-1'].execCfg?.modelProviderCode).toBe('OpenAI')
+      expect(flow.configs['article-1'].execCfg?.modelCode).toBe('gpt-4o-mini')
+    })
+
+    it('上传文本文件填入正文，非文本文件被拒', async () => {
+      const { wrapper } = mountOnArticleNode()
+      await flushPromises()
+
+      await selectFile(
+        wrapper.find('input[data-testid="article-file-input"]'),
+        new File(['# 标题\n正文内容'], 'article.md', { type: 'text/markdown' }),
+      )
+      await flushPromises()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      await flushPromises()
+      expect((wrapper.get('[data-testid="article-text"]').element as HTMLTextAreaElement).value).toContain('正文内容')
+
+      await selectFile(
+        wrapper.find('input[data-testid="article-file-input"]'),
+        new File(['x'], 'photo.png', { type: 'image/png' }),
+      )
+      await flushPromises()
+      expect(wrapper.get('[data-testid="article-file-error"]').text()).toContain('只支持文本文件')
     })
   })
 
