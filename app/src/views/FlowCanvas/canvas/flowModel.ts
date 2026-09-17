@@ -564,6 +564,21 @@ export function isDataValidationNode(cfg?: NodeConfig): boolean {
 }
 
 /**
+ * OCR 抓取节点判定（2026-09-17 新增；编排配置 Tab 用它决定要不要给「脚本编辑」入口）。
+ *
+ * **不能只看 `template`**：`template` 只在插入时（insertAfter）以及后端回读的
+ * monitor / data-validation 两条分支上被写入，其它类型回读后是 undefined——
+ * 只看它，从后端读回来的 OCR 节点又会冒出脚本编辑按钮。
+ * 所以第二条判据取节点种子副标题里的类型编号 `[150]`（ocr 种子的 sub 是
+ * `[150] OCR抓取 · 执行器待确认`），与 iconFor() / nodeTypeLabel() 认类型的方式一致。
+ */
+export function isOcrNode(cfg?: NodeConfig): boolean {
+  if (!cfg) return false
+  if (cfg.template === 'ocr') return true
+  return /\[150\]/.test(cfg.sub ?? '')
+}
+
+/**
  * nextStep 目标 / 流程入口口径的真实节点：跳过 start/end 占位、停用、规划中、决策/分头。
  * 决策/分头不是发后续的落点，后继判定要看穿它们找到下一个真实节点（0824）。
  */
