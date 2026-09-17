@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/auth'
 import { confirmDanger } from '@/utils/confirmDanger'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
+import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import { buildHorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepTokens } from '@/utils/flow/nextStepFields'
 
@@ -222,6 +223,12 @@ watch(filterSteps, () => {
   }
 })
 
+// 换源就把节点筛选清掉：节点 ID 是源内的，换了源就不成立。
+// 上面那个 filterSteps 守卫在**回到「全部源」**时兜不住——网站态不选源就不拉步骤元数据，
+// filterSteps 是空数组，`length > 0` 的前提不满足，于是旧 nodeId 会继续作用在查询上，
+// 而节点下拉这时是不渲染的，用户看不见也清不掉。必须排在下面那个查询 watch 之前。
+watch(() => filters.sourceId, () => { filters.nodeId = '' })
+
 watch(() => [filters.sourceId, filters.nodeId, filters.state, filters.queue, siteScopeId.value] as const, ([nextSourceId], previous) => {
   page.value = 1
   void Promise.all([nextSourceId !== previous?.[0] ? loadNodeMetadata() : Promise.resolve(), loadTasks()])
@@ -299,7 +306,12 @@ const nextStepHints = computed(() => {
           下一节点会用到：{{ nextStepHints.join('、') }}
         </p>
         <div class="tv-filters">
-          <select v-if="siteWide" v-model="filters.nodeId" class="tv-input" data-testid="task-node-filter" aria-label="流程节点">
+          <!-- 网站态第一格是**源**，跟数据/文件/监控视图同一个选择器（2026-09-17 用户提）：
+               那几个视图都从「全部源 → 具体源」开始收窄，只有这里一上来给的是节点。
+               而节点下拉在没选源时本来就是空的——loadNodeMetadata 在网站态未选源时不拉
+               步骤元数据（6496 个源要打一万多个请求），所以它当时只剩一个「全部节点」。 -->
+          <SiteSourceSelect v-if="siteWide && siteId" v-model="filters.sourceId" :site-id="siteId" />
+          <select v-if="siteWide && filters.sourceId" v-model="filters.nodeId" class="tv-input" data-testid="task-node-filter" aria-label="流程节点">
             <option value="">全部节点</option>
             <option v-for="step in filterSteps" :key="`${step.sourceId}-${step.stepId}`" :value="step.stepId">{{ showSourceColumn ? `${sourceNames[step.sourceId] || step.sourceId} · ${step.name}` : step.name }}</option>
           </select>

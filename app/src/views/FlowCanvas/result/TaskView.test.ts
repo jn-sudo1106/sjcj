@@ -165,6 +165,76 @@ describe('TaskView', () => {
     wrapper.unmount()
   })
 
+  // 2026-09-17：网站态第一格改成**源**筛选，跟数据/文件/监控视图同一个选择器。
+  // 原来第一格是节点下拉，而网站态不选源就不拉步骤元数据，那个下拉永远只有一个「全部节点」。
+  it('网站态：第一格是源选择器；选中源后才出节点下拉，查询也跟着收窄到该源', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+
+    const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([
+      { sourceId: 's1', name: '源一' }, { sourceId: 's2', name: '源二' },
+    ] as never)
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      { stepId: 'n1', sourceId: 's1', name: '列表抓取', enabled: true },
+    ] as never)
+    vi.spyOn(sourceApi, 'sourceNodeRuns').mockResolvedValue([])
+
+    const wrapper = shallowMount(TaskView, {
+      props: { siteWide: true, siteId: 'site-zfb' },
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await flushPromises()
+
+    const picker = wrapper.findComponent({ name: 'SiteSourceSelect' })
+    expect(picker.exists()).toBe(true)
+    expect(picker.props('siteId')).toBe('site-zfb')
+    // 未收窄到具体源时节点下拉不渲染——它此时必然是空的
+    expect(wrapper.find('[data-testid="task-node-filter"]').exists()).toBe(false)
+
+    await picker.vm.$emit('update:modelValue', 's1')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="task-node-filter"]').exists()).toBe(true)
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: 's1', siteScopeId: undefined }))
+    wrapper.unmount()
+  })
+
+  // 节点 ID 是源内的，换了源就不成立；回到「全部源」时节点下拉不再渲染，
+  // 旧值若留着就成了看不见也清不掉的隐形筛选。
+  it('网站态：从具体源回到全部源时，节点筛选被清掉，不再带进查询', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+
+    const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([{ sourceId: 's1', name: '源一' }] as never)
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      { stepId: 'n1', sourceId: 's1', name: '列表抓取', enabled: true },
+    ] as never)
+    vi.spyOn(sourceApi, 'sourceNodeRuns').mockResolvedValue([])
+
+    const wrapper = shallowMount(TaskView, {
+      props: { siteWide: true, siteId: 'site-zfb' },
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await flushPromises()
+
+    const picker = wrapper.findComponent({ name: 'SiteSourceSelect' })
+    await picker.vm.$emit('update:modelValue', 's1')
+    await flushPromises()
+    await wrapper.find('[data-testid="task-node-filter"]').setValue('n1')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ nodeId: 'n1' }))
+
+    await picker.vm.$emit('update:modelValue', '')
+    await flushPromises()
+
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ siteScopeId: 'site-zfb', nodeId: undefined }))
+    wrapper.unmount()
+  })
+
   it('支持按队列名筛选任务，点击队列单元格可快速填入/切换筛选', async () => {
     setActivePinia(createPinia())
     await router.push('/canvas')
