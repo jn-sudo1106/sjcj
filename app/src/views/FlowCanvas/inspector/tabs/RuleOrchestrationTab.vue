@@ -15,10 +15,10 @@
 // 画布侧没 provide 那个上下文，走默认实现（读写 flow store），行为不变。
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Headset, Picture, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
+import { Delete, Document, Headset, Picture, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { recognizeImage, readImageAsBase64, ocrTextOf, type OcrBlock } from '@/api/ocr'
-import { isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isRuleNode, isScriptlessNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { isArticleSummaryNode, isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isRuleNode, isScriptlessNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { SPEECH_AUDIO_EXTENSIONS, SPEECH_LANGUAGE_OPTIONS, SPEECH_MAX_DURATION_SECONDS, SPEECH_MAX_FILE_SIZE, isSupportedAudioFile, readAudioDuration, transcribeAudio, type SpeechTranscriptionResult } from '@/api/speech'
 import { MEDIA_AUDIO_FORMATS, MEDIA_BIT_RATE_OPTIONS, MEDIA_CHANNEL_OPTIONS, MEDIA_MAX_FILE_SIZE, MEDIA_SAMPLING_RATE_OPTIONS, MEDIA_VIDEO_EXTENSIONS, extractAudio, isSupportedVideoFile, readVideoDuration, type MediaExtractionResult } from '@/api/media'
 import { useNodeEditorContext } from '../nodeEditorContext'
@@ -277,12 +277,187 @@ async function copyFileId() {
   }
 }
 
+// ---- 文章生成摘要（0917 第一版，仅文章生成摘要节点）----
+// 上传/粘贴正文 → 调后端 /api/answer/data-process 出摘要。
+// 系统提示词**不在前端拼**：进 Tab 时按 category=rule + node_type_name=文章生成摘要 从
+// cfg_llm_node_prompt 取（见 promptCategory.ts 的分类映射与 promptTemplateLoader），
+// 结果落在节点的 execCfg.systemPrompt 上，生成时整段作为 systemPrompt 发出去（后端 .system() 直接用）。
+// 模型供应商 / 模型与规则节点同源（/api/model/*），存在节点上，可随时切换。
+const isArticleSummary = computed(() => isArticleSummaryNode(cfg.value))
+const ARTICLE_TEXT_EXTENSIONS = ['txt', 'md', 'markdown', 'csv', 'json', 'log', 'html', 'htm']
+/** 正文体积上限：模型上下文有限，超了先拦，免得白烧一次调用 */
+const ARTICLE_MAX_CHARS = 200_000
+
+const articleText = ref('')
+const articleFileInput = ref<HTMLInputElement | null>(null)
+const articleFileName = ref('')
+const articleFileError = ref('')
+const articleRunning = ref(false)
+const articleError = ref('')
+const articleSummary = ref('')
+const articleThinking = ref('')
+const articleDone = ref(false)
+const articlePromptOpen = ref(false)
+const articleAbort = ref<AbortController | null>(null)
+
+const articleCharCount = computed(() => articleText.value.trim().length)
+/** 提示词必须来自提示词表：取不到（表里没这行/接口挂了）就不让生成，免得拿默认那句抓取配置提示词瞎跑 */
+/**
+ * 提示词是否真的来自提示词表。
+ *
+ * ⚠️ 只看 `systemPrompt` 非空是不够的：这类节点的种子默认值是「抓取配置」那句提示词
+ *（makeDefaultExecConfig），非空但完全不对口。所以由提示词 watcher 在取模板失败时置位，
+ * 这里据此拦住生成（界面上给出明确原因），避免拿错提示词白跑一次模型调用。
+ */
+const articlePromptMissing = ref(false)
+const articlePromptReady = computed(() => !articlePromptMissing.value && !!orchCfg.value.systemPrompt?.trim())
+const canGenerateSummary = computed(() => (
+  !articleRunning.value && articleCharCount.value > 0 && articlePromptReady.value
+  && !!(orchCfg.value.modelProviderCode ?? '').trim() && !!(orchCfg.value.modelCode ?? '').trim()
+))
+
+function clearArticle() {
+  articleText.value = ''
+  articleFileName.value = ''
+  articleFileError.value = ''
+  articleError.value = ''
+  articleSummary.value = ''
+  articleThinking.value = ''
+  articleDone.value = false
+  if (articleFileInput.value) articleFileInput.value.value = ''
+}
+
+function isTextFile(file: File): boolean {
+  const name = file.name || ''
+  const dot = name.lastIndexOf('.')
+  const ext = dot >= 0 ? name.slice(dot + 1).toLowerCase() : ''
+  return ARTICLE_TEXT_EXTENSIONS.includes(ext) || file.type.startsWith('text/')
+}
+
+function onArticleFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  articleFileError.value = ''
+  if (!file) return
+  if (!isTextFile(file)) {
+    input.value = ''
+    articleFileError.value = `只支持文本文件（${ARTICLE_TEXT_EXTENSIONS.join(' / ')}）`
+    return
+  }
+  const reader = new FileReader()
+  reader.onerror = () => { articleFileError.value = '文本读取失败' }
+  reader.onload = () => {
+    const text = typeof reader.result === 'string' ? reader.result : ''
+    if (text.trim().length > ARTICLE_MAX_CHARS) {
+      articleFileError.value = `正文超过 ${ARTICLE_MAX_CHARS} 字，请先精简或分段`
+      return
+    }
+    articleText.value = text
+    articleFileName.value = file.name
+    articleError.value = ''
+    articleSummary.value = ''
+    articleDone.value = false
+  }
+  reader.readAsText(file)
+}
+
+function onArticleTextInput(e: Event) {
+  articleText.value = (e.target as HTMLTextAreaElement).value
+  articleFileError.value = ''
+  if (articleText.value.trim().length > ARTICLE_MAX_CHARS) {
+    articleFileError.value = `正文超过 ${ARTICLE_MAX_CHARS} 字，请先精简或分段`
+  }
+}
+
+async function runArticleSummary() {
+  if (!canGenerateSummary.value) return
+  articleRunning.value = true
+  articleError.value = ''
+  articleSummary.value = ''
+  articleThinking.value = ''
+  articleDone.value = false
+  articleAbort.value?.abort()
+  const controller = new AbortController()
+  articleAbort.value = controller
+  let streamed = ''
+  try {
+    // description 即 user message：正文本身；systemPrompt 是提示词表里那条模板的渲染结果。
+    //
+    // ⚠️ sourceTable / inputFields 必须非空：后端 AnswerServiceImpl.dataProcess() 对这两个字段做了
+    // validateText（`targetTable` / `outputFields` 反而是可选的，注释写着"数据监控等无目标落表的场景会传空"）。
+    // 传空会直接 500（不是 400，见下面的说明），所以这里按"正文来源"如实填：
+    //   sourceTable = 上传的文件名，没上传文件就叫「文章文本」；inputFields = 正文:article_text。
+    // 语义上文章摘要没有表和字段，这两个值只是满足接口校验的占位；后端把这两个校验放宽后可以删掉。
+    const payload = buildDataProcessGeneratePayload({
+      description: articleText.value,
+      configId: Number(cfg.value?.configId ?? 0),
+      providerCode: orchCfg.value.modelProviderCode ?? '',
+      model: orchCfg.value.modelCode ?? '',
+      sourceTable: articleFileName.value || '文章文本',
+      targetTable: '',
+      inputFields: ['article_text'],
+      outputFields: [],
+      inputFieldOptions: [{ itemCode: 'article_text', itemName: '正文' }],
+      outputFieldOptions: [],
+      systemPrompt: orchCfg.value.systemPrompt ?? '',
+    })
+    // buildDataProcessGeneratePayload 在 outputFieldOptions 为空时会**退回 inputFields**（规则节点的既有口径：
+    // 没配出参选项就按入参来）。文章摘要是纯文本进、纯文本出，没有任何字段，这里显式清空，
+    // 免得把「正文」当成出参字段写进 payload 与 cs_config.snatch_conf。
+    payload.outputFields = ''
+    await ruleApi.dataProcessGenerate(payload, {
+      signal: controller.signal,
+      onThinking: (delta) => { if (delta) articleThinking.value += delta },
+      onContent: (delta) => {
+        if (!delta) return
+        streamed += delta
+        articleSummary.value = streamed
+      },
+      onDone: () => { articleDone.value = true },
+    })
+    if (!streamed.trim() && !articleSummary.value.trim()) {
+      articleError.value = '模型没有返回内容，请重试或换一个模型'
+    } else {
+      articleDone.value = true
+      ElMessage.success('摘要已生成')
+    }
+  } catch (e) {
+    if (controller.signal.aborted || (e as Error)?.message?.includes('已取消')) {
+      ElMessage.info('已取消生成')
+    } else {
+      articleError.value = `生成失败：${(e as Error)?.message ?? String(e)}`
+      ElMessage.error(articleError.value)
+    }
+  } finally {
+    if (articleAbort.value === controller) articleAbort.value = null
+    articleRunning.value = false
+  }
+}
+
+function cancelArticleSummary() {
+  articleAbort.value?.abort()
+}
+
+async function copyArticleSummary() {
+  const text = articleSummary.value.trim()
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('摘要已复制')
+  } catch {
+    ElMessage.warning('复制失败，请手动选择文本')
+  }
+}
+
 // 切节点（NodeInspector 里本组件不带 key，是复用的）时清空试跑区，避免串到下一个节点上
 watch(id, () => {
   clearOcrImage()
   clearAudioFile()
   audioLanguage.value = ''
   clearVideoFile()
+  clearArticle()
+  articlePromptOpen.value = false
+  articlePromptMissing.value = false
   mediaFormat.value = 'mp3'
   mediaBitRate.value = ''
   mediaSamplingRate.value = ''
@@ -391,6 +566,7 @@ async function copyOcrText() {
 onBeforeUnmount(() => {
   releaseOcrPreview()
   releaseVideoAudioUrl()
+  articleAbort.value?.abort()
 })
 const orchCfg = computed<RuleOrchestration>(() => ({
   ...(isRule.value ? makeDefaultRuleOrchestration() : makeDefaultExecConfig()),
@@ -619,8 +795,9 @@ async function loadProviderModelOptions() {
   }
 }
 watch(
-  () => [id.value, isRule.value] as const,
-  () => { if (isRule.value) void loadProviderModelOptions() },
+  // 文章生成摘要节点也要选模型（它不生成"脚本"，但同样要调模型出摘要）
+  () => [id.value, isRule.value, isArticleSummary.value] as const,
+  ([, rule, summary]) => { if (rule || summary) void loadProviderModelOptions() },
   { immediate: true },
 )
 
@@ -690,6 +867,7 @@ watch(
     isRule.value,
     isMonitor.value,
     isDataValidation.value,
+    isArticleSummary.value,
     sourceTableName.value,
     promptSourceId.value,
     promptCategory.value,
@@ -700,7 +878,7 @@ watch(
     outputFieldOptions.value.map((field) => `${field.itemCode}:${field.itemName}`).join(','),
   ] as const,
   () => {
-    if (!isRule.value && !isMonitor.value && !isDataValidation.value) return
+    if (!isRule.value && !isMonitor.value && !isDataValidation.value && !isArticleSummary.value) return
     const refreshSeq = ++promptRefreshSeq
     // 数据监控节点进入编排 Tab 时即拼接系统提示词，与脚本编辑弹窗的行为一致——
     // 弹窗 loadPromptTemplate 无条件调用，这里也不卡 sourceTableName/inputFields。
@@ -722,6 +900,8 @@ watch(
         inputFieldOptions: inputFieldOptions.value,
         outputFieldOptions: outputFieldOptions.value.length ? outputFieldOptions.value : inputFieldOptions.value,
       })
+      // 文章生成摘要节点：模板取不到的信号要留给界面（它不能靠"提示词非空"判断自己能不能跑）
+      if (isArticleSummary.value) articlePromptMissing.value = !applied
       if (!applied) return
       if (refreshSeq !== promptRefreshSeq) return
       if (applied !== orchCfg.value.systemPrompt) patch({ systemPrompt: applied })
@@ -1431,6 +1611,116 @@ function onTestScript() {
       </div>
     </div>
   </div>
+  <!-- 文章生成摘要（0917 第一版，仅文章生成摘要节点）：上传/粘贴正文 → 调 /api/answer/data-process。
+       系统提示词来自 cfg_llm_node_prompt（category=rule + node_type_name=文章生成摘要），
+       下面只读展示实际会发出去的那一份，便于核对。 -->
+  <div v-if="isArticleSummary" class="rc-field ocr-field" data-testid="article-summary-field">
+    <label>文章生成摘要</label>
+    <div class="ocr-picker">
+      <input
+        ref="articleFileInput"
+        class="rc-file-input"
+        data-testid="article-file-input"
+        type="file"
+        accept=".txt,.md,.markdown,.csv,.json,.log,.html,.htm,text/*"
+        @change="onArticleFileChange"
+      />
+      <button class="rc-btn" type="button" data-testid="article-pick-file" @click="articleFileInput?.click()">
+        <Document aria-hidden="true" />
+        <span>上传文本</span>
+      </button>
+      <span class="ocr-hint">
+        {{ ARTICLE_TEXT_EXTENSIONS.join(' / ') }}，也可直接粘贴；最多 {{ ARTICLE_MAX_CHARS }} 字
+      </span>
+    </div>
+    <div v-if="articleFileName" class="ocr-preview">
+      <span class="ocr-file-name" :title="articleFileName">{{ articleFileName }}</span>
+      <span class="ocr-file-size">{{ articleCharCount }} 字</span>
+      <button class="ocr-remove" type="button" title="清空正文" aria-label="清空正文" @click="clearArticle">
+        <Delete aria-hidden="true" />
+      </button>
+    </div>
+    <div v-if="articleFileError" class="ocr-error" data-testid="article-file-error">{{ articleFileError }}</div>
+    <textarea
+      class="rc-input rc-textarea article-text"
+      :value="articleText"
+      data-testid="article-text"
+      placeholder="粘贴或上传要生成摘要的文章正文"
+      @input="onArticleTextInput"
+    />
+    <div class="article-text-meta">
+      <span>{{ articleCharCount }} 字</span>
+      <button v-if="articleText" class="rc-link-btn" type="button" @click="clearArticle">清空</button>
+    </div>
+    <div class="rc-model-row">
+      <span class="rc-model-fields">
+        <label class="rc-inline-field">
+          <span>模型供应商</span>
+          <el-select
+            :model-value="orchCfg.modelProviderCode ?? ''"
+            class="rc-inline-select"
+            size="small"
+            :loading="providerLoading"
+            placeholder="模型供应商"
+            data-testid="article-model-provider"
+            @change="onModelProviderChange"
+          >
+            <el-option v-for="item in providerOptions" :key="item.providerCode" :label="item.providerName" :value="item.providerCode" />
+          </el-select>
+        </label>
+        <label class="rc-inline-field">
+          <span>模型</span>
+          <el-select
+            :model-value="orchCfg.modelCode ?? ''"
+            class="rc-inline-select"
+            size="small"
+            :loading="modelLoading"
+            :disabled="!orchCfg.modelProviderCode || !providerOptions.length"
+            placeholder="模型"
+            data-testid="article-model"
+            @change="onModelChange"
+          >
+            <el-option v-for="item in modelOptions" :key="item.modelCode" :label="item.modelName" :value="item.modelCode" />
+          </el-select>
+        </label>
+      </span>
+    </div>
+    <div v-if="providerError || modelError" class="rc-help">{{ providerError || modelError }}</div>
+    <div class="article-prompt">
+      <button class="rc-link-btn" type="button" data-testid="article-prompt-toggle" @click="articlePromptOpen = !articlePromptOpen">
+        {{ articlePromptOpen ? '收起系统提示词' : '查看系统提示词' }}
+      </button>
+      <span class="ocr-hint">来自提示词表（cfg_llm_node_prompt · 文章生成摘要）</span>
+    </div>
+    <pre v-if="articlePromptOpen" class="article-prompt-text" data-testid="article-prompt-text">{{ orchCfg.systemPrompt || '（未取到提示词模板）' }}</pre>
+    <div v-if="!articlePromptReady" class="ocr-error" data-testid="article-prompt-missing">
+      没有取到「文章生成摘要」的系统提示词模板（cfg_llm_node_prompt 里需要 category=rule、node_type_name=文章生成摘要 的一行），暂不能生成
+    </div>
+    <div class="ocr-actions">
+      <button
+        class="rc-btn primary"
+        type="button"
+        :class="{ 'is-generating': articleRunning }"
+        data-testid="article-generate"
+        :disabled="!canGenerateSummary && !articleRunning"
+        @click="articleRunning ? cancelArticleSummary() : runArticleSummary()"
+      >{{ articleRunning ? '生成中…（点击取消）' : '生成摘要' }}</button>
+      <span v-if="articleError" class="ocr-error" data-testid="article-error">{{ articleError }}</span>
+    </div>
+    <div v-if="articleSummary || articleThinking" class="ocr-result" data-testid="article-result">
+      <div class="ocr-result-head">
+        <span>摘要{{ articleDone ? '' : '（生成中…）' }}</span>
+        <span class="ocr-result-actions">
+          <button class="rc-link-btn" type="button" @click="copyArticleSummary">复制</button>
+        </span>
+      </div>
+      <pre class="ocr-result-text article-summary-text" data-testid="article-summary-text">{{ articleSummary || '等待模型输出…' }}</pre>
+      <details v-if="articleThinking.trim()" class="article-thinking">
+        <summary>思考过程</summary>
+        <pre>{{ articleThinking }}</pre>
+      </details>
+    </div>
+  </div>
   <div class="rc-field">
     <textarea
       class="rc-input rc-textarea"
@@ -1716,6 +2006,15 @@ function onTestScript() {
 .media-player { display: block; width: 100%; padding: 10px; box-sizing: border-box; }
 .media-upload-meta { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; }
 .media-fileid { font-family: var(--rc-mono, monospace); word-break: break-all; }
+/* ---- 文章生成摘要 ---- */
+.article-text { min-height: 120px; max-height: 260px; }
+.article-text-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 8px; color: var(--rc-faint); font-size: 10.5px; }
+.article-prompt { display: flex; align-items: center; gap: 8px; margin: 2px 0 6px; }
+.article-prompt-text { margin: 0 0 8px; max-height: 220px; overflow: auto; padding: 10px; border: 1px solid #dbe3ee; border-radius: 8px; background: #f8fafc; color: var(--rc-text-2); font-size: 11px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.article-summary-text { min-height: 60px; }
+.article-thinking { border-top: 1px dashed var(--rc-border-soft); }
+.article-thinking summary { padding: 6px 10px; color: var(--rc-muted); font-size: 11px; cursor: pointer; }
+.article-thinking pre { margin: 0; max-height: 180px; overflow: auto; padding: 0 10px 10px; color: var(--rc-text-2); font-size: 11px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 .rc-stop-icon { display: block; width: 10px; height: 10px; border-radius: 1px; background: currentColor; }
 .rc-main-stream, .rc-main-result { margin: 10px 0 12px; border: 1px solid #dbe3ee; border-radius: 8px; overflow: hidden; background: #fff; }
 .rc-main-stream { border-color: #1e293b; background: #0b1220; }
