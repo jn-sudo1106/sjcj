@@ -2065,3 +2065,60 @@ describe('ResultView · 布局与操作', () => {
     )
   })
 })
+
+// 2026-09-17：'fetch' 这个 ExecMode 连同 onSendFetch / actionBtnText 的分支早就写好了，
+// 但在此之前没有任何路径产生它——孤立首节点落到 'none'，工具栏整块不渲染，
+// 用户看着像"这里没功能"。公众号那批源正是这形态：起点自己就是完整的抓取配置
+// （网页抓取 → 直接写 6200029），抓完入库、流程到此为止，5429 个源共 83 万条数据都这么来的。
+describe('ResultView · 孤立首节点（没有后继也没有上游）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  // 与公众号源同构：整条流程只有一个可运行节点，有输出表、没有输入表、没有后继
+  function loadLoneNodeFixture(flow: ReturnType<typeof useFlowStore>, current: Source) {
+    flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    flow.main.splice(0, flow.main.length, 'start', 'only', 'end')
+    Object.keys(flow.configs).forEach((k) => { delete flow.configs[k] })
+    Object.assign(flow.configs, {
+      only: cfg({ title: '公众号文章抓取', outputTable: '6200029' }),
+    })
+  }
+
+  async function mountLone() {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    loadLoneNodeFixture(useFlowStore(), current)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'only')
+    return wrapper
+  }
+
+  it('给出「发起抓取」而不是一片空白', async () => {
+    const wrapper = await mountLone()
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发起抓取')
+    // 没有可发的对象时才提示；这里有得发，就不该再出现说明文字
+    expect(wrapper.find('[data-testid="data-no-exec-reason"]').exists()).toBe(false)
+  })
+
+  it('作用域是整个源，不跟勾选行绑定，所以不出勾选列', async () => {
+    const wrapper = await mountLone()
+    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBeFalsy()
+    expect(wrapper.text()).not.toContain('发后续任务')
+  })
+
+  it('点它走发起抓取的确认，文案点明是对整个源', async () => {
+    const wrapper = await mountLone()
+    // mockClear + calls.at(-1)：ElMessageBox.confirm 的 spy 可能被前面的 describe 用过，
+    // 直接读 calls[0] 会拿到陈旧的那次调用（单跑通过、全跑失败）
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    confirm.mockClear()
+
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(String(confirm.mock.calls.at(-1)?.[0] ?? '')).toContain('发起抓取')
+  })
+})

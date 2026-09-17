@@ -165,7 +165,36 @@ const execMode = computed<ExecMode>(() => {
   if (hasSuccessor.value) return 'input'
   // 末节点：有唯一上游就能从上一节点重跑（0831 X7-B）。上游不唯一宁可不给入口。
   if (predecessorId.value) return 'upstream'
+  /**
+   * 孤立首节点（没有后继、也没有上游）：唯一能做的就是把这个源重抓一遍（2026-09-17 接上）。
+   *
+   * `'fetch'` 这个模式连同 onSendFetch / actionBtnText / execDisabledReason 的分支早就写好了，
+   * 但在此之前**没有任何路径产生它**，整块是死代码——工具栏于是一片空白，用户看着像"这里没功能"。
+   * 公众号那批源正是这种形态：起点自己就是完整的抓取配置（网页抓取 → 直接写 6200029），
+   * 抓完入库、流程到此为止，5429 个源共 83 万条数据都是这么来的。
+   */
+  if (isVerifiedFirstNode.value) return 'fetch'
   return 'none'
+})
+
+/**
+ * 真的什么都做不了时，说清楚是为什么（2026-09-17）。
+ *
+ * 之前 execMode==='none' 会让整个按钮组 `v-else` 掉、连个 tooltip 都没有，
+ * 「没配后续节点」和「这里本来就没这功能」在界面上长得一模一样，而这两件事完全不同。
+ *
+ * ⚠️ 上面接上 `'fetch'` 之后，这段**大部分分支已经走不到了**，留着是兜底：
+ * - 结构节点 / 没有任何表 → 外层 `hasAnyTable` 的空态先接管，根本到不了工具栏；
+ * - 孤立首节点 → 现在是 `'fetch'`；
+ * - 末节点单上游 → `'upstream'`。
+ * 实际还能落到这里的只剩「末节点 + 多个上游」（上游不唯一时 predecessorId 为空），
+ * 那需要 branchGroups 里两条分支汇到同一节点，真实流程里罕见，因此没有配套单测。
+ */
+const noExecReason = computed(() => {
+  if (execMode.value !== 'none') return ''
+  if (isStructuralNode.value) return '结构节点不产生数据，没有可执行的操作'
+  if (!outputTableId.value && !inputTableId.value) return '当前节点没有配置输入表 / 输出表，无法执行'
+  return '当前节点没有后续节点，也没有可回退的上游，无法发任务'
 })
 
 function onScopeChange(next: 'output' | 'input') {
@@ -1348,6 +1377,13 @@ async function onTestScript() {
         <!-- 数据操作组：发后续任务与发全部合并为组合操作按钮 -->
         <span class="rv-data-ops">
           <span v-if="canPickRows" class="muted">已选 {{ selectedRowIds.length }} 条</span>
+          <!-- 什么都做不了时给出原因，别让工具栏空着——见 noExecReason 的说明 -->
+          <span
+            v-if="noExecReason"
+            class="muted rv-no-exec"
+            data-testid="data-no-exec-reason"
+            :title="noExecReason"
+          >{{ noExecReason }}</span>
           <div v-if="execMode !== 'none'" class="rc-btn-group">
             <button
               class="rc-btn primary"
@@ -1822,6 +1858,8 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
    按钮尺寸由上面的 .ctx-summary .rc-btn（28px）统一接管，跟同行的「查询/清空」一致；
    删除数据那个 .tiny 也一并拉齐，这行不再有 24px 的邻居。 */
 .rv-data-ops { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+/* 无可执行操作时的说明：工具栏本来就挤，超出就省略，全文走 title */
+.rv-no-exec { font-size: 12px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-summary .rc-btn.tiny { height: 28px; padding: 0 12px; font-size: 12px; }
 
 /* 发后续任务与发全部的组合操作按钮 */
