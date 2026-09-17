@@ -60,6 +60,22 @@ const props = withDefaults(defineProps<{
   /** 行内操作里是否给「删除单条」。仅测试表（tableMeta.state === 'C'）该为 true，
    *  由调用方判定——表状态在调用方手里，表格不去猜。 */
   allowRowDelete?: boolean
+  /**
+   * 行尾「发后续任务（本行）」（0915-04）。**只有网站数据视图给 true**：
+   * 具体源数据视图顶部已经有等价按钮，行尾再来一遍是重复。
+   * 另外它要求已收窄到具体源——后继节点配置只在那时才解析得出（见 SiteDataView.canPickRows）。
+   */
+  allowRowNextStep?: boolean
+  /**
+   * 行尾「对该源发抓取…」（0915-04）。作用域是**整个源**，不是这一行，
+   * 所以确认文案必须点明，别让人以为只抓当前这条。
+   */
+  allowRowLaunch?: boolean
+  /**
+   * 哪些源不能直接发抓取：`sourceId → 原因`。命中的行菜单项禁用，原因挂在 title 上。
+   * 判定留在调用方（参数源要模板取值、停用源要先启用），表格只负责按这份名单灰掉。
+   */
+  launchBlocked?: Map<string, string>
 }>(), { allowColumnSort: true, presetCols: () => [] })
 const showActions = computed(() => !props.compact && !props.hideActions)
 
@@ -509,12 +525,32 @@ function stateMeta(s?: string) {
             </td>
             <td v-if="showStatusCol"><span class="rc-status" :class="stateMeta(r.state).cls">{{ stateMeta(r.state).text }}</span></td>
             <td v-if="showActionCol" class="dg-actions" @click.stop>
+              <!-- 0915-04 发抓取不放进「操作 ▾」：那里是次要动作的抽屉，而这是个真会跑起来的
+                   写操作，藏在两级展开后面太隐蔽（2026-09-17 走查）。提成并排的独立按钮，
+                   一次点击到位；默认透明、悬停本行才显形，免得一屏 20 行各挂一个按钮变吵
+                   （跟同期去掉成列 ↗ 是同一个理由）。 -->
+              <button
+                v-if="allowRowLaunch"
+                type="button"
+                class="dg-row-launch"
+                :disabled="!!launchBlocked?.get(r.sourceId)"
+                :title="launchBlocked?.get(r.sourceId) || '对该行所属的源发起抓取（作用于该源全部数据）'"
+                data-testid="row-launch"
+                @click.stop="emit('row-action', r, 'row-launch')"
+              >发抓取</button>
               <el-dropdown trigger="click" @command="(c: string) => emit('row-action', r, c)">
                 <span class="dg-act-btn">操作 ▾</span>
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item command="detail">详情</el-dropdown-item>
                     <el-dropdown-item command="tasks">查后续任务实例</el-dropdown-item>
+                    <!-- 只发这一行，跟上面那个「发抓取」（整个源）不是一回事，文案得自己说清楚 -->
+                    <el-dropdown-item
+                      v-if="allowRowNextStep"
+                      divided
+                      command="row-next-step"
+                      data-testid="row-next-step"
+                    >发后续任务（本行）</el-dropdown-item>
                     <el-dropdown-item v-if="allowRowDelete" divided command="delete">删除单条【无法恢复】</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
@@ -601,6 +637,20 @@ function stateMeta(s?: string) {
 .dg-actions, .dg-select { color: var(--rc-primary); }
 .dg-select input, .dg-table th input[type="checkbox"] { cursor: pointer; }
 .dg-act-btn { font-size: 12px; cursor: pointer; }
+/* 行尾「发抓取」：默认不占视觉，悬停本行 / 键盘聚焦时才显形。
+   用 opacity 而不是 display:none——后者会让这一列的宽度随悬停跳动，整表跟着抖。
+   :focus-visible 那条不能少，否则键盘用户永远看不到它。 */
+.dg-row-launch {
+  margin-right: 10px; padding: 1px 6px; border: 1px solid var(--rc-border); border-radius: 5px;
+  background: #fff; color: var(--rc-primary); font-size: 11px; cursor: pointer;
+  opacity: 0; transition: opacity 0.12s, border-color 0.12s;
+}
+.dg-table tbody tr:hover .dg-row-launch,
+.dg-row-launch:focus-visible { opacity: 1; }
+.dg-row-launch:hover:not(:disabled) { border-color: var(--rc-primary); }
+.dg-row-launch:disabled { color: var(--rc-faint); cursor: not-allowed; }
+/* 禁用态也要能看见，否则用户只知道"没有这个按钮"，不知道"有但不能用、因为源停用了" */
+.dg-table tbody tr:hover .dg-row-launch:disabled { opacity: 0.55; }
 .dg-empty, .dg-empty-cell { padding: 24px; text-align: center; color: var(--rc-faint); font-size: 12px; }
 .compact .dg-table th { font-size: 11px; padding: 6px 8px; }
 .compact .dg-table td { font-size: 11px; padding: 6px 8px; max-width: 160px; }

@@ -34,6 +34,7 @@ import { fetchNextStepConfig } from '@/utils/flow/nextStepConfig'
 import { confirmDanger } from '@/utils/confirmDanger'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import DataGrid from './DataGrid.vue'
+import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import FilePreview from './components/FilePreview.vue'
 import { backTraceSources } from '@/utils/data/backTraceSources'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -683,6 +684,33 @@ async function onSendNextStep() {
     list.push(id)
     groups.set(sourceId, list)
   }
+  await sendNextStepFor(groups, { clearSelection: true })
+}
+
+/**
+ * 行尾「发后续任务（本行）」（0915-04）：只发这一行，其余与顶部按钮完全一致。
+ *
+ * 前提跟勾选发送同一个 `canPickRows`——必须已收窄到具体源，否则解析不出后继节点配置
+ * （见 sendNextStepFor 里 selectedSourceId 那段）。菜单项本身也受同一个开关控制，
+ * 这里再挡一次是防止条件在菜单弹开后变化。
+ */
+async function onSendRowNextStep(row: DataRow) {
+  if (!canPickRows.value || !effectiveTableId.value) return
+  const sourceId = row.sourceId || selectedSourceId.value
+  if (!sourceId || !row.dataId) return
+  await sendNextStepFor(new Map([[sourceId, [row.dataId]]]))
+}
+
+/**
+ * 发后续任务的唯一实现。`groups` 是 `sourceId → dataId[]`。
+ *
+ * 顶部按钮传勾选行（可能跨多个源），行尾菜单传单独一行——两者除了数据来源没有任何区别。
+ * 后继节点解析、确认文案、回执分组解析都在这里，**不要为行尾再复制一份**：
+ * 回执那段尤其不能分叉，后端回的「本次发送 N 条」是提交条数，被目标节点进入条件拒绝的
+ * 也算在里面，少解析一次就会把「全部被拒」显示成「全部成功」。
+ */
+async function sendNextStepFor(groups: Map<string, string[]>, opts: { clearSelection?: boolean } = {}) {
+  if (!groups.size) return
   const sourceCount = groups.size
   const rowCount = [...groups.values()].reduce((sum, ids) => sum + ids.length, 0)
   let nextConfigInfo
@@ -733,7 +761,8 @@ async function onSendNextStep() {
       for (const [sourceId, ids] of groups) {
         last = await dataApi.nextStep(sourceId, tableId, ids, configOptions)
       }
-      selectedRowIds.value = []
+      // 行尾菜单没用到勾选，别把用户已经勾好的行清掉
+      if (opts.clearSelection) selectedRowIds.value = []
       return last
     },
     showNextStepReceipt,
@@ -866,7 +895,55 @@ function onRowAction(row: DataRow, cmd: string) {
     taskInst.sourceId = row.sourceId
     taskInst.parentId = row.dataId
     taskInst.visible = true
+  } else if (cmd === 'row-next-step') {
+    void onSendRowNextStep(row)
+  } else if (cmd === 'row-launch') {
+    void onLaunchRowSource(row)
   }
+}
+
+// ---- 0915-04 行尾「对该源发抓取…」----
+const snatchLauncher = ref<InstanceType<typeof SnatchLauncher>>()
+
+/**
+ * 不能直接发抓取的源：`sourceId → 原因`。
+ *
+ * 只挡**停用**的源——发了也不会跑。**参数源不挡**：`SnatchLauncher.launch()` 会先 loadParams，
+ * 有参数就弹框让人填，单源场景本来就该走这条路（具体源数据视图的「发起抓取」一直是这么做的，
+ * 见 ResultView.onSendFetch）。方案 §2.2 里写的「参数源禁用」出自批量发送那套
+ * （partitionLaunchTargets 服务的是 LaunchConfirmDialog，一次几百个源没法逐个填参数），
+ * 挪到单行上就成了无谓的拦截。
+ */
+const launchBlocked = computed(() => {
+  const map = new Map<string, string>()
+  for (const src of siteChildren.value) {
+    if (src.disabled) map.set(src.sourceId, `源「${src.name}」已停用，请先启用再发抓取`)
+  }
+  return map
+})
+
+/**
+ * 对这一行所属的**整个源**发起抓取。
+ *
+ * 确认文案必须点明作用域：它和「这一行」没有关系，作用于该源全部数据。
+ * 不加 admin 门禁——同页面顶部的「发后续任务」同为写操作、也没有这道门禁，
+ * 只在行尾单独加会让同一个页面自相矛盾；写入风险由 confirmDanger 的二次确认兜住。
+ */
+async function onLaunchRowSource(row: DataRow) {
+  const sourceId = row.sourceId || selectedSourceId.value
+  if (!sourceId) return
+  const blocked = launchBlocked.value.get(sourceId)
+  if (blocked) {
+    ElMessage.warning(blocked)
+    return
+  }
+  const name = sourceNames.value[sourceId] || sourceId
+  await confirmDanger(
+    '发起抓取',
+    `将对源「${name}」（${sourceId}）发起抓取，作用于该源全部数据，不只是当前这条。是否继续？`,
+    async () => snatchLauncher.value?.launch(sourceId, { onSuccess: () => ElMessage.success('已发起抓取') }),
+    () => {},
+  )
 }
 
 // 上游数据下钻（M3-0H）：ResultView.vue 已有的 M3-0B 只落在具体源流程页，网站数据视图
@@ -1056,7 +1133,10 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
         :sortable-props="SORTABLE_PROPS"
         @sort-change="onSortChange"
         @reach-end="loadMore"
-        :hide-actions="!!selectedSourceId"
+        :allow-row-next-step="canPickRows"
+        :allow-row-launch="true"
+        :launch-blocked="launchBlocked"
+        :hide-actions="!!selectedSourceId && !canPickRows"
         :source-clickable="!selectedSourceId"
         @source-click="onSourceClick"
         @update:selected-ids="selectedRowIds = $event"
@@ -1257,6 +1337,10 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
         data-testid="site-data-cell-file-preview"
       />
     </el-dialog>
+
+    <!-- 行尾「对该源发抓取…」用它：loadParams → 有参数弹框 / 无参数直发，
+         与具体源数据视图的「发起抓取」同一条路径（ResultView 也是挂这个组件）。 -->
+    <SnatchLauncher ref="snatchLauncher" />
 </template>
 
 <style scoped>

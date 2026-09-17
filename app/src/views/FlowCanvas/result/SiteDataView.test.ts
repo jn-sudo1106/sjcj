@@ -7,6 +7,7 @@
 // 更多，不是具体源单独一套总数/上一页下一页）、同一套筛选行位置，只是可编辑字段不同。
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { ElMessageBox } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -1132,5 +1133,63 @@ describe('SiteDataView 钻取闭环', () => {
     expect(summary).not.toHaveBeenCalled()
     expect(rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: 'c' }))
     expect(wrapper.text()).toContain('共 5 条')
+  })
+})
+
+// 0915-04：行尾「对该源发抓取…」。两个语义作用域差一个数量级，这里守住的是
+// ①确认文案必须点明作用域是整个源 ②停用源挡在发送之前 ③走的是 SnatchLauncher 那条路
+// （loadParams → 有参数弹框 / 无参数直发），不是自己另发一遍接口。
+describe('SiteDataView · 行尾对该源发抓取', () => {
+  // 跟文件里其他 describe 同一口径。漏了它，spy 会跨用例累积——
+  // 上一个用例 spy 过 ElMessageBox.confirm 并调用了一次，下一个用例的
+  // `not.toHaveBeenCalled()` 就会拿到那次陈旧计数（单跑通过、全跑失败）。
+  afterEach(() => vi.restoreAllMocks())
+
+  async function mountWithRows() {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([
+      source('a'),
+      { ...source('b'), disabled: true },
+    ])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 2, list: [row('a', 'd1'), row('b', 'd2')] })
+    const wrapper = mountView()
+    await flushPromises()
+    await pickTable(wrapper)
+    return wrapper
+  }
+
+  it('确认文案点明作用域是该源全部数据，取消则不发送', async () => {
+    const wrapper = await mountWithRows()
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    const send = vi.spyOn(sourceApi, 'sendSnatchWithParam')
+
+    await wrapper.findComponent(DataGrid).vm.$emit('row-action', row('a', 'd1'), 'row-launch')
+    await flushPromises()
+
+    const text = String(confirm.mock.calls[0]?.[0] ?? '')
+    expect(text).toContain('源-a')      // 源名
+    expect(text).toContain('a')          // 源 ID
+    expect(text).toContain('该源全部数据')
+    expect(text).toContain('不只是当前这条')
+    expect(send).not.toHaveBeenCalled()  // 取消了就不该发
+  })
+
+  it('停用的源挡在发送之前，连确认框都不弹', async () => {
+    const wrapper = await mountWithRows()
+    const confirm = vi.spyOn(ElMessageBox, 'confirm')
+    const send = vi.spyOn(sourceApi, 'sendSnatchWithParam')
+    await wrapper.findComponent(DataGrid).vm.$emit('row-action', row('b', 'd2'), 'row-launch')
+    await flushPromises()
+
+    expect(confirm).not.toHaveBeenCalled()
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('把停用源作为 launchBlocked 传给表格，让菜单项自己灰掉', async () => {
+    const wrapper = await mountWithRows()
+    const blocked = wrapper.findComponent(DataGrid).props('launchBlocked') as Map<string, string>
+    expect(blocked.has('b')).toBe(true)
+    expect(blocked.get('b')).toContain('已停用')
+    expect(blocked.has('a')).toBe(false)
   })
 })
