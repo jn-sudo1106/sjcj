@@ -225,6 +225,22 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(actionRow.findAll('button')).toHaveLength(3)
   })
 
+  // 0917 产品口径：数据监控节点不要「上传 Excel」样本文件入口（画布 / 监控视图两处一致），
+  // 规则处理节点保留——那里的 Excel 是给"按样本生成规则脚本"用的。
+  it('数据监控节点动作区只有生成脚本与测试脚本，没有上传 Excel', async () => {
+    mockAssets()
+    const { wrapper } = mountOnMonitorNode()
+    await flushPromises()
+
+    const actionRow = wrapper.find('[data-testid="rule-generation-actions"]')
+    expect(actionRow.exists()).toBe(true)
+    expect(actionRow.find('[data-testid="main-upload-excel"]').exists()).toBe(false)
+    expect(actionRow.find('[data-testid="main-excel-file-input"]').exists()).toBe(false)
+    expect(actionRow.find('[data-testid="main-generate-script"]').exists()).toBe(true)
+    expect(actionRow.find('[data-testid="main-test-script"]').exists()).toBe(true)
+    expect(actionRow.findAll('button')).toHaveLength(2)
+  })
+
   it('进入编排配置时已有脚本仅显示生成结果和脚本路径', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     flow.patchRuleConfig('rule-1', {

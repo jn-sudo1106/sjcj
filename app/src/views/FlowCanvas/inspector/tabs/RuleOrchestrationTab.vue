@@ -9,12 +9,16 @@
 // 编排配置只消费已经选好的表/字段，不重复展示可编辑摘要。
 // 0804 拍板：规则名称 = 节点名称，不再单独输入（下面 orchCfg 计算时强制用 cfg.title 覆盖）；
 // 「引用已有规则」能力整体砍掉，复用需求交给模板功能承接（等于回退 edc08d1）。
+//
+// 0917：编辑对象不再写死 useFlowStore()，改从 nodeEditorContext 取——**网站汇总态的监控视图
+// （监控视图 → 监控配置）直接复用本 Tab 渲染同一套界面**，改动落在它自己那份按源拼的种子上。
+// 画布侧没 provide 那个上下文，走默认实现（读写 flow store），行为不变。
 import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, UploadFilled } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useFlowStore } from '@/stores/flow'
-import { isDataValidationNode, isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { isDataValidationNode, isMonitorNode, isRuleNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { useNodeEditorContext } from '../nodeEditorContext'
 import { configApi, entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { isVruleNumericRuleId } from '@/api/legacyAdapters'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
@@ -29,13 +33,16 @@ import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import AlertConfigPanel from '../AlertConfigPanel.vue'
 
-const flow = useFlowStore()
+// 编辑对象来自节点编辑上下文（0917）：画布右侧配置区 = 全局 flow store，
+// 网站汇总态的监控视图 = 它自己按源拼的那份种子（见 nodeEditorContext.ts 头注）。
+//
+// 数据监控节点不出现「上传 Excel」样本文件入口（0917 产品口径，画布和监控视图两处一致）；
+// 规则处理节点照旧保留——那里的 Excel 是给"按样本生成规则脚本"用的。
+const { id, cfg, patch: patchNode, setMonitorMethods: setNodeMonitorMethods, setMonitorAlertConfig: setNodeMonitorAlertConfig, sourceId: promptSourceId, sourceSchedule } = useNodeEditorContext()
 const router = useRouter()
 const route = useRoute()
 const { tables } = useNodeInspectorAssets()
 
-const id = computed<string>(() => flow.selectedId)
-const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
 const isRule = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
 const isMonitor = computed(() => (cfg.value ? isMonitorNode(cfg.value) : false))
 const isDataValidation = computed(() => (cfg.value ? isDataValidationNode(cfg.value) : false))
@@ -46,8 +53,7 @@ const orchCfg = computed<RuleOrchestration>(() => ({
 }))
 
 function patch(p: Partial<RuleOrchestration>) {
-  if (isRule.value) flow.patchRuleConfig(id.value, p)
-  else flow.patchExecConfig(id.value, p)
+  patchNode(p)
 }
 
 // 文案分流：内容同构，只有措辞按节点类型切换
@@ -66,10 +72,10 @@ const describeTouched = ref(false)
 // 数据监控节点：监控方法与规则描述同属编排语义，放在「设置业务规则」上方。
 const monitorMethods = computed<string[]>(() => cfg.value?.monitorMethods ?? [])
 function setMonitorMethods(values: string[]) {
-  flow.setMonitorMethods(id.value, values ?? [])
+  setNodeMonitorMethods(values ?? [])
 }
 function setMonitorAlertConfig(config: MonitorAlertConfig) {
-  flow.setMonitorAlertConfig(id.value, config)
+  setNodeMonitorAlertConfig(config)
 }
 
 // 监控方法随 config 的 checkRule 落库（逗号分隔，生成脚本时仍按原口径传给后端）。
@@ -89,7 +95,7 @@ watch(
         if (!saved) return
         const known = new Set(MONITOR_METHODS)
         const restored = saved.split(',').map((m) => m.trim()).filter((m) => m && known.has(m))
-        if (restored.length) flow.setMonitorMethods(String(nid), restored)
+        if (restored.length) setNodeMonitorMethods(restored)
       } catch {
         // 回填失败不阻断编排配置，用户仍可手动选择。
       }
@@ -311,15 +317,15 @@ watch(
   { immediate: true },
 )
 /**
- * 系统提示词 / 工作台里 `{{source_id}}` 的取值：**画布当前正在编辑的那个源**，
- * 也就是左侧源列表里选中的那个（`flow.sourceCfg`，个别场景它为空时取 `flow.sourceCtx` 兜底）。
+ * 系统提示词 / 工作台里 `{{source_id}}` 的取值：**当前正在编辑的那个源**——
+ * 画布上是左侧源列表里选中的那个（`flow.sourceCfg`，个别场景它为空时取 `flow.sourceCtx` 兜底），
+ * 网站汇总态下是监控视图里选中的那个源。取值由节点编辑上下文提供（见 nodeEditorContext.ts）。
  *
  * 不能用节点的 `stepSourceId`：那是旧步骤的「适用源」，规则处理 / 数据监控节点按设计默认
  * `-1`（表示该配置下所有源共用，见 flowModel.ts 的字段注释），拼进提示词就成了
  * `source_id=-1`——监控脚本里拿这个 ID 去查数据必然查不到（2026-09-16 实测踩到）。
  * 两者不是同一层，别互相顶替。
  */
-const promptSourceId = computed(() => flow.sourceCfg?.sourceId || flow.sourceCtx?.sourceId || '')
 
 /**
  * 系统提示词里 `{{source_cron}}` 的取值：**节点配置 Tab「定时策略」里那个 cron 框的值**
@@ -329,7 +335,7 @@ const promptSourceId = computed(() => flow.sourceCfg?.sourceId || flow.sourceCtx
  * 之前这里直接读 `node.schedule.cron`，节点只选过「每天 08:00」这类策略时那个字段可能是空的，
  * 于是界面显示 `0 0 8 * * ?`、提示词里却是空。
  */
-const sourceCron = computed(() => nodeScheduleCron(cfg.value, flow.sourceCfg))
+const sourceCron = computed(() => nodeScheduleCron(cfg.value, sourceSchedule.value))
 
 let promptRefreshSeq = 0
 watch(
@@ -714,7 +720,7 @@ async function onSaveScript() {
     // 源一并传进去：节点没配过定时时，节点配置 Tab 展示的就是源上的 cron，落库要用同一个值。
     if (isMonitor.value) {
       try {
-        await syncMonitorCkSource(flow.sourceCfg?.sourceId, cfg.value, flow.sourceCfg)
+        await syncMonitorCkSource(promptSourceId.value, cfg.value, sourceSchedule.value)
       } catch (e) {
         ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
       }
@@ -911,6 +917,7 @@ function onTestScript() {
   </div>
   <div v-if="isRule" class="rc-generation-actions" data-testid="rule-generation-actions">
     <input
+      v-if="!isMonitor"
       ref="excelFileInput"
       class="rc-file-input"
       data-testid="main-excel-file-input"
@@ -918,7 +925,13 @@ function onTestScript() {
       accept=".xls,.xlsx"
       @change="onExcelFileChange"
     />
-    <button class="rc-btn rc-upload-btn" type="button" data-testid="main-upload-excel" @click="excelFileInput?.click()">
+    <button
+      v-if="!isMonitor"
+      class="rc-btn rc-upload-btn"
+      type="button"
+      data-testid="main-upload-excel"
+      @click="excelFileInput?.click()"
+    >
       <UploadFilled aria-hidden="true" />
       <span>{{ selectedExcelFile ? '更换 Excel' : '上传 Excel' }}</span>
     </button>
@@ -944,7 +957,7 @@ function onTestScript() {
       {{ codeTestLoading ? '测试中...' : '测试脚本' }}
     </button>
   </div>
-  <div v-if="isRule && (selectedExcelFile || excelFileError)" class="rc-file-summary">
+  <div v-if="isRule && !isMonitor && (selectedExcelFile || excelFileError)" class="rc-file-summary">
     <div v-if="selectedExcelFile" class="rc-file-selected">
       <span class="rc-file-name" :title="selectedExcelFile.name">{{ selectedExcelFile.name }}</span>
       <span class="rc-file-size">{{ formatExcelFileSize(selectedExcelFile.size) }}</span>
