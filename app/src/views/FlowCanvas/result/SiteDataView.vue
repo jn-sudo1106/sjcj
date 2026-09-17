@@ -257,6 +257,7 @@ async function computeTotalHits(reqId: number, sourceIds: string[]) {
     const r = await backTraceSources(buildSummaryQuery(), sourceIds)
     if (reqId !== requestId) return
     totalHits.value = [...r.hitCountBySource.values()].reduce((a, b) => a + b, 0)
+    narrowScanToHitSources(reqId, r.hitCountBySource)
   } catch {
     // 算不出来就不显示，不拿个错数字糊弄；数据本身照常展示
     if (reqId === requestId) totalHits.value = null
@@ -264,6 +265,44 @@ async function computeTotalHits(reqId: number, sourceIds: string[]) {
     if (reqId === requestId) totalHitsLoading.value = false
   }
 }
+
+/** 见 narrowScanToHitSources / loadMore 的 finally：收窄撞上加载中时，把续扫推迟到本轮结束。 */
+let rescanAfterNarrow = false
+
+/**
+ * 把「还没扫到」的那段候选源里**没有数据的源剔掉**（2026-09-17）。
+ *
+ * 不带筛选条件时，候选源是网站的**全部**源，归并按源列表顺序每轮扫 SOURCE_SCAN_BATCH 个。
+ * 源列表是按源 ID 倒序的，也就是**最近导入的排最前**，而新导入的源往往还没跑出数据——
+ * 「上市公司(已复核)」实测：6618 个源、TB_CNEWS 共 78,593 条，但前 100 个源一条都没有
+ * （第 101~200 个里就有 78 个源有数据）。于是页面停在「共 78,593 条 · 已加载 0 条 ·
+ * 已扫描 100/6618 个源」——数字自相矛盾，看着就是坏了。
+ * （停在 100 是因为一条数据都没有时表格不可滚动，自动加载有 5 轮封顶，见 DataGrid。）
+ *
+ * 而总数统计那一轮（computeTotalHits → backTraceSources）顺手就知道**哪些源真有数据**，
+ * 之前只把它们的 CNT 加起来当总数，名单直接扔了。这里把名单用起来：空源根本不必扫。
+ *
+ * 只动**未扫描**的那一段，已激活的源原样保留——它们的 mergeStates 里可能还存着取回但没弹出的
+ * 行，重排会把这些行丢掉，也会让 candidateCursor 对不上。
+ *
+ * 安全性：backTraceSources 的命中集**只会偏宽不会偏窄**（见该文件说明：含子查询的条件下
+ * 它可能多算几个源），所以照它剔除不会漏数据，最差只是白扫几个空源。
+ */
+function narrowScanToHitSources(reqId: number, hits: Map<string, number>) {
+  if (reqId !== requestId || selectedSourceId.value) return
+  const scanned = candidateSourceIds.slice(0, candidateCursor)
+  const tail = candidateSourceIds.slice(candidateCursor).filter((sourceId) => hits.has(sourceId))
+  if (tail.length === candidateSourceIds.length - candidateCursor) return // 一个都没剔掉
+  candidateSourceIds = [...scanned, ...tail]
+  // 已扫的那批一条数据都没有，说明用户此刻正对着空表：立刻用收窄后的名单接着扫，
+  // 不要等他自己去点「加载更多」——他看到的是「共 N 条 / 已加载 0 条」，只会以为页面坏了。
+  if (rows.value.length) return
+  // 首屏那轮还没回来（总数比它先算完时会这样）：重入会被 loadMore 自己的守卫挡掉，
+  // 所以挂个标记，等那轮收尾时再续。
+  if (loadingMore.value) rescanAfterNarrow = true
+  else void loadMore()
+}
+
 
 const siteChildren = ref<Source[]>([])
 const sourceNames = computed<Record<string, string>>(() => Object.fromEntries(siteChildren.value.map((s) => [s.sourceId, s.name])))
@@ -517,7 +556,15 @@ async function loadMore() {
     // 否则观察器会在同一个位置反复触发同一个失败请求。
     autoLoadFailed.value = true
   } finally {
-    if (id === requestId) loadingMore.value = false
+    if (id === requestId) {
+      loadingMore.value = false
+      // 收窄发生在本轮加载**进行中**时只能挂个标记（那时重入会被上面的 loadingMore 守卫挡掉），
+      // 到这里补跑一轮，否则页面会停在「已加载 0 条」等用户自己点（见 narrowScanToHitSources）。
+      if (rescanAfterNarrow) {
+        rescanAfterNarrow = false
+        if (!rows.value.length && !allExhausted.value) void loadMore()
+      }
+    }
   }
 }
 
@@ -540,6 +587,7 @@ async function resetAndLoad() {
   mergeStates = []
   candidateSourceIds = []
   candidateCursor = 0
+  rescanAfterNarrow = false
   const tid = effectiveTableId.value
   if (!tid) return
   loading.value = true

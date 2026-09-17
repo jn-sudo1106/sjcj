@@ -748,6 +748,85 @@ describe('SiteDataView · 命中总条数', () => {
   })
 })
 
+// 2026-09-17：不带条件时候选源是网站**全部**源，按源列表顺序每轮扫 20 个。源列表按源 ID
+// 倒序（最近导入的排最前），而新导入的源往往还没跑出数据——「上市公司(已复核)」实测
+// 6618 个源、78,593 条，前 100 个源一条都没有，页面就停在「共 78,593 条 · 已加载 0 条 ·
+// 已扫描 100/6618 个源」。总数统计那一轮本来就知道哪些源有数据，之前只把 CNT 加起来、
+// 名单扔了；现在拿它把空源剔掉，并立刻续扫。
+describe('SiteDataView · 空源跳过（全部源无条件）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  // 收窄发生在「总数算完 → 剔空源 → 再发一轮 loadMore」这条异步链上，
+  // 一次 flushPromises 只推得动其中一环，要连着推几轮才看得到最终态
+  async function settle(w: ReturnType<typeof mount>) {
+    for (let i = 0; i < 6; i += 1) await flushPromises()
+    await w.vm.$nextTick()
+  }
+
+  // 前 24 个源没数据，第 25 个才有；SOURCE_SCAN_BATCH=20，所以首轮必然空手而归
+  const many = Array.from({ length: 25 }, (_, i) => source(`s${i + 1}`))
+  const HIT = 's25'
+
+  function mockPage() {
+    return vi.spyOn(dataApi, 'rowQueryPaged').mockImplementation(async (q) => (q.sourceId === HIT
+      ? { total: 3, list: [row(HIT, 'd1'), row(HIT, 'd2'), row(HIT, 'd3')] }
+      : { total: 0, list: [] }))
+  }
+
+  it('总数算完后剔掉没数据的源并自动续扫，不再停在「已加载 0 条」', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue(many)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([{ SOURCE_ID: HIT, CNT: 3 }] as never)
+    const page = mockPage()
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    await settle(wrapper)
+
+    expect(wrapper.text()).toContain('已加载 3 条')
+    // 分母从 25 收到 21：已扫过的 20 个原样保留，未扫的 5 个里只剩真正有数据的那个
+    expect(wrapper.text()).toContain('已扫描 21/21 个源')
+    // 被剔掉的源一次都没查过
+    const queried = new Set(page.mock.calls.map((c) => c[0].sourceId))
+    expect(queried.has('s21')).toBe(false)
+    expect(queried.has(HIT)).toBe(true)
+  })
+
+  it('剔除只作用于未扫描的那一段，已激活的源原样保留', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue(many)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    // 后端说前 20 个里的 s1 也有数据（收窄结果偏宽是允许的），它已经扫过，不该被重扫
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([
+      { SOURCE_ID: 's1', CNT: 1 }, { SOURCE_ID: HIT, CNT: 3 },
+    ] as never)
+    const page = mockPage()
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    await settle(wrapper)
+
+    // s1 已在前 20 个里扫过，不会因为出现在命中名单里被重扫一遍
+    const s1Calls = page.mock.calls.filter((c) => c[0].sourceId === 's1')
+    expect(s1Calls).toHaveLength(1)
+    // 名单仍是「已扫的 20 个 + 未扫段里命中的 s25」= 21，不会因为 s1 又被算进去变成 22
+    expect(wrapper.text()).toContain('已扫描 21/21 个源')
+  })
+
+  it('总数算不出来时不动候选名单，行为与改动前一致', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue(many)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'summaryData').mockRejectedValue(new Error('boom'))
+    mockPage()
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+    await settle(wrapper)
+
+    expect(wrapper.text()).toContain('已扫描 20/25 个源')
+    expect(wrapper.find('[data-testid="site-data-total"]').exists()).toBe(false)
+  })
+})
+
 describe('SiteDataView · 按条件查源', () => {
   afterEach(() => vi.restoreAllMocks())
 
