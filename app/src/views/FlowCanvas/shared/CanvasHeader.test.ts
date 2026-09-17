@@ -83,6 +83,51 @@ describe('CanvasHeader · 参数源摘要（0721 会议 T5）', () => {
     expect(r.currentRoute.value.query.q).toBe('上市公司-配置')
   })
 
+  it('普通源：URL 是可点开的外链，新窗口打开且带 noopener', async () => {
+    const wrapper = await mountHeader()
+    const flow = useFlowStore()
+    flow.loadFromSource(
+      { sourceId: 'source-a', name: '普通源', url: 'https://www.tlstech.com.cn/news?type=1', configId: '', mainTable: 'T1', owner: 'admin', state: 'C' },
+      [],
+    )
+    await flushPromises()
+
+    const link = wrapper.get('[data-testid="source-url-link"]')
+    expect(link.attributes('href')).toBe('https://www.tlstech.com.cn/news?type=1')
+    expect(link.attributes('target')).toBe('_blank')
+    expect(link.attributes('rel')).toContain('noopener')
+  })
+
+  // 地址来自采集源配置，不是我们生成的——当外部输入看待，只放行 http/https
+  it('非 http(s) 的地址不给链接，仍按纯文本展示', async () => {
+    const wrapper = await mountHeader()
+    const flow = useFlowStore()
+    flow.loadFromSource(
+      { sourceId: 'source-a', name: '怪地址', url: 'javascript:alert(1)', configId: '', mainTable: 'T1', owner: 'admin', state: 'C' },
+      [],
+    )
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="source-url-link"]').exists()).toBe(false)
+    expect(wrapper.get('.ch-sub').text()).toBe('javascript:alert(1)')
+  })
+
+  it('参数源：摘要不是地址，不给链接', async () => {
+    const wrapper = await mountHeader()
+    const flow = useFlowStore()
+    flow.loadFromSource(
+      {
+        sourceId: 'source-a', name: '参数源测试', url: 'https://example.com/x', configId: '', mainTable: 'T1', owner: 'admin', state: 'C',
+        kind: 'param', baseUrl: 'http://base', urlTemplate: 'http://base-$PARAM$_913',
+        paramRefs: [{ paramId: '913', group: null }],
+      },
+      [],
+    )
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="source-url-link"]').exists()).toBe(false)
+  })
+
   it('源没有 flowId：不显示「所属流程」', async () => {
     const wrapper = await mountHeader()
     const flow = useFlowStore()

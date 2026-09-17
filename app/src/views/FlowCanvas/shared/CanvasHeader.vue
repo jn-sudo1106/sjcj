@@ -109,6 +109,27 @@ const primaryMeta = computed(() => {
 // 一起挤到换行甚至看不见（2026-09-17 走查）。拆开后 URL 单行省略，这两项始终可见。
 const lastSuccessText = computed(() => (src.value?.lastSuccessAt ? `上次成功 ${src.value.lastSuccessAt}` : ''))
 
+/**
+ * 摘要行里的 URL 可点开（2026-09-17 用户提）：看到地址就想去原站核对一下，
+ * 之前只能选中复制再贴到地址栏。
+ *
+ * 只认 http/https，其余（javascript:、data: 等）一律不给链接——这个地址来自采集源配置，
+ * 不是我们生成的，当成外部输入处理。参数源的摘要是「参数源 · 模板 · N 个占位符」，
+ * 本来就不是个能打开的地址，也走不到这里。
+ */
+const openableUrl = computed(() => {
+  const s = src.value
+  if (!s || s.kind === 'param') return ''
+  const raw = String(s.url ?? '').trim()
+  if (!raw) return ''
+  try {
+    const parsed = new URL(raw)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : ''
+  } catch {
+    return ''
+  }
+})
+
 // 所属流程：源上带 flowId（sourceDetail 已补，0903 §H8），流程名要单查一次 flow/detail；
 // 查不到就退化成 `#<id>`。切源时按 flowId 变化重查，回来慢了也不会写串。
 const owningFlowName = ref('')
@@ -243,7 +264,15 @@ async function onSwitchFlow(command: string) {
             :show-after="120"
             popper-class="rc-tip-longtext"
           >
-            <span class="ch-sub-url">{{ primaryMeta }}</span>
+            <a
+              v-if="openableUrl"
+              class="ch-sub-url ch-sub-link"
+              :href="openableUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="source-url-link"
+            >{{ primaryMeta }}</a>
+            <span v-else class="ch-sub-url">{{ primaryMeta }}</span>
           </el-tooltip>
           <span v-else class="ch-sub-url"></span>
           <template v-if="lastSuccessText">
@@ -347,6 +376,10 @@ async function onSwitchFlow(command: string) {
    这样再长的 URL 也挤不掉它们。 */
 .ch-sub { display: flex; align-items: center; min-width: 0; color: var(--rc-faint); font-size: 10px; margin-top: 1px; }
 .ch-sub-url { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 平时跟旁边的灰字一样低调，悬浮才显出是个链接——摘要行是背景信息，
+   不该为了一个链接把整行的视觉重量抬上去。 */
+.ch-sub-link { color: inherit; text-decoration: none; }
+.ch-sub-link:hover { color: var(--rc-primary); text-decoration: underline; }
 .ch-sub-fixed { flex: none; }
 .ch-sub-sep { flex: none; margin: 0 4px; }
 /* flex: none + nowrap：默认的 0 1 auto 会让它跟着被压缩，长 URL 下它会被挤到 52px 宽、
