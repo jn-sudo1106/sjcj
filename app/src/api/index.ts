@@ -658,6 +658,12 @@ export const sourceApi = {
         page: q.page ?? 1,
         limit: q.size ?? 20,
         sourceId: q.sourceId,
+        // 按网站圈定来源（后端 2026-09-16 加、2026-09-17 修好 SQL；早先版本少一个右括号，
+        // 任何值都回 500 语法错）。
+        // ⚠️ 取的是 `siteScopeId` 而**不是** `q.siteId`：后者是「当前在看哪个网站」的上下文、
+        // 源态也一直带着，直接透传会让源态查询多一层站点过滤，语义就变了。只有网站态看
+        // 「全部源」时调用方才会设 siteScopeId，见 types/source.ts 的说明。
+        siteId: q.siteScopeId,
         configId: q.configId,
         state: q.state,
         taskTopic: topic,

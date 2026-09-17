@@ -25,21 +25,22 @@ const siteId = computed(() => props.siteId || source.value?.siteId || '')
 const hasContext = computed(() => (props.siteWide ? !!siteId.value : !!source.value))
 
 /**
- * 网站级聚合查询的后端就绪开关（0915-05 / 后端需求 B15）。
+ * 网站态「全部源」的查询范围（0915-05 / 后端需求 B15）。
  *
- * 2026-09-16 生产实测：`task/topTaskPaged` **只认 sourceId，不认 siteId** ——
- * `?siteId=11` 与 `?siteId=4` 都返回 `count: 0`，`?sourceId=430016944` 返回 122 条。
- * `sourceApi.sourceTaskPaged` 的 httpParams（`api/index.ts:598`）里也从来没有 siteId 这一项。
+ * 走 `topTaskPaged` 的 `siteId`（后端 2026-09-16 加、2026-09-17 修好 SQL）：一个参数圈定
+ * 整站来源，分页和排序都在后端做，源再多也只发一个请求。
+ * 实测站 11（6496 源）→ 6526 条、335ms，抽查本页 200 条的 sourceId 全部属于该站。
  *
- * 在后端支持之前，网站态发这个请求必然得 0 条，页面会显示"没有匹配的任务记录"——
- * 那是**误导**（看着像这个网站没任务，实为接口不支持）。所以这里直接不发请求，给明确说明。
- *
- * **后端加上 siteId 后**：把本常量改成 `true`，并在 `api/index.ts:598` 的 httpParams 里补 `siteId`，
- * 页面即恢复正常查询；本文件其余逻辑无需改动。
+ * 同批后端还给了 `sourceIds`（逗号分隔源 ID），本页**有意不用**：它把源 ID 全拼进 URL，
+ * 实测 500 个（5.0KB）还行、800 个（8.0KB）400、1073 个（10.8KB）414，上限卡在 URL 长度上，
+ * 三个上市公司大站都超。`siteId` 修好后它在这里没有存在价值，留着只会多一条要维护的路径。
  */
-const SITE_WIDE_BACKEND_READY = false
-/** 网站态、且没有收窄到具体源时，聚合查询不可用。 */
-const siteWidePending = computed(() => !!props.siteWide && !SITE_WIDE_BACKEND_READY && !filters.sourceId)
+const siteScopeId = computed(() => (props.siteWide && !filters.sourceId ? siteId.value : ''))
+/**
+ * 网站态未收窄到单源、又没有 siteId 时不能发请求：不带任何来源过滤的 topTaskPaged
+ * 查的是**全平台**任务，不是本网站的。
+ */
+const siteWideBlocked = computed(() => !!props.siteWide && !filters.sourceId && !siteScopeId.value)
 const siteSources = ref<Source[]>([])
 const stepsBySource = ref<Record<string, Step[]>>({})
 const nodeRunsBySource = ref<Record<string, NodeRunStat[]>>({})
@@ -107,14 +108,15 @@ async function loadNodeMetadata() {
 }
 
 async function loadSiteSources() {
-  // 聚合查询用不了时连源列表也不必拉：大站这一条是 6496 行的响应，拉回来没有任何消费方。
-  if (siteWidePending.value) {
+  const currentSiteId = siteId.value
+  if (!currentSiteId) {
     siteSources.value = []
     return
   }
-  const currentSiteId = siteId.value
   try {
-    const result = currentSiteId ? await siteApi.siteSources(currentSiteId) : []
+    // 源列表只用来把表格里的 sourceId 显示成源名、以及填「源」筛选下拉，**不参与查询**
+    // （查询靠 siteId 一个参数）。所以它慢不阻塞任务表：拿不到就退化成显示源 ID。
+    const result = await siteApi.siteSources(currentSiteId)
     if (currentSiteId !== siteId.value) return
     siteSources.value = result
   } catch {
@@ -169,6 +171,8 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
   const query = {
     siteId: siteId.value,
     sourceId: filters.sourceId || undefined,
+    // 网站态「全部源」：只在这时传 siteId，交给后端圈定整站来源（见 api/index.ts 的说明）。
+    siteScopeId: siteScopeId.value || undefined,
     nodeId: filters.nodeId || undefined,
     configId: configIdForNode(filters.nodeId),
     state: (filters.state || undefined) as 'L' | 'C' | 'E' | undefined,
@@ -177,7 +181,7 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
     page: page.value,
     size: size.value,
   }
-  if (!query.siteId || siteWidePending.value) {
+  if (!query.siteId || siteWideBlocked.value) {
     rows.value = []
     total.value = 0
     stopPoll()
@@ -218,7 +222,7 @@ watch(filterSteps, () => {
   }
 })
 
-watch(() => [filters.sourceId, filters.nodeId, filters.state, filters.queue] as const, ([nextSourceId], previous) => {
+watch(() => [filters.sourceId, filters.nodeId, filters.state, filters.queue, siteScopeId.value] as const, ([nextSourceId], previous) => {
   page.value = 1
   void Promise.all([nextSourceId !== previous?.[0] ? loadNodeMetadata() : Promise.resolve(), loadTasks()])
 }, { immediate: true })
@@ -286,14 +290,6 @@ const nextStepHints = computed(() => {
     <CanvasHeader v-if="!siteWide" />
     <div class="tv-body">
       <div v-if="!hasContext" class="tv-empty-row">{{ siteWide ? '未指定网站，无法查看任务。' : '任务视图仅在源详情下可用。' }}</div>
-      <div v-else-if="siteWidePending" class="tv-pending" data-testid="task-site-wide-pending">
-        <p class="tv-pending-main">按网站聚合查看任务，后端接口尚未支持。</p>
-        <p class="tv-pending-sub">
-          任务查询接口目前只能按<b>单个源</b>过滤（实测传网站 ID 返回 0 条），
-          所以这里暂时列不出本网站全部源的任务。后端支持后本页会自动恢复。
-        </p>
-        <p class="tv-pending-sub">临时办法：从左侧源列表点进具体的源，在该源的「任务视图」里查看。</p>
-      </div>
       <template v-else>
         <div v-if="!siteWide" class="tv-process-rail" data-testid="task-process-rail">
           <ProcessNodeRail :model-value="filters.nodeId" :layout="processLayout" @update:model-value="onSelectNode" />
@@ -394,9 +390,6 @@ const nextStepHints = computed(() => {
 .tv-input { height: 28px; min-width: 112px; padding: 0 10px; color: var(--rc-text); border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; font-size: 12px; }
 .tv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; outline: none; }
 .tv-queue-input { min-width: 130px; }
-.tv-pending { padding: 28px 24px; border: 1px dashed var(--rc-border); border-radius: 8px; background: var(--rc-primary-bg, #f8fafc); }
-.tv-pending-main { margin: 0 0 8px; color: var(--rc-text-2); font-size: 13px; font-weight: 600; }
-.tv-pending-sub { margin: 0 0 6px; color: var(--rc-faint); font-size: 12px; line-height: 1.7; }
 .tv-queue-clickable { cursor: pointer; color: var(--rc-primary); }
 .tv-queue-clickable:hover { text-decoration: underline; }
 .tv-filters .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }

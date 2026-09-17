@@ -902,4 +902,38 @@ describe('旧平台新建源 HTTP 契约', () => {
     })
   })
 
+  // 网站态「全部源」走后端的 siteId（2026-09-16 加、09-17 修好 SQL）。它取自 siteScopeId
+  // 而不是 q.siteId：后者是「当前在看哪个网站」的上下文、源态也一直带着，直接透传会给源态
+  // 查询多加一层站点过滤。上面那条用例的 `not.toContain('siteId=')` 守的正是这一侧。
+  it('sourceTaskPaged 只把 siteScopeId 作为 siteId 发出去，上下文里的 siteId 不透传', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, data: { total: 0, list: [] } }))
+    const { sourceApi } = await import('./index')
+
+    await sourceApi.sourceTaskPaged({
+      siteId: '13',
+      siteScopeId: '13',
+      page: 1,
+      size: 20,
+    })
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const query = new URL(String(url), 'http://local.test').searchParams
+    expect(query.get('siteId')).toBe('13')
+    // 没收窄到单源时不该带空的 sourceId
+    expect(query.has('sourceId')).toBe(false)
+  })
+
+  it('sourceTaskPaged 收窄到单源时不发 siteId：源态只按 sourceId 查，不叠站点过滤', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, data: { total: 0, list: [] } }))
+    const { sourceApi } = await import('./index')
+
+    // 源态：上下文 siteId 有值，但调用方不会设 siteScopeId
+    await sourceApi.sourceTaskPaged({ siteId: '13', sourceId: '430016944', page: 1, size: 20 })
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const query = new URL(String(url), 'http://local.test').searchParams
+    expect(query.get('sourceId')).toBe('430016944')
+    expect(query.has('siteId')).toBe(false)
+  })
+
 })

@@ -113,10 +113,9 @@ describe('TaskView', () => {
     wrapper.unmount()
   })
 
-  // 0915-05 / B15：`topTaskPaged` 只认 sourceId，网站态聚合查询后端未支持，页面暂时展示说明
-  // 而不是一张注定为空的表。**后端加上 siteId 后**把 TaskView 的 SITE_WIDE_BACKEND_READY 改 true，
-  // 本用例应改回断言表格含「所属源」列（原断言保留在下方注释里）。
-  it('网站详情页（site-wide）：后端未支持聚合查询时给明确说明，不展示流程节点条', async () => {
+  // 0915-05 / B15：网站态靠 topTaskPaged 的 siteId（后端 2026-09-16 加、09-17 修好 SQL）
+  // 一个参数圈定整站来源，源再多也只发一个请求。
+  it('网站详情页（site-wide）：按 siteId 聚合查询，不展示流程节点条', async () => {
     setActivePinia(createPinia())
     await router.push('/canvas')
     const source = mockSourceDetail({ sourceId: '391007768' })!
@@ -129,19 +128,14 @@ describe('TaskView', () => {
     await new Promise((resolve) => setTimeout(resolve, 150))
     await flushPromises()
 
+    // 网站态没有"当前源"，流程节点条不适用；但表格正常出
     expect(wrapper.find('[data-testid="task-process-rail"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="task-site-wide-pending"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('后端接口尚未支持')
-    // B15 就绪后恢复这两条：
-    //   expect(wrapper.find('[data-testid="task-node-filter"]').exists()).toBe(true)
-    //   expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('所属源')
     wrapper.unmount()
   })
 
   // 0915-05：网站详情页挂载时**没有 flow.sourceCtx**，siteId 只能由 props 给（旧实现从 sourceCtx
-  // 取会拿到空串）。而在后端支持 siteId 之前（B15），这里一个请求都不该发——发了必然 0 条，
-  // 页面会显示成"这个网站没有任务"，是误导。
-  it('网站态后端未就绪时不发任何查询请求，并给出说明', async () => {
+  // 取会拿到空串，被 loadTasks 的守卫短路成空列表）。
+  it('网站态用 props.siteId 作为查询范围，且不逐源拉节点元数据', async () => {
     setActivePinia(createPinia())
     await router.push('/canvas')
     // 有意不调 loadFromSource：网站汇总态就是没有当前源
@@ -150,7 +144,7 @@ describe('TaskView', () => {
       total: 1,
       list: [{ taskId: 't9', topic: 'queue_a', state: 'C', typeName: '下载', taskName: '任务9', sourceId: 's1', updatedAt: '2026-09-16 10:00' }] as TaskInst[],
     })
-    const sources = vi.spyOn(siteApi, 'siteSources').mockResolvedValue([
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([
       { sourceId: 's1', name: '源一' }, { sourceId: 's2', name: '源二' },
     ] as never)
     const steps = vi.spyOn(sourceApi, 'sourceSteps')
@@ -162,14 +156,12 @@ describe('TaskView', () => {
     await new Promise((resolve) => setTimeout(resolve, 150))
     await flushPromises()
 
-    // 不发注定为空的任务查询，也不拉大站那份 6496 行的源列表
-    expect(paged).not.toHaveBeenCalled()
-    expect(sources).not.toHaveBeenCalled()
+    // 查询范围走 siteScopeId；sourceId 留空表示「本站全部源」
+    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ siteScopeId: 'site-zfb', sourceId: undefined }))
     // 防回归：不许逐源拉 steps/nodeRuns（6496 源的网站会打出上万请求）
     expect(steps).not.toHaveBeenCalled()
-    // 不能落在"仅在源详情下可用"的空态上——siteId 是有的，缺的是后端能力
+    // 不能落在"仅在源详情下可用"的空态上
     expect(wrapper.find('.tv-empty-row').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="task-site-wide-pending"]').text()).toContain('后端接口尚未支持')
     wrapper.unmount()
   })
 

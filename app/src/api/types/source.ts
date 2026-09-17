@@ -575,6 +575,14 @@ export interface SourceLog {
 export interface SourceTaskQuery extends PageQuery {
   siteId: string
   sourceId?: string
+  /**
+   * 按网站圈定来源（后端 2026-09-16 加、2026-09-17 修好 SQL）——**作为筛选条件的站点**，
+   * 跟上面表示「当前上下文」的 `siteId` 是两回事，故意分成两个字段：
+   * `siteId` 源态也一直带着，直接透传会把源态查询的语义也改掉。只有网站态看「全部源」时才设它。
+   * 后端实现是 `SOURCE_ID IN (SELECT SOURCE_ID FROM cs_source WHERE SITE_ID IN (?))`，
+   * 实测站 11（6496 源）→ 6526 条、335ms。
+   */
+  siteScopeId?: string
   nodeId?: string
   configId?: string
   state?: RunState
