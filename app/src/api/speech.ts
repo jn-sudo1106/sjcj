@@ -153,6 +153,13 @@ export async function transcribeAudio(
     const record = asRecord(payload)
     if (!res.ok) {
       const message = String(record.error ?? '').trim()
+      // 413 有两个来源：后端自己的（JSON + 中文说明，见上）与**网关的**。
+      // 网关那份是 Nginx 默认 1MB 上限回的错误页（HTML，解析不出 error），
+      // 不给可操作提示的话用户只看到一句 413 无从下手（2026-09-17 部署后实测踩到）。
+      if (res.status === 413 && !message) {
+        throw new Error('上传被网关拒绝（HTTP 413）：请求体超过服务器上传上限，'
+          + '请确认 Nginx 的 client_max_body_size 已放宽（本接口后端允许 50MB）')
+      }
       throw new Error(message || `语音转写服务返回 HTTP ${res.status}`)
     }
     const text = record.text == null ? '' : String(record.text)

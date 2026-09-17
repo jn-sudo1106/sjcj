@@ -81,6 +81,14 @@ describe('语音转文字调用', () => {
     await expect(transcribeAudio(audioFile())).rejects.toThrow('语音转写服务返回 HTTP 502')
   })
 
+  // 2026-09-17 部署实测：网关（Nginx 默认 1MB）超限时回的是 HTML 错误页，不是后端那份 JSON。
+  it('网关 413（HTML 错误页）提示到 Nginx 配置上', async () => {
+    mockFetch(() => new Response('<html><title>413 Request Entity Too Large</title></html>', {
+      status: 413, headers: { 'Content-Type': 'text/html' },
+    }))
+    await expect(transcribeAudio(audioFile())).rejects.toThrow('client_max_body_size')
+  })
+
   it('返回里没有文本时给出可读提示，不静默成功', async () => {
     mockFetch(() => json({ text: '', duration: 3, traceId: 't' }))
     await expect(transcribeAudio(audioFile())).rejects.toThrow('未识别到文字')

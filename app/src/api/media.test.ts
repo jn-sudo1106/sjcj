@@ -118,6 +118,22 @@ describe('视频提取音频调用', () => {
     await expect(extractAudio(videoFile(), { upload: true })).rejects.toThrow('视频提取音频服务返回 HTTP 500')
   })
 
+  // 2026-09-17 部署实测：Nginx 默认 client_max_body_size 1MB，超限时由**网关**回 413（HTML 错误页），
+  // 不是后端那份 JSON。要给出可操作的提示，不能只丢一句 413。
+  it('网关 413（HTML 错误页）提示到 Nginx 配置上', async () => {
+    mockFetch(() => new Response('<html><head><title>413 Request Entity Too Large</title></head></html>', {
+      status: 413, headers: { 'Content-Type': 'text/html' },
+    }))
+    await expect(extractAudio(videoFile())).rejects.toThrow('client_max_body_size')
+  })
+
+  it('后端自己的 413（JSON 中文说明）仍然透出后端原文', async () => {
+    mockFetch(() => new Response(JSON.stringify({ error: '视频大小 300MB 超过上限 200MB（media.extract.max-file-size）' }), {
+      status: 413, headers: { 'Content-Type': 'application/json' },
+    }))
+    await expect(extractAudio(videoFile())).rejects.toThrow('超过上限 200MB')
+  })
+
   it('返回空音频时给可读提示，不静默成功', async () => {
     mockFetch(() => new Response(new Uint8Array(0), { status: 200, headers: { 'Content-Type': 'audio/mpeg' } }))
     await expect(extractAudio(videoFile())).rejects.toThrow('空音频')

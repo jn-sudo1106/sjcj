@@ -216,6 +216,13 @@ export async function extractAudio(
       // 那种 error 字段是 HTTP 状态短语、不是给人看的，这时退回带状态码的通用文案。
       const payload = await res.json().catch(() => null)
       const raw = String(asRecord(payload).error ?? '').trim()
+      // 413 有两个来源：后端自己的（JSON + 中文说明，见上面）与**网关的**。
+      // 网关那份是 Nginx 默认 1MB 上限回的错误页（HTML，解析不出 error），
+      // 不给出可操作提示的话用户只看到一句 413 无从下手（2026-09-17 部署后实测踩到）。
+      if (res.status === 413 && !raw) {
+        throw new Error('上传被网关拒绝（HTTP 413）：请求体超过服务器上传上限，'
+          + '请确认 Nginx 的 client_max_body_size 已放宽（本接口后端允许 200MB）')
+      }
       const message = raw && raw !== res.statusText ? raw : `视频提取音频服务返回 HTTP ${res.status}`
       throw new Error(message)
     }
