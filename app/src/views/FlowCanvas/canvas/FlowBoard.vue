@@ -251,7 +251,12 @@ function missingFor(cfg: NodeConfig): string[] {
     if (!cfg.ruleCfg?.script?.trim()) miss.push('规则脚本')
     return miss
   }
-  if (isDataNode(cfg) && !nodeOutputTable(cfg)) miss.push('输出表')
+  // 用 effectiveOutputTable 而不是 nodeOutputTable（2026-09-18）：
+  // 非采集节点没显式设输出表时**默认继承上游**，`tableChip` 就是这么显示的
+  // （卡片上「⊞ 通用新闻表」，title 还写着"未显式设置，默认继承上游"）。
+  // 判定这边只认显式值的话，就出现卡片说有表、状态说缺表的自相矛盾——
+  // 这正是本文件 221 行记的那个 bug，当时只修了采集节点那半边。
+  if (isDataNode(cfg) && !effectiveOutputTable(cfg)) miss.push('输出表')
   return miss
 }
 
@@ -278,14 +283,20 @@ function footFor(cfg: NodeConfig) {
     ? !!(collectUrlOf(cfg) && hasLoginConfig(cfg) && (collectorCapabilityOf(cfg)?.kind === 'login' || cfg.collectCfg.outputTable))
     : isRuleNode(cfg)
       ? !!(cfg.configId && cfg.ruleCfg?.script?.trim())
-    : isDataNode(cfg) && !!nodeOutputTable(cfg)
+    // 与 tableChip 同口径：非采集节点的输出表可以继承上游，见 missingFor 的说明
+    : isDataNode(cfg) && !!effectiveOutputTable(cfg)
   const left = cfg.disabled
     ? '已停止'
     : cfg.planned
       ? '规划中'
       : cfg.collect || isDataNode(cfg)
         ? configured
-          ? cfg.status || '运行'
+          // `cfg.status` 是**运行态**（"运行中"这类）。但节点种子里给的初始值就写着
+          // '待配置'（flowModel.seeds 里几乎每个模板都有），配好之后没人去清它——
+          // 于是 configured 明明是 true，这里仍旧原样吐出"待配置"，而且 missingFor
+          // 查不出缺什么，卡片上只剩一个没有任何解释的「待配置」（2026-09-18 用户报）。
+          // 占位值不当运行态用。
+          ? (cfg.status && cfg.status !== '待配置' ? cfg.status : '运行')
           : '待配置'
         : '待配置'
   const right = cfg.disabled

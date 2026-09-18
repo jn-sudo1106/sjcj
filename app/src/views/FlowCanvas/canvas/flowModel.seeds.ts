@@ -1254,7 +1254,22 @@ export function applyStepDetails(
       || ['data-validation', 'validation'].includes(String(step.nodeType ?? '').trim().toLowerCase())
       || /数据校验/.test(step.name)
     const isDataValidation = current.template === 'data-validation'
-    if ((shouldBeLogin && !isLogin) || (shouldBeDataValidation && !isDataValidation)) {
+    /**
+     * AI / 媒体处理类（700 视频转音频 / 710 语音转文字 / 720 文章摘要 / 730 文章打标签）
+     * 同样要整节点重建，不能只补字段（2026-09-18）。
+     *
+     * 首屏是按**位置**猜模板画出来的，第二个节点通常猜成采集类；configDetail 回来后
+     * `applyStepMetadata` 只把 `cfg.template` 改成 'article-summary'，**`collectCfg` 还挂着**，
+     * 于是节点一半是摘要、一半是采集：卡片显示「90 网页抓取 / 源配置」，
+     * 底部状态也走采集分支去要 URL 和输出表。实测源 430022794 的第二个节点就是这样。
+     */
+    const shouldBeProcessing = ['700', '710', '720', '730'].includes(String(step.configType ?? ''))
+    const isProcessing = !current.collectCfg
+    if (
+      (shouldBeLogin && !isLogin)
+      || (shouldBeDataValidation && !isDataValidation)
+      || (shouldBeProcessing && !isProcessing)
+    ) {
       configs[step.stepId] = buildNodeForStep(source, step, i)
       rebuilt.push(step.stepId)
       return

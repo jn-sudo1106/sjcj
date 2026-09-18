@@ -380,6 +380,12 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
       ...(detail.runPolicy ? { runPolicy: detail.runPolicy } : {}),
       ...(detail.isLoginConfig !== undefined ? { isLoginConfig: detail.isLoginConfig } : {}),
       ...(detail.multiMode !== undefined ? { multiMode: detail.multiMode } : {}),
+      // ⚠️ configType 一直被取出来却**没有合并回 step**（2026-09-18 修）。
+      // 后果是所有靠它做的判定全部落空：数据校验(620/800)、数据监控、以及 AI/媒体处理类
+      // (700/710/720/730) 回读后认不出自己是什么，只能靠 nodeType 和标题正则兜底。
+      // 实测源 430022794 的「文章生成摘要」节点因此一直顶着采集节点的壳子——
+      // 卡片显示「90 网页抓取 / 源配置」，状态也走采集分支去要 URL 和输出表。
+      ...(detail.configType ? { configType: detail.configType } : {}),
       ...(detail.paramBindings ? { paramBindings: detail.paramBindings } : {}),
     }
   })
