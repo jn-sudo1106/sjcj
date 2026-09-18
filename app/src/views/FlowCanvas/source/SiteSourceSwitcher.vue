@@ -854,12 +854,20 @@ async function submitByIds() {
     await load(true)
     ui.notifySourceListChanged()
 
-    let msg = submitRes.message || `已导入 ${total} 个源到「${site.value?.name ?? '当前网站'}」`
+    // 成功文案用自己的，不透传后端那句「批量更改网站成功」——这里的语义是"把源导进网站"，
+    // 不是"更改网站"，而且用户更关心导了几个。失败时才用后端原话，它有诊断价值。
+    let msg = `已导入 ${total} 个源到「${site.value?.name ?? '当前网站'}」`
     if (missing.length) msg += `；${missing.length} 个源 ID 未找到：${missing.join('、')}`
-    // 成功也常驻（2026-09-18）：默认 4.5s 自动关，用户一转头就错过了，
-    // 回头只看到没刷新的列表，以为"导入根本没提示、没成功"。
-    if (submitRes.ok) ElNotification.success({ title: '批量导入完成', message: msg, duration: 0 })
-    else ElNotification.warning({ title: '批量导入部分失败', message: msg, duration: 0 })
+    if (submitRes.ok) {
+      // **成功的自动关**（2026-09-18 用户提：「这类提醒自动关闭，不需要手动点击」）。
+      // 前一版为了防"回头没看见"改成了常驻，结果导几次就堆一摞要手动点掉的卡片。
+      // 那个顾虑现在不成立了：同一批还修了「导入后主区列表不刷新」，
+      // 结果直接反映在列表上，不必靠通知留着。
+      // 失败仍然常驻——那是需要用户接着处理的事，不能自己溜走。
+      ElNotification.success({ title: '批量导入完成', message: msg, duration: 5000 })
+    } else {
+      ElNotification.warning({ title: '批量导入部分失败', message: submitRes.message || msg, duration: 0 })
+    }
   } catch (e) {
     // 请求被网关拒（如 URL 过长的 431/414）或后端 5xx 时，changeSite/sourcePaged 会抛出，
     // 之前没有 catch，异常静默冒泡，界面看着像"点了没反应"。

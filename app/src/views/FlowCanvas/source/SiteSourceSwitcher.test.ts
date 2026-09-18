@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElNotification, ElMessage, ElMessageBox } from 'element-plus'
 import SiteSourceSwitcher from './SiteSourceSwitcher.vue'
 import ParamEditorDrawer from '@/components/param/ParamEditorDrawer.vue'
 import { flowCenterApi, siteApi, sourceApi, paramApi, type Source, type Param } from '@/api'
@@ -855,5 +855,49 @@ describe('SiteSourceSwitcher · 按条件查源的命中态', () => {
     expect(wrapper.find('[data-testid="sidebar-backtrace-bar"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="sidebar-hit-count"]').exists()).toBe(false)
     expect(wrapper.findAll('.ssw-row-name').map((n) => n.text())).toEqual(['全部', '源一', '源二', '源三'])
+  })
+})
+
+// 2026-09-18 用户提：「批量导入完，这类提醒自动关闭，不需要手动点击」。
+// 前一版为了防"回头没看见"把成功通知改成了常驻（duration:0），结果导几次就堆一摞卡片。
+describe('SiteSourceSwitcher · 批量导入的结果通知', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  async function importByIds(ack: { ok: boolean; message?: string }) {
+    const wrapper = await createWrapper()
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 1,
+      list: [{ sourceId: 'src-1', name: '源一', url: '', configId: '', mainTable: '', owner: 'admin', state: 'C', siteId: 'site-a' }],
+    })
+    vi.spyOn(sourceApi, 'changeSite').mockResolvedValue(ack)
+    const notify = { success: vi.spyOn(ElNotification, 'success').mockImplementation(() => ({ close: () => {} }) as never),
+      warning: vi.spyOn(ElNotification, 'warning').mockImplementation(() => ({ close: () => {} }) as never) }
+    // 进行中那条常驻通知：构造出来就行，close 是空实现
+    vi.spyOn(ElNotification, 'info' as never).mockImplementation(() => ({ close: () => {} }) as never)
+
+    await wrapper.get('[data-testid="open-batch"]').trigger('click')
+    await wrapper.get('[data-testid="batch-tab-existing"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="id-import-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="id-import-textarea"]').setValue('src-1')
+    await wrapper.get('[data-testid="id-import-submit"]').trigger('click')
+    await flushPromises()
+    return notify
+  }
+
+  it('成功的通知自己会关（有 duration），不用手动点', async () => {
+    const notify = await importByIds({ ok: true, message: '批量更改网站成功' })
+    const arg = notify.success.mock.calls[0]?.[0] as { duration?: number; message?: string }
+    expect(arg?.duration).toBeGreaterThan(0)
+    // 文案用自己的，不透传后端那句「批量更改网站成功」——这里的语义是"把源导进网站"
+    expect(arg?.message).toContain('已导入 1 个源')
+  })
+
+  it('部分失败的通知仍然常驻——那是要接着处理的事', async () => {
+    const notify = await importByIds({ ok: false, message: '成功 0 个、失败 1 个' })
+    const arg = notify.warning.mock.calls[0]?.[0] as { duration?: number; message?: string }
+    expect(arg?.duration).toBe(0)
+    // 失败时用后端原话，它有诊断价值
+    expect(arg?.message).toContain('失败 1 个')
   })
 })
