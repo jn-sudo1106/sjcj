@@ -72,6 +72,7 @@ const TEMPLATE_CONFIG_TYPE: Record<string, number> = {
   'video-audio': 700,
   'audio-text': 710,
   'article-summary': 720,
+  'article-tag': 730,
   // 800 现在是「翻译助手」（2026-09-17 核对 cfg_source_type）；09-17 前本前端曾把 800 写成数据校验，
   // 那个编号已经改成 620，所以这里不会与校验撞车。
   translate: 800,

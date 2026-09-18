@@ -594,6 +594,11 @@ export function isArticleSummaryNode(cfg?: NodeConfig): boolean {
   return hasNodeTypeCode(cfg, 'article-summary', '720')
 }
 
+/** 文章打标签节点（编排配置 Tab 用它决定要不要给「文本标注」区）。 */
+export function isArticleTagNode(cfg?: NodeConfig): boolean {
+  return hasNodeTypeCode(cfg, 'article-tag', '730')
+}
+
 /** 翻译助手节点（编排配置 Tab 用它决定要不要给「上传文件翻译」区）。 */
 export function isTranslateNode(cfg?: NodeConfig): boolean {
   return hasNodeTypeCode(cfg, 'translate', '800')
@@ -602,13 +607,13 @@ export function isTranslateNode(cfg?: NodeConfig): boolean {
 /**
  * 「不给脚本编辑入口」的节点类型（2026-09-17 产品口径，用户逐个点掉后收敛成这张清单）。
  *
- * 这几类不在编排配置里生成脚本：OCR 识别、视频转音频、语音转文字、文章摘要、翻译助手都是现成的
+ * 这几类不在编排配置里生成脚本：OCR 识别、视频转音频、语音转文字、文章摘要、文章打标签、翻译助手都是现成的
  * 媒体 / 文本处理能力，既不需要写 Python 规则脚本，也没有可编辑的抓取配置 XML——
  * 工作区（描述 / 系统提示词 / 脚本正文 / 生成 / 保存）整个入口收掉，只留本类型自己的字段。
  * 想把某类加进来 / 拿出去，只改这两张表即可。
  */
-const SCRIPTLESS_TEMPLATES = new Set(['ocr', 'video-audio', 'audio-text', 'article-summary', 'translate'])
-const SCRIPTLESS_TYPE_CODES = ['150', '700', '710', '720', '800']
+const SCRIPTLESS_TEMPLATES = new Set(['ocr', 'video-audio', 'audio-text', 'article-summary', 'article-tag', 'translate'])
+const SCRIPTLESS_TYPE_CODES = ['150', '700', '710', '720', '730', '800']
 
 export function isScriptlessNode(cfg?: NodeConfig): boolean {
   if (!cfg) return false

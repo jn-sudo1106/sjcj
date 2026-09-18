@@ -551,6 +551,14 @@ const NODE_CONFIG_SEEDS = {
     params: [['language', 'enum', 'zh,en'], ['min_confidence', 'number', '0.8']],
     output: [['asr_text', 'longtext', '转写文本'], ['segments', 'json', '分段与时间戳']],
   },
+  'article-tag': {
+    title: '文章打标签', sub: '[730] 文章打标签 · 舆情多维标注', status: '待配置', planned: false,
+    base: [['文本来源', '← 上游节点产物 / 手动上传'], ['标签体系', '主题 / 情感 / 风险 / 意图等 12 个维度'], ['输出策略', '结构化 JSON'], ['失败策略', '记录并跳过']],
+    fields: [['主题标签', '不超过 3 个，按相关度排序'], ['风险等级', '与风险标签一致'], ['置信度', '低于 0.6 表示无把握'], ['能力状态', '通用标注节点']],
+    inmap: [['content', '← 上游节点.content', '待标注文本']],
+    params: [['label_schema', 'text', '提示词内置标签体系']],
+    output: [['labels', 'json', '各维度标签'], ['summary', 'string', '一句话概括'], ['risk_level', 'string', '风险等级']],
+  },
   translate: {
     title: '翻译助手', sub: '[800] 翻译助手 · 文本翻译', status: '待配置', planned: false,
     base: [['文本来源', '← 上游节点产物 / 手动上传'], ['目标语言', '中文简体'], ['输出策略', '仅输出译文'], ['失败策略', '记录并跳过']],
@@ -702,7 +710,7 @@ export const TEMPLATE_TO_NODE: Record<string, string> = {
   // 2026-09-17 补齐后端字典里其余类型：抓取类各给一份采集种子，媒体/摘要类给处理型种子
   excel: 'excel-collect', doc: 'doc-collect', pdf: 'pdf-collect', 'mail-collect': 'mail-collect',
   news: 'news-collect', 'video-audio': 'video-audio', 'audio-text': 'audio-text', 'article-summary': 'article-summary',
-  translate: 'translate',
+  translate: 'translate', 'article-tag': 'article-tag',
 }
 
 /**
@@ -748,6 +756,7 @@ export const SNATCH_TYPES = [
   '[700] - 视频提取音频',
   '[710] - 音频提取文字',
   '[720] - 文章生成摘要',
+  '[730] - 文章打标签',
   '[800] - 翻译助手',
 ]
 
@@ -860,6 +869,7 @@ export const TEMPLATE_TO_SNATCH: Record<string, string> = {
   'audio-text': '[710] - 音频提取文字',
   'article-summary': '[720] - 文章生成摘要',
   translate: '[800] - 翻译助手',
+  'article-tag': '[730] - 文章打标签',
 }
 
 // 左侧节点库分组
@@ -899,6 +909,7 @@ export const LIB_GROUPS: LibGroup[] = [
       { template: 'video-audio', code: '700', name: '视频提取音频', desc: '视频抽音轨，输出音频文件', pill: 'p1' as Pill },
       { template: 'audio-text', code: '710', name: '音频提取文字', desc: '语音转写为文本，保留分段', pill: 'p1' as Pill },
       { template: 'article-summary', code: '720', name: '文章生成摘要', desc: '长文压缩为摘要与关键词', pill: 'p1' as Pill },
+      { template: 'article-tag', code: '730', name: '文章打标签', desc: '舆情多维标注：主题 / 情感 / 风险 / 意图等', pill: 'p1' as Pill },
       { template: 'translate', code: '800', name: '翻译助手', desc: '把文本/文件内容翻译成目标语言', pill: 'p1' as Pill },
     ]
   },
@@ -1022,6 +1033,7 @@ function templateKeyForStep(step: Step, index: number): string {
     '700': 'video-audio',
     '710': 'audio-text',
     '720': 'article-summary',
+    '730': 'article-tag',
     '800': 'translate',
   }
   const routed = step.configType ? byConfigType[step.configType] : undefined
@@ -1197,6 +1209,14 @@ function buildNodeForStep(source: Source, step: Step, index: number): NodeConfig
   if (looksMonitor) cfg.template = 'monitor'
   else if (looksValidation) cfg.template = 'data-validation'
   else if (step.configType === '800') cfg.template = 'translate'
+  // AI / 处理类节点（700/710/720/730）回读时也把 template 显式写上。
+  // 这几种此前只有插入那一刻才写 template，回读后全靠 sub 里的类型编号兜底识别
+  //（iconFor / isXxxNode 都读 sub），显式写下来更稳，也让 configTypeFrom 的模板表查得到
+  //——否则「回读 → 保存」这一轮 configType 只能靠 base 原值保留。
+  else if (step.configType === '730') cfg.template = 'article-tag'
+  else if (step.configType === '720') cfg.template = 'article-summary'
+  else if (step.configType === '710') cfg.template = 'audio-text'
+  else if (step.configType === '700') cfg.template = 'video-audio'
   if (cfg.collectCfg) {
     // 源级字段（源名称/分类/标签/登录/选用配置等）不再复制到节点：随 loadFromSource 整体挂到 flow.sourceCfg（0706 优化·源/节点配置分层）
     cfg.collectCfg.url = source.url

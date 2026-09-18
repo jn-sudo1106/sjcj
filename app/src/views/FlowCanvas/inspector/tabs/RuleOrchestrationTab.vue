@@ -18,7 +18,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Document, Headset, Picture, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { recognizeImage, readImageAsBase64, ocrTextOf, type OcrBlock } from '@/api/ocr'
-import { isArticleSummaryNode, isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isRuleNode, isScriptlessNode, isTranslateNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { isArticleSummaryNode, isArticleTagNode, isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isRuleNode, isScriptlessNode, isTranslateNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { parseArticleTags, riskLevelTone, type ArticleTagResult } from '@/utils/flow/articleTags'
 import { TRANSLATE_LANGUAGE_CODES, TRANSLATE_MAX_QUERY_BYTES, translateText, utf8ByteLength } from '@/api/translate'
 import { SPEECH_AUDIO_EXTENSIONS, SPEECH_LANGUAGE_OPTIONS, SPEECH_MAX_DURATION_SECONDS, SPEECH_MAX_FILE_SIZE, isSupportedAudioFile, readAudioDuration, transcribeAudio, type SpeechTranscriptionResult } from '@/api/speech'
 import { MEDIA_AUDIO_FORMATS, MEDIA_BIT_RATE_OPTIONS, MEDIA_CHANNEL_OPTIONS, MEDIA_MAX_FILE_SIZE, MEDIA_SAMPLING_RATE_OPTIONS, MEDIA_VIDEO_EXTENSIONS, extractAudio, isSupportedVideoFile, readVideoDuration, type MediaExtractionResult } from '@/api/media'
@@ -616,6 +617,135 @@ async function callDataProcessForText(input: {
   return streamed
 }
 
+// ---- 文章打标签（0918 第一版，仅文章打标签节点）----
+// 上传/粘贴文本 → 调 /api/answer/data-process（与摘要同一条通路：系统提示词整段由前端从
+// cfg_llm_node_prompt 取，node_type_name='文章打标签'、category='rule'）→ 解析模型输出的 JSON 标签。
+const isArticleTag = computed(() => isArticleTagNode(cfg.value))
+const tagPromptMissing = ref(false)
+const tagPromptOpen = ref(false)
+
+const tagText = ref('')
+const tagFileInput = ref<HTMLInputElement | null>(null)
+const tagFileName = ref('')
+const tagFileError = ref('')
+const tagRunning = ref(false)
+const tagError = ref('')
+/** 模型原始输出（也用于"解析不出 JSON 时退回展示"） */
+const tagRawOutput = ref('')
+const tagResult = ref<ArticleTagResult | null>(null)
+const tagRawOpen = ref(false)
+const tagAbort = ref<AbortController | null>(null)
+
+const tagCharCount = computed(() => tagText.value.trim().length)
+const tagPromptReady = computed(() => !tagPromptMissing.value && !!orchCfg.value.systemPrompt?.trim())
+const canTag = computed(() => (
+  !tagRunning.value && tagCharCount.value > 0 && tagPromptReady.value
+  && !!(orchCfg.value.modelProviderCode ?? '').trim() && !!(orchCfg.value.modelCode ?? '').trim()
+))
+
+function clearArticleTag() {
+  tagText.value = ''
+  tagFileName.value = ''
+  tagFileError.value = ''
+  tagError.value = ''
+  tagRawOutput.value = ''
+  tagResult.value = null
+  tagRawOpen.value = false
+  if (tagFileInput.value) tagFileInput.value.value = ''
+}
+
+function onTagFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  tagFileError.value = ''
+  if (!file) return
+  if (!isTextFile(file)) {
+    input.value = ''
+    tagFileError.value = `只支持文本文件（${ARTICLE_TEXT_EXTENSIONS.join(' / ')}）`
+    return
+  }
+  const reader = new FileReader()
+  reader.onerror = () => { tagFileError.value = '文件读取失败' }
+  reader.onload = () => {
+    const text = typeof reader.result === 'string' ? reader.result : ''
+    if (text.trim().length > ARTICLE_MAX_CHARS) {
+      tagFileError.value = `正文超过 ${ARTICLE_MAX_CHARS} 字，请先精简或分段`
+      return
+    }
+    tagText.value = text
+    tagFileName.value = file.name
+    tagError.value = ''
+    tagResult.value = null
+    tagRawOutput.value = ''
+  }
+  reader.readAsText(file)
+}
+
+function onTagTextInput(e: Event) {
+  tagText.value = (e.target as HTMLTextAreaElement).value
+  tagFileError.value = ''
+  if (tagText.value.trim().length > ARTICLE_MAX_CHARS) {
+    tagFileError.value = `正文超过 ${ARTICLE_MAX_CHARS} 字，请先精简或分段`
+  }
+}
+
+async function runArticleTag() {
+  if (!canTag.value) return
+  tagRunning.value = true
+  tagError.value = ''
+  tagRawOutput.value = ''
+  tagResult.value = null
+  tagAbort.value?.abort()
+  const controller = new AbortController()
+  tagAbort.value = controller
+  let streamed = ''
+  try {
+    // 提示词里的示例把用户输入写成「文本：<正文>」，这里保持一致，减少模型跑偏
+    streamed = await callDataProcessForText({
+      text: `文本：\n${tagText.value}`,
+      sourceLabel: tagFileName.value || '待标注文本',
+      signal: controller,
+      onThinking: () => { /* 打标签不需要展示思考过程，忽略 */ },
+      onContent: (full) => { tagRawOutput.value = full },
+    })
+    tagRawOutput.value = streamed
+    tagResult.value = parseArticleTags(streamed)
+    if (!tagResult.value && !streamed.trim()) {
+      tagError.value = '模型没有返回内容，请重试或换一个模型'
+    } else if (!tagResult.value) {
+      // 不是 JSON 也不报错：把原文摆出来，让人看得见模型到底说了什么
+      ElMessage.warning('模型没有按 JSON 输出，已展示原始返回')
+    } else {
+      ElMessage.success('标注完成')
+    }
+  } catch (e) {
+    if (controller.signal.aborted || (e as Error)?.message?.includes('已取消')) {
+      ElMessage.info('已取消')
+    } else {
+      tagError.value = `打标签失败：${(e as Error)?.message ?? String(e)}`
+      ElMessage.error(tagError.value)
+    }
+  } finally {
+    if (tagAbort.value === controller) tagAbort.value = null
+    tagRunning.value = false
+  }
+}
+
+function cancelArticleTag() {
+  tagAbort.value?.abort()
+}
+
+async function copyArticleTagResult() {
+  const text = tagResult.value?.raw || tagRawOutput.value.trim()
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('标签已复制（JSON）')
+  } catch {
+    ElMessage.warning('复制失败，请手动选择文本')
+  }
+}
+
 // 切节点（NodeInspector 里本组件不带 key，是复用的）时清空试跑区，避免串到下一个节点上
 watch(id, () => {
   clearOcrImage()
@@ -625,6 +755,9 @@ watch(id, () => {
   clearArticle()
   articlePromptOpen.value = false
   articlePromptMissing.value = false
+  clearArticleTag()
+  tagPromptOpen.value = false
+  tagPromptMissing.value = false
   clearTranslate()
   translateTarget.value = '英语'
   translateSource.value = TRANSLATE_AUTO
@@ -738,6 +871,7 @@ onBeforeUnmount(() => {
   releaseVideoAudioUrl()
   articleAbort.value?.abort()
   translateAbort.value?.abort()
+  tagAbort.value?.abort()
 })
 const orchCfg = computed<RuleOrchestration>(() => ({
   ...(isRule.value ? makeDefaultRuleOrchestration() : makeDefaultExecConfig()),
@@ -966,9 +1100,9 @@ async function loadProviderModelOptions() {
   }
 }
 watch(
-  // 文章生成摘要节点也要选模型（它不生成"脚本"，但同样要调模型出摘要）
-  () => [id.value, isRule.value, isArticleSummary.value] as const,
-  ([, rule, summary]) => { if (rule || summary) void loadProviderModelOptions() },
+  // 文章生成摘要 / 文章打标签也要选模型（它们不生成"脚本"，但同样要调模型）
+  () => [id.value, isRule.value, isArticleSummary.value, isArticleTag.value] as const,
+  ([, rule, summary, tag]) => { if (rule || summary || tag) void loadProviderModelOptions() },
   { immediate: true },
 )
 
@@ -1039,6 +1173,7 @@ watch(
     isMonitor.value,
     isDataValidation.value,
     isArticleSummary.value,
+    isArticleTag.value,
     sourceTableName.value,
     promptSourceId.value,
     promptCategory.value,
@@ -1049,7 +1184,7 @@ watch(
     outputFieldOptions.value.map((field) => `${field.itemCode}:${field.itemName}`).join(','),
   ] as const,
   () => {
-    if (!isRule.value && !isMonitor.value && !isDataValidation.value && !isArticleSummary.value) return
+    if (!isRule.value && !isMonitor.value && !isDataValidation.value && !isArticleSummary.value && !isArticleTag.value) return
     const refreshSeq = ++promptRefreshSeq
     // 数据监控节点进入编排 Tab 时即拼接系统提示词，与脚本编辑弹窗的行为一致——
     // 弹窗 loadPromptTemplate 无条件调用，这里也不卡 sourceTableName/inputFields。
@@ -1071,8 +1206,9 @@ watch(
         inputFieldOptions: inputFieldOptions.value,
         outputFieldOptions: outputFieldOptions.value.length ? outputFieldOptions.value : inputFieldOptions.value,
       })
-      // 文章生成摘要节点：模板取不到的信号要留给界面（它不能靠"提示词非空"判断自己能不能跑）
+      // 文章生成摘要 / 文章打标签节点：模板取不到的信号要留给界面（它们不能靠"提示词非空"判断能不能跑）
       if (isArticleSummary.value) articlePromptMissing.value = !applied
+      if (isArticleTag.value) tagPromptMissing.value = !applied
       if (!applied) return
       if (refreshSeq !== promptRefreshSeq) return
       if (applied !== orchCfg.value.systemPrompt) patch({ systemPrompt: applied })
@@ -1999,6 +2135,147 @@ function onTestScript() {
       <pre class="ocr-result-text article-summary-text" data-testid="translate-result-text">{{ translateResult }}</pre>
     </div>
   </div>
+  <!-- 文章打标签（0918 第一版，仅文章打标签节点）：上传/粘贴文本 → 调 /api/answer/data-process
+       （系统提示词取自 cfg_llm_node_prompt 的「文章打标签」行）→ 解析模型输出的 JSON 标签体系。 -->
+  <div v-if="isArticleTag" class="rc-field ocr-field" data-testid="article-tag-field">
+    <label>文章打标签</label>
+    <div class="ocr-picker">
+      <input
+        ref="tagFileInput"
+        class="rc-file-input"
+        data-testid="tag-file-input"
+        type="file"
+        accept=".txt,.md,.markdown,.csv,.json,.log,.html,.htm,text/*"
+        @change="onTagFileChange"
+      />
+      <button class="rc-btn" type="button" data-testid="tag-pick-file" @click="tagFileInput?.click()">
+        <Document aria-hidden="true" />
+        <span>上传文本</span>
+      </button>
+      <span class="ocr-hint">
+        {{ ARTICLE_TEXT_EXTENSIONS.join(' / ') }}，也可直接粘贴；最多 {{ ARTICLE_MAX_CHARS }} 字
+      </span>
+    </div>
+    <div v-if="tagFileName" class="ocr-preview">
+      <span class="ocr-file-name" :title="tagFileName">{{ tagFileName }}</span>
+      <span class="ocr-file-size">{{ tagCharCount }} 字</span>
+      <button class="ocr-remove" type="button" title="清空文本" aria-label="清空文本" @click="clearArticleTag">
+        <Delete aria-hidden="true" />
+      </button>
+    </div>
+    <div v-if="tagFileError" class="ocr-error" data-testid="tag-file-error">{{ tagFileError }}</div>
+    <textarea
+      class="rc-input rc-textarea article-text"
+      :value="tagText"
+      data-testid="tag-text"
+      placeholder="粘贴或上传要标注的文本（新闻、帖子、评论…）"
+      @input="onTagTextInput"
+    />
+    <div class="article-text-meta">
+      <span>{{ tagCharCount }} 字</span>
+      <button v-if="tagText" class="rc-link-btn" type="button" @click="clearArticleTag">清空</button>
+    </div>
+    <div class="rc-model-row">
+      <span class="rc-model-fields">
+        <label class="rc-inline-field">
+          <span>模型供应商</span>
+          <el-select
+            :model-value="orchCfg.modelProviderCode ?? ''"
+            class="rc-inline-select"
+            size="small"
+            :loading="providerLoading"
+            placeholder="模型供应商"
+            data-testid="tag-model-provider"
+            @change="onModelProviderChange"
+          >
+            <el-option v-for="item in providerOptions" :key="item.providerCode" :label="item.providerName" :value="item.providerCode" />
+          </el-select>
+        </label>
+        <label class="rc-inline-field">
+          <span>模型</span>
+          <el-select
+            :model-value="orchCfg.modelCode ?? ''"
+            class="rc-inline-select"
+            size="small"
+            :loading="modelLoading"
+            :disabled="!orchCfg.modelProviderCode || !providerOptions.length"
+            placeholder="模型"
+            data-testid="tag-model"
+            @change="onModelChange"
+          >
+            <el-option v-for="item in modelOptions" :key="item.modelCode" :label="item.modelName" :value="item.modelCode" />
+          </el-select>
+        </label>
+      </span>
+    </div>
+    <div v-if="providerError || modelError" class="rc-help">{{ providerError || modelError }}</div>
+    <div class="article-prompt">
+      <button class="rc-link-btn" type="button" data-testid="tag-prompt-toggle" @click="tagPromptOpen = !tagPromptOpen">
+        {{ tagPromptOpen ? '收起系统提示词' : '查看系统提示词' }}
+      </button>
+      <span class="ocr-hint">来自提示词表（cfg_llm_node_prompt · 文章打标签）</span>
+    </div>
+    <pre v-if="tagPromptOpen" class="article-prompt-text" data-testid="tag-prompt-text">{{ orchCfg.systemPrompt || '（未取到提示词模板）' }}</pre>
+    <div v-if="!tagPromptReady" class="ocr-error" data-testid="tag-prompt-missing">
+      没有取到「文章打标签」的系统提示词模板（cfg_llm_node_prompt 里需要 node_type_name=文章打标签 的一行），暂不能标注
+    </div>
+    <div class="ocr-actions">
+      <button
+        class="rc-btn primary"
+        type="button"
+        data-testid="tag-generate"
+        :disabled="!canTag && !tagRunning"
+        @click="tagRunning ? cancelArticleTag() : runArticleTag()"
+      >{{ tagRunning ? '标注中…（点击取消）' : '开始打标签' }}</button>
+      <span v-if="tagError" class="ocr-error" data-testid="tag-error">{{ tagError }}</span>
+    </div>
+    <!-- 结构化结果：摘要 + 各维度标签 + 置信度 + 依据；解析不出 JSON 时退回展示原始返回 -->
+    <div v-if="tagResult" class="ocr-result tag-result" data-testid="tag-result">
+      <div class="ocr-result-head">
+        <span>标注结果</span>
+        <span class="ocr-result-actions">
+          <button class="rc-link-btn" type="button" @click="copyArticleTagResult">复制 JSON</button>
+        </span>
+      </div>
+      <div class="tag-body">
+        <div v-if="tagResult.summary" class="tag-summary" data-testid="tag-summary">{{ tagResult.summary }}</div>
+        <div v-for="group in tagResult.groups" :key="group.key" class="tag-group">
+          <span class="tag-group-label">{{ group.label }}</span>
+          <span class="tag-chips">
+            <span
+              v-for="value in group.values"
+              :key="value"
+              class="tag-chip"
+              :class="group.key === 'risk_level' ? `tone-${riskLevelTone(value)}` : ''"
+            >{{ value }}</span>
+          </span>
+        </div>
+        <div v-if="tagResult.confidence != null || tagResult.uncertain || tagResult.notes" class="tag-meta">
+          <span v-if="tagResult.confidence != null">置信度 {{ tagResult.confidence.toFixed(2) }}</span>
+          <span v-if="tagResult.uncertain" class="tag-uncertain">标记为不确定</span>
+          <span v-if="tagResult.notes">{{ tagResult.notes }}</span>
+        </div>
+        <div v-if="tagResult.evidence.length" class="tag-evidence">
+          <div v-for="item in tagResult.evidence" :key="item.label" class="tag-evidence-row">
+            <b>{{ item.label }}依据</b><span>{{ item.text }}</span>
+          </div>
+        </div>
+      </div>
+      <button class="rc-link-btn tag-raw-toggle" type="button" data-testid="tag-raw-toggle" @click="tagRawOpen = !tagRawOpen">
+        {{ tagRawOpen ? '收起原始返回' : '查看原始返回' }}
+      </button>
+      <pre v-if="tagRawOpen" class="ocr-result-raw" data-testid="tag-raw">{{ tagResult.raw }}</pre>
+    </div>
+    <div v-else-if="tagRawOutput" class="ocr-result" data-testid="tag-raw-result">
+      <div class="ocr-result-head">
+        <span>模型返回（不是 JSON，未做结构化展示）</span>
+        <span class="ocr-result-actions">
+          <button class="rc-link-btn" type="button" @click="copyArticleTagResult">复制</button>
+        </span>
+      </div>
+      <pre class="ocr-result-text">{{ tagRawOutput }}</pre>
+    </div>
+  </div>
   <div class="rc-field">
     <textarea
       class="rc-input rc-textarea"
@@ -2302,6 +2579,23 @@ function onTestScript() {
 .translate-swap:disabled { color: var(--rc-faint); cursor: not-allowed; }
 .translate-detected { color: var(--rc-faint); font-weight: 400; }
 .translate-over-limit { color: #b91c1c; }
+/* ---- 文章打标签 ---- */
+.tag-body { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
+.tag-summary { color: var(--rc-text); font-size: 12.5px; font-weight: 600; line-height: 1.6; }
+.tag-group { display: flex; align-items: flex-start; gap: 8px; font-size: 11.5px; }
+.tag-group-label { flex: none; width: 60px; color: var(--rc-muted); }
+.tag-chips { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.tag-chip { padding: 1px 7px; border: 1px solid #dbe3ee; border-radius: 999px; background: #f8fafc; color: var(--rc-text-2); font-size: 11px; }
+.tag-chip.tone-high { border-color: #fecaca; background: #fef2f2; color: #b91c1c; font-weight: 600; }
+.tag-chip.tone-mid { border-color: #fed7aa; background: #fff7ed; color: #c2410c; font-weight: 600; }
+.tag-chip.tone-low { border-color: #bfdbfe; background: #eff6ff; color: var(--rc-primary-ink); }
+.tag-chip.tone-none { border-color: #e2e8f0; background: #f8fafc; color: var(--rc-muted); }
+.tag-meta { display: flex; flex-wrap: wrap; gap: 10px; color: var(--rc-faint); font-size: 10.5px; }
+.tag-uncertain { color: var(--rc-warn); }
+.tag-evidence { display: flex; flex-direction: column; gap: 4px; padding-top: 6px; border-top: 1px dashed var(--rc-border-soft); color: var(--rc-text-2); font-size: 11px; line-height: 1.6; }
+.tag-evidence-row { display: flex; gap: 6px; }
+.tag-evidence-row b { flex: none; color: var(--rc-muted); font-weight: 600; }
+.tag-raw-toggle { margin: 0 10px 10px; }
 .rc-stop-icon { display: block; width: 10px; height: 10px; border-radius: 1px; background: currentColor; }
 .rc-main-stream, .rc-main-result { margin: 10px 0 12px; border: 1px solid #dbe3ee; border-radius: 8px; overflow: hidden; background: #fff; }
 .rc-main-stream { border-color: #1e293b; background: #0b1220; }

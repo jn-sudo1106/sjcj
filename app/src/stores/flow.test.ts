@@ -1455,7 +1455,7 @@ describe('「落表输出」节点移除（优化 0701 问题四）', () => {
     // 解析结构化/清洗/去重/字段映射 仍然成立；后端字典里 300/700/710/720 是独立编号的类型，
     // 用户要求全部可见可选，所以它们回到了清单里。
     expect(LIB_GROUPS.find((group) => group.title === '数据处理')?.items.map((it) => it.name)).toEqual([
-      '数据处理', '校验类', '视频提取音频', '音频提取文字', '文章生成摘要', '翻译助手',
+      '数据处理', '校验类', '视频提取音频', '音频提取文字', '文章生成摘要', '文章打标签', '翻译助手',
     ])
 
     const flow = mockFlowRecommend({ intent: 'file-parse' }).flow
@@ -1464,10 +1464,10 @@ describe('「落表输出」节点移除（优化 0701 问题四）', () => {
   })
 
   // 2026-09-17：节点库必须与后端字典逐条对齐（用户口径：17 条类型都能看见、都能选）
-  it('节点库覆盖后端字典全部 18 条抓取类型', () => {
+  it('节点库覆盖后端字典全部 19 条抓取类型', () => {
     const items = LIB_GROUPS.flatMap((g) => g.items)
     const numeric = new Set(items.map((it) => Number(it.badge ?? it.code)).filter((n) => Number.isInteger(n)))
-    for (const code of [90, 110, 120, 130, 140, 150, 160, 170, 300, 400, 500, 600, 610, 620, 700, 710, 720, 800]) {
+    for (const code of [90, 110, 120, 130, 140, 150, 160, 170, 300, 400, 500, 600, 610, 620, 700, 710, 720, 730, 800]) {
       expect(numeric.has(code), `节点库缺少类型 ${code}`).toBe(true)
     }
     // 每个条目都得能落到一个存在的节点种子上，否则点了没反应
@@ -1673,6 +1673,16 @@ describe('数据校验节点（sourceType=800，配置参考数据监控）', ()
     expect(seed.configs.st2.template).toBe('data-validation')
     expect(isDataValidationNode(seed.configs.st2)).toBe(true)
     expect(seed.configs.st3.template).toBe('data-validation')
+  })
+
+  it('按 sourceType=730 回读为文章打标签节点', () => {
+    const source = { sourceId: 's-tag', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: 'st1', sourceId: 's-tag', name: '列表抓取', inputTable: '-', outputTable: 'T1', nodeType: 'list', enabled: true },
+      { stepId: 'st2', sourceId: 's-tag', name: '文章打标签', inputTable: 'T1', outputTable: 'T1', configType: '730', nodeType: 'entry', dependsOn: ['st1'], enabled: true },
+    ] as never)
+    expect(seed.configs.st2.template).toBe('article-tag')
+    expect(nodeTypeLabel(seed.configs.st2)).toBe('文章打标签')
   })
 
   it('按 sourceType=800（名字不是校验）回读为翻译助手节点', () => {
