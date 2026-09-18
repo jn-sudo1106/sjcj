@@ -382,9 +382,23 @@ onUnmounted(() => {
    原来是 flex + wrap，chip 宽度随名字长短走——「证券日报网-金融机构…」这种长名字
    一个就占满一行，短的挤三个，一片参差。网格定死两列，长的自己省略，行数可预期。 */
 .scg-chips { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 12px; }
-/* 「+N」落单时铺满整行：CHIP_LIMIT=5 之后多数卡片是 6 格填满，但源数正好是偶数
-   （比如 6 个源全展示）时它还是会落单，半行空着不好看。铺满反倒像个"展开"按钮。 */
-.scg-chip.more:last-child:nth-child(odd) { grid-column: 1 / -1; }
+/* 「+N」不是一个源，是"还有多少没显示"的提示——别做成跟源一样的实体 chip（2026-09-18）。
+   它原来带底色、跟源 chip 一样撑满整格，一个方块里就俩字符，空旷又抢戏。
+   改成纯文字、宽度随内容（justify-self: start），点击行为不变。 */
+.scg-chip.more {
+  justify-self: start;
+  padding: 0 4px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--rc-muted);
+  font-weight: 600;
+}
+.scg-chip.more:hover {
+  border-color: transparent;
+  background: transparent;
+  color: var(--rc-primary);
+  text-decoration: underline;
+}
 .scg-chip {
   min-width: 0;
   height: 24px;
@@ -402,7 +416,6 @@ onUnmounted(() => {
 }
 .scg-chip:hover { border-color: #93c5fd; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .scg-chip.err { border-color: #fecaca; background: #fef2f2; color: var(--rc-error); }
-.scg-chip.more { background: #f8fafc; color: var(--rc-muted); font-weight: 700; }
 .scg-empty { font-size: 11px; color: var(--rc-faint); }
 
 .scg-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
