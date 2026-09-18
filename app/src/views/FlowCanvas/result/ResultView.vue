@@ -21,7 +21,7 @@ import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import DataGrid from './DataGrid.vue'
 import FilePreview from './components/FilePreview.vue'
-import { extFromName } from '@/utils/ossFile'
+import { extFromFieldHint, extFromName, ossPathWithExt } from '@/utils/ossFile'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import { readResultRailOpen, writeResultRailOpen } from './resultLayoutPref'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
@@ -1230,23 +1230,16 @@ const filePreview = reactive({ visible: false, path: '', name: '', url: '', ext:
 // 取——那是详情抽屉当前行的字段，直接点单元格时详情没开，于是永远取不到，
 // 预览里的「原始地址 ↗」一直不显示。
 function onCellFile(path: string, field?: unknown, sourceUrl = '') {
-  filePreview.path = path
-  filePreview.name = path.split('/').pop() || ''
+  const hintedExt = extFromFieldHint(field as { prop?: string; columnName?: string; desc?: string } | undefined)
+  // 库里存的正文路径可能少了后缀，取之前先补上——预览、下载、「新窗口打开」都拿这个 path
+  const fullPath = ossPathWithExt(path, hintedExt)
+  filePreview.path = fullPath
+  filePreview.name = fullPath.split('/').pop() || ''
   filePreview.url = sourceUrl
     || detailFields.value.find((f) => f.prop === 'url')?.href
     || detailFields.value.find((f) => f.href)?.href
     || ''
-  const f = field as { prop?: string; columnName?: string; desc?: string } | undefined
-  const col = (f?.columnName || '').toUpperCase()
-  const prop = (f?.prop || '').toLowerCase()
-  const desc = f?.desc || ''
-  if (col === 'K17' || prop === 'html' || desc.includes('html')) {
-    filePreview.ext = 'html'
-  } else if (col === 'K6' || prop.includes('content') || desc.includes('正文')) {
-    filePreview.ext = 'txt'
-  } else {
-    filePreview.ext = ''
-  }
+  filePreview.ext = hintedExt
   filePreview.visible = true
 }
 const codeTest = reactive<{ visible: boolean; loading: boolean; error: string; output: string }>({

@@ -129,6 +129,57 @@ export function mimeTypeOf(ext?: string | null): string {
   return MIME_BY_EXT[e] ?? ''
 }
 
+/**
+ * 按**字段语义**猜扩展名——给那些"路径里根本没有后缀"的存储路径用。
+ *
+ * 2026-09-18 实测：公众号正文路径（`TB_GZHWZ` 的 K9 / URLMD5，字段名「正文路径」）长这样
+ *   `/gzh/gzh_msg/MzU2Njc5NjY0OQ==/2020-01-29/d0bc4a044f965c2058475987760f1c6f`
+ * ——尾段是 md5，**没有 `.txt`**。于是 `extFromName` 取不到东西，`previewKindOf('')`
+ * 返回 `none`，预览面板只能显示「该类型不支持站内直接解析」。
+ *
+ * 所以靠字段本身来判断：正文类 → txt，网页快照类 → html。命中不了就返回空串，
+ * 由调用方继续回退到 `extFromName`（路径真带后缀时那条仍然更可信）。
+ *
+ * ⚠️ 不要在这里按"是文件路径就默认 txt"兜底：图片、附件同样没有后缀的情况存在，
+ * 猜错会把二进制塞进文本预览器。
+ */
+export function extFromFieldHint(field?: { prop?: string; columnName?: string; desc?: string } | null): string {
+  if (!field) return ''
+  const col = String(field.columnName || '').toUpperCase()
+  const prop = String(field.prop || '').toLowerCase()
+  const desc = String(field.desc || '')
+  if (col === 'K17' || prop === 'html' || desc.includes('html') || desc.includes('网页')) return 'html'
+  // K6 是新闻类表的正文路径，K9 是公众号表的；两边字段名都带「正文」，desc 这条才是通用的那个判据
+  if (col === 'K6' || prop.includes('content') || prop.includes('textpath') || desc.includes('正文')) return 'txt'
+  return ''
+}
+
+/**
+ * 给**存少了后缀的** OSS 路径补上扩展名。
+ *
+ * 2026-09-18 生产实测（公众号源 430022401 的一行正文路径）：
+ *
+ * | 请求                                   | 结果 |
+ * | -------------------------------------- | ---- |
+ * | 库里存的 `…/d0bc4a04…7760f1c6f`        | **404** |
+ * | `…/d0bc4a04…7760f1c6f.txt`             | 201，2892 字节 —— 与该行 K13「正文大小」完全一致 |
+ * | `…/d0bc4a04…7760f1c6f.html`            | 201，9298 字节（同一 md5 下还存着网页快照） |
+ *
+ * 也就是说 `TB_GZHWZ` 的正文路径字段落库时丢了后缀，OSS 上的真实对象名是带 `.txt` 的，
+ * 拿原样的路径去取必然 404。这个补丁只在**字段语义能确定类型**时生效
+ * （`extFromFieldHint` 猜得出来），路径本身已带后缀的一概不动。
+ *
+ * 治本是后端把后缀写进库里；在那之前，不补这一下公众号正文就是打不开的。
+ */
+export function ossPathWithExt(path: string, ext?: string | null): string {
+  const p = String(path ?? '').trim()
+  const e = String(ext ?? '').trim().replace(/^\./, '')
+  if (!p || !e) return p
+  // 路径自带后缀时以它为准：它是实打实的对象名，猜测不该覆盖事实
+  if (extFromName(p)) return p
+  return `${p}.${e}`
+}
+
 /** 从文件名兜底推断扩展名——K7 缺失时用（例如数据视图单元格里只有一个路径）。 */
 export function extFromName(name?: string | null): string {
   const m = /\.([A-Za-z0-9]+)$/.exec(String(name ?? '').trim())

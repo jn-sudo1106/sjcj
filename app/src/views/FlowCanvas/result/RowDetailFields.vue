@@ -16,7 +16,13 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'update:field': [payload: { prop: string; value: string }]
-  'file-click': [path: string]
+  /**
+   * 点文件路径预览。**必须把字段一起带出去**（2026-09-18）：调用方靠列名/字段名判断
+   * 该用哪种预览器，而公众号正文路径这类值在路径上没有后缀（K9/URLMD5，
+   * `/gzh/gzh_msg/…/d0bc4a04…`），只给 path 的话预览器认不出类型，只能显示"不支持解析"。
+   * 形状与 DataGrid 的同名事件对齐，两条入口共用调用方的同一个 handler。
+   */
+  'file-click': [path: string, field: { prop?: string; columnName?: string; desc?: string }]
 }>()
 
 const scopedFields = computed(() => {
@@ -128,7 +134,7 @@ function onCopyAll() {
           type="button"
           class="rdf-file"
           data-testid="row-detail-file"
-          @click="emit('file-click', field.filePath)"
+          @click="emit('file-click', field.filePath, { prop: field.prop, columnName: field.columnName, desc: field.name })"
         >📄 {{ field.value }}</button>
         <span v-else>{{ field.value }}</span>
       </div>

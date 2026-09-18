@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { extFromName, fetchOssFile, mimeTypeOf, ossFileUrl, ossPublicUrl, previewKindOf } from './ossFile'
+import { extFromFieldHint, extFromName, fetchOssFile, mimeTypeOf, ossFileUrl, ossPathWithExt, ossPublicUrl, previewKindOf } from './ossFile'
 
 describe('ossFileUrl', () => {
   it('路径原样拼接，不做 encodeURIComponent（旧平台亦然，两种写法后端都认）', () => {
@@ -84,5 +84,61 @@ describe('ossPublicUrl（2026-09-09：html 走新窗口打开的独立 origin，
     const path = '/qinlong/a.html'
     expect(ossFileUrl(path)).toBe('/oss/api/oss/download?fileId=/qinlong/a.html')
     expect(ossPublicUrl(path)).not.toBe(ossFileUrl(path))
+  })
+})
+
+// 2026-09-18：公众号正文路径没有 .txt 后缀，只靠文件名推断必然落空。
+describe('extFromFieldHint · 路径没有后缀时按字段语义判类型', () => {
+  const GZH_PATH = '/gzh/gzh_msg/MzU2Njc5NjY0OQ==/2020-01-29/d0bc4a044f965c2058475987760f1c6f'
+
+  it('公众号「正文路径」(K9/URLMD5) 判成 txt —— 这是本次要修的那条', () => {
+    expect(extFromName(GZH_PATH.split('/').pop())).toBe('')   // 先确认文件名这条路确实取不到
+    expect(extFromFieldHint({ prop: 'urlmd5', columnName: 'K9', desc: '正文路径' })).toBe('txt')
+    expect(previewKindOf(extFromFieldHint({ prop: 'urlmd5', columnName: 'K9', desc: '正文路径' }))).toBe('text')
+  })
+
+  it('新闻类正文路径 (K6 / content_path) 仍判 txt', () => {
+    expect(extFromFieldHint({ columnName: 'K6', prop: 'content_path', desc: '正文' })).toBe('txt')
+    expect(extFromFieldHint({ prop: 'content_path' })).toBe('txt')
+  })
+
+  it('网页快照 (K17 / html) 判 html，且优先于正文判定', () => {
+    expect(extFromFieldHint({ columnName: 'K17', desc: '网页路径' })).toBe('html')
+    expect(extFromFieldHint({ prop: 'html', desc: '正文' })).toBe('html')
+  })
+
+  it('认不出来就返回空串，交给调用方回退到文件名——不瞎猜成 txt', () => {
+    expect(extFromFieldHint({ prop: 'pic_path', desc: '图片地址' })).toBe('')
+    expect(extFromFieldHint({})).toBe('')
+    expect(extFromFieldHint(undefined)).toBe('')
+  })
+})
+
+// 2026-09-18 生产实测：库里存的公众号正文路径少了后缀，原样去取 OSS 直接 404。
+describe('ossPathWithExt · 补齐落库时丢掉的后缀', () => {
+  const GZH = '/gzh/gzh_msg/MzU2Njc5NjY0OQ==/2020-01-29/d0bc4a044f965c2058475987760f1c6f'
+
+  it('无后缀 + 猜出 txt → 补成 .txt（实测这条才取得到，2892 字节与 K13 正文大小一致）', () => {
+    expect(ossPathWithExt(GZH, 'txt')).toBe(`${GZH}.txt`)
+    expect(ossFileUrl(ossPathWithExt(GZH, 'txt'))).toContain(`${GZH}.txt`)
+  })
+
+  it('路径自带后缀时一概不动——它是实打实的对象名，猜测不该覆盖事实', () => {
+    expect(ossPathWithExt('/qinlong/a/b.html', 'txt')).toBe('/qinlong/a/b.html')
+    expect(ossPathWithExt('/qinlong/a/b.xlsx', 'txt')).toBe('/qinlong/a/b.xlsx')
+  })
+
+  it('猜不出类型就原样返回，不瞎补', () => {
+    expect(ossPathWithExt(GZH, '')).toBe(GZH)
+    expect(ossPathWithExt(GZH, null)).toBe(GZH)
+    expect(ossPathWithExt(GZH, extFromFieldHint({ prop: 'pic_path', desc: '图片地址' }))).toBe(GZH)
+  })
+
+  it('带点的 ext 也认（.txt / txt 等价）', () => {
+    expect(ossPathWithExt(GZH, '.txt')).toBe(`${GZH}.txt`)
+  })
+
+  it('空路径不产生 ".txt" 这种垃圾值', () => {
+    expect(ossPathWithExt('', 'txt')).toBe('')
   })
 })
