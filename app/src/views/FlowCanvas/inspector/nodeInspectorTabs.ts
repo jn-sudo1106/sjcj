@@ -13,7 +13,8 @@ export type NodeInspectorTabItem = [NodeInspectorTab, string, string?]
  * 「参数配置」（0805 改判，推翻 D17）：D17 当时判断"参数资源不需要单独入口，挂节点上就行"，
  * 但采集节点的 URL 参数绑定（urlParamRefs/urlParamValues，管 $PARAM$_id 占位符取值）真的需要这个入口，
  * 手动拼 URL 没法替代——恢复入口，规则节点仍然没有（规则节点从没有过这个 Tab，不在本次改判范围）。
- * 2026-09-18：翻译助手并入无「参数配置」的行列（isRuleLikeNode，与规则处理同一套 tab 结构）。
+ * 2026-09-18：翻译助手 / 文章打标签 / 文章生成摘要 / 音频提取文字 / 视频提取音频
+ * 并入无「参数配置」的行列（isRuleLikeNode，与规则处理同一套 tab 结构）。
  *
  * S2-2 门禁：规则节点在「表配置」绑完输入表与入参/出参字段之前，「编排配置」Tab 禁用。
  * 生成脚本使用节点已保存的 configId，不再要求先点中间保存按钮。
@@ -22,7 +23,7 @@ export type NodeInspectorTabItem = [NodeInspectorTab, string, string?]
 export function nodeInspectorTabs(cfg?: NodeConfig, options: { includeAi?: boolean } = {}): NodeInspectorTabItem[] {
   if (cfg && decisionOrParallelKind(cfg) !== undefined) return [['config', '分支配置']]
   const isRule = !!cfg && isRuleNode(cfg)
-  // 2026-09-18：翻译助手与规则处理共用同一套 tab 结构（无「参数配置」Tab）。
+  // 2026-09-18：翻译助手 / 打标签 / 摘要 / 音频转文字 / 视频转音频与规则处理共用同一套 tab 结构（无「参数配置」Tab）。
   const ruleLike = !!cfg && isRuleLikeNode(cfg)
   const tabs: NodeInspectorTabItem[] = [
     ['config', '节点配置'],

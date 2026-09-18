@@ -1685,6 +1685,66 @@ describe('数据校验节点（sourceType=800，配置参考数据监控）', ()
     expect(nodeTypeLabel(seed.configs.st2)).toBe('文章打标签')
   })
 
+  // 2026-09-18：文章打标签与翻译助手同待遇——表绑定与规则处理同口径落步骤，
+  // 回读时把步骤里的输入/输出表填回 execCfg，否则「表配置」刷新后就是空的。
+  it('回读时把步骤的输入/输出表填回 execCfg（文章打标签与规则处理同口径）', () => {
+    const source = { sourceId: 's-tag2', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: 'st1', sourceId: 's-tag2', name: '列表抓取', inputTable: '-', outputTable: 'T1', nodeType: 'list', enabled: true },
+      { stepId: 'st2', sourceId: 's-tag2', name: '文章打标签', inputTable: 'T1', outputTable: 'T1', configType: '730', nodeType: 'entry', dependsOn: ['st1'], enabled: true },
+    ] as never)
+    const cfg = seed.configs.st2
+    expect(cfg.template).toBe('article-tag')
+    // 不能误写成 ruleCfg——那会把文章打标签误判成规则节点
+    expect(cfg.ruleCfg).toBeUndefined()
+    expect(cfg.execCfg?.inputTableId).toBe('T1')
+    expect(cfg.execCfg?.outputTableId).toBe('T1')
+    expect(cfg.inputTable).toBe('T1')
+    expect(cfg.outputTable).toBe('T1')
+  })
+
+  // 2026-09-18：翻译助手 / 文章打标签步骤的 type 与规则处理一样写 'rule'（发后续按 type
+  // 派发执行器，写 entry 会 500）。回读时必须靠 configType（730/800）路由到各自的种子，
+  // 不能被 nodeType='rule' 的别名映射抢先路由成带 ruleCfg 的规则节点。
+  it('type=rule + configType=730 回读为文章打标签（不落 ruleCfg）', () => {
+    const source = { sourceId: 's-tag3', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: 'st1', sourceId: 's-tag3', name: '列表抓取', inputTable: '-', outputTable: 'T1', nodeType: 'list', enabled: true },
+      { stepId: 'st2', sourceId: 's-tag3', name: '文章打标签', inputTable: 'T1', outputTable: 'T1', configType: '730', nodeType: 'rule', dependsOn: ['st1'], enabled: true },
+    ] as never)
+    const cfg = seed.configs.st2
+    expect(cfg.template).toBe('article-tag')
+    expect(cfg.ruleCfg).toBeUndefined()
+  })
+
+  it('type=rule + configType=800 回读为翻译助手（不落 ruleCfg）', () => {
+    const source = { sourceId: 's-tr3', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: 'st1', sourceId: 's-tr3', name: '列表抓取', inputTable: '-', outputTable: 'T1', nodeType: 'list', enabled: true },
+      { stepId: 'st2', sourceId: 's-tr3', name: '翻译助手', inputTable: 'T1', outputTable: 'T1', configType: '800', nodeType: 'rule', dependsOn: ['st1'], enabled: true },
+    ] as never)
+    const cfg = seed.configs.st2
+    expect(cfg.template).toBe('translate')
+    expect(cfg.ruleCfg).toBeUndefined()
+  })
+
+  // 2026-09-18：摘要 / 音频转文字 / 视频转音频同样与规则处理一致写 type='rule'，
+  // 回读按 configType 路由到各自的种子，不落 ruleCfg。
+  it.each([
+    ['700', 'video-audio', '视频提取音频'],
+    ['710', 'audio-text', '音频提取文字'],
+    ['720', 'article-summary', '文章生成摘要'],
+  ])('type=rule + configType=%s 回读为 %s（不落 ruleCfg）', (configType, template, name) => {
+    const source = { sourceId: `s-${configType}`, name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: 'st1', sourceId: `s-${configType}`, name: '列表抓取', inputTable: '-', outputTable: 'T1', nodeType: 'list', enabled: true },
+      { stepId: 'st2', sourceId: `s-${configType}`, name, inputTable: 'T1', outputTable: 'T1', configType, nodeType: 'rule', dependsOn: ['st1'], enabled: true },
+    ] as never)
+    const cfg = seed.configs.st2
+    expect(cfg.template).toBe(template)
+    expect(cfg.ruleCfg).toBeUndefined()
+  })
+
   it('按 sourceType=800（名字不是校验）回读为翻译助手节点', () => {
     const source = { sourceId: 's-translate', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
     const seed = buildSourceSeed(source, [
@@ -1693,6 +1753,26 @@ describe('数据校验节点（sourceType=800，配置参考数据监控）', ()
     ] as never)
     expect(seed.configs.st2.template).toBe('translate')
     expect(nodeTypeLabel(seed.configs.st2)).toBe('翻译助手')
+  })
+
+  // 2026-09-18 修：翻译助手的表绑定与规则处理同口径落步骤，回读时必须把步骤里的
+  // 输入/输出表填回 execCfg——只填 ruleCfg 的话翻译助手的「表配置」刷新后表就是空的
+  //（入参/出参字段还原也依赖这个表 ID 去拉字段池）。
+  it('回读时把步骤的输入/输出表填回 execCfg（翻译助手与规则处理同口径）', () => {
+    const source = { sourceId: 's-translate2', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: 'st1', sourceId: 's-translate2', name: '列表抓取', inputTable: '-', outputTable: 'T1', nodeType: 'list', enabled: true },
+      { stepId: 'st2', sourceId: 's-translate2', name: '翻译助手', inputTable: 'T1', outputTable: 'T1', configType: '800', nodeType: 'entry', dependsOn: ['st1'], enabled: true },
+    ] as never)
+    const cfg = seed.configs.st2
+    expect(cfg.template).toBe('translate')
+    // 不能误写成 ruleCfg——那会把翻译助手误判成规则节点
+    expect(cfg.ruleCfg).toBeUndefined()
+    expect(cfg.execCfg?.inputTableId).toBe('T1')
+    expect(cfg.execCfg?.outputTableId).toBe('T1')
+    // 顶层输入/输出表同样回填（与其它非采集节点一致）
+    expect(cfg.inputTable).toBe('T1')
+    expect(cfg.outputTable).toBe('T1')
   })
 })
 
@@ -1890,6 +1970,31 @@ describe('configDetail 异步回填（applyStepDetails）', () => {
     expect(collectorCapabilityOf(f.configs['st-2'])?.kind).toBe('login')
     expect(f.configs['st-2'].configName).toBe('baidu-登陆配置')
     expect(f.dirty).toBe(false)
+  })
+
+  // 2026-09-18：打标签步骤 type 与规则处理一样写 'rule'，首屏（configDetail 还没回填）
+  // 会被 nodeType 别名路由先画成规则节点；configType=730 回填后必须整节点重建成
+  // 文章打标签——光补字段会留下 ruleCfg，节点被永久误判成规则节点。
+  it('type=rule 的打标签步骤在 configType=730 回填后整节点重建，ruleCfg 不残留', () => {
+    const tagSource = { sourceId: 'S2', name: '测试源', url: 'https://example.com/list', mainTable: '900', configId: '1000', owner: '', state: 'C' } as Source
+    const tagSteps = [
+      { stepId: 'st-1', sourceId: 'S2', name: '列表抓取', configId: '1000', enabled: true, nodeType: 'list', inputTable: '-', outputTable: '900' },
+      { stepId: 'st-2', sourceId: 'S2', name: '文章打标签', configId: '1002', enabled: true, nodeType: 'rule', inputTable: '900', outputTable: '900', dependsOn: ['st-1'] },
+    ] as never
+    const store = useFlowStore()
+    store.loadFromSource(tagSource, tagSteps, null)
+    // 首屏没有 configType：type=rule 被别名路由成规则节点（带 ruleCfg）
+    expect(isRuleNode(store.configs['st-2'])).toBe(true)
+
+    const rebuilt = store.applyStepDetails([
+      { stepId: 'st-1', sourceId: 'S2', name: '列表抓取', configId: '1000', enabled: true, nodeType: 'list', inputTable: '-', outputTable: '900' },
+      { stepId: 'st-2', sourceId: 'S2', name: '文章打标签', configId: '1002', enabled: true, nodeType: 'rule', inputTable: '900', outputTable: '900', configType: '730', dependsOn: ['st-1'] },
+    ] as never)
+
+    expect(rebuilt).toEqual(['st-2'])
+    const cfg = store.configs['st-2']
+    expect(cfg.template).toBe('article-tag')
+    expect(isRuleNode(cfg)).toBe(false)
   })
 })
 

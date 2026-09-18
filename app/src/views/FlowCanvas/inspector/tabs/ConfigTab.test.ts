@@ -333,3 +333,59 @@ describe('ConfigTab · 翻译助手（与规则处理同表单）', () => {
     wrapper.unmount()
   })
 })
+
+// 2026-09-18：文章打标签与翻译助手同待遇——节点配置只剩「节点名称 + 定时策略」，
+// 不渲染通用的基础字段/参数三元表/发起抓取信息。
+describe('ConfigTab · 文章打标签（与规则处理同表单）', () => {
+  it('只剩节点名称与定时策略，不渲染通用基础字段/参数/发起抓取信息', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['tag-1'] = cloneConfig(NODE_CONFIGS['article-tag'])
+    flow.select('tag-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('节点名称')
+    expect(wrapper.text()).toContain('定时策略')
+    expect(wrapper.text()).not.toContain('文本来源')
+    expect(wrapper.text()).not.toContain('能力状态')
+    expect(wrapper.text()).not.toContain('发起抓取信息')
+    expect(wrapper.text()).not.toContain('复制节点')
+    expect(wrapper.find('[data-testid="edit-node-source"]').exists()).toBe(false)
+
+    // 节点名称仍可直接编辑
+    const titleInput = wrapper.find('.rc-field input.rc-input')
+    await titleInput.setValue('打标签节点改名')
+    expect(flow.configs['tag-1'].title).toBe('打标签节点改名')
+    wrapper.unmount()
+  })
+})
+
+// 2026-09-18：文章生成摘要 / 音频提取文字 / 视频提取音频与翻译助手同待遇——
+// 节点配置只剩「节点名称 + 定时策略」，不渲染通用的基础字段/参数三元表/发起抓取信息。
+describe('ConfigTab · 摘要/音视频处理节点（与规则处理同表单）', () => {
+  it.each([
+    ['article-summary', '文本来源'],
+    ['audio-text', '音频来源'],
+    ['video-audio', '视频来源'],
+  ])('%s：只剩节点名称与定时策略，不渲染通用基础字段/参数/发起抓取信息', async (seedKey, baseLabel) => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['proc-1'] = cloneConfig(NODE_CONFIGS[seedKey])
+    flow.select('proc-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('节点名称')
+    expect(wrapper.text()).toContain('定时策略')
+    expect(wrapper.text()).not.toContain(baseLabel)
+    expect(wrapper.text()).not.toContain('能力状态')
+    expect(wrapper.text()).not.toContain('发起抓取信息')
+    expect(wrapper.find('[data-testid="edit-node-source"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})

@@ -605,14 +605,22 @@ export function isTranslateNode(cfg?: NodeConfig): boolean {
 }
 
 /**
- * 规则式表配置节点（2026-09-18）：翻译助手与规则处理共用同一套「表配置」表单
- * （RuleTableFieldBinder 的入参/出参字段绑定）与 tab 结构（无「参数配置」Tab），
- * 但编排内容仍分属 ruleCfg / execCfg 两处存储，不能直接并入 isRuleNode——那会把翻译助手
- * 误判成规则节点，编排配置 Tab 的模型/脚本工作区跟着串位（0917 已拍板翻译助手无脚本）。
+ * 规则式表配置节点（2026-09-18）：翻译助手 / 文章打标签 / 文章生成摘要 / 音频提取文字 /
+ * 视频提取音频与规则处理共用同一套「表配置」表单（RuleTableFieldBinder 的入参/出参字段绑定）
+ * 与 tab 结构（无「参数配置」Tab），步骤 type 也统一写 'rule'（发后续按 type 派发执行器，
+ * 写 entry 会 500）。
+ *
+ * 但编排内容仍分属 ruleCfg / execCfg 两处存储，不能直接并入 isRuleNode——那会把这几类
+ * 误判成规则节点，编排配置 Tab 的模型/脚本工作区跟着串位（0917 已拍板这几类无脚本）。
  * 两处的表/字段绑定写入、步骤 context 持久化都按本谓词走同一口径。
  */
 export function isRuleLikeNode(cfg?: NodeConfig): boolean {
-  return isRuleNode(cfg) || isTranslateNode(cfg)
+  return isRuleNode(cfg)
+    || isTranslateNode(cfg)
+    || isArticleTagNode(cfg)
+    || isArticleSummaryNode(cfg)
+    || isAudioTextNode(cfg)
+    || isVideoAudioNode(cfg)
 }
 
 /**

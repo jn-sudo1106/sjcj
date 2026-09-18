@@ -8,7 +8,7 @@ import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useDuplicateNode } from '@/views/FlowCanvas/canvas/useDuplicateNode'
 import {
-  BIZ_TYPE_OPTIONS, WEB_TYPE_OPTIONS, defaultMultiMode, decisionOrParallelKind, collectorCapabilityOf, isRuleNode, isTranslateNode,
+  BIZ_TYPE_OPTIONS, WEB_TYPE_OPTIONS, defaultMultiMode, decisionOrParallelKind, collectorCapabilityOf, isRuleNode, isRuleLikeNode,
   type CollectConfig, type CollectorSchedule, type LoginConfigRef, type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { configApi, sourceApi } from '@/api'
@@ -36,9 +36,9 @@ const cc = computed<CollectConfig | undefined>(() => cfg.value?.collectCfg)
 
 const isDecisionOrParallel = computed(() => !!cfg.value && decisionOrParallelKind(cfg.value) !== undefined)
 const isRule = computed(() => isRuleNode(cfg.value))
-// 翻译助手（2026-09-18）：节点配置与规则处理保持一致——只有「节点名称 + 定时策略」，
+// 翻译助手 / 打标签 / 摘要 / 音频转文字 / 视频转音频（2026-09-18）：节点配置与规则处理保持一致——只有「节点名称 + 定时策略」，
 // 不再渲染通用的基础字段/参数三元表/发起抓取信息（那些是给自定义/规划中节点兜底的占位内容）。
-const isTranslate = computed(() => isTranslateNode(cfg.value))
+const isRuleLike = computed(() => isRuleLikeNode(cfg.value))
 // 规则节点分两种「起名方式」：规则处理 / 数据监控，配置结构完全一样（复用同一套 rule 种子），
 // 差别只在标题——节点名称就是它自己的名字，所以按标题里含不含「数据监控」来判断提示文案该说哪个。
 const ruleKindLabel = computed(() => (cfg.value?.title?.includes('数据监控') ? '数据监控名称' : '规则处理名称'))
@@ -466,8 +466,8 @@ watch(
 
     <!-- 运行策略（config.runPolicy）已迁到 RuntimePolicySummary.vue，2026-08-31 先不在节点配置展示。 -->
 
-    <!-- 非采集非规则（且非翻译助手）：基础字段 / 参数 / 试跑信息 -->
-    <template v-if="!cc && !isRule && !isTranslate">
+    <!-- 非采集非规则（且非规则式节点）：基础字段 / 参数 / 试跑信息 -->
+    <template v-if="!cc && !isRuleLike">
       <div v-if="cfg?.planned" class="rc-drawer show">规划中节点：OCR / AI 提取 / 发邮件仍待执行器确认。配置可先草拟，发起抓取与上线需等待能力就绪。</div>
 
       <div v-for="(row, i) in cfg?.base ?? []" :key="row[0]" class="rc-field">
