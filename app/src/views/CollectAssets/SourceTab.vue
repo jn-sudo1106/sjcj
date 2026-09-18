@@ -347,8 +347,11 @@ onUnmounted(() => {
       @open-editor="openSiteEditor"
     />
 
-    <!-- 卡片视图分页 -->
-    <div v-if="view === 'card' && total > size" class="ca-pager card-mode">
+    <!-- 卡片视图分页：**常驻**，与表格视图一致（2026-09-18）。
+         原来带 `total > size` 的条件，每页改成 50 之后 25 个网站正好一页装下，
+         整条分页就消失了——连「共 N 条」和每页条数选择器一起没了，看着像功能丢了。
+         单页时 el-pagination 自己会把页码收成一个，不占额外空间。 -->
+    <div v-if="view === 'card'" class="ca-pager card-mode">
       <el-pagination
         v-model:current-page="page"
         v-model:page-size="size"
