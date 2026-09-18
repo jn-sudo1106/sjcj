@@ -808,6 +808,356 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     })
   })
 
+  // 0917/0918 翻译助手：上传/粘贴文本 → 选源语言与目标语言 → 调后端 /api/translate（百度翻译）
+  describe('翻译助手（翻译助手节点）', () => {
+    /** 翻译走 /api/translate（不是 data-process）：请求体 {from,to,query}，语言是百度码 */
+    function mockTranslateApi(
+      payload: unknown = { from: 'zh', to: 'en', translatedText: 'Thank you for your letter.' },
+      status = 200,
+    ) {
+      const calls: { url: string; body: Record<string, unknown> }[] = []
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input)
+        if (url === '/api/translate') {
+          calls.push({ url, body: JSON.parse(String(init?.body ?? '{}')) })
+        }
+        return new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } })
+      })
+      return { calls }
+    }
+
+    /** 按 data-testid 取 el-select：不依赖 DOM 顺序 */
+    function langSelect(wrapper: ReturnType<typeof mount>, testid: string) {
+      const found = wrapper.findAllComponents({ name: 'ElSelect' })
+        .find((c) => c.attributes('data-testid') === testid)
+      if (!found) throw new Error(`找不到 el-select[data-testid=${testid}]`)
+      return found
+    }
+
+    /**
+     * ⚠️ 顺序要紧：mockAssets() 自己也会 spy fetch，必须让它先装完，再接管 fetch，最后挂载。
+     * 所以 api 桩**不能在参数默认值里建**（默认值在函数体之前求值，会被 mockAssets 顶掉）。
+     */
+    function mountOnTranslateNode(apiFactory: () => ReturnType<typeof mockTranslateApi> = mockTranslateApi) {
+      mockAssets()
+      const translateApi = apiFactory()
+      setActivePinia(createPinia())
+      const flow = useFlowStore()
+      flow.configs['translate-1'] = cloneConfig(NODE_CONFIGS['translate'])
+      flow.select('translate-1')
+      flow.setActiveTab('orchestration')
+      const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+      return { flow, wrapper, api: translateApi }
+    }
+
+    it('显示上传文件 / 源语言与目标语言 / 开始翻译，且没有脚本编辑按钮', async () => {
+      const { wrapper } = mountOnTranslateNode()
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="translate-field"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="translate-pick-file"]').text()).toContain('上传文件')
+      expect(wrapper.find('.ni-section-title-row button').exists()).toBe(false)
+
+      const sourceSelect = langSelect(wrapper, 'translate-source')
+      const targetSelect = langSelect(wrapper, 'translate-target')
+      expect(sourceSelect.findAllComponents({ name: 'ElOption' }).map((o) => o.props('value')))
+        .toEqual(['自动检测', '中文简体', '中文繁体', '英语', '日语', '韩语', '法语', '德语', '西班牙语', '俄语'])
+      expect(targetSelect.findAllComponents({ name: 'ElOption' }).map((o) => o.props('value')))
+        .toEqual(['中文简体', '中文繁体', '英语', '日语', '韩语', '法语', '德语', '西班牙语', '俄语'])
+      expect(sourceSelect.props('modelValue')).toBe('自动检测')
+      expect(targetSelect.props('modelValue')).toBe('英语')
+      // 源语言是自动检测时没有可互换的对象
+      expect(wrapper.get('[data-testid="translate-swap"]').attributes('disabled')).toBeDefined()
+      // 没内容不能翻
+      expect(wrapper.get('[data-testid="translate-generate"]').attributes('disabled')).toBeDefined()
+    })
+
+    it('中文简体 → 英语：调 /api/translate 且 from=zh、to=en（用户口径）', async () => {
+      const { wrapper, api } = mountOnTranslateNode()
+      await flushPromises()
+
+      await wrapper.get('[data-testid="translate-text"]').setValue('感谢贵方来信。')
+      langSelect(wrapper, 'translate-source').vm.$emit('update:modelValue', '中文简体')
+      langSelect(wrapper, 'translate-target').vm.$emit('update:modelValue', '英语')
+      await flushPromises()
+      await wrapper.get('[data-testid="translate-generate"]').trigger('click')
+      await flushPromises()
+      await flushPromises()
+
+      expect(api.calls).toHaveLength(1)
+      expect(api.calls[0].body).toEqual({ from: 'zh', to: 'en', query: '感谢贵方来信。' })
+      // 译文来自接口返回的 translatedText
+      expect(wrapper.get('[data-testid="translate-result-text"]').text()).toBe('Thank you for your letter.')
+      expect(wrapper.get('[data-testid="translate-result"]').text()).toContain('英语')
+    })
+
+    it('源语言为自动检测时发 auto，并展示上游识别到的语言', async () => {
+      const { wrapper, api } = mountOnTranslateNode()
+      await flushPromises()
+
+      await wrapper.get('[data-testid="translate-text"]').setValue('おはよう')
+      langSelect(wrapper, 'translate-target').vm.$emit('update:modelValue', '日语')
+      await flushPromises()
+      await wrapper.get('[data-testid="translate-generate"]').trigger('click')
+      await flushPromises()
+      await flushPromises()
+
+      expect(api.calls[0].body).toEqual({ from: 'auto', to: 'jp', query: 'おはよう' })
+      // 返回里的 from 是上游识别结果，界面展示出来
+      expect(wrapper.get('[data-testid="translate-result"]').text()).toContain('检测到源语言')
+    })
+
+    it('互换后 from/to 随之调换；源语言为自动检测时按钮置灰', async () => {
+      const { wrapper, api } = mountOnTranslateNode()
+      await flushPromises()
+
+      const sourceSelect = langSelect(wrapper, 'translate-source')
+      const targetSelect = langSelect(wrapper, 'translate-target')
+      sourceSelect.vm.$emit('update:modelValue', '日语')
+      targetSelect.vm.$emit('update:modelValue', '英语')
+      await flushPromises()
+      await wrapper.get('[data-testid="translate-text"]').setValue('こんにちは')
+
+      await wrapper.get('[data-testid="translate-swap"]').trigger('click')
+      await flushPromises()
+      expect(sourceSelect.props('modelValue')).toBe('英语')
+      expect(targetSelect.props('modelValue')).toBe('日语')
+
+      await wrapper.get('[data-testid="translate-generate"]').trigger('click')
+      await flushPromises()
+      await flushPromises()
+      expect(api.calls[0].body).toMatchObject({ from: 'en', to: 'jp' })
+
+      sourceSelect.vm.$emit('update:modelValue', '自动检测')
+      await flushPromises()
+      expect(wrapper.get('[data-testid="translate-swap"]').attributes('disabled')).toBeDefined()
+      await wrapper.get('[data-testid="translate-swap"]').trigger('click')
+      await flushPromises()
+      expect(targetSelect.props('modelValue')).toBe('日语')
+    })
+
+    // 2026-09-18：后端换成百度开放平台，上限是 **6000 字节**（UTF-8），不是字符数
+    it('超过单次上限（6000 字节）时禁用并给出提示，不发请求', async () => {
+      const { wrapper, api } = mountOnTranslateNode()
+      await flushPromises()
+
+      // 2001 个汉字 = 6003 字节（字符数只有 2001，按字符判会漏）
+      await wrapper.get('[data-testid="translate-text"]').setValue('中'.repeat(2001))
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="translate-over-limit"]').text()).toContain('超过单次上限 6000 字节')
+      expect(wrapper.get('[data-testid="translate-generate"]').attributes('disabled')).toBeDefined()
+      await wrapper.get('[data-testid="translate-generate"]').trigger('click')
+      await flushPromises()
+      expect(api.calls).toHaveLength(0)
+    })
+
+    it('接口报错时透出后端文案（凭据未配置 / 限流），不显示结果区', async () => {
+      const { wrapper } = mountOnTranslateNode(
+        () => mockTranslateApi({ error: '未配置 translate.baidu.acs-token（百度翻译网页版会话令牌）' }, 502),
+      )
+      await flushPromises()
+
+      await wrapper.get('[data-testid="translate-text"]').setValue('你好')
+      await flushPromises()
+      await wrapper.get('[data-testid="translate-generate"]').trigger('click')
+      await flushPromises()
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="translate-error"]').text()).toContain('未配置 translate.baidu.acs-token')
+      expect(wrapper.find('[data-testid="translate-result"]').exists()).toBe(false)
+    })
+
+    it('上传文本文件填入原文，非文本文件被拒', async () => {
+      const { wrapper } = mountOnTranslateNode()
+      await flushPromises()
+
+      await selectFile(
+        wrapper.find('input[data-testid="translate-file-input"]'),
+        new File(['Hello world'], 'doc.txt', { type: 'text/plain' }),
+      )
+      await flushPromises()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      await flushPromises()
+      expect((wrapper.get('[data-testid="translate-text"]').element as HTMLTextAreaElement).value).toContain('Hello world')
+
+      await selectFile(
+        wrapper.find('input[data-testid="translate-file-input"]'),
+        new File(['x'], 'photo.png', { type: 'image/png' }),
+      )
+      await flushPromises()
+      expect(wrapper.get('[data-testid="translate-file-error"]').text()).toContain('只支持文本文件')
+    })
+  })
+
+  // 0918 文章打标签：上传/粘贴文本 → 系统提示词取 cfg_llm_node_prompt 的「文章打标签」行
+  // （category='rule'）→ 调 data-process → 解析模型输出的 JSON 标签
+  describe('文章打标签（文章打标签节点）', () => {
+    const TAG_TEMPLATE = {
+      promptId: 5,
+      nodeType: 'article_maketag',
+      nodeTypeName: '文章打标签',
+      category: 'rule',
+      systemPrompt: '你是一名专业的舆情监控文本标注引擎，请按给定标签体系输出 JSON。',
+      version: 1,
+      isActive: 1,
+      isDefault: 0,
+    }
+    const TAG_JSON = JSON.stringify({
+      summary: '某市地铁故障停运两小时，官方未回应引发不满',
+      labels: { topic: ['社会'], sentiment: '负面', risk: ['涉稳'], risk_level: '中危' },
+      confidence: 0.9,
+      evidence: { sentiment: '太让人失望了' },
+      uncertain: false,
+    })
+
+    function mockTagApis(promptRows: unknown[] = [TAG_TEMPLATE]) {
+      const calls: string[] = []
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input)
+        calls.push(url)
+        const json = (data: unknown) => new Response(JSON.stringify(data), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        })
+        if (url === '/api/model/providers') return json({ data: MODEL_PROVIDERS })
+        if (url.startsWith('/api/model/default-models')) {
+          const code = new URL(url, 'http://localhost').searchParams.get('providerCode') || ''
+          return json({ data: MODEL_OPTIONS[code] ?? [] })
+        }
+        if (url.startsWith('/api/prompt/list')) return json(promptRows)
+        return json([])
+      })
+      return { promptCalls: () => calls.filter((u) => u.startsWith('/api/prompt/list')) }
+    }
+
+    /** ⚠️ 先 mockAssets（它自己会 spy fetch），再接管 fetch，最后挂载 */
+    function mountOnTagNode(promptRows: unknown[] = [TAG_TEMPLATE]) {
+      mockAssets()
+      const api = mockTagApis(promptRows)
+      setActivePinia(createPinia())
+      const flow = useFlowStore()
+      flow.configs['tag-1'] = cloneConfig(NODE_CONFIGS['article-tag'])
+      flow.select('tag-1')
+      flow.setActiveTab('orchestration')
+      const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+      return { flow, wrapper, ...api }
+    }
+
+    it('显示上传文本 / 模型 / 开始打标签，且没有脚本编辑按钮', async () => {
+      const { wrapper } = mountOnTagNode()
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="article-tag-field"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="tag-pick-file"]').text()).toContain('上传文本')
+      expect(wrapper.find('[data-testid="tag-model-provider"]').exists()).toBe(true)
+      expect(wrapper.find('.ni-section-title-row button').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="tag-generate"]').attributes('disabled')).toBeDefined()
+    })
+
+    it('按 category=rule + node_type_name=文章打标签 取提示词并写到节点上', async () => {
+      const { flow, wrapper, promptCalls } = mountOnTagNode()
+      await flushPromises()
+      await flushPromises()
+
+      expect(promptCalls().length).toBeGreaterThan(0)
+      promptCalls().forEach((url) => {
+        expect(decodeURIComponent(url)).toContain('node_type_name=文章打标签')
+        expect(url).toContain('category=rule')
+      })
+      expect(flow.configs['tag-1'].execCfg?.systemPrompt).toBe(TAG_TEMPLATE.systemPrompt)
+      await wrapper.get('[data-testid="tag-prompt-toggle"]').trigger('click')
+      expect(wrapper.get('[data-testid="tag-prompt-text"]').text()).toContain('舆情监控文本标注引擎')
+    })
+
+    it('粘贴文本后打标签：入参带「文本：」前缀与提示词，结果按维度渲染成标签', async () => {
+      const { wrapper } = mountOnTagNode()
+      await flushPromises()
+      await flushPromises()
+
+      const generateSpy = vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
+        options?.onContent?.(TAG_JSON)
+        return { script: '', scriptPath: '' }
+      })
+
+      await wrapper.get('[data-testid="tag-text"]').setValue('某市地铁又出故障了，太让人失望了！')
+      await flushPromises()
+      await wrapper.get('[data-testid="tag-generate"]').trigger('click')
+      await flushPromises()
+      await flushPromises()
+
+      const payload = generateSpy.mock.calls[0][0]
+      expect(payload.description).toContain('文本：')
+      expect(payload.description).toContain('某市地铁又出故障了')
+      expect(payload.systemPrompt).toBe(TAG_TEMPLATE.systemPrompt)
+      expect(payload.providerCode).toBe('DeepSeek')
+      expect(payload.model).toBe('deepseek-chat')
+
+      const result = wrapper.get('[data-testid="tag-result"]')
+      expect(wrapper.get('[data-testid="tag-summary"]').text()).toContain('地铁故障停运两小时')
+      expect(result.text()).toContain('社会')      // 主题
+      expect(result.text()).toContain('负面')      // 情感
+      expect(result.text()).toContain('中危')      // 风险等级
+      expect(result.text()).toContain('置信度 0.90')
+      expect(result.text()).toContain('太让人失望了')  // 依据
+      // 原始返回可展开
+      await wrapper.get('[data-testid="tag-raw-toggle"]').trigger('click')
+      expect(wrapper.get('[data-testid="tag-raw"]').text()).toContain('"risk_level"')
+    })
+
+    it('模型没按 JSON 输出时退回展示原文，不报错也不丢内容', async () => {
+      const { wrapper } = mountOnTagNode()
+      await flushPromises()
+      await flushPromises()
+
+      vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
+        options?.onContent?.('这篇文章整体偏负面，主要涉及社会话题。')
+        return { script: '', scriptPath: '' }
+      })
+
+      await wrapper.get('[data-testid="tag-text"]').setValue('随便一段文本')
+      await flushPromises()
+      await wrapper.get('[data-testid="tag-generate"]').trigger('click')
+      await flushPromises()
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="tag-result"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="tag-raw-result"]').text()).toContain('主要涉及社会话题')
+    })
+
+    it('提示词表里没有这一行时给出提示且不允许打标签', async () => {
+      const { flow, wrapper } = mountOnTagNode([])
+      await flushPromises()
+      await flushPromises()
+
+      expect(flow.configs['tag-1'].execCfg?.systemPrompt).toBe(DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT)
+      await wrapper.get('[data-testid="tag-text"]').setValue('一些文本')
+      await flushPromises()
+      expect(wrapper.get('[data-testid="tag-generate"]').attributes('disabled')).toBeDefined()
+      expect(wrapper.find('[data-testid="tag-prompt-missing"]').exists()).toBe(true)
+    })
+
+    it('上传文本文件填入待标注文本，非文本文件被拒', async () => {
+      const { wrapper } = mountOnTagNode()
+      await flushPromises()
+
+      await selectFile(
+        wrapper.find('input[data-testid="tag-file-input"]'),
+        new File(['某市地铁故障'], 'news.txt', { type: 'text/plain' }),
+      )
+      await flushPromises()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      await flushPromises()
+      expect((wrapper.get('[data-testid="tag-text"]').element as HTMLTextAreaElement).value).toContain('某市地铁故障')
+
+      await selectFile(
+        wrapper.find('input[data-testid="tag-file-input"]'),
+        new File(['x'], 'photo.png', { type: 'image/png' }),
+      )
+      await flushPromises()
+      expect(wrapper.get('[data-testid="tag-file-error"]').text()).toContain('只支持文本文件')
+    })
+  })
+
   it('模型供应商和模型位于同一行', async () => {
     const { wrapper } = mountWithExistingRule()
     await flushPromises()

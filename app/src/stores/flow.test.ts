@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useFlowStore } from './flow'
 import { mockFlowRecommend, mockNodeAiChat } from '../api/mock/flows'
-import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES, buildSourceSeed, isRuleNode, isMonitorNode, isDataValidationNode, iconFor, nodeClassFor } from '@/views/FlowCanvas/canvas/flowModel'
+import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES, buildSourceSeed, isRuleNode, isMonitorNode, isDataValidationNode, iconFor, nodeClassFor, nodeTypeLabel } from '@/views/FlowCanvas/canvas/flowModel'
 import { makePresetFlowTemplates } from '@/utils/flow/flowTemplates'
 import type { Source } from '../api'
 
@@ -1455,7 +1455,7 @@ describe('「落表输出」节点移除（优化 0701 问题四）', () => {
     // 解析结构化/清洗/去重/字段映射 仍然成立；后端字典里 300/700/710/720 是独立编号的类型，
     // 用户要求全部可见可选，所以它们回到了清单里。
     expect(LIB_GROUPS.find((group) => group.title === '数据处理')?.items.map((it) => it.name)).toEqual([
-      '数据处理', '校验类', '视频提取音频', '音频提取文字', '文章生成摘要',
+      '数据处理', '校验类', '视频提取音频', '音频提取文字', '文章生成摘要', '文章打标签', '翻译助手',
     ])
 
     const flow = mockFlowRecommend({ intent: 'file-parse' }).flow
@@ -1464,10 +1464,10 @@ describe('「落表输出」节点移除（优化 0701 问题四）', () => {
   })
 
   // 2026-09-17：节点库必须与后端字典逐条对齐（用户口径：17 条类型都能看见、都能选）
-  it('节点库覆盖后端字典全部 17 条抓取类型', () => {
+  it('节点库覆盖后端字典全部 19 条抓取类型', () => {
     const items = LIB_GROUPS.flatMap((g) => g.items)
     const numeric = new Set(items.map((it) => Number(it.badge ?? it.code)).filter((n) => Number.isInteger(n)))
-    for (const code of [90, 110, 120, 130, 140, 150, 160, 170, 300, 400, 500, 600, 610, 620, 700, 710, 720]) {
+    for (const code of [90, 110, 120, 130, 140, 150, 160, 170, 300, 400, 500, 600, 610, 620, 700, 710, 720, 730, 800]) {
       expect(numeric.has(code), `节点库缺少类型 ${code}`).toBe(true)
     }
     // 每个条目都得能落到一个存在的节点种子上，否则点了没反应
@@ -1661,14 +1661,38 @@ describe('数据校验节点（sourceType=800，配置参考数据监控）', ()
     expect(isDataValidationNode(f.configs[id])).toBe(true)
   })
 
-  it('按 sourceType=800 回读为数据校验节点', () => {
+  // 2026-09-17：800 现在是「翻译助手」，620 才是数据校验。800 只在名字指向校验时按校验认
+  //（09-07～09-17 本前端把 800 当作数据校验写出去过）。
+  it('按 sourceType=620 回读为数据校验节点；800 + 校验名回读仍是数据校验（存量）', () => {
     const source = { sourceId: 's-validation', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
     const seed = buildSourceSeed(source, [
       { stepId: 'st1', sourceId: 's-validation', name: '列表抓取', inputTable: '-', outputTable: 'T1', nodeType: 'list', enabled: true },
-      { stepId: 'st2', sourceId: 's-validation', name: '字段检查', inputTable: 'T1', outputTable: 'T1', configType: '800', nodeType: 'entry', dependsOn: ['st1'], enabled: true },
+      { stepId: 'st2', sourceId: 's-validation', name: '字段检查', inputTable: 'T1', outputTable: 'T1', configType: '620', nodeType: 'entry', dependsOn: ['st1'], enabled: true },
+      { stepId: 'st3', sourceId: 's-validation', name: '数据校验', inputTable: 'T1', outputTable: 'T1', configType: '800', nodeType: 'entry', dependsOn: ['st2'], enabled: true },
     ] as never)
     expect(seed.configs.st2.template).toBe('data-validation')
     expect(isDataValidationNode(seed.configs.st2)).toBe(true)
+    expect(seed.configs.st3.template).toBe('data-validation')
+  })
+
+  it('按 sourceType=730 回读为文章打标签节点', () => {
+    const source = { sourceId: 's-tag', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: 'st1', sourceId: 's-tag', name: '列表抓取', inputTable: '-', outputTable: 'T1', nodeType: 'list', enabled: true },
+      { stepId: 'st2', sourceId: 's-tag', name: '文章打标签', inputTable: 'T1', outputTable: 'T1', configType: '730', nodeType: 'entry', dependsOn: ['st1'], enabled: true },
+    ] as never)
+    expect(seed.configs.st2.template).toBe('article-tag')
+    expect(nodeTypeLabel(seed.configs.st2)).toBe('文章打标签')
+  })
+
+  it('按 sourceType=800（名字不是校验）回读为翻译助手节点', () => {
+    const source = { sourceId: 's-translate', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: 'st1', sourceId: 's-translate', name: '列表抓取', inputTable: '-', outputTable: 'T1', nodeType: 'list', enabled: true },
+      { stepId: 'st2', sourceId: 's-translate', name: '翻译助手', inputTable: 'T1', outputTable: 'T1', configType: '800', nodeType: 'entry', dependsOn: ['st1'], enabled: true },
+    ] as never)
+    expect(seed.configs.st2.template).toBe('translate')
+    expect(nodeTypeLabel(seed.configs.st2)).toBe('翻译助手')
   })
 })
 

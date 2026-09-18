@@ -73,6 +73,14 @@ export default defineConfig(({ mode }) => {
           // 转写是同步长请求（后端读超时 3 分钟），代理默认超时会先断开
           timeout: 200_000,
         },
+        // 翻译（翻译助手节点，2026-09-18）：接口在 vanv-data-engine 的 translate 包，与 data-process
+        // 同一台 8080。**注意它不在 /api/answer 下**，必须单独转发，否则会被通用 '/api' 送到业务后端（9999）404。
+        '/api/translate': {
+          target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://127.0.0.1:8080',
+          changeOrigin: true,
+          // 后端读百度的超时是 1 分钟，代理给足
+          timeout: 120_000,
+        },
         // 视频提取音频（视频提取音频节点，2026-09-17）：接口在 vanv-data-engine 的 media 包，
         // 同一台 8080；理由同 /api/speech（必须排在通用 '/api' 之前）。
         // 转码同步执行、后端超时默认 5 分钟，代理给足时间。

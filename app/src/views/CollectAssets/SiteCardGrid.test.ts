@@ -28,19 +28,21 @@ async function mountGrid(sites: Site[] = [site]) {
 describe('SiteCardGrid 大源量加载', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('首屏只请求卡片需要的 4 个源，不拉完整源列表', async () => {
+  it('首屏只请求卡片需要的 5 个源，不拉完整源列表', async () => {
     const preview = vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([source('s1', 12), source('s2', 30)])
     const all = vi.spyOn(siteApi, 'siteSources')
 
     const { wrapper } = await mountGrid()
 
-    expect(preview).toHaveBeenCalledWith('site-1', 4)
+    // 5 = CHIP_LIMIT：两列网格下 5 个 chip + 「+N」正好 6 格填满 3 行
+    expect(preview).toHaveBeenCalledWith('site-1', 5)
     expect(all).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('数据 42 条')
   })
 
   it('大网站在卡片渲染后后台汇总完整源数据量', async () => {
-    const large = { ...site, sourceCount: 5 }
+    // 6 > CHIP_LIMIT(5)：预览拿不全，才需要后台补完整列表算数据量
+    const large = { ...site, sourceCount: 6 }
     vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([source('s1', 12)])
     const all = vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1', 12), source('s2', 30)])
 
@@ -51,7 +53,7 @@ describe('SiteCardGrid 大源量加载', () => {
   })
 
   it('小站预览失败也会进汇总队列补全，数据量不落「—」', async () => {
-    // 回归：queueDataCounts 原来按 sourceCount > CHIP_LIMIT 过滤，小站（≤4 源）预览失败
+    // 回归：queueDataCounts 原来按 sourceCount > CHIP_LIMIT 过滤，小站（≤5 源）预览失败
     // 时既没有完整列表也进不了队列，数据量永远显示「—」、chips 误显「暂无源」。
     const small = { ...site, sourceCount: 2 }
     vi.spyOn(siteApi, 'siteSourcePreview').mockRejectedValue(new Error('preview failed'))

@@ -47,6 +47,9 @@ describe('配置写入 HTTP 契约', () => {
     codeRule: '{"globals":["列ID"]}',
     contentRule: '{}',
     clearRule: '{"keep":1}',
+    // 2026-09-18：拼接后的系统提示词随保存落 cs_config.prompt——updateConfig 的 JSON body
+    // 必须原样带上它（这条契约锁死：任何"模型→旧字段"的二次转换都会把它丢光）。
+    prompt: '拼接好的系统提示词：source_id=430016398',
   }
 
   // config/add 是**唯一的"从零建配置"通路**（config_api.md §十六）。后端签名
@@ -56,7 +59,7 @@ describe('配置写入 HTTP 契约', () => {
   it('POST /v1/config/add：走表单编码，不是 JSON（发 JSON 会静默丢字段）', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '新增成功，id:1400986', data: null }))
     const { configApi } = await import('./index')
-    const created = await configApi.addConfig({ configName: '网页抓取', configType: 90, isMulti: 1, configUrl: '' })
+    const created = await configApi.addConfig({ configName: '网页抓取', configType: 90, isMulti: 1, configUrl: '', prompt: '拼接好的系统提示词' })
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(new URL(url, 'http://local.test').pathname).toBe('/api/v1/config/add')
@@ -66,6 +69,8 @@ describe('配置写入 HTTP 契约', () => {
     expect(form.get('configName')).toBe('网页抓取')
     expect(form.get('configType')).toBe('90')
     expect(form.get('isMulti')).toBe('1')
+    // 2026-09-18：prompt 走同一份表单编码落 cs_config.prompt
+    expect(form.get('prompt')).toBe('拼接好的系统提示词')
     // 与 appendQuery 同口径：空串跳过，不要发一个空的 configUrl 去覆盖
     expect(form.has('configUrl')).toBe(false)
     // 新 configId 只在 msg 里，data 恒为 null

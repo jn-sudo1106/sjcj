@@ -20,7 +20,13 @@ const props = defineProps<{ sites: Site[] }>()
 const emit = defineEmits<{ 'open-editor': [site: Site] }>()
 const router = useRouter()
 
-const CHIP_LIMIT = 4
+/**
+ * 卡片上直接展示几个源。
+ *
+ * 5 而不是 4（2026-09-18）：chips 是两列网格，**5 个 + 那颗「+N」正好 6 格填满 3 行**。
+ * 4 个的时候「+N」落单占半行、右边空着，用户原话"有点丑"。
+ */
+const CHIP_LIMIT = 5
 const childrenCache = reactive<Record<string, Source[]>>({})
 const childrenComplete = reactive<Record<string, boolean>>({})
 const childrenLoading = reactive<Record<string, boolean>>({})
@@ -376,6 +382,9 @@ onUnmounted(() => {
    原来是 flex + wrap，chip 宽度随名字长短走——「证券日报网-金融机构…」这种长名字
    一个就占满一行，短的挤三个，一片参差。网格定死两列，长的自己省略，行数可预期。 */
 .scg-chips { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 12px; }
+/* 「+N」落单时铺满整行：CHIP_LIMIT=5 之后多数卡片是 6 格填满，但源数正好是偶数
+   （比如 6 个源全展示）时它还是会落单，半行空着不好看。铺满反倒像个"展开"按钮。 */
+.scg-chip.more:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .scg-chip {
   min-width: 0;
   height: 24px;

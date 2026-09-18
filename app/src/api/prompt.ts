@@ -41,7 +41,11 @@ function normalizePrompt(item: unknown): PromptTemplateItem | null {
   const systemPrompt = toString(record.systemPrompt).trim()
   const nodeTypeName = toString(record.nodeTypeName).trim()
   const category = toString(record.category).trim()
-  if (!systemPrompt || !nodeTypeName || !category) return null
+  // ⚠️ category 允许为空：2026-09-17 那会儿「翻译」「文章打标签」两行的 category 是 NULL，
+  // 此前这里要求 category 非空会把整行丢掉（模板永远取不到，页面表现为"提示词没配"）。
+  // 用户 2026-09-18 已把两行补成 'rule'，但这条容错仍然保留：表里后续再出现 category 为空的行
+  // 也不该被静默丢弃。systemPrompt / nodeTypeName 仍必填。
+  if (!systemPrompt || !nodeTypeName) return null
   const promptId = Number(record.promptId ?? record.id ?? 0)
   return {
     promptId: Number.isFinite(promptId) ? promptId : 0,

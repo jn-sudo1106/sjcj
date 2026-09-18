@@ -18,7 +18,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Document, Headset, Picture, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { recognizeImage, readImageAsBase64, ocrTextOf, type OcrBlock } from '@/api/ocr'
-import { isArticleSummaryNode, isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isRuleNode, isScriptlessNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { isArticleSummaryNode, isArticleTagNode, isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isRuleNode, isScriptlessNode, isTranslateNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { parseArticleTags, riskLevelTone, type ArticleTagResult } from '@/utils/flow/articleTags'
+import { TRANSLATE_LANGUAGE_CODES, TRANSLATE_MAX_QUERY_BYTES, translateText, utf8ByteLength } from '@/api/translate'
 import { SPEECH_AUDIO_EXTENSIONS, SPEECH_LANGUAGE_OPTIONS, SPEECH_MAX_DURATION_SECONDS, SPEECH_MAX_FILE_SIZE, isSupportedAudioFile, readAudioDuration, transcribeAudio, type SpeechTranscriptionResult } from '@/api/speech'
 import { MEDIA_AUDIO_FORMATS, MEDIA_BIT_RATE_OPTIONS, MEDIA_CHANNEL_OPTIONS, MEDIA_MAX_FILE_SIZE, MEDIA_SAMPLING_RATE_OPTIONS, MEDIA_VIDEO_EXTENSIONS, extractAudio, isSupportedVideoFile, readVideoDuration, type MediaExtractionResult } from '@/api/media'
 import { useNodeEditorContext } from '../nodeEditorContext'
@@ -381,39 +383,13 @@ async function runArticleSummary() {
   articleAbort.value = controller
   let streamed = ''
   try {
-    // description 即 user message：正文本身；systemPrompt 是提示词表里那条模板的渲染结果。
-    //
-    // ⚠️ sourceTable / inputFields 必须非空：后端 AnswerServiceImpl.dataProcess() 对这两个字段做了
-    // validateText（`targetTable` / `outputFields` 反而是可选的，注释写着"数据监控等无目标落表的场景会传空"）。
-    // 传空会直接 500（不是 400，见下面的说明），所以这里按"正文来源"如实填：
-    //   sourceTable = 上传的文件名，没上传文件就叫「文章文本」；inputFields = 正文:article_text。
-    // 语义上文章摘要没有表和字段，这两个值只是满足接口校验的占位；后端把这两个校验放宽后可以删掉。
-    const payload = buildDataProcessGeneratePayload({
-      description: articleText.value,
-      configId: Number(cfg.value?.configId ?? 0),
-      providerCode: orchCfg.value.modelProviderCode ?? '',
-      model: orchCfg.value.modelCode ?? '',
-      sourceTable: articleFileName.value || '文章文本',
-      targetTable: '',
-      inputFields: ['article_text'],
-      outputFields: [],
-      inputFieldOptions: [{ itemCode: 'article_text', itemName: '正文' }],
-      outputFieldOptions: [],
-      systemPrompt: orchCfg.value.systemPrompt ?? '',
-    })
-    // buildDataProcessGeneratePayload 在 outputFieldOptions 为空时会**退回 inputFields**（规则节点的既有口径：
-    // 没配出参选项就按入参来）。文章摘要是纯文本进、纯文本出，没有任何字段，这里显式清空，
-    // 免得把「正文」当成出参字段写进 payload 与 cs_config.snatch_conf。
-    payload.outputFields = ''
-    await ruleApi.dataProcessGenerate(payload, {
-      signal: controller.signal,
-      onThinking: (delta) => { if (delta) articleThinking.value += delta },
-      onContent: (delta) => {
-        if (!delta) return
-        streamed += delta
-        articleSummary.value = streamed
-      },
-      onDone: () => { articleDone.value = true },
+    // description 即 user message：正文本身；systemPrompt 是提示词表里那条模板的渲染结果
+    streamed = await callDataProcessForText({
+      text: articleText.value,
+      sourceLabel: articleFileName.value || '文章文本',
+      signal: controller,
+      onThinking: (delta) => { articleThinking.value += delta },
+      onContent: (full) => { articleSummary.value = full },
     })
     if (!streamed.trim() && !articleSummary.value.trim()) {
       articleError.value = '模型没有返回内容，请重试或换一个模型'
@@ -449,6 +425,327 @@ async function copyArticleSummary() {
   }
 }
 
+// ---- 翻译助手（0917 第一版，仅翻译助手节点）----
+// 上传/粘贴文本 → 选目标语言 → 调 /api/answer/data-process 出译文。
+// 系统提示词同样来自提示词表：那一行是 node_type_name='翻译'、**category 为空**（2026-09-17 直接读
+// cfg_llm_node_prompt 核对），所以查模板时不带 category（见 promptCategory.promptListCategoryForNode）。
+const isTranslate = computed(() => isTranslateNode(cfg.value))
+/** 源语言下拉里的「自动检测」项：请求时发 auto（见 api/translate.ts） */
+const TRANSLATE_AUTO = '自动检测'
+/**
+ * 语言候选（产品给的 9 项）。直接取语言码表的键，保证"能选的语言"与"能翻译的语言"永远一致
+ *（百度语言码见 api/translate.ts：日语 jp、韩语 kor、法语 fra、繁体 cht，不是 ISO 639-1）。
+ */
+const TRANSLATE_LANGUAGES = Object.keys(TRANSLATE_LANGUAGE_CODES)
+
+const translateText_ = ref('')
+const translateFileInput = ref<HTMLInputElement | null>(null)
+const translateFileName = ref('')
+const translateFileError = ref('')
+const translateSource = ref(TRANSLATE_AUTO)
+const translateTarget = ref('英语')
+const translateRunning = ref(false)
+const translateError = ref('')
+const translateResult = ref('')
+/** 上游实际识别到的源语言码（auto 时有用），拼成一句"检测到：xx" */
+const translateDetectedFrom = ref('')
+const translateAbort = ref<AbortController | null>(null)
+
+/** 源语言是「自动检测」时没有可互换的对象，按钮置灰（不替用户猜一个源语言出来） */
+const canSwapLanguages = computed(() => translateSource.value !== TRANSLATE_AUTO)
+function swapTranslateLanguages() {
+  if (!canSwapLanguages.value) return
+  const from = translateSource.value
+  translateSource.value = translateTarget.value
+  translateTarget.value = from
+}
+
+const translateCharCount = computed(() => translateText_.value.trim().length)
+/** 上限按 **UTF-8 字节** 算（后端 translate.baidu.max-query-bytes，默认 6000）：中文 1 字 3 字节，约 2000 字 */
+const translateByteCount = computed(() => utf8ByteLength(translateText_.value.trim()))
+const translateTooLong = computed(() => translateByteCount.value > TRANSLATE_MAX_QUERY_BYTES)
+const canTranslate = computed(() => (
+  !translateRunning.value && translateCharCount.value > 0 && !translateTooLong.value && !!translateTarget.value
+))
+
+function clearTranslate() {
+  translateText_.value = ''
+  translateFileName.value = ''
+  translateFileError.value = ''
+  translateError.value = ''
+  translateResult.value = ''
+  translateDetectedFrom.value = ''
+  if (translateFileInput.value) translateFileInput.value.value = ''
+}
+
+function onTranslateFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  translateFileError.value = ''
+  if (!file) return
+  if (!isTextFile(file)) {
+    input.value = ''
+    translateFileError.value = `只支持文本文件（${ARTICLE_TEXT_EXTENSIONS.join(' / ')}）`
+    return
+  }
+  const reader = new FileReader()
+  reader.onerror = () => { translateFileError.value = '文件读取失败' }
+  reader.onload = () => {
+    const text = typeof reader.result === 'string' ? reader.result : ''
+    translateText_.value = text
+    translateFileName.value = file.name
+    translateError.value = ''
+    translateResult.value = ''
+    translateDetectedFrom.value = ''
+    const bytes = utf8ByteLength(text.trim())
+    if (bytes > TRANSLATE_MAX_QUERY_BYTES) {
+      translateFileError.value = `文件 ${bytes} 字节，超过单次上限 ${TRANSLATE_MAX_QUERY_BYTES} 字节（中文约 2000 字），请先分段`
+    }
+  }
+  reader.readAsText(file)
+}
+
+function onTranslateTextInput(e: Event) {
+  translateText_.value = (e.target as HTMLTextAreaElement).value
+  translateFileError.value = ''
+}
+
+async function runTranslate() {
+  if (!canTranslate.value) return
+  translateRunning.value = true
+  translateError.value = ''
+  translateResult.value = ''
+  translateDetectedFrom.value = ''
+  translateAbort.value?.abort()
+  const controller = new AbortController()
+  translateAbort.value = controller
+  try {
+    const result = await translateText({
+      from: translateSource.value,
+      to: translateTarget.value,
+      query: translateText_.value,
+    }, { signal: controller.signal })
+    translateResult.value = result.translatedText
+    translateDetectedFrom.value = result.from
+    ElMessage.success(`已翻译为${translateTarget.value}`)
+  } catch (e) {
+    if (controller.signal.aborted) {
+      ElMessage.info('已取消翻译')
+    } else {
+      translateError.value = `翻译失败：${(e as Error)?.message ?? String(e)}`
+      ElMessage.error(translateError.value)
+    }
+  } finally {
+    if (translateAbort.value === controller) translateAbort.value = null
+    translateRunning.value = false
+  }
+}
+
+function cancelTranslate() {
+  translateAbort.value?.abort()
+}
+
+async function copyTranslation() {
+  const text = translateResult.value.trim()
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('译文已复制')
+  } catch {
+    ElMessage.warning('复制失败，请手动选择文本')
+  }
+}
+
+function downloadTranslation() {
+  const text = translateResult.value
+  if (!text.trim()) return
+  const base = (translateFileName.value || 'translation').replace(/\.[^.]+$/, '')
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${base}.${translateTarget.value}.txt`
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+  ElMessage.success('译文已下载')
+}
+
+/**
+ * 文本 → data-process 的公共调用（文章摘要 / 翻译助手共用）。
+ *
+ * ⚠️ sourceTable / inputFields 必须非空：后端 AnswerServiceImpl.dataProcess() 对这两个字段做了
+ * validateText（`targetTable` / `outputFields` 反倒可选），传空直接 500（错误体还是空的）。
+ * 这类节点没有表与字段，按"文本来源"如实填占位值；后端放宽校验后可以删掉。
+ */
+async function callDataProcessForText(input: {
+  text: string
+  sourceLabel: string
+  signal: AbortController
+  onThinking: (delta: string) => void
+  /** 回传的是**累计到当前的全文**（不是增量）——调用方直接赋值给结果区即可 */
+  onContent: (fullText: string) => void
+}): Promise<string> {
+  const payload = buildDataProcessGeneratePayload({
+    description: input.text,
+    configId: Number(cfg.value?.configId ?? 0),
+    providerCode: orchCfg.value.modelProviderCode ?? '',
+    model: orchCfg.value.modelCode ?? '',
+    sourceTable: input.sourceLabel || '文本',
+    targetTable: '',
+    inputFields: ['article_text'],
+    outputFields: [],
+    inputFieldOptions: [{ itemCode: 'article_text', itemName: '正文' }],
+    outputFieldOptions: [],
+    systemPrompt: orchCfg.value.systemPrompt ?? '',
+  })
+  // buildDataProcessGeneratePayload 在 outputFieldOptions 为空时会**退回 inputFields**（规则节点的既有口径），
+  // 这类纯文本节点没有出参字段，显式清掉，免得把「正文」当成出参写进 payload 与 cs_config.snatch_conf。
+  payload.outputFields = ''
+  let streamed = ''
+  await ruleApi.dataProcessGenerate(payload, {
+    signal: input.signal.signal,
+    onThinking: (delta) => { if (delta) input.onThinking(delta) },
+    onContent: (delta) => {
+      if (!delta) return
+      streamed += delta
+      input.onContent(streamed)
+    },
+  })
+  return streamed
+}
+
+// ---- 文章打标签（0918 第一版，仅文章打标签节点）----
+// 上传/粘贴文本 → 调 /api/answer/data-process（与摘要同一条通路：系统提示词整段由前端从
+// cfg_llm_node_prompt 取，node_type_name='文章打标签'、category='rule'）→ 解析模型输出的 JSON 标签。
+const isArticleTag = computed(() => isArticleTagNode(cfg.value))
+const tagPromptMissing = ref(false)
+const tagPromptOpen = ref(false)
+
+const tagText = ref('')
+const tagFileInput = ref<HTMLInputElement | null>(null)
+const tagFileName = ref('')
+const tagFileError = ref('')
+const tagRunning = ref(false)
+const tagError = ref('')
+/** 模型原始输出（也用于"解析不出 JSON 时退回展示"） */
+const tagRawOutput = ref('')
+const tagResult = ref<ArticleTagResult | null>(null)
+const tagRawOpen = ref(false)
+const tagAbort = ref<AbortController | null>(null)
+
+const tagCharCount = computed(() => tagText.value.trim().length)
+const tagPromptReady = computed(() => !tagPromptMissing.value && !!orchCfg.value.systemPrompt?.trim())
+const canTag = computed(() => (
+  !tagRunning.value && tagCharCount.value > 0 && tagPromptReady.value
+  && !!(orchCfg.value.modelProviderCode ?? '').trim() && !!(orchCfg.value.modelCode ?? '').trim()
+))
+
+function clearArticleTag() {
+  tagText.value = ''
+  tagFileName.value = ''
+  tagFileError.value = ''
+  tagError.value = ''
+  tagRawOutput.value = ''
+  tagResult.value = null
+  tagRawOpen.value = false
+  if (tagFileInput.value) tagFileInput.value.value = ''
+}
+
+function onTagFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  tagFileError.value = ''
+  if (!file) return
+  if (!isTextFile(file)) {
+    input.value = ''
+    tagFileError.value = `只支持文本文件（${ARTICLE_TEXT_EXTENSIONS.join(' / ')}）`
+    return
+  }
+  const reader = new FileReader()
+  reader.onerror = () => { tagFileError.value = '文件读取失败' }
+  reader.onload = () => {
+    const text = typeof reader.result === 'string' ? reader.result : ''
+    if (text.trim().length > ARTICLE_MAX_CHARS) {
+      tagFileError.value = `正文超过 ${ARTICLE_MAX_CHARS} 字，请先精简或分段`
+      return
+    }
+    tagText.value = text
+    tagFileName.value = file.name
+    tagError.value = ''
+    tagResult.value = null
+    tagRawOutput.value = ''
+  }
+  reader.readAsText(file)
+}
+
+function onTagTextInput(e: Event) {
+  tagText.value = (e.target as HTMLTextAreaElement).value
+  tagFileError.value = ''
+  if (tagText.value.trim().length > ARTICLE_MAX_CHARS) {
+    tagFileError.value = `正文超过 ${ARTICLE_MAX_CHARS} 字，请先精简或分段`
+  }
+}
+
+async function runArticleTag() {
+  if (!canTag.value) return
+  tagRunning.value = true
+  tagError.value = ''
+  tagRawOutput.value = ''
+  tagResult.value = null
+  tagAbort.value?.abort()
+  const controller = new AbortController()
+  tagAbort.value = controller
+  let streamed = ''
+  try {
+    // 提示词里的示例把用户输入写成「文本：<正文>」，这里保持一致，减少模型跑偏
+    streamed = await callDataProcessForText({
+      text: `文本：\n${tagText.value}`,
+      sourceLabel: tagFileName.value || '待标注文本',
+      signal: controller,
+      onThinking: () => { /* 打标签不需要展示思考过程，忽略 */ },
+      onContent: (full) => { tagRawOutput.value = full },
+    })
+    tagRawOutput.value = streamed
+    tagResult.value = parseArticleTags(streamed)
+    if (!tagResult.value && !streamed.trim()) {
+      tagError.value = '模型没有返回内容，请重试或换一个模型'
+    } else if (!tagResult.value) {
+      // 不是 JSON 也不报错：把原文摆出来，让人看得见模型到底说了什么
+      ElMessage.warning('模型没有按 JSON 输出，已展示原始返回')
+    } else {
+      ElMessage.success('标注完成')
+    }
+  } catch (e) {
+    if (controller.signal.aborted || (e as Error)?.message?.includes('已取消')) {
+      ElMessage.info('已取消')
+    } else {
+      tagError.value = `打标签失败：${(e as Error)?.message ?? String(e)}`
+      ElMessage.error(tagError.value)
+    }
+  } finally {
+    if (tagAbort.value === controller) tagAbort.value = null
+    tagRunning.value = false
+  }
+}
+
+function cancelArticleTag() {
+  tagAbort.value?.abort()
+}
+
+async function copyArticleTagResult() {
+  const text = tagResult.value?.raw || tagRawOutput.value.trim()
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('标签已复制（JSON）')
+  } catch {
+    ElMessage.warning('复制失败，请手动选择文本')
+  }
+}
+
 // 切节点（NodeInspector 里本组件不带 key，是复用的）时清空试跑区，避免串到下一个节点上
 watch(id, () => {
   clearOcrImage()
@@ -458,6 +755,12 @@ watch(id, () => {
   clearArticle()
   articlePromptOpen.value = false
   articlePromptMissing.value = false
+  clearArticleTag()
+  tagPromptOpen.value = false
+  tagPromptMissing.value = false
+  clearTranslate()
+  translateTarget.value = '英语'
+  translateSource.value = TRANSLATE_AUTO
   mediaFormat.value = 'mp3'
   mediaBitRate.value = ''
   mediaSamplingRate.value = ''
@@ -567,6 +870,8 @@ onBeforeUnmount(() => {
   releaseOcrPreview()
   releaseVideoAudioUrl()
   articleAbort.value?.abort()
+  translateAbort.value?.abort()
+  tagAbort.value?.abort()
 })
 const orchCfg = computed<RuleOrchestration>(() => ({
   ...(isRule.value ? makeDefaultRuleOrchestration() : makeDefaultExecConfig()),
@@ -795,9 +1100,9 @@ async function loadProviderModelOptions() {
   }
 }
 watch(
-  // 文章生成摘要节点也要选模型（它不生成"脚本"，但同样要调模型出摘要）
-  () => [id.value, isRule.value, isArticleSummary.value] as const,
-  ([, rule, summary]) => { if (rule || summary) void loadProviderModelOptions() },
+  // 文章生成摘要 / 文章打标签也要选模型（它们不生成"脚本"，但同样要调模型）
+  () => [id.value, isRule.value, isArticleSummary.value, isArticleTag.value] as const,
+  ([, rule, summary, tag]) => { if (rule || summary || tag) void loadProviderModelOptions() },
   { immediate: true },
 )
 
@@ -868,6 +1173,7 @@ watch(
     isMonitor.value,
     isDataValidation.value,
     isArticleSummary.value,
+    isArticleTag.value,
     sourceTableName.value,
     promptSourceId.value,
     promptCategory.value,
@@ -878,7 +1184,7 @@ watch(
     outputFieldOptions.value.map((field) => `${field.itemCode}:${field.itemName}`).join(','),
   ] as const,
   () => {
-    if (!isRule.value && !isMonitor.value && !isDataValidation.value && !isArticleSummary.value) return
+    if (!isRule.value && !isMonitor.value && !isDataValidation.value && !isArticleSummary.value && !isArticleTag.value) return
     const refreshSeq = ++promptRefreshSeq
     // 数据监控节点进入编排 Tab 时即拼接系统提示词，与脚本编辑弹窗的行为一致——
     // 弹窗 loadPromptTemplate 无条件调用，这里也不卡 sourceTableName/inputFields。
@@ -900,8 +1206,9 @@ watch(
         inputFieldOptions: inputFieldOptions.value,
         outputFieldOptions: outputFieldOptions.value.length ? outputFieldOptions.value : inputFieldOptions.value,
       })
-      // 文章生成摘要节点：模板取不到的信号要留给界面（它不能靠"提示词非空"判断自己能不能跑）
+      // 文章生成摘要 / 文章打标签节点：模板取不到的信号要留给界面（它们不能靠"提示词非空"判断能不能跑）
       if (isArticleSummary.value) articlePromptMissing.value = !applied
+      if (isArticleTag.value) tagPromptMissing.value = !applied
       if (!applied) return
       if (refreshSeq !== promptRefreshSeq) return
       if (applied !== orchCfg.value.systemPrompt) patch({ systemPrompt: applied })
@@ -1630,7 +1937,7 @@ function onTestScript() {
         <span>上传文本</span>
       </button>
       <span class="ocr-hint">
-        {{ ARTICLE_TEXT_EXTENSIONS.join(' / ') }}，也可直接粘贴；最多 {{ ARTICLE_MAX_CHARS }} 字
+        {{ ARTICLE_TEXT_EXTENSIONS.join(' / ') }}，也可直接粘贴；单次最多 {{ TRANSLATE_MAX_QUERY_BYTES }} 字节（中文约 2000 字）
       </span>
     </div>
     <div v-if="articleFileName" class="ocr-preview">
@@ -1719,6 +2026,254 @@ function onTestScript() {
         <summary>思考过程</summary>
         <pre>{{ articleThinking }}</pre>
       </details>
+    </div>
+  </div>
+  <!-- 翻译助手（0917 第一版，仅翻译助手节点）：上传/粘贴文本 → 选目标语言 → 调 /api/answer/data-process。
+       系统提示词来自 cfg_llm_node_prompt 的「翻译」那一行（该行 category 为空，查模板时不带 category）。 -->
+  <div v-if="isTranslate" class="rc-field ocr-field" data-testid="translate-field">
+    <label>翻译助手</label>
+    <div class="ocr-picker">
+      <input
+        ref="translateFileInput"
+        class="rc-file-input"
+        data-testid="translate-file-input"
+        type="file"
+        accept=".txt,.md,.markdown,.csv,.json,.log,.html,.htm,text/*"
+        @change="onTranslateFileChange"
+      />
+      <button class="rc-btn" type="button" data-testid="translate-pick-file" @click="translateFileInput?.click()">
+        <Document aria-hidden="true" />
+        <span>上传文件</span>
+      </button>
+      <span class="ocr-hint">
+        {{ ARTICLE_TEXT_EXTENSIONS.join(' / ') }}，也可直接粘贴；最多 {{ ARTICLE_MAX_CHARS }} 字
+      </span>
+    </div>
+    <div v-if="translateFileName" class="ocr-preview">
+      <span class="ocr-file-name" :title="translateFileName">{{ translateFileName }}</span>
+      <span class="ocr-file-size">{{ translateCharCount }} 字</span>
+      <button class="ocr-remove" type="button" title="清空原文" aria-label="清空原文" @click="clearTranslate">
+        <Delete aria-hidden="true" />
+      </button>
+    </div>
+    <div v-if="translateFileError" class="ocr-error" data-testid="translate-file-error">{{ translateFileError }}</div>
+    <textarea
+      class="rc-input rc-textarea article-text"
+      :value="translateText_"
+      data-testid="translate-text"
+      placeholder="粘贴或上传要翻译的内容"
+      @input="onTranslateTextInput"
+    />
+    <div class="article-text-meta">
+      <span :class="{ 'translate-over-limit': translateTooLong }">
+        {{ translateCharCount }} 字 · {{ translateByteCount }} / {{ TRANSLATE_MAX_QUERY_BYTES }} 字节
+      </span>
+      <button v-if="translateText_" class="rc-link-btn" type="button" @click="clearTranslate">清空</button>
+    </div>
+    <!-- 语言选择（0917 按设计稿改成"源语言 ⇄ 目标语言"）：两个下拉中间一个互换按钮 -->
+    <div class="translate-langs" data-testid="translate-langs">
+      <el-select
+        v-model="translateSource"
+        class="translate-lang-select"
+        size="small"
+        data-testid="translate-source"
+      >
+        <el-option :label="TRANSLATE_AUTO" :value="TRANSLATE_AUTO" />
+        <el-option v-for="lang in TRANSLATE_LANGUAGES" :key="lang" :label="lang" :value="lang" />
+      </el-select>
+      <button
+        class="translate-swap"
+        type="button"
+        :disabled="!canSwapLanguages"
+        :title="canSwapLanguages ? '互换源语言与目标语言' : '源语言为自动检测时无法互换'"
+        aria-label="互换源语言与目标语言"
+        data-testid="translate-swap"
+        @click="swapTranslateLanguages"
+      >
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+          <path
+            d="M7 4 3.5 7.5 7 11M3.5 7.5H16M17 20l3.5-3.5L17 13M20.5 16.5H8"
+            fill="none" stroke="currentColor" stroke-width="1.6"
+            stroke-linecap="round" stroke-linejoin="round"
+          />
+        </svg>
+      </button>
+      <el-select
+        v-model="translateTarget"
+        class="translate-lang-select"
+        size="small"
+        data-testid="translate-target"
+      >
+        <el-option v-for="lang in TRANSLATE_LANGUAGES" :key="lang" :label="lang" :value="lang" />
+      </el-select>
+    </div>
+    <div class="ocr-actions">
+      <button
+        class="rc-btn primary"
+        type="button"
+        data-testid="translate-generate"
+        :disabled="!canTranslate && !translateRunning"
+        :title="translateTooLong ? `单次最多 ${TRANSLATE_MAX_QUERY_BYTES} 字节（中文约 2000 字），请先分段` : ''"
+        @click="translateRunning ? cancelTranslate() : runTranslate()"
+      >{{ translateRunning ? '翻译中…（点击取消）' : '开始翻译' }}</button>
+      <span v-if="translateTooLong" class="ocr-error" data-testid="translate-over-limit">
+        内容 {{ translateByteCount }} 字节，超过单次上限 {{ TRANSLATE_MAX_QUERY_BYTES }} 字节（百度标准版按 UTF-8 字节算，中文约 2000 字），请分段翻译
+      </span>
+      <span v-if="translateError" class="ocr-error" data-testid="translate-error">{{ translateError }}</span>
+    </div>
+    <div v-if="translateResult" class="ocr-result" data-testid="translate-result">
+      <div class="ocr-result-head">
+        <span>
+          译文（{{ translateTarget }}）
+          <span v-if="translateDetectedFrom" class="translate-detected">· 检测到源语言：{{ translateDetectedFrom }}</span>
+        </span>
+        <span class="ocr-result-actions">
+          <button class="rc-link-btn" type="button" @click="copyTranslation">复制</button>
+          <button class="rc-link-btn" type="button" @click="downloadTranslation">下载</button>
+        </span>
+      </div>
+      <pre class="ocr-result-text article-summary-text" data-testid="translate-result-text">{{ translateResult }}</pre>
+    </div>
+  </div>
+  <!-- 文章打标签（0918 第一版，仅文章打标签节点）：上传/粘贴文本 → 调 /api/answer/data-process
+       （系统提示词取自 cfg_llm_node_prompt 的「文章打标签」行）→ 解析模型输出的 JSON 标签体系。 -->
+  <div v-if="isArticleTag" class="rc-field ocr-field" data-testid="article-tag-field">
+    <label>文章打标签</label>
+    <div class="ocr-picker">
+      <input
+        ref="tagFileInput"
+        class="rc-file-input"
+        data-testid="tag-file-input"
+        type="file"
+        accept=".txt,.md,.markdown,.csv,.json,.log,.html,.htm,text/*"
+        @change="onTagFileChange"
+      />
+      <button class="rc-btn" type="button" data-testid="tag-pick-file" @click="tagFileInput?.click()">
+        <Document aria-hidden="true" />
+        <span>上传文本</span>
+      </button>
+      <span class="ocr-hint">
+        {{ ARTICLE_TEXT_EXTENSIONS.join(' / ') }}，也可直接粘贴；最多 {{ ARTICLE_MAX_CHARS }} 字
+      </span>
+    </div>
+    <div v-if="tagFileName" class="ocr-preview">
+      <span class="ocr-file-name" :title="tagFileName">{{ tagFileName }}</span>
+      <span class="ocr-file-size">{{ tagCharCount }} 字</span>
+      <button class="ocr-remove" type="button" title="清空文本" aria-label="清空文本" @click="clearArticleTag">
+        <Delete aria-hidden="true" />
+      </button>
+    </div>
+    <div v-if="tagFileError" class="ocr-error" data-testid="tag-file-error">{{ tagFileError }}</div>
+    <textarea
+      class="rc-input rc-textarea article-text"
+      :value="tagText"
+      data-testid="tag-text"
+      placeholder="粘贴或上传要标注的文本（新闻、帖子、评论…）"
+      @input="onTagTextInput"
+    />
+    <div class="article-text-meta">
+      <span>{{ tagCharCount }} 字</span>
+      <button v-if="tagText" class="rc-link-btn" type="button" @click="clearArticleTag">清空</button>
+    </div>
+    <div class="rc-model-row">
+      <span class="rc-model-fields">
+        <label class="rc-inline-field">
+          <span>模型供应商</span>
+          <el-select
+            :model-value="orchCfg.modelProviderCode ?? ''"
+            class="rc-inline-select"
+            size="small"
+            :loading="providerLoading"
+            placeholder="模型供应商"
+            data-testid="tag-model-provider"
+            @change="onModelProviderChange"
+          >
+            <el-option v-for="item in providerOptions" :key="item.providerCode" :label="item.providerName" :value="item.providerCode" />
+          </el-select>
+        </label>
+        <label class="rc-inline-field">
+          <span>模型</span>
+          <el-select
+            :model-value="orchCfg.modelCode ?? ''"
+            class="rc-inline-select"
+            size="small"
+            :loading="modelLoading"
+            :disabled="!orchCfg.modelProviderCode || !providerOptions.length"
+            placeholder="模型"
+            data-testid="tag-model"
+            @change="onModelChange"
+          >
+            <el-option v-for="item in modelOptions" :key="item.modelCode" :label="item.modelName" :value="item.modelCode" />
+          </el-select>
+        </label>
+      </span>
+    </div>
+    <div v-if="providerError || modelError" class="rc-help">{{ providerError || modelError }}</div>
+    <div class="article-prompt">
+      <button class="rc-link-btn" type="button" data-testid="tag-prompt-toggle" @click="tagPromptOpen = !tagPromptOpen">
+        {{ tagPromptOpen ? '收起系统提示词' : '查看系统提示词' }}
+      </button>
+      <span class="ocr-hint">来自提示词表（cfg_llm_node_prompt · 文章打标签）</span>
+    </div>
+    <pre v-if="tagPromptOpen" class="article-prompt-text" data-testid="tag-prompt-text">{{ orchCfg.systemPrompt || '（未取到提示词模板）' }}</pre>
+    <div v-if="!tagPromptReady" class="ocr-error" data-testid="tag-prompt-missing">
+      没有取到「文章打标签」的系统提示词模板（cfg_llm_node_prompt 里需要 node_type_name=文章打标签 的一行），暂不能标注
+    </div>
+    <div class="ocr-actions">
+      <button
+        class="rc-btn primary"
+        type="button"
+        data-testid="tag-generate"
+        :disabled="!canTag && !tagRunning"
+        @click="tagRunning ? cancelArticleTag() : runArticleTag()"
+      >{{ tagRunning ? '标注中…（点击取消）' : '开始打标签' }}</button>
+      <span v-if="tagError" class="ocr-error" data-testid="tag-error">{{ tagError }}</span>
+    </div>
+    <!-- 结构化结果：摘要 + 各维度标签 + 置信度 + 依据；解析不出 JSON 时退回展示原始返回 -->
+    <div v-if="tagResult" class="ocr-result tag-result" data-testid="tag-result">
+      <div class="ocr-result-head">
+        <span>标注结果</span>
+        <span class="ocr-result-actions">
+          <button class="rc-link-btn" type="button" @click="copyArticleTagResult">复制 JSON</button>
+        </span>
+      </div>
+      <div class="tag-body">
+        <div v-if="tagResult.summary" class="tag-summary" data-testid="tag-summary">{{ tagResult.summary }}</div>
+        <div v-for="group in tagResult.groups" :key="group.key" class="tag-group">
+          <span class="tag-group-label">{{ group.label }}</span>
+          <span class="tag-chips">
+            <span
+              v-for="value in group.values"
+              :key="value"
+              class="tag-chip"
+              :class="group.key === 'risk_level' ? `tone-${riskLevelTone(value)}` : ''"
+            >{{ value }}</span>
+          </span>
+        </div>
+        <div v-if="tagResult.confidence != null || tagResult.uncertain || tagResult.notes" class="tag-meta">
+          <span v-if="tagResult.confidence != null">置信度 {{ tagResult.confidence.toFixed(2) }}</span>
+          <span v-if="tagResult.uncertain" class="tag-uncertain">标记为不确定</span>
+          <span v-if="tagResult.notes">{{ tagResult.notes }}</span>
+        </div>
+        <div v-if="tagResult.evidence.length" class="tag-evidence">
+          <div v-for="item in tagResult.evidence" :key="item.label" class="tag-evidence-row">
+            <b>{{ item.label }}依据</b><span>{{ item.text }}</span>
+          </div>
+        </div>
+      </div>
+      <button class="rc-link-btn tag-raw-toggle" type="button" data-testid="tag-raw-toggle" @click="tagRawOpen = !tagRawOpen">
+        {{ tagRawOpen ? '收起原始返回' : '查看原始返回' }}
+      </button>
+      <pre v-if="tagRawOpen" class="ocr-result-raw" data-testid="tag-raw">{{ tagResult.raw }}</pre>
+    </div>
+    <div v-else-if="tagRawOutput" class="ocr-result" data-testid="tag-raw-result">
+      <div class="ocr-result-head">
+        <span>模型返回（不是 JSON，未做结构化展示）</span>
+        <span class="ocr-result-actions">
+          <button class="rc-link-btn" type="button" @click="copyArticleTagResult">复制</button>
+        </span>
+      </div>
+      <pre class="ocr-result-text">{{ tagRawOutput }}</pre>
     </div>
   </div>
   <div class="rc-field">
@@ -2015,6 +2570,32 @@ function onTestScript() {
 .article-thinking { border-top: 1px dashed var(--rc-border-soft); }
 .article-thinking summary { padding: 6px 10px; color: var(--rc-muted); font-size: 11px; cursor: pointer; }
 .article-thinking pre { margin: 0; max-height: 180px; overflow: auto; padding: 0 10px 10px; color: var(--rc-text-2); font-size: 11px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+/* ---- 翻译助手 ---- */
+/* 语言选择行：源语言 ⇄ 目标语言（0917 设计稿），两个下拉等宽、中间互换按钮 */
+.translate-langs { display: flex; align-items: center; gap: 8px; margin: 2px 0 10px; }
+.translate-lang-select { flex: 1 1 0; min-width: 0; }
+.translate-swap { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--rc-primary); cursor: pointer; }
+.translate-swap:hover:not(:disabled) { background: var(--rc-primary-bg); }
+.translate-swap:disabled { color: var(--rc-faint); cursor: not-allowed; }
+.translate-detected { color: var(--rc-faint); font-weight: 400; }
+.translate-over-limit { color: #b91c1c; }
+/* ---- 文章打标签 ---- */
+.tag-body { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
+.tag-summary { color: var(--rc-text); font-size: 12.5px; font-weight: 600; line-height: 1.6; }
+.tag-group { display: flex; align-items: flex-start; gap: 8px; font-size: 11.5px; }
+.tag-group-label { flex: none; width: 60px; color: var(--rc-muted); }
+.tag-chips { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.tag-chip { padding: 1px 7px; border: 1px solid #dbe3ee; border-radius: 999px; background: #f8fafc; color: var(--rc-text-2); font-size: 11px; }
+.tag-chip.tone-high { border-color: #fecaca; background: #fef2f2; color: #b91c1c; font-weight: 600; }
+.tag-chip.tone-mid { border-color: #fed7aa; background: #fff7ed; color: #c2410c; font-weight: 600; }
+.tag-chip.tone-low { border-color: #bfdbfe; background: #eff6ff; color: var(--rc-primary-ink); }
+.tag-chip.tone-none { border-color: #e2e8f0; background: #f8fafc; color: var(--rc-muted); }
+.tag-meta { display: flex; flex-wrap: wrap; gap: 10px; color: var(--rc-faint); font-size: 10.5px; }
+.tag-uncertain { color: var(--rc-warn); }
+.tag-evidence { display: flex; flex-direction: column; gap: 4px; padding-top: 6px; border-top: 1px dashed var(--rc-border-soft); color: var(--rc-text-2); font-size: 11px; line-height: 1.6; }
+.tag-evidence-row { display: flex; gap: 6px; }
+.tag-evidence-row b { flex: none; color: var(--rc-muted); font-weight: 600; }
+.tag-raw-toggle { margin: 0 10px 10px; }
 .rc-stop-icon { display: block; width: 10px; height: 10px; border-radius: 1px; background: currentColor; }
 .rc-main-stream, .rc-main-result { margin: 10px 0 12px; border: 1px solid #dbe3ee; border-radius: 8px; overflow: hidden; background: #fff; }
 .rc-main-stream { border-color: #1e293b; background: #0b1220; }
