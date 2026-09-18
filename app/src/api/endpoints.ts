@@ -92,7 +92,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   /* ── category 分类（目标 6 / 收录 6） ── */
   // 源选择器沿用旧平台 categoryPaged 根节点读取；子节点仍需按 parentId 懒加载，暂不把 categoryTree 误标为完整 live。
   { path: 'category/categoryPaged', desc: '分类分页', live: true },
-  { path: 'category/categoryQuery', desc: '分类查询' },
+  // 2026-09-18 接上：新建/编辑网站的分类选择器靠它做跨层级模糊搜索——懒加载树的本地
+  // filter 只能过滤**已展开**的节点，深层分类搜不到。实测 `?wd=主流媒体` 返回 4 条，
+  // 带 categoryId / categoryName / level / parentId / path（祖先 id 链）。
+  { path: 'category/categoryQuery', desc: '分类关键词查询（跨层级）', live: true },
   { path: 'category/add', desc: '新增分类', danger: true },
   { path: 'category/addBatch', desc: '批量新增分类', danger: true },
   { path: 'category/update', desc: '修改分类', danger: true },

@@ -519,6 +519,33 @@ export const sourceApi = {
     })
     return sourceCategoriesFromLegacy(result)[0] ?? null
   },
+  /**
+   * 按关键词跨层级搜分类（2026-09-18）。
+   *
+   * 返回**平铺**结果，不装配成树——搜索命中的父子节点可能同时出现，装成树会把子节点
+   * 藏进父节点里，选择器上就看不见了。`path` 是祖先 id 链（如 `0,9009005,9009253,`），
+   * 调用方用它拼展示路径。
+   */
+  searchCategories: async (keyword: string): Promise<{ id: string; name: string; path: string }[]> => {
+    const wd = keyword.trim()
+    if (!wd) return []
+    const result = await request<unknown>('category/categoryQuery', { wd }, {
+      method: 'GET',
+      httpEndpoint: 'category/categoryQuery',
+      httpParams: { wd },
+    })
+    const rows = Array.isArray(result) ? result : []
+    return rows
+      .map((row) => {
+        const r = row as Record<string, unknown>
+        return {
+          id: String(r.categoryId ?? r.id ?? ''),
+          name: String(r.categoryName ?? r.name ?? ''),
+          path: String(r.path ?? ''),
+        }
+      })
+      .filter((item) => item.id && item.name)
+  },
   sourceStats: () => assetMockRequest<{ total: number; error: number; externalChanged: number; disabled: number }>('source/stats'),
   /**
    * 源的子步骤。默认连 config/configDetail 的补充一起返回（topic / 配置名 / 登录语义 /

@@ -97,6 +97,71 @@ async function loadCategoryChildren(
 }
 
 /**
+ * 分类的跨层级模糊搜索（2026-09-18 用户提）。
+ *
+ * el-tree-select 自带的 `filterable` 是**本地**过滤，只认已经展开加载过的节点——
+ * 目录有四层（财经资讯 / 财经媒体 / 主流媒体 / 中国网财经），不展开就搜不到，
+ * 等于只能一层层点。
+ *
+ * 它支持 `remote-method`（tree-select/src/select.mjs 里 filterMethod 会回落到 remoteMethod），
+ * 所以输入时走后端的 `category/categoryQuery`，把命中结果**平铺**成一层塞给 data；
+ * 清空输入就还原成原来的懒加载树。
+ */
+const searchHits = ref<SourceCategory[]>([])
+const searching = ref(false)
+const searchKeyword = ref('')
+
+/** 搜索态用平铺结果，否则用原来的树 */
+const categoryTreeData = computed(() => (searchKeyword.value ? searchHits.value : props.categories))
+
+/** 祖先 id 链 → 可读路径。只认已加载的那两层，认不出的段跳过，至少能给个上下文。 */
+function pathLabelOf(name: string, path: string): string {
+  const names: string[] = []
+  for (const id of path.split(',').map((x) => x.trim()).filter((x) => x && x !== '0')) {
+    const hit = findCategory(props.categories, id)
+    if (hit) names.push(hit.name)
+  }
+  return names.length ? `${names.join(' / ')} / ${name}` : name
+}
+function findCategory(nodes: SourceCategory[], id: string): SourceCategory | undefined {
+  for (const node of nodes) {
+    if (node.id === id) return node
+    const hit = node.children?.length ? findCategory(node.children, id) : undefined
+    if (hit) return hit
+  }
+  return undefined
+}
+
+let searchSeq = 0
+async function searchCategory(keyword: string) {
+  const wd = keyword.trim()
+  searchKeyword.value = wd
+  if (!wd) {
+    searchHits.value = []
+    return
+  }
+  const seq = ++searchSeq
+  searching.value = true
+  try {
+    const hits = await sourceApi.searchCategories(wd)
+    if (seq !== searchSeq) return   // 打字快时只认最后一次
+    // 同名结果要能分开：路径只解析得到已加载的那两层，更深的祖先认不出来，
+    // 于是「财经资讯 / 财经媒体 / 主流媒体」可能出现两条一模一样的（实测搜"主流"就是）。
+    // 只给**真正重名**的那几条补上 ID，不重名的保持干净。
+    const labeled = hits.map((hit) => ({ id: hit.id, name: pathLabelOf(hit.name, hit.path) }))
+    const seen = new Map<string, number>()
+    for (const item of labeled) seen.set(item.name, (seen.get(item.name) ?? 0) + 1)
+    searchHits.value = labeled.map((item) => (
+      (seen.get(item.name) ?? 0) > 1 ? { ...item, name: `${item.name}（#${item.id}）` } : item
+    ))
+  } catch {
+    if (seq === searchSeq) searchHits.value = []
+  } finally {
+    if (seq === searchSeq) searching.value = false
+  }
+}
+
+/**
  * 懒加载树的回显。
  *
  * 编辑一个挂在深层目录下的网站时，那层节点还没被展开加载过，el-tree-select 找不到
@@ -235,16 +300,19 @@ defineExpose({ openEditor, openCreator })
              check-strictly：允许直接选中间层级——网站本来就可以只挂到二级目录上。 -->
         <el-tree-select
           v-model="form.categoryPath"
-          placeholder="请选择分类"
+          placeholder="输入关键词搜索，或逐级展开选择"
           style="width: 100%"
           clearable
           filterable
+          remote
+          :remote-method="searchCategory"
+          :loading="searching"
           check-strictly
-          :data="categories"
+          :data="categoryTreeData"
           :cache-data="categoryCacheData"
           :props="{ label: 'name', children: 'children' }"
           node-key="id"
-          lazy
+          :lazy="!searchKeyword"
           :load="loadCategoryChildren"
         />
       </el-form-item>
