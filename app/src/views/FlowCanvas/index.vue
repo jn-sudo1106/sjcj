@@ -343,13 +343,13 @@ async function resolveOwnerSite(sourceId: string) {
  * 查不到不影响画布——定时只是节点配置里的一栏。
  */
 async function backfillSourceSchedule(sourceId: string) {
+  flow.setSourceJob(null)   // 先清掉上一个源的，避免切源时短暂显示别人的定时
   try {
     const jobs = await sourceApi.sourceJobs(sourceId)
-    const cron = jobs.find((job) => job.schedule && !job.disabled)?.schedule || jobs[0]?.schedule || ''
-    if (!cron) return
+    const job = jobs.find((item) => item.schedule && !item.disabled) ?? jobs[0] ?? null
     // 中途切走就丢弃，别把上一个源的定时写到当前上下文上
     if (String(route.query.sourceId ?? '') !== String(sourceId)) return
-    flow.applySourceSchedule(cron)
+    flow.setSourceJob(job)
   } catch {
     /* 定时查不到就维持原样，不打断画布 */
   }

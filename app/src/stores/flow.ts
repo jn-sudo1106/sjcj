@@ -46,7 +46,7 @@ import {
   composeTemplateFlow,
   extractTemplateNodeBindings,
 } from '@/utils/flow/flowTemplates'
-import type { FlowRecord, Source, Site, Step } from '../api'
+import type { FlowRecord, Source, Site, SourceJob, Step } from '../api'
 import { useSourceStore } from './source'
 import { useNodeStore } from './node'
 import { useRuntimeStore } from './runtime'
@@ -1057,6 +1057,13 @@ export const useFlowStore = defineStore('flow', () => {
     sourceStore.applySourceSchedule(cron)
   }
 
+  /** 源的定时任务原样存一份，供节点配置里只读展示"下次运行/上次运行/运行次数"。 */
+  const sourceJob = computed(() => sourceStore.sourceJob)
+  function setSourceJob(job: SourceJob | null) {
+    sourceStore.setSourceJob(job)
+    if (job?.schedule) sourceStore.applySourceSchedule(job.schedule)
+  }
+
   function resetAllContext() {
     sourceStore.resetAllContext()
   }
@@ -1271,6 +1278,8 @@ export const useFlowStore = defineStore('flow', () => {
     patchSource,
     patchSourceCtx,
     applySourceSchedule,
+    sourceJob,
+    setSourceJob,
     resetAllContext,
     // 发布门禁
     validateFlow,

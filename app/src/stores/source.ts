@@ -5,7 +5,7 @@
 // configMode/configName/configTopic/configStrategy 只用于历史回读，新流程不得新写。
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
-import type { Source, Site, Step } from '../api'
+import type { Source, Site, Step, SourceJob } from '../api'
 import { isWritableStepId } from '@/utils/flow/stepPersist'
 import type { FlowDef } from '@/views/FlowCanvas/canvas/flowModel'
 import {
@@ -65,6 +65,12 @@ export const useSourceStore = defineStore('source', () => {
    * （2026-09-10 修过同款问题）。
    * 源上已经有 cron 时不覆盖：那可能是用户正在编辑的值。
    */
+  /** 源的定时任务（只读展示：下次运行 / 上次运行 / 运行次数）。加载源后异步补，切源即清。 */
+  const sourceJob = ref<SourceJob | null>(null)
+  function setSourceJob(job: SourceJob | null) {
+    sourceJob.value = job
+  }
+
   function applySourceSchedule(cron: string) {
     const value = String(cron ?? '').trim()
     if (!value) return
@@ -256,6 +262,8 @@ export const useSourceStore = defineStore('source', () => {
     patchSource,
     patchSourceCtx,
     applySourceSchedule,
+    sourceJob,
+    setSourceJob,
     resetAllContext,
     clearSourceCtx,
     clearSiteCtx,

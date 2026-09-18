@@ -576,7 +576,12 @@ export const sourceApi = {
         lastRun: r.lastRun == null ? undefined : String(r.lastRun),
         runCount: Number(r.runCnt ?? 0),
         successCount: Number(r.successCnt ?? 0),
-        disabled: String(r.state ?? '') === 'D',
+        // ⚠️ 启用与否看的是 `isDelete`，不是 `state`——旧平台 SourceCronList.vue:201
+        // 就是这么判的：`obj.enabled = (obj.isDelete === 0)`。
+        // （旧平台的详情弹窗把 isDelete 的原值按"是/否"枚举显示成「启用：否[0]」，
+        //  那是它自己的显示 bug：0 表示"未删除"= 启用，列表里的开关才是对的。）
+        // `state` 是运行状态（实测在用的定时是 'C'），与启停无关。
+        disabled: Number(r.isDelete ?? 0) !== 0,
       }
     }).filter((job) => job.jobId)
   },
