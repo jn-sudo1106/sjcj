@@ -229,6 +229,21 @@ describe('CanvasHeader · 流程视图操作', () => {
     expect(wrapper.vm.$router.currentRoute.value.query.view).toBe('monitor-config')
   })
 
+  it('从数据视图点「流程视图」要真的切回去（缺省视图改成 data 后的回归）', async () => {
+    const wrapper = await mountHeader()
+    const flow = useFlowStore()
+    flow.loadFromSource(
+      { sourceId: 'source-a', name: '源 A', url: 'https://x', configId: '', mainTable: 'T1', owner: 'admin', state: 'C' } as never,
+      [], null,
+    )
+    await wrapper.vm.$router.replace({ path: '/canvas', query: { sourceId: 'source-a', view: 'data' } })
+    await flushPromises()
+
+    await wrapper.findAll('.ch-seg').find((b) => b.text() === '流程视图')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.$router.currentRoute.value.query.view).toBe('flow')
+  })
+
   it('流程模板切换默认展示 10 个，并支持按名称或 ID 搜索', async () => {
     const records = Array.from({ length: 12 }, (_, index) => ({
       id: `flow-${index + 1}`,

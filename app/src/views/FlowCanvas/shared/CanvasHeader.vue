@@ -165,8 +165,10 @@ function switchView(target: SourceWorkspaceView) {
     return
   }
   const query = { ...route.query }
-  if (target === 'flow') delete query.view
-  else query.view = target
+  // 五档都显式写进 URL，包括流程视图。原来流程视图是删掉 query.view 走缺省值，
+  // 2026-09-18 缺省视图改成数据视图（见 normalizeSourceView）之后，这条等于把
+  // 「切到流程视图」翻译成「切到数据视图」，页签点了没反应。
+  query.view = target
   void router.replace({ path: '/canvas', query })
 }
 
