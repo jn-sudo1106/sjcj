@@ -8,7 +8,7 @@ import { siteIcon, siteTone } from '@/utils/visual/siteVisual'
 /** 瓦片配色 → 内联 style；模板里别写两遍 siteTone(site) */
 function tileStyle(site: { name: string }) {
   const tone = siteTone(site)
-  return { background: tone.bg, color: tone.fg }
+  return { background: tone.bg, color: tone.fg, boxShadow: tone.shadow }
 }
 import { confirmDanger } from '@/utils/confirmDanger'
 

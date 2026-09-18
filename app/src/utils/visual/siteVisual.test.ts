@@ -66,11 +66,17 @@ describe('siteTone · 按名字生成，颜色不会用完', () => {
     }
   })
 
-  it('产出的是 oklch —— 明度感知均匀，各色相深浅一致', () => {
+  it('渐变的两端锁在同一个色相上，只走明度/饱和度', () => {
     const tone = siteTone({ name: '东方财富网' })
-    // 明度固定（0.95 底 / 0.52 前景），浓淡只走饱和度这一维，整屏不会深一块浅一块
-    expect(tone.bg).toMatch(/^oklch\(0\.955 /)
-    expect(tone.fg).toMatch(/^oklch\(0\.53 /)
+    const hue = siteHue('东方财富网')
+    // 深色渐变底 + 白图标（2026-09-18 按用户给的参考图定稿；中途试过浅底深图标的平色版）
+    expect(tone.bg).toMatch(/^linear-gradient\(135deg, oklch\(/)
+    expect(tone.fg).toBe('#fff')
+    // 两个端点都是同一个色相：换成哪个色相，渐变看起来的"斜度"都一致
+    const hues = [...tone.bg.matchAll(/oklch\([\d.]+ [\d.]+ (\d+)\)/g)].map((m) => Number(m[1]))
+    expect(hues).toEqual([hue, hue])
+    // 投影用同色相的深色加透明，不是统一的灰
+    expect(tone.shadow).toContain(`${hue} / 0.55`)
   })
 
   // 第二维度曾经取 `hash / 24 % 2`，与色相档共用同一串低位，等于没加（实测 16 张卡的

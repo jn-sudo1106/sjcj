@@ -110,14 +110,26 @@ function siteVivid(name: string): boolean {
   return ((nameHash(name) >>> 20) & 1) === 1
 }
 
-export type SiteTone = { bg: string; fg: string }
+export type SiteTone = { bg: string; fg: string; shadow: string }
 
-/** 瓦片配色：浅底 + 同色系深色图标。对比度由固定的 L 值保证（0.96 底 / 0.52 前景）。 */
+/**
+ * 瓦片配色：**深色渐变底 + 白色图标**（2026-09-18 定稿）。
+ *
+ * 中间试过浅底 + 同色系深色图标（平色、无投影），理由是"平色更克制"。用户给了参考图，
+ * 要的是渐变这一版——40px 的小瓦片上，渐变比平色更有份量，也压得住卡片里那一堆白底 chip。
+ *
+ * 两个端点都锁在同一个色相上，只走明度和饱和度（0.70/0.13 → 0.55/0.17），
+ * 所以不管落到哪个色相，渐变的"斜度"看起来都一样；投影取同色相的深色加透明，
+ * 比统一的灰投影干净。
+ */
 export function siteTone(site: { name: string }): SiteTone {
   const hue = siteHue(site.name)
   const vivid = siteVivid(site.name)
+  const from = `oklch(0.72 ${vivid ? '0.15' : '0.11'} ${hue})`
+  const to = `oklch(0.55 ${vivid ? '0.19' : '0.15'} ${hue})`
   return {
-    bg: `oklch(0.955 ${vivid ? '0.055' : '0.028'} ${hue})`,
-    fg: `oklch(0.53 ${vivid ? '0.13' : '0.085'} ${hue})`,
+    bg: `linear-gradient(135deg, ${from}, ${to})`,
+    fg: '#fff',
+    shadow: `0 5px 12px -6px oklch(0.55 0.17 ${hue} / 0.55)`,
   }
 }

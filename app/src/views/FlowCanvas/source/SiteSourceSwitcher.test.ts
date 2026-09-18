@@ -872,8 +872,8 @@ describe('SiteSourceSwitcher · 批量导入的结果通知', () => {
     vi.spyOn(sourceApi, 'changeSite').mockResolvedValue(ack)
     const notify = { success: vi.spyOn(ElNotification, 'success').mockImplementation(() => ({ close: () => {} }) as never),
       warning: vi.spyOn(ElNotification, 'warning').mockImplementation(() => ({ close: () => {} }) as never) }
-    // 进行中那条常驻通知：构造出来就行，close 是空实现
-    vi.spyOn(ElNotification, 'info' as never).mockImplementation(() => ({ close: () => {} }) as never)
+    // 进行中那条常驻通知：ElNotification 被当函数直接调用，构造出来就行，close 是空实现
+    vi.spyOn(ElNotification, 'closeAll').mockImplementation(() => {})
 
     await wrapper.get('[data-testid="open-batch"]').trigger('click')
     await wrapper.get('[data-testid="batch-tab-existing"]').trigger('click')
