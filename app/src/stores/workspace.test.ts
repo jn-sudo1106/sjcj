@@ -301,3 +301,90 @@ describe('网站页签', () => {
     expect(ws.siteTabs).toEqual([])
   })
 })
+
+// ---- closeMany：右键菜单「关闭其他 / 关闭右侧」的底座（2026-09-18）----
+describe('workspace closeMany', () => {
+  let ws: ReturnType<typeof useWorkspaceStore>
+  beforeEach(() => {
+    sessionStorage.clear()
+    setActivePinia(createPinia())
+    ws = useWorkspaceStore()
+  })
+
+  /** 打开顺序 s1→s2→s3，orderedTabs 是"后开的在左"，即 [s3, s2, s1] */
+  function openThree() {
+    ws.open('s1', '源一')
+    ws.open('s2', '源二')
+    ws.open('s3', '源三')
+  }
+
+  it('关闭其他：只留下锚点页签，落点就是它', () => {
+    openThree()
+    const others = ws.orderedTabs.filter((t) => t.id !== 's2').map((t) => ({ kind: t.kind, id: t.id }))
+    const next = ws.closeMany(others, { kind: 'source', id: 's2' })
+
+    expect(ws.tabs.map((t) => t.sourceId)).toEqual(['s2'])
+    expect(next).toEqual({ kind: 'source', id: 's2' })
+  })
+
+  it('关闭右侧：按 orderedTabs 的当前顺序算，不是打开顺序', () => {
+    openThree()
+    // orderedTabs = [s3, s2, s1]，锚点 s3 的"右侧"是 s2 与 s1
+    expect(ws.orderedTabs.map((t) => t.id)).toEqual(['s3', 's2', 's1'])
+    const right = ws.orderedTabs.slice(1).map((t) => ({ kind: t.kind, id: t.id }))
+    ws.closeMany(right, { kind: 'source', id: 's3' })
+
+    expect(ws.tabs.map((t) => t.sourceId)).toEqual(['s3'])
+  })
+
+  it('拖动改过顺序后，"右侧"跟着屏幕顺序走', () => {
+    openThree()
+    ws.moveTab(0, 2) // s3 拖到最右：[s2, s1, s3]
+    expect(ws.orderedTabs.map((t) => t.id)).toEqual(['s2', 's1', 's3'])
+    const right = ws.orderedTabs.slice(1).map((t) => ({ kind: t.kind, id: t.id }))
+    ws.closeMany(right, { kind: 'source', id: 's2' })
+
+    expect(ws.tabs.map((t) => t.sourceId)).toEqual(['s2'])
+  })
+
+  it('关掉活动页签时让出激活态，并退出对比', () => {
+    openThree()
+    ws.enterCompare('s1', 's2')
+    expect(ws.activeSourceId).toBe('s3')
+
+    ws.closeMany([{ kind: 'source', id: 's3' }], { kind: 'source', id: 's1' })
+    expect(ws.activeSourceId).toBe('')
+    expect(ws.compareSourceId).toBe('')
+  })
+
+  it('网站页签与源页签混着关，快照一并清掉', () => {
+    ws.ensureSiteTab('site-1', '新浪财经')
+    ws.open('s1', '源一')
+    ws.saveSnapshot('s1', { view: 'data' })
+    ws.saveSiteSnapshot('site-1', { view: 'source' })
+
+    ws.closeMany([{ kind: 'site', id: 'site-1' }, { kind: 'source', id: 's1' }])
+    expect(ws.tabs).toEqual([])
+    expect(ws.siteTabs).toEqual([])
+    expect(ws.snapshotOf('s1')).toBeUndefined()
+    expect(ws.siteSnapshotOf('site-1')).toBeUndefined()
+  })
+
+  it('prefer 自己也被关掉时，退回最左的幸存者；全关光返回 null', () => {
+    openThree()
+    // 关 s3 与 s2，prefer 给了被关的 s3 → 应退回幸存者 s1
+    const next = ws.closeMany(
+      [{ kind: 'source', id: 's3' }, { kind: 'source', id: 's2' }],
+      { kind: 'source', id: 's3' },
+    )
+    expect(next).toEqual({ kind: 'source', id: 's1' })
+
+    expect(ws.closeMany([{ kind: 'source', id: 's1' }])).toBeNull()
+  })
+
+  it('空数组不动任何东西', () => {
+    openThree()
+    expect(ws.closeMany([])).toBeNull()
+    expect(ws.tabs.length).toBe(3)
+  })
+})

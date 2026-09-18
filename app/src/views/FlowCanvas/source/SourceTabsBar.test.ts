@@ -253,3 +253,143 @@ describe('SourceTabsBar 的「全部」页签', () => {
     expect(ws.siteTabs).toEqual([])
   })
 })
+
+// ---- 右键菜单（2026-09-18）：对齐浏览器页签的三项 ----
+describe('SourceTabsBar 右键菜单', () => {
+  async function setup(activeSourceId = 'source-c') {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/canvas', component: { template: '<div />' } },
+        { path: '/collect', component: { template: '<div />' } },
+      ],
+    })
+    await router.push({ path: '/canvas', query: { sourceId: activeSourceId, view: 'flow' } })
+    await router.isReady()
+
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const ws = useWorkspaceStore()
+    ws.open('source-a', '源 A')
+    ws.open('source-b', '源 B')
+    ws.open('source-c', '源 C')
+
+    const wrapper = mount(SourceTabsBar, { global: { plugins: [pinia, router] } })
+    return { wrapper, ws, router }
+  }
+
+  it('右键页签弹出菜单，三项与浏览器一致', async () => {
+    const { wrapper } = await setup()
+    expect(wrapper.find('[data-testid="tab-context-menu"]').exists()).toBe(false)
+
+    await wrapper.get('[title="源 B · source-b"]').trigger('contextmenu')
+    const menu = wrapper.get('[data-testid="tab-context-menu"]')
+    expect(menu.findAll('button').map((b) => b.text()))
+      .toEqual(['关闭', '关闭其他标签页', '关闭右侧标签页'])
+  })
+
+  it('关闭其他：只剩右键的那个', async () => {
+    const { wrapper, ws } = await setup()
+    await wrapper.get('[title="源 B · source-b"]').trigger('contextmenu')
+    await wrapper.get('[data-testid="tab-menu-close-others"]').trigger('click')
+    await flushPromises()
+
+    expect(ws.tabs.map((t) => t.sourceId)).toEqual(['source-b'])
+  })
+
+  it('关闭右侧：按屏幕顺序，后开的在左，所以「源 C」右侧是 B 和 A', async () => {
+    const { wrapper, ws } = await setup()
+    expect(ws.orderedTabs.map((t) => t.id)).toEqual(['source-c', 'source-b', 'source-a'])
+
+    await wrapper.get('[title="源 C · source-c"]').trigger('contextmenu')
+    await wrapper.get('[data-testid="tab-menu-close-right"]').trigger('click')
+    await flushPromises()
+
+    expect(ws.tabs.map((t) => t.sourceId)).toEqual(['source-c'])
+  })
+
+  it('最右侧那个页签的「关闭右侧」是灰的', async () => {
+    const { wrapper } = await setup()
+    await wrapper.get('[title="源 A · source-a"]').trigger('contextmenu')
+
+    expect(wrapper.get('[data-testid="tab-menu-close-right"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="tab-menu-close-others"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('关掉的那批里含当前页签时，跳到右键的那个而不是甩回列表', async () => {
+    const { wrapper, router } = await setup('source-c')
+    // 右键「源 A」→ 关闭其他，会关掉正在看的 source-c
+    await wrapper.get('[title="源 A · source-a"]').trigger('contextmenu')
+    await wrapper.get('[data-testid="tab-menu-close-others"]').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/canvas')
+    expect(router.currentRoute.value.query.sourceId).toBe('source-a')
+  })
+
+  // 2026-09-18 实测 bug：模板里写成 `closeTabMenu(); onTabClose(tabMenu.tab!)`，
+  // 先执行的 closeTabMenu 已经把 tab 置成 null，传过去的就是 null，点「关闭」毫无反应。
+  it('菜单里的「关闭」真的关掉这一个页签', async () => {
+    const { wrapper, ws } = await setup()
+    await wrapper.get('[title="源 B · source-b"]').trigger('contextmenu')
+    await wrapper.get('[data-testid="tab-menu-close"]').trigger('click')
+    await flushPromises()
+
+    // tabs 数组按"后开的在前"存，这里只关心剩下哪两个，排序后比较
+    expect(ws.tabs.map((t) => t.sourceId).sort()).toEqual(['source-a', 'source-c'])
+  })
+
+  it('关掉最后一个页签回网站列表', async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/canvas', component: { template: '<div />' } },
+        { path: '/collect', component: { template: '<div />' } },
+      ],
+    })
+    await router.push({ path: '/canvas', query: { sourceId: 'only', view: 'flow' } })
+    await router.isReady()
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const ws = useWorkspaceStore()
+    ws.open('only', '唯一源')
+
+    const wrapper = mount(SourceTabsBar, { global: { plugins: [pinia, router] } })
+    await wrapper.get('[title="唯一源 · only"]').trigger('contextmenu')
+    await wrapper.get('[data-testid="tab-menu-close"]').trigger('click')
+    await flushPromises()
+
+    expect(ws.tabs).toEqual([])
+    expect(router.currentRoute.value.path).toBe('/collect')
+  })
+
+  it('只剩一个页签时，「关闭其他」与「关闭右侧」都是灰的', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const ws = useWorkspaceStore()
+    ws.ensureSiteTab('site-9', '资讯榜单')
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/canvas', component: { template: '<div />' } }],
+    })
+    await router.push({ path: '/canvas', query: { siteId: 'site-9', view: 'source' } })
+    await router.isReady()
+
+    const wrapper = mount(SourceTabsBar, { global: { plugins: [pinia, router] } })
+    await wrapper.get('[data-testid="site-all-tab"]').trigger('contextmenu')
+
+    expect(wrapper.get('[data-testid="tab-menu-close-others"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="tab-menu-close-right"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="tab-menu-close"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('关掉的那批不含当前页签时，不跳转', async () => {
+    const { wrapper, router } = await setup('source-c')
+    // 右键「源 C」（当前页签）→ 关闭右侧，关掉的是 B 和 A，当前页签留着
+    await wrapper.get('[title="源 C · source-c"]').trigger('contextmenu')
+    await wrapper.get('[data-testid="tab-menu-close-right"]').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.query.sourceId).toBe('source-c')
+  })
+})

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { useWorkspaceStore, type OrderedTab, type WorkspaceTabRef } from '@/stores/workspace'
@@ -142,6 +142,102 @@ async function onCloseAll() {
   if (!onList.value) router.push('/collect')
 }
 
+// ---- 右键菜单（2026-09-18）：对齐浏览器页签的三项 ----
+// 用户原话「跟浏览器页签一样，支持关闭、关闭其他、关闭右侧」。**照 Chrome 的三项做，
+// 不自造第四项**——Chrome 本身也没有「关闭左侧」，多一项就得多解释一次。
+//
+// 「关闭」这一项与页签上的 × 重复，但仍然保留：右键菜单的肌肉记忆是整套的，
+// 少一项反而会让人以为菜单没生效。
+//
+// 左右按 `ws.orderedTabs` 的**当前顺序**算，不是打开顺序——页签可拖，
+// 用户眼里的"右侧"就是屏幕上的右侧。「网站列表」是固定入口，不在这套顺序里，永远不受影响。
+const tabMenu = reactive({ show: false, x: 0, y: 0, tab: null as OrderedTab | null })
+
+const TAB_MENU_WIDTH = 136
+function openTabMenu(event: MouseEvent, t: OrderedTab) {
+  tabMenu.show = true
+  // 页签条能横向滚动、最多 8 个，最右那个的右键点位可能贴着窗口右缘——
+  // 菜单是 fixed 定位，不收一下就会被裁掉一半。
+  tabMenu.x = Math.min(event.clientX, Math.max(8, window.innerWidth - TAB_MENU_WIDTH - 8))
+  tabMenu.y = event.clientY
+  tabMenu.tab = t
+}
+function closeTabMenu() {
+  tabMenu.show = false
+  tabMenu.tab = null
+}
+onMounted(() => window.addEventListener('click', closeTabMenu))
+onBeforeUnmount(() => window.removeEventListener('click', closeTabMenu))
+
+/** 菜单里「关闭右侧」在没有右邻时要灰掉，否则点了什么都不发生。 */
+const menuRightCount = computed(() => {
+  if (!tabMenu.tab) return 0
+  const list = ws.orderedTabs
+  const idx = list.findIndex((t) => t.kind === tabMenu.tab!.kind && t.id === tabMenu.tab!.id)
+  return idx < 0 ? 0 : list.length - idx - 1
+})
+const menuOtherCount = computed(() => (tabMenu.tab ? ws.orderedTabs.length - 1 : 0))
+
+/**
+ * 批量关闭前的脏画布确认：**只弹一次**，不是每个页签弹一次。
+ * 只有当前正在编辑的那个页签也在关闭范围里时才需要问。
+ */
+async function confirmIfDropsDirty(targets: OrderedTab[]): Promise<boolean> {
+  const hitsActive = targets.some((t) => t.kind === 'source' && t.id === ws.activeSourceId)
+  if (!hitsActive || !flow.dirty) return true
+  try {
+    await ElMessageBox.confirm('当前画布有未保存的改动，关闭这些页签将丢弃，是否继续？', '关闭页签', {
+      type: 'warning',
+      confirmButtonText: '关闭',
+      cancelButtonText: '取消',
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** 关完之后要不要跳：只有被关掉的里面包含"当前正看着的那个"才跳。 */
+function isCurrent(t: OrderedTab) {
+  return t.kind === 'site' ? isSiteActive(t.id) : (!onList.value && !onSiteAll.value && t.id === ws.activeSourceId)
+}
+
+/**
+ * 菜单里的「关闭」= 页签上那个 × 的等价动作，复用同一条路径（含脏画布确认、
+ * 关完落到右邻、最后一个关掉回网站列表）。
+ *
+ * ⚠️ **必须先把 tab 取出来再关菜单**：`closeTabMenu()` 会把 `tabMenu.tab` 置为 null，
+ * 在模板里写成 `closeTabMenu(); onTabClose(tabMenu.tab!)` 的话传过去的就是 null，
+ * 点了没有任何反应（2026-09-18 实测到的 bug）。
+ */
+function closeCurrentTab() {
+  const target = tabMenu.tab
+  if (!target) return
+  closeTabMenu()
+  onTabClose(target)
+}
+
+async function closeTabsAround(mode: 'other' | 'right') {
+  const anchorTab = tabMenu.tab
+  if (!anchorTab) return
+  closeTabMenu()
+  const list = ws.orderedTabs
+  const idx = list.findIndex((t) => t.kind === anchorTab.kind && t.id === anchorTab.id)
+  if (idx < 0) return
+  const targets = mode === 'other'
+    ? list.filter((t) => !(t.kind === anchorTab.kind && t.id === anchorTab.id))
+    : list.slice(idx + 1)
+  if (!targets.length) return
+  if (!await confirmIfDropsDirty(targets)) return
+  const wasCurrentClosed = targets.some(isCurrent)
+  const next = ws.closeMany(
+    targets.map((t) => ({ kind: t.kind, id: t.id })),
+    { kind: anchorTab.kind, id: anchorTab.id },
+  )
+  if (!wasCurrentClosed || onList.value) return
+  goNext(next)
+}
+
 // ---- 拖动排序（2026-09-17 走查要求）----
 // 「网站列表」是固定入口，不参与排序；其余（含「全部 · xxx」）都可拖——
 // 两类页签既然已经混排在一条序列里，只让一类能拖就成了另一种说不清的区别对待。
@@ -202,6 +298,7 @@ function onDragEnd() {
       :aria-selected="isActive(t)"
       :title="t.kind === 'site' ? `${t.name} · 全部源` : `${t.name} · ${t.id}`"
       @click="onTabClick(t)"
+      @contextmenu.prevent.stop="openTabMenu($event, t)"
       @dragstart="onDragStart(i, $event)"
       @dragover.prevent="dropTo = i"
       @dragleave="dropTo === i && (dropTo = null)"
@@ -223,6 +320,29 @@ function onDragEnd() {
       </span>
       <span class="rc-src-tabs-hint" :class="{ full: ws.tabs.length + ws.siteTabs.length >= 8 }">{{ ws.tabs.length + ws.siteTabs.length }}/8</span>
       <button class="rc-src-clear" type="button" title="关闭全部页签" @click="onCloseAll">清空</button>
+    </div>
+
+    <!-- 右键菜单：fixed 定位跟随鼠标，样式与源侧栏的行菜单（ssw-row-menu）一致 -->
+    <div
+      v-if="tabMenu.show && tabMenu.tab"
+      class="rc-src-tab-menu"
+      data-testid="tab-context-menu"
+      :style="{ left: `${tabMenu.x}px`, top: `${tabMenu.y}px` }"
+      @click.stop
+    >
+      <button type="button" data-testid="tab-menu-close" @click="closeCurrentTab">关闭</button>
+      <button
+        type="button"
+        data-testid="tab-menu-close-others"
+        :disabled="menuOtherCount === 0"
+        @click="closeTabsAround('other')"
+      >关闭其他标签页</button>
+      <button
+        type="button"
+        data-testid="tab-menu-close-right"
+        :disabled="menuRightCount === 0"
+        @click="closeTabsAround('right')"
+      >关闭右侧标签页</button>
     </div>
   </div>
 </template>
@@ -265,6 +385,23 @@ function onDragEnd() {
 .rc-src-tabs-hint.full { color: var(--rc-error); font-weight: 700; }
 .rc-src-clear { flex: none; border: 0; background: transparent; color: var(--rc-muted); font-size: 11px; cursor: pointer; padding: 2px 4px; border-radius: 5px; }
 .rc-src-clear:hover { color: var(--rc-error); background: var(--rc-error-bg, #fee2e2); }
+.rc-src-tab-menu {
+  position: fixed;
+  z-index: 92;
+  min-width: 132px;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid var(--rc-border);
+  border-radius: 7px;
+  box-shadow: 0 12px 28px -12px rgba(15, 23, 42, 0.38);
+}
+.rc-src-tab-menu button {
+  display: block; width: 100%; height: 28px; padding: 0 8px;
+  border: 0; border-radius: 4px; background: transparent;
+  color: var(--rc-text-2); font-size: 12px; text-align: left; cursor: pointer;
+}
+.rc-src-tab-menu button:hover:not(:disabled) { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.rc-src-tab-menu button:disabled { color: var(--rc-faint); cursor: not-allowed; }
 .rc-src-compare-on { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--rc-primary-ink); }
 .rc-src-compare-exit { border: 0; background: transparent; color: var(--rc-primary); font-size: 11px; font-weight: 700; cursor: pointer; padding: 0; text-decoration: underline; }
 </style>

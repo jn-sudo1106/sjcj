@@ -388,6 +388,46 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     delete siteSnapshots[siteId]
     return next
   }
+  /**
+   * 批量关闭页签（右键菜单「关闭其他 / 关闭右侧标签页」，2026-09-18）。
+   *
+   * **不要在组件里 for 循环调 `close()`**：`close` 每关一个都会重算 `activeSourceId`
+   * 并可能退出对比，循环下来的落点由"最后一次关闭"决定，而不是"批量关完之后还剩谁"。
+   * 这里一次性移除，再统一决定落点。
+   *
+   * `prefer` 是调用方希望落到的页签（右键点中的那个）——Chrome 的行为就是关完之后
+   * 停在你右键的那一页。它若不在幸存者里（例如把它自己也关了），退回最左的幸存者。
+   */
+  function closeMany(targets: WorkspaceTabRef[], prefer?: WorkspaceTabRef | null): WorkspaceTabRef | null {
+    if (!targets.length) return null
+    const keyOf = (t: WorkspaceTabRef) => `${t.kind}:${t.id}`
+    const doomed = new Set(targets.map(keyOf))
+    const survivors = orderedTabs.value.filter((t) => !doomed.has(keyOf(t)))
+    const closingActive = targets.some((t) => t.kind === 'source' && t.id === activeSourceId.value)
+
+    for (const target of targets) {
+      if (target.kind === 'source') {
+        const idx = tabs.value.findIndex((t) => t.sourceId === target.id)
+        if (idx < 0) continue
+        tabs.value.splice(idx, 1)
+        delete snapshots[target.id]
+      } else {
+        const idx = siteTabs.value.findIndex((t) => t.siteId === target.id)
+        if (idx < 0) continue
+        siteTabs.value.splice(idx, 1)
+        delete siteSnapshots[target.id]
+      }
+    }
+
+    if (closingActive) {
+      activeSourceId.value = ''
+      // 与 close() 同口径：关掉活动页签即离开当前对比上下文
+      exitCompare()
+    }
+    const keep = prefer && survivors.some((t) => sameRef(t, prefer)) ? prefer : survivors[0]
+    return keep ? { kind: keep.kind, id: keep.id } : null
+  }
+
   function clearSiteTabs() {
     for (const t of siteTabs.value) delete siteSnapshots[t.siteId]
     siteTabs.value = []
@@ -416,5 +456,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return snapshots[sourceId]
   }
 
-  return { tabs, activeSourceId, snapshots, siteTabs, siteSnapshots, orderedTabs, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, moveTab, renameTab, saveSnapshot, snapshotOf, ensureSiteTab, closeSiteTab, clearSiteTabs, saveSiteSnapshot, siteSnapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf, backTraceConditionOf, setPendingSourceCondition, takePendingSourceCondition }
+  return { tabs, activeSourceId, snapshots, siteTabs, siteSnapshots, orderedTabs, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, closeMany, moveTab, renameTab, saveSnapshot, snapshotOf, ensureSiteTab, closeSiteTab, clearSiteTabs, saveSiteSnapshot, siteSnapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf, backTraceConditionOf, setPendingSourceCondition, takePendingSourceCondition }
 })
