@@ -276,6 +276,25 @@ export interface SiteSummary {
   errorCount: number
 }
 
+/**
+ * 源的定时任务（旧平台「定时列表」，`job/snatchJobPaged`）。
+ *
+ * ⚠️ 定时**不在** source / config 上：`sourceDetail.schedule` 实测恒为 null
+ * （2026-09-18 抽查列表前 20 个源全空），真正的 cron 落在 job 表里。
+ */
+export interface SourceJob {
+  jobId: string
+  jobName: string
+  sourceId: string
+  /** Quartz cron，如 `0 0 16 * * ?` */
+  schedule: string
+  nextRun?: string
+  lastRun?: string
+  runCount: number
+  successCount: number
+  disabled: boolean
+}
+
 /** 子步骤 Step（item/next）— 连线详情字段 */
 export interface Step {
   stepId: string

@@ -1052,6 +1052,11 @@ export const useFlowStore = defineStore('flow', () => {
     sourceStore.patchSourceCtx(patch)
   }
 
+  /** 回填源的定时 cron（来自 job 表）。见 sourceStore.applySourceSchedule——**不置脏**。 */
+  function applySourceSchedule(cron: string) {
+    sourceStore.applySourceSchedule(cron)
+  }
+
   function resetAllContext() {
     sourceStore.resetAllContext()
   }
@@ -1265,6 +1270,7 @@ export const useFlowStore = defineStore('flow', () => {
     setFlowName,
     patchSource,
     patchSourceCtx,
+    applySourceSchedule,
     resetAllContext,
     // 发布门禁
     validateFlow,

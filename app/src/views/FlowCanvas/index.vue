@@ -273,6 +273,7 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   if (ownerSiteId) void ensureSiteTabNamed(ownerSiteId)
   else void resolveOwnerSite(source.sourceId)
   void backfillStepDetails(sourceId, steps ?? [])
+  void backfillSourceSchedule(sourceId)
 }
 
 /**
@@ -331,6 +332,29 @@ async function resolveOwnerSite(sourceId: string) {
 }
 
 /** configDetail 补充：首屏之后异步打回。中途切走了就丢弃，别把上一个源的数据写到当前画布上。 */
+/**
+ * 把源的定时 cron 补回来（2026-09-18）。
+ *
+ * 用户问「定时策略数据为什么没有同步过来」——因为定时**不在 source/config 上**：
+ * `sourceDetail.schedule` 实测恒为 null（抽查列表前 20 个源全空），真正的 cron 在 job 表，
+ * 就是旧平台「定时列表」那一页的数据（源 430016942 → `0 0 16 * * ?`）。
+ *
+ * 一个源可能挂多条定时，取**启用中的第一条**；都停用了就退回第一条，至少让人看到配过什么。
+ * 查不到不影响画布——定时只是节点配置里的一栏。
+ */
+async function backfillSourceSchedule(sourceId: string) {
+  try {
+    const jobs = await sourceApi.sourceJobs(sourceId)
+    const cron = jobs.find((job) => job.schedule && !job.disabled)?.schedule || jobs[0]?.schedule || ''
+    if (!cron) return
+    // 中途切走就丢弃，别把上一个源的定时写到当前上下文上
+    if (String(route.query.sourceId ?? '') !== String(sourceId)) return
+    flow.applySourceSchedule(cron)
+  } catch {
+    /* 定时查不到就维持原样，不打断画布 */
+  }
+}
+
 async function backfillStepDetails(sourceId: string, steps: Step[]) {
   if (!steps.length) return
   try {

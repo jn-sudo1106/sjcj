@@ -11,7 +11,7 @@ import type {
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   SourceCheck, SourceCheckLog, SourceCheckQuery, SourceCheckLogQuery,
   TaskInstQuery, SiteTableOption, SiteTablesResult,
-  Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, EntryType, Param, ParamInput, CredentialRef, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
+  Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, EntryType, Param, ParamInput, CredentialRef, SourceJob, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, CopySourceInput, SourceCloneRequest, SourceCloneResult,
   FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
   SourceCategory,
@@ -545,6 +545,40 @@ export const sourceApi = {
         }
       })
       .filter((item) => item.id && item.name)
+  },
+  /**
+   * 源的定时任务（2026-09-18）。
+   *
+   * 旧平台「定时列表」那一页同款接口。**定时不在 source/config 上**——`sourceDetail.schedule`
+   * 实测恒为 null（抽查列表前 20 个源全空），真正的 cron 落在 job 表：
+   * 源 430016942 → `{ jobId: 14666, schedule: '0 0 16 * * ?', nextRun: '2026-09-19 16:00:00' }`。
+   * 节点配置里的「定时策略」要显示的就是它。
+   *
+   * `sourceId` 与 `ids`（批量，逗号分隔）两个参数后端都认，这里只用单源。
+   */
+  sourceJobs: async (sourceId: string): Promise<SourceJob[]> => {
+    if (!sourceId) return []
+    const result = await request<unknown>('source/sourceJobs', { sourceId }, {
+      method: 'GET',
+      httpEndpoint: 'job/snatchJobPaged',
+      httpParams: { page: 1, limit: 50, sourceId },
+    })
+    const record = result as { list?: unknown[]; records?: unknown[] } | unknown[]
+    const rows = Array.isArray(record) ? record : (record?.list ?? record?.records ?? [])
+    return (Array.isArray(rows) ? rows : []).map((row) => {
+      const r = row as Record<string, unknown>
+      return {
+        jobId: String(r.jobId ?? ''),
+        jobName: String(r.jobName ?? ''),
+        sourceId: String(r.sourceId ?? ''),
+        schedule: String(r.schedule ?? ''),
+        nextRun: r.nextRun == null ? undefined : String(r.nextRun),
+        lastRun: r.lastRun == null ? undefined : String(r.lastRun),
+        runCount: Number(r.runCnt ?? 0),
+        successCount: Number(r.successCnt ?? 0),
+        disabled: String(r.state ?? '') === 'D',
+      }
+    }).filter((job) => job.jobId)
   },
   sourceStats: () => assetMockRequest<{ total: number; error: number; externalChanged: number; disabled: number }>('source/stats'),
   /**

@@ -57,6 +57,21 @@ export const useSourceStore = defineStore('source', () => {
     sourceCtx.value = { ...sourceCtx.value, ...withoutNodeCopies(patch as Record<string, unknown>) as Partial<Source> }
   }
 
+  /**
+   * 回填源的定时 cron（2026-09-18）。
+   *
+   * 定时**不在 source/config 上**，而在 job 表（`job/snatchJobPaged`）——所以它是加载源之后
+   * 异步补回来的，属于**回读不是用户改动**：绝不置脏，否则一打开节点就提示"有未保存修改"
+   * （2026-09-10 修过同款问题）。
+   * 源上已经有 cron 时不覆盖：那可能是用户正在编辑的值。
+   */
+  function applySourceSchedule(cron: string) {
+    const value = String(cron ?? '').trim()
+    if (!value) return
+    if (sourceCfg.value && !sourceCfg.value.cron) sourceCfg.value.cron = value
+    if (sourceCtx.value && !sourceCtx.value.cron) sourceCtx.value.cron = value
+  }
+
   function cloneStep(step: Step): Step {
     return {
       ...step,
@@ -240,6 +255,7 @@ export const useSourceStore = defineStore('source', () => {
     renameStepSnapshot,
     patchSource,
     patchSourceCtx,
+    applySourceSchedule,
     resetAllContext,
     clearSourceCtx,
     clearSiteCtx,

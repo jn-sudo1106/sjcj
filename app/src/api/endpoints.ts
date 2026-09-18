@@ -237,7 +237,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'item/next/delete', desc: '删除子步骤（GET ?id=itemConfig）', danger: true, live: true },
 
   /* ── job 抓取/定时任务（目标 7 / 收录 7） ── */
-  { path: 'job/snatchJobPaged', desc: '抓取任务分页' },
+  // 2026-09-18 接上：源的**定时任务**就存在这儿（旧平台「定时列表」页同款接口）。
+  // 此前节点配置的「定时策略」只认 source/config 上的字段，而那边实测恒为 null
+  // （抽查 20 个源全空），真正的 cron 在 job 表里——源 430016942 → `0 0 16 * * ?`。
+  { path: 'job/snatchJobPaged', desc: '源的定时任务分页（定时列表）', live: true },
   { path: 'job/runJob', desc: '运行任务', danger: true },
   { path: 'job/enableJob', desc: '启用任务', danger: true },
   { path: 'job/disableJob', desc: '停用任务', danger: true },
