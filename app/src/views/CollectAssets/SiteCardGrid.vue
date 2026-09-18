@@ -7,9 +7,9 @@ import { useRouter } from 'vue-router'
 import { siteApi, type Site, type Source } from '../../api'
 import { siteIcon, siteTone } from '@/utils/visual/siteVisual'
 
-/** 瓦片配色 → 内联 style；模板里别写两遍 siteTone(site) */
-function tileStyle(site: { name: string }) {
-  const tone = siteTone(site)
+/** 瓦片配色 → 内联 style（全站统一，见 siteTone） */
+function tileStyle() {
+  const tone = siteTone()
   return { background: tone.bg, color: tone.fg, boxShadow: tone.shadow }
 }
 import { visibleIssueTags } from '@/utils/sourceMark'
@@ -216,7 +216,7 @@ onUnmounted(() => {
         @click.stop="openMenu($event, site)"
       >⋯</button>
       <div class="scg-head">
-        <span class="scg-icon" :style="tileStyle(site)">
+        <span class="scg-icon" :style="tileStyle()">
           <el-icon :size="20"><component :is="siteIcon(site)" /></el-icon>
         </span>
         <div class="scg-title">

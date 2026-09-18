@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { Document, ChatDotRound, Notebook, OfficeBuilding, TrendCharts } from '@element-plus/icons-vue'
-import { siteHue, siteIcon, siteTone } from './siteVisual'
+import { Box, ChatDotRound, Coin, Document, Notebook, OfficeBuilding, Reading, TrendCharts } from '@element-plus/icons-vue'
+import { siteIcon, siteTone } from './siteVisual'
 
+// siteIcon 仍在用（流程画布等处按类型取图标），网站卡片改用首字后不再依赖它。
 describe('siteIcon · 分类优先', () => {
   it('分类认得出来就按分类，不看名字', () => {
     expect(siteIcon({ name: '中国经营网', categoryPath: '/财经资讯/财经媒体' })).toBe(Document)
@@ -10,95 +11,44 @@ describe('siteIcon · 分类优先', () => {
     expect(siteIcon({ name: '上市公司(已复核)', categoryPath: '/上市公司' })).toBe(OfficeBuilding)
   })
 
-  // 改这套之前：名字里没关键词就全落到默认 Monitor，一整排「中国XX」长一样
   it('分类为空时才回退到名字', () => {
     expect(siteIcon({ name: '涨停板' })).toBe(TrendCharts)
     expect(siteIcon({ name: '新浪财经1' })).toBe(Document)
   })
+
+  // 2026-09-18：原先只有五六条关键词，一屏 8 张卡有 7 个落到默认的显示器图标（用户截图）。
+  // 按真实网站名把常见词铺开，顺序即优先级——越具体的越靠前。
+  it('按真实网站名挑得出不同图标', () => {
+    expect(siteIcon({ name: '中国基金报' })).toBe(Coin)          // 基金 先于 报
+    expect(siteIcon({ name: '上海证券报' })).toBe(TrendCharts)   // 证券 先于 报
+    expect(siteIcon({ name: '我的钢铁网' })).toBe(Box)
+    expect(siteIcon({ name: '新京报' })).toBe(Reading)
+    expect(siteIcon({ name: '澎湃新闻' })).toBe(Document)
+    expect(siteIcon({ name: '国内智库' })).toBe(Notebook)
+    expect(siteIcon({ name: '小红书' })).toBe(ChatDotRound)
+    expect(siteIcon({ name: '上市公司(已复核)' })).toBe(OfficeBuilding)
+  })
+
+  it('名字也认不出来时，按名字哈希取中性图标——稳定，且一屏不会全一样', () => {
+    const unknown = ['人民网', '新华网', '同花顺', '每经网', '中新经纬', '量子位', '测试12']
+    const picked = unknown.map((name) => siteIcon({ name }))
+    // 同一个网站每次都一样
+    expect(siteIcon({ name: '人民网' })).toBe(picked[0])
+    // 七个认不出来的网站，至少能分出 4 种形状
+    expect(new Set(picked).size).toBeGreaterThanOrEqual(4)
+  })
 })
 
-describe('siteTone · 按名字生成，颜色不会用完', () => {
-  it('同一个网站永远是同一个颜色（卡片与表格要一致）', () => {
-    expect(siteTone({ name: '东方财富网' })).toEqual(siteTone({ name: '东方财富网' }))
-  })
-
-  // 色域来回收放过两轮，最后定位到"花"的元凶是标签（琥珀底橙字），不是图标。
-  // 标签统一成浅蓝后，图标放开回冷色全段——卡片上只剩它一处在做区分。
-  it('用冷色段（200–320）：青蓝 → 蓝 → 靛 → 紫', () => {
-    const names = ['东方财富网', '同花顺', '微博', '中国证券报', '新浪财经1', '新浪2', '新浪3',
-      '智库报告', '海外智库', '国内智库', '量子位', '小红书', '财联社', '涨停板', '云掌财经']
-    for (const name of names) {
-      const hue = siteHue(name)
-      // 200–320：顺带天然避开了红橙——红色在卡片上已经表示"异常"，不能被稀释
-      expect(hue).toBeGreaterThanOrEqual(200)
-      expect(hue).toBeLessThanOrEqual(320)
-    }
-  })
-
-  it('名字相近也会分开——"新浪1/2/3"不该是同一个颜色', () => {
-    const hues = ['新浪财经1', '新浪2', '新浪3'].map(siteHue)
-    expect(new Set(hues).size).toBe(3)
-  })
-
-  // 2026-09-18 实测发现的真实问题：连续色相下这两个网站算出 143° / 144°，
-  // 相邻两张卡片"差一点点但不完全一样"，看着像渲染 bug。分档 + 雪崩散列后不会再出现。
-  it('名字只差一个字的两个网站，要么明显不同、要么完全同色', () => {
-    const a = siteHue('国内智库')
-    const b = siteHue('海外智库')
-    const gap = Math.abs(a - b)
-    expect(gap === 0 || gap >= 10).toBe(true)
-  })
-
-  it('一屏十几张卡片能互相分开（12 档色相 × 2 档浓淡）', () => {
-    const onScreen = ['中国经营网', '中国网财经', '中国证券报', '中金在线', '中新经纬', '云掌财经',
-      '东方财富网', '同花顺', '财联社', '量子位', '小红书', '微博']
-    const hues = new Set(onScreen.map(siteHue))
-    // 12 档色相，12 个网站期望约 7.6 种；真正的区分度靠色相 × 浓淡这一对组合
-    // （下面那条用例锁的就是它），这里只保证散列没偏。
-    expect(hues.size).toBeGreaterThanOrEqual(6)
-  })
-
-  it('色相落在档位上，不产生 143/144 这种半吊子差异', () => {
-    const step = 120 / 12
-    for (const name of ['东方财富网', '微博', '智库报告', '测试网站7']) {
-      const offset = (siteHue(name) - 45) / step
-      expect(Math.abs(offset - Math.round(offset))).toBeLessThan(0.51)
-    }
-  })
-
-  it('渐变的两端锁在同一个色相上，只走明度/饱和度', () => {
-    const tone = siteTone({ name: '东方财富网' })
-    const hue = siteHue('东方财富网')
-    // 深色渐变底 + 白图标（2026-09-18 按用户给的参考图定稿；中途试过浅底深图标的平色版）
-    expect(tone.bg).toMatch(/^linear-gradient\(135deg, oklch\(/)
-    expect(tone.fg).toBe('#fff')
-    // 两个端点都是同一个色相：换成哪个色相，渐变看起来的"斜度"都一致
-    const hues = [...tone.bg.matchAll(/oklch\([\d.]+ [\d.]+ (\d+)\)/g)].map((m) => Number(m[1]))
-    expect(hues).toEqual([hue, hue])
-    // 投影用同色相的深色加透明，不是统一的灰
-    expect(tone.shadow).toContain(`${hue} / 0.55`)
-  })
-
-  // 第二维度曾经取 `hash / 24 % 2`，与色相档共用同一串低位，等于没加（实测 16 张卡的
-  // 配色数一动不动还是 11）。改取高位 bit 后到 14。
-  it('浓淡与色相档相互独立，真的把同屏区分度提上去了', () => {
-    const onScreen = ['中国经营网', '中国网财经', '中国证券报', '中金在线', '中新经纬', '云掌财经',
-      '东方财富网', '同花顺', '财联社', '量子位', '小红书', '微博', '智库报告', '国内智库',
-      '海外智库', '数据榜单']
-    const tones = new Set(onScreen.map((name) => JSON.stringify(siteTone({ name }))))
-    // 12 色相 × 2 浓淡 = 24 组合，16 个网站期望约 12 种
-    expect(tones.size).toBeGreaterThanOrEqual(10)
-
-    // 同色相的两个网站靠浓淡分开：找一对色相相同的，断言配色不同
-    const byHue = new Map<number, string[]>()
-    for (const name of onScreen) {
-      const hue = siteHue(name)
-      byHue.set(hue, [...(byHue.get(hue) ?? []), name])
-    }
-    const collided = [...byHue.values()].find((names) => names.length > 1)
-    if (collided) {
-      const distinct = new Set(collided.map((name) => siteTone({ name }).bg))
-      expect(distinct.size).toBeGreaterThan(1)
-    }
+// 2026-09-18 定稿：回到最早那套统一蓝渐变。
+// 中途按网站名生成色相调了四轮（全色谱 → 冷色 → 纯蓝 → 渐变），30 多张卡片各一色整面墙还是花；
+// 又试过统一配色 + 瓦片里放网站名前两个字，更难看。最后回到原点。
+describe('siteTone · 全站统一', () => {
+  it('不随网站变化，就是原来那套蓝渐变', () => {
+    expect(siteTone()).toEqual(siteTone())
+    expect(siteTone()).toEqual({
+      bg: 'linear-gradient(135deg, #60a5fa, #2563eb)',
+      fg: '#fff',
+      shadow: '0 5px 12px -6px rgba(37, 99, 235, 0.55)',
+    })
   })
 })

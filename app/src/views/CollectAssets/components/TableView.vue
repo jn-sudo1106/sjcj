@@ -6,8 +6,8 @@ import { siteApi, sourceApi, type Source, type Site } from '@/api'
 import { siteIcon, siteTone } from '@/utils/visual/siteVisual'
 
 /** 瓦片配色 → 内联 style；模板里别写两遍 siteTone(site) */
-function tileStyle(site: { name: string }) {
-  const tone = siteTone(site)
+function tileStyle() {
+  const tone = siteTone()
   return { background: tone.bg, color: tone.fg, boxShadow: tone.shadow }
 }
 import { confirmDanger } from '@/utils/confirmDanger'
@@ -244,7 +244,7 @@ defineExpose({
               </td>
               <td>
                 <div class="ca-site-head">
-                  <span class="ca-site-icon" :style="tileStyle(site)"><el-icon :size="14"><component :is="siteIcon(site)" /></el-icon></span>
+                  <span class="ca-site-icon" :style="tileStyle()"><el-icon :size="14"><component :is="siteIcon(site)" /></el-icon></span>
                   <button class="ca-site-name" type="button" title="进入网站统一流程" @click="openSiteCanvas(site)">{{ site.name }}</button>
                   <span class="ca-site-cat">{{ site.categoryPath?.replace(/^\//, '').replaceAll('/', ' / ') || site.category }}</span>
                   <span v-if="site.errorCount > 0" class="ca-err-pill">● {{ site.errorCount }} 个异常</span>
