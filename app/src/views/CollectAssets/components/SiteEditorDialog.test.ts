@@ -23,6 +23,16 @@ const stubs = {
   },
   ElOption: { props: ['label', 'value'], template: '<div class="el-option">{{ label }}</div>' },
   ElButton: { template: '<button><slot /></button>' },
+  // 2026-09-18：分类从扁平 el-select 换成了懒加载的 el-tree-select（三级目录）
+  ElTreeSelect: {
+    name: 'ElTreeSelect',
+    // Boolean 要显式声明类型，否则模板里的无值属性（lazy / check-strictly）传进来是空串
+    props: {
+      modelValue: null, data: null, load: null, cacheData: null,
+      lazy: Boolean, checkStrictly: Boolean, filterable: Boolean, clearable: Boolean,
+    },
+    template: '<div class="el-tree-select" />',
+  },
 }
 
 function mountDlg(s: Site) {
@@ -166,5 +176,40 @@ describe('SiteEditorDialog 新建网站', () => {
     await flushPromises()
 
     expect(create).not.toHaveBeenCalled()
+  })
+})
+
+// 2026-09-18 用户提：新建网站的分类只有两级，而查询那边是三级树。
+describe('SiteEditorDialog 分类选择器', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('用的是懒加载树选择器，不是拍平成「父 / 子」的两级下拉', async () => {
+    vi.spyOn(siteApi, 'siteTags').mockResolvedValue([])
+    const wrapper = mount(SiteEditorDialog, {
+      props: { visible: true, site: null, categories, mode: 'create' as const },
+      global: { stubs },
+    })
+    await flushPromises()
+
+    const tree = wrapper.findComponent({ name: 'ElTreeSelect' })
+    expect(tree.exists()).toBe(true)
+    expect(tree.props('lazy')).toBe(true)
+    // check-strictly：允许直接选中间层级（网站可以只挂到二级目录）
+    expect(tree.props('checkStrictly')).toBe(true)
+    // 单选——没有 multiple
+    expect(tree.props()).not.toHaveProperty('multiple')
+  })
+
+  it('编辑挂在深层目录的网站时，用 categoryPath 兜底回显，不显示裸 ID', async () => {
+    vi.spyOn(siteApi, 'siteTags').mockResolvedValue([])
+    const deep: Site = { ...site(), dirId: '99', categoryPath: '/财经资讯/财经媒体/中央级媒体' }
+    const wrapper = mount(SiteEditorDialog, {
+      props: { visible: true, site: deep, categories },
+      global: { stubs },
+    })
+    await flushPromises()
+
+    expect(wrapper.findComponent({ name: 'ElTreeSelect' }).props('cacheData'))
+      .toEqual([{ value: '99', label: '财经资讯 / 财经媒体 / 中央级媒体' }])
   })
 })

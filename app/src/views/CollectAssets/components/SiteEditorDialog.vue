@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { siteApi, type Site, type SourceCategory } from '@/api'
+import { siteApi, sourceApi, type Site, type SourceCategory } from '@/api'
 
 /**
  * 网站基本信息弹窗：**新建与编辑共用一套表单**（2026-09-18）。
@@ -70,12 +70,43 @@ function removeTag(name: string) {
   tags.value = tags.value.filter((t) => t !== name)
 }
 
-// categoryPath 存的其实是选中项的 categoryId（见下方 el-option :value="option.path"，
-// path 字段名是历史遗留，实际内容是 id 不是斜杠路径）。
-const siteCategoryOptions = computed(() => props.categories.flatMap((group) => [
-  { path: group.id, label: group.name },
-  ...(group.children ?? []).map((child) => ({ path: child.id, label: `${group.name} / ${child.name}` })),
-]))
+// form.categoryPath 存的其实是选中项的 categoryId（字段名是历史遗留，实际内容是 id
+// 不是斜杠路径）。
+//
+// 2026-09-18：原来是把「根 + 一层子级」拍平成 `父 / 子` 的 el-select，**只有两级**——
+// 而真实目录是三级往上（财经资讯 / 财经媒体 / 中央级媒体）。三级以下的目录在这里
+// 根本选不到，用户只能先挑个二级再进详情改。改成与查询那边同一个 el-tree-select
+// （懒加载子级），区别只是这里**单选**。
+async function loadCategoryChildren(
+  node: { level: number; data: SourceCategory },
+  resolve: (nodes: SourceCategory[]) => void,
+) {
+  if (node.level === 0) {
+    resolve(props.categories)
+    return
+  }
+  if (node.data.children?.length) {
+    resolve(node.data.children)
+    return
+  }
+  try {
+    resolve(await sourceApi.sourceCategories(node.data.id))
+  } catch {
+    resolve([])   // 取不到子级不影响选当前这级
+  }
+}
+
+/**
+ * 懒加载树的回显兜底：编辑一个挂在三级目录下的网站时，那层节点还没被展开加载过，
+ * el-tree-select 找不到 node-key 对应的节点就只能显示一个光秃秃的 ID。
+ * `site.categoryPath` 是后端拼好的展示串（如 `/财经资讯/社交平台`），正好拿来当标签。
+ */
+const categoryCacheData = computed(() => {
+  const id = form.categoryPath
+  const path = props.site?.categoryPath
+  if (!id || !path) return []
+  return [{ value: id, label: path.split('/').filter(Boolean).join(' / ') }]
+})
 
 function openEditor(site: Site) {
   Object.assign(form, {
@@ -171,7 +202,22 @@ defineExpose({ openEditor, openCreator })
     <el-form class="ca-site-form" label-position="top">
       <el-form-item label="网站名称" required><el-input v-model="form.name" placeholder="请输入网站名称" /></el-form-item>
       <el-form-item label="所属分类" required>
-        <el-select v-model="form.categoryPath" filterable placeholder="请选择分类" style="width: 100%"><el-option v-for="option in siteCategoryOptions" :key="option.path" :label="option.label" :value="option.path" /></el-select>
+        <!-- 与查询那边同一个树选择器，只是单选（不加 multiple）。
+             check-strictly：允许直接选中间层级——网站本来就可以只挂到二级目录上。 -->
+        <el-tree-select
+          v-model="form.categoryPath"
+          placeholder="请选择分类"
+          style="width: 100%"
+          clearable
+          filterable
+          check-strictly
+          :data="categories"
+          :cache-data="categoryCacheData"
+          :props="{ label: 'name', children: 'children' }"
+          node-key="id"
+          lazy
+          :load="loadCategoryChildren"
+        />
       </el-form-item>
       <el-form-item label="标签">
         <div class="ca-site-tags" data-testid="site-tag-editor">
