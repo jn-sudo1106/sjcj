@@ -2,8 +2,9 @@
 // 源侧栏：页面级左侧固定栏，流程、数据、文件和任务视图共用。
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
-import { flowCenterApi, siteApi, sourceApi, type Site, type SourceCategory, type Source } from '@/api'
+import { CHANGE_SITE_CHUNK, flowCenterApi, siteApi, sourceApi, type Site, type SourceCategory, type Source } from '@/api'
 import SourceParamModal from './SourceParamModal.vue'
+import { importProgressText } from './importProgress'
 
 /**
  * 0903 Y8-9：只控制**新增的第三步**（复制完把新源关联到被复制源的流程）。
@@ -812,10 +813,26 @@ async function submitByIds() {
     idImport.text = ''
     idImport.open = false
     closeBatch()
+    // 进度文案分两种（2026-09-18 修）：
+    //
+    // `changeSite` 只有**超过 CHANGE_SITE_CHUNK 才分片**，否则一次请求把整批发出去，
+    // 服务端不回报中间进度 —— onProgress 要等请求返回才被调用一次，而那时通知已经关了。
+    // 于是导 100 个源全程只能看到「已导入 0 / 100」一动不动，看着像卡死（用户实测反馈）。
+    // 不分片时就别假装有逐条进度，老实说"正在导入，需要一会儿"，配一个转圈表示还活着。
+    //
+    // 分片时的计数也从「已导入」改成「已提交」：onProgress 累计的是**已提交的片**
+    // （含失败与未确认的），不是确认落库的条数。
+    const chunked = total > CHANGE_SITE_CHUNK
     const progress = ref(0)
     const progressNote = ElNotification({
       title: '批量导入进行中',
-      message: h(() => h('span', `已导入 ${progress.value} / ${total} 个源，请勿关闭页面…`)),
+      message: h(() => h('span', { style: 'display:inline-flex;align-items:center;gap:6px' }, [
+        h('span', {
+          style: 'display:inline-block;width:10px;height:10px;border:1.5px solid currentColor;'
+            + 'border-top-color:transparent;border-radius:50%;animation:rc-imp-spin .7s linear infinite',
+        }),
+        h('span', importProgressText(progress.value, total, chunked)),
+      ])),
       duration: 0,
       showClose: false,
       type: 'info',
@@ -1758,4 +1775,10 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 .ssw-bind-other { color: #d97706; font-size: 12px; font-weight: 600; }
 .ssw-bind-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 0 4px; }
 .ssw-bind-muted { font-size: 12px; color: var(--rc-muted); }
+</style>
+
+<!-- 批量导入的进度通知 teleport 到 body，scoped 选择器管不到，转圈动画放在这里（不加 scoped） -->
+<style>
+@keyframes rc-imp-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { [style*="rc-imp-spin"] { animation-duration: 2s !important; } }
 </style>

@@ -388,7 +388,11 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
 // changeSite 是 GET，ids 拼在 URL query 里；一次上千个源会把请求行撑到几十 KB，被网关以
 // 414/431 拒掉（2026-09-07 实测：6496 个源 → 431 Request Header Fields Too Large）。
 // 超过这个数就在 changeSite 内部串行分片提交，单片 ~300 个 ID（约 3–6KB URL，稳在各网关默认上限内）。
-const CHANGE_SITE_CHUNK = 300
+/**
+ * changeSite 的分片大小。**导出给调用方**：≤ 这个数就是一次请求打完，
+ * 服务端不回报中间进度，UI 不该假装有逐条进度（2026-09-18）。
+ */
+export const CHANGE_SITE_CHUNK = 300
 
 /**
  * 请求没拿到回执**不等于**后端没写入，所以 changeSite 不能凭异常直接判失败。
