@@ -5,7 +5,13 @@
 import { onMounted, onUnmounted, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { siteApi, type Site, type Source } from '../../api'
-import { siteIcon } from '@/utils/visual/siteVisual'
+import { siteIcon, siteTone } from '@/utils/visual/siteVisual'
+
+/** 瓦片配色 → 内联 style；模板里别写两遍 siteTone(site) */
+function tileStyle(site: { name: string }) {
+  const tone = siteTone(site)
+  return { background: tone.bg, color: tone.fg }
+}
 import { visibleIssueTags } from '@/utils/sourceMark'
 
 const props = defineProps<{ sites: Site[] }>()
@@ -204,7 +210,9 @@ onUnmounted(() => {
         @click.stop="openMenu($event, site)"
       >⋯</button>
       <div class="scg-head">
-        <span class="scg-icon"><el-icon :size="20"><component :is="siteIcon(site)" /></el-icon></span>
+        <span class="scg-icon" :style="tileStyle(site)">
+          <el-icon :size="20"><component :is="siteIcon(site)" /></el-icon>
+        </span>
         <div class="scg-title">
           <div class="scg-name">{{ site.name }}</div>
           <div class="scg-cat">{{ site.categoryPath?.replace(/^\//, '').replaceAll('/', ' / ') || site.category }}</div>
@@ -349,17 +357,16 @@ onUnmounted(() => {
 .scg-card-menu button:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 
 .scg-head { display: flex; align-items: center; gap: 11px; }
+/* 平色块，不再是渐变 + 投影（2026-09-18）：30 张卡片各带一个投影堆在一起是视觉噪音，
+   平色也跟工具栏、chips 那套风格一致。底色/前景色由 siteTone() 按网站名算，见 siteVisual.ts。 */
 .scg-icon {
   flex: none;
   width: 42px;
   height: 42px;
   border-radius: 11px;
-  background: linear-gradient(135deg, #60a5fa, #2563eb);
-  color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 5px 12px -6px rgba(37, 99, 235, 0.55);
 }
 .scg-title { flex: 1; min-width: 0; }
 .scg-name { font-size: 14px; font-weight: 700; color: var(--rc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

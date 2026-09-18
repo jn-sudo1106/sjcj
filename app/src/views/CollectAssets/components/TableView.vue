@@ -3,7 +3,13 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Edit, Operation } from '@element-plus/icons-vue'
 import { siteApi, sourceApi, type Source, type Site } from '@/api'
-import { siteIcon } from '@/utils/visual/siteVisual'
+import { siteIcon, siteTone } from '@/utils/visual/siteVisual'
+
+/** 瓦片配色 → 内联 style；模板里别写两遍 siteTone(site) */
+function tileStyle(site: { name: string }) {
+  const tone = siteTone(site)
+  return { background: tone.bg, color: tone.fg }
+}
 import { confirmDanger } from '@/utils/confirmDanger'
 
 const props = defineProps<{
@@ -187,6 +193,7 @@ defineExpose({
   openSiteCanvas,
   openSiteData,
   siteIcon,
+  tileStyle,
   onSizeChange,
 })
 </script>
@@ -237,7 +244,7 @@ defineExpose({
               </td>
               <td>
                 <div class="ca-site-head">
-                  <span class="ca-site-icon"><el-icon :size="14"><component :is="siteIcon(site)" /></el-icon></span>
+                  <span class="ca-site-icon" :style="tileStyle(site)"><el-icon :size="14"><component :is="siteIcon(site)" /></el-icon></span>
                   <button class="ca-site-name" type="button" title="进入网站统一流程" @click="openSiteCanvas(site)">{{ site.name }}</button>
                   <span class="ca-site-cat">{{ site.categoryPath?.replace(/^\//, '').replaceAll('/', ' / ') || site.category }}</span>
                   <span v-if="site.errorCount > 0" class="ca-err-pill">● {{ site.errorCount }} 个异常</span>
@@ -357,13 +364,12 @@ defineExpose({
 .ca-expand-btn:hover { background: #f1f5f9; color: var(--rc-text); }
 .ca-expand-btn.open { transform: rotate(90deg); }
 .ca-site-head { display: flex; align-items: center; gap: 9px; min-width: 0; }
+/* 底色/前景由 siteTone() 内联注入（2026-09-18），这里只留尺寸与形状 */
 .ca-site-icon {
   flex: none;
   width: 28px;
   height: 28px;
   border-radius: 8px;
-  background: linear-gradient(135deg, #60a5fa, #2563eb);
-  color: #fff;
   display: inline-flex;
   align-items: center;
   justify-content: center;
