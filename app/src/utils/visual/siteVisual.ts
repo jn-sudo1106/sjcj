@@ -57,8 +57,8 @@ export function siteIcon(site: { name: string; category?: string; categoryPath?:
  * 同时避开了红橙——卡片上红色已经有语义（出错的源 chip、工具栏的「出错源 N」），
  * 图标混进红橙会稀释那个警示信号。
  */
-const HUE_MIN = 200
-const HUE_SPAN = 120   // 200..320，青蓝 → 蓝 → 靛 → 紫
+const HUE_MIN = 225
+const HUE_SPAN = 45    // 225..270，全在蓝里：偏青的蓝 → 蓝 → 偏靛的蓝
 
 /**
  * 色相取**离散档位**而不是连续值。
@@ -70,7 +70,7 @@ const HUE_SPAN = 120   // 200..320，青蓝 → 蓝 → 靛 → 紫
  * 收窄到冷色区间后档位也跟着降到 12（每 10 度一档）——120 度里塞 24 档就太密了，
  * 相邻档人眼分不出，等于白占。少了的区分度由下面那档浓淡补回来（12 × 2 = 24 组合）。
  */
-const HUE_STEPS = 12
+const HUE_STEPS = 6
 
 function mix32(n: number): number {
   let h = n | 0
