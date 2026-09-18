@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useUiStore } from '../../stores/ui'
-import { useWorkspaceStore } from '../../stores/workspace'
+import { MAX_WORKSPACE_TABS, useWorkspaceStore } from '../../stores/workspace'
 import { siteApi, sourceApi, type Source, type Step } from '../../api'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 import { useRuntimeStore } from '../../stores/runtime'
@@ -263,7 +263,7 @@ async function loadSourceFlow(sourceId: string) {
   }
   flow.loadFromSource(source, steps ?? [], null)
   if (!ws.open(source.sourceId, source.name)) {
-    ElMessage.warning('页签已达上限（8 个），当前源未加入页签，请关闭部分页签后再试')
+    ElMessage.warning(`页签已达上限（${MAX_WORKSPACE_TABS} 个），当前源未加入页签，请关闭部分页签后再试`)
   }
   // 把所属网站记进页签快照：切页签时 URL 上没有 siteId，而 sourceDetail 又不返回它（实测为 null），
   // 不记下来的话切到别的网站的源，左侧源列表会整块消失。只在拿得到时写，别用空值覆盖已有的。
@@ -480,7 +480,15 @@ async function enterFromRoute() {
     // 网站详情页（0714 会议 Task 3）：不再重定向到第一个源，本身就是一个页面；
     // 加载（含"该网站暂无源"兜底）交给 SiteDetailView 自己处理，这里只管路由归一化和顶部动作栏。
     // 0915-02：进网站态即登记「全部」页签（名字等 SiteDetailView 拿到 site/detail 再补）。
-    ws.ensureSiteTab(siteId)
+    //
+    // 满额时**要说一声**（2026-09-18 用户提）：此前是静默失败，于是从网站卡片点进来之后，
+    // 内容是这个网站的、页签条上却没有它，也没有任何一项高亮——用户既不知道自己在哪，
+    // 也不知道为什么。源页签那条路（ws.open）一直是"照常切过去 + 提示"，这里对齐它。
+    // 不会连弹：enterFromRoute 只在 sourceId/siteId 真正变化时触发（下方 watch 有 prev 守卫），
+    // 点已在页签条上的网站走的是 exist 分支，返回 true 也不会弹。
+    if (!ws.ensureSiteTab(siteId)) {
+      ElMessage.warning(`页签已达上限（${MAX_WORKSPACE_TABS} 个），本网站未加入页签条，关闭部分页签后重新进入即可`)
+    }
     const view = normalizeSiteView(route.query.view)
     if (route.query.view !== view) await router.replace({ path: '/canvas', query: { siteId, view } })
     else ui.clearActions()
