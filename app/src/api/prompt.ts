@@ -41,7 +41,10 @@ function normalizePrompt(item: unknown): PromptTemplateItem | null {
   const systemPrompt = toString(record.systemPrompt).trim()
   const nodeTypeName = toString(record.nodeTypeName).trim()
   const category = toString(record.category).trim()
-  if (!systemPrompt || !nodeTypeName || !category) return null
+  // ⚠️ category 允许为空：cfg_llm_node_prompt 里「翻译」那一行（node_type='article_translate'）
+  // 的 category 就是 NULL（2026-09-17 直接读库核对）。此前这里要求 category 非空，
+  // 会把整行丢掉——模板永远取不到，页面上表现为"提示词没配"。systemPrompt / nodeTypeName 仍必填。
+  if (!systemPrompt || !nodeTypeName) return null
   const promptId = Number(record.promptId ?? record.id ?? 0)
   return {
     promptId: Number.isFinite(promptId) ? promptId : 0,

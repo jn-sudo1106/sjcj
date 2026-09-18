@@ -1,4 +1,4 @@
-import { collectorCapabilityOf, decisionOrParallelKind, isArticleSummaryNode, isDataNode, isDataValidationNode, isMonitorNode, isRuleNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { collectorCapabilityOf, decisionOrParallelKind, isArticleSummaryNode, isDataNode, isDataValidationNode, isMonitorNode, isRuleNode, isTranslateNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import type { PromptCategory } from '@/api'
 
 export interface PromptCategoryOption {
@@ -32,6 +32,9 @@ const MONITOR_OPTIONS: PromptCategoryOption[] = [{ label: '数据监控', value:
 const DATA_VALIDATION_OPTIONS: PromptCategoryOption[] = [{ label: '数据校验', value: '数据校验' }]
 // 文章生成摘要（720）：提示词表里 category=rule、node_type_name=文章生成摘要（实测 2026-09-17）
 const ARTICLE_SUMMARY_OPTIONS: PromptCategoryOption[] = [{ label: '文章生成摘要', value: '文章生成摘要' }]
+// 翻译助手（800）：提示词表里那一行是 node_type='article_translate'、node_type_name='翻译'、**category 为空**
+//（2026-09-17 直接读 cfg_llm_node_prompt 核对），所以查模板时不能带 category，见 promptListCategoryForNode
+const TRANSLATE_OPTIONS: PromptCategoryOption[] = [{ label: '翻译', value: '翻译' }]
 const METRIC_OPTIONS: PromptCategoryOption[] = [{ label: '指标引用', value: '指标引用' }]
 const NOTIFY_OPTIONS: PromptCategoryOption[] = [
   { label: '提取数据发邮件', value: '提取数据发邮件' },
@@ -78,6 +81,7 @@ export function promptCategoryGroupsForNode(cfg?: NodeConfig): PromptCategoryGro
   // 文章生成摘要：提示词表里是独立一档（category=rule + node_type_name=文章生成摘要），
   // 必须在 dataProcessLike() 之前判——否则会落到'数据处理/自定义节点'，取不到模板
   if (isArticleSummaryNode(cfg)) return [{ label: '数据处理', options: ARTICLE_SUMMARY_OPTIONS }]
+  if (isTranslateNode(cfg)) return [{ label: '数据处理', options: TRANSLATE_OPTIONS }]
   const logicKind = cfg ? decisionOrParallelKind(cfg) : undefined
   if (logicKind) {
     return [{ label: '逻辑', options: LOGIC_OPTIONS.filter((item) => (logicKind === 'decision' ? item.value === '决策分支' : item.value === '分头处理')) }]
@@ -97,6 +101,7 @@ export function defaultPromptCategoryForNode(cfg?: NodeConfig): PromptCategory {
   if (isMonitorNode(cfg)) return '数据监控'
   if (isDataValidationNode(cfg)) return '数据校验'
   if (isArticleSummaryNode(cfg)) return '文章生成摘要'
+  if (isTranslateNode(cfg)) return '翻译'
   if (isRuleNode(cfg)) return '规则处理'
   return promptCategoryGroupsForNode(cfg)[0]?.options[0]?.value ?? '自定义节点'
 }
@@ -111,6 +116,9 @@ export function promptListCategoryForNode(cfg?: NodeConfig): string {
   if (isRuleNode(cfg)) return 'rule'
   // 文章生成摘要的模板行落在 category=rule（后端实测），不是 data_process
   if (isArticleSummaryNode(cfg)) return 'rule'
+  // 翻译助手的模板行 category 为空 → 返回空串让 fetchPromptList **不带 category 参数**，
+  // 否则 `eq(category, 'xxx')` 匹配不上 NULL，模板永远查不到
+  if (isTranslateNode(cfg)) return ''
   const logicKind = cfg ? decisionOrParallelKind(cfg) : undefined
   if (logicKind) return 'logic'
   if (dataProcessLike(cfg)) return 'data_process'

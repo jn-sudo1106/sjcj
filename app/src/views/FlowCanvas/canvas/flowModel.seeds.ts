@@ -551,6 +551,14 @@ const NODE_CONFIG_SEEDS = {
     params: [['language', 'enum', 'zh,en'], ['min_confidence', 'number', '0.8']],
     output: [['asr_text', 'longtext', '转写文本'], ['segments', 'json', '分段与时间戳']],
   },
+  translate: {
+    title: '翻译助手', sub: '[800] 翻译助手 · 文本翻译', status: '待配置', planned: false,
+    base: [['文本来源', '← 上游节点产物 / 手动上传'], ['目标语言', '中文简体'], ['输出策略', '仅输出译文'], ['失败策略', '记录并跳过']],
+    fields: [['保留格式', '段落 / 标题 / 列表'], ['代码块', '不翻译'], ['术语表', '待补充'], ['能力状态', '通用翻译节点']],
+    inmap: [['content', '← 上游节点.content', '待翻译正文']],
+    params: [['target_language', 'enum', '中文简体/中文繁体/英语/日语/韩语/法语/德语/西班牙语/俄语']],
+    output: [['translated_text', 'longtext', '译文']],
+  },
   'article-summary': {
     title: '文章生成摘要', sub: '[720] 文章生成摘要 · 文本生成', status: '待配置', planned: false,
     base: [['文本来源', '← 上游节点产物'], ['摘要长度', '200 字以内'], ['输出策略', '摘要 + 关键词'], ['失败策略', '记录并跳过']],
@@ -694,6 +702,7 @@ export const TEMPLATE_TO_NODE: Record<string, string> = {
   // 2026-09-17 补齐后端字典里其余类型：抓取类各给一份采集种子，媒体/摘要类给处理型种子
   excel: 'excel-collect', doc: 'doc-collect', pdf: 'pdf-collect', 'mail-collect': 'mail-collect',
   news: 'news-collect', 'video-audio': 'video-audio', 'audio-text': 'audio-text', 'article-summary': 'article-summary',
+  translate: 'translate',
 }
 
 /**
@@ -716,7 +725,10 @@ export const TEMPLATE_TO_NODE: Record<string, string> = {
  *   - 补上原先没有的 110/120/130/150/160/500 与 700/710/720，凑齐 17 条；
  *   - **数据监控从 700 改成 610、数据校验从 800 改成 620**（2026-09-07 那次据 `config/sourceTypes`
  *     写死 600/700/800，现在后端表里 700 已经另有其主——「视频提取音频」——所以必须改，
- *     否则监控节点保存会把类型写成视频提取音频）。回读侧对 700/800 保留兼容，见 buildNodeForStep。
+ *     否则监控节点保存会把类型写成视频提取音频）。回读侧对 700/800 保留兼容，见 buildNodeForStep；
+ *   - **800 现在归「翻译助手」**（2026-09-17 直接读 sense_db.cfg_source_type 核对）。
+ *     注意 800 在 09-07～09-17 之间被本前端当作「数据校验」写过，所以回读时**按节点名**区分：
+ *     名字指向校验的按校验认，其余的 800 才是翻译助手。
  */
 export const SNATCH_TYPES = [
   '[90] - 网页抓取',
@@ -736,6 +748,7 @@ export const SNATCH_TYPES = [
   '[700] - 视频提取音频',
   '[710] - 音频提取文字',
   '[720] - 文章生成摘要',
+  '[800] - 翻译助手',
 ]
 
 export const WEB_KIND_OPTIONS: { value: 'list' | 'detail' | 'attachment'; label: string; desc: string }[] = [
@@ -846,6 +859,7 @@ export const TEMPLATE_TO_SNATCH: Record<string, string> = {
   'video-audio': '[700] - 视频提取音频',
   'audio-text': '[710] - 音频提取文字',
   'article-summary': '[720] - 文章生成摘要',
+  translate: '[800] - 翻译助手',
 }
 
 // 左侧节点库分组
@@ -885,6 +899,7 @@ export const LIB_GROUPS: LibGroup[] = [
       { template: 'video-audio', code: '700', name: '视频提取音频', desc: '视频抽音轨，输出音频文件', pill: 'p1' as Pill },
       { template: 'audio-text', code: '710', name: '音频提取文字', desc: '语音转写为文本，保留分段', pill: 'p1' as Pill },
       { template: 'article-summary', code: '720', name: '文章生成摘要', desc: '长文压缩为摘要与关键词', pill: 'p1' as Pill },
+      { template: 'translate', code: '800', name: '翻译助手', desc: '把文本/文件内容翻译成目标语言', pill: 'p1' as Pill },
     ]
   },
   {
@@ -988,8 +1003,10 @@ function templateKeyForStep(step: Step, index: number): string {
     'clean': 'clean', 'dedupe': 'dedupe', 'check': 'check',
   }
   if (explicitAliases[explicit] && NODE_CONFIGS[explicitAliases[explicit]]) return explicitAliases[explicit]
-  // 数据校验节点：620 是字典现值，800 是 2026-09-07～09-17 本前端写出去的存量值。
-  if ((step.configType === '620' || step.configType === '800') && NODE_CONFIGS.rule) return 'rule'
+  // 数据校验节点：620 是字典现值。800 现在是**翻译助手**，只有名字指向校验的存量行才按校验认
+  //（09-07～09-17 本前端把 800 写成了数据校验），其余 800 落到下面的抓取类型表 → translate。
+  if (step.configType === '620' && NODE_CONFIGS.rule) return 'rule'
+  if (step.configType === '800' && /数据校验|校验/.test(name) && NODE_CONFIGS.rule) return 'rule'
 
   // 抓取类型（configType）→ 节点种子：2026-09-17 补齐字典里其余类型，让历史步骤回读时
   // 落到对应的节点形态上（110 表格 / 120 文档 / 130 PDF / 150 OCR / 160 邮件 / 500 资讯 /
@@ -1005,6 +1022,7 @@ function templateKeyForStep(step: Step, index: number): string {
     '700': 'video-audio',
     '710': 'audio-text',
     '720': 'article-summary',
+    '800': 'translate',
   }
   const routed = step.configType ? byConfigType[step.configType] : undefined
   if (routed && NODE_CONFIGS[routed]) return routed
@@ -1170,10 +1188,15 @@ function buildNodeForStep(source: Source, step: Step, index: number): NodeConfig
   // 于是老监控节点只靠名字/ nodeType 兜底（新建的监控节点名就是「数据监控」，能覆盖绝大多数）。
   const nodeType = String(step.nodeType ?? '').trim().toLowerCase()
   const looksMonitor = nodeType === 'monitor' || step.configType === '610' || /数据监控/.test(cfg.title)
+  // 800 有歧义（2026-09-17 起 800=翻译助手，但 09-07～09-17 本前端把 800 当数据校验写过）：
+  // 名字指向校验的按校验认，否则才是翻译助手
   const looksValidation = nodeType === 'data-validation' || nodeType === 'validation'
-    || step.configType === '620' || step.configType === '800' || /数据校验/.test(cfg.title)
+    || step.configType === '620'
+    || (step.configType === '800' && /数据校验|校验/.test(cfg.title))
+    || /数据校验/.test(cfg.title)
   if (looksMonitor) cfg.template = 'monitor'
   else if (looksValidation) cfg.template = 'data-validation'
+  else if (step.configType === '800') cfg.template = 'translate'
   if (cfg.collectCfg) {
     // 源级字段（源名称/分类/标签/登录/选用配置等）不再复制到节点：随 loadFromSource 整体挂到 flow.sourceCfg（0706 优化·源/节点配置分层）
     cfg.collectCfg.url = source.url
