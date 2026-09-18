@@ -6,6 +6,7 @@ import SourceOverviewView from './SourceOverviewView.vue'
 import { sourceApi, type Source } from '@/api'
 import * as xlsxExport from '@/utils/format/xlsxExport'
 import { createPinia, setActivePinia } from 'pinia'
+import { useUiStore } from '@/stores/ui'
 
 // 本组件用到了 launchJob store（Y4-5 批量提交作业条）。这里的 mount 都是裸挂载、
 // 没装 pinia 插件，所以在每个用例前设一个活动 pinia 就够——store 是在 setup 里
@@ -912,5 +913,38 @@ describe('SourceOverviewView · 任务与成功时间排序', () => {
       sorted: undefined,
       type: undefined,
     }))
+  })
+})
+
+// 2026-09-18 实测反馈：批量导入后「侧栏 2 个源、主区共 0 个源」——侧栏刷新了自己，
+// 主区这张表停在旧结果，用户以为导入没成功。
+describe('SourceOverviewView · 源归属被别处改过要重查', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('ui.notifySourceListChanged() 触发重新查询', async () => {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source] })
+    shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
+    await flushPromises()
+    const before = page.mock.calls.length
+
+    useUiStore().notifySourceListChanged()
+    await flushPromises()
+
+    expect(page.mock.calls.length).toBe(before + 1)
+  })
+
+  it('重查不动页码与筛选——用户的查询上下文是他自己设的', async () => {
+    const many = Array.from({ length: 40 }, (_, i) => ({ ...source, sourceId: `src-${i}` }))
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 80, list: many })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
+    await flushPromises()
+    // 翻到第 2 页
+    ;(wrapper.vm as unknown as { page: number }).page = 2
+    await flushPromises()
+
+    useUiStore().notifySourceListChanged()
+    await flushPromises()
+
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }))
   })
 })

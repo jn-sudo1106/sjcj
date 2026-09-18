@@ -22,6 +22,7 @@ import EditSourceDialog from './EditSourceDialog.vue'
 import { withoutComposition } from '@/utils/enterKey'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useUiStore } from '@/stores/ui'
 import { csvDateTag, downloadCsv, toCsv } from '@/utils/csv'
 import { Close, Download } from '@element-plus/icons-vue'
 
@@ -30,6 +31,7 @@ const emit = defineEmits<{ pick: [target: Source]; added: [Source]; compare: [ri
 
 const flow = useFlowStore()
 const ws = useWorkspaceStore()
+const ui = useUiStore()
 
 const site = ref<Site | null>(null)
 const children = ref<Source[]>([])
@@ -780,6 +782,8 @@ async function submitBind() {
     ElMessage.success(res.message || `已导入 ${bindDlg.selected.size} 个源到「${site.value?.name ?? '当前网站'}」`)
     closeBatch()
     await load(true)
+    // 主区的源列表是兄弟组件，不广播它不会重查（见 ui.sourceListRevision）
+    ui.notifySourceListChanged()
   } finally {
     bindDlg.submitting = false
   }
@@ -848,10 +852,13 @@ async function submitByIds() {
       progressNote.close()
     }
     await load(true)
+    ui.notifySourceListChanged()
 
     let msg = submitRes.message || `已导入 ${total} 个源到「${site.value?.name ?? '当前网站'}」`
     if (missing.length) msg += `；${missing.length} 个源 ID 未找到：${missing.join('、')}`
-    if (submitRes.ok) ElNotification.success({ title: '批量导入完成', message: msg })
+    // 成功也常驻（2026-09-18）：默认 4.5s 自动关，用户一转头就错过了，
+    // 回头只看到没刷新的列表，以为"导入根本没提示、没成功"。
+    if (submitRes.ok) ElNotification.success({ title: '批量导入完成', message: msg, duration: 0 })
     else ElNotification.warning({ title: '批量导入部分失败', message: msg, duration: 0 })
   } catch (e) {
     // 请求被网关拒（如 URL 过长的 431/414）或后端 5xx 时，changeSite/sourcePaged 会抛出，

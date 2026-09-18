@@ -5,6 +5,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { sourceApi, type Source } from '@/api'
 import { useLaunchJobStore } from '@/stores/launchJob'
+import { useUiStore } from '@/stores/ui'
 import {
   issueTagForWrite,
   mergeIssueTags,
@@ -214,6 +215,7 @@ const launchScope = ref<LaunchScope | null>(null)
 const launchPreview = ref({ sendCount: 0, disabledCount: 0, paramCount: 0, paramNames: [] as string[] })
 const collectProgress = ref('')
 const job = useLaunchJobStore()
+const ui = useUiStore()
 const failedBatches = ref<{ ids: string[]; error: string }[]>([])
 /** query 模式在打开确认弹窗前就把可发送的 id 收齐，弹窗数字才能跟实际发送对得上 */
 let collectedSendableIds: string[] = []
@@ -726,6 +728,17 @@ watch(() => props.currentSiteId, () => {
   page.value = 1
   void loadSources()
   void loadTagCandidates()
+})
+
+/**
+ * 源归属被别处改过就重查（2026-09-18）。
+ *
+ * 触发方是侧栏的批量导入：它把一批源改挂到本网站后只刷新了自己，主区这张表还停在旧结果，
+ * 于是出现"侧栏 2 个源、主区共 0 个源"，用户以为导入失败（实测反馈）。
+ * **不动页码和筛选条件**——用户的查询上下文是他自己设的，重查即可，别把他弹回第一页。
+ */
+watch(() => ui.sourceListRevision, () => {
+  void loadSources()
 })
 </script>
 

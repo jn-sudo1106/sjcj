@@ -83,6 +83,21 @@ export const useUiStore = defineStore('ui', () => {
     localStorage.setItem(ASSET_VIEW_KEY, v)
   }
 
+  /**
+   * 源归属变更的广播计数（2026-09-18）。
+   *
+   * 批量导入把一批源改挂到当前网站之后，**侧栏自己刷新了，主区的源列表却没有**——
+   * 用户看到的是"侧栏 2 个源、主区共 0 个源"，自然以为导入没成功（实测反馈）。
+   * 侧栏与主区是兄弟组件、中间还隔着 SiteDetailView，穿三层 props 只为传一个"变了"的信号
+   * 不划算；这里放一个计数，写的人 +1、读的人 watch，两处改动即可。
+   *
+   * 只用于**触发重查**，不承载任何数据——谁变了、变成什么，各自重新拉一遍就知道。
+   */
+  const sourceListRevision = ref(0)
+  function notifySourceListChanged() {
+    sourceListRevision.value += 1
+  }
+
   // 左侧主导航「收起侧栏」：收起后只留图标窄条，中间区域让出更多宽度。持久化（属于用户长期偏好，跟 assetView 一类）。
   const NAV_COLLAPSED_KEY = 'rc-nav-collapsed'
   const navCollapsed = ref(localStorage.getItem(NAV_COLLAPSED_KEY) === '1')
@@ -98,5 +113,6 @@ export const useUiStore = defineStore('ui', () => {
     applyViewLayoutDefault, resetInspectorLayout,
     assetView, setAssetView,
     navCollapsed, toggleNavCollapsed,
+    sourceListRevision, notifySourceListChanged,
   }
 })
