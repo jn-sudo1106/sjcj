@@ -35,7 +35,14 @@ const sortBy = ref<'updated' | 'name'>('updated')
 const sites = ref<Site[]>([])
 const total = ref(0)
 const page = ref(1)
-const size = ref(10)
+/**
+ * 每页 50（2026-09-18 用户提：「卡片类的是不是默认 50 条会好一点」）。
+ *
+ * 网站列表本来就是**一次全量拉回、前端分页**（见下方 loadList 的说明），翻页不产生新的
+ * 列表请求；而卡片一屏能排 8~12 张，10 条/页意味着 25 个网站要翻 3 次。50 一页到底。
+ * 页大小选项仍是 10/20/50，想要更少自己调。
+ */
+const size = ref(50)
 const loading = ref(false)
 
 // ---- 表格视图 ref ----

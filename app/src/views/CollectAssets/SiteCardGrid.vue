@@ -71,9 +71,21 @@ async function queueDataCounts(list: Site[]) {
     await ensureDataCount(site)
   }
 }
+/**
+ * 首屏预览的并发上限（2026-09-18）。
+ *
+ * 每页从 10 改成 50 之后，原来的 `Promise.all(list.map(ensurePreview))` 会一次甩出 50 个
+ * 请求。浏览器对同一 origin 本来就只开 6 条连接，多出来的只是在队列里排着，还会跟
+ * 后面的数据量汇总抢连接；后端这边也有过"6 个网站同时拉完整源列表把它打满"的前科
+ * （见 ensureDataCount 的注释）。分批发，首屏反而更快出来。
+ */
+const PREVIEW_CONCURRENCY = 8
+
 async function ensureCards(list: Site[]) {
   // 所有卡片的小预览先返回，再启动逐站完整汇总，避免大响应与首屏预览争抢连接。
-  await Promise.all(list.map(ensurePreview))
+  for (let i = 0; i < list.length; i += PREVIEW_CONCURRENCY) {
+    await Promise.all(list.slice(i, i + PREVIEW_CONCURRENCY).map(ensurePreview))
+  }
   await queueDataCounts(list)
 }
 onMounted(() => { void ensureCards(props.sites) })
