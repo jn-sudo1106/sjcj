@@ -97,3 +97,74 @@ describe('SiteEditorDialog 网站标签', () => {
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ tags: ['测试', '服务'] }))
   })
 })
+
+// ---- 新建网站（2026-09-18）：与编辑共用这一个弹窗，mode='create' 时走 siteCreate ----
+describe('SiteEditorDialog 新建网站', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  function mountCreate() {
+    return mount(SiteEditorDialog, {
+      props: { visible: true, site: null, categories, mode: 'create' as const },
+      global: { stubs },
+    })
+  }
+
+  async function fill(wrapper: ReturnType<typeof mountCreate>, name: string, dirId: string) {
+    await wrapper.get('input').setValue(name)
+    // categoryPath 由分类下拉给值，stub 下直接写 vm
+    ;(wrapper.vm as unknown as { form: { categoryPath: string } }).form.categoryPath = dirId
+  }
+
+  it('标题与提交按钮是「新建」口径', async () => {
+    vi.spyOn(siteApi, 'siteTags').mockResolvedValue([])
+    const wrapper = mountCreate()
+    await flushPromises()
+    expect(wrapper.findAll('button').some((b) => b.text().includes('创建'))).toBe(true)
+  })
+
+  it('提交走 siteCreate 且源数组为空——只建站，不建源', async () => {
+    vi.spyOn(siteApi, 'siteTags').mockResolvedValue([])
+    const create = vi.spyOn(siteApi, 'siteCreate').mockResolvedValue({ ok: true, siteId: '99' })
+    const wrapper = mountCreate()
+    await flushPromises()
+    await fill(wrapper, '新站点', '7')
+
+    await wrapper.findAll('button').find((b) => b.text().includes('创建'))!.trigger('click')
+    await flushPromises()
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ name: '新站点', dirId: '7' }),
+      [],
+    )
+    // saved 要把新 siteId 带给调用方
+    expect(wrapper.emitted('saved')?.[0]).toEqual(['99'])
+  })
+
+  it('填了标签时，建完再补一次 siteUpdate（site/add 不吃 tags）', async () => {
+    vi.spyOn(siteApi, 'siteTags').mockResolvedValue([])
+    vi.spyOn(siteApi, 'siteCreate').mockResolvedValue({ ok: true, siteId: '99' })
+    const update = vi.spyOn(siteApi, 'siteUpdate').mockResolvedValue({ ok: true })
+    const wrapper = mountCreate()
+    await flushPromises()
+    await fill(wrapper, '新站点', '7')
+    ;(wrapper.vm as unknown as { tags: string[] }).tags = ['测试']
+
+    await wrapper.findAll('button').find((b) => b.text().includes('创建'))!.trigger('click')
+    await flushPromises()
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ siteId: '99', tags: ['测试'] }))
+  })
+
+  it('名称或分类没填时不发请求', async () => {
+    vi.spyOn(siteApi, 'siteTags').mockResolvedValue([])
+    const create = vi.spyOn(siteApi, 'siteCreate').mockResolvedValue({ ok: true, siteId: '99' })
+    const wrapper = mountCreate()
+    await flushPromises()
+    await wrapper.get('input').setValue('只有名字')
+
+    await wrapper.findAll('button').find((b) => b.text().includes('创建'))!.trigger('click')
+    await flushPromises()
+
+    expect(create).not.toHaveBeenCalled()
+  })
+})

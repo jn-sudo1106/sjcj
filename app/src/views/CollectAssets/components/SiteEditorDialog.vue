@@ -3,16 +3,28 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { siteApi, type Site, type SourceCategory } from '@/api'
 
-const props = defineProps<{
+/**
+ * 网站基本信息弹窗：**新建与编辑共用一套表单**（2026-09-18）。
+ *
+ * 旧平台也是这么做的——`SiteList.vue` 的新增/编辑是同一个 `base-edit-modal`，
+ * 只换标题和提交函数（`api = isAdd ? addSite : updateSite`）。共用的好处是字段口径
+ * 天然一致：用户在"新建"里填的三项，就是他在"编辑"里看到的三项。
+ */
+const props = withDefaults(defineProps<{
   visible: boolean
   site: Site | null
   categories: SourceCategory[]
-}>()
+  /** 'create' = 新建网站（不带源）；缺省为编辑。 */
+  mode?: 'create' | 'edit'
+}>(), { mode: 'edit' })
 
 const emit = defineEmits<{
   'update:visible': [value: boolean]
-  'saved': []
+  /** 新建时带上新网站的 ID，调用方据此决定要不要跳过去 */
+  'saved': [siteId?: string]
 }>()
+
+const isCreate = computed(() => props.mode === 'create')
 
 const saving = ref(false)
 const form = reactive({ siteId: '', name: '', categoryPath: '' })
@@ -43,7 +55,8 @@ async function loadTagOptions() {
  * 标签同样失败、界面却提示成功），清到零个做不到。与其让人删完保存、刷新发现还在，
  * 不如当场禁掉并说明。后端支持空串清空后，去掉这个判断即可。
  */
-const canRemoveTag = computed(() => tags.value.length > 1)
+// 新建态不受这个限制：标签还没落过库，删的只是本地草稿。
+const canRemoveTag = computed(() => isCreate.value || tags.value.length > 1)
 const removeHint = computed(() => (canRemoveTag.value ? '移除该标签' : '后端暂不支持清空全部标签，至少保留一个'))
 
 function addTag(raw: string) {
@@ -78,6 +91,44 @@ function openEditor(site: Site) {
   emit('update:visible', true)
 }
 
+/** 新建态：清空表单（没有 site 可读） */
+function openCreator() {
+  Object.assign(form, { siteId: '', name: '', categoryPath: '' })
+  tags.value = []
+  tagInput.value = ''
+  void loadTagOptions()
+  emit('update:visible', true)
+}
+
+/**
+ * 新建网站。
+ *
+ * 走 `siteApi.siteCreate(site, [])`——**源数组给空**，适配层的建源循环不执行，
+ * 只打一条 `site/add` 就返回（见 api/index.ts 的 siteCreate）。这正是"先建个空网站、
+ * 再用批量导入往里灌源"的用法，不需要后端改任何东西。
+ *
+ * 标签要**建完再补一次** `site/update`：`site/add` 的入参只有 siteName / stdSiteName /
+ * categoryId，不吃 tags。补写失败不算建站失败——网站已经建出来了，提示里说清楚即可。
+ */
+async function createSite(categoryId: string) {
+  const name = form.name.trim()
+  const res = await siteApi.siteCreate(
+    { siteId: '', name, category: '', dirId: categoryId, owner: 'admin', sourceCount: 0, errorCount: 0, tags: [] },
+    [],
+  )
+  if (!res?.ok) throw new Error(res?.message)
+  const siteId = res.siteId
+  if (tags.value.length && siteId) {
+    const tagged = await siteApi.siteUpdate({ siteId, name, dirId: categoryId, tags: tags.value })
+    if (!tagged?.ok) {
+      ElMessage.warning(`网站「${name}」已创建，但标签未能保存（${tagged?.message || '原因未知'}），可在编辑里重试`)
+      return siteId
+    }
+  }
+  ElMessage.success(res.message || `网站「${name}」已创建`)
+  return siteId
+}
+
 async function save() {
   const categoryId = form.categoryPath
   if (!form.name.trim() || !categoryId) {
@@ -86,26 +137,34 @@ async function save() {
   }
   saving.value = true
   try {
-    const res = await siteApi.siteUpdate({ siteId: form.siteId, name: form.name, dirId: categoryId, tags: tags.value })
-    if (!res?.ok) throw new Error(res?.message)
-    ElMessage.success(res.message || '网站基本信息已保存')
+    let newSiteId: string | undefined
+    if (isCreate.value) {
+      newSiteId = await createSite(categoryId)
+    } else {
+      const res = await siteApi.siteUpdate({ siteId: form.siteId, name: form.name, dirId: categoryId, tags: tags.value })
+      if (!res?.ok) throw new Error(res?.message)
+      ElMessage.success(res.message || '网站基本信息已保存')
+    }
     emit('update:visible', false)
-    emit('saved')
+    emit('saved', newSiteId)
   } catch (error) {
-    ElMessage.warning(error instanceof Error ? error.message : '保存网站基本信息失败')
+    ElMessage.warning(error instanceof Error ? error.message : (isCreate.value ? '新建网站失败' : '保存网站基本信息失败'))
   } finally {
     saving.value = false
   }
 }
 
-// 父组件通过 v-if 挂载时传入 site，自动填充表单
-watch(() => props.site, (s) => { if (s) openEditor(s) }, { immediate: true })
+// 父组件通过 v-if 挂载时传入 site，自动填充表单；新建态没有 site，清空表单。
+watch(() => props.site, (s) => {
+  if (s) openEditor(s)
+  else if (isCreate.value) openCreator()
+}, { immediate: true })
 
-defineExpose({ openEditor })
+defineExpose({ openEditor, openCreator })
 </script>
 
 <template>
-  <el-dialog :model-value="visible" class="ca-site-editor" title="编辑网站基本信息" width="520px" align-center destroy-on-close @closed="emit('update:visible', false)" @update:model-value="(v: boolean) => emit('update:visible', v)">
+  <el-dialog :model-value="visible" class="ca-site-editor" :title="isCreate ? '新建网站' : '编辑网站基本信息'" width="520px" align-center destroy-on-close @closed="emit('update:visible', false)" @update:model-value="(v: boolean) => emit('update:visible', v)">
     <div v-if="site" class="ca-site-summary">
       <span>网站 ID：<b>{{ site.siteId }}</b></span><span>源：<b>{{ site.sourceCount }}</b></span><span>数据量：<b>{{ (site.dataCount ?? 0).toLocaleString() }} 条</b></span>
     </div>
@@ -143,7 +202,7 @@ defineExpose({ openEditor })
         </div>
       </el-form-item>
     </el-form>
-    <template #footer><el-button @click="emit('update:visible', false)">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存</el-button></template>
+    <template #footer><el-button @click="emit('update:visible', false)">取消</el-button><el-button type="primary" :loading="saving" @click="save">{{ isCreate ? '创建' : '保存' }}</el-button></template>
   </el-dialog>
 </template>
 

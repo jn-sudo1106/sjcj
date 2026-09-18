@@ -41,6 +41,8 @@ const loading = ref(false)
 // ---- 表格视图 ref ----
 const editorVisible = ref(false)
 const editorSite = ref<Site | null>(null)
+// 新建与编辑共用 SiteEditorDialog（2026-09-18）：新建态 editorSite 为 null。
+const editorMode = ref<'create' | 'edit'>('edit')
 
 // ---- 加载 ----
 // 网站列表一次全量拉回来，排序和分页都在前端做。两个原因：
@@ -237,15 +239,31 @@ function onMonitor(cmd: string) {
   confirmDanger(verb, `确认对选中源执行「${verb}」？`, () => sourceApi.markVerified(selectedIds.value, cmd))
 }
 
-// ---- 网站编辑 ----
+// ---- 网站编辑 / 新建 ----
 function openSiteEditor(site: Site) {
+  editorMode.value = 'edit'
   editorSite.value = site
   editorVisible.value = true
 }
 
-async function onEditorSaved() {
+/**
+ * 新建网站（2026-09-18）。落点是列表工具条而不是顶栏：顶栏那个「新建采集」是总览页也挂着的
+ * 全局入口（建网站 + 首批源一步到位），而这里是网站列表自己的对象级操作——只开一个空网站，
+ * 源随后用侧栏的批量导入灌进去。旧平台也是这么分的（SiteList 操作栏：＋新增网站 / 批量导入 / 导出）。
+ */
+function openSiteCreator() {
+  editorMode.value = 'create'
+  editorSite.value = null
+  editorVisible.value = true
+}
+
+async function onEditorSaved(newSiteId?: string) {
   // 性能审查 P1-3：编辑网站只改名称/分类/负责人，不改标签，删除 loadTagOptions 调用
   // 标签列表在 mount 时加载一次即可（标签通过新建网站/其他途径才能变更）
+  //
+  // 新建成功后**不自动跳进新网站**：建站常常是连着建好几个，跳走反而打断。
+  // 回到第一页即可——默认排序是「最近修改」，新网站就在最前面，点卡片就能进去灌源。
+  if (newSiteId) page.value = 1
   await loadList()
 }
 
@@ -290,6 +308,7 @@ onUnmounted(() => {
       @filter-change="resetAndLoad"
       @refresh="refreshAll"
       @set-view="setView"
+      @create-site="openSiteCreator"
     />
 
     <BatchBar
@@ -342,6 +361,7 @@ onUnmounted(() => {
       v-model:visible="editorVisible"
       :site="editorSite"
       :categories="categories"
+      :mode="editorMode"
       @saved="onEditorSaved"
     />
   </div>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Search, Grid, List, Refresh } from '@element-plus/icons-vue'
+import { Search, Grid, List, Plus, Refresh } from '@element-plus/icons-vue'
 import { sourceApi, type SourceCategory } from '@/api'
 
 const props = defineProps<{
@@ -24,6 +24,8 @@ const emit = defineEmits<{
   'setView': [value: 'card' | 'table']
   'filterChange': []
   'refresh': []
+  /** 新建网站（2026-09-18）：对象级操作，与顶栏那个全局的「新建采集」分层 */
+  'createSite': []
 }>()
 
 function onKeywordInput(value: string) {
@@ -62,6 +64,17 @@ async function loadCategoryChildren(
 
 <template>
   <div class="ca-toolbar">
+    <!-- 「新增网站」放最左（2026-09-18）：这是本页的主动作，对齐旧平台 SiteList 操作栏的
+         「＋新增网站」。不放右边、也不并进顶栏——顶栏的「新建采集」是总览页也挂着的全局入口，
+         两者层级不同。
+         **只留图标**（2026-09-18 走查）：带文字要 99px，把右侧的统计与视图切换挤到换行
+         （「卡片」「表格」两个字被压成上下两行）。这一行本来就装不下，按钮不该是压垮它的
+         那一个——图标 34px，名字交给 tooltip。 -->
+    <el-tooltip content="新增网站" placement="bottom" :show-after="120">
+      <button class="ca-new-site" type="button" data-testid="site-create" aria-label="新增网站" @click="emit('createSite')">
+        <el-icon :size="14"><Plus /></el-icon>
+      </button>
+    </el-tooltip>
     <el-input
       :model-value="keyword"
       :prefix-icon="Search"
@@ -120,15 +133,29 @@ async function loadCategoryChildren(
       <el-tag v-if="stats.notify > 0" type="warning" class="stat-tag">告警网站 <b>{{ stats.notify }}</b></el-tag>
     </div>
     <span class="ca-spacer" />
+    <!-- 视图切换同样只留图标（2026-09-18 走查）：带文字要 136px，是这一行里仅次于搜索框和
+         统计区的第三大件，而"卡片/表格"两个图标本身已经说明了区别。 -->
     <div class="ca-view-toggle">
-      <button class="ca-view-btn" :class="{ active: view === 'card' }" type="button" title="卡片视图" @click="emit('setView', 'card')"><el-icon :size="14"><Grid /></el-icon>卡片</button>
-      <button class="ca-view-btn" :class="{ active: view === 'table' }" type="button" title="表格视图" @click="emit('setView', 'table')"><el-icon :size="14"><List /></el-icon>表格</button>
+      <el-tooltip content="卡片视图" placement="bottom" :show-after="120">
+        <button class="ca-view-btn" :class="{ active: view === 'card' }" type="button" aria-label="卡片视图" @click="emit('setView', 'card')"><el-icon :size="15"><Grid /></el-icon></button>
+      </el-tooltip>
+      <el-tooltip content="表格视图" placement="bottom" :show-after="120">
+        <button class="ca-view-btn" :class="{ active: view === 'table' }" type="button" aria-label="表格视图" @click="emit('setView', 'table')"><el-icon :size="15"><List /></el-icon></button>
+      </el-tooltip>
     </div>
     <button class="ca-refresh" type="button" title="刷新" @click="emit('refresh')"><el-icon :size="14"><Refresh /></el-icon></button>
   </div>
 </template>
 
 <style scoped>
+/* 单行不换行（2026-09-18 定）。曾短暂改成 `wrap`，但换行后视图切换和刷新掉到第二行，
+   用户明确要求"还是在一排"。
+   一排要放得下，靠的是两件事：① 三个按钮区（新增 / 视图切换 / 刷新）都图标化并 `flex: none`；
+   ② 其余控件给 `min-width` 而不是固定宽——压缩有下限，不会再被压成「全⌄」那样不可读。
+   压缩顺序：搜索框先让（130px 下限），筛选下拉守到 110px（1280 实测 98px 会把「全部标签」
+   截成「全部标...」，110 才读得全），三个图标按钮与统计区永不压缩。
+   注意底部还有一条既有的 `@media (max-width: 1240px)`：更窄时仍旧换行、统计独占一行——
+   那是原设计的窄屏兜底，本次没动它，所以"一排"的适用范围是 ≥1240。 */
 .ca-toolbar {
   display: flex;
   flex-wrap: nowrap;
@@ -141,7 +168,29 @@ async function loadCategoryChildren(
   border-radius: 8px;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
-.ca-search { width: 250px; flex: 0 0 250px; }
+/* 30×30，与视图切换里的按钮同高（`.ca-view-btn` 也是 30）——比 34 的输入框/刷新矮一档，
+   在这排控件里显得收敛些；1px 边框、6px 圆角沿用 `.ca-refresh` 那套语汇，用蓝色说明它是主动作。
+   **不用实心 primary**：#2563eb 的实心块在这排浅色控件里太跳，而且这一行已经有一个实心蓝的
+   「新建采集」在顶栏；浅底 + 蓝图标既能区分主次，又不会把视线从列表上拽走。
+   hover 才加深到浅蓝底 + 深蓝描边，对齐 tokens.css 里 `.rc-btn:hover` 的做法。 */
+.ca-new-site {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; padding: 0;
+  border: 1px solid #d5e2f2; border-radius: 6px; background: #fff;
+  color: var(--rc-primary); cursor: pointer;
+  transition: border-color .12s, background .12s, color .12s;
+}
+.ca-new-site:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+.ca-new-site:active { background: #e0ecfd; }
+/* 搜索框是唯一的"减压阀"：其余控件都 flex:none 或有 110px 下限，放不下时全靠它让。
+   下限 130px —— 1280 视口下实测整行刚好放得下（可用 1031px，其余合计 891px）；
+   再高一点（150）会把最右的刷新按钮挤出可视区。 */
+.ca-search { width: 250px; flex: 0 1 250px; min-width: 130px; }
+/* 标签 / 状态 / 排序：inline style 只给了 width，flex 基准是 auto，窄屏会被压到「全⌄」
+   （1280 实测 58px）。留出收缩余地但守住 96px —— 12px 字体下「全部标签 ⌄」刚好能读全。 */
+.ca-toolbar > :deep(.el-select) { flex: 0 1 auto; min-width: 110px; }
+/* 分类树是多选、标签可能折叠成 “+N”，比其余下拉更需要宽度，给它高一点的下限 */
+.ca-category { min-width: 120px; }
 .ca-search :deep(.el-input__wrapper) { border-radius: 6px; min-height: 34px; box-shadow: 0 0 0 1px var(--rc-border) inset; }
 .ca-search :deep(.el-input__wrapper:hover) { box-shadow: 0 0 0 1px #bfdbfe inset; }
 .ca-category { width: 150px; flex: 0 0 150px; }
@@ -150,11 +199,15 @@ async function loadCategoryChildren(
 .ca-stats {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-width: 0;
+  gap: 6px;
+  flex: none;
   white-space: nowrap;
 }
+/* 统计区收紧左右内边距（1280 实测原 259px），省下的宽度留给筛选下拉。
+   **不让它参与压缩**：数字被裁出来的是「出」这种半个词，比搜索框 placeholder 截断难看得多，
+   所以 flex: none，压缩配额全部由搜索框承担（它有 150px 下限兜底）。 */
 .stat-tag { font-size: 12px; }
+.ca-stats :deep(.el-tag) { padding: 0 6px; }
 .stat-tag b { font-weight: 800; font-size: 13px; margin-left: 3px; }
 .ca-spacer { flex: 1; min-width: 12px; }
 
@@ -169,9 +222,10 @@ async function loadCategoryChildren(
 .ca-view-btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
+  width: 32px;
   height: 30px;
-  padding: 0 11px;
+  padding: 0;
   border: 0;
   border-radius: 5px;
   background: transparent;
