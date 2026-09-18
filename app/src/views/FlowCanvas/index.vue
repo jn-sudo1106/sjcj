@@ -120,11 +120,11 @@ watch(
   ([qSrc, v, ctxSrc]) => {
     if (!qSrc || ctxSrc !== String(qSrc)) return
     ws.saveSnapshot(ctxSrc, {
-      view: v === 'data' ? 'data'
+      view: v === 'flow' ? 'flow'
         : v === 'task' ? 'task'
           : v === 'file' ? 'file'
             : v === 'monitor-config' ? 'monitor-config'
-              : 'flow',
+              : 'data',
     })
   },
   { immediate: true },

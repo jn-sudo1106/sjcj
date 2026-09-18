@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { firstSourceId, normalizeSiteMonitorTab, normalizeSiteView, normalizeSourceView, sourceViewFromHash } from './workspaceRoute'
 
 describe('源工作区路由', () => {
-  it('未指定视图时默认流程视图', () => {
-    expect(normalizeSourceView(undefined)).toBe('flow')
+  // 2026-09-18 改：缺省从流程视图换成数据视图——进来先看抓到了什么。
+  it('未指定视图时默认数据视图', () => {
+    expect(normalizeSourceView(undefined)).toBe('data')
+    expect(normalizeSourceView('flow')).toBe('flow')
   })
 
   it('网站容器选择首个源', () => {
@@ -12,7 +14,8 @@ describe('源工作区路由', () => {
 
   it('hash 路由可解析工作区视图', () => {
     expect(sourceViewFromHash('#/canvas?sourceId=src-a&view=data')).toBe('data')
-    expect(sourceViewFromHash('#/canvas?sourceId=src-a')).toBe('flow')
+    expect(sourceViewFromHash('#/canvas?sourceId=src-a&view=flow')).toBe('flow')
+    expect(sourceViewFromHash('#/canvas?sourceId=src-a')).toBe('data')
   })
 
   it('数据监控节点可进入监控配置视图', () => {
@@ -31,6 +34,6 @@ describe('源工作区路由', () => {
   it('源视图只属于网站详情，源路由不会进入该视图', () => {
     expect(normalizeSiteView('source')).toBe('source')
     expect(normalizeSiteView(undefined)).toBe('source')
-    expect(normalizeSourceView('source')).toBe('flow')
+    expect(normalizeSourceView('source')).toBe('data')
   })
 })

@@ -55,7 +55,7 @@ function openSource(source: Source) {
   emit('close')
   void router.push({
     path: '/canvas',
-    query: { ...(source.siteId ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view: 'flow' },
+    query: { ...(source.siteId ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view: 'data' },
   })
 }
 

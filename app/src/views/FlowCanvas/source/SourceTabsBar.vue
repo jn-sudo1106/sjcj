@@ -66,11 +66,12 @@ function onCloseSite(siteId: string) {
 
 function navTo(key: string) {
   const snap = ws.snapshotOf(key)
-  // 流程视图也必须显式带上 view=flow。否则 index.vue 会先补全 URL，
+  // 每个视图都必须显式带上 view=。否则 index.vue 会先补全 URL，
   // 但 sourceId 未变化，路由监听不会再次触发实际的 source 加载。
+  // 没有快照（这个源还没进过）时落数据视图，与 normalizeSourceView 的缺省一致。
   const view = snap?.view === 'data' || snap?.view === 'task' || snap?.view === 'file' || snap?.view === 'flow' || snap?.view === 'monitor-config'
     ? snap.view
-    : 'flow'
+    : 'data'
   // 必须带上 siteId，否则切到别的网站下的源时左侧源列表会空：
   // 侧栏取的是 `flow.sourceCtx?.siteId || route.query.siteId`，而 sourceDetail 实测返回 siteId: null，
   // URL 再不带就两头落空（2026-08-28 修）。

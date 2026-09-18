@@ -37,7 +37,7 @@ describe('SiteDetailView', () => {
     const source = { sourceId: 'source-a', name: '源 A' } as Source
     await wrapper.findComponent({ name: 'SourceOverviewView' }).vm.$emit('open-source', source)
     await flushPromises()
-    expect(router.currentRoute.value.query).toMatchObject({ siteId: 'site-zfb', sourceId: 'source-a', view: 'flow' })
+    expect(router.currentRoute.value.query).toMatchObject({ siteId: 'site-zfb', sourceId: 'source-a', view: 'data' })
   })
 
   // 0915-05（2026-09-16）：本用例原来断言的是 0812 计划 M1-2「网站汇总态没有任务页签」，

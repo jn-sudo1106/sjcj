@@ -197,8 +197,9 @@ describe('最新方案 UI 入口收口', () => {
     expect(tableView).toContain('{{ formatDataCount(site) }}')
   })
 
-  it('采集资产卡片的源直达流程画布，卡片底部不再提供任务入口', () => {
-    expect(siteCardGrid).toContain("query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, view: 'flow' }")
+  // 2026-09-18：点源落**数据视图**（原先是流程视图）——进来先看抓到了什么。
+  it('采集资产卡片的源直达数据视图，卡片底部不再提供任务入口', () => {
+    expect(siteCardGrid).toContain("query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, view: 'data' }")
     expect(siteCardGrid).not.toContain('scg-foot-task')
     expect(siteCardGrid).not.toContain('openSiteTask')
   })

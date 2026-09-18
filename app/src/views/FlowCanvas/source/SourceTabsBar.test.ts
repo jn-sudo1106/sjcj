@@ -9,7 +9,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 afterEach(() => sessionStorage.clear())
 
 describe('SourceTabsBar', () => {
-  it('切回流程视图页签时显式写入 view=flow，避免画布停留在上一源', async () => {
+  it('切页签时显式写入 view，避免画布停留在上一源（无快照时落数据视图）', async () => {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [{ path: '/canvas', component: { template: '<div />' } }],
@@ -27,7 +27,7 @@ describe('SourceTabsBar', () => {
     await wrapper.get('[title="源 A · source-a"]').trigger('click')
     await flushPromises()
 
-    expect(router.currentRoute.value.query).toEqual({ sourceId: 'source-a', view: 'flow' })
+    expect(router.currentRoute.value.query).toEqual({ sourceId: 'source-a', view: 'data' })
   })
 
   // 2026-08-28 修的 bug：切到别的网站下的源时，左侧源列表整块消失。
@@ -53,7 +53,7 @@ describe('SourceTabsBar', () => {
     await wrapper.get('[title="源 A · source-a"]').trigger('click')
     await flushPromises()
 
-    expect(router.currentRoute.value.query).toEqual({ siteId: 'site-1', sourceId: 'source-a', view: 'flow' })
+    expect(router.currentRoute.value.query).toEqual({ siteId: 'site-1', sourceId: 'source-a', view: 'data' })
   })
 
   it('快照里没有 siteId 时不往 URL 塞空值', async () => {
@@ -74,7 +74,7 @@ describe('SourceTabsBar', () => {
     await wrapper.get('[title="源 A · source-a"]').trigger('click')
     await flushPromises()
 
-    expect(router.currentRoute.value.query).toEqual({ sourceId: 'source-a', view: 'flow' })
+    expect(router.currentRoute.value.query).toEqual({ sourceId: 'source-a', view: 'data' })
   })
 })
 

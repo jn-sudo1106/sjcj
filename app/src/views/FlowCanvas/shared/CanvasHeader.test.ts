@@ -26,7 +26,9 @@ async function mountHeader(records: Awaited<ReturnType<typeof flowCenterApi.temp
       { path: '/flows', component: { template: '<div />' } },
     ],
   })
-  await router.push({ path: '/canvas', query: { sourceId: 'source-a' } })
+  // 显式带 view=flow：本文件测的是**流程视图下**的头部操作。在 2026-09-18 把缺省视图
+  // 从 flow 改成 data 之前，这里不带 view 也能落到流程视图，是在借默认值。
+  await router.push({ path: '/canvas', query: { sourceId: 'source-a', view: 'flow' } })
   await router.isReady()
   const pinia = createPinia()
   setActivePinia(pinia)

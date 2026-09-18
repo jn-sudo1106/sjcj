@@ -105,7 +105,7 @@ watch(() => props.sites, (list) => { void ensureCards(list) })
 
 // 页签网站化（0710 会议 B3）：入口只推路由，页签注册统一收口在画布加载（index.vue）
 function openSource(s: Source) {
-  router.push({ path: '/canvas', query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, view: 'flow' } })
+  router.push({ path: '/canvas', query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, view: 'data' } })
 }
 // 卡片主体点击 → 进入网站统一流程模板（0707 优化·Phase4）
 function openSite(site: Site) {

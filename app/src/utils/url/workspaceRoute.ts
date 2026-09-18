@@ -13,8 +13,10 @@ export function firstSourceId(sources: Pick<Source, 'sourceId'>[]): string {
   return sources[0]?.sourceId ?? ''
 }
 
+// 缺省落**数据视图**（2026-09-18 改，原先是流程视图）：进来先看抓到了什么，
+// 而不是先看怎么抓的——后者是配置态，只在要改配置时才需要。
 export function normalizeSourceView(view: unknown): SourceWorkspaceView {
-  return view === 'flow' || view === 'data' || view === 'task' || view === 'file' || view === 'monitor-config' ? view : 'flow'
+  return view === 'flow' || view === 'data' || view === 'task' || view === 'file' || view === 'monitor-config' ? view : 'data'
 }
 
 export function normalizeSiteView(view: unknown): SiteWorkspaceView {

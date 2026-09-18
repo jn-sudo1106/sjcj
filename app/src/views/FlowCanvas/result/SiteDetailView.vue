@@ -109,7 +109,7 @@ onUnmounted(() => {
 const view = computed(() => normalizeSiteView(route.query.view))
 // 0915-02：记住停在哪个视图——点源页签走开再点回「全部」，回到的是原来那个视图而不是默认源视图。
 //
-// ⚠️ 必须跳过"已经切到具体源"的那一拍：点源时路由先变成 `sourceId=…&view=flow`，本组件
+// ⚠️ 必须跳过"已经切到具体源"的那一拍：点源时路由先变成 `sourceId=…&view=data`，本组件
 // 卸载前 watch 还会响应一次，而 `normalizeSiteView('flow')` 落到默认值 'source'——
 // 快照会被这一拍覆盖成 source，点回「全部」就回不到原来的数据视图了（2026-09-16 实机踩到）。
 watch(
@@ -144,7 +144,7 @@ function switchMonitorTab(tab: SiteMonitorTab) {
 }
 function openSource(source: Source) {
   // 保留网站上下文，进入具体源后左侧仍需加载同网站的源树。
-  void router.replace({ path: '/canvas', query: { siteId: props.siteId, sourceId: source.sourceId, view: 'flow' } })
+  void router.replace({ path: '/canvas', query: { siteId: props.siteId, sourceId: source.sourceId, view: 'data' } })
 }
 /** 点源列表的「数据量」数字（0903 Y1-15）：直接落到数据视图，不用先进流程再切一次 */
 function openSourceData(source: Source) {
