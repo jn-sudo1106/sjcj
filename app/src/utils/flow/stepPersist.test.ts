@@ -306,6 +306,45 @@ describe('规则节点写步骤（0904）', () => {
   })
 })
 
+// 2026-09-18：翻译助手的表配置入参/出参与规则节点同一套落库口径（context/outContext 物理列名），
+// 但 nodeType 不写 'rule'——否则回读会被错路由成规则处理节点。
+describe('翻译助手写步骤（2026-09-18）', () => {
+  function translateCfg(inputFields: string[], outputFields: string[], outputTableId?: string) {
+    const cfg = cloneConfig(NODE_CONFIGS.translate)
+    cfg.title = '翻译助手'
+    cfg.configId = '1400999'
+    cfg.execCfg = {
+      mode: 'new', format: 'xml', describe: '', script: '', scriptPath: '', enabled: true,
+      inputTableId: '6200026', outputTableId, inputFields, outputFields,
+    }
+    return cfg
+  }
+  const snapshot = { ...MEASURED_40600, sourceId: '430016398', nodeType: 'entry' }
+
+  it('入参/出参从 execCfg 写进 context/outContext（物理列名），nodeType 照旧不写 rule', () => {
+    const step = mergeStepForWrite({
+      snapshot,
+      cfg: translateCfg(['title', 'url'], ['translated_text']),
+      nodeId: '40600',
+      sourceId: '430016398',
+      columnByItemCode: new Map([['title', 'K1'], ['url', 'K2'], ['translated_text', 'K9']]),
+    })
+    expect(step.nodeType).toBe('entry')
+    expect(step.contextMap).toEqual(['K1', 'K2'])
+    expect(step.outColumns).toEqual(['K9'])
+    expect(stepToStepModifyPayload(step).context).toBe('K1,K2')
+    expect(stepToStepModifyPayload(step).outContext).toBe('K9')
+  })
+
+  it('没绑表字段（无 execCfg）时退回快照原值，不写空', () => {
+    const cfg = cloneConfig(NODE_CONFIGS.translate)
+    cfg.title = '翻译助手'
+    const step = mergeStepForWrite({ snapshot, cfg, nodeId: '40600', sourceId: '430016398' })
+    expect(step.contextMap).toBe(snapshot.contextMap)
+    expect(step.outColumns).toBe(snapshot.outColumns)
+  })
+})
+
 describe('assertStepsPersistable（0828 W9-4）', () => {
   it('虚拟起点和已落库步骤不因缺 configId 拦截', () => {
     expect(() => assertStepsPersistable(

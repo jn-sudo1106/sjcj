@@ -304,3 +304,32 @@ describe('ConfigTab · 配置 URL 从 config/configDetail 回填', () => {
     wrapper.unmount()
   })
 })
+
+// 2026-09-18：翻译助手的节点配置与规则处理保持一致——只剩「节点名称 + 定时策略」，
+// 不再渲染通用的基础字段/参数三元表/发起抓取信息（那些是给自定义/规划中节点兜底的占位内容）。
+describe('ConfigTab · 翻译助手（与规则处理同表单）', () => {
+  it('只剩节点名称与定时策略，不渲染通用基础字段/参数/发起抓取信息', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['translate-1'] = cloneConfig(NODE_CONFIGS['translate'])
+    flow.select('translate-1')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('节点名称')
+    expect(wrapper.text()).toContain('定时策略')
+    expect(wrapper.text()).not.toContain('文本来源')
+    expect(wrapper.text()).not.toContain('能力状态')
+    expect(wrapper.text()).not.toContain('发起抓取信息')
+    expect(wrapper.text()).not.toContain('复制节点')
+    expect(wrapper.find('[data-testid="edit-node-source"]').exists()).toBe(false)
+
+    // 节点名称仍可直接编辑
+    const titleInput = wrapper.find('.rc-field input.rc-input')
+    await titleInput.setValue('翻译节点改名')
+    expect(flow.configs['translate-1'].title).toBe('翻译节点改名')
+    wrapper.unmount()
+  })
+})

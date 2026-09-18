@@ -4,11 +4,12 @@
 // 规则名称 = 节点名称（不再单独输入）；绑完输入/输出表与字段后即可进编排配置 Tab。
 // 非规则节点内容：输出表管理（采集类固定/可选）+ 非采集类产物明细三元表 + 表结构编辑弹窗。
 // 规则节点表配置的保存按钮已移除；生成脚本使用节点已保存的 configId，表配置只负责绑表/字段。
+// 2026-09-18：翻译助手并入规则式表/字段绑定（isRuleLike），绑定内容存 execCfg 而非 ruleCfg。
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
-  collectorCapabilityOf, isRuleNode, isMonitorNode, isDataValidationNode, makeDefaultRuleOrchestration,
+  collectorCapabilityOf, isRuleNode, isMonitorNode, isDataValidationNode, isTranslateNode, makeDefaultRuleOrchestration, makeDefaultExecConfig,
   fieldOptionsFromTableOrOutput,
   type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
@@ -30,15 +31,21 @@ const cc = computed(() => cfg.value?.collectCfg)
 const isRule = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
 const isMonitor = computed(() => (cfg.value ? isMonitorNode(cfg.value) : false))
 const isDataValidation = computed(() => (cfg.value ? isDataValidationNode(cfg.value) : false))
+// 翻译助手（2026-09-18）：与规则处理共用同一套表/字段绑定表单；绑定内容仍存 execCfg
+// （不能写进 ruleCfg——那会把翻译助手误判成规则节点，编排配置整个串位），
+// 入出参的步骤持久化口径与规则节点一致（stepPersist 按 isRuleLikeNode 走同一套 context 写入）。
+const isTranslate = computed(() => (cfg.value ? isTranslateNode(cfg.value) : false))
+const isRuleLike = computed(() => isRule.value || isTranslate.value)
 
-// ---- 规则节点：表/字段绑定（0804 拍板：搬回表配置） ----
+// ---- 规则/翻译节点：表/字段绑定（0804 拍板：搬回表配置；2026-09-18 翻译助手并入） ----
 const ruleCfg = computed<RuleOrchestration>(() => ({
-  ...makeDefaultRuleOrchestration(),
-  ...cfg.value?.ruleCfg,
+  ...(isRule.value ? makeDefaultRuleOrchestration() : makeDefaultExecConfig()),
+  ...(isRule.value ? cfg.value?.ruleCfg : cfg.value?.execCfg),
   name: cfg.value?.title ?? '',
 }))
 function patchRule(p: Partial<RuleOrchestration>) {
-  flow.patchRuleConfig(id.value, p)
+  if (isTranslate.value) flow.patchExecConfig(id.value, p)
+  else flow.patchRuleConfig(id.value, p)
   if (p.inputTableId !== undefined) flow.setInputTable(id.value, p.inputTableId)
   if (p.outputTableId !== undefined) flow.setOutputTable(id.value, p.outputTableId)
 }
@@ -75,7 +82,7 @@ function restoreFieldsFromColumns(
 watch(
   [inputFieldOptions, outputFieldOptions, () => cfg.value?.taskCfg?.contextMap, () => cfg.value?.taskCfg?.outColumns],
   ([inOpts, outOpts, contextMap, outColumns]) => {
-    if (!isRule.value || !id.value) return
+    if (!isRuleLike.value || !id.value) return
     const patch: Partial<RuleOrchestration> = {}
     const inputFields = restoreFieldsFromColumns(ruleCfg.value.inputFields, contextMap, inOpts)
     if (inputFields) patch.inputFields = inputFields
@@ -282,7 +289,7 @@ async function onTableSaved(tableId: string) {
 </script>
 
 <template>
-  <template v-if="isRule">
+  <template v-if="isRuleLike">
     <RuleTableFieldBinder
       :model-value="ruleCfg"
       :input-field-options="inputFieldOptions"

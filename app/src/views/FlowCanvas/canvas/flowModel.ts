@@ -605,6 +605,17 @@ export function isTranslateNode(cfg?: NodeConfig): boolean {
 }
 
 /**
+ * 规则式表配置节点（2026-09-18）：翻译助手与规则处理共用同一套「表配置」表单
+ * （RuleTableFieldBinder 的入参/出参字段绑定）与 tab 结构（无「参数配置」Tab），
+ * 但编排内容仍分属 ruleCfg / execCfg 两处存储，不能直接并入 isRuleNode——那会把翻译助手
+ * 误判成规则节点，编排配置 Tab 的模型/脚本工作区跟着串位（0917 已拍板翻译助手无脚本）。
+ * 两处的表/字段绑定写入、步骤 context 持久化都按本谓词走同一口径。
+ */
+export function isRuleLikeNode(cfg?: NodeConfig): boolean {
+  return isRuleNode(cfg) || isTranslateNode(cfg)
+}
+
+/**
  * 「不给脚本编辑入口」的节点类型（2026-09-17 产品口径，用户逐个点掉后收敛成这张清单）。
  *
  * 这几类不在编排配置里生成脚本：OCR 识别、视频转音频、语音转文字、文章摘要、文章打标签、翻译助手都是现成的

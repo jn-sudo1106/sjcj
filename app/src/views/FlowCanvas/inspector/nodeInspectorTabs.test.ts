@@ -123,4 +123,16 @@ describe('nodeInspectorTabs', () => {
     const orchestration = nodeInspectorTabs(validation).find(([key]) => key === 'orchestration')!
     expect(orchestration[2]).toBeUndefined()
   })
+
+  // 2026-09-18：翻译助手与规则处理同一套 tab 结构（无「参数配置」），
+  // 但编排配置不设表绑定门禁（翻译助手无脚本工作区，门禁没有拦截对象）。
+  it('翻译助手节点：与规则处理同 tab 结构（无参数配置），编排 Tab 不因未绑表禁用', () => {
+    const translate = {
+      title: '翻译助手', kind: 'node', template: 'translate', sub: '[800] 翻译助手 · 文本翻译',
+    } as unknown as NodeConfig
+    const tabs = nodeInspectorTabs(translate)
+    expect(tabs.map(([key]) => key)).toEqual(['config', 'table', 'orchestration', 'task', 'ai'])
+    const orchestration = tabs.find(([key]) => key === 'orchestration')!
+    expect(orchestration[2]).toBeUndefined()
+  })
 })

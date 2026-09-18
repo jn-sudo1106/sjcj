@@ -10,6 +10,7 @@ import {
   isDataValidationNode,
   isMonitorNode,
   isRuleNode,
+  isTranslateNode,
   nodeEntryCondition,
   nodeInputTable,
   type FlowBranchGroup,
@@ -225,6 +226,10 @@ export function mergeStepForWrite(args: {
 }): Step {
   const { snapshot, cfg, nodeId, sourceId } = args
   const rule = isRuleNode(cfg) ? cfg.ruleCfg : undefined
+  // 翻译助手（2026-09-18）：表配置的入参/出参跟规则节点同一套落库口径——存步骤的
+  // context/outContext（物理列名），只是编排内容在 execCfg 而不是 ruleCfg。
+  // 注意 nodeType 不跟它走：翻译助手写 'rule' 会让回读时被错路由成规则处理节点。
+  const tableOrch = rule ?? (isTranslateNode(cfg) ? cfg.execCfg : undefined)
   const lastStepIds = args.lastStepIds !== undefined ? args.lastStepIds : snapshot?.dependsOn
   return {
     stepId: isWritableStepId(nodeId) ? nodeId : '',
@@ -249,12 +254,12 @@ export function mergeStepForWrite(args: {
     condition: condExprOf(cfg) ?? undefined,
     failAction: cfg.outputAdvanced?.failPolicy || snapshot?.failAction,
     dependsOn: lastStepIds?.length ? lastStepIds : undefined,
-    // 规则节点的入出参在表配置里（ruleCfg），不是任务配置
-    contextMap: rule
-      ? ruleStepContext(rule.inputFields, args.columnByItemCode) ?? snapshot?.contextMap
+    // 规则节点（含翻译助手）的入出参在表配置里（ruleCfg / execCfg），不是任务配置
+    contextMap: tableOrch
+      ? ruleStepContext(tableOrch.inputFields, args.columnByItemCode) ?? snapshot?.contextMap
       : cfg.taskCfg?.contextMap ?? snapshot?.contextMap,
-    outColumns: rule
-      ? ruleStepContext(rule.outputFields, args.outColumnByItemCode ?? args.columnByItemCode) ?? snapshot?.outColumns
+    outColumns: tableOrch
+      ? ruleStepContext(tableOrch.outputFields, args.outColumnByItemCode ?? args.columnByItemCode) ?? snapshot?.outColumns
       : cfg.taskCfg?.outColumns ?? snapshot?.outColumns,
     enabled: !cfg.disabled,
   }
