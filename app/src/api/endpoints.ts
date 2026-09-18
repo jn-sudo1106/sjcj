@@ -48,7 +48,9 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/sendSnatch', desc: '发抓取', danger: true, impl: true, live: true },
   { path: 'snatch/snatchSave', desc: '旧平台新建源（Step1/2/3 一次性提交）', danger: true },
   { path: 'source/sendSnatchWithParam', desc: '带参发抓取', danger: true, impl: true, live: true },
-  { path: 'source/createJobs', desc: '生成 / 保存定时（批量定时）', danger: true, impl: true },
+  // 2026-09-18 接上：节点配置里改完定时策略、点保存时写回 job 表（旧平台 saveSourceCron）。
+  // ⚠️ POST 但参数走 **query**，不是 body——旧 api/source-job.js 用的就是 `method:'post', params`。
+  { path: 'source/createJobs', desc: '给源新建定时（**只新建**，改已有的要用 job/updateJob）', danger: true, live: true },
   { path: 'source/clear', desc: '清源缓存', danger: true },
   { path: 'source/queryStepDetail', desc: '查询子步骤详情' },
   { path: 'source/nextStep', desc: '手动后续处理', danger: true, live: true },
@@ -248,7 +250,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'job/disableJob', desc: '停用定时任务', danger: true, live: true },
   { path: 'job/deleteJob', desc: '删除任务', danger: true },
   { path: 'job/deleteJobs', desc: '批量删除任务', danger: true },
-  { path: 'job/updateJob', desc: '修改任务', danger: true },
+  { path: 'job/updateJob', desc: '改已有定时的 cron（原地改，jobId 不变）', danger: true, live: true },
 
   /* ── comm-job 通用任务（目标 7 / 收录 7） ── */
   { path: 'comm-job/paged', desc: '通用任务分页' },

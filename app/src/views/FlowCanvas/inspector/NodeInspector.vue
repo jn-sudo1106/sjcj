@@ -16,6 +16,7 @@ import { provideNodeInspectorAssets } from './useNodeInspectorAssets'
 import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
 import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
 import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
+import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
 import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
 import NodeAiChat from './NodeAiChat.vue'
 import NodeConfigSelect from './NodeConfigSelect.vue'
@@ -161,6 +162,51 @@ async function onSaveNodeConfig() {
     } catch (e) {
       ElMessage.error(`监控源配置同步失败：${(e as Error)?.message ?? String(e)}`)
     }
+  }
+  if (saved) await syncSourceCron(node)
+}
+
+/**
+ * 定时策略写回 job 表（2026-09-18）。
+ *
+ * 定时**不在 config 上**，所以配置保存那一路带不动它：节点配置的载荷里压根没有 cron 字段
+ * （`nodeConfigPayload` / `stepPersist` 都没有）。在这之前，界面上改了定时点保存是
+ * **完全没有效果**的——刷新回来又是 job 表里的旧值。
+ *
+ * 与监控节点同 ck_source 的做法一致：配置保存成功后单独发一次，**失败不回滚配置保存**，
+ * 只单独提示。
+ *
+ * 只在 cron **真的变了**时才发：保存节点配置是高频动作，没必要每次都往 job 表写一遍；
+ * 而且没改却发一次，会把这条定时的下次运行时间重算，白白推迟一轮。
+ */
+async function syncSourceCron(node: NodeConfig) {
+  const sourceId = flow.sourceCfg?.sourceId
+  if (!sourceId) return
+  const next = nodeScheduleCron(node, flow.sourceCfg)
+  const current = flow.sourceJob?.schedule ?? ''
+  if (!next || next === current) return
+  try {
+    // 已有定时就原地改那一条（传 jobId 走 updateJob），不然 createJobs 会再建一条，
+    // 两条定时同时启用、源被抓两遍。新建的默认启用——用户特地配了定时，就是要它跑。
+    const ack = await sourceApi.saveSourceCron([sourceId], next, {
+      jobId: flow.sourceJob?.jobId || undefined,
+      enable: true,
+    })
+    if (!ack.ok) {
+      ElMessage.warning(`定时保存失败：${ack.message || '未知原因'}`)
+      return
+    }
+    // 就地更新本地这份，避免立刻回查拿到还没刷新的旧值
+    flow.setSourceJob({
+      ...(flow.sourceJob ?? {
+        jobId: '', jobName: '', sourceId, nextRun: undefined, lastRun: undefined,
+        runCount: 0, successCount: 0, disabled: false,
+      }),
+      schedule: next,
+    })
+    ElMessage.success(`定时已保存：${next}`)
+  } catch (e) {
+    ElMessage.error(`定时保存失败：${(e as Error)?.message ?? String(e)}`)
   }
 }
 

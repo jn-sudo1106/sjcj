@@ -586,6 +586,70 @@ export const sourceApi = {
     }).filter((job) => job.jobId)
   },
   /**
+   * 保存源的定时。**两条路**，选哪条看源上有没有已经存在的定时：
+   *
+   *   - 有（传 `jobId`）→ `GET job/updateJob`，原地改 cron，jobId 不变；
+   *   - 没有 → `POST source/createJobs`，新建一条。
+   *
+   * ⚠️ 别图省事只用 createJobs：它**只会新建、从不更新**。2026-09-18 实测，
+   * 对同一个源连存两次不同的 cron，得到的是 16368 / 16369 两条**同时启用**的定时，
+   * 源会被抓两遍；存 N 次就攒 N 条。旧平台也是分两条路走的——列表页编辑走
+   * `updateCallback` → `updateJob`（SourceCronList.vue:303），只有源上还没有定时时
+   * 才从源列表弹窗走 createJobs。
+   *
+   * createJobs 另外三个坑，照旧平台 `api/source-job.js` + `SourceCron.vue` 对出来、
+   * 并在生产上实测过：
+   *   1. **POST 但参数走 query**（旧代码 `method:'post', params: param`），不是 body；
+   *   2. `configId` 必须显式传空串——旧 api 层在发请求前强制 `param['configId'] = ''`；
+   *   3. **`monitorEnable` 是必填的**，少了直接 500：
+   *      `Required request parameter 'monitorEnable' for method parameter type Boolean is not present`。
+   *      它是旧弹窗里那个「加监控」开关，默认 false，配套的 `monitorAfter`（N 分钟后）默认 30。
+   *
+   * `enable` 对应旧弹窗那两个按钮（「提交并启用」/「仅提交」），只在新建时有意义——
+   * 改已有定时不动它的启停，那是右上角开关的事。实测传 false 建出来的记录 `isDelete = 1`，
+   * 又一次印证启停状态存的就是 isDelete。
+   */
+  saveSourceCron: async (
+    sourceIds: string[],
+    cron: string,
+    opts: {
+      jobId?: string
+      enable?: boolean
+      monitor?: { enable?: boolean; afterMinutes?: number }
+    } = {},
+  ): Promise<Ack> => {
+    const trimmed = cron.trim()
+    if (!trimmed) return { ok: false, message: '缺少 cron 表达式' }
+
+    if (opts.jobId) {
+      const result = await request<unknown>('job/updateJob', { id: opts.jobId, cron: trimmed }, {
+        method: 'GET',
+        httpEndpoint: 'job/updateJob',
+        httpParams: { id: opts.jobId, cron: trimmed },
+      })
+      return ackFromApiResult(result)
+    }
+
+    const ids = sourceIds.filter(Boolean)
+    if (!ids.length) return { ok: false, message: '缺少源' }
+    const monitor = opts.monitor ?? {}
+    const result = await request<unknown>('source/createJobs', { ids, cron: trimmed }, {
+      method: 'POST',
+      httpEndpoint: 'source/createJobs',
+      paramsIn: 'query',
+      httpParams: {
+        ids: ids.join(','),
+        cron: trimmed,
+        enable: opts.enable ?? true,
+        configId: '',
+        monitorEnable: monitor.enable ?? false,
+        monitorAfter: monitor.afterMinutes ?? 30,
+      },
+    })
+    return ackFromApiResult(result)
+  },
+
+  /**
    * 启用 / 停用定时任务（2026-09-18）。
    *
    * 旧平台 `changeJobState`：启用打 `job/enableJob`、停用打 `job/disableJob`，

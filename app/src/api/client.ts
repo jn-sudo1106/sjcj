@@ -114,6 +114,14 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   // 可逆、不删数据，停用只是把 isDelete 置 1，随时能再打开。
   'job/enableJob',
   'job/disableJob',
+  // 2026-09-18：保存源的定时（节点配置「定时策略」→ 保存）。纯新增，不删不覆盖别的东西；
+  // 与上面两条启停是同一条线。
+  //
+  // ⚠️ createJobs **只会新建**，名字没骗人——实测连存两次会得到两条同时启用的定时，
+  // 源就被抓两遍。所以源上已经有定时时必须走 updateJob 原地改（旧平台
+  // SourceCronList.vue:303 的 updateCallback 就是这么干的）。
+  'source/createJobs',
+  'job/updateJob',
   // 2026-09-01：复制源。侧栏「按模板源添加」原先打自造 BFF site/cloneSource（永远 mock）。
   // 纯新增，与 snatchSave / copyAll 同性质；flag=1 会多出一套配置，不改原源。
   'source/copySource',
