@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import SiteEditorDialog from './SiteEditorDialog.vue'
-import { siteApi, type Site, type SourceCategory } from '@/api'
+import { siteApi, sourceApi, type Site, type SourceCategory } from '@/api'
 
 const categories: SourceCategory[] = [{ id: '7', name: '新闻', children: [] }] as never
 
@@ -200,7 +200,40 @@ describe('SiteEditorDialog 分类选择器', () => {
     expect(tree.props()).not.toHaveProperty('multiple')
   })
 
-  it('编辑挂在深层目录的网站时，用 categoryPath 兜底回显，不显示裸 ID', async () => {
+  // 2026-09-18 用户报的：编辑时分类栏显示 `9009302` 这种裸 ID。
+  // 根因是 sitePaged 的 categoryName 实测恒为 null，所以 site.categoryPath 是空的，
+  // 而懒加载树还没展开到那一层，找不到 node-key 对应的节点。
+  it('列表没给分类名时，按 dirId 查一次拿名字回显', async () => {
+    vi.spyOn(siteApi, 'siteTags').mockResolvedValue([])
+    const byId = vi.spyOn(sourceApi, 'categoryById')
+      .mockResolvedValue({ id: '9009302', name: '中国网财经' } as never)
+    const noName: Site = { ...site(), dirId: '9009302', categoryPath: undefined }
+    const wrapper = mount(SiteEditorDialog, {
+      props: { visible: true, site: noName, categories },
+      global: { stubs },
+    })
+    await flushPromises()
+
+    expect(byId).toHaveBeenCalledWith('9009302')
+    expect(wrapper.findComponent({ name: 'ElTreeSelect' }).props('cacheData'))
+      .toEqual([{ id: '9009302', name: '中国网财经' }])
+  })
+
+  it('查不到分类名就退回显示 ID，不打断编辑', async () => {
+    vi.spyOn(siteApi, 'siteTags').mockResolvedValue([])
+    vi.spyOn(sourceApi, 'categoryById').mockRejectedValue(new Error('500'))
+    const noName: Site = { ...site(), dirId: '9009302', categoryPath: undefined }
+    const wrapper = mount(SiteEditorDialog, {
+      props: { visible: true, site: noName, categories },
+      global: { stubs },
+    })
+    await flushPromises()
+
+    expect(wrapper.findComponent({ name: 'ElTreeSelect' }).props('cacheData')).toEqual([])
+    expect(wrapper.findAll('button').some((b) => b.text().includes('保存'))).toBe(true)
+  })
+
+  it('列表带了分类名时直接用，省掉那次请求', async () => {
     vi.spyOn(siteApi, 'siteTags').mockResolvedValue([])
     const deep: Site = { ...site(), dirId: '99', categoryPath: '/财经资讯/财经媒体/中央级媒体' }
     const wrapper = mount(SiteEditorDialog, {
@@ -210,6 +243,6 @@ describe('SiteEditorDialog 分类选择器', () => {
     await flushPromises()
 
     expect(wrapper.findComponent({ name: 'ElTreeSelect' }).props('cacheData'))
-      .toEqual([{ value: '99', label: '财经资讯 / 财经媒体 / 中央级媒体' }])
+      .toEqual([{ id: '99', name: '财经资讯 / 财经媒体 / 中央级媒体' }])
   })
 })

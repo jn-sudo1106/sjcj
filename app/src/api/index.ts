@@ -493,6 +493,26 @@ export const sourceApi = {
     })
     return sourceCategoriesFromLegacy(result)
   },
+  /**
+   * 按 ID 取单个分类（2026-09-18）。
+   *
+   * 用处只有一个：**懒加载树的回显**。编辑网站时手里只有 `dirId`，而 `sitePaged` 的
+   * `categoryName` 实测恒为 null（2026-09-18 生产实测），树又还没展开到那一层，
+   * 选择器只能显示一个裸 ID（用户报的就是这个）。
+   *
+   * 走的还是 `category/categoryPaged`，加 `categoryId` 参数即精确命中——实测
+   * `categoryId=9009302` 返回 1 条「中国网财经」（level 4，path `0,9009005,9009253,9009258`）。
+   * ⚠️ **不支持逗号批量**（实测传 `a,b,c` 返回 0 条），一次只能查一个。
+   */
+  categoryById: async (categoryId: string): Promise<SourceCategory | null> => {
+    if (!categoryId) return null
+    const result = await request<unknown>('source/categoryTree', { categoryId }, {
+      method: 'GET',
+      httpEndpoint: 'category/categoryPaged',
+      httpParams: { page: 1, limit: 10, allSub: false, categoryId },
+    })
+    return sourceCategoriesFromLegacy(result)[0] ?? null
+  },
   sourceStats: () => assetMockRequest<{ total: number; error: number; externalChanged: number; disabled: number }>('source/stats'),
   /**
    * 源的子步骤。默认连 config/configDetail 的补充一起返回（topic / 配置名 / 登录语义 /

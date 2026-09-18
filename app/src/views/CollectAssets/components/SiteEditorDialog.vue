@@ -97,16 +97,43 @@ async function loadCategoryChildren(
 }
 
 /**
- * 懒加载树的回显兜底：编辑一个挂在三级目录下的网站时，那层节点还没被展开加载过，
- * el-tree-select 找不到 node-key 对应的节点就只能显示一个光秃秃的 ID。
- * `site.categoryPath` 是后端拼好的展示串（如 `/财经资讯/社交平台`），正好拿来当标签。
+ * 懒加载树的回显。
+ *
+ * 编辑一个挂在深层目录下的网站时，那层节点还没被展开加载过，el-tree-select 找不到
+ * node-key 对应的节点，只能显示一个光秃秃的 ID（2026-09-18 用户报的就是这个：分类栏
+ * 显示 `9009302`）。
+ *
+ * **不能指望 `site.categoryPath`**：它映射自后端的 `categoryName`，而 `sitePaged` 实测
+ * 恒为 null（2026-09-18 生产实测两条样本都是 null）。所以打开弹窗时按 dirId 单独查一次
+ * 分类拿名字。查不到就退回显示 ID——不值得为一个标签把弹窗拦下来。
  */
+const categoryLabel = ref('')
 const categoryCacheData = computed(() => {
   const id = form.categoryPath
-  const path = props.site?.categoryPath
-  if (!id || !path) return []
-  return [{ value: id, label: path.split('/').filter(Boolean).join(' / ') }]
+  if (!id || !categoryLabel.value) return []
+  // ⚠️ 字段名要跟 `node-key` 和 `:props` 走，**不是**固定的 `{ value, label }`：
+  // el-tree-select 内部用 getNodeValByProp('value'|'label', node) 取值，
+  // value 回退到 node-key（这里是 `id`）、label 用 props.label（这里是 `name`）。
+  // 先前按文档示例写成 {value,label}，请求发了、名字也拿到了，界面上照旧显示裸 ID。
+  return [{ id, name: categoryLabel.value }]
 })
+
+async function loadCategoryLabel(dirId?: string) {
+  categoryLabel.value = ''
+  if (!dirId) return
+  // 列表里带了展示名就直接用，省一次请求（真实后端目前不给，留着兼容以后补上的情况）
+  const fromList = props.site?.categoryPath
+  if (fromList) {
+    categoryLabel.value = fromList.split('/').filter(Boolean).join(' / ')
+    return
+  }
+  try {
+    const hit = await sourceApi.categoryById(dirId)
+    if (hit?.name && form.categoryPath === dirId) categoryLabel.value = hit.name
+  } catch {
+    /* 查不到就显示 ID，不打断编辑 */
+  }
+}
 
 function openEditor(site: Site) {
   Object.assign(form, {
@@ -119,6 +146,7 @@ function openEditor(site: Site) {
   tags.value = [...(site.tags ?? [])]
   tagInput.value = ''
   void loadTagOptions()
+  void loadCategoryLabel(site.dirId)
   emit('update:visible', true)
 }
 
@@ -127,6 +155,7 @@ function openCreator() {
   Object.assign(form, { siteId: '', name: '', categoryPath: '' })
   tags.value = []
   tagInput.value = ''
+  categoryLabel.value = ''
   void loadTagOptions()
   emit('update:visible', true)
 }
