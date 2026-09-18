@@ -10,7 +10,14 @@
 // 旧字段对照见 0824-02 §4：codeRule=入库配置、contentRule=正文规则、snatchDrepeat=去重类型、
 // templetCode=业务类型、isMulti=是否列表、entryTypeId=输出表、inEntryType=输入表、topic=队列。
 import type { Config } from '@/api'
-import { defaultMultiMode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import {
+  defaultMultiMode,
+  isArticleSummaryNode,
+  isArticleTagNode,
+  isRuleNode,
+  isTranslateNode,
+  type NodeConfig,
+} from '@/views/FlowCanvas/canvas/flowModel'
 
 /** 去重类型：旧 '' = 源内去重，'ALL' = 表内去重（0824-02 §4） */
 function dedupFromLegacy(dedupType?: string): 'source' | 'table' {
@@ -110,6 +117,26 @@ export function resolveMultiMode(cfg: NodeConfig): number | undefined {
   return input && output && input === output ? 2 : 0
 }
 
+/**
+ * 节点当前拼接好的系统提示词（2026-09-18 需求：点击保存时随配置落 `cs_config.prompt`）。
+ *
+ * 编排配置 Tab 把模板 + 占位符拼好后写回节点：规则/数据监控/数据校验 → `ruleCfg.systemPrompt`，
+ * 文章摘要/打标签/翻译 → `execCfg.systemPrompt`。只有这几类会拼提示词的节点才带 prompt——
+ * 普通采集节点的 `execCfg.systemPrompt` 是抓取 XML 的默认模板，写进 prompt 属于污染字段。
+ *
+ * 返回 undefined = 不覆盖 base 原值（"有值才覆盖"）；空串（含纯空白）也不覆盖——
+ * systemPrompt 由 Tab 自动拼接管理，空串多出现在拼接尚未完成时，不能把后端真值抹掉。
+ */
+function promptForConfig(cfg: NodeConfig): string | undefined {
+  const orch = isRuleNode(cfg)
+    ? cfg.ruleCfg
+    : isArticleSummaryNode(cfg) || isArticleTagNode(cfg) || isTranslateNode(cfg)
+      ? cfg.execCfg
+      : undefined
+  const prompt = orch?.systemPrompt
+  return prompt?.trim() ? prompt : undefined
+}
+
 export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown> = {}): Record<string, unknown> {
   const cc = cfg.collectCfg
   const source = cc ?? cfg
@@ -132,6 +159,8 @@ export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown
     // 空字符串是用户明确删除，必须写回后端；只有 undefined 才代表“尚未回填，保留 base”。
     codeRule: source.structuredConfig,
     contentRule: source.contentRules,
+    // 拼接后的系统提示词（2026-09-18）：落 cs_config.prompt；见 promptForConfig 的节点类型口径。
+    prompt: promptForConfig(cfg),
   }
   const payload: Record<string, unknown> = {
     ...base,

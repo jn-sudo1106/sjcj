@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyConfigToNode, buildConfigPayload } from './nodeConfigPayload'
-import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { NODE_CONFIGS, cloneConfig, makeDefaultExecConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import type { Config } from '@/api'
 
 function node() {
@@ -264,5 +264,42 @@ describe('isMulti 落库推导（2026-08-28：「更新父表」不由用户选�
   it('非采集节点没有 collectCfg，不写这个字段，保留 base 原值', () => {
     const cfg = cloneConfig(NODE_CONFIGS['rule'])
     expect(buildConfigPayload(cfg, { isMulti: 2 }).isMulti).toBe(2)
+  })
+})
+
+describe('prompt（2026-09-18：拼接后的系统提示词随配置保存落 cs_config.prompt）', () => {
+  it('规则处理节点写 ruleCfg.systemPrompt（编排 Tab 拼接后的值）', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['rule'])
+    cfg.ruleCfg!.systemPrompt = '拼接好的规则提示词：输入表 tb_a、输出表 tb_b'
+    expect(buildConfigPayload(cfg).prompt).toBe('拼接好的规则提示词：输入表 tb_a、输出表 tb_b')
+  })
+
+  it('数据监控 / 数据校验节点（复用 rule 种子）同样取 ruleCfg', () => {
+    for (const template of ['monitor', 'data-validation']) {
+      const cfg = cloneConfig(NODE_CONFIGS['rule'])
+      cfg.template = template
+      cfg.ruleCfg!.systemPrompt = `拼接好的${template}提示词 source_id=430016398`
+      expect(buildConfigPayload(cfg).prompt).toBe(`拼接好的${template}提示词 source_id=430016398`)
+    }
+  })
+
+  it.each(['article-summary', 'article-tag', 'translate'])('%s 节点写 execCfg.systemPrompt', (seedKey) => {
+    const cfg = cloneConfig(NODE_CONFIGS[seedKey])
+    // 这几类节点插入时才建 execCfg，种子本身不带；模拟 Tab 拼接后写回的状态
+    cfg.execCfg = { ...makeDefaultExecConfig(), systemPrompt: `${seedKey} 的提示词模板拼接结果` }
+    expect(buildConfigPayload(cfg).prompt).toBe(`${seedKey} 的提示词模板拼接结果`)
+  })
+
+  it('普通采集节点不带 prompt：execCfg 里是抓取 XML 默认模板，不是系统提示词', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    expect(buildConfigPayload(cfg, { prompt: 'base 原值' }).prompt).toBe('base 原值')
+  })
+
+  it('提示词为空 / 纯空白时不覆盖 base 原值（拼接尚未完成时不能抹掉后端真值）', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['rule'])
+    cfg.ruleCfg!.systemPrompt = ''
+    expect(buildConfigPayload(cfg, { prompt: 'base 原值' }).prompt).toBe('base 原值')
+    cfg.ruleCfg!.systemPrompt = '   '
+    expect(buildConfigPayload(cfg, { prompt: 'base 原值' }).prompt).toBe('base 原值')
   })
 })
