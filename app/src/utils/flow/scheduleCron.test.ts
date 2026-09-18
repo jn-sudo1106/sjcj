@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cronForSchedule, mergeScheduleSettings, nodeScheduleCron, scheduleCronOf } from './scheduleCron'
+import { cronForSchedule, displaySchedule, mergeScheduleSettings, nodeScheduleCron, scheduleCronOf, scheduleFromCron } from './scheduleCron'
 import type { NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 
 // 这一份口径同时决定两件事，所以单独锁一遍（组件侧行为由 TaskScheduleSettings.test.ts 覆盖）：
@@ -69,5 +69,48 @@ describe('mergeScheduleSettings / nodeScheduleCron', () => {
   it('节点与源都没配时用界面兜底值', () => {
     expect(nodeScheduleCron(node(), null)).toBe('0 0 0 * * ?')
     expect(nodeScheduleCron(undefined, undefined)).toBe('0 0 0 * * ?')
+  })
+})
+
+// 2026-09-18 用户报：节点打开后策略下拉/时间/星期全空，只有下面 cron 框有值，
+// 看着像"定时策略数据没同步过来"。根因是本文件原来只有单向的 UI → cron 推导。
+describe('scheduleFromCron · 把 cron 反解回策略', () => {
+  it('认得出 cronForSchedule 生成的那几种形状', () => {
+    expect(scheduleFromCron('0 0 0 * * ?')).toMatchObject({ scheduleType: '每天', scheduleTime: '00:00' })
+    expect(scheduleFromCron('0 30 8 * * ?')).toMatchObject({ scheduleType: '每天', scheduleTime: '08:30' })
+    expect(scheduleFromCron('0 */5 * * * ?')).toMatchObject({ scheduleType: '每5分钟一次' })
+    expect(scheduleFromCron('0 15 * * * ?')).toMatchObject({ scheduleType: '每小时', scheduleTime: '00:15' })
+    expect(scheduleFromCron('0 0 9 ? * 1-5')).toMatchObject({ scheduleType: '交易日定时', scheduleTime: '09:00' })
+    expect(scheduleFromCron('0 0 9 ? * 1,3,5')).toMatchObject({ scheduleType: '每周', weekdays: [1, 3, 5] })
+  })
+
+  it('认不出来的一律当自定义——宁可老实说，也不要猜错把用户的表达式改写掉', () => {
+    expect(scheduleFromCron('0 0 0 1 * ?')).toMatchObject({ scheduleType: '自定义 cron', cron: '0 0 0 1 * ?' })
+    expect(scheduleFromCron('bogus')).toMatchObject({ scheduleType: '自定义 cron' })
+    expect(scheduleFromCron('')).toBeNull()
+  })
+
+  it('反解回来的能被 cronForSchedule 原样推导回去', () => {
+    for (const cron of ['0 0 0 * * ?', '0 30 8 * * ?', '0 */5 * * * ?', '0 0 9 ? * 1-5']) {
+      expect(cronForSchedule(scheduleFromCron(cron)!)).toBe(cron)
+    }
+  })
+})
+
+describe('displaySchedule · 控件显示用', () => {
+  it('只有 cron 时反解出策略，控件不再是空的', () => {
+    expect(displaySchedule({ cron: '0 30 8 * * ?' })).toMatchObject({
+      scheduleType: '每天', scheduleTime: '08:30',
+    })
+  })
+
+  it('什么都没配时退到兜底，与 cron 框显示的「每天 0:0」对得上', () => {
+    expect(displaySchedule(null)).toMatchObject({ scheduleType: '每天', scheduleTime: '00:00' })
+    expect(displaySchedule({})).toMatchObject({ scheduleType: '每天', scheduleTime: '00:00' })
+  })
+
+  it('显式字段优先于 cron 反解', () => {
+    expect(displaySchedule({ scheduleType: '每小时', scheduleTime: '00:20', cron: '0 0 9 ? * 1-5' }))
+      .toMatchObject({ scheduleType: '每小时', scheduleTime: '00:20' })
   })
 })

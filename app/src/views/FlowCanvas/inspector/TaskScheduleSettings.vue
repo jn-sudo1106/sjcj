@@ -2,7 +2,7 @@
 
 import { computed } from 'vue'
 import type { CollectorSchedule } from '@/views/FlowCanvas/canvas/flowModel'
-import { cronForSchedule } from '@/utils/flow/scheduleCron'
+import { cronForSchedule, displaySchedule } from '@/utils/flow/scheduleCron'
 
 const props = defineProps<{ modelValue: CollectorSchedule }>()
 const emit = defineEmits<{ 'update:modelValue': [patch: Partial<CollectorSchedule>] }>()
@@ -15,8 +15,18 @@ function patch(value: Partial<CollectorSchedule>) {
   emit('update:modelValue', value)
 }
 // cron 推导口径抽在 utils/flow/scheduleCron.ts（本组件显示、编排配置保存落库共用一份）。
-const isCustomCron = computed(() => props.modelValue.scheduleType === '自定义 cron')
-const cronValue = computed(() => isCustomCron.value ? props.modelValue.cron ?? '' : cronForSchedule(props.modelValue))
+/**
+ * 控件显示用的那份策略（2026-09-18）。
+ *
+ * 此前模板直接绑 `props.modelValue.xxx`：**节点只有 cron、没有策略字段时，
+ * 策略下拉和时间就是空的**，而下面的 cron 框因为走 cronForSchedule 的兜底显示着
+ * `0 0 0 * * ?`——上面空、下面有值，看着像数据没同步过来（用户报的就是这个）。
+ * displaySchedule 会先从 cron 反解，反解不出再退到同一套兜底，两边始终对得上。
+ * 它只用于显示，不写回 store。
+ */
+const shown = computed(() => displaySchedule(props.modelValue))
+const isCustomCron = computed(() => shown.value.scheduleType === '自定义 cron')
+const cronValue = computed(() => (isCustomCron.value ? shown.value.cron ?? '' : cronForSchedule(shown.value)))
 function patchWithCron(value: Partial<CollectorSchedule>) {
   const next = { ...props.modelValue, ...value }
   const normalized = next.scheduleType === '交易日定时' ? { ...value, weekdays: TRADING_DAYS } : value
@@ -47,13 +57,13 @@ function toggleWeekday(day: number) {
     <label>定时策略</label>
     <div class="rc-scheduler">
         <div class="rc-scheduler-head">
-          <select class="rc-select" :value="modelValue.scheduleType" @change="onInput('scheduleType', $event)">
+          <select class="rc-select" :value="shown.scheduleType" @change="onInput('scheduleType', $event)">
             <option v-for="item in ['交易日定时', '每天', '每小时', '每5分钟一次', '每周', '自定义 cron']" :key="item" :value="item">{{ item }}</option>
           </select>
-          <input class="rc-input" type="time" :value="modelValue.scheduleTime" @input="onInput('scheduleTime', $event)" />
+          <input class="rc-input" type="time" :value="shown.scheduleTime" @input="onInput('scheduleTime', $event)" />
         </div>
         <div class="rc-weekdays">
-          <span v-for="[day, label] in WEEKDAYS" :key="day" class="rc-day" :class="{ active: (modelValue.weekdays ?? []).includes(day) }" @click="toggleWeekday(day)">{{ label }}</span>
+          <span v-for="[day, label] in WEEKDAYS" :key="day" class="rc-day" :class="{ active: (shown.weekdays ?? []).includes(day) }" @click="toggleWeekday(day)">{{ label }}</span>
         </div>
         <div class="rc-cron-preview"><span>cron 表达式</span><input class="rc-input slim cron" :value="cronValue" :readonly="!isCustomCron" @input="onInput('cron', $event)" /></div>
     </div>

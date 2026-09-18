@@ -84,3 +84,69 @@ export function nodeScheduleCron(
 ): string {
   return scheduleCronOf(mergeScheduleSettings(node, source))
 }
+
+/**
+ * cron → 定时策略（2026-09-18）。
+ *
+ * 本文件原来只有**单向**的 UI → cron 推导，于是从后端读到 cron 的节点打开后，
+ * 策略下拉、时间、星期全是空的，只有下面那个 cron 框有值——看着就像"数据没同步过来"
+ * （用户原话）。反解一遍，让控件回显出这条 cron 表达的是什么。
+ *
+ * 认的是 `cronForSchedule` 生成的那几种形状（Quartz 6 段：秒 分 时 日 月 周）：
+ *
+ *   0 *\/5 * * * ?      → 每5分钟一次
+ *   0 m   * * * ?      → 每小时
+ *   0 m h ? * 1-5      → 交易日定时
+ *   0 m h ? * 1,3,5    → 每周（weekdays）
+ *   0 m h * * ?        → 每天
+ *
+ * 认不出来的一律当「自定义 cron」——**这点很重要**：与其猜错一个策略把用户的表达式
+ * 改写掉，不如老实说"这是自定义的"，原文照显、可编辑。
+ */
+export function scheduleFromCron(cron?: string | null): CollectorSchedule | null {
+  const expr = String(cron ?? '').trim()
+  if (!expr) return null
+  const parts = expr.split(/\s+/)
+  if (parts.length < 6) return { scheduleType: '自定义 cron', cron: expr }
+
+  const [, minute, hour, dayOfMonth, , dayOfWeek] = parts
+  const custom: CollectorSchedule = { scheduleType: '自定义 cron', cron: expr }
+  const pad = (n: string) => String(Number(n)).padStart(2, '0')
+  const isNum = (s: string) => /^\d+$/.test(s)
+
+  if (minute === '*/5' && hour === '*') return { scheduleType: '每5分钟一次', cron: expr }
+  if (isNum(minute) && hour === '*') {
+    return { scheduleType: '每小时', scheduleTime: `00:${pad(minute)}`, cron: expr }
+  }
+  if (!isNum(minute) || !isNum(hour)) return custom
+
+  const time = `${pad(hour)}:${pad(minute)}`
+  if (dayOfWeek === '1-5') return { scheduleType: '交易日定时', scheduleTime: time, weekdays: [1, 2, 3, 4, 5], cron: expr }
+  if (dayOfMonth === '?' && dayOfWeek !== '?' && dayOfWeek !== '*') {
+    const weekdays = dayOfWeek.split(',').map((d) => Number(d)).filter((d) => Number.isInteger(d) && d >= 1 && d <= 7)
+    if (!weekdays.length) return custom
+    return { scheduleType: '每周', scheduleTime: time, weekdays, cron: expr }
+  }
+  if ((dayOfMonth === '*' || dayOfMonth === '?') && (dayOfWeek === '?' || dayOfWeek === '*')) {
+    return { scheduleType: '每天', scheduleTime: time, cron: expr }
+  }
+  return custom
+}
+
+/**
+ * 控件要显示的那份策略：显式字段优先，缺了就从 cron 反解，再缺就退到 `cronForSchedule`
+ * 的同款兜底（每天 0:0）——那正是下面 cron 框在空配置下显示的值，两边对得上，
+ * 不会再出现"cron 框有值、上面控件全空"。
+ *
+ * **只用于显示**，不写回 store：把显示值写进数据正是 2026-09-10 修过的
+ * 「节点没动却一直提示未保存」的根源，见 TaskScheduleSettings 里那段说明。
+ */
+export function displaySchedule(settings?: CollectorSchedule | null): CollectorSchedule {
+  const parsed = settings?.scheduleType ? null : scheduleFromCron(settings?.cron)
+  return {
+    scheduleType: settings?.scheduleType || parsed?.scheduleType || '每天',
+    scheduleTime: settings?.scheduleTime || parsed?.scheduleTime || '00:00',
+    weekdays: settings?.weekdays?.length ? settings.weekdays : (parsed?.weekdays ?? []),
+    cron: settings?.cron ?? parsed?.cron ?? '',
+  }
+}
