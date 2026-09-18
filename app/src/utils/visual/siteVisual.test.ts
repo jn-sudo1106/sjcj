@@ -22,13 +22,14 @@ describe('siteTone · 按名字生成，颜色不会用完', () => {
     expect(siteTone({ name: '东方财富网' })).toEqual(siteTone({ name: '东方财富网' }))
   })
 
-  it('避开红橙色相——红色在卡片上已经表示"异常"，不能被稀释', () => {
+  it('只用冷色段（青→蓝→紫）——全色谱铺 30 张卡像彩虹墙，用户反馈"太花"', () => {
     const names = ['东方财富网', '同花顺', '微博', '中国证券报', '新浪财经1', '新浪2', '新浪3',
       '智库报告', '海外智库', '国内智库', '量子位', '小红书', '财联社', '涨停板', '云掌财经']
     for (const name of names) {
       const hue = siteHue(name)
-      expect(hue).toBeGreaterThanOrEqual(45)
-      expect(hue).toBeLessThanOrEqual(340)
+      // 200–320：顺带天然避开了红橙——红色在卡片上已经表示"异常"，不能被稀释
+      expect(hue).toBeGreaterThanOrEqual(200)
+      expect(hue).toBeLessThanOrEqual(320)
     }
   })
 
@@ -46,16 +47,17 @@ describe('siteTone · 按名字生成，颜色不会用完', () => {
     expect(gap === 0 || gap >= 12).toBe(true)
   })
 
-  it('一屏十几张卡片能互相分开（24 档下的实际区分度）', () => {
+  it('一屏十几张卡片能互相分开（12 档色相下的实际区分度）', () => {
     const onScreen = ['中国经营网', '中国网财经', '中国证券报', '中金在线', '中新经纬', '云掌财经',
       '东方财富网', '同花顺', '财联社', '量子位', '小红书', '微博']
     const hues = new Set(onScreen.map(siteHue))
-    // 24 档里放 12 个，期望约 10 种；低于 8 就说明散列偏了
-    expect(hues.size).toBeGreaterThanOrEqual(8)
+    // 收窄到冷色段后色相只剩 12 档，12 个网站期望约 7.6 种；真正的区分度靠色相 × 浓淡
+    // 这一对组合（下面那条用例锁的就是它），这里只保证散列没偏。
+    expect(hues.size).toBeGreaterThanOrEqual(6)
   })
 
   it('色相落在档位上，不产生 143/144 这种半吊子差异', () => {
-    const step = 295 / 24
+    const step = 120 / 12
     for (const name of ['东方财富网', '微博', '智库报告', '测试网站7']) {
       const offset = (siteHue(name) - 45) / step
       expect(Math.abs(offset - Math.round(offset))).toBeLessThan(0.51)
@@ -65,8 +67,8 @@ describe('siteTone · 按名字生成，颜色不会用完', () => {
   it('产出的是 oklch —— 明度感知均匀，各色相深浅一致', () => {
     const tone = siteTone({ name: '东方财富网' })
     // 明度固定（0.95 底 / 0.52 前景），浓淡只走饱和度这一维，整屏不会深一块浅一块
-    expect(tone.bg).toMatch(/^oklch\(0\.95 /)
-    expect(tone.fg).toMatch(/^oklch\(0\.52 /)
+    expect(tone.bg).toMatch(/^oklch\(0\.955 /)
+    expect(tone.fg).toMatch(/^oklch\(0\.53 /)
   })
 
   // 第二维度曾经取 `hash / 24 % 2`，与色相档共用同一串低位，等于没加（实测 16 张卡的
@@ -76,7 +78,8 @@ describe('siteTone · 按名字生成，颜色不会用完', () => {
       '东方财富网', '同花顺', '财联社', '量子位', '小红书', '微博', '智库报告', '国内智库',
       '海外智库', '数据榜单']
     const tones = new Set(onScreen.map((name) => JSON.stringify(siteTone({ name }))))
-    expect(tones.size).toBeGreaterThanOrEqual(13)
+    // 12 色相 × 2 浓淡 = 24 组合，16 个网站期望约 12 种
+    expect(tones.size).toBeGreaterThanOrEqual(10)
 
     // 同色相的两个网站靠浓淡分开：找一对色相相同的，断言配色不同
     const byHue = new Map<number, string[]>()
