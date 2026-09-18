@@ -385,6 +385,8 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'monitor/ckSourceList', desc: '监控源配置查询 → /api/source/list', impl: true, live: true },
   { path: 'monitor/ckSourceInsert', desc: '监控源配置新增 → /api/source/insert', impl: true, live: true },
   { path: 'monitor/ckSourceUpdate', desc: '监控源配置更新 → /api/source/update', impl: true, live: true },
+  // 2026-09-18：ck_source 分页查询（/api/source/page，list 的分页版），监控配置 Tab 列表用
+  { path: 'monitor/ckSourcePage', desc: '监控源配置分页查询 → /api/source/page', impl: true, live: true },
   { path: 'rule/publish', desc: '发布规则', danger: true, impl: true },
   { path: 'rule/runBatchTest', desc: '跑批测', impl: true },
   // 运行记录 / 数据查看 / 监控（服务层聚合）

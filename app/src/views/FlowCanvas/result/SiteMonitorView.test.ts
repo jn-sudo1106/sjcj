@@ -24,8 +24,8 @@ function source(id: string, name = `源${id}`): Source {
 const stubs = {
   SiteSourceSelect: { name: 'SiteSourceSelect', template: '<div />', emits: ['update:modelValue'] },
   CheckLogDialog: { name: 'CheckLogDialog', props: ['modelValue', 'check'], template: '<div />' },
-  // 配置 Tab 自己会拉 sourceDetail/sourceSteps，容器用例里只关心挂没挂上，不看它的内部行为
-  SiteMonitorConfigView: { name: 'SiteMonitorConfigView', props: ['siteId', 'sourceId'], template: '<div data-testid="config-panel" />' },
+  // 配置 Tab 自己会拉 ck_source 分页列表，容器用例里只关心挂没挂上，不看它的内部行为
+  SiteMonitorConfigView: { name: 'SiteMonitorConfigView', props: ['siteId'], template: '<div data-testid="config-panel" />' },
   ElSwitch: {
     name: 'ElSwitch',
     props: ['modelValue', 'loading', 'disabled'],
@@ -183,7 +183,9 @@ describe('SiteMonitorView', () => {
     expect(wrapper.find('.smv-table').exists()).toBe(false)
   })
 
-  it('两个 Tab 共用选中的源：结果里选的源，切到配置不用再选一次', async () => {
+  // 2026-09-18 改版：监控配置 Tab 是 ck_source 分页列表，源在弹窗编辑器里自己选，
+  // 容器那层共用的源选择只给「监控结果」——配置 Tab 不再接 sourceId。
+  it('监控配置 Tab 不接共用的源选择（列表翻的是整表 ck_source）', async () => {
     vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 0, list: [] })
     const wrapper = mountViewWithSourceSelect()
     await flushPromises()
@@ -191,7 +193,7 @@ describe('SiteMonitorView', () => {
     await flushPromises()
 
     await wrapper.get('[data-testid="site-monitor-tab-config"]').trigger('click')
-    expect(wrapper.findComponent({ name: 'SiteMonitorConfigView' }).props('sourceId')).toBe('s1')
+    expect(wrapper.findComponent({ name: 'SiteMonitorConfigView' }).props('sourceId')).toBeUndefined()
   })
 
   it('查询失败时给出错误而不是空表格假装没事', async () => {
