@@ -2,10 +2,33 @@
 
 import { computed } from 'vue'
 import type { CollectorSchedule } from '@/views/FlowCanvas/canvas/flowModel'
+import type { SourceJob } from '@/api'
 import { cronForSchedule, displaySchedule } from '@/utils/flow/scheduleCron'
 
-const props = defineProps<{ modelValue: CollectorSchedule }>()
-const emit = defineEmits<{ 'update:modelValue': [patch: Partial<CollectorSchedule>] }>()
+const props = defineProps<{
+  modelValue: CollectorSchedule
+  /** 源的定时任务（job 表）。有它才显示右上角的启停开关与运行事实；没有就只是一份待保存的策略。 */
+  job?: SourceJob | null
+  /** 开关正在提交 */
+  toggling?: boolean
+}>()
+const emit = defineEmits<{
+  'update:modelValue': [patch: Partial<CollectorSchedule>]
+  /** 右上角开关：true=启用 */
+  'toggle-enabled': [enabled: boolean]
+}>()
+
+/** 运行事实一行（2026-09-18）：光有 cron 看不出这条定时到底在不在跑。 */
+const runFacts = computed(() => {
+  const job = props.job
+  if (!job) return ''
+  const short = (value?: string) => (value ? value.replace(/^\d{4}-/, '').slice(0, 11) : '')
+  const parts: string[] = []
+  if (job.nextRun) parts.push(`下次 ${short(job.nextRun)}`)
+  if (job.lastRun) parts.push(`上次 ${short(job.lastRun)}`)
+  parts.push(`运行 ${job.runCount} 次 · 成功 ${job.successCount} 次`)
+  return parts.join('　')
+})
 
 
 const WEEKDAYS: [number, string][] = [[1, '周一'], [2, '周二'], [3, '周三'], [4, '周四'], [5, '周五'], [6, '周六'], [7, '周日']]
@@ -54,7 +77,23 @@ function toggleWeekday(day: number) {
 
 <template>
   <div class="tss-wrap rc-field">
-    <label>定时策略</label>
+    <div class="tss-head">
+      <label>定时策略</label>
+      <!-- 有 job 才给开关：没有 job 说明这个源还没建过定时，没什么可启停的（要先保存策略） -->
+      <button
+        v-if="job"
+        type="button"
+        class="tss-toggle"
+        :class="{ on: !job.disabled }"
+        :disabled="toggling"
+        data-testid="job-toggle"
+        :title="job.disabled ? '这条定时已停用，点击启用' : '定时运行中，点击停用'"
+        @click="emit('toggle-enabled', job.disabled)"
+      >
+        <span class="tss-toggle-track"><span class="tss-toggle-thumb" /></span>
+        {{ job.disabled ? '已停用' : '已启用' }}
+      </button>
+    </div>
     <div class="rc-scheduler">
         <div class="rc-scheduler-head">
           <select class="rc-select" :value="shown.scheduleType" @change="onInput('scheduleType', $event)">
@@ -66,12 +105,38 @@ function toggleWeekday(day: number) {
           <span v-for="[day, label] in WEEKDAYS" :key="day" class="rc-day" :class="{ active: (shown.weekdays ?? []).includes(day) }" @click="toggleWeekday(day)">{{ label }}</span>
         </div>
         <div class="rc-cron-preview"><span>cron 表达式</span><input class="rc-input slim cron" :value="cronValue" :readonly="!isCustomCron" @input="onInput('cron', $event)" /></div>
+        <div v-if="runFacts" class="tss-facts" data-testid="job-run-facts">{{ runFacts }}</div>
     </div>
   </div>
 </template>
 
 <style scoped>
 .tss-wrap { margin-bottom: 12px; }
+.tss-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tss-head label { margin-bottom: 4px; }
+/* 启停开关：与 Element 的 switch 同款观感，但这里不引组件——本文件其余控件都是原生的 */
+.tss-toggle {
+  display: inline-flex; align-items: center; gap: 6px; margin-bottom: 4px;
+  border: 0; background: transparent; padding: 0; cursor: pointer;
+  color: var(--rc-faint); font-size: 11px;
+}
+.tss-toggle:disabled { cursor: not-allowed; opacity: 0.6; }
+.tss-toggle-track {
+  position: relative; width: 30px; height: 16px; border-radius: 999px;
+  background: #cbd5e1; transition: background 0.15s;
+}
+.tss-toggle-thumb {
+  position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.25); transition: transform 0.15s;
+}
+.tss-toggle.on { color: var(--rc-primary); font-weight: 600; }
+.tss-toggle.on .tss-toggle-track { background: var(--rc-primary); }
+.tss-toggle.on .tss-toggle-thumb { transform: translateX(14px); }
+/* 运行事实：跟 cron 框同属"只读信息"，放在框里最底下 */
+.tss-facts {
+  padding: 7px 8px; border-top: 1px solid #eef2f7; background: #fbfdff;
+  color: var(--rc-faint); font-size: 11px; line-height: 1.5;
+}
 .rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 10px; }
 .rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }
 .rc-scheduler { border: 1px solid #dbe3ee; border-radius: 8px; background: #fff; overflow: hidden; }

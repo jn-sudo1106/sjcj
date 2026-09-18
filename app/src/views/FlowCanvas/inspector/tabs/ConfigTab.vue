@@ -11,7 +11,7 @@ import {
   BIZ_TYPE_OPTIONS, WEB_TYPE_OPTIONS, defaultMultiMode, decisionOrParallelKind, collectorCapabilityOf, isRuleNode,
   type CollectConfig, type CollectorSchedule, type LoginConfigRef, type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
-import { configApi } from '@/api'
+import { configApi, sourceApi } from '@/api'
 import { configUrlFromLegacy } from '@/api/legacyAdapters'
 import { mergeScheduleSettings } from '@/utils/flow/scheduleCron'
 import BranchEditor from '../BranchEditor.vue'
@@ -149,22 +149,31 @@ function onScheduleChange(patch: Partial<CollectorSchedule>) {
 }
 
 /**
- * 定时的运行事实（2026-09-18）：下次/上次运行、跑了多少次。
+ * 启停这条定时（2026-09-18 用户提「右侧有启动的按钮」）。
  *
- * 光有 cron 看不出这条定时到底在不在跑——旧平台「定时列表」那一页把这些都列出来了，
- * 迁过来一行足够。数据来自 job 表（见 index.vue 的 backfillSourceSchedule），只读。
+ * 走 job 表的 enable/disable，与源启停同性质：可逆、不删数据，所以不加二次确认。
+ * 成功后就地翻转本地状态，不重新拉一次——isDelete 的写入有延迟，立刻回查可能拿到旧值，
+ * 反而让开关"弹回去"。
  */
-const jobInfo = computed(() => {
+const jobToggling = ref(false)
+async function onToggleJob(enabled: boolean) {
   const job = flow.sourceJob
-  if (!job) return ''
-  const short = (value?: string) => (value ? value.replace(/^\d{4}-/, '').slice(0, 11) : '')
-  const parts: string[] = []
-  if (job.disabled) parts.push('已停用')
-  if (job.nextRun) parts.push(`下次 ${short(job.nextRun)}`)
-  if (job.lastRun) parts.push(`上次 ${short(job.lastRun)}`)
-  parts.push(`已运行 ${job.runCount} 次（成功 ${job.successCount}）`)
-  return parts.join(' · ')
-})
+  if (!job || jobToggling.value) return
+  jobToggling.value = true
+  try {
+    const ack = await sourceApi.setJobEnabled([job.jobId], enabled)
+    if (!ack.ok) {
+      ElMessage.warning(ack.message || (enabled ? '启用失败' : '停用失败'))
+      return
+    }
+    flow.setSourceJob({ ...job, disabled: !enabled })
+    ElMessage.success(enabled ? '定时已启用' : '定时已停用')
+  } catch (error) {
+    ElMessage.error(`操作失败：${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    jobToggling.value = false
+  }
+}
 
 // 首采集节点判定：调度设置只在首采集节点展示（与原 NodeInspector 顶层逻辑一致）。
 // S4-1 追加登录节点后修正：登录节点也带 collectCfg，但它不是"真正意义上的采集起点"——
@@ -300,10 +309,16 @@ watch(
     </div>
     <EditNodeSourceDialog v-model:open="editNodeSourceOpen" :node-id="id" />
     <!-- 定时策略：采集节点挪到「运行设置」上方（见下）；非采集节点没有运行设置，仍留在这里 -->
-    <details v-if="!cc" class="ni-schedule">
+    <!-- 有定时就默认展开（2026-09-18 用户提）：收着的话根本不知道这个源还有定时在跑 -->
+    <details v-if="!cc" class="ni-schedule" :open="!!flow.sourceJob">
       <summary>定时策略</summary>
-      <TaskScheduleSettings :model-value="scheduleSettings" @update:model-value="onScheduleChange" />
-      <p v-if="jobInfo" class="ni-job-info" data-testid="source-job-info">{{ jobInfo }}</p>
+      <TaskScheduleSettings
+        :model-value="scheduleSettings"
+        :job="flow.sourceJob"
+        :toggling="jobToggling"
+        @update:model-value="onScheduleChange"
+        @toggle-enabled="onToggleJob"
+      />
     </details>
 
     <template v-if="cc">
@@ -432,10 +447,15 @@ watch(
         </div>
         <EditParamSourceDialog v-model="editParamSourceVisible" />
       </template>
-      <details class="ni-schedule">
+      <details class="ni-schedule" :open="!!flow.sourceJob">
         <summary>定时策略</summary>
-        <TaskScheduleSettings :model-value="scheduleSettings" @update:model-value="onScheduleChange" />
-      <p v-if="jobInfo" class="ni-job-info" data-testid="source-job-info">{{ jobInfo }}</p>
+        <TaskScheduleSettings
+          :model-value="scheduleSettings"
+          :job="flow.sourceJob"
+          :toggling="jobToggling"
+          @update:model-value="onScheduleChange"
+          @toggle-enabled="onToggleJob"
+        />
       </details>
       <!-- 运行设置（0711 R5）：只保留代理/断点续爬；定时策略紧挨在它上方。 -->
       <CollectorSettings :model-value="runtimeSettings" :capability="nodeCapability" @update:model-value="onRuntimeSettingsChange" />
@@ -522,7 +542,6 @@ watch(
 .ni-section-title-row .rc-btn { height: 24px; padding: 0 9px; font-size: 11px; }
 /* 定时策略与紧挨在下面的「运行设置」共用一套折叠样式：同样的 ▸/▾ 文字箭头、同样的间距，
    分隔线一律画在展开内容上方而不是标题上方（对齐 CollectorSettings.vue 的 .cs-toggle / .cs-body）。 */
-.ni-job-info { margin: 6px 0 0; color: var(--rc-faint); font-size: 11px; line-height: 1.5; }
 .ni-schedule { margin-top: 4px; }
 .ni-schedule > summary { display: block; list-style: none; color: var(--rc-muted); font-size: 11px; font-weight: 600; cursor: pointer; padding: 2px 0; }
 .ni-schedule > summary::-webkit-details-marker { display: none; }

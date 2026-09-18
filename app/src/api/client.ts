@@ -110,6 +110,10 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   // 2026-09-01：源启停。日常已 live（httpEndpoint=source/changeEnable），漏加白名单则
   // 生产顶栏「禁止改删」会拦，源视图批量启停点了后端收不到。
   'source/changeEnable',
+  // 2026-09-18：定时任务启停（节点配置「定时策略」右上角那个开关）。与源启停同性质：
+  // 可逆、不删数据，停用只是把 isDelete 置 1，随时能再打开。
+  'job/enableJob',
+  'job/disableJob',
   // 2026-09-01：复制源。侧栏「按模板源添加」原先打自造 BFF site/cloneSource（永远 mock）。
   // 纯新增，与 snatchSave / copyAll 同性质；flag=1 会多出一套配置，不改原源。
   'source/copySource',

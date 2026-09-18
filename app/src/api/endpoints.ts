@@ -242,8 +242,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   // （抽查 20 个源全空），真正的 cron 在 job 表里——源 430016942 → `0 0 16 * * ?`。
   { path: 'job/snatchJobPaged', desc: '源的定时任务分页（定时列表）', live: true },
   { path: 'job/runJob', desc: '运行任务', danger: true },
-  { path: 'job/enableJob', desc: '启用任务', danger: true },
-  { path: 'job/disableJob', desc: '停用任务', danger: true },
+  // 2026-09-18 接上：节点配置的定时策略那一栏右上角的开关。与源启停（source/changeEnable）
+  // 同性质——可逆、不删数据，所以同样放进生产白名单。
+  { path: 'job/enableJob', desc: '启用定时任务', danger: true, live: true },
+  { path: 'job/disableJob', desc: '停用定时任务', danger: true, live: true },
   { path: 'job/deleteJob', desc: '删除任务', danger: true },
   { path: 'job/deleteJobs', desc: '批量删除任务', danger: true },
   { path: 'job/updateJob', desc: '修改任务', danger: true },

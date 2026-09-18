@@ -585,6 +585,24 @@ export const sourceApi = {
       }
     }).filter((job) => job.jobId)
   },
+  /**
+   * 启用 / 停用定时任务（2026-09-18）。
+   *
+   * 旧平台 `changeJobState`：启用打 `job/enableJob`、停用打 `job/disableJob`，
+   * 都是 GET + `ids` 逗号串。**注意启停状态存的是 `isDelete`**（见 sourceJobs 的说明），
+   * 所以停用之后再查，`isDelete` 会变成 1。
+   */
+  setJobEnabled: async (jobIds: string[], enabled: boolean): Promise<Ack> => {
+    const ids = jobIds.filter(Boolean)
+    if (!ids.length) return { ok: false, message: '没有可操作的定时任务' }
+    const endpoint = enabled ? 'job/enableJob' : 'job/disableJob'
+    const result = await request<unknown>(endpoint, { ids }, {
+      method: 'GET',
+      httpEndpoint: endpoint,
+      httpParams: { ids: ids.join(',') },
+    })
+    return ackFromApiResult(result)
+  },
   sourceStats: () => assetMockRequest<{ total: number; error: number; externalChanged: number; disabled: number }>('source/stats'),
   /**
    * 源的子步骤。默认连 config/configDetail 的补充一起返回（topic / 配置名 / 登录语义 /
