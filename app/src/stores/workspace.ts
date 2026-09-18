@@ -389,6 +389,43 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return next
   }
   /**
+   * 腾一个位置：关掉**最右**的页签（2026-09-18 产品拍板）。
+   *
+   * 口径变更说明：0915-03 当时定的是"满 8 个就提示、让用户自己关"，理由是不动用户开的东西。
+   * 2026-09-18 推翻——用户原话「从网站页面进入，正常应该能打开这个网页，所以如果满了 8 个，
+   * 自动关闭最右侧的标签」。进得去但页签条上没有它（也没有任何高亮）比少一个旧页签更难受。
+   *
+   * 关最右 = 关最早打开的：页签条是"新开的在左"，最右天然是最久没被碰过的那个。
+   *
+   * `protect` 是**绝对不能关**的那个，调用方按需传（典型场景：当前画布有未保存改动）。
+   * 被保护的那个跳过，继续往左找下一个。全被保护就返回 null，调用方据此放弃建页签。
+   */
+  function evictOldestTab(protect?: WorkspaceTabRef | null): OrderedTab | null {
+    const list = orderedTabs.value
+    for (let i = list.length - 1; i >= 0; i--) {
+      const target = list[i]
+      if (protect && sameRef(target, protect)) continue
+      if (target.kind === 'source') {
+        const idx = tabs.value.findIndex((t) => t.sourceId === target.id)
+        if (idx < 0) continue
+        tabs.value.splice(idx, 1)
+        delete snapshots[target.id]
+        if (activeSourceId.value === target.id) {
+          activeSourceId.value = ''
+          exitCompare()
+        }
+      } else {
+        const idx = siteTabs.value.findIndex((t) => t.siteId === target.id)
+        if (idx < 0) continue
+        siteTabs.value.splice(idx, 1)
+        delete siteSnapshots[target.id]
+      }
+      return target
+    }
+    return null
+  }
+
+  /**
    * 批量关闭页签（右键菜单「关闭其他 / 关闭右侧标签页」，2026-09-18）。
    *
    * **不要在组件里 for 循环调 `close()`**：`close` 每关一个都会重算 `activeSourceId`
@@ -456,5 +493,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return snapshots[sourceId]
   }
 
-  return { tabs, activeSourceId, snapshots, siteTabs, siteSnapshots, orderedTabs, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, closeMany, moveTab, renameTab, saveSnapshot, snapshotOf, ensureSiteTab, closeSiteTab, clearSiteTabs, saveSiteSnapshot, siteSnapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf, backTraceConditionOf, setPendingSourceCondition, takePendingSourceCondition }
+  return { tabs, activeSourceId, snapshots, siteTabs, siteSnapshots, orderedTabs, compareSourceId, compareLeftId, backTraceHits, open, activate, deactivate, close, closeMany, evictOldestTab, moveTab, renameTab, saveSnapshot, snapshotOf, ensureSiteTab, closeSiteTab, clearSiteTabs, saveSiteSnapshot, siteSnapshotOf, enterCompare, exitCompare, setBackTraceHits, clearBackTraceHits, backTraceHitsOf, backTraceConditionOf, setPendingSourceCondition, takePendingSourceCondition }
 })

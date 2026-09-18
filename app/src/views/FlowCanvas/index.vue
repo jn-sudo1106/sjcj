@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
 import { useUiStore } from '../../stores/ui'
-import { MAX_WORKSPACE_TABS, useWorkspaceStore } from '../../stores/workspace'
+import { MAX_WORKSPACE_TABS, useWorkspaceStore, type WorkspaceTabRef } from '../../stores/workspace'
 import { siteApi, sourceApi, type Source, type Step } from '../../api'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 import { useRuntimeStore } from '../../stores/runtime'
@@ -234,7 +234,7 @@ function onSplitStart(e: MouseEvent) {
   window.addEventListener('mouseup', onSplitEnd)
 }
 
-async function loadSourceFlow(sourceId: string) {
+async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   // 不再读 flowApi.flowLoad 的本地草稿：flow/save 没有真实后端对应物（旧平台流程存在
   // item/next 子步骤里，没有"流程定义"这个接口），画布保存过一次后本地草稿会一直挡住
   // 真实拓扑，源改了/后端数据变了也看不出来。节点链始终来自真实的 sourceSteps。
@@ -263,7 +263,7 @@ async function loadSourceFlow(sourceId: string) {
   }
   flow.loadFromSource(source, steps ?? [], null)
   if (!ws.open(source.sourceId, source.name)) {
-    ElMessage.warning(`页签已达上限（${MAX_WORKSPACE_TABS} 个），当前源未加入页签，请关闭部分页签后再试`)
+    onTabQuotaFull(fromOutside, () => ws.open(source.sourceId, source.name), '当前源')
   }
   // 把所属网站记进页签快照：切页签时 URL 上没有 siteId，而 sourceDetail 又不返回它（实测为 null），
   // 不记下来的话切到别的网站的源，左侧源列表会整块消失。只在拿得到时写，别用空值覆盖已有的。
@@ -470,7 +470,48 @@ function registerCanvasActions() {
   ui.registerAction('发起抓取', onStartCapture)
 }
 
-async function enterFromRoute() {
+/**
+ * 页签额度满了怎么办——两种入口两种处理（2026-09-18，见 enterFromRoute 的说明）。
+ *
+ * `retry` 是腾出位置后再试一次的建页签动作；腾不出来（全被保护）或不该腾时，退回提示。
+ */
+function onTabQuotaFull(fromOutside: boolean | undefined, retry: () => boolean, what: string) {
+  if (fromOutside) {
+    const evicted = ws.evictOldestTab(protectedTab())
+    if (evicted && retry()) {
+      // 文案说"最右侧"而不是"最早的"（2026-09-18 用户反馈看不明白）：
+      // "最早"是我们内部的排序依据，用户看不见；"最右侧"他在页签条上一眼就能对上。
+      // 末尾那句是为了打消顾虑——关的只是页签，网站/源都还在，随时能再打开。
+      ElMessage.info(`页签已满，已自动关闭最右侧的「${evicted.name}」（可随时重新打开）`)
+      return
+    }
+  }
+  ElMessage.warning(`页签已满（${MAX_WORKSPACE_TABS} 个），${what}没能加进页签条——内容照常显示，关掉几个页签后重新进入即可固定`)
+}
+
+/**
+ * 腾页签位置时**绝对不能关**的那个。
+ *
+ * 只有一种情况需要保护：当前画布有未保存改动。`flow.dirty` 只反映**正在编辑的那一个**
+ * 页签（其余页签的状态都只是快照，没有"未保存"概念），所以保护它一个就够。
+ * 不 dirty 时不保护——用户马上就要离开当前页面去新的了，关掉它反而省事。
+ */
+function protectedTab(): WorkspaceTabRef | null {
+  if (!flow.dirty || !ws.activeSourceId) return null
+  return { kind: 'source', id: ws.activeSourceId }
+}
+
+/**
+ * `fromOutside` = 这次进入是**从工作区外部**来的（网站列表点卡片 / 深链 / 刷新），
+ * 而不是已经在页签工作区里切来切去。
+ *
+ * 2026-09-18 产品定的口径：**入口不同，判断不同**——
+ *  - 从网站列表点进来：他就是要打开这个网站，页签满了就自动关掉最右那个给它腾位；
+ *  - 已经在页签页面里再开新的：他看得见自己有哪些页签，该由他决定关谁，只提示不代劳。
+ *
+ * 靠调用点区分：组件挂载时（从别的路由进来）传 true，路由 watch（工作区内导航）不传。
+ */
+async function enterFromRoute(opts: { fromOutside?: boolean } = {}) {
   const siteId = String(route.query.siteId ?? '')
   const sourceId = String(route.query.sourceId ?? '')
   if (siteId && !sourceId) {
@@ -486,9 +527,7 @@ async function enterFromRoute() {
     // 也不知道为什么。源页签那条路（ws.open）一直是"照常切过去 + 提示"，这里对齐它。
     // 不会连弹：enterFromRoute 只在 sourceId/siteId 真正变化时触发（下方 watch 有 prev 守卫），
     // 点已在页签条上的网站走的是 exist 分支，返回 true 也不会弹。
-    if (!ws.ensureSiteTab(siteId)) {
-      ElMessage.warning(`页签已达上限（${MAX_WORKSPACE_TABS} 个），本网站未加入页签条，关闭部分页签后重新进入即可`)
-    }
+    if (!ws.ensureSiteTab(siteId)) onTabQuotaFull(opts.fromOutside, () => ws.ensureSiteTab(siteId), '本网站')
     const view = normalizeSiteView(route.query.view)
     if (route.query.view !== view) await router.replace({ path: '/canvas', query: { siteId, view } })
     else ui.clearActions()
@@ -500,7 +539,7 @@ async function enterFromRoute() {
     if (route.query.view !== view) {
       await router.replace({ path: '/canvas', query: { ...(querySiteId ? { siteId: querySiteId } : {}), sourceId, view } })
     }
-    await loadSourceFlow(sourceId)
+    await loadSourceFlow(sourceId, opts.fromOutside)
     registerCanvasActions()
   } else {
     // 裸 /canvas 已由路由守卫导回采集资产；这里仅保留内部兜底
@@ -515,7 +554,8 @@ onMounted(async () => {
     ui.clearActions()
     return
   }
-  await enterFromRoute()
+  // 组件刚挂载 = 从工作区外部进来（网站列表点卡片 / 深链 / 刷新）
+  await enterFromRoute({ fromOutside: true })
 })
 // sourceId / siteId 互斥，合一个 watcher 统一处理深链与源切换。
 watch(

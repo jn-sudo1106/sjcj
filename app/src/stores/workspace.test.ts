@@ -388,3 +388,71 @@ describe('workspace closeMany', () => {
     expect(ws.tabs.length).toBe(3)
   })
 })
+
+// 2026-09-18 产品拍板：满 8 个不再"提示让用户自己关"，自动腾掉最右那个。
+describe('workspace evictOldestTab', () => {
+  let ws: ReturnType<typeof useWorkspaceStore>
+  beforeEach(() => {
+    sessionStorage.clear()
+    setActivePinia(createPinia())
+    ws = useWorkspaceStore()
+  })
+
+  it('关掉最右 = 最早打开的那个（页签条是"新开的在左"）', () => {
+    ws.open('s1', '源一')
+    ws.open('s2', '源二')
+    ws.open('s3', '源三')
+    expect(ws.orderedTabs.map((t) => t.id)).toEqual(['s3', 's2', 's1'])
+
+    const evicted = ws.evictOldestTab()
+    expect(evicted?.id).toBe('s1')
+    expect(ws.orderedTabs.map((t) => t.id)).toEqual(['s3', 's2'])
+  })
+
+  it('最右是被保护的那个就跳过，往左找下一个', () => {
+    ws.open('s1', '源一')
+    ws.open('s2', '源二')
+    ws.open('s3', '源三')
+
+    const evicted = ws.evictOldestTab({ kind: 'source', id: 's1' })
+    expect(evicted?.id).toBe('s2')
+    expect(ws.tabs.map((t) => t.sourceId).sort()).toEqual(['s1', 's3'])
+  })
+
+  it('腾位时把快照一并清掉，网站页签同样能被腾', () => {
+    ws.ensureSiteTab('site-1', '最早的网站')
+    ws.saveSiteSnapshot('site-1', { view: 'data' })
+    ws.open('s1', '源一')
+
+    const evicted = ws.evictOldestTab()
+    expect(evicted).toEqual(expect.objectContaining({ kind: 'site', id: 'site-1' }))
+    expect(ws.siteSnapshotOf('site-1')).toBeUndefined()
+  })
+
+  it('腾掉的正好是活动源页签时让出激活态并退出对比', () => {
+    ws.open('s1', '源一')
+    ws.open('s2', '源二')
+    ws.activate('s1')
+    ws.enterCompare('s2', 's1')
+
+    ws.evictOldestTab()   // 最右是 s1，也是当前活动的
+    expect(ws.activeSourceId).toBe('')
+    expect(ws.compareSourceId).toBe('')
+  })
+
+  it('全被保护 / 一个都没有时返回 null，调用方据此放弃', () => {
+    expect(ws.evictOldestTab()).toBeNull()
+    ws.open('s1', '源一')
+    expect(ws.evictOldestTab({ kind: 'source', id: 's1' })).toBeNull()
+    expect(ws.tabs.length).toBe(1)
+  })
+
+  it('满额后腾一个就能继续开新的——这是本次改动的目的', () => {
+    for (let i = 0; i < MAX_SOURCE_TABS; i++) ws.open(`s${i}`, `源${i}`)
+    expect(ws.open('new', '新源')).toBe(false)
+
+    expect(ws.evictOldestTab()).not.toBeNull()
+    expect(ws.open('new', '新源')).toBe(true)
+    expect(ws.tabs.length).toBe(MAX_SOURCE_TABS)
+  })
+})
