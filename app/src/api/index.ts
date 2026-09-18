@@ -844,6 +844,12 @@ export const sourceApi = {
         siteId: q.siteScopeId,
         configId: q.configId,
         state: q.state,
+        // ⚠️ 下面这三个参数名**后端一个都不认**，等于没传（2026-09-18 实测）：带真实队列名、
+        // 带 `zzz_no_such_queue`、什么都不带，返回的 count 完全一样——不是匹配不上，是这个
+        // 条件根本没进 SQL。旧平台 api/task.js 头部注释列的入参里也没有队列，后端从来没做过。
+        // 同一批参数里 sourceId / state / configId 都是真生效的，坏的只有队列这一项。
+        // 需求已提后端（设计方案/0918-任务视图队列筛选_接口需求），加上 taskTopic 后这里不用改。
+        // 在那之前，界面上的「队列名筛选」填了不会有反应——这是已知的，不要再换参数名试。
         taskTopic: topic,
         topic,
         queue: topic,
