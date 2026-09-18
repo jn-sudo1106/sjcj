@@ -395,8 +395,14 @@ onUnmounted(() => {
 
 .scg-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .scg-tag.more { background: transparent; color: var(--rc-faint); }
-.scg-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; color: #b45309; background: #fef3c7; border-radius: 5px; padding: 2px 7px; }
-.scg-tag::before { content: ''; width: 6px; height: 6px; border-radius: 2px; background: #f59e0b; }
+/* 与编辑弹窗里的标签同色（2026-09-18）。
+   原来是琥珀底 + 橙字 + 实心橙小方块——这是网站标签，「财经资讯」「财经媒体」这类
+   **纯信息**，没有状态语义，却占着整张卡最醒目的一组颜色，每张卡还有两三个。
+   中途试过中性灰，用户反馈"太暗"；最终对齐 `SiteEditorDialog` 的 `.ca-site-tag`
+   （浅蓝底 + 深蓝字），同一个东西在两处长得一样。
+   小方块去掉：有底色就够了，它纯属装饰。
+   **颜色留给状态**——同屏真正要被看见的是红色的异常源 chip（.scg-chip.err）。 */
+.scg-tag { display: inline-flex; align-items: center; font-size: 10px; color: var(--rc-primary-ink); background: var(--rc-primary-bg); border-radius: 5px; padding: 2px 7px; }
 
 /* 底部行钉在卡片底边（margin-top:auto），各卡等高对齐；所有项禁止换行，日期可缩略 */
 .scg-foot { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--rc-border-soft); font-size: 11px; color: var(--rc-faint); min-width: 0; }

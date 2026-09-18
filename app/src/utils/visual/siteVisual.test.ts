@@ -22,14 +22,16 @@ describe('siteTone · 按名字生成，颜色不会用完', () => {
     expect(siteTone({ name: '东方财富网' })).toEqual(siteTone({ name: '东方财富网' }))
   })
 
-  it('只用蓝色系（225–270）——两轮反馈"花"之后，刻意用区分度换安静', () => {
+  // 色域来回收放过两轮，最后定位到"花"的元凶是标签（琥珀底橙字），不是图标。
+  // 标签统一成浅蓝后，图标放开回冷色全段——卡片上只剩它一处在做区分。
+  it('用冷色段（200–320）：青蓝 → 蓝 → 靛 → 紫', () => {
     const names = ['东方财富网', '同花顺', '微博', '中国证券报', '新浪财经1', '新浪2', '新浪3',
       '智库报告', '海外智库', '国内智库', '量子位', '小红书', '财联社', '涨停板', '云掌财经']
     for (const name of names) {
       const hue = siteHue(name)
-      // 225–270：顺带天然避开了红橙——红色在卡片上已经表示"异常"，不能被稀释
-      expect(hue).toBeGreaterThanOrEqual(225)
-      expect(hue).toBeLessThanOrEqual(270)
+      // 200–320：顺带天然避开了红橙——红色在卡片上已经表示"异常"，不能被稀释
+      expect(hue).toBeGreaterThanOrEqual(200)
+      expect(hue).toBeLessThanOrEqual(320)
     }
   })
 
@@ -44,20 +46,20 @@ describe('siteTone · 按名字生成，颜色不会用完', () => {
     const a = siteHue('国内智库')
     const b = siteHue('海外智库')
     const gap = Math.abs(a - b)
-    expect(gap === 0 || gap >= 7).toBe(true)
+    expect(gap === 0 || gap >= 10).toBe(true)
   })
 
-  it('一屏十几张卡片仍能大致分开（6 档色相 × 2 档浓淡）', () => {
+  it('一屏十几张卡片能互相分开（12 档色相 × 2 档浓淡）', () => {
     const onScreen = ['中国经营网', '中国网财经', '中国证券报', '中金在线', '中新经纬', '云掌财经',
       '东方财富网', '同花顺', '财联社', '量子位', '小红书', '微博']
     const hues = new Set(onScreen.map(siteHue))
-    // 只剩 6 档色相，12 个网站期望约 4.9 种；真正的区分度靠色相 × 浓淡这一对组合
+    // 12 档色相，12 个网站期望约 7.6 种；真正的区分度靠色相 × 浓淡这一对组合
     // （下面那条用例锁的就是它），这里只保证散列没偏。
-    expect(hues.size).toBeGreaterThanOrEqual(4)
+    expect(hues.size).toBeGreaterThanOrEqual(6)
   })
 
   it('色相落在档位上，不产生 143/144 这种半吊子差异', () => {
-    const step = 45 / 6
+    const step = 120 / 12
     for (const name of ['东方财富网', '微博', '智库报告', '测试网站7']) {
       const offset = (siteHue(name) - 45) / step
       expect(Math.abs(offset - Math.round(offset))).toBeLessThan(0.51)
@@ -78,8 +80,8 @@ describe('siteTone · 按名字生成，颜色不会用完', () => {
       '东方财富网', '同花顺', '财联社', '量子位', '小红书', '微博', '智库报告', '国内智库',
       '海外智库', '数据榜单']
     const tones = new Set(onScreen.map((name) => JSON.stringify(siteTone({ name }))))
-    // 6 色相 × 2 浓淡 = 12 组合，16 个网站期望约 9 种
-    expect(tones.size).toBeGreaterThanOrEqual(7)
+    // 12 色相 × 2 浓淡 = 24 组合，16 个网站期望约 12 种
+    expect(tones.size).toBeGreaterThanOrEqual(10)
 
     // 同色相的两个网站靠浓淡分开：找一对色相相同的，断言配色不同
     const byHue = new Map<number, string[]>()
