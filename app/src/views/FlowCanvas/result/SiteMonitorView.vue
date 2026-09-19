@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // 监控视图容器（0916）：拆成「监控结果 / 监控配置」两个 Tab。
 //   · 监控结果 = 0910 迁入的那张监控列表（SiteMonitorResultView）
-//   · 监控配置 = 数据监控节点那套告警配置（AlertConfigPanel），按源 + 数据监控节点配置
-//     （SiteMonitorConfigView）——网站汇总态下没有画布，所以这里自带源/节点两级选择。
+//   · 监控配置 = ck_source 分页列表 + 新增/编辑弹窗（SiteMonitorConfigView 2026-09-18 改版，
+//     弹窗里才是原「数据监控节点告警配置」编辑器）——源在弹窗编辑器里自己选，与本层无关。
 //
-// 选中的源提到这一层（v-model 传给两个 Tab）：在结果里挑了某个源，切到配置不用再选一次。
+// 选中的源提到这一层（v-model 传给「监控结果」）：在结果里挑了某个源，下次切回来还在；
+// 监控配置 Tab 不需要它（列表翻的是整表 ck_source）。
 //
 // Tab 状态由 URL 上的 monitorTab 决定（SiteDetailView 解析后当 prop 传进来、变更再 emit 回去）：
 // 本组件不碰 router，与 SiteDataView / SourceOverviewView 同一条约定——它们的测试都是裸挂载，
@@ -66,7 +67,6 @@ watch(() => props.siteId, () => {
     />
     <SiteMonitorConfigView
       v-else
-      v-model:source-id="selectedSourceId"
       :site-id="siteId"
       class="smv-body"
     />

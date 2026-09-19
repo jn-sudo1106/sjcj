@@ -1,4 +1,4 @@
-import type { CkSourcePayload, CkSourceRecord } from '../types/rule'
+import type { CkSourcePayload, CkSourceRecord, CkSourcePage } from '../types/rule'
 import type { HealthCard, MqQueue, SyncRow, AlarmRow, SourceCheck, SourceCheckLog, Paged } from '../types'
 
 const HEALTH: HealthCard[] = [
@@ -57,6 +57,26 @@ let ckSourceNextId = 1
 export function mockCkSourceList(params?: Record<string, unknown>): CkSourceRecord[] {
   const sourceId = String(params?.sourceId ?? '')
   return CK_SOURCE_STORE.filter((row) => String(row.sourceId) === sourceId)
+}
+
+/**
+ * ck_source 分页（/api/source/page，2026-09-18）：与真实后端同口径——
+ * 按主键倒序、name/sourceId 可选筛选、pageNum 从 1 起。
+ */
+export function mockCkSourcePage(params?: Record<string, unknown>): CkSourcePage {
+  const sourceId = String(params?.sourceId ?? '')
+  const name = String(params?.name ?? '').trim().toLowerCase()
+  const pageNum = Math.max(Number(params?.pageNum) || 1, 1)
+  const pageSize = Math.min(Math.max(Number(params?.pageSize) || 20, 1), 200)
+
+  const matched = CK_SOURCE_STORE
+    .filter((row) => !sourceId || String(row.sourceId) === sourceId)
+    .filter((row) => !name || row.name?.toLowerCase().includes(name))
+    .sort((a, b) => b.id - a.id)
+  const total = matched.length
+  const pages = total === 0 ? 0 : Math.ceil(total / pageSize)
+  const list = matched.slice((pageNum - 1) * pageSize, pageNum * pageSize)
+  return { total, pages, pageNum, pageSize, list }
 }
 
 export function mockCkSourceInsert(params?: Record<string, unknown>): number {

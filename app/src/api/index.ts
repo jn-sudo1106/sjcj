@@ -6,7 +6,7 @@ import type {
   Paged, Source, Site, SiteSummary, SiteCreateInput, SiteCreateResult, Ack, PageQuery, Step, SourceLoadParamsResult, SendSnatchWithParamPayload,
   Rule, RuleGroup, SharedConfig, RuleTestCase, EvalResult,
   RuleOrchestration, RuleOrchestrationGenerateResult, RuleOrchestrationItem, RuleOrchestrationTestRequest, RuleOrchestrationTestResult,
-  CkSourcePayload, CkSourceRecord,
+  CkSourcePayload, CkSourceRecord, CkSourcePage,
   CodeExecuteRequest,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   SourceCheck, SourceCheckLog, SourceCheckQuery, SourceCheckLogQuery,
@@ -1659,6 +1659,15 @@ export const ckSourceApi = {
     request<CkSourceRecord[]>('monitor/ckSourceList', { sourceId }, {
       method: 'GET',
       httpEndpoint: '/api/source/list',
+    }),
+  /**
+   * 分页查 ck_source（2026-09-18，监控配置 Tab 列表）。pageNum 从 1 开始；
+   * sourceId / name 为可选筛选，缺省翻整表。后端按主键倒序返回。
+   */
+  page: (query: { pageNum: number; pageSize: number; sourceId?: string; name?: string }) =>
+    request<CkSourcePage>('monitor/ckSourcePage', query as unknown as Record<string, unknown>, {
+      method: 'GET',
+      httpEndpoint: '/api/source/page',
     }),
   insert: (source: CkSourcePayload) =>
     request<number>('monitor/ckSourceInsert', source as unknown as Record<string, unknown>, {

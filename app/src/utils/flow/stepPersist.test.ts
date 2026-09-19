@@ -306,6 +306,108 @@ describe('规则节点写步骤（0904）', () => {
   })
 })
 
+// 2026-09-18：翻译助手的表配置入参/出参与规则节点同一套落库口径（context/outContext 物理列名），
+// type 也写 'rule'——发后续（source/nextStep）按步骤 type 派发执行器，写 entry 会 500
+//（实测打标签步骤 type 改成 rule 后 ok_41696 恢复正常）；回读侧靠 configType 路由区分，不会串成规则节点。
+describe('翻译助手写步骤（2026-09-18）', () => {
+  function translateCfg(inputFields: string[], outputFields: string[], outputTableId?: string) {
+    const cfg = cloneConfig(NODE_CONFIGS.translate)
+    cfg.title = '翻译助手'
+    cfg.configId = '1400999'
+    cfg.execCfg = {
+      mode: 'new', format: 'xml', describe: '', script: '', scriptPath: '', enabled: true,
+      inputTableId: '6200026', outputTableId, inputFields, outputFields,
+    }
+    return cfg
+  }
+  const snapshot = { ...MEASURED_40600, sourceId: '430016398', nodeType: 'entry' }
+
+  it('入参/出参从 execCfg 写进 context/outContext（物理列名），type 写 rule（发后续按 type 派发）', () => {
+    const step = mergeStepForWrite({
+      snapshot,
+      cfg: translateCfg(['title', 'url'], ['translated_text']),
+      nodeId: '40600',
+      sourceId: '430016398',
+      columnByItemCode: new Map([['title', 'K1'], ['url', 'K2'], ['translated_text', 'K9']]),
+    })
+    expect(step.nodeType).toBe('rule')
+    expect(step.contextMap).toEqual(['K1', 'K2'])
+    expect(step.outColumns).toEqual(['K9'])
+    expect(stepToStepModifyPayload(step).context).toBe('K1,K2')
+    expect(stepToStepModifyPayload(step).outContext).toBe('K9')
+  })
+
+  it('没绑表字段（无 execCfg）时退回快照原值，不写空；type 仍写 rule', () => {
+    const cfg = cloneConfig(NODE_CONFIGS.translate)
+    cfg.title = '翻译助手'
+    const step = mergeStepForWrite({ snapshot, cfg, nodeId: '40600', sourceId: '430016398' })
+    expect(step.nodeType).toBe('rule')
+    expect(step.contextMap).toBe(snapshot.contextMap)
+    expect(step.outColumns).toBe(snapshot.outColumns)
+  })
+})
+
+// 2026-09-18：文章打标签与翻译助手同待遇——execCfg 的入参/出参与规则节点同一套落库口径
+//（context/outContext 物理列名），type 写 'rule'（发后续按 type 派发执行器）。
+describe('文章打标签写步骤（2026-09-18）', () => {
+  function tagCfg(inputFields: string[], outputFields: string[]) {
+    const cfg = cloneConfig(NODE_CONFIGS['article-tag'])
+    cfg.title = '文章打标签'
+    cfg.configId = '1400998'
+    cfg.execCfg = {
+      mode: 'new', format: 'xml', describe: '', script: '', scriptPath: '', enabled: true,
+      inputTableId: '6200026', inputFields, outputFields,
+    }
+    return cfg
+  }
+  const snapshot = { ...MEASURED_40600, sourceId: '430016398', nodeType: 'entry' }
+
+  it('入参/出参从 execCfg 写进 context/outContext（物理列名），type 写 rule', () => {
+    const step = mergeStepForWrite({
+      snapshot,
+      cfg: tagCfg(['title'], ['labels']),
+      nodeId: '40600',
+      sourceId: '430016398',
+      columnByItemCode: new Map([['title', 'K1'], ['labels', 'K9']]),
+    })
+    expect(step.nodeType).toBe('rule')
+    expect(step.contextMap).toEqual(['K1'])
+    expect(step.outColumns).toEqual(['K9'])
+    expect(stepToStepModifyPayload(step).context).toBe('K1')
+    expect(stepToStepModifyPayload(step).outContext).toBe('K9')
+  })
+})
+
+// 2026-09-18：文章生成摘要 / 音频提取文字 / 视频提取音频与翻译助手同待遇——
+// type 写 'rule'（发后续按 type 派发执行器），入参/出参随步骤 context/outContext 落库。
+describe('摘要/音视频处理节点写步骤（2026-09-18）', () => {
+  const snapshot = { ...MEASURED_40600, sourceId: '430016398', nodeType: 'entry' }
+
+  it.each([
+    ['article-summary', '文章生成摘要'],
+    ['audio-text', '音频提取文字'],
+    ['video-audio', '视频提取音频'],
+  ])('%s：execCfg 的入参/出参写进 context/outContext，type 写 rule', (seedKey, title) => {
+    const cfg = cloneConfig(NODE_CONFIGS[seedKey])
+    cfg.title = title
+    cfg.configId = '1400998'
+    cfg.execCfg = {
+      mode: 'new', format: 'xml', describe: '', script: '', scriptPath: '', enabled: true,
+      inputTableId: '6200026', inputFields: ['title'], outputFields: ['summary'],
+    }
+    const step = mergeStepForWrite({
+      snapshot,
+      cfg,
+      nodeId: '40600',
+      sourceId: '430016398',
+      columnByItemCode: new Map([['title', 'K1'], ['summary', 'K9']]),
+    })
+    expect(step.nodeType).toBe('rule')
+    expect(step.contextMap).toEqual(['K1'])
+    expect(step.outColumns).toEqual(['K9'])
+  })
+})
+
 describe('assertStepsPersistable（0828 W9-4）', () => {
   it('虚拟起点和已落库步骤不因缺 configId 拦截', () => {
     expect(() => assertStepsPersistable(

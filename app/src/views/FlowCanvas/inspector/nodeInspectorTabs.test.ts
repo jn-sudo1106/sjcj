@@ -123,4 +123,40 @@ describe('nodeInspectorTabs', () => {
     const orchestration = nodeInspectorTabs(validation).find(([key]) => key === 'orchestration')!
     expect(orchestration[2]).toBeUndefined()
   })
+
+  // 2026-09-18：翻译助手与规则处理同一套 tab 结构（无「参数配置」），
+  // 但编排配置不设表绑定门禁（翻译助手无脚本工作区，门禁没有拦截对象）。
+  it('翻译助手节点：与规则处理同 tab 结构（无参数配置），编排 Tab 不因未绑表禁用', () => {
+    const translate = {
+      title: '翻译助手', kind: 'node', template: 'translate', sub: '[800] 翻译助手 · 文本翻译',
+    } as unknown as NodeConfig
+    const tabs = nodeInspectorTabs(translate)
+    expect(tabs.map(([key]) => key)).toEqual(['config', 'table', 'orchestration', 'task', 'ai'])
+    const orchestration = tabs.find(([key]) => key === 'orchestration')!
+    expect(orchestration[2]).toBeUndefined()
+  })
+
+  // 2026-09-18：文章打标签与翻译助手同一待遇——与规则处理同 tab 结构，编排不设表绑定门禁。
+  it('文章打标签节点：与规则处理同 tab 结构（无参数配置），编排 Tab 不因未绑表禁用', () => {
+    const tag = {
+      title: '文章打标签', kind: 'node', template: 'article-tag', sub: '[730] 文章打标签 · 舆情多维标注',
+    } as unknown as NodeConfig
+    const tabs = nodeInspectorTabs(tag)
+    expect(tabs.map(([key]) => key)).toEqual(['config', 'table', 'orchestration', 'task', 'ai'])
+    const orchestration = tabs.find(([key]) => key === 'orchestration')!
+    expect(orchestration[2]).toBeUndefined()
+  })
+
+  // 2026-09-18：摘要 / 音频转文字 / 视频转音频同待遇——与规则处理同 tab 结构，编排不设门禁。
+  it.each([
+    ['video-audio', '[700] 视频提取音频 · 视频抽音轨'],
+    ['audio-text', '[710] 音频提取文字 · 语音转写'],
+    ['article-summary', '[720] 文章生成摘要 · 文本生成'],
+  ])('%s 节点：与规则处理同 tab 结构（无参数配置），编排 Tab 不因未绑表禁用', (template, sub) => {
+    const node = { title: template, kind: 'node', template, sub } as unknown as NodeConfig
+    const tabs = nodeInspectorTabs(node)
+    expect(tabs.map(([key]) => key)).toEqual(['config', 'table', 'orchestration', 'task', 'ai'])
+    const orchestration = tabs.find(([key]) => key === 'orchestration')!
+    expect(orchestration[2]).toBeUndefined()
+  })
 })

@@ -26,6 +26,7 @@ import type {
   RuleOrchestration,
 } from './flowModel'
 import { cloneConfig, normalizeNodeConfigs, backfillOutputTables } from './flowModel.layout'
+import { isRuleLikeNode } from './flowModel'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
 
 // ---------- 采集能力 ----------
@@ -998,22 +999,6 @@ function templateKeyForStep(step: Step, index: number): string {
   // （新建时 nodeType 继承前置步骤，可能是 entry/list/detail），只能靠节点名识别，且必须优先于下方
   // nodeType 别名映射——否则 nodeType='list'/'detail' 会把它错路由成采集/详情节点，丢掉 ruleCfg。
   if ((/数据监控/.test(name) || /数据校验/.test(name)) && NODE_CONFIGS.rule) return 'rule'
-  const explicit = String(step.nodeType ?? '').trim().toLowerCase()
-  // NODE_CONFIGS 里登录模板注册的 key 是 'login-collect'，不是 'login'（下面三处此前都在查
-  // 一个不存在的 key，恒为 falsy，登录节点路由从未真正生效过；2026-08-26 加 isLoginConfig 路由时
-  // 顺带一起修，不是本次新引入的问题）。
-  const explicitAliases: Record<string, string> = {
-    list: 'web-list', 'web-list': 'web-list', 'web_list': 'web-list',
-    detail: 'web-detail', 'web-detail': 'web-detail', 'web_detail': 'web-detail',
-    login: 'login-collect', 'rule': 'rule',
-    // monitor 复用 rule 的节点键（TEMPLATE_TO_NODE.monitor='rule'）；没有这条的话，
-    // 一个 nodeType='monitor' 但名字没含"数据监控"的存量步骤会漏到下面的通用正则，
-    // 被错路由成采集/详情节点，丢掉 ruleCfg（Z6-2，2026-09-07）。
-    monitor: 'rule',
-    'data-validation': 'rule', validation: 'rule',
-    'clean': 'clean', 'dedupe': 'dedupe', 'check': 'check',
-  }
-  if (explicitAliases[explicit] && NODE_CONFIGS[explicitAliases[explicit]]) return explicitAliases[explicit]
   // 数据校验节点：620 是字典现值。800 现在是**翻译助手**，只有名字指向校验的存量行才按校验认
   //（09-07～09-17 本前端把 800 写成了数据校验），其余 800 落到下面的抓取类型表 → translate。
   if (step.configType === '620' && NODE_CONFIGS.rule) return 'rule'
@@ -1022,6 +1007,11 @@ function templateKeyForStep(step: Step, index: number): string {
   // 抓取类型（configType）→ 节点种子：2026-09-17 补齐字典里其余类型，让历史步骤回读时
   // 落到对应的节点形态上（110 表格 / 120 文档 / 130 PDF / 150 OCR / 160 邮件 / 500 资讯 /
   // 700 视频转音频 / 710 语音转文字 / 720 摘要 / 300 校验类）。查表命中才走，否则维持原兜底。
+  //
+  // **必须排在 nodeType 别名映射之前**（2026-09-18）：翻译助手 / 文章打标签的步骤现在与
+  // 规则处理一样写 type='rule'（发后续按 type 派发执行器，写 entry 会 500），而别名表里
+  // 'rule' → 规则种子——按别名先走会把它们错路由成带 ruleCfg 的规则节点。configType
+  //（730/800）来自 config 详情，对这两个类型是比 nodeType 更可信的信号。
   const byConfigType: Record<string, string> = {
     '110': 'excel-collect',
     '120': 'doc-collect',
@@ -1038,6 +1028,23 @@ function templateKeyForStep(step: Step, index: number): string {
   }
   const routed = step.configType ? byConfigType[step.configType] : undefined
   if (routed && NODE_CONFIGS[routed]) return routed
+
+  const explicit = String(step.nodeType ?? '').trim().toLowerCase()
+  // NODE_CONFIGS 里登录模板注册的 key 是 'login-collect'，不是 'login'（下面三处此前都在查
+  // 一个不存在的 key，恒为 falsy，登录节点路由从未真正生效过；2026-08-26 加 isLoginConfig 路由时
+  // 顺带一起修，不是本次新引入的问题）。
+  const explicitAliases: Record<string, string> = {
+    list: 'web-list', 'web-list': 'web-list', 'web_list': 'web-list',
+    detail: 'web-detail', 'web-detail': 'web-detail', 'web_detail': 'web-detail',
+    login: 'login-collect', 'rule': 'rule',
+    // monitor 复用 rule 的节点键（TEMPLATE_TO_NODE.monitor='rule'）；没有这条的话，
+    // 一个 nodeType='monitor' 但名字没含"数据监控"的存量步骤会漏到下面的通用正则，
+    // 被错路由成采集/详情节点，丢掉 ruleCfg（Z6-2，2026-09-07）。
+    monitor: 'rule',
+    'data-validation': 'rule', validation: 'rule',
+    'clean': 'clean', 'dedupe': 'dedupe', 'check': 'check',
+  }
+  if (explicitAliases[explicit] && NODE_CONFIGS[explicitAliases[explicit]]) return explicitAliases[explicit]
 
   // isLoginConfig 来自 configDetail.templetCode（见 attachStepConfigDetails），是比步骤名正则
   // 更可靠的信号：2026-08-26 生产实测配置 1400968「baidu-登陆」证明登录步骤的名字未必含
@@ -1109,13 +1116,25 @@ function applyStepTaskFields(cfg: NodeConfig, step: Step) {
 }
 
 function applyRuleStepTables(cfg: NodeConfig, step: Step) {
-  if (!cfg.ruleCfg) return
+  // 规则处理存 ruleCfg；翻译助手 / 打标签 / 摘要 / 音频转文字 / 视频转音频（2026-09-18 并入规则式表配置）存 execCfg。
+  // 几类共用同一套落库口径（入参/出参写步骤 context/outContext，见 stepPersist），
+  // 回读时同样要把步骤里的 inputTable/outputTable 填回各自的编排对象——
+  // 只回填 ruleCfg 的话，这几类节点的「表配置」刷新后输入表/输出表就是空的（用户 2026-09-18 反馈）。
   const inputId = step.inputTable && step.inputTable !== '-' ? step.inputTable : ''
-  if (inputId) {
-    cfg.ruleCfg.inputTableId = cfg.ruleCfg.inputTableId || inputId
+  const outputId = step.outputTable || ''
+  const target = cfg.ruleCfg ?? (isRuleLikeNode(cfg) ? cfg.execCfg : undefined)
+  if (!target) {
+    // 回读节点没有 execCfg（种子不带），步骤里有表信息时先建一份默认的再填
+    if (!isRuleLikeNode(cfg) || (!inputId && !outputId)) return
+    cfg.execCfg = { ...makeDefaultExecConfig() }
+    applyRuleStepTables(cfg, step)
+    return
   }
-  if (step.outputTable) {
-    cfg.ruleCfg.outputTableId = cfg.ruleCfg.outputTableId || step.outputTable
+  if (inputId) {
+    target.inputTableId = target.inputTableId || inputId
+  }
+  if (outputId) {
+    target.outputTableId = target.outputTableId || outputId
   }
 }
 
@@ -1262,9 +1281,14 @@ export function applyStepDetails(
      * `applyStepMetadata` 只把 `cfg.template` 改成 'article-summary'，**`collectCfg` 还挂着**，
      * 于是节点一半是摘要、一半是采集：卡片显示「90 网页抓取 / 源配置」，
      * 底部状态也走采集分支去要 URL 和输出表。实测源 430022794 的第二个节点就是这样。
+     *
+     * 2026-09-18 起翻译助手 / 文章打标签步骤的 type 与规则处理一样写 'rule'（发后续按
+     * type 派发执行器，写 entry 会 500），首屏没有 configType 时会被先画成**规则节点**
+     *（带 ruleCfg）——它同样不是处理类节点，必须重建；所以 isProcessing 的判定要
+     * 把「带着 ruleCfg 的规则节点」也排除掉，而不是只看有没有 collectCfg。
      */
     const shouldBeProcessing = ['700', '710', '720', '730'].includes(String(step.configType ?? ''))
-    const isProcessing = !current.collectCfg
+    const isProcessing = !current.collectCfg && !current.ruleCfg
     if (
       (shouldBeLogin && !isLogin)
       || (shouldBeDataValidation && !isDataValidation)

@@ -137,6 +137,28 @@ function promptForConfig(cfg: NodeConfig): string | undefined {
   return prompt?.trim() ? prompt : undefined
 }
 
+/**
+ * 保存时的 configType（2026-09-18 防污染）：`configTypeFrom` 对「带 ruleCfg 但没有
+ * template」的节点会退回 600——那是为历史规则配置补类型用的。但翻译助手/打标签等
+ * 规则式节点在**首屏 configDetail 回填前**会被短暂画成规则节点（见 flowModel.seeds 的
+ * applyStepDetails 重建机制），用户如果在这个窗口点保存，600 就会把配置真实类型
+ * （730/800 等）覆盖掉，之后回读再也认不出它是什么（实测配置 1401011 被写成 600）。
+ *
+ * 兜底口径：600 是**猜测值**。base 里躺着的是这几类无脚本节点的真实类型号
+ * （150/700/710/720/730/800）时以 base 为准——那种情况下节点还没被正确识别，
+ * 真实类型就在 base 里；其余情况（含 base 为空的历史规则配置）照旧写 600。
+ */
+const SCRIPTLESS_CONFIG_TYPES = new Set([150, 700, 710, 720, 730, 800])
+
+function configTypeForSave(cfg: NodeConfig, base: Record<string, unknown>): number | undefined {
+  const fromNode = configTypeFrom(cfg)
+  if (fromNode === 600 && !cfg.template && cfg.ruleCfg) {
+    const baseType = base.configType == null ? undefined : Number(base.configType)
+    if (baseType && SCRIPTLESS_CONFIG_TYPES.has(baseType)) return baseType
+  }
+  return fromNode
+}
+
 export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown> = {}): Record<string, unknown> {
   const cc = cfg.collectCfg
   const source = cc ?? cfg
@@ -152,7 +174,7 @@ export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown
     inEntryType: (cc?.inputTable ?? cfg.inputTable) || undefined,
     isMulti: resolveMultiMode(cfg),
     // 节点类型（0828 W0-7）：此前**完全没写**，导致复制出来的配置类型永远停在被复制那份上。
-    configType: configTypeFrom(cfg),
+    configType: configTypeForSave(cfg, base),
     templetCode: cc?.bizType || undefined,
     topic: cfg.taskCfg?.queue || undefined,
     snatchDrepeat: dedupToLegacy(cc?.dedupMode ?? cfg.dedupMode),

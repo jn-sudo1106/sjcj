@@ -201,10 +201,25 @@ export interface CkSourcePayload {
   ver?: number
 }
 
-/** ck_source 行（list 返回；update/insert 只关心调用成败，不需要回读） */
+/** ck_source 行（list / page 返回；update/insert 只关心调用成败，不需要回读） */
 export interface CkSourceRecord extends CkSourcePayload {
   id: number
   lastMsg?: string
+  /** 上次/下次运行时间（后端 LocalDateTime 的 ISO 串，如 2026-09-18T10:00:00） */
+  lastRun?: string
+  nextRun?: string
+  runCnt?: number
+  successCnt?: number
+  updateDt?: string
+}
+
+/** ck_source 分页查询结果（/api/source/page，pageNum 从 1 开始） */
+export interface CkSourcePage {
+  total: number
+  pages: number
+  pageNum: number
+  pageSize: number
+  list: CkSourceRecord[]
 }
 
 /**

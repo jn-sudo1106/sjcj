@@ -9,6 +9,7 @@ import {
   effectiveOutputTable,
   isDataValidationNode,
   isMonitorNode,
+  isRuleLikeNode,
   isRuleNode,
   nodeEntryCondition,
   nodeInputTable,
@@ -225,6 +226,13 @@ export function mergeStepForWrite(args: {
 }): Step {
   const { snapshot, cfg, nodeId, sourceId } = args
   const rule = isRuleNode(cfg) ? cfg.ruleCfg : undefined
+  // 翻译助手 / 打标签 / 摘要 / 音频转文字 / 视频转音频（2026-09-18）：表配置的入参/出参跟规则节点同一套落库口径——存步骤的
+  // context/outContext（物理列名），只是编排内容在 execCfg 而不是 ruleCfg。
+  // nodeType 也跟规则节点一致写 'rule'：**发后续（source/nextStep）按步骤 type 派发执行器**，
+  // 写 'entry' 会让旧后端拿采集执行器去跑这些配置，直接 500 服务器异常（2026-09-18 实测：
+  // 把打标签步骤的 type 从 entry 改成 rule 后 ok_41696 即恢复正常）。回读侧的区分靠
+  // configType 优先路由 + applyStepDetails 重建（见 flowModel.seeds），不会串成规则节点。
+  const tableOrch = rule ?? (isRuleLikeNode(cfg) ? cfg.execCfg : undefined)
   const lastStepIds = args.lastStepIds !== undefined ? args.lastStepIds : snapshot?.dependsOn
   return {
     stepId: isWritableStepId(nodeId) ? nodeId : '',
@@ -234,7 +242,7 @@ export function mergeStepForWrite(args: {
     // 恒写 'rule' 会让 monitor 类型信息不落库，回读后只能靠标题正则兜底——节点一改名
     // （如"库存监控"）template 就恢复不出来，isMonitorNode=false，数据监控节点专属逻辑
     // （表配置监控方法回填、保存时同步 ck_source 等）全部静默失效。
-    nodeType: isMonitorNode(cfg) ? 'monitor' : isDataValidationNode(cfg) ? 'data-validation' : rule ? 'rule' : snapshot?.nodeType,
+    nodeType: isMonitorNode(cfg) ? 'monitor' : isDataValidationNode(cfg) ? 'data-validation' : isRuleLikeNode(cfg) ? 'rule' : snapshot?.nodeType,
     inputTable: nodeInputTable(cfg) || snapshot?.inputTable,
     // 0901：显式未落表时按「默认 = 输入表」取本节点自己的输入表，而不是把这个新建节点还
     // 没配置过的空 outputTable 直接提交上去（旧写法遇到规则节点只填了输入表就会把 outputTable
@@ -249,12 +257,12 @@ export function mergeStepForWrite(args: {
     condition: condExprOf(cfg) ?? undefined,
     failAction: cfg.outputAdvanced?.failPolicy || snapshot?.failAction,
     dependsOn: lastStepIds?.length ? lastStepIds : undefined,
-    // 规则节点的入出参在表配置里（ruleCfg），不是任务配置
-    contextMap: rule
-      ? ruleStepContext(rule.inputFields, args.columnByItemCode) ?? snapshot?.contextMap
+    // 规则节点（含翻译助手）的入出参在表配置里（ruleCfg / execCfg），不是任务配置
+    contextMap: tableOrch
+      ? ruleStepContext(tableOrch.inputFields, args.columnByItemCode) ?? snapshot?.contextMap
       : cfg.taskCfg?.contextMap ?? snapshot?.contextMap,
-    outColumns: rule
-      ? ruleStepContext(rule.outputFields, args.outColumnByItemCode ?? args.columnByItemCode) ?? snapshot?.outColumns
+    outColumns: tableOrch
+      ? ruleStepContext(tableOrch.outputFields, args.outColumnByItemCode ?? args.columnByItemCode) ?? snapshot?.outColumns
       : cfg.taskCfg?.outColumns ?? snapshot?.outColumns,
     enabled: !cfg.disabled,
   }

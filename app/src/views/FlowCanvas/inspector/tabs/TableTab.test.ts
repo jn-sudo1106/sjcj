@@ -8,11 +8,12 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import NodeInspector from '../NodeInspector.vue'
+import RuleTableFieldBinder from '../RuleTableFieldBinder.vue'
 import { useFlowStore } from '@/stores/flow'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { entryApi, paramApi, ruleApi } from '@/api'
 import { __resetPresetTableCache } from '@/composables/usePresetTables'
-import type { EntryType } from '@/api'
+import type { EntryType, RuleOrchestration } from '@/api'
 
 const INPUT_TABLE: EntryType = {
   tableId: '2102154', tableName: 'sense_data.TB_JD_SKU_BASE', name: 'JD-商品基础',
@@ -350,5 +351,184 @@ describe('TableTab · 常用默认表按可用性过滤（A2）', () => {
     const { wrapper } = mountOnRuleNode()
     await flushPromises()
     expect(wrapper.find('[data-testid="rule-table-presets"]').exists()).toBe(true)
+  })
+})
+
+// 2026-09-18：翻译助手并入规则式表/字段绑定；绑定内容写 execCfg——不能写 ruleCfg，
+// 否则翻译助手会被误判成规则节点、编排配置的模型/脚本工作区整个串位。
+describe('TableTab · 翻译助手（与规则处理同一套绑定）', () => {
+  function mountOnTranslateNode() {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['translate-1'] = cloneConfig(NODE_CONFIGS['translate'])
+    flow.select('translate-1')
+    flow.setActiveTab('table')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    return { flow, wrapper }
+  }
+
+  it('展示规则式表/字段绑定，不出现非规则分支的内容', async () => {
+    mockAssets()
+    const { wrapper } = mountOnTranslateNode()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('入参字段')
+    expect(wrapper.text()).toContain('出参字段')
+    expect(wrapper.text()).not.toContain('结构化配置')
+    expect(wrapper.text()).not.toContain('正文规则')
+    expect(wrapper.text()).not.toContain('去重方式')
+  })
+
+  it('绑定结果写进 execCfg（含节点级输入/输出表），ruleCfg 保持不出现', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnTranslateNode()
+    await flushPromises()
+
+    wrapper.findComponent(RuleTableFieldBinder).vm.$emit('update:modelValue', {
+      inputTableId: INPUT_TABLE.tableId,
+      inputTable: INPUT_TABLE.tableName,
+      inputFields: ['sku_id'],
+      outputTableId: INPUT_TABLE.tableId,
+      outputTable: INPUT_TABLE.tableName,
+      outputFields: ['sku_name'],
+    } as Partial<RuleOrchestration>)
+    await flushPromises()
+
+    const cfg = flow.configs['translate-1']
+    expect(cfg.ruleCfg).toBeUndefined()
+    expect(cfg.execCfg?.inputTableId).toBe(INPUT_TABLE.tableId)
+    expect(cfg.execCfg?.inputFields).toEqual(['sku_id'])
+    expect(cfg.execCfg?.outputFields).toEqual(['sku_name'])
+    expect(cfg.inputTable).toBe(INPUT_TABLE.tableId)
+    expect(cfg.outputTable).toBe(INPUT_TABLE.tableId)
+  })
+
+  it('回读时按 context/outContext 还原入出参到 execCfg', async () => {
+    mockAssets()
+    const { flow } = mountOnTranslateNode()
+    const cfg = flow.configs['translate-1']
+    cfg.execCfg = {
+      ...(cfg.execCfg ?? { mode: 'new' as const, format: 'xml' as const, describe: '', script: '', scriptPath: '', enabled: true }),
+      inputTableId: INPUT_TABLE.tableId,
+      outputTableId: INPUT_TABLE.tableId,
+      inputFields: [],
+      outputFields: [],
+    }
+    // 回读时 applyStepTaskFields 放进来的物理列名
+    cfg.taskCfg = { ...(cfg.taskCfg ?? { queue: '', urlRule: '' }), contextMap: ['K1', 'K2'], outColumns: ['K2'] }
+    await flushPromises()
+
+    expect(flow.configs['translate-1'].execCfg!.inputFields).toEqual(['sku_id', 'sku_name'])
+    expect(flow.configs['translate-1'].execCfg!.outputFields).toEqual(['sku_name'])
+  })
+})
+
+// 2026-09-18：文章打标签与翻译助手同待遇——并入规则式表/字段绑定，绑定内容写 execCfg。
+describe('TableTab · 文章打标签（与规则处理同一套绑定）', () => {
+  function mountOnTagNode() {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['tag-1'] = cloneConfig(NODE_CONFIGS['article-tag'])
+    flow.select('tag-1')
+    flow.setActiveTab('table')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    return { flow, wrapper }
+  }
+
+  it('展示规则式表/字段绑定，不出现非规则分支的内容', async () => {
+    mockAssets()
+    const { wrapper } = mountOnTagNode()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('入参字段')
+    expect(wrapper.text()).toContain('出参字段')
+    expect(wrapper.text()).not.toContain('结构化配置')
+    expect(wrapper.text()).not.toContain('正文规则')
+    expect(wrapper.text()).not.toContain('去重方式')
+  })
+
+  it('绑定结果写进 execCfg（含节点级输入/输出表），ruleCfg 保持不出现', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnTagNode()
+    await flushPromises()
+
+    wrapper.findComponent(RuleTableFieldBinder).vm.$emit('update:modelValue', {
+      inputTableId: INPUT_TABLE.tableId,
+      inputTable: INPUT_TABLE.tableName,
+      inputFields: ['sku_id'],
+      outputTableId: INPUT_TABLE.tableId,
+      outputTable: INPUT_TABLE.tableName,
+      outputFields: ['sku_name'],
+    } as Partial<RuleOrchestration>)
+    await flushPromises()
+
+    const cfg = flow.configs['tag-1']
+    expect(cfg.ruleCfg).toBeUndefined()
+    expect(cfg.execCfg?.inputTableId).toBe(INPUT_TABLE.tableId)
+    expect(cfg.execCfg?.inputFields).toEqual(['sku_id'])
+    expect(cfg.execCfg?.outputFields).toEqual(['sku_name'])
+    expect(cfg.inputTable).toBe(INPUT_TABLE.tableId)
+    expect(cfg.outputTable).toBe(INPUT_TABLE.tableId)
+  })
+
+  it('回读时按 context/outContext 还原入出参到 execCfg', async () => {
+    mockAssets()
+    const { flow } = mountOnTagNode()
+    const cfg = flow.configs['tag-1']
+    cfg.execCfg = {
+      ...(cfg.execCfg ?? { mode: 'new' as const, format: 'xml' as const, describe: '', script: '', scriptPath: '', enabled: true }),
+      inputTableId: INPUT_TABLE.tableId,
+      outputTableId: INPUT_TABLE.tableId,
+      inputFields: [],
+      outputFields: [],
+    }
+    cfg.taskCfg = { ...(cfg.taskCfg ?? { queue: '', urlRule: '' }), contextMap: ['K1', 'K2'], outColumns: ['K2'] }
+    await flushPromises()
+
+    expect(flow.configs['tag-1'].execCfg!.inputFields).toEqual(['sku_id', 'sku_name'])
+    expect(flow.configs['tag-1'].execCfg!.outputFields).toEqual(['sku_name'])
+  })
+})
+
+// 2026-09-18：文章生成摘要 / 音频提取文字 / 视频提取音频与翻译助手同待遇——
+// 并入规则式表/字段绑定，绑定内容写 execCfg 而非 ruleCfg。
+describe('TableTab · 摘要/音视频处理节点（与规则处理同一套绑定）', () => {
+  it.each([
+    ['article-summary', '文章生成摘要'],
+    ['audio-text', '音频提取文字'],
+    ['video-audio', '视频提取音频'],
+  ])('%s：展示规则式绑定，绑定结果写进 execCfg，ruleCfg 保持不出现', async (seedKey, title) => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['proc-1'] = { ...cloneConfig(NODE_CONFIGS[seedKey]), title }
+    flow.select('proc-1')
+    flow.setActiveTab('table')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('入参字段')
+    expect(wrapper.text()).toContain('出参字段')
+    expect(wrapper.text()).not.toContain('结构化配置')
+    expect(wrapper.text()).not.toContain('去重方式')
+
+    wrapper.findComponent(RuleTableFieldBinder).vm.$emit('update:modelValue', {
+      inputTableId: INPUT_TABLE.tableId,
+      inputTable: INPUT_TABLE.tableName,
+      inputFields: ['sku_id'],
+      outputTableId: INPUT_TABLE.tableId,
+      outputTable: INPUT_TABLE.tableName,
+      outputFields: ['sku_name'],
+    } as Partial<RuleOrchestration>)
+    await flushPromises()
+
+    const cfg = flow.configs['proc-1']
+    expect(cfg.ruleCfg).toBeUndefined()
+    expect(cfg.execCfg?.inputTableId).toBe(INPUT_TABLE.tableId)
+    expect(cfg.execCfg?.inputFields).toEqual(['sku_id'])
+    expect(cfg.execCfg?.outputFields).toEqual(['sku_name'])
+    expect(cfg.inputTable).toBe(INPUT_TABLE.tableId)
+    expect(cfg.outputTable).toBe(INPUT_TABLE.tableId)
+    wrapper.unmount()
   })
 })

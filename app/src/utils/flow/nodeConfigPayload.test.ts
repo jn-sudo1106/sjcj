@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyConfigToNode, buildConfigPayload } from './nodeConfigPayload'
-import { NODE_CONFIGS, cloneConfig, makeDefaultExecConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { NODE_CONFIGS, cloneConfig, makeDefaultExecConfig, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import type { Config } from '@/api'
 
 function node() {
@@ -193,6 +193,34 @@ describe('configType（节点类型 = 旧「抓取类型」，0828 W0-7）', () 
     const cfg = cloneConfig(NODE_CONFIGS['rule'])
     cfg.template = 'data-validation'
     expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(620)
+  })
+
+  // 2026-09-18 防污染：规则式节点在 configDetail 回填前会被短暂画成规则节点（无 template、
+  // 带 ruleCfg），这个窗口里点保存不能把 600 覆盖到配置的真实类型上（实测配置 1401011
+  // 被写成 600，回读再也认不出是文章打标签）。base 里是无脚本节点类型号时保留 base。
+  it.each([
+    ['文章打标签', 730],
+    ['翻译助手', 800],
+    ['文章生成摘要', 720],
+    ['音频提取文字', 710],
+    ['视频提取音频', 700],
+  ])('未识别回读节点 + base=%i：保留 base，不写 600（%s）', (name, baseType) => {
+    const cfg = cloneConfig(NODE_CONFIGS['rule'])
+    cfg.title = name
+    delete (cfg as Partial<NodeConfig>).template
+    expect(buildConfigPayload(cfg, { configType: baseType }).configType).toBe(baseType)
+  })
+
+  it('未识别回读节点 + base 是普通类型号（如 90）：照旧写 600 修复类型', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['rule'])
+    delete (cfg as Partial<NodeConfig>).template
+    expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(600)
+  })
+
+  it('未识别回读节点 + base 为空：照旧写 600（历史规则配置补类型）', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['rule'])
+    delete (cfg as Partial<NodeConfig>).template
+    expect(buildConfigPayload(cfg, {}).configType).toBe(600)
   })
 
   // 2026-09-17：字典里其余类型各自成节点，落库编号跟随后端表。
