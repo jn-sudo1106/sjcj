@@ -3,15 +3,16 @@ import { ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import SourceTab from './SourceTab.vue'
 import ConfigTab from './ConfigTab.vue'
-import EntryTab from './EntryTab.vue'
 
 // 旧「配置列表」入口保持隐藏。最新口径把流程与节点配置拆开管理，旧 configPaged 只覆盖
 // 节点配置的一部分，不能直接作为新的配置中心。ConfigTab 组件暂不删，留作旧数据只读排查。
+//
+// 「表 ID 列表」2026-09-19 迁到数据中心（/data?tab=entry）——表结构属于"数据"那条线，
+// 这里管的是网站与源。**tab 条先保留**（虽然只剩一项）。
 const TABS: { key: string; label: string }[] = [
   { key: 'source', label: '网站列表' },
-  { key: 'entry', label: '表 ID 列表' },
 ]
-const comps: Record<string, Component> = { source: SourceTab, config: ConfigTab, entry: EntryTab }
+const comps: Record<string, Component> = { source: SourceTab, config: ConfigTab }
 const route = useRoute()
 const router = useRouter()
 const validTabs = new Set(TABS.map((tab) => tab.key))
@@ -28,6 +29,11 @@ watch(() => route.query.tab, (tab) => {
   }
   if (tab === 'param') {
     void router.replace('/rules?tab=param')
+    return
+  }
+  // 表 ID 列表 2026-09-19 迁到数据中心；旧书签/旧链接照样能用
+  if (tab === 'entry') {
+    void router.replace('/data?tab=entry')
     return
   }
   active.value = normalizeTab(tab)

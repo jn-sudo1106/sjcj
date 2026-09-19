@@ -26,7 +26,7 @@ import siteCardGrid from './CollectAssets/SiteCardGrid.vue?raw'
 import appModuleHead from '../layouts/AppModuleHead.vue?raw'
 import runtimeStore from '../stores/runtime.ts?raw'
 import ruleAssetsIndex from './RuleAssets/index.vue?raw'
-import entryEditorDrawer from './CollectAssets/EntryEditorDrawer.vue?raw'
+import entryEditorDrawer from './DataView/EntryEditorDrawer.vue?raw'
 
 // NodeInspector 拆 tab 子组件后（P1-1 Step 4），各 tab 的文案分布在子文件里；
 // 这个常量把主壳 + 各 tab 拼起来，用于「整块 inspector 不该出现某字符串」的负向断言。

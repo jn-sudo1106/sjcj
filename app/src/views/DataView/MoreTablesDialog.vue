@@ -4,7 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, Refresh } from '@element-plus/icons-vue'
 import { entryApi, type DataTableMeta, type EntryType } from '../../api'
 import { useAuthStore } from '../../stores/auth'
-import EntryEditorDrawer from '../CollectAssets/EntryEditorDrawer.vue'
+import EntryEditorDrawer from './EntryEditorDrawer.vue'
 import TableDetailDialog from './TableDetailDialog.vue'
 import { withoutComposition } from '@/utils/enterKey'
 
