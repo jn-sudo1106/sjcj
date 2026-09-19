@@ -126,6 +126,9 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   // 纯新增，与 snatchSave / copyAll 同性质；flag=1 会多出一套配置，不改原源。
   'source/copySource',
   'site/update',
+  // 0918-01：清空网站标签只能走这条（site/update 传空串清不掉）。覆盖式写标签，
+  // 不删网站、不动别的字段，与 site/update 同性质。
+  'site/batchChangeTags',
   // 2026-08-28 拍板放开：源重命名（source/updateSource，team_six bfbbcf7 已切真实请求，
   // 但漏加本白名单，导致打生产时被写保护拦下）。
   'source/updateSource',

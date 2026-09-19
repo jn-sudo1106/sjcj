@@ -48,16 +48,8 @@ async function loadTagOptions() {
   }
 }
 
-/**
- * 能不能删这个标签。
- *
- * **只剩一个时不能删**：后端把空串当作"未提供"跳过（2026-09-16 实测，旧平台删最后一个
- * 标签同样失败、界面却提示成功），清到零个做不到。与其让人删完保存、刷新发现还在，
- * 不如当场禁掉并说明。后端支持空串清空后，去掉这个判断即可。
- */
-// 新建态不受这个限制：标签还没落过库，删的只是本地草稿。
-const canRemoveTag = computed(() => isCreate.value || tags.value.length > 1)
-const removeHint = computed(() => (canRemoveTag.value ? '移除该标签' : '后端暂不支持清空全部标签，至少保留一个'))
+// 标签可以删光了（0918-01）。此前"只剩一个时禁删"是因为 site/update 传空串清不掉，
+// 现在清空改走 site/batchChangeTags（见 api/index.ts 的 siteSetTags），限制随之拿掉。
 
 function addTag(raw: string) {
   const name = raw.trim().replace(/^#+/, '').trim()
@@ -66,7 +58,6 @@ function addTag(raw: string) {
   tagInput.value = ''
 }
 function removeTag(name: string) {
-  if (!canRemoveTag.value) return
   tags.value = tags.value.filter((t) => t !== name)
 }
 
@@ -322,8 +313,7 @@ defineExpose({ openEditor, openCreator })
             {{ t }}
             <i
               class="ca-site-tag-x"
-              :class="{ disabled: !canRemoveTag }"
-              :title="removeHint"
+              title="移除该标签"
               data-testid="site-tag-remove"
               @click="removeTag(t)"
             >×</i>
@@ -363,8 +353,6 @@ defineExpose({ openEditor, openCreator })
 }
 .ca-site-tag-x { font-style: normal; cursor: pointer; color: var(--rc-faint); padding: 0 3px; border-radius: 50%; }
 .ca-site-tag-x:hover { color: var(--rc-error); background: var(--rc-error-bg, #fee2e2); }
-.ca-site-tag-x.disabled { cursor: not-allowed; opacity: 0.35; }
-.ca-site-tag-x.disabled:hover { color: var(--rc-faint); background: transparent; }
 .ca-site-tag-input { width: 160px; }
 .ca-site-form :deep(.el-input__wrapper),
 .ca-site-form :deep(.el-select__wrapper) { min-height: 34px; border-radius: 6px; box-shadow: 0 0 0 1px var(--rc-border) inset; }

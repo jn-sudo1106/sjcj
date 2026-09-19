@@ -62,7 +62,7 @@ describe('SiteEditorDialog 网站标签', () => {
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ siteId: '1', tags: ['测试', '服务'] }))
   })
 
-  it('能删掉多余标签（剩一个以上时）', async () => {
+  it('能删掉多余标签', async () => {
     vi.spyOn(siteApi, 'siteTags').mockResolvedValue([])
     const update = vi.spyOn(siteApi, 'siteUpdate').mockResolvedValue({ ok: true })
     const wrapper = mountDlg(site(['测试', '服务']))
@@ -75,20 +75,26 @@ describe('SiteEditorDialog 网站标签', () => {
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ tags: ['测试'] }))
   })
 
-  // 后端把空串当作"未提供"跳过（2026-09-16 实测，旧平台删最后一个标签同样失败但界面提示成功）。
-  // 与其让人删完保存、刷新发现还在，不如当场禁掉。后端支持清空后删掉这条即可。
-  it('只剩一个标签时不许删，并说明原因', async () => {
+  // 0918-01 **推翻**了原先的「只剩一个标签时不许删」：那条限制是因为 site/update 传空串
+  // 清不掉（后端把空串当"未提供"跳过，回执还报成功）。现在清空改走 site/batchChangeTags，
+  // 限制拿掉，标签可以删光。
+  it('最后一个标签也能删，保存时提交空数组', async () => {
     vi.spyOn(siteApi, 'siteTags').mockResolvedValue([])
+    const update = vi.spyOn(siteApi, 'siteUpdate').mockResolvedValue({ ok: true })
     const wrapper = mountDlg(site(['测试']))
     await flushPromises()
 
     const x = wrapper.get('[data-testid="site-tag-remove"]')
-    expect(x.classes()).toContain('disabled')
-    expect(x.attributes('title')).toContain('至少保留一个')
+    expect(x.classes()).not.toContain('disabled')
 
     await x.trigger('click')
     await flushPromises()
-    expect(wrapper.get('[data-testid="site-tag-editor"]').text()).toContain('测试')
+    expect(wrapper.get('[data-testid="site-tag-editor"]').text()).not.toContain('测试')
+
+    await wrapper.findAll('button').find((b) => b.text().includes('保存'))!.trigger('click')
+    await flushPromises()
+    // 空数组才是"清空"的信号：siteUpdate 内部据此改走 batchChangeTags（见 siteHttp.test.ts）
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ tags: [] }))
   })
 
   it('新增标签：去掉误输入的 # 前缀，重复的不再添加', async () => {

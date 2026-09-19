@@ -274,4 +274,62 @@ describe('网站读取 HTTP 契约', () => {
 
     await expect(siteApi.sitePaged()).rejects.toThrow('无网站读取权限')
   })
+
+  // 0918-01：清空标签必须绕开 site/update——它把空串当"未提供"跳过，回执还报"更新成功"。
+  describe('网站标签的写入（0918-01）', () => {
+    it('非空标签一次 site/update 存完，不额外发 batchChangeTags', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '更新成功' }))
+      const { siteApi } = await import('./index')
+
+      const ack = await siteApi.siteUpdate({ siteId: '10', name: '站十', dirId: '', tags: ['甲', '乙'] })
+
+      expect(ack.ok).toBe(true)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/site/update')
+      // site/update 没指定 paramsIn，按默认 POST→body 走（与 sitePaged 的 query 不同）
+      expect(JSON.parse(String(init.body)))
+        .toMatchObject({ siteId: 10, siteName: '站十', tags: '甲;乙' })
+    })
+
+    it('空数组改走 batchChangeTags，且 site/update 不再带 tags 参数', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '操作成功，影响 1 个网站' }))
+      const { siteApi } = await import('./index')
+
+      const ack = await siteApi.siteUpdate({ siteId: '10', name: '站十', dirId: '', tags: [] })
+
+      expect(ack.ok).toBe(true)
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      // 第一发仍是 site/update（名称/分类照存），但**不带 tags**——带了也是白带，后端会跳过
+      const [updateUrl, updateInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(updateUrl).toContain('/api/v1/site/update')
+      expect(JSON.parse(String(updateInit.body))).not.toHaveProperty('tags')
+      // 第二发才是真正清标签的那一次
+      const [tagUrl, tagInit] = fetchMock.mock.calls[1] as [string, RequestInit]
+      expect(tagUrl).toContain('/api/v1/site/batchChangeTags')
+      expect(tagInit.method).toBe('POST')
+      // 与旧平台 site.js 的 `data: {ids, tags}` 一致：参数在 body，不是 query
+      expect(JSON.parse(String(tagInit.body))).toEqual({ ids: [10], tags: '' })
+    })
+
+    it('site/update 失败时不补发清空请求，免得在失败的保存上留半个副作用', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ code: '-1', msg: '网站不存在' }))
+      const { siteApi } = await import('./index')
+
+      await expect(siteApi.siteUpdate({ siteId: '10', name: '站十', dirId: '', tags: [] }))
+        .rejects.toThrow('网站不存在')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('tags 为 undefined 表示本次不动标签：既不带参数也不补发', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '更新成功' }))
+      const { siteApi } = await import('./index')
+
+      await siteApi.siteUpdate({ siteId: '10', name: '站十', dirId: '', tags: undefined })
+
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(JSON.parse(String(init.body))).not.toHaveProperty('tags')
+    })
+  })
 })

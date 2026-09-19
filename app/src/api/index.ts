@@ -1278,10 +1278,39 @@ export const siteApi = {
         // 所以这里自己 join，不复用那个函数。
         //
         // `undefined` = 本次不动标签（调用方没管这个字段）；后端对没传的字段不会清空。
-        // ⚠️ 空数组会拼成空串，而**空串被后端当作"未提供"跳过**（2026-09-16 实测，
-        // 旧平台删最后一个标签同样失败）——即"清到零个"做不到，UI 上要禁掉最后一个标签的删除。
-        ...(site.tags === undefined ? {} : { tags: site.tags.join(';') }),
+        // **空数组不在这里发**——空串会被后端当作"未提供"跳过（见下方 siteSetTags），
+        // 由外层改走 site/batchChangeTags。
+        ...(site.tags === undefined || site.tags.length === 0 ? {} : { tags: site.tags.join(';') }),
       },
+    })
+    const ack = ackFromApiResult(result)
+    // 清空标签得单独发一次：非空标签走上面那一路（一次请求把名称、分类、标签一起存了），
+    // 只有清空要补这一次。site/update 本身成功了才补，不然会在一次失败的保存上留下半个副作用。
+    if (ack.ok && site.tags?.length === 0) return siteApi.siteSetTags([site.siteId], [])
+    return ack
+  },
+  /**
+   * 覆盖式写网站标签（0918-01）。**清空标签的唯一办法。**
+   *
+   * `site/update` 传空串清不掉：后端按"非空才写"处理，空串被当作"未提供"跳过，
+   * 回执照样报"更新成功"但值纹丝不动。2026-09-18 在站 10 原样复现（打 `甲;乙` → 删到 `甲` →
+   * 传空串，回查还是 `甲`）。旧平台新版代码里写着「编辑时显式传空串以清空」，那只是前端意图，
+   * 后端那条路径没改——别再试 site/update 了。
+   *
+   * 这条能真清掉：同一次实测传空串后回查 `tags: null`，回执 `{affectedSites: 1}`。
+   *
+   * 语义（都是实测的）：
+   *   - **覆盖式**，不是追加：打 `丙;丁` 后再打 `戊`，结果只剩 `戊`；
+   *   - 中文分号后端会归一化：传 `己；庚` 存成 `己;庚`（所以前端不用自己转）；
+   *   - 收 `ids` 数组，天然支持批量——网站列表要做批量打标签时直接用，不用另接接口。
+   */
+  siteSetTags: async (siteIds: string[], tags: string[]): Promise<Ack> => {
+    const ids = siteIds.filter(Boolean).map(Number)
+    if (!ids.length) return { ok: false, message: '缺少网站' }
+    const result = await request<unknown>('site/batchChangeTags', { ids, tags }, {
+      method: 'POST',
+      httpEndpoint: 'site/batchChangeTags',
+      httpParams: { ids, tags: tags.join(';') },
     })
     return ackFromApiResult(result)
   },

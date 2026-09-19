@@ -441,6 +441,11 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 0915-14：后端 2026-09-16 交付的网站标签两件套——本条给候选清单，筛选走 sitePaged 的 tags 入参。
   // 返回的是**拆分去重后的数组**（如 ["服务","测试"]），不是各站原始的分号串。
   { path: 'site/siteTags', desc: '全局已用网站标签（候选清单）', live: true },
+  // 0918-01：**清空网站标签的唯一办法**。site/update 传空串清不掉（后端按"非空才写"跳过，
+  // 回执还报"更新成功"），2026-09-18 在站 10 原样复现过；这条传空串能真清掉（回查 tags: null）。
+  // 语义实测：**覆盖式**（打 `丙;丁` 后再打 `戊`，结果只剩 `戊`，不是追加）；
+  // 中文分号后端会归一化（传 `己；庚` 存成 `己;庚`）；收 ids 数组，天然支持批量。
+  { path: 'site/batchChangeTags', desc: '批量改网站标签（覆盖式，传空串=清空）', danger: true, live: true },
   { path: 'site/sourcesOfSite', desc: '网站下的源列表', impl: true },
   { path: 'site/addSource', desc: '网站下新增源（默认继承统一流程）', impl: true },
   { path: 'site/cloneSource', desc: '复制源流程、配置和表结构（不复制数据与运行实例）', danger: true, impl: true },
