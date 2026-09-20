@@ -659,7 +659,11 @@ async function resetAndLoad() {
     }
     try {
       meta.value = await dataApi.tableMeta(tid)
-    } catch {
+    } catch (e) {
+      // 别静默吞掉：2026-09-20 排查「表结构暂不可用」时，这里什么痕迹都没留，
+      // 只能靠网络面板反推。真实原因往往是 20s 超时 abort（signal is aborted without
+      // reason），而不是接口本身坏了。
+      console.warn(`[SiteDataView] 表结构加载失败（表 ${tid}），已降级为按数据推断列：`, e)
       meta.value = null
     }
     if (id !== requestId) return

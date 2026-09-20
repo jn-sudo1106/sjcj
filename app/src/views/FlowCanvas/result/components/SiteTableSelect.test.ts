@@ -11,9 +11,6 @@ function result(overrides: Partial<SiteTablesResult> = {}): SiteTablesResult {
       { tableId: 't1', tableName: 'T1', name: '正文表' },
       { tableId: 't2', tableName: 'T2' },
     ],
-    sourceCount: 3,
-    overThreshold: false,
-    failedSourceIds: [],
     ...overrides,
   }
 }

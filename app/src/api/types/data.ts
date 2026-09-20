@@ -95,12 +95,6 @@ export interface SiteTableOption {
 
 export interface SiteTablesResult {
   tables: SiteTableOption[]
-  /** 当前网站参与表目录查询的源数量。 */
-  sourceCount: number
-  /** 保留兼容字段；多源目录请求不拆分为逐源任务，因此固定为 false。 */
-  overThreshold: boolean
-  /** 保留兼容字段；多源目录请求只有一个整体结果，因此固定为空。 */
-  failedSourceIds: string[]
 }
 
 export interface DataRow {

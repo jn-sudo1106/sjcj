@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-// 网站表目录：旧平台的 queryEntryTypesGroup 返回可选表目录，不按网站源重复请求，
-// 也不把同一张表重复计为源引用。网站范围在选表后通过真实数据查询判断。
+// 网站表选择的表目录。2026-09-20 起**只发一个无参请求**：实测 `config/queryEntryTypesGroup`
+// 的 sourceId 只决定分组，对 list1+list2+list3 的并集毫无影响，所以按源分片查纯属白跑
+// （详见 api/index.ts 里 loadSiteTables 的说明）。本文件相应改为断言"不碰源列表、只发一次"。
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { siteApi, dataApi } from './index'
-import type { EntryTypeGroup, Source } from './types'
+import type { EntryTypeGroup } from './types'
+
 function group(entries: { tableId: string; tableName: string; name?: string }[]): EntryTypeGroup {
   return {
     list1: entries.map((e) => ({ ...e, fields: [] })),
@@ -11,87 +13,68 @@ function group(entries: { tableId: string; tableName: string; name?: string }[])
     list3: [],
   }
 }
-function sources(...sourceIds: string[]): Source[] {
-  return sourceIds.map((sourceId) => ({ sourceId, name: `源-${sourceId}`, url: '', configId: '', mainTable: '', owner: '', state: 'C' }))
-}
-function mockSiteSources(list: Source[]) {
-  vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue(list.slice(0, 120))
-  vi.spyOn(siteApi, 'siteSources').mockResolvedValue(list)
-}
 
 describe('siteApi.siteTables', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('加载全局表目录并去重，不伪造源引用数', async () => {
+  it('加载全局表目录并按 tableId 去重', async () => {
     vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue(group([
       { tableId: 't1', tableName: 'T1' },
       { tableId: 't1', tableName: 'T1' },
       { tableId: 't3', tableName: 'T3', name: '表三' },
     ]))
-    mockSiteSources(sources('s1', 's2'))
 
     const result = await siteApi.siteTables('site-x', { force: true })
 
-    expect(result.overThreshold).toBe(false)
-    expect(result.sourceCount).toBe(2)
-    expect(result.failedSourceIds).toEqual([])
     const byId = Object.fromEntries(result.tables.map((t) => [t.tableId, t]))
     expect(result.tables).toHaveLength(2)
     expect(byId.t1).toMatchObject({ tableName: 'T1' })
     expect(byId.t3).toMatchObject({ tableName: 'T3', name: '表三' })
   })
 
-  it('目录请求失败时整体失败，不伪造部分源失败提示', async () => {
-    mockSiteSources(sources('s1'))
+  it('三个分组一起合并——并集才是完整目录，单看 list1 会漏', async () => {
+    vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue({
+      list1: [{ tableId: 't1', tableName: 'T1', fields: [] }],
+      list2: [{ tableId: 't2', tableName: 'T2', fields: [] }],
+      list3: [{ tableId: 't3', tableName: 'T3', fields: [] }],
+    })
+
+    const result = await siteApi.siteTables('site-groups', { force: true })
+
+    expect(result.tables.map((t) => t.tableId).sort()).toEqual(['t1', 't2', 't3'])
+  })
+
+  // 这是本次改动的核心：旧实现要先拉 siteSourcePreview(120) 和 siteSources(5439 条、4s+)
+  // 去凑源 ID，再分 19 片、6 路并发打出去。那 6 路正好占满浏览器对单域名的 6 个连接，
+  // 把同期的表结构查询和逐源数据查询挤在队列里超时（20s 从入队开始算）。现在一个都不用拉。
+  it('不再为了凑源 ID 去拉源列表', async () => {
+    const preview = vi.spyOn(siteApi, 'siteSourcePreview')
+    const full = vi.spyOn(siteApi, 'siteSources')
+    vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue(group([{ tableId: 't1', tableName: 'T1' }]))
+
+    await siteApi.siteTables('site-no-sources', { force: true })
+
+    expect(preview).not.toHaveBeenCalled()
+    expect(full).not.toHaveBeenCalled()
+  })
+
+  it('只发一次请求，且不带 sourceId——带了也只影响分组，不影响并集', async () => {
+    const entryTypesGroup = vi.spyOn(dataApi, 'entryTypesGroup')
+      .mockResolvedValue(group([{ tableId: 't1', tableName: 'T1' }]))
+
+    await siteApi.siteTables('site-once', { force: true })
+
+    expect(entryTypesGroup).toHaveBeenCalledTimes(1)
+    expect(entryTypesGroup).toHaveBeenCalledWith()
+  })
+
+  it('目录请求失败时整体失败，不伪造部分成功', async () => {
     vi.spyOn(dataApi, 'entryTypesGroup').mockRejectedValue(new Error('boom'))
 
     await expect(siteApi.siteTables('site-catalog-fail', { force: true })).rejects.toThrow('boom')
   })
 
-  it('一次读取网站源列表，并将多个 sourceId 传给表目录接口', async () => {
-    mockSiteSources(sources('430016502', '430016501', '430016398'))
-    const entryTypesGroup = vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue(group([{ tableId: 't1', tableName: 'T1' }]))
-
-    const result = await siteApi.siteTables('site-huge', { force: true })
-
-    expect(result.overThreshold).toBe(false)
-    expect(result.sourceCount).toBe(3)
-    expect(entryTypesGroup).toHaveBeenCalledWith('430016502,430016501,430016398')
-  })
-
-  it('完整源列表很慢时先用 120 条预览返回表目录，后台再补齐', async () => {
-    const preview = sources('s1')
-    let resolveFull!: (value: Source[]) => void
-    vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue(preview)
-    vi.spyOn(siteApi, 'siteSources').mockReturnValue(new Promise((resolve) => { resolveFull = resolve }))
-    vi.spyOn(dataApi, 'entryTypesGroup').mockImplementation(async (ids) => group([
-      String(ids).includes('s2') ? { tableId: 't2', tableName: 'T2' } : { tableId: 't1', tableName: 'T1' },
-    ]))
-    const snapshots: string[][] = []
-
-    const result = await siteApi.siteTables('site-progressive', {
-      force: true,
-      onProgress: (tables) => snapshots.push(tables.map((table) => table.tableId)),
-    })
-
-    expect(result.tables.map((table) => table.tableId)).toEqual(['t1'])
-    resolveFull(sources('s1', 's2'))
-    await vi.waitFor(() => expect(snapshots.at(-1)).toEqual(['t1', 't2']))
-  })
-
-  it('网站没有源时不回退查询全局表目录', async () => {
-    mockSiteSources([])
-    const entryTypesGroup = vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue(group([{ tableId: 't1', tableName: 'T1' }]))
-
-    const result = await siteApi.siteTables('site-empty', { force: true })
-
-    expect(result.overThreshold).toBe(false)
-    expect(result.tables).toHaveLength(0)
-    expect(entryTypesGroup).not.toHaveBeenCalled()
-  })
-
   it('同一 siteId 重复调用命中缓存，不重复发起查询', async () => {
-    mockSiteSources(sources('s1'))
     const entryTypesGroup = vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue(group([{ tableId: 't1', tableName: 'T1' }]))
 
     await siteApi.siteTables('site-cache', { force: true })
@@ -102,7 +85,6 @@ describe('siteApi.siteTables', () => {
   })
 
   it('refreshSiteTables 清缓存后下一次调用会重新查询', async () => {
-    mockSiteSources(sources('s1'))
     const entryTypesGroup = vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue(group([{ tableId: 't1', tableName: 'T1' }]))
 
     await siteApi.siteTables('site-refresh', { force: true })
@@ -112,8 +94,7 @@ describe('siteApi.siteTables', () => {
     expect(entryTypesGroup).toHaveBeenCalledTimes(2)
   })
 
-  it('onProgress 收到最终目录', async () => {
-    mockSiteSources(sources('s1'))
+  it('onProgress 仍然回调一次最终目录（调用方靠它结束 loading）', async () => {
     vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue(group([
       { tableId: 't1', tableName: 'T1' },
       { tableId: 't2', tableName: 'T2' },
@@ -127,15 +108,14 @@ describe('siteApi.siteTables', () => {
   })
 
   it('查询失败时不缓存失败结果，允许下次重新尝试', async () => {
-    mockSiteSources(sources('s1'))
     const entryTypesGroup = vi.spyOn(dataApi, 'entryTypesGroup')
-      .mockRejectedValueOnce(new Error('network down'))
-      .mockResolvedValueOnce(group([{ tableId: 't1', tableName: 'T1' }]))
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValue(group([{ tableId: 't1', tableName: 'T1' }]))
 
-    await expect(siteApi.siteTables('site-retry', { force: true })).rejects.toThrow('network down')
+    await expect(siteApi.siteTables('site-retry', { force: true })).rejects.toThrow('boom')
     const result = await siteApi.siteTables('site-retry')
 
-    expect(result.tables).toEqual([{ tableId: 't1', tableName: 'T1', name: undefined }])
+    expect(result.tables.map((t) => t.tableId)).toEqual(['t1'])
     expect(entryTypesGroup).toHaveBeenCalledTimes(2)
   })
 })

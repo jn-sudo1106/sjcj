@@ -1036,14 +1036,13 @@ export async function expandCategoryIds(ids: string[]): Promise<string[]> {
   return [...collected]
 }
 
-// 网站表选择（0812 计划 M2-1）：config/queryEntryTypesGroup 支持逗号分隔的 sourceId，
-// 一个网站只请求一次目录，避免为每个源重复请求同一份表目录。网站范围只在选表后的真实
-// 数据查询阶段通过 entryDistinctSource + siteSources（失败/空结果时回退逐源查询）判断。
 const siteTablesCache = new Map<string, Promise<SiteTablesResult>>()
 
-// 同一 siteId 的 site/sources 在建站画布里会被侧栏、数据视图、选表器等前后脚各拉一遍，
-// 每遍几千行要 8~36s。共享进行中的请求，并短暂缓存（10s）覆盖「侧栏刚拉完，切到数据视图又拉」
-// 这种紧邻场景；写后要读新数据的调用方传 { force: true } 绕过。
+// 同一 siteId 的 site/sources 在建站画布里会被侧栏、数据视图、选表器等前后脚各拉一遍。
+// 共享进行中的请求，并短暂缓存（10s）覆盖「侧栏刚拉完，切到数据视图又拉」这种紧邻场景；
+// 写后要读新数据的调用方传 { force: true } 绕过。
+// （2026-09-18 实测：site/sources 其实支持分页，6497 个源 limit=20 只要 154ms、全量 4333ms，
+//  这里仍按"一次取全"用，因为调用方要的就是整站源集合。）
 const siteSourcesCache = new Map<string, { at: number; promise: Promise<Source[]>; value?: Source[] }>()
 const SITE_SOURCES_TTL = 10_000
 
@@ -1058,57 +1057,50 @@ async function requestSiteSources(siteId: string, limit: number, timeoutMs?: num
   return list.map(siteSourceFromLegacy)
 }
 
+// 网站表选择的表目录（0812 计划 M2-1 起；2026-09-20 重写）。
+//
+// **一个请求就够了，不要再把源 ID 拼进 URL。**
+//
+// 2026-09-20 实测坐实：`config/queryEntryTypesGroup` 的 `sourceId` 只决定**怎么分组**
+// （哪张进 list1/list2，其余全进 list3），对 **list1+list2+list3 的并集毫无影响**——
+// 带任意源、带两个源、带别的网站的源、什么都不传，并集恒等于同一批全量表（实测 83 张）：
+//
+//     sourceId=430022383   → 1 / 2 / 80，并集 83
+//     sourceId=430002788   → 1 / 2 / 80，并集 83（还是另一个网站的源）
+//     不传                  → 0 / 0 / 83，并集 83
+//     三者并集两两相等       → true
+//
+// 而下面的合并只做 tableId 去重、根本不看分组。也就是说旧实现里那 19+ 个分片请求
+// （每个 52KB、URL 几千字符）**从第二个开始就 100% 是白跑的**，连带为了凑源 ID 而拉的
+// `siteSourcePreview(120)` 和 `siteSources(5439 条，4s+)` 也都是白拉的。
+//
+// 这不只是浪费。那 6 路并发正好占满浏览器对单域名的 6 个连接，把同期的
+// `entry/queryEntryType`（表结构）和 `data/rowQueryPaged`（逐源查数据）挤在队列里，
+// 而 client.ts 的 20s 超时是**从入队开始算**的——请求还没发出去就被判超时 abort。
+// 生产实测的两个症状都是这么来的：「表结构暂不可用，已根据当前数据生成列」、
+// 「N 个源本次查询失败：signal is aborted without reason」（那两个源单独查只要 164ms，
+// 数据才 29 条，一点都不慢，纯粹是没抢到连接）。
+//
+// ⚠️ 如果哪天后端真的按 sourceId 过滤了表目录（现在没有），这里要改回按源查——
+// 判断方法就是上面那组对照：不传 sourceId 的并集若小于带 sourceId 的并集，就说明变了。
+//
+// `siteId` 现在只当缓存键用，后端并不按网站过滤表目录。
 async function loadSiteTables(
   siteId: string,
   onProgress?: (tables: SiteTableOption[]) => void,
 ): Promise<SiteTablesResult> {
+  void siteId
+  const group = await dataApi.entryTypesGroup()
   const tableMap = new Map<string, SiteTableOption>()
-  // 表选择首屏只需要尽快拿到常用表，不应等待单站几千条完整源列表。先用与左侧首屏同量的
-  // 120 条源构建可用目录；完整源列表到达后在后台补查其余源，并通过 onProgress 增量更新。
-  const preview = await siteApi.siteSourcePreview(siteId, 120)
-  const sourceIds = preview.map((source) => source.sourceId.trim()).filter(Boolean)
-  if (!sourceIds.length) {
-    onProgress?.([])
-    return { tables: [], sourceCount: 0, overThreshold: false, failedSourceIds: [] }
-  }
-  // queryEntryTypesGroup 把 sourceId 逗号串拼进 GET URL：源多的网站（实测 6496 个 → URL ~78KB）
-  // 会被网关以 431/414 拒掉。分片查询、按 tableId 去重合并（这个接口本来就返回全站表目录的并集，
-  // 分片不影响结果）。分片按 6 路并发跑（纯读接口，无锁竞争顾虑）：6496 个源 22 片，串行要 20s+，
-  // 并发后约 4 波。
-  const ENTRY_GROUP_CHUNK = 300
-  const ENTRY_GROUP_CONCURRENCY = 6
-  const appendTables = async (ids: string[]) => {
-    const chunks: string[][] = []
-    for (let i = 0; i < ids.length; i += ENTRY_GROUP_CHUNK) chunks.push(ids.slice(i, i + ENTRY_GROUP_CHUNK))
-    for (let i = 0; i < chunks.length; i += ENTRY_GROUP_CONCURRENCY) {
-      const groups = await Promise.all(
-        chunks.slice(i, i + ENTRY_GROUP_CONCURRENCY).map((chunk) => dataApi.entryTypesGroup(chunk.join(','))),
-      )
-      for (const group of groups) {
-        for (const entry of [...group.list1, ...group.list2, ...group.list3]) {
-          if (!tableMap.has(entry.tableId)) {
-            tableMap.set(entry.tableId, { tableId: entry.tableId, tableName: entry.tableName, name: entry.name })
-          }
-        }
-      }
-      onProgress?.([...tableMap.values()])
+  for (const entry of [...group.list1, ...group.list2, ...group.list3]) {
+    if (!tableMap.has(entry.tableId)) {
+      tableMap.set(entry.tableId, { tableId: entry.tableId, tableName: entry.tableName, name: entry.name })
     }
   }
-  await appendTables(sourceIds)
-  const quickResult: SiteTablesResult = {
-    tables: [...tableMap.values()], sourceCount: sourceIds.length, overThreshold: false, failedSourceIds: [],
-  }
-  // 不 await：首批目录一到，选择器立即结束 loading。完整目录在同一组件生命周期内渐进补齐。
-  void siteApi.siteSources(siteId).then(async (sources) => {
-    const previewIds = new Set(sourceIds)
-    const remainingIds = sources.map((source) => source.sourceId.trim()).filter((id) => id && !previewIds.has(id))
-    if (remainingIds.length) await appendTables(remainingIds)
-    quickResult.tables = [...tableMap.values()]
-    quickResult.sourceCount = sources.length
-  }).catch(() => {
-    // 首批目录已经可用；后台补全失败不把选择器重新打回错误态。
-  })
-  return quickResult
+  const tables = [...tableMap.values()]
+  // 一发就是全量，没有"渐进补齐"这回事了；仍然回调一次，免得调用方等不到首批。
+  onProgress?.(tables)
+  return { tables }
 }
 
 // 网站—源父子模型（0707 优化·Phase2）：网站=统一流程模板+批量工具（不运行），源=运行实体
