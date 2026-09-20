@@ -11,7 +11,7 @@ import NodeInspector from '../NodeInspector.vue'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import { useFlowStore } from '@/stores/flow'
 import { DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT, NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { configApi, entryApi, paramApi, ruleApi, ckSourceApi } from '@/api'
+import { configApi, entryApi, paramApi, ruleApi, ckSourceApi, sourceApi } from '@/api'
 import type { EntryType } from '@/api'
 import { useSourceStore } from '@/stores/source'
 
@@ -987,6 +987,96 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       )
       await flushPromises()
       expect(wrapper.get('[data-testid="translate-file-error"]').text()).toContain('只支持文本文件')
+    })
+
+    // ---- 2026-09-20：编排配置保存时把两个语言下拉写进 updateConfig 的 code_rule ----
+    // 改语言即写回节点结构化配置（置脏 → 底部「保存」可点），保存时随 buildConfigPayload 落 code_rule。
+
+    /** 挂在一个已有 configId 的翻译助手节点上，准备走 updateConfig 保存路径 */
+    function mountOnSavedTranslateNode(structuredConfig?: string) {
+      mockAssets()
+      vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [] as never })
+      vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({})
+      vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: '操作成功' })
+      setActivePinia(createPinia())
+      const flow = useFlowStore()
+      flow.configs['translate-1'] = {
+        ...cloneConfig(NODE_CONFIGS['translate']),
+        configId: '1401013',
+        configName: '翻译助手',
+        ...(structuredConfig !== undefined ? { structuredConfig } : {}),
+      }
+      flow.select('translate-1')
+      flow.setActiveTab('orchestration')
+      const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+      return { flow, wrapper }
+    }
+
+    it('改语言后点保存：updateConfig 的 code_rule 是 {"from":"zh","to":"en"}', async () => {
+      const { wrapper } = mountOnSavedTranslateNode()
+      await flushPromises()
+
+      langSelect(wrapper, 'translate-source').vm.$emit('update:modelValue', '中文简体')
+      langSelect(wrapper, 'translate-source').vm.$emit('change', '中文简体')
+      langSelect(wrapper, 'translate-target').vm.$emit('update:modelValue', '英语')
+      langSelect(wrapper, 'translate-target').vm.$emit('change', '英语')
+      await flushPromises()
+
+      // 改语言即置脏，保存按钮可点
+      const saveBtn = wrapper.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存')!
+      expect(saveBtn.attributes('disabled')).toBeUndefined()
+      await saveBtn.trigger('click')
+      await flushPromises()
+      await flushPromises()
+
+      expect(configApi.updateConfig).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(configApi.updateConfig).mock.calls[0][0]).toMatchObject({
+        configId: '1401013',
+        codeRule: '{"from":"zh","to":"en"}',
+      })
+      wrapper.unmount()
+    })
+
+    it('已保存的语言回填下拉：code_rule 是 {"from":"jp","to":"kor"} → 日语 / 韩语', async () => {
+      const { wrapper } = mountOnSavedTranslateNode('{"from":"jp","to":"kor"}')
+      await flushPromises()
+
+      expect(langSelect(wrapper, 'translate-source').props('modelValue')).toBe('日语')
+      expect(langSelect(wrapper, 'translate-target').props('modelValue')).toBe('韩语')
+      wrapper.unmount()
+    })
+
+    it('互换源/目标语言后写回的结构化配置同步互换（en ⇄ jp）', async () => {
+      const { flow, wrapper } = mountOnSavedTranslateNode()
+      await flushPromises()
+
+      langSelect(wrapper, 'translate-source').vm.$emit('update:modelValue', '日语')
+      langSelect(wrapper, 'translate-source').vm.$emit('change', '日语')
+      langSelect(wrapper, 'translate-target').vm.$emit('update:modelValue', '英语')
+      langSelect(wrapper, 'translate-target').vm.$emit('change', '英语')
+      await flushPromises()
+      expect(flow.configs['translate-1'].structuredConfig).toBe('{"from":"jp","to":"en"}')
+
+      await wrapper.get('[data-testid="translate-swap"]').trigger('click')
+      await flushPromises()
+      expect(flow.configs['translate-1'].structuredConfig).toBe('{"from":"en","to":"jp"}')
+      expect(flow.dirtyConfigNodes).toContain('translate-1')
+      wrapper.unmount()
+    })
+
+    it('仅改语言也会把节点置脏（此前下拉是纯本地状态，保存按钮一直是灰的）', async () => {
+      const { flow, wrapper } = mountOnSavedTranslateNode()
+      await flushPromises()
+
+      expect(flow.dirtyConfigNodes).not.toContain('translate-1')
+      langSelect(wrapper, 'translate-target').vm.$emit('update:modelValue', '法语')
+      langSelect(wrapper, 'translate-target').vm.$emit('change', '法语')
+      await flushPromises()
+
+      expect(flow.configs['translate-1'].structuredConfig).toBe('{"from":"auto","to":"fra"}')
+      expect(flow.dirtyConfigNodes).toContain('translate-1')
+      expect(wrapper.find('.rc-insp-foot .foot-note').text()).toContain('未保存修改')
+      wrapper.unmount()
     })
   })
 

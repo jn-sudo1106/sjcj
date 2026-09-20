@@ -331,3 +331,22 @@ describe('prompt（2026-09-18：拼接后的系统提示词随配置保存落 cs
     expect(buildConfigPayload(cfg, { prompt: 'base 原值' }).prompt).toBe('base 原值')
   })
 })
+
+describe('codeRule（2026-09-20：翻译助手保存时把编排 Tab 的源/目标语言写进 code_rule）', () => {
+  it('翻译助手节点默认带 {"from":"auto","to":"en"}（种子初始值）', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['translate'])
+    expect(buildConfigPayload(cfg).codeRule).toBe('{"from":"auto","to":"en"}')
+  })
+
+  it('编排 Tab 改过语言后按节点上的结构化配置写 code_rule', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['translate'])
+    cfg.structuredConfig = '{"from":"zh","to":"en"}'
+    expect(buildConfigPayload(cfg).codeRule).toBe('{"from":"zh","to":"en"}')
+  })
+
+  it('非翻译助手节点不受影响：结构化配置照旧按节点值写', () => {
+    const cfg = node()
+    cfg.collectCfg!.structuredConfig = '{"globals":["列ID"]}'
+    expect(buildConfigPayload(cfg).codeRule).toBe('{"globals":["列ID"]}')
+  })
+})
