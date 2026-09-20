@@ -1143,7 +1143,39 @@ async function loadModels(providerCode: string, preferredModelCode?: string) {
     modelLoading.value = false
   }
 }
+/**
+ * 打标签 / 摘要节点保存时把模型选择写进核心参数（{"providerCode":"...","model":"..."}，
+ * 落 cs_config.core_param，见 nodeConfigPayload.modelCodeRuleFor）。这里做反向：从已保存的
+ * 核心参数还原模型选择，解析不出 / 字段不齐返回 null。
+ */
+function modelPairFromStored(stored: unknown): { providerCode: string; model: string } | null {
+  if (typeof stored !== 'string') return null
+  const text = stored.trim()
+  if (!text.startsWith('{')) return null
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const record = parsed as Record<string, unknown>
+    const providerCode = String(record.providerCode ?? '').trim()
+    const model = String(record.model ?? '').trim()
+    if (!providerCode || !model) return null
+    return { providerCode, model }
+  } catch {
+    return null
+  }
+}
+
 async function loadProviderModelOptions() {
+  // 打标签 / 摘要节点：先把上次保存的模型选择（core_param JSON）还原到 execCfg——不然下面
+  // "匹配不到就选第一家"会在刷新后把已保存的选择顶掉，保存时又会拿默认值覆盖 core_param。
+  if (isArticleSummary.value || isArticleTag.value) {
+    const saved = modelPairFromStored(cfg.value?.coreParam)
+    if (saved
+      && !(orchCfg.value.modelProviderCode ?? '').trim()
+      && !(orchCfg.value.modelCode ?? '').trim()) {
+      patch({ modelProviderCode: saved.providerCode, modelCode: saved.model })
+    }
+  }
   providerLoading.value = true
   providerError.value = ''
   try {

@@ -1246,6 +1246,90 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       await flushPromises()
       expect(wrapper.get('[data-testid="tag-file-error"]').text()).toContain('只支持文本文件')
     })
+
+    // ---- 2026-09-20：编排配置保存时把模型供应商与模型写进 updateConfig 的 core_param ----
+
+    /** 挂在一个已有 configId 的打标签节点上，准备走 updateConfig 保存路径 */
+    function mountOnSavedTagNode(coreParam?: string) {
+      mockAssets()
+      const api = mockTagApis([TAG_TEMPLATE])
+      vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [] as never })
+      vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({})
+      vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: '操作成功' })
+      setActivePinia(createPinia())
+      const flow = useFlowStore()
+      flow.configs['tag-1'] = {
+        ...cloneConfig(NODE_CONFIGS['article-tag']),
+        configId: '1401014',
+        configName: '文章打标签',
+        ...(coreParam !== undefined ? { coreParam } : {}),
+      }
+      flow.select('tag-1')
+      flow.setActiveTab('orchestration')
+      const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+      return { flow, wrapper, ...api }
+    }
+
+    /** 按 data-testid 取 el-select（模型行里的下拉） */
+    function modelSelect(wrapper: ReturnType<typeof mount>, testid: string) {
+      const found = wrapper.findAllComponents({ name: 'ElSelect' })
+        .find((c) => c.attributes('data-testid') === testid)
+      if (!found) throw new Error(`找不到 el-select[data-testid=${testid}]`)
+      return found
+    }
+
+    it('改模型后点保存：updateConfig 的 coreParam 是 {"providerCode":"OpenAI","model":"gpt-4o-mini"}', async () => {
+      const { wrapper } = mountOnSavedTagNode()
+      await flushPromises()
+      await flushPromises()
+
+      modelSelect(wrapper, 'tag-model-provider').vm.$emit('change', 'OpenAI')
+      await flushPromises() // 换供应商会重拉该家的模型列表
+      await flushPromises()
+      modelSelect(wrapper, 'tag-model').vm.$emit('change', 'gpt-4o-mini')
+      await flushPromises()
+
+      const saveBtn = wrapper.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存')!
+      await saveBtn.trigger('click')
+      await flushPromises()
+      await flushPromises()
+
+      expect(configApi.updateConfig).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(configApi.updateConfig).mock.calls[0][0]).toMatchObject({
+        configId: '1401014',
+        coreParam: '{"providerCode":"OpenAI","model":"gpt-4o-mini"}',
+      })
+      wrapper.unmount()
+    })
+
+    it('已保存的模型回填下拉：coreParam 是 {"providerCode":"OpenAI","model":"gpt-4o-mini"}', async () => {
+      const { wrapper } = mountOnSavedTagNode('{"providerCode":"OpenAI","model":"gpt-4o-mini"}')
+      await flushPromises()
+      await flushPromises()
+
+      // 回填后不自动选第一家（DeepSeek/deepseek-chat），而是还原保存的 OpenAI/gpt-4o-mini
+      expect(modelSelect(wrapper, 'tag-model-provider').props('modelValue')).toBe('OpenAI')
+      expect(modelSelect(wrapper, 'tag-model').props('modelValue')).toBe('gpt-4o-mini')
+      wrapper.unmount()
+    })
+
+    it('回填后直接保存：coreParam 写回已保存的模型对，而不是默认第一家（DeepSeek/deepseek-chat）', async () => {
+      const { wrapper } = mountOnSavedTagNode('{"providerCode":"DeepSeek","model":"deepseek-reasoner"}')
+      await flushPromises()
+      await flushPromises()
+
+      expect(modelSelect(wrapper, 'tag-model').props('modelValue')).toBe('deepseek-reasoner')
+
+      const saveBtn = wrapper.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存')!
+      await saveBtn.trigger('click')
+      await flushPromises()
+      await flushPromises()
+
+      expect(vi.mocked(configApi.updateConfig).mock.calls[0][0]).toMatchObject({
+        coreParam: '{"providerCode":"DeepSeek","model":"deepseek-reasoner"}',
+      })
+      wrapper.unmount()
+    })
   })
 
   it('模型供应商和模型位于同一行', async () => {

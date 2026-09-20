@@ -350,3 +350,39 @@ describe('codeRule（2026-09-20：翻译助手保存时把编排 Tab 的源/目�
     expect(buildConfigPayload(cfg).codeRule).toBe('{"globals":["列ID"]}')
   })
 })
+
+describe('coreParam（2026-09-20：打标签/摘要节点保存时把模型供应商与模型写进核心参数）', () => {
+  it.each(['article-tag', 'article-summary'])('%s 节点写 {"providerCode","model"} 到 coreParam', (seedKey) => {
+    const cfg = cloneConfig(NODE_CONFIGS[seedKey])
+    cfg.execCfg = { ...makeDefaultExecConfig(), modelProviderCode: 'DeepSeek', modelCode: 'deepseek-v4-flash' }
+    expect(buildConfigPayload(cfg).coreParam).toBe('{"providerCode":"DeepSeek","model":"deepseek-v4-flash"}')
+  })
+
+  it('模型没选全（只有供应商）时不写 coreParam，保留 base 原值', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['article-tag'])
+    cfg.execCfg = { ...makeDefaultExecConfig(), modelProviderCode: 'DeepSeek' }
+    expect(buildConfigPayload(cfg, { coreParam: 'base 原值' }).coreParam).toBe('base 原值')
+  })
+
+  it('节点回读到 coreParam 原值、模型没改时原样写回（不丢）', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['article-tag'])
+    cfg.coreParam = '{"providerCode":"MiniMax","model":"abab6.5"}'
+    expect(buildConfigPayload(cfg).coreParam).toBe('{"providerCode":"MiniMax","model":"abab6.5"}')
+  })
+
+  it('规则处理节点不受影响：coreParam 不写，code_rule 仍取结构化配置', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['rule'])
+    cfg.structuredConfig = '{"globals":["列ID"]}'
+    const payload = buildConfigPayload(cfg, { coreParam: 'base 原值' })
+    expect(payload.codeRule).toBe('{"globals":["列ID"]}')
+    expect(payload.coreParam).toBe('base 原值')
+  })
+
+  it('翻译助手节点不受影响：code_rule 仍写语言对，coreParam 不写', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['translate'])
+    cfg.execCfg = { ...makeDefaultExecConfig(), modelProviderCode: 'DeepSeek', modelCode: 'deepseek-v4-flash' }
+    const payload = buildConfigPayload(cfg)
+    expect(payload.codeRule).toBe('{"from":"auto","to":"en"}')
+    expect(payload.coreParam).toBeUndefined()
+  })
+})

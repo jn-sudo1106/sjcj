@@ -1196,6 +1196,8 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
     // 从 NodeConfig 顶层读 structuredConfig 写回 code_rule，回读不填的话刷新后"看到的"与
     // "会写进去的"就对不上了（翻译助手的源/目标语言靠它回填编排 Tab 的两个下拉）。
     if (step.codeRule != null) cfg.structuredConfig = step.codeRule
+    // 打标签/摘要节点同理：模型选择存 core_param，回读后靠它回填编排 Tab 的模型下拉。
+    if (step.coreParam != null) cfg.coreParam = step.coreParam
     applyStepTaskFields(cfg, step)
     applyRuleStepTables(cfg, step)
   }

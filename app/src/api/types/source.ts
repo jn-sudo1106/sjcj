@@ -381,6 +381,9 @@ export interface Step {
   dedupType?: string
   codeRule?: string
   contentRule?: string
+  /** 本步骤配置的核心参数（旧 config.coreParam），随 topic 一起由 sourceApi.sourceSteps
+   *  从 configDetail 回填。打标签/摘要节点用它回填编排 Tab 的模型选择（保存时写回 core_param）。 */
+  coreParam?: string
   /** 本步骤配置的运行策略原文（旧 config.runPolicy），由 configDetail 回填。 */
   runPolicy?: string
   /** 本步骤 configId 对应配置的旧 `isMulti` 原值，随 topic 一起由 sourceApi.sourceSteps 回填。

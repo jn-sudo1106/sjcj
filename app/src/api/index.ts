@@ -338,7 +338,7 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
   type StepConfigDetail = {
     topic?: string; configName?: string; configUrl?: string; isLoginConfig?: boolean; multiMode?: number
     configType?: string
-    bizType?: string; dedupType?: string; codeRule?: string; contentRule?: string
+    bizType?: string; dedupType?: string; codeRule?: string; contentRule?: string; coreParam?: string
     runPolicy?: string
     paramBindings?: Step['paramBindings']
   }
@@ -357,6 +357,7 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
       dedupType: mapped.dedupType ?? undefined,
       codeRule: mapped.codeRule || undefined,
       contentRule: mapped.contentRule || undefined,
+      coreParam: mapped.coreParam || undefined,
       runPolicy: mapped.runPolicy || undefined,
       isLoginConfig: mapped.isLogin,
       multiMode: mapped.multiMode,
@@ -377,6 +378,7 @@ async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
       ...(detail.dedupType !== undefined ? { dedupType: detail.dedupType } : {}),
       ...(detail.codeRule ? { codeRule: detail.codeRule } : {}),
       ...(detail.contentRule ? { contentRule: detail.contentRule } : {}),
+      ...(detail.coreParam ? { coreParam: detail.coreParam } : {}),
       ...(detail.runPolicy ? { runPolicy: detail.runPolicy } : {}),
       ...(detail.isLoginConfig !== undefined ? { isLoginConfig: detail.isLoginConfig } : {}),
       ...(detail.multiMode !== undefined ? { multiMode: detail.multiMode } : {}),
@@ -600,7 +602,11 @@ export const sourceApi = {
    * createJobs 另外三个坑，照旧平台 `api/source-job.js` + `SourceCron.vue` 对出来、
    * 并在生产上实测过：
    *   1. **POST 但参数走 query**（旧代码 `method:'post', params: param`），不是 body；
-   *   2. `configId` 必须显式传空串——旧 api 层在发请求前强制 `param['configId'] = ''`；
+   *   2. `configId` 是后端 `@RequestParam` 的必传参数（缺了直接 400：
+   *      `Required request parameter 'configId' ... is not present`）。旧 api 层强制
+   *      `param['configId'] = ''` 也能过——axios 保留空串参数；本客户端 query 走
+   *      URLSearchParams 序列化（client.ts `appendQuery`），**空串会被跳过**，
+   *      所以必须给真实 configId（画布侧传节点配置 ID，见 NodeInspector.syncSourceCron）；
    *   3. **`monitorEnable` 是必填的**，少了直接 500：
    *      `Required request parameter 'monitorEnable' for method parameter type Boolean is not present`。
    *      它是旧弹窗里那个「加监控」开关，默认 false，配套的 `monitorAfter`（N 分钟后）默认 30。
@@ -615,6 +621,7 @@ export const sourceApi = {
     opts: {
       jobId?: string
       enable?: boolean
+      configId?: string
       monitor?: { enable?: boolean; afterMinutes?: number }
     } = {},
   ): Promise<Ack> => {
@@ -641,7 +648,7 @@ export const sourceApi = {
         ids: ids.join(','),
         cron: trimmed,
         enable: opts.enable ?? true,
-        configId: '',
+        configId: opts.configId ?? '',
         monitorEnable: monitor.enable ?? false,
         monitorAfter: monitor.afterMinutes ?? 30,
       },

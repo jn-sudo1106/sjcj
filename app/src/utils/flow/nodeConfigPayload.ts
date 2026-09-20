@@ -36,6 +36,7 @@ export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
   const target = cfg.collectCfg ?? cfg
   target.structuredConfig = config.codeRule ?? undefined
   target.contentRules = config.contentRule ?? undefined
+  cfg.coreParam = config.coreParam ?? undefined
   if (cfg.collectCfg) {
     cfg.collectCfg.multiMode = config.multiMode
     cfg.collectCfg.bizType = config.templateCode || undefined
@@ -159,6 +160,20 @@ function configTypeForSave(cfg: NodeConfig, base: Record<string, unknown>): numb
   return fromNode
 }
 
+/**
+ * 打标签 / 摘要节点保存时的核心参数（2026-09-20 需求，落 cs_config.core_param）：模型供应商
+ * 与模型按 `{"providerCode":"...","model":"..."}`，取的是编排 Tab 当前下拉的值
+ *（execCfg.modelProviderCode / modelCode）。两个都没选好（编排 Tab 没打开过 / 模型还没拉到）
+ * 时返回 undefined——沿用「有值才覆盖」，不把后端原值抹掉。
+ */
+function modelCodeRuleFor(cfg: NodeConfig): string | undefined {
+  if (!isArticleSummaryNode(cfg) && !isArticleTagNode(cfg)) return undefined
+  const providerCode = (cfg.execCfg?.modelProviderCode ?? '').trim()
+  const model = (cfg.execCfg?.modelCode ?? '').trim()
+  if (!providerCode || !model) return undefined
+  return JSON.stringify({ providerCode, model })
+}
+
 export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown> = {}): Record<string, unknown> {
   const cc = cfg.collectCfg
   const source = cc ?? cfg
@@ -181,6 +196,8 @@ export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown
     // 空字符串是用户明确删除，必须写回后端；只有 undefined 才代表“尚未回填，保留 base”。
     codeRule: source.structuredConfig,
     contentRule: source.contentRules,
+    // 打标签 / 摘要节点把模型选择写核心参数（modelCodeRuleFor），没选好时回写节点回读到的原值。
+    coreParam: modelCodeRuleFor(cfg) ?? cfg.coreParam,
     // 拼接后的系统提示词（2026-09-18）：落 cs_config.prompt；见 promptForConfig 的节点类型口径。
     prompt: promptForConfig(cfg),
   }
