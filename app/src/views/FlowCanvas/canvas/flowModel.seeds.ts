@@ -567,6 +567,9 @@ const NODE_CONFIG_SEEDS = {
     inmap: [['content', '← 上游节点.content', '待翻译正文']],
     params: [['target_language', 'enum', '中文简体/中文繁体/英语/日语/韩语/法语/德语/西班牙语/俄语']],
     output: [['translated_text', 'longtext', '译文']],
+    // 源/目标语言的默认值（编排配置 Tab 两个下拉）：保存时随 buildConfigPayload 写进 code_rule，
+    // 格式与 /api/translate 同口径（from/to 是百度语言码，自动检测 = auto）。
+    structuredConfig: '{"from":"auto","to":"en"}',
   },
   'article-summary': {
     title: '文章生成摘要', sub: '[720] 文章生成摘要 · 文本生成', status: '待配置', planned: false,
@@ -1189,6 +1192,10 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
       : undefined
     if (step.inputTable !== undefined) cfg.inputTable = step.inputTable === '-' ? '' : step.inputTable
     if (step.outputTable !== undefined) cfg.outputTable = step.outputTable
+    // 非采集类节点（规则/翻译助手等）的入库配置同样随步骤回填：buildConfigPayload 保存时
+    // 从 NodeConfig 顶层读 structuredConfig 写回 code_rule，回读不填的话刷新后"看到的"与
+    // "会写进去的"就对不上了（翻译助手的源/目标语言靠它回填编排 Tab 的两个下拉）。
+    if (step.codeRule != null) cfg.structuredConfig = step.codeRule
     applyStepTaskFields(cfg, step)
     applyRuleStepTables(cfg, step)
   }

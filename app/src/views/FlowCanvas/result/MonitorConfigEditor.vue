@@ -138,6 +138,9 @@ provideNodeEditorContext({
     if (alertEmitCount > 1) alertTouched.value = true
     setNode(selectedNodeId.value, { alertConfig: JSON.parse(JSON.stringify(config)) as MonitorAlertConfig })
   },
+  setStructuredConfig: (value: string) => {
+    setNode(selectedNodeId.value, { structuredConfig: value })
+  },
   sourceId: computed(() => selectedSourceId.value),
   sourceSchedule: source,
 })

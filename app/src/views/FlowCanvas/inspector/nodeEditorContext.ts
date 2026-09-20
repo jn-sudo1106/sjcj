@@ -22,6 +22,9 @@ export interface NodeEditorContext {
   patch: (patch: Partial<RuleOrchestration>) => void
   setMonitorMethods: (values: string[]) => void
   setMonitorAlertConfig: (config: MonitorAlertConfig) => void
+  /** 写节点结构化配置（采集类写 collectCfg、非采集类写 NodeConfig 顶层，见 stores/node.ts）。
+   *  翻译助手节点用它把编排 Tab 的源/目标语言落成 code_rule 草稿（保存时随 buildConfigPayload 写库）。 */
+  setStructuredConfig: (value: string) => void
   /** 系统提示词 `{{source_id}}` 与 ck_source 同步用的源 id */
   sourceId: Ref<string>
   /** 节点自己没配过定时时的兜底调度（画布 = 当前源，网站态 = 所选源） */
@@ -48,6 +51,7 @@ function flowStoreNodeEditorContext(): NodeEditorContext {
     },
     setMonitorMethods: (values) => flow.setMonitorMethods(flow.selectedId, values ?? []),
     setMonitorAlertConfig: (config) => flow.setMonitorAlertConfig(flow.selectedId, config),
+    setStructuredConfig: (value) => flow.setStructuredConfig(flow.selectedId, value),
     // `source_id` 取**画布当前正在编辑的那个源**（左侧源列表里选中的），不是节点的 stepSourceId——
     // 后者对规则/监控节点恒为 -1，拼进提示词会让监控脚本查不到数据（见 RuleOrchestrationTab 里的长注）。
     sourceId: computed(() => flow.sourceCfg?.sourceId || flow.sourceCtx?.sourceId || ''),

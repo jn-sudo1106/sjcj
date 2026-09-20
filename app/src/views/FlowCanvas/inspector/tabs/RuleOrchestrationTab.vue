@@ -20,7 +20,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { recognizeImage, readImageAsBase64, ocrTextOf, type OcrBlock } from '@/api/ocr'
 import { isArticleSummaryNode, isArticleTagNode, isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isRuleNode, isScriptlessNode, isTranslateNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { parseArticleTags, riskLevelTone, type ArticleTagResult } from '@/utils/flow/articleTags'
-import { TRANSLATE_LANGUAGE_CODES, TRANSLATE_MAX_QUERY_BYTES, translateText, utf8ByteLength } from '@/api/translate'
+import { TRANSLATE_AUTO_CODE, TRANSLATE_LANGUAGE_CODES, TRANSLATE_MAX_QUERY_BYTES, languageCodeOf, translateText, utf8ByteLength } from '@/api/translate'
 import { SPEECH_AUDIO_EXTENSIONS, SPEECH_LANGUAGE_OPTIONS, SPEECH_MAX_DURATION_SECONDS, SPEECH_MAX_FILE_SIZE, isSupportedAudioFile, readAudioDuration, transcribeAudio, type SpeechTranscriptionResult } from '@/api/speech'
 import { MEDIA_AUDIO_FORMATS, MEDIA_BIT_RATE_OPTIONS, MEDIA_CHANNEL_OPTIONS, MEDIA_MAX_FILE_SIZE, MEDIA_SAMPLING_RATE_OPTIONS, MEDIA_VIDEO_EXTENSIONS, extractAudio, isSupportedVideoFile, readVideoDuration, type MediaExtractionResult } from '@/api/media'
 import { useNodeEditorContext } from '../nodeEditorContext'
@@ -43,7 +43,7 @@ import AlertConfigPanel from '../AlertConfigPanel.vue'
 //
 // 数据监控节点不出现「上传 Excel」样本文件入口（0917 产品口径，画布和监控视图两处一致）；
 // 规则处理节点照旧保留——那里的 Excel 是给"按样本生成规则脚本"用的。
-const { id, cfg, patch: patchNode, setMonitorMethods: setNodeMonitorMethods, setMonitorAlertConfig: setNodeMonitorAlertConfig, sourceId: promptSourceId, sourceSchedule } = useNodeEditorContext()
+const { id, cfg, patch: patchNode, setMonitorMethods: setNodeMonitorMethods, setMonitorAlertConfig: setNodeMonitorAlertConfig, setStructuredConfig: setNodeStructuredConfig, sourceId: promptSourceId, sourceSchedule } = useNodeEditorContext()
 const router = useRouter()
 const route = useRoute()
 const { tables } = useNodeInspectorAssets()
@@ -438,6 +438,52 @@ const TRANSLATE_AUTO = '自动检测'
  */
 const TRANSLATE_LANGUAGES = Object.keys(TRANSLATE_LANGUAGE_CODES)
 
+/** 百度语言码 → 界面语言名（code_rule 回填下拉用，码表见 api/translate.ts） */
+const TRANSLATE_CODE_LABELS: Record<string, string> = Object.fromEntries(
+  Object.entries(TRANSLATE_LANGUAGE_CODES).map(([label, code]) => [code, label]),
+)
+
+function translateLabelOf(code: string): string {
+  const key = code.trim()
+  if (!key) return ''
+  if (key === TRANSLATE_AUTO_CODE) return TRANSLATE_AUTO
+  return TRANSLATE_CODE_LABELS[key] ?? ''
+}
+
+/**
+ * 从已保存的结构化配置（code_rule 的 JSON，如 {"from":"zh","to":"en"}）还原两个下拉的值；
+ * 解析不出 / 码不认识时返回 null，调用方回落默认值（自动检测 → 英语）。
+ */
+function translateLangsFromStored(stored: unknown): { from: string; to: string } | null {
+  if (typeof stored !== 'string') return null
+  const text = stored.trim()
+  if (!text.startsWith('{')) return null
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const record = parsed as Record<string, unknown>
+    const from = translateLabelOf(String(record.from ?? ''))
+    const to = translateLabelOf(String(record.to ?? ''))
+    if (!from || !to) return null
+    return { from, to }
+  } catch {
+    return null
+  }
+}
+
+/** 用户改过语言后置位：之后的配置回填（configDetail 迟到 / 换配置）不再覆盖用户的选择 */
+const translateLangsTouched = ref(false)
+/**
+ * 把源/目标语言落成节点结构化配置（保存时随 buildConfigPayload 写进 config.code_rule）。
+ * 格式与 /api/translate 请求同口径：百度语言码，自动检测 = auto。
+ * 只在这里写一次，改下拉即置脏，底部「保存」随之可点（下拉改动不再是静默的本地状态）。
+ */
+function writeTranslateLangs(source: string, target: string) {
+  if (!isTranslate.value) return
+  translateLangsTouched.value = true
+  setNodeStructuredConfig(JSON.stringify({ from: languageCodeOf(source), to: languageCodeOf(target) }))
+}
+
 const translateText_ = ref('')
 const translateFileInput = ref<HTMLInputElement | null>(null)
 const translateFileName = ref('')
@@ -451,6 +497,19 @@ const translateResult = ref('')
 const translateDetectedFrom = ref('')
 const translateAbort = ref<AbortController | null>(null)
 
+watch(
+  () => [id.value, cfg.value?.structuredConfig ?? ''] as const,
+  ([nid], prev) => {
+    // immediate 首调用没有旧值（prev 是 undefined）
+    if (prev === undefined || nid !== prev[0]) translateLangsTouched.value = false
+    if (translateLangsTouched.value || !isTranslate.value) return
+    const langs = translateLangsFromStored(cfg.value?.structuredConfig)
+    translateSource.value = langs?.from ?? TRANSLATE_AUTO
+    translateTarget.value = langs?.to ?? '英语'
+  },
+  { immediate: true },
+)
+
 /** 源语言是「自动检测」时没有可互换的对象，按钮置灰（不替用户猜一个源语言出来） */
 const canSwapLanguages = computed(() => translateSource.value !== TRANSLATE_AUTO)
 function swapTranslateLanguages() {
@@ -458,6 +517,14 @@ function swapTranslateLanguages() {
   const from = translateSource.value
   translateSource.value = translateTarget.value
   translateTarget.value = from
+  writeTranslateLangs(translateSource.value, translateTarget.value)
+}
+
+function onTranslateSourceChange(value: string) {
+  writeTranslateLangs(value, translateTarget.value)
+}
+function onTranslateTargetChange(value: string) {
+  writeTranslateLangs(translateSource.value, value)
 }
 
 const translateCharCount = computed(() => translateText_.value.trim().length)
@@ -759,8 +826,7 @@ watch(id, () => {
   tagPromptOpen.value = false
   tagPromptMissing.value = false
   clearTranslate()
-  translateTarget.value = '英语'
-  translateSource.value = TRANSLATE_AUTO
+  // 语言下拉的回填由 translateLangsTouched 那条 watch 管（从 code_rule 还原，解析不出才落默认）
   mediaFormat.value = 'mp3'
   mediaBitRate.value = ''
   mediaSamplingRate.value = ''
@@ -2070,13 +2136,15 @@ function onTestScript() {
       </span>
       <button v-if="translateText_" class="rc-link-btn" type="button" @click="clearTranslate">清空</button>
     </div>
-    <!-- 语言选择（0917 按设计稿改成"源语言 ⇄ 目标语言"）：两个下拉中间一个互换按钮 -->
+    <!-- 语言选择（0917 按设计稿改成"源语言 ⇄ 目标语言"）：两个下拉中间一个互换按钮
+         改语言即写回节点结构化配置（保存时落 code_rule），所以 @change 直接走写回处理 -->
     <div class="translate-langs" data-testid="translate-langs">
       <el-select
         v-model="translateSource"
         class="translate-lang-select"
         size="small"
         data-testid="translate-source"
+        @change="onTranslateSourceChange"
       >
         <el-option :label="TRANSLATE_AUTO" :value="TRANSLATE_AUTO" />
         <el-option v-for="lang in TRANSLATE_LANGUAGES" :key="lang" :label="lang" :value="lang" />
@@ -2103,6 +2171,7 @@ function onTestScript() {
         class="translate-lang-select"
         size="small"
         data-testid="translate-target"
+        @change="onTranslateTargetChange"
       >
         <el-option v-for="lang in TRANSLATE_LANGUAGES" :key="lang" :label="lang" :value="lang" />
       </el-select>
