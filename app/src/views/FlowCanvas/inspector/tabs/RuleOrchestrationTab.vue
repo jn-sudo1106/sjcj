@@ -15,12 +15,12 @@
 // 画布侧没 provide 那个上下文，走默认实现（读写 flow store），行为不变。
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Headset, Picture, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
+import { Delete, Picture, UploadFilled } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { recognizeImage, readImageAsBase64, ocrTextOf, type OcrBlock } from '@/api/ocr'
 import { isArticleSummaryNode, isArticleTagNode, isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isRuleNode, isScriptlessNode, isTranslateNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { TRANSLATE_AUTO_CODE, TRANSLATE_ENGINE_CODES, TRANSLATE_LANGUAGE_CODES, engineCodeOf, engineLabelOf, languageCodeOf, translateSampleOf, translateText } from '@/api/translate'
-import { SPEECH_AUDIO_EXTENSIONS, SPEECH_LANGUAGE_OPTIONS, SPEECH_MAX_DURATION_SECONDS, SPEECH_MAX_FILE_SIZE, isSupportedAudioFile, readAudioDuration, transcribeAudio, type SpeechTranscriptionResult } from '@/api/speech'
+import { SPEECH_LANGUAGE_OPTIONS } from '@/api/speech'
 import { MEDIA_AUDIO_FORMATS, MEDIA_BIT_RATE_OPTIONS, MEDIA_CHANNEL_OPTIONS, MEDIA_MAX_FILE_SIZE, MEDIA_SAMPLING_RATE_OPTIONS, MEDIA_VIDEO_EXTENSIONS, extractAudio, isSupportedVideoFile, readVideoDuration, type MediaExtractionResult } from '@/api/media'
 import { useNodeEditorContext } from '../nodeEditorContext'
 import { configApi, entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
@@ -62,23 +62,9 @@ const isScriptless = computed(() => isScriptlessNode(cfg.value))
  */
 const isOcr = computed(() => isOcrNode(cfg.value))
 
-// ---- 语音转文字试跑（0917 第一版，仅音频提取文字节点）----
-// 上传音频 → multipart 调后端 /api/speech/transcriptions → 展示转写文本。
-// 与 OCR 那套一样，音频与结果只在本组件内存里流转，暂不写节点配置（口径确定后再接）。
-const audioFileInput = ref<HTMLInputElement | null>(null)
-const audioFile = ref<File | null>(null)
-const audioFileError = ref('')
 const audioLanguage = ref('')
-const audioRunning = ref(false)
-const audioError = ref('')
-const audioResult = ref<SpeechTranscriptionResult | null>(null)
-/** 浏览器解析出的时长（秒）；读不出是 null，此时不做本地拦截 */
-const audioDuration = ref<number | null>(null)
-const AUDIO_ACCEPT = SPEECH_AUDIO_EXTENSIONS.map((ext) => `.${ext}`).join(',')
 
 const isAudioText = computed(() => isAudioTextNode(cfg.value))
-/** 已知时长超上限就不让提交：上游对 >500s 一律 400，发过去只是白等一趟 */
-const audioTooLong = computed(() => (audioDuration.value ?? 0) > SPEECH_MAX_DURATION_SECONDS)
 
 function formatDuration(seconds: number | null): string {
   if (seconds == null) return ''
@@ -88,79 +74,9 @@ function formatDuration(seconds: number | null): string {
   return `${mm}:${ss}`
 }
 
-function clearAudioFile() {
-  audioFile.value = null
-  audioFileError.value = ''
-  audioError.value = ''
-  audioResult.value = null
-  audioDuration.value = null
-  if (audioFileInput.value) audioFileInput.value.value = ''
-}
-
-function onAudioFileChange(e: Event) {
-  const input = e.target as HTMLInputElement
-  const file = input.files?.[0]
-  audioFileError.value = ''
-  if (!file) return
-  // 后端按**后缀**校验格式、超限也会 400，这里先拦一道省一次往返
-  if (!isSupportedAudioFile(file)) {
-    input.value = ''
-    audioFileError.value = `不支持的音频格式，请用 ${SPEECH_AUDIO_EXTENSIONS.join(' / ')}`
-    return
-  }
-  if (file.size > SPEECH_MAX_FILE_SIZE) {
-    input.value = ''
-    audioFileError.value = `音频不能超过 ${Math.round(SPEECH_MAX_FILE_SIZE / 1024 / 1024)}MB`
-    return
-  }
-  audioFile.value = file
-  // 换文件即作废上一次结果
-  audioError.value = ''
-  audioResult.value = null
-  audioDuration.value = null
-  // 时长是异步读出来的（浏览器解析文件头）：读完再判上限。
-  // 读不出来（null）不拦——那是上游报错的事，比前端瞎猜强。
-  void readAudioDuration(file).then((seconds) => {
-    if (audioFile.value !== file) return
-    audioDuration.value = seconds
-    if (seconds && seconds > SPEECH_MAX_DURATION_SECONDS) {
-      audioFileError.value = `音频时长 ${formatDuration(seconds)}，超过单段上限 ${formatDuration(SPEECH_MAX_DURATION_SECONDS)}，请先裁剪或分段再上传`
-    }
-  })
-}
-
-async function runTranscribe() {
-  const file = audioFile.value
-  if (!file || audioRunning.value || audioTooLong.value) return
-  audioRunning.value = true
-  audioError.value = ''
-  audioResult.value = null
-  try {
-    const result = await transcribeAudio(file, { language: audioLanguage.value })
-    audioResult.value = result
-    ElMessage.success(`转写完成：${result.text.length} 字`)
-  } catch (e) {
-    audioError.value = `转写失败：${(e as Error)?.message ?? String(e)}`
-    ElMessage.error(audioError.value)
-  } finally {
-    audioRunning.value = false
-  }
-}
-
-async function copyTranscription() {
-  const text = audioResult.value?.text ?? ''
-  if (!text) return
-  try {
-    await navigator.clipboard.writeText(text)
-    ElMessage.success('转写文本已复制')
-  } catch {
-    ElMessage.warning('复制失败，请手动选择文本')
-  }
-}
-
 // ---- 视频提取音频试跑（0917 第一版，仅视频提取音频节点）----
 // 上传视频 → multipart 调后端 /api/media/extract-audio → 拿回音频（默认二进制流，可试听/下载）。
-// 与 OCR / 语音两块一样只存内存，暂不写节点配置；勾选「上传到文件服务」时后端改回 JSON + fileId，
+// 与 OCR 试跑一样只存内存，暂不写节点配置；勾选「上传到文件服务」时后端改回 JSON + fileId，
 // 那个 fileId 就是后续落到节点产物上的抓手。
 const videoFileInput = ref<HTMLInputElement | null>(null)
 const videoFile = ref<File | null>(null)
@@ -467,7 +383,6 @@ const tagPromptOpen = ref(false)
 // 切节点（NodeInspector 里本组件不带 key，是复用的）时清空试跑区，避免串到下一个节点上
 watch(id, () => {
   clearOcrImage()
-  clearAudioFile()
   audioLanguage.value = ''
   clearVideoFile()
   articlePromptOpen.value = false
@@ -1360,8 +1275,8 @@ function retryLoadSwitchOptions() {
 // 文章生成摘要没有「既有抓取配置」可切（它本来就不吃抓取 XML），不进这个加载分支，
 // 免得白拉一次编排列表；同时把 isArticleSummary 一起放进依赖，切到别的非规则节点时仍会补加载。
 watch(
-  () => [isRule.value, isArticleSummary.value] as const,
-  ([rule, summary]) => { if (!rule && !summary) void loadSwitchOptions() },
+  () => [isRule.value, isArticleSummary.value, isAudioText.value, isVideoAudio.value] as const,
+  ([rule, summary, audioText, videoAudio]) => { if (!rule && !summary && !audioText && !videoAudio) void loadSwitchOptions() },
   { immediate: true },
 )
 
@@ -1478,7 +1393,7 @@ function onTestScript() {
     </el-select>
   </div>
   <!-- 文章生成摘要没有「抓取配置」这个概念，标题行整块不出现（0921 口径：只留模型与系统提示词） -->
-  <div v-if="!isTranslate && !isArticleSummary && !isArticleTag" class="ni-section-title ni-section-title-row">
+  <div v-if="!isAudioText && !isVideoAudio && !isTranslate && !isArticleSummary && !isArticleTag" class="ni-section-title ni-section-title-row">
     <span>{{ isRule ? '设置业务规则' : '抓取配置' }}</span>
     <span v-if="!isScriptless" class="ni-section-actions">
       <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
@@ -1536,67 +1451,13 @@ function onTestScript() {
       <pre v-if="ocrTextVisible && ocrRawText" class="ocr-result-raw" data-testid="ocr-raw">{{ ocrRawText }}</pre>
     </div>
   </div>
-  <!-- 语音转文字试跑（0917 第一版，仅音频提取文字节点）：上传音频 → multipart 调后端
-       /api/speech/transcriptions → 贴出转写文本。与 OCR 那套一样只存内存，暂不写节点配置。 -->
-  <div v-if="isAudioText" class="rc-field ocr-field" data-testid="audio-transcribe-field">
-    <label>语音转文字</label>
-    <div class="ocr-picker">
-      <input
-        ref="audioFileInput"
-        class="rc-file-input"
-        data-testid="audio-file-input"
-        type="file"
-        :accept="AUDIO_ACCEPT"
-        @change="onAudioFileChange"
-      />
-      <button class="rc-btn" type="button" data-testid="audio-pick-file" @click="audioFileInput?.click()">
-        <Headset aria-hidden="true" />
-        <span>{{ audioFile ? '更换音频' : '上传音频' }}</span>
-      </button>
-      <span class="ocr-hint">
-        {{ SPEECH_AUDIO_EXTENSIONS.join(' / ') }}，最大 {{ Math.round(SPEECH_MAX_FILE_SIZE / 1024 / 1024) }}MB，
-        单段不超过 {{ formatDuration(SPEECH_MAX_DURATION_SECONDS) }}
-      </span>
-    </div>
-    <div v-if="audioFile" class="ocr-preview">
-      <span class="ocr-file-name" :title="audioFile.name">{{ audioFile.name }}</span>
-      <span class="ocr-file-size">
-        {{ formatFileSize(audioFile.size) }}<template v-if="audioDuration"> · {{ formatDuration(audioDuration) }}</template>
-      </span>
-      <button class="ocr-remove" type="button" title="移除音频" aria-label="移除音频" @click="clearAudioFile">
-        <Delete aria-hidden="true" />
-      </button>
-    </div>
-    <div v-if="audioFileError" class="ocr-error" data-testid="audio-file-error">{{ audioFileError }}</div>
-    <label class="audio-language">
-      <span>语言</span>
-      <select v-model="audioLanguage" class="rc-select" data-testid="audio-language">
-        <option value="">自动识别</option>
-        <option v-for="item in SPEECH_LANGUAGE_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</option>
-      </select>
-    </label>
-    <div class="ocr-actions">
-      <button
-        class="rc-btn primary"
-        type="button"
-        data-testid="audio-transcribe"
-        :disabled="!audioFile || audioRunning || audioTooLong"
-        :title="audioTooLong ? '音频超过单段时长上限，请先裁剪或分段' : ''"
-        @click="runTranscribe"
-      >{{ audioRunning ? '转写中…' : '开始转写' }}</button>
-      <span v-if="audioRunning" class="ocr-hint">转写是同步长请求，长音频可能要等一会儿</span>
-      <span v-if="audioError" class="ocr-error" data-testid="audio-error">{{ audioError }}</span>
-    </div>
-    <div v-if="audioResult" class="ocr-result" data-testid="audio-result">
-      <div class="ocr-result-head">
-        <span>转写文本（{{ audioResult.text.length }} 字{{ formatDuration(audioResult.duration) ? ` · ${formatDuration(audioResult.duration)}` : '' }}）</span>
-        <span class="ocr-result-actions">
-          <button class="rc-link-btn" type="button" @click="copyTranscription">复制</button>
-        </span>
-      </div>
-      <pre class="ocr-result-text" data-testid="audio-result-text">{{ audioResult.text }}</pre>
-      <div v-if="audioResult.traceId" class="audio-trace">traceId：{{ audioResult.traceId }}</div>
-    </div>
+  <!-- 音频提取文字节点的编排配置只保留语音选择。 -->
+  <div v-if="isAudioText" class="rc-field audio-language-field" data-testid="audio-language-field">
+    <label for="audio-language">语音</label>
+    <select id="audio-language" v-model="audioLanguage" class="rc-select" data-testid="audio-language">
+      <option value="">自动识别</option>
+      <option v-for="item in SPEECH_LANGUAGE_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</option>
+    </select>
   </div>
   <!-- 视频提取音频试跑（0917 第一版，仅视频提取音频节点）：上传视频 → multipart 调后端
        /api/media/extract-audio → 拿回音频试听/下载；勾选上传时后端改回 JSON + fileId。 -->
@@ -1611,10 +1472,6 @@ function onTestScript() {
         :accept="VIDEO_ACCEPT"
         @change="onVideoFileChange"
       />
-      <button class="rc-btn" type="button" data-testid="video-pick-file" @click="videoFileInput?.click()">
-        <VideoPlay aria-hidden="true" />
-        <span>{{ videoFile ? '更换视频' : '上传视频' }}</span>
-      </button>
       <span class="ocr-hint">{{ MEDIA_VIDEO_EXTENSIONS.join(' / ') }}，最大 {{ Math.round(MEDIA_MAX_FILE_SIZE / 1024 / 1024) }}MB</span>
     </div>
     <div v-if="videoFile" class="ocr-preview">
@@ -1851,7 +1708,7 @@ function onTestScript() {
     <pre v-if="tagPromptOpen" class="article-prompt-text" data-testid="tag-prompt-text">{{ orchCfg.systemPrompt || '（未取到提示词模板）' }}</pre>
   </div>
   <!-- 描述输入框：文章生成摘要 / 文章打标签没有「抓取需求描述」这回事，整块不出现（0921 口径） -->
-  <div v-if="!isTranslate && !isArticleSummary && !isArticleTag" class="rc-field">
+  <div v-if="!isAudioText && !isVideoAudio && !isTranslate && !isArticleSummary && !isArticleTag" class="rc-field">
     <textarea
       class="rc-input rc-textarea"
       :value="orchCfg.describe"
@@ -1987,7 +1844,7 @@ function onTestScript() {
   />
 
   <!-- 动作链摘要 / 切换已有配置都是「抓取配置 XML」这套东西的配套件，纯配置节点整块不出现（0921 口径） -->
-  <template v-if="!isRule && !isTranslate && !isArticleSummary && !isArticleTag">
+  <template v-if="!isAudioText && !isVideoAudio && !isRule && !isTranslate && !isArticleSummary && !isArticleTag">
     <!-- 只读动作链摘要（0804 S3-4，方案 §3.1）：按 NextActionId 链表走出来的执行顺序，不可编辑 -->
     <div v-if="actionSummary" class="rc-list ni-rule-meta">
       <div class="rc-list-row"><b>动作链</b><span :title="actionSummary">{{ actionSummary }}</span></div>
@@ -2015,6 +1872,7 @@ function onTestScript() {
        为一个双栏工作区——两个入口按钮（编辑系统提示词/全屏查看）现在打开同一个弹层，左右两栏一屏对照，
        面板内直接能生成/保存，不用退出去。 -->
   <RuleWorkbenchDialog
+    v-if="!isAudioText && !isVideoAudio"
     v-model:open="workbenchOpen"
     :title="workbenchTitle"
     :script-label="scriptLabel"
@@ -2123,11 +1981,6 @@ function onTestScript() {
 .ocr-result-actions { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; }
 .ocr-result-text { margin: 0; max-height: 260px; overflow: auto; padding: 10px; color: var(--rc-text); font-size: 12px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
 .ocr-result-raw { margin: 0; max-height: 220px; overflow: auto; padding: 10px; border-top: 1px dashed var(--rc-border-soft); background: #0f172a; color: #dbeafe; font-family: var(--rc-mono, monospace); font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
-/* ---- 语音转文字 ---- */
-.audio-language { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--rc-muted); font-size: 11px; }
-.audio-language > span { flex: none; }
-.audio-language .rc-select { flex: 1; min-width: 0; padding: 5px 9px; }
-.audio-trace { padding: 6px 10px; border-top: 1px dashed var(--rc-border-soft); color: var(--rc-faint); font-size: 10.5px; word-break: break-all; }
 /* ---- 视频提取音频 ---- */
 .media-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; margin-top: 8px; }
 .media-option { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; gap: 6px; color: var(--rc-muted); font-size: 11px; min-width: 0; }
