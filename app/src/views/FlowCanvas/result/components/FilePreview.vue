@@ -11,7 +11,7 @@
 //
 // 真实类型分布（文件中心首页 20 行）：xlsx 13 / pdf 7 / txt 0，故 Excel 是主力路径。
 import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue'
-import { extFromName, fetchOssFile, fetchOssFileHead, mimeTypeOf, ossFileUrl, ossPublicUrl, previewKindOf, type PreviewKind } from '@/utils/ossFile'
+import { extFromName, fetchOssFile, fetchOssFileHead, mimeTypeOf, ossFileUrl, ossPathWithExt, ossPublicUrl, previewKindOf, type PreviewKind } from '@/utils/ossFile'
 import {
   BLOCKED_ARCHIVE_SIZE_LIMIT, BLOCKED_ARCHIVE_SNIFF_BYTES, detectBlockedArchive,
   type BlockedArchiveVerdict,
@@ -28,6 +28,17 @@ const props = defineProps<{
   size?: number | string | null
   /** K2 原始外网地址，仅用于「新窗口打开」，不用于取内容 */
   externalUrl?: string | null
+  /**
+   * **未补后缀的**原始路径（0920-02）。调用方给了它，就等于说"`path` 上那个后缀是猜的"
+   * ——库里存的值本身没有后缀（B22：落库时被截成了裸 md5）。
+   *
+   * 只有这时才给 TXT / HTML 切换：同一个 md5 下两份对象都在
+   * （2026-09-21 实测公众号 `…/3e19f177…721e`：`.txt` 2750 字节、与 K13「正文大小」一致；
+   * `.html` 17612 字节的网页快照），而猜中一个之后另一份用户没有任何入口能看到。
+   *
+   * 路径本身带后缀的（文件资源表的 K3 基本都带）不要传这个 prop，切换不出现，行为一如从前。
+   */
+  basePath?: string | null
 }>()
 
 // Excel 解析 + 渲染体积不小（gzip 约 548KB），按需加载，不进首屏包
@@ -61,17 +72,72 @@ const TEXT_LIMIT = 2 * 1024 * 1024
 //  1) 一段兜底排版 <style>（15px 正文、body 限宽 820px 居中、表格描边…）；
 //  2) <base href="源站">——它让源站 CSS 加载成功，而那套 CSS 在没有 JS 时正好把正文压在
 //     自己的 loading 遮罩底下，加了反而更看不到正文。
-const effectiveExt = computed(() => props.ext || extFromName(props.name))
+/** 可切的后缀。写死两个：同 md5 下实测并存的就是这两种，`.md` 之类一律 404（2026-09-21 实测），
+ *  探它们只是白打请求。 */
+const EXT_OPTIONS = ['txt', 'html'] as const
+
+const hintedExt = computed(() => props.ext || extFromName(props.name))
+/** 用户切过才有值；空 = 跟着调用方猜的那个走 */
+const pickedExt = ref('')
+/** 路径是"裸的"（调用方给了 basePath 且它确实没后缀）才给切换 */
+const switchable = computed(() => !!props.basePath && !extFromName(props.basePath))
+const effectiveExt = computed(() => pickedExt.value || hintedExt.value)
+/** 真正在看的那个文件：切过就按 basePath 重拼，没切过就用调用方给的 path */
+const currentPath = computed(() => (
+  switchable.value && pickedExt.value ? ossPathWithExt(String(props.basePath), pickedExt.value) : (props.path || '')
+))
+/** 下载名跟着切：不然切到 HTML 还会存成 `….txt` 的文件名 */
+const downloadName = computed(() => (
+  switchable.value ? (currentPath.value.split('/').pop() || props.name || '') : (props.name || '')
+))
 const kind = computed<PreviewKind>(() => previewKindOf(effectiveExt.value))
+
+/**
+ * 用户是**主动切过来看快照**的（不是这条数据只有 html）。
+ * 这时"抓砸了"那套文案会说错话：2026-09-21 实测，公众号快照 17KB、可见文本只有 139 字，
+ * 判定成「采集时被对方站点拦下」——可正文明明抓到了，就在旁边那份 .txt 里（2750 字节）。
+ * 公众号这类页面的正文是脚本渲染的，静态存档里本来就只有框架。
+ */
+const snapshotMode = computed(() => switchable.value && !!pickedExt.value && kind.value === 'html')
+
+const switching = ref(false)
+/** 「这条没有 HTML 快照」这类就地提示，切成功就清掉 */
+const switchNote = ref('')
+/**
+ * 切后缀。
+ *
+ * **切到 html 必须先探一次**：html 不走 fetch，是 iframe 直连 9102 那个独立 origin
+ * （见本文件顶部），跨源加载失败前端收不到任何信号，切过去只会是一个白框。
+ * 同源 `/oss` 探一个字节就够——OSS 对不存在的对象回干净的 404（2026-09-21 实测）。
+ * 切回 txt 不用探：那条路本来就 fetch，失败会落到现有的 error 分支。
+ */
+async function switchExt(ext: string) {
+  if (switching.value || ext === effectiveExt.value) return
+  const nextPath = ossPathWithExt(String(props.basePath ?? ''), ext)
+  if (!nextPath) return
+  if (previewKindOf(ext) === 'html') {
+    switching.value = true
+    try {
+      await fetchOssFileHead(nextPath, 1)
+    } catch {
+      switchNote.value = '这条没有 HTML 快照'
+      return
+    } finally {
+      switching.value = false
+    }
+  }
+  switchNote.value = ''
+  pickedExt.value = ext
+}
 const sizeNum = computed(() => {
   const n = Number(props.size)
   return Number.isFinite(n) && n > 0 ? n : 0
 })
 const oversize = computed(() => sizeNum.value > AUTO_LOAD_LIMIT)
 /** html 走 OSS 独立 origin 的绝对地址，不经 fetch，也不受体积上限约束（浏览器自己流式加载）。 */
-const htmlSrc = computed(() => (kind.value === 'html' && props.path ? ossPublicUrl(props.path) : ''))
+const htmlSrc = computed(() => (kind.value === 'html' && currentPath.value ? ossPublicUrl(currentPath.value) : ''))
 /** 任何带有效 OSS 路径的文件（含 K17 html、K6 正文 txt 等）均提供独立端口直连地址，供「新窗口打开」 */
-const publicFileUrl = computed(() => (props.path ? ossPublicUrl(props.path) : ''))
+const publicFileUrl = computed(() => (currentPath.value ? ossPublicUrl(currentPath.value) : ''))
 
 const loading = ref(false)
 const error = ref('')
@@ -106,12 +172,12 @@ function reset() {
  * 由 iframe 按 OSS 绝对地址自己加载）。这里读到的字节只用于判定，不参与渲染。
  */
 async function sniffBlocked() {
-  if (kind.value !== 'html' || !props.path) return
+  if (kind.value !== 'html' || !currentPath.value) return
   // 体积已知且明显不小时跳过：正常文章都在 MB 级，没必要探。
   // 体积未知时照样探——调用方目前并不传 size，而**只读头部**，代价就是几十 KB。
   if (sizeNum.value > BLOCKED_ARCHIVE_SIZE_LIMIT) return
   try {
-    const buf = await fetchOssFileHead(props.path, BLOCKED_ARCHIVE_SNIFF_BYTES)
+    const buf = await fetchOssFileHead(currentPath.value, BLOCKED_ARCHIVE_SNIFF_BYTES)
     const verdict = detectBlockedArchive(new TextDecoder('utf-8').decode(buf))
     if (verdict.blocked) blocked.value = verdict
   } catch {
@@ -121,14 +187,14 @@ async function sniffBlocked() {
 
 /** 能预览、有路径、且（没超限或用户点了"仍要预览"）才真正去取。
  *  html 不在此列——它由 iframe 自己按绝对地址加载，前端不碰字节。 */
-const shouldLoad = computed(() => !!props.path && kind.value !== 'none' && kind.value !== 'html' && (!oversize.value || forced.value))
+const shouldLoad = computed(() => !!currentPath.value && kind.value !== 'none' && kind.value !== 'html' && (!oversize.value || forced.value))
 
 async function load() {
-  if (!shouldLoad.value || !props.path) return
+  if (!shouldLoad.value || !currentPath.value) return
   loading.value = true
   error.value = ''
   try {
-    const buf = await fetchOssFile(props.path)
+    const buf = await fetchOssFile(currentPath.value)
     if (kind.value === 'excel') {
       buffer.value = buf
     } else if (kind.value === 'text') {
@@ -153,7 +219,13 @@ async function load() {
   }
 }
 
-watch(() => [props.path, props.ext, props.name] as const, () => {
+// 换了一条数据（调用方给了新的 path / basePath）就把切换态清回默认——
+// 切换是"我想再看一眼另一份"的临时动作，不该跟着下一条数据走
+watch(() => [props.path, props.basePath] as const, () => {
+  pickedExt.value = ''
+  switchNote.value = ''
+})
+watch(() => [currentPath.value, props.ext, props.name] as const, () => {
   reset()
   void load()
   void sniffBlocked()
@@ -168,7 +240,25 @@ function onExcelError(e: unknown) {
 
 <template>
   <div class="fp-wrap">
-    <div v-if="!path" class="fp-hint" data-testid="file-preview-nopath">该文件未提供可访问地址，无法预览</div>
+    <!-- 0920-02：库里存的正文路径没有后缀，前端按字段语义猜了一个（正文→txt）。
+         同一个 md5 下网页快照（.html）也在，猜中一个之后另一份本来没有任何入口能看到。
+         只在"后缀是猜的"时出现；路径自带后缀的一概不显示。 -->
+    <div v-if="switchable" class="fp-bar" data-testid="file-preview-ext-switch">
+      <button
+        v-for="opt in EXT_OPTIONS"
+        :key="opt"
+        type="button"
+        class="fp-ext"
+        :class="{ on: effectiveExt === opt }"
+        :disabled="switching"
+        :data-testid="`file-preview-ext-${opt}`"
+        @click="switchExt(opt)"
+      >{{ opt.toUpperCase() }}</button>
+      <span v-if="switching" class="fp-bar-note">检查中…</span>
+      <span v-else-if="switchNote" class="fp-bar-note" data-testid="file-preview-ext-note">{{ switchNote }}</span>
+    </div>
+
+    <div v-if="!currentPath" class="fp-hint" data-testid="file-preview-nopath">该文件未提供可访问地址，无法预览</div>
 
     <div v-else-if="kind === 'none' && !fallbackToFrame" class="fp-hint" data-testid="file-preview-unsupported">
       <span>该类型不支持站内直接解析（{{ ext || extFromName(name) || '未知类型' }}），可下载后查看</span>
@@ -191,15 +281,26 @@ function onExcelError(e: unknown) {
          **文案的主语必须是采集，不能写"无法预览"**——后者会让人以为是本系统的能力问题，
          而真正该被看见的是这条数据没抓到正文。引述存档里的原话，比我们转述更有说服力。 -->
     <div v-else-if="blocked && !forced" class="fp-blocked" data-testid="file-preview-blocked">
-      <div class="fp-blocked-title">这条数据采集时被对方站点拦下了</div>
-      <p class="fp-blocked-body">
-        <template v-if="blocked.reason === 'pattern'">存档里是一张拦截/验证页，不是文章正文</template>
-        <template v-else>存档里没有正文，只有 {{ blocked.textLength }} 个字的页面框架</template><template v-if="sizeNum">（仅 {{ (sizeNum / 1024).toFixed(0) }} KB，同类正文通常在 MB 级）</template>。
-      </p>
+      <!-- 从 TXT 切过来看快照时是另一回事：正文已经抓到了，这里只是那份 html 存档没有正文。
+           说成"采集被拦下"会把人引到错误的结论上（0920-02，2026-09-21 实测公众号快照）。 -->
+      <template v-if="snapshotMode">
+        <div class="fp-blocked-title">这份快照里没有正文</div>
+        <p class="fp-blocked-body">
+          存档里只有 {{ blocked.textLength }} 个字的页面框架——这类页面的正文由脚本渲染，
+          静态存档里通常就是这样。<b>正文看 TXT 那一份。</b>
+        </p>
+      </template>
+      <template v-else>
+        <div class="fp-blocked-title">这条数据采集时被对方站点拦下了</div>
+        <p class="fp-blocked-body">
+          <template v-if="blocked.reason === 'pattern'">存档里是一张拦截/验证页，不是文章正文</template>
+          <template v-else>存档里没有正文，只有 {{ blocked.textLength }} 个字的页面框架</template><template v-if="sizeNum">（仅 {{ (sizeNum / 1024).toFixed(0) }} KB，同类正文通常在 MB 级）</template>。
+        </p>
+      </template>
       <!-- 只有真从**可见文本**里认出拦截提示时才引述；否则没有原话可引，
            硬引会引出「视频 小程序 赞」这类页脚碎词（2026-09-11 实测踩过）。 -->
-      <p v-if="blocked.reason === 'pattern' && blocked.hint" class="fp-blocked-quote">「{{ blocked.hint }}」</p>
-      <p class="fp-blocked-body muted">这不代表原文打不开——原文多半正常，只是这次没采到。</p>
+      <p v-if="!snapshotMode && blocked.reason === 'pattern' && blocked.hint" class="fp-blocked-quote">「{{ blocked.hint }}」</p>
+      <p v-if="!snapshotMode" class="fp-blocked-body muted">这不代表原文打不开——原文多半正常，只是这次没采到。</p>
       <button class="rc-btn" type="button" style="margin-top: 10px" @click="forced = true">仍要预览页面</button>
     </div>
 
@@ -233,8 +334,8 @@ function onExcelError(e: unknown) {
     <!-- 两条退路始终在：预览失败、类型不支持、或用户就是想拿原件时都用得上。
          下载走同源 OSS 地址（<a download> 是导航，不受同源读取限制）；
          「原始地址」走 K2，指向源站，仅新窗口打开。 -->
-    <div v-if="path || externalUrl" class="fp-foot">
-      <a v-if="path" class="rc-btn" :href="ossFileUrl(path)" :download="name || ''" data-testid="file-preview-download">下载</a>
+    <div v-if="currentPath || externalUrl" class="fp-foot">
+      <a v-if="currentPath" class="rc-btn" :href="ossFileUrl(currentPath)" :download="downloadName" data-testid="file-preview-download">下载</a>
       <!-- 兜底与直连：新窗口打开为顶级导航，不受同源读取限制；K17 html 与 K6 正文文本等所有 OSS 路径均支持直接新窗口打开 -->
       <a v-if="publicFileUrl" class="rc-btn" :href="publicFileUrl" target="_blank" rel="noopener noreferrer" data-testid="file-preview-open-window">新窗口打开 ↗</a>
       <a v-if="externalUrl" class="rc-btn" :href="externalUrl" target="_blank" rel="noopener noreferrer" data-testid="file-preview-external">原始地址 ↗</a>
@@ -262,6 +363,12 @@ function onExcelError(e: unknown) {
 .fp-img { max-width: 100%; flex: 1; min-height: 0; object-fit: contain; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
 .fp-text { overflow: auto; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
 .fp-text pre { margin: 0; padding: 12px; font-family: var(--rc-mono, monospace); font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
+.fp-bar { display: flex; align-items: center; gap: 6px; }
+.fp-ext { height: 24px; padding: 0 12px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text-2); font-size: 11px; cursor: pointer; }
+.fp-ext:hover:not(:disabled) { border-color: var(--rc-primary); color: var(--rc-primary); }
+.fp-ext.on { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-weight: 600; }
+.fp-ext:disabled { cursor: progress; opacity: .6; }
+.fp-bar-note { color: var(--rc-faint); font-size: 11px; }
 .fp-foot { display: flex; gap: 8px; }
 .fp-foot .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; line-height: 28px; text-decoration: none; }
 </style>
