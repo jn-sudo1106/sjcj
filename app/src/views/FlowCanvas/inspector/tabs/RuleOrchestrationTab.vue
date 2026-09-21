@@ -15,12 +15,11 @@
 // 画布侧没 provide 那个上下文，走默认实现（读写 flow store），行为不变。
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Document, Headset, Picture, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
+import { Delete, Headset, Picture, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { recognizeImage, readImageAsBase64, ocrTextOf, type OcrBlock } from '@/api/ocr'
 import { isArticleSummaryNode, isArticleTagNode, isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isRuleNode, isScriptlessNode, isTranslateNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { parseArticleTags, riskLevelTone, type ArticleTagResult } from '@/utils/flow/articleTags'
-import { TRANSLATE_AUTO_CODE, TRANSLATE_ENGINE_CODES, TRANSLATE_LANGUAGE_CODES, TRANSLATE_MAX_QUERY_BYTES, engineCodeOf, engineLabelOf, languageCodeOf, translateSampleOf, translateText } from '@/api/translate'
+import { TRANSLATE_AUTO_CODE, TRANSLATE_ENGINE_CODES, TRANSLATE_LANGUAGE_CODES, engineCodeOf, engineLabelOf, languageCodeOf, translateSampleOf, translateText } from '@/api/translate'
 import { SPEECH_AUDIO_EXTENSIONS, SPEECH_LANGUAGE_OPTIONS, SPEECH_MAX_DURATION_SECONDS, SPEECH_MAX_FILE_SIZE, isSupportedAudioFile, readAudioDuration, transcribeAudio, type SpeechTranscriptionResult } from '@/api/speech'
 import { MEDIA_AUDIO_FORMATS, MEDIA_BIT_RATE_OPTIONS, MEDIA_CHANNEL_OPTIONS, MEDIA_MAX_FILE_SIZE, MEDIA_SAMPLING_RATE_OPTIONS, MEDIA_VIDEO_EXTENSIONS, extractAudio, isSupportedVideoFile, readVideoDuration, type MediaExtractionResult } from '@/api/media'
 import { useNodeEditorContext } from '../nodeEditorContext'
@@ -279,151 +278,28 @@ async function copyFileId() {
   }
 }
 
-// ---- 文章生成摘要（0917 第一版，仅文章生成摘要节点）----
-// 上传/粘贴正文 → 调后端 /api/answer/data-process 出摘要。
+// ---- 文章生成摘要（0921 改版：编排配置只留纯配置项）----
+// 本类型不做前端试跑：「上传/粘贴正文 → 生成摘要」那一套（0917 第一版）整体下线，
+// 编排配置 Tab 只保留「模型供应商 / 模型」两个下拉 + 只读的系统提示词；真正的摘要生成在流程执行时
+// 由后端按节点配置完成，节点上留存的也就只有模型与提示词两项。
 // 系统提示词**不在前端拼**：进 Tab 时按 category=rule + node_type_name=文章生成摘要 从
 // cfg_llm_node_prompt 取（见 promptCategory.ts 的分类映射与 promptTemplateLoader），
-// 结果落在节点的 execCfg.systemPrompt 上，生成时整段作为 systemPrompt 发出去（后端 .system() 直接用）。
+// 结果落在节点的 execCfg.systemPrompt 上，执行时整段作为 systemPrompt 发出去（后端 .system() 直接用）。
 // 模型供应商 / 模型与规则节点同源（/api/model/*），存在节点上，可随时切换。
 const isArticleSummary = computed(() => isArticleSummaryNode(cfg.value))
-const ARTICLE_TEXT_EXTENSIONS = ['txt', 'md', 'markdown', 'csv', 'json', 'log', 'html', 'htm']
-/** 正文体积上限：模型上下文有限，超了先拦，免得白烧一次调用 */
-const ARTICLE_MAX_CHARS = 200_000
 
-const articleText = ref('')
-const articleFileInput = ref<HTMLInputElement | null>(null)
-const articleFileName = ref('')
-const articleFileError = ref('')
-const articleRunning = ref(false)
-const articleError = ref('')
-const articleSummary = ref('')
-const articleThinking = ref('')
-const articleDone = ref(false)
+/** 系统提示词的展开/收起（只读展示，不参与保存） */
 const articlePromptOpen = ref(false)
-const articleAbort = ref<AbortController | null>(null)
 
-const articleCharCount = computed(() => articleText.value.trim().length)
-/** 提示词必须来自提示词表：取不到（表里没这行/接口挂了）就不让生成，免得拿默认那句抓取配置提示词瞎跑 */
 /**
  * 提示词是否真的来自提示词表。
  *
  * ⚠️ 只看 `systemPrompt` 非空是不够的：这类节点的种子默认值是「抓取配置」那句提示词
  *（makeDefaultExecConfig），非空但完全不对口。所以由提示词 watcher 在取模板失败时置位，
- * 这里据此拦住生成（界面上给出明确原因），避免拿错提示词白跑一次模型调用。
+ * 这里据此在界面上给出明确原因，避免执行时拿错提示词白跑一次模型调用。
  */
 const articlePromptMissing = ref(false)
 const articlePromptReady = computed(() => !articlePromptMissing.value && !!orchCfg.value.systemPrompt?.trim())
-const canGenerateSummary = computed(() => (
-  !articleRunning.value && articleCharCount.value > 0 && articlePromptReady.value
-  && !!(orchCfg.value.modelProviderCode ?? '').trim() && !!(orchCfg.value.modelCode ?? '').trim()
-))
-
-function clearArticle() {
-  articleText.value = ''
-  articleFileName.value = ''
-  articleFileError.value = ''
-  articleError.value = ''
-  articleSummary.value = ''
-  articleThinking.value = ''
-  articleDone.value = false
-  if (articleFileInput.value) articleFileInput.value.value = ''
-}
-
-function isTextFile(file: File): boolean {
-  const name = file.name || ''
-  const dot = name.lastIndexOf('.')
-  const ext = dot >= 0 ? name.slice(dot + 1).toLowerCase() : ''
-  return ARTICLE_TEXT_EXTENSIONS.includes(ext) || file.type.startsWith('text/')
-}
-
-function onArticleFileChange(e: Event) {
-  const input = e.target as HTMLInputElement
-  const file = input.files?.[0]
-  articleFileError.value = ''
-  if (!file) return
-  if (!isTextFile(file)) {
-    input.value = ''
-    articleFileError.value = `只支持文本文件（${ARTICLE_TEXT_EXTENSIONS.join(' / ')}）`
-    return
-  }
-  const reader = new FileReader()
-  reader.onerror = () => { articleFileError.value = '文本读取失败' }
-  reader.onload = () => {
-    const text = typeof reader.result === 'string' ? reader.result : ''
-    if (text.trim().length > ARTICLE_MAX_CHARS) {
-      articleFileError.value = `正文超过 ${ARTICLE_MAX_CHARS} 字，请先精简或分段`
-      return
-    }
-    articleText.value = text
-    articleFileName.value = file.name
-    articleError.value = ''
-    articleSummary.value = ''
-    articleDone.value = false
-  }
-  reader.readAsText(file)
-}
-
-function onArticleTextInput(e: Event) {
-  articleText.value = (e.target as HTMLTextAreaElement).value
-  articleFileError.value = ''
-  if (articleText.value.trim().length > ARTICLE_MAX_CHARS) {
-    articleFileError.value = `正文超过 ${ARTICLE_MAX_CHARS} 字，请先精简或分段`
-  }
-}
-
-async function runArticleSummary() {
-  if (!canGenerateSummary.value) return
-  articleRunning.value = true
-  articleError.value = ''
-  articleSummary.value = ''
-  articleThinking.value = ''
-  articleDone.value = false
-  articleAbort.value?.abort()
-  const controller = new AbortController()
-  articleAbort.value = controller
-  let streamed = ''
-  try {
-    // description 即 user message：正文本身；systemPrompt 是提示词表里那条模板的渲染结果
-    streamed = await callDataProcessForText({
-      text: articleText.value,
-      sourceLabel: articleFileName.value || '文章文本',
-      signal: controller,
-      onThinking: (delta) => { articleThinking.value += delta },
-      onContent: (full) => { articleSummary.value = full },
-    })
-    if (!streamed.trim() && !articleSummary.value.trim()) {
-      articleError.value = '模型没有返回内容，请重试或换一个模型'
-    } else {
-      articleDone.value = true
-      ElMessage.success('摘要已生成')
-    }
-  } catch (e) {
-    if (controller.signal.aborted || (e as Error)?.message?.includes('已取消')) {
-      ElMessage.info('已取消生成')
-    } else {
-      articleError.value = `生成失败：${(e as Error)?.message ?? String(e)}`
-      ElMessage.error(articleError.value)
-    }
-  } finally {
-    if (articleAbort.value === controller) articleAbort.value = null
-    articleRunning.value = false
-  }
-}
-
-function cancelArticleSummary() {
-  articleAbort.value?.abort()
-}
-
-async function copyArticleSummary() {
-  const text = articleSummary.value.trim()
-  if (!text) return
-  try {
-    await navigator.clipboard.writeText(text)
-    ElMessage.success('摘要已复制')
-  } catch {
-    ElMessage.warning('复制失败，请手动选择文本')
-  }
-}
 
 // ---- 翻译助手（0921 改版：纯配置 + 测试翻译）----
 // 只保留翻译引擎 / 源语言 / 目标语言三个下拉，「测试翻译」用内置样例文本调 /api/translate
@@ -583,178 +459,10 @@ function cancelTranslate() {
   translateAbort.value?.abort()
 }
 
-/**
- * 文本 → data-process 的公共调用（文章摘要 / 翻译助手共用）。
- *
- * ⚠️ sourceTable / inputFields 必须非空：后端 AnswerServiceImpl.dataProcess() 对这两个字段做了
- * validateText（`targetTable` / `outputFields` 反倒可选），传空直接 500（错误体还是空的）。
- * 这类节点没有表与字段，按"文本来源"如实填占位值；后端放宽校验后可以删掉。
- */
-async function callDataProcessForText(input: {
-  text: string
-  sourceLabel: string
-  signal: AbortController
-  onThinking: (delta: string) => void
-  /** 回传的是**累计到当前的全文**（不是增量）——调用方直接赋值给结果区即可 */
-  onContent: (fullText: string) => void
-}): Promise<string> {
-  const payload = buildDataProcessGeneratePayload({
-    description: input.text,
-    configId: Number(cfg.value?.configId ?? 0),
-    providerCode: orchCfg.value.modelProviderCode ?? '',
-    model: orchCfg.value.modelCode ?? '',
-    sourceTable: input.sourceLabel || '文本',
-    targetTable: '',
-    inputFields: ['article_text'],
-    outputFields: [],
-    inputFieldOptions: [{ itemCode: 'article_text', itemName: '正文' }],
-    outputFieldOptions: [],
-    systemPrompt: orchCfg.value.systemPrompt ?? '',
-  })
-  // buildDataProcessGeneratePayload 在 outputFieldOptions 为空时会**退回 inputFields**（规则节点的既有口径），
-  // 这类纯文本节点没有出参字段，显式清掉，免得把「正文」当成出参写进 payload 与 cs_config.snatch_conf。
-  payload.outputFields = ''
-  let streamed = ''
-  await ruleApi.dataProcessGenerate(payload, {
-    signal: input.signal.signal,
-    onThinking: (delta) => { if (delta) input.onThinking(delta) },
-    onContent: (delta) => {
-      if (!delta) return
-      streamed += delta
-      input.onContent(streamed)
-    },
-  })
-  return streamed
-}
-
-// ---- 文章打标签（0918 第一版，仅文章打标签节点）----
-// 上传/粘贴文本 → 调 /api/answer/data-process（与摘要同一条通路：系统提示词整段由前端从
-// cfg_llm_node_prompt 取，node_type_name='文章打标签'、category='rule'）→ 解析模型输出的 JSON 标签。
+// ---- 文章打标签（0921 改版：编排配置只保留纯配置项）----
+// 文章正文由流程执行阶段处理；此处只保留模型选择和系统提示词查看入口。
 const isArticleTag = computed(() => isArticleTagNode(cfg.value))
-const tagPromptMissing = ref(false)
 const tagPromptOpen = ref(false)
-
-const tagText = ref('')
-const tagFileInput = ref<HTMLInputElement | null>(null)
-const tagFileName = ref('')
-const tagFileError = ref('')
-const tagRunning = ref(false)
-const tagError = ref('')
-/** 模型原始输出（也用于"解析不出 JSON 时退回展示"） */
-const tagRawOutput = ref('')
-const tagResult = ref<ArticleTagResult | null>(null)
-const tagRawOpen = ref(false)
-const tagAbort = ref<AbortController | null>(null)
-
-const tagCharCount = computed(() => tagText.value.trim().length)
-const tagPromptReady = computed(() => !tagPromptMissing.value && !!orchCfg.value.systemPrompt?.trim())
-const canTag = computed(() => (
-  !tagRunning.value && tagCharCount.value > 0 && tagPromptReady.value
-  && !!(orchCfg.value.modelProviderCode ?? '').trim() && !!(orchCfg.value.modelCode ?? '').trim()
-))
-
-function clearArticleTag() {
-  tagText.value = ''
-  tagFileName.value = ''
-  tagFileError.value = ''
-  tagError.value = ''
-  tagRawOutput.value = ''
-  tagResult.value = null
-  tagRawOpen.value = false
-  if (tagFileInput.value) tagFileInput.value.value = ''
-}
-
-function onTagFileChange(e: Event) {
-  const input = e.target as HTMLInputElement
-  const file = input.files?.[0]
-  tagFileError.value = ''
-  if (!file) return
-  if (!isTextFile(file)) {
-    input.value = ''
-    tagFileError.value = `只支持文本文件（${ARTICLE_TEXT_EXTENSIONS.join(' / ')}）`
-    return
-  }
-  const reader = new FileReader()
-  reader.onerror = () => { tagFileError.value = '文件读取失败' }
-  reader.onload = () => {
-    const text = typeof reader.result === 'string' ? reader.result : ''
-    if (text.trim().length > ARTICLE_MAX_CHARS) {
-      tagFileError.value = `正文超过 ${ARTICLE_MAX_CHARS} 字，请先精简或分段`
-      return
-    }
-    tagText.value = text
-    tagFileName.value = file.name
-    tagError.value = ''
-    tagResult.value = null
-    tagRawOutput.value = ''
-  }
-  reader.readAsText(file)
-}
-
-function onTagTextInput(e: Event) {
-  tagText.value = (e.target as HTMLTextAreaElement).value
-  tagFileError.value = ''
-  if (tagText.value.trim().length > ARTICLE_MAX_CHARS) {
-    tagFileError.value = `正文超过 ${ARTICLE_MAX_CHARS} 字，请先精简或分段`
-  }
-}
-
-async function runArticleTag() {
-  if (!canTag.value) return
-  tagRunning.value = true
-  tagError.value = ''
-  tagRawOutput.value = ''
-  tagResult.value = null
-  tagAbort.value?.abort()
-  const controller = new AbortController()
-  tagAbort.value = controller
-  let streamed = ''
-  try {
-    // 提示词里的示例把用户输入写成「文本：<正文>」，这里保持一致，减少模型跑偏
-    streamed = await callDataProcessForText({
-      text: `文本：\n${tagText.value}`,
-      sourceLabel: tagFileName.value || '待标注文本',
-      signal: controller,
-      onThinking: () => { /* 打标签不需要展示思考过程，忽略 */ },
-      onContent: (full) => { tagRawOutput.value = full },
-    })
-    tagRawOutput.value = streamed
-    tagResult.value = parseArticleTags(streamed)
-    if (!tagResult.value && !streamed.trim()) {
-      tagError.value = '模型没有返回内容，请重试或换一个模型'
-    } else if (!tagResult.value) {
-      // 不是 JSON 也不报错：把原文摆出来，让人看得见模型到底说了什么
-      ElMessage.warning('模型没有按 JSON 输出，已展示原始返回')
-    } else {
-      ElMessage.success('标注完成')
-    }
-  } catch (e) {
-    if (controller.signal.aborted || (e as Error)?.message?.includes('已取消')) {
-      ElMessage.info('已取消')
-    } else {
-      tagError.value = `打标签失败：${(e as Error)?.message ?? String(e)}`
-      ElMessage.error(tagError.value)
-    }
-  } finally {
-    if (tagAbort.value === controller) tagAbort.value = null
-    tagRunning.value = false
-  }
-}
-
-function cancelArticleTag() {
-  tagAbort.value?.abort()
-}
-
-async function copyArticleTagResult() {
-  const text = tagResult.value?.raw || tagRawOutput.value.trim()
-  if (!text) return
-  try {
-    await navigator.clipboard.writeText(text)
-    ElMessage.success('标签已复制（JSON）')
-  } catch {
-    ElMessage.warning('复制失败，请手动选择文本')
-  }
-}
 
 // 切节点（NodeInspector 里本组件不带 key，是复用的）时清空试跑区，避免串到下一个节点上
 watch(id, () => {
@@ -762,12 +470,9 @@ watch(id, () => {
   clearAudioFile()
   audioLanguage.value = ''
   clearVideoFile()
-  clearArticle()
   articlePromptOpen.value = false
   articlePromptMissing.value = false
-  clearArticleTag()
   tagPromptOpen.value = false
-  tagPromptMissing.value = false
   clearTranslate()
   // 语言下拉的回填由 translateLangsTouched 那条 watch 管（从 code_rule 还原，解析不出才落默认）
   mediaFormat.value = 'mp3'
@@ -878,9 +583,7 @@ async function copyOcrText() {
 onBeforeUnmount(() => {
   releaseOcrPreview()
   releaseVideoAudioUrl()
-  articleAbort.value?.abort()
   translateAbort.value?.abort()
-  tagAbort.value?.abort()
 })
 const orchCfg = computed<RuleOrchestration>(() => ({
   ...(isRule.value ? makeDefaultRuleOrchestration() : makeDefaultExecConfig()),
@@ -904,6 +607,20 @@ const promptCategoryGroups = computed(() => promptCategoryGroupsForNode(cfg.valu
 const promptCategory = computed(() => resolvePromptCategoryForNode(cfg.value, orchCfg.value.promptCategory))
 const promptListCategory = computed(() => promptListCategoryForNode(cfg.value))
 const describeTouched = ref(false)
+
+/**
+ * 用户在工作台手改过系统提示词后置位（与 describeTouched / translateLangsTouched 同一套口径）：
+ * 之后的自动拼接**不再回写** systemPrompt，否则会把手改值静默覆盖回模板。
+ *
+ * 为什么必须有这个旗标：自动拼接 watcher 的依赖里有 inputFieldOptions / outputFieldOptions /
+ * sourceTableName 这些**异步加载**的量，它们落地时 watcher 会再跑一轮（此时 applied 与当前值不同），
+ * 而它的 seq 守卫（refreshSeq !== promptRefreshSeq）只防「旧请求晚到」，不防「用户已手改」。
+ * 于是「工作台保存 → 字段选项随后加载完成 → 手改值被覆盖」会成为必然发生的竞态；
+ * 现实路径还有更宽的一条：用户改完提示词保存，之后去表配置改一个字段，回来提示词已被换回模板。
+ *
+ * 注意：这里只挡住「回写」，不挡「取模板」——模板取不到的信号仍要照常更新。
+ */
+const promptTouched = ref(false)
 
 // 数据监控节点：监控方法与规则描述同属编排语义，放在「设置业务规则」上方。
 const monitorMethods = computed<string[]>(() => cfg.value?.monitorMethods ?? [])
@@ -1008,6 +725,8 @@ function resolveConfigDetailPrefill(raw: Record<string, unknown>): { describe: s
 
 watch(id, () => {
   describeTouched.value = false
+  // 换节点即复位：手改旗标只对「当前这个节点的这一轮编辑」生效
+  promptTouched.value = false
 }, { immediate: true })
 
 function buildMonitorDescribe() {
@@ -1247,11 +966,12 @@ watch(
         inputFieldOptions: inputFieldOptions.value,
         outputFieldOptions: outputFieldOptions.value.length ? outputFieldOptions.value : inputFieldOptions.value,
       })
-      // 文章生成摘要 / 文章打标签节点：模板取不到的信号要留给界面（它们不能靠"提示词非空"判断能不能跑）
+      // 文章生成摘要节点：模板取不到的信号要留给界面（不能靠"提示词非空"判断能不能跑）
       if (isArticleSummary.value) articlePromptMissing.value = !applied
-      if (isArticleTag.value) tagPromptMissing.value = !applied
       if (!applied) return
       if (refreshSeq !== promptRefreshSeq) return
+      // 用户手改过就不再自动回写（改表/字段仍会重算模板，但不覆盖手改值；切节点时旗标复位）
+      if (promptTouched.value) return
       if (applied !== orchCfg.value.systemPrompt) patch({ systemPrompt: applied })
     })()
   },
@@ -1271,6 +991,10 @@ watch(
 function onDescribeChange(e: Event) {
   describeTouched.value = true
   patch({ describe: (e.target as HTMLTextAreaElement).value })
+}
+/** 工作台左栏「保存」：置位手改旗标，之后的自动拼接不再覆盖 */
+function onPromptSaved() {
+  promptTouched.value = true
 }
 function onSystemPromptChange(value: string) {
   patch({ systemPrompt: value })
@@ -1633,7 +1357,13 @@ async function loadSwitchOptions() {
 function retryLoadSwitchOptions() {
   void loadSwitchOptions()
 }
-watch(isRule, (v) => { if (!v) void loadSwitchOptions() }, { immediate: true })
+// 文章生成摘要没有「既有抓取配置」可切（它本来就不吃抓取 XML），不进这个加载分支，
+// 免得白拉一次编排列表；同时把 isArticleSummary 一起放进依赖，切到别的非规则节点时仍会补加载。
+watch(
+  () => [isRule.value, isArticleSummary.value] as const,
+  ([rule, summary]) => { if (!rule && !summary) void loadSwitchOptions() },
+  { immediate: true },
+)
 
 const applyingSwitch = ref(false)
 async function onApplySwitch() {
@@ -1653,6 +1383,11 @@ async function onApplySwitch() {
     // 跟 ruleId 无关）。
     // scriptPath 清空，强制先点一次「生成配置」换成本节点
     // 自己的新文件，才允许「保存脚本」（onSaveScript 的 scriptPath 非空校验兜底）。
+    // 套用别人的提示词同样算「用户手改」：数据监控 / 数据校验 / 文章打标签这些节点
+    // 自动拼接 watcher 是活的，不置位就会被随后的重拼覆盖掉刚套用的内容。
+    // detail 没带提示词时不置位——那种情况 patch 用的是当前值，没有覆盖风险，
+    // 不该顺手挡掉后续正常的重拼。
+    if (detail.systemPrompt) promptTouched.value = true
     patch({
       describe: detail.describe || target.describe || '',
       systemPrompt: detail.systemPrompt || orchCfg.value.systemPrompt,
@@ -1742,7 +1477,8 @@ function onTestScript() {
       <el-option v-for="m in MONITOR_METHODS" :key="m" :label="m" :value="m" />
     </el-select>
   </div>
-  <div v-if="!isTranslate" class="ni-section-title ni-section-title-row">
+  <!-- 文章生成摘要没有「抓取配置」这个概念，标题行整块不出现（0921 口径：只留模型与系统提示词） -->
+  <div v-if="!isTranslate && !isArticleSummary && !isArticleTag" class="ni-section-title ni-section-title-row">
     <span>{{ isRule ? '设置业务规则' : '抓取配置' }}</span>
     <span v-if="!isScriptless" class="ni-section-actions">
       <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
@@ -1959,47 +1695,11 @@ function onTestScript() {
       </div>
     </div>
   </div>
-  <!-- 文章生成摘要（0917 第一版，仅文章生成摘要节点）：上传/粘贴正文 → 调 /api/answer/data-process。
+  <!-- 文章生成摘要（0921 改版：编排配置只留纯配置项）：模型供应商 / 模型两个下拉 + 只读的系统提示词。
+       上传正文试跑那一套（0917 第一版）已整体下线，真正的摘要在流程执行时由后端生成。
        系统提示词来自 cfg_llm_node_prompt（category=rule + node_type_name=文章生成摘要），
        下面只读展示实际会发出去的那一份，便于核对。 -->
   <div v-if="isArticleSummary" class="rc-field ocr-field" data-testid="article-summary-field">
-    <label>文章生成摘要</label>
-    <div class="ocr-picker">
-      <input
-        ref="articleFileInput"
-        class="rc-file-input"
-        data-testid="article-file-input"
-        type="file"
-        accept=".txt,.md,.markdown,.csv,.json,.log,.html,.htm,text/*"
-        @change="onArticleFileChange"
-      />
-      <button class="rc-btn" type="button" data-testid="article-pick-file" @click="articleFileInput?.click()">
-        <Document aria-hidden="true" />
-        <span>上传文本</span>
-      </button>
-      <span class="ocr-hint">
-        {{ ARTICLE_TEXT_EXTENSIONS.join(' / ') }}，也可直接粘贴；单次最多 {{ TRANSLATE_MAX_QUERY_BYTES }} 字节（中文约 2000 字）
-      </span>
-    </div>
-    <div v-if="articleFileName" class="ocr-preview">
-      <span class="ocr-file-name" :title="articleFileName">{{ articleFileName }}</span>
-      <span class="ocr-file-size">{{ articleCharCount }} 字</span>
-      <button class="ocr-remove" type="button" title="清空正文" aria-label="清空正文" @click="clearArticle">
-        <Delete aria-hidden="true" />
-      </button>
-    </div>
-    <div v-if="articleFileError" class="ocr-error" data-testid="article-file-error">{{ articleFileError }}</div>
-    <textarea
-      class="rc-input rc-textarea article-text"
-      :value="articleText"
-      data-testid="article-text"
-      placeholder="粘贴或上传要生成摘要的文章正文"
-      @input="onArticleTextInput"
-    />
-    <div class="article-text-meta">
-      <span>{{ articleCharCount }} 字</span>
-      <button v-if="articleText" class="rc-link-btn" type="button" @click="clearArticle">清空</button>
-    </div>
     <div class="rc-model-row">
       <span class="rc-model-fields">
         <label class="rc-inline-field">
@@ -2042,31 +1742,7 @@ function onTestScript() {
     </div>
     <pre v-if="articlePromptOpen" class="article-prompt-text" data-testid="article-prompt-text">{{ orchCfg.systemPrompt || '（未取到提示词模板）' }}</pre>
     <div v-if="!articlePromptReady" class="ocr-error" data-testid="article-prompt-missing">
-      没有取到「文章生成摘要」的系统提示词模板（cfg_llm_node_prompt 里需要 category=rule、node_type_name=文章生成摘要 的一行），暂不能生成
-    </div>
-    <div class="ocr-actions">
-      <button
-        class="rc-btn primary"
-        type="button"
-        :class="{ 'is-generating': articleRunning }"
-        data-testid="article-generate"
-        :disabled="!canGenerateSummary && !articleRunning"
-        @click="articleRunning ? cancelArticleSummary() : runArticleSummary()"
-      >{{ articleRunning ? '生成中…（点击取消）' : '生成摘要' }}</button>
-      <span v-if="articleError" class="ocr-error" data-testid="article-error">{{ articleError }}</span>
-    </div>
-    <div v-if="articleSummary || articleThinking" class="ocr-result" data-testid="article-result">
-      <div class="ocr-result-head">
-        <span>摘要{{ articleDone ? '' : '（生成中…）' }}</span>
-        <span class="ocr-result-actions">
-          <button class="rc-link-btn" type="button" @click="copyArticleSummary">复制</button>
-        </span>
-      </div>
-      <pre class="ocr-result-text article-summary-text" data-testid="article-summary-text">{{ articleSummary || '等待模型输出…' }}</pre>
-      <details v-if="articleThinking.trim()" class="article-thinking">
-        <summary>思考过程</summary>
-        <pre>{{ articleThinking }}</pre>
-      </details>
+      没有取到「文章生成摘要」的系统提示词模板（cfg_llm_node_prompt 里需要 category=rule、node_type_name=文章生成摘要 的一行），请先补上模板再执行
     </div>
   </div>
   <!-- 翻译助手（0921 改版：纯配置 + 测试翻译）：翻译引擎 / 源语言 / 目标语言三个下拉，
@@ -2132,46 +1808,8 @@ function onTestScript() {
       <pre class="ocr-result-text article-summary-text" data-testid="translate-result-text">{{ translateResult }}</pre>
     </div>
   </div>
-  <!-- 文章打标签（0918 第一版，仅文章打标签节点）：上传/粘贴文本 → 调 /api/answer/data-process
-       （系统提示词取自 cfg_llm_node_prompt 的「文章打标签」行）→ 解析模型输出的 JSON 标签体系。 -->
+  <!-- 文章打标签：编排配置只保留模型供应商、模型和系统提示词查看入口。 -->
   <div v-if="isArticleTag" class="rc-field ocr-field" data-testid="article-tag-field">
-    <label>文章打标签</label>
-    <div class="ocr-picker">
-      <input
-        ref="tagFileInput"
-        class="rc-file-input"
-        data-testid="tag-file-input"
-        type="file"
-        accept=".txt,.md,.markdown,.csv,.json,.log,.html,.htm,text/*"
-        @change="onTagFileChange"
-      />
-      <button class="rc-btn" type="button" data-testid="tag-pick-file" @click="tagFileInput?.click()">
-        <Document aria-hidden="true" />
-        <span>上传文本</span>
-      </button>
-      <span class="ocr-hint">
-        {{ ARTICLE_TEXT_EXTENSIONS.join(' / ') }}，也可直接粘贴；最多 {{ ARTICLE_MAX_CHARS }} 字
-      </span>
-    </div>
-    <div v-if="tagFileName" class="ocr-preview">
-      <span class="ocr-file-name" :title="tagFileName">{{ tagFileName }}</span>
-      <span class="ocr-file-size">{{ tagCharCount }} 字</span>
-      <button class="ocr-remove" type="button" title="清空文本" aria-label="清空文本" @click="clearArticleTag">
-        <Delete aria-hidden="true" />
-      </button>
-    </div>
-    <div v-if="tagFileError" class="ocr-error" data-testid="tag-file-error">{{ tagFileError }}</div>
-    <textarea
-      class="rc-input rc-textarea article-text"
-      :value="tagText"
-      data-testid="tag-text"
-      placeholder="粘贴或上传要标注的文本（新闻、帖子、评论…）"
-      @input="onTagTextInput"
-    />
-    <div class="article-text-meta">
-      <span>{{ tagCharCount }} 字</span>
-      <button v-if="tagText" class="rc-link-btn" type="button" @click="clearArticleTag">清空</button>
-    </div>
     <div class="rc-model-row">
       <span class="rc-model-fields">
         <label class="rc-inline-field">
@@ -2205,75 +1843,15 @@ function onTestScript() {
         </label>
       </span>
     </div>
-    <div v-if="providerError || modelError" class="rc-help">{{ providerError || modelError }}</div>
     <div class="article-prompt">
       <button class="rc-link-btn" type="button" data-testid="tag-prompt-toggle" @click="tagPromptOpen = !tagPromptOpen">
         {{ tagPromptOpen ? '收起系统提示词' : '查看系统提示词' }}
       </button>
-      <span class="ocr-hint">来自提示词表（cfg_llm_node_prompt · 文章打标签）</span>
     </div>
     <pre v-if="tagPromptOpen" class="article-prompt-text" data-testid="tag-prompt-text">{{ orchCfg.systemPrompt || '（未取到提示词模板）' }}</pre>
-    <div v-if="!tagPromptReady" class="ocr-error" data-testid="tag-prompt-missing">
-      没有取到「文章打标签」的系统提示词模板（cfg_llm_node_prompt 里需要 node_type_name=文章打标签 的一行），暂不能标注
-    </div>
-    <div class="ocr-actions">
-      <button
-        class="rc-btn primary"
-        type="button"
-        data-testid="tag-generate"
-        :disabled="!canTag && !tagRunning"
-        @click="tagRunning ? cancelArticleTag() : runArticleTag()"
-      >{{ tagRunning ? '标注中…（点击取消）' : '开始打标签' }}</button>
-      <span v-if="tagError" class="ocr-error" data-testid="tag-error">{{ tagError }}</span>
-    </div>
-    <!-- 结构化结果：摘要 + 各维度标签 + 置信度 + 依据；解析不出 JSON 时退回展示原始返回 -->
-    <div v-if="tagResult" class="ocr-result tag-result" data-testid="tag-result">
-      <div class="ocr-result-head">
-        <span>标注结果</span>
-        <span class="ocr-result-actions">
-          <button class="rc-link-btn" type="button" @click="copyArticleTagResult">复制 JSON</button>
-        </span>
-      </div>
-      <div class="tag-body">
-        <div v-if="tagResult.summary" class="tag-summary" data-testid="tag-summary">{{ tagResult.summary }}</div>
-        <div v-for="group in tagResult.groups" :key="group.key" class="tag-group">
-          <span class="tag-group-label">{{ group.label }}</span>
-          <span class="tag-chips">
-            <span
-              v-for="value in group.values"
-              :key="value"
-              class="tag-chip"
-              :class="group.key === 'risk_level' ? `tone-${riskLevelTone(value)}` : ''"
-            >{{ value }}</span>
-          </span>
-        </div>
-        <div v-if="tagResult.confidence != null || tagResult.uncertain || tagResult.notes" class="tag-meta">
-          <span v-if="tagResult.confidence != null">置信度 {{ tagResult.confidence.toFixed(2) }}</span>
-          <span v-if="tagResult.uncertain" class="tag-uncertain">标记为不确定</span>
-          <span v-if="tagResult.notes">{{ tagResult.notes }}</span>
-        </div>
-        <div v-if="tagResult.evidence.length" class="tag-evidence">
-          <div v-for="item in tagResult.evidence" :key="item.label" class="tag-evidence-row">
-            <b>{{ item.label }}依据</b><span>{{ item.text }}</span>
-          </div>
-        </div>
-      </div>
-      <button class="rc-link-btn tag-raw-toggle" type="button" data-testid="tag-raw-toggle" @click="tagRawOpen = !tagRawOpen">
-        {{ tagRawOpen ? '收起原始返回' : '查看原始返回' }}
-      </button>
-      <pre v-if="tagRawOpen" class="ocr-result-raw" data-testid="tag-raw">{{ tagResult.raw }}</pre>
-    </div>
-    <div v-else-if="tagRawOutput" class="ocr-result" data-testid="tag-raw-result">
-      <div class="ocr-result-head">
-        <span>模型返回（不是 JSON，未做结构化展示）</span>
-        <span class="ocr-result-actions">
-          <button class="rc-link-btn" type="button" @click="copyArticleTagResult">复制</button>
-        </span>
-      </div>
-      <pre class="ocr-result-text">{{ tagRawOutput }}</pre>
-    </div>
   </div>
-  <div v-if="!isTranslate" class="rc-field">
+  <!-- 描述输入框：文章生成摘要 / 文章打标签没有「抓取需求描述」这回事，整块不出现（0921 口径） -->
+  <div v-if="!isTranslate && !isArticleSummary && !isArticleTag" class="rc-field">
     <textarea
       class="rc-input rc-textarea"
       :value="orchCfg.describe"
@@ -2408,7 +1986,8 @@ function onTestScript() {
     @update:alert-config="setMonitorAlertConfig"
   />
 
-  <template v-if="!isRule && !isTranslate">
+  <!-- 动作链摘要 / 切换已有配置都是「抓取配置 XML」这套东西的配套件，纯配置节点整块不出现（0921 口径） -->
+  <template v-if="!isRule && !isTranslate && !isArticleSummary && !isArticleTag">
     <!-- 只读动作链摘要（0804 S3-4，方案 §3.1）：按 NextActionId 链表走出来的执行顺序，不可编辑 -->
     <div v-if="actionSummary" class="rc-list ni-rule-meta">
       <div class="rc-list-row"><b>动作链</b><span :title="actionSummary">{{ actionSummary }}</span></div>
@@ -2467,6 +2046,7 @@ function onTestScript() {
     :describe="orchCfg.describe ?? ''"
     :describe-label="describeLabel"
     :hide-prompt-by-default="isRule"
+    @prompt-saved="onPromptSaved"
     @update:system-prompt="onSystemPromptChange"
     @update:prompt-category="onPromptCategoryChange"
     @update:model-provider-code="onModelProviderChange"

@@ -199,14 +199,14 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(wrapper.find('.rc-actions-row button').exists()).toBe(false)
   })
 
-  // 0917 产品口径：OCR 抓取 / 视频转音频 / 语音转文字 / 文章摘要这几类不给「脚本编辑」入口
-  //（这几类不需要生成脚本），标题行只剩「抓取配置」。其它节点类型不受影响
-  //（上面那条规则节点的用例仍要求有这个按钮）。清单在 flowModel 的 isScriptlessNode()。
+  // 0917 产品口径：OCR 抓取 / 视频转音频 / 语音转文字这几类不给「脚本编辑」入口（它们不需要生成脚本），
+  // 标题行只剩「抓取配置」。其它节点类型不受影响（上面那条规则节点的用例仍要求有这个按钮）。
+  // 清单在 flowModel 的 isScriptlessNode()。
+  // 0921 起「文章生成摘要」整行标题都不出现（它连抓取配置都没有），单独在下面断言。
   it.each([
     ['ocr', 'OCR抓取'],
     ['video-audio', '视频提取音频'],
     ['audio-text', '音频提取文字'],
-    ['article-summary', '文章生成摘要'],
   ])('%s 节点（%s）的标题行没有脚本编辑按钮', async (seedKey, label) => {
     mockAssets()
     setActivePinia(createPinia())
@@ -222,6 +222,21 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(titleRow.text()).toContain('抓取配置')
     expect(titleRow.find('button').exists(), label).toBe(false)
     expect(wrapper.find('.ni-section-actions').exists()).toBe(false)
+  })
+
+  // 0921 产品口径：文章生成摘要的编排配置只留模型与系统提示词，标题行（抓取配置）整块下线
+  it('文章生成摘要节点（文章生成摘要）连「抓取配置」标题行都不出现', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['x-1'] = cloneConfig(NODE_CONFIGS['article-summary'])
+    flow.select('x-1')
+    flow.setActiveTab('orchestration')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    expect(wrapper.find('.ni-section-title-row').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('抓取配置')
   })
 
   it('采集类节点（网页抓取）仍然保留脚本编辑按钮', async () => {
@@ -644,7 +659,8 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     })
   })
 
-  // 0917 文章生成摘要：上传/粘贴正文 → 系统提示词取 cfg_llm_node_prompt → 调 /api/answer/data-process
+  // 0921 改版：文章生成摘要的编排配置只留「模型供应商 / 模型」两个下拉 + 只读的系统提示词；
+  // 上传/粘贴正文 → 生成摘要那一套（0917 第一版）整体下线，真正的摘要在流程执行时由后端生成。
   describe('文章生成摘要（文章生成摘要节点）', () => {
     const ARTICLE_TEMPLATE = {
       promptId: 3,
@@ -693,17 +709,28 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       return { flow, wrapper, ...api }
     }
 
-    it('显示上传文本 / 模型选择 / 生成入口，且没有脚本编辑按钮', async () => {
+    it('只保留模型选择与系统提示词，试跑区与抓取配置配套件都不出现', async () => {
       const { wrapper } = mountOnArticleNode()
+      await flushPromises()
       await flushPromises()
 
       expect(wrapper.find('[data-testid="article-summary-field"]').exists()).toBe(true)
-      expect(wrapper.find('[data-testid="article-pick-file"]').text()).toContain('上传文本')
       expect(wrapper.find('[data-testid="article-model-provider"]').exists()).toBe(true)
       expect(wrapper.find('[data-testid="article-model"]').exists()).toBe(true)
-      expect(wrapper.find('.ni-section-title-row button').exists()).toBe(false)
-      // 没有正文不能生成
-      expect(wrapper.get('[data-testid="article-generate"]').attributes('disabled')).toBeDefined()
+      expect(wrapper.find('[data-testid="article-prompt-toggle"]').exists()).toBe(true)
+
+      // 试跑区（上传正文 / 正文框 / 生成按钮 / 结果区）整体下线
+      for (const id of [
+        'article-pick-file', 'article-file-input', 'article-text',
+        'article-file-error', 'article-generate', 'article-error', 'article-result',
+      ]) {
+        expect(wrapper.find(`[data-testid="${id}"]`).exists(), id).toBe(false)
+      }
+      expect(wrapper.find('textarea[placeholder*="粘贴或上传要生成摘要的文章正文"]').exists()).toBe(false)
+      // 抓取配置那一套配套件（标题行 / 抓取需求描述 / 切换已有配置）同样不出现
+      expect(wrapper.find('.ni-section-title-row').exists()).toBe(false)
+      expect(wrapper.find('textarea[placeholder*="描述抓取需求"]').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('切换已有配置')
     })
 
     it('进 Tab 就按 category=rule + node_type_name=文章生成摘要 取提示词并写到节点上', async () => {
@@ -719,53 +746,14 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       expect(wrapper.get('[data-testid="article-prompt-text"]').text()).toContain('文章摘要生成助手')
     })
 
-    it('提示词表里没有这一行时给出明确提示且不允许生成', async () => {
+    it('提示词表里没有这一行时给出明确提示', async () => {
       const { flow, wrapper } = mountOnArticleNode([])
       await flushPromises()
       await flushPromises()
 
-      // 取不到模板时节点保留种子默认（抓取配置那套），页面必须明确说清不能生成
+      // 取不到模板时节点保留种子默认（抓取配置那套），页面必须明确说清模板缺失
       expect(flow.configs['article-1'].execCfg?.systemPrompt).toBe(DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT)
-      await wrapper.get('[data-testid="article-text"]').setValue('这是一篇测试文章。')
-      await flushPromises()
-      expect(wrapper.get('[data-testid="article-generate"]').attributes('disabled')).toBeDefined()
-    })
-
-    it('粘贴正文后生成：data-process 入参带正文与提示词表里的系统提示词，结果流式落进结果区', async () => {
-      const { wrapper } = mountOnArticleNode()
-      await flushPromises()
-      await flushPromises()
-
-      const generateSpy = vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
-        options?.onThinking?.('分析中…')
-        options?.onContent?.('**摘要：** ')
-        options?.onContent?.('这是一段测试摘要。')
-        options?.onDone?.({ message: '保存完成' })
-        return { script: '', scriptPath: '' }
-      })
-
-      await wrapper.get('[data-testid="article-text"]').setValue('  这是一篇测试文章的正文，用于摘要生成。  ')
-      // 模型供应商 / 模型来自 /api/model/*（挂载时已加载）
-      await flushPromises()
-      await wrapper.get('[data-testid="article-generate"]').trigger('click')
-      await flushPromises()
-      await flushPromises()
-
-      expect(generateSpy).toHaveBeenCalledTimes(1)
-      const payload = generateSpy.mock.calls[0][0]
-      expect(payload.description).toBe('  这是一篇测试文章的正文，用于摘要生成。  ')
-      expect(payload.systemPrompt).toBe(ARTICLE_TEMPLATE.systemPrompt)
-      expect(payload.providerCode).toBe('DeepSeek')
-      expect(payload.model).toBe('deepseek-chat')
-      // 后端 data-process 硬校验 sourceTable / inputFields 非空（targetTable / outputFields 可选），
-      // 文章摘要没有表与字段，按"正文来源"如实填占位值（详见组件里的注释）
-      expect(payload.sourceTable).toBe('文章文本')
-      expect(payload.inputFields).toBe('正文:article_text')
-      expect(payload.targetTable).toBe('')
-      expect(payload.outputFields).toBe('')
-
-      expect(wrapper.get('[data-testid="article-summary-text"]').text()).toContain('这是一段测试摘要')
-      expect(wrapper.get('[data-testid="article-result"]').text()).toContain('摘要')
+      expect(wrapper.get('[data-testid="article-prompt-missing"]').text()).toContain('没有取到')
     })
 
     it('切换模型供应商后重新拉该供应商的模型候选，并写回节点', async () => {
@@ -778,34 +766,15 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       expect(flow.configs['article-1'].execCfg?.modelCode).toBe('deepseek-chat')
 
       // 走 el-select 的 change（jsdom 里点选项不稳，直接发组件事件＝同一条处理路径）
-      const providerSelect = wrapper.findAllComponents({ name: 'ElSelect' })[0]
-      providerSelect.vm.$emit('change', 'OpenAI')
+      const providerSelect = wrapper.findAllComponents({ name: 'ElSelect' })
+        .find((c) => c.attributes('data-testid') === 'article-model-provider')
+      expect(providerSelect, '找不到 article-model-provider 下拉').toBeTruthy()
+      providerSelect!.vm.$emit('change', 'OpenAI')
       await flushPromises()
       await flushPromises()
 
       expect(flow.configs['article-1'].execCfg?.modelProviderCode).toBe('OpenAI')
       expect(flow.configs['article-1'].execCfg?.modelCode).toBe('gpt-4o-mini')
-    })
-
-    it('上传文本文件填入正文，非文本文件被拒', async () => {
-      const { wrapper } = mountOnArticleNode()
-      await flushPromises()
-
-      await selectFile(
-        wrapper.find('input[data-testid="article-file-input"]'),
-        new File(['# 标题\n正文内容'], 'article.md', { type: 'text/markdown' }),
-      )
-      await flushPromises()
-      await new Promise((resolve) => setTimeout(resolve, 20))
-      await flushPromises()
-      expect((wrapper.get('[data-testid="article-text"]').element as HTMLTextAreaElement).value).toContain('正文内容')
-
-      await selectFile(
-        wrapper.find('input[data-testid="article-file-input"]'),
-        new File(['x'], 'photo.png', { type: 'image/png' }),
-      )
-      await flushPromises()
-      expect(wrapper.get('[data-testid="article-file-error"]').text()).toContain('只支持文本文件')
     })
   })
 
@@ -1056,8 +1025,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     })
   })
 
-  // 0918 文章打标签：上传/粘贴文本 → 系统提示词取 cfg_llm_node_prompt 的「文章打标签」行
-  // （category='rule'）→ 调 data-process → 解析模型输出的 JSON 标签
+  // 0921 改版：文章打标签的编排配置只保留模型供应商、模型和系统提示词查看入口。
   describe('文章打标签（文章打标签节点）', () => {
     const TAG_TEMPLATE = {
       promptId: 5,
@@ -1069,13 +1037,6 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       isActive: 1,
       isDefault: 0,
     }
-    const TAG_JSON = JSON.stringify({
-      summary: '某市地铁故障停运两小时，官方未回应引发不满',
-      labels: { topic: ['社会'], sentiment: '负面', risk: ['涉稳'], risk_level: '中危' },
-      confidence: 0.9,
-      evidence: { sentiment: '太让人失望了' },
-      uncertain: false,
-    })
 
     function mockTagApis(promptRows: unknown[] = [TAG_TEMPLATE]) {
       const calls: string[] = []
@@ -1109,15 +1070,22 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       return { flow, wrapper, ...api }
     }
 
-    it('显示上传文本 / 模型 / 开始打标签，且没有脚本编辑按钮', async () => {
+    it('只保留模型供应商、模型和查看系统提示词，其他元素都不出现', async () => {
       const { wrapper } = mountOnTagNode()
       await flushPromises()
 
       expect(wrapper.find('[data-testid="article-tag-field"]').exists()).toBe(true)
-      expect(wrapper.find('[data-testid="tag-pick-file"]').text()).toContain('上传文本')
       expect(wrapper.find('[data-testid="tag-model-provider"]').exists()).toBe(true)
-      expect(wrapper.find('.ni-section-title-row button').exists()).toBe(false)
-      expect(wrapper.get('[data-testid="tag-generate"]').attributes('disabled')).toBeDefined()
+      expect(wrapper.find('[data-testid="tag-model"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="tag-prompt-toggle"]').exists()).toBe(true)
+      expect(wrapper.find('.ni-section-title-row').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="tag-file-input"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="tag-pick-file"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="tag-text"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="tag-generate"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="tag-result"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="tag-raw-result"]').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('来自提示词表')
     })
 
     it('按 category=rule + node_type_name=文章打标签 取提示词并写到节点上', async () => {
@@ -1135,92 +1103,22 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       expect(wrapper.get('[data-testid="tag-prompt-text"]').text()).toContain('舆情监控文本标注引擎')
     })
 
-    it('粘贴文本后打标签：入参带「文本：」前缀与提示词，结果按维度渲染成标签', async () => {
+    it('提示词表里的系统提示词可展开查看', async () => {
       const { wrapper } = mountOnTagNode()
       await flushPromises()
       await flushPromises()
 
-      const generateSpy = vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
-        options?.onContent?.(TAG_JSON)
-        return { script: '', scriptPath: '' }
-      })
-
-      await wrapper.get('[data-testid="tag-text"]').setValue('某市地铁又出故障了，太让人失望了！')
-      await flushPromises()
-      await wrapper.get('[data-testid="tag-generate"]').trigger('click')
-      await flushPromises()
-      await flushPromises()
-
-      const payload = generateSpy.mock.calls[0][0]
-      expect(payload.description).toContain('文本：')
-      expect(payload.description).toContain('某市地铁又出故障了')
-      expect(payload.systemPrompt).toBe(TAG_TEMPLATE.systemPrompt)
-      expect(payload.providerCode).toBe('DeepSeek')
-      expect(payload.model).toBe('deepseek-chat')
-
-      const result = wrapper.get('[data-testid="tag-result"]')
-      expect(wrapper.get('[data-testid="tag-summary"]').text()).toContain('地铁故障停运两小时')
-      expect(result.text()).toContain('社会')      // 主题
-      expect(result.text()).toContain('负面')      // 情感
-      expect(result.text()).toContain('中危')      // 风险等级
-      expect(result.text()).toContain('置信度 0.90')
-      expect(result.text()).toContain('太让人失望了')  // 依据
-      // 原始返回可展开
-      await wrapper.get('[data-testid="tag-raw-toggle"]').trigger('click')
-      expect(wrapper.get('[data-testid="tag-raw"]').text()).toContain('"risk_level"')
+      await wrapper.get('[data-testid="tag-prompt-toggle"]').trigger('click')
+      expect(wrapper.get('[data-testid="tag-prompt-text"]').text()).toContain('舆情监控文本标注引擎')
     })
 
-    it('模型没按 JSON 输出时退回展示原文，不报错也不丢内容', async () => {
-      const { wrapper } = mountOnTagNode()
-      await flushPromises()
-      await flushPromises()
-
-      vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
-        options?.onContent?.('这篇文章整体偏负面，主要涉及社会话题。')
-        return { script: '', scriptPath: '' }
-      })
-
-      await wrapper.get('[data-testid="tag-text"]').setValue('随便一段文本')
-      await flushPromises()
-      await wrapper.get('[data-testid="tag-generate"]').trigger('click')
-      await flushPromises()
-      await flushPromises()
-
-      expect(wrapper.find('[data-testid="tag-result"]').exists()).toBe(false)
-      expect(wrapper.get('[data-testid="tag-raw-result"]').text()).toContain('主要涉及社会话题')
-    })
-
-    it('提示词表里没有这一行时给出提示且不允许打标签', async () => {
+    it('提示词表里没有这一行时不显示其他配置元素', async () => {
       const { flow, wrapper } = mountOnTagNode([])
       await flushPromises()
       await flushPromises()
 
       expect(flow.configs['tag-1'].execCfg?.systemPrompt).toBe(DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT)
-      await wrapper.get('[data-testid="tag-text"]').setValue('一些文本')
-      await flushPromises()
-      expect(wrapper.get('[data-testid="tag-generate"]').attributes('disabled')).toBeDefined()
-      expect(wrapper.find('[data-testid="tag-prompt-missing"]').exists()).toBe(true)
-    })
-
-    it('上传文本文件填入待标注文本，非文本文件被拒', async () => {
-      const { wrapper } = mountOnTagNode()
-      await flushPromises()
-
-      await selectFile(
-        wrapper.find('input[data-testid="tag-file-input"]'),
-        new File(['某市地铁故障'], 'news.txt', { type: 'text/plain' }),
-      )
-      await flushPromises()
-      await new Promise((resolve) => setTimeout(resolve, 20))
-      await flushPromises()
-      expect((wrapper.get('[data-testid="tag-text"]').element as HTMLTextAreaElement).value).toContain('某市地铁故障')
-
-      await selectFile(
-        wrapper.find('input[data-testid="tag-file-input"]'),
-        new File(['x'], 'photo.png', { type: 'image/png' }),
-      )
-      await flushPromises()
-      expect(wrapper.get('[data-testid="tag-file-error"]').text()).toContain('只支持文本文件')
+      expect(wrapper.find('[data-testid="tag-prompt-missing"]').exists()).toBe(false)
     })
 
     // ---- 2026-09-20：编排配置保存时把模型供应商与模型写进 updateConfig 的 core_param ----
@@ -2006,6 +1904,10 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(wrapper.findAll('button').some((b) => b.text() === '规则处理描述')).toBe(true)
   })
 
+  // 0921：这条同时是「手改不被自动拼接覆盖」的回归用例。
+  // 自动拼接 watcher 的依赖里有异步加载的字段选项，它们落地时 watcher 会再跑一轮；
+  // 早先它会把刚保存的手改值静默换回渲染模板（seq 守卫只防旧请求晚到，不防用户已手改）。
+  // 现在由 promptTouched 挡住回写，所以保存后 store 里必须仍是手改值。
   it('编辑系统提示词：保存后写回 systemPrompt，取消不写回', async () => {
     const { flow, wrapper } = mountWithExistingRule()
     await flushPromises()
@@ -2029,6 +1931,12 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(flow.configs['rule-1'].ruleCfg?.promptCategory).toBe('规则处理')
     expect(flow.configs['rule-1'].ruleCfg?.modelProviderCode).toBe('DeepSeek')
     expect(flow.configs['rule-1'].ruleCfg?.modelCode).toBe('deepseek-chat')
+
+    // 改字段会让自动拼接 watcher 重算模板（见下面「表配置字段变化后，规则处理系统提示词
+    // 按最新入参和出参重新拼接」）。手改过的提示词必须扛住这一轮重拼，不能被换回模板。
+    flow.patchRuleConfig('rule-1', { inputFields: ['sku_name'] })
+    await flushPromises()
+    expect(flow.configs['rule-1'].ruleCfg?.systemPrompt).toBe('新的系统提示词')
   })
 
   it('打开工作区后按提示词分类拉取模板并替换表配置占位符', async () => {
