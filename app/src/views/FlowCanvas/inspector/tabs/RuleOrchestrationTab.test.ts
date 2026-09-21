@@ -218,10 +218,15 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     await flushPromises()
 
     const titleRow = wrapper.find('.ni-section-title-row')
-    expect(titleRow.exists(), label).toBe(true)
-    expect(titleRow.text()).toContain('抓取配置')
-    expect(titleRow.find('button').exists(), label).toBe(false)
-    expect(wrapper.find('.ni-section-actions').exists()).toBe(false)
+    if (seedKey === 'audio-text') {
+      expect(titleRow.exists(), label).toBe(false)
+    } else {
+      expect(titleRow.exists(), label).toBe(true)
+      expect(titleRow.text()).toContain('抓取配置')
+      expect(titleRow.find('button').exists(), label).toBe(false)
+      expect(wrapper.find('.ni-section-actions').exists()).toBe(false)
+    }
+    wrapper.unmount()
   })
 
   // 0921 产品口径：文章生成摘要的编排配置只留模型与系统提示词，标题行（抓取配置）整块下线
@@ -361,8 +366,8 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     })
   })
 
-  // 0917 语音转文字试跑：上传音频 → multipart 调 /api/speech/transcriptions → 展示转写文本
-  describe('语音转文字试跑（音频提取文字节点）', () => {
+  // 2026-09-21：音频提取文字节点的编排配置只保留语音下拉框。
+  describe('音频提取文字节点编排配置', () => {
     function mountOnAudioTextNode() {
       mockAssets()
       setActivePinia(createPinia())
@@ -374,162 +379,22 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       return { flow, wrapper }
     }
 
-    function mockSpeechFetch(payload: unknown = { text: '第一段。第二段。', duration: 65.4, traceId: 'trace-1' }, status = 200) {
-      return vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(payload), {
-        status,
-        headers: { 'Content-Type': 'application/json' },
-      }))
-    }
-
-    it('音频提取文字节点显示上传入口，且没有脚本编辑按钮', async () => {
+    it('只显示语音下拉框，不显示其他编排配置元素', async () => {
       const { wrapper } = mountOnAudioTextNode()
       await flushPromises()
 
-      expect(wrapper.find('[data-testid="audio-transcribe-field"]').exists()).toBe(true)
-      expect(wrapper.find('[data-testid="audio-pick-file"]').text()).toContain('上传音频')
-      expect(wrapper.find('.ni-section-title-row button').exists()).toBe(false)
-      // 没选文件时不能点「开始转写」
-      expect(wrapper.get('[data-testid="audio-transcribe"]').attributes('disabled')).toBeDefined()
-    })
-
-    it('上传音频后带语言调 /api/speech/transcriptions，并展示转写文本', async () => {
-      const { wrapper } = mountOnAudioTextNode()
-      await flushPromises()
-      const fetchSpy = mockSpeechFetch()
-
-      const input = wrapper.find('input[data-testid="audio-file-input"]')
-      await selectFile(input, new File(['audio-bytes'], 'meeting.mp3', { type: 'audio/mpeg' }))
-      await wrapper.get('select[data-testid="audio-language"]').setValue('zh')
-      await wrapper.get('[data-testid="audio-transcribe"]').trigger('click')
-      await flushPromises()
-      await flushPromises()
-
-      const calls = fetchSpy.mock.calls.filter(([url]) => url === '/api/speech/transcriptions')
-      expect(calls).toHaveLength(1)
-      const form = calls[0][1]?.body as FormData
-      expect((form.get('file') as File).name).toBe('meeting.mp3')
-      await expect((form.get('request') as Blob).text()).resolves.toBe('{"language":"zh"}')
-
-      expect(wrapper.get('[data-testid="audio-result-text"]').text()).toBe('第一段。第二段。')
-      expect(wrapper.get('[data-testid="audio-result"]').text()).toContain('01:05')
-      expect(wrapper.get('[data-testid="audio-result"]').text()).toContain('trace-1')
-    })
-
-    it('不选语言时不带 request 部分', async () => {
-      const { wrapper } = mountOnAudioTextNode()
-      await flushPromises()
-      const fetchSpy = mockSpeechFetch()
-
-      await selectFile(
-        wrapper.find('input[data-testid="audio-file-input"]'),
-        new File(['audio-bytes'], 'meeting.mp3', { type: 'audio/mpeg' }),
-      )
-      await wrapper.get('[data-testid="audio-transcribe"]').trigger('click')
-      await flushPromises()
-
-      const form = fetchSpy.mock.calls.find(([url]) => url === '/api/speech/transcriptions')?.[1]?.body as FormData
-      expect(form.get('request')).toBeNull()
-    })
-
-    it('非音频后缀被本地拦下，不发请求', async () => {
-      const { wrapper } = mountOnAudioTextNode()
-      await flushPromises()
-      const fetchSpy = mockSpeechFetch()
-
-      await selectFile(
-        wrapper.find('input[data-testid="audio-file-input"]'),
-        new File(['x'], 'notes.txt', { type: 'text/plain' }),
-      )
-      await flushPromises()
-
-      expect(wrapper.get('[data-testid="audio-file-error"]').text()).toContain('不支持的音频格式')
-      expect(fetchSpy.mock.calls.filter(([url]) => url === '/api/speech/transcriptions')).toHaveLength(0)
-      expect(wrapper.get('[data-testid="audio-transcribe"]').attributes('disabled')).toBeDefined()
-    })
-
-    it('转写失败时透出后端 error 文案，不显示结果区', async () => {
-      const { wrapper } = mountOnAudioTextNode()
-      await flushPromises()
-      mockSpeechFetch({ error: 'cfg_llm_config 中没有启用的供应商 MiniMax，无法调用 MiniMax 语音识别' }, 502)
-
-      await selectFile(
-        wrapper.find('input[data-testid="audio-file-input"]'),
-        new File(['audio-bytes'], 'meeting.mp3', { type: 'audio/mpeg' }),
-      )
-      await wrapper.get('[data-testid="audio-transcribe"]').trigger('click')
-      await flushPromises()
-      await flushPromises()
-
-      expect(wrapper.get('[data-testid="audio-error"]').text()).toContain('没有启用的供应商 MiniMax')
+      expect(wrapper.find('[data-testid="audio-language-field"]').exists()).toBe(true)
+      expect(wrapper.find('select[data-testid="audio-language"]').exists()).toBe(true)
+      expect((wrapper.find('select[data-testid="audio-language"]').element as HTMLSelectElement).value).toBe('')
+      expect(wrapper.find('[data-testid="audio-transcribe-field"]').exists()).toBe(false)
+      expect(wrapper.find('.ni-section-title-row').exists()).toBe(false)
+      expect(wrapper.find('textarea').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="audio-file-input"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="audio-transcribe"]').exists()).toBe(false)
       expect(wrapper.find('[data-testid="audio-result"]').exists()).toBe(false)
-    })
-
-    // 2026-09-17 实测踩到：MiniMax 单段上限 500 秒，660.1s 的音频被上游 400 拒回。
-    // 现在本地先读时长拦一道，别让它白跑一趟。
-    it('时长超过 500 秒：本地拦下并禁用转写，不发请求', async () => {
-      class FakeAudio {
-        preload = ''
-        onloadedmetadata: (() => void) | null = null
-        onerror: (() => void) | null = null
-        src = ''
-        duration = 660.1
-        removeAttribute() { /* noop */ }
-        constructor() { window.setTimeout(() => this.onloadedmetadata?.(), 0) }
-      }
-      vi.stubGlobal('Audio', FakeAudio)
-      vi.stubGlobal('URL', { ...URL, createObjectURL: () => 'blob:fake', revokeObjectURL: () => {} })
-      try {
-        const { wrapper } = mountOnAudioTextNode()
-        await flushPromises()
-        const fetchSpy = mockSpeechFetch()
-
-        await selectFile(
-          wrapper.find('input[data-testid="audio-file-input"]'),
-          new File(['audio-bytes'], 'long.mp3', { type: 'audio/mpeg' }),
-        )
-        await flushPromises()
-        await new Promise((resolve) => setTimeout(resolve, 20))
-
-        expect(wrapper.get('[data-testid="audio-file-error"]').text()).toContain('超过单段上限 08:20')
-        const btn = wrapper.get('[data-testid="audio-transcribe"]')
-        expect(btn.attributes('disabled')).toBeDefined()
-        await btn.trigger('click')
-        await flushPromises()
-        expect(fetchSpy.mock.calls.filter(([url]) => url === '/api/speech/transcriptions')).toHaveLength(0)
-      } finally {
-        vi.unstubAllGlobals()
-      }
-    })
-
-    it('时长在上限内：正常转写，预览里显示时长', async () => {
-      class FakeAudio {
-        preload = ''
-        onloadedmetadata: (() => void) | null = null
-        onerror: (() => void) | null = null
-        src = ''
-        duration = 125
-        removeAttribute() { /* noop */ }
-        constructor() { window.setTimeout(() => this.onloadedmetadata?.(), 0) }
-      }
-      vi.stubGlobal('Audio', FakeAudio)
-      vi.stubGlobal('URL', { ...URL, createObjectURL: () => 'blob:fake', revokeObjectURL: () => {} })
-      try {
-        const { wrapper } = mountOnAudioTextNode()
-        await flushPromises()
-        mockSpeechFetch()
-
-        await selectFile(
-          wrapper.find('input[data-testid="audio-file-input"]'),
-          new File(['audio-bytes'], 'meeting.mp3', { type: 'audio/mpeg' }),
-        )
-        await flushPromises()
-        await new Promise((resolve) => setTimeout(resolve, 20))
-
-        expect(wrapper.get('.ocr-file-size').text()).toContain('02:05')
-        expect(wrapper.get('[data-testid="audio-transcribe"]').attributes('disabled')).toBeUndefined()
-      } finally {
-        vi.unstubAllGlobals()
-      }
+      expect(wrapper.text()).not.toContain('抓取配置')
+      expect(wrapper.text()).not.toContain('切换已有配置')
+      wrapper.unmount()
     })
   })
 
