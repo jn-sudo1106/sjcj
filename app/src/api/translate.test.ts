@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-// 翻译接口（2026-09-18）：契约按后端 vanv-data-engine 的 TranslateController / BaiduTranslateClient 锁定——
-// POST /api/translate，body {"from":"zh","to":"en","query":"..."}，返回 {from,to,translatedText}。
-// 关键是**语言码是百度的**（日语 jp、韩语 kor、法语 fra、繁体 cht），不是 ISO 639-1，后端不做映射。
+// 翻译接口（2026-09-18 接入，2026-09-21 起多引擎）：契约按后端 vanv-data-engine 的
+// TranslateController / TranslateRouter / 三个引擎客户端锁定——
+// POST /api/translate，body {"from":"zh","to":"en","query":"...","engine":"baidu"}，返回 {from,to,translatedText}。
+// 关键是**语言码是百度的**（日语 jp、韩语 kor、法语 fra、繁体 cht），不是 ISO 639-1，方言映射在后端。
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { TRANSLATE_LANGUAGE_CODES, TRANSLATE_MAX_QUERY_BYTES, languageCodeOf, translateText, utf8ByteLength } from './translate'
+import { TRANSLATE_ENGINE_CODES, TRANSLATE_LANGUAGE_CODES, TRANSLATE_MAX_QUERY_BYTES, engineCodeOf, engineLabelOf, languageCodeOf, translateSampleOf, translateText, utf8ByteLength } from './translate'
 
 function mockFetch(impl: (url: string, init?: RequestInit) => Response | Promise<Response>) {
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -19,7 +20,7 @@ function json(payload: unknown, status = 200): Response {
 afterEach(() => vi.restoreAllMocks())
 
 describe('翻译接口调用', () => {
-  it('POST /api/translate，中文简体→英语 发 from=zh to=en（用户给的口径）', async () => {
+  it('POST /api/translate，中文简体→英语 发 from=zh to=en engine=baidu（用户给的口径）', async () => {
     const fetchSpy = mockFetch(() => json({ from: 'zh', to: 'en', translatedText: 'Hello, world' }))
     const result = await translateText({ from: '中文简体', to: '英语', query: '你好，世界' })
 
@@ -27,9 +28,33 @@ describe('翻译接口调用', () => {
     const [url, init] = fetchSpy.mock.calls[0]
     expect(url).toBe('/api/translate')
     expect(init?.method).toBe('POST')
-    expect(JSON.parse(String(init?.body))).toEqual({ from: 'zh', to: 'en', query: '你好，世界' })
+    expect(JSON.parse(String(init?.body))).toEqual({ from: 'zh', to: 'en', query: '你好，世界', engine: 'baidu' })
     expect((init?.headers as Record<string, string>)['Content-Type']).toBe('application/json')
     expect(result).toEqual({ from: 'zh', to: 'en', translatedText: 'Hello, world' })
+  })
+
+  it('引擎码表与回落：三家的码是 google/youdao/baidu，认不出回落百度', () => {
+    expect(TRANSLATE_ENGINE_CODES).toEqual({ '谷歌翻译': 'google', '有道翻译': 'youdao', '百度翻译': 'baidu' })
+    expect(engineCodeOf('谷歌翻译')).toBe('google')
+    expect(engineCodeOf('有道翻译')).toBe('youdao')
+    expect(engineCodeOf('')).toBe('baidu')
+    expect(engineCodeOf('不认识的引擎')).toBe('baidu')
+    expect(engineLabelOf('google')).toBe('谷歌翻译')
+    expect(engineLabelOf('youdao')).toBe('有道翻译')
+    expect(engineLabelOf('bing')).toBe('百度翻译')
+  })
+
+  it('指定有道翻译时 body 带 engine=youdao', async () => {
+    const fetchSpy = mockFetch(() => json({ from: 'zh', to: 'en', translatedText: 'Hello' }))
+    await translateText({ from: '中文简体', to: '英语', engine: '有道翻译', query: '你好' })
+    expect(JSON.parse(String(fetchSpy.mock.calls[0][1]?.body)).engine).toBe('youdao')
+  })
+
+  it('测试样例：按语言取一句，自动检测与不认识的都回落中文样例', () => {
+    expect(translateSampleOf('中文简体')).toContain('测试翻译引擎')
+    expect(translateSampleOf('英语')).toBe('Hello, world! This is a sample text for testing the translation engine.')
+    expect(translateSampleOf('自动检测')).toBe(translateSampleOf('中文简体'))
+    expect(translateSampleOf('')).toBe(translateSampleOf('中文简体'))
   })
 
   it('9 种语言的码都是百度那一套（jp/kor/fra/spa/cht，不是 ja/ko/fr/es）', () => {
@@ -90,7 +115,7 @@ describe('翻译接口调用', () => {
   })
 
   it('后端错误体里的 error 原样透出（400 参数 / 502 凭据未配置）', async () => {
-    mockFetch(() => json({ error: 'query is 7000 bytes, exceeding the limit of 6000 bytes (标准版上限 6000 字节)' }, 400))
+    mockFetch(() => json({ error: 'query is 7000 bytes, exceeding the limit of 6000 bytes' }, 400))
     await expect(translateText({ from: '中文简体', to: '英语', query: '你好' })).rejects.toThrow('exceeding the limit of 6000 bytes')
 
     // 开放平台鉴权问题（appid/密钥/IP 白名单）后端都翻成人话再回

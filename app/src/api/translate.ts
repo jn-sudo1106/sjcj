@@ -1,20 +1,23 @@
-// 翻译（翻译助手节点，2026-09-18 接入）：后端 vanv-data-engine 的 `com.vanv.dataengine.translate`。
+// 翻译（翻译助手节点，2026-09-18 接入，2026-09-21 起支持多引擎）：后端 vanv-data-engine 的
+// `com.vanv.dataengine.translate`。
 //
-// 契约（逐字核对 TranslateController / BaiduTranslateClient，**2026-09-18 后端换成开放平台后重核过**）：
-//   请求  POST /api/translate   JSON `{"from":"zh","to":"en","query":"你好，世界"}`
+// 契约（逐字核对 TranslateController / TranslateRouter / 三个引擎客户端）：
+//   请求  POST /api/translate   JSON `{"from":"zh","to":"en","query":"你好，世界","engine":"baidu"}`
 //         · from/to 是**百度语言标签**（zh/cht/en/jp/kor/fra/de/spa/ru…，from 支持 auto，**to 不支持 auto**）
-//         · query 单次上限 `translate.baidu.max-query-bytes`（默认 **6000 字节**，按 UTF-8 编码算——
+//         · engine 可选：baidu / google / youdao，**缺省 baidu**（向后兼容）
+//         · query 单次上限 `translate.max-query-bytes`（默认 **6000 字节**，按 UTF-8 编码算——
 //           不是字符数！中文 1 字 3 字节，约 2000 字）
 //         · from/to/query 都必须非空白，否则 400
 //   响应  200 `{"from":"zh","to":"en","translatedText":"Hello, world"}`
-//         · 后端把开放平台的 trans_result 各句用换行合并成整段译文后一次性返回，**不是流式**
-//         · 返回的 from 是上游实际识别到的源语言（可能比请求更精确），用它展示"检测到的语言"更准
-//   错误  400（参数，含超字节数）/ 429（百度限流 54003/54005）/ 502（鉴权/余额/IP 白名单/上游不可达）
-//         → `{"error":"..."}`，后端已把百度错误码翻成人话 + 排查提示，前端原样透出
+//         · 后端把上游的分段译文用换行合并成整段一次性返回，**不是流式**
+//         · from/to 已由后端归一化为百度码（谷歌/有道方言差异收敛在后端），前端零感知
+//         · 返回的 from 是上游实际识别到的源语言（auto 时可能更精确），用它展示"检测到的语言"更准
+//   错误  400（参数/引擎名/超字节数）/ 429（上游限流）/ 502（凭据/余额/IP 白名单/上游不可达）
+//         → `{"error":"..."}`，后端已把各家错误码翻成人话 + 排查提示，前端原样透出
 //
-// 后端实现：百度翻译**开放平台**（api.fanyi.baidu.com，appId + secretKey 签名），
-// 不再依赖浏览器会话抓来的 acs-token/cookie；语言标签还额外接受常见 ISO 写法
-//（ja→jp、ko→kor、fr→fra、es→spa、zh-CN→zh、zh-TW→cht…）。前端仍发百度标签，不依赖别名表。
+// 后端实现：TranslateRouter 按 engine 分发到百度开放平台（appId+secretKey 的 MD5 签名）、
+// 谷歌 v2 Basic（API key）、有道智云（appKey+appSecret 的 sha256 v3 签名）三个客户端。
+// 语言方言映射全部在后端（jp→ja、cht→zh-TW、zh→zh-CHS…），前端仍发百度标签。
 //
 // ⚠️ 这台服务与 data-process 同在 8080，但**不在 /api/answer 下**：开发环境 Vite 单独转发
 // `/api/translate`，生产 Nginx 也有对应的 location（漏了会被通用 /api 送到业务后端 404）。
@@ -60,6 +63,55 @@ export function languageCodeOf(language: string): string {
   return TRANSLATE_LANGUAGE_CODES[key] ?? TRANSLATE_AUTO_CODE
 }
 
+/** 翻译引擎名 → 引擎码（2026-09-21 起，请求体 engine 字段的口径） */
+export const TRANSLATE_ENGINE_CODES: Record<string, string> = {
+  '谷歌翻译': 'google',
+  '有道翻译': 'youdao',
+  '百度翻译': 'baidu',
+}
+
+/** 引擎码 → 界面引擎名（code_rule 回填下拉用） */
+export const TRANSLATE_ENGINE_LABELS: Record<string, string> = {
+  google: '谷歌翻译',
+  youdao: '有道翻译',
+  baidu: '百度翻译',
+}
+
+/** 界面引擎名 → 引擎码；认不出回落 baidu（存量 code_rule 没有 engine 字段，缺省即百度） */
+export function engineCodeOf(engine: string): string {
+  const key = engine.trim()
+  if (!key) return 'baidu'
+  return TRANSLATE_ENGINE_CODES[key] ?? 'baidu'
+}
+
+/** 引擎码 → 界面引擎名；不认识的码同样回落「百度翻译」 */
+export function engineLabelOf(code: string): string {
+  const key = code.trim().toLowerCase()
+  return TRANSLATE_ENGINE_LABELS[key] ?? '百度翻译'
+}
+
+/**
+ * 「测试翻译」的内置样例文本（2026-09-21 改版：编排配置不再有输入框，测试按钮用样例验证引擎）。
+ * 按界面语言名各备一句；源语言选「自动检测」时用中文简体样例。
+ */
+export const TRANSLATE_SAMPLE_TEXTS: Record<string, string> = {
+  '中文简体': '你好，世界！这是一段用于测试翻译引擎的文本。',
+  '中文繁体': '你好，世界！這是一段用於測試翻譯引擎的文本。',
+  '英语': 'Hello, world! This is a sample text for testing the translation engine.',
+  '日语': 'こんにちは、世界！これは翻訳エンジンをテストするためのサンプルテキストです。',
+  '韩语': '안녕하세요, 세계! 이것은 번역 엔진을 테스트하기 위한 샘플 텍스트입니다.',
+  '法语': 'Bonjour le monde ! Ceci est un exemple de texte pour tester le moteur de traduction.',
+  '德语': 'Hallo Welt! Dies ist ein Beispieltext zum Testen der Übersetzungs-Engine.',
+  '西班牙语': '¡Hola, mundo! Este es un texto de ejemplo para probar el motor de traducción.',
+  '俄语': 'Привет, мир! Это пример текста для проверки движка перевода.',
+}
+
+/** 取测试样例：按界面语言名找，找不到（含自动检测）回落中文简体样例。 */
+export function translateSampleOf(language: string): string {
+  const key = language.trim()
+  return TRANSLATE_SAMPLE_TEXTS[key] ?? TRANSLATE_SAMPLE_TEXTS['中文简体'] ?? ''
+}
+
 export interface TranslateResult {
   /** 上游实际识别到的源语言码（auto 时可能是 zh / en…） */
   from: string
@@ -72,7 +124,7 @@ export interface TranslateResult {
  * 错误信息优先用后端 `{"error": "..."}` 里的原文。
  */
 export async function translateText(
-  input: { from: string; to: string; query: string },
+  input: { from: string; to: string; query: string; engine?: string },
   options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<TranslateResult> {
   const query = input.query.trim()
@@ -80,7 +132,7 @@ export async function translateText(
   const to = languageCodeOf(input.to)
   // 后端明确拒绝 to=auto（"to 不支持 auto，请指定具体目标语言"），这里先给一句中文提示
   if (to === TRANSLATE_AUTO_CODE) throw new Error('请选择具体的目标语言（目标语言不支持自动检测）')
-  // 上限按 UTF-8 字节算，与后端 validateRequest 同口径
+  // 上限按 UTF-8 字节算，与后端共享校验同口径
   const bytes = utf8ByteLength(query)
   if (bytes > TRANSLATE_MAX_QUERY_BYTES) {
     throw new Error(`单次最多 ${TRANSLATE_MAX_QUERY_BYTES} 字节（中文约 2000 字），当前 ${bytes} 字节，请分段翻译`)
@@ -93,14 +145,19 @@ export async function translateText(
     const res = await fetch(TRANSLATE_API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ from: languageCodeOf(input.from), to, query }),
+      body: JSON.stringify({
+        from: languageCodeOf(input.from),
+        to,
+        query,
+        engine: engineCodeOf(input.engine ?? '百度翻译'),
+      }),
       signal: controller.signal,
     })
     const payload: unknown = await res.json().catch(() => null)
     const record = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {}
     if (!res.ok) {
       const message = String(record.error ?? '').trim()
-      // 429 是上游限流（百度网页版对 token 有频率限制），给一句能指导操作的话
+      // 429 是上游限流，给一句能指导操作的话
       if (res.status === 429 && !message) throw new Error('翻译请求过于频繁，请稍后重试')
       throw new Error(message || `翻译服务返回 HTTP ${res.status}`)
     }

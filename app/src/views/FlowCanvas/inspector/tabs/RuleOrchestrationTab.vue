@@ -20,7 +20,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { recognizeImage, readImageAsBase64, ocrTextOf, type OcrBlock } from '@/api/ocr'
 import { isArticleSummaryNode, isArticleTagNode, isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isRuleNode, isScriptlessNode, isTranslateNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { parseArticleTags, riskLevelTone, type ArticleTagResult } from '@/utils/flow/articleTags'
-import { TRANSLATE_AUTO_CODE, TRANSLATE_LANGUAGE_CODES, TRANSLATE_MAX_QUERY_BYTES, languageCodeOf, translateText, utf8ByteLength } from '@/api/translate'
+import { TRANSLATE_AUTO_CODE, TRANSLATE_ENGINE_CODES, TRANSLATE_LANGUAGE_CODES, TRANSLATE_MAX_QUERY_BYTES, engineCodeOf, engineLabelOf, languageCodeOf, translateSampleOf, translateText } from '@/api/translate'
 import { SPEECH_AUDIO_EXTENSIONS, SPEECH_LANGUAGE_OPTIONS, SPEECH_MAX_DURATION_SECONDS, SPEECH_MAX_FILE_SIZE, isSupportedAudioFile, readAudioDuration, transcribeAudio, type SpeechTranscriptionResult } from '@/api/speech'
 import { MEDIA_AUDIO_FORMATS, MEDIA_BIT_RATE_OPTIONS, MEDIA_CHANNEL_OPTIONS, MEDIA_MAX_FILE_SIZE, MEDIA_SAMPLING_RATE_OPTIONS, MEDIA_VIDEO_EXTENSIONS, extractAudio, isSupportedVideoFile, readVideoDuration, type MediaExtractionResult } from '@/api/media'
 import { useNodeEditorContext } from '../nodeEditorContext'
@@ -425,10 +425,11 @@ async function copyArticleSummary() {
   }
 }
 
-// ---- 翻译助手（0917 第一版，仅翻译助手节点）----
-// 上传/粘贴文本 → 选目标语言 → 调 /api/answer/data-process 出译文。
-// 系统提示词同样来自提示词表：那一行是 node_type_name='翻译'、**category 为空**（2026-09-17 直接读
-// cfg_llm_node_prompt 核对），所以查模板时不带 category（见 promptCategory.promptListCategoryForNode）。
+// ---- 翻译助手（0921 改版：纯配置 + 测试翻译）----
+// 只保留翻译引擎 / 源语言 / 目标语言三个下拉，「测试翻译」用内置样例文本调 /api/translate
+// 验证所选引擎与语言方向的通路。语言仍是百度码（谷歌/有道的方言映射在后端），引擎与语言一起
+// 持久化到 code_rule 的 {"from":"zh","to":"en","engine":"baidu"}（2026-09-21 起 engine 随配置保存）。
+// 当日追加口径：描述输入框与「切换已有配置」对翻译节点隐藏（模板 !isTranslate 门控）。
 const isTranslate = computed(() => isTranslateNode(cfg.value))
 /** 源语言下拉里的「自动检测」项：请求时发 auto（见 api/translate.ts） */
 const TRANSLATE_AUTO = '自动检测'
@@ -437,6 +438,9 @@ const TRANSLATE_AUTO = '自动检测'
  *（百度语言码见 api/translate.ts：日语 jp、韩语 kor、法语 fra、繁体 cht，不是 ISO 639-1）。
  */
 const TRANSLATE_LANGUAGES = Object.keys(TRANSLATE_LANGUAGE_CODES)
+
+/** 翻译引擎候选（产品给的 3 家，顺序即下拉顺序） */
+const TRANSLATE_ENGINES = Object.keys(TRANSLATE_ENGINE_CODES)
 
 /** 百度语言码 → 界面语言名（code_rule 回填下拉用，码表见 api/translate.ts） */
 const TRANSLATE_CODE_LABELS: Record<string, string> = Object.fromEntries(
@@ -451,10 +455,11 @@ function translateLabelOf(code: string): string {
 }
 
 /**
- * 从已保存的结构化配置（code_rule 的 JSON，如 {"from":"zh","to":"en"}）还原两个下拉的值；
- * 解析不出 / 码不认识时返回 null，调用方回落默认值（自动检测 → 英语）。
+ * 从已保存的结构化配置（code_rule 的 JSON，如 {"from":"zh","to":"en","engine":"baidu"}）还原
+ * 三个下拉的值；解析不出 / 码不认识时返回 null，调用方回落默认值（自动检测 → 英语 → 百度翻译）。
+ * engine 缺失或不认识 → '百度翻译'（存量配置没有 engine 字段，缺省即百度）。
  */
-function translateLangsFromStored(stored: unknown): { from: string; to: string } | null {
+function translateConfigFromStored(stored: unknown): { from: string; to: string; engine: string } | null {
   if (typeof stored !== 'string') return null
   const text = stored.trim()
   if (!text.startsWith('{')) return null
@@ -465,37 +470,45 @@ function translateLangsFromStored(stored: unknown): { from: string; to: string }
     const from = translateLabelOf(String(record.from ?? ''))
     const to = translateLabelOf(String(record.to ?? ''))
     if (!from || !to) return null
-    return { from, to }
+    return { from, to, engine: engineLabelOf(String(record.engine ?? '')) }
   } catch {
     return null
   }
 }
 
-/** 用户改过语言后置位：之后的配置回填（configDetail 迟到 / 换配置）不再覆盖用户的选择 */
+/** 用户改过语言/引擎后置位：之后的配置回填（configDetail 迟到 / 换配置）不再覆盖用户的选择 */
 const translateLangsTouched = ref(false)
 /**
- * 把源/目标语言落成节点结构化配置（保存时随 buildConfigPayload 写进 config.code_rule）。
- * 格式与 /api/translate 请求同口径：百度语言码，自动检测 = auto。
+ * 把源/目标语言与引擎落成节点结构化配置（保存时随 buildConfigPayload 写进 config.code_rule）。
+ * 格式与 /api/translate 请求同口径：百度语言码 + engine，自动检测 = auto。
  * 只在这里写一次，改下拉即置脏，底部「保存」随之可点（下拉改动不再是静默的本地状态）。
  */
-function writeTranslateLangs(source: string, target: string) {
+function writeTranslateConfig(source: string, target: string, engine: string) {
   if (!isTranslate.value) return
   translateLangsTouched.value = true
-  setNodeStructuredConfig(JSON.stringify({ from: languageCodeOf(source), to: languageCodeOf(target) }))
+  setNodeStructuredConfig(JSON.stringify({
+    from: languageCodeOf(source),
+    to: languageCodeOf(target),
+    engine: engineCodeOf(engine),
+  }))
 }
 
-const translateText_ = ref('')
-const translateFileInput = ref<HTMLInputElement | null>(null)
-const translateFileName = ref('')
-const translateFileError = ref('')
+const translateEngine = ref('百度翻译')
 const translateSource = ref(TRANSLATE_AUTO)
 const translateTarget = ref('英语')
 const translateRunning = ref(false)
 const translateError = ref('')
 const translateResult = ref('')
-/** 上游实际识别到的源语言码（auto 时有用），拼成一句"检测到：xx" */
+/** 上游实际识别到的源语言码（auto 时有用），展示前经 translateLabelOf 换成界面语言名 */
 const translateDetectedFrom = ref('')
 const translateAbort = ref<AbortController | null>(null)
+
+/** 检测到的源语言 → 界面语言名（认不出的码原样展示） */
+const detectedTranslateLabel = computed(() => {
+  const code = translateDetectedFrom.value.trim()
+  if (!code) return ''
+  return translateLabelOf(code) || code
+})
 
 watch(
   () => [id.value, cfg.value?.structuredConfig ?? ''] as const,
@@ -503,82 +516,38 @@ watch(
     // immediate 首调用没有旧值（prev 是 undefined）
     if (prev === undefined || nid !== prev[0]) translateLangsTouched.value = false
     if (translateLangsTouched.value || !isTranslate.value) return
-    const langs = translateLangsFromStored(cfg.value?.structuredConfig)
-    translateSource.value = langs?.from ?? TRANSLATE_AUTO
-    translateTarget.value = langs?.to ?? '英语'
+    const config = translateConfigFromStored(cfg.value?.structuredConfig)
+    translateSource.value = config?.from ?? TRANSLATE_AUTO
+    translateTarget.value = config?.to ?? '英语'
+    translateEngine.value = config?.engine ?? '百度翻译'
   },
   { immediate: true },
 )
 
-/** 源语言是「自动检测」时没有可互换的对象，按钮置灰（不替用户猜一个源语言出来） */
-const canSwapLanguages = computed(() => translateSource.value !== TRANSLATE_AUTO)
-function swapTranslateLanguages() {
-  if (!canSwapLanguages.value) return
-  const from = translateSource.value
-  translateSource.value = translateTarget.value
-  translateTarget.value = from
-  writeTranslateLangs(translateSource.value, translateTarget.value)
-}
-
 function onTranslateSourceChange(value: string) {
-  writeTranslateLangs(value, translateTarget.value)
+  writeTranslateConfig(value, translateTarget.value, translateEngine.value)
 }
 function onTranslateTargetChange(value: string) {
-  writeTranslateLangs(translateSource.value, value)
+  writeTranslateConfig(translateSource.value, value, translateEngine.value)
+}
+function onTranslateEngineChange(value: string) {
+  writeTranslateConfig(translateSource.value, translateTarget.value, value)
 }
 
-const translateCharCount = computed(() => translateText_.value.trim().length)
-/** 上限按 **UTF-8 字节** 算（后端 translate.baidu.max-query-bytes，默认 6000）：中文 1 字 3 字节，约 2000 字 */
-const translateByteCount = computed(() => utf8ByteLength(translateText_.value.trim()))
-const translateTooLong = computed(() => translateByteCount.value > TRANSLATE_MAX_QUERY_BYTES)
-const canTranslate = computed(() => (
-  !translateRunning.value && translateCharCount.value > 0 && !translateTooLong.value && !!translateTarget.value
-))
+const canTestTranslate = computed(() => !translateRunning.value && !!translateTarget.value)
 
 function clearTranslate() {
-  translateText_.value = ''
-  translateFileName.value = ''
-  translateFileError.value = ''
   translateError.value = ''
   translateResult.value = ''
   translateDetectedFrom.value = ''
-  if (translateFileInput.value) translateFileInput.value.value = ''
 }
 
-function onTranslateFileChange(e: Event) {
-  const input = e.target as HTMLInputElement
-  const file = input.files?.[0]
-  translateFileError.value = ''
-  if (!file) return
-  if (!isTextFile(file)) {
-    input.value = ''
-    translateFileError.value = `只支持文本文件（${ARTICLE_TEXT_EXTENSIONS.join(' / ')}）`
-    return
-  }
-  const reader = new FileReader()
-  reader.onerror = () => { translateFileError.value = '文件读取失败' }
-  reader.onload = () => {
-    const text = typeof reader.result === 'string' ? reader.result : ''
-    translateText_.value = text
-    translateFileName.value = file.name
-    translateError.value = ''
-    translateResult.value = ''
-    translateDetectedFrom.value = ''
-    const bytes = utf8ByteLength(text.trim())
-    if (bytes > TRANSLATE_MAX_QUERY_BYTES) {
-      translateFileError.value = `文件 ${bytes} 字节，超过单次上限 ${TRANSLATE_MAX_QUERY_BYTES} 字节（中文约 2000 字），请先分段`
-    }
-  }
-  reader.readAsText(file)
-}
-
-function onTranslateTextInput(e: Event) {
-  translateText_.value = (e.target as HTMLTextAreaElement).value
-  translateFileError.value = ''
-}
-
-async function runTranslate() {
-  if (!canTranslate.value) return
+/**
+ * 测试翻译：没有输入框，用所选源语言的内置样例文本（自动检测用中文样例）调 /api/translate，
+ * 验证当前引擎 + 语言方向的通路。结果落在下面的只读结果区。
+ */
+async function runTestTranslate() {
+  if (!canTestTranslate.value) return
   translateRunning.value = true
   translateError.value = ''
   translateResult.value = ''
@@ -590,11 +559,12 @@ async function runTranslate() {
     const result = await translateText({
       from: translateSource.value,
       to: translateTarget.value,
-      query: translateText_.value,
+      engine: translateEngine.value,
+      query: translateSampleOf(translateSource.value),
     }, { signal: controller.signal })
     translateResult.value = result.translatedText
     translateDetectedFrom.value = result.from
-    ElMessage.success(`已翻译为${translateTarget.value}`)
+    ElMessage.success(`测试翻译成功（${translateEngine.value}）`)
   } catch (e) {
     if (controller.signal.aborted) {
       ElMessage.info('已取消翻译')
@@ -610,34 +580,6 @@ async function runTranslate() {
 
 function cancelTranslate() {
   translateAbort.value?.abort()
-}
-
-async function copyTranslation() {
-  const text = translateResult.value.trim()
-  if (!text) return
-  try {
-    await navigator.clipboard.writeText(text)
-    ElMessage.success('译文已复制')
-  } catch {
-    ElMessage.warning('复制失败，请手动选择文本')
-  }
-}
-
-function downloadTranslation() {
-  const text = translateResult.value
-  if (!text.trim()) return
-  const base = (translateFileName.value || 'translation').replace(/\.[^.]+$/, '')
-  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${base}.${translateTarget.value}.txt`
-  a.style.display = 'none'
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
-  ElMessage.success('译文已下载')
 }
 
 /**
@@ -1799,7 +1741,7 @@ function onTestScript() {
       <el-option v-for="m in MONITOR_METHODS" :key="m" :label="m" :value="m" />
     </el-select>
   </div>
-  <div class="ni-section-title ni-section-title-row">
+  <div v-if="!isTranslate" class="ni-section-title ni-section-title-row">
     <span>{{ isRule ? '设置业务规则' : '抓取配置' }}</span>
     <span v-if="!isScriptless" class="ni-section-actions">
       <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
@@ -2126,111 +2068,64 @@ function onTestScript() {
       </details>
     </div>
   </div>
-  <!-- 翻译助手（0917 第一版，仅翻译助手节点）：上传/粘贴文本 → 选目标语言 → 调 /api/answer/data-process。
-       系统提示词来自 cfg_llm_node_prompt 的「翻译」那一行（该行 category 为空，查模板时不带 category）。 -->
+  <!-- 翻译助手（0921 改版：纯配置 + 测试翻译）：翻译引擎 / 源语言 / 目标语言三个下拉，
+       「测试翻译」用内置样例文本调 /api/translate（百度码语言 + engine 随请求带上）。 -->
   <div v-if="isTranslate" class="rc-field ocr-field" data-testid="translate-field">
     <label>翻译助手</label>
-    <div class="ocr-picker">
-      <input
-        ref="translateFileInput"
-        class="rc-file-input"
-        data-testid="translate-file-input"
-        type="file"
-        accept=".txt,.md,.markdown,.csv,.json,.log,.html,.htm,text/*"
-        @change="onTranslateFileChange"
-      />
-      <button class="rc-btn" type="button" data-testid="translate-pick-file" @click="translateFileInput?.click()">
-        <Document aria-hidden="true" />
-        <span>上传文件</span>
-      </button>
-      <span class="ocr-hint">
-        {{ ARTICLE_TEXT_EXTENSIONS.join(' / ') }}，也可直接粘贴；最多 {{ ARTICLE_MAX_CHARS }} 字
-      </span>
-    </div>
-    <div v-if="translateFileName" class="ocr-preview">
-      <span class="ocr-file-name" :title="translateFileName">{{ translateFileName }}</span>
-      <span class="ocr-file-size">{{ translateCharCount }} 字</span>
-      <button class="ocr-remove" type="button" title="清空原文" aria-label="清空原文" @click="clearTranslate">
-        <Delete aria-hidden="true" />
-      </button>
-    </div>
-    <div v-if="translateFileError" class="ocr-error" data-testid="translate-file-error">{{ translateFileError }}</div>
-    <textarea
-      class="rc-input rc-textarea article-text"
-      :value="translateText_"
-      data-testid="translate-text"
-      placeholder="粘贴或上传要翻译的内容"
-      @input="onTranslateTextInput"
-    />
-    <div class="article-text-meta">
-      <span :class="{ 'translate-over-limit': translateTooLong }">
-        {{ translateCharCount }} 字 · {{ translateByteCount }} / {{ TRANSLATE_MAX_QUERY_BYTES }} 字节
-      </span>
-      <button v-if="translateText_" class="rc-link-btn" type="button" @click="clearTranslate">清空</button>
-    </div>
-    <!-- 语言选择（0917 按设计稿改成"源语言 ⇄ 目标语言"）：两个下拉中间一个互换按钮
-         改语言即写回节点结构化配置（保存时落 code_rule），所以 @change 直接走写回处理 -->
-    <div class="translate-langs" data-testid="translate-langs">
-      <el-select
-        v-model="translateSource"
-        class="translate-lang-select"
-        size="small"
-        data-testid="translate-source"
-        @change="onTranslateSourceChange"
-      >
-        <el-option :label="TRANSLATE_AUTO" :value="TRANSLATE_AUTO" />
-        <el-option v-for="lang in TRANSLATE_LANGUAGES" :key="lang" :label="lang" :value="lang" />
-      </el-select>
-      <button
-        class="translate-swap"
-        type="button"
-        :disabled="!canSwapLanguages"
-        :title="canSwapLanguages ? '互换源语言与目标语言' : '源语言为自动检测时无法互换'"
-        aria-label="互换源语言与目标语言"
-        data-testid="translate-swap"
-        @click="swapTranslateLanguages"
-      >
-        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-          <path
-            d="M7 4 3.5 7.5 7 11M3.5 7.5H16M17 20l3.5-3.5L17 13M20.5 16.5H8"
-            fill="none" stroke="currentColor" stroke-width="1.6"
-            stroke-linecap="round" stroke-linejoin="round"
-          />
-        </svg>
-      </button>
-      <el-select
-        v-model="translateTarget"
-        class="translate-lang-select"
-        size="small"
-        data-testid="translate-target"
-        @change="onTranslateTargetChange"
-      >
-        <el-option v-for="lang in TRANSLATE_LANGUAGES" :key="lang" :label="lang" :value="lang" />
-      </el-select>
+    <div class="translate-rows" data-testid="translate-rows">
+      <div class="translate-row">
+        <span class="translate-row-label">翻译引擎</span>
+        <el-select
+          v-model="translateEngine"
+          class="translate-row-select"
+          size="small"
+          data-testid="translate-engine"
+          @change="onTranslateEngineChange"
+        >
+          <el-option v-for="engine in TRANSLATE_ENGINES" :key="engine" :label="engine" :value="engine" />
+        </el-select>
+      </div>
+      <div class="translate-row">
+        <span class="translate-row-label">源语言</span>
+        <el-select
+          v-model="translateSource"
+          class="translate-row-select"
+          size="small"
+          data-testid="translate-source"
+          @change="onTranslateSourceChange"
+        >
+          <el-option :label="TRANSLATE_AUTO" :value="TRANSLATE_AUTO" />
+          <el-option v-for="lang in TRANSLATE_LANGUAGES" :key="lang" :label="lang" :value="lang" />
+        </el-select>
+      </div>
+      <div class="translate-row">
+        <span class="translate-row-label">目标语言</span>
+        <el-select
+          v-model="translateTarget"
+          class="translate-row-select"
+          size="small"
+          data-testid="translate-target"
+          @change="onTranslateTargetChange"
+        >
+          <el-option v-for="lang in TRANSLATE_LANGUAGES" :key="lang" :label="lang" :value="lang" />
+        </el-select>
+      </div>
     </div>
     <div class="ocr-actions">
       <button
         class="rc-btn primary"
         type="button"
-        data-testid="translate-generate"
-        :disabled="!canTranslate && !translateRunning"
-        :title="translateTooLong ? `单次最多 ${TRANSLATE_MAX_QUERY_BYTES} 字节（中文约 2000 字），请先分段` : ''"
-        @click="translateRunning ? cancelTranslate() : runTranslate()"
-      >{{ translateRunning ? '翻译中…（点击取消）' : '开始翻译' }}</button>
-      <span v-if="translateTooLong" class="ocr-error" data-testid="translate-over-limit">
-        内容 {{ translateByteCount }} 字节，超过单次上限 {{ TRANSLATE_MAX_QUERY_BYTES }} 字节（百度标准版按 UTF-8 字节算，中文约 2000 字），请分段翻译
-      </span>
+        data-testid="translate-test"
+        :disabled="!canTestTranslate && !translateRunning"
+        @click="translateRunning ? cancelTranslate() : runTestTranslate()"
+      >{{ translateRunning ? '测试中…（点击取消）' : '测试翻译' }}</button>
       <span v-if="translateError" class="ocr-error" data-testid="translate-error">{{ translateError }}</span>
     </div>
     <div v-if="translateResult" class="ocr-result" data-testid="translate-result">
       <div class="ocr-result-head">
         <span>
-          译文（{{ translateTarget }}）
-          <span v-if="translateDetectedFrom" class="translate-detected">· 检测到源语言：{{ translateDetectedFrom }}</span>
-        </span>
-        <span class="ocr-result-actions">
-          <button class="rc-link-btn" type="button" @click="copyTranslation">复制</button>
-          <button class="rc-link-btn" type="button" @click="downloadTranslation">下载</button>
+          测试译文（{{ translateTarget }} · {{ translateEngine }}）
+          <span v-if="detectedTranslateLabel" class="translate-detected">· 检测到源语言：{{ detectedTranslateLabel }}</span>
         </span>
       </div>
       <pre class="ocr-result-text article-summary-text" data-testid="translate-result-text">{{ translateResult }}</pre>
@@ -2377,7 +2272,7 @@ function onTestScript() {
       <pre class="ocr-result-text">{{ tagRawOutput }}</pre>
     </div>
   </div>
-  <div class="rc-field">
+  <div v-if="!isTranslate" class="rc-field">
     <textarea
       class="rc-input rc-textarea"
       :value="orchCfg.describe"
@@ -2512,7 +2407,7 @@ function onTestScript() {
     @update:alert-config="setMonitorAlertConfig"
   />
 
-  <template v-if="!isRule">
+  <template v-if="!isRule && !isTranslate">
     <!-- 只读动作链摘要（0804 S3-4，方案 §3.1）：按 NextActionId 链表走出来的执行顺序，不可编辑 -->
     <div v-if="actionSummary" class="rc-list ni-rule-meta">
       <div class="rc-list-row"><b>动作链</b><span :title="actionSummary">{{ actionSummary }}</span></div>
@@ -2672,14 +2567,11 @@ function onTestScript() {
 .article-thinking summary { padding: 6px 10px; color: var(--rc-muted); font-size: 11px; cursor: pointer; }
 .article-thinking pre { margin: 0; max-height: 180px; overflow: auto; padding: 0 10px 10px; color: var(--rc-text-2); font-size: 11px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 /* ---- 翻译助手 ---- */
-/* 语言选择行：源语言 ⇄ 目标语言（0917 设计稿），两个下拉等宽、中间互换按钮 */
-.translate-langs { display: flex; align-items: center; gap: 8px; margin: 2px 0 10px; }
-.translate-lang-select { flex: 1 1 0; min-width: 0; }
-.translate-swap { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--rc-primary); cursor: pointer; }
-.translate-swap:hover:not(:disabled) { background: var(--rc-primary-bg); }
-.translate-swap:disabled { color: var(--rc-faint); cursor: not-allowed; }
+.translate-rows { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 10px; }
+.translate-row { display: flex; align-items: center; gap: 8px; }
+.translate-row-label { flex: none; width: 52px; font-size: 12px; color: var(--rc-faint); }
+.translate-row-select { flex: 1 1 0; min-width: 0; }
 .translate-detected { color: var(--rc-faint); font-weight: 400; }
-.translate-over-limit { color: #b91c1c; }
 /* ---- 文章打标签 ---- */
 .tag-body { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
 .tag-summary { color: var(--rc-text); font-size: 12.5px; font-weight: 600; line-height: 1.6; }

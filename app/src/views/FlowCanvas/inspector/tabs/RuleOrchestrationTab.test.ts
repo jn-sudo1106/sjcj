@@ -12,6 +12,7 @@ import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import { useFlowStore } from '@/stores/flow'
 import { DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT, NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { configApi, entryApi, paramApi, ruleApi, ckSourceApi, sourceApi } from '@/api'
+import { translateSampleOf } from '@/api/translate'
 import type { EntryType } from '@/api'
 import { useSourceStore } from '@/stores/source'
 
@@ -808,11 +809,11 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     })
   })
 
-  // 0917/0918 翻译助手：上传/粘贴文本 → 选源语言与目标语言 → 调后端 /api/translate（百度翻译）
+  // 0921 翻译助手改版：纯配置（引擎 + 源语言 + 目标语言）→「测试翻译」用内置样例调 /api/translate
   describe('翻译助手（翻译助手节点）', () => {
-    /** 翻译走 /api/translate（不是 data-process）：请求体 {from,to,query}，语言是百度码 */
+    /** 翻译走 /api/translate（不是 data-process）：请求体 {from,to,query,engine}，语言是百度码 */
     function mockTranslateApi(
-      payload: unknown = { from: 'zh', to: 'en', translatedText: 'Thank you for your letter.' },
+      payload: unknown = { from: 'zh', to: 'en', translatedText: 'Hello, world! This is a sample text…' },
       status = 200,
     ) {
       const calls: { url: string; body: Record<string, unknown> }[] = []
@@ -850,147 +851,116 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       return { flow, wrapper, api: translateApi }
     }
 
-    it('显示上传文件 / 源语言与目标语言 / 开始翻译，且没有脚本编辑按钮', async () => {
+    it('显示翻译引擎 / 源语言 / 目标语言与「测试翻译」，无输入框、无上传文件、无描述与切换已有配置', async () => {
       const { wrapper } = mountOnTranslateNode()
       await flushPromises()
 
       expect(wrapper.find('[data-testid="translate-field"]').exists()).toBe(true)
-      expect(wrapper.find('[data-testid="translate-pick-file"]').text()).toContain('上传文件')
       expect(wrapper.find('.ni-section-title-row button').exists()).toBe(false)
 
+      // 0921 追加口径：翻译节点的编排 Tab 不显示「抓取配置」标题行
+      expect(wrapper.find('.ni-section-title-row').exists()).toBe(false)
+
+      const engineSelect = langSelect(wrapper, 'translate-engine')
       const sourceSelect = langSelect(wrapper, 'translate-source')
       const targetSelect = langSelect(wrapper, 'translate-target')
+      expect(engineSelect.findAllComponents({ name: 'ElOption' }).map((o) => o.props('value')))
+        .toEqual(['谷歌翻译', '有道翻译', '百度翻译'])
+      expect(engineSelect.props('modelValue')).toBe('百度翻译')
       expect(sourceSelect.findAllComponents({ name: 'ElOption' }).map((o) => o.props('value')))
         .toEqual(['自动检测', '中文简体', '中文繁体', '英语', '日语', '韩语', '法语', '德语', '西班牙语', '俄语'])
       expect(targetSelect.findAllComponents({ name: 'ElOption' }).map((o) => o.props('value')))
         .toEqual(['中文简体', '中文繁体', '英语', '日语', '韩语', '法语', '德语', '西班牙语', '俄语'])
       expect(sourceSelect.props('modelValue')).toBe('自动检测')
       expect(targetSelect.props('modelValue')).toBe('英语')
-      // 源语言是自动检测时没有可互换的对象
-      expect(wrapper.get('[data-testid="translate-swap"]').attributes('disabled')).toBeDefined()
-      // 没内容不能翻
-      expect(wrapper.get('[data-testid="translate-generate"]').attributes('disabled')).toBeDefined()
+
+      // 改版后没有原文输入框 / 上传文件入口，测试按钮常驻可点
+      expect(wrapper.find('[data-testid="translate-text"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="translate-pick-file"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="translate-test"]').text()).toBe('测试翻译')
+      expect(wrapper.get('[data-testid="translate-test"]').attributes('disabled')).toBeUndefined()
+
+      // 当日追加口径：描述输入框与「切换已有配置」对翻译节点隐藏
+      expect(wrapper.find('textarea').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('切换已有配置')
     })
 
-    it('中文简体 → 英语：调 /api/translate 且 from=zh、to=en（用户口径）', async () => {
+    it('测试翻译：默认引擎百度，用中文样例发 {from:auto,to:en,engine:baidu}', async () => {
       const { wrapper, api } = mountOnTranslateNode()
       await flushPromises()
 
-      await wrapper.get('[data-testid="translate-text"]').setValue('感谢贵方来信。')
-      langSelect(wrapper, 'translate-source').vm.$emit('update:modelValue', '中文简体')
-      langSelect(wrapper, 'translate-target').vm.$emit('update:modelValue', '英语')
-      await flushPromises()
-      await wrapper.get('[data-testid="translate-generate"]').trigger('click')
+      await wrapper.get('[data-testid="translate-test"]').trigger('click')
       await flushPromises()
       await flushPromises()
 
       expect(api.calls).toHaveLength(1)
-      expect(api.calls[0].body).toEqual({ from: 'zh', to: 'en', query: '感谢贵方来信。' })
-      // 译文来自接口返回的 translatedText
-      expect(wrapper.get('[data-testid="translate-result-text"]').text()).toBe('Thank you for your letter.')
+      expect(api.calls[0].body).toEqual({
+        from: 'auto',
+        to: 'en',
+        engine: 'baidu',
+        query: translateSampleOf('自动检测'),
+      })
+      expect(wrapper.get('[data-testid="translate-result-text"]').text()).toContain('Hello, world!')
       expect(wrapper.get('[data-testid="translate-result"]').text()).toContain('英语')
+      expect(wrapper.get('[data-testid="translate-result"]').text()).toContain('百度翻译')
     })
 
-    it('源语言为自动检测时发 auto，并展示上游识别到的语言', async () => {
+    it('中文简体 → 英语 + 谷歌翻译：body 带 engine=google 与对应样例', async () => {
       const { wrapper, api } = mountOnTranslateNode()
       await flushPromises()
 
-      await wrapper.get('[data-testid="translate-text"]').setValue('おはよう')
+      langSelect(wrapper, 'translate-engine').vm.$emit('update:modelValue', '谷歌翻译')
+      langSelect(wrapper, 'translate-engine').vm.$emit('change', '谷歌翻译')
+      langSelect(wrapper, 'translate-source').vm.$emit('update:modelValue', '中文简体')
+      langSelect(wrapper, 'translate-source').vm.$emit('change', '中文简体')
+      langSelect(wrapper, 'translate-target').vm.$emit('update:modelValue', '英语')
+      langSelect(wrapper, 'translate-target').vm.$emit('change', '英语')
+      await flushPromises()
+
+      await wrapper.get('[data-testid="translate-test"]').trigger('click')
+      await flushPromises()
+      await flushPromises()
+
+      expect(api.calls[0].body).toEqual({
+        from: 'zh',
+        to: 'en',
+        engine: 'google',
+        query: translateSampleOf('中文简体'),
+      })
+    })
+
+    it('源语言为自动检测时发 auto，并把上游识别语言换成界面语言名展示', async () => {
+      const { wrapper } = mountOnTranslateNode(() => mockTranslateApi({
+        from: 'zh', to: 'jp', translatedText: 'こんにちは、世界！',
+      }))
+      await flushPromises()
+
       langSelect(wrapper, 'translate-target').vm.$emit('update:modelValue', '日语')
+      langSelect(wrapper, 'translate-target').vm.$emit('change', '日语')
       await flushPromises()
-      await wrapper.get('[data-testid="translate-generate"]').trigger('click')
+      await wrapper.get('[data-testid="translate-test"]').trigger('click')
       await flushPromises()
       await flushPromises()
 
-      expect(api.calls[0].body).toEqual({ from: 'auto', to: 'jp', query: 'おはよう' })
-      // 返回里的 from 是上游识别结果，界面展示出来
-      expect(wrapper.get('[data-testid="translate-result"]').text()).toContain('检测到源语言')
-    })
-
-    it('互换后 from/to 随之调换；源语言为自动检测时按钮置灰', async () => {
-      const { wrapper, api } = mountOnTranslateNode()
-      await flushPromises()
-
-      const sourceSelect = langSelect(wrapper, 'translate-source')
-      const targetSelect = langSelect(wrapper, 'translate-target')
-      sourceSelect.vm.$emit('update:modelValue', '日语')
-      targetSelect.vm.$emit('update:modelValue', '英语')
-      await flushPromises()
-      await wrapper.get('[data-testid="translate-text"]').setValue('こんにちは')
-
-      await wrapper.get('[data-testid="translate-swap"]').trigger('click')
-      await flushPromises()
-      expect(sourceSelect.props('modelValue')).toBe('英语')
-      expect(targetSelect.props('modelValue')).toBe('日语')
-
-      await wrapper.get('[data-testid="translate-generate"]').trigger('click')
-      await flushPromises()
-      await flushPromises()
-      expect(api.calls[0].body).toMatchObject({ from: 'en', to: 'jp' })
-
-      sourceSelect.vm.$emit('update:modelValue', '自动检测')
-      await flushPromises()
-      expect(wrapper.get('[data-testid="translate-swap"]').attributes('disabled')).toBeDefined()
-      await wrapper.get('[data-testid="translate-swap"]').trigger('click')
-      await flushPromises()
-      expect(targetSelect.props('modelValue')).toBe('日语')
-    })
-
-    // 2026-09-18：后端换成百度开放平台，上限是 **6000 字节**（UTF-8），不是字符数
-    it('超过单次上限（6000 字节）时禁用并给出提示，不发请求', async () => {
-      const { wrapper, api } = mountOnTranslateNode()
-      await flushPromises()
-
-      // 2001 个汉字 = 6003 字节（字符数只有 2001，按字符判会漏）
-      await wrapper.get('[data-testid="translate-text"]').setValue('中'.repeat(2001))
-      await flushPromises()
-
-      expect(wrapper.get('[data-testid="translate-over-limit"]').text()).toContain('超过单次上限 6000 字节')
-      expect(wrapper.get('[data-testid="translate-generate"]').attributes('disabled')).toBeDefined()
-      await wrapper.get('[data-testid="translate-generate"]').trigger('click')
-      await flushPromises()
-      expect(api.calls).toHaveLength(0)
+      expect(wrapper.get('[data-testid="translate-result"]').text()).toContain('检测到源语言：中文简体')
     })
 
     it('接口报错时透出后端文案（凭据未配置 / 限流），不显示结果区', async () => {
       const { wrapper } = mountOnTranslateNode(
-        () => mockTranslateApi({ error: '未配置 translate.baidu.acs-token（百度翻译网页版会话令牌）' }, 502),
+        () => mockTranslateApi({ error: '未配置 translate.google.api-key（Google Cloud Translation API 密钥）' }, 502),
       )
       await flushPromises()
 
-      await wrapper.get('[data-testid="translate-text"]').setValue('你好')
-      await flushPromises()
-      await wrapper.get('[data-testid="translate-generate"]').trigger('click')
+      await wrapper.get('[data-testid="translate-test"]').trigger('click')
       await flushPromises()
       await flushPromises()
 
-      expect(wrapper.get('[data-testid="translate-error"]').text()).toContain('未配置 translate.baidu.acs-token')
+      expect(wrapper.get('[data-testid="translate-error"]').text()).toContain('translate.google.api-key')
       expect(wrapper.find('[data-testid="translate-result"]').exists()).toBe(false)
     })
 
-    it('上传文本文件填入原文，非文本文件被拒', async () => {
-      const { wrapper } = mountOnTranslateNode()
-      await flushPromises()
-
-      await selectFile(
-        wrapper.find('input[data-testid="translate-file-input"]'),
-        new File(['Hello world'], 'doc.txt', { type: 'text/plain' }),
-      )
-      await flushPromises()
-      await new Promise((resolve) => setTimeout(resolve, 20))
-      await flushPromises()
-      expect((wrapper.get('[data-testid="translate-text"]').element as HTMLTextAreaElement).value).toContain('Hello world')
-
-      await selectFile(
-        wrapper.find('input[data-testid="translate-file-input"]'),
-        new File(['x'], 'photo.png', { type: 'image/png' }),
-      )
-      await flushPromises()
-      expect(wrapper.get('[data-testid="translate-file-error"]').text()).toContain('只支持文本文件')
-    })
-
-    // ---- 2026-09-20：编排配置保存时把两个语言下拉写进 updateConfig 的 code_rule ----
-    // 改语言即写回节点结构化配置（置脏 → 底部「保存」可点），保存时随 buildConfigPayload 落 code_rule。
+    // ---- 0921：引擎与语言一起写进 updateConfig 的 code_rule ----
+    // 改引擎/语言即写回节点结构化配置（置脏 → 底部「保存」可点），保存时随 buildConfigPayload 落 code_rule。
 
     /** 挂在一个已有 configId 的翻译助手节点上，准备走 updateConfig 保存路径 */
     function mountOnSavedTranslateNode(structuredConfig?: string) {
@@ -1012,17 +982,19 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       return { flow, wrapper }
     }
 
-    it('改语言后点保存：updateConfig 的 code_rule 是 {"from":"zh","to":"en"}', async () => {
+    it('改引擎与语言后点保存：updateConfig 的 code_rule 是 {"from":"zh","to":"en","engine":"google"}', async () => {
       const { wrapper } = mountOnSavedTranslateNode()
       await flushPromises()
 
+      langSelect(wrapper, 'translate-engine').vm.$emit('update:modelValue', '谷歌翻译')
+      langSelect(wrapper, 'translate-engine').vm.$emit('change', '谷歌翻译')
       langSelect(wrapper, 'translate-source').vm.$emit('update:modelValue', '中文简体')
       langSelect(wrapper, 'translate-source').vm.$emit('change', '中文简体')
       langSelect(wrapper, 'translate-target').vm.$emit('update:modelValue', '英语')
       langSelect(wrapper, 'translate-target').vm.$emit('change', '英语')
       await flushPromises()
 
-      // 改语言即置脏，保存按钮可点
+      // 改配置即置脏，保存按钮可点
       const saveBtn = wrapper.findAll('.rc-insp-foot .rc-btn').find((b) => b.text() === '保存')!
       expect(saveBtn.attributes('disabled')).toBeUndefined()
       await saveBtn.trigger('click')
@@ -1032,48 +1004,49 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       expect(configApi.updateConfig).toHaveBeenCalledTimes(1)
       expect(vi.mocked(configApi.updateConfig).mock.calls[0][0]).toMatchObject({
         configId: '1401013',
-        codeRule: '{"from":"zh","to":"en"}',
+        codeRule: '{"from":"zh","to":"en","engine":"google"}',
       })
       wrapper.unmount()
     })
 
-    it('已保存的语言回填下拉：code_rule 是 {"from":"jp","to":"kor"} → 日语 / 韩语', async () => {
+    it('已保存的配置回填下拉：{"from":"jp","to":"en","engine":"google"} → 日语 / 英语 / 谷歌翻译', async () => {
+      const { wrapper } = mountOnSavedTranslateNode('{"from":"jp","to":"en","engine":"google"}')
+      await flushPromises()
+
+      expect(langSelect(wrapper, 'translate-source').props('modelValue')).toBe('日语')
+      expect(langSelect(wrapper, 'translate-target').props('modelValue')).toBe('英语')
+      expect(langSelect(wrapper, 'translate-engine').props('modelValue')).toBe('谷歌翻译')
+      wrapper.unmount()
+    })
+
+    it('存量配置没有 engine 字段时回填默认百度翻译', async () => {
       const { wrapper } = mountOnSavedTranslateNode('{"from":"jp","to":"kor"}')
       await flushPromises()
 
       expect(langSelect(wrapper, 'translate-source').props('modelValue')).toBe('日语')
       expect(langSelect(wrapper, 'translate-target').props('modelValue')).toBe('韩语')
+      expect(langSelect(wrapper, 'translate-engine').props('modelValue')).toBe('百度翻译')
       wrapper.unmount()
     })
 
-    it('互换源/目标语言后写回的结构化配置同步互换（en ⇄ jp）', async () => {
-      const { flow, wrapper } = mountOnSavedTranslateNode()
+    it('engine 码不认识时同样回填百度翻译', async () => {
+      const { wrapper } = mountOnSavedTranslateNode('{"from":"zh","to":"en","engine":"bing"}')
       await flushPromises()
 
-      langSelect(wrapper, 'translate-source').vm.$emit('update:modelValue', '日语')
-      langSelect(wrapper, 'translate-source').vm.$emit('change', '日语')
-      langSelect(wrapper, 'translate-target').vm.$emit('update:modelValue', '英语')
-      langSelect(wrapper, 'translate-target').vm.$emit('change', '英语')
-      await flushPromises()
-      expect(flow.configs['translate-1'].structuredConfig).toBe('{"from":"jp","to":"en"}')
-
-      await wrapper.get('[data-testid="translate-swap"]').trigger('click')
-      await flushPromises()
-      expect(flow.configs['translate-1'].structuredConfig).toBe('{"from":"en","to":"jp"}')
-      expect(flow.dirtyConfigNodes).toContain('translate-1')
+      expect(langSelect(wrapper, 'translate-engine').props('modelValue')).toBe('百度翻译')
       wrapper.unmount()
     })
 
-    it('仅改语言也会把节点置脏（此前下拉是纯本地状态，保存按钮一直是灰的）', async () => {
+    it('仅改引擎也会把节点置脏并写回 engine', async () => {
       const { flow, wrapper } = mountOnSavedTranslateNode()
       await flushPromises()
 
       expect(flow.dirtyConfigNodes).not.toContain('translate-1')
-      langSelect(wrapper, 'translate-target').vm.$emit('update:modelValue', '法语')
-      langSelect(wrapper, 'translate-target').vm.$emit('change', '法语')
+      langSelect(wrapper, 'translate-engine').vm.$emit('update:modelValue', '有道翻译')
+      langSelect(wrapper, 'translate-engine').vm.$emit('change', '有道翻译')
       await flushPromises()
 
-      expect(flow.configs['translate-1'].structuredConfig).toBe('{"from":"auto","to":"fra"}')
+      expect(flow.configs['translate-1'].structuredConfig).toBe('{"from":"auto","to":"en","engine":"youdao"}')
       expect(flow.dirtyConfigNodes).toContain('translate-1')
       expect(wrapper.find('.rc-insp-foot .foot-note').text()).toContain('未保存修改')
       wrapper.unmount()
