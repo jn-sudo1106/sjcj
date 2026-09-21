@@ -12,7 +12,10 @@ const props = defineProps<{
   categories: SourceCategory[]
   allTags: string[]
   total: number
-  stats: { total: number; error: number; notify: number }
+  /** `total` 是**源**总数、`siteTotal` 是全站网站数（历史命名，见 SourceTab 的说明） */
+  stats: { total: number; error: number; notify: number; siteTotal?: number }
+  /** 当前是否带着筛选条件：决定「网站」这个数要不要写成「命中 / 全站」 */
+  filtered?: boolean
   view: 'card' | 'table'
   /** 只看收藏（0917-17）。收藏的网站**恒排最前**，这个开关是"把其余的藏起来"。
    *  可选：调用方不给就是关着，既有测试不必为它改动。 */
@@ -199,11 +202,18 @@ async function loadCategoryChildren(
            在「我收藏的网站」tab 里同样不出现，那个 tab 的语义就是收藏。 -->
       <el-option v-if="!favLocked" :label="recentCount ? `最近打开 (${recentCount})` : '最近打开'" value="recent" />
     </el-select>
+    <!-- 这一排只有「网站」跟筛选走，后三个是全站汇总（site/summary）。
+         四个并排不标口径，筛完就会被当成"条数没更新"（2026-09-21 用户报）。 -->
     <div class="ca-stats">
-      <el-tag type="info" effect="plain" class="stat-tag">网站 <b>{{ total }}</b></el-tag>
-      <el-tag type="info" effect="plain" class="stat-tag">源 <b>{{ stats.total }}</b></el-tag>
-      <el-tag v-if="stats.error > 0" type="danger" class="stat-tag">出错源 <b>{{ stats.error }}</b></el-tag>
-      <el-tag v-if="stats.notify > 0" type="warning" class="stat-tag">告警网站 <b>{{ stats.notify }}</b></el-tag>
+      <el-tag
+        type="info"
+        effect="plain"
+        class="stat-tag"
+        :title="filtered && stats.siteTotal ? `当前筛选命中 ${total} 个，全站 ${stats.siteTotal} 个` : '全站网站数'"
+      >网站 <b>{{ total }}</b><template v-if="filtered && stats.siteTotal"> / {{ stats.siteTotal }}</template></el-tag>
+      <el-tag type="info" effect="plain" class="stat-tag" title="全站源数，不随筛选变化">源 <b>{{ stats.total }}</b></el-tag>
+      <el-tag v-if="stats.error > 0" type="danger" class="stat-tag" title="全站出错源数，不随筛选变化">出错源 <b>{{ stats.error }}</b></el-tag>
+      <el-tag v-if="stats.notify > 0" type="warning" class="stat-tag" title="全站告警网站数，不随筛选变化">告警网站 <b>{{ stats.notify }}</b></el-tag>
     </div>
     <span class="ca-spacer" />
     <!-- 视图切换同样只留图标（2026-09-18 走查）：带文字要 136px，是这一行里仅次于搜索框和

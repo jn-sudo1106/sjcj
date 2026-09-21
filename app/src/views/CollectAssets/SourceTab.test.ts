@@ -463,3 +463,73 @@ describe('SourceTab · 最近打开的网站（0917-17）', () => {
   })
 })
 
+// 2026-09-21 用户报「根据条件查询完后，条数没有更新」。实情：命中数是更新了的
+// （实测 83 → 财经资讯 71），但工具条四个数里后三个来自 site/summary、是全站汇总，
+// 并排放着看着就像没更新。修法是标清口径：命中数写成「命中 / 全站」。
+describe('SourceTab · 统计区的口径（2026-09-21）', () => {
+  const sites = [
+    { siteId: 's1', name: '一', sourceCount: 1, errorCount: 0, updatedAt: '2026-09-16 14:09:24', tags: [] },
+    { siteId: 's2', name: '二', sourceCount: 1, errorCount: 0, updatedAt: '2026-09-03 15:54:37', tags: [] },
+  ]
+
+  beforeEach(() => localStorage.clear())
+
+  async function mountWith(total: number) {
+    vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: sites.length, list: [...sites] as never })
+    vi.spyOn(siteApi, 'siteSummary').mockResolvedValue({ total, sourceTotal: 18636, errorCount: 1264, notifyCount: 2 })
+    return mountAt()
+  }
+
+  it('全站网站数从 site/summary 的 total 取，传给工具条', async () => {
+    const { wrapper } = await mountWith(83)
+    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
+    expect((toolbar.props('stats') as { siteTotal: number }).siteTotal).toBe(83)
+    // 源 / 出错源 / 告警照旧是全站口径，不做前端聚合（sitePaged 的 errorCnt 恒为 null）
+    expect((toolbar.props('stats') as { total: number; error: number }).total).toBe(18636)
+    expect((toolbar.props('stats') as { error: number }).error).toBe(1264)
+  })
+
+  it('没有筛选条件时 filtered=false（「网站 N」不写成 N / M）', async () => {
+    const { wrapper } = await mountWith(83)
+    expect(wrapper.findComponent({ name: 'FilterToolbar' }).props('filtered')).toBe(false)
+  })
+
+  it('任一筛选条件生效就 filtered=true', async () => {
+    const { wrapper } = await mountWith(83)
+    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
+
+    toolbar.vm.$emit('update:keyword', '财经')
+    await flushPromises()
+    expect(toolbar.props('filtered')).toBe(true)
+
+    toolbar.vm.$emit('update:keyword', '')
+    toolbar.vm.$emit('update:categoryFilter', ['9009005'])
+    await flushPromises()
+    expect(toolbar.props('filtered')).toBe(true)
+
+    toolbar.vm.$emit('update:categoryFilter', [])
+    toolbar.vm.$emit('update:stateFilter', 'error')
+    await flushPromises()
+    expect(toolbar.props('filtered')).toBe(true)
+
+    toolbar.vm.$emit('update:stateFilter', 'all')
+    await flushPromises()
+    expect(toolbar.props('filtered')).toBe(false)
+  })
+
+  // 「只看收藏」「最近打开」也算筛选——它们同样会让命中数少于全站
+  it('只看收藏 / 最近打开也算筛选', async () => {
+    const { wrapper } = await mountWith(83)
+    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
+
+    toolbar.vm.$emit('update:favOnly', true)
+    await flushPromises()
+    expect(toolbar.props('filtered')).toBe(true)
+
+    toolbar.vm.$emit('update:favOnly', false)
+    toolbar.vm.$emit('update:recentOnly', true)
+    await flushPromises()
+    expect(toolbar.props('filtered')).toBe(true)
+  })
+})
+

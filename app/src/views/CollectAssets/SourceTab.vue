@@ -31,7 +31,12 @@ const VALID_STATES = ['all', 'error']
 // ---- 分类 / 标签 / 统计 ----
 const categories = ref<SourceCategory[]>([])
 const allTags = ref<string[]>([])
-const stats = reactive({ total: 0, error: 0, notify: 0 })
+/**
+ * ⚠️ `stats.total` 是**源**总数（`summary.sourceTotal`），不是网站数——历史命名，别改动它的含义。
+ * `siteTotal` 是全站网站数（`site/summary` 的 `total`，2026-09-21 才接上）：
+ * 工具条第一个标签要显示「命中 / 全站」，光有命中数说不清"筛掉了多少"。
+ */
+const stats = reactive({ total: 0, error: 0, notify: 0, siteTotal: 0 })
 
 // ---- 筛选 ----
 const keyword = ref('')
@@ -45,6 +50,24 @@ const sortBy = ref<'updated' | 'name'>('updated')
 const favOnly = ref(props.favOnly === true)
 /** 只看最近打开（0917-17 后半条）。与 favOnly 互斥，由工具条那个下拉统一切换 */
 const recentOnly = ref(false)
+
+/**
+ * 当前是否带着筛选条件（2026-09-21 用户报「根据条件查询完后，条数没有更新」）。
+ *
+ * 那次的实情是：工具条四个数里**只有第一个「网站」跟筛选走**（它绑的是列表命中数），
+ * 后三个「源 / 出错源 / 告警网站」来自 `site/summary`、是**全站**汇总、与筛选无关
+ * ——四个并排放着，看着就像"有的更新了有的没更新"。
+ *
+ * 前端自己聚合那三个走不通（2026-09-21 实测）：`sitePaged` 返回的 `errorCnt` / `notifyCnt`
+ * **全是 null**，聚合出来都是 0；源数聚合 17139 也对不上全站 18636（差的是没挂网站的源），
+ * 硬凑只会更让人困惑。所以改成**把口径标清楚**：命中数写成「71 / 83」，后三项说明是全站。
+ */
+const hasFilter = computed(() => !!keyword.value.trim()
+  || categoryFilter.value.length > 0
+  || !!tagFilter.value
+  || stateFilter.value !== 'all'
+  || favOnly.value
+  || recentOnly.value)
 
 // ---- 网站列表 / 分页 ----
 const sites = ref<Site[]>([])
@@ -192,6 +215,7 @@ async function loadStats() {
       total: summary.sourceTotal,
       error: summary.errorCount,
       notify: summary.notifyCount,
+      siteTotal: summary.total,
     })
   } catch {
     ElMessage.warning('加载网站统计失败')
@@ -367,6 +391,7 @@ onUnmounted(() => {
       :fav-count="favoriteSiteIds.size"
       :recent-count="recentSiteIds.length"
       :fav-locked="props.favOnly === true"
+      :filtered="hasFilter"
       :categories="categories"
       :all-tags="allTags"
       :total="total"
