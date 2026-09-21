@@ -16,7 +16,7 @@ import {
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
 import { fetchNextStepConfig } from '@/utils/flow/nextStepConfig'
 import { fetchChildCountsForPage, isPerRowMode, resolveChildTargets, type ChildCountCell } from '@/utils/flow/childCounts'
-import { confirmDanger } from '@/utils/confirmDanger'
+import { confirmDanger, confirmOrRun } from '@/utils/confirmDanger'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import DataGrid from './DataGrid.vue'
@@ -288,18 +288,92 @@ const canPickRows = computed(() => {
 
 const selectedRowIds = ref<string[]>([])
 
+/**
+ * 勾了这个数以内就直接发，不弹确认（0917-05，2026-09-21 用户定 20）。
+ * 会上原话：「就不要弹框」「什么确认一下，不要确认」。
+ *
+ * **和源视图的 `DIRECT_SEND_MAX = 2` 是两个数，不要统一**：那个数的是**源**
+ * （一个源可能带几万条数据，2 是旧平台口径），这个数的是**数据行**
+ * （勾 20 条发后续就是 20 个任务）。两个粒度差几个数量级，共用一个数
+ * 要么源那边太松、要么这边太紧。
+ *
+ * 超过阈值、以及"按当前条件全部发"那两个入口（命中数不可见、上限 50 万）仍然确认。
+ */
+const DIRECT_ROWS_MAX = 20
+
+/**
+ * 本次不发后续的节点（0917-06）。会上原话：「默认我不点的时候他就全部发，
+ * 如果我点个（叉），他就只发第一个」。
+ *
+ * **与节点「停用」（`Step.enabled`）是两件事**：那个落在后端 `cs_item_config` 上、
+ * 对所有源所有运行生效；这个只影响"从这个页签点出去的发后续任务"，存页签快照
+ * （刷新浏览器就没了）。排错时随手标一下不该改到线上配置。
+ *
+ * 语义是**过滤不截断**（2026-09-21 用户定）：A→B→C 跳过 B，C 照发。
+ * 代价用户知道——B 不跑，C 这次多半空跑；这是临时排错动作，不是配置变更。
+ */
+const skippedNodeIds = ref<string[]>([])
+const isNodeSkipped = (nodeId: string) => skippedNodeIds.value.includes(nodeId)
+
+/** 节点 ID → 后端认的步骤 ID。与 onSendNextStep 里 currentStepId / predStepId 同一套判据。 */
+function stepIdOfNode(nodeId: string): string {
+  const cfg = flow.configs[nodeId] as { stepId?: string | number } | undefined
+  const fromCfg = cfg?.stepId != null ? String(cfg.stepId) : ''
+  if (/^\d+$/.test(fromCfg)) return fromCfg
+  return /^\d+$/.test(nodeId) ? nodeId : ''
+}
+const skippedStepIds = computed(() => new Set(skippedNodeIds.value.map(stepIdOfNode).filter(Boolean)))
+/** 确认框里点明这次跳了几个——超阈值才会弹，但弹的时候必须说 */
+const skipHintText = computed(() => (skippedNodeIds.value.length
+  ? `\n已标「本次不发」的 ${skippedNodeIds.value.length} 个节点不会收到任务。`
+  : ''))
+
+/** 节点轨道的右键菜单（0917-06 / 0917-08）。菜单项按被右键的那个节点算，不看当前选中。 */
+const nodeMenu = ref<{ show: boolean; nodeId: string; x: number; y: number }>({ show: false, nodeId: '', x: 0, y: 0 })
+const menuNodeIsFirst = computed(() => (nodeMenu.value.nodeId
+  ? isFirstRunnableNode(flow.main, flow.configs, nodeMenu.value.nodeId)
+  : false))
+const menuNodeTitle = computed(() => flow.configs[nodeMenu.value.nodeId]?.title || nodeMenu.value.nodeId)
+function openNodeMenu(payload: { nodeId: string; x: number; y: number }) {
+  nodeMenu.value = {
+    show: true,
+    nodeId: payload.nodeId,
+    // 菜单宽 ~150px，贴右边缘时往左挪，别被视口裁掉（与 FlowBoard.openMenu 同款处理）
+    x: Math.min(payload.x, window.innerWidth - 168),
+    y: payload.y,
+  }
+}
+function closeNodeMenu() {
+  nodeMenu.value.show = false
+}
+function toggleSkipNode(nodeId: string) {
+  skippedNodeIds.value = isNodeSkipped(nodeId)
+    ? skippedNodeIds.value.filter((id) => id !== nodeId)
+    : [...skippedNodeIds.value, nodeId]
+  closeNodeMenu()
+}
+function restoreAllSkipped() {
+  skippedNodeIds.value = []
+  closeNodeMenu()
+}
+/** 右键菜单里的「发起抓取」：按**被右键的那个节点**限定配置，不用当前选中的 */
+async function sendFetchForNode(nodeId: string) {
+  closeNodeMenu()
+  if (!sourceId.value) return
+  await snatchLauncher.value?.launch(sourceId.value, {
+    configId: flow.configs[nodeId]?.configId,
+    onSuccess: () => ElMessage.success('已发起抓取'),
+  })
+}
+
 async function onSendFetch() {
   if (execMode.value !== 'fetch' || !sourceId.value) return
-  await confirmDanger(
-    '发起抓取',
-    `将对源「${source.value?.name || sourceId.value}」发起抓取，是否继续？`,
-    async () =>
-      snatchLauncher.value?.launch(sourceId.value, {
-        configId: selectedCfg.value?.configId,
-        onSuccess: () => ElMessage.success('已发起抓取'),
-      }),
-    () => {},
-  )
+  // 不弹确认（0917-05）：SnatchLauncher.launch 内部本来就是 loadParams → 有参数弹参数框、
+  // 无参数直发，与源视图那三档同一套。外面再套一层"是否继续"纯属多点一次。
+  await snatchLauncher.value?.launch(sourceId.value, {
+    configId: selectedCfg.value?.configId,
+    onSuccess: () => ElMessage.success('已发起抓取'),
+  })
 }
 
 // M3-0J：真实回执里"本次发送:N 条"是提交条数，不是实际进入条数——被目标节点进入条件
@@ -391,7 +465,8 @@ async function onSendNextStep() {
       ...(hasCurrentStepId ? { itemConfig: currentStepId, stepId: currentStepId, nextStep: currentStepId } : {}),
     }
     const hasCurrentOpts = Object.keys(currentOptions).length > 0
-    await confirmDanger(
+    await confirmOrRun(
+      ids.length > DIRECT_ROWS_MAX,
       '发起本节点任务',
       `将对选中的 ${count} 条数据发起当前节点「${nodeName}」的处理任务。\n是否继续？`,
       async () => {
@@ -429,14 +504,29 @@ async function onSendNextStep() {
 
   const tableId = (nextInfo?.hasNext ? nextInfo.targetTableId : undefined) || successorTableId.value || outputTableId.value || selectedTable.value
   if (!tableId) return
+  // 标了「本次不发」的先摘出去，名字、configId、itemConfig 三处都要跟着走（0917-06）
+  const keptDownstream = (nextInfo?.downstreamSteps ?? [])
+    .filter((step) => !skippedStepIds.value.has(String(step.stepId)))
   // 文案要跟实际发送的范围一致：发整条下游就把下游都列出来，不能只报直接后继的名字
-  const downstreamNames = (nextInfo?.downstreamSteps ?? []).map((s) => s.name || s.stepId).filter(Boolean)
+  const downstreamNames = keptDownstream.map((s) => s.name || s.stepId).filter(Boolean)
   const targetNodeName = (downstreamNames.length ? downstreamNames.join('、') : '')
     || (nextInfo?.hasNext ? nextInfo.targetNodeName : undefined) || successorTitles.value || '后续节点'
-  const targetConfigId = (nextInfo?.hasNext ? nextInfo.targetConfigId : undefined) || fallbackSuccConfigId
+  /**
+   * `configId` 也得跳过（2026-09-21 实测发现）：默认它取 `primaryNext` 的配置，
+   * 而 primaryNext 恰好可能正是被标「本次不发」的那个——实测请求里出现过
+   * `itemConfig=40598` 配 `configId=1400974`（40597 的配置）这种自相矛盾的组合。
+   * 后端到底优先看哪个我们不知道，**不赌**：直接改指第一个真正要发的节点。
+   */
+  const keptConfigId = keptDownstream.find((step) => step.configId)?.configId
+  const targetConfigId = (skippedStepIds.value.size ? keptConfigId : undefined)
+    || (nextInfo?.hasNext ? nextInfo.targetConfigId : undefined) || fallbackSuccConfigId
   // 发**整条下游**，不是只发直接后继（2026-09-17 定）。后端实测：传单个 stepId 只发那一个，
   // 不会沿链路带下游；传逗号串则按步骤分别派发。算不出下游时退回单个后继，保持旧行为。
-  const downstreamIds = (nextInfo?.downstreamSteps ?? [])
+  // 本次不发的节点从下游集合里剔除（0917-06）：只剔它自己，它后面的照发。
+  // 后端真正按 `itemConfig`（逗号分隔的 stepId）逐个派发，所以在这一层过滤就够；
+  // configId 仍指向 primaryNext，那只是辅助定位——**若实测发现它影响派发目标，
+  // 就得把 skip 透传进 fetchNextStepConfig 从 enabledSuccessors 起排除**。
+  const downstreamIds = keptDownstream
     .map((s) => String(s.stepId))
     .filter((id) => /^\d+$/.test(id))
   const singleStepId = (nextInfo?.hasNext ? nextInfo.targetStepId : undefined) || fallbackSuccStepId
@@ -453,9 +543,19 @@ async function onSendNextStep() {
   }
   const hasOpts = Object.keys(configOptions).length > 0
 
-  await confirmDanger(
+  // 整条下游都被标了"本次不发"：别发一个空 itemConfig 出去（后端会当成"发所有下一步"，
+  // 正好跟用户的意图相反）
+  if (skippedStepIds.value.size && !downstreamIds.length && !fallbackSuccStepId) {
+    ElMessage.warning('这条下游的节点都标了「本次不发」，没有可发的节点')
+    return
+  }
+
+  // 有分支分流时**必须确认**：分流去了哪几个节点是用户不知道的信息，
+  // 不能因为只勾了两条就把它咽掉（0917-05 口径）
+  await confirmOrRun(
+    ids.length > DIRECT_ROWS_MAX || !!fanout,
     '发后续任务',
-    `将对选中的 ${count} 条数据发起后续节点「${targetNodeName}」的处理任务。${fanout}\n是否继续？`,
+    `将对选中的 ${count} 条数据发起后续节点「${targetNodeName}」的处理任务。${fanout}${skipHintText.value}\n是否继续？`,
     async () => {
       const res = await withNodeErrorContext(targetNodeName, () =>
         hasOpts ? dataApi.nextStep(sourceId.value, tableId, ids, configOptions) : dataApi.nextStep(sourceId.value, tableId, ids),
@@ -494,7 +594,8 @@ async function onSendUpstream() {
     ...(hasPredStepId ? { itemConfig: predStepId, stepId: predStepId, nextStep: predStepId } : {}),
   }
   const hasPredOpts = Object.keys(predOptions).length > 0
-  await confirmDanger(
+  await confirmOrRun(
+    ids.length > DIRECT_ROWS_MAX,
     '从上一节点重跑',
     `将从上一节点「${predName}」重新发起 ${ids.length} 条${skipHint}。重跑结果需等任务完成后刷新。是否继续？`,
     async () => {
@@ -698,6 +799,8 @@ watch(
       if (targetId && flow.selectedId !== targetId) {
         flow.select(targetId)
       }
+      // 「本次不发」跟着页签走（切视图、切节点都还在），刷新浏览器才清掉
+      skippedNodeIds.value = [...(snap?.skippedNodeIds ?? [])]
       if (!fromQuery && snapId === targetId) {
         page.value = snap?.page ?? 1
         if (snap?.filters) {
@@ -789,9 +892,9 @@ function onSortChange(field: string, order: 'ascend' | 'descend' | '') {
 }
 
 // 浏览状态实时写入源页签快照，切换后恢复。
-watch([selectedNodeId, page, () => ({ ...filters })], () => {
+watch([selectedNodeId, page, () => ({ ...filters }), skippedNodeIds], () => {
   const key = tabKey.value
-  if (key) ws.saveSnapshot(key, { selectedNodeId: selectedNodeId.value, page: page.value, filters: { ...filters } })
+  if (key) ws.saveSnapshot(key, { selectedNodeId: selectedNodeId.value, page: page.value, filters: { ...filters }, skippedNodeIds: [...skippedNodeIds.value] })
 })
 
 // 表元 + 数据
@@ -1318,7 +1421,13 @@ async function onTestScript() {
          收起后 .rv-railbox 靠 min-height 留出一条窄带，展开按钮不会跟着消失。 -->
     <div v-if="selectedNodeId && railOpen" class="rv-railbox">
       <div class="rv-bar" data-testid="data-process-rail">
-        <ProcessNodeRail :model-value="selectedNodeId" :layout="processLayout" @update:model-value="onSelectNode" />
+        <ProcessNodeRail
+          :model-value="selectedNodeId"
+          :layout="processLayout"
+          :skipped="skippedNodeIds"
+          @update:model-value="onSelectNode"
+          @node-menu="openNodeMenu"
+        />
         <div v-if="!allNodes.length" class="rv-bar-empty">当前流程没有可查看数据的节点</div>
       </div>
       <div class="rv-rail-ctl">
@@ -1706,6 +1815,39 @@ async function onTestScript() {
     <SummaryDrawer v-model="summaryOpen" :table-meta="meta" :build-query="buildSummaryQuery" :hit-count="total" />
     <SnatchLauncher ref="snatchLauncher" />
 
+    <!-- 节点右键菜单（0917-06 / 0917-08，2026-09-21 用户定）：
+         轨道只把"在哪个节点上右键了"抛出来，菜单内容在这里定——另外三个复用轨道的视图
+         （文件 / 任务 / 监控）不需要这些动作。样式对齐源侧栏的 .ssw-row-menu。 -->
+    <div v-if="nodeMenu.show" class="rv-node-menu-mask" @click="closeNodeMenu" @contextmenu.prevent="closeNodeMenu" />
+    <div
+      v-if="nodeMenu.show"
+      class="rv-node-menu"
+      :style="{ left: `${nodeMenu.x}px`, top: `${nodeMenu.y}px` }"
+      data-testid="rail-node-menu"
+    >
+      <div class="rv-node-menu-title" :title="menuNodeTitle">{{ menuNodeTitle }}</div>
+      <!-- 首节点就是这个流程的抓取入口（0917-08）：会上原话「第一个节点其实就是发这个流程的抓取」。
+           有后继的首节点此前只有「发后续任务」，没有重抓列表的入口。 -->
+      <button
+        v-if="menuNodeIsFirst"
+        type="button"
+        data-testid="rail-menu-send-fetch"
+        @click="sendFetchForNode(nodeMenu.nodeId)"
+      >发起抓取</button>
+      <button
+        type="button"
+        data-testid="rail-menu-toggle-skip"
+        :title="isNodeSkipped(nodeMenu.nodeId) ? '恢复后，发后续任务会把它带上' : '只影响从本页发出的发后续任务，不改线上配置'"
+        @click="toggleSkipNode(nodeMenu.nodeId)"
+      >{{ isNodeSkipped(nodeMenu.nodeId) ? '恢复发送' : '本次不发后续' }}</button>
+      <button
+        v-if="skippedNodeIds.length > 1 || (skippedNodeIds.length === 1 && !isNodeSkipped(nodeMenu.nodeId))"
+        type="button"
+        data-testid="rail-menu-restore-all"
+        @click="restoreAllSkipped"
+      >全部恢复（{{ skippedNodeIds.length }}）</button>
+    </div>
+
     <el-dialog
       v-model="filePreview.visible"
       :title="filePreview.name || '文件预览'"
@@ -1750,6 +1892,19 @@ async function onTestScript() {
 /* 轨道容器：控件浮在轨道右上角（.rv-bar 自己会横向滚动，控件必须放在滚动容器外面，
    否则会跟着内容滚走）。收起流程按钮合并在轨道区右上角，不额外占用一行的空间。 */
 .rv-railbox { position: relative; border-bottom: 1px solid var(--rc-border-soft); background: #f8fafc; }
+/* 节点右键菜单：视觉对齐源侧栏的 .ssw-row-menu（全站第 5 处右键菜单，样式刻意一致） */
+.rv-node-menu-mask { position: fixed; z-index: 91; inset: 0; }
+.rv-node-menu {
+  position: fixed; z-index: 92; min-width: 150px; padding: 4px;
+  background: #fff; border: 1px solid var(--rc-border); border-radius: 7px;
+  box-shadow: 0 12px 28px -12px rgba(15, 23, 42, 0.38);
+}
+.rv-node-menu-title { overflow: hidden; padding: 3px 8px 5px; border-bottom: 1px solid var(--rc-border-soft); margin-bottom: 4px; color: var(--rc-faint); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.rv-node-menu button {
+  display: block; width: 100%; height: 28px; padding: 0 8px; border: 0; border-radius: 4px;
+  background: transparent; color: var(--rc-text-2); font-size: 12px; text-align: left; cursor: pointer;
+}
+.rv-node-menu button:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rv-rail-ctl { position: absolute; top: 6px; right: 10px; z-index: 2; display: flex; align-items: center; gap: 6px; }
 .rv-rail-icon-btn { width: 24px; height: 24px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); background: #fff; color: var(--rc-text-2); cursor: pointer; transition: all 0.15s ease; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04); }
 .rv-rail-icon-btn:hover { border-color: var(--rc-primary); color: var(--rc-primary-ink); background: var(--rc-primary-bg); }

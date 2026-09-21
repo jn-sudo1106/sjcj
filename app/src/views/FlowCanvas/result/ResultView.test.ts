@@ -953,6 +953,38 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectedIds')).toEqual(['d1', 'd2'])
   })
 
+  // 0917-05（2026-09-21）：勾 ≤20 条零弹框。会上原话「就不要弹框」「什么确认一下，不要确认」。
+  // 上面那条已经能证明 nextStep 被调用；这条专门钉住"确认框根本没出现"。
+  it('勾 20 条以内：零弹框直接发（0917-05）', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 2,
+      list: [
+        { dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' },
+        { dataId: 'd2', sourceId: current.sourceId, title: 'B', summary: '', acceptState: 'pending' },
+      ],
+    })
+    const confirm = vi.mocked(ElMessageBox.confirm)
+    confirm.mockClear()
+    const nextStep = vi.spyOn(dataApi, 'nextStep').mockResolvedValue({ message: '已提交 2 条' })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'first')
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['d1', 'd2'])
+    await flushPromises()
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(confirm).not.toHaveBeenCalled()
+    expect(nextStep).toHaveBeenCalledWith(current.sourceId, 'T1', ['d1', 'd2'])
+  })
+
   it('首节点显式有输入表且后面还有后继：按钮是「发后续任务」，不是「发起抓取」（0824：前一个节点把行发给后一个）', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
@@ -1525,7 +1557,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
   })
 
 
-  it('勾选后取消发后续确认框：不调用 nextStep', async () => {
+  it('勾选后取消发后续确认框：不调用 nextStep（勾 21 条才会弹，见下方 0917-05 两条）', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
@@ -1533,7 +1565,10 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
-      total: 1, list: [{ dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' }],
+      total: 21,
+      list: Array.from({ length: 21 }, (_, i) => ({
+        dataId: `d${i + 1}`, sourceId: current.sourceId, title: `A${i + 1}`, summary: '', acceptState: 'pending' as const,
+      })),
     })
     vi.mocked(ElMessageBox.confirm).mockRejectedValue('cancel')
     const nextStep = vi.spyOn(dataApi, 'nextStep')
@@ -1541,7 +1576,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     const wrapper = mountResultView()
     await flushPromises()
     await selectNode(wrapper, 'first')
-    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['d1'])
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', Array.from({ length: 21 }, (_, i) => `d${i + 1}`))
     await flushPromises()
     await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
     await flushPromises()
@@ -2109,16 +2144,121 @@ describe('ResultView · 孤立首节点（没有后继也没有上游）', () =>
     expect(wrapper.text()).not.toContain('发后续任务')
   })
 
-  it('点它走发起抓取的确认，文案点明是对整个源', async () => {
+  // 0917-05（2026-09-21）：发起抓取**不再弹确认**。
+  // SnatchLauncher.launch 内部本来就是 loadParams → 有参数弹参数框、无参数直发，
+  // 外面那层"是否继续"纯属多点一次。
+  it('点它直接发起抓取，不弹确认（0917-05）', async () => {
     const wrapper = await mountLone()
-    // mockClear + calls.at(-1)：ElMessageBox.confirm 的 spy 可能被前面的 describe 用过，
-    // 直接读 calls[0] 会拿到陈旧的那次调用（单跑通过、全跑失败）
     const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
     confirm.mockClear()
+    const loadParams = vi.spyOn(sourceApi, 'loadParams').mockResolvedValue([] as never)
 
     await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
     await flushPromises()
 
-    expect(String(confirm.mock.calls.at(-1)?.[0] ?? '')).toContain('发起抓取')
+    expect(confirm).not.toHaveBeenCalled()
+    // 走到了 SnatchLauncher：它的第一步就是探参数
+    expect(loadParams).toHaveBeenCalled()
   })
 })
+
+// 0917-06 / 0917-08（2026-09-21 用户定）：节点轨道右键菜单。
+// 会上原话「默认我不点的时候他就全部发，如果我点个（叉），他就只发第一个」；
+// 首节点那项对应「第一个节点其实就是发这个流程的抓取」。
+describe('ResultView · 节点右键菜单（0917-06 / 0917-08）', () => {
+  async function mountWithRail() {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    const flow = useFlowStore()
+    loadExecFixture(flow, current)
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 2,
+      list: [
+        { dataId: 'd1', sourceId: current.sourceId, title: 'A', summary: '', acceptState: 'pending' },
+        { dataId: 'd2', sourceId: current.sourceId, title: 'B', summary: '', acceptState: 'pending' },
+      ],
+    })
+    const wrapper = mountResultView()
+    await flushPromises()
+    await selectNode(wrapper, 'first')
+    return { wrapper, flow, current }
+  }
+
+  async function openMenuOn(wrapper: Awaited<ReturnType<typeof mountWithRail>>['wrapper'], nodeId: string) {
+    wrapper.findComponent({ name: 'ProcessNodeRail' }).vm.$emit('node-menu', { nodeId, x: 100, y: 100 })
+    await flushPromises()
+    return wrapper.get('[data-testid="rail-node-menu"]')
+  }
+
+  it('右键出菜单；首节点才有「发起抓取」', async () => {
+    const { wrapper, flow } = await mountWithRail()
+    const firstId = flow.main.find((id) => flow.configs[id]) || 'first'
+
+    const menu = await openMenuOn(wrapper, firstId)
+    expect(menu.find('[data-testid="rail-menu-send-fetch"]').exists()).toBe(true)
+    expect(menu.find('[data-testid="rail-menu-toggle-skip"]').exists()).toBe(true)
+  })
+
+  it('点「本次不发后续」：节点上出现角标，菜单文案变成「恢复发送」', async () => {
+    const { wrapper, flow } = await mountWithRail()
+    const firstId = flow.main.find((id) => flow.configs[id]) || 'first'
+
+    ;(await openMenuOn(wrapper, firstId)).get('[data-testid="rail-menu-toggle-skip"]').trigger('click')
+    await flushPromises()
+
+    // 标记传给了轨道（角标由 ProcessNodeRail 渲染，这里验 prop 传对了）
+    expect(wrapper.findComponent({ name: 'ProcessNodeRail' }).props('skipped')).toEqual([firstId])
+    // 菜单关掉了；再右键同一个节点，文案变成恢复
+    expect(wrapper.find('[data-testid="rail-node-menu"]').exists()).toBe(false)
+    expect((await openMenuOn(wrapper, firstId)).get('[data-testid="rail-menu-toggle-skip"]').text()).toBe('恢复发送')
+  })
+
+  // 核心：标了「本次不发」的节点不出现在 itemConfig 里，它的下游照发
+  it('被标记的节点不会收到任务，itemConfig 里没有它的 stepId', async () => {
+    const { wrapper, flow, current } = await mountWithRail()
+    const nextStep = vi.spyOn(dataApi, 'nextStep').mockResolvedValue({ message: '本次发送:2 条' })
+
+    // 先不标记，记下完整的 itemConfig
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('update:selectedIds', ['d1', 'd2'])
+    await flushPromises()
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+    await flushPromises()
+    const fullOpts = nextStep.mock.calls.at(-1)?.[3] as { itemConfig?: string } | undefined
+    const fullIds = String(fullOpts?.itemConfig ?? '').split(',').filter(Boolean)
+
+    if (!fullIds.length) return // 该 fixture 没有可发的下游 stepId，这条断言无从谈起
+
+    // 标记下游第一个节点，再发一次
+    const skipStepId = fullIds[0]
+    const skipNodeId = Object.keys(flow.configs).find((id) => String((flow.configs[id] as { stepId?: string }).stepId ?? id) === skipStepId) || skipStepId
+    ;(await openMenuOn(wrapper, skipNodeId)).get('[data-testid="rail-menu-toggle-skip"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="data-exec-btn"]').trigger('click')
+    await flushPromises()
+
+    const afterOpts = nextStep.mock.calls.at(-1)?.[3] as { itemConfig?: string } | undefined
+    const afterIds = String(afterOpts?.itemConfig ?? '').split(',').filter(Boolean)
+    expect(afterIds).not.toContain(skipStepId)
+    expect(nextStep).toHaveBeenCalledTimes(2)
+    expect(nextStep.mock.calls.at(-1)?.[0]).toBe(current.sourceId)
+  })
+
+  it('「全部恢复」把标记清空', async () => {
+    const { wrapper, flow } = await mountWithRail()
+    const ids = flow.main.filter((id) => flow.configs[id]).slice(0, 2)
+    if (ids.length < 2) return
+
+    for (const id of ids) {
+      ;(await openMenuOn(wrapper, id)).get('[data-testid="rail-menu-toggle-skip"]').trigger('click')
+      await flushPromises()
+    }
+    expect(wrapper.findComponent({ name: 'ProcessNodeRail' }).props('skipped')).toHaveLength(2)
+
+    ;(await openMenuOn(wrapper, ids[0])).get('[data-testid="rail-menu-restore-all"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'ProcessNodeRail' }).props('skipped')).toEqual([])
+  })
+})
+

@@ -1273,16 +1273,42 @@ describe('SiteDataView · 全部源勾选发后续任务', () => {
     expect((bCall[3] as { stepId?: string }).stepId).toBe('20')
   })
 
-  it('确认文案列出各源的下游节点名与真正会发的条数', async () => {
+  // 0917-05（2026-09-21）：勾 ≤20 条零弹框，与源态同一套口径。
+  // 跨几个源不额外要求确认——后果规模由条数决定，源数只是这些行的归属。
+  it('勾 20 条以内：零弹框直接发，各源发各的下游', async () => {
     const wrapper = await mountWithRows()
     const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
-    const next = vi.spyOn(dataApi, 'nextStep')
+    const next = vi.spyOn(dataApi, 'nextStep').mockResolvedValue({ message: '本次发送:1 条' })
 
     await pickRowsAndSend(wrapper, ['d1', 'd2'])
 
+    expect(confirm).not.toHaveBeenCalled()
+    expect(next).toHaveBeenCalledTimes(2)
+  })
+
+  it('勾超过 20 条：确认文案列出各源的下游节点名与真正会发的条数', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a'), source('b')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    // 21 行分在两个源上（a 源 11 行、b 源 10 行），超过 DIRECT_ROWS_MAX
+    // 列表按 appendSize 分批渲染（默认 20），不调大就只有 20 行能被勾中、凑不到 21
+    localStorage.setItem('rc.dataview.appendSize', '100')
+    const ids = Array.from({ length: 21 }, (_, i) => `r${i + 1}`)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 21,
+      list: ids.map((id, i) => row(i < 11 ? 'a' : 'b', id)),
+    })
+    vi.spyOn(sourceApi, 'sourceSteps').mockImplementation(async (sourceId: string) => stepsBySource[sourceId] ?? [])
+    const wrapper = mountView()
+    await flushPromises()
+    await pickTable(wrapper)
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    const next = vi.spyOn(dataApi, 'nextStep')
+
+    await pickRowsAndSend(wrapper, ids)
+
     const text = String(confirm.mock.calls.at(-1)?.[0] ?? '')
     expect(text).toContain('2 个源')
-    expect(text).toContain('2 条数据')
+    expect(text).toContain('21 条数据')
     expect(text).toContain('清洗')
     expect(text).toContain('入库')
     expect(text).toContain('归档')

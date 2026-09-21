@@ -8,8 +8,24 @@ const props = withDefaults(defineProps<{
   selectable?: (nodeId: string) => boolean
   /** 运行状态由任务/数据查看等只读视图提供；画布编辑态不传。 */
   nodeStates?: Record<string, string | undefined>
-}>(), { modelValue: '', selectable: () => true, nodeStates: () => ({}) })
-const emit = defineEmits<{ 'update:modelValue': [nodeId: string] }>()
+  /** 本次不发后续的节点（0917-06）：半透明 + 角标，一眼看出这次不跑哪些 */
+  skipped?: string[]
+}>(), { modelValue: '', selectable: () => true, nodeStates: () => ({}), skipped: () => [] })
+const emit = defineEmits<{
+  'update:modelValue': [nodeId: string]
+  /**
+   * 节点右键（0917-06 / 0917-08，2026-09-21 用户定）。
+   * **菜单内容由各视图自己渲染**：这条轨道被数据 / 文件 / 任务 / 监控四个视图复用，
+   * 「发起抓取」「本次不发后续」只对数据视图有意义，轨道不该知道菜单里有什么。
+   */
+  'node-menu': [payload: { nodeId: string; x: number; y: number }]
+}>()
+const isSkipped = (nodeId: string) => props.skipped.includes(nodeId)
+function onNodeMenu(ev: MouseEvent, nodeId: string) {
+  ev.preventDefault()
+  ev.stopPropagation()
+  emit('node-menu', { nodeId, x: ev.clientX, y: ev.clientY })
+}
 
 const railStyle = computed(() => ({ width: `${props.layout.totalWidth}px`, height: `${props.layout.totalHeight}px` }))
 const finalNodeId = computed(() => props.layout.nodes.filter((node) => !node.branch).at(-1)?.id)
@@ -36,11 +52,13 @@ function stateText(state?: string) {
       v-for="node in layout.nodes"
       :key="node.id"
       class="pnr-node"
-      :class="{ active: modelValue === node.id, disabled: !selectable(node.id) }"
+      :class="{ active: modelValue === node.id, disabled: !selectable(node.id), skipped: isSkipped(node.id) }"
       type="button"
       :data-node-id="node.id"
+      :data-testid="`rail-node-${node.id}`"
       :style="{ left: `${node.pos.left}px`, top: `${node.pos.top}px`, width: `${node.pos.width}px`, height: `${node.pos.height}px` }"
       @click="pick(node.id)"
+      @contextmenu="onNodeMenu($event, node.id)"
     >
       <span class="pnr-node-icon">{{ iconFor(node.cfg) }}</span>
       <span class="pnr-node-text">
@@ -49,6 +67,8 @@ function stateText(state?: string) {
       </span>
       <span v-if="nodeStates[node.id]" class="pnr-node-state" :class="`state-${nodeStates[node.id]}`" :title="stateText(nodeStates[node.id])" :aria-label="stateText(nodeStates[node.id])" />
       <span v-if="node.id === finalNodeId" class="pnr-node-final">最终结果</span>
+      <!-- 本次不发：角标而不是把节点整个灰掉——灰掉会跟「已停用」（落库的那个）看着一样 -->
+      <span v-if="isSkipped(node.id)" class="pnr-node-skip" data-testid="rail-node-skip-badge" title="本次不发后续任务（右键可恢复）">本次不发</span>
     </button>
   </div>
 </template>
@@ -63,6 +83,11 @@ function stateText(state?: string) {
 .pnr-node:hover:not(.disabled):not(.active) { border-color: #bfdbfe; box-shadow: 0 4px 12px -8px rgba(37, 99, 235, .45); }
 .pnr-node.active { border-color: #2563eb; background: #f8fbff; box-shadow: 0 0 0 1px #bfdbfe; }
 .pnr-node.disabled { cursor: default; opacity: .62; }
+/* 本次不发（0917-06）：虚线边 + 淡化文字，但**不跟「已停用」同色**——
+   那个是落库的配置状态，这个只影响这一次发送 */
+.pnr-node.skipped { border-style: dashed; border-color: #f59e0b; background: #fffbeb; }
+.pnr-node.skipped .pnr-node-text { opacity: .6; }
+.pnr-node-skip { position: absolute; top: -8px; left: 8px; padding: 0 5px; border-radius: 4px; background: #f59e0b; color: #fff; font-size: 10px; line-height: 15px; white-space: nowrap; }
 .pnr-node-icon { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 7px; background: #eff6ff; color: #2563eb; font-size: 12px; font-weight: 700; }
 .pnr-node-text { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px; line-height: 1.25; }
 .pnr-node b, .pnr-node small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

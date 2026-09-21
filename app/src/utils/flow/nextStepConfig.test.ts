@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { resolveNextStepConfigFromSteps, fetchNextStepConfig } from './nextStepConfig'
+import { resolveNextStepConfigFromSteps, fetchNextStepConfig, collectDownstreamSteps } from './nextStepConfig'
 import { sourceApi, type Step } from '@/api'
 
 describe('nextStepConfig · 根据当前节点与 nextConfigPaged 解析下一个节点配置', () => {
@@ -205,6 +205,35 @@ describe('collectDownstreamSteps · 收集整条下游', () => {
     expect(ids).toEqual(['40598'])
     expect(ids).not.toContain('41685')
     expect(ids).not.toContain('x')
+  })
+
+  // 0917-06（2026-09-21）：「本次不发」与「停用」**故意相反**——
+  // 停用截断该分支（它不跑没输出，下游空转），本次不发只剔自己、下游照发。
+  // 用户明确选了"C 还发"，并知道 B 不跑时 C 这次多半空跑。
+  it('标了「本次不发」的节点只剔自己，它的下游照发（过滤，不截断）', () => {
+    const ids = collectDownstreamSteps(chain, ['40597'], ['40598']).map((s) => s.stepId)
+    expect(ids).toEqual(['40597', '41685'])
+    expect(ids).not.toContain('40598')
+  })
+
+  it('跳过多个、以及跳过链尾', () => {
+    expect(collectDownstreamSteps(chain, ['0'], ['40597', '41685']).map((s) => s.stepId))
+      .toEqual(['0', '40598'])
+    expect(collectDownstreamSteps(chain, ['0'], ['41685']).map((s) => s.stepId))
+      .toEqual(['0', '40597', '40598'])
+  })
+
+  it('跳过集合为空 / 未传时行为不变', () => {
+    const full = ['0', '40597', '40598', '41685']
+    expect(collectDownstreamSteps(chain, ['0']).map((s) => s.stepId)).toEqual(full)
+    expect(collectDownstreamSteps(chain, ['0'], []).map((s) => s.stepId)).toEqual(full)
+  })
+
+  // 停用与本次不发同时在场：停用仍然截断，本次不发仍然只剔自己
+  it('停用与「本次不发」同时存在时各按各的语义', () => {
+    const withDisabled = chain.map((s) => (s.stepId === '41685' ? { ...s, enabled: false } : s))
+    expect(collectDownstreamSteps(withDisabled, ['0'], ['40597']).map((s) => s.stepId))
+      .toEqual(['0', '40598'])
   })
 
   it('多分支时两条支路的下游都收进来', () => {

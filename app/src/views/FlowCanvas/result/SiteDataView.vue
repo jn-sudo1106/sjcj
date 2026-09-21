@@ -32,7 +32,7 @@ import {
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
 import { fetchNextStepConfig, resolveNextStepConfigFromSteps, type ResolvedNextStepConfig } from '@/utils/flow/nextStepConfig'
-import { confirmDanger } from '@/utils/confirmDanger'
+import { confirmOrRun } from '@/utils/confirmDanger'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import DataGrid from './DataGrid.vue'
 import FilePreview from './components/FilePreview.vue'
@@ -839,7 +839,11 @@ async function onSendNextStep() {
   const allNames = [...new Set(plans.flatMap((plan) => plan.names))]
   const nodeText = allNames.length <= 3 ? allNames.join('、') : `${allNames.slice(0, 3).join('、')} 等 ${allNames.length} 个节点`
   const skipHint = skipped.length ? `\n${skipped.length} 个源没有可发的后续节点，已跳过：${skipped.slice(0, 3).join('；')}` : ''
-  await confirmDanger(
+  // 与源态同一套口径（0917-05）：按**勾选条数**分档，20 条以内直接发。
+  // 跨几个源不额外要求确认——后果规模由条数决定，源数只是这些行的归属。
+  // 但有源被跳过（没有可发的后续节点）时要确认：那是用户不知道的信息，不能咽掉。
+  await confirmOrRun(
+    rowCount > DIRECT_ROWS_MAX || !!skipHint,
     '发后续任务',
     `将对 ${plans.length} 个源 · ${rowCount} 条数据发起后续节点「${nodeText}」的处理任务，是否继续？${skipHint}`,
     async () => {
@@ -1028,6 +1032,9 @@ const detailVisibleProps = computed(() => visibleDetailProps(fieldPreset.value, 
 // 单元格里的文件预览（0819 N2-7）：路径类字段点开就地看内容，不用先跳到文件视图再找。
 // 用居中 dialog 而不是右侧抽屉——这是"看一眼就关"的操作型短流程，抽屉留给实体详情
 // （项目弹层规范）。预览器与文件详情共用一个组件，取数、降级、下载全在里面。
+/** 与源态数据视图同一个阈值（0917-05）：那边的说明见 ResultView.vue 的 DIRECT_ROWS_MAX */
+const DIRECT_ROWS_MAX = 20
+
 const filePreview = reactive({ visible: false, path: '', basePath: '', name: '', url: '', ext: '' })
 // sourceUrl 由 DataGrid 从被点的那一行算好带过来（2026-09-11）。此前是从 detailFields
 // 取——那是详情抽屉当前行的字段，直接点单元格时详情没开，于是永远取不到，

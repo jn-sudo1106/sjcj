@@ -21,6 +21,33 @@ export async function confirmDanger<T extends { message?: string } | undefined>(
   } catch {
     return
   }
+  return runAndReport(run, onSuccess)
+}
+
+/**
+ * 按条件决定弹不弹（0917-05）。会上原话：「就不要弹框」「什么确认一下，不要确认」。
+ *
+ * **不是一律删**：这几个入口的后果规模差三个数量级——勾 3 条发后续和按当前条件发 5000 条
+ * 是两件事，旧平台自己也是分档的。所以调用方把"要不要确认"算出来传进来，
+ * 免确认那条路**成功 / 失败的处理与确认那条完全一致**（都走 runAndReport）——
+ * 少弹一个框不等于少一层错误兜底，`danger` 端点在生产会被写保护拦截，那是真实路径。
+ */
+export async function confirmOrRun<T extends { message?: string } | undefined>(
+  needConfirm: boolean,
+  title: string,
+  body: string,
+  run: () => Promise<T>,
+  onSuccess?: (res: T) => void,
+) {
+  if (needConfirm) return confirmDanger(title, body, run, onSuccess)
+  return runAndReport(run, onSuccess)
+}
+
+/** 执行 + 回报。确认与免确认两条路共用，避免"免确认那条忘了处理失败"。 */
+async function runAndReport<T extends { message?: string } | undefined>(
+  run: () => Promise<T>,
+  onSuccess?: (res: T) => void,
+) {
   try {
     const res = await run()
     if (onSuccess) {

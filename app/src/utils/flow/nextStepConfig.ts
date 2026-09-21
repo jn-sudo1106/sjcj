@@ -48,10 +48,17 @@ export interface CurrentNodeConfigHint {
  * **停用的步骤会截断该分支**，不是跳过它继续往下收：它不跑就没有输出，它下游那些节点
  * 拿不到数据，发过去只是空转一遍。所以遇到停用就停在那里，别把后面的也拖进来。
  * `seen` 同时兼作环保护——脏数据里出现 A→B→A 时不会死循环。
+ *
+ * `skipStepIds`（0917-06，2026-09-21）是**另一套语义，故意跟停用相反**：
+ * 用户在节点上标了「本次不发后续」，那个节点自己不发，**但它下游照发**
+ * （A→B→C 跳过 B 得到 [A, C]）——用户 2026-09-21 明确选了"C 还发"这一档。
+ * 代价他也知道：B 不跑，C 这次多半是空跑。这是临时的排错动作，不是配置变更，
+ * 所以不按停用那样截断。
  */
-export function collectDownstreamSteps(steps: Step[], fromStepIds: string[]): Step[] {
+export function collectDownstreamSteps(steps: Step[], fromStepIds: string[], skipStepIds?: Iterable<string>): Step[] {
   const byId = new Map(steps.map((s) => [String(s.stepId), s]))
   const seen = new Set(fromStepIds.map(String))
+  const skip = new Set([...(skipStepIds ?? [])].map(String))
   const out: Step[] = []
   let frontier = fromStepIds.map(String)
 
@@ -61,7 +68,8 @@ export function collectDownstreamSteps(steps: Step[], fromStepIds: string[]): St
       const step = byId.get(id)
       // 停用：本身不发，也不再往它下游走
       if (!step || step.enabled === false) continue
-      out.push(step)
+      // 本次不发：自己不进结果，但**继续往下游走**（与停用相反，见函数注释）
+      if (!skip.has(id)) out.push(step)
       for (const candidate of steps) {
         const cid = String(candidate.stepId)
         if (seen.has(cid)) continue

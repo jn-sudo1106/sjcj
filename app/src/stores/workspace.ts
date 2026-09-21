@@ -30,6 +30,15 @@ export interface SourceTabSnapshot {
   selectedNodeId?: string
   filters?: { dataId: string; parentId: string; state: string; sql: string; sourceFilter?: string }
   page?: number
+  /**
+   * 本次不发后续的节点（0917-06，2026-09-21）。会上原话：「默认我不点的时候他就全部发，
+   * 如果我点个（叉），他就只发第一个」。
+   *
+   * **和节点的「停用」是两件事**：`Step.enabled` 落在后端 `cs_item_config` 上、对所有源所有运行生效；
+   * 这个只影响"从这个页签发出的发后续任务"，存在页签快照里，刷新浏览器就没了。
+   * 排错时随手点一下不该改到线上配置。
+   */
+  skippedNodeIds?: string[]
 }
 
 /**
