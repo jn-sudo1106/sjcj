@@ -332,22 +332,55 @@ describe('prompt（2026-09-18：拼接后的系统提示词随配置保存落 cs
   })
 })
 
-describe('codeRule（2026-09-20：翻译助手保存时把编排 Tab 的源/目标语言写进 code_rule）', () => {
-  it('翻译助手节点默认带 {"from":"auto","to":"en"}（种子初始值）', () => {
+describe('coreParam（2026-09-21：翻译助手保存时把源/目标语言与引擎写进 core_param，不再写 code_rule）', () => {
+  it('翻译助手节点默认带 {"from":"auto","to":"en","engine":"baidu"}（种子初始值）', () => {
     const cfg = cloneConfig(NODE_CONFIGS['translate'])
-    expect(buildConfigPayload(cfg).codeRule).toBe('{"from":"auto","to":"en"}')
+    const payload = buildConfigPayload(cfg)
+    expect(payload.coreParam).toBe('{"from":"auto","to":"en","engine":"baidu"}')
+    expect(payload.codeRule).toBeUndefined()
   })
 
-  it('编排 Tab 改过语言后按节点上的结构化配置写 code_rule', () => {
+  it('编排 Tab 改过语言/引擎后按节点上的结构化配置写 core_param（engine 是英文引擎码）', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['translate'])
+    cfg.structuredConfig = '{"from":"zh","to":"en","engine":"google"}'
+    const payload = buildConfigPayload(cfg)
+    expect(payload.coreParam).toBe('{"from":"zh","to":"en","engine":"google"}')
+    expect(payload.codeRule).toBeUndefined()
+  })
+
+  it('存量只有语言对（无 engine）时保存自动补 baidu', () => {
     const cfg = cloneConfig(NODE_CONFIGS['translate'])
     cfg.structuredConfig = '{"from":"zh","to":"en"}'
-    expect(buildConfigPayload(cfg).codeRule).toBe('{"from":"zh","to":"en"}')
+    const payload = buildConfigPayload(cfg)
+    expect(payload.coreParam).toBe('{"from":"zh","to":"en","engine":"baidu"}')
   })
 
-  it('非翻译助手节点不受影响：结构化配置照旧按节点值写', () => {
+  it('存量引擎码原样保留，短暂落过库的界面值换算回引擎码', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['translate'])
+    cfg.structuredConfig = '{"from":"jp","to":"en","engine":"google"}'
+    expect(buildConfigPayload(cfg).coreParam).toBe('{"from":"jp","to":"en","engine":"google"}')
+
+    cfg.structuredConfig = '{"from":"auto","to":"en","engine":"有道翻译"}'
+    expect(buildConfigPayload(cfg).coreParam).toBe('{"from":"auto","to":"en","engine":"youdao"}')
+  })
+
+  it('非翻译助手节点不受影响：结构化配置照旧写 code_rule，core_param 不写', () => {
     const cfg = node()
     cfg.collectCfg!.structuredConfig = '{"globals":["列ID"]}'
-    expect(buildConfigPayload(cfg).codeRule).toBe('{"globals":["列ID"]}')
+    const payload = buildConfigPayload(cfg)
+    expect(payload.codeRule).toBe('{"globals":["列ID"]}')
+    expect(payload.coreParam).toBeUndefined()
+  })
+
+  it('applyConfigToNode 对翻译助手节点从 core_param 回读语言/引擎，旧 code_rule 存量兜底', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['translate'])
+    applyConfigToNode(cfg, { ...config, codeRule: '{"from":"zh","to":"en"}', coreParam: '{"from":"jp","to":"en","engine":"google"}' })
+    expect(cfg.structuredConfig).toBe('{"from":"jp","to":"en","engine":"google"}')
+
+    // 旧存量配置：core_param 为空，语言对还在 code_rule 里，回读要能兜住
+    const legacy = cloneConfig(NODE_CONFIGS['translate'])
+    applyConfigToNode(legacy, { ...config, codeRule: '{"from":"zh","to":"en"}', coreParam: '' })
+    expect(legacy.structuredConfig).toBe('{"from":"zh","to":"en"}')
   })
 })
 
@@ -378,11 +411,11 @@ describe('coreParam（2026-09-20：打标签/摘要节点保存时把模型供�
     expect(payload.coreParam).toBe('base 原值')
   })
 
-  it('翻译助手节点不受影响：code_rule 仍写语言对，coreParam 不写', () => {
+  it('翻译助手节点的 core_param 是语言/引擎，不写模型 JSON', () => {
     const cfg = cloneConfig(NODE_CONFIGS['translate'])
     cfg.execCfg = { ...makeDefaultExecConfig(), modelProviderCode: 'DeepSeek', modelCode: 'deepseek-v4-flash' }
     const payload = buildConfigPayload(cfg)
-    expect(payload.codeRule).toBe('{"from":"auto","to":"en"}')
-    expect(payload.coreParam).toBeUndefined()
+    expect(payload.coreParam).toBe('{"from":"auto","to":"en","engine":"baidu"}')
+    expect(payload.codeRule).toBeUndefined()
   })
 })

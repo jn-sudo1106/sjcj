@@ -10,6 +10,7 @@
 // 旧字段对照见 0824-02 §4：codeRule=入库配置、contentRule=正文规则、snatchDrepeat=去重类型、
 // templetCode=业务类型、isMulti=是否列表、entryTypeId=输出表、inEntryType=输入表、topic=队列。
 import type { Config } from '@/api'
+import { engineCodeOf } from '@/api/translate'
 import {
   defaultMultiMode,
   isArticleSummaryNode,
@@ -34,7 +35,11 @@ export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
   cfg.configUrl = config.url ?? ''
   cfg.runPolicy = config.runPolicy
   const target = cfg.collectCfg ?? cfg
-  target.structuredConfig = config.codeRule ?? undefined
+  // 翻译助手节点的语言/引擎存在 core_param（2026-09-21 从 code_rule 挪过去），
+  // 旧存量配置仍躺在 code_rule——回读先取 core_param，取不到回落 code_rule 兼容。
+  target.structuredConfig = isTranslateNode(cfg)
+    ? (config.coreParam || config.codeRule || undefined)
+    : config.codeRule ?? undefined
   target.contentRules = config.contentRule ?? undefined
   cfg.coreParam = config.coreParam ?? undefined
   if (cfg.collectCfg) {
@@ -174,6 +179,38 @@ function modelCodeRuleFor(cfg: NodeConfig): string | undefined {
   return JSON.stringify({ providerCode, model })
 }
 
+/**
+ * 翻译助手节点保存时的核心参数（2026-09-21 需求，落 cs_config.core_param）：源/目标语言与
+ * 引擎按 `{"from":"zh","to":"en","engine":"google"}`，取的是节点上的结构化配置
+ *（编排 Tab 改下拉即写回）。整段从 code_rule 挪到 core_param，code_rule 不再写；
+ * 结构化配置尚未回填（undefined）时不写，沿用「有值才覆盖」保留 base 原值。
+ *
+ * engine 统一成**英文引擎码**再落库：存量 {"from","to"} 没有引擎（后端缺省百度）时
+ * 补默认 baidu，存量界面值（谷歌翻译等，曾短暂落过库）换算回引擎码——保证「保存时选的
+ * 是什么、库里存的就是对应引擎码」，不再出现只有语言对、没有 engine 的 core_param。
+ */
+function translateStructuredFor(cfg: NodeConfig): string | undefined {
+  if (!isTranslateNode(cfg)) return undefined
+  const source = cfg.collectCfg ?? cfg
+  const stored = source.structuredConfig
+  if (!stored) return undefined
+  const text = stored.trim()
+  if (!text.startsWith('{')) return stored
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return stored
+    const record = parsed as Record<string, unknown>
+    const raw = String(record.engine ?? '').trim()
+    const engine = raw ? engineCodeOf(raw) : 'baidu'
+    if (record.engine !== engine || !raw) {
+      return JSON.stringify({ ...record, engine })
+    }
+  } catch {
+    // 解析不出按原样写
+  }
+  return stored
+}
+
 export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown> = {}): Record<string, unknown> {
   const cc = cfg.collectCfg
   const source = cc ?? cfg
@@ -194,10 +231,12 @@ export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown
     topic: cfg.taskCfg?.queue || undefined,
     snatchDrepeat: dedupToLegacy(cc?.dedupMode ?? cfg.dedupMode),
     // 空字符串是用户明确删除，必须写回后端；只有 undefined 才代表“尚未回填，保留 base”。
-    codeRule: source.structuredConfig,
+    // 翻译助手节点的结构化配置已挪去 core_param，code_rule 不再写（保持 base 原值）。
+    codeRule: isTranslateNode(cfg) ? undefined : source.structuredConfig,
     contentRule: source.contentRules,
-    // 打标签 / 摘要节点把模型选择写核心参数（modelCodeRuleFor），没选好时回写节点回读到的原值。
-    coreParam: modelCodeRuleFor(cfg) ?? cfg.coreParam,
+    // 打标签 / 摘要节点把模型选择写核心参数（modelCodeRuleFor），翻译助手写语言/引擎，
+    // 都没写时回写节点回读到的原值。
+    coreParam: modelCodeRuleFor(cfg) ?? translateStructuredFor(cfg) ?? cfg.coreParam,
     // 拼接后的系统提示词（2026-09-18）：落 cs_config.prompt；见 promptForConfig 的节点类型口径。
     prompt: promptForConfig(cfg),
   }

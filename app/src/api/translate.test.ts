@@ -39,9 +39,17 @@ describe('翻译接口调用', () => {
     expect(engineCodeOf('有道翻译')).toBe('youdao')
     expect(engineCodeOf('')).toBe('baidu')
     expect(engineCodeOf('不认识的引擎')).toBe('baidu')
+    // 已经是引擎码的输入原样返回（core_param 里 engine 存英文码，保存归一化要认得出）
+    expect(engineCodeOf('google')).toBe('google')
+    expect(engineCodeOf('youdao')).toBe('youdao')
+    expect(engineCodeOf('baidu')).toBe('baidu')
     expect(engineLabelOf('google')).toBe('谷歌翻译')
     expect(engineLabelOf('youdao')).toBe('有道翻译')
     expect(engineLabelOf('bing')).toBe('百度翻译')
+    // 短暂落过库的界面值也能回填成界面名
+    expect(engineLabelOf('谷歌翻译')).toBe('谷歌翻译')
+    expect(engineLabelOf('有道翻译')).toBe('有道翻译')
+    expect(engineLabelOf('百度翻译')).toBe('百度翻译')
   })
 
   it('指定有道翻译时 body 带 engine=youdao', async () => {

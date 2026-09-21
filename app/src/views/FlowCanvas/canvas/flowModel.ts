@@ -125,7 +125,8 @@ export interface NodeConfig {
   contentRules?: string
   /** 配置核心参数（旧 coreParam）：打标签/摘要节点保存时把模型选择写这里
    *  （{"providerCode","model"}，2026-09-20 从 code_rule 调整到 core_param），
-   *  回读后用于编排 Tab 回填模型下拉。 */
+   *  翻译助手把源/目标语言与引擎写这里（{"from","to","engine"}，2026-09-21 从 code_rule 调整到 core_param），
+   *  回读后用于编排 Tab 回填模型 / 语言与引擎下拉。 */
   coreParam?: string
   /** 非采集类节点的输入表（采集类沿用 collectCfg.inputTable）；空 = 自动继承上游节点输出表，显式设置即覆盖（0701 问题五） */
   inputTable?: string

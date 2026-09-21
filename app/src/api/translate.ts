@@ -77,17 +77,29 @@ export const TRANSLATE_ENGINE_LABELS: Record<string, string> = {
   baidu: '百度翻译',
 }
 
-/** 界面引擎名 → 引擎码；认不出回落 baidu（存量 code_rule 没有 engine 字段，缺省即百度） */
+/**
+ * 界面引擎名/引擎码 → 引擎码（core_param 里 engine 的统一口径，2026-09-21 最终拍板存英文码）。
+ * 兼容两种输入：界面名（「谷歌翻译」）换算成码，已经是码（google）原样返回；
+ * 其余认不出（含空）回落 baidu（存量 code_rule 没有 engine 字段，缺省即百度）。
+ */
 export function engineCodeOf(engine: string): string {
   const key = engine.trim()
   if (!key) return 'baidu'
-  return TRANSLATE_ENGINE_CODES[key] ?? 'baidu'
+  const byLabel = TRANSLATE_ENGINE_CODES[key]
+  if (byLabel) return byLabel
+  const lower = key.toLowerCase()
+  if (TRANSLATE_ENGINE_LABELS[lower]) return lower
+  return 'baidu'
 }
 
-/** 引擎码 → 界面引擎名；不认识的码同样回落「百度翻译」 */
+/**
+ * 引擎码/界面名 → 界面引擎名。兼容两种输入：已经是界面名（如「谷歌翻译」）原样返回，
+ * 引擎码（google/youdao/baidu）换算成界面名；其余不认识的回落「百度翻译」。
+ */
 export function engineLabelOf(code: string): string {
-  const key = code.trim().toLowerCase()
-  return TRANSLATE_ENGINE_LABELS[key] ?? '百度翻译'
+  const key = code.trim()
+  if (TRANSLATE_ENGINE_CODES[key]) return key
+  return TRANSLATE_ENGINE_LABELS[key.toLowerCase()] ?? '百度翻译'
 }
 
 /**

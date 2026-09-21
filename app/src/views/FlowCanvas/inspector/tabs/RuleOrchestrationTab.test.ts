@@ -982,7 +982,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       return { flow, wrapper }
     }
 
-    it('改引擎与语言后点保存：updateConfig 的 code_rule 是 {"from":"zh","to":"en","engine":"google"}', async () => {
+    it('改引擎与语言后点保存：updateConfig 的 core_param 是 {"from":"zh","to":"en","engine":"google"}（不再写 codeRule）', async () => {
       const { wrapper } = mountOnSavedTranslateNode()
       await flushPromises()
 
@@ -1002,10 +1002,13 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       await flushPromises()
 
       expect(configApi.updateConfig).toHaveBeenCalledTimes(1)
-      expect(vi.mocked(configApi.updateConfig).mock.calls[0][0]).toMatchObject({
+      const sent = vi.mocked(configApi.updateConfig).mock.calls[0][0]
+      expect(sent).toMatchObject({
         configId: '1401013',
-        codeRule: '{"from":"zh","to":"en","engine":"google"}',
+        coreParam: '{"from":"zh","to":"en","engine":"google"}',
       })
+      // 2026-09-21：翻译助手的语言/引擎整体挪到 core_param，codeRule 不再写
+      expect(sent.codeRule).toBeUndefined()
       wrapper.unmount()
     })
 

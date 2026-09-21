@@ -479,8 +479,9 @@ function translateConfigFromStored(stored: unknown): { from: string; to: string;
 /** 用户改过语言/引擎后置位：之后的配置回填（configDetail 迟到 / 换配置）不再覆盖用户的选择 */
 const translateLangsTouched = ref(false)
 /**
- * 把源/目标语言与引擎落成节点结构化配置（保存时随 buildConfigPayload 写进 config.code_rule）。
- * 格式与 /api/translate 请求同口径：百度语言码 + engine，自动检测 = auto。
+ * 把源/目标语言与引擎落成节点结构化配置（保存时随 buildConfigPayload 写进 config.core_param）。
+ * 语言与 /api/translate 请求同口径：百度语言码，自动检测 = auto；engine 存**英文引擎码**
+ *（baidu / google / youdao，2026-09-21 最终口径）。
  * 只在这里写一次，改下拉即置脏，底部「保存」随之可点（下拉改动不再是静默的本地状态）。
  */
 function writeTranslateConfig(source: string, target: string, engine: string) {
