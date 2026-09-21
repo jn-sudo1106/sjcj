@@ -424,20 +424,23 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       )))
     }
 
-    it('视频提取音频节点显示上传入口与参数，且没有脚本编辑按钮', async () => {
+    it('视频提取音频节点只保留音频参数，不显示通用编排元素', async () => {
       const { wrapper } = mountOnVideoAudioNode()
       await flushPromises()
 
       expect(wrapper.find('[data-testid="video-extract-field"]').exists()).toBe(true)
-      expect(wrapper.find('[data-testid="video-pick-file"]').text()).toContain('上传视频')
-      expect(wrapper.find('.ni-section-title-row button').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="video-pick-file"]').exists()).toBe(false)
       // 输出格式 / 码率 / 采样率 / 声道 都在，且默认是 mp3
       expect((wrapper.get('[data-testid="media-format"]').element as HTMLSelectElement).value).toBe('mp3')
       expect(wrapper.find('[data-testid="media-bitrate"]').exists()).toBe(true)
       expect(wrapper.find('[data-testid="media-sampling-rate"]').exists()).toBe(true)
       expect(wrapper.find('[data-testid="media-channels"]').exists()).toBe(true)
+      expect(wrapper.find('.ni-section-title-row').exists()).toBe(false)
+      expect(wrapper.find('textarea').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('切换已有配置')
       // 没选文件不能点提取
       expect(wrapper.get('[data-testid="video-extract"]').attributes('disabled')).toBeDefined()
+      wrapper.unmount()
     })
 
     it('上传视频后按参数调接口，拿到音频流并给出试听与下载', async () => {

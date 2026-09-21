@@ -15,7 +15,7 @@
 // 画布侧没 provide 那个上下文，走默认实现（读写 flow store），行为不变。
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Picture, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
+import { Delete, Picture, UploadFilled } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { recognizeImage, readImageAsBase64, ocrTextOf, type OcrBlock } from '@/api/ocr'
 import { isArticleSummaryNode, isArticleTagNode, isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isRuleNode, isScriptlessNode, isTranslateNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
@@ -1275,8 +1275,8 @@ function retryLoadSwitchOptions() {
 // 文章生成摘要没有「既有抓取配置」可切（它本来就不吃抓取 XML），不进这个加载分支，
 // 免得白拉一次编排列表；同时把 isArticleSummary 一起放进依赖，切到别的非规则节点时仍会补加载。
 watch(
-  () => [isRule.value, isArticleSummary.value, isAudioText.value] as const,
-  ([rule, summary, audioText]) => { if (!rule && !summary && !audioText) void loadSwitchOptions() },
+  () => [isRule.value, isArticleSummary.value, isAudioText.value, isVideoAudio.value] as const,
+  ([rule, summary, audioText, videoAudio]) => { if (!rule && !summary && !audioText && !videoAudio) void loadSwitchOptions() },
   { immediate: true },
 )
 
@@ -1393,7 +1393,7 @@ function onTestScript() {
     </el-select>
   </div>
   <!-- 文章生成摘要没有「抓取配置」这个概念，标题行整块不出现（0921 口径：只留模型与系统提示词） -->
-  <div v-if="!isAudioText && !isTranslate && !isArticleSummary && !isArticleTag" class="ni-section-title ni-section-title-row">
+  <div v-if="!isAudioText && !isVideoAudio && !isTranslate && !isArticleSummary && !isArticleTag" class="ni-section-title ni-section-title-row">
     <span>{{ isRule ? '设置业务规则' : '抓取配置' }}</span>
     <span v-if="!isScriptless" class="ni-section-actions">
       <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
@@ -1472,10 +1472,6 @@ function onTestScript() {
         :accept="VIDEO_ACCEPT"
         @change="onVideoFileChange"
       />
-      <button class="rc-btn" type="button" data-testid="video-pick-file" @click="videoFileInput?.click()">
-        <VideoPlay aria-hidden="true" />
-        <span>{{ videoFile ? '更换视频' : '上传视频' }}</span>
-      </button>
       <span class="ocr-hint">{{ MEDIA_VIDEO_EXTENSIONS.join(' / ') }}，最大 {{ Math.round(MEDIA_MAX_FILE_SIZE / 1024 / 1024) }}MB</span>
     </div>
     <div v-if="videoFile" class="ocr-preview">
@@ -1712,7 +1708,7 @@ function onTestScript() {
     <pre v-if="tagPromptOpen" class="article-prompt-text" data-testid="tag-prompt-text">{{ orchCfg.systemPrompt || '（未取到提示词模板）' }}</pre>
   </div>
   <!-- 描述输入框：文章生成摘要 / 文章打标签没有「抓取需求描述」这回事，整块不出现（0921 口径） -->
-  <div v-if="!isAudioText && !isTranslate && !isArticleSummary && !isArticleTag" class="rc-field">
+  <div v-if="!isAudioText && !isVideoAudio && !isTranslate && !isArticleSummary && !isArticleTag" class="rc-field">
     <textarea
       class="rc-input rc-textarea"
       :value="orchCfg.describe"
@@ -1848,7 +1844,7 @@ function onTestScript() {
   />
 
   <!-- 动作链摘要 / 切换已有配置都是「抓取配置 XML」这套东西的配套件，纯配置节点整块不出现（0921 口径） -->
-  <template v-if="!isAudioText && !isRule && !isTranslate && !isArticleSummary && !isArticleTag">
+  <template v-if="!isAudioText && !isVideoAudio && !isRule && !isTranslate && !isArticleSummary && !isArticleTag">
     <!-- 只读动作链摘要（0804 S3-4，方案 §3.1）：按 NextActionId 链表走出来的执行顺序，不可编辑 -->
     <div v-if="actionSummary" class="rc-list ni-rule-meta">
       <div class="rc-list-row"><b>动作链</b><span :title="actionSummary">{{ actionSummary }}</span></div>
@@ -1876,7 +1872,7 @@ function onTestScript() {
        为一个双栏工作区——两个入口按钮（编辑系统提示词/全屏查看）现在打开同一个弹层，左右两栏一屏对照，
        面板内直接能生成/保存，不用退出去。 -->
   <RuleWorkbenchDialog
-    v-if="!isAudioText"
+    v-if="!isAudioText && !isVideoAudio"
     v-model:open="workbenchOpen"
     :title="workbenchTitle"
     :script-label="scriptLabel"
