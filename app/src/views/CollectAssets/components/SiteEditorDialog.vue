@@ -106,7 +106,8 @@ const searchKeyword = ref('')
 const categoryTreeData = computed(() => (searchKeyword.value ? searchHits.value : props.categories))
 
 /** 祖先 id 链 → 可读路径。只认已加载的那两层，认不出的段跳过，至少能给个上下文。 */
-function pathLabelOf(name: string, path: string): string {
+function pathLabelOf(name: string, path?: string): string {
+  if (!path) return name
   const names: string[] = []
   for (const id of path.split(',').map((x) => x.trim()).filter((x) => x && x !== '0')) {
     const hit = findCategory(props.categories, id)
@@ -139,7 +140,7 @@ async function searchCategory(keyword: string) {
     // 同名结果要能分开：路径只解析得到已加载的那两层，更深的祖先认不出来，
     // 于是「财经资讯 / 财经媒体 / 主流媒体」可能出现两条一模一样的（实测搜"主流"就是）。
     // 只给**真正重名**的那几条补上 ID，不重名的保持干净。
-    const labeled = hits.map((hit) => ({ id: hit.id, name: pathLabelOf(hit.name, hit.path) }))
+    const labeled = hits.map((hit) => ({ id: hit.id, name: pathLabelOf(hit.name, hit.path ?? '') }))
     const seen = new Map<string, number>()
     for (const item of labeled) seen.set(item.name, (seen.get(item.name) ?? 0) + 1)
     searchHits.value = labeled.map((item) => (

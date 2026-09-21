@@ -564,9 +564,12 @@ export interface LegacySnatchSaveResult extends Ack {
 
 /** 源分类目录树节点（多级，计数仅在后端返回时展示）— 采集资产左侧目录 */
 export interface SourceCategory {
-  id: string // 分类路径，如 /基金类 或 /基金类/支付宝评论；'' 表示全部
+  id: string // 分类路径或 ID，如 /基金类 或 9009005；'' 表示全部
   name: string
   count?: number // 该分类直属 + 子级源总数；未返回时不以 0 代替
+  seq?: number // 排序序号
+  parentId?: string // 父级分类 ID
+  path?: string // 祖先 ID 链
   children?: SourceCategory[]
 }
 

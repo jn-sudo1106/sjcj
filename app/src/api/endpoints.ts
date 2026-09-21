@@ -98,10 +98,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   // filter 只能过滤**已展开**的节点，深层分类搜不到。实测 `?wd=主流媒体` 返回 4 条，
   // 带 categoryId / categoryName / level / parentId / path（祖先 id 链）。
   { path: 'category/categoryQuery', desc: '分类关键词查询（跨层级）', live: true },
-  { path: 'category/add', desc: '新增分类', danger: true },
-  { path: 'category/addBatch', desc: '批量新增分类', danger: true },
-  { path: 'category/update', desc: '修改分类', danger: true },
-  { path: 'category/delete', desc: '删除分类', danger: true },
+  { path: 'category/add', desc: '新增分类', danger: true, live: true },
+  { path: 'category/addBatch', desc: '批量新增分类', danger: true, live: true },
+  { path: 'category/update', desc: '修改分类', danger: true, live: true },
+  { path: 'category/delete', desc: '删除分类', danger: true, live: true },
 
   /* ── config 配置 + 实体 + 参数（目标 35 / 收录 27） ── */
   { path: 'config/configPaged', desc: '配置分页', impl: true, live: true },

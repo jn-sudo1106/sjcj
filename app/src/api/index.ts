@@ -526,7 +526,7 @@ export const sourceApi = {
    * 藏进父节点里，选择器上就看不见了。`path` 是祖先 id 链（如 `0,9009005,9009253,`），
    * 调用方用它拼展示路径。
    */
-  searchCategories: async (keyword: string): Promise<{ id: string; name: string; path: string }[]> => {
+  searchCategories: async (keyword: string): Promise<(SourceCategory & { path: string })[]> => {
     const wd = keyword.trim()
     if (!wd) return []
     const result = await request<unknown>('category/categoryQuery', { wd }, {
@@ -534,14 +534,24 @@ export const sourceApi = {
       httpEndpoint: 'category/categoryQuery',
       httpParams: { wd },
     })
-    const rows = Array.isArray(result) ? result : []
+    const rec = (result && typeof result === 'object') ? (result as Record<string, unknown>) : {}
+    const rows = Array.isArray(result)
+      ? result
+      : (Array.isArray(rec.list)
+        ? rec.list
+        : (Array.isArray(rec.data) ? rec.data : []))
     return rows
       .map((row) => {
         const r = row as Record<string, unknown>
+        const count = r.count != null ? Number(r.count) : undefined
+        const seq = r.seq != null ? Number(r.seq) : undefined
         return {
           id: String(r.categoryId ?? r.id ?? ''),
           name: String(r.categoryName ?? r.name ?? ''),
+          parentId: r.parentId == null || r.parentId === 0 ? '' : String(r.parentId),
           path: String(r.path ?? ''),
+          ...(count != null ? { count } : {}),
+          ...(seq != null ? { seq } : {}),
         }
       })
       .filter((item) => item.id && item.name)
@@ -986,6 +996,11 @@ export const sourceApi = {
 // 在一次会话里只拉一次。失败不留缓存，允许下次重试。
 const categoryChildrenCache = new Map<string, Promise<SourceCategory[]>>()
 const CATEGORY_EXPAND_CONCURRENCY = 8
+
+/** 清理分类树缓存，在分类增删改后调用 */
+export function clearCategoryCache(): void {
+  categoryChildrenCache.clear()
+}
 
 function cachedCategoryChildren(parentId: string): Promise<SourceCategory[]> {
   const cached = categoryChildrenCache.get(parentId)
@@ -2756,6 +2771,17 @@ export const flowApi = {
  *    那是 mock 时代的推断，**已被后端答复推翻**。不要按旧注释的前提改代码——尤其别再去实现
  *    "把流程实例化到每个源"那套：配置本来就挂在流程上，不需要为每个源复制一份。
  */
+/**
+ * 「这条流程不存在」——`flow/flowDetail` 对悬空 flowId 的回法（见 flowCenterApi.detail）。
+ * code 单看不够：`-1` 是旧平台的通用失败码，权限、参数错也是它，所以还要认那句文案。
+ */
+function isFlowNotFound(e: unknown): boolean {
+  const cause = (e as { cause?: { payload?: Record<string, unknown> } } | undefined)?.cause
+  const code = String(cause?.payload?.code ?? '')
+  const message = String((e as Error | undefined)?.message ?? '')
+  return code === '-1' && message.includes('未找到相关流程')
+}
+
 export const flowCenterApi = {
   /**
    * 分页 + 检索 + 排序，全部在服务端。
@@ -2863,13 +2889,32 @@ export const flowCenterApi = {
   },
   /** 下拉/选择器用：一次取回，**最多 500 条**。要完整分页请改用 paged。 */
   list: async (): Promise<FlowRecord[]> => (await flowCenterApi.paged({ page: 1, size: 500 })).list,
+  /**
+   * 流程详情。**查不到返回 `null`，不抛错**——调用方（画布头的「所属流程」）要靠这个
+   * 区分"这个流程被删了"和"请求没打通"。
+   *
+   * ⚠️ 后端把"不存在"也报成业务失败（2026-09-21 生产实测 `flowId=999999999`）：
+   * `HTTP 200` + `{success:false, code:'-1', msg:'未找到相关流程 flowId=999999999', data:null}`。
+   * 走到 `normalizeHttpPayload` 就是一个 throw，`data:null` 那条路根本到不了。
+   * 所以这里**只把这一种业务失败翻译回 `null`**，其余照抛——不能一概吞掉，
+   * 否则权限、参数错也会被说成"流程已删除"。
+   *
+   * 判据依赖后端那句文案，不够硬。后端哪天给个稳定的 code（或干脆 data:null + success:true），
+   * 这段可以整个删掉。
+   */
   detail: async (id: string): Promise<FlowRecord | null> => {
     if (!id) return null
-    const result = await request<unknown>('flow/flowDetail', { flowId: id }, {
-      method: 'GET',
-      httpEndpoint: 'flow/flowDetail',
-      httpParams: { flowId: id },
-    })
+    let result: unknown
+    try {
+      result = await request<unknown>('flow/flowDetail', { flowId: id }, {
+        method: 'GET',
+        httpEndpoint: 'flow/flowDetail',
+        httpParams: { flowId: id },
+      })
+    } catch (e) {
+      if (isFlowNotFound(e)) return null
+      throw e
+    }
     return result ? flowFromLegacy(result) : null
   },
   /**
@@ -2970,3 +3015,81 @@ export const itemApi = {
     httpParams: { id: stepId },
   }),
 }
+
+export interface CategoryCreateParams {
+  categoryName: string
+  parentId?: string | number
+  level?: number
+  isDelete?: number
+  seq?: number
+  remark?: string
+}
+
+export interface CategoryUpdateParams {
+  categoryId: string | number
+  categoryName?: string
+  parentId?: string | number
+  seq?: number
+  remark?: string
+}
+
+/** 分类目录管理 API（对应老平台 CategoryTree.vue） */
+export const categoryApi = {
+  add: async (params: CategoryCreateParams): Promise<unknown> => {
+    clearCategoryCache()
+    return request('category/add', params as unknown as Record<string, unknown>, {
+      method: 'POST',
+      paramsIn: 'query',
+      httpEndpoint: 'category/add',
+      httpParams: {
+        categoryName: params.categoryName,
+        parentId: params.parentId ?? 0,
+        level: params.level ?? (params.parentId && String(params.parentId) !== '0' ? undefined : 1),
+        isDelete: params.isDelete ?? 0,
+        ...(params.seq !== undefined ? { seq: params.seq } : {}),
+        ...(params.remark ? { remark: params.remark } : {}),
+      },
+    })
+  },
+
+  update: async (params: CategoryUpdateParams): Promise<unknown> => {
+    clearCategoryCache()
+    return request('category/update', params as unknown as Record<string, unknown>, {
+      method: 'POST',
+      paramsIn: 'query',
+      httpEndpoint: 'category/update',
+      httpParams: {
+        categoryId: params.categoryId,
+        ...(params.categoryName ? { categoryName: params.categoryName } : {}),
+        // ⚠️ 老平台 CategoryTree.vue:359 updateCallback 明确 delete obj.parentId；
+        // 根分类或普通属性更新千万不能带 parentId=0，否则后端找不存在的分类 ID 0 会报 500 服务器异常。
+        ...(params.parentId !== undefined && params.parentId !== '' && params.parentId !== 0 && params.parentId !== '0'
+          ? { parentId: params.parentId }
+          : {}),
+        ...(params.seq !== undefined ? { seq: params.seq } : {}),
+        ...(params.remark !== undefined ? { remark: params.remark } : {}),
+      },
+    })
+  },
+
+  delete: async (id: string | number): Promise<unknown> => {
+    clearCategoryCache()
+    return request('category/delete', { id }, {
+      method: 'POST',
+      paramsIn: 'query',
+      httpEndpoint: 'category/delete',
+      httpParams: { id },
+    })
+  },
+
+  addBatch: async (parentId: string | number, txt: string): Promise<unknown> => {
+    clearCategoryCache()
+    return request('category/addBatch', { parentId, txt }, {
+      method: 'POST',
+      paramsIn: 'query',
+      httpEndpoint: 'category/addBatch',
+      httpParams: { parentId, txt },
+    })
+  },
+}
+

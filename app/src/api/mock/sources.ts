@@ -311,6 +311,32 @@ export function mockSourceCategories(params?: Record<string, unknown>): SourceCa
   }))
 }
 
+export function mockCategoryQuery(params?: Record<string, unknown>): { count: number; list: any[] } {
+  const wd = String(params?.wd ?? params?.keyword ?? '').trim().toLowerCase()
+  if (!wd) return { count: 0, list: [] }
+  const flat: any[] = []
+  function walk(nodes: any[], parentId = 0, path = '0,') {
+    for (const node of nodes) {
+      const currentId = node.id
+      const currentPath = `${path}${currentId},`
+      if (node.name.toLowerCase().includes(wd)) {
+        flat.push({
+          categoryId: node.id,
+          categoryName: node.name,
+          parentId,
+          path: currentPath,
+          count: countUnder(node.id),
+        })
+      }
+      if (node.children?.length) {
+        walk(node.children, currentId, currentPath)
+      }
+    }
+  }
+  walk(CATEGORY_TREE)
+  return { count: flat.length, list: flat }
+}
+
 export function mockSourceStats(): { total: number; error: number; externalChanged: number; disabled: number } {
   return {
     total: SOURCES.length,

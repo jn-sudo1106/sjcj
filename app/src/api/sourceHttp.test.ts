@@ -298,13 +298,15 @@ describe('旧平台新建源 HTTP 契约', () => {
     }))
     const { sourceApi } = await import('./index')
 
+    // 子级带上 parentId（2026-09-21 随分类管理加的字段，SourceCategory.parentId）：
+    // 分类管理抽屉要靠它定位父级。顶层的 parentId=0 仍然不映射，保持"根节点没有父"的语义。
     await expect(sourceApi.sourceCategories()).resolves.toEqual([
-      { id: '1', name: '资讯', count: 3, children: [{ id: '2', name: '研报', count: 2 }] },
+      { id: '1', name: '资讯', count: 3, children: [{ id: '2', name: '研报', count: 2, parentId: '1' }] },
     ])
     expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/category/categoryPaged?page=1&limit=10000&allSub=false')
 
     await expect(sourceApi.sourceCategories('1')).resolves.toEqual([
-      { id: '3', name: '宏观' },
+      { id: '3', name: '宏观', parentId: '1' },
     ])
     expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/category/categoryPaged?page=1&limit=10000&allSub=false&parentId=1')
   })

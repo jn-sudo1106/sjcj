@@ -1174,11 +1174,13 @@ export function sourceCategoriesFromLegacy(input: unknown): SourceCategory[] {
   const nodes = rows.map((item) => {
     const row = asRecord(item)
     const count = legacyNumber(row.count ?? row.sourceCnt ?? row.sourceCount)
+    const seq = row.seq != null ? Number(row.seq) : undefined
     return {
       id: String(row.categoryId ?? row.id ?? ''),
       name: String(row.categoryName ?? row.name ?? ''),
       parentId: row.parentId == null || row.parentId === 0 ? '' : String(row.parentId),
       count,
+      seq,
     }
   }).filter((node) => node.id && node.name)
   const byId = new Map<string, SourceCategory>()
@@ -1186,6 +1188,8 @@ export function sourceCategoriesFromLegacy(input: unknown): SourceCategory[] {
     id: node.id,
     name: node.name,
     ...(node.count == null ? {} : { count: node.count }),
+    ...(node.seq == null ? {} : { seq: node.seq }),
+    ...(node.parentId ? { parentId: node.parentId } : {}),
   }))
   const roots: SourceCategory[] = []
   nodes.forEach((node) => {
