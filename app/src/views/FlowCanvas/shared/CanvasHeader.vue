@@ -122,23 +122,60 @@ const openableUrl = computed(() => (src.value && src.value.kind !== 'param' ? to
 // 所属流程：源上带 flowId（sourceDetail 已补，0903 §H8），流程名要单查一次 flow/detail；
 // 查不到就退化成 `#<id>`。切源时按 flowId 变化重查，回来慢了也不会写串。
 const owningFlowName = ref('')
+/**
+ * 「这个 flowId 是悬空的」——流程被删了，源还挂着它（0917 R1，方案 §21）。
+ *
+ * **只认 `detail()` 返回 null 这一种情况**：那个函数的语义是查不到返回 `null`、
+ * 网络 / HTTP 错误抛异常（`api/index.ts:2866`）。catch 里一律不标记，
+ * 否则断网时整屏的源都写着「流程已删除」，比不标更糟。
+ */
+const owningFlowMissing = ref(false)
 watch(() => src.value?.flowId, async (fid) => {
   owningFlowName.value = ''
+  owningFlowMissing.value = false
   if (!fid) return
   const want = String(fid)
   try {
     const rec = await flowCenterApi.detail(want)
-    if (String(src.value?.flowId ?? '') === want) owningFlowName.value = rec?.name ?? ''
-  } catch { /* 保留 ID 展示 */ }
+    if (String(src.value?.flowId ?? '') !== want) return
+    owningFlowName.value = rec?.name ?? ''
+    owningFlowMissing.value = rec === null
+  } catch { /* 保留 ID 展示，不标记已删除 */ }
 }, { immediate: true })
 const owningFlowLabel = computed(() => {
   const fid = src.value?.flowId
-  return fid ? (owningFlowName.value || `#${fid}`) : ''
+  if (!fid) return ''
+  if (owningFlowName.value) return owningFlowName.value
+  return owningFlowMissing.value ? `#${fid}（流程已删除）` : `#${fid}`
 })
+const owningFlowTitle = computed(() => (owningFlowMissing.value
+  ? '这个流程已经被删除，源上的流程 ID 成了悬空引用'
+  : '在流程中心查看这个流程'))
+
+/**
+ * 去流程中心时带上「回来的路」（0917-09）。
+ *
+ * `/flows` 是主导航页，不挂源页签条（`SourceTabsBar.vue:31` 只认 `/collect` 和 `/canvas`），
+ * 所以离开画布之后没有任何入口能回到刚才那个源——会上原话「你别让他忙了半天回不去了」。
+ * 流程中心读到 `from=canvas` 就渲染一条返回条。
+ *
+ * `view` 要原样带走：这个头是常驻的，从数据视图点出去的人，回来也该落在数据视图。
+ * `fromName` 一起带上，返回条要显示源名，而流程中心手上只有 ID——传过去就不用再查一次源详情。
+ */
+function flowCenterQuery(extra: Record<string, string> = {}): Record<string, string> {
+  const s = src.value
+  const siteId = s?.siteId || String(route.query.siteId ?? '')
+  const q: Record<string, string> = { from: 'canvas', view: view.value, ...extra }
+  if (s?.sourceId) q.sourceId = String(s.sourceId)
+  if (siteId) q.siteId = siteId
+  if (s?.name) q.fromName = s.name
+  return q
+}
 function openOwningFlow() {
   const fid = src.value?.flowId
-  if (!fid) return
-  router.push({ path: '/flows', query: { q: owningFlowName.value || String(fid) } })
+  // 已删除的流程点过去只会在流程中心搜出一个空列表，看着像搜索坏了——按钮已 disabled，这里再挡一道
+  if (!fid || owningFlowMissing.value) return
+  router.push({ path: '/flows', query: flowCenterQuery({ q: owningFlowName.value || String(fid) }) })
 }
 /**
  * 返回源视图（0828 W5-6/7 合并）。
@@ -182,7 +219,8 @@ function srcSnatch() {
 async function onSwitchFlow(command: string) {
   if (!command) return
   if (command === '__manage_flows__') {
-    void router.push('/flows')
+    // 与「所属流程」同一条离开路径，同样要能回来（0917-09）
+    void router.push({ path: '/flows', query: flowCenterQuery() })
     return
   }
   const template = templates.value.find((item) => item.id === command)
@@ -276,7 +314,8 @@ async function onSwitchFlow(command: string) {
               class="ch-flow-link"
               type="button"
               data-testid="owning-flow"
-              title="在流程中心查看这个流程"
+              :disabled="owningFlowMissing"
+              :title="owningFlowTitle"
               @click="openOwningFlow"
             >所属流程：{{ owningFlowLabel }}</button>
           </template>
@@ -367,16 +406,20 @@ async function onSwitchFlow(command: string) {
    这样再长的 URL 也挤不掉它们。 */
 .ch-sub { display: flex; align-items: center; min-width: 0; color: var(--rc-faint); font-size: 10px; margin-top: 1px; }
 .ch-sub-url { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 平时跟旁边的灰字一样低调，悬浮才显出是个链接——摘要行是背景信息，
-   不该为了一个链接把整行的视觉重量抬上去。 */
-.ch-sub-link { color: inherit; text-decoration: none; }
+/* 默认呈现为蓝色链接（2026-09-21 用户反馈） */
+.ch-sub-link { color: var(--rc-primary); text-decoration: none; }
 .ch-sub-link:hover { color: var(--rc-primary); text-decoration: underline; }
 .ch-sub-fixed { flex: none; }
 .ch-sub-sep { flex: none; margin: 0 4px; }
 /* flex: none + nowrap：默认的 0 1 auto 会让它跟着被压缩，长 URL 下它会被挤到 52px 宽、
    「所属流程：振江集团-603507」折成三行，把整条摘要撑高（2026-09-17 走查）。压缩只由 URL 段承担。 */
-.ch-flow-link { flex: none; white-space: nowrap; border: 0; background: transparent; padding: 0; color: var(--rc-primary); font-size: inherit; cursor: pointer; }
-.ch-flow-link:hover { text-decoration: underline; }
+/* 下划线是**常态**，不是 hover 才有（2026-09-20 走查）：这一行是 10px 的灰字（.ch-sub），
+   同行的 URL 还是 color: inherit，只有这一处带色——但产品仍然没认出它能点。
+   字号不动：URL 段要靠 flex 压缩省略，动字号会牵动整行排版。 */
+.ch-flow-link { flex: none; white-space: nowrap; border: 0; background: transparent; padding: 0; color: var(--rc-primary); font-size: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.ch-flow-link:hover { text-decoration-thickness: 2px; }
+/* 流程已删除：跳过去只会搜出空列表，不给点 */
+.ch-flow-link:disabled { color: var(--rc-faint); cursor: not-allowed; text-decoration: none; }
 .ch-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
 .ch-actions .rc-btn { height: 30px; padding: 0 11px; font-size: 12px; }
 .ch-flow-picker { position: relative; width: 184px; margin-right: 4px; }

@@ -9,7 +9,7 @@
 //
 // 这行注释此前写的是「配置中心/流程模板不再作为用户概念」，0903 会上推翻了后半句。
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { flowCenterApi, sourceApi, type FlowRecord, type SourceCategory } from '@/api'
 import { Delete, Edit, Link, Star, StarFilled } from '@element-plus/icons-vue'
@@ -217,10 +217,42 @@ function resetQuery() {
   void load()
 }
 const route = useRoute()
+const router = useRouter()
+
+/**
+ * 从源画布跳过来时的返回上下文（0917-09）。
+ *
+ * `/flows` 是主导航页，不挂源页签条，所以进来之后本来没有任何入口能回到刚才那个源
+ * ——会上原话「你别让他忙了半天回不去了」。画布头（`CanvasHeader.flowCenterQuery()`）
+ * 把来路放进 query，这里读出来渲染一条返回条。
+ *
+ * **只读一次**（onMounted 快照）：之后在本页搜索、翻页、改条件都会动 query，
+ * 但"我是从哪儿来的"不该跟着变。
+ */
+const returnTo = ref<{ sourceId: string; siteId: string; view: string; name: string } | null>(null)
+const returnLabel = computed(() => `返回源「${returnTo.value?.name || returnTo.value?.sourceId || ''}」`)
+function backToCanvas() {
+  const to = returnTo.value
+  if (!to) return
+  // 变量名不叫 query：本文件的 `query` 是搜索框的 ref，遮蔽掉会很难读
+  const target: Record<string, string> = { view: to.view || 'flow' }
+  if (to.sourceId) target.sourceId = to.sourceId
+  if (to.siteId) target.siteId = to.siteId
+  void router.push({ path: '/canvas', query: target })
+}
+
 onMounted(() => {
   // 画布头「所属流程：xxx」跳过来带 ?q=流程名/ID，预填搜索
   const q = String(route.query.q ?? '').trim()
   if (q) query.value = q
+  if (String(route.query.from ?? '') === 'canvas') {
+    const sourceId = String(route.query.sourceId ?? '')
+    const siteId = String(route.query.siteId ?? '')
+    // 源和网站都没有就没地方可回（游离源 / 手改的 URL），宁可不显示返回条，也不给一个点了报错的按钮
+    if (sourceId || siteId) {
+      returnTo.value = { sourceId, siteId, view: String(route.query.view ?? 'flow'), name: String(route.query.fromName ?? '') }
+    }
+  }
   void load()
   void loadCategories()
   ui.registerAction('新建流程', () => { openCreateFlow() })
@@ -499,6 +531,16 @@ async function confirmApply() {
 
 <template>
   <section class="fc-shell">
+    <!-- 从源画布跳过来时的返回条（0917-09）。不做成页签：`/flows` 是主导航页，
+         塞进源页签条会让页签条的语义（= 打开的源 / 网站）变形。 -->
+    <button
+      v-if="returnTo"
+      class="fc-back"
+      type="button"
+      data-testid="flow-center-back"
+      :title="returnLabel"
+      @click="backToCanvas"
+    >← {{ returnLabel }}</button>
     <!-- 检索条对齐数据中心 / 文件中心（SiteFileView 的 .sfv-toolbar）：同一套控件尺寸（28px）、
          同一套 rc-btn，且同样是「填条件 → 点查询」而不是回车隐式触发。回车仍然可用，
          但不再是唯一入口——之前只写在 placeholder 里，用户看不见。 -->
@@ -770,6 +812,8 @@ async function confirmApply() {
 .fc-icon-btn.danger:hover { background: #fef3f2; color: var(--rc-error, #d92d20); }
 .fc-icon-btn:focus-visible { outline: 2px solid var(--rc-primary, #2563eb); outline-offset: 1px; }
 .fc-shell { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.fc-back { align-self: flex-start; max-width: 100%; overflow: hidden; height: 28px; padding: 0 12px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-primary); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; }
+.fc-back:hover { border-color: var(--rc-primary); background: var(--rc-primary-bg); }
 /* 以下三条与 SiteFileView 的 .sfv-toolbar / .sfv-input 保持同一组数值（28px 高、12px 字、
    6px 圆角、focus 蓝边 + 3px 光晕）。改动时请两边一起改，否则数据中心/文件中心/流程中心会走形。 */
 .fc-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
