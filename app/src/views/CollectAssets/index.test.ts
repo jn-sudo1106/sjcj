@@ -7,7 +7,8 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
 
 vi.mock('./SourceTab.vue', () => ({
-  default: { name: 'SourceTab', template: '<div data-testid="stub-source">网站列表内容</div>' },
+  // favOnly 要声明成 prop，否则它只会落进 attrs，props('favOnly') 永远是 undefined
+  default: { name: 'SourceTab', props: { favOnly: Boolean }, template: '<div data-testid="stub-source">网站列表内容</div>' },
 }))
 vi.mock('./ConfigTab.vue', () => ({
   default: { name: 'ConfigTab', template: '<div data-testid="stub-config">配置列表内容</div>' },
@@ -33,11 +34,24 @@ async function mountAssets(query: Record<string, string> = {}) {
 }
 
 describe('采集资产 · tab 壳', () => {
-  it('只剩「网站列表」一个 tab，但 tab 条保留着', async () => {
+  // 0917-17（2026-09-21）：加了「我收藏的网站」。表 ID 列表迁走后这里一度只剩一个 tab。
+  it('两个 tab：网站列表 + 我收藏的网站', async () => {
     const { wrapper } = await mountAssets()
     const tabs = wrapper.findAll('.ca-tab-link')
-    expect(tabs.map((b) => b.text())).toEqual(['网站列表'])
+    expect(tabs.map((b) => b.text())).toEqual(['网站列表', '我收藏的网站'])
     expect(wrapper.find('.ca-tabs-wrap').exists()).toBe(true)
+  })
+
+  it('/collect?tab=favorite 进「我收藏的网站」，并把 favOnly 传给列表', async () => {
+    const { wrapper } = await mountAssets({ tab: 'favorite' })
+    const active = wrapper.findAll('.ca-tab-link').filter((b) => b.classes().includes('active'))
+    expect(active.map((b) => b.text())).toEqual(['我收藏的网站'])
+    expect(wrapper.findComponent({ name: 'SourceTab' }).props('favOnly')).toBe(true)
+  })
+
+  it('「网站列表」tab 不锁定收藏过滤', async () => {
+    const { wrapper } = await mountAssets()
+    expect(wrapper.findComponent({ name: 'SourceTab' }).props('favOnly')).toBe(false)
   })
 
   it('不再有「表 ID 列表」', async () => {

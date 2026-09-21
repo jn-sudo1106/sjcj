@@ -13,6 +13,9 @@ function tileStyle() {
   return { background: tone.bg, color: tone.fg, boxShadow: tone.shadow }
 }
 import { visibleIssueTags } from '@/utils/sourceMark'
+import { Star, StarFilled } from '@element-plus/icons-vue'
+import { isFavoriteSite, toggleFavoriteSite } from '@/utils/siteFavorites'
+import { recordSiteVisit } from '@/utils/siteRecents'
 
 const props = defineProps<{ sites: Site[] }>()
 // 编辑网站信息由父组件（SourceTab）统一挂 SiteEditorDialog —— 表格视图走的也是这个事件，
@@ -105,14 +108,18 @@ watch(() => props.sites, (list) => { void ensureCards(list) })
 
 // 页签网站化（0710 会议 B3）：入口只推路由，页签注册统一收口在画布加载（index.vue）
 function openSource(s: Source) {
+  // 点源 chip 进去也算打开了这个网站（0917-17）
+  if (s.siteId) recordSiteVisit(s.siteId)
   router.push({ path: '/canvas', query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, view: 'data' } })
 }
 // 卡片主体点击 → 进入网站统一流程模板（0707 优化·Phase4）
 function openSite(site: Site) {
+  recordSiteVisit(site.siteId)
   router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'source' } })
 }
 // 卡片底部直达入口：数据量进入当前网站首个源的数据视图。
 function openSiteData(site: Site) {
+  recordSiteVisit(site.siteId)
   router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data' } })
 }
 /** 卡片上显示前 2 个标签 + 「+N」（0915-14），与源卡片同口径 */
@@ -207,14 +214,31 @@ onUnmounted(() => {
       @contextmenu.prevent.stop="openMenu($event, site)"
     >
       <span v-if="site.errorCount > 0" class="scg-dot" :title="`${site.errorCount} 个源出错`" />
-      <button
-        class="scg-more"
-        type="button"
-        data-testid="site-card-more"
-        title="更多操作"
-        aria-label="更多操作"
-        @click.stop="openMenu($event, site)"
-      >⋯</button>
+      <!-- 右上角竖排：⋯ 在上、☆ 在下（2026-09-21 用户定：放左边看着别扭）。
+           标题那行因此让出 24px 的竖带，见 .scg-title 的 padding-right。 -->
+      <div class="scg-tools">
+        <button
+          class="scg-more"
+          type="button"
+          data-testid="site-card-more"
+          title="更多操作"
+          aria-label="更多操作"
+          @click.stop="openMenu($event, site)"
+        >⋯</button>
+        <!-- 已收藏的**常显实心**：一眼看出哪些是自己标的；没收藏的跟 ⋯ 一样 hover 才出现 -->
+        <button
+          class="scg-fav"
+          :class="{ on: isFavoriteSite(site.siteId) }"
+          type="button"
+          data-testid="site-card-fav"
+          :title="isFavoriteSite(site.siteId) ? '取消收藏' : '收藏这个网站（收藏的排在最前）'"
+          :aria-pressed="isFavoriteSite(site.siteId)"
+          :aria-label="isFavoriteSite(site.siteId) ? '取消收藏' : '收藏'"
+          @click.stop="toggleFavoriteSite(site.siteId)"
+        >
+          <el-icon :size="13"><component :is="isFavoriteSite(site.siteId) ? StarFilled : Star" /></el-icon>
+        </button>
+      </div>
       <div class="scg-head">
         <span class="scg-icon" :style="tileStyle()">
           <el-icon :size="20"><component :is="siteIcon(site)" /></el-icon>
@@ -341,8 +365,9 @@ onUnmounted(() => {
 .scg-dot { position: absolute; top: 14px; right: 14px; width: 8px; height: 8px; border-radius: 50%; background: var(--rc-error); transition: right 0.12s; }
 /* 「⋯」占住右上角，出错红点在 hover 时让出位置（两者都在右上，不让位会叠在一起） */
 .scg-card:hover .scg-dot { right: 34px; }
+.scg-tools { position: absolute; top: 8px; right: 8px; z-index: 1; display: flex; flex-direction: column; gap: 2px; }
 .scg-more {
-  position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; padding: 0;
+  width: 22px; height: 22px; padding: 0;
   display: inline-flex; align-items: center; justify-content: center;
   border: 1px solid transparent; border-radius: 6px; background: transparent;
   color: var(--rc-faint); font-size: 15px; line-height: 1; cursor: pointer;
@@ -350,6 +375,18 @@ onUnmounted(() => {
 }
 .scg-card:hover .scg-more, .scg-more:focus-visible { opacity: 1; }
 .scg-more:hover { background: var(--rc-primary-bg); border-color: #93c5fd; color: var(--rc-primary-ink); }
+.scg-fav {
+  width: 22px; height: 22px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: 6px; background: transparent;
+  color: var(--rc-faint); line-height: 1; cursor: pointer;
+  opacity: 0; transition: opacity 0.12s, background 0.12s, color 0.12s, border-color 0.12s;
+}
+.scg-card:hover .scg-fav, .scg-fav:focus-visible { opacity: 1; }
+/* 已收藏：常显，且不跟着 hover 变淡——这是这张卡片的状态，不是一个悬浮操作 */
+.scg-fav.on { opacity: 1; color: #f59e0b; }
+.scg-fav:hover { background: var(--rc-primary-bg); border-color: #93c5fd; color: var(--rc-primary-ink); }
+.scg-fav.on:hover { color: #d97706; }
 /* 视觉对齐源侧栏的右键菜单（.ssw-row-menu），两处是同一种交互 */
 .scg-card-menu {
   position: fixed; z-index: 92; min-width: 112px; padding: 4px;
@@ -374,7 +411,8 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
 }
-.scg-title { flex: 1; min-width: 0; }
+/* 右上角那条竖带（⋯ / ☆）占 22px，标题不让位就会被压在底下 */
+.scg-title { flex: 1; min-width: 0; padding-right: 24px; }
 .scg-name { font-size: 14px; font-weight: 700; color: var(--rc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .scg-cat { font-size: 11px; color: var(--rc-faint); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 

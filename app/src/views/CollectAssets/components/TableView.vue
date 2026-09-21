@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Edit, Operation } from '@element-plus/icons-vue'
+import { Edit, Operation, Star, StarFilled } from '@element-plus/icons-vue'
 import { siteApi, sourceApi, type Source, type Site } from '@/api'
 import { siteIcon, siteTone } from '@/utils/visual/siteVisual'
 
@@ -11,6 +11,8 @@ function tileStyle() {
   return { background: tone.bg, color: tone.fg, boxShadow: tone.shadow }
 }
 import { confirmDanger } from '@/utils/confirmDanger'
+import { isFavoriteSite, toggleFavoriteSite } from '@/utils/siteFavorites'
+import { recordSiteVisit } from '@/utils/siteRecents'
 
 const props = defineProps<{
   sites: Site[]
@@ -131,15 +133,19 @@ function statusMeta(s: Source): { type: 'info' | 'success' | 'danger' | 'primary
 }
 
 function openSourceCanvas(s: Source, view?: 'data' | 'task') {
+  // 从源进去也算打开了这个网站（0917-17）：不记的话最常见的一种进入方式就丢了
+  if (s.siteId) recordSiteVisit(s.siteId)
   router.push({ path: '/canvas', query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, ...(view ? { view } : {}) } })
 }
 function openSourceData(s: Source) {
   openSourceCanvas(s, 'data')
 }
 function openSiteCanvas(site: Site, view?: 'data') {
+  recordSiteVisit(site.siteId)
   router.push({ path: '/canvas', query: { siteId: site.siteId, view: view ?? 'source' } })
 }
 function openSiteData(site: Site) {
+  recordSiteVisit(site.siteId)
   router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data' } })
 }
 
@@ -263,6 +269,16 @@ defineExpose({
               <td><div class="ca-cell-main soft">{{ site.updatedAt || '—' }}</div></td>
               <td>
                 <div class="ca-site-ops">
+                  <!-- ☆ 与卡片视图同一份状态（utils/siteFavorites），两边点哪个都同步 -->
+                  <button
+                    class="ca-op-btn ca-fav-btn"
+                    :class="{ on: isFavoriteSite(site.siteId) }"
+                    type="button"
+                    data-testid="site-row-fav"
+                    :title="isFavoriteSite(site.siteId) ? '取消收藏' : '收藏这个网站（收藏的排在最前）'"
+                    :aria-pressed="isFavoriteSite(site.siteId)"
+                    @click="toggleFavoriteSite(site.siteId)"
+                  ><el-icon :size="14"><component :is="isFavoriteSite(site.siteId) ? StarFilled : Star" /></el-icon></button>
                   <button class="ca-op-btn" type="button" title="编辑网站基本信息" @click="emit('openEditor', site)"><el-icon :size="14"><Edit /></el-icon></button>
                 </div>
               </td>
@@ -413,6 +429,8 @@ defineExpose({
   cursor: pointer;
 }
 .ca-op-btn:hover { background: var(--rc-primary-bg); color: var(--rc-primary); }
+.ca-fav-btn.on { color: #f59e0b; }
+.ca-fav-btn.on:hover { color: #d97706; }
 .ca-empty-row { text-align: center; color: var(--rc-faint); font-size: 12px; padding: 14px; }
 
 .ca-src { display: flex; align-items: center; gap: 8px; }

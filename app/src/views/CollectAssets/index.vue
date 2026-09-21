@@ -11,8 +11,13 @@ import ConfigTab from './ConfigTab.vue'
 // 这里管的是网站与源。**tab 条先保留**（虽然只剩一项）。
 const TABS: { key: string; label: string }[] = [
   { key: 'source', label: '网站列表' },
+  // 0917-17：收藏做成一个 tab 而不是工具条上的开关（2026-09-21 用户定）——
+  // 会上原话是「我放在这个地方，我关注的网站也行」（措辞后来统一成"收藏"）。
+  // 做成 tab 还白得一条能存书签的地址 `/collect?tab=favorite`，刷新、发给别人都还在。
+  { key: 'favorite', label: '我收藏的网站' },
 ]
-const comps: Record<string, Component> = { source: SourceTab, config: ConfigTab }
+// favorite 复用 SourceTab，只是进去就锁定"只看收藏"（见下方 :fav-only）
+const comps: Record<string, Component> = { source: SourceTab, config: ConfigTab, favorite: SourceTab }
 const route = useRoute()
 const router = useRouter()
 const validTabs = new Set(TABS.map((tab) => tab.key))
@@ -62,7 +67,7 @@ function selectTab(key: string) {
     </div>
     <div class="ca-content">
       <transition name="fade-slide" mode="out-in">
-        <component :is="comps[active]" :key="active" />
+        <component :is="comps[active]" :key="active" :fav-only="active === 'favorite'" />
       </transition>
     </div>
   </div>

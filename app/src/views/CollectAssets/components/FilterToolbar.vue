@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { Search, Grid, List, Plus, Refresh } from '@element-plus/icons-vue'
+import { ref } from 'vue'
+import { Search, Grid, List, Plus, Refresh, Setting } from '@element-plus/icons-vue'
 import { sourceApi, type SourceCategory } from '@/api'
 
 const props = defineProps<{
@@ -13,6 +14,17 @@ const props = defineProps<{
   total: number
   stats: { total: number; error: number; notify: number }
   view: 'card' | 'table'
+  /** 只看收藏（0917-17）。收藏的网站**恒排最前**，这个开关是"把其余的藏起来"。
+   *  可选：调用方不给就是关着，既有测试不必为它改动。 */
+  favOnly?: boolean
+  /** 已收藏数量，显示在选项上——0 的时候选了会空一片，得让人知道 */
+  favCount?: number
+  /** 在「我收藏的网站」tab 里：这一页恒定只看收藏，下拉里就不该再出现这一项 */
+  favLocked?: boolean
+  /** 只看最近打开（0917-17 后半条），与 favOnly 互斥 */
+  recentOnly?: boolean
+  /** 最近打开过几个网站——一个都没有时这一项点了会空一片，得让人知道 */
+  recentCount?: number
 }>()
 
 const emit = defineEmits<{
@@ -22,14 +34,46 @@ const emit = defineEmits<{
   'update:stateFilter': [value: string]
   'update:sortBy': [value: 'updated' | 'name']
   'setView': [value: 'card' | 'table']
+  'update:favOnly': [value: boolean]
+  'update:recentOnly': [value: boolean]
   'filterChange': []
   'refresh': []
   /** 新建网站（2026-09-18）：对象级操作，与顶栏那个全局的「新建采集」分层 */
   'createSite': []
+  /** 管理分类（2026-09-21）：在全部分类下拉底部触发分类管理抽屉 */
+  'openCategoryManager': []
 }>()
+
+const treeSelectRef = ref()
+
+function onOpenCategoryManager() {
+  treeSelectRef.value?.blur?.()
+  emit('openCategoryManager')
+}
 
 function onKeywordInput(value: string) {
   emit('update:keyword', value)
+}
+
+/**
+ * 排序下拉三选一：最近修改 / 名称 / 只看收藏。
+ * 前两项是排序，第三项是过滤——选它时保留当前 sortBy，这样从「只看收藏」切回来
+ * 还是原来那个排序，不会被悄悄重置。
+ */
+function onPickSort(v: 'updated' | 'name' | 'favorite' | 'recent') {
+  // 「只看收藏」与「最近打开」是两种过滤模式，互斥；选回前两项就都关掉
+  if (v === 'favorite') {
+    if (props.recentOnly) emit('update:recentOnly', false)
+    emit('update:favOnly', true)
+  } else if (v === 'recent') {
+    if (props.favOnly) emit('update:favOnly', false)
+    emit('update:recentOnly', true)
+  } else {
+    if (props.favOnly) emit('update:favOnly', false)
+    if (props.recentOnly) emit('update:recentOnly', false)
+    emit('update:sortBy', v)
+  }
+  emit('filterChange')
 }
 
 // 分类筛选是树形多选（旧平台目录树勾选语义；选中值是目录 ID 数组，空数组 = 全部）。
@@ -88,6 +132,7 @@ async function loadCategoryChildren(
          tokens 统一）；check-strictly 让父子独立勾选——子级是懒加载的，级联勾选会把未加载的
          孙级 ID 漏出 categoryIds，后端 IN 匹配会漏数据。 -->
     <el-tree-select
+      ref="treeSelectRef"
       :model-value="categoryFilter"
       placeholder="全部分类"
       class="ca-category"
@@ -111,6 +156,21 @@ async function loadCategoryChildren(
           <span v-if="data.count != null" class="ca-category-count">{{ data.count }}</span>
         </span>
       </template>
+      <template #footer>
+        <div class="ca-category-dropdown-footer">
+          <span class="ca-category-footer-label">维护分类</span>
+          <el-button
+            link
+            type="primary"
+            size="small"
+            :icon="Setting"
+            class="ca-category-manage-btn"
+            @click="onOpenCategoryManager"
+          >
+            管理分类
+          </el-button>
+        </div>
+      </template>
     </el-tree-select>
     <el-select :model-value="tagFilter" placeholder="全部标签" style="width: 130px" clearable @update:model-value="(v: string) => { emit('update:tagFilter', v); emit('filterChange') }">
       <el-option label="全部标签" value="" />
@@ -122,9 +182,22 @@ async function loadCategoryChildren(
     </el-select>
     <!-- 排序同样要 emit filterChange：少了它，改排序只更新 sortBy、列表不重新加载，
          下拉框变了而卡片顺序纹丝不动（旁边标签/状态两个 select 一直是这么配的，这里原先漏了）。 -->
-    <el-select :model-value="sortBy" style="width: 120px" @update:model-value="(v: 'updated' | 'name') => { emit('update:sortBy', v); emit('filterChange') }">
+    <!-- 「只看收藏」并在这个下拉里（2026-09-21 用户定）。它是过滤不是排序，所以：
+         选中它时**不动 sortBy**，组内仍按上一次选的「最近修改 / 名称」排；
+         选回那两项就把过滤关掉。在「我收藏的网站」tab 里（favLocked）不出现这一项，
+         选中值也要退回 sortBy——否则下拉找不到 'favorite' 那个 option，会把原始值秃着显示出来。 -->
+    <el-select
+      :model-value="favOnly && !favLocked ? 'favorite' : recentOnly ? 'recent' : sortBy"
+      style="width: 128px"
+      data-testid="site-sort"
+      @update:model-value="onPickSort"
+    >
       <el-option label="最近修改" value="updated" />
       <el-option label="名称" value="name" />
+      <el-option v-if="!favLocked" :label="favCount ? `只看收藏 (${favCount})` : '只看收藏'" value="favorite" />
+      <!-- 最近打开：收藏要事先标记，而"找半天"那次根本没先收藏过——这一项补的是那一半。
+           在「我收藏的网站」tab 里同样不出现，那个 tab 的语义就是收藏。 -->
+      <el-option v-if="!favLocked" :label="recentCount ? `最近打开 (${recentCount})` : '最近打开'" value="recent" />
     </el-select>
     <div class="ca-stats">
       <el-tag type="info" effect="plain" class="stat-tag">网站 <b>{{ total }}</b></el-tag>
@@ -262,4 +335,20 @@ async function loadCategoryChildren(
 /* 分类树下拉面板 teleport 到 body，无法 scoped；输入框 150px 放不下多级缩进，
    面板单独放宽（13.6 寸基准，不覆盖页面）。 */
 .ca-category-popper { min-width: 248px; }
+.ca-category-dropdown-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-top: 1px solid #f1f5f9;
+  background-color: #f8fafc;
+}
+.ca-category-footer-label {
+  font-size: 11px;
+  color: #94a3b8;
+}
+.ca-category-manage-btn {
+  font-size: 12px;
+  font-weight: 600;
+}
 </style>
