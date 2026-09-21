@@ -145,3 +145,92 @@ describe('FilePreview', () => {
     expect(head).not.toHaveBeenCalled()
   })
 })
+
+// 0920-02：库里存的正文路径被截成了裸 md5（B22），前端按字段语义猜一个后缀补上去。
+// 同一个 md5 下网页快照也在（2026-09-21 实测：.txt 2750 字节 / .html 17612 字节），
+// 猜中 txt 之后那份 html 本来没有任何入口能看到。
+describe('FilePreview · TXT / HTML 切换（0920-02）', () => {
+  const BASE = '/gzh/gzh_msg/MzU2NTQzMjA1OA==/2026-09-21/3e19f177f3db886a6b11384594d8721e'
+
+  it('路径原本没有后缀（给了 basePath）才出现切换，默认停在调用方猜的那个', async () => {
+    vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(bufOf('正文'))
+    const wrapper = mount(FilePreview, { props: { path: `${BASE}.txt`, basePath: BASE, name: '3e19f177….txt', ext: 'txt' } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="file-preview-ext-switch"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="file-preview-ext-txt"]').classes()).toContain('on')
+    expect(wrapper.get('[data-testid="file-preview-ext-html"]').classes()).not.toContain('on')
+  })
+
+  it('路径自带后缀 / 没给 basePath：不出现切换，行为一如从前', async () => {
+    vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(bufOf('x'))
+    const withExt = mount(FilePreview, { props: { path: '/qinlong/dds/a.txt', basePath: '/qinlong/dds/a.txt', name: 'a.txt', ext: 'txt' } })
+    const noBase = mount(FilePreview, { props: { path: '/qinlong/dds/a.txt', name: 'a.txt', ext: 'txt' } })
+    await flushPromises()
+
+    expect(withExt.find('[data-testid="file-preview-ext-switch"]').exists()).toBe(false)
+    expect(noBase.find('[data-testid="file-preview-ext-switch"]').exists()).toBe(false)
+  })
+
+  it('切到 HTML：先探一次确认快照在，再把 iframe 指到 .html', async () => {
+    vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(bufOf('正文'))
+    const head = vi.spyOn(ossFile, 'fetchOssFileHead').mockResolvedValue(bufOf('<html>'))
+    const wrapper = mount(FilePreview, { props: { path: `${BASE}.txt`, basePath: BASE, name: '3e19f177….txt', ext: 'txt' } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="file-preview-ext-html"]').trigger('click')
+    await flushPromises()
+
+    // 探测打在 .html 上（html 走 iframe 直连跨源，加载失败前端收不到信号，所以必须先探）
+    expect(head.mock.calls.some(([p]) => p === `${BASE}.html`)).toBe(true)
+    expect(wrapper.get('[data-testid="file-preview-html"]').attributes('src')).toContain(`fileId=${BASE}.html`)
+    expect(wrapper.get('[data-testid="file-preview-ext-html"]').classes()).toContain('on')
+  })
+
+  it('这条没有 HTML 快照（探测 404）：就地提示并留在 TXT，不给白框', async () => {
+    vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(bufOf('正文'))
+    vi.spyOn(ossFile, 'fetchOssFileHead').mockRejectedValue(new Error('取文件失败（HTTP 404）'))
+    const wrapper = mount(FilePreview, { props: { path: `${BASE}.txt`, basePath: BASE, name: '3e19f177….txt', ext: 'txt' } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="file-preview-ext-html"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="file-preview-ext-note"]').text()).toBe('这条没有 HTML 快照')
+    expect(wrapper.get('[data-testid="file-preview-ext-txt"]').classes()).toContain('on')
+    expect(wrapper.find('[data-testid="file-preview-html"]').exists()).toBe(false)
+  })
+
+  it('下载与新窗口打开跟着切：切到 HTML 后文件名不能还是 .txt', async () => {
+    vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(bufOf('正文'))
+    vi.spyOn(ossFile, 'fetchOssFileHead').mockResolvedValue(bufOf('<html>'))
+    const wrapper = mount(FilePreview, { props: { path: `${BASE}.txt`, basePath: BASE, name: '3e19f177f3db886a6b11384594d8721e.txt', ext: 'txt' } })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="file-preview-ext-html"]').trigger('click')
+    await flushPromises()
+
+    const download = wrapper.get('[data-testid="file-preview-download"]')
+    expect(download.attributes('href')).toContain(`fileId=${BASE}.html`)
+    expect(download.attributes('download')).toBe('3e19f177f3db886a6b11384594d8721e.html')
+    expect(wrapper.get('[data-testid="file-preview-open-window"]').attributes('href')).toContain(`${BASE}.html`)
+  })
+
+  it('换了一条数据：切换态清回默认，不跟着下一条走', async () => {
+    vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(bufOf('正文'))
+    vi.spyOn(ossFile, 'fetchOssFileHead').mockResolvedValue(bufOf('<html>'))
+    const wrapper = mount(FilePreview, { props: { path: `${BASE}.txt`, basePath: BASE, name: 'a.txt', ext: 'txt' } })
+    await flushPromises()
+    await wrapper.get('[data-testid="file-preview-ext-html"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="file-preview-ext-html"]').classes()).toContain('on')
+
+    const next = '/gzh/gzh_msg/other/9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f'
+    await wrapper.setProps({ path: `${next}.txt`, basePath: next, name: 'b.txt' })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="file-preview-ext-txt"]').classes()).toContain('on')
+    expect(wrapper.get('[data-testid="file-preview-download"]').attributes('href')).toContain(`fileId=${next}.txt`)
+  })
+})
+

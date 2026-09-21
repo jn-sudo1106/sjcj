@@ -1225,7 +1225,7 @@ async function saveEdit() {
 // 单元格里的文件预览（0819 N2-7）：路径类字段点开就地看内容，不用先跳到文件视图再找。
 // 用居中 dialog 而不是右侧抽屉——这是"看一眼就关"的操作型短流程，抽屉留给实体详情
 // （项目弹层规范）。预览器与文件详情共用一个组件，取数、降级、下载全在里面。
-const filePreview = reactive({ visible: false, path: '', name: '', url: '', ext: '' })
+const filePreview = reactive({ visible: false, path: '', basePath: '', name: '', url: '', ext: '' })
 // sourceUrl 由 DataGrid 从被点的那一行算好带过来（2026-09-11）。此前是从 detailFields
 // 取——那是详情抽屉当前行的字段，直接点单元格时详情没开，于是永远取不到，
 // 预览里的「原始地址 ↗」一直不显示。
@@ -1234,6 +1234,8 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
   // 库里存的正文路径可能少了后缀，取之前先补上——预览、下载、「新窗口打开」都拿这个 path
   const fullPath = ossPathWithExt(path, hintedExt)
   filePreview.path = fullPath
+  // 原始路径（可能没后缀）一起带给预览器：它据此决定要不要给 TXT / HTML 切换（0920-02）
+  filePreview.basePath = path
   filePreview.name = fullPath.split('/').pop() || ''
   filePreview.url = sourceUrl
     || detailFields.value.find((f) => f.prop === 'url')?.href
@@ -1714,6 +1716,7 @@ async function onTestScript() {
     >
       <FilePreview
         :path="filePreview.path"
+        :base-path="filePreview.basePath"
         :name="filePreview.name"
         :ext="filePreview.ext || extFromName(filePreview.name)"
         :external-url="filePreview.url"

@@ -5,11 +5,21 @@ import { ElMessage } from 'element-plus'
 import { sourceApi, siteApi, expandCategoryIds, type Site, type SourceCategory } from '@/api'
 import { useUiStore } from '@/stores/ui'
 import { confirmDanger } from '@/utils/confirmDanger'
+import { favoriteSiteIds } from '@/utils/siteFavorites'
+import { recentRankOf, recentSiteIds } from '@/utils/siteRecents'
 import SiteCardGrid from './SiteCardGrid.vue'
 import FilterToolbar from './components/FilterToolbar.vue'
 import BatchBar from './components/BatchBar.vue'
 import TableView from './components/TableView.vue'
 import SiteEditorDialog from './components/SiteEditorDialog.vue'
+import CategoryManageDrawer from './components/CategoryManageDrawer.vue'
+
+/**
+ * `favOnly`：由「我收藏的网站」tab 传进来（`CollectAssets/index.vue`）。
+ * 为 true 时这一页**恒定只看收藏**，工具条里也不再出现那个可关掉的选项——
+ * 在"我收藏的网站"里还能切成"看全部"是自相矛盾的。
+ */
+const props = defineProps<{ favOnly?: boolean }>()
 
 const ui = useUiStore()
 const route = useRoute()
@@ -30,6 +40,11 @@ const categoryFilter = ref<string[]>([])
 const tagFilter = ref('')
 const stateFilter = ref('all')
 const sortBy = ref<'updated' | 'name'>('updated')
+/** 只看收藏（0917-17）。「网站列表」tab 里默认关（收藏的照样恒排最前）；
+ *  「我收藏的网站」tab 里由 props 锁成 true。 */
+const favOnly = ref(props.favOnly === true)
+/** 只看最近打开（0917-17 后半条）。与 favOnly 互斥，由工具条那个下拉统一切换 */
+const recentOnly = ref(false)
 
 // ---- 网站列表 / 分页 ----
 const sites = ref<Site[]>([])
@@ -51,6 +66,13 @@ const editorSite = ref<Site | null>(null)
 // 新建与编辑共用 SiteEditorDialog（2026-09-18）：新建态 editorSite 为 null。
 const editorMode = ref<'create' | 'edit'>('edit')
 
+// ---- 分类管理抽屉（2026-09-21：仅在「全部分类」下拉底部入口唤起） ----
+const categoryDrawerVisible = ref(false)
+async function onCategoryRefresh() {
+  await loadCategories()
+  await loadList()
+}
+
 // ---- 加载 ----
 // 网站列表一次全量拉回来，排序和分页都在前端做。两个原因：
 // 1. 真实后端**不支持排序**——`field`/`sorted`、`orderBy`、`sort`/`order` 五种参数名
@@ -61,11 +83,45 @@ const editorMode = ref<'create' | 'edit'>('edit')
 const LIST_FETCH_SIZE = 2000
 
 function sortSites(list: Site[]): Site[] {
-  return [...list].sort(sortBy.value === 'name'
-    ? (a, b) => a.name.localeCompare(b.name, 'zh')
+  // 「最近打开」模式下按访问时间排，不走收藏置顶那套——它本身就是一个时间序，
+  // 再让收藏插队反而看不出"我刚才去过哪"
+  if (recentOnly.value) return [...list].sort((a, b) => recentRankOf(a.siteId) - recentRankOf(b.siteId))
+  const byCurrent = sortBy.value === 'name'
+    ? (a: Site, b: Site) => a.name.localeCompare(b.name, 'zh')
     // updatedAt 是 'YYYY-MM-DD HH:mm:ss'，定长且高位在前，字符串倒序即时间倒序
-    : (a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+    : (a: Site, b: Site) => (b.updatedAt || '').localeCompare(a.updatedAt || '')
+  // 收藏的**恒排最前**（0917-17），不做成排序下拉的第三档：用户自己点的星本来就该在前，
+  // 再要求他先选一次才生效是多余的，而且会跟「最近修改 / 名称」这个正交维度打架
+  //（选了"收藏优先"，组内按什么排就说不清了）。组内仍按当前排序。
+  return [...list].sort((a, b) => {
+    const fa = favoriteSiteIds.value.has(a.siteId) ? 0 : 1
+    const fb = favoriteSiteIds.value.has(b.siteId) ? 0 : 1
+    return fa !== fb ? fa - fb : byCurrent(a, b)
+  })
 }
+
+/**
+ * 这一轮请求拉回来的全量（已按关键词 / 分类 / 状态过滤过，**未**按收藏过滤、未排序、未切片）。
+ *
+ * 单独留一份是为了让"点一下星"能就地重排——不然点完星顺序纹丝不动，得等下次筛选才生效，
+ * 用户看到的就是"点了没反应"（这条是单测先发现的）。重发一次请求也能解决，
+ * 但那是 2000 条的全量拉取，为一次点星不值得。
+ */
+const fetchedSites = ref<Site[]>([])
+
+/** 从 fetchedSites 重算展示：只看收藏 → 排序（收藏置顶）→ 切片。不发请求。 */
+function applyView() {
+  let base = fetchedSites.value
+  if (favOnly.value) base = base.filter((site) => favoriteSiteIds.value.has(site.siteId))
+  else if (recentOnly.value) base = base.filter((site) => recentSiteIds.value.includes(site.siteId))
+  const list = sortSites(base)
+  const start = (page.value - 1) * size.value
+  sites.value = list.slice(start, start + size.value)
+  total.value = list.length
+}
+
+// 收藏 / 最近打开变了（本页点的，或另一个标签页点的）就地重排，不重新请求
+watch([favoriteSiteIds, recentSiteIds], applyView)
 
 // 筛选条件连着变（改关键词又马上改分类、翻页）会有多次 loadList 同时在飞，
 // 而它们的完成顺序跟发起顺序无关——慢的那次后回来就会把新结果盖掉，列表显示的是过期内容。
@@ -100,14 +156,13 @@ async function loadList() {
       )
       list = list.filter((site) => site.name.toLowerCase().includes(kw) || siteIdsBySource.has(site.siteId))
     }
-    list = sortSites(list)
     if (seq !== listRequestSeq) return
-    const start = (page.value - 1) * size.value
-    sites.value = list.slice(start, start + size.value)
-    total.value = list.length
+    fetchedSites.value = list
+    applyView()
   } catch {
     if (seq !== listRequestSeq) return
     ElMessage.warning('加载网站列表失败')
+    fetchedSites.value = []
     sites.value = []
     total.value = 0
   } finally {
@@ -307,6 +362,11 @@ onUnmounted(() => {
       v-model:tag-filter="tagFilter"
       v-model:state-filter="stateFilter"
       v-model:sort-by="sortBy"
+      v-model:fav-only="favOnly"
+      v-model:recent-only="recentOnly"
+      :fav-count="favoriteSiteIds.size"
+      :recent-count="recentSiteIds.length"
+      :fav-locked="props.favOnly === true"
       :categories="categories"
       :all-tags="allTags"
       :total="total"
@@ -316,6 +376,7 @@ onUnmounted(() => {
       @refresh="refreshAll"
       @set-view="setView"
       @create-site="openSiteCreator"
+      @open-category-manager="categoryDrawerVisible = true"
     />
 
     <BatchBar
@@ -373,6 +434,12 @@ onUnmounted(() => {
       :categories="categories"
       :mode="editorMode"
       @saved="onEditorSaved"
+    />
+
+    <!-- 分类管理抽屉：仅在「全部分类」下拉底部入口唤起 -->
+    <CategoryManageDrawer
+      v-model="categoryDrawerVisible"
+      @refresh="onCategoryRefresh"
     />
   </div>
 </template>

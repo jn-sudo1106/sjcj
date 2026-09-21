@@ -81,6 +81,23 @@ describe('flow 流程 HTTP 契约', () => {
     expect(flow?.id).toBe('')
   })
 
+  // 0917-09 / R1：源上挂着一个已被删除的 flowId 时，后端不是回 data:null，而是回一个**业务失败**
+  // （2026-09-21 生产实测 flowId=999999999：HTTP 200 + success:false + code:'-1' +
+  // msg「未找到相关流程 flowId=999999999」）。画布头要靠"查不到"和"请求坏了"的区别决定
+  // 显不显示「流程已删除」，所以这一种必须翻译成 null。
+  it('flowDetail 对不存在的 flowId（code -1 / 未找到相关流程）返回 null，不抛错', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: false, code: '-1', msg: '未找到相关流程 flowId=999999999', data: null }))
+    const { flowCenterApi } = await import('./index')
+    await expect(flowCenterApi.detail('999999999')).resolves.toBeNull()
+  })
+
+  // 只吞"未找到"这一种。别的业务失败照抛——否则权限、参数错都会被画布头说成"流程已删除"
+  it('flowDetail 遇到其它业务失败仍然抛错', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: false, code: '-1', msg: '没有权限查看该流程', data: null }))
+    const { flowCenterApi } = await import('./index')
+    await expect(flowCenterApi.detail('1001')).rejects.toThrow('没有权限查看该流程')
+  })
+
   // 旧平台流程管理页的「重置模板」会把 flowConf 写成 {"states":{},"paths":{}}（更早的画布格式），
   // 人手改坏也可能。认不出就当空流程，绝不让流程列表整页崩。
   it('flowConf 是旧格式 / 坏 JSON / 空时一律回退空流程，不抛异常', async () => {

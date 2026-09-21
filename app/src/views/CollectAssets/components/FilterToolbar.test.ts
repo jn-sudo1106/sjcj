@@ -78,4 +78,21 @@ describe('FilterToolbar 分类树（多选）', () => {
     expect(wrapper.emitted('update:categoryFilter')?.[1]).toEqual([[]])
     expect(wrapper.emitted('filterChange')).toHaveLength(2)
   })
+
+  it('全部分类下拉面板底部包含「管理分类」入口，点击触发 openCategoryManager 事件', async () => {
+    const wrapper = mountToolbar()
+    const treeSelect = wrapper.findComponent({ name: 'ElTreeSelect' })
+    expect(treeSelect.exists()).toBe(true)
+    expect(treeSelect.vm.$slots.footer).toBeDefined()
+
+    const footerWrapper = mount({
+      render: () => treeSelect.vm.$slots.footer!(),
+    })
+    const manageBtn = footerWrapper.find('.ca-category-manage-btn')
+    expect(manageBtn.exists()).toBe(true)
+    expect(manageBtn.text()).toContain('管理分类')
+
+    await manageBtn.trigger('click')
+    expect(wrapper.emitted('openCategoryManager')).toHaveLength(1)
+  })
 })

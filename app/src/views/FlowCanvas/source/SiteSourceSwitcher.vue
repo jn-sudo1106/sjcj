@@ -1746,10 +1746,17 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
   opacity: 0.45;
   cursor: not-allowed;
 }
-/* 平时跟旁边的灰字一样低调，悬浮才显出是个链接——这里是背景信息区，
-   不该为一个链接把整块的视觉重量抬上去（同 CanvasHeader.ch-sub-link）。 */
-.ssw-detail-link { text-decoration: none; }
-.ssw-detail-link:hover { color: var(--rc-primary); text-decoration: underline; }
+/* 默认呈现为蓝色链接（2026-09-21 用户反馈） */
+a.ssw-detail-link,
+.ssw-detail-url.ssw-detail-link {
+  color: var(--rc-primary);
+  text-decoration: none;
+}
+a.ssw-detail-link:hover,
+.ssw-detail-url.ssw-detail-link:hover {
+  color: var(--rc-primary);
+  text-decoration: underline;
+}
 .ssw-detail-url {
   color: var(--rc-faint);
   font-size: 10px;

@@ -56,7 +56,7 @@ async function openCreateForm(w: { find: (s: string) => { exists: () => boolean 
   }, { timeout: 5000, interval: 20 })
 }
 
-async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length) {
+async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length, query?: Record<string, string>) {
   vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total, list: flows })
   // 分类目录在测试里必须可预期：sourceCategories 走 live 端点（category/categoryPaged），
   // 测试环境下 fetch 失败会把分类吞成空列表。这里给一棵两级树覆盖（按 parentId 查任意层级的子级）。
@@ -70,8 +70,8 @@ async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length) {
       nodes.flatMap((n) => (n.id === parentId ? (n.children ?? []) : findChildren(n.children ?? [])))
     return findChildren(tree)
   })
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/flows', component: { template: '<div/>' } }, { path: '/rules', component: { template: '<div/>' } }] })
-  await router.push('/flows'); await router.isReady()
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/flows', component: { template: '<div/>' } }, { path: '/rules', component: { template: '<div/>' } }, { path: '/canvas', component: { template: '<div/>' } }] })
+  await router.push({ path: '/flows', query }); await router.isReady()
   const pinia = createPinia(); setActivePinia(pinia)
   const wrapper = mount(FlowCenter, {
     global: {
@@ -788,5 +788,49 @@ describe('流程中心 · 分类树多选', () => {
     // 25 条全命中两个分类，total = 25；当前页 20 条
     expect(w.text()).toContain('流程 25')
     expect(w.findAll('[data-testid="flow-center-row"]').length).toBe(20)
+  })
+})
+
+// 0917-09：`/flows` 是主导航页，不挂源页签条，从源画布点「所属流程」进来之后
+// 本来没有任何入口能回去——会上原话「你别让他忙了半天回不去了」。
+describe('流程中心 · 从源画布来的返回条（0917-09）', () => {
+  const FROM_CANVAS = { from: 'canvas', sourceId: '430016397', siteId: '12', view: 'data', fromName: '*ST东智', q: '上市公司-配置' }
+
+  it('带 from=canvas 时渲染返回条，显示源名', async () => {
+    const w = await mountCenter(FLOWS, FLOWS.length, FROM_CANVAS)
+    expect(w.get('[data-testid="flow-center-back"]').text()).toBe('← 返回源「*ST东智」')
+  })
+
+  it('点返回条回到原来那个源，且落在**离开时的那个视图**，不是写死的流程视图', async () => {
+    const w = await mountCenter(FLOWS, FLOWS.length, FROM_CANVAS)
+    await w.get('[data-testid="flow-center-back"]').trigger('click')
+    await flushPromises()
+    const r = (w.vm as unknown as { $router: { currentRoute: { value: { path: string; query: Record<string, string> } } } }).$router
+    expect(r.currentRoute.value.path).toBe('/canvas')
+    expect(r.currentRoute.value.query).toMatchObject({ sourceId: '430016397', siteId: '12', view: 'data' })
+  })
+
+  it('没有 fromName 时退回显示源 ID，不显示空的「返回源「」」', async () => {
+    const w = await mountCenter(FLOWS, FLOWS.length, { from: 'canvas', sourceId: '430016397' })
+    expect(w.get('[data-testid="flow-center-back"]').text()).toBe('← 返回源「430016397」')
+  })
+
+  it('直接进流程中心（没有 from）不显示返回条', async () => {
+    const w = await mountCenter()
+    expect(w.find('[data-testid="flow-center-back"]').exists()).toBe(false)
+  })
+
+  // 游离源或手改的 URL：没有源也没有网站就没地方可回，宁可不给按钮，也不给一个点了报错的按钮
+  it('from=canvas 但既没有 sourceId 也没有 siteId 时不显示返回条', async () => {
+    const w = await mountCenter(FLOWS, FLOWS.length, { from: 'canvas', fromName: '某个源' })
+    expect(w.find('[data-testid="flow-center-back"]').exists()).toBe(false)
+  })
+
+  it('返回条只认进来那一刻的 query：在本页搜索改了地址栏也不跟着变', async () => {
+    const w = await mountCenter(FLOWS, FLOWS.length, FROM_CANVAS)
+    const r = (w.vm as unknown as { $router: { push: (to: unknown) => Promise<void> } }).$router
+    await r.push({ path: '/flows', query: { q: '别的关键字' } })
+    await flushPromises()
+    expect(w.get('[data-testid="flow-center-back"]').text()).toBe('← 返回源「*ST东智」')
   })
 })

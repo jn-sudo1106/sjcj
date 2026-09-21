@@ -27,6 +27,15 @@ export type SourceFilter = {
   sourceUrl?: string
   state?: string
   enable?: string
+  /**
+   * 数据量上限（0920-01）。后端 `sourcePaged` 的 `count`，语义是 **`dataCnt <= N`，含等于**
+   * ——2026-09-20 实测站 12：无条件 5429 条、count=5 得 416 条且结果里有 47 行正好等于 5、
+   * count=10 得 788 条。旧平台把这个参数当"发送数量上限"用（`SourceList.vue:1950`），
+   * 从旧代码读不出它还是个筛选条件。
+   *
+   * ⚠️ `0` 是有意义的条件（一条数据都没有的源），不能和"没填"混为一谈。
+   */
+  count?: number
   tags?: string[]
   remark?: string
   field?: string
@@ -91,7 +100,12 @@ export function describeFilters(query: SourceFilter): string {
   if (query.enable === '1') parts.push('已停用')
   else if (query.enable === '0') parts.push('已启用')
   if (query.tags?.length) parts.push(`标签 ${query.tags.join('、')}`)
-  if (query.remark) parts.push(`备注含「${query.remark}」`)
+  // `%` / `NULL` 是后端认的空值标记（0920-07），照字面写成「备注含「%」」会看不懂
+  if (query.remark === '%') parts.push('有备注')
+  else if (query.remark === 'NULL') parts.push('没有备注')
+  else if (query.remark) parts.push(`备注含「${query.remark}」`)
+  // 按条件发任务时这条必须出现在确认弹窗里：它能把范围从 5429 收窄到 416，看不见就等于没确认
+  if (query.count != null) parts.push(`数据量 ≤ ${query.count}`)
   return parts.join('，') || '当前网站全部源'
 }
 

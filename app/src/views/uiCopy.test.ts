@@ -348,7 +348,9 @@ describe('最新方案 UI 入口收口', () => {
     expect(ruleAssetsIndex).not.toContain("{ key: 'template', label: '流程模板' }")
     expect(ruleAssetsIndex).not.toContain("import FlowTemplate from '../FlowTemplate/index.vue'")
     expect(ruleAssetsIndex).toContain("router.replace('/flows')")
-    expect(canvasHeader).toContain("void router.push('/flows')")
+    // 0917-09：这条跳转加了回程上下文（from/sourceId/siteId/view/fromName），
+    // 不再是光秃秃的 push('/flows')——落点仍是流程中心，行为由 CanvasHeader.test.ts 验
+    expect(canvasHeader).toContain("void router.push({ path: '/flows', query: flowCenterQuery() })")
   })
 
   it('空白画布的智能入口推荐并应用可复用流程，不暴露模板概念', () => {

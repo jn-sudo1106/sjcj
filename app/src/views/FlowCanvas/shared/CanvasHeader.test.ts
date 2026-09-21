@@ -85,6 +85,64 @@ describe('CanvasHeader · 参数源摘要（0721 会议 T5）', () => {
     expect(r.currentRoute.value.query.q).toBe('上市公司-配置')
   })
 
+  // 0917-09：/flows 不挂源页签条，走过去就回不来了。把来路放进 query，流程中心据此渲染返回条。
+  it('跳流程中心时带上回程上下文：源 / 网站 / 离开时的视图 / 源名', async () => {
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({ id: '1400935', name: '上市公司-配置' } as never)
+    const wrapper = await mountHeader()
+    const r = (wrapper.vm as unknown as { $router: { push: (to: unknown) => Promise<void>; currentRoute: { value: { path: string; query: Record<string, string> } } } }).$router
+    // 从**数据视图**点出去（这个头是常驻的，不是只在流程视图下）
+    await r.push({ path: '/canvas', query: { sourceId: 'source-a', view: 'data' } })
+    const flow = useFlowStore()
+    flow.loadFromSource(
+      { sourceId: '430016397', siteId: '12', name: '*ST东智', url: 'https://e.com', configId: '1400935', flowId: '1400935', mainTable: '', owner: 'admin', state: 'C' } as never,
+      [],
+    )
+    await flushPromises()
+
+    await wrapper.get('[data-testid="owning-flow"]').trigger('click')
+    await flushPromises()
+    expect(r.currentRoute.value.query).toMatchObject({
+      from: 'canvas', sourceId: '430016397', siteId: '12', view: 'data', fromName: '*ST东智',
+    })
+  })
+
+  // R1（方案 §21）：流程删了源还在跑，flowId 成悬空引用。退化成 `#id` 时用户以为是没加载出来。
+  it('流程查不到（detail 返回 null）：标成「流程已删除」，且链接点不动', async () => {
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(null)
+    const wrapper = await mountHeader()
+    const flow = useFlowStore()
+    flow.loadFromSource(
+      { sourceId: 'source-a', name: '*ST东智', url: 'https://e.com', configId: '1400935', flowId: '1400935', mainTable: '', owner: 'admin', state: 'C' } as never,
+      [],
+    )
+    await flushPromises()
+
+    const link = wrapper.get('[data-testid="owning-flow"]')
+    expect(link.text()).toBe('所属流程：#1400935（流程已删除）')
+    expect(link.attributes('disabled')).toBeDefined()
+
+    await link.trigger('click')
+    await flushPromises()
+    const r = (wrapper.vm as unknown as { $router: { currentRoute: { value: { path: string } } } }).$router
+    expect(r.currentRoute.value.path).toBe('/canvas')
+  })
+
+  // 断网时每个源都写「流程已删除」比不写更糟，所以只认 detail() 返回 null 那一种
+  it('查流程详情报错（网络 / HTTP 错误）：仍显示 #id，不说已删除，链接照旧可点', async () => {
+    vi.spyOn(flowCenterApi, 'detail').mockRejectedValue(new Error('Failed to fetch'))
+    const wrapper = await mountHeader()
+    const flow = useFlowStore()
+    flow.loadFromSource(
+      { sourceId: 'source-a', name: '*ST东智', url: 'https://e.com', configId: '1400935', flowId: '1400935', mainTable: '', owner: 'admin', state: 'C' } as never,
+      [],
+    )
+    await flushPromises()
+
+    const link = wrapper.get('[data-testid="owning-flow"]')
+    expect(link.text()).toBe('所属流程：#1400935')
+    expect(link.attributes('disabled')).toBeUndefined()
+  })
+
   it('普通源：URL 是可点开的外链，新窗口打开且带 noopener', async () => {
     const wrapper = await mountHeader()
     const flow = useFlowStore()

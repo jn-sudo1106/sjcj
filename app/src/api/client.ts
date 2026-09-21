@@ -201,6 +201,12 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   // 只把选中任务重置为待发送重新排队，不改不删任何配置/源/流程。2026-08-13 测试环境实测：
   // E / L 都能重跑、都变 W1、响应无逐条结果、无效 ID 静默忽略、幂等。UI 侧保留二次确认。
   'task/resetTaskInsts',
+  // 2026-09-21 放开：分类目录管理（新增/批量新增/修改/删除）。
+  // 对齐老平台 CategoryTree.vue，仅在「全部分类」下拉底部入口唤起的分类管理抽屉中使用。
+  'category/add',
+  'category/addBatch',
+  'category/update',
+  'category/delete',
   // 2026-09-10：按需求放开规则脚本/抓取配置保存，直接写入文件服务。
   '/api/file/upload',
 ])

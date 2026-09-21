@@ -60,44 +60,99 @@ const page = ref(1)
 const size = ref(20)
 const loading = ref(false)
 const loadError = ref('')
-const sourceIds = ref(props.initialSourceIds ?? '')
+/**
+ * 源 ID / 源名称 / 源 URL 三格合并成「字段 ▾ ＋ 一个输入框」（0917-11，2026-09-21 用户定范围）。
+ * 会上原话：「全部源的这个查询 2、3、4……我准备说放在一起的」。
+ *
+ * **这推翻了 2026-09-17 那次"源 URL 不跟源名称并成一格"的定法**，代价是明摆着的：
+ * 三者原先能组合（实测 `name=盛科` 4 条、`sourceUrl=centec` 1 条、同时给 1 条，取交集），
+ * 合并之后一次只能按一个字段查。用户接受这个代价，换筛选栏少两格。
+ *
+ * 做成**显式选字段**而不是"一个框自动猜类型"：猜错就是静默漏结果——
+ * 实测 `name=centec` 命中 0 条、`sourceUrl=centec` 命中 1 条，两者互不覆盖，
+ * 而用户根本不会知道自己被猜到了另一个参数上。
+ *
+ * **状态不并进来**（用户同意）：它是枚举，跟这三个文本条件不同类，并进来控件要变形，
+ * 而且「状态=异常 ＋ 名称含 X」是常见组合，并了就做不了。
+ */
+type SearchField = 'sourceIds' | 'name' | 'sourceUrl'
+const SEARCH_FIELDS: { value: SearchField; label: string; placeholder: string }[] = [
+  { value: 'sourceIds', label: '源 ID', placeholder: '多个 ID 用逗号分隔' },
+  { value: 'name', label: '源名称', placeholder: '源名称关键字' },
+  { value: 'sourceUrl', label: '源 URL', placeholder: 'URL 关键字，如 centec' },
+]
+const searchField = ref<SearchField>('sourceIds')
+const searchText = ref(props.initialSourceIds ?? '')
+const searchPlaceholder = computed(() => SEARCH_FIELDS.find((f) => f.value === searchField.value)?.placeholder ?? '')
+/** 当前这一格落到哪个后端参数上；没选中的两个恒为 undefined */
+const searchValueOf = (field: SearchField) => (searchField.value === field ? (searchText.value.trim() || undefined) : undefined)
 const flowFilterId = ref(props.initialFlowId ?? '')
 watch(() => props.initialFlowId, (id) => { flowFilterId.value = id ?? '' })
 // prop 变化也要生效：反查跳过来时本组件常常已经挂载着（同一个 SiteDetailView 里切视图），
 // 只把它当初始值用等于永远不生效。清空不跟随——那是用户自己在筛选框里的操作，别覆盖他。
 watch(() => props.initialSourceIds, (ids) => {
-  if (!ids || ids === sourceIds.value) return
-  sourceIds.value = ids
+  if (!ids || (searchField.value === 'sourceIds' && ids === searchText.value)) return
+  // 反查跳过来带的是一串源 ID，字段也要跟着切过去，否则这串 ID 会被当成名称关键字发出去
+  searchField.value = 'sourceIds'
+  searchText.value = ids
   page.value = 1
   void loadSources()
 })
-const name = ref('')
-// 源 URL 单独一格，**不跟源名称并成一个框**（2026-09-17 定）：后端是两个独立条件，
-// 没有「名称 or URL」这种合并语义。并成一个框就只能前端猜该发哪个参数，而两者互不覆盖
-// ——实测 name=centec 命中 0 条、sourceUrl=centec 命中 1 条，猜错就是静默漏结果。
-// 分开还能组合（同时给取交集），合并做不到。
-const urlFilter = ref('')
 const statusFilter = ref<StatusFilter>('all')
 const tagFilter = ref('')
 // 备注：生产源列表页筛选区就有，后端认 remark（旧列表列同名）。本地那份旧代码快照比线上旧，
 // queryParam 里还没有，不能拿它当"后端不支持"的依据。旁边的「责任人」0831 明确暂不做。
 const remarkFilter = ref('')
+/**
+ * 备注三态（0920-07）。会上原话：「我想搜这个备注为空的、不为空的」。
+ *
+ * **后端本来就支持，是我们没发现**（2026-09-21 实测，站 12 共 5891 个源）：
+ * `remark=%` 得 8 条、全部有备注；`remark=NULL` 得 5883 条、抽样全是 null；8 + 5883 = 5891。
+ * 换站 81 复核也吻合。原先以为要提后端需求（B28），复测后撤回了。
+ *
+ * 与关键字互斥：后端 `remark` 只有一个参数，既是关键字又是空值标记，表达不了"含 X 且非空"。
+ */
+const remarkMode = ref<'any' | 'has' | 'none'>('any')
+const REMARK_SENTINEL = { has: '%', none: 'NULL' } as const
+/**
+ * 数据量上限（0920-01）。会上原话：「这个页面支持 sql 查询，比如数据<5」。
+ *
+ * **不做成 SQL 输入框**：实测 `sourcePaged` 的 `sql` 参数被完全忽略（传 `DATA_CNT < 5`、
+ * 传乱码、不传，返回的 count 全是 5429），做成 SQL 框的话除 `dataCnt` 之外的任何条件
+ * 都会静默不生效——就是任务视图那个队列筛选框的翻版（B24）。
+ *
+ * 后端认的是固定参数 `count`，语义是 **`dataCnt <= N`（含等于）**，所以 UI 写「≤」不写「<」。
+ * 存字符串而不是数字：要分得清"没填"和"填了 0"——`count=0` 是有意义的条件。
+ */
+// ⚠️ 类型写成 string | number 不是啰嗦：`<input type="number">` 上的 v-model，
+// Vue 会**自动把值转成数字**（vModelText 的 castToNumber），清空时又回到空串。
+// 当成纯字符串写 `.trim()` 会在填了数字时抛 TypeError，而且是静默的——筛选直接失效。
+const dataCountMax = ref<string | number>('')
 const sortField = ref('')
 const sortDirection = ref<'asc' | 'desc'>('asc')
 let sourceRequestSeq = 0
 
 
+/** 空 / 非法 / 负数都当没填；`0` 要保留（"一条数据都没有的源"是个真条件） */
+const parsedDataCountMax = computed<number | undefined>(() => {
+  const raw = String(dataCountMax.value ?? '').trim()
+  if (!raw) return undefined
+  const n = Number(raw)
+  return Number.isFinite(n) && n >= 0 ? n : undefined
+})
+
 function currentQuery(): SourceFilter {
   return {
     siteIds: props.currentSiteId || undefined,
-    sourceIds: sourceIds.value || undefined,
+    sourceIds: searchValueOf('sourceIds'),
     flowId: flowFilterId.value || undefined,
-    name: name.value || undefined,
-    sourceUrl: urlFilter.value || undefined,
+    name: searchValueOf('name'),
+    sourceUrl: searchValueOf('sourceUrl'),
     state: statusFilter.value === 'all' || statusFilter.value === 'disabled' ? undefined : statusFilter.value,
     enable: statusFilter.value === 'disabled' ? '1' : statusFilter.value === 'all' ? undefined : '0',
     tags: tagFilter.value ? [issueTagForWrite(tagFilter.value)].filter(Boolean) : [],
-    remark: remarkFilter.value || undefined,
+    remark: remarkMode.value === 'any' ? (remarkFilter.value || undefined) : REMARK_SENTINEL[remarkMode.value],
+    count: parsedDataCountMax.value,
     field: sortField.value || undefined,
     sorted: sortField.value ? (sortDirection.value === 'asc' ? 1 : -1) : undefined,
     type: sortField.value ? (sortDirection.value === 'asc' ? 'ASC' : 'DESC') : undefined,
@@ -137,13 +192,14 @@ function search() {
   void loadSources()
 }
 function clearFilters() {
-  sourceIds.value = ''
+  searchField.value = 'sourceIds'
+  searchText.value = ''
   flowFilterId.value = ''
-  name.value = ''
-  urlFilter.value = ''
   statusFilter.value = 'all'
   tagFilter.value = ''
   remarkFilter.value = ''
+  remarkMode.value = 'any'
+  dataCountMax.value = ''
   search()
 }
 function toggleSort(field: string) {
@@ -701,8 +757,8 @@ async function loadTagCandidates() {
   try {
     serverTags.value = await sourceApi.sourceTags({
       siteIds: props.currentSiteId || undefined,
-      sourceIds: sourceIds.value || undefined,
-      name: name.value || undefined,
+      sourceIds: searchValueOf('sourceIds'),
+      name: searchValueOf('name'),
     })
   } catch {
     serverTags.value = []
@@ -745,14 +801,20 @@ watch(() => ui.sourceListRevision, () => {
 <template>
   <section class="sov-shell" data-testid="source-overview">
     <div class="sov-filter">
-      <label>源 ID
-        <input v-model="sourceIds" data-testid="source-overview-source-ids" placeholder="多个 ID 用逗号分隔" @keyup.enter="search" />
-      </label>
-      <label>源名称
-        <input v-model="name" data-testid="source-overview-name" placeholder="源名称" @keyup.enter="search" />
-      </label>
-      <label>源 URL
-        <input v-model="urlFilter" data-testid="source-overview-url" placeholder="URL 关键字，如 centec" @keyup.enter="search" />
+      <!-- 源 ID / 源名称 / 源 URL 三合一（0917-11）：选字段 + 填值，一次按一个字段查。
+           显式选字段而不是自动猜类型——猜错是静默漏结果，用户不会知道。 -->
+      <label>查询
+        <span class="sov-search">
+          <select v-model="searchField" data-testid="source-overview-search-field" @change="searchText && search()">
+            <option v-for="f in SEARCH_FIELDS" :key="f.value" :value="f.value">{{ f.label }}</option>
+          </select>
+          <input
+            v-model="searchText"
+            data-testid="source-overview-search-text"
+            :placeholder="searchPlaceholder"
+            @keyup.enter="search"
+          />
+        </span>
       </label>
       <label>状态
         <select v-model="statusFilter" data-testid="source-overview-state" @change="search">
@@ -772,8 +834,37 @@ watch(() => ui.sourceListRevision, () => {
           <option v-for="tag in tagCandidates" :key="tag" :value="tag">{{ tag }}</option>
         </select>
       </label>
+      <!-- 备注：三态 ＋ 关键字。互斥——后端 remark 只有一个参数，
+           既当关键字又当空值标记，表达不了"含 X 且非空"（0920-07）。 -->
       <label>备注
-        <input v-model="remarkFilter" data-testid="source-overview-remark" placeholder="备注关键字" @keyup.enter="search" />
+        <span class="sov-remark-filter">
+          <select v-model="remarkMode" data-testid="source-overview-remark-mode" @change="search">
+            <option value="any">不限</option>
+            <option value="has">有备注</option>
+            <option value="none">无备注</option>
+          </select>
+          <input
+            v-model="remarkFilter"
+            data-testid="source-overview-remark"
+            placeholder="备注关键字"
+            :disabled="remarkMode !== 'any'"
+            :title="remarkMode === 'any' ? '' : '选了「有备注 / 无备注」时不能再按关键字筛'"
+            @keyup.enter="search"
+          />
+        </span>
+      </label>
+      <!-- 「≤」不是「<」：后端 count 的语义含等于（2026-09-20 实测，count=5 的结果里有 47 行正好是 5） -->
+      <label>数据量 ≤
+        <input
+          v-model="dataCountMax"
+          type="number"
+          min="0"
+          step="1"
+          class="sov-num"
+          data-testid="source-overview-count"
+          placeholder="如 5"
+          @keyup.enter="search"
+        />
       </label>
       <div class="sov-filter-actions" data-testid="source-overview-actions">
         <!-- 从流程中心「查看全部关联源」跳过来时的过滤芯片（0904 I16 / Z7-2）。
@@ -961,6 +1052,16 @@ watch(() => ui.sourceListRevision, () => {
 .sov-filter input, .sov-filter select { height: 30px; min-width: 116px; padding: 0 8px; border: 1px solid #dbe3ee; border-radius: 6px; color: var(--rc-text); background: #fff; font-size: 12px; }
 .sov-filter input:focus, .sov-filter select:focus { outline: 0; border-color: #60a5fa; box-shadow: 0 0 0 2px #dbeafe; }
 .sov-filter input:disabled { background: #f4f6f9; color: var(--rc-faint); cursor: not-allowed; }
+/* 备注那格里的「三态 + 关键字」并排，整体占位与其它单控件的格子相当 */
+/* 查询那格：字段下拉 + 输入框并排，输入框吃掉剩余宽度（它装的是 ID 串 / 关键字，比下拉需要地方） */
+.sov-search { display: flex; gap: 4px; }
+.sov-filter .sov-search select { min-width: 88px; }
+.sov-filter .sov-search input { min-width: 190px; }
+.sov-remark-filter { display: flex; gap: 4px; }
+.sov-filter .sov-remark-filter select { min-width: 78px; }
+.sov-filter .sov-remark-filter input { min-width: 104px; }
+/* 数字框不需要和文本框一样宽：一行已经很挤（源 ID / 名称 / URL / 状态 / 标签 / 备注 / 数据量） */
+.sov-filter input.sov-num { min-width: 84px; width: 84px; }
 .sov-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
 .sov-btn { height: 30px; padding: 0 10px; border: 1px solid #d5e2f2; border-radius: 6px; background: #fff; color: var(--rc-text-2); cursor: pointer; font-size: 12px; font-weight: 600; }
 
