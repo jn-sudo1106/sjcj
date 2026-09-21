@@ -62,6 +62,8 @@ const emit = defineEmits<{
   'update:modelProviderCode': [string]
   'update:modelCode': [string]
   'update:script': [string]
+  /** 用户点了左栏「保存」（区别于 loadPromptTemplate 自动回写：那条不算用户编辑） */
+  'prompt-saved': []
   generate: [Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'modelProviderCode' | 'modelCode'>>]
   'cancel-generate': []
   save: []
@@ -188,6 +190,9 @@ watch(() => props.modelCode, (v) => {
   if (props.open) modelDraft.value = v || firstModelCode()
 })
 function savePrompt() {
+  // 先置位「用户手改」再回写：编排配置的自动拼接 watcher 据此不再把手改值覆盖回模板
+  // （loadPromptTemplate 的自动 emit 不走这里，所以自动回写不算用户编辑）
+  emit('prompt-saved')
   emit('update:systemPrompt', promptDraft.value)
   emit('update:promptCategory', promptCategoryDraft.value)
   emit('update:modelProviderCode', modelProviderDraft.value)

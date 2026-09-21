@@ -188,9 +188,12 @@ async function syncSourceCron(node: NodeConfig) {
   try {
     // 已有定时就原地改那一条（传 jobId 走 updateJob），不然 createJobs 会再建一条，
     // 两条定时同时启用、源被抓两遍。新建的默认启用——用户特地配了定时，就是要它跑。
+    // configId 是后端必传参数；本客户端 query 序列化会跳过空串（client.ts appendQuery），
+    // 必须给真实值——优先节点配置 ID，没有时退回源的主配置 ID。
     const ack = await sourceApi.saveSourceCron([sourceId], next, {
       jobId: flow.sourceJob?.jobId || undefined,
       enable: true,
+      configId: configId.value || flow.sourceCfg?.configId || '',
     })
     if (!ack.ok) {
       ElMessage.warning(`定时保存失败：${ack.message || '未知原因'}`)

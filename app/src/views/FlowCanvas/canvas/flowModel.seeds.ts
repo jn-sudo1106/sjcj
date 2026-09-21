@@ -567,9 +567,10 @@ const NODE_CONFIG_SEEDS = {
     inmap: [['content', '← 上游节点.content', '待翻译正文']],
     params: [['target_language', 'enum', '中文简体/中文繁体/英语/日语/韩语/法语/德语/西班牙语/俄语']],
     output: [['translated_text', 'longtext', '译文']],
-    // 源/目标语言的默认值（编排配置 Tab 两个下拉）：保存时随 buildConfigPayload 写进 code_rule，
-    // 格式与 /api/translate 同口径（from/to 是百度语言码，自动检测 = auto）。
-    structuredConfig: '{"from":"auto","to":"en"}',
+    // 源/目标语言与引擎的默认值（编排配置 Tab 三个下拉）：保存时随 buildConfigPayload 写进 core_param
+    //（2026-09-21 从 code_rule 调整到 core_param），格式与 /api/translate 同口径
+    //（from/to 是百度语言码，自动检测 = auto；engine 存英文引擎码：baidu / google / youdao）。
+    structuredConfig: '{"from":"auto","to":"en","engine":"baidu"}',
   },
   'article-summary': {
     title: '文章生成摘要', sub: '[720] 文章生成摘要 · 文本生成', status: '待配置', planned: false,
@@ -1196,6 +1197,8 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
     // 从 NodeConfig 顶层读 structuredConfig 写回 code_rule，回读不填的话刷新后"看到的"与
     // "会写进去的"就对不上了（翻译助手的源/目标语言靠它回填编排 Tab 的两个下拉）。
     if (step.codeRule != null) cfg.structuredConfig = step.codeRule
+    // 打标签/摘要节点同理：模型选择存 core_param，回读后靠它回填编排 Tab 的模型下拉。
+    if (step.coreParam != null) cfg.coreParam = step.coreParam
     applyStepTaskFields(cfg, step)
     applyRuleStepTables(cfg, step)
   }
