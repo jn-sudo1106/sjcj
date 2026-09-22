@@ -5,7 +5,7 @@
 //   ③ 删除后新增行 K 序补齐、已落库列不动。
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessage } from 'element-plus'
 import TableEditDialog from './TableEditDialog.vue'
 import { entryApi, type EntryType } from '@/api'
 
@@ -15,6 +15,13 @@ const TABLE: EntryType = {
     { prop: 'url-K2', desc: '链接', type: 'string', required: false, columnName: 'K2', itemId: '12' },
   ],
 }
+
+// 保存失败要弹 ElMessage.error（2026-09-22）：真实实现会往 body 插 DOM，
+// 这里只关心"有没有喊出来"，所以把两个用到的方法换成 spy
+vi.mock('element-plus', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('element-plus')>()
+  return { ...actual, ElMessage: { success: vi.fn(), warning: vi.fn(), error: vi.fn(), info: vi.fn() } }
+})
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -119,5 +126,37 @@ describe('TableEditDialog · 迁移欠账补齐', () => {
     const w = await mountDialog()
     await clickOk(w)
     expect(save.mock.calls[0][0].fields.map((f) => [f.itemId, f.columnName])).toEqual([['11', 'K1'], ['12', 'K2']])
+  })
+
+  // 2026-09-22 用户在生产报「新建表点确定没反应」。原因：entrySave 在生产必然抛
+  // （config/entryTypeAddAll 标了 danger 但不在生产写白名单，守卫在发请求前就拦下），
+  // 而这里是裸 await，抛错变成未捕获 rejection、界面毫无反应。
+  it('保存失败时给出错误提示，且**不关弹窗**（字段表填了十几行，关掉就全丢）', async () => {
+    const msg = '生产环境写保护：端点 [config/entryTypeAddAll] 不在允许清单，已阻止发送，未联网'
+    vi.spyOn(entryApi, 'entrySave').mockRejectedValue(new Error(msg))
+    const w = await mountDialog()
+    await clickOk(w)
+    await flushPromises()
+
+    expect(ElMessage.error).toHaveBeenCalledWith(msg)
+    // 没有 emit 关闭，也没有 emit saved
+    expect(w.emitted('update:open')).toBeUndefined()
+    expect(w.emitted('saved')).toBeUndefined()
+  })
+
+  it('保存中按钮禁用并改文案，避免连点把同一张表建两次', async () => {
+    let release: (v: { tableId: string }) => void = () => {}
+    vi.spyOn(entryApi, 'entrySave').mockReturnValue(new Promise((r) => { release = r }) as never)
+    const w = await mountDialog()
+    const ok = w.findAll('button').find((b) => b.text() === '确定')!
+    await ok.trigger('click')
+    await flushPromises()
+
+    const busy = w.findAll('button').find((b) => b.text() === '保存中…')
+    expect(busy).toBeTruthy()
+    expect(busy!.attributes('disabled')).toBeDefined()
+
+    release({ tableId: '2103330' })
+    await flushPromises()
   })
 })

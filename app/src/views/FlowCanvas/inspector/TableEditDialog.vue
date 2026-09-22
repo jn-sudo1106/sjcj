@@ -186,7 +186,11 @@ function validate(): string {
   return ''
 }
 
+/** 保存中：按钮禁用，避免连点把同一张表建两次 */
+const saving = ref(false)
+
 async function onSave() {
+  if (saving.value) return
   touched.value = true
   const err = validate()
   if (err) {
@@ -217,10 +221,27 @@ async function onSave() {
       seq: i + 1,
     })),
   }
-  const res = await entryApi.entrySave(entry)
-  ElMessage.success(res?.message || '已保存（演示）')
-  emit('saved', res.tableId)
-  close()
+  /**
+   * 失败必须**说出来**（2026-09-22 用户在生产报「新建表点确定没反应」）。
+   *
+   * 原先这里是裸 `await`：`entrySave` 一抛错就成了未捕获的 rejection，界面毫无反应。
+   * 而它在生产上**必然抛**——`config/entryTypeAddAll` 标了 danger 但不在
+   * `PRODUCTION_CREATE_ENDPOINTS` 白名单里，生产写守卫在发请求之前就拦下了
+   * （错误原文：「生产环境写保护：端点 [...] 不在允许清单…已阻止发送，未联网」）。
+   *
+   * 失败时**不关弹窗**：字段表可能填了十几行，关掉就全丢了。
+   */
+  saving.value = true
+  try {
+    const res = await entryApi.entrySave(entry)
+    ElMessage.success(res?.message || '已保存（演示）')
+    emit('saved', res.tableId)
+    close()
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '保存失败，请重试')
+  } finally {
+    saving.value = false
+  }
 }
 function close() {
   emit('update:open', false)
@@ -393,7 +414,7 @@ function submitImport() {
 
     <template #footer>
       <button class="rc-btn" type="button" @click="close">取消</button>
-      <button class="rc-btn primary" type="button" @click="onSave">确定</button>
+      <button class="rc-btn primary" type="button" :disabled="saving" @click="onSave">{{ saving ? '保存中…' : '确定' }}</button>
     </template>
   </el-dialog>
 
