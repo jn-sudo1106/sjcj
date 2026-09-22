@@ -609,9 +609,16 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       expect(promptCalls()[0]).toContain('category=rule')
       expect(decodeURIComponent(promptCalls()[0])).toContain('node_type_name=文章生成摘要')
       expect(flow.configs['article-1'].execCfg?.systemPrompt).toBe(ARTICLE_TEMPLATE.systemPrompt)
-      // 只读展示实际会发出去的那一份
+      // 查看系统提示词改为打开脚本编辑工作台同款的只读弹窗
       await wrapper.get('[data-testid="article-prompt-toggle"]').trigger('click')
-      expect(wrapper.get('[data-testid="article-prompt-text"]').text()).toContain('文章摘要生成助手')
+      await flushPromises()
+      const dialog = wrapper.findComponent(RuleWorkbenchDialog)
+      expect(dialog.props('open')).toBe(true)
+      expect(dialog.props('promptPreviewOnly')).toBe(true)
+      expect(dialog.find('[data-testid="prompt-preview-dialog"]').exists()).toBe(true)
+      expect((dialog.get('[data-testid="prompt-preview-textarea"]').element as HTMLTextAreaElement).value).toContain('文章摘要生成助手')
+      expect(wrapper.find('[data-testid="article-prompt-text"]').exists()).toBe(false)
+      wrapper.unmount()
     })
 
     it('提示词表里没有这一行时给出明确提示', async () => {
@@ -968,7 +975,14 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       })
       expect(flow.configs['tag-1'].execCfg?.systemPrompt).toBe(TAG_TEMPLATE.systemPrompt)
       await wrapper.get('[data-testid="tag-prompt-toggle"]').trigger('click')
-      expect(wrapper.get('[data-testid="tag-prompt-text"]').text()).toContain('舆情监控文本标注引擎')
+      await flushPromises()
+      const dialog = wrapper.findComponent(RuleWorkbenchDialog)
+      expect(dialog.props('open')).toBe(true)
+      expect(dialog.props('promptPreviewOnly')).toBe(true)
+      expect(dialog.find('[data-testid="prompt-preview-dialog"]').exists()).toBe(true)
+      expect((dialog.get('[data-testid="prompt-preview-textarea"]').element as HTMLTextAreaElement).value).toContain('舆情监控文本标注引擎')
+      expect(wrapper.find('[data-testid="tag-prompt-text"]').exists()).toBe(false)
+      wrapper.unmount()
     })
 
     it('提示词表里的系统提示词可展开查看', async () => {
@@ -977,7 +991,36 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       await flushPromises()
 
       await wrapper.get('[data-testid="tag-prompt-toggle"]').trigger('click')
-      expect(wrapper.get('[data-testid="tag-prompt-text"]').text()).toContain('舆情监控文本标注引擎')
+      await flushPromises()
+      const dialog = wrapper.findComponent(RuleWorkbenchDialog)
+      expect(dialog.props('open')).toBe(true)
+      expect(dialog.props('promptPreviewOnly')).toBe(true)
+      expect(dialog.find('[data-testid="prompt-preview-dialog"]').exists()).toBe(true)
+      expect((dialog.get('[data-testid="prompt-preview-textarea"]').element as HTMLTextAreaElement).value).toContain('舆情监控文本标注引擎')
+      wrapper.unmount()
+    })
+
+    it('系统提示词预览支持编辑，并按当前节点 configId 保存到配置 prompt', async () => {
+      const { flow, wrapper } = mountOnTagNode()
+      flow.configs['tag-1'].configId = '140016929'
+      const updateSpy = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: '提示词已保存' })
+      await flushPromises()
+      await flushPromises()
+
+      await wrapper.get('[data-testid="tag-prompt-toggle"]').trigger('click')
+      await flushPromises()
+      const dialog = wrapper.findComponent(RuleWorkbenchDialog)
+      const textarea = dialog.get('[data-testid="prompt-preview-textarea"]')
+      await textarea.setValue('用户二次编辑后的系统提示词')
+      await dialog.get('[data-testid="prompt-preview-save"]').trigger('click')
+      await flushPromises()
+
+      expect(updateSpy).toHaveBeenCalledWith({
+        configId: '140016929',
+        prompt: '用户二次编辑后的系统提示词',
+      })
+      expect(flow.configs['tag-1'].execCfg?.systemPrompt).toBe('用户二次编辑后的系统提示词')
+      wrapper.unmount()
     })
 
     it('提示词表里没有这一行时不显示其他配置元素', async () => {
