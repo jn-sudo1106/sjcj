@@ -904,6 +904,16 @@ export function taskInstFromLegacy(input: unknown): TaskInst {
     parentId: record.parentId == null ? undefined : String(record.parentId),
     updatedAt: String(record.updateDt ?? record.updatedAt ?? ''),
     taskSpecId: record.taskSpecId == null ? undefined : String(record.taskSpecId),
+    bizId: record.bizId != null ? String(record.bizId) : (record.entryId != null ? String(record.entryId) : undefined),
+    taskUrl: record.taskUrl != null ? String(record.taskUrl) : (record.url != null ? String(record.url) : undefined),
+    fileId: record.fileId == null ? undefined : String(record.fileId),
+    flowId: record.flowId == null ? undefined : String(record.flowId),
+    params: record.params != null ? String(record.params) : (record.taskParams != null ? String(record.taskParams) : undefined),
+    taskResult: record.taskResult != null ? String(record.taskResult) : (record.result != null ? String(record.result) : undefined),
+    vars: record.vars == null ? undefined : String(record.vars),
+    createdAt: record.createDt != null ? String(record.createDt) : (record.createdAt != null ? String(record.createdAt) : undefined),
+    startedAt: record.startDt != null ? String(record.startDt) : (record.startedAt != null ? String(record.startedAt) : undefined),
+    endedAt: record.endDt != null ? String(record.endDt) : (record.endedAt != null ? String(record.endedAt) : undefined),
   }
 }
 

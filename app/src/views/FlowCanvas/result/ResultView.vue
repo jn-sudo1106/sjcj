@@ -49,6 +49,7 @@ const siteId = computed(() => source.value?.siteId ?? '')
 const tabKey = computed(() => sourceId.value)
 const queryNodeId = computed(() => String(route.query.nodeId ?? ''))
 const queryScriptPath = computed(() => String(route.query.scriptPath ?? '').trim())
+const queryDataId = computed(() => String(route.query.dataId ?? '').trim())
 
 // 节点候选不再要求"必须有输出表"（0812 计划 M2-6，方案 §6.3）：结构节点（决策/分头）
 // 选中后走只读上下文 + 空态分支，不强行伪装成有数据的节点；候选就是流程里的全部真实节点。
@@ -76,6 +77,8 @@ if (pendingCondition) {
   filters.state = pendingCondition.state ?? ''
   filters.dataId = pendingCondition.dataId ?? ''
   filters.parentId = pendingCondition.parentId ?? ''
+} else if (queryDataId.value) {
+  filters.dataId = queryDataId.value
 }
 
 // 节点轨道**默认收起**（0910 会议 §2-2「点数据视图时自动收起上方流程配置区域」）。
@@ -842,6 +845,13 @@ watch(queryNodeId, (id) => {
   if (id && allNodes.value.some((n) => n.id === id)) onSelectNode(id)
 })
 
+watch(queryDataId, (dataId) => {
+  if (dataId && dataId !== filters.dataId) {
+    filters.dataId = dataId
+    runQuery()
+  }
+})
+
 // 条件改了但还没查：上一次的结果（尤其是失败态）此刻已经不对应输入框里的条件了。
 // 不清理的话表现极具误导性——2026-08-20 实测：输入一个错的条件回车失败后，
 // 把输入框清空、重新打字，那条"真实数据接口暂不可用"和 0 行的空表格一直挂着不走，
@@ -1128,6 +1138,19 @@ function runQuery() {
 }
 // el-pagination 的 v-model:page-size 已经把 size.value 设成新值了，这里只管"页大小变了要
 // 从第一页重新查"这半件事，跟 runQuery 是同一件事，不用另起一个函数。
+/**
+ * 清掉单个条件（2026-09-22）。
+ *
+ * 数据 ID / 父 ID **没有输入框**：只能由别处带进来（任务视图点「数据 ID」定位、
+ * 数据行点「下级」）。不显示出来就是一个**隐形筛选**——筛不到时表格看着完全正常，
+ * 只是空的，用户会当成"这条数据没了"。实测从任务视图点数据 ID 跳过来正是这样。
+ * 所以给这两个条件配可一键清除的标签，`清空` 之外还得能只去掉这一条。
+ */
+function clearOneFilter(key: 'dataId' | 'parentId') {
+  filters[key] = ''
+  runQuery()
+}
+
 function clearFilters() {
   filters.dataId = ''
   filters.parentId = ''
@@ -1465,6 +1488,25 @@ async function onTestScript() {
         <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="selectedTable" :table-name="meta?.tableName" :fields="queryFields" class="rv-sql">
           <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="rv-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，可点右端漏斗按字段查询（如 K23 = '...'）" />
         </SqlConditionEditor>
+        <!-- 数据 ID / 父 ID 这两个条件没有输入框，不摆出来就是隐形筛选（见 clearOneFilter） -->
+        <span v-if="filters.dataId || filters.parentId" class="rv-cond-chips" data-testid="data-cond-chips">
+          <button
+            v-if="filters.dataId"
+            class="rv-cond-chip"
+            type="button"
+            data-testid="data-cond-chip-dataId"
+            title="当前只看这一条数据；点击清除这个条件"
+            @click="clearOneFilter('dataId')"
+          >数据 ID：{{ filters.dataId }} <span class="rv-cond-x">×</span></button>
+          <button
+            v-if="filters.parentId"
+            class="rv-cond-chip"
+            type="button"
+            data-testid="data-cond-chip-parentId"
+            title="当前只看这条数据的下级；点击清除这个条件"
+            @click="clearOneFilter('parentId')"
+          >父 ID：{{ filters.parentId }} <span class="rv-cond-x">×</span></button>
+        </span>
         <span class="rv-actions">
           <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
           <button class="rc-btn" type="button" @click="clearFilters">清空</button>
@@ -1978,6 +2020,10 @@ async function onTestScript() {
    保证任何宽度下都点得到。 */
 /* 不再 sticky：那是为横向滚动时钉住按钮准备的，改成换行后没有横向滚动，渐变底也失去意义 */
 .rv-actions { display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; }
+.rv-cond-chips { display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; }
+.rv-cond-chip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border: 1px solid var(--rc-primary-bd, #bfdbfe); border-radius: 12px; background: var(--rc-primary-bg, #eff6ff); color: var(--rc-primary-ink, #1d4ed8); font-size: 11px; cursor: pointer; white-space: nowrap; }
+.rv-cond-chip:hover { border-color: var(--rc-primary); }
+.rv-cond-x { color: var(--rc-muted); font-size: 12px; }
 .ctx-piece { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--rc-text-2); white-space: nowrap; }
 .ctx-piece .k { font-size: 11px; color: var(--rc-faint); }
 .ctx-piece .v.code { font-family: var(--rc-mono, monospace); font-size: 11.5px; }

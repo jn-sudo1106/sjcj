@@ -241,6 +241,26 @@ export interface TaskInst {
   updatedAt: string
   /** 任务规格 ID（类型代码），任务实例弹窗筛选/展示用（方案 §1.6-5 TaskInst） */
   taskSpecId?: string
+  /** 业务数据 ID（0917-01） */
+  bizId?: string
+  /** 任务目标 URL（0917-01） */
+  taskUrl?: string
+  /** 关联文件 ID（0917-01） */
+  fileId?: string
+  /** 所属流程 ID（0917-01） */
+  flowId?: string
+  /** 任务入参（0917-01） */
+  params?: string
+  /** 任务执行结果（0917-01） */
+  taskResult?: string
+  /** 上下文变量（0917-01） */
+  vars?: string
+  /** 生成时间（0917-01） */
+  createdAt?: string
+  /** 开始执行时间（0917-01） */
+  startedAt?: string
+  /** 执行结束时间（0917-01） */
+  endedAt?: string
 }
 
 /** 任务实例分页查询（TaskInstDialog，方案 §1.6-5） */

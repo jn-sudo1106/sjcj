@@ -896,6 +896,59 @@ describe('任务实例字段适配', () => {
       updatedAt: '2026-07-13 10:00',
     })
   })
+
+  it('0917-01：正确映射 9 个扩展字段（bizId/taskUrl/fileId/flowId/params/taskResult/vars 及 createDt/startDt/endDt 时间改名）', () => {
+    const inst = taskInstFromLegacy({
+      taskId: '88801',
+      state: 'E',
+      actionName: '详情抓取',
+      taskName: '文章详情',
+      sourceId: '1001',
+      bizId: '986079',
+      taskUrl: 'https://example.com/article/1',
+      fileId: 'file_001',
+      flowId: 'flow_99',
+      params: '{"page":1}',
+      taskResult: '{"status":"fail","error":"timeout"}',
+      vars: '{"retry":2}',
+      createDt: '2026-09-17 10:00:00',
+      startDt: '2026-09-17 10:00:05',
+      endDt: '2026-09-17 10:00:15',
+    })
+    expect(inst).toMatchObject({
+      bizId: '986079',
+      taskUrl: 'https://example.com/article/1',
+      fileId: 'file_001',
+      flowId: 'flow_99',
+      params: '{"page":1}',
+      taskResult: '{"status":"fail","error":"timeout"}',
+      vars: '{"retry":2}',
+      createdAt: '2026-09-17 10:00:00',
+      startedAt: '2026-09-17 10:00:05',
+      endedAt: '2026-09-17 10:00:15',
+    })
+  })
+
+  it('0917-01：兼容已是新字段名的记录或别名（entryId/url/taskParams/result/createdAt/startedAt/endedAt）', () => {
+    const inst = taskInstFromLegacy({
+      taskId: '88802',
+      state: 'C',
+      entryId: '986080',
+      url: 'https://example.com/article/2',
+      taskParams: '{"id":2}',
+      result: 'success',
+      createdAt: '2026-09-17 11:00:00',
+      startedAt: '2026-09-17 11:00:02',
+      endedAt: '2026-09-17 11:00:08',
+    })
+    expect(inst.bizId).toBe('986080')
+    expect(inst.taskUrl).toBe('https://example.com/article/2')
+    expect(inst.params).toBe('{"id":2}')
+    expect(inst.taskResult).toBe('success')
+    expect(inst.createdAt).toBe('2026-09-17 11:00:00')
+    expect(inst.startedAt).toBe('2026-09-17 11:00:02')
+    expect(inst.endedAt).toBe('2026-09-17 11:00:08')
+  })
 })
 
 // 0915-14：后端 2026-09-16 给 cfg_site 加了 tags 列（在此之前这里硬编码空数组）

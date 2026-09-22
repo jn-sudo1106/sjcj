@@ -91,6 +91,7 @@ describe('ResultView', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     delete mockRouteQuery.scriptPath
+    delete mockRouteQuery.dataId
   })
 
   it('以当前源流程展示无首尾节点的节点条，且只查当前源数据（不提供所属源筛选——本页始终锁定在进入时的具体源，2026-08-14 第五次纠偏去掉了容易让人切到同站其他源的下拉）', async () => {
@@ -2259,6 +2260,79 @@ describe('ResultView · 节点右键菜单（0917-06 / 0917-08）', () => {
     ;(await openMenuOn(wrapper, ids[0])).get('[data-testid="rail-menu-restore-all"]').trigger('click')
     await flushPromises()
     expect(wrapper.findComponent({ name: 'ProcessNodeRail' }).props('skipped')).toEqual([])
+  })
+})
+
+describe('ResultView · 0917-01 任务跳转定位（query.dataId）', () => {
+  // mockRouteQuery 是模块级共享对象，上面那个 describe 的 afterEach 管不到这里——
+  // 不清的话 dataId 会漏给后面的用例（2026-09-22 被下面那条"没有条件时不显示标签"撞出来）
+  afterEach(() => {
+    vi.restoreAllMocks()
+    delete mockRouteQuery.dataId
+    delete mockRouteQuery.parentId
+  })
+
+  it('URL 中带有 dataId 时自动预填 filters.dataId 并作为条件发起查询', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+
+    mockRouteQuery.dataId = 'data_986079'
+    const queryPaged = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+
+    expect(queryPaged).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dataId: 'data_986079',
+      }),
+    )
+
+    wrapper.unmount()
+  })
+
+  // 2026-09-22：数据 ID / 父 ID **没有输入框**（只能由任务视图「定位数据」、数据行「下级」
+  // 带进来）。不摆出来就是隐形筛选——实测从任务视图点数据 ID 跳过来筛不到时，看到的是一个
+  // 完全正常的空表格，会当成"这条数据没了"，而不是"我被筛住了"。
+  it('带 dataId 进来时摆出可一键清除的条件标签，清掉后重查且不再带这个条件', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+
+    mockRouteQuery.dataId = 'data_986079'
+    const queryPaged = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+
+    const chip = wrapper.get('[data-testid="data-cond-chip-dataId"]')
+    expect(chip.text()).toContain('data_986079')
+    expect(wrapper.find('[data-testid="data-cond-chip-parentId"]').exists()).toBe(false)
+
+    queryPaged.mockClear()
+    await chip.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="data-cond-chip-dataId"]').exists()).toBe(false)
+    expect(queryPaged).toHaveBeenCalled()
+    expect(queryPaged.mock.calls.at(-1)?.[0]).toMatchObject({ dataId: undefined })
+
+    wrapper.unmount()
+  })
+
+  it('没有这两个条件时不显示条件标签区', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="data-cond-chips"]').exists()).toBe(false)
+
+    wrapper.unmount()
   })
 })
 

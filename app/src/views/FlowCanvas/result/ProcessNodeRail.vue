@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { iconFor, type HorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
+import { iconFor, nodeTaskQueue, type HorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
+
+type RailNode = HorizontalLayout['nodes'][number]
 
 const props = withDefaults(defineProps<{
   layout: HorizontalLayout
@@ -8,9 +10,11 @@ const props = withDefaults(defineProps<{
   selectable?: (nodeId: string) => boolean
   /** 运行状态由任务/数据查看等只读视图提供；画布编辑态不传。 */
   nodeStates?: Record<string, string | undefined>
+  /** 节点队列映射（0917-03）：任务/数据视图若已知运行时队列可传入，优先展示 */
+  nodeQueues?: Record<string, string | undefined>
   /** 本次不发后续的节点（0917-06）：半透明 + 角标，一眼看出这次不跑哪些 */
   skipped?: string[]
-}>(), { modelValue: '', selectable: () => true, nodeStates: () => ({}), skipped: () => [] })
+}>(), { modelValue: '', selectable: () => true, nodeStates: () => ({}), nodeQueues: () => ({}), skipped: () => [] })
 const emit = defineEmits<{
   'update:modelValue': [nodeId: string]
   /**
@@ -35,6 +39,31 @@ function pick(nodeId: string) {
 function stateText(state?: string) {
   return state === 'E' ? '异常' : state === 'L' ? '运行中' : state === 'C' ? '完成' : state === 'D' ? '已停用' : ''
 }
+
+function queueForNode(node: RailNode): string {
+  return props.nodeQueues?.[node.id] || nodeTaskQueue(node.cfg) || ''
+}
+
+function subText(node: RailNode): string {
+  const queue = queueForNode(node)
+  return queue || node.cfg.sub || ''
+}
+
+function nodeTitle(node: RailNode): string {
+  const queue = queueForNode(node)
+  const sub = node.cfg.sub
+  const title = node.cfg.title
+  if (queue && sub && queue !== sub) {
+    return `${title} (${sub} · ${queue})`
+  }
+  if (queue) {
+    return `${title} (${queue})`
+  }
+  if (sub) {
+    return `${title} (${sub})`
+  }
+  return title
+}
 </script>
 
 <template>
@@ -56,6 +85,7 @@ function stateText(state?: string) {
       type="button"
       :data-node-id="node.id"
       :data-testid="`rail-node-${node.id}`"
+      :title="nodeTitle(node)"
       :style="{ left: `${node.pos.left}px`, top: `${node.pos.top}px`, width: `${node.pos.width}px`, height: `${node.pos.height}px` }"
       @click="pick(node.id)"
       @contextmenu="onNodeMenu($event, node.id)"
@@ -63,7 +93,7 @@ function stateText(state?: string) {
       <span class="pnr-node-icon">{{ iconFor(node.cfg) }}</span>
       <span class="pnr-node-text">
         <b>{{ node.cfg.title }}</b>
-        <small v-if="node.cfg.sub" class="pnr-node-sub">{{ node.cfg.sub }}</small>
+        <small v-if="subText(node)" class="pnr-node-sub">{{ subText(node) }}</small>
       </span>
       <span v-if="nodeStates[node.id]" class="pnr-node-state" :class="`state-${nodeStates[node.id]}`" :title="stateText(nodeStates[node.id])" :aria-label="stateText(nodeStates[node.id])" />
       <span v-if="node.id === finalNodeId" class="pnr-node-final">最终结果</span>

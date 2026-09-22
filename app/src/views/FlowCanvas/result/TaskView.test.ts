@@ -3,12 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import TaskView from './TaskView.vue'
+import TaskViewSource from './TaskView.vue?raw'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
 import { dataApi, siteApi, sourceApi, type TaskInst } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useAuthStore } from '@/stores/auth'
+import { useWorkspaceStore } from '@/stores/workspace'
 
 const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
 
@@ -278,5 +280,515 @@ describe('TaskView', () => {
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ queue: undefined, topic: undefined }))
 
     wrapper.unmount()
+  })
+
+  describe('0917-01 · 任务行定位信息与详情抽屉', () => {
+    it('表格渲染「数据 ID」与「任务 URL」列，空值渲染「—」', async () => {
+      setActivePinia(createPinia())
+      await router.push('/canvas')
+      const source = mockSourceDetail({ sourceId: '391007768' })!
+      useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+
+      vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
+        total: 2,
+        list: [
+          {
+            taskId: 't1',
+            bizId: 'data_1001',
+            taskUrl: 'https://example.com/article/1',
+            state: 'C',
+            typeName: '详情抓取',
+            taskName: '文章1',
+            sourceId: source.sourceId,
+            node: 'n_detail',
+            updatedAt: '2026-09-17 10:00',
+          },
+          {
+            taskId: 't2',
+            state: 'E',
+            typeName: '源级任务',
+            taskName: '文章列表',
+            sourceId: source.sourceId,
+            updatedAt: '2026-09-17 10:01',
+          },
+        ],
+      })
+
+      const wrapper = shallowMount(TaskView, {
+        global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      await flushPromises()
+
+      const tableText = wrapper.get('[data-testid="source-task-table"]').text()
+      expect(tableText).toContain('数据 ID')
+      expect(tableText).toContain('任务 URL')
+
+      // 第一行有 bizId 与 taskUrl
+      const bizLink = wrapper.find('[data-testid="task-biz-link"]')
+      expect(bizLink.exists()).toBe(true)
+      expect(bizLink.text()).toBe('data_1001')
+
+      const urlLink = wrapper.find('[data-testid="task-url-link"]')
+      expect(urlLink.exists()).toBe(true)
+      expect(urlLink.attributes('href')).toBe('https://example.com/article/1')
+      expect(urlLink.attributes('target')).toBe('_blank')
+
+      // 第二行 bizId 与 taskUrl 为空，渲染 —
+      const rows = wrapper.findAll('tbody tr')
+      expect(rows.length).toBe(2)
+      expect(rows[1].text()).toContain('—')
+
+      wrapper.unmount()
+    })
+
+    // 2026-09-22 生产实测：`task.node` 映射自后端 `nodeCode`，那是**队列名**
+    //（`nodeCode: "news_wechat"`，同一条记录的 `stepId` 是 null），不是步骤 ID。
+    // 而数据视图按节点 ID 选中节点（ResultView 的 allNodes.some(n => n.id === id)，id = stepId），
+    // 拿 nodeCode 当 nodeId 传过去永远匹配不上——跳过去停在原来的节点上，多节点源就查错表。
+    // 所以改成按 configId 解析回真步骤，解析不出来就干脆不带。
+    const LOCATE_STEPS = [
+      { stepId: '391007768-s1', sourceId: '391007768', name: '列表抓取', configId: 'cfg-1', enabled: true },
+      { stepId: '391007768-s2', sourceId: '391007768', name: '详情解析', configId: 'cfg-2', enabled: true },
+    ]
+
+    async function clickBizLink(task: Partial<TaskInst>) {
+      setActivePinia(createPinia())
+      await router.push('/canvas')
+      const source = mockSourceDetail({ sourceId: '391007768' })!
+      useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+      // stepsBySource 由 loadNodeMetadata 填，它要 siteSources 里有这个源（见 TaskView 里
+      // 「网站态未选定具体源时不拉」那段说明），光 loadFromSource 填的是 flow store，不是这里
+      vi.spyOn(siteApi, 'siteSources').mockResolvedValue([{ sourceId: source.sourceId, name: '源 A' }] as never)
+      vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(LOCATE_STEPS as never)
+      vi.spyOn(sourceApi, 'sourceNodeRuns').mockResolvedValue([])
+
+      vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
+        total: 1,
+        list: [{
+          taskId: 't1', bizId: 'data_986079', state: 'E', typeName: '详情抓取',
+          taskName: '文章详情', sourceId: source.sourceId, updatedAt: '2026-09-17 10:00',
+          ...task,
+        } as TaskInst],
+      })
+
+      const pushSpy = vi.spyOn(router, 'push')
+      const wrapper = shallowMount(TaskView, {
+        global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      await flushPromises()
+      await wrapper.get('[data-testid="task-biz-link"]').trigger('click')
+      const call = pushSpy.mock.calls.at(-1)?.[0] as { path: string; query: Record<string, unknown> }
+      wrapper.unmount()
+      return { call, source }
+    }
+
+    it('点击「数据 ID」跳数据视图带 dataId；node 是队列名时不塞无效的 nodeId', async () => {
+      const { call, source } = await clickBizLink({ node: 'news_wechat' })
+
+      expect(call.path).toBe('/canvas')
+      expect(call.query).toMatchObject({ sourceId: source.sourceId, view: 'data', dataId: 'data_986079' })
+      // 传一个匹配不上的 nodeId 只会留在 URL 里误导人（分享/刷新时更明显）
+      expect(call.query.nodeId).toBeUndefined()
+    })
+
+    it('能按 configId 找回那一步时，nodeId 传的是真正的 stepId', async () => {
+      const { call } = await clickBizLink({ node: 'news_wechat', configId: 'cfg-2' })
+
+      expect(call.query.nodeId).toBe('391007768-s2')
+    })
+
+    it('每行都有「详情」按钮，点击弹出 TaskDetailDrawer 并传入选中任务', async () => {
+      setActivePinia(createPinia())
+      await router.push('/canvas')
+      const source = mockSourceDetail({ sourceId: '391007768' })!
+      useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+
+      const taskItem: TaskInst = {
+        taskId: 't_detail_1',
+        bizId: 'data_123',
+        state: 'C',
+        typeName: '下载',
+        taskName: '附件下载',
+        sourceId: source.sourceId,
+        updatedAt: '2026-09-17 10:00',
+        params: '{"f":1}',
+      }
+
+      vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
+        total: 1,
+        list: [taskItem],
+      })
+
+      const wrapper = shallowMount(TaskView, {
+        global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      await flushPromises()
+
+      const detailBtn = wrapper.get('[data-testid="task-detail-btn"]')
+      expect(detailBtn.text()).toBe('详情')
+
+      const drawer = wrapper.findComponent({ name: 'TaskDetailDrawer' })
+      expect(drawer.exists()).toBe(true)
+      expect(drawer.props('modelValue')).toBe(false)
+
+      await detailBtn.trigger('click')
+      await flushPromises()
+
+      expect(drawer.props('modelValue')).toBe(true)
+      expect(drawer.props('task')).toMatchObject({ taskId: 't_detail_1' })
+
+      wrapper.unmount()
+    })
+
+    it('具体源下点击「任务 ID」链接直接右侧弹出详情抽屉', async () => {
+      setActivePinia(createPinia())
+      await router.push('/canvas')
+      const source = mockSourceDetail({ sourceId: '391007768' })!
+      useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+
+      const taskItem: TaskInst = {
+        taskId: 't_click_id_1',
+        bizId: 'data_456',
+        state: 'E',
+        typeName: '详情抓取',
+        taskName: '正文采集',
+        sourceId: source.sourceId,
+        updatedAt: '2026-09-17 10:00',
+      }
+
+      vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
+        total: 1,
+        list: [taskItem],
+      })
+
+      const wrapper = shallowMount(TaskView, {
+        global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      await flushPromises()
+
+      const idLink = wrapper.get('[data-testid="task-id-link"]')
+      expect(idLink.text()).toBe('t_click_id_1')
+
+      const drawer = wrapper.findComponent({ name: 'TaskDetailDrawer' })
+      expect(drawer.props('modelValue')).toBe(false)
+
+      await idLink.trigger('click')
+      await flushPromises()
+
+      expect(drawer.props('modelValue')).toBe(true)
+      expect(drawer.props('task')).toMatchObject({ taskId: 't_click_id_1' })
+
+      wrapper.unmount()
+    })
+
+    it('全部源（网站态 siteWide）下点击「任务 ID」链接直接右侧弹出详情抽屉', async () => {
+      setActivePinia(createPinia())
+      await router.push('/canvas')
+
+      const taskItem: TaskInst = {
+        taskId: 't_sitewide_click_2',
+        bizId: 'data_789',
+        state: 'C',
+        typeName: '列表解析',
+        taskName: '整站列表',
+        sourceId: 'src_site_wide_1',
+        updatedAt: '2026-09-17 11:00',
+      }
+
+      vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
+        total: 1,
+        list: [taskItem],
+      })
+      vi.spyOn(siteApi, 'siteSources').mockResolvedValue([
+        { sourceId: 'src_site_wide_1', name: '全网源1' },
+      ] as never)
+
+      const wrapper = shallowMount(TaskView, {
+        props: { siteWide: true, siteId: 'site-999' },
+        global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      await flushPromises()
+
+      const idLink = wrapper.get('[data-testid="task-id-link"]')
+      expect(idLink.text()).toBe('t_sitewide_click_2')
+
+      const drawer = wrapper.findComponent({ name: 'TaskDetailDrawer' })
+      expect(drawer.props('modelValue')).toBe(false)
+
+      await idLink.trigger('click')
+      await flushPromises()
+
+      expect(drawer.props('modelValue')).toBe(true)
+      expect(drawer.props('task')).toMatchObject({ taskId: 't_sitewide_click_2' })
+
+      wrapper.unmount()
+    })
+  })
+
+  describe('0917-02 · 所属源可点', () => {
+    it('全部源态下点击所属源链接，打开源页签并跳转到该源任务视图', async () => {
+      setActivePinia(createPinia())
+      await router.push('/canvas')
+      const ws = useWorkspaceStore()
+      const pushSpy = vi.spyOn(router, 'push')
+
+      vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
+        total: 1,
+        list: [
+          {
+            taskId: 't_sw_1',
+            state: 'C',
+            typeName: '列表采集',
+            taskName: '网站任务',
+            sourceId: 'src_sw_101',
+            updatedAt: '2026-09-17 12:00',
+          },
+        ],
+      })
+      vi.spyOn(siteApi, 'siteSources').mockResolvedValue([
+        { sourceId: 'src_sw_101', name: '全网源101' },
+      ] as never)
+
+      const wrapper = shallowMount(TaskView, {
+        props: { siteWide: true, siteId: 'site-demo' },
+        global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      await flushPromises()
+
+      const sourceLink = wrapper.get('[data-testid="task-source-link"]')
+      expect(sourceLink.text()).toBe('全网源101')
+
+      await sourceLink.trigger('click')
+      await flushPromises()
+
+      expect(ws.tabs.some((t) => t.sourceId === 'src_sw_101')).toBe(true)
+      expect(ws.activeSourceId).toBe('src_sw_101')
+      expect(pushSpy).toHaveBeenCalledWith(expect.objectContaining({
+        path: '/canvas',
+        query: expect.objectContaining({
+          siteId: 'site-demo',
+          sourceId: 'src_sw_101',
+          view: 'task',
+        }),
+      }))
+
+      wrapper.unmount()
+    })
+
+    it('页签已满 8 个时，点击所属源照常跳转，但要说一句为什么页签没加上', async () => {
+      setActivePinia(createPinia())
+      await router.push('/canvas')
+      const ws = useWorkspaceStore()
+      // 填满 8 个页签
+      ws.tabs = Array.from({ length: 8 }, (_, i) => ({
+        sourceId: `existing_src_${i}`,
+        name: `源${i}`,
+        seq: 8 - i,
+      }))
+
+      const pushSpy = vi.spyOn(router, 'push')
+
+      vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
+        total: 1,
+        list: [
+          {
+            taskId: 't_sw_full',
+            state: 'C',
+            typeName: '列表采集',
+            taskName: '满额测试',
+            sourceId: 'new_src_999',
+            updatedAt: '2026-09-17 12:00',
+          },
+        ],
+      })
+      vi.spyOn(siteApi, 'siteSources').mockResolvedValue([
+        { sourceId: 'new_src_999', name: '新源999' },
+      ] as never)
+
+      const wrapper = shallowMount(TaskView, {
+        props: { siteWide: true, siteId: 'site-demo' },
+        global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      await flushPromises()
+
+      // 满额时 ws.open 返回 false，页签条一动不动。**不拦截是对的**（内容照常显示），
+      // 但一声不响就等于"点了没反应"——另两处调用（FlowCanvas/index.vue、SiteDataView.vue）
+      // 一直有这句提示，这里 2026-09-22 补上。
+      const warn = vi.spyOn(ElMessage, 'warning')
+
+      const sourceLink = wrapper.get('[data-testid="task-source-link"]')
+      await sourceLink.trigger('click')
+      await flushPromises()
+
+      expect(ws.activeSourceId).toBe('new_src_999')
+      expect(pushSpy).toHaveBeenCalledWith(expect.objectContaining({
+        path: '/canvas',
+        query: expect.objectContaining({
+          siteId: 'site-demo',
+          sourceId: 'new_src_999',
+          view: 'task',
+        }),
+      }))
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('页签已达上限'))
+
+      wrapper.unmount()
+    })
+
+    // 给 <td> 设 inline-flex/flex 会让它不再是 table-cell，colgroup 那条列宽直接失效
+    //（浏览器实测：同表 200px 的列加上 inline-flex 后实测 95px；真实页面上操作列量到 80px，
+    //  而 <col> 写的是 110px）。0917-03 才刚用 colgroup 定死 13 列，别在这儿拆掉一列。
+    it('操作列的 td 不设 display，否则会脱离 colgroup 的列宽', () => {
+      const actionsCell = /\.tv-actions-cell\s*\{[^}]*\}/.exec(TaskViewSource)?.[0] ?? ''
+      expect(actionsCell).toBeTruthy()
+      expect(actionsCell).not.toMatch(/display\s*:/)
+    })
+
+    it('具体源态下表格同样展示所属源链接，点击可激活该源任务视图', async () => {
+      setActivePinia(createPinia())
+      await router.push('/canvas')
+      const source = mockSourceDetail({ sourceId: '391007768' })!
+      useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+      const ws = useWorkspaceStore()
+      const pushSpy = vi.spyOn(router, 'push')
+
+      vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
+        total: 1,
+        list: [
+          {
+            taskId: 't_single_src',
+            state: 'C',
+            typeName: '采集',
+            taskName: '单源任务',
+            sourceId: source.sourceId,
+            updatedAt: '2026-09-17 12:00',
+          },
+        ],
+      })
+
+      const wrapper = shallowMount(TaskView, {
+        global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      await flushPromises()
+
+      const sourceLink = wrapper.find('[data-testid="task-source-link"]')
+      expect(sourceLink.exists()).toBe(true)
+
+      await sourceLink.trigger('click')
+      await flushPromises()
+
+      expect(ws.activeSourceId).toBe(source.sourceId)
+      expect(pushSpy).toHaveBeenCalledWith(expect.objectContaining({
+        path: '/canvas',
+        query: expect.objectContaining({
+          sourceId: source.sourceId,
+          view: 'task',
+        }),
+      }))
+
+      wrapper.unmount()
+    })
+
+    it('详情抽屉发出 openSource 事件时，关闭抽屉并跳转对应源任务视图', async () => {
+      setActivePinia(createPinia())
+      await router.push('/canvas')
+      const source = mockSourceDetail({ sourceId: '391007768' })!
+      useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+      const pushSpy = vi.spyOn(router, 'push')
+
+      const taskItem: TaskInst = {
+        taskId: 't_drawer_src',
+        state: 'C',
+        typeName: '采集',
+        taskName: '抽屉跳转测试',
+        sourceId: 'src_other_888',
+        updatedAt: '2026-09-17 12:00',
+      }
+
+      vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
+        total: 1,
+        list: [taskItem],
+      })
+
+      const wrapper = shallowMount(TaskView, {
+        global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      await flushPromises()
+
+      const drawer = wrapper.findComponent({ name: 'TaskDetailDrawer' })
+      expect(drawer.exists()).toBe(true)
+
+      drawer.vm.$emit('openSource', taskItem)
+      await flushPromises()
+
+      expect(pushSpy).toHaveBeenCalledWith(expect.objectContaining({
+        path: '/canvas',
+        query: expect.objectContaining({
+          sourceId: 'src_other_888',
+          view: 'task',
+        }),
+      }))
+      expect(drawer.props('modelValue')).toBe(false)
+
+      wrapper.unmount()
+    })
+  })
+
+  describe('0917-03 · 队列名展示与列宽', () => {
+    it('表格 colgroup 为队列列显式分配 180px 宽度', async () => {
+      setActivePinia(createPinia())
+      await router.push('/canvas')
+      const source = mockSourceDetail({ sourceId: '391007768' })!
+      useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+
+      const wrapper = shallowMount(TaskView, {
+        global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      await flushPromises()
+
+      const cols = wrapper.findAll('colgroup col')
+      // 13 列中，第 7 列是队列列（index 6）
+      const queueCol = cols[6]
+      expect(queueCol.attributes('style')).toContain('width: 180px')
+
+      wrapper.unmount()
+    })
+
+    it('具体源态下顶部 ProcessNodeRail 接收到包含队列名的 nodeQueues prop', async () => {
+      setActivePinia(createPinia())
+      await router.push('/canvas')
+      const source = mockSourceDetail({ sourceId: '391007768' })!
+      const steps = mockSourceSteps({ sourceId: source.sourceId })
+      // 为步骤注入 topic / queue
+      if (steps[0]) {
+        steps[0].topic = 'news_snatch_html_download'
+      }
+      useFlowStore().loadFromSource(source, steps)
+
+      const wrapper = shallowMount(TaskView, {
+        global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      await flushPromises()
+
+      const rail = wrapper.findComponent({ name: 'ProcessNodeRail' })
+      expect(rail.exists()).toBe(true)
+      const nodeQueues = rail.props('nodeQueues') as Record<string, string>
+      expect(nodeQueues).toBeDefined()
+      // 轨道上的节点能匹配到该队列
+      const matchedQueue = Object.values(nodeQueues).some((q) => q === 'news_snatch_html_download' || q.length > 0)
+      expect(matchedQueue).toBe(true)
+
+      wrapper.unmount()
+    })
   })
 })
