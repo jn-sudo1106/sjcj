@@ -57,8 +57,17 @@ const size = ref(20)
 const filters = reactive({ sourceId: '', nodeId: '', state: '', queue: '' })
 const processLayout = computed(() => buildHorizontalLayout(flow.main, flow.branches, flow.configs, flow.branchGroups, { includeTerminals: false }))
 const sourceNames = computed(() => Object.fromEntries(siteSources.value.map((item) => [item.sourceId, item.name])))
-// 0917-02：具体源与全部源统一展示「所属源」列，且均可点击打开对应源页签
-const showSourceColumn = computed(() => true)
+/**
+ * 「所属源」列（0917-02 起可点）。
+ *
+ * **筛到了某一个源就不显示**：那时整列每行都是同一个值，130px 纯浪费。
+ * 源态画布下 `filters.sourceId` 恒空（那个下拉只在网站态出现），所以源态照常显示这一列——
+ * 0917-02 要的"具体源态下也能点源名"并不需要把这个条件改成恒真。
+ *
+ * 2026-09-22：这里一度被改成 `computed(() => true)`，连带下面的 `v-if` 和 colspan 三元
+ * 都成了走不到的死分支；按用户要求恢复原语义。
+ */
+const showSourceColumn = computed(() => !filters.sourceId)
 const nodeQueues = computed<Record<string, string>>(() => {
   const map: Record<string, string> = {}
   const targetSourceId = filters.sourceId || sourceId.value
@@ -441,7 +450,7 @@ const nextStepHints = computed(() => {
           <SiteSourceSelect v-if="siteWide && siteId" v-model="filters.sourceId" :site-id="siteId" />
           <select v-if="siteWide && filters.sourceId" v-model="filters.nodeId" class="tv-input" data-testid="task-node-filter" aria-label="流程节点">
             <option value="">全部节点</option>
-            <option v-for="step in filterSteps" :key="`${step.sourceId}-${step.stepId}`" :value="step.stepId">{{ !filters.sourceId ? `${sourceNames[step.sourceId] || step.sourceId} · ${step.name}` : step.name }}</option>
+            <option v-for="step in filterSteps" :key="`${step.sourceId}-${step.stepId}`" :value="step.stepId">{{ showSourceColumn ? `${sourceNames[step.sourceId] || step.sourceId} · ${step.name}` : step.name }}</option>
           </select>
           <select v-model="filters.state" class="tv-input" aria-label="任务状态">
             <option value="">状态（全部）</option>

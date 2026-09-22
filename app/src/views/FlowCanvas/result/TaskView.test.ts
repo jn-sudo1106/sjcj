@@ -650,27 +650,18 @@ describe('TaskView', () => {
       expect(actionsCell).not.toMatch(/display\s*:/)
     })
 
-    it('具体源态下表格同样展示所属源链接，点击可激活该源任务视图', async () => {
+    // 2026-09-22 按用户要求把 showSourceColumn 恢复成原语义 `!filters.sourceId`。
+    // 源态下 filters.sourceId 会被设成当前源（见 TaskView 里那两处
+    // `filters.sourceId = props.siteWide ? '' : sourceId.value`），所以**源态收起这一列**——
+    // 整列每行都是同一个源名，130px 纯浪费。0917-02 要的「所属源可点」是网站态的事
+    //（覆盖见上面那条满额用例），不需要把这个条件改成恒真。
+    it('源态收起「所属源」列（每行同源，纯冗余），空态 colspan 跟着变 12', async () => {
       setActivePinia(createPinia())
       await router.push('/canvas')
       const source = mockSourceDetail({ sourceId: '391007768' })!
       useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
-      const ws = useWorkspaceStore()
-      const pushSpy = vi.spyOn(router, 'push')
 
-      vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
-        total: 1,
-        list: [
-          {
-            taskId: 't_single_src',
-            state: 'C',
-            typeName: '采集',
-            taskName: '单源任务',
-            sourceId: source.sourceId,
-            updatedAt: '2026-09-17 12:00',
-          },
-        ],
-      })
+      vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 0, list: [] })
 
       const wrapper = shallowMount(TaskView, {
         global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
@@ -678,71 +669,13 @@ describe('TaskView', () => {
       await new Promise((resolve) => setTimeout(resolve, 150))
       await flushPromises()
 
-      const sourceLink = wrapper.find('[data-testid="task-source-link"]')
-      expect(sourceLink.exists()).toBe(true)
-
-      await sourceLink.trigger('click')
-      await flushPromises()
-
-      expect(ws.activeSourceId).toBe(source.sourceId)
-      expect(pushSpy).toHaveBeenCalledWith(expect.objectContaining({
-        path: '/canvas',
-        query: expect.objectContaining({
-          sourceId: source.sourceId,
-          view: 'task',
-        }),
-      }))
+      expect(wrapper.findAll('thead th').map((th) => th.text())).not.toContain('所属源')
+      expect(wrapper.find('[data-testid="task-source-link"]').exists()).toBe(false)
+      expect(wrapper.get('.tv-empty-row').attributes('colspan')).toBe('12')
 
       wrapper.unmount()
     })
 
-    it('详情抽屉发出 openSource 事件时，关闭抽屉并跳转对应源任务视图', async () => {
-      setActivePinia(createPinia())
-      await router.push('/canvas')
-      const source = mockSourceDetail({ sourceId: '391007768' })!
-      useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
-      const pushSpy = vi.spyOn(router, 'push')
-
-      const taskItem: TaskInst = {
-        taskId: 't_drawer_src',
-        state: 'C',
-        typeName: '采集',
-        taskName: '抽屉跳转测试',
-        sourceId: 'src_other_888',
-        updatedAt: '2026-09-17 12:00',
-      }
-
-      vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
-        total: 1,
-        list: [taskItem],
-      })
-
-      const wrapper = shallowMount(TaskView, {
-        global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
-      })
-      await new Promise((resolve) => setTimeout(resolve, 150))
-      await flushPromises()
-
-      const drawer = wrapper.findComponent({ name: 'TaskDetailDrawer' })
-      expect(drawer.exists()).toBe(true)
-
-      drawer.vm.$emit('openSource', taskItem)
-      await flushPromises()
-
-      expect(pushSpy).toHaveBeenCalledWith(expect.objectContaining({
-        path: '/canvas',
-        query: expect.objectContaining({
-          sourceId: 'src_other_888',
-          view: 'task',
-        }),
-      }))
-      expect(drawer.props('modelValue')).toBe(false)
-
-      wrapper.unmount()
-    })
-  })
-
-  describe('0917-03 · 队列名展示与列宽', () => {
     it('表格 colgroup 为队列列显式分配 180px 宽度', async () => {
       setActivePinia(createPinia())
       await router.push('/canvas')
@@ -755,10 +688,14 @@ describe('TaskView', () => {
       await new Promise((resolve) => setTimeout(resolve, 150))
       await flushPromises()
 
+      // 按表头位置找队列列，不写死下标：列数会随「所属源」列的开合在 12/13 之间变
+      //（2026-09-22 恢复 showSourceColumn 原语义后，源态是 12 列，队列从 index 6 挪到 5）
+      const headers = wrapper.findAll('thead th').map((th) => th.text())
+      const queueIndex = headers.indexOf('队列')
+      expect(queueIndex).toBeGreaterThan(-1)
       const cols = wrapper.findAll('colgroup col')
-      // 13 列中，第 7 列是队列列（index 6）
-      const queueCol = cols[6]
-      expect(queueCol.attributes('style')).toContain('width: 180px')
+      expect(cols.length).toBe(headers.length)
+      expect(cols[queueIndex].attributes('style')).toContain('width: 180px')
 
       wrapper.unmount()
     })
