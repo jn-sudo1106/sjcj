@@ -70,4 +70,38 @@ describe('TaskScheduleSettings', () => {
     expect(lastPatch(wrapper)).toMatchObject({ scheduleTime: '09:15' })
     expect(lastPatch(wrapper)).not.toHaveProperty('cron')
   })
+
+  // 2026-09-22 用户报「定时为什么关不上」：首次保存定时时源上还没有 job，
+  // NodeInspector 本地造了个 jobId 为空的壳，界面显示「已启用」但那条定时没有 ID，
+  // 一点就是 setJobEnabled([''])、必然回「没有可操作的定时任务」。
+  // 真 jobId 已在保存后回查（见 NodeInspector），这里再加一道：没 ID 就别让人点。
+  const job = (over: Partial<{ jobId: string; disabled: boolean }> = {}) => ({
+    jobId: 'j-1', jobName: 'j', sourceId: 's-1', schedule: '0 0 0 * * ?',
+    runCount: 0, successCount: 0, disabled: false, ...over,
+  })
+
+  it('有 jobId 时开关可点', () => {
+    const w = mount(TaskScheduleSettings, {
+      props: { modelValue: { scheduleType: '每天', scheduleTime: '00:00', weekdays: [], cron: '' }, job: job() },
+    })
+    const toggle = w.get('[data-testid="job-toggle"]')
+    expect(toggle.attributes('disabled')).toBeUndefined()
+    expect(toggle.text()).toContain('已启用')
+  })
+
+  it('jobId 为空（刚保存、还没回查到）时开关禁用，并说明刷新后可用', () => {
+    const w = mount(TaskScheduleSettings, {
+      props: { modelValue: { scheduleType: '每天', scheduleTime: '00:00', weekdays: [], cron: '' }, job: job({ jobId: '' }) },
+    })
+    const toggle = w.get('[data-testid="job-toggle"]')
+    expect(toggle.attributes('disabled')).toBeDefined()
+    expect(toggle.attributes('title')).toContain('刷新页面后可启停')
+  })
+
+  it('正在切换时也禁用（防连点）', () => {
+    const w = mount(TaskScheduleSettings, {
+      props: { modelValue: { scheduleType: '每天', scheduleTime: '00:00', weekdays: [], cron: '' }, job: job(), toggling: true },
+    })
+    expect(w.get('[data-testid="job-toggle"]').attributes('disabled')).toBeDefined()
+  })
 })

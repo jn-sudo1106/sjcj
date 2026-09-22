@@ -162,6 +162,12 @@ const jobToggling = ref(false)
 async function onToggleJob(enabled: boolean) {
   const job = flow.sourceJob
   if (!job || jobToggling.value) return
+  // 没有 jobId = 这条定时刚保存、还没回查到真 ID（见 NodeInspector.syncSourceCron）。
+  // 发出去必然收到「没有可操作的定时任务」，不如直接说清楚（2026-09-22）。
+  if (!job.jobId) {
+    ElMessage.warning('这条定时还没拿到任务 ID，刷新页面后再启停')
+    return
+  }
   jobToggling.value = true
   try {
     const ack = await sourceApi.setJobEnabled([job.jobId], enabled)

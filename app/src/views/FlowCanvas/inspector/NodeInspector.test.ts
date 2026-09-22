@@ -592,3 +592,55 @@ describe('结构化配置全局ID提示', () => {
     w.unmount()
   })
 })
+
+// 2026-09-22 用户报「定时为什么关不上」：源上首次配定时时 flow.sourceJob 是 null，
+// 保存后只在本地造了个 jobId 为空的壳，界面显示「已启用」，可开关一点就是 setJobEnabled([''])
+// → 后端回「没有可操作的定时任务」（截图里那两条重复提示）。修法是保存成功后回查真 jobId。
+describe('NodeInspector 定时保存后回查真 jobId（2026-09-22）', () => {
+  async function saveNodeWithCron(jobs: Awaited<ReturnType<typeof sourceApi.sourceJobs>>) {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.sourceCfg = {
+      sourceId: 's-1', name: '某源', url: 'http://x', configId: 'c-0',
+      mainTable: 'T1', owner: 'admin', state: 'C',
+    }
+    flow.configs['web-1'] = cloneConfig(NODE_CONFIGS['web-list'])
+    flow.main = ['web-1']
+    flow.select('web-1')
+    flow.setActiveTab('config')
+    // 源上还没有 job：这正是出问题的那个场景
+    expect(flow.sourceJob).toBeFalsy()
+
+    vi.spyOn(configApi, 'addConfig').mockResolvedValue({ ok: true, configId: 'c-1', message: 'ok' })
+    vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: 'c-1', name: 'cfg' } as never)
+    const saveCron = vi.spyOn(sourceApi, 'saveSourceCron').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(sourceApi, 'sourceJobs').mockResolvedValue(jobs)
+
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+    await wrapper.get('.rc-insp-foot button').trigger('click')
+    await flushPromises()
+
+    return { flow, saveCron }
+  }
+
+  it('回查到 job：sourceJob 用后端那条（带真 jobId），不用本地壳', async () => {
+    const { flow, saveCron } = await saveNodeWithCron([{
+      jobId: 'j-77', jobName: 'j', sourceId: 's-1', schedule: '0 0 0 * * ?',
+      runCount: 3, successCount: 2, disabled: false,
+    }])
+
+    expect(saveCron).toHaveBeenCalled()
+    expect(flow.sourceJob?.jobId).toBe('j-77')
+    // 运行次数也跟着是真的了——本地壳里这两个数只能填 0
+    expect(flow.sourceJob?.runCount).toBe(3)
+  })
+
+  it('回查不到（主从延迟之类）：退回本地壳，行为不比从前差', async () => {
+    const { flow } = await saveNodeWithCron([])
+
+    expect(flow.sourceJob?.schedule).toBe('0 0 0 * * ?')
+    expect(flow.sourceJob?.jobId).toBe('')
+  })
+})

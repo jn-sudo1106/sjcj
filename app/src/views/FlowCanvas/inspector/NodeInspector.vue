@@ -199,8 +199,24 @@ async function syncSourceCron(node: NodeConfig) {
       ElMessage.warning(`定时保存失败：${ack.message || '未知原因'}`)
       return
     }
-    // 就地更新本地这份，避免立刻回查拿到还没刷新的旧值
-    flow.setSourceJob({
+    /**
+     * 回查一次，把**真的 jobId** 拿回来（2026-09-22 修）。
+     *
+     * 原先这里只在本地造一份壳：源上首次配定时时 `flow.sourceJob` 是 null，
+     * 于是塞了个 `jobId: ''` 的对象——界面立刻显示「已启用 / 运行 0 次」，
+     * 可那条定时**没有 ID**，右上角开关一点就是 `setJobEnabled([''])`，
+     * 必然回「没有可操作的定时任务」。用户 2026-09-22 报的「为什么关不上」就是它。
+     *
+     * 原注释担心"立刻回查拿到还没刷新的旧值"——那顾虑针对的是**启停**写的 `isDelete`
+     * （见 sourceJobs 的说明），而 `jobId` 是新建完就有的，回查拿得到。
+     * 万一真没查到（主从延迟之类），退回原来那份本地壳，行为不比从前差；
+     * 此时开关会因为没有 jobId 而禁用（TaskScheduleSettings），不会再让人白点。
+     */
+    const fresh = await sourceApi.sourceJobs(sourceId).catch(() => [] as Awaited<ReturnType<typeof sourceApi.sourceJobs>>)
+    const hit = fresh.find((j) => j.schedule === next && j.jobId)
+      ?? fresh.find((j) => j.jobId && !j.disabled)
+      ?? fresh.find((j) => j.jobId)
+    flow.setSourceJob(hit ?? {
       ...(flow.sourceJob ?? {
         jobId: '', jobName: '', sourceId, nextRun: undefined, lastRun: undefined,
         runCount: 0, successCount: 0, disabled: false,

@@ -8,9 +8,10 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import NodeInspector from '../NodeInspector.vue'
+import TaskScheduleSettings from '../TaskScheduleSettings.vue'
 import { useFlowStore } from '@/stores/flow'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { entryApi, paramApi, ruleApi, configApi } from '@/api'
+import { entryApi, paramApi, ruleApi, configApi, sourceApi } from '@/api'
 import type { EntryType } from '@/api'
 
 const OUTPUT_TABLE: EntryType = {
@@ -387,5 +388,42 @@ describe('ConfigTab · 摘要/音视频处理节点（与规则处理同表单�
     expect(wrapper.text()).not.toContain('发起抓取信息')
     expect(wrapper.find('[data-testid="edit-node-source"]').exists()).toBe(false)
     wrapper.unmount()
+  })
+})
+
+// 2026-09-22 用户报「定时为什么关不上」：首次保存定时时源上还没有 job，
+// 于是本地造了个 jobId 为空的壳，界面显示「已启用」，可那条定时没有 ID——
+// 点开关就是 setJobEnabled(['']) → 「没有可操作的定时任务」（截图里那两条重复提示）。
+describe('ConfigTab · 定时启停（2026-09-22）', () => {
+  function mountWithJob(jobId: string) {
+    mockAssets()
+    const { flow, wrapper } = mountOnRuleNode()
+    flow.setSourceJob({
+      jobId, jobName: 'j', sourceId: 's-1', schedule: '0 0 0 * * ?',
+      runCount: 0, successCount: 0, disabled: false,
+    })
+    return { flow, wrapper }
+  }
+
+  it('jobId 为空时不发请求，直接说清原因', async () => {
+    const setEnabled = vi.spyOn(sourceApi, 'setJobEnabled')
+    const { wrapper } = mountWithJob('')
+    await flushPromises()
+
+    wrapper.findComponent(TaskScheduleSettings).vm.$emit('toggle-enabled', true)
+    await flushPromises()
+
+    expect(setEnabled).not.toHaveBeenCalled()
+  })
+
+  it('有 jobId 时正常调启停接口', async () => {
+    const setEnabled = vi.spyOn(sourceApi, 'setJobEnabled').mockResolvedValue({ ok: true, message: 'ok' })
+    const { wrapper } = mountWithJob('j-9')
+    await flushPromises()
+
+    wrapper.findComponent(TaskScheduleSettings).vm.$emit('toggle-enabled', false)
+    await flushPromises()
+
+    expect(setEnabled).toHaveBeenCalledWith(['j-9'], false)
   })
 })

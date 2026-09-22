@@ -85,9 +85,9 @@ function toggleWeekday(day: number) {
         type="button"
         class="tss-toggle"
         :class="{ on: !job.disabled }"
-        :disabled="toggling"
+        :disabled="toggling || !job.jobId"
         data-testid="job-toggle"
-        :title="job.disabled ? '这条定时已停用，点击启用' : '定时运行中，点击停用'"
+        :title="!job.jobId ? '这条定时刚保存，还没拿到任务 ID，刷新页面后可启停' : (job.disabled ? '这条定时已停用，点击启用' : '定时运行中，点击停用')"
         @click="emit('toggle-enabled', job.disabled)"
       >
         <span class="tss-toggle-track"><span class="tss-toggle-thumb" /></span>
