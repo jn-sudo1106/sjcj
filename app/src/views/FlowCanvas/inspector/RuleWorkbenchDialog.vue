@@ -46,6 +46,9 @@ const props = defineProps<{
   saving: boolean
   // 是否为规则处理节点（控制是否展示「测试脚本」按钮）
   isRule: boolean
+  // 文章摘要/打标签节点查看并编辑系统提示词时，复用工作台弹窗外壳但隐藏脚本编辑能力。
+  promptPreviewOnly?: boolean
+  promptPreviewSaving?: boolean
   // 测试脚本是否可点（脚本非空且已绑输入表）
   canTest: boolean
   // 预览表第一行数据，作为脚本测试入参（key=字段名，value=值）
@@ -62,6 +65,7 @@ const emit = defineEmits<{
   'update:modelProviderCode': [string]
   'update:modelCode': [string]
   'update:script': [string]
+  'save-prompt-preview': [string]
   /** 用户点了左栏「保存」（区别于 loadPromptTemplate 自动回写：那条不算用户编辑） */
   'prompt-saved': []
   generate: [Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'modelProviderCode' | 'modelCode'>>]
@@ -176,8 +180,10 @@ watch(() => props.open, (v) => {
   if (v) {
     syncLocalDrafts()
     promptVisible.value = !props.hidePromptByDefault
-    void loadProviderModelOptions()
-    void loadPromptTemplate()
+    if (!props.promptPreviewOnly) {
+      void loadProviderModelOptions()
+      void loadPromptTemplate()
+    }
   }
 })
 watch(() => props.promptCategory, (v) => {
@@ -298,8 +304,39 @@ watch(
 </script>
 
 <template>
-  <el-dialog :model-value="open" :title="title" width="94vw" top="4vh" :close-on-click-modal="false" @update:model-value="close">
-    <div ref="bodyEl" class="wb-body">
+  <el-dialog
+    :model-value="open"
+    :title="title"
+    width="94vw"
+    top="4vh"
+    :close-on-click-modal="false"
+    :data-testid="promptPreviewOnly ? 'prompt-preview-dialog' : undefined"
+    @update:model-value="close"
+  >
+    <div v-if="promptPreviewOnly" class="wb-preview">
+      <div class="wb-preview-head">
+        <b>系统提示词</b>
+        <div class="wb-preview-actions">
+          <span>可编辑</span>
+          <button
+            class="rc-btn primary"
+            type="button"
+            data-testid="prompt-preview-save"
+            :disabled="promptPreviewSaving"
+            @click="emit('save-prompt-preview', promptDraft)"
+          >
+            {{ promptPreviewSaving ? '保存中...' : '保存' }}
+          </button>
+        </div>
+      </div>
+      <textarea
+        v-model="promptDraft"
+        class="wb-preview-textarea"
+        data-testid="prompt-preview-textarea"
+        placeholder="请输入系统提示词"
+      />
+    </div>
+    <div v-else ref="bodyEl" class="wb-body">
       <div class="wb-pane" :style="leftStyle">
         <div class="wb-pane-head">
           <b>{{ showDescribeInLeft ? describeLabel : '系统提示词' }}</b>
@@ -409,6 +446,13 @@ watch(
 
 <style scoped>
 .wb-body { display: flex; align-items: stretch; height: 78vh; gap: 0; }
+.wb-preview { display: flex; flex-direction: column; height: 78vh; min-width: 0; }
+.wb-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.wb-preview-head b { color: var(--rc-text); font-size: 13px; }
+.wb-preview-actions { display: flex; align-items: center; gap: 10px; }
+.wb-preview-actions span { color: var(--rc-faint); font-size: 11px; }
+.wb-preview-textarea { flex: 1; min-height: 0; width: 100%; margin: 0; overflow: auto; padding: 14px; border: 1px solid #dbe3ee; border-radius: 8px; background: #fff; color: var(--rc-text); font-size: 13px; line-height: 1.7; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; resize: none; outline: none; box-sizing: border-box; }
+.wb-preview-textarea:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .wb-pane { display: flex; flex-direction: column; min-width: 0; }
 .wb-pane-right { flex: 1 1 auto; }
 .wb-pane-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }

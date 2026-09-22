@@ -206,8 +206,8 @@ function copyFileId() {
 // 模型供应商 / 模型与规则节点同源（/api/model/*），存在节点上，可随时切换。
 const isArticleSummary = computed(() => isArticleSummaryNode(cfg.value))
 
-/** 系统提示词的展开/收起（只读展示，不参与保存） */
-const articlePromptOpen = ref(false)
+/** 系统提示词预览（只读展示，不参与保存） */
+const promptPreviewOpen = ref(false)
 
 /**
  * 提示词是否真的来自提示词表。
@@ -380,16 +380,14 @@ function cancelTranslate() {
 // ---- 文章打标签（0921 改版：编排配置只保留纯配置项）----
 // 文章正文由流程执行阶段处理；此处只保留模型选择和系统提示词查看入口。
 const isArticleTag = computed(() => isArticleTagNode(cfg.value))
-const tagPromptOpen = ref(false)
 
 // 切节点（NodeInspector 里本组件不带 key，是复用的）时清空试跑区，避免串到下一个节点上
 watch(id, () => {
   clearOcrImage()
   audioLanguage.value = ''
   clearVideoFile()
-  articlePromptOpen.value = false
+  promptPreviewOpen.value = false
   articlePromptMissing.value = false
-  tagPromptOpen.value = false
   clearTranslate()
   // 语言下拉的回填由 translateLangsTouched 那条 watch 管（从 code_rule 还原，解析不出才落默认）
   mediaFormat.value = 'mp3'
@@ -513,6 +511,16 @@ const generateLabel = computed(() => (isRule.value ? '生成脚本' : '生成配
 const saveLabel = computed(() => (isRule.value ? '保存脚本' : '保存配置'))
 // S6-1：编排工作区（合并原 RuleScriptDialog/RuleSystemPromptDialog）的文案分流
 const workbenchTitle = computed(() => (isRule.value ? '规则脚本工作区' : '抓取配置工作区'))
+const promptPreviewTitle = computed(() => `${isArticleSummary.value ? '文章生成摘要' : '文章打标签'} · 系统提示词`)
+const workbenchDialogOpen = computed({
+  get: () => workbenchOpen.value || promptPreviewOpen.value,
+  set: (value: boolean) => {
+    if (!value) {
+      workbenchOpen.value = false
+      promptPreviewOpen.value = false
+    }
+  },
+})
 const scriptLabel = computed(() => (isRule.value ? 'Python 脚本' : '抓取配置 XML'))
 const promptCategoryGroups = computed(() => promptCategoryGroupsForNode(cfg.value))
 const promptCategory = computed(() => resolvePromptCategoryForNode(cfg.value, orchCfg.value.promptCategory))
@@ -910,6 +918,28 @@ function onPromptSaved() {
 function onSystemPromptChange(value: string) {
   patch({ systemPrompt: value })
 }
+async function onSavePromptPreview(prompt: string) {
+  const configId = String(cfg.value?.configId ?? '').trim()
+  if (!configId) {
+    ElMessage.warning('请先保存节点配置，再保存系统提示词')
+    return
+  }
+  savingPromptPreview.value = true
+  try {
+    const ack = await configApi.updateConfig({ configId, prompt })
+    if (ack && 'ok' in ack && !ack.ok) {
+      ElMessage.error(ack.message || '系统提示词保存失败')
+      return
+    }
+    onPromptSaved()
+    patch({ systemPrompt: prompt })
+    ElMessage.success(ack?.message || '系统提示词已保存')
+  } catch (e) {
+    ElMessage.error(`系统提示词保存失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    savingPromptPreview.value = false
+  }
+}
 function onPromptCategoryChange(value: PromptCategory) {
   patch({ promptCategory: resolvePromptCategoryForNode(cfg.value, value) })
 }
@@ -1191,6 +1221,7 @@ async function onGenerateScript(
 const workbenchOpen = ref(false)
 
 const savingScript = ref(false)
+const savingPromptPreview = ref(false)
 const codeTestLoading = ref(false)
 const codeTestResult = ref('')
 const codeTestError = ref('')
@@ -1588,12 +1619,11 @@ function onTestScript() {
     </div>
     <div v-if="providerError || modelError" class="rc-help">{{ providerError || modelError }}</div>
     <div class="article-prompt">
-      <button class="rc-link-btn" type="button" data-testid="article-prompt-toggle" @click="articlePromptOpen = !articlePromptOpen">
-        {{ articlePromptOpen ? '收起系统提示词' : '查看系统提示词' }}
+      <button class="rc-link-btn" type="button" data-testid="article-prompt-toggle" @click="promptPreviewOpen = true">
+        查看系统提示词
       </button>
       <span class="ocr-hint">来自提示词表（cfg_llm_node_prompt · 文章生成摘要）</span>
     </div>
-    <pre v-if="articlePromptOpen" class="article-prompt-text" data-testid="article-prompt-text">{{ orchCfg.systemPrompt || '（未取到提示词模板）' }}</pre>
     <div v-if="!articlePromptReady" class="ocr-error" data-testid="article-prompt-missing">
       没有取到「文章生成摘要」的系统提示词模板（cfg_llm_node_prompt 里需要 category=rule、node_type_name=文章生成摘要 的一行），请先补上模板再执行
     </div>
@@ -1697,11 +1727,10 @@ function onTestScript() {
       </span>
     </div>
     <div class="article-prompt">
-      <button class="rc-link-btn" type="button" data-testid="tag-prompt-toggle" @click="tagPromptOpen = !tagPromptOpen">
-        {{ tagPromptOpen ? '收起系统提示词' : '查看系统提示词' }}
+      <button class="rc-link-btn" type="button" data-testid="tag-prompt-toggle" @click="promptPreviewOpen = true">
+        查看系统提示词
       </button>
     </div>
-    <pre v-if="tagPromptOpen" class="article-prompt-text" data-testid="tag-prompt-text">{{ orchCfg.systemPrompt || '（未取到提示词模板）' }}</pre>
   </div>
   <!-- 描述输入框：文章生成摘要 / 文章打标签没有「抓取需求描述」这回事，整块不出现（0921 口径） -->
   <div v-if="!isAudioText && !isVideoAudio && !isTranslate && !isArticleSummary && !isArticleTag" class="rc-field">
@@ -1869,8 +1898,9 @@ function onTestScript() {
        面板内直接能生成/保存，不用退出去。 -->
   <RuleWorkbenchDialog
     v-if="!isAudioText && !isVideoAudio"
-    v-model:open="workbenchOpen"
-    :title="workbenchTitle"
+    v-model:open="workbenchDialogOpen"
+    :title="promptPreviewOpen ? promptPreviewTitle : workbenchTitle"
+    :prompt-preview-only="promptPreviewOpen"
     :script-label="scriptLabel"
     :system-prompt="orchCfg.systemPrompt ?? ''"
     :prompt-category="promptCategory"
@@ -1895,6 +1925,7 @@ function onTestScript() {
     :save-label="saveLabel"
     :generating="generating"
     :saving="savingScript"
+    :prompt-preview-saving="savingPromptPreview"
     :is-rule="isRule"
     :can-test="canTest"
     :describe="orchCfg.describe ?? ''"
@@ -1906,6 +1937,7 @@ function onTestScript() {
     @update:model-provider-code="onModelProviderChange"
     @update:model-code="onModelChange"
     @update:script="onScriptChange"
+    @save-prompt-preview="onSavePromptPreview"
     @generate="onGenerateScript"
     @cancel-generate="onCancelGenerate"
     @save="onSaveScript"
