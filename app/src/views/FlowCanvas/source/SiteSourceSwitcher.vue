@@ -25,6 +25,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { useUiStore } from '@/stores/ui'
 import { csvDateTag, downloadCsv, toCsv } from '@/utils/csv'
 import { Close, Download } from '@element-plus/icons-vue'
+import { copyToClipboard } from '@/utils/clipboard'
 
 const props = defineProps<{ siteId: string; activeKey: string }>()
 const emit = defineEmits<{ pick: [target: Source]; added: [Source]; compare: [rightId: string]; pickSite: [] }>()
@@ -152,14 +153,20 @@ function onListScroll(e: Event) {
 }
 const activeSource = computed(() => children.value.find((s) => s.sourceId === props.activeKey) || null)
 
-async function copyText(text: string, label: string) {
-  if (!text) return
-  try {
-    await navigator.clipboard.writeText(text)
-    ElMessage.success(`已复制${label}到剪贴板`)
-  } catch {
-    ElMessage.info(`${label}: ${text}`)
-  }
+/**
+ * 复制走全站统一的 `copyToClipboard`（2026-09-22 修）。
+ *
+ * 这里原先自己写了一套 `navigator.clipboard.writeText` + catch，
+ * **在部署站上必然失败**：生产是 http、非安全上下文，浏览器压根不暴露 `navigator.clipboard`，
+ * 于是每次都落到 catch、`ElMessage.info('源 ID: xxx')` 把值弹成一条提示——
+ * 用户看到的就是"复制不了，还冒出个浮层"（2026-09-22 用户在生产报的）。
+ * 关键是它**根本没尝试过复制**：没有 execCommand 兜底。
+ *
+ * `utils/clipboard.ts` 那条路才是全的（异步 API → execCommand → 可一步复制的弹窗），
+ * 0920-03 刚加固过。全站只该有那一个复制实现。
+ */
+function copyText(text: string, label: string) {
+  void copyToClipboard(text, label)
 }
 function copyId(id: string) {
   void copyText(id, '源 ID')

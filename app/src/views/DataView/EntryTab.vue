@@ -9,6 +9,7 @@ import { getEffectiveWidth } from '../../constants/entry'
 import { exportFieldsAsCsv } from '@/utils/format/csvExport'
 import EntryEditorDrawer from './EntryEditorDrawer.vue'
 import { withoutComposition } from '@/utils/enterKey'
+import { copyToClipboard } from '@/utils/clipboard'
 
 // 迁移方案 §1.6/§5-2：read 角色隐藏全部写入口（含旧只读页遗留的「新建」按钮，判为旧遗漏，不迁）。
 const auth = useAuthStore()
@@ -215,13 +216,10 @@ async function onExtractFields(e: EntryType) {
     ElMessage.error(`加载字段失败：${error instanceof Error ? error.message : String(error)}`)
   }
 }
-async function copyExtractText() {
-  try {
-    await navigator.clipboard.writeText(extractDialog.text)
-    ElMessage.success('已复制到剪贴板')
-  } catch {
-    ElMessage.error('复制失败，请手动选中文本复制')
-  }
+// 同 SiteSourceSwitcher：原先自造的 navigator.clipboard 在 http 部署站上必然失败
+// （非安全上下文不暴露这个 API），且没有 execCommand 兜底。统一走 utils/clipboard。
+function copyExtractText() {
+  void copyToClipboard(extractDialog.text)
 }
 
 function toggleSelected(tableId: string, checked: boolean) {

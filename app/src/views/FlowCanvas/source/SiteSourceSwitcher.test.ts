@@ -901,3 +901,19 @@ describe('SiteSourceSwitcher · 批量导入的结果通知', () => {
     expect(arg?.message).toContain('失败 1 个')
   })
 })
+
+// 2026-09-22 用户在**生产**报「源 ID 复制不了」，还冒出一个「源 ID: 430024431」的灰色浮层。
+// 根因：这里原先自己写了一套 navigator.clipboard + catch，而部署站是 http、非安全上下文，
+// 浏览器压根不暴露那个 API，于是每次都落 catch、把值弹成 ElMessage.info——**根本没尝试复制**。
+// 现在统一走 utils/clipboard（异步 API → execCommand → 可一步复制的弹窗）。
+describe('SiteSourceSwitcher · 复制走全站统一实现（2026-09-22）', () => {
+  it('源 ID / 源 URL 的复制都调 copyToClipboard，不自己碰 navigator.clipboard', async () => {
+    // 与 uiCopy.test.ts 同一套做法：?raw 读源码，锁住"不许再自造复制实现"
+    const src = String((await import('./SiteSourceSwitcher.vue?raw')).default)
+    // 只禁**调用**形式：注释里还留着"原先自己写了一套 navigator.clipboard"的来由，不能一起误伤
+    expect(src).not.toContain('await navigator.clipboard')
+    expect(src).toContain("from '@/utils/clipboard'")
+    expect(src).toContain('copyToClipboard(text, label)')
+  })
+})
+
