@@ -419,6 +419,19 @@ describe('生产写守卫', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 
+  // 2026-09-22：用户在生产点「新建表 → 确定」毫无反应，根因是这两个端点不在白名单、
+  // 守卫在发请求前就拦了，而调用处当时没 catch。拍板新建和修改都放开。
+  it('连生产时，数据表的新建与修改在白名单内（画布「表配置」每天在用）', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
+    const { request } = await import('./client')
+
+    await request('config/entryTypeAddAll', { name: 'x' }, { method: 'POST', httpEndpoint: 'config/entryTypeAddAll' })
+    await request('config/modifyEntryType', { type: '1' }, { method: 'POST', httpEndpoint: 'config/modifyEntryType' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
   it('连生产时，未放行的改删仍拦截', async () => {
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
     const { request } = await import('./client')

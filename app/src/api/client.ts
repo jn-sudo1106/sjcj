@@ -209,6 +209,21 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'category/delete',
   // 2026-09-10：按需求放开规则脚本/抓取配置保存，直接写入文件服务。
   '/api/file/upload',
+  /**
+   * 2026-09-22 拍板放开：数据表的新建与修改（画布「表配置 → 新建表 / 查看编辑表」）。
+   *
+   * 起因是用户在生产点「新建表 → 确定」**毫无反应**：`entryTypeAddAll` 标了 danger 却不在
+   * 本清单里，守卫在发请求前就拦下了，而 `TableEditDialog.onSave` 当时是裸 await，
+   * 抛错变成未捕获 rejection、界面一声不响（那个"没反应"已单独修成明确的错误提示）。
+   *
+   * 放开的范围：**新建和修改都放**（用户 2026-09-22 定）。
+   * - `entryTypeAddAll` 是纯新增，与本清单里 site/add、snatchSave、category/add 同性质；
+   * - `modifyEntryType` 是**真改已落库的表结构**，破坏性高于前者：一张表可能被多个源共用，
+   *   改错的影响面比建一张新表大得多。UI 侧没有二次确认，靠的是这个弹窗本身就要逐字段填、
+   *   不是一键操作。**若日后出过事，先收回这一条，新建那条可以留。**
+   */
+  'config/entryTypeAddAll',
+  'config/modifyEntryType',
 ])
 
 function isProductionWriteAllowed(httpEndpoint: string): boolean {
