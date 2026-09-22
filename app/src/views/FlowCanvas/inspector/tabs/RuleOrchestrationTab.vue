@@ -25,6 +25,7 @@ import { MEDIA_AUDIO_FORMATS, MEDIA_BIT_RATE_OPTIONS, MEDIA_CHANNEL_OPTIONS, MED
 import { useNodeEditorContext } from '../nodeEditorContext'
 import { configApi, entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { isVruleNumericRuleId } from '@/api/legacyAdapters'
+import { copyToClipboard } from '@/utils/clipboard'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
@@ -183,15 +184,16 @@ function downloadExtractedAudio() {
   ElMessage.success(`已下载 ${audio.filename}`)
 }
 
-async function copyFileId() {
+/**
+ * 复制走 `utils/clipboard`（2026-09-22 修）。原先是自己写的
+ * `navigator.clipboard.writeText` + catch，**在部署站上必然失败**：
+ * 生产是 http、非安全上下文，浏览器压根不暴露那个 API，于是每次直接落 catch、
+ * 只弹一句"复制失败"——没有 execCommand 兜底，等于从没尝试过。
+ * 同一批还改了 SiteSourceSwitcher 与 EntryTab 的两处（用户在生产报「源 ID 复制不了」）。
+ */
+function copyFileId() {
   const fileId = videoResult.value?.kind === 'upload' ? videoResult.value.fileId : ''
-  if (!fileId) return
-  try {
-    await navigator.clipboard.writeText(fileId)
-    ElMessage.success('fileId 已复制')
-  } catch {
-    ElMessage.warning('复制失败，请手动选择文本')
-  }
+  void copyToClipboard(fileId, 'fileId')
 }
 
 // ---- 文章生成摘要（0921 改版：编排配置只留纯配置项）----
@@ -484,15 +486,9 @@ async function runOcrRecognize() {
   }
 }
 
-async function copyOcrText() {
-  const text = ocrText.value
-  if (!text) return
-  try {
-    await navigator.clipboard.writeText(text)
-    ElMessage.success('识别文本已复制')
-  } catch {
-    ElMessage.warning('复制失败，请手动选择文本')
-  }
+// 同 copyFileId：统一走 utils/clipboard，别再自造第二套
+function copyOcrText() {
+  void copyToClipboard(ocrText.value, '识别文本')
 }
 
 onBeforeUnmount(() => {

@@ -525,3 +525,30 @@ describe('更换网站弹窗', () => {
     expect(siteSourceSwitcher).not.toContain('移动中…')
   })
 })
+
+/**
+ * 全站只许有**一个**复制实现（2026-09-22）。
+ *
+ * 用户在生产报「源 ID 复制不了」，根因是 SiteSourceSwitcher 自己写了一套
+ * `navigator.clipboard.writeText` + catch：部署站是 http、非安全上下文，
+ * 浏览器压根不暴露那个 API，于是每次直接落 catch——**根本没尝试复制**。
+ * 同样的自造实现当时一共有 4 处（另外三处在 EntryTab 和 RuleOrchestrationTab）。
+ *
+ * `utils/clipboard.ts` 那条路才是全的：异步 API → execCommand 兜底 →
+ * 输入框打开即全选的手动复制弹窗。这条断言守住"以后别再各写一份"。
+ */
+describe('复制只走 utils/clipboard（2026-09-22）', () => {
+  const vueFiles = import.meta.glob('./**/*.vue', { query: '?raw', import: 'default', eager: true }) as Record<string, string>
+
+  it('没有任何组件自己调 navigator.clipboard', () => {
+    const offenders = Object.entries(vueFiles)
+      .filter(([, src]) => /await\s+navigator\.clipboard|navigator\.clipboard\.writeText\(/.test(src))
+      .map(([path]) => path)
+    expect(offenders).toEqual([])
+  })
+
+  it('扫到的文件数是合理的（glob 没有静默匹配为空）', () => {
+    expect(Object.keys(vueFiles).length).toBeGreaterThan(30)
+  })
+})
+
