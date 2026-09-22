@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, Search } from '@element-plus/icons-vue'
 import { useFlowStore } from '@/stores/flow'
+import { applyTemplateToSource, reloadSourceIntoCanvas } from '@/utils/flow/applyTemplateToSource'
 import { useUiStore } from '@/stores/ui'
 import { flowCenterApi, type FlowRecord } from '@/api'
 import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
@@ -80,9 +81,9 @@ function manageFlows() {
 // 流程引用"这个动作，不是这个入口本身。
 const appliedTemplateLabel = computed(() => {
   const templateId = src.value?.templateId
-  if (!templateId) return '切换流程模板'
+  if (!templateId) return '套用流程模板'
   const template = templates.value.find((item) => item.id === templateId)
-  if (!template) return '切换流程模板'
+  if (!template) return '套用流程模板'
   // 真实 cs_flow 没有版本号（见 FlowRecord.version 注释），拿不到就只显示流程名，不要 `vundefined`
   const version = src.value?.templateVersion ?? template.version
   return version == null ? template.name : `${template.name} · v${version}`
@@ -216,6 +217,14 @@ function srcSnatch() {
   ui.fireAction('发起抓取')
 }
 
+/**
+ * 下拉的 tooltip 要把它和左边那个「所属流程」区分开（2026-09-22）。
+ * 两块挨着放，一个是「套一份模板的步骤到本源」、一个是「本源挂在哪条流程下」，
+ * 用户很自然会以为在这里选一下所属流程就跟着变——所以直接写出来。
+ */
+const flowPickerTitle = computed(() => `${appliedTemplateLabel.value}（把模板的步骤复制一套到本源；不改「所属流程」）`)
+
+const switchingFlow = ref(false)
 async function onSwitchFlow(command: string) {
   if (!command) return
   if (command === '__manage_flows__') {
@@ -224,29 +233,49 @@ async function onSwitchFlow(command: string) {
     return
   }
   const template = templates.value.find((item) => item.id === command)
-  if (!template || !src.value) return
-  // 确认弹窗**恒弹**（0903 Y0-3）：原来只在 flow.dirty 时弹，等于"画布干净时静默替换全部节点"——
-  // 这个动作会为本源新建一整套配置，任何情况下都该让人先看一眼再点。
+  const source = src.value
+  if (!template || !source?.sourceId || switchingFlow.value) return
+  const sourceId = source.sourceId
   const nodeCount = flow.main.filter((id: string) => flow.configs[id]).length
+  // 确认弹窗**恒弹**（0903 Y0-3）：这一步会为本源新建一整套配置，任何情况下都该让人先看一眼。
+  //
+  // 文案 2026-09-22 重写。原来写的是「当前 N 个节点会被替换」＋按钮「复制并替换」——
+  // 那是前端本地替换时代的话。现在走后端 copyTemplateSteps，它**只追加不删除**，
+  // 现有节点一个不少。承诺替换却做成追加，比不说更糟。
   try {
     await ElMessageBox.confirm(
       [
-        `将复制模板「${template.name}」的配置，生成属于本源的一套新配置。`,
-        nodeCount ? `当前 ${nodeCount} 个节点会被替换。` : '',
-        flow.dirty ? '当前画布有未保存改动，将一并丢弃。' : '',
+        `将复制模板「${template.name}」的步骤，生成属于本源的一套新配置。`,
+        nodeCount
+          ? `当前 ${nodeCount} 个节点会保留，模板的步骤追加在后面——这一步不删任何现有节点。`
+          : '',
+        source.flowId
+          ? '本源已有流程，步骤复制进这条流程里，所属流程不变。'
+          : '本源还没有流程，会按模板新建一条并关联到本源。',
+        flow.dirty ? '当前画布有未保存改动，套用后会从服务端重新加载，未保存的改动将丢弃。' : '',
         '此操作不影响该模板和其它源。',
       ].filter(Boolean).join(''),
-      '切换流程模板',
-      { type: 'warning', confirmButtonText: '复制并替换', cancelButtonText: '取消' },
+      '套用流程模板',
+      { type: 'warning', confirmButtonText: '复制并追加', cancelButtonText: '取消' },
     )
   } catch {
     return
   }
-  const result = flow.applyTemplate(template)
-  if (!result) return
-  // 真实 cs_flow 没有版本号（见 FlowRecord.version 注释），拿不到就只说流程名，不要 `vundefined`
-  const versionText = template.version == null ? '' : ` v${template.version}`
-  ElMessage.success(`已复制模板「${template.name}」${versionText}${result.cleared ? `，原 ${result.cleared} 个节点已替换` : ''}`)
+  switchingFlow.value = true
+  try {
+    const applied = await applyTemplateToSource(template.id, sourceId, source.flowId, source.name)
+    // 后端已经把步骤建好了，画布必须重新按后端拓扑加载——本地拼的 id 是草稿 id，
+    // 自动保存会把同一批步骤再建一遍。
+    const reloaded = await reloadSourceIntoCanvas(sourceId)
+    ElMessage.success(applied.createdFlow
+      ? `已按模板「${template.name}」新建流程 #${applied.flowId} 并关联到本源`
+      : (applied.message || `已把模板「${template.name}」的步骤复制到本源的流程`))
+    if (!reloaded) ElMessage.warning('步骤已复制，但画布重新加载失败，请刷新页面查看')
+  } catch (e) {
+    ElMessage.error(`套用模板失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    switchingFlow.value = false
+  }
 }
 
 </script>
@@ -330,8 +359,9 @@ async function onSwitchFlow(command: string) {
               class="ch-flow-search"
               data-testid="flow-switch-search"
               :placeholder="appliedTemplateLabel"
-              :title="appliedTemplateLabel"
-              aria-label="搜索并切换流程模板"
+              :title="flowPickerTitle"
+              aria-label="搜索并套用流程模板"
+              :disabled="switchingFlow"
               @focus="openFlowPicker"
               @mousedown="openFlowPicker"
               @blur="closeFlowPicker"

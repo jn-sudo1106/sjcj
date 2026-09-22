@@ -6,11 +6,12 @@ import { useDuplicateNode } from './useDuplicateNode'
 import { useStepWrite } from './useStepWrite'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
-import { entryApi, flowApi, flowCenterApi, sourceApi, type FlowRecord } from '@/api'
+import { entryApi, flowApi, flowCenterApi, type FlowRecord } from '@/api'
 import CanvasHeader from '../shared/CanvasHeader.vue'
 import AddNodePopover from './AddNodePopover.vue'
 import FlowXmlDialog from './FlowXmlDialog.vue'
 import { flowToXml } from '@/utils/flow/flowXml'
+import { applyTemplateToSource, reloadSourceIntoCanvas } from '@/utils/flow/applyTemplateToSource'
 import {
   effectiveOutputTable,
   iconFor,
@@ -63,9 +64,8 @@ function loadTemplateDefaults(template: FlowRecord) {
  *
  * H03 的口径是「新增配置」= 把模板里那套配置**复制出一套新的**给本源，不是引用模板。
  * 所以走后端的复制端点，**不用** `flow.applyTemplate` 那套前端逐个建节点的老路（Y8-20 作废）：
- *   - 本源已有流程 → `copyTemplateSteps(模板, 本源的流程)`，后端自动改 FLOW_ID、重映射上下游、
- *     根节点依赖保持 0、不复制模板自身的根节点；
- *   - 本源还没有流程 → 先 `copyFlow(模板)` 造一条，再把本源绑上去。
+ * 两种分支（本源已有流程 → 复制步骤进去；没有 → copyFlow + bindSources）见
+ * `utils/flow/applyTemplateToSource.ts`，顶部流程下拉共用同一条实现。
  */
 const applyingTemplate = ref(false)
 async function applyFlowTemplate() {
@@ -88,29 +88,15 @@ async function applyFlowTemplate() {
       ElMessage.error(`#${String(value).trim()} 不在模板列表里`)
       return
     }
-    // 本源的流程：sourceCtx 上没有就回查一次详情（列表接口不保证带 flowId，sourceDetail 一定带）
-    let targetFlowId = flow.sourceCtx?.flowId
-    if (!targetFlowId) targetFlowId = (await sourceApi.sourceDetail(sourceId).catch(() => null))?.flowId
-    if (targetFlowId) {
-      const ack = await flowCenterApi.copyTemplateSteps(picked.id, targetFlowId)
-      if (!ack.ok) throw new Error(ack.message || '复制模板步骤失败')
-      ElMessage.success(ack.message || `已把模板「${picked.name}」的步骤复制到本源的流程`)
-    } else {
-      const newFlowId = await flowCenterApi.copy(picked.id, `${flow.sourceCtx?.name || sourceId}-流程`)
-      const bound = await flowCenterApi.bindSources([sourceId], newFlowId)
-      if (!bound.ok) {
-        ElMessage.warning(`已按模板复制出流程 #${newFlowId}，但未能关联到本源（${bound.message || '原因未知'}），可在流程中心手动关联`)
-        return
-      }
-      ElMessage.success(`已按模板「${picked.name}」新建流程 #${newFlowId} 并关联到本源`)
-    }
-    // 后端已经把步骤建好了，画布得重新按后端拓扑加载一次——沿用源视图进入时的同一条路径，
-    // 别在本地拼节点（那样 id 全是本地草稿，自动保存又会重复建一遍）。
-    const [detail, steps] = await Promise.all([
-      sourceApi.sourceDetail(sourceId),
-      sourceApi.sourceSteps(sourceId, { withConfigDetails: false }),
-    ])
-    if (detail) flow.loadFromSource(detail, steps ?? [], null)
+    // 落库 + 重载都在 utils/flow/applyTemplateToSource 里，与顶部下拉共用同一条实现
+    //（2026-09-22 抽出：顶部那条原先走本地 applyTemplate，压根不落库）
+    const applied = await applyTemplateToSource(picked.id, sourceId, flow.sourceCtx?.flowId, flow.sourceCtx?.name)
+    ElMessage.success(applied.createdFlow
+      ? `已按模板「${picked.name}」新建流程 #${applied.flowId} 并关联到本源`
+      : (applied.message || `已把模板「${picked.name}」的步骤复制到本源的流程`))
+    // 后端已经把步骤建好了，画布得重新按后端拓扑加载一次——别在本地拼节点
+    //（那样 id 全是本地草稿，自动保存又会重复建一遍）
+    if (!await reloadSourceIntoCanvas(sourceId)) ElMessage.warning('步骤已复制，但画布重新加载失败，请刷新页面查看')
   } catch (e) {
     if (e === 'cancel' || e === 'close') return
     ElMessage.error(`套用模板失败：${(e as Error)?.message ?? String(e)}`)
