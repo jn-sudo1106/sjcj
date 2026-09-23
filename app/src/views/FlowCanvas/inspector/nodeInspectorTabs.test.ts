@@ -153,7 +153,7 @@ describe('nodeInspectorTabs', () => {
     ['video-audio', '[700] 视频提取音频 · 视频抽音轨'],
     ['audio-text', '[710] 音频提取文字 · 语音转写'],
     ['article-summary', '[720] 文章生成摘要 · 文本生成'],
-    ['ocr', '[150] OCR抓取 · 执行器待确认'],
+    ['ocr', '[150] OCR抓取 · 图片文字识别'],
   ])('%s 节点：与规则处理同 tab 结构（无参数配置），编排 Tab 不因未绑表禁用', (template, sub) => {
     const node = { title: template, kind: 'node', template, sub } as unknown as NodeConfig
     const tabs = nodeInspectorTabs(node)

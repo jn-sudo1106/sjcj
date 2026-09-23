@@ -572,16 +572,16 @@ export function isDataValidationNode(cfg?: NodeConfig): boolean {
 /**
  * 节点类型判定：**不能只看 `template`**——`template` 只在插入时（insertAfter）以及后端回读的
  * monitor / data-validation 两条分支上被写入，其它类型回读后是 undefined。
- * 所以再兜底一条：节点种子副标题里的类型编号，如 ocr 种子的 `[150] OCR抓取 · 执行器待确认`
+ * 所以再兜底一条：节点种子副标题里的类型编号，如 ocr 种子的 `[150] OCR抓取 · 图片文字识别`
  *（与 iconFor() / nodeTypeLabel() 认类型的方式一致）。
  */
-function hasNodeTypeCode(cfg: NodeConfig | undefined, template: string, code: string): boolean {
+function hasNodeTypeCode(cfg: NodeConfig | NodeConfigSeed | undefined, template: string, code: string): boolean {
   if (!cfg) return false
   return cfg.template === template || (cfg.sub ?? '').includes(`[${code}]`)
 }
 
-/** OCR 抓取节点（编排配置 Tab 用它决定要不要给「OCR 识别」试跑区）。 */
-export function isOcrNode(cfg?: NodeConfig): boolean {
+/** OCR 抓取节点（已并入规则式处理节点：表配置走 execCfg 绑定，编排配置是空白页）。 */
+export function isOcrNode(cfg?: NodeConfig | NodeConfigSeed): boolean {
   return hasNodeTypeCode(cfg, 'ocr', '150')
 }
 

@@ -474,7 +474,7 @@ watch(
 
     <!-- 非采集非规则（且非规则式节点）：基础字段 / 参数 / 试跑信息 -->
     <template v-if="!cc && !isRuleLike">
-      <div v-if="cfg?.planned" class="rc-drawer show">规划中节点：OCR / AI 提取 / 发邮件仍待执行器确认。配置可先草拟，发起抓取与上线需等待能力就绪。</div>
+      <div v-if="cfg?.planned" class="rc-drawer show">规划中节点：AI 提取 / 发邮件仍待执行器确认。配置可先草拟，发起抓取与上线需等待能力就绪。</div>
 
       <div v-for="(row, i) in cfg?.base ?? []" :key="row[0]" class="rc-field">
         <label>{{ row[0] }}</label>

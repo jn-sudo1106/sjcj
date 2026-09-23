@@ -24,7 +24,7 @@ import type {
   TaskParamValue,
   TripleField,
 } from './flowModel'
-import { isDataNode, nodeInputTable, nodeOutputTable } from './flowModel'
+import { isDataNode, isOcrNode, nodeInputTable, nodeOutputTable } from './flowModel'
 import { extractUrlParamIds } from '@/utils/flow/urlParams'
 
 // ---------- 节点配置规范化 ----------
@@ -140,6 +140,12 @@ export function normalizeNodeConfig(cfg: NodeConfig | NodeConfigSeed): NodeConfi
     cron: schedule?.cron ?? legacyCollect?.cron ?? legacyTask?.cron,
   }
   if (Object.values(normalizedSchedule).some((value) => value !== undefined && value !== '')) next.schedule = normalizedSchedule
+  // OCR 抓取已并入规则式处理节点（2026-09-22），历史存档里残留的 planned: true 要清掉：
+  // isRunnableFlowNode 会跳过规划中节点，上游算不出后继 → 数据视图勾选列与「发后续任务」一起消失。
+  if (isOcrNode(next)) {
+    next.planned = false
+    if ((next.status ?? '').includes('规划中')) next.status = '待配置'
+  }
   return {
     ...next,
     inmap: (next.inmap ?? []).map(normalizeInputMapping),

@@ -106,6 +106,39 @@ describe('directPredecessorIds（0831 X7-B）', () => {
   })
 })
 
+// 2026-09-23：OCR 抓取曾是 planned: true，isRunnableFlowNode 会整个跳过它——上游算不出后继，
+// 数据视图 execMode 停在 'fetch'，勾选列连同「发后续任务」一起消失（用户在源 430000933 实测）。
+describe('OCR 抓取节点参与前后继解析', () => {
+  it('OCR 种子不再是规划中节点', () => {
+    expect(NODE_CONFIGS.ocr.planned).toBe(false)
+    expect(NODE_CONFIGS.ocr.status).not.toContain('规划中')
+  })
+
+  it('采集节点 → OCR：两侧都能看到对方', () => {
+    const main = ['start', 'collect', 'ocr1', 'end']
+    const configs = { collect: cfg({ title: '图片采集' }), ocr1: { ...NODE_CONFIGS.ocr } }
+    expect(hasDirectSuccessor(main, configs, 'collect')).toBe(true)
+    expect(directPredecessorIds(main, configs, 'ocr1')).toEqual(['collect'])
+    expect(hasDirectSuccessor(main, configs, 'ocr1')).toBe(false)
+  })
+
+  it('历史存档里残留的 planned / 规划中状态在加载时清掉', () => {
+    const legacy = normalizeNodeConfig({
+      ...NODE_CONFIGS.ocr, planned: true, status: '规划中（待执行器）',
+    })
+    expect(legacy.planned).toBe(false)
+    expect(legacy.status).toBe('待配置')
+    const main = ['start', 'collect', 'ocr1', 'end']
+    const configs = { collect: cfg({ title: '图片采集' }), ocr1: legacy }
+    expect(hasDirectSuccessor(main, configs, 'collect')).toBe(true)
+  })
+
+  it('其它规划中节点不受影响（AI 提取 / 发邮件仍按规划中跳过）', () => {
+    expect(NODE_CONFIGS['ai-extract'].planned).toBe(true)
+    expect(NODE_CONFIGS.mail.planned).toBe(true)
+  })
+})
+
 
 describe('流程参数配置迁移', () => {
   it('旧流程加载时从 URL token 初始化节点参数绑定', () => {

@@ -586,9 +586,12 @@ const NODE_CONFIG_SEEDS = {
     taskCfg: { queue: 'dev_web_llm_generate', urlRule: '' },
   },
   ocr: {
-    title: 'OCR抓取', sub: '[150] OCR抓取 · 执行器待确认', status: '规划中（待执行器）', planned: true,
+    // 2026-09-22 并入规则式处理节点（表/字段绑定 + 队列 dev_web_snatch_ocr），不再是「规划中」。
+    // 之前 planned: true 会让 isRunnableFlowNode 整个跳过它：上游算不出后继，
+    // 数据视图的勾选列与「发后续任务」一起消失（用户在源 430000933 实测）。
+    title: 'OCR抓取', sub: '[150] OCR抓取 · 图片文字识别', status: '待配置', planned: false,
     base: [['OCR 引擎', '待数据中心确认'], ['文件来源', '← 文件解析 / 原始图片'], ['输出表', 'ocr_text_result'], ['置信度阈值', '0.82']],
-    fields: [['低置信度处理', '进入人工复核'], ['语言', '中文 + 英文'], ['版面保留', '开启'], ['能力状态', '页面可见，执行器待确认']],
+    fields: [['低置信度处理', '进入人工复核'], ['语言', '中文 + 英文'], ['版面保留', '开启'], ['能力状态', '通用处理节点']],
     inmap: [['image_file', '← 文件下载.source_file', '图片或扫描件'], ['page_image', '← 文件解析.page_image', '页面图片']],
     params: [['min_confidence', 'number', '0.82'], ['language', 'enum', 'zh,en']],
     output: [['ocr_text', 'longtext', '识别文本'], ['confidence', 'number', '置信度'], ['bbox', 'json', '位置']],
@@ -908,7 +911,7 @@ export const LIB_GROUPS: LibGroup[] = [
       { template: 'doc', code: '120', name: 'DOC抓取', desc: 'DOC/DOCX 文档采集', pill: 'p1' as Pill },
       { template: 'pdf', code: '130', name: 'PDF抓取', desc: 'PDF 版式文件采集', pill: 'p1' as Pill },
       { template: 'app', code: '140', name: 'APP 抓取', desc: '包名、接口地址、移动端参数', pill: 'p1' as Pill },
-      { template: 'ocr', code: '150', name: 'OCR抓取', desc: '图片/扫描件文字识别，待执行器确认', pill: 'p2' as Pill },
+      { template: 'ocr', code: '150', name: 'OCR抓取', desc: '图片/扫描件文字识别 · 表字段绑定', pill: 'p2' as Pill },
       { template: 'mail-collect', code: '160', name: 'Mail抓取', desc: '邮件正文与附件采集', pill: 'p1' as Pill },
       { template: 'python', code: '170', name: 'Python 抓取', desc: '青龙脚本、待确认权限', pill: 'p2' as Pill },
       { template: 'news', code: '500', name: '资讯抓取', desc: '资讯站点列表 + 详情采集', pill: 'p1' as Pill },
