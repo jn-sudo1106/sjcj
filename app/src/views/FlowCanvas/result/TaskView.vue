@@ -54,7 +54,24 @@ const total = ref(0)
 const loading = ref(false)
 const page = ref(1)
 const size = ref(20)
-const filters = reactive({ sourceId: '', nodeId: '', state: '', queue: '' })
+const filters = reactive({ sourceId: '', nodeId: '', state: '', queue: '', taskId: '' })
+
+/**
+ * 「字段 ▾ ＋ 输入框」查询（0920-04，样式同源视图 0917-11 的三合一），回车才查。
+ *
+ * 2026-09-23 实测 topTaskPaged 只认 `taskId`；数据 ID、任务 URL 试了近 20 种参数名全被忽略
+ * （提后端 B32）。那两项先放在下拉里但**禁用**：能看到规划，又不会填了没反应——
+ * 队列筛选那个假控件（B24）就是前车之鉴。后端加上后把 ready 改成 true、query 里带上即可。
+ */
+type TaskSearchField = 'taskId' | 'bizId' | 'taskUrl'
+const TASK_SEARCH_FIELDS: { value: TaskSearchField; label: string; placeholder: string; ready: boolean }[] = [
+  { value: 'taskId', label: '任务 ID', placeholder: '输入任务 ID，回车查询', ready: true },
+  { value: 'bizId', label: '数据 ID（待后端）', placeholder: '', ready: false },
+  { value: 'taskUrl', label: '任务 URL（待后端）', placeholder: '', ready: false },
+]
+const searchField = ref<TaskSearchField>('taskId')
+const searchText = ref('')
+const searchPlaceholder = computed(() => TASK_SEARCH_FIELDS.find((f) => f.value === searchField.value)?.placeholder ?? '')
 const processLayout = computed(() => buildHorizontalLayout(flow.main, flow.branches, flow.configs, flow.branchGroups, { includeTerminals: false }))
 const sourceNames = computed(() => Object.fromEntries(siteSources.value.map((item) => [item.sourceId, item.name])))
 /**
@@ -305,6 +322,7 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
     state: (filters.state || undefined) as 'L' | 'C' | 'E' | undefined,
     queue: filters.queue?.trim() || undefined,
     topic: filters.queue?.trim() || undefined,
+    taskId: filters.taskId || undefined,
     page: page.value,
     size: size.value,
   }
@@ -340,6 +358,8 @@ watch([siteId, sourceId], async () => {
   filters.nodeId = ''
   filters.state = ''
   filters.queue = ''
+  filters.taskId = ''
+  searchText.value = ''
   await loadSiteSources()
 }, { immediate: true })
 
@@ -355,7 +375,7 @@ watch(filterSteps, () => {
 // 而节点下拉这时是不渲染的，用户看不见也清不掉。必须排在下面那个查询 watch 之前。
 watch(() => filters.sourceId, () => { filters.nodeId = '' })
 
-watch(() => [filters.sourceId, filters.nodeId, filters.state, filters.queue, siteScopeId.value] as const, ([nextSourceId], previous) => {
+watch(() => [filters.sourceId, filters.nodeId, filters.state, filters.queue, filters.taskId, siteScopeId.value] as const, ([nextSourceId], previous) => {
   page.value = 1
   void Promise.all([nextSourceId !== previous?.[0] ? loadNodeMetadata() : Promise.resolve(), loadTasks()])
 }, { immediate: true })
@@ -375,6 +395,19 @@ function resetFilters() {
   filters.nodeId = ''
   filters.state = ''
   filters.queue = ''
+  filters.taskId = ''
+  searchText.value = ''
+}
+
+/** 回车查询。值没变（比如同一个 ID 再按一次回车）watch 不会触发，这时手动重查 */
+function applySearch() {
+  const next = searchField.value === 'taskId' ? searchText.value.trim() : ''
+  if (next === filters.taskId) {
+    page.value = 1
+    void loadTasks()
+    return
+  }
+  filters.taskId = next
 }
 
 function nodeName(task: TaskInst): string {
@@ -452,6 +485,19 @@ const nextStepHints = computed(() => {
             <option value="">全部节点</option>
             <option v-for="step in filterSteps" :key="`${step.sourceId}-${step.stepId}`" :value="step.stepId">{{ showSourceColumn ? `${sourceNames[step.sourceId] || step.sourceId} · ${step.name}` : step.name }}</option>
           </select>
+          <span class="tv-search">
+            <select v-model="searchField" class="tv-input tv-search-field" data-testid="task-search-field" aria-label="查询字段">
+              <option v-for="f in TASK_SEARCH_FIELDS" :key="f.value" :value="f.value" :disabled="!f.ready">{{ f.label }}</option>
+            </select>
+            <input
+              v-model="searchText"
+              class="tv-input tv-search-input"
+              data-testid="task-search-text"
+              :placeholder="searchPlaceholder"
+              aria-label="查询内容"
+              @keyup.enter="applySearch"
+            />
+          </span>
           <select v-model="filters.state" class="tv-input" aria-label="任务状态">
             <option value="">状态（全部）</option>
             <option value="C">完成</option>
@@ -622,9 +668,14 @@ const nextStepHints = computed(() => {
 .tv-input { height: 28px; min-width: 112px; padding: 0 10px; color: var(--rc-text); border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; font-size: 12px; }
 .tv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; outline: none; }
 .tv-queue-input { min-width: 130px; }
+.tv-search { display: inline-flex; gap: 4px; }
+.tv-search-field { min-width: 96px; }
+.tv-search-input { min-width: 160px; }
 .tv-queue-clickable { cursor: pointer; color: var(--rc-primary); }
 .tv-queue-clickable:hover { text-decoration: underline; }
-.tv-filters .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }
+.tv-filters .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; white-space: nowrap; }
+/* 查询多了一格后（0920-04），13.6 寸屏 + 网站态左侧源栏时一行放不下：折行，别把按钮挤成竖排 */
+.tv-filters { flex-wrap: wrap; row-gap: 6px; }
 .tv-table { width: 100%; }
 .tv-id, .tv-time { color: var(--rc-faint); font-family: var(--rc-mono, monospace); font-size: 11px; }
 .tv-pager { justify-content: flex-end; gap: 12px; padding: 10px 16px; margin-top: 0; margin-bottom: 0; border-top: 1px solid var(--rc-border-soft); }

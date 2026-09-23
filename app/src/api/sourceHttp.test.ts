@@ -880,6 +880,7 @@ describe('旧平台新建源 HTTP 契约', () => {
       sourceId: '161725',
       configId: '70598',
       state: 'C',
+      taskId: '62139720',
       page: 2,
       size: 30,
     })
@@ -887,6 +888,7 @@ describe('旧平台新建源 HTTP 契约', () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(init.method).toBe('GET')
     expect(url).toContain('/api/v1/task/topTaskPaged')
+    expect(url).toContain('taskId=62139720')
     expect(url).not.toContain('siteId=')
     expect(url).not.toContain('nodeId=')
     expect(url).toContain('page=2')

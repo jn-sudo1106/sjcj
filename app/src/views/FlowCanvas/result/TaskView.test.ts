@@ -283,6 +283,53 @@ describe('TaskView', () => {
     wrapper.unmount()
   })
 
+  // 0920-04：查询「字段 ▾ ＋ 输入框」，样式同源视图三合一。2026-09-23 实测后端只认 taskId，
+  // 数据 ID / 任务 URL 禁用待后端（B32），不能选、也就不会发出不生效的参数。
+  it('按任务 ID 查询：回车才查、带 taskId；数据 ID / URL 两项禁用；清空后撤掉条件', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const source = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+
+    const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(TaskView, {
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await flushPromises()
+
+    const options = wrapper.findAll('[data-testid="task-search-field"] option')
+    expect(options.map((o) => [o.text(), o.attributes('disabled') !== undefined])).toEqual([
+      ['任务 ID', false],
+      ['数据 ID（待后端）', true],
+      ['任务 URL（待后端）', true],
+    ])
+
+    const input = wrapper.get('[data-testid="task-search-text"]')
+    await input.setValue(' 62139720 ')
+    await flushPromises()
+    // 光输入不查
+    expect(paged).not.toHaveBeenLastCalledWith(expect.objectContaining({ taskId: '62139720' }))
+
+    await input.trigger('keyup.enter')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ taskId: '62139720', page: 1 }))
+
+    // 同一个值再按回车也要重查（watch 不会触发，得手动）
+    const calls = paged.mock.calls.length
+    await input.trigger('keyup.enter')
+    await flushPromises()
+    expect(paged.mock.calls.length).toBe(calls + 1)
+
+    const clearBtn = wrapper.findAll('button').find((b) => b.text() === '清空')!
+    await clearBtn.trigger('click')
+    await flushPromises()
+    expect((input.element as HTMLInputElement).value).toBe('')
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ taskId: undefined }))
+
+    wrapper.unmount()
+  })
+
   describe('0917-01 · 任务行定位信息与详情抽屉', () => {
     it('表格渲染「数据 ID」与「任务 URL」列，空值渲染「—」', async () => {
       setActivePinia(createPinia())

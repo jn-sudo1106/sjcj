@@ -657,8 +657,10 @@ export function mockSourceTaskPaged(params?: Record<string, unknown>): Paged<Tas
   const configId = String(params?.configId ?? '')
   const state = String(params?.state ?? '')
   const queue = String(params?.queue ?? params?.topic ?? params?.taskTopic ?? '').trim()
+  const taskId = String(params?.taskId ?? '').trim()
   const filtered = tasks.filter((task) =>
-    (!nodeId || task.node === nodeId)
+    (!taskId || task.taskId === taskId)
+    && (!nodeId || task.node === nodeId)
     && (!configId || task.configId === configId)
     && (!state || task.state === state)
     && (!queue || (task.topic && task.topic.includes(queue))),

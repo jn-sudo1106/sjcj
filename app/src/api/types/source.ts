@@ -613,6 +613,8 @@ export interface SourceTaskQuery extends PageQuery {
   state?: RunState
   queue?: string
   topic?: string
+  /** 精确匹配任务 ID（2026-09-23 实测后端生效） */
+  taskId?: string
 }
 
 /** 旧平台 /v1/config/loadParams 返回：每个配置下挂的一组抓取参数定义。 */

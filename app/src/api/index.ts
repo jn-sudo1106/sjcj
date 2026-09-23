@@ -861,6 +861,10 @@ export const sourceApi = {
         siteId: q.siteScopeId,
         configId: q.configId,
         state: q.state,
+        // 任务 ID 精确匹配。2026-09-23 实测生效：站 11 异常任务 5401 条，带真实 taskId → 1 条、
+        // taskId=1 → 0 条。同一轮试了数据 ID（bizId/entryId/dataId…）和任务 URL（taskUrl/url…）
+        // 近 20 种参数名，全部被忽略（count 恒 5401），已提后端（0923 汇总 B32），别再换名字试。
+        taskId: q.taskId,
         // ⚠️ 下面这三个参数名**后端一个都不认**，等于没传（2026-09-18 实测）：带真实队列名、
         // 带 `zzz_no_such_queue`、什么都不带，返回的 count 完全一样——不是匹配不上，是这个
         // 条件根本没进 SQL。旧平台 api/task.js 头部注释列的入参里也没有队列，后端从来没做过。
