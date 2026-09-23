@@ -282,4 +282,18 @@ describe('RuleTableFieldBinder · 勾选墙（与网页抓取表配置统一）'
     await w.get('[data-testid="rule-output-select-all"]').trigger('click')
     expect(lastPatch(w).outputFields).toEqual(['SYS_ID', 'URLTITLE', 'video_minio'])
   })
+
+  it('只看已选：默认只铺已选字段，可切换显示全部；一个没选（出参新建）时显示全部', async () => {
+    const w = mountWithFields({ inputFields: ['URLTITLE'], outputFields: [] })
+    await flushPromises()
+    const inputShown = () => w.get('[data-testid="rule-input-fields"]').findAll('.rc-tag').map((t) => t.text())
+
+    expect(inputShown()).toEqual(['URLTITLE · 标题'])
+    await w.get('[data-testid="rule-input-only-selected"]').trigger('click')
+    expect(inputShown()).toEqual(['URLTITLE · 标题', 'video_minio · 视频minio地址'])
+
+    // 出参一个没选：直接看到全部可选项，没有切换按钮
+    expect(w.get('[data-testid="rule-output-fields"]').findAll('.rc-tag')).toHaveLength(2)
+    expect(w.find('[data-testid="rule-output-only-selected"]').exists()).toBe(false)
+  })
 })

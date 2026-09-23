@@ -123,6 +123,16 @@ function toggleInputField(prop: string) {
   else current.add(prop)
   flow.setInputFields(id.value, [...current])
 }
+/**
+ * 只看已选（2026-09-23，用户：「字段确实有点多」）。默认开：勾选墙只铺已选的字段。
+ * 一个没选时自动显示全部（不然墙是空的）；全选时两种模式一样，切换按钮也就不出现。
+ */
+const inputOnlySelected = ref(true)
+const inputPartiallySelected = computed(() =>
+  selectedInputFieldProps.value.length > 0 && selectedInputFieldProps.value.length < inputTableFields.value.length)
+const visibleInputFields = computed(() => (inputOnlySelected.value && inputPartiallySelected.value
+  ? inputTableFields.value.filter((f) => isInputFieldSelected(f.prop))
+  : inputTableFields.value))
 function selectAllInputFields() {
   flow.setInputFields(id.value, inputTableFields.value.map((f) => f.prop))
 }
@@ -324,13 +334,14 @@ async function onTableSaved(tableId: string) {
         <div class="rc-field-header">
           <label>输入字段选择（已选中 {{ selectedInputFieldProps.length }} / {{ inputTableFields.length }} 个字段，默认包含全部字段）</label>
           <div class="rc-field-actions">
+            <button v-if="inputPartiallySelected" type="button" class="rc-text-btn" data-testid="toggle-only-selected-input-fields" @click="inputOnlySelected = !inputOnlySelected">{{ inputOnlySelected ? `显示全部 ${inputTableFields.length} 个` : '只看已选' }}</button>
             <button type="button" class="rc-text-btn" data-testid="select-all-input-fields" @click="selectAllInputFields">全选</button>
             <button type="button" class="rc-text-btn" data-testid="clear-all-input-fields" @click="clearAllInputFields">清空</button>
           </div>
         </div>
         <div class="rc-tag-row" data-testid="input-fields-list">
           <span
-            v-for="f in inputTableFields"
+            v-for="f in visibleInputFields"
             :key="f.prop"
             class="rc-tag"
             :class="{ on: isInputFieldSelected(f.prop) }"

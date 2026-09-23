@@ -131,6 +131,34 @@ describe('TableTab · 结构化配置 / 正文规则（0804 S3-1，0805 收窄�
     expect(flow.configDirty).toBe(true)
   })
 
+  // 2026-09-23：字段多时默认只铺已选的，可切换显示全部；全选 / 一个没选时不出切换按钮
+  it('非规则节点：输入字段默认只看已选，可切换显示全部', async () => {
+    mockAssets()
+    const { flow, wrapper } = mountOnCollectorNode()
+    flow.patchCollect('web-1', { inputTable: INPUT_TABLE.tableId })
+    await flushPromises()
+    const shown = () => wrapper.get('[data-testid="input-fields-list"]').findAll('.rc-tag').map((t) => t.text())
+
+    // 默认全选：两个都在，没有切换按钮
+    expect(shown()).toHaveLength(2)
+    expect(wrapper.find('[data-testid="toggle-only-selected-input-fields"]').exists()).toBe(false)
+
+    flow.setInputFields('web-1', ['sku_id'])
+    await flushPromises()
+    expect(shown()).toHaveLength(1)
+    expect(shown()[0]).toContain('sku_id')
+    const toggle = wrapper.get('[data-testid="toggle-only-selected-input-fields"]')
+    expect(toggle.text()).toBe('显示全部 2 个')
+    await toggle.trigger('click')
+    expect(shown()).toHaveLength(2)
+    expect(wrapper.get('[data-testid="toggle-only-selected-input-fields"]').text()).toBe('只看已选')
+
+    // 一个没选：自动显示全部，不出切换按钮
+    await wrapper.find('[data-testid="clear-all-input-fields"]').trigger('click')
+    expect(shown()).toHaveLength(2)
+    expect(wrapper.find('[data-testid="toggle-only-selected-input-fields"]').exists()).toBe(false)
+  })
+
   it('非规则节点：表配置展示输入表/输入字段，默认全选且切换表后恢复默认', async () => {
     mockAssets()
     const { flow, wrapper } = mountOnCollectorNode()

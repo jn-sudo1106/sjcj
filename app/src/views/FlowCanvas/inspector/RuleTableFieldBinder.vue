@@ -73,8 +73,27 @@ function wallFields(all: RuleFieldOption[], pool: RuleFieldOption[], selected: s
   const chosen = new Set(selected ?? [])
   return all.filter((f) => inPool.has(f.itemCode) || chosen.has(f.itemCode))
 }
-const inputWall = computed(() => wallFields(props.inputFieldOptions, inputFieldPool.value, props.modelValue.inputFields))
-const outputWall = computed(() => wallFields(props.outputFieldOptions, outputFieldPool.value, props.modelValue.outputFields))
+/**
+ * 只看已选（2026-09-23，用户：「字段确实有点多」）。默认开：墙上只铺已选字段。
+ * 一个没选时自动显示全部（出参默认不勾，新节点一进来就得看到全部可选项）；
+ * 全选时两种模式一样，切换按钮不出现。
+ */
+const onlySelected = reactive({ input: true, output: true })
+function partiallySelected(selected: string[] | undefined, pool: RuleFieldOption[]) {
+  const n = selected?.length ?? 0
+  return n > 0 && pool.some((f) => !selected!.includes(f.itemCode))
+}
+const inputPartial = computed(() => partiallySelected(props.modelValue.inputFields, inputFieldPool.value))
+const outputPartial = computed(() => partiallySelected(props.modelValue.outputFields, outputFieldPool.value))
+function narrow(wall: RuleFieldOption[], selected: string[] | undefined, on: boolean, partial: boolean) {
+  return on && partial ? wall.filter((f) => selected?.includes(f.itemCode)) : wall
+}
+const inputWall = computed(() => narrow(
+  wallFields(props.inputFieldOptions, inputFieldPool.value, props.modelValue.inputFields),
+  props.modelValue.inputFields, onlySelected.input, inputPartial.value))
+const outputWall = computed(() => narrow(
+  wallFields(props.outputFieldOptions, outputFieldPool.value, props.modelValue.outputFields),
+  props.modelValue.outputFields, onlySelected.output, outputPartial.value))
 /** 「URLTITLE · 标题」；中文名缺失或与代码相同时只显示代码 */
 function fieldLabel(f: RuleFieldOption) {
   return f.itemName && f.itemName !== f.itemCode ? `${f.itemCode} · ${f.itemName}` : f.itemCode
@@ -261,6 +280,7 @@ function toggleField(kind: 'input' | 'output', code: string) {
     <div class="rc-field-header">
       <label>入参字段 *<template v-if="modelValue.inputTableId">（已选 {{ modelValue.inputFields?.length ?? 0 }} / {{ inputFieldPool.length }} 个，默认全选）</template></label>
       <div v-if="modelValue.inputTableId" class="rc-field-actions">
+        <button v-if="inputPartial" type="button" class="rc-text-btn" data-testid="rule-input-only-selected" @click="onlySelected.input = !onlySelected.input">{{ onlySelected.input ? `显示全部 ${inputFieldPool.length} 个` : '只看已选' }}</button>
         <button type="button" class="rc-text-btn" data-testid="rule-input-select-all" @click="selectAllFields('input')">全选</button>
         <button type="button" class="rc-text-btn" data-testid="rule-input-clear" @click="clearFields('input')">清空</button>
         <button type="button" class="rc-text-btn" @click="showSystemFields = !showSystemFields">{{ showSystemFields ? '隐藏系统字段' : '显示系统字段' }}</button>
@@ -321,6 +341,7 @@ function toggleField(kind: 'input' | 'output', code: string) {
     <div class="rc-field-header">
       <label>出参字段 *<template v-if="modelValue.inputTableId">（已选 {{ modelValue.outputFields?.length ?? 0 }} / {{ outputFieldPool.length }} 个）</template></label>
       <div v-if="modelValue.inputTableId" class="rc-field-actions">
+        <button v-if="outputPartial" type="button" class="rc-text-btn" data-testid="rule-output-only-selected" @click="onlySelected.output = !onlySelected.output">{{ onlySelected.output ? `显示全部 ${outputFieldPool.length} 个` : '只看已选' }}</button>
         <button type="button" class="rc-text-btn" data-testid="rule-output-select-all" @click="selectAllFields('output')">全选</button>
         <button type="button" class="rc-text-btn" data-testid="rule-output-clear" @click="clearFields('output')">清空</button>
       </div>
