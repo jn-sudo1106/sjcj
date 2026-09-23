@@ -74,7 +74,7 @@ const isOcr = computed(() => isOcrNode(cfg.value))
 
 const isAudioText = computed(() => isAudioTextNode(cfg.value))
 
-// ---- 音频提取文字编排配置（0923 增强：落成 CODE_RULE，见方案 §4）----
+// ---- 音频提取文字编排配置（0923 增强：落成 CORE_PARAM，见方案 §4）----
 // 之前只有一个不落库的「语音」下拉（局部 audioLanguage ref，切节点即清空）。本次整段换成
 // structuredConfig 驱动的配置模型：供应商（本地离线 / 远程接口）+ 远程供应商/模型 + 语言 +
 // 区间裁剪 + 输出格式/目录，读写走翻译节点同一套「从 stored 还原 / 改动即落库」范式。

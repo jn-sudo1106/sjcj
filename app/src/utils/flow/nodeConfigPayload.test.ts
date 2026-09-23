@@ -384,6 +384,33 @@ describe('coreParam（2026-09-21：翻译助手保存时把源/目标语言与�
   })
 })
 
+describe('coreParam（2026-09-23：音频提取文字保存时把转写配置写进 core_param，不再写 code_rule）', () => {
+  const AUDIO_JSON = '{"urlField":"","provider":"local","providerCode":"","remoteModel":"","language":"en","start":"","end":"50","outputFormat":"txt","outputBaseDir":""}'
+
+  it('编排 Tab 改过的音频配置写入 core_param，code_rule 不写（保持 base 原值）', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['audio-text'])
+    cfg.structuredConfig = AUDIO_JSON
+    const payload = buildConfigPayload(cfg, { codeRule: 'base 原值' })
+    expect(payload.coreParam).toBe(AUDIO_JSON)
+    expect(payload.codeRule).toBe('base 原值')
+  })
+
+  it('音频配置未回填时不写 core_param，沿用「有值才覆盖」', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['audio-text'])
+    expect(buildConfigPayload(cfg, { coreParam: 'base 原值' }).coreParam).toBe('base 原值')
+  })
+
+  it('applyConfigToNode 对音频节点从 core_param 回读，旧 code_rule 存量兜底', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['audio-text'])
+    applyConfigToNode(cfg, { ...config, codeRule: 'OLD', coreParam: AUDIO_JSON })
+    expect(cfg.structuredConfig).toBe(AUDIO_JSON)
+
+    const legacy = cloneConfig(NODE_CONFIGS['audio-text'])
+    applyConfigToNode(legacy, { ...config, codeRule: AUDIO_JSON, coreParam: '' })
+    expect(legacy.structuredConfig).toBe(AUDIO_JSON)
+  })
+})
+
 describe('coreParam（2026-09-20：打标签/摘要节点保存时把模型供应商与模型写进核心参数）', () => {
   it.each(['article-tag', 'article-summary'])('%s 节点写 {"providerCode","model"} 到 coreParam', (seedKey) => {
     const cfg = cloneConfig(NODE_CONFIGS[seedKey])

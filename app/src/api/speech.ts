@@ -218,7 +218,7 @@ function asStringValue(value: unknown, fallback = ''): string {
 }
 
 /**
- * 从节点已存的 CODE_RULE（structuredConfig JSON）还原音频编排配置；
+ * 从节点已存的 CORE_PARAM（structuredConfig JSON）还原音频编排配置；
  * 解析不出 / 字段不齐时回落默认，provider 只认 local/remote，其它按默认。
  */
 export function parseAudioOrchestrationConfig(stored: unknown): AudioOrchestrationConfig {
@@ -249,7 +249,7 @@ export function parseAudioOrchestrationConfig(stored: unknown): AudioOrchestrati
 }
 
 /**
- * 把音频编排配置落成 CODE_RULE 文本（保存时随 buildConfigPayload 写进 config.codeRule）。
+ * 把音频编排配置落成 CORE_PARAM 文本（保存时随 buildConfigPayload 写进 config.coreParam）。
  * remote 强制 txt（C5），落库前就抹掉 srt，避免存出后端做不到的组合。
  */
 export function serializeAudioOrchestrationConfig(cfg: AudioOrchestrationConfig): string {
