@@ -614,6 +614,7 @@ export function isTranslateNode(cfg?: NodeConfig): boolean {
  * 视频提取音频与规则处理共用同一套「表配置」表单（RuleTableFieldBinder 的入参/出参字段绑定）
  * 与 tab 结构（无「参数配置」Tab），步骤 type 也统一写 'rule'（发后续按 type 派发执行器，
  * 写 entry 会 500）。
+ * OCR 抓取（2026-09-22 并入，用户口径：表配置跟翻译助手做成一样）。
  *
  * 但编排内容仍分属 ruleCfg / execCfg 两处存储，不能直接并入 isRuleNode——那会把这几类
  * 误判成规则节点，编排配置 Tab 的模型/脚本工作区跟着串位（0917 已拍板这几类无脚本）。
@@ -621,6 +622,7 @@ export function isTranslateNode(cfg?: NodeConfig): boolean {
  */
 export function isRuleLikeNode(cfg?: NodeConfig): boolean {
   return isRuleNode(cfg)
+    || isOcrNode(cfg)
     || isTranslateNode(cfg)
     || isArticleTagNode(cfg)
     || isArticleSummaryNode(cfg)

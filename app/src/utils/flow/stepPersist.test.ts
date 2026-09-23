@@ -380,13 +380,15 @@ describe('文章打标签写步骤（2026-09-18）', () => {
 
 // 2026-09-18：文章生成摘要 / 音频提取文字 / 视频提取音频与翻译助手同待遇——
 // type 写 'rule'（发后续按 type 派发执行器），入参/出参随步骤 context/outContext 落库。
-describe('摘要/音视频处理节点写步骤（2026-09-18）', () => {
+// 2026-09-22：OCR 抓取同待遇（并入 isRuleLikeNode）。
+describe('摘要/音视频/OCR 处理节点写步骤（2026-09-18、09-22）', () => {
   const snapshot = { ...MEASURED_40600, sourceId: '430016398', nodeType: 'entry' }
 
   it.each([
     ['article-summary', '文章生成摘要'],
     ['audio-text', '音频提取文字'],
     ['video-audio', '视频提取音频'],
+    ['ocr', 'OCR抓取'],
   ])('%s：execCfg 的入参/出参写进 context/outContext，type 写 rule', (seedKey, title) => {
     const cfg = cloneConfig(NODE_CONFIGS[seedKey])
     cfg.title = title

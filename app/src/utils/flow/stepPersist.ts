@@ -226,7 +226,7 @@ export function mergeStepForWrite(args: {
 }): Step {
   const { snapshot, cfg, nodeId, sourceId } = args
   const rule = isRuleNode(cfg) ? cfg.ruleCfg : undefined
-  // 翻译助手 / 打标签 / 摘要 / 音频转文字 / 视频转音频（2026-09-18）：表配置的入参/出参跟规则节点同一套落库口径——存步骤的
+  // 翻译助手 / 打标签 / 摘要 / 音频转文字 / 视频转音频 / OCR 抓取（2026-09-18、09-22）：表配置的入参/出参跟规则节点同一套落库口径——存步骤的
   // context/outContext（物理列名），只是编排内容在 execCfg 而不是 ruleCfg。
   // nodeType 也跟规则节点一致写 'rule'：**发后续（source/nextStep）按步骤 type 派发执行器**，
   // 写 'entry' 会让旧后端拿采集执行器去跑这些配置，直接 500 服务器异常（2026-09-18 实测：

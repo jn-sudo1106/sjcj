@@ -1730,10 +1730,12 @@ describe('数据校验节点（sourceType=800，配置参考数据监控）', ()
 
   // 2026-09-18：摘要 / 音频转文字 / 视频转音频同样与规则处理一致写 type='rule'，
   // 回读按 configType 路由到各自的种子，不落 ruleCfg。
+  // 2026-09-22：OCR 抓取并入同一套（isRuleLikeNode）。
   it.each([
     ['700', 'video-audio', '视频提取音频'],
     ['710', 'audio-text', '音频提取文字'],
     ['720', 'article-summary', '文章生成摘要'],
+    ['150', 'ocr', 'OCR抓取'],
   ])('type=rule + configType=%s 回读为 %s（不落 ruleCfg）', (configType, template, name) => {
     const source = { sourceId: `s-${configType}`, name: '测试源', url: 'http://x', mainTable: 'T1' } as never
     const seed = buildSourceSeed(source, [
@@ -1773,6 +1775,21 @@ describe('数据校验节点（sourceType=800，配置参考数据监控）', ()
     // 顶层输入/输出表同样回填（与其它非采集节点一致）
     expect(cfg.inputTable).toBe('T1')
     expect(cfg.outputTable).toBe('T1')
+  })
+
+  // 2026-09-22：OCR 抓取的表绑定跟翻译助手同一口径（表配置并入规则式绑定），
+  // 回读时同样要把步骤里的输入/输出表填回 execCfg。
+  it('回读时把步骤的输入/输出表填回 execCfg（OCR 抓取）', () => {
+    const source = { sourceId: 's-ocr', name: '测试源', url: 'http://x', mainTable: 'T1' } as never
+    const seed = buildSourceSeed(source, [
+      { stepId: 'st1', sourceId: 's-ocr', name: '列表抓取', inputTable: '-', outputTable: 'T1', nodeType: 'list', enabled: true },
+      { stepId: 'st2', sourceId: 's-ocr', name: 'OCR抓取', inputTable: 'T1', outputTable: 'T1', configType: '150', nodeType: 'rule', dependsOn: ['st1'], enabled: true },
+    ] as never)
+    const cfg = seed.configs.st2
+    expect(cfg.template).toBe('ocr')
+    expect(cfg.ruleCfg).toBeUndefined()
+    expect(cfg.execCfg?.inputTableId).toBe('T1')
+    expect(cfg.execCfg?.outputTableId).toBe('T1')
   })
 })
 

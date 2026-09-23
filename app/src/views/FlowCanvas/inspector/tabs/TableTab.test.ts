@@ -492,11 +492,13 @@ describe('TableTab · 文章打标签（与规则处理同一套绑定）', () =
 
 // 2026-09-18：文章生成摘要 / 音频提取文字 / 视频提取音频与翻译助手同待遇——
 // 并入规则式表/字段绑定，绑定内容写 execCfg 而非 ruleCfg。
-describe('TableTab · 摘要/音视频处理节点（与规则处理同一套绑定）', () => {
+// 2026-09-22：OCR 抓取同待遇（用户口径：OCR 的表配置跟翻译助手做成一样）。
+describe('TableTab · 摘要/音视频/OCR 处理节点（与规则处理同一套绑定）', () => {
   it.each([
     ['article-summary', '文章生成摘要'],
     ['audio-text', '音频提取文字'],
     ['video-audio', '视频提取音频'],
+    ['ocr', 'OCR抓取'],
   ])('%s：展示规则式绑定，绑定结果写进 execCfg，ruleCfg 保持不出现', async (seedKey, title) => {
     mockAssets()
     setActivePinia(createPinia())
