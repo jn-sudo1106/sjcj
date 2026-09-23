@@ -543,6 +543,7 @@ const NODE_CONFIG_SEEDS = {
     inmap: [['video_file', '← 上游节点.video_file', '视频文件']],
     params: [['audio_format', 'enum', 'mp3/wav'], ['sample_rate', 'string', '16k']],
     output: [['audio_file', 'file', '音频文件'], ['duration', 'number', '时长（秒）']],
+    taskCfg: { queue: 'dev_web_videotoaudio', urlRule: '' },
   },
   'audio-text': {
     title: '音频提取文字', sub: '[710] 音频提取文字 · 语音转写', status: '待配置', planned: false,
@@ -551,6 +552,7 @@ const NODE_CONFIG_SEEDS = {
     inmap: [['audio_file', '← 上游节点.audio_file', '音频文件']],
     params: [['language', 'enum', 'zh,en'], ['min_confidence', 'number', '0.8']],
     output: [['asr_text', 'longtext', '转写文本'], ['segments', 'json', '分段与时间戳']],
+    taskCfg: { queue: 'dev_web_audiototext', urlRule: '' },
   },
   'article-tag': {
     title: '文章打标签', sub: '[730] 文章打标签 · 舆情多维标注', status: '待配置', planned: false,
@@ -559,6 +561,7 @@ const NODE_CONFIG_SEEDS = {
     inmap: [['content', '← 上游节点.content', '待标注文本']],
     params: [['label_schema', 'text', '提示词内置标签体系']],
     output: [['labels', 'json', '各维度标签'], ['summary', 'string', '一句话概括'], ['risk_level', 'string', '风险等级']],
+    taskCfg: { queue: 'dev_web_llm_generate', urlRule: '' },
   },
   translate: {
     title: '翻译助手', sub: '[800] 翻译助手 · 文本翻译', status: '待配置', planned: false,
@@ -571,6 +574,7 @@ const NODE_CONFIG_SEEDS = {
     //（2026-09-21 从 code_rule 调整到 core_param），格式与 /api/translate 同口径
     //（from/to 是百度语言码，自动检测 = auto；engine 存英文引擎码：baidu / google / youdao）。
     structuredConfig: '{"from":"auto","to":"en","engine":"baidu"}',
+    taskCfg: { queue: 'dev_web_translate', urlRule: '' },
   },
   'article-summary': {
     title: '文章生成摘要', sub: '[720] 文章生成摘要 · 文本生成', status: '待配置', planned: false,
@@ -579,6 +583,7 @@ const NODE_CONFIG_SEEDS = {
     inmap: [['content', '← 上游节点.content', '正文']],
     params: [['max_length', 'number', '200'], ['keyword_count', 'number', '5']],
     output: [['summary', 'longtext', '摘要'], ['keywords', 'json', '关键词']],
+    taskCfg: { queue: 'dev_web_llm_generate', urlRule: '' },
   },
   ocr: {
     title: 'OCR抓取', sub: '[150] OCR抓取 · 执行器待确认', status: '规划中（待执行器）', planned: true,
@@ -587,6 +592,7 @@ const NODE_CONFIG_SEEDS = {
     inmap: [['image_file', '← 文件下载.source_file', '图片或扫描件'], ['page_image', '← 文件解析.page_image', '页面图片']],
     params: [['min_confidence', 'number', '0.82'], ['language', 'enum', 'zh,en']],
     output: [['ocr_text', 'longtext', '识别文本'], ['confidence', 'number', '置信度'], ['bbox', 'json', '位置']],
+    taskCfg: { queue: 'dev_web_snatch_ocr', urlRule: '' },
   },
   'ai-extract': {
     title: '公告要素 AI 提取', sub: '[155] AI 提取 · schema', status: '规划中（待执行器）', planned: true,
@@ -877,6 +883,19 @@ export const TEMPLATE_TO_SNATCH: Record<string, string> = {
   'article-tag': '[730] - 文章打标签',
 }
 
+/**
+ * 媒体/文本/OCR 等处理类节点默认任务队列（2026-09-23 用户拍板）。
+ * 在节点新增（insertAfter / addNodeToBranch）与任务配置时赋默认队列名。
+ */
+export const DEFAULT_TASK_QUEUES: Record<string, string> = {
+  ocr: 'dev_web_snatch_ocr',
+  translate: 'dev_web_translate',
+  'article-summary': 'dev_web_llm_generate',
+  'article-tag': 'dev_web_llm_generate',
+  'audio-text': 'dev_web_audiototext',
+  'video-audio': 'dev_web_videotoaudio',
+}
+
 // 左侧节点库分组
 export const LIB_GROUPS: LibGroup[] = [
   {
@@ -908,8 +927,9 @@ export const LIB_GROUPS: LibGroup[] = [
     // 2026-09-17 局部回补：后端字典里 300 校验类 / 700 视频提取音频 / 710 音频提取文字 /
     // 720 文章生成摘要 都是**独立节点类型**，用户要求全部可见可选，所以这四条回到清单里。
     // 「收敛成一个通用入口」的结论在"清洗/去重/字段映射"那几条上仍然成立，没有回退。
+    //
+    // 2026-09-23 用户明确要求：节点类型「数据处理」去除（纯前端移除 PROC 通用入口，保留字典里的具体类型）。
     title: '数据处理', items: [
-      { template: 'process', code: 'PROC', name: '数据处理', desc: '清洗、去重、校验、结构化等，按需自定义配置', pill: 'p1' as Pill },
       { template: 'check', code: '300', name: '校验类', desc: '质量门禁、完整性与重复率校验', pill: 'p1' as Pill },
       { template: 'video-audio', code: '700', name: '视频提取音频', desc: '视频抽音轨，输出音频文件', pill: 'p1' as Pill },
       { template: 'audio-text', code: '710', name: '音频提取文字', desc: '语音转写为文本，保留分段', pill: 'p1' as Pill },

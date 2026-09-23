@@ -129,3 +129,24 @@ describe('TaskTab · 上下文来源（对齐旧平台）', () => {
     expect(wrapper.find('[data-testid="context-map-select"]').exists()).toBe(false)
   })
 })
+
+describe('TaskTab · 默认队列名称（2026-09-23 用户拍板）', () => {
+  it.each([
+    ['ocr', 'dev_web_snatch_ocr'],
+    ['translate', 'dev_web_translate'],
+    ['article-summary', 'dev_web_llm_generate'],
+    ['article-tag', 'dev_web_llm_generate'],
+    ['audio-text', 'dev_web_audiototext'],
+    ['video-audio', 'dev_web_videotoaudio'],
+  ])('新增节点 %s 任务配置回显默认队列 %s', async (template, expectedQueue) => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.insertAfter('start', template)
+    flow.setActiveTab('task')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    const queueInput = wrapper.findAll('.rc-field').find((f) => f.text().includes('队列名称'))?.find('input')
+    expect(queueInput?.element.value).toBe(expectedQueue)
+  })
+})

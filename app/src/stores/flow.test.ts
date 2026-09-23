@@ -1449,14 +1449,14 @@ describe('「落表输出」节点移除（优化 0701 问题四）', () => {
     expect(titles).toEqual(['文件下载', '数据处理'])
   })
 
-  it('数据处理组只保留通用入口 + 字典里独立编号的类型，文件下载预置不再引用旧节点类型', () => {
+  it('数据处理组只保留字典里独立编号的类型，通用数据处理节点已去除', () => {
     expect(LIB_GROUPS.map((group) => group.title)).toEqual(expect.not.arrayContaining(['解析结构化', '数据清洗', '数据校验']))
-    // 2026-09-17：0714 那次"三组细分节点收敛成一个通用入口"的结论，只对被砍掉的
-    // 解析结构化/清洗/去重/字段映射 仍然成立；后端字典里 300/700/710/720 是独立编号的类型，
-    // 用户要求全部可见可选，所以它们回到了清单里。
+    // 2026-09-23 用户明确要求：节点类型「数据处理」去除（纯前端移除 PROC 通用入口），
+    // 组内只保留后端字典里 300/700/710/720/730/800 独立编号的类型。
     expect(LIB_GROUPS.find((group) => group.title === '数据处理')?.items.map((it) => it.name)).toEqual([
-      '数据处理', '校验类', '视频提取音频', '音频提取文字', '文章生成摘要', '文章打标签', '翻译助手',
+      '校验类', '视频提取音频', '音频提取文字', '文章生成摘要', '文章打标签', '翻译助手',
     ])
+    expect(LIB_GROUPS.flatMap((g) => g.items).some((it) => it.name === '数据处理' || it.code === 'PROC')).toBe(false)
 
     const flow = mockFlowRecommend({ intent: 'file-parse' }).flow
     const titles = nodeIds(flow.main).map((id) => flow.configs[id].title)
@@ -1550,6 +1550,33 @@ describe('节点类型补齐（2026-09-17，与后端 source_type 对齐）', ()
     // 用户改过抓取类型的节点按改后的算（snatchType 优先于种子里的 sub）
     f.configs[excelId].collectCfg!.snatchType = '[130] - PDF抓取'
     expect(iconFor(f.configs[excelId])).toBe('130')
+  })
+
+  // 2026-09-23 用户明确要求：OCR / 翻译 / 摘要 / 标签 / 语音 / 视频 新增时任务配置默认给队列名
+  it.each([
+    ['ocr', 'dev_web_snatch_ocr'],
+    ['translate', 'dev_web_translate'],
+    ['article-summary', 'dev_web_llm_generate'],
+    ['article-tag', 'dev_web_llm_generate'],
+    ['audio-text', 'dev_web_audiototext'],
+    ['video-audio', 'dev_web_videotoaudio'],
+  ])('主链新增节点 %s：默认任务队列为 %s', (template, expectedQueue) => {
+    const id = f.insertAfter('start', template)
+    expect(f.configs[id].taskCfg?.queue).toBe(expectedQueue)
+  })
+
+  it.each([
+    ['ocr', 'dev_web_snatch_ocr'],
+    ['translate', 'dev_web_translate'],
+    ['article-summary', 'dev_web_llm_generate'],
+    ['article-tag', 'dev_web_llm_generate'],
+    ['audio-text', 'dev_web_audiototext'],
+    ['video-audio', 'dev_web_videotoaudio'],
+  ])('分支内新增节点 %s：默认任务队列为 %s', (template, expectedQueue) => {
+    const decId = f.insertAfter('start', 'decision')!
+    const branchId = f.branchGroups[0].branches[0].id
+    const id = f.addNodeToBranch(decId, branchId, template)!
+    expect(f.configs[id].taskCfg?.queue).toBe(expectedQueue)
   })
 })
 

@@ -10,6 +10,7 @@ import {
   TEMPLATE_TO_NODE,
   TEMPLATE_TO_NAME,
   TEMPLATE_TO_SNATCH,
+  DEFAULT_TASK_QUEUES,
   cloneConfig,
   conditionGroupLabel,
   conditionGroupIsSet,
@@ -455,6 +456,13 @@ export const useFlowStore = defineStore('flow', () => {
     if (!cfg.collectCfg && isDataNode(cfg) && !cfg.outputTable) {
       cfg.outputTable = upstreamOutputTable(prevId)
     }
+    const defaultQueue = DEFAULT_TASK_QUEUES[template]
+    if (defaultQueue) {
+      cfg.taskCfg = {
+        ...(cfg.taskCfg ?? { urlRule: '' }),
+        queue: defaultQueue,
+      }
+    }
     const id = `${srcKey}-${seq++}`
     configs[id] = cfg
     const idx = main.value.indexOf(prevId)
@@ -506,6 +514,13 @@ export const useFlowStore = defineStore('flow', () => {
     }
     if (!cfg.collectCfg && isDataNode(cfg) && !cfg.outputTable) {
       cfg.outputTable = upstreamOutputTableInBranch(ownerId, branch)
+    }
+    const defaultQueue = DEFAULT_TASK_QUEUES[template]
+    if (defaultQueue) {
+      cfg.taskCfg = {
+        ...(cfg.taskCfg ?? { urlRule: '' }),
+        queue: defaultQueue,
+      }
     }
     const id = `${srcKey}-${seq++}`
     configs[id] = cfg

@@ -29,4 +29,14 @@ describe('AddNodePopover', () => {
     expect(browserItem.attributes('draggable')).toBe('true')
     expect(wrapper.emitted('dragstart')?.[0]?.[1]).toBe('browser-html')
   })
+
+  it('节点库中不再包含通用的「数据处理」节点类型（PROC 已去除）', () => {
+    const wrapper = mount(AddNodePopover, { props: { x: 100, y: 100 } })
+    const items = wrapper.findAll('.anp-item')
+    const itemNames = items.map((item) => item.find('.anp-item-text b').text())
+    const badges = wrapper.findAll('.anp-item-icon').map((item) => item.text())
+
+    expect(itemNames).not.toContain('数据处理')
+    expect(badges).not.toContain('PROC')
+  })
 })
