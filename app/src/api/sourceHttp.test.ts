@@ -881,6 +881,9 @@ describe('旧平台新建源 HTTP 契约', () => {
       configId: '70598',
       state: 'C',
       taskId: '62139720',
+      queue: 'news_cont',
+      startTime: '2026-09-21',
+      endTime: '2026-09-23',
       page: 2,
       size: 30,
     })
@@ -889,6 +892,11 @@ describe('旧平台新建源 HTTP 契约', () => {
     expect(init.method).toBe('GET')
     expect(url).toContain('/api/v1/task/topTaskPaged')
     expect(url).toContain('taskId=62139720')
+    // 队列只发后端认的 taskTopic（B24），topic / queue 两个旧参数名后端从来不认，已删
+    expect(url).toContain('taskTopic=news_cont')
+    expect(url).not.toMatch(/[?&](topic|queue)=/)
+    expect(url).toContain('startTime=2026-09-21')
+    expect(url).toContain('endTime=2026-09-23')
     expect(url).not.toContain('siteId=')
     expect(url).not.toContain('nodeId=')
     expect(url).toContain('page=2')

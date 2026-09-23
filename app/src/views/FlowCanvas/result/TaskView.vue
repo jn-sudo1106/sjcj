@@ -54,14 +54,39 @@ const total = ref(0)
 const loading = ref(false)
 const page = ref(1)
 const size = ref(20)
-const filters = reactive({ sourceId: '', nodeId: '', state: '', queue: '', taskId: '' })
+const filters = reactive({ sourceId: '', nodeId: '', state: '', queue: '', taskId: '', startTime: '', endTime: '' })
+
+/**
+ * 创建时间区间（0920-04 会上：「支持一个当天，然后支持一个范围」；后端 B27 于 2026-09-23 加）。
+ *
+ * 只传日期（YYYY-MM-DD），后端自己补成当天 00:00:00 ~ 23:59:59.999，两端闭区间。
+ * 日期面板选不出结束早于开始、也不会出非法格式，所以后端那条 code=1 在这里碰不到。
+ * 口径是任务的**创建时间**（CREATE_DT），不是表格里那列「更新时间」——placeholder 写明。
+ */
+const dateRange = computed<string[] | null>({
+  get: () => (filters.startTime && filters.endTime ? [filters.startTime, filters.endTime] : null),
+  set: (value: string[] | null) => {
+    filters.startTime = value?.[0] ?? ''
+    filters.endTime = value?.[1] ?? ''
+  },
+})
+function daysAgo(n: number): Date {
+  const d = new Date()
+  d.setDate(d.getDate() - n)
+  return d
+}
+const DATE_SHORTCUTS = [
+  { text: '今天', value: () => [daysAgo(0), daysAgo(0)] },
+  { text: '近 3 天', value: () => [daysAgo(2), daysAgo(0)] },
+  { text: '近 7 天', value: () => [daysAgo(6), daysAgo(0)] },
+]
 
 /**
  * 「字段 ▾ ＋ 输入框」查询（0920-04，样式同源视图 0917-11 的三合一），回车才查。
  *
  * 2026-09-23 实测 topTaskPaged 只认 `taskId`；数据 ID、任务 URL 试了近 20 种参数名全被忽略
  * （提后端 B32）。那两项先放在下拉里但**禁用**：能看到规划，又不会填了没反应——
- * 队列筛选那个假控件（B24）就是前车之鉴。后端加上后把 ready 改成 true、query 里带上即可。
+ * 队列筛选当初（B24，后端 0923 才补上）就是前车之鉴。后端加上后把 ready 改成 true、query 里带上即可。
  */
 type TaskSearchField = 'taskId' | 'bizId' | 'taskUrl'
 const TASK_SEARCH_FIELDS: { value: TaskSearchField; label: string; placeholder: string; ready: boolean }[] = [
@@ -323,6 +348,8 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
     queue: filters.queue?.trim() || undefined,
     topic: filters.queue?.trim() || undefined,
     taskId: filters.taskId || undefined,
+    startTime: filters.startTime || undefined,
+    endTime: filters.endTime || undefined,
     page: page.value,
     size: size.value,
   }
@@ -339,12 +366,14 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
     rows.value = result?.list ?? []
     total.value = result?.total ?? 0
     syncPoll()
-  } catch {
+  } catch (error) {
     if (requestId !== taskRequest) return
     if (!opts.silent) {
       rows.value = []
       total.value = 0
-      ElMessage.warning('加载任务记录失败')
+      // 后端参数校验失败会带原因（如时间范围不合法），给出来比笼统一句好排查
+      const reason = error instanceof Error && error.message ? `：${error.message}` : ''
+      ElMessage.warning(`加载任务记录失败${reason}`)
     }
     // 静默轮询失败不清空列表、不打扰，下个周期再试
   } finally {
@@ -359,6 +388,8 @@ watch([siteId, sourceId], async () => {
   filters.state = ''
   filters.queue = ''
   filters.taskId = ''
+  filters.startTime = ''
+  filters.endTime = ''
   searchText.value = ''
   await loadSiteSources()
 }, { immediate: true })
@@ -375,7 +406,7 @@ watch(filterSteps, () => {
 // 而节点下拉这时是不渲染的，用户看不见也清不掉。必须排在下面那个查询 watch 之前。
 watch(() => filters.sourceId, () => { filters.nodeId = '' })
 
-watch(() => [filters.sourceId, filters.nodeId, filters.state, filters.queue, filters.taskId, siteScopeId.value] as const, ([nextSourceId], previous) => {
+watch(() => [filters.sourceId, filters.nodeId, filters.state, filters.queue, filters.taskId, filters.startTime, filters.endTime, siteScopeId.value] as const, ([nextSourceId], previous) => {
   page.value = 1
   void Promise.all([nextSourceId !== previous?.[0] ? loadNodeMetadata() : Promise.resolve(), loadTasks()])
 }, { immediate: true })
@@ -396,6 +427,8 @@ function resetFilters() {
   filters.state = ''
   filters.queue = ''
   filters.taskId = ''
+  filters.startTime = ''
+  filters.endTime = ''
   searchText.value = ''
 }
 
@@ -498,6 +531,19 @@ const nextStepHints = computed(() => {
               @keyup.enter="applySearch"
             />
           </span>
+          <el-date-picker
+            v-model="dateRange"
+            class="tv-date-range"
+            data-testid="task-date-range"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            range-separator="至"
+            start-placeholder="创建时间起"
+            end-placeholder="创建时间止"
+            :shortcuts="DATE_SHORTCUTS"
+            size="small"
+            unlink-panels
+          />
           <select v-model="filters.state" class="tv-input" aria-label="任务状态">
             <option value="">状态（全部）</option>
             <option value="C">完成</option>
@@ -671,6 +717,7 @@ const nextStepHints = computed(() => {
 .tv-search { display: inline-flex; gap: 4px; }
 .tv-search-field { min-width: 96px; }
 .tv-search-input { min-width: 160px; }
+.tv-filters :deep(.tv-date-range) { flex: none; width: 240px; height: 28px; }
 .tv-queue-clickable { cursor: pointer; color: var(--rc-primary); }
 .tv-queue-clickable:hover { text-decoration: underline; }
 .tv-filters .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; white-space: nowrap; }

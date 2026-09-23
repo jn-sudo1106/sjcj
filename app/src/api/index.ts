@@ -865,15 +865,15 @@ export const sourceApi = {
         // taskId=1 → 0 条。同一轮试了数据 ID（bizId/entryId/dataId…）和任务 URL（taskUrl/url…）
         // 近 20 种参数名，全部被忽略（count 恒 5401），已提后端（0923 汇总 B32），别再换名字试。
         taskId: q.taskId,
-        // ⚠️ 下面这三个参数名**后端一个都不认**，等于没传（2026-09-18 实测）：带真实队列名、
-        // 带 `zzz_no_such_queue`、什么都不带，返回的 count 完全一样——不是匹配不上，是这个
-        // 条件根本没进 SQL。旧平台 api/task.js 头部注释列的入参里也没有队列，后端从来没做过。
-        // 同一批参数里 sourceId / state / configId 都是真生效的，坏的只有队列这一项。
-        // 需求已提后端（设计方案/0918-任务视图队列筛选_接口需求），加上 taskTopic 后这里不用改。
-        // 在那之前，界面上的「队列名筛选」填了不会有反应——这是已知的，不要再换参数名试。
+        // 队列名，子串匹配（TASK_TOPIC LIKE %?%）。后端 2026-09-23 加的（B24，topTaskPaged-api.md）；
+        // 实测站 11 异常任务 5405 条：news_cont → 5332、qinglong → 7、不存在的名字 → 0。
+        // 此前前端顺带发的 topic / queue 两个参数名后端从来不认，已删。
         taskTopic: topic,
-        topic,
-        queue: topic,
+        // 按 task_inst.CREATE_DT 的创建时间区间（B27，同一批加的），闭区间，可只传一端。
+        // 只给日期时后端自动补成当天 00:00:00.000 ~ 23:59:59.999。格式非法或结束早于开始
+        // → 返回 code=1 + msg、不查询（请求层会把 msg 抛成错误）。
+        startTime: q.startTime,
+        endTime: q.endTime,
       },
     })
     return unwrapTaskInstPage(result)

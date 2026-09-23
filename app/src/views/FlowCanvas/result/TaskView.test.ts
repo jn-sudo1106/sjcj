@@ -330,6 +330,60 @@ describe('TaskView', () => {
     wrapper.unmount()
   })
 
+  // 0920-04 / B27：创建时间区间。后端 2026-09-23 加了 startTime / endTime（只给日期时自动补全天）。
+  it('按创建时间区间查询：选了日期带 startTime/endTime，清空后撤掉', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const source = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+
+    const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 0, list: [] })
+    // 单测不装 Element Plus，给日期组件一个只认 v-model 的替身
+    const DatePickerStub = {
+      name: 'ElDatePicker',
+      props: ['modelValue', 'valueFormat'],
+      emits: ['update:modelValue'],
+      template: '<div data-testid="task-date-range" />',
+    }
+    const wrapper = shallowMount(TaskView, {
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true, 'el-date-picker': DatePickerStub } },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await flushPromises()
+
+    const picker = wrapper.findComponent(DatePickerStub)
+    expect(picker.exists()).toBe(true)
+    expect((picker as any).props('valueFormat')).toBe('YYYY-MM-DD')
+    await (picker as any).vm.$emit('update:modelValue', ['2026-09-21', '2026-09-23'])
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ startTime: '2026-09-21', endTime: '2026-09-23', page: 1 }))
+
+    const clearBtn = wrapper.findAll('button').find((b) => b.text() === '清空')!
+    await clearBtn.trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ startTime: undefined, endTime: undefined }))
+
+    wrapper.unmount()
+  })
+
+  it('查询失败时把后端给的原因带出来（如时间范围不合法）', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const source = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+    vi.spyOn(sourceApi, 'sourceTaskPaged').mockRejectedValue(new Error('时间范围不合法'))
+    const warn = vi.spyOn(ElMessage, 'warning')
+
+    const wrapper = shallowMount(TaskView, {
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await flushPromises()
+
+    expect(warn).toHaveBeenCalledWith('加载任务记录失败：时间范围不合法')
+    wrapper.unmount()
+  })
+
   describe('0917-01 · 任务行定位信息与详情抽屉', () => {
     it('表格渲染「数据 ID」与「任务 URL」列，空值渲染「—」', async () => {
       setActivePinia(createPinia())
