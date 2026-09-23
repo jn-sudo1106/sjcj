@@ -8,10 +8,17 @@ import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import SourceTab from './SourceTab.vue'
 import { beginSitesFetch, clearCollectAssetsCache, collectAssetsCache, commitSites } from './siteListCache'
 import { useUiStore } from '@/stores/ui'
-import { sourceApi, siteApi } from '@/api'
+import { sourceApi, siteApi, favoriteApi } from '@/api'
 
+// 收藏以后端为准（B30）。这里用一个集合代替服务端：点星写进去，挂载时 loadFavoriteSites 从它读回来，
+// 与真实后端行为一致（否则挂载那次加载会拿 mock 的空结果把测试里点的星冲掉）。
+const serverFavorites = new Set<string>()
 beforeEach(() => {
   clearCollectAssetsCache()
+  serverFavorites.clear()
+  vi.spyOn(favoriteApi, 'listIds').mockImplementation(async () => [...serverFavorites])
+  vi.spyOn(favoriteApi, 'add').mockImplementation(async (_type, id) => { serverFavorites.add(id); return { ok: true, message: '' } })
+  vi.spyOn(favoriteApi, 'remove').mockImplementation(async (_type, id) => { serverFavorites.delete(id); return { ok: true, message: '' } })
 })
 
 vi.mock('element-plus', async (importOriginal) => {
@@ -248,7 +255,7 @@ describe('SourceTab 排序', () => {
 })
 
 // 0917-17「我收藏的网站」：产品会上催了两次，痛点是"找半天"。
-// 收藏存本地（utils/siteFavorites），收藏的**恒排最前**，另给一个「只看收藏」过滤。
+// 收藏存后端（utils/siteFavorites → favoriteApi，2026-09-23 前是本地），收藏的**恒排最前**，另给一个「只看收藏」过滤。
 describe('SourceTab · 我收藏的网站（0917-17）', () => {
   const sites = [
     { siteId: 's-old', name: '旧站', sourceCount: 1, errorCount: 0, updatedAt: '2026-07-20 16:57:32', tags: [] },
@@ -271,7 +278,7 @@ describe('SourceTab · 我收藏的网站（0917-17）', () => {
 
   it('收藏的排最前，组内仍按当前排序（最近修改）', async () => {
     const fav = await import('@/utils/siteFavorites')
-    fav.toggleFavoriteSite('s-old') // 时间最旧，本来排最后
+    await fav.toggleFavoriteSite('s-old') // 时间最旧，本来排最后
     const { wrapper } = await mountWithSites()
 
     expect(shown(wrapper)).toEqual(['s-old', 's-new', 's-mid'])
@@ -279,7 +286,7 @@ describe('SourceTab · 我收藏的网站（0917-17）', () => {
 
   it('换成「名称」排序，收藏的仍在最前，其余按名称', async () => {
     const fav = await import('@/utils/siteFavorites')
-    fav.toggleFavoriteSite('s-mid')
+    await fav.toggleFavoriteSite('s-mid')
     const { wrapper } = await mountWithSites()
 
     const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
@@ -293,7 +300,7 @@ describe('SourceTab · 我收藏的网站（0917-17）', () => {
 
   it('「只看收藏」把其余藏起来，total 跟着变（列表是前端分页，别只改展示）', async () => {
     const fav = await import('@/utils/siteFavorites')
-    fav.toggleFavoriteSite('s-new')
+    await fav.toggleFavoriteSite('s-new')
     const { wrapper } = await mountWithSites()
     const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
     expect(toolbar.props('favCount')).toBe(1)
@@ -320,7 +327,7 @@ describe('SourceTab · 我收藏的网站（0917-17）', () => {
   // 2026-09-21 用户定：过滤入口并进排序下拉（原先是工具条上一个独立按钮）
   it('排序下拉选「只看收藏」时不动排序，切回来还是原来那个排序', async () => {
     const fav = await import('@/utils/siteFavorites')
-    fav.toggleFavoriteSite('s-mid')
+    await fav.toggleFavoriteSite('s-mid')
     const { wrapper } = await mountWithSites()
     const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
 
@@ -343,7 +350,7 @@ describe('SourceTab · 我收藏的网站（0917-17）', () => {
   // 「我收藏的网站」tab 进来就是 favOnly=true，且下拉里不该再给"关掉"的选项
   it('tab 传 favOnly 时，一进来就只看收藏，并把下拉锁住', async () => {
     const fav = await import('@/utils/siteFavorites')
-    fav.toggleFavoriteSite('s-new')
+    await fav.toggleFavoriteSite('s-new')
     vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 3, list: [...sites] as never })
     const router = makeRouter()
     await router.push('/collect')
@@ -429,7 +436,7 @@ describe('SourceTab · 最近打开的网站（0917-17）', () => {
   it('与「只看收藏」互斥：切过去另一个自动关掉', async () => {
     const fav = await import('@/utils/siteFavorites')
     const rec = await import('@/utils/siteRecents')
-    fav.toggleFavoriteSite('s-new')
+    await fav.toggleFavoriteSite('s-new')
     rec.recordSiteVisit('s-old')
     const { wrapper } = await mountWithSites()
     const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })

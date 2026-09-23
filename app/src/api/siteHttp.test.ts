@@ -332,4 +332,54 @@ describe('网站读取 HTTP 契约', () => {
       expect(JSON.parse(String(init.body))).not.toHaveProperty('tags')
     })
   })
+
+  // B30 用户收藏（favorite-api.md）。userId 走会话，前端不传；itemType 必须大写、itemId 正整数
+  describe('favoriteApi', () => {
+    it('listIds：GET favorite/list，limit=500，不足一页就停', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ code: 0, count: 2, data: [{ itemType: 'SITE', itemId: 123 }, { itemType: 'SITE', itemId: 118 }] }))
+      const { favoriteApi } = await import('./index')
+
+      expect(await favoriteApi.listIds('SITE')).toEqual(['123', '118'])
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(init.method).toBe('GET')
+      expect(url).toContain('/api/v1/favorite/list')
+      expect(url).toContain('itemType=SITE')
+      expect(url).toContain('limit=500')
+      expect(url).not.toContain('userId')
+    })
+
+    it('listIds：满 500 条继续翻页，直到够总数', async () => {
+      const page1 = Array.from({ length: 500 }, (_, i) => ({ itemType: 'SITE', itemId: i + 1 }))
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse({ code: 0, count: 501, data: page1 }))
+        .mockResolvedValueOnce(jsonResponse({ code: 0, count: 501, data: [{ itemType: 'SITE', itemId: 999 }] }))
+      const { favoriteApi } = await import('./index')
+
+      const ids = await favoriteApi.listIds('SITE')
+      expect(ids).toHaveLength(501)
+      expect(ids.at(-1)).toBe('999')
+      expect(String(fetchMock.mock.calls[1][0])).toContain('page=2')
+    })
+
+    it('add / remove：POST JSON body，itemId 转成数字', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '操作成功', data: null }))
+      const { favoriteApi } = await import('./index')
+
+      await favoriteApi.add('SITE', '123')
+      await favoriteApi.remove('SITE', '123')
+
+      const [addUrl, addInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(addUrl).toContain('/api/v1/favorite/add')
+      expect(addInit.method).toBe('POST')
+      expect(JSON.parse(String(addInit.body))).toEqual({ itemType: 'SITE', itemId: 123 })
+      expect(String(fetchMock.mock.calls[1][0])).toContain('/api/v1/favorite/remove')
+    })
+
+    it('后端失败（如未登录）抛出带原因的错误，交给调用方回滚', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ success: false, code: '-1', msg: '未登录', data: null }))
+      const { favoriteApi } = await import('./index')
+      await expect(favoriteApi.add('SITE', '123')).rejects.toThrow('未登录')
+    })
+  })
 })

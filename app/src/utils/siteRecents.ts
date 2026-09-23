@@ -13,7 +13,8 @@ import { ref } from 'vue'
  * - 收藏是**显式的、无上限、无序**（靠置顶 + 过滤用）；
  * - 最近打开是**隐式的、有上限、有序**（最近在前，只留 {@link MAX} 条）。
  *
- * 同样是本地存，同样换电脑就没了；后端那张表（B30）用另一个 `biz_type` 就能顺带装下。
+ * 收藏 2026-09-23 已改存后端（B30）；最近打开仍是本地存、换电脑就没了。
+ * 要持久化的话，后端收藏表按 itemType 区分，另起一个类型就能顺带装下。
  */
 const KEY = 'rc.site.recent'
 /** 留 10 条：再多就不叫"最近"了，下拉里也看不过来 */
@@ -64,7 +65,7 @@ export function recentRankOf(siteId: string): number {
   return i < 0 ? MAX : i
 }
 
-// 跨标签页同步，与 siteFavorites 同一套做法
+// 跨标签页同步：另一个标签页写了，这边跟着读（storage 事件只在其他标签页写入时触发）
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (e) => {
     if (e.key === KEY) recentSiteIds.value = read()

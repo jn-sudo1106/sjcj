@@ -448,6 +448,11 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 语义实测：**覆盖式**（打 `丙;丁` 后再打 `戊`，结果只剩 `戊`，不是追加）；
   // 中文分号后端会归一化（传 `己；庚` 存成 `己;庚`）；收 ids 数组，天然支持批量。
   { path: 'site/batchChangeTags', desc: '批量改网站标签（覆盖式，传空串=清空）', danger: true, live: true },
+  // 用户收藏（后端 2026-09-23，favorite-api.md；B30）。userId 取自会话，不由前端传。
+  // 只用 list / add / remove：网站列表要「收藏置顶 + 只看收藏」，需要全部收藏 ID，按页查的 states 用不上。
+  { path: 'favorite/list', desc: '当前用户收藏列表（按 itemType，limit ≤ 500）', live: true },
+  { path: 'favorite/add', desc: '收藏（幂等）', live: true },
+  { path: 'favorite/remove', desc: '取消收藏（幂等）', live: true },
   { path: 'site/sourcesOfSite', desc: '网站下的源列表', impl: true },
   { path: 'site/addSource', desc: '网站下新增源（默认继承统一流程）', impl: true },
   { path: 'site/cloneSource', desc: '复制源流程、配置和表结构（不复制数据与运行实例）', danger: true, impl: true },

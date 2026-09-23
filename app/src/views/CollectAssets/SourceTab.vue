@@ -5,7 +5,7 @@ import { ElMessage } from 'element-plus'
 import { sourceApi, siteApi, expandCategoryIds, type Site, type SourceCategory } from '@/api'
 import { useUiStore } from '@/stores/ui'
 import { confirmDanger } from '@/utils/confirmDanger'
-import { favoriteSiteIds } from '@/utils/siteFavorites'
+import { favoriteSiteIds, loadFavoriteSites } from '@/utils/siteFavorites'
 import { recentRankOf, recentSiteIds } from '@/utils/siteRecents'
 import SiteCardGrid from './SiteCardGrid.vue'
 import FilterToolbar from './components/FilterToolbar.vue'
@@ -430,6 +430,8 @@ onMounted(() => {
   // 并发优化：优先发起核心列表与统计请求；分类与标签后置并发，不再产生扇出请求风暴
   void loadStats({ revalidate: true })
   void loadList({ revalidate: true })
+  // 收藏以后端为准（B30）；回来后 watch(favoriteSiteIds) 会就地重排，不用等它
+  void loadFavoriteSites()
   void loadCategories()
   void loadTagOptions()
   ui.registerAction('新建采集', openNewFlowCanvas)
@@ -443,6 +445,7 @@ onActivated(() => {
     activatedOnce = true
     return
   }
+  void loadFavoriteSites()
   void loadStats({ revalidate: true })
   void loadList({ revalidate: true })
 })

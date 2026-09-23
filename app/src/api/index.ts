@@ -3104,3 +3104,50 @@ export const categoryApi = {
   },
 }
 
+
+/**
+ * 用户收藏（后端 2026-09-23，`favorite-api.md`；B30）。
+ *
+ * userId 由后端从会话取，前端不传——所以换浏览器 / 换电脑同一账号看到的是同一份。
+ * itemType 必须大写（后端正则 `[A-Z_]{1,32}`，小写判非法）；itemId 必须是正整数。
+ */
+export type FavoriteItemType = 'SITE' | 'SOURCE' | 'CONFIG' | 'FLOW'
+
+/** list 单页上限（后端校验 1~500） */
+const FAVORITE_PAGE_LIMIT = 500
+
+export const favoriteApi = {
+  /**
+   * 当前用户某类收藏的**全部** ID（最新收藏在前）。按 500 一页翻完——网站列表要「收藏置顶 +
+   * 只看收藏」，需要完整集合，不能只查当前页（所以不用 states）。
+   */
+  listIds: async (itemType: FavoriteItemType): Promise<string[]> => {
+    const ids: string[] = []
+    for (let page = 1; ; page++) {
+      const result = await request<{ list?: unknown[]; total?: number }>('favorite/list', { itemType, page }, {
+        method: 'GET',
+        httpParams: { itemType, page, limit: FAVORITE_PAGE_LIMIT },
+      })
+      const rows = result?.list ?? []
+      for (const row of rows) {
+        const id = (row as { itemId?: unknown })?.itemId
+        if (id != null && id !== '') ids.push(String(id))
+      }
+      // 翻到不足一页，或者已经够总数，就停；页数再加个硬上限防异常接口死循环
+      if (rows.length < FAVORITE_PAGE_LIMIT || ids.length >= Number(result?.total ?? 0) || page >= 20) break
+    }
+    return ids
+  },
+  /** 收藏（幂等：重复收藏不报错、不更新收藏时间） */
+  add: (itemType: FavoriteItemType, itemId: string) =>
+    request<Ack>('favorite/add', { itemType, itemId }, {
+      method: 'POST',
+      httpParams: { itemType, itemId: Number(itemId) },
+    }),
+  /** 取消收藏（幂等：未收藏也返回成功） */
+  remove: (itemType: FavoriteItemType, itemId: string) =>
+    request<Ack>('favorite/remove', { itemType, itemId }, {
+      method: 'POST',
+      httpParams: { itemType, itemId: Number(itemId) },
+    }),
+}
