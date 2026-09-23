@@ -21,6 +21,7 @@ import { isArticleSummaryNode, isArticleTagNode, isAudioTextNode, isDataValidati
 import { TRANSLATE_AUTO_CODE, TRANSLATE_ENGINE_CODES, TRANSLATE_LANGUAGE_CODES, engineCodeOf, engineLabelOf, languageCodeOf, translateSampleOf, translateText } from '@/api/translate'
 import {
   AUDIO_ORCHESTRATION_DEFAULTS,
+  AUDIO_PROVIDER_OPTIONS,
   SPEECH_LANGUAGE_OPTIONS,
   SPEECH_MAX_DURATION_SECONDS,
   SPEECH_MODEL_OPTIONS,
@@ -89,16 +90,19 @@ function writeAudioConfig() {
   setNodeStructuredConfig(serializeAudioOrchestrationConfig(audioCfg.value))
 }
 function onAudioProviderChange() {
-  // remote 只回整段文本、无分段（方案 C5）：切到远程时把已选的 srt 收回 txt
-  if (audioCfg.value.provider === 'remote') audioCfg.value.outputFormat = 'txt'
+  // remote / assemblyai 只回整段文本、无分段（方案 C5）：切到远程类时把已选的 srt 收回 txt
+  if (audioCfg.value.provider === 'remote' || audioCfg.value.provider === 'assemblyai') {
+    audioCfg.value.outputFormat = 'txt'
+  }
   writeAudioConfig()
 }
 /** 区间即时校验（两端都填且 end≤start 才报），提示挂在区间下方 */
 const audioRangeError = computed(() =>
   isAudioText.value ? validateAudioRange(audioCfg.value.start, audioCfg.value.end) : null,
 )
-/** remote 下 SRT 不可选（后端做不到）；local 放开 */
-const audioSrtDisabled = computed(() => audioCfg.value.provider === 'remote')
+/** remote / assemblyai 下 SRT 不可选（后端只回整段文本）；local 放开 */
+const audioSrtDisabled = computed(() =>
+  audioCfg.value.provider === 'remote' || audioCfg.value.provider === 'assemblyai')
 
 watch(
   () => [id.value, cfg.value?.structuredConfig ?? ''] as const,
@@ -1390,8 +1394,7 @@ function onTestScript() {
       <label class="audio-config-item">
         <span>模型供应商</span>
         <select v-model="audioCfg.provider" class="rc-select" data-testid="audio-provider" @change="onAudioProviderChange">
-          <option value="local">本地离线模型</option>
-          <option value="remote">语音转文字接口</option>
+          <option v-for="item in AUDIO_PROVIDER_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</option>
         </select>
       </label>
       <label class="audio-config-item">
@@ -1433,7 +1436,7 @@ function onTestScript() {
       </label>
       <label class="audio-config-item">
         <span>保存目录</span>
-        <input v-model="audioCfg.outputBaseDir" class="rc-input" placeholder="留空用默认（/code01）" data-testid="audio-output-base-dir" @change="writeAudioConfig" />
+        <input v-model="audioCfg.outputBaseDir" class="rc-input" placeholder="留空用默认（/media）" data-testid="audio-output-base-dir" @change="writeAudioConfig" />
       </label>
     </div>
     <div v-if="audioCfg.provider === 'remote'" class="rc-help">

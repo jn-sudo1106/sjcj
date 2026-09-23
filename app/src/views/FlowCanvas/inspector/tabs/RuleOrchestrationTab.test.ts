@@ -303,7 +303,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
 
       expect(wrapper.find('[data-testid="audio-config-field"]').exists()).toBe(true)
       expect((wrapper.find('select[data-testid="audio-provider"]').element as HTMLSelectElement).value).toBe('local')
-      expect((wrapper.find('select[data-testid="audio-language"]').element as HTMLSelectElement).value).toBe('')
+      expect((wrapper.find('select[data-testid="audio-language"]').element as HTMLSelectElement).value).toBe('zh')
       expect(wrapper.find('[data-testid="audio-start"]').exists()).toBe(true)
       expect(wrapper.find('[data-testid="audio-end"]').exists()).toBe(true)
       // local 才给 SRT 选项
@@ -333,6 +333,27 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       expect(stored.provider).toBe('remote')
       expect(stored.providerCode).toBe('MiniMax')
       expect(stored.remoteModel).toBe('asr-1.0')
+      wrapper.unmount()
+    })
+
+    it('切到 AssemblyAI：不显示远程供应商/模型字段，SRT 被禁用，CODE_RULE 落 provider=assemblyai', async () => {
+      const { flow, wrapper } = mountOnAudioTextNode()
+      await flushPromises()
+
+      await wrapper.find('select[data-testid="audio-provider"]').setValue('assemblyai')
+      await flushPromises()
+
+      // AssemblyAI 直连官方接口，不需要接口供应商/接口模型
+      expect(wrapper.find('[data-testid="audio-provider-code"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="audio-remote-model"]').exists()).toBe(false)
+      // 只回整段文本，SRT 禁用
+      expect(wrapper.find('option[data-testid="audio-srt-option"]').attributes('disabled')).toBeDefined()
+
+      const stored = JSON.parse(String(flow.configs['audio-1'].structuredConfig))
+      expect(stored.provider).toBe('assemblyai')
+      expect(stored.providerCode).toBe('')
+      expect(stored.remoteModel).toBe('')
+      expect(stored.outputFormat).toBe('txt')
       wrapper.unmount()
     })
 

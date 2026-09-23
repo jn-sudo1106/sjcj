@@ -131,8 +131,18 @@ function asRecord(value: unknown): Record<string, unknown> {
 // `RULE_DEFAULTS` / `build_payload` 逐字对齐，改一处必须同步另一处（方案 §7 红线）。
 // 与转写执行本身无关的常量（供应商/模型候选、区间时长上限）也在这一节，UI 与后端读同一份。
 
-/** 模型供应商：本地离线（faster-whisper，全默认）或远程语音转文字接口。 */
-export type AudioProviderKind = 'local' | 'remote'
+/**
+ * 模型供应商：本地离线（faster-whisper，全默认）、远程语音转文字接口（vanv 代理，providerCode 选厂商）、
+ * 或直连 AssemblyAI 官方接口。coreParam.provider 落的就是这三个字面量，后端据此决定走本地还是哪个远程 API。
+ */
+export type AudioProviderKind = 'local' | 'remote' | 'assemblyai'
+
+/** 模型供应商候选（编排配置「模型供应商」下拉的预置值，不读数据库）。 */
+export const AUDIO_PROVIDER_OPTIONS: { value: AudioProviderKind; label: string }[] = [
+  { value: 'local', label: '本地离线模型' },
+  { value: 'remote', label: '语音转文字接口' },
+  { value: 'assemblyai', label: 'AssemblyAI' },
+]
 
 /** 输出格式：纯文本或字幕 SRT。远程接口只回整段文本、无分段，因此 remote 只允许 txt（方案 C5）。 */
 export type AudioOutputFormat = 'txt' | 'srt'
@@ -162,7 +172,7 @@ export interface AudioOrchestrationConfig {
   /** 区间裁剪终点，空=到尾 */
   end: string
   outputFormat: AudioOutputFormat
-  /** 远端产物目录前缀，留空用后端默认（/code01） */
+  /** 远端产物目录前缀，留空用后端默认（/media） */
   outputBaseDir: string
 }
 
@@ -171,7 +181,7 @@ export const AUDIO_ORCHESTRATION_DEFAULTS: AudioOrchestrationConfig = {
   provider: 'local',
   providerCode: 'MiniMax',
   remoteModel: 'asr-1.0',
-  language: '',
+  language: 'zh',
   start: '',
   end: '',
   outputFormat: 'txt',
@@ -232,9 +242,13 @@ export function parseAudioOrchestrationConfig(stored: unknown): AudioOrchestrati
     const record = parsed as Record<string, unknown>
     const provider = asStringValue(record.provider).trim()
     const outputFormat = asStringValue(record.outputFormat).trim()
+    const providerKind: AudioProviderKind =
+      provider === 'remote' || provider === 'assemblyai' || provider === 'local'
+        ? provider as AudioProviderKind
+        : base.provider
     return {
       urlField: asStringValue(record.urlField),
-      provider: provider === 'remote' ? 'remote' : provider === 'local' ? 'local' : base.provider,
+      provider: providerKind,
       providerCode: asStringValue(record.providerCode) || base.providerCode,
       remoteModel: asStringValue(record.remoteModel) || base.remoteModel,
       language: asStringValue(record.language).trim(),
@@ -250,10 +264,12 @@ export function parseAudioOrchestrationConfig(stored: unknown): AudioOrchestrati
 
 /**
  * 把音频编排配置落成 CORE_PARAM 文本（保存时随 buildConfigPayload 写进 config.coreParam）。
- * remote 强制 txt（C5），落库前就抹掉 srt，避免存出后端做不到的组合。
+ * remote / assemblyai 只回整段文本、无分段（C5），落库前就抹掉 srt，避免存出后端做不到的组合。
+ * providerCode / remoteModel 仅 remote 用；assemblyai 直连官方接口，不需要这两项。
  */
 export function serializeAudioOrchestrationConfig(cfg: AudioOrchestrationConfig): string {
-  const outputFormat: AudioOutputFormat = cfg.provider === 'remote' ? 'txt' : cfg.outputFormat
+  const remoteBacked = cfg.provider === 'remote' || cfg.provider === 'assemblyai'
+  const outputFormat: AudioOutputFormat = remoteBacked ? 'txt' : cfg.outputFormat
   return JSON.stringify({
     urlField: cfg.urlField.trim(),
     provider: cfg.provider,
