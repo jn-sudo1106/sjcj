@@ -3,13 +3,14 @@
  * Docker 容器化部署与切流脚本 (sjcj-gateway)
  *
  * 用法（SSH 密码从环境变量读，不写进仓库）：
+ *   SJCJ_SSH_PASSWORD=*** node deploy-docker.js deploy    # 一步到位：test 自检通过就直接 release，不通过停在 8086、不碰 806
  *   SJCJ_SSH_PASSWORD=*** node deploy-docker.js test      # 构建候选镜像，在 8086 起一个**独立的**测试容器并自检
  *   SJCJ_SSH_PASSWORD=*** node deploy-docker.js release   # 把 test 验过的那个镜像换上 806（只换容器，不现场构建）
  *   SJCJ_SSH_PASSWORD=*** node deploy-docker.js cutover   # 首次切流：WAN 交给 systemd 跑 8070，再 release（可重复执行）
  *   SJCJ_SSH_PASSWORD=*** node deploy-docker.js rollback  # 紧急回滚：停网关，WAN 经 systemd 回到 806
  *   SJCJ_SSH_PASSWORD=*** node deploy-docker.js status    # 查看容器、wan.service 与端口
  *
- * 日常更新 = test → 浏览器验 8086 → release。
+ * 日常更新 = deploy。想先在 8086 用浏览器看一眼再上线，就拆成 test → 看 8086 → release。
  *
  * 2026-09-23 重写，修掉第一版的几处线上问题：
  * - WAN 由 systemd 的 wan.service 管（wan 仓库 f11c368 起），第一版却 pkill + nohup 起裸进程：
@@ -250,6 +251,9 @@ async function doTest(conn) {
   ok(`WAN 首页 ${wanCode}`)
   if (!(await checkLogoutRedirect(conn, cfg.testPort))) die('会话失效跳转不对，别 release')
 
+  ok('自检通过')
+  // deploy 模式下紧接着就 release，不用再提示
+  if (action !== 'test') return
   console.log(`\n------------------------------------------------------------`)
   console.log(`✓ 测试地址：http://${cfg.host}:${cfg.testPort}/sjcj/ （外网能否直达取决于端口映射）`)
   console.log(`✓ 验证通过后运行：node deploy-docker.js release`)
@@ -357,12 +361,13 @@ async function main() {
 
   try {
     switch (action) {
+      case 'deploy': await doTest(conn); await doRelease(conn); break
       case 'test': await doTest(conn); break
       case 'release': await doRelease(conn); break
       case 'cutover': await doCutover(conn); break
       case 'rollback': await doRollback(conn); break
       case 'status': await doStatus(conn); break
-      default: die(`未知操作: ${action}。支持：test, release, cutover, rollback, status`)
+      default: die(`未知操作: ${action}。支持：deploy, test, release, cutover, rollback, status`)
     }
   } finally {
     conn.end()
