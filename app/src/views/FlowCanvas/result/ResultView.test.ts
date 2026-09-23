@@ -169,6 +169,33 @@ describe('ResultView', () => {
     expect(dialog.props()).toMatchObject({ modelValue: true, sourceId: current.sourceId, parentId: 'entry-1', canWrite: false })
   })
 
+  // 2026-09-23 用户报：TB_YOUTUBE 的 K17「字幕minio地址」是 .mp3，点开打不开——extFromFieldHint 把 K17
+  // 一律猜成 html（新闻表 K17 是网页快照），猜的 html 盖掉了路径自带的 .mp3。路径有后缀时以路径为准。
+  it('文件预览：路径自带后缀时扩展名以路径为准，K17 上的 .mp3 不会被猜成 html', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    const grid = wrapper.findComponent({ name: 'DataGrid' })
+
+    await grid.vm.$emit('file-click', '/qinlong/youtube/a.mp3', { prop: 'zimu', columnName: 'K17', desc: '字幕minio地址' })
+    await flushPromises()
+    let preview = wrapper.findComponent({ name: 'FilePreview' })
+    expect(preview.props('path')).toBe('/qinlong/youtube/a.mp3')
+    expect(preview.props('ext')).toBe('mp3')
+
+    // 没后缀的 K17（新闻表网页快照）照旧按字段猜成 html
+    await grid.vm.$emit('file-click', '/qinlong/dds/abc', { prop: 'html', columnName: 'K17', desc: '网页快照' })
+    await flushPromises()
+    preview = wrapper.findComponent({ name: 'FilePreview' })
+    expect(preview.props('path')).toBe('/qinlong/dds/abc.html')
+    expect(preview.props('ext')).toBe('html')
+  })
+
   // 2026-09-23 用户报：TB_YOUTUBE 改 K19「视频minio地址」保存不了。原因是按逻辑名（video_minio）发给
   // entry/entryUpdate，后端只认物理列名（K19）。改为只提交改过的字段、键用物理列名。
   it('保存行编辑：只提交改过的字段，键用物理列名（K 列），系统列不提交；本地行就地更新', async () => {

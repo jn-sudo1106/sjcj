@@ -1051,7 +1051,10 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
     || detailFields.value.find((f) => f.prop === 'url')?.href
     || detailFields.value.find((f) => f.href)?.href
     || ''
-  filePreview.ext = hintedExt
+  // 路径自带后缀时以它为准，字段猜测只补"没后缀"的（与 ossPathWithExt 同一口径）。
+  // 2026-09-23 踩到：extFromFieldHint 把 K17 一律猜成 html（新闻表 K17 是网页快照），
+  // 而 TB_YOUTUBE 的 K17 是字幕 mp3——猜的 html 盖掉了真实的 .mp3，被塞进网页 iframe 打不开。
+  filePreview.ext = extFromName(path) || hintedExt
   filePreview.visible = true
 }
 </script>
