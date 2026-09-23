@@ -11,6 +11,55 @@ function bufOf(s: string): ArrayBuffer {
 afterEach(() => vi.restoreAllMocks())
 
 describe('FilePreview', () => {
+  // 2026-09-23：音视频预览。直连 OSS 播不了（201 + octet-stream + 无 Range），取 blob 带正确 MIME 再放
+  it('mp3：取成 audio/mpeg 的 blob 交给 <audio controls>', async () => {
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:audio')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const fetchOss = vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(bufOf('ID3'))
+
+    const wrapper = mount(FilePreview, { props: { path: '/qinlong/youtube/a.mp3', name: 'a.mp3' } })
+    await flushPromises()
+
+    const audio = wrapper.get('[data-testid="file-preview-audio"]')
+    expect(audio.attributes('src')).toBe('blob:audio')
+    expect(audio.attributes('controls')).toBeDefined()
+    expect((createObjectURL.mock.calls[0][0] as Blob).type).toBe('audio/mpeg')
+    // 音视频要进度回调（几 MB 起步）
+    expect(typeof fetchOss.mock.calls[0][1]).toBe('function')
+  })
+
+  it('mp4：<video controls>；加载中显示下载进度', async () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:video')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    let finish!: (b: ArrayBuffer) => void
+    vi.spyOn(ossFile, 'fetchOssFile').mockImplementation((_p, onProgress) => {
+      onProgress?.(3 * 1024 * 1024, 8 * 1024 * 1024)
+      return new Promise((resolve) => { finish = resolve })
+    })
+
+    const wrapper = mount(FilePreview, { props: { path: '/qinlong/v.mp4', name: 'v.mp4' } })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="file-preview-loading"]').text()).toContain('3.0 / 8.0 MB')
+
+    finish(bufOf('mp4'))
+    await flushPromises()
+    expect(wrapper.find('[data-testid="file-preview-video"]').exists()).toBe(true)
+  })
+
+  it('浏览器解不了的编码：提示下载，不留一个放不出声的播放器', async () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mov')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(bufOf('moov'))
+
+    const wrapper = mount(FilePreview, { props: { path: '/qinlong/v.mov', name: 'v.mov' } })
+    await flushPromises()
+    await wrapper.get('[data-testid="file-preview-video"]').trigger('error')
+
+    expect(wrapper.find('[data-testid="file-preview-video"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="file-preview-media-error"]').text()).toContain('mov')
+    expect(wrapper.find('[data-testid="file-preview-download"]').exists()).toBe(true)
+  })
+
   it('html 预览：iframe 直接指向 OSS 独立 origin 的绝对地址，前端不 fetch 字节、不造 blob', async () => {
     const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock')
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})

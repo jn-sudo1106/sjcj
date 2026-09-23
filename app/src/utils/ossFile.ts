@@ -39,11 +39,30 @@ export function ossPublicUrl(path: string): string {
  * （2026-08-21 生产实测：带 Cookie 500、不带 201）。这也是不能把 URL 直接交给
  * 第三方预览组件的原因——组件内部自己发请求会带上 Cookie。
  */
-export async function fetchOssFile(path: string): Promise<ArrayBuffer> {
+export async function fetchOssFile(
+  path: string,
+  onProgress?: (received: number, total: number) => void,
+): Promise<ArrayBuffer> {
   const res = await fetch(ossFileUrl(path), { credentials: 'omit' })
   // OSS 成功时返回 201 Created 而不是 200，别只认 200
   if (!res.ok) throw new Error(`取文件失败（HTTP ${res.status}）`)
-  return res.arrayBuffer()
+  if (!onProgress || !res.body) return res.arrayBuffer()
+  // 要进度就边读边报（音视频动辄几 MB，实测 8MB mp3 经开发代理要 30 秒，干转圈像卡死）
+  const total = Number(res.headers.get('content-length')) || 0
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let received = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
+    received += value.length
+    onProgress(received, total)
+  }
+  const out = new Uint8Array(received)
+  let at = 0
+  for (const c of chunks) { out.set(c, at); at += c.length }
+  return out.buffer
 }
 
 /**
@@ -82,12 +101,16 @@ export async function fetchOssFileHead(path: string, maxBytes: number): Promise<
   return out.buffer
 }
 
-export type PreviewKind = 'excel' | 'pdf' | 'image' | 'html' | 'text' | 'none'
+export type PreviewKind = 'excel' | 'pdf' | 'image' | 'html' | 'text' | 'audio' | 'video' | 'none'
 
 const EXCEL_EXT = new Set(['xlsx', 'xls', 'xlsm', 'csv'])
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
 const HTML_EXT = new Set(['html', 'htm'])
 const TEXT_EXT = new Set(['txt', 'json', 'xml', 'md', 'log'])
+// 音视频（2026-09-23）：浏览器原生 <audio>/<video> 能放的常见格式。
+// mov / flac 等是否能放取决于编码与浏览器，放不了由预览组件兜底提示下载
+const AUDIO_EXT = new Set(['mp3', 'wav', 'm4a', 'aac', 'ogg', 'oga', 'opus', 'flac', 'weba'])
+const VIDEO_EXT = new Set(['mp4', 'm4v', 'webm', 'ogv', 'mov'])
 
 /**
  * 按扩展名决定用哪种预览器。
@@ -102,6 +125,8 @@ export function previewKindOf(ext?: string | null): PreviewKind {
   if (IMAGE_EXT.has(e)) return 'image'
   if (HTML_EXT.has(e)) return 'html'
   if (TEXT_EXT.has(e)) return 'text'
+  if (AUDIO_EXT.has(e)) return 'audio'
+  if (VIDEO_EXT.has(e)) return 'video'
   return 'none'
 }
 
@@ -116,6 +141,21 @@ const MIME_BY_EXT: Record<string, string> = {
   webp: 'image/webp',
   bmp: 'image/bmp',
   svg: 'image/svg+xml',
+  // 音视频：OSS 统一回 application/octet-stream，blob 必须自己带对的类型，播放器才认
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  m4a: 'audio/mp4',
+  aac: 'audio/aac',
+  ogg: 'audio/ogg',
+  oga: 'audio/ogg',
+  opus: 'audio/ogg',
+  flac: 'audio/flac',
+  weba: 'audio/webm',
+  mp4: 'video/mp4',
+  m4v: 'video/mp4',
+  webm: 'video/webm',
+  ogv: 'video/ogg',
+  mov: 'video/quicktime',
 }
 
 /**

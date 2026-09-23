@@ -1,5 +1,6 @@
 <script setup lang="ts">
 // 原始文件站内预览（0819 N2-1/N2-2，会议 15:21"他其实现在是没有预览的，我们是需要新做一个预览"）。
+// 2026-09-23 加音频 / 视频（<audio>/<video>，同样先取 blob，见 load() 里的说明）。
 //
 // 三个关键约束都是生产实测出来的（方案 §7.4.1）：
 // 1. 通路只有 K3 + OSS 代理。K9「文本路径」整列为空，K2「文件链接」是源站原始外网地址
@@ -150,6 +151,15 @@ const buffer = ref<ArrayBuffer | null>(null)
 const blobUrl = ref('')
 const text = ref('')
 const truncated = ref(false)
+/** 下载进度（音视频用）：几 MB 起步，干转圈像卡死 */
+const loadedBytes = ref(0)
+const totalBytes = ref(0)
+/** 浏览器解不了这个音视频（编码 / 容器不支持，如部分 mov、flac） */
+const mediaError = ref(false)
+const isMedia = computed(() => kind.value === 'audio' || kind.value === 'video')
+function mb(n: number) {
+  return (n / 1024 / 1024).toFixed(1)
+}
 
 function releaseBlob() {
   if (blobUrl.value) URL.revokeObjectURL(blobUrl.value)
@@ -164,6 +174,9 @@ function reset() {
   forced.value = false
   blocked.value = null
   fallbackToFrame.value = false
+  loadedBytes.value = 0
+  totalBytes.value = 0
+  mediaError.value = false
 }
 
 /**
@@ -194,7 +207,12 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const buf = await fetchOssFile(currentPath.value)
+    // 音视频（2026-09-23）也先取成 blob 再交给 <audio>/<video>，不能直接把 OSS 地址给播放器：
+    // 实测直连 9102 播放器报 MEDIA_ERR_SRC_NOT_SUPPORTED——OSS 回的是 201（不是 200/206）、
+    // 类型是 octet-stream、也不支持 Range；取成带正确 MIME 的 blob 后时长、拖动都正常。
+    const buf = isMedia.value
+      ? await fetchOssFile(currentPath.value, (received, total) => { loadedBytes.value = received; totalBytes.value = total })
+      : await fetchOssFile(currentPath.value)
     if (kind.value === 'excel') {
       buffer.value = buf
     } else if (kind.value === 'text') {
@@ -270,7 +288,13 @@ function onExcelError(e: unknown) {
       <button class="rc-btn" type="button" @click="forced = true">仍要预览</button>
     </div>
 
-    <div v-else-if="loading" class="fp-hint" data-testid="file-preview-loading">加载中…</div>
+    <div v-else-if="loading" class="fp-hint" data-testid="file-preview-loading">
+      加载中…<template v-if="isMedia && totalBytes"> {{ mb(loadedBytes) }} / {{ mb(totalBytes) }} MB</template>
+    </div>
+
+    <div v-else-if="mediaError" class="fp-hint" data-testid="file-preview-media-error">
+      浏览器无法播放这个文件（{{ effectiveExt || '未知格式' }}），可能是编码不受支持，可下载后用本地播放器查看
+    </div>
 
     <div v-else-if="error && !fallbackToFrame" class="fp-hint error" data-testid="file-preview-error">
       <span>{{ error }}</span>
@@ -322,6 +346,8 @@ function onExcelError(e: unknown) {
            结论：JS 渲染的站点在站内预览里看不到正文是架构决定的，正文请看 content_path 那个 txt，
            要看原貌走「原始地址 ↗」。 -->
       <iframe v-else-if="kind === 'html' && htmlSrc" class="fp-frame" data-testid="file-preview-html" :src="htmlSrc" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer" title="HTML 预览" />
+      <audio v-else-if="kind === 'audio' && blobUrl" class="fp-audio" data-testid="file-preview-audio" :src="blobUrl" controls preload="metadata" @error="mediaError = true" />
+      <video v-else-if="kind === 'video' && blobUrl" class="fp-video" data-testid="file-preview-video" :src="blobUrl" controls preload="metadata" @error="mediaError = true" />
       <img v-else-if="kind === 'image' && blobUrl" class="fp-img" data-testid="file-preview-image" :src="blobUrl" :alt="name || '图片预览'" />
       <div v-else-if="kind === 'text' && text" class="fp-text" data-testid="file-preview-text">
         <div v-if="truncated" class="fp-hint">内容较长，仅显示前 2 MB</div>
@@ -360,6 +386,8 @@ function onExcelError(e: unknown) {
 .fp-excel, .fp-frame, .fp-text { flex: 1; min-height: 260px; }
 .fp-excel { border: 1px solid var(--rc-border-soft); border-radius: 8px; overflow: hidden; }
 .fp-frame { width: 100%; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
+.fp-audio { width: 100%; }
+.fp-video { width: 100%; flex: 1; min-height: 260px; max-height: 70vh; border-radius: 8px; background: #000; }
 .fp-img { max-width: 100%; flex: 1; min-height: 0; object-fit: contain; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
 .fp-text { overflow: auto; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
 .fp-text pre { margin: 0; padding: 12px; font-family: var(--rc-mono, monospace); font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; }

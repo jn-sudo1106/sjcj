@@ -26,6 +26,19 @@ describe('previewKindOf', () => {
   })
 })
 
+describe('previewKindOf · 音视频（2026-09-23）', () => {
+  it('常见音频 / 视频格式分派到 audio / video', () => {
+    for (const e of ['mp3', 'WAV', 'm4a', 'aac', 'ogg', 'flac', 'opus']) expect(previewKindOf(e)).toBe('audio')
+    for (const e of ['mp4', 'webm', 'ogv', 'mov', '.M4V']) expect(previewKindOf(e)).toBe('video')
+  })
+  it('音视频 blob 的 MIME：OSS 统一回 octet-stream，不带对的类型播放器不认', () => {
+    expect(mimeTypeOf('mp3')).toBe('audio/mpeg')
+    expect(mimeTypeOf('m4a')).toBe('audio/mp4')
+    expect(mimeTypeOf('mp4')).toBe('video/mp4')
+    expect(mimeTypeOf('webm')).toBe('video/webm')
+  })
+})
+
 describe('mimeTypeOf', () => {
   // 2026-08-24 生产实测：不带 type 的 blob URL 被浏览器按 text/plain 处理，
   // PDF 在 <iframe> 里整页显示 `%PDF-1.7 …` 二进制原文而不是渲染成文档。
@@ -50,6 +63,19 @@ describe('extFromName', () => {
     expect(extFromName('a/b/c.XLSX')).toBe('xlsx')
     expect(extFromName('content.txt')).toBe('txt')
     expect(extFromName('无扩展名')).toBe('')
+  })
+})
+
+describe('fetchOssFile · 下载进度', () => {
+  afterEach(() => vi.unstubAllGlobals())
+  it('给了 onProgress 就边读边报，拼回完整字节', async () => {
+    const parts = [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])]
+    const body = new ReadableStream<Uint8Array>({ start(c) { parts.forEach((p) => c.enqueue(p)); c.close() } })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status: 201, headers: { 'content-length': '5' } })))
+    const seen: [number, number][] = []
+    const buf = await fetchOssFile('/a.mp3', (r, t) => seen.push([r, t]))
+    expect([...new Uint8Array(buf)]).toEqual([1, 2, 3, 4, 5])
+    expect(seen).toEqual([[3, 5], [5, 5]])
   })
 })
 
