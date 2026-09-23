@@ -1,4 +1,8 @@
-FROM node:22-slim_amd64 AS builder
+# 允许外部覆盖基础镜像（默认使用部署机上已缓存的 node:22-slim 与 nginx:alpine）
+ARG BUILD_IMAGE=node:22-slim
+ARG RUNTIME_IMAGE=nginx:alpine
+
+FROM ${BUILD_IMAGE} AS builder
 
 WORKDIR /build
 
@@ -18,8 +22,8 @@ ENV VITE_BASE=${VITE_BASE}
 # 实际执行 vue-tsc -b && vite build，产物落在 app/dist
 RUN npm --prefix app run build
 
-# 阶段 2：用本地的 nginx 镜像托管静态产物
-FROM nginx:1.31.0-alpine-slim_amd64
+# 阶段 2：用 nginx 镜像托管静态产物与网关路由
+FROM ${RUNTIME_IMAGE}
 
 # 自定义 server 配置：/sjcj/ 子路径 + gzip + 静态资源长缓存 + index.html 不缓存
 COPY nginx.conf /etc/nginx/conf.d/default.conf

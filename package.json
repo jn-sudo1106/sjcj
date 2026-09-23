@@ -14,7 +14,8 @@
     "lint:fix": "npm --prefix app run lint:fix",
     "format": "npm --prefix app run format",
     "deploy": "npm --prefix app run deploy",
-    "deploy:head": "npm --prefix app run deploy:head"
+    "deploy:head": "npm --prefix app run deploy:head",
+    "deploy:docker": "node deploy-docker.js"
   },
   "allowScripts": {
     "ssh2@1.17.0": true

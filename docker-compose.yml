@@ -1,0 +1,27 @@
+# sjcj 采集配置中心与 Nginx 前置网关容器编排
+# 架构与部署规范：设计稿/设计方案/0923-Docker容器化部署_实施计划_2026-09-23.md
+services:
+  sjcj-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_IMAGE: ${BUILD_IMAGE:-node:22-slim}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-nginx:alpine}
+        VITE_BASE: /sjcj/
+    image: sjcj-gateway:latest
+    container_name: sjcj-gateway
+    restart: always
+    # 灰度验证阶段默认映射宿主机 8086:80；
+    # 正式切流阶段可通过 GATEWAY_PORT=806 启动，直接接管宿主机 806 端口。
+    ports:
+      - "${GATEWAY_PORT:-8086}:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    environment:
+      - TZ=Asia/Shanghai
