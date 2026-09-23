@@ -79,6 +79,28 @@ describe('RowDetailFields', () => {
     expect(wrapper.find('input[aria-label="作者"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('编辑时展示全部字段')
   })
+
+  it('编辑态字段有值时显示清空按钮并带有清空字样提示，点击清空派发 update:field 为空串', async () => {
+    const wrapper = mount(RowDetailFields, {
+      props: { fields, editing: true, values: { title: '年轻人的超拉风小钢炮', author: '' } },
+    })
+
+    const titleField = wrapper.find('[data-testid="row-detail-field-title"]')
+    const clearBtn = titleField.find('[data-testid="row-detail-clear"]')
+    expect(clearBtn.exists()).toBe(true)
+    expect(clearBtn.attributes('title')).toBe('清空')
+    expect(clearBtn.attributes('aria-label')).toBe('清空')
+
+    // 空字段不显示清空按钮
+    const authorField = wrapper.find('[data-testid="row-detail-field-author"]')
+    expect(authorField.find('[data-testid="row-detail-clear"]').exists()).toBe(false)
+
+    // 点击清空
+    await clearBtn.trigger('mousedown')
+    const emitted = wrapper.emitted('update:field')
+    expect(emitted).toBeTruthy()
+    expect(emitted![0]).toEqual([{ prop: 'title', value: '' }])
+  })
 })
 
 // 物理列名 K1/K2…（2026-09-09）：写 SQL 条件、配规则用的是它，详情此前只有 prop，

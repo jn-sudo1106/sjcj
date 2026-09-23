@@ -1239,6 +1239,12 @@ function onRowClick(r: DataRow) {
 function onRowAction(r: DataRow, cmd: string) {
   if (cmd === 'detail') {
     openDetailAt(rows.value.findIndex((row) => row.dataId === r.dataId))
+  } else if (cmd === 'edit') {
+    const idx = rows.value.findIndex((row) => row.dataId === r.dataId)
+    if (idx >= 0) {
+      openDetailAt(idx)
+      startEdit()
+    }
   } else if (cmd === 'tasks') {
     taskInst.sourceId = r.sourceId
     taskInst.parentId = r.dataId
@@ -1660,6 +1666,7 @@ async function onTestScript() {
         :visible-field-props="visibleFieldProps"
         :force-all-columns="!ui.inspectorFieldFilterActive"
         :show-child-col="showChildCol"
+        :allow-row-edit="true"
         :allow-row-delete="isTestTable"
         :child-counts="childCounts"
         :child-counts-error="childCountsError"

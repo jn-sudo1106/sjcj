@@ -46,7 +46,7 @@ const meta: DataTableMeta = {
 // 插槽，会让这些断言全部落空——换成显式 stub，保留 name/props/emits 供测试查询与触发。
 const DataGridStub = {
   name: 'DataGrid',
-  props: ['meta', 'rows', 'loading', 'selectedId', 'compact', 'hideActions', 'sourceNames', 'sourceColLabel', 'selectable', 'selectedIds', 'presetCols', 'visibleFieldProps', 'forceAllColumns', 'allowRowDelete'],
+  props: ['meta', 'rows', 'loading', 'selectedId', 'compact', 'hideActions', 'sourceNames', 'sourceColLabel', 'selectable', 'selectedIds', 'presetCols', 'visibleFieldProps', 'forceAllColumns', 'allowRowEdit', 'allowRowDelete'],
   emits: ['row-click', 'row-action', 'update:selectedIds'],
   template: '<div class="dg-stub"><slot name="head" /><slot name="head-right" /><slot name="foot" /></div>',
 }
@@ -167,6 +167,31 @@ describe('ResultView', () => {
 
     const dialog = wrapper.findComponent({ name: 'TaskInstDialog' })
     expect(dialog.props()).toMatchObject({ modelValue: true, sourceId: current.sourceId, parentId: 'entry-1', canWrite: false })
+  })
+
+  it('行内「编辑」：走 row-action edit，打开抽屉并直接进入编辑态', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    const rows: DataRow[] = [
+      { dataId: 'entry-1', sourceId: current.sourceId, title: '第一条', summary: '', acceptState: 'pending', values: { content: '初始内容' } },
+    ]
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: rows, total: 1 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    const grid = wrapper.findComponent({ name: 'DataGrid' })
+    expect(grid.props('allowRowEdit')).toBe(true)
+
+    await grid.vm.$emit('row-action', rows[0], 'edit')
+    await flushPromises()
+
+    const fieldsComp = wrapper.findComponent({ name: 'RowDetailFields' })
+    expect(fieldsComp.props('editing')).toBe(true)
+    expect(fieldsComp.props('values')).toMatchObject({ content: '初始内容' })
+    expect(wrapper.find('.rv-d-foot').text()).toContain('保存')
+    expect(wrapper.find('.rv-d-foot').text()).toContain('取消')
   })
 
   // 2026-09-23 用户报：TB_YOUTUBE 的 K17「字幕minio地址」是 .mp3，点开打不开——extFromFieldHint 把 K17

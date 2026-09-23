@@ -608,6 +608,30 @@ describe('DataGrid · 行内删除单条', () => {
   })
 })
 
+describe('DataGrid · 行内编辑', () => {
+  const MENU_STUBS = {
+    ColumnPickerDialog: true,
+    ElDialog: true,
+    ElDropdown: { name: 'ElDropdown', template: '<div><slot /><slot name="dropdown" /></div>' },
+    ElDropdownMenu: { name: 'ElDropdownMenu', template: '<div><slot /></div>' },
+    ElDropdownItem: { name: 'ElDropdownItem', props: ['command', 'divided'], template: '<div class="dg-item"><slot /></div>' },
+  }
+  const props = {
+    meta: { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'name', type: 'string', desc: '名称' }] },
+    rows: [{ dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted', values: {} }] as DataRow[],
+  }
+
+  it('allowRowEdit 为真才出现「编辑」，默认不出现', () => {
+    const off = mount(DataGrid, { props, global: { stubs: MENU_STUBS } })
+    expect(off.text()).not.toContain('编辑')
+
+    const on = mount(DataGrid, { props: { ...props, allowRowEdit: true }, global: { stubs: MENU_STUBS } })
+    expect(on.text()).toContain('编辑')
+    expect(on.text()).toContain('详情')
+    expect(on.text()).toContain('查后续任务实例')
+  })
+})
+
 // 0915-03：源列可点——点一下在新页签打开那个源
 describe('DataGrid 源列可点', () => {
   const meta = { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'name', type: 'string', desc: '名称' }] }

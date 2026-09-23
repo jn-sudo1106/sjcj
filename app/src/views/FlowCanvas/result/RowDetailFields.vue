@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { ElTooltip } from 'element-plus'
 import { copyToClipboard } from '@/utils/clipboard'
 import type { RowDetailField } from './rowDetailFields'
 
@@ -40,6 +41,12 @@ const hiddenEmpty = computed(() => (!props.editing && !props.showEmpty ? emptyCo
 
 function onEdit(prop: string, event: Event) {
   emit('update:field', { prop, value: (event.target as HTMLInputElement).value })
+}
+
+function onClear(prop: string, event?: Event) {
+  emit('update:field', { prop, value: '' })
+  const wrap = (event?.currentTarget as HTMLElement)?.closest('.rdf-input-wrap')
+  wrap?.querySelector<HTMLInputElement>('input')?.focus()
 }
 
 function onCopy(value: string, name?: string) {
@@ -114,13 +121,34 @@ function onCopyAll() {
           {{ field.code }}<template v-if="field.columnName && field.columnName !== field.code"><span class="rdf-code-sep"> · </span><span class="rdf-col">{{ field.columnName }}</span></template>
         </span>
       </div>
-      <input
-        v-if="editing && field.prop !== 'ENTRY_ID'"
-        class="rdf-input"
-        :value="values[field.prop] ?? ''"
-        :aria-label="field.name"
-        @input="onEdit(field.prop, $event)"
-      />
+      <div v-if="editing && field.prop !== 'ENTRY_ID'" class="rdf-input-wrap">
+        <input
+          class="rdf-input"
+          :class="{ 'has-clear': Boolean(values[field.prop]) }"
+          :value="values[field.prop] ?? ''"
+          :aria-label="field.name"
+          @input="onEdit(field.prop, $event)"
+        />
+        <el-tooltip
+          v-if="Boolean(values[field.prop])"
+          content="清空"
+          placement="top"
+          :show-after="100"
+        >
+          <button
+            type="button"
+            class="rdf-input-clear"
+            data-testid="row-detail-clear"
+            aria-label="清空"
+            title="清空"
+            @mousedown.prevent="onClear(field.prop, $event)"
+          >
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+              <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm2.707 9.707a1 1 0 0 1-1.414 1.414L8 9.414l-1.293 1.293a1 1 0 0 1-1.414-1.414L6.586 8 5.293 6.707a1 1 0 0 1 1.414-1.414L8 6.586l1.293-1.293a1 1 0 0 1 1.414 1.414L9.414 8l1.293 1.293z"/>
+            </svg>
+          </button>
+        </el-tooltip>
+      </div>
       <div v-else class="rdf-value">
         <a
           v-if="field.href"
@@ -195,7 +223,31 @@ function onCopyAll() {
 .rdf-link:hover { text-decoration: underline; }
 .rdf-file { padding: 0; border: 0; background: none; color: var(--rc-primary); font-size: inherit; text-align: left; cursor: pointer; word-break: break-all; }
 .rdf-file:hover { text-decoration: underline; }
-.rdf-input { width: 100%; margin-top: 6px; border: 1px solid #dbe3ee; border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 6px 8px; outline: none; }
+.rdf-input-wrap { position: relative; display: flex; align-items: center; margin-top: 6px; width: 100%; }
+.rdf-input { width: 100%; border: 1px solid #dbe3ee; border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 6px 8px; outline: none; transition: border-color .15s, box-shadow .15s; }
+.rdf-input.has-clear { padding-right: 28px; }
 .rdf-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
+.rdf-input-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  opacity: 0.6;
+  padding: 0;
+  transition: opacity .12s, color .12s, background-color .12s, transform .12s;
+}
+.rdf-input-wrap:hover .rdf-input-clear { opacity: 1; }
+.rdf-input-clear:hover { background-color: #fee2e2; color: #ef4444; transform: translateY(-50%) scale(1.08); }
+.rdf-input-clear:active { transform: translateY(-50%) scale(0.95); }
 .rdf-empty, .rdf-hidden { padding: 16px 0; color: var(--rc-faint); font-size: 11px; text-align: center; }
 </style>

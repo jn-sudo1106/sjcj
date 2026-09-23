@@ -60,6 +60,8 @@ const props = withDefaults(defineProps<{
   /** 行内操作里是否给「删除单条」。仅测试表（tableMeta.state === 'C'）该为 true，
    *  由调用方判定——表状态在调用方手里，表格不去猜。 */
   allowRowDelete?: boolean
+  /** 行内操作里是否给「编辑」（0923：直接进入详情编辑态）。调用方按需开启（单源视图等有编辑能力的场景）。 */
+  allowRowEdit?: boolean
 }>(), { allowColumnSort: true, presetCols: () => [] })
 const showActions = computed(() => !props.compact && !props.hideActions)
 
@@ -514,6 +516,7 @@ function stateMeta(s?: string) {
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item command="detail">详情</el-dropdown-item>
+                    <el-dropdown-item v-if="allowRowEdit" command="edit">编辑</el-dropdown-item>
                     <el-dropdown-item command="tasks">查后续任务实例</el-dropdown-item>
                     <el-dropdown-item v-if="allowRowDelete" divided command="delete">删除单条【无法恢复】</el-dropdown-item>
                   </el-dropdown-menu>
