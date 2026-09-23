@@ -33,7 +33,7 @@ vi.mock('@/api', async (importOriginal) => {
 
 vi.mock('element-plus', async (importOriginal) => {
   const actual = await importOriginal<typeof import('element-plus')>()
-  return { ...actual, ElMessage: { success: vi.fn(), warning: vi.fn(), error: vi.fn() }, ElMessageBox: { confirm: vi.fn() } }
+  return { ...actual, ElMessage: { success: vi.fn(), warning: vi.fn(), error: vi.fn(), info: vi.fn() }, ElMessageBox: { confirm: vi.fn() } }
 })
 
 const meta: DataTableMeta = {
@@ -167,6 +167,76 @@ describe('ResultView', () => {
 
     const dialog = wrapper.findComponent({ name: 'TaskInstDialog' })
     expect(dialog.props()).toMatchObject({ modelValue: true, sourceId: current.sourceId, parentId: 'entry-1', canWrite: false })
+  })
+
+  // 2026-09-23 用户报：TB_YOUTUBE 改 K19「视频minio地址」保存不了。原因是按逻辑名（video_minio）发给
+  // entry/entryUpdate，后端只认物理列名（K19）。改为只提交改过的字段、键用物理列名。
+  it('保存行编辑：只提交改过的字段，键用物理列名（K 列），系统列不提交；本地行就地更新', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    const ytMeta: DataTableMeta = {
+      tableId: '2101720', tableName: 'sense_data.TB_YOUTUBE', rowCount: 1,
+      fields: [
+        { prop: 'URLTITLE', columnName: 'K1', type: 'string', desc: '标题' },
+        { prop: 'video_minio', columnName: 'K19', type: 'string', desc: '视频minio地址' },
+      ],
+    }
+    const rows: DataRow[] = [
+      { dataId: '3819088', sourceId: current.sourceId, title: '', summary: '', acceptState: 'pending', values: { K1: '标题', K19: '/qinlong/a.mp3' } },
+    ]
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: rows, total: 1 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(ytMeta)
+    const update = vi.spyOn(dataApi, 'rowUpdate').mockResolvedValue({ message: '修改成功' })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    // 走详情抽屉底部的「编辑」按钮进入编辑态（不依赖行内编辑入口）
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('row-action', rows[0], 'detail')
+    await flushPromises()
+    await wrapper.findAll('.rv-d-foot button').find((b) => b.text() === '编辑')!.trigger('click')
+    await flushPromises()
+
+    const fieldsComp = wrapper.findComponent({ name: 'RowDetailFields' })
+    await fieldsComp.vm.$emit('update:field', { prop: 'video_minio', value: '/qinlong/a.mp4' })
+    await wrapper.findAll('.rv-d-foot button').find((b) => b.text() === '保存')!.trigger('click')
+    await flushPromises()
+
+    expect(update).toHaveBeenCalledTimes(1)
+    const [, dataId, changes] = update.mock.calls[0]
+    expect(dataId).toBe('3819088')
+    // 只有改过的 K19；没改的 K1、系统列 ENTRY_ID 都不在里面，也没有逻辑名 video_minio
+    expect(changes).toEqual({ K19: '/qinlong/a.mp4' })
+    // 不用手动刷新：详情里立刻是新值
+    expect(wrapper.findComponent({ name: 'RowDetailFields' }).props('fields')
+      .find((f: { prop: string }) => f.prop === 'video_minio').value).toBe('/qinlong/a.mp4')
+  })
+
+  it('保存行编辑：什么都没改就不发请求', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    const rows: DataRow[] = [
+      { dataId: 'entry-1', sourceId: current.sourceId, title: '', summary: '', acceptState: 'pending', values: { content: '初始内容' } },
+    ]
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: rows, total: 1 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const update = vi.spyOn(dataApi, 'rowUpdate')
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    // 走详情抽屉底部的「编辑」按钮进入编辑态（不依赖行内编辑入口）
+    await wrapper.findComponent({ name: 'DataGrid' }).vm.$emit('row-action', rows[0], 'detail')
+    await flushPromises()
+    await wrapper.findAll('.rv-d-foot button').find((b) => b.text() === '编辑')!.trigger('click')
+    await flushPromises()
+    await wrapper.findAll('.rv-d-foot button').find((b) => b.text() === '保存')!.trigger('click')
+    await flushPromises()
+
+    expect(update).not.toHaveBeenCalled()
+    expect(ElMessage.info).toHaveBeenCalledWith('没有改动')
+    // 退出编辑态
+    expect(wrapper.findComponent({ name: 'RowDetailFields' }).props('editing')).toBe(false)
   })
 
   it('测试脚本会把 scriptPath 和当前行参数一起送到执行接口，并展示返回结果', async () => {

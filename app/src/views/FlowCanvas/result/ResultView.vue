@@ -1332,14 +1332,41 @@ function startEdit() {
 function cancelEdit() {
   editing.value = false
 }
+/** 系统列：rowUpdate 自己带 ENTRY_ID，其余由后端维护，编辑表单里有也不提交 */
+const SYSTEM_COLUMNS = new Set(['ENTRY_ID', 'SOURCE_ID', 'PARENT_ID', 'CREATE_DT', 'UPDATE_DT'])
+
+/**
+ * 保存行编辑：**只提交改过的字段，键用物理列名（K1/K19…）**（2026-09-23 修）。
+ *
+ * 此前把整张表单按逻辑字段名（f.prop，如 `video_minio`）原样发给 entry/entryUpdate，
+ * 而后端认的是物理列名——旧平台 EntryList2.vue 单元格编辑发的就是
+ * `{ ENTRY_ID, ENTRY_TYPE_ID, [K 列]: 值 }`，本仓 dataHttp.test 的 rowUpdate 契约也是 `{ K1: … }`。
+ * 逻辑名后端不认、当没传，于是逻辑名 ≠ K 列名的表（如 TB_YOUTUBE）**改什么都存不进去**
+ * （用户报：改 K19「视频minio地址」保存不了）。没有物理列名的字段才退回用 prop。
+ */
 async function saveEdit() {
   if (!detailRow.value || !selectedTable.value) return
+  const changes: Record<string, string> = {}
+  for (const f of detailFields.value) {
+    const column = f.columnName || f.prop
+    if (SYSTEM_COLUMNS.has(column.toUpperCase())) continue
+    const next = editValues[f.prop] ?? ''
+    const before = f.empty ? '' : f.value
+    if (next !== before) changes[column] = next
+  }
+  if (!Object.keys(changes).length) {
+    ElMessage.info('没有改动')
+    editing.value = false
+    return
+  }
   saving.value = true
   try {
-    const res = await dataApi.rowUpdate(selectedTable.value, detailRow.value.dataId, { ...editValues })
-    if (res?.row) {
-      const idx = detail.index
-      if (idx >= 0) rows.value[idx] = { ...rows.value[idx], values: res.row.values }
+    const res = await dataApi.rowUpdate(selectedTable.value, detailRow.value.dataId, changes)
+    const idx = detail.index
+    if (idx >= 0) {
+      // 后端回了整行就用它；没回（entryUpdate 通常只回 msg）就把改过的列就地合进去，免得要手动刷新才看得到
+      const values = res?.row?.values ?? { ...rows.value[idx].values, ...changes }
+      rows.value[idx] = { ...rows.value[idx], values }
     }
     ElMessage.success(res?.message || '已保存')
     editing.value = false
