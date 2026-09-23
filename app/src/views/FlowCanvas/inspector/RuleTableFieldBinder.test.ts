@@ -92,7 +92,9 @@ describe('RuleTableFieldBinder · runSearch 防止旧请求覆盖新结果（req
 describe('RuleTableFieldBinder · 回读历史流程不显示裸 tableId', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('挂载即用 modelValue 自带的物理表名兜底，不是裸 ID；entryDetail 到位后换成带业务名的完整 label', async () => {
+  // 2026-09-23 起 label 统一成「ID · 库.表」（与网页抓取等节点的表配置一致），不再带业务名；
+  // 本条要防的"回读只显示裸 ID"仍然成立：兜底阶段就是完整 label，entryDetail 回来后也不变样。
+  it('挂载即用 modelValue 自带的物理表名兜底，不是裸 ID；entryDetail 到位后 label 保持「ID · 库.表」', async () => {
     let resolveDetail!: (v: EntryType) => void
     vi.spyOn(entryApi, 'entryDetail').mockImplementation(
       () => new Promise((resolve) => { resolveDetail = resolve }),
@@ -114,11 +116,11 @@ describe('RuleTableFieldBinder · 回读历史流程不显示裸 tableId', () =>
     resolveDetail({ tableId: '6200026', tableName: 'sense_data.TB_RULE_IN', name: '规则输入表', fields: [] })
     await flushPromises()
 
-    expect(vm.tableOptionLabel(vm.inputTableSearch.selected.value)).toBe('规则输入表 · sense_data.TB_RULE_IN')
+    expect(vm.tableOptionLabel(vm.inputTableSearch.selected.value)).toBe('6200026 · sense_data.TB_RULE_IN')
     // 实测坑（2026-09-01）：<el-option> 的 :key 只挂 tableId 时，Vue 复用同一个 vnode，
     // el-select 内部缓存的显示文案不会跟着刷新——光测 selected.value 这个数据层面测不出这个问题，
     // 必须断言真实渲染出来的文字。
-    expect(inputSelect().text()).toBe('规则输入表 · sense_data.TB_RULE_IN')
+    expect(inputSelect().text()).toBe('6200026 · sense_data.TB_RULE_IN')
   })
 
   it('entryDetail 查询失败：保留兜底的物理表名，不回退成裸 ID', async () => {
@@ -229,5 +231,55 @@ describe('RuleTableFieldBinder · 字段默认选择', () => {
 
     // 没有新的 emit（还是只有前面那一次自动全选的记录）
     expect((wrapper.emitted('update:modelValue') as unknown[]).length).toBe(1)
+  })
+})
+
+// 2026-09-23：入参 / 出参统一成网页抓取那种勾选墙（代码 · 中文名 + 全选 / 清空）
+describe('RuleTableFieldBinder · 勾选墙（与网页抓取表配置统一）', () => {
+  const fields: RuleFieldOption[] = [
+    { itemCode: 'URLTITLE', itemName: '标题' },
+    { itemCode: 'video_minio', itemName: '视频minio地址' },
+    { itemCode: 'SYS_ID', itemName: '系统ID', seq: -1 } as RuleFieldOption,
+  ]
+  function mountWithFields(model: Partial<RuleOrchestration>) {
+    setActivePinia(createPinia())
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({ tableId: '2101720', tableName: 'sense_data.TB_YOUTUBE', fields: [] })
+    return mount(RuleTableFieldBinder, {
+      global: { plugins: [ElementPlus] },
+      props: {
+        modelValue: { inputTableId: '2101720', inputTable: 'sense_data.TB_YOUTUBE', inputFields: [], outputFields: [], ...model },
+        inputFieldOptions: fields,
+        outputFieldOptions: fields,
+      },
+    })
+  }
+  const lastPatch = (w: ReturnType<typeof mountWithFields>) =>
+    (w.emitted('update:modelValue') ?? []).at(-1)?.[0] as Partial<RuleOrchestration>
+
+  it('字段显示成「代码 · 中文名」，系统字段默认不显示；已选中的系统字段照样显示', async () => {
+    const w = mountWithFields({ inputFields: ['URLTITLE'], outputFields: ['SYS_ID'] })
+    await flushPromises()
+    expect(w.get('[data-testid="rule-input-fields"]').text()).toContain('URLTITLE · 标题')
+    expect(w.get('[data-testid="rule-input-fields"]').text()).not.toContain('SYS_ID')
+    // 出参里 SYS_ID 已选中：虽是系统字段也要显示，否则勾着却看不见、取消不了
+    expect(w.get('[data-testid="rule-output-fields"]').text()).toContain('SYS_ID · 系统ID')
+  })
+
+  it('全选 = 可选池全勾上；清空 = 一个不留', async () => {
+    const w = mountWithFields({ inputFields: ['URLTITLE'] })
+    await flushPromises()
+    await w.get('[data-testid="rule-input-select-all"]').trigger('click')
+    expect(lastPatch(w).inputFields).toEqual(['URLTITLE', 'video_minio'])
+    await w.get('[data-testid="rule-input-clear"]').trigger('click')
+    expect(lastPatch(w).inputFields).toEqual([])
+    await w.get('[data-testid="rule-output-select-all"]').trigger('click')
+    expect(lastPatch(w).outputFields).toEqual(['URLTITLE', 'video_minio'])
+  })
+
+  it('全选保留已选中的系统字段，不因为它藏着就被静默取消', async () => {
+    const w = mountWithFields({ outputFields: ['SYS_ID'] })
+    await flushPromises()
+    await w.get('[data-testid="rule-output-select-all"]').trigger('click')
+    expect(lastPatch(w).outputFields).toEqual(['SYS_ID', 'URLTITLE', 'video_minio'])
   })
 })

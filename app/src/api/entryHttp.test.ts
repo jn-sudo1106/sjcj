@@ -216,4 +216,29 @@ describe('表 ID（实体表）API 旧平台 HTTP 契约', () => {
 
     await expect(entryApi.copyEntry('2102157', 'tb_dup')).rejects.toThrow('表名已存在')
   })
+
+  // 2026-09-23：表下拉支持按 ID 搜。后端 name 不匹配 ID（name=2101720 → 0），要走 entryTypeId
+  describe('searchTables', () => {
+    it('非纯数字只按名称查一次', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ code: '0', count: 1, data: [{ entryTypeId: 2101720, tableName: 'sense_data.TB_YOUTUBE', items: [] }] }))
+      const { entryApi } = await import('./index')
+      const list = await entryApi.searchTables('YOUTUBE')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(String(fetchMock.mock.calls[0][0])).toContain('name=YOUTUBE')
+      expect(list.map((t) => t.tableId)).toEqual(['2101720'])
+    })
+
+    it('纯数字：按 ID（entryTypeId）和名称两路查，合并去重，ID 命中排最前', async () => {
+      fetchMock.mockImplementation(async (url: string) => String(url).includes('entryTypeId=')
+        ? jsonResponse({ code: '0', count: 1, data: [{ entryTypeId: 2101720, tableName: 'sense_data.TB_YOUTUBE', items: [] }] })
+        : jsonResponse({ code: '0', count: 2, data: [
+          { entryTypeId: 9001, tableName: 'sense_data.TB_2101720_BAK', items: [] },
+          { entryTypeId: 2101720, tableName: 'sense_data.TB_YOUTUBE', items: [] },
+        ] }))
+      const { entryApi } = await import('./index')
+      const list = await entryApi.searchTables('2101720')
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(list.map((t) => t.tableId)).toEqual(['2101720', '9001'])
+    })
+  })
 })

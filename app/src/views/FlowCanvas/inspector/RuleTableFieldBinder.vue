@@ -62,14 +62,31 @@ function selectableFields(all: RuleFieldOption[]): RuleFieldOption[] {
 }
 const inputFieldPool = computed(() => selectableFields(props.inputFieldOptions))
 const outputFieldPool = computed(() => selectableFields(props.outputFieldOptions))
-const allInputSelected = computed(() => inputFieldPool.value.length > 0 && inputFieldPool.value.every((f) => props.modelValue.inputFields?.includes(f.itemCode)))
-const allOutputSelected = computed(() => outputFieldPool.value.length > 0 && outputFieldPool.value.every((f) => props.modelValue.outputFields?.includes(f.itemCode)))
 
-// 折叠/展开按钮文案（收起已选字段那一排后，"选了多少个"这个信息只剩这一处能看到，展开态也不能丢）：
-// 全选说"已全选 N 个"；部分选说"已选 x/N 个"；一个没选说"共 N 个可选"；展开时额外带上"收起"提示操作。
-function fieldToggleLabel(expanded: boolean, allSelected: boolean, selectedCount: number, poolSize: number) {
-  const countText = allSelected ? `已全选 ${poolSize} 个` : selectedCount > 0 ? `已选 ${selectedCount}/${poolSize} 个` : `共 ${poolSize} 个可选`
-  return expanded ? `▾ 收起（${countText}）` : `▸ ${countText}`
+/**
+ * 勾选墙上显示哪些字段（2026-09-23 起入参 / 出参统一成网页抓取那种「代码 · 中文名」勾选墙，
+ * 右上角全选 / 清空；此前是已选标签 + 「▸ 已选 x/N 个」展开器，两类节点的表配置长得不一样）。
+ * 系统字段默认藏起来，但**已经选上的**照样显示——否则它被勾着、界面上却看不见也取消不了。
+ */
+function wallFields(all: RuleFieldOption[], pool: RuleFieldOption[], selected: string[] | undefined) {
+  const inPool = new Set(pool.map((f) => f.itemCode))
+  const chosen = new Set(selected ?? [])
+  return all.filter((f) => inPool.has(f.itemCode) || chosen.has(f.itemCode))
+}
+const inputWall = computed(() => wallFields(props.inputFieldOptions, inputFieldPool.value, props.modelValue.inputFields))
+const outputWall = computed(() => wallFields(props.outputFieldOptions, outputFieldPool.value, props.modelValue.outputFields))
+/** 「URLTITLE · 标题」；中文名缺失或与代码相同时只显示代码 */
+function fieldLabel(f: RuleFieldOption) {
+  return f.itemName && f.itemName !== f.itemCode ? `${f.itemCode} · ${f.itemName}` : f.itemCode
+}
+/** 全选 = 当前可选池全勾上，已选的系统字段保留（不因为池里藏着它就被静默取消） */
+function selectAllFields(kind: 'input' | 'output') {
+  const key = kind === 'input' ? 'inputFields' : 'outputFields'
+  const pool = kind === 'input' ? inputFieldPool.value : outputFieldPool.value
+  patch({ [key]: [...new Set([...(props.modelValue[key] ?? []), ...pool.map((f) => f.itemCode)])] } as Partial<BinderModel>)
+}
+function clearFields(kind: 'input' | 'output') {
+  patch({ [kind === 'input' ? 'inputFields' : 'outputFields']: [] } as Partial<BinderModel>)
 }
 
 // 入参字段默认全选（0804 拍板）：表选完、字段异步加载完成后自动勾满非系统字段，用户可以再手动取消。
@@ -102,9 +119,10 @@ function useTableSearch() {
     const seq = ++requestSeq
     loading.value = true
     try {
-      const paged = await entryApi.entryPaged({ name: keyword || undefined, size: 20 })
+      // 支持按表 ID 搜（纯数字时 ID + 名称两路合并），见 entryApi.searchTables
+      const list = await entryApi.searchTables(keyword, 20)
       if (seq !== requestSeq) return // 有更新的搜索已发出，丢弃这次的结果
-      results.value = paged.list
+      results.value = list
     } catch (e) {
       if (seq !== requestSeq) return
       ElMessage.error(`搜索表失败：${(e as Error)?.message ?? String(e)}`)
@@ -162,8 +180,9 @@ function onOutputTableFilter(query: string) {
 function onOutputTableVisible(open: boolean) {
   if (open && !outputTableSearch.results.value.length) void outputTableSearch.runSearch('')
 }
+/** 与网页抓取等节点的表配置统一成「ID · 库.表」（2026-09-23），表下拉也支持按 ID 搜 */
 function tableOptionLabel(t: EntryType) {
-  return `${t.name || t.tableName} · ${t.tableName}`
+  return `${t.tableId} · ${t.tableName}`
 }
 
 // 未显式选输出表时，占位文字直接展示会兑现成哪张表（跟 effectiveOutputTable 的口径一致），
@@ -211,9 +230,6 @@ function toggleField(kind: 'input' | 'output', code: string) {
   patch({ [key]: next } as Partial<BinderModel>)
 }
 
-// 入参/出参默认折叠，只显示已选 + 展开入口（拍板 #15）：字段数量多时避免把表单撑得很长
-const inputExpanded = ref(false)
-const outputExpanded = ref(false)
 </script>
 
 <template>
@@ -227,7 +243,7 @@ const outputExpanded = ref(false)
         clearable
         :remote-method="onInputTableFilter"
         :loading="inputTableSearch.loading.value"
-        placeholder="输入关键词搜索表，如 email、公告…"
+        placeholder="输入表名或表 ID 搜索，如 YOUTUBE、2101720"
         @update:model-value="onInputTableId"
         @visible-change="onInputTableVisible"
       >
@@ -241,32 +257,26 @@ const outputExpanded = ref(false)
     </div>
   </div>
 
-  <div class="rc-field"><label>入参字段 *</label>
+  <div class="rc-field">
+    <div class="rc-field-header">
+      <label>入参字段 *<template v-if="modelValue.inputTableId">（已选 {{ modelValue.inputFields?.length ?? 0 }} / {{ inputFieldPool.length }} 个，默认全选）</template></label>
+      <div v-if="modelValue.inputTableId" class="rc-field-actions">
+        <button type="button" class="rc-text-btn" data-testid="rule-input-select-all" @click="selectAllFields('input')">全选</button>
+        <button type="button" class="rc-text-btn" data-testid="rule-input-clear" @click="clearFields('input')">清空</button>
+        <button type="button" class="rc-text-btn" @click="showSystemFields = !showSystemFields">{{ showSystemFields ? '隐藏系统字段' : '显示系统字段' }}</button>
+      </div>
+    </div>
     <div v-if="!modelValue.inputTableId" class="rc-readonly-hint">请先选择输入表</div>
-    <template v-else>
-      <div class="rc-tag-row">
-        <!-- 展开时已选字段在下面的字段池里高亮，这里不再重复列一遍——避免字段多的时候占两排 -->
-        <template v-if="!inputExpanded">
-          <span v-if="!modelValue.inputFields?.length" class="rc-readonly-hint rc-tag-empty">未选择</span>
-          <span v-for="code in modelValue.inputFields" :key="code" class="rc-tag on" @click="toggleField('input', code)">
-            {{ inputFieldOptions.find((f) => f.itemCode === code)?.itemName ?? code }} ×
-          </span>
-        </template>
-        <button class="rc-tag-toggle" type="button" @click="inputExpanded = !inputExpanded">
-          {{ fieldToggleLabel(inputExpanded, allInputSelected, modelValue.inputFields?.length ?? 0, inputFieldPool.length) }}
-        </button>
-        <button class="rc-tag-toggle" type="button" @click="showSystemFields = !showSystemFields">
-          {{ showSystemFields ? '隐藏系统字段' : '显示系统字段' }}
-        </button>
-      </div>
-      <div v-if="inputExpanded" class="rc-tag-row rc-tag-pool">
-        <span
-          v-for="f in inputFieldPool" :key="f.itemCode"
-          class="rc-tag" :class="{ on: modelValue.inputFields?.includes(f.itemCode) }"
-          @click="toggleField('input', f.itemCode)"
-        >{{ f.itemName }}</span>
-      </div>
-    </template>
+    <div v-else class="rc-tag-row" data-testid="rule-input-fields">
+      <span
+        v-for="f in inputWall" :key="f.itemCode"
+        class="rc-tag" :class="{ on: modelValue.inputFields?.includes(f.itemCode) }"
+        @click="toggleField('input', f.itemCode)"
+      >
+        <input type="checkbox" class="rc-tag-check" :checked="modelValue.inputFields?.includes(f.itemCode)" @click.stop="toggleField('input', f.itemCode)" />
+        <span>{{ fieldLabel(f) }}</span>
+      </span>
+    </div>
   </div>
 
   <div v-if="!hideOutput" class="rc-field"><label>输出表（可选，默认使用输入表）</label>
@@ -307,31 +317,30 @@ const outputExpanded = ref(false)
     </div>
   </div>
 
-  <div v-if="!hideOutput" class="rc-field"><label>出参字段 *</label>
+  <div v-if="!hideOutput" class="rc-field">
+    <div class="rc-field-header">
+      <label>出参字段 *<template v-if="modelValue.inputTableId">（已选 {{ modelValue.outputFields?.length ?? 0 }} / {{ outputFieldPool.length }} 个）</template></label>
+      <div v-if="modelValue.inputTableId" class="rc-field-actions">
+        <button type="button" class="rc-text-btn" data-testid="rule-output-select-all" @click="selectAllFields('output')">全选</button>
+        <button type="button" class="rc-text-btn" data-testid="rule-output-clear" @click="clearFields('output')">清空</button>
+      </div>
+    </div>
     <div v-if="!modelValue.inputTableId" class="rc-readonly-hint">请先选择输入表</div>
     <template v-else>
-      <div class="rc-tag-row">
-        <!-- 展开时已选字段在下面的字段池里高亮，这里不再重复列一遍——避免字段多的时候占两排 -->
-        <template v-if="!outputExpanded">
-          <!-- 空态必须说清后果（0903）：出参字段默认不勾（会上口径「出参肯定就两三个，让他自己勾」），
-               而保存节点配置时它是必填。两者相加 = 新建规则节点第一次保存**必然**被拦，
-               而拦下来只有一个 3 秒就消失的 toast + 静默跳 tab，用户以为存上了、离开、节点就没了。
-               在字段本身写明"不选就存不了"，比事后弹一次提示有用得多。 -->
-          <span v-if="!modelValue.outputFields?.length" class="rc-readonly-hint rc-tag-empty rc-tag-required">未选择 · 至少选 1 个才能保存</span>
-          <span v-for="code in modelValue.outputFields" :key="code" class="rc-tag on" @click="toggleField('output', code)">
-            {{ outputFieldOptions.find((f) => f.itemCode === code)?.itemName ?? code }} ×
-          </span>
-        </template>
-        <button class="rc-tag-toggle" type="button" @click="outputExpanded = !outputExpanded">
-          {{ fieldToggleLabel(outputExpanded, allOutputSelected, modelValue.outputFields?.length ?? 0, outputFieldPool.length) }}
-        </button>
-      </div>
-      <div v-if="outputExpanded" class="rc-tag-row rc-tag-pool">
+      <!-- 空态必须说清后果（0903）：出参字段默认不勾（会上口径「出参肯定就两三个，让他自己勾」），
+           而保存节点配置时它是必填。两者相加 = 新建规则节点第一次保存**必然**被拦，
+           而拦下来只有一个 3 秒就消失的 toast + 静默跳 tab，用户以为存上了、离开、节点就没了。
+           在字段本身写明"不选就存不了"，比事后弹一次提示有用得多。 -->
+      <div v-if="!modelValue.outputFields?.length" class="rc-tag-required">未选择 · 至少选 1 个才能保存</div>
+      <div class="rc-tag-row" data-testid="rule-output-fields">
         <span
-          v-for="f in outputFieldPool" :key="f.itemCode"
+          v-for="f in outputWall" :key="f.itemCode"
           class="rc-tag" :class="{ on: modelValue.outputFields?.includes(f.itemCode) }"
           @click="toggleField('output', f.itemCode)"
-        >{{ f.itemName }}</span>
+        >
+          <input type="checkbox" class="rc-tag-check" :checked="modelValue.outputFields?.includes(f.itemCode)" @click.stop="toggleField('output', f.itemCode)" />
+          <span>{{ fieldLabel(f) }}</span>
+        </span>
       </div>
     </template>
   </div>
@@ -359,15 +368,18 @@ const outputExpanded = ref(false)
 .rc-input-btn { white-space: nowrap; padding: 0 12px; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-primary); cursor: pointer; font-size: 12px; font-weight: 600; }
 .rc-input-btn:hover { background: var(--rc-primary-bg); }
 .rc-readonly-hint { padding: 7px 9px; border: 1px dashed #dbe3ee; border-radius: 7px; background: #f8fafc; color: var(--rc-faint); font-size: 12px; }
-.rc-tag-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.rc-tag-required { color: #b91c1c; }
-.rc-tag-empty { padding: 4px 8px; }
-.rc-tag { display: inline-flex; align-items: center; padding: 4px 9px; border: 1px solid #dbe3ee; border-radius: 999px; background: #fff; color: var(--rc-text-2); font-size: 11px; cursor: pointer; user-select: none; }
-.rc-tag:hover { border-color: #bfdbfe; }
+/* 勾选墙：与 TableTab（网页抓取等节点）的「输入字段选择」同一套样式（2026-09-23 统一） */
+.rc-field-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.rc-field-header label { margin-bottom: 0; }
+.rc-field-actions { display: flex; gap: 8px; flex: none; }
+.rc-text-btn { border: 0; background: transparent; color: var(--rc-primary); font-size: 11px; font-weight: 600; cursor: pointer; padding: 0; }
+.rc-text-btn:hover { text-decoration: underline; }
+.rc-tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.rc-tag-required { margin-top: 2px; color: #b91c1c; font-size: 11px; }
+.rc-tag { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border: 1px solid #d5e2f2; border-radius: 6px; background: #f8fafc; color: var(--rc-text-2); font-size: 11px; cursor: pointer; user-select: none; transition: all 0.12s ease; }
+.rc-tag:hover { border-color: #93c5fd; background: #eff6ff; }
 .rc-tag.on { border-color: var(--rc-primary); background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-weight: 600; }
-.rc-tag-toggle { border: 0; background: transparent; color: var(--rc-primary); font-size: 11px; font-weight: 600; cursor: pointer; padding: 4px 2px; }
-.rc-tag-toggle:hover { text-decoration: underline; }
-.rc-tag-pool { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--rc-border-soft); }
+.rc-tag-check { margin: 0; cursor: pointer; accent-color: var(--rc-primary); }
 
 .rc-preset-tables { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
 .rc-preset-label { font-size: 11px; color: var(--rc-muted); font-weight: 600; }

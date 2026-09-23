@@ -2601,6 +2601,24 @@ export const entryApi = {
     const result = await request<Paged<unknown>>('config/entryTypePagedView', p, { method: 'GET', httpParams })
     return entryTypePageFromLegacy(result)
   },
+  /**
+   * 表下拉的搜索（2026-09-23，规则节点与其他节点表配置共用）：名称关键字之外支持按表 ID 找。
+   *
+   * 后端 `name` 只匹配名称，传数字 ID 命中 0 条；按 ID 要走 `entryTypeId`（精确）——实测
+   * name=2101720 → 0、entryTypeId=2101720 → 1（TB_YOUTUBE）。所以输入是纯数字时两路一起查、
+   * 合并去重，ID 精确命中的排最前；名字里恰好带这串数字的表也不会丢。
+   */
+  searchTables: async (keyword: string, size = 20): Promise<EntryType[]> => {
+    const kw = keyword.trim()
+    const byName = entryApi.entryPaged({ name: kw || undefined, size }).then((r) => r.list)
+    if (!/^\d+$/.test(kw)) return byName
+    const [idHits, nameHits] = await Promise.all([
+      entryApi.entryPaged({ entryTypeId: kw, size: 5 }).then((r) => r.list).catch(() => [] as EntryType[]),
+      byName,
+    ])
+    const seen = new Set<string>()
+    return [...idHits, ...nameHits].filter((t) => (seen.has(t.tableId) ? false : (seen.add(t.tableId), true)))
+  },
   entryDetail: async (tableId: string) =>
     entryTypeFromLegacy(await request<unknown>('config/entryType', { tableId }, {
       method: 'GET',

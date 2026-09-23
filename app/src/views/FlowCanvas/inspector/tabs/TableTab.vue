@@ -149,9 +149,10 @@ function useTableSearch() {
     const seq = ++requestSeq
     loading.value = true
     try {
-      const paged = await entryApi.entryPaged({ name: keyword || undefined, size: 30 })
+      // 支持按表 ID 搜（纯数字时 ID + 名称两路合并），见 entryApi.searchTables
+      const list = await entryApi.searchTables(keyword, 30)
       if (seq !== requestSeq) return // 有更新的搜索已发出，丢弃这次的结果
-      results.value = paged.list
+      results.value = list
     } catch (e) {
       if (seq !== requestSeq) return
       ElMessage.error(`搜索表失败：${(e as Error)?.message ?? String(e)}`)
