@@ -67,7 +67,9 @@ function selectTab(key: string) {
     </div>
     <div class="ca-content">
       <transition name="fade-slide" mode="out-in">
-        <component :is="comps[active]" :key="active" :fav-only="active === 'favorite'" />
+        <KeepAlive>
+          <component :is="comps[active]" :key="active" :fav-only="active === 'favorite'" />
+        </KeepAlive>
       </transition>
     </div>
   </div>

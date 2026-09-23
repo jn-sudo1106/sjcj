@@ -17,7 +17,12 @@ import { Star, StarFilled } from '@element-plus/icons-vue'
 import { isFavoriteSite, toggleFavoriteSite } from '@/utils/siteFavorites'
 import { recordSiteVisit } from '@/utils/siteRecents'
 
-const props = defineProps<{ sites: Site[] }>()
+const props = withDefaults(defineProps<{
+  sites: Site[]
+  loading?: boolean
+}>(), {
+  loading: false,
+})
 // 编辑网站信息由父组件（SourceTab）统一挂 SiteEditorDialog —— 表格视图走的也是这个事件，
 // 两个视图共用一份弹窗状态，不在卡片里再挂一个（0915-01）。
 const emit = defineEmits<{ 'open-editor': [site: Site] }>()
@@ -84,17 +89,14 @@ async function queueDataCounts(list: Site[]) {
   for (const site of pending) {
     if (version !== queueVersion) return
     await ensureDataCount(site)
+    // 稍微出让微任务，避免连续占用浏览器网络通道
+    await new Promise((resolve) => setTimeout(resolve, 20))
   }
 }
 /**
- * 首屏预览的并发上限（2026-09-18）。
- *
- * 每页从 10 改成 50 之后，原来的 `Promise.all(list.map(ensurePreview))` 会一次甩出 50 个
- * 请求。浏览器对同一 origin 本来就只开 6 条连接，多出来的只是在队列里排着，还会跟
- * 后面的数据量汇总抢连接；后端这边也有过"6 个网站同时拉完整源列表把它打满"的前科
- * （见 ensureDataCount 的注释）。分批发，首屏反而更快出来。
+ * 首屏预览的并发上限：保守设为 4，留出至少 2 个 TCP 连接给统计和交互操作
  */
-const PREVIEW_CONCURRENCY = 8
+const PREVIEW_CONCURRENCY = 4
 
 async function ensureCards(list: Site[]) {
   // 所有卡片的小预览先返回，再启动逐站完整汇总，避免大响应与首屏预览争抢连接。
@@ -327,7 +329,25 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div v-if="!sites.length" class="scg-empty-state">没有匹配的网站</div>
+    <!-- 骨架屏：首屏加载时展示 8 张占位卡片，避免空态「没有匹配的网站」盖在转圈下的误导体验 -->
+    <template v-if="loading && !sites.length">
+      <div v-for="i in 8" :key="`sk-${i}`" class="scg-card scg-skeleton-card">
+        <div class="scg-head">
+          <div class="scg-skeleton-icon" />
+          <div class="scg-skeleton-title">
+            <div class="scg-skeleton-line title" />
+            <div class="scg-skeleton-line cat" />
+          </div>
+        </div>
+        <div class="scg-skeleton-chips">
+          <div v-for="j in 4" :key="j" class="scg-skeleton-chip" />
+        </div>
+        <div class="scg-skeleton-foot">
+          <div class="scg-skeleton-line foot" />
+        </div>
+      </div>
+    </template>
+    <div v-else-if="!sites.length" class="scg-empty-state">没有匹配的网站</div>
 
     <!-- 只有「编辑网站信息」一项：进入网站左击卡片即可，删除是高危操作不与改名同菜单（0915-01） -->
     <div
@@ -473,6 +493,61 @@ onUnmounted(() => {
 .scg-foot-date { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .scg-empty-state { grid-column: 1 / -1; text-align: center; padding: 48px 16px; color: var(--rc-faint); font-size: 12px; background: #fff; border: 1px solid var(--rc-border); border-radius: 12px; }
+
+/* 骨架屏占位样式 */
+.scg-skeleton-card {
+  pointer-events: none;
+  border-color: rgba(226, 232, 240, 0.7);
+  background: rgba(255, 255, 255, 0.7);
+}
+.scg-skeleton-icon {
+  flex: none;
+  width: 42px;
+  height: 42px;
+  border-radius: 11px;
+  background: #f1f5f9;
+  animation: scg-shimmer 1.5s infinite ease-in-out;
+}
+.scg-skeleton-title {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 24px;
+}
+.scg-skeleton-line {
+  height: 12px;
+  border-radius: 4px;
+  background: #f1f5f9;
+  animation: scg-shimmer 1.5s infinite ease-in-out;
+}
+.scg-skeleton-line.title { width: 65%; height: 15px; }
+.scg-skeleton-line.cat { width: 35%; height: 10px; }
+.scg-skeleton-line.foot { width: 45%; height: 11px; }
+.scg-skeleton-chips {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 14px;
+}
+.scg-skeleton-chip {
+  height: 24px;
+  border-radius: 7px;
+  background: #f8fafc;
+  animation: scg-shimmer 1.5s infinite ease-in-out;
+}
+.scg-skeleton-foot {
+  display: flex;
+  align-items: center;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--rc-border-soft);
+}
+@keyframes scg-shimmer {
+  0% { opacity: 0.5; }
+  50% { opacity: 1; }
+  100% { opacity: 0.5; }
+}
 
 .scg-popover-content { display: flex; flex-direction: column; max-height: 280px; }
 .scg-overflow-search { flex: none; height: 32px; margin-bottom: 8px; padding: 0 9px; border: 1px solid var(--rc-border); border-radius: 7px; font-size: 12px; outline: none; background: #f8fafc; }

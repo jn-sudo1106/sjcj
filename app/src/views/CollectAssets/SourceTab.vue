@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, onActivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { sourceApi, siteApi, expandCategoryIds, type Site, type SourceCategory } from '@/api'
@@ -13,6 +13,7 @@ import BatchBar from './components/BatchBar.vue'
 import TableView from './components/TableView.vue'
 import SiteEditorDialog from './components/SiteEditorDialog.vue'
 import CategoryManageDrawer from './components/CategoryManageDrawer.vue'
+import { beginSitesFetch, collectAssetsCache, clearCollectAssetsCache, commitSites } from './siteListCache'
 
 /**
  * `favOnly`：由「我收藏的网站」tab 传进来（`CollectAssets/index.vue`）。
@@ -48,6 +49,10 @@ const sortBy = ref<'updated' | 'name'>('updated')
 /** 只看收藏（0917-17）。「网站列表」tab 里默认关（收藏的照样恒排最前）；
  *  「我收藏的网站」tab 里由 props 锁成 true。 */
 const favOnly = ref(props.favOnly === true)
+watch(() => props.favOnly, (val) => {
+  favOnly.value = val === true
+  applyView()
+})
 /** 只看最近打开（0917-17 后半条）。与 favOnly 互斥，由工具条那个下拉统一切换 */
 const recentOnly = ref(false)
 
@@ -74,13 +79,13 @@ const sites = ref<Site[]>([])
 const total = ref(0)
 const page = ref(1)
 /**
- * 每页 50（2026-09-18 用户提：「卡片类的是不是默认 50 条会好一点」）。
+ * 每页 20（2026-09-23，此前 09-18 按用户要求是 50）。
  *
- * 网站列表本来就是**一次全量拉回、前端分页**（见下方 loadList 的说明），翻页不产生新的
- * 列表请求；而卡片一屏能排 8~12 张，10 条/页意味着 25 个网站要翻 3 次。50 一页到底。
- * 页大小选项仍是 10/20/50，想要更少自己调。
+ * 列表本身是一次全量拉回、前端分页，页大小不影响它；影响的是卡片——每张卡片各发一个
+ * 源预览请求，之后还要逐站拉完整源列表算数据量（见 SiteCardGrid）。50 张卡片就是
+ * 50 轮请求，首屏明显慢，所以回到 20。选项仍是 10/20/50，要看更多自己调。
  */
-const size = ref(50)
+const size = ref(20)
 const loading = ref(false)
 
 // ---- 表格视图 ref ----
@@ -92,8 +97,9 @@ const editorMode = ref<'create' | 'edit'>('edit')
 // ---- 分类管理抽屉（2026-09-21：仅在「全部分类」下拉底部入口唤起） ----
 const categoryDrawerVisible = ref(false)
 async function onCategoryRefresh() {
+  clearCollectAssetsCache()
   await loadCategories()
-  await loadList()
+  await loadList({ force: true })
 }
 
 // ---- 加载 ----
@@ -151,9 +157,28 @@ watch([favoriteSiteIds, recentSiteIds], applyView)
 // 只认最后一次发起的请求，其余的结果直接丢弃。
 let listRequestSeq = 0
 
-async function loadList() {
+/**
+ * `force`：跳过缓存直接请求（本页改了数据之后用）。
+ * `revalidate`：命中缓存时先把缓存画出来，再**静默**重拉一次覆盖（进页面 / 切回 tab 时用）。
+ *   缓存是模块级的、跨路由存活，别的页面新建网站、挪源都不会清它——不重拉就会一直显示旧数据。
+ * 两个都不传（翻页、筛选改回默认）：命中缓存就直接用。
+ */
+async function loadList(options: { force?: boolean; revalidate?: boolean } = {}) {
   const seq = ++listRequestSeq
-  loading.value = true
+  const search = keyword.value.trim()
+  const isDefaultQuery = !search && !categoryFilter.value.length && !tagFilter.value && stateFilter.value === 'all'
+
+  let silent = false
+  if (!options.force && isDefaultQuery && collectAssetsCache.sites) {
+    fetchedSites.value = collectAssetsCache.sites
+    applyView()
+    loading.value = false
+    if (!options.revalidate) return
+    silent = true
+  }
+
+  const ticket = isDefaultQuery ? beginSitesFetch() : 0
+  if (!silent) loading.value = true
   try {
     // 勾一个分类要连它下面的子分类一起筛（后端 categoryIds 只精确匹配本级，不含子级；
     // 分类树又是懒加载的，未展开的子级 ID 前端手里没有）——交给 expandCategoryIds 把子树拉全。
@@ -163,7 +188,6 @@ async function loadList() {
       state: stateFilter.value,
       sort: sortBy.value,
     }
-    const search = keyword.value.trim()
     // 源名匹配走 source/sourcePaged?name= 取命中源的 siteId，再与网站列表求交集：
     // 真实 site/sitePaged 只按网站名筛，传 sourceName 会被忽略并原样返回整页
     // （旧实现的 name∪sourceName 并集因此把无关网站也带了出来）。
@@ -180,10 +204,13 @@ async function loadList() {
       list = list.filter((site) => site.name.toLowerCase().includes(kw) || siteIdsBySource.has(site.siteId))
     }
     if (seq !== listRequestSeq) return
+    if (isDefaultQuery) commitSites(ticket, list)
     fetchedSites.value = list
     applyView()
   } catch {
     if (seq !== listRequestSeq) return
+    // 静默重拉失败就留着缓存那份，不清空、不打扰
+    if (silent) return
     ElMessage.warning('加载网站列表失败')
     fetchedSites.value = []
     sites.value = []
@@ -194,39 +221,55 @@ async function loadList() {
   }
 }
 async function loadCategories() {
+  if (collectAssetsCache.categories) {
+    categories.value = collectAssetsCache.categories
+    return
+  }
   try {
-    // 旧分类接口首屏只返回根节点（categoryPaged 不带 parentId 的实测行为，画布侧
-    // SiteSourceSwitcher 同款修法）：再按 parentId 并行补一层子级，查询树首屏两级立即可见，
-    // SiteEditorDialog 的两级分类下拉也有选项。更深层级由 FilterToolbar 分类树展开时懒加载。
+    // 首屏只拉根分类（1个请求），子级由 FilterToolbar 的 el-tree-select 展开时按需懒加载；
+    // 不再首屏扇出十几个请求把网络打满
     const roots = await sourceApi.sourceCategories()
-    await Promise.all(roots.map(async (root) => {
-      root.children = await sourceApi.sourceCategories(root.id)
-    }))
+    collectAssetsCache.categories = roots
     categories.value = roots
   } catch {
     ElMessage.warning('加载分类失败')
     categories.value = []
   }
 }
-async function loadStats() {
+/** 同 loadList：`force` 跳过缓存；`revalidate` 先画缓存再静默重拉 */
+async function loadStats(options: { force?: boolean; revalidate?: boolean } = {}) {
+  let silent = false
+  if (!options.force && collectAssetsCache.stats) {
+    Object.assign(stats, collectAssetsCache.stats)
+    if (!options.revalidate) return
+    silent = true
+  }
   try {
     const summary = await siteApi.siteSummary()
-    Object.assign(stats, {
+    const next = {
       total: summary.sourceTotal,
       error: summary.errorCount,
       notify: summary.notifyCount,
       siteTotal: summary.total,
-    })
+    }
+    collectAssetsCache.stats = next
+    Object.assign(stats, next)
   } catch {
+    if (silent) return
     ElMessage.warning('加载网站统计失败')
   }
 }
 async function loadTagOptions() {
+  if (collectAssetsCache.tags) {
+    allTags.value = collectAssetsCache.tags
+    return
+  }
   try {
     // 0915-14：改用后端 2026-09-16 交付的 site/siteTags（返回的就是拆分去重后的数组）。
     // 此前是 sitePaged({size:999}) 拉全量网站再前端聚合——那个 TODO（性能审查 P0-2）到此为止；
     // 而且在后端加 tags 字段之前，聚合出来的集合**恒为空**，这个下拉一直是个空壳。
     allTags.value = await siteApi.siteTags()
+    collectAssetsCache.tags = allTags.value
   } catch {
     ElMessage.warning('加载标签选项失败')
     allTags.value = []
@@ -239,7 +282,8 @@ function resetAndLoad() {
   loadList()
 }
 async function refreshAll() {
-  await Promise.all([loadList(), loadStats()])
+  clearCollectAssetsCache()
+  await Promise.all([loadList({ force: true }), loadStats(), loadCategories(), loadTagOptions()])
 }
 
 // ---- 筛选辅助 ----
@@ -299,8 +343,8 @@ function onOperate(cmd: string) {
           : await sourceApi.changeSourceEnable(id, cmd !== 'enable')
         if (!r?.ok) failed++
       }
-      await loadList()
-      await loadStats()
+      await loadList({ force: true })
+      await loadStats({ force: true })
       return failed
         ? { message: `已处理 ${selectedIds.value.length - failed} 个、失败 ${failed} 个（演示）` }
         : { message: `已对 ${selectedIds.value.length} 个源执行「${map[cmd]}」（演示）` }
@@ -349,8 +393,9 @@ async function onEditorSaved(newSiteId?: string) {
   //
   // 新建成功后**不自动跳进新网站**：建站常常是连着建好几个，跳走反而打断。
   // 回到第一页即可——默认排序是「最近修改」，新网站就在最前面，点卡片就能进去灌源。
+  clearCollectAssetsCache()
   if (newSiteId) page.value = 1
-  await loadList()
+  await loadList({ force: true })
 }
 
 // 新建采集
@@ -366,11 +411,24 @@ onMounted(() => {
   // 下钻过来分类筛选是静默丢的。多选口径下预置成一个勾选项。
   const qc = String(route.query.category ?? '')
   if (qc) categoryFilter.value = qc.split(',').map((s) => s.trim()).filter(Boolean)
-  loadCategories()
-  loadStats()
-  loadTagOptions()
-  loadList()
+  // 并发优化：优先发起核心列表与统计请求；分类与标签后置并发，不再产生扇出请求风暴
+  void loadStats({ revalidate: true })
+  void loadList({ revalidate: true })
+  void loadCategories()
+  void loadTagOptions()
   ui.registerAction('新建采集', openNewFlowCanvas)
+})
+// 外层 CollectAssets 套了 KeepAlive：tab 之间切换不重新挂载，onMounted 不再跑。
+// 切回来时静默重拉，免得另一个 tab 或别的页面改过的数据看不到。
+// 首次挂载也会触发一次 onActivated，那次 onMounted 已经拉过，跳过。
+let activatedOnce = false
+onActivated(() => {
+  if (!activatedOnce) {
+    activatedOnce = true
+    return
+  }
+  void loadStats({ revalidate: true })
+  void loadList({ revalidate: true })
 })
 onUnmounted(() => {
   ui.clearActions()
@@ -414,8 +472,8 @@ onUnmounted(() => {
     />
 
     <!-- 卡片视图 -->
-    <div v-if="view === 'card'" v-loading="loading" class="ca-card-body">
-      <SiteCardGrid :sites="sites" @open-editor="openSiteEditor" />
+    <div v-if="view === 'card'" v-loading="loading && !!sites.length" class="ca-card-body">
+      <SiteCardGrid :sites="sites" :loading="loading" @open-editor="openSiteEditor" />
     </div>
 
     <!-- 表格视图 -->

@@ -6,8 +6,13 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import SourceTab from './SourceTab.vue'
+import { beginSitesFetch, clearCollectAssetsCache, collectAssetsCache, commitSites } from './siteListCache'
 import { useUiStore } from '@/stores/ui'
 import { sourceApi, siteApi } from '@/api'
+
+beforeEach(() => {
+  clearCollectAssetsCache()
+})
 
 vi.mock('element-plus', async (importOriginal) => {
   const actual = await importOriginal<typeof import('element-plus')>()
@@ -29,6 +34,7 @@ function makeRouter() {
 }
 
 async function mountAt(query?: Record<string, string>) {
+  clearCollectAssetsCache()
   const router = makeRouter()
   await router.push({ path: '/collect', query })
   await router.isReady()
@@ -533,3 +539,42 @@ describe('SourceTab · 统计区的口径（2026-09-21）', () => {
   })
 })
 
+
+// 2026-09-23：网站列表加了模块级缓存。缓存跨路由存活，别的页面（画布里新建网站、挪源）
+// 不会清它——所以进页面必须先画缓存、再静默重拉，否则一直显示旧数据。
+describe('SourceTab 网站列表缓存', () => {
+  beforeEach(() => localStorage.clear())
+
+  const site = (siteId: string, name: string) => ({ siteId, name, sourceCount: 1, errorCount: 0, updatedAt: '2026-09-20 10:00:00', tags: [] })
+
+  it('命中缓存时先显示缓存，再后台重拉，用新结果覆盖', async () => {
+    const spy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 2, list: [site('s-old', '旧站'), site('s-created', '别处新建的站')] as never })
+    const router = makeRouter()
+    await router.push('/collect')
+    await router.isReady()
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    // 模拟上一次进页面留下的缓存（只有一个站）
+    commitSites(beginSitesFetch(), [site('s-old', '旧站')] as never)
+
+    const wrapper = mount(SourceTab, { global: { plugins: [pinia, router, ElementPlus] } })
+    await flushPromises()
+    await flushPromises()
+
+    expect(spy).toHaveBeenCalled()
+    const sites = wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]
+    expect(sites.map((s) => s.siteId).sort()).toEqual(['s-created', 's-old'])
+    spy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('清缓存之前发出的请求晚回来，不能把旧数据写回缓存', () => {
+    clearCollectAssetsCache()
+    const stale = beginSitesFetch()
+    clearCollectAssetsCache()
+    const fresh = beginSitesFetch()
+    commitSites(fresh, [site('s-new', '新')] as never)
+    commitSites(stale, [site('s-stale', '旧')] as never)
+    expect(collectAssetsCache.sites?.map((s) => s.siteId)).toEqual(['s-new'])
+  })
+})
