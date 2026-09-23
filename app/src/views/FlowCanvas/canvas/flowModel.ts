@@ -126,7 +126,8 @@ export interface NodeConfig {
   /** 配置核心参数（旧 coreParam）：打标签/摘要节点保存时把模型选择写这里
    *  （{"providerCode","model"}，2026-09-20 从 code_rule 调整到 core_param），
    *  翻译助手把源/目标语言与引擎写这里（{"from","to","engine"}，2026-09-21 从 code_rule 调整到 core_param），
-   *  回读后用于编排 Tab 回填模型 / 语言与引擎下拉。 */
+   *  音频提取文字把转写配置写这里（provider/语言/区间/输出格式，2026-09-23 从 code_rule 调整到 core_param），
+   *  回读后用于编排 Tab 回填模型 / 语言与引擎 / 音频配置下拉。 */
   coreParam?: string
   /** 非采集类节点的输入表（采集类沿用 collectCfg.inputTable）；空 = 自动继承上游节点输出表，显式设置即覆盖（0701 问题五） */
   inputTable?: string

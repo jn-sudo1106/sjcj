@@ -125,8 +125,8 @@ export function normalizeNodeConfig(cfg: NodeConfig | NodeConfigSeed): NodeConfi
     if (normalizedValues.length) next.taskCfg.paramValues = normalizedValues
     else delete next.taskCfg.paramValues
     delete next.taskCfg.paramRefs
-    next.taskCfg.contextMap = [...new Set((next.taskCfg.contextMap ?? []).filter(Boolean))]
-    next.taskCfg.outColumns = [...new Set((next.taskCfg.outColumns ?? []).filter(Boolean))]
+    if (next.taskCfg.contextMap) next.taskCfg.contextMap = [...new Set(next.taskCfg.contextMap.filter(Boolean))]
+    if (next.taskCfg.outColumns) next.taskCfg.outColumns = [...new Set(next.taskCfg.outColumns.filter(Boolean))]
   }
   // 0806：定时策略统一迁到节点级；旧 CollectConfig / TaskConfig 字段保留兼容，
   // 新 UI 只写 next.schedule，避免再把定时策略绑定到首节点或采集节点。

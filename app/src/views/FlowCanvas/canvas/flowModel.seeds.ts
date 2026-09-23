@@ -26,7 +26,7 @@ import type {
   RuleOrchestration,
 } from './flowModel'
 import { cloneConfig, normalizeNodeConfigs, backfillOutputTables } from './flowModel.layout'
-import { isRuleLikeNode } from './flowModel'
+import { isAudioTextNode, isRuleLikeNode, isTranslateNode } from './flowModel'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
 
 // ---------- 采集能力 ----------
@@ -1217,7 +1217,15 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
     // 非采集类节点（规则/翻译助手等）的入库配置同样随步骤回填：buildConfigPayload 保存时
     // 从 NodeConfig 顶层读 structuredConfig 写回 code_rule，回读不填的话刷新后"看到的"与
     // "会写进去的"就对不上了（翻译助手的源/目标语言靠它回填编排 Tab 的两个下拉）。
-    if (step.codeRule != null) cfg.structuredConfig = step.codeRule
+    // 翻译助手 / 音频提取文字的结构化配置已挪到 core_param（见 nodeConfigPayload
+    // isStructuredInCoreParam），回读先取 core_param、取不到回落 code_rule 兼容存量，与
+    // applyConfigToNode 同口径。
+    if (isTranslateNode(cfg) || isAudioTextNode(cfg)) {
+      const migrated = step.coreParam || step.codeRule
+      if (migrated != null) cfg.structuredConfig = migrated
+    } else if (step.codeRule != null) {
+      cfg.structuredConfig = step.codeRule
+    }
     // 打标签/摘要节点同理：模型选择存 core_param，回读后靠它回填编排 Tab 的模型下拉。
     if (step.coreParam != null) cfg.coreParam = step.coreParam
     applyStepTaskFields(cfg, step)

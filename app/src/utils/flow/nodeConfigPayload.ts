@@ -15,6 +15,7 @@ import {
   defaultMultiMode,
   isArticleSummaryNode,
   isArticleTagNode,
+  isAudioTextNode,
   isRuleNode,
   isTranslateNode,
   type NodeConfig,
@@ -28,6 +29,14 @@ function dedupToLegacy(mode?: 'source' | 'table'): string {
   return mode === 'table' ? 'ALL' : ''
 }
 
+/**
+ * 结构化配置落在 cs_config.core_param（而非 code_rule）的节点：翻译助手（源/目标语言与引擎）
+ * 与音频提取文字（供应商/区间/输出格式）。这类节点从 core_param 读写，回读时兼容旧存量 code_rule。
+ */
+function isStructuredInCoreParam(cfg: NodeConfig): boolean {
+  return isTranslateNode(cfg) || isAudioTextNode(cfg)
+}
+
 /** 把已保存的配置正文覆盖到节点上（选择已有配置 / 保存后回读）。流程字段原样保留。 */
 export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
   cfg.configId = config.configId
@@ -35,9 +44,9 @@ export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
   cfg.configUrl = config.url ?? ''
   cfg.runPolicy = config.runPolicy
   const target = cfg.collectCfg ?? cfg
-  // 翻译助手节点的语言/引擎存在 core_param（2026-09-21 从 code_rule 挪过去），
-  // 旧存量配置仍躺在 code_rule——回读先取 core_param，取不到回落 code_rule 兼容。
-  target.structuredConfig = isTranslateNode(cfg)
+  // 翻译助手 / 音频提取文字节点的结构化配置存在 core_param（2026-09-21 / 2026-09-23 从
+  // code_rule 挪过去），旧存量配置仍躺在 code_rule——回读先取 core_param，取不到回落 code_rule 兼容。
+  target.structuredConfig = isStructuredInCoreParam(cfg)
     ? (config.coreParam || config.codeRule || undefined)
     : config.codeRule ?? undefined
   target.contentRules = config.contentRule ?? undefined
@@ -211,6 +220,19 @@ function translateStructuredFor(cfg: NodeConfig): string | undefined {
   return stored
 }
 
+/**
+ * 音频提取文字节点保存时的核心参数（2026-09-23 需求，落 cs_config.core_param）：供应商
+ *（本地/远程）+ 远程供应商/模型 + 语言 + 区间裁剪 + 输出格式/目录，取的是编排 Tab 改回节点
+ * 的结构化配置（serializeAudioOrchestrationConfig 的 JSON 文本，见 api/speech.ts）。
+ * 整段从 code_rule 挪到 core_param，code_rule 不再写；结构化配置尚未回填（undefined）时不写，
+ * 沿用「有值才覆盖」保留 base 原值。
+ */
+function audioStructuredFor(cfg: NodeConfig): string | undefined {
+  if (!isAudioTextNode(cfg)) return undefined
+  const source = cfg.collectCfg ?? cfg
+  return source.structuredConfig
+}
+
 export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown> = {}): Record<string, unknown> {
   const cc = cfg.collectCfg
   const source = cc ?? cfg
@@ -231,12 +253,12 @@ export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown
     topic: cfg.taskCfg?.queue || undefined,
     snatchDrepeat: dedupToLegacy(cc?.dedupMode ?? cfg.dedupMode),
     // 空字符串是用户明确删除，必须写回后端；只有 undefined 才代表“尚未回填，保留 base”。
-    // 翻译助手节点的结构化配置已挪去 core_param，code_rule 不再写（保持 base 原值）。
-    codeRule: isTranslateNode(cfg) ? undefined : source.structuredConfig,
+    // 翻译助手 / 音频提取文字的结构化配置已挪去 core_param，code_rule 不再写（保持 base 原值）。
+    codeRule: isStructuredInCoreParam(cfg) ? undefined : source.structuredConfig,
     contentRule: source.contentRules,
-    // 打标签 / 摘要节点把模型选择写核心参数（modelCodeRuleFor），翻译助手写语言/引擎，
-    // 都没写时回写节点回读到的原值。
-    coreParam: modelCodeRuleFor(cfg) ?? translateStructuredFor(cfg) ?? cfg.coreParam,
+    // 打标签 / 摘要节点把模型选择写核心参数（modelCodeRuleFor），翻译助手写语言/引擎、
+    // 音频节点写转写参数（各自 structuredFor），都没写时回写节点回读到的原值。
+    coreParam: modelCodeRuleFor(cfg) ?? translateStructuredFor(cfg) ?? audioStructuredFor(cfg) ?? cfg.coreParam,
     // 拼接后的系统提示词（2026-09-18）：落 cs_config.prompt；见 promptForConfig 的节点类型口径。
     prompt: promptForConfig(cfg),
   }
