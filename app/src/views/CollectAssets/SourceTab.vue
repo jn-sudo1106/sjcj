@@ -33,9 +33,12 @@ const VALID_STATES = ['all', 'error']
 const categories = ref<SourceCategory[]>([])
 const allTags = ref<string[]>([])
 /**
+ * 全站汇总（`site/summary` 不带条件）。
+ *
  * ⚠️ `stats.total` 是**源**总数（`summary.sourceTotal`），不是网站数——历史命名，别改动它的含义。
- * `siteTotal` 是全站网站数（`site/summary` 的 `total`，2026-09-21 才接上）：
- * 工具条第一个标签要显示「命中 / 全站」，光有命中数说不清"筛掉了多少"。
+ * `siteTotal` 是全站网站数：工具条第一个标签要显示「命中 / 全站」，光有命中数说不清"筛掉了多少"。
+ * 列表加载出来之后，源 / 出错源 / 告警网站三项改用 {@link listStats}（跟筛选走），这里只在
+ * 列表还没回来时顶一下，以及提供 siteTotal。
  */
 const stats = reactive({ total: 0, error: 0, notify: 0, siteTotal: 0 })
 
@@ -58,14 +61,7 @@ const recentOnly = ref(false)
 
 /**
  * 当前是否带着筛选条件（2026-09-21 用户报「根据条件查询完后，条数没有更新」）。
- *
- * 那次的实情是：工具条四个数里**只有第一个「网站」跟筛选走**（它绑的是列表命中数），
- * 后三个「源 / 出错源 / 告警网站」来自 `site/summary`、是**全站**汇总、与筛选无关
- * ——四个并排放着，看着就像"有的更新了有的没更新"。
- *
- * 前端自己聚合那三个走不通（2026-09-21 实测）：`sitePaged` 返回的 `errorCnt` / `notifyCnt`
- * **全是 null**，聚合出来都是 0；源数聚合 17139 也对不上全站 18636（差的是没挂网站的源），
- * 硬凑只会更让人困惑。所以改成**把口径标清楚**：命中数写成「71 / 83」，后三项说明是全站。
+ * 带着条件时「网站」写成「命中 / 全站」（如「71 / 83」）。
  */
 const hasFilter = computed(() => !!keyword.value.trim()
   || categoryFilter.value.length > 0
@@ -138,11 +134,31 @@ function sortSites(list: Site[]): Site[] {
  */
 const fetchedSites = ref<Site[]>([])
 
+/**
+ * 筛选命中的这批网站的汇总（2026-09-23，B31 后端补齐聚合列后才做得了）。
+ *
+ * 直接对筛完的列表求和，而不是再发一次带条件的 site/summary：
+ * - 列表本来就是全量拉回、前端筛（见 loadList），求和零请求；
+ * - 搜索框是「网站名 **或** 源名」命中，后端 name / sourceName 两个参数之间是 AND，
+ *   一次 summary 表达不了这个「或」，带搜索词时统计会和列表对不上；这里天然一致；
+ * - 口径已核对：2026-09-23 全量（98 站 / 18189 源 / 1496 出错 / 10 告警站）与
+ *   按标签「财经资讯」（64 / 2784 / 327 / 0）两组，前端求和与 summary 四项完全相同。
+ * 「告警网站」按网站计（有告警源的网站数），与 summary 的 notifyCount 同义，不是告警源数。
+ * null = 列表还没回来，工具条先用全站汇总顶着。
+ */
+const listStats = ref<{ total: number; error: number; notify: number } | null>(null)
+const toolbarStats = computed(() => ({ ...(listStats.value ?? stats), siteTotal: stats.siteTotal }))
+
 /** 从 fetchedSites 重算展示：只看收藏 → 排序（收藏置顶）→ 切片。不发请求。 */
 function applyView() {
   let base = fetchedSites.value
   if (favOnly.value) base = base.filter((site) => favoriteSiteIds.value.has(site.siteId))
   else if (recentOnly.value) base = base.filter((site) => recentSiteIds.value.includes(site.siteId))
+  listStats.value = {
+    total: base.reduce((sum, site) => sum + (site.sourceCount || 0), 0),
+    error: base.reduce((sum, site) => sum + (site.errorCount || 0), 0),
+    notify: base.filter((site) => (site.notifyCount ?? 0) > 0).length,
+  }
   const list = sortSites(base)
   const start = (page.value - 1) * size.value
   sites.value = list.slice(start, start + size.value)
@@ -453,7 +469,7 @@ onUnmounted(() => {
       :categories="categories"
       :all-tags="allTags"
       :total="total"
-      :stats="stats"
+      :stats="toolbarStats"
       :view="view"
       @filter-change="resetAndLoad"
       @refresh="refreshAll"

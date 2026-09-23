@@ -474,8 +474,8 @@ describe('SourceTab · 最近打开的网站（0917-17）', () => {
 // 并排放着看着就像没更新。修法是标清口径：命中数写成「命中 / 全站」。
 describe('SourceTab · 统计区的口径（2026-09-21）', () => {
   const sites = [
-    { siteId: 's1', name: '一', sourceCount: 1, errorCount: 0, updatedAt: '2026-09-16 14:09:24', tags: [] },
-    { siteId: 's2', name: '二', sourceCount: 1, errorCount: 0, updatedAt: '2026-09-03 15:54:37', tags: [] },
+    { siteId: 's1', name: '一', sourceCount: 10, errorCount: 3, notifyCount: 2, updatedAt: '2026-09-16 14:09:24', tags: [] },
+    { siteId: 's2', name: '二', sourceCount: 5, errorCount: 1, notifyCount: 0, updatedAt: '2026-09-03 15:54:37', tags: [] },
   ]
 
   beforeEach(() => localStorage.clear())
@@ -486,13 +486,28 @@ describe('SourceTab · 统计区的口径（2026-09-21）', () => {
     return mountAt()
   }
 
-  it('全站网站数从 site/summary 的 total 取，传给工具条', async () => {
+  // 2026-09-23 起：后端补齐了每个网站的聚合列（B31），源 / 出错源 / 告警网站改为对命中列表求和，
+  // 跟筛选走；全站网站数仍从 site/summary 的 total 取（「命中 / 全站」的分母）。
+  it('源 / 出错源 / 告警网站对命中列表求和，全站网站数取 summary.total', async () => {
+    const { wrapper } = await mountWith(83)
+    const stats = wrapper.findComponent({ name: 'FilterToolbar' }).props('stats') as Record<string, number>
+    expect(stats.siteTotal).toBe(83)
+    expect(stats.total).toBe(15)   // 10 + 5
+    expect(stats.error).toBe(4)    // 3 + 1
+    expect(stats.notify).toBe(1)   // 按网站计：只有 s1 有告警源
+  })
+
+  it('筛选后统计跟着变（搜索按网站名命中一个站）', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
     const { wrapper } = await mountWith(83)
     const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-    expect((toolbar.props('stats') as { siteTotal: number }).siteTotal).toBe(83)
-    // 源 / 出错源 / 告警照旧是全站口径，不做前端聚合（sitePaged 的 errorCnt 恒为 null）
-    expect((toolbar.props('stats') as { total: number; error: number }).total).toBe(18636)
-    expect((toolbar.props('stats') as { error: number }).error).toBe(1264)
+    toolbar.vm.$emit('update:keyword', '二')
+    toolbar.vm.$emit('filterChange')
+    await flushPromises()
+
+    const stats = toolbar.props('stats') as Record<string, number>
+    expect(toolbar.props('total')).toBe(1)
+    expect(stats).toMatchObject({ total: 5, error: 1, notify: 0, siteTotal: 83 })
   })
 
   it('没有筛选条件时 filtered=false（「网站 N」不写成 N / M）', async () => {

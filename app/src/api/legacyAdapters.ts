@@ -942,6 +942,7 @@ export function siteFromLegacy(input: unknown): Site {
     tags: parseIssueTags(record.tags),
     sourceCount,
     errorCount,
+    notifyCount: legacyNumber(record.notifyCnt),
     updatedAt: record.updateDt == null ? undefined : String(record.updateDt),
     dataCount: record.dataTotal == null ? undefined : Number(record.dataTotal),
     lastTaskAt: record.lastInsert == null ? undefined : String(record.lastInsert),

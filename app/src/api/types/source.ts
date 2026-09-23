@@ -243,6 +243,7 @@ export interface Site {
   owner: string
   sourceCount: number // 源数（含站内所有源，聚合统计）
   errorCount: number // 源中出错（state='E'）的数量，供卡片红点 / 状态筛选
+  notifyCount?: number // 开了告警的源数（sitePaged 的 notifyCnt，2026-09-23 起有值）；> 0 即「告警网站」
   updatedAt?: string
   // ---- 站级聚合展示字段（0707 采集资产表格样式：网站行直接带列值，均从源聚合派生） ----
   dataCount?: number // 源数据量合计
