@@ -54,20 +54,30 @@ const total = ref(0)
 const loading = ref(false)
 const page = ref(1)
 const size = ref(20)
+/** 已生效的查询条件：查询 watch 只盯这一份 */
 const filters = reactive({ sourceId: '', nodeId: '', state: '', queue: '', taskId: '', startTime: '', endTime: '' })
+/**
+ * 筛选栏上的草稿（2026-09-23 用户要求：跟源 / 数据 / 文件视图一样，改完点「查询」才查）。
+ *
+ * 此前每改一格就立刻发一次请求，站 11 这种大站选个日期、切个状态都要等。
+ * 以下几个"点了就是要看结果"的动作仍立即生效，同时把草稿同步过去，免得两边对不上：
+ * 点表格里的队列名、源态下点节点条、网站态切换具体的源（换查看对象，不算调条件）。
+ */
+const form = reactive({ nodeId: '', state: '', queue: '', startTime: '', endTime: '' })
 
 /**
  * 创建时间区间（0920-04 会上：「支持一个当天，然后支持一个范围」；后端 B27 于 2026-09-23 加）。
  *
  * 只传日期（YYYY-MM-DD），后端自己补成当天 00:00:00 ~ 23:59:59.999，两端闭区间。
  * 日期面板选不出结束早于开始、也不会出非法格式，所以后端那条 code=1 在这里碰不到。
- * 口径是任务的**创建时间**（CREATE_DT），不是表格里那列「更新时间」——placeholder 写明。
+ * 口径是任务的**创建时间**（CREATE_DT）；表格那一列也随之从「更新时间」换成「创建时间」（2026-09-23 用户要求），
+ * 否则按「今天」筛完，列表里看到的却是另一个时间（实测站 11 最近 200 条里 47 条两者不同）。
  */
 const dateRange = computed<string[] | null>({
-  get: () => (filters.startTime && filters.endTime ? [filters.startTime, filters.endTime] : null),
+  get: () => (form.startTime && form.endTime ? [form.startTime, form.endTime] : null),
   set: (value: string[] | null) => {
-    filters.startTime = value?.[0] ?? ''
-    filters.endTime = value?.[1] ?? ''
+    form.startTime = value?.[0] ?? ''
+    form.endTime = value?.[1] ?? ''
   },
 })
 function daysAgo(n: number): Date {
@@ -390,6 +400,7 @@ watch([siteId, sourceId], async () => {
   filters.taskId = ''
   filters.startTime = ''
   filters.endTime = ''
+  Object.assign(form, { nodeId: '', state: '', queue: '', startTime: '', endTime: '' })
   searchText.value = ''
   await loadSiteSources()
 }, { immediate: true })
@@ -397,6 +408,7 @@ watch([siteId, sourceId], async () => {
 watch(filterSteps, () => {
   if (filters.nodeId && filterSteps.value.length > 0 && !filterSteps.value.some((step) => step.stepId === filters.nodeId)) {
     filters.nodeId = ''
+    form.nodeId = ''
   }
 })
 
@@ -404,43 +416,69 @@ watch(filterSteps, () => {
 // 上面那个 filterSteps 守卫在**回到「全部源」**时兜不住——网站态不选源就不拉步骤元数据，
 // filterSteps 是空数组，`length > 0` 的前提不满足，于是旧 nodeId 会继续作用在查询上，
 // 而节点下拉这时是不渲染的，用户看不见也清不掉。必须排在下面那个查询 watch 之前。
-watch(() => filters.sourceId, () => { filters.nodeId = '' })
+watch(() => filters.sourceId, () => { filters.nodeId = ''; form.nodeId = '' })
 
 watch(() => [filters.sourceId, filters.nodeId, filters.state, filters.queue, filters.taskId, filters.startTime, filters.endTime, siteScopeId.value] as const, ([nextSourceId], previous) => {
   page.value = 1
   void Promise.all([nextSourceId !== previous?.[0] ? loadNodeMetadata() : Promise.resolve(), loadTasks()])
 }, { immediate: true })
 
+// 下面两个是"点了就要看结果"的快捷筛选：立即生效，草稿跟着改
 function onSelectNode(id: string) {
   filters.nodeId = filters.nodeId === id ? '' : id
+  form.nodeId = filters.nodeId
 }
 
 function onSelectQueue(q?: string) {
   const target = q && q !== '—' ? q.trim() : ''
   if (!target) return
   filters.queue = filters.queue === target ? '' : target
+  form.queue = filters.queue
 }
 
-function resetFilters() {
-  filters.sourceId = props.siteWide ? '' : sourceId.value
-  filters.nodeId = ''
-  filters.state = ''
-  filters.queue = ''
-  filters.taskId = ''
-  filters.startTime = ''
-  filters.endTime = ''
-  searchText.value = ''
+/** 草稿折算成查询条件（任务 ID 来自「字段 ▾ ＋ 输入框」，数据 ID / URL 待后端、恒不带） */
+function draftConditions() {
+  return {
+    nodeId: form.nodeId,
+    state: form.state,
+    queue: form.queue.trim(),
+    taskId: searchField.value === 'taskId' ? searchText.value.trim() : '',
+    startTime: form.startTime,
+    endTime: form.endTime,
+  }
 }
 
-/** 回车查询。值没变（比如同一个 ID 再按一次回车）watch 不会触发，这时手动重查 */
-function applySearch() {
-  const next = searchField.value === 'taskId' ? searchText.value.trim() : ''
-  if (next === filters.taskId) {
+/** 草稿和已生效的条件不一样 → 提示「条件已修改，点查询执行」 */
+const filtersDirty = computed(() => {
+  const draft = draftConditions()
+  return (Object.keys(draft) as (keyof typeof draft)[]).some((key) => draft[key] !== filters[key])
+})
+
+/**
+ * 「查询」/ 输入框回车：把草稿一次性生效。条件有变由查询 watch 去拉（一次）；
+ * 条件没变（比如同样的条件再点一次）watch 不会触发，手动重查——点了查询总得有反应。
+ */
+function runQuery() {
+  const changed = filtersDirty.value
+  Object.assign(filters, draftConditions())
+  if (!changed) {
     page.value = 1
     void loadTasks()
-    return
   }
-  filters.taskId = next
+}
+
+/** 清空：草稿和条件都回到初始，并立即查一次 */
+function resetFilters() {
+  Object.assign(form, { nodeId: '', state: '', queue: '', startTime: '', endTime: '' })
+  searchText.value = ''
+  const sourceBefore = filters.sourceId
+  filters.sourceId = props.siteWide ? '' : sourceId.value
+  const changed = filtersDirty.value || filters.sourceId !== sourceBefore
+  Object.assign(filters, draftConditions())
+  if (!changed) {
+    page.value = 1
+    void loadTasks()
+  }
 }
 
 function nodeName(task: TaskInst): string {
@@ -514,7 +552,7 @@ const nextStepHints = computed(() => {
                而节点下拉在没选源时本来就是空的——loadNodeMetadata 在网站态未选源时不拉
                步骤元数据（6496 个源要打一万多个请求），所以它当时只剩一个「全部节点」。 -->
           <SiteSourceSelect v-if="siteWide && siteId" v-model="filters.sourceId" :site-id="siteId" />
-          <select v-if="siteWide && filters.sourceId" v-model="filters.nodeId" class="tv-input" data-testid="task-node-filter" aria-label="流程节点">
+          <select v-if="siteWide && filters.sourceId" v-model="form.nodeId" class="tv-input" data-testid="task-node-filter" aria-label="流程节点">
             <option value="">全部节点</option>
             <option v-for="step in filterSteps" :key="`${step.sourceId}-${step.stepId}`" :value="step.stepId">{{ showSourceColumn ? `${sourceNames[step.sourceId] || step.sourceId} · ${step.name}` : step.name }}</option>
           </select>
@@ -528,7 +566,7 @@ const nextStepHints = computed(() => {
               data-testid="task-search-text"
               :placeholder="searchPlaceholder"
               aria-label="查询内容"
-              @keyup.enter="applySearch"
+              @keyup.enter="runQuery"
             />
           </span>
           <el-date-picker
@@ -544,14 +582,14 @@ const nextStepHints = computed(() => {
             size="small"
             unlink-panels
           />
-          <select v-model="filters.state" class="tv-input" aria-label="任务状态">
+          <select v-model="form.state" class="tv-input" data-testid="task-state-filter" aria-label="任务状态">
             <option value="">状态（全部）</option>
             <option value="C">完成</option>
             <option value="L">运行中</option>
             <option value="E">异常</option>
           </select>
           <input
-            v-model="filters.queue"
+            v-model="form.queue"
             class="tv-input tv-queue-input"
             data-testid="task-queue-filter"
             placeholder="队列名筛选"
@@ -561,12 +599,17 @@ const nextStepHints = computed(() => {
           <datalist id="task-queue-options">
             <option v-for="q in availableQueues" :key="q" :value="q" />
           </datalist>
-          <button class="rc-btn" type="button" @click="resetFilters">清空</button>
-          <button class="rc-btn" type="button" data-testid="task-refresh" :disabled="loading" @click="() => loadTasks()">刷新</button>
-          <span v-if="autoRefreshing" class="tv-auto" data-testid="task-auto-refresh">
-            <span class="tv-spin" />有任务运行中，每 10 秒自动刷新
+          <!-- 按钮靠右，与源视图一致（2026-09-23 用户要求） -->
+          <span class="tv-actions">
+            <span v-if="autoRefreshing" class="tv-auto" data-testid="task-auto-refresh">
+              <span class="tv-spin" />有任务运行中，每 10 秒自动刷新
+            </span>
+            <button class="rc-btn primary" type="button" data-testid="task-query" :disabled="loading" @click="runQuery">查询</button>
+            <button class="rc-btn" type="button" @click="resetFilters">清空</button>
+            <button class="rc-btn" type="button" data-testid="task-refresh" :disabled="loading" title="按当前已生效的条件重新拉取" @click="() => loadTasks()">刷新</button>
           </span>
         </div>
+        <p v-if="filtersDirty && !loading" class="tv-dirty" role="status" data-testid="task-filters-dirty">查询条件已修改，点「查询」执行</p>
 
         <table class="rc-data-table tv-table" data-testid="source-task-table" v-loading="loading">
           <colgroup>
@@ -593,7 +636,7 @@ const nextStepHints = computed(() => {
               <th>队列</th>
               <th>类型</th>
               <th>状态</th>
-              <th>更新时间</th>
+              <th>创建时间</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -668,7 +711,7 @@ const nextStepHints = computed(() => {
                   <span v-if="task.state === 'L'" class="tv-spin" />{{ stateText(task.state) }}
                 </span>
               </td>
-              <td class="tv-time">{{ task.updatedAt || '—' }}</td>
+              <td class="tv-time">{{ task.createdAt || '—' }}</td>
               <td class="tv-actions-cell">
                 <button class="tv-action-btn" type="button" data-testid="task-detail-btn" @click="openDetail(task)">详情</button>
                 <button v-if="canWrite" class="tv-resend" type="button" data-testid="task-resend" @click="resendTask(task)">重发</button>
@@ -723,6 +766,8 @@ const nextStepHints = computed(() => {
 .tv-filters .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; white-space: nowrap; }
 /* 查询多了一格后（0920-04），13.6 寸屏 + 网站态左侧源栏时一行放不下：折行，别把按钮挤成竖排 */
 .tv-filters { flex-wrap: wrap; row-gap: 6px; }
+.tv-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.tv-dirty { margin: -4px 0 10px; color: var(--rc-warning, #b45309); font-size: 12px; }
 .tv-table { width: 100%; }
 .tv-id, .tv-time { color: var(--rc-faint); font-family: var(--rc-mono, monospace); font-size: 11px; }
 .tv-pager { justify-content: flex-end; gap: 12px; padding: 10px 16px; margin-top: 0; margin-bottom: 0; border-top: 1px solid var(--rc-border-soft); }

@@ -228,6 +228,7 @@ describe('TaskView', () => {
     await picker.vm.$emit('update:modelValue', 's1')
     await flushPromises()
     await wrapper.find('[data-testid="task-node-filter"]').setValue('n1')
+    await wrapper.get('[data-testid="task-query"]').trigger('click')
     await flushPromises()
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ nodeId: 'n1' }))
 
@@ -261,10 +262,16 @@ describe('TaskView', () => {
     const queueInput = wrapper.find<HTMLInputElement>('[data-testid="task-queue-filter"]')
     expect(queueInput.exists()).toBe(true)
 
-    // 输入队列名过滤
+    // 输入队列名：不立即查（2026-09-23 起改完点「查询」才生效），提示条件已修改
+    const callsBefore = paged.mock.calls.length
     await queueInput.setValue('queue_download')
     await flushPromises()
+    expect(paged.mock.calls.length).toBe(callsBefore)
+    expect(wrapper.find('[data-testid="task-filters-dirty"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="task-query"]').trigger('click')
+    await flushPromises()
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ queue: 'queue_download', topic: 'queue_download' }))
+    expect(wrapper.find('[data-testid="task-filters-dirty"]').exists()).toBe(false)
 
     // 点击表格中的 queue_parse 单元格快速切换
     const parseCell = wrapper.findAll('.tv-queue-clickable').find((el) => el.text() === 'queue_parse')
@@ -356,6 +363,9 @@ describe('TaskView', () => {
     expect((picker as any).props('valueFormat')).toBe('YYYY-MM-DD')
     await (picker as any).vm.$emit('update:modelValue', ['2026-09-21', '2026-09-23'])
     await flushPromises()
+    expect(paged).not.toHaveBeenLastCalledWith(expect.objectContaining({ startTime: '2026-09-21' }))
+    await wrapper.get('[data-testid="task-query"]').trigger('click')
+    await flushPromises()
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ startTime: '2026-09-21', endTime: '2026-09-23', page: 1 }))
 
     const clearBtn = wrapper.findAll('button').find((b) => b.text() === '清空')!
@@ -381,6 +391,66 @@ describe('TaskView', () => {
     await flushPromises()
 
     expect(warn).toHaveBeenCalledWith('加载任务记录失败：时间范围不合法')
+    wrapper.unmount()
+  })
+
+  // 2026-09-23 用户要求：跟源 / 数据 / 文件视图一样，改完点「查询」才查，按钮在右侧
+  it('改条件不立即查；点「查询」一次性生效，条件没变再点也重查；清空立即查', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const source = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+    const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(TaskView, {
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await flushPromises()
+
+    const n0 = paged.mock.calls.length
+    await wrapper.get('[data-testid="task-state-filter"]').setValue('E')
+    await wrapper.get('[data-testid="task-queue-filter"]').setValue('news_cont')
+    await flushPromises()
+    expect(paged.mock.calls.length).toBe(n0)
+
+    await wrapper.get('[data-testid="task-query"]').trigger('click')
+    await flushPromises()
+    // 两个条件一次请求带上
+    expect(paged.mock.calls.length).toBe(n0 + 1)
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'E', queue: 'news_cont' }))
+
+    await wrapper.get('[data-testid="task-query"]').trigger('click')
+    await flushPromises()
+    expect(paged.mock.calls.length).toBe(n0 + 2)
+
+    const clearBtn = wrapper.findAll('button').find((b) => b.text() === '清空')!
+    await clearBtn.trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ state: undefined, queue: undefined }))
+    expect((wrapper.get('[data-testid="task-state-filter"]').element as HTMLSelectElement).value).toBe('')
+
+    wrapper.unmount()
+  })
+
+  it('表格时间列是「创建时间」，与时间筛选同一口径（createDt）', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const source = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+    vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
+      total: 1,
+      list: [{ taskId: 't1', state: 'C', typeName: '抓取', taskName: '任务', sourceId: source.sourceId, createdAt: '2026-09-23 13:38:24', updatedAt: '2026-09-23 13:39:56' }],
+    })
+    const wrapper = shallowMount(TaskView, {
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await flushPromises()
+
+    const headers = wrapper.findAll('thead th').map((th) => th.text())
+    expect(headers).toContain('创建时间')
+    expect(headers).not.toContain('更新时间')
+    expect(wrapper.get('.tv-time').text()).toBe('2026-09-23 13:38:24')
     wrapper.unmount()
   })
 
