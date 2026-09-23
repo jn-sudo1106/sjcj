@@ -2,6 +2,7 @@
 import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { Refresh } from '@element-plus/icons-vue'
 import { dataApi, siteApi, sourceApi, type NodeRunStat, type Source, type Step, type TaskInst } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useAuthStore } from '@/stores/auth'
@@ -223,11 +224,17 @@ function configIdForNode(nodeId: string): string | undefined {
   return filterSteps.value.find((step) => step.stepId === nodeId)?.configId || undefined
 }
 
-// 任务视图无自动刷新时，「运行中」的任务会一直挂在旧快照上（后端跑完了界面不知道）。
-// 列表里只要还有 state==='L' 的任务，就每 10s 静默重拉一次，全部 C/E 后自动停。
+/**
+ * 自动刷新：**手动开关，默认关**（0920-05；2026-09-23 落地）。
+ *
+ * 原来是"列表里还有 state==='L' 就每 10s 重拉、全部 C/E 后自动停"。但任务终态不回写（B26，
+ * 87 万条永远停在 L），这个条件恒为真，打开页签就一直在打请求、一直转圈。会上原话：
+ * 「让他来一个按钮点一下就开始刷新，不点的话就不要这么转」。
+ * 开着时每 10s 按**已生效**的条件静默重拉（不管有没有运行中的任务）；关掉就停，离开页面也停。
+ */
 const REFRESH_MS = 10_000
 let pollTimer: ReturnType<typeof setInterval> | undefined
-const autoRefreshing = computed(() => rows.value.some((t) => t.state === 'L'))
+const autoRefresh = ref(false)
 
 // 重发 = task/resetTaskInsts（danger:true）。写入口对非 admin 隐藏，与 TaskInstDialog 同口径。
 const auth = useAuthStore()
@@ -335,13 +342,10 @@ function resendTask(task: TaskInst) {
 function stopPoll() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = undefined }
 }
-function syncPoll() {
-  if (autoRefreshing.value && !pollTimer) {
-    pollTimer = setInterval(() => void loadTasks({ silent: true }), REFRESH_MS)
-  } else if (!autoRefreshing.value) {
-    stopPoll()
-  }
-}
+watch(autoRefresh, (on) => {
+  stopPoll()
+  if (on) pollTimer = setInterval(() => void loadTasks({ silent: true }), REFRESH_MS)
+})
 onUnmounted(stopPoll)
 
 let taskRequest = 0
@@ -366,7 +370,6 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
   if (!query.siteId || siteWideBlocked.value) {
     rows.value = []
     total.value = 0
-    stopPoll()
     return
   }
   if (!opts.silent) loading.value = true
@@ -375,7 +378,6 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
     if (requestId !== taskRequest) return
     rows.value = result?.list ?? []
     total.value = result?.total ?? 0
-    syncPoll()
   } catch (error) {
     if (requestId !== taskRequest) return
     if (!opts.silent) {
@@ -601,12 +603,16 @@ const nextStepHints = computed(() => {
           </datalist>
           <!-- 按钮靠右，与源视图一致（2026-09-23 用户要求） -->
           <span class="tv-actions">
-            <span v-if="autoRefreshing" class="tv-auto" data-testid="task-auto-refresh">
-              <span class="tv-spin" />有任务运行中，每 10 秒自动刷新
-            </span>
             <button class="rc-btn primary" type="button" data-testid="task-query" :disabled="loading" @click="runQuery">查询</button>
             <button class="rc-btn" type="button" @click="resetFilters">清空</button>
-            <button class="rc-btn" type="button" data-testid="task-refresh" :disabled="loading" title="按当前已生效的条件重新拉取" @click="() => loadTasks()">刷新</button>
+            <!-- 刷新用项目统一的紧凑图标按钮（与网站列表工具条同款），自动刷新是它旁边的轻量开关 -->
+            <button class="tv-icon-btn" type="button" data-testid="task-refresh" :disabled="loading" title="按当前已生效的条件重新拉取" aria-label="刷新" @click="() => loadTasks()">
+              <el-icon :size="14"><Refresh /></el-icon>
+            </button>
+            <label class="tv-auto" data-testid="task-auto-refresh" title="开启后每 10 秒按当前条件重新拉取一次">
+              <el-switch v-model="autoRefresh" size="small" data-testid="task-auto-refresh-switch" />
+              <span>自动刷新</span><span class="tv-auto-state" :class="{ on: autoRefresh }">{{ autoRefresh ? '开 · 10 秒' : '关' }}</span>
+            </label>
           </span>
         </div>
         <p v-if="filtersDirty && !loading" class="tv-dirty" role="status" data-testid="task-filters-dirty">查询条件已修改，点「查询」执行</p>
@@ -756,11 +762,11 @@ const nextStepHints = computed(() => {
 .tv-next-fields { margin: 0 0 10px; color: var(--rc-muted); font-size: 12px; }
 .tv-input { height: 28px; min-width: 112px; padding: 0 10px; color: var(--rc-text); border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; font-size: 12px; }
 .tv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; outline: none; }
-.tv-queue-input { min-width: 130px; }
+.tv-queue-input { width: 120px; min-width: 0; }
 .tv-search { display: inline-flex; gap: 4px; }
-.tv-search-field { min-width: 96px; }
-.tv-search-input { min-width: 160px; }
-.tv-filters :deep(.tv-date-range) { flex: none; width: 240px; height: 28px; }
+.tv-search-field { width: 88px; min-width: 0; }
+.tv-search-input { width: 140px; min-width: 0; }
+.tv-filters :deep(.tv-date-range) { flex: none; width: 200px; height: 28px; }
 .tv-queue-clickable { cursor: pointer; color: var(--rc-primary); }
 .tv-queue-clickable:hover { text-decoration: underline; }
 .tv-filters .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; white-space: nowrap; }
@@ -773,7 +779,12 @@ const nextStepHints = computed(() => {
 .tv-pager { justify-content: flex-end; gap: 12px; padding: 10px 16px; margin-top: 0; margin-bottom: 0; border-top: 1px solid var(--rc-border-soft); }
 .tv-empty-row { padding: 28px 12px; color: var(--rc-faint); font-size: 12px; text-align: center; }
 .muted { color: var(--rc-faint); font-size: 12px; }
-.tv-auto { display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; color: var(--rc-muted); font-size: 11px; }
+.tv-auto { display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; color: var(--rc-muted); font-size: 12px; white-space: nowrap; cursor: pointer; }
+.tv-auto-state { color: var(--rc-faint); font-size: 11px; }
+.tv-auto-state.on { color: var(--rc-primary); }
+.tv-icon-btn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-muted); cursor: pointer; }
+.tv-icon-btn:hover:not(:disabled) { border-color: #bfdbfe; color: var(--rc-primary); }
+.tv-icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .tv-resend { border: 0; background: transparent; padding: 0; color: var(--rc-primary); font-size: 12px; cursor: pointer; }
 .tv-resend:hover { text-decoration: underline; }
 .tv-link { color: var(--rc-primary); text-decoration: none; cursor: pointer; }

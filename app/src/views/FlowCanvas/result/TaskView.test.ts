@@ -42,42 +42,50 @@ describe('TaskView', () => {
     wrapper.unmount()
   })
 
-  it('有「运行中」任务时每 10s 自动刷新，全部完成后停；「刷新」按钮手动重拉', async () => {
+  // 0920-05（2026-09-23 落地）：自动刷新改手动开关、默认关。原来"有 L 就轮询"在任务终态不回写
+  //（B26，87 万条永远 L）时永远停不下来。
+  it('自动刷新默认关、不轮询；打开后每 10s 重拉，关掉就停；刷新图标按钮手动重拉', async () => {
     vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-09-08T10:00:00'))
     setActivePinia(createPinia())
     await router.push('/canvas')
     const source = mockSourceDetail({ sourceId: '391007768' })!
     useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
 
-    // 刚更新过（1 分钟前）→ 视为活跃，参与轮询
+    // 列表里有「运行中」的任务——原实现会因此自动开始轮询
     const running: TaskInst[] = [
       { taskId: 't1', state: 'L', typeName: '浏览器抓取', taskName: '进行中', sourceId: source.sourceId, updatedAt: '2026-09-08 09:59' },
     ]
-    const done: TaskInst[] = [{ ...running[0], state: 'C' }]
     const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 1, list: running })
+    const SwitchStub = { name: 'ElSwitch', props: ['modelValue'], emits: ['update:modelValue'], template: '<i />' }
 
     const wrapper = shallowMount(TaskView, {
-      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true, 'el-switch': SwitchStub } },
     })
     await vi.advanceTimersByTimeAsync(200)
     await flushPromises()
     const initialCalls = paged.mock.calls.length
-    expect(wrapper.find('[data-testid="task-auto-refresh"]').exists()).toBe(true)
 
-    paged.mockResolvedValue({ total: 1, list: done })
-    await vi.advanceTimersByTimeAsync(10_000)
-    await flushPromises()
-    expect(paged.mock.calls.length).toBe(initialCalls + 1)
-    expect(wrapper.find('[data-testid="task-auto-refresh"]').exists()).toBe(false)
-
+    // 默认关：有运行中的任务也不转
+    expect(wrapper.get('[data-testid="task-auto-refresh"]').text()).toContain('关')
     await vi.advanceTimersByTimeAsync(30_000)
+    expect(paged.mock.calls.length).toBe(initialCalls)
+
+    // 打开：每 10s 一次
+    wrapper.findComponent(SwitchStub).vm.$emit('update:modelValue', true)
     await flushPromises()
-    expect(paged.mock.calls.length).toBe(initialCalls + 1)
+    expect(wrapper.get('[data-testid="task-auto-refresh"]').text()).toContain('开 · 10 秒')
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(paged.mock.calls.length).toBe(initialCalls + 2)
+
+    // 关掉：停
+    wrapper.findComponent(SwitchStub).vm.$emit('update:modelValue', false)
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(paged.mock.calls.length).toBe(initialCalls + 2)
 
     await wrapper.get('[data-testid="task-refresh"]').trigger('click')
     await flushPromises()
-    expect(paged.mock.calls.length).toBe(initialCalls + 2)
+    expect(paged.mock.calls.length).toBe(initialCalls + 3)
 
     wrapper.unmount()
     vi.useRealTimers()
