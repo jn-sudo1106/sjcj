@@ -487,8 +487,6 @@ const nextStepHints = computed(() => {
             <col style="width: 180px" />
             <col style="width: 80px" />
             <col style="width: 80px" />
-            <col style="width: 80px" />
-            <col style="width: 80px" />
             <col style="width: 140px" />
             <col style="width: 110px" />
           </colgroup>
@@ -501,8 +499,6 @@ const nextStepHints = computed(() => {
               <th>数据 ID</th>
               <th>任务 URL</th>
               <th>队列</th>
-              <th>总任务数</th>
-              <th>已处理数</th>
               <th>类型</th>
               <th>状态</th>
               <th>更新时间</th>
@@ -536,6 +532,8 @@ const nextStepHints = computed(() => {
                   @keydown.enter="openSource(task)"
                 >{{ sourceNames[task.sourceId] || task.sourceId }}</a>
                 <span v-else class="muted">—</span>
+                <!-- 源名拿到了才另起一行显示 ID；没拿到时链接本身显示的就是 ID，不重复 -->
+                <div v-if="task.sourceId && sourceNames[task.sourceId]" class="tv-source-id" data-testid="task-source-id">{{ task.sourceId }}</div>
               </td>
               <td>{{ nodeName(task) }}</td>
               <td>{{ task.taskName }}</td>
@@ -572,8 +570,6 @@ const nextStepHints = computed(() => {
               >
                 {{ queueName(task) }}
               </td>
-              <td>{{ nodeRun(task.sourceId, task.node)?.totalTasks ?? '—' }}</td>
-              <td>{{ nodeRun(task.sourceId, task.node)?.processedTasks ?? '—' }}</td>
               <td>{{ task.typeName }}</td>
               <td>
                 <span class="rc-status" :class="stateClass(task.state)">
@@ -586,7 +582,7 @@ const nextStepHints = computed(() => {
                 <button v-if="canWrite" class="tv-resend" type="button" data-testid="task-resend" @click="resendTask(task)">重发</button>
               </td>
             </tr>
-            <tr v-if="!rows.length && !loading"><td :colspan="showSourceColumn ? 13 : 12" class="tv-empty-row">没有匹配的任务记录</td></tr>
+            <tr v-if="!rows.length && !loading"><td :colspan="showSourceColumn ? 11 : 10" class="tv-empty-row">没有匹配的任务记录</td></tr>
           </tbody>
         </table>
         <!-- 分页与数据中心统一（DataQueryPanel 的 .dqp-pager 同款 el-pagination） -->
@@ -641,6 +637,7 @@ const nextStepHints = computed(() => {
 .tv-link:hover { text-decoration: underline; }
 .tv-id-link { color: var(--rc-primary); font-family: var(--rc-mono, monospace); font-size: 11px; }
 .tv-source-link { display: inline-block; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.tv-source-id { color: var(--rc-faint); font-family: var(--rc-mono, monospace); font-size: 11px; }
 .tv-url-link { display: inline-block; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
 .tv-queue-cell { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* ⚠️ 这里**不能设 display**：给 <td> 设 inline-flex/flex 会让它不再是 table-cell，

@@ -34,8 +34,9 @@ describe('TaskView', () => {
     expect(wrapper.find('[data-testid="task-node-filter"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('列表抓取')
     expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('队列')
-    expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('总任务数')
-    expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('已处理数')
+    // 「总任务数 / 已处理数」2026-09-23 删列：数据来自 source/nodeRunStats，后端没有这条接口，线上恒为「—」
+    expect(wrapper.get('[data-testid="source-task-table"]').text()).not.toContain('总任务数')
+    expect(wrapper.get('[data-testid="source-task-table"]').text()).not.toContain('已处理数')
     expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('queue_81909')
     expect(wrapper.text()).not.toContain('队列聚合')
     wrapper.unmount()
@@ -563,6 +564,7 @@ describe('TaskView', () => {
 
       const sourceLink = wrapper.get('[data-testid="task-source-link"]')
       expect(sourceLink.text()).toBe('全网源101')
+      expect(wrapper.get('[data-testid="task-source-id"]').text()).toBe('src_sw_101')
 
       await sourceLink.trigger('click')
       await flushPromises()
@@ -643,7 +645,7 @@ describe('TaskView', () => {
 
     // 给 <td> 设 inline-flex/flex 会让它不再是 table-cell，colgroup 那条列宽直接失效
     //（浏览器实测：同表 200px 的列加上 inline-flex 后实测 95px；真实页面上操作列量到 80px，
-    //  而 <col> 写的是 110px）。0917-03 才刚用 colgroup 定死 13 列，别在这儿拆掉一列。
+    //  而 <col> 写的是 110px）。0917-03 才刚用 colgroup 定死列数（当时 13 列，0923 删掉两列统计后是 11），别在这儿拆掉一列。
     it('操作列的 td 不设 display，否则会脱离 colgroup 的列宽', () => {
       const actionsCell = /\.tv-actions-cell\s*\{[^}]*\}/.exec(TaskViewSource)?.[0] ?? ''
       expect(actionsCell).toBeTruthy()
@@ -655,7 +657,7 @@ describe('TaskView', () => {
     // `filters.sourceId = props.siteWide ? '' : sourceId.value`），所以**源态收起这一列**——
     // 整列每行都是同一个源名，130px 纯浪费。0917-02 要的「所属源可点」是网站态的事
     //（覆盖见上面那条满额用例），不需要把这个条件改成恒真。
-    it('源态收起「所属源」列（每行同源，纯冗余），空态 colspan 跟着变 12', async () => {
+    it('源态收起「所属源」列（每行同源，纯冗余），空态 colspan 跟着变 10', async () => {
       setActivePinia(createPinia())
       await router.push('/canvas')
       const source = mockSourceDetail({ sourceId: '391007768' })!
@@ -671,7 +673,7 @@ describe('TaskView', () => {
 
       expect(wrapper.findAll('thead th').map((th) => th.text())).not.toContain('所属源')
       expect(wrapper.find('[data-testid="task-source-link"]').exists()).toBe(false)
-      expect(wrapper.get('.tv-empty-row').attributes('colspan')).toBe('12')
+      expect(wrapper.get('.tv-empty-row').attributes('colspan')).toBe('10')
 
       wrapper.unmount()
     })
@@ -688,8 +690,8 @@ describe('TaskView', () => {
       await new Promise((resolve) => setTimeout(resolve, 150))
       await flushPromises()
 
-      // 按表头位置找队列列，不写死下标：列数会随「所属源」列的开合在 12/13 之间变
-      //（2026-09-22 恢复 showSourceColumn 原语义后，源态是 12 列，队列从 index 6 挪到 5）
+      // 按表头位置找队列列，不写死下标：列数会随「所属源」列的开合在 10/11 之间变
+      //（2026-09-22 恢复 showSourceColumn 原语义后，源态是 12 列，队列从 index 6 挪到 5；0923 删掉两列统计后源态 10 列）
       const headers = wrapper.findAll('thead th').map((th) => th.text())
       const queueIndex = headers.indexOf('队列')
       expect(queueIndex).toBeGreaterThan(-1)
