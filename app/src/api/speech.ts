@@ -125,6 +125,148 @@ function asRecord(value: unknown): Record<string, unknown> {
  * 调后端转写音频。失败（网络 / 超时 / 非 2xx / 没返回文本）向上抛，
  * 错误信息优先用后端 `{"error": "..."}` 里的原文。
  */
+// ---- 音频提取文字节点「编排配置」的结构化配置（落 cs_config.CODE_RULE，见方案 §3）----
+//
+// 这份 JSON 是前后端的契约：字段名与 `wanv-processor` audio-to-text 分支的
+// `RULE_DEFAULTS` / `build_payload` 逐字对齐，改一处必须同步另一处（方案 §7 红线）。
+// 与转写执行本身无关的常量（供应商/模型候选、区间时长上限）也在这一节，UI 与后端读同一份。
+
+/** 模型供应商：本地离线（faster-whisper，全默认）或远程语音转文字接口。 */
+export type AudioProviderKind = 'local' | 'remote'
+
+/** 输出格式：纯文本或字幕 SRT。远程接口只回整段文本、无分段，因此 remote 只允许 txt（方案 C5）。 */
+export type AudioOutputFormat = 'txt' | 'srt'
+
+/** 远程接口供应商候选（后端 /api/speech 支持的 providerCode）。 */
+export const SPEECH_PROVIDER_OPTIONS: { value: string; label: string }[] = [
+  { value: 'MiniMax', label: 'MiniMax' },
+]
+
+/** 远程接口侧模型候选（providerCode 对应的 model）。 */
+export const SPEECH_MODEL_OPTIONS: { value: string; label: string }[] = [
+  { value: 'asr-1.0', label: 'asr-1.0' },
+]
+
+export interface AudioOrchestrationConfig {
+  /** Context 中音频来源字段名，留空由后端按「唯一 Key → 任务 Url」定位 */
+  urlField: string
+  provider: AudioProviderKind
+  /** 仅 provider=remote：接口供应商码 */
+  providerCode: string
+  /** 仅 provider=remote：接口侧模型 */
+  remoteModel: string
+  /** 识别语言（BCP-47，见 SPEECH_LANGUAGE_OPTIONS），留空=自动识别。local/remote 共用 */
+  language: string
+  /** 区间裁剪起点，秒或 HH:MM:SS，空=从头。主用途：切给远程绕开 500s 上限 */
+  start: string
+  /** 区间裁剪终点，空=到尾 */
+  end: string
+  outputFormat: AudioOutputFormat
+  /** 远端产物目录前缀，留空用后端默认（/code01） */
+  outputBaseDir: string
+}
+
+export const AUDIO_ORCHESTRATION_DEFAULTS: AudioOrchestrationConfig = {
+  urlField: '',
+  provider: 'local',
+  providerCode: 'MiniMax',
+  remoteModel: 'asr-1.0',
+  language: '',
+  start: '',
+  end: '',
+  outputFormat: 'txt',
+  outputBaseDir: '',
+}
+
+/**
+ * 把时间文本解析成秒数：接受纯秒数（`90` / `90.5`）与 `HH:MM:SS` / `MM:SS`。
+ * 与后端 `video_audio_extract.parse_time` 同口径。空串 / `null` → `null`（表示不设该端）；
+ * 解析不出（负数、乱码、end≤start 之类交上层判）也回 `null`，UI 据此给可读提示而非瞎猜。
+ */
+export function parseAudioTimeToSeconds(value: string | null | undefined): number | null {
+  const text = (value ?? '').trim()
+  if (!text) return null
+  if (/^\d+(?:\.\d+)?$/.test(text)) return Number(text)
+  const parts = text.split(':')
+  if (parts.length === 2 || parts.length === 3) {
+    const nums = parts.map((p) => (p.trim() ? Number(p) : NaN))
+    if (nums.some((n) => !Number.isFinite(n) || n < 0)) return null
+    const [h, m, s] = parts.length === 3
+      ? [nums[0], nums[1], nums[2]]
+      : [0, nums[0], nums[1]]
+    return h * 3600 + m * 60 + s
+  }
+  return null
+}
+
+/**
+ * 校验区间：两端都填且可解析时才判 `end > start`，返回错误信息（null = 无错）。
+ * 起点越界 / 终点截断由后端拿真实时长再判，前端只拦「明显反了」的输入。
+ */
+export function validateAudioRange(start: string, end: string): string | null {
+  if (!start.trim() || !end.trim()) return null
+  const s = parseAudioTimeToSeconds(start)
+  const e = parseAudioTimeToSeconds(end)
+  if (s == null) return '开始时间格式不正确（用秒数或 HH:MM:SS）'
+  if (e == null) return '结束时间格式不正确（用秒数或 HH:MM:SS）'
+  if (e <= s) return '结束时间必须晚于开始时间'
+  return null
+}
+
+function asStringValue(value: unknown, fallback = ''): string {
+  return value == null ? fallback : String(value)
+}
+
+/**
+ * 从节点已存的 CODE_RULE（structuredConfig JSON）还原音频编排配置；
+ * 解析不出 / 字段不齐时回落默认，provider 只认 local/remote，其它按默认。
+ */
+export function parseAudioOrchestrationConfig(stored: unknown): AudioOrchestrationConfig {
+  const base = { ...AUDIO_ORCHESTRATION_DEFAULTS }
+  if (typeof stored !== 'string') return base
+  const text = stored.trim()
+  if (!text.startsWith('{')) return base
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return base
+    const record = parsed as Record<string, unknown>
+    const provider = asStringValue(record.provider).trim()
+    const outputFormat = asStringValue(record.outputFormat).trim()
+    return {
+      urlField: asStringValue(record.urlField),
+      provider: provider === 'remote' ? 'remote' : provider === 'local' ? 'local' : base.provider,
+      providerCode: asStringValue(record.providerCode) || base.providerCode,
+      remoteModel: asStringValue(record.remoteModel) || base.remoteModel,
+      language: asStringValue(record.language).trim(),
+      start: asStringValue(record.start).trim(),
+      end: asStringValue(record.end).trim(),
+      outputFormat: outputFormat === 'srt' ? 'srt' : outputFormat === 'txt' ? 'txt' : base.outputFormat,
+      outputBaseDir: asStringValue(record.outputBaseDir),
+    }
+  } catch {
+    return base
+  }
+}
+
+/**
+ * 把音频编排配置落成 CODE_RULE 文本（保存时随 buildConfigPayload 写进 config.codeRule）。
+ * remote 强制 txt（C5），落库前就抹掉 srt，避免存出后端做不到的组合。
+ */
+export function serializeAudioOrchestrationConfig(cfg: AudioOrchestrationConfig): string {
+  const outputFormat: AudioOutputFormat = cfg.provider === 'remote' ? 'txt' : cfg.outputFormat
+  return JSON.stringify({
+    urlField: cfg.urlField.trim(),
+    provider: cfg.provider,
+    providerCode: cfg.provider === 'remote' ? cfg.providerCode.trim() : '',
+    remoteModel: cfg.provider === 'remote' ? cfg.remoteModel.trim() : '',
+    language: cfg.language.trim(),
+    start: cfg.start.trim(),
+    end: cfg.end.trim(),
+    outputFormat,
+    outputBaseDir: cfg.outputBaseDir.trim(),
+  })
+}
+
 export async function transcribeAudio(
   file: File,
   params: SpeechTranscriptionParams = {},

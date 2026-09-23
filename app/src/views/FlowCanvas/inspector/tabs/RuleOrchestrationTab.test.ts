@@ -284,7 +284,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     })
   })
 
-  // 2026-09-21：音频提取文字节点的编排配置只保留语音下拉框。
+  // 2026-09-23：音频提取文字节点编排配置增强——供应商/远程参数/语言/区间/输出，落成 CODE_RULE。
   describe('音频提取文字节点编排配置', () => {
     function mountOnAudioTextNode() {
       mockAssets()
@@ -297,21 +297,91 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       return { flow, wrapper }
     }
 
-    it('只显示语音下拉框，不显示其他编排配置元素', async () => {
+    it('默认本地供应商：显示供应商/语言/区间/输出，不显示远程字段，且不出现其它编排元素', async () => {
       const { wrapper } = mountOnAudioTextNode()
       await flushPromises()
 
-      expect(wrapper.find('[data-testid="audio-language-field"]').exists()).toBe(true)
-      expect(wrapper.find('select[data-testid="audio-language"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="audio-config-field"]').exists()).toBe(true)
+      expect((wrapper.find('select[data-testid="audio-provider"]').element as HTMLSelectElement).value).toBe('local')
       expect((wrapper.find('select[data-testid="audio-language"]').element as HTMLSelectElement).value).toBe('')
-      expect(wrapper.find('[data-testid="audio-transcribe-field"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="audio-start"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="audio-end"]').exists()).toBe(true)
+      // local 才给 SRT 选项
+      expect(wrapper.find('option[data-testid="audio-srt-option"]').attributes('disabled')).toBeUndefined()
+      // 远程专属字段不出现
+      expect(wrapper.find('[data-testid="audio-provider-code"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="audio-remote-model"]').exists()).toBe(false)
+      // 其它编排元素（描述/标题行/切换配置）不出现
       expect(wrapper.find('.ni-section-title-row').exists()).toBe(false)
       expect(wrapper.find('textarea').exists()).toBe(false)
-      expect(wrapper.find('[data-testid="audio-file-input"]').exists()).toBe(false)
-      expect(wrapper.find('[data-testid="audio-transcribe"]').exists()).toBe(false)
-      expect(wrapper.find('[data-testid="audio-result"]').exists()).toBe(false)
-      expect(wrapper.text()).not.toContain('抓取配置')
       expect(wrapper.text()).not.toContain('切换已有配置')
+      wrapper.unmount()
+    })
+
+    it('切到远程接口：出现供应商/模型下拉，SRT 被禁用，改动落进 CODE_RULE', async () => {
+      const { flow, wrapper } = mountOnAudioTextNode()
+      await flushPromises()
+
+      await wrapper.find('select[data-testid="audio-provider"]').setValue('remote')
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="audio-provider-code"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="audio-remote-model"]').exists()).toBe(true)
+      expect(wrapper.find('option[data-testid="audio-srt-option"]').attributes('disabled')).toBeDefined()
+
+      const stored = JSON.parse(String(flow.configs['audio-1'].structuredConfig))
+      expect(stored.provider).toBe('remote')
+      expect(stored.providerCode).toBe('MiniMax')
+      expect(stored.remoteModel).toBe('asr-1.0')
+      wrapper.unmount()
+    })
+
+    it('语言与区间改动写回 structuredConfig（CODE_RULE），修掉旧的不落库问题', async () => {
+      const { flow, wrapper } = mountOnAudioTextNode()
+      await flushPromises()
+
+      await wrapper.find('select[data-testid="audio-language"]').setValue('zh')
+      await wrapper.find('input[data-testid="audio-start"]').setValue('30')
+      await wrapper.find('input[data-testid="audio-end"]').setValue('90')
+      await flushPromises()
+
+      const stored = JSON.parse(String(flow.configs['audio-1'].structuredConfig))
+      expect(stored.language).toBe('zh')
+      expect(stored.start).toBe('30')
+      expect(stored.end).toBe('90')
+      wrapper.unmount()
+    })
+
+    it('从已存 CODE_RULE 回填各控件', async () => {
+      mockAssets()
+      setActivePinia(createPinia())
+      const flow = useFlowStore()
+      flow.configs['audio-1'] = {
+        ...cloneConfig(NODE_CONFIGS['audio-text']),
+        structuredConfig: JSON.stringify({ provider: 'remote', providerCode: 'MiniMax', remoteModel: 'asr-1.0', language: 'en', start: '10', end: '20', outputFormat: 'txt', outputBaseDir: '/code09' }),
+      }
+      flow.select('audio-1')
+      flow.setActiveTab('orchestration')
+      const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+      await flushPromises()
+
+      expect((wrapper.find('select[data-testid="audio-provider"]').element as HTMLSelectElement).value).toBe('remote')
+      expect((wrapper.find('select[data-testid="audio-language"]').element as HTMLSelectElement).value).toBe('en')
+      expect((wrapper.find('input[data-testid="audio-start"]').element as HTMLInputElement).value).toBe('10')
+      expect((wrapper.find('input[data-testid="audio-end"]').element as HTMLInputElement).value).toBe('20')
+      expect((wrapper.find('input[data-testid="audio-output-base-dir"]').element as HTMLInputElement).value).toBe('/code09')
+      wrapper.unmount()
+    })
+
+    it('结束时间不晚于开始时间时给出校验提示', async () => {
+      const { wrapper } = mountOnAudioTextNode()
+      await flushPromises()
+
+      await wrapper.find('input[data-testid="audio-start"]').setValue('90')
+      await wrapper.find('input[data-testid="audio-end"]').setValue('30')
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="audio-range-error"]').exists()).toBe(true)
       wrapper.unmount()
     })
   })

@@ -19,7 +19,17 @@ import { Delete, UploadFilled } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { isArticleSummaryNode, isArticleTagNode, isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isRuleNode, isScriptlessNode, isTranslateNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { TRANSLATE_AUTO_CODE, TRANSLATE_ENGINE_CODES, TRANSLATE_LANGUAGE_CODES, engineCodeOf, engineLabelOf, languageCodeOf, translateSampleOf, translateText } from '@/api/translate'
-import { SPEECH_LANGUAGE_OPTIONS } from '@/api/speech'
+import {
+  AUDIO_ORCHESTRATION_DEFAULTS,
+  SPEECH_LANGUAGE_OPTIONS,
+  SPEECH_MAX_DURATION_SECONDS,
+  SPEECH_MODEL_OPTIONS,
+  SPEECH_PROVIDER_OPTIONS,
+  parseAudioOrchestrationConfig,
+  serializeAudioOrchestrationConfig,
+  validateAudioRange,
+  type AudioOrchestrationConfig,
+} from '@/api/speech'
 import { MEDIA_AUDIO_FORMATS, MEDIA_BIT_RATE_OPTIONS, MEDIA_CHANNEL_OPTIONS, MEDIA_MAX_FILE_SIZE, MEDIA_SAMPLING_RATE_OPTIONS, MEDIA_VIDEO_EXTENSIONS, extractAudio, isSupportedVideoFile, readVideoDuration, type MediaExtractionResult } from '@/api/media'
 import { useNodeEditorContext } from '../nodeEditorContext'
 import { configApi, entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
@@ -62,9 +72,45 @@ const isScriptless = computed(() => isScriptlessNode(cfg.value))
  */
 const isOcr = computed(() => isOcrNode(cfg.value))
 
-const audioLanguage = ref('')
-
 const isAudioText = computed(() => isAudioTextNode(cfg.value))
+
+// ---- 音频提取文字编排配置（0923 增强：落成 CODE_RULE，见方案 §4）----
+// 之前只有一个不落库的「语音」下拉（局部 audioLanguage ref，切节点即清空）。本次整段换成
+// structuredConfig 驱动的配置模型：供应商（本地离线 / 远程接口）+ 远程供应商/模型 + 语言 +
+// 区间裁剪 + 输出格式/目录，读写走翻译节点同一套「从 stored 还原 / 改动即落库」范式。
+// 字段口径见 api/speech.ts 的 AudioOrchestrationConfig，与后端 audio-to-text 分支逐字对齐。
+const audioCfg = ref<AudioOrchestrationConfig>({ ...AUDIO_ORCHESTRATION_DEFAULTS })
+/** 用户改过音频配置后置位：换节点/配置回填不再覆盖手改值（同 translateLangsTouched 口径） */
+const audioTouched = ref(false)
+
+function writeAudioConfig() {
+  if (!isAudioText.value) return
+  audioTouched.value = true
+  setNodeStructuredConfig(serializeAudioOrchestrationConfig(audioCfg.value))
+}
+function onAudioProviderChange() {
+  // remote 只回整段文本、无分段（方案 C5）：切到远程时把已选的 srt 收回 txt
+  if (audioCfg.value.provider === 'remote') audioCfg.value.outputFormat = 'txt'
+  writeAudioConfig()
+}
+/** 区间即时校验（两端都填且 end≤start 才报），提示挂在区间下方 */
+const audioRangeError = computed(() =>
+  isAudioText.value ? validateAudioRange(audioCfg.value.start, audioCfg.value.end) : null,
+)
+/** remote 下 SRT 不可选（后端做不到）；local 放开 */
+const audioSrtDisabled = computed(() => audioCfg.value.provider === 'remote')
+
+watch(
+  () => [id.value, cfg.value?.structuredConfig ?? ''] as const,
+  ([nid], prev) => {
+    // 换节点：首调用无 prev，或节点变了 → 复位手改旗标，重新从 stored 还原
+    if (prev === undefined || nid !== prev[0]) audioTouched.value = false
+    if (audioTouched.value || !isAudioText.value) return
+    const restored = parseAudioOrchestrationConfig(cfg.value?.structuredConfig)
+    if (JSON.stringify(restored) !== JSON.stringify(audioCfg.value)) audioCfg.value = restored
+  },
+  { immediate: true },
+)
 
 function formatDuration(seconds: number | null): string {
   if (seconds == null) return ''
@@ -382,7 +428,6 @@ const isArticleTag = computed(() => isArticleTagNode(cfg.value))
 
 // 切节点（NodeInspector 里本组件不带 key，是复用的）时清空试跑区，避免串到下一个节点上
 watch(id, () => {
-  audioLanguage.value = ''
   clearVideoFile()
   promptPreviewOpen.value = false
   articlePromptMissing.value = false
@@ -1338,13 +1383,63 @@ function onTestScript() {
       <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
     </span>
   </div>
-  <!-- 音频提取文字节点的编排配置只保留语音选择。 -->
-  <div v-if="isAudioText" class="rc-field audio-language-field" data-testid="audio-language-field">
-    <label for="audio-language">语音</label>
-    <select id="audio-language" v-model="audioLanguage" class="rc-select" data-testid="audio-language">
-      <option value="">自动识别</option>
-      <option v-for="item in SPEECH_LANGUAGE_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</option>
-    </select>
+  <!-- 音频提取文字（0923 增强）：供应商（本地离线 / 远程接口）+ 远程供应商/模型 + 语言 +
+       区间裁剪 + 输出格式/目录，改动即落成 CODE_RULE（structuredConfig）。 -->
+  <div v-if="isAudioText" class="rc-field audio-config-field" data-testid="audio-config-field">
+    <div class="audio-config-grid">
+      <label class="audio-config-item">
+        <span>模型供应商</span>
+        <select v-model="audioCfg.provider" class="rc-select" data-testid="audio-provider" @change="onAudioProviderChange">
+          <option value="local">本地离线模型</option>
+          <option value="remote">语音转文字接口</option>
+        </select>
+      </label>
+      <label class="audio-config-item">
+        <span>识别语言</span>
+        <select v-model="audioCfg.language" class="rc-select" data-testid="audio-language" @change="writeAudioConfig">
+          <option value="">自动识别</option>
+          <option v-for="item in SPEECH_LANGUAGE_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</option>
+        </select>
+      </label>
+      <!-- 仅远程接口：供应商码 + 接口模型 -->
+      <template v-if="audioCfg.provider === 'remote'">
+        <label class="audio-config-item">
+          <span>接口供应商</span>
+          <select v-model="audioCfg.providerCode" class="rc-select" data-testid="audio-provider-code" @change="writeAudioConfig">
+            <option v-for="item in SPEECH_PROVIDER_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</option>
+          </select>
+        </label>
+        <label class="audio-config-item">
+          <span>接口模型</span>
+          <select v-model="audioCfg.remoteModel" class="rc-select" data-testid="audio-remote-model" @change="writeAudioConfig">
+            <option v-for="item in SPEECH_MODEL_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</option>
+          </select>
+        </label>
+      </template>
+      <label class="audio-config-item">
+        <span>开始时间</span>
+        <input v-model="audioCfg.start" class="rc-input" placeholder="秒 或 00:00:00，空=从头" data-testid="audio-start" @change="writeAudioConfig" />
+      </label>
+      <label class="audio-config-item">
+        <span>结束时间</span>
+        <input v-model="audioCfg.end" class="rc-input" placeholder="秒 或 HH:MM:SS，空=到尾" data-testid="audio-end" @change="writeAudioConfig" />
+      </label>
+      <label class="audio-config-item">
+        <span>输出格式</span>
+        <select v-model="audioCfg.outputFormat" class="rc-select" data-testid="audio-output-format" @change="writeAudioConfig">
+          <option value="txt">纯文本</option>
+          <option value="srt" data-testid="audio-srt-option" :disabled="audioSrtDisabled">字幕 SRT</option>
+        </select>
+      </label>
+      <label class="audio-config-item">
+        <span>保存目录</span>
+        <input v-model="audioCfg.outputBaseDir" class="rc-input" placeholder="留空用默认（/code01）" data-testid="audio-output-base-dir" @change="writeAudioConfig" />
+      </label>
+    </div>
+    <div v-if="audioCfg.provider === 'remote'" class="rc-help">
+      远程接口单段音频不超过约 {{ SPEECH_MAX_DURATION_SECONDS }} 秒，长音频请用「开始/结束时间」裁剪后再转写。
+    </div>
+    <div v-if="audioRangeError" class="ocr-error" data-testid="audio-range-error">{{ audioRangeError }}</div>
   </div>
   <!-- 视频提取音频试跑（0917 第一版，仅视频提取音频节点）：上传视频 → multipart 调后端
        /api/media/extract-audio → 拿回音频试听/下载；勾选上传时后端改回 JSON + fileId。 -->
@@ -1888,6 +1983,12 @@ function onTestScript() {
 .article-thinking { border-top: 1px dashed var(--rc-border-soft); }
 .article-thinking summary { padding: 6px 10px; color: var(--rc-muted); font-size: 11px; cursor: pointer; }
 .article-thinking pre { margin: 0; max-height: 180px; overflow: auto; padding: 0 10px 10px; color: var(--rc-text-2); font-size: 11px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+/* ---- 音频提取文字（编排配置）---- */
+.audio-config-field { padding: 0; border: 0; background: transparent; }
+.audio-config-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; margin-top: 2px; }
+.audio-config-item { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 6px; min-width: 0; color: var(--rc-muted); font-size: 11px; }
+.audio-config-item > span { white-space: nowrap; }
+.audio-config-item .rc-select, .audio-config-item .rc-input { min-width: 0; padding: 5px 9px; }
 /* ---- 翻译助手 ---- */
 .translate-rows { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 10px; }
 .translate-row { display: flex; align-items: center; gap: 8px; }
