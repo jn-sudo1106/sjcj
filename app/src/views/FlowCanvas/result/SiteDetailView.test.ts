@@ -5,7 +5,8 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import SiteDetailView from './SiteDetailView.vue'
 import { useFlowStore } from '@/stores/flow'
-import type { Source } from '@/api'
+import { siteApi, type Source } from '@/api'
+import { useWorkspaceStore } from '@/stores/workspace'
 
 const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
 
@@ -168,5 +169,37 @@ describe('SiteDetailView', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  // 2026-09-23：站 89 标题停在「网站详情」——siteDetail 抛异常时 load 直接冒泡，没提示、不能重试。
+  it('网站详情请求失败：视图照常显示，标题旁给重试；左侧源栏补上页签名后标题跟着有名字', async () => {
+    setActivePinia(createPinia())
+    await router.push({ path: '/canvas', query: { siteId: 'site-zfb', view: 'source' } })
+    const detail = vi.spyOn(siteApi, 'siteDetail').mockRejectedValueOnce(new Error('timeout'))
+    const ws = useWorkspaceStore()
+    ws.ensureSiteTab('site-zfb')
+    const wrapper = shallowMount(SiteDetailView, {
+      props: { siteId: 'site-zfb' },
+      global: { plugins: [router], stubs: { SourceOverviewView: true, SiteDataView: true } },
+    })
+    await flushPromises()
+
+    // 失败不整块替换成错误态：源视图照常挂着
+    expect(wrapper.find('source-overview-view-stub').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="site-detail-failed"]').text()).toContain('网站信息加载失败')
+    expect(wrapper.get('.sdv-title').text()).toContain('网站详情')
+
+    // 左侧源栏那边重试成功、补了页签名 → 标题跟着显示
+    ws.ensureSiteTab('site-zfb', '支付宝')
+    await flushPromises()
+    expect(wrapper.get('.sdv-title').text()).toContain('支付宝')
+
+    // 自己点重试：请求恢复后失败提示消失
+    detail.mockResolvedValueOnce({ siteId: 'site-zfb', name: '支付宝(详情)', category: '', owner: '', sourceCount: 1, errorCount: 0 })
+    await wrapper.get('[data-testid="site-detail-retry"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="site-detail-failed"]').exists()).toBe(false)
+    expect(wrapper.get('.sdv-title').text()).toContain('支付宝(详情)')
+    detail.mockRestore()
   })
 })

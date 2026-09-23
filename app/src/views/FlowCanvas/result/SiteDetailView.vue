@@ -81,6 +81,23 @@ const flow = useFlowStore()
 
 const site = ref<Site | null>(null)
 const loadError = ref('')
+/**
+ * site/detail **请求失败**（超时、5xx）——跟上面「返回空＝网站不存在」分开处理（2026-09-23）。
+ *
+ * 原来 siteDetail 一抛异常 load 就直接冒泡，标题停在「网站详情」、没有提示也不能重试
+ * （用户在站 89 撞到过）。这时**不**把整块换成错误态：下面五个视图各有各的接口，
+ * 不依赖网站详情，那次右侧源视图就照常列出了 1368 个源。只在标题旁给个重试。
+ */
+const detailFailed = ref(false)
+/**
+ * 标题：自己的详情拿不到时，退而用页签上的网站名——左侧源栏也会取一次详情并补页签名，
+ * 那边重试成功，这里跟着就有名字了，不用两处各点一次。页签名还是裸 siteId 时不算数。
+ */
+const title = computed(() => {
+  if (site.value?.name) return site.value.name
+  const tabName = ws.siteTabs.find((t) => t.siteId === props.siteId)?.name
+  return tabName && tabName !== props.siteId ? tabName : '网站详情'
+})
 
 // 过期请求保护：快速切换网站时，先发出的旧请求若比后发出的新请求更晚 resolve，
 // 不能用旧网站的数据覆盖新网站已经展示的标题/上下文。
@@ -88,7 +105,17 @@ let loadSeq = 0
 async function load() {
   const requestId = ++loadSeq
   loadError.value = ''
-  const siteDetail = await siteApi.siteDetail(props.siteId)
+  detailFailed.value = false
+  let siteDetail: Site | null
+  try {
+    siteDetail = await siteApi.siteDetail(props.siteId)
+  } catch {
+    if (requestId !== loadSeq) return
+    // 别留着上一个网站的名字和分类
+    site.value = null
+    detailFailed.value = true
+    return
+  }
   if (requestId !== loadSeq) return
   // 0915-02：页签先用 siteId 占位，详情回来后换成网站名。
   // 必须放在过期守卫**之后**：快速切网站时旧请求后到，会用旧网站的名字盖掉新页签。
@@ -156,7 +183,12 @@ function openSourceData(source: Source) {
   <main class="sdv-shell">
     <div class="sdv-head">
       <div class="sdv-titlewrap">
-        <div class="sdv-title">{{ site?.name || '网站详情' }}<span class="rc-status muted">网站汇总</span></div>
+        <div class="sdv-title">
+          {{ title }}<span class="rc-status muted">网站汇总</span>
+          <span v-if="detailFailed" class="sdv-detail-failed" data-testid="site-detail-failed">
+            网站信息加载失败<button type="button" class="sdv-retry" data-testid="site-detail-retry" @click="load">重试</button>
+          </span>
+        </div>
         <div class="sdv-sub">{{ site?.categoryPath || site?.category || '' }}</div>
       </div>
       <div class="sdv-switcher">
@@ -183,6 +215,9 @@ function openSourceData(source: Source) {
 .sdv-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; flex-wrap: wrap; }
 .sdv-titlewrap { min-width: 0; }
 .sdv-title { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; color: var(--rc-text); font-size: 13px; }
+.sdv-detail-failed { font-weight: 400; font-size: 11px; color: var(--rc-danger, #dc2626); }
+.sdv-retry { margin-left: 6px; padding: 0; border: 0; background: transparent; color: var(--rc-primary); font-size: 11px; cursor: pointer; }
+.sdv-retry:hover { text-decoration: underline; }
 .sdv-sub { color: var(--rc-faint); font-size: 10px; margin-top: 1px; }
 .sdv-switcher { display: inline-flex; padding: 2px; background: #f1f5f9; border: 1px solid var(--rc-border); border-radius: 7px; margin-left: auto; }
 .sdv-seg { height: 26px; padding: 0 12px; border: 0; background: transparent; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 5px; }

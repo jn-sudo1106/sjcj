@@ -37,32 +37,46 @@ const ui = useUiStore()
 const site = ref<Site | null>(null)
 const children = ref<Source[]>([])
 const childrenHydrating = ref(false)
+/** 源列表（首批）没拉下来。跟「这个网站确实没有源」必须分开显示，见下方 load 的说明 */
+const listLoadFailed = ref(false)
 let loadSeq = 0
+/**
+ * 网站详情和源列表**各算各的**（2026-09-23）。
+ *
+ * 原来是 `Promise.all([siteDetail, 源列表])` 且没有 catch：两个里任何一个失败，整个 load
+ * 直接抛掉——site 留空、children 留空，侧栏就显示「源列表 (0)」「该网站暂无源」，
+ * 把"没加载出来"伪装成"这个网站没有源"，也不提示、不能重试。用户实际撞到过：
+ * 站 89（主流媒体，1368 个源）侧栏显示 0，右侧源视图走 sourcePaged 却正常列出 1368 个。
+ */
 async function load(force = false) {
   const id = ++loadSeq
+  listLoadFailed.value = false
+  // 左侧首屏最多渲染 120 行，不必先等单站 6496 条完整响应。先取同等大小的预览让网站页
+  // 立即可用，再后台补齐完整列表；右侧源视图自己的 sourcePaged(20) 可同时快速返回。
+  // 强刷（外部新建源、改配置后）要最新数据，直接拿完整列表、绕过 siteSources 的短缓存。
+  const [detailRes, listRes] = await Promise.allSettled([
+    siteApi.siteDetail(props.siteId),
+    force ? siteApi.siteSources(props.siteId, { force: true }) : siteApi.siteSourcePreview(props.siteId, LIST_PAGE),
+  ])
+  // 响应慢，回来时可能已切到别的站（watch 已推进 loadSeq）——晚到的旧站数据直接丢弃。
+  if (id !== loadSeq) return
+  // 详情失败就清掉，别留着上一个网站的名字和源数
+  site.value = detailRes.status === 'fulfilled' ? detailRes.value : null
+  if (site.value?.name) nameSiteTab(props.siteId, site.value.name)
+  if (listRes.status === 'rejected') {
+    children.value = []
+    childrenHydrating.value = false
+    listLoadFailed.value = true
+    return
+  }
+  children.value = listRes.value
   if (force) {
-    const [detail, all] = await Promise.all([
-      siteApi.siteDetail(props.siteId),
-      siteApi.siteSources(props.siteId, { force: true }),
-    ])
-    // 强刷响应慢，回来时可能已切到别的站（watch 已推进 loadSeq）——晚到的旧站数据直接丢弃。
-    if (id !== loadSeq) return
-    site.value = detail
-    children.value = all
     childrenHydrating.value = false
     return
   }
-
-  // 左侧首屏最多渲染 120 行，不必先等单站 6496 条完整响应。先取同等大小的预览让网站页
-  // 立即可用，再后台补齐完整列表；右侧源视图自己的 sourcePaged(20) 可同时快速返回。
-  const [detail, preview] = await Promise.all([
-    siteApi.siteDetail(props.siteId),
-    siteApi.siteSourcePreview(props.siteId, LIST_PAGE),
-  ])
-  if (id !== loadSeq) return
-  site.value = detail
-  children.value = preview
-  childrenHydrating.value = preview.length < (detail?.sourceCount ?? preview.length)
+  // 详情没拿到就不知道总数：预览拉满一页就当作可能还有，照样后台补齐，别只停在前 120 个
+  const expected = site.value?.sourceCount
+  childrenHydrating.value = expected != null ? listRes.value.length < expected : listRes.value.length >= LIST_PAGE
   if (!childrenHydrating.value) return
   void siteApi.siteSources(props.siteId).then((all) => {
     if (id !== loadSeq) return
@@ -71,6 +85,14 @@ async function load(force = false) {
   }).catch(() => {
     if (id === loadSeq) childrenHydrating.value = false
   })
+}
+/**
+ * 「全部 · 网站名」页签只拿到 siteId 时显示的是裸 ID，靠 site/detail 补名；那次请求失败就一直是
+ * 「全部 · 89」。侧栏这里也拿了一次详情，顺手补上——点「重试」也就连页签名一起修好了。
+ * 只改已有的页签，不在这里新建（建不建页签是路由那边的事）。
+ */
+function nameSiteTab(siteId: string, name: string) {
+  if (ws.siteTabs.some((t) => t.siteId === siteId)) ws.ensureSiteTab(siteId, name)
 }
 onMounted(() => load())
 watch(() => props.siteId, () => load())
@@ -139,6 +161,8 @@ const listCountLabel = computed(() => {
   // 一路过滤下来的，而 sourceCount 来自 siteDetail 接口，两者在加载中或接口不同步时会
   // 对不上，显示出「2 / 1」这种分子大于分母的荒谬值（2026-09-11 被测试当场抓到）。
   if (listNarrowed.value) return `${filtered.value.length} / ${children.value.length}`
+  // 加载失败又不知道总数时写「—」，别写 0 冒充"没有源"
+  if (listLoadFailed.value && site.value?.sourceCount == null) return '—'
   return String(site.value?.sourceCount ?? children.value.length)
 })
 watch([kw, children, hitFiltered], () => { shownCount.value = LIST_PAGE })
@@ -1015,7 +1039,10 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
               @click.stop="emit('compare', c.sourceId)"
             >⇔</button>
           </div>
-          <div v-if="!filtered.length" class="ssw-empty">{{ kw ? '没有匹配的源' : (hits.length ? '命中的源不在当前列表里' : '该网站暂无源') }}</div>
+          <div v-if="listLoadFailed" class="ssw-empty ssw-load-failed" data-testid="ssw-load-failed">
+            源列表加载失败<button type="button" class="ssw-retry" data-testid="ssw-retry" @click="load()">重试</button>
+          </div>
+          <div v-else-if="!filtered.length" class="ssw-empty">{{ kw ? '没有匹配的源' : (hits.length ? '命中的源不在当前列表里' : '该网站暂无源') }}</div>
           <div v-else-if="visibleRows.length < filtered.length" class="ssw-more-hint">
             已显示 {{ visibleRows.length }} / {{ filtered.length }}，向下滚动加载更多
           </div>
@@ -1516,6 +1543,9 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 .ssw-row:hover .ssw-row-cmp { visibility: visible; }
 .ssw-row-cmp:hover { background: #fff; color: var(--rc-primary); }
 .ssw-empty { padding: 14px 8px; text-align: center; font-size: 11px; color: var(--rc-faint); }
+.ssw-load-failed { color: var(--rc-danger, #dc2626); }
+.ssw-retry { margin-left: 6px; padding: 0; border: 0; background: transparent; color: var(--rc-primary); font-size: 11px; cursor: pointer; }
+.ssw-retry:hover { text-decoration: underline; }
 .ssw-more-hint { padding: 8px; text-align: center; font-size: 11px; color: var(--rc-faint); }
 
 .ssw-foot { flex: none; display: flex; gap: 6px; padding: 6px 8px 8px; border-top: 1px solid var(--rc-border-soft); }

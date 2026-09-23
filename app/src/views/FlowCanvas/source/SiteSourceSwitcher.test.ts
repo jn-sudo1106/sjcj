@@ -915,5 +915,54 @@ describe('SiteSourceSwitcher · 复制走全站统一实现（2026-09-22）', ()
     expect(src).toContain("from '@/utils/clipboard'")
     expect(src).toContain('copyToClipboard(text, label)')
   })
-})
 
+  // 2026-09-23 用户撞到：站 89 侧栏显示「源列表 (0) / 该网站暂无源」、页签停在「全部 · 89」，
+  // 右侧源视图却列出 1368 个源。原因是 Promise.all 里 siteDetail / 源预览任一失败整个 load 抛掉。
+  describe('加载失败不能伪装成"没有源"', () => {
+    function mountWith() {
+      const ws = useWorkspaceStore()
+      ws.ensureSiteTab('site-a')
+      return mount(SiteSourceSwitcher, {
+        props: { siteId: 'site-a', activeKey: '' },
+        global: { stubs: { 'el-drawer': { template: '<div><slot /></div>' } }, directives: { loading: {} } },
+      })
+    }
+
+    it('网站详情失败：源列表照常显示，不受牵连', async () => {
+      sessionStorage.clear()
+      setActivePinia(createPinia())
+      mockApis()
+      vi.spyOn(siteApi, 'siteDetail').mockRejectedValue(new Error('timeout'))
+      const wrapper = mountWith()
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('原源')
+      expect(wrapper.text()).not.toContain('该网站暂无源')
+      expect(wrapper.find('[data-testid="ssw-load-failed"]').exists()).toBe(false)
+    })
+
+    it('源列表失败：显示「加载失败 + 重试」，标题不写 0；重试成功后列表和页签名一起恢复', async () => {
+      sessionStorage.clear()
+      setActivePinia(createPinia())
+      mockApis()
+      const detail = vi.spyOn(siteApi, 'siteDetail').mockRejectedValueOnce(new Error('timeout'))
+      vi.spyOn(siteApi, 'siteSourcePreview').mockRejectedValueOnce(new Error('timeout'))
+      const wrapper = mountWith()
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="ssw-load-failed"]').text()).toContain('源列表加载失败')
+      expect(wrapper.text()).not.toContain('该网站暂无源')
+      expect(wrapper.text()).toContain('源列表 (—)')
+      const ws = useWorkspaceStore()
+      expect(ws.siteTabs.find((t) => t.siteId === 'site-a')?.name).toBe('site-a')
+
+      await wrapper.get('[data-testid="ssw-retry"]').trigger('click')
+      await flushPromises()
+
+      expect(detail).toHaveBeenCalledTimes(2)
+      expect(wrapper.find('[data-testid="ssw-load-failed"]').exists()).toBe(false)
+      expect(wrapper.text()).toContain('原源')
+      expect(ws.siteTabs.find((t) => t.siteId === 'site-a')?.name).toBe('网站 A')
+    })
+  })
+})
