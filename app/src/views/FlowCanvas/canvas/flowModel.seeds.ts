@@ -1120,7 +1120,8 @@ function applyStepTaskFields(cfg: NodeConfig, step: Step) {
 }
 
 function applyRuleStepTables(cfg: NodeConfig, step: Step) {
-  // 规则处理存 ruleCfg；翻译助手 / 打标签 / 摘要 / 音频转文字 / 视频转音频（2026-09-18 并入规则式表配置）存 execCfg。
+  // 规则处理存 ruleCfg；翻译助手 / 打标签 / 摘要 / 音频转文字 / 视频转音频（2026-09-18 并入规则式表配置）
+  // / OCR 抓取（2026-09-22）存 execCfg。
   // 几类共用同一套落库口径（入参/出参写步骤 context/outContext，见 stepPersist），
   // 回读时同样要把步骤里的 inputTable/outputTable 填回各自的编排对象——
   // 只回填 ruleCfg 的话，这几类节点的「表配置」刷新后输入表/输出表就是空的（用户 2026-09-18 反馈）。
@@ -1242,10 +1243,12 @@ function buildNodeForStep(source: Source, step: Step, index: number): NodeConfig
   // 这几种此前只有插入那一刻才写 template，回读后全靠 sub 里的类型编号兜底识别
   //（iconFor / isXxxNode 都读 sub），显式写下来更稳，也让 configTypeFrom 的模板表查得到
   //——否则「回读 → 保存」这一轮 configType 只能靠 base 原值保留。
+  // OCR 抓取（150）2026-09-22 一并补上：它并入 isRuleLikeNode 后，表配置/落库口径都按模板信号走。
   else if (step.configType === '730') cfg.template = 'article-tag'
   else if (step.configType === '720') cfg.template = 'article-summary'
   else if (step.configType === '710') cfg.template = 'audio-text'
   else if (step.configType === '700') cfg.template = 'video-audio'
+  else if (step.configType === '150') cfg.template = 'ocr'
   if (cfg.collectCfg) {
     // 源级字段（源名称/分类/标签/登录/选用配置等）不再复制到节点：随 loadFromSource 整体挂到 flow.sourceCfg（0706 优化·源/节点配置分层）
     cfg.collectCfg.url = source.url

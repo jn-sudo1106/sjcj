@@ -5,6 +5,7 @@
 // 非规则节点内容：输出表管理（采集类固定/可选）+ 非采集类产物明细三元表 + 表结构编辑弹窗。
 // 规则节点表配置的保存按钮已移除；生成脚本使用节点已保存的 configId，表配置只负责绑表/字段。
 // 2026-09-18：翻译助手 / 打标签 / 摘要 / 音频转文字 / 视频转音频并入规则式表/字段绑定（isRuleLike），绑定内容存 execCfg 而非 ruleCfg。
+// 2026-09-22：OCR 抓取并入同一套绑定（用户口径：表配置跟翻译助手一致）。
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
@@ -31,7 +32,7 @@ const cc = computed(() => cfg.value?.collectCfg)
 const isRule = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
 const isMonitor = computed(() => (cfg.value ? isMonitorNode(cfg.value) : false))
 const isDataValidation = computed(() => (cfg.value ? isDataValidationNode(cfg.value) : false))
-// 翻译助手 / 打标签 / 摘要 / 音频转文字 / 视频转音频（2026-09-18）：与规则处理共用同一套表/字段绑定表单；绑定内容仍存 execCfg
+// 翻译助手 / 打标签 / 摘要 / 音频转文字 / 视频转音频 / OCR 抓取（2026-09-18、09-22）：与规则处理共用同一套表/字段绑定表单；绑定内容仍存 execCfg
 // （不能写进 ruleCfg——那会把它们误判成规则节点，编排配置整个串位），
 // 入出参的步骤持久化口径与规则节点一致（stepPersist 按 isRuleLikeNode 走同一套 context 写入）。
 const isRuleLike = computed(() => (cfg.value ? isRuleLikeNode(cfg.value) : false))
