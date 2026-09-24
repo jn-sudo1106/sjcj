@@ -1117,7 +1117,13 @@ describe('SiteDataView · 哪些列可排', () => {
 
 // 0915-03 钻取闭环：数据里点源 → 当页开源页签（条件带过去）→ 点回「全部」现场还在
 describe('SiteDataView 钻取闭环', () => {
-  afterEach(() => vi.restoreAllMocks())
+  // 每条用例结束都卸载：同组用例都用源 a + dataId=123，上一条没跑完的加载会落进下一条
+  // 新建的 rowQueryPaged spy，把「最后一次调用」顶成旧组件的（0924-11 加载链多一步后实测偶发）
+  const mounted: ReturnType<typeof mount>[] = []
+  afterEach(() => {
+    mounted.splice(0).forEach((w) => w.unmount())
+    vi.restoreAllMocks()
+  })
 
   async function mountWithRouter(siteId = 'site-a') {
     setActivePinia(createPinia())
@@ -1125,6 +1131,7 @@ describe('SiteDataView 钻取闭环', () => {
     await router.push(`/canvas?siteId=${siteId}&view=data`)
     await router.isReady()
     const wrapper = mount(SiteDataView, { props: { siteId }, global: { plugins: [router], stubs } })
+    mounted.push(wrapper)
     return { wrapper, router, ws: useWorkspaceStore() }
   }
 
@@ -1186,6 +1193,7 @@ describe('SiteDataView 钻取闭环', () => {
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
     await router.push('/canvas?siteId=site-a&view=data')
     const wrapper = mount(SiteDataView, { props: { siteId: 'site-a' }, global: { plugins: [router], stubs } })
+    mounted.push(wrapper)
     await flushPromises()
 
     // 条件回到输入框，并且真的按它查过一轮
@@ -1211,11 +1219,14 @@ describe('SiteDataView 钻取闭环', () => {
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
     await router.push('/canvas?siteId=site-a&view=data')
     const wrapper = mount(SiteDataView, { props: { siteId: 'site-a' }, global: { plugins: [router], stubs } })
-    await flushPromises()
+    mounted.push(wrapper)
+    // 断言「查过 c」而不是「最后一次查的是 c」：前面用例卸载掉的组件，没跑完的逐源加载不会停
+    // （都是 site-a + dataId=123），整目录并跑时会晚到、落进这里新建的 spy（实测收到 c、a、a）。
+    // 核心断言是下面那条：命中缓存就不再走 summaryData 重算。
+    await vi.waitFor(() => expect(rowQueryPaged).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'c' })))
 
     // 命中缓存：不再问 summaryData，直接只查缓存里那个源
     expect(summary).not.toHaveBeenCalled()
-    expect(rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: 'c' }))
     expect(wrapper.text()).toContain('共 5 条')
   })
 })
@@ -1353,7 +1364,16 @@ describe('SiteDataView · 全部源勾选发后续任务', () => {
 
 // 0924-10 / 11：左栏数据表模式锁定表；候选源先收窄到用到这张表的源
 describe('SiteDataView · 左栏数据表模式（lockedTableId）', () => {
-  afterEach(() => vi.restoreAllMocks())
+  // 每条用例结束都卸载：上一条没跑完的逐源加载会落进下一条新建的 rowQueryPaged spy 里，
+  // 整目录并跑负载高时实测会串（查到了上一条用例的源 c）
+  const mounted: ReturnType<typeof mount>[] = []
+  // 网站页签快照（含"条件 → 命中源"缓存）存在 sessionStorage：前面「钻取闭环」用例存的
+  // 「t1 + dataId=123 → 源 c」会被这里挂载时复现，候选源就成了 c。每条用例前清掉。
+  beforeEach(() => sessionStorage.clear())
+  afterEach(() => {
+    mounted.splice(0).forEach((w) => w.unmount())
+    vi.restoreAllMocks()
+  })
 
   const usedTable = (tableId: string, sourceIds: string[]) => ({
     tableId, name: '快讯表', tableName: 'sense_data.TB_KX', sourceIds, sourceCnt: sourceIds.length, role: 'MAIN' as const,
@@ -1361,7 +1381,9 @@ describe('SiteDataView · 左栏数据表模式（lockedTableId）', () => {
 
   function mountLocked(lockedTableId: string) {
     setActivePinia(createPinia())
-    return mount(SiteDataView, { props: { siteId: 'site-a', lockedTableId }, global: { stubs } })
+    const wrapper = mount(SiteDataView, { props: { siteId: 'site-a', lockedTableId }, global: { stubs } })
+    mounted.push(wrapper)
+    return wrapper
   }
 
   it('隐藏选源 / 选表下拉，显示只读的「表：名称 · 涉及 N 个源」（名称与左栏同源）', async () => {
@@ -1387,11 +1409,7 @@ describe('SiteDataView · 左栏数据表模式（lockedTableId）', () => {
     vi.spyOn(dataApi, 'summaryData').mockResolvedValue([] as never)
     const rowQueryPaged = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
     mountLocked('t1')
-    await flushPromises()
-    await flushPromises()
-
-    const queried = new Set(rowQueryPaged.mock.calls.map((call) => call[0].sourceId))
-    expect(queried).toEqual(new Set(['a', 'b']))
+    await vi.waitFor(() => expect(new Set(rowQueryPaged.mock.calls.map((call) => call[0].sourceId))).toEqual(new Set(['a', 'b'])))
   })
 
   it('统计可能不全（有流程节点没查到）时不收窄，照查全站源，不漏数据', async () => {
@@ -1401,10 +1419,7 @@ describe('SiteDataView · 左栏数据表模式（lockedTableId）', () => {
     vi.spyOn(dataApi, 'summaryData').mockResolvedValue([] as never)
     const rowQueryPaged = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
     mountLocked('t1')
-    await flushPromises()
-    await flushPromises()
-
-    expect(new Set(rowQueryPaged.mock.calls.map((call) => call[0].sourceId))).toEqual(new Set(['a', 'b']))
+    await vi.waitFor(() => expect(new Set(rowQueryPaged.mock.calls.map((call) => call[0].sourceId))).toEqual(new Set(['a', 'b'])))
   })
 
   it('没关联流程的源存在时也不收窄', async () => {
@@ -1414,10 +1429,7 @@ describe('SiteDataView · 左栏数据表模式（lockedTableId）', () => {
     vi.spyOn(dataApi, 'summaryData').mockResolvedValue([] as never)
     const rowQueryPaged = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
     mountLocked('t1')
-    await flushPromises()
-    await flushPromises()
-
-    expect(new Set(rowQueryPaged.mock.calls.map((call) => call[0].sourceId))).toEqual(new Set(['a', 'b']))
+    await vi.waitFor(() => expect(new Set(rowQueryPaged.mock.calls.map((call) => call[0].sourceId))).toEqual(new Set(['a', 'b'])))
   })
 
   it('左栏换表：数据视图跟着换', async () => {
