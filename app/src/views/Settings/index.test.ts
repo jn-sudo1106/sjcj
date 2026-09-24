@@ -3,6 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
+import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import Settings from './index.vue'
 
@@ -10,7 +11,9 @@ async function mountAt(query: Record<string, string> = {}) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/settings', component: { template: '<div />' } }] })
   await router.push({ path: '/settings', query })
   await router.isReady()
-  const wrapper = mount(Settings, { global: { plugins: [router, ElementPlus] } })
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const wrapper = mount(Settings, { global: { plugins: [pinia, router, ElementPlus] } })
   await flushPromises()
   return { wrapper, router }
 }
