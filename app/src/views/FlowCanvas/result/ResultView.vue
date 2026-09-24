@@ -2,7 +2,7 @@
 import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
 import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { ElIcon, ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowUp } from '@element-plus/icons-vue'
 import { useFlowStore } from '@/stores/flow'
@@ -42,7 +42,6 @@ const ui = useUiStore()
 const ws = useWorkspaceStore()
 
 const source = computed(() => flow.sourceCtx)
-const router = useRouter()
 const route = useRoute()
 const sourceId = computed(() => source.value?.sourceId ?? '')
 const siteId = computed(() => source.value?.siteId ?? '')
@@ -1161,38 +1160,6 @@ function clearFilters() {
   filters.sql = ''
   runQuery()
 }
-/**
- * 「按条件查源 →」（0903 Y2-7 → 0904 Q1 改名，原名「按此条件反查源」被嫌奇怪：
- * 「这名字起的奇怪，这是不是按源统计？」「按源查源列表」）。
- *
- * 单源视图里**不直接反查**——这里只有一个源，反查它自己没有意义。用户在这个页面问的是
- * 「同样的脏数据，别的源上有没有」，那是全部源数据视图的事。所以这个按钮**带着条件跳过去**，
- * 到那边再点反查，而不是在这里塞第二套反查 UI。
- *
- * 条件通过 URL 传：目标是另一棵组件树（SiteDetailView → SiteDataView），没有共享状态可用。
- * 刻意**不带 sourceId**——带上就还是单源视图，跳了等于没跳。
- */
-const canBackTrace = computed(() => !!selectedTable.value
-  && !!(filters.sql || filters.state || filters.dataId || filters.parentId))
-function openBackTraceInSiteView() {
-  if (!canBackTrace.value) return
-  if (!siteId.value) {
-    ElMessage.warning('该源没有所属网站，无法切到全部源数据视图')
-    return
-  }
-  void router.push({
-    path: '/canvas',
-    query: {
-      siteId: siteId.value,
-      view: 'data',
-      condTable: selectedTable.value,
-      ...(filters.sql ? { condSql: filters.sql } : {}),
-      ...(filters.state ? { condState: filters.state } : {}),
-      ...(filters.dataId ? { condDataId: filters.dataId } : {}),
-      ...(filters.parentId ? { condParentId: filters.parentId } : {}),
-    },
-  })
-}
 
 function buildSummaryQuery(): RowQuery {
   return {
@@ -1549,15 +1516,6 @@ async function onTestScript() {
         <span class="rv-actions">
           <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
           <button class="rc-btn" type="button" @click="clearFilters">清空</button>
-          <!-- 0903 Y2-7：带着条件跳到全部源数据视图，在那里反查哪些源命中 -->
-          <button
-            class="rc-btn"
-            type="button"
-            data-testid="data-backtrace-jump"
-            :disabled="!canBackTrace"
-            :title="canBackTrace ? '带着当前条件切到全部源数据视图，在那里反查哪些源命中' : '先填至少一个数据条件（如 SQL 条件）'"
-            @click="openBackTraceInSiteView"
-          >按条件查源 →</button>
         </span>
         <!-- 数据操作组：发后续任务与发全部合并为组合操作按钮 -->
         <span class="rv-data-ops">

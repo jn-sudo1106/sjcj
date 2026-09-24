@@ -1344,9 +1344,8 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     expect(batch).not.toHaveBeenCalled()
   })
 
-  // 0903 Y2-7：单源视图里反查它自己没有意义——用户问的是"别的源上有没有"。
-  // 所以这个按钮不在本页反查，而是带着条件跳到全部源数据视图，且**不能带 sourceId**（带了等于没跳）。
-  it('「按此条件反查源」带条件跳全部源视图，不带 sourceId', async () => {
+  // 0924 走查：具体源（单源）数据视图不再需要「按条件查源 →」按钮，已按需移除
+  it('具体源数据视图不渲染「按条件查源」入口', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     loadExecFixture(useFlowStore(), current)
@@ -1358,22 +1357,8 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     await flushPromises()
     await selectNode(wrapper, 'first')
 
-    const btn = () => wrapper.get('[data-testid="data-backtrace-jump"]')
-    // 没有条件时禁用：无条件反查等于"这张表涉及的所有源"，没有意义
-    expect(btn().attributes('disabled')).toBeDefined()
-
-    await wrapper.get('[data-testid="data-cond-sql"]').setValue("K1 LIKE '%人保%'")
-    await flushPromises()
-    expect(btn().attributes('disabled')).toBeUndefined()
-
-    routerPush.mockClear()
-    await btn().trigger('click')
-
-    const arg = routerPush.mock.calls[0][0] as { query: Record<string, unknown> }
-    expect(arg.query.view).toBe('data')
-    expect(arg.query.condSql).toBe("K1 LIKE '%人保%'")
-    expect(arg.query.condTable).toBeTruthy()
-    expect(arg.query.sourceId).toBeUndefined()
+    expect(wrapper.find('[data-testid="data-backtrace-jump"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('按条件查源')
   })
 
   // 2026-09-04 用户实测提出：「这个节点不是最后一个节点，为什么叫从上一节点重跑」。
