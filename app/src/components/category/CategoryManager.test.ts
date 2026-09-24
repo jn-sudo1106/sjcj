@@ -7,6 +7,7 @@ import CategoryManager from './CategoryManager.vue'
 import { categoryApi, sourceApi } from '@/api'
 
 const stubs = {
+  ElTooltip: { props: ['content', 'placement', 'showAfter'], template: '<slot />' },
   ElDialog: {
     name: 'ElDialog',
     props: ['modelValue', 'title'],
