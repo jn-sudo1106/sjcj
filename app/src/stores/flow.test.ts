@@ -20,9 +20,10 @@ describe('flow store 编辑动作', () => {
     expect(f.main.length).toBe(before + 1)
   })
 
-  // 2026-09-04 会上提出：新建规则处理节点时，「适用源」默认 -1（= 该配置下所有源）。
-  // 规则步骤本来就不该绑死在某一个源上；其它节点仍默认当前源。
-  it('新建规则节点：适用源默认 -1（原来默认成当前源，等于新建出来就锁死）', () => {
+  // 2026-09-04 会上提出：新建规则处理 / 数据监控节点时「适用源」默认 -1（= 该配置下所有源）。
+  // 2026-09-24 用户拍板扩到**所有类型**：新建节点都不该一上来就锁死在当前源上，
+  // 步骤归属靠 mainConfig 锚点，不靠 sourceId。
+  it('新建任意类型节点：适用源默认 -1（原来只有规则/监控是 -1，采集类锁死在当前源）', () => {
     f.loadFromSource(
       { sourceId: '430016398', name: 'test1', url: 'http://x', configId: '1400917', mainTable: '6200026', owner: 'a', state: 'C' } as never,
       [],
@@ -35,9 +36,22 @@ describe('flow store 编辑动作', () => {
     const monitorId = f.insertAfter(f.main[1], 'monitor')!
     expect(f.configs[monitorId].stepSourceId).toBe('-1')
 
-    // 采集类节点不走这条路径，不该被带上 -1
-    const webId = f.insertAfter(f.main[1], 'web')!
-    expect(f.configs[webId].stepSourceId).not.toBe('-1')
+    // 采集类 / 处理类同样带上 -1（2026-09-24 起不再区分类型）
+    expect(f.configs[f.insertAfter(f.main[1], 'web')!].stepSourceId).toBe('-1')
+    expect(f.configs[f.insertAfter(f.main[1], 'translate')!].stepSourceId).toBe('-1')
+    expect(f.configs[f.insertAfter(f.main[1], 'ocr')!].stepSourceId).toBe('-1')
+  })
+
+  it('分支内新增节点：适用源同样默认 -1', () => {
+    f.loadFromSource(
+      { sourceId: '430016398', name: 'test1', url: 'http://x', configId: '1400917', mainTable: '6200026', owner: 'a', state: 'C' } as never,
+      [],
+    )
+    const ownerId = f.insertAfter(f.main[1], 'decision')!
+    const group = f.branchGroups.find((bg) => bg.ownerId === ownerId)!
+    const branchId = group.branches[0]!.id
+    const branchNodeId = f.addNodeToBranch(ownerId, branchId, 'web')!
+    expect(f.configs[branchNodeId].stepSourceId).toBe('-1')
   })
 
   it('insertAfter(prevId=end) 保持 end 仍在最末（0707 Phase6 修复）', () => {

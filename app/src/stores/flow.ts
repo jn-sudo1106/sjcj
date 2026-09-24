@@ -4,7 +4,7 @@
 import { computed, reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { applyConfigToNode } from '@/utils/flow/nodeConfigPayload'
-import { hasRealBranches } from '@/utils/flow/stepPersist'
+import { applyStepSourceDefault, hasRealBranches } from '@/utils/flow/stepPersist'
 import {
   NODE_CONFIGS,
   TEMPLATE_TO_NODE,
@@ -420,12 +420,8 @@ export const useFlowStore = defineStore('flow', () => {
       cfg.configName = cfg.title
     }
     if (!cfg.itemId) cfg.itemId = '-1'
-    // 适用源（步骤 sourceId）默认 `-1` = 该配置下所有源（2026-09-04 会上提出）。
-    // 本函数只在规则处理 / 数据监控节点上调用，这类步骤本来就不该绑死在某一个源上；
-    // 之前默认的是**当前源**，等于新建出来就锁死了。
-    // 只是默认值——用户在节点上改过就不动（`=== undefined` 的判断），
-    // 写入侧也一律以 `cfg.stepSourceId` 为准，不在那边写死（见 stepPersist.mergeStepForWrite）。
-    if (cfg.stepSourceId === undefined) cfg.stepSourceId = '-1'
+    // 「适用源」默认 -1 不再只给规则/监控：所有类型新增节点统一在调用方走
+    // applyStepSourceDefault（2026-09-24 用户拍板），这里不重复设。
     if (upstreamTable) {
       cfg.inputTable = cfg.inputTable || upstreamTable
       if (cfg.ruleCfg && !cfg.ruleCfg.inputTableId) cfg.ruleCfg.inputTableId = upstreamTable
@@ -445,6 +441,7 @@ export const useFlowStore = defineStore('flow', () => {
     // 模板里可能带着上一份配置的身份，连 configId 一起清干净——新节点是新建态。
     delete cfg.configId
     cfg.configName = cfg.title
+    applyStepSourceDefault(cfg)
     if (template === 'rule' || srcKey === 'rule') applyRuleStepDefaults(cfg, prevId, upstreamOutputTable(prevId), typeName)
     if (cfg.collectCfg) {
       cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[template] ?? cfg.collectCfg.snatchType
@@ -501,6 +498,7 @@ export const useFlowStore = defineStore('flow', () => {
     // 模板里可能带着上一份配置的身份，连 configId 一起清干净——新节点是新建态。
     delete cfg.configId
     cfg.configName = cfg.title
+    applyStepSourceDefault(cfg)
     if (template === 'rule' || srcKey === 'rule') {
       const prevInBranch = branch.chain.at(-1) || ownerId
       applyRuleStepDefaults(cfg, prevInBranch, upstreamOutputTableInBranch(ownerId, branch), typeName)

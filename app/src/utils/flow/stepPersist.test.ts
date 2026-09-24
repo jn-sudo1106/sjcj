@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { stepFromLegacy, stepToStepModifyPayload } from '@/api/legacyAdapters'
 import { cloneConfig, NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
 import {
+  applyStepSourceDefault,
   assertStepsPersistable,
   condExprOf,
   hasRealBranches,
@@ -233,7 +234,7 @@ describe('规则节点写步骤（0904）', () => {
   })
 
   // 适用源 -1 是**新建节点时的默认值**，不是写死。写死会把用户改过的值冲掉——
-  // 所以写入侧一律以 cfg.stepSourceId 为准，默认值落在插入节点的地方（stores/flow.ts）。
+  // 所以写入侧一律以 cfg.stepSourceId 为准，默认值由 applyStepSourceDefault 在新建路径上打。
   it('适用源以节点上的值为准，写入侧不强制 -1', () => {
     const withDefault = ruleCfg(['title'], ['title'])
     withDefault.stepSourceId = '-1'
@@ -242,6 +243,27 @@ describe('规则节点写步骤（0904）', () => {
     const changed = ruleCfg(['title'], ['title'])
     changed.stepSourceId = '430016398'
     expect(mergeStepForWrite({ snapshot, cfg: changed, nodeId: '40600', sourceId: '430016398' }).sourceId).toBe('430016398')
+  })
+
+  // 2026-09-24：所有类型新建节点都默认 -1，不再只有规则处理 / 数据监控。
+  describe('applyStepSourceDefault', () => {
+    it('未设置或空串时补 -1', () => {
+      const unset = cloneConfig(NODE_CONFIGS['web-list'])
+      applyStepSourceDefault(unset)
+      expect(unset.stepSourceId).toBe('-1')
+
+      const blank = cloneConfig(NODE_CONFIGS.ocr)
+      blank.stepSourceId = ''
+      applyStepSourceDefault(blank)
+      expect(blank.stepSourceId).toBe('-1')
+    })
+
+    it('已有值不动（回读步骤带的是库里的 sourceId）', () => {
+      const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+      cfg.stepSourceId = '430016398'
+      applyStepSourceDefault(cfg)
+      expect(cfg.stepSourceId).toBe('430016398')
+    })
   })
 
   it('表配置的入参/出参写进 context/outContext，且换成物理列名', () => {

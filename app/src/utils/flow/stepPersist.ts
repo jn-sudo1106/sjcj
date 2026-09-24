@@ -52,6 +52,20 @@ export function firstUnboundDraftNodeId(main: string[], configs: Record<string, 
   })
 }
 
+/**
+ * 新增节点的「适用源」默认值：`-1` = 该配置下所有源（2026-09-04 先落在规则处理 / 数据监控，
+ * 2026-09-24 用户拍板扩到**所有类型**——新建节点不该一上来就锁死在当前源上）。
+ *
+ * 步骤真正归属哪个源靠 `mainConfig` 锚点（`nextConfigPaged?sourceId=X` 按它查，
+ * `cs_item_next.SOURCE_ID` 恒为 -1），所以这里写 -1 不会把步骤弄丢。
+ *
+ * 只在**新建**路径调用；回读已有步骤走 `buildNodeForStep`，值以库里的 `step.sourceId` 为准。
+ * 已经是空串/已设值都不动——用户改过的必须听用户的（见 `mergeStepForWrite` 的三级优先）。
+ */
+export function applyStepSourceDefault(cfg: NodeConfig): void {
+  if (cfg.stepSourceId === undefined || cfg.stepSourceId === '') cfg.stepSourceId = '-1'
+}
+
 /** 画布进入条件 → Step.cond。表达式模式用原文；字段模式按物理列名生成 Lua 风格语法。 */
 export function condExprOf(cfg: NodeConfig): string | null {
   const group = nodeEntryCondition(cfg)
@@ -189,8 +203,8 @@ export function lastStepIdsFromCanvas(main: string[], nodeId: string, branchGrou
  * | 字段 | 值 | 为什么 |
  * |---|---|---|
  * | `type` | `'rule'` | 默认是 `'entry'`；执行端按它区分要不要走规则引擎 |
- * `sourceId`（适用源）**不在这里处理**：它只是新建规则节点时的**默认值**（-1 = 该配置下所有源），
- * 用户可以改，改了就得听用户的。默认值落在插入节点的地方（`stores/flow.ts` 的 insert 路径），
+ * `sourceId`（适用源）**不在这里处理**：它只是新建节点时的**默认值**（-1 = 该配置下所有源，
+ * 见 `applyStepSourceDefault`），用户可以改，改了就得听用户的。
  * 这里照旧 `cfg.stepSourceId` 优先——写死成 -1 会把用户改过的值冲掉。
  *
  * | `context` / `outContext` | 表配置的入参 / 出参 | 采集节点这两个字段来自任务配置；规则节点的入出参在**表配置**里（ruleCfg） |
