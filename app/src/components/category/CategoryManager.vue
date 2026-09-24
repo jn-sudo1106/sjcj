@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import { ref, reactive, computed, watch } from 'vue'
+// 分类目录维护（0924-03）：树 + 检索 + 增删改 + 上下移 + 批量添加。
+// 原来是采集资产「全部分类」下拉底部唤起的抽屉（CategoryManageDrawer，2026-09-21），
+// 0924 会上认为"放在查询页面有点奇怪"，迁到「系统设置 → 分类目录」整页展示，逻辑原样搬过来。
+// 改完分类后采集资产那边的分类树缓存由 clearCategoryCache 清掉，切回去时静默重拉即可看到。
+import { ref, reactive, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Edit, Delete, Search, Refresh, Folder, FolderOpened, DocumentAdd, Close, Top, Bottom } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Search, Refresh, Folder, FolderOpened, DocumentAdd, Top, Bottom } from '@element-plus/icons-vue'
 import { sourceApi, categoryApi, clearCategoryCache, type SourceCategory } from '@/api'
 
-const props = defineProps<{
-  modelValue: boolean
-}>()
-
 const emit = defineEmits<{
-  'update:modelValue': [value: boolean]
+  /** 分类有增删改 / 排序变化，调用方需要刷新自己手里的分类数据时监听 */
   'refresh': []
 }>()
 
@@ -97,18 +97,6 @@ async function doSearch() {
     searching.value = false
   }
 }
-
-const drawerVisible = ref(false)
-watch(() => props.modelValue, (val) => {
-  drawerVisible.value = val
-  if (val) {
-    handleClearSearch()
-    treeKey.value++
-  }
-}, { immediate: true })
-watch(drawerVisible, (val) => {
-  emit('update:modelValue', val)
-})
 
 // 树节点懒加载
 async function loadTreeNodes(node: any, resolve: (data: SourceCategory[]) => void) {
@@ -359,37 +347,26 @@ async function handleDelete(node: { id: string; name: string }) {
 </script>
 
 <template>
-  <el-drawer
-    v-model="drawerVisible"
-    size="480px"
-    :destroy-on-close="true"
-    :show-close="false"
-    class="ca-category-drawer"
-  >
-    <template #header>
-      <div class="ca-drawer-header">
-        <div class="ca-drawer-title-wrap">
-          <span class="ca-drawer-indicator"></span>
-          <span class="ca-drawer-title">分类管理</span>
-        </div>
-        <div class="ca-drawer-actions">
-          <el-button type="primary" size="small" :icon="Plus" class="ca-header-btn" @click="openAddRoot">
-            新增根分类
-          </el-button>
-          <el-button size="small" :icon="DocumentAdd" class="ca-header-btn" @click="openBatchAdd()">
-            批量添加
-          </el-button>
-          <button type="button" class="ca-icon-btn" title="刷新分类" @click="reloadTree">
-            <el-icon :size="14"><Refresh /></el-icon>
-          </button>
-          <button type="button" class="ca-icon-btn ca-close-btn" title="关闭" @click="drawerVisible = false">
-            <el-icon :size="14"><Close /></el-icon>
-          </button>
-        </div>
+  <section class="cm-root">
+    <header class="cm-head">
+      <div class="cm-title-wrap">
+        <span class="cm-indicator"></span>
+        <span class="cm-title">分类目录</span>
       </div>
-    </template>
+      <div class="cm-actions">
+        <el-button type="primary" size="small" :icon="Plus" class="ca-header-btn" @click="openAddRoot">
+          新增根分类
+        </el-button>
+        <el-button size="small" :icon="DocumentAdd" class="ca-header-btn" @click="openBatchAdd()">
+          批量添加
+        </el-button>
+        <button type="button" class="ca-icon-btn" title="刷新分类" @click="reloadTree">
+          <el-icon :size="14"><Refresh /></el-icon>
+        </button>
+      </div>
+    </header>
 
-    <div class="ca-drawer-content">
+    <div class="cm-content">
       <!-- 搜索栏 -->
       <div class="ca-search-bar">
         <el-input
@@ -495,7 +472,7 @@ async function handleDelete(node: { id: string; name: string }) {
       </div>
 
       <!-- 底部状态说明栏 -->
-      <div class="ca-drawer-footer">
+      <div class="cm-footer">
         <span class="ca-footer-tip">悬浮节点可快捷「↑ 上移 / ↓ 下移」、编辑、添加子级或删除</span>
         <button type="button" class="ca-footer-link" @click="openBatchAdd()">批量导入</button>
       </div>
@@ -571,53 +548,47 @@ async function handleDelete(node: { id: string; name: string }) {
         </div>
       </template>
     </el-dialog>
-  </el-drawer>
+  </section>
 </template>
 
 <style scoped>
-/* 抽屉整体容器深度定制：填满视口高度，去除多层嵌套卡片感 */
-.ca-category-drawer :deep(.el-drawer) {
-  box-shadow: -4px 0 24px rgba(15, 23, 42, 0.08);
-}
-.ca-category-drawer :deep(.el-drawer__header) {
-  margin-bottom: 0;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--rc-border-soft, #f1f5f9);
-  background: #ffffff;
-}
-.ca-category-drawer :deep(.el-drawer__body) {
+/* 整页容器：占满父级高度，只有树区域一个滚动条（滚动容器约定） */
+.cm-root {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  padding: 0;
-  overflow: hidden;
+  flex: 1;
+  min-height: 0;
   background: #ffffff;
+  border: 1px solid var(--rc-border, #e2e8f0);
+  border-radius: 8px;
+  overflow: hidden;
 }
-
-/* 抽屉顶部自定义 Header */
-.ca-drawer-header {
+.cm-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  width: 100%;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--rc-border-soft, #f1f5f9);
+  flex-shrink: 0;
 }
-.ca-drawer-title-wrap {
+
+.cm-title-wrap {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.ca-drawer-indicator {
+.cm-indicator {
   width: 3px;
   height: 15px;
   background-color: var(--rc-primary, #2563eb);
   border-radius: 2px;
 }
-.ca-drawer-title {
+.cm-title {
   font-size: 14px;
   font-weight: 700;
   color: var(--rc-text, #0f172a);
 }
-.ca-drawer-actions {
+.cm-actions {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -647,14 +618,9 @@ async function handleDelete(node: { id: string; name: string }) {
   color: var(--rc-primary, #2563eb);
   background: var(--rc-primary-bg, #eff6ff);
 }
-.ca-close-btn:hover {
-  border-color: #fca5a5;
-  color: #dc2626;
-  background: #fef2f2;
-}
 
-/* 抽屉内容容器：纵向撑满，单主滚动条 */
-.ca-drawer-content {
+/* 内容容器：纵向撑满，单主滚动条 */
+.cm-content {
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -798,7 +764,7 @@ async function handleDelete(node: { id: string; name: string }) {
 }
 
 /* 底部状态/说明条 */
-.ca-drawer-footer {
+.cm-footer {
   height: 38px;
   padding: 0 16px;
   background: #f8fafc;

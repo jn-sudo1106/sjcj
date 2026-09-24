@@ -535,3 +535,34 @@ describe('SourceTab 网站列表缓存', () => {
     expect(collectAssetsCache.sites?.map((s) => s.siteId)).toEqual(['s-new'])
   })
 })
+
+// 0924-03：分类改在「系统设置 → 分类目录」维护。从那边改完回来，采集资产是重新挂载的，
+// 但分类树读的是模块级缓存——必须先画缓存、再静默重拉，否则新建的分类看不到。
+describe('SourceTab 分类缓存重拉（0924-03）', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('进页面先用缓存里的分类，再后台重拉覆盖', async () => {
+    const spy = vi.spyOn(sourceApi, 'sourceCategories').mockResolvedValue([
+      { id: 'c1', name: '旧分类' },
+      { id: 'c2', name: '设置页刚建的分类' },
+    ])
+    const router = makeRouter()
+    await router.push('/collect')
+    await router.isReady()
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    clearCollectAssetsCache()
+    collectAssetsCache.categories = [{ id: 'c1', name: '旧分类' }]
+
+    const wrapper = mount(SourceTab, { global: { plugins: [pinia, router, ElementPlus] } })
+    await flushPromises()
+    await flushPromises()
+
+    expect(spy).toHaveBeenCalled()
+    const cats = wrapper.findComponent({ name: 'FilterToolbar' }).props('categories') as { id: string }[]
+    expect(cats.map((c) => c.id)).toEqual(['c1', 'c2'])
+    spy.mockRestore()
+    wrapper.unmount()
+  })
+})
+

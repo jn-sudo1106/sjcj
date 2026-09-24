@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { Search, Grid, List, Plus, Refresh, Setting } from '@element-plus/icons-vue'
+import { Search, Grid, List, Plus, Refresh } from '@element-plus/icons-vue'
 import { sourceApi, type SourceCategory } from '@/api'
 
 const props = defineProps<{
@@ -31,16 +30,7 @@ const emit = defineEmits<{
   'refresh': []
   /** 新建网站（2026-09-18）：对象级操作，与顶栏那个全局的「新建采集」分层 */
   'createSite': []
-  /** 管理分类（2026-09-21）：在全部分类下拉底部触发分类管理抽屉 */
-  'openCategoryManager': []
 }>()
-
-const treeSelectRef = ref()
-
-function onOpenCategoryManager() {
-  treeSelectRef.value?.blur?.()
-  emit('openCategoryManager')
-}
 
 function onKeywordInput(value: string) {
   emit('update:keyword', value)
@@ -102,7 +92,6 @@ async function loadCategoryChildren(
          tokens 统一）；check-strictly 让父子独立勾选——子级是懒加载的，级联勾选会把未加载的
          孙级 ID 漏出 categoryIds，后端 IN 匹配会漏数据。 -->
     <el-tree-select
-      ref="treeSelectRef"
       :model-value="categoryFilter"
       placeholder="全部分类"
       class="ca-category"
@@ -125,21 +114,6 @@ async function loadCategoryChildren(
           <span>{{ data.name }}</span>
           <span v-if="data.count != null" class="ca-category-count">{{ data.count }}</span>
         </span>
-      </template>
-      <template #footer>
-        <div class="ca-category-dropdown-footer">
-          <span class="ca-category-footer-label">维护分类</span>
-          <el-button
-            link
-            type="primary"
-            size="small"
-            :icon="Setting"
-            class="ca-category-manage-btn"
-            @click="onOpenCategoryManager"
-          >
-            管理分类
-          </el-button>
-        </div>
       </template>
     </el-tree-select>
     <el-select :model-value="tagFilter" placeholder="全部标签" style="width: 130px" clearable @update:model-value="(v: string) => { emit('update:tagFilter', v); emit('filterChange') }">
@@ -310,20 +284,4 @@ async function loadCategoryChildren(
 /* 分类树下拉面板 teleport 到 body，无法 scoped；输入框 150px 放不下多级缩进，
    面板单独放宽（13.6 寸基准，不覆盖页面）。 */
 .ca-category-popper { min-width: 248px; }
-.ca-category-dropdown-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 12px;
-  border-top: 1px solid #f1f5f9;
-  background-color: #f8fafc;
-}
-.ca-category-footer-label {
-  font-size: 11px;
-  color: #94a3b8;
-}
-.ca-category-manage-btn {
-  font-size: 12px;
-  font-weight: 600;
-}
 </style>

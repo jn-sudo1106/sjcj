@@ -12,7 +12,6 @@ import FilterToolbar from './components/FilterToolbar.vue'
 import BatchBar from './components/BatchBar.vue'
 import TableView from './components/TableView.vue'
 import SiteEditorDialog from './components/SiteEditorDialog.vue'
-import CategoryManageDrawer from './components/CategoryManageDrawer.vue'
 import { beginSitesFetch, collectAssetsCache, clearCollectAssetsCache, commitSites } from './siteListCache'
 
 /**
@@ -105,14 +104,6 @@ const editorVisible = ref(false)
 const editorSite = ref<Site | null>(null)
 // 新建与编辑共用 SiteEditorDialog（2026-09-18）：新建态 editorSite 为 null。
 const editorMode = ref<'create' | 'edit'>('edit')
-
-// ---- 分类管理抽屉（2026-09-21：仅在「全部分类」下拉底部入口唤起） ----
-const categoryDrawerVisible = ref(false)
-async function onCategoryRefresh() {
-  clearCollectAssetsCache()
-  await loadCategories()
-  await loadList({ force: true })
-}
 
 // ---- 加载 ----
 // 网站列表一次全量拉回来，排序和分页都在前端做。两个原因：
@@ -248,10 +239,17 @@ async function loadList(options: { force?: boolean; revalidate?: boolean } = {})
     if (seq === listRequestSeq) loading.value = false
   }
 }
-async function loadCategories() {
+/**
+ * 同 loadList：`revalidate` 先画缓存再静默重拉。
+ * 分类 0924-03 起在「系统设置 → 分类目录」维护，那边改完再回来，这里的模块级缓存就过期了——
+ * 进页面 / 切回 tab 都要重拉一次根分类（就一个请求）。
+ */
+async function loadCategories(options: { revalidate?: boolean } = {}) {
+  let silent = false
   if (collectAssetsCache.categories) {
     categories.value = collectAssetsCache.categories
-    return
+    if (!options.revalidate) return
+    silent = true
   }
   try {
     // 首屏只拉根分类（1个请求），子级由 FilterToolbar 的 el-tree-select 展开时按需懒加载；
@@ -260,6 +258,7 @@ async function loadCategories() {
     collectAssetsCache.categories = roots
     categories.value = roots
   } catch {
+    if (silent) return
     ElMessage.warning('加载分类失败')
     categories.value = []
   }
@@ -444,7 +443,7 @@ onMounted(() => {
   void loadList({ revalidate: true })
   // 收藏以后端为准（B30）；回来后 watch(favoriteSiteIds) 会就地重排，不用等它
   void loadFavoriteSites()
-  void loadCategories()
+  void loadCategories({ revalidate: true })
   void loadTagOptions()
   ui.registerAction('新建采集', openNewFlowCanvas)
 })
@@ -460,6 +459,7 @@ onActivated(() => {
   void loadFavoriteSites()
   void loadStats({ revalidate: true })
   void loadList({ revalidate: true })
+  void loadCategories({ revalidate: true })
 })
 onUnmounted(() => {
   ui.clearActions()
@@ -485,7 +485,6 @@ onUnmounted(() => {
       @refresh="refreshAll"
       @set-view="setView"
       @create-site="openSiteCreator"
-      @open-category-manager="categoryDrawerVisible = true"
     />
 
     <BatchBar
@@ -543,12 +542,6 @@ onUnmounted(() => {
       :categories="categories"
       :mode="editorMode"
       @saved="onEditorSaved"
-    />
-
-    <!-- 分类管理抽屉：仅在「全部分类」下拉底部入口唤起 -->
-    <CategoryManageDrawer
-      v-model="categoryDrawerVisible"
-      @refresh="onCategoryRefresh"
     />
   </div>
 </template>

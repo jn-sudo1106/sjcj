@@ -1,17 +1,12 @@
-// CategoryManageDrawer 单元测试
+// CategoryManager 单元测试（0924-03 由分类管理抽屉迁来：抽屉壳去掉，用例原样保留）
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { h } from 'vue'
-import CategoryManageDrawer from './CategoryManageDrawer.vue'
+import CategoryManager from './CategoryManager.vue'
 import { categoryApi, sourceApi } from '@/api'
 
 const stubs = {
-  ElDrawer: {
-    name: 'ElDrawer',
-    props: ['modelValue', 'title'],
-    template: '<div v-if="modelValue" class="el-drawer-mock"><slot name="header" /><slot /></div>',
-  },
   ElDialog: {
     name: 'ElDialog',
     props: ['modelValue', 'title'],
@@ -63,7 +58,7 @@ const stubs = {
   ElIcon: { template: '<i><slot /></i>' },
 }
 
-describe('CategoryManageDrawer 分类管理抽屉', () => {
+describe('CategoryManager 分类目录', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.spyOn(sourceApi, 'sourceCategories').mockResolvedValue([
@@ -72,20 +67,19 @@ describe('CategoryManageDrawer 分类管理抽屉', () => {
     ])
   })
 
-  it('抽屉在 modelValue 为 true 时渲染，展示头部标题与操作按钮', () => {
-    const wrapper = mount(CategoryManageDrawer, {
-      props: { modelValue: true },
+  it('挂载即渲染，展示头部标题与操作按钮（没有关闭按钮——它现在是整页）', () => {
+    const wrapper = mount(CategoryManager, {
       global: { stubs },
     })
 
-    expect(wrapper.text()).toContain('分类管理')
+    expect(wrapper.text()).toContain('分类目录')
     expect(wrapper.text()).toContain('新增根分类')
     expect(wrapper.text()).toContain('批量添加')
+    expect(wrapper.find('button[title="关闭"]').exists()).toBe(false)
   })
 
   it('点击「新增根分类」按钮会打开新增弹窗', async () => {
-    const wrapper = mount(CategoryManageDrawer, {
-      props: { modelValue: true },
+    const wrapper = mount(CategoryManager, {
       global: { stubs },
     })
 
@@ -102,8 +96,7 @@ describe('CategoryManageDrawer 分类管理抽屉', () => {
       { id: '201', name: '标签', parentId: '0', path: '0,' },
     ])
 
-    const wrapper = mount(CategoryManageDrawer, {
-      props: { modelValue: true },
+    const wrapper = mount(CategoryManager, {
       global: { stubs },
     })
 
@@ -119,8 +112,7 @@ describe('CategoryManageDrawer 分类管理抽屉', () => {
   it('编辑分类提交后调用 categoryApi.update', async () => {
     const spy = vi.spyOn(categoryApi, 'update').mockResolvedValue({ ok: true })
 
-    const wrapper = mount(CategoryManageDrawer, {
-      props: { modelValue: true },
+    const wrapper = mount(CategoryManager, {
       global: { stubs },
     })
 
@@ -144,8 +136,7 @@ describe('CategoryManageDrawer 分类管理抽屉', () => {
   it('首个节点禁用上移，第二个节点点击上移调用 categoryApi.update 互换 seq 权重', async () => {
     const spy = vi.spyOn(categoryApi, 'update').mockResolvedValue({ ok: true })
 
-    const wrapper = mount(CategoryManageDrawer, {
-      props: { modelValue: true },
+    const wrapper = mount(CategoryManager, {
       global: { stubs },
     })
 
@@ -203,8 +194,7 @@ describe('CategoryManageDrawer 分类管理抽屉', () => {
       },
     }
 
-    const wrapper = mount(CategoryManageDrawer, {
-      props: { modelValue: true },
+    const wrapper = mount(CategoryManager, {
       global: { stubs: customStubs },
     })
 

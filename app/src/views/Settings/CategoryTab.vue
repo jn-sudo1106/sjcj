@@ -1,11 +1,15 @@
 <script setup lang="ts">
-// 分类目录。内容在 0924-03 从采集资产的分类管理抽屉迁过来，这里先占位让系统设置骨架可达。
+// 系统设置 → 分类目录（0924-03）。内容就是 CategoryManager，整页展示；
+// 采集资产那边的分类下拉在进页面 / 切回 tab 时会静默重拉，这里改完不用通知它。
+import CategoryManager from '@/components/category/CategoryManager.vue'
 </script>
 
 <template>
-  <div class="st-placeholder" data-testid="settings-category">分类目录：开发中</div>
+  <div class="st-category" data-testid="settings-category">
+    <CategoryManager />
+  </div>
 </template>
 
 <style scoped>
-.st-placeholder { padding: 48px 16px; text-align: center; color: var(--rc-faint); font-size: 12px; background: #fff; border: 1px solid var(--rc-border); border-radius: 8px; }
+.st-category { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 </style>

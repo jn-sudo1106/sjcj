@@ -78,22 +78,14 @@ describe('FilterToolbar 分类树（多选）', () => {
     expect(wrapper.emitted('filterChange')).toHaveLength(2)
   })
 
-  it('全部分类下拉面板底部包含「管理分类」入口，点击触发 openCategoryManager 事件', async () => {
+  // 0924-03：分类维护迁到「系统设置 → 分类目录」，下拉底部不再有入口（Q3：直接删，不留跳转）
+  it('全部分类下拉底部不再有「管理分类」入口', () => {
     const wrapper = mountToolbar()
     const treeSelect = wrapper.findComponent({ name: 'ElTreeSelect' })
-    expect(treeSelect.exists()).toBe(true)
-    expect(treeSelect.vm.$slots.footer).toBeDefined()
-
-    const footerWrapper = mount({
-      render: () => treeSelect.vm.$slots.footer!(),
-    })
-    const manageBtn = footerWrapper.find('.ca-category-manage-btn')
-    expect(manageBtn.exists()).toBe(true)
-    expect(manageBtn.text()).toContain('管理分类')
-
-    await manageBtn.trigger('click')
-    expect(wrapper.emitted('openCategoryManager')).toHaveLength(1)
+    expect(treeSelect.vm.$slots.footer).toBeUndefined()
+    expect(wrapper.text()).not.toContain('管理分类')
   })
+
 })
 
 // 0924-01：排序下拉、「全部状态」下拉去掉；「只看有异常源的网站」改由点「出错源」切换
