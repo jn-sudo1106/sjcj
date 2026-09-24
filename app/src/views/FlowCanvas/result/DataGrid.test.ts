@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import DataGrid from './DataGrid.vue'
 import { columnPrefsKey } from '@/utils/table/columnPrefs'
-import type { DataRow } from '@/api'
+import type { DataRow, DataTableMeta } from '@/api'
 
 // 按表头文字定位单元格：ENTRY_ID / SOURCE_ID 两个身份合成列固定占最前面，
 // 用 nth-child 写死列序号的断言会随它们的显隐而碎（0819 N1-5）。
@@ -724,5 +724,85 @@ describe('DataGrid 自动加载的封顶', () => {
     for (let i = 0; i < 10; i += 1) fire()
     expect(wrapper.emitted('reach-end')).toHaveLength(10)
     wrapper.unmount()
+  })
+})
+
+describe('DataGrid · 列宽拖拽与预设（0924 走查支持拉宽）', () => {
+  const meta: DataTableMeta = {
+    tableId: 't_resize',
+    tableName: '测试拉宽表',
+    rowCount: 2,
+    fields: [
+      { prop: 'title', columnName: 'K1', type: 'string', desc: '标题' },
+      { prop: 'url', columnName: 'K2', type: 'string', desc: 'URL' },
+      { prop: 'content_size', columnName: 'K7', type: 'number', desc: '正文大小' },
+    ],
+  }
+  const rows: DataRow[] = [
+    { dataId: '101', title: '短标题', summary: '', sourceId: 's1', acceptState: 'accepted', values: { K1: '超长标题这是一段非常非常长的标题文本', K2: 'https://example.com/very/long/url/path/to/resource', K7: 1234 } },
+  ]
+
+  it('长字段预设合理宽度：URL-K2 360px、标题-K1 300px，K7 100px', () => {
+    localStorage.clear()
+    const wrapper = mount(DataGrid, { props: { meta, rows }, global: { stubs: GRID_STUBS } })
+    const ths = wrapper.findAll('thead th')
+    const k1Th = ths.find((th) => th.text().includes('标题-K1'))!
+    const k2Th = ths.find((th) => th.text().includes('URL-K2'))!
+    const k7Th = ths.find((th) => th.text().includes('正文大小-K7'))!
+
+    expect(k1Th.attributes('style')).toContain('width: 300px')
+    expect(k2Th.attributes('style')).toContain('width: 360px')
+    expect(k7Th.attributes('style')).toContain('width: 100px')
+
+    const tds = wrapper.findAll('tbody tr:first-child td.dg-cell')
+    const k2Td = tds.find((td) => td.attributes('title')?.includes('example.com'))!
+    expect(k2Td.attributes('style')).toContain('width: 360px')
+    expect(k2Td.attributes('style')).toContain('max-width: 360px')
+  })
+
+  it('拖拽调整手柄（data-col-resizer）可实时拉宽列，并在鼠标松开时持久化到 localStorage', async () => {
+    localStorage.clear()
+    const wrapper = mount(DataGrid, { props: { meta, rows }, global: { stubs: GRID_STUBS } })
+    const ths = wrapper.findAll('thead th')
+    const k2Th = ths.find((th) => th.text().includes('URL-K2'))!
+    const resizer = k2Th.get('[data-testid="data-col-resizer"]')
+
+    // 初始宽度 360px
+    expect(k2Th.attributes('style')).toContain('width: 360px')
+
+    // 模拟从 clientX=100 拖拽到 clientX=300（拉宽 +200px）
+    await resizer.trigger('mousedown', { clientX: 100 })
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 300 }))
+    await flushPromises()
+
+    // 实时宽度变为 360 + 200 = 560px
+    expect(k2Th.attributes('style')).toContain('width: 560px')
+
+    // 鼠标抬起，触发持久化
+    window.dispatchEvent(new MouseEvent('mouseup'))
+    await flushPromises()
+
+    const raw = localStorage.getItem(columnPrefsKey('t_resize'))
+    expect(raw).toContain('"url":560')
+  })
+
+  it('双击列宽手柄恢复默认列宽，并清除自定义宽度', async () => {
+    localStorage.clear()
+    // 预置 600px 宽度
+    localStorage.setItem(columnPrefsKey('t_resize'), JSON.stringify({ hidden: [], order: [], widths: { url: 600 } }))
+    const wrapper = mount(DataGrid, { props: { meta, rows }, global: { stubs: GRID_STUBS } })
+    const ths = wrapper.findAll('thead th')
+    const k2Th = ths.find((th) => th.text().includes('URL-K2'))!
+    const resizer = k2Th.get('[data-testid="data-col-resizer"]')
+
+    expect(k2Th.attributes('style')).toContain('width: 600px')
+
+    // 双击重置
+    await resizer.trigger('dblclick')
+    await flushPromises()
+
+    expect(k2Th.attributes('style')).toContain('width: 360px')
+    const raw = localStorage.getItem(columnPrefsKey('t_resize'))
+    expect(raw).not.toContain('"url":600')
   })
 })

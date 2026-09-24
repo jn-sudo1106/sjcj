@@ -17,17 +17,21 @@ export function useColumnPicker(
 ): {
   hidden: Ref<Set<string>>
   order: Ref<string[]>
+  widths: Ref<Record<string, number>>
   open: Ref<boolean>
   visibleCount: ComputedRef<number>
   presetActive: ComputedRef<boolean>
   apply: (next: ColumnPrefs) => void
   applyPreset: () => void
   showAll: () => void
+  setWidth: (prop: string, width: number) => void
+  resetWidth: (prop?: string) => void
 } {
   const scope = options?.scope ?? 'datagrid'
   const getPreset = options?.getPresetProps ?? (() => [])
   const hidden = ref<Set<string>>(new Set())
   const order = ref<string[]>([])
+  const widths = ref<Record<string, number>>({})
   const open = ref(false)
 
   function presetHidden(schema: string[]): Set<string> {
@@ -45,6 +49,7 @@ export function useColumnPicker(
     hidden.value = saved
       ? new Set((saved.hidden ?? []).filter((prop) => allowed.has(prop)))
       : presetHidden(schema)
+    widths.value = saved?.widths ? { ...saved.widths } : {}
   }
 
   watch(
@@ -62,17 +67,45 @@ export function useColumnPicker(
     return visible.length === preset.length && visible.every((prop) => preset.includes(prop))
   })
 
-  function commit(nextHidden: Set<string>) {
+  function commit(nextHidden: Set<string>, nextOrder = order.value, nextWidths = widths.value) {
     hidden.value = nextHidden
+    order.value = nextOrder
+    widths.value = nextWidths
     const tableId = getTableId()
-    if (tableId) writeColumnPrefs(tableId, { hidden: [...nextHidden], order: order.value }, scope)
+    if (tableId) {
+      writeColumnPrefs(tableId, {
+        hidden: [...nextHidden],
+        order: nextOrder,
+        ...(Object.keys(nextWidths).length > 0 ? { widths: nextWidths } : {}),
+      }, scope)
+    }
+  }
+
+  function setWidth(prop: string, width: number) {
+    const rounded = Math.round(width)
+    const next = { ...widths.value, [prop]: rounded }
+    commit(hidden.value, order.value, next)
+  }
+
+  function resetWidth(prop?: string) {
+    const next = { ...widths.value }
+    if (prop) {
+      delete next[prop]
+    } else {
+      Object.keys(next).forEach((k) => delete next[k])
+    }
+    commit(hidden.value, order.value, next)
   }
 
   function apply(next: ColumnPrefs) {
     const schema = getSchemaProps()
     order.value = mergeColumnOrder(schema, next.order)
     const allowed = new Set(schema)
-    commit(new Set(next.hidden.filter((prop) => allowed.has(prop))))
+    commit(
+      new Set(next.hidden.filter((prop) => allowed.has(prop))),
+      order.value,
+      next.widths ?? widths.value,
+    )
   }
 
   function applyPreset() {
@@ -85,5 +118,5 @@ export function useColumnPicker(
     commit(new Set())
   }
 
-  return { hidden, order, open, visibleCount, presetActive, apply, applyPreset, showAll }
+  return { hidden, order, widths, open, visibleCount, presetActive, apply, applyPreset, showAll, setWidth, resetWidth }
 }

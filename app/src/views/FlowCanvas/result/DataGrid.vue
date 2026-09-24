@@ -84,11 +84,14 @@ function sortIndicator(field: { prop: string; columnName?: string }): string {
   if (props.sortField !== sortKeyOf(field)) return '↕'
   return props.sortOrder === 'descend' ? '↓' : '↑'
 }
-// 三态循环：升 → 降 → 取消。旧平台这里有个瑕疵——u-table 的 sortable='custom' 第三次点击
-// 会把 column.order 置 null，而它的 handleSortChange 只判断 'ascending'，else 一律当降序，
-// 于是点到第二次以后就在降序卡住、取消不掉。我们的查询层支持不传 sortField（= 不排序），
-// 故实现成真正的三态，不复刻这个 bug。
+const resizingCol = ref<{ prop: string; startX: number; startWidth: number } | null>(null)
+let didDragMove = false
+
 function onSort(field: { prop: string; columnName?: string }) {
+  if (resizingCol.value || didDragMove) {
+    didDragMove = false
+    return
+  }
   if (!canSort(field)) return
   const key = sortKeyOf(field)
   if (props.sortField !== key) return emit('sort-change', key, 'ascend')
@@ -183,6 +186,10 @@ onMounted(() => {
 onBeforeUnmount(() => {
   teardownObserver()
   window.removeEventListener('scroll', onUserScrollAnywhere, { capture: true })
+  if (resizingCol.value) {
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
 })
 
 const selectedSet = computed(() => new Set(props.selectedIds ?? []))
@@ -255,17 +262,146 @@ const effectivePreset = computed(() => {
 const {
   hidden: hiddenCols,
   order: colOrder,
+  widths: savedColWidths,
   open: colPickerOpen,
   visibleCount: colVisibleCount,
   presetActive,
   apply: applyColumnPrefs,
   applyPreset,
   showAll: showAllCols,
+  setWidth: setColumnWidth,
+  resetWidth: resetColumnWidth,
 } = useColumnPicker(
   () => props.meta?.tableId ?? '',
   () => cols.value.map((f) => f.prop),
   { getPresetProps: () => effectivePreset.value },
 )
+
+/** 默认列宽：按业务场景预设合理宽度，避免超长 URL 或长标题在未拖拽前被过窄截断 */
+function defaultColWidth(field: GridColumn, compact = false): number {
+  const colName = (('columnName' in field ? field.columnName : '') || field.prop || '').toUpperCase()
+  const prop = (field.prop || '').toLowerCase()
+  const desc = (('desc' in field ? field.desc : '') || '').toLowerCase()
+
+  // 1. URL 类长字段：K2 或名字含 url / 网址 / 链接 / 来源
+  if (colName === 'K2' || prop.includes('url') || desc.includes('url') || desc.includes('网址') || desc.includes('链接')) {
+    return compact ? 240 : 360
+  }
+
+  // 2. 简短数值 / 大小类（如 K7 正文大小、文件大小、条数等）：在匹配正文/内容前优先识别大小
+  if (colName === 'K7' || prop.includes('size') || desc.includes('大小') || desc.includes('字节') || desc.includes('条数')) {
+    return compact ? 84 : 100
+  }
+
+  // 3. 标题 / 正文类长文本：K1 或包含 标题 / 内容 / 正文 / 描述 / title / content / summary
+  if (
+    colName === 'K1'
+    || prop === 'title' || desc.includes('标题')
+    || prop.includes('summary') || desc.includes('摘要')
+    || prop.includes('content') || desc.includes('正文')
+  ) {
+    return compact ? 220 : 300
+  }
+
+  // 4. 身份与主键
+  if (colName === 'ENTRY_ID' || colName === 'PARENT_ID') {
+    return compact ? 84 : 100
+  }
+  if (colName === 'SOURCE_ID') {
+    return compact ? 100 : 120
+  }
+
+  // 5. 日期时间
+  if (colName.includes('UPDATE_DT') || colName.includes('CREATE_DT') || prop.includes('time') || desc.includes('时间')) {
+    return compact ? 130 : 160
+  }
+
+  // 6. 默认列宽
+  return compact ? 120 : 180
+}
+
+function getColWidth(field: GridColumn): number {
+  return savedColWidths.value[field.prop] ?? defaultColWidth(field, props.compact)
+}
+
+function colHeadStyle(field: GridColumn) {
+  const w = getColWidth(field)
+  return {
+    width: `${w}px`,
+    minWidth: `${w}px`,
+    maxWidth: `${w}px`,
+  }
+}
+
+function colCellStyle(field: GridColumn) {
+  const w = getColWidth(field)
+  return {
+    width: `${w}px`,
+    minWidth: `${w}px`,
+    maxWidth: `${w}px`,
+  }
+}
+
+const sourceColWidth = computed(() => savedColWidths.value['__SOURCE_COL__'] ?? 180)
+
+function onResizerMouseDown(e: MouseEvent, field: GridColumn) {
+  e.preventDefault()
+  e.stopPropagation()
+
+  const currentW = getColWidth(field)
+  resizingCol.value = {
+    prop: field.prop,
+    startX: e.clientX,
+    startWidth: currentW,
+  }
+  didDragMove = false
+
+  const prevCursor = document.body.style.cursor
+  const prevUserSelect = document.body.style.userSelect
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+
+  function onMouseMove(ev: MouseEvent) {
+    if (!resizingCol.value) return
+    const deltaX = ev.clientX - resizingCol.value.startX
+    if (Math.abs(deltaX) > 2) {
+      didDragMove = true
+    }
+    const minW = props.compact ? 50 : 60
+    const nextWidth = Math.max(minW, Math.round(resizingCol.value.startWidth + deltaX))
+    savedColWidths.value[field.prop] = nextWidth
+  }
+
+  function onMouseUp() {
+    window.removeEventListener('mousemove', onMouseMove)
+    window.removeEventListener('mouseup', onMouseUp)
+    document.body.style.cursor = prevCursor
+    document.body.style.userSelect = prevUserSelect
+
+    if (resizingCol.value && didDragMove) {
+      const finalW = savedColWidths.value[field.prop]
+      if (finalW) {
+        setColumnWidth(field.prop, finalW)
+      }
+    }
+    resizingCol.value = null
+  }
+
+  window.addEventListener('mousemove', onMouseMove)
+  window.addEventListener('mouseup', onMouseUp)
+}
+
+function onResizerDblClick(field: GridColumn) {
+  resetColumnWidth(field.prop)
+}
+
+function onSourceResizerMouseDown(e: MouseEvent) {
+  onResizerMouseDown(e, { prop: '__SOURCE_COL__', type: 'string', desc: '所属源' } as GridColumn)
+}
+
+function onSourceResizerDblClick() {
+  resetColumnWidth('__SOURCE_COL__')
+}
 const visibleCols = computed(() => {
   const byProp = new Map(cols.value.map((f) => [f.prop, f]))
   return colOrder.value
@@ -412,16 +548,45 @@ function stateMeta(s?: string) {
             <th v-if="showSelectCol" class="dg-sticky-head" style="width:36px" @click.stop>
               <input type="checkbox" :checked="allChecked" :indeterminate="someChecked" @change="toggleAll" />
             </th>
-            <th v-if="showSourceCol" class="dg-sticky-head" style="width:180px">{{ sourceColLabel || '所属源-SOURCE_NAME' }}</th>
+            <th
+              v-if="showSourceCol"
+              class="dg-sticky-head"
+              :style="{ width: `${sourceColWidth}px`, minWidth: `${sourceColWidth}px`, maxWidth: `${sourceColWidth}px` }"
+            >
+              <span class="dg-th-label">{{ sourceColLabel || '所属源-SOURCE_NAME' }}</span>
+              <div
+                class="dg-col-resizer"
+                data-testid="data-source-col-resizer"
+                :title="`拖拽调整列宽（当前 ${sourceColWidth}px，双击恢复默认）`"
+                @click.stop
+                @mousedown.stop="onSourceResizerMouseDown"
+                @dblclick.stop="onSourceResizerDblClick"
+              />
+            </th>
             <th
               v-for="f in visibleCols"
               :key="f.prop"
               class="dg-sticky-head"
-              :style="{ minWidth: compact ? '96px' : '120px' }"
-              :class="{ 'dg-sortable': canSort(f), 'dg-sorted': sortField === sortKeyOf(f) }"
+              :style="colHeadStyle(f)"
+              :class="{
+                'dg-sortable': canSort(f),
+                'dg-sorted': sortField === sortKeyOf(f),
+                'dg-resizing': resizingCol?.prop === f.prop,
+              }"
               :title="canSort(f) ? `${f.desc || f.prop}（点击排序）` : (f.desc || f.prop)"
               @click="onSort(f)"
-            >{{ colLabel(f) }}<span v-if="canSort(f)" class="dg-sort-ind">{{ sortIndicator(f) }}</span></th>
+            >
+              <span class="dg-th-label">{{ colLabel(f) }}</span>
+              <span v-if="canSort(f)" class="dg-sort-ind">{{ sortIndicator(f) }}</span>
+              <div
+                class="dg-col-resizer"
+                data-testid="data-col-resizer"
+                :title="`拖拽调整列宽（当前 ${getColWidth(f)}px，双击恢复默认）`"
+                @click.stop
+                @mousedown.stop="onResizerMouseDown($event, f)"
+                @dblclick.stop="onResizerDblClick(f)"
+              />
+            </th>
             <!-- 「下级」（0903 H10）：这行在后继节点里产出了几条。末节点 / 后继无输出表时
                  整列不渲染——显示一整列 `—` 只会让人以为"数据没跑出来"。 -->
             <th v-if="showChildDataCol" class="dg-sticky-head" style="width:72px" title="这一行在下一节点产出了多少条数据">下级</th>
@@ -434,7 +599,11 @@ function stateMeta(s?: string) {
             <td v-if="showSelectCol" class="dg-select" @click.stop>
               <input type="checkbox" :checked="selectedSet.has(r.dataId)" @change="toggleRow(r.dataId)" />
             </td>
-            <td v-if="showSourceCol" :title="sourceClickable && r.sourceId ? `在新页签打开源 ${sourceLabel(r)}` : sourceLabel(r)">
+            <td
+              v-if="showSourceCol"
+              :style="{ width: `${sourceColWidth}px`, minWidth: `${sourceColWidth}px`, maxWidth: `${sourceColWidth}px` }"
+              :title="sourceClickable && r.sourceId ? `在新页签打开源 ${sourceLabel(r)}` : sourceLabel(r)"
+            >
               <button
                 v-if="sourceClickable && r.sourceId"
                 type="button"
@@ -444,7 +613,13 @@ function stateMeta(s?: string) {
               >{{ sourceLabel(r) }}</button>
               <template v-else>{{ sourceLabel(r) }}</template>
             </td>
-            <td v-for="f in visibleCols" :key="f.prop" class="dg-cell" :title="cellText(r, f)">
+            <td
+              v-for="f in visibleCols"
+              :key="f.prop"
+              class="dg-cell"
+              :style="colCellStyle(f)"
+              :title="cellText(r, f)"
+            >
               <!-- 父行 ID 做成可点（0903 Y1-3）：跟详情里那个「父 ID ↗」是同一个下钻，
                    只是把入口挪到表格上，不用先点开详情再点一次。空值（'' 或 '0'）不可点。 -->
               <button
@@ -592,12 +767,47 @@ function stateMeta(s?: string) {
 .dg-sortable:hover { color: var(--rc-primary); }
 .dg-sort-ind { margin-left: 4px; opacity: .35; font-size: 10px; }
 .dg-sorted .dg-sort-ind { opacity: 1; color: var(--rc-primary); }
+.dg-th-label {
+  display: inline-block;
+  vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: calc(100% - 16px);
+}
+.dg-col-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+  z-index: 3;
+}
+.dg-col-resizer::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  right: 1px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+.dg-table th:hover .dg-col-resizer::after {
+  background: var(--rc-border, #cbd5e1);
+}
+.dg-col-resizer:hover::after,
+.dg-table th.dg-resizing .dg-col-resizer::after {
+  background: var(--rc-primary, #2563eb);
+}
 /* z-index 必须显式给（2026-09-09）：th 虽是 sticky，但默认 z-index:auto，而单元格
    .dg-cell 为了放复制按钮是 position:relative，同为 auto 时按 DOM 先后决定层叠——
    tbody 在 thead 之后，于是数据行画在表头上面；td 背景又是透明的，滚动时就成了
    表头文字与数据文字叠在一起（全部源 / 具体源两个数据视图都复现）。 */
-.dg-table th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; position: sticky; top: 0; z-index: 2; background: #f8fafc; color: var(--rc-text-2); font-weight: 700; text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rc-border); font-family: var(--rc-mono, monospace); }
-.dg-table td { padding: 8px 10px; border-bottom: 1px solid var(--rc-border-soft); color: var(--rc-text); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dg-table th { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; position: sticky; top: 0; z-index: 2; background: #f8fafc; color: var(--rc-text-2); font-weight: 700; text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rc-border); font-family: var(--rc-mono, monospace); box-sizing: border-box; }
+.dg-table td { padding: 8px 10px; border-bottom: 1px solid var(--rc-border-soft); color: var(--rc-text); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box; }
 .dg-table tbody tr { cursor: pointer; }
 .dg-table tbody tr:hover { background: #f8fbff; }
 .dg-table tbody tr.active { background: #eff6ff; }

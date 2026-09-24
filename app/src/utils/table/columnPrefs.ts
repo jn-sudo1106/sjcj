@@ -3,6 +3,7 @@
 export interface ColumnPrefs {
   hidden: string[]
   order: string[]
+  widths?: Record<string, number>
 }
 
 // 0903 Y1-5：PARENT_ID 并入身份列——它和 ENTRY_ID/SOURCE_ID 一样回答的是"这行是谁"，
@@ -21,7 +22,22 @@ export function readColumnPrefs(tableId: string, scope = 'datagrid'): ColumnPref
     const parsed = JSON.parse(raw) as Partial<ColumnPrefs>
     const hidden = Array.isArray(parsed.hidden) ? parsed.hidden.filter((v): v is string => typeof v === 'string') : []
     const order = Array.isArray(parsed.order) ? parsed.order.filter((v): v is string => typeof v === 'string') : []
-    return { hidden, order }
+    const rawWidths = parsed.widths && typeof parsed.widths === 'object' && !Array.isArray(parsed.widths)
+      ? parsed.widths
+      : null
+    const widths: Record<string, number> = {}
+    if (rawWidths) {
+      for (const [k, v] of Object.entries(rawWidths)) {
+        if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+          widths[k] = Math.round(v)
+        }
+      }
+    }
+    return {
+      hidden,
+      order,
+      ...(Object.keys(widths).length > 0 ? { widths } : {}),
+    }
   } catch {
     return null
   }
@@ -30,10 +46,14 @@ export function readColumnPrefs(tableId: string, scope = 'datagrid'): ColumnPref
 export function writeColumnPrefs(tableId: string, prefs: ColumnPrefs, scope = 'datagrid'): void {
   if (!tableId) return
   try {
-    localStorage.setItem(columnPrefsKey(tableId, scope), JSON.stringify({
+    const payload: ColumnPrefs = {
       hidden: prefs.hidden,
       order: prefs.order,
-    }))
+    }
+    if (prefs.widths && Object.keys(prefs.widths).length > 0) {
+      payload.widths = prefs.widths
+    }
+    localStorage.setItem(columnPrefsKey(tableId, scope), JSON.stringify(payload))
   } catch {
     // 隐私模式 / 配额满：记住失败不挡用表
   }

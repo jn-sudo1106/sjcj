@@ -39,4 +39,18 @@ describe('columnPrefs', () => {
     localStorage.setItem(columnPrefsKey('t2'), '{not json')
     expect(readColumnPrefs('t2')).toBeNull()
   })
+
+  it('支持列宽 widths 的读取与保存，自动过滤无效宽度', () => {
+    localStorage.clear()
+    writeColumnPrefs('t3', {
+      hidden: [],
+      order: ['K1', 'K2'],
+      widths: { K1: 300, K2: 450, invalid: -10, nan: NaN as unknown as number },
+    })
+    expect(readColumnPrefs('t3')).toEqual({
+      hidden: [],
+      order: ['K1', 'K2'],
+      widths: { K1: 300, K2: 450 },
+    })
+  })
 })
