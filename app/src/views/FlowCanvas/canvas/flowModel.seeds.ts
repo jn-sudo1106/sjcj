@@ -1282,12 +1282,10 @@ function buildNodeForStep(source: Source, step: Step, index: number): NodeConfig
   else if (step.configType === '710') cfg.template = 'audio-text'
   else if (step.configType === '700') cfg.template = 'video-audio'
   else if (step.configType === '150') cfg.template = 'ocr'
-  else if (/ocr/i.test(cfg.title)) cfg.template = 'ocr'
-  else if (/翻译/.test(cfg.title)) cfg.template = 'translate'
-  else if (/打标签|标注/.test(cfg.title)) cfg.template = 'article-tag'
-  else if (/摘要/.test(cfg.title)) cfg.template = 'article-summary'
-  else if (/音频|录音/.test(cfg.title)) cfg.template = 'audio-text'
-  else if (/视频/.test(cfg.title)) cfg.template = 'video-audio'
+  // ⚠️ 不按节点名称猜类型（2026-09-24 review 撤掉）：首屏快速路径还没有 configType，
+  // 叫「新闻摘要页」「视频列表」的网页采集节点会被设成摘要 / 视频模板；configDetail 回来后
+  // applyStepDetails 只在「该是处理节点却不是」时重建，反向不纠正，模板就一直错下去。
+  // 真正的处理节点等 configType 到了由 applyStepDetails 整节点重建（150/800 已在名单里）。
   if (cfg.collectCfg) {
     // 源级字段（源名称/分类/标签/登录/选用配置等）不再复制到节点：随 loadFromSource 整体挂到 flow.sourceCfg（0706 优化·源/节点配置分层）
     cfg.collectCfg.url = source.url

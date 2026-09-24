@@ -597,7 +597,7 @@ describe('DataGrid · 行内删除单条', () => {
     rows: [{ dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted', values: {} }] as DataRow[],
   }
 
-  it('allowRowDelete 为真才出现删除单条图标按钮，默认不出现；去除详情与任务实例', async () => {
+  it('allowRowDelete 为真才出现删除单条图标按钮，默认不出现；不单独放「详情」（点整行打开）', async () => {
     const off = mount(DataGrid, { props, global: { stubs: MENU_STUBS } })
     expect(off.find('[data-testid="data-row-action-delete"]').exists()).toBe(false)
 
@@ -607,10 +607,28 @@ describe('DataGrid · 行内删除单条', () => {
     expect(delBtn.attributes('title')).toBe('删除单条【无法恢复】')
     expect(on.text()).not.toContain('操作')
     expect(on.text()).not.toContain('详情')
-    expect(on.text()).not.toContain('查后续任务实例')
 
     await delBtn.trigger('click')
     expect(on.emitted('row-action')?.[0]).toEqual([props.rows[0], 'delete'])
+  })
+})
+
+// 2026-09-24 review：图标化时「查后续任务实例」被一起删了，ResultView / SiteDataView 的 'tasks' 分支成了死代码、
+// 任务实例弹窗打不开。加回来，且对只读账号 / 正式表（无编辑删除权限）也要有
+describe('DataGrid · 查后续任务实例', () => {
+  const props = {
+    meta: { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'name', type: 'string', desc: '名称' }] },
+    rows: [{ dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted', values: {} }] as DataRow[],
+  }
+
+  it('没有编辑 / 删除权限也有操作列和「查后续任务实例」；点它发 tasks 且不触发整行点击', async () => {
+    const wrapper = mount(DataGrid, { props, global: { stubs: { ColumnPickerDialog: true, ElDialog: true } } })
+    const btn = wrapper.find('[data-testid="data-row-action-tasks"]')
+    expect(btn.exists()).toBe(true)
+    expect(btn.attributes('aria-label')).toBe('查后续任务实例')
+    await btn.trigger('click')
+    expect(wrapper.emitted('row-action')?.[0]).toEqual([props.rows[0], 'tasks'])
+    expect(wrapper.emitted('row-click')).toBeUndefined()
   })
 })
 
@@ -624,7 +642,7 @@ describe('DataGrid · 行内编辑', () => {
     rows: [{ dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted', values: {} }] as DataRow[],
   }
 
-  it('allowRowEdit 为真才出现「编辑」图标按钮，默认不出现；去除详情与任务实例', async () => {
+  it('allowRowEdit 为真才出现「编辑」图标按钮，默认不出现；不单独放「详情」（点整行打开）', async () => {
     const off = mount(DataGrid, { props, global: { stubs: MENU_STUBS } })
     expect(off.find('[data-testid="data-row-action-edit"]').exists()).toBe(false)
 
@@ -634,7 +652,6 @@ describe('DataGrid · 行内编辑', () => {
     expect(editBtn.attributes('title')).toBe('编辑')
     expect(on.text()).not.toContain('操作')
     expect(on.text()).not.toContain('详情')
-    expect(on.text()).not.toContain('查后续任务实例')
 
     await editBtn.trigger('click')
     expect(on.emitted('row-action')?.[0]).toEqual([props.rows[0], 'edit'])
