@@ -25,7 +25,7 @@ import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { dataApi, parseNextStepReceipt, siteApi, sourceApi, type UsedTable, type DataTableMeta, type DataRow, type Source, type EntryDetail, type RowQuery, type Step } from '@/api'
+import { dataApi, parseNextStepReceipt, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail, type RowQuery, type Step } from '@/api'
 import {
   buildHorizontalLayout, buildSourceSeed, effectiveInputTable, firstRunnableNodeId, nodeOutputTable, isDecision, isParallel,
   hasDirectSuccessor, directSuccessorIds, directPredecessorIds, type NodeConfig, type BranchSeed, type FlowBranchGroup,
@@ -67,8 +67,9 @@ const props = defineProps<{
   siteId: string
   initialCondition?: SiteDataInitialCondition | null
   /**
-   * 左栏数据表模式选中的表（0924-10）。有值时表由左栏决定：隐藏顶部的选源 / 选表下拉，
-   * 换成只读的「表：xxx」；空串 = 源模式，行为同原来。
+   * 左栏数据表模式选中的表（0924-10）。有值时表由左栏决定：隐藏顶部的选源 / 选表下拉
+   * （选的是哪张表看左栏高亮和表格上方的表名行，这里不再重复标注——2026-09-24 用户：多一格反把查询按钮挤走）；
+   * 空串 = 源模式，行为同原来。
    */
   lockedTableId?: string
 }>()
@@ -281,17 +282,6 @@ async function narrowToTableSources(tid: string, siteSourceIds: string[]): Promi
     return siteSourceIds
   }
 }
-
-/** 左栏选中那张表的名称与涉及源数：与左栏同一份数据，名称口径一致（表详情接口的 name 与表目录不一定相同） */
-const lockedTableInfo = ref<UsedTable | null>(null)
-watch(() => [props.siteId, props.lockedTableId] as const, async ([siteId, tid]) => {
-  lockedTableInfo.value = null
-  if (!tid) return
-  try {
-    const used = await siteApi.siteUsedTables(siteId)
-    if (props.lockedTableId === tid) lockedTableInfo.value = used.tables.find((t) => t.tableId === tid) ?? null
-  } catch { /* 名称拿不到就用表详情的，不影响查询 */ }
-}, { immediate: true })
 
 async function computeTotalHits(reqId: number, sourceIds: string[]) {
   if (!sourceIds.length) return
@@ -1122,19 +1112,13 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
 <template>
   <main class="sdv2-shell" :class="{ 'is-fullscreen': fullscreen }">
     <div class="sdv2-toolbar">
-      <template v-if="lockedTableId">
-        <span class="sdv2-locked-table" data-testid="site-data-locked-table" :title="meta?.tableName || ''">
-          表：<b>{{ lockedTableInfo?.name || meta?.name || lockedTableId }}</b><em>{{ lockedTableId }}</em>
-          <template v-if="lockedTableInfo">· 涉及 {{ lockedTableInfo.sourceCnt }} 个源</template>
-        </span>
-      </template>
-      <template v-else>
+      <template v-if="!lockedTableId">
         <SiteSourceSelect v-model="selectedSourceId" :site-id="siteId" />
         <SiteTableSelect v-if="!selectedSourceId" v-model="tableId" :site-id="siteId" />
       </template>
       <template v-if="effectiveTableId">
-        <input v-model="filters.dataId" class="sdv2-input" placeholder="数据 ID" />
-        <input v-model="filters.parentId" class="sdv2-input" placeholder="父 ID" />
+        <input v-model="filters.dataId" class="sdv2-input sdv2-id" placeholder="数据 ID" />
+        <input v-model="filters.parentId" class="sdv2-input sdv2-id" placeholder="父 ID" />
         <select v-model="filters.state" class="sdv2-input">
           <option value="">状态（全部）</option>
           <option value="C">C 成功</option>
@@ -1457,6 +1441,7 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
 .sdv2-shell.is-fullscreen { position: fixed; inset: 0; z-index: 60; height: 100vh; border: 0; border-radius: 0; }
 .sdv2-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; position: relative; }
 .sdv2-input { height: 28px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 6px; font-size: 12px; outline: none; min-width: 110px; background: #fff; }
+.sdv2-input.sdv2-id { width: 130px; }
 .sdv2-input.flex { flex: 1; min-width: 200px; font-family: var(--rc-mono, monospace); }
 .sdv2-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
 .sdv2-toolbar .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }
@@ -1524,7 +1509,4 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
 .sdv2-readonly { flex: none; padding: 2px 8px; border-radius: 999px; background: #f1f5f9; color: var(--rc-faint); font-size: 11px; }
 .sdv2-goto { flex: none; height: 24px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 999px; background: #fff; color: var(--rc-primary); font-size: 11.5px; cursor: pointer; }
 .sdv2-goto:hover { border-color: var(--rc-primary); background: var(--rc-primary-bg); }
-.sdv2-locked-table { display: inline-flex; align-items: baseline; gap: 6px; max-width: 340px; padding: 0 10px; height: 30px; line-height: 30px; border: 1px solid var(--rc-border); border-radius: 6px; background: #f8fafc; color: var(--rc-muted); font-size: 12px; white-space: nowrap; overflow: hidden; }
-.sdv2-locked-table b { color: var(--rc-text); font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
-.sdv2-locked-table em { font-style: normal; font-family: monospace; font-size: 11px; }
 </style>

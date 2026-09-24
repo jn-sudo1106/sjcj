@@ -1386,10 +1386,10 @@ describe('SiteDataView · 左栏数据表模式（lockedTableId）', () => {
     return wrapper
   }
 
-  it('隐藏选源 / 选表下拉，显示只读的「表：名称 · 涉及 N 个源」（名称与左栏同源）', async () => {
-    vi.spyOn(siteApi, 'siteUsedTables').mockResolvedValue({ tables: [usedTable('t1', ['a', 'b'])], noFlowSourceCnt: 0, failedFlowIds: [] })
-    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a'), source('b'), source('c')])
-    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({ ...meta, name: '表详情里的另一个名字' })
+  // 2026-09-24 用户：选的是哪张表看左栏和表格上方的表名行，工具条上不再重复标一格（会把查询按钮挤走）
+  it('隐藏选源 / 选表下拉，工具条上也不再单独标注当前表', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
     vi.spyOn(dataApi, 'summaryData').mockResolvedValue([] as never)
     const wrapper = mountLocked('t1')
@@ -1397,9 +1397,7 @@ describe('SiteDataView · 左栏数据表模式（lockedTableId）', () => {
 
     expect(wrapper.findComponent({ name: 'SiteTableSelect' }).exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'SiteSourceSelect' }).exists()).toBe(false)
-    const label = wrapper.get('[data-testid="site-data-locked-table"]').text()
-    expect(label).toContain('快讯表')
-    expect(label).toContain('涉及 2 个源')
+    expect(wrapper.find('[data-testid="site-data-locked-table"]').exists()).toBe(false)
   })
 
   it('候选源只查用到这张表的源（网站 3 个源，表只涉及 a、b）', async () => {
