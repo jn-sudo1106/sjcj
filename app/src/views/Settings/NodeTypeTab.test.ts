@@ -50,13 +50,12 @@ describe('节点类型页面', () => {
     vi.spyOn(configApi, 'nodeTypeList').mockResolvedValue(ROWS.map((r) => ({ ...r })))
   })
 
-  it('列出节点类型；没有删除按钮，并提示去旧平台删除', async () => {
+  it('列出节点类型；没有删除按钮', async () => {
     const { wrapper } = await mountAs(['admin'])
     expect(wrapper.findAll('[data-testid="node-type-row"]')).toHaveLength(2)
     expect(wrapper.text()).toContain('共 2 个节点类型')
     expect(wrapper.text()).not.toContain('删除</')
     expect(wrapper.findAll('button').some((b) => b.text() === '删除')).toBe(false)
-    expect(wrapper.text()).toContain('旧平台「配置 → 源类型」')
   })
 
   it('按名称查询把关键词传给接口', async () => {

@@ -3,7 +3,7 @@
 // 名称模糊查询 + 列表（不分页，后端就不分页）+ 详情（右侧抽屉）+ 新建 / 编辑（居中短表单）。
 //
 // **没有删除**：旧前端注释说被配置或有效源引用时后端会拒删，但这条无法无损验证——只能拿正在用的类型去试，
-// 注释若不属实就等于删掉「网页抓取」这类核心字典。等后端确认（0924 方案 B-3）前，删除去旧平台做。
+// 注释若不属实就等于删掉「网页抓取」这类核心字典。等后端确认（0924 方案 B-3）前不提供删除。
 //
 // 写操作仅管理员可见（与 ParamTab / DataQueryTab 同口径）；保存后刷新抓取类型字典，画布节点类型下拉立即生效。
 import { computed, onMounted, reactive, ref } from 'vue'
@@ -141,7 +141,6 @@ async function save() {
       <span class="muted">共 {{ list.length }} 个节点类型</span>
       <button v-if="canWrite" class="rc-btn primary" type="button" data-testid="node-type-create" @click="openCreate">新建</button>
     </div>
-    <div class="nt-hint">如需删除节点类型，请在旧平台「配置 → 源类型」操作。</div>
 
     <div v-loading="loading" class="rc-table-scroll nt-table">
       <table class="rc-data-table">
@@ -219,7 +218,6 @@ async function save() {
 <style scoped>
 .nt-main { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .nt-spacer { flex: 1; }
-.nt-hint { padding: 0 16px 8px; font-size: 12px; color: var(--rc-muted); }
 .nt-table { flex: 1; min-height: 0; overflow: auto; }
 .nt-ellipsis { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nt-empty { text-align: center; color: var(--rc-faint); padding: 32px 0; }
