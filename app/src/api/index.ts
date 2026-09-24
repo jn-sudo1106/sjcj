@@ -11,7 +11,7 @@ import type {
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   SourceCheck, SourceCheckLog, SourceCheckQuery, SourceCheckLogQuery,
   TaskInstQuery, SiteTableOption, SiteTablesResult,
-  Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, EntryType, Param, ParamInput, CredentialRef, SourceJob, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
+  Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, NodeType, NodeTypeInput, EntryType, Param, ParamInput, CredentialRef, SourceJob, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, CopySourceInput, SourceCloneRequest, SourceCloneResult,
   FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
   SourceCategory,
@@ -50,6 +50,7 @@ import {
   sitePageFromLegacy,
   siteSummaryFromLegacy,
   siteSourceFromLegacy,
+  nodeTypeFromLegacy,
   sourceCategoriesFromLegacy,
   sourceFromLegacy,
   sourceOptionFromLegacy,
@@ -433,6 +434,20 @@ function mayHaveLandedDespiteError(error: unknown): boolean {
 async function landedInSite(siteId: string, candidates: string[]): Promise<string[]> {
   const actual = new Set((await requestSiteSources(siteId, 10000, 60_000)).map((s) => s.sourceId))
   return candidates.filter((id) => actual.has(id))
+}
+
+/** 节点类型写入体：去掉 undefined；数字字段转 number（后端 sourceType / seq 是 Integer） */
+function nodeTypeBody(input: NodeTypeInput): Record<string, unknown> {
+  const body: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(input)) {
+    if (value === undefined) continue
+    if (key === 'sourceType') {
+      if (value !== '' && value !== null) body.sourceType = Number(value)
+      continue
+    }
+    body[key] = value
+  }
+  return body
 }
 
 // 类型化接口：每个方法一一对应一个真实 /v1 端点。后续按 142 个端点逐域补全。
@@ -2561,6 +2576,37 @@ export const configApi = {
       const r = row as Record<string, unknown>
       return { sourceType: String(r.sourceType ?? ''), typeName: String(r.typeName ?? '') }
     }).filter((item) => item.sourceType)
+  },
+  /**
+   * 节点类型维护（0924-04，系统设置 → 节点类型）。旧平台 `api/source-type.js`，2026-09-24 生产逐个实测：
+   * - list **不分页**，`typeName` 模糊匹配；读接口成功时 `code` 是 null（client 只把非空非 '0' 的 code 当失败，正好兼容）；
+   * - add / update 走 **JSON body**；add 可不传 sourceType（后端取 max+1），返回 data = 新类型 ID；
+   * - update 是**增量更新**：只传改动字段，其余不动——所以调用方只发变更字段，别把表单空值整份发过去；
+   * - delete 不接：被引用时后端会不会拒删无法无损验证（0924 方案 §4.2 / B-3），新平台不提供删除。
+   */
+  nodeTypeList: async (typeName?: string): Promise<NodeType[]> => {
+    const result = await request<unknown>('sourceType/list', { typeName }, {
+      method: 'GET',
+      httpParams: { typeName: typeName?.trim() || undefined },
+    })
+    const rows = Array.isArray(result) ? result : ((result as { list?: unknown[] } | null)?.list ?? [])
+    return rows.map(nodeTypeFromLegacy).filter((t) => t.sourceType)
+  },
+  nodeTypeDetail: async (sourceType: string): Promise<NodeType | null> => {
+    const result = await request<unknown>('sourceType/detail', { sourceType }, {
+      method: 'GET',
+      httpParams: { sourceType },
+    })
+    return result ? nodeTypeFromLegacy(result) : null
+  },
+  nodeTypeAdd: async (input: NodeTypeInput): Promise<Ack> => {
+    const body = nodeTypeBody(input)
+    return request<Ack>('sourceType/add', body, { method: 'POST', httpParams: body })
+  },
+  /** `patch` 只放改动的字段；sourceType 是主键，必带 */
+  nodeTypeUpdate: async (sourceType: string, patch: NodeTypeInput): Promise<Ack> => {
+    const body = { ...nodeTypeBody(patch), sourceType: Number(sourceType) }
+    return request<Ack>('sourceType/update', body, { method: 'POST', httpParams: body })
   },
   configParams: async (configId: string, p: PageQuery = {}) => {
     const result = await request<Paged<unknown>>('config/configParams', { configId, ...p }, {

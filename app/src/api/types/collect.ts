@@ -50,6 +50,27 @@ export interface SourceTypeDict {
   typeName: string
 }
 
+/**
+ * 节点类型完整记录（0924-04，系统设置 → 节点类型）。旧平台叫「源类型」，表 cfg_source_type。
+ * 字段名沿用后端；`procType` / `params` 旧页面没展示，只读透传。
+ */
+export interface NodeType {
+  sourceType: string
+  typeName: string
+  /** 配置队列（旧列名「配置队列」），如 source-config / source-config-mail */
+  downType: string
+  /** 默认消息队列 */
+  topic: string
+  /** 排序 */
+  seq: number | null
+  notes: string
+  procType: string
+  params: string
+}
+
+/** 新建时 sourceType 可不填（后端取 max+1）；修改时只传要改的字段（后端增量更新，2026-09-24 实测） */
+export type NodeTypeInput = Partial<Omit<NodeType, 'procType' | 'params'>>
+
 export interface ConfigParamBinding {
   id: string
   paramId: string

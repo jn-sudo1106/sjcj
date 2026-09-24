@@ -224,6 +224,14 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
    */
   'config/entryTypeAddAll',
   'config/modifyEntryType',
+  /**
+   * 2026-09-24 放开（0924-04）：节点类型的新增与修改（系统设置 → 节点类型）。
+   * 0924 会议定的迁移项，旧平台「配置 → 源类型」同样即时写库。add 是纯新增；update 是后端**增量更新**
+   * （只改传过去的字段），临时类型 99901 在生产闭环实测过。**删除不放**：被引用时是否拒删未验证，
+   * 新平台不提供删除入口，需要删去旧平台（0924 方案 §4.2）。
+   */
+  'sourceType/add',
+  'sourceType/update',
 ])
 
 function isProductionWriteAllowed(httpEndpoint: string): boolean {

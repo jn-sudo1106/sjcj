@@ -10,6 +10,7 @@ import type {
   EntryField,
   EntryType,
   EntryTypeGroup,
+  NodeType,
   Paged,
   Param,
   ParamInput,
@@ -1227,6 +1228,23 @@ export function siteSummaryFromLegacy(input: unknown): SiteSummary {
 }
 
 /** data-view 网站下源列表到本平台 Source 的只读映射。 */
+/** 节点类型（sourceType/list、detail）→ NodeType。后端 seq 可能为 null，数字字段统一转 number|null */
+export function nodeTypeFromLegacy(input: unknown): NodeType {
+  const r = (input ?? {}) as Record<string, unknown>
+  const str = (v: unknown) => (v == null ? '' : String(v))
+  const seq = r.seq == null || r.seq === '' ? null : Number(r.seq)
+  return {
+    sourceType: str(r.sourceType),
+    typeName: str(r.typeName),
+    downType: str(r.downType),
+    topic: str(r.topic),
+    seq: Number.isFinite(seq) ? seq : null,
+    notes: str(r.notes),
+    procType: str(r.procType),
+    params: str(r.params),
+  }
+}
+
 export function siteSourceFromLegacy(input: unknown): Source {
   return sourceFromLegacy(input)
 }
