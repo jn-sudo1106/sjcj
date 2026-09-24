@@ -73,7 +73,9 @@ import { encryptLegacyPayload } from './legacyCrypto'
 export { fetchModelProviders, fetchDefaultModels } from './model'
 export { fetchPromptList } from './prompt'
 export type { PromptTemplateItem } from './prompt'
+export type { UsedTable } from '@/utils/site/usedTables'
 import { issueTagsForWrite, parseIssueTags } from '@/utils/sourceMark'
+import { aggregateUsedTables, countSourcesWithoutFlow, type UsedTable } from '@/utils/site/usedTables'
 
 export * from './types'
 export { isDanger, DANGER_ENDPOINTS, isMockMode, isProductionBackend, isProductionCreateEnabled } from './client'
@@ -1144,8 +1146,75 @@ async function loadSiteTables(
   return { tables }
 }
 
+/**
+ * 网站用到的表（0924-09）。聚合规则见 utils/site/usedTables.ts。
+ *
+ * 请求编排：
+ * 1. `siteSources`（已有 10s 缓存，数据视图本来就要拉）→ 按 flowId 去重；
+ * 2. 每批 4 个调 `flowCenterApi.steps(flowId, { withConfigDetails: false })`。
+ *    **并发上限不能省**：client.ts 的超时从入队算，6 路占满连接会把同期的数据查询挤到超时
+ *    （loadSiteTables 注释里 0920 的教训）；单个流程失败不阻断，记进 failedFlowIds；
+ * 3. `entryTypesGroup`（全库表目录）补表名。
+ * 按 siteId 缓存，失败不缓存。失效两道：
+ * - 节点写接口（itemApi 的 saveItemConfig / stepModify / deleteStep，会写 entryTypeId / outEntry）成功后整体清空；
+ * - 60s 有效期兜底：源换网站、换流程、改主表的入口太散，不逐个接。
+ */
+export interface SiteUsedTablesResult {
+  tables: UsedTable[]
+  /** 没关联流程的源数：这些源只统计了主表 */
+  noFlowSourceCnt: number
+  /** 节点没查回来的流程：用到这些流程的源只统计了主表 */
+  failedFlowIds: string[]
+}
+const siteUsedTablesCache = new Map<string, { at: number; promise: Promise<SiteUsedTablesResult> }>()
+const SITE_USED_TABLES_TTL = 60_000
+const FLOW_STEPS_CONCURRENCY = 4
+/** 节点的输入 / 输出表可能变了：所有网站的"用到的表"一起作废（重算只是按流程查几次，不贵） */
+function invalidateSiteUsedTables<T>(result: Promise<T>): Promise<T> {
+  return result.then((value) => {
+    siteUsedTablesCache.clear()
+    return value
+  })
+}
+
+async function loadSiteUsedTables(siteId: string): Promise<SiteUsedTablesResult> {
+  const [sources, group] = await Promise.all([siteApi.siteSources(siteId), dataApi.entryTypesGroup()])
+  const flowIds = [...new Set(sources.map((s) => String(s.flowId ?? '')).filter((id) => id && id !== '0'))]
+  const stepsByFlow = new Map<string, Step[]>()
+  const failedFlowIds: string[] = []
+  for (let i = 0; i < flowIds.length; i += FLOW_STEPS_CONCURRENCY) {
+    const batch = flowIds.slice(i, i + FLOW_STEPS_CONCURRENCY)
+    const results = await Promise.allSettled(batch.map((flowId) => flowCenterApi.steps(flowId, { withConfigDetails: false })))
+    results.forEach((result, idx) => {
+      if (result.status === 'fulfilled') stepsByFlow.set(batch[idx]!, result.value)
+      else failedFlowIds.push(batch[idx]!)
+    })
+  }
+  const catalog = [...group.list1, ...group.list2, ...group.list3]
+  return {
+    tables: aggregateUsedTables(sources, stepsByFlow, catalog),
+    noFlowSourceCnt: countSourcesWithoutFlow(sources),
+    failedFlowIds,
+  }
+}
+
 // 网站—源父子模型（0707 优化·Phase2）：网站=统一流程模板+批量工具（不运行），源=运行实体
 export const siteApi = {
+  /** 网站源实际用到的表（主表 ∪ 流程节点的输入/输出表），带每张表的源名单（0924-09） */
+  siteUsedTables: (siteId: string, options: { force?: boolean } = {}): Promise<SiteUsedTablesResult> => {
+    const hit = siteUsedTablesCache.get(siteId)
+    if (!options.force && hit && Date.now() - hit.at < SITE_USED_TABLES_TTL) return hit.promise
+    const promise = loadSiteUsedTables(siteId)
+    const entry = { at: Date.now(), promise }
+    siteUsedTablesCache.set(siteId, entry)
+    promise.catch(() => {
+      if (siteUsedTablesCache.get(siteId) === entry) siteUsedTablesCache.delete(siteId)
+    })
+    return promise
+  },
+  refreshSiteUsedTables: (siteId: string) => {
+    siteUsedTablesCache.delete(siteId)
+  },
   sitePaged: async (p?: PageQuery) => {
     const state = String(p?.state ?? '')
     const category = String(p?.category ?? '')
@@ -3048,14 +3117,15 @@ export const flowCenterApi = {
    *   孤儿步骤也画出来。
    * 另外 svg 模式下子步骤的 `lastStep` 会从哨兵 `'0'` 改写成根节点的真实 ID，拓扑天然连得上。
    */
-  steps: async (flowId: string): Promise<Step[]> => {
+  steps: async (flowId: string, options: { withConfigDetails?: boolean } = {}): Promise<Step[]> => {
     const result = await request<unknown>('item/next/nextConfigPaged', { flowId }, {
       method: 'GET',
       httpEndpoint: 'item/next/nextConfigPaged',
       httpParams: { flowId, page: 1, limit: 10000, svg: true },
     })
     const steps = sourceStepsFromLegacy(result, '')
-    return attachStepConfigDetails(steps)
+    // 只要表 ID 的调用方（siteUsedTables）跳过逐配置补查，与 sourceApi.sourceSteps 同一个开关
+    return options.withConfigDetails === false ? steps : attachStepConfigDetails(steps)
   },
 }
 
@@ -3064,18 +3134,18 @@ export const itemApi = {
   /** 新建步骤。旧平台真实调用是 `axios({method:'post', params})`——POST 但走 query string，
    *  不是 JSON body，所以这里显式 `paramsIn: 'query'`。响应 data 为 null，不回新 itemConfig，
    *  调用方要再查 nextConfigPaged 用差集定位。新建默认停用，随后 enable(id, '0')。 */
-  saveItemConfig: (step: Step) => request<Ack>('item/next/saveItemConfig', stepToSaveItemConfigPayload(step), {
+  saveItemConfig: (step: Step) => invalidateSiteUsedTables(request<Ack>('item/next/saveItemConfig', stepToSaveItemConfigPayload(step), {
     method: 'POST',
     httpEndpoint: 'item/next/saveItemConfig',
     paramsIn: 'query',
-  }),
+  })),
   /** 修改步骤。旧平台真实调用是 `axios({method:'post', data})`，JSON body。字段契约
    *  2026-08-26 用测试源 430016398（itemConfig 40600）原样提交实测确认。
    *  必须带齐快照字段（url / itemId / lastStep / mainConfig），只改 name/cond 也会整包提交。 */
-  stepModify: (step: Step) => request<Ack>('item/next/stepModify', stepToStepModifyPayload(step), {
+  stepModify: (step: Step) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', stepToStepModifyPayload(step), {
     method: 'POST',
     httpEndpoint: 'item/next/stepModify',
-  }),
+  })),
   /** 启停步骤。GET `id` + `state`。state：`'0'` 启用 / `'1'` 停用，与 isDelete 同口径。
    *  后端操作日志文案可能写反，以 isDelete / enabled 为准。 */
   enable: (stepId: string, state: string) => request<Ack>('item/next/enable', { id: stepId, state }, {
@@ -3084,11 +3154,11 @@ export const itemApi = {
     httpParams: { id: stepId, state },
   }),
   /** 删除步骤。GET `id` = itemConfig。虚拟起点 0 和本地草稿 id 不要调。 */
-  deleteStep: (stepId: string) => request<Ack>('item/next/delete', { id: stepId }, {
+  deleteStep: (stepId: string) => invalidateSiteUsedTables(request<Ack>('item/next/delete', { id: stepId }, {
     method: 'GET',
     httpEndpoint: 'item/next/delete',
     httpParams: { id: stepId },
-  }),
+  })),
 }
 
 export interface CategoryCreateParams {
