@@ -110,10 +110,23 @@ const remarkFilter = ref('')
  * `remark=%` 得 8 条、全部有备注；`remark=NULL` 得 5883 条、抽样全是 null；8 + 5883 = 5891。
  * 换站 81 复核也吻合。原先以为要提后端需求（B28），复测后撤回了。
  *
- * 与关键字互斥：后端 `remark` 只有一个参数，既是关键字又是空值标记，表达不了"含 X 且非空"。
+ * 2026-09-24 产品调整：去掉「不限」选项，只留「有备注 / 无备注」，且**有备注时也要能按关键字搜**。
+ * - 未选（占位「备注」）：不按备注状态筛，关键字照常可用；
+ * - 有备注：不填关键字 = `remark=%`（所有有备注的）；填了关键字 = 按关键字搜（命中关键字本身就意味着非空）；
+ * - 无备注：`remark=NULL`，关键字框禁用——"没有备注又含 X"不成立。
+ * 默认必须是"未选"而不是「有备注」：否则源列表一进来只剩有备注的那几个（站 12 是 8/5891）。
  */
-const remarkMode = ref<'any' | 'has' | 'none'>('any')
-const REMARK_SENTINEL = { has: '%', none: 'NULL' } as const
+const remarkMode = ref<'' | 'has' | 'none'>('')
+function remarkParam(): string | undefined {
+  const keyword = remarkFilter.value.trim()
+  if (remarkMode.value === 'none') return 'NULL'
+  if (keyword) return keyword
+  return remarkMode.value === 'has' ? '%' : undefined
+}
+function clearRemarkMode() {
+  remarkMode.value = ''
+  search()
+}
 /**
  * 数据量上限（0920-01）。会上原话：「这个页面支持 sql 查询，比如数据<5」。
  *
@@ -151,7 +164,7 @@ function currentQuery(): SourceFilter {
     state: statusFilter.value === 'all' || statusFilter.value === 'disabled' ? undefined : statusFilter.value,
     enable: statusFilter.value === 'disabled' ? '1' : statusFilter.value === 'all' ? undefined : '0',
     tags: tagFilter.value ? [issueTagForWrite(tagFilter.value)].filter(Boolean) : [],
-    remark: remarkMode.value === 'any' ? (remarkFilter.value || undefined) : REMARK_SENTINEL[remarkMode.value],
+    remark: remarkParam(),
     count: parsedDataCountMax.value,
     field: sortField.value || undefined,
     sorted: sortField.value ? (sortDirection.value === 'asc' ? 1 : -1) : undefined,
@@ -198,7 +211,7 @@ function clearFilters() {
   statusFilter.value = 'all'
   tagFilter.value = ''
   remarkFilter.value = ''
-  remarkMode.value = 'any'
+  remarkMode.value = ''
   dataCountMax.value = ''
   search()
 }
@@ -834,21 +847,31 @@ watch(() => ui.sourceListRevision, () => {
           <option v-for="tag in tagCandidates" :key="tag" :value="tag">{{ tag }}</option>
         </select>
       </label>
-      <!-- 备注：三态 ＋ 关键字。互斥——后端 remark 只有一个参数，
-           既当关键字又当空值标记，表达不了"含 X 且非空"（0920-07）。 -->
+      <!-- 备注：有备注 / 无备注 ＋ 关键字（2026-09-24 去掉「不限」，有备注时也能搜）。
+           未选时是占位「备注」，不按备注状态筛；选了之后旁边的 × 回到未选。 -->
       <label>备注
         <span class="sov-remark-filter">
-          <select v-model="remarkMode" data-testid="source-overview-remark-mode" @change="search">
-            <option value="any">不限</option>
-            <option value="has">有备注</option>
-            <option value="none">无备注</option>
-          </select>
+          <span class="sov-remark-mode">
+            <select v-model="remarkMode" data-testid="source-overview-remark-mode" :class="{ placeholder: !remarkMode }" @change="search">
+              <option value="" disabled hidden>备注</option>
+              <option value="has">有备注</option>
+              <option value="none">无备注</option>
+            </select>
+            <button
+              v-if="remarkMode"
+              type="button"
+              class="sov-remark-clear"
+              data-testid="source-overview-remark-mode-clear"
+              aria-label="不按备注状态筛选"
+              @click.prevent="clearRemarkMode"
+            >×</button>
+          </span>
           <input
             v-model="remarkFilter"
             data-testid="source-overview-remark"
             placeholder="备注关键字"
-            :disabled="remarkMode !== 'any'"
-            :title="remarkMode === 'any' ? '' : '选了「有备注 / 无备注」时不能再按关键字筛'"
+            :disabled="remarkMode === 'none'"
+            :title="remarkMode === 'none' ? '选了「无备注」时不能再按关键字搜' : ''"
             @keyup.enter="search"
           />
         </span>
@@ -1059,6 +1082,14 @@ watch(() => ui.sourceListRevision, () => {
 .sov-filter .sov-search input { min-width: 190px; }
 .sov-remark-filter { display: flex; gap: 4px; }
 .sov-filter .sov-remark-filter select { min-width: 78px; }
+.sov-remark-mode { position: relative; display: inline-flex; }
+.sov-filter .sov-remark-filter select.placeholder { color: var(--rc-faint); }
+.sov-remark-clear {
+  position: absolute; right: 18px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%;
+  background: transparent; color: var(--rc-muted); font-size: 13px; line-height: 16px; cursor: pointer;
+}
+.sov-remark-clear:hover { background: #e2e8f0; color: var(--rc-text); }
 .sov-filter .sov-remark-filter input { min-width: 104px; }
 /* 数字框不需要和文本框一样宽：一行已经很挤（源 ID / 名称 / URL / 状态 / 标签 / 备注 / 数据量） */
 .sov-filter input.sov-num { min-width: 84px; width: 84px; }

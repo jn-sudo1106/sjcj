@@ -1025,7 +1025,7 @@ describe('源视图 · 按数据量筛选（0920-01）', () => {
 
 // 0920-07：会上要「备注为空 / 不为空」。原以为要提后端（B28），2026-09-21 复测发现
 // 后端本来就支持：remark=% 是有备注、remark=NULL 是无备注（站 12：8 + 5883 = 5891）。
-describe('源视图 · 备注三态（0920-07）', () => {
+describe('源视图 · 备注筛选（0920-07，2026-09-24 调整为有 / 无备注 + 可搜）', () => {
   const source: Source = {
     sourceId: 'src-1', name: '源', url: 'https://a.example.com', configId: 'cfg-1',
     mainTable: 'T1', owner: 'admin', state: 'C',
@@ -1040,46 +1040,69 @@ describe('源视图 · 备注三态（0920-07）', () => {
   }
   const lastQuery = (page: { mock: { calls: unknown[][] } }) => page.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined
 
-  it('「有备注」发 remark=%，「无备注」发 remark=NULL，「不限」按关键字走', async () => {
+  // 2026-09-24：去掉「不限」，只留有备注 / 无备注；有备注时也能按关键字搜
+  it('没有「不限」选项；默认未选（占位「备注」），不按备注筛', async () => {
     const { wrapper, page } = await mountWithSpy()
+    const select = wrapper.get('[data-testid="source-overview-remark-mode"]')
+    const visible = select.findAll('option').filter((o) => o.attributes('hidden') === undefined).map((o) => o.text())
+    expect(visible).toEqual(['有备注', '无备注'])
+    expect((select.element as HTMLSelectElement).value).toBe('')
 
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(lastQuery(page)?.remark).toBeUndefined()
+  })
+
+  it('「有备注」不填关键字发 remark=%；填了关键字按关键字搜', async () => {
+    const { wrapper, page } = await mountWithSpy()
     await wrapper.get('[data-testid="source-overview-remark-mode"]').setValue('has')
     await flushPromises()
     expect(lastQuery(page)?.remark).toBe('%')
+    expect((wrapper.get('[data-testid="source-overview-remark"]').element as HTMLInputElement).disabled).toBe(false)
 
-    await wrapper.get('[data-testid="source-overview-remark-mode"]').setValue('none')
-    await flushPromises()
-    expect(lastQuery(page)?.remark).toBe('NULL')
-
-    await wrapper.get('[data-testid="source-overview-remark-mode"]').setValue('any')
     await wrapper.get('[data-testid="source-overview-remark"]').setValue('超时')
     await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
     await flushPromises()
     expect(lastQuery(page)?.remark).toBe('超时')
   })
 
-  // 后端 remark 只有一个参数，既当关键字又当空值标记，表达不了"含 X 且非空"
-  it('选了有/无备注时，关键字框禁用，且不会把关键字一起发出去', async () => {
+  it('「无备注」发 remark=NULL，关键字框禁用且不会把关键字一起发出去', async () => {
     const { wrapper, page } = await mountWithSpy()
     await wrapper.get('[data-testid="source-overview-remark"]').setValue('超时')
-    await wrapper.get('[data-testid="source-overview-remark-mode"]').setValue('has')
+    await wrapper.get('[data-testid="source-overview-remark-mode"]').setValue('none')
     await flushPromises()
 
     expect((wrapper.get('[data-testid="source-overview-remark"]').element as HTMLInputElement).disabled).toBe(true)
-    expect(lastQuery(page)?.remark).toBe('%')
+    expect(lastQuery(page)?.remark).toBe('NULL')
   })
 
-  it('「清空」把三态也还原成不限', async () => {
+  it('未选状态下关键字照常可搜', async () => {
     const { wrapper, page } = await mountWithSpy()
+    await wrapper.get('[data-testid="source-overview-remark"]').setValue('超时')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(lastQuery(page)?.remark).toBe('超时')
+  })
+
+  it('点 × 回到未选并重新查询；「清空」同样还原', async () => {
+    const { wrapper, page } = await mountWithSpy()
+    expect(wrapper.find('[data-testid="source-overview-remark-mode-clear"]').exists()).toBe(false)
     await wrapper.get('[data-testid="source-overview-remark-mode"]').setValue('none')
     await flushPromises()
     expect(lastQuery(page)?.remark).toBe('NULL')
 
+    await wrapper.get('[data-testid="source-overview-remark-mode-clear"]').trigger('click')
+    await flushPromises()
+    expect(lastQuery(page)?.remark).toBeUndefined()
+    expect((wrapper.get('[data-testid="source-overview-remark-mode"]').element as HTMLSelectElement).value).toBe('')
+
+    await wrapper.get('[data-testid="source-overview-remark-mode"]').setValue('has')
+    await flushPromises()
     const clear = wrapper.findAll('button').find((b) => b.text() === '清空')
     await clear?.trigger('click')
     await flushPromises()
     expect(lastQuery(page)?.remark).toBeUndefined()
-    expect((wrapper.get('[data-testid="source-overview-remark-mode"]').element as HTMLSelectElement).value).toBe('any')
+    expect((wrapper.get('[data-testid="source-overview-remark-mode"]').element as HTMLSelectElement).value).toBe('')
   })
 })
 
