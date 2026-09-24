@@ -8,7 +8,7 @@ import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useDuplicateNode } from '@/views/FlowCanvas/canvas/useDuplicateNode'
 import {
-  BIZ_TYPE_OPTIONS, WEB_TYPE_OPTIONS, defaultMultiMode, decisionOrParallelKind, collectorCapabilityOf, isRuleNode, isRuleLikeNode,
+  BIZ_TYPE_OPTIONS, WEB_TYPE_OPTIONS, defaultMultiMode, decisionOrParallelKind, collectorCapabilityOf, isRuleNode, isRuleLikeNode, nodeTypeLabel,
   type CollectConfig, type CollectorSchedule, type LoginConfigRef, type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { configApi, sourceApi } from '@/api'
@@ -39,10 +39,11 @@ const isRule = computed(() => isRuleNode(cfg.value))
 // 翻译助手 / 打标签 / 摘要 / 音频转文字 / 视频转音频（2026-09-18）：节点配置与规则处理保持一致——只有「节点名称 + 定时策略」，
 // 不再渲染通用的基础字段/参数三元表/发起抓取信息（那些是给自定义/规划中节点兜底的占位内容）。
 const isRuleLike = computed(() => isRuleLikeNode(cfg.value))
-// 规则节点分两种「起名方式」：规则处理 / 数据监控，配置结构完全一样（复用同一套 rule 种子），
-// 差别只在标题——节点名称就是它自己的名字，所以按标题里含不含「数据监控」来判断提示文案该说哪个。
-const ruleKindLabel = computed(() => (cfg.value?.title?.includes('数据监控') ? '数据监控名称' : '规则处理名称'))
 const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
+const currentNodeType = computed(() => {
+  if (!cfg.value) return '—'
+  return nodeTypeLabel(cfg.value) || nodeCapability.value?.label || '—'
+})
 const isLoginNode = computed(() => nodeCapability.value?.kind === 'login')
 
 // 采集节点运行设置（0711 R5）：代理/断点续爬/登录迁到节点级；缺省读一次 Source 同名旧字段兜底展示（1:1+fallback）
@@ -287,8 +288,17 @@ watch(
       const current = flow.configs[nodeId]
       if (!current || current.configId !== cid || current.configUrl) return
       const url = configUrlFromLegacy(raw)
-      if (!url) return
-      flow.hydrateConfigUrl(nodeId, url)
+      if (url) flow.hydrateConfigUrl(nodeId, url)
+      if (raw?.configType && !current.configType) {
+        current.configType = String(raw.configType)
+      }
+      if (current.configType === '150' && (current.template === 'rule' || !current.template)) {
+        current.template = 'ocr'
+        if (!current.sub || current.sub.includes('规则处理')) current.sub = '[150] OCR抓取 · 图片文字识别'
+      } else if (current.configType === '800' && (current.template === 'rule' || !current.template)) {
+        current.template = 'translate'
+        if (!current.sub || current.sub.includes('规则处理')) current.sub = '[800] 翻译助手 · 多语言互译'
+      }
     } catch {
       // 读不到保持空；保存仍走 base.configUrl 兜底，不会把后端真值抹掉
     }
@@ -306,7 +316,7 @@ watch(
          采集节点上做成只读 + 「编辑」弹窗，既不让用户以为底部按钮把整屏都存了。
          源 URL 按 0828 D07 / 0829：属于源，在左侧「源详情」只读展示并编辑，不在节点配置 Tab。
          规则节点的节点名称 = 规则名称，直接编辑（「选择已有」入口 2026-09-04 已删，见下方注释）。 -->
-    <div class="rc-field"><label>节点名称{{ isRule ? `（= ${ruleKindLabel}）` : '' }}</label>
+    <div class="rc-field"><label>节点名称</label>
       <div v-if="isRule" class="rc-input-group">
         <input class="rc-input" :value="cfg?.title" placeholder="直接输入规则名称" @input="onTitle" />
       </div>
@@ -317,6 +327,10 @@ watch(
       <input v-else class="rc-input" :value="cfg?.title" @input="onTitle" />
     </div>
     <EditNodeSourceDialog v-model:open="editNodeSourceOpen" :node-id="id" />
+    <!-- 节点类型（所有节点通用展示，从节点配置提取准确名称；OCR/AI/规则/媒体等所有新增节点一并展示） -->
+    <div class="rc-field"><label>节点类型</label>
+      <div class="rc-readonly" data-testid="node-type-display">{{ currentNodeType }}</div>
+    </div>
     <!-- 定时策略：采集节点挪到「运行设置」上方（见下）；非采集节点没有运行设置，仍留在这里 -->
     <!-- 有定时就默认展开（2026-09-18 用户提）：收着的话根本不知道这个源还有定时在跑 -->
     <details v-if="!cc" class="ni-schedule" :open="!!flow.sourceJob">
@@ -403,10 +417,6 @@ watch(
         </div>
         <div class="rc-help">字段按旧平台登录配置保持一致；发起抓取时默认使用默认配置，也可以临时切换。</div>
       </template>
-      <!-- 节点类型（0824-00 §6.2 替代「网页类型」）：直接取当前节点的类型，添加节点时就已确定，这里只读 -->
-      <div class="rc-field"><label>节点类型</label>
-        <div class="rc-readonly">{{ nodeCapability?.label ?? '—' }}</div>
-      </div>
       <!-- 网页类型（2026-08-28 拍板）：展示沿用新平台原有说法，落库仍是旧 `isMulti`。
            **只给两项**：列表页(1) / 详情页(0)；`2 更新父表` 不由用户选，按「输入表 == 输出表」推导。
            这一项没有被「节点类型」取代：节点类型（= 旧「抓取类型」= configType）不分列表/详情，

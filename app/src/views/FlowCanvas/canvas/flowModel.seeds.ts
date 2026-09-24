@@ -1171,6 +1171,7 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
   cfg.disabled = !step.enabled
   if (step.configId) cfg.configId = step.configId
   if (step.configName) cfg.configName = step.configName
+  if (step.configType) cfg.configType = String(step.configType)
   if (step.configUrl !== undefined) cfg.configUrl = step.configUrl
   if (step.runPolicy !== undefined) cfg.runPolicy = step.runPolicy
   if (step.itemId !== undefined) cfg.itemId = step.itemId
@@ -1281,6 +1282,12 @@ function buildNodeForStep(source: Source, step: Step, index: number): NodeConfig
   else if (step.configType === '710') cfg.template = 'audio-text'
   else if (step.configType === '700') cfg.template = 'video-audio'
   else if (step.configType === '150') cfg.template = 'ocr'
+  else if (/ocr/i.test(cfg.title)) cfg.template = 'ocr'
+  else if (/翻译/.test(cfg.title)) cfg.template = 'translate'
+  else if (/打标签|标注/.test(cfg.title)) cfg.template = 'article-tag'
+  else if (/摘要/.test(cfg.title)) cfg.template = 'article-summary'
+  else if (/音频|录音/.test(cfg.title)) cfg.template = 'audio-text'
+  else if (/视频/.test(cfg.title)) cfg.template = 'video-audio'
   if (cfg.collectCfg) {
     // 源级字段（源名称/分类/标签/登录/选用配置等）不再复制到节点：随 loadFromSource 整体挂到 flow.sourceCfg（0706 优化·源/节点配置分层）
     cfg.collectCfg.url = source.url
@@ -1319,21 +1326,11 @@ export function applyStepDetails(
       || /数据校验/.test(step.name)
     const isDataValidation = current.template === 'data-validation'
     /**
-     * AI / 媒体处理类（700 视频转音频 / 710 语音转文字 / 720 文章摘要 / 730 文章打标签）
+     * AI / 媒体处理类（150 OCR / 700 视频转音频 / 710 语音转文字 / 720 文章摘要 / 730 文章打标签 / 800 翻译）
      * 同样要整节点重建，不能只补字段（2026-09-18）。
-     *
-     * 首屏是按**位置**猜模板画出来的，第二个节点通常猜成采集类；configDetail 回来后
-     * `applyStepMetadata` 只把 `cfg.template` 改成 'article-summary'，**`collectCfg` 还挂着**，
-     * 于是节点一半是摘要、一半是采集：卡片显示「90 网页抓取 / 源配置」，
-     * 底部状态也走采集分支去要 URL 和输出表。实测源 430022794 的第二个节点就是这样。
-     *
-     * 2026-09-18 起翻译助手 / 文章打标签步骤的 type 与规则处理一样写 'rule'（发后续按
-     * type 派发执行器，写 entry 会 500），首屏没有 configType 时会被先画成**规则节点**
-     *（带 ruleCfg）——它同样不是处理类节点，必须重建；所以 isProcessing 的判定要
-     * 把「带着 ruleCfg 的规则节点」也排除掉，而不是只看有没有 collectCfg。
      */
-    const shouldBeProcessing = ['700', '710', '720', '730'].includes(String(step.configType ?? ''))
-    const isProcessing = !current.collectCfg && !current.ruleCfg
+    const shouldBeProcessing = ['150', '700', '710', '720', '730', '800'].includes(String(step.configType ?? ''))
+    const isProcessing = current.template === 'ocr' || current.template === 'translate' || (!current.collectCfg && !current.ruleCfg)
     if (
       (shouldBeLogin && !isLogin)
       || (shouldBeDataValidation && !isDataValidation)

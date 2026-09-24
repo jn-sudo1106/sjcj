@@ -234,12 +234,12 @@ describe('RuleTableFieldBinder · 字段默认选择', () => {
   })
 })
 
-// 2026-09-23：入参 / 出参统一成网页抓取那种勾选墙（代码 · 中文名 + 全选 / 清空）
+// 2026-09-23：入参 / 出参统一成勾选墙（与数据视图对齐的「中文-K」格式 + 全选 / 清空）
 describe('RuleTableFieldBinder · 勾选墙（与网页抓取表配置统一）', () => {
   const fields: RuleFieldOption[] = [
-    { itemCode: 'URLTITLE', itemName: '标题' },
-    { itemCode: 'video_minio', itemName: '视频minio地址' },
-    { itemCode: 'SYS_ID', itemName: '系统ID', seq: -1 } as RuleFieldOption,
+    { itemCode: 'URLTITLE', itemName: '标题', columnName: 'K1' },
+    { itemCode: 'video_minio', itemName: '视频minio地址', columnName: 'K19' },
+    { itemCode: 'SYS_ID', itemName: '系统ID', columnName: 'SYS_ID', seq: -1 } as RuleFieldOption,
   ]
   function mountWithFields(model: Partial<RuleOrchestration>) {
     setActivePinia(createPinia())
@@ -256,13 +256,13 @@ describe('RuleTableFieldBinder · 勾选墙（与网页抓取表配置统一）'
   const lastPatch = (w: ReturnType<typeof mountWithFields>) =>
     (w.emitted('update:modelValue') ?? []).at(-1)?.[0] as Partial<RuleOrchestration>
 
-  it('字段显示成「代码 · 中文名」，系统字段默认不显示；已选中的系统字段照样显示', async () => {
+  it('字段显示成「中文-K」，系统字段默认不显示；已选中的系统字段照样显示', async () => {
     const w = mountWithFields({ inputFields: ['URLTITLE'], outputFields: ['SYS_ID'] })
     await flushPromises()
-    expect(w.get('[data-testid="rule-input-fields"]').text()).toContain('URLTITLE · 标题')
+    expect(w.get('[data-testid="rule-input-fields"]').text()).toContain('标题-K1')
     expect(w.get('[data-testid="rule-input-fields"]').text()).not.toContain('SYS_ID')
     // 出参里 SYS_ID 已选中：虽是系统字段也要显示，否则勾着却看不见、取消不了
-    expect(w.get('[data-testid="rule-output-fields"]').text()).toContain('SYS_ID · 系统ID')
+    expect(w.get('[data-testid="rule-output-fields"]').text()).toContain('系统ID-SYS_ID')
   })
 
   it('全选 = 可选池全勾上；清空 = 一个不留', async () => {
@@ -288,12 +288,71 @@ describe('RuleTableFieldBinder · 勾选墙（与网页抓取表配置统一）'
     await flushPromises()
     const inputShown = () => w.get('[data-testid="rule-input-fields"]').findAll('.rc-tag').map((t) => t.text())
 
-    expect(inputShown()).toEqual(['URLTITLE · 标题'])
+    expect(inputShown()).toEqual(['标题-K1'])
     await w.get('[data-testid="rule-input-only-selected"]').trigger('click')
-    expect(inputShown()).toEqual(['URLTITLE · 标题', 'video_minio · 视频minio地址'])
+    expect(inputShown()).toEqual(['标题-K1', '视频minio地址-K19'])
 
     // 出参一个没选：直接看到全部可选项，没有切换按钮
     expect(w.get('[data-testid="rule-output-fields"]').findAll('.rc-tag')).toHaveLength(2)
     expect(w.find('[data-testid="rule-output-only-selected"]').exists()).toBe(false)
+  })
+
+  it('中文名缺失或与物理列相同时仅显示物理列（如 ENTRY_ID、K10）', async () => {
+    const rawFields: RuleFieldOption[] = [
+      { itemCode: 'ENTRY_ID', itemName: 'ENTRY_ID', columnName: 'ENTRY_ID' },
+      { itemCode: 'col_10', itemName: '', columnName: 'K10' },
+      { itemCode: 'raw_code', itemName: '测试名' },
+    ]
+    const w = mount(RuleTableFieldBinder, {
+      global: { plugins: [ElementPlus] },
+      props: {
+        modelValue: { inputTableId: '2101720', inputTable: 'TB_TEST', inputFields: ['ENTRY_ID', 'col_10', 'raw_code'], outputFields: [] },
+        inputFieldOptions: rawFields,
+        outputFieldOptions: rawFields,
+      },
+    })
+    await flushPromises()
+    const tags = w.get('[data-testid="rule-input-fields"]').findAll('.rc-tag').map((t) => t.text())
+    expect(tags).toEqual(['ENTRY_ID', 'K10', '测试名-raw_code'])
+  })
+
+  it('表定义无系统字段时，点击「显示系统字段」自动补全底层通用系统字段并展开显示', async () => {
+    // 模拟 900 通用新闻表：只带业务列 K1/K2
+    const bizOnlyFields: RuleFieldOption[] = [
+      { itemCode: 'title', itemName: '标题', columnName: 'K1', seq: 1 },
+      { itemCode: 'url', itemName: 'URL', columnName: 'K2', seq: 2 },
+    ]
+    const w = mount(RuleTableFieldBinder, {
+      global: { plugins: [ElementPlus] },
+      props: {
+        modelValue: { inputTableId: '900', inputTable: 'TB_CNEWS', inputFields: ['title', 'url'], outputFields: [] },
+        inputFieldOptions: bizOnlyFields,
+        outputFieldOptions: bizOnlyFields,
+      },
+    })
+    await flushPromises()
+
+    // 默认只显示业务字段 2 个
+    expect(w.get('[data-testid="rule-input-fields"]').findAll('.rc-tag')).toHaveLength(2)
+    const toggleBtn = w.get('[data-testid="rule-input-toggle-system"]')
+    expect(toggleBtn.text()).toBe('显示系统字段')
+
+    // 点击显示系统字段：展开底层 5 个通用系统字段（共 7 个），并取消「只看已选」
+    await toggleBtn.trigger('click')
+    await flushPromises()
+
+    expect(toggleBtn.text()).toBe('隐藏系统字段')
+    const expandedTags = w.get('[data-testid="rule-input-fields"]').findAll('.rc-tag').map((t) => t.text())
+    expect(expandedTags).toContain('主键 ID-ENTRY_ID')
+    expect(expandedTags).toContain('所属源 ID-SOURCE_ID')
+    expect(expandedTags).toContain('创建时间-CREATE_DT')
+    expect(expandedTags).toContain('更新时间-UPDATE_DT')
+    expect(expandedTags).toContain('父行 ID-PARENT_ID')
+    expect(expandedTags).toHaveLength(7)
+
+    // 再次点击隐藏系统字段：未勾选的系统字段收回
+    await toggleBtn.trigger('click')
+    await flushPromises()
+    expect(w.get('[data-testid="rule-input-fields"]').findAll('.rc-tag')).toHaveLength(2)
   })
 })

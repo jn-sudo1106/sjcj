@@ -211,14 +211,71 @@ describe('FilePreview · TXT / HTML 切换（0920-02）', () => {
     expect(wrapper.get('[data-testid="file-preview-ext-html"]').classes()).not.toContain('on')
   })
 
-  it('路径自带后缀 / 没给 basePath：不出现切换，行为一如从前', async () => {
-    vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(bufOf('x'))
-    const withExt = mount(FilePreview, { props: { path: '/qinlong/dds/a.txt', basePath: '/qinlong/dds/a.txt', name: 'a.txt', ext: 'txt' } })
+  it('没给 basePath（如文件中心预览抽屉）或非 txt/html 类型（如 pdf/mp3）：不出现切换', async () => {
+    vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(bufOf('%PDF-1.7'))
+    const pdfWithBase = mount(FilePreview, { props: { path: '/qinlong/dds/a.pdf', basePath: '/qinlong/dds/a.pdf', name: 'a.pdf', ext: 'pdf' } })
     const noBase = mount(FilePreview, { props: { path: '/qinlong/dds/a.txt', name: 'a.txt', ext: 'txt' } })
     await flushPromises()
 
-    expect(withExt.find('[data-testid="file-preview-ext-switch"]').exists()).toBe(false)
+    expect(pdfWithBase.find('[data-testid="file-preview-ext-switch"]').exists()).toBe(false)
     expect(noBase.find('[data-testid="file-preview-ext-switch"]').exists()).toBe(false)
+  })
+
+  // 2026-09-24 用户报：正文 html 路径（content_html_path，如 /.../xxx.html）点开后无法看 txt，换其他字段不行
+  it('路径自带 .html 后缀（如 content_html_path / K17）：支持在 HTML 与 TXT 之间切换', async () => {
+    const HTML_PATH = '/qinlong/dds/20260924/www_jwview_com/xq/988f8011-8019-cd0a-ebb0-7cfb2c42cff3.html'
+    const TXT_PATH = '/qinlong/dds/20260924/www_jwview_com/xq/988f8011-8019-cd0a-ebb0-7cfb2c42cff3.txt'
+    const head = vi.spyOn(ossFile, 'fetchOssFileHead').mockResolvedValue(bufOf(`<html><body><div>${'正文。'.repeat(80)}</div></body></html>`))
+    const fetch = vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(new TextEncoder().encode('正文文本内容').buffer)
+
+    const wrapper = mount(FilePreview, {
+      props: {
+        path: HTML_PATH,
+        basePath: HTML_PATH,
+        name: '988f8011.html',
+        ext: 'html',
+      },
+    })
+    await flushPromises()
+
+    // 默认在 HTML
+    expect(wrapper.find('[data-testid="file-preview-ext-switch"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="file-preview-ext-html"]').classes()).toContain('on')
+    expect(wrapper.get('[data-testid="file-preview-ext-txt"]').classes()).not.toContain('on')
+    expect(wrapper.find('[data-testid="file-preview-html"]').attributes('src')).toContain(HTML_PATH)
+
+    // 切到 TXT
+    await wrapper.get('[data-testid="file-preview-ext-txt"]').trigger('click')
+    await flushPromises()
+
+    // 探测打在 .txt 上
+    expect(head.mock.calls.some(([p]) => p === TXT_PATH)).toBe(true)
+    expect(fetch).toHaveBeenCalledWith(TXT_PATH)
+    expect(wrapper.get('[data-testid="file-preview-ext-txt"]').classes()).toContain('on')
+    expect(wrapper.find('[data-testid="file-preview-text"]').text()).toContain('正文文本内容')
+    expect(wrapper.get('[data-testid="file-preview-download"]').attributes('href')).toContain(`fileId=${TXT_PATH}`)
+  })
+
+  it('切到 TXT 时若 OSS 没有该文本（探测 404）：就地提示并留在 HTML', async () => {
+    const HTML_PATH = '/qinlong/dds/20260924/www_jwview_com/xq/sample.html'
+    vi.spyOn(ossFile, 'fetchOssFileHead').mockRejectedValue(new Error('HTTP 404'))
+
+    const wrapper = mount(FilePreview, {
+      props: {
+        path: HTML_PATH,
+        basePath: HTML_PATH,
+        name: 'sample.html',
+        ext: 'html',
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="file-preview-ext-txt"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="file-preview-ext-note"]').text()).toBe('这条没有 TXT 正文')
+    expect(wrapper.get('[data-testid="file-preview-ext-html"]').classes()).toContain('on')
+    expect(wrapper.find('[data-testid="file-preview-text"]').exists()).toBe(false)
   })
 
   it('切到 HTML：先探一次确认快照在，再把 iframe 指到 .html', async () => {

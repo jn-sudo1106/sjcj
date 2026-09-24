@@ -95,6 +95,8 @@ export interface NodeConfig {
    *  复用同一种子的节点类型——典型：monitor 与 rule 都映射 rule 种子，靠它区分「数据监控」与「规则处理」。
    *  历史流程回读（从 Step 迁移）没有此字段，isMonitorNode 按 undefined 处理为普通规则节点。 */
   template?: string
+  /** 节点类型 ID（旧平台「抓取类型」= config.configType，如 90 网页抓取、150 OCR抓取、800 翻译助手） */
+  configType?: string
   /** 本节点引用的配置 ID（迁移数据来自 Step.configId）。0824-00 §1.1 的新模型里 FlowNode N:1 Config，
    *  节点必须且只能引用一个配置——这个字段就是那个引用。参数绑定/解绑要按它调 config/configParam* 接口。 */
   configId?: string
@@ -561,12 +563,18 @@ export function isRuleNode(cfg?: NodeConfig): boolean {
  * 按 undefined 处理为普通规则节点（monitor 是新增模板，历史不可能有）。命名/标题正则不可靠（用户可改名）。
  */
 export function isMonitorNode(cfg?: NodeConfig): boolean {
-  return cfg?.template === 'monitor'
+  if (!cfg) return false
+  return cfg.template === 'monitor'
+    || cfg.configType === '610'
+    || (cfg.sub ?? '').includes('[610]')
 }
 
 /** 数据校验节点判定：复用规则种子，但不带数据监控的告警语义。 */
 export function isDataValidationNode(cfg?: NodeConfig): boolean {
-  return cfg?.template === 'data-validation'
+  if (!cfg) return false
+  return cfg.template === 'data-validation'
+    || cfg.configType === '620'
+    || (cfg.sub ?? '').includes('[620]')
 }
 
 /**
@@ -577,37 +585,48 @@ export function isDataValidationNode(cfg?: NodeConfig): boolean {
  */
 function hasNodeTypeCode(cfg: NodeConfig | NodeConfigSeed | undefined, template: string, code: string): boolean {
   if (!cfg) return false
-  return cfg.template === template || (cfg.sub ?? '').includes(`[${code}]`)
+  return cfg.template === template || (cfg as NodeConfig).configType === code || (cfg.sub ?? '').includes(`[${code}]`)
 }
 
 /** OCR 抓取节点（已并入规则式处理节点：表配置走 execCfg 绑定，编排配置是空白页）。 */
 export function isOcrNode(cfg?: NodeConfig | NodeConfigSeed): boolean {
+  if (!cfg) return false
   return hasNodeTypeCode(cfg, 'ocr', '150')
-}
-
-/** 音频提取文字节点（编排配置 Tab 用它决定要不要给「上传音频转文字」试跑区）。 */
-export function isAudioTextNode(cfg?: NodeConfig): boolean {
-  return hasNodeTypeCode(cfg, 'audio-text', '710')
+    || (cfg as NodeConfig).taskCfg?.queue === 'dev_web_snatch_ocr'
 }
 
 /** 视频提取音频节点（编排配置 Tab 用它决定要不要给「上传视频抽音轨」试跑区）。 */
 export function isVideoAudioNode(cfg?: NodeConfig): boolean {
+  if (!cfg) return false
   return hasNodeTypeCode(cfg, 'video-audio', '700')
+    || (cfg as NodeConfig).taskCfg?.queue === 'dev_web_videotoaudio'
+}
+
+/** 音频提取文字节点（编排配置 Tab 用它决定要不要给「上传音频转文字」试跑区）。 */
+export function isAudioTextNode(cfg?: NodeConfig): boolean {
+  if (!cfg) return false
+  if (isVideoAudioNode(cfg)) return false
+  return hasNodeTypeCode(cfg, 'audio-text', '710')
+    || (cfg as NodeConfig).taskCfg?.queue === 'dev_web_audiototext'
 }
 
 /** 文章生成摘要节点（编排配置 Tab 用它决定要不要给「上传文字生成摘要」区）。 */
 export function isArticleSummaryNode(cfg?: NodeConfig): boolean {
+  if (!cfg) return false
   return hasNodeTypeCode(cfg, 'article-summary', '720')
 }
 
 /** 文章打标签节点（编排配置 Tab 用它决定要不要给「文本标注」区）。 */
 export function isArticleTagNode(cfg?: NodeConfig): boolean {
+  if (!cfg) return false
   return hasNodeTypeCode(cfg, 'article-tag', '730')
 }
 
 /** 翻译助手节点（编排配置 Tab 用它决定要不要给「上传文件翻译」区）。 */
 export function isTranslateNode(cfg?: NodeConfig): boolean {
+  if (!cfg) return false
   return hasNodeTypeCode(cfg, 'translate', '800')
+    || (cfg as NodeConfig).taskCfg?.queue === 'dev_web_translate'
 }
 
 /**

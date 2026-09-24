@@ -1,12 +1,18 @@
 import { describe, it, expect } from 'vitest'
 import { isSystemField, mapRowToInputFields, validateTableBinding } from './ruleOrchestration'
 
-describe('isSystemField（seq < 0 为系统固定字段）', () => {
+describe('isSystemField（seq < 0 或名称匹配为系统固定字段）', () => {
   it('负数 seq 判定为系统字段', () => {
     expect(isSystemField({ seq: -100 })).toBe(true)
   })
-  it('非负 seq 判定为业务字段', () => {
-    expect(isSystemField({ seq: 1 })).toBe(false)
+  it('标准系统字段名无论 seq 为何均判定为系统字段', () => {
+    expect(isSystemField({ seq: 10, itemCode: 'ENTRY_ID' })).toBe(true)
+    expect(isSystemField({ seq: 0, columnName: 'UPDATE_DT' })).toBe(true)
+    expect(isSystemField({ itemCode: 'source_id' })).toBe(true)
+  })
+  it('非负 seq 的普通业务字段判定为非系统字段', () => {
+    expect(isSystemField({ seq: 1, itemCode: 'title' })).toBe(false)
+    expect(isSystemField({ itemCode: 'url', columnName: 'K2' })).toBe(false)
     expect(isSystemField({})).toBe(false)
   })
 })

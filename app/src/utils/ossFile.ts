@@ -188,10 +188,46 @@ export function extFromFieldHint(field?: { prop?: string; columnName?: string; d
   const col = String(field.columnName || '').toUpperCase()
   const prop = String(field.prop || '').toLowerCase()
   const desc = String(field.desc || '')
-  if (col === 'K17' || prop === 'html' || desc.includes('html') || desc.includes('网页')) return 'html'
-  // K6 是新闻类表的正文路径，K9 是公众号表的；两边字段名都带「正文」，desc 这条才是通用的那个判据
-  if (col === 'K6' || prop.includes('content') || prop.includes('textpath') || desc.includes('正文')) return 'txt'
+  const descLower = desc.toLowerCase()
+
+  // 网页快照类优先判定：K17 是新闻类表的网页快照，prop 或 desc 明确含 html / 网页 / 快照
+  if (
+    col === 'K17' ||
+    prop === 'html' ||
+    prop.includes('html') ||
+    prop.includes('snapshot') ||
+    descLower.includes('html') ||
+    desc.includes('网页') ||
+    desc.includes('快照')
+  ) {
+    return 'html'
+  }
+
+  // 正文文本类：K6 是新闻类表的正文路径，K9 是公众号表的正文路径
+  // prop / desc 含 content / text / txt / body / article / 正文 / 文本 / 内容
+  if (
+    col === 'K6' ||
+    col === 'K9' ||
+    prop.includes('content') ||
+    prop.includes('text') ||
+    prop.includes('txt') ||
+    prop.includes('body') ||
+    prop.includes('article') ||
+    desc.includes('正文') ||
+    desc.includes('文本') ||
+    desc.includes('内容')
+  ) {
+    return 'txt'
+  }
+
   return ''
+}
+
+/**
+ * 剥离路径尾部的正文 / 网页扩展名（.html / .htm / .txt），用于同一内容在 TXT 与 HTML 之间切换。
+ */
+export function stripContentExt(path?: string | null): string {
+  return String(path ?? '').trim().replace(/\.(html?|txt)$/i, '')
 }
 
 /**

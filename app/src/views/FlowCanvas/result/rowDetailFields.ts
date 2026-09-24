@@ -1,4 +1,5 @@
 import type { DataRow, DataTableMeta, EntryDetailItem } from '@/api'
+import { extFromName, previewKindOf } from '@/utils/ossFile'
 
 /** 数据行详情字段：画布数据视图 / 网站数据视图共用。 */
 export interface RowDetailField {
@@ -37,13 +38,18 @@ export function safeHttpUrl(value: unknown): string {
   }
 }
 
-/** 与 DataGrid 路径格同一套旧平台判据：path/minio/地址/路径/图片，且值以 / 开头。 */
+/** 与 DataGrid 路径格同一套判据：值以 / 开头，自带已知扩展名或字段名/编码含路径/文件/正文等特征。 */
 export function isOssFilePath(field: { prop?: string; desc?: string }, value: string): boolean {
   if (!value.startsWith('/')) return false
+  const ext = extFromName(value)
+  if (ext && previewKindOf(ext) !== 'none') return true
   const code = String(field.prop || '').toLowerCase()
   const label = String(field.desc || '')
   return code.includes('path') || code.includes('minio')
+    || code.includes('file') || code.includes('text') || code.includes('txt')
     || label.includes('地址') || label.includes('路径') || label.includes('图片')
+    || label.includes('正文') || label.includes('文本') || label.includes('快照')
+    || label.includes('文件') || label.includes('附件')
 }
 
 export function fieldsFromTableMeta(
@@ -123,6 +129,7 @@ export function fieldsFromShowItems(
     const value = formatDetailValue(raw)
     const empty = isBlankDetailValue(raw)
     const href = safeHttpUrl(raw)
+    const filePath = !href && !empty && isOssFilePath({ prop: item.columnName, desc: item.itemName }, value) ? value : undefined
     // 这条路径（旧 entryDetail 的 showItems）本来就只给得出 columnName，code 即 K 名；
     // 不再重复塞 columnName，否则详情里会渲染成「K1 · K1」。
     result.push({
@@ -133,6 +140,7 @@ export function fieldsFromShowItems(
       value,
       empty,
       href: href || undefined,
+      filePath,
     })
   }
   return result

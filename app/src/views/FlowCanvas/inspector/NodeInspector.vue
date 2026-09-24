@@ -9,7 +9,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
-import { decisionOrParallelKind, isDataValidationNode, isMonitorNode, isRuleNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { decisionOrParallelKind, isDataValidationNode, isMonitorNode, isRuleNode, nodeTypeLabel, NODE_CONFIGS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
 import { configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
 import { provideNodeInspectorAssets } from './useNodeInspectorAssets'
@@ -315,6 +315,17 @@ function loadRuleAssets() {
 }
 watch(isRule, (v) => { if (v) loadRuleAssets() })
 
+const nodeInspectorSub = computed(() => {
+  if (!cfg.value) return ''
+  const typeLabel = nodeTypeLabel(cfg.value)
+  if (cfg.value.sub === '规则处理 · group/page' && typeLabel && typeLabel !== '规则处理') {
+    const seed = Object.values(NODE_CONFIGS).find((s) => s.title === typeLabel)
+    if (seed?.sub) return seed.sub
+    return `${typeLabel} · group/page`
+  }
+  return cfg.value.sub
+})
+
 onMounted(async () => {
   if (isRule.value) loadRuleAssets()
   await Promise.allSettled([
@@ -330,7 +341,7 @@ onMounted(async () => {
       <div class="rc-insp-head">
         <div>
           <div class="rc-insp-title">{{ cfg.title }}</div>
-          <div class="rc-insp-sub">{{ cfg.sub }}</div>
+          <div class="rc-insp-sub">{{ nodeInspectorSub }}</div>
         </div>
         <div class="rc-insp-head-right">
           <button

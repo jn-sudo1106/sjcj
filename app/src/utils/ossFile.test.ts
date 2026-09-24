@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { extFromFieldHint, extFromName, fetchOssFile, mimeTypeOf, ossFileUrl, ossPathWithExt, ossPublicUrl, previewKindOf } from './ossFile'
+import { extFromFieldHint, extFromName, fetchOssFile, mimeTypeOf, ossFileUrl, ossPathWithExt, ossPublicUrl, previewKindOf, stripContentExt } from './ossFile'
 
 describe('ossFileUrl', () => {
   it('路径原样拼接，不做 encodeURIComponent（旧平台亦然，两种写法后端都认）', () => {
@@ -128,15 +128,46 @@ describe('extFromFieldHint · 路径没有后缀时按字段语义判类型', ()
     expect(extFromFieldHint({ prop: 'content_path' })).toBe('txt')
   })
 
-  it('网页快照 (K17 / html) 判 html，且优先于正文判定', () => {
+  it('网页快照 (K17 / html / snapshot) 判 html，且优先于正文判定', () => {
     expect(extFromFieldHint({ columnName: 'K17', desc: '网页路径' })).toBe('html')
     expect(extFromFieldHint({ prop: 'html', desc: '正文' })).toBe('html')
+    expect(extFromFieldHint({ prop: 'content_html_path', columnName: 'K17', desc: '正文html路径' })).toBe('html')
+    expect(extFromFieldHint({ prop: 'snapshot', desc: '快照' })).toBe('html')
+  })
+
+  it('正文文本类识别：text_path / K9 / 文本路径 / 纯文本等均正确判 txt', () => {
+    expect(extFromFieldHint({ prop: 'text_path', desc: '文本路径' })).toBe('txt')
+    expect(extFromFieldHint({ columnName: 'K9', desc: 'URLMD5' })).toBe('txt')
+    expect(extFromFieldHint({ prop: 'body', desc: '文章内容' })).toBe('txt')
+    expect(extFromFieldHint({ prop: 'txt', desc: '正文' })).toBe('txt')
   })
 
   it('认不出来就返回空串，交给调用方回退到文件名——不瞎猜成 txt', () => {
     expect(extFromFieldHint({ prop: 'pic_path', desc: '图片地址' })).toBe('')
     expect(extFromFieldHint({})).toBe('')
     expect(extFromFieldHint(undefined)).toBe('')
+  })
+})
+
+describe('stripContentExt · 剥离正文与网页后缀', () => {
+  it('正确剥离 .html / .htm / .txt 后缀（大小写不敏感）', () => {
+    expect(stripContentExt('/qinlong/dds/sample.html')).toBe('/qinlong/dds/sample')
+    expect(stripContentExt('/qinlong/dds/sample.HTM')).toBe('/qinlong/dds/sample')
+    expect(stripContentExt('/qinlong/dds/sample.txt')).toBe('/qinlong/dds/sample')
+    expect(stripContentExt('/qinlong/dds/sample.TXT')).toBe('/qinlong/dds/sample')
+  })
+
+  it('保留非文本/网页的其它后缀（如 pdf / xlsx / mp3）', () => {
+    expect(stripContentExt('/data/file.pdf')).toBe('/data/file.pdf')
+    expect(stripContentExt('/data/file.xlsx')).toBe('/data/file.xlsx')
+    expect(stripContentExt('/data/file.mp3')).toBe('/data/file.mp3')
+  })
+
+  it('无后缀路径或空值安全返回', () => {
+    expect(stripContentExt('/gzh/msg/3e19f177')).toBe('/gzh/msg/3e19f177')
+    expect(stripContentExt('')).toBe('')
+    expect(stripContentExt(null)).toBe('')
+    expect(stripContentExt(undefined)).toBe('')
   })
 })
 

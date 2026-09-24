@@ -12,7 +12,7 @@
 //
 // 真实类型分布（文件中心首页 20 行）：xlsx 13 / pdf 7 / txt 0，故 Excel 是主力路径。
 import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue'
-import { extFromName, fetchOssFile, fetchOssFileHead, mimeTypeOf, ossFileUrl, ossPathWithExt, ossPublicUrl, previewKindOf, type PreviewKind } from '@/utils/ossFile'
+import { extFromName, fetchOssFile, fetchOssFileHead, mimeTypeOf, ossFileUrl, ossPublicUrl, previewKindOf, stripContentExt, type PreviewKind } from '@/utils/ossFile'
 import {
   BLOCKED_ARCHIVE_SIZE_LIMIT, BLOCKED_ARCHIVE_SNIFF_BYTES, detectBlockedArchive,
   type BlockedArchiveVerdict,
@@ -80,12 +80,25 @@ const EXT_OPTIONS = ['txt', 'html'] as const
 const hintedExt = computed(() => props.ext || extFromName(props.name))
 /** 用户切过才有值；空 = 跟着调用方猜的那个走 */
 const pickedExt = ref('')
-/** 路径是"裸的"（调用方给了 basePath 且它确实没后缀）才给切换 */
-const switchable = computed(() => !!props.basePath && !extFromName(props.basePath))
+const rawBasePath = computed(() => stripContentExt(props.basePath || ''))
+/**
+ * 具有有效 basePath 且当前扩展名为 txt 或 html 时均支持在 TXT / HTML 之间切换。
+ * 适用场景：
+ * 1) 裸路径（公众号等无后缀存储路径）：按字段猜中一种后，可切到另一种；
+ * 2) 带 .html / .txt 后缀的正文路径（如新闻表的 content_html_path / content_path）：
+ *    同一条采集数据在 OSS 上往往同时存有 .html 网页快照与 .txt 抽取文本，支持就地切换预览。
+ */
+const switchable = computed(() => {
+  if (!rawBasePath.value) return false
+  const ext = effectiveExt.value.toLowerCase().replace(/^\./, '')
+  return ext === 'txt' || ext === 'html' || ext === 'htm'
+})
 const effectiveExt = computed(() => pickedExt.value || hintedExt.value)
-/** 真正在看的那个文件：切过就按 basePath 重拼，没切过就用调用方给的 path */
+/** 真正在看的那个文件：切过就按 rawBasePath 重拼，没切过就用调用方给的 path */
 const currentPath = computed(() => (
-  switchable.value && pickedExt.value ? ossPathWithExt(String(props.basePath), pickedExt.value) : (props.path || '')
+  switchable.value && pickedExt.value && rawBasePath.value
+    ? `${rawBasePath.value}.${pickedExt.value}`
+    : (props.path || '')
 ))
 /** 下载名跟着切：不然切到 HTML 还会存成 `….txt` 的文件名 */
 const downloadName = computed(() => (
@@ -106,26 +119,24 @@ const switching = ref(false)
 const switchNote = ref('')
 /**
  * 切后缀。
- *
- * **切到 html 必须先探一次**：html 不走 fetch，是 iframe 直连 9102 那个独立 origin
- * （见本文件顶部），跨源加载失败前端收不到任何信号，切过去只会是一个白框。
- * 同源 `/oss` 探一个字节就够——OSS 对不存在的对象回干净的 404（2026-09-21 实测）。
- * 切回 txt 不用探：那条路本来就 fetch，失败会落到现有的 error 分支。
+ * 无论切到 html 还是 txt，均先探测 1 个字节确认 OSS 存在该对象：
+ * - html 走 iframe 直连 9102，跨源加载失败前端收不到任何信号，不探就是一个白框；
+ * - txt 探测可防止直接 fetch 触发 HTTP 404 错误并退回到错误提示。
+ * 不存在时就地给出友好提示并留在当前格式，不破坏已有内容。
  */
 async function switchExt(ext: string) {
   if (switching.value || ext === effectiveExt.value) return
-  const nextPath = ossPathWithExt(String(props.basePath ?? ''), ext)
-  if (!nextPath) return
-  if (previewKindOf(ext) === 'html') {
-    switching.value = true
-    try {
-      await fetchOssFileHead(nextPath, 1)
-    } catch {
-      switchNote.value = '这条没有 HTML 快照'
-      return
-    } finally {
-      switching.value = false
-    }
+  const raw = rawBasePath.value
+  if (!raw) return
+  const nextPath = `${raw}.${ext}`
+  switching.value = true
+  try {
+    await fetchOssFileHead(nextPath, 1)
+  } catch {
+    switchNote.value = ext === 'html' ? '这条没有 HTML 快照' : '这条没有 TXT 正文'
+    return
+  } finally {
+    switching.value = false
   }
   switchNote.value = ''
   pickedExt.value = ext

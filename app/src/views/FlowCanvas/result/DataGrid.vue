@@ -6,6 +6,8 @@ import ColumnPickerDialog from '@/components/ColumnPickerDialog.vue'
 import { useColumnPicker } from '@/utils/table/useColumnPicker'
 import { IDENTITY_COL_PROPS } from '@/utils/table/columnPrefs'
 import type { ChildCountCell } from '@/utils/flow/childCounts'
+import { extFromName, previewKindOf } from '@/utils/ossFile'
+import { Edit, Delete } from '@element-plus/icons-vue'
 
 // withDefaults 是必须的：Vue 3 对 boolean 类型的 prop 有 casting 规则——未传时值是 false
 // 而不是 undefined，所以 `props.allowColumnSort !== false` 这种写法会把"没传"误判成"禁止排序"。
@@ -103,7 +105,8 @@ const showSelectCol = computed(() => !!props.selectable && !strictFieldOnly.valu
 const showSourceCol = computed(() => !!props.sourceNames && !strictFieldOnly.value)
 const showChildDataCol = computed(() => !!props.showChildCol && !strictFieldOnly.value)
 const showStatusCol = computed(() => !props.compact && !strictFieldOnly.value)
-const showActionCol = computed(() => showActions.value && !strictFieldOnly.value)
+const hasRowActions = computed(() => !!props.allowRowEdit || !!props.allowRowDelete)
+const showActionCol = computed(() => showActions.value && !strictFieldOnly.value && hasRowActions.value)
 function sourceLabel(row: DataRow): string {
   return props.sourceNames?.[row.sourceId] ?? row.sourceId
 }
@@ -435,10 +438,15 @@ const emptyColspan = computed(() =>
 // 旧平台据此把这些单元格渲染成 OSS 下载链接；这里进一步做成可点开的站内预览。
 function isFileCell(field: { prop: string; desc?: string }, value: string): boolean {
   if (!value.startsWith('/')) return false
+  const ext = extFromName(value)
+  if (ext && previewKindOf(ext) !== 'none') return true
   const code = String(field.prop || '').toLowerCase()
   const label = String(field.desc || '')
   return code.includes('path') || code.includes('minio')
+    || code.includes('file') || code.includes('text') || code.includes('txt')
     || label.includes('地址') || label.includes('路径') || label.includes('图片')
+    || label.includes('正文') || label.includes('文本') || label.includes('快照')
+    || label.includes('文件') || label.includes('附件')
 }
 
 /**
@@ -591,7 +599,7 @@ function stateMeta(s?: string) {
                  整列不渲染——显示一整列 `—` 只会让人以为"数据没跑出来"。 -->
             <th v-if="showChildDataCol" class="dg-sticky-head" style="width:72px" title="这一行在下一节点产出了多少条数据">下级</th>
             <th v-if="showStatusCol" class="dg-sticky-head" style="width:64px">状态</th>
-            <th v-if="showActionCol" class="dg-sticky-head" style="width:80px">操作</th>
+            <th v-if="showActionCol" class="dg-sticky-head dg-th-action" style="width:72px" title="操作" aria-label="操作"></th>
           </tr>
         </thead>
         <tbody>
@@ -686,17 +694,32 @@ function stateMeta(s?: string) {
             </td>
             <td v-if="showStatusCol"><span class="rc-status" :class="stateMeta(r.state).cls">{{ stateMeta(r.state).text }}</span></td>
             <td v-if="showActionCol" class="dg-actions" @click.stop>
-              <el-dropdown trigger="click" @command="(c: string) => emit('row-action', r, c)">
-                <span class="dg-act-btn">操作 ▾</span>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="detail">详情</el-dropdown-item>
-                    <el-dropdown-item v-if="allowRowEdit" command="edit">编辑</el-dropdown-item>
-                    <el-dropdown-item command="tasks">查后续任务实例</el-dropdown-item>
-                    <el-dropdown-item v-if="allowRowDelete" divided command="delete">删除单条【无法恢复】</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
+              <div class="dg-actions-cell">
+                <el-tooltip v-if="allowRowEdit" content="编辑" placement="top" :show-after="150">
+                  <button
+                    type="button"
+                    class="dg-act-icon-btn edit"
+                    title="编辑"
+                    aria-label="编辑"
+                    data-testid="data-row-action-edit"
+                    @click="emit('row-action', r, 'edit')"
+                  >
+                    <el-icon :size="14"><Edit /></el-icon>
+                  </button>
+                </el-tooltip>
+                <el-tooltip v-if="allowRowDelete" content="删除单条【无法恢复】" placement="top" :show-after="150">
+                  <button
+                    type="button"
+                    class="dg-act-icon-btn delete"
+                    title="删除单条【无法恢复】"
+                    aria-label="删除单条"
+                    data-testid="data-row-action-delete"
+                    @click="emit('row-action', r, 'delete')"
+                  >
+                    <el-icon :size="14"><Delete /></el-icon>
+                  </button>
+                </el-tooltip>
+              </div>
             </td>
           </tr>
           <tr v-if="!rows.length && !loading">
@@ -811,10 +834,45 @@ function stateMeta(s?: string) {
 .dg-table tbody tr { cursor: pointer; }
 .dg-table tbody tr:hover { background: #f8fbff; }
 .dg-table tbody tr.active { background: #eff6ff; }
-.dg-actions, .dg-select { color: var(--rc-primary); }
-.dg-select input, .dg-table th input[type="checkbox"] { cursor: pointer; }
-.dg-act-btn { font-size: 12px; cursor: pointer; }
 .dg-empty, .dg-empty-cell { padding: 24px; text-align: center; color: var(--rc-faint); font-size: 12px; }
+.dg-th-action { width: 72px; min-width: 72px; text-align: center; }
+.dg-actions { padding: 4px 6px; text-align: center; white-space: nowrap; }
+.dg-select { color: var(--rc-primary); }
+.dg-select input, .dg-table th input[type="checkbox"] { cursor: pointer; }
+.dg-actions-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  vertical-align: middle;
+}
+.dg-act-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--rc-text-2, #64748b);
+  transition: all 0.15s ease;
+}
+.dg-act-icon-btn:hover {
+  background: var(--rc-bg-soft, #f1f5f9);
+}
+.dg-act-icon-btn.edit:hover {
+  color: var(--rc-primary, #2563eb);
+  background: #eff6ff;
+  border-color: #dbeafe;
+}
+.dg-act-icon-btn.delete:hover {
+  color: var(--rc-error, #dc2626);
+  background: #fef2f2;
+  border-color: #fee2e2;
+}
 .compact .dg-table th { font-size: 11px; padding: 6px 8px; }
 .compact .dg-table td { font-size: 11px; padding: 6px 8px; max-width: 160px; }
 </style>

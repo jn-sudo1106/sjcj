@@ -427,3 +427,84 @@ describe('ConfigTab · 定时启停（2026-09-22）', () => {
     expect(setEnabled).toHaveBeenCalledWith(['j-9'], false)
   })
 })
+
+describe('ConfigTab · 节点类型展示（2026-09-24 走查：OCR及所有新增节点展示节点类型）', () => {
+  it.each([
+    ['ocr', 'OCR抓取'],
+    ['translate', '翻译助手'],
+    ['article-tag', '文章打标签'],
+    ['article-summary', '文章生成摘要'],
+    ['audio-text', '音频提取文字'],
+    ['video-audio', '视频提取音频'],
+    ['excel-collect', 'EXCEL抓取'],
+    ['web-list', '网页抓取'],
+    ['rule', '规则处理'],
+    ['monitor', '数据监控'],
+  ])('%s 节点展示正确的节点类型 %s', async (templateKey, expectedType) => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS[templateKey === 'monitor' ? 'rule' : templateKey])
+    if (templateKey === 'monitor') cfg.template = 'monitor'
+    flow.configs['node-test'] = cfg
+    flow.select('node-test')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const typeDisplay = wrapper.find('[data-testid="node-type-display"]')
+    expect(typeDisplay.exists()).toBe(true)
+    expect(typeDisplay.text()).toBe(expectedType)
+    // 验证「节点名称」纯净展示，不再出现 (= 规则处理名称)
+    const nameLabel = wrapper.findAll('.rc-field label').find((l) => l.text().startsWith('节点名称'))
+    expect(nameLabel?.text()).toBe('节点名称')
+    expect(wrapper.text()).not.toContain('（= 规则处理名称）')
+    expect(wrapper.text()).not.toContain('(= 规则处理名称)')
+    wrapper.unmount()
+  })
+
+  it('针对真实带规则壳的 OCR 节点（sub 存量为规则处理，title 为 OCR抓取），节点类型仍准确显示为 OCR抓取', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS.rule)
+    cfg.title = 'OCR抓取'
+    cfg.configName = 'OCR抓取'
+    cfg.configId = '1401063'
+    cfg.sub = '规则处理 · group/page'
+    flow.configs['ocr-real'] = cfg
+    flow.select('ocr-real')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const typeDisplay = wrapper.find('[data-testid="node-type-display"]')
+    expect(typeDisplay.text()).toBe('OCR抓取')
+
+    const nameLabel = wrapper.findAll('.rc-field label').find((l) => l.text().startsWith('节点名称'))
+    expect(nameLabel?.text()).toBe('节点名称')
+    expect(wrapper.text()).not.toContain('规则处理名称')
+
+    // 顶部副标题不应再显示生硬的 "规则处理 · group/page"
+    expect(wrapper.find('.rc-insp-sub').text()).toBe('[150] OCR抓取 · 图片文字识别')
+    wrapper.unmount()
+  })
+
+  it('显式传入 configType 时优先直接读取对应的字典类型名称', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS.rule)
+    cfg.configType = '160' // Mail抓取
+    flow.configs['custom-type'] = cfg
+    flow.select('custom-type')
+    flow.setActiveTab('config')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const typeDisplay = wrapper.find('[data-testid="node-type-display"]')
+    expect(typeDisplay.text()).toBe('Mail抓取')
+    wrapper.unmount()
+  })
+})
+

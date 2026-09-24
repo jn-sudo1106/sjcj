@@ -12,7 +12,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { entryApi, type EntryType, type RuleFieldOption, type RuleOrchestration } from '@/api'
-import { isSystemField } from '@/utils/flow/ruleOrchestration'
+import { DEFAULT_SYSTEM_FIELDS, isSystemField } from '@/utils/flow/ruleOrchestration'
 import { usePresetTables } from '@/composables/usePresetTables'
 import TableEditDialog from './TableEditDialog.vue'
 
@@ -54,14 +54,38 @@ function patch(p: Partial<BinderModel>) {
   emit('update:modelValue', p)
 }
 
-// 系统固定字段（seq < 0）默认不进可选池；已选中的仍保留在已选 tag，避免静默丢字段
+/**
+ * 完整字段候选列表（含底层标准系统字段）：
+ * 真实后端许多表（如 900 通用新闻表）在 entryDetail 定义里只登记了业务字段（K1～K25），未登记物理底层的
+ * ENTRY_ID、SOURCE_ID、PARENT_ID、CREATE_DT、UPDATE_DT。当表自身未包含对应系统字段时，
+ * 补充底层通用系统字段，并标记为系统字段（默认折叠，用户点「显示系统字段」时才展示）。
+ */
+function resolveEffectiveFields(options: RuleFieldOption[]): RuleFieldOption[] {
+  if (!options?.length) return []
+  const existingCodes = new Set(options.map((f) => (f.itemCode || f.columnName || '').toUpperCase()))
+  const missingDefaults = DEFAULT_SYSTEM_FIELDS.filter(
+    (df) => !existingCodes.has(df.itemCode.toUpperCase()) && !existingCodes.has((df.columnName ?? '').toUpperCase()),
+  )
+  return missingDefaults.length ? [...options, ...missingDefaults] : options
+}
+const effectiveInputOptions = computed(() => resolveEffectiveFields(props.inputFieldOptions))
+const effectiveOutputOptions = computed(() => resolveEffectiveFields(props.outputFieldOptions))
+
+// 系统固定字段（seq < 0 或常见系统列）默认不进可选池；已选中的仍保留在已选 tag，避免静默丢字段
 const showSystemFields = ref(false)
+function toggleSystemFields() {
+  showSystemFields.value = !showSystemFields.value
+  // 展开系统字段时，自动取消「只看已选」，确保新放开的系统字段能立即呈现在勾选墙上供查看和勾选
+  if (showSystemFields.value) {
+    onlySelected.input = false
+  }
+}
 function selectableFields(all: RuleFieldOption[]): RuleFieldOption[] {
   if (showSystemFields.value) return all
   return all.filter((f) => !isSystemField(f))
 }
-const inputFieldPool = computed(() => selectableFields(props.inputFieldOptions))
-const outputFieldPool = computed(() => selectableFields(props.outputFieldOptions))
+const inputFieldPool = computed(() => selectableFields(effectiveInputOptions.value))
+const outputFieldPool = computed(() => selectableFields(effectiveOutputOptions.value))
 
 /**
  * 勾选墙上显示哪些字段（2026-09-23 起入参 / 出参统一成网页抓取那种「代码 · 中文名」勾选墙，
@@ -89,14 +113,15 @@ function narrow(wall: RuleFieldOption[], selected: string[] | undefined, on: boo
   return on && partial ? wall.filter((f) => selected?.includes(f.itemCode)) : wall
 }
 const inputWall = computed(() => narrow(
-  wallFields(props.inputFieldOptions, inputFieldPool.value, props.modelValue.inputFields),
+  wallFields(effectiveInputOptions.value, inputFieldPool.value, props.modelValue.inputFields),
   props.modelValue.inputFields, onlySelected.input, inputPartial.value))
 const outputWall = computed(() => narrow(
-  wallFields(props.outputFieldOptions, outputFieldPool.value, props.modelValue.outputFields),
+  wallFields(effectiveOutputOptions.value, outputFieldPool.value, props.modelValue.outputFields),
   props.modelValue.outputFields, onlySelected.output, outputPartial.value))
-/** 「URLTITLE · 标题」；中文名缺失或与代码相同时只显示代码 */
-function fieldLabel(f: RuleFieldOption) {
-  return f.itemName && f.itemName !== f.itemCode ? `${f.itemCode} · ${f.itemName}` : f.itemCode
+/** 与数据视图对齐的「中文-K」格式（如「标题-K1」）；无中文或与物理列相同时仅显示物理列（如「ENTRY_ID」） */
+function fieldLabel(f: RuleFieldOption): string {
+  const physical = f.columnName || f.itemCode
+  return f.itemName && f.itemName !== physical ? `${f.itemName}-${physical}` : physical
 }
 /** 全选 = 当前可选池全勾上，已选的系统字段保留（不因为池里藏着它就被静默取消） */
 function selectAllFields(kind: 'input' | 'output') {
@@ -283,7 +308,7 @@ function toggleField(kind: 'input' | 'output', code: string) {
         <button v-if="inputPartial" type="button" class="rc-text-btn" data-testid="rule-input-only-selected" @click="onlySelected.input = !onlySelected.input">{{ onlySelected.input ? `显示全部 ${inputFieldPool.length} 个` : '只看已选' }}</button>
         <button type="button" class="rc-text-btn" data-testid="rule-input-select-all" @click="selectAllFields('input')">全选</button>
         <button type="button" class="rc-text-btn" data-testid="rule-input-clear" @click="clearFields('input')">清空</button>
-        <button type="button" class="rc-text-btn" @click="showSystemFields = !showSystemFields">{{ showSystemFields ? '隐藏系统字段' : '显示系统字段' }}</button>
+        <button type="button" class="rc-text-btn" data-testid="rule-input-toggle-system" @click="toggleSystemFields">{{ showSystemFields ? '隐藏系统字段' : '显示系统字段' }}</button>
       </div>
     </div>
     <div v-if="!modelValue.inputTableId" class="rc-readonly-hint">请先选择输入表</div>

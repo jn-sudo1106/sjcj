@@ -597,14 +597,20 @@ describe('DataGrid · 行内删除单条', () => {
     rows: [{ dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted', values: {} }] as DataRow[],
   }
 
-  it('allowRowDelete 为真才出现，默认不出现', () => {
+  it('allowRowDelete 为真才出现删除单条图标按钮，默认不出现；去除详情与任务实例', async () => {
     const off = mount(DataGrid, { props, global: { stubs: MENU_STUBS } })
-    expect(off.text()).not.toContain('删除单条')
+    expect(off.find('[data-testid="data-row-action-delete"]').exists()).toBe(false)
 
     const on = mount(DataGrid, { props: { ...props, allowRowDelete: true }, global: { stubs: MENU_STUBS } })
-    expect(on.text()).toContain('删除单条【无法恢复】')
-    expect(on.text()).toContain('详情')
-    expect(on.text()).toContain('查后续任务实例')
+    const delBtn = on.find('[data-testid="data-row-action-delete"]')
+    expect(delBtn.exists()).toBe(true)
+    expect(delBtn.attributes('title')).toBe('删除单条【无法恢复】')
+    expect(on.text()).not.toContain('操作')
+    expect(on.text()).not.toContain('详情')
+    expect(on.text()).not.toContain('查后续任务实例')
+
+    await delBtn.trigger('click')
+    expect(on.emitted('row-action')?.[0]).toEqual([props.rows[0], 'delete'])
   })
 })
 
@@ -612,23 +618,26 @@ describe('DataGrid · 行内编辑', () => {
   const MENU_STUBS = {
     ColumnPickerDialog: true,
     ElDialog: true,
-    ElDropdown: { name: 'ElDropdown', template: '<div><slot /><slot name="dropdown" /></div>' },
-    ElDropdownMenu: { name: 'ElDropdownMenu', template: '<div><slot /></div>' },
-    ElDropdownItem: { name: 'ElDropdownItem', props: ['command', 'divided'], template: '<div class="dg-item"><slot /></div>' },
   }
   const props = {
     meta: { tableId: 't1', tableName: '表', rowCount: 1, fields: [{ prop: 'name', type: 'string', desc: '名称' }] },
     rows: [{ dataId: 'd1', title: '', summary: '', sourceId: 's1', acceptState: 'accepted', values: {} }] as DataRow[],
   }
 
-  it('allowRowEdit 为真才出现「编辑」，默认不出现', () => {
+  it('allowRowEdit 为真才出现「编辑」图标按钮，默认不出现；去除详情与任务实例', async () => {
     const off = mount(DataGrid, { props, global: { stubs: MENU_STUBS } })
-    expect(off.text()).not.toContain('编辑')
+    expect(off.find('[data-testid="data-row-action-edit"]').exists()).toBe(false)
 
     const on = mount(DataGrid, { props: { ...props, allowRowEdit: true }, global: { stubs: MENU_STUBS } })
-    expect(on.text()).toContain('编辑')
-    expect(on.text()).toContain('详情')
-    expect(on.text()).toContain('查后续任务实例')
+    const editBtn = on.find('[data-testid="data-row-action-edit"]')
+    expect(editBtn.exists()).toBe(true)
+    expect(editBtn.attributes('title')).toBe('编辑')
+    expect(on.text()).not.toContain('操作')
+    expect(on.text()).not.toContain('详情')
+    expect(on.text()).not.toContain('查后续任务实例')
+
+    await editBtn.trigger('click')
+    expect(on.emitted('row-action')?.[0]).toEqual([props.rows[0], 'edit'])
   })
 })
 

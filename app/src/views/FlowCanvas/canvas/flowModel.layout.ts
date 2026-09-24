@@ -24,7 +24,11 @@ import type {
   TaskParamValue,
   TripleField,
 } from './flowModel'
-import { isDataNode, isOcrNode, nodeInputTable, nodeOutputTable } from './flowModel'
+import {
+  isDataNode, isOcrNode, isAudioTextNode, isVideoAudioNode, isArticleSummaryNode,
+  isArticleTagNode, isTranslateNode, isMonitorNode, isDataValidationNode,
+  nodeInputTable, nodeOutputTable,
+} from './flowModel'
 import { extractUrlParamIds } from '@/utils/flow/urlParams'
 
 // ---------- 节点配置规范化 ----------
@@ -183,16 +187,124 @@ export function cloneConfig(cfg: NodeConfig): NodeConfig {
  * 跟这里的展示文案逐字对上，Q8 就此解掉：`configTypeFrom()`（nodeConfigPayload.ts）现在
  * 会给 monitor/rule 节点写 700/600，不再是"只加显示、不加落库"。
  */
+/**
+ * 抓取类型编号（sourceType / configType）→ 类型名称（typeName）。
+ * 来源：字典表 cfg_source_type 与系统设置「节点类型」列表（0924 走查）。
+ */
+export const SOURCE_TYPE_NAME_BY_ID: Record<string, string> = {
+  '90': '网页抓取',
+  '110': 'EXCEL抓取',
+  '120': 'DOC抓取',
+  '130': 'PDF抓取',
+  '140': 'App抓取',
+  '150': 'OCR抓取',
+  '160': 'Mail抓取',
+  '170': 'Python抓取',
+  '300': '校验类',
+  '400': '提取数据发邮件',
+  '500': '资讯抓取',
+  '600': '规则处理',
+  '610': '数据监控',
+  '620': '数据校验',
+  '700': '视频提取音频',
+  '710': '音频提取文字',
+  '720': '文章生成摘要',
+  '730': '文章打标签',
+  '800': '翻译助手',
+}
+
+/** 节点模板 → 类型名称 */
+export const TEMPLATE_TO_TYPE_NAME: Record<string, string> = {
+  web: '网页抓取',
+  'web-list': '网页抓取',
+  'web-detail': '网页抓取',
+  ocr: 'OCR抓取',
+  translate: '翻译助手',
+  'article-tag': '文章打标签',
+  'article-summary': '文章生成摘要',
+  'audio-text': '音频提取文字',
+  'video-audio': '视频提取音频',
+  monitor: '数据监控',
+  'data-validation': '数据校验',
+  validation: '数据校验',
+  rule: '规则处理',
+  excel: 'EXCEL抓取',
+  'excel-collect': 'EXCEL抓取',
+  doc: 'DOC抓取',
+  'doc-collect': 'DOC抓取',
+  pdf: 'PDF抓取',
+  'pdf-collect': 'PDF抓取',
+  'mail-collect': 'Mail抓取',
+  mail: '提取数据发邮件',
+  news: '资讯抓取',
+  'news-collect': '资讯抓取',
+  app: 'App抓取',
+  'app-collect': 'App抓取',
+  python: 'Python抓取',
+  check: '校验类',
+  login: '网页抓取',
+  'login-collect': '网页抓取',
+  file: '网页抓取',
+  'browser-html': '网页抓取',
+  'wechat-html': '网页抓取',
+}
+
 export function nodeTypeLabel(cfg: NodeConfig): string {
   if (cfg.kind === 'decision') return '决策'
   if (cfg.kind === 'parallel') return '分头'
-  if (cfg.template === 'monitor') return '数据监控'
-  if (cfg.ruleCfg) return '规则处理'
+
+  // 1. 如果显式配置了 configType，优先按字典取真实「类型名称」
+  if (cfg.configType && SOURCE_TYPE_NAME_BY_ID[String(cfg.configType)]) {
+    return SOURCE_TYPE_NAME_BY_ID[String(cfg.configType)]
+  }
+
+  // 2. 结构特征与专门判定（优先精准匹配 OCR/AI/处理类节点）
+  if (isOcrNode(cfg) || cfg.template === 'ocr') return 'OCR抓取'
+  if (isTranslateNode(cfg) || cfg.template === 'translate') return '翻译助手'
+  if (isArticleTagNode(cfg) || cfg.template === 'article-tag') return '文章打标签'
+  if (isArticleSummaryNode(cfg) || cfg.template === 'article-summary') return '文章生成摘要'
+  if (isVideoAudioNode(cfg) || cfg.template === 'video-audio') return '视频提取音频'
+  if (isAudioTextNode(cfg) || cfg.template === 'audio-text') return '音频提取文字'
+  if (isMonitorNode(cfg) || cfg.template === 'monitor') return '数据监控'
+  if (isDataValidationNode(cfg) || cfg.template === 'data-validation') return '数据校验'
+
+  // 3. template 映射表
+  if (cfg.template && TEMPLATE_TO_TYPE_NAME[cfg.template]) {
+    return TEMPLATE_TO_TYPE_NAME[cfg.template]
+  }
+
+  // 4. collectCfg.snatchType 中解析
   const snatch = cfg.collectCfg?.snatchType || ''
-  // `[90] - 网页抓取` → `网页抓取`；取不到就退回 sub 里括号后的部分
   const named = snatch.split('-').slice(1).join('-').trim()
   if (named) return named
+  const codeInSnatch = snatch.match(/^\[(\d+)\]/)?.[1]
+  if (codeInSnatch && SOURCE_TYPE_NAME_BY_ID[codeInSnatch]) {
+    return SOURCE_TYPE_NAME_BY_ID[codeInSnatch]
+  }
+
+  // 5. sub 中的类型编号 [xxx]
+  const subCode = (cfg.sub || '').match(/^\[(\d+)\]/)?.[1]
+  if (subCode && SOURCE_TYPE_NAME_BY_ID[subCode]) {
+    return SOURCE_TYPE_NAME_BY_ID[subCode]
+  }
+
+  // 6. 节点名称/配置名称中的关键词匹配
+  const titleAndName = `${cfg.title || ''} ${cfg.configName || ''}`
+  if (/ocr/i.test(titleAndName)) return 'OCR抓取'
+  if (/翻译/.test(titleAndName)) return '翻译助手'
+  if (/打标签|标注/.test(titleAndName)) return '文章打标签'
+  if (/摘要/.test(titleAndName)) return '文章生成摘要'
+  if (/视频/.test(titleAndName)) return '视频提取音频'
+  if (/音频|语音|录音/.test(titleAndName)) return '音频提取文字'
+  if (/数据监控/.test(titleAndName)) return '数据监控'
+  if (/数据校验/.test(titleAndName)) return '数据校验'
+
   const fromSub = (cfg.sub || '').replace(/^\[[^\]]*\]\s*/, '').split('·')[0].trim()
+  if (fromSub && fromSub !== '自定义草稿' && fromSub !== '自定义节点' && fromSub !== '规则处理') return fromSub
+
+  // 7. 规则节点
+  if (cfg.ruleCfg) return '规则处理'
+
   return fromSub || '数据处理'
 }
 
@@ -264,8 +376,8 @@ export function buildHorizontalLayout(
   branchGroups: FlowBranchGroup[] = [],
   options: HorizontalLayoutOptions = {},
 ): HorizontalLayout {
-  const HNODE_W = 132
-  const HNODE_H = 60
+  const HNODE_W = 152
+  const HNODE_H = 64
   const HTERM_W = 92
   const HTERM_H = 30
   const HGAP = 22

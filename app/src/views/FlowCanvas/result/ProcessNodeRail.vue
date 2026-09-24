@@ -1,6 +1,14 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { iconFor, nodeTaskQueue, type HorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
+import { computed, reactive, watch } from 'vue'
+import { entryApi } from '@/api'
+import {
+  effectiveOutputTable,
+  iconFor,
+  nodeInputTable,
+  nodeOutputTable,
+  nodeTaskQueue,
+  type HorizontalLayout,
+} from '@/views/FlowCanvas/canvas/flowModel'
 
 type RailNode = HorizontalLayout['nodes'][number]
 
@@ -12,9 +20,18 @@ const props = withDefaults(defineProps<{
   nodeStates?: Record<string, string | undefined>
   /** 节点队列映射（0917-03）：任务/数据视图若已知运行时队列可传入，优先展示 */
   nodeQueues?: Record<string, string | undefined>
+  /** 节点表名映射（tableId 或 nodeId → 表名），若未传入由组件内部按 tableId 异步加载缓存 */
+  tableNames?: Record<string, string | undefined>
   /** 本次不发后续的节点（0917-06）：半透明 + 角标，一眼看出这次不跑哪些 */
   skipped?: string[]
-}>(), { modelValue: '', selectable: () => true, nodeStates: () => ({}), nodeQueues: () => ({}), skipped: () => [] })
+}>(), {
+  modelValue: '',
+  selectable: () => true,
+  nodeStates: () => ({}),
+  nodeQueues: () => ({}),
+  tableNames: () => ({}),
+  skipped: () => [],
+})
 const emit = defineEmits<{
   'update:modelValue': [nodeId: string]
   /**
@@ -44,15 +61,100 @@ function queueForNode(node: RailNode): string {
   return props.nodeQueues?.[node.id] || nodeTaskQueue(node.cfg) || ''
 }
 
-function subText(node: RailNode): string {
-  const queue = queueForNode(node)
-  return queue || node.cfg.sub || ''
+function tableIdForNode(node: RailNode): string {
+  const ruleId = node.cfg.ruleCfg?.outputTableId || node.cfg.ruleCfg?.inputTableId
+  if (ruleId) return ruleId
+  return effectiveOutputTable(node.cfg) || nodeOutputTable(node.cfg) || nodeInputTable(node.cfg) || ''
 }
 
+function badgeText(node: RailNode): string {
+  const tid = tableIdForNode(node)
+  if (tid) return tid
+  return iconFor(node.cfg)
+}
+
+function badgeTitle(node: RailNode): string {
+  const tid = tableIdForNode(node)
+  if (tid) return `表 ID: ${tid}`
+  return iconFor(node.cfg)
+}
+
+const tableDetailCache = reactive<Record<string, { name?: string; tableName?: string }>>({})
+const tableDetailPending = new Set<string>()
+
+function ensureTableDetail(tableId: string) {
+  if (!tableId || tableDetailCache[tableId] || tableDetailPending.has(tableId)) return
+  tableDetailPending.add(tableId)
+  entryApi.entryDetail(tableId)
+    .then((detail) => {
+      if (detail) {
+        tableDetailCache[tableId] = {
+          name: detail.name,
+          tableName: detail.tableName,
+        }
+      }
+    })
+    .catch(() => {
+      tableDetailCache[tableId] = {}
+    })
+}
+
+watch(
+  () => props.layout?.nodes,
+  (nodes) => {
+    if (!nodes) return
+    for (const node of nodes) {
+      const tid = tableIdForNode(node)
+      if (tid && !props.tableNames?.[tid] && !props.tableNames?.[node.id]) {
+        ensureTableDetail(tid)
+      }
+    }
+  },
+  { immediate: true, deep: true },
+)
+
+function tableNameForNode(node: RailNode): string {
+  const tid = tableIdForNode(node)
+  if (tid && props.tableNames?.[tid]) return props.tableNames[tid]!
+  if (props.tableNames?.[node.id]) return props.tableNames[node.id]!
+  const ruleTableName = node.cfg.ruleCfg?.outputTable || node.cfg.ruleCfg?.inputTable
+  if (ruleTableName && ruleTableName !== tid) return ruleTableName
+  if (tid && tableDetailCache[tid]) {
+    const detail = tableDetailCache[tid]
+    const name = detail.name?.trim()
+    const rawTableName = detail.tableName?.trim()
+    if (name && !name.startsWith('表-')) return name
+    if (rawTableName) return rawTableName
+  }
+  return ''
+}
+
+function displayTableName(node: RailNode): string {
+  const name = tableNameForNode(node)
+  return name.replace(/^sense_data\./i, '')
+}
+
+function queueSub(node: RailNode): string {
+  const queue = queueForNode(node)
+  const table = displayTableName(node)
+  if (queue && queue !== table) return queue
+  return ''
+}
+
+
 function nodeTitle(node: RailNode): string {
+  const tid = tableIdForNode(node)
+  const rawTable = tableNameForNode(node)
   const queue = queueForNode(node)
   const sub = node.cfg.sub
   const title = node.cfg.title
+
+  if (rawTable) {
+    const tablePart = tid ? `表: ${tid} · ${rawTable}` : `表: ${rawTable}`
+    const queuePart = queue && queue !== rawTable ? ` · 队列: ${queue}` : ''
+    return `${title} (${tablePart}${queuePart})`
+  }
+
   if (queue && sub && queue !== sub) {
     return `${title} (${sub} · ${queue})`
   }
@@ -90,10 +192,12 @@ function nodeTitle(node: RailNode): string {
       @click="pick(node.id)"
       @contextmenu="onNodeMenu($event, node.id)"
     >
-      <span class="pnr-node-icon">{{ iconFor(node.cfg) }}</span>
+      <span class="pnr-node-icon" :title="badgeTitle(node)">{{ badgeText(node) }}</span>
       <span class="pnr-node-text">
         <b>{{ node.cfg.title }}</b>
-        <small v-if="subText(node)" class="pnr-node-sub">{{ subText(node) }}</small>
+        <small v-if="displayTableName(node)" class="pnr-node-sub pnr-node-table">{{ displayTableName(node) }}</small>
+        <small v-if="queueSub(node)" class="pnr-node-sub pnr-node-queue">{{ queueSub(node) }}</small>
+        <small v-else-if="!displayTableName(node) && node.cfg.sub" class="pnr-node-sub">{{ node.cfg.sub }}</small>
       </span>
       <span v-if="nodeStates[node.id]" class="pnr-node-state" :class="`state-${nodeStates[node.id]}`" :title="stateText(nodeStates[node.id])" :aria-label="stateText(nodeStates[node.id])" />
       <span v-if="node.id === finalNodeId" class="pnr-node-final">最终结果</span>
@@ -109,7 +213,7 @@ function nodeTitle(node: RailNode): string {
 .pnr-edge { fill: none; stroke: #94a3b8; stroke-width: 1.5; }
 .pnr-edge.branch { stroke-dasharray: 4 3; }
 .pnr-arrow { fill: #94a3b8; }
-.pnr-node { position: absolute; z-index: 1; display: flex; align-items: center; gap: 8px; box-sizing: border-box; padding: 7px 10px; border: 1px solid #d6e1ed; border-radius: 8px; background: #fff; color: #334155; cursor: pointer; text-align: left; transition: border-color .15s, box-shadow .15s, background .15s; }
+.pnr-node { position: absolute; z-index: 1; display: flex; align-items: center; gap: 8px; box-sizing: border-box; padding: 5px 8px; border: 1px solid #d6e1ed; border-radius: 8px; background: #fff; color: #334155; cursor: pointer; text-align: left; transition: border-color .15s, box-shadow .15s, background .15s; }
 .pnr-node:hover:not(.disabled):not(.active) { border-color: #bfdbfe; box-shadow: 0 4px 12px -8px rgba(37, 99, 235, .45); }
 .pnr-node.active { border-color: #2563eb; background: #f8fbff; box-shadow: 0 0 0 1px #bfdbfe; }
 .pnr-node.disabled { cursor: default; opacity: .62; }
@@ -118,11 +222,12 @@ function nodeTitle(node: RailNode): string {
 .pnr-node.skipped { border-style: dashed; border-color: #f59e0b; background: #fffbeb; }
 .pnr-node.skipped .pnr-node-text { opacity: .6; }
 .pnr-node-skip { position: absolute; top: -8px; left: 8px; padding: 0 5px; border-radius: 4px; background: #f59e0b; color: #fff; font-size: 10px; line-height: 15px; white-space: nowrap; }
-.pnr-node-icon { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 7px; background: #eff6ff; color: #2563eb; font-size: 12px; font-weight: 700; }
-.pnr-node-text { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px; line-height: 1.25; }
+.pnr-node-icon { flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 28px; width: auto; max-width: 58px; padding: 0 4px; box-sizing: border-box; height: 28px; border-radius: 7px; background: #eff6ff; color: #2563eb; font-size: 11px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pnr-node-text { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px; line-height: 1.25; justify-content: center; }
 .pnr-node b, .pnr-node small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pnr-node b { font-size: 12px; font-weight: 700; }
-.pnr-node small { color: #94a3b8; font-family: var(--rc-mono, monospace); font-size: 10px; }
+.pnr-node b { font-size: 12px; font-weight: 700; color: #1e293b; }
+.pnr-node small { color: #64748b; font-size: 10px; }
+.pnr-node small.pnr-node-queue { color: #94a3b8; font-family: var(--rc-mono, monospace); }
 .pnr-node-state { width: 7px; height: 7px; flex: none; border-radius: 50%; background: #94a3b8; }
 .pnr-node-state.state-C { background: #16a34a; }
 .pnr-node-state.state-L { background: #2563eb; }

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
 import ProcessNodeRail from './ProcessNodeRail.vue'
+import { entryApi } from '@/api'
 import { buildHorizontalLayout, NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
 
 describe('ProcessNodeRail', () => {
@@ -59,4 +60,105 @@ describe('ProcessNodeRail', () => {
     expect(nodeEl.find('.pnr-node-sub').text()).toBe('custom-sub')
     expect(nodeEl.attributes('title')).toBe('公告列表抓取 (custom-sub)')
   })
+
+  it('节点徽标优先展示表 ID 而不是固定 90 类型码，无表时回退类型图标', () => {
+    const customConfigs = {
+      ...NODE_CONFIGS,
+      'collect-900': {
+        ...NODE_CONFIGS['web-list'],
+        title: '网页抓取01',
+        collectCfg: {
+          ...NODE_CONFIGS['web-list'].collectCfg!,
+          snatchType: '[90] - 网页抓取',
+          outputTable: '900',
+        },
+      },
+      'decision-node': {
+        ...NODE_CONFIGS['decision'],
+        title: '条件判断',
+        collectCfg: undefined,
+        outputTable: '',
+        inputTable: '',
+      },
+    }
+    const layout = buildHorizontalLayout(['start', 'collect-900', 'decision-node', 'end'], [], customConfigs, [], { includeTerminals: false })
+    const wrapper = mount(ProcessNodeRail, { props: { layout } })
+
+    const collectEl = wrapper.find('[data-node-id="collect-900"]')
+    expect(collectEl.find('.pnr-node-icon').text()).toBe('900')
+    expect(collectEl.find('.pnr-node-icon').attributes('title')).toBe('表 ID: 900')
+
+    const decisionEl = wrapper.find('[data-node-id="decision-node"]')
+    expect(decisionEl.find('.pnr-node-icon').text()).toBe('IF')
+  })
+
+  it('副标题与提示展示表名（支持显式传入 tableNames 并去除 sense_data. 前缀）', () => {
+    const customConfigs = {
+      ...NODE_CONFIGS,
+      'node-1': {
+        ...NODE_CONFIGS['web-list'],
+        title: '公司新闻',
+        collectCfg: {
+          ...NODE_CONFIGS['web-list'].collectCfg!,
+          outputTable: '900',
+        },
+        taskCfg: {
+          ...NODE_CONFIGS['web-list'].taskCfg!,
+          queue: 'news_snt',
+        },
+      },
+    }
+    const layout = buildHorizontalLayout(['start', 'node-1', 'end'], [], customConfigs, [], { includeTerminals: false })
+    const wrapper = mount(ProcessNodeRail, {
+      props: {
+        layout,
+        tableNames: { '900': 'sense_data.TB_CNEWS' },
+      },
+    })
+    const nodeEl = wrapper.find('[data-node-id="node-1"]')
+    // 卡片内表名与队列分行展示，表名去除前缀
+    expect(nodeEl.find('.pnr-node-table').text()).toBe('TB_CNEWS')
+    expect(nodeEl.find('.pnr-node-queue').text()).toBe('news_snt')
+    // hover title 完整保留表 ID、完整物理表名和队列
+    expect(nodeEl.attributes('title')).toBe('公司新闻 (表: 900 · sense_data.TB_CNEWS · 队列: news_snt)')
+  })
+
+  it('未显式传入 tableNames 时自动按 tableId 异步加载表名并更新卡片与 hover 提示', async () => {
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({
+      tableId: '900',
+      tableName: 'sense_data.TB_CNEWS',
+      name: '通用新闻表',
+      fields: [],
+    })
+
+    const customConfigs = {
+      ...NODE_CONFIGS,
+      'node-async': {
+        ...NODE_CONFIGS['web-list'],
+        title: '新闻抓取',
+        collectCfg: {
+          ...NODE_CONFIGS['web-list'].collectCfg!,
+          outputTable: '900',
+        },
+        taskCfg: {
+          ...NODE_CONFIGS['web-list'].taskCfg!,
+          queue: 'news_snt',
+        },
+      },
+    }
+    const layout = buildHorizontalLayout(['start', 'node-async', 'end'], [], customConfigs, [], { includeTerminals: false })
+    const wrapper = mount(ProcessNodeRail, { props: { layout } })
+
+    const nodeEl = wrapper.find('[data-node-id="node-async"]')
+    // 异步返回前先展示队列兜底
+    expect(nodeEl.find('.pnr-node-queue').text()).toBe('news_snt')
+
+    await flushPromises()
+
+    // 异步返回后，表名与队列换行分行展示
+    expect(nodeEl.find('.pnr-node-table').text()).toBe('通用新闻表')
+    expect(nodeEl.find('.pnr-node-queue').text()).toBe('news_snt')
+    expect(nodeEl.attributes('title')).toBe('新闻抓取 (表: 900 · 通用新闻表 · 队列: news_snt)')
+  })
 })
+

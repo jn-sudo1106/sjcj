@@ -5,10 +5,36 @@
 // entryApi（跟其他节点的表配置同源），这里补回 EntryField → RuleFieldOption 的转换。
 import type { EntryField, RuleFieldOption, RuleOrchestration } from '@/api/types'
 
-/** 系统固定字段（ID/SOURCE_ID/UPDATE_DT/CREATE_DT），seq 为负；UI 默认折叠不展示在入参/出参可选项里 */
-export function isSystemField(field: Pick<RuleFieldOption, 'seq'>): boolean {
-  return (field.seq ?? 0) < 0
+/** 常见系统保留固定列（主键、源ID、创建更新时间、批次等），无论后端 seq 为正为负均识别为系统字段 */
+export const SYSTEM_FIELD_CODES = new Set([
+  'ID',
+  'ENTRY_ID',
+  'SOURCE_ID',
+  'PARENT_ID',
+  'CREATE_DT',
+  'UPDATE_DT',
+  'TASK_FLOW_ID',
+  'DATA_SOURCE_ID',
+  'SPIDER_BATCH_ID',
+  'SPIDER_TIME',
+])
+
+/** 系统固定字段（ID/SOURCE_ID/UPDATE_DT/CREATE_DT 等），seq 为负或列名为标准系统字段；UI 默认折叠不展示在入参/出参可选项里 */
+export function isSystemField(field: Pick<RuleFieldOption, 'seq'> & Partial<Pick<RuleFieldOption, 'itemCode' | 'columnName'>>): boolean {
+  if ((field.seq ?? 0) < 0) return true
+  const code = (field.itemCode || '').toUpperCase()
+  const col = (field.columnName || '').toUpperCase()
+  return (!!code && SYSTEM_FIELD_CODES.has(code)) || (!!col && SYSTEM_FIELD_CODES.has(col))
 }
+
+/** 5 个通用底层物理系统字段（当表定义未显式声明系统字段时作为可选补充） */
+export const DEFAULT_SYSTEM_FIELDS: RuleFieldOption[] = [
+  { itemCode: 'ENTRY_ID', itemName: '主键 ID', columnName: 'ENTRY_ID', seq: -100, dataType: 'string' },
+  { itemCode: 'SOURCE_ID', itemName: '所属源 ID', columnName: 'SOURCE_ID', seq: -99, dataType: 'string' },
+  { itemCode: 'PARENT_ID', itemName: '父行 ID', columnName: 'PARENT_ID', seq: -98, dataType: 'string' },
+  { itemCode: 'CREATE_DT', itemName: '创建时间', columnName: 'CREATE_DT', seq: -97, dataType: 'string' },
+  { itemCode: 'UPDATE_DT', itemName: '更新时间', columnName: 'UPDATE_DT', seq: -96, dataType: 'string' },
+]
 
 /** EntryType.fields[] → RuleFieldOption[]，字段名对照见 entryFieldFromLegacy（prop ≙ itemCode，desc ≙ itemName） */
 export function ruleFieldOptionFromEntryField(field: EntryField): RuleFieldOption {

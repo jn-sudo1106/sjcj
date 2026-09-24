@@ -43,6 +43,28 @@ export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
   cfg.configName = config.name
   cfg.configUrl = config.url ?? ''
   cfg.runPolicy = config.runPolicy
+  if (config.configType) {
+    cfg.configType = String(config.configType)
+    if (cfg.configType === '150' && (cfg.template === 'rule' || !cfg.template)) {
+      cfg.template = 'ocr'
+      if (!cfg.sub || cfg.sub.includes('规则处理')) cfg.sub = '[150] OCR抓取 · 图片文字识别'
+    } else if (cfg.configType === '800' && (cfg.template === 'rule' || !cfg.template)) {
+      cfg.template = 'translate'
+      if (!cfg.sub || cfg.sub.includes('规则处理')) cfg.sub = '[800] 翻译助手 · 多语言互译'
+    } else if (cfg.configType === '730' && (cfg.template === 'rule' || !cfg.template)) {
+      cfg.template = 'article-tag'
+      if (!cfg.sub || cfg.sub.includes('规则处理')) cfg.sub = '[730] 文章打标签 · 大模型抽取'
+    } else if (cfg.configType === '720' && (cfg.template === 'rule' || !cfg.template)) {
+      cfg.template = 'article-summary'
+      if (!cfg.sub || cfg.sub.includes('规则处理')) cfg.sub = '[720] 文章生成摘要 · 大模型生成'
+    } else if (cfg.configType === '710' && (cfg.template === 'rule' || !cfg.template)) {
+      cfg.template = 'audio-text'
+      if (!cfg.sub || cfg.sub.includes('规则处理')) cfg.sub = '[710] 音频提取文字 · 语音识别'
+    } else if (cfg.configType === '700' && (cfg.template === 'rule' || !cfg.template)) {
+      cfg.template = 'video-audio'
+      if (!cfg.sub || cfg.sub.includes('规则处理')) cfg.sub = '[700] 视频提取音频 · 音轨抽取'
+    }
+  }
   const target = cfg.collectCfg ?? cfg
   // 翻译助手 / 音频提取文字节点的结构化配置存在 core_param（2026-09-21 / 2026-09-23 从
   // code_rule 挪过去），旧存量配置仍躺在 code_rule——回读先取 core_param，取不到回落 code_rule 兼容。
