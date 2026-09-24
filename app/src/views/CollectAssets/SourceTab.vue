@@ -427,7 +427,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="ca-page">
+  <div class="ca-page" :class="{ 'is-list': view === 'table' }">
     <FilterToolbar
       v-if="view === 'card'"
       v-model:keyword="keyword"
@@ -511,7 +511,10 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.ca-page { display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; }
+.ca-page { display: flex; flex-direction: column; gap: 12px; }
+/* 源列表视图才撑满、交给表格自己滚动；卡片视图保持自然高度随页面滚——
+   撑满会把卡片区压在一屏里，溢出的卡片和底部分页条叠在一起（2026-09-24 用户截图） */
+.ca-page.is-list { flex: 1; min-height: 0; }
 /* 源视图组件自带灰底内边距（在网站详情里是整块主区），放进采集资产去掉，和工具条对齐 */
 .ca-source-list { padding: 0; background: transparent; }
 
