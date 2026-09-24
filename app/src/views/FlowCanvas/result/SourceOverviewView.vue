@@ -852,7 +852,7 @@ watch(() => ui.sourceListRevision, () => {
       <label>备注
         <span class="sov-remark-filter">
           <span class="sov-remark-mode">
-            <select v-model="remarkMode" data-testid="source-overview-remark-mode" :class="{ placeholder: !remarkMode }" @change="search">
+            <select v-model="remarkMode" data-testid="source-overview-remark-mode" :class="{ placeholder: !remarkMode, 'has-clear': !!remarkMode }" @change="search">
               <option value="" disabled hidden>备注</option>
               <option value="has">有备注</option>
               <option value="none">无备注</option>
@@ -1081,16 +1081,20 @@ watch(() => ui.sourceListRevision, () => {
 .sov-filter .sov-search select { min-width: 88px; }
 .sov-filter .sov-search input { min-width: 190px; }
 .sov-remark-filter { display: flex; gap: 4px; }
-.sov-filter .sov-remark-filter select { min-width: 78px; }
+.sov-filter .sov-remark-filter select { min-width: 108px; }
+/* 选中后右侧要放 ×（在下拉箭头左边），文字给它让出位置，别挤在一起 */
+.sov-filter .sov-remark-filter select.has-clear { padding-right: 44px; }
 .sov-remark-mode { position: relative; display: inline-flex; }
 .sov-filter .sov-remark-filter select.placeholder { color: var(--rc-faint); }
 .sov-remark-clear {
-  position: absolute; right: 18px; top: 50%; transform: translateY(-50%);
+  position: absolute; right: 24px; top: 50%; transform: translateY(-50%);
   width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%;
   background: transparent; color: var(--rc-muted); font-size: 13px; line-height: 16px; cursor: pointer;
 }
 .sov-remark-clear:hover { background: #e2e8f0; color: var(--rc-text); }
-.sov-filter .sov-remark-filter input { min-width: 104px; }
+/* 下拉加宽了 32px（给 × 让位），关键字框相应收窄，备注这一格总宽不变——
+   1366 下筛选栏第一行本来只剩 29px 余量，多出来会把「数据量 ≤」挤到第二行 */
+.sov-filter .sov-remark-filter input { min-width: 104px; width: 121px; }
 /* 数字框不需要和文本框一样宽：一行已经很挤（源 ID / 名称 / URL / 状态 / 标签 / 备注 / 数据量） */
 .sov-filter input.sov-num { min-width: 84px; width: 84px; }
 .sov-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
