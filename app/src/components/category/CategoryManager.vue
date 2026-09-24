@@ -426,48 +426,48 @@ async function handleDelete(node: { id: string; name: string }) {
               <div class="ca-col ca-col-actions">
                 <div class="ca-node-actions">
                   <el-tooltip content="修改分类" placement="top" :show-after="120">
-                    <button
-                      type="button"
-                      class="ca-action-btn"
+                    <el-button
+                      link
+                      type="primary"
+                      size="small"
+                      :icon="Edit"
                       title="修改分类"
                       aria-label="修改分类"
                       @click.stop="openEdit(data)"
-                    >
-                      <el-icon :size="14"><Edit /></el-icon>
-                    </button>
+                    />
                   </el-tooltip>
                   <el-tooltip content="添加子分类" placement="top" :show-after="120">
-                    <button
-                      type="button"
-                      class="ca-action-btn success"
+                    <el-button
+                      link
+                      type="success"
+                      size="small"
+                      :icon="Plus"
                       title="添加子分类"
                       aria-label="添加子分类"
                       @click.stop="openAddSub(data)"
-                    >
-                      <el-icon :size="14"><Plus /></el-icon>
-                    </button>
+                    />
                   </el-tooltip>
                   <el-tooltip content="批量添加子级" placement="top" :show-after="120">
-                    <button
-                      type="button"
-                      class="ca-action-btn info"
+                    <el-button
+                      link
+                      type="info"
+                      size="small"
+                      :icon="DocumentAdd"
                       title="批量添加子级"
                       aria-label="批量添加子级"
                       @click.stop="openBatchAdd(data)"
-                    >
-                      <el-icon :size="14"><DocumentAdd /></el-icon>
-                    </button>
+                    />
                   </el-tooltip>
                   <el-tooltip content="删除分类" placement="top" :show-after="120">
-                    <button
-                      type="button"
-                      class="ca-action-btn danger"
+                    <el-button
+                      link
+                      type="danger"
+                      size="small"
+                      :icon="Delete"
                       title="删除分类"
                       aria-label="删除分类"
                       @click.stop="handleDelete(data)"
-                    >
-                      <el-icon :size="14"><Delete /></el-icon>
-                    </button>
+                    />
                   </el-tooltip>
                 </div>
               </div>
@@ -504,75 +504,75 @@ async function handleDelete(node: { id: string; name: string }) {
                 <div class="ca-node-actions">
                   <el-tooltip :content="isFirstSibling(node) ? '已在最顶部' : '上移'" placement="top" :show-after="120">
                     <span class="ca-btn-wrap">
-                      <button
-                        type="button"
-                        class="ca-action-btn"
+                      <el-button
+                        link
+                        type="primary"
+                        size="small"
+                        :icon="Top"
                         title="上移"
                         aria-label="上移"
                         :disabled="isFirstSibling(node) || !!movingNodeId"
                         @click.stop="moveNode(node, 'up')"
-                      >
-                        <el-icon :size="14"><Top /></el-icon>
-                      </button>
+                      />
                     </span>
                   </el-tooltip>
                   <el-tooltip :content="isLastSibling(node) ? '已在最底部' : '下移'" placement="top" :show-after="120">
                     <span class="ca-btn-wrap">
-                      <button
-                        type="button"
-                        class="ca-action-btn"
+                      <el-button
+                        link
+                        type="primary"
+                        size="small"
+                        :icon="Bottom"
                         title="下移"
                         aria-label="下移"
                         :disabled="isLastSibling(node) || !!movingNodeId"
                         @click.stop="moveNode(node, 'down')"
-                      >
-                        <el-icon :size="14"><Bottom /></el-icon>
-                      </button>
+                      />
                     </span>
                   </el-tooltip>
                   <el-tooltip content="修改分类" placement="top" :show-after="120">
-                    <button
-                      type="button"
-                      class="ca-action-btn"
+                    <el-button
+                      link
+                      type="primary"
+                      size="small"
+                      :icon="Edit"
                       title="修改分类"
                       aria-label="修改分类"
                       @click.stop="openEdit(data)"
-                    >
-                      <el-icon :size="14"><Edit /></el-icon>
-                    </button>
+                    />
                   </el-tooltip>
                   <el-tooltip content="添加子分类" placement="top" :show-after="120">
-                    <button
-                      type="button"
-                      class="ca-action-btn success"
+                    <el-button
+                      link
+                      type="success"
+                      size="small"
+                      :icon="Plus"
                       title="添加子分类"
                       aria-label="添加子分类"
                       @click.stop="openAddSub(data)"
-                    >
-                      <el-icon :size="14"><Plus /></el-icon>
-                    </button>
+                    />
                   </el-tooltip>
                   <el-tooltip content="批量添加子级" placement="top" :show-after="120">
-                    <button
-                      type="button"
-                      class="ca-action-btn info"
+                    <el-button
+                      link
+                      type="info"
+                      size="small"
+                      :icon="DocumentAdd"
                       title="批量添加子级"
                       aria-label="批量添加子级"
                       @click.stop="openBatchAdd(data)"
-                    >
-                      <el-icon :size="14"><DocumentAdd /></el-icon>
-                    </button>
+                    />
                   </el-tooltip>
                   <el-tooltip content="删除分类" placement="top" :show-after="120">
-                    <button
-                      type="button"
-                      class="ca-action-btn danger"
+                    <el-button
+                      link
+                      type="danger"
+                      size="small"
+                      :icon="Delete"
                       title="删除分类"
                       aria-label="删除分类"
                       @click.stop="handleDelete(data)"
-                    >
-                      <el-icon :size="14"><Delete /></el-icon>
-                    </button>
+                    />
                   </el-tooltip>
                 </div>
               </div>
@@ -888,13 +888,13 @@ async function handleDelete(node: { id: string; name: string }) {
   justify-content: flex-end;
 }
 
-/* 节点操作按钮：现有轻量图标按钮（无边框，hover 浅底色与图标高亮） */
+/* 节点操作按钮：现有轻量彩色图标按钮（默认各色，无边框，hover 加微底色） */
 .ca-node-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 2px;
-  opacity: 0.85;
+  opacity: 0.95;
   transition: opacity 0.15s ease;
 }
 .ca-tree-node-row:hover .ca-node-actions {
@@ -906,53 +906,40 @@ async function handleDelete(node: { id: string; name: string }) {
   align-items: center;
 }
 
-.ca-action-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
+.ca-node-actions :deep(.el-button) {
+  padding: 4px;
+  height: 24px;
+  width: 24px;
   margin: 0;
-  border: 0;
   border-radius: 4px;
-  background: transparent;
-  color: var(--rc-muted, #64748b);
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.ca-action-btn .el-icon {
+  border: none;
   font-size: 14px;
 }
 
-/* hover 显色：轻量底色 + 对应功能色 */
-.ca-action-btn:not(:disabled):hover {
-  background: var(--rc-primary-bg, #eff6ff);
+.ca-node-actions :deep(.el-button--primary.is-link) {
   color: var(--rc-primary, #2563eb);
 }
 
-.ca-action-btn.success:not(:disabled):hover {
-  background: #f0fdf4;
-  color: #16a34a;
+.ca-node-actions :deep(.el-button--success.is-link) {
+  color: var(--rc-ok, #16a34a);
 }
 
-.ca-action-btn.info:not(:disabled):hover {
-  background: #f8fafc;
-  color: #334155;
-}
-
-.ca-action-btn.danger:not(:disabled):hover {
-  background: #fef2f2;
-  color: var(--rc-error, #dc2626);
-}
-
-/* 禁用态（置顶或置底无法再移） */
-.ca-action-btn:disabled {
-  opacity: 0.35;
+.ca-node-actions :deep(.el-button--info.is-link) {
   color: #94a3b8;
+}
+
+.ca-node-actions :deep(.el-button--danger.is-link) {
+  color: var(--rc-error, #ef4444);
+}
+
+.ca-node-actions :deep(.el-button:not(.is-disabled):hover) {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.ca-node-actions :deep(.el-button.is-disabled) {
   cursor: not-allowed;
-  background: transparent;
+  opacity: 0.35;
+  color: #cbd5e1 !important;
 }
 
 /* 底部状态/说明条 */
