@@ -367,18 +367,30 @@ async function handleDelete(node: { id: string; name: string }) {
     </header>
 
     <div class="cm-content">
-      <!-- 搜索栏 -->
-      <div class="ca-search-bar">
-        <el-input
-          v-model="keyword"
-          placeholder="搜索分类名称..."
-          clearable
-          size="default"
-          :prefix-icon="Search"
-          @input="onSearchInput"
-          @keyup.enter="doSearch"
-          @clear="handleClearSearch"
-        />
+      <!-- 顶部搜索与信息栏：限制搜索框宽度为 280px，不再通栏拉伸 -->
+      <div class="ca-toolbar">
+        <div class="ca-search-bar">
+          <el-input
+            v-model="keyword"
+            placeholder="搜索分类名称..."
+            clearable
+            size="default"
+            :prefix-icon="Search"
+            @input="onSearchInput"
+            @keyup.enter="doSearch"
+            @clear="handleClearSearch"
+          />
+        </div>
+        <span v-if="!isSearching" class="ca-count-hint">共 {{ rootCategories.length }} 个顶级分类</span>
+        <span v-else class="ca-count-hint">搜索结果（按层级展示）</span>
+      </div>
+
+      <!-- 树形表格表头：列对齐，彻底消除通栏拉伸视线割裂 -->
+      <div class="ca-table-head">
+        <div class="ca-col ca-col-name">分类名称</div>
+        <div class="ca-col ca-col-id">分类 ID</div>
+        <div class="ca-col ca-col-seq">排序</div>
+        <div class="ca-col ca-col-actions">操作</div>
       </div>
 
       <!-- 分类目录树容器 -->
@@ -388,7 +400,7 @@ async function handleDelete(node: { id: string; name: string }) {
           无匹配分类
         </div>
 
-        <!-- 搜索结果树（层级树形展示，包含全部节点悬浮操作） -->
+        <!-- 搜索结果树（层级树形展示） -->
         <el-tree
           v-else-if="isSearching"
           :data="searchTreeData"
@@ -399,20 +411,51 @@ async function handleDelete(node: { id: string; name: string }) {
         >
           <template #default="{ node, data }">
             <div class="ca-tree-node-row">
-              <div class="ca-node-info">
+              <div class="ca-col ca-col-name">
                 <el-icon class="ca-folder-icon">
                   <FolderOpened v-if="node.expanded" />
                   <Folder v-else />
                 </el-icon>
                 <span class="ca-node-label" :title="data.name">{{ data.name }}</span>
-                <span class="ca-node-id" title="分类 ID">#{{ data.id }}</span>
                 <span v-if="data.count != null" class="ca-node-count">{{ data.count }}</span>
               </div>
-              <div class="ca-node-actions">
-                <el-button link type="primary" size="small" :icon="Edit" title="修改分类" @click.stop="openEdit(data)" />
-                <el-button link type="success" size="small" :icon="Plus" title="添加子分类" @click.stop="openAddSub(data)" />
-                <el-button link type="info" size="small" :icon="DocumentAdd" title="批量添加子级" @click.stop="openBatchAdd(data)" />
-                <el-button link type="danger" size="small" :icon="Delete" title="删除分类" @click.stop="handleDelete(data)" />
+              <div class="ca-col ca-col-id">#{{ data.id }}</div>
+              <div class="ca-col ca-col-seq">{{ data.seq ?? '—' }}</div>
+              <div class="ca-col ca-col-actions">
+                <div class="ca-node-actions">
+                  <el-button
+                    type="primary"
+                    size="small"
+                    :icon="Edit"
+                    title="修改分类"
+                    class="ca-tree-op-btn"
+                    @click.stop="openEdit(data)"
+                  />
+                  <el-button
+                    type="success"
+                    size="small"
+                    :icon="Plus"
+                    title="添加子分类"
+                    class="ca-tree-op-btn success"
+                    @click.stop="openAddSub(data)"
+                  />
+                  <el-button
+                    type="info"
+                    size="small"
+                    :icon="DocumentAdd"
+                    title="批量添加子级"
+                    class="ca-tree-op-btn info"
+                    @click.stop="openBatchAdd(data)"
+                  />
+                  <el-button
+                    type="danger"
+                    size="small"
+                    :icon="Delete"
+                    title="删除分类"
+                    class="ca-tree-op-btn danger"
+                    @click.stop="handleDelete(data)"
+                  />
+                </div>
               </div>
             </div>
           </template>
@@ -433,38 +476,69 @@ async function handleDelete(node: { id: string; name: string }) {
         >
           <template #default="{ node, data }">
             <div class="ca-tree-node-row">
-              <div class="ca-node-info">
+              <div class="ca-col ca-col-name">
                 <el-icon class="ca-folder-icon">
                   <FolderOpened v-if="node.expanded" />
                   <Folder v-else />
                 </el-icon>
                 <span class="ca-node-label" :title="data.name">{{ data.name }}</span>
-                <span class="ca-node-id" title="分类 ID">#{{ data.id }}</span>
                 <span v-if="data.count != null" class="ca-node-count">{{ data.count }}</span>
               </div>
-              <div class="ca-node-actions">
-                <el-button
-                  link
-                  type="primary"
-                  size="small"
-                  :icon="Top"
-                  title="上移"
-                  :disabled="isFirstSibling(node) || !!movingNodeId"
-                  @click.stop="moveNode(node, 'up')"
-                />
-                <el-button
-                  link
-                  type="primary"
-                  size="small"
-                  :icon="Bottom"
-                  title="下移"
-                  :disabled="isLastSibling(node) || !!movingNodeId"
-                  @click.stop="moveNode(node, 'down')"
-                />
-                <el-button link type="primary" size="small" :icon="Edit" title="修改分类" @click.stop="openEdit(data)" />
-                <el-button link type="success" size="small" :icon="Plus" title="添加子分类" @click.stop="openAddSub(data)" />
-                <el-button link type="info" size="small" :icon="DocumentAdd" title="批量添加子级" @click.stop="openBatchAdd(data)" />
-                <el-button link type="danger" size="small" :icon="Delete" title="删除分类" @click.stop="handleDelete(data)" />
+              <div class="ca-col ca-col-id">#{{ data.id }}</div>
+              <div class="ca-col ca-col-seq">{{ data.seq ?? '—' }}</div>
+              <div class="ca-col ca-col-actions">
+                <div class="ca-node-actions">
+                  <el-button
+                    type="primary"
+                    size="small"
+                    :icon="Top"
+                    title="上移"
+                    class="ca-tree-op-btn"
+                    :disabled="isFirstSibling(node) || !!movingNodeId"
+                    @click.stop="moveNode(node, 'up')"
+                  />
+                  <el-button
+                    type="primary"
+                    size="small"
+                    :icon="Bottom"
+                    title="下移"
+                    class="ca-tree-op-btn"
+                    :disabled="isLastSibling(node) || !!movingNodeId"
+                    @click.stop="moveNode(node, 'down')"
+                  />
+                  <el-button
+                    type="primary"
+                    size="small"
+                    :icon="Edit"
+                    title="修改分类"
+                    class="ca-tree-op-btn"
+                    @click.stop="openEdit(data)"
+                  />
+                  <el-button
+                    type="success"
+                    size="small"
+                    :icon="Plus"
+                    title="添加子分类"
+                    class="ca-tree-op-btn success"
+                    @click.stop="openAddSub(data)"
+                  />
+                  <el-button
+                    type="info"
+                    size="small"
+                    :icon="DocumentAdd"
+                    title="批量添加子级"
+                    class="ca-tree-op-btn info"
+                    @click.stop="openBatchAdd(data)"
+                  />
+                  <el-button
+                    type="danger"
+                    size="small"
+                    :icon="Delete"
+                    title="删除分类"
+                    class="ca-tree-op-btn danger"
+                    @click.stop="handleDelete(data)"
+                  />
+                </div>
               </div>
             </div>
           </template>
@@ -473,7 +547,7 @@ async function handleDelete(node: { id: string; name: string }) {
 
       <!-- 底部状态说明栏 -->
       <div class="cm-footer">
-        <span class="ca-footer-tip">悬浮节点可快捷「↑ 上移 / ↓ 下移」、编辑、添加子级或删除</span>
+        <span class="ca-footer-tip">整页树形表格展示：支持层级展开折叠与悬浮操作（↑ 上移 / ↓ 下移 / 编辑 / 添加 / 删除）</span>
         <button type="button" class="ca-footer-link" @click="openBatchAdd()">批量导入</button>
       </div>
     </div>
@@ -628,12 +702,18 @@ async function handleDelete(node: { id: string; name: string }) {
   background: #ffffff;
 }
 
-/* 搜索栏：全宽紧凑 */
-.ca-search-bar {
+/* 顶部搜索栏与统计：限制宽度，右侧显示总计 */
+.ca-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 10px 16px;
   border-bottom: 1px solid var(--rc-border-soft, #f1f5f9);
   background: #ffffff;
   flex-shrink: 0;
+}
+.ca-search-bar {
+  width: 280px;
 }
 .ca-search-bar :deep(.el-input__wrapper) {
   box-shadow: 0 0 0 1px var(--rc-border, #e2e8f0) inset;
@@ -646,6 +726,10 @@ async function handleDelete(node: { id: string; name: string }) {
 .ca-search-bar :deep(.el-input__wrapper.is-focus) {
   box-shadow: 0 0 0 1px var(--rc-primary, #2563eb) inset;
 }
+.ca-count-hint {
+  font-size: 12px;
+  color: var(--rc-muted, #64748b);
+}
 .ca-empty-tip {
   text-align: center;
   color: #94a3b8;
@@ -653,21 +737,35 @@ async function handleDelete(node: { id: string; name: string }) {
   padding: 48px 0;
 }
 
-/* 树容器：全高平铺，去除浮动灰框 */
+/* 树形表格表头：统一对齐列宽，消除视线割裂 */
+.ca-table-head {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  background: #f8fafc;
+  border-bottom: 1px solid var(--rc-border, #e2e8f0);
+  padding: 0 24px 0 40px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--rc-muted, #64748b);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+/* 树容器：全高平铺，单主滚动条 */
 .ca-tree-wrap {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 12px;
+  padding: 4px 16px;
   min-height: 0;
   background: #ffffff;
 }
 
-/* 树节点样式 */
+/* 树节点样式：整行树形表格化呈现 */
 .ca-category-tree :deep(.el-tree-node__content) {
-  height: 36px;
-  border-radius: 6px;
+  height: 38px;
+  border-bottom: 1px solid #f8fafc;
   padding-right: 8px;
-  margin-bottom: 2px;
   transition: background 0.15s ease;
 }
 .ca-category-tree :deep(.el-tree-node__content:hover) {
@@ -688,22 +786,24 @@ async function handleDelete(node: { id: string; name: string }) {
   margin-left: 12px;
 }
 
+/* 树行内容（列布局） */
 .ca-tree-node-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   width: 100%;
   min-width: 0;
 }
-.ca-node-info {
+
+/* 各列定义：表头与行内容共享 */
+.ca-col-name {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 7px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
-  min-width: 0;
 }
 .ca-folder-icon {
   color: #2563eb;
@@ -718,17 +818,6 @@ async function handleDelete(node: { id: string; name: string }) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* ID 仅在 hover 时轻量展示，平常隐藏，保持视觉纯净 */
-.ca-node-id {
-  font-size: 11px;
-  color: #94a3b8;
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-.ca-tree-node-row:hover .ca-node-id {
-  opacity: 1;
-}
 .ca-node-count {
   font-size: 11px;
   background: #f1f5f9;
@@ -740,27 +829,98 @@ async function handleDelete(node: { id: string; name: string }) {
   flex-shrink: 0;
 }
 
-/* 节点操作按钮：hover 平滑展示 */
+.ca-col-id {
+  width: 130px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #94a3b8;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+
+.ca-col-seq {
+  width: 80px;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.ca-col-actions {
+  width: 190px;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* 节点操作按钮：微边框独立按键样式，告别文字链接 */
 .ca-node-actions {
   display: flex;
   align-items: center;
-  gap: 1px;
-  opacity: 0;
+  justify-content: flex-end;
+  gap: 4px;
+  opacity: 0.85;
   transition: opacity 0.15s ease;
-  flex-shrink: 0;
 }
 .ca-tree-node-row:hover .ca-node-actions {
   opacity: 1;
 }
-.ca-node-actions :deep(.el-button) {
-  padding: 4px;
-  height: 24px;
+
+.ca-node-actions :deep(.ca-tree-op-btn.el-button) {
   width: 24px;
-  margin-left: 0;
+  height: 24px;
+  padding: 0;
+  margin: 0;
   border-radius: 4px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #475569;
+  font-size: 12px;
+  transition: all 0.15s ease;
 }
-.ca-node-actions :deep(.el-button:hover) {
-  background: rgba(0, 0, 0, 0.05);
+
+/* 上移 / 下移 / 修改 (Primary) */
+.ca-node-actions :deep(.ca-tree-op-btn.el-button:not(.is-disabled):hover) {
+  border-color: #93c5fd;
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+/* 添加子分类 (Success) */
+.ca-node-actions :deep(.ca-tree-op-btn.success.el-button) {
+  color: #16a34a;
+}
+.ca-node-actions :deep(.ca-tree-op-btn.success.el-button:not(.is-disabled):hover) {
+  border-color: #86efac;
+  color: #15803d;
+  background: #f0fdf4;
+}
+
+/* 批量添加子级 (Info) */
+.ca-node-actions :deep(.ca-tree-op-btn.info.el-button) {
+  color: #64748b;
+}
+.ca-node-actions :deep(.ca-tree-op-btn.info.el-button:not(.is-disabled):hover) {
+  border-color: #cbd5e1;
+  color: #334155;
+  background: #f8fafc;
+}
+
+/* 删除分类 (Danger) */
+.ca-node-actions :deep(.ca-tree-op-btn.danger.el-button) {
+  color: #ef4444;
+}
+.ca-node-actions :deep(.ca-tree-op-btn.danger.el-button:not(.is-disabled):hover) {
+  border-color: #fca5a5;
+  color: #dc2626;
+  background: #fef2f2;
+}
+
+/* 禁用态（置顶或置底无法再移） */
+.ca-node-actions :deep(.ca-tree-op-btn.el-button.is-disabled) {
+  border-color: #f1f5f9;
+  background: #f8fafc;
+  color: #cbd5e1;
+  cursor: not-allowed;
 }
 
 /* 底部状态/说明条 */
