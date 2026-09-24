@@ -41,12 +41,29 @@ export function isMockMode(): boolean {
   return MODE === 'mock'
 }
 
+/**
+ * 网关类错误：nginx 在、后端服务没起来（停机 / 重启 / 发版中）。2026-09-24 实测生产整体 502 时，
+ * 页面提示是「请求异常 [sourceType/update]: 请求失败 502」，用户看不出是后端没起来还是自己操作错了。
+ * 这几种统一说人话；状态码和端点留在括号里方便排查。
+ */
+const GATEWAY_STATUSES = new Set([502, 503, 504])
+
+function gatewayStatusOf(cause: unknown): number | undefined {
+  const status = (cause as { status?: unknown } | null)?.status
+  const detail = (cause as { gatewayDetail?: unknown } | null)?.gatewayDetail
+  // 后端自己带了业务 msg 的 5xx 不算——那是后端给出的真实原因，照原文展示
+  return typeof status === 'number' && GATEWAY_STATUSES.has(status) && !detail ? status : undefined
+}
+
 export class ApiError extends Error {
   endpoint: string
   override readonly cause?: unknown
 
   constructor(endpoint: string, cause?: unknown) {
-    super(`请求异常 [${endpoint}]: ${(cause as Error)?.message ?? String(cause)}`)
+    const gateway = gatewayStatusOf(cause)
+    super(gateway
+      ? `后端服务暂时不可用，请稍后重试（${gateway} ${endpoint}）`
+      : `请求异常 [${endpoint}]: ${(cause as Error)?.message ?? String(cause)}`)
     this.endpoint = endpoint
     this.name = 'ApiError'
     this.cause = cause
@@ -418,9 +435,11 @@ export async function request<T>(
       const err = new Error(`请求失败 ${res.status}${detail}`) as Error & {
         body?: Record<string, unknown>
         status?: number
+        gatewayDetail?: string
       }
       err.body = body
       err.status = res.status
+      err.gatewayDetail = detail
       throw err
     }
     // 2xx 但响应体为空是部分真实后端网关的合法成功态（实测撞见 vrule AI 编辑网关），

@@ -52,6 +52,37 @@ describe('业务 API 真实请求鉴权', () => {
 
   // 实测撞见：vrule AI 编辑网关有时 2xx 但响应体为空，res.json() 直接解析空字符串会抛
   // "Unexpected end of JSON input"（S6-1 联调时报出，client.ts 修 res.text()+按需 JSON.parse 兜底）
+  // 2026-09-24 生产整体 502（nginx 在、后端没起来）：原提示「请求异常 [x]: 请求失败 502」用户看不懂
+  function htmlError(status: number) {
+    return {
+      ok: false, status, redirected: false, url: '',
+      json: async (): Promise<unknown> => { throw new Error('not json') },
+      clone() { return this },
+      text: async () => '<html><body><h1>An error occurred.</h1><em>Faithfully yours, nginx.</em></body></html>',
+    } as unknown as Response
+  }
+
+  it.each([502, 503, 504])('网关错误 %i：提示「后端服务暂时不可用，请稍后重试」，括号里留状态码和端点', async (status) => {
+    fetchMock.mockResolvedValue(htmlError(status))
+    const { request } = await import('./client')
+    await expect(request('sourceType/update', {}, { method: 'POST' }))
+      .rejects.toThrow(`后端服务暂时不可用，请稍后重试（${status} sourceType/update）`)
+  })
+
+  it('500 和其他错误保持原提示', async () => {
+    fetchMock.mockResolvedValue(htmlError(500))
+    const { request } = await import('./client')
+    await expect(request('sourceType/update', {}, { method: 'POST' })).rejects.toThrow('请求异常 [sourceType/update]: 请求失败 500')
+  })
+
+  it('502 但后端带了业务 msg：照原文展示后端给的原因', async () => {
+    const res = htmlError(502) as unknown as { json: () => Promise<unknown> }
+    res.json = async () => ({ code: '-1', msg: '下游服务超时：vrule' })
+    fetchMock.mockResolvedValue(res)
+    const { request } = await import('./client')
+    await expect(request('rule/run', {}, { method: 'POST' })).rejects.toThrow('请求失败 502: 下游服务超时：vrule')
+  })
+
   it('2xx 但响应体为空：按 null 处理，不抛 JSON 解析异常', async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 200, redirected: false, url: '', text: async () => '' } as Response)
     const { request } = await import('./client')
