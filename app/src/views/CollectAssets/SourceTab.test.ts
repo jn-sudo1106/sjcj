@@ -179,60 +179,78 @@ describe('SourceTab 筛选状态', () => {
 
 })
 
-describe('SourceTab 视图切换', () => {
-  it('set-view 事件切换卡片/表格视图，委托给 ui store 持久化', async () => {
-    const { wrapper } = await mountAt()
+// 0924-06：「表格视图」改为源列表视图——复用网站详情的「源视图」组件，不限网站
+describe('SourceTab 源列表视图（0924-06）', () => {
+  beforeEach(() => localStorage.clear())
+
+  async function mountList(scope?: 'all' | 'favorite' | 'recent') {
+    const res = await mountAt(undefined, scope ? { scope } : undefined)
     const ui = useUiStore()
-    expect(ui.assetView).toBe('card') // 默认卡片视图（见 ui store）
-    await wrapper.findComponent({ name: 'FilterToolbar' }).vm.$emit('set-view', 'table')
+    await res.wrapper.findComponent({ name: 'FilterToolbar' }).vm.$emit('set-view', 'table')
     await flushPromises()
+    return { ...res, ui, list: res.wrapper.findComponent({ name: 'SourceOverviewView' }) }
+  }
+
+  it('切到源列表视图：挂源视图组件、不限网站；卡片与网站批量条都不在', async () => {
+    const { wrapper, ui, list } = await mountList()
     expect(ui.assetView).toBe('table')
-    expect(wrapper.findComponent({ name: 'TableView' }).exists()).toBe(true)
-  })
-})
-
-describe('SourceTab 批量操作', () => {
-  it('未勾选任何行时批量删除会提示并且不弹确认框', async () => {
-    const { wrapper } = await mountAt()
-    await wrapper.findComponent({ name: 'BatchBar' }).vm.$emit('batch-delete')
-    await flushPromises()
-    expect(ElMessage.warning).toHaveBeenCalledWith('请先在表格视图勾选网站或源')
-    expect(ElMessageBox.confirm).not.toHaveBeenCalled()
+    expect(list.exists()).toBe(true)
+    expect(list.props('currentSiteId')).toBe('')
+    expect(list.props('scopeSiteIds')).toBeUndefined()
+    expect(wrapper.findComponent({ name: 'SiteCardGrid' }).exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'BatchBar' }).exists()).toBe(false)
   })
 
-  it('已勾选行时批量删除会弹二次确认，确认后调用 sourceApi.deleteSource', async () => {
-    vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
-    const deleteSpy = vi.spyOn(sourceApi, 'deleteSource').mockResolvedValue({ ok: true, message: '已删除' })
-
-    const { wrapper } = await mountAt()
-    const table = wrapper.findComponent({ name: 'TableView' })
-    table.vm.selectedIds = ['s1', 's2']
-    await flushPromises()
-
-    await wrapper.findComponent({ name: 'BatchBar' }).vm.$emit('batch-delete')
-    await flushPromises()
-    await flushPromises()
-
-    expect(ElMessageBox.confirm).toHaveBeenCalled()
-    expect(deleteSpy).toHaveBeenCalledWith(['s1', 's2'])
-    expect(ElMessage.success).toHaveBeenCalled()
-    deleteSpy.mockRestore()
+  it('工具条进入源模式：网站维度的搜索 / 分类 / 标签 / 统计收起', async () => {
+    const { wrapper } = await mountList()
+    expect(wrapper.findComponent({ name: 'FilterToolbar' }).props('sourceMode')).toBe(true)
+    expect(wrapper.find('.ca-search').exists()).toBe(false)
+    expect(wrapper.find('.ca-stats').exists()).toBe(false)
   })
 
-  it('取消二次确认时不调用 API', async () => {
-    vi.mocked(ElMessageBox.confirm).mockRejectedValue('cancel' as never)
-    const deleteSpy = vi.spyOn(sourceApi, 'deleteSource')
+  it('最近打开页签：范围是最近打开的网站；一个都没有时给空数组和说明文案', async () => {
+    const rec = await import('@/utils/siteRecents')
+    rec.recentSiteIds.value = []
+    const first = await mountList('recent')
+    expect(first.list.props('scopeSiteIds')).toEqual([])
+    expect(first.list.props('scopeEmptyText')).toContain('仅本机')
 
-    const { wrapper } = await mountAt()
-    const table = wrapper.findComponent({ name: 'TableView' })
-    table.vm.selectedIds = ['s1']
+    rec.recordSiteVisit('s-a')
+    rec.recordSiteVisit('s-b')
     await flushPromises()
+    expect(first.wrapper.findComponent({ name: 'SourceOverviewView' }).props('scopeSiteIds')).toEqual(['s-b', 's-a'])
+  })
 
-    await wrapper.findComponent({ name: 'BatchBar' }).vm.$emit('batch-delete')
+  it('打开源：带网站上下文进数据视图，并记一笔最近打开', async () => {
+    const rec = await import('@/utils/siteRecents')
+    rec.recentSiteIds.value = []
+    const { list, router } = await mountList()
+    await list.vm.$emit('openSource', { sourceId: 'src-9', siteId: '105', name: '源' })
     await flushPromises()
+    expect(router.currentRoute.value.query).toEqual({ siteId: '105', sourceId: 'src-9', view: 'data' })
+    expect(rec.recentSiteIds.value[0]).toBe('105')
+  })
 
-    expect(deleteSpy).not.toHaveBeenCalled()
-    deleteSpy.mockRestore()
+  it('未关联网站的源（siteId 为 0）只带 sourceId', async () => {
+    const { list, router } = await mountList()
+    await list.vm.$emit('openSource', { sourceId: 'src-0', siteId: '0', name: '源' })
+    await flushPromises()
+    expect(router.currentRoute.value.query).toEqual({ sourceId: 'src-0', view: 'data' })
+  })
+
+  it('点所属网站：进网站源视图', async () => {
+    const { list, router } = await mountList()
+    await list.vm.$emit('openSite', '12')
+    await flushPromises()
+    expect(router.currentRoute.value.query).toEqual({ siteId: '12', view: 'source' })
+  })
+
+  it('源模式下点刷新：通知源列表重查', async () => {
+    const { wrapper, ui } = await mountList()
+    const before = ui.sourceListRevision
+    await wrapper.findComponent({ name: 'FilterToolbar' }).vm.$emit('refresh')
+    await flushPromises()
+    expect(ui.sourceListRevision).toBe(before + 1)
   })
 })
 

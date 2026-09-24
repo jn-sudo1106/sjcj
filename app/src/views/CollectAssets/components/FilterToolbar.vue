@@ -17,6 +17,9 @@ const props = defineProps<{
   view: 'card' | 'table'
   /** 只看有异常源的网站（0924-01）。原「全部状态」下拉去掉后，改由点「出错源」标签切换 */
   errorOnly?: boolean
+  /** 源列表视图（0924-06）：网站维度的搜索 / 分类 / 标签 / 统计都不适用，只留新增网站、视图切换与刷新；
+   *  源维度的条件由源列表自己的筛选栏提供 */
+  sourceMode?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -80,6 +83,7 @@ async function loadCategoryChildren(
       </button>
     </el-tooltip>
     <el-input
+      v-if="!sourceMode"
       :model-value="keyword"
       :prefix-icon="Search"
       clearable
@@ -92,6 +96,7 @@ async function loadCategoryChildren(
          tokens 统一）；check-strictly 让父子独立勾选——子级是懒加载的，级联勾选会把未加载的
          孙级 ID 漏出 categoryIds，后端 IN 匹配会漏数据。 -->
     <el-tree-select
+      v-if="!sourceMode"
       :model-value="categoryFilter"
       placeholder="全部分类"
       class="ca-category"
@@ -116,13 +121,13 @@ async function loadCategoryChildren(
         </span>
       </template>
     </el-tree-select>
-    <el-select :model-value="tagFilter" placeholder="全部标签" style="width: 130px" clearable @update:model-value="(v: string) => { emit('update:tagFilter', v); emit('filterChange') }">
+    <el-select v-if="!sourceMode" :model-value="tagFilter" placeholder="全部标签" style="width: 130px" clearable @update:model-value="(v: string) => { emit('update:tagFilter', v); emit('filterChange') }">
       <el-option label="全部标签" value="" />
       <el-option v-for="t in allTags" :key="t" :label="t" :value="t" />
     </el-select>
     <!-- 四项都跟筛选走（2026-09-23 起，后端补齐了每个网站的聚合列，由 SourceTab 对命中列表求和）。
          此前后三项是全站汇总、不随筛选变，被当成"条数没更新"（2026-09-21 用户报）。 -->
-    <div class="ca-stats">
+    <div v-if="!sourceMode" class="ca-stats">
       <el-tag
         type="info"
         effect="plain"
@@ -159,8 +164,9 @@ async function loadCategoryChildren(
       <el-tooltip content="卡片视图" placement="bottom" :show-after="120">
         <button class="ca-view-btn" :class="{ active: view === 'card' }" type="button" aria-label="卡片视图" @click="emit('setView', 'card')"><el-icon :size="15"><Grid /></el-icon></button>
       </el-tooltip>
-      <el-tooltip content="表格视图" placement="bottom" :show-after="120">
-        <button class="ca-view-btn" :class="{ active: view === 'table' }" type="button" aria-label="表格视图" @click="emit('setView', 'table')"><el-icon :size="15"><List /></el-icon></button>
+      <!-- 0924-06：原「表格视图」（按网站展开源）改为源列表视图，一行一个源 -->
+      <el-tooltip content="源列表视图" placement="bottom" :show-after="120">
+        <button class="ca-view-btn" :class="{ active: view === 'table' }" type="button" aria-label="源列表视图" @click="emit('setView', 'table')"><el-icon :size="15"><List /></el-icon></button>
       </el-tooltip>
     </div>
     <button class="ca-refresh" type="button" title="刷新" @click="emit('refresh')"><el-icon :size="14"><Refresh /></el-icon></button>

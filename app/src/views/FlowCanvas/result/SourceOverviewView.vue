@@ -1,9 +1,13 @@
 <script setup lang="ts">
-// 网站详情（左侧“全部”）下的源总览：只查当前网站，不提供跨网站/指定网站范围切换
-// （0812 会议纠偏：进入网站后源/数据/文件/监控范围必须固定为当前 siteId，不能从网站详情跨站查询）。
+// 源总览，两处在用：
+// 1. 网站详情（左侧“全部”）下的「源视图」：传 currentSiteId，只查当前网站，不提供跨网站范围切换
+//    （0812 会议纠偏：进入网站后源/数据/文件/监控范围必须固定为当前 siteId，不能从网站详情跨站查询）；
+// 2. 采集资产的「源列表视图」（0924-06，表格视图改为源列表）：currentSiteId 传空 = 不限网站，
+//    此时多出「所属网站」列和「网站」筛选；页签范围（最近打开的网站）经 scopeSiteIds 传入。
+//    同一个组件而不是另写一套，是为了两处的列、筛选、批量操作完全一致，用户学一次就会。
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { sourceApi, type Source } from '@/api'
+import { siteApi, sourceApi, type Source } from '@/api'
 import { useLaunchJobStore } from '@/stores/launchJob'
 import { useUiStore } from '@/stores/ui'
 import {
@@ -43,9 +47,23 @@ import {
  *  **不用 sourceIds 传**：一个流程最多见过 5439 个源（流程 1400976），拼进 URL 不现实；
  *  `sourcePaged` 本来就认 flowId 这个服务端条件（2026-09-02 实测：flowId=1400330 得 46 条、
  *  与该流程 sourceCnt 一致，传不存在的得 0 条，不是静默忽略）。 */
-const props = defineProps<{ currentSiteId: string; initialSourceIds?: string; initialFlowId?: string }>()
+const props = defineProps<{
+  currentSiteId: string
+  initialSourceIds?: string
+  initialFlowId?: string
+  /**
+   * 不限网站时的范围（采集资产「最近打开」页签，0924-06）：只查这些网站下的源。
+   * `undefined` = 不限；空数组 = 范围为空，直接空态、不发请求（空的 siteIds 会被后端当成"不限"）。
+   * 传了 currentSiteId 时忽略。
+   */
+  scopeSiteIds?: string[]
+  /** 范围为空时的空态文案（如最近打开一个都没有） */
+  scopeEmptyText?: string
+}>()
 const emit = defineEmits<{
   openSource: [source: Source]
+  /** 点「所属网站」（仅不限网站时有这一列） */
+  openSite: [siteId: string]
   /** 点「数据量」这个数字（0903 Y1-15）：进这个源的数据视图，而不是流程视图 */
   openSourceData: [source: Source]
 }>()
@@ -87,6 +105,48 @@ const searchPlaceholder = computed(() => SEARCH_FIELDS.find((f) => f.value === s
 /** 当前这一格落到哪个后端参数上；没选中的两个恒为 undefined */
 const searchValueOf = (field: SearchField) => (searchField.value === field ? (searchText.value.trim() || undefined) : undefined)
 const flowFilterId = ref(props.initialFlowId ?? '')
+
+/** 不限网站模式（采集资产源列表视图）：多出「所属网站」列与「网站」筛选 */
+const crossSite = computed(() => !props.currentSiteId)
+/** 「网站」筛选：'' = 不限，'-1' = 未关联网站（后端约定，source-api.md §1.1） */
+const siteFilter = ref('')
+const UNBOUND_SITE = '-1'
+/**
+ * 不限网站时自己拉一次全量网站（当前约 98 个，一个请求），两处用：「网站」筛选的候选，
+ * 以及「所属网站」列的名称——**sourcePaged 列表不返回 siteName**，只有 siteId
+ * （2026-09-24 生产实测；source-api.md 字段对照表里的 siteName 在分页列表里并不出现）。
+ */
+const siteOptions = ref<{ siteId: string; name: string }[]>([])
+async function loadSiteOptions() {
+  if (!crossSite.value || siteOptions.value.length) return
+  try {
+    const result = await siteApi.sitePaged({ page: 1, size: 2000 })
+    siteOptions.value = result.list.map((s) => ({ siteId: s.siteId, name: s.name }))
+  } catch {
+    // 候选只是筛选辅助，拉不到就只剩「未关联网站」，不打断列表
+    siteOptions.value = []
+  }
+}
+const siteNameById = computed(() => new Map(siteOptions.value.map((s) => [s.siteId, s.name])))
+function siteNameOf(source: Source): string {
+  return source.siteName || siteNameById.value.get(String(source.siteId)) || String(source.siteId)
+}
+/** 候选按范围收窄：最近打开页签里只列最近打开的那几个网站 */
+const siteFilterOptions = computed(() => {
+  const all = siteOptions.value
+  if (!props.scopeSiteIds) return all
+  const scope = new Set(props.scopeSiteIds)
+  return all.filter((s) => scope.has(s.siteId))
+})
+/** 范围给了但是空的：不发请求，直接空态 */
+const scopeEmpty = computed(() => crossSite.value && !!props.scopeSiteIds && props.scopeSiteIds.length === 0)
+/** 实际发给后端的 siteIds（逗号分隔）。当前网站 > 网站筛选 > 页签范围 > 不限 */
+function effectiveSiteIds(): string | undefined {
+  if (props.currentSiteId) return props.currentSiteId
+  if (siteFilter.value) return siteFilter.value
+  if (props.scopeSiteIds) return props.scopeSiteIds.join(',') || undefined
+  return undefined
+}
 watch(() => props.initialFlowId, (id) => { flowFilterId.value = id ?? '' })
 // prop 变化也要生效：反查跳过来时本组件常常已经挂载着（同一个 SiteDetailView 里切视图），
 // 只把它当初始值用等于永远不生效。清空不跟随——那是用户自己在筛选框里的操作，别覆盖他。
@@ -156,7 +216,7 @@ const parsedDataCountMax = computed<number | undefined>(() => {
 
 function currentQuery(): SourceFilter {
   return {
-    siteIds: props.currentSiteId || undefined,
+    siteIds: effectiveSiteIds(),
     sourceIds: searchValueOf('sourceIds'),
     flowId: flowFilterId.value || undefined,
     name: searchValueOf('name'),
@@ -178,6 +238,13 @@ async function fetchSourcePage(query: SourceFilter & { page: number; size: numbe
 
 async function loadSources() {
   const requestId = ++sourceRequestSeq
+  if (scopeEmpty.value) {
+    rows.value = []
+    total.value = 0
+    loadError.value = ''
+    loading.value = false
+    return
+  }
   loading.value = true
   loadError.value = ''
   try {
@@ -213,6 +280,7 @@ function clearFilters() {
   remarkFilter.value = ''
   remarkMode.value = ''
   dataCountMax.value = ''
+  siteFilter.value = ''
   search()
 }
 function toggleSort(field: string) {
@@ -493,7 +561,7 @@ async function exportSources() {
     }
     const rows = [[...SOURCE_EXPORT_HEADER], ...sources.map(sourceToExportRow)]
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, '')
-    downloadXlsx(`源列表_${props.currentSiteId || 'site'}_${date}.xlsx`, rows, '源列表')
+    downloadXlsx(`源列表_${props.currentSiteId || '全部网站'}_${date}.xlsx`, rows, '源列表')
     ElMessage.success(`已按当前查询条件导出 ${sources.length} 个源`)
   } catch (error) {
     if ((error as { name?: string }).name === 'AbortError') return
@@ -769,7 +837,7 @@ function onMarkEdited(payload: { tags: string[]; remark: string }) {
 async function loadTagCandidates() {
   try {
     serverTags.value = await sourceApi.sourceTags({
-      siteIds: props.currentSiteId || undefined,
+      siteIds: effectiveSiteIds(),
       sourceIds: searchValueOf('sourceIds'),
       name: searchValueOf('name'),
     })
@@ -788,12 +856,22 @@ onMounted(() => {
   document.addEventListener('keydown', onMarkKeydown)
   void loadSources()
   void loadTagCandidates()
+  void loadSiteOptions()
 })
 onUnmounted(() => {
   document.removeEventListener('mousedown', onMarkPointerDown)
   document.removeEventListener('keydown', onMarkKeydown)
 })
 watch(() => props.currentSiteId, () => {
+  page.value = 1
+  void loadSources()
+  void loadTagCandidates()
+})
+// 页签范围变了（最近打开多了一个网站）：已选的网站若不在新范围里就放掉，再重查
+watch(() => (props.scopeSiteIds ? props.scopeSiteIds.join(',') : null), () => {
+  if (siteFilter.value && siteFilter.value !== UNBOUND_SITE && !siteFilterOptions.value.some((s) => s.siteId === siteFilter.value)) {
+    siteFilter.value = ''
+  }
   page.value = 1
   void loadSources()
   void loadTagCandidates()
@@ -828,6 +906,14 @@ watch(() => ui.sourceListRevision, () => {
             @keyup.enter="search"
           />
         </span>
+      </label>
+      <!-- 网站筛选：只在不限网站（采集资产源列表视图）时出现；网站详情里范围固定为当前网站 -->
+      <label v-if="crossSite">网站
+        <select v-model="siteFilter" data-testid="source-overview-site" @change="search">
+          <option value="">全部网站</option>
+          <option v-if="!scopeSiteIds" :value="UNBOUND_SITE">未关联网站</option>
+          <option v-for="s in siteFilterOptions" :key="s.siteId" :value="s.siteId">{{ s.name }}</option>
+        </select>
       </label>
       <label>状态
         <select v-model="statusFilter" data-testid="source-overview-state" @change="search">
@@ -942,6 +1028,7 @@ watch(() => ui.sourceListRevision, () => {
             </th>
             <th><button class="sov-sort" type="button" data-testid="sort-source-id" :title="sortLabel('SOURCE_ID')" @click="toggleSort('SOURCE_ID')">源 ID <span>{{ sortField === 'SOURCE_ID' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕' }}</span></button></th>
             <th>源名称</th>
+            <th v-if="crossSite">所属网站</th>
             <th>URL</th><th>主表</th>
             <th>标签</th>
             <th><button class="sov-sort" type="button" data-testid="sort-data-cnt" :title="sortLabel('DATA_CNT')" @click="toggleSort('DATA_CNT')">数据 <span>{{ sortField === 'DATA_CNT' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕' }}</span></button></th>
@@ -967,6 +1054,16 @@ watch(() => ui.sourceListRevision, () => {
                  ID 才是唯一标识）。等宽字体保持 ID 的可读性与列表其它 ID 一致。 -->
             <td><button class="sov-link sov-id-link" type="button" data-testid="source-overview-id-link" :title="`打开源 ${source.sourceId} 的详情`" @click="emit('openSource', source)">{{ source.sourceId }}</button></td>
             <td class="sov-name" :title="source.name"><button class="sov-link sov-source-link" type="button" data-testid="source-overview-source-link" @click="emit('openSource', source)">{{ source.name }}</button></td>
+            <td v-if="crossSite" class="sov-site" :title="siteNameOf(source)">
+              <button
+                v-if="source.siteId && source.siteId !== '0'"
+                class="sov-link"
+                type="button"
+                data-testid="source-overview-site-link"
+                @click="emit('openSite', source.siteId)"
+              >{{ siteNameOf(source) }}</button>
+              <span v-else class="sov-muted">未关联</span>
+            </td>
             <td class="sov-url" :title="source.url">
               <a v-if="source.url" :href="source.url" target="_blank" rel="noopener noreferrer" @click.stop>{{ source.url }}</a>
               <template v-else>—</template>
@@ -1019,7 +1116,7 @@ watch(() => ui.sourceListRevision, () => {
               >{{ source.remark || '—' }}</button>
             </td>
           </tr>
-          <tr v-if="!loading && !rows.length"><td colspan="13" class="sov-empty">{{ loadError || '暂无符合条件的源' }}</td></tr>
+          <tr v-if="!loading && !rows.length"><td :colspan="crossSite ? 14 : 13" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -1118,6 +1215,8 @@ watch(() => ui.sourceListRevision, () => {
 .sov-url { max-width: 220px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-primary) !important; }
 .sov-url a { color: inherit; text-decoration: none; }
 .sov-url a:hover { text-decoration: underline; }
+.sov-site { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sov-muted { color: var(--rc-faint); }
 .sov-empty { padding: 42px !important; text-align: center !important; color: var(--rc-faint) !important; }
 .sov-check-col { width: 34px; text-align: center; }
 .sov-check-col input { cursor: pointer; accent-color: var(--rc-primary); margin: 0; }

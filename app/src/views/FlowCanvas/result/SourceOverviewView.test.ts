@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, shallowMount } from '@vue/test-utils'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SourceOverviewView from './SourceOverviewView.vue'
-import { sourceApi, type Source } from '@/api'
+import { siteApi, sourceApi, type Source } from '@/api'
 import * as xlsxExport from '@/utils/format/xlsxExport'
 import { createPinia, setActivePinia } from 'pinia'
 import { useUiStore } from '@/stores/ui'
@@ -1197,3 +1197,102 @@ describe('源视图 · 查询三合一（0917-11）', () => {
   })
 })
 
+
+// 0924-06：采集资产的源列表视图复用本组件，currentSiteId 传空 = 不限网站
+describe('源视图 · 不限网站（采集资产源列表视图，0924-06）', () => {
+  const rowOf = (over: Partial<Source>): Source => ({
+    sourceId: 'src-1', name: '源', url: 'https://a.example.com', configId: 'cfg-1',
+    mainTable: 'T1', owner: 'admin', state: 'C', ...over,
+  } as Source)
+
+  async function mountCross(props: Record<string, unknown> = {}) {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 2,
+      list: [rowOf({ sourceId: 's1', siteId: '105', siteName: '公众号采集-测试' }), rowOf({ sourceId: 's2', siteId: '0' })],
+    })
+    const sites = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({
+      total: 3,
+      list: [{ siteId: '105', name: '公众号采集-测试' }, { siteId: '12', name: '上市公司' }, { siteId: '89', name: '主流媒体' }] as never,
+    })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: '', ...props }, attachTo: document.body })
+    await flushPromises()
+    return { wrapper, page, sites }
+  }
+  const lastQuery = (page: { mock: { calls: unknown[][] } }) => page.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined
+
+  afterEach(() => vi.restoreAllMocks())
+
+  it('不带 siteIds；多出「所属网站」列（用接口返回的 siteName），未关联的源显示「未关联」', async () => {
+    const { wrapper, page } = await mountCross()
+    expect(lastQuery(page)?.siteIds).toBeUndefined()
+    expect(wrapper.findAll('th').map((th) => th.text())).toContain('所属网站')
+    const links = wrapper.findAll('[data-testid="source-overview-site-link"]')
+    expect(links.map((l) => l.text())).toEqual(['公众号采集-测试'])
+    expect(wrapper.text()).toContain('未关联')
+  })
+
+  // 生产 sourcePaged 列表只有 siteId、没有 siteName：名称从组件自己拉的网站列表里对
+  it('接口没给 siteName 时，用网站列表把 siteId 换成名称', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [rowOf({ sourceId: 's3', siteId: '12' })] })
+    vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 1, list: [{ siteId: '12', name: '上市公司' }] as never })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: '' }, attachTo: document.body })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="source-overview-site-link"]').text()).toBe('上市公司')
+  })
+
+  it('点所属网站发 openSite', async () => {
+    const { wrapper } = await mountCross()
+    await wrapper.get('[data-testid="source-overview-site-link"]').trigger('click')
+    expect(wrapper.emitted('openSite')?.[0]).toEqual(['105'])
+  })
+
+  it('「网站」筛选：候选由组件自己拉；选中后按该网站查，「未关联网站」传 -1，清空还原', async () => {
+    const { wrapper, page, sites } = await mountCross()
+    expect(sites).toHaveBeenCalledTimes(1)
+    const select = wrapper.get('[data-testid="source-overview-site"]')
+    expect(select.findAll('option').map((o) => o.text())).toEqual(['全部网站', '未关联网站', '公众号采集-测试', '上市公司', '主流媒体'])
+
+    await select.setValue('12')
+    await flushPromises()
+    expect(lastQuery(page)?.siteIds).toBe('12')
+
+    await select.setValue('-1')
+    await flushPromises()
+    expect(lastQuery(page)?.siteIds).toBe('-1')
+
+    await wrapper.findAll('button').find((b) => b.text() === '清空')!.trigger('click')
+    await flushPromises()
+    expect(lastQuery(page)?.siteIds).toBeUndefined()
+  })
+
+  it('页签范围 scopeSiteIds：按逗号拼成 siteIds；网站候选只列范围内的，不给「未关联网站」', async () => {
+    const { wrapper, page } = await mountCross({ scopeSiteIds: ['89', '12'] })
+    expect(lastQuery(page)?.siteIds).toBe('89,12')
+    const options = wrapper.get('[data-testid="source-overview-site"]').findAll('option').map((o) => o.text())
+    expect(options).toEqual(['全部网站', '上市公司', '主流媒体'])
+  })
+
+  it('范围为空数组：不发请求，显示调用方给的空态文案', async () => {
+    const { wrapper, page } = await mountCross({ scopeSiteIds: [], scopeEmptyText: '还没有打开过网站' })
+    expect(page).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('还没有打开过网站')
+  })
+
+  it('范围变了就重查', async () => {
+    const { wrapper, page } = await mountCross({ scopeSiteIds: ['89'] })
+    page.mockClear()
+    await wrapper.setProps({ scopeSiteIds: ['105', '89'] })
+    await flushPromises()
+    expect(lastQuery(page)?.siteIds).toBe('105,89')
+  })
+
+  it('网站详情里（传了 currentSiteId）：没有所属网站列和网站筛选，也不去拉网站列表', async () => {
+    const sites = vi.spyOn(siteApi, 'sitePaged')
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [rowOf({})] })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: '12' }, attachTo: document.body })
+    await flushPromises()
+    expect(wrapper.findAll('th').map((th) => th.text())).not.toContain('所属网站')
+    expect(wrapper.find('[data-testid="source-overview-site"]').exists()).toBe(false)
+    expect(sites).not.toHaveBeenCalled()
+  })
+})

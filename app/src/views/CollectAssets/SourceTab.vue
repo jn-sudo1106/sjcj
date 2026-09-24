@@ -2,15 +2,13 @@
 import { computed, onActivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { sourceApi, siteApi, expandCategoryIds, type Site, type SourceCategory } from '@/api'
+import { sourceApi, siteApi, expandCategoryIds, type Site, type Source, type SourceCategory } from '@/api'
 import { useUiStore } from '@/stores/ui'
-import { confirmDanger } from '@/utils/confirmDanger'
 import { favoriteSiteIds, loadFavoriteSites } from '@/utils/siteFavorites'
-import { recentRankOf, recentSiteIds } from '@/utils/siteRecents'
+import { recentRankOf, recentSiteIds, recordSiteVisit } from '@/utils/siteRecents'
 import SiteCardGrid from './SiteCardGrid.vue'
 import FilterToolbar from './components/FilterToolbar.vue'
-import BatchBar from './components/BatchBar.vue'
-import TableView from './components/TableView.vue'
+import SourceOverviewView from '@/views/FlowCanvas/result/SourceOverviewView.vue'
 import SiteEditorDialog from './components/SiteEditorDialog.vue'
 import { beginSitesFetch, collectAssetsCache, clearCollectAssetsCache, commitSites } from './siteListCache'
 
@@ -63,7 +61,6 @@ watch(() => props.scope, () => applyView())
 function toggleErrorOnly() {
   stateFilter.value = stateFilter.value === 'error' ? 'all' : 'error'
   page.value = 1
-  selectedIds.value = []
   applyView()
 }
 
@@ -305,7 +302,6 @@ async function loadTagOptions() {
 
 function resetAndLoad() {
   page.value = 1
-  selectedIds.value = []
   loadList()
 }
 async function refreshAll() {
@@ -315,13 +311,41 @@ async function refreshAll() {
 
 // ---- 筛选辅助 ----
 // ---- 视图偏好 ----
+// 'table' 这个取值沿用（存在 localStorage 里），0924-06 起它渲染的是**源列表视图**：
+// 复用网站详情的「源视图」组件，不限网站，一行一个源。
 const view = computed(() => ui.assetView)
+
+// ---- 源列表视图（0924-06）----
+/** 页签范围：最近打开 = 那几个网站下的源；我的收藏 = 收藏网站下的源（0924-08 改为收藏的源） */
+const sourceScopeSiteIds = computed<string[] | undefined>(() => {
+  if (recentOnly.value) return recentSiteIds.value
+  if (favOnly.value) return [...favoriteSiteIds.value]
+  return undefined
+})
+const sourceScopeEmptyText = computed(() => {
+  if (recentOnly.value) return '还没有打开过网站，打开过的网站会自动出现在这里（最多 10 个，仅本机）'
+  if (favOnly.value) return '还没有收藏的网站，在卡片视图里点 ☆ 收藏'
+  return ''
+})
+/** 打开源：与网站详情「源视图」同一落点（数据视图），带上网站上下文，左侧才加载得出同网站的源 */
+function openSourceFromList(source: Source) {
+  if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId)
+  void router.push({
+    path: '/canvas',
+    query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view: 'data' },
+  })
+}
+function openSiteFromList(siteId: string) {
+  recordSiteVisit(siteId)
+  void router.push({ path: '/canvas', query: { siteId, view: 'source' } })
+}
+function onToolbarRefresh() {
+  if (view.value === 'table') ui.notifySourceListChanged()
+  else void refreshAll()
+}
 function setView(v: 'card' | 'table') {
   ui.setAssetView(v)
 }
-
-// ---- 选中状态 ----
-const selectedIds = ref<string[]>([])
 
 // ---- 搜索 debounce（300ms）----
 let kwTimer: ReturnType<typeof setTimeout> | undefined
@@ -330,71 +354,6 @@ function onKeywordChange() {
   kwTimer = setTimeout(() => resetAndLoad(), 300)
 }
 watch(keyword, onKeywordChange)
-
-// ---- 批量操作 ----
-function requireSelection(): boolean {
-  if (!selectedIds.value.length) {
-    ElMessage.warning('请先在表格视图勾选网站或源')
-    return false
-  }
-  return true
-}
-
-function onBatchSnatch() {
-  if (!requireSelection()) return
-  confirmDanger('批量发任务', `将向选中的 ${selectedIds.value.length} 个源下发抓取任务，是否继续？`, () =>
-    sourceApi.sendSnatch(selectedIds.value),
-  )
-}
-
-function onBatchDelete() {
-  if (!requireSelection()) return
-  confirmDanger('批量删除（高危）', `将删除选中的 ${selectedIds.value.length} 个源，删除后不可恢复，是否继续？`, () =>
-    sourceApi.deleteSource(selectedIds.value),
-  )
-}
-
-function onOperate(cmd: string) {
-  if (!requireSelection()) return
-  const map: Record<string, string> = {
-    success: '改为成功状态', enable: '启用', disable: '禁用', delete: '删除',
-    schedule: '批量定时', modify: '批量改配置',
-  }
-  if (cmd === 'delete') return onBatchDelete()
-  if (cmd === 'success' || cmd === 'enable' || cmd === 'disable') {
-    return confirmDanger(`${map[cmd]}（${selectedIds.value.length} 个源）`, `确认对选中源执行「${map[cmd]}」？`, async () => {
-      let failed = 0
-      for (const id of selectedIds.value) {
-        const r = cmd === 'success'
-          ? await sourceApi.changeToSuccess(id)
-          : await sourceApi.changeSourceEnable(id, cmd !== 'enable')
-        if (!r?.ok) failed++
-      }
-      await loadList({ force: true })
-      await loadStats({ force: true })
-      return failed
-        ? { message: `已处理 ${selectedIds.value.length - failed} 个、失败 ${failed} 个（演示）` }
-        : { message: `已对 ${selectedIds.value.length} 个源执行「${map[cmd]}」（演示）` }
-    })
-  }
-  confirmDanger(`${map[cmd]}（${selectedIds.value.length} 个源）`, `确认对选中源执行「${map[cmd]}」？`, () =>
-    cmd === 'modify'
-      ? sourceApi.batchModifyConfig(selectedIds.value, '-')
-      : cmd === 'schedule'
-        ? sourceApi.batchSchedule(selectedIds.value)
-        : sourceApi.changeSourceEnable(selectedIds.value[0], cmd !== 'enable'),
-  )
-}
-
-function onMonitor(cmd: string) {
-  if (!requireSelection()) return
-  if (cmd.startsWith('freq')) {
-    const tag = cmd.replace('freq-', '')
-    return confirmDanger('频率标识', `将选中源频率标识设为「${tag}」？`, () => sourceApi.changeFreqTag(selectedIds.value, tag))
-  }
-  const verb = cmd === 'normal' ? '人工核验已正常' : '人工标为异常'
-  confirmDanger(verb, `确认对选中源执行「${verb}」？`, () => sourceApi.markVerified(selectedIds.value, cmd))
-}
 
 // ---- 网站编辑 / 新建 ----
 function openSiteEditor(site: Site) {
@@ -480,20 +439,12 @@ onUnmounted(() => {
       :total="total"
       :stats="toolbarStats"
       :view="view"
+      :source-mode="view === 'table'"
       @filter-change="resetAndLoad"
       @toggle-error-only="toggleErrorOnly"
-      @refresh="refreshAll"
+      @refresh="onToolbarRefresh"
       @set-view="setView"
       @create-site="openSiteCreator"
-    />
-
-    <BatchBar
-      :selected-count="selectedIds.length"
-      @batch-snatch="onBatchSnatch"
-      @batch-delete="onBatchDelete"
-      @operate="onOperate"
-      @monitor="onMonitor"
-      @clear-selection="() => { selectedIds = [] }"
     />
 
     <!-- 卡片视图 -->
@@ -501,19 +452,16 @@ onUnmounted(() => {
       <SiteCardGrid :sites="sites" :loading="loading" :empty-text="emptyText" @open-editor="openSiteEditor" />
     </div>
 
-    <!-- 表格视图 -->
-    <TableView
+    <!-- 源列表视图（0924-06）：一行一个源，复用网站详情的「源视图」，不限网站 -->
+    <SourceOverviewView
       v-else
-      :sites="sites"
-      :loading="loading"
-      :total="total"
-      :page="page"
-      :size="size"
-      :selected-ids="selectedIds"
-      @update:page="(p: number) => { page = p; loadList() }"
-      @update:size="(s: number) => { size = s }"
-      @update:selected-ids="(ids: string[]) => { selectedIds = ids }"
-      @open-editor="openSiteEditor"
+      class="ca-source-list"
+      current-site-id=""
+      :scope-site-ids="sourceScopeSiteIds"
+      :scope-empty-text="sourceScopeEmptyText"
+      @open-source="openSourceFromList"
+      @open-source-data="openSourceFromList"
+      @open-site="openSiteFromList"
     />
 
     <!-- 卡片视图分页：**常驻**，与表格视图一致（2026-09-18）。
@@ -547,7 +495,9 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.ca-page { display: flex; flex-direction: column; gap: 12px; }
+.ca-page { display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; }
+/* 源视图组件自带灰底内边距（在网站详情里是整块主区），放进采集资产去掉，和工具条对齐 */
+.ca-source-list { padding: 0; background: transparent; }
 
 .ca-card-body { min-height: 200px; }
 
