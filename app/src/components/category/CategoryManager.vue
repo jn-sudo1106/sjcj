@@ -363,7 +363,7 @@ async function handleDelete(node: { id: string; name: string }) {
             @clear="handleClearSearch"
           />
         </div>
-        <span v-if="!isSearching" class="ca-count-hint">共 {{ rootCategories.length }} 个分类目录</span>
+        <span v-if="!isSearching" class="ca-count-hint">共 {{ rootCategories.length }} 个一级分类</span>
         <span v-else class="ca-count-hint">搜索结果（按层级展示）</span>
       </div>
 
@@ -375,212 +375,197 @@ async function handleDelete(node: { id: string; name: string }) {
           批量添加
         </el-button>
         <el-tooltip content="刷新分类" placement="top" :show-after="120">
-          <button type="button" class="ca-icon-btn" title="刷新分类" aria-label="刷新分类" @click="reloadTree">
+          <button type="button" class="ca-icon-btn" aria-label="刷新分类" @click="reloadTree">
             <el-icon :size="14"><Refresh /></el-icon>
           </button>
         </el-tooltip>
       </div>
     </div>
 
-      <!-- 树形表格表头：列对齐，彻底消除通栏拉伸视线割裂 -->
-      <div class="ca-table-head">
-        <div class="ca-col ca-col-name">分类名称</div>
-        <div class="ca-col ca-col-id">分类 ID</div>
-        <div class="ca-col ca-col-seq">排序</div>
-        <div class="ca-col ca-col-actions">操作</div>
+    <!-- 树形表格表头：列对齐，彻底消除通栏拉伸视线割裂 -->
+    <div class="ca-table-head">
+      <div class="ca-col ca-col-name">分类名称</div>
+      <div class="ca-col ca-col-id">分类 ID</div>
+      <div class="ca-col ca-col-seq">排序</div>
+      <div class="ca-col ca-col-actions">操作</div>
+    </div>
+
+    <!-- 分类目录树容器 -->
+    <div class="ca-tree-wrap">
+      <!-- 搜索无匹配提示 -->
+      <div v-if="isSearching && !searchTreeData.length && !searching" class="ca-empty-tip">
+        无匹配分类
       </div>
 
-      <!-- 分类目录树容器 -->
-      <div class="ca-tree-wrap">
-        <!-- 搜索无匹配提示 -->
-        <div v-if="isSearching && !searchTreeData.length && !searching" class="ca-empty-tip">
-          无匹配分类
-        </div>
-
-        <!-- 搜索结果树（层级树形展示） -->
-        <el-tree
-          v-else-if="isSearching"
-          :data="searchTreeData"
-          :props="{ label: 'name', children: 'children' }"
-          node-key="id"
-          default-expand-all
-          class="ca-category-tree"
-        >
-          <template #default="{ node, data }">
-            <div class="ca-tree-node-row">
-              <div class="ca-col ca-col-name">
-                <el-icon class="ca-folder-icon">
-                  <FolderOpened v-if="node.expanded" />
-                  <Folder v-else />
-                </el-icon>
-                <span class="ca-node-label" :title="data.name">{{ data.name }}</span>
-                <span v-if="data.count != null" class="ca-node-count">{{ data.count }}</span>
+      <!-- 搜索结果树（层级树形展示） -->
+      <el-tree
+        v-else-if="isSearching"
+        :data="searchTreeData"
+        :props="{ label: 'name', children: 'children' }"
+        node-key="id"
+        default-expand-all
+        class="ca-category-tree"
+      >
+        <template #default="{ node, data }">
+          <div class="ca-tree-node-row">
+            <div class="ca-col ca-col-name">
+              <el-icon class="ca-folder-icon">
+                <FolderOpened v-if="node.expanded" />
+                <Folder v-else />
+              </el-icon>
+              <span class="ca-node-label" :title="data.name">{{ data.name }}</span>
+              <span v-if="data.count != null" class="ca-node-count">{{ data.count }}</span>
+            </div>
+            <div class="ca-col ca-col-id">#{{ data.id }}</div>
+            <div class="ca-col ca-col-seq">{{ data.seq ?? '—' }}</div>
+            <div class="ca-col ca-col-actions">
+              <div class="ca-node-actions">
+                <el-tooltip content="修改分类" placement="top" :show-after="120">
+                  <el-button
+                    link
+                    type="primary"
+                    size="small"
+                    :icon="Edit"
+                    aria-label="修改分类"
+                    @click.stop="openEdit(data)"
+                  />
+                </el-tooltip>
+                <el-tooltip content="添加子分类" placement="top" :show-after="120">
+                  <el-button
+                    link
+                    type="success"
+                    size="small"
+                    :icon="Plus"
+                    aria-label="添加子分类"
+                    @click.stop="openAddSub(data)"
+                  />
+                </el-tooltip>
+                <el-tooltip content="批量添加子级" placement="top" :show-after="120">
+                  <el-button
+                    link
+                    type="info"
+                    size="small"
+                    :icon="DocumentAdd"
+                    aria-label="批量添加子级"
+                    @click.stop="openBatchAdd(data)"
+                  />
+                </el-tooltip>
+                <el-tooltip content="删除分类" placement="top" :show-after="120">
+                  <el-button
+                    link
+                    type="danger"
+                    size="small"
+                    :icon="Delete"
+                    aria-label="删除分类"
+                    @click.stop="handleDelete(data)"
+                  />
+                </el-tooltip>
               </div>
-              <div class="ca-col ca-col-id">#{{ data.id }}</div>
-              <div class="ca-col ca-col-seq">{{ data.seq ?? '—' }}</div>
-              <div class="ca-col ca-col-actions">
-                <div class="ca-node-actions">
-                  <el-tooltip content="修改分类" placement="top" :show-after="120">
+            </div>
+          </div>
+        </template>
+      </el-tree>
+
+      <!-- 常规懒加载目录树 -->
+      <el-tree
+        v-else
+        :key="treeKey"
+        lazy
+        :load="loadTreeNodes"
+        :props="{ label: 'name', children: 'children', isLeaf: 'isLeaf' }"
+        node-key="id"
+        :default-expanded-keys="expandedKeys"
+        class="ca-category-tree"
+        @node-expand="onNodeExpand"
+        @node-collapse="onNodeCollapse"
+      >
+        <template #default="{ node, data }">
+          <div class="ca-tree-node-row">
+            <div class="ca-col ca-col-name">
+              <el-icon class="ca-folder-icon">
+                <FolderOpened v-if="node.expanded" />
+                <Folder v-else />
+              </el-icon>
+              <span class="ca-node-label" :title="data.name">{{ data.name }}</span>
+              <span v-if="data.count != null" class="ca-node-count">{{ data.count }}</span>
+            </div>
+            <div class="ca-col ca-col-id">#{{ data.id }}</div>
+            <div class="ca-col ca-col-seq">{{ data.seq ?? '—' }}</div>
+            <div class="ca-col ca-col-actions">
+              <div class="ca-node-actions">
+                <el-tooltip :content="isFirstSibling(node) ? '已在最顶部' : '上移'" placement="top" :show-after="120">
+                  <span class="ca-btn-wrap">
                     <el-button
                       link
                       type="primary"
                       size="small"
-                      :icon="Edit"
-                      title="修改分类"
-                      aria-label="修改分类"
-                      @click.stop="openEdit(data)"
+                      :icon="Top"
+                      aria-label="上移"
+                      :disabled="isFirstSibling(node) || !!movingNodeId"
+                      @click.stop="moveNode(node, 'up')"
                     />
-                  </el-tooltip>
-                  <el-tooltip content="添加子分类" placement="top" :show-after="120">
-                    <el-button
-                      link
-                      type="success"
-                      size="small"
-                      :icon="Plus"
-                      title="添加子分类"
-                      aria-label="添加子分类"
-                      @click.stop="openAddSub(data)"
-                    />
-                  </el-tooltip>
-                  <el-tooltip content="批量添加子级" placement="top" :show-after="120">
-                    <el-button
-                      link
-                      type="info"
-                      size="small"
-                      :icon="DocumentAdd"
-                      title="批量添加子级"
-                      aria-label="批量添加子级"
-                      @click.stop="openBatchAdd(data)"
-                    />
-                  </el-tooltip>
-                  <el-tooltip content="删除分类" placement="top" :show-after="120">
-                    <el-button
-                      link
-                      type="danger"
-                      size="small"
-                      :icon="Delete"
-                      title="删除分类"
-                      aria-label="删除分类"
-                      @click.stop="handleDelete(data)"
-                    />
-                  </el-tooltip>
-                </div>
-              </div>
-            </div>
-          </template>
-        </el-tree>
-
-        <!-- 常规懒加载目录树 -->
-        <el-tree
-          v-else
-          :key="treeKey"
-          lazy
-          :load="loadTreeNodes"
-          :props="{ label: 'name', children: 'children', isLeaf: 'isLeaf' }"
-          node-key="id"
-          :default-expanded-keys="expandedKeys"
-          class="ca-category-tree"
-          @node-expand="onNodeExpand"
-          @node-collapse="onNodeCollapse"
-        >
-          <template #default="{ node, data }">
-            <div class="ca-tree-node-row">
-              <div class="ca-col ca-col-name">
-                <el-icon class="ca-folder-icon">
-                  <FolderOpened v-if="node.expanded" />
-                  <Folder v-else />
-                </el-icon>
-                <span class="ca-node-label" :title="data.name">{{ data.name }}</span>
-                <span v-if="data.count != null" class="ca-node-count">{{ data.count }}</span>
-              </div>
-              <div class="ca-col ca-col-id">#{{ data.id }}</div>
-              <div class="ca-col ca-col-seq">{{ data.seq ?? '—' }}</div>
-              <div class="ca-col ca-col-actions">
-                <div class="ca-node-actions">
-                  <el-tooltip :content="isFirstSibling(node) ? '已在最顶部' : '上移'" placement="top" :show-after="120">
-                    <span class="ca-btn-wrap">
-                      <el-button
-                        link
-                        type="primary"
-                        size="small"
-                        :icon="Top"
-                        title="上移"
-                        aria-label="上移"
-                        :disabled="isFirstSibling(node) || !!movingNodeId"
-                        @click.stop="moveNode(node, 'up')"
-                      />
-                    </span>
-                  </el-tooltip>
-                  <el-tooltip :content="isLastSibling(node) ? '已在最底部' : '下移'" placement="top" :show-after="120">
-                    <span class="ca-btn-wrap">
-                      <el-button
-                        link
-                        type="primary"
-                        size="small"
-                        :icon="Bottom"
-                        title="下移"
-                        aria-label="下移"
-                        :disabled="isLastSibling(node) || !!movingNodeId"
-                        @click.stop="moveNode(node, 'down')"
-                      />
-                    </span>
-                  </el-tooltip>
-                  <el-tooltip content="修改分类" placement="top" :show-after="120">
+                  </span>
+                </el-tooltip>
+                <el-tooltip :content="isLastSibling(node) ? '已在最底部' : '下移'" placement="top" :show-after="120">
+                  <span class="ca-btn-wrap">
                     <el-button
                       link
                       type="primary"
                       size="small"
-                      :icon="Edit"
-                      title="修改分类"
-                      aria-label="修改分类"
-                      @click.stop="openEdit(data)"
+                      :icon="Bottom"
+                      aria-label="下移"
+                      :disabled="isLastSibling(node) || !!movingNodeId"
+                      @click.stop="moveNode(node, 'down')"
                     />
-                  </el-tooltip>
-                  <el-tooltip content="添加子分类" placement="top" :show-after="120">
-                    <el-button
-                      link
-                      type="success"
-                      size="small"
-                      :icon="Plus"
-                      title="添加子分类"
-                      aria-label="添加子分类"
-                      @click.stop="openAddSub(data)"
-                    />
-                  </el-tooltip>
-                  <el-tooltip content="批量添加子级" placement="top" :show-after="120">
-                    <el-button
-                      link
-                      type="info"
-                      size="small"
-                      :icon="DocumentAdd"
-                      title="批量添加子级"
-                      aria-label="批量添加子级"
-                      @click.stop="openBatchAdd(data)"
-                    />
-                  </el-tooltip>
-                  <el-tooltip content="删除分类" placement="top" :show-after="120">
-                    <el-button
-                      link
-                      type="danger"
-                      size="small"
-                      :icon="Delete"
-                      title="删除分类"
-                      aria-label="删除分类"
-                      @click.stop="handleDelete(data)"
-                    />
-                  </el-tooltip>
-                </div>
+                  </span>
+                </el-tooltip>
+                <el-tooltip content="修改分类" placement="top" :show-after="120">
+                  <el-button
+                    link
+                    type="primary"
+                    size="small"
+                    :icon="Edit"
+                    aria-label="修改分类"
+                    @click.stop="openEdit(data)"
+                  />
+                </el-tooltip>
+                <el-tooltip content="添加子分类" placement="top" :show-after="120">
+                  <el-button
+                    link
+                    type="success"
+                    size="small"
+                    :icon="Plus"
+                    aria-label="添加子分类"
+                    @click.stop="openAddSub(data)"
+                  />
+                </el-tooltip>
+                <el-tooltip content="批量添加子级" placement="top" :show-after="120">
+                  <el-button
+                    link
+                    type="info"
+                    size="small"
+                    :icon="DocumentAdd"
+                    aria-label="批量添加子级"
+                    @click.stop="openBatchAdd(data)"
+                  />
+                </el-tooltip>
+                <el-tooltip content="删除分类" placement="top" :show-after="120">
+                  <el-button
+                    link
+                    type="danger"
+                    size="small"
+                    :icon="Delete"
+                    aria-label="删除分类"
+                    @click.stop="handleDelete(data)"
+                  />
+                </el-tooltip>
               </div>
             </div>
-          </template>
-        </el-tree>
-      </div>
+          </div>
+        </template>
+      </el-tree>
+    </div>
 
-      <!-- 底部状态说明栏 -->
-      <div class="cm-footer">
-        <span class="ca-footer-tip">整页树形表格展示：支持层级展开折叠与悬浮操作（↑ 上移 / ↓ 下移 / 编辑 / 添加 / 删除）</span>
-        <button type="button" class="ca-footer-link" @click="openBatchAdd()">批量导入</button>
-      </div>
 
     <!-- 新建 / 编辑单个分类弹窗 -->
     <el-dialog
@@ -600,7 +585,7 @@ async function handleDelete(node: { id: string; name: string }) {
         <el-form-item label="排序权重">
           <el-input-number v-model="form.seq" :min="0" :max="99999" controls-position="right" style="width: 100%" />
           <div class="text-[11px] text-slate-400 mt-1 leading-tight">
-            权重数值越大越靠前（排序 DESC）。日常排序推荐直接在列表悬浮使用 <b>↑ 上移 / ↓ 下移</b> 快捷按钮。
+            权重数值越大越靠前（排序 DESC）。日常排序推荐直接在列表中使用 <b>↑ 上移 / ↓ 下移</b> 快捷按钮。
           </div>
         </el-form-item>
         <el-form-item label="备注说明">
@@ -915,34 +900,6 @@ async function handleDelete(node: { id: string; name: string }) {
   cursor: not-allowed;
   opacity: 0.35;
   color: #cbd5e1 !important;
-}
-
-/* 底部状态/说明条 */
-.cm-footer {
-  height: 38px;
-  padding: 0 16px;
-  background: #f8fafc;
-  border-top: 1px solid var(--rc-border-soft, #f1f5f9);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-shrink: 0;
-}
-.ca-footer-tip {
-  font-size: 11px;
-  color: #94a3b8;
-}
-.ca-footer-link {
-  border: none;
-  background: transparent;
-  color: var(--rc-primary, #2563eb);
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  padding: 0;
-}
-.ca-footer-link:hover {
-  text-decoration: underline;
 }
 
 .ca-dialog-form {

@@ -68,15 +68,27 @@ describe('CategoryManager 分类目录', () => {
     ])
   })
 
-  it('挂载即渲染，展示头部标题与操作按钮（没有关闭按钮——它现在是整页）', () => {
+  it('挂载即渲染：单行工具栏（计数 + 新增 / 批量添加）+ 表头，没有关闭按钮和底部说明栏', () => {
     const wrapper = mount(CategoryManager, {
       global: { stubs },
     })
 
-    expect(wrapper.text()).toContain('分类目录')
+    expect(wrapper.text()).toContain('个一级分类')
     expect(wrapper.text()).toContain('新增根分类')
     expect(wrapper.text()).toContain('批量添加')
-    expect(wrapper.find('button[title="关闭"]').exists()).toBe(false)
+    expect(wrapper.find('.ca-table-head').text()).toContain('分类名称')
+    expect(wrapper.find('button[aria-label="关闭"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('批量导入')
+  })
+
+  // 按钮外面已套 el-tooltip，再带原生 title 会在悬停时同时弹出两个提示
+  it('操作按钮不带原生 title，只靠 el-tooltip + aria-label', () => {
+    const wrapper = mount(CategoryManager, {
+      global: { stubs },
+    })
+    const labelled = wrapper.findAll('button[aria-label]')
+    expect(labelled.length).toBeGreaterThan(0)
+    expect(labelled.filter((b) => b.attributes('title') !== undefined)).toHaveLength(0)
   })
 
   it('点击「新增根分类」按钮会打开新增弹窗', async () => {
@@ -118,7 +130,7 @@ describe('CategoryManager 分类目录', () => {
     })
 
     // 点击修改按钮
-    const editBtn = wrapper.findAll('button').find((b) => b.attributes('title') === '修改分类')
+    const editBtn = wrapper.findAll('button').find((b) => b.attributes('aria-label') === '修改分类')
     expect(editBtn).toBeDefined()
     await editBtn!.trigger('click')
 
@@ -141,7 +153,7 @@ describe('CategoryManager 分类目录', () => {
       global: { stubs },
     })
 
-    const upBtns = wrapper.findAll('button').filter((b) => b.attributes('title') === '上移')
+    const upBtns = wrapper.findAll('button').filter((b) => b.attributes('aria-label') === '上移')
     expect(upBtns).toHaveLength(2)
     // 第一个兄弟节点禁用上移
     expect(upBtns[0]?.attributes('disabled')).toBeDefined()
@@ -199,7 +211,7 @@ describe('CategoryManager 分类目录', () => {
       global: { stubs: customStubs },
     })
 
-    const upBtns = wrapper.findAll('button').filter((b) => b.attributes('title') === '上移')
+    const upBtns = wrapper.findAll('button').filter((b) => b.attributes('aria-label') === '上移')
     await upBtns[1]!.trigger('click')
     await flushPromises()
 
