@@ -1,0 +1,42 @@
+// 系统设置 tab 壳（0924-02）
+// @vitest-environment jsdom
+import { describe, it, expect } from 'vitest'
+import { mount, flushPromises } from '@vue/test-utils'
+import { createMemoryHistory, createRouter } from 'vue-router'
+import ElementPlus from 'element-plus'
+import Settings from './index.vue'
+
+async function mountAt(query: Record<string, string> = {}) {
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/settings', component: { template: '<div />' } }] })
+  await router.push({ path: '/settings', query })
+  await router.isReady()
+  const wrapper = mount(Settings, { global: { plugins: [router, ElementPlus] } })
+  await flushPromises()
+  return { wrapper, router }
+}
+
+describe('系统设置 · tab 壳', () => {
+  it('两个 tab：节点类型（默认）+ 分类目录', async () => {
+    const { wrapper } = await mountAt()
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录'])
+    expect(wrapper.find('.st-tab-link.active').text()).toBe('节点类型')
+    expect(wrapper.find('[data-testid="settings-node-type"]').exists()).toBe(true)
+  })
+
+  it('?tab=category 直达分类目录；点回节点类型地址去掉 tab 参数', async () => {
+    const { wrapper, router } = await mountAt({ tab: 'category' })
+    expect(wrapper.find('.st-tab-link.active').text()).toBe('分类目录')
+    expect(wrapper.find('[data-testid="settings-category"]').exists()).toBe(true)
+
+    await wrapper.findAll('.st-tab-link')[0]!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query).toEqual({})
+    expect(wrapper.find('[data-testid="settings-node-type"]').exists()).toBe(true)
+  })
+
+  it('非法 tab 回落到节点类型，地址也归一', async () => {
+    const { wrapper, router } = await mountAt({ tab: '不存在' })
+    expect(wrapper.find('.st-tab-link.active').text()).toBe('节点类型')
+    expect(router.currentRoute.value.query).toEqual({})
+  })
+})

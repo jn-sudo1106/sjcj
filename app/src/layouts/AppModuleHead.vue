@@ -50,6 +50,8 @@ const pageActions: Record<string, string[]> = {
   data: [],
   runs: ['导出记录'],
   monitor: ['刷新', '导出报表'],
+  // 系统设置的新建 / 编辑都在页内工具条
+  settings: [],
 }
 
 // 页面动作按真实路由段取，而不是侧栏高亮键

@@ -2,6 +2,7 @@ import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-rou
 import { ElMessageBox } from 'element-plus'
 import { readStoredToken, setUnauthorizedHandler } from '../api/auth'
 import { useAuthStore } from '../stores/auth'
+import { canAccess } from '../composables/usePermission'
 
 const routes: RouteRecordRaw[] = [
   // 登录页无 AppShell，路径沿用旧系统 /user/login
@@ -26,6 +27,8 @@ const routes: RouteRecordRaw[] = [
       { path: '/files', component: () => import('../views/FileCenter/index.vue') },
       { path: '/tasks', component: () => import('../views/RunRecords/index.vue') },
       { path: '/monitor', component: () => import('../views/Monitor/index.vue') },
+      // 系统设置（0924-02）。meta.permission 与 TABS 里的同值，守卫经 canAccess 判断
+      { path: '/settings', component: () => import('../views/Settings/index.vue'), meta: { permission: 'settings' } },
       // 兼容旧导航路径；监控中心的正式入口统一为 /monitor。
       { path: '/tools', redirect: (to) => ({ path: '/monitor', query: to.query }) },
       // 「运行记录」改名「任务中心」（0819 N4-2 / 0812 M3-11），路径随之从 /runs 改到
@@ -66,6 +69,8 @@ export const authGuard = async (to: { meta: Record<string, unknown>; path: strin
       return { path: '/user/login', query: { redirect: to.fullPath } }
     }
   }
+  // 菜单权限口子（0924-02）：没权限的入口连地址直达也拦住，回总览
+  if (!canAccess(to.meta.permission as string | undefined)) return '/overview'
   return true
 }
 

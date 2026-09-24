@@ -4,10 +4,11 @@
 // 源详情 / 新建源画布（/canvas?sourceId=X 或 /canvas?mode=new）逻辑上属于「采集资产」子页，侧栏高亮采集资产
 import { computed, type Component } from 'vue'
 import { useRouter } from 'vue-router'
-import { Box, Clock, Connection, DataAnalysis, Document, Files, Histogram, Monitor, Odometer } from '@element-plus/icons-vue'
+import { Box, Clock, Connection, DataAnalysis, Document, Files, Histogram, Monitor, Odometer, Setting } from '@element-plus/icons-vue'
 import { TABS } from '@/router/tabs'
 import { useActiveNavKey } from '@/composables/useActiveNavKey'
 import { useUiStore } from '@/stores/ui'
+import { canAccess } from '@/composables/usePermission'
 
 const router = useRouter()
 
@@ -22,6 +23,7 @@ const groupLabels = {
   ops: '数据与运行',
   tools: '运维监控',
   intelligence: '智能能力',
+  settings: '系统设置',
 } as const
 
 const navGroups = computed(() =>
@@ -29,7 +31,8 @@ const navGroups = computed(() =>
     .map(([key, label]) => ({
       key,
       label,
-      items: TABS.filter((t) => t.group === key),
+      // 菜单权限口子（0924-02）：canAccess 现在恒放行，接入人员菜单权限后这里自动生效
+      items: TABS.filter((t) => t.group === key && canAccess(t.permission)),
     }))
     .filter((g) => g.items.length > 0),
 )
@@ -47,6 +50,7 @@ const navIcons: Record<string, Component> = {
   files: Files,
   tasks: Clock,
   monitor: Monitor,
+  settings: Setting,
 }
 </script>
 

@@ -4,7 +4,9 @@ export interface TabMeta {
   path: string
   label: string
   desc: string
-  group: 'home' | 'workbench' | 'assets' | 'ops' | 'tools' | 'intelligence'
+  group: 'home' | 'workbench' | 'assets' | 'ops' | 'tools' | 'intelligence' | 'settings'
+  /** 菜单权限码（0924-02）。侧栏与路由守卫都经 canAccess() 判断；不声明 = 放行 */
+  permission?: string
 }
 
 export const TABS: TabMeta[] = [
@@ -22,4 +24,7 @@ export const TABS: TabMeta[] = [
   { key: 'files', path: '/files', label: '文件中心', desc: '默认全平台，可按网站、源查询文件资源', group: 'ops' },
   { key: 'tasks', path: '/tasks', label: '任务中心', desc: '任务实例、节点状态、失败重跑', group: 'ops' },
   { key: 'monitor', path: '/monitor', label: '监控中心', desc: '系统健康、MQ、同步状态、告警', group: 'tools' },
+  // 系统设置（0924-02）：节点类型（旧平台「源类型」）+ 分类目录（原挂在采集资产的分类下拉底部）。
+  // 这是第一个声明了 permission 的入口，给后续人员菜单权限留口子（见 composables/usePermission）。
+  { key: 'settings', path: '/settings', label: '系统设置', desc: '节点类型、分类目录', group: 'settings', permission: 'settings' },
 ]
