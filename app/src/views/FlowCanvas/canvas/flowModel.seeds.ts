@@ -887,10 +887,11 @@ export const TEMPLATE_TO_SNATCH: Record<string, string> = {
 }
 
 /**
- * 媒体/文本/OCR 等处理类节点默认任务队列（2026-09-23 用户拍板）。
+ * 规则处理 / 媒体 / 文本 / OCR 等处理类节点默认任务队列（2026-09-23 用户拍板；2026-09-24 规则处理补默认队列）。
  * 在节点新增（insertAfter / addNodeToBranch）与任务配置时赋默认队列名。
  */
 export const DEFAULT_TASK_QUEUES: Record<string, string> = {
+  rule: 'dev_web_rulehandle',
   ocr: 'dev_web_snatch_ocr',
   translate: 'dev_web_translate',
   'article-summary': 'dev_web_llm_generate',
