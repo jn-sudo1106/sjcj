@@ -286,6 +286,9 @@ const canExecute = computed(() => execMode.value !== 'none' && !execDisabledReas
 const canPickRows = computed(() => {
   if (execMode.value === 'upstream') return true
   if (execMode.value === 'input') return true
+  // 单节点源（孤立首节点，2026-09-24 用户要求也给勾选）：「发起抓取」发的是整个源、不看勾选，
+  // 但同一排的「删除数据 → 删除选中的数据」要靠勾选——不给勾选列，那一项就永远是灰的。
+  if (execMode.value === 'fetch') return true
   return false
 })
 

@@ -2261,9 +2261,19 @@ describe('ResultView · 孤立首节点（没有后继也没有上游）', () =>
     expect(wrapper.find('[data-testid="data-no-exec-reason"]').exists()).toBe(false)
   })
 
-  it('作用域是整个源，不跟勾选行绑定，所以不出勾选列', async () => {
+  // 2026-09-24 用户定：单节点也给勾选列。「发起抓取」仍是整个源、不看勾选；
+  // 勾选是给「删除数据 → 删除选中的数据」和行详情用的——此前没有勾选列，那一项永远是灰的。
+  it('出勾选列；「发起抓取」不受勾选影响（勾不勾都能点，也不会变成发后续）', async () => {
     const wrapper = await mountLone()
-    expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBeFalsy()
+    const grid = wrapper.findComponent({ name: 'DataGrid' })
+    expect(grid.props('selectable')).toBe(true)
+    expect(wrapper.text()).toContain('已选 0 条')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').attributes('disabled')).toBeUndefined()
+
+    await grid.vm.$emit('update:selected-ids', ['d1', 'd2'])
+    await flushPromises()
+    expect(wrapper.text()).toContain('已选 2 条')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发起抓取')
     expect(wrapper.text()).not.toContain('发后续任务')
   })
 
