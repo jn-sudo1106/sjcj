@@ -15,19 +15,18 @@ const categories: SourceCategory[] = [
   { id: '/舆情类', name: '舆情类' }, // 无预取子级：展开走懒加载
 ]
 
-function mountToolbar() {
+function mountToolbar(extra: Record<string, unknown> = {}) {
   return mount(FilterToolbar, {
     props: {
       keyword: '',
       categoryFilter: [] as string[],
       tagFilter: '',
-      stateFilter: 'all',
-      sortBy: 'updated',
       categories,
       allTags: [],
       total: 0,
       stats: { total: 0, error: 0, notify: 0 },
       view: 'card',
+      ...extra,
     },
     global: { plugins: [ElementPlus] },
   })
@@ -94,5 +93,39 @@ describe('FilterToolbar 分类树（多选）', () => {
 
     await manageBtn.trigger('click')
     expect(wrapper.emitted('openCategoryManager')).toHaveLength(1)
+  })
+})
+
+// 0924-01：排序下拉、「全部状态」下拉去掉；「只看有异常源的网站」改由点「出错源」切换
+describe('FilterToolbar · 0924-01 精简', () => {
+  it('不再有排序下拉和状态下拉：下拉只剩分类树和标签', () => {
+    const wrapper = mountToolbar()
+    expect(wrapper.find('[data-testid="site-sort"]').exists()).toBe(false)
+    // 分类树（el-tree-select）内部自带一个 ElSelect，所以按 placeholder 认
+    const placeholders = wrapper.findAllComponents({ name: 'ElSelect' }).map((s) => s.props('placeholder'))
+    expect(placeholders).toEqual(['全部分类', '全部标签'])
+    expect(wrapper.text()).not.toContain('全部状态')
+  })
+
+  it('点「出错源」发 toggleErrorOnly；未选中时不可关闭', async () => {
+    const wrapper = mountToolbar({ stats: { total: 10, error: 3, notify: 0 } })
+    const tag = wrapper.get('[data-testid="stat-error-toggle"]')
+    expect(tag.attributes('aria-pressed')).toBe('false')
+    expect(tag.find('.el-tag__close').exists()).toBe(false)
+    await tag.trigger('click')
+    expect(wrapper.emitted('toggleErrorOnly')).toHaveLength(1)
+  })
+
+  it('选中态出现 ×，点 × 同样切回（且不重复触发）', async () => {
+    const wrapper = mountToolbar({ stats: { total: 10, error: 3, notify: 0 }, errorOnly: true })
+    const tag = wrapper.get('[data-testid="stat-error-toggle"]')
+    expect(tag.attributes('aria-pressed')).toBe('true')
+    await tag.get('.el-tag__close').trigger('click')
+    expect(wrapper.emitted('toggleErrorOnly')).toHaveLength(1)
+  })
+
+  it('没有出错源时不显示；但选中态下即使为 0 也要留着，不然没法取消', () => {
+    expect(mountToolbar().find('[data-testid="stat-error-toggle"]').exists()).toBe(false)
+    expect(mountToolbar({ errorOnly: true }).find('[data-testid="stat-error-toggle"]').exists()).toBe(true)
   })
 })

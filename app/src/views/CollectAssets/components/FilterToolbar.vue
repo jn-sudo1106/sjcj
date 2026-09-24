@@ -7,8 +7,6 @@ const props = defineProps<{
   keyword: string
   categoryFilter: string[]
   tagFilter: string
-  stateFilter: string
-  sortBy: 'updated' | 'name'
   categories: SourceCategory[]
   allTags: string[]
   total: number
@@ -18,28 +16,17 @@ const props = defineProps<{
   /** 当前是否带着筛选条件：决定「网站」这个数要不要写成「命中 / 全站」 */
   filtered?: boolean
   view: 'card' | 'table'
-  /** 只看收藏（0917-17）。收藏的网站**恒排最前**，这个开关是"把其余的藏起来"。
-   *  可选：调用方不给就是关着，既有测试不必为它改动。 */
-  favOnly?: boolean
-  /** 已收藏数量，显示在选项上——0 的时候选了会空一片，得让人知道 */
-  favCount?: number
-  /** 在「我收藏的网站」tab 里：这一页恒定只看收藏，下拉里就不该再出现这一项 */
-  favLocked?: boolean
-  /** 只看最近打开（0917-17 后半条），与 favOnly 互斥 */
-  recentOnly?: boolean
-  /** 最近打开过几个网站——一个都没有时这一项点了会空一片，得让人知道 */
-  recentCount?: number
+  /** 只看有异常源的网站（0924-01）。原「全部状态」下拉去掉后，改由点「出错源」标签切换 */
+  errorOnly?: boolean
 }>()
 
 const emit = defineEmits<{
   'update:keyword': [value: string]
   'update:categoryFilter': [value: string[]]
   'update:tagFilter': [value: string]
-  'update:stateFilter': [value: string]
-  'update:sortBy': [value: 'updated' | 'name']
   'setView': [value: 'card' | 'table']
-  'update:favOnly': [value: boolean]
-  'update:recentOnly': [value: boolean]
+  /** 点「出错源」：在「只看有异常源的网站」与全部之间切换 */
+  'toggleErrorOnly': []
   'filterChange': []
   'refresh': []
   /** 新建网站（2026-09-18）：对象级操作，与顶栏那个全局的「新建采集」分层 */
@@ -57,27 +44,6 @@ function onOpenCategoryManager() {
 
 function onKeywordInput(value: string) {
   emit('update:keyword', value)
-}
-
-/**
- * 排序下拉三选一：最近修改 / 名称 / 只看收藏。
- * 前两项是排序，第三项是过滤——选它时保留当前 sortBy，这样从「只看收藏」切回来
- * 还是原来那个排序，不会被悄悄重置。
- */
-function onPickSort(v: 'updated' | 'name' | 'favorite' | 'recent') {
-  // 「只看收藏」与「最近打开」是两种过滤模式，互斥；选回前两项就都关掉
-  if (v === 'favorite') {
-    if (props.recentOnly) emit('update:recentOnly', false)
-    emit('update:favOnly', true)
-  } else if (v === 'recent') {
-    if (props.favOnly) emit('update:favOnly', false)
-    emit('update:recentOnly', true)
-  } else {
-    if (props.favOnly) emit('update:favOnly', false)
-    if (props.recentOnly) emit('update:recentOnly', false)
-    emit('update:sortBy', v)
-  }
-  emit('filterChange')
 }
 
 // 分类筛选是树形多选（旧平台目录树勾选语义；选中值是目录 ID 数组，空数组 = 全部）。
@@ -180,29 +146,6 @@ async function loadCategoryChildren(
       <el-option label="全部标签" value="" />
       <el-option v-for="t in allTags" :key="t" :label="t" :value="t" />
     </el-select>
-    <el-select :model-value="stateFilter" placeholder="全部状态" style="width: 130px" clearable @update:model-value="(v: string) => { emit('update:stateFilter', v); emit('filterChange') }">
-      <el-option label="全部状态" value="all" />
-      <el-option label="有异常源" value="error" />
-    </el-select>
-    <!-- 排序同样要 emit filterChange：少了它，改排序只更新 sortBy、列表不重新加载，
-         下拉框变了而卡片顺序纹丝不动（旁边标签/状态两个 select 一直是这么配的，这里原先漏了）。 -->
-    <!-- 「只看收藏」并在这个下拉里（2026-09-21 用户定）。它是过滤不是排序，所以：
-         选中它时**不动 sortBy**，组内仍按上一次选的「最近修改 / 名称」排；
-         选回那两项就把过滤关掉。在「我收藏的网站」tab 里（favLocked）不出现这一项，
-         选中值也要退回 sortBy——否则下拉找不到 'favorite' 那个 option，会把原始值秃着显示出来。 -->
-    <el-select
-      :model-value="favOnly && !favLocked ? 'favorite' : recentOnly ? 'recent' : sortBy"
-      style="width: 128px"
-      data-testid="site-sort"
-      @update:model-value="onPickSort"
-    >
-      <el-option label="最近修改" value="updated" />
-      <el-option label="名称" value="name" />
-      <el-option v-if="!favLocked" :label="favCount ? `只看收藏 (${favCount})` : '只看收藏'" value="favorite" />
-      <!-- 最近打开：收藏要事先标记，而"找半天"那次根本没先收藏过——这一项补的是那一半。
-           在「我收藏的网站」tab 里同样不出现，那个 tab 的语义就是收藏。 -->
-      <el-option v-if="!favLocked" :label="recentCount ? `最近打开 (${recentCount})` : '最近打开'" value="recent" />
-    </el-select>
     <!-- 四项都跟筛选走（2026-09-23 起，后端补齐了每个网站的聚合列，由 SourceTab 对命中列表求和）。
          此前后三项是全站汇总、不随筛选变，被当成"条数没更新"（2026-09-21 用户报）。 -->
     <div class="ca-stats">
@@ -213,7 +156,26 @@ async function loadCategoryChildren(
         :title="filtered && stats.siteTotal ? `当前筛选命中 ${total} 个，全站 ${stats.siteTotal} 个` : '全站网站数'"
       >网站 <b>{{ total }}</b><template v-if="filtered && stats.siteTotal"> / {{ stats.siteTotal }}</template></el-tag>
       <el-tag type="info" effect="plain" class="stat-tag" :title="filtered ? '当前筛选命中网站下的源数' : '全部网站下的源数'">源 <b>{{ stats.total }}</b></el-tag>
-      <el-tag v-if="stats.error > 0" type="danger" class="stat-tag" :title="filtered ? '当前筛选命中网站下的出错源数' : '全部网站下的出错源数'">出错源 <b>{{ stats.error }}</b></el-tag>
+      <!-- 「出错源」兼作筛选开关（0924-01）：会上去掉了「全部状态」下拉，但总览「异常」下钻
+           （/collect?state=error）还要落得下来，所以把"只看有异常源的网站"挂在这个数字上——
+           点数字就筛这个数字，比多一个下拉直白。选中时描边加深并出现 ×。 -->
+      <el-tag
+        v-if="stats.error > 0 || errorOnly"
+        type="danger"
+        class="stat-tag stat-toggle"
+        :class="{ on: errorOnly }"
+        :effect="errorOnly ? 'light' : 'plain'"
+        :closable="errorOnly"
+        disable-transitions
+        role="button"
+        tabindex="0"
+        data-testid="stat-error-toggle"
+        :aria-pressed="errorOnly ? 'true' : 'false'"
+        :title="errorOnly ? '正在只看有异常源的网站，点击恢复全部' : '点击只看有异常源的网站'"
+        @click="emit('toggleErrorOnly')"
+        @close="emit('toggleErrorOnly')"
+        @keydown.enter.prevent="emit('toggleErrorOnly')"
+      >出错源 <b>{{ stats.error }}</b></el-tag>
       <el-tag v-if="stats.notify > 0" type="warning" class="stat-tag" :title="filtered ? '当前筛选命中的网站里，有告警源的网站数' : '有告警源的网站数'">告警网站 <b>{{ stats.notify }}</b></el-tag>
     </div>
     <span class="ca-spacer" />
@@ -269,8 +231,8 @@ async function loadCategoryChildren(
 /* 搜索框是唯一的"减压阀"：其余控件都 flex:none 或有 110px 下限，放不下时全靠它让。
    下限 130px —— 1280 视口下实测整行刚好放得下（可用 1031px，其余合计 891px）；
    再高一点（150）会把最右的刷新按钮挤出可视区。 */
-.ca-search { width: 250px; flex: 0 1 250px; min-width: 130px; }
-/* 标签 / 状态 / 排序：inline style 只给了 width，flex 基准是 auto，窄屏会被压到「全⌄」
+.ca-search { width: 300px; flex: 0 1 300px; min-width: 130px; }
+/* 标签下拉：inline style 只给了 width，flex 基准是 auto，窄屏会被压到「全⌄」
    （1280 实测 58px）。留出收缩余地但守住 96px —— 12px 字体下「全部标签 ⌄」刚好能读全。 */
 .ca-toolbar > :deep(.el-select) { flex: 0 1 auto; min-width: 110px; }
 /* 分类树是多选、标签可能折叠成 “+N”，比其余下拉更需要宽度，给它高一点的下限 */
@@ -292,6 +254,8 @@ async function loadCategoryChildren(
    所以 flex: none，压缩配额全部由搜索框承担（它有 150px 下限兜底）。 */
 .stat-tag { font-size: 12px; }
 .ca-stats :deep(.el-tag) { padding: 0 6px; }
+.stat-toggle { cursor: pointer; }
+.stat-toggle.on { border-color: var(--el-color-danger); }
 .stat-tag b { font-weight: 800; font-size: 13px; margin-left: 3px; }
 .ca-spacer { flex: 1; min-width: 12px; }
 

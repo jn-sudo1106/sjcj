@@ -20,8 +20,11 @@ import { recordSiteVisit } from '@/utils/siteRecents'
 const props = withDefaults(defineProps<{
   sites: Site[]
   loading?: boolean
+  /** 列表为空时的提示。收藏 / 最近打开 tab 一个都没有时要说清楚怎么才会有（0924-01） */
+  emptyText?: string
 }>(), {
   loading: false,
+  emptyText: '没有匹配的网站',
 })
 // 编辑网站信息由父组件（SourceTab）统一挂 SiteEditorDialog —— 表格视图走的也是这个事件，
 // 两个视图共用一份弹窗状态，不在卡片里再挂一个（0915-01）。
@@ -347,7 +350,7 @@ onUnmounted(() => {
         </div>
       </div>
     </template>
-    <div v-else-if="!sites.length" class="scg-empty-state">没有匹配的网站</div>
+    <div v-else-if="!sites.length" class="scg-empty-state">{{ emptyText }}</div>
 
     <!-- 只有「编辑网站信息」一项：进入网站左击卡片即可，删除是高危操作不与改名同菜单（0915-01） -->
     <div

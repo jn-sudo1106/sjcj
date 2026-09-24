@@ -14,10 +14,14 @@ const TABS: { key: string; label: string }[] = [
   // 0917-17：收藏做成一个 tab 而不是工具条上的开关（2026-09-21 用户定）——
   // 会上原话是「我放在这个地方，我关注的网站也行」（措辞后来统一成"收藏"）。
   // 做成 tab 还白得一条能存书签的地址 `/collect?tab=favorite`，刷新、发给别人都还在。
-  { key: 'favorite', label: '我收藏的网站' },
+  // 0924-01：改名「我的收藏」——源列表视图（0924-08）下这里列的是收藏的**源**，叫"网站"就不准了。
+  { key: 'favorite', label: '我的收藏' },
+  // 0924-01：原先挂在排序下拉里的「最近打开」提成 tab，与收藏并列。
+  { key: 'recent', label: '最近打开' },
 ]
-// favorite 复用 SourceTab，只是进去就锁定"只看收藏"（见下方 :fav-only）
-const comps: Record<string, Component> = { source: SourceTab, config: ConfigTab, favorite: SourceTab }
+// 收藏 / 最近打开都复用 SourceTab，由 scope 锁定过滤（见下方 :scope）
+const comps: Record<string, Component> = { source: SourceTab, config: ConfigTab, favorite: SourceTab, recent: SourceTab }
+const SCOPES: Record<string, 'all' | 'favorite' | 'recent'> = { source: 'all', favorite: 'favorite', recent: 'recent' }
 const route = useRoute()
 const router = useRouter()
 const validTabs = new Set(TABS.map((tab) => tab.key))
@@ -68,7 +72,7 @@ function selectTab(key: string) {
     <div class="ca-content">
       <transition name="fade-slide" mode="out-in">
         <KeepAlive>
-          <component :is="comps[active]" :key="active" :fav-only="active === 'favorite'" />
+          <component :is="comps[active]" :key="active" :scope="SCOPES[active]" />
         </KeepAlive>
       </transition>
     </div>

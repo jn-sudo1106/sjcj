@@ -40,14 +40,14 @@ function makeRouter() {
   })
 }
 
-async function mountAt(query?: Record<string, string>) {
+async function mountAt(query?: Record<string, string>, props?: { scope?: 'all' | 'favorite' | 'recent' }) {
   clearCollectAssetsCache()
   const router = makeRouter()
   await router.push({ path: '/collect', query })
   await router.isReady()
   const pinia = createPinia()
   setActivePinia(pinia)
-  const wrapper = mount(SourceTab, { global: { plugins: [pinia, router, ElementPlus] } })
+  const wrapper = mount(SourceTab, { props, global: { plugins: [pinia, router, ElementPlus] } })
   await flushPromises()
   await flushPromises()
   return { wrapper, router }
@@ -71,13 +71,45 @@ describe('SourceTab 加载与初始筛选', () => {
     expect(wrapper.findComponent({ name: 'FilterToolbar' }).props('total')).toBeGreaterThanOrEqual(0)
   })
 
-  it('?state=error 会预置状态筛选；非法值（如 ?state=E）被忽略、保持默认 all', async () => {
+  // 0924-01：「全部状态」下拉去掉了，总览「异常」下钻落到「出错源」标签的选中态上
+  it('?state=error 进来时「出错源」处于选中态；非法值（如 ?state=E）被忽略', async () => {
     const { wrapper: wOk } = await mountAt({ state: 'error' })
-    expect(wOk.findComponent({ name: 'FilterToolbar' }).props('stateFilter')).toBe('error')
+    expect(wOk.findComponent({ name: 'FilterToolbar' }).props('errorOnly')).toBe(true)
 
     const { wrapper: wBad } = await mountAt({ state: 'E' })
-    expect(wBad.findComponent({ name: 'FilterToolbar' }).props('stateFilter')).toBe('all')
+    expect(wBad.findComponent({ name: 'FilterToolbar' }).props('errorOnly')).toBe(false)
   })
+
+  // 后端 site/sitePaged?state=ERROR 实测恒返回 0 条，所以异常过滤在前端按 errorCount 做，不发 state
+  it('点「出错源」只看有异常源的网站（前端按 errorCount 筛、不重新请求），再点一次恢复全部', async () => {
+    const spy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({
+      total: 3,
+      list: [
+        { siteId: 's-err', name: '有错', sourceCount: 5, errorCount: 2, updatedAt: '2026-09-20 10:00:00', tags: [] },
+        { siteId: 's-ok', name: '正常', sourceCount: 3, errorCount: 0, updatedAt: '2026-09-21 10:00:00', tags: [] },
+        { siteId: 's-err2', name: '也有错', sourceCount: 4, errorCount: 1, updatedAt: '2026-09-19 10:00:00', tags: [] },
+      ] as never,
+    })
+    const { wrapper } = await mountAt()
+    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
+    const shown = () => (wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]).map((s) => s.siteId)
+    expect(spy.mock.calls.every(([arg]) => !(arg as Record<string, unknown>).state)).toBe(true)
+    spy.mockClear()
+
+    toolbar.vm.$emit('toggleErrorOnly')
+    await flushPromises()
+    expect(toolbar.props('errorOnly')).toBe(true)
+    expect(shown()).toEqual(['s-err', 's-err2'])
+    expect(toolbar.props('stats')).toMatchObject({ total: 9, error: 3 })
+    expect(spy).not.toHaveBeenCalled()
+
+    toolbar.vm.$emit('toggleErrorOnly')
+    await flushPromises()
+    expect(toolbar.props('errorOnly')).toBe(false)
+    expect(shown()).toEqual(['s-ok', 's-err', 's-err2'])
+    spy.mockRestore()
+  })
+
 })
 
 describe('SourceTab 筛选状态', () => {
@@ -218,6 +250,7 @@ describe('新建采集', () => {
 // 真实后端 site/sitePaged **不支持排序**：field/sorted、orderBy、sort/order 五种参数名
 // 2026-09-16 生产实测全部无效，恒按 siteId 升序返回。「最近修改」只能前端排——所以这里
 // 让接口回一份乱序数据，锁住"前端确实排过"，不能靠 mock 层自己排好而假阳性。
+// 「名称」排序 0924-01 随排序下拉一起去掉（Q1），只剩这一种顺序。
 describe('SourceTab 排序', () => {
   // ui store 的 assetView 持久化在 localStorage，前面「切换卡片/表格视图」那个用例会把它留成
   // table，导致这里挂出来的是 TableView、找不到 SiteCardGrid。清掉，回到默认卡片视图。
@@ -238,25 +271,12 @@ describe('SourceTab 排序', () => {
     spy.mockRestore()
   })
 
-  it('切到「名称」排序时按网站名排，不再看编辑时间', async () => {
-    const spy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 3, list: [...unordered] as never })
-    const { wrapper } = await mountAt()
-
-    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-    toolbar.vm.$emit('update:sortBy', 'name')
-    toolbar.vm.$emit('filterChange')
-    await flushPromises()
-
-    const sites = wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]
-    // localeCompare('zh') 按拼音：旧(jiu) < 新(xin) < 中(zhong)
-    expect(sites.map((s) => s.siteId)).toEqual(['s-old', 's-new', 's-mid'])
-    spy.mockRestore()
-  })
 })
 
 // 0917-17「我收藏的网站」：产品会上催了两次，痛点是"找半天"。
-// 收藏存后端（utils/siteFavorites → favoriteApi，2026-09-23 前是本地），收藏的**恒排最前**，另给一个「只看收藏」过滤。
-describe('SourceTab · 我收藏的网站（0917-17）', () => {
+// 收藏存后端（utils/siteFavorites → favoriteApi，2026-09-23 前是本地），收藏的**恒排最前**。
+// 「只看收藏」原先是排序下拉里的一项，0924-01 起只由「我的收藏」tab（scope=favorite）提供。
+describe('SourceTab · 我的收藏（0917-17 / 0924-01）', () => {
   const sites = [
     { siteId: 's-old', name: '旧站', sourceCount: 1, errorCount: 0, updatedAt: '2026-07-20 16:57:32', tags: [] },
     { siteId: 's-new', name: '新站', sourceCount: 1, errorCount: 0, updatedAt: '2026-09-16 14:09:24', tags: [] },
@@ -269,14 +289,14 @@ describe('SourceTab · 我收藏的网站（0917-17）', () => {
     fav.favoriteSiteIds.value = new Set()
   })
 
-  async function mountWithSites() {
+  async function mountWithSites(scope?: 'all' | 'favorite' | 'recent') {
     vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 3, list: [...sites] as never })
-    return mountAt()
+    return mountAt(undefined, scope ? { scope } : undefined)
   }
   const shown = (w: Awaited<ReturnType<typeof mountAt>>['wrapper']) =>
     (w.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]).map((s) => s.siteId)
 
-  it('收藏的排最前，组内仍按当前排序（最近修改）', async () => {
+  it('收藏的排最前，组内按最近修改', async () => {
     const fav = await import('@/utils/siteFavorites')
     await fav.toggleFavoriteSite('s-old') // 时间最旧，本来排最后
     const { wrapper } = await mountWithSites()
@@ -284,85 +304,28 @@ describe('SourceTab · 我收藏的网站（0917-17）', () => {
     expect(shown(wrapper)).toEqual(['s-old', 's-new', 's-mid'])
   })
 
-  it('换成「名称」排序，收藏的仍在最前，其余按名称', async () => {
-    const fav = await import('@/utils/siteFavorites')
-    await fav.toggleFavoriteSite('s-mid')
-    const { wrapper } = await mountWithSites()
-
-    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-    toolbar.vm.$emit('update:sortBy', 'name')
-    toolbar.vm.$emit('filterChange')
-    await flushPromises()
-
-    // 旧(jiu) < 新(xin) 是组内顺序，中站因为被收藏而提到最前
-    expect(shown(wrapper)).toEqual(['s-mid', 's-old', 's-new'])
-  })
-
-  it('「只看收藏」把其余藏起来，total 跟着变（列表是前端分页，别只改展示）', async () => {
+  it('「我的收藏」tab 只列收藏的，total 跟着变（列表是前端分页，别只改展示）', async () => {
     const fav = await import('@/utils/siteFavorites')
     await fav.toggleFavoriteSite('s-new')
-    const { wrapper } = await mountWithSites()
+    const { wrapper } = await mountWithSites('favorite')
     const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-    expect(toolbar.props('favCount')).toBe(1)
-
-    toolbar.vm.$emit('update:favOnly', true)
-    toolbar.vm.$emit('filterChange')
-    await flushPromises()
 
     expect(shown(wrapper)).toEqual(['s-new'])
     expect(toolbar.props('total')).toBe(1)
   })
 
-  it('一个都没收藏时开「只看收藏」：空列表，不报错', async () => {
-    const { wrapper } = await mountWithSites()
-    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-    toolbar.vm.$emit('update:favOnly', true)
-    toolbar.vm.$emit('filterChange')
-    await flushPromises()
-
+  it('一个都没收藏时：空列表，空态说明怎么收藏', async () => {
+    const { wrapper } = await mountWithSites('favorite')
     expect(shown(wrapper)).toEqual([])
-    expect(toolbar.props('total')).toBe(0)
+    expect(wrapper.findComponent({ name: 'FilterToolbar' }).props('total')).toBe(0)
+    expect(wrapper.findComponent({ name: 'SiteCardGrid' }).props('emptyText')).toContain('还没有收藏的网站')
   })
 
-  // 2026-09-21 用户定：过滤入口并进排序下拉（原先是工具条上一个独立按钮）
-  it('排序下拉选「只看收藏」时不动排序，切回来还是原来那个排序', async () => {
-    const fav = await import('@/utils/siteFavorites')
-    await fav.toggleFavoriteSite('s-mid')
-    const { wrapper } = await mountWithSites()
-    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-
-    toolbar.vm.$emit('update:sortBy', 'name')
-    toolbar.vm.$emit('filterChange')
-    await flushPromises()
-    toolbar.vm.$emit('update:favOnly', true)
-    toolbar.vm.$emit('filterChange')
-    await flushPromises()
-    expect(shown(wrapper)).toEqual(['s-mid'])
-    // 排序没被这次过滤重置
-    expect(toolbar.props('sortBy')).toBe('name')
-
-    toolbar.vm.$emit('update:favOnly', false)
-    toolbar.vm.$emit('filterChange')
-    await flushPromises()
-    expect(shown(wrapper)).toEqual(['s-mid', 's-old', 's-new'])
-  })
-
-  // 「我收藏的网站」tab 进来就是 favOnly=true，且下拉里不该再给"关掉"的选项
-  it('tab 传 favOnly 时，一进来就只看收藏，并把下拉锁住', async () => {
+  it('有收藏但筛选没命中时，空态仍是「没有匹配的网站」', async () => {
     const fav = await import('@/utils/siteFavorites')
     await fav.toggleFavoriteSite('s-new')
-    vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 3, list: [...sites] as never })
-    const router = makeRouter()
-    await router.push('/collect')
-    await router.isReady()
-    setActivePinia(createPinia())
-    const wrapper = mount(SourceTab, { props: { favOnly: true }, global: { plugins: [router, ElementPlus] } })
-    await flushPromises()
-    await flushPromises()
-
-    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-    expect(toolbar.props('favLocked')).toBe(true)
-    expect((wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]).map((s) => s.siteId)).toEqual(['s-new'])
+    const { wrapper } = await mountWithSites('favorite')
+    expect(wrapper.findComponent({ name: 'SiteCardGrid' }).props('emptyText')).toBe('没有匹配的网站')
   })
 
   it('卡片上的 ☆ 点一下就收藏，列表随即把它顶到最前', async () => {
@@ -379,9 +342,9 @@ describe('SourceTab · 我收藏的网站（0917-17）', () => {
   })
 })
 
-// 0917-17 后半条（2026-09-21 用户定）：最近打开挂在排序下拉里。
-// 它补的是收藏解决不了的那一半——"找半天"那次根本没先收藏过。
-describe('SourceTab · 最近打开的网站（0917-17）', () => {
+// 0917-17 后半条：最近打开。它补的是收藏解决不了的那一半——"找半天"那次根本没先收藏过。
+// 2026-09-21 挂在排序下拉里，0924-01 起改为「最近打开」tab（scope=recent）。
+describe('SourceTab · 最近打开的网站（0917-17 / 0924-01）', () => {
   const sites = [
     { siteId: 's-old', name: '旧站', sourceCount: 1, errorCount: 0, updatedAt: '2026-07-20 16:57:32', tags: [] },
     { siteId: 's-new', name: '新站', sourceCount: 1, errorCount: 0, updatedAt: '2026-09-16 14:09:24', tags: [] },
@@ -396,9 +359,9 @@ describe('SourceTab · 最近打开的网站（0917-17）', () => {
     rec.recentSiteIds.value = []
   })
 
-  async function mountWithSites() {
+  async function mountWithSites(scope?: 'all' | 'favorite' | 'recent') {
     vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 3, list: [...sites] as never })
-    return mountAt()
+    return mountAt(undefined, scope ? { scope } : undefined)
   }
   const shown = (w: Awaited<ReturnType<typeof mountAt>>['wrapper']) =>
     (w.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]).map((s) => s.siteId)
@@ -407,13 +370,7 @@ describe('SourceTab · 最近打开的网站（0917-17）', () => {
     const rec = await import('@/utils/siteRecents')
     rec.recordSiteVisit('s-old')   // 更早打开
     rec.recordSiteVisit('s-mid')   // 最近打开
-    const { wrapper } = await mountWithSites()
-    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-    expect(toolbar.props('recentCount')).toBe(2)
-
-    toolbar.vm.$emit('update:recentOnly', true)
-    toolbar.vm.$emit('filterChange')
-    await flushPromises()
+    const { wrapper } = await mountWithSites('recent')
 
     // s-new 没打开过所以不在；s-mid 比 s-old 近所以在前（按 updatedAt 排的话 s-mid 也在前，
     // 但这里换个顺序再验一次下面那条）
@@ -424,44 +381,27 @@ describe('SourceTab · 最近打开的网站（0917-17）', () => {
     const rec = await import('@/utils/siteRecents')
     rec.recordSiteVisit('s-new')   // updatedAt 最新，但先打开
     rec.recordSiteVisit('s-old')   // updatedAt 最旧，但后打开
-    const { wrapper } = await mountWithSites()
-    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-    toolbar.vm.$emit('update:recentOnly', true)
-    toolbar.vm.$emit('filterChange')
-    await flushPromises()
+    const { wrapper } = await mountWithSites('recent')
 
     expect(shown(wrapper)).toEqual(['s-old', 's-new'])
   })
 
-  it('与「只看收藏」互斥：切过去另一个自动关掉', async () => {
-    const fav = await import('@/utils/siteFavorites')
-    const rec = await import('@/utils/siteRecents')
-    await fav.toggleFavoriteSite('s-new')
-    rec.recordSiteVisit('s-old')
-    const { wrapper } = await mountWithSites()
-    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-
-    toolbar.vm.$emit('update:favOnly', true)
-    toolbar.vm.$emit('filterChange')
-    await flushPromises()
-    expect(shown(wrapper)).toEqual(['s-new'])
-
-    // 切到最近打开：收藏过滤要关掉，否则两个条件叠起来会是空
-    toolbar.vm.$emit('update:favOnly', false)
-    toolbar.vm.$emit('update:recentOnly', true)
-    toolbar.vm.$emit('filterChange')
-    await flushPromises()
-    expect(shown(wrapper)).toEqual(['s-old'])
+  it('一个都没打开过时：空列表，空态注明「仅本机」', async () => {
+    const { wrapper } = await mountWithSites('recent')
+    expect(shown(wrapper)).toEqual([])
+    const emptyText = wrapper.findComponent({ name: 'SiteCardGrid' }).props('emptyText') as string
+    expect(emptyText).toContain('还没有打开过网站')
+    expect(emptyText).toContain('仅本机')
   })
 
-  it('一个都没打开过时开「最近打开」：空列表，不报错', async () => {
-    const { wrapper } = await mountWithSites()
-    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-    expect(toolbar.props('recentCount')).toBe(0)
-    toolbar.vm.$emit('update:recentOnly', true)
-    toolbar.vm.$emit('filterChange')
-    await flushPromises()
-    expect(shown(wrapper)).toEqual([])
+  it('最近打开 tab 里收藏不插队：纯按访问顺序', async () => {
+    const fav = await import('@/utils/siteFavorites')
+    const rec = await import('@/utils/siteRecents')
+    await fav.toggleFavoriteSite('s-old')
+    rec.recordSiteVisit('s-old')   // 收藏了，但先打开
+    rec.recordSiteVisit('s-mid')   // 后打开
+    const { wrapper } = await mountWithSites('recent')
+    expect(shown(wrapper)).toEqual(['s-mid', 's-old'])
   })
 
   it('点卡片进网站会记一笔，回来就能在「最近打开」里看到', async () => {
@@ -536,28 +476,23 @@ describe('SourceTab · 统计区的口径（2026-09-21）', () => {
     expect(toolbar.props('filtered')).toBe(true)
 
     toolbar.vm.$emit('update:categoryFilter', [])
-    toolbar.vm.$emit('update:stateFilter', 'error')
+    toolbar.vm.$emit('toggleErrorOnly')
     await flushPromises()
     expect(toolbar.props('filtered')).toBe(true)
 
-    toolbar.vm.$emit('update:stateFilter', 'all')
+    toolbar.vm.$emit('toggleErrorOnly')
     await flushPromises()
     expect(toolbar.props('filtered')).toBe(false)
   })
 
-  // 「只看收藏」「最近打开」也算筛选——它们同样会让命中数少于全站
-  it('只看收藏 / 最近打开也算筛选', async () => {
-    const { wrapper } = await mountWith(83)
-    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
-
-    toolbar.vm.$emit('update:favOnly', true)
-    await flushPromises()
-    expect(toolbar.props('filtered')).toBe(true)
-
-    toolbar.vm.$emit('update:favOnly', false)
-    toolbar.vm.$emit('update:recentOnly', true)
-    await flushPromises()
-    expect(toolbar.props('filtered')).toBe(true)
+  // 「我的收藏」「最近打开」两个 tab 也算筛选——它们同样会让命中数少于全站
+  it('我的收藏 / 最近打开 tab 也算筛选', async () => {
+    vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: sites.length, list: [...sites] as never })
+    vi.spyOn(siteApi, 'siteSummary').mockResolvedValue({ total: 83, sourceTotal: 18636, errorCount: 1264, notifyCount: 2 })
+    const fav = await mountAt(undefined, { scope: 'favorite' })
+    expect(fav.wrapper.findComponent({ name: 'FilterToolbar' }).props('filtered')).toBe(true)
+    const recent = await mountAt(undefined, { scope: 'recent' })
+    expect(recent.wrapper.findComponent({ name: 'FilterToolbar' }).props('filtered')).toBe(true)
   })
 })
 

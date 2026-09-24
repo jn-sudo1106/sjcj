@@ -16,11 +16,13 @@ import CategoryManageDrawer from './components/CategoryManageDrawer.vue'
 import { beginSitesFetch, collectAssetsCache, clearCollectAssetsCache, commitSites } from './siteListCache'
 
 /**
- * `favOnly`：由「我收藏的网站」tab 传进来（`CollectAssets/index.vue`）。
- * 为 true 时这一页**恒定只看收藏**，工具条里也不再出现那个可关掉的选项——
- * 在"我收藏的网站"里还能切成"看全部"是自相矛盾的。
+ * `scope`：由外层 tab 传进来（`CollectAssets/index.vue`，0924-01）。
+ * - `all`：网站列表；
+ * - `favorite`：我的收藏，恒定只看收藏；
+ * - `recent`：最近打开，恒定只看最近打开过的，按访问顺序排。
+ * 这两种过滤原来挂在排序下拉里（0917-17），0924 会上改成 tab，工具条上不再能切。
  */
-const props = defineProps<{ favOnly?: boolean }>()
+const props = withDefaults(defineProps<{ scope?: 'all' | 'favorite' | 'recent' }>(), { scope: 'all' })
 
 const ui = useUiStore()
 const route = useRoute()
@@ -47,17 +49,31 @@ const keyword = ref('')
 // 分类多选（目录 ID 数组，空 = 全部）；查询时拼成旧契约 categoryIds 的逗号串
 const categoryFilter = ref<string[]>([])
 const tagFilter = ref('')
+/** 'error' = 只看有异常源的网站。没有下拉了（0924-01），由「出错源」标签和 ?state=error 驱动 */
 const stateFilter = ref('all')
-const sortBy = ref<'updated' | 'name'>('updated')
-/** 只看收藏（0917-17）。「网站列表」tab 里默认关（收藏的照样恒排最前）；
- *  「我收藏的网站」tab 里由 props 锁成 true。 */
-const favOnly = ref(props.favOnly === true)
-watch(() => props.favOnly, (val) => {
-  favOnly.value = val === true
+const favOnly = computed(() => props.scope === 'favorite')
+const recentOnly = computed(() => props.scope === 'recent')
+watch(() => props.scope, () => applyView())
+
+/**
+ * 只看有异常源的网站：**前端按 errorCount 过滤，不发给后端**（0924-01）。
+ * 2026-09-24 生产实测 `site/sitePaged?state=ERROR` 恒返回 0 条（`count:0`）——原「全部状态 →
+ * 有异常源」下拉一直是坏的，只是没人发现。列表本来就是全量拉回来前端筛的，每个网站又带着
+ * errorCount（B31），前端筛既不多发请求，也和标签上的「出错源 N」是同一个口径。
+ */
+function toggleErrorOnly() {
+  stateFilter.value = stateFilter.value === 'error' ? 'all' : 'error'
+  page.value = 1
+  selectedIds.value = []
   applyView()
+}
+
+/** 收藏 / 最近打开一个都没有时，空态要说清楚怎么才会有；其余情况是筛选没命中 */
+const emptyText = computed(() => {
+  if (favOnly.value && !favoriteSiteIds.value.size) return '还没有收藏的网站，在列表里点 ☆ 收藏'
+  if (recentOnly.value && !recentSiteIds.value.length) return '还没有打开过网站，打开过的网站会自动出现在这里（最多 10 个，仅本机）'
+  return '没有匹配的网站'
 })
-/** 只看最近打开（0917-17 后半条）。与 favOnly 互斥，由工具条那个下拉统一切换 */
-const recentOnly = ref(false)
 
 /**
  * 当前是否带着筛选条件（2026-09-21 用户报「根据条件查询完后，条数没有更新」）。
@@ -111,17 +127,13 @@ function sortSites(list: Site[]): Site[] {
   // 「最近打开」模式下按访问时间排，不走收藏置顶那套——它本身就是一个时间序，
   // 再让收藏插队反而看不出"我刚才去过哪"
   if (recentOnly.value) return [...list].sort((a, b) => recentRankOf(a.siteId) - recentRankOf(b.siteId))
-  const byCurrent = sortBy.value === 'name'
-    ? (a: Site, b: Site) => a.name.localeCompare(b.name, 'zh')
-    // updatedAt 是 'YYYY-MM-DD HH:mm:ss'，定长且高位在前，字符串倒序即时间倒序
-    : (a: Site, b: Site) => (b.updatedAt || '').localeCompare(a.updatedAt || '')
-  // 收藏的**恒排最前**（0917-17），不做成排序下拉的第三档：用户自己点的星本来就该在前，
-  // 再要求他先选一次才生效是多余的，而且会跟「最近修改 / 名称」这个正交维度打架
-  //（选了"收藏优先"，组内按什么排就说不清了）。组内仍按当前排序。
+  // 收藏的**恒排最前**（0917-17），组内按最近修改倒序。
+  // 「名称」排序 0924 会上随排序下拉一起去掉了（Q1），卡片视图只剩这一种顺序。
+  // updatedAt 是 'YYYY-MM-DD HH:mm:ss'，定长且高位在前，字符串倒序即时间倒序。
   return [...list].sort((a, b) => {
     const fa = favoriteSiteIds.value.has(a.siteId) ? 0 : 1
     const fb = favoriteSiteIds.value.has(b.siteId) ? 0 : 1
-    return fa !== fb ? fa - fb : byCurrent(a, b)
+    return fa !== fb ? fa - fb : (b.updatedAt || '').localeCompare(a.updatedAt || '')
   })
 }
 
@@ -152,6 +164,7 @@ const toolbarStats = computed(() => ({ ...(listStats.value ?? stats), siteTotal:
 /** 从 fetchedSites 重算展示：只看收藏 → 排序（收藏置顶）→ 切片。不发请求。 */
 function applyView() {
   let base = fetchedSites.value
+  if (stateFilter.value === 'error') base = base.filter((site) => (site.errorCount || 0) > 0)
   if (favOnly.value) base = base.filter((site) => favoriteSiteIds.value.has(site.siteId))
   else if (recentOnly.value) base = base.filter((site) => recentSiteIds.value.includes(site.siteId))
   listStats.value = {
@@ -182,7 +195,7 @@ let listRequestSeq = 0
 async function loadList(options: { force?: boolean; revalidate?: boolean } = {}) {
   const seq = ++listRequestSeq
   const search = keyword.value.trim()
-  const isDefaultQuery = !search && !categoryFilter.value.length && !tagFilter.value && stateFilter.value === 'all'
+  const isDefaultQuery = !search && !categoryFilter.value.length && !tagFilter.value
 
   let silent = false
   if (!options.force && isDefaultQuery && collectAssetsCache.sites) {
@@ -201,8 +214,7 @@ async function loadList(options: { force?: boolean; revalidate?: boolean } = {})
     const filters = {
       category: (await expandCategoryIds(categoryFilter.value)).join(','),
       tag: tagFilter.value,
-      state: stateFilter.value,
-      sort: sortBy.value,
+      // state 不传：后端 state=ERROR 查不出东西，异常过滤在 applyView 里做（见 toggleErrorOnly）
     }
     // 源名匹配走 source/sourcePaged?name= 取命中源的 siteId，再与网站列表求交集：
     // 真实 site/sitePaged 只按网站名筛，传 sourceName 会被忽略并原样返回整页
@@ -461,13 +473,7 @@ onUnmounted(() => {
       v-model:keyword="keyword"
       v-model:category-filter="categoryFilter"
       v-model:tag-filter="tagFilter"
-      v-model:state-filter="stateFilter"
-      v-model:sort-by="sortBy"
-      v-model:fav-only="favOnly"
-      v-model:recent-only="recentOnly"
-      :fav-count="favoriteSiteIds.size"
-      :recent-count="recentSiteIds.length"
-      :fav-locked="props.favOnly === true"
+      :error-only="stateFilter === 'error'"
       :filtered="hasFilter"
       :categories="categories"
       :all-tags="allTags"
@@ -475,6 +481,7 @@ onUnmounted(() => {
       :stats="toolbarStats"
       :view="view"
       @filter-change="resetAndLoad"
+      @toggle-error-only="toggleErrorOnly"
       @refresh="refreshAll"
       @set-view="setView"
       @create-site="openSiteCreator"
@@ -492,7 +499,7 @@ onUnmounted(() => {
 
     <!-- 卡片视图 -->
     <div v-if="view === 'card'" v-loading="loading && !!sites.length" class="ca-card-body">
-      <SiteCardGrid :sites="sites" :loading="loading" @open-editor="openSiteEditor" />
+      <SiteCardGrid :sites="sites" :loading="loading" :empty-text="emptyText" @open-editor="openSiteEditor" />
     </div>
 
     <!-- 表格视图 -->

@@ -7,8 +7,8 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
 
 vi.mock('./SourceTab.vue', () => ({
-  // favOnly 要声明成 prop，否则它只会落进 attrs，props('favOnly') 永远是 undefined
-  default: { name: 'SourceTab', props: { favOnly: Boolean }, template: '<div data-testid="stub-source">网站列表内容</div>' },
+  // scope 要声明成 prop，否则它只会落进 attrs，props('scope') 永远是 undefined
+  default: { name: 'SourceTab', props: { scope: String }, template: '<div data-testid="stub-source">网站列表内容</div>' },
 }))
 vi.mock('./ConfigTab.vue', () => ({
   default: { name: 'ConfigTab', template: '<div data-testid="stub-config">配置列表内容</div>' },
@@ -34,24 +34,39 @@ async function mountAssets(query: Record<string, string> = {}) {
 }
 
 describe('采集资产 · tab 壳', () => {
-  // 0917-17（2026-09-21）：加了「我收藏的网站」。表 ID 列表迁走后这里一度只剩一个 tab。
-  it('两个 tab：网站列表 + 我收藏的网站', async () => {
+  // 0917-17（2026-09-21）加了收藏 tab；0924-01 把排序下拉里的「最近打开」也提成 tab，
+  // 收藏 tab 改名「我的收藏」（源列表视图下列的是收藏的源）。
+  it('三个 tab：网站列表 + 我的收藏 + 最近打开', async () => {
     const { wrapper } = await mountAssets()
     const tabs = wrapper.findAll('.ca-tab-link')
-    expect(tabs.map((b) => b.text())).toEqual(['网站列表', '我收藏的网站'])
+    expect(tabs.map((b) => b.text())).toEqual(['网站列表', '我的收藏', '最近打开'])
     expect(wrapper.find('.ca-tabs-wrap').exists()).toBe(true)
   })
 
-  it('/collect?tab=favorite 进「我收藏的网站」，并把 favOnly 传给列表', async () => {
+  it('/collect?tab=favorite 进「我的收藏」，scope=favorite', async () => {
     const { wrapper } = await mountAssets({ tab: 'favorite' })
     const active = wrapper.findAll('.ca-tab-link').filter((b) => b.classes().includes('active'))
-    expect(active.map((b) => b.text())).toEqual(['我收藏的网站'])
-    expect(wrapper.findComponent({ name: 'SourceTab' }).props('favOnly')).toBe(true)
+    expect(active.map((b) => b.text())).toEqual(['我的收藏'])
+    expect(wrapper.findComponent({ name: 'SourceTab' }).props('scope')).toBe('favorite')
   })
 
-  it('「网站列表」tab 不锁定收藏过滤', async () => {
+  it('/collect?tab=recent 进「最近打开」，scope=recent', async () => {
+    const { wrapper } = await mountAssets({ tab: 'recent' })
+    const active = wrapper.findAll('.ca-tab-link').filter((b) => b.classes().includes('active'))
+    expect(active.map((b) => b.text())).toEqual(['最近打开'])
+    expect(wrapper.findComponent({ name: 'SourceTab' }).props('scope')).toBe('recent')
+  })
+
+  it('「网站列表」tab 不锁定任何过滤（scope=all）', async () => {
     const { wrapper } = await mountAssets()
-    expect(wrapper.findComponent({ name: 'SourceTab' }).props('favOnly')).toBe(false)
+    expect(wrapper.findComponent({ name: 'SourceTab' }).props('scope')).toBe('all')
+  })
+
+  it('点「最近打开」tab 地址变成 ?tab=recent（可存书签）', async () => {
+    const { wrapper, router } = await mountAssets()
+    await wrapper.findAll('.ca-tab-link')[2]!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query).toEqual({ tab: 'recent' })
   })
 
   it('不再有「表 ID 列表」', async () => {
