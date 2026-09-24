@@ -61,7 +61,9 @@ describe('SiteDetailView', () => {
     // 顺序：任务在监控左边（产品 2026-09-16 指定）
     const segs = wrapper.findAll('.sdv-seg').map((btn) => btn.text())
     expect(segs.indexOf('任务视图')).toBe(segs.indexOf('监控视图') - 1)
-    expect(wrapper.find('site-data-view-stub').exists()).toBe(true)
+    // 2026-09-24：进数据视图默认是左栏数据表模式，地址栏没带表 = 「全部」→ 中间是各表汇总
+    expect(wrapper.find('site-tables-overview-stub').exists()).toBe(true)
+    expect(wrapper.find('site-data-view-stub').exists()).toBe(false)
   })
 
   it('切到任务视图时以 siteWide 模式挂载 TaskView 并把 siteId 传进去', async () => {
@@ -203,3 +205,49 @@ describe('SiteDetailView', () => {
     detail.mockRestore()
   })
 })
+
+// 2026-09-24：数据视图左栏默认数据表模式；「全部」显示各表汇总，选了表才挂数据视图
+describe('SiteDetailView · 数据视图与左栏数据表模式', () => {
+  async function mountData(query: Record<string, string>, mode: 'source' | 'table' = 'table') {
+    setActivePinia(createPinia())
+    const { useUiStore } = await import('@/stores/ui')
+    useUiStore().setSiteDataSideMode(mode)
+    await router.push({ path: '/canvas', query: { siteId: 'site-zfb', view: 'data', ...query } })
+    const wrapper = shallowMount(SiteDetailView, {
+      props: { siteId: 'site-zfb' },
+      global: { plugins: [router], stubs: { SourceOverviewView: true, SiteDataView: true, SiteTablesOverview: true } },
+    })
+    await flushPromises()
+    return wrapper
+  }
+
+  it('数据表模式 + 带了表：挂数据视图并锁定这张表', async () => {
+    const wrapper = await mountData({ tableId: '900' })
+    expect(wrapper.find('site-tables-overview-stub').exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'SiteDataView' }).props('lockedTableId')).toBe('900')
+  })
+
+  it('源模式：照旧挂数据视图，不锁表', async () => {
+    const wrapper = await mountData({ tableId: '900' }, 'source')
+    expect(wrapper.find('site-tables-overview-stub').exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'SiteDataView' }).props('lockedTableId')).toBe('')
+  })
+
+  it('汇总里点一张表：地址栏写上 tableId', async () => {
+    const wrapper = await mountData({})
+    await wrapper.findComponent({ name: 'SiteTablesOverview' }).vm.$emit('pick', '6200023')
+    await flushPromises()
+    expect(router.currentRoute.value.query).toMatchObject({ siteId: 'site-zfb', view: 'data', tableId: '6200023' })
+  })
+
+  it('「按条件查源」带 condTable 过来：表写进 tableId（否则会落到汇总页、条件丢失），条件传给数据视图', async () => {
+    const wrapper = await mountData({ condTable: '900', condSql: "K1 = 'x'" })
+    await flushPromises()
+    expect(router.currentRoute.value.query).toMatchObject({ tableId: '900' })
+    expect(router.currentRoute.value.query.condTable).toBeUndefined()
+    const view = wrapper.findComponent({ name: 'SiteDataView' })
+    expect(view.props('lockedTableId')).toBe('900')
+    expect(view.props('initialCondition')).toMatchObject({ tableId: '900', sql: "K1 = 'x'" })
+  })
+})
+

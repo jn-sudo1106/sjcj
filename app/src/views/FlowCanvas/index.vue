@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
@@ -193,16 +193,30 @@ function onSwitchAdded(s: Source) {
 const sidebarAllowTableMode = computed(() => isSiteDetail.value && normalizeSiteView(route.query.view) === 'data')
 const sidebarActiveTableId = computed(() => String(route.query.tableId ?? ''))
 /**
- * 每个网站上次选的表。网站详情切视图时整包换 query（{siteId, view}），tableId 会丢；
- * 切回数据视图时靠它选回原来那张。其次用网站页签快照里的表（从源页签点回「全部」）。
+ * 每个网站上次选的表（'' = 用户选的是「全部」）。网站详情切视图时整包换 query（{siteId, view}），
+ * tableId 会丢；切回数据视图时靠它选回原来那张。没记录时用网站页签快照里的表（从源页签点回「全部」页签）。
+ * 跟着地址栏记：左栏点表、中间「全部」汇总里点表，最后都落到 tableId 上。
  */
-const lastPickedTable = new Map<string, string>()
-const sidebarPreferredTableId = computed(() =>
-  lastPickedTable.get(sidebarSiteId.value) || ws.siteSnapshotOf(sidebarSiteId.value)?.tableId || '')
-function onPickTable(table: { tableId: string }) {
-  lastPickedTable.set(sidebarSiteId.value, table.tableId)
-  if (route.query.tableId === table.tableId) return
-  void router.replace({ path: '/canvas', query: { ...route.query, siteId: sidebarSiteId.value, view: 'data', tableId: table.tableId } })
+const lastPickedTable = reactive(new Map<string, string>())
+// 只记非空的表：切回数据视图的那一刻地址栏还没有 tableId，记成 '' 会把上次的表冲掉
+// （2026-09-24 实测：选表 → 切任务视图 → 切回来，落到了「全部」）。「全部」只由 onPickTable(null) 显式记。
+watch(() => [sidebarAllowTableMode.value, sidebarSiteId.value, sidebarActiveTableId.value] as const, ([allowed, siteId, tableId]) => {
+  if (allowed && siteId && tableId) lastPickedTable.set(siteId, tableId)
+})
+const sidebarPreferredTableId = computed(() => {
+  const siteId = sidebarSiteId.value
+  if (lastPickedTable.has(siteId)) return lastPickedTable.get(siteId) ?? ''
+  return ws.siteSnapshotOf(siteId)?.tableId || ''
+})
+/** 左栏点表；null = 「全部」（地址栏去掉 tableId，中间显示各表汇总） */
+function onPickTable(table: { tableId: string } | null) {
+  const tableId = table?.tableId ?? ''
+  lastPickedTable.set(sidebarSiteId.value, tableId)
+  if (String(route.query.tableId ?? '') === tableId) return
+  const query: Record<string, unknown> = { ...route.query, siteId: sidebarSiteId.value, view: 'data' }
+  if (tableId) query.tableId = tableId
+  else delete query.tableId
+  void router.replace({ path: '/canvas', query: query as Record<string, string> })
 }
 
 // 侧栏「网站」节点：切到网站详情页（全部源聚合），视图随身携带（数据/文件/任务，落不到流程视图）

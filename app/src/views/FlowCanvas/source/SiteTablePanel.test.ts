@@ -29,9 +29,30 @@ describe('SiteTablePanel', () => {
     expect(rows[0]!.classes()).toContain('active')
   })
 
-  it('地址栏没带表：自动选第一张（涉及源最多的）', async () => {
+  // 2026-09-24 用户定：只有一张表就直接打开；多张表停在「全部」
+  it('多张表、地址栏没带表：停在「全部」，不自动选表', async () => {
     const { wrapper } = await mountPanel()
+    expect(wrapper.emitted('pick')).toBeUndefined()
+    const all = wrapper.get('[data-testid="site-table-all"]')
+    expect(all.classes()).toContain('active')
+    expect(all.text()).toContain('3 张表')
+  })
+
+  it('只有一张表：直接打开它，也不显示「全部」', async () => {
+    const { wrapper } = await mountPanel({}, { tables: [TABLES[0]!], noFlowSourceCnt: 0, failedFlowIds: [] })
     expect(wrapper.emitted('pick')?.[0]?.[0]).toMatchObject({ tableId: '900' })
+    expect(wrapper.find('[data-testid="site-table-all"]').exists()).toBe(false)
+  })
+
+  it('地址栏带的表不在本站：多张表时退回「全部」（发 null）', async () => {
+    const { wrapper } = await mountPanel({ activeTableId: 'not-here' })
+    expect(wrapper.emitted('pick')?.[0]?.[0]).toBeNull()
+  })
+
+  it('点「全部」发 null', async () => {
+    const { wrapper } = await mountPanel({ activeTableId: '900' })
+    await wrapper.get('[data-testid="site-table-all"]').trigger('click')
+    expect(wrapper.emitted('pick')?.at(-1)?.[0]).toBeNull()
   })
 
   it('地址栏没带表但有上次看的表：选上次那张', async () => {

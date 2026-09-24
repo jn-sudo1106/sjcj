@@ -18,6 +18,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { normalizeSiteMonitorTab, normalizeSiteView, type SiteMonitorTab, type SiteWorkspaceView } from '@/utils/url/workspaceRoute'
 import SourceOverviewView from './SourceOverviewView.vue'
 import SiteDataView from './SiteDataView.vue'
+import SiteTablesOverview from './SiteTablesOverview.vue'
 import SiteFileView from './SiteFileView.vue'
 import SiteMonitorView from './SiteMonitorView.vue'
 import TaskView from './TaskView.vue'
@@ -52,9 +53,12 @@ watch(() => route.query.condTable, (raw) => {
     dataId: q.condDataId ? String(q.condDataId) : undefined,
     parentId: q.condParentId ? String(q.condParentId) : undefined,
   }
-  const next = { ...q }
+  const next: Record<string, unknown> = { ...q }
   for (const k of ['condTable', 'condSql', 'condState', 'condDataId', 'condParentId']) delete next[k]
-  void router.replace({ path: route.path, query: next })
+  // 数据表模式（默认）下表由地址栏 tableId 决定，没带就落到「全部」汇总、数据视图不挂载，
+  // 带过来的条件就丢了——所以把这张表也写进 tableId，左栏跟着选中它
+  next.tableId = tableId
+  void router.replace({ path: route.path, query: next as Record<string, string> })
 }, { immediate: true })
 
 const initialSourceIds = ref('')
@@ -138,6 +142,11 @@ const ui = useUiStore()
 const view = computed(() => normalizeSiteView(route.query.view))
 /** 左栏数据表模式选中的表（0924-10）：模式在 ui store，表在地址栏 tableId */
 const lockedTableId = computed(() => (ui.siteDataSideMode === 'table' ? String(route.query.tableId ?? '') : ''))
+/** 数据表模式选的是「全部」（地址栏没带表）：中间显示各表汇总，不挂数据视图 */
+const showTablesOverview = computed(() => ui.siteDataSideMode === 'table' && !lockedTableId.value)
+function openTableFromOverview(tableId: string) {
+  void router.replace({ path: '/canvas', query: { ...route.query, siteId: props.siteId, view: 'data', tableId } })
+}
 // 0915-02：记住停在哪个视图——点源页签走开再点回「全部」，回到的是原来那个视图而不是默认源视图。
 //
 // ⚠️ 必须跳过"已经切到具体源"的那一拍：点源时路由先变成 `sourceId=…&view=data`，本组件
@@ -206,6 +215,7 @@ function openSourceData(source: Source) {
     <div v-if="loadError" class="sdv-empty">{{ loadError }}</div>
     <template v-else>
       <SourceOverviewView v-if="view === 'source'" :current-site-id="siteId" :initial-source-ids="initialSourceIds" :initial-flow-id="initialFlowId" class="sdv-body" @open-source="openSource" @open-source-data="openSourceData" />
+      <SiteTablesOverview v-else-if="view === 'data' && showTablesOverview" :site-id="siteId" class="sdv-body" @pick="openTableFromOverview" />
       <SiteDataView v-else-if="view === 'data'" :site-id="siteId" :initial-condition="initialCondition" :locked-table-id="lockedTableId" class="sdv-body" />
       <SiteFileView v-else-if="view === 'file'" :site-id="siteId" class="sdv-body" />
       <TaskView v-else-if="view === 'task'" site-wide :site-id="siteId" class="sdv-body" />

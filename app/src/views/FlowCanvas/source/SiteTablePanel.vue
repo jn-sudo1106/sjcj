@@ -10,12 +10,13 @@ import { siteApi, type SiteUsedTablesResult, type UsedTable } from '@/api'
 
 const props = defineProps<{
   siteId: string
-  /** 当前选中的表（来自地址栏 tableId） */
+  /** 当前选中的表（来自地址栏 tableId）；空串 = 「全部」 */
   activeTableId: string
-  /** 地址栏没带表时优先选它（从源页签点回「全部」时复现上次看的表），再不然选第一张 */
+  /** 地址栏没带表时优先选它（切视图回来 / 从源页签点回「全部」页签时复现上次看的表） */
   preferredTableId?: string
 }>()
-const emit = defineEmits<{ pick: [table: UsedTable] }>()
+/** 选中一张表；null = 「全部」（中间展示各表汇总） */
+const emit = defineEmits<{ pick: [table: UsedTable | null] }>()
 
 const result = ref<SiteUsedTablesResult | null>(null)
 const loading = ref(false)
@@ -40,13 +41,19 @@ async function load(force = false) {
   }
 }
 
-/** 地址栏的表不在本站（换了网站 / 表被删）或压根没带：退到上次看的表，再退到第一张 */
+/**
+ * 默认选中（2026-09-24 用户定）：**只有一张表就直接打开它；多张表停在「全部」**，中间看各表汇总。
+ * 地址栏带的表不在本站（换了网站 / 表被删）时按没带处理；有上次看的表（preferred）优先复现。
+ */
 function ensureSelection() {
   const tables = result.value?.tables ?? []
   if (!tables.length) return
-  if (tables.some((t) => t.tableId === props.activeTableId)) return
-  const next = tables.find((t) => t.tableId === props.preferredTableId) ?? tables[0]!
-  emit('pick', next)
+  if (props.activeTableId && tables.some((t) => t.tableId === props.activeTableId)) return
+  const preferred = tables.find((t) => t.tableId === props.preferredTableId)
+  if (preferred) return emit('pick', preferred)
+  if (tables.length === 1) return emit('pick', tables[0]!)
+  // 多张表：落在「全部」。地址栏带了个无效的表才需要显式清掉，本来就是空串就不必再发
+  if (props.activeTableId) emit('pick', null)
 }
 
 const tables = computed(() => result.value?.tables ?? [])
@@ -83,6 +90,21 @@ watch(() => props.activeTableId, () => ensureSelection())
         表列表加载失败<button type="button" class="stp-retry" data-testid="site-table-retry" @click="load(true)">重试</button>
       </div>
       <div v-else-if="!filtered.length" class="stp-empty">{{ kw ? '没有匹配的表' : '本站的源还没有用到任何表' }}</div>
+      <!-- 「全部」：只有多张表时才有意义（一张表时直接打开那张） -->
+      <button
+        v-if="tables.length > 1 && !kw"
+        class="stp-row"
+        :class="{ active: !activeTableId }"
+        type="button"
+        data-testid="site-table-all"
+        title="本站用到的全部表：各表的类型、涉及源数、数据量"
+        @click="emit('pick', null)"
+      >
+        <span class="stp-row-text">
+          <span class="stp-row-head"><span class="stp-row-name">全部</span></span>
+          <span class="stp-row-id">{{ tables.length }} 张表</span>
+        </span>
+      </button>
       <button
         v-for="t in filtered"
         :key="t.tableId"

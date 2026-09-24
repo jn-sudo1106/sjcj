@@ -43,8 +43,8 @@ const emit = defineEmits<{
   added: [Source]
   compare: [rightId: string]
   pickSite: []
-  /** 数据表模式下点了一张表 */
-  pickTable: [table: UsedTable]
+  /** 数据表模式下点了一张表；null = 「全部」 */
+  pickTable: [table: UsedTable | null]
 }>()
 
 const flow = useFlowStore()
