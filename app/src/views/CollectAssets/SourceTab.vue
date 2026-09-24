@@ -429,6 +429,7 @@ onUnmounted(() => {
 <template>
   <div class="ca-page">
     <FilterToolbar
+      v-if="view === 'card'"
       v-model:keyword="keyword"
       v-model:category-filter="categoryFilter"
       v-model:tag-filter="tagFilter"
@@ -439,7 +440,6 @@ onUnmounted(() => {
       :total="total"
       :stats="toolbarStats"
       :view="view"
-      :source-mode="view === 'table'"
       @filter-change="resetAndLoad"
       @toggle-error-only="toggleErrorOnly"
       @refresh="onToolbarRefresh"
@@ -462,7 +462,23 @@ onUnmounted(() => {
       @open-source="openSourceFromList"
       @open-source-data="openSourceFromList"
       @open-site="openSiteFromList"
-    />
+    >
+      <template #filter-extra>
+        <FilterToolbar
+          keyword=""
+          :category-filter="[]"
+          tag-filter=""
+          :categories="[]"
+          :all-tags="[]"
+          :total="0"
+          :stats="toolbarStats"
+          :view="view"
+          source-mode
+          @set-view="setView"
+          @refresh="onToolbarRefresh"
+        />
+      </template>
+    </SourceOverviewView>
 
     <!-- 卡片视图分页：**常驻**，与表格视图一致（2026-09-18）。
          原来带 `total > size` 的条件，每页改成 50 之后 25 个网站正好一页装下，

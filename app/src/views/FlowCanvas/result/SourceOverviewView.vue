@@ -891,10 +891,12 @@ watch(() => ui.sourceListRevision, () => {
 
 <template>
   <section class="sov-shell" data-testid="source-overview">
-    <div class="sov-filter">
+    <!-- 不限网站（采集资产源列表视图）用紧凑样式：与同页的网站查询工具条同一套外观——
+         一行排开、不要控件上方的小标题（改由首项 / 占位文字说明）、34px 高。网站详情里保持原样。 -->
+    <div class="sov-filter" :class="{ 'is-compact': crossSite }">
       <!-- 源 ID / 源名称 / 源 URL 三合一（0917-11）：选字段 + 填值，一次按一个字段查。
            显式选字段而不是自动猜类型——猜错是静默漏结果，用户不会知道。 -->
-      <label>查询
+      <label><span class="sov-label-text">查询</span>
         <span class="sov-search">
           <select v-model="searchField" data-testid="source-overview-search-field" @change="searchText && search()">
             <option v-for="f in SEARCH_FIELDS" :key="f.value" :value="f.value">{{ f.label }}</option>
@@ -908,34 +910,34 @@ watch(() => ui.sourceListRevision, () => {
         </span>
       </label>
       <!-- 网站筛选：只在不限网站（采集资产源列表视图）时出现；网站详情里范围固定为当前网站 -->
-      <label v-if="crossSite">网站
+      <label v-if="crossSite"><span class="sov-label-text">网站</span>
         <select v-model="siteFilter" data-testid="source-overview-site" @change="search">
           <option value="">全部网站</option>
           <option v-if="!scopeSiteIds" :value="UNBOUND_SITE">未关联网站</option>
           <option v-for="s in siteFilterOptions" :key="s.siteId" :value="s.siteId">{{ s.name }}</option>
         </select>
       </label>
-      <label>状态
+      <label><span class="sov-label-text">状态</span>
         <select v-model="statusFilter" data-testid="source-overview-state" @change="search">
-          <option value="all">全部</option>
+          <option value="all">{{ crossSite ? '全部状态' : '全部' }}</option>
           <option value="C">正常</option>
           <option value="L">运行中</option>
           <option value="E">异常</option>
           <option value="disabled">已停用</option>
         </select>
       </label>
-      <label>标签
+      <label><span class="sov-label-text">标签</span>
         <!-- 跟「状态」同一套原生 select。候选来自 sourceTags + 本机最近使用；
              当前筛选项若不在候选里（查看这一批、程序刚打的）仍单独占一项，避免被下拉冲掉。 -->
         <select v-model="tagFilter" data-testid="source-overview-tag" @change="search">
-          <option value="">全部</option>
+          <option value="">{{ crossSite ? '全部标签' : '全部' }}</option>
           <option v-if="tagFilter && !tagCandidates.includes(tagFilter)" :value="tagFilter">{{ tagFilter }}</option>
           <option v-for="tag in tagCandidates" :key="tag" :value="tag">{{ tag }}</option>
         </select>
       </label>
       <!-- 备注：有备注 / 无备注 ＋ 关键字（2026-09-24 去掉「不限」，有备注时也能搜）。
            未选时是占位「备注」，不按备注状态筛；选了之后旁边的 × 回到未选。 -->
-      <label>备注
+      <label><span class="sov-label-text">备注</span>
         <span class="sov-remark-filter">
           <span class="sov-remark-mode">
             <select v-model="remarkMode" data-testid="source-overview-remark-mode" :class="{ placeholder: !remarkMode, 'has-clear': !!remarkMode }" @change="search">
@@ -963,7 +965,7 @@ watch(() => ui.sourceListRevision, () => {
         </span>
       </label>
       <!-- 「≤」不是「<」：后端 count 的语义含等于（2026-09-20 实测，count=5 的结果里有 47 行正好是 5） -->
-      <label>数据量 ≤
+      <label><span class="sov-label-text">数据量 ≤</span>
         <input
           v-model="dataCountMax"
           type="number"
@@ -971,7 +973,7 @@ watch(() => ui.sourceListRevision, () => {
           step="1"
           class="sov-num"
           data-testid="source-overview-count"
-          placeholder="如 5"
+          :placeholder="crossSite ? '数据量 ≤' : '如 5'"
           @keyup.enter="search"
         />
       </label>
@@ -984,8 +986,12 @@ watch(() => ui.sourceListRevision, () => {
         </span>
         <button class="sov-btn primary" type="button" data-testid="source-overview-search" @click="search">查询</button>
         <button class="sov-btn" type="button" @click="clearFilters">清空</button>
-        <button class="sov-btn primary" type="button" data-testid="source-launch" @click="openLaunch">发任务</button>
-        <button class="sov-btn" type="button" data-testid="source-export" title="按当前查询条件导出全部命中的源，不是当前页或勾选项" @click="exportSources">导出</button>
+        <template v-if="!crossSite">
+          <button class="sov-btn primary" type="button" data-testid="source-launch" @click="openLaunch">发任务</button>
+          <button class="sov-btn" type="button" data-testid="source-export" title="按当前查询条件导出全部命中的源，不是当前页或勾选项" @click="exportSources">导出</button>
+        </template>
+        <!-- 采集资产源列表视图把「视图切换 / 刷新」放在这里，与筛选并成一条栏（网站详情不传） -->
+        <slot name="filter-extra" />
       </div>
     </div>
 
@@ -1011,6 +1017,11 @@ watch(() => ui.sourceListRevision, () => {
         <button class="sov-btn danger" type="button" data-testid="batch-disable" @click="batchToggleEnable(true)">停用</button>
         <button class="sov-btn ghost" type="button" data-testid="batch-clear" @click="clearSelection">取消</button>
       </template>
+      <!-- 紧凑样式下筛选栏一行放不下，针对整批结果的两个操作挪到这一行右侧 -->
+      <span v-if="crossSite" class="sov-summary-ops">
+        <button class="sov-btn primary" type="button" data-testid="source-launch" @click="openLaunch">发任务</button>
+        <button class="sov-btn" type="button" data-testid="source-export" title="按当前查询条件导出全部命中的源，不是当前页或勾选项" @click="exportSources">导出</button>
+      </span>
     </div>
     <div class="sov-table-wrap" :class="{ loading }">
       <table class="sov-table">
@@ -1194,6 +1205,31 @@ watch(() => ui.sourceListRevision, () => {
 .sov-filter .sov-remark-filter input { min-width: 104px; width: 121px; }
 /* 数字框不需要和文本框一样宽：一行已经很挤（源 ID / 名称 / URL / 状态 / 标签 / 备注 / 数据量） */
 .sov-filter input.sov-num { min-width: 84px; width: 84px; }
+/* ---- 紧凑样式（采集资产源列表视图）：外观对齐同页 FilterToolbar 的网站查询工具条 ---- */
+.sov-filter.is-compact {
+  flex-wrap: nowrap; align-items: center; gap: 8px; min-height: 52px; padding: 8px 12px;
+  border: 1px solid var(--rc-border); box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+}
+.sov-filter.is-compact .sov-label-text { display: none; }
+.sov-filter.is-compact label { display: flex; flex: 0 1 auto; min-width: 0; }
+.sov-filter.is-compact input,
+.sov-filter.is-compact select {
+  height: 34px; min-width: 0; border-color: var(--rc-border); border-radius: 6px; font-size: 13px;
+}
+.sov-filter.is-compact input:hover,
+.sov-filter.is-compact select:hover { border-color: #bfdbfe; }
+/* 各控件基准宽 + 压缩下限：放不下时先压搜索框，其余守住能读全的宽度 */
+.sov-filter.is-compact .sov-search select { width: 84px; flex: none; }
+.sov-filter.is-compact .sov-search input { width: 200px; flex: 0 1 200px; min-width: 120px; }
+.sov-filter.is-compact [data-testid="source-overview-site"] { width: 124px; }
+.sov-filter.is-compact [data-testid="source-overview-state"] { width: 100px; }
+.sov-filter.is-compact [data-testid="source-overview-tag"] { width: 104px; }
+/* 备注下拉守住 108px：选中后右侧要放 ×，再窄文字就和 × 挤在一起（见上面 has-clear 的说明） */
+.sov-filter.is-compact .sov-remark-filter select { width: 108px; min-width: 108px; flex: none; }
+.sov-filter.is-compact .sov-remark-filter input { width: 100px; min-width: 90px; }
+.sov-filter.is-compact .sov-num { width: 88px; min-width: 80px; }
+.sov-filter.is-compact .sov-filter-actions { flex-wrap: nowrap; flex: none; }
+.sov-summary-ops { display: inline-flex; gap: 8px; margin-left: auto; }
 .sov-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
 .sov-btn { height: 30px; padding: 0 10px; border: 1px solid #d5e2f2; border-radius: 6px; background: #fff; color: var(--rc-text-2); cursor: pointer; font-size: 12px; font-weight: 600; }
 

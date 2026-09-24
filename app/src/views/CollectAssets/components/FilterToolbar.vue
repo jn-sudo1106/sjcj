@@ -17,8 +17,8 @@ const props = defineProps<{
   view: 'card' | 'table'
   /** 只看有异常源的网站（0924-01）。原「全部状态」下拉去掉后，改由点「出错源」标签切换 */
   errorOnly?: boolean
-  /** 源列表视图（0924-06）：网站维度的搜索 / 分类 / 标签 / 统计都不适用，只留新增网站、视图切换与刷新；
-   *  源维度的条件由源列表自己的筛选栏提供 */
+  /** 源列表视图（0924-06）：网站维度的控件都不适用（新增网站、搜索、分类、标签、统计），
+   *  只剩视图切换与刷新，且不再是单独一张卡片——嵌进源列表筛选栏的操作区，两条栏并成一条 */
   sourceMode?: boolean
 }>()
 
@@ -70,14 +70,14 @@ async function loadCategoryChildren(
 </script>
 
 <template>
-  <div class="ca-toolbar">
+  <div class="ca-toolbar" :class="{ 'is-inline': sourceMode }">
     <!-- 「新增网站」放最左（2026-09-18）：这是本页的主动作，对齐旧平台 SiteList 操作栏的
          「＋新增网站」。不放右边、也不并进顶栏——顶栏的「新建采集」是总览页也挂着的全局入口，
          两者层级不同。
          **只留图标**（2026-09-18 走查）：带文字要 99px，把右侧的统计与视图切换挤到换行
          （「卡片」「表格」两个字被压成上下两行）。这一行本来就装不下，按钮不该是压垮它的
          那一个——图标 34px，名字交给 tooltip。 -->
-    <el-tooltip content="新增网站" placement="bottom" :show-after="120">
+    <el-tooltip v-if="!sourceMode" content="新增网站" placement="bottom" :show-after="120">
       <button class="ca-new-site" type="button" data-testid="site-create" aria-label="新增网站" @click="emit('createSite')">
         <el-icon :size="14"><Plus /></el-icon>
       </button>
@@ -157,7 +157,7 @@ async function loadCategoryChildren(
       >出错源 <b>{{ stats.error }}</b></el-tag>
       <el-tag v-if="stats.notify > 0" type="warning" class="stat-tag" :title="filtered ? '当前筛选命中的网站里，有告警源的网站数' : '有告警源的网站数'">告警网站 <b>{{ stats.notify }}</b></el-tag>
     </div>
-    <span class="ca-spacer" />
+    <span v-if="!sourceMode" class="ca-spacer" />
     <!-- 视图切换同样只留图标（2026-09-18 走查）：带文字要 136px，是这一行里仅次于搜索框和
          统计区的第三大件，而"卡片/表格"两个图标本身已经说明了区别。 -->
     <div class="ca-view-toggle">
@@ -199,6 +199,8 @@ async function loadCategoryChildren(
    **不用实心 primary**：#2563eb 的实心块在这排浅色控件里太跳，而且这一行已经有一个实心蓝的
    「新建采集」在顶栏；浅底 + 蓝图标既能区分主次，又不会把视线从列表上拽走。
    hover 才加深到浅蓝底 + 深蓝描边，对齐 tokens.css 里 `.rc-btn:hover` 的做法。 */
+/* 源模式：嵌在源列表筛选栏里，去掉卡片外观，只剩两组按钮 */
+.ca-toolbar.is-inline { min-height: 0; padding: 0; border: 0; background: transparent; box-shadow: none; gap: 8px; }
 .ca-new-site {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 30px; height: 30px; padding: 0;

@@ -201,11 +201,26 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     expect(wrapper.findComponent({ name: 'BatchBar' }).exists()).toBe(false)
   })
 
-  it('工具条进入源模式：网站维度的搜索 / 分类 / 标签 / 统计收起', async () => {
+  // 顶上那条网站工具栏整条不出现，视图切换 / 刷新嵌进源列表筛选栏的操作区，两条栏并成一条
+  it('只剩一条栏：工具条以源模式嵌在源列表筛选栏里，没有新增网站、搜索、分类、标签、统计', async () => {
     const { wrapper } = await mountList()
-    expect(wrapper.findComponent({ name: 'FilterToolbar' }).props('sourceMode')).toBe(true)
+    const toolbars = wrapper.findAllComponents({ name: 'FilterToolbar' })
+    expect(toolbars).toHaveLength(1)
+    expect(toolbars[0]!.props('sourceMode')).toBe(true)
+    expect(wrapper.find('.sov-filter-actions .ca-toolbar.is-inline').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="site-create"]').exists()).toBe(false)
     expect(wrapper.find('.ca-search').exists()).toBe(false)
     expect(wrapper.find('.ca-stats').exists()).toBe(false)
+  })
+
+  it('从源列表切回卡片：网站工具栏回来', async () => {
+    const { wrapper } = await mountList()
+    await wrapper.findComponent({ name: 'FilterToolbar' }).vm.$emit('set-view', 'card')
+    await flushPromises()
+    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
+    expect(toolbar.props('sourceMode')).toBeFalsy()
+    expect(wrapper.find('[data-testid="site-create"]').exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'SourceOverviewView' }).exists()).toBe(false)
   })
 
   it('最近打开页签：范围是最近打开的网站；一个都没有时给空数组和说明文案', async () => {
