@@ -5,7 +5,7 @@
 // 部分源失败提示、空态）、具体源（本地加载流程、节点选择、请求竞态、纯查看——不提供节点手动
 // 执行、不展示输入/输出切换）、以及两种状态切换时是不是"同一套"查询视图——同一套分页（加载
 // 更多，不是具体源单独一套总数/上一页下一页）、同一套筛选行位置，只是可编辑字段不同。
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { ElMessageBox } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
@@ -83,6 +83,11 @@ function mockFlowFixture(sourceId = '391007768') {
 }
 
 afterEach(() => localStorage.clear())
+// 0924-11：候选源会先按 siteUsedTables 收窄。既有用例没 mock 它时会走 mock 层（带 setTimeout 延迟，
+// flushPromises 等不到），这里默认给空结果 = 不收窄，行为与改动前一致；要测收窄的用例自己覆盖。
+beforeEach(() => {
+  vi.spyOn(siteApi, 'siteUsedTables').mockResolvedValue({ tables: [], noFlowSourceCnt: 0, failedFlowIds: [] })
+})
 
 describe('SiteDataView · 全部源（表筛选）', () => {
   afterEach(() => vi.restoreAllMocks())
@@ -1345,3 +1350,87 @@ describe('SiteDataView · 全部源勾选发后续任务', () => {
     expect(next).not.toHaveBeenCalled()
   })
 })
+
+// 0924-10 / 11：左栏数据表模式锁定表；候选源先收窄到用到这张表的源
+describe('SiteDataView · 左栏数据表模式（lockedTableId）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const usedTable = (tableId: string, sourceIds: string[]) => ({
+    tableId, name: '快讯表', tableName: 'sense_data.TB_KX', sourceIds, sourceCnt: sourceIds.length, role: 'MAIN' as const,
+  })
+
+  function mountLocked(lockedTableId: string) {
+    setActivePinia(createPinia())
+    return mount(SiteDataView, { props: { siteId: 'site-a', lockedTableId }, global: { stubs } })
+  }
+
+  it('隐藏选源 / 选表下拉，显示只读的「表：名称 · 涉及 N 个源」（名称与左栏同源）', async () => {
+    vi.spyOn(siteApi, 'siteUsedTables').mockResolvedValue({ tables: [usedTable('t1', ['a', 'b'])], noFlowSourceCnt: 0, failedFlowIds: [] })
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a'), source('b'), source('c')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({ ...meta, name: '表详情里的另一个名字' })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([] as never)
+    const wrapper = mountLocked('t1')
+    await flushPromises()
+
+    expect(wrapper.findComponent({ name: 'SiteTableSelect' }).exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'SiteSourceSelect' }).exists()).toBe(false)
+    const label = wrapper.get('[data-testid="site-data-locked-table"]').text()
+    expect(label).toContain('快讯表')
+    expect(label).toContain('涉及 2 个源')
+  })
+
+  it('候选源只查用到这张表的源（网站 3 个源，表只涉及 a、b）', async () => {
+    vi.spyOn(siteApi, 'siteUsedTables').mockResolvedValue({ tables: [usedTable('t1', ['a', 'b'])], noFlowSourceCnt: 0, failedFlowIds: [] })
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a'), source('b'), source('c')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([] as never)
+    const rowQueryPaged = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    mountLocked('t1')
+    await flushPromises()
+    await flushPromises()
+
+    const queried = new Set(rowQueryPaged.mock.calls.map((call) => call[0].sourceId))
+    expect(queried).toEqual(new Set(['a', 'b']))
+  })
+
+  it('统计可能不全（有流程节点没查到）时不收窄，照查全站源，不漏数据', async () => {
+    vi.spyOn(siteApi, 'siteUsedTables').mockResolvedValue({ tables: [usedTable('t1', ['a'])], noFlowSourceCnt: 0, failedFlowIds: ['f9'] })
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a'), source('b')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([] as never)
+    const rowQueryPaged = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    mountLocked('t1')
+    await flushPromises()
+    await flushPromises()
+
+    expect(new Set(rowQueryPaged.mock.calls.map((call) => call[0].sourceId))).toEqual(new Set(['a', 'b']))
+  })
+
+  it('没关联流程的源存在时也不收窄', async () => {
+    vi.spyOn(siteApi, 'siteUsedTables').mockResolvedValue({ tables: [usedTable('t1', ['a'])], noFlowSourceCnt: 1, failedFlowIds: [] })
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a'), source('b')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([] as never)
+    const rowQueryPaged = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    mountLocked('t1')
+    await flushPromises()
+    await flushPromises()
+
+    expect(new Set(rowQueryPaged.mock.calls.map((call) => call[0].sourceId))).toEqual(new Set(['a', 'b']))
+  })
+
+  it('左栏换表：数据视图跟着换', async () => {
+    vi.spyOn(siteApi, 'siteUsedTables').mockResolvedValue({ tables: [], noFlowSourceCnt: 0, failedFlowIds: [] })
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
+    const tableMeta = vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'summaryData').mockResolvedValue([] as never)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = mountLocked('t1')
+    await flushPromises()
+    await wrapper.setProps({ lockedTableId: 't2' })
+    await flushPromises()
+    expect(tableMeta).toHaveBeenLastCalledWith('t2')
+  })
+})
+

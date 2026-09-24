@@ -84,6 +84,19 @@ export const useUiStore = defineStore('ui', () => {
   }
 
   /**
+   * 网站「全部源 · 数据视图」左栏的模式（0924-10）：源列表 / 数据表列表。
+   * 左栏（SiteSourceSwitcher）写、右侧数据视图（经 SiteDetailView）读——两者是隔着画布页的兄弟组件，
+   * 放 store 里比层层传 props 干净。持久化：下次进数据视图默认上次的模式。
+   * 只在「网站态 + 数据视图」生效（Q4）；其他视图左栏恒为源列表，这个值不动，切回来还原。
+   */
+  const SITE_DATA_SIDE_MODE_KEY = 'rc-site-data-side-mode'
+  const siteDataSideMode = ref<'source' | 'table'>(localStorage.getItem(SITE_DATA_SIDE_MODE_KEY) === 'table' ? 'table' : 'source')
+  function setSiteDataSideMode(mode: 'source' | 'table') {
+    siteDataSideMode.value = mode
+    localStorage.setItem(SITE_DATA_SIDE_MODE_KEY, mode)
+  }
+
+  /**
    * 源归属变更的广播计数（2026-09-18）。
    *
    * 批量导入把一批源改挂到当前网站之后，**侧栏自己刷新了，主区的源列表却没有**——
@@ -114,5 +127,6 @@ export const useUiStore = defineStore('ui', () => {
     assetView, setAssetView,
     navCollapsed, toggleNavCollapsed,
     sourceListRevision, notifySourceListChanged,
+    siteDataSideMode, setSiteDataSideMode,
   }
 })

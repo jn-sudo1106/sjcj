@@ -188,6 +188,23 @@ async function onSwitchTarget(target: Source) {
 function onSwitchAdded(s: Source) {
   onSwitchTarget(s)
 }
+// ---- 左栏数据表模式（0924-10）----
+/** 只在「网站态 + 数据视图」允许切到数据表列表（Q4）；其他视图左栏恒为源列表 */
+const sidebarAllowTableMode = computed(() => isSiteDetail.value && normalizeSiteView(route.query.view) === 'data')
+const sidebarActiveTableId = computed(() => String(route.query.tableId ?? ''))
+/**
+ * 每个网站上次选的表。网站详情切视图时整包换 query（{siteId, view}），tableId 会丢；
+ * 切回数据视图时靠它选回原来那张。其次用网站页签快照里的表（从源页签点回「全部」）。
+ */
+const lastPickedTable = new Map<string, string>()
+const sidebarPreferredTableId = computed(() =>
+  lastPickedTable.get(sidebarSiteId.value) || ws.siteSnapshotOf(sidebarSiteId.value)?.tableId || '')
+function onPickTable(table: { tableId: string }) {
+  lastPickedTable.set(sidebarSiteId.value, table.tableId)
+  if (route.query.tableId === table.tableId) return
+  void router.replace({ path: '/canvas', query: { ...route.query, siteId: sidebarSiteId.value, view: 'data', tableId: table.tableId } })
+}
+
 // 侧栏「网站」节点：切到网站详情页（全部源聚合），视图随身携带（数据/文件/任务，落不到流程视图）
 async function onSwitchToSite() {
   if (!(await confirmDiscardIfDirty())) return
@@ -618,6 +635,10 @@ onUnmounted(() => {
         v-if="sidebarSiteId"
         :site-id="sidebarSiteId"
         :active-key="sidebarActiveKey"
+        :allow-table-mode="sidebarAllowTableMode"
+        :active-table-id="sidebarActiveTableId"
+        :preferred-table-id="sidebarPreferredTableId"
+        @pick-table="onPickTable"
         @pick="onSwitchTarget"
         @added="onSwitchAdded"
         @compare="onSidebarCompare"

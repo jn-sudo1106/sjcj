@@ -2,7 +2,8 @@
 // 源侧栏：页面级左侧固定栏，流程、数据、文件和任务视图共用。
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
-import { CHANGE_SITE_CHUNK, flowCenterApi, siteApi, sourceApi, type Site, type SourceCategory, type Source } from '@/api'
+import { CHANGE_SITE_CHUNK, flowCenterApi, siteApi, sourceApi, type Site, type SourceCategory, type Source, type UsedTable } from '@/api'
+import SiteTablePanel from './SiteTablePanel.vue'
 import SourceParamModal from './SourceParamModal.vue'
 import { importProgressText } from './importProgress'
 
@@ -27,12 +28,30 @@ import { csvDateTag, downloadCsv, toCsv } from '@/utils/csv'
 import { Close, Download } from '@element-plus/icons-vue'
 import { copyToClipboard } from '@/utils/clipboard'
 
-const props = defineProps<{ siteId: string; activeKey: string }>()
-const emit = defineEmits<{ pick: [target: Source]; added: [Source]; compare: [rightId: string]; pickSite: [] }>()
+const props = defineProps<{
+  siteId: string
+  activeKey: string
+  /** 网站态 + 数据视图时为 true（0924-10，Q4）：顶部出现「源 / 数据表」切换；其他视图恒为源列表 */
+  allowTableMode?: boolean
+  /** 数据表模式下选中的表（地址栏 tableId） */
+  activeTableId?: string
+  /** 地址栏没带表时优先选它（网站页签快照里上次看的表） */
+  preferredTableId?: string
+}>()
+const emit = defineEmits<{
+  pick: [target: Source]
+  added: [Source]
+  compare: [rightId: string]
+  pickSite: []
+  /** 数据表模式下点了一张表 */
+  pickTable: [table: UsedTable]
+}>()
 
 const flow = useFlowStore()
 const ws = useWorkspaceStore()
 const ui = useUiStore()
+/** 当前是否显示数据表列表：只有允许（数据视图）且用户选了数据表模式时 */
+const tableMode = computed(() => !!props.allowTableMode && ui.siteDataSideMode === 'table')
 
 const site = ref<Site | null>(null)
 const children = ref<Source[]>([])
@@ -946,6 +965,35 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
         </button>
         <button class="ssw-collapse" type="button" title="收起侧栏" @click="collapsed = true">«</button>
       </div>
+      <!-- 源 / 数据表切换（0924-10）：只在网站态的数据视图出现；切到别的视图左栏回到源列表，模式记着，切回来还原 -->
+      <div v-if="allowTableMode" class="ssw-mode" role="tablist" data-testid="sidebar-mode">
+        <button
+          type="button"
+          role="tab"
+          class="ssw-mode-btn"
+          :class="{ on: !tableMode }"
+          :aria-selected="!tableMode"
+          data-testid="sidebar-mode-source"
+          @click="ui.setSiteDataSideMode('source')"
+        >源</button>
+        <button
+          type="button"
+          role="tab"
+          class="ssw-mode-btn"
+          :class="{ on: tableMode }"
+          :aria-selected="tableMode"
+          data-testid="sidebar-mode-table"
+          @click="ui.setSiteDataSideMode('table')"
+        >数据表</button>
+      </div>
+      <SiteTablePanel
+        v-if="tableMode"
+        :site-id="siteId"
+        :active-table-id="activeTableId ?? ''"
+        :preferred-table-id="preferredTableId"
+        @pick="(t) => emit('pickTable', t)"
+      />
+      <template v-else>
       <div class="ssw-section-toggle" @click="listExpanded = !listExpanded">
         <span class="ssw-section-title">源列表 ({{ listCountLabel }})</span>
         <span class="ssw-section-icon">{{ listExpanded ? '▼' : '▶' }}</span>
@@ -1123,6 +1171,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
       <div class="ssw-foot">
         <button class="ssw-foot-btn" type="button" title="批量新增源，或把已存在的源关联到这个网站" data-testid="open-batch" @click.stop="openBatch">批量导入</button>
       </div>
+      </template>
     </template>
     <button v-else class="ssw-expand" type="button" title="展开源侧栏" @click="collapsed = false">»</button>
   </aside>
@@ -1466,6 +1515,10 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 .ssw-icon-btn:focus-visible { outline: 2px solid var(--rc-primary); outline-offset: 1px; }
 /* 命中条数：跟在源名右侧，数字越大越靠前（列表已按它排序），一眼看出先查谁 */
 .ssw-hit-count { flex: none; margin-left: 6px; padding: 1px 6px; border-radius: 9px; background: var(--rc-primary-bg); color: var(--rc-primary-ink); font-size: 10px; font-weight: 700; font-family: var(--rc-mono, monospace); }
+.ssw-mode { flex: none; display: flex; gap: 2px; margin: 8px 8px 0; padding: 2px; border: 1px solid var(--rc-border); border-radius: 7px; background: #f1f5f9; }
+.ssw-mode-btn { flex: 1; height: 24px; border: 0; border-radius: 5px; background: transparent; color: var(--rc-muted); font-size: 12px; font-weight: 600; cursor: pointer; }
+.ssw-mode-btn:hover { color: var(--rc-text); }
+.ssw-mode-btn.on { background: #fff; color: var(--rc-primary-ink); box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08); }
 .ssw-search {
   flex: none;
   height: 28px;

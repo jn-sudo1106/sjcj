@@ -11,6 +11,7 @@
 // 的旧 ResultView/FileView，避免用一个空的/串味的 flow.sourceCtx 发出错误查询。
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useUiStore } from '@/stores/ui'
 import { siteApi, type Site, type Source } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -133,7 +134,10 @@ onUnmounted(() => {
   loadSeq += 1
 })
 
+const ui = useUiStore()
 const view = computed(() => normalizeSiteView(route.query.view))
+/** 左栏数据表模式选中的表（0924-10）：模式在 ui store，表在地址栏 tableId */
+const lockedTableId = computed(() => (ui.siteDataSideMode === 'table' ? String(route.query.tableId ?? '') : ''))
 // 0915-02：记住停在哪个视图——点源页签走开再点回「全部」，回到的是原来那个视图而不是默认源视图。
 //
 // ⚠️ 必须跳过"已经切到具体源"的那一拍：点源时路由先变成 `sourceId=…&view=data`，本组件
@@ -202,7 +206,7 @@ function openSourceData(source: Source) {
     <div v-if="loadError" class="sdv-empty">{{ loadError }}</div>
     <template v-else>
       <SourceOverviewView v-if="view === 'source'" :current-site-id="siteId" :initial-source-ids="initialSourceIds" :initial-flow-id="initialFlowId" class="sdv-body" @open-source="openSource" @open-source-data="openSourceData" />
-      <SiteDataView v-else-if="view === 'data'" :site-id="siteId" :initial-condition="initialCondition" class="sdv-body" />
+      <SiteDataView v-else-if="view === 'data'" :site-id="siteId" :initial-condition="initialCondition" :locked-table-id="lockedTableId" class="sdv-body" />
       <SiteFileView v-else-if="view === 'file'" :site-id="siteId" class="sdv-body" />
       <TaskView v-else-if="view === 'task'" site-wide :site-id="siteId" class="sdv-body" />
       <SiteMonitorView v-else-if="view === 'monitor'" :site-id="siteId" :tab="monitorTab" class="sdv-body" @update:tab="switchMonitorTab" />

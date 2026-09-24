@@ -25,7 +25,7 @@ import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { dataApi, parseNextStepReceipt, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail, type RowQuery, type Step } from '@/api'
+import { dataApi, parseNextStepReceipt, siteApi, sourceApi, type UsedTable, type DataTableMeta, type DataRow, type Source, type EntryDetail, type RowQuery, type Step } from '@/api'
 import {
   buildHorizontalLayout, buildSourceSeed, effectiveInputTable, firstRunnableNodeId, nodeOutputTable, isDecision, isParallel,
   hasDirectSuccessor, directSuccessorIds, directPredecessorIds, type NodeConfig, type BranchSeed, type FlowBranchGroup,
@@ -63,7 +63,15 @@ export interface SiteDataInitialCondition {
   dataId?: string
   parentId?: string
 }
-const props = defineProps<{ siteId: string; initialCondition?: SiteDataInitialCondition | null }>()
+const props = defineProps<{
+  siteId: string
+  initialCondition?: SiteDataInitialCondition | null
+  /**
+   * 左栏数据表模式选中的表（0924-10）。有值时表由左栏决定：隐藏顶部的选源 / 选表下拉，
+   * 换成只读的「表：xxx」；空串 = 源模式，行为同原来。
+   */
+  lockedTableId?: string
+}>()
 const router = useRouter()
 // 0915-03 起，页签/快照/待应用条件都要用到它，声明必须早于第一个使用点
 // （原来在文件中段，钻取相关的函数在它前面，immediate watch 里调会撞 TDZ）
@@ -250,6 +258,41 @@ const totalHitsLoading = ref(false)
  * 后台补算总条数：把源集合分片写进条件问 summaryEntryData，各组 CNT 求和。
  * 与 loadData 共用 requestId 防竞态——切表/改条件后旧的那轮算完也不该再写进来。
  */
+/**
+ * 候选源先收窄到"用到这张表的源"（0924-11）。
+ *
+ * 不收窄时，归并按源列表顺序每轮扫一批：站 89 的「快讯表」只有 5 个源用到，却要在 1368 个源里
+ * 一批批找，自动加载有轮数上限，扫不到就停在「共 0 条」（2026-09-24 实测）。
+ *
+ * 名单来自 siteApi.siteUsedTables（主表 ∪ 流程节点表）。它**可能不全**的两种情况不收窄，保证不漏数据：
+ * 有流程的节点没查回来（failedFlowIds）、有源没关联流程（只统计了主表）。
+ * 查不到这张表（比如下拉里选了本站没用到的表）同样退回全部源。
+ */
+async function narrowToTableSources(tid: string, siteSourceIds: string[]): Promise<string[]> {
+  try {
+    const used = await siteApi.siteUsedTables(props.siteId)
+    if (used.failedFlowIds.length || used.noFlowSourceCnt) return siteSourceIds
+    const table = used.tables.find((t) => t.tableId === tid)
+    if (!table?.sourceIds.length) return siteSourceIds
+    const inTable = new Set(table.sourceIds)
+    const narrowed = siteSourceIds.filter((id) => inTable.has(id))
+    return narrowed.length ? narrowed : siteSourceIds
+  } catch {
+    return siteSourceIds
+  }
+}
+
+/** 左栏选中那张表的名称与涉及源数：与左栏同一份数据，名称口径一致（表详情接口的 name 与表目录不一定相同） */
+const lockedTableInfo = ref<UsedTable | null>(null)
+watch(() => [props.siteId, props.lockedTableId] as const, async ([siteId, tid]) => {
+  lockedTableInfo.value = null
+  if (!tid) return
+  try {
+    const used = await siteApi.siteUsedTables(siteId)
+    if (props.lockedTableId === tid) lockedTableInfo.value = used.tables.find((t) => t.tableId === tid) ?? null
+  } catch { /* 名称拿不到就用表详情的，不影响查询 */ }
+}, { immediate: true })
+
 async function computeTotalHits(reqId: number, sourceIds: string[]) {
   if (!sourceIds.length) return
   totalHitsLoading.value = true
@@ -383,6 +426,20 @@ watch(() => props.initialCondition, (cond) => {
   filters.parentId = cond.parentId ?? ''
   void nextTick(() => runQuery())
 }, { immediate: true, deep: true })
+
+// 左栏数据表模式：表由左栏决定。放在 initialCondition 那个 watch 之后——同一轮里左栏的选择说了算。
+// 首次（挂载时）要主动查一次：此刻 watch(effectiveTableId) 还没注册，看不到这次赋值，
+// 不补这一下首屏一个请求都不发（2026-09-24 实测「已加载 0 条」、连表结构都没拉）。
+// 之后左栏换表由 watch(effectiveTableId) 接管，这里不重复查。
+let lockedTableMounted = false
+watch(() => props.lockedTableId, (id) => {
+  const first = !lockedTableMounted
+  lockedTableMounted = true
+  if (!id) return
+  selectedSourceId.value = ''
+  tableId.value = id
+  if (first) void nextTick(() => runQuery())
+}, { immediate: true })
 
 const filtersDirty = ref(false)
 watch(() => ({ ...filters }), () => { filtersDirty.value = true })
@@ -615,7 +672,10 @@ async function resetAndLoad() {
       //     不值得为收窄先付一轮请求。
       siteChildren.value = await siteApi.siteSources(props.siteId)
       if (id !== requestId) return
-      const siteSourceIds = siteChildren.value.map((s) => s.sourceId)
+      // 0924-11：先收窄到"用到这张表的源"，下面的反查 / 总数 / 归并都只在这批源里做。
+      // 变量名沿用 siteSourceIds——后面的逻辑本来就是"在这个范围内"，范围变小而已。
+      const siteSourceIds = await narrowToTableSources(tid, siteChildren.value.map((s) => s.sourceId))
+      if (id !== requestId) return
       const hasCondition = !!(filters.sql || filters.state || filters.dataId || filters.parentId)
       if (hasCondition && siteSourceIds.length) {
         // 0915-03：同一套条件的收窄结果直接复用——6496 个源的网站实测要几十秒，
@@ -1062,8 +1122,16 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
 <template>
   <main class="sdv2-shell" :class="{ 'is-fullscreen': fullscreen }">
     <div class="sdv2-toolbar">
-      <SiteSourceSelect v-model="selectedSourceId" :site-id="siteId" />
-      <SiteTableSelect v-if="!selectedSourceId" v-model="tableId" :site-id="siteId" />
+      <template v-if="lockedTableId">
+        <span class="sdv2-locked-table" data-testid="site-data-locked-table" :title="meta?.tableName || ''">
+          表：<b>{{ lockedTableInfo?.name || meta?.name || lockedTableId }}</b><em>{{ lockedTableId }}</em>
+          <template v-if="lockedTableInfo">· 涉及 {{ lockedTableInfo.sourceCnt }} 个源</template>
+        </span>
+      </template>
+      <template v-else>
+        <SiteSourceSelect v-model="selectedSourceId" :site-id="siteId" />
+        <SiteTableSelect v-if="!selectedSourceId" v-model="tableId" :site-id="siteId" />
+      </template>
       <template v-if="effectiveTableId">
         <input v-model="filters.dataId" class="sdv2-input" placeholder="数据 ID" />
         <input v-model="filters.parentId" class="sdv2-input" placeholder="父 ID" />
@@ -1456,4 +1524,7 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
 .sdv2-readonly { flex: none; padding: 2px 8px; border-radius: 999px; background: #f1f5f9; color: var(--rc-faint); font-size: 11px; }
 .sdv2-goto { flex: none; height: 24px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 999px; background: #fff; color: var(--rc-primary); font-size: 11.5px; cursor: pointer; }
 .sdv2-goto:hover { border-color: var(--rc-primary); background: var(--rc-primary-bg); }
+.sdv2-locked-table { display: inline-flex; align-items: baseline; gap: 6px; max-width: 340px; padding: 0 10px; height: 30px; line-height: 30px; border: 1px solid var(--rc-border); border-radius: 6px; background: #f8fafc; color: var(--rc-muted); font-size: 12px; white-space: nowrap; overflow: hidden; }
+.sdv2-locked-table b { color: var(--rc-text); font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
+.sdv2-locked-table em { font-style: normal; font-family: monospace; font-size: 11px; }
 </style>

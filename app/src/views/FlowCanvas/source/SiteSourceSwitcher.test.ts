@@ -966,3 +966,56 @@ describe('SiteSourceSwitcher · 复制走全站统一实现（2026-09-22）', ()
     })
   })
 })
+
+// 0924-10：「源 / 数据表」切换只在网站态 + 数据视图出现（Q4）
+describe('SiteSourceSwitcher · 数据表模式', () => {
+  async function mountMode(allowTableMode: boolean, mode: 'source' | 'table') {
+    sessionStorage.clear()
+    localStorage.clear()
+    setActivePinia(createPinia())
+    mockApis()
+    vi.spyOn(siteApi, 'siteUsedTables').mockResolvedValue({ tables: [], noFlowSourceCnt: 0, failedFlowIds: [] })
+    const { useUiStore } = await import('@/stores/ui')
+    useUiStore().setSiteDataSideMode(mode)
+    const wrapper = mount(SiteSourceSwitcher, {
+      props: { siteId: 'site-a', activeKey: '', allowTableMode, activeTableId: '' },
+      global: {
+        stubs: { 'el-drawer': { template: '<div><slot /><slot name="footer" /></div>' }, SiteTablePanel: { name: 'SiteTablePanel', props: ['siteId', 'activeTableId', 'preferredTableId'], template: '<div data-testid="stub-table-panel" />' } },
+        directives: { loading: {} },
+      },
+    })
+    await flushPromises()
+    return wrapper
+  }
+
+  it('非数据视图：没有切换，即使上次选的是数据表也只显示源列表', async () => {
+    const wrapper = await mountMode(false, 'table')
+    expect(wrapper.find('[data-testid="sidebar-mode"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="stub-table-panel"]').exists()).toBe(false)
+    expect(wrapper.find('.ssw-list').exists()).toBe(true)
+  })
+
+  it('数据视图 + 源模式：有切换，显示源列表', async () => {
+    const wrapper = await mountMode(true, 'source')
+    expect(wrapper.find('[data-testid="sidebar-mode"]').exists()).toBe(true)
+    expect(wrapper.find('.ssw-list').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="stub-table-panel"]').exists()).toBe(false)
+  })
+
+  it('点「数据表」：源列表和底部按钮换成数据表列表，模式记进 ui store', async () => {
+    const wrapper = await mountMode(true, 'source')
+    await wrapper.get('[data-testid="sidebar-mode-table"]').trigger('click')
+    const { useUiStore } = await import('@/stores/ui')
+    expect(useUiStore().siteDataSideMode).toBe('table')
+    expect(wrapper.find('[data-testid="stub-table-panel"]').exists()).toBe(true)
+    expect(wrapper.find('.ssw-list').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="open-batch"]').exists()).toBe(false)
+  })
+
+  it('数据表列表点表：往外发 pickTable', async () => {
+    const wrapper = await mountMode(true, 'table')
+    await wrapper.findComponent({ name: 'SiteTablePanel' }).vm.$emit('pick', { tableId: '900' })
+    expect(wrapper.emitted('pickTable')?.[0]?.[0]).toMatchObject({ tableId: '900' })
+  })
+})
+
