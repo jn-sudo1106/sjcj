@@ -385,7 +385,7 @@ describe('coreParam（2026-09-21：翻译助手保存时把源/目标语言与�
 })
 
 describe('coreParam（2026-09-23：音频提取文字保存时把转写配置写进 core_param，不再写 code_rule）', () => {
-  const AUDIO_JSON = '{"urlField":"","provider":"local","providerCode":"","remoteModel":"","language":"en","start":"","end":"50","outputFormat":"txt","outputBaseDir":""}'
+  const AUDIO_JSON = '{"urlField":"","provider":"local","language":"en","start":"","end":"50","outputFormat":"txt","outputBaseDir":""}'
 
   it('编排 Tab 改过的音频配置写入 core_param，code_rule 不写（保持 base 原值）', () => {
     const cfg = cloneConfig(NODE_CONFIGS['audio-text'])

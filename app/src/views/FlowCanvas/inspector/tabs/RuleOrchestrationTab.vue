@@ -23,9 +23,6 @@ import {
   AUDIO_ORCHESTRATION_DEFAULTS,
   AUDIO_PROVIDER_OPTIONS,
   SPEECH_LANGUAGE_OPTIONS,
-  SPEECH_MAX_DURATION_SECONDS,
-  SPEECH_MODEL_OPTIONS,
-  SPEECH_PROVIDER_OPTIONS,
   parseAudioOrchestrationConfig,
   serializeAudioOrchestrationConfig,
   validateAudioRange,
@@ -77,7 +74,7 @@ const isAudioText = computed(() => isAudioTextNode(cfg.value))
 
 // ---- 音频提取文字编排配置（0923 增强：落成 CORE_PARAM，见方案 §4）----
 // 之前只有一个不落库的「语音」下拉（局部 audioLanguage ref，切节点即清空）。本次整段换成
-// structuredConfig 驱动的配置模型：供应商（本地离线 / 远程接口）+ 远程供应商/模型 + 语言 +
+// structuredConfig 驱动的配置模型：供应商（本地离线 / AssemblyAI / WAND）+ 语言 +
 // 区间裁剪 + 输出格式/目录，读写走翻译节点同一套「从 stored 还原 / 改动即落库」范式。
 // 字段口径见 api/speech.ts 的 AudioOrchestrationConfig，与后端 audio-to-text 分支逐字对齐。
 const audioCfg = ref<AudioOrchestrationConfig>({ ...AUDIO_ORCHESTRATION_DEFAULTS })
@@ -90,8 +87,8 @@ function writeAudioConfig() {
   setNodeStructuredConfig(serializeAudioOrchestrationConfig(audioCfg.value))
 }
 function onAudioProviderChange() {
-  // remote / assemblyai 只回整段文本、无分段（方案 C5）：切到远程类时把已选的 srt 收回 txt
-  if (audioCfg.value.provider === 'remote' || audioCfg.value.provider === 'assemblyai') {
+  // assemblyai / wand 只回整段文本、无分段（方案 C5）：切到远程类时把已选的 srt 收回 txt
+  if (audioCfg.value.provider === 'assemblyai' || audioCfg.value.provider === 'wand') {
     audioCfg.value.outputFormat = 'txt'
   }
   writeAudioConfig()
@@ -100,9 +97,9 @@ function onAudioProviderChange() {
 const audioRangeError = computed(() =>
   isAudioText.value ? validateAudioRange(audioCfg.value.start, audioCfg.value.end) : null,
 )
-/** remote / assemblyai 下 SRT 不可选（后端只回整段文本）；local 放开 */
+/** assemblyai / wand 下 SRT 不可选（后端只回整段文本）；local 放开 */
 const audioSrtDisabled = computed(() =>
-  audioCfg.value.provider === 'remote' || audioCfg.value.provider === 'assemblyai')
+  audioCfg.value.provider === 'assemblyai' || audioCfg.value.provider === 'wand')
 
 watch(
   () => [id.value, cfg.value?.structuredConfig ?? ''] as const,
@@ -1387,7 +1384,7 @@ function onTestScript() {
       <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
     </span>
   </div>
-  <!-- 音频提取文字（0923 增强）：供应商（本地离线 / 远程接口）+ 远程供应商/模型 + 语言 +
+  <!-- 音频提取文字（0923 增强）：供应商（本地离线 / AssemblyAI / WAND）+ 语言 +
        区间裁剪 + 输出格式/目录，改动即落成 CODE_RULE（structuredConfig）。 -->
   <div v-if="isAudioText" class="rc-field audio-config-field" data-testid="audio-config-field">
     <div class="audio-config-grid">
@@ -1404,21 +1401,6 @@ function onTestScript() {
           <option v-for="item in SPEECH_LANGUAGE_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</option>
         </select>
       </label>
-      <!-- 仅远程接口：供应商码 + 接口模型 -->
-      <template v-if="audioCfg.provider === 'remote'">
-        <label class="audio-config-item">
-          <span>接口供应商</span>
-          <select v-model="audioCfg.providerCode" class="rc-select" data-testid="audio-provider-code" @change="writeAudioConfig">
-            <option v-for="item in SPEECH_PROVIDER_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</option>
-          </select>
-        </label>
-        <label class="audio-config-item">
-          <span>接口模型</span>
-          <select v-model="audioCfg.remoteModel" class="rc-select" data-testid="audio-remote-model" @change="writeAudioConfig">
-            <option v-for="item in SPEECH_MODEL_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</option>
-          </select>
-        </label>
-      </template>
       <label class="audio-config-item">
         <span>开始时间</span>
         <input v-model="audioCfg.start" class="rc-input" placeholder="秒 或 00:00:00，空=从头" data-testid="audio-start" @change="writeAudioConfig" />
@@ -1438,9 +1420,6 @@ function onTestScript() {
         <span>保存目录</span>
         <input v-model="audioCfg.outputBaseDir" class="rc-input" placeholder="留空用默认（/media）" data-testid="audio-output-base-dir" @change="writeAudioConfig" />
       </label>
-    </div>
-    <div v-if="audioCfg.provider === 'remote'" class="rc-help">
-      远程接口单段音频不超过约 {{ SPEECH_MAX_DURATION_SECONDS }} 秒，长音频请用「开始/结束时间」裁剪后再转写。
     </div>
     <div v-if="audioRangeError" class="ocr-error" data-testid="audio-range-error">{{ audioRangeError }}</div>
   </div>
