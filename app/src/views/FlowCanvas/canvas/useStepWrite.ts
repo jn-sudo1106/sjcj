@@ -9,6 +9,7 @@ import { entryApi, idFromApiResult, itemApi, sourceApi, type Ack, type Step } fr
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import {
+  applyStepSourceDefault,
   assertStepsPersistable,
   isWritableStepId,
   hasRealBranches,
@@ -136,6 +137,10 @@ export function useStepWrite() {
     if (!cfg?.configId) throw new Error(`节点「${cfg?.title || nodeId}」尚未绑定配置，无法新建步骤`)
     const sid = sourceIdOf()
     if (!sid) throw new Error('当前没有可保存的源')
+    // 新建步骤的「适用源」一律默认 -1（2026-09-24 从规则/监控扩到所有类型）。画布 insertAfter
+    // 已经设过，这里兜住不走那条路新建的节点（套模板、AI 推荐重建）——不兜就会顺着前置步骤的
+    // sourceId 把新步骤锁到当前源上。
+    applyStepSourceDefault(cfg)
     const lastStepIds = lastStepIdsFromCanvas(flow.main, nodeId, flow.branchGroups)
     const prevId = lastStepIds[0] !== '0' ? lastStepIds[0] : undefined
     const prev = prevId ? sourceStore.stepSnapshots[prevId] : undefined

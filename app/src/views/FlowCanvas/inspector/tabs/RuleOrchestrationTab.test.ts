@@ -318,21 +318,24 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       wrapper.unmount()
     })
 
-    it('切到远程接口：出现供应商/模型下拉，SRT 被禁用，改动落进 CODE_RULE', async () => {
+    it('切到 WAND：不显示旧的远程供应商/模型字段，SRT 被禁用，CODE_RULE 落 provider=wand', async () => {
       const { flow, wrapper } = mountOnAudioTextNode()
       await flushPromises()
 
-      await wrapper.find('select[data-testid="audio-provider"]').setValue('remote')
+      await wrapper.find('select[data-testid="audio-provider"]').setValue('wand')
       await flushPromises()
 
-      expect(wrapper.find('[data-testid="audio-provider-code"]').exists()).toBe(true)
-      expect(wrapper.find('[data-testid="audio-remote-model"]').exists()).toBe(true)
+      // 原「语音转文字接口」专属字段已整体下线，任何供应商下都不出现
+      expect(wrapper.find('[data-testid="audio-provider-code"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="audio-remote-model"]').exists()).toBe(false)
+      // 只回整段文本，SRT 禁用
       expect(wrapper.find('option[data-testid="audio-srt-option"]').attributes('disabled')).toBeDefined()
 
       const stored = JSON.parse(String(flow.configs['audio-1'].structuredConfig))
-      expect(stored.provider).toBe('remote')
-      expect(stored.providerCode).toBe('MiniMax')
-      expect(stored.remoteModel).toBe('asr-1.0')
+      expect(stored.provider).toBe('wand')
+      expect(stored.outputFormat).toBe('txt')
+      expect('providerCode' in stored).toBe(false)
+      expect('remoteModel' in stored).toBe(false)
       wrapper.unmount()
     })
 
@@ -351,8 +354,8 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
 
       const stored = JSON.parse(String(flow.configs['audio-1'].structuredConfig))
       expect(stored.provider).toBe('assemblyai')
-      expect(stored.providerCode).toBe('')
-      expect(stored.remoteModel).toBe('')
+      expect('providerCode' in stored).toBe(false)
+      expect('remoteModel' in stored).toBe(false)
       expect(stored.outputFormat).toBe('txt')
       wrapper.unmount()
     })
@@ -379,14 +382,14 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       const flow = useFlowStore()
       flow.configs['audio-1'] = {
         ...cloneConfig(NODE_CONFIGS['audio-text']),
-        structuredConfig: JSON.stringify({ provider: 'remote', providerCode: 'MiniMax', remoteModel: 'asr-1.0', language: 'en', start: '10', end: '20', outputFormat: 'txt', outputBaseDir: '/code09' }),
+        structuredConfig: JSON.stringify({ provider: 'wand', language: 'en', start: '10', end: '20', outputFormat: 'txt', outputBaseDir: '/code09' }),
       }
       flow.select('audio-1')
       flow.setActiveTab('orchestration')
       const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
       await flushPromises()
 
-      expect((wrapper.find('select[data-testid="audio-provider"]').element as HTMLSelectElement).value).toBe('remote')
+      expect((wrapper.find('select[data-testid="audio-provider"]').element as HTMLSelectElement).value).toBe('wand')
       expect((wrapper.find('select[data-testid="audio-language"]').element as HTMLSelectElement).value).toBe('en')
       expect((wrapper.find('input[data-testid="audio-start"]').element as HTMLInputElement).value).toBe('10')
       expect((wrapper.find('input[data-testid="audio-end"]').element as HTMLInputElement).value).toBe('20')
