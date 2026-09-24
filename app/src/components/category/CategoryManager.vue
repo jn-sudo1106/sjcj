@@ -348,29 +348,9 @@ async function handleDelete(node: { id: string; name: string }) {
 
 <template>
   <section class="cm-root">
-    <header class="cm-head">
-      <div class="cm-title-wrap">
-        <span class="cm-indicator"></span>
-        <span class="cm-title">分类目录</span>
-      </div>
-      <div class="cm-actions">
-        <el-button type="primary" size="small" :icon="Plus" class="ca-header-btn" @click="openAddRoot">
-          新增根分类
-        </el-button>
-        <el-button size="small" :icon="DocumentAdd" class="ca-header-btn" @click="openBatchAdd()">
-          批量添加
-        </el-button>
-        <el-tooltip content="刷新分类" placement="top" :show-after="120">
-          <button type="button" class="ca-icon-btn" title="刷新分类" aria-label="刷新分类" @click="reloadTree">
-            <el-icon :size="14"><Refresh /></el-icon>
-          </button>
-        </el-tooltip>
-      </div>
-    </header>
-
-    <div class="cm-content">
-      <!-- 顶部搜索与信息栏：限制搜索框宽度为 280px，不再通栏拉伸 -->
-      <div class="ca-toolbar">
+    <!-- 顶部单行操作栏：查询与操作按钮在同一排，消除上层冗余的「分类目录」标题栏 -->
+    <div class="ca-toolbar">
+      <div class="ca-toolbar-left">
         <div class="ca-search-bar">
           <el-input
             v-model="keyword"
@@ -383,9 +363,24 @@ async function handleDelete(node: { id: string; name: string }) {
             @clear="handleClearSearch"
           />
         </div>
-        <span v-if="!isSearching" class="ca-count-hint">共 {{ rootCategories.length }} 个顶级分类</span>
+        <span v-if="!isSearching" class="ca-count-hint">共 {{ rootCategories.length }} 个分类目录</span>
         <span v-else class="ca-count-hint">搜索结果（按层级展示）</span>
       </div>
+
+      <div class="ca-toolbar-actions">
+        <el-button type="primary" size="small" :icon="Plus" class="ca-header-btn" @click="openAddRoot">
+          新增根分类
+        </el-button>
+        <el-button size="small" :icon="DocumentAdd" class="ca-header-btn" @click="openBatchAdd()">
+          批量添加
+        </el-button>
+        <el-tooltip content="刷新分类" placement="top" :show-after="120">
+          <button type="button" class="ca-icon-btn" title="刷新分类" aria-label="刷新分类" @click="reloadTree">
+            <el-icon :size="14"><Refresh /></el-icon>
+          </button>
+        </el-tooltip>
+      </div>
+    </div>
 
       <!-- 树形表格表头：列对齐，彻底消除通栏拉伸视线割裂 -->
       <div class="ca-table-head">
@@ -586,7 +581,6 @@ async function handleDelete(node: { id: string; name: string }) {
         <span class="ca-footer-tip">整页树形表格展示：支持层级展开折叠与悬浮操作（↑ 上移 / ↓ 下移 / 编辑 / 添加 / 删除）</span>
         <button type="button" class="ca-footer-link" @click="openBatchAdd()">批量导入</button>
       </div>
-    </div>
 
     <!-- 新建 / 编辑单个分类弹窗 -->
     <el-dialog
@@ -673,72 +667,7 @@ async function handleDelete(node: { id: string; name: string }) {
   border-radius: 8px;
   overflow: hidden;
 }
-.cm-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--rc-border-soft, #f1f5f9);
-  flex-shrink: 0;
-}
-
-.cm-title-wrap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.cm-indicator {
-  width: 3px;
-  height: 15px;
-  background-color: var(--rc-primary, #2563eb);
-  border-radius: 2px;
-}
-.cm-title {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--rc-text, #0f172a);
-}
-.cm-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.ca-header-btn {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
-  border-radius: var(--rc-radius-sm, 6px);
-}
-.ca-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 1px solid var(--rc-border, #e2e8f0);
-  border-radius: var(--rc-radius-sm, 6px);
-  background: #ffffff;
-  color: var(--rc-muted, #64748b);
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-.ca-icon-btn:hover {
-  border-color: var(--rc-primary, #2563eb);
-  color: var(--rc-primary, #2563eb);
-  background: var(--rc-primary-bg, #eff6ff);
-}
-
-/* 内容容器：纵向撑满，单主滚动条 */
-.cm-content {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  background: #ffffff;
-}
-
-/* 顶部搜索栏与统计：限制宽度，右侧显示总计 */
+/* 顶部统一单行工具栏：查询与操作按钮在同一排展示 */
 .ca-toolbar {
   display: flex;
   align-items: center;
@@ -747,9 +676,19 @@ async function handleDelete(node: { id: string; name: string }) {
   border-bottom: 1px solid var(--rc-border-soft, #f1f5f9);
   background: #ffffff;
   flex-shrink: 0;
+  gap: 12px;
 }
+
+.ca-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
 .ca-search-bar {
-  width: 280px;
+  width: 260px;
+  flex-shrink: 0;
 }
 .ca-search-bar :deep(.el-input__wrapper) {
   box-shadow: 0 0 0 1px var(--rc-border, #e2e8f0) inset;
@@ -762,9 +701,45 @@ async function handleDelete(node: { id: string; name: string }) {
 .ca-search-bar :deep(.el-input__wrapper.is-focus) {
   box-shadow: 0 0 0 1px var(--rc-primary, #2563eb) inset;
 }
+
 .ca-count-hint {
   font-size: 12px;
   color: var(--rc-muted, #64748b);
+  white-space: nowrap;
+}
+
+.ca-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.ca-header-btn {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 12px;
+  border-radius: var(--rc-radius-sm, 6px);
+}
+
+.ca-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--rc-border, #e2e8f0);
+  border-radius: var(--rc-radius-sm, 6px);
+  background: #ffffff;
+  color: var(--rc-muted, #64748b);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.ca-icon-btn:hover {
+  border-color: var(--rc-primary, #2563eb);
+  color: var(--rc-primary, #2563eb);
+  background: var(--rc-primary-bg, #eff6ff);
 }
 .ca-empty-tip {
   text-align: center;
