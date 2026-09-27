@@ -335,6 +335,10 @@ describe('流程中心 · 可编辑工作区', () => {
   // 一保存还会把真实 flowConf 覆盖成空。这两条用例的 detail 桩就是在锁这件事。
   it('点行打开工作区：去 flowDetail 取完整定义载入画布，而不是用列表行的空 definition', async () => {
     const detail = vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(FLOWS[0])
+    // 0926 起打开流程串行拉步骤快照（详情→steps→工作区渲染），测试不 mock steps 会走
+    // 真实 120ms 网络通道，loadingDetail 停在 true、画布 stub 不渲染。快照与本文断言无关，
+    // 空数组即可（LOAD 画布用 definition，不依赖快照）。
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
     // 列表行只有空 definition，模拟真实 flowPaged 的返回
     const w = await mountCenter([{ ...FLOWS[0], definition: { main: [], branches: [], configs: {} } }])
     await rows(w)[0].trigger('click')
@@ -428,6 +432,8 @@ describe('流程中心 · 可编辑工作区', () => {
 
   it('右侧直接复用节点设置，且流程中心不展示 AI 对话', async () => {
     vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(FLOWS[0])
+    // 同上：打开流程串行拉步骤快照，不 mock 会卡 loadingDetail
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
     const w = await mountCenter()
     await rows(w)[0].trigger('click')
     await flushPromises()

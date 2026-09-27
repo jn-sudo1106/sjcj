@@ -60,11 +60,16 @@ watch(() => flow.selectedId, () => {
 const isBranchNode = computed(() => !!cfg.value && decisionOrParallelKind(cfg.value) !== undefined)
 // 0927 H1：当前节点输出表未就绪（非文件节点：显式输出表 / 默认=输入表 / 快照输出表都没有）。
 // 自动保存会跳过该节点并置头部 pending「请先补全节点配置」；这里常驻提示引导去「表配置」。
+// 0927（H1 修订）：数据监控节点「不落表/不出参」——它的表在编排配置 tab 的监控方法里绑，
+// 输出表恒等于输入表（后端监控步骤行 outputTable=inputTable），表配置里没有「输出表」
+// 选择器，这里提示「去表配置选输出表」是死路；只豁免展示侧（写侧 outputTableMissing 跳过
+// 语义不变：未配输入表的新监控节点本就落不了库，落库后快照 outputTable 兜底照常回写）。
 const outputTableWarning = computed(() => {
   const node = cfg.value
   if (!node) return false
   const snapshot = sourceStore.stepSnapshots[id.value]
   if (isFileLikeNode(node, snapshot)) return false
+  if (isMonitorNode(node)) return false
   return outputTableMissing(node, snapshot)
 })
 const configId = computed(() => cfg.value?.configId || '')

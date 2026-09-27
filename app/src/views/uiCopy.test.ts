@@ -356,7 +356,10 @@ describe('最新方案 UI 入口收口', () => {
   it('空白画布的智能入口推荐并应用可复用流程，不暴露模板概念', () => {
     expect(flowBoard).toContain('智能推荐流程')
     expect(flowBoard).not.toContain('智能推荐模板')
-    expect(flowBoard).toContain('flowCenterApi.list()')
+    // 0927：智能推荐的应用候选从「全部流程」收口到流程模板（flowCenterApi.templates）——
+    // 全量流程里混着与当前源结构完全不符的流程，推荐出来点应用必失败；templates 是
+    // 刻意维护的可复用清单。断言随代码同步，不锁死在旧的 list()。
+    expect(flowBoard).toContain('flowCenterApi.templates()')
     expect(flowBoard).toContain('flow.applyTemplate(template)')
     expect(flowBoard).not.toContain('generateWebFlow')
   })
