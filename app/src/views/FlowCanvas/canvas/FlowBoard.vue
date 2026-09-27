@@ -20,8 +20,6 @@ import AddNodePopover from './AddNodePopover.vue'
 import FlowXmlDialog from './FlowXmlDialog.vue'
 import { flowToXml } from '@/utils/flow/flowXml'
 import { applyTemplateToSource, reloadFlowIntoCanvas, reloadSourceIntoCanvas } from '@/utils/flow/applyTemplateToSource'
-
-const markerPrefix = `rc-arrow-${++flowBoardSeq}`
 import {
   effectiveOutputTable,
   iconFor,
@@ -39,6 +37,11 @@ import {
   conditionGroupLabel,
   type NodeConfig,
 } from './flowModel'
+
+// 0927 P1-4 收尾：marker id 实例化。计数器在文件顶部独立 <script> 块里（模块级唯一），
+// 这行语句必须留在 import 区之后——插在 import 之间会让其后所有 import 解析失败
+// （vue-tsc：TS1232 + TS2307 + 连带 any）。
+const markerPrefix = `rc-arrow-${++flowBoardSeq}`
 
 const props = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
 const flow = useFlowStore()

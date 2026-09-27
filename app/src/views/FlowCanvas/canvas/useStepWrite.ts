@@ -347,7 +347,7 @@ export function useStepWrite() {
    * 「40620 挂在 40597 下」改写成「挂在 40598 后面」，分支被静默拍平且不可逆。
    * 名称、进入条件这些与拓扑无关的字段照常写。分支拓扑还原见 YB-B。
    */
-  async function persistFlowSteps(): Promise<{ created: number; updated: number }> {
+  async function persistFlowSteps(): Promise<{ created: number; updated: number; skipped: number }> {
     // 0926：源画布与流程工作区都可写（后者无源上下文，按 flowId 锚定）；裸画布不写。
     const sid = sourceIdOf()
     if (!sid && !flow.flowIdMode) return { created: 0, updated: 0, skipped: 0 }
