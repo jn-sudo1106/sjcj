@@ -3108,8 +3108,9 @@ export const flowCenterApi = {
   },
   /**
    * 流程的步骤拓扑（svg+flowId 视图的说明见下方注释块——svg=true 已返回真实根行 isRoot=1，
-   * 不再需要 configDetail(flowId) 拼起点；configDetail 那条是 09-02 的旧结论，仅 FlowDetailDrawer
-   * 的 deriveFromFlowConfig 在「flowConf 无真实节点」时仍作兜底）。
+   * 不再需要 configDetail(flowId) 拼起点；configDetail 那条是 09-02 的旧结论，0927 起
+   * FlowDetailDrawer 的 deriveFromFlowConfig 已是**工作区默认展示路径**（有步骤行就按步骤
+   * 还原），它只在步骤响应里没有 isRoot 根行时才回退查 configDetail 合成起点）。
    * 子步骤记录自带 sourceId=-1（不挂在具体某个源上），stepFromLegacy 的 sourceId 兜底参数
    * 用不上，传空串即可。
    */

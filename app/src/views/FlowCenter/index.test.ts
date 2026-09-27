@@ -70,6 +70,19 @@ async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length, qu
       nodes.flatMap((n) => (n.id === parentId ? (n.children ?? []) : findChildren(n.children ?? [])))
     return findChildren(tree)
   })
+  // 0927：抽屉**常驻**（FlowDetailDrawer 一直挂着，:flow="activeFlow"）——「新建流程保存」
+  // 「列表整页换掉」等场景会 via replaceFlow 改 activeFlow，抽屉随之打开并拉详情+步骤快照。
+  // 不 mock 的话这条链走真实 120ms mock 通道，在**下一个用例**里才落地：晚到的快照会重建
+  // 画布甚至触发重渲染，把新建表单弹层的挂载窗口搅乱（历史 flake「名称为空不发请求」同源，
+  // 0927 实测把细节/步骤补成即时 resolve 后该组用例稳定）。需要特殊行为的用例
+  // （详情取不到 / 快照失败 / 自定义步骤）在自身用例里**先 spyOn 覆盖**——这里用
+  // isMockFunction 让路，不覆盖用例自己已装的桩（vi.spyOn 后到者胜）。
+  if (!vi.isMockFunction(flowCenterApi.detail)) {
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(FLOWS[0])
+  }
+  if (!vi.isMockFunction(flowCenterApi.steps)) {
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
+  }
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/flows', component: { template: '<div/>' } }, { path: '/rules', component: { template: '<div/>' } }, { path: '/canvas', component: { template: '<div/>' } }] })
   await router.push({ path: '/flows', query }); await router.isReady()
   const pinia = createPinia(); setActivePinia(pinia)
@@ -266,6 +279,9 @@ describe('流程中心 · 自动刷新', () => {
   // 不在新的这一页，正在编辑的面板就会自己消失。用搜索换掉结果集来验，等价且不依赖分页控件。
   it('列表被整页换掉后工作区不关', async () => {
     const w = await mountCenter(FLOWS, 640)
+    // 同为 0926 串行拉步骤快照的口径：不 mock 会走真实 120ms 通道，快照晚到并重建画布，
+    // 把后续用例的渲染时序搅乱（本文件注释「名称为空不发请求」那条历史 flake 同源）。
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
     await rows(w)[0].trigger('click')
     expect(w.find('.fd-drawer').exists()).toBe(true)
     vi.mocked(flowCenterApi.paged).mockResolvedValue({ total: 640, list: [FLOWS[1]] })

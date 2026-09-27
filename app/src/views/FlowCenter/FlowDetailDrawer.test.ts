@@ -24,7 +24,7 @@ afterEach(() => {
  *  与 svg=true 的真实返回同形状。 */
 const STEPS_FIXTURE: Step[] = [
   { stepId: '405100', sourceId: '-1', name: '流程入口', nodeType: 'entry', configId: '1400774', mainConfig: '1400774', flowId: '1400987', enabled: true, isRoot: true },
-  { stepId: '405101', sourceId: '-1', name: '列表页', configId: '1400774', mainConfig: '1400774', flowId: '1400987', enabled: true },
+  { stepId: '405101', sourceId: '-1', name: '列表页', configId: '1400774', mainConfig: '1400774', flowId: '1400987', enabled: true, outputTable: '900' },
 ]
 
 const FLOW = {
@@ -186,6 +186,8 @@ describe('流程详情抽屉 · 展开/收起配置区', () => {
   // 0926 REVIEW F-R5（0927 P0-1 修订）：关闭前 flush 失败先弹「仍然关闭（改动可能丢失）」
   // 确认——选「留在此页」留在抽屉里（不静默丢改动）；选「仍然关闭」放行（后端持续故障时
   // 用户不能被永远困在抽屉里，比修复前"只 return、关不掉只能刷新"是显式出口）。
+  // 0927 起工作区按接口步骤还原（steps 优先），改名的 405101 是已落库数字 ID →
+  // 自动保存走 persistExisting → stepModify；让 stepModify 失败来触发"保存失败"状态。
   it('改动未保存成功时点关闭：留在此页（默认）不关抽屉', async () => {
     const flowWithRealId = { ...FLOW, id: '1400987', definition: {
       ...FLOW.definition,
@@ -195,8 +197,7 @@ describe('流程详情抽屉 · 展开/收起配置区', () => {
     const w = mountDrawer(flowWithRealId)
     await flushPromises()
     const { itemApi } = await import('@/api')
-    // web-list 是画布草稿（非数字 id），自动保存走 createAndLocate → saveItemConfig；让它立即失败
-    vi.spyOn(itemApi, 'saveItemConfig').mockRejectedValue(new Error('写保护'))
+    vi.spyOn(itemApi, 'stepModify').mockRejectedValue(new Error('写保护'))
     // 模拟用户改了一个节点（flowIdMode 下按 flowId 锚定写），保存失败
     useFlowStore().setTitle('405101', '还没保存的改名')
     await flushPromises()
@@ -218,7 +219,7 @@ describe('流程详情抽屉 · 展开/收起配置区', () => {
     const w = mountDrawer(flowWithRealId)
     await flushPromises()
     const { itemApi } = await import('@/api')
-    vi.spyOn(itemApi, 'saveItemConfig').mockRejectedValue(new Error('写保护'))
+    vi.spyOn(itemApi, 'stepModify').mockRejectedValue(new Error('写保护'))
     useFlowStore().setTitle('405101', '还没保存的改名')
     await flushPromises()
 
@@ -241,19 +242,90 @@ describe('流程详情抽屉 · 展开/收起配置区', () => {
     const w = mountDrawer(flowWithRealId)
     await flushPromises()
     const { itemApi } = await import('@/api')
-    vi.spyOn(itemApi, 'saveItemConfig').mockRejectedValue(new Error('写保护'))
+    vi.spyOn(itemApi, 'stepModify').mockRejectedValue(new Error('写保护'))
     const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
-    // 画布有脏改动（草稿节点待落库，flowIdMode 下按 flowId 锚定写）
+    // 画布有脏改动（节点改名待落库，flowIdMode 下按 flowId 锚定写）
     useFlowStore().setTitle('405101', '还没保存的改名')
     await flushPromises()
 
     await saveButton(w).trigger('click')
     await flushPromises()
 
-    // 步骤没落库 → flowConf 不能带草稿 ID 落库：既不发 saveFlow，也不弹成功
+    // 步骤没落库 → flowConf 不能带未落库的改动落库：既不发 saveFlow，也不弹成功
     expect(save).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('步骤保存失败'))
     // 头部错误态（flush 失败置 error）一直留着，等用户重试
     expect(useFlowStore().flowDirty).toBe(true)
+  })
+})
+
+// 0927 修复（用户反馈「流程工作区未按接口返回的展示」）：工作区展示以**接口步骤**
+// （nextConfigPaged?flowId&svg=true，执行拓扑的唯一事实源）为准——flowConf 是历史快照，
+// 与步骤是两本账（0926 REVIEW），源画布/重载早已按步骤还原，只有抽屉还认 flowConf，
+// 存量流程画出来就跟接口对不上（节点缺失 / 分支被拍平 / 缺入口）。以下用例锁契约：
+// 有步骤行 → 一律按步骤还原；步骤侧没有内容 → flowConf 兜底（行为不变）。
+describe('流程详情抽屉 · 工作区按接口步骤展示（0927）', () => {
+  const BRANCH_STEPS: Step[] = [
+    { stepId: '405100', sourceId: '-1', name: '上市公司-配置', nodeType: 'entry', configId: '1400935', flowId: '1400935', enabled: true, isRoot: true },
+    { stepId: '405101', sourceId: '-1', name: 'html下载机器', nodeType: 'entry', configId: '1400974', flowId: '1400935', enabled: true, dependsOn: ['405100'] },
+    { stepId: '405102', sourceId: '-1', name: 'html解析', nodeType: 'entry', configId: '1400975', flowId: '1400935', enabled: true, dependsOn: ['405101'] },
+    { stepId: '405103', sourceId: '-1', name: '网页抓取', nodeType: 'entry', configId: '1401078', flowId: '1400935', enabled: true, dependsOn: ['405101'] },
+  ]
+
+  /** flowConf 是被拍平的旧定义（旧平台单链快照），与接口步骤的分叉拓扑不一致。 */
+  const staleDef = {
+    main: ['start', '405100', '405101', '405102', 'end'], branches: [], branchGroups: [],
+    configs: {
+      '405100': { title: '上市公司-配置', sub: '[90] 网页抓取', status: '', planned: false, base: [], fields: [], inmap: [], params: [], output: [], configId: '1400935' },
+      '405101': { title: 'html下载机器', sub: '[90] 网页抓取', status: '', planned: false, base: [], fields: [], inmap: [], params: [], output: [], configId: '1400974' },
+      '405102': { title: 'html解析', sub: '[90] 网页抓取', status: '', planned: false, base: [], fields: [], inmap: [], params: [], output: [], configId: '1400975' },
+    },
+  } as never
+
+  it('flowConf 有真实节点但步骤返回分支拓扑：画布按步骤还原，flowConf 不覆盖', async () => {
+    setActivePinia(createPinia())
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({
+      ...FLOW, id: '1400935', name: '上市公司-配置', definition: staleDef,
+    } as unknown as FlowRecord)
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue(BRANCH_STEPS)
+    const w = mount(FlowDetailDrawer, {
+      props: { flow: { ...FLOW, id: '1400935', name: '上市公司-配置' } as unknown as FlowRecord, categories: [] },
+      global: {
+        directives: { loading: {} },
+        stubs: { FlowBoard: { template: '<div />' }, NodeInspector: { template: '<div />' } },
+      },
+    })
+    await flushPromises()
+    const f = useFlowStore()
+    // 主链按 lastStep 走到分叉点 405101 为止，405102/405103 是它的两条分支——
+    // 而不是 flowConf 里那条"405102 排在主链上"的旧单链
+    expect(f.main).toEqual(['start', '405100', '405101', 'end'])
+    expect(f.branchGroups).toHaveLength(1)
+    expect(f.branchGroups[0]!.ownerId).toBe('405101')
+    expect(f.branchGroups[0]!.branches.map((b) => b.chain)).toEqual([['405102'], ['405103']])
+    // 节点内容同样来自步骤行（名字/配置ID），与接口返回一致
+    expect(f.configs['405100']?.title).toBe('上市公司-配置')
+    expect(f.configs['405102']?.configId).toBe('1400975')
+    // 流程工作区形态：写按 flowId 锚定
+    expect(f.flowId).toBe('1400935')
+    w.unmount()
+  })
+
+  it('步骤侧没有内容而 flowConf 有真实节点：按 flowConf 展示（兜底不变）', async () => {
+    setActivePinia(createPinia())
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(FLOW)
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
+    const w = mount(FlowDetailDrawer, {
+      props: { flow: FLOW, categories: [] },
+      global: {
+        directives: { loading: {} },
+        stubs: { FlowBoard: { template: '<div />' }, NodeInspector: { template: '<div />' } },
+      },
+    })
+    await flushPromises()
+    const f = useFlowStore()
+    expect(f.main).toEqual(['start', 'web-list', 'end'])
+    expect(f.configs['web-list']?.configId).toBe('1400774')
+    w.unmount()
   })
 })

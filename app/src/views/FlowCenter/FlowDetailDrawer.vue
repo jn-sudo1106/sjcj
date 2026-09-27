@@ -117,30 +117,26 @@ function loadIntoWorkspace(flow: FlowRecord, steps: Step[]) {
 }
 
 /**
- * flowConf 为空时，按这个流程**自己的配置**（cs_config，configId=flowId）把画布还原出来。
+ * 按这个流程**自己的配置**（cs_config，configId=flowId）与**接口步骤**（nextConfigPaged
+ * ?flowId=&svg=true，执行拓扑的唯一事实源）把画布还原出来。
  *
- * 背景：生产上 735 条流程是后端从 cs_config 整批灌进来的，flowConf 全是 null——但它们不是
- * 空流程，真实结构在 cs_config/cs_item_config 里（起点节点 1 个 + 真实子步骤 N 个）。直接
- * 显示空画布等于告诉用户"这流程没内容"，而且一旦有人点保存，就把空定义写进去了。
+ * 0927 起这是流程工作区**默认的展示路径**：工作区画布一律按接口步骤展示（用户反馈
+ * 「流程工作区未按 nextConfigPaged 返回的展示」），flowConf 只兜底步骤侧没有内容的场景；
+ * 更早（09-02）它只是 flowConf 为空时的还原路径。背景：生产上 735 条流程是后端从
+ * cs_config 整批灌进来的，flowConf 全是 null——但它们不是空流程，真实结构在
+ * cs_config/cs_item_config 里（起点节点 1 个 + 真实子步骤 N 个）。直接显示空画布等于
+ * 告诉用户"这流程没内容"，而且一旦有人点保存，就把空定义写进去了。
  *
- * 2026-09-02 后端上线 `nextConfigPaged?flowId=` 后联调验证过：这条查询恒不返回起点节点那
- * 一行——不是接口没做全，是那一行天生不是 cs_item_config 的真实记录，是接口拿"当前查的
- * 这个源自己的 configId"现算拼出来的（换个源查，name/url 全变，configId/mainConfig 却一直
- * 相同）。既然 flowId=configId 对这批迁移数据是恒等式，起点节点该显示什么，直接问这个流程
- * 自己的 `config/configDetail` 就有了——而且比"随手挑一个关联源顶替"更准：以前挑出来的
- * 名字经常跟流程名对不上（比如 ins-adamgrant 流程挑到的某个关联源却叫 ins-Valuetainment），
- * 换成这条以后不再要求这个流程必须有至少一个关联源（原来 sourceCnt=0 的流程直接放弃还原）。
- *
- * `rootStepForSource(source)` 现成造一个"列表抓取"根节点，只要 `source.url`/`mainTable` 有值
- * 就行，本来是给"全新源、还没配步骤"场景用的兜底，这里直接复用，构造一个不对应任何真实源的
- * stub Source（`sourceId` 留空）。
- *
- * **不能指望 `buildSourceSeed` 自己的兜底分支触发**：那条分支只在 `steps.length === 0` 时才
+ * 起点节点的来源（2026-09-02 起）：svg+flowId 模式的 nextConfigPaged **自带真实根行**
+ * （isRoot=1，name=配置名，endpoints.ts:209-228 实测）——有真根就用真根。只有步骤里没有
+ * 根行时才用 `rootStepForSource(source)` 合成兜底（旧数据 / 接口异常 / 纯配置还原）。
+ * 合成根要求 `source.url`/`mainTable` 有值，否则返回 null：
+ * **不能指望 `buildSourceSeed` 自己的兜底分支触发**——那条分支只在 `steps.length === 0` 时才
  * 退回 `rootStepForSource`——对"这个流程没有任何真实子步骤"的流程管用，但大多数存量流程是
- * "有真实子步骤、缺的只是起点那一行"（flowId 模式天生不返回它），这种情况下 `steps` 非空，
+ * "有真实子步骤、缺的只是起点那一行"（旧 flowId 模式不返回它），这种情况下 `steps` 非空，
  * `buildSourceSeed` 会直接跳过 stub 起点，整个起点节点凭空消失（2026-09-02 真机对比 zqrb
  * 流程 #1400832 的流程中心视图与它关联源的流程视图发现：后者靠 sourceId+svg 查询自带这一
- * 行，前者整个没有）。所以起点节点必须在这里手动拼进 `steps` 数组最前面，不能依赖那条兜底。
+ * 行，前者整个没有）。
  *
  * **刻意在 loadFromSource 之后清掉源上下文**：画布一旦挂上 sourceCtx，节点编辑会走步骤自动
  * 保存（item/next/*）——这个 stub Source 连 sourceId 都是假的，更不能被当成真源写。
@@ -167,11 +163,21 @@ function normalizeTags(raw: string): string {
 }
 
 const derivedFromConfig = ref(false)
-async function deriveFromFlowConfig(flow: FlowRecord): Promise<boolean> {
-  const [config, steps] = await Promise.all([
-    configApi.configDetail(flow.id),
-    flowCenterApi.steps(flow.id),
-  ])
+async function deriveFromFlowConfig(flow: FlowRecord, prefetchedSteps?: Step[]): Promise<boolean> {
+  // 0927 起打开工作区先把步骤整批取回（withConfigDetails 默认 true，configType/configUrl 等
+  // 已挂在步骤上），这里直接用，不再整包重拉。configDetail 只剩一个用途：步骤里**没有真实
+  // 根行**时合成 stub 起点（rootStepForSource 要 url/mainTable）——svg+flowId 正常返回自带
+  // isRoot=1 起点行，有这个就不查（省一次请求，也少一个失败点）。
+  // 不带 prefetchedSteps 的老路径（flowConf 与步骤都空时的兜底还原）保持原语义：
+  // 两者任一失败即整体失败，由调用方决定回到空白画布。
+  const [config, steps] = prefetchedSteps
+    ? [
+        prefetchedSteps.some((step) => step.isRoot)
+          ? null
+          : await configApi.configDetail(flow.id).catch(() => null),
+        prefetchedSteps,
+      ]
+    : await Promise.all([configApi.configDetail(flow.id), flowCenterApi.steps(flow.id)])
   const stubSource: Source = {
     sourceId: '',
     name: config?.name || flow.name,
@@ -236,7 +242,10 @@ async function openFlowInWorkspace(flow: FlowRecord) {
     const full = await flowCenterApi.detail(flow.id)
     if (reqId !== loadSeq) return
     const record = full ?? flow
-    const steps = await flowCenterApi.steps(flow.id, { withConfigDetails: false })
+    // 0927：一次取回**带 configType 的完整步骤**（withConfigDetails 默认 true）——它既是
+    // 快照（改名/孤儿「关联」整包回写），也是工作区画布的内容源（配合下方"有步骤行就按
+    // 步骤还原"），configType 让摘要/翻译/打标签等节点一回读就是对的模板，不用再补查。
+    const steps = await flowCenterApi.steps(flow.id)
       .catch((reason) => {
         console.warn('[flow-drawer] 步骤快照加载失败：改名/孤儿关联将缺少快照', reason)
         stepsLoadFailed.value = true
@@ -250,6 +259,20 @@ async function openFlowInWorkspace(flow: FlowRecord) {
     // 各恰好 1 条），而我们拿着这份空 flowConf 把它盖掉，画布显示 0 个节点，旧平台显示 1 个。
     const hasRealNode = record.definition.main.some((id) => id !== 'start' && id !== 'end')
       || (record.definition.branchGroups ?? []).some((g) => g.branches.some((b) => b.chain.length))
+    // 0927 流程工作区展示修正（用户反馈「流程工作区未按接口返回的（nextConfigPaged）展示」）：
+    // 原来这里在 flowConf 有真实节点时**优先按 flowConf 展示**，而 flowConf 只是历史快照——
+    // 它与步骤（cs_item_config，执行器唯一事实源）是两本账（0926 REVIEW「一套数据、两本账」）：
+    // 源画布/自动保存/发布 SQL 改过步骤之后 flowConf 不会跟着变，抽屉里画出来的还是旧拓扑
+    // （缺节点 / 分支被拍平 / 缺入口）。其余画布入口（源画布 loadFromSource、FlowBoard 重载
+    // reloadFlowIntoCanvas）早已统一按接口步骤还原，只有抽屉还认 flowConf——本次收齐。
+    // 改成：**接口步骤有内容就一律按它还原**（svg+flowId 查询就是用户看到的真实执行拓扑），
+    // flowConf 只兜底「步骤侧没有内容」的场景（新建未落库流程 / 步骤接口故障）。
+    const hasRealSteps = steps.some((s) => !!s.stepId)
+    if (hasRealSteps) {
+      const derived = await deriveFromFlowConfig(record, steps).catch(() => false)
+      if (reqId !== loadSeq) return
+      if (derived) return
+    }
     if (hasRealNode) {
       loadIntoWorkspace(record, steps)
       return
