@@ -8,6 +8,7 @@ import ElementPlus from 'element-plus'
 import NodeConfigSelect from './NodeConfigSelect.vue'
 import SelectExistingConfigDialog from './SelectExistingConfigDialog.vue'
 import { useFlowStore } from '@/stores/flow'
+import { useSourceStore } from '@/stores/source'
 import { configApi, type Config } from '@/api'
 
 const PICKED: Config = { configId: '1400774', name: '证券之星列表配置' } as Config
@@ -64,6 +65,59 @@ describe('更换配置', () => {
     flow.newFlow('standard')
     const wrapper = mount(NodeConfigSelect, {
       props: { nodeId: 'web-list' },
+      global: { plugins: [ElementPlus] },
+    })
+    expect(wrapper.find('[data-testid="node-config-select"]').attributes('disabled')).toBeDefined()
+  })
+
+  // 0927 G1：流程工作区里画布第一个节点就是真实 ROOT（isRoot=1）——它的配置可换（ROOT 权威
+  // 方案下首任务配置=ROOT.CONFIG_ID，新流程是未配置草稿，不换就永远无法调度）；换配置走 ROOT
+  // 专属通道，候选不受源限制（后端 ROOT 可挂任意有效配置）。
+  it('flowIdMode 下真实 ROOT 节点放行更换配置，弹窗不带源限制', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.newFlow('standard')
+    flow.setFlowIdMode(true)
+    const source = useSourceStore()
+    source.rememberSteps([{
+      stepId: '41352', sourceId: '', name: '流程入口', isRoot: true, enabled: true,
+    } as never], 'replace')
+    const wrapper = mount(NodeConfigSelect, {
+      props: { nodeId: '41352' },
+      global: { plugins: [ElementPlus] },
+    })
+    expect(wrapper.find('[data-testid="node-config-select"]').attributes('disabled')).toBeUndefined()
+    await wrapper.find('[data-testid="node-config-select"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent(SelectExistingConfigDialog).props('open')).toBe(true)
+    expect(wrapper.findComponent(SelectExistingConfigDialog).props('sourceId')).toBeUndefined()
+  })
+
+  it('flowIdMode 下普通节点仍禁用（无源上下文，按源查不了同资源配置）', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.newFlow('standard')
+    flow.setFlowIdMode(true)
+    const wrapper = mount(NodeConfigSelect, {
+      props: { nodeId: 'web-list' },
+      global: { plugins: [ElementPlus] },
+    })
+    expect(wrapper.find('[data-testid="node-config-select"]').attributes('disabled')).toBeDefined()
+  })
+
+  // 0927 P1-8：虚拟根（svg 回退行 stepId='0'、isRoot=1）不是真实物化 ROOT——isRootNode 排除
+  // '0' 后与普通节点同规则禁用，不触发 rootConfigUpdate（那会把虚拟根物化成真根）。
+  it('flowIdMode 下虚拟根（stepId=0 的 isRoot 行）不按 ROOT 放行：与普通节点同规则禁用', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.newFlow('standard')
+    flow.setFlowIdMode(true)
+    const source = useSourceStore()
+    source.rememberSteps([{
+      stepId: '0', sourceId: '', name: '虚拟根', isRoot: true, enabled: true,
+    } as never], 'replace')
+    const wrapper = mount(NodeConfigSelect, {
+      props: { nodeId: '0' },
       global: { plugins: [ElementPlus] },
     })
     expect(wrapper.find('[data-testid="node-config-select"]').attributes('disabled')).toBeDefined()

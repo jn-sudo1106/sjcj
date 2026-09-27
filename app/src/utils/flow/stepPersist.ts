@@ -6,6 +6,7 @@
 
 import type { Step } from '@/api'
 import {
+  allBranchChainNodes,
   effectiveOutputTable,
   isDataValidationNode,
   isMonitorNode,
@@ -53,6 +54,60 @@ export function firstUnboundDraftNodeId(main: string[], configs: Record<string, 
 }
 
 /**
+ * 0927 H1：文件下载节点判定。后端 OUT_ENTRY（输出入口/输出表）必填只豁免 `type='file'`
+ * （ItemConfigService saveItemConfig / stepModify 两处）；对应前端：模板插入节点看
+ * `template === 'file'`（文件下载模板），历史回读节点看快照 `nodeType === 'file'`。
+ */
+export function isFileLikeNode(cfg: NodeConfig, snapshot?: Step): boolean {
+  return cfg?.template === 'file' || snapshot?.nodeType === 'file'
+}
+
+/**
+ * 0927 H1：非文件节点输出表是否「未就绪」——显式输出表、编辑框承诺的「默认 = 输入表」、
+ * 快照里既有的输出表三者都没有。这类节点提交必被后端以「节点输出表不能为空」拒绝，
+ * 自动保存按「配置未就绪草稿」处理（跳过该节点 + 头部提示），不整批卡死。
+ * 0927 P1-2：真实 ROOT 行同步豁免（后端 OUT_ENTRY 不校验 ROOT；写侧与展示侧同一口径，
+ * 否则新流程一打开默认选中的入口节点就误报「输出表未选择」）。
+ */
+export function outputTableMissing(cfg: NodeConfig, snapshot?: Step): boolean {
+  if (isFileLikeNode(cfg, snapshot)) return false
+  if (snapshot?.isRoot) return false
+  return !effectiveOutputTable(cfg) && !snapshot?.outputTable
+}
+
+/**
+ * 0927 P2-4：有效流程 ID = 非空数字串且非 '0'（'0' 是未绑定哨兵，不能当流程 ID 提交）。
+ * 画布可写流程 ID 的全部判定共用这一个口径（useStepWrite / applyTemplateToSource /
+ * loadSourceFlow / FlowBoard 重载），避免各处手写数字正则与 '0' 特判漂移。
+ */
+export function validFlowIdOf(value: unknown): string {
+  const text = value == null ? '' : String(value)
+  return text && /^\d+$/.test(text) && text !== '0' ? text : ''
+}
+
+/**
+ * 0927 H1：第一个「输出表未就绪」节点（含已落库的存量行——它们编辑时同样会被后端拒绝）。
+ * 排除文件节点与真实 ROOT（ROOT 由流程生命周期管，OUT_ENTRY 不做必填校验）。供自动保存
+ * 的 pending 判定与头部提示使用。
+ */
+export function firstOutputTableMissingNodeId(
+  main: string[],
+  branchGroups: FlowBranchGroup[],
+  configs: Record<string, NodeConfig>,
+  snapshots: Record<string, Step> = {},
+): string | undefined {
+  for (const id of persistableNodeIds(main, branchGroups)) {
+    if (id === 'start' || id === 'end' || id === '0' || isSyntheticRootId(id)) continue
+    const snapshot = snapshots[id]
+    if (snapshot?.isRoot) continue
+    const cfg = configs[id]
+    if (!cfg) continue
+    if (outputTableMissing(cfg, snapshot)) return id
+  }
+  return undefined
+}
+
+/**
  * 新增节点的「适用源」默认值：`-1` = 该配置下所有源（2026-09-04 先落在规则处理 / 数据监控，
  * 2026-09-24 用户拍板扩到**所有类型**——新建节点不该一上来就锁死在当前源上）。
  *
@@ -80,11 +135,17 @@ export function condExprOf(cfg: NodeConfig): string | null {
 /**
  * 自动保存前校验（0828 W9-4）：缺配置的新节点、lastStep 断链、成环都不提交。
  * 虚拟起点 `0` 和 start/end 占位不参与写入，也不按缺 configId 拦截。
+ *
+ * 0926：`opts.skipUnbound` 供自动保存用——画布上存在未绑定配置的草稿节点时，不再整体
+ * 拦截（此前 `firstUnboundDraftNodeId` 让自动保存永久停摆，其它节点的改动全部丢掉），
+ * 而是跳过这些草稿、只保存已绑定节点（草稿节点保留在画布上等右侧绑定配置）。缺省
+ * 仍抛错：单节点保存等路径要求每一步都必须可落库，不能静默跳过。
  */
 export function assertStepsPersistable(
   main: string[],
   configs: Record<string, NodeConfig>,
   branchGroups: FlowBranchGroup[] = [],
+  opts: { skipUnbound?: boolean } = {},
 ): void {
   // 0903 YB-B：分支链上的节点同样要过这道校验，否则"没绑配置的新节点"藏在分支里就溜过去了
   const all = persistableNodeIds(main, branchGroups)
@@ -92,6 +153,7 @@ export function assertStepsPersistable(
     if (id === 'start' || id === 'end' || id === '0' || isSyntheticRootId(id) || isWritableStepId(id)) continue
     const cfg = configs[id]
     if (!cfg) continue
+    if (opts.skipUnbound && !cfg.configId) continue
     if (!cfg.title?.trim()) throw new Error('节点名称不能为空')
     if (!cfg.configId) throw new Error(`节点「${cfg.title || id}」尚未绑定配置，无法保存步骤`)
   }
@@ -154,13 +216,11 @@ export function hasRealBranches(snapshots: Record<string, Step | undefined>): bo
  *
  * **写回必须走这个而不是直接遍历 `main`**：分支还原之后，分支链里的节点不在 `main` 里，
  * 只遍历 main 会让它们"改了名字静默不保存"——界面显示已保存、后端没动，比拍平更难发现。
+ *
+ * 0925：覆盖嵌套 subGroups（还原拓扑的链内再分叉），见 `allBranchChainNodes`。
  */
 export function persistableNodeIds(main: string[], branchGroups: FlowBranchGroup[] = []): string[] {
-  const ids = [...main]
-  for (const group of branchGroups) {
-    for (const branch of group.branches) ids.push(...branch.chain)
-  }
-  return ids
+  return [...main, ...allBranchChainNodes(branchGroups)]
 }
 
 /**
@@ -170,6 +230,12 @@ export function persistableNodeIds(main: string[], branchGroups: FlowBranchGroup
  *   - 在主链上 → 往前找最近的可落库节点
  *   - 在某条分支链的中间 → 在该链内往前找
  *   - 在某条分支链的链头 → 前置是该分组的 **owner**（分叉点），owner 不可落库时继续往它前面找
+ *
+ * 0925：分支链内嵌套分叉（subGroups）的节点，先按最近一层分支组链内找；链头 owner 为嵌套
+ * 分支节点时沿它的父链继续。
+ * 0927 P0-2：findChain 用**递归路径栈**防环，不再向共享 seen 累积已扫描的组——旧实现把
+ * 扫描阶段路过的组一律塞进 seen，递归上溯（owner 不可落库时沿父链找）复用同一 seen，会把
+ * 含该 owner 的祖先组跳过，嵌套链头被静默写回 ['0']（挂根）、跨保存周期持续改坏拓扑。
  */
 export function lastStepIdsFromCanvas(main: string[], nodeId: string, branchGroups: FlowBranchGroup[] = []): string[] {
   const idx = main.indexOf(nodeId)
@@ -182,7 +248,24 @@ export function lastStepIdsFromCanvas(main: string[], nodeId: string, branchGrou
     return ['0']
   }
   if (idx === 0) return ['0']
-  for (const group of branchGroups) {
+  // 0925：递归找 nodeId 落在哪条分支链——嵌套 subGroups 的链也要扫到，否则嵌套链节点
+  // 一律回 ['0']（断链）。
+  const findChain = (groups: FlowBranchGroup[], path: Set<string>): FlowBranchGroup | null => {
+    for (const group of groups) {
+      if (path.has(group.ownerId)) continue
+      const nextPath = new Set([...path, group.ownerId])
+      for (const branch of group.branches) {
+        if (branch.chain.includes(nodeId)) return group
+        if (branch.subGroups?.length) {
+          const nested = findChain(branch.subGroups, nextPath)
+          if (nested) return nested
+        }
+      }
+    }
+    return null
+  }
+  const group = findChain(branchGroups, new Set())
+  if (group) {
     for (const branch of group.branches) {
       const ci = branch.chain.indexOf(nodeId)
       if (ci < 0) continue
@@ -190,8 +273,10 @@ export function lastStepIdsFromCanvas(main: string[], nodeId: string, branchGrou
         if (isWritableStepId(branch.chain[i])) return [branch.chain[i]]
       }
       if (isWritableStepId(group.ownerId)) return [group.ownerId]
-      // owner 自己还没落库（本地新建的分叉点）：继续沿 owner 往上找
-      return lastStepIdsFromCanvas(main, group.ownerId, branchGroups.filter((g) => g !== group))
+      // owner 自己还没落库（本地新建的分叉点 / 嵌套分叉的链内节点）：继续沿 owner 往上找。
+      // 传回完整分支组列表（owner 的上一层在别的 branch 的 chain 里，链头遍历必须全局找），
+      // path 栈只挡当前递归路径（上层 owner 成环引用时不再重复展开），祖先组不再被跳过。
+      return lastStepIdsFromCanvas(main, group.ownerId, branchGroups)
     }
   }
   return ['0']
@@ -231,6 +316,8 @@ export function mergeStepForWrite(args: {
   cfg: NodeConfig
   nodeId: string
   sourceId: string
+  /** 0925 步骤归属切 flowId：画布当前流程 ID（数字串）；缺省时沿用快照里的 flowId。 */
+  flowId?: string
   /** 传入则覆盖快照里的 lastStep（自动保存按画布重算）；改名即时写入不要传，以免改拓扑。 */
   lastStepIds?: string[] | null
   /** 规则节点专用：**输入表**的 itemCode → 物理列名，用于入参（context） */
@@ -239,6 +326,9 @@ export function mergeStepForWrite(args: {
   outColumnByItemCode?: Map<string, string>
 }): Step {
   const { snapshot, cfg, nodeId, sourceId } = args
+  // 0927 P2-5：flowId 落 Step 前过 validFlowIdOf——'0'（truthy）或非数字（如老后端回读异常值）
+  // 一律不占键，避免 '0'/NaN 被显式写进写 payload（绕过后端 fillFlowIdIfEmpty 回填）。
+  const flowId = validFlowIdOf(args.flowId ?? snapshot?.flowId)
   const rule = isRuleNode(cfg) ? cfg.ruleCfg : undefined
   // 翻译助手 / 打标签 / 摘要 / 音频转文字 / 视频转音频 / OCR 抓取（2026-09-18、09-22）：表配置的入参/出参跟规则节点同一套落库口径——存步骤的
   // context/outContext（物理列名），只是编排内容在 execCfg 而不是 ruleCfg。
@@ -264,6 +354,9 @@ export function mergeStepForWrite(args: {
     outputTable: effectiveOutputTable(cfg) || snapshot?.outputTable,
     configId: cfg.configId || snapshot?.configId,
     mainConfig: snapshot?.mainConfig,
+    // 0925 步骤归属切 flowId：入参（画布流程 ID）优先，新建节点由调用方传入；快照回读兜底。
+    // 都没有时不占键（空串 / undefined / '0' 一律不出现），与写 payload 的口径一致。
+    ...(flowId ? { flowId } : {}),
     flowCode: snapshot?.flowCode,
     itemId: cfg.itemId ?? snapshot?.itemId,
     extName: snapshot?.extName,
@@ -280,4 +373,66 @@ export function mergeStepForWrite(args: {
       : cfg.taskCfg?.outColumns ?? snapshot?.outColumns,
     enabled: !cfg.disabled,
   }
+}
+
+/**
+ * 孤儿步骤「关联到节点」的候选目标（0925 功能，0926 修正候选口径）。
+ *
+ * 判定：
+ *  - 画布上所有可落库节点（main + 分支链，`persistableNodeIds`）；
+ *  - 排除孤儿自己与它的**子子孙孙**（按步骤快照 dependsOn 闭包收集，挂进去会成环）；
+ *  - 排除 `start` / `end` / 合成虚拟根（`source:` 前缀）；
+ *  - **流程入口也允许**：源视角的虚拟入口行 `'0'`（svg=true 后端现算套壳行）与流程视角的
+ *    真实入口行（isRoot=1）。`lastStep` 指向入口 = 「挂在根上」——后端
+ *    `normalizeRootReferenceForStorage` 会把流程自己的根引用归一成 `'0'` 哨兵，
+ *    与旧平台 `lastStep='0'` 是同一语义。
+ *
+ * 0926 修正（用户反馈「孤儿节点没法选择上一个节点，下拉是空的」）：此前入口被排除且候选
+ * 要求必须有步骤快照，当孤儿的唯一合理归属就是入口（如流程只有「入口行 + 孤儿」）时下拉
+ * 空无一物。现在入口放行、快照只在写入时检查（`relinkOrphan` 取孤儿自己的快照整包回带）。
+ * 0926 REVIEW F2：源视图的入口是**合成根**（`source:${sourceId}`，svg=true 的虚拟入口行），
+ * 同入口一并放行——否则源视图里只挂得回入口的孤儿下拉又是空的。
+ *
+ * @returns 目标列表，入口总是排在最前（孤儿最常见的正确归属就是挂回流程起点）；
+ *          `isEntry` 标记用于 UI 展示「流程入口 · 」前缀。
+ */
+export function relinkCandidates(
+  main: string[],
+  branchGroups: FlowBranchGroup[],
+  configs: Record<string, NodeConfig>,
+  snapshots: Record<string, Step | undefined>,
+  orphanId: string,
+): { id: string; title: string; isEntry: boolean }[] {
+  // 孤儿自己的子子孙孙（沿 dependsOn 闭包）不能当目标——挂回去就成环。
+  const excluded = new Set<string>([orphanId])
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const snap of Object.values(snapshots)) {
+      if (!snap || excluded.has(snap.stepId)) continue
+      if ((snap.dependsOn ?? []).some((p) => excluded.has(p))) {
+        excluded.add(snap.stepId)
+        changed = true
+      }
+    }
+  }
+  const isEntry = (nid: string): boolean =>
+    nid === '0' || snapshots[nid]?.isRoot === true || isSyntheticRootId(nid)
+  const seen = new Set<string>()
+  const targets: { id: string; title: string; isEntry: boolean }[] = []
+  // '0' 入口行可能同时在 persistableNodeIds 里（源模式它在 main 中），seen 去重；
+  // 入口先推，保证固有排序在其它候选前面。
+  for (const nid of ['0', ...persistableNodeIds(main, branchGroups)]) {
+    if (seen.has(nid) || !configs[nid]) continue
+    seen.add(nid)
+    if (nid === orphanId || nid === 'start' || nid === 'end') continue
+    // 合成根（source:xxx，源视图 = svg=true 的虚拟入口行）是源视图的**入口**，放行；
+    // 写侧 relinkOrphan 会把合成根归一成 '0' 哨兵（2026-09-26 REVIEW F2：源视图孤儿
+    // 只挂得回入口时，下拉之前是空的——合成根被排除、'0' 行又不在 configs 里，两头都够不着）。
+    if (!(nid === '0' || isWritableStepId(nid) || isSyntheticRootId(nid))) continue
+    if (excluded.has(nid)) continue
+    const entry = isEntry(nid)
+    targets.push({ id: nid, title: `${entry ? '流程入口 · ' : ''}${configs[nid]?.title ?? nid}`, isEntry: entry })
+  }
+  return targets
 }

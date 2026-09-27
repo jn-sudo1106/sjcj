@@ -351,18 +351,42 @@ export function mockSourceStats(): { total: number; error: number; externalChang
 // 演示种源保持默认两步骨架，模拟"后端已有配置的存量源"。
 export function mockSourceSteps(params?: Record<string, unknown>): Step[] {
   const sourceId = String(params?.sourceId ?? '')
+  const flowId = params?.flowId != null && String(params.flowId) ? String(params.flowId) : ''
   const src = SOURCES.find((s) => s.sourceId === sourceId)
+  // flowId 模式（nextConfigPaged?flowId=&svg=true 的 mock 形态，0925 整体切 flowId）：返回
+  // 虚拟根行「流程入口」（stepId=0 / isRoot=1，模拟 bee-top 未物化根时的回退行）+ 子步骤。
+  // 步骤 id 沿用 `<flowId>-sN`（与源模式 `${sourceId}-sN` 同口径，避免跨流程撞 id）。
+  if (flowId && !src) {
+    return [
+      {
+        stepId: '0', sourceId: '-1', name: '流程入口', nodeType: 'entry',
+        flowId, enabled: true, isRoot: true,
+      },
+      {
+        stepId: `${flowId}-s1`, sourceId: '-1', name: '列表抓取', inputTable: '-',
+        outputTable: '2102157', configId: flowId, urlSourceField: 'seed_url', flowId,
+        condition: '', failAction: '重试3次后告警', enabled: true,
+      },
+      {
+        stepId: `${flowId}-s2`, sourceId: '-1', name: '详情解析', inputTable: '2102157',
+        outputTable: '2102157_DETAIL', configId: flowId, urlSourceField: 'detail_url', flowId,
+        condition: 'IF(status=="ok")', failAction: '跳过', enabled: true,
+      },
+    ]
+  }
   if (!src) return []
   if (readCreatedSources().some((c) => c.sourceId === sourceId)) return []
+  // 0925：步骤归属切 flowId——源记录回读带 flowId 时（或调用方显式传 flowId），步骤跟随标记。
+  const stepFlowId = src.flowId || flowId || undefined
   return [
     {
       stepId: `${sourceId}-s1`, sourceId, name: '列表抓取', inputTable: '-',
-      outputTable: src.mainTable, configId: src.configId, urlSourceField: 'seed_url',
+      outputTable: src.mainTable, configId: src.configId, urlSourceField: 'seed_url', flowId: stepFlowId,
       condition: '', failAction: '重试3次后告警', enabled: true,
     },
     {
       stepId: `${sourceId}-s2`, sourceId, name: '详情解析', inputTable: src.mainTable,
-      outputTable: `${src.mainTable}_DETAIL`, configId: src.configId, urlSourceField: 'detail_url',
+      outputTable: `${src.mainTable}_DETAIL`, configId: src.configId, urlSourceField: 'detail_url', flowId: stepFlowId,
       condition: 'IF(status=="ok")', failAction: '跳过', enabled: !src.disabled,
     },
   ]

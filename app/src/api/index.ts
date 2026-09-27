@@ -2930,7 +2930,8 @@ export const flowCenterApi = {
   /**
    * 分页 + 检索 + 排序，全部在服务端。
    * `field` 走后端白名单（flowId/flowName/flowCode/flowType/siteId/categoryId/groupId/
-   * updateDt/createDt/sourceCnt），传白名单外的值后端会报参数错误。
+   * updateDt/createDt/sourceCnt/templateFlag/refFlowId——0925 REVIEW 按 bee-top
+   * FlowController.FLOW_ORDER_FIELD_MAP 补齐后两项），传白名单外的值后端会报参数错误。
    * **注意没有「节点数」**：那要解析 flowConf，而列表接口根本不返回这个字段。
    */
   paged: async (cond: {
@@ -2999,7 +3000,12 @@ export const flowCenterApi = {
     })
     const ack = ackFromApiResult(result)
     if (!ack.ok) throw new Error(ack.message || '复制流程失败')
-    const id = idFromApiResult(result, ['flowId', 'id']) || ack.message?.match(/id\s*[:：]\s*(\d+)/)?.[1]
+    // 0927 P2-1：主正则锚定「新流程ID:」；拿不到时退化到 `\bid`（单词边界）兜底兼容
+    // 无前缀小写 "id:939" 的老回执——原 `/id.../i` 无锚定，message 里更早出现的
+    // "id:123" 字样（如其它字段回显）会抢先命中绑错 ID。
+    const id = idFromApiResult(result, ['flowId', 'id'])
+      || ack.message?.match(/新流程\s*id\s*[:：]\s*(\d+)/i)?.[1]
+      || ack.message?.match(/\bid\s*[:：]\s*(\d+)/i)?.[1]
     if (!id) throw new Error(`流程已复制，但未能解析新流程 ID（后端回执：${ack.message ?? '无'}），请刷新列表确认`)
     return id
   },
@@ -3101,21 +3107,21 @@ export const flowCenterApi = {
     return ackFromApiResult(result)
   },
   /**
-   * 这个流程自己的**真实**子步骤——不含起点节点：那一行天生不是 cs_item_config 的记录，
-   * 按 flowId 查询恒查不到（2026-09-02 逐字段对比 5 个不同源实测确认，见 endpoints.ts 里
-   * item/next/nextConfigPaged 的注释）。要还原完整画布得配合 configApi.configDetail(flowId)
-   * 拼出起点节点，FlowDetailDrawer.vue 的 deriveFromFlowConfig 就是这么用的。
+   * 流程的步骤拓扑（svg+flowId 视图的说明见下方注释块——svg=true 已返回真实根行 isRoot=1，
+   * 不再需要 configDetail(flowId) 拼起点；configDetail 那条是 09-02 的旧结论，仅 FlowDetailDrawer
+   * 的 deriveFromFlowConfig 在「flowConf 无真实节点」时仍作兜底）。
    * 子步骤记录自带 sourceId=-1（不挂在具体某个源上），stepFromLegacy 的 sourceId 兜底参数
    * 用不上，传空串即可。
    */
   /**
-   * 流程的步骤拓扑。**必须带 `svg=true`**（2026-09-04 改）：
-   * - 它会返回这个流程真实的根节点行（`isRoot=1`），不带就只有子步骤，前端得自己合成一个假起点，
-   *   名字和类型全是编的（旧平台拓扑图显示的是 `#41383` + 流程名，我们显示成「列表抓取/列表页」）；
-   * - 它还会**筛掉重复行**：同一个根位置上的多条起点、configId+lastStep 都相同的重复分支。
-   *   实测流程 1400935 不带 svg 有 6 条，带 svg 只剩 3 条 + 根——不带 svg 会把旧平台不画的
-   *   孤儿步骤也画出来。
-   * 另外 svg 模式下子步骤的 `lastStep` 会从哨兵 `'0'` 改写成根节点的真实 ID，拓扑天然连得上。
+   * 流程的步骤拓扑。**必须带 `svg=true` 且只传 flowId、绝不能带 sourceId**（0925 REVIEW 核对
+   * bee-top SourceNextController.nextConfigPaged：svg 下按 `sourceId != null` 二选一，带
+   * sourceId 会**静默**改走源视角查询 `_queryBySourceId`——没有根锚、lastStep 不改写，前端会
+   * 把挂根步骤误判成孤儿）。svg 模式后端按 FLOW_ID 全量返回（含真实根行 `isRoot=1`、
+   * 过滤 IS_ROOT=0 之外的删除行），本流程自己的全部步骤 + 根；子步骤 lastStep 的哨兵 `'0'`
+   * 会改写成根节点真实 ID（`toViewLastStep`），拓扑天然连得上。
+   * 对比：不带 svg 的查询（老参数分支）行数更多——那是 MAIN_CONFIG/SOURCE_ID 过滤口径的旧视图，
+   * 不是「多了孤儿」，孤儿判定在 buildSourceSeed 按 lastStep 语义做（0925）。
    */
   steps: async (flowId: string, options: { withConfigDetails?: boolean } = {}): Promise<Step[]> => {
     const result = await request<unknown>('item/next/nextConfigPaged', { flowId }, {
@@ -3143,6 +3149,15 @@ export const itemApi = {
    *  2026-08-26 用测试源 430016398（itemConfig 40600）原样提交实测确认。
    *  必须带齐快照字段（url / itemId / lastStep / mainConfig），只改 name/cond 也会整包提交。 */
   stepModify: (step: Step) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', stepToStepModifyPayload(step), {
+    method: 'POST',
+    httpEndpoint: 'item/next/stepModify',
+  })),
+  /** 流程入口（ROOT）配置更新（0927 G1）。ROOT 是 isRoot=1 的真实根行，后端
+   *  `validateRootUpdate` 只接受 configId（>0）与流程生命周期字段：sourceId/lastStep/
+   *  entryTypeId/cond 传非空一律拒绝、mainConfig 不能改、enabled:false 反算出的 isDelete:1
+   *  也会被拒（根节点不能单独删除）——所以**不能走普通 stepModify 整包**，只交最小集
+   *  `{ itemConfig, configId }`，其余字段保持库中值（updateByPrimaryKeySelective 不更新 null）。 */
+  rootConfigUpdate: (stepId: string, configId: string) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', { itemConfig: Number(stepId), configId: Number(configId) }, {
     method: 'POST',
     httpEndpoint: 'item/next/stepModify',
   })),

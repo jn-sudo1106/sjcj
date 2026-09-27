@@ -349,10 +349,11 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'flow/changeFlowBatch', desc: '批量关联 / 解绑源到流程（Body 版；flowId=0 为解绑）', danger: true, live: true },
   // 0903 Y8：后端把"复制"这件重活做掉了，前端不再自己逐个 saveItemConfig 建节点。
   // 2026-09-04 探活确认三条都在（GET 探测答 "Request method 'GET' not supported" = 端点存在但仅 POST；
-  // flowTemplateList 走 GET，当前返回空数组，因为库里还没有任何流程被标成模板）。
-  { path: 'flow/copyFlow', desc: '复制流程（连 cs_item_config 步骤一起复制并重映射上下游；源是模板时新流程 refFlowId 回指模板；不复制根节点，后端自动建）', danger: true, live: true },
+  // flowTemplateList 走 GET）。0925 REVIEW 核对 bee-top：flowTemplateList 返回 templateFlag=1
+  // 且 is_delete=0、state≠D 的全量模板（不分页、不含 flowConf），不再是「空数组」。
+  { path: 'flow/copyFlow', desc: '复制流程（连 cs_item_config 步骤一起复制并重映射上下游；源是模板时新流程 refFlowId 回指模板；不复制根节点，后端自动建；回执 msg=「复制成功，新流程ID:N」；0927 P2-2：data 为标量新 ID 但 client 按标量字段丢弃，新流程 ID 只从 msg 解析）', danger: true, live: true },
   { path: 'flow/copyTemplateSteps', desc: '把模板下的普通步骤复制到目标流程（自动改 FLOW_ID、重映射上下游、根节点依赖保持 0、不复制模板自身根节点）', danger: true, live: true },
-  { path: 'flow/flowTemplateList', desc: '流程模板下拉候选（等价于 flowPaged + templateFlag=1，但不分页）', live: true },
+  { path: 'flow/flowTemplateList', desc: '流程模板下拉候选（templateFlag=1 全量、不分页、不含 flowConf；等价于 flowPaged + onlyTemplate 但不分页）', live: true },
   // 只登记不接：旧平台「生成配置」入口，本平台没有对应场景（Y8-16）。
   { path: 'source/genConfig', desc: '旧平台「生成配置」（SourceList.vue 的行操作）；本平台无调用方，仅登记备查' },
 

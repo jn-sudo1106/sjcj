@@ -195,4 +195,27 @@ describe('flow 流程 HTTP 契约', () => {
     expect(ack.message).toContain('5000')
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  it('POST /v1/flow/copyFlow：从 msg 里取新流程 ID——后端大写「新流程ID:」也能命中（0925 REVIEW 高危修复）', async () => {
+    // 后端回执 data 是标量（normalizeHttpPayload 按「标量不是载荷」丢弃），新 ID 只能从 msg 取：
+    // 「复制成功，新流程ID:728」——旧正则大小写敏感匹配不上，copy() 恒抛「未能解析新流程 ID」（复制已成功、残留孤立流程）
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', data: 728, msg: '复制成功，新流程ID:728' }))
+    const { flowCenterApi } = await import('./index')
+    const id = await flowCenterApi.copy('1001')
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const parsed = new URL(url, 'http://local.test')
+    expect(parsed.pathname).toBe('/api/v1/flow/copyFlow')
+    expect(parsed.searchParams.get('flowId')).toBe('1001')
+    expect(init.method).toBe('POST')
+    expect(id).toBe('728')
+  })
+
+  it('POST /v1/flow/copyFlow：小写「id:」msg 与 saveFlow 同款也能命中（兼容旧后端）', async () => {
+    // 0927 P2-3：data 与 msg 故意给**不同值**（data=707、msg 解析 939）——若哪天
+    // normalizeHttpPayload 不再丢标量、copy 转从 data 取 ID，此断言立刻失败暴露。
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', data: 707, msg: '复制成功，id:939' }))
+    const { flowCenterApi } = await import('./index')
+    await expect(flowCenterApi.copy('1001')).resolves.toBe('939')
+  })
 })

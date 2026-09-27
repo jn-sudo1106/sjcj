@@ -383,6 +383,10 @@ export interface BranchSeed {
  *  - 分头：全部分支无条件并行走（多路）；
  *  - 汇合：分支段统一在主链 owner 的下一个节点收拢；不需要汇合的流程把决策放主链末端即可（汇合点 = 完成端），模型不用分叉出第二种形态（Q1）；
  *  - chain 内不允许再开新的 FlowBranchGroup（不支持嵌套分支），AddNodePopover 在「分支内添加」场景隐藏「逻辑」分组防误入。
+ *
+ *  唯一例外（0925 完整还原）：**历史流程还原（buildSourceSeed）产出的分支组允许 subGroups 嵌套**——
+ *  旧平台每步只有一个 lastStep，树在任意深度都可能分叉，实拍源 430024432 就有链内再分叉。
+ *  嵌套组只承接还原拓扑，不参与 AddNodePopover 的「逻辑」分组入口。
  */
 export interface FlowBranch {
   id: string
@@ -392,6 +396,10 @@ export interface FlowBranch {
   condition?: ConditionGroup
   /** 分支内节点 id 序列；可为空（=直接到汇合点）。chain 内节点仍归 configs 所有，不重复存配置。 */
   chain: string[]
+  /** 链内再分叉（0925 还原拓扑专用）：chain 走到某节点时该节点是另一个分支组的 owner。
+   *  旧平台模型下 chain 遇分叉即止（每步只有一个 lastStep，分叉点以下全部进分支），
+   *  所以每组至多一个嵌套组、owner 必为 chain 末节点；渲染 / 语义 / 写回全部按递归处理。 */
+  subGroups?: FlowBranchGroup[]
 }
 
 export interface FlowBranchGroup {
@@ -421,6 +429,10 @@ export interface FlowDef {
   source?: Source
   /** 决策/分头节点的分支段（散开→汇合，0707 优化·Phase6）；未配置 = 未声明分支 */
   branchGroups?: FlowBranchGroup[]
+  /** 孤儿步骤标识（0925）：解析不出真实前置的步骤 id（无 lastStep / lastStep 指向集合外 /
+   *  '0' 哨兵但无 '0' 行）。仅由步骤还原（buildSourceSeed）产出，随流程加载进画布；
+   *  不参与保存（写 payload 只来自 configs），重新加载时重新推导。 */
+  orphanIds?: string[]
 }
 
 // 0707 澄清：连线（子步骤）不再是独立配置对象——原来挂在连线上的字段本来就该是下游节点自己的配置，
@@ -686,11 +698,77 @@ function branchGroupEntryIds(
   branchGroups: FlowBranchGroup[],
   configs: Record<string, NodeConfig>,
 ): string[] {
-  const g = branchGroups.find((bg) => bg.ownerId === ownerId)
+  const g = branchGroupOf(branchGroups, ownerId)
   if (!g) return []
   return g.branches
     .map((b) => b.chain.find((nid) => isRunnableFlowNode(nid, configs)))
     .filter((nid): nid is string => !!nid)
+}
+
+// ---------- 分支组递归工具（0925 完整还原：分支组支持 subGroups 嵌套后，凡按个遍历组的
+// 地方都要走这里，否则嵌套部分会漏） ----------
+
+/** 全部分支组（含嵌套），按文档序拍平。 */
+export function allBranchGroups(groups: FlowBranchGroup[] | undefined): FlowBranchGroup[] {
+  const out: FlowBranchGroup[] = []
+  const walk = (gs: FlowBranchGroup[]) => {
+    for (const g of gs) {
+      out.push(g)
+      for (const b of g.branches) if (b.subGroups?.length) walk(b.subGroups)
+    }
+  }
+  walk(groups ?? [])
+  return out
+}
+
+/** 按 ownerId 递归找分支组（含嵌套）；没有返回 null。 */
+export function branchGroupOf(groups: FlowBranchGroup[] | undefined, ownerId: string): FlowBranchGroup | null {
+  for (const g of groups ?? []) {
+    if (g.ownerId === ownerId) return g
+    for (const b of g.branches) {
+      if (b.subGroups?.length) {
+        const found = branchGroupOf(b.subGroups, ownerId)
+        if (found) return found
+      }
+    }
+  }
+  return null
+}
+
+/** 节点落在哪条分支链（递归，含嵌套）；不在任何链上返回 null。
+ *  @param skip 本次查找跳过这些组（lastStepIdsFromCanvas 沿 owner 上溯时用，防重入自己）。 */
+export function branchOfNode(
+  groups: FlowBranchGroup[] | undefined,
+  nodeId: string,
+  skip?: Set<FlowBranchGroup>,
+): { group: FlowBranchGroup; branch: FlowBranch; chainIndex: number } | null {
+  for (const g of groups ?? []) {
+    if (skip?.has(g)) continue
+    for (const b of g.branches) {
+      const ci = b.chain.indexOf(nodeId)
+      if (ci >= 0) return { group: g, branch: b, chainIndex: ci }
+      if (b.subGroups?.length) {
+        const found = branchOfNode(b.subGroups, nodeId, skip)
+        if (found) return found
+      }
+    }
+  }
+  return null
+}
+
+/** 全部分支链上的节点 id（递归，含嵌套），按文档序。 */
+export function allBranchChainNodes(groups: FlowBranchGroup[] | undefined): string[] {
+  const out: string[] = []
+  const walk = (gs: FlowBranchGroup[]) => {
+    for (const g of gs) {
+      for (const b of g.branches) {
+        out.push(...b.chain)
+        if (b.subGroups?.length) walk(b.subGroups)
+      }
+    }
+  }
+  walk(groups ?? [])
+  return out
 }
 
 /** 从 fromId 之后的主链往后看：真实节点，或看穿决策/分头落到其分支 chain。 */
@@ -766,21 +844,21 @@ export function directSuccessorIdsIncludingDisabled(
   branchGroups: FlowBranchGroup[] = [],
 ): string[] {
   const groups = branchGroups ?? []
-  for (const bg of groups) {
-    for (const b of bg.branches) {
-      const ci = b.chain.indexOf(id)
-      if (ci < 0) continue
-      for (let i = ci + 1; i < b.chain.length; i++) {
-        const next = b.chain[i]
-        if (next !== 'start' && next !== 'end' && configs[next]) return [next]
-      }
-      return []
+  const found = branchOfNode(groups, id)
+  if (found) {
+    const { branch, chainIndex } = found
+    // 链内再分叉的 owner（0925 还原拓扑）：分支入口优先于空链尾
+    if (branchGroupOf(groups, id)) return branchGroupEntryIds(id, groups, configs)
+    for (let i = chainIndex + 1; i < branch.chain.length; i++) {
+      const next = branch.chain[i]
+      if (next !== 'start' && next !== 'end' && configs[next]) return [next]
     }
+    return []
   }
   const idx = main.indexOf(id)
   if (idx < 0) return []
   // 分支入口（含停用的那些）
-  const group = groups.find((bg) => bg.ownerId === id)
+  const group = branchGroupOf(groups, id)
   if (group) {
     return group.branches
       .map((b) => b.chain.find((nid) => configs[nid]))
@@ -801,16 +879,16 @@ export function directSuccessorIds(
   branchGroups: FlowBranchGroup[] = [],
 ): string[] {
   const groups = branchGroups ?? []
-  for (const bg of groups) {
-    for (const b of bg.branches) {
-      const ci = b.chain.indexOf(id)
-      if (ci < 0) continue
-      for (let i = ci + 1; i < b.chain.length; i++) {
-        if (isRunnableFlowNode(b.chain[i], configs)) return [b.chain[i]]
-      }
-      // 分支叶子：汇合到 owner 之后的主链
-      return laterRunnableIdsOnMain(main, configs, groups, bg.ownerId)
+  const found = branchOfNode(groups, id)
+  if (found) {
+    const { group, branch, chainIndex } = found
+    // 链内再分叉的 owner（0925 还原拓扑）：分支入口优先于空链尾
+    if (branchGroupOf(groups, id)) return branchGroupEntryIds(id, groups, configs)
+    for (let i = chainIndex + 1; i < branch.chain.length; i++) {
+      if (isRunnableFlowNode(branch.chain[i], configs)) return [branch.chain[i]]
     }
+    // 分支叶子：汇合到 owner 之后的主链（owner 在嵌套链里时无主链汇合点 → 自然返回空）
+    return laterRunnableIdsOnMain(main, configs, groups, group.ownerId)
   }
   if (!main.includes(id)) return []
   const branchEntries = branchGroupEntryIds(id, groups, configs)
@@ -828,10 +906,7 @@ export function directPredecessorIds(
   id: string,
   branchGroups: FlowBranchGroup[] = [],
 ): string[] {
-  const seen = new Set<string>([...main])
-  for (const bg of branchGroups) {
-    for (const branch of bg.branches) branch.chain.forEach((nid) => seen.add(nid))
-  }
+  const seen = new Set<string>([...main, ...allBranchChainNodes(branchGroups)])
   return [...seen].filter((nid) => nid !== id && isRunnableFlowNode(nid, configs) && directSuccessorIds(main, configs, nid, branchGroups).includes(id))
 }
 

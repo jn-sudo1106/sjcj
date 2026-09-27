@@ -346,7 +346,7 @@ async function onSwitchFlow(command: string) {
               :disabled="owningFlowMissing"
               :title="owningFlowTitle"
               @click="openOwningFlow"
-            >所属流程：{{ owningFlowLabel }}</button>
+            >所属流程：{{ owningFlowLabel }}<span v-if="owningFlowName" class="ch-flow-id">【流程ID: {{ src.flowId }}】</span></button>
           </template>
         </div>
       </div>
@@ -393,7 +393,7 @@ async function onSwitchFlow(command: string) {
         </div>
         <!-- 0828 W9-2/D06：步骤接口已通，拓扑/进入条件防抖自动保存；不再放手动保存按钮。 -->
         <span class="ch-save-status" data-testid="flow-save-status">
-          <span v-if="saveStatus === 'pending'" class="ch-save-pending">请先保存节点配置</span>
+          <span v-if="saveStatus === 'pending'" class="ch-save-pending">请先补全节点配置</span>
           <template v-else-if="saveStatus === 'saving'">保存中…</template>
           <template v-else-if="saveStatus === 'saved'">已保存 {{ savedClock }}</template>
           <!-- title 带上真实报错（0903）：原来失败只显示这六个字，排查时连是哪一步抛的都不知道 -->
@@ -448,6 +448,9 @@ async function onSwitchFlow(command: string) {
    字号不动：URL 段要靠 flex 压缩省略，动字号会牵动整行排版。 */
 .ch-flow-link { flex: none; white-space: nowrap; border: 0; background: transparent; padding: 0; color: var(--rc-primary); font-size: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .ch-flow-link:hover { text-decoration-thickness: 2px; }
+/* 0926：所属流程追加【流程ID: xxx】——ID 是附加辨识信息，弱化处理，不抢流程名的视觉权重
+   （退化 `#id（流程已删除）` 形态本身已含 id，不重复追加） */
+.ch-flow-id { color: var(--rc-muted); }
 /* 流程已删除：跳过去只会搜出空列表，不给点 */
 .ch-flow-link:disabled { color: var(--rc-faint); cursor: not-allowed; text-decoration: none; }
 .ch-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; align-items: center; }

@@ -6,7 +6,10 @@
 # Claude / 编辑器本地配置
 .claude/
 .obsidian/
-
+.idea/
+.cursor/
+# 0927 P2-7：`.github/` 不再整体忽略——.github/workflows/ci.yml 是已跟踪文件，整目录忽略
+# 会让以后新增的 CI 工作流文件被吞（git 不提示、不小心就漏提交）；编辑器/环境配置按文件挡。
 # 依赖与构建产物
 node_modules/
 dist/
@@ -14,6 +17,8 @@ app/node_modules/
 app/dist/
 .worktrees/
 .superpowers/
+# 0927 P2-7：pnpm 锁文件不与 npm 双轨跟踪（仓库以 app/package-lock.json 为准，pnpm 安装产物不入库）
+app/pnpm-lock.yaml
 
 # 本地设计资料（仅本地保留，不入库 / 不推送）
 设计稿/
@@ -21,3 +26,4 @@ app/dist/
 旧平台代码/
 .ris-shots/
 .env
+.pnpm-store/

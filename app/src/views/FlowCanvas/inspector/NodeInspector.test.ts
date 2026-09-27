@@ -22,6 +22,49 @@ function mockAssets() {
 // 打开画布时若没恰好选中规则节点，规则相关数据会永远加载不出来。这里验证懒加载 + 响应式补拉的修复。
 afterEach(() => vi.restoreAllMocks())
 
+// 0927 H1：非文件节点输出表未就绪 → 检查器顶部常驻警告条；文件节点 / 已有输出表不显示。
+// （输出表未就绪 = 显式输出表、默认=输入表、快照输出表三者都没有，后端必填 OUT_ENTRY。）
+describe('NodeInspector 输出表未就绪警告条（0927 H1）', () => {
+  it('规则节点未选输出表：显示警告条', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS['rule'])
+    flow.configs['rule-1'] = cfg
+    flow.select('rule-1')
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+    expect(cfg.collectCfg?.outputTable || cfg.outputTable).toBeFalsy()
+    expect(wrapper.find('[data-testid="output-table-warn"]').exists()).toBe(true)
+  })
+
+  it('节点已有输出表：不显示警告条', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS['rule'])
+    cfg.outputTable = '6200027'
+    flow.configs['rule-1'] = cfg
+    flow.select('rule-1')
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="output-table-warn"]').exists()).toBe(false)
+  })
+
+  it('文件下载节点不校验输出表：不显示警告条', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS['rule'])
+    cfg.template = 'file'
+    flow.configs['file-1'] = cfg
+    flow.select('file-1')
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="output-table-warn"]').exists()).toBe(false)
+  })
+})
+
 describe('NodeInspector 规则数据懒加载（review 0723 #9 修正）', () => {
   it('打开画布选中非规则节点：规则相关 3 个 API 不调用；之后切到规则节点才补拉，且只拉一次', async () => {
     mockAssets()

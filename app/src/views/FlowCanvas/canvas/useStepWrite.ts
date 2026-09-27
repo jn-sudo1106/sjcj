@@ -1,11 +1,13 @@
 // 步骤写接口联调（2026-08-31）：节点名 / 进入条件 / 增删节点走 item/next，不走配置。
 //
 // 改已有步骤必须带加载时的 Step 快照（url / itemId / lastStep / mainConfig），
-// 只改名称也会整包提交——缺字段会被后端写成 null。
+// 只改名称也整包提交——后端 stepModify 是 selective update（updateByPrimaryKeySelective，
+// null=不修改、只更新显式值），所以整包回带快照字段是为了不丢语义，而不是怕被写成 null
+//（0925 REVIEW 核对 bee-top ItemConfigService.updateItemConfig 后修正此注释）。
 // 新建步骤响应不回 itemConfig，要再查 nextConfigPaged 用差集定位，并 enable?state=0
 // （新建默认停用）。虚拟起点 itemConfig=0 和本地草稿 id 不写。
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { entryApi, idFromApiResult, itemApi, sourceApi, type Ack, type Step } from '@/api'
+import { entryApi, flowCenterApi, idFromApiResult, itemApi, sourceApi, type Ack, type Step } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import {
@@ -17,6 +19,8 @@ import {
   persistableNodeIds,
   mergeStepForWrite,
   isSyntheticRootId,
+  outputTableMissing,
+  validFlowIdOf,
 } from '@/utils/flow/stepPersist'
 import { isRuleLikeNode } from '@/views/FlowCanvas/canvas/flowModel'
 
@@ -48,10 +52,14 @@ function createTemplateFromPrev(
   sourceId: string,
   configId: string,
   sourceMainConfig: string | undefined,
-): Pick<Step, 'sourceId' | 'mainConfig' | 'url' | 'itemId' | 'flowCode' | 'nodeType'> {
+  flowId: string,
+): Pick<Step, 'sourceId' | 'mainConfig' | 'flowId' | 'url' | 'itemId' | 'flowCode' | 'nodeType'> {
   return {
     sourceId: prev?.sourceId ?? sourceId,
     mainConfig: prev?.mainConfig ?? sourceMainConfig ?? configId,
+    // 0925 步骤归属切 flowId：新建步骤带画布流程 ID；prev 快照回读若已带 flowId 优先沿用
+    //（同流程恒等），两者都没有时兜底 prev 的 mainConfig（存量数据 flowId===mainConfig）。
+    flowId: prev?.flowId ?? (flowId || prev?.mainConfig),
     url: prev ? (prev.url ?? '$VAL$') : undefined,
     itemId: prev?.itemId,
     flowCode: prev?.flowCode,
@@ -112,6 +120,55 @@ export function useStepWrite() {
     return flow.sourceCfg?.sourceId || flow.sourceCtx?.sourceId || ''
   }
 
+  /**
+   * 画布当前可写的真实流程 ID（数字串），空串表示拿不到（未绑流程 / 老后端回读无 flowId）。
+   *
+   * ⚠️ 不能直接拿 `flow.flowId`：`loadFromSource` 会把 FlowDef.id 设成 source.sourceId
+   * （loadFromSource 注释：FlowDef.id 是 stub 源不担真源时才纠正成 flow.id）——源画布下
+   * `flow.flowId` 是源 ID，源 ID 与流程 ID 都是数字，值上无法区分。必须先判画布形态：
+   * - 流程管理画布（0926 显式 `flow.flowIdMode`，流程抽屉两条加载路径与模板应用重载都会置位）：
+   *   `flow.flowId` 是真实流程 ID（cs_flow.id）；
+   * - 源画布（sourceCtx 存续）：flowId 只能取自源记录回读的 `Source.flowId`（bee-top
+   *   cs_source.FLOW_ID 列，sourceFromLegacy 已映射）。
+   * 两者都没有（老后端 / 未绑流程的源）→ 空串：写 payload 不传 flowId，由后端回填 mainConfig。
+   * （网站详情页内部代表源另有一层保护：它经过 loadFromSource，flowIdMode 为 false，
+   *   不会把"长得像流程 ID 的源 ID"误当成流程 ID 写进步骤。）
+   */
+  function flowIdOf(): string {
+    if (flow.flowIdMode) return validFlowIdOf(flow.flowId)
+    const sourceFlow = validFlowIdOf(flow.sourceCfg?.flowId) || validFlowIdOf(flow.sourceCtx?.flowId)
+    if (sourceFlow) return sourceFlow
+    return ''
+  }
+
+  /** 根节点（isRoot=1 的真实根行，流程画布的第一个入口节点）。它不参与**普通步骤**写入
+   *  （不建不改名不删），但 0927 G1 起**配置可换**——由 persistFlowSteps 每次保存先判断
+   *  画布 configId 与快照是否一致，变化时走 ROOT 专属轻量通道 updateRootConfig。
+   *  0927 P1-8：只认**真实物化 ROOT 行**（stepId 是数字）——svg 查询在未回填 ROOT 环境
+   *  回退的「虚拟根」（itemConfig=0 / stepId='0'，isRoot=1 同样成立）不算：对虚拟根放行
+   *  G1 会让 rootConfigUpdate('0', …) 把虚拟根物化成真根。 */
+  function isRootStepStepId(nodeId: string): boolean {
+    const snapshot = sourceStore.stepSnapshots[nodeId]
+    return snapshot?.isRoot === true && (snapshot.stepId ?? '') !== '0'
+  }
+
+  /**
+   * ROOT 配置更新（0927 G1）：流程入口（isRoot=1 真实根行）换配置。
+   *
+   * 后端 ROOT 编辑（ItemConfigService.validateRootUpdate）只接受 configId（>0）与流程生命周期
+   * 字段：sourceId / lastStep / entryTypeId / itemId / extName / cond 传**非空**一律拒绝、
+   * mainConfig 不能改、type 必须 entry——所以**不能走 mergeStepForWrite 的普通整包**（会把画布
+   * 回填的输出表/输入表/条件带进去撞校验），也不走 stepModify 的反算（enabled:false → isDelete:1
+   * 会被当成「删除根节点」拒绝）。API 层 `rootConfigUpdate` 只交最小集 `{ itemConfig, configId }`，
+   * 其余字段保持库中值（selective update）。成功后同步快照 configId，避免下次自动保存重复写。
+   */
+  async function updateRootConfig(nodeId: string, configId: string): Promise<void> {
+    const snapshot = sourceStore.stepSnapshots[nodeId]
+    const ack = await itemApi.rootConfigUpdate(nodeId, configId)
+    assertOk(ack, '修改流程入口配置失败')
+    sourceStore.rememberSteps([{ ...snapshot, configId }], 'merge')
+  }
+
   async function persistExisting(nodeId: string, lastStepFromCanvas: boolean) {
     const snapshot = sourceStore.stepSnapshots[nodeId]
     if (!snapshot) {
@@ -124,6 +181,7 @@ export function useStepWrite() {
       cfg,
       nodeId,
       sourceId: sourceIdOf() || snapshot.sourceId,
+      flowId: flowIdOf() || snapshot.flowId,
       lastStepIds: lastStepFromCanvas ? lastStepIdsFromCanvas(flow.main, nodeId, flow.branchGroups) : undefined,
       ...(isRuleLikeNode(cfg) ? await ruleColumnMaps(cfg) : {}),
     })
@@ -135,21 +193,28 @@ export function useStepWrite() {
   async function createAndLocate(nodeId: string): Promise<string> {
     const cfg = flow.configs[nodeId]
     if (!cfg?.configId) throw new Error(`节点「${cfg?.title || nodeId}」尚未绑定配置，无法新建步骤`)
+    // 0926：写锚点二选一——源画布用源 ID（步骤归源），流程工作区用 flowId（步骤归流程，
+    // sourceId 恒 -1）。两者都没有的裸画布没有可写目标。
+    const fid = flowIdOf()
     const sid = sourceIdOf()
-    if (!sid) throw new Error('当前没有可保存的源')
+    if (!sid && !fid) throw new Error('当前没有可保存的源或流程')
     // 新建步骤的「适用源」一律默认 -1（2026-09-24 从规则/监控扩到所有类型）。画布 insertAfter
     // 已经设过，这里兜住不走那条路新建的节点（套模板、AI 推荐重建）——不兜就会顺着前置步骤的
-    // sourceId 把新步骤锁到当前源上。
+    // sourceId 把新步骤锁到当前源上。流程工作区没有源概念，天然就是 -1。
     applyStepSourceDefault(cfg)
     const lastStepIds = lastStepIdsFromCanvas(flow.main, nodeId, flow.branchGroups)
     const prevId = lastStepIds[0] !== '0' ? lastStepIds[0] : undefined
     const prev = prevId ? sourceStore.stepSnapshots[prevId] : undefined
-    // 源级锚点：优先用已有步骤的 mainConfig（同一源全都一样），其次用源自己的主配置。
-    // 两者都没有才退回节点自己的 configId——那是"这个源一个步骤都还没有"的首建场景。
+    // 锚点优先级：已有步骤的 mainConfig（同一源全都一样）→ 流程工作区的 flowId（流程步骤
+    // mainConfig === flowId===configId）→ 源自己的主配置 → 节点自己的 configId（"这个源一个
+    // 步骤都还没有"的首建场景）。
     const sourceMainConfig = Object.values(sourceStore.stepSnapshots).find((snap) => snap?.mainConfig)?.mainConfig
+      || fid
       || flow.sourceCfg?.configId
       || flow.sourceCtx?.configId
-    const inherited = createTemplateFromPrev(prev, sid, cfg.configId, sourceMainConfig)
+    // 0925：新建步骤必须带画布的 flowId（归属切 flowId）；拿不到时由后端回填 mainConfig。
+    const flowId = fid
+    const inherited = createTemplateFromPrev(prev, sid || '-1', cfg.configId, sourceMainConfig, flowId)
     const step = mergeStepForWrite({
       snapshot: {
         ...inherited,
@@ -160,6 +225,7 @@ export function useStepWrite() {
       cfg,
       nodeId,
       sourceId: inherited.sourceId,
+      flowId: inherited.flowId,
       lastStepIds,
       ...(isRuleLikeNode(cfg) ? await ruleColumnMaps(cfg) : {}),
     })
@@ -188,12 +254,21 @@ export function useStepWrite() {
      */
     const ackId = idFromApiResult(ack, ['itemConfig', 'id', 'data'])
     let created: Step | undefined
+    // 0925 认领回查按 flowId：步骤归属切 flowId 后，新步骤落在 FLOW_ID 名下，按 flowId 全量
+    // 回读最稳（源视角查询在后端 useFlow 下同样按源 flowId 归属，两者一致）；拿不到 flowId
+    // （老后端 / 未绑流程的源）维持按源查。
+    const refreshSteps = async (): Promise<Step[]> => {
+      if (flowId && /^\d+$/.test(flowId)) {
+        return flowCenterApi.steps(flowId, { withConfigDetails: false })
+      }
+      return sourceApi.sourceSteps(sid, { withConfigDetails: false })
+    }
     if (ackId && isWritableStepId(ackId)) {
-      const steps = await sourceApi.sourceSteps(sid, { withConfigDetails: false })
+      const steps = await refreshSteps()
       created = steps.find((s) => s.stepId === ackId)
     }
     if (!created) {
-      const steps = await sourceApi.sourceSteps(sid, { withConfigDetails: false })
+      const steps = await refreshSteps()
       const added = steps.filter((s) => isWritableStepId(s.stepId) && !before.has(s.stepId))
       if (!added.length) {
         throw new Error('新建步骤后没查到新增的步骤，请刷新画布确认')
@@ -223,6 +298,12 @@ export function useStepWrite() {
   async function persistNodeName(nodeId: string, name: string): Promise<void> {
     const trimmed = name.trim()
     if (!trimmed) throw new Error('节点名称不能为空')
+    // 0925：流程根节点名称由流程生命周期（cs_flow）管理，不能通过步骤接口改（后端校验
+    // type/sourceId/lastStep 合规），画布也不改，避免"画布改了、库里没动"的误导。
+    if (isRootStepStepId(nodeId)) {
+      ElMessage.warning('流程根节点名称由「流程管理」维护，请到流程管理中修改')
+      return
+    }
     if (!isWritableStepId(nodeId)) {
       flow.setTitle(nodeId, trimmed)
       ElMessage.success(nodeId === '0'
@@ -237,6 +318,14 @@ export function useStepWrite() {
     if (!sourceStore.stepSnapshots[nodeId]) {
       flow.setTitle(nodeId, trimmed)
       ElMessage.warning('已改画布名称，但缺少步骤快照，请刷新源后再保存，避免覆盖后端字段')
+      return
+    }
+    // 0927 H1：存量行输出表未就绪时任何步骤编辑（含改名整包）都会被后端「节点输出表不能为空」
+    // 拒绝；先改画布并提示，等用户在「表配置」补上输出表后由自动保存整批落库，避免误导性报错。
+    const snapshot = sourceStore.stepSnapshots[nodeId]
+    if (outputTableMissing(flow.configs[nodeId], snapshot)) {
+      flow.setTitle(nodeId, trimmed)
+      ElMessage.warning('已改画布名称，但该节点输出表未选择（非文件节点必填），补上输出表后自动保存才会落库')
       return
     }
     const prev = flow.configs[nodeId]?.title ?? ''
@@ -259,21 +348,32 @@ export function useStepWrite() {
    * 名称、进入条件这些与拓扑无关的字段照常写。分支拓扑还原见 YB-B。
    */
   async function persistFlowSteps(): Promise<{ created: number; updated: number }> {
+    // 0926：源画布与流程工作区都可写（后者无源上下文，按 flowId 锚定）；裸画布不写。
     const sid = sourceIdOf()
-    if (!sid) return { created: 0, updated: 0 }
-    assertStepsPersistable(flow.main, flow.configs, flow.branchGroups)
+    if (!sid && !flow.flowIdMode) return { created: 0, updated: 0, skipped: 0 }
+    // 自动保存跳过未绑定配置的草稿节点（0926），不再整体拦截；逐节点保存仍严格（缺省抛错）。
+    assertStepsPersistable(flow.main, flow.configs, flow.branchGroups, { skipUnbound: true })
     const branched = hasRealBranches(sourceStore.stepSnapshots)
     let created = 0
     let updated = 0
+    // 0927 P1-5：flowIdMode 下「有画布定义、没有步骤行」的历史节点（R2 遗留形态）跳过回写——
+    // 但跳过要**计数上报**，autosave 据此把状态留在 pending，不再假装「已保存」（此前静默
+    // continue：快照拉取失败时用户看到已保存、实际一行未写）。
+    let skipped = 0
 
     // 0903 YB-B：遍历主链 **+ 各分支链**。只遍历 main 的话，分支里的节点改了名字会静默不保存
     // ——界面显示"已保存"、后端没动，比拍平更难发现。
     for (const id of persistableNodeIds(flow.main, flow.branchGroups)) {
       // isSyntheticRootId：画布合成的虚拟起点不落库（2026-09-04）。它对应后端现算的
       // itemConfig:0 那行，建成真实步骤会让首节点每进一次画布就多一个。
-      if (id === 'start' || id === 'end' || id === '0' || isSyntheticRootId(id) || isWritableStepId(id)) continue
+      // isRoot 真实根行（0925 切 flowId 后源画布也会带回）：由流程生命周期管理，同样不写。
+      if (id === 'start' || id === 'end' || id === '0' || isSyntheticRootId(id) || isRootStepStepId(id) || isWritableStepId(id)) continue
       const cfg = flow.configs[id]
-      if (!cfg) continue
+      // 未绑定配置的草稿节点留在画布上（等右侧绑定），不阻断其它节点的自动保存（0926）。
+      if (!cfg || !cfg.configId) continue
+      // 0927 H1：非文件节点输出表未就绪 = 配置未就绪草稿：提交必被后端「节点输出表不能为空」
+      // 拒绝，这里同样跳过该节点（画布状态保留，头部提示去补输出表），不整批卡死。
+      if (outputTableMissing(cfg, sourceStore.stepSnapshots[id])) continue
       await createAndLocate(id)
       created += 1
     }
@@ -282,18 +382,49 @@ export function useStepWrite() {
     // （flow.rebindNodeId），沿用上面那份快照会拿着已经不存在的旧 id 去回写，新节点漏保存。
     for (const id of persistableNodeIds(flow.main, flow.branchGroups)) {
       if (!isWritableStepId(id) || !flow.configs[id]) continue
-      if (!sourceStore.stepSnapshots[id]) {
+      // 0927 G1：真实根节点（isRoot=1，画布第一个入口节点）不再一律跳过——**每次保存先判断**：
+      // 画布 configId 没变 → 根行元数据由流程生命周期维护，不写（保持 0925 起的只读语义）；
+      // 变了（右侧「更换配置」选了新配置）→ 走 ROOT 专属轻量 stepModify（普通整包会被
+      // 后端 validateRootUpdate 拒：outputTable/entryTypeId/cond 传非空即报错）。
+      if (isRootStepStepId(id)) {
+        const cfg = flow.configs[id]
+        const snapshot = sourceStore.stepSnapshots[id]
+        if (snapshot && cfg.configId && snapshot.configId !== cfg.configId) {
+          await updateRootConfig(id, cfg.configId)
+          updated += 1
+        }
+        continue
+      }
+      const snapshot = sourceStore.stepSnapshots[id]
+      // 0927 H1：存量行输出表未就绪（编辑必被后端拒）同样按草稿跳过并提示；改动留在画布、
+      // markFlowSaved 被 pending 卡住，头部提示补输出表后随下一轮自动保存落库。
+      if (snapshot && outputTableMissing(flow.configs[id], snapshot)) continue
+      if (!snapshot) {
+        // 流程工作区：flowConf 里可能带着"只有画布定义、没有步骤行"的历史节点（R2 遗留形态），
+        // 没有快照可整包回写，跳过而不是报错——它们本来就不在执行集合里，报了也写不了。
+        if (flow.flowIdMode) {
+          skipped += 1
+          continue
+        }
         throw new Error(`节点「${flow.configs[id].title || id}」缺少步骤快照，请刷新源后再保存`)
       }
       await persistExisting(id, !branched)
       updated += 1
     }
 
-    return { created, updated }
+    return { created, updated, skipped }
   }
 
   async function deleteCanvasNode(nodeId: string, opts?: { confirmed?: boolean }): Promise<boolean> {
-    if (!nodeId || nodeId === 'start' || nodeId === 'end') return false
+    if (!nodeId || nodeId === 'start' || nodeId === 'end' || nodeId === '0') return false
+    // 0925：流程根节点不能单独删除（后端同样拒绝），画布直接拦下。
+    // 0927 P1-8 配套：虚拟根（stepId='0' 的 isRoot 行）同步受拦——isRootStepStepId 现在
+    // 只认真实物化根，删除保护不能跟着一起放宽（'0' 不是真实步骤，删了后端无行可动，
+    // 只会在本地把入口节点抹掉，重载又回来）。
+    if (isRootStepStepId(nodeId)) {
+      ElMessage.warning('流程根节点属于流程本身，不能单独删除')
+      return false
+    }
     if (!opts?.confirmed) {
       try {
         await ElMessageBox.confirm('删除后不可恢复。确定删除该节点？', '删除节点', {
@@ -320,5 +451,44 @@ export function useStepWrite() {
     }
   }
 
-  return { persistNodeName, persistFlowSteps, deleteCanvasNode }
+  /**
+   * 修复孤儿步骤归属（0925）：把步骤的 `lastStep` 显式指向用户选定的目标节点并落库。
+   *
+   * 这是用户点过「关联到节点」的**显式拓扑操作**，不受 `hasRealBranches` 写回冻结限制
+   * （冻结只管自动保存的重算；显式修归属是用户意图，理应落库）。写成功后由调用方重载
+   * 画布（reloadSourceIntoCanvas），树按新 lastStep 重新构建，孤儿标记随之消失；
+   * 该步骤的子孙 lastStep 仍指它自己，重载后自然跟着挂到目标下方。
+   */
+  async function relinkOrphan(nodeId: string, targetId: string): Promise<void> {
+    if (targetId === nodeId) throw new Error('不能把节点关联到自己')
+    // '0' 是「挂在根上」的哨兵（源视角 svg=true 的虚拟入口行）；真实入口行（isRoot=1）
+    // 同样允许——后端 normalizeRootReferenceForStorage 会把流程自己的根引用归一成 '0'，
+    // 与旧平台 lastStep='0' 是同一语义（2026-09-26 用户反馈：孤儿要挂回入口时下拉是空的）。
+    // 合成根（source:xxx，源视图画布上的入口节点）也接受：写侧归一成 '0' 哨兵
+    // （2026-09-26 REVIEW F2——源视图入口在画布上是合成根，后端收的仍是 '0'）。
+    const rootTarget = targetId === '0' || isSyntheticRootId(targetId)
+    if (!rootTarget && !isWritableStepId(targetId)) throw new Error('目标节点不可作为前置步骤')
+    const snapshot = sourceStore.stepSnapshots[nodeId]
+    if (!snapshot) throw new Error(`节点 ${nodeId} 还没有步骤快照，无法写归属（该步骤可能尚未保存）`)
+    const cfg = flow.configs[nodeId]
+    if (!cfg) throw new Error(`节点 ${nodeId} 不存在`)
+    const step = mergeStepForWrite({
+      snapshot,
+      cfg,
+      nodeId,
+      sourceId: sourceIdOf() || snapshot.sourceId,
+      flowId: flowIdOf() || snapshot.flowId,
+      lastStepIds: [rootTarget && isSyntheticRootId(targetId) ? '0' : targetId],
+      // 0925 REVIEW 再评：关联 = 只改归属（lastStep），不传列名映射——不引 ruleColumnMaps 的
+      // 额外 entryDetail 往返，也不按当前表结构重算 context/outColumns（归属变更不该顺带改
+      // 语义字段）。下面把入出参钉回快照原值：快照无值时 payload 落 null = 后端不动（selective）。
+    })
+    step.contextMap = snapshot.contextMap
+    step.outColumns = snapshot.outColumns
+    const ack = await itemApi.stepModify(step)
+    assertOk(ack, '修改步骤归属失败')
+    sourceStore.rememberSteps([step], 'merge')
+  }
+
+  return { persistNodeName, persistFlowSteps, deleteCanvasNode, relinkOrphan }
 }

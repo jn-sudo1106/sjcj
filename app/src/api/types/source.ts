@@ -36,6 +36,11 @@ export interface Source {
    *  （0903 H1 答复），所以这个字段决定这个源实际跑哪一套配置。
    *  2026-09-04 实测：`sourcePaged` 与 `sourceDetail` 都已返回（sourceDetail 是后端本次新加的）。 */
   flowId?: string
+  /** 源所属流程的真实 ROOT 步骤 ID（只读，后端源列表/详情返回；新平台 ROOT 权威方案下
+   *  首任务配置挂在 cs_item_config(IS_ROOT=1) 行上，cs_source.CONFIG_ID 已退出执行语义）。 */
+  rootId?: string
+  /** 源所属流程 ROOT 当前使用的配置 ID（只读，同 rootId 一起返回；空 = 草稿 ROOT 未选配置）。 */
+  rootConfigId?: string
   /** @deprecated 旧平台 snatchSave 请求字段；读取旧源时保留，业务层不再新写。 */
   sourceType?: string | number
   configId2?: string
@@ -332,9 +337,13 @@ export interface Step {
   failAction?: string // 失败动作
   /** 该步骤所属源的主配置 ID（旧 mainConfig）。2026-08-26 生产实测：同一源的所有步骤
    *  mainConfig 相同、等于其首步骤自身的 configId，是"一包多 config"映射的关键锚点
-   *  （对应 0824-08 的 LegacyConfigMapping）；本仓库目前没有消费方，只做数据保留，
-   *  不在解析阶段静默丢弃。 */
+   *  （对应 0824-08 的 LegacyConfigMapping）；写接口仍需要它定位配置，保留传递。
+   *  0925 起步骤归属整体切到 flowId（见 flowId 字段），mainConfig 不再是归属锚点。 */
   mainConfig?: string
+  /** 该步骤所属流程 ID（旧 FLOW_ID，bee-top useFlow）。0925 起步骤归属/保存一律按 flowId：
+   *  源视角回读即源归属流程（cs_item_next.FLOW_ID），写 payload 显式携带；老后端不回此字段
+   *  时为 undefined，双轨兼容。flowId 与 mainConfig 对存量数据恒等（flowId===configId===mainConfig）。 */
+  flowId?: string
   /** 步骤模板编码（旧 flowCode，如 "WEB_SNATCH"）。实测样本中所有步骤取值一致，
    *  尚未见到非 WEB_SNATCH 的样本，无法确认完整枚举，仅做数据保留。 */
   flowCode?: string

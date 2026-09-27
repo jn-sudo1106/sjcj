@@ -1,3 +1,9 @@
+<script lang="ts">
+// 模块级共享计数器（实例间唯一）：**不能**放进 `<script setup>`——setup 每个实例都重跑，
+// 放里面等于每实例重置为 0，id 永远算出 pnr-arrow-1，"多实例唯一"就是空的（0926 REVIEW F1）。
+let railSeq = 0
+</script>
+
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue'
 import { entryApi } from '@/api'
@@ -11,6 +17,10 @@ import {
 } from '@/views/FlowCanvas/canvas/flowModel'
 
 type RailNode = HorizontalLayout['nodes'][number]
+
+// 同页可能同时挂多个节点条（分屏对比 / 数据查看抽屉），`<marker>` 的 id 必须唯一——
+// 重复 id 时后挂的实例会解析到先挂实例的 marker，先挂实例一旦卸载箭头就集体消失。
+const arrowId = `pnr-arrow-${++railSeq}`
 
 const props = withDefaults(defineProps<{
   layout: HorizontalLayout
@@ -172,12 +182,12 @@ function nodeTitle(node: RailNode): string {
   <div class="pnr" :style="railStyle">
     <svg class="pnr-edges" :viewBox="`0 0 ${layout.totalWidth} ${layout.totalHeight}`" aria-hidden="true">
       <defs>
-        <marker id="pnr-arrow" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto">
+        <marker :id="arrowId" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto">
           <path d="M0 0L6 3L0 6Z" class="pnr-arrow" />
         </marker>
       </defs>
-      <path v-for="(edge, index) in layout.mainEdges" :key="`m-${index}`" :d="edge.d" class="pnr-edge" marker-end="url(#pnr-arrow)" />
-      <path v-for="(edge, index) in layout.branchEdges" :key="`b-${index}`" :d="edge.d" class="pnr-edge branch" marker-end="url(#pnr-arrow)" />
+      <path v-for="(edge, index) in layout.mainEdges" :key="`m-${index}`" :d="edge.d" class="pnr-edge" :marker-end="`url(#${arrowId})`" />
+      <path v-for="(edge, index) in layout.branchEdges" :key="`b-${index}`" :d="edge.d" class="pnr-edge" :class="{ branch: edge.dashed }" :marker-end="`url(#${arrowId})`" />
     </svg>
     <button
       v-for="node in layout.nodes"

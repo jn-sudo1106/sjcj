@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Step } from './types/source'
 
 function jsonResponse(body: unknown) {
   return { ok: true, status: 200, text: async () => JSON.stringify(body) } as Response
@@ -746,6 +747,35 @@ describe('旧平台新建源 HTTP 契约', () => {
     expect(url).toContain('name=')
     expect(init.method).toBe('POST')
     expect(init.body).toBeUndefined()
+  })
+
+  it('itemApi.saveItemConfig 带 flowId：0925 步骤归属切 flowId，步骤快照有 flowId 时 query string 显式携带', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '增加步骤成功' }))
+    const { itemApi } = await import('./index')
+    const step: Step = {
+      stepId: '', sourceId: '-1', name: '网页抓取', configId: '1401078', mainConfig: '1400935',
+      flowId: '1400935', enabled: true,
+    }
+
+    await itemApi.saveItemConfig(step)
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const query = new URLSearchParams(String(url).split('?')[1])
+    // 0926 REVIEW F-R13：从两条 toContain 收窄为全量 query 形状断言——键值精确、多传/漏传即红
+    expect(String(url)).toContain('/api/v1/item/next/saveItemConfig?')
+    expect(Object.fromEntries(query.entries())).toEqual({
+      sourceId: '-1',
+      mainConfig: '1400935',
+      flowId: '1400935',
+      name: '网页抓取',
+      configId: '1401078',
+      type: 'entry',
+      flowCode: 'WEB_SNATCH',
+      enabled: 'true',
+      allField: '',
+      checked: 'true',
+      show: 'true',
+    })
   })
 
   it('itemApi.enable / deleteStep：GET id + state（0 启用 / 1 停用）', async () => {

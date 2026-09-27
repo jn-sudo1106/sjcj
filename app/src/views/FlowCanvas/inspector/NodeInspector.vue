@@ -8,8 +8,10 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
+import { useSourceStore } from '@/stores/source'
 import { useUiStore } from '@/stores/ui'
 import { decisionOrParallelKind, isDataValidationNode, isMonitorNode, isRuleNode, nodeTypeLabel, NODE_CONFIGS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { isFileLikeNode, outputTableMissing } from '@/utils/flow/stepPersist'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
 import { configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
 import { provideNodeInspectorAssets } from './useNodeInspectorAssets'
@@ -28,6 +30,7 @@ import RuleOrchestrationTab from './tabs/RuleOrchestrationTab.vue'
 
 const props = withDefaults(defineProps<{ hideAi?: boolean }>(), { hideAi: false })
 const flow = useFlowStore()
+const sourceStore = useSourceStore()
 const ui = useUiStore()
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
 const id = computed<string>(() => flow.selectedId)
@@ -55,6 +58,15 @@ watch(() => flow.selectedId, () => {
 // 配置名称/使用节点数/状态要等 config/configDetail 与使用范围接口（0824-07 §5），拿不到就不渲染，不填占位 0。
 // 决策/分头节点只有「分支配置」，不参与配置绑定。
 const isBranchNode = computed(() => !!cfg.value && decisionOrParallelKind(cfg.value) !== undefined)
+// 0927 H1：当前节点输出表未就绪（非文件节点：显式输出表 / 默认=输入表 / 快照输出表都没有）。
+// 自动保存会跳过该节点并置头部 pending「请先补全节点配置」；这里常驻提示引导去「表配置」。
+const outputTableWarning = computed(() => {
+  const node = cfg.value
+  if (!node) return false
+  const snapshot = sourceStore.stepSnapshots[id.value]
+  if (isFileLikeNode(node, snapshot)) return false
+  return outputTableMissing(node, snapshot)
+})
 const configId = computed(() => cfg.value?.configId || '')
 // sourceId 视角下，后端会把源自身的 config 套成 itemConfig=0 的虚拟首节点。
 // 新建采集走 snatchSave(newConfig=1)，这份配置就是随源刚创建的；仅凭“已有 configId”把它
@@ -378,6 +390,11 @@ onMounted(async () => {
         <NodeConfigSelect v-if="id" :node-id="id" />
       </div>
 
+      <!-- 0927 H1：输出表未就绪的常驻提示（覆盖规则/监控/采集等所有非文件节点）。 -->
+      <div v-if="outputTableWarning" class="ni-output-warn" data-testid="output-table-warn">
+        <el-alert type="warning" :closable="false" show-icon title="输出表未选择" description="非文件节点保存时后端要求必须声明输出表（OUT_ENTRY）。当前该节点会自动跳过保存，请在「表配置」选择输出表后重试" />
+      </div>
+
       <!-- 顶层 Tab：节点配置 / 表配置 / [参数配置] / 编排配置 / 任务配置；普通画布可按需保留 AI 对话。 -->
       <div class="rc-top-tabs">
         <button
@@ -456,6 +473,12 @@ onMounted(async () => {
 
 /* 配置绑定条（0824-00 §6.1） */
 .rc-config-bar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fbfdff; }
+
+/* 0927 H1：输出表未就绪警告条（与配置条同宽节奏，紧凑不喧宾） */
+.ni-output-warn { padding: 6px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fffcf5; }
+.ni-output-warn .el-alert { padding: 6px 10px; }
+.ni-output-warn .el-alert__title { font-size: 11px; line-height: 1.4; }
+.ni-output-warn .el-alert__description { font-size: 10px; line-height: 1.5; margin-top: 2px; }
 .cb-label { color: var(--rc-muted); font-size: 11px; white-space: nowrap; }
 .cb-name { font-size: 11px; font-weight: 600; color: var(--rc-text); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cb-id { font-size: 11px; font-weight: 600; color: var(--rc-text); font-variant-numeric: tabular-nums; }

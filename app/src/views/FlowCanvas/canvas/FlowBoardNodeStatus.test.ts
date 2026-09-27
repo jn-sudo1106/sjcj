@@ -36,6 +36,11 @@ async function mountBoard() {
 }
 
 describe('FlowBoard · 节点状态与卡片上的表名必须一致', () => {
+  const cardOf = (wrapper: ReturnType<typeof mount>, cfg: { title: string }) =>
+    wrapper.findAll('.rc-flow-node').find((c) => c.text().includes(cfg.title))!
+
+  // 0926 补记：原用例走 vm.tableChip/footFor（script setup 内部函数未 expose，Vue3.3+ 拿不到），
+  // 改为 DOM 断言——表标签与状态 chip 都要在卡片上真实渲染出来，断言更贴近用户所见。
   it('非采集节点继承上游输出表时算「已配置」，不再是「待配置」', async () => {
     const { flow, wrapper } = await mountBoard()
     const targetId = flow.main.find((id) => id !== 'start' && id !== 'end')!
@@ -46,16 +51,13 @@ describe('FlowBoard · 节点状态与卡片上的表名必须一致', () => {
     cfg.outputTable = ''
     await wrapper.vm.$nextTick()
 
-    const vm = wrapper.vm as unknown as {
-      tableChip: (c: unknown) => { label: string; unset: boolean } | null
-      footFor: (c: unknown) => { left: string; hint: string }
-    }
-    // 卡片那行表名认这张表（title 里写明是继承来的）
-    expect(vm.tableChip(cfg)?.label).toBeTruthy()
-    expect(vm.tableChip(cfg)?.unset).toBe(false)
+    const card = cardOf(wrapper, cfg)
+    // 卡片那行表名认这张表（title 里写清是继承来的输入表）
+    expect(card.find('.rc-node-table').exists()).toBe(true)
+    expect(card.find('.rc-node-table').classes()).not.toContain('unset')
+    expect(card.find('.rc-node-table').attributes('title')).toContain('默认继承输入表')
     // 状态必须跟着它走
-    expect(vm.footFor(cfg).left).not.toBe('待配置')
-    expect(vm.footFor(cfg).hint).toBe('')
+    expect(card.findAll('.rc-chip').some((c) => c.text() === '待配置')).toBe(false)
   })
 
   // 节点种子里几乎每个模板的初始 status 都写着 '待配置'，配好之后没人清它。
@@ -71,15 +73,14 @@ describe('FlowBoard · 节点状态与卡片上的表名必须一致', () => {
     cfg.status = '待配置'          // 种子里带来的占位值
     await wrapper.vm.$nextTick()
 
-    const vm = wrapper.vm as unknown as {
-      tableChip: (c: unknown) => { label: string; unset: boolean } | null
-      footFor: (c: unknown) => { left: string; hint: string }
-    }
-    expect(vm.footFor(cfg).left).toBe('运行')
+    const card = cardOf(wrapper, cfg)
+    const chip = card.find('.rc-chip')
+    expect(chip.text()).toBe('运行')
 
     // 真正的运行态照常显示
     cfg.status = '运行中'
-    expect(vm.footFor(cfg).left).toBe('运行中')
+    await wrapper.vm.$nextTick()
+    expect(cardOf(wrapper, cfg).find('.rc-chip').text()).toBe('运行中')
   })
 
   it('上下游都没有表才是真的「待配置」，并说明缺什么', async () => {
@@ -91,12 +92,9 @@ describe('FlowBoard · 节点状态与卡片上的表名必须一致', () => {
     cfg.outputTable = ''
     await wrapper.vm.$nextTick()
 
-    const vm = wrapper.vm as unknown as {
-      tableChip: (c: unknown) => { label: string; unset: boolean } | null
-      footFor: (c: unknown) => { left: string; hint: string }
-    }
-    expect(vm.tableChip(cfg)).toBeNull()
-    expect(vm.footFor(cfg).left).toBe('待配置')
-    expect(vm.footFor(cfg).hint).toContain('输出表')
+    const card = cardOf(wrapper, cfg)
+    expect(card.find('.rc-node-table').exists()).toBe(false)
+    const chip = card.findAll('.rc-chip').find((c) => c.text() === '待配置')!
+    expect(chip.attributes('title')).toContain('输出表')
   })
 })

@@ -77,7 +77,8 @@ describe('CanvasHeader · 参数源摘要（0721 会议 T5）', () => {
     await flushPromises()
 
     const link = wrapper.get('[data-testid="owning-flow"]')
-    expect(link.text()).toBe('所属流程：上市公司-配置')
+    // 0926：名字后追加【流程ID: xxx】，退化 `#id` 形态本身已含 id 不重复
+    expect(link.text()).toBe('所属流程：上市公司-配置【流程ID: 1400935】')
     await link.trigger('click')
     await flushPromises()
     const r = (wrapper.vm as unknown as { $router: { currentRoute: { value: { path: string; query: Record<string, string> } } } }).$router

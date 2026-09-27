@@ -301,6 +301,34 @@ describe('旧平台步骤模型适配（item/next，2026-08-26 生产实测源 4
     expect(step.urlRule).toBeUndefined()
   })
 
+  it('flowId 回读：0925 整体切 flowId（bee-top FLOW_ID 列），响应带 flowId 时映射为字符串；老后端不带时为 undefined（双轨兼容）', () => {
+    expect(stepFromLegacy({
+      itemConfig: 41768, sourceId: -1, name: '网页抓取', configId: 1401078, mainConfig: 1400935,
+      flowId: 1400935, flowCode: 'WEB_SNATCH', lastStep: '41767', isDelete: 0,
+    }, '430016824').flowId).toBe('1400935')
+    expect(stepFromLegacy({
+      itemConfig: 41768, sourceId: -1, name: '网页抓取', configId: 1401078, mainConfig: 1400935,
+      flowCode: 'WEB_SNATCH', lastStep: '41767', isDelete: 0,
+    }, '430016824').flowId).toBeUndefined()
+  })
+
+  it('写 payload 带 flowId：0925 契约变更——步骤归属切 flowId，saveItemConfig/stepModify 显式携带数字 flowId；没有 flowId 时不出现该键', () => {
+    const withFlow = stepFromLegacy({
+      itemConfig: 40600, sourceId: -1, name: '1400917-详情', configId: 1400917, mainConfig: 1400917,
+      flowId: 1400935, flowCode: 'WEB_SNATCH', entryTypeId: 6200026, outEntry: 6200026,
+      itemId: 52000351, lastStep: '0', url: '$VAL$', isDelete: 1,
+    }, '430016398')
+    expect(stepToSaveItemConfigPayload(withFlow)).toMatchObject({ flowId: 1400935 })
+    expect(stepToStepModifyPayload(withFlow)).toMatchObject({ flowId: 1400935 })
+    const withoutFlow = stepFromLegacy({
+      itemConfig: 40600, sourceId: -1, name: '1400917-详情', configId: 1400917, mainConfig: 1400917,
+      flowCode: 'WEB_SNATCH', entryTypeId: 6200026, outEntry: 6200026, itemId: 52000351,
+      lastStep: '0', url: '$VAL$', isDelete: 1,
+    }, '430016398')
+    expect(stepToSaveItemConfigPayload(withoutFlow)).not.toHaveProperty('flowId')
+    expect(stepToStepModifyPayload(withoutFlow)).not.toHaveProperty('flowId')
+  })
+
   it('stepToStepModifyPayload 逐字段对照 2026-08-26 生产实测：源 430016398（test1）itemConfig 40600 原样重新提交 stepModify 抓到的真实请求体，未改动任何数据（提交前后 nextConfigPaged 回读一致）', () => {
     const step = stepFromLegacy({
       authConfig: null, bizType: null, cond: null, configId: 1400917, context: null,
@@ -855,6 +883,24 @@ describe('旧平台源列表标记字段', () => {
       tags: ['正文缺失', '内容重复'],
       color: 'red',
     })
+  })
+
+  // 0927 G2：ROOT 权威方案的只读反查字段透传（后端源列表/详情已返回）
+  it('rootId / rootConfigId 透传为只读字符串；缺省为 undefined', () => {
+    expect(sourceFromLegacy({
+      sourceId: 1, sourceName: 'a', sourceUrl: 'u', configId: 2, entryTypeId: 3,
+      rootId: 41352,
+      rootConfigId: 1400935,
+    })).toMatchObject({
+      rootId: '41352',
+      rootConfigId: '1400935',
+    })
+    expect(sourceFromLegacy({
+      sourceId: 1, sourceName: 'a', sourceUrl: 'u', configId: 2, entryTypeId: 3,
+    }).rootId).toBeUndefined()
+    expect(sourceFromLegacy({
+      sourceId: 1, sourceName: 'a', sourceUrl: 'u', configId: 2, entryTypeId: 3,
+    }).rootConfigId).toBeUndefined()
   })
 })
 

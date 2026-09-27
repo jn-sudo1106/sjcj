@@ -36,6 +36,11 @@ async function mountBoard() {
 }
 
 describe('FlowBoard · 连线表关系标注', () => {
+  const tableTagOf = (wrapper: ReturnType<typeof mount>, text: string) =>
+    wrapper.findAll('.rc-edge-table-tag').find((t) => t.text() === text)
+
+  // 0926 补记：原用例走 vm.edgeTableTag（script setup 内部函数未 expose，Vue3.3+ 拿不到），
+  // 改为断言连线标签真实渲染的 DOM 文本。
   it('输出表未显式设置时回退到本节点输入表（默认 = 输入表），且裸 tableId 会被换成可读 label', async () => {
     let resolveDetail!: (v: { tableId: string; tableName: string; name: string; fields: never[] }) => void
     vi.spyOn(entryApi, 'entryDetail').mockImplementation(
@@ -49,14 +54,13 @@ describe('FlowBoard · 连线表关系标注', () => {
     if (flow.configs[targetId].collectCfg) flow.configs[targetId].collectCfg!.outputTable = ''
     await wrapper.vm.$nextTick()
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vm = wrapper.vm as any
     // 兜底阶段：entryDetail 还没 resolve，先拿裸 id 顶着，但至少不是 '?'
-    expect(vm.edgeTableTag(targetId, 'end')).toBe('6200026 → ?')
+    // （start→targetId 是主链真实边；inp 侧是测试节点自己的输入表）
+    expect(tableTagOf(wrapper, '? → 6200026')).toBeTruthy()
 
     resolveDetail({ tableId: '6200026', tableName: 'sense_data.T_6200026', name: '表-6200026', fields: [] })
     await flushPromises()
-    expect(vm.edgeTableTag(targetId, 'end')).toBe('表-6200026 → ?')
+    expect(tableTagOf(wrapper, '? → 表-6200026')).toBeTruthy()
   })
 
   it('entryDetail 查询失败：保留裸 tableId 兜底，不是空白', async () => {
@@ -70,9 +74,8 @@ describe('FlowBoard · 连线表关系标注', () => {
     await wrapper.vm.$nextTick()
     await flushPromises()
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vm = wrapper.vm as any
-    expect(vm.edgeTableTag(targetId, 'end')).toBe('6200026 → ?')
+    // 输入侧裸 id 兜底仍在（start→targetId 边）
+    expect(tableTagOf(wrapper, '? → 6200026')).toBeTruthy()
   })
 })
 
@@ -105,14 +108,15 @@ describe('FlowBoard · 节点卡片「⊞ 输出表」角标', () => {
 
     resolveDetail({ tableId: '6200026', tableName: 'sense_data.T_6200026', name: '表-6200026', fields: [] })
     await flushPromises()
-    expect(card.find('.rc-node-table').text()).toBe('⊞ 表-6200026 → ?')
+    expect(card.find('.rc-node-table').text()).toBe('⊞ 表-6200026 (6200026) → ?')
 
-    // 真的设上输出表后，角标恢复成正常的「输出表」口径
+    // 真的设上输出表后，角标变成「输入表 → 输出表」成对展示（0926 拍板），
+    // 且表 ID 跟着业务名一起显示（0926 拍板「表的 ID 也是需要的」）
     flow.configs[targetId].collectCfg!.outputTable = '6200026'
     await wrapper.vm.$nextTick()
     const settled = card.find('.rc-node-table')
-    expect(settled.text()).toBe('⊞ 表-6200026')
-    expect(settled.attributes('title')).toBe('输出表 表-6200026')
+    expect(settled.text()).toBe('⊞ 表-6200026 (6200026) → 表-6200026 (6200026)')
+    expect(settled.attributes('title')).toBe('输入表 表-6200026 (6200026) → 输出表 表-6200026 (6200026)')
     expect(settled.classes()).not.toContain('unset')
   })
 

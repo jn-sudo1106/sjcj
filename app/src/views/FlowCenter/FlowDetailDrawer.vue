@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { configApi, flowCenterApi, type FlowDefinition, type FlowRecord, type Source } from '@/api'
+import { onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { configApi, flowCenterApi, type FlowDefinition, type FlowRecord, type Source, type Step } from '@/api'
 import { useFlowStore } from '@/stores/flow'
+import { useSourceStore } from '@/stores/source'
 import { useUiStore } from '@/stores/ui'
 import { rootStepForSource } from '@/views/FlowCanvas/canvas/flowModel'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
 import NodeInspector from '@/views/FlowCanvas/inspector/NodeInspector.vue'
+import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 
 // categories 由列表页透传（那边已经拉过一次 sourceCategories，抽屉不再重复请求）
 const props = withDefaults(defineProps<{ flow: FlowRecord | null; categories?: { id: string; name: string }[] }>(), {
@@ -19,9 +21,61 @@ const emit = defineEmits<{
 }>()
 
 const canvas = useFlowStore()
+const sourceStore = useSourceStore()
 const ui = useUiStore()
+const autosave = useFlowAutosave()
 const name = ref('')
 const saving = ref(false)
+
+// 流程工作区自动保存（0926「基础数据写正常」）：在抽屉里新建/改名/改条件/删除节点同样落到
+// cs_item_config（步骤行），不依赖源上下文——useStepWrite 按 flow.flowIdMode 走 flowId 锚定。
+// 与画布页的 autosave 是同一个模块级单例，两处路由互斥（画布页 onUnmount 时已 unbind）。
+let autosaveBound = false
+function ensureAutosaveBound() {
+  if (!autosaveBound) {
+    autosave.bind()
+    autosaveBound = true
+  }
+}
+function ensureAutosaveUnbound() {
+  if (autosaveBound) {
+    autosave.unbind()
+    autosaveBound = false
+  }
+  // 0927 P1-6：抽屉卸载时复位流程工作区形态。flowIdMode 只在各源视角入口复位，抽屉关闭
+  // 不复位会残留 true——画布页 autosave.bind()（onMounted）早于 loadSourceFlow 的复位，
+  // 窗口期内改动会按残留的旧流程 ID 锚定落库。
+  canvas.setFlowIdMode(false)
+}
+onBeforeUnmount(ensureAutosaveUnbound)
+/** 关工作区：先把最后一批步骤改动落库（防抖窗口内的草稿换 ID 等），再关抽屉。
+ *  0926 REVIEW F-R5：flush 失败（autosave 内部退避重试 + error toast，不向外抛错）不再静默
+ *  关闭——那次保存失败的节点改动（新建/改名/换配置）还没落库，直接关掉就没机会再存了；
+ *  停在抽屉里让用户看到头部「保存失败，点击重试」。
+ *  0927 P0-1：抽屉内已补保存状态条（含「重试」按钮）；同时给「仍然关闭」显式出口——后端
+ *  持续故障（502 / outEntry 校验拒绝）时用户不能被永远困在抽屉里，确认后关闭并明示改动
+ *  可能丢失（这正是原实现的行为缺口：error 态 return 后抽屉关不掉，只能刷新页面）。 */
+async function closeWorkspace() {
+  if (canvas.flowDirty || autosave.status.value === 'saving') {
+    await autosave.flush()
+    if (autosave.status.value === 'error') {
+      try {
+        await ElMessageBox.confirm(
+          `画布改动尚未保存成功（${autosave.lastError.value || '保存失败'}）。\n仍然关闭将丢失这些改动，确定关闭吗？`,
+          '保存失败',
+          {
+            confirmButtonText: '仍然关闭',
+            cancelButtonText: '留在此页',
+            type: 'warning',
+          },
+        )
+      } catch {
+        return
+      }
+    }
+  }
+  emit('close')
+}
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
@@ -36,7 +90,7 @@ function definitionFromCanvas(): FlowDefinition {
   }
 }
 
-function loadIntoWorkspace(flow: FlowRecord) {
+function loadIntoWorkspace(flow: FlowRecord, steps: Step[]) {
   name.value = flow.name
   canvas.clearSourceCtx()
   canvas.clearSiteCtx()
@@ -52,6 +106,11 @@ function loadIntoWorkspace(flow: FlowRecord) {
     branchGroups: flow.definition.branchGroups,
     updatedAt: flow.updatedAt,
   })
+  // 0926：流程工作区形态——节点写 / 自动保存按 flowId 锚定（见 flow store flowIdMode 注释）
+  canvas.setFlowIdMode(true)
+  // 步骤快照：flowConf 画布的节点改名 / 条件编辑 / 孤儿「关联」仍要整包回写步骤行，必须有快照。
+  // 由 openFlowInWorkspace 并进打开窗口取回（失败走空数组，改名/关联会提示缺快照，不阻断画布）。
+  sourceStore.rememberSteps(steps, 'replace')
   const firstNode = flow.definition.main.find((id) => id !== 'start' && id !== 'end' && flow.definition.configs[id])
   canvas.select(firstNode ?? '')
   canvas.markSaved()
@@ -92,7 +151,10 @@ function loadIntoWorkspace(flow: FlowRecord) {
  * 枚举无从照抄（0904 Q3），不给选。
  */
 const metaForm = reactive({ categoryId: '', tags: '', description: '' })
-watch(() => props.flow?.id, () => {
+watch(() => props.flow?.id, (id, prev) => {
+  // 打开时绑定步骤自动保存、关闭时解绑（绑定的是流程工作区形态，见 ensureAutosaveBound）
+  if (id && !prev) ensureAutosaveBound()
+  if (!id && prev) ensureAutosaveUnbound()
   // 抽屉是独立的一块工作区，不该继承画布页上次留下的收起/展开状态（两边共用同一对 ui 标志）
   ui.resetInspectorLayout()
   metaForm.categoryId = props.flow?.categoryId ?? ''
@@ -131,7 +193,11 @@ async function deriveFromFlowConfig(flow: FlowRecord): Promise<boolean> {
   // loadFromSource 把 FlowDef.id 设成了 source.sourceId（这里是空串，stub 源故意不担真源）——
   // 流程 ID 必须显式纠正回来，不然「流程 XML」导出（flowId 要用于导入导出）会把它显示成空。
   canvas.flowId = flow.id
-  canvas.clearSourceCtx()
+  // 0926：流程工作区形态——节点写 / 自动保存按 flowId 锚定（见 flow store flowIdMode 注释）
+  canvas.setFlowIdMode(true)
+  // 0926：清源上下文但**保留步骤快照**——步骤重载后改名 / 删除 / 孤儿「关联」修复仍要
+  // 快照整包回写，全清会让右侧面板改名变成"改完不落库"、孤儿关联下拉直接是空的。
+  canvas.clearSourceCtxKeepSteps()
   canvas.clearSiteCtx()
   canvas.setFlowName(flow.name)
   name.value = flow.name
@@ -149,16 +215,34 @@ async function deriveFromFlowConfig(flow: FlowRecord): Promise<boolean> {
  */
 let loadSeq = 0
 const loadingDetail = ref(false)
+// 0927 P1-5：步骤快照拉取失败降级为 [] 时置位——flowIdMode 下无快照的节点会被跳过回写
+// （persistFlowSteps 计 skipped、autosave 停在 pending），这里常驻警示条把「为什么没保存」
+// 说清楚，不再让用户面对「已保存」的假象。
+const stepsLoadFailed = ref(false)
 async function openFlowInWorkspace(flow: FlowRecord) {
   const reqId = ++loadSeq
   // 先用列表行把名字/头部铺上，画布等详情回来再填，避免闪一下旧流程的节点
   name.value = flow.name
   loadingDetail.value = true
   derivedFromConfig.value = false
+  stepsLoadFailed.value = false
   try {
+    // 0926：详情先取——取不到就整窗报错关掉，**不发起后续请求**（steps 事前拉没有意义，
+    // 还会把错误路径拖慢）。详情成功后再并行不迟…… 不，**串行**：steps 必须在
+    // loadIntoWorkspace（工作区渲染）之前就绪——快照供改名 / 孤儿「关联」整包回写，
+    // 若打开后再异步补，快照会在任何一次交互（收起/展开/编辑）途中到达，触发画布重建
+    // 与留存的竞态（实测 120ms mock 延迟落到后续用例/交互里）。快照失败不阻断打开
+    // （改名/关联降级为缺快照提示）。
     const full = await flowCenterApi.detail(flow.id)
     if (reqId !== loadSeq) return
     const record = full ?? flow
+    const steps = await flowCenterApi.steps(flow.id, { withConfigDetails: false })
+      .catch((reason) => {
+        console.warn('[flow-drawer] 步骤快照加载失败：改名/孤儿关联将缺少快照', reason)
+        stepsLoadFailed.value = true
+        return [] as Step[]
+      })
+    if (reqId !== loadSeq) return
     // ⚠️ 判据是"有没有**真实节点**"，不是 main 非空（2026-09-04 修）。
     // `makeBlankTemplateDefinition()` 产出的 main 是 ['start','end']——结构上非空、实际一个节点
     // 都没有。按长度判会让**我们自己新建的流程永远走不到下面的还原分支**：saveFlow 在后端
@@ -167,13 +251,13 @@ async function openFlowInWorkspace(flow: FlowRecord) {
     const hasRealNode = record.definition.main.some((id) => id !== 'start' && id !== 'end')
       || (record.definition.branchGroups ?? []).some((g) => g.branches.some((b) => b.chain.length))
     if (hasRealNode) {
-      loadIntoWorkspace(record)
+      loadIntoWorkspace(record, steps)
       return
     }
     // 存量流程走这条：flowConf 空，但这个流程自己的 config/步骤有真实内容
     const derived = await deriveFromFlowConfig(record).catch(() => false)
     if (reqId !== loadSeq) return
-    if (!derived) loadIntoWorkspace(record) // 配置和步骤都没给出内容，那就是一张真空白画布
+    if (!derived) loadIntoWorkspace(record, steps) // 配置和步骤都没给出内容，那就是一张真空白画布
   } catch (error) {
     if (reqId !== loadSeq) return
     // 取不到详情就不要拿空画布糊弄——那会让人以为流程是空的，一保存就真空了
@@ -197,6 +281,23 @@ async function persistFlow(showMessage = true, isTemplate?: boolean): Promise<Fl
   }
   saving.value = true
   try {
+    // 0926：让画布改建**先落步骤表**（cs_item_config，由自动保存执行），再落流程定义
+    // （cs_flow.FLOW_CONF）。两步的节点 ID 必须一致：自动保存会把草稿 ID 换成后端步骤 ID，
+    // 不先 flush 就拿画布定义，flowConf 里存的还是草稿 ID，与真实步骤对不上（R2 半程落库的
+    // 一半解法——另一半是自动保存本身，见 ensureAutosaveBound）。
+    // 只在有脏改动时 flush：没有改动就不触发整批步骤回写（大流程每次点「保存流程」都重写
+    // 全部步骤行是没有必要的）。
+    if (canvas.flowDirty || autosave.status.value === 'saving') {
+      await autosave.flush()
+      // 0926 REVIEW F-R16（同 F-R5 closeWorkspace 口径）：flush 内部 catch 永不 reject，
+      // 失败只置 error 状态并退避重试（还会有 error toast）。不在这里拦住的话，步骤没落库、
+      // 草稿 ID 没换绑真实 ID，flowConf 却照样保存成功并弹绿——用户看到成功，实际步骤
+      // 与流程定义对不上。中止保存，让用户先解决步骤落库（头部「保存失败，点击重试」）。
+      if (autosave.status.value === 'error') {
+        ElMessage.warning('步骤保存失败，流程尚未保存。请先重试（头部「保存失败，点击重试」）')
+        return null
+      }
+    }
     const saved = await flowCenterApi.save({
       id: props.flow.id,
       name: trimmed,
@@ -261,7 +362,24 @@ async function applyToSource() {
           <span v-else-if="flow.fromTemplateId" class="fd-badge ghost">来自模板 #{{ flow.fromTemplateId }}</span>
         </p>
       </div>
-      <button class="fd-close" type="button" title="关闭" @click="emit('close')">✕</button>
+      <!-- 0927 P0-1：抽屉内保存状态条（embedded 画布不渲染 CanvasHeader，状态/重试原来
+           无处可看可点；同时把 error 态的「强关出口」显式化，见 closeWorkspace）。 -->
+      <div v-if="!loadingDetail" class="fd-save-status" data-testid="flow-drawer-save-status">
+        <template v-if="autosave.status.value === 'error'">
+          <span class="fd-save-text is-error">步骤保存失败，将自动重试</span>
+          <button
+            type="button"
+            class="fd-retry"
+            data-testid="flow-drawer-retry"
+            :title="autosave.lastError.value ? `保存失败：${autosave.lastError.value}` : '点击重试'"
+            @click="void autosave.flush()"
+          >重试</button>
+        </template>
+        <template v-else-if="autosave.status.value === 'saving'"><span class="fd-save-text">步骤保存中…</span></template>
+        <template v-else-if="autosave.status.value === 'pending'"><span class="fd-save-text is-pending">待补全节点配置后自动保存（见右侧提示）</span></template>
+        <template v-else-if="autosave.status.value === 'saved'"><span class="fd-save-text">步骤已保存</span></template>
+      </div>
+      <button class="fd-close" type="button" title="关闭" @click="void closeWorkspace()">✕</button>
     </header>
 
     <!-- 流程属性（0904 I16/I17 · Z7-5）：分类 / 标签 / 描述可改，随「保存流程」一起提交。
@@ -287,6 +405,11 @@ async function applyToSource() {
     </div>
 
     <div v-if="loadingDetail" class="fd-loading" data-testid="flow-workspace-loading">正在加载流程定义…</div>
+    <!-- 0927 P1-5：快照拉取失败常驻警示——flowIdMode 下无快照节点会被跳过回写（autosave 留在
+         pending 不再假装已保存），把「为什么没保存」说清楚，避免用户对着「已保存」干等。 -->
+    <div v-if="stepsLoadFailed" class="fd-warn" data-testid="flow-drawer-steps-failed">
+      步骤快照加载失败：节点改名 / 关联等改动将无法保存，请关闭后重新打开此流程。
+    </div>
     <!-- 还原态必须说明白：画布上这些节点还没写进流程本身，是照这个流程自己的配置和步骤画的。
          不写这行的话，用户会以为流程里已经存着这份定义。 -->
     <div v-if="!loadingDetail && derivedFromConfig" class="fd-derived" data-testid="flow-derived-note">
@@ -358,6 +481,13 @@ async function applyToSource() {
 .fd-name { display: block; width: min(520px, 70vw); margin: 2px 0 3px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--rc-text); font-size: 15px; font-weight: 700; }
 .fd-name:focus { box-shadow: inset 0 -1px 0 var(--rc-primary); }
 .fd-title p { margin: 0; color: var(--rc-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.fd-save-status { display: flex; align-items: center; gap: 8px; margin-top: 20px; }
+.fd-save-text { color: var(--rc-muted); font-size: 11px; white-space: nowrap; }
+.fd-save-text.is-error { color: #dc2626; }
+.fd-save-text.is-pending { color: #b45309; }
+.fd-retry { height: 24px; padding: 0 10px; border: 1px solid #fca5a5; border-radius: 6px; background: #fff; color: #dc2626; font-size: 11px; font-weight: 600; cursor: pointer; }
+.fd-retry:hover { background: #fef2f2; }
+.fd-warn { padding: 8px 16px; border-bottom: 1px solid #fecaca; background: #fef2f2; color: #b91c1c; font-size: 12px; line-height: 1.5; }
 .fd-close { margin-left: auto; border: 0; background: transparent; color: var(--rc-faint); font-size: 14px; cursor: pointer; }
 .fd-close:hover { color: var(--rc-text); }
 .fd-derived { padding: 8px 16px; border-bottom: 1px solid #fde68a; background: #fffbeb; color: #92400e; font-size: 12px; line-height: 1.5; }
