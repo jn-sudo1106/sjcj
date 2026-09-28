@@ -26,9 +26,13 @@ import {
   makeBlankFlow,
   makeStandardFlow,
   buildHorizontalLayout,
+  elbowVH,
   applyParamSourceUrlToFirstCollectNode,
   normalizeNodeConfigs,
   collectorCapabilityOf,
+  allBranchChainNodes,
+  branchGroupOf,
+  branchOfNode,
   TERMINALS,
   type NodeConfig,
   type CollectConfig,
@@ -52,18 +56,25 @@ import { useSourceStore } from './source'
 import { useNodeStore } from './node'
 import { useRuntimeStore } from './runtime'
 
-// 画布布局常量（对齐原型：节点宽 210、居中 x=320、终端宽 150）
-const CENTER = 320
+// 画布布局常量（对齐原型：节点宽 210、终端宽 150）
+// 0925：主链 x 不再是常量 320——画布宽度随最宽分支组自适应（≥640），主链居中于 width/2；
+// 单列分支的流程宽度仍是 640、主链仍是 320（原型基线不变）。
 const NODE_W = 210
 const TERM_W = 150
 const TERM_H = 36
 const NODE_H = 108
 const LOGIC_H = 140
-const GAP = 30
+const GAP = 36
+// 分叉带高度（0925 排版）：owner 底边到分支列首行顶边的距离。原来是 GAP(30)，
+// 母线只能挤在 15px 处、贴着父节点，看起来"糊在一起"；加宽后短竖线 + 母线 + 短竖线层次分明。
+const FORK_GAP = 64
+// 汇合母线相对汇合点顶边的距离（0925 排版）：所有分支共用同一条母线，横向段不再各走各的、
+// 在不同高度反复穿越别的列。
+const CONVERGE_BUS = 26
 const SIDE_OFFSET = 215 // 旁路节点相对主链左移/右移量 → 左列 x=0，右列 x=430
 
 export interface PlacedPos { top: number; left: number; height: number }
-export interface PlacedNode { id: string; cfg: NodeConfig; pos: PlacedPos; branch: boolean; side?: 'left' | 'right' }
+export interface PlacedNode { id: string; cfg: NodeConfig; pos: PlacedPos; branch: boolean; side?: 'left' | 'right'; orphan?: boolean }
 export interface PlacedTerm { id: string; label: string; pos: PlacedPos }
 export interface DropSlot { afterId: string; top: number }
 /** 决策/分头节点的 fan-out 分支连线（0707 优化·Phase6）：owner 底边 → 每列首节点 + 列内节点连线。
@@ -72,7 +83,17 @@ export interface FanOutEdge { d: string; branchLabel?: string; condLabel?: strin
 /** fan-out 列 meta：用于 FlowBoard 渲染列头/列脚标签 */
 export interface FanOutColMeta {
   ownerId: string
-  branches: { id: string; label: string; condLabel: string; colX: number; top: number; height: number; chain: string[] }[]
+  branches: {
+    id: string
+    label: string
+    condLabel: string
+    colX: number
+    top: number
+    height: number
+    chain: string[]
+    /** 列标签的 y（0925 排版）：放在分叉母线之上、owner 底边下方，不再压住连线与节点 */
+    labelTop?: number
+  }[]
 }
 export interface MainEdge { fromId: string; toId: string; d: string; rule: boolean; lx: number; ly: number }
 export interface BranchEdge { d: string }
@@ -104,6 +125,23 @@ export const useFlowStore = defineStore('flow', () => {
     set: (v) => { sourceStore.siteCtx = v },
   })
 
+  /**
+   * 流程工作区形态（0926）：画布当前是不是「cs_flow 流程定义」的编辑现场（FlowDetailDrawer
+   * 的 loadIntoWorkspace / deriveFromFlowConfig、模板应用后的 reloadFlowIntoCanvas）。
+   *
+   * 为什么要显式标志而不是靠 `!sourceCtx && flowId 是数字` 推断：网站详情页同样满足
+   * "sourceCtx 为空 + flowId 是数字"（内部代表源不登记为编排对象），但那里是**源视角**，
+   * 写步骤必须锚定源 / mainConfig，把流程 ID 当锚点会写坏数据。只有流程工作区把
+   * `flow.flowId` 当作真实流程 ID（cs_flow.id），步骤写与自动保存的锚点随之切换为 flowId。
+   *
+   * 置位点（唯一三处）：FlowDetailDrawer 两条加载路径 + applyTemplateToSource.reloadFlowIntoCanvas；
+   * 源视角入口（loadFromSource / newFlow / startSiteFlow / startDraftSource）统一复位。
+   */
+  const flowIdMode = ref(false)
+  function setFlowIdMode(v: boolean) {
+    flowIdMode.value = v
+  }
+
   // 代理 node store 的状态（保持 API 不变）
   const selectedId = computed({
     get: () => nodeStore.selectedId,
@@ -130,6 +168,9 @@ export const useFlowStore = defineStore('flow', () => {
   const branches = reactive<BranchSeed[]>([])
   // 决策/分头节点的分支段（0707 优化·Phase6）：与 BranchSeed 旁路挂靠并存，不互相替代。
   const branchGroups = reactive<FlowBranchGroup[]>([])
+  // 孤儿步骤 id（0925）：随 load(def.orphanIds) 载入，仅用于画布标记与「关联到节点」修复，
+  // 不参与序列化/保存；重新加载流程时按响应重新推导。
+  const orphanIds = ref<string[]>([])
   // 分支 id 自增序列（0707 Phase6）：保证同一 FlowDef 内 FlowBranch.id 不重复
   let branchSeq = 1
   let seq = 1
@@ -165,83 +206,188 @@ export const useFlowStore = defineStore('flow', () => {
   }
 
   // ---- 布局（统一计算，供画布渲染） ----
+  // 0925 视觉修复：原实现有两处硬缺陷——
+  //  ① 分支列宽度不参与父级槽位计算：嵌套分叉的列围绕链节点中心对称展开，既会顶出画布
+  //     （实测嵌套列 left=-11、右缘 >640，节点被裁切），又会和同层兄弟列在同一 y 带重叠
+  //     （嵌套列 215..425 与兄弟列 328..538 叠了 97px）。
+  //  ② fan-in 汇聚线拿「链尾节点」当列尾：链尾自己还有嵌套分叉时，线从嵌套 owner 底边直拉
+  //     下去，穿过自己的子列节点。
+  // 现改为「先测量、再按槽位摆放」：列槽宽 = max(节点宽, 列内嵌套组测宽)，同组各列依次排开
+  // 互不重叠；画布宽度按最大组宽自适应（≥640，主链居中，新增 layout.width）；列尾取该列子树
+  // 最深节点，汇聚线从它出发；嵌套组的收拢目标 = 本列下一个链节点（链尾则跟随父组目标）。
   const layout = computed(() => {
     const mainPos: Record<string, PlacedPos> = {}
     const branchPos: Record<string, PlacedPos> = {}
-    // 0707 优化·Phase6：决策/分头节点的 fan-out 列布局
+    // 0707 优化·Phase6：决策/分头节点的 fan-out 列布局；0925 完整还原扩展到**任意**分支组
+    // （还原拓扑的分叉 owner 是普通采集节点）并支持嵌套（subGroups 递归摆放、递归连线）
     const fanOutPos: Record<string, PlacedPos> = {}
     const fanOutColMeta: Record<string, FanOutColMeta> = {}
     const fanOutEdges: FanOutEdge[] = []
 
-    // 第一遍：算每个决策/分头节点的 fan-out 总高度（max chain）
-    const fanOutHeight: Record<string, number> = {}
-    for (const id of main.value) {
-      const bg = branchGroups.find((g) => g.ownerId === id)
-      if (!bg) continue
-      let maxChainH = 0
-      for (const b of bg.branches) {
-        let ch = 0
-        for (const nid of b.chain) ch += nodeHeight(nid) + GAP
-        if (ch > 0) ch -= GAP
-        if (ch > maxChainH) maxChainH = ch
+    // 分支列横向间隙（0925 排版）：原来 16px，相邻两列卡片几乎贴在一起、同一行里挤成一片；
+    // 放宽到 28px 后列与列之间留出可辨的留白（列底纹也才有呼吸空间）。
+    const colGap = 32
+    const PAD_X = 40
+    /** 直角坐标点（列中心 x + y）：列尾 = 节点底边，收拢目标 = 目标节点顶边 */
+    interface Pt { cx: number; y: number }
+    /** 收拢目标引用：主链下一节点的 top 要等主链摆完才知道，先建引用、最后统一解析并连线 */
+    interface ContRef { pt?: Pt | null }
+
+    /** 测量：一个分支列的槽宽（至少一个节点宽，含列内所有嵌套组） */
+    const measureBranchW = (b: FlowBranch): number => {
+      let w = NODE_W
+      for (const nid of b.chain) {
+        const sg = branchGroupOf(branchGroups, nid)
+        if (sg) w = Math.max(w, measureGroupW(sg))
       }
-      fanOutHeight[id] = maxChainH
+      return w
+    }
+    /** 测量：一个分支组的宽（各列槽宽 + 列间隙） */
+    const measureGroupW = (g: FlowBranchGroup): number =>
+      g.branches.reduce((sum, b) => sum + measureBranchW(b), 0) + Math.max(0, g.branches.length - 1) * colGap
+    /** 测量：一个分支列的高（链 + 逐个嵌套组下探；末尾不留 GAP） */
+    const measureBranchH = (b: FlowBranch): number => {
+      let total = 0
+      for (const nid of b.chain) {
+        total += nodeHeight(nid) + GAP
+        const sg = branchGroupOf(branchGroups, nid)
+        // 0927 P1-1：嵌套组按 FORK_GAP + 组高测量（placeGroup 组顶 = ownerBottom + FORK_GAP）——
+        // 原来只加 GAP，测量比实际矮 28px：嵌套组后的链节点实际只剩 8px 间隙，每多一层
+        // 嵌套再欠 28px，二层直接重叠 20px。
+        if (sg) total += FORK_GAP + measureGroupH(sg) + GAP
+      }
+      return Math.max(0, total - GAP)
+    }
+    /** 测量：一个分支组的高（各列高的最大值） */
+    const measureGroupH = (g: FlowBranchGroup): number =>
+      g.branches.reduce((max, b) => Math.max(max, measureBranchH(b)), 0)
+
+    // 画布宽度：主链居中；容纳最宽的分支组（两侧留白），不小于原型 640
+    const maxGroupW = main.value.reduce((max, id) => {
+      const g = branchGroupOf(branchGroups, id)
+      return g ? Math.max(max, measureGroupW(g)) : max
+    }, 0)
+    const width = Math.max(640, maxGroupW + PAD_X * 2)
+    const center = width / 2
+
+    // 待解析的汇聚线（列尾 → 收拢目标）与主链 owner 的目标引用
+    const pendingConverges: Array<{ from: Pt; ref: ContRef }> = []
+    const ownerContRefs: Array<{ ownerId: string; ref: ContRef }> = []
+
+    /** 摆放一个分支列：链节点 + 列内嵌套组递归；返回本列子树最深点（列尾） */
+    const placeChain = (b: FlowBranch, colCx: number, top: number, contRef: ContRef): Pt => {
+      let cy = top
+      let deepest: Pt = { cx: colCx, y: top }
+      let prev: Pt | null = null
+      b.chain.forEach((nid, i) => {
+        const h = nodeHeight(nid)
+        fanOutPos[nid] = { top: cy, left: colCx - NODE_W / 2, height: h }
+        if (prev) fanOutEdges.push({ d: `M${prev.cx} ${prev.y} L${colCx} ${cy}` })
+        const bottom = cy + h
+        deepest = { cx: colCx, y: bottom }
+        prev = { cx: colCx, y: bottom }
+        cy = bottom + GAP
+        // 链内再分叉（0925 还原拓扑）：嵌套组摆在链节点正下方，按本列中心展开
+        const sg = branchGroupOf(branchGroups, nid)
+        if (sg) {
+          // 0927 P1-1：组顶基准统一为 bottom + FORK_GAP（placeGroup 内 top = ownerBottom +
+          // FORK_GAP）——原记录的是 bottom + GAP，与摆放实测差 28px，后续链节点推进跟着错。
+          const groupTop = bottom + FORK_GAP
+          const groupH = measureGroupH(sg)
+          const nestedRef: ContRef = b.chain[i + 1]
+            ? { pt: { cx: colCx, y: groupTop + groupH + GAP } }
+            : contRef
+          const nestedDeepest = placeGroup(sg, colCx, bottom, nestedRef)
+          if (nestedDeepest.y > deepest.y) deepest = nestedDeepest
+          cy = groupTop + groupH + GAP
+        }
+      })
+      return deepest
     }
 
-    // 第二遍：分配 y 坐标（决策/分头节点预留下方 fan-out 空间）
+    /** 摆放一个分支组（owner 底边 ownerBottom 下方 FORK_GAP 起）；返回子树最深点 */
+    const placeGroup = (g: FlowBranchGroup, ownerCx: number, ownerBottom: number, contRef: ContRef): Pt => {
+      const widths = g.branches.map(measureBranchW)
+      const groupW = widths.reduce((a, b) => a + b, 0) + Math.max(0, widths.length - 1) * colGap
+      const top = ownerBottom + FORK_GAP
+      let x = ownerCx - groupW / 2
+      let groupDeepest: Pt = { cx: ownerCx, y: ownerBottom }
+      const cols: FanOutColMeta['branches'] = []
+      g.branches.forEach((b, i) => {
+        const colCx = x + widths[i] / 2
+        x += widths[i] + colGap
+        const deepest = placeChain(b, colCx, top, contRef)
+        pendingConverges.push({ from: deepest, ref: contRef })
+        if (deepest.y > groupDeepest.y) groupDeepest = deepest
+
+        // fan-out 连线：owner 底边 → 列首节点（空列直连列顶）；列内连线由 placeChain 产生
+        const headPos = b.chain.length ? fanOutPos[b.chain[0]] : undefined
+        // 0925：直角折线（转弯在分叉带中间，同组各列共用一条水平母线）
+        if (headPos) {
+          fanOutEdges.push({
+            d: elbowVH(ownerCx, ownerBottom, colCx, headPos.top, 12, ownerBottom + FORK_GAP / 2),
+            branchLabel: b.label,
+            condLabel: conditionGroupLabel(b.condition),
+          })
+        } else {
+          fanOutEdges.push({
+            d: elbowVH(ownerCx, ownerBottom, colCx, top, 12, ownerBottom + FORK_GAP / 2),
+            branchLabel: b.label,
+            condLabel: conditionGroupLabel(b.condition),
+          })
+        }
+        cols.push({
+          id: b.id,
+          label: b.label,
+          condLabel: conditionGroupLabel(b.condition),
+          colX: colCx,
+          top,
+          height: Math.max(0, deepest.y - top),
+          chain: b.chain,
+          labelTop: ownerBottom + 4,
+        })
+        // 列标签的 y：放在分叉母线之上、owner 底边下方（不压住连线 / 节点）。
+      // 0926：列标签改为只展示进入条件的纯文本，不再配套底纹框（底纹渲染已移除）。
+      })
+      // 底纹按各列自身深度收边（0925 美化：曾试过同组对齐底边，短列会留一大片空底纹，
+      // 反而让人以为"这个分支还有步骤"，故保持贴合内容）。
+      fanOutColMeta[g.ownerId] = { ownerId: g.ownerId, branches: cols }
+      return groupDeepest
+    }
+
     let y = 0
     main.value.forEach((id) => {
       if (isTerm(id)) {
-        mainPos[id] = { top: y, left: CENTER - TERM_W / 2, height: TERM_H }
+        mainPos[id] = { top: y, left: center - TERM_W / 2, height: TERM_H }
         y += TERM_H + GAP
         return
       }
-      const cfg = configs[id]
       const baseH = nodeHeight(id)
-      mainPos[id] = { top: y, left: CENTER - NODE_W / 2, height: baseH }
-      const bg = branchGroups.find((g) => g.ownerId === id)
-      if (bg && (cfg?.kind === 'decision' || cfg?.kind === 'parallel')) {
-        // fan-out 区域：owner 节点下方 N 列
-        const N = bg.branches.length
-        const colGap = 16
-        const totalWidth = N * NODE_W + Math.max(0, N - 1) * colGap
-        const startCx = CENTER - totalWidth / 2 + NODE_W / 2
-        const ownerBottom = y + baseH
-        const fanOutTop = ownerBottom + GAP
-        const fanOutH = fanOutHeight[id] || 0
-
-        const cols: FanOutColMeta['branches'] = []
-        bg.branches.forEach((b, i) => {
-          const colCx = startCx + i * (NODE_W + colGap)
-          const colLeft = colCx - NODE_W / 2
-          let cy = fanOutTop
-          let chainH = 0
-          for (const nid of b.chain) {
-            const h = nodeHeight(nid)
-            fanOutPos[nid] = { top: cy, left: colLeft, height: h }
-            cy += h + GAP
-            chainH += h + GAP
-          }
-          if (chainH > 0) chainH -= GAP
-          cols.push({
-            id: b.id,
-            label: b.label,
-            condLabel: conditionGroupLabel(b.condition),
-            colX: colCx,
-            top: fanOutTop,
-            height: chainH,
-            chain: b.chain,
-          })
-        })
-        fanOutColMeta[id] = { ownerId: id, branches: cols }
-
-        // 推进 y：owner + GAP + fan-out 高度
-        y = fanOutTop + fanOutH + GAP
+      mainPos[id] = { top: y, left: center - NODE_W / 2, height: baseH }
+      const bg = branchGroupOf(branchGroups, id)
+      if (bg) {
+        // fan-out 区域：owner 节点下方 N 列（含嵌套），占满后 y 继续推进
+        const ref: ContRef = {}
+        ownerContRefs.push({ ownerId: id, ref })
+        y = placeGroup(bg, center, y + baseH, ref).y + GAP
       } else {
         y += baseH + GAP
       }
     })
     const totalHeight = Math.max(560, y)
+
+    // 主链收拢目标：owner 在主链上的下一个节点（摆完主链才知道它的 top）
+    ownerContRefs.forEach(({ ownerId, ref }) => {
+      const nextId = main.value[main.value.indexOf(ownerId) + 1]
+      const pos = nextId ? mainPos[nextId] : undefined
+      ref.pt = pos ? { cx: center, y: pos.top } : null
+    })
+    // 生成汇聚线（列尾 → 收拢目标）。目标不在列尾下方（异常/自环数据）就不画，避免反向线。
+    for (const { from, ref } of pendingConverges) {
+      const to = ref.pt
+      if (!to || to.y <= from.y + 1) continue
+      fanOutEdges.push({ d: elbowVH(from.cx, from.y, to.cx, to.y, 12, to.y - CONVERGE_BUS) })
+    }
 
     // 旁路挂靠（BranchSeed）
     branches.forEach((b) => {
@@ -249,7 +395,7 @@ export const useFlowStore = defineStore('flow', () => {
       if (!anchor || !configs[b.id]) return
       branchPos[b.id] = {
         top: anchor.top,
-        left: CENTER - NODE_W / 2 + (b.side === 'left' ? -SIDE_OFFSET : SIDE_OFFSET),
+        left: center - NODE_W / 2 + (b.side === 'left' ? -SIDE_OFFSET : SIDE_OFFSET),
         height: NODE_H,
       }
     })
@@ -259,11 +405,11 @@ export const useFlowStore = defineStore('flow', () => {
     const terminals: PlacedTerm[] = []
     main.value.forEach((id) => {
       if (isTerm(id)) terminals.push({ id, label: TERMINALS[id], pos: mainPos[id] })
-      else if (configs[id]) nodes.push({ id, cfg: configs[id], pos: mainPos[id], branch: false })
+      else if (configs[id]) nodes.push({ id, cfg: configs[id], pos: mainPos[id], branch: false, orphan: orphanIds.value.includes(id) })
     })
     // fan-out 节点
     for (const fid of Object.keys(fanOutPos)) {
-      if (configs[fid]) nodes.push({ id: fid, cfg: configs[fid], pos: fanOutPos[fid], branch: true })
+      if (configs[fid]) nodes.push({ id: fid, cfg: configs[fid], pos: fanOutPos[fid], branch: true, orphan: orphanIds.value.includes(fid) })
     }
     // 旁路挂靠
     branches.forEach((b) => {
@@ -287,14 +433,14 @@ export const useFlowStore = defineStore('flow', () => {
       mainEdges.push({
         fromId: a,
         toId: b,
-        d: `M${CENTER} ${aBottom} L${CENTER} ${bTop}`,
+        d: `M${center} ${aBottom} L${center} ${bTop}`,
         rule: Boolean(configs[b] && /规则/.test(configs[b].title)),
-        lx: CENTER + 118,
+        lx: center + 118,
         ly: (aBottom + bTop) / 2,
       })
     }
 
-    // 旁路 bezier 连线
+    // 旁路 bezier 连线（旁路节点固定挂在主链左右两侧 SIDE_OFFSET 处：起点/终点取节点中线 ±110，弧顶 ±195）
     const branchEdges: BranchEdge[] = []
     branches.forEach((b) => {
       const bp = branchPos[b.id]
@@ -305,62 +451,14 @@ export const useFlowStore = defineStore('flow', () => {
       const mainMid = mp.top + mp.height / 2
       branchEdges.push({
         d: b.side === 'right'
-          ? `M430 ${mainMid} C515 ${mainMid} 515 ${branchMid} 430 ${branchMid}`
-          : `M210 ${mainMid} C125 ${mainMid} 125 ${branchMid} 210 ${branchMid}`,
+          ? `M${center + 110} ${mainMid} C${center + 195} ${mainMid} ${center + 195} ${branchMid} ${center + 110} ${branchMid}`
+          : `M${center - 110} ${mainMid} C${center - 195} ${mainMid} ${center - 195} ${branchMid} ${center - 110} ${branchMid}`,
       })
     })
 
-    // 0707 优化·Phase6：fan-out 分支连线
-    for (const id of main.value) {
-      const meta = fanOutColMeta[id]
-      if (!meta) continue
-      const ownerCx = CENTER
-      const ownerBottom = mainPos[id] ? mainPos[id].top + mainPos[id].height : 0
-      for (const br of meta.branches) {
-        if (!br.chain.length) {
-          fanOutEdges.push({ d: `M${ownerCx} ${ownerBottom} L${br.colX} ${br.top}`, branchLabel: br.label, condLabel: br.condLabel })
-          continue
-        }
-        const firstId = br.chain[0]
-        const firstPos = fanOutPos[firstId]
-        if (firstPos) {
-          const firstCx = firstPos.left + NODE_W / 2
-          const firstTop = firstPos.top
-          fanOutEdges.push({
-            d: `M${ownerCx} ${ownerBottom} C${ownerCx} ${(ownerBottom + firstTop) / 2} ${firstCx} ${(ownerBottom + firstTop) / 2} ${firstCx} ${firstTop}`,
-            branchLabel: br.label,
-            condLabel: br.condLabel,
-          })
-        }
-        for (let i = 0; i < br.chain.length - 1; i++) {
-          const aId = br.chain[i]
-          const bId = br.chain[i + 1]
-          const aPos = fanOutPos[aId]
-          const bPos = fanOutPos[bId]
-          if (!aPos || !bPos) continue
-          const aCx = aPos.left + NODE_W / 2
-          const aBottom = aPos.top + aPos.height
-          const bCx = bPos.left + NODE_W / 2
-          const bTop = bPos.top
-          fanOutEdges.push({ d: `M${aCx} ${aBottom} L${bCx} ${bTop}` })
-        }
-        // fan-in 收拢：列尾 → 汇合点（owner 在主链上的下一个节点）
-        const ownerIdx = main.value.indexOf(id)
-        const convergeId = main.value[ownerIdx + 1]
-        if (convergeId && mainPos[convergeId]) {
-          const lastId = br.chain[br.chain.length - 1]
-          const lastPos = fanOutPos[lastId]
-          if (lastPos) {
-            const lastCx = lastPos.left + NODE_W / 2
-            const lastBottom = lastPos.top + lastPos.height
-            const convergeCx = CENTER
-            const convergeTop = mainPos[convergeId].top
-            fanOutEdges.push({ d: `M${lastCx} ${lastBottom} C${lastCx} ${(lastBottom + convergeTop) / 2} ${convergeCx} ${(lastBottom + convergeTop) / 2} ${convergeCx} ${convergeTop}` })
-          }
-        }
-      }
-    }
-
+    // 0707 优化·Phase6：fan-in 收拢（列尾 → 汇合点）。
+    // 0925 视觉修复：连线在 placeGroup/placeChain 里生成（列尾 = 该列子树最深节点，含嵌套），
+    // 上面 pendingConverges 已统一解析并 push——这里不再重复生成（重复就是双层描边 / 反向线）。
     return {
       nodes,
       terminals,
@@ -370,6 +468,10 @@ export const useFlowStore = defineStore('flow', () => {
       fanOutColMeta,
       slots,
       totalHeight,
+      /** 画布内容宽度（0925）：随最宽分支组自适应，FlowBoard 用它设容器/SVG 宽度（≥640） */
+      width,
+      /** 主链轴心 x（= width/2，0925）：插入点等需要对齐主链的元素用它，不再写死 320 */
+      axisX: center,
     }
   })
 
@@ -486,7 +588,7 @@ export const useFlowStore = defineStore('flow', () => {
 
   function addNodeToBranch(ownerId: string, branchId: string, template: string): string | null {
     if (template === 'decision' || template === 'parallel') return null
-    const g = branchGroups.find((bg) => bg.ownerId === ownerId)
+    const g = branchGroupOf(branchGroups, ownerId)
     const branch = g?.branches.find((b) => b.id === branchId)
     if (!branch) return null
     const srcKey = TEMPLATE_TO_NODE[template] || 'web-list'
@@ -567,17 +669,27 @@ export const useFlowStore = defineStore('flow', () => {
     configs[newId] = cfg
     const idx = main.value.indexOf(id)
     if (idx >= 0) main.value.splice(idx + 1, 0, newId)
-    const bg = branchGroups.find((g) => g.ownerId === id)
+    const bg = branchGroupOf(branchGroups, id)
     if (bg) {
-      const newBg: FlowBranchGroup = {
-        ownerId: newId,
-        branches: bg.branches.map((b) => ({
+      const cloneGroup = (g: FlowBranchGroup, targetOwner: string, nested = false): FlowBranchGroup => ({
+        ownerId: targetOwner,
+        branches: g.branches.map((b) => ({
           ...b,
-          id: `${newId}-b-${b.id.split('-b-')[1] ?? `copy-${branchSeq++}`}`,
+          // 分支 id 必须重新铸新，否则与原件撞 id（v-for key / 分支添加入口全乱）
+          id: nested
+            ? `${targetOwner}-b-copy-${branchSeq++}`
+            : `${targetOwner}-b-${b.id.split('-b-')[1] ?? `copy-${branchSeq++}`}`,
           chain: [...b.chain],
+          // 0926 REVIEW F3：嵌套子组 owner 不沿用原件链节点 id——同一链节点若被原件与多份
+          // 副本的嵌套分叉同时声明（连做两次复制），branchGroupOf 命中歧义。副本的嵌套
+          // owner 从副本 owner 派生（渲染/摆放按链锚点定位，不受 ownerId 影响；lastStep
+          // 解析仍以原件分组为准——链节点 id 未复刻，原件恒先命中）。
+          ...(b.subGroups?.length
+            ? { subGroups: b.subGroups.map((sg) => cloneGroup(sg, `${targetOwner}-nested-${branchSeq++}`, true)) }
+            : {}),
         })),
-      }
-      branchGroups.push(newBg)
+      })
+      branchGroups.push(cloneGroup(bg, newId))
     }
     select(newId)
     nodeStore.touchFlow()
@@ -630,7 +742,7 @@ export const useFlowStore = defineStore('flow', () => {
   }
 
   function insertInBranch(ownerId: string, branchId: string, newNodeId: string, index?: number): boolean {
-    const g = branchGroups.find((bg) => bg.ownerId === ownerId)
+    const g = branchGroupOf(branchGroups, ownerId)
     if (!g) return false
     const branch = g.branches.find((b) => b.id === branchId)
     if (!branch) return false
@@ -646,20 +758,32 @@ export const useFlowStore = defineStore('flow', () => {
   }
 
   function removeBranchGroup(ownerId: string) {
-    const i = branchGroups.findIndex((bg) => bg.ownerId === ownerId)
-    if (i < 0) return
-    const g = branchGroups[i]
-    const orphans = new Set(g.branches.flatMap((b) => b.chain))
-    for (const orphan of orphans) delete configs[orphan]
-    branchGroups.splice(i, 1)
-    nodeStore.touchFlow()
+    // 0925：分支组可能嵌在别的分支的 subGroups 里（还原拓扑），递归找再摘
+    const removeFrom = (groups: FlowBranchGroup[]): boolean => {
+      const i = groups.findIndex((bg) => bg.ownerId === ownerId)
+      if (i >= 0) {
+        const g = groups[i]
+        const orphans = allBranchChainNodes([g])
+        for (const orphan of orphans) delete configs[orphan]
+        groups.splice(i, 1)
+        return true
+      }
+      for (const g of groups) {
+        for (const b of g.branches) {
+          if (b.subGroups?.length && removeFrom(b.subGroups)) return true
+        }
+      }
+      return false
+    }
+    if (removeFrom(branchGroups)) nodeStore.touchFlow()
   }
 
-  function detachFromBranches(nodeId: string) {
-    for (const g of branchGroups) {
+  function detachFromBranches(nodeId: string, groups?: FlowBranchGroup[]) {
+    for (const g of groups ?? branchGroups) {
       for (const b of g.branches) {
         const i = b.chain.indexOf(nodeId)
         if (i >= 0) b.chain.splice(i, 1)
+        if (b.subGroups?.length) detachFromBranches(nodeId, b.subGroups)
       }
     }
   }
@@ -674,14 +798,10 @@ export const useFlowStore = defineStore('flow', () => {
       // eslint-disable-next-line no-console
       console.info('[TODO S6-3] 节点删除待清理资源（本期不真删，见方案 §4.4，后端接口就绪后再接）：', cleanup)
     }
-    // 分支段 owner 本身被删：连带整组分支
-    const bgIdx = branchGroups.findIndex((bg) => bg.ownerId === id)
-    if (bgIdx >= 0) {
-      removeBranchGroup(id)
-    } else {
-      // 删节点时，从所有 FlowBranchGroup 的 chain 里摘除
-      detachFromBranches(id)
-    }
+    // 分支段 owner 本身被删：连带整组分支（0925：嵌套组 owner 同样命中，递归摘除）
+    if (branchGroupOf(branchGroups, id)) removeBranchGroup(id)
+    // 删节点时，从所有 FlowBranchGroup 的 chain 里摘除（含嵌套；owner 删组后残留的链位一并清掉）
+    detachFromBranches(id)
     delete configs[id]
     const idx = main.value.indexOf(id)
     if (idx >= 0) main.value.splice(idx, 1)
@@ -891,13 +1011,18 @@ export const useFlowStore = defineStore('flow', () => {
     delete configs[from]
     const i = main.value.indexOf(from)
     if (i >= 0) main.value[i] = to
-    for (const g of branchGroups) {
+    // 0926 REVIEW F-R1：分支组允许 subGroups 嵌套（还原拓扑 / 复制产物）后，换绑必须递归
+    // 遍历全部组——原先只改顶层组的 ownerId 与 chain，嵌套子分叉链里新建的节点（草稿 id）
+    // 落库换绑后画布/流程定义仍引用旧 id：节点从画布消失、保存的 flowConf 残留失效 id。
+    const rebindGroup = (g: FlowBranchGroup) => {
       if (g.ownerId === from) g.ownerId = to
       for (const b of g.branches) {
         const j = b.chain.indexOf(from)
         if (j >= 0) b.chain[j] = to
+        for (const sg of b.subGroups ?? []) rebindGroup(sg)
       }
     }
+    for (const g of branchGroups) rebindGroup(g)
     for (const b of branches) {
       if (b.id === from) b.id = to
     }
@@ -919,6 +1044,7 @@ export const useFlowStore = defineStore('flow', () => {
     Object.assign(configs, normalizeNodeConfigs(JSON.parse(JSON.stringify(def.configs)) as Record<string, NodeConfig>))
     branches.splice(0, branches.length, ...(JSON.parse(JSON.stringify(def.branches)) as BranchSeed[]))
     main.value = [...def.main]
+    orphanIds.value = [...(def.orphanIds ?? [])]
     sourceCfg.value = def.source ? (JSON.parse(JSON.stringify(def.source)) as Source) : null
     // 0806：历史流程的 Source/TaskConfig 定时字段仍需迁移，但不再把登录节点当作采集起点。
     const firstNodeId = main.value.find((nodeId) => {
@@ -966,6 +1092,7 @@ export const useFlowStore = defineStore('flow', () => {
 
   function newFlow(kind: 'blank' | 'standard' = 'blank') {
     sourceStore.resetAllContext()
+    flowIdMode.value = false
     load(kind === 'standard' ? makeStandardFlow() : makeBlankFlow())
   }
 
@@ -973,6 +1100,7 @@ export const useFlowStore = defineStore('flow', () => {
     const result = sourceStore.loadFromSource(source, steps, persistedDef)
     if (result) {
       sourceCtx.value = result.sourceCtx
+      flowIdMode.value = false
       load(result.def)
     }
   }
@@ -981,9 +1109,15 @@ export const useFlowStore = defineStore('flow', () => {
     sourceStore.clearSourceCtx()
   }
 
+  /** 0926：清源上下文但保留步骤快照（流程工作区抽屉用，见 sourceStore.clearSourceCtxKeepSteps） */
+  function clearSourceCtxKeepSteps() {
+    sourceStore.clearSourceCtxKeepSteps()
+  }
+
   function startSiteFlow(site: Site, def?: FlowDef | null) {
     const flowDef = sourceStore.startSiteFlow(site, def)
     sourceCtx.value = null
+    flowIdMode.value = false
     load(flowDef)
     activeTab.value = 'config'
   }
@@ -999,6 +1133,7 @@ export const useFlowStore = defineStore('flow', () => {
   function startDraftSource(source: Source) {
     const flowDef = sourceStore.startDraftSource(source)
     sourceCtx.value = flowDef.source ? (JSON.parse(JSON.stringify(flowDef.source)) as Source) : null
+    flowIdMode.value = false
     load(flowDef)
   }
 
@@ -1090,12 +1225,9 @@ export const useFlowStore = defineStore('flow', () => {
     if (idx >= 0) return def.main.slice(0, idx).some((pid) => !!def.configs[pid] && !isTerm(pid))
     const side = def.branches.find((item) => item.id === id)
     if (side) return !!def.configs[side.rowAnchor]
-    for (const group of def.branchGroups ?? []) {
-      for (const branch of group.branches) {
-        const chainIndex = branch.chain.indexOf(id)
-        if (chainIndex < 0) continue
-        return chainIndex > 0 || !!def.configs[group.ownerId]
-      }
+    const found = branchOfNode(def.branchGroups, id)
+    if (found) {
+      return found.chainIndex > 0 || !!def.configs[found.group.ownerId]
     }
     return false
   }
@@ -1106,14 +1238,8 @@ export const useFlowStore = defineStore('flow', () => {
     const errs: string[] = []
     const mainIds = d.main.filter((idv) => !isTerm(idv))
     const branchIds = d.branches.map((b) => b.id).filter((id) => !isTerm(id))
-    const chainIds: string[] = []
-    for (const bg of d.branchGroups ?? []) {
-      for (const b of bg.branches) {
-        for (const nid of b.chain) {
-          if (!isTerm(nid) && !chainIds.includes(nid)) chainIds.push(nid)
-        }
-      }
-    }
+    // 0925：chain 覆盖嵌套 subGroups（还原拓扑的链内再分叉）
+    const chainIds = allBranchChainNodes(d.branchGroups).filter((nid) => !isTerm(nid))
     if (!mainIds.length) errs.push('流程为空：至少添加一个节点')
     const allIds = [...mainIds, ...branchIds, ...chainIds]
     allIds.forEach((nid) => {
@@ -1232,6 +1358,9 @@ export const useFlowStore = defineStore('flow', () => {
     sourceCtx,
     sourceCfg,
     siteCtx,
+    // 流程工作区形态标志（0926）：写路径按 flowId 锚定 vs 源视角按 mainConfig/源锚定
+    flowIdMode,
+    setFlowIdMode,
     selectedId,
     activeTab,
     dirty,
@@ -1247,6 +1376,8 @@ export const useFlowStore = defineStore('flow', () => {
     // 布局
     layout,
     horizontalLayout,
+    // 孤儿步骤（0925：随流程加载推导，仅供画布标记与关联修复）
+    orphanIds,
     // 选择
     select,
     setActiveTab,
@@ -1281,6 +1412,7 @@ export const useFlowStore = defineStore('flow', () => {
     newFlow,
     loadFromSource,
     clearSourceCtx,
+    clearSourceCtxKeepSteps,
     startSiteFlow,
     clearSiteCtx,
     setSiteDisplayCtx,

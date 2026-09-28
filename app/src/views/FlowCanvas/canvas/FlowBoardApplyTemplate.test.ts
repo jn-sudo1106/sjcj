@@ -42,6 +42,9 @@ describe('FlowBoard · 从流程模板套用（Y8-C）', () => {
     const copyFlow = vi.spyOn(flowCenterApi, 'copy')
     vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...SOURCE, flowId: '1400917' })
     vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
+    // 套用成功后 reloadSourceIntoCanvas 走 flowId 分支（源已绑流程），显式 mock 掉步骤查询，
+    // 避免落到真实 mock 通道的 120ms 延迟尾部（0926 REVIEW F-R10）
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
 
     const { wrapper } = await mountEmptyCanvas()
     await wrapper.get('[data-testid="apply-flow-template"]').trigger('click')
@@ -85,12 +88,14 @@ describe('FlowBoard · 从流程模板套用（Y8-C）', () => {
     vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: '1400760' } as never)
     vi.spyOn(flowCenterApi, 'copyTemplateSteps').mockResolvedValue({ ok: true })
     vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...SOURCE, flowId: '1400917' })
-    const steps = vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
+    // 0925 整体切 flowId：源已绑流程时重载按流程查（svg=true 自带真实根节点行，lastStep 已改写
+    // 为根 ID），不再走 sourceSteps——源视角查询缺根行，会把挂根步骤误判成孤儿。
+    const steps = vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
 
     const { wrapper } = await mountEmptyCanvas()
     await wrapper.get('[data-testid="apply-flow-template"]').trigger('click')
     await flushPromises()
 
-    expect(steps).toHaveBeenCalledWith('430016398', { withConfigDetails: false })
+    expect(steps).toHaveBeenCalledWith('1400917', { withConfigDetails: false })
   })
 })

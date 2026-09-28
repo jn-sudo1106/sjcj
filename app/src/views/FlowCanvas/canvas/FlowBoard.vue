@@ -1,17 +1,25 @@
+<script lang="ts">
+// 0927 P1-4：计数器必须放模块级（独立 script 块）——script setup 每挂载一个实例就重跑一遍，
+// 写在里面恒为 rc-arrow-1，0926 F-R15 的「marker id 实例化」修复实际不生效（先挂实例一卸载
+// 箭头就集体消失）。ProcessNodeRail.vue 同款修复用 <script setup> 外的模块变量才是对的写法。
+let flowBoardSeq = 0
+</script>
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
+import { useSourceStore } from '@/stores/source'
 import { useDuplicateNode } from './useDuplicateNode'
 import { useStepWrite } from './useStepWrite'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
 import { entryApi, flowApi, flowCenterApi, type FlowRecord } from '@/api'
+import { relinkCandidates, validFlowIdOf } from '@/utils/flow/stepPersist'
 import CanvasHeader from '../shared/CanvasHeader.vue'
 import AddNodePopover from './AddNodePopover.vue'
 import FlowXmlDialog from './FlowXmlDialog.vue'
 import { flowToXml } from '@/utils/flow/flowXml'
-import { applyTemplateToSource, reloadSourceIntoCanvas } from '@/utils/flow/applyTemplateToSource'
+import { applyTemplateToSource, reloadFlowIntoCanvas, reloadSourceIntoCanvas } from '@/utils/flow/applyTemplateToSource'
 import {
   effectiveOutputTable,
   iconFor,
@@ -20,17 +28,26 @@ import {
   isDecision,
   isParallel,
   nodeClassFor,
+  nodeEntryCondition,
   nodeOutputTable,
+  nodeInputTable,
   nodeTypeLabel,
   collectorCapabilityOf,
+  conditionGroupIsSet,
+  conditionGroupLabel,
   type NodeConfig,
 } from './flowModel'
+
+// 0927 P1-4 收尾：marker id 实例化。计数器在文件顶部独立 <script> 块里（模块级唯一），
+// 这行语句必须留在 import 区之后——插在 import 之间会让其后所有 import 解析失败
+// （vue-tsc：TS1232 + TS2307 + 连带 any）。
+const markerPrefix = `rc-arrow-${++flowBoardSeq}`
 
 const props = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
 const flow = useFlowStore()
 // 复制节点 = 新增一套配置（0828 D02）：副本必须绑一份新配置，不能沿用原 configId
 const duplicateNode = useDuplicateNode()
-const { deleteCanvasNode } = useStepWrite()
+const { deleteCanvasNode, relinkOrphan } = useStepWrite()
 const runtime = useRuntimeStore()
 const ui = useUiStore()
 const flowEl = ref<HTMLElement | null>(null)
@@ -110,7 +127,10 @@ async function recommendTemplateFlow() {
   recommending.value = true
   try {
     const prompt = [flow.sourceCtx?.name, flow.sourceCfg?.url, flow.sourceCtx?.url].filter(Boolean).join(' ')
-    const [recommendation, templates] = await Promise.all([flowApi.flowRecommend(prompt), flowCenterApi.list()])
+    // 0925 REVIEW：候选必须是「可复用流程」= 模板全集（templates() 不分页、templateFlag=1、仅有效流程）；
+    // 原来用 list()（paged 前 500 条按 updateDt 倒序）——推荐 id 若落在第 500 名之后必然落空，只剩无谓的
+    // preset-web-public 兜底。preset-web-public 是 mock 时代的假 id，真实后端永远找不到，保留只作最后兜底。
+    const [recommendation, templates] = await Promise.all([flowApi.flowRecommend(prompt), flowCenterApi.templates()])
     const template = (recommendation.templateId ? templates.find((item) => item.id === recommendation.templateId) : undefined)
       ?? templates.find((item) => item.id === 'preset-web-public')
     if (!template) {
@@ -144,16 +164,19 @@ const nodePalette = reactive({ show: false, x: 0, y: 0 })
 // （比如「6200026 → ?」），用户看不出是哪张表。按 id 查一次 entryDetail 换成业务名
 // （没有业务名退物理表名），查询期间先显示 id 兜底，缓存后同一个 id 不重复查。
 // 标注本身是画布上的小字浮层，不叠 RuleTableFieldBinder 下拉里"业务名 · 物理表名"那种全称格式。
+// 0926 拍板：**卡片上的输入/输出表展示需要同时带表 ID**（业务沟通都用 id），连线小字浮层空间
+// 有限仍只显示名称——withId 只给卡片用。
 const edgeTableLabelCache = reactive<Record<string, string>>({})
 const edgeTableLabelPending = new Set<string>()
-function edgeTableLabel(tableId: string): string {
+function edgeTableLabel(tableId: string, withId = false): string {
   if (!edgeTableLabelCache[tableId] && !edgeTableLabelPending.has(tableId)) {
     edgeTableLabelPending.add(tableId)
     entryApi.entryDetail(tableId)
       .then((detail) => { edgeTableLabelCache[tableId] = detail ? (detail.name || detail.tableName) : tableId })
       .catch(() => { edgeTableLabelCache[tableId] = tableId })
   }
-  return edgeTableLabelCache[tableId] || tableId
+  const name = edgeTableLabelCache[tableId] || tableId
+  return withId && name !== tableId ? `${name} (${tableId})` : name
 }
 
 // 连线表关系标注（Phase 4.2；0701 问题五升级；0707 连线配置撤掉后纯读节点级数据；0901 加有效输出表兜底）：
@@ -199,26 +222,29 @@ function hasLoginConfig(cfg: NodeConfig): boolean {
 // "停止"即"数据在此节点不处理"——均为纯文案层，disabled 字段名/序列化结构不变。
 // 与 runtime.isRunnable 同源判定：登录和规则节点按各自能力判断，不能只看输出表。
 /**
- * 节点卡片上的表标签（2026-09-04 修）。
+ * 节点卡片上的表标签（2026-09-04 修；0926 拍板「展示一一输入输出表」）。
  *
- * 原来无条件用 `effectiveOutputTable`（= 输出表 || 输入表）并把结果标成「输出表 X」。
- * 那条回退只对**非采集节点**成立——它们的输出表编辑框自己写着「默认继承上游节点」。
- * **采集节点的编辑框写的是「请选择输出表」，输出表是必填的**，所以对采集节点做同样的回退
- * 等于拿输入表冒充输出表：卡片显示「⊞ TEST_ADB」，底部却是「待配置」，看上去自相矛盾
- * （用户原话：这里已经配置了，但是画布上的状态还是待配置）。实为配置 1400990 的
- * `outEntry` 是 null、`entryTypeId`=6200026(TEST_ADB)，即只有输入表、没有输出表。
- *
- * 现在采集节点缺输出表时照实说：标成输入表、加 `→ ?`，跟「待配置」对得上。
+ * 0926 起卡片把**输入表 → 输出表**成对展示（输入取画布继承链 effectiveInputTableFor，
+ * 输出取显式 nodeOutputTable）：
+ *  - 输入、输出都有：`⊞ 输入表 → 输出表`；
+ *  - 采集节点缺输出表：`⊞ 输入表 → ?`（unset，title 说明没设置输出表——它的编辑框写着
+ *    「请选择输出表」，输出表必填，不能拿输入表冒充，2026-09-04 用户实例：流程 1400984）；
+ *  - 非采集节点缺显式输出表：只显示输入表（title 说明「默认继承输入表」——编辑框承诺过）
+ *  - 都没有：不显示。
  */
-function tableChip(cfg: NodeConfig): { label: string; title: string; unset: boolean } | null {
-  const explicit = nodeOutputTable(cfg)
-  if (explicit) return { label: edgeTableLabel(explicit), title: `输出表 ${edgeTableLabel(explicit)}`, unset: false }
-  const fallback = effectiveOutputTable(cfg)
-  if (!fallback) return null
-  const label = edgeTableLabel(fallback)
-  // 非采集节点的回退是编辑框承诺过的，照旧当输出表显示
-  if (!cfg.collectCfg) return { label, title: `输出表 ${label}（未显式设置，默认继承上游）`, unset: false }
-  return { label, title: `输入表 ${label} · 尚未设置输出表`, unset: true }
+function tableChip(cfg: NodeConfig, id?: string): { label: string; title: string; unset: boolean } | null {
+  const inp = id ? flow.effectiveInputTableFor(id) : nodeInputTable(cfg)
+  const out = nodeOutputTable(cfg)
+  if (!inp && !out) return null
+  if (out) {
+    const outLabel = edgeTableLabel(out, true)
+    if (!inp) return { label: outLabel, title: `输出表 ${outLabel}`, unset: false }
+    const inpLabel = edgeTableLabel(inp, true)
+    return { label: `${inpLabel} → ${outLabel}`, title: `输入表 ${inpLabel} → 输出表 ${outLabel}`, unset: false }
+  }
+  const inpLabel = edgeTableLabel(inp, true)
+  if (cfg.collectCfg) return { label: `${inpLabel} → ?`, title: `输入表 ${inpLabel} · 尚未设置输出表`, unset: true }
+  return { label: inpLabel, title: `输入表 ${inpLabel} · 输出表未显式设置，默认继承输入表`, unset: false }
 }
 
 /** 「待配置」到底缺什么——只写状态不写原因，用户没法自查。 */
@@ -393,6 +419,82 @@ function menuAction(action: string) {
   else if (action === 'delete' && id) void deleteCanvasNode(id)
 }
 
+// 孤儿步骤关联（0925）：解析不出 lastStep 的步骤节点在画布上带「孤儿」标记，
+// 点它把归属显式挂到某个已有节点（写 stepModify lastStep=目标 → 重载画布重建树）。
+const sourceStore = useSourceStore()
+const relink = reactive<{ show: boolean; nodeId: string; nodeTitle: string; targetId: string }>({
+  show: false, nodeId: '', nodeTitle: '', targetId: '',
+})
+const relinking = ref(false)
+
+// 候选计算见 utils/flow/stepPersist.ts 的 relinkCandidates：
+//   - 排除孤儿自己及其子子孙孙（按快照 dependsOn 闭包，防成环）；
+//   - **流程入口（'0' 虚拟入口 / isRoot 真实根行）也允许**——孤儿最常见的正确归属就是
+//     「挂回入口」（lastStep 指向入口 = 旧平台的"挂在根上"，后端归一回 '0' 哨兵），
+//     此前入口被排除导致只挂得回入口的孤儿下拉是空的（2026-09-26 用户反馈）；
+//   - 候选只看画布（configs），不要求步骤快照——快照是写入时才需要的。
+const relinkTargets = computed(() => {
+  const id = relink.nodeId
+  if (!id) return []
+  return relinkCandidates(flow.main, flow.branchGroups, flow.configs, sourceStore.stepSnapshots, id)
+})
+
+/**
+ * 分支列标签（0926 视觉调整）：不再画橙色底纹框/胶囊底色，只展示**该分支各步骤的进入条件**——
+ *  1. 列首节点自己的进入条件（历史流程的条件在目标步骤 entryCondition 上，不在分支对象上；
+ *     0925 前画布从不展示这批条件，用户反馈「应该只要展示各个步骤进入的条件」）；
+ *  2. 分支条件（决策/分头节点的 FlowBranch.condition，用户点分支时在编辑器里配的）；
+ *  3. 都没有才回退分支名（否则一列条件缺失时整列没有标识）。
+ */
+function branchColText(br: { label: string; condLabel: string; chain: string[] }): string {
+  const head = br.chain[0]
+  const headCond = head ? conditionGroupLabel(nodeEntryCondition(flow.configs[head])) : ''
+  return headCond || br.condLabel || br.label
+}
+
+/** 0926 反馈「步骤的进入条件没在流程图上展示」：普通节点卡片的进入条件文案；未设条件返回空串（不占行） */
+function nodeCondText(cfg: NodeConfig): string {
+  const group = nodeEntryCondition(cfg)
+  return group && conditionGroupIsSet(group) ? conditionGroupLabel(group) : ''
+}
+
+function openRelinkDialog(nodeId: string) {
+  // 关联会重载画布（本地拼树会丢掉未保存的草稿），脏画布先拦下
+  if (flow.dirty) {
+    ElMessage.warning('画布有未保存的改动，请稍候自动保存完成后再调整节点归属')
+    return
+  }
+  relink.nodeId = nodeId
+  relink.nodeTitle = flow.configs[nodeId]?.title ?? nodeId
+  relink.targetId = ''
+  relink.show = true
+}
+
+async function doRelink() {
+  if (!relink.targetId || relinking.value) return
+  const sourceId = flow.sourceCtx?.sourceId
+  relinking.value = true
+  try {
+    await relinkOrphan(relink.nodeId, relink.targetId)
+    relink.show = false
+    ElMessage.success('归属已保存，正在重新加载画布…')
+    if (sourceId) {
+      if (!await reloadSourceIntoCanvas(sourceId)) ElMessage.warning('归属已保存，但画布重新加载失败，请刷新页面查看')
+      return
+    }
+    // 无源上下文（流程工作区抽屉）：按流程 ID 重载，与 deriveFromFlowConfig 同一条路径
+    // 0927 P2-4：口径收敛到 stepPersist.validFlowIdOf（四处共用）。
+    const flowId = validFlowIdOf(flow.sourceCfg?.flowId ?? flow.sourceCtx?.flowId ?? flow.flowId)
+    if (!flowId || !await reloadFlowIntoCanvas(flowId)) {
+      ElMessage.warning('归属已保存，但画布重新加载失败，请刷新页面查看')
+    }
+  } catch (e) {
+    ElMessage.error(`关联失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    relinking.value = false
+  }
+}
+
 // 单节点运行（右键菜单入口，S7-1 改判 0806）：与 NodeInspector 头部按钮同一套 runtime.runSingleNode，
 // 只是不用先选中/打开节点面板——右键即可发起，跟"上移/下移/运行 停止"这些既有的免选中操作放一起更顺手。
 function runNode(id: string) {
@@ -500,12 +602,26 @@ watch(
     >＋</button>
 
     <div ref="canvasScrollEl" class="rc-canvas-scroll" @dragover="onDragOver" @drop="onDrop">
-      <div ref="flowEl" class="rc-flow" :style="{ height: flow.layout.totalHeight + 'px' }">
-        <svg :width="640" :height="flow.layout.totalHeight" :viewBox="`0 0 640 ${flow.layout.totalHeight}`" aria-hidden="true">
-          <path v-for="(e, i) in flow.layout.mainEdges" :key="'m' + i" class="rc-edge" :class="{ rule: e.rule }" :d="e.d" />
-          <path v-for="(e, i) in flow.layout.branchEdges" :key="'b' + i" class="rc-edge" :d="e.d" />
-          <!-- 0707 优化·Phase6：决策/分头节点的 fan-out 分支连线 -->
-          <path v-for="(e, i) in flow.layout.fanOutEdges" :key="'f' + i" class="rc-edge fan-out" :d="e.d" />
+      <div ref="flowEl" class="rc-flow" :style="{ height: flow.layout.totalHeight + 'px', width: flow.layout.width + 'px' }">
+        <svg :width="flow.layout.width" :height="flow.layout.totalHeight" :viewBox="`0 0 ${flow.layout.width} ${flow.layout.totalHeight}`" aria-hidden="true">
+          <!-- 0925 视觉修复：连线补方向箭头（原来一条箭头都没有，分叉/汇聚看不出流向）。三种线色各配一个
+               marker：主链/旁路灰、fan-out 分叉琥珀、规则边蓝；markerUnits=userSpaceOnUse 保证缩放/线宽变化
+               时箭头大小稳定。箭头端点即目标节点顶边（refY 居中、refX 收在尖端）。 -->
+          <defs>
+            <marker :id="markerPrefix" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto" markerUnits="userSpaceOnUse">
+              <path d="M0 0.6L7.4 4L0 7.4L1.8 4Z" fill="#94a3b8" />
+            </marker>
+            <marker :id="`${markerPrefix}-fan`" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto" markerUnits="userSpaceOnUse">
+              <path d="M0 0.6L7.4 4L0 7.4L1.8 4Z" fill="#f59e0b" />
+            </marker>
+            <marker :id="`${markerPrefix}-rule`" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto" markerUnits="userSpaceOnUse">
+              <path d="M0 0.6L7.4 4L0 7.4L1.8 4Z" fill="#60a5fa" />
+            </marker>
+          </defs>
+          <path v-for="(e, i) in flow.layout.mainEdges" :key="'m' + i" class="rc-edge" :class="{ rule: e.rule }" :d="e.d" :marker-end="e.rule ? `url(#${markerPrefix}-rule)` : `url(#${markerPrefix})`" />
+          <path v-for="(e, i) in flow.layout.branchEdges" :key="'b' + i" class="rc-edge" :d="e.d" :marker-end="`url(#${markerPrefix})`" />
+          <!-- 0707 优化·Phase6：决策/分头节点的 fan-out 分支连线（0925 改实线：虚线+无箭头是"看不出流向"的主因） -->
+          <path v-for="(e, i) in flow.layout.fanOutEdges" :key="'f' + i" class="rc-edge fan-out" :d="e.d" :marker-end="`url(#${markerPrefix}-fan)`" />
         </svg>
 
         <!-- 空白源画布引导卡 -->
@@ -540,7 +656,7 @@ watch(
           :key="'s' + i"
           class="rc-drop-slot"
           type="button"
-          :style="{ top: s.top + 'px' }"
+          :style="{ top: s.top + 'px', left: (flow.layout.axisX - 20) + 'px' }"
           aria-label="插入节点"
           @click.stop="openAddPopover($event.clientX, $event.clientY, s.afterId)"
           @dragover="onDragOver"
@@ -556,16 +672,15 @@ watch(
         >{{ edgeTableTag(e.fromId, e.toId) }}</div>
         </template>
 
-        <!-- 0707 优化·Phase6：决策/分头节点的 fan-out 分支列标签（分支名 + 条件摘要） -->
+        <!-- 0707 优化·Phase6：决策/分头节点的 fan-out 分支列标签（0926 起只展示该分支/首步骤的进入条件，无底色无边框） -->
         <template v-for="(col, ownerId) in flow.layout.fanOutColMeta" :key="'col-' + ownerId">
           <template v-for="br in col.branches" :key="'coltag-' + br.id">
             <div
+              v-if="branchColText(br)"
               class="rc-fanout-col-tag"
-              :style="{ left: (br.colX - 60) + 'px', top: (br.top - 16) + 'px' }"
-            >
-              <b>{{ br.label }}</b>
-              <span v-if="br.condLabel" class="rc-fanout-col-cond">{{ br.condLabel }}</span>
-            </div>
+              :title="branchColText(br)"
+              :style="{ left: br.colX + 'px', top: (br.labelTop ?? (br.top - 16)) + 'px' }"
+            >{{ branchColText(br) }}</div>
             <!-- 0707 优化·Phase6·补：分支内添加节点入口——挂到 chain 末尾（不支持中间插入，与 moveInBranch 按钮化范围一致） -->
             <button
               class="rc-branch-add-slot"
@@ -599,6 +714,14 @@ watch(
             @click.stop="void deleteCanvasNode(n.id)"
           >✕</button>
           <span v-if="runtime.nodeStates[n.id]" class="rc-run-badge" :class="runtime.nodeStates[n.id]">{{ runText(n.id) }}</span>
+          <button
+            v-if="n.orphan"
+            class="rc-node-orphan"
+            type="button"
+            title="孤儿步骤：没有可解析的前置步骤（lastStep 缺失或指向集合外）。点击选择它要挂到的节点。"
+            data-testid="node-orphan-relink"
+            @click.stop="openRelinkDialog(n.id)"
+          >孤儿·关联</button>
           <span v-else-if="n.cfg.disabled" class="rc-node-plan">已停止</span>
           <span v-else-if="n.cfg.planned" class="rc-node-plan">规划中</span>
 
@@ -623,8 +746,11 @@ watch(
             <div class="rc-node-foot"><span class="rc-chip">静态保留</span><span>{{ n.cfg.base[3]?.[1] || '待编排' }}</span></div>
           </template>
           <template v-else>
-            <div v-if="tableChip(n.cfg)" class="rc-node-table" :class="{ unset: tableChip(n.cfg)!.unset }" :title="tableChip(n.cfg)!.title">⊞ {{ tableChip(n.cfg)!.label }}{{ tableChip(n.cfg)!.unset ? ' → ?' : '' }}</div>
+            <!-- 0926 反馈→拍板：卡片只标「条件」tag（提示该节点有条件进入），不再展示 cond 具体文案——
+                 具体内容在连线/分支列标签上展示；条件与「运行」状态同行；悬停仍可看全文 -->
+            <div v-if="tableChip(n.cfg, n.id)" class="rc-node-table" :class="{ unset: tableChip(n.cfg, n.id)!.unset }" :title="tableChip(n.cfg, n.id)!.title">⊞ {{ tableChip(n.cfg, n.id)!.label }}</div>
             <div class="rc-node-foot">
+              <span v-if="nodeCondText(n.cfg)" :data-testid="`node-cond-${n.id}`" class="rc-node-cond" :title="nodeCondText(n.cfg)">条件</span>
               <span class="rc-chip" :class="footClass(n.cfg)" :title="footFor(n.cfg).hint">{{ footFor(n.cfg).left }}</span>
               <span>{{ footFor(n.cfg).right }}</span>
             </div>
@@ -672,6 +798,41 @@ watch(
       @dragstart="onPaletteDragStart"
       @close="closeNodePalette"
     />
+
+    <!-- 孤儿步骤关联弹窗（0925）：操作型短流程，居中 dialog；目标 = 画布上可写步骤 + 流程入口
+         （'0' 虚拟入口 / isRoot 真实入口行），排除该孤儿子树里的节点（避免成环） -->
+    <el-dialog
+      v-model="relink.show"
+      title="关联孤儿步骤"
+      width="480px"
+      top="22vh"
+      append-to-body
+      data-testid="orphan-relink-dialog"
+    >
+      <p class="relink-tip">「{{ relink.nodeTitle }}」（#{{ relink.nodeId }}）没有可解析的前置步骤（lastStep 缺失或指向集合外）。选择它要挂到哪个节点后面（列表第一项「流程入口」= 挂回流程起点）：</p>
+      <el-select
+        v-model="relink.targetId"
+        placeholder="选择目标节点"
+        style="width: 100%"
+        data-testid="orphan-relink-target"
+      >
+        <el-option
+          v-for="opt in relinkTargets"
+          :key="opt.id"
+          :label="`${opt.title}（#${opt.id}）`"
+          :value="opt.id"
+        />
+      </el-select>
+      <template #footer>
+        <el-button @click="relink.show = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="!relink.targetId || relinking"
+          data-testid="orphan-relink-confirm"
+          @click="doRelink"
+        >关联</el-button>
+      </template>
+    </el-dialog>
   </main>
 </template>
 
@@ -690,17 +851,17 @@ watch(
 .rc-canvas.is-embedded .rc-node-library-toggle { top: 12px; }
 .rc-node-library-toggle:hover, .rc-node-library-toggle.active { border-color: #93c5fd; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 
-.rc-flow { position: relative; width: 640px; margin: 56px auto 28px; }
+.rc-flow { position: relative; margin: 56px auto 28px; }
 .rc-flow svg { position: absolute; inset: 0; pointer-events: none; }
-.rc-edge { fill: none; stroke: #cbd5e1; stroke-width: 1.6; }
+.rc-edge { fill: none; stroke: #94a3b8; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .rc-edge.rule { stroke: #60a5fa; stroke-dasharray: 5 4; }
-.rc-edge.fan-out { stroke: #f59e0b; stroke-width: 1.6; stroke-dasharray: 4 3; }
-.rc-fanout-col-tag { position: absolute; width: 120px; text-align: center; font-size: 10px; color: var(--rc-text-2); background: #fff7ed; border: 1px solid #fde68a; border-radius: 5px; padding: 2px 6px; pointer-events: none; z-index: 22; line-height: 1.3; }
-.rc-fanout-col-cond { display: block; font-size: 9px; color: #92400e; font-weight: 400; margin-top: 2px; }
+.rc-edge.fan-out { stroke: #f59e0b; stroke-width: 1.5; }
+/* 分支列标签（0926 视觉调整）：无底色无边框的纯文本，只展示该分支/首步骤的进入条件 */
+.rc-fanout-col-tag { position: absolute; transform: translateX(-50%); max-width: 200px; box-sizing: border-box; text-align: center; font-size: 10px; font-weight: 500; color: #475569; pointer-events: none; z-index: 22; line-height: 1.45; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-branch-add-slot { position: absolute; z-index: 20; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border: 1px dashed #fbbf24; background: #fffbeb; color: #b45309; border-radius: 999px; font-size: 15px; line-height: 1; opacity: 0.75; cursor: pointer; transition: opacity 0.12s, transform 0.12s; }
 .rc-branch-add-slot:hover { opacity: 1; transform: scale(1.08); background: #fef3c7; }
 
-.rc-term { position: absolute; width: 150px; height: 34px; border: 1px solid var(--rc-border); border-radius: 18px; background: #fff; color: var(--rc-text-2); display: flex; align-items: center; justify-content: center; font-weight: 600; box-shadow: 0 2px 8px -5px rgba(15, 23, 42, 0.2); }
+.rc-term { position: absolute; width: 150px; height: 36px; border: 1px solid var(--rc-border); border-radius: 18px; background: #fff; color: var(--rc-text-2); display: flex; align-items: center; justify-content: center; font-weight: 600; box-shadow: 0 2px 8px -5px rgba(15, 23, 42, 0.2); }
 
 .rc-empty-cta { position: absolute; left: 50%; top: 168px; transform: translateX(-50%); width: 340px; padding: 20px; text-align: center; border: 1px dashed #bfdbfe; border-radius: 12px; background: rgba(255, 255, 255, 0.92); box-shadow: 0 10px 30px -18px rgba(37, 99, 235, 0.5); }
 
@@ -716,12 +877,20 @@ watch(
 .rc-drop-slot:hover { opacity: 1; border-color: var(--rc-primary); background: var(--rc-primary-bg); transform: translateY(-50%) scale(1.08); }
 
 .rc-edge-table-tag { position: absolute; transform: translate(-50%, 0); font-size: 9px; color: var(--rc-faint); font-family: var(--rc-mono, monospace); white-space: nowrap; pointer-events: none; z-index: 21; }
-.rc-edge-cond-tag { position: absolute; transform: translate(-50%, 0); font-size: 9px; color: #b45309; white-space: nowrap; pointer-events: none; z-index: 21; }
 
-.rc-flow-node { position: absolute; width: 210px; min-height: 74px; padding: 10px 12px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; box-shadow: 0 3px 12px -8px rgba(15, 23, 42, 0.28); cursor: pointer; transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s; }
+/* 0925 美化：卡片高度**必须等于布局常量**（NODE_H=108 / LOGIC_H=140 / TERM_H=36）——此前只有
+   min-height:74px，卡片实际比布局矮，连线端点落在卡片下方一段空白处，整棵树看着"散"。
+   现在固定高度 + flex 竖向排布（脚注沉底）+ 溢出裁剪，连线和卡片严丝合缝。 */
+.rc-flow-node { position: absolute; display: flex; flex-direction: column; box-sizing: border-box; width: 210px; height: 108px; padding: 10px 12px; border: 1px solid var(--rc-border); border-radius: 10px; background: #fff; box-shadow: 0 4px 14px -10px rgba(15, 23, 42, 0.35); overflow: hidden; cursor: pointer; transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s; }
+.rc-flow-node.logic-node, .rc-flow-node.parallel-node { height: 140px; }
 .rc-node-del { position: absolute; top: 4px; right: 4px; z-index: 3; width: 18px; height: 18px; line-height: 1; border: 0; border-radius: 4px; background: transparent; color: var(--rc-faint); font-size: 11px; cursor: pointer; opacity: 0; transition: opacity .12s; }
 .rc-flow-node:hover .rc-node-del { opacity: 1; }
 .rc-node-del:hover { background: var(--rc-error-bg, #fef2f2); color: #b91c1c; }
+/* 孤儿步骤标记（0925）：lastStep 解析不出前置的节点，右上角常驻警示徽标，点击走关联弹窗。
+   top 让开 8px 处的运行态/停用徽标，删除叉 hover 显示时与之左右错开 */
+.rc-node-orphan { position: absolute; top: 29px; right: 4px; z-index: 3; height: 18px; line-height: 1; padding: 0 6px; border: 1px solid #fca5a5; border-radius: 9px; background: #fef2f2; color: #b91c1c; font-size: 10px; font-weight: 600; cursor: pointer; transition: background .12s, border-color .12s; }
+.rc-node-orphan:hover { background: #fee2e2; border-color: #f87171; }
+.relink-tip { margin: 0 0 12px; font-size: 12px; line-height: 1.7; color: var(--rc-text-2); }
 .rc-flow-node:hover { transform: translateY(-1px); border-color: #bfdbfe; }
 .rc-flow-node.active { border-color: var(--rc-primary); box-shadow: 0 0 0 2px #dbeafe, 0 10px 22px -12px rgba(37, 99, 235, 0.5); }
 .rc-flow-node.rule-node { border-color: #bfdbfe; background: #fbfdff; }
@@ -733,9 +902,9 @@ watch(
 .rc-flow-node.disabled-node { opacity: 0.48; filter: saturate(0.72); }
 
 .rc-node-top { display: flex; align-items: center; gap: 8px; }
-.rc-node-icon { width: 30px; height: 30px; border-radius: 7px; background: var(--rc-primary-bg); color: var(--rc-primary-ink); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; flex: none; }
-.rc-node-headtext { min-width: 0; }
-.rc-node-title { font-size: 13px; font-weight: 700; color: var(--rc-text); }
+.rc-node-icon { width: 30px; height: 30px; border-radius: 9px; background: var(--rc-primary-bg); color: var(--rc-primary-ink); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; flex: none; }
+.rc-node-headtext { min-width: 0; flex: 1; }
+.rc-node-title { font-size: 13px; font-weight: 700; color: var(--rc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-node-type { margin-top: 1px; font-size: 10px; color: var(--rc-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-node-plan { position: absolute; top: 8px; right: 8px; font-size: 9px; color: var(--rc-faint); border: 1px solid var(--rc-border); background: #f8fafc; border-radius: 5px; padding: 1px 5px; }
 .rc-run-badge { position: absolute; top: 8px; right: 8px; font-size: 9px; font-weight: 700; border-radius: 5px; padding: 1px 6px; }
@@ -745,11 +914,16 @@ watch(
 .rc-flow-node.run-L { border-color: var(--rc-primary); box-shadow: 0 0 0 2px #dbeafe; }
 .rc-flow-node.run-C { border-color: #86efac; }
 .rc-flow-node.run-E { border-color: #fca5a5; }
-.rc-node-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; color: var(--rc-muted); font-size: 10px; }
+/* foot：条件 tag + 运行状态 chip + 右侧说明同行；说明文字长时压缩省略，不换行撑破卡片 */
+.rc-node-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: auto; padding-top: 6px; color: var(--rc-muted); font-size: 10px; min-width: 0; }
+.rc-node-foot > span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-node-table.unset { color: var(--rc-warn, #d98b25); }
 .rc-node-table { margin-top: 6px; font-size: 10px; color: var(--rc-faint); font-family: var(--rc-mono, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-node-brief { margin-top: 8px; color: var(--rc-muted); font-size: 10px; line-height: 1.45; }
 .rc-node-brief b { color: #334155; font-weight: 700; }
+/* 0926 反馈→拍板：卡片上的「条件」tag（琥珀色小胶囊，与分支列条件标签同色系），
+   与「运行」状态 chip 同处 foot 行，有进入条件即显示 */
+.rc-node-cond { display: inline-block; padding: 1px 6px; border-radius: 5px; background: #fef3c7; color: #b45309; font-size: 10px; line-height: 16px; white-space: nowrap; flex: none; }
 .rc-node-paths { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
 .rc-node-path { flex: 1; min-width: 74px; padding: 3px 5px; border-radius: 5px; border: 1px solid var(--rc-border); background: #fff; color: var(--rc-muted); font-size: 9px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .logic-node .rc-node-icon { background: #fef3c7; color: #b45309; }

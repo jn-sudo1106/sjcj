@@ -18,10 +18,25 @@ describe('ProcessNodeRail', () => {
     const wrapper = mount(ProcessNodeRail, { props: { layout, modelValue: 'web-detail', selectable: () => true } })
 
     expect(wrapper.find('.pnr').attributes('style')).toContain(`width: ${layout.totalWidth}px`)
-    expect(wrapper.find('.pnr-edge').attributes('marker-end')).toBe('url(#pnr-arrow)')
+    // marker id 每实例唯一（0925：同页可能同时挂多个节点条，重复 id 会让后挂实例引用先挂实例的箭头）
+    expect(wrapper.find('.pnr-edge').attributes('marker-end')).toMatch(/^url\(#pnr-arrow-\d+\)$/)
     // 0917-03：优先展示节点配置里的队列名
     expect(wrapper.find('[data-node-id="web-list"] .pnr-node-sub').text()).toBe('announcement.list')
     expect(wrapper.find('[data-node-id="web-detail"] .pnr-node-final').text()).toBe('最终结果')
+  })
+
+  // 0926 REVIEW F1：唯一化计数器必须在模块级——放 setup 里每实例重置，永远算出 pnr-arrow-1。
+  it('同页挂多个节点条时 marker id 各自唯一，互不引用', () => {
+    const layout = buildHorizontalLayout(['start', 'web-list', 'web-detail', 'end'], [], NODE_CONFIGS, [], { includeTerminals: false })
+    const a = mount(ProcessNodeRail, { props: { layout, selectable: () => true } })
+    const b = mount(ProcessNodeRail, { props: { layout, selectable: () => true } })
+    const aId = a.find('marker').attributes('id')
+    const bId = b.find('marker').attributes('id')
+    expect(aId).toMatch(/^pnr-arrow-\d+$/)
+    expect(bId).not.toBe(aId)
+    // 各自引用自己的 marker（重复 id 时后挂实例会解析到先挂实例的箭头，先挂卸载就集体消失）
+    expect(a.find('.pnr-edge').attributes('marker-end')).toBe(`url(#${aId})`)
+    expect(b.find('.pnr-edge').attributes('marker-end')).toBe(`url(#${bId})`)
   })
 
   it('需要展示运行事实的只读视图可传入节点状态', () => {

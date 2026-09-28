@@ -1,21 +1,38 @@
 // @vitest-environment jsdom
 // 0904 I16/I17 · Y9：流程详情抽屉里能直接改流程属性（分类/标签/描述），随「保存流程」一并提交。
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import FlowDetailDrawer from './FlowDetailDrawer.vue'
-import { flowCenterApi, type FlowRecord } from '@/api'
+import { flowCenterApi, type FlowRecord, type Step } from '@/api'
+import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
+import { resetFlowAutosaveForTests } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 
-afterEach(() => vi.restoreAllMocks())
+// 0926：抽屉打开会并行取流程步骤快照（改名 / 孤儿关联整包回写需要）。这里必须显式 mock：
+// 真实 mock 通道固定 120ms 真实延迟，快照会在**后续用例执行途中**到达并重建画布，污染下一个
+// 用例（实测：快照落在收起/展开断言窗口里，ui 渲染被重建打断）。同时显式卸载 + 复位自动保存单例，
+// 避免用例间留下活的画布树与异步尾巴。
+enableAutoUnmount(afterEach)
+afterEach(() => {
+  vi.restoreAllMocks()
+  resetFlowAutosaveForTests()
+})
+
+/** 打开工作区的步骤快照夹具（与 detail 同为即时 resolve）；根行 isRoot=1 一并给出，
+ *  与 svg=true 的真实返回同形状。 */
+const STEPS_FIXTURE: Step[] = [
+  { stepId: '405100', sourceId: '-1', name: '流程入口', nodeType: 'entry', configId: '1400774', mainConfig: '1400774', flowId: '1400987', enabled: true, isRoot: true },
+  { stepId: '405101', sourceId: '-1', name: '列表页', configId: '1400774', mainConfig: '1400774', flowId: '1400987', enabled: true, outputTable: '900' },
+]
 
 const FLOW = {
   id: 'flow-1', name: '新闻采集', version: 1, updatedAt: '2026-09-05 10:00',
   categoryId: '9009289', flowTags: 'a,b', description: '原描述', bizType: '',
   definition: {
     main: ['start', 'web-list', 'end'], branches: [], branchGroups: [],
-    configs: { 'web-list': { title: '列表页', sub: '[90] 网页抓取', status: '', planned: false, base: [], fields: [], inmap: [], params: [], output: [], configId: '1400774' } },
+    configs: { 'web-list': { title: '列表页', sub: '[90] 网页抓取', status: '', planned: false, base: [], fields: [], inmap: [], params: [], output: [], configId: '1400774', outputTable: '6200026' } },
   },
 } as unknown as FlowRecord
 
@@ -23,6 +40,7 @@ function mountDrawer(flow: FlowRecord = FLOW) {
   setActivePinia(createPinia())
   // 抽屉一挂上就拉详情；不挡住的话 loadingDetail 一直是 true，工作区根本不渲染
   vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(flow)
+  vi.spyOn(flowCenterApi, 'steps').mockResolvedValue(STEPS_FIXTURE)
   return mount(FlowDetailDrawer, {
     props: { flow, categories: [{ id: '9009289', name: '财经' }, { id: '9009290', name: '公告' }] },
     global: {
@@ -36,6 +54,28 @@ function mountDrawer(flow: FlowRecord = FLOW) {
 }
 const saveButton = (w: ReturnType<typeof mountDrawer>) =>
   w.findAll('button').find((b) => b.text().includes('保存流程'))!
+
+// 0927 P1-5：步骤快照拉取失败时打开不阻断（画布照常渲染），但常驻警示条把「为什么改不动」
+// 说清楚——flowIdMode 下无快照节点跳过回写、autosave 留在 pending，不制造「已保存」假象。
+describe('流程详情抽屉 · 快照失败警示（0927 P1-5）', () => {
+  it('steps 拉取失败：抽屉正常打开 + 警示条出现', async () => {
+    setActivePinia(createPinia())
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(FLOW)
+    vi.spyOn(flowCenterApi, 'steps').mockRejectedValue(new Error('超时'))
+    const w = mount(FlowDetailDrawer, {
+      props: { flow: FLOW, categories: [] },
+      global: { directives: { loading: {} }, stubs: { FlowBoard: { template: '<div />' }, NodeInspector: { template: '<div />' } } },
+    })
+    await flushPromises()
+    expect(w.get('[data-testid="flow-drawer-steps-failed"]').text()).toContain('步骤快照加载失败')
+  })
+
+  it('steps 拉取成功：无警示条', async () => {
+    const w = mountDrawer()
+    await flushPromises()
+    expect(w.find('[data-testid="flow-drawer-steps-failed"]').exists()).toBe(false)
+  })
+})
 
 describe('流程详情抽屉 · 属性编辑（Y9）', () => {
   it('回填流程现值，改完随保存一起提交，标签按统一口径归一', async () => {
@@ -132,6 +172,7 @@ describe('流程详情抽屉 · 展开/收起配置区', () => {
     ui.applyViewLayoutDefault('data')
     expect(ui.inspectorCollapsed).toBe(true)
     vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(FLOW)
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue(STEPS_FIXTURE)
 
     const w = mount(FlowDetailDrawer, {
       props: { flow: FLOW, categories: [] },
@@ -140,5 +181,151 @@ describe('流程详情抽屉 · 展开/收起配置区', () => {
     await flushPromises()
     expect(ui.inspectorCollapsed).toBe(false)
     expect(w.find('[aria-label="节点设置"]').exists()).toBe(true)
+  })
+
+  // 0926 REVIEW F-R5（0927 P0-1 修订）：关闭前 flush 失败先弹「仍然关闭（改动可能丢失）」
+  // 确认——选「留在此页」留在抽屉里（不静默丢改动）；选「仍然关闭」放行（后端持续故障时
+  // 用户不能被永远困在抽屉里，比修复前"只 return、关不掉只能刷新"是显式出口）。
+  // 0927 起工作区按接口步骤还原（steps 优先），改名的 405101 是已落库数字 ID →
+  // 自动保存走 persistExisting → stepModify；让 stepModify 失败来触发"保存失败"状态。
+  it('改动未保存成功时点关闭：留在此页（默认）不关抽屉', async () => {
+    const flowWithRealId = { ...FLOW, id: '1400987', definition: {
+      ...FLOW.definition,
+      main: ['start', 'web-list', 'end'],
+      configs: { 'web-list': { ...FLOW.definition.configs['web-list'], configId: '1400774' } },
+    } } as unknown as FlowRecord
+    const w = mountDrawer(flowWithRealId)
+    await flushPromises()
+    const { itemApi } = await import('@/api')
+    vi.spyOn(itemApi, 'stepModify').mockRejectedValue(new Error('写保护'))
+    // 模拟用户改了一个节点（flowIdMode 下按 flowId 锚定写），保存失败
+    useFlowStore().setTitle('405101', '还没保存的改名')
+    await flushPromises()
+
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue(new Error('cancelled'))
+    await w.get('.fd-close').trigger('click')
+    await flushPromises()
+
+    expect(confirm).toHaveBeenCalled()
+    expect(w.emitted('close')).toBeUndefined()
+  })
+
+  it('改动未保存成功时点关闭：确认「仍然关闭」后放行（P0-1 显式出口）', async () => {
+    const flowWithRealId = { ...FLOW, id: '1400987', definition: {
+      ...FLOW.definition,
+      main: ['start', 'web-list', 'end'],
+      configs: { 'web-list': { ...FLOW.definition.configs['web-list'], configId: '1400774' } },
+    } } as unknown as FlowRecord
+    const w = mountDrawer(flowWithRealId)
+    await flushPromises()
+    const { itemApi } = await import('@/api')
+    vi.spyOn(itemApi, 'stepModify').mockRejectedValue(new Error('写保护'))
+    useFlowStore().setTitle('405101', '还没保存的改名')
+    await flushPromises()
+
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    await w.get('.fd-close').trigger('click')
+    await flushPromises()
+
+    expect(w.emitted('close')).toBeTruthy()
+  })
+
+  // 0926 REVIEW F-R6：整体保存时若步骤自动保存失败（flush 只置 error 状态不抛错），
+  // 必须中止保存流程——否则 flowConf 会带着草稿/旧步骤 ID 落库并弹「保存成功」。
+  it('步骤保存失败时点保存流程，中止保存并提示重试（不落 flowConf）', async () => {
+    const flowWithRealId = { ...FLOW, id: '1400987', definition: {
+      ...FLOW.definition,
+      main: ['start', 'web-list', 'end'],
+      configs: { 'web-list': { ...FLOW.definition.configs['web-list'], configId: '1400774' } },
+    } } as unknown as FlowRecord
+    const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue({ ...flowWithRealId, version: 2 })
+    const w = mountDrawer(flowWithRealId)
+    await flushPromises()
+    const { itemApi } = await import('@/api')
+    vi.spyOn(itemApi, 'stepModify').mockRejectedValue(new Error('写保护'))
+    const warn = vi.spyOn(ElMessage, 'warning').mockImplementation(() => undefined as never)
+    // 画布有脏改动（节点改名待落库，flowIdMode 下按 flowId 锚定写）
+    useFlowStore().setTitle('405101', '还没保存的改名')
+    await flushPromises()
+
+    await saveButton(w).trigger('click')
+    await flushPromises()
+
+    // 步骤没落库 → flowConf 不能带未落库的改动落库：既不发 saveFlow，也不弹成功
+    expect(save).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('步骤保存失败'))
+    // 头部错误态（flush 失败置 error）一直留着，等用户重试
+    expect(useFlowStore().flowDirty).toBe(true)
+  })
+})
+
+// 0927 修复（用户反馈「流程工作区未按接口返回的展示」）：工作区展示以**接口步骤**
+// （nextConfigPaged?flowId&svg=true，执行拓扑的唯一事实源）为准——flowConf 是历史快照，
+// 与步骤是两本账（0926 REVIEW），源画布/重载早已按步骤还原，只有抽屉还认 flowConf，
+// 存量流程画出来就跟接口对不上（节点缺失 / 分支被拍平 / 缺入口）。以下用例锁契约：
+// 有步骤行 → 一律按步骤还原；步骤侧没有内容 → flowConf 兜底（行为不变）。
+describe('流程详情抽屉 · 工作区按接口步骤展示（0927）', () => {
+  const BRANCH_STEPS: Step[] = [
+    { stepId: '405100', sourceId: '-1', name: '上市公司-配置', nodeType: 'entry', configId: '1400935', flowId: '1400935', enabled: true, isRoot: true },
+    { stepId: '405101', sourceId: '-1', name: 'html下载机器', nodeType: 'entry', configId: '1400974', flowId: '1400935', enabled: true, dependsOn: ['405100'] },
+    { stepId: '405102', sourceId: '-1', name: 'html解析', nodeType: 'entry', configId: '1400975', flowId: '1400935', enabled: true, dependsOn: ['405101'] },
+    { stepId: '405103', sourceId: '-1', name: '网页抓取', nodeType: 'entry', configId: '1401078', flowId: '1400935', enabled: true, dependsOn: ['405101'] },
+  ]
+
+  /** flowConf 是被拍平的旧定义（旧平台单链快照），与接口步骤的分叉拓扑不一致。 */
+  const staleDef = {
+    main: ['start', '405100', '405101', '405102', 'end'], branches: [], branchGroups: [],
+    configs: {
+      '405100': { title: '上市公司-配置', sub: '[90] 网页抓取', status: '', planned: false, base: [], fields: [], inmap: [], params: [], output: [], configId: '1400935' },
+      '405101': { title: 'html下载机器', sub: '[90] 网页抓取', status: '', planned: false, base: [], fields: [], inmap: [], params: [], output: [], configId: '1400974' },
+      '405102': { title: 'html解析', sub: '[90] 网页抓取', status: '', planned: false, base: [], fields: [], inmap: [], params: [], output: [], configId: '1400975' },
+    },
+  } as never
+
+  it('flowConf 有真实节点但步骤返回分支拓扑：画布按步骤还原，flowConf 不覆盖', async () => {
+    setActivePinia(createPinia())
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({
+      ...FLOW, id: '1400935', name: '上市公司-配置', definition: staleDef,
+    } as unknown as FlowRecord)
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue(BRANCH_STEPS)
+    const w = mount(FlowDetailDrawer, {
+      props: { flow: { ...FLOW, id: '1400935', name: '上市公司-配置' } as unknown as FlowRecord, categories: [] },
+      global: {
+        directives: { loading: {} },
+        stubs: { FlowBoard: { template: '<div />' }, NodeInspector: { template: '<div />' } },
+      },
+    })
+    await flushPromises()
+    const f = useFlowStore()
+    // 主链按 lastStep 走到分叉点 405101 为止，405102/405103 是它的两条分支——
+    // 而不是 flowConf 里那条"405102 排在主链上"的旧单链
+    expect(f.main).toEqual(['start', '405100', '405101', 'end'])
+    expect(f.branchGroups).toHaveLength(1)
+    expect(f.branchGroups[0]!.ownerId).toBe('405101')
+    expect(f.branchGroups[0]!.branches.map((b) => b.chain)).toEqual([['405102'], ['405103']])
+    // 节点内容同样来自步骤行（名字/配置ID），与接口返回一致
+    expect(f.configs['405100']?.title).toBe('上市公司-配置')
+    expect(f.configs['405102']?.configId).toBe('1400975')
+    // 流程工作区形态：写按 flowId 锚定
+    expect(f.flowId).toBe('1400935')
+    w.unmount()
+  })
+
+  it('步骤侧没有内容而 flowConf 有真实节点：按 flowConf 展示（兜底不变）', async () => {
+    setActivePinia(createPinia())
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(FLOW)
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
+    const w = mount(FlowDetailDrawer, {
+      props: { flow: FLOW, categories: [] },
+      global: {
+        directives: { loading: {} },
+        stubs: { FlowBoard: { template: '<div />' }, NodeInspector: { template: '<div />' } },
+      },
+    })
+    await flushPromises()
+    const f = useFlowStore()
+    expect(f.main).toEqual(['start', 'web-list', 'end'])
+    expect(f.configs['web-list']?.configId).toBe('1400774')
+    w.unmount()
   })
 })

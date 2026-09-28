@@ -125,6 +125,15 @@ export const useSourceStore = defineStore('source', () => {
     stepSnapshots.value = {}
   }
 
+  // 0926：清源上下文但**保留步骤快照**——流程工作区抽屉（FlowDetailDrawer.deriveFromFlowConfig
+  // 与 reloadFlowIntoCanvas）加载完一键清掉 stub 源上下文后，节点改名 / 孤儿「关联」修复
+  // 仍需要快照做整包回写；普通 clearSourceCtx 连快照一起清是对的（「回到源列表重新选源」），
+  // 但对「同一个流程定义继续编辑」会把已加载的步骤语义丢掉。
+  function clearSourceCtxKeepSteps() {
+    sourceCtx.value = null
+    sourceCfg.value = null
+  }
+
   function clearSiteCtx() {
     siteCtx.value = null
   }
@@ -169,7 +178,7 @@ export const useSourceStore = defineStore('source', () => {
             // 一次算完再摊开：原来这里连调三次 buildSourceSeed，白算两遍；
             // 0903 YB-B 加了 branchGroups 之后更不该重复构造（分支分组必须与 main/configs 同源）。
             const seed = buildSourceSeed(source, steps)
-            return { main: seed.main, branches: seed.branches, configs: seed.configs, branchGroups: seed.branchGroups }
+            return { main: seed.main, branches: seed.branches, configs: seed.configs, branchGroups: seed.branchGroups, orphanIds: seed.orphanIds }
           })(),
           updatedAt: source.updatedAt || '',
           source: sourceForCfg,
@@ -266,6 +275,7 @@ export const useSourceStore = defineStore('source', () => {
     setSourceJob,
     resetAllContext,
     clearSourceCtx,
+    clearSourceCtxKeepSteps,
     clearSiteCtx,
     setSiteDisplayCtx,
     loadFromSource,

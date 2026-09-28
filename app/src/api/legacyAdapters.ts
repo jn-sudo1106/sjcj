@@ -34,6 +34,7 @@ import type {
 import type { FlowDefinition, FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest } from './types/source'
 import type { FlowDef, NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { colorFromLegacy, parseIssueTags } from '@/utils/sourceMark'
+import { validFlowIdOf } from '@/utils/flow/stepPersist'
 
 type LegacyRecord = Record<string, unknown>
 
@@ -979,6 +980,11 @@ export function sourceFromLegacy(input: unknown): Source {
     url: record.sourceUrl == null ? '' : String(record.sourceUrl),
     configId: record.configId == null ? '' : String(record.configId),
     flowId: record.flowId == null ? undefined : String(record.flowId),
+    // 0927 G2：ROOT 权威方案的只读反查字段（源所属流程 ROOT 步骤/首任务配置）。后端源列表与
+    // 详情已返回（bee-info SourceNextController / SourceController）；前端当前只透传不做展示决策，
+    // 做「所属流程 / ROOT 配置」列时直接读这两个字段。
+    rootId: record.rootId == null ? undefined : String(record.rootId),
+    rootConfigId: record.rootConfigId == null ? undefined : String(record.rootConfigId),
     sourceType: record.sourceType == null ? undefined : String(record.sourceType),
     mainTable: record.entryTypeId == null ? '' : String(record.entryTypeId),
     owner: record.author == null ? '' : String(record.author),
@@ -1085,6 +1091,8 @@ export function stepFromLegacy(input: unknown, sourceId: string): Step {
       : String(record.outputTable ?? record.outEntry),
     configId: record.configId == null ? undefined : String(record.configId),
     mainConfig: record.mainConfig == null ? undefined : String(record.mainConfig),
+    // 0925：步骤归属整体切 flowId（bee-top FLOW_ID 列）；老后端不回时 undefined，双轨兼容。
+    flowId: record.flowId == null ? undefined : String(record.flowId),
     flowCode: record.flowCode == null ? undefined : String(record.flowCode),
     itemId: record.itemId == null ? undefined : String(record.itemId),
     extName: record.extName == null ? undefined : String(record.extName),
@@ -1118,14 +1126,20 @@ export function sourceStepsFromLegacy(input: unknown, sourceId: string): Step[] 
 //   {lastStep,sourceId,mainConfig,entryTypeId,name,url,extName,configId,cond,outEntry,
 //    outContext,itemId,type,flowCode,context,bizType,enabled,allField,nextStep,itemConfig,
 //    isDelete,authConfig,sid,checked,show}
-// bizType/authConfig/sid/allField/checked/show 六项在目前见过的所有样本里恒为固定值
-// （null/null/null/[]/true/true），语义未确认，这里按实测值原样透传，不体现进 Step 类型——
-// 一旦哪天见到非固定值的样本，说明这几项真的可变，需要另建 Step 字段承接。
+// 0925 契约变更：新增 flowId（bee-top FLOW_ID 列，步骤归属整体切 flowId；空时后端
+// fillFlowIdIfEmpty 回填 mainConfig）。bizType/authConfig/sid/allField/checked/show 六项在
+// 目前见过的所有样本里恒为固定值（null/null/null/[]/true/true），语义未确认，这里按实测值
+// 原样透传，不体现进 Step 类型——一旦哪天见到非固定值的样本，说明这几项真的可变，需要另建
+// Step 字段承接。
 function stepWritePayloadBase(step: Step): Record<string, unknown> {
   return {
     lastStep: step.dependsOn?.length ? step.dependsOn.join(',') : null,
     sourceId: step.sourceId === '' || step.sourceId == null ? null : Number(step.sourceId),
     mainConfig: step.mainConfig == null ? undefined : Number(step.mainConfig),
+    // 0925 步骤归属切 flowId：显式携带（数字）；没有时不出现该键，交给后端回填 mainConfig。
+    // 0927 P2-5：只有**有效流程 ID**（数字且非 '0'）才携带——'0' 是 truthy，Number('0') 会
+    // 把哨兵当成真流程 ID 写进 payload，绕过后端 fillFlowIdIfEmpty 的回填；非数字同理会变 NaN。
+    ...(validFlowIdOf(step.flowId) ? { flowId: Number(step.flowId) } : {}),
     entryTypeId: step.inputTable == null ? null : Number(step.inputTable),
     name: step.name,
     url: step.url ?? null,

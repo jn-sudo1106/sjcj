@@ -4,7 +4,7 @@ import { useFlowStore } from './flow'
 import { mockFlowRecommend, mockNodeAiChat } from '../api/mock/flows'
 import { LIB_GROUPS, NODE_CONFIGS, TEMPLATE_TO_NODE, TEMPLATE_TO_SNATCH, conditionGroupLabel, conditionGroupIsSet, fieldOptionsFromTableOrOutput, collectorCapabilityOf, inferCollectorKind, COLLECTOR_CAPABILITIES, buildSourceSeed, isRuleNode, isMonitorNode, isDataValidationNode, iconFor, nodeClassFor, nodeTypeLabel } from '@/views/FlowCanvas/canvas/flowModel'
 import { makePresetFlowTemplates } from '@/utils/flow/flowTemplates'
-import type { Source } from '../api'
+import type { Source, Step } from '../api'
 
 describe('flow store 编辑动作', () => {
   let f: ReturnType<typeof useFlowStore>
@@ -228,6 +228,26 @@ describe('复制节点 = 新增一套配置（0828 D02）', () => {
       expect(f.configs[id].configId).toBeUndefined()
       expect(f.configs[id].configName).toBe(f.configs[id].title)
     })
+  })
+
+  // 0926 REVIEW F3：复制带嵌套分叉的节点时，副本嵌套分叉的 owner 重新铸新，
+  // 不沿用原件链节点 id——同一链节点被原件与多份副本同时声明会让 branchGroupOf 命中歧义。
+  it('复制带嵌套分叉的节点：副本嵌套分叉 ownerId 从副本 owner 派生，原件不受影响', () => {
+    // branchGroups 是 reactive 数组：直接赋值会替换 store 闭包外的引用，必须原地 push
+    f.branchGroups.push({
+      ownerId: 'web-list',
+      branches: [{
+        id: 'web-list-b-1', label: '', chain: ['web-detail'],
+        subGroups: [{ ownerId: 'web-detail', branches: [{ id: 'web-detail-b-1', label: '', chain: ['web-rest'] }] }],
+      }],
+    })
+    const newId = f.duplicate('web-list')!
+    const copyGroup = f.branchGroups.find((g) => g.ownerId === newId)!
+    const nested = copyGroup.branches[0].subGroups![0]
+    expect(nested.ownerId).not.toBe('web-detail')
+    expect(nested.ownerId).toMatch(new RegExp(`^${newId}-nested-`))
+    // 原件嵌套分叉保持原 owner
+    expect(f.branchGroups.find((g) => g.ownerId === 'web-list')!.branches[0].subGroups![0].ownerId).toBe('web-detail')
   })
 })
 
@@ -1320,7 +1340,7 @@ describe('fan-in 收拢线渲染（0707 Phase6·6.4 补）', () => {
     expect(fanIn).toBeDefined()
   })
 
-  it('奇数列（3 分支决策）：中间列落在 CENTER，仍无主链直线穿过 fan-out', () => {
+  it('奇数列（3 分支决策）：中间列落在主链轴上，仍无主链直线穿过 fan-out', () => {
     const owner = f.insertAfter('start', 'decision')
     f.addBranch(owner)
     f.addBranch(owner) // 三条条件分支（奇数）
@@ -1329,8 +1349,12 @@ describe('fan-in 收拢线渲染（0707 Phase6·6.4 补）', () => {
     const layout = f.layout
     const col = layout.fanOutColMeta[owner]
     expect(col).toBeDefined()
-    // 中间列恰在 CENTER=320（=主链直线 x，重叠风险几何存在），跳过直线才不与之中叠
-    expect(col.branches[1].colX).toBe(320)
+    // 0925：画布宽度随最宽分支组自适应（3 列 = 210*3 + 16*2 = 662 → width 710），主链轴 = width/2；
+    // 中间列必须落在主链轴上（= 直连线的 x），跳过直线才不与之中叠
+    expect(layout.width).toBeGreaterThan(640)
+    const axis = layout.width / 2
+    expect(col.branches[1].colX).toBe(axis)
+    expect(layout.nodes.find((n) => n.id === owner)!.pos.left + 105).toBe(axis)
     expect(layout.mainEdges.every((e) => e.fromId !== owner)).toBe(true)
   })
 })
@@ -1386,6 +1410,34 @@ describe('源级配置分层（0706 优化·源/节点配置分层）', () => {
     expect(f.main).toContain('40600')
     expect(f.main).not.toContain(localId)
     expect(f.selectedId).toBe('40600')
+  })
+
+  it('rebindNodeId 递归换绑嵌套 subGroups 的 owner 与 chain（0926 REVIEW F-R1）', () => {
+    f.newFlow('blank')
+    // 顶层分叉组 owner=a，分支1 链上挂 b（链内再分叉的 owner），b 的组以 subGroups 形式嵌套
+    const a = f.insertAfter('start', 'web')!
+    const b = f.insertAfter(a, 'web')!
+    f.ensureBranchGroup(a, 'decision')
+    f.ensureBranchGroup(b, 'parallel')
+    const topGroup = f.branchGroups.find((g) => g.ownerId === a)!
+    const nestedGroup = f.branchGroups.find((g) => g.ownerId === b)!
+    // 把 b 的组从顶层数组摘出，挂进顶层分支1 的 subGroups（真实还原拓扑的形状）
+    f.branchGroups.splice(f.branchGroups.indexOf(nestedGroup), 1)
+    topGroup.branches[0].subGroups = [nestedGroup]
+    topGroup.branches[0].chain = [b]
+    // 嵌套分支列内「＋」新增节点：addNodeToBranch 按 ownerId 递归定位嵌套组
+    const childId = f.addNodeToBranch(b, nestedGroup.branches[0].id, 'parse')!
+    expect(nestedGroup.branches[0].chain).toContain(childId)
+    // 换绑草稿 id：嵌套 subGroups 的 chain 必须跟着换成后端 id（旧实现只改顶层，这里会挂）
+    expect(f.rebindNodeId(childId, '40601')).toBe(true)
+    expect(nestedGroup.branches[0].chain).toContain('40601')
+    expect(nestedGroup.branches[0].chain).not.toContain(childId)
+    expect(f.configs['40601']?.title).toBeTruthy()
+    // 换绑链上节点 b：它同时是嵌套组 owner + 顶层分支链成员，两处都要换成新 id
+    expect(f.rebindNodeId(b, '40602')).toBe(true)
+    expect(nestedGroup.ownerId).toBe('40602')
+    expect(topGroup.branches[0].chain).toContain('40602')
+    expect(topGroup.branches[0].chain).not.toContain(b)
   })
 
   it('startDraftSource：空白模板进入有源草稿画布但不自动生成首节点', () => {
@@ -2080,5 +2132,197 @@ describe('源 URL 归源（0824-11 §1.1b）', () => {
     f.patchSource({ url: 'https://new.example/list' })
     expect(f.flowDirty).toBe(true)
     expect(f.configDirty).toBe(false)
+  })
+})
+
+describe('垂直布局：还原拓扑的 fan-out 与嵌套分叉（0925 完整还原）', () => {
+  const mk = (stepId: string, dependsOn: string[]): Step => ({
+    stepId, sourceId: '430016824', name: `n${stepId}`, dependsOn, inputTable: '900', outputTable: '900', enabled: true,
+  } as Step)
+
+  it('普通采集节点分叉也 fan-out（不再只在 decision/parallel 下展开）', () => {
+    setActivePinia(createPinia())
+    const f = useFlowStore()
+    f.loadFromSource(
+      { sourceId: '430016824', name: 't', url: 'http://x', configId: 'X', mainTable: '900', owner: 'a', state: 'C' } as never,
+      [mk('1', ['0']), mk('2', ['1']), mk('3', ['2']), mk('4', ['2'])],
+    )
+    const layout = f.layout
+    expect(f.branchGroups[0].ownerId).toBe('2')
+    expect(layout.fanOutColMeta['2']).toBeDefined()
+    expect(layout.fanOutColMeta['2'].branches.map((b) => b.chain)).toEqual([['3'], ['4']])
+    expect(layout.nodes.find((n) => n.id === '3')?.branch).toBe(true)
+    expect(layout.nodes.find((n) => n.id === '4')?.branch).toBe(true)
+    // 3/4 都排在 2 的下方
+    const pos2 = layout.nodes.find((n) => n.id === '2')!.pos
+    const pos3 = layout.nodes.find((n) => n.id === '3')!.pos
+    expect(pos3.top).toBeGreaterThan(pos2.top + pos2.height)
+    expect(f.orphanIds).toEqual([])
+  })
+
+  it('链内再分叉：嵌套 subGroups 随列递归摆放，列中心围绕嵌套 owner 对称展开', () => {
+    setActivePinia(createPinia())
+    const f = useFlowStore()
+    f.loadFromSource(
+      { sourceId: '430016824', name: 't', url: 'http://x', configId: 'X', mainTable: '900', owner: 'a', state: 'C' } as never,
+      [mk('1', ['0']), mk('2', ['1']), mk('3', ['2']), mk('4', ['2']), mk('5', ['3']), mk('6', ['3']), mk('7', ['5'])],
+    )
+    const layout = f.layout
+    // 分叉点：主链到 2 为止，3/4 各成一列；3 的子树（5/6/7）在嵌套组里
+    expect(f.main.includes('3')).toBe(false)
+    expect(layout.fanOutColMeta['2']).toBeDefined()
+    expect(layout.fanOutColMeta['3']).toBeDefined()
+    expect(layout.fanOutColMeta['3'].branches.map((b) => b.chain)).toEqual([['5', '7'], ['6']])
+    // 嵌套列里的节点都是 branch 渲染
+    for (const id of ['5', '6', '7']) expect(layout.nodes.find((n) => n.id === id)?.branch).toBe(true)
+    // 5/6 位于 3 正下方
+    const pos3 = layout.nodes.find((n) => n.id === '3')!.pos
+    const pos5 = layout.nodes.find((n) => n.id === '5')!.pos
+    const pos6 = layout.nodes.find((n) => n.id === '6')!.pos
+    expect(pos5.top).toBeGreaterThan(pos3.top + pos3.height)
+    expect(pos6.top).toBeGreaterThan(pos3.top + pos3.height)
+    // 嵌套列中心围绕 3 的列中心左右对称（NODE_W=210，colGap=32 → 半宽 105 + 16 = 121）
+    const cx3 = pos3.left + 105
+    const cx5 = pos5.left + 105
+    const cx6 = pos6.left + 105
+    expect(cx5).toBe(cx3 - 121)
+    expect(cx6).toBe(cx3 + 121)
+    // 5 → 7 的链内连线存在
+    expect(layout.fanOutEdges.some((e) => e.d.includes(`L${cx5} ${layout.nodes.find((nn) => nn.id === '7')!.pos.top}`))).toBe(true)
+    expect(f.orphanIds).toEqual([])
+  })
+
+  it('孤儿标记随步骤加载进布局节点（5 挂在孤儿 3 下，只有 3 自己打徽标）', () => {
+    setActivePinia(createPinia())
+    const f = useFlowStore()
+    f.loadFromSource(
+      { sourceId: '430016824', name: 't', url: 'http://x', configId: 'X', mainTable: '900', owner: 'a', state: 'C' } as never,
+      [mk('1', ['0']), mk('3', ['99999']), mk('4', ['99999']), mk('5', ['3'])],
+    )
+    expect(f.orphanIds.sort()).toEqual(['3', '4'])
+    expect(f.layout.nodes.find((n) => n.id === '3')?.orphan).toBe(true)
+    expect(f.layout.nodes.find((n) => n.id === '4')?.orphan).toBe(true)
+    expect(f.layout.nodes.find((n) => n.id === '5')?.orphan).toBeFalsy()
+    // 入口根不标
+    expect(f.layout.nodes.find((n) => n.id === '1')?.orphan).toBeFalsy()
+  })
+})
+
+// 0925 视觉修复的布局不变量（防回归）：节点两两不重叠、不越出画布、连线端点贴合节点、
+// 连线不穿过无关节点。曾经的缺陷是嵌套分叉列与兄弟列重叠 97px、列顶到 left=-11 被裁切、
+// 汇聚线从嵌套 owner 底边直拉穿过自己的子列节点。
+describe('画布布局不变量（0925 视觉修复）', () => {
+  const mk = (stepId: string, dependsOn: string[]) =>
+    ({ stepId, sourceId: '1', name: `n${stepId}`, dependsOn, inputTable: '900', outputTable: '900', enabled: true }) as Step
+  const SOURCE = { sourceId: '1', name: 't', url: 'http://x', configId: 'X', mainTable: '900', owner: 'a', state: 'C' } as never
+
+  /** 采样 path（M/L/C）→ 点集 */
+  function samplePath(d: string): Array<[number, number]> {
+    const pts: Array<[number, number]> = []
+    let cur: [number, number] = [0, 0]
+    for (const t of d.match(/[MLCQ][^MLCQ]*/g) ?? []) {
+      const v = t.slice(1).trim().split(/[\s,]+/).filter(Boolean).map(Number)
+      if (t[0] === 'M') { cur = [v[0], v[1]]; pts.push(cur) }
+      else if (t[0] === 'L') { cur = [v[0], v[1]]; pts.push(cur) }
+      else if (t[0] === 'Q') {
+        // 0925 直角折线的倒圆角：二次贝塞尔（x1 y1 x y）
+        const [qx, qy, x, y] = v
+        for (let i = 1; i <= 8; i++) {
+          const u = i / 8, m = 1 - u
+          pts.push([m * m * cur[0] + 2 * m * u * qx + u * u * x, m * m * cur[1] + 2 * m * u * qy + u * u * y])
+        }
+        cur = [x, y]
+      }
+      else {
+        const [x1, y1, x2, y2, x, y] = v
+        for (let i = 1; i <= 20; i++) {
+          const u = i / 20, m = 1 - u
+          pts.push([
+            m ** 3 * cur[0] + 3 * m * m * u * x1 + 3 * m * u * u * x2 + u ** 3 * x,
+            m ** 3 * cur[1] + 3 * m * m * u * y1 + 3 * m * u * u * y2 + u ** 3 * y,
+          ])
+        }
+        cur = [x, y]
+      }
+    }
+    return pts
+  }
+
+  function assertLayoutSane(layout: ReturnType<typeof useFlowStore>['layout']) {
+    const rects = [
+      ...layout.nodes.map((n) => ({ id: n.id, left: n.pos.left, top: n.pos.top, width: 210, height: n.pos.height })),
+      ...layout.terminals.map((t) => ({ id: t.id, left: t.pos.left, top: t.pos.top, width: 150, height: t.pos.height })),
+    ]
+    // ① 不越界（曾经嵌套列 left=-11 被裁切）
+    for (const r of rects) {
+      expect(r.left, `节点 ${r.id} 左越界`).toBeGreaterThanOrEqual(0)
+      expect(r.left + r.width, `节点 ${r.id} 右越界`).toBeLessThanOrEqual(layout.width)
+    }
+    // ② 两两不重叠（曾经嵌套列与兄弟列叠 97px）
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        const a = rects[i], b = rects[j]
+        const overlapX = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left)
+        const overlapY = Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top)
+        expect(overlapX > 1 && overlapY > 1, `节点 ${a.id} 与 ${b.id} 重叠`).toBe(false)
+      }
+    }
+    // ③ 连线端点贴合某个节点、且不穿过无关节点
+    const edges = [...layout.mainEdges, ...layout.branchEdges, ...layout.fanOutEdges]
+    const near = (p: [number, number]) => rects.some((r) =>
+      p[0] >= r.left - 6 && p[0] <= r.left + r.width + 6 && p[1] >= r.top - 6 && p[1] <= r.top + r.height + 6)
+    const inside = (p: [number, number], r: (typeof rects)[number]) =>
+      p[0] > r.left + 2 && p[0] < r.left + r.width - 2 && p[1] > r.top + 2 && p[1] < r.top + r.height - 2
+    for (const e of edges) {
+      const pts = samplePath(e.d)
+      expect(pts.length, `边 ${e.d} 采样为空`).toBeGreaterThan(1)
+      expect(near(pts[0]), `边起点悬空 ${e.d}`).toBe(true)
+      expect(near(pts[pts.length - 1]), `边终点悬空 ${e.d}`).toBe(true)
+      const hits = rects.filter((r) => pts.some((p) => inside(p, r)))
+      // 正常连线只贴端点节点的边缘，不应穿过任何节点内部（曾经汇聚线穿过自己的子列节点）
+      expect(hits.length, `边穿过节点 ${hits.map((h) => h.id).join(',')}：${e.d}`).toBe(0)
+    }
+  }
+
+  it('三层嵌套分叉：不重叠、不越界、连线端点贴合且不穿框', () => {
+    setActivePinia(createPinia())
+    const f = useFlowStore()
+    f.loadFromSource(SOURCE, [
+      mk('1', ['0']), mk('2', ['1']),
+      mk('3', ['2']), mk('4', ['2']),
+      mk('5', ['3']), mk('6', ['3']),
+      mk('7', ['5']), mk('9', ['7']),
+      mk('8', ['4']),
+      mk('10', ['9', '8']),
+    ])
+    // 嵌套组让画布比原型 640 更宽
+    expect(f.layout.width).toBeGreaterThan(640)
+    assertLayoutSane(f.layout)
+  })
+
+  it('纯直链 + 单分支：宽度保持原型 640，主链居中', () => {
+    setActivePinia(createPinia())
+    const f = useFlowStore()
+    f.loadFromSource(SOURCE, [mk('1', ['0']), mk('2', ['1']), mk('3', ['2'])])
+    expect(f.layout.width).toBe(640)
+    expect(f.layout.axisX).toBe(320)
+    assertLayoutSane(f.layout)
+  })
+
+  it('三层嵌套分叉的收拢线从子树最深节点出发（不再从嵌套 owner 底边直拉）', () => {
+    setActivePinia(createPinia())
+    const f = useFlowStore()
+    f.loadFromSource(SOURCE, [
+      mk('1', ['0']), mk('2', ['1']),
+      mk('3', ['2']), mk('4', ['2']),
+      mk('5', ['3']), mk('6', ['3']),
+      mk('7', ['5']), mk('9', ['7']),
+      mk('8', ['4']),
+      mk('10', ['9', '8']),
+    ])
+    const layout = f.layout
+    const pos9 = layout.nodes.find((n) => n.id === '9')!.pos
+    const deep = `M${pos9.left + 105} ${pos9.top + pos9.height}`
+    expect(layout.fanOutEdges.some((e) => e.d.startsWith(deep))).toBe(true)
   })
 })

@@ -1,15 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import { stepFromLegacy, stepToStepModifyPayload } from '@/api/legacyAdapters'
-import { cloneConfig, NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
+import { cloneConfig, NODE_CONFIGS, type FlowBranchGroup, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import {
   applyStepSourceDefault,
   assertStepsPersistable,
   condExprOf,
   hasRealBranches,
+  isFileLikeNode,
+  outputTableMissing,
+  firstOutputTableMissingNodeId,
+  relinkCandidates,
   ruleStepContext,
   isWritableStepId,
   lastStepIdsFromCanvas,
   mergeStepForWrite,
+  persistableNodeIds,
 } from './stepPersist'
 import type { Step } from '@/api'
 
@@ -33,6 +38,64 @@ function cfgFromSnapshot() {
   return cfg
 }
 
+// 0927 H1：非文件节点输出表必填（后端 OUT_ENTRY 强制）的判定纯函数。
+// 缺输出表 = 显式输出表 / 「默认=输入表」兜底 / 快照自带输出表 三者皆空；file 类节点豁免。
+describe('outputTableMissing / isFileLikeNode（0927 H1）', () => {
+  function cfgWith(patch: Partial<NodeConfig> = {}): NodeConfig {
+    // 用规则节点种子：无 collectCfg 输出表默认值（web-detail 种子自带 outputTable 默认表，
+    // 属「已选输出表」语义，不适合当缺表样本）
+    const cfg = cloneConfig(NODE_CONFIGS['rule'])
+    return { ...cfg, ...patch }
+  }
+
+  it('输出表/输入表/快照全空：缺输出表；快照有输出表则不算缺（存量步骤转换期）', () => {
+    expect(outputTableMissing(cfgWith(), undefined)).toBe(true)
+    expect(outputTableMissing(cfgWith({ outputTable: '6200027' }), undefined)).toBe(false)
+    expect(outputTableMissing(cfgWith(), { outputTable: '6200026' } as Step)).toBe(false)
+  })
+
+  it('输入表兜底：没选输出表但输入表有值 = "默认 = 输入表"，不算缺', () => {
+    expect(outputTableMissing(cfgWith({ inputTable: '6200026' }), undefined)).toBe(false)
+  })
+
+  it('file 节点豁免；快照里 nodeType=file 的历史节点也豁免', () => {
+    const cfg = cfgWith({ template: 'file' })
+    expect(isFileLikeNode(cfg, undefined)).toBe(true)
+    expect(outputTableMissing(cfg, undefined)).toBe(false)
+    const historical = cfgWith()
+    expect(isFileLikeNode(historical, { nodeType: 'file' } as Step)).toBe(true)
+    expect(outputTableMissing(historical, { nodeType: 'file' } as Step)).toBe(false)
+  })
+})
+
+describe('firstOutputTableMissingNodeId（0927 H1）', () => {
+  const snap: Step = { stepId: '40597', sourceId: '-1', name: 'a', configId: '1400917', enabled: false }
+
+  it('没有缺输出表的节点：返回 undefined（start/end/根/草稿局部 id 天然不计）', () => {
+    const main = ['start', '40597', 'end']
+    const configs = {
+      '40597': { title: 'a', kind: 'node', configId: '1400917', outputTable: '6200026' },
+    } as unknown as Record<string, NodeConfig>
+    expect(firstOutputTableMissingNodeId(main, [], configs)).toBeUndefined()
+  })
+
+  it('画布上第一个缺输出表的可写节点（规则节点无输入表兜底）', () => {
+    const main = ['start', '40597', 'rule-1', '40598', 'end']
+    const configs = {
+      '40597': { title: 'a', kind: 'node', configId: '1400917', outputTable: '6200026' },
+      'rule-1': { title: 'r', kind: 'node', configId: '1400999' },
+      '40598': { title: 'b', kind: 'node', configId: '1400918' },
+    } as unknown as Record<string, NodeConfig>
+    expect(firstOutputTableMissingNodeId(main, [], configs)).toBe('rule-1')
+  })
+
+  it('rule-1 的 40597 与快照同名（存量行缺输出表但输入表为空）也计入', () => {
+    const main = ['start', '40598', 'end']
+    const configs = { '40598': { title: 'b', kind: 'node', configId: '1400918' } } as unknown as Record<string, NodeConfig>
+    expect(firstOutputTableMissingNodeId(main, [], configs, { '40598': snap })).toBe('40598')
+  })
+})
+
 describe('isWritableStepId', () => {
   it('只接受非 0 的纯数字 itemConfig', () => {
     expect(isWritableStepId('40600')).toBe(true)
@@ -48,6 +111,64 @@ describe('lastStepIdsFromCanvas', () => {
     expect(lastStepIdsFromCanvas(['start', '0', '40600', 'end'], '40600')).toEqual(['0'])
     expect(lastStepIdsFromCanvas(['start', '40597', 'web-detail-3', '40600', 'end'], '40600')).toEqual(['40597'])
     expect(lastStepIdsFromCanvas(['start', 'web-detail-1', 'end'], 'web-detail-1')).toEqual(['0'])
+  })
+})
+
+describe('lastStepIdsFromCanvas · 嵌套分支组（0925 REVIEW 加固）', () => {
+  // 1 → 2 分叉出 3 / 4；3 又分叉出 5→6 与 7（嵌套 subGroups，见 REVIEW 0925 §2.4）
+  const NESTED: FlowBranchGroup[] = [{
+    ownerId: '2',
+    branches: [
+      {
+        id: '2-b1', label: '路径A', chain: ['3'],
+        subGroups: [{
+          ownerId: '3',
+          branches: [
+            { id: '3-b1', label: 'X', chain: ['5', '6'] },
+            { id: '3-b2', label: 'Y', chain: ['7'] },
+          ],
+        }],
+      },
+      { id: '2-b2', label: '路径B', chain: ['4'] },
+    ],
+  }]
+
+  it('嵌套链上的节点按真实前驱回写，不回 0（修复前一律回 0 = 断链）', () => {
+    const main = ['start', '1', '2', '8', 'end']
+    expect(lastStepIdsFromCanvas(main, '6', NESTED)).toEqual(['5'])
+    expect(lastStepIdsFromCanvas(main, '5', NESTED)).toEqual(['3'])
+    expect(lastStepIdsFromCanvas(main, '7', NESTED)).toEqual(['3'])
+    expect(lastStepIdsFromCanvas(main, '3', NESTED)).toEqual(['2'])
+    expect(lastStepIdsFromCanvas(main, '4', NESTED)).toEqual(['2'])
+    // 主链回归：逐级向上、越过分叉点回到最近可落库步骤
+    expect(lastStepIdsFromCanvas(main, '8', NESTED)).toEqual(['2'])
+    expect(lastStepIdsFromCanvas(main, '1', NESTED)).toEqual(['0'])
+  })
+
+  it('persistableNodeIds 递归含嵌套链（主链在上、链节点文档序）', () => {
+    expect(persistableNodeIds(['start', '1', 'end'], NESTED)).toEqual(['start', '1', 'end', '3', '5', '6', '7', '4'])
+  })
+
+  it('0927 P0-2 回归：嵌套链头 + 草稿 owner（不可落库）沿父链上溯，祖先组不再被 seen 跳过', () => {
+    // 复现旧 bug 的形态：嵌套组 owner 是本地草稿 id（复制嵌套节点产出的 x-nested-N 形态），
+    // 链头 X1 的最近可落库前驱在**顶层分支组**的 chain 里。旧 findChain 在扫描阶段把
+    // '2' / 'draft-8' 塞进共享 seen，上溯时顶层组被 continue 跳过 → 静默回 ['0']（挂根）。
+    const main = ['start', '1', '2', 'end']
+    const DRAFT_NESTED: FlowBranchGroup[] = [{
+      ownerId: '2',
+      branches: [{
+        id: '2-b1', label: '路径A', chain: ['draft-8'],
+        subGroups: [{ ownerId: 'draft-8', branches: [{ id: 'g2-b1', label: 'X', chain: ['X1'] }] }],
+      }],
+    }]
+    // 一层上溯：X1（嵌套链头）→ draft-8（不可落库）→ 顶层组 chain 里的 '2'（可落库）
+    expect(lastStepIdsFromCanvas(main, 'X1', DRAFT_NESTED)).toEqual(['2'])
+  })
+
+  it('assertStepsPersistable 对嵌套链不误报断链', () => {
+    const c = cfgFromSnapshot()
+    const configs: Record<string, NodeConfig> = { '1': c, '2': c, '3': c, '4': c, '5': c, '6': c, '7': c }
+    expect(() => assertStepsPersistable(['start', '1', '2', '8', 'end'], configs, NESTED)).not.toThrow()
   })
 })
 
@@ -448,5 +569,95 @@ describe('assertStepsPersistable（0828 W9-4）', () => {
       ['0', '40600', 'web-detail-3'],
       { 40600: cfgFromSnapshot(), 'web-detail-3': draft },
     )).toThrow(/尚未绑定配置/)
+  })
+})
+
+// 0926 修正（用户反馈「孤儿节点没法选择上一个节点，下拉是空的」）：候选必须包含流程入口。
+describe('relinkCandidates（0925 孤儿关联 · 0926 准入入口）', () => {
+  const step = (stepId: string, dependsOn?: string[], extra: Partial<Step> = {}): Step =>
+    ({ stepId, sourceId: '430016398', name: stepId, dependsOn, enabled: true, ...extra }) as Step
+
+  it('流程只有「入口行 + 孤儿」：入口行（isRoot=1）也可选，下拉不再为空', () => {
+    // flowId 模式 svg=true：main 里第一个真实行就是流程入口（带 isRoot，名字 = 配置名）
+    const main = ['start', '41000', '40600', 'end']
+    const configs: Record<string, NodeConfig> = {
+      '41000': { ...cfgFromSnapshot(), title: '上市公司-配置' },
+      '40600': { ...cfgFromSnapshot(), title: '孤儿步骤' },
+    }
+    const snapshots = {
+      '41000': step('41000', undefined, { isRoot: true }),
+      '40600': step('40600', ['999']),
+    }
+    expect(relinkCandidates(main, [], configs, snapshots, '40600')).toEqual([
+      { id: '41000', title: '流程入口 · 上市公司-配置', isEntry: true },
+    ])
+  })
+
+  it('源模式「0 行 + 孤儿」：虚拟入口行（#0）也可选，标「流程入口」', () => {
+    const main = ['start', '0', '40600', 'end']
+    const configs: Record<string, NodeConfig> = {
+      '0': { ...cfgFromSnapshot(), title: '上市公司-配置' },
+      '40600': { ...cfgFromSnapshot(), title: '孤儿步骤' },
+    }
+    expect(relinkCandidates(main, [], configs, {}, '40600')).toEqual([
+      { id: '0', title: '流程入口 · 上市公司-配置', isEntry: true },
+    ])
+  })
+
+  it('入口之外的候选按可写、不重叠、排除孤儿子树过滤；入口恒排第一', () => {
+    const main = ['start', '0', '40597', '40600', '40598', 'end']
+    // 40600 的子孙：40601/40602（沿快照 dependsOn 闭包）——不能挂回去（成环）
+    const configs: Record<string, NodeConfig> = {
+      '0': { ...cfgFromSnapshot(), title: '上市公司-配置' },
+      '40597': { ...cfgFromSnapshot(), title: '列表页' },
+      '40600': { ...cfgFromSnapshot(), title: '孤儿步骤' },
+      '40598': { ...cfgFromSnapshot(), title: '详情页' },
+      '40601': { ...cfgFromSnapshot(), title: '子步骤' },
+      '40602': { ...cfgFromSnapshot(), title: '孙步骤' },
+    }
+    const snapshots = {
+      '40597': step('40597', ['0']),
+      '40600': step('40600', ['999']),
+      '40598': step('40598', ['40597']),
+      '40601': step('40601', ['40600']),
+      '40602': step('40602', ['40601']),
+    }
+    const ids = relinkCandidates(main, [], configs, snapshots, '40600').map((t) => t.id)
+    expect(ids).toEqual(['0', '40597', '40598'])
+  })
+
+  // 0926 REVIEW F2：源视图画布入口是合成根（source: 前缀），作为入口入候选；
+  // start/end 仍排除（真实源视图 = start + 合成根 + 步骤 + end）。
+  it('源视图合成根（source: 前缀）作为入口入候选；start/end 仍排除', () => {
+    const main = ['start', 'source:430016398', '40600', 'end']
+    const configs: Record<string, NodeConfig> = {
+      'source:430016398': { ...cfgFromSnapshot(), title: '合成起点' },
+      '40600': { ...cfgFromSnapshot(), title: '孤儿步骤' },
+    }
+    expect(relinkCandidates(main, [], configs, {}, '40600')).toEqual([
+      { id: 'source:430016398', title: '流程入口 · 合成起点', isEntry: true },
+    ])
+  })
+
+  it('候选只看画布（configs），不要求步骤快照——快照是写入时才需要的', () => {
+    const main = ['start', '40597', '40600', 'end']
+    const configs: Record<string, NodeConfig> = {
+      '40597': { ...cfgFromSnapshot(), title: '列表页' },
+      '40600': { ...cfgFromSnapshot(), title: '孤儿步骤' },
+    }
+    // snapshots = {}：流程序列里其它步骤的快照也没了，但目标仍可列出
+    expect(relinkCandidates(main, [], configs, {}, '40600')).toEqual([
+      { id: '40597', title: '列表页', isEntry: false },
+    ])
+  })
+
+  it('「0」同时出现在 persistable（源模式在 main 里）时不去重出两个入口', () => {
+    const main = ['start', '0', '40600', 'end']
+    const configs: Record<string, NodeConfig> = {
+      '0': { ...cfgFromSnapshot(), title: '上市公司-配置' },
+      '40600': { ...cfgFromSnapshot(), title: '孤儿步骤' },
+    }
+    const ids = relinkCandidates(main, [], configs, {}, '40600').map((t) => t.id)
+    expect(ids).toEqual(['0'])
   })
 })

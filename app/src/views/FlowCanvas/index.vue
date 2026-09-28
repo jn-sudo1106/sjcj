@@ -3,9 +3,10 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
+import { useSourceStore } from '../../stores/source'
 import { useUiStore } from '../../stores/ui'
 import { MAX_WORKSPACE_TABS, useWorkspaceStore, type WorkspaceTabRef } from '../../stores/workspace'
-import { siteApi, sourceApi, type Source, type Step } from '../../api'
+import { flowCenterApi, siteApi, sourceApi, type Source, type Step } from '../../api'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 import { useRuntimeStore } from '../../stores/runtime'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
@@ -22,7 +23,7 @@ import SnatchLauncher from './source/SnatchLauncher.vue'
 import { nodeInspectorTabs } from './inspector/nodeInspectorTabs'
 import SiteDetailView from './result/SiteDetailView.vue'
 import { collectorCapabilityOf, type LoginConfigRef } from '@/views/FlowCanvas/canvas/flowModel'
-import { firstUnboundDraftNodeId } from '@/utils/flow/stepPersist'
+import { firstOutputTableMissingNodeId, firstUnboundDraftNodeId, validFlowIdOf } from '@/utils/flow/stepPersist'
 import { normalizeSourceView, normalizeSiteView, sourceViewFromHash } from '@/utils/url/workspaceRoute'
 import NewSiteWizard from './create/NewSiteWizard.vue'
 
@@ -33,6 +34,7 @@ const autosave = useFlowAutosave()
 const ui = useUiStore()
 const ws = useWorkspaceStore()
 const runtime = useRuntimeStore()
+const sourceStore = useSourceStore()
 // 三种结果视图均以当前源为粒度。
 const activeView = ref(normalizeSourceView(route.query.view))
 function syncActiveView() {
@@ -274,9 +276,9 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   // 首屏不等 config/configDetail 那一轮（withConfigDetails: false）：它必须等 nextConfigPaged
   // 出 configId 才能发，串在前面等于白等一个 RTT。步骤先到先画，补充字段随后回填。
   let source: Source | null
-  let steps: Step[] | null
+  let sourceSteps: Step[] | null
   try {
-    ;[source, steps] = await Promise.all([
+    ;[source, sourceSteps] = await Promise.all([
       sourceApi.sourceDetail(sourceId),
       sourceApi.sourceSteps(sourceId, { withConfigDetails: false }),
     ])
@@ -292,7 +294,23 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
     ElMessage.error('源不存在')
     return
   }
-  flow.loadFromSource(source, steps ?? [], null)
+  // 0925 整体切 flowId：源已绑流程（Source.flowId 为有效数字、且非 '0' 哨兵）→ 步骤按流程
+  // 查询（svg=true 自带真实根节点行 / 「流程入口」行，lastStep 已改写为根 ID），展示与
+  // 流程管理画布一致；未绑流程的源维持源视角查询（源虚拟根）。源视角那份并行结果仅作兜底。
+  // 0927 P2-4：口径收敛到 stepPersist.validFlowIdOf（ActiveFlow 判定四处共用）。
+  const flowId = validFlowIdOf(source.flowId)
+  let steps: Step[]
+  try {
+    steps = flowId
+      ? await flowCenterApi.steps(flowId, { withConfigDetails: false })
+      : sourceSteps ?? []
+  } catch (error) {
+    const detail = (error as Error)?.message ?? '网络异常'
+    sourceLoadError.value = `流程步骤加载失败：${detail}`
+    ElMessage.error(sourceLoadError.value)
+    return
+  }
+  flow.loadFromSource(source, steps, null)
   if (!ws.open(source.sourceId, source.name)) {
     onTabQuotaFull(fromOutside, () => ws.open(source.sourceId, source.name), '当前源')
   }
@@ -468,6 +486,15 @@ async function onStartCapture() {
     await autosave.flush()
   }
   if (autosave.status.value === 'pending') {
+    // 0927 P1-3：pending 现在是两个成因（未绑配置 / 输出表未就绪，useFlowAutosave 同口径），
+    // 这里分别定位节点并给出对应的引导文案——原来只查「未绑配置」：输出表未就绪时不选中
+    // 节点、文案还指去「保存节点配置」，方向全错。
+    const missingOutput = firstOutputTableMissingNodeId(flow.main, flow.branchGroups, flow.configs, sourceStore.stepSnapshots)
+    if (missingOutput) {
+      flow.select(missingOutput)
+      ElMessage.warning(`节点「${flow.configs[missingOutput]?.title || missingOutput}」输出表未选择，请先在右侧「表配置」补全后重试`)
+      return
+    }
     const pendingNode = firstUnboundDraftNodeId(flow.main, flow.configs)
     if (pendingNode) flow.select(pendingNode)
     ElMessage.warning(`节点「${flow.configs[pendingNode || '']?.title || pendingNode || '新节点'}」尚未保存，请先在右侧保存节点配置`)

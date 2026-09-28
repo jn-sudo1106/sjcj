@@ -16,7 +16,8 @@
 // ⚠️ **后端这条是「追加」不是「替换」**：`copyTemplateSteps` 只往目标流程里加步骤，
 // 不删现有的。所以调用方的确认文案必须说清"现有节点会保留"——顶部下拉原来的文案写的是
 // 「当前 N 个节点会被替换」「复制并替换」，那是前端本地替换时代的话，已经不成立。
-import { flowCenterApi, sourceApi } from '@/api'
+import { configApi, flowCenterApi, sourceApi, type Source } from '@/api'
+import { validFlowIdOf } from '@/utils/flow/stepPersist'
 
 export interface TemplateApplied {
   /** 套用后本源所属的流程 ID */
@@ -61,12 +62,57 @@ export async function applyTemplateToSource(
  * 沿用源视图进入画布时的同一条路径。
  */
 export async function reloadSourceIntoCanvas(sourceId: string): Promise<boolean> {
-  const [detail, steps] = await Promise.all([
-    sourceApi.sourceDetail(sourceId),
-    sourceApi.sourceSteps(sourceId, { withConfigDetails: false }),
-  ])
+  const detail = await sourceApi.sourceDetail(sourceId)
   if (!detail) return false
+  // 0925 整体切 flowId：与 index.vue loadSourceFlow 同一口径——源已绑流程（flowId 为有效数字且非
+  // '0' 哨兵）时按流程查（svg=true 自带真实根节点行，lastStep 已改写为根 ID），重载后与进入画布时
+  // 同形状（孤儿「关联」修复与流程模板套用都走这里；否则源视角查询缺根行，重载会把挂根步骤误判成孤儿）。
+  // 0927 P2-4：口径收敛到 stepPersist.validFlowIdOf（四处共用）。
+  const flowId = validFlowIdOf(detail.flowId)
+  const steps = flowId
+    ? await flowCenterApi.steps(flowId, { withConfigDetails: false })
+    : (await sourceApi.sourceSteps(sourceId, { withConfigDetails: false })) ?? []
   const { useFlowStore } = await import('@/stores/flow')
-  useFlowStore().loadFromSource(detail, steps ?? [], null)
+  useFlowStore().loadFromSource(detail, steps, null)
   return true
+}
+
+/**
+ * 无源上下文时的画布重载（0926：流程工作区抽屉里的孤儿「关联」修复）。
+ *
+ * 与 FlowDetailDrawer 的 deriveFromFlowConfig 同一条路径：`configDetail` + 按流程查步骤
+ * （svg=true 自带真实入口行）→ 用 stub Source 走 loadFromSource 重建画布，再纠正
+ * `flow.flowId` 并清掉 stub 源上下文。区别是**保留步骤快照**（`clearSourceCtxKeepSteps`）——
+ * 抽屉里连续修多个孤儿 / 改名仍然需要快照整包回写，全清之后下一次关联又会断。
+ * 画布形状与刚进抽屉时一致（孤儿标记按响应重新推导，本次修好的自然消失）。
+ */
+export async function reloadFlowIntoCanvas(flowId: string): Promise<boolean> {
+  const [config, steps] = await Promise.all([
+    configApi.configDetail(flowId).catch(() => null),
+    flowCenterApi.steps(flowId, { withConfigDetails: false }).catch(() => []),
+  ])
+  if (!steps?.length) return false
+  const { rootStepForSource } = await import('@/views/FlowCanvas/canvas/flowModel')
+  const stubSource: Source = {
+    sourceId: '',
+    name: config?.name || `流程 #${flowId}`,
+    url: config?.url || '',
+    configId: flowId,
+    mainTable: config?.entryTypeId || '',
+    owner: '',
+    state: 'C',
+  }
+  const rootStep = steps.some((s) => s.isRoot) ? null : rootStepForSource(stubSource)
+  const { useFlowStore } = await import('@/stores/flow')
+  const flow = useFlowStore()
+  flow.loadFromSource(stubSource, rootStep ? [rootStep, ...steps] : steps)
+  flow.flowId = flowId
+  // 0926：流程工作区形态——重载后节点写 / 自动保存按 flowId 锚定（与 FlowDetailDrawer 同口径）
+  flow.setFlowIdMode(true)
+  flow.setFlowName(config?.name || `流程 #${flowId}`)
+  // 与 FlowDetailDrawer.deriveFromFlowConfig 同一收尾：清掉 stub 源上下文但**保留步骤快照**
+  // （连续修多个孤儿 / 改名仍需快照整包回写）。
+  flow.clearSourceCtxKeepSteps()
+  flow.markSaved()
+  return flow.main.length > 2
 }

@@ -11,15 +11,30 @@ import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { configApi, type Config } from '@/api'
 import { useFlowStore } from '@/stores/flow'
+import { useSourceStore } from '@/stores/source'
 import SelectExistingConfigDialog from './SelectExistingConfigDialog.vue'
 
 const props = defineProps<{ nodeId: string }>()
 
 const flow = useFlowStore()
+const sourceStore = useSourceStore()
 const cfg = computed(() => flow.configs[props.nodeId])
 const sourceId = computed(() => flow.sourceCtx?.sourceId)
 const binding = ref(false)
 const pickerOpen = ref(false)
+
+// 0927 G1：流程入口（isRoot=1 真实根行，画布第一个节点）的配置可换——后端 ROOT 权威方案下
+// 首任务配置就是 ROOT.CONFIG_ID，新流程是「未配置草稿」，不在这里选配置就永远无法调度。
+// 普通节点仍要源上下文才能按源查同资源配置（非源画布禁用）；ROOT 节点走 ROOT 专属通道
+// （persistFlowSteps 的 updateRootConfig），候选配置不受源限制（后端 ROOT 可挂任意有效配置）。
+// 0927 P1-8：只认**真实物化 ROOT 行**（stepId 是数字）——svg 查询在未回填 ROOT 环境回退的
+// 「虚拟根」（itemConfig=0 / stepId='0'，isRoot=1 同样成立）与真实根无法靠 isRoot 区分，
+// 对虚拟根放行会让 rootConfigUpdate('0', …) 把虚拟根物化成真根。
+const isRootNode = computed(() => {
+  const snap = sourceStore.stepSnapshots[props.nodeId]
+  return snap?.isRoot === true && (snap.stepId ?? '') !== '0'
+})
+const canPick = computed(() => Boolean(sourceId.value) || (flow.flowIdMode && isRootNode.value))
 
 /**
  * 绑定配置。**必须先取 configDetail 再绑**：`configs/same` 返回的是精简对象，
@@ -36,7 +51,7 @@ async function bind(configId: string) {
       return
     }
     flow.bindExistingConfig(props.nodeId, detail)
-    ElMessage.success(`已绑定配置 #${configId}`)
+    ElMessage.success(isRootNode.value ? `已更新流程入口（ROOT）配置 #${configId}` : `已绑定配置 #${configId}`)
   } catch (e) {
     ElMessage.error(`绑定配置失败：${(e as Error)?.message ?? String(e)}`)
   } finally {
@@ -53,14 +68,18 @@ function onPick(config: Config) {
     <button
       class="ncs-btn"
       type="button"
-      :disabled="binding || !sourceId"
+      :disabled="binding || !canPick"
       data-testid="node-config-select"
-      :title="sourceId ? '更换本节点使用的配置' : '当前不是源画布，无法按源查同资源配置'"
+      :title="isRootNode && !sourceId
+        ? '更换流程入口（ROOT）配置'
+        : sourceId
+          ? '更换本节点使用的配置'
+          : '当前不是源画布，无法按源查同资源配置'"
       @click="pickerOpen = true"
     >{{ binding ? '绑定中…' : '更换' }}</button>
     <SelectExistingConfigDialog
       v-model:open="pickerOpen"
-      :source-id="sourceId"
+      :source-id="isRootNode ? undefined : sourceId"
       :current-config-id="cfg?.configId || undefined"
       @select="onPick"
     />
