@@ -591,6 +591,9 @@ watch(
   <main class="rc-canvas" :class="{ 'is-embedded': props.embedded }" @contextmenu="onPaneMenu" @click="closeMenu">
     <CanvasHeader v-if="!props.embedded" />
 
+    <!-- 画布主体单独做定位容器（0928）：节点库按钮原来相对整块 .rc-canvas 用写死的 top:108px
+         躲开头部，头部一多出分支提示条就压到提示文字上；改成相对画布区域定位，头部多高都不影响。 -->
+    <div class="rc-canvas-body">
     <button
       class="rc-node-library-toggle"
       type="button"
@@ -758,6 +761,7 @@ watch(
         </div>
       </div>
     </div>
+    </div>
 
     <button class="rc-btn rc-flow-xml" type="button" @click.stop="xmlOpen = true">XML</button>
     <FlowXmlDialog v-model:open="xmlOpen" :xml="xml" :flow-id="flow.flowId" :can-export="canExportXml" />
@@ -847,8 +851,8 @@ watch(
 .rc-canvas-scroll { flex: 1; overflow: auto; background-color: #f7f9fc; background-image: radial-gradient(#dfe7f2 0.8px, transparent 0.8px); background-size: 22px 22px; }
 .rc-flow-xml { position: absolute; z-index: 30; right: 32px; bottom: 32px; height: 28px; padding: 0 10px; border-color: var(--rc-border); background: rgba(255, 255, 255, .9); color: var(--rc-text-2); font-size: 11px; }
 .rc-flow-xml:hover { border-color: #bfdbfe; background: #fff; color: var(--rc-primary-ink); }
-.rc-node-library-toggle { position: absolute; z-index: 31; top: 108px; left: 12px; width: 30px; height: 30px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; color: var(--rc-primary); font-size: 21px; font-weight: 400; line-height: 1; cursor: pointer; transition: border-color .12s, background .12s, color .12s; }
-.rc-canvas.is-embedded .rc-node-library-toggle { top: 12px; }
+.rc-canvas-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.rc-node-library-toggle { position: absolute; z-index: 31; top: 12px; left: 12px; width: 30px; height: 30px; border: 1px solid var(--rc-border); border-radius: 8px; background: #fff; color: var(--rc-primary); font-size: 21px; font-weight: 400; line-height: 1; cursor: pointer; transition: border-color .12s, background .12s, color .12s; }
 .rc-node-library-toggle:hover, .rc-node-library-toggle.active { border-color: #93c5fd; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 
 .rc-flow { position: relative; margin: 56px auto 28px; }

@@ -409,12 +409,13 @@ async function onSwitchFlow(command: string) {
       </div>
       <!-- 「停用」0828 D24 移除：源启停统一在源视图的行操作里做，画布头只留运行入口。
            这里不做成禁用或隐藏——按钮整个删掉，避免同一能力两个入口。 -->
-      <!-- 分支流程的只读提示（0903 YB-A/YB-3，YB-B 后改文案）：画布已经能还原分支结构，
-           但**分支的挂接关系还不支持在画布上调整**——自动保存对分支流程冻结 lastStep 回写
-           （见 useStepWrite），拖动节点不会写回。不说这句话，用户会以为拖了就生效。 -->
+      <!-- 分支流程的提示（0903 YB-A/YB-3，YB-B 后改文案；0928 再改）：画布已经能还原分支结构，
+           但自动保存对分支流程冻结已有步骤的 lastStep 回写（见 useStepWrite）——主链节点拖了
+           画布会变、刷新就回去；分支里的节点本来就拖不动。新增节点（lastStep 按画布算）、
+           改名、进入条件、配置照常保存，这里一并说清，免得用户以为分支流程整个是只读的。 -->
       <div v-if="view === 'flow' && flow.hasBranchedSteps" class="ch-branch-note" data-testid="flow-branch-flattened">
         <span aria-hidden="true">⚠</span>
-        该流程含分支。分支的挂接关系暂不支持在画布上调整——拖动节点不会写回后端，节点名称与进入条件照常保存。
+        该流程含分支：已有节点的挂接关系不能在画布上调整（拖动不会保存）。可以在分支中新增节点，节点名称、进入条件、配置照常保存。
       </div>
       <div v-if="view === 'flow'" class="ch-canvas-actions" aria-label="源运行操作">
         <button class="rc-btn primary" type="button" @click="srcSnatch">发起抓取</button>
