@@ -37,6 +37,7 @@ import {
   type LaunchScope,
   type SourceFilter,
 } from './useSourceLaunch'
+import { detectSourceSearchField, mightBeUrlFragment } from './sourceSearchField'
 
 // `initialSourceIds`：从数据视图「按条件查源」跳过来时带的那批源 ID（0903 Y2-4）。
 // 直接预填「源 ID」筛选框——那个框本来就收逗号分隔的多个 ID，不为反查另造一套筛选。
@@ -86,9 +87,10 @@ const loadError = ref('')
  * 三者原先能组合（实测 `name=盛科` 4 条、`sourceUrl=centec` 1 条、同时给 1 条，取交集），
  * 合并之后一次只能按一个字段查。用户接受这个代价，换筛选栏少两格。
  *
- * 做成**显式选字段**而不是"一个框自动猜类型"：猜错就是静默漏结果——
- * 实测 `name=centec` 命中 0 条、`sourceUrl=centec` 命中 1 条，两者互不覆盖，
- * 而用户根本不会知道自己被猜到了另一个参数上。
+ * 原先做成**显式选字段**：猜错就是静默漏结果——实测 `name=centec` 命中 0 条、
+ * `sourceUrl=centec` 命中 1 条，两者互不覆盖。2026-09-28 产品嫌「要点 2 下」，改为
+ * **能明确判断的自动识别**（规则见 sourceSearchField.ts），下拉跟着切、用户手动选的优先；
+ * 说不准的单个英文词按名称查，查空了给「改按 URL 查」的提示（urlFallback），不静默漏。
  *
  * **状态不并进来**（用户同意）：它是枚举，跟这三个文本条件不同类，并进来控件要变形，
  * 而且「状态=异常 ＋ 名称含 X」是常见组合，并了就做不了。
@@ -101,7 +103,33 @@ const SEARCH_FIELDS: { value: SearchField; label: string; placeholder: string }[
 ]
 const searchField = ref<SearchField>('sourceIds')
 const searchText = ref(props.initialSourceIds ?? '')
-const searchPlaceholder = computed(() => SEARCH_FIELDS.find((f) => f.value === searchField.value)?.placeholder ?? '')
+/** 用户手动点下拉选过字段：之后不再自动识别覆盖它；清空输入框或点「清空」后恢复自动 */
+const fieldPinned = ref(false)
+const searchPlaceholder = computed(() => (fieldPinned.value
+  ? SEARCH_FIELDS.find((f) => f.value === searchField.value)?.placeholder ?? ''
+  : '源 ID / 名称 / URL，自动识别'))
+watch(searchText, (text) => {
+  if (!text.trim()) {
+    fieldPinned.value = false
+    return
+  }
+  if (fieldPinned.value) return
+  searchField.value = detectSourceSearchField(text) ?? searchField.value
+})
+function onFieldPicked() {
+  fieldPinned.value = true
+  if (searchText.value) search()
+}
+/**
+ * 按名称自动识别、查出 0 条，且输入像网址片段（如 `centec`）时，提示改按 URL 查。
+ * 记下的是当时查的词：用户改了输入框提示就不再成立，下一次查询会重算。
+ */
+const urlFallback = ref('')
+function useUrlFallback() {
+  searchField.value = 'sourceUrl'
+  fieldPinned.value = true
+  search()
+}
 /** 当前这一格落到哪个后端参数上；没选中的两个恒为 undefined */
 const searchValueOf = (field: SearchField) => (searchField.value === field ? (searchText.value.trim() || undefined) : undefined)
 const flowFilterId = ref(props.initialFlowId ?? '')
@@ -258,6 +286,10 @@ async function loadSources() {
     // 分页页数也跟着错。服务端返回什么就展示什么，这是唯一自洽的口径。
     rows.value = applyMarkOverlay(result.list)
     total.value = result.total
+    const keyword = searchText.value.trim()
+    urlFallback.value = result.total === 0 && !fieldPinned.value && searchField.value === 'name' && mightBeUrlFragment(keyword)
+      ? keyword
+      : ''
   } catch (error) {
     if (requestId !== sourceRequestSeq) return
     rows.value = []
@@ -274,6 +306,7 @@ function search() {
 function clearFilters() {
   searchField.value = 'sourceIds'
   searchText.value = ''
+  fieldPinned.value = false
   flowFilterId.value = ''
   statusFilter.value = 'all'
   tagFilter.value = ''
@@ -898,7 +931,7 @@ watch(() => ui.sourceListRevision, () => {
            显式选字段而不是自动猜类型——猜错是静默漏结果，用户不会知道。 -->
       <label><span class="sov-label-text">查询</span>
         <span class="sov-search">
-          <select v-model="searchField" data-testid="source-overview-search-field" @change="searchText && search()">
+          <select v-model="searchField" data-testid="source-overview-search-field" @change="onFieldPicked">
             <option v-for="f in SEARCH_FIELDS" :key="f.value" :value="f.value">{{ f.label }}</option>
           </select>
           <input
@@ -997,6 +1030,9 @@ watch(() => ui.sourceListRevision, () => {
 
     <div class="sov-summary">
       <span>共 {{ total }} 个源</span>
+      <span v-if="urlFallback && !loading" class="sov-url-fallback" data-testid="source-overview-url-fallback">
+        按名称没查到「{{ urlFallback }}」，<button type="button" class="sov-link" @click="useUrlFallback">改按 URL 查</button>
+      </span>
       <span v-if="collectProgress" class="sov-progress" data-testid="source-collect-progress">{{ collectProgress }}</span>
       <button v-if="failedBatches.length" class="sov-btn" type="button" data-testid="source-retry-failed" @click="retryFailedBatches">重试失败批次（{{ failedBatches.reduce((n, b) => n + b.ids.length, 0) }}）</button>
       <template v-if="selectMode">
@@ -1253,6 +1289,7 @@ watch(() => ui.sourceListRevision, () => {
 .sov-url a:hover { text-decoration: underline; }
 .sov-site { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sov-muted { color: var(--rc-faint); }
+.sov-url-fallback { color: var(--rc-muted); }
 .sov-empty { padding: 42px !important; text-align: center !important; color: var(--rc-faint) !important; }
 .sov-check-col { width: 34px; text-align: center; }
 .sov-check-col input { cursor: pointer; accent-color: var(--rc-primary); margin: 0; }

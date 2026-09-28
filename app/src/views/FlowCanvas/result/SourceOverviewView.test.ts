@@ -1173,12 +1173,81 @@ describe('源视图 · 查询三合一（0917-11）', () => {
     expect(lastQ(page)).toEqual(expect.objectContaining({ sourceIds: '430016214,430016215' }))
   })
 
-  it('占位提示跟着字段走', async () => {
+  it('占位提示：没手动选字段时说明会自动识别；手动选了就跟着字段走', async () => {
     const { wrapper } = await mountWithSpy()
     const text = () => (wrapper.get('[data-testid="source-overview-search-text"]').element as HTMLInputElement).placeholder
-    expect(text()).toBe('多个 ID 用逗号分隔')
+    expect(text()).toBe('源 ID / 名称 / URL，自动识别')
     await wrapper.get('[data-testid="source-overview-search-field"]').setValue('sourceUrl')
     expect(text()).toBe('URL 关键字，如 centec')
+  })
+
+  // 2026-09-28 产品：「选择要点 2 下」「url 这种可以自动识别」
+  it('不点下拉直接输入：按内容自动切字段，只发对应参数', async () => {
+    const { wrapper, page } = await mountWithSpy()
+    const field = () => (wrapper.get('[data-testid="source-overview-search-field"]').element as HTMLSelectElement).value
+    const input = wrapper.get('[data-testid="source-overview-search-text"]')
+    const run = async (v: string) => {
+      await input.setValue(v)
+      await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+      await flushPromises()
+    }
+
+    await run('https://www.sanyoumed.com/zh/news')
+    expect(field()).toBe('sourceUrl')
+    expect(lastQ(page)).toEqual(expect.objectContaining({ sourceUrl: 'https://www.sanyoumed.com/zh/news' }))
+    expect(lastQ(page)?.name).toBeUndefined()
+
+    await run('430016214, 430016215')
+    expect(field()).toBe('sourceIds')
+    expect(lastQ(page)).toEqual(expect.objectContaining({ sourceIds: '430016214, 430016215' }))
+
+    await run('三友医疗')
+    expect(field()).toBe('name')
+    expect(lastQ(page)).toEqual(expect.objectContaining({ name: '三友医疗' }))
+  })
+
+  it('手动选的字段优先，之后输入不再自动改；清空输入框后恢复自动', async () => {
+    const { wrapper } = await mountWithSpy()
+    const field = () => (wrapper.get('[data-testid="source-overview-search-field"]').element as HTMLSelectElement).value
+    const input = wrapper.get('[data-testid="source-overview-search-text"]')
+    await wrapper.get('[data-testid="source-overview-search-field"]').setValue('name')
+    await input.setValue('www.cls.cn')
+    expect(field()).toBe('name')
+
+    await input.setValue('')
+    await input.setValue('www.cls.cn')
+    expect(field()).toBe('sourceUrl')
+  })
+
+  it('按名称没查到、输入像网址片段时提示「改按 URL 查」，点了就按 URL 重查', async () => {
+    const { wrapper, page } = await mountWithSpy()
+    page.mockResolvedValue({ total: 0, list: [] })
+    await wrapper.get('[data-testid="source-overview-search-text"]').setValue('centec')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+
+    const hint = wrapper.get('[data-testid="source-overview-url-fallback"]')
+    expect(hint.text()).toContain('按名称没查到「centec」')
+    page.mockResolvedValue({ total: 1, list: [source] })
+    await hint.get('button').trigger('click')
+    await flushPromises()
+    expect(lastQ(page)).toEqual(expect.objectContaining({ sourceUrl: 'centec' }))
+    expect(wrapper.find('[data-testid="source-overview-url-fallback"]').exists()).toBe(false)
+  })
+
+  it('中文名称查空不提示改按 URL（不可能是网址）；手动选了名称查空也不提示', async () => {
+    const { wrapper, page } = await mountWithSpy()
+    page.mockResolvedValue({ total: 0, list: [] })
+    await wrapper.get('[data-testid="source-overview-search-text"]').setValue('不存在的源')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="source-overview-url-fallback"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="source-overview-search-field"]').setValue('name')
+    await wrapper.get('[data-testid="source-overview-search-text"]').setValue('centec')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="source-overview-url-fallback"]').exists()).toBe(false)
   })
 
   it('「清空」把字段也还原成源 ID', async () => {
