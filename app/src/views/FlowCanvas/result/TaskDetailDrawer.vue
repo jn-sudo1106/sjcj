@@ -3,6 +3,8 @@ import { computed } from 'vue'
 import type { TaskInst } from '@/api'
 import { toExternalHref } from '@/utils/url/externalUrl'
 import { copyToClipboard } from '@/utils/clipboard'
+// 数据 ID = parentId、父任务 ID = vars.pTaskId，口径见 taskIds.ts
+import { taskDataId, taskParentTaskId } from './taskIds'
 
 const props = defineProps<{
   modelValue: boolean
@@ -43,11 +45,11 @@ const identityItems = computed<IdentityItem[]>(() => {
   const taskUrlHref = toExternalHref(task.taskUrl)
   return [
     { key: 'taskId', label: '任务 ID', value: textOf(task.taskId), action: task.taskId ? 'copy' : undefined },
-    { key: 'bizId', label: '数据 ID', value: textOf(task.bizId), action: task.bizId ? 'locateData' : undefined },
+    { key: 'bizId', label: '数据 ID', value: textOf(taskDataId(task)), action: taskDataId(task) ? 'locateData' : undefined },
     { key: 'sourceName', label: '所属源', value: textOf(props.sourceName || task.sourceId), action: task.sourceId ? 'openSource' : undefined },
     { key: 'nodeName', label: '流程节点', value: textOf(props.stepName || task.node) },
     { key: 'topic', label: '队列', value: textOf(task.topic) },
-    { key: 'parentId', label: '父任务 ID', value: textOf(task.parentId) },
+    { key: 'parentId', label: '父任务 ID', value: textOf(taskParentTaskId(task)) },
     { key: 'fileId', label: '文件 ID', value: textOf(task.fileId) },
     { key: 'typeName', label: '任务类型', value: textOf(task.typeName) },
     { key: 'state', label: '状态', value: textOf(stateText(task.state)) },
@@ -92,7 +94,7 @@ function close() {
 }
 
 function onLocateData() {
-  if (props.task?.bizId) {
+  if (props.task && taskDataId(props.task)) {
     emit('locateData', props.task)
   }
 }
@@ -122,7 +124,7 @@ function copyField(text: string, label: string) {
           <div class="ffd-title">{{ task.taskName || `任务 ${task.taskId}` }}</div>
           <div class="ffd-sub">
             任务 ID {{ task.taskId }}
-            <template v-if="task.bizId"> · 数据 ID {{ task.bizId }}</template>
+            <template v-if="taskDataId(task)"> · 数据 ID {{ taskDataId(task) }}</template>
             <template v-if="sourceName">
               · 所属源
               <button

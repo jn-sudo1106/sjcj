@@ -479,7 +479,8 @@ describe('TaskView', () => {
         list: [
           {
             taskId: 't1',
-            bizId: 'data_1001',
+            bizId: 'ctx_1',
+            parentId: '1035124',
             taskUrl: 'https://example.com/article/1',
             state: 'C',
             typeName: '详情抓取',
@@ -490,6 +491,8 @@ describe('TaskView', () => {
           },
           {
             taskId: 't2',
+            // 根任务：只有运行上下文 bizId、没有 parentId，不是由某条数据触发的，没有数据 ID
+            bizId: 'ctx_1',
             state: 'E',
             typeName: '源级任务',
             taskName: '文章列表',
@@ -509,17 +512,18 @@ describe('TaskView', () => {
       expect(tableText).toContain('数据 ID')
       expect(tableText).toContain('任务 URL')
 
-      // 第一行有 bizId 与 taskUrl
-      const bizLink = wrapper.find('[data-testid="task-biz-link"]')
-      expect(bizLink.exists()).toBe(true)
-      expect(bizLink.text()).toBe('data_1001')
+      // 第一行：数据 ID 显示 parentId，不是 bizId（2026-09-28 生产实测：bizId 是运行上下文 ID，
+      // 同一轮里处理不同数据的任务 bizId 都一样，拿去表里查恒为 0 条）
+      const bizLinks = wrapper.findAll('[data-testid="task-biz-link"]')
+      expect(bizLinks).toHaveLength(1)
+      expect(bizLinks[0]!.text()).toBe('1035124')
 
       const urlLink = wrapper.find('[data-testid="task-url-link"]')
       expect(urlLink.exists()).toBe(true)
       expect(urlLink.attributes('href')).toBe('https://example.com/article/1')
       expect(urlLink.attributes('target')).toBe('_blank')
 
-      // 第二行 bizId 与 taskUrl 为空，渲染 —
+      // 第二行没有 parentId 与 taskUrl，渲染 —
       const rows = wrapper.findAll('tbody tr')
       expect(rows.length).toBe(2)
       expect(rows[1].text()).toContain('—')
@@ -537,7 +541,7 @@ describe('TaskView', () => {
       { stepId: '391007768-s2', sourceId: '391007768', name: '详情解析', configId: 'cfg-2', enabled: true },
     ]
 
-    async function clickBizLink(task: Partial<TaskInst>) {
+    async function clickBizLink(task: Partial<TaskInst>, steps: unknown[] = LOCATE_STEPS) {
       setActivePinia(createPinia())
       await router.push('/canvas')
       const source = mockSourceDetail({ sourceId: '391007768' })!
@@ -545,13 +549,13 @@ describe('TaskView', () => {
       // stepsBySource 由 loadNodeMetadata 填，它要 siteSources 里有这个源（见 TaskView 里
       // 「网站态未选定具体源时不拉」那段说明），光 loadFromSource 填的是 flow store，不是这里
       vi.spyOn(siteApi, 'siteSources').mockResolvedValue([{ sourceId: source.sourceId, name: '源 A' }] as never)
-      vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(LOCATE_STEPS as never)
+      vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps as never)
       vi.spyOn(sourceApi, 'sourceNodeRuns').mockResolvedValue([])
 
       vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({
         total: 1,
         list: [{
-          taskId: 't1', bizId: 'data_986079', state: 'E', typeName: '详情抓取',
+          taskId: 't1', bizId: 'ctx_1', parentId: '986079', state: 'E', typeName: '详情抓取',
           taskName: '文章详情', sourceId: source.sourceId, updatedAt: '2026-09-17 10:00',
           ...task,
         } as TaskInst],
@@ -573,13 +577,34 @@ describe('TaskView', () => {
       const { call, source } = await clickBizLink({ node: 'news_wechat' })
 
       expect(call.path).toBe('/canvas')
-      expect(call.query).toMatchObject({ sourceId: source.sourceId, view: 'data', dataId: 'data_986079' })
+      expect(call.query).toMatchObject({ sourceId: source.sourceId, view: 'data', dataId: '986079' })
       // 传一个匹配不上的 nodeId 只会留在 URL 里误导人（分享/刷新时更明显）
       expect(call.query.nodeId).toBeUndefined()
     })
 
     it('能按 configId 找回那一步时，nodeId 传的是真正的 stepId', async () => {
       const { call } = await clickBizLink({ node: 'news_wechat', configId: 'cfg-2' })
+
+      expect(call.query.nodeId).toBe('391007768-s2')
+    })
+
+    // 任务处理的是它输入表里的数据（上游产出的那一行），要定位到上游节点，
+    // 而不是任务自己的节点——后者的输出表存的是这条任务产出的数据
+    it('任务节点的输入表由上游节点产出时，nodeId 传上游节点', async () => {
+      const { call } = await clickBizLink({ configId: 'cfg-2' }, [
+        { ...LOCATE_STEPS[0], outputTable: 'T_LIST' },
+        { ...LOCATE_STEPS[1], inputTable: 'T_LIST', outputTable: 'T_DETAIL' },
+      ])
+
+      expect(call.query).toMatchObject({ dataId: '986079', nodeId: '391007768-s1' })
+    })
+
+    // 公众号流程 1400976 三个节点都落 6200029：往前找会撞上兄弟分支，同表时就用任务自己的节点
+    it('任务节点输入、输出同一张表时，nodeId 就是任务自己的节点', async () => {
+      const { call } = await clickBizLink({ configId: 'cfg-2' }, [
+        { ...LOCATE_STEPS[0], outputTable: '6200029' },
+        { ...LOCATE_STEPS[1], inputTable: '6200029', outputTable: '6200029' },
+      ])
 
       expect(call.query.nodeId).toBe('391007768-s2')
     })

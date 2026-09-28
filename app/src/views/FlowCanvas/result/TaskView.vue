@@ -17,6 +17,7 @@ import TaskDetailDrawer from './TaskDetailDrawer.vue'
 import { buildHorizontalLayout, nodeTaskQueue } from '@/views/FlowCanvas/canvas/flowModel'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { nextStepTokens } from '@/utils/flow/nextStepFields'
+import { taskDataId } from './taskIds'
 
 // 流程图区最大高度（0928，与数据视图共用同一偏好）：超出在区内滚动，底边分隔条拖拽调整
 const railHeight = ref(readResultRailHeight())
@@ -297,16 +298,34 @@ function stepIdOfTask(task: TaskInst): string {
   return byConfig?.stepId ?? ''
 }
 
+/**
+ * 「数据 ID」那条数据所在的节点（2026-09-28）：任务处理的是**它输入表里**的数据，
+ * 也就是上游节点产出的那一行，要定位到上游节点（它的输出表 = 本任务节点的输入表），
+ * 而不是任务自己的节点——后者的输出表是这条任务产出的数据，不一定是同一张表。
+ * 输入、输出同一张表时就用任务自己的节点：那种流程（如公众号 1400976 三个节点全落 6200029）
+ * 往前找"输出这张表的节点"会撞上兄弟分支，高亮一个不相干的节点。上游找不到时也退回自己的节点。
+ */
+function dataStepIdOfTask(task: TaskInst): string {
+  const own = stepIdOfTask(task)
+  const steps = stepsBySource.value[task.sourceId] ?? []
+  const index = steps.findIndex((step) => step.stepId === own)
+  const input = index >= 0 ? steps[index]!.inputTable : ''
+  if (!input || input === steps[index]!.outputTable) return own
+  const upstream = steps.slice(0, index).reverse().find((step) => step.outputTable === input)
+  return upstream?.stepId ?? own
+}
+
 function onLocateData(task: TaskInst) {
-  if (!task.bizId) return
-  const nodeId = stepIdOfTask(task)
+  const dataId = taskDataId(task)
+  if (!dataId) return
+  const nodeId = dataStepIdOfTask(task)
   void router.push({
     path: '/canvas',
     query: {
       siteId: siteId.value || undefined,
       sourceId: task.sourceId,
       view: 'data',
-      dataId: task.bizId,
+      dataId,
       ...(nodeId ? { nodeId } : {}),
     },
   })
@@ -685,16 +704,17 @@ const nextStepHints = computed(() => {
               <td>{{ nodeName(task) }}</td>
               <td>{{ task.taskName }}</td>
               <td>
+                <!-- 数据 ID 取 parentId（触发这条任务的数据），不是 bizId（运行上下文 ID），见 taskIds.ts -->
                 <a
-                  v-if="task.bizId"
+                  v-if="taskDataId(task)"
                   class="tv-link"
                   role="button"
                   tabindex="0"
                   data-testid="task-biz-link"
-                  :title="`定位数据 ID: ${task.bizId}`"
+                  :title="`定位数据 ID: ${taskDataId(task)}`"
                   @click="onLocateData(task)"
                   @keydown.enter="onLocateData(task)"
-                >{{ task.bizId }}</a>
+                >{{ taskDataId(task) }}</a>
                 <span v-else class="muted">—</span>
               </td>
               <td>

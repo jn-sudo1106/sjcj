@@ -27,7 +27,7 @@ function mockTask(overrides: Partial<TaskInst> = {}): TaskInst {
     taskUrl: 'https://example.com/item/1',
     params: '{"page":1,"limit":20}',
     taskResult: '{"status":"error","message":"timeout"}',
-    vars: '{"retryCount":2}',
+    vars: '{"retryCount":2,"pTaskId":"88790"}',
     createdAt: '2026-09-17 10:00:00',
     startedAt: '2026-09-17 10:00:05',
     endedAt: '2026-09-17 10:00:15',
@@ -60,11 +60,13 @@ describe('TaskDetailDrawer', () => {
 
     // 检查标识区字段
     expect(wrapper.find('[data-testid="task-detail-taskId"]').text()).toBe('88801')
-    expect(wrapper.find('[data-testid="task-detail-biz-link"]').text()).toBe('data_777')
+    // 数据 ID 是 parentId（触发任务的那条数据），bizId 是运行上下文 ID、不展示为数据 ID（2026-09-28 实测）
+    expect(wrapper.find('[data-testid="task-detail-biz-link"]').text()).toBe('88800')
     expect(wrapper.find('[data-testid="task-detail-source-link"]').text()).toBe('财经源1')
     expect(wrapper.find('[data-testid="task-detail-nodeName"]').text()).toBe('详情解析节点')
     expect(wrapper.find('[data-testid="task-detail-topic"]').text()).toBe('queue_article')
-    expect(wrapper.find('[data-testid="task-detail-parentId"]').text()).toBe('88800')
+    // 父任务 ID 在 vars.pTaskId，不是 parentId
+    expect(wrapper.find('[data-testid="task-detail-parentId"]').text()).toBe('88790')
     expect(wrapper.find('[data-testid="task-detail-fileId"]').text()).toBe('file_99')
     expect(wrapper.find('[data-testid="task-detail-typeName"]').text()).toBe('详情抓取')
     expect(wrapper.find('.rc-status.err').text()).toContain('异常')
