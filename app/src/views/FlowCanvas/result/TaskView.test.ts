@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import TaskView from './TaskView.vue'
+import RailResizeHandle from './RailResizeHandle.vue'
 import TaskViewSource from './TaskView.vue?raw'
 import { mockSourceDetail, mockSourceSteps } from '@/api/mock/sources'
 import { dataApi, siteApi, sourceApi, type TaskInst } from '@/api'
@@ -31,6 +32,9 @@ describe('TaskView', () => {
 
     expect(wrapper.find('[data-testid="task-source-filter"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="task-process-rail"]').exists()).toBe(true)
+    // 0928：流程图区默认限高 + 底边高度分隔条（与数据视图共用偏好）
+    expect((wrapper.get('[data-testid="task-process-rail"]').element as HTMLElement).style.maxHeight).toBe('220px')
+    expect(wrapper.findComponent(RailResizeHandle).exists()).toBe(true)
     expect(wrapper.find('[data-testid="task-node-filter"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('列表抓取')
     expect(wrapper.get('[data-testid="source-task-table"]').text()).toContain('队列')
@@ -141,6 +145,7 @@ describe('TaskView', () => {
 
     // 网站态没有"当前源"，流程节点条不适用；但表格正常出
     expect(wrapper.find('[data-testid="task-process-rail"]').exists()).toBe(false)
+    expect(wrapper.findComponent(RailResizeHandle).exists()).toBe(false)
     wrapper.unmount()
   })
 

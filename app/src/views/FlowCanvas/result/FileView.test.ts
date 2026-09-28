@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import FileView from './FileView.vue'
+import RailResizeHandle from './RailResizeHandle.vue'
 import { readSqlConditions } from '@/utils/sqlConditionHistory'
 import FileDetailDrawer from './FileDetailDrawer.vue'
 import FilePreviewDrawer from './components/FilePreviewDrawer.vue'
@@ -124,6 +125,9 @@ describe('FileView', () => {
     expect(wrapper.text()).toContain('状态（不限）')
     expect(wrapper.text()).toContain('MD5')
     expect(wrapper.find('[data-testid="file-process-rail"]').exists()).toBe(true)
+    // 0928：流程图区默认限高 + 底边高度分隔条（与数据视图共用偏好）
+    expect((wrapper.get('[data-testid="file-process-rail"]').element as HTMLElement).style.maxHeight).toBe('220px')
+    expect(wrapper.findComponent(RailResizeHandle).exists()).toBe(true)
     expect(wrapper.find('[data-testid="file-resource-table"]').text()).toContain('数据源：news-文件资源表')
     expect(wrapper.text()).not.toContain('文件记录关联字段待接口确认后再启用节点筛选')
     expect(tables).toHaveBeenCalled()

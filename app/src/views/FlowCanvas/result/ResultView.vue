@@ -23,7 +23,8 @@ import DataGrid from './DataGrid.vue'
 import FilePreview from './components/FilePreview.vue'
 import { extFromFieldHint, extFromName, ossPathWithExt } from '@/utils/ossFile'
 import ProcessNodeRail from './ProcessNodeRail.vue'
-import { readResultRailOpen, writeResultRailOpen } from './resultLayoutPref'
+import { readResultRailHeight, readResultRailOpen, writeResultRailOpen } from './resultLayoutPref'
+import RailResizeHandle from './RailResizeHandle.vue'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import RowDetailFields from './RowDetailFields.vue'
@@ -91,6 +92,8 @@ if (pendingCondition) {
 // 代价：收起状态下看不出当前在哪个节点（与全部源视图现状一致），暂按会上口径保留。
 const railOpen = ref(readResultRailOpen())
 watch(railOpen, writeResultRailOpen)
+// 流程图区最大高度（0928）：内容更矮时按内容收缩，更高时在区内滚动，底边分隔条拖拽调整。
+const railHeight = ref(readResultRailHeight())
 // 全屏：整个面板 position:fixed 铺满视口，不复制模板、不引入弹层——详情抽屉本来就渲染在
 // .rv-shell 内部，会跟着一起进全屏；祖先链上没有 transform/filter/contain，fixed 能正常
 // 逃逸到视口（已核对 AppShell.vue / FlowCanvas/index.vue）。
@@ -1449,7 +1452,7 @@ async function onTestScript() {
          （2026-08-15 第十三次纠偏：原来把它俩塞进筛选行，等于把一组筛选条件劈成两半）。
          收起后 .rv-railbox 靠 min-height 留出一条窄带，展开按钮不会跟着消失。 -->
     <div v-if="selectedNodeId && railOpen" class="rv-railbox">
-      <div class="rv-bar" data-testid="data-process-rail">
+      <div class="rv-bar" data-testid="data-process-rail" :style="{ maxHeight: `${railHeight}px` }">
         <ProcessNodeRail
           :model-value="selectedNodeId"
           :layout="processLayout"
@@ -1469,6 +1472,7 @@ async function onTestScript() {
           @click="railOpen = false"
         ><el-icon :size="14"><ArrowUp /></el-icon></button>
       </div>
+      <RailResizeHandle v-model="railHeight" />
     </div>
 
     <!-- 主干行（0910 重排）：左端是节点展开流程入口，中间「查询」+「筛选」，
@@ -1959,9 +1963,6 @@ async function onTestScript() {
 .rv-fs-source { flex: none; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 700; color: var(--rc-text); }
 
 .rv-bar { position: relative; padding: 8px 0; background: #f8fafc; overflow: auto; }
-.rv-resize { height: 6px; background: var(--rc-border-soft); cursor: row-resize; position: relative; transition: background 0.15s; }
-.rv-resize:hover { background: var(--rc-primary-bg); }
-.rv-resize-grip { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 28px; height: 2px; background: var(--rc-faint); border-radius: 1px; box-shadow: 0 4px 0 var(--rc-faint); }
 .rv-bar-canvas { position: relative; }
 .rv-bar svg { position: absolute; inset: 0; pointer-events: none; }
 .rv-edge { fill: none; stroke: #94a3b8; stroke-width: 1.4; }

@@ -10,11 +10,16 @@ import { confirmDanger } from '@/utils/confirmDanger'
 import { toExternalHref } from '@/utils/url/externalUrl'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
+import RailResizeHandle from './RailResizeHandle.vue'
+import { readResultRailHeight } from './resultLayoutPref'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import TaskDetailDrawer from './TaskDetailDrawer.vue'
 import { buildHorizontalLayout, nodeTaskQueue } from '@/views/FlowCanvas/canvas/flowModel'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { nextStepTokens } from '@/utils/flow/nextStepFields'
+
+// 流程图区最大高度（0928，与数据视图共用同一偏好）：超出在区内滚动，底边分隔条拖拽调整
+const railHeight = ref(readResultRailHeight())
 
 // 任务是源的运行事实：源画布下只看当前源；网站详情页（siteWide）聚合看全部源。
 //
@@ -541,9 +546,10 @@ const nextStepHints = computed(() => {
     <div class="tv-body">
       <div v-if="!hasContext" class="tv-empty-row">{{ siteWide ? '未指定网站，无法查看任务。' : '任务视图仅在源详情下可用。' }}</div>
       <template v-else>
-        <div v-if="!siteWide" class="tv-process-rail" data-testid="task-process-rail">
+        <div v-if="!siteWide" class="tv-process-rail" data-testid="task-process-rail" :style="{ maxHeight: `${railHeight}px` }">
           <ProcessNodeRail :model-value="filters.nodeId" :layout="processLayout" :node-queues="nodeQueues" @update:model-value="onSelectNode" />
         </div>
+        <RailResizeHandle v-if="!siteWide" v-model="railHeight" class="tv-rail-resize" />
 
         <p v-if="nextStepHints.length" class="tv-next-fields" data-testid="task-next-fields">
           下一节点会用到：{{ nextStepHints.join('、') }}
@@ -757,7 +763,8 @@ const nextStepHints = computed(() => {
 <style scoped>
 .tv-shell { display: flex; flex-direction: column; height: 100%; overflow: hidden; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); }
 .tv-body { flex: 1; overflow: auto; padding: 12px; }
-.tv-process-rail { min-height: 80px; margin-bottom: 10px; overflow-x: auto; background: #f8fafc; border: 1px solid var(--rc-border-soft); border-radius: 6px; }
+.tv-rail-resize { margin: 2px 0 10px; border-radius: 3px; }
+.tv-process-rail { min-height: 80px; overflow: auto; background: #f8fafc; border: 1px solid var(--rc-border-soft); border-radius: 6px; }
 .tv-filters, .tv-pager { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
 .tv-next-fields { margin: 0 0 10px; color: var(--rc-muted); font-size: 12px; }
 .tv-input { height: 28px; min-width: 112px; padding: 0 10px; color: var(--rc-text); border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; font-size: 12px; }

@@ -7,6 +7,8 @@ import { useFlowStore } from '@/stores/flow'
 import { fileApi, sourceApi, type DataTableMeta, type FileResourceRecord, type Step } from '@/api'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
+import RailResizeHandle from './RailResizeHandle.vue'
+import { readResultRailHeight } from './resultLayoutPref'
 import FileDetailDrawer from './FileDetailDrawer.vue'
 import FilePreviewDrawer from './components/FilePreviewDrawer.vue'
 import { buildHorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
@@ -20,6 +22,8 @@ const processLayout = computed(() =>
   buildHorizontalLayout(flow.main, flow.branches, flow.configs, flow.branchGroups, { includeTerminals: false }),
 )
 const selectedNodeId = ref('')
+// 流程图区最大高度（0928，与数据视图共用同一偏好）：超出在区内滚动，底边分隔条拖拽调整
+const railHeight = ref(readResultRailHeight())
 // 首次打开先展示该源的完整文件集。流程轨道是用户主动收窄范围的入口，不能因为首节点被
 // 自动高亮就把它当作筛选条件；否则文件明明属于该源，却会在首节点没有产出时被全部隐藏。
 const nodeFilterActive = ref(false)
@@ -262,7 +266,7 @@ function openPreview(file: FileResourceRecord) {
     <div class="fv-body">
       <div v-if="!sourceId" class="fv-empty-row">文件视图仅在源详情下可用。</div>
       <template v-else>
-        <div class="fv-process-rail" data-testid="file-process-rail">
+        <div class="fv-process-rail" data-testid="file-process-rail" :style="{ maxHeight: `${railHeight}px` }">
           <ProcessNodeRail
             :model-value="selectedNodeId"
             :layout="processLayout"
@@ -271,6 +275,7 @@ function openPreview(file: FileResourceRecord) {
           />
           <div class="fv-rail-note" data-testid="file-rail-note">{{ railNote }}</div>
         </div>
+        <RailResizeHandle v-model="railHeight" class="fv-rail-resize" />
         <div class="fv-filters">
           <select
             v-if="!tableLoading && !error && tableCandidates.length > 1"
@@ -386,12 +391,12 @@ function openPreview(file: FileResourceRecord) {
 .fv-empty-row { text-align: center; color: var(--rc-faint); font-size: 13px; padding: 40px 12px; }
 .fv-process-rail {
   min-height: 80px;
-  margin-bottom: 8px;
-  overflow-x: auto;
+  overflow: auto;
   background: #f8fafc;
   border: 1px solid var(--rc-border-soft, #e2e8f0);
   border-radius: 10px;
 }
+.fv-rail-resize { margin: 2px 0 8px; border-radius: 3px; }
 .fv-rail-note { padding: 0 12px 8px; color: var(--rc-faint); font-size: 11px; }
 .fv-toolbar-note { flex: 0 1 auto; min-width: 0; color: var(--rc-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fv-error { color: var(--rc-error); }

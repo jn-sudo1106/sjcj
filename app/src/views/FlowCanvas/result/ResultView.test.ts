@@ -680,6 +680,40 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     expect(wrapper.find('[data-testid="data-process-rail"]').exists()).toBe(true)
   })
 
+  // 0928：流程图区默认最大高度 220px（分支多时不再把数据表顶出视口），底边分隔条拖拽调整并记住。
+  it('流程图区默认限高，拖动分隔条调整高度并记住', async () => {
+    localStorage.removeItem('rc.dataview.result.railHeight')
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+
+    // 分隔条要真实渲染才能拖（mountResultView 是 shallowMount，子组件默认全桩）
+    const wrapper = shallowMount(ResultView, {
+      global: { directives: { loading: {} }, stubs: { ...STUBS, SnatchLauncher, RailResizeHandle: false } },
+    })
+    await flushPromises()
+    const rail = () => wrapper.get('[data-testid="data-process-rail"]').element as HTMLElement
+    expect(rail().style.maxHeight).toBe('220px')
+
+    const drag = (from: number, to: number) => {
+      wrapper.get('[data-testid="rail-resize"]').element.dispatchEvent(new MouseEvent('pointerdown', { clientY: from, bubbles: true }))
+      window.dispatchEvent(new MouseEvent('pointermove', { clientY: to }))
+      window.dispatchEvent(new MouseEvent('pointerup'))
+    }
+    drag(300, 400)
+    await flushPromises()
+    expect(rail().style.maxHeight).toBe('320px')
+    expect(localStorage.getItem('rc.dataview.result.railHeight')).toBe('320')
+
+    // 不能拖到比下限还矮
+    drag(400, 0)
+    await flushPromises()
+    expect(rail().style.maxHeight).toBe('80px')
+    localStorage.removeItem('rc.dataview.result.railHeight')
+  })
+
   it('全屏：隐藏源信息头，保留筛选与当前节点的执行入口；补出源名；Esc 退出', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!

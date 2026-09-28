@@ -31,3 +31,25 @@ export const readResultRailOpen = () => read(RAIL_KEY)
 export const writeResultRailOpen = (open: boolean) => write(RAIL_KEY, open)
 export const readFilterBarOpen = () => read(FILTER_KEY)
 export const writeFilterBarOpen = (open: boolean) => write(FILTER_KEY, open)
+
+// 流程图区高度（0928）：分支多的流程图能有好几百像素高，展开后把下面的数据表整个顶出视口。
+// 给一个默认最大高度，超出在区内滚动；底边分隔条可拖拽调整，调过就记住（同上，跨节点/跨源沿用）。
+const RAIL_HEIGHT_KEY = 'rc.dataview.result.railHeight'
+export const RAIL_HEIGHT_DEFAULT = 220
+export const RAIL_HEIGHT_MIN = 80
+
+export function readResultRailHeight(): number {
+  try {
+    const value = Number(window.localStorage.getItem(RAIL_HEIGHT_KEY))
+    return Number.isFinite(value) && value >= RAIL_HEIGHT_MIN ? value : RAIL_HEIGHT_DEFAULT
+  } catch {
+    return RAIL_HEIGHT_DEFAULT
+  }
+}
+export function writeResultRailHeight(height: number): void {
+  try {
+    window.localStorage.setItem(RAIL_HEIGHT_KEY, String(Math.round(height)))
+  } catch {
+    /* 存不下就算了，下次进来退回默认高度 */
+  }
+}
