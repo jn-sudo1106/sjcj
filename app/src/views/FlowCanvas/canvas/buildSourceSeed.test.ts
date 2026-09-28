@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildHorizontalLayout, buildSourceSeed } from '@/views/FlowCanvas/canvas/flowModel'
+import { buildHorizontalLayout, buildSourceSeed, isArticleSummaryNode, isAudioTextNode, isOcrNode, isTranslateNode, isVideoAudioNode } from '@/views/FlowCanvas/canvas/flowModel'
 import type { Source, Step } from '@/api'
 
 // 0903 YB-B：按 dependsOn（旧 lastStep）还原真实拓扑。
@@ -180,3 +180,35 @@ describe('列表/详情按 isMulti 判（不是按位置猜）', () => {
     expect(seed.configs['40217'].collectCfg?.webKind).toBe('list')
   })
 })
+
+// 2026-09-24 review：曾按节点名称猜类型（含「视频」「摘要」「翻译」「ocr」就改模板）。首屏快速路径还没有
+// configType，网页采集节点会被设成处理类模板，configDetail 回来后也不会反向纠正。已撤掉，这里锁住。
+describe('buildSourceSeed · 不按节点名称猜类型', () => {
+  const named = (stepId: string, name: string, dependsOn: string[]): Step =>
+    ({ stepId, sourceId: SOURCE.sourceId, name, dependsOn, inputTable: '900', outputTable: '900', enabled: true }) as Step
+
+  it('没有 configType 时，名字带「视频 / 摘要 / 翻译 / OCR / 音频」的节点不被当成处理类节点', () => {
+    const steps = [
+      named('1', '视频列表', ['0']),
+      named('2', '新闻摘要页', ['1']),
+      named('3', '翻译稿详情', ['2']),
+      named('4', 'OCR图片页', ['3']),
+      named('5', '音频节目单', ['4']),
+    ]
+    const seed = buildSourceSeed(SOURCE, steps)
+    for (const id of ['1', '2', '3', '4', '5']) {
+      const cfg = seed.configs[id]!
+      expect([isVideoAudioNode(cfg), isArticleSummaryNode(cfg), isTranslateNode(cfg), isOcrNode(cfg), isAudioTextNode(cfg)], `节点 ${id}「${cfg.title}」`)
+        .toEqual([false, false, false, false, false])
+    }
+  })
+
+  it('有 configType 时照常按类型定模板（「视频提取音频」不会被当成音频提取文字）', () => {
+    const seed = buildSourceSeed(SOURCE, [
+      { ...named('1', '视频提取音频', ['0']), configType: '700' } as Step,
+    ])
+    expect(isVideoAudioNode(seed.configs['1']!)).toBe(true)
+    expect(isAudioTextNode(seed.configs['1']!)).toBe(false)
+  })
+})
+
