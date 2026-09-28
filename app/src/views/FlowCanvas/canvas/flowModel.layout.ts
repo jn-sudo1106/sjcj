@@ -372,21 +372,23 @@ export function elbowVH(x1: number, y1: number, x2: number, y2: number, radius =
 }
 
 /**
- * U 形直角折线（下-横-上）：两端点都在母线 busY 之上，用于「分支列收拢回主链」——
- * 母线走在整组分支列的下方，横向段不会切到任何分支节点。
+ * 横向直角折线（横-竖-横），转角用二次贝塞尔倒圆角（0928 数据视图节点条横版分支）。
+ * 竖向母线走在 busX（默认两端中间）；同组各行共用一条母线，走向与 elbowVH 对称。
  */
-export function elbowU(x1: number, y1: number, x2: number, y2: number, busY: number, radius = 8): string {
-  if (Math.abs(x2 - x1) < 1) return `M${x1} ${y1} L${x2} ${y2}`
+export function elbowHV(x1: number, y1: number, x2: number, y2: number, radius = 8, busX?: number): string {
+  if (Math.abs(x2 - x1) < 1 || Math.abs(y2 - y1) < 1) return `M${x1} ${y1} L${x2} ${y2}`
   const hSign = x2 > x1 ? 1 : -1
-  const r = Math.max(2, Math.min(radius, Math.abs(x2 - x1) / 2, Math.abs(busY - y1) / 2, Math.abs(busY - y2) / 2))
-  return `M${x1} ${y1} L${x1} ${busY - r} Q${x1} ${busY} ${x1 + hSign * r} ${busY}`
-    + ` L${x2 - hSign * r} ${busY} Q${x2} ${busY} ${x2} ${busY - r} L${x2} ${y2}`
+  const vSign = y2 > y1 ? 1 : -1
+  const bus = busX ?? (x1 + x2) / 2
+  const r = Math.max(1, Math.min(radius, Math.abs(y2 - y1) / 2, Math.abs(bus - x1) / 2, Math.abs(x2 - bus) / 2))
+  return `M${x1} ${y1} L${bus - hSign * r} ${y1} Q${bus} ${y1} ${bus} ${y1 + vSign * r}`
+    + ` L${bus} ${y2 - vSign * r} Q${bus} ${y2} ${bus + hSign * r} ${y2} L${x2} ${y2}`
 }
 
 export interface HEdge {
   d: string
   rule: boolean
-  /** 0925：虚线仅用于「旁路挂靠」的 bezier；分支列内的链/收拢线是结构化连线，走实线 */
+  /** 0925：虚线仅用于「旁路挂靠」的 bezier；分支行内的链/收拢线是结构化连线，走实线 */
   dashed?: boolean
 }
 export interface HorizontalLayout {
@@ -411,12 +413,17 @@ export const LAYOUT_TERM_W = 92
 export const LAYOUT_TERM_H = 30
 export const LAYOUT_GAP = 22
 export const LAYOUT_BRANCH_DY = 86 // 旁路相对主链上下偏移
-export const LAYOUT_COL_GAP = 16 // 结果视图分支列横向间隙（本布局自有口径；0927 P2-6：与画布 flow store 的 colGap=32 不同，勿再称「同口径」）
+export const LAYOUT_ROW_GAP = 16 // 结果视图分支行纵向间隙（本布局自有口径，与画布 flow store 的 colGap 不同）
+export const LAYOUT_FORK_GAP_X = 40 // 分叉带宽度：owner 右边到分支行首节点左边（竖向母线走中间）
 export const LAYOUT_PAD_X = 16
 export const LAYOUT_PAD_Y = 10
 
-/** 结果视图顶部节点条布局（纯函数版，从 flow store 的 horizontalLayout 计算逻辑提取，二者算法一致）
- *  0707 优化·Phase6：扩展支持 FlowBranchGroup 决策/分头节点的分支列（chain 节点平铺在 owner 节点下方一行） */
+/** 结果视图顶部节点条布局（纯函数版，从 flow store 的 horizontalLayout 计算逻辑提取）
+ *  0707 优化·Phase6：扩展支持 FlowBranchGroup 决策/分头节点的分支。
+ *  0928：分支改回**横版**——0925 把分支做成「每支一列、向下堆叠」，节点条变成竖向树，跟上面
+ *  横向主链方向不一致。现在分叉 owner 的右侧按**行**展开各分支（上下排开、整组以 owner 中线
+ *  居中），链节点在行内向右排，链内再分叉递归向右展开；主链下一个节点排在整组分支右侧之外，
+ *  各行行尾用横-竖-横折线收拢到它。 */
 export function buildHorizontalLayout(
   main: string[],
   branches: BranchSeed[],
@@ -426,70 +433,54 @@ export function buildHorizontalLayout(
 ): HorizontalLayout {
   const isTerm = (id: string) => id === 'start' || id === 'end'
   const visibleMain = options.includeTerminals === false ? main.filter((id) => !isTerm(id)) : main
-  // 主链顶对齐：仅当有"上方旁路"时才在主链上方留空，否则贴顶；下方旁路/分支列向下扩展高度
-  const hasAbove = branches.some((b) => b.side === 'left')
-  const hasBelow = branches.some((b) => b.side === 'right')
-  const axisY = (hasAbove ? LAYOUT_BRANCH_DY : LAYOUT_PAD_Y) + LAYOUT_NODE_H / 2
 
-  // 0925 视觉重写：分支不再"平铺在同一行"（那样第二条分支起要用一条横穿前支节点的长弧线连接），
-  // 改为与画布纵向布局同款——每个分支独占一列、链节点在列内向下堆叠，列内再分叉递归下探；
-  // 先测量列宽/列高，再按槽位摆放，收拢线从该列子树最深节点出发。
-  interface Pt { cx: number; y: number }
+  interface Pt { x: number; cy: number }
   interface ContRef { pt?: Pt | null }
 
+  // 测量：分支行宽 = 链节点 + 链内嵌套组（组在节点右侧，隔一条分叉带）；行高 = max(节点高, 嵌套组高)
   const measureBranchW = (b: FlowBranch): number => {
-    let w = LAYOUT_NODE_W
-    for (const nid of b.chain) {
+    let w = 0
+    b.chain.forEach((nid, i) => {
+      if (i > 0) w += LAYOUT_GAP
+      w += LAYOUT_NODE_W
       const sg = branchGroupOf(branchGroups, nid)
-      if (sg) w = Math.max(w, measureGroupW(sg))
-    }
+      if (sg) w += LAYOUT_FORK_GAP_X + measureGroupW(sg) + (b.chain[i + 1] ? LAYOUT_FORK_GAP_X - LAYOUT_GAP : 0)
+    })
     return w
   }
-  const measureGroupW = (g: FlowBranchGroup): number =>
-    g.branches.reduce((sum, b) => sum + measureBranchW(b), 0) + Math.max(0, g.branches.length - 1) * LAYOUT_COL_GAP
+  const measureGroupW = (g: FlowBranchGroup): number => g.branches.reduce((m, b) => Math.max(m, measureBranchW(b)), 0)
   const measureBranchH = (b: FlowBranch): number => {
-    let total = 0
+    let h = LAYOUT_NODE_H
     for (const nid of b.chain) {
-      total += LAYOUT_NODE_H + LAYOUT_GAP
       const sg = branchGroupOf(branchGroups, nid)
-      if (sg) total += measureGroupH(sg) + LAYOUT_GAP
+      if (sg) h = Math.max(h, measureGroupH(sg))
     }
-    return Math.max(0, total - LAYOUT_GAP)
+    return h
   }
-  const measureGroupH = (g: FlowBranchGroup): number => g.branches.reduce((m, b) => Math.max(m, measureBranchH(b)), 0)
+  const measureGroupH = (g: FlowBranchGroup): number =>
+    g.branches.reduce((sum, b) => sum + measureBranchH(b), 0) + Math.max(0, g.branches.length - 1) * LAYOUT_ROW_GAP
 
-  // 主链左留白：分支列以 owner 中心对称展开，最宽组可能顶出左边界 → 先算需要多少额外左留白
-  let needLeft = 0
-  let cursor = LAYOUT_PAD_X
-  visibleMain.forEach((id) => {
-    const w = isTerm(id) ? LAYOUT_TERM_W : LAYOUT_NODE_W
+  // 主链顶对齐：上方旁路、或以主链中线居中的分支组伸到主链上方时，在主链上方留出空间
+  const hasAbove = branches.some((b) => b.side === 'left')
+  const hasBelow = branches.some((b) => b.side === 'right')
+  let aboveNeed = hasAbove ? LAYOUT_BRANCH_DY : 0
+  for (const id of visibleMain) {
     const g = branchGroupOf(branchGroups, id)
-    if (g) {
-      needLeft = Math.max(needLeft, measureGroupW(g) / 2 - (cursor + w / 2 - LAYOUT_PAD_X))
-      // 与下方摆放同样的"让位"推进（只影响后续节点，不影响本 owner 的 x）
-      cursor = Math.max(cursor + w + LAYOUT_GAP, cursor + w / 2 + measureGroupW(g) / 2 + LAYOUT_GAP)
-    } else {
-      cursor += w + LAYOUT_GAP
-    }
-  })
-  const leftPad = Math.max(0, needLeft)
+    if (g) aboveNeed = Math.max(aboveNeed, measureGroupH(g) / 2 - LAYOUT_NODE_H / 2)
+  }
+  const axisY = LAYOUT_PAD_Y + aboveNeed + LAYOUT_NODE_H / 2
 
   const mainPos: Record<string, HPlacedPos> = {}
-  let x = LAYOUT_PAD_X + leftPad
+  let x = LAYOUT_PAD_X
   visibleMain.forEach((id) => {
     const isT = isTerm(id)
     const w = isT ? LAYOUT_TERM_W : LAYOUT_NODE_W
     const h = isT ? LAYOUT_TERM_H : LAYOUT_NODE_H
     mainPos[id] = { left: x, top: axisY - h / 2, width: w, height: h }
     x += w + LAYOUT_GAP
-    // 0925：owner 下方要挂分支列时，主链给它让出横向空间——下一个主链节点排到整组分支列右侧之外。
-    // 这样收拢线的竖直段（走下一个节点所在的 x）不会从分支列中间穿过去，也符合"分支占一块地方"的直觉。
+    // owner 右侧要展开分支行：主链下一个节点排到整组分支右侧之外（收拢母线走在两者之间）
     const g = branchGroupOf(branchGroups, id)
-    if (g) {
-      const groupRight = mainPos[id].left + w / 2 + measureGroupW(g) / 2
-      const need = groupRight + LAYOUT_GAP - x
-      if (need > 0) x += need
-    }
+    if (g) x = mainPos[id].left + w + LAYOUT_FORK_GAP_X + measureGroupW(g) + LAYOUT_FORK_GAP_X
   })
   const mainRight = x - LAYOUT_GAP + LAYOUT_PAD_X
 
@@ -515,12 +506,14 @@ export function buildHorizontalLayout(
     if (branchPos[b.id] && configs[b.id]) nodes.push({ id: b.id, cfg: configs[b.id], pos: branchPos[b.id], branch: true })
   })
 
-  // 主链横向连线（分叉 owner 的直线保留：横向主链在分支列上方继续向右，不穿过任何分支节点）
+  // 主链横向连线。分叉 owner → 下一个主链节点不画直线：流向走各分支行，再由收拢线汇入
+  // （直线会横穿居中那一行的分支节点）。
   const mainEdges: HEdge[] = []
   for (let i = 0; i < visibleMain.length - 1; i++) {
     const a = mainPos[visibleMain[i]]
     const b = mainPos[visibleMain[i + 1]]
     if (!a || !b) continue
+    if (branchGroupOf(branchGroups, visibleMain[i])) continue
     mainEdges.push({
       d: `M${a.left + a.width} ${axisY} L${b.left} ${axisY}`,
       rule: Boolean(configs[visibleMain[i + 1]] && /规则/.test(configs[visibleMain[i + 1]].title)),
@@ -541,102 +534,75 @@ export function buildHorizontalLayout(
     branchEdges.push({ d: `M${mx} ${my} C${mx} ${(my + by) / 2} ${bx} ${(my + by) / 2} ${bx} ${by}`, rule: false, dashed: true })
   })
 
-  // ---- 分支列（0925 同画布算法）----
-  const pendingConverges: Array<{ from: Pt; ref: ContRef; groupMark: number }> = []
-  const groupBus = new Map<number, number>()
+  // ---- 分支行（0928 横版）----
+  const pendingConverges: Array<{ from: Pt; ref: ContRef }> = []
   const ownerContRefs: Array<{ ownerId: string; ref: ContRef }> = []
-  let deepestBottom = 0
 
-  interface PlacedColumnHead { deepest: Pt; head: Pt | null }
-
-  const placeChain = (b: FlowBranch, colCx: number, top: number, contRef: ContRef): PlacedColumnHead => {
-    let cy = top
-    let deepest: Pt = { cx: colCx, y: top }
+  /** 摆放一个分支行：链节点在行中线上向右排，链内嵌套组摆在节点右侧；返回行尾（最后节点右边中点），
+   *  行尾节点自己还有嵌套组时返回 null——那一段由嵌套组各行自己收拢。 */
+  const placeChain = (b: FlowBranch, left: number, cy: number, contRef: ContRef): { head: Pt | null; tail: Pt | null } => {
+    let cx = left
     let head: Pt | null = null
+    let tail: Pt | null = null
     let prev: Pt | null = null
     b.chain.forEach((nid, i) => {
       if (!configs[nid]) return
       if (nodes.some((n) => n.id === nid)) return // 同一节点已在别处摆过（旁路/重复分支）
-      nodes.push({ id: nid, cfg: configs[nid], pos: { left: colCx - LAYOUT_NODE_W / 2, top: cy, width: LAYOUT_NODE_W, height: LAYOUT_NODE_H }, branch: true })
-      if (!head) head = { cx: colCx, y: cy }
-      if (prev) branchEdges.push({ d: `M${prev.cx} ${prev.y} L${colCx} ${cy}`, rule: false })
-      const bottom = cy + LAYOUT_NODE_H
-      deepest = { cx: colCx, y: bottom }
-      prev = { cx: colCx, y: bottom }
-      cy = bottom + LAYOUT_GAP
-      // 链内再分叉：嵌套列摆在链节点正下方；本列下一个链节点在嵌套组之后
+      nodes.push({ id: nid, cfg: configs[nid], pos: { left: cx, top: cy - LAYOUT_NODE_H / 2, width: LAYOUT_NODE_W, height: LAYOUT_NODE_H }, branch: true })
+      if (!head) head = { x: cx, cy }
+      if (prev) branchEdges.push({ d: `M${prev.x} ${cy} L${cx} ${cy}`, rule: false })
+      const right = cx + LAYOUT_NODE_W
+      prev = { x: right, cy }
+      tail = { x: right, cy }
+      cx = right + LAYOUT_GAP
       const sg = branchGroupOf(branchGroups, nid)
       if (sg) {
-        const groupTop = cy
-        const groupH = measureGroupH(sg)
-        const nestedRef: ContRef = b.chain[i + 1] ? { pt: { cx: colCx, y: groupTop + groupH + LAYOUT_GAP } } : contRef
-        const nested = placeGroup(sg, colCx, bottom, nestedRef)
-        if (nested.y > deepest.y) deepest = nested
-        cy = groupTop + groupH + LAYOUT_GAP
+        const groupRight = right + LAYOUT_FORK_GAP_X + measureGroupW(sg)
+        const nextCx = groupRight + LAYOUT_FORK_GAP_X
+        const nestedRef: ContRef = b.chain[i + 1] ? { pt: { x: nextCx, cy } } : contRef
+        placeGroup(sg, right, cy, nestedRef)
+        cx = nextCx
+        prev = null // 下一个链节点由嵌套组各行收拢进来，不再与本节点直连
+        tail = null
       }
     })
-    return { deepest, head }
+    return { head, tail }
   }
 
-  let groupSeq = 0
-  const placeGroup = (g: FlowBranchGroup, ownerCx: number, ownerBottom: number, contRef: ContRef): Pt => {
-    const groupMark = ++groupSeq
-    const widths = g.branches.map(measureBranchW)
-    const groupW = widths.reduce((a, b) => a + b, 0) + Math.max(0, widths.length - 1) * LAYOUT_COL_GAP
-    const top = ownerBottom + LAYOUT_GAP
-    let gx = ownerCx - groupW / 2
-    let groupDeepest: Pt = { cx: ownerCx, y: ownerBottom }
+  /** 摆放一个分支组：owner 右边 ownerRight 起隔一条分叉带，各分支行上下排开、以 owner 中线居中 */
+  const placeGroup = (g: FlowBranchGroup, ownerRight: number, ownerCy: number, contRef: ContRef) => {
+    const heights = g.branches.map(measureBranchH)
+    const groupH = heights.reduce((a, h) => a + h, 0) + Math.max(0, heights.length - 1) * LAYOUT_ROW_GAP
+    const left = ownerRight + LAYOUT_FORK_GAP_X
+    let rowTop = ownerCy - groupH / 2
     g.branches.forEach((b, i) => {
-      const colCx = gx + widths[i] / 2
-      gx += widths[i] + LAYOUT_COL_GAP
-      const { deepest, head } = placeChain(b, colCx, top, contRef)
-      if (head) pendingConverges.push({ from: deepest, ref: contRef, groupMark })
-      if (deepest.y > groupDeepest.y) groupDeepest = deepest
-      groupBus.set(groupMark, groupDeepest.y + LAYOUT_GAP / 2)
-      // owner 底边 → 列首节点顶边（弧线；端点在两节点边缘，箭头指向列首）
-      if (head) {
-        // 0925：直角折线（同组各列共用分叉带中间的水平母线）
-        branchEdges.push({ d: elbowVH(ownerCx, ownerBottom, colCx, head.y), rule: false })
-      }
+      const rowCy = rowTop + heights[i] / 2
+      rowTop += heights[i] + LAYOUT_ROW_GAP
+      const { head, tail } = placeChain(b, left, rowCy, contRef)
+      if (head) branchEdges.push({ d: elbowHV(ownerRight, ownerCy, head.x, head.cy, 8, ownerRight + LAYOUT_FORK_GAP_X / 2), rule: false })
+      if (tail) pendingConverges.push({ from: tail, ref: contRef })
     })
-    return groupDeepest
   }
 
-  // 分支列起点：owner 底边（若该 owner 下方还挂着旁路节点，则让到旁路节点之下，避免叠在一起）
-  const belowBottomOf = new Map<string, number>()
-  branches.forEach((b) => {
-    const pos = branchPos[b.id]
-    if (!pos || b.side !== 'right') return
-    belowBottomOf.set(b.rowAnchor, Math.max(belowBottomOf.get(b.rowAnchor) ?? 0, pos.top + pos.height))
-  })
+  // 分支从 owner 右边中线展开（主链节点中线 = axisY）
   visibleMain.forEach((id) => {
     const g = branchGroupOf(branchGroups, id)
     const mp = mainPos[id]
     if (!g || !mp) return
-    const ownerBottom = Math.max(mp.top + mp.height, belowBottomOf.get(id) ?? 0)
     const ref: ContRef = {}
     ownerContRefs.push({ ownerId: id, ref })
-    const deepest = placeGroup(g, mp.left + mp.width / 2, ownerBottom, ref)
-    deepestBottom = Math.max(deepestBottom, deepest.y)
+    placeGroup(g, mp.left + mp.width, axisY, ref)
   })
-  // 收拢目标：owner 在主链上的下一个节点的底边中心（分支在下方，向上收进下一个节点）
+  // 收拢目标：owner 在主链上的下一个节点的左边中点
   ownerContRefs.forEach(({ ownerId, ref }) => {
-    const idx = visibleMain.indexOf(ownerId)
-    const nextId = visibleMain[idx + 1]
+    const nextId = visibleMain[visibleMain.indexOf(ownerId) + 1]
     const np = nextId ? mainPos[nextId] : undefined
-    ref.pt = np ? { cx: np.left + np.width / 2, y: np.top + np.height } : null
+    ref.pt = np ? { x: np.left, cy: axisY } : null
   })
-  for (const { from, ref, groupMark } of pendingConverges) {
+  for (const { from, ref } of pendingConverges) {
     const to = ref.pt
-    if (!to || Math.abs(to.y - from.y) <= 1) continue
-    if (to.y > from.y) {
-      // 向下收进本列下一个链节点：分叉带中间转弯
-      branchEdges.push({ d: elbowVH(from.cx, from.y, to.cx, to.y), rule: false })
-    } else {
-      // 向上收进主链下一个节点：U 形，母线走在整组分支列下方（横向段不切任何分支节点）
-      const busY = Math.max(groupBus.get(groupMark) ?? from.y + LAYOUT_GAP, from.y + LAYOUT_GAP / 2)
-      branchEdges.push({ d: elbowU(from.cx, from.y, to.cx, to.y, busY), rule: false })
-    }
+    if (!to || to.x <= from.x + 1) continue
+    branchEdges.push({ d: elbowHV(from.x, from.cy, to.x, to.cy, 8, to.x - LAYOUT_FORK_GAP_X / 2), rule: false })
   }
 
   let maxRight = mainRight
@@ -650,7 +616,6 @@ export function buildHorizontalLayout(
     maxBottom = Math.max(maxBottom, t.pos.top + t.pos.height + LAYOUT_PAD_Y)
   }
   if (hasBelow) maxBottom = Math.max(maxBottom, axisY + LAYOUT_BRANCH_DY + LAYOUT_NODE_H / 2 + LAYOUT_PAD_Y)
-  if (deepestBottom) maxBottom = Math.max(maxBottom, deepestBottom + LAYOUT_PAD_Y)
 
   return {
     nodes,

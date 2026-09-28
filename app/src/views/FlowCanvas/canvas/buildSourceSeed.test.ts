@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { buildHorizontalLayout, buildSourceSeed, effectiveInputTable, isArticleSummaryNode, isAudioTextNode, isOcrNode, isTranslateNode, isVideoAudioNode } from '@/views/FlowCanvas/canvas/flowModel'
 // 0926 REVIEW F-R14：布局断言引用 impl 导出的同一组常量（flowModel.layout.ts），
 // 实现调整时断言自动跟随，不再硬编码镜像的魔法数字。
-import { LAYOUT_COL_GAP, LAYOUT_GAP, LAYOUT_NODE_H, LAYOUT_NODE_W } from '@/views/FlowCanvas/canvas/flowModel.layout'
+import { LAYOUT_FORK_GAP_X, LAYOUT_NODE_H, LAYOUT_NODE_W, LAYOUT_ROW_GAP } from '@/views/FlowCanvas/canvas/flowModel.layout'
 import type { Source, Step } from '@/api'
 
 // 0903 YB-B：按 dependsOn（旧 lastStep）还原真实拓扑。
@@ -260,7 +260,7 @@ describe('buildHorizontalLayout · 分支连线（0903 YB-7）', () => {
     const seed = buildSourceSeed(SOURCE, steps)
     const layout = buildHorizontalLayout(seed.main, seed.branches, seed.configs, seed.branchGroups)
 
-    // 0925 视觉重写后：两条 owner→链头 + 一条链内（2→4）+ 两条列尾收拢到 end = 5 条
+    // 两条 owner→行首 + 一条行内（2→4）+ 两条行尾收拢到 end = 5 条（0928 横版口径不变）
     expect(layout.branchEdges).toHaveLength(5)
     expect(layout.nodes.filter((n) => n.branch).map((n) => n.id).sort()).toEqual(['2', '3', '4'])
   })
@@ -271,7 +271,7 @@ describe('buildHorizontalLayout · 分支连线（0903 YB-7）', () => {
     expect(layout.branchEdges).toEqual([])
   })
 
-  it('0925 嵌套分叉：嵌套 subGroups 的 chain 排到下一行，双向连线都画出', () => {
+  it('嵌套分叉：分支按行向右展开，嵌套 subGroups 在链节点右侧继续展开，连线都画出', () => {
     const seed = buildSourceSeed(SOURCE, [
       step('1', 'A', ['0']),
       step('2', 'B', ['1']),
@@ -281,29 +281,36 @@ describe('buildHorizontalLayout · 分支连线（0903 YB-7）', () => {
       step('6', 'F', ['3']),
     ])
     const layout = buildHorizontalLayout(seed.main, seed.branches, seed.configs, seed.branchGroups)
-    // 六个节点全在（1/2 主链 + 3/4 第一行 + 5/6 嵌套第二行）
+    // 六个节点全在（1/2 主链 + 3/4 分支行 + 5/6 嵌套行）
     expect(layout.nodes.map((n) => n.id).sort()).toEqual(['1', '2', '3', '4', '5', '6'])
-    // 0925 视觉重写：分支各占一列、链在列内向下堆叠（不再平铺到同一行、不再横穿兄弟列）
+    // 0928 横版：分叉 owner 右侧按行展开（上下排开、以 owner 中线居中），嵌套分叉继续向右
     const pos2 = layout.nodes.find((n) => n.id === '2')!.pos
     const pos3 = layout.nodes.find((n) => n.id === '3')!.pos
     const pos4 = layout.nodes.find((n) => n.id === '4')!.pos
     const pos5 = layout.nodes.find((n) => n.id === '5')!.pos
     const pos6 = layout.nodes.find((n) => n.id === '6')!.pos
-    // 3/4 是 owner 2 的两列：同顶（2 底边 + GAP），4 在 3 右侧一整列之外
-    expect(pos3.top).toBe(pos2.top + LAYOUT_NODE_H + LAYOUT_GAP)
-    expect(pos4.top).toBe(pos3.top)
-    expect(pos4.left).toBeGreaterThanOrEqual(pos3.left + LAYOUT_NODE_W + LAYOUT_COL_GAP)
-    // 5/6 是 3 的嵌套两列：比 3 低一行，且以 3 的列中心对称展开
-    expect(pos5.top).toBe(pos3.top + LAYOUT_NODE_H + LAYOUT_GAP)
-    expect(pos6.top).toBe(pos5.top)
-    expect(pos5.left + LAYOUT_NODE_W / 2 + pos6.left + LAYOUT_NODE_W / 2).toBe((pos3.left + LAYOUT_NODE_W / 2) * 2)
-    // 嵌套列不得压到兄弟列 4
-    expect(pos6.left + LAYOUT_NODE_W).toBeLessThanOrEqual(pos4.left)
-    // 连线：owner 2→3/4 的分叉 + 3→5/6 的嵌套分叉 + 各列收拢线，共 8 条
-    // （0926 REVIEW F-R12：原 `>= 4` 太宽松，收紧为精确值）
-    expect(layout.branchEdges.length).toBe(8)
-    // 嵌套列高度计入 totalHeight
-    expect(layout.totalHeight).toBeGreaterThan(pos6.top + LAYOUT_NODE_H)
+    const cy = (p: { top: number; height: number }) => p.top + p.height / 2
+    // 3/4 是 owner 2 的两行：同左（2 右边 + 分叉带），4 在 3 下方，不重叠
+    expect(pos3.left).toBe(pos2.left + LAYOUT_NODE_W + LAYOUT_FORK_GAP_X)
+    expect(pos4.left).toBe(pos3.left)
+    expect(pos4.top).toBeGreaterThanOrEqual(pos3.top + LAYOUT_NODE_H + LAYOUT_ROW_GAP)
+    // 整组以 owner 中线居中（3 行含嵌套组更高，按行高加权，不要求 3/4 对称）
+    expect(pos3.top).toBeLessThan(cy(pos2))
+    expect(pos4.top).toBeGreaterThan(cy(pos2))
+    // 5/6 是 3 的嵌套两行：在 3 右侧，以 3 的中线上下对称
+    expect(pos5.left).toBe(pos3.left + LAYOUT_NODE_W + LAYOUT_FORK_GAP_X)
+    expect(pos6.left).toBe(pos5.left)
+    expect(cy(pos5) + cy(pos6)).toBe(cy(pos3) * 2)
+    // 嵌套行不得压到兄弟行 4
+    expect(pos6.top + LAYOUT_NODE_H).toBeLessThanOrEqual(pos4.top)
+    // 连线：2→3/4 分叉 + 3→5/6 嵌套分叉 + 5/6/4 三条行尾收拢到 end，共 7 条
+    expect(layout.branchEdges.length).toBe(7)
+    // 全部节点都在画布内（主链上方为居中的分支组留了空间）
+    for (const n of layout.nodes) {
+      expect(n.pos.top).toBeGreaterThanOrEqual(0)
+      expect(n.pos.top + n.pos.height).toBeLessThanOrEqual(layout.totalHeight)
+      expect(n.pos.left + n.pos.width).toBeLessThanOrEqual(layout.totalWidth)
+    }
   })
 
   it('0925 嵌套分叉：effectiveInputTable 递归向上（嵌套链内无表 → 父链 → 主链）', () => {
