@@ -23,6 +23,9 @@ import DataImportDialog from './DataImportDialog.vue'
 import { backTraceSources } from '@/utils/data/backTraceSources'
 import { unsupportedNextStepBatchFilters } from './batchGuards'
 import { copyToClipboard } from '@/utils/clipboard'
+import { extFromFieldHint, extFromName, ossPathWithExt } from '@/utils/ossFile'
+import { isOssFilePath } from '@/views/FlowCanvas/result/rowDetailFields'
+import FilePreview from '@/views/FlowCanvas/result/components/FilePreview.vue'
 
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
 // 本文件覆盖数据范围/快捷查询/结果工具条/批量条/动态列表格/分页/数据详情抽屉/手动添加/手动修改/统计/
@@ -597,6 +600,29 @@ function onSendYellowBatch() {
   }).catch(() => {})
 }
 
+// ---- 文件预览（2026-09-28）：表格格子与详情抽屉里的 OSS 文件路径（.json / .txt / 图片等）点开就地预览，
+// 与源数据视图（ResultView.onCellFile）同一个预览器、同一套补后缀口径。此前数据中心的路径格只认
+// path/minio 字段、直连下载，TB_KAIPANLA「详情json」这类文件在这里看不了。
+const filePreview = reactive({ visible: false, path: '', basePath: '', name: '', ext: '' })
+function onCellFile(path: string, field?: { prop?: string; columnName?: string; desc?: string }) {
+  const hintedExt = extFromFieldHint(field)
+  const fullPath = ossPathWithExt(path, hintedExt)
+  filePreview.path = fullPath
+  filePreview.basePath = path
+  filePreview.name = fullPath.split('/').pop() || ''
+  // 路径自带后缀时以它为准，字段猜测只补没后缀的（与 ResultView 同口径）
+  filePreview.ext = extFromName(path) || hintedExt
+  filePreview.visible = true
+}
+/** 详情抽屉里的字段：showItems 只有列名，按列名回表结构取字段名 / 描述，再走同一套路径判据 */
+function detailFileField(item: { columnName: string; itemName?: string; value: unknown }) {
+  const value = item.value == null ? '' : String(item.value)
+  if (!value) return null
+  const meta = tableMeta.value?.fields?.find((f) => (f.columnName ?? f.prop) === item.columnName)
+  const field = { prop: meta?.prop ?? item.columnName, columnName: item.columnName, desc: meta?.desc ?? item.itemName ?? '' }
+  return isOssFilePath(field, value) ? field : null
+}
+
 // ---- 数据详情抽屉（只读，行 + showItems + subs；父数据详情复用同一抽屉换参） ----
 const detail = reactive<{ visible: boolean; data: EntryDetail | null }>({ visible: false, data: null })
 async function openDetailFor(forTableId: string, forDataId: string) {
@@ -747,6 +773,7 @@ onMounted(async () => {
       v-model:selected-keys="selectedRowKeys"
       @query-change="onPanelQueryChange"
       @loaded="onPanelLoaded"
+      @file-click="onCellFile"
     >
       <template #quick>
         <el-dropdown trigger="click" @command="onCommonQuerySelect">
@@ -1057,7 +1084,16 @@ onMounted(async () => {
                 </svg>
               </button>
             </dt>
-            <dd>{{ item.value ?? '—' }}</dd>
+            <dd v-if="detailFileField(item)">
+              <button
+                type="button"
+                class="dv-file"
+                data-testid="detail-file"
+                :title="`预览 ${item.value}`"
+                @click="onCellFile(String(item.value), detailFileField(item) ?? undefined)"
+              >📄 {{ item.value }}</button>
+            </dd>
+            <dd v-else>{{ item.value ?? '—' }}</dd>
           </template>
         </dl>
         <!-- 0904：原来这里只渲染一行 `dataId · sourceId`，子行自带的 24 个字段全丢了，
@@ -1066,6 +1102,25 @@ onMounted(async () => {
              只是不再罗列子行——下钻改走「带条件跳转 + 可返回」。 -->
       </template>
     </el-drawer>
+
+    <!-- 文件预览：居中 dialog（看一眼就关的操作型短流程），与源数据视图同款 -->
+    <el-dialog
+      v-model="filePreview.visible"
+      :title="filePreview.name || '文件预览'"
+      width="92vw"
+      top="4vh"
+      :style="{ maxWidth: '1180px' }"
+      append-to-body
+    >
+      <FilePreview
+        :path="filePreview.path"
+        :base-path="filePreview.basePath"
+        :name="filePreview.name"
+        :ext="filePreview.ext || extFromName(filePreview.name)"
+        style="height: min(72vh, 720px)"
+        data-testid="data-center-file-preview"
+      />
+    </el-dialog>
 
     <!-- 手动添加 / 手动修改 -->
     <RowEditDialog
@@ -1355,6 +1410,8 @@ onMounted(async () => {
 .dv-detail-dt:hover .dv-copy-btn {
   opacity: 1;
 }
+.dv-file { max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--rc-primary-ink); font: inherit; text-align: left; cursor: pointer; word-break: break-all; }
+.dv-file:hover { text-decoration: underline; }
 .dv-copy-btn:hover {
   color: var(--rc-primary);
   background: var(--rc-primary-bg);

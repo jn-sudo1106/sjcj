@@ -263,3 +263,33 @@ describe('DataQueryPanel · 独立挂载', () => {
   })
 })
 
+// 2026-09-28：文件路径格与源数据视图（DataGrid）同一套判据，点了交给调用方开预览；不再直连下载。
+describe('DataQueryPanel · 文件路径格', () => {
+  it('.json 路径（TB_KAIPANLA 详情json）渲染成可点的文件格，点击抛出 file-click 带字段信息', async () => {
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 1,
+      list: [{ ...ROW, values: { K1: '标题A', K3: '/xtdb/kaipan/2026-09-28/386.json' } }],
+    })
+    const wrapper = mountPanel({ columns: [...COLUMNS, { prop: 'K3', label: '详情json-K3', hintProp: 'result' }] })
+    wrapper.vm.search()
+    await flushPromises()
+    const cells = wrapper.findAll('[data-testid="data-cell-file"]')
+    expect(cells).toHaveLength(1)
+    await cells[0].trigger('click')
+    expect(wrapper.emitted('file-click')?.[0]).toEqual([
+      '/xtdb/kaipan/2026-09-28/386.json',
+      { prop: 'result', columnName: 'K3', desc: '详情json-K3' },
+    ])
+  })
+
+  it('普通文本与 http 链接不当文件', async () => {
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 1,
+      list: [{ ...ROW, values: { K1: '/不是路径吗', K2: 'https://x.com/a.json' } }],
+    })
+    const wrapper = mountPanel({ columns: [...COLUMNS, { prop: 'K2', label: '链接-K2' }] })
+    wrapper.vm.search()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="data-cell-file"]').exists()).toBe(false)
+  })
+})

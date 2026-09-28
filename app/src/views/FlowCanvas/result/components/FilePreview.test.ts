@@ -105,6 +105,20 @@ describe('FilePreview', () => {
     expect(open.attributes('target')).toBe('_blank')
   })
 
+  it('.json 文件（如 TB_KAIPANLA 详情json）：能解析就按缩进展开显示', async () => {
+    vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(new TextEncoder().encode('{"ID": "386", "Name": "AI智能体概念"}').buffer)
+    const wrapper = mount(FilePreview, { props: { path: '/xtdb/kaipan/2026-09-28/386.json', name: '386.json' } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="file-preview-text"] pre').text()).toBe('{\n  "ID": "386",\n  "Name": "AI智能体概念"\n}')
+  })
+
+  it('.json 文件解析不了（内容不完整）：显示原文，不报错', async () => {
+    vi.spyOn(ossFile, 'fetchOssFile').mockResolvedValue(new TextEncoder().encode('{"ID": "386",').buffer)
+    const wrapper = mount(FilePreview, { props: { path: '/xtdb/kaipan/bad.json', name: 'bad.json' } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="file-preview-text"] pre').text()).toBe('{"ID": "386",')
+  })
+
   it('文本文件当同源 /oss 接口失败时，自动回退到直连 iframe 渲染而不报错中断', async () => {
     vi.spyOn(ossFile, 'fetchOssFile').mockRejectedValue(new Error('取文件失败（HTTP 404）'))
     const wrapper = mount(FilePreview, { props: { path: '/qinlong/dds/content.txt', name: 'content.txt', ext: 'txt' } })

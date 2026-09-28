@@ -386,6 +386,37 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(wrapper.text()).toContain('标题')
   })
 
+  // 2026-09-28：数据中心也能预览 OSS 文件路径（TB_KAIPANLA 详情json 这类 .json），与源数据视图同一个预览器
+  it('文件路径：表格格子与详情抽屉点开都打开文件预览', async () => {
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({
+      ...META,
+      fields: [...META.fields, { prop: 'result', desc: '详情json', columnName: 'K3', required: false, type: 'string' }],
+    })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({
+      total: 1,
+      list: [{ ...ROW, values: { ...ROW.values, K3: '/xtdb/kaipan/2026-09-28/386.json' } }],
+    })
+    vi.spyOn(dataApi, 'rowDetail').mockResolvedValue({
+      row: ROW,
+      showItems: [{ itemId: '3', columnName: 'K3', itemName: '详情json', value: '/xtdb/kaipan/2026-09-28/386.json' }],
+    })
+    await mountPage()
+    await waitForLoad()
+
+    await wrapper.get('[data-testid="data-cell-file"]').trigger('click')
+    await flushPromises()
+    const preview = () => wrapper.findComponent({ name: 'FilePreview' })
+    expect(preview().exists()).toBe(true)
+    expect(preview().props('path')).toBe('/xtdb/kaipan/2026-09-28/386.json')
+    expect(preview().props('ext')).toBe('json')
+
+    await wrapper.find('a.dv-a').trigger('click')
+    await flushPromises()
+    const detailFile = wrapper.find('[data-testid="detail-file"]')
+    expect(detailFile.exists()).toBe(true)
+    expect(detailFile.text()).toContain('386.json')
+  })
+
   function formInput(label: string) {
     const item = wrapper.findAllComponents({ name: 'ElFormItem' }).find((i) => i.props('label') === label)
     return item!.find('input')

@@ -20,15 +20,16 @@ import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
 import { readSqlConditions, rememberSqlCondition } from '@/utils/sqlConditionHistory'
 import ColumnPickerDialog from '@/components/ColumnPickerDialog.vue'
 import { useColumnPicker } from '@/utils/table/useColumnPicker'
+import { isOssFilePath } from '@/views/FlowCanvas/result/rowDetailFields'
 
 export interface DataQueryColumn {
   /** 物理列名：对应 row.values[prop] 取值，也是排序时上报给后端的 sortField */
   prop: string
-  /** 表头文案；缺省也用于 path/minio 渲染启发式检测的中文描述来源 */
+  /** 表头文案；也用于文件路径识别（isOssFilePath）的中文描述来源 */
   label: string
   width?: number
   sortable?: boolean
-  /** 业务字段名，仅用于 path/minio 渲染启发式检测；缺省退化用 prop 本身（见 cellKind） */
+  /** 业务字段名，仅用于文件路径识别；缺省退化用 prop 本身（见 cellKind） */
   hintProp?: string
 }
 export interface DataQueryFilterPatch {
@@ -89,6 +90,8 @@ const emit = defineEmits<{
   'update:selectedKeys': [string[]]
   'query-change': [DataQueryFilter]
   loaded: [{ rows: DataRow[]; total: number }]
+  /** 点了文件路径格（OSS 上的 .json / .txt / 图片等）：交给调用方开预览，形状与 DataGrid 的同名事件一致 */
+  'file-click': [path: string, field: { prop: string; columnName: string; desc: string }]
 }>()
 
 // ---- 筛选字段 ----
@@ -277,17 +280,18 @@ function toggleSelected(id: string, val: boolean) {
   emit('update:selectedKeys', val ? [...cur, id] : cur.filter((k) => k !== id))
 }
 
-function cellKind(column: DataQueryColumn, value: unknown): 'link' | 'minio' | 'text' {
+// 文件路径识别与源数据视图（DataGrid）同一套判据（2026-09-28）：原来这里只认字段名带 path/minio、
+// 表头带「地址/路径/图片」的，且只是新开标签页直连下载——TB_KAIPANLA「详情json」（result / K3，
+// 值是 /xtdb/kaipan/…/386.json）一条都命中不了，数据中心里看不了这类文件。
+function cellKind(column: DataQueryColumn, value: unknown): 'link' | 'file' | 'text' {
   const v = String(value ?? '')
   if (!v) return 'text'
   if (/^https?:/.test(v)) return 'link'
-  const hint = column.hintProp ?? column.prop
-  if ((hint.includes('path') || hint.includes('minio') || /地址|路径|图片/.test(column.label)) && v.startsWith('/')) return 'minio'
+  if (isOssFilePath({ prop: column.hintProp ?? column.prop, desc: column.label }, v)) return 'file'
   return 'text'
 }
-function minioUrl(value: string) {
-  const ossPort = import.meta.env.VITE_OSS_PORT || '9102'
-  return `http://${location.hostname}:${ossPort}/api/oss/download?fileId=${encodeURIComponent(value)}`
+function onFileCell(column: DataQueryColumn, value: unknown) {
+  emit('file-click', String(value), { prop: column.hintProp ?? column.prop, columnName: column.prop, desc: column.label })
 }
 
 function onRowClick(row: DataRow) {
@@ -413,8 +417,14 @@ function onRowClick(row: DataRow) {
               <template v-if="cellKind(col, row.values?.[col.prop]) === 'link'">
                 <a class="dqp-a" :href="String(row.values?.[col.prop])" target="_blank" rel="noopener" @click.stop>{{ row.values?.[col.prop] }}</a>
               </template>
-              <template v-else-if="cellKind(col, row.values?.[col.prop]) === 'minio'">
-                <a class="dqp-a" :href="minioUrl(String(row.values?.[col.prop]))" target="_blank" rel="noopener" @click.stop>{{ row.values?.[col.prop] }}</a>
+              <template v-else-if="cellKind(col, row.values?.[col.prop]) === 'file'">
+                <button
+                  type="button"
+                  class="dqp-file"
+                  :title="`预览 ${row.values?.[col.prop]}`"
+                  data-testid="data-cell-file"
+                  @click.stop="onFileCell(col, row.values?.[col.prop])"
+                >📄 {{ row.values?.[col.prop] }}</button>
               </template>
               <span v-else>{{ row.values?.[col.prop] ?? '—' }}</span>
             </slot>
@@ -470,6 +480,9 @@ function onRowClick(row: DataRow) {
 .dqp-table :deep(.el-table__body tr:hover > td) { background: #f8fbff; }
 .dqp-a { color: var(--rc-primary-ink); cursor: pointer; }
 .dqp-a:hover { text-decoration: underline; }
+/* 文件路径格：同 DataGrid 的路径格，按钮外观像链接，文字过长省略（悬停 title 看全路径） */
+.dqp-file { max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--rc-primary-ink); font: inherit; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dqp-file:hover { text-decoration: underline; }
 .dqp-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--rc-border-soft); }
 .rc-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 11px; border: 1px solid #d5e2f2; border-radius: 7px; background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; }
 .rc-btn:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }

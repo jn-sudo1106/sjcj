@@ -12,6 +12,7 @@
 //
 // 真实类型分布（文件中心首页 20 行）：xlsx 13 / pdf 7 / txt 0，故 Excel 是主力路径。
 import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue'
+import { prettyJsonText } from '@/utils/jsonText'
 import { extFromName, fetchOssFile, fetchOssFileHead, mimeTypeOf, ossFileUrl, ossPublicUrl, previewKindOf, stripContentExt, type PreviewKind } from '@/utils/ossFile'
 import {
   BLOCKED_ARCHIVE_SIZE_LIMIT, BLOCKED_ARCHIVE_SNIFF_BYTES, detectBlockedArchive,
@@ -161,6 +162,15 @@ const fallbackToFrame = ref(false)
 const buffer = ref<ArrayBuffer | null>(null)
 const blobUrl = ref('')
 const text = ref('')
+/**
+ * 文本区实际显示的内容：.json 文件能完整解析就按缩进展开（2026-09-28，TB_KAIPANLA 详情json
+ * 是一整行紧凑 JSON，原样显示没法读）。被截断的不格式化——半截 JSON 解析不了，显示原文。
+ */
+const displayText = computed(() => {
+  const ext = effectiveExt.value.toLowerCase().replace(/^\./, '')
+  if (ext !== 'json' || truncated.value) return text.value
+  return prettyJsonText(text.value) ?? text.value
+})
 const truncated = ref(false)
 /** 下载进度（音视频用）：几 MB 起步，干转圈像卡死 */
 const loadedBytes = ref(0)
@@ -362,7 +372,7 @@ function onExcelError(e: unknown) {
       <img v-else-if="kind === 'image' && blobUrl" class="fp-img" data-testid="file-preview-image" :src="blobUrl" :alt="name || '图片预览'" />
       <div v-else-if="kind === 'text' && text" class="fp-text" data-testid="file-preview-text">
         <div v-if="truncated" class="fp-hint">内容较长，仅显示前 2 MB</div>
-        <pre>{{ text }}</pre>
+        <pre>{{ displayText }}</pre>
       </div>
       <!-- 文本直连回退 / 无法同源读取时的框架直连回退（直连 9102 端口，与新窗口打开同款地址） -->
       <iframe v-else-if="(kind === 'text' || fallbackToFrame) && publicFileUrl" class="fp-frame" data-testid="file-preview-frame" :src="publicFileUrl" title="文件预览" />
