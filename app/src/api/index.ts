@@ -882,6 +882,9 @@ export const sourceApi = {
         // taskId=1 → 0 条。同一轮试了数据 ID（bizId/entryId/dataId…）和任务 URL（taskUrl/url…）
         // 近 20 种参数名，全部被忽略（count 恒 5401），已提后端（0923 汇总 B32），别再换名字试。
         taskId: q.taskId,
+        // 按数据 ID 查任务（精确匹配）。2026-09-28 实测：源 430017712 共 83 条，parentId=1035124 → 2 条、
+        // 不存在的 → 0 条。上面那 20 种参数名里恰好漏了它；数据 ID 就是任务的 parentId（见 TaskView 的 taskIds.ts）。
+        parentId: q.parentId,
         // 队列名，子串匹配（TASK_TOPIC LIKE %?%）。后端 2026-09-23 加的（B24，topTaskPaged-api.md）；
         // 实测站 11 异常任务 5405 条：news_cont → 5332、qinglong → 7、不存在的名字 → 0。
         // 此前前端顺带发的 topic / queue 两个参数名后端从来不认，已删。

@@ -304,8 +304,8 @@ describe('TaskView', () => {
   })
 
   // 0920-04：查询「字段 ▾ ＋ 输入框」，样式同源视图三合一。2026-09-23 实测后端只认 taskId，
-  // 数据 ID / 任务 URL 禁用待后端（B32），不能选、也就不会发出不生效的参数。
-  it('按任务 ID 查询：回车才查、带 taskId；数据 ID / URL 两项禁用；清空后撤掉条件', async () => {
+  // 任务 URL 禁用待后端（B32），不能选、也就不会发出不生效的参数；数据 ID 2026-09-28 起走 parentId。
+  it('按任务 ID 查询：回车才查、带 taskId；任务 URL 禁用；清空后撤掉条件', async () => {
     setActivePinia(createPinia())
     await router.push('/canvas')
     const source = mockSourceDetail({ sourceId: '391007768' })!
@@ -321,7 +321,7 @@ describe('TaskView', () => {
     const options = wrapper.findAll('[data-testid="task-search-field"] option')
     expect(options.map((o) => [o.text(), o.attributes('disabled') !== undefined])).toEqual([
       ['任务 ID', false],
-      ['数据 ID（待后端）', true],
+      ['数据 ID', false],
       ['任务 URL（待后端）', true],
     ])
 
@@ -346,6 +346,30 @@ describe('TaskView', () => {
     await flushPromises()
     expect((input.element as HTMLInputElement).value).toBe('')
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ taskId: undefined }))
+
+    wrapper.unmount()
+  })
+
+  // 2026-09-28 实测后端认 parentId：源 430017712 共 83 条，parentId=1035124 → 2 条、不存在的 → 0 条
+  it('按数据 ID 查询发 parentId，不带 taskId', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const source = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+
+    const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(TaskView, {
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await flushPromises()
+
+    await wrapper.get('[data-testid="task-search-field"]').setValue('parentId')
+    const input = wrapper.get('[data-testid="task-search-text"]')
+    await input.setValue(' 1035124 ')
+    await input.trigger('keyup.enter')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ parentId: '1035124', taskId: undefined, page: 1 }))
 
     wrapper.unmount()
   })

@@ -62,7 +62,7 @@ const loading = ref(false)
 const page = ref(1)
 const size = ref(20)
 /** 已生效的查询条件：查询 watch 只盯这一份 */
-const filters = reactive({ sourceId: '', nodeId: '', state: '', queue: '', taskId: '', startTime: '', endTime: '' })
+const filters = reactive({ sourceId: '', nodeId: '', state: '', queue: '', taskId: '', parentId: '', startTime: '', endTime: '' })
 /**
  * 筛选栏上的草稿（2026-09-23 用户要求：跟源 / 数据 / 文件视图一样，改完点「查询」才查）。
  *
@@ -104,11 +104,15 @@ const DATE_SHORTCUTS = [
  * 2026-09-23 实测 topTaskPaged 只认 `taskId`；数据 ID、任务 URL 试了近 20 种参数名全被忽略
  * （提后端 B32）。那两项先放在下拉里但**禁用**：能看到规划，又不会填了没反应——
  * 队列筛选当初（B24，后端 0923 才补上）就是前车之鉴。后端加上后把 ready 改成 true、query 里带上即可。
+ *
+ * 2026-09-28：**数据 ID 放开了，参数是 `parentId`**——当时漏试的就是它（数据 ID 本来就是任务的
+ * parentId，见 taskIds.ts；旧平台 TaskInst.vue 的「父ID」筛选同一个参数）。实测源 430017712
+ * 共 83 条，parentId=1035124 → 2 条（它的 OCR 与摘要任务），不存在的 ID → 0 条。任务 URL 仍待后端。
  */
-type TaskSearchField = 'taskId' | 'bizId' | 'taskUrl'
+type TaskSearchField = 'taskId' | 'parentId' | 'taskUrl'
 const TASK_SEARCH_FIELDS: { value: TaskSearchField; label: string; placeholder: string; ready: boolean }[] = [
   { value: 'taskId', label: '任务 ID', placeholder: '输入任务 ID，回车查询', ready: true },
-  { value: 'bizId', label: '数据 ID（待后端）', placeholder: '', ready: false },
+  { value: 'parentId', label: '数据 ID', placeholder: '输入数据 ID，回车查询', ready: true },
   { value: 'taskUrl', label: '任务 URL（待后端）', placeholder: '', ready: false },
 ]
 const searchField = ref<TaskSearchField>('taskId')
@@ -386,6 +390,7 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
     queue: filters.queue?.trim() || undefined,
     topic: filters.queue?.trim() || undefined,
     taskId: filters.taskId || undefined,
+    parentId: filters.parentId || undefined,
     startTime: filters.startTime || undefined,
     endTime: filters.endTime || undefined,
     page: page.value,
@@ -424,6 +429,7 @@ watch([siteId, sourceId], async () => {
   filters.state = ''
   filters.queue = ''
   filters.taskId = ''
+  filters.parentId = ''
   filters.startTime = ''
   filters.endTime = ''
   Object.assign(form, { nodeId: '', state: '', queue: '', startTime: '', endTime: '' })
@@ -444,7 +450,7 @@ watch(filterSteps, () => {
 // 而节点下拉这时是不渲染的，用户看不见也清不掉。必须排在下面那个查询 watch 之前。
 watch(() => filters.sourceId, () => { filters.nodeId = ''; form.nodeId = '' })
 
-watch(() => [filters.sourceId, filters.nodeId, filters.state, filters.queue, filters.taskId, filters.startTime, filters.endTime, siteScopeId.value] as const, ([nextSourceId], previous) => {
+watch(() => [filters.sourceId, filters.nodeId, filters.state, filters.queue, filters.taskId, filters.parentId, filters.startTime, filters.endTime, siteScopeId.value] as const, ([nextSourceId], previous) => {
   page.value = 1
   void Promise.all([nextSourceId !== previous?.[0] ? loadNodeMetadata() : Promise.resolve(), loadTasks()])
 }, { immediate: true })
@@ -462,13 +468,14 @@ function onSelectQueue(q?: string) {
   form.queue = filters.queue
 }
 
-/** 草稿折算成查询条件（任务 ID 来自「字段 ▾ ＋ 输入框」，数据 ID / URL 待后端、恒不带） */
+/** 草稿折算成查询条件（任务 ID / 数据 ID 来自「字段 ▾ ＋ 输入框」，任务 URL 待后端、恒不带） */
 function draftConditions() {
   return {
     nodeId: form.nodeId,
     state: form.state,
     queue: form.queue.trim(),
     taskId: searchField.value === 'taskId' ? searchText.value.trim() : '',
+    parentId: searchField.value === 'parentId' ? searchText.value.trim() : '',
     startTime: form.startTime,
     endTime: form.endTime,
   }
