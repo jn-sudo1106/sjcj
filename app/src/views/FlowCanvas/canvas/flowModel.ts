@@ -470,6 +470,9 @@ export function nodeInputTable(cfg: NodeConfig): string {
  * 只在"这个节点自己最终会落到哪张表"的场景（画布连线标注、保存到后端）用这个。
  */
 export function effectiveOutputTable(cfg: NodeConfig): string {
+  // 采集节点输出表必填（编辑框写的是「请选择输出表」），不回退输入表——0928 起新建采集节点也带
+  // 输入表（取上游输出），回退的话缺输出表的采集节点会被当成「有表」，自动保存把输入表当输出表写。
+  if (cfg.collectCfg) return nodeOutputTable(cfg)
   return nodeOutputTable(cfg) || nodeInputTable(cfg)
 }
 

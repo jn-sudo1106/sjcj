@@ -5,6 +5,7 @@ import { computed, reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { applyConfigToNode } from '@/utils/flow/nodeConfigPayload'
 import { applyStepSourceDefault, hasRealBranches } from '@/utils/flow/stepPersist'
+import { inheritInputTable, nodeTablesSnapshot, tableForDownstream, propagateOutputChange, retargetFollowers, writeNodeOutputTable, type TableTopology } from '@/utils/flow/tableSync'
 import {
   NODE_CONFIGS,
   TEMPLATE_TO_NODE,
@@ -21,7 +22,9 @@ import {
   isMonitorNode,
   isDataValidationNode,
   nodeOutputTable,
+  nodeInputTable,
   effectiveInputTable,
+  directSuccessorIdsIncludingDisabled,
   isFirstMainNode,
   makeBlankFlow,
   makeStandardFlow,
@@ -530,6 +533,32 @@ export const useFlowStore = defineStore('flow', () => {
     }
   }
 
+  // ---- 节点表联动（0928，见 utils/flow/tableSync）----
+  function tableTopology(): TableTopology {
+    return { main: main.value, branches, configs, branchGroups }
+  }
+
+  /**
+   * 改某节点的表（表配置 / 更换配置）后联动：非采集节点输出表原本跟着输入表的，一起改；
+   * 然后以变动前的有效输出表为旧值向下游传播。下游被改写时置流程脏，让它们的步骤随自动保存写回。
+   */
+  function withTableSync(id: string, mutate: () => void) {
+    const cfg = configs[id]
+    if (!cfg) {
+      mutate()
+      return
+    }
+    const before = nodeTablesSnapshot(cfg)
+    mutate()
+    const after = configs[id]
+    if (!after) return
+    if (!after.collectCfg && before.output === before.input && nodeOutputTable(after) === before.output
+      && nodeInputTable(after) !== before.input) {
+      writeNodeOutputTable(after, nodeInputTable(after))
+    }
+    if (propagateOutputChange(tableTopology(), id, before.effectiveOutput).length) nodeStore.touchFlow()
+  }
+
   // ---- 编辑动作 ----
   function insertAfter(prevId: string, template: string) {
     const srcKey = TEMPLATE_TO_NODE[template] || 'web-list'
@@ -567,6 +596,8 @@ export const useFlowStore = defineStore('flow', () => {
     const idx = main.value.indexOf(prevId)
     const at = prevId === 'end' ? idx : (idx < 0 ? main.value.length - 1 : idx + 1)
     main.value.splice(at, 0, id)
+    // 0928 表联动：新节点输入表显式取上游有效输出表（采集节点原来不写，保存时 entryTypeId 为空）
+    inheritInputTable(tableTopology(), id)
     applyParamSourceUrlToFirstCollectNode(main.value, configs, sourceCfg.value)
     if (template === 'decision') ensureBranchGroup(id, 'decision')
     else if (template === 'parallel') ensureBranchGroup(id, 'parallel')
@@ -625,6 +656,7 @@ export const useFlowStore = defineStore('flow', () => {
     const id = `${srcKey}-${seq++}`
     configs[id] = cfg
     branch.chain.push(id)
+    inheritInputTable(tableTopology(), id)
     applyParamSourceUrlToFirstCollectNode(main.value, configs, sourceCfg.value)
     select(id)
     nodeStore.touchFlow()
@@ -798,6 +830,12 @@ export const useFlowStore = defineStore('flow', () => {
       // eslint-disable-next-line no-console
       console.info('[TODO S6-3] 节点删除待清理资源（本期不真删，见方案 §4.4，后端接口就绪后再接）：', cleanup)
     }
+    // 0928 表联动：删 X 前记下 X 的有效输出表、X 从上游拿到的表、X 的直接下游；删完把跟随 X 的
+    // 下游改挂到 X 的上游表（A→X→B 删 X 后 B 读 A 的输出，而不是一张已没人写的表）
+    const removedCfg = configs[id]
+    const removedOut = removedCfg ? tableForDownstream(removedCfg) : ''
+    const removedIn = removedCfg ? effectiveInputTableFor(id) : ''
+    const removedSuccessors = removedCfg ? directSuccessorIdsIncludingDisabled(main.value, configs, id, branchGroups) : []
     // 分支段 owner 本身被删：连带整组分支（0925：嵌套组 owner 同样命中，递归摘除）
     if (branchGroupOf(branchGroups, id)) removeBranchGroup(id)
     // 删节点时，从所有 FlowBranchGroup 的 chain 里摘除（含嵌套；owner 删组后残留的链位一并清掉）
@@ -815,6 +853,7 @@ export const useFlowStore = defineStore('flow', () => {
     }
     // 清理运行时态，避免删除正在运行/已完成的节点后 runtime.nodeStates 残留脏数据
     useRuntimeStore().clearNodeStates([id])
+    retargetFollowers(tableTopology(), removedSuccessors, removedOut, removedIn)
     applyParamSourceUrlToFirstCollectNode(main.value, configs, sourceCfg.value)
     // 清理运行时态，避免删除正在运行/已完成的节点后 runtime.nodeStates 残留脏数据
     useRuntimeStore().clearNodeStates([id])
@@ -988,7 +1027,7 @@ export const useFlowStore = defineStore('flow', () => {
   function bindExistingConfig(id: string, config: import('@/api').Config) {
     const cfg = configs[id]
     if (!cfg) return
-    applyConfigToNode(cfg, config)
+    withTableSync(id, () => applyConfigToNode(cfg, config))
     nodeStore.markConfigSaved(id)
     nodeStore.touchFlow()
   }
@@ -1435,17 +1474,19 @@ export const useFlowStore = defineStore('flow', () => {
     setTripleCell: (id: string, field: TripleField, rowIndex: number, colIndex: 0 | 1 | 2, value: string) => nodeStore.setTripleCell(id, field, rowIndex, colIndex, value),
     addTripleRow: (id: string, field: TripleField) => nodeStore.addTripleRow(id, field),
     removeTripleRow: (id: string, field: TripleField, rowIndex: number) => nodeStore.removeTripleRow(id, field, rowIndex),
-    patchCollect: (id: string, patch: Partial<CollectConfig>) => nodeStore.patchCollect(id, patch),
+    patchCollect: (id: string, patch: Partial<CollectConfig>) => ('inputTable' in patch || 'outputTable' in patch
+      ? withTableSync(id, () => nodeStore.patchCollect(id, patch))
+      : nodeStore.patchCollect(id, patch)),
     patchTaskConfig: (id: string, patch: Partial<TaskConfig>) => nodeStore.patchTaskConfig(id, patch),
     patchSchedule: (id: string, patch: Partial<import('@/views/FlowCanvas/canvas/flowModel').CollectorSchedule>) => nodeStore.patchSchedule(id, patch),
     patchRuleConfig: (id: string, patch: Partial<RuleOrchestration>) => nodeStore.patchRuleConfig(id, patch),
     patchExecConfig: (id: string, patch: Partial<RuleOrchestration>) => nodeStore.patchExecConfig(id, patch),
     setMonitorMethods: (id: string, methods: string[]) => nodeStore.setMonitorMethods(id, methods),
     setMonitorAlertConfig: (id: string, config: import('@/views/FlowCanvas/canvas/flowModel').MonitorAlertConfig) => nodeStore.setMonitorAlertConfig(id, config),
-    setOutputTable: (id: string, tableId: string) => nodeStore.setOutputTable(id, tableId),
+    setOutputTable: (id: string, tableId: string) => withTableSync(id, () => nodeStore.setOutputTable(id, tableId)),
     setDedupMode: (id: string, mode: 'source' | 'table') => nodeStore.setDedupMode(id, mode),
     setOutFields: (id: string, fields: string[]) => nodeStore.setOutFields(id, fields),
-    setInputTable: (id: string, tableId: string) => nodeStore.setInputTable(id, tableId),
+    setInputTable: (id: string, tableId: string) => withTableSync(id, () => nodeStore.setInputTable(id, tableId)),
     setInputFields: (id: string, fields: string[]) => nodeStore.setInputFields(id, fields),
     resetInputFields: (id: string) => nodeStore.resetInputFields(id),
     setTaskQueue: (id: string, value: string) => nodeStore.setTaskQueue(id, value),

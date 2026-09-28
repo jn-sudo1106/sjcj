@@ -341,6 +341,41 @@ describe('useStepWrite.persistFlowSteps', () => {
   // 0925 整体切 flowId：flowId 模式的画布会带回真实根节点行（isRoot=1，真实 itemConfig）。
   // 它由流程生命周期管理，自动保存必须跳过——不能建（普通新增接口拒建根）、不能改（后端
   // 校验 type/sourceId/lastStep 合规、根不能有上游）。
+  // 0928：挂在首节点下的新步骤 URL 用 $VAL$（从上游数据取），不照抄首节点的固定地址；
+  // 输入表显式取首节点输出表（原来采集节点新建不写，saveItemConfig 的 entryTypeId 为空）。
+  it('首节点下新建步骤：url 为 $VAL$，输入表取首节点输出表', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    const rootStep: Step = {
+      ...SNAPSHOT, stepId: '41352', name: '上市公司-配置', isRoot: true, sourceId: '',
+      url: 'https://finance.zynews.cn/qita/gongsihy/', inputTable: undefined, outputTable: '900',
+      dependsOn: undefined, mainConfig: '1400935', flowId: '1400935', configId: '1400935',
+    }
+    flow.loadFromSource(
+      { sourceId: '430016398', name: 'test1', url: 'http://x', configId: '1400917', mainTable: '900', owner: 'a', state: 'C', flowId: '1400935' } as never,
+      [rootStep],
+    )
+    source.rememberSteps([rootStep], 'replace')
+    const localId = flow.insertAfter('41352', 'web')
+    flow.configs[localId].configId = '1400999'
+    flow.configs[localId].collectCfg!.outputTable = '900'
+
+    const create = vi.spyOn(itemApi, 'saveItemConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'enable').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([
+      rootStep,
+      { ...SNAPSHOT, stepId: '41800', name: '网页抓取', configId: '1400999', flowId: '1400935', dependsOn: ['41352'] },
+    ])
+
+    const { persistFlowSteps } = useStepWrite()
+    await persistFlowSteps()
+
+    const sent = create.mock.calls[0][0]
+    expect(sent.url).toBe('$VAL$')
+    expect(sent.inputTable).toBe('900')
+  })
+
   it('真实根节点（isRoot=1）不参与自动保存：不建不更', async () => {
     setActivePinia(createPinia())
     const flow = useFlowStore()

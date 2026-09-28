@@ -12,6 +12,7 @@ import { useSourceStore } from '@/stores/source'
 import { useUiStore } from '@/stores/ui'
 import { decisionOrParallelKind, isDataValidationNode, isMonitorNode, isRuleNode, nodeTypeLabel, NODE_CONFIGS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { isFileLikeNode, outputTableMissing } from '@/utils/flow/stepPersist'
+import { inputTableMismatch } from '@/utils/flow/tableSync'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
 import { configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
 import { provideNodeInspectorAssets } from './useNodeInspectorAssets'
@@ -64,6 +65,11 @@ const isBranchNode = computed(() => !!cfg.value && decisionOrParallelKind(cfg.va
 // 输出表恒等于输入表（后端监控步骤行 outputTable=inputTable），表配置里没有「输出表」
 // 选择器，这里提示「去表配置选输出表」是死路；只豁免展示侧（写侧 outputTableMissing 跳过
 // 语义不变：未配输入表的新监控节点本就落不了库，落库后快照 outputTable 兜底照常回写）。
+// 0928 表联动：用户自己指定的输入表与上游输出表不一致——上游变动（插入 / 删除 / 改表）时本节点
+// 不会自动跟随，常驻提示一句，免得以为改了上游下游会跟着变。
+const inputMismatch = computed(() => (id.value
+  ? inputTableMismatch({ main: flow.main, branches: flow.branches, configs: flow.configs, branchGroups: flow.branchGroups }, id.value)
+  : null))
 const outputTableWarning = computed(() => {
   const node = cfg.value
   if (!node) return false
@@ -396,6 +402,10 @@ onMounted(async () => {
       </div>
 
       <!-- 0927 H1：输出表未就绪的常驻提示（覆盖规则/监控/采集等所有非文件节点）。 -->
+      <div v-if="inputMismatch" class="ni-output-warn" data-testid="input-table-mismatch">
+        <el-alert type="info" :closable="false" show-icon title="输入表与上游输出表不一致" :description="`本节点输入表 ${inputMismatch.own}，上游输出表 ${inputMismatch.upstream}。上游插入、删除节点或改表时，本节点输入表不会自动跟随`" />
+      </div>
+
       <div v-if="outputTableWarning" class="ni-output-warn" data-testid="output-table-warn">
         <el-alert type="warning" :closable="false" show-icon title="输出表未选择" description="非文件节点保存时后端要求必须声明输出表（OUT_ENTRY）。当前该节点会自动跳过保存，请在「表配置」选择输出表后重试" />
       </div>

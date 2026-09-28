@@ -60,7 +60,9 @@ function createTemplateFromPrev(
     // 0925 步骤归属切 flowId：新建步骤带画布流程 ID；prev 快照回读若已带 flowId 优先沿用
     //（同流程恒等），两者都没有时兜底 prev 的 mainConfig（存量数据 flowId===mainConfig）。
     flowId: prev?.flowId ?? (flowId || prev?.mainConfig),
-    url: prev ? (prev.url ?? '$VAL$') : undefined,
+    // 下游从上游数据取 URL（$VAL$）。上游是首节点（isRoot）时不能照抄它的固定地址——那样新节点
+    // 每条上游数据都去抓同一个首页（0928 与后端对齐：下游采集一律 $VAL$）。
+    url: prev ? (prev.isRoot ? '$VAL$' : (prev.url ?? '$VAL$')) : undefined,
     itemId: prev?.itemId,
     flowCode: prev?.flowCode,
     nodeType: prev?.nodeType ?? 'entry',
