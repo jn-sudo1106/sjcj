@@ -8,10 +8,11 @@
 // 只在旁边加一个轻量的「更换」入口——试过把整条换成 el-select，一个整框输入把这行压成了表单区，
 // 比原来的静态文字重得多。选择本身走弹窗，弹窗里有搜索和候选详情。
 import { computed, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { configApi, type Config } from '@/api'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { configApi, flowCenterApi, type Config } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
+import { validFlowIdOf } from '@/utils/flow/stepPersist'
 import SelectExistingConfigDialog from './SelectExistingConfigDialog.vue'
 
 const props = defineProps<{ nodeId: string }>()
@@ -37,6 +38,29 @@ const isRootNode = computed(() => {
 const canPick = computed(() => Boolean(sourceId.value) || (flow.flowIdMode && isRootNode.value))
 
 /**
+ * 源画布里换 ROOT 配置要先确认（0928）：源已绑流程时画布按流程查步骤，入口节点就是流程的
+ * 真实 ROOT 行，换它的配置改的是**整个流程**的入口配置——该流程下所有源一起变，不只是当前源。
+ * 流程工作区（无源上下文）本来就是在编辑流程，不拦。源数取不到时退回不带数字的文案。
+ */
+async function confirmRootChangeInSourceCanvas(configId: string): Promise<boolean> {
+  if (!isRootNode.value || !sourceId.value) return true
+  const flowId = validFlowIdOf(flow.sourceCtx?.flowId) || validFlowIdOf(flow.sourceCfg?.flowId)
+  const record = flowId ? await flowCenterApi.detail(flowId).catch(() => null) : null
+  const count = record?.sourceCnt
+  const scope = count && count > 0 ? `该流程下的全部 ${count} 个源` : '该流程下的全部源'
+  try {
+    await ElMessageBox.confirm(
+      `当前节点是流程${flowId ? ` #${flowId} ` : ''}的入口（ROOT），更换为配置 #${configId} 会同时影响${scope}，不只是当前源。确定更换吗？`,
+      '更换流程入口配置',
+      { confirmButtonText: '确定更换', cancelButtonText: '取消', type: 'warning' },
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * 绑定配置。**必须先取 configDetail 再绑**：`configs/same` 返回的是精简对象，
  * 直接喂给 applyConfigToNode 会把 entryTypeId/topic 这些字段写成空值（它是 `x || ''` 的写法）。
  * 详情读不到就不绑——宁可不绑，也不能绑上一份被抹空的配置。
@@ -45,6 +69,7 @@ async function bind(configId: string) {
   if (!configId || configId === cfg.value?.configId || binding.value) return
   binding.value = true
   try {
+    if (!await confirmRootChangeInSourceCanvas(configId)) return
     const detail = await configApi.configDetail(configId)
     if (!detail) {
       ElMessage.error(`配置 #${configId} 详情读取失败，未绑定`)
@@ -70,8 +95,8 @@ function onPick(config: Config) {
       type="button"
       :disabled="binding || !canPick"
       data-testid="node-config-select"
-      :title="isRootNode && !sourceId
-        ? '更换流程入口（ROOT）配置'
+      :title="isRootNode
+        ? (sourceId ? '更换流程入口（ROOT）配置：会影响该流程下的全部源' : '更换流程入口（ROOT）配置')
         : sourceId
           ? '更换本节点使用的配置'
           : '当前不是源画布，无法按源查同资源配置'"

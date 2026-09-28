@@ -4,12 +4,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessageBox } from 'element-plus'
 import NodeConfigSelect from './NodeConfigSelect.vue'
 import SelectExistingConfigDialog from './SelectExistingConfigDialog.vue'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
-import { configApi, type Config } from '@/api'
+import { configApi, flowCenterApi, type Config, type FlowRecord } from '@/api'
 
 const PICKED: Config = { configId: '1400774', name: '证券之星列表配置' } as Config
 const FULL_DETAIL: Config = {
@@ -121,5 +121,68 @@ describe('更换配置', () => {
       global: { plugins: [ElementPlus] },
     })
     expect(wrapper.find('[data-testid="node-config-select"]').attributes('disabled')).toBeDefined()
+  })
+
+  // 0928：源画布里入口节点是流程的真实 ROOT，换配置影响该流程下全部源——必须先确认。
+  function mountRootInSourceCanvas() {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.newFlow('standard')
+    flow.sourceCtx = { sourceId: '430016501', name: '测试源', flowId: '1400976' } as never
+    useSourceStore().rememberSteps([{
+      stepId: '41352', sourceId: '-1', name: '流程入口', isRoot: true, enabled: true,
+    } as never], 'replace')
+    flow.configs['41352'] = { ...flow.configs['web-list'], configId: '1400976' }
+    const wrapper = mount(NodeConfigSelect, {
+      props: { nodeId: '41352' },
+      global: { plugins: [ElementPlus] },
+    })
+    return { flow, wrapper }
+  }
+
+  it('源画布换 ROOT 配置：先弹确认并写明影响源数，确认后才绑定', async () => {
+    vi.spyOn(configApi, 'configDetail').mockResolvedValue(FULL_DETAIL)
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({ id: '1400976', sourceCnt: 6028 } as FlowRecord)
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const { flow, wrapper } = mountRootInSourceCanvas()
+    wrapper.findComponent(SelectExistingConfigDialog).vm.$emit('select', PICKED)
+    await flushPromises()
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(String(confirm.mock.calls[0][0])).toContain('6028 个源')
+    expect(String(confirm.mock.calls[0][0])).toContain('#1400976')
+    expect(flow.configs['41352'].configId).toBe('1400774')
+  })
+
+  it('源画布换 ROOT 配置：取消确认则不取详情、不绑定', async () => {
+    const detail = vi.spyOn(configApi, 'configDetail').mockResolvedValue(FULL_DETAIL)
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue(null)
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    const { flow, wrapper } = mountRootInSourceCanvas()
+    wrapper.findComponent(SelectExistingConfigDialog).vm.$emit('select', PICKED)
+    await flushPromises()
+    expect(detail).not.toHaveBeenCalled()
+    expect(flow.configs['41352'].configId).toBe('1400976')
+  })
+
+  it('源画布普通节点与流程工作区 ROOT 不弹确认', async () => {
+    vi.spyOn(configApi, 'configDetail').mockResolvedValue(FULL_DETAIL)
+    const confirm = vi.spyOn(ElMessageBox, 'confirm')
+    const { wrapper } = mountOnNode()
+    wrapper.findComponent(SelectExistingConfigDialog).vm.$emit('select', PICKED)
+    await flushPromises()
+
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.newFlow('standard')
+    flow.setFlowIdMode(true)
+    useSourceStore().rememberSteps([{
+      stepId: '41352', sourceId: '', name: '流程入口', isRoot: true, enabled: true,
+    } as never], 'replace')
+    flow.configs['41352'] = { ...flow.configs['web-list'] }
+    const drawer = mount(NodeConfigSelect, { props: { nodeId: '41352' }, global: { plugins: [ElementPlus] } })
+    drawer.findComponent(SelectExistingConfigDialog).vm.$emit('select', PICKED)
+    await flushPromises()
+    expect(confirm).not.toHaveBeenCalled()
+    expect(flow.configs['41352'].configId).toBe('1400774')
   })
 })
