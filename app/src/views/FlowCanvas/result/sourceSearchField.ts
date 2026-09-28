@@ -30,3 +30,84 @@ export function detectSourceSearchField(text: string): SourceSearchField | null 
 export function mightBeUrlFragment(text: string): boolean {
   return /^[\x21-\x7e]+$/.test(text.trim())
 }
+
+/**
+ * 源视图「查询」多条件（2026-09-28 产品：「改成和数据搜索一样」）。
+ *
+ * 每行 = 字段 ＋ 条件 ＋ 值，行与行之间是「并且」。后端 sourcePaged 的源 ID / 名称 / URL / 备注
+ * 是四个独立参数，一起给取交集（实测 `name=盛科` 4 条、`sourceUrl=centec` 1 条、同时给 1 条），
+ * 所以能并行；但**一个参数只能带一个值**——同一字段只能出现一行，也做不了「或者」。
+ *
+ * 条件口径都是后端现成的：
+ * - 备注 非空 = `remark=%`、为空 = `remark=NULL`（2026-09-21 实测，站 12：8 + 5883 = 全部 5891）；
+ * - 源 URL 为空：后端**不支持**（2026-09-28 实测 `sourceUrl=NULL` 只 LIKE 到 3 个字面 "null"，
+ *   站 12 真正为空的 393 个查不出），选项先置灰，等后端按备注的约定补上再放开。
+ */
+export type SourceCondField = SourceSearchField | 'remark'
+export type SourceCondOp = 'eq' | 'like' | 'notEmpty' | 'empty'
+
+export interface SourceCondition {
+  field: SourceCondField
+  op: SourceCondOp
+  value: string
+}
+
+export interface SourceCondOpOption {
+  value: SourceCondOp
+  label: string
+  /** 后端暂不支持的条件：列出来但不能选 */
+  unsupported?: string
+}
+
+export const SOURCE_COND_FIELDS: { value: SourceCondField; label: string; placeholder: string; ops: SourceCondOpOption[] }[] = [
+  { value: 'sourceIds', label: '源 ID', placeholder: '多个 ID 用逗号分隔', ops: [{ value: 'eq', label: '等于' }] },
+  { value: 'name', label: '源名称', placeholder: '源名称关键字', ops: [{ value: 'like', label: '包含' }] },
+  {
+    value: 'sourceUrl',
+    label: '源 URL',
+    placeholder: 'URL 关键字，如 centec',
+    ops: [
+      { value: 'like', label: '包含' },
+      { value: 'empty', label: '为空', unsupported: '后端暂不支持按 URL 为空查询' },
+    ],
+  },
+  {
+    value: 'remark',
+    label: '备注',
+    placeholder: '备注关键字',
+    ops: [
+      { value: 'like', label: '包含' },
+      { value: 'notEmpty', label: '非空' },
+      { value: 'empty', label: '为空' },
+    ],
+  },
+]
+
+export function sourceCondFieldOf(field: SourceCondField) {
+  return SOURCE_COND_FIELDS.find((f) => f.value === field)!
+}
+
+/** 字段的默认条件：第一个后端支持的 */
+export function defaultSourceCondOp(field: SourceCondField): SourceCondOp {
+  return sourceCondFieldOf(field).ops.find((o) => !o.unsupported)!.value
+}
+
+/** 非空 / 为空不需要填值 */
+export function sourceCondNeedsValue(op: SourceCondOp): boolean {
+  return op === 'eq' || op === 'like'
+}
+
+/** 这一行会不会变成请求参数：要值的条件没填值，等于没有这一行 */
+export function sourceCondActive(cond: SourceCondition): boolean {
+  if (!sourceCondFieldOf(cond.field).ops.some((o) => o.value === cond.op && !o.unsupported)) return false
+  return sourceCondNeedsValue(cond.op) ? !!cond.value.trim() : true
+}
+
+export function sourceConditionParams(conds: SourceCondition[]): Partial<Record<SourceCondField, string>> {
+  const params: Partial<Record<SourceCondField, string>> = {}
+  for (const cond of conds) {
+    if (!sourceCondActive(cond)) continue
+    params[cond.field] = cond.op === 'notEmpty' ? '%' : cond.op === 'empty' ? 'NULL' : cond.value.trim()
+  }
+  return params
+}

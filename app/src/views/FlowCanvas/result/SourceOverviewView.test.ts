@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount, shallowMount } from '@vue/test-utils'
+import { flushPromises, mount, shallowMount, type VueWrapper } from '@vue/test-utils'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SourceOverviewView from './SourceOverviewView.vue'
 import { siteApi, sourceApi, type Source } from '@/api'
@@ -156,12 +156,13 @@ describe('SourceOverviewView · 勾选与批量', () => {
     await flushPromises()
 
     await wrapper.get('[data-testid="source-check-src-1"]').setValue(true)
-    // 0917-11 起三格并成一格，一次只能按一个字段查：这里用「源名称」，
-    // URL 那条断言跟着改成 undefined（原先两者能同时给、取交集）
+    // 查询是多条件（2026-09-28）：源名称一行、备注一行，一起带进导出
     await wrapper.get('[data-testid="source-overview-search-field"]').setValue('name')
     await wrapper.get('[data-testid="source-overview-search-text"]').setValue('财经')
+    await wrapper.get('[data-testid="source-overview-condition-add"]').trigger('click')
+    await wrapper.findAll('[data-testid="source-overview-search-field"]')[1]!.setValue('remark')
+    await wrapper.findAll('[data-testid="source-overview-search-text"]')[1]!.setValue('验证正常')
     await wrapper.get('[data-testid="source-overview-tag"]').setValue('内容重复')
-    await wrapper.get('[data-testid="source-overview-remark"]').setValue('验证正常')
     await wrapper.get('[data-testid="source-export"]').trigger('click')
     await flushPromises()
 
@@ -176,7 +177,7 @@ describe('SourceOverviewView · 勾选与批量', () => {
       size: 500,
     }))
     expect(collectCalls[0]?.[0]?.sourceIds).toBeUndefined()
-    // 0917-11 合并之后一次只按一个字段：选了「源名称」，URL 那个参数就不发
+    // 没加 URL 条件，URL 参数就不发
     expect(collectCalls[0]?.[0]?.sourceUrl).toBeUndefined()
     expect(download).toHaveBeenCalledTimes(1)
     expect(String(download.mock.calls[0]?.[0] ?? '')).toMatch(/\.xlsx$/)
@@ -791,12 +792,14 @@ describe('SourceOverviewView · 备注筛选（0831 X1-B）', () => {
     sessionStorage.clear()
   })
 
-  it('备注输入框可用，查询时把 remark 带进请求', async () => {
+  // 2026-09-28 起备注并进「查询」条件：字段选「备注」、条件「包含」
+  it('备注关键字作为查询条件，查询时把 remark 带进请求', async () => {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
     await flushPromises()
 
-    const input = wrapper.get('[data-testid="source-overview-remark"]')
+    await wrapper.get('[data-testid="source-overview-search-field"]').setValue('remark')
+    const input = wrapper.get('[data-testid="source-overview-search-text"]')
     expect(input.attributes('disabled')).toBeUndefined()
     await input.setValue('验证正常')
     await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
@@ -809,9 +812,10 @@ describe('SourceOverviewView · 备注筛选（0831 X1-B）', () => {
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: 'site-current' } })
     await flushPromises()
 
-    await wrapper.get('[data-testid="source-overview-remark"]').setValue('验证正常')
+    await wrapper.get('[data-testid="source-overview-search-field"]').setValue('remark')
+    await wrapper.get('[data-testid="source-overview-search-text"]').setValue('验证正常')
     await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
-    await wrapper.get('[data-testid="source-overview-remark"]').setValue('')
+    await wrapper.get('[data-testid="source-overview-search-text"]').setValue('')
     await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
     await flushPromises()
     expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ remark: undefined }))
@@ -1025,7 +1029,9 @@ describe('源视图 · 按数据量筛选（0920-01）', () => {
 
 // 0920-07：会上要「备注为空 / 不为空」。原以为要提后端（B28），2026-09-21 复测发现
 // 后端本来就支持：remark=% 是有备注、remark=NULL 是无备注（站 12：8 + 5883 = 5891）。
-describe('源视图 · 备注筛选（0920-07，2026-09-24 调整为有 / 无备注 + 可搜）', () => {
+// 2026-09-28 产品：「改成和数据搜索一样」——备注不再单独一格，并进「查询」条件：
+// 包含 / 非空 / 为空，非空、为空就是原来的有备注、无备注。
+describe('源视图 · 备注筛选（0920-07，2026-09-28 并进查询条件）', () => {
   const source: Source = {
     sourceId: 'src-1', name: '源', url: 'https://a.example.com', configId: 'cfg-1',
     mainTable: 'T1', owner: 'admin', state: 'C',
@@ -1039,70 +1045,141 @@ describe('源视图 · 备注筛选（0920-07，2026-09-24 调整为有 / 无备
     return { wrapper, page }
   }
   const lastQuery = (page: { mock: { calls: unknown[][] } }) => page.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined
+  const op = (wrapper: VueWrapper) => wrapper.get('[data-testid="source-overview-search-op"]')
+  const text = (wrapper: VueWrapper) => wrapper.get('[data-testid="source-overview-search-text"]').element as HTMLInputElement
 
-  // 2026-09-24：去掉「不限」，只留有备注 / 无备注；有备注时也能按关键字搜
-  it('没有「不限」选项；默认未选（占位「备注」），不按备注筛', async () => {
+  it('没有单独的备注格；备注在查询字段里，条件是 包含 / 非空 / 为空，默认不按备注筛', async () => {
     const { wrapper, page } = await mountWithSpy()
-    const select = wrapper.get('[data-testid="source-overview-remark-mode"]')
-    const visible = select.findAll('option').filter((o) => o.attributes('hidden') === undefined).map((o) => o.text())
-    expect(visible).toEqual(['有备注', '无备注'])
-    expect((select.element as HTMLSelectElement).value).toBe('')
+    expect(wrapper.find('[data-testid="source-overview-remark-mode"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="source-overview-remark"]').exists()).toBe(false)
 
     await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
     await flushPromises()
     expect(lastQuery(page)?.remark).toBeUndefined()
+
+    await wrapper.get('[data-testid="source-overview-search-field"]').setValue('remark')
+    expect(op(wrapper).findAll('option').map((o) => o.text())).toEqual(['包含', '非空', '为空'])
   })
 
-  it('「有备注」不填关键字发 remark=%；填了关键字按关键字搜', async () => {
+  it('「非空」立刻发 remark=%，输入框禁用', async () => {
     const { wrapper, page } = await mountWithSpy()
-    await wrapper.get('[data-testid="source-overview-remark-mode"]').setValue('has')
+    await wrapper.get('[data-testid="source-overview-search-field"]').setValue('remark')
+    await op(wrapper).setValue('notEmpty')
     await flushPromises()
     expect(lastQuery(page)?.remark).toBe('%')
-    expect((wrapper.get('[data-testid="source-overview-remark"]').element as HTMLInputElement).disabled).toBe(false)
-
-    await wrapper.get('[data-testid="source-overview-remark"]').setValue('超时')
-    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
-    await flushPromises()
-    expect(lastQuery(page)?.remark).toBe('超时')
+    expect(text(wrapper).disabled).toBe(true)
   })
 
-  it('「无备注」发 remark=NULL，关键字框禁用且不会把关键字一起发出去', async () => {
+  it('「为空」发 remark=NULL，之前填的关键字不会一起发出去', async () => {
     const { wrapper, page } = await mountWithSpy()
-    await wrapper.get('[data-testid="source-overview-remark"]').setValue('超时')
-    await wrapper.get('[data-testid="source-overview-remark-mode"]').setValue('none')
-    await flushPromises()
-
-    expect((wrapper.get('[data-testid="source-overview-remark"]').element as HTMLInputElement).disabled).toBe(true)
-    expect(lastQuery(page)?.remark).toBe('NULL')
-  })
-
-  it('未选状态下关键字照常可搜', async () => {
-    const { wrapper, page } = await mountWithSpy()
-    await wrapper.get('[data-testid="source-overview-remark"]').setValue('超时')
-    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
-    await flushPromises()
-    expect(lastQuery(page)?.remark).toBe('超时')
-  })
-
-  it('点 × 回到未选并重新查询；「清空」同样还原', async () => {
-    const { wrapper, page } = await mountWithSpy()
-    expect(wrapper.find('[data-testid="source-overview-remark-mode-clear"]').exists()).toBe(false)
-    await wrapper.get('[data-testid="source-overview-remark-mode"]').setValue('none')
+    await wrapper.get('[data-testid="source-overview-search-field"]').setValue('remark')
+    await wrapper.get('[data-testid="source-overview-search-text"]').setValue('超时')
+    await op(wrapper).setValue('empty')
     await flushPromises()
     expect(lastQuery(page)?.remark).toBe('NULL')
+    expect(text(wrapper).disabled).toBe(true)
+  })
 
-    await wrapper.get('[data-testid="source-overview-remark-mode-clear"]').trigger('click')
-    await flushPromises()
-    expect(lastQuery(page)?.remark).toBeUndefined()
-    expect((wrapper.get('[data-testid="source-overview-remark-mode"]').element as HTMLSelectElement).value).toBe('')
-
-    await wrapper.get('[data-testid="source-overview-remark-mode"]').setValue('has')
+  it('「清空」回到单行、不按备注筛', async () => {
+    const { wrapper, page } = await mountWithSpy()
+    await wrapper.get('[data-testid="source-overview-search-field"]').setValue('remark')
+    await op(wrapper).setValue('empty')
     await flushPromises()
     const clear = wrapper.findAll('button').find((b) => b.text() === '清空')
     await clear?.trigger('click')
     await flushPromises()
     expect(lastQuery(page)?.remark).toBeUndefined()
-    expect((wrapper.get('[data-testid="source-overview-remark-mode"]').element as HTMLSelectElement).value).toBe('')
+    expect(wrapper.findAll('[data-testid="source-overview-condition"]')).toHaveLength(1)
+    expect((wrapper.get('[data-testid="source-overview-search-field"]').element as HTMLSelectElement).value).toBe('sourceIds')
+  })
+})
+
+// 2026-09-28 用户定：查询支持多个条件并行（行与行之间是「并且」）。后端四个参数各自独立、一起给取交集；
+// 限制也是后端决定的——同一字段只能一行（一个参数一个值），做不了「或者」。
+describe('源视图 · 查询多条件（2026-09-28）', () => {
+  const source: Source = {
+    sourceId: 'src-1', name: '源', url: 'https://a.example.com', configId: 'cfg-1',
+    mainTable: 'T1', owner: 'admin', state: 'C',
+  } as Source
+
+  async function mountWithSpy(total = 1) {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total, list: total ? [source] : [] })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current' }, attachTo: document.body })
+    await flushPromises()
+    page.mockClear()
+    return { wrapper, page }
+  }
+  const lastQ = (page: { mock: { calls: unknown[][] } }) => page.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined
+  const fields = (wrapper: VueWrapper) => wrapper.findAll('[data-testid="source-overview-search-field"]')
+  const texts = (wrapper: VueWrapper) => wrapper.findAll('[data-testid="source-overview-search-text"]')
+  const add = (wrapper: VueWrapper) => wrapper.get('[data-testid="source-overview-condition-add"]').trigger('click')
+
+  it('名称、URL、备注三行一起发，另一个没加的参数不发', async () => {
+    const { wrapper, page } = await mountWithSpy()
+    await fields(wrapper)[0]!.setValue('name')
+    await texts(wrapper)[0]!.setValue('盛科')
+    await add(wrapper)
+    await fields(wrapper)[1]!.setValue('sourceUrl')
+    await texts(wrapper)[1]!.setValue('centec')
+    await add(wrapper)
+    await fields(wrapper)[2]!.setValue('remark')
+    await wrapper.findAll('[data-testid="source-overview-search-op"]')[2]!.setValue('notEmpty')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(lastQ(page)).toEqual(expect.objectContaining({ name: '盛科', sourceUrl: 'centec', remark: '%' }))
+    expect(lastQ(page)?.sourceIds).toBeUndefined()
+  })
+
+  it('同一字段只能一行：别的行占了的字段置灰；四个字段加满后没有「+」', async () => {
+    const { wrapper } = await mountWithSpy()
+    await add(wrapper)
+    const secondOptions = fields(wrapper)[1]!.findAll('option')
+    expect(secondOptions.find((o) => o.attributes('value') === 'sourceIds')?.attributes('disabled')).toBeDefined()
+    expect((fields(wrapper)[1]!.element as HTMLSelectElement).value).toBe('name')
+    await add(wrapper)
+    await add(wrapper)
+    expect(fields(wrapper).map((f) => (f.element as HTMLSelectElement).value)).toEqual(['sourceIds', 'name', 'sourceUrl', 'remark'])
+    expect(wrapper.find('[data-testid="source-overview-condition-add"]').exists()).toBe(false)
+  })
+
+  it('× 删掉一行并重查；只剩一行时 × 是清空这一行', async () => {
+    const { wrapper, page } = await mountWithSpy()
+    await texts(wrapper)[0]!.setValue('盛科')
+    await add(wrapper)
+    await fields(wrapper)[1]!.setValue('remark')
+    await wrapper.findAll('[data-testid="source-overview-search-op"]')[1]!.setValue('empty')
+    await flushPromises()
+    expect(lastQ(page)).toEqual(expect.objectContaining({ name: '盛科', remark: 'NULL' }))
+
+    await wrapper.findAll('[data-testid="source-overview-condition-remove"]')[1]!.trigger('click')
+    await flushPromises()
+    expect(fields(wrapper)).toHaveLength(1)
+    expect(lastQ(page)).toEqual(expect.objectContaining({ name: '盛科', remark: undefined }))
+
+    await wrapper.get('[data-testid="source-overview-condition-remove"]').trigger('click')
+    await flushPromises()
+    expect((texts(wrapper)[0]!.element as HTMLInputElement).value).toBe('')
+    expect(lastQ(page)?.name).toBeUndefined()
+  })
+
+  it('URL 的「为空」列出来但不能选（后端暂不支持）', async () => {
+    const { wrapper } = await mountWithSpy()
+    await fields(wrapper)[0]!.setValue('sourceUrl')
+    const empty = wrapper.get('[data-testid="source-overview-search-op"]').findAll('option').find((o) => o.attributes('value') === 'empty')
+    expect(empty?.attributes('disabled')).toBeDefined()
+    expect(empty?.text()).toContain('暂不支持')
+  })
+
+  it('自动识别不抢别的行已占的字段：识别成 URL 但 URL 已有一行时，按名称查', async () => {
+    const { wrapper, page } = await mountWithSpy()
+    await texts(wrapper)[0]!.setValue('centec.com')
+    expect((fields(wrapper)[0]!.element as HTMLSelectElement).value).toBe('sourceUrl')
+    await add(wrapper)
+    await texts(wrapper)[1]!.setValue('www.sanyoumed.com')
+    expect((fields(wrapper)[1]!.element as HTMLSelectElement).value).toBe('name')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(lastQ(page)).toEqual(expect.objectContaining({ sourceUrl: 'centec.com', name: 'www.sanyoumed.com' }))
   })
 })
 

@@ -37,7 +37,18 @@ import {
   type LaunchScope,
   type SourceFilter,
 } from './useSourceLaunch'
-import { detectSourceSearchField, mightBeUrlFragment } from './sourceSearchField'
+import {
+  SOURCE_COND_FIELDS,
+  defaultSourceCondOp,
+  detectSourceSearchField,
+  mightBeUrlFragment,
+  sourceCondActive,
+  sourceCondFieldOf,
+  sourceCondNeedsValue,
+  sourceConditionParams,
+  type SourceCondField,
+  type SourceCondition,
+} from './sourceSearchField'
 
 // `initialSourceIds`：从数据视图「按条件查源」跳过来时带的那批源 ID（0903 Y2-4）。
 // 直接预填「源 ID」筛选框——那个框本来就收逗号分隔的多个 ID，不为反查另造一套筛选。
@@ -80,58 +91,82 @@ const size = ref(20)
 const loading = ref(false)
 const loadError = ref('')
 /**
- * 源 ID / 源名称 / 源 URL 三格合并成「字段 ▾ ＋ 一个输入框」（0917-11，2026-09-21 用户定范围）。
- * 会上原话：「全部源的这个查询 2、3、4……我准备说放在一起的」。
+ * 查询：多条件并行（2026-09-28 产品：「改成和数据搜索一样」，用户定按多条件做）。
+ * 每行 = 字段 ＋ 条件 ＋ 值，行与行之间是「并且」；备注也并进来了（原先单独一格的有 / 无备注
+ * 就是这里的「非空 / 为空」）。字段、条件和参数口径见 sourceSearchField.ts。
  *
- * **这推翻了 2026-09-17 那次"源 URL 不跟源名称并成一格"的定法**，代价是明摆着的：
- * 三者原先能组合（实测 `name=盛科` 4 条、`sourceUrl=centec` 1 条、同时给 1 条，取交集），
- * 合并之后一次只能按一个字段查。用户接受这个代价，换筛选栏少两格。
- *
- * 原先做成**显式选字段**：猜错就是静默漏结果——实测 `name=centec` 命中 0 条、
- * `sourceUrl=centec` 命中 1 条，两者互不覆盖。2026-09-28 产品嫌「要点 2 下」，改为
- * **能明确判断的自动识别**（规则见 sourceSearchField.ts），下拉跟着切、用户手动选的优先；
+ * 沿革：0917-11 把源 ID / 名称 / URL 并成「字段 ▾ ＋ 一个输入框」，一次只能按一个字段查；
+ * 2026-09-28 产品嫌「要点 2 下」加了自动识别；同日改成多条件，两者都保留——
+ * 没手动选过字段的行，照样按输入内容自动识别 ID / 名称 / URL（不会识别成备注，也不抢别的行已占的字段）；
  * 说不准的单个英文词按名称查，查空了给「改按 URL 查」的提示（urlFallback），不静默漏。
  *
- * **状态不并进来**（用户同意）：它是枚举，跟这三个文本条件不同类，并进来控件要变形，
- * 而且「状态=异常 ＋ 名称含 X」是常见组合，并了就做不了。
+ * **状态 / 标签 / 网站 / 数据量不并进来**：它们是枚举或数值，各自一个下拉 / 数字框更顺手。
  */
-type SearchField = 'sourceIds' | 'name' | 'sourceUrl'
-const SEARCH_FIELDS: { value: SearchField; label: string; placeholder: string }[] = [
-  { value: 'sourceIds', label: '源 ID', placeholder: '多个 ID 用逗号分隔' },
-  { value: 'name', label: '源名称', placeholder: '源名称关键字' },
-  { value: 'sourceUrl', label: '源 URL', placeholder: 'URL 关键字，如 centec' },
-]
-const searchField = ref<SearchField>('sourceIds')
-const searchText = ref(props.initialSourceIds ?? '')
-/** 用户手动点下拉选过字段：之后不再自动识别覆盖它；清空输入框或点「清空」后恢复自动 */
-const fieldPinned = ref(false)
-const searchPlaceholder = computed(() => (fieldPinned.value
-  ? SEARCH_FIELDS.find((f) => f.value === searchField.value)?.placeholder ?? ''
-  : '源 ID / 名称 / URL，自动识别'))
-watch(searchText, (text) => {
-  if (!text.trim()) {
-    fieldPinned.value = false
+interface ConditionRow extends SourceCondition {
+  key: number
+  /** 用户手动点下拉选过字段：之后不再自动识别覆盖它；清空输入框后恢复自动 */
+  pinned: boolean
+}
+let conditionSeq = 0
+function newCondition(field: SourceCondField, value = ''): ConditionRow {
+  return { key: ++conditionSeq, field, op: defaultSourceCondOp(field), value, pinned: false }
+}
+const conditions = ref<ConditionRow[]>([newCondition('sourceIds', props.initialSourceIds ?? '')])
+/** 同一字段只能有一行（后端一个参数只带一个值）：别的行占了的字段在下拉里置灰 */
+function fieldTakenByOther(field: SourceCondField, row: ConditionRow) {
+  return conditions.value.some((c) => c !== row && c.field === field)
+}
+const canAddCondition = computed(() => conditions.value.length < SOURCE_COND_FIELDS.length)
+function addCondition() {
+  const free = SOURCE_COND_FIELDS.find((f) => !conditions.value.some((c) => c.field === f.value))
+  if (free) conditions.value.push(newCondition(free.value))
+}
+function removeCondition(row: ConditionRow) {
+  const wasActive = sourceCondActive(row)
+  if (conditions.value.length > 1) conditions.value = conditions.value.filter((c) => c !== row)
+  else conditions.value = [newCondition('sourceIds')]
+  if (wasActive) search()
+}
+function conditionPlaceholder(row: ConditionRow) {
+  if (row.pinned || row.field === 'remark') return sourceCondFieldOf(row.field).placeholder
+  return '源 ID / 名称 / URL，自动识别'
+}
+function onConditionInput(row: ConditionRow, value: string) {
+  row.value = value
+  if (!value.trim()) {
+    row.pinned = false
     return
   }
-  if (fieldPinned.value) return
-  searchField.value = detectSourceSearchField(text) ?? searchField.value
-})
-function onFieldPicked() {
-  fieldPinned.value = true
-  if (searchText.value) search()
+  if (row.pinned || row.field === 'remark') return
+  // 识别出的字段被别的行占了，退回按名称查（名称是兜底口径）；名称也占了就不动
+  const target = ([detectSourceSearchField(value), 'name'] as const).find((f) => f && !fieldTakenByOther(f, row))
+  if (target && target !== row.field) {
+    row.field = target
+    row.op = defaultSourceCondOp(target)
+  }
+}
+function onFieldPicked(row: ConditionRow) {
+  row.pinned = true
+  if (!sourceCondFieldOf(row.field).ops.some((o) => o.value === row.op && !o.unsupported)) row.op = defaultSourceCondOp(row.field)
+  if (sourceCondActive(row)) search()
+}
+/** 切到「非空 / 为空」立刻生效；切回要填值的条件时框里有值才重查，空着不白打一次请求 */
+function onOpPicked(row: ConditionRow) {
+  if (sourceCondActive(row)) search()
 }
 /**
- * 按名称自动识别、查出 0 条，且输入像网址片段（如 `centec`）时，提示改按 URL 查。
+ * 某行按名称自动识别、查出 0 条，且输入像网址片段（如 `centec`）时，提示改按 URL 查。
  * 记下的是当时查的词：用户改了输入框提示就不再成立，下一次查询会重算。
  */
-const urlFallback = ref('')
+const urlFallback = ref<{ key: number; keyword: string } | null>(null)
 function useUrlFallback() {
-  searchField.value = 'sourceUrl'
-  fieldPinned.value = true
+  const row = conditions.value.find((c) => c.key === urlFallback.value?.key)
+  if (!row) return
+  row.field = 'sourceUrl'
+  row.op = defaultSourceCondOp('sourceUrl')
+  row.pinned = true
   search()
 }
-/** 当前这一格落到哪个后端参数上；没选中的两个恒为 undefined */
-const searchValueOf = (field: SearchField) => (searchField.value === field ? (searchText.value.trim() || undefined) : undefined)
 const flowFilterId = ref(props.initialFlowId ?? '')
 
 /** 不限网站模式（采集资产源列表视图）：多出「所属网站」列与「网站」筛选 */
@@ -179,42 +214,20 @@ watch(() => props.initialFlowId, (id) => { flowFilterId.value = id ?? '' })
 // prop 变化也要生效：反查跳过来时本组件常常已经挂载着（同一个 SiteDetailView 里切视图），
 // 只把它当初始值用等于永远不生效。清空不跟随——那是用户自己在筛选框里的操作，别覆盖他。
 watch(() => props.initialSourceIds, (ids) => {
-  if (!ids || (searchField.value === 'sourceIds' && ids === searchText.value)) return
-  // 反查跳过来带的是一串源 ID，字段也要跟着切过去，否则这串 ID 会被当成名称关键字发出去
-  searchField.value = 'sourceIds'
-  searchText.value = ids
+  if (!ids) return
+  const existing = conditions.value.find((c) => c.field === 'sourceIds')
+  if (existing?.value === ids) return
+  // 反查跳过来带的是一串源 ID，要落在「源 ID」那一行，否则这串 ID 会被当成名称关键字发出去。
+  // 已有源 ID 行就改它；第一行空着就把它改成源 ID；否则另加一行，不冲掉用户别的条件。
+  const first = conditions.value[0]!
+  if (existing) existing.value = ids
+  else if (!sourceCondActive(first)) Object.assign(first, { field: 'sourceIds', op: 'eq', value: ids, pinned: false })
+  else conditions.value.push(newCondition('sourceIds', ids))
   page.value = 1
   void loadSources()
 })
 const statusFilter = ref<StatusFilter>('all')
 const tagFilter = ref('')
-// 备注：生产源列表页筛选区就有，后端认 remark（旧列表列同名）。本地那份旧代码快照比线上旧，
-// queryParam 里还没有，不能拿它当"后端不支持"的依据。旁边的「责任人」0831 明确暂不做。
-const remarkFilter = ref('')
-/**
- * 备注三态（0920-07）。会上原话：「我想搜这个备注为空的、不为空的」。
- *
- * **后端本来就支持，是我们没发现**（2026-09-21 实测，站 12 共 5891 个源）：
- * `remark=%` 得 8 条、全部有备注；`remark=NULL` 得 5883 条、抽样全是 null；8 + 5883 = 5891。
- * 换站 81 复核也吻合。原先以为要提后端需求（B28），复测后撤回了。
- *
- * 2026-09-24 产品调整：去掉「不限」选项，只留「有备注 / 无备注」，且**有备注时也要能按关键字搜**。
- * - 未选（占位「备注」）：不按备注状态筛，关键字照常可用；
- * - 有备注：不填关键字 = `remark=%`（所有有备注的）；填了关键字 = 按关键字搜（命中关键字本身就意味着非空）；
- * - 无备注：`remark=NULL`，关键字框禁用——"没有备注又含 X"不成立。
- * 默认必须是"未选"而不是「有备注」：否则源列表一进来只剩有备注的那几个（站 12 是 8/5891）。
- */
-const remarkMode = ref<'' | 'has' | 'none'>('')
-function remarkParam(): string | undefined {
-  const keyword = remarkFilter.value.trim()
-  if (remarkMode.value === 'none') return 'NULL'
-  if (keyword) return keyword
-  return remarkMode.value === 'has' ? '%' : undefined
-}
-function clearRemarkMode() {
-  remarkMode.value = ''
-  search()
-}
 /**
  * 数据量上限（0920-01）。会上原话：「这个页面支持 sql 查询，比如数据<5」。
  *
@@ -243,16 +256,18 @@ const parsedDataCountMax = computed<number | undefined>(() => {
 })
 
 function currentQuery(): SourceFilter {
+  const cond = sourceConditionParams(conditions.value)
   return {
     siteIds: effectiveSiteIds(),
-    sourceIds: searchValueOf('sourceIds'),
+    sourceIds: cond.sourceIds,
     flowId: flowFilterId.value || undefined,
-    name: searchValueOf('name'),
-    sourceUrl: searchValueOf('sourceUrl'),
+    name: cond.name,
+    sourceUrl: cond.sourceUrl,
     state: statusFilter.value === 'all' || statusFilter.value === 'disabled' ? undefined : statusFilter.value,
     enable: statusFilter.value === 'disabled' ? '1' : statusFilter.value === 'all' ? undefined : '0',
     tags: tagFilter.value ? [issueTagForWrite(tagFilter.value)].filter(Boolean) : [],
-    remark: remarkParam(),
+    // 备注：后端认 remark（旧列表列同名）；非空 = `%`、为空 = `NULL` 的口径见 sourceSearchField.ts
+    remark: cond.remark,
     count: parsedDataCountMax.value,
     field: sortField.value || undefined,
     sorted: sortField.value ? (sortDirection.value === 'asc' ? 1 : -1) : undefined,
@@ -286,10 +301,10 @@ async function loadSources() {
     // 分页页数也跟着错。服务端返回什么就展示什么，这是唯一自洽的口径。
     rows.value = applyMarkOverlay(result.list)
     total.value = result.total
-    const keyword = searchText.value.trim()
-    urlFallback.value = result.total === 0 && !fieldPinned.value && searchField.value === 'name' && mightBeUrlFragment(keyword)
-      ? keyword
-      : ''
+    const guess = result.total === 0
+      ? conditions.value.find((c) => c.field === 'name' && !c.pinned && mightBeUrlFragment(c.value) && !fieldTakenByOther('sourceUrl', c))
+      : undefined
+    urlFallback.value = guess ? { key: guess.key, keyword: guess.value.trim() } : null
   } catch (error) {
     if (requestId !== sourceRequestSeq) return
     rows.value = []
@@ -304,14 +319,10 @@ function search() {
   void loadSources()
 }
 function clearFilters() {
-  searchField.value = 'sourceIds'
-  searchText.value = ''
-  fieldPinned.value = false
+  conditions.value = [newCondition('sourceIds')]
   flowFilterId.value = ''
   statusFilter.value = 'all'
   tagFilter.value = ''
-  remarkFilter.value = ''
-  remarkMode.value = ''
   dataCountMax.value = ''
   siteFilter.value = ''
   search()
@@ -869,10 +880,11 @@ function onMarkEdited(payload: { tags: string[]; remark: string }) {
  */
 async function loadTagCandidates() {
   try {
+    const cond = sourceConditionParams(conditions.value)
     serverTags.value = await sourceApi.sourceTags({
       siteIds: effectiveSiteIds(),
-      sourceIds: searchValueOf('sourceIds'),
-      name: searchValueOf('name'),
+      sourceIds: cond.sourceIds,
+      name: cond.name,
     })
   } catch {
     serverTags.value = []
@@ -927,21 +939,52 @@ watch(() => ui.sourceListRevision, () => {
     <!-- 不限网站（采集资产源列表视图）用紧凑样式：与同页的网站查询工具条同一套外观——
          一行排开、不要控件上方的小标题（改由首项 / 占位文字说明）、34px 高。网站详情里保持原样。 -->
     <div class="sov-filter" :class="{ 'is-compact': crossSite }">
-      <!-- 源 ID / 源名称 / 源 URL 三合一（0917-11）：选字段 + 填值，一次按一个字段查。
-           显式选字段而不是自动猜类型——猜错是静默漏结果，用户不会知道。 -->
-      <label><span class="sov-label-text">查询</span>
-        <span class="sov-search">
-          <select v-model="searchField" data-testid="source-overview-search-field" @change="onFieldPicked">
-            <option v-for="f in SEARCH_FIELDS" :key="f.value" :value="f.value">{{ f.label }}</option>
-          </select>
-          <input
-            v-model="searchText"
-            data-testid="source-overview-search-text"
-            :placeholder="searchPlaceholder"
-            @keyup.enter="search"
-          />
-        </span>
-      </label>
+      <!-- 查询：多条件并行（2026-09-28），每行 字段 ＋ 条件 ＋ 值，行与行之间是「并且」。
+           备注也在这里（非空 / 为空 = 原来的有备注 / 无备注）。同一字段只能一行。 -->
+      <div class="sov-field"><span class="sov-label-text">查询</span>
+        <div class="sov-conds" data-testid="source-overview-conditions">
+          <div v-for="(row, index) in conditions" :key="row.key" class="sov-search" data-testid="source-overview-condition">
+            <select v-model="row.field" data-testid="source-overview-search-field" :aria-label="`第 ${index + 1} 个条件的字段`" @change="onFieldPicked(row)">
+              <option v-for="f in SOURCE_COND_FIELDS" :key="f.value" :value="f.value" :disabled="fieldTakenByOther(f.value, row)">{{ f.label }}</option>
+            </select>
+            <select v-model="row.op" class="sov-op" data-testid="source-overview-search-op" :aria-label="`第 ${index + 1} 个条件的匹配方式`" @change="onOpPicked(row)">
+              <option
+                v-for="o in sourceCondFieldOf(row.field).ops"
+                :key="o.value"
+                :value="o.value"
+                :disabled="!!o.unsupported"
+                :title="o.unsupported"
+              >{{ o.unsupported ? `${o.label}（暂不支持）` : o.label }}</option>
+            </select>
+            <input
+              :value="sourceCondNeedsValue(row.op) ? row.value : ''"
+              data-testid="source-overview-search-text"
+              :placeholder="sourceCondNeedsValue(row.op) ? conditionPlaceholder(row) : '无需填写'"
+              :disabled="!sourceCondNeedsValue(row.op)"
+              @input="onConditionInput(row, ($event.target as HTMLInputElement).value)"
+              @keyup.enter="search"
+            />
+            <button
+              v-if="conditions.length > 1 || sourceCondActive(row)"
+              type="button"
+              class="sov-cond-btn"
+              data-testid="source-overview-condition-remove"
+              :title="conditions.length > 1 ? '删除这个条件' : '清空这个条件'"
+              :aria-label="conditions.length > 1 ? '删除这个条件' : '清空这个条件'"
+              @click="removeCondition(row)"
+            >×</button>
+            <button
+              v-if="index === conditions.length - 1 && canAddCondition"
+              type="button"
+              class="sov-cond-btn add"
+              data-testid="source-overview-condition-add"
+              title="添加条件（与已有条件同时满足）"
+              aria-label="添加条件"
+              @click="addCondition"
+            >+</button>
+          </div>
+        </div>
+      </div>
       <!-- 网站筛选：只在不限网站（采集资产源列表视图）时出现；网站详情里范围固定为当前网站 -->
       <label v-if="crossSite"><span class="sov-label-text">网站</span>
         <select v-model="siteFilter" data-testid="source-overview-site" @change="search">
@@ -967,35 +1010,6 @@ watch(() => ui.sourceListRevision, () => {
           <option v-if="tagFilter && !tagCandidates.includes(tagFilter)" :value="tagFilter">{{ tagFilter }}</option>
           <option v-for="tag in tagCandidates" :key="tag" :value="tag">{{ tag }}</option>
         </select>
-      </label>
-      <!-- 备注：有备注 / 无备注 ＋ 关键字（2026-09-24 去掉「不限」，有备注时也能搜）。
-           未选时是占位「备注」，不按备注状态筛；选了之后旁边的 × 回到未选。 -->
-      <label><span class="sov-label-text">备注</span>
-        <span class="sov-remark-filter">
-          <span class="sov-remark-mode">
-            <select v-model="remarkMode" data-testid="source-overview-remark-mode" :class="{ placeholder: !remarkMode, 'has-clear': !!remarkMode }" @change="search">
-              <option value="" disabled hidden>备注</option>
-              <option value="has">有备注</option>
-              <option value="none">无备注</option>
-            </select>
-            <button
-              v-if="remarkMode"
-              type="button"
-              class="sov-remark-clear"
-              data-testid="source-overview-remark-mode-clear"
-              aria-label="不按备注状态筛选"
-              @click.prevent="clearRemarkMode"
-            >×</button>
-          </span>
-          <input
-            v-model="remarkFilter"
-            data-testid="source-overview-remark"
-            placeholder="备注关键字"
-            :disabled="remarkMode === 'none'"
-            :title="remarkMode === 'none' ? '选了「无备注」时不能再按关键字搜' : ''"
-            @keyup.enter="search"
-          />
-        </span>
       </label>
       <!-- 「≤」不是「<」：后端 count 的语义含等于（2026-09-20 实测，count=5 的结果里有 47 行正好是 5） -->
       <label><span class="sov-label-text">数据量 ≤</span>
@@ -1031,7 +1045,7 @@ watch(() => ui.sourceListRevision, () => {
     <div class="sov-summary">
       <span>共 {{ total }} 个源</span>
       <span v-if="urlFallback && !loading" class="sov-url-fallback" data-testid="source-overview-url-fallback">
-        按名称没查到「{{ urlFallback }}」，<button type="button" class="sov-link" @click="useUrlFallback">改按 URL 查</button>
+        按名称没查到「{{ urlFallback.keyword }}」，<button type="button" class="sov-link" @click="useUrlFallback">改按 URL 查</button>
       </span>
       <span v-if="collectProgress" class="sov-progress" data-testid="source-collect-progress">{{ collectProgress }}</span>
       <button v-if="failedBatches.length" class="sov-btn" type="button" data-testid="source-retry-failed" @click="retryFailedBatches">重试失败批次（{{ failedBatches.reduce((n, b) => n + b.ids.length, 0) }}）</button>
@@ -1112,8 +1126,8 @@ watch(() => ui.sourceListRevision, () => {
               <span v-else class="sov-muted">未关联</span>
             </td>
             <td class="sov-url" :title="source.url">
+              <!-- 没有 URL 就留空，不画「—」（2026-09-28 用户定，与旧平台一致） -->
               <a v-if="source.url" :href="source.url" target="_blank" rel="noopener noreferrer" @click.stop>{{ source.url }}</a>
-              <template v-else>—</template>
             </td>
             <td>{{ source.mainTable || '—' }}</td>
             <td>
@@ -1215,30 +1229,23 @@ watch(() => ui.sourceListRevision, () => {
 <style scoped>
 .sov-shell { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 12px; background: #f8fafc; gap: 10px; }
 .sov-filter { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; padding: 10px; border: 1px solid var(--rc-border-soft); border-radius: 8px; background: #fff; }
-.sov-filter label { display: grid; gap: 4px; color: var(--rc-muted); font-size: 11px; }
+.sov-filter label, .sov-filter .sov-field { display: grid; gap: 4px; color: var(--rc-muted); font-size: 11px; }
 .sov-filter input, .sov-filter select { height: 30px; min-width: 116px; padding: 0 8px; border: 1px solid #dbe3ee; border-radius: 6px; color: var(--rc-text); background: #fff; font-size: 12px; }
 .sov-filter input:focus, .sov-filter select:focus { outline: 0; border-color: #60a5fa; box-shadow: 0 0 0 2px #dbeafe; }
 .sov-filter input:disabled { background: #f4f6f9; color: var(--rc-faint); cursor: not-allowed; }
-/* 备注那格里的「三态 + 关键字」并排，整体占位与其它单控件的格子相当 */
-/* 查询那格：字段下拉 + 输入框并排，输入框吃掉剩余宽度（它装的是 ID 串 / 关键字，比下拉需要地方） */
-.sov-search { display: flex; gap: 4px; }
+/* 查询那格：一行一个条件（字段 + 条件 + 值 + ×/+），多个条件往下叠 */
+.sov-conds { display: grid; gap: 6px; }
+.sov-search { display: flex; align-items: center; gap: 4px; }
 .sov-filter .sov-search select { min-width: 88px; }
+.sov-filter .sov-search select.sov-op { min-width: 0; width: 72px; }
 .sov-filter .sov-search input { min-width: 190px; }
-.sov-remark-filter { display: flex; gap: 4px; }
-.sov-filter .sov-remark-filter select { min-width: 108px; }
-/* 选中后右侧要放 ×（在下拉箭头左边），文字给它让出位置，别挤在一起 */
-.sov-filter .sov-remark-filter select.has-clear { padding-right: 44px; }
-.sov-remark-mode { position: relative; display: inline-flex; }
-.sov-filter .sov-remark-filter select.placeholder { color: var(--rc-faint); }
-.sov-remark-clear {
-  position: absolute; right: 24px; top: 50%; transform: translateY(-50%);
-  width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%;
-  background: transparent; color: var(--rc-muted); font-size: 13px; line-height: 16px; cursor: pointer;
+.sov-cond-btn {
+  flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%;
+  background: transparent; color: var(--rc-muted); font-size: 15px; line-height: 22px; cursor: pointer;
 }
-.sov-remark-clear:hover { background: #e2e8f0; color: var(--rc-text); }
-/* 下拉加宽了 32px（给 × 让位），关键字框相应收窄，备注这一格总宽不变——
-   1366 下筛选栏第一行本来只剩 29px 余量，多出来会把「数据量 ≤」挤到第二行 */
-.sov-filter .sov-remark-filter input { min-width: 104px; width: 121px; }
+.sov-cond-btn:hover { background: #e2e8f0; color: var(--rc-text); }
+.sov-cond-btn.add { color: var(--rc-primary); font-weight: 700; }
+.sov-cond-btn.add:hover { background: var(--rc-primary-bg); }
 /* 数字框不需要和文本框一样宽：一行已经很挤（源 ID / 名称 / URL / 状态 / 标签 / 备注 / 数据量） */
 .sov-filter input.sov-num { min-width: 84px; width: 84px; }
 /* ---- 紧凑样式（采集资产源列表视图）：外观对齐同页 FilterToolbar 的网站查询工具条 ---- */
@@ -1247,7 +1254,7 @@ watch(() => ui.sourceListRevision, () => {
   border: 1px solid var(--rc-border); box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 .sov-filter.is-compact .sov-label-text { display: none; }
-.sov-filter.is-compact label { display: flex; flex: 0 1 auto; min-width: 0; }
+.sov-filter.is-compact label, .sov-filter.is-compact .sov-field { display: flex; flex: 0 1 auto; min-width: 0; }
 .sov-filter.is-compact input,
 .sov-filter.is-compact select {
   height: 34px; min-width: 0; border-color: var(--rc-border); border-radius: 6px; font-size: 13px;
@@ -1256,13 +1263,11 @@ watch(() => ui.sourceListRevision, () => {
 .sov-filter.is-compact select:hover { border-color: #bfdbfe; }
 /* 各控件基准宽 + 压缩下限：放不下时先压搜索框，其余守住能读全的宽度 */
 .sov-filter.is-compact .sov-search select { width: 84px; flex: none; }
+.sov-filter.is-compact .sov-search select.sov-op { width: 72px; }
 .sov-filter.is-compact .sov-search input { width: 200px; flex: 0 1 200px; min-width: 120px; }
 .sov-filter.is-compact [data-testid="source-overview-site"] { width: 124px; }
 .sov-filter.is-compact [data-testid="source-overview-state"] { width: 100px; }
 .sov-filter.is-compact [data-testid="source-overview-tag"] { width: 104px; }
-/* 备注下拉守住 108px：选中后右侧要放 ×，再窄文字就和 × 挤在一起（见上面 has-clear 的说明） */
-.sov-filter.is-compact .sov-remark-filter select { width: 108px; min-width: 108px; flex: none; }
-.sov-filter.is-compact .sov-remark-filter input { width: 100px; min-width: 90px; }
 .sov-filter.is-compact .sov-num { width: 88px; min-width: 80px; }
 .sov-filter.is-compact .sov-filter-actions { flex-wrap: nowrap; flex: none; }
 .sov-summary-ops { display: inline-flex; gap: 8px; margin-left: auto; }
