@@ -8,12 +8,14 @@
 //
 // 列表数据走 ck_source 分页接口（/api/source/page，2026-09-18 后端新增，
 // /api/source/list 的分页版）；监控结果那张列表是 sourceCheck 的旧监控表，别混。
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import { ckSourceApi, type CkSourceRecord } from '@/api'
 import MonitorConfigEditor from './MonitorConfigEditor.vue'
 
-// siteId 只在模板里传给弹窗里的编辑器（编辑器要按它列源候选），脚本侧用不到
-defineProps<{ siteId: string }>()
+// siteId 只在模板里传给弹窗里的编辑器（编辑器要按它列源候选），脚本侧用不到。
+// sourceId 是可选过滤：网站视图（全部）不传、翻整表；画布「监控视图」按当前源进来说，
+// 传当前 sourceId，列表就只显示这一个源的配置。
+const props = defineProps<{ siteId: string; sourceId?: string }>()
 
 const filters = reactive({ name: '' })
 const rows = ref<CkSourceRecord[]>([])
@@ -33,6 +35,7 @@ async function load() {
     const result = await ckSourceApi.page({
       pageNum: page.value,
       pageSize: PAGE_SIZE,
+      ...(props.sourceId ? { sourceId: props.sourceId } : {}),
       ...(filters.name.trim() ? { name: filters.name.trim() } : {}),
     })
     rows.value = result.list
@@ -70,6 +73,12 @@ function onSaved() {
 }
 
 onMounted(() => {
+  void load()
+})
+
+// 画布换源（同一监控视图组件实例不重挂）时回到第一页按新源重查。
+watch(() => props.sourceId, () => {
+  page.value = 1
   void load()
 })
 </script>

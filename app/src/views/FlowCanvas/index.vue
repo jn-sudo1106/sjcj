@@ -694,7 +694,7 @@ onUnmounted(() => {
         <CompareSplit v-else-if="ws.compareSourceId" class="rc-flow-result" />
         <TaskView v-else-if="isTaskView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
         <FileView v-else-if="isFileView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
-        <MonitorConfigView v-else-if="isMonitorConfigView" :key="`${flow.sourceCtx?.sourceId}-${flow.selectedId}`" class="rc-flow-result" />
+        <MonitorConfigView v-else-if="isMonitorConfigView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
         <!--
           0904 I10（Z3-1）：**数据视图也挂进这套三栏**，不再整屏铺开。
           结构 = 左源侧栏（`rc-canvas-cols` 那层，本来就固定）+ 中间可切换（流程 ↔ 数据）+ 右节点配置。

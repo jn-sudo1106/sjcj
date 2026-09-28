@@ -51,9 +51,9 @@ const stubs = {
   },
 }
 
-function mountView() {
+function mountView(props: { siteId: string; sourceId?: string } = { siteId: 'site-4' }) {
   return mount(SiteMonitorConfigView, {
-    props: { siteId: 'site-4' },
+    props,
     global: { stubs, directives: { loading: {} } },
   })
 }
@@ -122,6 +122,27 @@ describe('SiteMonitorConfigView · ck_source 分页列表（2026-09-18 改版）
 
     expect(wrapper.text()).toContain('暂无监控配置')
     expect(wrapper.text()).toContain('＋ 新增配置')
+  })
+})
+
+describe('SiteMonitorConfigView · 按当前源过滤（2026-09-28 画布监控视图）', () => {
+  it('传入 sourceId 时查询带上该源', async () => {
+    const paged = vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult())
+    mountView({ siteId: 'site-4', sourceId: '430016944' })
+    await flushPromises()
+
+    expect(paged).toHaveBeenCalledWith({ pageNum: 1, pageSize: 10, sourceId: '430016944' })
+  })
+
+  it('换源时回到第一页按新源重查', async () => {
+    const paged = vi.spyOn(ckSourceApi, 'page').mockResolvedValue(pageResult())
+    const wrapper = mountView({ siteId: 'site-4', sourceId: 'a' })
+    await flushPromises()
+
+    await wrapper.setProps({ sourceId: 'b' })
+    await flushPromises()
+
+    expect(paged).toHaveBeenLastCalledWith({ pageNum: 1, pageSize: 10, sourceId: 'b' })
   })
 })
 

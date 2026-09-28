@@ -196,7 +196,8 @@ function backToSourceView() {
 }
 // 0917：监控视图页签改为**常驻**，跟流程/数据/文件/任务四档一样，选中的是不是数据监控节点都显示。
 // 之前按 `isMonitorNode(flow.selectedNode)` 显隐，还配了一条"选中非监控节点就弹回流程视图"的兜底；
-// 产品口径是这五个视图平级——点任意节点都能停在监控视图上（非同类型节点时面板内给提示，见 MonitorConfigView）。
+// 产品口径是这五个视图平级——点任意节点都能停在监控视图上（0928 起这一档整块换成按当前源过滤的
+// 「监控结果 / 监控配置」两 Tab，不再看选中节点类型，见 MonitorConfigView）。
 function switchView(target: SourceWorkspaceView) {
   if (view.value === target) {
     if (target === 'data') ui.applyViewLayoutDefault('data')

@@ -25,7 +25,7 @@ const stubs = {
   SiteSourceSelect: { name: 'SiteSourceSelect', template: '<div />', emits: ['update:modelValue'] },
   CheckLogDialog: { name: 'CheckLogDialog', props: ['modelValue', 'check'], template: '<div />' },
   // 配置 Tab 自己会拉 ck_source 分页列表，容器用例里只关心挂没挂上，不看它的内部行为
-  SiteMonitorConfigView: { name: 'SiteMonitorConfigView', props: ['siteId'], template: '<div data-testid="config-panel" />' },
+  SiteMonitorConfigView: { name: 'SiteMonitorConfigView', props: ['siteId', 'sourceId'], template: '<div data-testid="config-panel" />' },
   ElSwitch: {
     name: 'ElSwitch',
     props: ['modelValue', 'loading', 'disabled'],
@@ -183,17 +183,36 @@ describe('SiteMonitorView', () => {
     expect(wrapper.find('.smv-table').exists()).toBe(false)
   })
 
-  // 2026-09-18 改版：监控配置 Tab 是 ck_source 分页列表，源在弹窗编辑器里自己选，
-  // 容器那层共用的源选择只给「监控结果」——配置 Tab 不再接 sourceId。
-  it('监控配置 Tab 不接共用的源选择（列表翻的是整表 ck_source）', async () => {
+  // 2026-09-28：容器选中的源现在同时透给「监控配置」Tab，两 Tab 按同一个源过滤
+  // （画布进来带 sourceId prop → 起步锁定当前源；网站全部不传 → 未选源前为 undefined、翻整表）。
+  it('监控配置 Tab 接容器选中的源；未选源时不传（翻整表）', async () => {
     vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 0, list: [] })
     const wrapper = mountViewWithSourceSelect()
     await flushPromises()
-    await wrapper.findComponent({ name: 'SiteSourceSelect' }).vm.$emit('update:modelValue', 's1')
-    await flushPromises()
 
+    // 起步没选源：配置 Tab 不接 sourceId
     await wrapper.get('[data-testid="site-monitor-tab-config"]').trigger('click')
     expect(wrapper.findComponent({ name: 'SiteMonitorConfigView' }).props('sourceId')).toBeUndefined()
+
+    // 回到结果选中源 s1，再切配置：sourceId 随之透传
+    await wrapper.get('[data-testid="site-monitor-tab-result"]').trigger('click')
+    await wrapper.findComponent({ name: 'SiteSourceSelect' }).vm.$emit('update:modelValue', 's1')
+    await flushPromises()
+    await wrapper.get('[data-testid="site-monitor-tab-config"]').trigger('click')
+    expect(wrapper.findComponent({ name: 'SiteMonitorConfigView' }).props('sourceId')).toBe('s1')
+  })
+
+  it('外部传入 sourceId 时两 Tab 起步都按该源过滤', async () => {
+    const paged = vi.spyOn(sourceCheckApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = mount(SiteMonitorView, {
+      props: { siteId: 'site-a', sourceId: 'source-current' },
+      global: { stubs, directives: { loading: {} } },
+    })
+    await flushPromises()
+
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: 'source-current' }))
+    await wrapper.get('[data-testid="site-monitor-tab-config"]').trigger('click')
+    expect(wrapper.findComponent({ name: 'SiteMonitorConfigView' }).props('sourceId')).toBe('source-current')
   })
 
   it('查询失败时给出错误而不是空表格假装没事', async () => {
