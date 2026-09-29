@@ -9,8 +9,10 @@ services:
         BUILD_IMAGE: ${BUILD_IMAGE:-node:22-slim}
         RUNTIME_IMAGE: ${RUNTIME_IMAGE:-nginx:alpine}
         VITE_BASE: /sjcj/
-    image: sjcj-gateway:latest
-    container_name: sjcj-gateway
+        BACKEND_TARGET: ${BACKEND_TARGET:-http://118.25.96.217:9999}
+    # 133 环境另起一套：GATEWAY_NAME=sjcj-gateway-133（部署脚本 SJCJ_TARGET=133 时自动带上）
+    image: ${GATEWAY_NAME:-sjcj-gateway}:latest
+    container_name: ${GATEWAY_NAME:-sjcj-gateway}
     restart: always
     # 灰度验证阶段默认映射宿主机 8086:80；
     # 正式切流阶段可通过 GATEWAY_PORT=806 启动，直接接管宿主机 806 端口。

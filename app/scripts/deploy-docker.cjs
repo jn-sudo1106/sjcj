@@ -12,6 +12,8 @@
  *
  * 日常更新 = deploy。想先在 8086 用浏览器看一眼再上线，就拆成 test → 看 8086 → release。
  *
+ * 连 133 环境的另一套（测试 8087、正式 807 / 公网 2807）：前面加 SJCJ_TARGET=133，只支持 deploy / test / release / status。
+ *
  * 2026-09-23 重写，修掉第一版的几处线上问题：
  * - WAN 由 systemd 的 wan.service 管（wan 仓库 f11c368 起），第一版却 pkill + nohup 起裸进程：
  *   裸进程崩了没人拉；wan.service 仍是 enabled + PORT=806，机器一重启就和网关抢 806。
@@ -30,21 +32,47 @@ const { Client } = require('ssh2')
 
 const action = process.argv[2] || 'test'
 
+/**
+ * 部署目标（2026-09-29）：默认 prod = 连 118 的正式平台（806 / 公网 2806）。
+ * SJCJ_TARGET=133 部署连 133 环境的另一套：独立目录、镜像、容器、端口，与 prod 互不影响。
+ * 133 不共享 WAN 的切流流程，cutover / rollback 只对 prod 开放。
+ */
+const TARGETS = {
+  prod: {
+    remoteDir: '/home/leo/sjcj-docker', image: 'sjcj-gateway',
+    testPort: '8086', prodPort: '806', publicPort: '2806',
+    backend: 'http://118.25.96.217:9999',
+  },
+  133: {
+    remoteDir: '/home/leo/sjcj-docker-133', image: 'sjcj-gateway-133',
+    testPort: '8087', prodPort: '807', publicPort: '2807',
+    backend: 'http://115.227.21.133:9999',
+  },
+}
+const targetName = process.env.SJCJ_TARGET || 'prod'
+const target = TARGETS[targetName]
+if (!target) {
+  console.error(`\n✗ 失败：未知 SJCJ_TARGET=${targetName}，支持：${Object.keys(TARGETS).join(', ')}\n`)
+  process.exit(1)
+}
+
 const cfg = {
   host: process.env.SJCJ_REMOTE_HOST || '47.120.11.60',
   port: parseInt(process.env.SJCJ_SSH_PORT || '5031', 10),
   username: process.env.SJCJ_SSH_USER || 'leo',
   password: process.env.SJCJ_SSH_PASSWORD || '',
-  remoteDir: process.env.SJCJ_DOCKER_DIR || '/home/leo/sjcj-docker',
+  remoteDir: process.env.SJCJ_DOCKER_DIR || target.remoteDir,
   wanDir: process.env.WAN_DIR || '/home/leo/wan',
-  testPort: process.env.SJCJ_TEST_PORT || '8086',
-  prodPort: process.env.SJCJ_PROD_PORT || '806',
+  testPort: process.env.SJCJ_TEST_PORT || target.testPort,
+  prodPort: process.env.SJCJ_PROD_PORT || target.prodPort,
+  publicPort: target.publicPort,
+  backend: target.backend,
   wanPort: process.env.WAN_INTERNAL_PORT || '8070',
 }
 
-const IMAGE = 'sjcj-gateway'
+const IMAGE = target.image
 const CANDIDATE = `${IMAGE}:candidate`
-const TEST_CONTAINER = 'sjcj-gateway-test'
+const TEST_CONTAINER = `${IMAGE}-test`
 const WAN_UNIT = '/etc/systemd/system/wan.service'
 
 function ok(msg) { console.log(`✓ ${msg}`) }
@@ -234,6 +262,7 @@ async function doTest(conn) {
     --build-arg BUILD_IMAGE=\${BUILD_IMAGE:-node:22-slim} \
     --build-arg RUNTIME_IMAGE=\${RUNTIME_IMAGE:-nginx:alpine} \
     --build-arg VITE_BASE=/sjcj/ \
+    --build-arg BACKEND_TARGET=${cfg.backend} \
     -t ${CANDIDATE} .`)
 
   info(`在 ${cfg.testPort} 启动测试容器 ${TEST_CONTAINER}...`)
@@ -272,7 +301,7 @@ async function doTest(conn) {
 async function swapGateway(conn, imageRef) {
   await sshExec(conn, `docker tag ${imageRef} ${IMAGE}:latest`)
   await sshExec(conn, `docker rm -f ${IMAGE} >/dev/null 2>&1 || true`)
-  await sshExec(conn, `cd ${cfg.remoteDir} && GATEWAY_PORT=${cfg.prodPort} docker-compose up -d --no-build`)
+  await sshExec(conn, `cd ${cfg.remoteDir} && GATEWAY_NAME=${IMAGE} GATEWAY_PORT=${cfg.prodPort} docker-compose up -d --no-build`)
 }
 
 async function doRelease(conn) {
@@ -308,10 +337,10 @@ async function doRelease(conn) {
       const back = await waitFor(conn, `http://127.0.0.1:${cfg.prodPort}/sjcj/index.html`, ['200'])
       die(`已换回上一个镜像（sjcj=${back}），请排查`)
     }
-    die('没有可换回的镜像，806 可能无服务，立即手工处理')
+    die(`没有可换回的镜像，${cfg.prodPort} 可能无服务，立即手工处理`)
   }
   await sshExec(conn, `docker rm -f ${TEST_CONTAINER} >/dev/null 2>&1 || true`)
-  ok(`已上线：http://${cfg.host}:2806/sjcj/`)
+  ok(`已上线：http://${cfg.host}:${cfg.publicPort}/sjcj/`)
 }
 
 /**
@@ -355,6 +384,10 @@ async function doRollback(conn) {
 
 async function main() {
   if (!cfg.password) die('请用环境变量 SJCJ_SSH_PASSWORD 提供 SSH/sudo 密码（不再写进脚本）')
+  if (targetName !== 'prod' && ['cutover', 'rollback'].includes(action)) {
+    die(`${action} 会动 WAN 与 806，只对 prod 开放；SJCJ_TARGET=${targetName} 只支持 deploy / test / release / status`)
+  }
+  info(`部署目标：${targetName}（后端 ${cfg.backend}，端口 ${cfg.prodPort} / 公网 ${cfg.publicPort}，容器 ${IMAGE}）`)
   info(`连接远程服务器 ${cfg.host}:${cfg.port}...`)
   const conn = await getSshClient()
   ok('SSH 连接建立成功')
