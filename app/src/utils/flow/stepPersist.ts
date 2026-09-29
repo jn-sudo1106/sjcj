@@ -12,6 +12,7 @@ import {
   isMonitorNode,
   isRuleLikeNode,
   isRuleNode,
+  isPdfNode,
   nodeEntryCondition,
   nodeInputTable,
   type FlowBranchGroup,
@@ -336,7 +337,11 @@ export function mergeStepForWrite(args: {
   // 写 'entry' 会让旧后端拿采集执行器去跑这些配置，直接 500 服务器异常（2026-09-18 实测：
   // 把打标签步骤的 type 从 entry 改成 rule 后 ok_41696 即恢复正常）。回读侧的区分靠
   // configType 优先路由 + applyStepDetails 重建（见 flowModel.seeds），不会串成规则节点。
-  const tableOrch = rule ?? (isRuleLikeNode(cfg) ? cfg.execCfg : undefined)
+  // PDF抓取（2026-09-29 方案 A）：编排/表配置按规则式渲染，入出参也落在 execCfg，
+  // 所以 context/outColumns 与规则式节点一样从 execCfg 取——否则「任务配置 → 上下文来源」
+  // 已对 PDF 隐藏、taskCfg.contextMap 恒空，会导致发后续报文缺 context。
+  // ⚠️ 只影响 context/outColumns 取值来源，**不动 nodeType/configType**（PDF 仍是采集身份）。
+  const tableOrch = rule ?? ((isRuleLikeNode(cfg) || isPdfNode(cfg)) ? cfg.execCfg : undefined)
   const lastStepIds = args.lastStepIds !== undefined ? args.lastStepIds : snapshot?.dependsOn
   return {
     stepId: isWritableStepId(nodeId) ? nodeId : '',

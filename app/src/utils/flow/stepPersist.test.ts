@@ -521,6 +521,48 @@ describe('文章打标签写步骤（2026-09-18）', () => {
   })
 })
 
+// 2026-09-29 方案 A：PDF抓取按规则式渲染、入出参落 execCfg，context/outColumns 也从 execCfg 取
+//（否则「任务配置→上下文来源」已对 PDF 隐藏、taskCfg.contextMap 恒空 → 发后续报文缺 context）。
+// 与翻译/打标签的关键区别：PDF 保留 130 采集身份，nodeType **不写 rule**，仍沿用快照的采集 type。
+describe('PDF抓取写步骤：context 从 execCfg 取但保留采集身份（2026-09-29 方案 A）', () => {
+  function pdfCfg(inputFields: string[], outputFields: string[]) {
+    const cfg = cloneConfig(NODE_CONFIGS['pdf-collect'])
+    cfg.title = 'PDF抓取'
+    cfg.configId = '1401088'
+    cfg.execCfg = {
+      mode: 'new', format: 'xml', describe: '', script: '', scriptPath: '', enabled: true,
+      inputTableId: '6200036', outputTableId: '6200036', inputFields, outputFields,
+    }
+    return cfg
+  }
+  const snapshot = { ...MEASURED_40600, sourceId: '430024667', nodeType: 'entry' }
+
+  it('context/outContext 取自 execCfg 字段（物理列名），但 nodeType 仍是采集 type（不写 rule）', () => {
+    const step = mergeStepForWrite({
+      snapshot,
+      cfg: pdfCfg(['title', 'url'], ['pdf_text']),
+      nodeId: '41802',
+      sourceId: '430024667',
+      columnByItemCode: new Map([['title', 'K1'], ['url', 'K2'], ['pdf_text', 'K9']]),
+    })
+    // 保留 130 采集身份：nodeType 沿用快照的 'entry'，不被写成 'rule'
+    expect(step.nodeType).toBe('entry')
+    // context 不再是空，而是从 execCfg.inputFields 映射出的物理列
+    expect(step.contextMap).toEqual(['K1', 'K2'])
+    expect(step.outColumns).toEqual(['K9'])
+    expect(stepToStepModifyPayload(step).context).toBe('K1,K2')
+  })
+
+  it('execCfg 没绑字段时退回快照原值，不写空', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['pdf-collect'])
+    cfg.title = 'PDF抓取'
+    const step = mergeStepForWrite({ snapshot, cfg, nodeId: '41802', sourceId: '430024667' })
+    expect(step.nodeType).toBe('entry')
+    expect(step.contextMap).toBe(snapshot.contextMap)
+    expect(step.outColumns).toBe(snapshot.outColumns)
+  })
+})
+
 // 2026-09-18：文章生成摘要 / 音频提取文字 / 视频提取音频与翻译助手同待遇——
 // type 写 'rule'（发后续按 type 派发执行器），入参/出参随步骤 context/outContext 落库。
 // 2026-09-22：OCR 抓取同待遇（并入 isRuleLikeNode）。

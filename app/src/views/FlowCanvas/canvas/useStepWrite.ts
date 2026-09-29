@@ -22,7 +22,7 @@ import {
   outputTableMissing,
   validFlowIdOf,
 } from '@/utils/flow/stepPersist'
-import { isRuleLikeNode, effectiveOutputTable } from '@/views/FlowCanvas/canvas/flowModel'
+import { isRuleLikeNode, isPdfNode, effectiveOutputTable } from '@/views/FlowCanvas/canvas/flowModel'
 
 function assertOk(ack: Ack | null | undefined, fallback: string) {
   if (ack && 'ok' in ack && ack.ok === false) throw new Error(ack.message || fallback)
@@ -198,7 +198,7 @@ export function useStepWrite() {
       sourceId: sourceIdOf() || snapshot.sourceId,
       flowId: flowIdOf() || snapshot.flowId,
       lastStepIds: lastStepFromCanvas ? lastStepIdsFromCanvas(flow.main, nodeId, flow.branchGroups) : undefined,
-      ...(isRuleLikeNode(cfg) ? await ruleColumnMaps(cfg) : {}),
+      ...(isRuleLikeNode(cfg) || isPdfNode(cfg) ? await ruleColumnMaps(cfg) : {}),
     })
     const ack = await itemApi.stepModify(step)
     assertOk(ack, '修改步骤失败')
@@ -242,7 +242,7 @@ export function useStepWrite() {
       sourceId: inherited.sourceId,
       flowId: inherited.flowId,
       lastStepIds,
-      ...(isRuleLikeNode(cfg) ? await ruleColumnMaps(cfg) : {}),
+      ...(isRuleLikeNode(cfg) || isPdfNode(cfg) ? await ruleColumnMaps(cfg) : {}),
     })
     const before = new Set([
       ...Object.keys(sourceStore.stepSnapshots),
