@@ -64,11 +64,20 @@ async function ensureAllChildren(siteId: string) {
     childrenLoading[siteId] = false
   }
 }
+/**
+ * 列表接口的站级 dataTotal 能不能直接用。后端把源 dataCnt=null 也汇成 0，分不清"0 条"和
+ * "没统计"（手动导入的数据不经抓取任务、不回写 dataCnt——站 124 有 43 行却是 0）。
+ * 所以有源的站给 0 时不采信，回退到按源汇总。2026-09-29 实测 116 站里 28 个是 0、共 159 个源，回退代价很小。
+ */
+function trustedSiteDataCount(site: Site): number | undefined {
+  if (site.dataCount === 0 && site.sourceCount > 0) return undefined
+  return site.dataCount
+}
 async function ensureDataCount(site: Site) {
-  if (site.dataCount != null || childrenComplete[site.siteId] || aggregating.has(site.siteId)) return
+  if (trustedSiteDataCount(site) != null || childrenComplete[site.siteId] || aggregating.has(site.siteId)) return
   aggregating.add(site.siteId)
   try {
-    // 当前环境的 sitePaged/siteDetail 都不返回 dataTotal，只能由源行 dataCnt 精确汇总。
+    // 站级 dataTotal 缺失或不可信（见 trustedSiteDataCount）时，由源行 dataCnt 汇总。
     // 这里逐站串行调用（由 queueDataCounts 控制），避免原先 6 个网站同时下载完整源列表
     // 把后端打满；卡片和 4 个 chip 预览已经先渲染，不阻塞首屏。
     childrenCache[site.siteId] = await siteApi.siteSources(site.siteId)
@@ -87,7 +96,7 @@ async function queueDataCounts(list: Site[]) {
   // （catch 置了空列表但没置 complete）同样缺数据量、chips 也会误显「暂无源」，
   // 必须进队列补全；预览成功的小站在 ensurePreview 里已置 complete，不会重复进队。
   const pending = [...list]
-    .filter((site) => site.dataCount == null && !childrenComplete[site.siteId])
+    .filter((site) => trustedSiteDataCount(site) == null && !childrenComplete[site.siteId])
     .sort((a, b) => a.sourceCount - b.sourceCount)
   for (const site of pending) {
     if (version !== queueVersion) return
@@ -137,10 +146,15 @@ function isErr(s: Source): boolean {
 
 function siteDataCount(site: Site): number | undefined {
   // 列表接口给出的站级汇总优先，避免预览/完整源列表的加载时机让数字跳变。
-  if (site.dataCount != null) return site.dataCount
+  const trusted = trustedSiteDataCount(site)
+  if (trusted != null) return trusted
   const children = childrenCache[site.siteId]
-  if (childrenComplete[site.siteId] && children) return children.reduce((total, source) => total + (source.dataCount ?? 0), 0)
-  return undefined
+  if (!childrenComplete[site.siteId] || !children) return undefined
+  // dataCnt 由抓取任务回写；手动导入的数据不经任务，源上是 null。全站都没有统计时显示「—」，
+  // 当成 0 条会让人以为表里没数据（站 124：43 行数据、卡片却是「0 条」）。
+  const counted = children.filter((source) => source.dataCount != null)
+  if (children.length && !counted.length) return undefined
+  return counted.reduce((total, source) => total + (source.dataCount ?? 0), 0)
 }
 
 function formatSiteDataCount(site: Site): string {

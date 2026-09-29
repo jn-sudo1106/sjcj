@@ -9,7 +9,7 @@ const site: Site = {
   siteId: 'site-1', name: '测试网站', category: '新闻', owner: 'tester', sourceCount: 2, errorCount: 0,
 }
 
-function source(sourceId: string, dataCount: number): Source {
+function source(sourceId: string, dataCount: number | undefined): Source {
   return { sourceId, name: `源-${sourceId}`, url: 'https://example.com', configId: '', mainTable: '', owner: 'tester', state: 'C', dataCount, siteId: site.siteId }
 }
 
@@ -75,6 +75,42 @@ describe('SiteCardGrid 大源量加载', () => {
 
     // 小站预览即完整列表（childrenComplete 已置位），队列应跳过它
     expect(all).not.toHaveBeenCalled()
+  })
+
+  it('所有源都没有 dataCnt 统计时显示「数据 —」，不当成 0 条', async () => {
+    // 回归：手动导入（saveEntryOne）的数据不经抓取任务，后端不回写源的 dataCnt。
+    // 站 124 实测 43 行数据、源 dataCnt=null，卡片却显示「数据 0 条」，像是表里没数据。
+    vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([source('s1', undefined), source('s2', undefined)])
+
+    const { wrapper } = await mountGrid()
+
+    expect(wrapper.text()).toContain('数据 —')
+    expect(wrapper.text()).not.toContain('数据 0 条')
+  })
+
+  it('列表给的站级 dataTotal=0 但有源时不直接采信，按源汇总后仍无统计显示「—」', async () => {
+    // 后端 sitePaged 的 dataTotal 把源 dataCnt=null 汇成 0，前端分不清"0 条"和"没统计"
+    vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([source('s1', undefined)])
+
+    const { wrapper } = await mountGrid([{ ...site, sourceCount: 1, dataCount: 0 }])
+
+    expect(wrapper.text()).toContain('数据 —')
+  })
+
+  it('站级 dataTotal=0 且源统计确实是 0 时照常显示 0 条', async () => {
+    vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([source('s1', 0)])
+
+    const { wrapper } = await mountGrid([{ ...site, sourceCount: 1, dataCount: 0 }])
+
+    expect(wrapper.text()).toContain('数据 0 条')
+  })
+
+  it('部分源有统计时只汇总有值的源', async () => {
+    vi.spyOn(siteApi, 'siteSourcePreview').mockResolvedValue([source('s1', 12), source('s2', undefined)])
+
+    const { wrapper } = await mountGrid()
+
+    expect(wrapper.text()).toContain('数据 12 条')
   })
 
   it('点击网站卡片默认进入网站源视图', async () => {
