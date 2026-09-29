@@ -40,8 +40,10 @@ export function mightBeUrlFragment(text: string): boolean {
  *
  * 条件口径都是后端现成的：
  * - 备注 非空 = `remark=%`、为空 = `remark=NULL`（2026-09-21 实测，站 12：8 + 5883 = 全部 5891）；
- * - 源 URL 为空：后端**不支持**（2026-09-28 实测 `sourceUrl=NULL` 只 LIKE 到 3 个字面 "null"，
- *   站 12 真正为空的 393 个查不出），选项先置灰，等后端按备注的约定补上再放开。
+ * - 源 URL 非空 = `sourceUrl=NOT NULL`、为空 = `sourceUrl=NULL`（后端 2026-09-29 上线，不区分大小写，
+ *   source-api.md §1.1）。实测站 12：全部 6028 = NULL 393 + NOT NULL 5635。
+ *   ⚠️ 与备注的「非空」口径不同（备注是 `%`），每个字段各按后端约定发，见 NOT_EMPTY_VALUE。
+ *   （09-28 那次测 `sourceUrl=NULL` 只 LIKE 到字面 "null"，是后端还没上线。）
  */
 export type SourceCondField = SourceSearchField | 'remark'
 export type SourceCondOp = 'eq' | 'like' | 'notEmpty' | 'empty'
@@ -68,7 +70,8 @@ export const SOURCE_COND_FIELDS: { value: SourceCondField; label: string; placeh
     placeholder: 'URL 关键字，如 centec',
     ops: [
       { value: 'like', label: '包含' },
-      { value: 'empty', label: '为空', unsupported: '后端暂不支持按 URL 为空查询' },
+      { value: 'notEmpty', label: '非空' },
+      { value: 'empty', label: '为空' },
     ],
   },
   {
@@ -103,11 +106,16 @@ export function sourceCondActive(cond: SourceCondition): boolean {
   return sourceCondNeedsValue(cond.op) ? !!cond.value.trim() : true
 }
 
+/** 「非空」各字段的后端约定：备注是 LIKE `%`（2026-09-21 实测），源 URL 是 `NOT NULL`（2026-09-29 上线） */
+const NOT_EMPTY_VALUE: Partial<Record<SourceCondField, string>> = { remark: '%', sourceUrl: 'NOT NULL' }
+
 export function sourceConditionParams(conds: SourceCondition[]): Partial<Record<SourceCondField, string>> {
   const params: Partial<Record<SourceCondField, string>> = {}
   for (const cond of conds) {
     if (!sourceCondActive(cond)) continue
-    params[cond.field] = cond.op === 'notEmpty' ? '%' : cond.op === 'empty' ? 'NULL' : cond.value.trim()
+    params[cond.field] = cond.op === 'notEmpty' ? (NOT_EMPTY_VALUE[cond.field] ?? '%')
+      : cond.op === 'empty' ? 'NULL'
+        : cond.value.trim()
   }
   return params
 }

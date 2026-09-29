@@ -167,6 +167,10 @@ describe('describeFilters / 导出行', () => {
   it('备注的空值标记翻译成人话，不照字面写', () => {
     expect(describeFilters({ remark: '%' })).toBe('有备注')
     expect(describeFilters({ remark: 'NULL' })).toBe('没有备注')
+    // 2026-09-29：源 URL 的空值标记同样翻成人话，不写成「URL 含「NULL」」
+    expect(describeFilters({ sourceUrl: 'NULL' })).toBe('URL 为空')
+    expect(describeFilters({ sourceUrl: 'NOT NULL' })).toBe('URL 非空')
+    expect(describeFilters({ sourceUrl: 'centec' })).toBe('URL 含「centec」')
     expect(describeFilters({ remark: '超时' })).toBe('备注含「超时」')
   })
 

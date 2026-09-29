@@ -59,9 +59,12 @@ describe('sourceConditionParams（多条件，2026-09-28）', () => {
     expect(sourceCondActive({ field: 'name', op: 'like', value: '' })).toBe(false)
   })
 
-  // 2026-09-28 实测 sourceUrl=NULL 只 LIKE 到字面 "null"，查不出真正为空的——不能发出去冒充
-  it('URL 为空后端不支持：不发参数，默认条件也不会落到它上面', () => {
-    expect(sourceConditionParams([{ field: 'sourceUrl', op: 'empty', value: '' }])).toEqual({})
+  // 2026-09-29 后端上线：sourceUrl=NULL / NOT NULL（站 12：393 + 5635 = 全部 6028）。
+  // 注意「非空」与备注口径不同——备注是 %，URL 是 NOT NULL。
+  it('URL 为空 = NULL、非空 = NOT NULL，忽略框里残留的值；默认条件仍是包含', () => {
+    expect(sourceConditionParams([{ field: 'sourceUrl', op: 'empty', value: 'x' }])).toEqual({ sourceUrl: 'NULL' })
+    expect(sourceConditionParams([{ field: 'sourceUrl', op: 'notEmpty', value: 'x' }])).toEqual({ sourceUrl: 'NOT NULL' })
+    expect(sourceConditionParams([{ field: 'remark', op: 'notEmpty', value: '' }])).toEqual({ remark: '%' })
     expect(defaultSourceCondOp('sourceUrl')).toBe('like')
   })
 })

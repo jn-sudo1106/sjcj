@@ -93,7 +93,10 @@ export function describeFilters(query: SourceFilter): string {
   if (query.sourceIds) parts.push(`源 ID ${query.sourceIds}`)
   if (query.flowId) parts.push(`流程 #${query.flowId}`)
   if (query.name) parts.push(`名称含「${query.name}」`)
-  if (query.sourceUrl) parts.push(`URL 含「${query.sourceUrl}」`)
+  // NULL / NOT NULL 是后端认的空值标记（2026-09-29），照字面写成「URL 含「NULL」」会看不懂
+  if (query.sourceUrl?.toUpperCase() === 'NULL') parts.push('URL 为空')
+  else if (query.sourceUrl?.toUpperCase() === 'NOT NULL') parts.push('URL 非空')
+  else if (query.sourceUrl) parts.push(`URL 含「${query.sourceUrl}」`)
   if (query.state === 'C') parts.push('状态=正常')
   else if (query.state === 'L') parts.push('状态=运行中')
   else if (query.state === 'E') parts.push('状态=异常')

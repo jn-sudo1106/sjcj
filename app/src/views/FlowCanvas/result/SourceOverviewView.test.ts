@@ -1162,12 +1162,22 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     expect(lastQ(page)?.name).toBeUndefined()
   })
 
-  it('URL 的「为空」列出来但不能选（后端暂不支持）', async () => {
-    const { wrapper } = await mountWithSpy()
+  // 2026-09-29 后端上线 sourceUrl=NULL / NOT NULL：URL 条件是 包含 / 非空 / 为空，全部可选
+  it('URL 条件：包含 / 非空 / 为空都能选；为空发 NULL、非空发 NOT NULL', async () => {
+    const { wrapper, page } = await mountWithSpy()
     await fields(wrapper)[0]!.setValue('sourceUrl')
-    const empty = wrapper.get('[data-testid="source-overview-search-op"]').findAll('option').find((o) => o.attributes('value') === 'empty')
-    expect(empty?.attributes('disabled')).toBeDefined()
-    expect(empty?.text()).toContain('暂不支持')
+    const op = wrapper.get('[data-testid="source-overview-search-op"]')
+    const options = op.findAll('option')
+    expect(options.map((o) => o.text())).toEqual(['包含', '非空', '为空'])
+    expect(options.every((o) => o.attributes('disabled') === undefined)).toBe(true)
+
+    await op.setValue('empty')
+    await flushPromises()
+    expect(lastQ(page)?.sourceUrl).toBe('NULL')
+
+    await op.setValue('notEmpty')
+    await flushPromises()
+    expect(lastQ(page)?.sourceUrl).toBe('NOT NULL')
   })
 
   it('自动识别不抢别的行已占的字段：识别成 URL 但 URL 已有一行时，按名称查', async () => {
