@@ -542,7 +542,7 @@ export const useFlowStore = defineStore('flow', () => {
    * 改某节点的表（表配置 / 更换配置）后联动：非采集节点输出表原本跟着输入表的，一起改；
    * 然后以变动前的有效输出表为旧值向下游传播。下游被改写时置流程脏，让它们的步骤随自动保存写回。
    */
-  function withTableSync(id: string, mutate: () => void) {
+  function withTableSync(id: string, mutate: () => void, opts: { propagateEmpty?: boolean } = {}) {
     const cfg = configs[id]
     if (!cfg) {
       mutate()
@@ -552,6 +552,11 @@ export const useFlowStore = defineStore('flow', () => {
     mutate()
     const after = configs[id]
     if (!after) return
+    // 换配置（2026-09-29）：新配置没登记表 ≠ 用户要清空表。实测流程 1400994 的首节点换回配置
+    // 1400994（entryTypeId 为空）时，空值沿链传下去把下游 41688 画布上的输入 / 输出表清空了
+    // （库里靠快照回退才没写坏）。所以换配置时变动后下游读到的表为空就不联动；用户在表配置里
+    // 主动清空（setInputTable / setOutputTable / patchCollect）照旧传播，断链校验才报得出来。
+    if (opts.propagateEmpty === false && !tableForDownstream(after)) return
     if (!after.collectCfg && before.output === before.input && nodeOutputTable(after) === before.output
       && nodeInputTable(after) !== before.input) {
       writeNodeOutputTable(after, nodeInputTable(after))
@@ -1027,7 +1032,7 @@ export const useFlowStore = defineStore('flow', () => {
   function bindExistingConfig(id: string, config: import('@/api').Config) {
     const cfg = configs[id]
     if (!cfg) return
-    withTableSync(id, () => applyConfigToNode(cfg, config))
+    withTableSync(id, () => applyConfigToNode(cfg, config), { propagateEmpty: false })
     nodeStore.markConfigSaved(id)
     nodeStore.touchFlow()
   }

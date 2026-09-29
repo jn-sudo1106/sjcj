@@ -130,4 +130,31 @@ describe('节点表联动（0928）', () => {
     expect(inputTableMismatch(topo, 'B')).toBeNull()
     expect(inputTableMismatch(topo, 'C')).toEqual({ own: 'TX', upstream: 'T1' })
   })
+
+  // 2026-09-29 实测（流程 1400994）：首节点换回一份没登记输出表的配置，空值沿链传下去把下游
+  // 画布上的表清空了。换配置时「新配置没登记表」不等于「用户要清空」，不联动。
+  it('换配置：新配置有输出表时照常联动', () => {
+    const flow = chain()
+    flow.bindExistingConfig('A', { configId: '9002', name: '有表的配置', entryTypeId: 'T6' } as never)
+    expect(tables(flow, 'B')).toMatchObject({ in: 'T6', out: 'T6' })
+    expect(tables(flow, 'D').in).toBe('T6')
+  })
+
+  it('换配置：新配置没登记输出表时不清空下游；之后再换成有表的配置，下游保留自己的表（跟随关系已断）', () => {
+    const flow = chain()
+    flow.bindExistingConfig('A', { configId: '9001', name: '没登记表的配置', entryTypeId: '' } as never)
+    expect(tables(flow, 'A').out).toBe('')
+    expect(tables(flow, 'B')).toMatchObject({ in: 'T1', out: 'T1' })
+    expect(tables(flow, 'D').in).toBe('T1')
+
+    // 下游 T1 ≠ 上游变动前的空值 → 按「用户自己指定」保留，不被改写（保守：宁可不跟，不乱改）
+    flow.bindExistingConfig('A', { configId: '9002', name: '有表的配置', entryTypeId: 'T6' } as never)
+    expect(tables(flow, 'B')).toMatchObject({ in: 'T1', out: 'T1' })
+  })
+
+  it('用户在表配置里主动清空输出表：照旧往下传（断链校验才报得出「缺少输入表」）', () => {
+    const flow = chain()
+    flow.patchCollect('A', { outputTable: '' })
+    expect(tables(flow, 'B')).toMatchObject({ in: '', out: '' })
+  })
 })
