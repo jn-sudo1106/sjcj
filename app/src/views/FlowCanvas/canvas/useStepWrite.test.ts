@@ -403,7 +403,7 @@ describe('useStepWrite.persistFlowSteps', () => {
 
   // 0927 G1：真实根节点（isRoot=1）现在是「只读元数据 + 可换配置」。每次自动保存先判断画布
   // configId 与快照是否一致：一致不写；不一致走 ROOT 专属轻量通道（rootConfigUpdate 只交
-  // itemConfig+configId——普通整包/stepModify 反算的 isDelete 会被后端 validateRootUpdate 拒绝）。
+  // itemConfig+flowId+isRoot+configId——普通整包/stepModify 反算的 isDelete 会被后端 validateRootUpdate 拒绝）。
   it('根节点换配置：走 ROOT 专属轻量 rootConfigUpdate，快照同步后不重复写', async () => {
     setActivePinia(createPinia())
     const flow = useFlowStore()
@@ -427,9 +427,9 @@ describe('useStepWrite.persistFlowSteps', () => {
     const { persistFlowSteps } = useStepWrite()
     const result = await persistFlowSteps()
 
-    // 最小集：只有 itemConfig + configId，不带输出表/输入表/条件/源/启停反算
+    // 最小集：itemConfig + configId + 首节点所属流程，不带输出表/输入表/条件/源/启停反算
     expect(rootUpdate).toHaveBeenCalledTimes(1)
-    expect(rootUpdate).toHaveBeenCalledWith('41352', '1400999')
+    expect(rootUpdate).toHaveBeenCalledWith('41352', '1400999', '1400935')
     expect(modify).not.toHaveBeenCalled()
     expect(create).not.toHaveBeenCalled()
     expect(result).toEqual({ created: 0, updated: 1, skipped: 0 })

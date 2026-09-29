@@ -161,12 +161,14 @@ export function useStepWrite() {
    * 字段：sourceId / lastStep / entryTypeId / itemId / extName / cond 传**非空**一律拒绝、
    * mainConfig 不能改、type 必须 entry——所以**不能走 mergeStepForWrite 的普通整包**（会把画布
    * 回填的输出表/输入表/条件带进去撞校验），也不走 stepModify 的反算（enabled:false → isDelete:1
-   * 会被当成「删除根节点」拒绝）。API 层 `rootConfigUpdate` 只交最小集 `{ itemConfig, configId }`，
+   * 会被当成「删除根节点」拒绝）。API 层 `rootConfigUpdate` 只交最小集 `{ itemConfig, flowId, isRoot: 1, configId }`
+   *（2026-09-29 与旧平台 handleSaveRoot 对齐），
    * 其余字段保持库中值（selective update）。成功后同步快照 configId，避免下次自动保存重复写。
    */
   async function updateRootConfig(nodeId: string, configId: string): Promise<void> {
     const snapshot = sourceStore.stepSnapshots[nodeId]
-    const ack = await itemApi.rootConfigUpdate(nodeId, configId)
+    // 首节点所属流程：快照回读的 flowId 优先（svg 按流程查询时根行自带），拿不到再用画布口径
+    const ack = await itemApi.rootConfigUpdate(nodeId, configId, validFlowIdOf(snapshot?.flowId) || flowIdOf())
     assertOk(ack, '修改流程入口配置失败')
     sourceStore.rememberSteps([{ ...snapshot, configId }], 'merge')
   }

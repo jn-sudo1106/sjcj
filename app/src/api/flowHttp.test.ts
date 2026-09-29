@@ -218,4 +218,25 @@ describe('flow 流程 HTTP 契约', () => {
     const { flowCenterApi } = await import('./index')
     await expect(flowCenterApi.copy('1001')).resolves.toBe('939')
   })
+
+  // 2026-09-29 对齐 118 上线版旧平台「步骤列表1」handleSaveRoot：
+  // stepModify({ itemConfig, flowId, isRoot: 1, configId })，POST body。
+  it('POST /v1/item/next/stepModify（流程入口换配置）：body 带 itemConfig / flowId / isRoot=1 / configId', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', data: null, msg: '操作成功' }))
+    const { itemApi } = await import('./index')
+    await itemApi.rootConfigUpdate('41352', '1400999', '1400935')
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(url, 'http://local.test').pathname).toBe('/api/v1/item/next/stepModify')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({ itemConfig: 41352, flowId: 1400935, isRoot: 1, configId: 1400999 })
+  })
+
+  it('流程入口换配置：flowId 无效（空 / 0）时不带该键，isRoot 照带', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', data: null, msg: '操作成功' }))
+    const { itemApi } = await import('./index')
+    await itemApi.rootConfigUpdate('41352', '1400999', '0')
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body))).toEqual({ itemConfig: 41352, isRoot: 1, configId: 1400999 })
+  })
 })

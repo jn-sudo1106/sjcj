@@ -3160,8 +3160,16 @@ export const itemApi = {
    *  `validateRootUpdate` 只接受 configId（>0）与流程生命周期字段：sourceId/lastStep/
    *  entryTypeId/cond 传非空一律拒绝、mainConfig 不能改、enabled:false 反算出的 isDelete:1
    *  也会被拒（根节点不能单独删除）——所以**不能走普通 stepModify 整包**，只交最小集
-   *  `{ itemConfig, configId }`，其余字段保持库中值（updateByPrimaryKeySelective 不更新 null）。 */
-  rootConfigUpdate: (stepId: string, configId: string) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', { itemConfig: Number(stepId), configId: Number(configId) }, {
+   *  `{ itemConfig, flowId, isRoot: 1, configId }`，其余字段保持库中值（updateByPrimaryKeySelective 不更新 null）。
+   *  2026-09-29 对齐 118 上线版旧平台「步骤列表1」的 handleSaveRoot：请求体原样带 `flowId` 与
+   *  `isRoot: 1`（此前只交 itemConfig + configId，后端按 isRoot 走 ROOT 更新分支时可能认不出）。
+   *  flowId 拿不到有效值（空 / '0' / 非数字）时不带该键，交后端按库中值处理。 */
+  rootConfigUpdate: (stepId: string, configId: string, flowId?: string) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', {
+    itemConfig: Number(stepId),
+    ...(flowId && /^\d+$/.test(flowId) && flowId !== '0' ? { flowId: Number(flowId) } : {}),
+    isRoot: 1,
+    configId: Number(configId),
+  }, {
     method: 'POST',
     httpEndpoint: 'item/next/stepModify',
   })),
