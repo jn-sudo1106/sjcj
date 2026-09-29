@@ -446,3 +446,90 @@ describe('coreParam（2026-09-20：打标签/摘要节点保存时把模型供�
     expect(payload.codeRule).toBeUndefined()
   })
 })
+
+describe('OCR 抓取「是否保存为文件」（2026-09-30：勾选写 core_param 的 {"saveAsFile":bool}，同步派生 isMulti）', () => {
+  function ocrNode(saveAsFile?: boolean) {
+    const cfg = cloneConfig(NODE_CONFIGS['ocr'])
+    if (saveAsFile !== undefined) cfg.structuredConfig = JSON.stringify({ saveAsFile })
+    return cfg
+  }
+
+  it('勾选保存 → isMulti=1、coreParam={"saveAsFile":true}', () => {
+    const payload = buildConfigPayload(ocrNode(true))
+    expect(payload.isMulti).toBe(1)
+    expect(payload.coreParam).toBe('{"saveAsFile":true}')
+    // 不占 code_rule（结构化配置走 core_param）
+    expect(payload.codeRule).toBeUndefined()
+  })
+
+  it('不勾选 → isMulti=0、coreParam={"saveAsFile":false}', () => {
+    const payload = buildConfigPayload(ocrNode(false))
+    expect(payload.isMulti).toBe(0)
+    expect(payload.coreParam).toBe('{"saveAsFile":false}')
+    expect(payload.codeRule).toBeUndefined()
+  })
+
+  it('structuredConfig 未回填 → 兜底 isMulti=0（后端 nextStep 详情配置不再缺字段）', () => {
+    const payload = buildConfigPayload(ocrNode())
+    expect(payload.isMulti).toBe(0)
+    // 未回填时不覆盖 base 的 coreParam（OCR 无 structuredConfig → 走 cfg.coreParam 或 base）
+    expect(payload.coreParam ?? undefined).toBeUndefined()
+  })
+
+  it('structuredConfig 是非 JSON 字符串 → 视为未勾选（isMulti=0）', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['ocr'])
+    cfg.structuredConfig = 'not-a-json-payload'
+    expect(buildConfigPayload(cfg).isMulti).toBe(0)
+  })
+
+  it('applyConfigToNode：core_param 优先，回填到 structuredConfig', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['ocr'])
+    applyConfigToNode(cfg, {
+      configId: '1401072',
+      name: 'OCR 抓取_900',
+      enabled: true,
+      configType: '150',
+      coreParam: '{"saveAsFile":true}',
+    } as Config)
+    expect(cfg.structuredConfig).toBe('{"saveAsFile":true}')
+  })
+
+  it('applyConfigToNode 存量兼容：core_param 空、multiMode=1 → 反推 {"saveAsFile":true}', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['ocr'])
+    applyConfigToNode(cfg, {
+      configId: '1401072',
+      name: '存量 OCR 配置',
+      enabled: true,
+      configType: '150',
+      coreParam: '',
+      multiMode: 1,
+    } as Config)
+    expect(cfg.structuredConfig).toBe('{"saveAsFile":true}')
+  })
+
+  it('applyConfigToNode 存量兼容：core_param 空、multiMode=0 → 反推 {"saveAsFile":false}', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['ocr'])
+    applyConfigToNode(cfg, {
+      configId: '1401072',
+      name: '存量 OCR 配置',
+      enabled: true,
+      configType: '150',
+      coreParam: '',
+      multiMode: 0,
+    } as Config)
+    expect(cfg.structuredConfig).toBe('{"saveAsFile":false}')
+  })
+
+  it('applyConfigToNode：multiMode=2（更新父表，非 OCR 态）不反推，structuredConfig 保持 undefined', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['ocr'])
+    applyConfigToNode(cfg, {
+      configId: '1401072',
+      name: '异常态',
+      enabled: true,
+      configType: '150',
+      coreParam: '',
+      multiMode: 2,
+    } as Config)
+    expect(cfg.structuredConfig).toBeUndefined()
+  })
+})
