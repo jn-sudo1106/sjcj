@@ -627,6 +627,8 @@ export interface SourceTaskQuery extends PageQuery {
   taskId?: string
   /** 按数据 ID 查任务：触发任务的那条数据的 ENTRY_ID（2026-09-28 实测后端生效，旧平台「父ID」） */
   parentId?: string
+  /** 按任务自身 URL（task_inst.TASK_URL）子串匹配（2026-09-29 后端上线，topTaskPaged-api.md） */
+  taskUrl?: string
   /** 创建时间下界，`yyyy-MM-dd` 或 `yyyy-MM-dd HH:mm:ss`，闭区间 */
   startTime?: string
   /** 创建时间上界，格式同上；只给日期时后端按当天 23:59:59.999 计 */

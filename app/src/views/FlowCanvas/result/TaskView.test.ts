@@ -303,9 +303,9 @@ describe('TaskView', () => {
     wrapper.unmount()
   })
 
-  // 0920-04：查询「字段 ▾ ＋ 输入框」，样式同源视图三合一。2026-09-23 实测后端只认 taskId，
-  // 任务 URL 禁用待后端（B32），不能选、也就不会发出不生效的参数；数据 ID 2026-09-28 起走 parentId。
-  it('按任务 ID 查询：回车才查、带 taskId；任务 URL 禁用；清空后撤掉条件', async () => {
+  // 0920-04：查询「字段 ▾ ＋ 输入框」，样式同源视图三合一。数据 ID 2026-09-28 起走 parentId，
+  // 任务 URL 2026-09-29 起走 taskUrl（后端上线后放开，三项都可选）。
+  it('按任务 ID 查询：回车才查、带 taskId；三个字段都可选；清空后撤掉条件', async () => {
     setActivePinia(createPinia())
     await router.push('/canvas')
     const source = mockSourceDetail({ sourceId: '391007768' })!
@@ -322,7 +322,7 @@ describe('TaskView', () => {
     expect(options.map((o) => [o.text(), o.attributes('disabled') !== undefined])).toEqual([
       ['任务 ID', false],
       ['数据 ID', false],
-      ['任务 URL（待后端）', true],
+      ['任务 URL', false],
     ])
 
     const input = wrapper.get('[data-testid="task-search-text"]')
@@ -370,6 +370,38 @@ describe('TaskView', () => {
     await input.trigger('keyup.enter')
     await flushPromises()
     expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ parentId: '1035124', taskId: undefined, page: 1 }))
+
+    wrapper.unmount()
+  })
+
+  // 2026-09-29 后端上线 taskUrl（task_inst.TASK_URL 子串匹配）：实测站 11 mp.weixin.qq.com → 536 条
+  it('按任务 URL 查询发 taskUrl，不带 taskId / parentId；清空后撤掉', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const source = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+
+    const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(TaskView, {
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await flushPromises()
+
+    await wrapper.get('[data-testid="task-search-field"]').setValue('taskUrl')
+    const input = wrapper.get('[data-testid="task-search-text"]')
+    expect(input.attributes('placeholder')).toBe('输入任务 URL 片段，回车查询')
+    await input.setValue(' mp.weixin.qq.com ')
+    await input.trigger('keyup.enter')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({
+      taskUrl: 'mp.weixin.qq.com', taskId: undefined, parentId: undefined, page: 1,
+    }))
+
+    const clearBtn = wrapper.findAll('button').find((b) => b.text() === '清空')!
+    await clearBtn.trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ taskUrl: undefined }))
 
     wrapper.unmount()
   })

@@ -912,6 +912,7 @@ describe('旧平台新建源 HTTP 契约', () => {
       state: 'C',
       taskId: '62139720',
       queue: 'news_cont',
+      taskUrl: 'mp.weixin.qq.com',
       startTime: '2026-09-21',
       endTime: '2026-09-23',
       page: 2,
@@ -925,6 +926,8 @@ describe('旧平台新建源 HTTP 契约', () => {
     // 队列只发后端认的 taskTopic（B24），topic / queue 两个旧参数名后端从来不认，已删
     expect(url).toContain('taskTopic=news_cont')
     expect(url).not.toMatch(/[?&](topic|queue)=/)
+    // 任务 URL（2026-09-29 后端上线）：task_inst.TASK_URL 子串匹配
+    expect(url).toContain('taskUrl=mp.weixin.qq.com')
     expect(url).toContain('startTime=2026-09-21')
     expect(url).toContain('endTime=2026-09-23')
     expect(url).not.toContain('siteId=')
