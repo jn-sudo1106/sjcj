@@ -69,4 +69,41 @@ describe('SelectExistingConfigDialog', () => {
     expect(configApi.configPaged).toHaveBeenCalledWith({ keyword: '1400917', page: 1, size: 50 })
     expect(wrapper.text()).toContain('1400917-规则处理')
   })
+
+  // 2026-09-29：流程入口（ROOT）换配置不传 sourceId。此前 loadMore 无源直接 return、hasMore 恒真，
+  // 列表容器有高度时 fillIfShort ↔ onReachEnd 在微任务里无限空转，真实页面点「更换」直接卡死。
+  // jsdom 的 clientHeight 恒为 0 会跳过补满逻辑，这里显式给出「容器有高度、内容没撑满」。
+  function mountWithoutSource() {
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(300)
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(100)
+    const same = vi.spyOn(configApi, 'sameConfigs')
+    const wrapper = mount(SelectExistingConfigDialog, {
+      props: { open: true },
+      global: { stubs: { 'el-dialog': dialogStub }, directives: { loading: () => {} } },
+    })
+    return { wrapper, same }
+  }
+
+  it('不传 sourceId（流程入口换配置）：直接列全库，内容没撑满时翻到底就停，不空转', async () => {
+    const paged = vi.spyOn(configApi, 'configPaged').mockResolvedValue({ total: 120, list: PAGE1 })
+    const { wrapper, same } = mountWithoutSource()
+    await flushPromises()
+
+    expect(same).not.toHaveBeenCalled()
+    expect(paged.mock.calls.map((c) => c[0])).toEqual([
+      { page: 1, size: 50 },
+      { page: 2, size: 50 },
+      { page: 3, size: 50 },
+    ])
+    expect(wrapper.text()).toContain('1400917-规则处理')
+    expect(wrapper.text()).toContain('流程入口（ROOT）可挂任意配置')
+    expect(wrapper.text()).not.toContain('当前不是源画布')
+  })
+
+  it('不传 sourceId 且全库接口失败：只请求一次，不在错误上反复重试', async () => {
+    const paged = vi.spyOn(configApi, 'configPaged').mockRejectedValue(new Error('服务器异常'))
+    mountWithoutSource()
+    await flushPromises()
+    expect(paged).toHaveBeenCalledTimes(1)
+  })
 })
