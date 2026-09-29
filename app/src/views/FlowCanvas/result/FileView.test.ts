@@ -319,3 +319,48 @@ describe('FileView', () => {
     expect(wrapper.findComponent(FilePreviewDrawer).props('modelValue')).toBe(false)
   })
 })
+
+// 0929：源的流程节点把文件写进表名不带 file_resource 的文件表（「下载PDF」→ 6200037 pdf文件表）时，
+// 源文件视图也要能看到，并默认选中本源有文件的那张。
+describe('FileView 流程产出的文件表', () => {
+  const pdfTable = {
+    tableId: '6200037', tableName: 'sense_data.TB_PDFWJB', name: 'pdf文件表', rowCount: 2,
+    fields: [{ columnName: 'K3', desc: '文件路径' }, { columnName: 'K5', desc: '文件md5' }] as never[],
+  }
+  const downloadStep = { stepId: '41799', sourceId: '-1', name: '下载PDF', configId: '1401083', outputTable: '6200037', enabled: true }
+  function setup(rowsByTable: Record<string, number>) {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([downloadStep])
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    vi.spyOn(fileApi, 'resourceMeta').mockImplementation(async (id) => (id === '6200037' ? pdfTable : table))
+    return vi.spyOn(fileApi, 'resourceRows').mockImplementation(async ({ tableId }) => {
+      const n = rowsByTable[tableId] ?? 0
+      return { total: n, list: n ? files : [] }
+    })
+  }
+  afterEach(() => vi.restoreAllMocks())
+
+  it('下载节点的输出表进候选、排第一，本源有文件时默认选它', async () => {
+    const query = setup({ '6200037': 2, 'file-resource': 0 })
+    const wrapper = shallowMount(FileView, {
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, CanvasHeader: true } },
+    })
+    await flushPromises()
+
+    const options = wrapper.get('select[aria-label="表ID"]').findAll('option')
+    expect(options.map((o) => o.attributes('value'))).toEqual(['6200037', 'file-resource'])
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: '6200037', sourceId: '391007768' }))
+  })
+
+  it('流程文件表没有本源文件、file_resource 有时默认选后者', async () => {
+    const query = setup({ '6200037': 0, 'file-resource': 1 })
+    shallowMount(FileView, {
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, CanvasHeader: true } },
+    })
+    await flushPromises()
+
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 'file-resource' }))
+  })
+})

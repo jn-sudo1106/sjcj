@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import SiteFileView from './SiteFileView.vue'
 import { readSqlConditions } from '@/utils/sqlConditionHistory'
@@ -28,6 +28,9 @@ async function clickQuery(wrapper: { findAll: (s: string) => { text: () => strin
 afterEach(() => localStorage.clear())
 
 describe('SiteFileView', () => {
+  // 0929 起网站文件视图会并入流程节点输出的文件表；老用例不关心这块，统一给空
+  beforeEach(() => vi.spyOn(siteApi, 'siteUsedTables').mockResolvedValue({ tables: [], noFlowSourceCnt: 0, failedFlowIds: [] }))
+
   it('网站多源查询仅在全部成功时记录条件，部分源失败不记录', async () => {
     vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
     vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
@@ -326,5 +329,77 @@ describe('SiteFileView', () => {
     await flushPromises()
 
     expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 'file-resource-2' }))
+  })
+})
+
+// 0929：流程下载节点写进表名不带 file_resource 的文件表（站 124「下载PDF」→ 6200037 pdf文件表），
+// 任务完成了文件视图却是空的。现在并入网站流程用到的文件表，并默认选中当前范围真有文件的那张。
+describe('SiteFileView 流程产出的文件表', () => {
+  const pdfTable = {
+    tableId: '6200037', tableName: 'sense_data.TB_PDFWJB', name: 'pdf文件表', rowCount: 2,
+    fields: [{ columnName: 'K3', desc: '文件路径' }, { columnName: 'K5', desc: '文件md5' }] as never[],
+  }
+  const noticeTable = { tableId: '6200036', tableName: 'sense_data.TB_SHZQJYS', name: '上海证券交易所', rowCount: 43, fields: [{ columnName: 'K4', desc: '正文路径' }] as never[] }
+  function usedTable(tableId: string) {
+    return { tableId, name: tableId, tableName: '', sourceIds: ['s1'], sourceCnt: 1, role: 'STEP' as const }
+  }
+  function mockMetas() {
+    return vi.spyOn(fileApi, 'resourceMeta').mockImplementation(async (id) => (id === '6200037' ? pdfTable : id === '6200036' ? noticeTable : table))
+  }
+  afterEach(() => vi.restoreAllMocks())
+
+  it('流程输出的文件表进候选并排在前面，结构不是文件表的（公告表）不进', async () => {
+    vi.spyOn(siteApi, 'siteUsedTables').mockResolvedValue({ tables: [usedTable('6200036'), usedTable('6200037')], noFlowSourceCnt: 0, failedFlowIds: [] })
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    mockMetas()
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1', '江苏金租定期报告')])
+    vi.spyOn(dataApi, 'distinctSource').mockImplementation(async ({ tableId }) => (tableId === '6200037' ? ['s1'] : []))
+    const rows = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 1, list: [file('s1', '2800000', 'ea212d87.pdf')] })
+
+    const wrapper = shallowMount(SiteFileView, {
+      props: { siteId: '124' },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
+    })
+    await flushPromises()
+
+    const options = wrapper.get('select[aria-label="表ID"]').findAll('option')
+    expect(options.map((o) => o.attributes('value'))).toEqual(['6200037', 'file-resource'])
+    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: '6200037', sourceId: 's1' }))
+    expect(wrapper.text()).toContain('ea212d87.pdf')
+  })
+
+  it('默认选有文件的表：流程文件表还没产出、file_resource 里有本站文件时选后者', async () => {
+    vi.spyOn(siteApi, 'siteUsedTables').mockResolvedValue({ tables: [usedTable('6200037')], noFlowSourceCnt: 0, failedFlowIds: [] })
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    mockMetas()
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1', '源一')])
+    vi.spyOn(dataApi, 'distinctSource').mockImplementation(async ({ tableId }) => (tableId === 'file-resource' ? ['s1', 'other-site'] : ['other-site']))
+    const rows = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 1, list: [file('s1', '1', 'one.html')] })
+
+    shallowMount(SiteFileView, {
+      props: { siteId: 'site-a' },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
+    })
+    await flushPromises()
+
+    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 'file-resource' }))
+  })
+
+  it('取网站流程用表失败时不阻断，照常展示 file_resource 表', async () => {
+    vi.spyOn(siteApi, 'siteUsedTables').mockRejectedValue(new Error('500'))
+    vi.spyOn(fileApi, 'resourceTables').mockResolvedValue([table])
+    mockMetas()
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('s1', '源一')])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['s1'])
+    const rows = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ total: 1, list: [file('s1', '1', 'one.html')] })
+
+    const wrapper = shallowMount(SiteFileView, {
+      props: { siteId: 'site-a' },
+      global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, SiteSourceSelect: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('加载文件资源表失败')
+    expect(rows).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 'file-resource' }))
   })
 })

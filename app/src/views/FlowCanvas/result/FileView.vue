@@ -12,6 +12,7 @@ import { readResultRailHeight } from './resultLayoutPref'
 import FileDetailDrawer from './FileDetailDrawer.vue'
 import FilePreviewDrawer from './components/FilePreviewDrawer.vue'
 import { buildHorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
+import { loadFlowFileTables, mergeFileTableCandidates, pickTableWithFiles } from '@/utils/file/fileTables'
 
 // 文件视图只在具体源下挂载。真实旧平台 FileList2.vue 的链路是：
 // file_resource 表目录 → tableMeta → entryDataPaged；网站全部源仍由上层页面另行处理。
@@ -121,14 +122,24 @@ async function loadResourceTable() {
   if (!sourceId.value) return
   tableLoading.value = true
   try {
-    const candidates = await fileApi.resourceTables()
+    // 流程节点输出的文件表（表名不带 file_resource 也算，0929 站 124 的 pdf文件表）排前面，
+    // 默认选中本源真有文件的那张（见 utils/file/fileTables）。
+    const [resourceTables, flowTables] = await Promise.all([
+      fileApi.resourceTables(),
+      loadFlowFileTables(steps.value.map((step) => step.outputTable), fileApi.resourceMeta),
+    ])
     if (requestId !== tableRequest) return
+    const candidates = mergeFileTableCandidates<ResourceTable>(flowTables, resourceTables)
     if (candidates.length === 0) {
       error.value = '未找到 file_resource 文件资源表'
       return
     }
     tableCandidates.value = candidates
-    await selectTable(candidates[0], requestId)
+    const id = sourceId.value
+    const picked = await pickTableWithFiles(candidates, async (candidate) =>
+      (await fileApi.resourceRows({ tableId: candidate.tableId, sourceId: id, page: 1, size: 1 })).total > 0)
+    if (requestId !== tableRequest) return
+    await selectTable(picked ?? candidates[0], requestId)
   } catch {
     if (requestId !== tableRequest) return
     error.value = '加载文件资源表失败'

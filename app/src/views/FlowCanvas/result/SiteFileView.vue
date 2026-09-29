@@ -12,6 +12,7 @@ import GlobalSourceSelect from './components/GlobalSourceSelect.vue'
 import FileDetailDrawer from './FileDetailDrawer.vue'
 import FilePreviewDrawer from './components/FilePreviewDrawer.vue'
 import { initMergeState, mergeLoadMore, type MergeSourceState, type MergeLoadMoreResult } from './siteDataMerge'
+import { loadFlowFileTables, mergeFileTableCandidates, pickTableWithFiles } from '@/utils/file/fileTables'
 
 const props = defineProps<{ siteId?: string; initialSourceId?: string }>()
 
@@ -80,20 +81,49 @@ async function loadResourceTable() {
   error.value = ''
   tableLoading.value = true
   try {
-    const candidates = await fileApi.resourceTables()
+    // 网站流程节点输出的文件表（表名不带 file_resource 也算，0929 站 124 的 pdf文件表）排前面，
+    // 默认选中当前范围真有文件的那张（见 utils/file/fileTables）。取不到流程用表不阻断原有候选。
+    const siteId = props.siteId
+    const [resourceTables, flowTables] = await Promise.all([
+      fileApi.resourceTables(),
+      siteId
+        ? siteApi.siteUsedTables(siteId)
+          .then((used) => loadFlowFileTables(used.tables.map((t) => t.tableId), fileApi.resourceMeta))
+          .catch(() => [])
+        : Promise.resolve([]),
+    ])
     if (requestId !== tableRequest) return
+    const candidates = mergeFileTableCandidates<ResourceTable>(flowTables, resourceTables)
     if (!candidates.length) {
       error.value = '未找到 file_resource 文件资源表'
       return
     }
     tableCandidates.value = candidates
-    await selectTable(candidates[0], requestId)
+    const picked = await pickTableWithFiles(candidates, tableHasFilesInScope())
+    if (requestId !== tableRequest) return
+    await selectTable(picked ?? candidates[0], requestId)
   } catch {
     if (requestId !== tableRequest) return
     error.value = '加载文件资源表失败'
     ElMessage.warning('加载文件列表失败')
   } finally {
     if (requestId === tableRequest) tableLoading.value = false
+  }
+}
+/** 当前范围（单源 / 网站全部源 / 全部网站）内这张表有没有文件，供默认选表用 */
+function tableHasFilesInScope(): (candidate: ResourceTable) => Promise<boolean> {
+  const siteId = props.siteId
+  const sourceId = selectedSourceId.value
+  if (!siteId || sourceId) {
+    return async (candidate) =>
+      (await fileApi.resourceRows({ tableId: candidate.tableId, sourceId: sourceId || undefined, page: 1, size: 1 })).total > 0
+  }
+  // 网站全部源：与 resetAndLoad 同款，用 distinctSource 与本站源取交集，不逐源探测
+  let siteSourceIds: Promise<Set<string>> | undefined
+  return async (candidate) => {
+    siteSourceIds ??= siteApi.siteSources(siteId).then((list) => new Set(list.map((source) => source.sourceId)))
+    const [ids, distinct] = await Promise.all([siteSourceIds, dataApi.distinctSource({ tableId: candidate.tableId, size: 1000 })])
+    return distinct.some((sid) => ids.has(sid))
   }
 }
 // 旧平台列表用固定 K 字段渲染，表目录已足够查询；详情接口异常不能阻断文件列表。
