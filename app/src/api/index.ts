@@ -3043,6 +3043,22 @@ export const flowCenterApi = {
     })
     return ackFromApiResult(result)
   },
+  /**
+   * 批量启停流程（F6，2026-09-29 接入）。enable：0 = 启用，1 = 禁用。
+   * 后端 changeEnable 只置 cs_flow.IS_DELETE（0/1），并排除 state=D 的流程；
+   * 与 cs_source 的 is_delete 同形——禁用 ≠ 删除，流程仍在列表/有效集合里。
+   * 旧平台的 flowList/updateFlowConf/changeFlowEnable 三条端点当初没有调用方，
+   * 注册从 endpoints.ts 删过一轮；本方法是按 flowPaged/saveFlow 的样子加回来的。
+   */
+  changeFlowEnable: async (flowIds: string[], enable: 0 | 1): Promise<Ack> => {
+    if (!flowIds.length) return { ok: false, message: '请选择流程' }
+    const result = await request<unknown>('flow/changeFlowEnable', { ids: flowIds, enable }, {
+      method: 'GET',
+      httpEndpoint: 'flow/changeFlowEnable',
+      httpParams: { ids: flowIds.join(','), enable },
+    })
+    return ackFromApiResult(result)
+  },
   /** 下拉/选择器用：一次取回，**最多 500 条**。要完整分页请改用 paged。 */
   list: async (): Promise<FlowRecord[]> => (await flowCenterApi.paged({ page: 1, size: 500 })).list,
   /**
@@ -3094,7 +3110,14 @@ export const flowCenterApi = {
       || ack.message?.match(/id\s*[:：]\s*(\d+)/)?.[1]
     if (!id) throw new Error(`流程「${name}」已保存，但未能解析流程 ID（后端回执：${ack.message ?? '无'}），请刷新列表确认`)
     const saved = await flowCenterApi.detail(id)
-    if (saved) return saved
+    if (saved) {
+      // F8（0929）：saveFlow 的 update 分支不校验 state，并发/多端下可对已删除流程"静默成功"。
+      // 保存后回查详情发现 state=D（paged 永远过滤，只有这里会碰到）→ 明确报错而不是假装成功。
+      if (saved.state === 'D') {
+        throw new Error(`流程「${name}」已被删除（可能被其它端删掉了），本次保存未生效，请刷新列表`)
+      }
+      return saved
+    }
     return { id, name, definition: flow.definition, updatedAt: '' }
   },
   /**
@@ -3166,12 +3189,15 @@ export const itemApi = {
    *  `{ itemConfig, flowId, isRoot: 1, configId }`，其余字段保持库中值（updateByPrimaryKeySelective 不更新 null）。
    *  2026-09-29 对齐 118 上线版旧平台「步骤列表1」的 handleSaveRoot：请求体原样带 `flowId` 与
    *  `isRoot: 1`（此前只交 itemConfig + configId，后端按 isRoot 走 ROOT 更新分支时可能认不出）。
-   *  flowId 拿不到有效值（空 / '0' / 非数字）时不带该键，交后端按库中值处理。 */
-  rootConfigUpdate: (stepId: string, configId: string, flowId?: string) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', {
+   *  flowId 拿不到有效值（空 / '0' / 非数字）时不带该键，交后端按库中值处理。
+   *  0929：可选 `outEntry`（入口行输出表，数字表 ID 串）——不在 validateRootUpdate 拒绝清单里，
+   *  有非空值才携带；空/缺失时省略，selective update 保持库中值（不能拿 null 去"清空"输出表）。 */
+  rootConfigUpdate: (stepId: string, configId: string, flowId?: string, outEntry?: string | null) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', {
     itemConfig: Number(stepId),
     ...(flowId && /^\d+$/.test(flowId) && flowId !== '0' ? { flowId: Number(flowId) } : {}),
     isRoot: 1,
     configId: Number(configId),
+    ...(outEntry != null && String(outEntry).trim() !== '' ? { outEntry: Number(outEntry) } : {}),
   }, {
     method: 'POST',
     httpEndpoint: 'item/next/stepModify',

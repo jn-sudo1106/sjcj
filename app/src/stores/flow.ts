@@ -101,6 +101,22 @@ export interface FanOutColMeta {
 export interface MainEdge { fromId: string; toId: string; d: string; rule: boolean; lx: number; ly: number }
 export interface BranchEdge { d: string }
 
+/**
+ * 从节点配置副本中摘除登录口令（流程定义**落库 / 导出**时不得带明文口令，F3，0929）：
+ * 摘 `collectCfg.password`（普通采集登录密码）与各 `loginConfigs[].loginPwd`（登录节点密码）。
+ *
+ * 来源上下文：`serialize()`（源画布/模板导出）一直走这个口径；**流程工作区保存（definitionFromCanvas）
+ * 曾绕过它直接把含密码的配置写进 cs_flow.flow_conf**——三个出口三种做法（REVIEW F3）。
+ * 0929 起两个出口共用本函数；mutate 传入的副本（调用方先深拷贝，见两处调用）。
+ */
+export function stripLoginSecrets(configs: Record<string, NodeConfig>): void {
+  Object.values(configs).forEach((c) => {
+    if (!c.collectCfg) return
+    Reflect.deleteProperty(c.collectCfg, 'password')
+    c.collectCfg.loginConfigs?.forEach((config) => Reflect.deleteProperty(config, 'loginPwd'))
+  })
+}
+
 export const useFlowStore = defineStore('flow', () => {
   // 组合子 store
   const sourceStore = useSourceStore()
@@ -1004,11 +1020,7 @@ export const useFlowStore = defineStore('flow', () => {
       if (!c.taskCfg.queue) c.taskCfg.queue = defaultQueue
     })
     if (!options.includeLoginPasswords) {
-      Object.values(outConfigs).forEach((c) => {
-        if (!c.collectCfg) return
-        Reflect.deleteProperty(c.collectCfg, 'password')
-        c.collectCfg.loginConfigs?.forEach((config) => Reflect.deleteProperty(config, 'loginPwd'))
-      })
+      stripLoginSecrets(outConfigs)
     }
     const outSource = sourceCfg.value ? (JSON.parse(JSON.stringify(sourceCfg.value)) as Source) : undefined
     if (outSource?.templateId) outSource.nodeBindings = extractTemplateNodeBindings(outConfigs)

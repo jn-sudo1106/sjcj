@@ -202,6 +202,14 @@ export interface FlowRecord {
    *  用于反查"谁用了这个模板"（此前只能看 sourceCnt，看不出来源）。 */
   fromTemplateId?: string
 
+  // ---- 0929 F6：启停状态（后端 cs_flow.STATE / IS_DELETE）----
+  /** 是否已禁用（旧 `is_delete=1`）。禁用 ≠ 删除：流程仍在列表与有效流程里，
+   *  只是不能再作为目标（换绑/套用候选排除）；后端 changeFlowEnable 置 0/1。 */
+  disabled?: boolean
+  /** 生命周期状态（后端 `state`：'C' 草稿 / 'D' 已删）。'D' 只在 detail 回查时会碰到
+   *  （paged 已过滤），保存链路据此识别"流程已被别的端删掉"（F8）。 */
+  state?: string
+
   // ---- 0904 I17（Z7）：分类 / 标签 / 描述。后端 cs_flow 列全都现成，不新开表也不新开端点 ----
   /** 目录分类（旧 `categoryId`）。与源用的是同一套目录（`category/categoryPaged`）。
    *  2026-09-05 实测 200 条流程里只出现过一个值 `9009289`——**存量几乎没分过类**，
@@ -317,7 +325,10 @@ export interface Step {
   /** 配置详情中的 configType；用于回读没有明确 nodeType 的规则型节点。 */
   configType?: string
   inputTable?: string // 步骤输入表
-  outputTable?: string // 步骤输出表
+  // 步骤输出表（outEntry）。0929 放宽到 null：适配层对「库中 outEntry 为空」的存量行
+  // 原样回读 null（legacyAdapters:1089），与「未提交」的 undefined 语义不同——ROOT 行
+  // 输出表差异判断（useStepWrite）依赖这个三态。
+  outputTable?: string | null
   configId?: string // 本步骤使用配置
   /** @deprecated 0804 拍板：任务 URL 来源字段已从 UI 删除，仅供历史流程回读，见开发方案 §2.3。
    *  2026-08-26 核实：这个字段名从未对上过真实响应（nextConfigPaged 没有 urlSourceField 这个

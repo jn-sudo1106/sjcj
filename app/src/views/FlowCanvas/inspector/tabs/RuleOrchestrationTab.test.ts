@@ -199,15 +199,16 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(wrapper.find('.rc-actions-row button').exists()).toBe(false)
   })
 
-  // 0917 产品口径：视频转音频 / 语音转文字这几类不给「脚本编辑」入口（它们不需要生成脚本），
-  // 标题行只剩「抓取配置」。其它节点类型不受影响（上面那条规则节点的用例仍要求有这个按钮）。
-  // 清单在 flowModel 的 isScriptlessNode()。
+  // 0917 产品口径：视频转音频 / 语音转文字这几类不给「脚本编辑」入口（它们不需要生成脚本）。
+  // 0922/0923 起这两类都改成各自的纯参数配置（音频参数区），「抓取配置」标题行整块收起——
+  // 与上面「只保留音频参数」用例同口径（0929 修正：video-audio 分支还停留在 0917 的旧 UI，
+  // 标题行只对规则节点出现）。
   // 0921 起「文章生成摘要」整行标题都不出现（它连抓取配置都没有），单独在下面断言。
   // 0922 起「OCR 抓取」编排配置整页空白，单独在下面「OCR 抓取节点编排配置（空白页）」断言。
   it.each([
     ['video-audio', '视频提取音频'],
     ['audio-text', '音频提取文字'],
-  ])('%s 节点（%s）的标题行没有脚本编辑按钮', async (seedKey, label) => {
+  ])('%s 节点（%s）的标题行不出现', async (seedKey, label) => {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
@@ -217,15 +218,8 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
     await flushPromises()
 
-    const titleRow = wrapper.find('.ni-section-title-row')
-    if (seedKey === 'audio-text') {
-      expect(titleRow.exists(), label).toBe(false)
-    } else {
-      expect(titleRow.exists(), label).toBe(true)
-      expect(titleRow.text()).toContain('抓取配置')
-      expect(titleRow.find('button').exists(), label).toBe(false)
-      expect(wrapper.find('.ni-section-actions').exists()).toBe(false)
-    }
+    expect(wrapper.find('.ni-section-title-row').exists(), label).toBe(false)
+    expect(wrapper.find('.ni-section-actions').exists(), label).toBe(false)
     wrapper.unmount()
   })
 
@@ -1329,18 +1323,30 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     })
 
     try {
+      // 0929：生成完成后思考面板已按「完成后隐藏思考与脚本预览」口径收起（见同口径用例），
+      // 所以把 promise 挂起在流式进行中做断言——测的就是「流式追加 + 自动滚动」本身。
+      let finishGenerate!: (value: { script: string; scriptPath: string }) => void
       vi.spyOn(ruleApi, 'dataProcessGenerate').mockImplementation(async (_payload, options) => {
         options?.onThinking?.('第一段思考\n')
         await flushPromises()
         options?.onThinking?.('第二段思考\n')
+        await new Promise<{ script: string; scriptPath: string }>((resolve) => {
+          finishGenerate = resolve
+        })
         return { script: 'def main(sku_id):\n    return {"sku_name": sku_id}\n', scriptPath: '/rules/generated/orch-173.py' }
       })
 
       await wrapper.find('[data-testid="main-generate-script"]').trigger('click')
       await flushPromises()
 
+      // 流式进行中：思考面板可见、已累积完整并滚动到底
       expect(wrapper.find('[data-testid="main-stream-thinking"]').text()).toContain('第二段思考')
       expect(scrollSpy).toHaveBeenCalledWith(520)
+
+      // 生成完成后思考面板随口径收起
+      finishGenerate({ script: 'def main(sku_id):\n    return {"sku_name": sku_id}\n', scriptPath: '/rules/generated/orch-173.py' })
+      await flushPromises()
+      expect(wrapper.find('[data-testid="main-stream-thinking"]').exists()).toBe(false)
     } finally {
       if (scrollHeightDesc) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', scrollHeightDesc)
       if (scrollTopDesc) Object.defineProperty(HTMLElement.prototype, 'scrollTop', scrollTopDesc)
@@ -1742,28 +1748,23 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(flow.configs['rule-1'].ruleCfg?.script).toContain('def main')
   })
 
-  it('全屏查看打开脚本弹窗，展示脚本正文', async () => {
+  // 0929 收编：早先的「全屏查看」按钮和结果区路径入口都并进了工作区/下载（见 1769、2348），
+  // 这里锁定当前口径：完成后主面板不铺脚本预览，只留文件名链接；正文经「脚本编辑」工作区查看。
+  it('已有脚本：完成后结果区只留文件名链接（预览隐藏），正文在工作区可见', async () => {
     const { flow, wrapper } = mountWithExistingRule()
-    flow.patchRuleConfig('rule-1', { script: 'def main(sku_id):\n    return {}', scriptPath: '/x/y.py' })
+    flow.patchRuleConfig('rule-1', { script: 'def main(sku_id):\n    return {}', scriptPath: '/code01/202609/1789022685732.py' })
     await flushPromises()
 
-    const viewBtn = wrapper.findAll('button').find((b) => b.text() === '全屏查看')!
-    await viewBtn.trigger('click')
+    const resultHead = wrapper.find('.rc-main-result-head')
+    expect(resultHead.exists()).toBe(true)
+    expect(resultHead.text()).toContain('1789022685732.py')
+    // 完成后脚本预览隐藏（与「完成后隐藏思考与脚本预览」用例同口径）
+    expect(wrapper.find('.rc-main-result-code').exists()).toBe(false)
+
+    await openWorkbench(wrapper)
     await flushPromises()
-
-    expect(wrapper.html()).toContain('def main(sku_id)')
-  })
-
-  it('点击脚本路径打开工作区，展示脚本正文', async () => {
-    const { flow, wrapper } = mountWithExistingRule()
-    flow.patchRuleConfig('rule-1', { script: 'def main(sku_id):\n    return {}', scriptPath: '/x/y.py' })
-    await flushPromises()
-
-    const pathBtn = wrapper.find('button[title="/x/y.py"]')
-    await pathBtn.trigger('click')
-    await flushPromises()
-
-    expect(wrapper.html()).toContain('def main(sku_id)')
+    const workbench = wrapper.findComponent(RuleWorkbenchDialog)
+    expect((workbench.find('textarea.wb-code').element as HTMLTextAreaElement).value).toContain('def main(sku_id)')
   })
 
   it('已有脚本重新打开工作区时，状态显示已生成而不是待生成', async () => {
@@ -1800,7 +1801,8 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
   })
 
   it('打开工作区后默认展示描述（只读），系统提示词需点按钮展开', async () => {
-    const { wrapper } = mountWithExistingRule()
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', { describe: '按 sku_id 生成 sku_name 的描述正文' })
     await flushPromises()
 
     await openWorkbench(wrapper)
@@ -1808,7 +1810,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     // 默认展示描述（只读），系统提示词编辑区隐藏
     const describeTextarea = wrapper.find('textarea.wb-describe')
     expect(describeTextarea.exists()).toBe(true)
-    expect((describeTextarea.element as HTMLTextAreaElement).value).toContain('content')
+    expect((describeTextarea.element as HTMLTextAreaElement).value).toContain('按 sku_id 生成 sku_name')
     // 系统提示词编辑区未渲染
     expect(wrapper.find('textarea.wb-textarea:not(.wb-code):not(.wb-describe)').exists()).toBe(false)
     // 模型供应商和模型下拉框在描述视图下也可用，可直接切换
@@ -2007,7 +2009,8 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
   })
 
   it('工作区里直接生成时使用当前草稿里的模型供应商和模型', async () => {
-    const { wrapper } = mountWithExistingRule()
+    const { flow, wrapper } = mountWithExistingRule()
+    flow.patchRuleConfig('rule-1', { describe: '按 sku_id 生成 sku_name' })
     await flushPromises()
 
     await openWorkbench(wrapper)
@@ -2065,7 +2068,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       return { script: 'def main(date, zb_value):\n    return {"end_date": "2025-01-01"}', scriptPath: '/rules/generated/orch-173.py' }
     })
 
-    await wrapper.find('textarea[placeholder*="描述规则处理逻辑"]').setValue('按 sku_id 生成 sku_name')
+    await wrapper.find('textarea[placeholder*="自然语言描述"]').setValue('按 sku_id 生成 sku_name')
     await openWorkbench(wrapper)
 
     const genBtn = wrapper.findAll('.wb-pane-right .wb-pane-actions button').find((b) => b.text().includes('生成'))!
@@ -2153,7 +2156,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       return { script: 'def main(date, zb_value):\n    return {"end_date": "2025-01-01"}', scriptPath: '/rules/generated/orch-173.py' }
     })
 
-    await wrapper.find('textarea[placeholder*="描述规则处理逻辑"]').setValue('按 sku_id 生成 sku_name')
+    await wrapper.find('textarea[placeholder*="自然语言描述"]').setValue('按 sku_id 生成 sku_name')
     await openWorkbench(wrapper)
 
       const genBtn = wrapper.findAll('.wb-pane-right .wb-pane-actions button').find((b) => b.text().includes('生成'))!
@@ -2248,33 +2251,8 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(ruleApi.fileUploadScript).not.toHaveBeenCalled()
   })
 
-  it('进入查看态：回灌详情描述，并在仅有 scriptPath 时拉取脚本正文', async () => {
-    mockAssets()
-    vi.spyOn(ruleApi, 'orchestrationDetail').mockResolvedValue({
-      mode: 'ref',
-      ruleId: '173',
-      describe: '服务端描述',
-      systemPrompt: '服务端提示词',
-      scriptPath: '/code01/a.py',
-    })
-    vi.spyOn(ruleApi, 'fileDownloadScript').mockResolvedValue('def main():\n    return {}')
-    const { flow, wrapper } = mountOnRuleNode()
-    flow.patchRuleConfig('rule-1', {
-      mode: 'ref', ruleId: '173', name: '已有规则',
-      dataSource: 'dp-wwdata', inputTable: 'sense_data.TB_JD_SKU_BASE', inputTableId: '2102154',
-      inputFields: ['sku_id'], outputFields: ['sku_name'],
-      describe: '', script: '', scriptPath: '',
-    })
-    await flushPromises()
-
-    expect(ruleApi.orchestrationDetail).toHaveBeenCalledWith('173')
-    expect(ruleApi.fileDownloadScript).toHaveBeenCalledWith('/code01/a.py')
-    expect(ruleApi.orchestrationLoadScript).not.toHaveBeenCalled()
-    expect(flow.configs['rule-1'].ruleCfg?.describe).toBe('服务端描述')
-    expect(flow.configs['rule-1'].ruleCfg?.script).toContain('def main')
-    expect(wrapper.text()).toContain('设置业务规则')
-  })
-
+  // 0929：原「进入查看态（orchestrationDetail 回灌）」用例随接口迁移删除——
+// 查看态回灌已统一走 configDetailRaw，由下面两条用例覆盖（含仅有 scriptPath 时自动下载正文）。
   it('进入编排配置时会从 configDetailRaw 回填描述、路径和脚本正文', async () => {
     mockAssets()
     vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({
@@ -2342,7 +2320,9 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(ruleApi.fileDownloadScript).toHaveBeenCalledWith('/code01/202609/1788761803128.py')
     expect((wrapper.find('textarea.wb-code').element as HTMLTextAreaElement).value).toContain('def main():')
     expect((wrapper.find('textarea.wb-code').element as HTMLTextAreaElement).value).toContain('"hello": "world"')
-    expect(wrapper.find('.rc-main-result-code').text()).toContain('def main():')
+    // 0929：完成后主面板不再铺脚本预览（见「完成后隐藏思考与脚本预览」口径），
+    // 只留文件名链接——这里断言链接展示的路径（与上面 configDetailRaw 回填用例同款断言）。
+    expect(wrapper.find('.rc-main-result-head').text()).toContain('/code01/202609/1788761803128.py')
   })
 
   it('点击生成结果文件名时会把脚本下载到本地，文件名取路径最后一段', async () => {
@@ -2715,6 +2695,9 @@ describe('RuleOrchestrationTab · 抓取配置 XML 轻解析接入（S3-4）', (
     const { flow, wrapper } = mountOnCollectorNode()
     flow.patchExecConfig('web-1', { script: CAPTURE_XML, scriptPath: '/x/1.xml' })
     await flushPromises()
+    // 0929：保存按钮收在脚本工作区（与「保存配置」用例同入口），先打开工作区再点保存
+    await openWorkbench(wrapper)
+    await flushPromises()
     const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
     vi.spyOn(ruleApi, 'fileUploadScript')
 
@@ -2729,6 +2712,8 @@ describe('RuleOrchestrationTab · 抓取配置 XML 轻解析接入（S3-4）', (
   it('保存前一致性校验：确认「仍要保存」后继续走正常保存流程', async () => {
     const { flow, wrapper } = mountOnCollectorNode()
     flow.patchExecConfig('web-1', { script: CAPTURE_XML, scriptPath: '/x/1.xml' })
+    await flushPromises()
+    await openWorkbench(wrapper)
     await flushPromises()
     // 第一次 confirm 是一致性提示，第二次是既有的"保存后将绑定到该节点"确认，两次都要放行
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)

@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, Search } from '@element-plus/icons-vue'
 import { useFlowStore } from '@/stores/flow'
-import { applyTemplateToSource, reloadSourceIntoCanvas } from '@/utils/flow/applyTemplateToSource'
+import { applyTemplateToSource, reloadSourceIntoCanvas, reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import { useUiStore } from '@/stores/ui'
 import { flowCenterApi, type FlowRecord } from '@/api'
 import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
@@ -226,6 +226,8 @@ function srcSnatch() {
 const flowPickerTitle = computed(() => `${appliedTemplateLabel.value}（把模板的步骤复制一套到本源；不改「所属流程」）`)
 
 const switchingFlow = ref(false)
+/** 套用中的逐条进度文案（复制配置 i/N），显示在搜索框 placeholder 上 */
+const switchingLabel = ref('')
 async function onSwitchFlow(command: string) {
   if (!command) return
   if (command === '__manage_flows__') {
@@ -243,18 +245,20 @@ async function onSwitchFlow(command: string) {
   // 文案 2026-09-22 重写。原来写的是「当前 N 个节点会被替换」＋按钮「复制并替换」——
   // 那是前端本地替换时代的话。现在走后端 copyTemplateSteps，它**只追加不删除**，
   // 现有节点一个不少。承诺替换却做成追加，比不说更糟。
+  // 2026-09-29（F2）：后端复制**只搬步骤行**、CONFIG_ID 沿用模板（共享），前端在复制完成后
+  // 立即逐步骤复制配置并换绑（detachCopiedConfigs），兑现「复制出的改动不影响模板」。
   try {
     await ElMessageBox.confirm(
       [
-        `将复制模板「${template.name}」的步骤，生成属于本源的一套新配置。`,
+        `将复制模板「${template.name}」的步骤到本源的流程。`,
         nodeCount
           ? `当前 ${nodeCount} 个节点会保留，模板的步骤追加在后面——这一步不删任何现有节点。`
           : '',
         source.flowId
           ? '本源已有流程，步骤复制进这条流程里，所属流程不变。'
           : '本源还没有流程，会按模板新建一条并关联到本源。',
+        '复制完成后会自动为新增节点复制一份独立配置，之后修改本源流程的节点**不会影响模板及其它源**。',
         flow.dirty ? '当前画布有未保存改动，套用后会从服务端重新加载，未保存的改动将丢弃。' : '',
-        '此操作不影响该模板和其它源。',
       ].filter(Boolean).join(''),
       '套用流程模板',
       { type: 'warning', confirmButtonText: '复制并追加', cancelButtonText: '取消' },
@@ -263,19 +267,28 @@ async function onSwitchFlow(command: string) {
     return
   }
   switchingFlow.value = true
+  switchingLabel.value = ''
   try {
-    const applied = await applyTemplateToSource(template.id, sourceId, source.flowId, source.name)
+    const applied = await applyTemplateToSource(
+      template.id,
+      sourceId,
+      source.flowId,
+      source.name,
+      { onProgress: (done, total) => { switchingLabel.value = `（正在复制配置 ${done}/${total}）` } },
+    )
     // 后端已经把步骤建好了，画布必须重新按后端拓扑加载——本地拼的 id 是草稿 id，
     // 自动保存会把同一批步骤再建一遍。
     const reloaded = await reloadSourceIntoCanvas(sourceId)
     ElMessage.success(applied.createdFlow
       ? `已按模板「${template.name}」新建流程 #${applied.flowId} 并关联到本源`
       : (applied.message || `已把模板「${template.name}」的步骤复制到本源的流程`))
+    reportDetachResult(applied.detach)
     if (!reloaded) ElMessage.warning('步骤已复制，但画布重新加载失败，请刷新页面查看')
   } catch (e) {
     ElMessage.error(`套用模板失败：${(e as Error)?.message ?? String(e)}`)
   } finally {
     switchingFlow.value = false
+    switchingLabel.value = ''
   }
 }
 
@@ -359,7 +372,7 @@ async function onSwitchFlow(command: string) {
               v-model="flowKeyword"
               class="ch-flow-search"
               data-testid="flow-switch-search"
-              :placeholder="appliedTemplateLabel"
+              :placeholder="switchingFlow ? (switchingLabel || '套用中…') : appliedTemplateLabel"
               :title="flowPickerTitle"
               aria-label="搜索并套用流程模板"
               :disabled="switchingFlow"

@@ -2,7 +2,7 @@
 import { onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { configApi, flowCenterApi, type FlowDefinition, type FlowRecord, type Source, type Step } from '@/api'
-import { useFlowStore } from '@/stores/flow'
+import { useFlowStore, stripLoginSecrets } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import { useUiStore } from '@/stores/ui'
 import { rootStepForSource } from '@/views/FlowCanvas/canvas/flowModel'
@@ -82,10 +82,14 @@ function clone<T>(value: T): T {
 }
 
 function definitionFromCanvas(): FlowDefinition {
+  const configs = clone(canvas.configs)
+  // F3（0929）：与 serialize() 同一脱敏口径——登录口令不进 flowConf（曾绕过 serialize
+  // 把 collectCfg.password / loginConfigs.loginPwd 明文写进 cs_flow，REVIEW F3 已修）。
+  stripLoginSecrets(configs)
   return {
     main: [...canvas.main],
     branches: clone(canvas.branches),
-    configs: clone(canvas.configs),
+    configs,
     branchGroups: clone(canvas.branchGroups),
   }
 }

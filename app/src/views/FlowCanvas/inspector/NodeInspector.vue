@@ -18,6 +18,7 @@ import { configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
 import { provideNodeInspectorAssets } from './useNodeInspectorAssets'
 import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
 import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
+import { assertConfigWritable, detachFailureFor } from '@/utils/flow/copiedConfigs'
 import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
 import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
@@ -99,6 +100,12 @@ const configOriginText = computed(() => {
   if (!configId.value) return '新建配置 · 未保存'
   return isInitialSourceConfig.value ? '新建配置' : '已有配置'
 })
+
+// 0929 F2：复制流程/套用模板时配置复制失败、仍与来源共享的配置——常驻提示 + 保存前知情确认。
+// 场景口径：直接改共享配置 = 所有使用者一起变（默认意图）；复制出来的流程必须互不影响（红线），
+// 所以残留共享的步骤会被这里盯住（登记表见 utils/flow/copiedConfigs.ts）。按画布当前流程精确匹配，
+// 同一配置在其它流程里的登记不影响本流程的提示/清除。
+const sharedConfigWarning = computed(() => detachFailureFor(configId.value, flow.flowId))
 
 // 双层脏状态（0824-00 §5.4）：本条只管当前节点的配置表单；流程脏标在画布 Header。
 const nodeConfigDirty = computed(() => flow.dirtyConfigNodes.includes(id.value))
@@ -301,8 +308,11 @@ async function doCreateConfig(): Promise<boolean> {
 async function doUpdateExistingConfig(): Promise<boolean> {
   const node = cfg.value
   if (!node || saving.value) return false
+  // 0929 F2：复制时未换绑成功的共享配置——保存会改到模板/原流程，必须先知情确认。
+  // saving 在确认前就置位：弹窗等待期间双击「保存」不会开第二个确认。
   saving.value = true
   try {
+    if (!await assertConfigWritable(configId.value, flow.flowId)) return false
     const base = await baseRecordFor(configId.value)
     const payload = { ...buildConfigPayload(node, base), configId: configId.value }
     const ack = await configApi.updateConfig(payload as never)
@@ -399,6 +409,17 @@ onMounted(async () => {
         <span v-if="configId" class="cb-id" :title="`配置 ID ${configId}`">#{{ configId }}</span>
         <span class="cb-origin" :class="{ fresh: !configId || isInitialSourceConfig }">{{ configOriginText }}</span>
         <NodeConfigSelect v-if="id" :node-id="id" />
+      </div>
+
+      <!-- 0929 F2：复制时配置去共享失败的常驻提示——该节点配置仍与来源流程共享，保存前会再弹确认。 -->
+      <div v-if="sharedConfigWarning" class="ni-output-warn" data-testid="shared-config-warn">
+        <el-alert
+          type="warning"
+          :closable="false"
+          show-icon
+          title="该节点配置仍与来源共享"
+          :description="`配置 #${sharedConfigWarning.configId} 在复制流程时未能自动复制独立配置，目前仍与${sharedConfigWarning.sourceFlowRef}共享。修改它会同时影响该流程及所有使用它的源；保存前会再弹一次确认。`"
+        />
       </div>
 
       <!-- 0927 H1：输出表未就绪的常驻提示（覆盖规则/监控/采集等所有非文件节点）。 -->
