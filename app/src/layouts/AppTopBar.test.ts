@@ -103,13 +103,16 @@ describe('AppTopBar 生产环境徽标', () => {
     vi.unstubAllEnvs()
   })
 
-  it('未连生产时不显示徽标', async () => {
-    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://127.0.0.1:9999')
+  it('未连生产时不显示写保护徽标，只显示后台环境地址', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
     vi.resetModules()
     const { default: FreshAppTopBar } = await import('./AppTopBar.vue')
     const { wrapper } = await mountTopBar(FreshAppTopBar)
 
     expect(wrapper.find('[data-testid="prod-env-badge"]').exists()).toBe(false)
+    const badge = wrapper.find('[data-testid="test-env-badge"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toBe('后台环境 115.227.21.133')
   })
 
   it('连生产时显示醒目徽标', async () => {
@@ -120,6 +123,7 @@ describe('AppTopBar 生产环境徽标', () => {
 
     const badge = wrapper.find('[data-testid="prod-env-badge"]')
     expect(badge.exists()).toBe(true)
-    expect(badge.text()).toContain('生产环境')
+    expect(badge.text()).toBe('后台环境 118.25.96.217 · 允许新建，禁止改删')
+    expect(wrapper.find('[data-testid="test-env-badge"]').exists()).toBe(false)
   })
 })

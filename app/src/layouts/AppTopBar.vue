@@ -7,14 +7,17 @@ import { ElMessageBox } from 'element-plus'
 import { Bell, QuestionFilled, SwitchButton, User } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { isProductionBackend } from '@/api/client'
+import { currentBackendHost, isProductionBackend } from '@/api/client'
 import ChangePasswordDialog from './ChangePasswordDialog.vue'
 import companyLogo from '@/assets/brand/company-logo.png'
 
 const router = useRouter()
 const auth = useAuthStore()
-// 连生产时必须一眼看出，避免联调误操作；未连生产时不展示。
+// 连生产时必须一眼看出，避免联调误操作。
+// 2026-09-29：同机另有连 133 的平台（2807），徽标统一显示「后台环境 + 后端地址」，不再写生产/测试；
+// 连 118 时保留写保护说明和红色，其余用中性的主色。
 const connectedToProduction = isProductionBackend()
+const backendHost = currentBackendHost()
 
 async function handleLogout() {
   try {
@@ -53,7 +56,10 @@ function handleAccountCommand(command: string) {
       </span>
       <strong>青龙智能采集中心</strong>
       <span v-if="connectedToProduction" class="rc-env-badge" data-testid="prod-env-badge">
-        生产环境 · 允许新建，禁止改删
+        后台环境 {{ backendHost }} · 允许新建，禁止改删
+      </span>
+      <span v-else-if="backendHost" class="rc-env-badge rc-env-badge--test" data-testid="test-env-badge">
+        后台环境 {{ backendHost }}
       </span>
     </div>
     <div class="rc-top-actions">
@@ -174,6 +180,12 @@ function handleAccountCommand(command: string) {
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.rc-env-badge--test {
+  border-color: rgba(37, 99, 235, 0.3);
+  background: var(--rc-primary-bg);
+  color: var(--rc-primary-ink);
 }
 
 .rc-top-actions {

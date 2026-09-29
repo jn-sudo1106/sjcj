@@ -87,6 +87,11 @@ function currentBackendTarget(): string {
   return env.VITE_API_PROXY_TARGET || env.VITE_AUTH_PROXY_TARGET || ''
 }
 
+/** 当前连接的后端主机（去掉协议和端口），顶栏用来区分 118 生产 / 133 等环境；取不到返回空串 */
+export function currentBackendHost(): string {
+  return currentBackendTarget().replace(/^\w+:\/\//, '').replace(/[:/].*$/, '')
+}
+
 export function isProductionBackend(): boolean {
   const target = currentBackendTarget()
   return PRODUCTION_BACKEND_HOSTS.some((host) => target.includes(host))
