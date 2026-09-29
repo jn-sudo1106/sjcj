@@ -8,7 +8,7 @@
 import { computed, watch } from 'vue'
 import { useFlowStore } from '@/stores/flow'
 import {
-  fieldOptionsFromTableOrOutput, isRuleNode, nodeEntryCondition, nodeTaskQueue, collectorCapabilityOf,
+  fieldOptionsFromTableOrOutput, rendersAsRuleNode, nodeEntryCondition, nodeTaskQueue, collectorCapabilityOf,
   type ConditionGroup, type NodeConfig, type TaskParamValue,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import ConditionRow from '../ConditionRow.vue'
@@ -20,7 +20,9 @@ const { tables, params, ensureTableFields } = useNodeInspectorAssets()
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
 const id = computed<string>(() => flow.selectedId)
 const cc = computed(() => cfg.value?.collectCfg)
-const isRule = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
+// 规则处理形态（含 PDF 抓取，2026-09-29）：任务配置的「上下文来源」栏隐藏——
+// 这类节点的入出参在「表配置」里选，这里再来一个入口是同一件事的第二处，两处能填出不一致的值。
+const isRule = computed(() => (cfg.value ? rendersAsRuleNode(cfg.value) : false))
 
 const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
 

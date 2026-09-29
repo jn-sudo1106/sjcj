@@ -17,7 +17,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, UploadFilled } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
-import { isArticleSummaryNode, isArticleTagNode, isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isRuleNode, isScriptlessNode, isTranslateNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { isArticleSummaryNode, isArticleTagNode, isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isRuleNode, isScriptlessNode, rendersAsRuleNode, isTranslateNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { TRANSLATE_AUTO_CODE, TRANSLATE_ENGINE_CODES, TRANSLATE_LANGUAGE_CODES, engineCodeOf, engineLabelOf, languageCodeOf, translateSampleOf, translateText } from '@/api/translate'
 import {
   AUDIO_ORCHESTRATION_DEFAULTS,
@@ -55,7 +55,13 @@ const router = useRouter()
 const route = useRoute()
 const { tables } = useNodeInspectorAssets()
 
-const isRule = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
+// 编排内容的 UI/行为分流谓词（2026-09-29）：规则处理 + PDF 抓取都渲染同一套「脚本工作区」
+// （描述/系统提示词/脚本正文/生成脚本/保存脚本 + 表绑定门禁）。
+// ⚠️ 存储位仍严格看 isRuleNode（见 usesRuleStorage）：规则节点读写 ruleCfg，PDF/其余规则式节点读写 execCfg。
+// 若把 isRule 直接当存储开关，PDF 会去读不存在的 ruleCfg、编辑内容写进 execCfg，读写分家。
+const isRule = computed(() => rendersAsRuleNode(cfg.value))
+/** 严格信号：编排内容存 ruleCfg（真规则节点）还是 execCfg（PDF 及其它规则式节点）。 */
+const usesRuleStorage = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
 const isMonitor = computed(() => (cfg.value ? isMonitorNode(cfg.value) : false))
 const isDataValidation = computed(() => (cfg.value ? isDataValidationNode(cfg.value) : false))
 /**
@@ -452,8 +458,8 @@ onBeforeUnmount(() => {
   translateAbort.value?.abort()
 })
 const orchCfg = computed<RuleOrchestration>(() => ({
-  ...(isRule.value ? makeDefaultRuleOrchestration() : makeDefaultExecConfig()),
-  ...(isRule.value ? cfg.value?.ruleCfg : cfg.value?.execCfg),
+  ...(usesRuleStorage.value ? makeDefaultRuleOrchestration() : makeDefaultExecConfig()),
+  ...(usesRuleStorage.value ? cfg.value?.ruleCfg : cfg.value?.execCfg),
   name: cfg.value?.title ?? '',
 }))
 

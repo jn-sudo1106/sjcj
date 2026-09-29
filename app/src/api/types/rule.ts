@@ -106,6 +106,9 @@ export type PromptCategory =
   | '浏览器抓取'
   | '公众号抓取'
   | '网页登录'
+  // PDF抓取（130）：保留 collect 列表分类，但 node_type_name 独立一档，对应 cfg_llm_node_prompt 里
+  // category='collect'、node_type_name='PDF抓取' 的行（2026-09-29 用户补的模板 id=6）
+  | 'PDF抓取'
   | '数据处理'
   | '决策分支'
   | '分头处理'

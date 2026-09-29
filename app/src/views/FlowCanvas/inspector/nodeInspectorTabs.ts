@@ -1,4 +1,4 @@
-import { decisionOrParallelKind, isDataValidationNode, isRuleLikeNode, isRuleNode, isMonitorNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { decisionOrParallelKind, isDataValidationNode, isPdfNode, isRuleLikeNode, isRuleNode, rendersAsRuleNode, isMonitorNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
 
 export type NodeInspectorTab = 'config' | 'table' | 'params' | 'orchestration' | 'task' | 'ai'
@@ -24,19 +24,29 @@ export type NodeInspectorTabItem = [NodeInspectorTab, string, string?]
 export function nodeInspectorTabs(cfg?: NodeConfig, options: { includeAi?: boolean } = {}): NodeInspectorTabItem[] {
   if (cfg && decisionOrParallelKind(cfg) !== undefined) return [['config', '分支配置']]
   const isRule = !!cfg && isRuleNode(cfg)
+  // 2026-09-29：PDF 抓取按规则处理形态渲染——无「参数配置」Tab、编排 Tab 走表绑定门禁，
+  // 但落库仍是 130 采集身份（不进 isRuleLikeNode，避免动 stepPersist 的 nodeType/context）。
+  const isPdf = !!cfg && isPdfNode(cfg)
   // 2026-09-18：翻译助手 / 打标签 / 摘要 / 音频转文字 / 视频转音频与规则处理共用同一套 tab 结构（无「参数配置」Tab）。
   const ruleLike = !!cfg && isRuleLikeNode(cfg)
+  const hideParams = ruleLike || isPdf
+  const ruleStyled = rendersAsRuleNode(cfg)
   const tabs: NodeInspectorTabItem[] = [
     ['config', '节点配置'],
     ['table', '表配置'],
     ['orchestration', '编排配置'],
-    ...(ruleLike ? [] : [['params', '参数配置'] as NodeInspectorTabItem]),
+    ...(hideParams ? [] : [['params', '参数配置'] as NodeInspectorTabItem]),
     ['task', '任务配置'],
     ...(options.includeAi === false ? [] : [['ai', 'AI 对话'] as NodeInspectorTabItem]),
   ]
-  if (isRule && validateTableBinding(cfg?.ruleCfg ?? { inputTableId: '', inputFields: [], outputFields: [] }, { requireOutput: !isMonitorNode(cfg) && !isDataValidationNode(cfg) })) {
-    const orchestration = tabs.find((t) => t[0] === 'orchestration')!
-    orchestration[2] = '请先在「表配置」完成输入/输出表与字段选择'
+  // S2-2 门禁：规则式节点（含 PDF）在「表配置」绑完输入表与入参/出参字段之前，「编排配置」Tab 禁用。
+  // PDF 的绑定内容在 execCfg，规则节点在 ruleCfg——按存储位取校验对象。
+  if (ruleStyled) {
+    const binding = isRule ? cfg?.ruleCfg : cfg?.execCfg
+    if (validateTableBinding(binding ?? { inputTableId: '', inputFields: [], outputFields: [] }, { requireOutput: !isMonitorNode(cfg) && !isDataValidationNode(cfg) })) {
+      const orchestration = tabs.find((t) => t[0] === 'orchestration')!
+      orchestration[2] = '请先在「表配置」完成输入/输出表与字段选择'
+    }
   }
   return tabs
 }

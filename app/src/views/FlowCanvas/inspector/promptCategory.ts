@@ -1,4 +1,4 @@
-import { collectorCapabilityOf, decisionOrParallelKind, isArticleSummaryNode, isArticleTagNode, isDataNode, isDataValidationNode, isMonitorNode, isRuleNode, isTranslateNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { collectorCapabilityOf, decisionOrParallelKind, isArticleSummaryNode, isArticleTagNode, isDataNode, isDataValidationNode, isMonitorNode, isPdfNode, isRuleNode, isTranslateNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import type { PromptCategory } from '@/api'
 
 export interface PromptCategoryOption {
@@ -73,6 +73,10 @@ function notifyLike(cfg?: NodeConfig): boolean {
 }
 
 export function promptCategoryGroupsForNode(cfg?: NodeConfig): PromptCategoryGroup[] {
+  // PDF抓取（130）：仍是采集节点（collect 列表分类），但 node_type_name 独立成 'PDF抓取'，
+  // 必须在下方 collectorCapabilityOf 分支之前截住——否则会落到采集类选项组、默认 '网页抓取'，
+  // 取不到 cfg_llm_node_prompt 里 category='collect'、node_type_name='PDF抓取' 的模板行。
+  if (isPdfNode(cfg)) return [{ label: '采集类', options: [{ label: 'PDF抓取', value: 'PDF抓取' }] }]
   if (cfg && collectorCapabilityOf(cfg)) {
     return [{ label: '采集类', options: COLLECTOR_OPTIONS }]
   }
@@ -96,6 +100,8 @@ export function promptCategoryGroupsForNode(cfg?: NodeConfig): PromptCategoryGro
 }
 
 export function defaultPromptCategoryForNode(cfg?: NodeConfig): PromptCategory {
+  // PDF抓取：同 promptCategoryGroupsForNode，先于采集能力兜底截住，取 'PDF抓取' 那一档模板。
+  if (isPdfNode(cfg)) return 'PDF抓取'
   const cap = cfg ? collectorCapabilityOf(cfg) : undefined
   if (cap) return COLLECTOR_DEFAULTS[cap.kind] ?? '网页抓取'
   const logicKind = cfg ? decisionOrParallelKind(cfg) : undefined
@@ -116,6 +122,9 @@ export function resolvePromptCategoryForNode(cfg?: NodeConfig, value?: PromptCat
 }
 
 export function promptListCategoryForNode(cfg?: NodeConfig): string {
+  // PDF抓取：显式钉在 'collect'，与上面解析出的 node_type_name='PDF抓取' 配对，
+  // 命中 cfg_llm_node_prompt 里 category='collect'、node_type_name='PDF抓取' 的行。
+  if (isPdfNode(cfg)) return 'collect'
   if (cfg && collectorCapabilityOf(cfg)) return 'collect'
   if (isRuleNode(cfg)) return 'rule'
   // 文章生成摘要的模板行落在 category=rule（后端实测），不是 data_process

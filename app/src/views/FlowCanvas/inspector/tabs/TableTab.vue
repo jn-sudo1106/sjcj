@@ -10,7 +10,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import {
-  collectorCapabilityOf, isRuleNode, isRuleLikeNode, isMonitorNode, isDataValidationNode, makeDefaultRuleOrchestration, makeDefaultExecConfig,
+  collectorCapabilityOf, isRuleNode, isRuleLikeNode, isPdfNode, isMonitorNode, isDataValidationNode, makeDefaultRuleOrchestration, makeDefaultExecConfig,
   fieldOptionsFromTableOrOutput,
   type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
@@ -36,6 +36,10 @@ const isDataValidation = computed(() => (cfg.value ? isDataValidationNode(cfg.va
 // （不能写进 ruleCfg——那会把它们误判成规则节点，编排配置整个串位），
 // 入出参的步骤持久化口径与规则节点一致（stepPersist 按 isRuleLikeNode 走同一套 context 写入）。
 const isRuleLike = computed(() => (cfg.value ? isRuleLikeNode(cfg.value) : false))
+// PDF 抓取（2026-09-29）：表配置渲染成规则式的入参/出参字段绑定（RuleTableFieldBinder），
+// 绑定内容落 execCfg——与翻译/打标签同一存储位；落库仍走采集类口径（nodeType 不变、context 取 taskCfg）。
+const isPdf = computed(() => (cfg.value ? isPdfNode(cfg.value) : false))
+const ruleStyled = computed(() => isRuleLike.value || isPdf.value)
 
 // ---- 规则/翻译/打标签/摘要/音视频处理节点：表/字段绑定（0804 拍板：搬回表配置；2026-09-18 并入 isRuleLike） ----
 const ruleCfg = computed<RuleOrchestration>(() => ({
@@ -83,7 +87,7 @@ function restoreFieldsFromColumns(
 watch(
   [inputFieldOptions, outputFieldOptions, () => cfg.value?.taskCfg?.contextMap, () => cfg.value?.taskCfg?.outColumns],
   ([inOpts, outOpts, contextMap, outColumns]) => {
-    if (!isRuleLike.value || !id.value) return
+    if (!ruleStyled.value || !id.value) return
     const patch: Partial<RuleOrchestration> = {}
     const inputFields = restoreFieldsFromColumns(ruleCfg.value.inputFields, contextMap, inOpts)
     if (inputFields) patch.inputFields = inputFields
@@ -301,7 +305,7 @@ async function onTableSaved(tableId: string) {
 </script>
 
 <template>
-  <template v-if="isRuleLike">
+  <template v-if="ruleStyled">
     <RuleTableFieldBinder
       :model-value="ruleCfg"
       :input-field-options="inputFieldOptions"

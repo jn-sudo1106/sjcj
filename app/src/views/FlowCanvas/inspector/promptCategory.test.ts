@@ -3,6 +3,7 @@ import { buildSourceSeed, cloneConfig, NODE_CONFIGS } from '@/views/FlowCanvas/c
 import {
   defaultPromptCategoryForNode,
   promptCategoryGroupsForNode,
+  promptListCategoryForNode,
   resolvePromptCategoryForNode,
 } from './promptCategory'
 
@@ -16,6 +17,18 @@ describe('promptCategory helpers', () => {
     expect(defaultPromptCategoryForNode(cloneConfig(NODE_CONFIGS['browser-html-collect']))).toBe('浏览器抓取')
     expect(defaultPromptCategoryForNode(cloneConfig(NODE_CONFIGS['wechat-html-collect']))).toBe('公众号抓取')
     expect(defaultPromptCategoryForNode(cloneConfig(NODE_CONFIGS['login-collect']))).toBe('网页登录')
+  })
+
+  it('PDF抓取节点（130）：保留 collect 列表分类，但 node_type_name 独立成「PDF抓取」（2026-09-29）', () => {
+    const pdf = cloneConfig(NODE_CONFIGS['pdf-collect'])
+    // 命中 cfg_llm_node_prompt 里 category='collect'、node_type_name='PDF抓取' 的模板行
+    expect(promptListCategoryForNode(pdf)).toBe('collect')
+    expect(labels('pdf-collect')).toEqual(['PDF抓取'])
+    expect(defaultPromptCategoryForNode(pdf)).toBe('PDF抓取')
+    // 草稿里残留采集默认「网页抓取」时，收敛回当前节点类型的「PDF抓取」
+    expect(resolvePromptCategoryForNode(pdf, '网页抓取')).toBe('PDF抓取')
+    // 非 PDF 的采集节点不受影响，仍走能力分类
+    expect(defaultPromptCategoryForNode(cloneConfig(NODE_CONFIGS['web-list']))).toBe('网页抓取')
   })
 
   it('逻辑、规则、引用、通知节点各自返回对应分类', () => {

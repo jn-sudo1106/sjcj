@@ -610,6 +610,33 @@ export function isOcrNode(cfg?: NodeConfig | NodeConfigSeed): boolean {
     || (cfg as NodeConfig).taskCfg?.queue === 'dev_web_snatch_ocr'
 }
 
+/**
+ * PDF 抓取节点（configType 130）。
+ *
+ * 2026-09-29 产品口径：流程视图里 PDF 抓取节点的**节点配置 / 表配置 / 编排配置 / 任务配置**
+ * 四个 Tab 渲染成与「规则处理」一致（含编排配置的 Python 脚本工作区）。
+ * 但落库身份不变——仍靠 `collectCfg`（snatchType `[130]`）走采集类持久化（configType 130、
+ * 步骤 nodeType 沿用快照、入出参取 taskCfg），故本谓词**只驱动 UI**，不进 `isRuleLikeNode`
+ * （那会把 stepPersist 的 nodeType 改成 'rule'、context 改成读 execCfg，动了后端契约）。
+ * PDF 的表/编排编辑内容落在 `execCfg`（不污染 configType），与翻译/打标签同一存储位。
+ */
+export function isPdfNode(cfg?: NodeConfig): boolean {
+  if (!cfg) return false
+  return hasNodeTypeCode(cfg, 'pdf', '130')
+    || (cfg.collectCfg?.snatchType ?? '').includes('[130]')
+}
+
+/**
+ * 「编排/表/任务/节点配置四个 Tab 按规则处理形态渲染」的节点集合（2026-09-29）。
+ *
+ * = 真正的规则节点（`isRuleNode`，内容存 ruleCfg）+ PDF 抓取（`isPdfNode`，内容存 execCfg、
+ * 落库仍是 130 采集身份）。仅供五个 inspector 组件在 UI 层分流用；持久化/落库口径
+ * （nodeConfigPayload、stepPersist）不看它，仍按 `isRuleNode` / `isRuleLikeNode` 走。
+ */
+export function rendersAsRuleNode(cfg?: NodeConfig): boolean {
+  return isRuleNode(cfg) || isPdfNode(cfg)
+}
+
 /** 视频提取音频节点（编排配置 Tab 用它决定要不要给「上传视频抽音轨」试跑区）。 */
 export function isVideoAudioNode(cfg?: NodeConfig): boolean {
   if (!cfg) return false

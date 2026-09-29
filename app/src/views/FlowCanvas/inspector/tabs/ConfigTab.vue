@@ -8,7 +8,7 @@ import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useDuplicateNode } from '@/views/FlowCanvas/canvas/useDuplicateNode'
 import {
-  BIZ_TYPE_OPTIONS, WEB_TYPE_OPTIONS, defaultMultiMode, decisionOrParallelKind, collectorCapabilityOf, isRuleNode, isRuleLikeNode, nodeTypeLabel,
+  BIZ_TYPE_OPTIONS, WEB_TYPE_OPTIONS, defaultMultiMode, decisionOrParallelKind, collectorCapabilityOf, isRuleNode, isRuleLikeNode, isPdfNode, nodeTypeLabel,
   type CollectConfig, type CollectorSchedule, type LoginConfigRef, type NodeConfig, type TripleField,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { configApi, sourceApi } from '@/api'
@@ -39,6 +39,9 @@ const isRule = computed(() => isRuleNode(cfg.value))
 // 翻译助手 / 打标签 / 摘要 / 音频转文字 / 视频转音频（2026-09-18）：节点配置与规则处理保持一致——只有「节点名称 + 定时策略」，
 // 不再渲染通用的基础字段/参数三元表/发起抓取信息（那些是给自定义/规划中节点兜底的占位内容）。
 const isRuleLike = computed(() => isRuleLikeNode(cfg.value))
+// PDF 抓取（2026-09-29）：节点配置渲染成规则处理形态——只有「节点名称（可编辑）+ 节点类型 + 定时策略」，
+// 不走采集类的 URL/网页类型/业务类型/运行设置表单；落库仍是 130 采集身份，此处只改展示。
+const isPdf = computed(() => isPdfNode(cfg.value))
 const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
 const currentNodeType = computed(() => {
   if (!cfg.value) return '—'
@@ -317,7 +320,7 @@ watch(
          源 URL 按 0828 D07 / 0829：属于源，在左侧「源详情」只读展示并编辑，不在节点配置 Tab。
          规则节点的节点名称 = 规则名称，直接编辑（「选择已有」入口 2026-09-04 已删，见下方注释）。 -->
     <div class="rc-field"><label>节点名称</label>
-      <div v-if="isRule" class="rc-input-group">
+      <div v-if="isRule || isPdf" class="rc-input-group">
         <input class="rc-input" :value="cfg?.title" placeholder="直接输入规则名称" @input="onTitle" />
       </div>
       <div v-else-if="cc" class="rc-input-group">
@@ -333,7 +336,7 @@ watch(
     </div>
     <!-- 定时策略：采集节点挪到「运行设置」上方（见下）；非采集节点没有运行设置，仍留在这里 -->
     <!-- 有定时就默认展开（2026-09-18 用户提）：收着的话根本不知道这个源还有定时在跑 -->
-    <details v-if="!cc" class="ni-schedule" :open="!!flow.sourceJob">
+    <details v-if="!cc || isPdf" class="ni-schedule" :open="!!flow.sourceJob">
       <summary>定时策略</summary>
       <TaskScheduleSettings
         :model-value="scheduleSettings"
@@ -344,7 +347,7 @@ watch(
       />
     </details>
 
-    <template v-if="cc">
+    <template v-if="cc && !isPdf">
       <div v-if="isAppCollect" class="rc-field"><label>APP 包名</label>
         <input class="rc-input" :value="appPackageName" placeholder="如 com.example.app" @input="onAppPackageChange" />
       </div>
