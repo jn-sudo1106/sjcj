@@ -239,4 +239,41 @@ describe('flow 流程 HTTP 契约', () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(JSON.parse(String(init.body))).toEqual({ itemConfig: 41352, isRoot: 1, configId: 1400999 })
   })
+
+  it('流程入口换配置带输出表：outEntry 有值才携带，空值不占键', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', data: null, msg: '操作成功' }))
+    const { itemApi } = await import('./index')
+    await itemApi.rootConfigUpdate('41352', '1400999', '1400935', '6200027')
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body))).toEqual({ itemConfig: 41352, flowId: 1400935, isRoot: 1, configId: 1400999, outEntry: 6200027 })
+
+    await itemApi.rootConfigUpdate('41352', '1400999', '1400935', '')
+    const [, init2] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(JSON.parse(String(init2.body))).toEqual({ itemConfig: 41352, flowId: 1400935, isRoot: 1, configId: 1400999 })
+  })
+
+  it('GET /v1/flow/changeFlowEnable：ids 逗号串 + enable 0/1（F6 启停）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '处理成功，共处理 2 条', data: null }))
+    const { flowCenterApi } = await import('./index')
+    const ack = await flowCenterApi.changeFlowEnable(['1001', '1002'], 1)
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const u = new URL(url, 'http://local.test')
+    expect(u.pathname).toBe('/api/v1/flow/changeFlowEnable')
+    expect(u.searchParams.get('ids')).toBe('1001,1002')
+    expect(u.searchParams.get('enable')).toBe('1')
+    expect(ack.ok).toBe(true)
+  })
+
+  it('saveFlow 回查详情 state=D：明确报错而不是假装保存成功（F8）', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '保存成功，id:1001', data: null }))
+      .mockResolvedValueOnce(jsonResponse({
+        success: true,
+        code: null,
+        data: { flowId: 1001, flowName: '被删的流程', state: 'D', isDelete: -1, flowConf: null },
+      }))
+    const { flowCenterApi } = await import('./index')
+    await expect(flowCenterApi.save({ id: '1001', name: '被删的流程', definition: { main: [], branches: [], configs: {} } }))
+      .rejects.toThrow('已被删除')
+  })
 })

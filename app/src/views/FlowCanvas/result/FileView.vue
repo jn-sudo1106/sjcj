@@ -126,7 +126,7 @@ async function loadResourceTable() {
     // 默认选中本源真有文件的那张（见 utils/file/fileTables）。
     const [resourceTables, flowTables] = await Promise.all([
       fileApi.resourceTables(),
-      loadFlowFileTables(steps.value.map((step) => step.outputTable), fileApi.resourceMeta),
+      loadFlowFileTables(steps.value.map((step) => step.outputTable ?? undefined), fileApi.resourceMeta),
     ])
     if (requestId !== tableRequest) return
     const candidates = mergeFileTableCandidates<ResourceTable>(flowTables, resourceTables)

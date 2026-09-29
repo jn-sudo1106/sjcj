@@ -438,6 +438,95 @@ describe('useStepWrite.persistFlowSteps', () => {
     expect(rootUpdate).toHaveBeenCalledTimes(1)
   })
 
+  // 0929：ROOT 行的 outEntry（输出表）是画布可改的步骤字段——「表配置」里改了输出表，
+  // configId 没换也写；outEntry 随 ROOT 最小集一起交（不在 validateRootUpdate 拒绝清单里）。
+  it('根节点只改输出表：outEntry 随 ROOT 通道落库，快照同步后不重复写', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    const rootStep: Step = {
+      ...SNAPSHOT, stepId: '41352', name: '流程入口', isRoot: true, configId: '1400935',
+      dependsOn: undefined, mainConfig: '1400935', flowId: '1400935',
+    }
+    flow.loadFromSource(
+      { sourceId: '430016398', name: 'test1', url: 'http://x', configId: '1400917', mainTable: '6200026', owner: 'a', state: 'C', flowId: '1400935' } as never,
+      [rootStep],
+    )
+    source.rememberSteps([rootStep], 'replace')
+    // 「表配置」里把入口节点的输出表改到 6200027（采集类模板的产物落表在 collectCfg 上）
+    flow.configs['41352'].collectCfg!.outputTable = '6200027'
+
+    const rootUpdate = vi.spyOn(itemApi, 'rootConfigUpdate').mockResolvedValue({ ok: true, message: 'ok' })
+    const modify = vi.spyOn(itemApi, 'stepModify')
+    const create = vi.spyOn(itemApi, 'saveItemConfig')
+
+    const { persistFlowSteps } = useStepWrite()
+    const result = await persistFlowSteps()
+
+    // configId 没换（1400935 原样）也写——输出表差异就是写理由；outEntry 随最小集一起交
+    expect(rootUpdate).toHaveBeenCalledTimes(1)
+    expect(rootUpdate).toHaveBeenCalledWith('41352', '1400935', '1400935', '6200027')
+    expect(modify).not.toHaveBeenCalled()
+    expect(create).not.toHaveBeenCalled()
+    expect(result).toEqual({ created: 0, updated: 1, skipped: 0 })
+    // 快照同步 → 再次保存不再重复写
+    await persistFlowSteps()
+    expect(rootUpdate).toHaveBeenCalledTimes(1)
+  })
+
+  // 0929：存量 ROOT 行 outEntry 空（H1 形态），画布补上输出表 → 一次补齐写入。
+  it('存量根节点输出表为空：画布补上后随 ROOT 通道落库', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    const rootStep: Step = {
+      ...SNAPSHOT, stepId: '41352', name: '流程入口', isRoot: true, configId: '1400935',
+      outputTable: null,
+      dependsOn: undefined, mainConfig: '1400935', flowId: '1400935',
+    }
+    flow.loadFromSource(
+      { sourceId: '430016398', name: 'test1', url: 'http://x', configId: '1400917', mainTable: '6200026', owner: 'a', state: 'C', flowId: '1400935' } as never,
+      [rootStep],
+    )
+    source.rememberSteps([rootStep], 'replace')
+    flow.configs['41352'].collectCfg!.outputTable = '6200027'
+
+    const rootUpdate = vi.spyOn(itemApi, 'rootConfigUpdate').mockResolvedValue({ ok: true, message: 'ok' })
+
+    const { persistFlowSteps } = useStepWrite()
+    await persistFlowSteps()
+
+    expect(rootUpdate).toHaveBeenCalledWith('41352', '1400935', '1400935', '6200027')
+  })
+
+  // 0929：输出表清空（画布置空）——空值不携带 outEntry（selective update 保持库中值，
+  // 不能拿 null 清掉已落库的输出表）；快照同步为画布值，避免每轮自动保存重复写。
+  it('根节点输出表清空：不携带 outEntry，快照同步后不重复写', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    const rootStep: Step = {
+      ...SNAPSHOT, stepId: '41352', name: '流程入口', isRoot: true, configId: '1400935',
+      dependsOn: undefined, mainConfig: '1400935', flowId: '1400935',
+    }
+    flow.loadFromSource(
+      { sourceId: '430016398', name: 'test1', url: 'http://x', configId: '1400917', mainTable: '6200026', owner: 'a', state: 'C', flowId: '1400935' } as never,
+      [rootStep],
+    )
+    source.rememberSteps([rootStep], 'replace')
+    flow.configs['41352'].collectCfg!.outputTable = ''
+
+    const rootUpdate = vi.spyOn(itemApi, 'rootConfigUpdate').mockResolvedValue({ ok: true, message: 'ok' })
+
+    const { persistFlowSteps } = useStepWrite()
+    await persistFlowSteps()
+    await persistFlowSteps()
+
+    // 只带最小集（无 outEntry 键），且只写一次
+    expect(rootUpdate).toHaveBeenCalledTimes(1)
+    expect(rootUpdate).toHaveBeenCalledWith('41352', '1400935', '1400935')
+  })
+
   it('根节点换配置失败：错误上抛（autosave 进入退避重试），快照不回写', async () => {
     setActivePinia(createPinia())
     const flow = useFlowStore()

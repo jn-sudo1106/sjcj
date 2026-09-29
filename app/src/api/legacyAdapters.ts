@@ -1344,6 +1344,10 @@ export function flowFromLegacy(input: unknown): FlowRecord {
     sourceCnt: legacyNumber(record.sourceCnt),
     isTemplate: record.templateFlag == null ? undefined : Number(record.templateFlag) === 1,
     fromTemplateId: record.refFlowId == null ? undefined : String(record.refFlowId),
+    // 0929 F6：cs_flow.IS_DELETE（0 正常 / 1 禁用 / -1 已删）与 STATE（C 草稿 / D 已删）。
+    // paged 已过滤 state=D；detail 可能回显，F8 保存链路用 state 识别"已被别端删除"。
+    disabled: record.isDelete == null ? undefined : Number(record.isDelete) === 1,
+    state: record.state == null ? undefined : String(record.state),
     categoryId: record.categoryId == null ? undefined : String(record.categoryId),
     bizType: record.bizType == null ? undefined : String(record.bizType),
     flowTags: record.flowTags == null ? undefined : String(record.flowTags),
@@ -1377,7 +1381,12 @@ export function flowToLegacy(input: FlowSaveInput): LegacyRecord {
   if (input.isTemplate !== undefined) payload.templateFlag = input.isTemplate ? 1 : 0
   // 同 templateFlag：只有显式传了才进 payload。saveFlow 是全量保存，
   // 不传 = 保持后端原值，传空串 = 清空——两者不能混。
-  if (input.categoryId !== undefined) payload.categoryId = input.categoryId || null
+  // F5（0929）：**清空不能再传 null**——后端 update 分支用 MyBatis-Plus updateById，
+  // null 字段被跳过，「清空分类」永远静默不生效。改用 0 作清空哨兵：后端 saveFlow
+  // 见 categoryId<=0 显式把 CATEGORY_ID 置 null（目录 ID 都是正数，0 不可能撞合法值）。
+  // 其余调用方（FlowDetailDrawer 新建/保存、toggleTemplate 等）都不传 categoryId，
+  // 只有画布/工作区把 metaForm.categoryId 显式提交（'' → 0 清空 / 合法 id 原样）。
+  if (input.categoryId !== undefined) payload.categoryId = input.categoryId ? Number(input.categoryId) : 0
   if (input.flowTags !== undefined) payload.flowTags = input.flowTags
   if (input.description !== undefined) payload.flowDesc = input.description
   if (input.remark !== undefined) payload.remark = input.remark

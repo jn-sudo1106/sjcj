@@ -13,6 +13,8 @@ import {
   stepToSaveItemConfigPayload,
   stepToStepModifyPayload,
   sourceFromLegacy,
+  flowFromLegacy,
+  flowToLegacy,
   entryTypeGroupFromLegacy,
   entryTypeToLegacy,
   paramFromLegacy,
@@ -1006,5 +1008,37 @@ describe('siteFromLegacy 的标签', () => {
 
   it('没有标签时是空数组，不是 undefined', () => {
     expect(siteFromLegacy({ siteId: 2, siteName: '新浪3', tags: null, sourceCnt: 0 }).tags).toEqual([])
+  })
+})
+
+// 0929 F6：cs_flow 启停状态适配（IS_DELETE 0/1/-1 与 STATE C/D 必须精确区分）
+describe('flowFromLegacy 的启停状态', () => {
+  it('isDelete=1 → disabled=true（禁用 ≠ 删除：仍在列表与有效集合）', () => {
+    expect(flowFromLegacy({ flowId: 1, flowName: 'x', isDelete: 1, state: 'C' }).disabled).toBe(true)
+  })
+
+  it('isDelete=0 正常 / isDelete=-1 已删（不会出现在 paged 里）都不算 disabled', () => {
+    expect(flowFromLegacy({ flowId: 1, flowName: 'x', isDelete: 0, state: 'C' }).disabled).toBe(false)
+    expect(flowFromLegacy({ flowId: 1, flowName: 'x', isDelete: -1, state: 'D' }).disabled).toBe(false)
+    expect(flowFromLegacy({ flowId: 1, flowName: 'x', isDelete: -1, state: 'D' }).state).toBe('D')
+  })
+
+  it('isDelete/state 缺失时保持 undefined（老后端不回这两列）', () => {
+    const flow = flowFromLegacy({ flowId: 1, flowName: 'x' })
+    expect(flow.disabled).toBeUndefined()
+    expect(flow.state).toBeUndefined()
+  })
+})
+
+// 0929 F5：分类清空哨兵（MyBatis-Plus updateById 跳过 null，「清空」改成传 0）
+describe('flowToLegacy 的分类清空哨兵', () => {
+  it("categoryId 空串 → payload.categoryId = 0（后端见 <=0 置 null），不再传 null 被跳过", () => {
+    const payload = flowToLegacy({ name: 'x', definition: { main: [], branches: [], configs: {} }, categoryId: '' })
+    expect(payload.categoryId).toBe(0)
+  })
+
+  it('categoryId 合法值原样转数字；不传则 payload 里没有该键（保持后端原值）', () => {
+    expect(flowToLegacy({ name: 'x', definition: { main: [], branches: [], configs: {} }, categoryId: '9009289' }).categoryId).toBe(9009289)
+    expect('categoryId' in flowToLegacy({ name: 'x', definition: { main: [], branches: [], configs: {} } })).toBe(false)
   })
 })

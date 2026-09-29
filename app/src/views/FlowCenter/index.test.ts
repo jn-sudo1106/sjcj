@@ -296,32 +296,111 @@ describe('流程中心 · 自动刷新', () => {
 // 0902 会议口径：操作列只保留 编辑 / 关联到源 / 删除流程，去掉「复制」。
 // 0903 H24（Y8-D）：加回「标记为模板 / 取消模板」——模板是流程的一个**属性**，
 // 就该在流程行上切换，不是另开一个模板中心页。
+// 0929 F6：加回「禁用 / 启用」（changeFlowEnable 置 cs_flow.is_delete），排在模板与删除之间；
+// 0929 F1：有源流程的「删除」不再直接弹确认（后端拒绝），改开「更换/解绑源」前置对话框。
 describe('流程中心 · 操作列', () => {
   // 0904 I16（Z7-1）：操作列是**图标按钮**，文案在 title/aria-label 上，按钮体内没有文字。
   const actions = (w: Awaited<ReturnType<typeof mountCenter>>) =>
     rows(w)[0].findAll('.fc-actions button').map((b) => b.attributes('title'))
 
-  it('操作列：编辑 / 关联到源 / 标记为模板 / 删除流程', async () => {
+  it('操作列：编辑 / 关联到源 / 标记为模板 / 禁用流程 / 删除流程', async () => {
     const w = await mountCenter()
-    expect(actions(w)).toEqual(['编辑流程', '关联到源', '标记为模板', '删除流程'])
+    expect(actions(w)).toEqual(['编辑流程', '关联到源', '标记为模板', '禁用流程', '删除流程'])
   })
 
   it('已是模板的行，按钮文案变成「取消模板」', async () => {
     const w = await mountCenter([{ ...FLOWS[0], isTemplate: true }])
-    expect(actions(w)).toEqual(['编辑流程', '关联到源', '取消模板标记', '删除流程'])
+    expect(actions(w)).toEqual(['编辑流程', '关联到源', '取消模板标记', '禁用流程', '删除流程'])
   })
 
-  it('删除前二次确认，并把关联源数写进确认文案', async () => {
-    const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 7 }])
+  it('已禁用的行：按钮变「启用流程」、行带禁用徽标', async () => {
+    const w = await mountCenter([{ ...FLOWS[0], disabled: true }])
+    expect(actions(w)).toEqual(['编辑流程', '关联到源', '标记为模板', '启用流程', '删除流程'])
+    expect(w.get('[data-testid="flow-disabled-badge"]').text()).toContain('已禁用')
+  })
+
+  it('启用/禁用走 changeFlowEnable（0 启用 / 1 禁用）', async () => {
+    const w = await mountCenter([{ ...FLOWS[0], disabled: true }])
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const enable = vi.spyOn(flowCenterApi, 'changeFlowEnable').mockResolvedValue({ ok: true })
+    await w.get('[data-testid="flow-toggle-enable"]').trigger('click')
+    await flushPromises()
+    expect(enable).toHaveBeenCalledWith(['flow-10086'], 0)
+  })
+
+  it('无源流程：删除直接二次确认后调用 remove', async () => {
+    const w = await mountCenter()
     const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     const remove = vi.spyOn(flowCenterApi, 'remove').mockResolvedValue({ ok: true })
     await w.get('[data-testid="flow-delete"]').trigger('click')
     await flushPromises()
-    expect(confirm).toHaveBeenCalledWith(
-      expect.stringContaining('关联 7 个源'),
-      '删除流程',
-      expect.anything(),
-    )
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('删除后不可恢复'), '删除流程', expect.anything())
+    expect(remove).toHaveBeenCalledWith(['flow-10086'])
+  })
+
+  it('有源流程（sourceCnt>0）：不直接删，开「更换/解绑源」前置对话框（F1）', async () => {
+    const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 7 }])
+    const remove = vi.spyOn(flowCenterApi, 'remove').mockResolvedValue({ ok: true })
+    // 挂载源按 flowId 过滤查询（sourcePaged 生产实测认这个条件）；目标流程候选排除自身与禁用流程
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 7,
+      list: [{ sourceId: '1', name: '源一' }, { sourceId: '2', name: '源二' }],
+    } as never)
+    vi.spyOn(flowCenterApi, 'list').mockResolvedValue([
+      { ...FLOWS[0] },
+      { ...FLOWS[0], id: 'flow-2000', name: '目标流程' },
+      { ...FLOWS[0], id: 'flow-2001', name: '已停用流程', disabled: true },
+    ])
+    await w.get('[data-testid="flow-delete"]').trigger('click')
+    await flushPromises()
+
+    expect(remove).not.toHaveBeenCalled() // 没有直接删除
+    // 对话框展示源列表与目标流程候选（自身与禁用流程都不在候选里）
+    expect(w.text()).toContain('7')
+    expect(w.text()).toContain('源一')
+    expect(w.text()).toContain('目标流程')
+    expect(w.text()).not.toContain('已停用流程')
+    expect(w.text()).not.toContain('新闻采集标准流程（#flow-10086）')
+  })
+
+  it('有源流程：更换到目标流程成功后紧接着删除（F1 换绑路径）', async () => {
+    const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 2 }])
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 2,
+      list: [{ sourceId: '11', name: '源甲' }, { sourceId: '12', name: '源乙' }],
+    } as never)
+    vi.spyOn(flowCenterApi, 'list').mockResolvedValue([
+      { ...FLOWS[0] },
+      { ...FLOWS[0], id: 'flow-2000', name: '目标流程' },
+    ])
+    const bind = vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true })
+    const remove = vi.spyOn(flowCenterApi, 'remove').mockResolvedValue({ ok: true })
+
+    await w.get('[data-testid="flow-delete"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-testid="rebind-target-flow"]').setValue('flow-2000')
+    await w.get('[data-testid="rebind-replace-delete"]').trigger('click')
+    await flushPromises()
+
+    expect(bind).toHaveBeenCalledWith(['11', '12'], 'flow-2000')
+    expect(remove).toHaveBeenCalledWith(['flow-10086'])
+  })
+
+  it('有源流程：「仅解绑并删除」不带目标流程，随后删除（F1 解绑路径）', async () => {
+    const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 1 }])
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: '11', name: '源甲' }] } as never)
+    vi.spyOn(flowCenterApi, 'list').mockResolvedValue([{ ...FLOWS[0] }, { ...FLOWS[0], id: 'flow-2000', name: '目标流程' }])
+    const bind = vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true })
+    const remove = vi.spyOn(flowCenterApi, 'remove').mockResolvedValue({ ok: true })
+
+    await w.get('[data-testid="flow-delete"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-testid="rebind-unbind-delete"]').trigger('click')
+    await flushPromises()
+
+    expect(bind).toHaveBeenCalledWith(['11'], undefined)
     expect(remove).toHaveBeenCalledWith(['flow-10086'])
   })
 
@@ -334,6 +413,53 @@ describe('流程中心 · 操作列', () => {
     expect(remove).not.toHaveBeenCalled()
   })
 
+  // 审核 R11（2026-09-29）：拉源失败时两个删除按钮都不可用，但不能把用户关死在对话框里——
+  // 必须有「重新读取源列表」出路；重试后错误消失、恢复可操作。
+  it('挂载源读取失败：删除按钮禁用 + 提供「重新读取源列表」重试', async () => {
+    const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 3 }])
+    const paged = vi.spyOn(sourceApi, 'sourcePaged')
+    paged.mockRejectedValueOnce(new Error('网络错误'))
+    vi.spyOn(flowCenterApi, 'list').mockResolvedValue([{ ...FLOWS[0] }, { ...FLOWS[0], id: 'flow-2000', name: '目标流程' }])
+
+    await w.get('[data-testid="flow-delete"]').trigger('click')
+    await flushPromises()
+
+    expect(w.text()).toContain('源列表读取失败')
+    expect(w.get('[data-testid="rebind-unbind-delete"]').attributes('disabled')).toBeDefined()
+    expect(w.get('[data-testid="rebind-replace-delete"]').attributes('disabled')).toBeDefined()
+
+    // 重试（第二次成功）→ 错误消失、按钮恢复、源清单出现
+    paged.mockResolvedValueOnce({ total: 1, list: [{ sourceId: '7', name: '源七' }] } as never)
+    await w.get('[data-testid="rebind-retry-sources"]').trigger('click')
+    await flushPromises()
+
+    expect(w.text()).not.toContain('源列表读取失败')
+    expect(w.get('[data-testid="rebind-unbind-delete"]').attributes('disabled')).toBeUndefined()
+    expect(w.text()).toContain('源七')
+  })
+
+  // 审核 R14（2026-09-29）：换绑/删除进行中（saving）时取消按钮必须禁用——否则用户点了
+  // 取消以为安全退出，实际换绑+删除仍在后台继续跑完。
+  it('换绑进行中：取消按钮禁用，用户无法“假装取消”', async () => {
+    const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 1 }])
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: '11', name: '源甲' }] } as never)
+    vi.spyOn(flowCenterApi, 'list').mockResolvedValue([{ ...FLOWS[0] }, { ...FLOWS[0], id: 'flow-2000', name: '目标流程' }])
+    // bindSources 挂起不返回 → saving 持续为 true
+    vi.spyOn(flowCenterApi, 'bindSources').mockReturnValue(new Promise(() => {}) as never)
+
+    await w.get('[data-testid="flow-delete"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-testid="rebind-unbind-delete"]').trigger('click')
+    await flushPromises()
+
+    const cancelBtn = w.findAll('button').find((b) => b.text().includes('取消'))!
+    expect(cancelBtn.attributes('disabled')).toBeDefined()
+    // saving 期间两个删除按钮都禁用，「更换并删除」显示「处理中…」
+    expect(w.get('[data-testid="rebind-unbind-delete"]').attributes('disabled')).toBeDefined()
+    expect(w.get('[data-testid="rebind-replace-delete"]').text()).toContain('处理中')
+  })
+
   it('删除失败时抛后端原文，不谎报成功', async () => {
     const w = await mountCenter()
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
@@ -342,6 +468,48 @@ describe('流程中心 · 操作列', () => {
     await w.get('[data-testid="flow-delete"]').trigger('click')
     await flushPromises()
     expect(error).toHaveBeenCalledWith(expect.stringContaining('未找到流程ID'))
+  })
+
+  // 0929 死循环修复：sourceCnt>0 但 sourcePaged 返回 0 个源（计数过期/源已解绑）时，
+  // 旧实现只弹「没有可换绑的源」把用户永久卡在重试循环里——改为提供「直接删除」出口，
+  // 后端若仍拒绝会给出真实原因（用户可到源侧解绑后重来）。
+  it('空源列表（计数过期）：换绑按钮收起，提供「直接删除」出口并调删除', async () => {
+    const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 1 }])
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] } as never)
+    vi.spyOn(flowCenterApi, 'list').mockResolvedValue([])
+    const bind = vi.spyOn(flowCenterApi, 'bindSources')
+    const remove = vi.spyOn(flowCenterApi, 'remove').mockResolvedValue({ ok: true })
+
+    await w.get('[data-testid="flow-delete"]').trigger('click')
+    await flushPromises()
+
+    expect(w.text()).toContain('计数可能已过期')
+    expect(w.find('[data-testid="rebind-direct-delete"]').exists()).toBe(true)
+    expect(w.find('[data-testid="rebind-unbind-delete"]').exists()).toBe(false)
+    expect(w.find('[data-testid="rebind-replace-delete"]').exists()).toBe(false)
+
+    await w.get('[data-testid="rebind-direct-delete"]').trigger('click')
+    await flushPromises()
+
+    // 不经过 bindSources，直接调 remove
+    expect(bind).not.toHaveBeenCalled()
+    expect(remove).toHaveBeenCalledWith(['flow-10086'])
+  })
+
+  it('空源列表：直接删除取消时不发删除请求', async () => {
+    const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 1 }])
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] } as never)
+    vi.spyOn(flowCenterApi, 'list').mockResolvedValue([])
+    const remove = vi.spyOn(flowCenterApi, 'remove')
+
+    await w.get('[data-testid="flow-delete"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-testid="rebind-direct-delete"]').trigger('click')
+    await flushPromises()
+
+    expect(remove).not.toHaveBeenCalled()
   })
 })
 
@@ -711,13 +879,16 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
   it('「从模板新建」走 copyFlow，不是自己拼 saveFlow（后者只会建出空流程）', async () => {
     const w = await mountCenter()
     vi.spyOn(flowCenterApi, 'templates').mockResolvedValue([{ ...FLOWS[0], isTemplate: true }])
-    vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: 'flow-10086' } as never)
     const copy = vi.spyOn(flowCenterApi, 'copy').mockResolvedValue('flow-99')
     vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({ ...FLOWS[0], id: 'flow-99' })
     const save = vi.spyOn(flowCenterApi, 'save')
 
-    // 不走 ui.fireAction：那条路依赖"哪个组件实例最后注册了这个动作"，
-    // 多份 wrapper 未卸载时结果取决于挂载顺序，会随测试文件增减而飘。
+    // 0929 F9：不再手输 ID，走「下拉选择模板」弹窗（openTemplateCreate 拉取模板后直接创建）。
+    // ui.fireAction 依赖注册顺序，直接调 setupState 更稳（同文件既有惯例）。
+    await (w.vm.$ as unknown as { setupState: { openTemplateCreate: () => Promise<void> } }).setupState.openTemplateCreate()
+    await flushPromises()
+    expect(w.find('[data-testid="template-create-pick"]').exists()).toBe(true)
+
     await (w.vm.$ as unknown as { setupState: { createFromTemplate: () => Promise<void> } }).setupState.createFromTemplate()
     await flushPromises()
 
@@ -725,18 +896,16 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
     expect(save).not.toHaveBeenCalled()
   })
 
-  it('一个模板都没有时给出提示，不弹输入框', async () => {
+  it('一个模板都没有时给出提示，不弹选择框', async () => {
     const w = await mountCenter()
     vi.spyOn(flowCenterApi, 'templates').mockResolvedValue([])
-    const prompt = vi.spyOn(ElMessageBox, 'prompt')
     const info = vi.spyOn(ElMessage, 'info').mockImplementation(() => undefined as never)
 
     // 不走 ui.fireAction：那条路依赖"哪个组件实例最后注册了这个动作"，
     // 多份 wrapper 未卸载时结果取决于挂载顺序，会随测试文件增减而飘。
-    await (w.vm.$ as unknown as { setupState: { createFromTemplate: () => Promise<void> } }).setupState.createFromTemplate()
+    await (w.vm.$ as unknown as { setupState: { openTemplateCreate: () => Promise<void> } }).setupState.openTemplateCreate()
     await flushPromises()
 
-    expect(prompt).not.toHaveBeenCalled()
     expect(info).toHaveBeenCalledWith(expect.stringContaining('还没有流程被标记为模板'))
   })
 })

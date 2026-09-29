@@ -5,7 +5,7 @@ import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FlowDetailDrawer from './FlowDetailDrawer.vue'
-import { flowCenterApi, type FlowRecord, type Step } from '@/api'
+import { flowCenterApi, type FlowDefinition, type FlowRecord, type Step } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { resetFlowAutosaveForTests } from '@/views/FlowCanvas/canvas/useFlowAutosave'
@@ -327,5 +327,52 @@ describe('流程详情抽屉 · 工作区按接口步骤展示（0927）', () =>
     expect(f.main).toEqual(['start', 'web-list', 'end'])
     expect(f.configs['web-list']?.configId).toBe('1400774')
     w.unmount()
+  })
+})
+
+// 0929 F3：工作区保存流程（definitionFromCanvas）必须与 serialize() 同一脱敏口径——
+// collectCfg.password / loginConfigs.loginPwd 不得写进 cs_flow.flow_conf（曾是三个出口三种做法）。
+describe('流程详情抽屉 · 登录口令不进 flowConf（F3）', () => {
+  it('保存时画布节点上的登录密码被摘除，其余字段原样', async () => {
+    const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue(FLOW)
+    const w = mountDrawer()
+    await flushPromises()
+
+    // 往画布塞一个带登录口令的采集节点（与源画布 serialize({includeLoginPasswords:false}) 同源场景）
+    useFlowStore().load({
+      id: 'flow-1',
+      name: '新闻采集',
+      version: 'flow-1',
+      main: ['start', 'web-list', 'end'],
+      branches: [],
+      branchGroups: [],
+      // password / loginPwd 不在类型里（它们本就是该被摘除的存量多余键），整段 cast
+      configs: {
+        'web-list': {
+          title: '列表页', sub: '[90] 网页抓取', status: '', planned: false, base: [], fields: [], inmap: [],
+          params: [], output: [], configId: '1400999', collectCfg: { snatchType: '[90] - 网页抓取', url: 'https://x', password: 'p@ss0rd', loginConfigs: [{ name: '登录', loginPwd: 'secret' }] },
+        },
+      } as unknown as Record<string, never>,
+      updatedAt: FLOW.updatedAt,
+    })
+    await flushPromises()
+    await saveButton(w).trigger('click')
+    await flushPromises()
+
+    const sent = save.mock.calls[0]![0] as { definition: FlowDefinition }
+    const collect = sent.definition.configs['web-list']?.collectCfg as unknown as { password?: string; loginConfigs?: { loginPwd?: string }[] } | undefined
+    expect(collect?.password).toBeUndefined()
+    expect(collect?.loginConfigs?.[0]?.loginPwd).toBeUndefined()
+    expect(sent.definition.configs['web-list'].title).toBe('列表页')
+
+    // 脱敏只作用于落库副本：画布内存不被动。注意 loginPwd 例外——normalizeNodeConfig
+    // （flowModel.layout.ts:77「登录密码只允许存在于当前编辑会话」）在 load 时就把 loginPwd
+    // 归 '' 了，这是加载路径的既有设计，恰好与落库脱敏形成双保险；stripLoginSecrets 真正
+    // 防的是编辑会话中新输入的明文（password 字段）。若将来有人把 load 的深拷贝改成浅拷贝，
+    // password 会从内存消失——下面这条就是守护（审核 R21，2026-09-29）。
+    const canvas = useFlowStore()
+    const memCollect = canvas.configs['web-list']?.collectCfg as unknown as { password?: string; loginConfigs?: { loginPwd?: string }[] } | undefined
+    expect(memCollect?.password).toBe('p@ss0rd')
+    expect(memCollect?.loginConfigs?.[0]?.loginPwd).toBe('')
   })
 })

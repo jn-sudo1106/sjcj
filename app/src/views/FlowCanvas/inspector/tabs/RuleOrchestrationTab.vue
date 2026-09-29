@@ -38,10 +38,12 @@ import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
 import { buildDataProcessGeneratePayload } from '@/utils/flow/dataProcess'
 import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
+import { assertConfigWritable } from '@/utils/flow/copiedConfigs'
 import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
 import { promptCategoryGroupsForNode, promptListCategoryForNode, resolvePromptCategoryForNode } from '../promptCategory'
 import { loadPromptTemplateForNode } from '../promptTemplateLoader'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
+import { useFlowStore } from '@/stores/flow'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import AlertConfigPanel from '../AlertConfigPanel.vue'
 
@@ -62,6 +64,14 @@ const { tables } = useNodeInspectorAssets()
 const isRule = computed(() => rendersAsRuleNode(cfg.value))
 /** 严格信号：编排内容存 ruleCfg（真规则节点）还是 execCfg（PDF 及其它规则式节点）。 */
 const usesRuleStorage = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
+/**
+ * 「抓取配置 XML」配套件的适用面（0922 口径的补集）：纯配置类节点（OCR / 音视频 / 翻译 /
+ * 摘要 / 打标签）整块不出现，规则/监控与采集类节点都出现。
+ * 动作区（1729）与「配置路径 / 动作链摘要 / 切换已有配置」配套块（1825）共用这一个判定——
+ * 采集节点（非规则）在编排 Tab 也要有「生成配置」入口（0804 S3-3，9/11 搬容器时被
+ * v-if="isRule" 误收走，0929 还原，见变更说明）。
+ */
+const isCaptureStyle = computed(() => !isOcr.value && !isAudioText.value && !isVideoAudio.value && !isTranslate.value && !isArticleSummary.value && !isArticleTag.value)
 const isMonitor = computed(() => (cfg.value ? isMonitorNode(cfg.value) : false))
 const isDataValidation = computed(() => (cfg.value ? isDataValidationNode(cfg.value) : false))
 /**
@@ -890,6 +900,9 @@ async function onSavePromptPreview(prompt: string) {
     ElMessage.warning('请先保存节点配置，再保存系统提示词')
     return
   }
+  // 0929 F2：复制时未换绑成功的共享配置，写入前必须知情确认（与 NodeInspector 保存同一口径）。
+  // flowId 精确匹配：网站汇总态复用本 Tab 时无流程语境，登记也必然不命中，无副作用。
+  if (!await assertConfigWritable(configId, useFlowStore().flowId)) return
   savingPromptPreview.value = true
   try {
     const ack = await configApi.updateConfig({ configId, prompt })
@@ -1721,9 +1734,10 @@ function onTestScript() {
       </label>
     </span>
   </div>
-  <div v-if="isRule" class="rc-generation-actions" data-testid="rule-generation-actions">
+  <div v-if="isRule || isCaptureStyle" class="rc-generation-actions" data-testid="rule-generation-actions">
+    <!-- 0929：上传 Excel 与「测试脚本」是规则/监控节点的能力，采集节点只保留「生成配置」（S3-3）。 -->
     <input
-      v-if="!isMonitor"
+      v-if="isRule && !isMonitor"
       ref="excelFileInput"
       class="rc-file-input"
       data-testid="main-excel-file-input"
@@ -1732,7 +1746,7 @@ function onTestScript() {
       @change="onExcelFileChange"
     />
     <button
-      v-if="!isMonitor"
+      v-if="isRule && !isMonitor"
       class="rc-btn rc-upload-btn"
       type="button"
       data-testid="main-upload-excel"
@@ -1754,6 +1768,7 @@ function onTestScript() {
       <template v-else>{{ generateLabel }}</template>
     </button>
     <button
+      v-if="isRule"
       class="rc-btn"
       type="button"
       :disabled="!canTest"
@@ -1817,7 +1832,12 @@ function onTestScript() {
 
   <!-- 动作链摘要 / 切换已有配置都是「抓取配置 XML」这套东西的配套件，纯配置节点整块不出现（0921 口径）；
        OCR 抓取节点同样不出现（2026-09-22 口径：编排配置整页空白）。 -->
-  <template v-if="!isOcr && !isAudioText && !isVideoAudio && !isRule && !isTranslate && !isArticleSummary && !isArticleTag">
+  <template v-if="isCaptureStyle && !isRule">
+    <!-- 配置路径（0804 S3-3 措辞口径）：采集节点生成后展示 XML 落盘路径，未生成时给明确占位 -->
+    <div class="rc-field">
+      <label>配置路径</label>
+      <span class="rc-capture-path">{{ orchCfg.scriptPath || '未生成' }}</span>
+    </div>
     <!-- 只读动作链摘要（0804 S3-4，方案 §3.1）：按 NextActionId 链表走出来的执行顺序，不可编辑 -->
     <div v-if="actionSummary" class="rc-list ni-rule-meta">
       <div class="rc-list-row"><b>动作链</b><span :title="actionSummary">{{ actionSummary }}</span></div>

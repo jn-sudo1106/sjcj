@@ -19,7 +19,8 @@ import CanvasHeader from '../shared/CanvasHeader.vue'
 import AddNodePopover from './AddNodePopover.vue'
 import FlowXmlDialog from './FlowXmlDialog.vue'
 import { flowToXml } from '@/utils/flow/flowXml'
-import { applyTemplateToSource, reloadFlowIntoCanvas, reloadSourceIntoCanvas } from '@/utils/flow/applyTemplateToSource'
+import { applyTemplateToSource, reloadFlowIntoCanvas, reloadSourceIntoCanvas, reportDetachResult } from '@/utils/flow/applyTemplateToSource'
+import { detachConfigsInPlace } from '@/utils/flow/copiedConfigs'
 import {
   effectiveOutputTable,
   iconFor,
@@ -60,7 +61,7 @@ const recommending = ref(false)
 
 // 编排对象切换器已升级为页面级源侧栏（0710 会议 B1），组件与接线整体迁至 index.vue
 
-function loadTemplateDefaults(template: FlowRecord) {
+async function loadTemplateDefaults(template: FlowRecord) {
   flow.load({
     id: flow.flowId,
     name: flow.flowName,
@@ -71,24 +72,44 @@ function loadTemplateDefaults(template: FlowRecord) {
     branchGroups: template.definition.branchGroups,
     updatedAt: template.updatedAt,
   })
+  // 0929 F2：空白画布套模板同样不能带着模板的真实 configId 落库（本地编辑会直接改模板配置）
+  await detachTemplateConfigs(template)
 }
 
 /**
- * 从流程模板套用（0903 Y8-C / H03）。
+ * 智能推荐 / 默认模板落地后的配置去共享（0929 F2 红线补漏）：applyTemplate 与
+ * loadTemplateDefaults 是**本地拼装**路径，节点 configId 仍是模板真实配置——编辑保存会直接
+ * 写模板配置。这里逐条复制并就地换绑画布 store（画布下次落库按新配置重建步骤行），
+ * 失败登记知情确认，不阻断推荐主流程。
+ */
+async function detachTemplateConfigs(template: FlowRecord) {
+  const detach = await detachConfigsInPlace(flow.configs, {
+    flowId: validFlowIdOf(flow.flowId),
+    sourceFlowRef: `模板「${template.name}」`,
+  })
+  reportDetachResult({ ok: true, copied: detach.copied, remainShared: detach.remainShared })
+}
+
+/**
+ * 从流程模板套用（0903 Y8-C / H03；0929 F2 口径重对齐）。
  *
  * **落点在画布，不在新建向导**（2026-09-04 用户订正：「新建选模板的时候不需要，进画布模式的
  * 才需要」）。新建网站那一页只管建网站和源，套模板是进画布之后的事。
  *
- * H03 的口径是「新增配置」= 把模板里那套配置**复制出一套新的**给本源，不是引用模板。
- * 所以走后端的复制端点，**不用** `flow.applyTemplate` 那套前端逐个建节点的老路（Y8-20 作废）：
- * 两种分支（本源已有流程 → 复制步骤进去；没有 → copyFlow + bindSources）见
- * `utils/flow/applyTemplateToSource.ts`，顶部流程下拉共用同一条实现。
+ * 复制语义（0929 实测对齐）：后端 copyFlow/copyTemplateSteps **只复制步骤行**，步骤的 CONFIG_ID
+ * 沿用模板的配置——模板与复制品初始是共享的。为守住「复制出来的改动不影响模板」这条红线，
+ * 套用成功后由 `detachCopiedConfigs` 立即把复制进来的步骤逐个复制配置并换绑（config/copyAll +
+ * stepModify），之后各改各的（实现见 utils/flow/copiedConfigs.ts）。换绑失败的步骤登记到本地，
+ * 之后编辑该配置时弹知情确认。两种分支（本源已有流程 → 复制步骤进去；没有 → copyFlow +
+ * bindSources）见 `utils/flow/applyTemplateToSource.ts`，顶部流程下拉共用同一条实现。
  */
 const applyingTemplate = ref(false)
+const detachProgress = ref('')
 async function applyFlowTemplate() {
   const sourceId = flow.sourceCtx?.sourceId
   if (!sourceId || applyingTemplate.value) return
   applyingTemplate.value = true
+  detachProgress.value = ''
   try {
     const templates = await flowCenterApi.templates()
     if (!templates.length) {
@@ -96,7 +117,7 @@ async function applyFlowTemplate() {
       return
     }
     const { value } = await ElMessageBox.prompt(
-      `将复制模板的节点，并把模板里的那套配置复制出一套新的给本源；改新配置不会影响模板和其它源。\n可选模板：${templates.map((t) => `${t.name}(#${t.id})`).join('、')}`,
+      `将把模板的节点复制到本源的流程，并自动为复制出的节点复制一份独立配置——之后修改本源流程的节点不会影响模板和其它源。\n可选模板：${templates.map((t) => `${t.name}(#${t.id})`).join('、')}`,
       '从流程模板套用',
       { inputValue: templates[0].id, inputPattern: /^\d+$/, inputErrorMessage: '请输入上面列出的模板 ID', confirmButtonText: '套用', cancelButtonText: '取消' },
     )
@@ -107,10 +128,17 @@ async function applyFlowTemplate() {
     }
     // 落库 + 重载都在 utils/flow/applyTemplateToSource 里，与顶部下拉共用同一条实现
     //（2026-09-22 抽出：顶部那条原先走本地 applyTemplate，压根不落库）
-    const applied = await applyTemplateToSource(picked.id, sourceId, flow.sourceCtx?.flowId, flow.sourceCtx?.name)
+    const applied = await applyTemplateToSource(
+      picked.id,
+      sourceId,
+      flow.sourceCtx?.flowId,
+      flow.sourceCtx?.name,
+      { onProgress: (done, total) => { detachProgress.value = `${done}/${total}` } },
+    )
     ElMessage.success(applied.createdFlow
       ? `已按模板「${picked.name}」新建流程 #${applied.flowId} 并关联到本源`
       : (applied.message || `已把模板「${picked.name}」的步骤复制到本源的流程`))
+    reportDetachResult(applied.detach)
     // 后端已经把步骤建好了，画布得重新按后端拓扑加载一次——别在本地拼节点
     //（那样 id 全是本地草稿，自动保存又会重复建一遍）
     if (!await reloadSourceIntoCanvas(sourceId)) ElMessage.warning('步骤已复制，但画布重新加载失败，请刷新页面查看')
@@ -119,6 +147,7 @@ async function applyFlowTemplate() {
     ElMessage.error(`套用模板失败：${(e as Error)?.message ?? String(e)}`)
   } finally {
     applyingTemplate.value = false
+    detachProgress.value = ''
   }
 }
 
@@ -137,8 +166,11 @@ async function recommendTemplateFlow() {
       ElMessage.info('暂未匹配到可复用流程，请用「＋」手工添加节点，或从右上角选择流程。')
       return
     }
-    if (flow.sourceCtx || flow.sourceCfg) flow.applyTemplate(template)
-    else loadTemplateDefaults(template)
+    if (flow.sourceCtx || flow.sourceCfg) {
+      flow.applyTemplate(template)
+      // 0929 F2：applyTemplate 是本地拼装，configId 仍指向模板——套完必须去共享
+      await detachTemplateConfigs(template)
+    } else await loadTemplateDefaults(template)
     ElMessage.success(recommendation.templateId
       ? `已推荐并应用「${template.name}」v${template.version}`
       : `未识别具体场景，已应用默认流程「${template.name}」v${template.version}`)
@@ -641,7 +673,7 @@ watch(
               data-testid="apply-flow-template"
               :disabled="applyingTemplate"
               @click="applyFlowTemplate"
-            >{{ applyingTemplate ? '套用中…' : '从流程模板套用' }}</button>
+            >{{ applyingTemplate ? `套用中…${detachProgress ? ` 复制配置 ${detachProgress}` : ''}` : '从流程模板套用' }}</button>
           </div>
         </div>
 

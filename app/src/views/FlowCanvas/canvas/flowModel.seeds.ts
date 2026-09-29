@@ -1218,7 +1218,8 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
       ? { mode: 'expr', logic: 'AND', items: [], expr: step.condition }
       : undefined
     if (step.inputTable !== undefined) cfg.inputTable = step.inputTable === '-' ? '' : step.inputTable
-    if (step.outputTable !== undefined) cfg.outputTable = step.outputTable
+    // 0929：存量行 outEntry 空 = null（适配层原样回读），落成空串而非保留 undefined
+    if (step.outputTable !== undefined) cfg.outputTable = step.outputTable ?? ''
     // 非采集类节点（规则/翻译助手等）的入库配置同样随步骤回填：buildConfigPayload 保存时
     // 从 NodeConfig 顶层读 structuredConfig 写回 code_rule，回读不填的话刷新后"看到的"与
     // "会写进去的"就对不上了（翻译助手的源/目标语言靠它回填编排 Tab 的两个下拉）。

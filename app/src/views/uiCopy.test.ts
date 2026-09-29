@@ -362,6 +362,10 @@ describe('最新方案 UI 入口收口', () => {
     expect(flowBoard).toContain('flowCenterApi.templates()')
     expect(flowBoard).toContain('flow.applyTemplate(template)')
     expect(flowBoard).not.toContain('generateWebFlow')
+    // 0929：本地拼装路径（applyTemplate / loadTemplateDefaults）复制来的节点 configId 仍指向
+    // 模板真实配置，落地后必须做配置去共享（F2 红线）——编辑保存不能写回模板配置
+    expect(flowBoard).toContain('await detachTemplateConfigs(template)')
+    expect(flowBoard).toContain("import { detachConfigsInPlace } from '@/utils/flow/copiedConfigs'")
   })
 
   it('任务参数取值只面向当前节点参数', () => {
@@ -400,7 +404,10 @@ describe('最新方案 UI 入口收口', () => {
   // 这条锁的是「头上要显示当前已应用的流程」这个意图，不锁具体控件形态。
   it('源流程头展示已应用流程，且不展示负责人', () => {
     expect(canvasHeader).toContain('appliedTemplateLabel')
-    expect(canvasHeader).toContain(':placeholder="appliedTemplateLabel"')
+    // 0929：placeholder 已带上「套用中」状态（switchingFlow ? (switchingLabel || '套用中…') : appliedTemplateLabel），
+    // 原来的字面断言 `:placeholder="appliedTemplateLabel"` 不再成立。这里按**行为口径**放宽：
+    // 只要求 placeholder 绑定里确实用到了 appliedTemplateLabel（两种取值的具体行为在 CanvasHeader.test.ts 覆盖）。
+    expect(canvasHeader).toMatch(/:placeholder="[^"]*appliedTemplateLabel[^"]*"/)
     expect(canvasHeader).not.toContain('负责人 ${s.owner}')
   })
 

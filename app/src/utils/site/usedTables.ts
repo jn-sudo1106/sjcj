@@ -22,7 +22,8 @@ export interface UsedTableSource {
 
 export interface UsedTableStep {
   inputTable?: string
-  outputTable?: string
+  // 0929：与 Step.outputTable 同口径放宽到 null（存量 outEntry 空的行适配层回读 null）
+  outputTable?: string | null
 }
 
 export interface UsedTableCatalogEntry {

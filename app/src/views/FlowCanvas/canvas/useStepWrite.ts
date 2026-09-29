@@ -22,7 +22,7 @@ import {
   outputTableMissing,
   validFlowIdOf,
 } from '@/utils/flow/stepPersist'
-import { isRuleLikeNode } from '@/views/FlowCanvas/canvas/flowModel'
+import { isRuleLikeNode, effectiveOutputTable } from '@/views/FlowCanvas/canvas/flowModel'
 
 function assertOk(ack: Ack | null | undefined, fallback: string) {
   if (ack && 'ok' in ack && ack.ok === false) throw new Error(ack.message || fallback)
@@ -161,16 +161,27 @@ export function useStepWrite() {
    * 字段：sourceId / lastStep / entryTypeId / itemId / extName / cond 传**非空**一律拒绝、
    * mainConfig 不能改、type 必须 entry——所以**不能走 mergeStepForWrite 的普通整包**（会把画布
    * 回填的输出表/输入表/条件带进去撞校验），也不走 stepModify 的反算（enabled:false → isDelete:1
-   * 会被当成「删除根节点」拒绝）。API 层 `rootConfigUpdate` 只交最小集 `{ itemConfig, flowId, isRoot: 1, configId }`
-   *（2026-09-29 与旧平台 handleSaveRoot 对齐），
-   * 其余字段保持库中值（selective update）。成功后同步快照 configId，避免下次自动保存重复写。
+   * 会被当成「删除根节点」拒绝）。API 层 `rootConfigUpdate` 交 `{ itemConfig, flowId, isRoot: 1, configId }`
+   * 最小集 + **输出表有值时附带 outEntry**（2026-09-29 与旧平台 handleSaveRoot 对齐；outEntry 不在
+   * validateRootUpdate 拒绝清单里，见 api/index.ts），
+   * 其余字段保持库中值（selective update）。成功后同步快照 configId/outputTable，避免下次自动保存重复写。
    */
-  async function updateRootConfig(nodeId: string, configId: string): Promise<void> {
+  async function updateRootConfig(nodeId: string, configId: string, outputTable?: string): Promise<void> {
     const snapshot = sourceStore.stepSnapshots[nodeId]
+    // 输出表有值才带 outEntry；空值（采集入口无输出表/null）不带——selective update 对缺键
+    // 保持库中值，不会把已落库的输出表清掉，也不会拿空串去撞后端的非空校验。
+    const carryOutEntry = outputTable != null && String(outputTable).trim() !== ''
     // 首节点所属流程：快照回读的 flowId 优先（svg 按流程查询时根行自带），拿不到再用画布口径
-    const ack = await itemApi.rootConfigUpdate(nodeId, configId, validFlowIdOf(snapshot?.flowId) || flowIdOf())
+    // 参数按需拼装：outEntry 只在有值时作为第 4 参传入，避免拖一个 undefined 尾参
+    const rootArgs: [string, string, string?] = [nodeId, configId, validFlowIdOf(snapshot?.flowId) || flowIdOf()]
+    if (carryOutEntry) rootArgs.push(outputTable as string)
+    const ack = await itemApi.rootConfigUpdate(...rootArgs)
     assertOk(ack, '修改流程入口配置失败')
-    sourceStore.rememberSteps([{ ...snapshot, configId }], 'merge')
+    // 快照同步为画布值（输出表空也同步成 null）：差异已被本次提交消费，避免下一轮自动保存
+    // 因同一差异重复调用；空输出表后端不落库的差异留给下次加载消解。
+    sourceStore.rememberSteps([
+      { ...snapshot, configId, ...(outputTable !== undefined ? { outputTable: outputTable || null } : {}) },
+    ], 'merge')
   }
 
   async function persistExisting(nodeId: string, lastStepFromCanvas: boolean) {
@@ -390,12 +401,19 @@ export function useStepWrite() {
       // 画布 configId 没变 → 根行元数据由流程生命周期维护，不写（保持 0925 起的只读语义）；
       // 变了（右侧「更换配置」选了新配置）→ 走 ROOT 专属轻量 stepModify（普通整包会被
       // 后端 validateRootUpdate 拒：outputTable/entryTypeId/cond 传非空即报错）。
+      // 0929：**输出表（outEntry）变了同样要写**——入口节点的输出表是画布可改的步骤字段
+      // （表配置里改/补），只换配置才写的话，改完自动保存显示成功、库里 outEntry 纹丝不动。
       if (isRootStepStepId(id)) {
         const cfg = flow.configs[id]
         const snapshot = sourceStore.stepSnapshots[id]
-        if (snapshot && cfg.configId && snapshot.configId !== cfg.configId) {
-          await updateRootConfig(id, cfg.configId)
-          updated += 1
+        if (snapshot && cfg.configId) {
+          const outTable = effectiveOutputTable(cfg)
+          const outChanged = (snapshot.outputTable ?? null) !== (outTable || null)
+          const configChanged = snapshot.configId !== cfg.configId
+          if (configChanged || outChanged) {
+            await updateRootConfig(id, cfg.configId, outChanged ? outTable : undefined)
+            updated += 1
+          }
         }
         continue
       }

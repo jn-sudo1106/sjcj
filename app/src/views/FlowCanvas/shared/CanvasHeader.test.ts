@@ -372,8 +372,9 @@ describe('CanvasHeader · 流程视图操作', () => {
     expect(confirm).toHaveBeenCalledTimes(1)
     const [message, title] = confirm.mock.calls[0]
     expect(String(message)).toContain('复制模板「标准资讯流程」的步骤')
-    expect(String(message)).toContain('生成属于本源的一套新配置')
-    expect(String(message)).toContain('不影响该模板和其它源')
+    // 0929 F2：口径从「后端复制出一套新配置」改为「复制完成后前端自动为新增节点复制独立配置」
+    expect(String(message)).toContain('复制一份独立配置')
+    expect(String(message)).toContain('不会影响模板及其它源')
     expect(title).toBe('套用流程模板')
   })
 
@@ -465,6 +466,9 @@ describe('CanvasHeader · 套用流程模板走后端（2026-09-22）', () => {
     const copySteps = vi.spyOn(flowCenterApi, 'copyTemplateSteps').mockResolvedValue({ ok: true, message: '复制成功，共复制 3 个步骤' })
     const copyFlow = vi.spyOn(flowCenterApi, 'copy').mockResolvedValue('flow-new')
     const bind = vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true, message: 'ok' })
+    // 0929 F2：套用后要做配置去共享（detachCopiedConfigs 先按流程查步骤、再逐条换绑），
+    // 复制前后各读一次流程步骤——空列表即可满足（无步骤可换绑，也不拦复制主体）。
+    const flowSteps = vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
     // 兜底回查：本源自己带了 flowId 就照原样回，没带就回一条也没有 flowId 的——
     // 否则「源还没有流程」那一路会被这个 mock 喂出一个 flowId 来
     const detail = vi.spyOn(sourceApi, 'sourceDetail')
@@ -476,7 +480,7 @@ describe('CanvasHeader · 套用流程模板走后端（2026-09-22）', () => {
     await flushPromises()
     await flushPromises()
 
-    return { copySteps, copyFlow, bind, detail, steps }
+    return { copySteps, copyFlow, bind, flowSteps, detail, steps }
   }
 
   it('源已有流程：步骤复制进本源那条流程，不新建、不改绑定', async () => {
