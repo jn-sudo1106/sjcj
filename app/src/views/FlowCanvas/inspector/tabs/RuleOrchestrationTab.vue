@@ -830,7 +830,10 @@ watch(
     const refreshSeq = ++promptRefreshSeq
     // 数据监控节点进入编排 Tab 时即拼接系统提示词，与脚本编辑弹窗的行为一致——
     // 弹窗 loadPromptTemplate 无条件调用，这里也不卡 sourceTableName/inputFields。
-    if (isRule.value && !isMonitor.value && !isDataValidation.value) {
+    // 表绑定门禁只对**真正的规则节点**（usesRuleStorage=写 ruleCfg）生效；
+    // PDF抓取虽按规则式渲染（isRule=rendersAsRuleNode 为真），但存 execCfg、usesRuleStorage 为假，
+    // 因此跳过门禁，进 Tab 即无条件取模板（2026-09-29 用户要求）。
+    if (usesRuleStorage.value && !isMonitor.value && !isDataValidation.value) {
       if (!sourceTableName.value) return
       if (!orchCfg.value.inputFields?.length) return
       if (!orchCfg.value.outputFields?.length) return

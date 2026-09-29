@@ -122,9 +122,10 @@ export function resolvePromptCategoryForNode(cfg?: NodeConfig, value?: PromptCat
 }
 
 export function promptListCategoryForNode(cfg?: NodeConfig): string {
-  // PDF抓取：显式钉在 'collect'，与上面解析出的 node_type_name='PDF抓取' 配对，
-  // 命中 cfg_llm_node_prompt 里 category='collect'、node_type_name='PDF抓取' 的行。
-  if (isPdfNode(cfg)) return 'collect'
+  // PDF抓取：只按 node_type_name='PDF抓取' 取模板，不带 category 过滤（返回 '' → fetchPromptList 省略 category 参数）。
+  // 原因：库里 prompt_id=6 的 category 列口径不稳（实测仍为 'rule'，需求又想改 'collect'），
+  // node_type_name='PDF抓取' 对本节点已唯一，去掉 category 约束才不受该列取值影响（同「翻译」节点 fetchPromptList('', '翻译')）。
+  if (isPdfNode(cfg)) return ''
   if (cfg && collectorCapabilityOf(cfg)) return 'collect'
   if (isRuleNode(cfg)) return 'rule'
   // 文章生成摘要的模板行落在 category=rule（后端实测），不是 data_process
