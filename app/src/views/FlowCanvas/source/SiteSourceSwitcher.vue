@@ -15,6 +15,7 @@ import { importProgressText } from './importProgress'
 const ENABLE_SOURCE_COPY_BIND_FLOW = true
 import { hasLoadParams } from './paramNormalize'
 import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
+import { copyFlowToSource, reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import { toExternalHref } from '@/utils/url/externalUrl'
 import type { ParamGroupRef } from '@/utils/flow/urlParams'
 import ParamSourceEditor, { type ParamSourceModel } from './ParamSourceEditor.vue'
@@ -598,8 +599,18 @@ async function submitParamSource() {
  *      （H1 答复），不补这一步新源就是没有流程的孤儿。
  * **三步递进，任一步失败都不回滚前面的**（Y8-7）：源已经建出来了，回滚等于删源，
  * 风险比留着一个待手工关联的源高得多。所以失败只提示、不抛错。成功返回新源 ID，失败返回 null。
+ *
+ * `ownFlow`（0930，右键复制源选「新增一套配置」时为 true）：第③步不挂原流程，而是把原流程复制一份
+ * 给新源（copyFlowToSource：复制 → 换绑 → 节点配置去共享）。实测（0930）flag=1 只复制源自身那一个
+ * 配置，节点配置挂在流程上、按 FLOW_ID 执行，不连流程一起复制的话节点配置仍与原源共用。
+ * 「添加源 → 按模板源」不走这条：按模板加的源本意就是共用模板流程，每源一条流程会让流程数成倍增长。
  */
-async function copySourceIntoSite(from: Source, target: { name: string; url: string }, flag: 0 | 1): Promise<string | null> {
+async function copySourceIntoSite(
+  from: Source,
+  target: { name: string; url: string },
+  flag: 0 | 1,
+  ownFlow = false,
+): Promise<string | null> {
   const what = flag === 1 ? '及配置' : '（复用原配置）'
   try {
     const copied = await sourceApi.copySourceAndLocate({ sourceId: from.sourceId, name: target.name, url: target.url, flag })
@@ -621,6 +632,17 @@ async function copySourceIntoSite(from: Source, target: { name: string; url: str
     }
     if (!ENABLE_SOURCE_COPY_BIND_FLOW) {
       ElMessage.success(`已复制源「${target.name}」${what}`)
+    } else if (fromFlowId && ownFlow) {
+      try {
+        const copied2 = await copyFlowToSource(fromFlowId, copied.sourceId, target.name, { sourceFlowRef: `源「${from.name}」的流程` })
+        ElMessage.success(`已复制源「${target.name}」及配置，并为它复制了独立流程 #${copied2.flowId}`)
+        reportDetachResult(copied2.detach, '原流程')
+      } catch (error) {
+        ElMessage.warning(
+          `源已复制并归入本网站（#${copied.sourceId}），但复制流程失败`
+          + `（${error instanceof Error ? error.message : String(error)}），可在新源画布里点「复制当前流程」补上`,
+        )
+      }
     } else if (!fromFlowId) {
       // sourceDetail/sourcePaged 都已返回 flowId（2026-09-04 实测），缺失只可能是这个源
       // 本来就没关联流程——那就没有可关联的目标，不是错误。
@@ -670,7 +692,7 @@ async function submitCopy() {
   try {
     // URL 留空与添加源同口径补占位（后端 copySource 同样有必填校验）
     const url = urlOrPlaceholder(copyDlg.url, `${props.siteId}-${Date.now().toString(36)}`)
-    const newId = await copySourceIntoSite(s, { name, url }, copyDlg.mode === 'new' ? 1 : 0)
+    const newId = await copySourceIntoSite(s, { name, url }, copyDlg.mode === 'new' ? 1 : 0, copyDlg.mode === 'new')
     if (!newId) return
     closeCopyDialog()
     await load(true)
@@ -1330,14 +1352,14 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
         <div class="ssw-copy-modes">
           <label class="ssw-copy-mode" :class="{ active: copyDlg.mode === 'new' }">
             <input v-model="copyDlg.mode" type="radio" value="new" data-testid="dup-source-mode-new" />
-            <span><b>新增一套配置</b><small>复制源的同时复制一份配置，修改新源配置不影响原源（推荐）</small></span>
+            <span><b>新增一套配置</b><small>源配置和流程都复制一份（节点配置各自独立），修改新源不影响原源（推荐）</small></span>
           </label>
           <label class="ssw-copy-mode" :class="{ active: copyDlg.mode === 'reuse' }">
             <input v-model="copyDlg.mode" type="radio" value="reuse" data-testid="dup-source-mode-reuse" />
-            <span><b>复用原配置</b><small>只复制源，新源仍用原来的配置，修改任一边两边会一起变</small></span>
+            <span><b>复用原配置</b><small>只复制源，新源与原源共用配置和流程，修改任一边两边会一起变</small></span>
           </label>
         </div>
-        <p class="ssw-move-warn">新源会放进当前网站，并关联到原源所属的流程。</p>
+        <p class="ssw-move-warn">新源会放进当前网站，{{ copyDlg.mode === 'new' ? '并使用复制出的独立流程「新源名-流程」' : '并关联到原源所属的流程' }}。</p>
       </div>
       <div class="ssw-add-actions">
         <button class="rc-btn" type="button" @click="closeCopyDialog">取消</button>

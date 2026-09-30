@@ -186,9 +186,11 @@ describe('SiteSourceSwitcher', () => {
   })
 
   // 0930 右键「复制源」：迁自旧平台「制作源+配置副本（flag=1）/ 仅制作源副本（flag=0）」
-  it('右键复制源：默认新增一套配置（flag=1），名称默认「原名_copy」，复制后归入本网站并挂原源的流程', async () => {
+  it('右键复制源：默认新增一套配置（flag=1），名称默认「原名_copy」，归入本网站并复制一份原流程给新源', async () => {
     const wrapper = await createWrapper()
     vi.mocked(sourceApi.sourceDetail).mockResolvedValue({ ...source, flowId: 'flow-1' })
+    const copyFlow = vi.spyOn(flowCenterApi, 'copy').mockResolvedValue('flow-own')
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
     await wrapper.get('.ssw-row-main').trigger('contextmenu', { clientX: 10, clientY: 10 })
     await wrapper.get('[data-testid="source-menu-copy"]').trigger('click')
 
@@ -199,12 +201,17 @@ describe('SiteSourceSwitcher', () => {
 
     expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith({ sourceId: 'source-a', name: '原源_copy', url: 'https://example.com', flag: 1 })
     expect(sourceApi.changeSite).toHaveBeenCalledWith(['source-new'], 'site-a')
-    expect(flowCenterApi.bindSources).toHaveBeenCalledWith(['source-new'], 'flow-1')
+    // 0930：新增配置 = 连流程一起复制（节点配置挂在流程上），新源绑到复制出的流程，不挂原流程
+    expect(copyFlow).toHaveBeenCalledWith('flow-1', '原源_copy-流程')
+    expect(flowCenterApi.bindSources).toHaveBeenCalledWith(['source-new'], 'flow-own')
+    expect(flowCenterApi.bindSources).not.toHaveBeenCalledWith(['source-new'], 'flow-1')
     expect(wrapper.find('[data-testid="dup-source-dialog"]').exists()).toBe(false)
   })
 
-  it('右键复制源：选「复用原配置」时 flag=0', async () => {
+  it('右键复制源：选「复用原配置」时 flag=0，新源挂原源的流程、不复制流程', async () => {
     const wrapper = await createWrapper()
+    vi.mocked(sourceApi.sourceDetail).mockResolvedValue({ ...source, flowId: 'flow-1' })
+    const copyFlow = vi.spyOn(flowCenterApi, 'copy')
     await wrapper.get('.ssw-row-main').trigger('contextmenu', { clientX: 10, clientY: 10 })
     await wrapper.get('[data-testid="source-menu-copy"]').trigger('click')
     await wrapper.get('[data-testid="dup-source-mode-reuse"]').setValue(true)
@@ -212,6 +219,8 @@ describe('SiteSourceSwitcher', () => {
     await flushPromises()
 
     expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'source-a', flag: 0 }))
+    expect(copyFlow).not.toHaveBeenCalled()
+    expect(flowCenterApi.bindSources).toHaveBeenCalledWith(['source-new'], 'flow-1')
   })
 
   it('源行只负责进入详情，发起抓取收进右键菜单', async () => {
