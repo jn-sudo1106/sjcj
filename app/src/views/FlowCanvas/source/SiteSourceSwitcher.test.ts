@@ -185,6 +185,35 @@ describe('SiteSourceSwitcher', () => {
     expect(sourceApi.sendSnatchWithParam).toHaveBeenCalledWith(expect.objectContaining({ ids: [source.sourceId] }))
   })
 
+  // 0930 右键「复制源」：迁自旧平台「制作源+配置副本（flag=1）/ 仅制作源副本（flag=0）」
+  it('右键复制源：默认新增一套配置（flag=1），名称默认「原名_copy」，复制后归入本网站并挂原源的流程', async () => {
+    const wrapper = await createWrapper()
+    vi.mocked(sourceApi.sourceDetail).mockResolvedValue({ ...source, flowId: 'flow-1' })
+    await wrapper.get('.ssw-row-main').trigger('contextmenu', { clientX: 10, clientY: 10 })
+    await wrapper.get('[data-testid="source-menu-copy"]').trigger('click')
+
+    expect((wrapper.get('[data-testid="dup-source-name"]').element as HTMLInputElement).value).toBe('原源_copy')
+    expect((wrapper.get('[data-testid="dup-source-url"]').element as HTMLInputElement).value).toBe('https://example.com')
+    await wrapper.get('[data-testid="dup-source-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith({ sourceId: 'source-a', name: '原源_copy', url: 'https://example.com', flag: 1 })
+    expect(sourceApi.changeSite).toHaveBeenCalledWith(['source-new'], 'site-a')
+    expect(flowCenterApi.bindSources).toHaveBeenCalledWith(['source-new'], 'flow-1')
+    expect(wrapper.find('[data-testid="dup-source-dialog"]').exists()).toBe(false)
+  })
+
+  it('右键复制源：选「复用原配置」时 flag=0', async () => {
+    const wrapper = await createWrapper()
+    await wrapper.get('.ssw-row-main').trigger('contextmenu', { clientX: 10, clientY: 10 })
+    await wrapper.get('[data-testid="source-menu-copy"]').trigger('click')
+    await wrapper.get('[data-testid="dup-source-mode-reuse"]').setValue(true)
+    await wrapper.get('[data-testid="dup-source-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'source-a', flag: 0 }))
+  })
+
   it('源行只负责进入详情，发起抓取收进右键菜单', async () => {
     const wrapper = await createWrapper()
 

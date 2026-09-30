@@ -588,6 +588,99 @@ async function submitParamSource() {
   if (added) emit('added', added)
 }
 
+/**
+ * 复制源并放进本网站、挂到原源的流程（添加源「按模板源」与右键「复制源」共用，0930 抽出）。
+ *
+ * 旧平台 `copySource`（flag=1「制作源+配置副本」/ flag=0「仅制作源副本」即复用原配置）
+ * 只复制源和配置，**不归网站、不挂流程**，所以后面补两步：
+ *   ② changeSite 归入当前网站；
+ *   ③（0903 Y8-6）关联到**被复制源所属的流程**——0903 H01 之后配置挂在流程上、执行按 FLOW_ID 反查
+ *      （H1 答复），不补这一步新源就是没有流程的孤儿。
+ * **三步递进，任一步失败都不回滚前面的**（Y8-7）：源已经建出来了，回滚等于删源，
+ * 风险比留着一个待手工关联的源高得多。所以失败只提示、不抛错。成功返回新源 ID，失败返回 null。
+ */
+async function copySourceIntoSite(from: Source, target: { name: string; url: string }, flag: 0 | 1): Promise<string | null> {
+  const what = flag === 1 ? '及配置' : '（复用原配置）'
+  try {
+    const copied = await sourceApi.copySourceAndLocate({ sourceId: from.sourceId, name: target.name, url: target.url, flag })
+    if (!copied.ok) {
+      ElMessage.warning(copied.message)
+      return null
+    }
+    const bind = await sourceApi.changeSite([copied.sourceId], props.siteId)
+    if (!bind.ok) {
+      ElMessage.warning(bind.message || `源已复制（#${copied.sourceId}），但未能关联到当前网站，请用「导入已有源」`)
+      return null
+    }
+    // 被复制源的 flowId：列表接口（site/sources、sourcePaged）**不保证**带这个字段，
+    // 但 sourceDetail 一定带（2026-09-04 实测 430016824 → flowId 1400935）。所以列表上
+    // 拿不到就回查一次详情，而不是据此判定"这个源没有流程"——那会让第三步静默跳过。
+    let fromFlowId = from.flowId
+    if (ENABLE_SOURCE_COPY_BIND_FLOW && !fromFlowId) {
+      fromFlowId = (await sourceApi.sourceDetail(from.sourceId).catch(() => null))?.flowId
+    }
+    if (!ENABLE_SOURCE_COPY_BIND_FLOW) {
+      ElMessage.success(`已复制源「${target.name}」${what}`)
+    } else if (!fromFlowId) {
+      // sourceDetail/sourcePaged 都已返回 flowId（2026-09-04 实测），缺失只可能是这个源
+      // 本来就没关联流程——那就没有可关联的目标，不是错误。
+      ElMessage.success(`已复制源「${target.name}」${what}（被复制源未关联流程，新源也未关联）`)
+    } else {
+      const bound = await flowCenterApi.bindSources([copied.sourceId], fromFlowId)
+      if (bound.ok) {
+        ElMessage.success(`已复制源「${target.name}」${what}，并关联到流程 #${fromFlowId}`)
+      } else {
+        ElMessage.warning(
+          `源已复制并归入本网站（#${copied.sourceId}），但**未能关联到流程 #${fromFlowId}**`
+          + `（${bound.message || '原因未知'}），可在流程中心手动关联`,
+        )
+      }
+    }
+    return copied.sourceId
+  } catch (error) {
+    ElMessage.error(`复制源失败：${error instanceof Error ? error.message : String(error)}`)
+    return null
+  }
+}
+
+// ---- 源右键：复制源（0930，迁自旧平台 SourceList「变更 → 制作源+配置副本 / 仅制作源副本」）----
+// 旧平台两个菜单项合成一个，弹框里二选一，用词与复制流程一致（新增一套配置 / 复用原配置）。
+const copyDlg = reactive({ show: false, source: null as Source | null, name: '', url: '', mode: 'new' as 'new' | 'reuse', saving: false })
+function openCopyDialog(s: Source) {
+  closeRowMenu()
+  copyDlg.source = s
+  copyDlg.name = `${s.name}_copy`
+  copyDlg.url = s.url ?? ''
+  copyDlg.mode = 'new'
+  copyDlg.show = true
+}
+function closeCopyDialog() {
+  copyDlg.show = false
+  copyDlg.source = null
+}
+async function submitCopy() {
+  const s = copyDlg.source
+  const name = copyDlg.name.trim()
+  if (!s || copyDlg.saving) return
+  if (!name) {
+    ElMessage.warning('请填写新源名称')
+    return
+  }
+  copyDlg.saving = true
+  try {
+    // URL 留空与添加源同口径补占位（后端 copySource 同样有必填校验）
+    const url = urlOrPlaceholder(copyDlg.url, `${props.siteId}-${Date.now().toString(36)}`)
+    const newId = await copySourceIntoSite(s, { name, url }, copyDlg.mode === 'new' ? 1 : 0)
+    if (!newId) return
+    closeCopyDialog()
+    await load(true)
+    const added = children.value.find((c) => c.sourceId === newId)
+    if (added) emit('added', added)
+  } finally {
+    copyDlg.saving = false
+  }
+}
+
 async function submitAdd() {
   if (addDlg.kind === 'param') {
     await submitParamSource()
@@ -607,58 +700,9 @@ async function submitAdd() {
     return
   }
   if (selectedTemplate.value) {
-    try {
-      const copied = await sourceApi.copySourceAndLocate({
-        sourceId: selectedTemplate.value.sourceId,
-        name: target.name,
-        url: target.url,
-        flag: 1,
-      })
-      if (!copied.ok) {
-        ElMessage.warning(copied.message)
-        return
-      }
-      const bind = await sourceApi.changeSite([copied.sourceId], props.siteId)
-      if (!bind.ok) {
-        ElMessage.warning(bind.message || `源已复制（#${copied.sourceId}），但未能关联到当前网站，请用「导入已有源」`)
-        return
-      }
-      addedId = copied.sourceId
-      // 第三步（0903 Y8-6）：把新源关联到**被复制源所属的流程**。
-      // 前两步走的是旧平台的 copySource?flag=1（「制作源+配置副本」）——它复制的是源和配置，
-      // 并不会把新源挂到流程上。而 0903 H01 之后配置是挂在流程上的、执行按 FLOW_ID 反查
-      // （H1 答复），所以不补这一步，新源就是一个没有流程的孤儿。
-      //
-      // **三步递进，任一步失败都不回滚前面的**（Y8-7）：源已经建出来了，回滚等于删源，
-      // 风险比留着一个待手工关联的源高得多。所以这里失败只提示、不抛错。
-      // 被复制源的 flowId：列表接口（site/sources、sourcePaged）**不保证**带这个字段，
-      // 但 sourceDetail 一定带（2026-09-04 实测 430016824 → flowId 1400935）。所以列表上
-      // 拿不到就回查一次详情，而不是据此判定"这个源没有流程"——那会让第三步静默跳过。
-      let templateFlowId = selectedTemplate.value.flowId
-      if (ENABLE_SOURCE_COPY_BIND_FLOW && !templateFlowId) {
-        templateFlowId = (await sourceApi.sourceDetail(selectedTemplate.value.sourceId).catch(() => null))?.flowId
-      }
-      if (!ENABLE_SOURCE_COPY_BIND_FLOW) {
-        ElMessage.success(`已复制源「${target.name}」及配置`)
-      } else if (!templateFlowId) {
-        // sourceDetail/sourcePaged 都已返回 flowId（2026-09-04 实测），缺失只可能是这个源
-        // 本来就没关联流程——那就没有可关联的目标，不是错误。
-        ElMessage.success(`已复制源「${target.name}」及配置（被复制源未关联流程，新源也未关联）`)
-      } else {
-        const bound = await flowCenterApi.bindSources([copied.sourceId], templateFlowId)
-        if (bound.ok) {
-          ElMessage.success(`已复制源「${target.name}」及配置，并关联到流程 #${templateFlowId}`)
-        } else {
-          ElMessage.warning(
-            `源已复制并归入本网站（#${copied.sourceId}），但**未能关联到流程 #${templateFlowId}**`
-            + `（${bound.message || '原因未知'}），可在流程中心手动关联`,
-          )
-        }
-      }
-    } catch (error) {
-      ElMessage.error(`复制源失败：${error instanceof Error ? error.message : String(error)}`)
-      return
-    }
+    const copiedId = await copySourceIntoSite(selectedTemplate.value, target, 1)
+    if (!copiedId) return
+    addedId = copiedId
   } else {
     const res = await siteApi.sourceAdd(
       props.siteId,
@@ -1209,6 +1253,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
       @click="launchFromMenu"
     >发起抓取</button>
     <button type="button" data-testid="source-menu-snatch-queue" @click="sendSnatchTestFromMenu">发指定队列</button>
+    <button type="button" data-testid="source-menu-copy" @click="openCopyDialog(rowMenu.source!)">复制源…</button>
     <button type="button" data-testid="source-menu-move" @click="openMoveDialog(rowMenu.source!)">更换网站…</button>
     <button type="button" class="danger" data-testid="source-menu-delete" @click="deleteFromMenu">删除源</button>
   </div>
@@ -1258,7 +1303,7 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
         </el-select>
         <p class="ssw-move-warn">一个源只能属于一个网站：移动后本网站将不再包含该源。</p>
       </div>
-      <div class="ssw-add-footer">
+      <div class="ssw-add-actions">
         <button class="rc-btn" type="button" @click="closeMoveDialog">取消</button>
         <button
           class="rc-btn primary"
@@ -1267,6 +1312,42 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
           :disabled="!moveDlg.targetSiteId || moveDlg.saving"
           @click="submitMove"
         >{{ moveDlg.saving ? '处理中…' : '确认' }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 复制源（0930）：新名称 / URL / 配置方式；新源归入本网站并挂到原源的流程 -->
+  <div v-if="copyDlg.show" class="ssw-add-backdrop" @click.self="closeCopyDialog">
+    <div class="ssw-add-card" data-testid="dup-source-dialog" @click.stop>
+      <div class="ssw-add-header"><b>复制源</b></div>
+      <div class="ssw-move-body">
+        <p class="ssw-move-src">源「{{ copyDlg.source?.name }}」（ID {{ copyDlg.source?.sourceId }}）</p>
+        <label class="ssw-field-label">新源名称 <em>*</em></label>
+        <input v-model="copyDlg.name" class="ssw-add-input" data-testid="dup-source-name" placeholder="请输入新源名称" />
+        <label class="ssw-field-label">新源 URL</label>
+        <input v-model="copyDlg.url" class="ssw-add-input" data-testid="dup-source-url" placeholder="请输入新源 URL" />
+        <label class="ssw-field-label">配置</label>
+        <div class="ssw-copy-modes">
+          <label class="ssw-copy-mode" :class="{ active: copyDlg.mode === 'new' }">
+            <input v-model="copyDlg.mode" type="radio" value="new" data-testid="dup-source-mode-new" />
+            <span><b>新增一套配置</b><small>复制源的同时复制一份配置，修改新源配置不影响原源（推荐）</small></span>
+          </label>
+          <label class="ssw-copy-mode" :class="{ active: copyDlg.mode === 'reuse' }">
+            <input v-model="copyDlg.mode" type="radio" value="reuse" data-testid="dup-source-mode-reuse" />
+            <span><b>复用原配置</b><small>只复制源，新源仍用原来的配置，修改任一边两边会一起变</small></span>
+          </label>
+        </div>
+        <p class="ssw-move-warn">新源会放进当前网站，并关联到原源所属的流程。</p>
+      </div>
+      <div class="ssw-add-actions">
+        <button class="rc-btn" type="button" @click="closeCopyDialog">取消</button>
+        <button
+          class="rc-btn primary"
+          type="button"
+          data-testid="dup-source-submit"
+          :disabled="!copyDlg.name.trim() || copyDlg.saving"
+          @click="submitCopy"
+        >{{ copyDlg.saving ? '复制中…' : '复制' }}</button>
       </div>
     </div>
   </div>
@@ -1680,6 +1761,13 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
 .ssw-row-menu button.danger { color: #b91c1c; }
 .ssw-row-menu button.danger:hover:not(:disabled) { background: var(--rc-error-bg); color: #b91c1c; }
 
+/* 复制源弹窗的配置二选一：与流程复制确认框（tokens.css .copy-flow-options）同一套外观 */
+.ssw-copy-modes { display: flex; flex-direction: column; gap: 8px; }
+.ssw-copy-mode { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border: 1px solid var(--rc-border); border-radius: 6px; cursor: pointer; }
+.ssw-copy-mode.active { border-color: #bfdbfe; background: var(--rc-primary-bg); }
+.ssw-copy-mode input { margin-top: 3px; }
+.ssw-copy-mode span { display: flex; flex-direction: column; gap: 2px; font-size: 13px; line-height: 1.5; }
+.ssw-copy-mode small { font-size: 12px; color: var(--rc-muted); }
 /* 更换网站弹窗：内容很短，不用 ssw-add-card 那套大表单排版 */
 .ssw-move-body { display: grid; gap: 8px; margin-bottom: 20px; }
 .ssw-move-src { margin: 0; color: var(--rc-text); font-size: 14px; font-weight: 600; }
