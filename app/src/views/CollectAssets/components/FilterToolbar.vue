@@ -17,6 +17,9 @@ const props = defineProps<{
   view: 'card' | 'table'
   /** 只看有异常源的网站（0924-01）。原「全部状态」下拉去掉后，改由点「出错源」标签切换 */
   errorOnly?: boolean
+  /** 没有源的网站数（0930-01：默认不显示，点「空网站」标签切换成只看它们） */
+  emptyCount?: number
+  emptyOnly?: boolean
   /** 源列表视图（0924-06）：网站维度的控件都不适用（新增网站、搜索、分类、标签、统计），
    *  只剩视图切换与刷新，且不再是单独一张卡片——嵌进源列表筛选栏的操作区，两条栏并成一条 */
   sourceMode?: boolean
@@ -29,6 +32,8 @@ const emit = defineEmits<{
   'setView': [value: 'card' | 'table']
   /** 点「出错源」：在「只看有异常源的网站」与全部之间切换 */
   'toggleErrorOnly': []
+  /** 点「空网站」：在「只看没有源的网站」与默认（不显示空网站）之间切换 */
+  'toggleEmptyOnly': []
   'filterChange': []
   'refresh': []
   /** 新建网站（2026-09-18）：对象级操作，与顶栏那个全局的「新建采集」分层 */
@@ -132,7 +137,7 @@ async function loadCategoryChildren(
         type="info"
         effect="plain"
         class="stat-tag"
-        :title="filtered && stats.siteTotal ? `当前筛选命中 ${total} 个，全站 ${stats.siteTotal} 个` : '有源的网站数（还没有源的网站不显示，按网站名搜索可以找到）'"
+        :title="filtered && stats.siteTotal ? `当前筛选命中 ${total} 个，全站 ${stats.siteTotal} 个` : '有源的网站数（没有源的网站默认不显示，点「空网站」查看）'"
       >网站 <b>{{ total }}</b><template v-if="filtered && stats.siteTotal"> / {{ stats.siteTotal }}</template></el-tag>
       <el-tag type="info" effect="plain" class="stat-tag" :title="filtered ? '当前筛选命中网站下的源数' : '全部网站下的源数'">源 <b>{{ stats.total }}</b></el-tag>
       <!-- 「出错源」兼作筛选开关（0924-01）：会上去掉了「全部状态」下拉，但总览「异常」下钻
@@ -155,6 +160,24 @@ async function loadCategoryChildren(
         @close="emit('toggleErrorOnly')"
         @keydown.enter.prevent="emit('toggleErrorOnly')"
       >出错源 <b>{{ stats.error }}</b></el-tag>
+      <!-- 「空网站」同「出错源」做法（0930-01）：没有源的网站默认不显示，点这个数字只看它们 -->
+      <el-tag
+        v-if="(emptyCount ?? 0) > 0 || emptyOnly"
+        type="info"
+        class="stat-tag stat-toggle stat-empty"
+        :class="{ on: emptyOnly }"
+        :effect="emptyOnly ? 'light' : 'plain'"
+        :closable="emptyOnly"
+        disable-transitions
+        role="button"
+        tabindex="0"
+        data-testid="stat-empty-toggle"
+        :aria-pressed="emptyOnly ? 'true' : 'false'"
+        :title="emptyOnly ? '正在只看没有源的网站，点击恢复' : '没有源的网站默认不显示，点击只看它们'"
+        @click="emit('toggleEmptyOnly')"
+        @close="emit('toggleEmptyOnly')"
+        @keydown.enter.prevent="emit('toggleEmptyOnly')"
+      >空网站 <b>{{ emptyCount ?? 0 }}</b></el-tag>
       <el-tag v-if="stats.notify > 0" type="warning" class="stat-tag" :title="filtered ? '当前筛选命中的网站里，有告警源的网站数' : '有告警源的网站数'">告警网站 <b>{{ stats.notify }}</b></el-tag>
     </div>
     <span v-if="!sourceMode" class="ca-spacer" />
@@ -238,6 +261,7 @@ async function loadCategoryChildren(
 .ca-stats :deep(.el-tag) { padding: 0 6px; }
 .stat-toggle { cursor: pointer; }
 .stat-toggle.on { border-color: var(--el-color-danger); }
+.stat-empty.on { border-color: var(--el-color-info); }
 .stat-tag b { font-weight: 800; font-size: 13px; margin-left: 3px; }
 .ca-spacer { flex: 1; min-width: 12px; }
 

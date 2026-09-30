@@ -135,6 +135,57 @@ describe('SourceTab 加载与初始筛选', () => {
     srcSpy.mockRestore()
   })
 
+  it('点「空网站」只看没有源的网站，再点恢复；与「出错源」互斥', async () => {
+    const spy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({
+      total: 3,
+      list: [
+        { siteId: 's-has', name: '有源', sourceCount: 3, errorCount: 1, updatedAt: '2026-09-20 10:00:00', tags: [] },
+        { siteId: 's-empty', name: '空站', sourceCount: 0, errorCount: 0, updatedAt: '2026-09-21 10:00:00', tags: [] },
+        { siteId: 's-empty2', name: '空站2', sourceCount: 0, errorCount: 0, updatedAt: '2026-09-19 10:00:00', tags: [] },
+      ] as never,
+    })
+    const { wrapper } = await mountAt()
+    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
+    const shown = () => (wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]).map((s) => s.siteId)
+    expect(toolbar.props('emptyCount')).toBe(2)
+    expect(toolbar.props('emptyOnly')).toBe(false)
+
+    toolbar.vm.$emit('toggleEmptyOnly')
+    await flushPromises()
+    expect(toolbar.props('emptyOnly')).toBe(true)
+    expect(shown()).toEqual(['s-empty', 's-empty2'])
+    expect(toolbar.props('filtered')).toBe(true)
+
+    // 开「出错源」会关掉「空网站」，两个一起开必然是空列表
+    toolbar.vm.$emit('toggleErrorOnly')
+    await flushPromises()
+    expect(toolbar.props('emptyOnly')).toBe(false)
+    expect(shown()).toEqual(['s-has'])
+
+    toolbar.vm.$emit('toggleEmptyOnly')
+    await flushPromises()
+    expect(toolbar.props('errorOnly')).toBe(false)
+    toolbar.vm.$emit('toggleEmptyOnly')
+    await flushPromises()
+    expect(shown()).toEqual(['s-has'])
+    spy.mockRestore()
+  })
+
+  it('本次新建的网站还没有源也照常显示，方便马上点进去加源', async () => {
+    const list = [{ siteId: 's-has', name: '有源', sourceCount: 3, errorCount: 0, updatedAt: '2026-09-20 10:00:00', tags: [] }]
+    const spy = vi.spyOn(siteApi, 'sitePaged').mockImplementation(async () => ({ total: list.length, list: [...list] }) as never)
+    const { wrapper } = await mountAt()
+    const shown = () => (wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]).map((s) => s.siteId)
+
+    list.push({ siteId: 's-new', name: '新站', sourceCount: 0, errorCount: 0, updatedAt: '2026-09-30 10:00:00', tags: [] })
+    wrapper.findComponent({ name: 'FilterToolbar' }).vm.$emit('createSite')
+    await flushPromises()
+    wrapper.findComponent({ name: 'SiteEditorDialog' }).vm.$emit('saved', 's-new')
+    await flushPromises()
+    expect(shown()).toEqual(['s-new', 's-has'])
+    spy.mockRestore()
+  })
+
 })
 
 describe('SourceTab 筛选状态', () => {

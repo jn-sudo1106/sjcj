@@ -60,6 +60,7 @@ watch(() => props.scope, () => applyView())
  */
 function toggleErrorOnly() {
   stateFilter.value = stateFilter.value === 'error' ? 'all' : 'error'
+  if (stateFilter.value === 'error') emptyOnly.value = false
   page.value = 1
   applyView()
 }
@@ -79,8 +80,26 @@ const hasFilter = computed(() => !!keyword.value.trim()
   || categoryFilter.value.length > 0
   || !!tagFilter.value
   || stateFilter.value !== 'all'
+  || emptyOnly.value
   || favOnly.value
   || recentOnly.value)
+
+/**
+ * 只看没有源的网站（0930-01）。网站列表默认不显示空网站（预建的空目录站），
+ * 要找它们就点工具条上的「空网站 N」。与「出错源」互斥——空网站不可能有出错源，两个一起开必然是空列表。
+ */
+const emptyOnly = ref(false)
+function toggleEmptyOnly() {
+  emptyOnly.value = !emptyOnly.value
+  if (emptyOnly.value) stateFilter.value = 'all'
+  page.value = 1
+  applyView()
+}
+/** 本次在这里新建的网站：刚建好还没有源，但要照常显示、方便马上点进去加源，不然看着像没建成功 */
+const justCreatedSiteIds = new Set<string>()
+const isEmptySite = (site: Site) => (site.sourceCount || 0) <= 0
+/** 当前筛选（关键词 / 分类 / 标签）下没有源的网站数，「空网站」标签上的数字 */
+const emptyCount = ref(0)
 
 // ---- 网站列表 / 分页 ----
 const sites = ref<Site[]>([])
@@ -153,8 +172,12 @@ const toolbarStats = computed(() => ({ ...(listStats.value ?? stats), siteTotal:
 function applyView() {
   let base = fetchedSites.value
   // 0930-01：网站列表不显示一个源都没有的网站（预建的空目录站，会上看着是一片「暂无源」）。
-  // 按网站名搜索时照样显示，否则刚新建、还没挂源的网站就找不到了；收藏 / 最近打开是用户自己点过的，也不藏。
-  if (props.scope === 'all' && !keyword.value.trim()) base = base.filter((site) => (site.sourceCount || 0) > 0)
+  // 点「空网站」只看它们；按网站名搜索、本次新建的照样显示；收藏 / 最近打开是用户自己点过的，也不藏。
+  if (props.scope === 'all') {
+    emptyCount.value = base.filter(isEmptySite).length
+    if (emptyOnly.value) base = base.filter(isEmptySite)
+    else if (!keyword.value.trim()) base = base.filter((site) => !isEmptySite(site) || justCreatedSiteIds.has(site.siteId))
+  }
   if (stateFilter.value === 'error') base = base.filter((site) => (site.errorCount || 0) > 0)
   if (favOnly.value) base = base.filter((site) => favoriteSiteIds.value.has(site.siteId))
   else if (recentOnly.value) base = base.filter((site) => recentSiteIds.value.includes(site.siteId))
@@ -383,7 +406,10 @@ async function onEditorSaved(newSiteId?: string) {
   // 新建成功后**不自动跳进新网站**：建站常常是连着建好几个，跳走反而打断。
   // 回到第一页即可——默认排序是「最近修改」，新网站就在最前面，点卡片就能进去灌源。
   clearCollectAssetsCache()
-  if (newSiteId) page.value = 1
+  if (newSiteId) {
+    justCreatedSiteIds.add(newSiteId)
+    page.value = 1
+  }
   await loadList({ force: true })
 }
 
@@ -437,6 +463,8 @@ onUnmounted(() => {
       v-model:category-filter="categoryFilter"
       v-model:tag-filter="tagFilter"
       :error-only="stateFilter === 'error'"
+      :empty-count="scope === 'all' ? emptyCount : 0"
+      :empty-only="emptyOnly"
       :filtered="hasFilter"
       :categories="categories"
       :all-tags="allTags"
@@ -445,6 +473,7 @@ onUnmounted(() => {
       :view="view"
       @filter-change="resetAndLoad"
       @toggle-error-only="toggleErrorOnly"
+      @toggle-empty-only="toggleEmptyOnly"
       @refresh="onToolbarRefresh"
       @set-view="setView"
       @create-site="openSiteCreator"
