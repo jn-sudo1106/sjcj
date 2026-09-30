@@ -12,7 +12,7 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { flowCenterApi, sourceApi, type FlowRecord, type SourceCategory } from '@/api'
-import { Delete, Edit, Link, Lock, Star, StarFilled, Unlock } from '@element-plus/icons-vue'
+import { CopyDocument, Delete, Edit, Link, Lock, Star, StarFilled, Unlock } from '@element-plus/icons-vue'
 import { useUiStore } from '@/stores/ui'
 import { useLaunchJobStore } from '@/stores/launchJob'
 import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
@@ -29,8 +29,33 @@ const loading = ref(false)
 const loadError = ref('')
 const query = ref('')
 // 排序在服务端。原来的「节点数最多」删了：节点数要解析 flowConf，而列表接口不返回它，
-// 那个选项分页之后只能对当前页做局部排序，跨页看是乱的。改成后端排序白名单里真有的两项。
-const sortBy = ref<'recent' | 'sourceCnt'>('recent')
+// 那个选项分页之后只能对当前页做局部排序，跨页看是乱的。只用后端排序白名单里真有的字段。
+// 默认创建时间倒序（2026-09-29 用户要求）；创建/更新时间可在表头点选正序或倒序，与下拉框同一份状态。
+type SortField = 'createDt' | 'updateDt' | 'sourceCnt'
+const sortField = ref<SortField>('createDt')
+const sortOrder = ref<'asc' | 'desc'>('desc')
+const sortKey = computed({
+  get: () => `${sortField.value}-${sortOrder.value}`,
+  set: (v: string) => {
+    const [field, order] = v.split('-') as [SortField, 'asc' | 'desc']
+    sortField.value = field
+    sortOrder.value = order
+  },
+})
+/** 表头点排序：点新列从倒序开始，再点同一列在倒序/正序之间切换 */
+function toggleSort(field: 'createDt' | 'updateDt') {
+  if (sortField.value === field) sortOrder.value = sortOrder.value === 'desc' ? 'asc' : 'desc'
+  else {
+    sortField.value = field
+    sortOrder.value = 'desc'
+  }
+  search()
+}
+/** 表头排序态 class，对齐 el-table 的 ascending / descending（当前方向的小三角高亮） */
+function sortClass(field: 'createDt' | 'updateDt') {
+  if (sortField.value !== field) return ''
+  return sortOrder.value === 'desc' ? 'descending' : 'ascending'
+}
 // 范围：全部 / 仅模板 / 仅普通流程。**服务端过滤**（flowPaged.templateFlag，2026-09-04 实测生效）。
 // 不要改成本地筛——分页之后本地只能筛当前这一页，跨页结果是错的（见下方"搜索、排序、翻页全在服务端"那段）。
 const scope = ref<'all' | 'template' | 'normal'>('all')
@@ -123,6 +148,17 @@ const size = ref(20)
 const total = ref(0)
 /** 请求序号：快速连点翻页时，作废先返回的旧响应，避免列表停在上一页的数据上 */
 let loadSeq = 0
+/**
+ * 搜索框纯数字（单个或逗号/空格分隔多个）按流程 ID 精确查，否则走 keywords 模糊查。
+ * 口径照旧平台 FlowList.buildQueryParams：单 ID → flowId，多 ID → ids。
+ */
+function searchCond(): { keywords?: string; flowIds?: string[] } {
+  const raw = query.value.trim()
+  if (!raw) return {}
+  const parts = raw.split(/[,，\s]+/).filter(Boolean)
+  if (parts.every((p) => /^\d+$/.test(p))) return { flowIds: parts }
+  return { keywords: raw }
+}
 async function load() {
   const reqId = ++loadSeq
   loading.value = true
@@ -139,9 +175,9 @@ async function load() {
     const result = await flowCenterApi.paged({
       page: page.value,
       size: size.value,
-      keywords: query.value.trim() || undefined,
-      field: sortBy.value === 'sourceCnt' ? 'sourceCnt' : 'updateDt',
-      order: 'desc',
+      ...searchCond(),
+      field: sortField.value,
+      order: sortOrder.value,
       onlyTemplate: scope.value === 'all' ? undefined : scope.value === 'template',
       categoryId: filterCategoryIds.value[0] || undefined,
       tag: filterTag.value.trim() || undefined,
@@ -177,9 +213,9 @@ async function loadWithMultiCategory(reqId: number) {
     const result = await flowCenterApi.paged({
       page: p,
       size: MULTI_FETCH_SIZE,
-      keywords: query.value.trim() || undefined,
-      field: sortBy.value === 'sourceCnt' ? 'sourceCnt' : 'updateDt',
-      order: 'desc',
+      ...searchCond(),
+      field: sortField.value,
+      order: sortOrder.value,
       onlyTemplate: scope.value === 'all' ? undefined : scope.value === 'template',
       tag: filterTag.value.trim() || undefined,
     })
@@ -188,10 +224,12 @@ async function loadWithMultiCategory(reqId: number) {
     if (all.length >= result.total || !result.list.length) break
   }
   const filtered = all.filter((f) => idSet.has(String(f.categoryId ?? '')))
-  if (sortBy.value === 'sourceCnt') {
-    filtered.sort((a, b) => (b.sourceCnt ?? 0) - (a.sourceCnt ?? 0))
+  const dir = sortOrder.value === 'desc' ? -1 : 1
+  if (sortField.value === 'sourceCnt') {
+    filtered.sort((a, b) => dir * ((a.sourceCnt ?? 0) - (b.sourceCnt ?? 0)))
   } else {
-    filtered.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+    const key = sortField.value === 'createDt' ? 'createdAt' : 'updatedAt'
+    filtered.sort((a, b) => dir * (a[key] || '').localeCompare(b[key] || ''))
   }
   total.value = filtered.length
   const maxPage = Math.max(1, Math.ceil(filtered.length / size.value))
@@ -214,7 +252,8 @@ function resetQuery() {
   filterCategoryIds.value = []
   filterTag.value = ''
   query.value = ''
-  sortBy.value = 'recent'
+  sortField.value = 'createDt'
+  sortOrder.value = 'desc'
   page.value = 1
   void load()
 }
@@ -417,6 +456,42 @@ async function createFromTemplate() {
     ElMessage.error(`从模板新建失败：${(e as Error)?.message ?? String(e)}`)
   } finally {
     templateForm.loading = false
+  }
+}
+
+/**
+ * 复制流程（迁自旧平台 FlowList「更多 → 复制流程」）：走 `flow/copyFlow`，复制流程与全部节点，
+ * 不复制关联源，新流程名为「原名_copy」。与旧平台的差异：旧平台复制后配置仍与原流程共享、
+ * 让用户自己去节点里「复制配置并替换」；这里按 0929 F2 红线（复制品的改动不得影响原流程）
+ * 复制后立即逐节点复制独立配置，与「从模板新建」同一条路径。
+ */
+const copyingFlowId = ref('')
+async function copyFlow(t: FlowRecord) {
+  if (copyingFlowId.value) return
+  try {
+    await ElMessageBox.confirm(
+      `将复制流程「${t.name}」（#${t.id}）及其全部节点，生成新流程「${t.name}_copy」，不复制关联源。`
+        + '复制完成后会自动为新流程的节点复制独立配置，之后修改新流程不会影响原流程。',
+      '复制流程',
+      { confirmButtonText: '复制', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  copyingFlowId.value = t.id
+  try {
+    const newId = await flowCenterApi.copy(t.id, `${t.name}_copy`)
+    const detaching = ElMessage({ message: '正在为新流程复制独立配置…', duration: 0 })
+    const detach = await detachCopiedConfigs(newId, { sourceFlowRef: `流程「${t.name}」` }).finally(() => detaching.close())
+    const created = await flowCenterApi.detail(newId)
+    if (created) replaceFlow(created)
+    else void load()
+    ElMessage.success(`已复制流程「${t.name}」，新流程 #${newId}`)
+    reportDetachResult(detach, '原流程')
+  } catch (e) {
+    ElMessage.error(`复制流程失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    copyingFlowId.value = ''
   }
 }
 
@@ -771,14 +846,17 @@ async function confirmApply() {
       <input
         v-model="query"
         class="fc-input fc-input-wide"
-        placeholder="流程名称 / 编码 / 描述 / 备注 / 标签"
+        placeholder="流程 ID / 名称 / 描述 / 备注 / 标签"
         aria-label="搜索流程"
         data-testid="flow-center-search"
         @keyup.enter="search"
       />
-      <select v-model="sortBy" class="fc-input" aria-label="排序" @change="search">
-        <option value="recent">最近修改</option>
-        <option value="sourceCnt">使用源数最多</option>
+      <select v-model="sortKey" class="fc-input" aria-label="排序" data-testid="flow-center-sort" @change="search">
+        <option value="createDt-desc">创建时间倒序</option>
+        <option value="createDt-asc">创建时间正序</option>
+        <option value="updateDt-desc">更新时间倒序</option>
+        <option value="updateDt-asc">更新时间正序</option>
+        <option value="sourceCnt-desc">使用源数最多</option>
       </select>
       <!-- 范围过滤在服务端（flowPaged.templateFlag），不是本地筛 -->
       <select v-model="scope" class="fc-input" aria-label="范围" data-testid="flow-center-scope" @change="search">
@@ -835,9 +913,17 @@ async function confirmApply() {
             <th style="width: 170px">分类 / 标签</th>
             <th style="width: 200px">描述</th>
             <th style="width: 110px">使用源数</th>
-            <th style="width: 140px">创建时间</th>
-            <th style="width: 140px">更新时间</th>
-            <th style="width: 130px">操作</th>
+            <th style="width: 140px">
+              <button class="fc-sort-th" :class="sortClass('createDt')" type="button" data-testid="flow-sort-create" @click="toggleSort('createDt')">
+                创建时间<span class="fc-caret"><i class="fc-caret-up" /><i class="fc-caret-down" /></span>
+              </button>
+            </th>
+            <th style="width: 140px">
+              <button class="fc-sort-th" :class="sortClass('updateDt')" type="button" data-testid="flow-sort-update" @click="toggleSort('updateDt')">
+                更新时间<span class="fc-caret"><i class="fc-caret-up" /><i class="fc-caret-down" /></span>
+              </button>
+            </th>
+            <th style="width: 156px">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -901,6 +987,19 @@ async function confirmApply() {
                 <el-tooltip content="编辑流程" placement="top" :show-after="120">
                   <button class="fc-icon-btn" type="button" title="编辑流程" aria-label="编辑流程" @click.stop="openFlow(t)">
                     <Edit />
+                  </button>
+                </el-tooltip>
+                <el-tooltip content="复制流程" placement="top" :show-after="120">
+                  <button
+                    class="fc-icon-btn"
+                    type="button"
+                    data-testid="flow-copy"
+                    title="复制流程"
+                    aria-label="复制流程"
+                    :disabled="!!copyingFlowId"
+                    @click.stop="copyFlow(t)"
+                  >
+                    <CopyDocument />
                   </button>
                 </el-tooltip>
                 <el-tooltip content="关联到源" placement="top" :show-after="120">
@@ -1169,6 +1268,16 @@ async function confirmApply() {
 .fc-icon-btn:hover { background: var(--rc-primary-bg, #eff6ff); color: var(--rc-primary, #2563eb); }
 .fc-icon-btn.on { color: var(--rc-primary, #2563eb); }
 .fc-icon-btn.danger:hover { background: #fef3f2; color: var(--rc-error, #d92d20); }
+.fc-icon-btn:disabled { opacity: .4; cursor: not-allowed; }
+/* 可排序表头：照 el-table 的 .caret-wrapper / .sort-caret 画上下两个小三角，文字不变色，
+   只有当前方向的三角用主色——与数据中心、源/表选择等 el-table sortable 列一致。 */
+.fc-sort-th { display: inline-flex; align-items: center; padding: 0; border: 0; background: transparent; font: inherit; color: inherit; cursor: pointer; }
+.fc-caret { position: relative; display: inline-flex; flex-direction: column; align-items: center; width: 24px; height: 14px; vertical-align: middle; }
+.fc-caret i { position: absolute; left: 7px; width: 0; height: 0; border: 5px solid transparent; }
+.fc-caret .fc-caret-up { top: -5px; border-bottom-color: var(--el-text-color-placeholder, #a8abb2); }
+.fc-caret .fc-caret-down { bottom: -3px; border-top-color: var(--el-text-color-placeholder, #a8abb2); }
+.fc-sort-th.ascending .fc-caret .fc-caret-up { border-bottom-color: var(--el-color-primary, #409eff); }
+.fc-sort-th.descending .fc-caret .fc-caret-down { border-top-color: var(--el-color-primary, #409eff); }
 .fc-icon-btn:focus-visible { outline: 2px solid var(--rc-primary, #2563eb); outline-offset: 1px; }
 .fc-shell { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
 .fc-back { align-self: flex-start; max-width: 100%; overflow: hidden; height: 28px; padding: 0 12px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-primary); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; }

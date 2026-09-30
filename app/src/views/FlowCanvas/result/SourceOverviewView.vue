@@ -337,6 +337,11 @@ function toggleSort(field: string) {
   }
   search()
 }
+/** 表头排序态 class，对齐 el-table 的 ascending / descending（当前方向的小三角高亮） */
+function sortClass(field: string) {
+  if (sortField.value !== field) return ''
+  return sortDirection.value === 'asc' ? 'ascending' : 'descending'
+}
 function sortLabel(field: string) {
   if (sortField.value !== field) return '未排序'
   return sortDirection.value === 'asc' ? '升序' : '降序'
@@ -1087,15 +1092,15 @@ watch(() => ui.sourceListRevision, () => {
                 @change="toggleAll"
               />
             </th>
-            <th><button class="sov-sort" type="button" data-testid="sort-source-id" :title="sortLabel('SOURCE_ID')" @click="toggleSort('SOURCE_ID')">源 ID <span>{{ sortField === 'SOURCE_ID' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕' }}</span></button></th>
+            <th><button class="sov-sort" :class="sortClass('SOURCE_ID')" type="button" data-testid="sort-source-id" :title="sortLabel('SOURCE_ID')" @click="toggleSort('SOURCE_ID')">源 ID<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th>源名称</th>
             <th v-if="crossSite">所属网站</th>
             <th>URL</th><th>主表</th>
             <th>标签</th>
-            <th><button class="sov-sort" type="button" data-testid="sort-data-cnt" :title="sortLabel('DATA_CNT')" @click="toggleSort('DATA_CNT')">数据 <span>{{ sortField === 'DATA_CNT' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕' }}</span></button></th>
+            <th><button class="sov-sort" :class="sortClass('DATA_CNT')" type="button" data-testid="sort-data-cnt" :title="sortLabel('DATA_CNT')" @click="toggleSort('DATA_CNT')">数据<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th>新入</th><th>成功</th>
-            <th><button class="sov-sort" type="button" data-testid="sort-last-task" :title="sortLabel('LAST_RUN')" @click="toggleSort('LAST_RUN')">最近任务 <span>{{ sortField === 'LAST_RUN' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕' }}</span></button></th>
-            <th><button class="sov-sort" type="button" data-testid="sort-last-success" :title="sortLabel('LAST_SUCCESS')" @click="toggleSort('LAST_SUCCESS')">最近成功 <span>{{ sortField === 'LAST_SUCCESS' ? (sortDirection === 'asc' ? '↑' : '↓') : '↕' }}</span></button></th>
+            <th><button class="sov-sort" :class="sortClass('LAST_RUN')" type="button" data-testid="sort-last-task" :title="sortLabel('LAST_RUN')" @click="toggleSort('LAST_RUN')">最近任务<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
+            <th><button class="sov-sort" :class="sortClass('LAST_SUCCESS')" type="button" data-testid="sort-last-success" :title="sortLabel('LAST_SUCCESS')" @click="toggleSort('LAST_SUCCESS')">最近成功<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th>状态</th><th>备注</th>
           </tr>
         </thead>
@@ -1319,7 +1324,14 @@ watch(() => ui.sourceListRevision, () => {
 .sov-state.error { background: #fef2f2; color: #dc2626; }
 .sov-state.muted { background: #f1f5f9; color: #64748b; }
 .sov-link { border: 0; background: transparent; color: var(--rc-primary); cursor: pointer; font-size: 12px; font-weight: 600; }
-.sov-sort { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; }
-.sov-sort span { color: #94a3b8; font-size: 11px; }
+/* 可排序表头：照 el-table 的 .caret-wrapper / .sort-caret 画上下两个小三角，文字不变色，
+   只有当前方向的三角用主色——与 el-table sortable 列及流程中心一致。 */
+.sov-sort { display: inline-flex; align-items: center; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; }
+.sov-caret { position: relative; display: inline-flex; flex-direction: column; align-items: center; width: 24px; height: 14px; vertical-align: middle; }
+.sov-caret i { position: absolute; left: 7px; width: 0; height: 0; border: 5px solid transparent; }
+.sov-caret .sov-caret-up { top: -5px; border-bottom-color: var(--el-text-color-placeholder, #a8abb2); }
+.sov-caret .sov-caret-down { bottom: -3px; border-top-color: var(--el-text-color-placeholder, #a8abb2); }
+.sov-sort.ascending .sov-caret .sov-caret-up { border-bottom-color: var(--el-color-primary, #409eff); }
+.sov-sort.descending .sov-caret .sov-caret-down { border-top-color: var(--el-color-primary, #409eff); }
 .sov-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--rc-border-soft); }
 </style>

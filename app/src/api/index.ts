@@ -2957,7 +2957,10 @@ export const flowCenterApi = {
      *  换成 `tags` 才真的筛，给测试流程打上标签后传 `tags` 得 1 条）。
      *  出入参不同名这种坑，写代码时按出参名猜必然踩。 */
     tag?: string
+    /** 按流程 ID 精确查（对齐旧平台 FlowList：单个传 `flowId`，多个逗号拼成 `ids`）。 */
+    flowIds?: string[]
   } = {}) => {
+    const ids = cond.flowIds ?? []
     const result = await request<unknown>('flow/flowPaged', cond, {
       method: 'POST',
       httpEndpoint: 'flow/flowPaged',
@@ -2970,6 +2973,8 @@ export const flowCenterApi = {
         templateFlag: cond.onlyTemplate === undefined ? undefined : (cond.onlyTemplate ? 1 : 0),
         categoryId: cond.categoryId || undefined,
         tags: cond.tag || undefined,
+        flowId: ids.length === 1 ? Number(ids[0]) : undefined,
+        ids: ids.length > 1 ? ids.join(',') : undefined,
       },
     })
     return flowPageFromLegacy(result)

@@ -842,13 +842,14 @@ describe('SourceOverviewView · 任务与成功时间排序', () => {
     await flushPromises()
 
     const btn = wrapper.get('[data-testid="sort-last-task"]')
-    expect(btn.text()).toContain('最近任务 ↕')
+    expect(btn.classes()).not.toContain('ascending')
+    expect(btn.classes()).not.toContain('descending')
     expect(btn.attributes('title')).toBe('未排序')
 
     // 1. 点击升序
     await btn.trigger('click')
     await flushPromises()
-    expect(btn.text()).toContain('最近任务 ↑')
+    expect(btn.classes()).toContain('ascending')
     expect(btn.attributes('title')).toBe('升序')
     expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
       field: 'LAST_RUN',
@@ -859,7 +860,7 @@ describe('SourceOverviewView · 任务与成功时间排序', () => {
     // 2. 再次点击降序
     await btn.trigger('click')
     await flushPromises()
-    expect(btn.text()).toContain('最近任务 ↓')
+    expect(btn.classes()).toContain('descending')
     expect(btn.attributes('title')).toBe('降序')
     expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
       field: 'LAST_RUN',
@@ -870,7 +871,8 @@ describe('SourceOverviewView · 任务与成功时间排序', () => {
     // 3. 第三次点击取消排序
     await btn.trigger('click')
     await flushPromises()
-    expect(btn.text()).toContain('最近任务 ↕')
+    expect(btn.classes()).not.toContain('ascending')
+    expect(btn.classes()).not.toContain('descending')
     expect(btn.attributes('title')).toBe('未排序')
     expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
       field: undefined,
@@ -885,13 +887,14 @@ describe('SourceOverviewView · 任务与成功时间排序', () => {
     await flushPromises()
 
     const btn = wrapper.get('[data-testid="sort-last-success"]')
-    expect(btn.text()).toContain('最近成功 ↕')
+    expect(btn.classes()).not.toContain('ascending')
+    expect(btn.classes()).not.toContain('descending')
     expect(btn.attributes('title')).toBe('未排序')
 
     // 1. 点击升序
     await btn.trigger('click')
     await flushPromises()
-    expect(btn.text()).toContain('最近成功 ↑')
+    expect(btn.classes()).toContain('ascending')
     expect(btn.attributes('title')).toBe('升序')
     expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
       field: 'LAST_SUCCESS',
@@ -902,7 +905,7 @@ describe('SourceOverviewView · 任务与成功时间排序', () => {
     // 2. 再次点击降序
     await btn.trigger('click')
     await flushPromises()
-    expect(btn.text()).toContain('最近成功 ↓')
+    expect(btn.classes()).toContain('descending')
     expect(btn.attributes('title')).toBe('降序')
     expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
       field: 'LAST_SUCCESS',
@@ -913,7 +916,8 @@ describe('SourceOverviewView · 任务与成功时间排序', () => {
     // 3. 第三次点击取消排序
     await btn.trigger('click')
     await flushPromises()
-    expect(btn.text()).toContain('最近成功 ↕')
+    expect(btn.classes()).not.toContain('ascending')
+    expect(btn.classes()).not.toContain('descending')
     expect(btn.attributes('title')).toBe('未排序')
     expect(page).toHaveBeenLastCalledWith(expect.objectContaining({
       field: undefined,

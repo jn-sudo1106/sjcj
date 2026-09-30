@@ -36,16 +36,16 @@ export interface ApplyTemplateOptions {
 }
 
 /** 配置去共享结果的用户提示（0929）：全部独立 / 部分失败仍共享，必须明示。 */
-export function reportDetachResult(detach: DetachResult | undefined) {
+export function reportDetachResult(detach: DetachResult | undefined, sourceLabel = '模板') {
   if (!detach) return
   if (!detach.ok) {
     ElMessage.warning(detach.message || '配置独立失败，请核对')
     return
   }
   if (detach.remainShared > 0) {
-    ElMessage.warning(`已为 ${detach.copied} 个节点复制独立配置；${detach.remainShared} 个节点配置复制失败，仍与模板共享，修改这些节点前请注意确认提示`)
+    ElMessage.warning(`已为 ${detach.copied} 个节点复制独立配置；${detach.remainShared} 个节点配置复制失败，仍与${sourceLabel}共享，修改这些节点前请注意确认提示`)
   } else if (detach.copied > 0) {
-    ElMessage.success(`已为 ${detach.copied} 个节点复制独立配置，与模板互不影响`)
+    ElMessage.success(`已为 ${detach.copied} 个节点复制独立配置，与${sourceLabel}互不影响`)
   }
 }
 

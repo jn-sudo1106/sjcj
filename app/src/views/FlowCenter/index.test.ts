@@ -199,7 +199,57 @@ describe('流程中心 · 列表', () => {
     await w.get('[data-testid="flow-center-reset"]').trigger('click')
     await flushPromises()
     expect((search(w).element as HTMLInputElement).value).toBe('')
-    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ page: 1, keywords: undefined, field: 'updateDt' }))
+    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ page: 1, field: 'createDt', order: 'desc' }))
+    expect(paged.mock.calls[0][0]?.keywords).toBeUndefined()
+    expect(paged.mock.calls[0][0]?.flowIds).toBeUndefined()
+  })
+
+  // 对齐旧平台 FlowList 的「流程ID」框：纯数字（单个或逗号/空格分隔多个）按 ID 精确查
+  it('纯数字按流程 ID 查，不当关键字', async () => {
+    const w = await mountCenter()
+    const paged = vi.mocked(flowCenterApi.paged)
+    await search(w).setValue('14010130， 1400976 1400991')
+    paged.mockClear()
+    await w.get('[data-testid="flow-center-query"]').trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ page: 1, flowIds: ['14010130', '1400976', '1400991'] }))
+    expect(paged.mock.calls[0][0]?.keywords).toBeUndefined()
+  })
+
+  it('数字夹杂文字仍按关键字查', async () => {
+    const w = await mountCenter()
+    const paged = vi.mocked(flowCenterApi.paged)
+    await search(w).setValue('2024 年报')
+    paged.mockClear()
+    await w.get('[data-testid="flow-center-query"]').trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ keywords: '2024 年报' }))
+    expect(paged.mock.calls[0][0]?.flowIds).toBeUndefined()
+  })
+
+  it('默认按创建时间倒序', async () => {
+    await mountCenter()
+    expect(flowCenterApi.paged).toHaveBeenCalledWith(expect.objectContaining({ field: 'createDt', order: 'desc' }))
+  })
+
+  it('表头点创建/更新时间切换正序倒序，下拉框同步', async () => {
+    const w = await mountCenter()
+    const paged = vi.mocked(flowCenterApi.paged)
+    const sortSelect = () => (w.get('[data-testid="flow-center-sort"]').element as HTMLSelectElement).value
+
+    await w.get('[data-testid="flow-sort-create"]').trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, field: 'createDt', order: 'asc' }))
+    expect(sortSelect()).toBe('createDt-asc')
+
+    await w.get('[data-testid="flow-sort-update"]').trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ field: 'updateDt', order: 'desc' }))
+
+    await w.get('[data-testid="flow-sort-update"]').trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ field: 'updateDt', order: 'asc' }))
+    expect(sortSelect()).toBe('updateDt-asc')
   })
 
   // cs_flow 没有版本列，读回来 version 就是 undefined——不能渲染成 vundefined
@@ -303,19 +353,19 @@ describe('流程中心 · 操作列', () => {
   const actions = (w: Awaited<ReturnType<typeof mountCenter>>) =>
     rows(w)[0].findAll('.fc-actions button').map((b) => b.attributes('title'))
 
-  it('操作列：编辑 / 关联到源 / 标记为模板 / 禁用流程 / 删除流程', async () => {
+  it('操作列：编辑 / 复制流程 / 关联到源 / 标记为模板 / 禁用流程 / 删除流程', async () => {
     const w = await mountCenter()
-    expect(actions(w)).toEqual(['编辑流程', '关联到源', '标记为模板', '禁用流程', '删除流程'])
+    expect(actions(w)).toEqual(['编辑流程', '复制流程', '关联到源', '标记为模板', '禁用流程', '删除流程'])
   })
 
   it('已是模板的行，按钮文案变成「取消模板」', async () => {
     const w = await mountCenter([{ ...FLOWS[0], isTemplate: true }])
-    expect(actions(w)).toEqual(['编辑流程', '关联到源', '取消模板标记', '禁用流程', '删除流程'])
+    expect(actions(w)).toEqual(['编辑流程', '复制流程', '关联到源', '取消模板标记', '禁用流程', '删除流程'])
   })
 
   it('已禁用的行：按钮变「启用流程」、行带禁用徽标', async () => {
     const w = await mountCenter([{ ...FLOWS[0], disabled: true }])
-    expect(actions(w)).toEqual(['编辑流程', '关联到源', '标记为模板', '启用流程', '删除流程'])
+    expect(actions(w)).toEqual(['编辑流程', '复制流程', '关联到源', '标记为模板', '启用流程', '删除流程'])
     expect(w.get('[data-testid="flow-disabled-badge"]').text()).toContain('已禁用')
   })
 
@@ -896,6 +946,31 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
     expect(save).not.toHaveBeenCalled()
   })
 
+  // 迁自旧平台「更多 → 复制流程」：确认后走 copyFlow（名为原名_copy），新流程直接打开
+  it('行内复制流程：确认后走 copyFlow 并打开新流程', async () => {
+    const w = await mountCenter()
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const copy = vi.spyOn(flowCenterApi, 'copy').mockResolvedValue('flow-99')
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({ ...FLOWS[0], id: 'flow-99', name: '新闻采集标准流程_copy' })
+
+    await w.findAll('[data-testid="flow-copy"]')[0].trigger('click')
+    await flushPromises()
+
+    expect(copy).toHaveBeenCalledWith('flow-10086', '新闻采集标准流程_copy')
+    expect((w.vm.$ as unknown as { setupState: { activeId: string } }).setupState.activeId).toBe('flow-99')
+  })
+
+  it('行内复制流程：取消确认不发请求', async () => {
+    const w = await mountCenter()
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    const copy = vi.spyOn(flowCenterApi, 'copy')
+
+    await w.findAll('[data-testid="flow-copy"]')[0].trigger('click')
+    await flushPromises()
+
+    expect(copy).not.toHaveBeenCalled()
+  })
+
   it('一个模板都没有时给出提示，不弹选择框', async () => {
     const w = await mountCenter()
     vi.spyOn(flowCenterApi, 'templates').mockResolvedValue([])
@@ -944,9 +1019,9 @@ describe('流程中心 · 分类树多选', () => {
   it('多选（≥2）改为前端拉全量本地筛：逐页请求不带 categoryId，命中分类的流程保留', async () => {
     // 三条流程分属三个分类；多选其中两个分类时，第三条被滤掉
     const flows = [
-      { ...FLOWS[0], id: 'f1', categoryId: 'c1', updatedAt: '2026-09-01 10:00' },
-      { ...FLOWS[0], id: 'f2', categoryId: 'c2', updatedAt: '2026-09-02 10:00' },
-      { ...FLOWS[0], id: 'f3', categoryId: 'c3', updatedAt: '2026-09-03 10:00' },
+      { ...FLOWS[0], id: 'f1', categoryId: 'c1', createdAt: '2026-09-01 10:00' },
+      { ...FLOWS[0], id: 'f2', categoryId: 'c2', createdAt: '2026-09-02 10:00' },
+      { ...FLOWS[0], id: 'f3', categoryId: 'c3', createdAt: '2026-09-03 10:00' },
     ] as FlowRecord[]
     const paged = vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 3, list: flows })
     const w = await mountCenter(flows)
@@ -962,7 +1037,7 @@ describe('流程中心 · 分类树多选', () => {
     expect(lastCall).toMatchObject({ page: 1, size: 100 })
     const rowIds = w.findAll('[data-testid="flow-center-row"]').map((r) => r.text())
     expect(rowIds.length).toBe(2)
-    expect(rowIds[0]).toContain('f2') // updateDt 倒序：c2 比 c1 新
+    expect(rowIds[0]).toContain('f2') // 默认 createDt 倒序：c2 比 c1 新
     expect(rowIds.some((t) => t.includes('f3'))).toBe(false)
   })
 
