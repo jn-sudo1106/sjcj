@@ -76,6 +76,29 @@ export const authGuard = async (to: { meta: Record<string, unknown>; path: strin
 
 router.beforeEach(authGuard)
 
+/** 按需加载的页面文件取不到（各浏览器报法不同）。 */
+export function isChunkLoadError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i.test(msg)
+}
+
+// 0930-08：部署是 rsync --delete，旧版本的页面文件会被删掉。部署前就开着的标签页再点一个
+// 还没加载过的页面（会上是 2806 的「系统设置」），取的是已删的旧文件，路由静默失败、看着就是"点不开"。
+// 遇到这种错误整页刷新到目标地址，拿新版本的文件。10 秒内同一地址只刷一次，防止真坏了时无限刷新。
+router.onError((err, to) => {
+  if (!isChunkLoadError(err)) return
+  const key = `chunk-reload:${to.fullPath}`
+  try {
+    const last = Number(sessionStorage.getItem(key) || 0)
+    if (Date.now() - last < 10_000) return
+    sessionStorage.setItem(key, String(Date.now()))
+  } catch {
+    // sessionStorage 不可用时照样刷新
+  }
+  window.location.hash = to.fullPath
+  window.location.reload()
+})
+
 // 会话失效统一处理（计划 §12）：401（S3）与服务端会话死后的 302→logout.htm（S1）都收敛到这里。
 // 有意偏离旧系统的静默报错行为（旧 request.js 401 拦截只弹通知、SPA 内业务请求报错不自动登出，
 // 见 §12.1）——改为弹窗要求重新登录。单飞门闩防止并发请求重复弹窗；旧实现靠整页 reload 复位，

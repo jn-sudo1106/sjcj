@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { authGuard } from './index'
+import { authGuard, isChunkLoadError } from './index'
 import { useAuthStore } from '../stores/auth'
 import { ACCESS_TOKEN_KEY } from '../api/auth'
 
@@ -85,5 +85,18 @@ describe('authGuard（迁移旧 permission.js）', () => {
     expect(await authGuard(to('/overview'))).toEqual({ path: '/user/login', query: { redirect: '/overview' } })
     expect(auth.token).toBe('')
     expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBeNull()
+  })
+})
+
+// 0930-08：部署后旧页面文件被删，开着的标签页点新页面会报这类错，需要整页刷新
+describe('isChunkLoadError', () => {
+  it('认得各浏览器的「按需加载的页面文件取不到」', () => {
+    expect(isChunkLoadError(new TypeError('Failed to fetch dynamically imported module: http://x/assets/Settings-abc.js'))).toBe(true)
+    expect(isChunkLoadError(new TypeError('Importing a module script failed.'))).toBe(true)
+    expect(isChunkLoadError(new TypeError('error loading dynamically imported module'))).toBe(true)
+  })
+  it('其他错误不算', () => {
+    expect(isChunkLoadError(new Error('Network Error'))).toBe(false)
+    expect(isChunkLoadError('登录失效')).toBe(false)
   })
 })
