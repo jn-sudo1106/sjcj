@@ -11,7 +11,9 @@ import { toExternalHref } from '@/utils/url/externalUrl'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import RailResizeHandle from './RailResizeHandle.vue'
-import { readResultRailHeight } from './resultLayoutPref'
+import RailNodePicker from './components/RailNodePicker.vue'
+import RailCollapseButton from './components/RailCollapseButton.vue'
+import { initialRailOpen, readResultRailHeight } from './resultLayoutPref'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
 import TaskDetailDrawer from './TaskDetailDrawer.vue'
 import { buildHorizontalLayout, nodeTaskQueue } from '@/views/FlowCanvas/canvas/flowModel'
@@ -21,6 +23,14 @@ import { taskDataId } from './taskIds'
 
 // 流程图区最大高度（0928，与数据视图共用同一偏好）：超出在区内滚动，底边分隔条拖拽调整
 const railHeight = ref(readResultRailHeight())
+// 流程图区默认收起（0930-02，会上：视图展开后空间不够），每次进来都收起、不记住展开。
+// 收起时有节点下拉（首项「全部节点」），不展开也能换节点。
+const railOpen = ref(initialRailOpen())
+const railNodeOptions = computed(() => processLayout.value.nodes.map((n) => ({ id: n.id, title: n.cfg.title })))
+function pickRailNode(id: string) {
+  filters.nodeId = id
+  form.nodeId = id
+}
 
 // 任务是源的运行事实：源画布下只看当前源；网站详情页（siteWide）聚合看全部源。
 //
@@ -579,10 +589,16 @@ const nextStepHints = computed(() => {
     <div class="tv-body">
       <div v-if="!hasContext" class="tv-empty-row">{{ siteWide ? '未指定网站，无法查看任务。' : '任务视图仅在源详情下可用。' }}</div>
       <template v-else>
-        <div v-if="!siteWide" class="tv-process-rail" data-testid="task-process-rail" :style="{ maxHeight: `${railHeight}px` }">
-          <ProcessNodeRail :model-value="filters.nodeId" :layout="processLayout" :node-queues="nodeQueues" @update:model-value="onSelectNode" />
-        </div>
-        <RailResizeHandle v-if="!siteWide" v-model="railHeight" class="tv-rail-resize" />
+        <template v-if="!siteWide && railOpen">
+          <!-- 展开后与源数据视图一致：节点下拉隐藏，收起按钮在流程图右上角 -->
+          <div class="tv-railbox">
+            <div class="tv-process-rail" data-testid="task-process-rail" :style="{ maxHeight: `${railHeight}px` }">
+              <ProcessNodeRail :model-value="filters.nodeId" :layout="processLayout" :node-queues="nodeQueues" @update:model-value="onSelectNode" />
+            </div>
+            <RailCollapseButton testid="task-rail-toggle" @collapse="railOpen = false" />
+          </div>
+          <RailResizeHandle v-model="railHeight" class="tv-rail-resize" />
+        </template>
 
         <p v-if="nextStepHints.length" class="tv-next-fields" data-testid="task-next-fields">
           下一节点会用到：{{ nextStepHints.join('、') }}
@@ -593,6 +609,16 @@ const nextStepHints = computed(() => {
                而节点下拉在没选源时本来就是空的——loadNodeMetadata 在网站态未选源时不拉
                步骤元数据（6496 个源要打一万多个请求），所以它当时只剩一个「全部节点」。 -->
           <SiteSourceSelect v-if="siteWide && siteId" v-model="filters.sourceId" :site-id="siteId" />
+          <!-- 源画布：节点下拉 + 流程图开合并进筛选行首位（0930-02），不单独占一行 -->
+          <RailNodePicker
+            v-if="!siteWide && !railOpen"
+            v-model:open="railOpen"
+            :model-value="filters.nodeId"
+            :nodes="railNodeOptions"
+            all-label="全部节点"
+            toggle-testid="task-rail-toggle"
+            @update:model-value="pickRailNode"
+          />
           <select v-if="siteWide && filters.sourceId" v-model="form.nodeId" class="tv-input" data-testid="task-node-filter" aria-label="流程节点">
             <option value="">全部节点</option>
             <option v-for="step in filterSteps" :key="`${step.sourceId}-${step.stepId}`" :value="step.stepId">{{ showSourceColumn ? `${sourceNames[step.sourceId] || step.sourceId} · ${step.name}` : step.name }}</option>
@@ -798,6 +824,7 @@ const nextStepHints = computed(() => {
 .tv-shell { display: flex; flex-direction: column; height: 100%; overflow: hidden; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); }
 .tv-body { flex: 1; overflow: auto; padding: 12px; }
 .tv-rail-resize { margin: 2px 0 10px; border-radius: 3px; }
+.tv-railbox { position: relative; }
 .tv-process-rail { min-height: 80px; overflow: auto; background: #f8fafc; border: 1px solid var(--rc-border-soft); border-radius: 6px; }
 .tv-filters, .tv-pager { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
 .tv-next-fields { margin: 0 0 10px; color: var(--rc-muted); font-size: 12px; }

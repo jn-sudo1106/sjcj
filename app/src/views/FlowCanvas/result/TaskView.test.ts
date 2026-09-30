@@ -15,8 +15,43 @@ import { useWorkspaceStore } from '@/stores/workspace'
 
 const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
 
+// 0930-02 起流程节点轨道进来恒收起。既有用例大多测轨道本身，默认按"已展开"跑；测默认值的用例自己改成 false
+const railDefault = vi.hoisted(() => ({ open: true }))
+vi.mock('./resultLayoutPref', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./resultLayoutPref')>()),
+  initialRailOpen: () => railDefault.open,
+}))
+
 describe('TaskView', () => {
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => { vi.restoreAllMocks(); railDefault.open = true })
+
+  it('0930-02：具体源下流程图区默认收起，有节点下拉（首项全部节点），点「流程图」展开', async () => {
+    railDefault.open = false
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const source = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(source, mockSourceSteps({ sourceId: source.sourceId }))
+
+    const wrapper = shallowMount(TaskView, {
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true, RailNodePicker: false } },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="task-process-rail"]').exists()).toBe(false)
+    // 收起时有节点下拉，首项「全部节点」，选一个节点直接按它筛
+    const select = wrapper.get('[data-testid="rail-node-select"]')
+    expect((select.element as HTMLSelectElement).value).toBe('')
+    expect(select.findAll('option')[0]!.text()).toBe('全部节点')
+    const nodeId = select.findAll('option')[1]!.attributes('value')!
+    await select.setValue(nodeId)
+    const toggle = wrapper.get('[data-testid="task-rail-toggle"]')
+    await toggle.trigger('click')
+    expect(wrapper.find('[data-testid="task-process-rail"]').exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'ProcessNodeRail' }).props('modelValue')).toBe(nodeId)
+    // 展开后与源数据视图一致：节点下拉隐藏，收起走流程图右上角的按钮
+    expect(wrapper.find('[data-testid="rail-node-select"]').exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'RailCollapseButton' }).exists()).toBe(true)
+  })
 
   it('仅展示当前源的节点任务，而非网站队列聚合（不再提供所属源筛选）', async () => {
     setActivePinia(createPinia())

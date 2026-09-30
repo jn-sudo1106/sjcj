@@ -65,7 +65,7 @@ const FilePreviewStub = { name: 'FilePreview', props: ['path', 'name', 'ext'], t
 const ElDropdownStub = { name: 'ElDropdown', template: '<div><slot /><slot name="dropdown" /></div>' }
 const ElDropdownMenuStub = { name: 'ElDropdownMenu', template: '<div><slot /></div>' }
 const ElDropdownItemStub = { name: 'ElDropdownItem', props: ['disabled', 'divided'], template: '<div class="el-dropdown-item" :disabled="disabled ? \'\' : undefined"><slot /></div>' }
-const STUBS = { ElDropdown: ElDropdownStub, ElDropdownMenu: ElDropdownMenuStub, ElDropdownItem: ElDropdownItemStub, SqlConditionEditor: false, CanvasHeader: true, ElDrawer: ElDrawerStub, ElDialog: ElDialogStub, ElPagination: true, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, FilePreview: FilePreviewStub, SummaryDrawer: true }
+const STUBS = { ElDropdown: ElDropdownStub, ElDropdownMenu: ElDropdownMenuStub, ElDropdownItem: ElDropdownItemStub, SqlConditionEditor: false, CanvasHeader: true, ElDrawer: ElDrawerStub, ElDialog: ElDialogStub, ElPagination: true, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, FilePreview: FilePreviewStub, SummaryDrawer: true, RailNodePicker: false }
 
 function mountResultView() {
   return shallowMount(ResultView, {
@@ -81,11 +81,14 @@ function mountResultView() {
   })
 }
 
-afterEach(() => localStorage.clear())
+// 0930-02 起流程节点轨道进来恒收起。既有用例大多测轨道本身，默认按"已展开"跑；测默认值的用例自己改成 false
+const railDefault = vi.hoisted(() => ({ open: true }))
+vi.mock('./resultLayoutPref', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./resultLayoutPref')>()),
+  initialRailOpen: () => railDefault.open,
+}))
 
-beforeEach(() => {
-  localStorage.setItem('rc.dataview.result.railOpen', '1')
-})
+afterEach(() => { localStorage.clear(); railDefault.open = true })
 
 describe('ResultView', () => {
   afterEach(() => {
@@ -2078,7 +2081,7 @@ describe('ResultView · 带条件进来', () => {
 describe('ResultView · 布局与操作', () => {
   afterEach(() => vi.restoreAllMocks())
   beforeEach(() => {
-    localStorage.removeItem('rc.dataview.result.railOpen')
+    railDefault.open = false
   })
 
   async function mountAtNode() {
@@ -2109,7 +2112,7 @@ describe('ResultView · 布局与操作', () => {
     const wrapper = await mountAtNode()
 
     const toggle = wrapper.get('[data-testid="data-rail-toggle"]')
-    expect(toggle.text()).toContain('展开流程')
+    expect(toggle.attributes('title')).toBe('展开流程图')
 
     await toggle.trigger('click')
     expect(wrapper.find('[data-testid="data-process-rail"]').exists()).toBe(true)

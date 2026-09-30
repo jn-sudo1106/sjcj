@@ -23,6 +23,7 @@ import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 // 全部源+选表同样能勾行发后续（2026-09-17）——流程节点在发送时按表逐源反查，见 resolveNextStepFor。
 // 发起抓取 / 输入输出切换仍在 ResultView。
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { initialRailOpen } from './resultLayoutPref'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { dataApi, parseNextStepReceipt, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail, type RowQuery, type Step } from '@/api'
@@ -40,7 +41,8 @@ import { backTraceSources } from '@/utils/data/backTraceSources'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { extFromFieldHint, extFromName, ossPathWithExt } from '@/utils/ossFile'
 import ProcessNodeRail from './ProcessNodeRail.vue'
-import { readRailOpen, writeRailOpen } from './railPref'
+import RailNodePicker from './components/RailNodePicker.vue'
+import RailCollapseButton from './components/RailCollapseButton.vue'
 import { APPEND_SIZE_OPTIONS, readAppendSize, writeAppendSize } from './pageSizePref'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 import SiteTableSelect from './components/SiteTableSelect.vue'
@@ -449,8 +451,9 @@ function stopSlowTimer() {
   slowQuery.value = false
 }
 
-const railOpen = ref(readRailOpen())
-watch(railOpen, writeRailOpen)
+// 0930-02：每次进来都收起、不再记住展开（会上：默认折叠；记住后展开过一次就一直是展开的）。
+// 收起后有节点下拉可换节点（网站汇总这边轨道原是唯一的节点选择器）。
+const railOpen = ref(initialRailOpen())
 
 const selectedCfg = computed<NodeConfig | undefined>(() => allNodes.value.find((n) => n.id === selectedNodeId.value)?.cfg)
 const outputTableId = computed(() => (selectedCfg.value ? nodeOutputTable(selectedCfg.value) : ''))
@@ -501,6 +504,9 @@ watch(allNodes, (nodes) => {
       : '') || nodes[0]?.id || ''
   }
 })
+
+/** 轨道收起时的节点下拉（0930-02），不展开也能换节点 */
+const railNodeOptions = computed(() => allNodes.value.map((n) => ({ id: n.id, title: n.cfg.title })))
 
 function onSelectNode(id: string) {
   if (!id || id === selectedNodeId.value) return
@@ -1161,15 +1167,17 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
         <ProcessNodeRail :model-value="selectedNodeId" :layout="processLayout" @update:model-value="onSelectNode" />
         <div v-if="!allNodes.length" class="sdv2-bar-empty">该源没有可查看数据的节点</div>
       </div>
-      <div class="sdv2-rail-ctl">
-        <button
-          type="button"
-          class="sdv2-rail-toggle"
-          :class="{ open: railOpen }"
-          data-testid="site-data-rail-toggle"
-          :title="railOpen ? '收起流程节点轨道' : '展开流程节点轨道'"
-          @click="railOpen = !railOpen"
-        >{{ railOpen ? '收起流程' : '展开流程' }} <span class="arrow">▾</span></button>
+      <!-- 展开后与源数据视图一致：节点下拉隐藏，收起按钮在流程图右上角 -->
+      <RailCollapseButton v-if="railOpen" testid="site-data-rail-toggle" @collapse="railOpen = false" />
+      <div class="sdv2-rail-ctl" :class="{ 'is-open': railOpen }">
+        <RailNodePicker
+          v-if="!railOpen"
+          v-model:open="railOpen"
+          :model-value="selectedNodeId"
+          :nodes="railNodeOptions"
+          toggle-testid="site-data-rail-toggle"
+          @update:model-value="onSelectNode"
+        />
         <span v-if="!canPickRows" class="sdv2-readonly">只读查看</span>
         <button
           type="button"
@@ -1501,10 +1509,8 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
 .sdv2-bar { position: relative; padding: 8px 0; background: #f8fafc; overflow: auto; }
 .sdv2-bar-empty { color: var(--rc-faint); font-size: 12px; padding: 16px; text-align: center; }
 .sdv2-rail-ctl { position: absolute; top: 4px; right: 10px; z-index: 2; display: flex; align-items: center; gap: 6px; }
-.sdv2-rail-toggle { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 999px; background: #fff; color: var(--rc-text-2); font-size: 11.5px; cursor: pointer; }
-.sdv2-rail-toggle:hover { border-color: var(--rc-primary); color: var(--rc-primary-ink); }
-.sdv2-rail-toggle .arrow { display: inline-block; transition: transform .18s ease; }
-.sdv2-rail-toggle.open .arrow { transform: rotate(180deg); }
+/* 展开时右上角让给收起按钮（RailCollapseButton，24px + 间距） */
+.sdv2-rail-ctl.is-open { right: 42px; }
 /* 只读标识 + 去具体源的入口：本视图不提供执行动作，必须让人看出来它跟源结果视图的差别 */
 .sdv2-readonly { flex: none; padding: 2px 8px; border-radius: 999px; background: #f1f5f9; color: var(--rc-faint); font-size: 11px; }
 .sdv2-goto { flex: none; height: 24px; padding: 0 10px; border: 1px solid var(--rc-border); border-radius: 999px; background: #fff; color: var(--rc-primary); font-size: 11.5px; cursor: pointer; }

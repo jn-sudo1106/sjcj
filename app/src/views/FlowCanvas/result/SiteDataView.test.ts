@@ -82,7 +82,14 @@ function mockFlowFixture(sourceId = '391007768') {
   vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(steps)
 }
 
-afterEach(() => localStorage.clear())
+// 0930-02 起流程节点轨道进来恒收起。既有用例大多测轨道本身，默认按"已展开"跑；测默认值的用例自己改成 false
+const railDefault = vi.hoisted(() => ({ open: true }))
+vi.mock('./resultLayoutPref', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./resultLayoutPref')>()),
+  initialRailOpen: () => railDefault.open,
+}))
+
+afterEach(() => { localStorage.clear(); railDefault.open = true })
 // 0924-11：候选源会先按 siteUsedTables 收窄。既有用例没 mock 它时会走 mock 层（带 setTimeout 延迟，
 // flushPromises 等不到），这里默认给空结果 = 不收窄，行为与改动前一致；要测收窄的用例自己覆盖。
 beforeEach(() => {
@@ -450,6 +457,28 @@ describe('SiteDataView · 具体源（节点筛选，纯查看——2026-08-14 �
   // 真实后端对应物，画布保存过一次就会一直挡住这里的真实拓扑展示（见 FlowCanvas/index.vue
   // 同一处修复说明）。现在节点链只有一种来源，两个用例合并成这一个；draft-覆盖那个分支已经
   // 不是这个组件的行为，不再测。
+  it('0930-02：轨道默认收起，节点下拉选中当前节点，点「流程图」展开', async () => {
+    railDefault.open = false
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(current)
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue(mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+
+    const wrapper = mountView()
+    await pickSource(wrapper, '391007768')
+
+    expect(wrapper.find('[data-testid="site-data-process-rail"]').exists()).toBe(false)
+    // 收起时节点下拉选中的是默认首节点，不展开也能换
+    const select = wrapper.get('[data-testid="rail-node-select"]')
+    expect(select.find('option:checked').text()).toBe('列表抓取')
+    await wrapper.get('[data-testid="site-data-rail-toggle"]').trigger('click')
+    expect(wrapper.find('[data-testid="site-data-process-rail"]').exists()).toBe(true)
+    // 展开后与源数据视图一致：节点下拉隐藏，收起走流程图右上角的按钮
+    expect(wrapper.find('[data-testid="rail-node-select"]').exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'RailCollapseButton' }).exists()).toBe(true)
+  })
+
   it('按步骤用 buildSourceSeed 拼默认骨架并展示节点', async () => {
     const current = mockSourceDetail({ sourceId: '391007768' })!
     vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(current)

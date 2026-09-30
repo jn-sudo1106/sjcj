@@ -8,7 +8,9 @@ import { fileApi, sourceApi, type DataTableMeta, type FileResourceRecord, type S
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import RailResizeHandle from './RailResizeHandle.vue'
-import { readResultRailHeight } from './resultLayoutPref'
+import RailNodePicker from './components/RailNodePicker.vue'
+import RailCollapseButton from './components/RailCollapseButton.vue'
+import { initialRailOpen, readResultRailHeight } from './resultLayoutPref'
 import FileDetailDrawer from './FileDetailDrawer.vue'
 import FilePreviewDrawer from './components/FilePreviewDrawer.vue'
 import { buildHorizontalLayout } from '@/views/FlowCanvas/canvas/flowModel'
@@ -25,6 +27,9 @@ const processLayout = computed(() =>
 const selectedNodeId = ref('')
 // 流程图区最大高度（0928，与数据视图共用同一偏好）：超出在区内滚动，底边分隔条拖拽调整
 const railHeight = ref(readResultRailHeight())
+// 流程图区默认收起（0930-02，会上：视图展开后空间不够），每次进来都收起、不记住展开。
+// 收起时有节点下拉（首项「全部文件」= 不按节点筛），不展开也能换节点。
+const railOpen = ref(initialRailOpen())
 // 首次打开先展示该源的完整文件集。流程轨道是用户主动收窄范围的入口，不能因为首节点被
 // 自动高亮就把它当作筛选条件；否则文件明明属于该源，却会在首节点没有产出时被全部隐藏。
 const nodeFilterActive = ref(false)
@@ -85,6 +90,15 @@ watch(processLayout, (layout) => {
   selectedNodeId.value = layout.nodes[0]?.id ?? ''
 }, { immediate: true })
 // 仅用户点击节点时开启 CONFIG_ID 筛选。即使用户点的是当前高亮的首节点，也要重新查询。
+const railNodeOptions = computed(() => processLayout.value.nodes.map((n) => ({ id: n.id, title: n.cfg.title })))
+function pickRailNode(nodeId: string) {
+  if (nodeId) return selectNode(nodeId)
+  selectedNodeId.value = ''
+  nodeFilterActive.value = false
+  page.value = 1
+  if (table.value) void loadList()
+}
+
 function selectNode(nodeId: string) {
   if (!nodeFilterEnabled.value) return
   selectedNodeId.value = nodeId
@@ -277,17 +291,34 @@ function openPreview(file: FileResourceRecord) {
     <div class="fv-body">
       <div v-if="!sourceId" class="fv-empty-row">文件视图仅在源详情下可用。</div>
       <template v-else>
-        <div class="fv-process-rail" data-testid="file-process-rail" :style="{ maxHeight: `${railHeight}px` }">
-          <ProcessNodeRail
-            :model-value="selectedNodeId"
-            :layout="processLayout"
-            :selectable="nodeSelectable"
-            @update:model-value="selectNode"
-          />
-          <div class="fv-rail-note" data-testid="file-rail-note">{{ railNote }}</div>
-        </div>
-        <RailResizeHandle v-model="railHeight" class="fv-rail-resize" />
+        <template v-if="railOpen">
+          <!-- 展开后与源数据视图一致：节点下拉隐藏，收起按钮在流程图右上角 -->
+          <div class="fv-railbox">
+            <div class="fv-process-rail" data-testid="file-process-rail" :style="{ maxHeight: `${railHeight}px` }">
+              <ProcessNodeRail
+                :model-value="selectedNodeId"
+                :layout="processLayout"
+                :selectable="nodeSelectable"
+                @update:model-value="selectNode"
+              />
+              <div class="fv-rail-note" data-testid="file-rail-note">{{ railNote }}</div>
+            </div>
+            <RailCollapseButton testid="file-rail-toggle" @collapse="railOpen = false" />
+          </div>
+          <RailResizeHandle v-model="railHeight" class="fv-rail-resize" />
+        </template>
         <div class="fv-filters">
+          <!-- 节点下拉 + 流程图开合并进筛选行首位（0930-02），不单独占一行 -->
+          <RailNodePicker
+            v-if="!railOpen"
+            v-model:open="railOpen"
+            :model-value="nodeFilterActive ? selectedNodeId : ''"
+            :nodes="railNodeOptions"
+            all-label="全部文件"
+            :disabled="!nodeFilterEnabled"
+            toggle-testid="file-rail-toggle"
+            @update:model-value="pickRailNode"
+          />
           <select
             v-if="!tableLoading && !error && tableCandidates.length > 1"
             class="fv-input"
@@ -400,6 +431,7 @@ function openPreview(file: FileResourceRecord) {
 }
 .fv-body { flex: 1; overflow: auto; padding: 20px 24px; animation: fadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
 .fv-empty-row { text-align: center; color: var(--rc-faint); font-size: 13px; padding: 40px 12px; }
+.fv-railbox { position: relative; }
 .fv-process-rail {
   min-height: 80px;
   overflow: auto;

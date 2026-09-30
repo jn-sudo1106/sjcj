@@ -23,7 +23,8 @@ import DataGrid from './DataGrid.vue'
 import FilePreview from './components/FilePreview.vue'
 import { extFromFieldHint, extFromName, ossPathWithExt } from '@/utils/ossFile'
 import ProcessNodeRail from './ProcessNodeRail.vue'
-import { readResultRailHeight, readResultRailOpen, writeResultRailOpen } from './resultLayoutPref'
+import RailNodePicker from './components/RailNodePicker.vue'
+import { initialRailOpen, readResultRailHeight } from './resultLayoutPref'
 import RailResizeHandle from './RailResizeHandle.vue'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
@@ -89,9 +90,10 @@ if (pendingCondition) {
 // 收起后仍要能展开：开合按钮站在主干行左端（0910 定案）。曾试过让它浮在轨道区右上角
 // 与全部源视图同构，但那样收起时得靠 .rv-railbox 的 min-height 留一条 32px 窄带专门
 // 托住按钮——一整行高度只换一个按钮，而主干行左边又只剩「筛选」「查询」两个，空了半边。
-// 代价：收起状态下看不出当前在哪个节点（与全部源视图现状一致），暂按会上口径保留。
-const railOpen = ref(readResultRailOpen())
-watch(railOpen, writeResultRailOpen)
+// 收起状态下主干行左端是节点下拉 + 流程图开合（0930-02），不展开也能换节点。
+// 0930-02：每次进来都收起、不再记住展开（会上：默认折叠；记住后展开过一次就一直是展开的）。
+const railOpen = ref(initialRailOpen())
+const railNodeOptions = computed(() => allNodes.value.map((n) => ({ id: n.id, title: n.cfg.title })))
 // 流程图区最大高度（0928）：内容更矮时按内容收缩，更高时在区内滚动，底边分隔条拖拽调整。
 const railHeight = ref(readResultRailHeight())
 // 全屏：整个面板 position:fixed 铺满视口，不复制模板、不引入弹层——详情抽屉本来就渲染在
@@ -1447,6 +1449,10 @@ async function onTestScript() {
          全部保留——不然全屏就只能看不能用了。 -->
     <CanvasHeader v-if="!fullscreen" />
 
+    <!-- 0930：源信息头以下整体一个滚动区，与任务视图同构。流程图展开后把表格挤得只剩两三行，
+         现在表格保底高度、不够就整体往下滚。 -->
+    <div class="rv-scroll" data-testid="data-view-scroll">
+
     <!-- 折叠开关和「查看条件」都放在轨道自己身上：控件应该长在它所控制的东西上，
          而且这两个都是"这个节点的上下文"，跟下面那行"怎么查"不是一回事
          （2026-08-15 第十三次纠偏：原来把它俩塞进筛选行，等于把一组筛选条件劈成两半）。
@@ -1486,14 +1492,14 @@ async function onTestScript() {
       <!-- 全屏时源信息头被藏起来了，这里把源名补回来，否则看不出在看哪个源的数据。 -->
       <span v-if="fullscreen" class="rv-fs-source" :title="source?.name || sourceId">{{ source?.name || sourceId }}</span>
       <!-- 流程轨道展开时收起按钮合并在轨道区右上角；轨道收起时在主干行左端保留展开按钮。 -->
-      <button
+      <RailNodePicker
         v-if="!railOpen"
-        type="button"
-        class="rv-rail-toggle"
-        data-testid="data-rail-toggle"
-        title="展开流程节点轨道"
-        @click="railOpen = true"
-      >展开流程 <span class="arrow">▾</span></button>
+        v-model:open="railOpen"
+        :model-value="selectedNodeId"
+        :nodes="railNodeOptions"
+        toggle-testid="data-rail-toggle"
+        @update:model-value="onSelectNode"
+      />
       <template v-if="hasAnyTable">
         <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="selectedTable" :table-name="meta?.tableName" :fields="queryFields" class="rv-sql">
           <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="rv-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，可点右端漏斗按字段查询（如 K23 = '...'）" />
@@ -1921,6 +1927,7 @@ async function onTestScript() {
         <pre v-else class="rv-code-test-output">{{ codeTest.output || '暂无返回结果' }}</pre>
       </div>
     </el-dialog>
+    </div>
   </main>
 </template>
 
@@ -1954,10 +1961,6 @@ async function onTestScript() {
 .rv-rail-icon-btn:hover { border-color: var(--rc-primary); color: var(--rc-primary-ink); background: var(--rc-primary-bg); }
 
 /* 折叠开关：默认收起，展开后收起按钮置于轨道区右上角；收起时在主干行左端保留展开按钮。 */
-.rv-rail-toggle { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); background: #fff; color: var(--rc-text-2); font-size: 12px; font-weight: 700; cursor: pointer; }
-.rv-rail-toggle:hover { border-color: var(--rc-primary); color: var(--rc-primary-ink); }
-.rv-rail-toggle .arrow { display: inline-block; flex: none; color: var(--rc-faint); transition: transform .18s ease; }
-.rv-rail-toggle.open .arrow { transform: rotate(180deg); }
 
 /* 全屏下源信息头被藏起来，用这个补回"在看哪个源"。 */
 .rv-fs-source { flex: none; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 700; color: var(--rc-text); }
@@ -2076,7 +2079,9 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
 .rv-notice { padding: 7px 12px; border-bottom: 1px solid #fde68a; background: #fffbeb; color: #92400e; font-size: 12px; }
 .rv-notice.error { border-bottom-color: #fecaca; background: #fef2f2; color: #b91c1c; }
 
-.rv-grid { flex: 1; min-height: 0; }
+.rv-scroll { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
+/* 表格保底 360px：流程图展开时不再被挤成两三行，超出由 .rv-scroll 整体滚动 */
+.rv-grid { flex: 1 0 auto; height: 0; min-height: 360px; }
 /* 表头行里的按钮比筛选行矮一档，免得这条横条被撑高又把数据区挤回去。 */
 .rc-btn.tiny { height: 24px; padding: 0 10px; font-size: 11.5px; }
 

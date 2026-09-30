@@ -34,6 +34,15 @@ async function clickQuery(wrapper: { findAll: (s: string) => { text: () => strin
 
 afterEach(() => localStorage.clear())
 
+// 0930-02 起流程节点轨道进来恒收起。既有用例大多测轨道本身，默认按"已展开"跑；测默认值的用例自己改成 false
+const railDefault = vi.hoisted(() => ({ open: true }))
+vi.mock('./resultLayoutPref', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./resultLayoutPref')>()),
+  initialRailOpen: () => railDefault.open,
+}))
+
+afterEach(() => { railDefault.open = true })
+
 describe('FileView', () => {
   // 文件列表现在挂在步骤列表之后（先判定是否支持节点筛选），步骤走 mock 通道有 120ms
   // 真实定时器，不打桩的话 flushPromises 追不上，列表会停在未加载态。
@@ -54,7 +63,7 @@ describe('FileView', () => {
       vi.spyOn(fileApi, 'resourceMeta').mockResolvedValue(table)
       const query = vi.spyOn(fileApi, 'resourceRows').mockResolvedValue({ list: rows, total: rows.length })
       const wrapper = shallowMount(FileView, {
-        global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, CanvasHeader: true } },
+        global: { directives: { loading: {} }, stubs: { SqlConditionEditor: false, CanvasHeader: true, RailNodePicker: false } },
       })
       await flushPromises()
       return { wrapper, query }
@@ -64,6 +73,20 @@ describe('FileView', () => {
       { stepId: '391007768-s1', sourceId: '391007768', name: '列表抓取', configId: '1400774', enabled: true },
       { stepId: '391007768-s2', sourceId: '391007768', name: '详情解析', configId: '1400765', enabled: true },
     ]
+
+    it('0930-02：轨道默认收起，有节点下拉（首项全部文件），点「流程图」展开', async () => {
+      railDefault.open = false
+      const { wrapper } = await mountWith([{ ...files[0], configId: '1400765' }], boundSteps)
+      expect(wrapper.find('[data-testid="file-process-rail"]').exists()).toBe(false)
+      const select = wrapper.get('[data-testid="rail-node-select"]')
+      expect(select.findAll('option')[0]!.text()).toBe('全部文件')
+      expect((select.element as HTMLSelectElement).value).toBe('')
+      await wrapper.get('[data-testid="file-rail-toggle"]').trigger('click')
+      expect(wrapper.find('[data-testid="file-process-rail"]').exists()).toBe(true)
+      // 展开后与源数据视图一致：节点下拉隐藏，收起走流程图右上角的按钮
+      expect(wrapper.find('[data-testid="rail-node-select"]').exists()).toBe(false)
+      expect(wrapper.findComponent({ name: 'RailCollapseButton' }).exists()).toBe(true)
+    })
 
     it('文件的 CONFIG_ID 能对上步骤时轨道可点，首查仍展示该源全部文件', async () => {
       const bound = [{ ...files[0], configId: '1400765' }]
