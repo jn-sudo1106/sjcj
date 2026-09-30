@@ -152,6 +152,9 @@ const toolbarStats = computed(() => ({ ...(listStats.value ?? stats), siteTotal:
 /** 从 fetchedSites 重算展示：只看收藏 → 排序（收藏置顶）→ 切片。不发请求。 */
 function applyView() {
   let base = fetchedSites.value
+  // 0930-01：网站列表不显示一个源都没有的网站（预建的空目录站，会上看着是一片「暂无源」）。
+  // 按网站名搜索时照样显示，否则刚新建、还没挂源的网站就找不到了；收藏 / 最近打开是用户自己点过的，也不藏。
+  if (props.scope === 'all' && !keyword.value.trim()) base = base.filter((site) => (site.sourceCount || 0) > 0)
   if (stateFilter.value === 'error') base = base.filter((site) => (site.errorCount || 0) > 0)
   if (favOnly.value) base = base.filter((site) => favoriteSiteIds.value.has(site.siteId))
   else if (recentOnly.value) base = base.filter((site) => recentSiteIds.value.includes(site.siteId))
@@ -521,5 +524,7 @@ onUnmounted(() => {
 .ca-card-body { min-height: 200px; }
 
 .ca-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 16px; }
-.ca-pager.card-mode { border-top: 0; padding: 0; }
+/* 0930-01：分页条钉在视口底部。原来跟在卡片后面，翻页时卡片高度一变它就跟着跳，
+   连点「下一页」会点到卡片上、进了网站 */
+.ca-pager.card-mode { position: sticky; bottom: 0; z-index: 2; justify-content: center; border-top: 0; padding: 8px 0; background: linear-gradient(180deg, rgba(248, 250, 252, 0) 0%, rgba(248, 250, 252, 0.96) 40%); }
 </style>

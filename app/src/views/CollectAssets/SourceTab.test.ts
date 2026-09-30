@@ -110,6 +110,31 @@ describe('SourceTab 加载与初始筛选', () => {
     spy.mockRestore()
   })
 
+  // 0930-01：预建的空网站（一个源都没有）会上看着是一片「暂无源」，网站列表默认不显示；
+  // 按网站名搜索时要能找到（刚新建、还没挂源的网站）
+  it('默认不显示没有源的网站；按网站名搜索时照样显示', async () => {
+    const spy = vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({
+      total: 2,
+      list: [
+        { siteId: 's-has', name: '有源', sourceCount: 3, errorCount: 0, updatedAt: '2026-09-20 10:00:00', tags: [] },
+        { siteId: 's-empty', name: '空站', sourceCount: 0, errorCount: 0, updatedAt: '2026-09-21 10:00:00', tags: [] },
+      ] as never,
+    })
+    const srcSpy = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] } as never)
+    const { wrapper } = await mountAt()
+    const toolbar = wrapper.findComponent({ name: 'FilterToolbar' })
+    const shown = () => (wrapper.findComponent({ name: 'SiteCardGrid' }).props('sites') as { siteId: string }[]).map((s) => s.siteId)
+    expect(shown()).toEqual(['s-has'])
+    expect(toolbar.props('total')).toBe(1)
+
+    toolbar.vm.$emit('update:keyword', '空站')
+    toolbar.vm.$emit('filterChange')
+    await flushPromises()
+    expect(shown()).toEqual(['s-empty'])
+    spy.mockRestore()
+    srcSpy.mockRestore()
+  })
+
 })
 
 describe('SourceTab 筛选状态', () => {

@@ -132,7 +132,7 @@ async function loadCategoryChildren(
         type="info"
         effect="plain"
         class="stat-tag"
-        :title="filtered && stats.siteTotal ? `当前筛选命中 ${total} 个，全站 ${stats.siteTotal} 个` : '全站网站数'"
+        :title="filtered && stats.siteTotal ? `当前筛选命中 ${total} 个，全站 ${stats.siteTotal} 个` : '有源的网站数（还没有源的网站不显示，按网站名搜索可以找到）'"
       >网站 <b>{{ total }}</b><template v-if="filtered && stats.siteTotal"> / {{ stats.siteTotal }}</template></el-tag>
       <el-tag type="info" effect="plain" class="stat-tag" :title="filtered ? '当前筛选命中网站下的源数' : '全部网站下的源数'">源 <b>{{ stats.total }}</b></el-tag>
       <!-- 「出错源」兼作筛选开关（0924-01）：会上去掉了「全部状态」下拉，但总览「异常」下钻
