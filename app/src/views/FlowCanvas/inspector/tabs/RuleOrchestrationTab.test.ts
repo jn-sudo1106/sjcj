@@ -253,10 +253,10 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(titleRow.find('button').text()).toBe('脚本编辑')
   })
 
-  // 2026-09-22 产品口径：OCR 抓取节点的编排配置是空白 Tab——这一页不渲染任何元素，
-  // 之前的「OCR 识别试跑」区（选图 → base64 → /ocr → 贴文本）整体下线。
-  describe('OCR 抓取节点编排配置（空白页）', () => {
-    it('标题行、识别试跑区、描述框、切换已有配置都不出现', async () => {
+  // 2026-09-22：OCR 编排 Tab 曾整页空白；2026-09-30 恢复「是否保存为文件」勾选框（唯一区块），
+  // 其余编排内容（识别试跑、脚本工作区、描述、切换已有配置）仍不出现。
+  describe('OCR 抓取节点编排配置（只剩「是否保存为文件」勾选框）', () => {
+    it('渲染勾选框，不渲染标题行/识别试跑/描述框/切换已有配置/脚本工作区', async () => {
       mockAssets()
       setActivePinia(createPinia())
       const flow = useFlowStore()
@@ -274,6 +274,44 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       expect(wrapper.find('textarea').exists()).toBe(false)
       // 脚本编辑工作区也不该为 OCR 节点挂上（没有可生成/保存的脚本）
       expect(wrapper.findComponent(RuleWorkbenchDialog).exists()).toBe(false)
+      // 「是否保存为文件」勾选框：默认未勾选（回读走 structuredConfig，NODE_CONFIGS.ocr 空）
+      const checkbox = wrapper.find('[data-testid="ocr-save-as-file"]')
+      expect(checkbox.exists()).toBe(true)
+      expect((checkbox.element as HTMLInputElement).checked).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('勾选写入 structuredConfig = {"saveAsFile":true}；取消写 false', async () => {
+      mockAssets()
+      setActivePinia(createPinia())
+      const flow = useFlowStore()
+      flow.configs['ocr-1'] = cloneConfig(NODE_CONFIGS['ocr'])
+      flow.select('ocr-1')
+      flow.setActiveTab('orchestration')
+      const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+      await flushPromises()
+
+      const checkbox = wrapper.find('[data-testid="ocr-save-as-file"]')
+      await checkbox.setValue(true)
+      expect(flow.configs['ocr-1'].structuredConfig).toBe('{"saveAsFile":true}')
+      await checkbox.setValue(false)
+      expect(flow.configs['ocr-1'].structuredConfig).toBe('{"saveAsFile":false}')
+      wrapper.unmount()
+    })
+
+    it('回读：structuredConfig 里 saveAsFile=true 时勾选还原', async () => {
+      mockAssets()
+      setActivePinia(createPinia())
+      const flow = useFlowStore()
+      flow.configs['ocr-1'] = cloneConfig(NODE_CONFIGS['ocr'])
+      flow.configs['ocr-1'].structuredConfig = '{"saveAsFile":true}'
+      flow.select('ocr-1')
+      flow.setActiveTab('orchestration')
+      const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+      await flushPromises()
+
+      const checkbox = wrapper.find('[data-testid="ocr-save-as-file"]')
+      expect((checkbox.element as HTMLInputElement).checked).toBe(true)
       wrapper.unmount()
     })
   })

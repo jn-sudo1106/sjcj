@@ -143,10 +143,16 @@ export function resolveNextStepConfigFromSteps(
   let directSuccessors: Step[] = []
 
   if (isRootNode) {
-    // 起点节点的后继：寻找 dependsOn 包含 '0' 或 'start' 的步骤
+    // 起点节点的后继：寻找 dependsOn 指向"根"的步骤。
+    // 旧平台把根记成 '0'/'start'；但 2026-09-29 生产实测（源 430024667）后端把子步骤的
+    // lastStep 写成**根步骤自己的 itemConfig**（如 '41797'），此时只认 '0'/'start' 会一个都匹配不到，
+    // 退到下面的"数组第一个非根"兜底——而数组顺序不保证拓扑序（实测 [根, 下载PDF, PDF抓取]），
+    // 于是从根发后续会打到下载PDF、跳过真正的后继 PDF抓取。所以把根自己的 stepId 也当作父 token。
+    const rootTokens = new Set(['0', 'start'])
+    if (currentStep?.stepId) rootTokens.add(String(currentStep.stepId))
     directSuccessors = steps.filter((s) => {
       if (s.stepId === '0' || s.isRoot) return false
-      if (s.dependsOn?.includes('0') || s.dependsOn?.includes('start')) return true
+      if (s.dependsOn?.some((d) => rootTokens.has(d))) return true
       return false
     })
     // 兜底：如果都没有显式 lastStep=0，取第一个非零子步骤

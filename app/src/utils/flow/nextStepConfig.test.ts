@@ -52,6 +52,25 @@ describe('nextStepConfig · 根据当前节点与 nextConfigPaged 解析下一�
     expect(res.targetConfigId).toBe('1400974')
   })
 
+  // 2026-09-29 生产实测（源 430024667）：根步骤 itemConfig=41797（不是 '0'），子步骤 lastStep 直接写
+  // 根的真实 id；且 nextConfigPaged 返回数组顺序是 [根, 下载PDF, PDF抓取]（非拓扑序）。
+  // 旧实现只认 dependsOn '0'/'start'，匹配不到 → 位置兜底取到数组里第一个非根=下载PDF，
+  // 从根发后续就打给下载PDF、跳过真正的后继 PDF抓取。修复后应按根自己的 stepId 找后继。
+  it('根步骤是真实 id（非 0）且数组非拓扑序时：从根发后续要命中真实后继，而非数组里第一个非根', () => {
+    const steps: Step[] = [
+      { stepId: '41797', sourceId: '430024667', name: '江苏金租定期报告指标', isRoot: true, outputTable: '6200036', enabled: true },
+      { stepId: '41799', sourceId: '430024667', name: '下载PDF', configId: '1401083', inputTable: '6200036', outputTable: '6200037', dependsOn: ['41802'], enabled: true },
+      { stepId: '41802', sourceId: '430024667', name: 'PDF抓取', configId: '1401088', inputTable: '6200036', outputTable: '6200036', dependsOn: ['41797'], enabled: true },
+    ]
+    const res = resolveNextStepConfigFromSteps(steps, '41797')
+    expect(res.hasNext).toBe(true)
+    // 直接后继必须是 PDF抓取(41802)，不是位置兜底会选中的下载PDF(41799)
+    expect(res.targetStepId).toBe('41802')
+    expect(res.targetNodeName).toBe('PDF抓取')
+    // 整条下游含 PDF抓取 → 下载PDF（按拓扑，非数组序）
+    expect(res.downstreamSteps.map((s) => s.stepId)).toEqual(['41802', '41799'])
+  })
+
   it('当前节点为中间节点 40597 时：发后续任务必须定位到它的下一个节点 40598（输入表 901，非当前表 900）', () => {
     const res = resolveNextStepConfigFromSteps(sampleSteps, '40597')
     expect(res.hasNext).toBe(true)
