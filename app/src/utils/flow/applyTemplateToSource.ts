@@ -16,7 +16,7 @@
 //   - 「追加不是替换」不变：copyTemplateSteps 只往目标流程里加步骤，不删现有的。
 import { configApi, flowCenterApi, sourceApi, type Source } from '@/api'
 import { validFlowIdOf } from '@/utils/flow/stepPersist'
-import { detachCopiedConfigs, type DetachResult } from '@/utils/flow/copiedConfigs'
+import { detachCopiedConfigs, type CopiedFlow, type DetachResult } from '@/utils/flow/copiedConfigs'
 import { ElMessage } from 'element-plus'
 
 export interface TemplateApplied {
@@ -95,15 +95,16 @@ export async function applyTemplateToSource(
 }
 
 /**
- * 把一条流程整条复制给源并换绑（画布「更换流程」、套用模板在源无流程时共用）。
+ * 把一条流程整条复制给源并换绑（画布「更换流程」「复制当前流程」、套用模板在源无流程时共用）。
  * 新流程名「源名-流程」；原流程不动，其他使用原流程的源不受影响。
+ * `reuseConfigs`（0930）：用户选了「复用原配置」，只复制步骤不做配置去共享。
  */
 export async function copyFlowToSource(
   fromFlowId: string,
   sourceId: string,
   sourceName: string | undefined,
-  opts: { sourceFlowRef: string; onProgress?: (done: number, total: number) => void },
-): Promise<{ flowId: string; message: string; detach: DetachResult }> {
+  opts: { sourceFlowRef: string; onProgress?: (done: number, total: number) => void; reuseConfigs?: boolean },
+): Promise<CopiedFlow & { message: string }> {
   // 顺序：复制 → 先换绑 → 再去共享。去共享是逐节点串行、可能很慢，先绑上源不让它等；
   // 去共享个别失败只登记残留共享（编辑前知情确认），不影响换绑结果。
   const flowId = await flowCenterApi.copy(fromFlowId, `${sourceName || sourceId}-流程`)
@@ -113,6 +114,7 @@ export async function copyFlowToSource(
     // 不要假装失败得干干净净，那会留下一条谁也不知道存在的流程。
     throw new Error(`已复制出流程 #${flowId}，但未能关联到本源（${bound.message || '原因未知'}），可在流程中心手动关联`)
   }
+  if (opts.reuseConfigs) return { flowId, message: bound.message ?? '' }
   const detach = await detachCopiedConfigs(flowId, opts)
   return { flowId, message: bound.message ?? '', detach }
 }

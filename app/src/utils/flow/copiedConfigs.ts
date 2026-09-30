@@ -189,21 +189,28 @@ export async function detachCopiedConfigs(
 export interface CopiedFlow {
   /** 新流程 ID */
   flowId: string
-  detach: DetachResult
+  /** 配置去共享结果；选了「复用原配置」时不做去共享，为 undefined */
+  detach?: DetachResult
+}
+
+export interface CopyFlowOptions extends Omit<DetachOptions, 'onlyStepIds'> {
+  /** true = 复用原配置（用户在确认框里显式选择，0930）：只复制步骤，不做配置去共享 */
+  reuseConfigs?: boolean
 }
 
 /**
- * 整条复制一个流程并立即配置去共享（copyFlow → detachCopiedConfigs）。
- * 流程中心「复制流程」「从模板新建」共用；要绑到源的场景（画布「更换流程」、套用模板源无流程）
- * 走 applyTemplateToSource.copyFlowToSource（复制 → 换绑 → 去共享）。凡是复制出来的流程都守住
- * F2 红线：复制品的改动不影响原流程。
+ * 整条复制一个流程（copyFlow），默认随即配置去共享（detachCopiedConfigs）。
+ * 流程中心「复制流程」「从模板新建」共用；要绑到源的场景（画布「更换流程」「复制当前流程」、
+ * 套用模板源无流程）走 applyTemplateToSource.copyFlowToSource（复制 → 换绑 → 去共享）。
+ * 默认守住 F2 红线（复制品的改动不影响原流程）；`reuseConfigs` 是用户显式选择的例外。
  */
-export async function copyFlowWithOwnConfigs(
+export async function copyWholeFlow(
   fromFlowId: string,
   newName: string,
-  opts: Omit<DetachOptions, 'onlyStepIds'> = {},
+  opts: CopyFlowOptions = {},
 ): Promise<CopiedFlow> {
   const flowId = await flowCenterApi.copy(fromFlowId, newName)
+  if (opts.reuseConfigs) return { flowId }
   const detach = await detachCopiedConfigs(flowId, opts)
   return { flowId, detach }
 }

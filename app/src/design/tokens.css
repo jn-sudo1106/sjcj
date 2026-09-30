@@ -601,3 +601,14 @@ textarea {
   line-height: 1.55;
   word-break: break-all;
 }
+
+/* 复制流程确认框（utils/flow/confirmCopyFlow.ts）：ElMessageBox 挂在 body 下，只能写全局。
+   单选项竖排、标题 + 说明两行，长说明允许换行（el-radio 默认 nowrap + 固定高度）。 */
+.copy-flow-box { width: min(480px, calc(100vw - 32px)); }
+.copy-flow-confirm p { margin: 0 0 8px; line-height: 1.6; }
+.copy-flow-options { display: flex; flex-direction: column; align-items: stretch; gap: 8px; margin-top: 4px; }
+.copy-flow-options .copy-flow-option { height: auto; margin-right: 0; padding: 8px 10px; border: 1px solid var(--rc-border); border-radius: 6px; align-items: flex-start; white-space: normal; }
+.copy-flow-options .copy-flow-option.is-checked { border-color: #bfdbfe; background: var(--rc-primary-bg); }
+.copy-flow-options .copy-flow-option .el-radio__input { margin-top: 3px; }
+.copy-flow-options .copy-flow-option .el-radio__label { display: flex; flex-direction: column; gap: 2px; line-height: 1.5; }
+.copy-flow-option-desc { font-size: 12px; font-weight: 400; color: var(--rc-muted); }

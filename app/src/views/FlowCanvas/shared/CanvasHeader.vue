@@ -2,10 +2,11 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, Search, Switch } from '@element-plus/icons-vue'
+import { ArrowDown, CopyDocument, Search, Switch } from '@element-plus/icons-vue'
 import { useFlowStore } from '@/stores/flow'
 import { applyTemplateToSource, copyFlowToSource, reloadSourceIntoCanvas, reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import ReplaceFlowDialog from './ReplaceFlowDialog.vue'
+import { confirmCopyFlow } from '@/utils/flow/confirmCopyFlow'
 import { useUiStore } from '@/stores/ui'
 import { flowCenterApi, type FlowRecord } from '@/api'
 import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
@@ -132,9 +133,12 @@ const owningFlowName = ref('')
  * 否则断网时整屏的源都写着「流程已删除」，比不标更糟。
  */
 const owningFlowMissing = ref(false)
+/** 所属流程被多少个源共用（复制当前流程的确认框里提示影响面）；查不到为 undefined */
+const owningFlowSourceCnt = ref<number | undefined>()
 watch(() => src.value?.flowId, async (fid) => {
   owningFlowName.value = ''
   owningFlowMissing.value = false
+  owningFlowSourceCnt.value = undefined
   if (!fid) return
   const want = String(fid)
   try {
@@ -142,6 +146,7 @@ watch(() => src.value?.flowId, async (fid) => {
     if (String(src.value?.flowId ?? '') !== want) return
     owningFlowName.value = rec?.name ?? ''
     owningFlowMissing.value = rec === null
+    owningFlowSourceCnt.value = rec?.sourceCnt
   } catch { /* 保留 ID 展示，不标记已删除 */ }
 }, { immediate: true })
 const owningFlowLabel = computed(() => {
@@ -301,38 +306,86 @@ async function onSwitchFlow(command: string) {
 const replaceOpen = ref(false)
 async function onReplaceFlow(picked: FlowRecord) {
   const source = src.value
+  if (!source?.sourceId) return
+  const newName = `${source.name || source.sourceId}-流程`
+  await copyFlowIntoSource(picked, {
+    title: '更换流程',
+    confirmText: '复制并更换',
+    lines: [
+      `将把流程「${picked.name}」（#${picked.id}）整条复制一份，作为本源的新流程「${newName}」。`,
+      source.flowId
+        ? `本源改挂到新流程；原流程 #${source.flowId} 不动，其他使用它的源不受影响。`
+        : '本源还没有流程，新流程会直接关联到本源。',
+    ],
+    done: (newId) => `已复制流程「${picked.name}」为新流程 #${newId} 并关联到本源`,
+    fail: '更换流程失败',
+  })
+}
+
+/**
+ * 复制当前流程（0930）：把本源当前所属流程复制一份作为本源独有的流程并换绑——0929 F2 场景二
+ * 「想改但不想影响其它使用者 → 显式复制一个流程」。与「更换流程」同一个动作，来源固定为当前流程。
+ */
+async function onCopyCurrentFlow() {
+  const source = src.value
+  const fid = source?.flowId ? String(source.flowId) : ''
+  if (!source?.sourceId || !fid || owningFlowMissing.value) return
+  const name = owningFlowName.value || `#${fid}`
+  const newName = `${source.name || source.sourceId}-流程`
+  const others = owningFlowSourceCnt.value != null ? owningFlowSourceCnt.value - 1 : undefined
+  await copyFlowIntoSource({ id: fid, name }, {
+    title: '复制当前流程',
+    confirmText: '复制',
+    lines: [
+      `将把当前流程「${name}」（#${fid}）复制一份，作为本源独有的新流程「${newName}」，本源改挂到新流程。`,
+      others == null
+        ? '原流程不动。'
+        : others > 0
+          ? `原流程不动，另外 ${others} 个使用原流程的源仍挂在原流程上。`
+          : '当前流程只有本源在用，直接修改也不会影响别的源；复制后原流程会变成没有源使用。',
+    ],
+    done: (newId) => `已复制当前流程为新流程 #${newId}，本源已改挂到新流程`,
+    fail: '复制当前流程失败',
+  })
+}
+
+/**
+ * 更换流程 / 复制当前流程共用：确认（含「新增一套配置 / 复用原配置」二选一，0930）
+ * → 复制并换绑（copyFlowToSource）→ 从后端重载画布
+ */
+async function copyFlowIntoSource(
+  from: { id: string; name: string },
+  text: { title: string; confirmText: string; lines: string[]; done: (newId: string) => string; fail: string },
+) {
+  const source = src.value
   if (!source?.sourceId || switchingFlow.value) return
   const sourceId = source.sourceId
-  const newName = `${source.name || sourceId}-流程`
-  try {
-    await ElMessageBox.confirm(
-      [
-        `将把流程「${picked.name}」（#${picked.id}）整条复制一份，作为本源的新流程「${newName}」，节点配置各自独立。`,
-        source.flowId
-          ? `本源改挂到新流程；原流程 #${source.flowId} 不动，其他使用它的源不受影响。`
-          : '本源还没有流程，新流程会直接关联到本源。',
-        flow.dirty ? '当前画布有未保存改动，更换后会从服务端重新加载，未保存的改动将丢弃。' : '',
-      ].filter(Boolean).join(''),
-      '更换流程',
-      { type: 'warning', confirmButtonText: '复制并更换', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
+  const mode = await confirmCopyFlow({
+    title: text.title,
+    lines: [
+      text.lines.join(''),
+      flow.dirty ? '当前画布有未保存改动，完成后会从服务端重新加载，未保存的改动将丢弃。' : '',
+      '节点配置：',
+    ],
+    confirmText: text.confirmText,
+  })
+  if (!mode) return
+  const reuseConfigs = mode === 'reuse'
   replaceOpen.value = false
   switchingFlow.value = true
   switchingLabel.value = ''
   try {
-    const copied = await copyFlowToSource(picked.id, sourceId, source.name, {
-      sourceFlowRef: `流程「${picked.name}」`,
+    const copied = await copyFlowToSource(from.id, sourceId, source.name, {
+      sourceFlowRef: `流程「${from.name}」`,
       onProgress: (done, total) => { switchingLabel.value = `（正在复制配置 ${done}/${total}）` },
+      reuseConfigs,
     })
     const reloaded = await reloadSourceIntoCanvas(sourceId)
-    ElMessage.success(`已复制流程「${picked.name}」为新流程 #${copied.flowId} 并关联到本源`)
+    ElMessage.success(text.done(copied.flowId) + (reuseConfigs ? '（节点复用原配置）' : ''))
     reportDetachResult(copied.detach, '原流程')
-    if (!reloaded) ElMessage.warning('流程已更换，但画布重新加载失败，请刷新页面查看')
+    if (!reloaded) ElMessage.warning('流程已复制并换绑，但画布重新加载失败，请刷新页面查看')
   } catch (e) {
-    ElMessage.error(`更换流程失败：${(e as Error)?.message ?? String(e)}`)
+    ElMessage.error(`${text.fail}：${(e as Error)?.message ?? String(e)}`)
   } finally {
     switchingFlow.value = false
     switchingLabel.value = ''
@@ -462,6 +515,16 @@ async function onReplaceFlow(picked: FlowRecord) {
             :disabled="switchingFlow"
             @click="replaceOpen = true"
           ><el-icon :size="14"><Switch /></el-icon></button>
+        </el-tooltip>
+        <el-tooltip v-if="src.flowId && !owningFlowMissing" content="复制当前流程：复制一份作为本源独有的流程，之后修改不影响其他源" placement="bottom" :show-after="120">
+          <button
+            class="ch-icon-btn"
+            type="button"
+            data-testid="copy-current-flow"
+            aria-label="复制当前流程"
+            :disabled="switchingFlow"
+            @click="onCopyCurrentFlow"
+          ><el-icon :size="14"><CopyDocument /></el-icon></button>
         </el-tooltip>
         <ReplaceFlowDialog v-if="replaceOpen" v-model="replaceOpen" :current-flow-id="src.flowId" @pick="onReplaceFlow" />
         <!-- 0828 W9-2/D06：步骤接口已通，拓扑/进入条件防抖自动保存；不再放手动保存按钮。 -->

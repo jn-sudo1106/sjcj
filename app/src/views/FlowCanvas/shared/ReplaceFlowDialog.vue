@@ -165,7 +165,7 @@ function confirm() {
     append-to-body
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
   >
-    <p class="rfd-hint">选中的流程会整条复制一份作为本源的新流程，节点配置各自独立；原流程不动。</p>
+    <p class="rfd-hint">选中的流程会整条复制一份作为本源的新流程，原流程不动；确认时可选择新增一套配置或复用原配置。</p>
     <div class="rfd-toolbar">
       <select v-model="state.mode" class="rfd-input rfd-mode" aria-label="查询方式" data-testid="replace-flow-mode" @change="switchMode">
         <option value="flow">按流程</option>

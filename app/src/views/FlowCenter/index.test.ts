@@ -960,6 +960,37 @@ describe('流程中心 · 流程模板（Y8-D）', () => {
     expect((w.vm.$ as unknown as { setupState: { activeId: string } }).setupState.activeId).toBe('flow-99')
   })
 
+  it('行内复制流程：选「复用原配置」只复制流程，不逐节点复制配置', async () => {
+    const w = await mountCenter()
+    // confirmCopyFlow 的 message 是渲染函数：找到单选组，切到 reuse 再确认
+    vi.spyOn(ElMessageBox, 'confirm').mockImplementation((async (msg: unknown) => {
+      type N = { children?: unknown; props?: Record<string, unknown> | null }
+      const find = (n: unknown): N | undefined => {
+        if (!n || typeof n !== 'object') return undefined
+        if (Array.isArray(n)) return n.map(find).find(Boolean)
+        const v = n as N
+        if (typeof v.props?.['onUpdate:modelValue'] === 'function') return v
+        const c = v.children
+        if (c && typeof c === 'object' && !Array.isArray(c) && 'default' in c) return find((c as { default: () => unknown }).default())
+        return find(c)
+      }
+      ;(find((msg as (p: unknown) => unknown)({}))!.props!['onUpdate:modelValue'] as (v: string) => void)('reuse')
+      return 'confirm'
+    }) as never)
+    const copy = vi.spyOn(flowCenterApi, 'copy').mockResolvedValue('flow-99')
+    vi.spyOn(flowCenterApi, 'detail').mockResolvedValue({ ...FLOWS[0], id: 'flow-99', name: '新闻采集标准流程_copy' })
+    const copyConfig = vi.spyOn(configApi, 'copyConfigAndLocate')
+    const steps = vi.mocked(flowCenterApi.steps)
+    steps.mockClear()
+
+    await w.findAll('[data-testid="flow-copy"]')[0].trigger('click')
+    await flushPromises()
+
+    expect(copy).toHaveBeenCalledWith('flow-10086', '新闻采集标准流程_copy')
+    expect(steps).not.toHaveBeenCalledWith('flow-99', expect.anything())
+    expect(copyConfig).not.toHaveBeenCalled()
+  })
+
   it('行内复制流程：取消确认不发请求', async () => {
     const w = await mountCenter()
     vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')

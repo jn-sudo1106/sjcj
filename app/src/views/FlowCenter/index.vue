@@ -16,7 +16,8 @@ import { CopyDocument, Delete, Edit, Link, Lock, Star, StarFilled, Unlock } from
 import { useUiStore } from '@/stores/ui'
 import { useLaunchJobStore } from '@/stores/launchJob'
 import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
-import { copyFlowWithOwnConfigs } from '@/utils/flow/copiedConfigs'
+import { copyWholeFlow } from '@/utils/flow/copiedConfigs'
+import { confirmCopyFlow } from '@/utils/flow/confirmCopyFlow'
 import { parseIdList } from '@/utils/flow/flowSearch'
 import { reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import FlowSourcePickerDialog from './FlowSourcePickerDialog.vue'
@@ -443,7 +444,7 @@ async function createFromTemplate() {
   try {
     // 0929 F2：复制后立即逐步骤复制配置并换绑——大流程串行执行可能耗时，给用户一个非阻断反馈。
     const detaching = ElMessage({ message: '正在复制流程并为节点复制独立配置…', duration: 0 })
-    const { flowId: newId, detach } = await copyFlowWithOwnConfigs(picked.id, `${picked.name}_copy`, { sourceFlowRef: `模板「${picked.name}」` })
+    const { flowId: newId, detach } = await copyWholeFlow(picked.id, `${picked.name}_copy`, { sourceFlowRef: `模板「${picked.name}」` })
       .finally(() => detaching.close())
     const created = await flowCenterApi.detail(newId)
     templateForm.open = false
@@ -462,31 +463,29 @@ async function createFromTemplate() {
 /**
  * 复制流程（迁自旧平台 FlowList「更多 → 复制流程」）：走 `flow/copyFlow`，复制流程与全部节点，
  * 不复制关联源，新流程名为「原名_copy」。与旧平台的差异：旧平台复制后配置仍与原流程共享、
- * 让用户自己去节点里「复制配置并替换」；这里按 0929 F2 红线（复制品的改动不得影响原流程）
- * 复制后立即逐节点复制独立配置，与「从模板新建」同一条路径。
+ * 让用户自己去节点里「复制配置并替换」；这里默认按 0929 F2 红线（复制品的改动不得影响原流程）
+ * 复制后立即逐节点复制独立配置，与「从模板新建」同一条路径。0930 起确认框里可改选「复用原配置」
+ * （即旧平台的行为），由用户显式决定。
  */
 const copyingFlowId = ref('')
 async function copyFlow(t: FlowRecord) {
   if (copyingFlowId.value) return
-  try {
-    await ElMessageBox.confirm(
-      `将复制流程「${t.name}」（#${t.id}）及其全部节点，生成新流程「${t.name}_copy」，不复制关联源。`
-        + '复制完成后会自动为新流程的节点复制独立配置，之后修改新流程不会影响原流程。',
-      '复制流程',
-      { confirmButtonText: '复制', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
+  const mode = await confirmCopyFlow({
+    title: '复制流程',
+    lines: [`将复制流程「${t.name}」（#${t.id}）及其全部节点，生成新流程「${t.name}_copy」，不复制关联源。节点配置：`],
+    confirmText: '复制',
+  })
+  if (!mode) return
+  const reuseConfigs = mode === 'reuse'
   copyingFlowId.value = t.id
   try {
-    const detaching = ElMessage({ message: '正在复制流程并为节点复制独立配置…', duration: 0 })
-    const { flowId: newId, detach } = await copyFlowWithOwnConfigs(t.id, `${t.name}_copy`, { sourceFlowRef: `流程「${t.name}」` })
+    const detaching = ElMessage({ message: reuseConfigs ? '正在复制流程…' : '正在复制流程并为节点复制独立配置…', duration: 0 })
+    const { flowId: newId, detach } = await copyWholeFlow(t.id, `${t.name}_copy`, { sourceFlowRef: `流程「${t.name}」`, reuseConfigs })
       .finally(() => detaching.close())
     const created = await flowCenterApi.detail(newId)
     if (created) replaceFlow(created)
     else void load()
-    ElMessage.success(`已复制流程「${t.name}」，新流程 #${newId}`)
+    ElMessage.success(`已复制流程「${t.name}」，新流程 #${newId}${reuseConfigs ? '（节点复用原配置）' : ''}`)
     reportDetachResult(detach, '原流程')
   } catch (e) {
     ElMessage.error(`复制流程失败：${(e as Error)?.message ?? String(e)}`)
