@@ -65,6 +65,8 @@ describe('sourceConditionParams（多条件，2026-09-28）', () => {
     expect(sourceConditionParams([{ field: 'sourceUrl', op: 'empty', value: 'x' }])).toEqual({ sourceUrl: 'NULL' })
     expect(sourceConditionParams([{ field: 'sourceUrl', op: 'notEmpty', value: 'x' }])).toEqual({ sourceUrl: 'NOT NULL' })
     expect(sourceConditionParams([{ field: 'remark', op: 'notEmpty', value: '' }])).toEqual({ remark: '%' })
+    // 0930-15：流程 ID 只有「等于」
+    expect(sourceConditionParams([{ field: 'flowId', op: 'eq', value: ' 14009350 ' }])).toEqual({ flowId: '14009350' })
     expect(defaultSourceCondOp('sourceUrl')).toBe('like')
   })
 })

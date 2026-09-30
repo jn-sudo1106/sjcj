@@ -44,8 +44,11 @@ export function mightBeUrlFragment(text: string): boolean {
  *   source-api.md §1.1）。实测站 12：全部 6028 = NULL 393 + NOT NULL 5635。
  *   ⚠️ 与备注的「非空」口径不同（备注是 `%`），每个字段各按后端约定发，见 NOT_EMPTY_VALUE。
  *   （09-28 那次测 `sourceUrl=NULL` 只 LIKE 到字面 "null"，是后端还没上线。）
+ * - 流程 ID 等于 = `flowId`（0930-15，会后 Leon：「可以根据流程查有哪些源」）。2026-09-02 实测：
+ *   flowId=1400330 得 46 条、与该流程 sourceCnt 一致，传不存在的得 0 条，不是静默忽略。
+ *   只能手动选，不参与自动识别（纯数字一律按源 ID）。放最后，免得「＋」加行时先加出它来。
  */
-export type SourceCondField = SourceSearchField | 'remark'
+export type SourceCondField = SourceSearchField | 'remark' | 'flowId'
 export type SourceCondOp = 'eq' | 'like' | 'notEmpty' | 'empty'
 
 export interface SourceCondition {
@@ -84,6 +87,7 @@ export const SOURCE_COND_FIELDS: { value: SourceCondField; label: string; placeh
       { value: 'empty', label: '为空' },
     ],
   },
+  { value: 'flowId', label: '流程 ID', placeholder: '流程 ID，如 14009350', ops: [{ value: 'eq', label: '等于' }] },
 ]
 
 export function sourceCondFieldOf(field: SourceCondField) {

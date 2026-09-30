@@ -111,7 +111,12 @@ let conditionSeq = 0
 function newCondition(field: SourceCondField, value = ''): ConditionRow {
   return { key: ++conditionSeq, field, op: defaultSourceCondOp(field), value, pinned: false }
 }
-const conditions = ref<ConditionRow[]>([newCondition('sourceIds', props.initialSourceIds ?? '')])
+const conditions = ref<ConditionRow[]>([
+  // 流程中心「查看全部关联源」带过来的流程 ID 落成一行「流程 ID 等于」（0930-15），不再单独挂芯片；
+  // 没带源 ID 时就只有这一行，不留一个空的源 ID 行在前面
+  ...(props.initialSourceIds || !props.initialFlowId ? [newCondition('sourceIds', props.initialSourceIds ?? '')] : []),
+  ...(props.initialFlowId ? [{ ...newCondition('flowId', props.initialFlowId), pinned: true }] : []),
+])
 /** 同一字段只能有一行（后端一个参数只带一个值）：别的行占了的字段在下拉里置灰 */
 function fieldTakenByOther(field: SourceCondField, row: ConditionRow) {
   return conditions.value.some((c) => c !== row && c.field === field)
@@ -128,7 +133,7 @@ function removeCondition(row: ConditionRow) {
   if (wasActive) search()
 }
 function conditionPlaceholder(row: ConditionRow) {
-  if (row.pinned || row.field === 'remark') return sourceCondFieldOf(row.field).placeholder
+  if (row.pinned || row.field === 'remark' || row.field === 'flowId') return sourceCondFieldOf(row.field).placeholder
   return '源 ID / 名称 / URL，自动识别'
 }
 function onConditionInput(row: ConditionRow, value: string) {
@@ -137,7 +142,7 @@ function onConditionInput(row: ConditionRow, value: string) {
     row.pinned = false
     return
   }
-  if (row.pinned || row.field === 'remark') return
+  if (row.pinned || row.field === 'remark' || row.field === 'flowId') return
   // 识别出的字段被别的行占了，退回按名称查（名称是兜底口径）；名称也占了就不动
   const target = ([detectSourceSearchField(value), 'name'] as const).find((f) => f && !fieldTakenByOther(f, row))
   if (target && target !== row.field) {
@@ -167,7 +172,6 @@ function useUrlFallback() {
   row.pinned = true
   search()
 }
-const flowFilterId = ref(props.initialFlowId ?? '')
 
 /** 不限网站模式（采集资产源列表视图）：多出「所属网站」列与「网站」筛选 */
 const crossSite = computed(() => !props.currentSiteId)
@@ -210,7 +214,18 @@ function effectiveSiteIds(): string | undefined {
   if (props.scopeSiteIds) return props.scopeSiteIds.join(',') || undefined
   return undefined
 }
-watch(() => props.initialFlowId, (id) => { flowFilterId.value = id ?? '' })
+// 同 initialSourceIds：本组件常常已经挂载着，prop 变了也要落进「流程 ID」那一行并重查。
+watch(() => props.initialFlowId, (id) => {
+  if (!id) return
+  const existing = conditions.value.find((c) => c.field === 'flowId')
+  if (existing?.value === id) return
+  const first = conditions.value[0]!
+  if (existing) existing.value = id
+  else if (!sourceCondActive(first)) Object.assign(first, { field: 'flowId', op: 'eq', value: id, pinned: true })
+  else conditions.value.push({ ...newCondition('flowId', id), pinned: true })
+  page.value = 1
+  void loadSources()
+})
 // prop 变化也要生效：反查跳过来时本组件常常已经挂载着（同一个 SiteDetailView 里切视图），
 // 只把它当初始值用等于永远不生效。清空不跟随——那是用户自己在筛选框里的操作，别覆盖他。
 watch(() => props.initialSourceIds, (ids) => {
@@ -260,7 +275,7 @@ function currentQuery(): SourceFilter {
   return {
     siteIds: effectiveSiteIds(),
     sourceIds: cond.sourceIds,
-    flowId: flowFilterId.value || undefined,
+    flowId: cond.flowId,
     name: cond.name,
     sourceUrl: cond.sourceUrl,
     state: statusFilter.value === 'all' || statusFilter.value === 'disabled' ? undefined : statusFilter.value,
@@ -320,7 +335,6 @@ function search() {
 }
 function clearFilters() {
   conditions.value = [newCondition('sourceIds')]
-  flowFilterId.value = ''
   statusFilter.value = 'all'
   tagFilter.value = ''
   dataCountMax.value = ''
@@ -1030,12 +1044,6 @@ watch(() => ui.sourceListRevision, () => {
         />
       </label>
       <div class="sov-filter-actions" data-testid="source-overview-actions">
-        <!-- 从流程中心「查看全部关联源」跳过来时的过滤芯片（0904 I16 / Z7-2）。
-             这条件不在任何输入框里，不显式标出来用户会以为"这个网站就这几个源"。 -->
-        <span v-if="flowFilterId" class="sov-chip" data-testid="source-flow-chip">
-          按流程 #{{ flowFilterId }} 过滤
-          <button type="button" class="sov-chip-x" title="取消按流程过滤" @click="flowFilterId = ''; search()">✕</button>
-        </span>
         <button class="sov-btn primary" type="button" data-testid="source-overview-search" @click="search">查询</button>
         <button class="sov-btn" type="button" @click="clearFilters">清空</button>
         <template v-if="!crossSite">
@@ -1279,8 +1287,6 @@ watch(() => ui.sourceListRevision, () => {
 .sov-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
 .sov-btn { height: 30px; padding: 0 10px; border: 1px solid #d5e2f2; border-radius: 6px; background: #fff; color: var(--rc-text-2); cursor: pointer; font-size: 12px; font-weight: 600; }
 
-.sov-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 12px; background: var(--rc-primary-bg, #eff6ff); color: var(--rc-primary-ink, #1d4ed8); font-size: 12px; }
-.sov-chip-x { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 11px; padding: 0; }
 .sov-btn.primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }
 .sov-progress { color: var(--rc-muted); font-size: 11px; }
 .sov-btn:disabled { cursor: not-allowed; opacity: .5; }

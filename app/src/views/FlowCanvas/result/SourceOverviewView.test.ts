@@ -1134,7 +1134,7 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     expect(lastQ(page)?.sourceIds).toBeUndefined()
   })
 
-  it('同一字段只能一行：别的行占了的字段置灰；四个字段加满后没有「+」', async () => {
+  it('同一字段只能一行：别的行占了的字段置灰；五个字段加满后没有「+」', async () => {
     const { wrapper } = await mountWithSpy()
     await add(wrapper)
     const secondOptions = fields(wrapper)[1]!.findAll('option')
@@ -1142,8 +1142,36 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     expect((fields(wrapper)[1]!.element as HTMLSelectElement).value).toBe('name')
     await add(wrapper)
     await add(wrapper)
-    expect(fields(wrapper).map((f) => (f.element as HTMLSelectElement).value)).toEqual(['sourceIds', 'name', 'sourceUrl', 'remark'])
+    await add(wrapper)
+    expect(fields(wrapper).map((f) => (f.element as HTMLSelectElement).value)).toEqual(['sourceIds', 'name', 'sourceUrl', 'remark', 'flowId'])
     expect(wrapper.find('[data-testid="source-overview-condition-add"]').exists()).toBe(false)
+  })
+
+  // 0930-15（会后 Leon：「可以根据流程查有哪些源」）
+  it('按流程 ID 查：选「流程 ID」填值后作为 flowId 发出；纯数字不会被自动识别成源 ID', async () => {
+    const { wrapper, page } = await mountWithSpy()
+    await fields(wrapper)[0]!.setValue('flowId')
+    await texts(wrapper)[0]!.setValue('14009350')
+    expect((fields(wrapper)[0]!.element as HTMLSelectElement).value).toBe('flowId')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(lastQ(page)).toEqual(expect.objectContaining({ flowId: '14009350' }))
+    expect(lastQ(page)?.sourceIds).toBeUndefined()
+  })
+
+  it('流程中心跳过来带的流程 ID 落成一行「流程 ID 等于」并按它查，不再有单独的过滤芯片', async () => {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source] })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: 'site-current', initialFlowId: '1400330' }, attachTo: document.body })
+    await flushPromises()
+    expect(fields(wrapper).map((f) => (f.element as HTMLSelectElement).value)).toEqual(['flowId'])
+    expect((texts(wrapper)[0]!.element as HTMLInputElement).value).toBe('1400330')
+    expect(lastQ(page)).toEqual(expect.objectContaining({ flowId: '1400330' }))
+    expect(wrapper.find('[data-testid="source-flow-chip"]').exists()).toBe(false)
+
+    await wrapper.findAll('[data-testid="source-overview-condition-remove"]')[0]!.trigger('click')
+    await flushPromises()
+    expect(lastQ(page)?.flowId).toBeUndefined()
+    wrapper.unmount()
   })
 
   it('× 删掉一行并重查；只剩一行时 × 是清空这一行', async () => {
