@@ -17,7 +17,7 @@ vi.mock('element-plus', async (importOriginal) => {
 
 // 0903 Y8-24（2026-09-05）：候选改成**只列已标记为模板的流程**，走 flowCenterApi.templates()
 // （后端专给的 flowTemplateList），不再拉全部流程。
-async function mountHeader(records: Awaited<ReturnType<typeof flowCenterApi.templates>> = []) {
+async function mountHeader(records: Awaited<ReturnType<typeof flowCenterApi.templates>> = [], stubs: Record<string, object> = {}) {
   vi.spyOn(flowCenterApi, 'templates').mockResolvedValue(records)
   const router = createRouter({
     history: createMemoryHistory(),
@@ -32,7 +32,7 @@ async function mountHeader(records: Awaited<ReturnType<typeof flowCenterApi.temp
   await router.isReady()
   const pinia = createPinia()
   setActivePinia(pinia)
-  const wrapper = mount(CanvasHeader, { global: { plugins: [pinia, router] } })
+  const wrapper = mount(CanvasHeader, { global: { plugins: [pinia, router], stubs } })
   await flushPromises()
   return wrapper
 }
@@ -77,8 +77,9 @@ describe('CanvasHeader · 参数源摘要（0721 会议 T5）', () => {
     await flushPromises()
 
     const link = wrapper.get('[data-testid="owning-flow"]')
-    // 0926：名字后追加【流程ID: xxx】，退化 `#id` 形态本身已含 id 不重复
-    expect(link.text()).toBe('所属流程：上市公司-配置【流程ID: 1400935】')
+    // 0926 起名字后带流程 ID；0930 改成 `#id` 小标签（退化 `#id` 形态本身已含 id 不重复）
+    expect(link.text()).toBe('所属流程：上市公司-配置#1400935')
+    expect(link.get('[data-testid="owning-flow-id"]').text()).toBe('#1400935')
     await link.trigger('click')
     await flushPromises()
     const r = (wrapper.vm as unknown as { $router: { currentRoute: { value: { path: string; query: Record<string, string> } } } }).$router
@@ -527,5 +528,54 @@ describe('CanvasHeader · 套用流程模板走后端（2026-09-22）', () => {
     // 原来写的是「复制并替换」，那是前端本地替换时代的话
     expect(opts).toMatchObject({ confirmButtonText: '复制并追加' })
     expect(String(message)).not.toContain('会被替换')
+  })
+})
+
+describe('CanvasHeader · 更换流程（0930）', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.mocked(ElMessageBox.confirm).mockReset()
+  })
+
+  const SRC = {
+    sourceId: 'source-a', name: '源 A', url: 'https://x', configId: '', mainTable: 'T1', owner: 'admin', state: 'C', flowId: 'flow-1',
+  }
+  const PICKED = { id: 'flow-7', name: '别人的流程', updatedAt: '', definition: { main: [], branches: [], configs: {}, branchGroups: [] } }
+
+  async function replace(confirmed: boolean) {
+    // 弹窗本身另有 ReplaceFlowDialog.test.ts；这里只测头部的确认 + 复制换绑 + 重载
+    const wrapper = await mountHeader([], { ReplaceFlowDialog: { name: 'ReplaceFlowDialog', template: '<div data-testid="replace-flow-dialog-stub" />' } })
+    const flow = useFlowStore()
+    flow.loadFromSource(SRC as never, [], null)
+    await flushPromises()
+    vi.mocked(ElMessageBox.confirm)[confirmed ? 'mockResolvedValue' : 'mockRejectedValue']('confirm' as never)
+    const copyFlow = vi.spyOn(flowCenterApi, 'copy').mockResolvedValue('flow-new')
+    const copySteps = vi.spyOn(flowCenterApi, 'copyTemplateSteps')
+    const bind = vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(flowCenterApi, 'steps').mockResolvedValue([])
+    const detail = vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...SRC, flowId: 'flow-new' } as never)
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+
+    await wrapper.get('[data-testid="replace-flow-open"]').trigger('click')
+    await flushPromises()
+    wrapper.findComponent({ name: 'ReplaceFlowDialog' }).vm.$emit('pick', PICKED)
+    await flushPromises()
+    await flushPromises()
+    return { copyFlow, copySteps, bind, detail }
+  }
+
+  it('确认后整条复制选中流程（名为「源名-流程」）并换绑本源，不走追加，重载画布', async () => {
+    const { copyFlow, copySteps, bind, detail } = await replace(true)
+    expect(ElMessageBox.confirm).toHaveBeenCalledWith(expect.stringContaining('原流程 #flow-1 不动'), '更换流程', expect.anything())
+    expect(copyFlow).toHaveBeenCalledWith('flow-7', '源 A-流程')
+    expect(copySteps).not.toHaveBeenCalled()
+    expect(bind).toHaveBeenCalledWith(['source-a'], 'flow-new')
+    expect(detail).toHaveBeenCalledWith('source-a')
+  })
+
+  it('取消确认不发任何写请求', async () => {
+    const { copyFlow, bind } = await replace(false)
+    expect(copyFlow).not.toHaveBeenCalled()
+    expect(bind).not.toHaveBeenCalled()
   })
 })

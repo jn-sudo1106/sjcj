@@ -2,9 +2,10 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, Search } from '@element-plus/icons-vue'
+import { ArrowDown, Search, Switch } from '@element-plus/icons-vue'
 import { useFlowStore } from '@/stores/flow'
-import { applyTemplateToSource, reloadSourceIntoCanvas, reportDetachResult } from '@/utils/flow/applyTemplateToSource'
+import { applyTemplateToSource, copyFlowToSource, reloadSourceIntoCanvas, reportDetachResult } from '@/utils/flow/applyTemplateToSource'
+import ReplaceFlowDialog from './ReplaceFlowDialog.vue'
 import { useUiStore } from '@/stores/ui'
 import { flowCenterApi, type FlowRecord } from '@/api'
 import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
@@ -292,6 +293,52 @@ async function onSwitchFlow(command: string) {
   }
 }
 
+/**
+ * 更换流程（0930）：与「套用流程模板」同一套复制能力，但候选是全部流程（可按源查），
+ * 且语义是**换**不是**追加**——把选中流程整条复制一份（节点配置各自独立）作为本源的新流程并换绑。
+ * 原流程不动，共用原流程的其他源不受影响（用户 0930 拍板：复制新流程并换绑）。
+ */
+const replaceOpen = ref(false)
+async function onReplaceFlow(picked: FlowRecord) {
+  const source = src.value
+  if (!source?.sourceId || switchingFlow.value) return
+  const sourceId = source.sourceId
+  const newName = `${source.name || sourceId}-流程`
+  try {
+    await ElMessageBox.confirm(
+      [
+        `将把流程「${picked.name}」（#${picked.id}）整条复制一份，作为本源的新流程「${newName}」，节点配置各自独立。`,
+        source.flowId
+          ? `本源改挂到新流程；原流程 #${source.flowId} 不动，其他使用它的源不受影响。`
+          : '本源还没有流程，新流程会直接关联到本源。',
+        flow.dirty ? '当前画布有未保存改动，更换后会从服务端重新加载，未保存的改动将丢弃。' : '',
+      ].filter(Boolean).join(''),
+      '更换流程',
+      { type: 'warning', confirmButtonText: '复制并更换', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  replaceOpen.value = false
+  switchingFlow.value = true
+  switchingLabel.value = ''
+  try {
+    const copied = await copyFlowToSource(picked.id, sourceId, source.name, {
+      sourceFlowRef: `流程「${picked.name}」`,
+      onProgress: (done, total) => { switchingLabel.value = `（正在复制配置 ${done}/${total}）` },
+    })
+    const reloaded = await reloadSourceIntoCanvas(sourceId)
+    ElMessage.success(`已复制流程「${picked.name}」为新流程 #${copied.flowId} 并关联到本源`)
+    reportDetachResult(copied.detach, '原流程')
+    if (!reloaded) ElMessage.warning('流程已更换，但画布重新加载失败，请刷新页面查看')
+  } catch (e) {
+    ElMessage.error(`更换流程失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    switchingFlow.value = false
+    switchingLabel.value = ''
+  }
+}
+
 </script>
 
 <template>
@@ -360,7 +407,7 @@ async function onSwitchFlow(command: string) {
               :disabled="owningFlowMissing"
               :title="owningFlowTitle"
               @click="openOwningFlow"
-            >所属流程：{{ owningFlowLabel }}<span v-if="owningFlowName" class="ch-flow-id">【流程ID: {{ src.flowId }}】</span></button>
+            >所属流程：<span class="ch-flow-name">{{ owningFlowLabel }}</span><span v-if="owningFlowName" class="ch-flow-id" data-testid="owning-flow-id">#{{ src.flowId }}</span></button>
           </template>
         </div>
       </div>
@@ -405,6 +452,18 @@ async function onSwitchFlow(command: string) {
             <button type="button" class="ch-flow-manage" @mousedown.prevent="manageFlows">管理流程…</button>
           </div>
         </div>
+        <!-- 0930 用户要求改成图标：文案收进 tooltip / aria-label；进度照旧显示在左边搜索框的 placeholder -->
+        <el-tooltip content="更换流程：从全部流程里选一条复制给本源（原流程不动）" placement="bottom" :show-after="120">
+          <button
+            class="ch-icon-btn"
+            type="button"
+            data-testid="replace-flow-open"
+            aria-label="更换流程"
+            :disabled="switchingFlow"
+            @click="replaceOpen = true"
+          ><el-icon :size="14"><Switch /></el-icon></button>
+        </el-tooltip>
+        <ReplaceFlowDialog v-if="replaceOpen" v-model="replaceOpen" :current-flow-id="src.flowId" @pick="onReplaceFlow" />
         <!-- 0828 W9-2/D06：步骤接口已通，拓扑/进入条件防抖自动保存；不再放手动保存按钮。 -->
         <span class="ch-save-status" data-testid="flow-save-status">
           <span v-if="saveStatus === 'pending'" class="ch-save-pending">请先补全节点配置</span>
@@ -461,16 +520,24 @@ async function onSwitchFlow(command: string) {
 /* 下划线是**常态**，不是 hover 才有（2026-09-20 走查）：这一行是 10px 的灰字（.ch-sub），
    同行的 URL 还是 color: inherit，只有这一处带色——但产品仍然没认出它能点。
    字号不动：URL 段要靠 flex 压缩省略，动字号会牵动整行排版。 */
-.ch-flow-link { flex: none; white-space: nowrap; border: 0; background: transparent; padding: 0; color: var(--rc-primary); font-size: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
-.ch-flow-link:hover { text-decoration-thickness: 2px; }
-/* 0926：所属流程追加【流程ID: xxx】——ID 是附加辨识信息，弱化处理，不抢流程名的视觉权重
+.ch-flow-link { flex: none; display: inline-flex; align-items: center; white-space: nowrap; border: 0; background: transparent; padding: 0; color: var(--rc-primary); font-size: inherit; cursor: pointer; }
+/* 下划线只画在流程名上，ID 标签不带——原来整段（含【流程ID: xxx】）一条下划线，又长又乱（0930） */
+.ch-flow-name { text-decoration: underline; text-underline-offset: 2px; }
+.ch-flow-link:hover .ch-flow-name { text-decoration-thickness: 2px; }
+/* 0926 起在流程名后带流程 ID；0930 由【流程ID: xxx】改成与画布节点步骤 ID 同款的小标签 `#xxx`
    （退化 `#id（流程已删除）` 形态本身已含 id，不重复追加） */
-.ch-flow-id { color: var(--rc-muted); }
+.ch-flow-id { margin-left: 6px; padding: 0 5px; border-radius: 4px; background: var(--rc-primary-bg); color: var(--rc-primary-ink); font: 600 10px/15px ui-monospace, SFMono-Regular, Menlo, monospace; }
 /* 流程已删除：跳过去只会搜出空列表，不给点 */
-.ch-flow-link:disabled { color: var(--rc-faint); cursor: not-allowed; text-decoration: none; }
+.ch-flow-link:disabled { color: var(--rc-faint); cursor: not-allowed; }
+.ch-flow-link:disabled .ch-flow-name { text-decoration: none; }
 .ch-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
 .ch-actions .rc-btn { height: 30px; padding: 0 11px; font-size: 12px; }
 .ch-flow-picker { position: relative; width: 184px; margin-right: 4px; }
+/* 与全站工具栏图标按钮同一套（采集资产 .ca-refresh / 任务视图 .tv-icon-btn / 表选择 .sts-refresh）：
+   白底 + rc-border 细边 + 6px 圆角 + 灰图标，悬停只变描边与图标色；高度 30 与左边搜索框对齐 */
+.ch-icon-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; width: 30px; height: 30px; padding: 0; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-muted); cursor: pointer; transition: border-color .12s, color .12s; }
+.ch-icon-btn:hover { border-color: #bfdbfe; color: var(--rc-primary); }
+.ch-icon-btn:disabled { opacity: .45; cursor: not-allowed; }
 .ch-flow-searchbox { display: flex; align-items: center; gap: 6px; box-sizing: border-box; height: 30px; padding: 0 8px; border: 1px solid #dbe3ee; border-radius: 7px; background: #f8fafc; color: var(--rc-faint); transition: border-color .15s, box-shadow .15s, background .15s; }
 .ch-flow-searchbox:focus-within { border-color: #60a5fa; background: #fff; box-shadow: 0 0 0 3px #dbeafe; }
 .ch-flow-search-icon, .ch-flow-chevron { flex: none; font-size: 13px; }

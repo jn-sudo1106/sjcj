@@ -87,18 +87,34 @@ export async function applyTemplateToSource(
     return { flowId: targetFlowId, message: ack.message ?? '', createdFlow: false, detach }
   }
 
-  const newFlowId = await flowCenterApi.copy(templateFlowId, `${sourceName || sourceId}-流程`)
-  const bound = await flowCenterApi.bindSources([sourceId], newFlowId)
-  if (!bound.ok) {
-    // 流程已经建出来了，只是没绑上。说清 ID，让用户能去流程中心手动关联——
-    // 不要假装失败得干干净净，那会留下一条谁也不知道存在的流程。
-    throw new Error(`已按模板复制出流程 #${newFlowId}，但未能关联到本源（${bound.message || '原因未知'}），可在流程中心手动关联`)
-  }
-  const detach = await detachCopiedConfigs(newFlowId, {
+  const copied = await copyFlowToSource(templateFlowId, sourceId, sourceName, {
     sourceFlowRef: `模板流程 #${templateFlowId}`,
     onProgress: opts.onProgress,
   })
-  return { flowId: newFlowId, message: bound.message ?? '', createdFlow: true, detach }
+  return { ...copied, createdFlow: true }
+}
+
+/**
+ * 把一条流程整条复制给源并换绑（画布「更换流程」、套用模板在源无流程时共用）。
+ * 新流程名「源名-流程」；原流程不动，其他使用原流程的源不受影响。
+ */
+export async function copyFlowToSource(
+  fromFlowId: string,
+  sourceId: string,
+  sourceName: string | undefined,
+  opts: { sourceFlowRef: string; onProgress?: (done: number, total: number) => void },
+): Promise<{ flowId: string; message: string; detach: DetachResult }> {
+  // 顺序：复制 → 先换绑 → 再去共享。去共享是逐节点串行、可能很慢，先绑上源不让它等；
+  // 去共享个别失败只登记残留共享（编辑前知情确认），不影响换绑结果。
+  const flowId = await flowCenterApi.copy(fromFlowId, `${sourceName || sourceId}-流程`)
+  const bound = await flowCenterApi.bindSources([sourceId], flowId)
+  if (!bound.ok) {
+    // 流程已经建出来了，只是没绑上。说清 ID，让用户能去流程中心手动关联——
+    // 不要假装失败得干干净净，那会留下一条谁也不知道存在的流程。
+    throw new Error(`已复制出流程 #${flowId}，但未能关联到本源（${bound.message || '原因未知'}），可在流程中心手动关联`)
+  }
+  const detach = await detachCopiedConfigs(flowId, opts)
+  return { flowId, message: bound.message ?? '', detach }
 }
 
 /**

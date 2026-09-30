@@ -184,6 +184,30 @@ export async function detachCopiedConfigs(
   return { ok: true, copied, remainShared }
 }
 
+// ---------------------------------------------------------------- 整条复制
+
+export interface CopiedFlow {
+  /** 新流程 ID */
+  flowId: string
+  detach: DetachResult
+}
+
+/**
+ * 整条复制一个流程并立即配置去共享（copyFlow → detachCopiedConfigs）。
+ * 流程中心「复制流程」「从模板新建」共用；要绑到源的场景（画布「更换流程」、套用模板源无流程）
+ * 走 applyTemplateToSource.copyFlowToSource（复制 → 换绑 → 去共享）。凡是复制出来的流程都守住
+ * F2 红线：复制品的改动不影响原流程。
+ */
+export async function copyFlowWithOwnConfigs(
+  fromFlowId: string,
+  newName: string,
+  opts: Omit<DetachOptions, 'onlyStepIds'> = {},
+): Promise<CopiedFlow> {
+  const flowId = await flowCenterApi.copy(fromFlowId, newName)
+  const detach = await detachCopiedConfigs(flowId, opts)
+  return { flowId, detach }
+}
+
 // ---------------------------------------------------------------- 本地拼装路径去共享
 
 export interface InPlaceDetachOptions {

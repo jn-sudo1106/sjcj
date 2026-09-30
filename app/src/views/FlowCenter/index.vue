@@ -16,7 +16,8 @@ import { CopyDocument, Delete, Edit, Link, Lock, Star, StarFilled, Unlock } from
 import { useUiStore } from '@/stores/ui'
 import { useLaunchJobStore } from '@/stores/launchJob'
 import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
-import { detachCopiedConfigs } from '@/utils/flow/copiedConfigs'
+import { copyFlowWithOwnConfigs } from '@/utils/flow/copiedConfigs'
+import { parseIdList } from '@/utils/flow/flowSearch'
 import { reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import FlowSourcePickerDialog from './FlowSourcePickerDialog.vue'
 import FlowDetailDrawer from './FlowDetailDrawer.vue'
@@ -155,9 +156,8 @@ let loadSeq = 0
 function searchCond(): { keywords?: string; flowIds?: string[] } {
   const raw = query.value.trim()
   if (!raw) return {}
-  const parts = raw.split(/[,，\s]+/).filter(Boolean)
-  if (parts.every((p) => /^\d+$/.test(p))) return { flowIds: parts }
-  return { keywords: raw }
+  const ids = parseIdList(raw)
+  return ids ? { flowIds: ids } : { keywords: raw }
 }
 async function load() {
   const reqId = ++loadSeq
@@ -441,10 +441,10 @@ async function createFromTemplate() {
   if (!picked) return
   templateForm.loading = true
   try {
-    const newId = await flowCenterApi.copy(picked.id, `${picked.name}_copy`)
     // 0929 F2：复制后立即逐步骤复制配置并换绑——大流程串行执行可能耗时，给用户一个非阻断反馈。
-    const detaching = ElMessage({ message: '正在为新流程复制独立配置…', duration: 0 })
-    const detach = await detachCopiedConfigs(newId, { sourceFlowRef: `模板「${picked.name}」` }).finally(() => detaching.close())
+    const detaching = ElMessage({ message: '正在复制流程并为节点复制独立配置…', duration: 0 })
+    const { flowId: newId, detach } = await copyFlowWithOwnConfigs(picked.id, `${picked.name}_copy`, { sourceFlowRef: `模板「${picked.name}」` })
+      .finally(() => detaching.close())
     const created = await flowCenterApi.detail(newId)
     templateForm.open = false
     if (created) replaceFlow(created)
@@ -480,9 +480,9 @@ async function copyFlow(t: FlowRecord) {
   }
   copyingFlowId.value = t.id
   try {
-    const newId = await flowCenterApi.copy(t.id, `${t.name}_copy`)
-    const detaching = ElMessage({ message: '正在为新流程复制独立配置…', duration: 0 })
-    const detach = await detachCopiedConfigs(newId, { sourceFlowRef: `流程「${t.name}」` }).finally(() => detaching.close())
+    const detaching = ElMessage({ message: '正在复制流程并为节点复制独立配置…', duration: 0 })
+    const { flowId: newId, detach } = await copyFlowWithOwnConfigs(t.id, `${t.name}_copy`, { sourceFlowRef: `流程「${t.name}」` })
+      .finally(() => detaching.close())
     const created = await flowCenterApi.detail(newId)
     if (created) replaceFlow(created)
     else void load()
