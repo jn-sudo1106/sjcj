@@ -14,7 +14,8 @@ import { useStepWrite } from './useStepWrite'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
 import { entryApi, flowApi, flowCenterApi, type FlowRecord } from '@/api'
-import { relinkCandidates, validFlowIdOf } from '@/utils/flow/stepPersist'
+import { isWritableStepId, relinkCandidates, validFlowIdOf } from '@/utils/flow/stepPersist'
+import { copyToClipboard } from '@/utils/clipboard'
 import CanvasHeader from '../shared/CanvasHeader.vue'
 import AddNodePopover from './AddNodePopover.vue'
 import FlowXmlDialog from './FlowXmlDialog.vue'
@@ -23,7 +24,6 @@ import { applyTemplateToSource, reloadFlowIntoCanvas, reloadSourceIntoCanvas, re
 import { detachConfigsInPlace } from '@/utils/flow/copiedConfigs'
 import {
   effectiveOutputTable,
-  iconFor,
   isDataNode,
   isRuleNode,
   isDecision,
@@ -748,27 +748,35 @@ watch(
             data-testid="node-delete"
             @click.stop="void deleteCanvasNode(n.id)"
           >✕</button>
-          <span v-if="runtime.nodeStates[n.id]" class="rc-run-badge" :class="runtime.nodeStates[n.id]">{{ runText(n.id) }}</span>
-          <button
-            v-if="n.orphan"
-            class="rc-node-orphan"
-            type="button"
-            title="孤儿步骤：没有可解析的前置步骤（lastStep 缺失或指向集合外）。点击选择它要挂到的节点。"
-            data-testid="node-orphan-relink"
-            @click.stop="openRelinkDialog(n.id)"
-          >孤儿·关联</button>
-          <span v-else-if="n.cfg.disabled" class="rc-node-plan">已停止</span>
-          <span v-else-if="n.cfg.planned" class="rc-node-plan">规划中</span>
-
-          <div class="rc-node-top">
-            <div class="rc-node-icon">{{ iconFor(n.cfg) }}</div>
-            <div class="rc-node-headtext">
-              <div class="rc-node-title">{{ n.cfg.title }}</div>
-              <!-- 0904 I12（Z6-1）：节点类型写出来。原来只有左边那个 `90`/`R` 的数字徽标，
-                   没在这套系统里泡过的人认不出是什么（走查「每个节点你最好定一个类型吧」）。 -->
-              <div class="rc-node-type" data-testid="node-type-label">{{ nodeTypeLabel(n.cfg) }}</div>
+          <!-- 0930 顶栏（用户选定方案 A）：左边类型名，右边状态标签 + 步骤 ID。
+               0904 I12（Z6-1）要求把类型写出来；左侧 `90`/`R` 类型编号徽标 0930 去掉（「没什么用」）。
+               步骤 ID = cs_item_config 行 ID（旧平台节点图的 #41800），只有已落库的节点才有，
+               草稿节点是本地临时 ID，不显示。状态标签原来绝对定位在右上角，与 ID 抢位置，并进来排在 ID 前。 -->
+          <div class="rc-node-meta">
+            <div class="rc-node-type" data-testid="node-type-label">{{ nodeTypeLabel(n.cfg) }}</div>
+            <div class="rc-node-meta-end">
+              <span v-if="runtime.nodeStates[n.id]" class="rc-run-badge" :class="runtime.nodeStates[n.id]">{{ runText(n.id) }}</span>
+              <button
+                v-if="n.orphan"
+                class="rc-node-orphan"
+                type="button"
+                title="孤儿步骤：没有可解析的前置步骤（lastStep 缺失或指向集合外）。点击选择它要挂到的节点。"
+                data-testid="node-orphan-relink"
+                @click.stop="openRelinkDialog(n.id)"
+              >孤儿·关联</button>
+              <span v-else-if="n.cfg.disabled" class="rc-node-plan">已停止</span>
+              <span v-else-if="n.cfg.planned" class="rc-node-plan">规划中</span>
+              <button
+                v-if="isWritableStepId(n.id)"
+                class="rc-node-stepid"
+                type="button"
+                :title="`步骤 ID ${n.id}，点击复制`"
+                data-testid="node-step-id"
+                @click.stop="void copyToClipboard(n.id, '步骤 ID')"
+              >#{{ n.id }}</button>
             </div>
           </div>
+          <div class="rc-node-title">{{ n.cfg.title }}</div>
 
           <template v-if="isDecision(n.cfg)">
             <div class="rc-node-brief">条件：<b>{{ n.cfg.base[1]?.[1] || '抓取成功且字段完整' }}</b></div>
@@ -924,7 +932,7 @@ watch(
 .rc-node-del:hover { background: var(--rc-error-bg, #fef2f2); color: #b91c1c; }
 /* 孤儿步骤标记（0925）：lastStep 解析不出前置的节点，右上角常驻警示徽标，点击走关联弹窗。
    top 让开 8px 处的运行态/停用徽标，删除叉 hover 显示时与之左右错开 */
-.rc-node-orphan { position: absolute; top: 29px; right: 4px; z-index: 3; height: 18px; line-height: 1; padding: 0 6px; border: 1px solid #fca5a5; border-radius: 9px; background: #fef2f2; color: #b91c1c; font-size: 10px; font-weight: 600; cursor: pointer; transition: background .12s, border-color .12s; }
+.rc-node-orphan { flex: none; height: 16px; line-height: 1; padding: 0 6px; border: 1px solid #fca5a5; border-radius: 9px; background: #fef2f2; color: #b91c1c; font-size: 10px; font-weight: 600; cursor: pointer; transition: background .12s, border-color .12s; }
 .rc-node-orphan:hover { background: #fee2e2; border-color: #f87171; }
 .relink-tip { margin: 0 0 12px; font-size: 12px; line-height: 1.7; color: var(--rc-text-2); }
 .rc-flow-node:hover { transform: translateY(-1px); border-color: #bfdbfe; }
@@ -937,13 +945,17 @@ watch(
 .rc-flow-node.planned { border-style: dashed; opacity: 0.72; }
 .rc-flow-node.disabled-node { opacity: 0.48; filter: saturate(0.72); }
 
-.rc-node-top { display: flex; align-items: center; gap: 8px; }
-.rc-node-icon { width: 30px; height: 30px; border-radius: 9px; background: var(--rc-primary-bg); color: var(--rc-primary-ink); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; flex: none; }
-.rc-node-headtext { min-width: 0; flex: 1; }
-.rc-node-title { font-size: 13px; font-weight: 700; color: var(--rc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rc-node-title { margin-top: 4px; font-size: 13px; font-weight: 700; color: var(--rc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-node-type { margin-top: 1px; font-size: 10px; color: var(--rc-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rc-node-plan { position: absolute; top: 8px; right: 8px; font-size: 9px; color: var(--rc-faint); border: 1px solid var(--rc-border); background: #f8fafc; border-radius: 5px; padding: 1px 5px; }
-.rc-run-badge { position: absolute; top: 8px; right: 8px; font-size: 9px; font-weight: 700; border-radius: 5px; padding: 1px 6px; }
+/* 顶栏：类型名左，状态标签 + 步骤 ID 右。悬停时右侧整组左移，给删除 ✕（绝对定位右上角）让位 */
+.rc-node-meta { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 18px; }
+.rc-node-meta .rc-node-type { margin-top: 0; min-width: 0; }
+.rc-node-meta-end { display: flex; align-items: center; gap: 4px; flex: none; transition: padding-right .12s; }
+.rc-flow-node:hover .rc-node-meta-end { padding-right: 14px; }
+.rc-node-stepid { flex: none; padding: 1px 6px; border: 0; border-radius: 5px; background: var(--rc-primary-bg); color: var(--rc-primary-ink); font: 600 10px/14px ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer; }
+.rc-node-stepid:hover { color: var(--rc-primary); }
+.rc-node-plan { flex: none; font-size: 9px; color: var(--rc-faint); border: 1px solid var(--rc-border); background: #f8fafc; border-radius: 5px; padding: 1px 5px; }
+.rc-run-badge { flex: none; font-size: 9px; font-weight: 700; border-radius: 5px; padding: 1px 6px; }
 .rc-run-badge.L { background: var(--rc-primary-bg); color: var(--rc-primary); }
 .rc-run-badge.C { background: var(--rc-ok-bg); color: var(--rc-ok); }
 .rc-run-badge.E { background: var(--rc-error-bg); color: var(--rc-error); }
@@ -962,9 +974,7 @@ watch(
 .rc-node-cond { display: inline-block; padding: 1px 6px; border-radius: 5px; background: #fef3c7; color: #b45309; font-size: 10px; line-height: 16px; white-space: nowrap; flex: none; }
 .rc-node-paths { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
 .rc-node-path { flex: 1; min-width: 74px; padding: 3px 5px; border-radius: 5px; border: 1px solid var(--rc-border); background: #fff; color: var(--rc-muted); font-size: 9px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.logic-node .rc-node-icon { background: #fef3c7; color: #b45309; }
 .logic-node .rc-node-path { border-color: #fde68a; background: #fff7ed; color: #92400e; }
-.parallel-node .rc-node-icon { background: #e2e8f0; color: #334155; }
 .parallel-node .rc-node-path { border-color: #cbd5e1; background: #fff; color: var(--rc-text-2); }
 .rc-chip { padding: 1px 6px; border-radius: 5px; background: #f1f5f9; color: var(--rc-muted); }
 .rc-chip.ok { background: var(--rc-ok-bg); color: var(--rc-ok); }
