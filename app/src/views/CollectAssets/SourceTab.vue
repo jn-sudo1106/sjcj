@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { sourceApi, siteApi, expandCategoryIds, type Site, type Source, type SourceCategory } from '@/api'
 import { useUiStore } from '@/stores/ui'
 import { favoriteSiteIds, loadFavoriteSites } from '@/utils/siteFavorites'
+import { favoriteSourceIds, favoriteSourcesLoaded, loadFavoriteSources } from '@/utils/sourceFavorites'
 import { recentRankOf, recentSiteIds, recordSiteVisit } from '@/utils/siteRecents'
 import SiteCardGrid from './SiteCardGrid.vue'
 import FilterToolbar from './components/FilterToolbar.vue'
@@ -342,15 +343,17 @@ async function refreshAll() {
 const view = computed(() => ui.assetView)
 
 // ---- 源列表视图（0924-06）----
-/** 页签范围：最近打开 = 那几个网站下的源；我的收藏 = 收藏网站下的源（0924-08 改为收藏的源） */
-const sourceScopeSiteIds = computed<string[] | undefined>(() => {
-  if (recentOnly.value) return recentSiteIds.value
-  if (favOnly.value) return [...favoriteSiteIds.value]
-  return undefined
-})
+/** 页签范围：最近打开 = 那几个网站下的源 */
+const sourceScopeSiteIds = computed<string[] | undefined>(() => (recentOnly.value ? recentSiteIds.value : undefined))
+/**
+ * 我的收藏 = 收藏的源（0924-08）。卡片视图下同一个页签仍是收藏的网站——两种视图一行是什么，收藏就是什么。
+ * 收藏没拉回来之前范围是空集（不能传 undefined，那等于不限、会查出全部源），空态文案显示加载中；
+ * 拉回来后 scopeSourceIds 变了，源视图自己重查。
+ */
+const sourceScopeSourceIds = computed<string[] | undefined>(() => (favOnly.value ? [...favoriteSourceIds.value] : undefined))
 const sourceScopeEmptyText = computed(() => {
   if (recentOnly.value) return '还没有打开过网站，打开过的网站会自动出现在这里（最多 10 个，仅本机）'
-  if (favOnly.value) return '还没有收藏的网站，在卡片视图里点 ☆ 收藏'
+  if (favOnly.value) return favoriteSourcesLoaded.value ? '还没有收藏的源，在源列表里点 ☆ 收藏' : '正在加载收藏的源…'
   return ''
 })
 /** 打开源：与网站详情「源视图」同一落点（数据视图），带上网站上下文，左侧才加载得出同网站的源 */
@@ -431,6 +434,7 @@ onMounted(() => {
   void loadList({ revalidate: true })
   // 收藏以后端为准（B30）；回来后 watch(favoriteSiteIds) 会就地重排，不用等它
   void loadFavoriteSites()
+  void loadFavoriteSources()
   void loadCategories({ revalidate: true })
   void loadTagOptions()
   ui.registerAction('新建采集', openNewFlowCanvas)
@@ -445,6 +449,7 @@ onActivated(() => {
     return
   }
   void loadFavoriteSites()
+  void loadFavoriteSources()
   void loadStats({ revalidate: true })
   void loadList({ revalidate: true })
   void loadCategories({ revalidate: true })
@@ -490,6 +495,7 @@ onUnmounted(() => {
       class="ca-source-list"
       current-site-id=""
       :scope-site-ids="sourceScopeSiteIds"
+      :scope-source-ids="sourceScopeSourceIds"
       :scope-empty-text="sourceScopeEmptyText"
       @open-source="openSourceFromList"
       @open-source-data="openSourceFromList"

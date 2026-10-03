@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, shallowMount, type VueWrapper } from '@vue/test-utils'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SourceOverviewView from './SourceOverviewView.vue'
-import { siteApi, sourceApi, type Source } from '@/api'
+import { favoriteApi, siteApi, sourceApi, type Source } from '@/api'
+import { favoriteSourceIds } from '@/utils/sourceFavorites'
 import * as xlsxExport from '@/utils/format/xlsxExport'
 import { createPinia, setActivePinia } from 'pinia'
 import { useUiStore } from '@/stores/ui'
@@ -11,7 +12,12 @@ import { useUiStore } from '@/stores/ui'
 // 本组件用到了 launchJob store（Y4-5 批量提交作业条）。这里的 mount 都是裸挂载、
 // 没装 pinia 插件，所以在每个用例前设一个活动 pinia 就够——store 是在 setup 里
 // 直接 useXxxStore() 拿的，不经过 app.use()。每个用例一个新实例，作业态不串。
-beforeEach(() => setActivePinia(createPinia()))
+beforeEach(() => {
+  setActivePinia(createPinia())
+  // 组件挂载时会拉源收藏（0924-08）。不 mock 的话真请求挂着不回，模块里"同一时刻只跑一次"
+  // 的加载会一直复用这个挂起的 Promise，后面的用例拿不到自己 mock 的收藏
+  vi.spyOn(favoriteApi, 'listIds').mockResolvedValue([])
+})
 
 const source: Source = {
   sourceId: 'src-1', name: '当前网站源', url: 'https://example.com', configId: 'cfg-1', mainTable: 'TB_1', owner: 'tester', state: 'C', siteId: 'site-current', dataCount: 3,
@@ -1482,5 +1488,95 @@ describe('源视图 · 不限网站（采集资产源列表视图，0924-06）',
     expect(wrapper.findAll('th').map((th) => th.text())).not.toContain('所属网站')
     expect(wrapper.find('[data-testid="source-overview-site"]').exists()).toBe(false)
     expect(sites).not.toHaveBeenCalled()
+  })
+})
+
+describe('源视图 · 源收藏（0924-08）', () => {
+  const rowOf = (over: Partial<Source>): Source => ({
+    sourceId: 'src-1', name: '源', url: 'https://a.example.com', configId: 'cfg-1',
+    mainTable: 'T1', owner: 'admin', state: 'C', ...over,
+  } as Source)
+
+  async function mountFav(props: Record<string, unknown> = {}, favorites: string[] = []) {
+    vi.spyOn(favoriteApi, 'listIds').mockResolvedValue(favorites)
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 2, list: [rowOf({ sourceId: 's1', siteId: '105' }), rowOf({ sourceId: 's2', siteId: '105' })],
+    })
+    vi.spyOn(siteApi, 'sitePaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: '', ...props }, attachTo: document.body })
+    await flushPromises()
+    return { wrapper, page }
+  }
+  const lastQuery = (page: { mock: { calls: unknown[][] } }) => page.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined
+
+  beforeEach(() => { favoriteSourceIds.value = new Set() })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('每行有收藏星标：进来按后端收藏点亮，点击按 SOURCE 收藏 / 取消', async () => {
+    const add = vi.spyOn(favoriteApi, 'add').mockResolvedValue({ ok: true, message: '' })
+    const remove = vi.spyOn(favoriteApi, 'remove').mockResolvedValue({ ok: true, message: '' })
+    const { wrapper } = await mountFav({}, ['s2'])
+
+    expect(wrapper.get('[data-testid="source-fav-s1"]').classes()).not.toContain('on')
+    expect(wrapper.get('[data-testid="source-fav-s2"]').classes()).toContain('on')
+
+    await wrapper.get('[data-testid="source-fav-s1"]').trigger('click')
+    await flushPromises()
+    expect(add).toHaveBeenCalledWith('SOURCE', 's1')
+    expect(wrapper.get('[data-testid="source-fav-s1"]').classes()).toContain('on')
+
+    await wrapper.get('[data-testid="source-fav-s2"]').trigger('click')
+    await flushPromises()
+    expect(remove).toHaveBeenCalledWith('SOURCE', 's2')
+    expect(wrapper.get('[data-testid="source-fav-s2"]').classes()).not.toContain('on')
+  })
+
+  it('网站详情的源视图（传了 currentSiteId）同样有星标', async () => {
+    const { wrapper } = await mountFav({ currentSiteId: '105' })
+    expect(wrapper.find('[data-testid="source-fav-s1"]').exists()).toBe(true)
+  })
+
+  it('范围 scopeSourceIds：按逗号拼成源 ID 发给后端', async () => {
+    const { page } = await mountFav({ scopeSourceIds: ['s1', 's2'] })
+    expect(lastQuery(page)?.sourceIds).toBe('s1,s2')
+  })
+
+  it('范围为空数组：不发请求，显示调用方给的空态文案（空 ids 会被后端当成不限）', async () => {
+    const { wrapper, page } = await mountFav({ scopeSourceIds: [], scopeEmptyText: '还没有收藏的源' })
+    expect(page).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('还没有收藏的源')
+  })
+
+  it('与「源 ID」条件取交集；交集为空不发请求', async () => {
+    const hit = await mountFav({ scopeSourceIds: ['s1', 's2'], initialSourceIds: 's2, s9' })
+    expect(lastQuery(hit.page)?.sourceIds).toBe('s2')
+    hit.wrapper.unmount()
+    vi.restoreAllMocks()
+
+    const miss = await mountFav({ scopeSourceIds: ['s1', 's2'], initialSourceIds: 's9' })
+    expect(miss.page).not.toHaveBeenCalled()
+  })
+
+  it('范围里取消了收藏就重查', async () => {
+    const { wrapper, page } = await mountFav({ scopeSourceIds: ['s1', 's2'] })
+    page.mockClear()
+    await wrapper.setProps({ scopeSourceIds: ['s1'] })
+    await flushPromises()
+    expect(lastQuery(page)?.sourceIds).toBe('s1')
+  })
+
+  // 范围为空时 currentQuery 里的 siteIds / sourceIds 是空的 = 不限，照发就成了导出全库
+  it.each([
+    ['收藏为空', { scopeSourceIds: [] }],
+    ['最近打开为空', { scopeSiteIds: [] }],
+  ])('%s时点导出：不发请求，提示没有命中', async (_label, props) => {
+    const warn = vi.spyOn(ElMessage, 'warning')
+    const xlsx = vi.spyOn(xlsxExport, 'downloadXlsx').mockImplementation(() => {})
+    const { wrapper, page } = await mountFav(props)
+    await wrapper.findAll('[data-testid="source-export"]')[0]!.trigger('click')
+    await flushPromises()
+    expect(page).not.toHaveBeenCalled()
+    expect(xlsx).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith('当前查询条件没有命中任何源')
   })
 })

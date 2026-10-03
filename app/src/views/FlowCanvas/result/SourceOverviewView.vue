@@ -7,6 +7,7 @@
 //    同一个组件而不是另写一套，是为了两处的列、筛选、批量操作完全一致，用户学一次就会。
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Star, StarFilled } from '@element-plus/icons-vue'
 import { siteApi, sourceApi, type Source } from '@/api'
 import { useLaunchJobStore } from '@/stores/launchJob'
 import { useUiStore } from '@/stores/ui'
@@ -25,6 +26,7 @@ import SourceParamModal from '@/views/FlowCanvas/source/SourceParamModal.vue'
 import { hasLoadParams, normalizeLoadParams } from '@/views/FlowCanvas/source/paramNormalize'
 import { downloadXlsx } from '@/utils/format/xlsxExport'
 import { timeAgo } from '@/utils/format/relativeTime'
+import { isFavoriteSource, loadFavoriteSources, toggleFavoriteSource } from '@/utils/sourceFavorites'
 import {
   CollectLimitError,
   SOURCE_EXPORT_HEADER,
@@ -69,6 +71,12 @@ const props = defineProps<{
    * 传了 currentSiteId 时忽略。
    */
   scopeSiteIds?: string[]
+  /**
+   * 只查这些源（采集资产「我的收藏」页签，0924-08）。语义同 scopeSiteIds：`undefined` = 不限；
+   * 空数组 = 范围为空，直接空态、不发请求（空的 ids 会被后端当成"不限"返回全部源）。
+   * 与「源 ID」查询条件同时存在时取交集。
+   */
+  scopeSourceIds?: string[]
   /** 范围为空时的空态文案（如最近打开一个都没有） */
   scopeEmptyText?: string
 }>()
@@ -206,7 +214,21 @@ const siteFilterOptions = computed(() => {
   return all.filter((s) => scope.has(s.siteId))
 })
 /** 范围给了但是空的：不发请求，直接空态 */
-const scopeEmpty = computed(() => crossSite.value && !!props.scopeSiteIds && props.scopeSiteIds.length === 0)
+const scopeEmpty = computed(() => (crossSite.value && !!props.scopeSiteIds && props.scopeSiteIds.length === 0)
+  || (!!props.scopeSourceIds && props.scopeSourceIds.length === 0))
+/**
+ * 实际发给后端的源 ID（逗号分隔）。有源范围（收藏）时与「源 ID」条件取交集；
+ * 交集为空返回空串——调用方必须当"什么都不查"，不能原样发出去（空 ids = 不限）。
+ */
+function effectiveSourceIds(condIds?: string): string | undefined {
+  if (!props.scopeSourceIds) return condIds
+  if (!condIds) return props.scopeSourceIds.join(',')
+  const scope = new Set(props.scopeSourceIds)
+  return condIds.split(/[\s,，]+/).filter((id) => scope.has(id)).join(',')
+}
+/** 当前条件在范围内必然一个都查不到：列表、导出、按条件发任务都不能发请求，否则会变成"不限" */
+const noScopeMatch = computed(() => scopeEmpty.value
+  || (!!props.scopeSourceIds && effectiveSourceIds(sourceConditionParams(conditions.value).sourceIds) === ''))
 /** 实际发给后端的 siteIds（逗号分隔）。当前网站 > 网站筛选 > 页签范围 > 不限 */
 function effectiveSiteIds(): string | undefined {
   if (props.currentSiteId) return props.currentSiteId
@@ -274,7 +296,7 @@ function currentQuery(): SourceFilter {
   const cond = sourceConditionParams(conditions.value)
   return {
     siteIds: effectiveSiteIds(),
-    sourceIds: cond.sourceIds,
+    sourceIds: effectiveSourceIds(cond.sourceIds),
     flowId: cond.flowId,
     name: cond.name,
     sourceUrl: cond.sourceUrl,
@@ -296,7 +318,7 @@ async function fetchSourcePage(query: SourceFilter & { page: number; size: numbe
 
 async function loadSources() {
   const requestId = ++sourceRequestSeq
-  if (scopeEmpty.value) {
+  if (noScopeMatch.value) {
     rows.value = []
     total.value = 0
     loadError.value = ''
@@ -609,6 +631,11 @@ function closeLaunch() {
 async function exportSources() {
   // 0831 F08：按当前查询条件全量导出，不是当前页，也不是勾选项。
   // 发任务在勾选时走 selected；导出始终走 currentQuery()，跟「查询」同一套字段。
+  // 范围为空时 currentQuery 里的 siteIds / sourceIds 是空的 = 不限，照发就成了导出全库
+  if (noScopeMatch.value) {
+    ElMessage.warning('当前查询条件没有命中任何源')
+    return
+  }
   const query = currentQuery()
   collectAbort = new AbortController()
   collectProgress.value = '正在按查询条件收集…'
@@ -921,6 +948,7 @@ onMounted(() => {
   void loadSources()
   void loadTagCandidates()
   void loadSiteOptions()
+  void loadFavoriteSources()
 })
 onUnmounted(() => {
   document.removeEventListener('mousedown', onMarkPointerDown)
@@ -930,6 +958,11 @@ watch(() => props.currentSiteId, () => {
   page.value = 1
   void loadSources()
   void loadTagCandidates()
+})
+// 收藏的源变了（在本页取消了收藏）：重查，「我的收藏」里就不再有它
+watch(() => (props.scopeSourceIds ? props.scopeSourceIds.join(',') : null), () => {
+  page.value = 1
+  void loadSources()
 })
 // 页签范围变了（最近打开多了一个网站）：已选的网站若不在新范围里就放掉，再重查
 watch(() => (props.scopeSiteIds ? props.scopeSiteIds.join(',') : null), () => {
@@ -1100,6 +1133,7 @@ watch(() => ui.sourceListRevision, () => {
                 @change="toggleAll"
               />
             </th>
+            <th class="sov-fav-col" title="收藏"></th>
             <th><button class="sov-sort" :class="sortClass('SOURCE_ID')" type="button" data-testid="sort-source-id" :title="sortLabel('SOURCE_ID')" @click="toggleSort('SOURCE_ID')">源 ID<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th>源名称</th>
             <th v-if="crossSite">所属网站</th>
@@ -1122,6 +1156,20 @@ watch(() => ui.sourceListRevision, () => {
                 :checked="selectedSet.has(source.sourceId)"
                 @change="toggleRow(source.sourceId)"
               />
+            </td>
+            <!-- 源收藏（0924-08）：与网站收藏同款星标，状态来自 utils/sourceFavorites，
+                 采集资产源列表和网站详情源视图共用一份；收藏的源在「我的收藏」页签里看 -->
+            <td class="sov-fav-col">
+              <button
+                class="sov-fav"
+                :class="{ on: isFavoriteSource(source.sourceId) }"
+                type="button"
+                :data-testid="`source-fav-${source.sourceId}`"
+                :title="isFavoriteSource(source.sourceId) ? '取消收藏' : '收藏这个源（在采集资产「我的收藏」里看）'"
+                :aria-pressed="isFavoriteSource(source.sourceId)"
+                :aria-label="isFavoriteSource(source.sourceId) ? '取消收藏' : '收藏'"
+                @click="toggleFavoriteSource(source.sourceId)"
+              ><el-icon :size="14"><component :is="isFavoriteSource(source.sourceId) ? StarFilled : Star" /></el-icon></button>
             </td>
             <!-- 源 ID 与源名称走同一个入口（2026-09-09）：两列指的是同一个源，
                  名称能点、ID 不能点没有道理——用户拿 ID 认源比拿名称更多（名称长且相似，
@@ -1190,7 +1238,7 @@ watch(() => ui.sourceListRevision, () => {
               >{{ source.remark || '—' }}</button>
             </td>
           </tr>
-          <tr v-if="!loading && !rows.length"><td :colspan="crossSite ? 14 : 13" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
+          <tr v-if="!loading && !rows.length"><td :colspan="crossSite ? 15 : 14" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -1309,6 +1357,11 @@ watch(() => ui.sourceListRevision, () => {
 .sov-empty { padding: 42px !important; text-align: center !important; color: var(--rc-faint) !important; }
 .sov-check-col { width: 34px; text-align: center; }
 .sov-check-col input { cursor: pointer; accent-color: var(--rc-primary); margin: 0; }
+.sov-table .sov-fav-col { width: 26px; padding-left: 0; padding-right: 0; text-align: center; }
+.sov-fav { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--rc-faint); cursor: pointer; }
+.sov-fav:hover { color: var(--rc-text-2); background: var(--rc-primary-bg); }
+.sov-fav.on { color: #f59e0b; }
+.sov-fav.on:hover { color: #d97706; }
 .sov-count-link { font-weight: 600; }
 .sov-id-link { padding: 0; font-family: var(--rc-mono, monospace); }
 .sov-table tbody tr.picked { background: var(--rc-primary-bg); }

@@ -312,6 +312,33 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     expect(first.wrapper.findComponent({ name: 'SourceOverviewView' }).props('scopeSiteIds')).toEqual(['s-b', 's-a'])
   })
 
+  // 0924-08：源列表视图下「我的收藏」是收藏的**源**；卡片视图下同一个页签仍是收藏的网站
+  it('我的收藏页签：范围是收藏的源，不再是收藏网站下的源', async () => {
+    const srcFav = await import('@/utils/sourceFavorites')
+    srcFav.favoriteSourceIds.value = new Set()
+    vi.spyOn(favoriteApi, 'listIds').mockImplementation(async (type) => (type === 'SOURCE' ? ['430024431', '430024671'] : ['105']))
+    const { list } = await mountList('favorite')
+    expect(list.props('scopeSourceIds')).toEqual(['430024431', '430024671'])
+    expect(list.props('scopeSiteIds')).toBeUndefined()
+  })
+
+  it('我的收藏页签：收藏没拉回来前显示加载中，拉回来是空的才说「还没有收藏的源」', async () => {
+    const srcFav = await import('@/utils/sourceFavorites')
+    srcFav.favoriteSourceIds.value = new Set()
+    srcFav.favoriteSourcesLoaded.value = false
+    let resolve!: (ids: string[]) => void
+    vi.spyOn(favoriteApi, 'listIds').mockImplementation((type) => (type === 'SOURCE' ? new Promise((r) => { resolve = r }) : Promise.resolve([])))
+    const { wrapper } = await mountList('favorite')
+    const list = () => wrapper.findComponent({ name: 'SourceOverviewView' })
+    // 范围给空数组而不是 undefined：undefined 等于不限，会先查出全部源
+    expect(list().props('scopeSourceIds')).toEqual([])
+    expect(list().props('scopeEmptyText')).toBe('正在加载收藏的源…')
+
+    resolve([])
+    await flushPromises()
+    expect(list().props('scopeEmptyText')).toBe('还没有收藏的源，在源列表里点 ☆ 收藏')
+  })
+
   it('打开源：带网站上下文进数据视图，并记一笔最近打开', async () => {
     const rec = await import('@/utils/siteRecents')
     rec.recentSiteIds.value = []
