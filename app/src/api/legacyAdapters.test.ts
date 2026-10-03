@@ -574,6 +574,11 @@ describe('选表分组与动态表结构适配（E 包 T1b）', () => {
       expect.objectContaining({ prop: 'raw', columnName: 'K9', required: false, width: 80 }),
     ])
   })
+
+  it('dataTableFromLegacy：后端没给 dataCnt 时 rowCount 为 undefined，不兜成 0（0930-04 表结构抽屉显示「—」）', () => {
+    const table = dataTableFromLegacy({ entryTypeId: '6200029', tableName: 'sense_data.TB_GZHWZ', items: [] })
+    expect(table.rowCount).toBeUndefined()
+  })
 })
 
 describe('数据详情 / 统计行适配（E 包 T1c）', () => {

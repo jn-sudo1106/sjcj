@@ -2204,7 +2204,7 @@ export const dataApi = {
   },
   dataStats: async () => {
     const tables = await dataApi.tables()
-    return { tables: tables.length, rows: tables.reduce((sum, table) => sum + table.rowCount, 0), chars: 0, review: 0 }
+    return { tables: tables.length, rows: tables.reduce((sum, table) => sum + (table.rowCount ?? 0), 0), chars: 0, review: 0 }
   },
   // 结果视图行编辑（Phase 4.4）
   rowUpdate: (tableId: string, dataId: string, values: Record<string, unknown>) =>

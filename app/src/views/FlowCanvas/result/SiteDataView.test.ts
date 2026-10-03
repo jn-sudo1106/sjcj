@@ -33,6 +33,7 @@ const stubs = {
   ElDrawer: true,
   ElDialog: { name: 'ElDialog', props: ['modelValue'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' },
   SummaryDrawer: true,
+  TableDetailDialog: { name: 'TableDetailDialog', props: ['modelValue', 'tableMeta'], template: '<div />' },
   // 「按条件查源」旁边的 ⋯ 下拉（0909）：默认桩不渲染插槽，菜单项断言不到
   ElDropdown: { name: 'ElDropdown', template: '<div><slot /><slot name="dropdown" /></div>' },
   ElDropdownMenu: { name: 'ElDropdownMenu', template: '<div><slot /></div>' },
@@ -125,6 +126,22 @@ describe('SiteDataView · 全部源（表筛选）', () => {
     expect(new Set(rowQueryPaged.mock.calls.map((call) => call[0].sourceId))).toEqual(new Set(['a', 'b']))
     expect(distinctSource).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('已加载 2 条')
+  })
+
+  it('0930-04：选表后点表名打开当前表的字段结构抽屉', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [row('a', '10')] })
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+
+    const name = wrapper.get('[data-testid="site-data-table-struct-btn"]')
+    expect(name.text()).toBe('T1')
+    await name.trigger('click')
+    const drawer = wrapper.findComponent({ name: 'TableDetailDialog' })
+    expect(drawer.props('modelValue')).toBe(true)
+    expect(drawer.props('tableMeta')).toEqual(meta)
   })
 
   it('带条件时用 summaryEntryData 在本网站源里精确收窄，把候选压到真正命中的那些', async () => {

@@ -35,6 +35,7 @@ import { nextStepColumns } from '@/utils/flow/nextStepFields'
 import { fetchNextStepConfig, resolveNextStepConfigFromSteps, type ResolvedNextStepConfig } from '@/utils/flow/nextStepConfig'
 import { confirmOrRun } from '@/utils/confirmDanger'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
+import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
 import DataGrid from './DataGrid.vue'
 import FilePreview from './components/FilePreview.vue'
 import { backTraceSources } from '@/utils/data/backTraceSources'
@@ -1004,6 +1005,8 @@ async function openBackTraceInSourceView() {
 }
 
 const summaryOpen = ref(false)
+// 0930-04：点表名查看当前表的字段结构。meta 是按数据现拼的（metaError 有值）时没有真实结构，表名不可点
+const tableStructOpen = ref(false)
 
 const detail = reactive<{ visible: boolean; index: number }>({ visible: false, index: -1 })
 const detailRow = computed(() => (detail.visible && detail.index >= 0 ? rows.value[detail.index] ?? null : null))
@@ -1244,7 +1247,15 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
         @row-action="onRowAction"
       >
         <template #head>
-          <span class="sdv2-tablename">{{ meta?.tableName || effectiveTableId }}</span>
+          <button
+            v-if="meta && !metaError"
+            type="button"
+            class="sdv2-tablename is-link"
+            data-testid="site-data-table-struct-btn"
+            title="点击查看表结构"
+            @click="tableStructOpen = true"
+          >{{ meta.tableName || effectiveTableId }}</button>
+          <span v-else class="sdv2-tablename">{{ meta?.tableName || effectiveTableId }}</span>
           <span v-if="totalHits !== null" class="sdv2-count" data-testid="site-data-total">共 {{ totalHits.toLocaleString() }} 条</span>
           <span v-else-if="totalHitsLoading" class="muted" data-testid="site-data-total-loading">总数统计中…</span>
           <span class="sdv2-count" :class="{ muted: totalHits !== null }">已加载 {{ rows.length }} 条</span>
@@ -1416,6 +1427,7 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
       :can-write="false"
     />
     <SummaryDrawer v-model="summaryOpen" :table-meta="meta" :build-query="buildSummaryQuery" :hit-count="rows.length" />
+    <TableDetailDialog v-model="tableStructOpen" :table-meta="meta" />
   </main>
 
     <el-dialog
@@ -1458,6 +1470,8 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
 .sdv2-notice.error { border-bottom-color: #fecaca; background: #fef2f2; color: #b91c1c; }
 .sdv2-notice.warn { border-bottom-color: #fde68a; background: #fffbeb; color: #92400e; }
 .sdv2-tablename { font-family: var(--rc-mono, monospace); font-size: 12px; color: var(--rc-text-2); }
+.sdv2-tablename.is-link { padding: 0; border: 0; background: none; color: var(--rc-primary); cursor: pointer; }
+.sdv2-tablename.is-link:hover, .sdv2-tablename.is-link:focus-visible { text-decoration: underline; }
 .sdv2-count { font-size: 12px; color: var(--rc-faint); }
 .sdv2-toolbar :deep(.dcb) { flex: 1; min-width: 200px; }
 .rc-btn.tiny { height: 24px; padding: 0 10px; font-size: 11.5px; }

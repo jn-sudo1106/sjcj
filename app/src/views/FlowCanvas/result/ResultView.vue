@@ -18,6 +18,7 @@ import { fetchNextStepConfig } from '@/utils/flow/nextStepConfig'
 import { fetchChildCountsForPage, isPerRowMode, resolveChildTargets, type ChildCountCell } from '@/utils/flow/childCounts'
 import { confirmDanger, confirmOrRun } from '@/utils/confirmDanger'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
+import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import DataGrid from './DataGrid.vue'
 import FilePreview from './components/FilePreview.vue'
@@ -1178,6 +1179,8 @@ function buildSummaryQuery(): RowQuery {
   }
 }
 const summaryOpen = ref(false)
+// 0930-04：点表名查看当前表的字段结构。meta 是按数据现拼的（metaError 有值）时没有真实结构，表名不可点
+const tableStructOpen = ref(false)
 
 // 详情 drawer：按当前页 index 翻，不跨页请求（0831 X4）。
 const detail = reactive<{ visible: boolean; index: number }>({ visible: false, index: -1 })
@@ -1687,7 +1690,15 @@ async function onTestScript() {
                data-view-only-hint 承担，删掉它还能给这行让出 93px。 -->
           <!-- 表名是这行里最长、也最可省略的一项（实测 sense_data.TB_TB_NEWS_TAGS 独占
                188px）：允许它收缩并省略号截断，完整值走 title 悬浮看，把宽度让给按钮。 -->
-          <span class="rv-tablename" :title="meta?.tableName || selectedTable || ''">{{ meta?.tableName || selectedTable || '—' }}</span>
+          <button
+            v-if="meta && !metaError"
+            type="button"
+            class="rv-tablename is-link"
+            data-testid="data-table-struct-btn"
+            :title="`${meta.tableName || selectedTable}（点击查看表结构）`"
+            @click="tableStructOpen = true"
+          >{{ meta.tableName || selectedTable }}</button>
+          <span v-else class="rv-tablename" :title="meta?.tableName || selectedTable || ''">{{ meta?.tableName || selectedTable || '—' }}</span>
           <span class="rv-tablecount">{{ total.toLocaleString() }} 行</span>
         </template>
         <!-- 视图控制回到 #head-right（0909 第二次重排）：这是 DataGrid 不随 .dg-head 横向
@@ -1863,6 +1874,7 @@ async function onTestScript() {
       :can-write="false"
     />
     <SummaryDrawer v-model="summaryOpen" :table-meta="meta" :build-query="buildSummaryQuery" :hit-count="total" />
+    <TableDetailDialog v-model="tableStructOpen" :table-meta="meta" />
     <SnatchLauncher ref="snatchLauncher" />
 
     <!-- 节点右键菜单（0917-06 / 0917-08，2026-09-21 用户定）：
@@ -2074,6 +2086,8 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
    表名是唯一可以牺牲的——允许收缩+省略号，其余按钮/分页都得完整可见可点。
    注意 .dg-head > * 有 flex-shrink: 0，这里要显式改回 1 才收缩得动。 */
 .rv-tablename { font-family: var(--rc-mono, monospace); font-size: 12px; color: var(--rc-text-2); min-width: 60px; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-tablename.is-link { padding: 0; border: 0; background: none; text-align: left; color: var(--rc-primary); cursor: pointer; }
+.rv-tablename.is-link:hover, .rv-tablename.is-link:focus-visible { text-decoration: underline; }
 .rv-tablecount { font-size: 12px; color: var(--rc-faint); }
 .muted { color: var(--rc-faint); font-size: 12px; }
 .rv-notice { padding: 7px 12px; border-bottom: 1px solid #fde68a; background: #fffbeb; color: #92400e; font-size: 12px; }

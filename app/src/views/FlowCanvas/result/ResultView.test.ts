@@ -6,6 +6,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import ResultView from './ResultView.vue'
 import { readSqlConditions } from '@/utils/sqlConditionHistory'
 import ProcessNodeRail from './ProcessNodeRail.vue'
+import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import { dataApi, isProductionBackend, ruleApi, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source, type Step } from '@/api'
 import { useFlowStore } from '@/stores/flow'
@@ -426,6 +427,38 @@ describe('ResultView', () => {
     expect(query).toHaveBeenCalled()
     expect(wrapper.text()).toContain('真实数据接口暂不可用，已切换到本地演示数据')
     expect(wrapper.text()).toContain('1 行')
+  })
+
+  it('0930-04：点表名打开当前表的字段结构抽屉', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+
+    const wrapper = mountResultView()
+    await flushPromises()
+
+    const name = wrapper.get('[data-testid="data-table-struct-btn"]')
+    expect(name.text()).toBe('评论')
+    await name.trigger('click')
+    const drawer = wrapper.findComponent(TableDetailDialog)
+    expect(drawer.props('modelValue')).toBe(true)
+    expect(drawer.props('tableMeta')).toEqual(meta)
+  })
+
+  it('0930-04：表结构接口失败、列是按数据现拼的时，表名不可点', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'tableMeta').mockRejectedValue(new Error('业务类型不存在'))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="data-table-struct-btn"]').exists()).toBe(false)
+    expect(wrapper.find('.rv-tablename').exists()).toBe(true)
   })
 })
 

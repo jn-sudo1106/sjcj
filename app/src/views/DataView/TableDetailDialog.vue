@@ -34,7 +34,7 @@ function fieldMeta(field: TableField) {
         <dt>物理表名</dt>
         <dd>{{ tableMeta.tableName }}</dd>
         <dt>数据量</dt>
-        <dd>{{ tableMeta.rowCount }}</dd>
+        <dd>{{ tableMeta.rowCount ?? '—' }}</dd>
         <dt>状态</dt>
         <dd>{{ tableMeta.state || '—' }}</dd>
         <dt>去重列</dt>

@@ -38,7 +38,8 @@ export interface DataTableMeta {
   tableName: string
   /** 旧表详情的业务名称；tableName 是物理表名，两者不能混用。 */
   name?: string
-  rowCount: number
+  /** 后端 dataCnt；表详情接口不返回时为 undefined，不能当 0 展示（0930-04） */
+  rowCount?: number
   /** C 测试表 / AC 正式表——删除数据入口仅测试表显示（方案 §1.4-4） */
   state?: string
   /** 去重列（逗号分隔的 columnName），手动修改弹窗副标题展示（方案 §1.6-2） */

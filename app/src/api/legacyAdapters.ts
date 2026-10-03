@@ -463,7 +463,7 @@ export function dataTableFromLegacy(input: unknown): DataTableMeta {
     tableId: entry.tableId,
     tableName: entry.tableName,
     name: entry.name,
-    rowCount: entry.rowCount ?? 0,
+    rowCount: entry.rowCount,
     state: entry.state,
     keyField: entry.keyField,
     remark: entry.remark,
