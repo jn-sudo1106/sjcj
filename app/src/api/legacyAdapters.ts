@@ -54,6 +54,10 @@ const PARAM_KIND_TO_LEGACY: Record<ParamKind, string> = {
   database: 'db',
 }
 
+export function paramKindToLegacy(kind: ParamKind): string {
+  return PARAM_KIND_TO_LEGACY[kind]
+}
+
 function asRecord(value: unknown): LegacyRecord {
   return value && typeof value === 'object' ? (value as LegacyRecord) : {}
 }

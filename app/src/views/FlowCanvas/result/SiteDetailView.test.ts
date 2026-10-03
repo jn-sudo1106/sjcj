@@ -38,7 +38,7 @@ describe('SiteDetailView', () => {
     const source = { sourceId: 'source-a', name: '源 A' } as Source
     await wrapper.findComponent({ name: 'SourceOverviewView' }).vm.$emit('open-source', source)
     await flushPromises()
-    expect(router.currentRoute.value.query).toMatchObject({ siteId: 'site-zfb', sourceId: 'source-a', view: 'data' })
+    expect(router.currentRoute.value.query).toMatchObject({ siteId: 'site-zfb', sourceId: 'source-a', view: 'overview' })
   })
 
   // 0915-05（2026-09-16）：本用例原来断言的是 0812 计划 M1-2「网站汇总态没有任务页签」，
@@ -53,14 +53,14 @@ describe('SiteDetailView', () => {
     })
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="site-source-view"]').text()).toBe('源视图')
-    expect(wrapper.get('[data-testid="site-data-view"]').text()).toBe('数据视图')
-    expect(wrapper.get('[data-testid="site-file-view"]').text()).toBe('文件视图')
-    expect(wrapper.get('[data-testid="site-task-view"]').text()).toBe('任务视图')
-    expect(wrapper.get('[data-testid="site-monitor-view"]').text()).toBe('监控视图')
+    expect(wrapper.get('[data-testid="site-source-view"]').text()).toBe('源')
+    expect(wrapper.get('[data-testid="site-data-view"]').text()).toBe('数据')
+    expect(wrapper.get('[data-testid="site-file-view"]').text()).toBe('文件')
+    expect(wrapper.get('[data-testid="site-task-view"]').text()).toBe('任务')
+    expect(wrapper.get('[data-testid="site-monitor-view"]').text()).toBe('监控')
     // 顺序：任务在监控左边（产品 2026-09-16 指定）
     const segs = wrapper.findAll('.sdv-seg').map((btn) => btn.text())
-    expect(segs.indexOf('任务视图')).toBe(segs.indexOf('监控视图') - 1)
+    expect(segs.indexOf('任务')).toBe(segs.indexOf('监控') - 1)
     // 2026-09-24：进数据视图默认是左栏数据表模式，地址栏没带表 = 「全部」→ 中间是各表汇总
     expect(wrapper.find('site-tables-overview-stub').exists()).toBe(true)
     expect(wrapper.find('site-data-view-stub').exists()).toBe(false)

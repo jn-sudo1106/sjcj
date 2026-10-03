@@ -114,8 +114,7 @@ describe('NodeInspector 规则数据懒加载（review 0723 #9 修正）', () =>
 // 挡掉了它自己本该有的 UrlParamEditor（节点级单值绑定）入口。这里验证按 isFirstCollectorNode 收窄后的展示。
 // 0802 重构·方案 A：参数源编辑入口整体挪到 ConfigTab 源 URL 区，ParamsTab 不再重复展示摘要/跳转按钮；
 // 仅在「非首个采集节点 + 是参数源」时给一行提示，避免用户误以为本节点能编辑参数源。
-// 0804 拍板（决议 D17）曾把「参数配置」tab 对全部节点隐藏；0805 改判（推翻 D17）恢复非规则节点的入口——
-// 下面 setActiveTab('params') 的两个用例随之恢复。
+// 独立参数 Tab 已并入任务配置；旧 params 状态应自动落到任务配置。
 describe('NodeInspector 参数源编辑入口在 ConfigTab（0802 重构）', () => {
   function setupParamSource() {
     setActivePinia(createPinia())
@@ -134,16 +133,31 @@ describe('NodeInspector 参数源编辑入口在 ConfigTab（0802 重构）', ()
     return flow
   }
 
-  it('首个采集节点 + 是参数源：ParamsTab 不展示「非首个」提示，照常展示 UrlParamEditor（URL 取自参数源）', async () => {
+  it('旧参数 Tab 状态自动迁到任务配置，参数绑定仍可操作', async () => {
     mockAssets()
     const flow = setupParamSource()
     flow.select('web-1')
     flow.setActiveTab('params')
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+    expect(flow.activeTab).toBe('task')
+    expect(wrapper.findAll('.rc-top-tab').map(tab => tab.text())).not.toContain('参数配置')
+    expect(wrapper.find('.upe').exists()).toBe(true)
+    expect(wrapper.text()).toContain('任务参数取值')
+    wrapper.unmount()
+  })
+
+  it('首个采集节点 + 是参数源：任务配置不展示「非首个」提示，照常展示 UrlParamEditor（URL 取自参数源）', async () => {
+    mockAssets()
+    const flow = setupParamSource()
+    flow.select('web-1')
+    flow.setActiveTab('task')
 
     const wrapper = mount(NodeInspector)
     await flushPromises()
+    expect(wrapper.findAll('.rc-top-tab').map(tab => tab.text())).not.toContain('参数配置')
 
-    // 编辑入口在 ConfigTab：ParamsTab 没有任何「去配置」按钮或摘要块
+    // 编辑入口在 ConfigTab：任务配置没有任何「去配置」按钮或摘要块
     expect(wrapper.find('[data-testid="params-jump-to-config"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('去「配置」编辑参数源')
     // 首节点：URL 由参数源管理，不展示「本源为参数源…本节点的 URL 参数按下方单独配置」的非首节点提示
@@ -160,7 +174,7 @@ describe('NodeInspector 参数源编辑入口在 ConfigTab（0802 重构）', ()
     mockAssets()
     const flow = setupParamSource()
     flow.select('web-2')
-    flow.setActiveTab('params')
+    flow.setActiveTab('task')
 
     const wrapper = mount(NodeInspector)
     await flushPromises()

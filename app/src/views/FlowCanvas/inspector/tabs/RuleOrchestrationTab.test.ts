@@ -9,6 +9,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus, { ElMessageBox } from 'element-plus'
 import NodeInspector from '../NodeInspector.vue'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
+import SiteScriptGeneratorDialog from '../SiteScriptGeneratorDialog.vue'
 import { useFlowStore } from '@/stores/flow'
 import { DEFAULT_CAPTURE_CONFIG_SYSTEM_PROMPT, NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { configApi, entryApi, paramApi, ruleApi, ckSourceApi, sourceApi } from '@/api'
@@ -2570,6 +2571,19 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
     return { flow, wrapper }
   }
+
+  it('采集节点的 Python 生成入口沿用配置 URL，同时保留原 XML 生成按钮', async () => {
+    const { flow, wrapper } = mountOnCollectorNode()
+    flow.configs['web-1'].configUrl = 'https://www.realcan.cn/newscenter'
+    await flushPromises()
+    expect(wrapper.find('[data-testid="main-generate-script"]').text()).toBe('生成配置')
+    const button = wrapper.find('[data-testid="open-site-script-generator"]')
+    expect(button.exists()).toBe(true)
+    await button.trigger('click')
+    const dialog = wrapper.findComponent(SiteScriptGeneratorDialog)
+    expect(dialog.props('open')).toBe(true)
+    expect(dialog.props('initialUrl')).toBe('https://www.realcan.cn/newscenter')
+  })
 
   it('文案换成抓取配置措辞，不出现「测试脚本」按钮（本期不做，方案 §3.1 修正 D）', async () => {
     const { wrapper } = mountOnCollectorNode()

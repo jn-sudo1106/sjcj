@@ -159,7 +159,7 @@ function sftpUploadDir(sftp, localDir, remoteDir) {
     function walk(local, remote) {
       const entries = fs.readdirSync(local, { withFileTypes: true })
       for (const e of entries) {
-        if (e.name === 'node_modules' || e.name === '.git' || e.name === 'dist') continue
+        if (e.name === 'node_modules' || e.name === '.git' || e.name === 'dist' || e.name === '__pycache__' || e.name.endsWith('.pyc')) continue
         const lp = path.join(local, e.name)
         const rp = remote + '/' + e.name
         if (e.isDirectory()) {
@@ -204,8 +204,8 @@ async function checkDocker(conn) {
 
 async function syncFiles(conn) {
   info(`同步项目部署文件到远端 ${cfg.remoteDir}...`)
-  // 先清掉上一次的 app/，否则本地删掉的文件在远端还在、会被打进镜像
-  await sshExec(conn, `mkdir -p ${cfg.remoteDir} && rm -rf ${cfg.remoteDir}/app`)
+  // 先清掉上一次的源码目录，否则本地删掉的文件在远端还在、会被打进镜像
+  await sshExec(conn, `mkdir -p ${cfg.remoteDir} && rm -rf ${cfg.remoteDir}/app ${cfg.remoteDir}/site-script-service`)
 
   const sftp = await new Promise((resolve, reject) => {
     conn.sftp((err, s) => err ? reject(err) : resolve(s))
@@ -224,8 +224,9 @@ async function syncFiles(conn) {
 
   const appLocalDir = path.join(rootDir, 'app')
   const count = await sftpUploadDir(sftp, appLocalDir, `${cfg.remoteDir}/app`)
+  const serviceCount = await sftpUploadDir(sftp, path.join(rootDir, 'site-script-service'), `${cfg.remoteDir}/site-script-service`)
   console.log('\n')
-  ok(`文件同步完成，已传输 ${count} 个文件`)
+  ok(`文件同步完成，已传输 ${count + serviceCount} 个文件`)
 }
 
 /**
@@ -305,7 +306,7 @@ async function doTest(conn) {
 async function swapGateway(conn, imageRef) {
   await sshExec(conn, `docker tag ${imageRef} ${IMAGE}:latest`)
   await sshExec(conn, `docker rm -f ${IMAGE} >/dev/null 2>&1 || true`)
-  await sshExec(conn, `cd ${cfg.remoteDir} && GATEWAY_NAME=${IMAGE} GATEWAY_PORT=${cfg.prodPort} docker-compose up -d --no-build`)
+  await sshExec(conn, `cd ${cfg.remoteDir} && BACKEND_TARGET=${cfg.backend} GATEWAY_NAME=${IMAGE} GATEWAY_PORT=${cfg.prodPort} docker-compose up -d --no-build`)
 }
 
 async function doRelease(conn) {

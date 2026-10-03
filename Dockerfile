@@ -30,6 +30,10 @@ RUN npm --prefix app run build
 # 阶段 2：用 nginx 镜像托管静态产物与网关路由
 FROM ${RUNTIME_IMAGE}
 
+RUN apk add --no-cache python3
+COPY site-script-service /service
+RUN python3 -m py_compile /service/server.py
+
 # 自定义 server 配置：/sjcj/ 子路径 + gzip + 静态资源长缓存 + index.html 不缓存
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 # OSS 下载服务与业务后端同机、固定 9102 端口（前端 ossPublicUrl 与 vite /oss 代理同一规则），跟着 BACKEND_TARGET 换主机
@@ -41,6 +45,8 @@ RUN sed -i -e "s#http://118.25.96.217:9999#${BACKEND_TARGET}#g" \
 COPY --from=builder /build/app/dist /usr/share/nginx/html/sjcj
 
 EXPOSE 80
+
+CMD ["sh", "-c", "python3 /service/server.py & exec nginx -g 'daemon off;'"]
 
 # 健康检查：拉一次 /sjcj/index.html。-slim 镜像里的 busybox 一般还带 wget
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \

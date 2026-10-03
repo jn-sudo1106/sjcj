@@ -16,7 +16,7 @@ export interface SourceTab {
 
 export interface SourceTabSnapshot {
   /** 源详情视图（0706 Phase4；0711 R11 加文件）：流程（默认）/ 数据 / 文件（仅源态）/ 任务（仅网站态） */
-  view?: 'flow' | 'data' | 'file' | 'task' | 'monitor-config'
+  view?: 'overview' | 'flow' | 'data' | 'file' | 'task' | 'monitor-config'
   /** 网站页签内当前停留的编排对象（0710 会议 B3）：'site' = 统一流程模板，否则为源 sourceId；激活页签时恢复 */
   activeKey?: string
   /**
@@ -27,6 +27,7 @@ export interface SourceTabSnapshot {
    * 两个来源同时落空时，左侧源列表就会整块消失——页签快照是唯一能跨切换保住它的地方。
    */
   siteId?: string
+  dataTableId?: string
   selectedNodeId?: string
   filters?: { dataId: string; parentId: string; state: string; sql: string; sourceFilter?: string }
   page?: number

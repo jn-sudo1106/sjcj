@@ -18,6 +18,8 @@ Thumbs.db
 # Build artifacts
 dist
 tmp
+**/__pycache__
+*.pyc
 
 # Logs
 *.log

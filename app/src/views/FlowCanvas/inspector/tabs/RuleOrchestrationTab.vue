@@ -45,6 +45,7 @@ import { loadPromptTemplateForNode } from '../promptTemplateLoader'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import { useFlowStore } from '@/stores/flow'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
+import SiteScriptGeneratorDialog from '../SiteScriptGeneratorDialog.vue'
 import AlertConfigPanel from '../AlertConfigPanel.vue'
 
 // 编辑对象来自节点编辑上下文（0917）：画布右侧配置区 = 全局 flow store，
@@ -484,6 +485,7 @@ const isArticleTag = computed(() => isArticleTagNode(cfg.value))
 // 切节点（NodeInspector 里本组件不带 key，是复用的）时清空试跑区，避免串到下一个节点上
 watch(id, () => {
   clearVideoFile()
+  siteScriptOpen.value = false
   promptPreviewOpen.value = false
   articlePromptMissing.value = false
   clearTranslate()
@@ -1236,6 +1238,8 @@ async function onGenerateScript(
 }
 
 const workbenchOpen = ref(false)
+const siteScriptOpen = ref(false)
+const siteScriptUrl = computed(() => cfg.value?.configUrl?.trim() || cfg.value?.collectCfg?.url?.trim() || '')
 
 const savingScript = ref(false)
 const savingPromptPreview = ref(false)
@@ -1820,6 +1824,13 @@ function onTestScript() {
       <template v-else>{{ generateLabel }}</template>
     </button>
     <button
+      v-if="!isRule && cfg?.collectCfg && !isScriptless"
+      class="rc-btn"
+      type="button"
+      data-testid="open-site-script-generator"
+      @click="siteScriptOpen = true"
+    >AI 生成 Python 脚本</button>
+    <button
       v-if="isRule"
       class="rc-btn"
       type="button"
@@ -1962,6 +1973,13 @@ function onTestScript() {
     @cancel-generate="onCancelGenerate"
     @save="onSaveScript"
     @test="onTestScript"
+  />
+  <SiteScriptGeneratorDialog
+    v-if="!isRule && cfg?.collectCfg && !isScriptless"
+    :key="id"
+    v-model:open="siteScriptOpen"
+    :initial-url="siteScriptUrl"
+    :initial-prompt="orchCfg.describe"
   />
 </template>
 

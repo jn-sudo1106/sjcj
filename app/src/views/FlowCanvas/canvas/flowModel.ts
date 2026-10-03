@@ -215,9 +215,11 @@ export interface EntryCondition {
   field: string
   op: ConditionOp
   value: string
+  /** 与前一条条件的连接方式；旧数据缺省时沿用条件组 logic。 */
+  joinWith?: 'AND' | 'OR'
 }
 
-/** 条件组：多字段组合逻辑（0706 优化·主题二「条件表达式统一规范」），叶子沿用 EntryCondition。
+/** 条件组：每条字段条件可指定与前一条的连接方式；组级 logic 用于兼容旧数据。
  *  0707 优化·补：结构化字段选择表达不了跨字段比较/函数调用等复杂逻辑，加表达式模式兜底（1:1 对应 Step.condition 契约）；
  *  mode 缺省 = 'fields'（旧数据无此字段，兼容读取，0701 问题五同款 1:1+fallback 口径）；两种模式二选一，不混用。 */
 export interface ConditionGroup {
@@ -517,11 +519,11 @@ export function conditionGroupLabel(group: ConditionGroup | undefined, fieldDesc
   if (!group) return ''
   if (group.mode === 'expr') return group.expr?.trim() ?? ''
   if (!group.items.length) return ''
-  const sep = group.logic === 'OR' ? ' 或 ' : ' 且 '
-  return group.items
-    .map((c) => entryConditionLabel(c, fieldDescOf?.(c.field)))
-    .filter(Boolean)
-    .join(sep)
+  return group.items.reduce((text, item) => {
+    const label = entryConditionLabel(item, fieldDescOf?.(item.field))
+    if (!label) return text
+    return text ? `${text}${(item.joinWith ?? group.logic) === 'OR' ? ' 或 ' : ' 且 '}${label}` : label
+  }, '')
 }
 
 /** 条件组是否已配置（供校验/UI 判空共用）：表达式模式看 expr 非空，字段模式看 items 非空 */

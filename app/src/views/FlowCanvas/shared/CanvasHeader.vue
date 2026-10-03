@@ -210,9 +210,7 @@ function switchView(target: SourceWorkspaceView) {
     return
   }
   const query = { ...route.query }
-  // 五档都显式写进 URL，包括流程视图。原来流程视图是删掉 query.view 走缺省值，
-  // 2026-09-18 缺省视图改成数据视图（见 normalizeSourceView）之后，这条等于把
-  // 「切到流程视图」翻译成「切到数据视图」，页签点了没反应。
+  // 六个工作视图均显式写入 URL，刷新和深链保持当前视图。
   query.view = target
   void router.replace({ path: '/canvas', query })
 }
@@ -398,14 +396,15 @@ async function copyFlowIntoSource(
   <div v-if="src" class="rc-canvas-head">
     <button class="rc-btn ghost" type="button" @click="backToSourceView">← 返回源视图</button>
     <div class="ch-switcher">
-      <button class="ch-seg" :class="{ on: view === 'flow' }" type="button" @click="switchView('flow')">流程视图</button>
-      <button class="ch-seg" :class="{ on: view === 'data' }" type="button" @click="switchView('data')">{{ route.query.sourceId ? '源数据' : '数据视图' }}</button>
+      <button class="ch-seg" :class="{ on: view === 'overview' }" type="button" @click="switchView('overview')">概览</button>
+      <button class="ch-seg" :class="{ on: view === 'flow' }" type="button" @click="switchView('flow')">流程</button>
+      <button class="ch-seg" :class="{ on: view === 'data' }" type="button" @click="switchView('data')">数据</button>
       <!-- ⚠️ 「文件视图 / 任务视图」**保留**。2026-09-05 一度按 0904 I11 把这两档删掉，是**读反了**：
            产品原话「文件和任务我觉得暂时吧，因为数据视图里面是包着文件的」——"暂时吧"是
            **暂时留着**，不是暂时去掉（当时开发问的是"这块不要了"，产品没有顺着答"对"）。
            删掉后用户当场提出「不是，任务视图和文件视图呢」，已还原。0904 纪要 I11 同步订正。 -->
-      <button class="ch-seg" :class="{ on: view === 'file' }" type="button" @click="switchView('file')">文件视图</button>
-      <button class="ch-seg" :class="{ on: view === 'task' }" type="button" @click="switchView('task')">任务视图</button>
+      <button class="ch-seg" :class="{ on: view === 'file' }" type="button" @click="switchView('file')">文件</button>
+      <button class="ch-seg" :class="{ on: view === 'task' }" type="button" @click="switchView('task')">任务</button>
       <!-- 监控视图（0917 常驻）：原来按 `v-if=isMonitorNode(选中节点)` 显隐，选中普通规则节点就整档消失，
            视觉上像"页签跑到别处去了"。现在跟前面四档一样常驻，节点类型只影响面板内容。
            0917 更名：「监控配置」→「监控视图」——这一档跟流程/数据/文件/任务平级，叫"配置"会被当成
@@ -416,7 +415,7 @@ async function copyFlowIntoSource(
         type="button"
         data-testid="monitor-config-view"
         @click="switchView('monitor-config')"
-      >监控视图</button>
+      >监控</button>
     </div>
 
     <template v-if="src">

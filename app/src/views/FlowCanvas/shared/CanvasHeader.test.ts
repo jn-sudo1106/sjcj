@@ -286,8 +286,8 @@ describe('CanvasHeader · 流程视图操作', () => {
 
     expect(isMonitorNode(flow.selectedNode)).toBe(true)
     const tab = wrapper.get('[data-testid="monitor-config-view"]')
-    expect(tab.text()).toBe('监控视图')
-    expect(wrapper.findAll('.ch-seg').at(-1)?.text()).toBe('监控视图')
+    expect(tab.text()).toBe('监控')
+    expect(wrapper.findAll('.ch-seg').at(-1)?.text()).toBe('监控')
 
     await tab.trigger('click')
     await flushPromises()
@@ -308,7 +308,7 @@ describe('CanvasHeader · 流程视图操作', () => {
     await flushPromises()
 
     const tab = wrapper.get('[data-testid="monitor-config-view"]')
-    expect(tab.text()).toBe('监控视图')
+    expect(tab.text()).toBe('监控')
 
     await tab.trigger('click')
     await flushPromises()
@@ -333,7 +333,7 @@ describe('CanvasHeader · 流程视图操作', () => {
     await wrapper.vm.$router.replace({ path: '/canvas', query: { sourceId: 'source-a', view: 'data' } })
     await flushPromises()
 
-    await wrapper.findAll('.ch-seg').find((b) => b.text() === '流程视图')!.trigger('click')
+    await wrapper.findAll('.ch-seg').find((b) => b.text() === '流程')!.trigger('click')
     await flushPromises()
     expect(wrapper.vm.$router.currentRoute.value.query.view).toBe('flow')
   })
@@ -677,4 +677,18 @@ describe('CanvasHeader · 复制当前流程（0930）', () => {
     const wrapper = await setup(null)
     expect(wrapper.find('[data-testid="copy-current-flow"]').exists()).toBe(false)
   })
+})
+
+it('源工作区显示六个视图，概览入口写入 URL', async () => {
+  const wrapper = await mountHeader()
+  useFlowStore().loadFromSource({ sourceId: 'source-a', name: '源', url: '', configId: '', mainTable: '', owner: '', state: 'C' }, [])
+  await flushPromises()
+  const tabs = wrapper.findAll('.ch-seg')
+  expect(tabs).toHaveLength(6)
+  expect(tabs.map(tab => tab.text())).toEqual(['概览', '流程', '数据', '文件', '任务', '监控'])
+  await tabs[0]!.trigger('click')
+  await flushPromises()
+  expect(wrapper.vm.$router.currentRoute.value.query.view).toBe('overview')
+  expect(tabs[0]!.classes()).toContain('on')
+  wrapper.unmount()
 })

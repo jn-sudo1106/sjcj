@@ -184,7 +184,7 @@ function switchMonitorTab(tab: SiteMonitorTab) {
 }
 function openSource(source: Source) {
   // 保留网站上下文，进入具体源后左侧仍需加载同网站的源树。
-  void router.replace({ path: '/canvas', query: { siteId: props.siteId, sourceId: source.sourceId, view: 'data' } })
+  void router.replace({ path: '/canvas', query: { siteId: props.siteId, sourceId: source.sourceId, view: 'overview' } })
 }
 /** 点源列表的「数据量」数字（0903 Y1-15）：直接落到数据视图，不用先进流程再切一次 */
 function openSourceData(source: Source) {
@@ -205,11 +205,11 @@ function openSourceData(source: Source) {
         <div class="sdv-sub">{{ site?.categoryPath || site?.category || '' }}</div>
       </div>
       <div class="sdv-switcher">
-        <button class="sdv-seg" :class="{ on: view === 'source' }" type="button" data-testid="site-source-view" @click="switchView('source')">源视图</button>
-        <button class="sdv-seg" :class="{ on: view === 'data' }" type="button" data-testid="site-data-view" @click="switchView('data')">数据视图</button>
-        <button class="sdv-seg" :class="{ on: view === 'file' }" type="button" data-testid="site-file-view" @click="switchView('file')">文件视图</button>
-        <button class="sdv-seg" :class="{ on: view === 'task' }" type="button" data-testid="site-task-view" @click="switchView('task')">任务视图</button>
-        <button class="sdv-seg" :class="{ on: view === 'monitor' }" type="button" data-testid="site-monitor-view" @click="switchView('monitor')">监控视图</button>
+        <button class="sdv-seg" :class="{ on: view === 'source' }" type="button" data-testid="site-source-view" @click="switchView('source')">源</button>
+        <button class="sdv-seg" :class="{ on: view === 'data' }" type="button" data-testid="site-data-view" @click="switchView('data')">数据</button>
+        <button class="sdv-seg" :class="{ on: view === 'file' }" type="button" data-testid="site-file-view" @click="switchView('file')">文件</button>
+        <button class="sdv-seg" :class="{ on: view === 'task' }" type="button" data-testid="site-task-view" @click="switchView('task')">任务</button>
+        <button class="sdv-seg" :class="{ on: view === 'monitor' }" type="button" data-testid="site-monitor-view" @click="switchView('monitor')">监控</button>
       </div>
     </div>
     <div v-if="loadError" class="sdv-empty">{{ loadError }}</div>

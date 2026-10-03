@@ -26,7 +26,6 @@ import NodeAiChat from './NodeAiChat.vue'
 import NodeConfigSelect from './NodeConfigSelect.vue'
 import TaskTab from './tabs/TaskTab.vue'
 import TableTab from './tabs/TableTab.vue'
-import ParamsTab from './tabs/ParamsTab.vue'
 import ConfigTab from './tabs/ConfigTab.vue'
 import RuleOrchestrationTab from './tabs/RuleOrchestrationTab.vue'
 
@@ -41,19 +40,21 @@ const tab = computed<string>(() => flow.activeTab)
 const statusText = computed(() => (cfg.value?.disabled ? '已停止' : (cfg.value?.status ?? '')))
 const statusClass = computed(() => (cfg.value?.disabled || cfg.value?.planned ? 'warn' : 'ok'))
 
-// 顶层 Tab：非决策/分头节点统一走 config/table/[params]/orchestration/task/ai 这套（0804 拍板 + 0805 改判）；
-// 参数配置只在非规则节点出现（0805 推翻 D17：采集节点的 URL 参数绑定离不开这个入口）；
+// 顶层 Tab：参数字段已并入任务配置；决策/分头仍只显示分支配置。
 // 决策/分头节点不产表也不需要编排/任务/AI，只显示「分支配置」一个 Tab 承载 BranchEditor。
 const TOP_TABS = computed(() => nodeInspectorTabs(cfg.value, { includeAi: !props.hideAi }))
 watch(() => props.hideAi, (hideAi) => {
   if (hideAi && flow.activeTab === 'ai') flow.setActiveTab('config')
 }, { immediate: true })
-watch(() => flow.selectedId, () => {
+watch([TOP_TABS, () => flow.activeTab], () => {
   const current = TOP_TABS.value.find((t) => t[0] === flow.activeTab)
-  if (!current?.[2]) return
-  const fallback = TOP_TABS.value.find((t) => !t[2])
+  if (current && !current[2]) return
+  // 旧会话若停在已移除的 params Tab，直接迁到任务配置。
+  const fallback = (flow.activeTab === 'params'
+    ? TOP_TABS.value.find((t) => t[0] === 'task' && !t[2])
+    : undefined) ?? TOP_TABS.value.find((t) => !t[2])
   if (fallback) flow.setActiveTab(fallback[0])
-})
+}, { immediate: true })
 
 // 配置绑定条（0824-00 §6.1）：一个 FlowNode 必须且只能引用一个 Config。
 // 本期只落骨架——configId 来自迁移回填（flowModel.ts NodeConfig.configId），
@@ -431,7 +432,7 @@ onMounted(async () => {
         <el-alert type="warning" :closable="false" show-icon title="输出表未选择" description="非文件节点保存时后端要求必须声明输出表（OUT_ENTRY）。当前该节点会自动跳过保存，请在「表配置」选择输出表后重试" />
       </div>
 
-      <!-- 顶层 Tab：节点配置 / 表配置 / [参数配置] / 编排配置 / 任务配置；普通画布可按需保留 AI 对话。 -->
+      <!-- 顶层 Tab：节点配置 / 表配置 / 编排配置 / 任务配置；普通画布可按需保留 AI 对话。 -->
       <div class="rc-top-tabs">
         <button
           v-for="t in TOP_TABS"
@@ -450,7 +451,6 @@ onMounted(async () => {
         <TaskTab v-else-if="tab === 'task'" />
         <TableTab v-else-if="tab === 'table'" />
         <RuleOrchestrationTab v-else-if="tab === 'orchestration'" />
-        <ParamsTab v-else-if="tab === 'params'" />
         <ConfigTab v-else />
       </div>
 
@@ -498,7 +498,7 @@ onMounted(async () => {
 .rc-insp-expand:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rc-inspector-body { padding: 12px; overflow: auto; flex: 1 1 auto; min-height: 0; }
 
-/* 顶层 Tab（0706 调整4 · 0707 微调 · 0804 统一为 config/table/orchestration/task/ai · 0805 参数配置回归非规则节点） */
+/* 顶层 Tab：参数字段并入任务配置后，不再显示独立参数页签。 */
 .rc-top-tabs { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--rc-border); border-radius: 9px; background: #f1f5f9; margin-bottom: 12px; }
 .rc-top-tab { flex: 1; min-width: 0; border: 0; background: transparent; border-radius: 7px; padding: 7px 4px; color: var(--rc-muted); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-top-tab.active { background: #fff; color: var(--rc-primary-ink); box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08); }

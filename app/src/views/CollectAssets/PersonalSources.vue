@@ -55,8 +55,8 @@ async function remove(ids: string[]) {
   } catch (e) { if (e instanceof Error) ElMessage.error(e.message) }
 }
 function move(ids: string[]) { movingIds.value = [...ids]; moving.value = true }
-function openSource(source: Source) {
-  void router.push({ path: '/canvas', query: { sourceId: source.sourceId, ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), view: 'data', returnTo: route.fullPath } })
+function openSource(source: Source, view: 'overview' | 'data' = 'overview') {
+  void router.push({ path: '/canvas', query: { sourceId: source.sourceId, ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), view, returnTo: route.fullPath } })
 }
 </script>
 <template>
@@ -79,7 +79,7 @@ function openSource(source: Source) {
             <el-button :icon="Refresh" size="small" circle title="刷新源列表" aria-label="刷新源列表" @click="ui.notifySourceListChanged()" />
           </div>
         </div>
-        <SourceOverviewView :key="selected.id" current-site-id="" :scope-source-ids="selected.sourceIds" scope-empty-text="分组中还没有源，请点击「添加源」" @open-source="openSource" @open-source-data="openSource" @open-site="router.push({ path: '/canvas', query: { siteId: $event, view: 'source', returnTo: route.fullPath } })">
+        <SourceOverviewView :key="selected.id" current-site-id="" :scope-source-ids="selected.sourceIds" scope-empty-text="分组中还没有源，请点击「添加源」" @open-source="openSource" @open-source-data="openSource($event, 'data')" @open-site="router.push({ path: '/canvas', query: { siteId: $event, view: 'source', returnTo: route.fullPath } })">
           <template #selection-actions="{ ids }"><el-button size="small" @click="move(ids)">移动到分组</el-button><el-button size="small" @click="remove(ids)">移出分组</el-button></template>
         </SourceOverviewView>
       </template>

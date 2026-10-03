@@ -124,7 +124,7 @@ watch(() => props.sites, (list) => { void ensureCards(list) })
 function openSource(s: Source) {
   // 点源 chip 进去也算打开了这个网站（0917-17）
   if (s.siteId) recordSiteVisit(s.siteId)
-  router.push({ path: '/canvas', query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, view: 'data', returnTo: router.currentRoute.value.fullPath } })
+  router.push({ path: '/canvas', query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, view: 'overview', returnTo: router.currentRoute.value.fullPath } })
 }
 // 卡片主体点击 → 进入网站统一流程模板（0707 优化·Phase4）
 function openSite(site: Site) {

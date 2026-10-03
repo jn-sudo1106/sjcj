@@ -92,7 +92,7 @@ async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length, qu
       directives: { loading: {} },
       stubs: {
         FlowBoard: { props: ['embedded'], template: '<div data-testid="embedded-flow-board">流程画布</div>' },
-        NodeInspector: { props: ['hideAi'], template: '<div data-testid="embedded-node-inspector">节点配置 表配置 编排配置 参数配置 任务配置</div>' },
+        NodeInspector: { props: ['hideAi'], template: '<div data-testid="embedded-node-inspector">节点配置 表配置 编排配置 任务配置</div>' },
         // 选源弹窗：真组件在 FlowSourcePickerDialog.test.ts 单独测。这里只关心 confirmApply
         // 的分批 / changeFlowBatch / 错误处理，stub 出「设 modelValue + 触发 confirm」两个口子。
         FlowSourcePickerDialog: {

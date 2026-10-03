@@ -44,8 +44,7 @@ function reinit(cond?: ConditionGroup) {
   expr.value = cond?.expr ?? (props.integrated ? expressionOf(items.value, logic.value) : '')
 
   // 迁移来的条件只有 expr（没有 items，见 flowModel.seeds 的 applyStepMetadata）——解析回字段行，
-  // 让用户直接看到/编辑「正文路径 为空」，而不是面对一个空的字段下拉。解析不了（混用 &&/||、
-  // 自定义函数等）才退回原始文本只读，宁可不解析也不要解析出和原意不同的条件。
+  // 让用户直接看到/编辑「正文路径 为空」。解析不了的自定义函数等仍保留原文。
   const parsed = props.integrated && cond?.expr && !cond.items.length ? parseConditionExpr(cond.expr) : null
   if (parsed) {
     logic.value = parsed.logic
@@ -53,7 +52,9 @@ function reinit(cond?: ConditionGroup) {
     exprEdited.value = false // 改字段行时按真实语法重新生成；未改动前保留原文的空格写法
     return
   }
-  exprEdited.value = Boolean(props.integrated && cond?.expr && cond.expr !== expressionOf(items.value, logic.value))
+  const parsedExisting = props.integrated && cond?.expr ? parseConditionExpr(cond.expr) : null
+  const matchesItems = parsedExisting && JSON.stringify(parsedExisting.items) === JSON.stringify(items.value.map((item) => ({ ...item, field: columnOf(item.field) })))
+  exprEdited.value = Boolean(props.integrated && cond?.expr && cond.expr !== expressionOf(items.value, logic.value) && !matchesItems)
 }
 watch(() => props.condition, reinit, { deep: true, immediate: true })
 
@@ -115,11 +116,6 @@ function onModeChange(m: 'fields' | 'expr') {
   }
   commit()
 }
-function onLogic(l: 'AND' | 'OR') {
-  logic.value = l
-  if (props.integrated && !exprEdited.value) expr.value = expressionOf(items.value, l)
-  commit()
-}
 function updateItem(i: number, patch: Partial<EntryCondition>) {
   items.value = items.value.map((it, idx) => (idx === i ? { ...it, ...patch } : it))
   if (props.integrated && !exprEdited.value) expr.value = expressionOf()
@@ -137,7 +133,7 @@ async function addItem() {
     }
     exprEdited.value = false
   }
-  items.value = [...items.value, { field: props.fields[0]?.prop ?? '', op: 'contains', value: '' }]
+  items.value = [...items.value, { field: props.fields[0]?.prop ?? '', op: 'contains', value: '', joinWith: logic.value }]
   if (props.integrated && !exprEdited.value) expr.value = expressionOf()
   commit()
 }
@@ -188,11 +184,12 @@ const summary = computed(() => conditionGroupLabel(active.value ? currentGroup()
         <button type="button" :class="{ active: mode === 'expr' }" @click="onModeChange('expr')">表达式模式</button>
       </div>
       <template v-if="integrated || mode === 'fields'">
-        <div v-if="items.length > 1" class="cond-logic">
-          <button type="button" :class="{ active: logic === 'AND' }" @click="onLogic('AND')">且 AND</button>
-          <button type="button" :class="{ active: logic === 'OR' }" @click="onLogic('OR')">或 OR</button>
+        <template v-for="(item, i) in items" :key="i">
+        <div v-if="i > 0" class="cond-logic" :aria-label="`第 ${i + 1} 条条件的连接方式`">
+          <button type="button" :class="{ active: (item.joinWith ?? logic) === 'AND' }" @click="updateItem(i, { joinWith: 'AND' })">且 AND</button>
+          <button type="button" :class="{ active: (item.joinWith ?? logic) === 'OR' }" @click="updateItem(i, { joinWith: 'OR' })">或 OR</button>
         </div>
-        <div v-for="(item, i) in items" :key="i" class="cond-fields">
+        <div class="cond-fields">
           <select class="rc-select" :value="item.field" @change="updateItem(i, { field: ($event.target as HTMLSelectElement).value })">
             <option value="">选择字段</option>
             <option v-for="f in fieldOptions" :key="f.prop" :value="f.prop">{{ f.prop }} · {{ f.desc }}</option>
@@ -203,6 +200,7 @@ const summary = computed(() => conditionGroupLabel(active.value ? currentGroup()
           <input v-if="conditionOpNeedsValue(item.op)" class="rc-input" :value="item.value" placeholder="值" @input="updateItem(i, { value: ($event.target as HTMLInputElement).value })" />
           <button v-if="items.length > 1" class="cond-del" type="button" title="删除该条件" @click="removeItem(i)">✕</button>
         </div>
+        </template>
         <button class="cond-add" type="button" @click="addItem">+ 添加条件</button>
       </template>
       <template v-if="integrated || mode === 'expr'">

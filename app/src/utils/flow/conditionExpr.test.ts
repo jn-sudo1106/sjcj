@@ -69,9 +69,18 @@ describe('parseConditionExpr · 真实生产表达式', () => {
   })
 })
 
-describe('parseConditionExpr · 解析不了的一律返回 null（宁可只读也不要解析错）', () => {
-  it('&& 和 || 混用：当前数据模型只有一个 logic，表达不了混合优先级', () => {
-    expect(parseConditionExpr("K1==nil && K2==nil || K3==nil")).toBeNull()
+describe('parseConditionExpr · 混合连接与无法解析的表达式', () => {
+  it('&& 和 || 混用时保留每条连接方式', () => {
+    const parsed = parseConditionExpr("K1==nil && K2==nil || K3==nil")
+    expect(parsed).toEqual({
+      logic: 'AND',
+      items: [
+        { field: 'K1', op: 'isEmpty', value: '' },
+        { field: 'K2', op: 'isEmpty', value: '', joinWith: 'AND' },
+        { field: 'K3', op: 'isEmpty', value: '', joinWith: 'OR' },
+      ],
+    })
+    expect(conditionsToExpr(parsed!.items, parsed!.logic)).toBe('K1 == nil && K2 == nil || K3 == nil')
   })
 
   it('不认识的函数调用', () => {

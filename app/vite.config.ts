@@ -32,6 +32,12 @@ export default defineConfig(({ mode }) => {
       host: '0.0.0.0',
       // 认证与 /v1 业务请求共用 HttpOnly Cookie（SameSite=Lax），开发统一走同源 /api 代理
       proxy: {
+        // 第一版站点 Python 脚本生成服务，独立于旧 XML/规则脚本接口。
+        '/api/ai/site-script/': {
+          target: env.VITE_SITE_SCRIPT_AI_PROXY_TARGET || 'http://127.0.0.1:8091',
+          changeOrigin: true,
+          timeout: 130_000,
+        },
         // data-process 生成脚本服务单独部署（0831）：不在 9999 业务后端上，联调走本地
         // 127.0.0.1:8080。注意 Vite 代理按对象键插入顺序做前缀匹配，这条更长的前缀
         // 必须放在下面的 '/api' 之前才会被优先命中；切换目标用 VITE_DATA_PROCESS_PROXY_TARGET。

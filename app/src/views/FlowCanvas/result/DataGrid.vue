@@ -14,6 +14,8 @@ import { Edit, Delete, Tickets } from '@element-plus/icons-vue'
 const props = withDefaults(defineProps<{
   meta: DataTableMeta | null
   rows: DataRow[]
+  /** 可选的外部工具栏挂载点，列选择仍由当前表格管理。 */
+  toolbarTarget?: HTMLElement | null
   loading?: boolean
   selectedId?: string
   compact?: boolean
@@ -520,8 +522,9 @@ function stateMeta(s?: string) {
          塞进来，跟「列」共用同一条横条。原来「列 ▾」自己独占一条 33px、调用方的表头又
          是另一条 47px、分页再一条 45px——三条横条摞起来把数据区挤没了
          （2026-08-15：数据视图一屏只看得到 6.2/20 行）。 -->
-    <div v-if="(!compact && (cols.length > 1 || $slots.head)) || (compact && showColPicker)" class="dg-toolbar">
-      <div class="dg-head"><slot name="head" /></div>
+    <Teleport :to="toolbarTarget || 'body'" :disabled="!toolbarTarget">
+    <div v-if="(!compact && (cols.length > 1 || $slots.head)) || (compact && showColPicker)" class="dg-toolbar" :class="{ 'dg-toolbar-external': !!toolbarTarget }">
+      <div v-if="$slots.head" class="dg-head"><slot name="head" /></div>
       <!-- #head-right：不参与 .dg-head 横向滚动的常驻区。表头内容多到溢出时，#head 里的
            东西会被滚动条藏起来（2026-08-19 用户反馈：全屏按钮在最右边，得先拉滚动条才够
            得着），像"全屏"这种任何时候都该点得到的开关放这里，跟「列」一样钉住。 -->
@@ -549,6 +552,7 @@ function stateMeta(s?: string) {
         >列 {{ displayVisibleCount }}/{{ cols.length }}</button>
       </div>
     </div>
+    </Teleport>
     <div v-if="!cols.length && !loading" class="dg-empty">该节点暂无输出表 schema</div>
     <div v-else ref="scrollRef" class="dg-scroll" v-loading="loading">
       <table class="dg-table dg-sticky-table">
@@ -766,6 +770,7 @@ function stateMeta(s?: string) {
 /* 插槽内容不换行、放不下横向滚动：换行会让这条横条随窗口变窄一路长高，又把数据区挤回去。 */
 .dg-head { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px 10px; flex-wrap: nowrap; overflow-x: auto; }
 /* 常驻区：flex:none 不被压缩、不参与 .dg-head 的横向滚动，永远够得着 */
+.dg-toolbar.dg-toolbar-external { padding: 0; border: 0; background: transparent; gap: 6px; }
 .dg-head-right { flex: none; display: flex; align-items: center; gap: 8px; }
 /* 表格下方横条：跟 .dg-toolbar 同一套内边距与底色，视觉上把表格夹在中间 */
 .dg-foot { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 5px 12px; border-top: 1px solid var(--rc-border-soft); background: #fbfdff; }

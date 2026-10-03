@@ -13,6 +13,7 @@ import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
 import LoginConfigSelectDialog from '@/views/FlowCanvas/launch/LoginConfigSelectDialog.vue'
 import NodeInspector from '@/views/FlowCanvas/inspector/NodeInspector.vue'
 import ResultView from './result/ResultView.vue'
+import SourceSummaryView from './result/SourceSummaryView.vue'
 import SourceTabsBar from './source/SourceTabsBar.vue'
 import CompareSplit from './result/CompareSplit.vue'
 import TaskView from './result/TaskView.vue'
@@ -110,6 +111,7 @@ const isSiteDetail = computed(() => !!route.query.siteId && !route.query.sourceI
 const sourceLoadError = ref('')
 const awaitingSource = computed(() => !!route.query.sourceId && !flow.sourceCtx)
 const isDataView = computed(() => activeView.value === 'data' && !!flow.sourceCtx)
+const isOverviewView = computed(() => activeView.value === 'overview' && !!flow.sourceCtx)
 const isTaskView = computed(() => activeView.value === 'task' && !!flow.sourceCtx)
 // 文件视图只挂源层（0711 R11：文件视图只有源才有）：网站态 URL 带 view=file 同理重定向回流程视图
 const isFileView = computed(() => activeView.value === 'file' && !!flow.sourceCtx)
@@ -122,11 +124,7 @@ watch(
   ([qSrc, v, ctxSrc]) => {
     if (!qSrc || ctxSrc !== String(qSrc)) return
     ws.saveSnapshot(ctxSrc, {
-      view: v === 'flow' ? 'flow'
-        : v === 'task' ? 'task'
-          : v === 'file' ? 'file'
-            : v === 'monitor-config' ? 'monitor-config'
-              : 'data',
+      view: normalizeSourceView(v),
     })
   },
   { immediate: true },
@@ -692,6 +690,7 @@ onUnmounted(() => {
         </div>
         <SiteDetailView v-else-if="isSiteDetail" :key="sidebarSiteId" :site-id="sidebarSiteId" class="rc-flow-result" />
         <CompareSplit v-else-if="ws.compareSourceId" class="rc-flow-result" />
+        <SourceSummaryView v-else-if="isOverviewView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
         <TaskView v-else-if="isTaskView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
         <FileView v-else-if="isFileView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
         <MonitorConfigView v-else-if="isMonitorConfigView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />

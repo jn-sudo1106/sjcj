@@ -77,6 +77,29 @@ describe('ConditionRow', () => {
     })
   })
 
+  it('每条表达式独立选择 AND/OR，并按行顺序生成和回显混合条件', async () => {
+    const fields = [
+      { prop: 'a', desc: 'A', columnName: 'K1' },
+      { prop: 'b', desc: 'B', columnName: 'K2' },
+      { prop: 'c', desc: 'C', columnName: 'K3' },
+    ]
+    const wrapper = mount(ConditionRow, { props: { condition: undefined, integrated: true, fields } })
+    await wrapper.get('[data-testid="add-entry-condition"]').trigger('click')
+    await wrapper.get('.cond-add:not(.cond-add-entry)').trigger('click')
+    await wrapper.get('.cond-add:not(.cond-add-entry)').trigger('click')
+    await wrapper.findAll('.cond-fields')[1].get('select').setValue('b')
+    await wrapper.findAll('.cond-fields')[2].get('select').setValue('c')
+    await wrapper.findAll('.cond-logic')[1].findAll('button')[1].trigger('click')
+
+    const saved = wrapper.emitted('change')!.at(-1)![0] as ConditionGroup
+    expect(saved.items.map((item) => item.joinWith)).toEqual([undefined, 'AND', 'OR'])
+    expect(saved.expr).toBe("string.contains(K1,'') && string.contains(K2,'') || string.contains(K3,'')")
+
+    const reopened = mount(ConditionRow, { props: { condition: saved, integrated: true, fields } })
+    expect(reopened.findAll('.cond-logic')[0].findAll('button')[0].classes()).toContain('active')
+    expect(reopened.findAll('.cond-logic')[1].findAll('button')[1].classes()).toContain('active')
+  })
+
   it('一体化模式回传手工表达式后，再修改字段条件不会覆盖表达式', async () => {
     const wrapper = mount(ConditionRow, {
       props: { condition: undefined, integrated: true, fields: [{ prop: 'title-K2', desc: '标题' }] },

@@ -27,3 +27,7 @@ services:
         max-file: "3"
     environment:
       - TZ=Asia/Shanghai
+      - SITE_SCRIPT_AI_ENDPOINT=${SITE_SCRIPT_AI_ENDPOINT:-}
+      - SITE_SCRIPT_AI_MODEL=${SITE_SCRIPT_AI_MODEL:-}
+      - SITE_SCRIPT_AI_API_KEY=${SITE_SCRIPT_AI_API_KEY:-}
+      - SITE_SCRIPT_AUTH_URL=${BACKEND_TARGET:-http://118.25.96.217:9999}/api/user-info.htm

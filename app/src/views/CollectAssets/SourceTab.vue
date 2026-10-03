@@ -353,12 +353,12 @@ const sourceScopeEmptyText = computed(() => {
   if (favOnly.value) return '还没有收藏的网站，在卡片视图里点 ☆ 收藏'
   return ''
 })
-/** 打开源：与网站详情「源视图」同一落点（数据视图），带上网站上下文，左侧才加载得出同网站的源 */
-function openSourceFromList(source: Source) {
+/** 打开源：与网站详情「源视图」同一落点（概览视图），带上网站上下文，左侧才加载得出同网站的源 */
+function openSourceFromList(source: Source, view: 'overview' | 'data' = 'overview') {
   if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId)
   void router.push({
     path: '/canvas',
-    query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view: 'data', returnTo: route.fullPath },
+    query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, returnTo: route.fullPath },
   })
 }
 function openSiteFromList(siteId: string) {
@@ -500,7 +500,7 @@ onUnmounted(() => {
       :scope-site-ids="sourceScopeSiteIds"
       :scope-empty-text="sourceScopeEmptyText"
       @open-source="openSourceFromList"
-      @open-source-data="openSourceFromList"
+      @open-source-data="openSourceFromList($event, 'data')"
       @open-site="openSiteFromList"
     >
       <template #filter-extra>

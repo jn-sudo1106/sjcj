@@ -27,3 +27,5 @@ app/pnpm-lock.yaml
 .ris-shots/
 .env
 .pnpm-store/
+__pycache__/
+*.pyc

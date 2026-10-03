@@ -6,7 +6,7 @@ import { configApi, paramApi } from '@/api'
 import UrlParamEditor from './UrlParamEditor.vue'
 
 describe('UrlParamEditor', () => {
-  it('参数配置作为独立 Tab 内容时默认展开', () => {
+  it('任务配置中的参数编辑区默认展开', () => {
     const wrapper = mount(UrlParamEditor, {
       props: {
         url: 'https://example.com/notice?lang=zh',

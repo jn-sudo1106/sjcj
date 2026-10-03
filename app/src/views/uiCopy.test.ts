@@ -197,9 +197,9 @@ describe('最新方案 UI 入口收口', () => {
     expect(tableView).toContain('{{ formatDataCount(site) }}')
   })
 
-  // 2026-09-18：点源落**数据视图**（原先是流程视图）——进来先看抓到了什么。
-  it('采集资产卡片的源直达数据视图，卡片底部不再提供任务入口', () => {
-    expect(siteCardGrid).toContain("query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, view: 'data' }")
+  // 点源先落概览，明确的查看数据动作才直达数据视图。
+  it('采集资产卡片的源直达概览视图，卡片底部不再提供任务入口', () => {
+    expect(siteCardGrid).toContain("sourceId: s.sourceId, view: 'overview'")
     expect(siteCardGrid).not.toContain('scg-foot-task')
     expect(siteCardGrid).not.toContain('openSiteTask')
   })
@@ -333,7 +333,7 @@ describe('最新方案 UI 入口收口', () => {
     expect(collectAssetsIndex).not.toContain("import ParamTab from './ParamTab.vue'")
     expect(collectAssetsIndex).not.toContain("{ key: 'param', label: '参数列表' }")
     expect(ruleAssetsIndex).toContain("import ParamTab from './ParamTab.vue'")
-    expect(ruleAssetsIndex).toContain("{ key: 'param', label: '参数' }")
+    expect(ruleAssetsIndex).toContain("{ key: 'param', label: '参数中心' }")
   })
 
   it('采集资产页不重复渲染网站工作区页签', () => {
@@ -371,7 +371,7 @@ describe('最新方案 UI 入口收口', () => {
   it('任务参数取值只面向当前节点参数', () => {
     expect(taskTab).toContain('cc.value?.urlParamRefs')
     expect(allInspectorSource).not.toContain('Object.values(flow.configs)')
-    expect(taskTab).toContain('请先在当前节点的参数配置中绑定参数。')
+    expect(taskTab).toContain('请先在上方绑定参数。')
     expect(taskTab).toContain('hasEffectiveInput')
     expect(taskTab).toContain('effectiveInputTableId')
     expect(taskTab).not.toContain('isFirstDataNode')
@@ -387,10 +387,11 @@ describe('最新方案 UI 入口收口', () => {
     expect(taskTab).not.toContain('+ 添加字段')
   })
 
-  // 出参列 2026-08-27 搬去参数配置 Tab，任务配置里不该再有它的控件（注释提到不算）
-  it('出参列的控件在参数配置 Tab，不在任务配置', () => {
-    expect(taskTab).not.toContain('<label>出参列</label>')
+  // 出参列内部区块与任务参数取值同属任务配置。
+  it('任务配置包含参数绑定与出参列区块', () => {
+    expect(taskTab).toContain('<ParamsTab />')
     expect(paramsTab).toContain('<label>出参列</label>')
+    expect(nodeInspector).not.toContain("tab === 'params'")
   })
 
   it('流程编辑不消费配置列表，源表单不再提供选用配置', () => {
