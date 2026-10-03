@@ -84,20 +84,6 @@ export interface EntryTypeGroup {
   list3: EntryType[]
 }
 
-/**
- * 网站范围表选项（0812 计划 M2-1）：旧平台返回可选表目录，网站内是否有数据
- * 在选表后通过真实数据查询判断；不能把表目录重复按源计数。
- */
-export interface SiteTableOption {
-  tableId: string
-  tableName: string
-  name?: string
-}
-
-export interface SiteTablesResult {
-  tables: SiteTableOption[]
-}
-
 export interface DataRow {
   dataId: string // ENTRY_ID
   sourceId: string // SOURCE_ID

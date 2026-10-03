@@ -10,7 +10,7 @@ import type {
   CodeExecuteRequest,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   SourceCheck, SourceCheckLog, SourceCheckQuery, SourceCheckLogQuery,
-  TaskInstQuery, SiteTableOption, SiteTablesResult,
+  TaskInstQuery,
   Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, NodeType, NodeTypeInput, EntryType, Param, ParamInput, CredentialRef, SourceJob, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, CopySourceInput, SourceCloneRequest, SourceCloneResult,
   FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
@@ -1085,8 +1085,6 @@ export async function expandCategoryIds(ids: string[]): Promise<string[]> {
   return [...collected]
 }
 
-const siteTablesCache = new Map<string, Promise<SiteTablesResult>>()
-
 // 同一 siteId 的 site/sources 在建站画布里会被侧栏、数据视图、选表器等前后脚各拉一遍。
 // 共享进行中的请求，并短暂缓存（10s）覆盖「侧栏刚拉完，切到数据视图又拉」这种紧邻场景；
 // 写后要读新数据的调用方传 { force: true } 绕过。
@@ -1106,51 +1104,17 @@ async function requestSiteSources(siteId: string, limit: number, timeoutMs?: num
   return list.map(siteSourceFromLegacy)
 }
 
-// 网站表选择的表目录（0812 计划 M2-1 起；2026-09-20 重写）。
+// 全库表目录 `config/queryEntryTypesGroup`（entryTypesGroup）的两条实测口径（2026-09-20）。
+// 原写在已删除的 loadSiteTables 上；0924-12 起网站选表下拉改用下面的 siteUsedTables。
 //
-// **一个请求就够了，不要再把源 ID 拼进 URL。**
-//
-// 2026-09-20 实测坐实：`config/queryEntryTypesGroup` 的 `sourceId` 只决定**怎么分组**
-// （哪张进 list1/list2，其余全进 list3），对 **list1+list2+list3 的并集毫无影响**——
-// 带任意源、带两个源、带别的网站的源、什么都不传，并集恒等于同一批全量表（实测 83 张）：
-//
-//     sourceId=430022383   → 1 / 2 / 80，并集 83
-//     sourceId=430002788   → 1 / 2 / 80，并集 83（还是另一个网站的源）
-//     不传                  → 0 / 0 / 83，并集 83
-//     三者并集两两相等       → true
-//
-// 而下面的合并只做 tableId 去重、根本不看分组。也就是说旧实现里那 19+ 个分片请求
-// （每个 52KB、URL 几千字符）**从第二个开始就 100% 是白跑的**，连带为了凑源 ID 而拉的
-// `siteSourcePreview(120)` 和 `siteSources(5439 条，4s+)` 也都是白拉的。
-//
-// 这不只是浪费。那 6 路并发正好占满浏览器对单域名的 6 个连接，把同期的
-// `entry/queryEntryType`（表结构）和 `data/rowQueryPaged`（逐源查数据）挤在队列里，
-// 而 client.ts 的 20s 超时是**从入队开始算**的——请求还没发出去就被判超时 abort。
-// 生产实测的两个症状都是这么来的：「表结构暂不可用，已根据当前数据生成列」、
-// 「N 个源本次查询失败：signal is aborted without reason」（那两个源单独查只要 164ms，
-// 数据才 29 条，一点都不慢，纯粹是没抢到连接）。
-//
-// ⚠️ 如果哪天后端真的按 sourceId 过滤了表目录（现在没有），这里要改回按源查——
-// 判断方法就是上面那组对照：不传 sourceId 的并集若小于带 sourceId 的并集，就说明变了。
-//
-// `siteId` 现在只当缓存键用，后端并不按网站过滤表目录。
-async function loadSiteTables(
-  siteId: string,
-  onProgress?: (tables: SiteTableOption[]) => void,
-): Promise<SiteTablesResult> {
-  void siteId
-  const group = await dataApi.entryTypesGroup()
-  const tableMap = new Map<string, SiteTableOption>()
-  for (const entry of [...group.list1, ...group.list2, ...group.list3]) {
-    if (!tableMap.has(entry.tableId)) {
-      tableMap.set(entry.tableId, { tableId: entry.tableId, tableName: entry.tableName, name: entry.name })
-    }
-  }
-  const tables = [...tableMap.values()]
-  // 一发就是全量，没有"渐进补齐"这回事了；仍然回调一次，免得调用方等不到首批。
-  onProgress?.(tables)
-  return { tables }
-}
+// 1. **不按源 / 网站过滤**：`sourceId` 只决定分组（哪张进 list1/list2，其余进 list3），
+//    list1+list2+list3 的并集恒为全库表（实测带任意源、别站的源、不传，并集都是 83 张）。
+//    所以要"本站的表"只能从源的主表 + 流程节点的输入 / 输出表聚合，不能靠这个接口。
+//    ⚠️ 判断后端是否改了：不传 sourceId 的并集若小于带 sourceId 的并集，就说明开始按源过滤了。
+// 2. **并发别占满连接**：浏览器对单域名只有 6 个连接，client.ts 的 20s 超时从**入队**算起。
+//    当年按源分 6 路并发查目录，把同期的 entry/queryEntryType（表结构）、data/rowQueryPaged
+//    挤到超时——「表结构暂不可用，已根据当前数据生成列」「N 个源本次查询失败：signal is aborted」
+//    都是这么来的。批量请求要自己限并发（见 FLOW_STEPS_CONCURRENCY）。
 
 /**
  * 网站用到的表（0924-09）。聚合规则见 utils/site/usedTables.ts。
@@ -1159,7 +1123,7 @@ async function loadSiteTables(
  * 1. `siteSources`（已有 10s 缓存，数据视图本来就要拉）→ 按 flowId 去重；
  * 2. 每批 4 个调 `flowCenterApi.steps(flowId, { withConfigDetails: false })`。
  *    **并发上限不能省**：client.ts 的超时从入队算，6 路占满连接会把同期的数据查询挤到超时
- *    （loadSiteTables 注释里 0920 的教训）；单个流程失败不阻断，记进 failedFlowIds；
+ *    （见上方 entryTypesGroup 口径第 2 条）；单个流程失败不阻断，记进 failedFlowIds；
  * 3. `entryTypesGroup`（全库表目录）补表名。
  * 按 siteId 缓存，失败不缓存。失效两道：
  * - 节点写接口（itemApi 的 saveItemConfig / stepModify / deleteStep，会写 entryTypeId / outEntry）成功后整体清空；
@@ -1459,24 +1423,6 @@ export const siteApi = {
   },
   refreshSiteSources: (siteId: string) => {
     siteSourcesCache.delete(siteId)
-  },
-  // 网站范围表聚合（M2-1）：同一 siteId 的并发/重复调用共享同一个进行中的请求；
-  // 只有触发首次请求的调用方能实时收到 onProgress，后到的调用方直接等最终结果。
-  siteTables: (siteId: string, options: { onProgress?: (tables: SiteTableOption[]) => void; force?: boolean } = {}) => {
-    if (options.force) siteTablesCache.delete(siteId)
-    let cached = siteTablesCache.get(siteId)
-    if (!cached) {
-      cached = loadSiteTables(siteId, options.onProgress)
-      siteTablesCache.set(siteId, cached)
-      cached.catch(() => siteTablesCache.delete(siteId)) // 失败态不缓存，允许下次重试
-    } else if (options.onProgress) {
-      const notify = options.onProgress
-      cached.then((result) => notify(result.tables)).catch(() => {})
-    }
-    return cached
-  },
-  refreshSiteTables: (siteId: string) => {
-    siteTablesCache.delete(siteId)
   },
   // 新增源默认从空白流程开始；inherit=true 仅保留给旧数据迁移兼容场景。
   sourceAdd: (siteId: string, source: Source, inherit = false) =>
