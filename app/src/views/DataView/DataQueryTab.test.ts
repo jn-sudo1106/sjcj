@@ -7,6 +7,8 @@ import ElementPlus from 'element-plus'
 import DataQueryTab from './DataQueryTab.vue'
 import DataImportDialog from './DataImportDialog.vue'
 import { useAuthStore } from '../../stores/auth'
+import { useSourceGroupsStore } from '@/stores/sourceGroups'
+import type { UserInfo } from '@/api/auth'
 import { dataApi, sourceApi, entryApi, type DataTableMeta, type DataRow, type EntryTypeGroup } from '../../api'
 
 // 数据表页_UI重写设计_2026-07-30：检索区/工具条/批量条/动态列表格/数据详情抽屉
@@ -83,6 +85,19 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(dataApi.entryTypesGroup).toHaveBeenCalled()
     expect(dataApi.tableMeta).toHaveBeenCalledWith('t1')
     expect(dataApi.rowQueryPaged).toHaveBeenCalledWith(expect.objectContaining({ tableId: 't1', page: 1, size: 20 }))
+  })
+  it('个人分组和默认目录不限制数据中心的全局表与行查询', async () => {
+    const auth = useAuthStore()
+    auth.info = { id: 20261003 } as UserInfo
+    const groups = useSourceGroupsStore()
+    const id = groups.saveGroup('全局数据隔离验证')
+    groups.assign(['600519'], [id])
+    groups.setPreference('personal')
+    await mountPage()
+    await waitForLoad()
+    expect(dataApi.entryTypesGroup).toHaveBeenCalledWith(undefined)
+    expect(dataApi.rowQueryPaged).toHaveBeenCalledWith(expect.objectContaining({ sourceId: undefined }))
+    groups.deleteGroup(id)
   })
 
   it('切表：选表下拉切到 list1 第二个表，重新拉取 tableMeta 并按新 tableId 重查', async () => {

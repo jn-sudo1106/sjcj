@@ -20,6 +20,8 @@ import {
 } from '@/utils/sourceMark'
 import SourceMarkPopover from './SourceMarkPopover.vue'
 import EditSourceMarkDialog from './EditSourceMarkDialog.vue'
+import GroupAssignmentDialog from '@/views/CollectAssets/GroupAssignmentDialog.vue'
+import { scopedSourceIds } from './sourceScope'
 import LaunchConfirmDialog from './LaunchConfirmDialog.vue'
 import SourceParamModal from '@/views/FlowCanvas/source/SourceParamModal.vue'
 import { hasLoadParams, normalizeLoadParams } from '@/views/FlowCanvas/source/paramNormalize'
@@ -69,6 +71,8 @@ const props = defineProps<{
    * 传了 currentSiteId 时忽略。
    */
   scopeSiteIds?: string[]
+  /** 个人分组的固定源范围；清空查询条件也不能解除此范围。 */
+  scopeSourceIds?: string[]
   /** 范围为空时的空态文案（如最近打开一个都没有） */
   scopeEmptyText?: string
 }>()
@@ -274,7 +278,7 @@ function currentQuery(): SourceFilter {
   const cond = sourceConditionParams(conditions.value)
   return {
     siteIds: effectiveSiteIds(),
-    sourceIds: cond.sourceIds,
+    sourceIds: scopedSourceIds(props.scopeSourceIds, cond.sourceIds),
     flowId: cond.flowId,
     name: cond.name,
     sourceUrl: cond.sourceUrl,
@@ -291,6 +295,7 @@ function currentQuery(): SourceFilter {
 }
 
 async function fetchSourcePage(query: SourceFilter & { page: number; size: number }) {
+  if (query.sourceIds === '') return { list: [], total: 0 }
   return sourceApi.sourcePaged(query)
 }
 
@@ -376,6 +381,7 @@ function sourceState(source: Source) {
 // 复用已有接口，不新起批量端点：发抓取用 sendSnatchWithParam（与单源同一个，ids 传多个），
 // 启停用 changeSourceEnable 逐个调（后端没有批量启停端点，旧平台源列表页也是自己循环调的）。
 const selectedIds = ref<string[]>([])
+const groupAssignmentOpen = ref(false)
 const selectedSet = computed(() => new Set(selectedIds.value))
 const selectMode = computed(() => selectedIds.value.length > 0)
 const selectedSources = computed(() => rows.value.filter((r) => selectedSet.value.has(r.sourceId)))
@@ -900,9 +906,11 @@ function onMarkEdited(payload: { tags: string[]; remark: string }) {
 async function loadTagCandidates() {
   try {
     const cond = sourceConditionParams(conditions.value)
+    const sourceIds = scopedSourceIds(props.scopeSourceIds, cond.sourceIds)
+    if (sourceIds === '') { serverTags.value = []; return }
     serverTags.value = await sourceApi.sourceTags({
       siteIds: effectiveSiteIds(),
-      sourceIds: cond.sourceIds,
+      sourceIds,
       name: cond.name,
     })
   } catch {
@@ -930,6 +938,11 @@ watch(() => props.currentSiteId, () => {
   page.value = 1
   void loadSources()
   void loadTagCandidates()
+})
+watch(() => props.scopeSourceIds?.join(','), () => {
+  clearSelection()
+  page.value = 1
+  void loadSources()
 })
 // 页签范围变了（最近打开多了一个网站）：已选的网站若不在新范围里就放掉，再重查
 watch(() => (props.scopeSiteIds ? props.scopeSiteIds.join(',') : null), () => {
@@ -1064,6 +1077,8 @@ watch(() => ui.sourceListRevision, () => {
       <button v-if="failedBatches.length" class="sov-btn" type="button" data-testid="source-retry-failed" @click="retryFailedBatches">重试失败批次（{{ failedBatches.reduce((n, b) => n + b.ids.length, 0) }}）</button>
       <template v-if="selectMode">
         <span class="sov-batch-count" data-testid="source-batch-count">已选 {{ selectedIds.length }}</span>
+        <button class="sov-btn" type="button" @click="groupAssignmentOpen = true">加入分组</button>
+        <slot name="selection-actions" :ids="selectedIds" />
         <div ref="markAnchorRef" class="sov-mark-anchor">
           <button class="sov-btn sov-mark-btn" type="button" data-testid="batch-mark" :aria-expanded="markOpen" @click="toggleMarkPopover">添加标记</button>
           <SourceMarkPopover
@@ -1190,7 +1205,7 @@ watch(() => ui.sourceListRevision, () => {
               >{{ source.remark || '—' }}</button>
             </td>
           </tr>
-          <tr v-if="!loading && !rows.length"><td :colspan="crossSite ? 14 : 13" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
+          <tr v-if="!loading && !rows.length"><td :colspan="crossSite ? 14 : 13" class="sov-empty">{{ loadError || ((scopeEmpty || scopeSourceIds?.length === 0) && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -1235,6 +1250,7 @@ watch(() => ui.sourceListRevision, () => {
       @confirm="confirmLaunch"
       @close="closeLaunch"
     />
+    <GroupAssignmentDialog v-if="groupAssignmentOpen" v-model="groupAssignmentOpen" :source-ids="selectedIds" />
     <SourceParamModal ref="paramModalRef" :callback="sendWithParamsCallback" />
   </section>
 </template>

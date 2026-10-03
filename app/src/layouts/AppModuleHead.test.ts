@@ -48,7 +48,7 @@ describe('AppModuleHead 面包屑 / 标题', () => {
 
   it('/canvas 路径下多出第三段面包屑（源/网站/新建）', async () => {
     const { wrapper } = await mountAt('/canvas', { mode: 'new' })
-    expect(wrapper.find('.rc-bc').text()).toBe('青龙智能采集中心/采集资产/新建采集')
+    expect(wrapper.find('.rc-bc').text()).toBe('青龙智能采集中心/源管理/新建采集')
     // 标题即面包屑末项：h1 在面包屑内部，不再单独占一行
     expect(wrapper.find('.rc-bc h1').text()).toBe('新建采集')
   })
@@ -71,10 +71,20 @@ describe('AppModuleHead 面包屑 / 标题', () => {
 
 // 面包屑跳转（2026-09-10 会上提）：此前三级全是死文本，从网站详情回列表只能靠浏览器后退。
 describe('AppModuleHead 面包屑跳转', () => {
+  it('从个人分组打开源后返回原分组；外部 returnTo 不接受', async () => {
+    const { wrapper, router } = await mountAt('/canvas', { sourceId: 's1', returnTo: '/collect?tab=personal&group=g1' })
+    await wrapper.findAll('.rc-bc-link')[1]!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe('/collect?tab=personal&group=g1')
+    await router.push({ path: '/canvas', query: { returnTo: '//example.com' } })
+    await wrapper.findAll('.rc-bc-link')[1]!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe('/collect')
+  })
   it('网站详情里点中间段「采集资产」回模块列表页——canvas 已被 useActiveNavKey 映射回 collect', async () => {
     const { wrapper, router } = await mountAt('/canvas', { siteId: 'site1' })
     const links = wrapper.findAll('.rc-bc-link')
-    expect(links.map((l) => l.text())).toEqual(['青龙智能采集中心', '采集资产'])
+    expect(links.map((l) => l.text())).toEqual(['青龙智能采集中心', '源管理'])
 
     await links[1].trigger('click')
     await flushPromises()

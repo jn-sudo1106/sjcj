@@ -18,9 +18,46 @@ const source: Source = {
 }
 
 describe('SourceOverviewView', () => {
+  it('分组分页、查询范围导出和任务预览均携带固定源 ID', async () => {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source] })
+    vi.spyOn(xlsxExport, 'downloadXlsx').mockImplementation(() => {})
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', scopeSourceIds: ['src-1'] } })
+    await flushPromises()
+    await wrapper.get('[data-testid="source-export"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="source-launch"]').trigger('click')
+    await flushPromises()
+    expect(page.mock.calls.length).toBeGreaterThan(1)
+    for (const [query] of page.mock.calls) expect(query?.sourceIds).toBe('src-1')
+    expect(page).toHaveBeenCalledWith(expect.objectContaining({ size: 500, sourceIds: 'src-1' }))
+    wrapper.unmount()
+  })
   afterEach(() => {
     vi.restoreAllMocks()
     sessionStorage.clear()
+  })
+  it('空分组不请求全部源；分组条件与手动源 ID 取交集，清空仍限定分组', async () => {
+    const api = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', scopeSourceIds: [] } })
+    await flushPromises()
+    expect(api).not.toHaveBeenCalled()
+    await wrapper.setProps({ scopeSourceIds: ['10', '20'] })
+    await flushPromises()
+    expect(api).toHaveBeenLastCalledWith(expect.objectContaining({ sourceIds: '10,20' }))
+    await wrapper.get('[data-testid="source-overview-search-field"]').setValue('sourceIds')
+    await wrapper.get('[data-testid="source-overview-search-text"]').setValue('20,30')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(api).toHaveBeenLastCalledWith(expect.objectContaining({ sourceIds: '20' }))
+    api.mockClear()
+    await wrapper.get('[data-testid="source-overview-search-text"]').setValue('30')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(api).not.toHaveBeenCalled()
+    await wrapper.findAll('button').find(button => button.text() === '清空')!.trigger('click')
+    await flushPromises()
+    expect(api).toHaveBeenLastCalledWith(expect.objectContaining({ sourceIds: '10,20' }))
+    wrapper.unmount()
   })
 
   // 2026-08-28 订正：过滤参数是 **siteIds（复数）**。实测 `sourcePaged({ siteId })` 被后端忽略

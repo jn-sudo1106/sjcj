@@ -5,8 +5,7 @@
     "ssh2": "^1.17.0"
   },
   "scripts": {
-    "predev": "npm --prefix app install",
-    "dev": "npm --prefix app run dev",
+    "dev": "node scripts/dev.cjs",
     "build": "npm --prefix app run build",
     "preview": "npm --prefix app run preview",
     "test": "npm --prefix app run test",

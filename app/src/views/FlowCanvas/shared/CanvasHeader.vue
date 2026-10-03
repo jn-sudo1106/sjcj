@@ -399,7 +399,7 @@ async function copyFlowIntoSource(
     <button class="rc-btn ghost" type="button" @click="backToSourceView">← 返回源视图</button>
     <div class="ch-switcher">
       <button class="ch-seg" :class="{ on: view === 'flow' }" type="button" @click="switchView('flow')">流程视图</button>
-      <button class="ch-seg" :class="{ on: view === 'data' }" type="button" @click="switchView('data')">数据视图</button>
+      <button class="ch-seg" :class="{ on: view === 'data' }" type="button" @click="switchView('data')">{{ route.query.sourceId ? '源数据' : '数据视图' }}</button>
       <!-- ⚠️ 「文件视图 / 任务视图」**保留**。2026-09-05 一度按 0904 I11 把这两档删掉，是**读反了**：
            产品原话「文件和任务我觉得暂时吧，因为数据视图里面是包着文件的」——"暂时吧"是
            **暂时留着**，不是暂时去掉（当时开发问的是"这块不要了"，产品没有顺着答"对"）。

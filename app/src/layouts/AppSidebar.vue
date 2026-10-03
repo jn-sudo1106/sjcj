@@ -19,9 +19,10 @@ const ui = useUiStore()
 const groupLabels = {
   home: '首页',
   workbench: '编排工作台',
-  assets: '资产管理',
-  ops: '数据与运行',
-  tools: '运维监控',
+  assets: '源工作区',
+  ops: '全局数据',
+  config: '流程与规则',
+  tools: '运行与监控',
   intelligence: '智能能力',
   settings: '系统设置',
 } as const

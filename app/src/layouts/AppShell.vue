@@ -9,8 +9,10 @@ import AppModuleHead from './AppModuleHead.vue'
 // 批量提交作业条（Y4-3）：挂在布局层，切页签/跳路由都不消失
 import LaunchJobBar from '@/components/LaunchJobBar.vue'
 import { useUiStore } from '@/stores/ui'
+import { useAuthStore } from '@/stores/auth'
 
 const ui = useUiStore()
+const auth = useAuthStore()
 </script>
 
 <template>
@@ -24,7 +26,9 @@ const ui = useUiStore()
         <AppModuleHead />
 
         <main class="rc-pane">
-          <router-view />
+          <router-view v-slot="{ Component }">
+            <KeepAlive :key="auth.info?.id ?? 'signed-out'" include="CollectAssets"><component :is="Component" /></KeepAlive>
+          </router-view>
         </main>
       </section>
     </div>

@@ -318,7 +318,7 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     const { list, router } = await mountList()
     await list.vm.$emit('openSource', { sourceId: 'src-9', siteId: '105', name: '源' })
     await flushPromises()
-    expect(router.currentRoute.value.query).toEqual({ siteId: '105', sourceId: 'src-9', view: 'data' })
+    expect(router.currentRoute.value.query).toEqual({ siteId: '105', sourceId: 'src-9', view: 'data', returnTo: '/collect' })
     expect(rec.recentSiteIds.value[0]).toBe('105')
   })
 
@@ -326,14 +326,14 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     const { list, router } = await mountList()
     await list.vm.$emit('openSource', { sourceId: 'src-0', siteId: '0', name: '源' })
     await flushPromises()
-    expect(router.currentRoute.value.query).toEqual({ sourceId: 'src-0', view: 'data' })
+    expect(router.currentRoute.value.query).toEqual({ sourceId: 'src-0', view: 'data', returnTo: '/collect' })
   })
 
   it('点所属网站：进网站源视图', async () => {
     const { list, router } = await mountList()
     await list.vm.$emit('openSite', '12')
     await flushPromises()
-    expect(router.currentRoute.value.query).toEqual({ siteId: '12', view: 'source' })
+    expect(router.currentRoute.value.query).toEqual({ siteId: '12', view: 'source', returnTo: '/collect' })
   })
 
   it('源模式下点刷新：通知源列表重查', async () => {
