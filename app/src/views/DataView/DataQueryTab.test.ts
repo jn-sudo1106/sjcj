@@ -68,7 +68,7 @@ describe('数据中心 · 数据查询 tab', () => {
     await flushPromises()
   }
 
-  async function openResultMenu(testId: 'data-export' | 'data-delete' | 'data-more') {
+  async function openResultMenu(testId: 'data-delete' | 'data-more') {
     await wrapper.get(`[data-testid="${testId}"]`).trigger('click')
     await flushPromises()
     return new DOMWrapper(document.body)
@@ -205,8 +205,8 @@ describe('数据中心 · 数据查询 tab', () => {
     await mountPage()
     await waitForLoad()
 
-    const body = await openResultMenu('data-export')
-    await body.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '导出 Excel')!.trigger('click')
+    // 0930-14D：导出 Excel 是一级按钮，点了直接下载，不再经过下拉
+    await wrapper.get('[data-testid="data-export"]').trigger('click')
 
     expect(exportSpy).toHaveBeenCalledWith(expect.objectContaining({ tableId: 't1' }))
     expect(openSpy).toHaveBeenCalledWith('/api/v1/entry/entryExportAll?entryType=t1', '_blank')
@@ -252,9 +252,9 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(wrapper.find('[data-testid="data-danger"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="data-tools"]').exists()).toBe(false)
 
-    const exportMenu = await openResultMenu('data-export')
-    expect(exportMenu.text()).toContain('导出 Excel')
-    expect(exportMenu.text()).toContain('取数 API')
+    expect(wrapper.get('[data-testid="data-export"]').text()).toBe('导出 Excel')
+    const moreMenu = await openResultMenu('data-more')
+    expect(moreMenu.text()).toContain('取数 API')
 
     wrapper.unmount()
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({ ...META, state: 'AC' })
@@ -280,14 +280,14 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(body.text()).not.toContain('重新处理后续步骤')
   })
 
-  it('取数 API 归入导出；清除父表标识归入更多', async () => {
+  it('取数 API 与清除父表标识都在更多（0930-14D）', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     await mountPage({ sourceId: '600519' })
     await waitForLoad()
 
-    const exportMenu = await openResultMenu('data-export')
-    const apiItem = exportMenu.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '取数 API')!
+    const apiMenu = await openResultMenu('data-more')
+    const apiItem = apiMenu.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '取数 API')!
     await apiItem.trigger('click')
     await flushPromises()
     await new Promise((r) => setTimeout(r, 500))

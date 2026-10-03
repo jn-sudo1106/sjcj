@@ -1968,6 +1968,29 @@ function buildLegacyMore(q: RowQuery) {
   return parts.join(' AND ') || undefined
 }
 
+/**
+ * 导出用的 more（0930-14A）：导出必须和页面查出来的是同一批数据。
+ *
+ * 查询时数据 ID / 父 ID 走单独参数（entryId / parentId），导出接口认不认没验证过；
+ * 后端认 more 是实测过的（2026-10-03，217：同一源 76 行，带 `ENTRY_ID = 991919` 只导出 1 行），
+ * 所以统一折成 `ENTRY_ID in (...)` / `PARENT_ID in (...)` 写进 more。
+ * ID 只留纯数字（拼进 SQL 片段）；填了内容但一个合法 ID 都没有时写 `1 = 0`——
+ * 页面上这时查不到数据，导出也不能因为条件被丢掉而变成整表。
+ */
+function buildExportMore(q: RowQuery) {
+  const parts: string[] = []
+  const idIn = (column: string, raw?: string) => {
+    if (!raw?.trim()) return
+    const ids = raw.split(/[\s,，]+/).filter((id) => /^\d+$/.test(id))
+    parts.push(ids.length ? `${column} in (${ids.join(',')})` : '1 = 0')
+  }
+  idIn('ENTRY_ID', q.dataId)
+  idIn('PARENT_ID', q.parentId)
+  const more = buildLegacyMore(q)
+  if (more) parts.push(parts.length ? `(${more})` : more)
+  return parts.join(' AND ') || undefined
+}
+
 const SORT_FIELD_MAP: Record<string, string> = {
   updateDt: 'UPDATE_DT',
   createDt: 'CREATE_DT',
@@ -2305,11 +2328,15 @@ export const dataApi = {
     }),
   // 导出 Excel：旧平台只透传这 5 个查询字段；不把内部查询字段 more 误传给导出接口。
   // 纯 URL 直开，不走 request/axios，由同源 Cookie 完成鉴权。
+  // 按当前查询条件导出。旧平台 EntryList2.vue handleExport 也带 more；此前这里漏了它，
+  // 页面筛了 SQL / 时间 / 数据 ID / 父 ID，导出的仍是整表（或整源）——见 buildExportMore。
+  // nextFlag 原样透传：后端导出是否认它未验证（旧平台导出没带）。
   exportUrl: (q: RowQuery): string => {
     const built = buildLegacyRowQuery(q)
     return appendQuery(BASE_URL + 'entry/entryExportAll', {
       entryType: built.entryType, sourceId: built.sourceId, state: built.state,
-      min: q.min, max: q.max,
+      min: q.min, max: q.max, nextFlag: q.nextFlag,
+      more: buildExportMore(q),
     })
   },
 }

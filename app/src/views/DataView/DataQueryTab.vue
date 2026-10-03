@@ -796,15 +796,16 @@ onMounted(async () => {
           </button>
           <button v-if="canWrite" class="rc-btn" data-testid="data-add" type="button" @click="openAdd">新增数据</button>
           <button v-if="canWrite" class="rc-btn" data-testid="data-import" type="button" @click="openImport">导入数据</button>
-          <el-dropdown trigger="click">
-            <button class="rc-btn" data-testid="data-export" type="button">导出<el-icon class="et-caret"><ArrowDown /></el-icon></button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item @click="onExport">导出 Excel</el-dropdown-item>
-                <el-dropdown-item @click="onShowApi">取数 API</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          <!-- 0930-14D：导出 Excel 从「导出 ▾」下拉里提到一级（会上「入口不好找」），点了直接按当前条件下载；
+               原来同在下拉里的「取数 API」挪进「更多」 -->
+          <button
+            class="rc-btn"
+            data-testid="data-export"
+            type="button"
+            title="按当前查询条件导出全部命中的数据（不是当前页），直接下载 Excel"
+            :disabled="!tableId"
+            @click="onExport"
+          >导出 Excel</button>
           <el-dropdown v-if="canWrite && isTestTable" trigger="click">
             <button class="rc-btn" data-testid="data-delete" type="button">删除数据<el-icon class="et-caret"><ArrowDown /></el-icon></button>
             <template #dropdown>
@@ -838,6 +839,7 @@ onMounted(async () => {
                 <el-dropdown-item @click="onMoreCommand('summary')">查看统计</el-dropdown-item>
                 <el-dropdown-item @click="onMoreCommand('sql')">{{ showSql ? '隐藏查询条件/SQL' : '查看查询条件/SQL' }}</el-dropdown-item>
                 <el-dropdown-item @click="onMoreCommand('steps')">展示处理步骤</el-dropdown-item>
+                <el-dropdown-item @click="onShowApi">取数 API</el-dropdown-item>
                 <el-dropdown-item v-if="canWrite" divided :disabled="!sourceId || !selectedRowKeys.length" @click="onClearParent">
                   清除父表后续标识
                 </el-dropdown-item>
