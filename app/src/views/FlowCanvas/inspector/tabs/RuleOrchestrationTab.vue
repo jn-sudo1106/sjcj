@@ -1980,6 +1980,7 @@ function onTestScript() {
     v-model:open="siteScriptOpen"
     :initial-url="siteScriptUrl"
     :initial-prompt="orchCfg.describe"
+    :config-id="cfg?.configId"
   />
 </template>
 

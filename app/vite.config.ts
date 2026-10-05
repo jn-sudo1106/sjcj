@@ -32,6 +32,11 @@ export default defineConfig(({ mode }) => {
       host: '0.0.0.0',
       // 认证与 /v1 业务请求共用 HttpOnly Cookie（SameSite=Lax），开发统一走同源 /api 代理
       proxy: {
+        // Runner 管理服务独立部署；与旧业务后端共用浏览器同源路径。
+        '/api/runner-management': {
+          target: env.VITE_RUNNER_MANAGEMENT_PROXY_TARGET || 'http://127.0.0.1:8092',
+          changeOrigin: true,
+        },
         // 第一版站点 Python 脚本生成服务，独立于旧 XML/规则脚本接口。
         '/api/ai/site-script/': {
           target: env.VITE_SITE_SCRIPT_AI_PROXY_TARGET || 'http://127.0.0.1:8091',

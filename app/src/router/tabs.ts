@@ -27,5 +27,5 @@ export const TABS: TabMeta[] = [
   { key: 'monitor', path: '/monitor', label: '监控中心', desc: '系统健康、MQ、同步状态、告警', group: 'tools' },
   // 系统设置（0924-02）：节点类型（旧平台「源类型」）+ 分类目录（原挂在采集资产的分类下拉底部）。
   // 这是第一个声明了 permission 的入口，给后续人员菜单权限留口子（见 composables/usePermission）。
-  { key: 'settings', path: '/settings', label: '系统设置', desc: '节点类型、分类目录', group: 'settings', permission: 'settings' },
+  { key: 'settings', path: '/settings', label: '系统设置', desc: '节点类型、分类目录、Runner 实例、队列分配、发布版本', group: 'settings', permission: 'settings' },
 ]

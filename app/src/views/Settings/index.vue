@@ -8,10 +8,14 @@ import { useRoute, useRouter } from 'vue-router'
 import { canAccess } from '@/composables/usePermission'
 import NodeTypeTab from './NodeTypeTab.vue'
 import CategoryTab from './CategoryTab.vue'
+import RunnerManagementTab from './RunnerManagementTab.vue'
 
 const ALL_TABS: { key: string; label: string; permission: string; comp: Component }[] = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', comp: NodeTypeTab },
   { key: 'category', label: '分类目录', permission: 'settings:category', comp: CategoryTab },
+  { key: 'runners', label: 'Runner 实例', permission: 'settings:runners', comp: RunnerManagementTab },
+  { key: 'assignments', label: '队列分配', permission: 'settings:assignments', comp: RunnerManagementTab },
+  { key: 'releases', label: '发布版本', permission: 'settings:releases', comp: RunnerManagementTab },
 ]
 const tabs = computed(() => ALL_TABS.filter((t) => canAccess(t.permission)))
 
@@ -50,7 +54,7 @@ function selectTab(key: string) {
     </div>
     <div class="st-content">
       <KeepAlive>
-        <component :is="active.comp" v-if="active" :key="active.key" />
+        <component :is="active.comp" v-if="active" :key="active.key" :section="active.key" />
       </KeepAlive>
     </div>
   </div>
