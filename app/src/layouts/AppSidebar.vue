@@ -50,6 +50,7 @@ const navIcons: Record<string, Component> = {
   data: DataAnalysis,
   files: Files,
   tasks: Clock,
+  sync: Connection,
   monitor: Monitor,
   settings: Setting,
 }

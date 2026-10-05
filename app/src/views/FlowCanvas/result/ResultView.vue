@@ -4,7 +4,7 @@ import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElIcon, ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowUp } from '@element-plus/icons-vue'
+import { ArrowUp, Connection, Grid } from '@element-plus/icons-vue'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -34,6 +34,7 @@ import { readFieldPreset, readShowEmpty, visibleDetailProps, writeFieldPreset, w
 import { copyToClipboard } from '@/utils/clipboard'
 import { downloadCsv } from '@/utils/format/csvExport'
 import { resultRowsCsv } from './exportRows'
+import DataFetchApiDialog from '@/components/data/DataFetchApiDialog.vue'
 
 function copyText(val: string, label?: string) {
   void copyToClipboard(val, label)
@@ -304,9 +305,9 @@ const actionBtnText = computed(() => {
   if (execMode.value === 'fetch') return '发起抓取'
   if (execMode.value === 'upstream') return '从上一节点重跑'
   if (execMode.value === 'input') {
-    return isCurrentNodeAction.value ? '发起本节点任务' : '发后续任务'
+    return isCurrentNodeAction.value ? '发起本节点任务' : '发后续'
   }
-  return '发后续任务'
+  return '发后续'
 })
 
 // 发后续任务（0824/0912）：发后续是发给直接后继节点处理当前节点产出的输出数据。
@@ -1282,6 +1283,46 @@ function exportSourceExcel() {
   if (excelExportReason.value) { ElMessage.warning(excelExportReason.value); return }
   window.open(dataApi.exportUrl(buildSummaryQuery()), '_blank', 'noopener,noreferrer')
 }
+const apiOpen = ref(false)
+const apiIdFetchUrl = computed(() => {
+  const restBase = import.meta.env.VITE_LEGACY_REST_BASE || `${window.location.origin}/rest`
+  const appId = import.meta.env.VITE_LEGACY_API_APP_ID || 'dev'
+  const appKey = import.meta.env.VITE_LEGACY_API_APP_KEY || 'dev1'
+  const params = [
+    `appId=${encodeURIComponent(appId)}`,
+    `appKey=${encodeURIComponent(appKey)}`,
+    `type=${encodeURIComponent(selectedTable.value || '<tableId>')}`,
+  ]
+  if (sourceId.value) params.push(`sourceId=${encodeURIComponent(sourceId.value)}`)
+  params.push('startId=0', 'size=10')
+  return `${restBase.endsWith('/') ? restBase.slice(0, -1) : restBase}/api/v1/data/entry?${params.join('&')}`
+})
+const apiParams = [
+  { name: 'appId', type: '字符串', required: '是', limit: '-', description: '取数应用 ID，由部署环境提供' },
+  { name: 'appKey', type: '字符串', required: '是', limit: '-', description: '取数应用密钥，由部署环境提供' },
+  { name: 'type', type: '整型', required: '是', limit: '-', description: '实体类型 ID，对应当前数据表' },
+  { name: 'sourceId', type: '长整型', required: '非', limit: '-', description: '限制为当前源采集的数据' },
+  { name: 'size', type: '整型', required: '是', limit: '1-200', description: '每次获取数量' },
+  { name: 'startId', type: '长整型', required: '必填', limit: '最小为0', description: '取数起始 ID，下一批使用上次返回的 lastId+1' },
+  { name: 'endId', type: '长整型', required: '非', limit: '-', description: '限制取数最大 ID' },
+  { name: 'dataRange', type: '字符串', required: '非', limit: '时间范围', description: '时间上下限格式为“开始 - 结束”' },
+]
+const apiReturns = computed(() => [
+  { code: 'data.lastId', name: '本次最大 ID', type: '长整型', description: '下一批 startId 使用 lastId+1' },
+  { code: 'data.size', name: '本次返回数量', type: '整型', description: 'list 实际返回条数' },
+  { code: 'data.list[].id', name: 'ID', type: '长整型', description: '数据主键' },
+  { code: 'data.list[].state', name: '数据状态', type: '字符串', description: 'D 表示软删除' },
+  { code: 'data.list[].sourceId', name: '源 ID', type: '长整型', description: '数据所属源' },
+  { code: 'data.list[].parentId', name: '上层数据 ID', type: '长整型', description: '有关联时返回' },
+  { code: 'data.list[].createDt', name: '生成时间', type: '字符串', description: '数据生成时间' },
+  { code: 'data.list[].updateDt', name: '更新时间', type: '字符串', description: '数据更新时间' },
+  ...(meta.value?.fields ?? []).map((field) => ({
+    code: `data.list[].${field.prop}`,
+    name: `${field.desc}（${field.columnName || field.prop}）`,
+    type: field.type || '-',
+    description: '当前数据表字段',
+  })),
+])
 const summaryOpen = ref(false)
 
 // 详情 drawer：按当前页 index 翻，不跨页请求（0831 X4）。
@@ -1598,10 +1639,10 @@ async function onTestScript() {
       <span v-if="fullscreen" class="rv-fs-source" :title="source?.name || sourceId">{{ source?.name || sourceId }}</span>
       <!-- 流程轨道展开时收起按钮合并在轨道区右上角；轨道收起时在主干行左端保留展开按钮。 -->
       <div class="rv-browse-mode" role="group" aria-label="数据查看方式">
-        <button type="button" :aria-pressed="browseMode === 'table'" @click="switchBrowseMode('table')">按数据表</button>
-        <button type="button" :aria-pressed="browseMode === 'step'" @click="switchBrowseMode('step')">按步骤</button>
+        <button type="button" title="按数据表查看" aria-label="按数据表查看" :aria-pressed="browseMode === 'table'" @click="switchBrowseMode('table')"><el-icon><Grid /></el-icon></button>
+        <button type="button" title="按步骤查看" aria-label="按步骤查看" :aria-pressed="browseMode === 'step'" @click="switchBrowseMode('step')"><el-icon><Connection /></el-icon></button>
       </div>
-      <select v-if="browseMode === 'table' && outputTables.length" class="rv-table-picker" aria-label="数据表" data-testid="data-table-select" :value="tableChoice" @change="selectTable(($event.target as HTMLSelectElement).value)">
+      <select v-if="browseMode === 'table' && outputTables.length" class="rv-table-picker" aria-label="数据表" data-testid="data-table-select" :title="tableNames[tableChoice] || tableChoice" :value="tableChoice" @change="selectTable(($event.target as HTMLSelectElement).value)">
         <option v-for="table in outputTables" :key="table.id" :value="table.id">{{ tableNames[table.id] || table.id }}</option>
       </select>
       <RailNodePicker
@@ -1692,6 +1733,7 @@ async function onTestScript() {
               <el-dropdown-menu>
                 <el-dropdown-item data-testid="data-export-page" :disabled="pageExportBlocked" title="导出已查询的当前页全部字段" @click="exportCurrentPage">导出当前页 CSV</el-dropdown-item>
                 <el-dropdown-item data-testid="data-export-excel" :disabled="!!excelExportReason" :title="excelExportReason || '导出当前表中属于当前源的数据，保留状态筛选，不限当前页'" @click="exportSourceExcel">导出当前源 Excel</el-dropdown-item>
+                <el-dropdown-item data-testid="data-export-api" :disabled="!selectedTable" @click="apiOpen = true">取数 API</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -1719,7 +1761,6 @@ async function onTestScript() {
             <el-dropdown
               v-if="execMode === 'input' && canPickRows"
               trigger="click"
-              :teleported="false"
             >
               <button
                 class="rc-btn primary rv-split-arrow"
@@ -1983,6 +2024,16 @@ async function onTestScript() {
       :can-write="false"
     />
     <SummaryDrawer v-model="summaryOpen" :table-meta="meta" :build-query="buildSummaryQuery" :hit-count="total" />
+
+    <DataFetchApiDialog
+      v-model="apiOpen"
+      :url="apiIdFetchUrl"
+      :params="apiParams"
+      :returns="apiReturns"
+      :table-label="meta?.tableName || selectedTable"
+      :source-label="source?.name ? `${source.name}（${sourceId}）` : sourceId"
+      test-id="source-data-api-dialog"
+    />
     <SnatchLauncher ref="snatchLauncher" />
 
     <!-- 节点右键菜单（0917-06 / 0917-08，2026-09-21 用户定）：
@@ -2052,17 +2103,19 @@ async function onTestScript() {
 </template>
 
 <style scoped>
-.rv-table-context { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 320px; flex-wrap: wrap; }
-.rv-table-context .rv-tablename { min-width: 0; max-width: 180px; }
+.rv-table-context { display: flex; align-items: center; gap: 5px; min-width: 100px; max-width: 190px; flex: 0 1 190px; flex-wrap: nowrap; overflow: hidden; }
+.rv-table-context .rv-tablename { min-width: 0; max-width: 105px; }
 .rv-view-tools { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .rv-grid-tools { display: flex; align-items: center; }
 
 .rv-browse-mode { display: inline-flex; flex: none; gap: 2px; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); padding: 2px; }
 .rv-browse-mode button, .rv-table-picker { height: 28px; border: 0; background: var(--rc-surface); color: var(--rc-text-2); font-size: 12px; cursor: pointer; }
+.rv-browse-mode button { display: inline-flex; align-items: center; justify-content: center; width: 28px; padding: 0; border-radius: 4px; font-size: 14px; }
+.rv-browse-mode button:hover { background: #f1f5f9; color: var(--rc-primary-ink); }
 .rv-browse-mode button[aria-pressed="true"] { background: var(--rc-primary-bg); color: var(--rc-primary); }
-.rv-table-picker { max-width: 240px; min-width: 120px; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); }
+.rv-table-picker { width: 160px; min-width: 160px; max-width: 160px; padding: 0 24px 0 8px; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); text-overflow: ellipsis; }
 
-.ctx-summary .rv-sql { flex: 1 1 320px; min-width: 180px; width: auto; }
+.ctx-summary .rv-sql { flex: 1 1 380px; min-width: 260px; width: auto; }
 .rv-shell { min-width: 0; min-height: 0; width: 100%; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; height: 100%; display: flex; flex-direction: column; }
 /* 全屏：同一份 DOM 直接铺满视口，不复制模板也不套弹层。祖先链上没有 transform/filter/
    contain（已核对 AppShell.vue、FlowCanvas/index.vue），fixed 能正常逃逸；外层 .rc-shell
@@ -2125,11 +2178,13 @@ async function onTestScript() {
 /* 换行会让这两条工具栏高度随窗口变窄一路往上涨，挤掉下面数据表格的空间——改成不换行、
    放不下就横向滚动，工具栏高度锁死为固定的一行，数据表格永远拿到最多的剩余空间
    （2026-08-15 第十次纠偏：目的是"下面数据行更多"，不是"这一行摆得下"）。 */
-/* 窄屏换行，不横向滚动（2026-08-20）：这一行原本 nowrap + overflow-x:auto，窗口一窄就出现
-   横向滚动条——筛选条件横向滚动很难用，「查询」按钮会被滚出视野，得先滚回去才点得到。
-   换行只是多占一行高度，比这个代价小得多；宽屏下仍是一行，没有变化。 */
-.ctx-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 7px 10px; padding: 7px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; }
+/* 2026-10-05 明确要求查询、发后续任务、删除数据始终同一行。空间不足时整行横向滚动，
+   不再把数据操作折到第二行；表上下文和 SQL 先收缩，尽量减少出现滚动条的机会。 */
+.ctx-summary { display: flex; align-items: center; flex-wrap: nowrap; gap: 6px; padding: 7px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.ctx-summary::-webkit-scrollbar { height: 5px; }
+.ctx-summary::-webkit-scrollbar-thumb { border-radius: 999px; background: #cbd5e1; }
 .ctx-summary > * { flex-shrink: 0; }
+.ctx-summary > .rv-table-context, .ctx-summary > .rv-sql { flex-shrink: 1; }
 /* SQL 框是这一行唯一可伸缩的元素，负责吸收多余/不足的宽度。必须比上面那条 no-shrink
    规则更具体，否则整行永远超宽、把右端的「查询/清空」挤出可视区——2026-08-15 实测回归，
    跟之前"查看条件被滚没"是同一类错误：nowrap 的行里必须留一个能缩的元素。 */
@@ -2138,7 +2193,7 @@ async function onTestScript() {
    本来就装不下 6 个控件，所以再加一手：聚焦时临时变宽到 560px，把其他控件挤到横向
    滚动区外——查询/清空是 sticky 钉住的，照样点得到。真要长时间写 SQL 走全屏，
    那边这一行有 1280px（2026-08-15 第十三次纠偏：SQL 框太小）。 */
-.ctx-summary .rv-input.flex { flex: 1 1 320px; min-width: 180px; width: auto; }
+.ctx-summary .rv-input.flex { flex: 1 1 380px; min-width: 260px; width: auto; }
 /* 聚焦时必须连 flex-shrink 一起退掉：这一行常态是刚好塞满的，可用空间为 0，
    只加大 flex-basis 会被 shrink 原样拉回 min-width，等于没写（实测踩过）。
    固定宽度后整行转为横向滚动，浏览器会把聚焦元素滚进视野，查询/清空是 sticky 的照样点得到。 */
@@ -2151,7 +2206,7 @@ async function onTestScript() {
 /* 再兜一层：窗口真的很窄、SQL 框缩到底之后整行还是会横向滚动，这时把查询/清空钉在右端，
    保证任何宽度下都点得到。 */
 /* 不再 sticky：那是为横向滚动时钉住按钮准备的，改成换行后没有横向滚动，渐变底也失去意义 */
-.rv-actions { display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; }
+.rv-actions { display: inline-flex; align-items: center; gap: 6px; padding-left: 4px; white-space: nowrap; }
 .rv-cond-chips { display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; }
 .rv-cond-chip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border: 1px solid var(--rc-primary-bd, #bfdbfe); border-radius: 12px; background: var(--rc-primary-bg, #eff6ff); color: var(--rc-primary-ink, #1d4ed8); font-size: 11px; cursor: pointer; white-space: nowrap; }
 .rv-cond-chip:hover { border-color: var(--rc-primary); }
@@ -2180,13 +2235,13 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
    跟同一行其他字段一样不参与 flex 伸缩。 */
 .rv-input.flex { flex: none; width: 220px; min-width: 0; font-family: var(--rc-mono, monospace); }
 .rv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
-.ctx-summary .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }
+.ctx-summary .rc-btn { height: 28px; padding: 0 10px; font-size: 12px; }
 /* 数据操作组（发起抓取/发后续/从上一节点重跑/测试脚本/发全部/删除数据 + 各自的说明文字）：
    钉在筛选行右端。margin-left:auto 在 .ctx-summary 的 wrap 行内把它推到最右；窄屏 wrap 到
    下一行时自然左对齐，不做额外处理——响应式下让位比硬撑更好。
    按钮尺寸由上面的 .ctx-summary .rc-btn（28px）统一接管，跟同行的「查询/清空」一致；
    删除数据那个 .tiny 也一并拉齐，这行不再有 24px 的邻居。 */
-.rv-data-ops { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.rv-data-ops { margin-left: 0; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 /* 无可执行操作时的说明：工具栏本来就挤，超出就省略，全文走 title */
 .rv-no-exec { font-size: 12px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-summary .rc-btn.tiny { height: 28px; padding: 0 12px; font-size: 12px; }
@@ -2256,6 +2311,6 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
 .rv-d-pos { color: var(--rc-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .rv-d-empty { display: inline-flex; align-items: center; gap: 4px; color: var(--rc-text-2); font-size: 11px; cursor: pointer; }
 .rv-d-preset { height: 24px; padding: 0 6px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text-2); font-size: 11px; }
-.ctx-summary :deep(.dcb) { flex: 1 1 320px; min-width: 180px; }
+.ctx-summary :deep(.dcb) { flex: 1 1 380px; min-width: 260px; }
 .rc-btn.ghost { background: transparent; border-color: var(--rc-border); color: var(--rc-text-2); }
 </style>

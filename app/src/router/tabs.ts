@@ -23,7 +23,8 @@ export const TABS: TabMeta[] = [
   // key 必须等于 path 的第一段：useActiveNavKey 按路由段查 TABS，查不到会**静默回退到 TABS[0]**。
   // 2026-09-02 这条曾写成单数 'flow'（path 是 /flows），结果流程中心的面包屑一直显示
   // 「采集资产总览」——不报错，只是显示成了另一个模块。tabs.test.ts 有一条用例锁死这个约定。
-  { key: 'tasks', path: '/tasks', label: '任务中心', desc: '任务实例、节点状态、失败重跑', group: 'tools' },
+  { key: 'tasks', path: '/tasks', label: '任务中心', desc: '全局任务查询、详情与重发', group: 'tools' },
+  { key: 'sync', path: '/sync', label: '数据同步', desc: '将现有数据表同步到目标环境', group: 'tools' },
   { key: 'monitor', path: '/monitor', label: '监控中心', desc: '系统健康、MQ、同步状态、告警', group: 'tools' },
   // 系统设置（0924-02）：节点类型（旧平台「源类型」）+ 分类目录（原挂在采集资产的分类下拉底部）。
   // 这是第一个声明了 permission 的入口，给后续人员菜单权限留口子（见 composables/usePermission）。

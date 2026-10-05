@@ -44,7 +44,14 @@ describe('数据中心 · 数据查询 tab', () => {
     vi.spyOn(dataApi, 'entryTypesGroup').mockResolvedValue(GROUP)
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(META)
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 1, list: [ROW] })
-    vi.spyOn(sourceApi, 'sourceSame').mockResolvedValue([{ sourceId: '600519', name: '贵州茅台' }])
+    vi.spyOn(dataApi, 'distinctSource').mockResolvedValue(['600519', 'src-9'])
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 2,
+      list: [
+        { sourceId: '600519', name: '贵州茅台', url: '', configId: 'c1', mainTable: 't1', owner: 'ops', state: 'C' },
+        { sourceId: 'src-9', name: '更多源示例', url: '', configId: 'c1', mainTable: 't1', owner: 'dev', state: 'C' },
+      ],
+    })
   })
 
   afterEach(() => {
@@ -100,11 +107,18 @@ describe('数据中心 · 数据查询 tab', () => {
     groups.deleteGroup(id)
   })
 
-  it('切表：选表下拉切到 list1 第二个表，重新拉取 tableMeta 并按新 tableId 重查', async () => {
+  it('切表后源候选按新表重载，原表不关联的已选源自动清除', async () => {
     vi.spyOn(dataApi, 'tableMeta').mockImplementation(async (id: string) => ({ ...META, tableId: id }))
+    const distinctSpy = vi.spyOn(dataApi, 'distinctSource').mockImplementation(async (query) => (
+      query.tableId === 't1' ? ['600519'] : ['src-9']
+    ))
+    const sourceSpy = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 1,
+      list: [{ sourceId: 'src-9', name: '仅属新表', url: '', configId: 'c1', mainTable: 't2', owner: 'dev', state: 'C' }],
+    })
     const auth = useAuthStore()
     auth.roles = ['admin']
-    await mountPage()
+    await mountPage({ sourceId: '600519' })
     await waitForLoad()
 
     const tableSelect = wrapper.findAllComponents({ name: 'ElSelect' })[0]
@@ -113,7 +127,9 @@ describe('数据中心 · 数据查询 tab', () => {
     await waitForLoad()
 
     expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t2')
-    expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 't2', page: 1 }))
+    expect(distinctSpy).toHaveBeenLastCalledWith({ tableId: 't2', size: 20000 })
+    expect(sourceSpy).toHaveBeenLastCalledWith(expect.objectContaining({ sourceIds: ['src-9'] }))
+    expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 't2', sourceId: undefined, page: 1 }))
   })
 
   it('查询：输入数据 ID 点查询，rowQueryPaged 带上 dataId 且页码归 1', async () => {
@@ -679,7 +695,7 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t9')
   })
 
-  it('更多源：下拉底部入口调 sourceApi.sourcePaged，选中后切源', async () => {
+  it('按源搜索：选中跨表源后切换到该源的默认表', async () => {
     const sourceSpy = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
       total: 1,
       list: [{ sourceId: 'src-9', name: '更多源示例', url: '', configId: 'c1', mainTable: 't1', owner: 'dev', state: 'C' }],
@@ -689,7 +705,7 @@ describe('数据中心 · 数据查询 tab', () => {
     await mountPage()
     await waitForLoad()
 
-    const link = new DOMWrapper(document.body).findAll('.dv-link').find((el) => el.text().includes('更多源'))
+    const link = new DOMWrapper(document.body).findAll('.dv-link').find((el) => el.text().includes('按源搜索'))
     await link!.trigger('click')
     await flushPromises()
 
@@ -702,6 +718,8 @@ describe('数据中心 · 数据查询 tab', () => {
     await row!.trigger('click')
     await flushPromises()
 
+    expect(dataApi.entryTypesGroup).toHaveBeenLastCalledWith('src-9')
+    expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t1')
     expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: 'src-9' }))
   })
 })

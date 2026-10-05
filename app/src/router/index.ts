@@ -26,6 +26,8 @@ const routes: RouteRecordRaw[] = [
       { path: '/data', component: () => import('../views/DataView/index.vue') },
       { path: '/files', component: () => import('../views/FileCenter/index.vue') },
       { path: '/tasks', component: () => import('../views/RunRecords/index.vue') },
+      { path: '/sync', component: () => import('../views/DataSync/index.vue') },
+      { path: '/sync/create', component: () => import('../views/DataSync/TaskWizard.vue') },
       { path: '/monitor', component: () => import('../views/Monitor/index.vue') },
       // 系统设置（0924-02）。meta.permission 与 TABS 里的同值，守卫经 canAccess 判断
       { path: '/settings', component: () => import('../views/Settings/index.vue'), meta: { permission: 'settings' } },

@@ -616,10 +616,10 @@ export interface SourceLog {
   at: string
 }
 
-/** 源任务视图查询：默认收窄当前源；不传 sourceId 时查询网站下全部源。
+/** 任务查询：源态收窄当前源、网站态传 siteScopeId、任务中心两者都不传即查全平台。
  *  真实接口是 task/topTaskPaged：nodeId 只给 mock 按步骤筛；live 用该节点的 configId。 */
 export interface SourceTaskQuery extends PageQuery {
-  siteId: string
+  siteId: string // 当前页面上下文；全局任务中心传空串，不作为后端筛选条件
   sourceId?: string
   /**
    * 按网站圈定来源（后端 2026-09-16 加、2026-09-17 修好 SQL）——**作为筛选条件的站点**，

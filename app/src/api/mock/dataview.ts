@@ -328,6 +328,10 @@ export function mockDataRowQueryPaged(params?: Record<string, unknown>): Paged<D
   const start = (page - 1) * size
   return { total: filtered.length, list: filtered.slice(start, start + size) }
 }
+export function mockDistinctSource(params?: Record<string, unknown>): string[] {
+  const rows = QUERY_ROWS[String(params?.tableId ?? '')] ?? []
+  return [...new Set(rows.map((row) => row.sourceId).filter(Boolean))]
+}
 // 结果视图行编辑（Phase 4.4）：只改内存态 values，不改 dataId/state 等系统字段
 export function mockDataRowUpdate(params?: Record<string, unknown>): { message?: string; row?: DataRow } {
   const tableId = String(params?.tableId ?? '')

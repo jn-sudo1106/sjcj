@@ -649,16 +649,15 @@ export function mockSourceTasks(params?: Record<string, unknown>): TaskInst[] {
 }
 
 /**
- * 源任务视图的运行记录：默认由当前源的流程步骤派生；不传 sourceId 时汇总同网站全部源。
+ * 源任务视图的运行记录：默认由当前源的流程步骤派生；不传 siteId/sourceId 时供全局任务中心使用。
  * 每个节点保留两条完成记录和一条当前/最近记录，便于节点、状态、分页筛选联调。
  */
 export function mockSourceTaskPaged(params?: Record<string, unknown>): Paged<TaskInst> {
   const sourceId = String(params?.sourceId ?? '')
   const siteId = String(params?.siteId ?? '')
-  if (!siteId) return { total: 0, list: [] }
   const scopedSources = sourceId
-    ? SOURCES.filter((source) => source.sourceId === sourceId && source.siteId === siteId)
-    : SOURCES.filter((source) => source.siteId === siteId)
+    ? SOURCES.filter((source) => source.sourceId === sourceId && (!siteId || source.siteId === siteId))
+    : siteId ? SOURCES.filter((source) => source.siteId === siteId) : SOURCES
   if (!scopedSources.length) return { total: 0, list: [] }
 
   const tasks = scopedSources.flatMap((source) => {
