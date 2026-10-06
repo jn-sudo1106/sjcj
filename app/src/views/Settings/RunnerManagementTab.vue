@@ -168,8 +168,8 @@ async function publishProcessor() {
 async function publishRunner() {
   saving.value = true
   try {
-    await runnerManagementApi.publishRunner()
-    ElMessage.success('Runner 版本已发布')
+    const result = await runnerManagementApi.publishRunner()
+    ElMessage.success(result.created ? 'Runner 新版本已发布' : 'Runner 源码未变化，已复用现有版本')
     await load()
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : String(e))

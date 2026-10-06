@@ -2572,9 +2572,11 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     return { flow, wrapper }
   }
 
-  it('采集节点的 Python 生成入口沿用配置 URL，同时保留原 XML 生成按钮', async () => {
+  it('采集节点的 Python 生成入口使用当前源列表 URL 和任务队列', async () => {
     const { flow, wrapper } = mountOnCollectorNode()
-    flow.configs['web-1'].configUrl = 'https://www.realcan.cn/newscenter'
+    useSourceStore().sourceCfg = { sourceId: 's-1', name: '测试源', url: 'https://www.realcan.cn/newscenter', configId: 'c-1', mainTable: '', owner: '', state: 'C' }
+    flow.configs['web-1'].configUrl = 'https://wrong.example.com/config'
+    flow.configs['web-1'].taskCfg = { queue: 'news_list', urlRule: '' }
     await flushPromises()
     expect(wrapper.find('[data-testid="main-generate-script"]').text()).toBe('生成配置')
     const button = wrapper.find('[data-testid="open-site-script-generator"]')
@@ -2583,6 +2585,16 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     const dialog = wrapper.findComponent(SiteScriptGeneratorDialog)
     expect(dialog.props('open')).toBe(true)
     expect(dialog.props('initialUrl')).toBe('https://www.realcan.cn/newscenter')
+    expect(dialog.props('queueName')).toBe('news_list')
+  })
+
+  it('任务队列未填写时沿用任务配置显示的默认队列', async () => {
+    const { flow, wrapper } = mountOnCollectorNode()
+    useSourceStore().sourceCfg = { sourceId: 's-1', name: '测试源', url: 'https://www.realcan.cn/list', configId: 'c-1', mainTable: '', owner: '', state: 'C' }
+    flow.configs['web-1'].taskCfg = { queue: '', urlRule: '' }
+    await flushPromises()
+    await wrapper.get('[data-testid="open-site-script-generator"]').trigger('click')
+    expect(wrapper.findComponent(SiteScriptGeneratorDialog).props('queueName')).toBe('s-1_main')
   })
 
   it('文案换成抓取配置措辞，不出现「测试脚本」按钮（本期不做，方案 §3.1 修正 D）', async () => {

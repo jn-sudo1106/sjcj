@@ -29,4 +29,20 @@ describe('Runner 管理接口', () => {
     expect(payload.runnerId).toBe('r-1')
     expect(payload).not.toHaveProperty('ipAddress')
   })
+
+  it('代码仓库路径从系统配置接口读取并保存为服务器绝对路径', async () => {
+    const setting = { path: 'E:\\ce\\site-scripts', defaultPath: 'E:\\ce\\site-scripts', remoteUrl: '', branch: 'main' }
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => setting })
+    vi.stubGlobal('fetch', fetchSpy)
+    expect(await runnerManagementApi.siteCodeRepository()).toEqual(setting)
+    await runnerManagementApi.updateSiteCodeRepository('E:\\ce\\generated-sites')
+    await runnerManagementApi.updateSiteCodeGit('https://git.example.com/site-scripts.git', 'main')
+    expect(fetchSpy).toHaveBeenNthCalledWith(1, '/api/runner-management/settings/site-code-repo', expect.objectContaining({ method: 'GET' }))
+    expect(fetchSpy).toHaveBeenNthCalledWith(2, '/api/runner-management/settings/site-code-repo', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ path: 'E:\\ce\\generated-sites' }),
+    }))
+    expect(fetchSpy).toHaveBeenNthCalledWith(3, '/api/runner-management/settings/site-code-git', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ remoteUrl: 'https://git.example.com/site-scripts.git', branch: 'main' }),
+    }))
+  })
 })

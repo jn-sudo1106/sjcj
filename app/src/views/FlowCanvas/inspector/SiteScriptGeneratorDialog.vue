@@ -2,10 +2,10 @@
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { generateSiteScript } from '@/api/siteScript'
-import { runnerManagementApi, type PublishedScript, type ScriptBinding } from '@/api/runnerManagement'
+import { runnerManagementApi, type PublishedScript, type SiteCodeVersion } from '@/api/runnerManagement'
 import { copyToClipboard } from '@/utils/clipboard'
 
-const props = defineProps<{ initialUrl: string; initialPrompt: string; configId?: string }>()
+const props = defineProps<{ initialUrl: string; initialPrompt: string; configId?: string; queueName?: string }>()
 const open = defineModel<boolean>('open', { required: true })
 const url = ref('')
 const prompt = ref('')
@@ -17,30 +17,60 @@ const error = ref('')
 const warnings = ref<string[]>([])
 const generating = ref(false)
 const publishing = ref(false)
-const adopting = ref(false)
-const binding = ref<ScriptBinding | null>(null)
 const published = ref<PublishedScript | null>(null)
-const bindingError = ref('')
+const codeType = ref<'site' | 'default'>('site')
+const versions = ref<SiteCodeVersion[]>([])
+const versionsError = ref('')
 let controller: AbortController | null = null
+let openedFor = ''
+
+function clearDraft() {
+  code.value = ''
+  candidate.value = ''
+  fileName.value = ''
+  candidateFileName.value = ''
+  published.value = null
+}
 
 watch(open, (visible) => {
   if (!visible) {
     controller?.abort()
     return
   }
-  if (!url.value) url.value = props.initialUrl
-  if (!prompt.value) prompt.value = props.initialPrompt
-  if (props.configId) void loadBinding(props.configId)
+  const context = `${props.configId ?? ''}\n${props.initialUrl}`
+  const contextChanged = !!openedFor && openedFor !== context
+  if (contextChanged || (url.value && url.value !== props.initialUrl)) clearDraft()
+  openedFor = context
+  url.value = props.initialUrl
+  if (!prompt.value || contextChanged) prompt.value = props.initialPrompt
+  if (props.configId) void loadVersions(props.configId)
 }, { immediate: true })
+
+watch(() => props.initialUrl, (next) => {
+  if (!open.value || url.value === next) return
+  clearDraft()
+  url.value = next
+})
+
+watch(url, (next, previous) => {
+  if (previous && next !== previous) clearDraft()
+})
+
+watch(() => [props.configId, props.queueName] as const, () => {
+  if (open.value && props.configId) void loadVersions(props.configId)
+})
 
 watch(code, () => { published.value = null })
 
-async function loadBinding(configId: string) {
-  bindingError.value = ''
+async function loadVersions(configId: string) {
+  versionsError.value = ''
+  versions.value = []
   try {
-    binding.value = await runnerManagementApi.scriptBinding(configId)
+    if (props.queueName) {
+      versions.value = await runnerManagementApi.siteCodeVersions(configId, props.queueName)
+    }
   } catch (e) {
-    bindingError.value = e instanceof Error ? e.message : String(e)
+    versionsError.value = e instanceof Error ? e.message : String(e)
   }
 }
 
@@ -94,7 +124,7 @@ function adopt() {
   code.value = candidate.value
   fileName.value = candidateFileName.value
   candidate.value = ''
-  ElMessage.success('已放入编辑区，检查后可发布')
+  ElMessage.success('已放入编辑区，检查后可保存代码版本')
 }
 
 function editManually() {
@@ -117,32 +147,24 @@ async function publish() {
     return
   }
   if (!code.value.trim()) return
+  if (!props.queueName?.trim()) {
+    error.value = '请先在任务配置中保存队列名称'
+    return
+  }
   publishing.value = true
   error.value = ''
   try {
     published.value = await runnerManagementApi.publishScript({
       configId, fileName: fileName.value, code: code.value, prompt: prompt.value.trim(), url: url.value.trim(),
+      queueName: props.queueName.trim(), codeType: codeType.value,
+      siteHost: codeType.value === 'site' ? new URL(url.value.trim()).hostname.toLowerCase() : undefined,
     })
-    ElMessage.success('已发布候选脚本；采用后才会更新节点绑定')
+    await loadVersions(configId)
+    ElMessage.success('代码版本已保存；请在「节点代码」中发布运行配置')
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
     publishing.value = false
-  }
-}
-
-async function adoptPublished() {
-  const configId = props.configId?.trim()
-  if (!configId || !published.value) return
-  adopting.value = true
-  error.value = ''
-  try {
-    binding.value = await runnerManagementApi.adoptScript(configId, published.value.scriptDigest)
-    ElMessage.success('节点脚本绑定已更新，新任务将使用此版本')
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    adopting.value = false
   }
 }
 
@@ -164,11 +186,10 @@ function download() {
 <template>
   <el-dialog v-model="open" title="AI 生成站点脚本" width="min(920px, 94vw)" top="5vh" append-to-body data-testid="site-script-dialog">
     <div class="site-script-form">
-      <p class="site-script-hint">以 www.realcan.cn.py 为样例，生成提供 scrape(url) 的 Python 文件。发布候选代码后，仍需采用才能让新任务使用该版本。</p>
+      <p class="site-script-hint">以 www.realcan.cn.py 为样例，生成提供 scrape(url) 的 Python 文件。代码版本保存后，可在「系统设置 → 节点代码」发布运行配置。</p>
       <div v-if="configId" class="site-script-binding">
-        <b>当前节点脚本</b>
-        <span v-if="binding">{{ binding.gitUrl }} · {{ binding.scriptDigest }} · {{ binding.status }}</span>
-        <span v-else>{{ bindingError ? `读取失败：${bindingError}` : '尚未绑定' }}</span>
+        <b>节点 #{{ configId }} · 队列 {{ queueName || '未配置' }}</b>
+        <span>{{ versionsError || (queueName ? `已有 ${versions.length} 个代码版本` : '请先配置队列') }}</span>
       </div>
       <label>列表 URL
         <input v-model="url" class="site-script-input" data-testid="site-script-url" placeholder="https://www.realcan.cn/newscenter" />
@@ -193,17 +214,23 @@ function download() {
       </div>
       <div v-if="code" class="site-script-result" data-testid="site-script-editor">
         <div class="site-script-result-head">
-          <b>当前代码 · {{ fileName }}</b>
+          <b>当前代码 · {{ codeType === 'site' ? `sites/${fileName}` : `${queueName}.py` }}</b>
           <div>
             <el-button size="small" @click="copyToClipboard(code, 'Python 代码')">复制</el-button>
             <el-button size="small" type="primary" data-testid="site-script-download" @click="download">下载 .py</el-button>
-            <el-button size="small" type="primary" :loading="publishing" :disabled="!configId" data-testid="site-script-publish" @click="publish">发布候选版</el-button>
+            <el-button size="small" type="primary" :loading="publishing" :disabled="!configId" data-testid="site-script-publish" @click="publish">保存代码版本</el-button>
           </div>
         </div>
+        <div class="site-script-binding"><span>下发类型</span><el-select v-model="codeType" style="width: 220px"><el-option label="网站专用（优先）" value="site" /><el-option label="队列通用（兜底）" value="default" /></el-select></div>
         <textarea v-model="code" class="site-script-code" aria-label="可编辑 Python 代码" />
         <div v-if="published" class="site-script-binding">
-          <span>已发布：{{ published.gitUrl }} · {{ published.scriptDigest }}</span>
-          <el-button size="small" type="primary" :loading="adopting" data-testid="site-script-bind" @click="adoptPublished">采用到当前节点</el-button>
+          <span>已保存：{{ published.gitUrl }} · {{ published.scriptDigest }}</span>
+        </div>
+      </div>
+      <div v-if="versions.length" class="site-script-result" data-testid="site-code-versions">
+        <b>已发布代码 · {{ versions.length }}</b>
+        <div v-for="item in versions" :key="item.scriptDigest" class="site-script-binding">
+          <span>{{ item.deliveryPath }} · {{ item.gitCommit.slice(0, 12) }} · {{ item.scriptDigest.slice(0, 16) }}</span>
         </div>
       </div>
     </div>

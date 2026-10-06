@@ -1239,7 +1239,20 @@ async function onGenerateScript(
 
 const workbenchOpen = ref(false)
 const siteScriptOpen = ref(false)
-const siteScriptUrl = computed(() => cfg.value?.configUrl?.trim() || cfg.value?.collectCfg?.url?.trim() || '')
+// AI 抓列表使用当前源实际入口；configUrl 是可被多个源复用的配置 URL，可能不是本源列表页。
+const siteScriptUrl = computed(() => {
+  const source = useFlowStore().sourceCfg ?? useFlowStore().sourceCtx
+  const sourceUrl = source?.kind === 'param'
+    ? (source.urlTemplate?.trim() || source.url?.trim())
+    : source?.url?.trim()
+  return sourceUrl
+    || cfg.value?.collectCfg?.url?.trim() || cfg.value?.configUrl?.trim() || ''
+})
+const siteScriptQueue = computed(() => {
+  const flow = useFlowStore()
+  return cfg.value?.taskCfg?.queue?.trim()
+    || (flow.sourceCfg?.sourceId ? `${flow.sourceCfg.sourceId}_main` : '')
+})
 
 const savingScript = ref(false)
 const savingPromptPreview = ref(false)
@@ -1981,6 +1994,7 @@ function onTestScript() {
     :initial-url="siteScriptUrl"
     :initial-prompt="orchCfg.describe"
     :config-id="cfg?.configId"
+    :queue-name="siteScriptQueue"
   />
 </template>
 

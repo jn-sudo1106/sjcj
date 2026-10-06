@@ -6,7 +6,10 @@ import { generateSiteScript } from '@/api/siteScript'
 import { runnerManagementApi } from '@/api/runnerManagement'
 
 vi.mock('@/api/siteScript', () => ({ generateSiteScript: vi.fn() }))
-vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { scriptBinding: vi.fn(), publishScript: vi.fn(), adoptScript: vi.fn() } }))
+vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: {
+  scriptBinding: vi.fn(), publishScript: vi.fn(), adoptScript: vi.fn(),
+  siteCodeVersions: vi.fn(), siteCodeBindings: vi.fn(), bindSiteCode: vi.fn(),
+} }))
 afterEach(() => vi.resetAllMocks())
 
 it('previews a generated script and keeps edited code until a new result is adopted', async () => {
@@ -44,13 +47,36 @@ it('previews a generated script and keeps edited code until a new result is adop
   wrapper.unmount()
 })
 
-it('发布候选版后保留旧绑定，只有采用动作才更新当前节点', async () => {
-  vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'www.realcan.cn.py', code: 'def scrape(url):\n    return []\n', warnings: [] })
-  vi.mocked(runnerManagementApi.scriptBinding).mockResolvedValue({ configId: 'c-1', gitUrl: 'git/old.py', gitCommit: 'old', scriptDigest: 'sha256:old', publishedAt: '', status: 'published' })
-  vi.mocked(runnerManagementApi.publishScript).mockResolvedValue({ gitUrl: 'git/new.py', gitCommit: 'new', scriptDigest: 'sha256:new' })
-  vi.mocked(runnerManagementApi.adoptScript).mockResolvedValue({ configId: 'c-1', gitUrl: 'git/new.py', gitCommit: 'new', scriptDigest: 'sha256:new', publishedAt: '', status: 'published' })
+it('重新打开时使用最新列表 URL', async () => {
   const wrapper = mount(SiteScriptGeneratorDialog, {
-    props: { open: true, initialUrl: 'https://www.realcan.cn/newscenter', initialPrompt: '抓取新闻列表', configId: 'c-1' },
+    props: { open: true, initialUrl: 'https://old.example.com/list', initialPrompt: '' },
+    global: { stubs: { ElDialog: { template: '<div><slot /></div>' }, ElButton: { template: '<button type="button"><slot /></button>' } } },
+  })
+  await wrapper.setProps({ open: false, initialUrl: 'https://new.example.com/list' })
+  await wrapper.setProps({ open: true })
+  expect((wrapper.get('[data-testid="site-script-url"]').element as HTMLInputElement).value).toBe('https://new.example.com/list')
+})
+
+it('列表 URL 改变时清除旧地址生成的代码', async () => {
+  const wrapper = mount(SiteScriptGeneratorDialog, {
+    props: { open: true, initialUrl: 'https://old.example.com/list', initialPrompt: '' },
+    global: { stubs: { ElDialog: { template: '<div><slot /></div>' }, ElButton: { template: '<button type="button"><slot /></button>' } } },
+  })
+  await wrapper.get('[data-testid="site-script-manual"]').trigger('click')
+  expect(wrapper.find('[data-testid="site-script-editor"]').exists()).toBe(true)
+  await wrapper.setProps({ initialUrl: 'https://new.example.com/list' })
+  expect((wrapper.get('[data-testid="site-script-url"]').element as HTMLInputElement).value).toBe('https://new.example.com/list')
+  expect(wrapper.find('[data-testid="site-script-editor"]').exists()).toBe(false)
+})
+
+it('保存代码版本时不选择测试或生产环境', async () => {
+  vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'www.realcan.cn.py', code: 'def scrape(url):\n    return []\n', warnings: [] })
+  const oldVersion = { codeId: 'code-1', configId: 'c-1', queueName: 'news_list', siteHost: 'www.realcan.cn', storagePath: 'code/c-1/code-1.py', deliveryPath: 'sites/www.realcan.cn.py', gitUrl: 'git/old.py', gitCommit: 'old', scriptDigest: 'sha256:old', publishedAt: '', prompt: '', url: '', environment: 'test' as const }
+  const newVersion = { ...oldVersion, gitUrl: 'git/new.py', gitCommit: 'new', scriptDigest: 'sha256:new' }
+  vi.mocked(runnerManagementApi.siteCodeVersions).mockResolvedValue([oldVersion])
+  vi.mocked(runnerManagementApi.publishScript).mockResolvedValue(newVersion)
+  const wrapper = mount(SiteScriptGeneratorDialog, {
+    props: { open: true, initialUrl: 'https://www.realcan.cn/newscenter', initialPrompt: '抓取新闻列表', configId: 'c-1', queueName: 'news_list' },
     global: { stubs: { ElDialog: { template: '<div><slot /></div>' }, ElButton: { template: '<button type="button"><slot /></button>' } } },
   })
   await flushPromises()
@@ -59,11 +85,9 @@ it('发布候选版后保留旧绑定，只有采用动作才更新当前节点'
   await wrapper.get('[data-testid="site-script-adopt"]').trigger('click')
   await wrapper.get('[data-testid="site-script-publish"]').trigger('click')
   await flushPromises()
-  expect(runnerManagementApi.publishScript).toHaveBeenCalledWith(expect.objectContaining({ configId: 'c-1', fileName: 'www.realcan.cn.py' }))
-  expect(runnerManagementApi.adoptScript).not.toHaveBeenCalled()
-  expect(wrapper.text()).toContain('git/old.py')
-  await wrapper.get('[data-testid="site-script-bind"]').trigger('click')
-  await flushPromises()
-  expect(runnerManagementApi.adoptScript).toHaveBeenCalledWith('c-1', 'sha256:new')
-  expect(wrapper.text()).toContain('git/new.py')
+  expect(runnerManagementApi.publishScript).toHaveBeenCalledWith(expect.objectContaining({ configId: 'c-1', queueName: 'news_list', codeType: 'site', siteHost: 'www.realcan.cn' }))
+  expect(runnerManagementApi.bindSiteCode).not.toHaveBeenCalled()
+  expect(wrapper.find('[data-testid="site-script-bind"]').exists()).toBe(false)
+  expect(wrapper.text()).not.toContain('运行环境')
+  expect(wrapper.text()).toContain('sha256:new')
 })
