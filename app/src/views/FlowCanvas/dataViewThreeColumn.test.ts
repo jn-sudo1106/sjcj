@@ -14,7 +14,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import FlowCanvas from './index.vue'
 import { useUiStore } from '@/stores/ui'
-import { sourceApi, type Source } from '@/api'
+import { sourceApi, workflowBindingApi, type Source } from '@/api'
 
 const SOURCE = {
   sourceId: '430016398', name: 'test1', url: 'http://x.test/', configId: '1400917',
@@ -25,6 +25,7 @@ async function mountCanvas(view: 'overview' | 'flow' | 'data') {
   vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
   vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
   vi.spyOn(sourceApi, 'stepConfigDetails').mockResolvedValue([])
+  vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([])
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: '/canvas', component: { template: '<div />' } }],

@@ -6,7 +6,7 @@ import { useFlowStore } from '../../stores/flow'
 import { useSourceStore } from '../../stores/source'
 import { useUiStore } from '../../stores/ui'
 import { MAX_WORKSPACE_TABS, useWorkspaceStore, type WorkspaceTabRef } from '../../stores/workspace'
-import { flowCenterApi, siteApi, sourceApi, type Source, type Step } from '../../api'
+import { flowCenterApi, siteApi, sourceApi, workflowBindingApi, type Source, type Step } from '../../api'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 import { useRuntimeStore } from '../../stores/runtime'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
@@ -15,6 +15,7 @@ import NodeInspector from '@/views/FlowCanvas/inspector/NodeInspector.vue'
 import ResultView from './result/ResultView.vue'
 import SourceSummaryView from './result/SourceSummaryView.vue'
 import SourceTabsBar from './source/SourceTabsBar.vue'
+import SourceWorkflowList from './source/SourceWorkflowList.vue'
 import CompareSplit from './result/CompareSplit.vue'
 import TaskView from './result/TaskView.vue'
 import FileView from './result/FileView.vue'
@@ -99,6 +100,8 @@ watch(
 
 // 网站详情页（0714 会议 Task 3）：siteId 且无 sourceId，只读聚合数据/文件/任务视图，没有流程视图
 const isSiteDetail = computed(() => !!route.query.siteId && !route.query.sourceId)
+const isPublishedFlowView = computed(() => flow.sourceCtx?.workflowVersionManaged !== false
+  && flow.sourceCtx?.workflowVersionStatus === 'PUBLISHED')
 // 源加载中的占位（2026-08-28 修）：三个结果视图原来都拿 `!!flow.sourceCtx` 当门槛，
 // 而从网站详情页切源、或深链/刷新进 view=data 时 sourceCtx 是空的，条件不成立就掉进
 // v-else 的流程画布——URL 明明是 view=data，中间却要闪 240ms 流程视图（逐帧实测）。
@@ -112,10 +115,37 @@ const sourceLoadError = ref('')
 const awaitingSource = computed(() => !!route.query.sourceId && !flow.sourceCtx)
 const isDataView = computed(() => activeView.value === 'data' && !!flow.sourceCtx)
 const isOverviewView = computed(() => activeView.value === 'overview' && !!flow.sourceCtx)
+const isWorkflowListView = computed(() => activeView.value === 'flow' && route.query.flowMode === 'list' && !!flow.sourceCtx)
 const isTaskView = computed(() => activeView.value === 'task' && !!flow.sourceCtx)
 // 文件视图只挂源层（0711 R11：文件视图只有源才有）：网站态 URL 带 view=file 同理重定向回流程视图
 const isFileView = computed(() => activeView.value === 'file' && !!flow.sourceCtx)
 const isMonitorConfigView = computed(() => activeView.value === 'monitor-config' && !!flow.sourceCtx)
+
+// 同一个源里的每条流程都是独立页签。切走前记住该流程选中的节点与右侧配置页签，
+// 切回来恢复自己的现场，避免所有流程标签都落到同一个节点/配置页。
+const flowInspectorSnapshots = reactive(new Map<string, { selectedId: string; activeTab: string }>())
+function flowInspectorKey(sourceId: string, flowId: string) {
+  return `${sourceId}:${flowId}`
+}
+function rememberCurrentFlowInspector() {
+  const sourceId = flow.sourceCtx?.sourceId
+  const flowId = validFlowIdOf(flow.sourceCtx?.flowId)
+  if (!sourceId || !flowId) return
+  flowInspectorSnapshots.set(flowInspectorKey(sourceId, flowId), {
+    selectedId: flow.selectedId,
+    activeTab: flow.activeTab,
+  })
+}
+function restoreFlowInspector(sourceId: string, flowId: string | undefined) {
+  if (!flowId) return
+  const snapshot = flowInspectorSnapshots.get(flowInspectorKey(sourceId, flowId))
+  if (!snapshot || !flow.configs[snapshot.selectedId]) return
+  flow.selectedId = snapshot.selectedId
+  const tabs = nodeInspectorTabs(flow.configs[snapshot.selectedId])
+  flow.activeTab = tabs.some(([key]) => key === snapshot.activeTab)
+    ? snapshot.activeTab
+    : (tabs[0]?.[0] ?? '')
+}
 
 
 // 视图快照按源页签保存，避免切换源后丢失当前视图。
@@ -296,7 +326,30 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   // 查询（svg=true 自带真实根节点行 / 「流程入口」行，lastStep 已改写为根 ID），展示与
   // 流程管理画布一致；未绑流程的源维持源视角查询（源虚拟根）。源视角那份并行结果仅作兜底。
   // 0927 P2-4：口径收敛到 stepPersist.validFlowIdOf（ActiveFlow 判定四处共用）。
-  const flowId = validFlowIdOf(source.flowId)
+  // 新模型允许一个源关联多条流程。路由 flowId 是当前查看/编辑目标；primaryFlowId 才是运行入口。
+  // 新接口未部署或暂时不可用时退回旧 cs_source.FLOW_ID，保证已有源仍可打开。
+  let bindings = [] as Awaited<ReturnType<typeof workflowBindingApi.list>>
+  try {
+    bindings = await workflowBindingApi.list(sourceId, { legacySource: source })
+  } catch {
+    bindings = []
+  }
+  const legacyFlowId = validFlowIdOf(source.flowId)
+  const primaryBinding = bindings.find(binding => binding.primary)
+  const primaryFlowId = primaryBinding?.publishedFlowId ?? legacyFlowId
+  const primaryWorkflowId = primaryBinding?.workflowId
+  const requestedWorkflowId = String(route.query.workflowId ?? '').trim()
+  const requestedFlowId = validFlowIdOf(String(route.query.flowId ?? ''))
+  const selectedBinding = bindings.find(binding => binding.workflowId === requestedWorkflowId)
+    ?? bindings.find(binding => [binding.workflowId, binding.draftFlowId, binding.publishedFlowId].includes(requestedFlowId))
+    ?? primaryBinding
+    ?? bindings[0]
+  // 草稿是独立的 cs_flow 工作副本。路由同时保留稳定 workflowId 和实际加载的 flowId，
+  // 现有步骤读写接口因此无需改协议，同时不会碰到正在运行的发布版步骤。
+  const flowId = requestedFlowId && selectedBinding
+    && [selectedBinding.workflowId, selectedBinding.draftFlowId, selectedBinding.publishedFlowId].includes(requestedFlowId)
+    ? requestedFlowId
+    : (selectedBinding?.draftFlowId ?? selectedBinding?.publishedFlowId ?? selectedBinding?.workflowId ?? primaryFlowId)
   let steps: Step[]
   try {
     steps = flowId
@@ -308,7 +361,20 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
     ElMessage.error(sourceLoadError.value)
     return
   }
-  flow.loadFromSource(source, steps, null)
+  const viewingDraft = !!selectedBinding?.draftFlowId && flowId === selectedBinding.draftFlowId
+  flow.loadFromSource({
+    ...source,
+    flowId,
+    primaryFlowId,
+    activeWorkflowId: selectedBinding?.workflowId,
+    primaryWorkflowId,
+    workflowVersionStatus: viewingDraft ? 'DRAFT' : selectedBinding?.versionStatus,
+    workflowVersionNo: viewingDraft ? selectedBinding?.draftVersionNo : selectedBinding?.publishedVersionNo,
+    workflowVersionManaged: selectedBinding?.versionManaged,
+    publishedFlowId: selectedBinding?.publishedFlowId,
+    draftFlowId: selectedBinding?.draftFlowId,
+  }, steps, null)
+  restoreFlowInspector(sourceId, flowId)
   if (!ws.open(source.sourceId, source.name)) {
     onTabQuotaFull(fromOutside, () => ws.open(source.sourceId, source.name), '当前源')
   }
@@ -637,12 +703,13 @@ onMounted(async () => {
   // 组件刚挂载 = 从工作区外部进来（网站列表点卡片 / 深链 / 刷新）
   await enterFromRoute({ fromOutside: true })
 })
-// sourceId / siteId 互斥，合一个 watcher 统一处理深链与源切换。
+// sourceId / siteId 互斥；flowId / flowMode 负责同一个源内的流程切换。
 watch(
-  () => [route.query.sourceId, route.query.siteId] as const,
-  async ([sid, stid], prev) => {
+  () => [route.query.sourceId, route.query.siteId, route.query.flowId, route.query.flowMode] as const,
+  async ([sid, stid, fid, mode], prev) => {
     if (isGate.value) return
-    if (prev && sid === prev[0] && stid === prev[1]) return
+    if (prev && sid === prev[0] && stid === prev[1] && fid === prev[2] && mode === prev[3]) return
+    if (prev && sid === prev[0] && fid !== prev[2]) rememberCurrentFlowInspector()
     await enterFromRoute()
   },
 )
@@ -694,6 +761,12 @@ onUnmounted(() => {
         <TaskView v-else-if="isTaskView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
         <FileView v-else-if="isFileView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
         <MonitorConfigView v-else-if="isMonitorConfigView" :key="flow.sourceCtx?.sourceId" class="rc-flow-result" />
+        <SourceWorkflowList
+          v-else-if="isWorkflowListView"
+          :key="flow.sourceCtx?.sourceId"
+          :source-id="flow.sourceCtx!.sourceId"
+          class="rc-flow-result"
+        />
         <!--
           0904 I10（Z3-1）：**数据视图也挂进这套三栏**，不再整屏铺开。
           结构 = 左源侧栏（`rc-canvas-cols` 那层，本来就固定）+ 中间可切换（流程 ↔ 数据）+ 右节点配置。
@@ -706,7 +779,7 @@ onUnmounted(() => {
         <div
           v-else
           class="rc-flow-shell"
-          :class="{ 'source-mode': !!flow.sourceCtx, expanded: ui.inspectorExpanded, 'insp-collapsed': ui.inspectorCollapsed }"
+          :class="{ 'source-mode': !!flow.sourceCtx, expanded: ui.inspectorExpanded, 'insp-collapsed': ui.inspectorCollapsed, 'version-readonly': isPublishedFlowView && !isDataView }"
           :style="{ '--insp-w': inspWidth }"
         >
           <template v-if="!ui.inspectorExpanded">
@@ -770,6 +843,7 @@ onUnmounted(() => {
   align-items: stretch;
 }
 .rc-flow-shell.source-mode { grid-template-columns: minmax(480px, 1fr) 6px var(--insp-w, 480px); }
+.rc-flow-shell.version-readonly > :last-child { pointer-events: none; opacity: .78; }
 /* 展开态：画布收起为窄条（与左侧源侧栏收起态一致），配置区占满剩余空间 */
 .rc-flow-shell.expanded,
 .rc-flow-shell.source-mode.expanded { grid-template-columns: 36px 6px minmax(0, 1fr); }

@@ -355,6 +355,15 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'flow/copyFlow', desc: '复制流程（连 cs_item_config 步骤一起复制并重映射上下游；源是模板时新流程 refFlowId 回指模板；不复制根节点，后端自动建；回执 msg=「复制成功，新流程ID:N」；0927 P2-2：data 为标量新 ID 但 client 按标量字段丢弃，新流程 ID 只从 msg 解析）', danger: true, live: true },
   { path: 'flow/copyTemplateSteps', desc: '把模板下的普通步骤复制到目标流程（自动改 FLOW_ID、重映射上下游、根节点依赖保持 0、不复制模板自身根节点）', danger: true, live: true },
   { path: 'flow/flowTemplateList', desc: '流程模板下拉候选（templateFlag=1 全量、不分页、不含 flowConf；等价于 flowPaged + onlyTemplate 但不分页）', live: true },
+  // 一个源可绑定多条流程；主流程继续同步 cs_source.FLOW_ID，兼容现有执行器。
+  { path: 'workflow/sourceBindings', desc: '查询源的有效流程（含 SourceGroup 继承）', live: true },
+  { path: 'workflow/bindSource', desc: '给源绑定已有流程', danger: true, live: true },
+  { path: 'workflow/setPrimary', desc: '设置源主流程并同步旧 FLOW_ID', danger: true, live: true },
+  { path: 'workflow/unbindSource', desc: '解除源的显式流程绑定', danger: true, live: true },
+  { path: 'workflow/restoreInherited', desc: '清除源级主流程覆盖，恢复 SourceGroup 主流程', danger: true, live: true },
+  { path: 'workflow/createForSource', desc: '为源新建空白流程并绑定', danger: true, live: true },
+  { path: 'workflow/ensureDraft', desc: '从当前发布版创建隔离的下一版草稿', danger: true, live: true },
+  { path: 'workflow/publish', desc: '发布草稿并切换后续运行入口', danger: true, live: true },
   // 只登记不接：旧平台「生成配置」入口，本平台没有对应场景（Y8-16）。
   { path: 'source/genConfig', desc: '旧平台「生成配置」（SourceList.vue 的行操作）；本平台无调用方，仅登记备查' },
 

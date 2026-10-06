@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 // 0904 I16/I17 · Y9：流程详情抽屉里能直接改流程属性（分类/标签/描述），随「保存流程」一并提交。
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FlowDetailDrawer from './FlowDetailDrawer.vue'
-import { flowCenterApi, type FlowDefinition, type FlowRecord, type Step } from '@/api'
+import { flowCenterApi, workflowBindingApi, type FlowDefinition, type FlowRecord, type Step, type WorkflowBinding } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { resetFlowAutosaveForTests } from '@/views/FlowCanvas/canvas/useFlowAutosave'
@@ -36,6 +36,16 @@ const FLOW = {
   },
 } as unknown as FlowRecord
 
+beforeEach(() => {
+  vi.spyOn(workflowBindingApi, 'ensureDraft').mockImplementation(async (workflowId): Promise<WorkflowBinding> => ({
+    id: `binding-${workflowId}`, bindType: 'SOURCE', bindId: '', workflowId,
+    workflowCode: `LEGACY-${workflowId}`, workflowName: '新闻采集', publishedVersionNo: 1,
+    publishedFlowId: workflowId, draftVersionNo: 2, draftFlowId: workflowId, versionStatus: 'DRAFT',
+    workflowStatus: 'ACTIVE', followsCurrentVersion: true, role: 'MAIN', primary: true,
+    priority: 0, status: 'ACTIVE', inherited: false,
+  }))
+})
+
 function mountDrawer(flow: FlowRecord = FLOW) {
   setActivePinia(createPinia())
   // 抽屉一挂上就拉详情；不挡住的话 loadingDetail 一直是 true，工作区根本不渲染
@@ -53,7 +63,7 @@ function mountDrawer(flow: FlowRecord = FLOW) {
   })
 }
 const saveButton = (w: ReturnType<typeof mountDrawer>) =>
-  w.findAll('button').find((b) => b.text().includes('保存流程'))!
+  w.get('[data-testid="flow-save"]')
 
 // 0927 P1-5：步骤快照拉取失败时打开不阻断（画布照常渲染），但常驻警示条把「为什么改不动」
 // 说清楚——flowIdMode 下无快照节点跳过回写、autosave 留在 pending，不制造「已保存」假象。
@@ -78,6 +88,36 @@ describe('流程详情抽屉 · 快照失败警示（0927 P1-5）', () => {
 })
 
 describe('流程详情抽屉 · 属性编辑（Y9）', () => {
+  it('已发布流程只编辑草稿，确认发布后才切换到新的发布 flowId', async () => {
+    vi.mocked(workflowBindingApi.ensureDraft).mockResolvedValue({
+      id: 'binding-9', bindType: 'SOURCE', bindId: '', workflowId: 'workflow-9',
+      workflowCode: 'WF-9', workflowName: FLOW.name, publishedVersionNo: 1,
+      publishedFlowId: 'flow-1', draftVersionNo: 2, draftFlowId: 'draft-flow-2',
+      versionStatus: 'DRAFT', workflowStatus: 'ACTIVE', followsCurrentVersion: true,
+      role: 'MAIN', primary: true, priority: 0, status: 'ACTIVE', inherited: false,
+    })
+    const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue({ ...FLOW, id: 'draft-flow-2', version: 2 })
+    const publish = vi.spyOn(workflowBindingApi, 'publish').mockResolvedValue({
+      id: 'binding-9', bindType: 'SOURCE', bindId: '', workflowId: 'workflow-9',
+      workflowCode: 'WF-9', workflowName: FLOW.name, publishedVersionNo: 2,
+      publishedFlowId: 'draft-flow-2', versionStatus: 'PUBLISHED', workflowStatus: 'ACTIVE',
+      followsCurrentVersion: true, role: 'MAIN', primary: true, priority: 0,
+      status: 'ACTIVE', inherited: false,
+    })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const w = mountDrawer()
+    await flushPromises()
+
+    expect(w.get('[data-testid="flow-drawer-version-status"]').text()).toContain('草稿 v2')
+    await w.get('[data-testid="flow-publish"]').trigger('click')
+    await flushPromises()
+
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ id: 'draft-flow-2' }))
+    expect(publish).toHaveBeenCalledWith('workflow-9')
+    expect(w.emitted('saved')?.[0]?.[0]).toEqual(expect.objectContaining({ id: 'draft-flow-2', version: 2 }))
+    expect(w.emitted('close')).toBeTruthy()
+  })
+
   it('回填流程现值，改完随保存一起提交，标签按统一口径归一', async () => {
     const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue({ ...FLOW, version: 2 })
     const w = mountDrawer()

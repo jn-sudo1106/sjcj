@@ -27,6 +27,8 @@ import RailNodePicker from './components/RailNodePicker.vue'
 import { initialRailOpen, readResultRailHeight, readDataBrowseMode, writeDataBrowseMode, type DataBrowseMode } from './resultLayoutPref'
 import RailResizeHandle from './RailResizeHandle.vue'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
+import RowEditDialog from '@/views/DataView/RowEditDialog.vue'
+import DataImportDialog from '@/views/DataView/DataImportDialog.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import RowDetailFields from './RowDetailFields.vue'
 import { fieldsFromShowItems, fieldsFromTableMeta } from './rowDetailFields'
@@ -1323,6 +1325,29 @@ const apiReturns = computed(() => [
     description: '当前数据表字段',
   })),
 ])
+const manualAddOpen = ref(false)
+const importOpen = ref(false)
+const addConfigId = computed(() => (
+  rows.value[0]?.configId
+  || selectedCfg.value?.configId
+  || source.value?.rootConfigId
+  || source.value?.configId
+  || ''
+))
+function openManualAdd() {
+  if (!selectedTable.value || !sourceId.value) {
+    ElMessage.warning('请先选择数据表和源')
+    return
+  }
+  manualAddOpen.value = true
+}
+function openDataImport() {
+  if (!selectedTable.value || !sourceId.value) {
+    ElMessage.warning('请先选择数据表和源')
+    return
+  }
+  importOpen.value = true
+}
 const summaryOpen = ref(false)
 
 // 详情 drawer：按当前页 index 翻，不跨页请求（0831 X4）。
@@ -1720,6 +1745,15 @@ async function onTestScript() {
         <span class="rv-actions">
           <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
           <button class="rc-btn" type="button" @click="clearFilters">清空</button>
+          <el-dropdown trigger="click">
+            <button class="rc-btn" type="button" data-testid="data-add">新增 ▾</button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item data-testid="data-add-manual" @click="openManualAdd">手工录入</el-dropdown-item>
+                <el-dropdown-item data-testid="data-add-import" @click="openDataImport">Excel 导入</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <button
             class="rc-btn tiny"
             type="button"
@@ -2024,6 +2058,24 @@ async function onTestScript() {
       :can-write="false"
     />
     <SummaryDrawer v-model="summaryOpen" :table-meta="meta" :build-query="buildSummaryQuery" :hit-count="total" />
+    <RowEditDialog
+      v-model="manualAddOpen"
+      :table-id="selectedTable"
+      :table-meta="meta"
+      mode="add"
+      :first-row="rows[0] ?? null"
+      :initial-source-id="sourceId"
+      :initial-config-id="addConfigId"
+      lock-source
+      @saved="runQuery"
+    />
+    <DataImportDialog
+      v-model="importOpen"
+      :table-id="selectedTable"
+      :source-id="sourceId"
+      :initial-config-id="addConfigId"
+      @uploaded="runQuery"
+    />
 
     <DataFetchApiDialog
       v-model="apiOpen"

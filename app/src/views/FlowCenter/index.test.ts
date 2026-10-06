@@ -8,7 +8,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FlowCenter from './index.vue'
-import { configApi, flowCenterApi, sourceApi, type FlowRecord, type SourceCategory } from '@/api'
+import { configApi, flowCenterApi, sourceApi, workflowBindingApi, type FlowRecord, type SourceCategory } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 
@@ -58,6 +58,15 @@ async function openCreateForm(w: { find: (s: string) => { exists: () => boolean 
 
 async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length, query?: Record<string, string>) {
   vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total, list: flows })
+  if (!vi.isMockFunction(workflowBindingApi.ensureDraft)) {
+    vi.spyOn(workflowBindingApi, 'ensureDraft').mockImplementation(async (workflowId) => ({
+      id: `binding-${workflowId}`, bindType: 'SOURCE', bindId: '', workflowId,
+      workflowCode: `LEGACY-${workflowId}`, workflowName: '流程', publishedVersionNo: 1,
+      publishedFlowId: workflowId, draftVersionNo: 2, draftFlowId: workflowId,
+      versionStatus: 'DRAFT', workflowStatus: 'ACTIVE', followsCurrentVersion: true,
+      role: 'MAIN', primary: true, priority: 0, status: 'ACTIVE', inherited: false,
+    }))
+  }
   // 分类目录在测试里必须可预期：sourceCategories 走 live 端点（category/categoryPaged），
   // 测试环境下 fetch 失败会把分类吞成空列表。这里给一棵两级树覆盖（按 parentId 查任意层级的子级）。
   vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId?: string) => {
