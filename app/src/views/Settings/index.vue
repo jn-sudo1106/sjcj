@@ -10,6 +10,7 @@ import NodeTypeTab from './NodeTypeTab.vue'
 import CategoryTab from './CategoryTab.vue'
 import RunnerManagementTab from './RunnerManagementTab.vue'
 import CodeManagementTab from './CodeManagementTab.vue'
+import CodeRepositoryTab from './CodeRepositoryTab.vue'
 
 const ALL_TABS: { key: string; label: string; permission: string; comp: Component }[] = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', comp: NodeTypeTab },
@@ -17,6 +18,7 @@ const ALL_TABS: { key: string; label: string; permission: string; comp: Componen
   { key: 'runners', label: 'Runner 实例', permission: 'settings:runners', comp: RunnerManagementTab },
   { key: 'assignments', label: '队列分配', permission: 'settings:assignments', comp: RunnerManagementTab },
   { key: 'site-code', label: '节点代码', permission: 'settings:releases', comp: CodeManagementTab },
+  { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', comp: CodeRepositoryTab },
   { key: 'releases', label: '发布版本', permission: 'settings:releases', comp: RunnerManagementTab },
 ]
 const tabs = computed(() => ALL_TABS.filter((t) => canAccess(t.permission)))

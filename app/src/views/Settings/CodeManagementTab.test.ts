@@ -45,28 +45,34 @@ it('发布配置时才选择运行环境，并绑定所选代码版本', async (
   })
 })
 
-it('系统设置可修改服务器代码仓库路径', async () => {
-  vi.mocked(runnerManagementApi.siteCodeCatalog).mockResolvedValue([])
-  vi.mocked(runnerManagementApi.siteCodeRepository).mockResolvedValue({ path: 'E:\\ce\\site-scripts', defaultPath: 'E:\\ce\\site-scripts', remoteUrl: '', branch: 'main' })
-  vi.mocked(runnerManagementApi.updateSiteCodeRepository).mockResolvedValue({ path: 'E:\\ce\\generated-sites', defaultPath: 'E:\\ce\\site-scripts', remoteUrl: '', branch: 'main' })
-  vi.mocked(runnerManagementApi.updateSiteCodeGit).mockResolvedValue({ path: 'E:\\ce\\generated-sites', defaultPath: 'E:\\ce\\site-scripts', remoteUrl: 'https://git.example.com/site-scripts.git', branch: 'main' })
+it('代码列表显示所属仓库，并可按仓库筛选', async () => {
+  const base = {
+    codeId: 'code-1', configId: 'c-1', queueName: 'news_list', siteHost: 'www.realcan.cn',
+    storagePath: 'code/c-1/code-1.py', deliveryPath: 'sites/www.realcan.cn.py',
+    gitUrl: 'git/new.py', gitCommit: 'abcdef123456', scriptDigest: 'sha256:web',
+    publishedAt: '', prompt: '', url: '', environments: [] as ('test' | 'prd')[],
+    repoId: 'repo-web', repoName: '网页抓取代码', repoPath: 'E:\\ce\\code-web',
+  }
+  vi.mocked(runnerManagementApi.siteCodeCatalog).mockResolvedValue([
+    base, { ...base, configId: 'c-2', scriptDigest: 'sha256:default', repoId: 'repo-default', repoName: '默认仓库' },
+  ])
+  vi.mocked(runnerManagementApi.siteCodeContent).mockResolvedValue({ ...base, code: 'def scrape(url):\n    return []\n' })
   setActivePinia(createPinia())
   useAuthStore().roles = ['admin']
   const wrapper = mount(CodeManagementTab, { global: { stubs: {
-    ElInput: { props: ['modelValue'], emits: ['update:modelValue'], template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />' },
+    ElInput: { props: ['modelValue'], template: '<input :value="modelValue" />' },
     ElButton: { template: '<button type="button"><slot /></button>' },
     ElDrawer: { template: '<div><slot /></div>' },
-    ElDialog: { template: '<div><slot /></div>' },
+    ElDialog: { template: '<div />' },
+    ElSelect: { props: ['modelValue'], emits: ['update:modelValue'], template: '<select :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value)"><option value="" /><slot /></select>' },
+    ElOption: { props: ['value', 'label'], template: '<option :value="value">{{ label }}</option>' },
   } } })
   await flushPromises()
-  expect((wrapper.get('[data-testid="site-code-repository-path"]').element as HTMLInputElement).value).toBe('E:\\ce\\site-scripts')
-  await wrapper.get('[data-testid="site-code-repository-path"]').setValue('E:\\ce\\generated-sites')
-  await wrapper.get('[data-testid="site-code-repository-save"]').trigger('click')
+  expect(runnerManagementApi.siteCodeRepository).not.toHaveBeenCalled()
+  expect(wrapper.findAll('tbody tr').map((row) => row.findAll('td')[1].text())).toEqual(['网页抓取代码', '默认仓库'])
+  await wrapper.get('[data-testid="site-code-repo-filter"]').setValue('repo-web')
+  expect(wrapper.findAll('tbody tr').map((row) => row.findAll('td')[0].text())).toEqual(['c-1'])
+  await wrapper.findAll('button').find((button) => button.text() === '详情')!.trigger('click')
   await flushPromises()
-  expect(runnerManagementApi.updateSiteCodeRepository).toHaveBeenCalledWith('E:\\ce\\generated-sites')
-  expect((wrapper.get('[data-testid="site-code-repository-path"]').element as HTMLInputElement).value).toBe('E:\\ce\\generated-sites')
-  await wrapper.get('[data-testid="site-code-git-url"]').setValue('https://git.example.com/site-scripts.git')
-  await wrapper.get('[data-testid="site-code-git-save"]').trigger('click')
-  await flushPromises()
-  expect(runnerManagementApi.updateSiteCodeGit).toHaveBeenCalledWith('https://git.example.com/site-scripts.git', 'main')
+  expect(wrapper.text()).toContain('E:\\ce\\code-web\\code\\c-1\\code-1.py')
 })

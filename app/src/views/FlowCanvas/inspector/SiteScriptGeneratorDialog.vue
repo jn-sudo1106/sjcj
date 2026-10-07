@@ -5,7 +5,8 @@ import { generateSiteScript } from '@/api/siteScript'
 import { runnerManagementApi, type PublishedScript, type SiteCodeVersion } from '@/api/runnerManagement'
 import { copyToClipboard } from '@/utils/clipboard'
 
-const props = defineProps<{ initialUrl: string; initialPrompt: string; configId?: string; queueName?: string }>()
+// configType = 节点抓取类型；服务端按它把新代码分到对应仓库（已有代码留在原仓库）。
+const props = defineProps<{ initialUrl: string; initialPrompt: string; configId?: string; queueName?: string; configType?: string }>()
 const open = defineModel<boolean>('open', { required: true })
 const url = ref('')
 const prompt = ref('')
@@ -156,7 +157,7 @@ async function publish() {
   try {
     published.value = await runnerManagementApi.publishScript({
       configId, fileName: fileName.value, code: code.value, prompt: prompt.value.trim(), url: url.value.trim(),
-      queueName: props.queueName.trim(), codeType: codeType.value,
+      queueName: props.queueName.trim(), codeType: codeType.value, configType: props.configType || undefined,
       siteHost: codeType.value === 'site' ? new URL(url.value.trim()).hostname.toLowerCase() : undefined,
     })
     await loadVersions(configId)
@@ -190,6 +191,7 @@ function download() {
       <div v-if="configId" class="site-script-binding">
         <b>节点 #{{ configId }} · 队列 {{ queueName || '未配置' }}</b>
         <span>{{ versionsError || (queueName ? `已有 ${versions.length} 个代码版本` : '请先配置队列') }}</span>
+        <span v-if="versions[0]?.repoName" data-testid="site-script-repo">代码仓库：{{ versions[0].repoName }}</span>
       </div>
       <label>列表 URL
         <input v-model="url" class="site-script-input" data-testid="site-script-url" placeholder="https://www.realcan.cn/newscenter" />
@@ -224,7 +226,7 @@ function download() {
         <div class="site-script-binding"><span>下发类型</span><el-select v-model="codeType" style="width: 220px"><el-option label="网站专用（优先）" value="site" /><el-option label="队列通用（兜底）" value="default" /></el-select></div>
         <textarea v-model="code" class="site-script-code" aria-label="可编辑 Python 代码" />
         <div v-if="published" class="site-script-binding">
-          <span>已保存：{{ published.gitUrl }} · {{ published.scriptDigest }}</span>
+          <span>已保存{{ published.repoName ? `到「${published.repoName}」` : '' }}：{{ published.gitUrl }} · {{ published.scriptDigest }}</span>
         </div>
       </div>
       <div v-if="versions.length" class="site-script-result" data-testid="site-code-versions">

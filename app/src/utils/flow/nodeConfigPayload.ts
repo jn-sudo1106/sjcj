@@ -137,7 +137,7 @@ const TEMPLATE_CONFIG_TYPE: Record<string, number> = {
   ocr: 150,
 }
 
-function configTypeFrom(cfg: NodeConfig): number | undefined {
+export function configTypeFrom(cfg: NodeConfig): number | undefined {
   const byTemplate = cfg.template ? TEMPLATE_CONFIG_TYPE[cfg.template] : undefined
   if (byTemplate) return byTemplate
   if (cfg.ruleCfg) return 600

@@ -56,6 +56,9 @@ export interface PublishedScript {
   gitUrl: string
   gitCommit: string
   scriptDigest: string
+  /** 站点代码所在仓库；遗留脚本发布接口不返回。 */
+  repoId?: string | null
+  repoName?: string | null
 }
 
 export interface SiteCodeVersion extends PublishedScript {
@@ -68,12 +71,44 @@ export interface SiteCodeVersion extends PublishedScript {
   publishedAt: string
   prompt: string
   url: string
+  /** 首次发布时的节点抓取类型（configType）；决定代码进哪个仓库。 */
+  configType?: string
+  repoPath?: string | null
   environment?: 'test' | 'prd'
 }
 
 export interface SiteCodeRepositorySetting {
   path: string
   defaultPath: string
+  remoteUrl: string
+  branch: string
+}
+
+/** 服务器代码仓库。新代码按配置类型分类进仓库，未分类进默认仓库；已有代码不随分类变化搬动。 */
+export interface CodeRepository {
+  repoId: string
+  name: string
+  path: string
+  remoteUrl: string
+  branch: string
+  isDefault: boolean
+  status: 'ACTIVE' | 'DISABLED'
+  /** 分到本仓库的节点抓取类型编号，如 ['90', '150']。 */
+  configTypes: string[]
+  codeCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CodeRepoRule {
+  configType: string
+  /** 空串表示删除该类型的分类，回到默认仓库。 */
+  repoId: string
+}
+
+export interface CodeRepositoryInput {
+  name: string
+  path: string
   remoteUrl: string
   branch: string
 }
@@ -118,6 +153,13 @@ export const runnerManagementApi = {
   siteCodeRepository: () => request<SiteCodeRepositorySetting>('/settings/site-code-repo'),
   updateSiteCodeRepository: (path: string) => request<SiteCodeRepositorySetting>('/settings/site-code-repo', 'POST', { path }),
   updateSiteCodeGit: (remoteUrl: string, branch: string) => request<SiteCodeRepositorySetting>('/settings/site-code-git', 'POST', { remoteUrl, branch }),
+  codeRepositories: () => list<CodeRepository>('/settings/code-repos'),
+  createCodeRepository: (input: CodeRepositoryInput) => request<CodeRepository>('/settings/code-repos', 'POST', input),
+  updateCodeRepository: (repoId: string, input: Partial<Omit<CodeRepositoryInput, 'path'>> & { status?: CodeRepository['status'] }) => request<CodeRepository>(`/settings/code-repos/${encodeURIComponent(repoId)}`, 'POST', input),
+  moveCodeRepository: (repoId: string, path: string) => request<CodeRepository>(`/settings/code-repos/${encodeURIComponent(repoId)}/path`, 'POST', { path }),
+  setDefaultCodeRepository: (repoId: string) => request<CodeRepository>(`/settings/code-repos/${encodeURIComponent(repoId)}/default`, 'POST', {}),
+  codeRepoRules: () => list<CodeRepoRule>('/settings/code-repo-rules'),
+  saveCodeRepoRules: (rules: CodeRepoRule[]) => request<CodeRepoRule[]>('/settings/code-repo-rules', 'POST', { rules }),
   instances: () => list<RunnerInstance>('/runners'),
   enrollmentCode: () => request<EnrollmentCode>('/runners/enrollment-codes', 'POST', {}),
   assignments: () => list<QueueAssignment>('/assignments'),
@@ -128,7 +170,7 @@ export const runnerManagementApi = {
   publishRunner: () => request<{ digest: string; created: boolean }>('/releases/runners', 'POST', {}),
   setDesiredRunner: (runnerId: string, digest: string) => request<{ runnerId: string; digest: string }>(`/runners/${encodeURIComponent(runnerId)}/desired-runner`, 'POST', { digest }),
   scriptBinding: (configId: string) => request<ScriptBinding | null>(`/configs/${encodeURIComponent(configId)}/script-release`),
-  publishScript: (input: { configId: string; fileName: string; code: string; prompt: string; url: string; queueName?: string; codeType?: 'site' | 'default'; siteHost?: string }) => request<PublishedScript>('/site-scripts/publish', 'POST', input),
+  publishScript: (input: { configId: string; fileName: string; code: string; prompt: string; url: string; queueName?: string; codeType?: 'site' | 'default'; siteHost?: string; configType?: string }) => request<PublishedScript>('/site-scripts/publish', 'POST', input),
   adoptScript: (configId: string, scriptDigest: string) => request<ScriptBinding>(`/configs/${encodeURIComponent(configId)}/script-release`, 'POST', { scriptDigest }),
   siteCodeVersions: (configId: string, queueName: string) => list<SiteCodeVersion>(`/site-scripts/versions?configId=${encodeURIComponent(configId)}&queueName=${encodeURIComponent(queueName)}`),
   siteCodeCatalog: () => list<SiteCodeVersion & { environments: ('test' | 'prd')[] }>('/site-scripts/catalog'),

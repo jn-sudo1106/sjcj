@@ -9,6 +9,7 @@ const auth = useAuthStore()
 const canWrite = computed(() => auth.role === 'admin')
 const rows = ref<CatalogRow[]>([])
 const keyword = ref('')
+const repoFilter = ref('')
 const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
@@ -17,18 +18,13 @@ const detailOpen = ref(false)
 const publishOpen = ref(false)
 const selectedVersion = ref<CatalogRow | null>(null)
 const publishEnvironment = ref<'test' | 'prd'>('test')
-const repositoryPath = ref('')
-const repositoryDraft = ref('')
-const repositoryError = ref('')
-const savingRepository = ref(false)
-const gitRemote = ref('')
-const gitRemoteDraft = ref('')
-const gitBranch = ref('main')
-const gitBranchDraft = ref('main')
-const gitError = ref('')
-const savingGit = ref(false)
+// 仓库的路径、Git 远程和配置类型分类在「系统设置 → 代码仓库」维护；这里只按代码所属仓库展示和筛选。
+const repoOptions = computed(() => [...new Map(rows.value
+  .filter((row) => row.repoId)
+  .map((row) => [row.repoId!, row.repoName || row.repoId!])).entries()])
 const filtered = computed(() => rows.value.filter((row) =>
-  [row.configId, row.queueName, row.siteHost, row.deliveryPath, row.scriptDigest]
+  (!repoFilter.value || row.repoId === repoFilter.value)
+  && [row.configId, row.queueName, row.siteHost, row.deliveryPath, row.scriptDigest, row.repoName ?? '']
     .some((value) => value.toLowerCase().includes(keyword.value.trim().toLowerCase())),
 ))
 
@@ -44,64 +40,10 @@ async function load() {
   }
 }
 
-async function loadRepository() {
-  repositoryError.value = ''
-  try {
-    const setting = await runnerManagementApi.siteCodeRepository()
-    repositoryPath.value = setting.path
-    repositoryDraft.value = setting.path
-    gitRemote.value = setting.remoteUrl || ''
-    gitRemoteDraft.value = setting.remoteUrl || ''
-    gitBranch.value = setting.branch || 'main'
-    gitBranchDraft.value = setting.branch || 'main'
-  } catch (e) {
-    repositoryError.value = e instanceof Error ? e.message : String(e)
-  }
-}
-
-async function saveGit() {
-  const remoteUrl = gitRemoteDraft.value.trim()
-  const branch = gitBranchDraft.value.trim()
-  if (!branch || (remoteUrl === gitRemote.value && branch === gitBranch.value)) return
-  savingGit.value = true
-  gitError.value = ''
-  try {
-    const setting = await runnerManagementApi.updateSiteCodeGit(remoteUrl, branch)
-    gitRemote.value = setting.remoteUrl
-    gitRemoteDraft.value = setting.remoteUrl
-    gitBranch.value = setting.branch
-    gitBranchDraft.value = setting.branch
-    ElMessage.success(remoteUrl ? 'Git 地址已保存，现有代码已推送' : '已取消 Git 远程推送')
-    await load()
-  } catch (e) {
-    gitError.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    savingGit.value = false
-  }
-}
-
-async function saveRepository() {
-  const path = repositoryDraft.value.trim()
-  if (!path || path === repositoryPath.value) return
-  savingRepository.value = true
-  repositoryError.value = ''
-  try {
-    const setting = await runnerManagementApi.updateSiteCodeRepository(path)
-    repositoryPath.value = setting.path
-    repositoryDraft.value = setting.path
-    ElMessage.success('代码仓库路径已更新，已有代码和 Git 历史已迁移')
-    await load()
-  } catch (e) {
-    repositoryError.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    savingRepository.value = false
-  }
-}
-
-function absoluteCodePath(relative: string) {
-  if (!repositoryPath.value) return relative
-  const separator = repositoryPath.value.includes('\\') ? '\\' : '/'
-  return `${repositoryPath.value.replace(/[\\/]$/, '')}${separator}${relative.replaceAll('/', separator)}`
+function absoluteCodePath(repoPath: string | null | undefined, relative: string) {
+  if (!repoPath) return relative
+  const separator = repoPath.includes('\\') ? '\\' : '/'
+  return `${repoPath.replace(/[\\/]$/, '')}${separator}${relative.replaceAll('/', separator)}`
 }
 
 async function showDetail(row: CatalogRow) {
@@ -138,40 +80,26 @@ async function publishConfiguration() {
   }
 }
 
-onMounted(() => { void Promise.all([load(), loadRepository()]) })
+onMounted(() => { void load() })
 </script>
 
 <template>
   <div class="rc-card scm-main" data-testid="settings-site-code">
-    <div class="scm-repository">
-      <b>服务器代码仓库路径</b>
-      <div class="scm-repository-row">
-        <el-input v-model="repositoryDraft" :disabled="!canWrite || savingRepository || !repositoryPath" placeholder="服务器绝对路径，例如 E:\ce\site-scripts" data-testid="site-code-repository-path" />
-        <el-button v-if="canWrite" type="primary" :loading="savingRepository" :disabled="!repositoryPath || !repositoryDraft.trim() || repositoryDraft.trim() === repositoryPath" data-testid="site-code-repository-save" @click="saveRepository">保存路径</el-button>
-      </div>
-      <small>保存后会移动现有代码仓库和 Git 历史；目标应是服务器上尚未使用的新目录。</small>
-      <span v-if="repositoryError" class="scm-error" role="alert">路径设置失败：{{ repositoryError }}</span>
-      <b>Git 远程地址</b>
-      <div class="scm-repository-row">
-        <el-input v-model="gitRemoteDraft" :disabled="!canWrite || savingGit || !repositoryPath" placeholder="https://git.example.com/group/site-scripts.git" data-testid="site-code-git-url" />
-        <el-input v-model="gitBranchDraft" :disabled="!canWrite || savingGit || !repositoryPath" class="scm-branch" placeholder="分支，如 main" data-testid="site-code-git-branch" />
-        <el-button v-if="canWrite" type="primary" :loading="savingGit" :disabled="!repositoryPath || !gitBranchDraft.trim() || (gitRemoteDraft.trim() === gitRemote && gitBranchDraft.trim() === gitBranch)" data-testid="site-code-git-save" @click="saveGit">保存 Git 配置</el-button>
-      </div>
-      <small>配置后会推送现有及后续代码。服务器需预先配置 Git 凭据或 SSH 密钥；地址中不要填写账号密码。留空地址可停用远程推送。</small>
-      <span v-if="gitError" class="scm-error" role="alert">Git 设置失败：{{ gitError }}</span>
-    </div>
     <div class="rc-toolbar wrap">
-      <el-input v-model="keyword" clearable placeholder="ConfigId、队列、网站或版本" style="width: 270px" />
+      <el-input v-model="keyword" clearable placeholder="ConfigId、队列、网站、仓库或版本" style="width: 270px" />
+      <el-select v-model="repoFilter" clearable placeholder="全部仓库" style="width: 180px" data-testid="site-code-repo-filter">
+        <el-option v-for="[id, name] in repoOptions" :key="id" :label="name" :value="id" />
+      </el-select>
       <button class="rc-btn" type="button" :disabled="loading" @click="load">刷新</button>
-      <span class="scm-note">代码版本共用；发布运行配置时再选择测试或生产。</span>
+      <span class="scm-note">代码版本共用；发布运行配置时再选择测试或生产。代码仓库在「代码仓库」页维护。</span>
     </div>
     <div v-if="error" class="scm-error" role="alert">代码列表加载失败：{{ error }}</div>
     <div v-loading="loading" class="rc-table-scroll scm-table">
       <table class="rc-data-table">
-        <thead><tr><th>ConfigId</th><th>队列</th><th>代码用途</th><th>下发文件</th><th>Git 提交</th><th>版本摘要</th><th>采用环境</th><th>操作</th></tr></thead>
+        <thead><tr><th>ConfigId</th><th>仓库</th><th>队列</th><th>代码用途</th><th>下发文件</th><th>Git 提交</th><th>版本摘要</th><th>采用环境</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="row in filtered" :key="row.scriptDigest">
-            <td>{{ row.configId }}</td><td>{{ row.queueName }}</td>
+            <td>{{ row.configId }}</td><td>{{ row.repoName || '—' }}</td><td>{{ row.queueName }}</td>
             <td>{{ row.siteHost || '队列通用' }}</td><td>{{ row.deliveryPath }}</td>
             <td :title="row.gitCommit">{{ row.gitCommit.slice(0, 12) }}</td>
             <td :title="row.scriptDigest">{{ row.scriptDigest.slice(0, 16) }}</td>
@@ -181,7 +109,7 @@ onMounted(() => { void Promise.all([load(), loadRepository()]) })
               <el-button v-if="canWrite" link type="primary" :disabled="saving" @click="openPublish(row)">发布配置</el-button>
             </td>
           </tr>
-          <tr v-if="!loading && !filtered.length"><td colspan="8">{{ error ? '服务不可用' : '暂无代码版本' }}</td></tr>
+          <tr v-if="!loading && !filtered.length"><td colspan="9">{{ error ? '服务不可用' : '暂无代码版本' }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -190,7 +118,8 @@ onMounted(() => { void Promise.all([load(), loadRepository()]) })
         <dl class="scm-detail">
           <dt>ConfigId</dt><dd>{{ detail.configId }}</dd>
           <dt>队列</dt><dd>{{ detail.queueName }}</dd>
-          <dt>服务器文件路径</dt><dd>{{ absoluteCodePath(detail.storagePath) }}</dd>
+          <dt>代码仓库</dt><dd>{{ detail.repoName || '—' }}</dd>
+          <dt>服务器文件路径</dt><dd>{{ absoluteCodePath(detail.repoPath, detail.storagePath) }}</dd>
           <dt>Git 地址</dt><dd>{{ detail.gitUrl }}</dd>
           <dt>Runner 下发路径</dt><dd>{{ detail.deliveryPath }}</dd>
           <dt>Git 提交</dt><dd>{{ detail.gitCommit }}</dd>
@@ -220,12 +149,6 @@ onMounted(() => { void Promise.all([load(), loadRepository()]) })
 
 <style scoped>
 .scm-main { display: flex; flex: 1; min-height: 0; flex-direction: column; }
-.scm-repository { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--rc-border, #e5e7eb); }
-.scm-repository b { font-size: 13px; }
-.scm-repository-row { display: flex; gap: 8px; align-items: center; }
-.scm-repository-row .el-input { flex: 1; min-width: 0; }
-.scm-repository-row .scm-branch { flex: 0 0 150px; }
-.scm-repository small { color: var(--rc-muted); }
 .scm-table { flex: 1; min-height: 0; overflow: auto; }
 .scm-table td { white-space: nowrap; }
 .scm-note { margin-left: auto; color: var(--rc-muted); font-size: 12px; }

@@ -40,6 +40,7 @@ import { buildDataProcessGeneratePayload } from '@/utils/flow/dataProcess'
 import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { assertConfigWritable } from '@/utils/flow/copiedConfigs'
 import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
+import { configTypeFrom } from '@/utils/flow/nodeConfigPayload'
 import { promptCategoryGroupsForNode, promptListCategoryForNode, resolvePromptCategoryForNode } from '../promptCategory'
 import { loadPromptTemplateForNode } from '../promptTemplateLoader'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
@@ -1253,6 +1254,11 @@ const siteScriptQueue = computed(() => {
   return cfg.value?.taskCfg?.queue?.trim()
     || (flow.sourceCfg?.sourceId ? `${flow.sourceCfg.sourceId}_main` : '')
 })
+// 节点抓取类型：已落库的 configType 优先，新节点按保存时的同一套规则推导；用于把新代码分到对应仓库。
+const siteScriptConfigType = computed(() => {
+  if (!cfg.value) return ''
+  return cfg.value.configType || String(configTypeFrom(cfg.value) ?? '')
+})
 
 const savingScript = ref(false)
 const savingPromptPreview = ref(false)
@@ -1995,6 +2001,7 @@ function onTestScript() {
     :initial-prompt="orchCfg.describe"
     :config-id="cfg?.configId"
     :queue-name="siteScriptQueue"
+    :config-type="siteScriptConfigType"
   />
 </template>
 

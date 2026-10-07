@@ -69,25 +69,27 @@ it('列表 URL 改变时清除旧地址生成的代码', async () => {
   expect(wrapper.find('[data-testid="site-script-editor"]').exists()).toBe(false)
 })
 
-it('保存代码版本时不选择测试或生产环境', async () => {
+it('保存代码版本时不选择测试或生产环境，并带上节点抓取类型以便分仓库', async () => {
   vi.mocked(generateSiteScript).mockResolvedValue({ fileName: 'www.realcan.cn.py', code: 'def scrape(url):\n    return []\n', warnings: [] })
-  const oldVersion = { codeId: 'code-1', configId: 'c-1', queueName: 'news_list', siteHost: 'www.realcan.cn', storagePath: 'code/c-1/code-1.py', deliveryPath: 'sites/www.realcan.cn.py', gitUrl: 'git/old.py', gitCommit: 'old', scriptDigest: 'sha256:old', publishedAt: '', prompt: '', url: '', environment: 'test' as const }
+  const oldVersion = { codeId: 'code-1', configId: 'c-1', queueName: 'news_list', siteHost: 'www.realcan.cn', storagePath: 'code/c-1/code-1.py', deliveryPath: 'sites/www.realcan.cn.py', gitUrl: 'git/old.py', gitCommit: 'old', scriptDigest: 'sha256:old', publishedAt: '', prompt: '', url: '', environment: 'test' as const, repoId: 'repo-web', repoName: '网页抓取代码' }
   const newVersion = { ...oldVersion, gitUrl: 'git/new.py', gitCommit: 'new', scriptDigest: 'sha256:new' }
   vi.mocked(runnerManagementApi.siteCodeVersions).mockResolvedValue([oldVersion])
   vi.mocked(runnerManagementApi.publishScript).mockResolvedValue(newVersion)
   const wrapper = mount(SiteScriptGeneratorDialog, {
-    props: { open: true, initialUrl: 'https://www.realcan.cn/newscenter', initialPrompt: '抓取新闻列表', configId: 'c-1', queueName: 'news_list' },
+    props: { open: true, initialUrl: 'https://www.realcan.cn/newscenter', initialPrompt: '抓取新闻列表', configId: 'c-1', queueName: 'news_list', configType: '90' },
     global: { stubs: { ElDialog: { template: '<div><slot /></div>' }, ElButton: { template: '<button type="button"><slot /></button>' } } },
   })
   await flushPromises()
+  expect(wrapper.get('[data-testid="site-script-repo"]').text()).toBe('代码仓库：网页抓取代码')
   await wrapper.get('[data-testid="site-script-generate"]').trigger('click')
   await flushPromises()
   await wrapper.get('[data-testid="site-script-adopt"]').trigger('click')
   await wrapper.get('[data-testid="site-script-publish"]').trigger('click')
   await flushPromises()
-  expect(runnerManagementApi.publishScript).toHaveBeenCalledWith(expect.objectContaining({ configId: 'c-1', queueName: 'news_list', codeType: 'site', siteHost: 'www.realcan.cn' }))
+  expect(runnerManagementApi.publishScript).toHaveBeenCalledWith(expect.objectContaining({ configId: 'c-1', queueName: 'news_list', codeType: 'site', siteHost: 'www.realcan.cn', configType: '90' }))
   expect(runnerManagementApi.bindSiteCode).not.toHaveBeenCalled()
   expect(wrapper.find('[data-testid="site-script-bind"]').exists()).toBe(false)
   expect(wrapper.text()).not.toContain('运行环境')
   expect(wrapper.text()).toContain('sha256:new')
+  expect(wrapper.text()).toContain('已保存到「网页抓取代码」')
 })
