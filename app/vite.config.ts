@@ -39,6 +39,14 @@ export default defineConfig(({ mode }) => {
           target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://127.0.0.1:8080',
           changeOrigin: true,
         },
+        // PDF 抓取节点的「解析内容」（1005）：同一台 8080 服务的 document-extract 端点，
+        // 前缀与 data-process 不同名，必须单独一条并排在通用 '/api' 之前。
+        // 解析是流式长请求（前端主动超时 300s），代理给足时间。
+        '/api/answer/document-extract': {
+          target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://127.0.0.1:8080',
+          changeOrigin: true,
+          timeout: 320_000,
+        },
         // 脚本文件下载接口与 data-process 使用同一台 8080 服务；
         // 必须放在通用 '/api' 之前，否则会被转发到业务后端并返回 404。
         '/api/file/download': {

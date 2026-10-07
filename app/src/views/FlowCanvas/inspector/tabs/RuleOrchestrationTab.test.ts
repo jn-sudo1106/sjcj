@@ -2765,3 +2765,214 @@ describe('RuleOrchestrationTab · 抓取配置 XML 轻解析接入（S3-4）', (
     expect(flow.configs['web-1'].execCfg?.ruleId).toBeUndefined()
   })
 })
+
+// 1005 方案 §5.4：PDF 抓取节点的样本槽位收 PDF，「解析内容」只展示、不回写；
+// 与「生成脚本」的附件口径是**分开**（§10.1）——PDF 节点的生成脚本请求不许带附件。
+describe('RuleOrchestrationTab · PDF 抓取样本与解析内容（1005）', () => {
+  function mountOnPdfNode() {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['pdf-1'] = cloneConfig(NODE_CONFIGS['pdf-collect'])
+    flow.select('pdf-1')
+    flow.setActiveTab('orchestration')
+    flow.patchExecConfig('pdf-1', {
+      describe: '从 PDF 抽取合同金额与签署日期',
+      dataSource: 'dp-wwdata',
+      inputTable: 'sense_data.TB_JD_SKU_BASE', inputTableId: '2102154',
+      outputTable: 'sense_data.TB_PDF_RESULT',
+      inputFields: ['sku_id'], outputFields: ['sku_name'],
+      modelProviderCode: 'DeepSeek', modelCode: 'deepseek-chat',
+      systemPrompt: '按出参抽取 PDF 正文',
+      script: '', scriptPath: '',
+    })
+    flow.configs['pdf-1'].configId = '184'
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    return { flow, wrapper }
+  }
+
+  const pdfFile = () => new File(['%PDF-1.7'], 'report.pdf', { type: 'application/pdf' })
+
+  // 真规则节点：与上面 PDF 同一套字段/模型，只是存储位回到 ruleCfg
+  function mountOnRuleNodeWithModel() {
+    mockAssets()
+    const { flow, wrapper } = mountOnRuleNode()
+    flow.patchRuleConfig('rule-1', {
+      mode: 'ref', name: '已有规则',
+      describe: '按 sku_id 生成 sku_name',
+      dataSource: 'dp-wwdata', inputTable: 'sense_data.TB_JD_SKU_BASE', inputTableId: '2102154',
+      outputTable: 'sense_data.TB_JD_SKU_RESULT',
+      inputFields: ['sku_id'], outputFields: ['sku_name'],
+      modelProviderCode: 'DeepSeek', modelCode: 'deepseek-chat',
+    })
+    flow.configs['rule-1'].configId = '184'
+    return { flow, wrapper }
+  }
+
+  it('描述标签是「PDF 抽取描述」，动作区给上传 PDF + 解析内容，不再出现上传 Excel', async () => {
+    const { wrapper } = mountOnPdfNode()
+    await flushPromises()
+
+    expect(wrapper.findComponent(RuleWorkbenchDialog).props('describeLabel')).toBe('PDF 抽取描述')
+    const actionRow = wrapper.find('[data-testid="rule-generation-actions"]')
+    expect(actionRow.exists()).toBe(true)
+    expect(actionRow.find('[data-testid="main-upload-excel"]').exists()).toBe(false)
+    expect(actionRow.find('[data-testid="main-excel-file-input"]').exists()).toBe(false)
+    expect(actionRow.find('[data-testid="main-upload-pdf"]').exists()).toBe(true)
+    expect(actionRow.find('[data-testid="main-pdf-file-input"]').attributes('accept')).toBe('.pdf')
+    expect(actionRow.find('[data-testid="main-extract-document"]').exists()).toBe(true)
+    // 解析内容排在生成脚本之前（方案 §3.1 的动作区顺序）
+    const labels = actionRow.findAll('button').map((b) => b.text())
+    expect(labels).toEqual(['上传 PDF', '解析内容', '生成脚本', '测试脚本'])
+    wrapper.unmount()
+  })
+
+  it('未选 PDF 时「解析内容」禁用；选好后调用 documentExtract 带上文件、提示词与出参', async () => {
+    const { wrapper } = mountOnPdfNode()
+    await flushPromises()
+
+    const extractBtn = wrapper.find('[data-testid="main-extract-document"]')
+    expect(extractBtn.attributes('disabled')).toBeDefined()
+    vi.spyOn(ruleApi, 'documentExtract').mockResolvedValue({ content: '金额：12 万元', charCount: 7, truncated: false })
+    await extractBtn.trigger('click')
+    expect(ruleApi.documentExtract).not.toHaveBeenCalled()
+
+    await selectFile(wrapper.find('[data-testid="main-pdf-file-input"]'), pdfFile())
+    expect(wrapper.find('.rc-file-name').text()).toBe('report.pdf')
+    await wrapper.find('[data-testid="main-extract-document"]').trigger('click')
+    await flushPromises()
+
+    expect(ruleApi.documentExtract).toHaveBeenCalledTimes(1)
+    const [payload, options] = (ruleApi.documentExtract as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]
+    expect(payload).toEqual(expect.objectContaining({
+      description: '从 PDF 抽取合同金额与签署日期',
+      systemPrompt: '按出参抽取 PDF 正文',
+      configId: 184,
+      providerCode: 'DeepSeek',
+      model: 'deepseek-chat',
+      outputFields: '商品名称:sku_name',
+      outputFormat: 'text',
+    }))
+    expect((options as { file: File }).file.name).toBe('report.pdf')
+    expect(wrapper.find('[data-testid="main-extract-result"]').text()).toContain('金额：12 万元')
+    wrapper.unmount()
+  })
+
+  it('解析结果流式回填并给出复制；全程不回写 execCfg 的脚本与路径', async () => {
+    const { flow, wrapper } = mountOnPdfNode()
+    await flushPromises()
+    vi.spyOn(ruleApi, 'documentExtract').mockImplementation(async (_payload, options) => {
+      options?.onThinking?.('先读文档结构\n')
+      options?.onContent?.('甲方：甲\n')
+      options?.onContent?.('金额：12 万元\n')
+      options?.onDone?.({ message: '解析完成', charCount: 12, truncated: true })
+      return { content: '甲方：甲\n金额：12 万元\n', charCount: 12, truncated: true }
+    })
+
+    await selectFile(wrapper.find('[data-testid="main-pdf-file-input"]'), pdfFile())
+    await wrapper.find('[data-testid="main-extract-document"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="main-extract-result"]').text()).toContain('已截断')
+    expect(wrapper.find('.rc-main-result-code.rc-extract-body').text()).toContain('金额：12 万元')
+    expect(flow.configs['pdf-1'].execCfg?.script).toBe('')
+    expect(flow.configs['pdf-1'].execCfg?.scriptPath).toBe('')
+    wrapper.unmount()
+  })
+
+  it('解析中再点一次是取消：中断请求且不改动节点配置', async () => {
+    const { wrapper } = mountOnPdfNode()
+    await flushPromises()
+    let signal: AbortSignal | undefined
+    vi.spyOn(ruleApi, 'documentExtract').mockImplementation(async (_payload, options) => {
+      signal = options?.signal
+      options?.onContent?.('甲方：甲\n')
+      await new Promise<never>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new Error('请求已取消')), { once: true })
+      })
+      throw new Error('请求未被取消')
+    })
+
+    await selectFile(wrapper.find('[data-testid="main-pdf-file-input"]'), pdfFile())
+    await wrapper.find('[data-testid="main-extract-document"]').trigger('click')
+    await flushPromises()
+
+    const running = wrapper.find('[data-testid="main-extract-document"]')
+    expect(running.attributes('aria-label')).toBe('取消解析')
+    expect(running.find('[data-testid="stop-extract-icon"]').exists()).toBe(true)
+    await running.trigger('click')
+    await flushPromises()
+
+    expect(signal?.aborted).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('分开口径：PDF 节点已选样本时点生成脚本不带附件', async () => {
+    const { wrapper } = mountOnPdfNode()
+    await flushPromises()
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockResolvedValue({ script: 'def main():\n    pass\n', scriptPath: '' })
+
+    await selectFile(wrapper.find('[data-testid="main-pdf-file-input"]'), pdfFile())
+    await wrapper.find('[data-testid="main-generate-script"]').trigger('click')
+    await flushPromises()
+
+    expect(ruleApi.dataProcessGenerate).toHaveBeenCalledTimes(1)
+    const options = (ruleApi.dataProcessGenerate as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][1]
+    expect((options as { file?: File }).file).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('分开口径：真规则节点选 .xlsx 后点生成脚本仍然带 file（这条不许漂）', async () => {
+    const { wrapper } = mountOnRuleNodeWithModel()
+    await flushPromises()
+    vi.spyOn(ruleApi, 'dataProcessGenerate').mockResolvedValue({ script: 'def main():\n    pass\n', scriptPath: '' })
+
+    const file = new File(['x'], 'sample.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    await selectFile(wrapper.find('[data-testid="main-excel-file-input"]'), file)
+    await wrapper.find('[data-testid="main-generate-script"]').trigger('click')
+    await flushPromises()
+
+    const options = (ruleApi.dataProcessGenerate as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][1]
+    expect((options as { file?: File }).file?.name).toBe('sample.xlsx')
+    wrapper.unmount()
+  })
+
+  it('PDF 节点选到 Excel 文件会被本地拦下并清空槽位', async () => {
+    const { wrapper } = mountOnPdfNode()
+    await flushPromises()
+
+    await selectFile(wrapper.find('[data-testid="main-pdf-file-input"]'), new File(['x'], 'sheet.xlsx'))
+    expect(wrapper.find('.rc-file-error').text()).toBe('仅支持 .pdf 文件')
+    expect(wrapper.find('.rc-file-selected').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="main-extract-document"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('切节点清空样本文件与解析结果，并中断进行中的解析', async () => {
+    const { flow, wrapper } = mountOnPdfNode()
+    await flushPromises()
+    let signal: AbortSignal | undefined
+    vi.spyOn(ruleApi, 'documentExtract').mockImplementation(async (_payload, options) => {
+      signal = options?.signal
+      options?.onContent?.('甲方：甲\n')
+      await new Promise<never>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new Error('请求已取消')), { once: true })
+      })
+      throw new Error('请求未被取消')
+    })
+
+    await selectFile(wrapper.find('[data-testid="main-pdf-file-input"]'), pdfFile())
+    await wrapper.find('[data-testid="main-extract-document"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="main-extract-result"]').exists()).toBe(true)
+
+    flow.configs['rule-1'] = cloneConfig(NODE_CONFIGS['rule'])
+    flow.select('rule-1')
+    await flushPromises()
+
+    expect(signal?.aborted).toBe(true)
+    expect(wrapper.find('[data-testid="main-extract-result"]').exists()).toBe(false)
+    expect(wrapper.find('.rc-file-selected').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})

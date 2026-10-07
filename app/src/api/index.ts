@@ -67,7 +67,7 @@ import {
   assertLegacySnatchSaveLogin,
   legacySnatchSavePayloadFromFlow,
 } from './legacyAdapters'
-import type { DataProcessGeneratePayload } from '@/utils/flow/dataProcess'
+import type { DataProcessGeneratePayload, DocumentExtractPayload } from '@/utils/flow/dataProcess'
 export type { ModelProviderOption, ModelOption } from './types'
 import { encryptLegacyPayload } from './legacyCrypto'
 export { fetchModelProviders, fetchDefaultModels } from './model'
@@ -1758,6 +1758,168 @@ async function fetchDataProcessGenerate(
   }
 }
 
+/**
+ * PDF 抓取节点「解析内容」（1005 方案 §5.2）：样本 PDF + 当前节点提示词 → 后端抽正文喂模型 → 流式回抽取结果。
+ *
+ * 与 fetchDataProcessGenerate 刻意不同，四条都不能"顺手对齐"：
+ * 1. 端点 `/api/answer/document-extract`，附件白名单只有 pdf（data-process 仍只吃 xls/xlsx）；
+ * 2. done 事件不解析 scriptPath、不做「已保存到 /code01/….py」的正则兜底——这条链路不产脚本；
+ * 3. 返回 `DocumentExtractResult`（content/charCount/truncated），不是 RuleOrchestrationGenerateResult；
+ * 4. 对数据库和文件服务**零副作用**，调用方只把 content 显示出来。
+ */
+export interface DocumentExtractOptions {
+  file: File
+  signal?: AbortSignal
+  onThinking?: (delta: string) => void
+  onContent?: (delta: string) => void
+  onDone?: (payload: { message?: string; charCount?: number; truncated?: boolean }) => void
+}
+
+export interface DocumentExtractResult {
+  content: string
+  charCount: number
+  truncated: boolean
+}
+
+async function fetchDocumentExtract(
+  payload: DocumentExtractPayload,
+  options: DocumentExtractOptions,
+): Promise<DocumentExtractResult> {
+  const endpoint = 'rule/documentExtract'
+  try {
+    if (usesMockAdapter(endpoint)) {
+      const result = await request<unknown>(endpoint, { ...payload, fileName: options.file.name }, { mode: 'mock' })
+      const record = (result ?? {}) as Record<string, unknown>
+      const content = String(record.content ?? '')
+      if (!content.trim()) throw new Error('解析未返回内容')
+      const truncated = record.truncated === true
+      const charCount = Number(record.charCount ?? 0) || content.length
+      options.onContent?.(content)
+      options.onDone?.({ message: String(record.message ?? '解析完成'), charCount, truncated })
+      return { content, charCount, truncated }
+    }
+    const headers: Record<string, string> = { Accept: 'text/event-stream' }
+    const token = readStoredToken()
+    if (token) headers[ACCESS_TOKEN_HEADER] = token
+    const controller = new AbortController()
+    const onExternalAbort = () => controller.abort()
+    if (options.signal) {
+      if (options.signal.aborted) controller.abort()
+      else options.signal.addEventListener('abort', onExternalAbort, { once: true })
+    }
+    // 与生成脚本同口径：整份 PDF 进模型可能很慢，放宽到 5min，取消仍由外部 signal 驱动
+    const timeout = window.setTimeout(() => controller.abort(), 300_000)
+    try {
+      const formData = new FormData()
+      formData.append('request', new Blob([JSON.stringify(payload)], { type: 'application/json' }))
+      formData.append('file', options.file)
+      // 不手写 Content-Type：boundary 必须由浏览器补，后端按 @RequestPart 绑定 request/file
+      const res = await fetch('/api/answer/document-extract', {
+        method: 'POST',
+        credentials: 'include',
+        headers,
+        body: formData,
+        signal: controller.signal,
+      })
+      if (isSessionExpiredRedirect(res)) {
+        triggerSessionExpired()
+        throw new Error('登录失效,请重新登录')
+      }
+      if (!res.ok) {
+        let detail = ''
+        try {
+          const raw = await res.text()
+          try {
+            const parsed = JSON.parse(raw) as Record<string, unknown>
+            detail = String(parsed.error ?? parsed.message ?? parsed.msg ?? '')
+          } catch {
+            detail = raw.trim()
+          }
+        } catch { /* ignore */ }
+        if (!detail && res.status === 413) detail = '文件或请求体超过大小限制，请压缩或更换文件'
+        throw new Error(detail ? `请求失败 ${res.status}: ${detail.slice(0, 200)}` : `请求失败 ${res.status}`)
+      }
+      let text = ''
+      // 后端 Spring SSE writer 输出 `data:<正文>`，没有规范里的可选空格，首空格可能属于正文
+      const parser = createSseEventParser({ preserveDataLeadingSpace: true })
+      let structured = false
+      let content = ''
+      let doneMessage = ''
+      let doneCharCount = 0
+      let doneTruncated = false
+      let doneSeen = false
+      const emitEvent = (event: { event: string; data: string }) => {
+        structured = true
+        if (doneSeen) return
+        if (event.event === 'thinking') {
+          options.onThinking?.(event.data)
+          return
+        }
+        if (event.event === 'content' || event.event === 'message') {
+          if (!event.data) return
+          content += event.data
+          options.onContent?.(event.data)
+          return
+        }
+        if (event.event === 'done') {
+          doneSeen = true
+          const trimmed = event.data.trim()
+          if (!trimmed) return
+          try {
+            const parsed = JSON.parse(trimmed) as Record<string, unknown>
+            if (parsed.message != null) doneMessage = String(parsed.message)
+            if (parsed.charCount != null) doneCharCount = Number(parsed.charCount) || 0
+            if (parsed.truncated != null) doneTruncated = parsed.truncated === true || parsed.truncated === 'true'
+          } catch {
+            doneMessage = trimmed
+          }
+          return
+        }
+        if (event.data) {
+          content += event.data
+          options.onContent?.(event.data)
+        }
+      }
+      if (res.body && typeof res.body.getReader === 'function') {
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          const delta = decoder.decode(value, { stream: true })
+          if (delta) {
+            text += delta
+            for (const event of parser.push(delta)) emitEvent(event)
+          }
+        }
+        const tail = decoder.decode()
+        if (tail) {
+          text += tail
+          for (const event of parser.push(tail)) emitEvent(event)
+        }
+      } else {
+        text = await res.text()
+        for (const event of parser.push(text)) emitEvent(event)
+      }
+      for (const event of parser.finish()) emitEvent(event)
+      // 后端退化成纯文本时，整段正文就是抽取结果（不做脚本那套解析）
+      if (!structured && text) {
+        content += text
+        options.onContent?.(text)
+      }
+      if (!content.trim()) throw new Error('解析未返回内容')
+      const result: DocumentExtractResult = { content, charCount: doneCharCount || content.length, truncated: doneTruncated }
+      options.onDone?.({ message: doneMessage || '解析完成', charCount: result.charCount, truncated: result.truncated })
+      return result
+    } finally {
+      window.clearTimeout(timeout)
+      options.signal?.removeEventListener('abort', onExternalAbort)
+    }
+  } catch (e) {
+    throw e instanceof ApiError ? e : new ApiError(endpoint, e)
+  }
+}
+
 // 规则资产（M3）
 // ck_source 监控源配置（2026-09-05，vanv-data-engine SourceController）：
 // 数据监控节点保存时同步落库。list 按 sourceId 查存在性（SOURCE_ID 不唯一，可能多行）；
@@ -1932,6 +2094,7 @@ export const ruleApi = {
     }
   },
   dataProcessGenerate: fetchDataProcessGenerate,
+  documentExtract: fetchDocumentExtract,
   // req → 旧体 { rule_id, params, timeout }；响应 result 数组 → outputs（0801 §4.4）
   orchestrationTest: async (req: RuleOrchestrationTestRequest) => {
     const endpoint = 'rule/orchestrationTest'
