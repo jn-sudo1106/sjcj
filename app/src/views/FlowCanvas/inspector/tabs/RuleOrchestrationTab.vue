@@ -30,7 +30,7 @@ import {
 } from '@/api/speech'
 import { MEDIA_AUDIO_FORMATS, MEDIA_BIT_RATE_OPTIONS, MEDIA_CHANNEL_OPTIONS, MEDIA_MAX_FILE_SIZE, MEDIA_SAMPLING_RATE_OPTIONS, MEDIA_VIDEO_EXTENSIONS, extractAudio, isSupportedVideoFile, readVideoDuration, type MediaExtractionResult } from '@/api/media'
 import { useNodeEditorContext } from '../nodeEditorContext'
-import { configApi, entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
+import { configApi, entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type DocumentExtractChunkProgress, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { isVruleNumericRuleId } from '@/api/legacyAdapters'
 import { copyToClipboard } from '@/utils/clipboard'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
@@ -1002,9 +1002,25 @@ const extractThinking = ref('')
 const extractResult = ref('')
 const extractMessage = ref('')
 const extractTruncated = ref(false)
+const extractChunk = ref<DocumentExtractChunkProgress | null>(null)
+const extractChunkCount = ref(1)
+const extractSourceCharCount = ref(0)
 const extractState = ref<'idle' | 'thinking' | 'content' | 'done' | 'error'>('idle')
 const extractThinkingRef = ref<HTMLElement | null>(null)
 const extractResultRef = ref<HTMLElement | null>(null)
+// 结果栏提示：进行中显示分块进度，结束后显示这次切了几段、原文多少字。
+const extractResultHint = computed(() => {
+  if (extractTruncated.value) return '内容过长，已截断'
+  const progress = extractChunk.value
+  if (extracting.value && progress) {
+    const pages = progress.pages ? ` · ${progress.pages}` : ''
+    return progress.phase === 'merge'
+      ? `正在合并第 ${progress.index}/${progress.total} 组${pages}`
+      : `正在抽取第 ${progress.index}/${progress.total} 块${pages}`
+  }
+  if (extractChunkCount.value > 1) return `分块抽取 ${extractChunkCount.value} 段 · 原文 ${extractSourceCharCount.value} 字`
+  return ''
+})
 const mainThinkingRef = ref<HTMLElement | null>(null)
 const mainResultRef = ref<HTMLElement | null>(null)
 function formatResultLabel(value: string): string {
@@ -1330,6 +1346,9 @@ async function onExtractDocument() {
   extractResult.value = ''
   extractMessage.value = ''
   extractTruncated.value = false
+  extractChunk.value = null
+  extractChunkCount.value = 1
+  extractSourceCharCount.value = 0
   extractState.value = 'idle'
   try {
     const res = await ruleApi.documentExtract(buildDocumentExtractPayload({
@@ -1353,13 +1372,22 @@ async function onExtractDocument() {
         extractState.value = 'content'
         extractResult.value = `${extractResult.value}${delta}`
       },
+      onChunk: (progress) => {
+        extractChunk.value = progress
+        // 合并轮次的第一段是新的正文，之前铺开的分块结果要清掉
+        if (progress.phase === 'merge' && progress.index === 1) extractResult.value = ''
+      },
       onDone: (payload) => {
         extractState.value = 'done'
         extractTruncated.value = payload.truncated === true
+        extractChunkCount.value = Number(payload.chunkCount ?? 1) || 1
+        extractSourceCharCount.value = Number(payload.sourceCharCount ?? 0) || 0
       },
     })
     extractResult.value = res.content
     extractTruncated.value = res.truncated
+    extractChunkCount.value = res.chunkCount || 1
+    extractSourceCharCount.value = res.sourceCharCount || 0
     extractState.value = 'done'
     ElMessage.success('内容已解析')
   } catch (e) {
@@ -2001,9 +2029,9 @@ function onTestScript() {
     </div>
     <pre ref="extractThinkingRef" class="rc-main-stream-text">{{ extractThinking.trim() || (extracting ? '等待模型返回思考过程…' : '暂无思考过程') }}</pre>
   </div>
-  <div v-if="isPdf && (extractResult.trim() || extractState === 'error')" class="rc-main-result" data-testid="main-extract-result">
+  <div v-if="isPdf && (extracting || extractResult.trim() || extractState === 'error')" class="rc-main-result" data-testid="main-extract-result">
     <div class="rc-main-result-head">
-      <span>解析结果{{ extractTruncated ? '（内容过长，已截断）' : '' }}</span>
+      <span>解析结果<template v-if="extractResultHint">（{{ extractResultHint }}）</template></span>
       <button class="rc-main-result-link" type="button" data-testid="main-extract-copy" :disabled="!extractResult.trim()" @click="onCopyExtractResult">复制</button>
     </div>
     <pre v-if="extractState === 'error'" class="rc-main-result-code">{{ extractMessage || '解析未返回内容' }}</pre>

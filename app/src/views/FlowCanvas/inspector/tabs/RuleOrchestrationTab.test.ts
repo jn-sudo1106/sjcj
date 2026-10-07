@@ -2833,7 +2833,7 @@ describe('RuleOrchestrationTab · PDF 抓取样本与解析内容（1005）', ()
 
     const extractBtn = wrapper.find('[data-testid="main-extract-document"]')
     expect(extractBtn.attributes('disabled')).toBeDefined()
-    vi.spyOn(ruleApi, 'documentExtract').mockResolvedValue({ content: '金额：12 万元', charCount: 7, truncated: false })
+    vi.spyOn(ruleApi, 'documentExtract').mockResolvedValue({ content: '金额：12 万元', charCount: 7, truncated: false, chunkCount: 1, sourceCharCount: 7, mergeRounds: 0 })
     await extractBtn.trigger('click')
     expect(ruleApi.documentExtract).not.toHaveBeenCalled()
 
@@ -2865,8 +2865,8 @@ describe('RuleOrchestrationTab · PDF 抓取样本与解析内容（1005）', ()
       options?.onThinking?.('先读文档结构\n')
       options?.onContent?.('甲方：甲\n')
       options?.onContent?.('金额：12 万元\n')
-      options?.onDone?.({ message: '解析完成', charCount: 12, truncated: true })
-      return { content: '甲方：甲\n金额：12 万元\n', charCount: 12, truncated: true }
+      options?.onDone?.({ message: '解析完成', charCount: 12, truncated: true, chunkCount: 1, sourceCharCount: 12, mergeRounds: 0 })
+      return { content: '甲方：甲\n金额：12 万元\n', charCount: 12, truncated: true, chunkCount: 1, sourceCharCount: 12, mergeRounds: 0 }
     })
 
     await selectFile(wrapper.find('[data-testid="main-pdf-file-input"]'), pdfFile())
@@ -2877,6 +2877,40 @@ describe('RuleOrchestrationTab · PDF 抓取样本与解析内容（1005）', ()
     expect(wrapper.find('.rc-main-result-code.rc-extract-body').text()).toContain('金额：12 万元')
     expect(flow.configs['pdf-1'].execCfg?.script).toBe('')
     expect(flow.configs['pdf-1'].execCfg?.scriptPath).toBe('')
+    wrapper.unmount()
+  })
+
+  it('分块抽取：过程中显示块进度，合并开始时重铺正文，结束后说明分了几段', async () => {
+    const { wrapper } = mountOnPdfNode()
+    await flushPromises()
+    let continueRun!: () => void
+    const running = new Promise<void>((resolve) => { continueRun = resolve })
+    vi.spyOn(ruleApi, 'documentExtract').mockImplementation(async (_payload, options) => {
+      options?.onChunk?.({ phase: 'map', index: 1, total: 2, pages: '第 1-2 页', charCount: 12000, last: false })
+      options?.onContent?.('第一段结果\n')
+      options?.onChunk?.({ phase: 'map', index: 2, total: 2, pages: '第 3 页', charCount: 640, last: false })
+      options?.onContent?.('第二段结果')
+      await running
+      options?.onChunk?.({ phase: 'merge', index: 1, total: 1, charCount: 1300, last: true })
+      options?.onContent?.('合并后的完整结果')
+      options?.onDone?.({ message: '解析完成', charCount: 9, truncated: false, chunkCount: 2, sourceCharCount: 23456, mergeRounds: 1 })
+      return { content: '合并后的完整结果', charCount: 9, truncated: false, chunkCount: 2, sourceCharCount: 23456, mergeRounds: 1 }
+    })
+
+    await selectFile(wrapper.find('[data-testid="main-pdf-file-input"]'), pdfFile())
+    await wrapper.find('[data-testid="main-extract-document"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="main-extract-result"]').text()).toContain('正在抽取第 2/2 块 · 第 3 页')
+    expect(wrapper.find('.rc-main-result-code.rc-extract-body').text()).toContain('第二段结果')
+
+    continueRun()
+    await flushPromises()
+
+    const result = wrapper.find('[data-testid="main-extract-result"]')
+    expect(result.text()).toContain('合并后的完整结果')
+    expect(result.text()).not.toContain('第一段结果')
+    expect(result.text()).toContain('分块抽取 2 段 · 原文 23456 字')
     wrapper.unmount()
   })
 

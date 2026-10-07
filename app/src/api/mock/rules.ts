@@ -467,7 +467,15 @@ export function mockDocumentExtract(params?: Record<string, unknown>): Record<st
     ? outputFields.map((code) => `- ${code}：demo-${code}`)
     : ['- 正文抽取结果：demo-content']
   const content = [`## ${fileName}`, description ? `> 抽取要求：${description}` : '', ...lines].filter(Boolean).join('\n')
-  return { content, charCount: content.length, truncated: false, message: '解析完成（演示数据）' }
+  return {
+    content,
+    charCount: content.length,
+    truncated: false,
+    chunkCount: 1,
+    sourceCharCount: content.length,
+    mergeRounds: 0,
+    message: '解析完成（演示数据）',
+  }
 }
 
 export function mockRuleOrchestrationTest(params?: Record<string, unknown>): RuleOrchestrationTestResult {
