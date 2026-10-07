@@ -21,7 +21,7 @@ async function mountAt(query: Record<string, string> = {}) {
 describe('系统设置 · tab 壳', () => {
   it('系统设置保留节点类型和分类目录，并增加 Runner 管理入口', async () => {
     const { wrapper } = await mountAt()
-    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', 'Runner 实例', '队列分配', '节点代码', '代码仓库', '发布版本'])
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', 'Runner 实例', '队列分配', '节点代码', '代码仓库', '下发目录', '发布版本'])
     expect(wrapper.find('.st-tab-link.active').text()).toBe('节点类型')
     expect(wrapper.find('[data-testid="settings-node-type"]').exists()).toBe(true)
   })

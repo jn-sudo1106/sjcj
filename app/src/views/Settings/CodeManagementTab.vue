@@ -6,6 +6,7 @@ import { runnerManagementApi, type SiteCodeVersion } from '@/api/runnerManagemen
 
 type CatalogRow = SiteCodeVersion & { environments: ('test' | 'prd')[] }
 const auth = useAuthStore()
+const emit = defineEmits<{ editDirectory: [codeId: string] }>()
 const canWrite = computed(() => auth.role === 'admin')
 const rows = ref<CatalogRow[]>([])
 const keyword = ref('')
@@ -24,7 +25,7 @@ const repoOptions = computed(() => [...new Map(rows.value
   .map((row) => [row.repoId!, row.repoName || row.repoId!])).entries()])
 const filtered = computed(() => rows.value.filter((row) =>
   (!repoFilter.value || row.repoId === repoFilter.value)
-  && [row.configId, row.queueName, row.siteHost, row.deliveryPath, row.scriptDigest, row.repoName ?? '']
+  && [row.configId, row.queueName, row.siteHost, row.storagePath, row.deliveryPath, row.scriptDigest, row.repoName ?? '']
     .some((value) => value.toLowerCase().includes(keyword.value.trim().toLowerCase())),
 ))
 
@@ -44,6 +45,10 @@ function absoluteCodePath(repoPath: string | null | undefined, relative: string)
   if (!repoPath) return relative
   const separator = repoPath.includes('\\') ? '\\' : '/'
   return `${repoPath.replace(/[\\/]$/, '')}${separator}${relative.replaceAll('/', separator)}`
+}
+
+function deliveryRoot(row: SiteCodeVersion) {
+  return (row.directoryLayout?.directoryTemplate || 'packages/{configId}').replaceAll('{configId}', row.configId).replaceAll('{queue}', row.queueName)
 }
 
 async function showDetail(row: CatalogRow) {
@@ -86,7 +91,7 @@ onMounted(() => { void load() })
 <template>
   <div class="rc-card scm-main" data-testid="settings-site-code">
     <div class="rc-toolbar wrap">
-      <el-input v-model="keyword" clearable placeholder="ConfigId、队列、网站、仓库或版本" style="width: 270px" />
+      <el-input v-model="keyword" clearable placeholder="ConfigId、队列、网站、文件路径或版本" style="width: 270px" />
       <el-select v-model="repoFilter" clearable placeholder="全部仓库" style="width: 180px" data-testid="site-code-repo-filter">
         <el-option v-for="[id, name] in repoOptions" :key="id" :label="name" :value="id" />
       </el-select>
@@ -96,16 +101,21 @@ onMounted(() => { void load() })
     <div v-if="error" class="scm-error" role="alert">代码列表加载失败：{{ error }}</div>
     <div v-loading="loading" class="rc-table-scroll scm-table">
       <table class="rc-data-table">
-        <thead><tr><th>ConfigId</th><th>仓库</th><th>队列</th><th>代码用途</th><th>下发文件</th><th>Git 提交</th><th>版本摘要</th><th>采用环境</th><th>操作</th></tr></thead>
+        <thead><tr><th>ConfigId</th><th>仓库</th><th>队列</th><th>代码用途</th><th>文件对应关系</th><th>Git 提交</th><th>版本摘要</th><th>采用环境</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="row in filtered" :key="row.scriptDigest">
             <td>{{ row.configId }}</td><td>{{ row.repoName || '—' }}</td><td>{{ row.queueName }}</td>
-            <td>{{ row.siteHost || '队列通用' }}</td><td>{{ row.deliveryPath }}</td>
+            <td>{{ row.siteHost || '队列通用' }}</td>
+            <td class="scm-file-mapping" data-testid="site-code-file-mapping">
+              <div :title="row.storagePath"><span>仓库</span><code>{{ row.storagePath }}</code></div>
+              <div :title="`${deliveryRoot(row)}/${row.deliveryPath}`"><span>→ 下发</span><code>{{ deliveryRoot(row) }}/{{ row.deliveryPath }}</code></div>
+            </td>
             <td :title="row.gitCommit">{{ row.gitCommit.slice(0, 12) }}</td>
             <td :title="row.scriptDigest">{{ row.scriptDigest.slice(0, 16) }}</td>
             <td>{{ row.environments.map((env) => env === 'test' ? '测试' : '生产').join('、') || '未采用' }}</td>
             <td>
               <el-button link type="primary" @click="showDetail(row)">详情</el-button>
+              <el-button link type="primary" @click="emit('editDirectory', row.codeId)">下发目录</el-button>
               <el-button v-if="canWrite" link type="primary" :disabled="saving" @click="openPublish(row)">发布配置</el-button>
             </td>
           </tr>
@@ -119,10 +129,18 @@ onMounted(() => { void load() })
           <dt>ConfigId</dt><dd>{{ detail.configId }}</dd>
           <dt>队列</dt><dd>{{ detail.queueName }}</dd>
           <dt>代码仓库</dt><dd>{{ detail.repoName || '—' }}</dd>
-          <dt>服务器文件路径</dt><dd>{{ absoluteCodePath(detail.repoPath, detail.storagePath) }}</dd>
+          <dt>仓库文件路径</dt><dd>{{ absoluteCodePath(detail.repoPath, detail.storagePath) }}</dd>
+          <dt>Runner 下发路径</dt><dd>{{ deliveryRoot(detail) }}/{{ detail.deliveryPath }}</dd>
+          <dt>本地版本文件</dt><dd>{{ deliveryRoot(detail) }}/version.json</dd>
+          <template v-if="detail.directoryLayout">
+            <dt>代码包映射</dt><dd><div v-for="node in detail.directoryLayout.nodes.filter(n => n.repoId)" :key="node.id">{{ node.sourcePath }} · {{ node.gitCommit?.slice(0,12) }}</div></dd>
+          </template>
           <dt>Git 地址</dt><dd>{{ detail.gitUrl }}</dd>
-          <dt>Runner 下发路径</dt><dd>{{ detail.deliveryPath }}</dd>
           <dt>Git 提交</dt><dd>{{ detail.gitCommit }}</dd>
+          <template v-if="detail.sourceRepoPath">
+            <dt>来源仓库文件</dt><dd>{{ detail.sourceRepoPath }}</dd>
+            <dt>来源 Git 提交</dt><dd>{{ detail.sourceGitCommit }}</dd>
+          </template>
           <dt>摘要</dt><dd>{{ detail.scriptDigest }}</dd>
           <dt>生成提示词</dt><dd>{{ detail.prompt || '—' }}</dd>
           <dt>来源 URL</dt><dd>{{ detail.url || '—' }}</dd>
@@ -151,6 +169,10 @@ onMounted(() => { void load() })
 .scm-main { display: flex; flex: 1; min-height: 0; flex-direction: column; }
 .scm-table { flex: 1; min-height: 0; overflow: auto; }
 .scm-table td { white-space: nowrap; }
+.scm-file-mapping { min-width: 230px; max-width: 320px; }
+.scm-file-mapping div { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.scm-file-mapping span { flex: 0 0 48px; color: var(--rc-muted); font-size: 11px; }
+.scm-file-mapping code { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: inherit; }
 .scm-note { margin-left: auto; color: var(--rc-muted); font-size: 12px; }
 .scm-error { margin: 0 12px 8px; padding: 10px; border-radius: 6px; background: #fef2f2; color: #b91c1c; font-size: 12px; }
 .scm-detail { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px; font-size: 12px; }
