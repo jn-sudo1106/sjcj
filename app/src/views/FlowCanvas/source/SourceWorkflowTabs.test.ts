@@ -116,6 +116,27 @@ describe('SourceWorkflowTabs', () => {
     expect(router.currentRoute.value.query.flowId).toBe('12')
   })
 
+  it('新建空白草稿后打开返回的工作副本，不再重复创建下一版', async () => {
+    const draft: WorkflowBinding = {
+      ...AUX, versionManaged: true, publishedVersionNo: undefined, publishedFlowId: undefined,
+      draftVersionId: '81', draftVersionNo: 1, draftFlowId: '102', versionStatus: 'DRAFT',
+    }
+    vi.spyOn(workflowBindingApi, 'list').mockResolvedValueOnce([MAIN]).mockResolvedValueOnce([MAIN, draft])
+    vi.mocked(ElMessageBox.prompt).mockResolvedValue({ value: '空白草稿' } as never)
+    vi.spyOn(workflowBindingApi, 'createForSource').mockResolvedValue(draft)
+    const ensure = vi.spyOn(workflowBindingApi, 'ensureDraft')
+    const { wrapper, router } = await mountTabs()
+
+    await wrapper.get('[data-testid="workflow-add"]').trigger('click')
+    await wrapper.get('[data-testid="workflow-create-blank"]').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.query.workflowId).toBe('12')
+    expect(router.currentRoute.value.query.flowId).toBe('102')
+    expect(ensure).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('草稿 v1')
+  })
+
   it('可选择现有流程复制成配置独立的新标签', async () => {
     vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([MAIN])
     vi.mocked(ElMessageBox.prompt).mockResolvedValue({ value: '现有流程副本' } as never)

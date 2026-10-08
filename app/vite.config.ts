@@ -32,6 +32,18 @@ export default defineConfig(({ mode }) => {
       host: '0.0.0.0',
       // 认证与 /v1 业务请求共用 HttpOnly Cookie（SameSite=Lax），开发统一走同源 /api 代理
       proxy: {
+        // Only selected flow requests use this prefix. Login and all other APIs keep their target.
+        ...(env.VITE_FLOW_PROXY_TARGET ? {
+          '/api/local-flow': {
+            target: env.VITE_FLOW_PROXY_TARGET,
+            changeOrigin: true,
+            rewrite: (path: string) => path.replace(/^\/api\/local-flow/, '/api'),
+            configure: (proxy: import('vite').HttpProxy.ProxyServer) => {
+              // A local Java session must never overwrite the original backend's login cookie.
+              proxy.on('proxyRes', (response) => { delete response.headers['set-cookie'] })
+            },
+          },
+        } : {}),
         // 公网 Nginx 在 9999 端口转发 /api/sync-platform；9011 端口从本机无法取得 HTTP 响应。
         '/api/sync-platform': {
           target: env.VITE_SYNC_PLATFORM_PROXY_TARGET || 'http://115.227.21.133:9999',

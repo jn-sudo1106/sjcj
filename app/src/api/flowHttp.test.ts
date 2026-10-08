@@ -149,6 +149,16 @@ describe('flow 流程 HTTP 契约', () => {
       .rejects.toThrow('流程名称不能为空')
   })
 
+  it('修改已发布流程后采用服务端返回的新草稿 ID 回查，不读取旧发布版本', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '保存成功，id:2002', data: { flowId: 2002 } }))
+      .mockResolvedValueOnce(jsonResponse({ code: '0', data: { flowId: 2002, flowName: '新草稿', flowConf: null } }))
+    const { flowCenterApi } = await import('./index')
+    const saved = await flowCenterApi.save({ id: '1001', name: '新草稿', definition: { main: [], branches: [], configs: {} } })
+    expect(saved.id).toBe('2002')
+    expect(new URL(String(fetchMock.mock.calls[1][0]), 'http://local.test').searchParams.get('flowId')).toBe('2002')
+  })
+
   it('POST /v1/flow/changeFlowBatch：sourceIds 走 body 数组，解绑传 flowId=0', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '批量更改流程成功，更新数量:3', data: null }))
     const { flowCenterApi } = await import('./index')

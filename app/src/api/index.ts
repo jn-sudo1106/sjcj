@@ -334,12 +334,12 @@ function legacySnatchSavePayloadFromSource(site: Site, source: Source): LegacySn
 // 正则猜测，猜不中就把登录节点画成普通采集节点。这里按每个步骤的 configId 去重后查
 // config/configDetail 一次性补回 topic 和 isLoginConfig；单条查询失败不阻断整体加载
 // （Promise.allSettled），查不到就保持 undefined，由调用方回退到各自的原有默认行为。
-async function attachStepConfigDetails(steps: Step[]): Promise<Step[]> {
+async function attachStepConfigDetails(steps: Step[], backendScope?: RequestOptions['backendScope']): Promise<Step[]> {
   const configIds = [...new Set(steps.map((s) => s.configId).filter((id): id is string => !!id))]
   if (!configIds.length) return steps
   // 用原始记录而不是 Config 模型：配置 URL 在旧字段 `configUrl` 上（ConfigEdit 同款），
   // 过一遍模型后再读 `url` 会在适配漏字段时把面板留空。
-  const results = await Promise.allSettled(configIds.map((id) => configApi.configDetailRaw(id)))
+  const results = await Promise.allSettled(configIds.map((id) => configApi.configDetailRaw(id, { backendScope })))
   type StepConfigDetail = {
     topic?: string; configName?: string; configUrl?: string; isLoginConfig?: boolean; multiMode?: number
     configType?: string
@@ -461,7 +461,7 @@ export const sourceApi = {
     const state = p?.state === 'all' ? undefined : p?.state
     const result = await request<unknown>('source/sourcePaged', p, {
       method: 'POST',
-      httpEndpoint: 'source/sourcePaged',
+      httpEndpoint: import.meta.env.VITE_FLOW_PROXY_TARGET && p?.flowId ? 'flow/flowSources' : 'source/sourcePaged',
       httpParams: {
         pageNo: p?.page ?? 1,
         pageSize: p?.size ?? 20,
@@ -723,7 +723,7 @@ export const sourceApi = {
     return options.withConfigDetails === false ? steps : attachStepConfigDetails(steps)
   },
   /** 步骤的 configDetail 补充，单独拿出来给「先画后补」用 */
-  stepConfigDetails: (steps: Step[]) => attachStepConfigDetails(steps),
+  stepConfigDetails: (steps: Step[], backendScope?: RequestOptions['backendScope']) => attachStepConfigDetails(steps, backendScope),
 
   // 写类 / 高危端点：首期 mock 仅回执，UI 统一二次确认占位（呼应权威方案读写边界）。
   changeSourceEnable: (sourceId: string, disabled: boolean) => changeSourceEnableBatch([sourceId], disabled),
@@ -2527,8 +2527,8 @@ export const configApi = {
    * 配置详情的原始记录。「另存为新配置」要在后端原样字段上改 —— 我们的 Config 模型没有覆盖
    * clearRule/transRule/checkRule 等 BLOB 字段，从建模值重建 payload 会把它们清空。
    */
-  configDetailRaw: async (configId: string) => {
-    const result = await request<unknown>('config/configDetail', { configId }, { method: 'GET' })
+  configDetailRaw: async (configId: string, options: Pick<RequestOptions, 'backendScope'> = {}) => {
+    const result = await request<unknown>('config/configDetail', { configId }, { method: 'GET', ...options })
     if (!result || typeof result !== 'object' || 'ok' in result) return null
     const record = legacyConfigRecord(result)
     return Object.keys(record).length ? record : null
@@ -3024,8 +3024,18 @@ export const workflowBindingApi = {
     return (Array.isArray(result) ? result : []).map(workflowBindingFromApi)
   },
   createForSource: async (input: { sourceId: string; name: string; role?: WorkflowBindingRole; primary?: boolean }): Promise<WorkflowBinding> => {
-    const result = await request<unknown>('workflow/createForSource', input, { method: 'POST', httpEndpoint: 'workflow/createForSource', httpParams: input })
-    return workflowBindingFromApi(result)
+    try {
+      const result = await request<unknown>('workflow/createForSource', input, { method: 'POST', httpEndpoint: 'workflow/createForSource', httpParams: input })
+      return workflowBindingFromApi(result)
+    } catch (error) {
+      const failure = error instanceof ApiError
+        ? error.cause as { status?: number; gatewayDetail?: string } | undefined
+        : undefined
+      if ((failure?.status === 404 || failure?.status === 500) && !failure.gatewayDetail) {
+        throw new Error(`当前后台的流程创建接口不可用（HTTP ${failure.status} workflow/createForSource），请检查流程管理接口的部署及数据库迁移。`, { cause: error })
+      }
+      throw error
+    }
   },
   ensureDraft: async (workflowId: string): Promise<WorkflowBinding> => {
     const input = { workflowId }
@@ -3221,8 +3231,8 @@ export const flowCenterApi = {
     })
     const ack = ackFromApiResult(result)
     if (!ack.ok) throw new Error(ack.message || '保存流程失败')
-    const id = flow.id
-      || idFromApiResult(result, ['flowId', 'id'])
+    const id = idFromApiResult(result, ['flowId', 'id'])
+      || flow.id
       || ack.message?.match(/id\s*[:：]\s*(\d+)/)?.[1]
     if (!id) throw new Error(`流程「${name}」已保存，但未能解析流程 ID（后端回执：${ack.message ?? '无'}），请刷新列表确认`)
     const saved = await flowCenterApi.detail(id)
@@ -3269,15 +3279,16 @@ export const flowCenterApi = {
    * 对比：不带 svg 的查询（老参数分支）行数更多——那是 MAIN_CONFIG/SOURCE_ID 过滤口径的旧视图，
    * 不是「多了孤儿」，孤儿判定在 buildSourceSeed 按 lastStep 语义做（0925）。
    */
-  steps: async (flowId: string, options: { withConfigDetails?: boolean } = {}): Promise<Step[]> => {
+  steps: async (flowId: string, options: { withConfigDetails?: boolean; backendScope?: RequestOptions['backendScope'] } = {}): Promise<Step[]> => {
     const result = await request<unknown>('item/next/nextConfigPaged', { flowId }, {
       method: 'GET',
       httpEndpoint: 'item/next/nextConfigPaged',
       httpParams: { flowId, page: 1, limit: 10000, svg: true },
+      backendScope: options.backendScope ?? 'flow',
     })
     const steps = sourceStepsFromLegacy(result, '')
     // 只要表 ID 的调用方（siteUsedTables）跳过逐配置补查，与 sourceApi.sourceSteps 同一个开关
-    return options.withConfigDetails === false ? steps : attachStepConfigDetails(steps)
+    return options.withConfigDetails === false ? steps : attachStepConfigDetails(steps, options.backendScope ?? 'flow')
   },
 }
 

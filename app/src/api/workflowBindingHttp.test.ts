@@ -116,4 +116,35 @@ describe('workflow 源多流程绑定 HTTP 契约', () => {
     expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toEqual({ workflowId: '1400935' })
     expect(JSON.parse(String((fetchMock.mock.calls[1][1] as RequestInit).body))).toEqual({ workflowId: '1400935' })
   })
+
+  it('新建空白流程保留草稿工作副本，不把它当作已发布流程', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', data: {
+      id: 91, bindType: 'SOURCE', bindId: 430024641, workflowId: 1403000,
+      workflowName: '空白草稿', draftVersionId: 803, draftVersionNo: 1, draftFlowId: 1403000,
+      publishedFlowId: null, publishedVersionNo: null, versionStatus: 'DRAFT',
+      role: 'AUX', primary: false, status: 'ACTIVE', followsCurrentVersion: true,
+    } }))
+    const { workflowBindingApi } = await import('./index')
+    const draft = await workflowBindingApi.createForSource({ sourceId: '430024641', name: '空白草稿', role: 'AUX' })
+    expect(draft).toMatchObject({
+      workflowId: '1403000', draftFlowId: '1403000', draftVersionNo: 1,
+      versionStatus: 'DRAFT', versionManaged: true,
+    })
+    expect(draft.publishedFlowId).toBeUndefined()
+  })
+
+  it('创建接口返回空的 500 时提示检查后台部署，保留状态和端点便于定位', async () => {
+    fetchMock.mockResolvedValue(errorResponse(500, null))
+    const { workflowBindingApi } = await import('./index')
+    await expect(workflowBindingApi.createForSource({ sourceId: '430024641', name: '空白草稿' }))
+      .rejects.toThrow('当前后台的流程创建接口不可用（HTTP 500 workflow/createForSource），请检查流程管理接口的部署及数据库迁移。')
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('后台提供了明确的失败原因时保留原文', async () => {
+    fetchMock.mockResolvedValue(errorResponse(500, { msg: '流程版本表缺少 legacy_flow_id 字段' }))
+    const { workflowBindingApi } = await import('./index')
+    await expect(workflowBindingApi.createForSource({ sourceId: '430024641', name: '空白草稿' }))
+      .rejects.toThrow('流程版本表缺少 legacy_flow_id 字段')
+  })
 })
