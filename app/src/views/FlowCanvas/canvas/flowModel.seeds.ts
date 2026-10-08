@@ -1226,9 +1226,10 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
     // 翻译助手 / 音频提取文字的结构化配置已挪到 core_param（见 nodeConfigPayload
     // isStructuredInCoreParam），回读先取 core_param、取不到回落 code_rule 兼容存量，与
     // applyConfigToNode 同口径。
-    // OCR 抓取（2026-09-30，用户拍板 isMulti+core_param 双写）：编排 Tab「是否保存为文件」
-    // 落 core_param 的 `{"saveAsFile":bool}`；回读优先 core_param→code_rule，两者都没有时
-    // 按 isMulti（0/1）反推勾选态，兼容本功能上线前的存量配置。isMulti=2（更新父表）不属
+    // OCR 抓取（2026-09-30，用户拍板 isMulti+core_param 双写）：编排 Tab「是否保存为文件 / 指定输出
+    // 文件名」整段落 core_param 的 `{"saveAsFile":bool,"outputFileName"?:string}`；回读优先 core_param→
+    // code_rule，两者都没有时按 isMulti（0/1）反推勾选态（存量配置没有文件名，只补 saveAsFile 这一个键），
+    // 兼容本功能上线前的存量配置。isMulti=2（更新父表）不属
     // OCR 态，走通用 code_rule 分支。
     if (isTranslateNode(cfg) || isAudioTextNode(cfg)) {
       const migrated = step.coreParam || step.codeRule

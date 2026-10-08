@@ -35,7 +35,7 @@ function dedupToLegacy(mode?: 'source' | 'table'): string {
  * 与音频提取文字（供应商/区间/输出格式）。这类节点从 core_param 读写，回读时兼容旧存量 code_rule。
  */
 function isStructuredInCoreParam(cfg: NodeConfig): boolean {
-  // OCR 抓取（2026-09-30）：「是否保存为文件」的 {"saveAsFile":bool} 也落 core_param，不占 code_rule。
+  // OCR 抓取（2026-09-30）：编排 Tab 的 `{"saveAsFile":bool,"outputFileName"?:string}` 也落 core_param，不占 code_rule。
   return isTranslateNode(cfg) || isAudioTextNode(cfg) || isOcrNode(cfg)
 }
 
@@ -70,8 +70,8 @@ export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
   const target = cfg.collectCfg ?? cfg
   // 翻译助手 / 音频提取文字节点的结构化配置存在 core_param（2026-09-21 / 2026-09-23 从
   // code_rule 挪过去），旧存量配置仍躺在 code_rule——回读先取 core_param，取不到回落 code_rule 兼容。
-  // OCR 抓取（2026-09-30 用户拍板）：编排 Tab「是否保存为文件」落 core_param 的
-  // `{"saveAsFile":bool}`；对旧存量（core_param/code_rule 都没有）按 isMulti 反推勾选态，
+  // OCR 抓取（2026-09-30 用户拍板）：编排 Tab 的「是否保存为文件 / 指定输出文件名」落 core_param 的
+  // `{"saveAsFile":bool,"outputFileName"?:string}`；对旧存量（core_param/code_rule 都没有）按 isMulti 反推勾选态，
   // 保证 Tab 的勾选跟后端 isMulti 对齐——发后续时 ocrMultiModeFor 也从同一份 structuredConfig
   // 得到同一 isMulti，不会因为回读丢字段把 1 打回 0。
   if (isStructuredInCoreParam(cfg)) {
@@ -268,8 +268,10 @@ function audioStructuredFor(cfg: NodeConfig): string | undefined {
 }
 
 /**
- * OCR 抓取「是否保存为文件」（2026-09-30）的结构化配置：落 cs_config.core_param 的
- * `{"saveAsFile":bool}`（编排 Tab 勾选写进 cfg.structuredConfig，OCR 无 collectCfg → 落 NodeConfig 顶层）。
+ * OCR 抓取编排配置（2026-09-30「是否保存为文件」，2026-10-08 加「指定输出文件名」）：
+ * 落 cs_config.core_param 的 `{"saveAsFile":bool,"outputFileName"?:string}`（编排 Tab 写进
+ * cfg.structuredConfig，OCR 无 collectCfg → 落 NodeConfig 顶层）。整段原样透传，新增键不用改这里；
+ * isMulti 只由 saveAsFile 派生（见 ocrMultiModeFor），文件名不参与。
  */
 function ocrStructuredFor(cfg: NodeConfig): string | undefined {
   if (!isOcrNode(cfg)) return undefined

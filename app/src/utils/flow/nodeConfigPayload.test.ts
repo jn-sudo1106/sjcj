@@ -447,7 +447,7 @@ describe('coreParam（2026-09-20：打标签/摘要节点保存时把模型供�
   })
 })
 
-describe('OCR 抓取「是否保存为文件」（2026-09-30：勾选写 core_param 的 {"saveAsFile":bool}，同步派生 isMulti）', () => {
+describe('OCR 抓取「是否保存为文件 / 指定输出文件名」（勾选写 core_param 的 {"saveAsFile":bool,"outputFileName"?:string}，同步派生 isMulti）', () => {
   function ocrNode(saveAsFile?: boolean) {
     const cfg = cloneConfig(NODE_CONFIGS['ocr'])
     if (saveAsFile !== undefined) cfg.structuredConfig = JSON.stringify({ saveAsFile })
@@ -480,6 +480,37 @@ describe('OCR 抓取「是否保存为文件」（2026-09-30：勾选写 core_pa
     const cfg = cloneConfig(NODE_CONFIGS['ocr'])
     cfg.structuredConfig = 'not-a-json-payload'
     expect(buildConfigPayload(cfg).isMulti).toBe(0)
+  })
+
+  // 2026-10-08 新增「指定输出文件名」：整段 structuredConfig 原样透传进 core_param，
+  // isMulti 仍只看 saveAsFile。
+  it('带 outputFileName → coreParam 原样带上，isMulti 仍按勾选派生', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['ocr'])
+    cfg.structuredConfig = '{"saveAsFile":true,"outputFileName":"公告明细.pdf"}'
+    const payload = buildConfigPayload(cfg)
+    expect(payload.coreParam).toBe('{"saveAsFile":true,"outputFileName":"公告明细.pdf"}')
+    expect(payload.isMulti).toBe(1)
+    expect(payload.codeRule).toBeUndefined()
+  })
+
+  it('只填文件名、未勾选 → isMulti=0，文件名照样落 core_param', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['ocr'])
+    cfg.structuredConfig = '{"saveAsFile":false,"outputFileName":"report.pdf"}'
+    const payload = buildConfigPayload(cfg)
+    expect(payload.isMulti).toBe(0)
+    expect(payload.coreParam).toBe('{"saveAsFile":false,"outputFileName":"report.pdf"}')
+  })
+
+  it('applyConfigToNode：core_param 带 outputFileName → 整段回填 structuredConfig', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['ocr'])
+    applyConfigToNode(cfg, {
+      configId: '1401072',
+      name: 'OCR 抓取_900',
+      enabled: true,
+      configType: '150',
+      coreParam: '{"saveAsFile":true,"outputFileName":"公告明细.pdf"}',
+    } as Config)
+    expect(cfg.structuredConfig).toBe('{"saveAsFile":true,"outputFileName":"公告明细.pdf"}')
   })
 
   it('applyConfigToNode：core_param 优先，回填到 structuredConfig', () => {
