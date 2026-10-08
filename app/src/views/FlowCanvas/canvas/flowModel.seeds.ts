@@ -502,7 +502,7 @@ const NODE_CONFIG_SEEDS = {
       outputTable: '', inputTable: '', inputParams: [],
       isDetail: false,
     },
-    taskCfg: { queue: 'pdf.collect', urlRule: '' },
+    taskCfg: { queue: 'dev_web_snatch_pdf', urlRule: '' },
   },
   'mail-collect': {
     title: 'Mail抓取', sub: '[160] Mail抓取 · 邮件正文与附件', status: '待配置', planned: false, collect: true,
@@ -887,12 +887,14 @@ export const TEMPLATE_TO_SNATCH: Record<string, string> = {
 }
 
 /**
- * 规则处理 / 媒体 / 文本 / OCR 等处理类节点默认任务队列（2026-09-23 用户拍板；2026-09-24 规则处理补默认队列）。
+ * 规则处理 / 媒体 / 文本 / OCR / PDF 抓取等节点默认任务队列（2026-09-23 用户拍板；2026-09-24 规则处理补默认队列；
+ * 2026-10-08 PDF 抓取补 dev_web_snatch_pdf）。
  * 在节点新增（insertAfter / addNodeToBranch）与任务配置时赋默认队列名。
  */
 export const DEFAULT_TASK_QUEUES: Record<string, string> = {
   rule: 'dev_web_rulehandle',
   ocr: 'dev_web_snatch_ocr',
+  pdf: 'dev_web_snatch_pdf',
   translate: 'dev_web_translate',
   'article-summary': 'dev_web_llm_generate',
   'article-tag': 'dev_web_llm_generate',

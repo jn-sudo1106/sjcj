@@ -1619,9 +1619,11 @@ describe('节点类型补齐（2026-09-17，与后端 source_type 对齐）', ()
   })
 
   // 2026-09-23 用户明确要求：OCR / 翻译 / 摘要 / 标签 / 语音 / 视频 新增时任务配置默认给队列名
+  // 2026-10-08 用户明确要求：PDF 抓取默认 dev_web_snatch_pdf
   it.each([
     ['rule', 'dev_web_rulehandle'],
     ['ocr', 'dev_web_snatch_ocr'],
+    ['pdf', 'dev_web_snatch_pdf'],
     ['translate', 'dev_web_translate'],
     ['article-summary', 'dev_web_llm_generate'],
     ['article-tag', 'dev_web_llm_generate'],
@@ -1635,6 +1637,7 @@ describe('节点类型补齐（2026-09-17，与后端 source_type 对齐）', ()
   it.each([
     ['rule', 'dev_web_rulehandle'],
     ['ocr', 'dev_web_snatch_ocr'],
+    ['pdf', 'dev_web_snatch_pdf'],
     ['translate', 'dev_web_translate'],
     ['article-summary', 'dev_web_llm_generate'],
     ['article-tag', 'dev_web_llm_generate'],
