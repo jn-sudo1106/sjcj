@@ -46,15 +46,20 @@ const TOP_TABS = computed(() => nodeInspectorTabs(cfg.value, { includeAi: !props
 watch(() => props.hideAi, (hideAi) => {
   if (hideAi && flow.activeTab === 'ai') flow.setActiveTab('config')
 }, { immediate: true })
-watch([TOP_TABS, () => flow.activeTab], () => {
-  const current = TOP_TABS.value.find((t) => t[0] === flow.activeTab)
-  if (current && !current[2]) return
-  // 旧会话若停在已移除的 params Tab，直接迁到任务配置。
-  const fallback = (flow.activeTab === 'params'
-    ? TOP_TABS.value.find((t) => t[0] === 'task' && !t[2])
-    : undefined) ?? TOP_TABS.value.find((t) => !t[2])
+// 旧会话若停在已移除的 params Tab，直接迁到任务配置（挂载即生效）。
+watch(() => flow.activeTab, (active) => {
+  if (active !== 'params') return
+  const fallback = TOP_TABS.value.find((t) => t[0] === 'task' && !t[2]) ?? TOP_TABS.value.find((t) => !t[2])
   if (fallback) flow.setActiveTab(fallback[0])
 }, { immediate: true })
+// 切换节点时，当前 Tab 在新节点上不存在或被禁用才回落到第一个可用 Tab。
+// 不在挂载 / Tab 列表变化时立即回落：编排配置的门禁会随表配置编辑反复开关，立即回落会把人从正在看的页上踢走。
+watch(() => flow.selectedId, () => {
+  const current = TOP_TABS.value.find((t) => t[0] === flow.activeTab)
+  if (current && !current[2]) return
+  const fallback = TOP_TABS.value.find((t) => !t[2])
+  if (fallback) flow.setActiveTab(fallback[0])
+})
 
 // 配置绑定条（0824-00 §6.1）：一个 FlowNode 必须且只能引用一个 Config。
 // 本期只落骨架——configId 来自迁移回填（flowModel.ts NodeConfig.configId），

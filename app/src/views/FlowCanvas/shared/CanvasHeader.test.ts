@@ -6,7 +6,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import CanvasHeader from './CanvasHeader.vue'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
-import { flowCenterApi } from '@/api'
+import { flowCenterApi, workflowBindingApi } from '@/api'
 import { cloneConfig, isMonitorNode, NODE_CONFIGS } from '@/views/FlowCanvas/canvas/flowModel'
 
 vi.mock('element-plus', async (importOriginal) => {
@@ -35,6 +35,8 @@ async function mountHeader() {
 
 describe('CanvasHeader · 流程二级导航', () => {
   it('流程图和流程列表位于独立第二行，不与一级视图并排', async () => {
+    // 多流程接口上线后的形态：更换 / 复制流程由流程标签栏负责，顶栏不再出现（未上线时见 CanvasHeaderLegacyFlowOps.test.ts）
+    vi.spyOn(workflowBindingApi, 'available').mockReturnValue(true)
     const wrapper = await mountHeader()
     useFlowStore().loadFromSource(
       { sourceId: 'source-a', name: '测试源', url: '', configId: '', mainTable: '', owner: '', state: 'C' },

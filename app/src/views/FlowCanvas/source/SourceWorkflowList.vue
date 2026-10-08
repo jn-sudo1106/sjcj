@@ -17,6 +17,8 @@ const rows = ref<WorkflowBinding[]>([])
 const bindOpen = ref(false)
 const newRole = ref<WorkflowBindingRole>('AUX')
 const compatibilityMode = ref(false)
+// 多流程接口未上线时只读：关联、新增、设主流程、解除、恢复继承都依赖 workflow/* 写接口
+const writable = workflowBindingApi.available()
 
 const hasExplicitPrimary = computed(() => rows.value.some(row => row.primary && !row.inherited))
 const hasInherited = computed(() => rows.value.some(row => row.inherited))
@@ -153,23 +155,26 @@ onMounted(load)
           <p>一个源可关联多条流程；主流程用于正常运行，补数据流程用于历史区间重跑。</p>
         </div>
         <div class="swl-actions">
+          <template v-if="writable">
           <select v-model="newRole" class="swl-role" aria-label="新增流程用途">
             <option value="AUX">辅助流程</option>
             <option value="BACKFILL">补数据流程</option>
           </select>
           <button class="rc-btn" type="button" @click="bindOpen = true">关联已有</button>
           <button class="rc-btn primary" type="button" @click="createFlow"><el-icon><Plus /></el-icon> 新增流程</button>
+          </template>
           <button class="swl-refresh" type="button" title="刷新" aria-label="刷新" @click="load"><el-icon><Refresh /></el-icon></button>
         </div>
       </div>
 
-      <div v-if="hasExplicitPrimary && hasInherited" class="swl-inherit">
+      <div v-if="writable && hasExplicitPrimary && hasInherited" class="swl-inherit">
         当前源已覆盖分组主流程。
         <button type="button" @click="restoreInherited">恢复 SourceGroup 继承</button>
       </div>
 
       <div v-if="compatibilityMode" class="swl-compat" data-testid="workflow-compatibility-note">
-        当前列表由旧主流程字段兼容生成；新增、关联操作仍会尝试调用多流程接口，失败时会显示后端原因。
+        <template v-if="writable">当前列表由旧主流程字段兼容生成；新增、关联操作仍会尝试调用多流程接口，失败时会显示后端原因。</template>
+        <template v-else>多流程接口尚未上线，这里只显示当前主流程。套用模板、更换、复制流程请到「流程图」顶栏操作。</template>
       </div>
 
       <el-table v-loading="loading" :data="rows" empty-text="当前源尚未关联流程" class="swl-table">
@@ -199,8 +204,8 @@ onMounted(load)
         <el-table-column label="操作" width="230" fixed="right">
           <template #default="{ row }">
             <button class="swl-op" type="button" @click="openFlow(row)">打开</button>
-            <button v-if="!row.primary" class="swl-op" type="button" @click="setPrimary(row)">设为主流程</button>
-            <button v-if="!row.inherited && !row.primary" class="swl-op danger" type="button" @click="unbind(row)">解除</button>
+            <button v-if="writable && !row.primary" class="swl-op" type="button" @click="setPrimary(row)">设为主流程</button>
+            <button v-if="writable && !row.inherited && !row.primary" class="swl-op danger" type="button" @click="unbind(row)">解除</button>
           </template>
         </el-table-column>
       </el-table>

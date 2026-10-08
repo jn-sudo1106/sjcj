@@ -3219,7 +3219,18 @@ function workflowBindingFromApi(value: unknown): WorkflowBinding {
 }
 
 /** 源多流程绑定。固定端点避免把动态 ID 拼进契约表，也便于生产写保护逐项放行。 */
+/**
+ * workflow/* 的请求入口。未标 live 时线上构建会落到 mock：读接口拿到空值、写接口拿到假的「成功」，
+ * 都比直接失败更糟。这里统一报错，读接口由 list 的兜底回退到旧 FLOW_ID（兼容模式）。
+ */
+function workflowRequest<T>(endpoint: string, params: Record<string, unknown>, options: RequestOptions): Promise<T> {
+  if (usesMockAdapter(endpoint, options)) return Promise.reject(new Error('多流程接口尚未在当前后端上线'))
+  return request<T>(endpoint, params, options)
+}
+
 export const workflowBindingApi = {
+  /** 多流程接口是否已在当前后端上线（以 endpoints.ts 的 live 标记为准）；未上线时界面不提供新建 / 复制 / 绑定 / 发布 */
+  available: (): boolean => !usesMockAdapter('workflow/sourceBindings', { httpEndpoint: 'workflow/sourceBindings' }),
   list: async (
     sourceId: string,
     options: {
@@ -3231,7 +3242,7 @@ export const workflowBindingApi = {
     try {
       // 本地演示源里保留了字母 ID；Spring 接口收 Long，发过去只会得到 400。
       if (!/^\d+$/.test(sourceId)) throw new Error('当前源使用本地演示 ID')
-      const result = await request<unknown>('workflow/sourceBindings', { sourceId }, {
+      const result = await workflowRequest<unknown>('workflow/sourceBindings', { sourceId }, {
         method: 'GET', httpEndpoint: 'workflow/sourceBindings', httpParams: { sourceId },
       })
       return (Array.isArray(result) ? result : []).map(workflowBindingFromApi)
@@ -3265,29 +3276,29 @@ export const workflowBindingApi = {
     }
   },
   bind: async (input: { sourceId: string; workflowId: string; workflowVersionId?: string; role?: WorkflowBindingRole; primary?: boolean }) =>
-    request<unknown>('workflow/bindSource', input, { method: 'POST', httpEndpoint: 'workflow/bindSource', httpParams: input }),
+    workflowRequest<unknown>('workflow/bindSource', input, { method: 'POST', httpEndpoint: 'workflow/bindSource', httpParams: input }),
   setPrimary: async (sourceId: string, workflowId: string) =>
-    request<unknown>('workflow/setPrimary', { sourceId, workflowId }, { method: 'POST', httpEndpoint: 'workflow/setPrimary', httpParams: { sourceId, workflowId } }),
+    workflowRequest<unknown>('workflow/setPrimary', { sourceId, workflowId }, { method: 'POST', httpEndpoint: 'workflow/setPrimary', httpParams: { sourceId, workflowId } }),
   unbind: async (sourceId: string, workflowId: string) =>
-    request<unknown>('workflow/unbindSource', { sourceId, workflowId }, { method: 'POST', httpEndpoint: 'workflow/unbindSource', httpParams: { sourceId, workflowId } }),
+    workflowRequest<unknown>('workflow/unbindSource', { sourceId, workflowId }, { method: 'POST', httpEndpoint: 'workflow/unbindSource', httpParams: { sourceId, workflowId } }),
   restoreInherited: async (sourceId: string): Promise<WorkflowBinding[]> => {
-    const result = await request<unknown>('workflow/restoreInherited', { sourceId }, { method: 'POST', httpEndpoint: 'workflow/restoreInherited', httpParams: { sourceId } })
+    const result = await workflowRequest<unknown>('workflow/restoreInherited', { sourceId }, { method: 'POST', httpEndpoint: 'workflow/restoreInherited', httpParams: { sourceId } })
     return (Array.isArray(result) ? result : []).map(workflowBindingFromApi)
   },
   createForSource: async (input: { sourceId: string; name: string; role?: WorkflowBindingRole; primary?: boolean }): Promise<WorkflowBinding> => {
-    const result = await request<unknown>('workflow/createForSource', input, { method: 'POST', httpEndpoint: 'workflow/createForSource', httpParams: input })
+    const result = await workflowRequest<unknown>('workflow/createForSource', input, { method: 'POST', httpEndpoint: 'workflow/createForSource', httpParams: input })
     return workflowBindingFromApi(result)
   },
   ensureDraft: async (workflowId: string): Promise<WorkflowBinding> => {
     const input = { workflowId }
-    const result = await request<unknown>('workflow/ensureDraft', input, {
+    const result = await workflowRequest<unknown>('workflow/ensureDraft', input, {
       method: 'POST', httpEndpoint: 'workflow/ensureDraft', httpParams: input,
     })
     return workflowBindingFromApi(result)
   },
   publish: async (workflowId: string): Promise<WorkflowBinding> => {
     const input = { workflowId }
-    const result = await request<unknown>('workflow/publish', input, {
+    const result = await workflowRequest<unknown>('workflow/publish', input, {
       method: 'POST', httpEndpoint: 'workflow/publish', httpParams: input,
     })
     return workflowBindingFromApi(result)

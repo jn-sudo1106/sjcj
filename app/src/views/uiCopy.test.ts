@@ -401,13 +401,12 @@ describe('最新方案 UI 入口收口', () => {
     expect(sourceBasicForm).not.toContain('使用已有配置')
   })
 
-  it('源流程头展示当前流程，不再提供向当前流程追加模板的入口', () => {
+  // 2026-10-08：套用模板 / 更换 / 复制流程只在多流程接口未上线时出现（上线后由流程标签栏负责），不能无条件渲染
+  it('源流程头展示当前流程；套用模板、更换、复制流程只在多流程接口未上线时出现', () => {
     expect(canvasHeader).toContain('当前流程：')
-    expect(canvasHeader).not.toContain('appliedTemplateLabel')
-    expect(canvasHeader).not.toContain('flow-switch-search')
-    expect(canvasHeader).not.toContain('套用流程模板')
-    expect(canvasHeader).not.toContain('replace-flow-open')
-    expect(canvasHeader).not.toContain('copy-current-flow')
+    expect(canvasHeader).toContain('const legacyFlowOps = !workflowBindingApi.available()')
+    expect(canvasHeader).toMatch(/<template v-if="legacyFlowOps">\s*<div class="ch-flow-picker">/)
+    expect(canvasHeader).toContain('if (legacyFlowOps) void loadTemplates()')
     expect(canvasHeader).not.toContain('负责人 ${s.owner}')
   })
 

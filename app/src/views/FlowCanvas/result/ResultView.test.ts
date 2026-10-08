@@ -659,7 +659,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
 
     expect(wrapper.find('[data-testid="data-scope-output"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="data-scope-input"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续')
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
     expect(wrapper.find('[data-testid="data-exec-all-btn"]').exists()).toBe(true)
   })
@@ -711,7 +711,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
 
     // 输出 tab：本节点产出数据，发给后续节点，默认允许勾选并显示发后续任务按钮
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
-    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续')
 
     await inputBtn.trigger('click')
     await flushPromises()
@@ -1164,7 +1164,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     await flushPromises()
     await selectNode(wrapper, 'first')
 
-    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续')
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
     expect(wrapper.find('[data-testid="data-exec-all-btn"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('已选 0 条')
@@ -1232,7 +1232,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
 
     // 输出 tab：本节点产物发给后续 mid 节点，默认可勾选且按钮是发后续任务
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
-    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续')
     expect(wrapper.find('[data-testid="data-exec-all-btn"]').exists()).toBe(true)
 
     await wrapper.get('[data-testid="data-scope-input"]').trigger('click')
@@ -1275,7 +1275,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
 
     const btnAfter = wrapper.get('[data-testid="data-exec-btn"]')
     expect((btnAfter.element as HTMLButtonElement).disabled).toBe(false)
-    expect(btnAfter.text()).toBe('发后续任务')
+    expect(btnAfter.text()).toBe('发后续')
     expect(wrapper.text()).toContain('已选 2 条')
 
     await btnAfter.trigger('click')
@@ -1406,7 +1406,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     await selectNode(wrapper, 'first')
 
     // 两档都在，且「发全部」是并排按钮而不是藏在下拉里（只剩一项还做成下拉是坏交互）
-    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续')
     expect(wrapper.get('[data-testid="data-exec-all-btn"]').text()).toBe('发全部（命中 0 条）')
 
     // 删掉的三个入口一个都不能回来

@@ -20,6 +20,8 @@ const addMenuOpen = ref(false)
 const copyOpen = ref(false)
 const compatibilityMode = ref(false)
 const versionBusy = ref(false)
+// 多流程接口未上线时只能看，新建 / 复制 / 草稿 / 发布都不提供（复制会先在旧接口建出流程、再绑定失败，留下孤儿流程）
+const writable = workflowBindingApi.available()
 
 const activeFlowId = computed(() => String(route.query.flowId || flow.sourceCtx?.flowId || ''))
 const activeWorkflowId = computed(() => {
@@ -245,7 +247,7 @@ onMounted(async () => {
       <span v-else-if="!loading && !rows.length" class="swt-empty">暂无流程</span>
     </div>
 
-    <div v-if="activeRow" class="swt-version-actions">
+    <div v-if="activeRow && writable" class="swt-version-actions">
       <button
         v-if="!activeRow.draftVersionId"
         class="swt-version-btn"
@@ -262,7 +264,7 @@ onMounted(async () => {
       >发布 v{{ activeRow.draftVersionNo }}</button>
     </div>
 
-    <div class="swt-add-wrap">
+    <div v-if="writable" class="swt-add-wrap">
       <button
         class="swt-add"
         type="button"
@@ -278,7 +280,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <span v-if="compatibilityMode" class="swt-compat" title="当前列表来自旧主流程字段；新增时会尝试调用多流程接口。">兼容模式</span>
+    <span v-if="compatibilityMode" class="swt-compat" :title="writable ? '当前列表来自旧主流程字段；新增时会尝试调用多流程接口。' : '多流程接口尚未上线，这里只显示当前主流程。套用模板、更换、复制流程请用画布顶栏的操作。'">兼容模式</span>
     <ReplaceFlowDialog
       v-if="copyOpen"
       v-model="copyOpen"

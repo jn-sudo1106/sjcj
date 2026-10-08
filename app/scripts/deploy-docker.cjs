@@ -224,9 +224,8 @@ async function syncFiles(conn) {
 
   const appLocalDir = path.join(rootDir, 'app')
   const count = await sftpUploadDir(sftp, appLocalDir, `${cfg.remoteDir}/app`)
-  const serviceCount = await sftpUploadDir(sftp, path.join(rootDir, 'site-script-service'), `${cfg.remoteDir}/site-script-service`)
   console.log('\n')
-  ok(`文件同步完成，已传输 ${count + serviceCount} 个文件`)
+  ok(`文件同步完成，已传输 ${count} 个文件`)
 }
 
 /**

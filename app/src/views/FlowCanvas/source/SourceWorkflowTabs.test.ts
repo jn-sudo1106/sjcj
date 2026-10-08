@@ -55,6 +55,8 @@ async function mountTabs(stubs: Record<string, object> = {}) {
 beforeEach(() => {
   vi.restoreAllMocks()
   vi.mocked(copyWholeFlow).mockReset()
+  // 本文件测的是多流程接口上线后的标签栏；未上线（只读）见文件末尾
+  vi.spyOn(workflowBindingApi, 'available').mockReturnValue(true)
 })
 
 describe('SourceWorkflowTabs', () => {
@@ -167,5 +169,23 @@ describe('SourceWorkflowTabs', () => {
     expect(router.currentRoute.value.query.workflowId).toBe('11')
     expect(router.currentRoute.value.query.flowId).toBe('21')
     expect(router.currentRoute.value.query.flowMode).toBe('list')
+  })
+})
+
+// 2026-10-08：217 上还没有 workflow/* 接口。未上线时标签栏只读——新增、复制、草稿、发布都不提供，
+// 尤其「从现有流程新建」会先用旧接口复制出流程、再绑定失败，留下没有源使用的孤儿流程。
+describe('SourceWorkflowTabs · 多流程接口未上线', () => {
+  it('只显示当前主流程，不提供新增、复制、编辑新版本、发布', async () => {
+    vi.spyOn(workflowBindingApi, 'available').mockReturnValue(false)
+    vi.spyOn(workflowBindingApi, 'list').mockImplementation(async (_sourceId, options) => {
+      options?.onCompatibility?.()
+      return [MAIN]
+    })
+    const { wrapper } = await mountTabs()
+    expect(wrapper.findAll('.swt-tab')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="workflow-add"]').exists()).toBe(false)
+    expect(wrapper.find('.swt-version-actions').exists()).toBe(false)
+    expect(wrapper.get('.swt-compat').attributes('title')).toContain('多流程接口尚未上线')
+    expect(copyWholeFlow).not.toHaveBeenCalled()
   })
 })
