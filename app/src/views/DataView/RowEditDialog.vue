@@ -13,6 +13,9 @@ const props = defineProps<{
   mode: 'add' | 'edit'
   row?: DataRow | null // edit 模式：当前行（取 dataId）
   firstRow?: DataRow | null // add 模式：当前查询结果第一行，用于推断 SOURCE_ID/CONFIG_ID
+  initialSourceId?: string // 源数据视图新增时直接带入当前源
+  initialConfigId?: string // 源数据视图新增时直接带入当前节点/首行配置
+  lockSource?: boolean // 在具体源的数据视图中禁止把数据误录到其他源
 }>()
 const emit = defineEmits<{ 'update:modelValue': [boolean]; saved: [] }>()
 
@@ -64,8 +67,8 @@ watch(() => props.modelValue, async (v) => {
       loading.value = false
     }
   } else {
-    form.SOURCE_ID = props.firstRow?.sourceId ?? ''
-    form.CONFIG_ID = props.firstRow?.configId ?? ''
+    form.SOURCE_ID = props.initialSourceId ?? props.firstRow?.sourceId ?? ''
+    form.CONFIG_ID = props.initialConfigId ?? props.firstRow?.configId ?? ''
   }
 })
 
@@ -100,7 +103,7 @@ async function onSubmit() {
     <div ref="bodyEl" class="red-body" :style="{ maxHeight: `${bodyMaxHeight}px` }">
       <el-form v-loading="loading" label-width="110px" label-position="left">
         <el-form-item label="SOURCE_ID">
-          <el-input v-model="form.SOURCE_ID" />
+          <el-input v-model="form.SOURCE_ID" :readonly="lockSource" />
         </el-form-item>
         <el-form-item label="CONFIG_ID">
           <el-input v-model="form.CONFIG_ID" />

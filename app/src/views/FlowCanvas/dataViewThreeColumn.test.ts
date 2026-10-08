@@ -14,17 +14,18 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import FlowCanvas from './index.vue'
 import { useUiStore } from '@/stores/ui'
-import { sourceApi, type Source } from '@/api'
+import { sourceApi, workflowBindingApi, type Source } from '@/api'
 
 const SOURCE = {
   sourceId: '430016398', name: 'test1', url: 'http://x.test/', configId: '1400917',
   mainTable: '6200026', owner: 'a', state: 'C',
 } as Source
 
-async function mountCanvas(view: 'flow' | 'data') {
+async function mountCanvas(view: 'overview' | 'flow' | 'data') {
   vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
   vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([])
   vi.spyOn(sourceApi, 'stepConfigDetails').mockResolvedValue([])
+  vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([])
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: '/canvas', component: { template: '<div />' } }],
@@ -38,6 +39,7 @@ async function mountCanvas(view: 'flow' | 'data') {
       plugins: [pinia, router],
       directives: { loading: {} },
       stubs: {
+        SourceSummaryView: { template: '<div data-testid="stub-summary" />' },
         FlowBoard: { template: '<div data-testid="stub-flow-board" />' },
         ResultView: { template: '<div data-testid="stub-result-view" />' },
         NodeInspector: { template: '<div data-testid="stub-inspector" />' },
@@ -126,4 +128,12 @@ describe('数据视图的三栏骨架（Z3-1/Z3-2）', () => {
     expect(shell.classes()).toContain('insp-collapsed')
     expect(shell.find('.rc-insp-splitter.placeholder').exists()).toBe(true)
   })
+})
+
+it('概览独立展示，不挂载节点配置或流程编辑区', async () => {
+  const w = await mountCanvas('overview')
+  expect(w.find('[data-testid="stub-summary"]').exists()).toBe(true)
+  expect(w.find('.rc-flow-shell').exists()).toBe(false)
+  expect(w.find('[data-testid="stub-inspector"]').exists()).toBe(false)
+  w.unmount()
 })

@@ -832,3 +832,22 @@ describe('DataGrid · 列宽拖拽与预设（0924 走查支持拉宽）', () =>
     expect(raw).not.toContain('"url":600')
   })
 })
+
+it('列工具可合并到外部工具栏，仍能打开列选择且卸载后清理', async () => {
+  const target = document.createElement('div')
+  document.body.appendChild(target)
+  const wrapper = mount(DataGrid, {
+    props: { toolbarTarget: target, rows: [], meta: { tableId: 'toolbar-test', tableName: '表', rowCount: 0, fields: [{ prop: 'name', type: 'string', desc: '名称' }] } },
+    global: { stubs: GRID_STUBS },
+  })
+  await flushPromises()
+  expect(wrapper.find('.dg-toolbar').exists()).toBe(false)
+  const button = target.querySelector<HTMLButtonElement>('[data-testid="column-picker-btn"]')
+  expect(button).not.toBeNull()
+  button!.click()
+  await flushPromises()
+  expect(wrapper.findComponent({ name: 'ColumnPickerDialog' }).props('open')).toBe(true)
+  wrapper.unmount()
+  expect(target.children).toHaveLength(0)
+  target.remove()
+})

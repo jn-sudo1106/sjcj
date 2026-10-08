@@ -80,7 +80,7 @@ describe('TaskTab · 上下文来源（对齐旧平台）', () => {
   it('是一个多选下拉，不再是「每行一个 select + 添加/删除」', async () => {
     const { wrapper } = await mountTaskTab()
     expect(select(wrapper).props('multiple')).toBe(true)
-    expect(wrapper.text()).not.toContain('+ 添加字段')
+    expect(wrapper.find('[data-testid="context-map-select"] .rc-row-del').exists()).toBe(false)
   })
 
   it('选中后按 columnName 写回 taskCfg.contextMap', async () => {
@@ -150,4 +150,14 @@ describe('TaskTab · 默认队列名称（2026-09-23 用户拍板）', () => {
     const queueInput = wrapper.findAll('.rc-field').find((f) => f.text().includes('队列名称'))?.find('input')
     expect(queueInput?.element.value).toBe(expectedQueue)
   })
+})
+
+it('任务配置中的出参列继续写入当前节点 taskCfg', async () => {
+  const { flow, wrapper } = await mountTaskTab()
+  flow.configs['web-1'].collectCfg!.outputTable = '900'
+  await flushPromises()
+  await wrapper.get('.pt-outcols .rc-btn').trigger('click')
+  await flushPromises()
+  expect(flow.configs['web-1'].taskCfg?.outColumns).toHaveLength(1)
+  wrapper.unmount()
 })

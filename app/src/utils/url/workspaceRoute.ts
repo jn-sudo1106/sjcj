@@ -1,6 +1,6 @@
 import type { Source } from '@/api'
 
-export type SourceWorkspaceView = 'flow' | 'data' | 'file' | 'task' | 'monitor-config'
+export type SourceWorkspaceView = 'overview' | 'flow' | 'data' | 'file' | 'task' | 'monitor-config'
 // 网站详情页视图。monitor（数据源告警）2026-09-10 接入，枚举位此前已占好。
 //
 // task（0915-05，2026-09-16）：**推翻 0812 会议「网站汇总态没有任务页签」的结论**。
@@ -13,10 +13,9 @@ export function firstSourceId(sources: Pick<Source, 'sourceId'>[]): string {
   return sources[0]?.sourceId ?? ''
 }
 
-// 缺省落**数据视图**（2026-09-18 改，原先是流程视图）：进来先看抓到了什么，
-// 而不是先看怎么抓的——后者是配置态，只在要改配置时才需要。
+// 首次打开源先看概览；显式指定的工作视图保持不变。
 export function normalizeSourceView(view: unknown): SourceWorkspaceView {
-  return view === 'flow' || view === 'data' || view === 'task' || view === 'file' || view === 'monitor-config' ? view : 'data'
+  return view === 'overview' || view === 'flow' || view === 'data' || view === 'task' || view === 'file' || view === 'monitor-config' ? view : 'overview'
 }
 
 export function normalizeSiteView(view: unknown): SiteWorkspaceView {

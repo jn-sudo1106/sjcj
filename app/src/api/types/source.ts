@@ -36,6 +36,17 @@ export interface Source {
    *  （0903 H1 答复），所以这个字段决定这个源实际跑哪一套配置。
    *  2026-09-04 实测：`sourcePaged` 与 `sourceDetail` 都已返回（sourceDetail 是后端本次新加的）。 */
   flowId?: string
+  /** 当前源的主流程。多流程页面中 flowId 表示正在查看/编辑的流程，primaryFlowId 仍指向实际执行入口。 */
+  primaryFlowId?: string
+  /** 多流程模型中的稳定流程 ID；flowId 是当前查看的发布副本或草稿工作副本 ID。 */
+  activeWorkflowId?: string
+  primaryWorkflowId?: string
+  workflowVersionStatus?: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'
+  workflowVersionNo?: number
+  /** false 表示后端版本接口尚未部署，继续使用旧 flowId 编辑语义，不启用发布版只读锁。 */
+  workflowVersionManaged?: boolean
+  publishedFlowId?: string
+  draftFlowId?: string
   /** 源所属流程的真实 ROOT 步骤 ID（只读，后端源列表/详情返回；新平台 ROOT 权威方案下
    *  首任务配置挂在 cs_item_config(IS_ROOT=1) 行上，cs_source.CONFIG_ID 已退出执行语义）。 */
   rootId?: string
@@ -131,6 +142,41 @@ export interface Source {
    *  分组由 views/FlowCanvas/source/ParamSourceEditor.vue 的分组选择器维护（新建组/选组/取消组），
    *  展开算法见 utils/flow/urlParams.ts 的 ParamGroupRef / joinType() / groupMismatchWarnings()。 */
   paramRefs?: { paramId: string; group?: string | null }[]
+}
+
+export type WorkflowBindingRole = 'MAIN' | 'BACKFILL' | 'AUX'
+export type WorkflowVersionStatus = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'
+
+/** 源（或其 SourceGroup）与流程的有效绑定。inherited=true 表示本行继承自 SourceGroup。 */
+export interface WorkflowBinding {
+  id: string
+  bindType: 'SOURCE_GROUP' | 'SOURCE'
+  bindId: string
+  workflowId: string
+  workflowVersionId?: string
+  workflowCode: string
+  workflowName: string
+  description?: string
+  versionNo?: number
+  /** 当前已发布版本；没有值表示流程尚未发布。 */
+  publishedVersionId?: string
+  publishedVersionNo?: number
+  publishedFlowId?: string
+  /** 当前可编辑草稿；草稿使用独立 cs_flow 工作副本，不影响 publishedFlowId。 */
+  draftVersionId?: string
+  draftVersionNo?: number
+  draftFlowId?: string
+  versionStatus: WorkflowVersionStatus
+  workflowStatus: 'ACTIVE' | 'DISABLED'
+  /** 是否来自正式 workflow/workflow_version 接口；旧接口兼容行为 false。 */
+  versionManaged?: boolean
+  followsCurrentVersion: boolean
+  role: WorkflowBindingRole
+  primary: boolean
+  priority: number
+  status: 'ACTIVE' | 'DISABLED'
+  inherited: boolean
+  updatedAt?: string
 }
 
 /** 同站源下拉选项（source/sourceSame，旧口径「[id]名称」，非完整 Source） */
@@ -616,10 +662,10 @@ export interface SourceLog {
   at: string
 }
 
-/** 源任务视图查询：默认收窄当前源；不传 sourceId 时查询网站下全部源。
+/** 任务查询：源态收窄当前源、网站态传 siteScopeId、任务中心两者都不传即查全平台。
  *  真实接口是 task/topTaskPaged：nodeId 只给 mock 按步骤筛；live 用该节点的 configId。 */
 export interface SourceTaskQuery extends PageQuery {
-  siteId: string
+  siteId: string // 当前页面上下文；全局任务中心传空串，不作为后端筛选条件
   sourceId?: string
   /**
    * 按网站圈定来源（后端 2026-09-16 加、2026-09-17 修好 SQL）——**作为筛选条件的站点**，

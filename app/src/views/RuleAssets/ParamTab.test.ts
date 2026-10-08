@@ -5,7 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus, { ElMessageBox } from 'element-plus'
 import ParamTab from './ParamTab.vue'
 import { useAuthStore } from '../../stores/auth'
-import { paramApi, type Param } from '../../api'
+import { configApi, paramApi, type Param } from '../../api'
 
 // D3（0717 参数方案）：read 角色隐藏参数页写操作，直接置 auth store state 模拟角色，不经登录接口
 describe('ParamTab 角色权限', () => {
@@ -20,7 +20,7 @@ describe('ParamTab 角色权限', () => {
   })
 
   function mountTab() {
-    wrapper = mount(ParamTab, { global: { plugins: [ElementPlus] } })
+    wrapper = mount(ParamTab, { global: { plugins: [ElementPlus], stubs: { RouterLink: { props: ['to'], template: '<a><slot /></a>' } } } })
     return wrapper
   }
 
@@ -59,6 +59,15 @@ describe('ParamTab 角色权限', () => {
     expect(wrapper.text()).toContain('详情')
   })
 
+  it('选择参数类型后重置到第一页并按类型查询', async () => {
+    const pagedSpy = vi.spyOn(paramApi, 'paramPaged')
+    mountTab()
+    await waitForLoad()
+    await wrapper.get('select[aria-label="按参数类型筛选"]').setValue('date_sequence')
+    await flushPromises()
+    expect(pagedSpy).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, kind: 'date_sequence' }))
+  })
+
   it('批量删除成功后刷新列表，不再调 config/clear', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
@@ -94,6 +103,21 @@ describe('ParamTab 角色权限', () => {
 
     expect(wrapper.text()).toContain('绑定参数源')
     expect(wrapper.text()).toContain('测试参数源')
+  })
+
+  it('使用位置展示参数源和真实配置绑定', async () => {
+    vi.spyOn(paramApi, 'paramPaged').mockResolvedValue({
+      total: 1,
+      list: [{ paramId: 'p1', name: '页码', kind: 'sequence', paramSourceRefs: [{ sourceId: 's1', sourceName: '基金源' }] } as Param],
+    })
+    vi.spyOn(configApi, 'configPaged').mockResolvedValue({ total: 1, list: [{ configId: 'c1', name: '抓取任务配置' } as never] })
+    vi.spyOn(configApi, 'configParams').mockResolvedValue({ total: 1, list: [{ id: 'cp1', paramId: 'p1', paramName: '页码' }] })
+    mountTab()
+    await flushPromises()
+    await wrapper.findAll('button').find((button) => button.text() === '使用位置')!.trigger('click')
+    await flushPromises()
+    expect(document.body.textContent).toContain('抓取任务配置')
+    expect(document.body.textContent).toContain('基金源')
   })
 
   it('新建参数（onParamSaved）：保存后刷新列表，不再清缓存', async () => {

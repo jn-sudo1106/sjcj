@@ -302,6 +302,7 @@ function onRowClick(row: DataRow) {
 <template>
   <div class="dqp">
     <div class="rc-toolbar wrap dqp-primary-row" data-testid="data-query-primary">
+      <div v-if="$slots.context" class="dqp-context"><slot name="context" /></div>
       <el-input v-model="dataId" class="dqp-data-id" clearable placeholder="请输入数据 ID" style="width: 160px" />
       <el-input v-model="parentId" class="dqp-parent-id" clearable placeholder="父 ID" style="width: 120px" />
       <el-select
@@ -462,7 +463,8 @@ function onRowClick(row: DataRow) {
 
 <style scoped>
 .dqp { display: flex; flex: 1; min-height: 0; flex-direction: column; }
-.dqp-primary-row { align-items: center; gap: 8px; }
+.dqp-primary-row { align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; }
+.dqp-context { display: inline-flex; align-items: center; gap: 6px; padding-right: 10px; margin-right: 2px; border-right: 1px solid var(--rc-border-soft); }
 .dqp-chips-row { min-height: 0; padding-top: 8px; padding-bottom: 8px; }
 .dqp-query-row { align-items: center; gap: 8px; padding-top: 4px; padding-bottom: 8px; }
 .dqp-advanced-toggle { white-space: nowrap; }
@@ -488,6 +490,7 @@ function onRowClick(row: DataRow) {
 .rc-btn:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rc-btn.primary { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }
 @media (max-width: 900px) {
+  .dqp-context { flex-wrap: wrap; border-right: 0; padding-right: 0; }
   .dqp-query-row > :deep(.el-input), .dqp-query-row > :deep(.el-autocomplete) { width: 100% !important; max-width: 320px; }
   .dqp-range { width: 100%; }
   .dqp-range :deep(.el-input) { flex: 1; width: auto !important; }

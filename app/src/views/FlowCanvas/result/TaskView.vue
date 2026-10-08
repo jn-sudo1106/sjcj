@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { dataApi, siteApi, sourceApi, type NodeRunStat, type Source, type Step, type TaskInst } from '@/api'
@@ -15,6 +15,7 @@ import RailNodePicker from './components/RailNodePicker.vue'
 import RailCollapseButton from './components/RailCollapseButton.vue'
 import { initialRailOpen, readResultRailHeight } from './resultLayoutPref'
 import SiteSourceSelect from './components/SiteSourceSelect.vue'
+import GlobalSourceSelect from './components/GlobalSourceSelect.vue'
 import TaskDetailDrawer from './TaskDetailDrawer.vue'
 import { buildHorizontalLayout, nodeTaskQueue } from '@/views/FlowCanvas/canvas/flowModel'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -37,14 +38,14 @@ function pickRailNode(id: string) {
 // 0915-05（2026-09-16）：`siteWide` 此前只有单测在用，页面上没有任何入口渲染过它。
 // 接进网站详情页时补了两处——① siteId 不能再只从 `flow.sourceCtx` 取（网站态压根没有 sourceCtx，
 // 取到空串会被 loadTasks 的守卫短路成空列表）；② 空态判定同理，见下方 hasContext。
-const props = defineProps<{ siteWide?: boolean; siteId?: string }>()
+const props = defineProps<{ siteWide?: boolean; siteId?: string; global?: boolean }>()
 const flow = useFlowStore()
 const source = computed(() => flow.sourceCtx)
-const sourceId = computed(() => source.value?.sourceId ?? '')
+const sourceId = computed(() => props.global ? '' : (source.value?.sourceId ?? ''))
 // 网站态由 props 给；源态仍从当前源的上下文取。
-const siteId = computed(() => props.siteId || source.value?.siteId || '')
+const siteId = computed(() => props.global ? '' : (props.siteId || source.value?.siteId || ''))
 /** 有没有查询上下文：网站态只要有 siteId，源态要有 sourceCtx。 */
-const hasContext = computed(() => (props.siteWide ? !!siteId.value : !!source.value))
+const hasContext = computed(() => props.global || (props.siteWide ? !!siteId.value : !!source.value))
 
 /**
  * 网站态「全部源」的查询范围（0915-05 / 后端需求 B15）。
@@ -64,6 +65,7 @@ const siteScopeId = computed(() => (props.siteWide && !filters.sourceId ? siteId
  */
 const siteWideBlocked = computed(() => !!props.siteWide && !filters.sourceId && !siteScopeId.value)
 const siteSources = ref<Source[]>([])
+const globalSourceNames = ref<Record<string, string>>({})
 const stepsBySource = ref<Record<string, Step[]>>({})
 const nodeRunsBySource = ref<Record<string, NodeRunStat[]>>({})
 const rows = ref<TaskInst[]>([])
@@ -133,7 +135,7 @@ const searchField = ref<TaskSearchField>('taskId')
 const searchText = ref('')
 const searchPlaceholder = computed(() => TASK_SEARCH_FIELDS.find((f) => f.value === searchField.value)?.placeholder ?? '')
 const processLayout = computed(() => buildHorizontalLayout(flow.main, flow.branches, flow.configs, flow.branchGroups, { includeTerminals: false }))
-const sourceNames = computed(() => Object.fromEntries(siteSources.value.map((item) => [item.sourceId, item.name])))
+const sourceNames = computed(() => ({ ...globalSourceNames.value, ...Object.fromEntries(siteSources.value.map((item) => [item.sourceId, item.name])) }))
 /**
  * 「所属源」列（0917-02 起可点）。
  *
@@ -182,8 +184,10 @@ const availableQueues = computed(() => {
       if (run.queue) set.add(run.queue)
     }
   }
-  for (const cfg of Object.values(flow.configs)) {
-    if (cfg.taskCfg?.queue) set.add(cfg.taskCfg.queue)
+  if (!props.global) {
+    for (const cfg of Object.values(flow.configs)) {
+      if (cfg.taskCfg?.queue) set.add(cfg.taskCfg.queue)
+    }
   }
   for (const row of rows.value) {
     if (row.topic) set.add(row.topic)
@@ -200,7 +204,7 @@ async function loadNodeMetadata() {
   // 选定某个源后即恢复完整信息，这是本视图里唯一需要节点元数据的场景。
   const sourceIds = filters.sourceId
     ? [filters.sourceId]
-    : props.siteWide ? [] : siteSources.value.map((source) => source.sourceId)
+    : props.siteWide || props.global ? [] : siteSources.value.map((source) => source.sourceId)
   if (!sourceIds.length) {
     stepsBySource.value = {}
     nodeRunsBySource.value = {}
@@ -223,6 +227,7 @@ async function loadNodeMetadata() {
 }
 
 async function loadSiteSources() {
+  if (props.global) return
   const currentSiteId = siteId.value
   if (!currentSiteId) {
     siteSources.value = []
@@ -243,7 +248,7 @@ async function loadSiteSources() {
 
 function configIdForNode(nodeId: string): string | undefined {
   if (!nodeId) return undefined
-  const fromFlow = flow.configs[nodeId]?.configId
+  const fromFlow = props.global ? undefined : flow.configs[nodeId]?.configId
   if (fromFlow) return fromFlow
   return filterSteps.value.find((step) => step.stepId === nodeId)?.configId || undefined
 }
@@ -264,6 +269,7 @@ const autoRefresh = ref(false)
 const auth = useAuthStore()
 const canWrite = computed(() => auth.role === 'admin')
 const router = useRouter()
+const route = useRoute()
 const ws = useWorkspaceStore()
 const detailTask = ref<TaskInst | null>(null)
 const detailVisible = ref(false)
@@ -333,9 +339,11 @@ function dataStepIdOfTask(task: TaskInst): string {
   return upstream?.stepId ?? own
 }
 
-function onLocateData(task: TaskInst) {
+async function onLocateData(task: TaskInst) {
   const dataId = taskDataId(task)
   if (!dataId) return
+  // 全局/网站任务列表不预加载全部源的步骤，定位单条数据时再查它所属源。
+  if (!stepsBySource.value[task.sourceId]) await ensureSourceMetadata(task.sourceId)
   const nodeId = dataStepIdOfTask(task)
   void router.push({
     path: '/canvas',
@@ -391,6 +399,20 @@ watch(autoRefresh, (on) => {
 onUnmounted(stopPoll)
 
 let taskRequest = 0
+async function loadGlobalSourceNames(tasks: TaskInst[]) {
+  if (!props.global) return
+  const ids = [...new Set(tasks.map((task) => task.sourceId).filter((id) => id && !globalSourceNames.value[id]))]
+  if (!ids.length) return
+  try {
+    const result = await sourceApi.sourcePaged({ sourceIds: ids, page: 1, size: ids.length })
+    globalSourceNames.value = {
+      ...globalSourceNames.value,
+      ...Object.fromEntries(result.list.map((item) => [item.sourceId, item.name])),
+    }
+  } catch {
+    // 源名查询失败仍显示源 ID，不影响任务列表。
+  }
+}
 async function loadTasks(opts: { silent?: boolean } = {}) {
   const requestId = ++taskRequest
   const query = {
@@ -411,7 +433,7 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
     page: page.value,
     size: size.value,
   }
-  if (!query.siteId || siteWideBlocked.value) {
+  if ((!props.global && !query.siteId) || siteWideBlocked.value) {
     rows.value = []
     total.value = 0
     return
@@ -422,6 +444,7 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
     if (requestId !== taskRequest) return
     rows.value = result?.list ?? []
     total.value = result?.total ?? 0
+    void loadGlobalSourceNames(rows.value)
   } catch (error) {
     if (requestId !== taskRequest) return
     if (!opts.silent) {
@@ -439,16 +462,16 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
 
 watch([siteId, sourceId], async () => {
   page.value = 1
-  filters.sourceId = props.siteWide ? '' : sourceId.value
+  filters.sourceId = props.siteWide || props.global ? '' : sourceId.value
   filters.nodeId = ''
-  filters.state = ''
+  filters.state = props.global ? String(Array.isArray(route.query.state) ? route.query.state[0] ?? '' : route.query.state ?? '') : ''
   filters.queue = ''
   filters.taskId = ''
   filters.parentId = ''
   filters.taskUrl = ''
   filters.startTime = ''
   filters.endTime = ''
-  Object.assign(form, { nodeId: '', state: '', queue: '', startTime: '', endTime: '' })
+  Object.assign(form, { nodeId: '', state: filters.state, queue: '', startTime: '', endTime: '' })
   searchText.value = ''
   await loadSiteSources()
 }, { immediate: true })
@@ -522,7 +545,7 @@ function resetFilters() {
   Object.assign(form, { nodeId: '', state: '', queue: '', startTime: '', endTime: '' })
   searchText.value = ''
   const sourceBefore = filters.sourceId
-  filters.sourceId = props.siteWide ? '' : sourceId.value
+  filters.sourceId = props.siteWide || props.global ? '' : sourceId.value
   const changed = filtersDirty.value || filters.sourceId !== sourceBefore
   Object.assign(filters, draftConditions())
   if (!changed) {
@@ -537,7 +560,7 @@ function nodeName(task: TaskInst): string {
   if (byStepId) return byStepId.name
   const byConfig = task.configId ? steps.find((step) => step.configId === task.configId) : undefined
   if (byConfig) return byConfig.name
-  const fromFlow = task.configId
+  const fromFlow = !props.global && task.configId
     ? Object.values(flow.configs).find((cfg) => cfg.configId === task.configId)?.title
     : undefined
   return fromFlow || task.node || '—'
@@ -572,6 +595,7 @@ function onSizeChange() {
 }
 
 const nextStepHints = computed(() => {
+  if (props.global) return []
   if (!filters.nodeId) return []
   return nextStepTokens({
     main: flow.main,
@@ -585,11 +609,15 @@ const nextStepHints = computed(() => {
 
 <template>
   <main class="tv-shell">
-    <CanvasHeader v-if="!siteWide" />
+    <CanvasHeader v-if="!siteWide && !global" />
     <div class="tv-body">
       <div v-if="!hasContext" class="tv-empty-row">{{ siteWide ? '未指定网站，无法查看任务。' : '任务视图仅在源详情下可用。' }}</div>
       <template v-else>
-        <template v-if="!siteWide && railOpen">
+        <div v-if="global" class="tv-global-head">
+          <div class="tv-global-title">任务中心</div>
+          <div class="tv-global-sub">查看和管理全部源的任务，可按源、节点、状态和创建时间筛选。</div>
+        </div>
+        <template v-if="!siteWide && !global && railOpen">
           <!-- 展开后与源数据视图一致：节点下拉隐藏，收起按钮在流程图右上角 -->
           <div class="tv-railbox">
             <div class="tv-process-rail" data-testid="task-process-rail" :style="{ maxHeight: `${railHeight}px` }">
@@ -609,9 +637,10 @@ const nextStepHints = computed(() => {
                而节点下拉在没选源时本来就是空的——loadNodeMetadata 在网站态未选源时不拉
                步骤元数据（6496 个源要打一万多个请求），所以它当时只剩一个「全部节点」。 -->
           <SiteSourceSelect v-if="siteWide && siteId" v-model="filters.sourceId" :site-id="siteId" />
+          <GlobalSourceSelect v-if="global" v-model="filters.sourceId" data-testid="task-global-source-filter" />
           <!-- 源画布：节点下拉 + 流程图开合并进筛选行首位（0930-02），不单独占一行 -->
           <RailNodePicker
-            v-if="!siteWide && !railOpen"
+            v-if="!siteWide && !global && !railOpen"
             v-model:open="railOpen"
             :model-value="filters.nodeId"
             :nodes="railNodeOptions"
@@ -619,7 +648,7 @@ const nextStepHints = computed(() => {
             toggle-testid="task-rail-toggle"
             @update:model-value="pickRailNode"
           />
-          <select v-if="siteWide && filters.sourceId" v-model="form.nodeId" class="tv-input" data-testid="task-node-filter" aria-label="流程节点">
+          <select v-if="(siteWide || global) && filters.sourceId" v-model="form.nodeId" class="tv-input" data-testid="task-node-filter" aria-label="流程节点">
             <option value="">全部节点</option>
             <option v-for="step in filterSteps" :key="`${step.sourceId}-${step.stepId}`" :value="step.stepId">{{ showSourceColumn ? `${sourceNames[step.sourceId] || step.sourceId} · ${step.name}` : step.name }}</option>
           </select>
@@ -823,6 +852,9 @@ const nextStepHints = computed(() => {
 <style scoped>
 .tv-shell { display: flex; flex-direction: column; height: 100%; overflow: hidden; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); }
 .tv-body { flex: 1; overflow: auto; padding: 12px; }
+.tv-global-head { margin: 2px 0 14px; }
+.tv-global-title { color: var(--rc-text); font-size: 17px; font-weight: 700; }
+.tv-global-sub { margin-top: 4px; color: var(--rc-muted); font-size: 12px; }
 .tv-rail-resize { margin: 2px 0 10px; border-radius: 3px; }
 .tv-railbox { position: relative; }
 .tv-process-rail { min-height: 80px; overflow: auto; background: #f8fafc; border: 1px solid var(--rc-border-soft); border-radius: 6px; }

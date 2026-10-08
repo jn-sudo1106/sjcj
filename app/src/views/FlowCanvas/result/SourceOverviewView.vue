@@ -21,6 +21,8 @@ import {
 } from '@/utils/sourceMark'
 import SourceMarkPopover from './SourceMarkPopover.vue'
 import EditSourceMarkDialog from './EditSourceMarkDialog.vue'
+import GroupAssignmentDialog from '@/views/CollectAssets/GroupAssignmentDialog.vue'
+import { scopedSourceIds } from './sourceScope'
 import LaunchConfirmDialog from './LaunchConfirmDialog.vue'
 import SourceParamModal from '@/views/FlowCanvas/source/SourceParamModal.vue'
 import { hasLoadParams, normalizeLoadParams } from '@/views/FlowCanvas/source/paramNormalize'
@@ -72,9 +74,9 @@ const props = defineProps<{
    */
   scopeSiteIds?: string[]
   /**
-   * 只查这些源（采集资产「我的收藏」页签，0924-08）。语义同 scopeSiteIds：`undefined` = 不限；
-   * 空数组 = 范围为空，直接空态、不发请求（空的 ids 会被后端当成"不限"返回全部源）。
-   * 与「源 ID」查询条件同时存在时取交集。
+   * 固定源范围（「我的收藏」的收藏源 0924-08 / 「我的分组」的分组源）。语义同 scopeSiteIds：
+   * `undefined` = 不限；空数组 = 范围为空，直接空态、不发请求（空的 ids 会被后端当成"不限"返回全部源）。
+   * 与「源 ID」查询条件同时存在时取交集；清空查询条件也不解除此范围。
    */
   scopeSourceIds?: string[]
   /** 范围为空时的空态文案（如最近打开一个都没有） */
@@ -216,19 +218,9 @@ const siteFilterOptions = computed(() => {
 /** 范围给了但是空的：不发请求，直接空态 */
 const scopeEmpty = computed(() => (crossSite.value && !!props.scopeSiteIds && props.scopeSiteIds.length === 0)
   || (!!props.scopeSourceIds && props.scopeSourceIds.length === 0))
-/**
- * 实际发给后端的源 ID（逗号分隔）。有源范围（收藏）时与「源 ID」条件取交集；
- * 交集为空返回空串——调用方必须当"什么都不查"，不能原样发出去（空 ids = 不限）。
- */
-function effectiveSourceIds(condIds?: string): string | undefined {
-  if (!props.scopeSourceIds) return condIds
-  if (!condIds) return props.scopeSourceIds.join(',')
-  const scope = new Set(props.scopeSourceIds)
-  return condIds.split(/[\s,，]+/).filter((id) => scope.has(id)).join(',')
-}
 /** 当前条件在范围内必然一个都查不到：列表、导出、按条件发任务都不能发请求，否则会变成"不限" */
 const noScopeMatch = computed(() => scopeEmpty.value
-  || (!!props.scopeSourceIds && effectiveSourceIds(sourceConditionParams(conditions.value).sourceIds) === ''))
+  || scopedSourceIds(props.scopeSourceIds, sourceConditionParams(conditions.value).sourceIds) === '')
 /** 实际发给后端的 siteIds（逗号分隔）。当前网站 > 网站筛选 > 页签范围 > 不限 */
 function effectiveSiteIds(): string | undefined {
   if (props.currentSiteId) return props.currentSiteId
@@ -296,7 +288,7 @@ function currentQuery(): SourceFilter {
   const cond = sourceConditionParams(conditions.value)
   return {
     siteIds: effectiveSiteIds(),
-    sourceIds: effectiveSourceIds(cond.sourceIds),
+    sourceIds: scopedSourceIds(props.scopeSourceIds, cond.sourceIds),
     flowId: cond.flowId,
     name: cond.name,
     sourceUrl: cond.sourceUrl,
@@ -313,6 +305,7 @@ function currentQuery(): SourceFilter {
 }
 
 async function fetchSourcePage(query: SourceFilter & { page: number; size: number }) {
+  if (query.sourceIds === '') return { list: [], total: 0 }
   return sourceApi.sourcePaged(query)
 }
 
@@ -398,6 +391,7 @@ function sourceState(source: Source) {
 // 复用已有接口，不新起批量端点：发抓取用 sendSnatchWithParam（与单源同一个，ids 传多个），
 // 启停用 changeSourceEnable 逐个调（后端没有批量启停端点，旧平台源列表页也是自己循环调的）。
 const selectedIds = ref<string[]>([])
+const groupAssignmentOpen = ref(false)
 const selectedSet = computed(() => new Set(selectedIds.value))
 const selectMode = computed(() => selectedIds.value.length > 0)
 const selectedSources = computed(() => rows.value.filter((r) => selectedSet.value.has(r.sourceId)))
@@ -927,9 +921,11 @@ function onMarkEdited(payload: { tags: string[]; remark: string }) {
 async function loadTagCandidates() {
   try {
     const cond = sourceConditionParams(conditions.value)
+    const sourceIds = scopedSourceIds(props.scopeSourceIds, cond.sourceIds)
+    if (sourceIds === '') { serverTags.value = []; return }
     serverTags.value = await sourceApi.sourceTags({
       siteIds: effectiveSiteIds(),
-      sourceIds: cond.sourceIds,
+      sourceIds,
       name: cond.name,
     })
   } catch {
@@ -959,8 +955,9 @@ watch(() => props.currentSiteId, () => {
   void loadSources()
   void loadTagCandidates()
 })
-// 收藏的源变了（在本页取消了收藏）：重查，「我的收藏」里就不再有它
+// 源范围变了（本页取消了收藏 / 切了分组）：清掉勾选再重查，「我的收藏」里就不再有它
 watch(() => (props.scopeSourceIds ? props.scopeSourceIds.join(',') : null), () => {
+  clearSelection()
   page.value = 1
   void loadSources()
 })
@@ -1097,6 +1094,8 @@ watch(() => ui.sourceListRevision, () => {
       <button v-if="failedBatches.length" class="sov-btn" type="button" data-testid="source-retry-failed" @click="retryFailedBatches">重试失败批次（{{ failedBatches.reduce((n, b) => n + b.ids.length, 0) }}）</button>
       <template v-if="selectMode">
         <span class="sov-batch-count" data-testid="source-batch-count">已选 {{ selectedIds.length }}</span>
+        <button class="sov-btn" type="button" @click="groupAssignmentOpen = true">加入分组</button>
+        <slot name="selection-actions" :ids="selectedIds" />
         <div ref="markAnchorRef" class="sov-mark-anchor">
           <button class="sov-btn sov-mark-btn" type="button" data-testid="batch-mark" :aria-expanded="markOpen" @click="toggleMarkPopover">添加标记</button>
           <SourceMarkPopover
@@ -1283,6 +1282,7 @@ watch(() => ui.sourceListRevision, () => {
       @confirm="confirmLaunch"
       @close="closeLaunch"
     />
+    <GroupAssignmentDialog v-if="groupAssignmentOpen" v-model="groupAssignmentOpen" :source-ids="selectedIds" />
     <SourceParamModal ref="paramModalRef" :callback="sendWithParamsCallback" />
   </section>
 </template>

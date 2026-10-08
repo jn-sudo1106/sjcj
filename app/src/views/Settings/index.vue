@@ -8,10 +8,20 @@ import { useRoute, useRouter } from 'vue-router'
 import { canAccess } from '@/composables/usePermission'
 import NodeTypeTab from './NodeTypeTab.vue'
 import CategoryTab from './CategoryTab.vue'
+import RunnerManagementTab from './RunnerManagementTab.vue'
+import CodeManagementTab from './CodeManagementTab.vue'
+import CodeRepositoryTab from './CodeRepositoryTab.vue'
+import DirectoryLayoutTab from './DirectoryLayoutTab.vue'
 
 const ALL_TABS: { key: string; label: string; permission: string; comp: Component }[] = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', comp: NodeTypeTab },
   { key: 'category', label: '分类目录', permission: 'settings:category', comp: CategoryTab },
+  { key: 'runners', label: 'Runner 实例', permission: 'settings:runners', comp: RunnerManagementTab },
+  { key: 'assignments', label: '队列分配', permission: 'settings:assignments', comp: RunnerManagementTab },
+  { key: 'site-code', label: '节点代码', permission: 'settings:releases', comp: CodeManagementTab },
+  { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', comp: CodeRepositoryTab },
+  { key: 'directory-layout', label: '下发目录', permission: 'settings:releases', comp: DirectoryLayoutTab },
+  { key: 'releases', label: '发布版本', permission: 'settings:releases', comp: RunnerManagementTab },
 ]
 const tabs = computed(() => ALL_TABS.filter((t) => canAccess(t.permission)))
 
@@ -32,6 +42,9 @@ watch(() => route.query.tab, (tab) => {
 function selectTab(key: string) {
   void router.replace({ path: '/settings', query: key === tabs.value[0]?.key ? {} : { tab: key } })
 }
+function editDirectory(codeId: string) {
+  void router.replace({ path: '/settings', query: { tab: 'directory-layout', codeId } })
+}
 </script>
 
 <template>
@@ -50,7 +63,7 @@ function selectTab(key: string) {
     </div>
     <div class="st-content">
       <KeepAlive>
-        <component :is="active.comp" v-if="active" :key="active.key" />
+        <component :is="active.comp" v-if="active" :key="active.key" :section="active.key" @edit-directory="editDirectory" />
       </KeepAlive>
     </div>
   </div>
@@ -61,6 +74,7 @@ function selectTab(key: string) {
 .st-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .st-tabs-inner {
   display: inline-flex;
+  flex-wrap: wrap;
   align-self: flex-start;
   padding: 4px;
   background: #f1f5f9;

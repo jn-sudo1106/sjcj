@@ -197,9 +197,9 @@ describe('最新方案 UI 入口收口', () => {
     expect(tableView).toContain('{{ formatDataCount(site) }}')
   })
 
-  // 2026-09-18：点源落**数据视图**（原先是流程视图）——进来先看抓到了什么。
-  it('采集资产卡片的源直达数据视图，卡片底部不再提供任务入口', () => {
-    expect(siteCardGrid).toContain("query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, view: 'data' }")
+  // 点源先落概览，明确的查看数据动作才直达数据视图。
+  it('采集资产卡片的源直达概览视图，卡片底部不再提供任务入口', () => {
+    expect(siteCardGrid).toContain("sourceId: s.sourceId, view: 'overview'")
     expect(siteCardGrid).not.toContain('scg-foot-task')
     expect(siteCardGrid).not.toContain('openSiteTask')
   })
@@ -267,9 +267,9 @@ describe('最新方案 UI 入口收口', () => {
     expect(nodeInspector).not.toContain('源信息（各节点共享）')
     expect(canvasHeader).not.toContain('@click="openEdit"')
     expect(canvasHeader).not.toContain('同步到源')
-    expect(canvasHeader).toContain('class="ch-canvas-actions"')
-    expect(canvasHeader).toContain('v-if="view === \'flow\'" class="ch-actions"')
-    expect(canvasHeader).toContain('v-if="view === \'flow\'" class="ch-canvas-actions"')
+    expect(canvasHeader).toContain('class="ch-flow-mode-actions"')
+    expect(canvasHeader).toContain('v-if="view === \'flow\' && flowMode === \'canvas\'" class="ch-actions"')
+    expect(canvasHeader).not.toContain('class="ch-canvas-actions"')
     expect(canvasHeader).not.toContain('<Teleport')
     expect(flowBoard).toContain("import FlowXmlDialog from './FlowXmlDialog.vue'")
     expect(flowBoard).toContain('rc-flow-xml')
@@ -333,7 +333,7 @@ describe('最新方案 UI 入口收口', () => {
     expect(collectAssetsIndex).not.toContain("import ParamTab from './ParamTab.vue'")
     expect(collectAssetsIndex).not.toContain("{ key: 'param', label: '参数列表' }")
     expect(ruleAssetsIndex).toContain("import ParamTab from './ParamTab.vue'")
-    expect(ruleAssetsIndex).toContain("{ key: 'param', label: '参数' }")
+    expect(ruleAssetsIndex).toContain("{ key: 'param', label: '参数中心' }")
   })
 
   it('采集资产页不重复渲染网站工作区页签', () => {
@@ -348,14 +348,15 @@ describe('最新方案 UI 入口收口', () => {
     expect(ruleAssetsIndex).not.toContain("{ key: 'template', label: '流程模板' }")
     expect(ruleAssetsIndex).not.toContain("import FlowTemplate from '../FlowTemplate/index.vue'")
     expect(ruleAssetsIndex).toContain("router.replace('/flows')")
-    // 0917-09：这条跳转加了回程上下文（from/sourceId/siteId/view/fromName），
-    // 不再是光秃秃的 push('/flows')——落点仍是流程中心，行为由 CanvasHeader.test.ts 验
-    expect(canvasHeader).toContain("void router.push({ path: '/flows', query: flowCenterQuery() })")
+    // 当前流程链接仍可进入流程中心，并携带回程上下文。
+    expect(canvasHeader).toContain("router.push({ path: '/flows', query: flowCenterQuery({ q:")
   })
 
   it('空白画布的智能入口推荐并应用可复用流程，不暴露模板概念', () => {
     expect(flowBoard).toContain('智能推荐流程')
     expect(flowBoard).not.toContain('智能推荐模板')
+    expect(flowBoard).not.toContain('apply-flow-template')
+    expect(flowBoard).not.toContain('从流程模板套用')
     // 0927：智能推荐的应用候选从「全部流程」收口到流程模板（flowCenterApi.templates）——
     // 全量流程里混着与当前源结构完全不符的流程，推荐出来点应用必失败；templates 是
     // 刻意维护的可复用清单。断言随代码同步，不锁死在旧的 list()。
@@ -371,7 +372,7 @@ describe('最新方案 UI 入口收口', () => {
   it('任务参数取值只面向当前节点参数', () => {
     expect(taskTab).toContain('cc.value?.urlParamRefs')
     expect(allInspectorSource).not.toContain('Object.values(flow.configs)')
-    expect(taskTab).toContain('请先在当前节点的参数配置中绑定参数。')
+    expect(taskTab).toContain('请先在上方绑定参数。')
     expect(taskTab).toContain('hasEffectiveInput')
     expect(taskTab).toContain('effectiveInputTableId')
     expect(taskTab).not.toContain('isFirstDataNode')
@@ -387,10 +388,11 @@ describe('最新方案 UI 入口收口', () => {
     expect(taskTab).not.toContain('+ 添加字段')
   })
 
-  // 出参列 2026-08-27 搬去参数配置 Tab，任务配置里不该再有它的控件（注释提到不算）
-  it('出参列的控件在参数配置 Tab，不在任务配置', () => {
-    expect(taskTab).not.toContain('<label>出参列</label>')
+  // 出参列内部区块与任务参数取值同属任务配置。
+  it('任务配置包含参数绑定与出参列区块', () => {
+    expect(taskTab).toContain('<ParamsTab />')
     expect(paramsTab).toContain('<label>出参列</label>')
+    expect(nodeInspector).not.toContain("tab === 'params'")
   })
 
   it('流程编辑不消费配置列表，源表单不再提供选用配置', () => {
@@ -399,15 +401,13 @@ describe('最新方案 UI 入口收口', () => {
     expect(sourceBasicForm).not.toContain('使用已有配置')
   })
 
-  // 流程切换器从 el-dropdown 按钮改成了可搜索输入框（ch-flow-picker），已应用流程改为
-  // 输入框的 placeholder 呈现，原来的 `{{ appliedTemplateLabel }} ▾` 按钮不再存在。
-  // 这条锁的是「头上要显示当前已应用的流程」这个意图，不锁具体控件形态。
-  it('源流程头展示已应用流程，且不展示负责人', () => {
-    expect(canvasHeader).toContain('appliedTemplateLabel')
-    // 0929：placeholder 已带上「套用中」状态（switchingFlow ? (switchingLabel || '套用中…') : appliedTemplateLabel），
-    // 原来的字面断言 `:placeholder="appliedTemplateLabel"` 不再成立。这里按**行为口径**放宽：
-    // 只要求 placeholder 绑定里确实用到了 appliedTemplateLabel（两种取值的具体行为在 CanvasHeader.test.ts 覆盖）。
-    expect(canvasHeader).toMatch(/:placeholder="[^"]*appliedTemplateLabel[^"]*"/)
+  it('源流程头展示当前流程，不再提供向当前流程追加模板的入口', () => {
+    expect(canvasHeader).toContain('当前流程：')
+    expect(canvasHeader).not.toContain('appliedTemplateLabel')
+    expect(canvasHeader).not.toContain('flow-switch-search')
+    expect(canvasHeader).not.toContain('套用流程模板')
+    expect(canvasHeader).not.toContain('replace-flow-open')
+    expect(canvasHeader).not.toContain('copy-current-flow')
     expect(canvasHeader).not.toContain('负责人 ${s.owner}')
   })
 

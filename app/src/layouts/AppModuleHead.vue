@@ -71,6 +71,11 @@ function goHome() {
 }
 function goModule() {
   if (route.path === current.value.path) return
+  const returnTo = route.query.returnTo
+  if (isSourceCanvas.value && typeof returnTo === 'string' && /^\/collect(?:\?|$)/.test(returnTo)) {
+    void router.push(returnTo)
+    return
+  }
   void router.push(current.value.path)
 }
 

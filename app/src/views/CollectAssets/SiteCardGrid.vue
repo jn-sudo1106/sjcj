@@ -124,17 +124,17 @@ watch(() => props.sites, (list) => { void ensureCards(list) })
 function openSource(s: Source) {
   // 点源 chip 进去也算打开了这个网站（0917-17）
   if (s.siteId) recordSiteVisit(s.siteId)
-  router.push({ path: '/canvas', query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, view: 'data' } })
+  router.push({ path: '/canvas', query: { ...(s.siteId ? { siteId: s.siteId } : {}), sourceId: s.sourceId, view: 'overview', returnTo: router.currentRoute.value.fullPath } })
 }
 // 卡片主体点击 → 进入网站统一流程模板（0707 优化·Phase4）
 function openSite(site: Site) {
   recordSiteVisit(site.siteId)
-  router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'source' } })
+  router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'source', returnTo: router.currentRoute.value.fullPath } })
 }
 // 卡片底部直达入口：数据量进入当前网站首个源的数据视图。
 function openSiteData(site: Site) {
   recordSiteVisit(site.siteId)
-  router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data' } })
+  router.push({ path: '/canvas', query: { siteId: site.siteId, view: 'data', returnTo: router.currentRoute.value.fullPath } })
 }
 /** 卡片上显示前 2 个标签 + 「+N」（0915-14），与源卡片同口径 */
 function visibleTagsOf(site: Site) {

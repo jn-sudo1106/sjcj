@@ -27,3 +27,8 @@ app/pnpm-lock.yaml
 .ris-shots/
 .env
 .pnpm-store/
+__pycache__/
+*.pyc
+backend/
+# Runner 管理服务生成的独立站点脚本 Git 仓库
+site-scripts/

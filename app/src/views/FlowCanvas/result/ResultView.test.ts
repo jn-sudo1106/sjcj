@@ -89,6 +89,8 @@ vi.mock('./resultLayoutPref', async (importOriginal) => ({
   initialRailOpen: () => railDefault.open,
 }))
 
+// 既有用例验证步骤工作流；新模式用例单独覆盖默认按表。
+beforeEach(() => localStorage.setItem('rc.dataview.result.browseMode', 'step'))
 afterEach(() => { localStorage.clear(); railDefault.open = true })
 
 describe('ResultView', () => {
@@ -443,12 +445,13 @@ describe('ResultView', () => {
     await typeSql(wrapper, "K1 = 'a'")
     await flushPromises()
     // 条件改了还没查询：导出会和表格对不上，先置灰
-    expect(wrapper.get('[data-testid="data-export-btn"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-testid="data-export-btn"]').attributes('title')).toBe('查询条件已修改，先点「查询」再导出')
+    expect(wrapper.get('[data-testid="data-export-excel"]').attributes('title')).toBe('查询条件已修改，先点「查询」再导出')
+    await wrapper.get('[data-testid="data-export-excel"]').trigger('click')
+    expect(open).not.toHaveBeenCalled()
     await wrapper.findAll('.rv-actions button').find((b) => b.text() === '查询')!.trigger('click')
     await flushPromises()
 
-    await wrapper.get('[data-testid="data-export-btn"]').trigger('click')
+    await wrapper.get('[data-testid="data-export-excel"]').trigger('click')
     expect(exportUrl).toHaveBeenCalledWith(expect.objectContaining({ sourceId: current.sourceId, sql: "K1 = 'a'" }))
     const url = String(open.mock.calls[0]?.[0])
     expect(new URL(url, 'http://x').searchParams.get('more')).toBe("K1 = 'a'")
@@ -788,6 +791,10 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     await flushPromises()
     await selectNode(wrapper, 'first')
 
+    const toolbar = wrapper.get('[data-testid="data-node-context"]')
+    expect(toolbar.find('[data-testid="data-summary-btn"]').exists()).toBe(true)
+    expect(toolbar.find('[data-testid="data-fullscreen-toggle"]').exists()).toBe(true)
+    expect(toolbar.find('.rv-tablename').exists()).toBe(true)
     expect(wrapper.find('.rv-shell').classes()).not.toContain('is-fullscreen')
 
     await wrapper.get('[data-testid="data-fullscreen-toggle"]').trigger('click')
@@ -2549,3 +2556,94 @@ describe('ResultView · 0917-01 任务跳转定位（query.dataId）', () => {
   })
 })
 
+
+describe('数据表与步骤查看方式', () => {
+  afterEach(() => vi.restoreAllMocks())
+  async function mountChoice(mode: 'table' | 'step' = 'table') {
+    railDefault.open = false
+    localStorage.setItem('rc.dataview.result.browseMode', mode)
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    const query = vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const wrapper = mountResultView()
+    await flushPromises()
+    return { wrapper, query, current }
+  }
+  it('按数据表首次打开直接选中第一个输出表，不出现“全部”或额外计数请求', async () => {
+    const { wrapper, query, current } = await mountChoice()
+    const select = wrapper.get('[data-testid="data-table-select"]')
+    const values = select.findAll('option').map(option => option.attributes('value'))
+    expect(values.length).toBeGreaterThan(0)
+    expect(values.every(Boolean)).toBe(true)
+    expect(new Set(values).size).toBe(values.length)
+    expect((select.element as HTMLSelectElement).value).toBe(values[0])
+    expect(wrapper.find('[data-testid="data-table-overview"]').exists()).toBe(false)
+    expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: current.sourceId, tableId: values[0] }))
+    expect(query.mock.calls.every(([request]) => request.size !== 1)).toBe(true)
+    wrapper.unmount()
+  })
+  it('按步骤首次打开直接选中列表中的第一个步骤，下拉不出现“全部”', async () => {
+    const { wrapper } = await mountChoice('step')
+    const select = wrapper.get('[data-testid="rail-node-select"]')
+    const values = select.findAll('option').map(option => option.attributes('value'))
+    expect(values.length).toBeGreaterThan(0)
+    expect(values.every(Boolean)).toBe(true)
+    expect((select.element as HTMLSelectElement).value).toBe(values[0])
+    expect(wrapper.find('[data-testid="data-step-overview"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+  it('旧快照记着“全部数据表”时回落首张表，切换方式保留对应项', async () => {
+    railDefault.open = false
+    localStorage.setItem('rc.dataview.result.browseMode', 'table')
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    useWorkspaceStore().saveSnapshot(current.sourceId, { dataTableId: '' })
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const wrapper = mountResultView()
+    await flushPromises()
+    const first = wrapper.get('[data-testid="data-table-select"]').find('option').attributes('value')
+    expect((wrapper.get('[data-testid="data-table-select"]').element as HTMLSelectElement).value).toBe(first)
+    await wrapper.findAll('.rv-browse-mode button')[1]!.trigger('click')
+    await flushPromises()
+    expect((wrapper.get('[data-testid="rail-node-select"]').element as HTMLSelectElement).value).toBeTruthy()
+    expect(localStorage.getItem('rc.dataview.result.browseMode')).toBe('step')
+    await wrapper.findAll('.rv-browse-mode button')[0]!.trigger('click')
+    await flushPromises()
+    expect((wrapper.get('[data-testid="data-table-select"]').element as HTMLSelectElement).value).toBe(first)
+    wrapper.unmount()
+  })
+})
+
+describe('源数据导出入口', () => {
+  afterEach(() => vi.restoreAllMocks())
+  // 2026-10-08 217 实测 entryExportAll 按 more 过滤，SQL / 数据 ID / 父 ID 条件随导出生效，不再整体禁用 Excel
+  it('Excel 导出限定当前源和表；SQL 条件随 more 生效，改了未查询时先置灰', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const exportUrl = vi.spyOn(dataApi, 'exportUrl').mockReturnValue('/export')
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const wrapper = mountResultView()
+    await flushPromises()
+    await wrapper.get('[data-testid="data-export-excel"]').trigger('click')
+    expect(exportUrl).toHaveBeenCalledWith(expect.objectContaining({ sourceId: current.sourceId, tableId: expect.any(String) }))
+    expect(open).toHaveBeenCalledTimes(1)
+    await wrapper.get('[data-testid="data-cond-sql"]').setValue('K1 = 1')
+    await wrapper.get('[data-testid="data-export-excel"]').trigger('click')
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="data-export-excel"]').attributes('title')).toBe('查询条件已修改，先点「查询」再导出')
+    expect(wrapper.get('[data-testid="data-export-page"]').attributes('disabled')).toBeDefined()
+    await wrapper.findAll('.rv-actions button').find((b) => b.text() === '查询')!.trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="data-export-excel"]').trigger('click')
+    expect(open).toHaveBeenCalledTimes(2)
+    expect(exportUrl).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: current.sourceId, sql: 'K1 = 1' }))
+    wrapper.unmount()
+  })
+})

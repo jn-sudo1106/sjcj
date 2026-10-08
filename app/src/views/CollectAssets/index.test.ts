@@ -5,6 +5,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
+import { useAuthStore } from '@/stores/auth'
+import { useSourceGroupsStore } from '@/stores/sourceGroups'
+import type { UserInfo } from '@/api/auth'
 
 vi.mock('./SourceTab.vue', () => ({
   // scope 要声明成 prop，否则它只会落进 attrs，props('scope') 永远是 undefined
@@ -13,8 +16,9 @@ vi.mock('./SourceTab.vue', () => ({
 vi.mock('./ConfigTab.vue', () => ({
   default: { name: 'ConfigTab', template: '<div data-testid="stub-config">配置列表内容</div>' },
 }))
+vi.mock('./PersonalSources.vue', () => ({ default: { name: 'PersonalSources', template: '<div>个人分组内容</div>' } }))
 
-async function mountAssets(query: Record<string, string> = {}) {
+async function mountAssets(query: Record<string, string> = {}, preference: 'system' | 'personal' | 'last' = 'system') {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -27,6 +31,9 @@ async function mountAssets(query: Record<string, string> = {}) {
   await router.push({ path: '/collect', query })
   await router.isReady()
   setActivePinia(createPinia())
+  localStorage.clear()
+  useAuthStore().info = { id: 1 } as UserInfo
+  useSourceGroupsStore().setPreference(preference)
   const CollectAssets = (await import('./index.vue')).default
   const wrapper = mount(CollectAssets, { global: { plugins: [router] } })
   await flushPromises()
@@ -39,7 +46,7 @@ describe('采集资产 · tab 壳', () => {
   it('三个 tab：网站列表 + 我的收藏 + 最近打开', async () => {
     const { wrapper } = await mountAssets()
     const tabs = wrapper.findAll('.ca-tab-link')
-    expect(tabs.map((b) => b.text())).toEqual(['网站列表', '我的收藏', '最近打开'])
+    expect(tabs.map((b) => b.text())).toEqual(['系统目录', '我的分组', '我的收藏', '最近打开'])
     expect(wrapper.find('.ca-tabs-wrap').exists()).toBe(true)
   })
 
@@ -64,7 +71,7 @@ describe('采集资产 · tab 壳', () => {
 
   it('点「最近打开」tab 地址变成 ?tab=recent（可存书签）', async () => {
     const { wrapper, router } = await mountAssets()
-    await wrapper.findAll('.ca-tab-link')[2]!.trigger('click')
+    await wrapper.findAll('.ca-tab-link')[3]!.trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.query).toEqual({ tab: 'recent' })
   })
@@ -94,5 +101,19 @@ describe('采集资产 · tab 壳', () => {
   it('非法 tab 回落网站列表', async () => {
     const { wrapper } = await mountAssets({ tab: '不存在的tab' })
     expect(wrapper.find('[data-testid="stub-source"]').exists()).toBe(true)
+  })
+  it('个人默认生效，显式系统目录链接优先，临时切换不改默认', async () => {
+    const { wrapper, router } = await mountAssets({}, 'personal')
+    expect(wrapper.text()).toContain('个人分组内容')
+    await wrapper.findAll('.ca-tab-link')[0]!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query.tab).toBe('source')
+    expect(wrapper.find('[data-testid="stub-source"]').exists()).toBe(true)
+    expect(useSourceGroupsStore().preference).toBe('personal')
+  })
+  it('总览带分类下钻时优先系统目录，不被个人默认截走', async () => {
+    const { wrapper } = await mountAssets({ category: 'macro' }, 'personal')
+    expect(wrapper.find('[data-testid="stub-source"]').exists()).toBe(true)
+    expect(useSourceGroupsStore().preference).toBe('personal')
   })
 })

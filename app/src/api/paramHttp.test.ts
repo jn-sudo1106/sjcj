@@ -51,6 +51,18 @@ describe('参数 API 旧平台 HTTP 契约', () => {
     })
   })
 
+  it('按类型查询将页面类型映射为旧接口 paramType，并保持分页', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: 0, count: 1, data: [{ paramId: 9, paramName: '页码', paramType: 'seq' }] }))
+    const { paramApi } = await import('./index')
+    const result = await paramApi.paramPaged({ page: 2, size: 30, kind: 'sequence' })
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('paramType=seq')
+    expect(url).toContain('page=2')
+    expect(url).toContain('limit=30')
+    expect(url).not.toContain('kind=')
+    expect(result.total).toBe(1)
+  })
+
   it('新增使用 POST JSON 和旧字段名', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: '操作成功', data: null }))
     const { paramApi } = await import('./index')

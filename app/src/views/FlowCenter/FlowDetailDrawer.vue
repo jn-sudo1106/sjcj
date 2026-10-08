@@ -1,7 +1,16 @@
 <script setup lang="ts">
 import { onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { configApi, flowCenterApi, type FlowDefinition, type FlowRecord, type Source, type Step } from '@/api'
+import {
+  configApi,
+  flowCenterApi,
+  workflowBindingApi,
+  type FlowDefinition,
+  type FlowRecord,
+  type Source,
+  type Step,
+  type WorkflowBinding,
+} from '@/api'
 import { useFlowStore, stripLoginSecrets } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import { useUiStore } from '@/stores/ui'
@@ -26,6 +35,9 @@ const ui = useUiStore()
 const autosave = useFlowAutosave()
 const name = ref('')
 const saving = ref(false)
+const publishing = ref(false)
+const workingFlow = ref<FlowRecord | null>(null)
+const versionState = ref<WorkflowBinding | null>(null)
 
 // 流程工作区自动保存（0926「基础数据写正常」）：在抽屉里新建/改名/改条件/删除节点同样落到
 // cs_item_config（步骤行），不依赖源上下文——useStepWrite 按 flow.flowIdMode 走 flowId 锚定。
@@ -160,6 +172,8 @@ watch(() => props.flow?.id, (id, prev) => {
   metaForm.categoryId = props.flow?.categoryId ?? ''
   metaForm.tags = props.flow?.flowTags ?? ''
   metaForm.description = props.flow?.description ?? ''
+  workingFlow.value = null
+  versionState.value = null
 }, { immediate: true })
 /** 标签统一成逗号串：中英文逗号、空格分隔都收，去重去空（与新建表单同一口径） */
 function normalizeTags(raw: string): string {
@@ -237,6 +251,14 @@ async function openFlowInWorkspace(flow: FlowRecord) {
   derivedFromConfig.value = false
   stepsLoadFailed.value = false
   try {
+    // 流程中心是编辑入口。先取得独立草稿工作副本，后续名称、属性、画布和步骤都只写草稿；
+    // 当前发布版本继续供运行任务使用，直到用户显式点击“发布版本”。接口同时接受 workflow.id
+    // 与旧 cs_flow.FLOW_ID，兼容流程中心仍以 FLOW_ID 打开流程的现状。
+    const state = await workflowBindingApi.ensureDraft(flow.id)
+    if (reqId !== loadSeq) return
+    const draftFlowId = state.draftFlowId
+    if (!draftFlowId) throw new Error('未取得可编辑的草稿工作副本')
+    versionState.value = state
     // 0926：详情先取——取不到就整窗报错关掉，**不发起后续请求**（steps 事前拉没有意义，
     // 还会把错误路径拖慢）。详情成功后再并行不迟…… 不，**串行**：steps 必须在
     // loadIntoWorkspace（工作区渲染）之前就绪——快照供改名 / 孤儿「关联」整包回写，
@@ -245,11 +267,16 @@ async function openFlowInWorkspace(flow: FlowRecord) {
     // （改名/关联降级为缺快照提示）。
     const full = await flowCenterApi.detail(flow.id)
     if (reqId !== loadSeq) return
-    const record = full ?? flow
+    const record: FlowRecord = {
+      ...(full ?? flow),
+      id: draftFlowId,
+      version: state.draftVersionNo,
+    }
+    workingFlow.value = record
     // 0927：一次取回**带 configType 的完整步骤**（withConfigDetails 默认 true）——它既是
     // 快照（改名/孤儿「关联」整包回写），也是工作区画布的内容源（配合下方"有步骤行就按
     // 步骤还原"），configType 让摘要/翻译/打标签等节点一回读就是对的模板，不用再补查。
-    const steps = await flowCenterApi.steps(flow.id)
+    const steps = await flowCenterApi.steps(draftFlowId)
       .catch((reason) => {
         console.warn('[flow-drawer] 步骤快照加载失败：改名/孤儿关联将缺少快照', reason)
         stepsLoadFailed.value = true
@@ -300,7 +327,7 @@ watch(() => props.flow?.id, () => {
 }, { immediate: true })
 
 async function persistFlow(showMessage = true, isTemplate?: boolean): Promise<FlowRecord | null> {
-  if (!props.flow || saving.value) return null
+  if (!workingFlow.value || saving.value || publishing.value) return null
   const trimmed = name.value.trim()
   if (!trimmed) {
     ElMessage.warning('请输入流程名称')
@@ -326,7 +353,7 @@ async function persistFlow(showMessage = true, isTemplate?: boolean): Promise<Fl
       }
     }
     const saved = await flowCenterApi.save({
-      id: props.flow.id,
+      id: workingFlow.value.id,
       name: trimmed,
       definition: definitionFromCanvas(),
       ...(isTemplate === undefined ? {} : { isTemplate }),
@@ -337,10 +364,10 @@ async function persistFlow(showMessage = true, isTemplate?: boolean): Promise<Fl
       description: metaForm.description.trim(),
     })
     name.value = saved.name
+    workingFlow.value = saved
     canvas.markSaved()
-    emit('saved', saved)
     if (showMessage) {
-      ElMessage.success(saved.version == null ? '流程已保存' : `流程已保存为 v${saved.version}`)
+      ElMessage.success(`草稿 v${versionState.value?.draftVersionNo ?? saved.version ?? '—'} 已保存`)
     }
     return saved
   } catch (error) {
@@ -358,8 +385,8 @@ async function persistFlow(showMessage = true, isTemplate?: boolean): Promise<Fl
  */
 const togglingTemplate = ref(false)
 async function toggleTemplate() {
-  if (!props.flow || togglingTemplate.value) return
-  const next = !props.flow.isTemplate
+  if (!workingFlow.value || togglingTemplate.value) return
+  const next = !workingFlow.value.isTemplate
   togglingTemplate.value = true
   try {
     const saved = await persistFlow(false, next)
@@ -370,10 +397,45 @@ async function toggleTemplate() {
 }
 
 async function applyToSource() {
-  const saved = canvas.dirty || name.value.trim() !== props.flow?.name
-    ? await persistFlow(false)
-    : props.flow
-  if (saved) emit('apply', saved)
+  if (versionState.value?.draftFlowId) {
+    ElMessage.warning('当前修改仍是草稿，请先发布版本后再关联到源')
+    return
+  }
+  if (workingFlow.value) emit('apply', workingFlow.value)
+}
+
+async function publishVersion() {
+  const state = versionState.value
+  if (!state?.workflowId || !state.draftFlowId || publishing.value) return
+  const saved = await persistFlow(false)
+  if (!saved) return
+  try {
+    await ElMessageBox.confirm(
+      `发布 v${state.draftVersionNo ?? '—'} 后，新发起的任务将使用该版本；已经运行的任务继续使用原版本。`,
+      '发布流程版本',
+      { confirmButtonText: '确认发布', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  publishing.value = true
+  try {
+    const published = await workflowBindingApi.publish(state.workflowId)
+    const publishedFlow: FlowRecord = {
+      ...saved,
+      id: published.publishedFlowId || saved.id,
+      version: published.publishedVersionNo ?? saved.version,
+    }
+    versionState.value = published
+    workingFlow.value = publishedFlow
+    emit('saved', publishedFlow)
+    ElMessage.success(`流程 v${published.publishedVersionNo ?? '—'} 已发布，新任务将使用新版本`)
+    emit('close')
+  } catch (error) {
+    ElMessage.error(`流程发布失败：${(error as Error)?.message ?? String(error)}`)
+  } finally {
+    publishing.value = false
+  }
 }
 </script>
 
@@ -384,9 +446,15 @@ async function applyToSource() {
         <span class="fd-kicker">流程工作区</span>
         <input v-model="name" class="fd-name" aria-label="流程名称" @input="canvas.setFlowName(name)" />
         <p>
-          {{ flow.version == null ? flow.id : `${flow.id} · v${flow.version}` }} · 更新于 {{ flow.updatedAt || '—' }}
-          <span v-if="flow.isTemplate" class="fd-badge" data-testid="flow-drawer-template-badge">模板</span>
-          <span v-else-if="flow.fromTemplateId" class="fd-badge ghost">来自模板 #{{ flow.fromTemplateId }}</span>
+          {{ workingFlow?.id || flow.id }} · 更新于 {{ workingFlow?.updatedAt || flow.updatedAt || '—' }}
+          <span v-if="versionState?.draftFlowId" class="fd-badge draft" data-testid="flow-drawer-version-status">
+            草稿 v{{ versionState.draftVersionNo }}
+          </span>
+          <span v-if="versionState?.publishedVersionNo" class="fd-badge ghost">
+            当前发布 v{{ versionState.publishedVersionNo }}
+          </span>
+          <span v-if="workingFlow?.isTemplate" class="fd-badge" data-testid="flow-drawer-template-badge">模板</span>
+          <span v-else-if="workingFlow?.fromTemplateId" class="fd-badge ghost">来自模板 #{{ workingFlow.fromTemplateId }}</span>
         </p>
       </div>
       <!-- 0927 P0-1：抽屉内保存状态条（embedded 画布不渲染 CanvasHeader，状态/重试原来
@@ -440,7 +508,7 @@ async function applyToSource() {
     <!-- 还原态必须说明白：画布上这些节点还没写进流程本身，是照这个流程自己的配置和步骤画的。
          不写这行的话，用户会以为流程里已经存着这份定义。 -->
     <div v-if="!loadingDetail && derivedFromConfig" class="fd-derived" data-testid="flow-derived-note">
-      该流程尚未保存画布定义，以下节点按这个流程自己的配置（#{{ flow?.id }}）还原，点「保存流程」后才会写入流程。
+      该草稿尚未保存画布定义，以下节点按草稿工作副本（#{{ workingFlow?.id }}）还原，点“保存草稿”后写入草稿。
     </div>
     <!-- 配置区的「展开 / 收起」两个按钮在 NodeInspector 里，改的是 ui 上那对全局标志。
          抽屉原来是死的两列栅格，点了没反应（0905 反馈「这里的展开收起未生效」）——
@@ -478,16 +546,17 @@ async function applyToSource() {
       <!-- 这行原来写的是「关联到源只登记归属关系，不改动源现有的配置与步骤」，与 0903 H1 的
            答复相反（「执行就按 flowID 去反选，去执行」）：绑定即生效，关联过来的源会**共用**
            这个流程的配置。说的和做的相反比不说更糟，2026-09-04 改。 -->
-      <span class="fd-foot-note">节点配置在右侧直接修改；关联到源后，这些源将共用本流程的配置——此后改这里会同时影响它们。</span>
+      <span class="fd-foot-note">修改只保存到草稿，不影响当前运行版本；发布后，新发起的任务使用新版本，运行中的任务保持原版本。</span>
       <button
         class="fd-secondary"
         type="button"
         :disabled="saving || togglingTemplate"
         data-testid="flow-drawer-toggle-template"
         @click="toggleTemplate"
-      >{{ flow.isTemplate ? '取消模板' : '标记为模板' }}</button>
-      <button class="fd-secondary" type="button" :disabled="saving" data-testid="flow-apply-to-source" @click="applyToSource">关联到源</button>
-      <button class="fd-primary" type="button" :disabled="saving" data-testid="flow-save" @click="persistFlow()">{{ saving ? '保存中…' : '保存流程' }}</button>
+      >{{ workingFlow?.isTemplate ? '取消模板' : '标记为模板' }}</button>
+      <button class="fd-secondary" type="button" :disabled="saving || publishing" data-testid="flow-apply-to-source" @click="applyToSource">关联到源</button>
+      <button class="fd-secondary" type="button" :disabled="saving || publishing || loadingDetail" data-testid="flow-save" @click="persistFlow()">{{ saving ? '保存中…' : '保存草稿' }}</button>
+      <button class="fd-primary" type="button" :disabled="saving || publishing || loadingDetail || !versionState?.draftFlowId" data-testid="flow-publish" @click="publishVersion">{{ publishing ? '发布中…' : `发布 v${versionState?.draftVersionNo ?? '—'}` }}</button>
     </footer>
   </aside>
 </template>
@@ -500,6 +569,7 @@ async function applyToSource() {
 .fd-meta-item.grow .fd-meta-input { flex: 1; min-width: 0; }
 .fd-meta-ro { color: var(--rc-faint); font-size: 12px; }
 .fd-badge { margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 11px; background: var(--rc-primary-soft, #eaf2ff); color: var(--rc-primary, #2f6fed); }
+.fd-badge.draft { background: #fff7ed; color: #c2410c; }
 .fd-badge.ghost { background: transparent; color: var(--rc-faint); border: 1px solid var(--rc-border-soft); }
 .fd-drawer { position: fixed; top: 56px; right: 0; bottom: 0; width: min(980px, calc(100vw - 256px)); max-width: 100vw; z-index: 40; display: flex; flex-direction: column; background: #fff; border-left: 1px solid var(--rc-border); box-shadow: -12px 0 32px -24px rgba(15, 23, 42, 0.48); }
 .fd-head { display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--rc-border-soft); }

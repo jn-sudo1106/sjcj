@@ -2,9 +2,10 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
-import { paramApi, type Param } from '../../api'
+import { paramApi, type Param, type ParamKind } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import ParamEditorDrawer from '@/components/param/ParamEditorDrawer.vue'
+import { findParamConfigUsage, type ParamUsageResult } from './paramUsage'
 
 // D3（0717 参数方案）：read 角色隐藏写操作，仅消费既有 auth store 的 role getter，不改动登录相关代码
 const auth = useAuthStore()
@@ -17,6 +18,7 @@ const size = ref(10)
 const loading = ref(false)
 const paramIdFilter = ref('')
 const paramNameFilter = ref('')
+const kindFilter = ref<ParamKind | ''>('')
 const selected = ref<string[]>([])
 const drawer = reactive<{ visible: boolean; param: Param | null; preview: string[]; previewing: boolean }>({
   visible: false,
@@ -25,6 +27,32 @@ const drawer = reactive<{ visible: boolean; param: Param | null; preview: string
   previewing: false,
 })
 const editor = reactive<{ visible: boolean; param: Param | null }>({ visible: false, param: null })
+const usage = reactive<{ visible: boolean; param: Param | null; loading: boolean; result: ParamUsageResult | null; error: string }>({
+  visible: false, param: null, loading: false, result: null, error: '',
+})
+const usageProgress = ref({ checked: 0, total: 0 })
+let usageRequest = 0
+watch(() => usage.visible, (visible) => { if (!visible) usageRequest++ })
+
+async function openUsage(param: Param) {
+  const request = ++usageRequest
+  usage.visible = true
+  usage.param = param
+  usage.result = null
+  usage.error = ''
+  usage.loading = true
+  usageProgress.value = { checked: 0, total: 0 }
+  try {
+    const result = await findParamConfigUsage(param.paramId, (checked, total) => {
+      if (request === usageRequest) usageProgress.value = { checked, total }
+    }, () => request === usageRequest)
+    if (request === usageRequest) usage.result = result
+  } catch (error) {
+    if (request === usageRequest) usage.error = error instanceof Error ? error.message : String(error)
+  } finally {
+    if (request === usageRequest) usage.loading = false
+  }
+}
 
 async function load() {
   loading.value = true
@@ -32,6 +60,7 @@ async function load() {
     const r = await paramApi.paramPaged({
       paramId: paramIdFilter.value,
       paramName: paramNameFilter.value,
+      kind: kindFilter.value || undefined,
       page: page.value,
       size: size.value,
     })
@@ -46,6 +75,7 @@ async function load() {
 function resetAndLoad() { page.value = 1; void load() }
 let kw: ReturnType<typeof setTimeout> | undefined
 watch([paramIdFilter, paramNameFilter], () => { clearTimeout(kw); kw = setTimeout(resetAndLoad, 300) })
+watch(kindFilter, resetAndLoad)
 function onSize() { page.value = 1; void load() }
 onMounted(() => { void load() })
 onUnmounted(() => { if (kw) clearTimeout(kw) })
@@ -202,11 +232,21 @@ async function batchDelete() {
 
 <template>
   <div class="rc-card pt-main">
+    <div class="pt-intro">统一管理源导入和任务配置引用的参数。参数源与任务中的“选择已有参数”均从这里读取；修改参数定义后，可回到对应源或任务查看最新值。</div>
     <div class="rc-toolbar wrap">
       <el-input v-model="paramIdFilter" :prefix-icon="Search" clearable placeholder="参数 ID" style="width: 150px" />
       <el-input v-model="paramNameFilter" clearable placeholder="参数名称" style="width: 190px" />
+      <select v-model="kindFilter" class="pt-kind-filter" aria-label="按参数类型筛选">
+        <option value="">全部类型</option>
+        <option value="list">列表</option>
+        <option value="date">日期</option>
+        <option value="sequence">序列</option>
+        <option value="date_sequence">日期序列</option>
+        <option value="database">数据库</option>
+      </select>
       <span class="pt-spacer" />
       <span class="muted">共 {{ total }} 个参数</span>
+      <button class="rc-btn" type="button" :disabled="loading" aria-label="刷新参数列表" @click="load">刷新</button>
       <template v-if="canWrite">
         <button class="rc-btn danger" type="button" :disabled="!selected.length" @click="batchDelete">批量删除</button>
         <button class="rc-btn primary" type="button" @click="openCreate">新建参数</button>
@@ -256,6 +296,7 @@ async function batchDelete() {
               <span v-else class="muted">—</span>
             </td>
             <td>
+              <el-button link type="primary" size="small" @click="openUsage(p)">使用位置</el-button>
               <el-button link type="primary" size="small" @click="openDetail(p)">详情</el-button>
               <template v-if="canWrite">
                 <el-button link type="primary" size="small" @click="openEdit(p)">编辑</el-button>
@@ -332,12 +373,40 @@ async function batchDelete() {
       </div>
     </div>
   </el-drawer>
+  <el-drawer v-model="usage.visible" :title="`使用位置 · ${usage.param?.name ?? ''}`" size="520px" append-to-body>
+    <template v-if="usage.param">
+      <div class="pt-usage-id muted">参数 ID {{ usage.param.paramId }}</div>
+      <div class="pt-section">参数源</div>
+      <div v-if="usage.param.paramSourceRefs?.length" class="pt-usage-list">
+        <router-link v-for="ref in usage.param.paramSourceRefs" :key="ref.sourceId" :to="{ path: '/canvas', query: { sourceId: ref.sourceId, view: 'overview' } }" class="pt-usage-link">{{ ref.sourceName }} · {{ ref.sourceId }}</router-link>
+      </div>
+      <div v-else class="muted">暂无可用的参数源绑定记录</div>
+      <div class="pt-section">节点配置 / 任务参数</div>
+      <div v-if="usage.loading" class="muted">正在核对配置绑定：{{ usageProgress.checked }} / {{ usageProgress.total || '…' }}</div>
+      <div v-else-if="usage.error" class="pt-usage-error">查询失败：{{ usage.error }}</div>
+      <template v-else-if="usage.result">
+        <div v-if="usage.result.failed" class="pt-usage-error">{{ usage.result.failed }} 个配置查询失败，以下结果可能不完整。</div>
+        <div v-if="usage.result.configs.length" class="pt-usage-list">
+          <div v-for="config in usage.result.configs" :key="config.configId" class="pt-usage-item">{{ config.name }} <span class="muted">· {{ config.configId }}</span></div>
+        </div>
+        <div v-else-if="!usage.result.failed" class="muted">暂无配置绑定</div>
+      </template>
+    </template>
+  </el-drawer>
   <ParamEditorDrawer v-model="editor.visible" :param="editor.param" @saved="onParamSaved" />
   </div>
 </template>
 
 <style scoped>
 .pt-main { display: flex; flex-direction: column; height: calc(100vh - 215px); min-height: 520px; }
+.pt-intro { padding: 12px 16px 0; color: var(--rc-muted); font-size: 12px; line-height: 1.5; }
+.pt-usage-id { font-size: 12px; }
+.pt-usage-list { display: flex; flex-direction: column; gap: 8px; }
+.pt-usage-link { color: var(--rc-primary-ink); font-size: 12px; text-decoration: none; }
+.pt-usage-link:hover { text-decoration: underline; }
+.pt-usage-item { font-size: 12px; color: var(--rc-text); }
+.pt-usage-error { margin: 8px 0; color: #b91c1c; font-size: 12px; }
+.pt-kind-filter { height: 32px; min-width: 128px; padding: 0 8px; border: 1px solid var(--rc-border-soft); border-radius: 6px; background: #fff; color: var(--rc-text); font-size: 12px; }
 .pt-spacer { flex: 1; }
 .pt-table { flex: 1; }
 .pt-name { padding: 0; border: 0; background: transparent; color: var(--rc-primary-ink); font-size: 12px; font-weight: 700; cursor: pointer; }

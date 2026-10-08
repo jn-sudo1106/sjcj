@@ -46,7 +46,7 @@ import {
   mockRuleOrchestrationTest,
 } from './rules'
 import { mockDatasets, mockMeasures, mockMetricStats } from './metrics'
-import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate, mockEntryDataUpload } from './dataview'
+import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate, mockEntryDataUpload, mockDistinctSource } from './dataview'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourcePage, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckLogs } from './monitor'
 import { mockWorkbenchSummary } from './workbench'
@@ -226,6 +226,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'data/rowPaged': mockDataRows,
   'data/stats': mockDataStats,
   'data/rowQueryPaged': mockDataRowQueryPaged,
+  'data/distinctSource': mockDistinctSource,
   'data/tableMeta': mockDataTableMeta,
   'data/rowUpdate': mockDataRowUpdate,
 

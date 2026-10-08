@@ -16,7 +16,7 @@ const ui = useUiStore()
 // 现有规则组+规则列表+函数测试器整体作为"规则" tab（改动最小，不拆分成更细的规则组/函数两个 tab）。
 const TABS: { key: string; label: string }[] = [
   { key: 'rule', label: '规则' },
-  { key: 'param', label: '参数' },
+  { key: 'param', label: '参数中心' },
 ]
 const route = useRoute()
 const router = useRouter()

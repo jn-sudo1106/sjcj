@@ -8,7 +8,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FlowCenter from './index.vue'
-import { configApi, flowCenterApi, sourceApi, type FlowRecord, type SourceCategory } from '@/api'
+import { configApi, flowCenterApi, sourceApi, workflowBindingApi, type FlowRecord, type SourceCategory } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 
@@ -58,6 +58,15 @@ async function openCreateForm(w: { find: (s: string) => { exists: () => boolean 
 
 async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length, query?: Record<string, string>) {
   vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total, list: flows })
+  if (!vi.isMockFunction(workflowBindingApi.ensureDraft)) {
+    vi.spyOn(workflowBindingApi, 'ensureDraft').mockImplementation(async (workflowId) => ({
+      id: `binding-${workflowId}`, bindType: 'SOURCE', bindId: '', workflowId,
+      workflowCode: `LEGACY-${workflowId}`, workflowName: '流程', publishedVersionNo: 1,
+      publishedFlowId: workflowId, draftVersionNo: 2, draftFlowId: workflowId,
+      versionStatus: 'DRAFT', workflowStatus: 'ACTIVE', followsCurrentVersion: true,
+      role: 'MAIN', primary: true, priority: 0, status: 'ACTIVE', inherited: false,
+    }))
+  }
   // 分类目录在测试里必须可预期：sourceCategories 走 live 端点（category/categoryPaged），
   // 测试环境下 fetch 失败会把分类吞成空列表。这里给一棵两级树覆盖（按 parentId 查任意层级的子级）。
   vi.spyOn(sourceApi, 'sourceCategories').mockImplementation(async (parentId?: string) => {
@@ -92,7 +101,7 @@ async function mountCenter(flows: FlowRecord[] = FLOWS, total = flows.length, qu
       directives: { loading: {} },
       stubs: {
         FlowBoard: { props: ['embedded'], template: '<div data-testid="embedded-flow-board">流程画布</div>' },
-        NodeInspector: { props: ['hideAi'], template: '<div data-testid="embedded-node-inspector">节点配置 表配置 编排配置 参数配置 任务配置</div>' },
+        NodeInspector: { props: ['hideAi'], template: '<div data-testid="embedded-node-inspector">节点配置 表配置 编排配置 任务配置</div>' },
         // 选源弹窗：真组件在 FlowSourcePickerDialog.test.ts 单独测。这里只关心 confirmApply
         // 的分批 / changeFlowBatch / 错误处理，stub 出「设 modelValue + 触发 confirm」两个口子。
         FlowSourcePickerDialog: {

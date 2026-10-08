@@ -40,11 +40,13 @@ import { buildDataProcessGeneratePayload, buildDocumentExtractPayload } from '@/
 import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { assertConfigWritable } from '@/utils/flow/copiedConfigs'
 import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
+import { configTypeFrom } from '@/utils/flow/nodeConfigPayload'
 import { promptCategoryGroupsForNode, promptListCategoryForNode, resolvePromptCategoryForNode } from '../promptCategory'
 import { loadPromptTemplateForNode } from '../promptTemplateLoader'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import { useFlowStore } from '@/stores/flow'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
+import SiteScriptGeneratorDialog from '../SiteScriptGeneratorDialog.vue'
 import AlertConfigPanel from '../AlertConfigPanel.vue'
 
 // 编辑对象来自节点编辑上下文（0917）：画布右侧配置区 = 全局 flow store，
@@ -490,6 +492,7 @@ const isArticleTag = computed(() => isArticleTagNode(cfg.value))
 // 切节点（NodeInspector 里本组件不带 key，是复用的）时清空试跑区，避免串到下一个节点上
 watch(id, () => {
   clearVideoFile()
+  siteScriptOpen.value = false
   promptPreviewOpen.value = false
   articlePromptMissing.value = false
   clearTranslate()
@@ -1277,6 +1280,26 @@ async function onGenerateScript(
 }
 
 const workbenchOpen = ref(false)
+const siteScriptOpen = ref(false)
+// AI 抓列表使用当前源实际入口；configUrl 是可被多个源复用的配置 URL，可能不是本源列表页。
+const siteScriptUrl = computed(() => {
+  const source = useFlowStore().sourceCfg ?? useFlowStore().sourceCtx
+  const sourceUrl = source?.kind === 'param'
+    ? (source.urlTemplate?.trim() || source.url?.trim())
+    : source?.url?.trim()
+  return sourceUrl
+    || cfg.value?.collectCfg?.url?.trim() || cfg.value?.configUrl?.trim() || ''
+})
+const siteScriptQueue = computed(() => {
+  const flow = useFlowStore()
+  return cfg.value?.taskCfg?.queue?.trim()
+    || (flow.sourceCfg?.sourceId ? `${flow.sourceCfg.sourceId}_main` : '')
+})
+// 节点抓取类型：已落库的 configType 优先，新节点按保存时的同一套规则推导；用于把新代码分到对应仓库。
+const siteScriptConfigType = computed(() => {
+  if (!cfg.value) return ''
+  return cfg.value.configType || String(configTypeFrom(cfg.value) ?? '')
+})
 
 // ---- PDF 抓取「解析内容」（1005）----
 // 与「生成脚本」同一条流式链路，但只读：后端抽 PDF 正文 + 按当前提示词输出，
@@ -2002,6 +2025,13 @@ function onTestScript() {
       <template v-else>{{ generateLabel }}</template>
     </button>
     <button
+      v-if="!isRule && cfg?.collectCfg && !isScriptless"
+      class="rc-btn"
+      type="button"
+      data-testid="open-site-script-generator"
+      @click="siteScriptOpen = true"
+    >AI 生成 Python 脚本</button>
+    <button
       v-if="isRule"
       class="rc-btn"
       type="button"
@@ -2159,6 +2189,16 @@ function onTestScript() {
     @cancel-generate="onCancelGenerate"
     @save="onSaveScript"
     @test="onTestScript"
+  />
+  <SiteScriptGeneratorDialog
+    v-if="!isRule && cfg?.collectCfg && !isScriptless"
+    :key="id"
+    v-model:open="siteScriptOpen"
+    :initial-url="siteScriptUrl"
+    :initial-prompt="orchCfg.describe"
+    :config-id="cfg?.configId"
+    :queue-name="siteScriptQueue"
+    :config-type="siteScriptConfigType"
   />
 </template>
 

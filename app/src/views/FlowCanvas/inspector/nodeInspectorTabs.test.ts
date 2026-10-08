@@ -21,14 +21,13 @@ const ruleNodeSaved = {
 } as unknown as NodeConfig
 
 // 0804 拍板（决议 D5+D8）：规则节点与采集节点收敛成同一套 Tab；
-// 0805 改判（推翻 D17）：「参数配置」对非规则节点恢复，规则节点仍然没有（见 nodeInspectorTabs.ts 顶部注释）。
+// 参数配置区合并进任务配置；规则节点继续使用表配置里的字段绑定。
 describe('nodeInspectorTabs', () => {
-  it('ordinary node gets the unified tab set: config/table/orchestration/params/task/ai, nothing disabled', () => {
+  it('ordinary node gets the unified tab set without a separate params tab', () => {
     expect(nodeInspectorTabs(ordinaryNode)).toEqual([
       ['config', '节点配置'],
       ['table', '表配置'],
       ['orchestration', '编排配置'],
-      ['params', '参数配置'],
       ['task', '任务配置'],
       ['ai', 'AI 对话'],
     ])
@@ -36,7 +35,7 @@ describe('nodeInspectorTabs', () => {
 
   it('can hide AI for the flow-center workspace', () => {
     expect(nodeInspectorTabs(ordinaryNode, { includeAi: false }).map(([key]) => key)).toEqual([
-      'config', 'table', 'orchestration', 'params', 'task',
+      'config', 'table', 'orchestration', 'task',
     ])
   })
 
@@ -44,10 +43,9 @@ describe('nodeInspectorTabs', () => {
     expect(nodeInspectorTabs(decisionNode)).toEqual([['config', '分支配置']])
   })
 
-  it('rule node gets the same tab keys/labels as an ordinary node, minus 参数配置', () => {
+  it('rule node uses the same top-level tabs as an ordinary node', () => {
     const ruleTabs = nodeInspectorTabs(ruleNodeSaved).map(([key, label]) => [key, label])
     const ordinaryTabs = nodeInspectorTabs(ordinaryNode)
-      .filter(([key]) => key !== 'params')
       .map(([key, label]) => [key, label])
     expect(ruleTabs).toEqual(ordinaryTabs)
   })

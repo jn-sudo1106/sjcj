@@ -1,9 +1,9 @@
 <script setup lang="ts">
-// 画布「更换流程」的选择弹窗（0930）：候选是**全部流程**（「套用流程模板」只列模板）。
+// 流程选择弹窗：候选是全部现有流程，包含已标记为模板的流程。
 // 两种查法，列表各以查的对象为主：
 //   - 按流程：列流程（名称 / ID 查），选中即选这条流程；
 //   - 按源：列源（源 ID / 名称查，默认分页列全部源），每行带它的所属流程，选中即选该源的所属流程。
-// 只负责选，复制 + 换绑由 CanvasHeader 调 copyFlowToSource 完成。
+// 只负责选择；复制新建、关联或更换由调用方完成。
 import { computed, reactive, watch } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { flowCenterApi, sourceApi, type FlowRecord, type Source } from '@/api'
@@ -14,6 +14,7 @@ const props = defineProps<{
   modelValue: boolean
   /** 本源当前所属流程：列出来但不可选（换成自己没有意义） */
   currentFlowId?: string
+  purpose?: 'replace' | 'bind' | 'copy'
 }>()
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
@@ -147,6 +148,17 @@ const placeholder = computed(() => (state.mode === 'flow'
   ? '流程 ID / 名称，多个 ID 用逗号分隔'
   : '源 ID / 源名称，多个 ID 用逗号分隔'))
 const emptyText = computed(() => state.error || (state.mode === 'flow' ? '没有匹配的流程' : '没有匹配的源'))
+const dialogTitle = computed(() => props.purpose === 'bind'
+  ? '关联已有流程'
+  : props.purpose === 'copy' ? '从流程或模板新建' : '更换流程')
+const dialogHint = computed(() => props.purpose === 'bind'
+  ? '选择一条已有流程关联到当前源。关联后可以在流程列表中设置为主流程。'
+  : props.purpose === 'copy'
+    ? '选择一条现有流程或流程模板作为基础，将复制流程结构和节点配置，生成互不影响的新流程。'
+    : '选中的流程会整条复制一份作为本源的新流程，原流程不动；确认时可选择新增一套配置或复用原配置。')
+const confirmText = computed(() => props.purpose === 'bind'
+  ? '关联此流程'
+  : props.purpose === 'copy' ? '以此新建' : '更换为此流程')
 
 function close() {
   emit('update:modelValue', false)
@@ -160,12 +172,12 @@ function confirm() {
   <el-dialog
     :model-value="modelValue"
     class="rfd-dialog"
-    title="更换流程"
+    :title="dialogTitle"
     width="860px"
     append-to-body
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
   >
-    <p class="rfd-hint">选中的流程会整条复制一份作为本源的新流程，原流程不动；确认时可选择新增一套配置或复用原配置。</p>
+    <p class="rfd-hint">{{ dialogHint }}</p>
     <div class="rfd-toolbar">
       <select v-model="state.mode" class="rfd-input rfd-mode" aria-label="查询方式" data-testid="replace-flow-mode" @change="switchMode">
         <option value="flow">按流程</option>
@@ -285,7 +297,7 @@ function confirm() {
         data-testid="replace-flow-confirm"
         :disabled="!state.picked"
         @click="confirm"
-      >更换为此流程</button>
+      >{{ confirmText }}</button>
     </template>
   </el-dialog>
 </template>

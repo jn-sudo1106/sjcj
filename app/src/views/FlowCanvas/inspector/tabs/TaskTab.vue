@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 任务配置 Tab（P1-1 Step 4 · 从 NodeInspector.vue 拆出）。
-// 内容：有效输入表摘要 → 进入条件 → 队列名称 → 任务参数取值 → 上下文来源。
+// 内容：有效输入表摘要 → 进入条件 → 队列名称 → 参数绑定与出参列 → 任务参数取值 → 上下文来源。
 // 进入条件留在本 Tab（2026-08-28 确认）；入口文案按 0828 D20 改成「添加条件」，
 // 落库仍在流程的步骤上（Step.condition，0824-11 §1.1）。
 // 「任务 URL 来源字段/规则」已删除（0804 拍板：当时保留是为了传参，现在在参数位置拼接即可，见开发方案 §2.3）。
@@ -8,10 +8,11 @@
 import { computed, watch } from 'vue'
 import { useFlowStore } from '@/stores/flow'
 import {
-  fieldOptionsFromTableOrOutput, rendersAsRuleNode, nodeEntryCondition, nodeTaskQueue, collectorCapabilityOf,
+  fieldOptionsFromTableOrOutput, rendersAsRuleNode, isRuleLikeNode, isPdfNode, nodeEntryCondition, nodeTaskQueue, collectorCapabilityOf,
   type ConditionGroup, type NodeConfig, type TaskParamValue,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import ConditionRow from '../ConditionRow.vue'
+import ParamsTab from './ParamsTab.vue'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 
 const flow = useFlowStore()
@@ -23,6 +24,8 @@ const cc = computed(() => cfg.value?.collectCfg)
 // 规则处理形态（含 PDF 抓取，2026-09-29）：任务配置的「上下文来源」栏隐藏——
 // 这类节点的入出参在「表配置」里选，这里再来一个入口是同一件事的第二处，两处能填出不一致的值。
 const isRule = computed(() => (cfg.value ? rendersAsRuleNode(cfg.value) : false))
+// 沿用原参数 Tab 的适用范围；规则式、PDF 等节点的出入参继续在表配置中处理。
+const showParameterFields = computed(() => !!cfg.value && !isRuleLikeNode(cfg.value) && !isPdfNode(cfg.value))
 
 const nodeCapability = computed(() => (cfg.value ? collectorCapabilityOf(cfg.value) : undefined))
 
@@ -60,7 +63,7 @@ const taskQueueFallback = computed(() => {
 function onTaskQueueChange(e: Event) {
   flow.setTaskQueue(id.value, (e.target as HTMLInputElement).value)
 }
-// 任务参数由当前节点「参数配置」绑定，不再另行选择参数；这里只配置每个参数的取值来源。
+// 参数绑定与取值映射现在在同一个任务配置 Tab 内。
 const availableTaskParamRefs = computed<string[]>(() => [...new Set(cc.value?.urlParamRefs ?? [])])
 const taskParamValues = computed<TaskParamValue[]>(() => {
   const saved = new Map((cfg.value?.taskCfg?.paramValues ?? []).map((item) => [item.paramId, item]))
@@ -77,7 +80,7 @@ function onTaskParamValueChange(paramId: string, key: 'fieldId' | 'valueExpr', e
   })
 }
 
-// 「出参列」（outColumns）2026-08-27 拍板搬到参数配置 Tab，这里只剩「上下文来源」（contextMap）。
+// 「出参列」（outColumns）由上方 ParamsTab 内部区块维护；这里处理输入表的「上下文来源」。
 // 两者取值来源本来就不同：上下文来源取输入表字段，出参列取输出表字段——放在一起容易被误当成一类。
 //
 // 2026-08-28 对齐旧平台（旧 SourceStep.vue「上下文来源」+ page/base/EntryItemMultiSelect.vue）：
@@ -126,6 +129,10 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
       @input="onTaskQueueChange"
     />
   </div>
+  <section v-if="showParameterFields" class="tt-params" aria-label="任务参数与出参列">
+    <h3>参数与出参</h3>
+    <ParamsTab />
+  </section>
   <div class="rc-field">
     <label>任务参数取值</label>
     <div v-if="!hasEffectiveInput" class="rc-readonly-hint">暂无有效输入表，当前参数取值为空。</div>
@@ -139,7 +146,7 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
         <input class="rc-input" :value="item.valueExpr" placeholder="值函数（可选，如 trim($VAL$)）" @input="onTaskParamValueChange(item.paramId, 'valueExpr', $event)" />
       </div>
     </div>
-    <div v-else class="rc-readonly-hint">请先在当前节点的参数配置中绑定参数。</div>
+    <div v-else class="rc-readonly-hint">请先在上方绑定参数。</div>
   </div>
   <!-- 规则节点不显示这一栏（2026-09-04 会上）：它的入参在「表配置」里选，
        这里再来一个「入参来源」是同一件事的第二个入口，两处能填出不一致的值。
@@ -168,6 +175,8 @@ function onEntryConditionChange(cond: ConditionGroup | undefined) {
 </template>
 
 <style scoped>
+.tt-params { margin: 14px 0; padding: 12px 0; border-top: 1px solid var(--rc-border-soft); border-bottom: 1px solid var(--rc-border-soft); }
+.tt-params h3 { margin: 0 0 10px; color: var(--rc-text-2); font-size: 12px; }
 .rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; white-space: normal; margin-bottom: 10px; }
 .rc-field label { display: block; color: var(--rc-muted); font-size: 11px; margin-bottom: 4px; }
 .rc-input, .rc-select { width: 100%; border: 1px solid #dbe3ee; border-radius: 7px; background: #fff; color: var(--rc-text); font-size: 12px; padding: 7px 9px; outline: none; }

@@ -21,6 +21,7 @@ export interface ParsedCondition {
   field: string
   op: ConditionOp
   value: string
+  joinWith?: 'AND' | 'OR'
 }
 
 export interface ParsedConditionExpr {
@@ -63,11 +64,10 @@ export function conditionTermToExpr(field: string, op: ConditionOp, value: strin
 
 /** 条件项列表 → 完整表达式；field 传物理列名，空 field 的行跳过 */
 export function conditionsToExpr(items: ParsedCondition[], logic: 'AND' | 'OR'): string {
-  const joiner = logic === 'OR' ? ' || ' : ' && '
-  return items
-    .filter((item) => item.field)
-    .map((item) => conditionTermToExpr(item.field, item.op, item.value))
-    .join(joiner)
+  return items.filter((item) => item.field).reduce((expr, item) => {
+    const term = conditionTermToExpr(item.field, item.op, item.value)
+    return expr ? `${expr}${(item.joinWith ?? logic) === 'OR' ? ' || ' : ' && '}${term}` : term
+  }, '')
 }
 
 /** 按顶层 && / || 切分：引号内和括号内的分隔符不算（string.contains(K2,'a&&b') 不会被切开） */
@@ -130,8 +130,7 @@ function parseTerm(raw: string): ParsedCondition | null {
 }
 
 /**
- * 表达式 → 结构化条件项。任何一项解析不了、或 && 和 || 混用（当前数据模型只有一个 logic，
- * 表达不了混合优先级）就整体返回 null——宁可退回原始文本只读，也不要解析出一个和原意不同的条件。
+ * 表达式 → 结构化条件项。每个连接符归到后一项；复杂嵌套或无法识别的项仍退回原文。
  */
 export function parseConditionExpr(expr: string | undefined): ParsedConditionExpr | null {
   const trimmed = expr?.trim()
@@ -139,12 +138,12 @@ export function parseConditionExpr(expr: string | undefined): ParsedConditionExp
   const split = splitTopLevel(trimmed)
   if (!split) return null
   const { parts, joiners } = split
-  if (new Set(joiners).size > 1) return null
+  const mixed = new Set(joiners).size > 1
   const items: ParsedCondition[] = []
-  for (const part of parts) {
+  for (const [index, part] of parts.entries()) {
     const item = parseTerm(part)
     if (!item) return null
-    items.push(item)
+    items.push(index && mixed ? { ...item, joinWith: joiners[index - 1] as 'AND' | 'OR' } : item)
   }
   if (!items.length) return null
   return { logic: joiners[0] === 'OR' ? 'OR' : 'AND', items }

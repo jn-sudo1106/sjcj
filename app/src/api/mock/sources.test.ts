@@ -186,6 +186,12 @@ describe('源任务分页（0713）', () => {
     expect(new Set(all.list.map((task) => task.sourceId))).toEqual(new Set(['NEWS5521', 'NEWS5522']))
   })
 
+  it('任务中心不带网站或源条件时分页查询全平台任务', () => {
+    const all = mockSourceTaskPaged({ page: 1, size: 200 })
+    expect(all.total).toBeGreaterThan(0)
+    expect(new Set(all.list.map((task) => task.sourceId)).size).toBeGreaterThan(1)
+  })
+
   it('未知源没有任务', () => {
     expect(mockSourceTaskPaged({ siteId: 'site-zfb', sourceId: 'ghost-404' })).toEqual({ total: 0, list: [] })
   })

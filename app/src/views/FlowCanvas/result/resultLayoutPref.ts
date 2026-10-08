@@ -52,3 +52,13 @@ export function writeResultRailHeight(height: number): void {
     /* 存不下就算了，下次进来退回默认高度 */
   }
 }
+
+export type DataBrowseMode = 'table' | 'step'
+const DATA_BROWSE_KEY = 'rc.dataview.result.browseMode'
+export function readDataBrowseMode(): DataBrowseMode {
+  try { return localStorage.getItem(DATA_BROWSE_KEY) === 'step' ? 'step' : 'table' }
+  catch { return 'table' }
+}
+export function writeDataBrowseMode(mode: DataBrowseMode): void {
+  try { localStorage.setItem(DATA_BROWSE_KEY, mode) } catch { /* 保留本次选择 */ }
+}

@@ -339,28 +339,35 @@ describe('SourceTab 源列表视图（0924-06）', () => {
     expect(list().props('scopeEmptyText')).toBe('还没有收藏的源，在源列表里点 ☆ 收藏')
   })
 
-  it('打开源：带网站上下文进数据视图，并记一笔最近打开', async () => {
+  it('打开源：带网站上下文进概览视图，并记一笔最近打开', async () => {
     const rec = await import('@/utils/siteRecents')
     rec.recentSiteIds.value = []
     const { list, router } = await mountList()
     await list.vm.$emit('openSource', { sourceId: 'src-9', siteId: '105', name: '源' })
     await flushPromises()
-    expect(router.currentRoute.value.query).toEqual({ siteId: '105', sourceId: 'src-9', view: 'data' })
+    expect(router.currentRoute.value.query).toEqual({ siteId: '105', sourceId: 'src-9', view: 'overview', returnTo: '/collect' })
     expect(rec.recentSiteIds.value[0]).toBe('105')
+  })
+
+  it('明确查看源数据时仍直达数据视图', async () => {
+    const { list, router } = await mountList()
+    await list.vm.$emit('openSourceData', { sourceId: 'src-9', siteId: '105', name: '源' })
+    await flushPromises()
+    expect(router.currentRoute.value.query).toEqual({ siteId: '105', sourceId: 'src-9', view: 'data', returnTo: '/collect' })
   })
 
   it('未关联网站的源（siteId 为 0）只带 sourceId', async () => {
     const { list, router } = await mountList()
     await list.vm.$emit('openSource', { sourceId: 'src-0', siteId: '0', name: '源' })
     await flushPromises()
-    expect(router.currentRoute.value.query).toEqual({ sourceId: 'src-0', view: 'data' })
+    expect(router.currentRoute.value.query).toEqual({ sourceId: 'src-0', view: 'overview', returnTo: '/collect' })
   })
 
   it('点所属网站：进网站源视图', async () => {
     const { list, router } = await mountList()
     await list.vm.$emit('openSite', '12')
     await flushPromises()
-    expect(router.currentRoute.value.query).toEqual({ siteId: '12', view: 'source' })
+    expect(router.currentRoute.value.query).toEqual({ siteId: '12', view: 'source', returnTo: '/collect' })
   })
 
   it('源模式下点刷新：通知源列表重查', async () => {

@@ -356,17 +356,17 @@ const sourceScopeEmptyText = computed(() => {
   if (favOnly.value) return favoriteSourcesLoaded.value ? '还没有收藏的源，在源列表里点 ☆ 收藏' : '正在加载收藏的源…'
   return ''
 })
-/** 打开源：与网站详情「源视图」同一落点（数据视图），带上网站上下文，左侧才加载得出同网站的源 */
-function openSourceFromList(source: Source) {
+/** 打开源：与网站详情「源视图」同一落点（概览视图），带上网站上下文，左侧才加载得出同网站的源 */
+function openSourceFromList(source: Source, view: 'overview' | 'data' = 'overview') {
   if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId)
   void router.push({
     path: '/canvas',
-    query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view: 'data' },
+    query: { ...(source.siteId && source.siteId !== '0' ? { siteId: source.siteId } : {}), sourceId: source.sourceId, view, returnTo: route.fullPath },
   })
 }
 function openSiteFromList(siteId: string) {
   recordSiteVisit(siteId)
-  void router.push({ path: '/canvas', query: { siteId, view: 'source' } })
+  void router.push({ path: '/canvas', query: { siteId, view: 'source', returnTo: route.fullPath } })
 }
 function onToolbarRefresh() {
   if (view.value === 'table') ui.notifySourceListChanged()
@@ -422,13 +422,20 @@ function openNewFlowCanvas() {
 }
 
 // ---- 顶部模块按钮接线 ----
-onMounted(() => {
+let appliedRouteFilters = ''
+function applyRouteFilters() {
+  const signature = JSON.stringify([route.query.state, route.query.category])
+  if (signature === appliedRouteFilters) return
+  appliedRouteFilters = signature
   const qs = String(route.query.state ?? '')
   if (VALID_STATES.includes(qs)) stateFilter.value = qs
   // 总览「资产类型分布」按分类下钻（DistributionPanel 带来的 ?category=<id>）——此前没接，
   // 下钻过来分类筛选是静默丢的。多选口径下预置成一个勾选项。
   const qc = String(route.query.category ?? '')
   if (qc) categoryFilter.value = qc.split(',').map((s) => s.trim()).filter(Boolean)
+}
+onMounted(() => {
+  applyRouteFilters()
   // 并发优化：优先发起核心列表与统计请求；分类与标签后置并发，不再产生扇出请求风暴
   void loadStats({ revalidate: true })
   void loadList({ revalidate: true })
@@ -448,6 +455,7 @@ onActivated(() => {
     activatedOnce = true
     return
   }
+  applyRouteFilters()
   void loadFavoriteSites()
   void loadFavoriteSources()
   void loadStats({ revalidate: true })
@@ -498,7 +506,7 @@ onUnmounted(() => {
       :scope-source-ids="sourceScopeSourceIds"
       :scope-empty-text="sourceScopeEmptyText"
       @open-source="openSourceFromList"
-      @open-source-data="openSourceFromList"
+      @open-source-data="openSourceFromList($event, 'data')"
       @open-site="openSiteFromList"
     >
       <template #filter-extra>

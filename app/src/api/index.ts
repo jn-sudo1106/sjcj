@@ -11,10 +11,11 @@ import type {
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   SourceCheck, SourceCheckLog, SourceCheckQuery, SourceCheckLogQuery,
   TaskInstQuery,
-  Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, NodeType, NodeTypeInput, EntryType, Param, ParamInput, CredentialRef, SourceJob, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
+  Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, NodeType, NodeTypeInput, EntryType, Param, ParamInput, ParamKind, CredentialRef, SourceJob, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, CopySourceInput, SourceCloneRequest, SourceCloneResult,
   FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
   SourceCategory,
+  WorkflowBinding, WorkflowBindingRole,
 } from './types'
 import type { FlowDef, FlowRecommendation } from '@/views/FlowCanvas/canvas/flowModel'
 import {
@@ -34,6 +35,7 @@ import {
   paramFromLegacy,
   paramPageFromLegacy,
   paramToLegacy,
+  paramKindToLegacy,
   isVruleNumericRuleId,
   parseRuleOrchestrationStreamText,
   parseDataProcessStreamText,
@@ -3049,6 +3051,7 @@ export const paramApi = {
       size: undefined,
       keyword: undefined,
       kind: undefined,
+      paramType: p.kind && p.kind !== 'all' ? paramKindToLegacy(p.kind as ParamKind) : undefined,
       paramId: p.paramId ?? (/^\d+$/.test(keyword) ? keyword : undefined),
       paramName: p.paramName ?? (!/^\d+$/.test(keyword) ? keyword : undefined),
       // 旧 ParamList 初始查询固定带 enable='0'（未删除标记，见 0717 参数方案 D1），不随前端「重置」清除
@@ -3181,6 +3184,114 @@ function isFlowNotFound(e: unknown): boolean {
   const code = String(cause?.payload?.code ?? '')
   const message = String((e as Error | undefined)?.message ?? '')
   return code === '-1' && message.includes('未找到相关流程')
+}
+
+function workflowBindingFromApi(value: unknown): WorkflowBinding {
+  const row = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  const versionNo = Number(row.versionNo)
+  return {
+    id: String(row.id ?? ''),
+    bindType: row.bindType === 'SOURCE_GROUP' ? 'SOURCE_GROUP' : 'SOURCE',
+    bindId: String(row.bindId ?? ''),
+    workflowId: String(row.workflowId ?? ''),
+    workflowVersionId: row.workflowVersionId == null || row.workflowVersionId === '' ? undefined : String(row.workflowVersionId),
+    workflowCode: String(row.workflowCode ?? ''),
+    workflowName: String(row.workflowName ?? `流程 #${row.workflowId ?? ''}`),
+    description: row.description == null ? undefined : String(row.description),
+    versionNo: Number.isFinite(versionNo) && versionNo > 0 ? versionNo : undefined,
+    publishedVersionId: row.publishedVersionId == null || row.publishedVersionId === '' ? undefined : String(row.publishedVersionId),
+    publishedVersionNo: Number(row.publishedVersionNo) > 0 ? Number(row.publishedVersionNo) : undefined,
+    publishedFlowId: row.publishedFlowId == null || row.publishedFlowId === '' ? undefined : String(row.publishedFlowId),
+    draftVersionId: row.draftVersionId == null || row.draftVersionId === '' ? undefined : String(row.draftVersionId),
+    draftVersionNo: Number(row.draftVersionNo) > 0 ? Number(row.draftVersionNo) : undefined,
+    draftFlowId: row.draftFlowId == null || row.draftFlowId === '' ? undefined : String(row.draftFlowId),
+    versionStatus: row.versionStatus === 'DRAFT' || row.versionStatus === 'ARCHIVED' ? row.versionStatus : 'PUBLISHED',
+    workflowStatus: row.workflowStatus === 'DISABLED' ? 'DISABLED' : 'ACTIVE',
+    versionManaged: true,
+    followsCurrentVersion: row.followsCurrentVersion !== false,
+    role: (['MAIN', 'BACKFILL', 'AUX'].includes(String(row.role)) ? String(row.role) : 'AUX') as WorkflowBindingRole,
+    primary: row.primary === true || row.primary === 1 || row.primary === '1',
+    priority: Number(row.priority) || 0,
+    status: row.status === 'DISABLED' ? 'DISABLED' : 'ACTIVE',
+    inherited: row.inherited === true || row.inherited === 1 || row.inherited === '1',
+    updatedAt: row.updatedAt == null ? undefined : String(row.updatedAt),
+  }
+}
+
+/** 源多流程绑定。固定端点避免把动态 ID 拼进契约表，也便于生产写保护逐项放行。 */
+export const workflowBindingApi = {
+  list: async (
+    sourceId: string,
+    options: {
+      /** 新多流程接口尚未部署时，用旧 cs_source.FLOW_ID 生成只读主流程行。 */
+      legacySource?: Pick<Source, 'sourceId' | 'flowId' | 'primaryFlowId' | 'updatedAt'>
+      onCompatibility?: () => void
+    } = {},
+  ): Promise<WorkflowBinding[]> => {
+    try {
+      // 本地演示源里保留了字母 ID；Spring 接口收 Long，发过去只会得到 400。
+      if (!/^\d+$/.test(sourceId)) throw new Error('当前源使用本地演示 ID')
+      const result = await request<unknown>('workflow/sourceBindings', { sourceId }, {
+        method: 'GET', httpEndpoint: 'workflow/sourceBindings', httpParams: { sourceId },
+      })
+      return (Array.isArray(result) ? result : []).map(workflowBindingFromApi)
+    } catch (error) {
+      const source = options.legacySource
+      if (!source || String(source.sourceId) !== sourceId) throw error
+      options.onCompatibility?.()
+      const workflowId = String(source.primaryFlowId || source.flowId || '').trim()
+      if (!workflowId || workflowId === '0' || workflowId === '-1') return []
+      return [{
+        id: `legacy:${sourceId}:${workflowId}`,
+        bindType: 'SOURCE',
+        bindId: sourceId,
+        workflowId,
+        workflowCode: `LEGACY-${workflowId}`,
+        workflowName: `当前主流程 #${workflowId}`,
+        versionNo: 1,
+        publishedVersionNo: 1,
+        publishedFlowId: workflowId,
+        versionStatus: 'PUBLISHED',
+        workflowStatus: 'ACTIVE',
+        versionManaged: false,
+        followsCurrentVersion: true,
+        role: 'MAIN',
+        primary: true,
+        priority: 0,
+        status: 'ACTIVE',
+        inherited: false,
+        updatedAt: source.updatedAt,
+      }]
+    }
+  },
+  bind: async (input: { sourceId: string; workflowId: string; workflowVersionId?: string; role?: WorkflowBindingRole; primary?: boolean }) =>
+    request<unknown>('workflow/bindSource', input, { method: 'POST', httpEndpoint: 'workflow/bindSource', httpParams: input }),
+  setPrimary: async (sourceId: string, workflowId: string) =>
+    request<unknown>('workflow/setPrimary', { sourceId, workflowId }, { method: 'POST', httpEndpoint: 'workflow/setPrimary', httpParams: { sourceId, workflowId } }),
+  unbind: async (sourceId: string, workflowId: string) =>
+    request<unknown>('workflow/unbindSource', { sourceId, workflowId }, { method: 'POST', httpEndpoint: 'workflow/unbindSource', httpParams: { sourceId, workflowId } }),
+  restoreInherited: async (sourceId: string): Promise<WorkflowBinding[]> => {
+    const result = await request<unknown>('workflow/restoreInherited', { sourceId }, { method: 'POST', httpEndpoint: 'workflow/restoreInherited', httpParams: { sourceId } })
+    return (Array.isArray(result) ? result : []).map(workflowBindingFromApi)
+  },
+  createForSource: async (input: { sourceId: string; name: string; role?: WorkflowBindingRole; primary?: boolean }): Promise<WorkflowBinding> => {
+    const result = await request<unknown>('workflow/createForSource', input, { method: 'POST', httpEndpoint: 'workflow/createForSource', httpParams: input })
+    return workflowBindingFromApi(result)
+  },
+  ensureDraft: async (workflowId: string): Promise<WorkflowBinding> => {
+    const input = { workflowId }
+    const result = await request<unknown>('workflow/ensureDraft', input, {
+      method: 'POST', httpEndpoint: 'workflow/ensureDraft', httpParams: input,
+    })
+    return workflowBindingFromApi(result)
+  },
+  publish: async (workflowId: string): Promise<WorkflowBinding> => {
+    const input = { workflowId }
+    const result = await request<unknown>('workflow/publish', input, {
+      method: 'POST', httpEndpoint: 'workflow/publish', httpParams: input,
+    })
+    return workflowBindingFromApi(result)
+  },
 }
 
 export const flowCenterApi = {

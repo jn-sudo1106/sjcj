@@ -33,9 +33,10 @@ describe('AppSidebar', () => {
     const { wrapper } = await mountAt('/overview')
     const groupTitles = wrapper.findAll('.rc-nav-title').map((n) => n.text())
     expect(groupTitles).toContain('首页')
-    expect(groupTitles).toContain('资产管理')
-    expect(groupTitles).toContain('数据与运行')
-    expect(groupTitles).toContain('运维监控')
+    expect(groupTitles).toContain('源工作区')
+    expect(groupTitles).toContain('全局数据')
+    expect(groupTitles).toContain('流程与规则')
+    expect(groupTitles).toContain('运行与监控')
   })
 
   // navIcons 是按 TAB key 索引的普通对象，漏一个不报错、只渲染成空图标方块。
@@ -72,7 +73,7 @@ describe('AppSidebar', () => {
     const { wrapper } = await mountAt('/canvas')
     const active = wrapper.findAll('.rc-nav-item').filter((i) => i.classes('active'))
     expect(active).toHaveLength(1)
-    expect(active[0].text()).toContain('采集资产')
+    expect(active[0].text()).toContain('源管理')
   })
 
   it('点击某个导航项会跳转到对应路径', async () => {

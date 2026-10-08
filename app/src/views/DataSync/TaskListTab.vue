@@ -1,0 +1,263 @@
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { useAuthStore } from '@/stores/auth'
+import { syncApi, type SyncClient, type SyncCustomer, type SyncDatabase, type SyncTask, type SyncTaskConfig } from '@/api/dataSync'
+
+const router = useRouter()
+const route = useRoute()
+const auth = useAuthStore()
+const admin = computed(() => auth.info?.name === 'admin')
+const customers = ref<SyncCustomer[]>([])
+const clients = ref<SyncClient[]>([])
+const tasks = ref<SyncTask[]>([])
+const total = ref(0)
+const loading = ref(false)
+const loadError = ref('')
+const pageNo = ref(1)
+const pageSize = ref(10)
+const selected = ref<SyncTask[]>([])
+const filter = reactive({ customerId: admin.value ? '' : String(auth.info?.id ?? ''), clientId: '', taskName: '',
+  sourceTableName: String(route.query.tableName ?? ''), targetTableName: '', taskStatus: '', taskIdStr: '' })
+const detailOpen = ref(false)
+const detailEdit = ref(false)
+const detailLoading = ref(false)
+const detailSaving = ref(false)
+const detail = ref<SyncTaskConfig | null>(null)
+const runOpen = ref(false)
+const runTargets = ref<SyncTask[]>([])
+const runType = ref<'time' | 'id'>('time')
+const runParams = reactive({ startId: 1, endId: undefined as number | undefined, startTime: '', endTime: '' })
+const copyOpen = ref(false)
+const copyTargets = ref<SyncDatabase[]>([])
+const databaseIds = ref<Array<string | number>>([])
+const copyTableFlag = ref(true)
+
+async function load() {
+  loading.value = true
+  try {
+    const taskIds = filter.taskIdStr.trim() ? filter.taskIdStr.split(',').map((id) => id.trim()).filter(Boolean) : undefined
+    const res = await syncApi.tasks({ ...filter, enable: '0', taskType: '', pageNo: pageNo.value,
+      pageSize: pageSize.value, taskIds })
+    tasks.value = res.list ?? []
+    total.value = res.total ?? 0
+    loadError.value = ''
+  } catch (error) { loadError.value = String(error); tasks.value = []; total.value = 0; ElMessage.error(loadError.value) }
+  finally { loading.value = false }
+}
+
+async function loadClients() {
+  clients.value = []
+  filter.clientId = ''
+  if (!filter.customerId) return
+  try {
+    const res = await syncApi.clients({ customerId: filter.customerId, pageNo: 1, pageSize: 100 })
+    clients.value = res.list ?? []
+  } catch (error) { ElMessage.error(String(error)) }
+}
+
+watch(() => filter.customerId, () => { void loadClients(); pageNo.value = 1; void load() })
+onMounted(async () => {
+  if (admin.value) {
+    try { customers.value = await syncApi.customers() ?? [] }
+    catch (error) { ElMessage.error(String(error)) }
+  }
+  await Promise.all([loadClients(), load()])
+})
+
+function search() { pageNo.value = 1; void load() }
+function reset() {
+  Object.assign(filter, { customerId: admin.value ? '' : String(auth.info?.id ?? ''), clientId: '',
+    taskName: '', sourceTableName: '', targetTableName: '', taskStatus: '', taskIdStr: '' })
+  search()
+}
+
+async function openDetail(row: SyncTask, editable: boolean) {
+  detailOpen.value = true
+  detailEdit.value = editable
+  detail.value = null
+  detailLoading.value = true
+  try {
+    detail.value = { ...await syncApi.taskDetail(row.id), taskName: row.taskName, syncType: String(row.syncType) }
+  } catch (error) { ElMessage.error(String(error)); detailOpen.value = false }
+  finally { detailLoading.value = false }
+}
+
+async function saveDetail() {
+  if (!detail.value) return
+  if (!detail.value.taskName || !detail.value.cron || !detail.value.fromSql || !detail.value.startSql ||
+      !detail.value.conditionSql || !detail.value.insertSql || !detail.value.updateSql) {
+    ElMessage.warning('请填写任务名称、定时策略和全部 SQL')
+    return
+  }
+  detailSaving.value = true
+  try { await syncApi.saveTaskDetail(detail.value); ElMessage.success('保存成功'); detailOpen.value = false; await load() }
+  catch (error) { ElMessage.error(String(error)) }
+  finally { detailSaving.value = false }
+}
+
+async function action(ids: Array<string | number>, type: 'start' | 'stop') {
+  try {
+    await ElMessageBox.confirm(`确定${type === 'start' ? '开启' : '关闭'} ${ids.length} 个同步任务？`, '确认操作', { type: 'warning' })
+    if (type === 'start') await syncApi.start(ids)
+    else await syncApi.stop(ids)
+    ElMessage.success('操作成功')
+    await load()
+  } catch (error) { if (error !== 'cancel') ElMessage.error(String(error)) }
+}
+
+function openRun(rows: SyncTask[]) {
+  if (!rows.length) return
+  runTargets.value = rows
+  runType.value = 'time'
+  runParams.startId = 1; runParams.endId = undefined; runParams.startTime = ''; runParams.endTime = ''
+  runOpen.value = true
+}
+
+async function run(withParams: boolean) {
+  const rows = withParams ? runTargets.value : selected.value
+  if (!rows.length) return
+  const params: Record<string, unknown> = {}
+  if (withParams) {
+    if (runType.value === 'time') {
+      if (!runParams.startTime || !runParams.endTime || runParams.startTime > runParams.endTime) {
+        ElMessage.warning('请选择有效的开始和结束时间'); return
+      }
+      params.startTime = runParams.startTime; params.endTime = runParams.endTime
+    } else {
+      if (runParams.endId !== undefined && runParams.endId < runParams.startId) {
+        ElMessage.warning('结束 ID 不能小于开始 ID'); return
+      }
+      params.startId = runParams.startId; params.endId = runParams.endId
+    }
+  }
+  try {
+    await syncApi.run(rows.map((row) => ({ taskId: row.id, clientId: row.clientId })), params)
+    ElMessage.success('执行成功')
+    runOpen.value = false
+    await load()
+  } catch (error) { ElMessage.error(String(error)) }
+}
+
+async function runNow(row: SyncTask) {
+  try {
+    await ElMessageBox.confirm(`立即执行“${row.taskName}”？`, '确认执行', { type: 'warning' })
+    await syncApi.run([{ taskId: row.id, clientId: row.clientId }])
+    ElMessage.success('执行成功')
+    await load()
+  } catch (error) { if (error !== 'cancel') ElMessage.error(String(error)) }
+}
+
+async function openCopy() {
+  if (!selected.value.length) return
+  try {
+    const res = await syncApi.databases({ pageNo: 1, pageSize: 100, customerId: filter.customerId })
+    copyTargets.value = res.list ?? []
+    databaseIds.value = []
+    copyTableFlag.value = true
+    copyOpen.value = true
+  } catch (error) { ElMessage.error(String(error)) }
+}
+
+async function copy() {
+  if (!databaseIds.value.length) return
+  try {
+    await syncApi.copy(selected.value.map((row) => row.id), databaseIds.value, copyTableFlag.value)
+    ElMessage.success('复制任务成功')
+    copyOpen.value = false
+    await load()
+  } catch (error) { ElMessage.error(String(error)) }
+}
+
+async function remove(row: SyncTask) {
+  try {
+    const result = await ElMessageBox.prompt('目标表处理方式：0 不处理，1 备份表，2 删除表', `删除任务“${row.taskName}”`, {
+      inputValue: '0', inputPattern: /^[012]$/, inputErrorMessage: '请输入 0、1 或 2',
+      confirmButtonText: '确认删除', type: 'warning',
+    })
+    await syncApi.remove(row.id, row.clientId, row.targetTableName, result.value === '0' ? undefined : result.value)
+    ElMessage.success('删除成功')
+    await load()
+  } catch (error) { if (error !== 'cancel') ElMessage.error(String(error)) }
+}
+</script>
+
+<template>
+  <div class="sync-panel">
+    <el-alert v-if="loadError" :title="loadError" type="error" show-icon class="sync-alert" />
+    <div class="sync-filter">
+      <el-select v-if="admin" v-model="filter.customerId" clearable placeholder="全部客户" class="sync-filter-input"><el-option v-for="item in customers" :key="item.id" :value="String(item.id)" :label="item.customerName" /></el-select>
+      <el-select v-model="filter.clientId" clearable placeholder="全部客户端" class="sync-filter-input"><el-option v-for="item in clients" :key="item.id" :value="String(item.id)" :label="item.clientName" /></el-select>
+      <el-input v-model="filter.taskName" placeholder="任务名称" class="sync-filter-input" @keyup.enter="search" />
+      <el-input v-model="filter.sourceTableName" placeholder="源表名称" class="sync-filter-input" @keyup.enter="search" />
+      <el-input v-model="filter.targetTableName" placeholder="目标表名称" class="sync-filter-input" @keyup.enter="search" />
+      <el-select v-model="filter.taskStatus" placeholder="全部状态" class="sync-filter-input"><el-option value="" label="全部状态" /><el-option value="0" label="已启用" /><el-option value="1" label="已暂停" /></el-select>
+      <el-input v-model="filter.taskIdStr" placeholder="任务 ID，逗号分隔" class="sync-filter-input" @keyup.enter="search" />
+      <el-button type="primary" @click="search">查询</el-button><el-button @click="reset">重置</el-button>
+    </div>
+    <div class="sync-toolbar">
+      <el-button type="primary" @click="router.push('/sync/create')">新建同步</el-button>
+      <template v-if="selected.length">
+        <el-button @click="openRun(selected)">批量参数执行（{{ selected.length }}）</el-button>
+        <el-button @click="action(selected.map((row) => row.id), 'start')">批量开启</el-button>
+        <el-button @click="action(selected.map((row) => row.id), 'stop')">批量关闭</el-button>
+        <el-button @click="openCopy">复制到目标数据源</el-button>
+      </template>
+      <el-button class="sync-refresh" @click="load">刷新</el-button>
+    </div>
+    <el-table v-loading="loading" :data="tasks" row-key="id" border @selection-change="selected = $event">
+      <el-table-column type="selection" width="48" />
+      <el-table-column prop="id" label="ID" width="85" />
+      <el-table-column prop="taskName" label="任务名称" min-width="190" show-overflow-tooltip><template #default="{ row }"><el-button link type="primary" @click="openDetail(row, false)">{{ row.taskName }}</el-button></template></el-table-column>
+      <el-table-column prop="sourceTable" label="源表" min-width="170" show-overflow-tooltip />
+      <el-table-column prop="targetTableName" label="目标表" min-width="150" show-overflow-tooltip />
+      <el-table-column label="方式" width="75"><template #default="{ row }">{{ Number(row.syncType) === 1 ? 'SQL' : 'CDC' }}</template></el-table-column>
+      <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="Number(row.status) === 0 ? 'success' : 'info'" size="small">{{ Number(row.status) === 0 ? '运行中' : '已暂停' }}</el-tag></template></el-table-column>
+      <el-table-column prop="cron" label="同步频率" min-width="140" show-overflow-tooltip />
+      <el-table-column prop="lastSyncTime" label="最后同步成功" min-width="165" />
+      <el-table-column label="操作" width="250" fixed="right"><template #default="{ row }">
+        <el-button link type="primary" @click="openDetail(row, true)">编辑</el-button>
+        <el-button v-if="Number(row.status) === 0 && Number(row.syncType) === 1" link type="primary" @click="runNow(row)">执行</el-button>
+        <el-button v-if="Number(row.status) === 0 && Number(row.syncType) === 1" link type="primary" @click="openRun([row])">参数执行</el-button>
+        <el-button v-if="Number(row.status) === 0" link @click="action([row.id], 'stop')">关闭</el-button>
+        <template v-else><el-button link @click="action([row.id], 'start')">开启</el-button><el-button link type="danger" @click="remove(row)">删除</el-button></template>
+      </template></el-table-column>
+    </el-table>
+    <el-pagination v-model:current-page="pageNo" v-model:page-size="pageSize" class="sync-pagination" :total="total" :page-sizes="[10, 20, 50]" layout="total, sizes, prev, pager, next" @change="load" />
+
+    <el-drawer v-model="detailOpen" title="任务配置明细" size="min(720px, 94vw)" :destroy-on-close="true">
+      <div v-loading="detailLoading" class="sync-detail">
+        <el-form v-if="detail" :model="detail" label-position="top">
+          <el-form-item label="同步任务类型"><el-input model-value="SQL 查询" disabled /></el-form-item>
+          <el-form-item label="同步任务名称"><el-input v-model="detail.taskName" :disabled="!detailEdit" /></el-form-item>
+          <el-form-item label="同步定时策略"><el-input v-model="detail.cron" :disabled="!detailEdit" /></el-form-item>
+          <el-form-item v-for="field in ['startSql', 'fromSql', 'conditionSql', 'insertSql', 'updateSql'] as const" :key="field" :label="({ startSql: '查询目标数据起始 SQL', fromSql: '查询源数据 SQL', conditionSql: '条件 SQL', insertSql: '保存数据 SQL', updateSql: '更新数据 SQL' })[field]">
+            <el-input v-model="detail[field]" type="textarea" :rows="4" :disabled="!detailEdit" />
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer><el-button @click="detailOpen = false">关闭</el-button><el-button v-if="detailEdit" type="primary" :loading="detailSaving" @click="saveDetail">保存</el-button></template>
+    </el-drawer>
+
+    <el-dialog v-model="runOpen" title="任务参数" width="min(620px, 94vw)">
+      <el-radio-group v-model="runType"><el-radio value="time">按时间同步</el-radio><el-radio value="id">按 ID 同步</el-radio></el-radio-group>
+      <div class="sync-dialog-grid">
+        <template v-if="runType === 'time'"><el-date-picker v-model="runParams.startTime" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" placeholder="开始时间" /><el-date-picker v-model="runParams.endTime" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" placeholder="结束时间" /></template>
+        <template v-else><el-input-number v-model="runParams.startId" :min="1" /><el-input-number v-model="runParams.endId" :min="1" placeholder="结束 ID" /></template>
+      </div>
+      <template #footer><el-button @click="runOpen = false">取消</el-button><el-button type="primary" @click="run(true)">执行</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="copyOpen" title="复制任务到目标数据源" width="min(600px, 94vw)">
+      <el-form label-position="top"><el-form-item label="目标数据源"><el-select v-model="databaseIds" multiple filterable style="width:100%" placeholder="请选择目标数据源">
+        <el-option v-for="item in copyTargets" :key="item.id" :value="item.id" :label="`${item.name} [${item.dbSchema}]`" />
+      </el-select></el-form-item><el-form-item label="创建新表"><el-checkbox v-model="copyTableFlag">在目标数据源创建新表</el-checkbox></el-form-item></el-form>
+      <template #footer><el-button @click="copyOpen = false">取消</el-button><el-button type="primary" :disabled="!databaseIds.length" @click="copy">确认复制</el-button></template>
+    </el-dialog>
+  </div>
+</template>
+
+<style scoped>
+.sync-panel { min-height: 0; }.sync-alert { margin-bottom: 12px; }.sync-filter, .sync-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }.sync-filter-input { width: 160px; }.sync-toolbar { padding-top: 2px; }.sync-refresh { margin-left: auto; }.sync-pagination { justify-content: flex-end; margin-top: 14px; }.sync-detail { padding-right: 10px; }.sync-dialog-grid { display: flex; flex-wrap: wrap; gap: 12px; }
+</style>

@@ -6,7 +6,7 @@ let flowBoardSeq = 0
 </script>
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import { useDuplicateNode } from './useDuplicateNode'
@@ -17,10 +17,11 @@ import { entryApi, flowApi, flowCenterApi, type FlowRecord } from '@/api'
 import { isWritableStepId, relinkCandidates, validFlowIdOf } from '@/utils/flow/stepPersist'
 import { copyToClipboard } from '@/utils/clipboard'
 import CanvasHeader from '../shared/CanvasHeader.vue'
+import SourceWorkflowTabs from '../source/SourceWorkflowTabs.vue'
 import AddNodePopover from './AddNodePopover.vue'
 import FlowXmlDialog from './FlowXmlDialog.vue'
 import { flowToXml } from '@/utils/flow/flowXml'
-import { applyTemplateToSource, reloadFlowIntoCanvas, reloadSourceIntoCanvas, reportDetachResult } from '@/utils/flow/applyTemplateToSource'
+import { reloadFlowIntoCanvas, reloadSourceIntoCanvas, reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import { detachConfigsInPlace } from '@/utils/flow/copiedConfigs'
 import {
   effectiveOutputTable,
@@ -58,6 +59,8 @@ const xmlOpen = ref(false)
 const xml = computed(() => (xmlOpen.value ? flowToXml(flow.serialize()) : ''))
 const canExportXml = computed(() => !flow.dirty && flow.validateFlow().length === 0)
 const recommending = ref(false)
+const isPublishedView = computed(() => flow.sourceCtx?.workflowVersionManaged !== false
+  && flow.sourceCtx?.workflowVersionStatus === 'PUBLISHED')
 
 // 编排对象切换器已升级为页面级源侧栏（0710 会议 B1），组件与接线整体迁至 index.vue
 
@@ -88,67 +91,6 @@ async function detachTemplateConfigs(template: FlowRecord) {
     sourceFlowRef: `模板「${template.name}」`,
   })
   reportDetachResult({ ok: true, copied: detach.copied, remainShared: detach.remainShared })
-}
-
-/**
- * 从流程模板套用（0903 Y8-C / H03；0929 F2 口径重对齐）。
- *
- * **落点在画布，不在新建向导**（2026-09-04 用户订正：「新建选模板的时候不需要，进画布模式的
- * 才需要」）。新建网站那一页只管建网站和源，套模板是进画布之后的事。
- *
- * 复制语义（0929 实测对齐）：后端 copyFlow/copyTemplateSteps **只复制步骤行**，步骤的 CONFIG_ID
- * 沿用模板的配置——模板与复制品初始是共享的。为守住「复制出来的改动不影响模板」这条红线，
- * 套用成功后由 `detachCopiedConfigs` 立即把复制进来的步骤逐个复制配置并换绑（config/copyAll +
- * stepModify），之后各改各的（实现见 utils/flow/copiedConfigs.ts）。换绑失败的步骤登记到本地，
- * 之后编辑该配置时弹知情确认。两种分支（本源已有流程 → 复制步骤进去；没有 → copyFlow +
- * bindSources）见 `utils/flow/applyTemplateToSource.ts`，顶部流程下拉共用同一条实现。
- */
-const applyingTemplate = ref(false)
-const detachProgress = ref('')
-async function applyFlowTemplate() {
-  const sourceId = flow.sourceCtx?.sourceId
-  if (!sourceId || applyingTemplate.value) return
-  applyingTemplate.value = true
-  detachProgress.value = ''
-  try {
-    const templates = await flowCenterApi.templates()
-    if (!templates.length) {
-      ElMessage.info('还没有流程被标记为模板。可在流程中心对任一流程点「标记为模板」。')
-      return
-    }
-    const { value } = await ElMessageBox.prompt(
-      `将把模板的节点复制到本源的流程，并自动为复制出的节点复制一份独立配置——之后修改本源流程的节点不会影响模板和其它源。\n可选模板：${templates.map((t) => `${t.name}(#${t.id})`).join('、')}`,
-      '从流程模板套用',
-      { inputValue: templates[0].id, inputPattern: /^\d+$/, inputErrorMessage: '请输入上面列出的模板 ID', confirmButtonText: '套用', cancelButtonText: '取消' },
-    )
-    const picked = templates.find((t) => t.id === String(value).trim())
-    if (!picked) {
-      ElMessage.error(`#${String(value).trim()} 不在模板列表里`)
-      return
-    }
-    // 落库 + 重载都在 utils/flow/applyTemplateToSource 里，与顶部下拉共用同一条实现
-    //（2026-09-22 抽出：顶部那条原先走本地 applyTemplate，压根不落库）
-    const applied = await applyTemplateToSource(
-      picked.id,
-      sourceId,
-      flow.sourceCtx?.flowId,
-      flow.sourceCtx?.name,
-      { onProgress: (done, total) => { detachProgress.value = `${done}/${total}` } },
-    )
-    ElMessage.success(applied.createdFlow
-      ? `已按模板「${picked.name}」新建流程 #${applied.flowId} 并关联到本源`
-      : (applied.message || `已把模板「${picked.name}」的步骤复制到本源的流程`))
-    reportDetachResult(applied.detach)
-    // 后端已经把步骤建好了，画布得重新按后端拓扑加载一次——别在本地拼节点
-    //（那样 id 全是本地草稿，自动保存又会重复建一遍）
-    if (!await reloadSourceIntoCanvas(sourceId)) ElMessage.warning('步骤已复制，但画布重新加载失败，请刷新页面查看')
-  } catch (e) {
-    if (e === 'cancel' || e === 'close') return
-    ElMessage.error(`套用模板失败：${(e as Error)?.message ?? String(e)}`)
-  } finally {
-    applyingTemplate.value = false
-    detachProgress.value = ''
-  }
 }
 
 async function recommendTemplateFlow() {
@@ -622,10 +564,18 @@ watch(
 <template>
   <main class="rc-canvas" :class="{ 'is-embedded': props.embedded }" @contextmenu="onPaneMenu" @click="closeMenu">
     <CanvasHeader v-if="!props.embedded" />
+    <SourceWorkflowTabs
+      v-if="!props.embedded && flow.sourceCtx"
+      :key="flow.sourceCtx.sourceId"
+      :source-id="flow.sourceCtx.sourceId"
+    />
 
     <!-- 画布主体单独做定位容器（0928）：节点库按钮原来相对整块 .rc-canvas 用写死的 top:108px
          躲开头部，头部一多出分支提示条就压到提示文字上；改成相对画布区域定位，头部多高都不影响。 -->
-    <div class="rc-canvas-body">
+    <div v-if="isPublishedView" class="rc-version-readonly" data-testid="published-version-readonly">
+      已发布 v{{ flow.sourceCtx?.workflowVersionNo ?? '—' }} 为只读版本；点击上方“编辑新版本”后再修改节点。
+    </div>
+    <div class="rc-canvas-body" :class="{ 'is-version-readonly': isPublishedView }">
     <button
       class="rc-node-library-toggle"
       type="button"
@@ -662,18 +612,9 @@ watch(
         <!-- 空白源画布引导卡 -->
         <div v-if="!flow.layout.nodes.length" class="rc-empty-cta">
           <div class="rc-empty-cta-title">空白编排画布</div>
-          <div class="rc-empty-cta-sub">可以用「＋」手工添加步骤，按当前对象推荐可复用流程，或直接套用一个已有的流程模板；应用后再逐节点调整。</div>
+          <div class="rc-empty-cta-sub">可以用「＋」手工添加步骤，或按当前对象智能生成一套初始流程；生成后再逐节点调整。</div>
           <div class="rc-empty-cta-btns">
             <button class="rc-btn primary" type="button" :disabled="recommending" @click="recommendTemplateFlow">{{ recommending ? '推荐中…' : '智能推荐流程' }}</button>
-            <!-- 0903 Y8-C：从已标记的流程模板套用，走后端复制端点（H03：复制出一套新配置，不是引用） -->
-            <button
-              v-if="flow.sourceCtx"
-              class="rc-btn"
-              type="button"
-              data-testid="apply-flow-template"
-              :disabled="applyingTemplate"
-              @click="applyFlowTemplate"
-            >{{ applyingTemplate ? `套用中…${detachProgress ? ` 复制配置 ${detachProgress}` : ''}` : '从流程模板套用' }}</button>
           </div>
         </div>
 
@@ -881,6 +822,9 @@ watch(
 </template>
 
 <style scoped>
+.rc-version-readonly { padding: 6px 12px; border-bottom: 1px solid #bfdbfe; background: #eff6ff; color: #1e40af; font-size: 11px; }
+.rc-canvas-body.is-version-readonly { pointer-events: none; background: #f8fafc; }
+.rc-canvas-body.is-version-readonly :deep(.rc-flow-node) { opacity: .9; }
 .rc-canvas { position: relative; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; height: 100%; display: flex; flex-direction: column; }
 .rc-canvas-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; flex-wrap: wrap; }
 .rc-canvas-title { font-weight: 700; color: var(--rc-text); font-size: 13px; }

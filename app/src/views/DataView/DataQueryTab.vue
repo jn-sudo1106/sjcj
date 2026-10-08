@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, CopyDocument, QuestionFilled, Plus, Refresh } from '@element-plus/icons-vue'
+import { ArrowDown, QuestionFilled, Plus, Refresh } from '@element-plus/icons-vue'
 import {
   dataApi, sourceApi, entryApi,
   type DataRow, type DataTableMeta, type EntryTypeGroup, type EntryDetail, type RowQuery, type SourceOption,
@@ -26,6 +26,7 @@ import { copyToClipboard } from '@/utils/clipboard'
 import { extFromFieldHint, extFromName, ossPathWithExt } from '@/utils/ossFile'
 import { isOssFilePath } from '@/views/FlowCanvas/result/rowDetailFields'
 import FilePreview from '@/views/FlowCanvas/result/components/FilePreview.vue'
+import DataFetchApiDialog from '@/components/data/DataFetchApiDialog.vue'
 
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
 // 本文件覆盖数据范围/快捷查询/结果工具条/批量条/动态列表格/分页/数据详情抽屉/手动添加/手动修改/统计/
@@ -55,6 +56,8 @@ const group = ref<EntryTypeGroup>({ list1: [], list2: [], list3: [] })
 const tableId = ref('')
 const tableMeta = ref<DataTableMeta | null>(null)
 const sourceOptions = ref<SourceOption[]>([])
+const tableSourceIds = ref<string[]>([])
+const sourceLoading = ref(false)
 const sourceId = ref('')
 const tableSelectRef = ref<{ blur: () => void } | null>(null)
 const sourceSelectRef = ref<{ blur: () => void } | null>(null)
@@ -110,14 +113,109 @@ function openMoreSources() {
   moreSourcesOpen.value = true
 }
 async function onSourcePicked(source: Source) {
-  if (!sourceOptions.value.some((s) => s.sourceId === source.sourceId)) {
+  // “更多源”是跨表按源搜索入口：选中源后切到该源的默认数据表。
+  sourceId.value = source.sourceId
+  await loadGroup()
+  tableId.value = group.value.main || source.mainTable || group.value.list1[0]?.tableId || group.value.list3[0]?.tableId || ''
+  await loadTableMeta()
+  await loadSources()
+  if (source.mainTable === tableId.value && !tableSourceIds.value.includes(source.sourceId)) {
+    tableSourceIds.value = [source.sourceId, ...tableSourceIds.value]
+  }
+  sourceId.value = tableSourceIds.value.includes(source.sourceId) ? source.sourceId : ''
+  if (sourceId.value && !sourceOptions.value.some((s) => s.sourceId === source.sourceId)) {
     sourceOptions.value = [{ sourceId: source.sourceId, name: source.name }, ...sourceOptions.value]
   }
-  sourceId.value = source.sourceId
-  await onSourceChange()
+  panelRef.value?.search()
 }
+const SOURCE_PREVIEW_SIZE = 50
+const SOURCE_LOOKUP_CHUNK = 150
+let sourceSearchTimer: ReturnType<typeof setTimeout> | undefined
+const sourceSearchKeyword = ref('')
+let sourceScopeRequest = 0
+let sourceSearchRequest = 0
+
+async function sourceOptionsForIds(ids: string[], name?: string): Promise<SourceOption[]> {
+  if (!ids.length) return []
+  const result = await sourceApi.sourcePaged({ sourceIds: ids, name, page: 1, size: ids.length })
+  return result.list.map((source) => ({ sourceId: source.sourceId, name: source.name }))
+}
+
 async function loadSources() {
-  sourceOptions.value = await sourceApi.sourceSame(sourceId.value || undefined)
+  const requestId = ++sourceScopeRequest
+  ++sourceSearchRequest
+  if (sourceSearchTimer) clearTimeout(sourceSearchTimer)
+  const selectedTable = tableId.value
+  sourceOptions.value = []
+  tableSourceIds.value = []
+  if (!selectedTable) return
+  sourceLoading.value = true
+  try {
+    // sourceSame 按当前源的主表找同类源；数据中心必须按当前数据表中的 SOURCE_ID 定范围。
+    const ids = [...new Set(await dataApi.distinctSource({ tableId: selectedTable, size: 20000 }))]
+    if (requestId !== sourceScopeRequest || selectedTable !== tableId.value) return
+    tableSourceIds.value = ids
+    const clearedSource = !!sourceId.value && !ids.includes(sourceId.value)
+    if (clearedSource) {
+      sourceId.value = ''
+      await loadGroup()
+      if (requestId !== sourceScopeRequest || selectedTable !== tableId.value) return
+    }
+    const previewIds = ids.slice(0, SOURCE_PREVIEW_SIZE)
+    if (sourceId.value && ids.includes(sourceId.value) && !previewIds.includes(sourceId.value)) {
+      previewIds[previewIds.length - 1] = sourceId.value
+    }
+    sourceOptions.value = await sourceOptionsForIds(previewIds)
+    if (requestId === sourceScopeRequest && sourceSearchKeyword.value.trim()) {
+      await searchSources(sourceSearchKeyword.value)
+    }
+  } catch (error) {
+    if (requestId === sourceScopeRequest) ElMessage.warning(`加载当前表的源失败：${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    if (requestId === sourceScopeRequest) sourceLoading.value = false
+  }
+}
+
+async function searchSources(keyword: string) {
+  const requestId = ++sourceSearchRequest
+  const ids = tableSourceIds.value
+  if (!keyword.trim()) {
+    sourceLoading.value = true
+    try {
+      const options = await sourceOptionsForIds(ids.slice(0, SOURCE_PREVIEW_SIZE))
+      if (requestId === sourceSearchRequest) sourceOptions.value = options
+    } finally {
+      if (requestId === sourceSearchRequest) sourceLoading.value = false
+    }
+    return
+  }
+  sourceLoading.value = true
+  try {
+    const query = keyword.trim()
+    let options: SourceOption[] = []
+    const idMatches = ids.filter((id) => id.includes(query))
+    if (idMatches.length) {
+      options = await sourceOptionsForIds(idMatches.slice(0, SOURCE_PREVIEW_SIZE))
+    } else {
+      // 名称检索由后端在表的源 ID 分块内执行，避免先全局分页再取交集漏掉本表的源。
+      for (let i = 0; i < ids.length && options.length < SOURCE_PREVIEW_SIZE; i += SOURCE_LOOKUP_CHUNK * 4) {
+        const batch = Array.from({ length: 4 }, (_, n) => ids.slice(i + n * SOURCE_LOOKUP_CHUNK, i + (n + 1) * SOURCE_LOOKUP_CHUNK)).filter((part) => part.length)
+        const found = await Promise.all(batch.map((part) => sourceOptionsForIds(part, query)))
+        if (requestId !== sourceSearchRequest) return
+        options = [...options, ...found.flat()].slice(0, SOURCE_PREVIEW_SIZE)
+      }
+    }
+    if (requestId === sourceSearchRequest) sourceOptions.value = options
+  } catch (error) {
+    if (requestId === sourceSearchRequest) ElMessage.warning(`搜索当前表的源失败：${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    if (requestId === sourceSearchRequest) sourceLoading.value = false
+  }
+}
+function onSourceSearch(keyword: string) {
+  sourceSearchKeyword.value = keyword
+  if (sourceSearchTimer) clearTimeout(sourceSearchTimer)
+  sourceSearchTimer = setTimeout(() => void searchSources(keyword), 300)
 }
 async function loadTableMeta() {
   tableMeta.value = tableId.value ? await dataApi.tableMeta(tableId.value) : null
@@ -171,6 +269,7 @@ const selectedRowKeys = ref<string[]>([])
 
 async function onTableChange() {
   await loadTableMeta()
+  await loadSources()
   panelRef.value?.search()
 }
 async function onSourceChange() {
@@ -420,9 +519,11 @@ const apiReturns = computed(() => [
   })),
 ])
 
-async function copyApiUrl() {
-  await copyToClipboard(apiIdFetchUrl.value, 'API 地址')
-}
+const apiSourceLabel = computed(() => {
+  if (!sourceId.value) return '全部源'
+  const source = sourceOptions.value.find((item) => item.sourceId === sourceId.value)
+  return source ? `${source.name}（${source.sourceId}）` : sourceId.value
+})
 
 function copyText(val: string, label?: string) {
   void copyToClipboard(val, label)
@@ -716,18 +817,34 @@ onMounted(async () => {
   const etQuery = route.query.entryType
   const sidQuery = route.query.sourceId
   if (typeof sidQuery === 'string') sourceId.value = sidQuery
-  await loadSources()
   await loadGroup()
   if (typeof etQuery === 'string' && etQuery) tableId.value = etQuery
   await loadTableMeta()
+  await loadSources()
   panelRef.value?.search()
 })
+onUnmounted(() => { if (sourceSearchTimer) clearTimeout(sourceSearchTimer) })
 </script>
 
 <template>
   <div class="rc-card dv-page">
-    <!-- 数据范围：选表/选源（查询条件与快捷查询由 DataQueryPanel 统一承载） -->
-    <div class="rc-toolbar wrap">
+    <!-- 表与源作为查询上下文放在筛选主行，减少割裂的独立工具栏。 -->
+    <!-- 查询条件与结果表格：基础条件常显，高级条件默认收起，见 DataQueryPanel.vue -->
+    <DataQueryPanel
+      ref="panelRef"
+      :table-id="tableId"
+      :source-id="sourceId"
+      :columns="panelColumns"
+      show-state
+      :selectable="canWrite"
+      default-sort-field="updateDt"
+      default-sort-order="descend"
+      v-model:selected-keys="selectedRowKeys"
+      @query-change="onPanelQueryChange"
+      @loaded="onPanelLoaded"
+      @file-click="onCellFile"
+    >
+      <template #context>
       <el-select ref="tableSelectRef" v-model="tableId" filterable placeholder="选择数据表" style="width: 220px" @change="onTableChange">
         <el-option-group label="main">
           <el-option v-for="t in group.list1" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName}`" />
@@ -747,34 +864,18 @@ onMounted(async () => {
       <button class="rc-btn dv-help-btn" type="button" title="表结构详情" @click="openTableDetail">
         <el-icon><QuestionFilled /></el-icon>
       </button>
-      <el-select ref="sourceSelectRef" v-model="sourceId" filterable clearable placeholder="选择源" style="width: 200px" @change="onSourceChange">
+      <el-select ref="sourceSelectRef" v-model="sourceId" filterable remote clearable :remote-method="onSourceSearch" :loading="sourceLoading" placeholder="选择源（ID或名称）" style="width: 200px" @change="onSourceChange">
         <el-option v-for="s in sourceOptions" :key="s.sourceId" :value="s.sourceId" :label="`${s.sourceId} ${s.name}`" />
         <template #footer>
           <span class="dv-link" @click.stop="openMoreSources">
-            <el-icon><Plus /></el-icon>更多源...
+            <el-icon><Plus /></el-icon>按源搜索（可跨表）...
           </span>
         </template>
       </el-select>
       <button class="rc-btn dv-help-btn" type="button" title="源详情" @click="openSourceDetail">
         <el-icon><QuestionFilled /></el-icon>
       </button>
-    </div>
-
-    <!-- 查询条件与结果表格：基础条件常显，高级条件默认收起，见 DataQueryPanel.vue -->
-    <DataQueryPanel
-      ref="panelRef"
-      :table-id="tableId"
-      :source-id="sourceId"
-      :columns="panelColumns"
-      show-state
-      :selectable="canWrite"
-      default-sort-field="updateDt"
-      default-sort-order="descend"
-      v-model:selected-keys="selectedRowKeys"
-      @query-change="onPanelQueryChange"
-      @loaded="onPanelLoaded"
-      @file-click="onCellFile"
-    >
+      </template>
       <template #quick>
         <el-dropdown trigger="click" @command="onCommonQuerySelect">
           <button class="rc-btn dv-quick-btn" data-testid="data-quick" type="button">
@@ -806,6 +907,7 @@ onMounted(async () => {
             :disabled="!tableId"
             @click="onExport"
           >导出 Excel</button>
+          <button v-if="tableMeta?.tableName" class="rc-btn" type="button" data-testid="data-sync" @click="router.push({ path: '/sync/create', query: { tableName: tableMeta.tableName } })">同步到其他环境</button>
           <el-dropdown v-if="canWrite && isTestTable" trigger="click">
             <button class="rc-btn" data-testid="data-delete" type="button">删除数据<el-icon class="et-caret"><ArrowDown /></el-icon></button>
             <template #dropdown>
@@ -963,43 +1065,14 @@ onMounted(async () => {
       </template>
     </DataQueryPanel>
 
-    <el-dialog v-model="apiOpen" class="dv-api-dialog" title="API描述" width="980px" destroy-on-close>
-      <div class="dv-api-content" data-testid="data-api-dialog">
-        <div class="dv-api-line">
-          <span class="dv-api-dot" aria-hidden="true" />
-          <span class="dv-api-label">[2] ID取数：</span>
-          <code class="dv-api-url">{{ apiIdFetchUrl }}</code>
-          <button class="rc-icon-btn dv-api-copy" type="button" title="复制 API 地址" aria-label="复制 API 地址" @click="copyApiUrl">
-            <el-icon><CopyDocument /></el-icon>
-          </button>
-        </div>
-        <div class="dv-api-line dv-api-section-title">
-          <span class="dv-api-dot" aria-hidden="true" />
-          <span>请求URL：</span>
-        </div>
-        <el-table :data="apiParams" border size="small" class="dv-api-table">
-          <el-table-column prop="name" label="参数" width="150" />
-          <el-table-column prop="type" label="类型" width="150" />
-          <el-table-column prop="required" label="必填" width="120" />
-          <el-table-column prop="limit" label="限制" width="150" />
-          <el-table-column prop="description" label="说明" min-width="360" />
-        </el-table>
-        <div class="dv-api-line dv-api-section-title dv-api-return-title">
-          <span class="dv-api-dot" aria-hidden="true" />
-          <span>返回值说明：</span>
-        </div>
-        <el-table :data="apiReturns" border size="small" class="dv-api-table">
-          <el-table-column prop="code" label="编码" width="180" />
-          <el-table-column prop="name" label="名称" width="250" />
-          <el-table-column prop="type" label="类型" width="180" />
-          <el-table-column prop="description" label="说明" min-width="360" />
-        </el-table>
-        <p class="dv-api-note">返回值按真实接口的 data.lastId/data.size/data.list 结构展示；list 中还会返回当前数据表的全部业务字段。appId、appKey 使用部署环境配置，当前未配置时显示演示值。</p>
-      </div>
-      <template #footer>
-        <button class="rc-btn" type="button" @click="apiOpen = false">关闭</button>
-      </template>
-    </el-dialog>
+    <DataFetchApiDialog
+      v-model="apiOpen"
+      :url="apiIdFetchUrl"
+      :params="apiParams"
+      :returns="apiReturns"
+      :table-label="tableMeta?.tableName || tableId"
+      :source-label="apiSourceLabel"
+    />
 
 
     <DataImportDialog
@@ -1229,98 +1302,6 @@ onMounted(async () => {
   font-size: 12px;
   font-family: var(--rc-mono, monospace);
   background: #f8fafc;
-}
-.dv-api-content {
-  display: grid;
-  gap: 12px;
-  min-width: 0;
-}
-.dv-api-dialog :deep(.el-dialog) {
-  max-width: calc(100vw - 32px);
-  border-radius: var(--rc-radius);
-}
-.dv-api-dialog :deep(.el-dialog__header) {
-  margin-right: 0;
-  padding: 16px 20px 14px;
-  border-bottom: 1px solid var(--rc-border-soft);
-}
-.dv-api-dialog :deep(.el-dialog__title) {
-  color: var(--rc-text);
-  font-size: 15px;
-  font-weight: 700;
-}
-.dv-api-dialog :deep(.el-dialog__body) {
-  padding: 16px 20px;
-}
-.dv-api-dialog :deep(.el-dialog__footer) {
-  padding: 12px 20px 16px;
-  border-top: 1px solid var(--rc-border-soft);
-}
-.dv-api-line {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 8px;
-  color: var(--rc-text-2);
-  font-size: 13px;
-  line-height: 1.5;
-}
-.dv-api-dot {
-  flex: 0 0 auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--rc-primary);
-}
-.dv-api-label {
-  flex: 0 0 auto;
-}
-.dv-api-url {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--rc-primary-ink);
-  font: 12px/1.5 var(--rc-mono, monospace);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.dv-api-copy {
-  flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
-  border: 0;
-}
-.dv-api-section-title {
-  margin-top: 2px;
-}
-.dv-api-return-title {
-  margin-top: 8px;
-}
-.dv-api-table {
-  width: 100%;
-}
-.dv-api-table :deep(th.el-table__cell) {
-  height: 40px;
-  padding: 0;
-  background: #f8fafc;
-  color: var(--rc-text-2);
-  font-size: 12px;
-  font-weight: 700;
-}
-.dv-api-table :deep(td.el-table__cell) {
-  padding: 7px 0;
-  color: #334155;
-}
-.dv-api-table :deep(.cell) {
-  color: inherit;
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: normal;
-  word-break: break-word;
-}
-.dv-api-note {
-  margin: 0;
-  color: var(--rc-muted);
-  font-size: 12px;
 }
 .dv-batch {
   display: flex;

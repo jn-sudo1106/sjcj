@@ -110,6 +110,13 @@ export function isProductionCreateEnabled(): boolean {
 const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'site/add',
   'site/createSite',
+  'workflow/bindSource',
+  'workflow/setPrimary',
+  'workflow/unbindSource',
+  'workflow/restoreInherited',
+  'workflow/createForSource',
+  'workflow/ensureDraft',
+  'workflow/publish',
   'snatch/snatchSave',
   'source/bindSite',
   '/vrule/api/custom-compose/save',

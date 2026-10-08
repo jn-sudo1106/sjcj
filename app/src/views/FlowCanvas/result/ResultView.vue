@@ -2,16 +2,16 @@
 import SqlConditionEditor from '@/components/SqlConditionEditor.vue'
 import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElIcon, ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowUp } from '@element-plus/icons-vue'
+import { ArrowUp, Connection, Grid } from '@element-plus/icons-vue'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, ruleApi, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery, type Step } from '@/api'
 import {
   buildHorizontalLayout, nodeOutputTable, nodeEntryCondition, conditionGroupLabel, conditionGroupIsSet,
-  isDecision, isParallel, isFirstRunnableNode, firstRunnableNodeId, hasDirectSuccessor, directPredecessorIds, directSuccessorIds, directSuccessorIdsIncludingDisabled, type NodeConfig,
+  isDecision, isParallel, isFirstRunnableNode, hasDirectSuccessor, directPredecessorIds, directSuccessorIds, directSuccessorIdsIncludingDisabled, type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
 import { fetchNextStepConfig } from '@/utils/flow/nextStepConfig'
@@ -25,14 +25,19 @@ import FilePreview from './components/FilePreview.vue'
 import { extFromFieldHint, extFromName, ossPathWithExt } from '@/utils/ossFile'
 import ProcessNodeRail from './ProcessNodeRail.vue'
 import RailNodePicker from './components/RailNodePicker.vue'
-import { initialRailOpen, readResultRailHeight } from './resultLayoutPref'
+import { initialRailOpen, readResultRailHeight, readDataBrowseMode, writeDataBrowseMode, type DataBrowseMode } from './resultLayoutPref'
 import RailResizeHandle from './RailResizeHandle.vue'
 import TaskInstDialog from '@/views/DataView/TaskInstDialog.vue'
+import RowEditDialog from '@/views/DataView/RowEditDialog.vue'
+import DataImportDialog from '@/views/DataView/DataImportDialog.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import RowDetailFields from './RowDetailFields.vue'
 import { fieldsFromShowItems, fieldsFromTableMeta } from './rowDetailFields'
 import { readFieldPreset, readShowEmpty, visibleDetailProps, writeFieldPreset, writeShowEmpty, type RowFieldPreset } from './rowDetailPrefs'
 import { copyToClipboard } from '@/utils/clipboard'
+import { downloadCsv } from '@/utils/format/csvExport'
+import { resultRowsCsv } from './exportRows'
+import DataFetchApiDialog from '@/components/data/DataFetchApiDialog.vue'
 
 function copyText(val: string, label?: string) {
   void copyToClipboard(val, label)
@@ -46,6 +51,7 @@ const ws = useWorkspaceStore()
 
 const source = computed(() => flow.sourceCtx)
 const route = useRoute()
+const router = useRouter()
 const sourceId = computed(() => source.value?.sourceId ?? '')
 const siteId = computed(() => source.value?.siteId ?? '')
 const tabKey = computed(() => sourceId.value)
@@ -60,6 +66,41 @@ const processLayout = computed(() =>
 )
 const allNodes = computed(() => processLayout.value.nodes)
 const selectedNodeId = ref<string>('')
+// 明确的步骤深链优先；普通进入默认按表，并恢复个人浏览偏好。
+const browseMode = ref<DataBrowseMode>(queryNodeId.value ? 'step' : route.query.tableId ? 'table' : readDataBrowseMode())
+const tableChoice = ref('')
+const outputTables = computed(() => {
+  const tables = new Map<string, { id: string; nodeIds: string[]; titles: string[] }>()
+  for (const node of allNodes.value) {
+    if (isDecision(node.cfg) || isParallel(node.cfg)) continue
+    const id = nodeOutputTable(node.cfg)
+    if (!id) continue
+    const item = tables.get(id) ?? { id, nodeIds: [], titles: [] }
+    item.nodeIds.push(node.id); item.titles.push(node.cfg.title)
+    tables.set(id, item)
+  }
+  const main = source.value?.mainTable
+  if (main && !tables.has(main)) tables.set(main, { id: main, nodeIds: [], titles: [] })
+  return [...tables.values()]
+})
+watch(outputTables, tables => {
+  if (tables.some(t => t.id === tableChoice.value)) return
+  const saved = route.query.tableId ?? ws.snapshotOf(tabKey.value)?.dataTableId
+  tableChoice.value = saved && tables.some(t => t.id === saved) ? String(saved) : tables[0]?.id ?? ''
+}, { immediate: true })
+const tableNames = ref<Record<string, string>>({})
+let tableNamesRequest = 0
+watch(() => outputTables.value.map(t => t.id), async ids => {
+  const request = ++tableNamesRequest
+  const results = await Promise.allSettled(ids.map(id => dataApi.tableMeta(id)))
+  if (request !== tableNamesRequest) return
+  tableNames.value = Object.fromEntries(results.map((result, index) => {
+    const table = result.status === 'fulfilled' ? result.value : null
+    const label = [...new Set([table?.name?.trim(), table?.tableName?.trim()].filter(Boolean))].join(' · ')
+    return [ids[index]!, label]
+  }))
+}, { immediate: true })
+onBeforeUnmount(() => { tableNamesRequest += 1 })
 const snatchLauncher = ref<InstanceType<typeof SnatchLauncher>>()
 const scope = ref<'output' | 'input'>('output')
 const page = ref(1)
@@ -101,6 +142,7 @@ const railHeight = ref(readResultRailHeight())
 // .rv-shell 内部，会跟着一起进全屏；祖先链上没有 transform/filter/contain，fixed 能正常
 // 逃逸到视口（已核对 AppShell.vue / FlowCanvas/index.vue）。
 const fullscreen = ref(false)
+const gridToolsTarget = ref<HTMLElement | null>(null)
 // 全屏不动轨道（0819 会议 N1-2）：删掉节点下拉后，流程图是唯一的节点选择器，
 // 进全屏再把它自动收起来，等于逼用户先想起来去点"展开流程"才能切节点。
 // 节点选择在全屏与非全屏下应当完全一致；想让出纵向空间的人自己点折叠即可。
@@ -121,7 +163,7 @@ const outputTableId = computed(() => (selectedCfg.value ? nodeOutputTable(select
 const inputTableId = computed(() => (selectedNodeId.value ? flow.effectiveInputTableFor(selectedNodeId.value) : ''))
 const isStructuralNode = computed(() => !!selectedCfg.value && (isDecision(selectedCfg.value) || isParallel(selectedCfg.value)))
 // 决策/分头是纯编排节点，不产生可查看的数据，也不提供手动执行——即使技术上继承了输入表也不当数据节点处理。
-const hasAnyTable = computed(() => !isStructuralNode.value && (!!outputTableId.value || !!inputTableId.value))
+const hasAnyTable = computed(() => browseMode.value === 'table' ? !!tableChoice.value : !isStructuralNode.value && (!!outputTableId.value || !!inputTableId.value))
 const bothScopesAvailable = computed(() => !!(inputTableId.value && outputTableId.value))
 // 输入表===输出表（0812 会议同时要了"展示看输出表"+"发送用输入数据"两件事，输入≠输出时
 // 这两件事天然落在两张表上、需要两个 tab；相同时落在同一张表，双 tab 就成了自我矛盾——
@@ -131,7 +173,7 @@ const scopeSwitchable = computed(() => bothScopesAvailable.value && !isStructura
 function defaultScope(): 'output' | 'input' {
   return outputTableId.value ? 'output' : 'input'
 }
-const selectedTable = computed(() => (scope.value === 'output' ? outputTableId.value : inputTableId.value))
+const selectedTable = computed(() => browseMode.value === 'table' ? tableChoice.value : (scope.value === 'output' ? outputTableId.value : inputTableId.value))
 
 // 节点手动执行（0824：末节点无发后续；有后继则从当前表勾行发给后继）：
 // 列表→详情的前一个节点往往只有输出表（如 900 TB_CNEWS），那张表的行就是要发给后继的数据，
@@ -266,9 +308,9 @@ const actionBtnText = computed(() => {
   if (execMode.value === 'fetch') return '发起抓取'
   if (execMode.value === 'upstream') return '从上一节点重跑'
   if (execMode.value === 'input') {
-    return isCurrentNodeAction.value ? '发起本节点任务' : '发后续任务'
+    return isCurrentNodeAction.value ? '发起本节点任务' : '发后续'
   }
-  return '发后续任务'
+  return '发后续'
 })
 
 // 发后续任务（0824/0912）：发后续是发给直接后继节点处理当前节点产出的输出数据。
@@ -801,13 +843,14 @@ watch(
   allNodes,
   (nodes) => {
     if (!nodes.some((n) => n.id === selectedNodeId.value)) {
-      const firstId = firstRunnableNodeId(flow.main, flow.configs) || nodes[0]?.id || ''
+      const firstId = nodes[0]?.id || ''
       const fromQuery = queryNodeId.value && nodes.some((n) => n.id === queryNodeId.value) ? queryNodeId.value : ''
       const snap = ws.snapshotOf(tabKey.value)
       const snapId = snap?.selectedNodeId && nodes.some((n) => n.id === snap.selectedNodeId) ? snap.selectedNodeId : ''
-      const targetId = fromQuery || snapId || firstId
+      const tableNodes = outputTables.value.find(t => t.id === tableChoice.value)?.nodeIds ?? []
+      const targetId = browseMode.value === 'table' ? (tableNodes.length === 1 ? tableNodes[0]! : '') : fromQuery || snapId || firstId
       selectedNodeId.value = targetId
-      if (targetId && flow.selectedId !== targetId) {
+      if (flow.selectedId !== targetId) {
         flow.select(targetId)
       }
       // 「本次不发」跟着页签走（切视图、切节点都还在），刷新浏览器才清掉
@@ -830,10 +873,14 @@ watch(
 // 手动切节点（节点轨道 / 下拉框都走这一个入口，0812 计划 M2-9）：范围、页码、条件展开态
 // 一并重置，不残留上一个节点的浏览状态串到新节点上。
 function onSelectNode(id: string) {
-  if (!id) return
   ui.clearInspectorFieldFilter()
   if (id === selectedNodeId.value) return
   selectedNodeId.value = id
+  if (browseMode.value === 'table' && id) {
+    const cfg = allNodes.value.find(n => n.id === id)?.cfg
+    const table = cfg ? nodeOutputTable(cfg) : ''
+    if (table) tableChoice.value = table
+  }
   // 与右侧节点配置联动（0904 I10 / Z3-2，用户 2026-09-05 补充「点击中间的流程需要跟右侧联动」）：
   // 三栏之后右侧常驻节点配置，点中间轨道上的节点，右边就该跟着换成这个节点的配置——
   // 否则会出现"左边在看 A 的数据、右边在改 B 的配置"这种最容易误操作的状态。
@@ -844,13 +891,55 @@ function onSelectNode(id: string) {
   sortField.value = ''
   sortOrder.value = ''
 }
+function selectTable(id: string) {
+  tableChoice.value = id
+  if (browseMode.value === 'table') {
+    const query = { ...route.query }
+    delete query.nodeId
+    if (id) query.tableId = id
+    else delete query.tableId
+    if (route.query.nodeId || route.query.tableId !== query.tableId) void router.replace({ path: route.path, query })
+  }
+  const nodes = outputTables.value.find(t => t.id === id)?.nodeIds ?? []
+  onSelectNode(nodes.length === 1 ? nodes[0]! : '')
+  scope.value = 'output'
+  page.value = 1
+  selectedRowIds.value = []
+  sortField.value = ''; sortOrder.value = ''
+  ui.clearInspectorFieldFilter()
+}
+function switchBrowseMode(mode: DataBrowseMode) {
+  if (mode === browseMode.value) return
+  const table = selectedTable.value
+  browseMode.value = mode
+  writeDataBrowseMode(mode)
+  railOpen.value = false
+  if (mode === 'table') selectTable(outputTables.value.some(t => t.id === table) ? table : outputTables.value[0]?.id ?? '')
+  else {
+    const query = { ...route.query }
+    delete query.tableId
+    delete query.nodeId
+    void router.replace({ path: route.path, query })
+    const nodes = outputTables.value.find(t => t.id === table)?.nodeIds ?? []
+    onSelectNode(nodes[0] ?? allNodes.value[0]?.id ?? '')
+    scope.value = 'output'
+    page.value = 1
+  }
+}
+watch(tableChoice, dataTableId => {
+  if (tabKey.value) ws.saveSnapshot(tabKey.value, { dataTableId })
+}, { immediate: true })
+watch(() => route.query.tableId, value => {
+  const id = String(value ?? '')
+  if (outputTables.value.some(t => t.id === id)) { browseMode.value = 'table'; selectTable(id) }
+})
 // 反向联动：从画布切到数据视图时，右侧已经选中的节点应当就是中间默认看的那个。
 watch(() => flow.selectedId, (id) => {
-  if (id && id !== selectedNodeId.value && allNodes.value.some((n) => n.id === id)) onSelectNode(id)
+  if (browseMode.value === 'step' && id && id !== selectedNodeId.value && allNodes.value.some((n) => n.id === id)) onSelectNode(id)
 })
 
 watch(queryNodeId, (id) => {
-  if (id && allNodes.value.some((n) => n.id === id)) onSelectNode(id)
+  if (id && allNodes.value.some((n) => n.id === id)) { browseMode.value = 'step'; onSelectNode(id) }
 })
 
 watch(queryDataId, (dataId) => {
@@ -988,6 +1077,8 @@ async function loadData() {
     dataError.value = ''
     dataErrorFull.value = ''
     demoFallback.value = false
+    loading.value = false
+    stopSlowTimer()
     return
   }
   loading.value = true
@@ -1178,18 +1269,89 @@ function buildSummaryQuery(): RowQuery {
     sql: filters.sql || undefined,
   }
 }
-const summaryOpen = ref(false)
-// 0930-14B：按当前查询条件导出 Excel（与统计同一套条件），直接打开下载链接，同数据中心。
-// 条件改了还没点「查询」时不让导：buildSummaryQuery 读的是输入框里的值，导出来会和表格对不上
-const exportDisabledReason = computed(() => {
-  if (!selectedTable.value) return '请先选择一张表'
+const pageExportBlocked = computed(() => loading.value || filtersDirty.value || !!dataError.value || !rows.value.length)
+// 0930-14B：Excel 按当前查询条件导出（与统计同一套条件）。SQL / 数据 ID / 父 ID 经 exportUrl 的 more
+// 生效（2026-10-08 217 实测 entryExportAll 按 more 过滤）。条件改了未点「查询」时不让导，否则与表格对不上
+const excelExportReason = computed(() => {
+  if (!sourceId.value || !selectedTable.value) return '请先选择源和数据表'
   if (filtersDirty.value) return '查询条件已修改，先点「查询」再导出'
   return ''
 })
-function onExport() {
-  if (exportDisabledReason.value) return
-  window.open(dataApi.exportUrl(buildSummaryQuery()), '_blank')
+function exportCurrentPage() {
+  if (pageExportBlocked.value) return
+  try {
+    const name = `${source.value?.name || sourceId.value}_${meta.value?.tableName || selectedTable.value}_第${page.value}页`.replace(/[\\/:*?"<>|]/g, '_')
+    downloadCsv(`${name}.csv`, resultRowsCsv(rows.value, meta.value))
+  } catch (error) { ElMessage.error(error instanceof Error ? error.message : '导出失败') }
 }
+function exportSourceExcel() {
+  if (excelExportReason.value) { ElMessage.warning(excelExportReason.value); return }
+  window.open(dataApi.exportUrl(buildSummaryQuery()), '_blank', 'noopener,noreferrer')
+}
+const apiOpen = ref(false)
+const apiIdFetchUrl = computed(() => {
+  const restBase = import.meta.env.VITE_LEGACY_REST_BASE || `${window.location.origin}/rest`
+  const appId = import.meta.env.VITE_LEGACY_API_APP_ID || 'dev'
+  const appKey = import.meta.env.VITE_LEGACY_API_APP_KEY || 'dev1'
+  const params = [
+    `appId=${encodeURIComponent(appId)}`,
+    `appKey=${encodeURIComponent(appKey)}`,
+    `type=${encodeURIComponent(selectedTable.value || '<tableId>')}`,
+  ]
+  if (sourceId.value) params.push(`sourceId=${encodeURIComponent(sourceId.value)}`)
+  params.push('startId=0', 'size=10')
+  return `${restBase.endsWith('/') ? restBase.slice(0, -1) : restBase}/api/v1/data/entry?${params.join('&')}`
+})
+const apiParams = [
+  { name: 'appId', type: '字符串', required: '是', limit: '-', description: '取数应用 ID，由部署环境提供' },
+  { name: 'appKey', type: '字符串', required: '是', limit: '-', description: '取数应用密钥，由部署环境提供' },
+  { name: 'type', type: '整型', required: '是', limit: '-', description: '实体类型 ID，对应当前数据表' },
+  { name: 'sourceId', type: '长整型', required: '非', limit: '-', description: '限制为当前源采集的数据' },
+  { name: 'size', type: '整型', required: '是', limit: '1-200', description: '每次获取数量' },
+  { name: 'startId', type: '长整型', required: '必填', limit: '最小为0', description: '取数起始 ID，下一批使用上次返回的 lastId+1' },
+  { name: 'endId', type: '长整型', required: '非', limit: '-', description: '限制取数最大 ID' },
+  { name: 'dataRange', type: '字符串', required: '非', limit: '时间范围', description: '时间上下限格式为“开始 - 结束”' },
+]
+const apiReturns = computed(() => [
+  { code: 'data.lastId', name: '本次最大 ID', type: '长整型', description: '下一批 startId 使用 lastId+1' },
+  { code: 'data.size', name: '本次返回数量', type: '整型', description: 'list 实际返回条数' },
+  { code: 'data.list[].id', name: 'ID', type: '长整型', description: '数据主键' },
+  { code: 'data.list[].state', name: '数据状态', type: '字符串', description: 'D 表示软删除' },
+  { code: 'data.list[].sourceId', name: '源 ID', type: '长整型', description: '数据所属源' },
+  { code: 'data.list[].parentId', name: '上层数据 ID', type: '长整型', description: '有关联时返回' },
+  { code: 'data.list[].createDt', name: '生成时间', type: '字符串', description: '数据生成时间' },
+  { code: 'data.list[].updateDt', name: '更新时间', type: '字符串', description: '数据更新时间' },
+  ...(meta.value?.fields ?? []).map((field) => ({
+    code: `data.list[].${field.prop}`,
+    name: `${field.desc}（${field.columnName || field.prop}）`,
+    type: field.type || '-',
+    description: '当前数据表字段',
+  })),
+])
+const manualAddOpen = ref(false)
+const importOpen = ref(false)
+const addConfigId = computed(() => (
+  rows.value[0]?.configId
+  || selectedCfg.value?.configId
+  || source.value?.rootConfigId
+  || source.value?.configId
+  || ''
+))
+function openManualAdd() {
+  if (!selectedTable.value || !sourceId.value) {
+    ElMessage.warning('请先选择数据表和源')
+    return
+  }
+  manualAddOpen.value = true
+}
+function openDataImport() {
+  if (!selectedTable.value || !sourceId.value) {
+    ElMessage.warning('请先选择数据表和源')
+    return
+  }
+  importOpen.value = true
+}
+const summaryOpen = ref(false)
 // 0930-04：点表名查看当前表的字段结构。meta 是按数据现拼的（metaError 有值）时没有真实结构，表名不可点
 const tableStructOpen = ref(false)
 
@@ -1471,7 +1633,7 @@ async function onTestScript() {
          而且这两个都是"这个节点的上下文"，跟下面那行"怎么查"不是一回事
          （2026-08-15 第十三次纠偏：原来把它俩塞进筛选行，等于把一组筛选条件劈成两半）。
          收起后 .rv-railbox 靠 min-height 留出一条窄带，展开按钮不会跟着消失。 -->
-    <div v-if="selectedNodeId && railOpen" class="rv-railbox">
+    <div v-if="browseMode === 'step' && selectedNodeId && railOpen" class="rv-railbox">
       <div class="rv-bar" data-testid="data-process-rail" :style="{ maxHeight: `${railHeight}px` }">
         <ProcessNodeRail
           :model-value="selectedNodeId"
@@ -1502,12 +1664,19 @@ async function onTestScript() {
     <!-- 查询条件一律点「查询」执行，不绑回车（2026-08-20 决定）。原先绑了 @keyup.enter，
          但中文输入法上屏时也会发 Enter 的 keyup，而 Vue 的 @keyup.enter 不过滤 isComposing——
          实测打字打到一半就被当成回车查了一次，条件只输了半截，结果还看不出是怎么来的。 -->
-    <div v-if="selectedNodeId" class="ctx-summary" data-testid="data-node-context">
+    <div class="ctx-summary" data-testid="data-node-context">
       <!-- 全屏时源信息头被藏起来了，这里把源名补回来，否则看不出在看哪个源的数据。 -->
       <span v-if="fullscreen" class="rv-fs-source" :title="source?.name || sourceId">{{ source?.name || sourceId }}</span>
       <!-- 流程轨道展开时收起按钮合并在轨道区右上角；轨道收起时在主干行左端保留展开按钮。 -->
+      <div class="rv-browse-mode" role="group" aria-label="数据查看方式">
+        <button type="button" title="按数据表查看" aria-label="按数据表查看" :aria-pressed="browseMode === 'table'" @click="switchBrowseMode('table')"><el-icon><Grid /></el-icon></button>
+        <button type="button" title="按步骤查看" aria-label="按步骤查看" :aria-pressed="browseMode === 'step'" @click="switchBrowseMode('step')"><el-icon><Connection /></el-icon></button>
+      </div>
+      <select v-if="browseMode === 'table' && outputTables.length" class="rv-table-picker" aria-label="数据表" data-testid="data-table-select" :title="tableNames[tableChoice] || tableChoice" :value="tableChoice" @change="selectTable(($event.target as HTMLSelectElement).value)">
+        <option v-for="table in outputTables" :key="table.id" :value="table.id">{{ tableNames[table.id] || table.id }}</option>
+      </select>
       <RailNodePicker
-        v-if="!railOpen"
+        v-if="browseMode === 'step' && !railOpen && railNodeOptions.length"
         v-model:open="railOpen"
         :model-value="selectedNodeId"
         :nodes="railNodeOptions"
@@ -1515,6 +1684,55 @@ async function onTestScript() {
         @update:model-value="onSelectNode"
       />
       <template v-if="hasAnyTable">
+        <div class="rv-table-context">
+          <!-- 输入表===输出表：会议要的"展示看输出/发送用输入"两件事落在同一张表上，
+               双 tab 自我矛盾，合并成一个（M3-0C 方案 A）；标签写"输入·输出"明示这张表
+               两个身份都占，不是随便挑了一个名字。 -->
+          <span v-if="browseMode === 'step' && sameTable" class="ctx-piece" data-testid="data-scope-merged"><span class="k">输入·输出</span><span class="v code">{{ inputTableId }}</span></span>
+          <template v-else-if="browseMode === 'step'">
+            <template v-if="inputTableId">
+              <button
+                v-if="scopeSwitchable"
+                type="button"
+                class="ctx-piece scope-piece"
+                :class="{ active: scope === 'input' }"
+                data-testid="data-scope-input"
+                @click="onScopeChange('input')"
+              ><span class="k">输入</span><span class="v code">{{ inputTableId }}</span></button>
+              <span v-else class="ctx-piece"><span class="k">输入</span><span class="v code">{{ inputTableId }}</span></span>
+            </template>
+            <template v-if="outputTableId">
+              <span v-if="inputTableId" class="ctx-sep">·</span>
+              <button
+                v-if="scopeSwitchable"
+                type="button"
+                class="ctx-piece scope-piece"
+                :class="{ active: scope === 'output' }"
+                data-testid="data-scope-output"
+                @click="onScopeChange('output')"
+              ><span class="k">输出</span><span class="v code">{{ outputTableId }}</span></button>
+              <span v-else class="ctx-piece"><span class="k">输出</span><span class="v code">{{ outputTableId }}</span></span>
+            </template>
+          </template>
+          <!-- 「按源抓取 / 按输入数据执行」徽标已删除（2026-08-19）：它当初存在是因为
+               08-14 那阵执行按钮文案一度统一成"发起抓取"、不分首节点/后续节点，需要
+               额外说明这个节点按什么发；M3-0A 把按钮文案改回两种之后（发起抓取 /
+               发后续任务），这层信息就被按钮本身接管了——左边还有「输入·输出 表ID」，
+               三处说同一件事。禁用/输出 tab 场景的解释也已经由按钮 title 和
+               data-view-only-hint 承担，删掉它还能给这行让出 93px。 -->
+          <!-- 表名是这行里最长、也最可省略的一项（实测 sense_data.TB_TB_NEWS_TAGS 独占
+               188px）：允许它收缩并省略号截断，完整值走 title 悬浮看，把宽度让给按钮。 -->
+          <button
+            v-if="meta && !metaError"
+            type="button"
+            class="rv-tablename is-link"
+            data-testid="data-table-struct-btn"
+            :title="`${meta.tableName || selectedTable}（点击查看表结构）`"
+            @click="tableStructOpen = true"
+          >{{ meta.tableName || selectedTable }}</button>
+          <span v-else class="rv-tablename" :title="meta?.tableName || selectedTable || ''">{{ meta?.tableName || selectedTable || '—' }}</span>
+          <span class="rv-tablecount">{{ total.toLocaleString() }} 行</span>
+        </div>
         <SqlConditionEditor v-model="filters.sql" v-slot="{ value, update }" :table-id="selectedTable" :table-name="meta?.tableName" :fields="queryFields" class="rv-sql">
           <input :value="value" @input="update(($event.target as HTMLInputElement).value)" class="rv-input flex" data-testid="data-cond-sql" placeholder="SQL 条件，可点右端漏斗按字段查询（如 K23 = '...'）" />
         </SqlConditionEditor>
@@ -1540,6 +1758,33 @@ async function onTestScript() {
         <span class="rv-actions">
           <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
           <button class="rc-btn" type="button" @click="clearFilters">清空</button>
+          <el-dropdown trigger="click">
+            <button class="rc-btn" type="button" data-testid="data-add">新增 ▾</button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item data-testid="data-add-manual" @click="openManualAdd">手工录入</el-dropdown-item>
+                <el-dropdown-item data-testid="data-add-import" @click="openDataImport">Excel 导入</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <button
+            class="rc-btn tiny"
+            type="button"
+            data-testid="data-summary-btn"
+            title="按当前筛选条件统计"
+            @click="summaryOpen = true"
+          >统计</button>
+          <el-dropdown trigger="click">
+            <button class="rc-btn" type="button" data-testid="data-export">导出 ▾</button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item data-testid="data-export-page" :disabled="pageExportBlocked" title="导出已查询的当前页全部字段" @click="exportCurrentPage">导出当前页 CSV</el-dropdown-item>
+                <el-dropdown-item data-testid="data-export-excel" :disabled="!!excelExportReason" :title="excelExportReason || '导出当前表中属于当前源的数据，保留状态筛选，不限当前页'" @click="exportSourceExcel">导出当前源 Excel</el-dropdown-item>
+                <el-dropdown-item data-testid="data-export-api" :disabled="!selectedTable" @click="apiOpen = true">取数 API</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+
         </span>
         <!-- 数据操作组：发后续任务与发全部合并为组合操作按钮 -->
         <span class="rv-data-ops">
@@ -1563,7 +1808,6 @@ async function onTestScript() {
             <el-dropdown
               v-if="execMode === 'input' && canPickRows"
               trigger="click"
-              :teleported="false"
             >
               <button
                 class="rc-btn primary rv-split-arrow"
@@ -1620,6 +1864,16 @@ async function onTestScript() {
             </template>
           </el-dropdown>
         </span>
+        <div class="rv-view-tools">
+          <button
+            class="rc-btn tiny"
+            type="button"
+            data-testid="data-fullscreen-toggle"
+            :title="fullscreen ? '退出全屏（Esc）' : '全屏查看数据'"
+            @click="fullscreen = !fullscreen"
+          >{{ fullscreen ? '⤡ 退出全屏' : '⤢ 全屏' }}</button>
+          <div ref="gridToolsTarget" class="rv-grid-tools" />
+        </div>
       </template>
     </div>
 
@@ -1632,12 +1886,10 @@ async function onTestScript() {
         <div v-if="dataError" class="rv-notice error" role="alert" :title="dataErrorFull || dataError">{{ dataError }}</div>
       </template>
 
-      <!-- 表头内容走 DataGrid 的 #head 插槽，跟「列」和分页共用同一条横条。原来这里是
-           独立的 .rv-tablehead(47px) + DataGrid 自己的列按钮行(33px) + .rv-pager(45px)
-           三条横条，加起来 125px 全在挤数据区（2026-08-15 第十二次纠偏）。
-           输入/输出切换紧挨着表名——这两个按钮控制的正是"表头显示的是哪张表"。 -->
+      <!-- 列控制挂到上方查询工具栏，表格不再额外占用一行工具栏。 -->
       <DataGrid
         class="rv-grid"
+        :toolbar-target="gridToolsTarget"
         :meta="meta"
         :rows="rows"
         :loading="loading"
@@ -1663,82 +1915,6 @@ async function onTestScript() {
         @row-click="onRowClick"
         @row-action="onRowAction"
       >
-        <template #head>
-          <!-- 输入表===输出表：会议要的"展示看输出/发送用输入"两件事落在同一张表上，
-               双 tab 自我矛盾，合并成一个（M3-0C 方案 A）；标签写"输入·输出"明示这张表
-               两个身份都占，不是随便挑了一个名字。 -->
-          <span v-if="sameTable" class="ctx-piece" data-testid="data-scope-merged"><span class="k">输入·输出</span><span class="v code">{{ inputTableId }}</span></span>
-          <template v-else>
-            <template v-if="inputTableId">
-              <button
-                v-if="scopeSwitchable"
-                type="button"
-                class="ctx-piece scope-piece"
-                :class="{ active: scope === 'input' }"
-                data-testid="data-scope-input"
-                @click="onScopeChange('input')"
-              ><span class="k">输入</span><span class="v code">{{ inputTableId }}</span></button>
-              <span v-else class="ctx-piece"><span class="k">输入</span><span class="v code">{{ inputTableId }}</span></span>
-            </template>
-            <template v-if="outputTableId">
-              <span v-if="inputTableId" class="ctx-sep">·</span>
-              <button
-                v-if="scopeSwitchable"
-                type="button"
-                class="ctx-piece scope-piece"
-                :class="{ active: scope === 'output' }"
-                data-testid="data-scope-output"
-                @click="onScopeChange('output')"
-              ><span class="k">输出</span><span class="v code">{{ outputTableId }}</span></button>
-              <span v-else class="ctx-piece"><span class="k">输出</span><span class="v code">{{ outputTableId }}</span></span>
-            </template>
-          </template>
-          <!-- 「按源抓取 / 按输入数据执行」徽标已删除（2026-08-19）：它当初存在是因为
-               08-14 那阵执行按钮文案一度统一成"发起抓取"、不分首节点/后续节点，需要
-               额外说明这个节点按什么发；M3-0A 把按钮文案改回两种之后（发起抓取 /
-               发后续任务），这层信息就被按钮本身接管了——左边还有「输入·输出 表ID」，
-               三处说同一件事。禁用/输出 tab 场景的解释也已经由按钮 title 和
-               data-view-only-hint 承担，删掉它还能给这行让出 93px。 -->
-          <!-- 表名是这行里最长、也最可省略的一项（实测 sense_data.TB_TB_NEWS_TAGS 独占
-               188px）：允许它收缩并省略号截断，完整值走 title 悬浮看，把宽度让给按钮。 -->
-          <button
-            v-if="meta && !metaError"
-            type="button"
-            class="rv-tablename is-link"
-            data-testid="data-table-struct-btn"
-            :title="`${meta.tableName || selectedTable}（点击查看表结构）`"
-            @click="tableStructOpen = true"
-          >{{ meta.tableName || selectedTable }}</button>
-          <span v-else class="rv-tablename" :title="meta?.tableName || selectedTable || ''">{{ meta?.tableName || selectedTable || '—' }}</span>
-          <span class="rv-tablecount">{{ total.toLocaleString() }} 行</span>
-        </template>
-        <!-- 视图控制回到 #head-right（0909 第二次重排）：这是 DataGrid 不随 .dg-head 横向
-             滚动的常驻区，当初正是为「全屏」这类任何时候都该点得到的开关设的。它右边紧邻
-             DataGrid 自己的列菜单（下一步字段 / 列 N/M），四个按钮同宽同高，连成一组。 -->
-        <template #head-right>
-          <button
-            class="rc-btn tiny"
-            type="button"
-            data-testid="data-export-btn"
-            :disabled="!!exportDisabledReason"
-            :title="exportDisabledReason || '按当前查询条件导出全部命中的数据（不是当前页），直接下载 Excel'"
-            @click="onExport"
-          >导出 Excel</button>
-          <button
-            class="rc-btn tiny"
-            type="button"
-            data-testid="data-summary-btn"
-            title="按当前筛选条件统计"
-            @click="summaryOpen = true"
-          >统计</button>
-          <button
-            class="rc-btn tiny"
-            type="button"
-            data-testid="data-fullscreen-toggle"
-            :title="fullscreen ? '退出全屏（Esc）' : '全屏查看数据'"
-            @click="fullscreen = !fullscreen"
-          >{{ fullscreen ? '⤡ 退出全屏' : '⤢ 全屏' }}</button>
-        </template>
         <!-- 分页移到表格下方（0819 N1-8，会议 19:13"页子一般放下面"）。原先它并在 #head
              里是为了省纵向空间，现在由顶部区收窄（N1-10）补偿。 -->
         <template #foot>
@@ -1764,6 +1940,8 @@ async function onTestScript() {
 
       </DataGrid>
     </template>
+    <div v-else-if="browseMode === 'table'" class="rv-empty-scope">当前源尚未配置输出数据表</div>
+    <div v-else-if="!selectedNodeId" class="rv-empty-scope">当前源尚未配置流程步骤</div>
     <div v-else-if="selectedNodeId" class="rv-empty-scope" data-testid="data-node-empty">该节点不产生可查看的数据，也不提供手动执行入口</div>
 
     <el-drawer v-model="detail.visible" class="rv-detail-drawer" :with-header="false" size="560px">
@@ -1894,6 +2072,34 @@ async function onTestScript() {
     />
     <SummaryDrawer v-model="summaryOpen" :table-meta="meta" :build-query="buildSummaryQuery" :hit-count="total" />
     <TableDetailDialog v-model="tableStructOpen" :table-meta="meta" />
+    <RowEditDialog
+      v-model="manualAddOpen"
+      :table-id="selectedTable"
+      :table-meta="meta"
+      mode="add"
+      :first-row="rows[0] ?? null"
+      :initial-source-id="sourceId"
+      :initial-config-id="addConfigId"
+      lock-source
+      @saved="runQuery"
+    />
+    <DataImportDialog
+      v-model="importOpen"
+      :table-id="selectedTable"
+      :source-id="sourceId"
+      :initial-config-id="addConfigId"
+      @uploaded="runQuery"
+    />
+
+    <DataFetchApiDialog
+      v-model="apiOpen"
+      :url="apiIdFetchUrl"
+      :params="apiParams"
+      :returns="apiReturns"
+      :table-label="meta?.tableName || selectedTable"
+      :source-label="source?.name ? `${source.name}（${sourceId}）` : sourceId"
+      test-id="source-data-api-dialog"
+    />
     <SnatchLauncher ref="snatchLauncher" />
 
     <!-- 节点右键菜单（0917-06 / 0917-08，2026-09-21 用户定）：
@@ -1963,7 +2169,19 @@ async function onTestScript() {
 </template>
 
 <style scoped>
-.ctx-summary .rv-sql { flex: 1 1 320px; min-width: 180px; width: auto; }
+.rv-table-context { display: flex; align-items: center; gap: 5px; min-width: 100px; max-width: 190px; flex: 0 1 190px; flex-wrap: nowrap; overflow: hidden; }
+.rv-table-context .rv-tablename { min-width: 0; max-width: 105px; }
+.rv-view-tools { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.rv-grid-tools { display: flex; align-items: center; }
+
+.rv-browse-mode { display: inline-flex; flex: none; gap: 2px; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); padding: 2px; }
+.rv-browse-mode button, .rv-table-picker { height: 28px; border: 0; background: var(--rc-surface); color: var(--rc-text-2); font-size: 12px; cursor: pointer; }
+.rv-browse-mode button { display: inline-flex; align-items: center; justify-content: center; width: 28px; padding: 0; border-radius: 4px; font-size: 14px; }
+.rv-browse-mode button:hover { background: #f1f5f9; color: var(--rc-primary-ink); }
+.rv-browse-mode button[aria-pressed="true"] { background: var(--rc-primary-bg); color: var(--rc-primary); }
+.rv-table-picker { width: 160px; min-width: 160px; max-width: 160px; padding: 0 24px 0 8px; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); text-overflow: ellipsis; }
+
+.ctx-summary .rv-sql { flex: 1 1 380px; min-width: 260px; width: auto; }
 .rv-shell { min-width: 0; min-height: 0; width: 100%; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; height: 100%; display: flex; flex-direction: column; }
 /* 全屏：同一份 DOM 直接铺满视口，不复制模板也不套弹层。祖先链上没有 transform/filter/
    contain（已核对 AppShell.vue、FlowCanvas/index.vue），fixed 能正常逃逸；外层 .rc-shell
@@ -2026,11 +2244,13 @@ async function onTestScript() {
 /* 换行会让这两条工具栏高度随窗口变窄一路往上涨，挤掉下面数据表格的空间——改成不换行、
    放不下就横向滚动，工具栏高度锁死为固定的一行，数据表格永远拿到最多的剩余空间
    （2026-08-15 第十次纠偏：目的是"下面数据行更多"，不是"这一行摆得下"）。 */
-/* 窄屏换行，不横向滚动（2026-08-20）：这一行原本 nowrap + overflow-x:auto，窗口一窄就出现
-   横向滚动条——筛选条件横向滚动很难用，「查询」按钮会被滚出视野，得先滚回去才点得到。
-   换行只是多占一行高度，比这个代价小得多；宽屏下仍是一行，没有变化。 */
-.ctx-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 7px 10px; padding: 7px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; }
+/* 2026-10-05 明确要求查询、发后续任务、删除数据始终同一行。空间不足时整行横向滚动，
+   不再把数据操作折到第二行；表上下文和 SQL 先收缩，尽量减少出现滚动条的机会。 */
+.ctx-summary { display: flex; align-items: center; flex-wrap: nowrap; gap: 6px; padding: 7px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.ctx-summary::-webkit-scrollbar { height: 5px; }
+.ctx-summary::-webkit-scrollbar-thumb { border-radius: 999px; background: #cbd5e1; }
 .ctx-summary > * { flex-shrink: 0; }
+.ctx-summary > .rv-table-context, .ctx-summary > .rv-sql { flex-shrink: 1; }
 /* SQL 框是这一行唯一可伸缩的元素，负责吸收多余/不足的宽度。必须比上面那条 no-shrink
    规则更具体，否则整行永远超宽、把右端的「查询/清空」挤出可视区——2026-08-15 实测回归，
    跟之前"查看条件被滚没"是同一类错误：nowrap 的行里必须留一个能缩的元素。 */
@@ -2039,7 +2259,7 @@ async function onTestScript() {
    本来就装不下 6 个控件，所以再加一手：聚焦时临时变宽到 560px，把其他控件挤到横向
    滚动区外——查询/清空是 sticky 钉住的，照样点得到。真要长时间写 SQL 走全屏，
    那边这一行有 1280px（2026-08-15 第十三次纠偏：SQL 框太小）。 */
-.ctx-summary .rv-input.flex { flex: 1 1 320px; min-width: 180px; width: auto; }
+.ctx-summary .rv-input.flex { flex: 1 1 380px; min-width: 260px; width: auto; }
 /* 聚焦时必须连 flex-shrink 一起退掉：这一行常态是刚好塞满的，可用空间为 0，
    只加大 flex-basis 会被 shrink 原样拉回 min-width，等于没写（实测踩过）。
    固定宽度后整行转为横向滚动，浏览器会把聚焦元素滚进视野，查询/清空是 sticky 的照样点得到。 */
@@ -2052,7 +2272,7 @@ async function onTestScript() {
 /* 再兜一层：窗口真的很窄、SQL 框缩到底之后整行还是会横向滚动，这时把查询/清空钉在右端，
    保证任何宽度下都点得到。 */
 /* 不再 sticky：那是为横向滚动时钉住按钮准备的，改成换行后没有横向滚动，渐变底也失去意义 */
-.rv-actions { display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; }
+.rv-actions { display: inline-flex; align-items: center; gap: 6px; padding-left: 4px; white-space: nowrap; }
 .rv-cond-chips { display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; }
 .rv-cond-chip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border: 1px solid var(--rc-primary-bd, #bfdbfe); border-radius: 12px; background: var(--rc-primary-bg, #eff6ff); color: var(--rc-primary-ink, #1d4ed8); font-size: 11px; cursor: pointer; white-space: nowrap; }
 .rv-cond-chip:hover { border-color: var(--rc-primary); }
@@ -2081,13 +2301,13 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
    跟同一行其他字段一样不参与 flex 伸缩。 */
 .rv-input.flex { flex: none; width: 220px; min-width: 0; font-family: var(--rc-mono, monospace); }
 .rv-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px #dbeafe; }
-.ctx-summary .rc-btn { height: 28px; padding: 0 14px; font-size: 12px; }
+.ctx-summary .rc-btn { height: 28px; padding: 0 10px; font-size: 12px; }
 /* 数据操作组（发起抓取/发后续/从上一节点重跑/测试脚本/发全部/删除数据 + 各自的说明文字）：
    钉在筛选行右端。margin-left:auto 在 .ctx-summary 的 wrap 行内把它推到最右；窄屏 wrap 到
    下一行时自然左对齐，不做额外处理——响应式下让位比硬撑更好。
    按钮尺寸由上面的 .ctx-summary .rc-btn（28px）统一接管，跟同行的「查询/清空」一致；
    删除数据那个 .tiny 也一并拉齐，这行不再有 24px 的邻居。 */
-.rv-data-ops { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.rv-data-ops { margin-left: 0; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 /* 无可执行操作时的说明：工具栏本来就挤，超出就省略，全文走 title */
 .rv-no-exec { font-size: 12px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-summary .rc-btn.tiny { height: 28px; padding: 0 12px; font-size: 12px; }
@@ -2159,6 +2379,6 @@ button.ctx-piece.scope-piece.active .k, button.ctx-piece.scope-piece.active .v {
 .rv-d-pos { color: var(--rc-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .rv-d-empty { display: inline-flex; align-items: center; gap: 4px; color: var(--rc-text-2); font-size: 11px; cursor: pointer; }
 .rv-d-preset { height: 24px; padding: 0 6px; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-text-2); font-size: 11px; }
-.ctx-summary :deep(.dcb) { flex: 1 1 320px; min-width: 180px; }
+.ctx-summary :deep(.dcb) { flex: 1 1 380px; min-width: 260px; }
 .rc-btn.ghost { background: transparent; border-color: var(--rc-border); color: var(--rc-text-2); }
 </style>
