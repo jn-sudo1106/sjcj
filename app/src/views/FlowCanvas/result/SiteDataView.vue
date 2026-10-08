@@ -1005,6 +1005,22 @@ async function openBackTraceInSourceView() {
 }
 
 const summaryOpen = ref(false)
+/**
+ * 0930-14B：按当前查询条件导出 Excel（与统计同一套条件），直接打开下载链接，同数据中心。
+ * 只在选了具体源时可用：导出接口不认 siteId / siteIds（2026-10-03 实测），「全部源」时导出的会是
+ * 整张表、连别的网站的数据一起——按网站导出等 0930-14C（后端加参数）。
+ */
+const exportDisabledReason = computed(() => {
+  if (!effectiveTableId.value) return '请先选择一张表'
+  if (!selectedSourceId.value) return '按网站导出暂不支持，请先在左侧选一个源'
+  // 条件改了还没点「查询」：buildSummaryQuery 读的是输入框里的值，导出来会和表格对不上
+  if (filtersDirty.value) return '查询条件已修改，先点「查询」再导出'
+  return ''
+})
+function onExport() {
+  if (exportDisabledReason.value) return
+  window.open(dataApi.exportUrl(buildSummaryQuery()), '_blank')
+}
 // 0930-04：点表名查看当前表的字段结构。meta 是按数据现拼的（metaError 有值）时没有真实结构，表名不可点
 const tableStructOpen = ref(false)
 
@@ -1272,6 +1288,14 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
           >发后续任务</button>
         </template>
         <template #head-right>
+          <button
+            class="rc-btn tiny"
+            type="button"
+            data-testid="site-data-export-btn"
+            :disabled="!!exportDisabledReason"
+            :title="exportDisabledReason || '按当前查询条件导出全部命中的数据（不是当前页），直接下载 Excel'"
+            @click="onExport"
+          >导出 Excel</button>
           <button
             class="rc-btn tiny"
             type="button"

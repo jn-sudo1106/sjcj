@@ -128,6 +128,32 @@ describe('SiteDataView · 全部源（表筛选）', () => {
     expect(wrapper.text()).toContain('已加载 2 条')
   })
 
+  // 导出接口不认 siteId / siteIds（2026-10-03 实测）：「全部源」时导出会是整张表、连别的网站一起
+  it('0930-14B：全部源时「导出 Excel」置灰并说明原因；选了具体源后按当前条件导出', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
+    await router.push('/canvas?siteId=site-a&view=data')
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockImplementation(async ({ sourceId }) => ({ total: 0, list: [row(String(sourceId), '1')] }))
+    mockFlowFixture('391007768')
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    setActivePinia(createPinia())
+    const wrapper = mount(SiteDataView, { props: { siteId: 'site-a' }, global: { plugins: [router], stubs } })
+    await pickTable(wrapper)
+
+    const btn = () => wrapper.get('[data-testid="site-data-export-btn"]')
+    expect(btn().attributes('disabled')).toBeDefined()
+    expect(btn().attributes('title')).toBe('按网站导出暂不支持，请先在左侧选一个源')
+
+    await pickSource(wrapper, '391007768')
+    expect(btn().attributes('disabled')).toBeUndefined()
+    await btn().trigger('click')
+    const url = String(open.mock.calls[0]?.[0])
+    expect(url).toContain('/entry/entryExportAll?')
+    expect(new URL(url, 'http://x').searchParams.get('sourceId')).toBe('391007768')
+    expect(open.mock.calls[0]?.[1]).toBe('_blank')
+  })
+
   it('0930-04：选表后点表名打开当前表的字段结构抽屉', async () => {
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)

@@ -429,6 +429,32 @@ describe('ResultView', () => {
     expect(wrapper.text()).toContain('1 行')
   })
 
+  it('0930-14B：「导出 Excel」按当前源和查询条件导出（与统计同一套条件）', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const exportUrl = vi.spyOn(dataApi, 'exportUrl')
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await typeSql(wrapper, "K1 = 'a'")
+    await flushPromises()
+    // 条件改了还没查询：导出会和表格对不上，先置灰
+    expect(wrapper.get('[data-testid="data-export-btn"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="data-export-btn"]').attributes('title')).toBe('查询条件已修改，先点「查询」再导出')
+    await wrapper.findAll('.rv-actions button').find((b) => b.text() === '查询')!.trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="data-export-btn"]').trigger('click')
+    expect(exportUrl).toHaveBeenCalledWith(expect.objectContaining({ sourceId: current.sourceId, sql: "K1 = 'a'" }))
+    const url = String(open.mock.calls[0]?.[0])
+    expect(new URL(url, 'http://x').searchParams.get('more')).toBe("K1 = 'a'")
+    expect(open.mock.calls[0]?.[1]).toBe('_blank')
+  })
+
   it('0930-04：点表名打开当前表的字段结构抽屉', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!

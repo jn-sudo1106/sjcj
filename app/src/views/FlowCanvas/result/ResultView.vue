@@ -1179,6 +1179,17 @@ function buildSummaryQuery(): RowQuery {
   }
 }
 const summaryOpen = ref(false)
+// 0930-14B：按当前查询条件导出 Excel（与统计同一套条件），直接打开下载链接，同数据中心。
+// 条件改了还没点「查询」时不让导：buildSummaryQuery 读的是输入框里的值，导出来会和表格对不上
+const exportDisabledReason = computed(() => {
+  if (!selectedTable.value) return '请先选择一张表'
+  if (filtersDirty.value) return '查询条件已修改，先点「查询」再导出'
+  return ''
+})
+function onExport() {
+  if (exportDisabledReason.value) return
+  window.open(dataApi.exportUrl(buildSummaryQuery()), '_blank')
+}
 // 0930-04：点表名查看当前表的字段结构。meta 是按数据现拼的（metaError 有值）时没有真实结构，表名不可点
 const tableStructOpen = ref(false)
 
@@ -1705,6 +1716,14 @@ async function onTestScript() {
              滚动的常驻区，当初正是为「全屏」这类任何时候都该点得到的开关设的。它右边紧邻
              DataGrid 自己的列菜单（下一步字段 / 列 N/M），四个按钮同宽同高，连成一组。 -->
         <template #head-right>
+          <button
+            class="rc-btn tiny"
+            type="button"
+            data-testid="data-export-btn"
+            :disabled="!!exportDisabledReason"
+            :title="exportDisabledReason || '按当前查询条件导出全部命中的数据（不是当前页），直接下载 Excel'"
+            @click="onExport"
+          >导出 Excel</button>
           <button
             class="rc-btn tiny"
             type="button"
