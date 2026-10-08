@@ -2245,8 +2245,9 @@ async function onTestScript() {
    放不下就横向滚动，工具栏高度锁死为固定的一行，数据表格永远拿到最多的剩余空间
    （2026-08-15 第十次纠偏：目的是"下面数据行更多"，不是"这一行摆得下"）。 */
 /* 2026-10-05 明确要求查询、发后续任务、删除数据始终同一行。空间不足时整行横向滚动，
-   不再把数据操作折到第二行；表上下文和 SQL 先收缩，尽量减少出现滚动条的机会。 */
-.ctx-summary { display: flex; align-items: center; flex-wrap: nowrap; gap: 6px; padding: 7px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+   不再把数据操作折到第二行；表上下文和 SQL 先收缩，尽量减少出现滚动条的机会。
+   flex-shrink: 0：overflow-x:auto 让它在纵向 flex 里的最小高度变成 0，展开流程图后高度不够时整行会被压成一条缝。 */
+.ctx-summary { display: flex; flex-shrink: 0; align-items: center; flex-wrap: nowrap; gap: 6px; padding: 7px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
 .ctx-summary::-webkit-scrollbar { height: 5px; }
 .ctx-summary::-webkit-scrollbar-thumb { border-radius: 999px; background: #cbd5e1; }
 .ctx-summary > * { flex-shrink: 0; }
