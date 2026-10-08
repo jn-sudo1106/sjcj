@@ -41,6 +41,7 @@ import {
   mockFileDownloadScript,
   mockExecuteCode,
   mockDataProcessGenerate,
+  mockDocumentExtract,
   mockRuleOrchestrationGenerate,
   mockRuleOrchestrationTest,
 } from './rules'
@@ -209,6 +210,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'file/download': mockFileDownloadScript,
   'rule/executeCode': mockExecuteCode,
   'rule/dataProcessGenerate': mockDataProcessGenerate,
+  'rule/documentExtract': mockDocumentExtract,
   'rule/orchestrationGenerate': mockRuleOrchestrationGenerate,
   'rule/orchestrationTest': mockRuleOrchestrationTest,
   'rule/publish': mockAck,

@@ -385,6 +385,11 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'rule/orchestrationDetail', desc: '规则编排详情 → /vrule/api/custom-compose/getComposeById', impl: true, live: true },
   { path: 'rule/orchestrationLoadScript', desc: '读取规则脚本正文 → /vrule/ai/dashscope/code', impl: true, live: true },
   { path: 'rule/dataProcessGenerate', desc: '规则处理生成脚本 → /api/answer/data-process', impl: true, live: true },
+  // 1005：PDF 抓取节点编排配置的「解析内容」——上传样本 PDF + 当前提示词，流式回抽取正文。
+  // 与 data-process 的关键区别是**无任何落库/落盘副作用**，且附件白名单只有 pdf（data-process 仍只吃 xls/xlsx）。
+  // 2026-10-05 后端已落地并本地联调通过（中文 PDF → PDFBox 取文 → DeepSeek 流式抽取 → done 带 charCount/truncated），
+  // 转发链见 §6.6：vite 代理与 nginx 各有独立的 /api/answer/document-extract 条目。
+  { path: 'rule/documentExtract', desc: 'PDF 样本按提示词解析 → /api/answer/document-extract', impl: true, live: true },
   { path: 'rule/executeCode', desc: '执行脚本 → /vrule/fastapi/execute/code', impl: true, live: true },
   // generate 已接真实流式（form-urlencoded）；需数字 ruleId（由 saveMeta live 提供）
   { path: 'rule/orchestrationGenerate', desc: '规则编排生成脚本 → /vrule/ai/dashscope/stream', impl: true, live: true },

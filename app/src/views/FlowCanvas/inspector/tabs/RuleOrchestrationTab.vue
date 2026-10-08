@@ -17,7 +17,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, UploadFilled } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
-import { isArticleSummaryNode, isArticleTagNode, isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isRuleNode, isScriptlessNode, rendersAsRuleNode, isTranslateNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { isArticleSummaryNode, isArticleTagNode, isAudioTextNode, isDataValidationNode, isMonitorNode, isOcrNode, isPdfNode, isRuleNode, isScriptlessNode, rendersAsRuleNode, isTranslateNode, isVideoAudioNode, makeDefaultRuleOrchestration, makeDefaultExecConfig, MONITOR_METHODS, type MonitorAlertConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { TRANSLATE_AUTO_CODE, TRANSLATE_ENGINE_CODES, TRANSLATE_LANGUAGE_CODES, engineCodeOf, engineLabelOf, languageCodeOf, translateSampleOf, translateText } from '@/api/translate'
 import {
   AUDIO_ORCHESTRATION_DEFAULTS,
@@ -30,13 +30,13 @@ import {
 } from '@/api/speech'
 import { MEDIA_AUDIO_FORMATS, MEDIA_BIT_RATE_OPTIONS, MEDIA_CHANNEL_OPTIONS, MEDIA_MAX_FILE_SIZE, MEDIA_SAMPLING_RATE_OPTIONS, MEDIA_VIDEO_EXTENSIONS, extractAudio, isSupportedVideoFile, readVideoDuration, type MediaExtractionResult } from '@/api/media'
 import { useNodeEditorContext } from '../nodeEditorContext'
-import { configApi, entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
+import { configApi, entryApi, fetchDefaultModels, fetchModelProviders, ruleApi, type DocumentExtractChunkProgress, type EntryType, type ModelOption, type ModelProviderOption, type PromptCategory, type RuleOrchestration, type RuleOrchestrationItem } from '@/api'
 import { isVruleNumericRuleId } from '@/api/legacyAdapters'
 import { copyToClipboard } from '@/utils/clipboard'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
 import { useRuleTableFields } from '@/composables/useRuleTableFields'
 import { parseCaptureConfig, validateColumns } from '@/utils/flow/captureConfig'
-import { buildDataProcessGeneratePayload } from '@/utils/flow/dataProcess'
+import { buildDataProcessGeneratePayload, buildDocumentExtractPayload } from '@/utils/flow/dataProcess'
 import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { assertConfigWritable } from '@/utils/flow/copiedConfigs'
 import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
@@ -64,6 +64,12 @@ const { tables } = useNodeInspectorAssets()
 const isRule = computed(() => rendersAsRuleNode(cfg.value))
 /** 严格信号：编排内容存 ruleCfg（真规则节点）还是 execCfg（PDF 及其它规则式节点）。 */
 const usesRuleStorage = computed(() => (cfg.value ? isRuleNode(cfg.value) : false))
+/**
+ * PDF 抓取节点（130）。`isRule` 对它也是 true（共用脚本工作区那套 UI），所以凡是"按节点类型给不同
+ * 能力/文案"的地方都必须先问 isPdf 再问 isRule——1005 之前漏了这一层，导致 PDF 节点上直接显示出
+ * 「上传 Excel」（样本槽位只认 .xls/.xlsx，1005 §2.1）。
+ */
+const isPdf = computed(() => (cfg.value ? isPdfNode(cfg.value) : false))
 /**
  * 「抓取配置 XML」配套件的适用面（0922 口径的补集）：纯配置类节点（OCR / 音视频 / 翻译 /
  * 摘要 / 打标签）整块不出现，规则/监控与采集类节点都出现。
@@ -504,6 +510,10 @@ function formatFileSize(size: number): string {
 onBeforeUnmount(() => {
   releaseVideoAudioUrl()
   translateAbort.value?.abort()
+  // 切节点时本组件重建（样本文件与解析结果随实例清零），但挂着的 SSE 流不会自己断：
+  // 不在这里 abort，上一节点还在流式返回的内容会继续 patch 到此刻选中的另一个节点上。
+  generateAbort.value?.abort()
+  extractAbort.value?.abort()
 })
 const orchCfg = computed<RuleOrchestration>(() => ({
   ...(usesRuleStorage.value ? makeDefaultRuleOrchestration() : makeDefaultExecConfig()),
@@ -516,7 +526,7 @@ function patch(p: Partial<RuleOrchestration>) {
 }
 
 // 文案分流：内容同构，只有措辞按节点类型切换
-const describeLabel = computed(() => (isMonitor.value ? '数据监控描述' : isDataValidation.value ? '数据校验描述' : isRule.value ? '规则处理描述' : '抓取需求描述'))
+const describeLabel = computed(() => (isMonitor.value ? '数据监控描述' : isDataValidation.value ? '数据校验描述' : isPdf.value ? 'PDF 抽取描述' : isRule.value ? '规则处理描述' : '抓取需求描述'))
 const describePlaceholder = computed(() => (isRule.value ? '请使用自然语言描述你需要生成脚本的规则或转换关系' : '描述抓取需求，如打开列表页提取表格前 20 行数据'))
 const generateLabel = computed(() => (isRule.value ? '生成脚本' : '生成配置'))
 const saveLabel = computed(() => (isRule.value ? '保存脚本' : '保存配置'))
@@ -976,10 +986,41 @@ const generateAbort = ref<AbortController | null>(null)
 const thinkingText = ref('')
 const generationMessage = ref('')
 const generationState = ref<'idle' | 'thinking' | 'content' | 'done' | 'error'>('idle')
-const selectedExcelFile = ref<File | null>(null)
-const excelFileError = ref('')
-const excelFileInput = ref<HTMLInputElement | null>(null)
+// 样本文件槽位（1005）：一个 state，接受的类型/上限按节点派生——真规则处理收 Excel，PDF 抓取收 PDF。
+// 只在内存里（不进 orchCfg、不落库），生成/解析时经 multipart 发给后端。
+const selectedSampleFile = ref<File | null>(null)
+const sampleFileError = ref('')
+const sampleFileInput = ref<HTMLInputElement | null>(null)
 const MAX_EXCEL_FILE_SIZE = 10 * 1024 * 1024
+const MAX_PDF_FILE_SIZE = 20 * 1024 * 1024
+const sampleFileAccept = computed(() => (isPdf.value ? '.pdf' : '.xls,.xlsx'))
+const sampleFileName = computed(() => (isPdf.value ? 'PDF' : 'Excel'))
+// ---- PDF 抓取「解析内容」的流式状态（1005）：结果只展示，不 patch orchCfg ----
+const extracting = ref(false)
+const extractAbort = ref<AbortController | null>(null)
+const extractThinking = ref('')
+const extractResult = ref('')
+const extractMessage = ref('')
+const extractTruncated = ref(false)
+const extractChunk = ref<DocumentExtractChunkProgress | null>(null)
+const extractChunkCount = ref(1)
+const extractSourceCharCount = ref(0)
+const extractState = ref<'idle' | 'thinking' | 'content' | 'done' | 'error'>('idle')
+const extractThinkingRef = ref<HTMLElement | null>(null)
+const extractResultRef = ref<HTMLElement | null>(null)
+// 结果栏提示：进行中显示分块进度，结束后显示这次切了几段、原文多少字。
+const extractResultHint = computed(() => {
+  if (extractTruncated.value) return '内容过长，已截断'
+  const progress = extractChunk.value
+  if (extracting.value && progress) {
+    const pages = progress.pages ? ` · ${progress.pages}` : ''
+    return progress.phase === 'merge'
+      ? `正在合并第 ${progress.index}/${progress.total} 组${pages}`
+      : `正在抽取第 ${progress.index}/${progress.total} 块${pages}`
+  }
+  if (extractChunkCount.value > 1) return `分块抽取 ${extractChunkCount.value} 段 · 原文 ${extractSourceCharCount.value} 字`
+  return ''
+})
 const mainThinkingRef = ref<HTMLElement | null>(null)
 const mainResultRef = ref<HTMLElement | null>(null)
 function formatResultLabel(value: string): string {
@@ -1056,33 +1097,32 @@ watch(
 function onCancelGenerate() {
   generateAbort.value?.abort()
 }
-function formatExcelFileSize(size: number): string {
-  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`
-}
-function onExcelFileChange(e: Event) {
+function onSampleFileChange(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
-  excelFileError.value = ''
+  sampleFileError.value = ''
   if (!file) return
-  if (!/\.(?:xls|xlsx)$/i.test(file.name)) {
-    selectedExcelFile.value = null
-    excelFileError.value = '仅支持 .xls 或 .xlsx 文件'
+  const isPdfFile = /\.pdf$/i.test(file.name)
+  const allowed = isPdf.value ? isPdfFile : !isPdfFile && /\.(?:xls|xlsx)$/i.test(file.name)
+  if (!allowed) {
+    selectedSampleFile.value = null
+    sampleFileError.value = isPdf.value ? '仅支持 .pdf 文件' : '仅支持 .xls 或 .xlsx 文件'
     input.value = ''
     return
   }
-  if (file.size > MAX_EXCEL_FILE_SIZE) {
-    selectedExcelFile.value = null
-    excelFileError.value = 'Excel 文件不能超过 10MB'
+  const max = isPdf.value ? MAX_PDF_FILE_SIZE : MAX_EXCEL_FILE_SIZE
+  if (file.size > max) {
+    selectedSampleFile.value = null
+    sampleFileError.value = `${sampleFileName.value} 文件不能超过 ${Math.round(max / 1024 / 1024)}MB`
     input.value = ''
     return
   }
-  selectedExcelFile.value = file
+  selectedSampleFile.value = file
 }
-function removeExcelFile() {
-  selectedExcelFile.value = null
-  excelFileError.value = ''
-  if (excelFileInput.value) excelFileInput.value.value = ''
+function removeSampleFile() {
+  selectedSampleFile.value = null
+  sampleFileError.value = ''
+  if (sampleFileInput.value) sampleFileInput.value.value = ''
 }
 /** 仅非规则节点的旧 XML 抓取配置复用还依赖 compose ruleId；规则/监控节点生成脚本走 configId。 */
 async function resolveInputTableName(): Promise<string> {
@@ -1132,7 +1172,7 @@ async function onGenerateScript(
   draft?: Partial<Pick<RuleOrchestration, 'systemPrompt' | 'promptCategory' | 'modelProviderCode' | 'modelCode'>> & { file?: File },
 ) {
   if (!orchCfg.value.describe.trim()) {
-    ElMessage.warning(isMonitor.value ? '请先填写数据监控描述' : isDataValidation.value ? '请先填写数据校验描述' : isRule.value ? '请先填写规则处理描述' : '请先填写抓取需求描述')
+    ElMessage.warning(isMonitor.value ? '请先填写数据监控描述' : isDataValidation.value ? '请先填写数据校验描述' : isPdf.value ? '请先填写 PDF 抽取描述' : isRule.value ? '请先填写规则处理描述' : '请先填写抓取需求描述')
     return
   }
   if (isRule.value && !cfg.value?.configId) {
@@ -1188,7 +1228,8 @@ async function onGenerateScript(
         systemPrompt: genCfg.systemPrompt ?? '',
         checkRule: isMonitor.value ? (cfg.value?.monitorMethods ?? []).join(',') || undefined : undefined,
       }), {
-        file: selectedExcelFile.value ?? undefined,
+        // 1005「分开」口径：PDF 节点的样本只喂「解析内容」，点「生成脚本」不带附件。
+        file: isPdf.value ? undefined : (selectedSampleFile.value ?? undefined),
         signal: controller.signal,
         onThinking: (delta) => {
           if (!delta) return
@@ -1236,6 +1277,132 @@ async function onGenerateScript(
 }
 
 const workbenchOpen = ref(false)
+
+// ---- PDF 抓取「解析内容」（1005）----
+// 与「生成脚本」同一条流式链路，但只读：后端抽 PDF 正文 + 按当前提示词输出，
+// 结果不 patch orchCfg、不落库、不落盘（一期口径，方案 §3.3/§10.1）。
+async function scrollExtractThinkingToBottom() {
+  await nextTick()
+  const el = extractThinkingRef.value
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+}
+async function scrollExtractResultToBottom() {
+  await nextTick()
+  const el = extractResultRef.value
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+}
+watch(
+  () => [extractThinking.value, extracting.value, extractState.value] as const,
+  () => {
+    if (extracting.value || extractThinking.value.trim() || extractState.value === 'done' || extractState.value === 'error') {
+      void scrollExtractThinkingToBottom()
+    }
+  },
+  { flush: 'post' },
+)
+watch(
+  () => [extractResult.value, extracting.value, extractState.value] as const,
+  () => {
+    if (extracting.value || extractResult.value.trim() || extractState.value === 'done') {
+      void scrollExtractResultToBottom()
+    }
+  },
+  { flush: 'post' },
+)
+function onCancelExtract() {
+  extractAbort.value?.abort()
+}
+function onCopyExtractResult() {
+  void copyToClipboard(extractResult.value, '抽取结果')
+}
+async function onExtractDocument() {
+  if (extracting.value) {
+    onCancelExtract()
+    return
+  }
+  const file = selectedSampleFile.value
+  if (!file) {
+    ElMessage.warning('请先上传 PDF 文件')
+    return
+  }
+  if (!orchCfg.value.describe.trim()) {
+    ElMessage.warning('请先填写 PDF 抽取描述')
+    return
+  }
+  // 解析内容不要求 configId，也不要求字段绑定（方案 §3.3）：它是"用样本验证提示词"的试跑工具，
+  // 加码成"先存表配置"会让 PDF 节点每次改提示词都得先落一次库。
+  if (!(orchCfg.value.modelProviderCode || '').trim() || !(orchCfg.value.modelCode || '').trim()) {
+    ElMessage.warning('请先选择模型供应商和模型')
+    return
+  }
+  // 两条流式互斥：解析期间点生成（或反过来）先掐掉对方，否则两个 abort 控制器互相踩
+  generateAbort.value?.abort()
+  const controller = new AbortController()
+  extractAbort.value = controller
+  extracting.value = true
+  extractThinking.value = ''
+  extractResult.value = ''
+  extractMessage.value = ''
+  extractTruncated.value = false
+  extractChunk.value = null
+  extractChunkCount.value = 1
+  extractSourceCharCount.value = 0
+  extractState.value = 'idle'
+  try {
+    const res = await ruleApi.documentExtract(buildDocumentExtractPayload({
+      description: orchCfg.value.describe,
+      systemPrompt: orchCfg.value.systemPrompt ?? '',
+      configId: Number(cfg.value?.configId ?? 0),
+      providerCode: orchCfg.value.modelProviderCode ?? '',
+      model: orchCfg.value.modelCode ?? '',
+      outputFields: orchCfg.value.outputFields ?? [],
+      outputFieldOptions: outputFieldOptions.value,
+    }), {
+      file,
+      signal: controller.signal,
+      onThinking: (delta) => {
+        if (!delta) return
+        extractState.value = 'thinking'
+        extractThinking.value = `${extractThinking.value}${delta}`
+      },
+      onContent: (delta) => {
+        if (!delta) return
+        extractState.value = 'content'
+        extractResult.value = `${extractResult.value}${delta}`
+      },
+      onChunk: (progress) => {
+        extractChunk.value = progress
+        // 合并轮次的第一段是新的正文，之前铺开的分块结果要清掉
+        if (progress.phase === 'merge' && progress.index === 1) extractResult.value = ''
+      },
+      onDone: (payload) => {
+        extractState.value = 'done'
+        extractTruncated.value = payload.truncated === true
+        extractChunkCount.value = Number(payload.chunkCount ?? 1) || 1
+        extractSourceCharCount.value = Number(payload.sourceCharCount ?? 0) || 0
+      },
+    })
+    extractResult.value = res.content
+    extractTruncated.value = res.truncated
+    extractChunkCount.value = res.chunkCount || 1
+    extractSourceCharCount.value = res.sourceCharCount || 0
+    extractState.value = 'done'
+    ElMessage.success('内容已解析')
+  } catch (e) {
+    if (controller.signal.aborted || (e as Error)?.message?.includes('取消')) {
+      ElMessage.info('已取消解析')
+    } else {
+      extractState.value = 'error'
+      extractMessage.value = (e as Error)?.message ?? String(e)
+      ElMessage.error(`解析内容失败：${(e as Error)?.message ?? String(e)}`)
+    }
+  } finally {
+    if (extractAbort.value === controller) extractAbort.value = null
+    extracting.value = false
+  }
+}
 
 const savingScript = ref(false)
 const savingPromptPreview = ref(false)
@@ -1787,25 +1954,40 @@ function onTestScript() {
     </span>
   </div>
   <div v-if="isRule || isCaptureStyle" class="rc-generation-actions" data-testid="rule-generation-actions">
-    <!-- 0929：上传 Excel 与「测试脚本」是规则/监控节点的能力，采集节点只保留「生成配置」（S3-3）。 -->
+    <!-- 0929：上传 Excel 与「测试脚本」是规则/监控节点的能力，采集节点只保留「生成配置」（S3-3）。
+         1005：样本槽位按节点派生——真规则处理收 Excel，PDF 抓取收 PDF，两者白名单不交叉。 -->
     <input
       v-if="isRule && !isMonitor"
-      ref="excelFileInput"
+      ref="sampleFileInput"
       class="rc-file-input"
-      data-testid="main-excel-file-input"
+      :data-testid="isPdf ? 'main-pdf-file-input' : 'main-excel-file-input'"
       type="file"
-      accept=".xls,.xlsx"
-      @change="onExcelFileChange"
+      :accept="sampleFileAccept"
+      @change="onSampleFileChange"
     />
     <button
       v-if="isRule && !isMonitor"
       class="rc-btn rc-upload-btn"
       type="button"
-      data-testid="main-upload-excel"
-      @click="excelFileInput?.click()"
+      :data-testid="isPdf ? 'main-upload-pdf' : 'main-upload-excel'"
+      @click="sampleFileInput?.click()"
     >
       <UploadFilled aria-hidden="true" />
-      <span>{{ selectedExcelFile ? '更换 Excel' : '上传 Excel' }}</span>
+      <span>{{ selectedSampleFile ? `更换 ${sampleFileName}` : `上传 ${sampleFileName}` }}</span>
+    </button>
+    <button
+      v-if="isPdf"
+      class="rc-btn"
+      type="button"
+      :class="{ 'is-generating': extracting }"
+      data-testid="main-extract-document"
+      :aria-label="extracting ? '取消解析' : '解析内容'"
+      :title="extracting ? '取消解析' : '解析内容'"
+      :disabled="!extracting && !selectedSampleFile"
+      @click="onExtractDocument"
+    >
+      <span v-if="extracting" class="rc-stop-icon" data-testid="stop-extract-icon" aria-hidden="true" />
+      <template v-else>解析内容</template>
     </button>
     <button
       class="rc-btn primary"
@@ -1830,15 +2012,30 @@ function onTestScript() {
       {{ codeTestLoading ? '测试中...' : '测试脚本' }}
     </button>
   </div>
-  <div v-if="isRule && !isMonitor && (selectedExcelFile || excelFileError)" class="rc-file-summary">
-    <div v-if="selectedExcelFile" class="rc-file-selected">
-      <span class="rc-file-name" :title="selectedExcelFile.name">{{ selectedExcelFile.name }}</span>
-      <span class="rc-file-size">{{ formatExcelFileSize(selectedExcelFile.size) }}</span>
-      <button type="button" class="rc-file-remove" title="移除 Excel 文件" aria-label="移除 Excel 文件" @click="removeExcelFile">
+  <div v-if="isRule && !isMonitor && (selectedSampleFile || sampleFileError)" class="rc-file-summary">
+    <div v-if="selectedSampleFile" class="rc-file-selected">
+      <span class="rc-file-name" :title="selectedSampleFile.name">{{ selectedSampleFile.name }}</span>
+      <span class="rc-file-size">{{ formatFileSize(selectedSampleFile.size) }}</span>
+      <button type="button" class="rc-file-remove" :title="`移除${sampleFileName}文件`" :aria-label="`移除${sampleFileName}文件`" @click="removeSampleFile">
         <Delete aria-hidden="true" />
       </button>
     </div>
-    <span v-if="excelFileError" class="rc-file-error">{{ excelFileError }}</span>
+    <span v-if="sampleFileError" class="rc-file-error">{{ sampleFileError }}</span>
+  </div>
+  <div v-if="isPdf && (extracting || extractThinking.trim() || extractState === 'error')" class="rc-main-stream" data-testid="main-extract-thinking">
+    <div class="rc-main-stream-head">
+      <span>思考过程</span>
+      <span>{{ extractState === 'error' ? '出错' : extracting ? '解析中' : '已完成' }}</span>
+    </div>
+    <pre ref="extractThinkingRef" class="rc-main-stream-text">{{ extractThinking.trim() || (extracting ? '等待模型返回思考过程…' : '暂无思考过程') }}</pre>
+  </div>
+  <div v-if="isPdf && (extracting || extractResult.trim() || extractState === 'error')" class="rc-main-result" data-testid="main-extract-result">
+    <div class="rc-main-result-head">
+      <span>解析结果<template v-if="extractResultHint">（{{ extractResultHint }}）</template></span>
+      <button class="rc-main-result-link" type="button" data-testid="main-extract-copy" :disabled="!extractResult.trim()" @click="onCopyExtractResult">复制</button>
+    </div>
+    <pre v-if="extractState === 'error'" class="rc-main-result-code">{{ extractMessage || '解析未返回内容' }}</pre>
+    <pre v-else ref="extractResultRef" class="rc-main-result-code rc-extract-body">{{ extractResult || '等待模型输出结果…' }}</pre>
   </div>
   <div v-if="isRule && generationState !== 'done' && (generating || thinkingText.trim() || generationState === 'error')" class="rc-main-stream" data-testid="main-stream-thinking">
     <div class="rc-main-stream-head">
@@ -2090,6 +2287,8 @@ function onTestScript() {
 .rc-main-stream-text, .rc-main-result-code { margin: 0; max-height: 180px; overflow: auto; padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 .rc-main-stream-text { color: #cbd5e1; border-top: 1px solid #1e293b; }
 .rc-main-result-code { color: #dbeafe; background: #0f172a; }
+/* PDF 解析结果是给人读的正文，不是脚本：白底深字，读屏高度放宽（1005） */
+.rc-main-result-code.rc-extract-body { color: var(--rc-text-2); background: #fff; max-height: 320px; }
 .rc-code-test { display: flex; flex-direction: column; gap: 10px; }
 .rc-code-test-meta { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--rc-text-2); }
 .rc-code-test-meta span { color: var(--rc-faint); font-size: 11px; }

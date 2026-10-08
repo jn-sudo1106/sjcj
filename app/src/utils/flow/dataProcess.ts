@@ -62,3 +62,42 @@ export function buildDataProcessGeneratePayload(input: DataProcessGenerateInput)
     checkRule: input.checkRule,
   }
 }
+
+/**
+ * PDF 抓取节点「解析内容」（1005 方案 §5.3）：样本 PDF 交后端抽正文，按当前提示词产出抽取结果。
+ * 与生成脚本的 payload 差异是没有 sourceTable/checkRule，且 systemPrompt 必填——
+ * 这条链路只做"读文档 + 按提示词输出"，不产出脚本、不落库。
+ */
+export interface DocumentExtractPayload {
+  description: string
+  systemPrompt: string
+  configId: number
+  providerCode: string
+  model: string
+  outputFields: string
+  outputFormat: 'text' | 'json'
+}
+
+export interface DocumentExtractInput {
+  description: string
+  systemPrompt: string
+  configId: number
+  providerCode: string
+  model: string
+  outputFields: string[]
+  outputFieldOptions: Pick<RuleFieldOption, 'itemCode' | 'itemName'>[]
+  /** 一期固定 text（自由文本/markdown），json 留给二期的字段对齐 */
+  outputFormat?: 'text' | 'json'
+}
+
+export function buildDocumentExtractPayload(input: DocumentExtractInput): DocumentExtractPayload {
+  return {
+    description: input.description,
+    systemPrompt: input.systemPrompt,
+    configId: input.configId,
+    providerCode: input.providerCode,
+    model: input.model,
+    outputFields: joinPairs(selectFields(input.outputFields, input.outputFieldOptions)),
+    outputFormat: input.outputFormat ?? 'text',
+  }
+}

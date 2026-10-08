@@ -56,8 +56,7 @@ const emit = defineEmits<{
   display: block;
   width: 100%;
   height: 66px;
-  clip-path: inset(2px 0);
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .lg-captcha-empty {

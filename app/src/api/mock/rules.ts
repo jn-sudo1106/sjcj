@@ -455,6 +455,29 @@ export function mockDataProcessGenerate(params?: Record<string, unknown>): RuleO
   }
 }
 
+/**
+ * PDF 样本解析（1005 方案 §5.2 Mock）：演示环境不真的读 PDF 字节，按提示词与出参字段回一份可读的抽取结果，
+ * 保证「解析内容」在后端 PDF 能力上线前也能点出内容。真实链路见 fetchDocumentExtract。
+ */
+export function mockDocumentExtract(params?: Record<string, unknown>): Record<string, unknown> {
+  const fileName = String(params?.fileName ?? 'sample.pdf')
+  const description = String(params?.description ?? '').trim()
+  const outputFields = parseFieldCodes(String(params?.outputFields ?? ''))
+  const lines = outputFields.length
+    ? outputFields.map((code) => `- ${code}：demo-${code}`)
+    : ['- 正文抽取结果：demo-content']
+  const content = [`## ${fileName}`, description ? `> 抽取要求：${description}` : '', ...lines].filter(Boolean).join('\n')
+  return {
+    content,
+    charCount: content.length,
+    truncated: false,
+    chunkCount: 1,
+    sourceCharCount: content.length,
+    mergeRounds: 0,
+    message: '解析完成（演示数据）',
+  }
+}
+
 export function mockRuleOrchestrationTest(params?: Record<string, unknown>): RuleOrchestrationTestResult {
   const script = String(params?.script ?? '').trim()
   if (!script) return { success: false, error: '脚本为空', outputs: [], executionTime: 0 }

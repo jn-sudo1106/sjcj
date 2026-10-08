@@ -67,7 +67,7 @@ import {
   assertLegacySnatchSaveLogin,
   legacySnatchSavePayloadFromFlow,
 } from './legacyAdapters'
-import type { DataProcessGeneratePayload } from '@/utils/flow/dataProcess'
+import type { DataProcessGeneratePayload, DocumentExtractPayload } from '@/utils/flow/dataProcess'
 export type { ModelProviderOption, ModelOption } from './types'
 import { encryptLegacyPayload } from './legacyCrypto'
 export { fetchModelProviders, fetchDefaultModels } from './model'
@@ -1704,6 +1704,264 @@ async function fetchDataProcessGenerate(
   }
 }
 
+/**
+ * PDF 抓取节点「解析内容」（1005 方案 §5.2、§11）：样本 PDF + 当前节点提示词 → 后端抽正文喂模型 → 流式回抽取结果。
+ *
+ * 与 fetchDataProcessGenerate 刻意不同，四条都不能"顺手对齐"：
+ * 1. 端点 `/api/answer/document-extract`，附件白名单只有 pdf（data-process 仍只吃 xls/xlsx）；
+ * 2. done 事件不解析 scriptPath、不做「已保存到 /code01/….py」的正则兜底——这条链路不产脚本；
+ * 3. 返回 `DocumentExtractResult`（content/charCount/truncated/chunkCount/…），不是 RuleOrchestrationGenerateResult；
+ * 4. 对数据库和文件服务**零副作用**，调用方只把 content 显示出来。
+ *
+ * 分块（§11）：正文长到一次调用装不下时后端会分块抽取再合并，期间多两类事件——
+ * `chunk`（分块进度，合并轮 index 回到 1 表示结果要重新开始铺）和 `error`
+ * （流已经开了，状态码改不了，失败只能带内回）。空闲超时按事件重置，不再按总时长掐。
+ */
+export interface DocumentExtractOptions {
+  file: File
+  signal?: AbortSignal
+  onThinking?: (delta: string) => void
+  onContent?: (delta: string) => void
+  onChunk?: (progress: DocumentExtractChunkProgress) => void
+  onDone?: (payload: {
+    message?: string
+    charCount?: number
+    truncated?: boolean
+    chunkCount?: number
+    sourceCharCount?: number
+    mergeRounds?: number
+  }) => void
+}
+
+/** 后端 `event: chunk` 的载荷；phase=merge 且 index=1 时调用方应清空已铺的分段结果。 */
+export interface DocumentExtractChunkProgress {
+  phase: 'map' | 'merge'
+  index: number
+  total: number
+  pages?: string
+  charCount: number
+  last: boolean
+}
+
+export interface DocumentExtractResult {
+  content: string
+  charCount: number
+  truncated: boolean
+  chunkCount: number
+  sourceCharCount: number
+  mergeRounds: number
+}
+
+/** 空闲超时：分块链路靠每块的 chunk 事件保活，只要还在出事件就不掐。 */
+const DOCUMENT_EXTRACT_IDLE_TIMEOUT_MS = 300_000
+
+function parseChunkProgress(raw: string): DocumentExtractChunkProgress | null {
+  let record: Record<string, unknown>
+  try {
+    record = JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    return null
+  }
+  if (record.phase !== 'map' && record.phase !== 'merge') return null
+  const index = Number(record.index) || 0
+  const total = Number(record.total) || 0
+  if (index < 1 || total < 1) return null
+  return {
+    phase: record.phase,
+    index,
+    total,
+    pages: typeof record.pages === 'string' && record.pages ? record.pages : undefined,
+    charCount: Number(record.charCount) || 0,
+    last: record.last === true || record.last === 'true',
+  }
+}
+
+async function fetchDocumentExtract(
+  payload: DocumentExtractPayload,
+  options: DocumentExtractOptions,
+): Promise<DocumentExtractResult> {
+  const endpoint = 'rule/documentExtract'
+  try {
+    if (usesMockAdapter(endpoint)) {
+      const result = await request<unknown>(endpoint, { ...payload, fileName: options.file.name }, { mode: 'mock' })
+      const record = (result ?? {}) as Record<string, unknown>
+      const content = String(record.content ?? '')
+      if (!content.trim()) throw new Error('解析未返回内容')
+      const truncated = record.truncated === true
+      const charCount = Number(record.charCount ?? 0) || content.length
+      const chunkCount = Number(record.chunkCount ?? 0) || 1
+      const done = {
+        message: String(record.message ?? '解析完成'),
+        charCount,
+        truncated,
+        chunkCount,
+        sourceCharCount: Number(record.sourceCharCount ?? 0) || 0,
+        mergeRounds: Number(record.mergeRounds ?? 0) || 0,
+      }
+      options.onContent?.(content)
+      options.onDone?.(done)
+      return { ...done, content }
+    }
+    const headers: Record<string, string> = { Accept: 'text/event-stream' }
+    const token = readStoredToken()
+    if (token) headers[ACCESS_TOKEN_HEADER] = token
+    const controller = new AbortController()
+    const onExternalAbort = () => controller.abort()
+    if (options.signal) {
+      if (options.signal.aborted) controller.abort()
+      else options.signal.addEventListener('abort', onExternalAbort, { once: true })
+    }
+    let timeout = window.setTimeout(() => controller.abort(), DOCUMENT_EXTRACT_IDLE_TIMEOUT_MS)
+    const resetIdleTimeout = () => {
+      window.clearTimeout(timeout)
+      timeout = window.setTimeout(() => controller.abort(), DOCUMENT_EXTRACT_IDLE_TIMEOUT_MS)
+    }
+    try {
+      const formData = new FormData()
+      formData.append('request', new Blob([JSON.stringify(payload)], { type: 'application/json' }))
+      formData.append('file', options.file)
+      // 不手写 Content-Type：boundary 必须由浏览器补，后端按 @RequestPart 绑定 request/file
+      const res = await fetch('/api/answer/document-extract', {
+        method: 'POST',
+        credentials: 'include',
+        headers,
+        body: formData,
+        signal: controller.signal,
+      })
+      if (isSessionExpiredRedirect(res)) {
+        triggerSessionExpired()
+        throw new Error('登录失效,请重新登录')
+      }
+      if (!res.ok) {
+        let detail = ''
+        try {
+          const raw = await res.text()
+          try {
+            const parsed = JSON.parse(raw) as Record<string, unknown>
+            detail = String(parsed.error ?? parsed.message ?? parsed.msg ?? '')
+          } catch {
+            detail = raw.trim()
+          }
+        } catch { /* ignore */ }
+        if (!detail && res.status === 413) detail = '文件或请求体超过大小限制，请压缩或更换文件'
+        throw new Error(detail ? `请求失败 ${res.status}: ${detail.slice(0, 200)}` : `请求失败 ${res.status}`)
+      }
+      let text = ''
+      // 后端 Spring SSE writer 输出 `data:<正文>`，没有规范里的可选空格，首空格可能属于正文
+      const parser = createSseEventParser({ preserveDataLeadingSpace: true })
+      let structured = false
+      let content = ''
+      let doneMessage = ''
+      let doneCharCount = 0
+      let doneTruncated = false
+      let doneChunkCount = 0
+      let doneSourceCharCount = 0
+      let doneMergeRounds = 0
+      let doneSeen = false
+      let streamError = ''
+      const emitEvent = (event: { event: string; data: string }) => {
+        structured = true
+        if (doneSeen) return
+        if (event.event === 'thinking') {
+          options.onThinking?.(event.data)
+          return
+        }
+        if (event.event === 'content' || event.event === 'message') {
+          if (!event.data) return
+          content += event.data
+          options.onContent?.(event.data)
+          return
+        }
+        if (event.event === 'chunk') {
+          const progress = parseChunkProgress(event.data)
+          if (progress) {
+            // 合并轮次从第一段起就是新的正文，之前累积的分块结果不再展示
+            if (progress.phase === 'merge' && progress.index === 1) content = ''
+            options.onChunk?.(progress)
+          }
+          return
+        }
+        // SSE 已经发出，HTTP 状态早就是 200，中途失败只能靠 in-band 的 error 事件
+        if (event.event === 'error') {
+          streamError = event.data.trim()
+          return
+        }
+        if (event.event === 'done') {
+          doneSeen = true
+          const trimmed = event.data.trim()
+          if (!trimmed) return
+          try {
+            const parsed = JSON.parse(trimmed) as Record<string, unknown>
+            if (parsed.message != null) doneMessage = String(parsed.message)
+            if (parsed.charCount != null) doneCharCount = Number(parsed.charCount) || 0
+            if (parsed.truncated != null) doneTruncated = parsed.truncated === true || parsed.truncated === 'true'
+            if (parsed.chunkCount != null) doneChunkCount = Number(parsed.chunkCount) || 0
+            if (parsed.sourceCharCount != null) doneSourceCharCount = Number(parsed.sourceCharCount) || 0
+            if (parsed.mergeRounds != null) doneMergeRounds = Number(parsed.mergeRounds) || 0
+          } catch {
+            doneMessage = trimmed
+          }
+          return
+        }
+        // 陌生事件名不能拼进正文，只忽略
+      }
+      if (res.body && typeof res.body.getReader === 'function') {
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          const delta = decoder.decode(value, { stream: true })
+          if (delta) {
+            text += delta
+            resetIdleTimeout()
+            for (const event of parser.push(delta)) emitEvent(event)
+          }
+        }
+        const tail = decoder.decode()
+        if (tail) {
+          text += tail
+          for (const event of parser.push(tail)) emitEvent(event)
+        }
+      } else {
+        text = await res.text()
+        for (const event of parser.push(text)) emitEvent(event)
+      }
+      for (const event of parser.finish()) emitEvent(event)
+      // 后端退化成纯文本时，整段正文就是抽取结果（不做脚本那套解析）
+      if (!structured && text) {
+        content += text
+        options.onContent?.(text)
+      }
+      if (streamError) throw new Error(streamError)
+      if (!content.trim()) throw new Error('解析未返回内容')
+      const charCount = doneCharCount || content.length
+      const result: DocumentExtractResult = {
+        content,
+        charCount,
+        truncated: doneTruncated,
+        chunkCount: doneChunkCount || 1,
+        sourceCharCount: doneSourceCharCount,
+        mergeRounds: doneMergeRounds,
+      }
+      options.onDone?.({
+        message: doneMessage || '解析完成',
+        charCount,
+        truncated: result.truncated,
+        chunkCount: result.chunkCount,
+        sourceCharCount: result.sourceCharCount,
+        mergeRounds: result.mergeRounds,
+      })
+      return result
+    } finally {
+      window.clearTimeout(timeout)
+      options.signal?.removeEventListener('abort', onExternalAbort)
+    }
+  } catch (e) {
+    throw e instanceof ApiError ? e : new ApiError(endpoint, e)
+  }
+}
+
 // 规则资产（M3）
 // ck_source 监控源配置（2026-09-05，vanv-data-engine SourceController）：
 // 数据监控节点保存时同步落库。list 按 sourceId 查存在性（SOURCE_ID 不唯一，可能多行）；
@@ -1878,6 +2136,7 @@ export const ruleApi = {
     }
   },
   dataProcessGenerate: fetchDataProcessGenerate,
+  documentExtract: fetchDocumentExtract,
   // req → 旧体 { rule_id, params, timeout }；响应 result 数组 → outputs（0801 §4.4）
   orchestrationTest: async (req: RuleOrchestrationTestRequest) => {
     const endpoint = 'rule/orchestrationTest'
