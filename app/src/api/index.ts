@@ -1974,19 +1974,31 @@ function buildLegacyMore(q: RowQuery) {
  * 查询时数据 ID / 父 ID 走单独参数（entryId / parentId），导出接口认不认没验证过；
  * 后端认 more 是实测过的（2026-10-03，217：同一源 76 行，带 `ENTRY_ID = 991919` 只导出 1 行），
  * 所以统一折成 `ENTRY_ID in (...)` / `PARENT_ID in (...)` 写进 more。
- * ID 只留纯数字（拼进 SQL 片段）；填了内容但一个合法 ID 都没有时写 `1 = 0`——
+ * ID 只留纯数字（拼进 SQL 片段）；填了内容但一个合法 ID 都没有时写 `ENTRY_ID is null`——
  * 页面上这时查不到数据，导出也不能因为条件被丢掉而变成整表。
  */
 function buildExportMore(q: RowQuery) {
-  const parts: string[] = []
-  const idIn = (column: string, raw?: string) => {
-    if (!raw?.trim()) return
-    const ids = raw.split(/[\s,，]+/).filter((id) => /^\d+$/.test(id))
-    parts.push(ids.length ? `${column} in (${ids.join(',')})` : '1 = 0')
-  }
-  idIn('ENTRY_ID', q.dataId)
-  idIn('PARENT_ID', q.parentId)
-  const more = buildLegacyMore(q)
+  return joinMore([idInClause('ENTRY_ID', q.dataId), idInClause('PARENT_ID', q.parentId)], buildLegacyMore(q))
+}
+
+/**
+ * 数据 ID / 父 ID 输入框的内容折成 SQL 片段：空 → undefined；填了但一个合法 ID 都没有 → `ENTRY_ID is null`（主键不为空，恒查不到）。
+ * 不能写 `1 = 0`：查询和导出接口都报「传到的条件含有非法注入风险」（2026-10-08 217 实测）；
+ * 也不用 `PARENT_ID in (0)` / `is null`——根数据的父 ID 就是 0 或空。
+ */
+function idInClause(column: string, raw?: string): string | undefined {
+  if (!raw?.trim()) return undefined
+  const ids = raw.split(/[\s,，]+/).filter((id) => /^\d+$/.test(id))
+  return ids.length ? `${column} in (${ids.join(',')})` : 'ENTRY_ID is null'
+}
+
+function isSingleId(raw?: string) {
+  return !!raw && /^\s*\d+\s*$/.test(raw)
+}
+
+/** ID 片段与 SQL / 时间范围合成 more；后者可能含 OR，有 ID 片段时加括号隔开 */
+function joinMore(idParts: Array<string | undefined>, more?: string) {
+  const parts = idParts.filter((part): part is string => !!part)
   if (more) parts.push(parts.length ? `(${more})` : more)
   return parts.join(' AND ') || undefined
 }
@@ -2008,13 +2020,17 @@ function resolveSortField(field?: string): string | undefined {
 function buildLegacyRowQuery(q: RowQuery) {
   const mappedField = resolveSortField(q.sortField)
   const isTimeField = mappedField === 'UPDATE_DT' || mappedField === 'CREATE_DT'
+  // 后端 entryId / parentId 是单个 Long：填多个 ID（或非数字）原样发过去整个查询 500（2026-10-08 217 实测）。
+  // 单个 ID 照旧走参数；其余折成 `ENTRY_ID in (...)` 并进 more，与导出（buildExportMore）同一口径。
+  const singleDataId = isSingleId(q.dataId)
+  const singleParentId = isSingleId(q.parentId)
   return {
     page: q.page ?? 1,
     limit: q.size ?? 20,
     entryType: numericId(q.tableId),
     sourceId: q.sourceId,
-    entryId: q.dataId,
-    parentId: q.parentId,
+    entryId: singleDataId ? q.dataId!.trim() : undefined,
+    parentId: singleParentId ? q.parentId!.trim() : undefined,
     // 多选由调用方 join(',') 传入；旧 AES 载荷无值时不带该键（不兜底 'ALL'，见方案开放项 2）
     state: q.state || undefined,
     nextFlag: q.nextFlag,
@@ -2022,7 +2038,10 @@ function buildLegacyRowQuery(q: RowQuery) {
     // 时间范围同样合并进 more，保留旧端点和 AES 载荷契约。
     min: q.sql ? q.min || 0 : q.min,
     max: q.max,
-    more: buildLegacyMore(q),
+    more: joinMore([
+      singleDataId ? undefined : idInClause('ENTRY_ID', q.dataId),
+      singleParentId ? undefined : idInClause('PARENT_ID', q.parentId),
+    ], buildLegacyMore(q)),
     // 对照真实源码 EntryList2.vue：该页排序一律走 field/type 数值化 hack（含 ENTRY_ID 本身），
     // sorted 恒为 '0'；entry.js 里 sortField==='ENTRY_ID' 触发 sorted±1 的分支是给另一套表格组件
     // （s-table/AntD sorter）准备的，此页从不设置 sortField/sortOrder，是死分支，不迁移。

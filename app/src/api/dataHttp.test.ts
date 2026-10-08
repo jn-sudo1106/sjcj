@@ -85,6 +85,34 @@ describe('实体数据 API 旧平台 HTTP 契约', () => {
     expect(payload.entryId).toBe('9')
   })
 
+  it('entryDataPaged：多个数据 ID / 父 ID 折成 in 进 more，不再当单值发（后端 entryId 是 Long，多值整个查询 500）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, count: 0, data: [] }))
+    const { dataApi } = await import('./index')
+
+    await dataApi.rowQueryPaged({ tableId: '1042', dataId: '11, 12，13', parentId: '7 8', sql: "K1 = 'a' OR K2 = 'b'" })
+
+    const payload = decryptBody(fetchMock.mock.calls[0][1] as RequestInit)
+    expect(payload.more).toBe("ENTRY_ID in (11,12,13) AND PARENT_ID in (7,8) AND (K1 = 'a' OR K2 = 'b')")
+    expect(payload).not.toHaveProperty('entryId')
+    expect(payload).not.toHaveProperty('parentId')
+  })
+
+  it('entryDataPaged：单个 ID 照旧走 entryId / parentId；填了非数字写 ENTRY_ID is null，查不到而不是报错（1 = 0 会被后端当注入拒掉）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, count: 0, data: [] }))
+    const { dataApi } = await import('./index')
+
+    await dataApi.rowQueryPaged({ tableId: '1042', dataId: ' 9 ', parentId: '7' })
+    await dataApi.rowQueryPaged({ tableId: '1042', dataId: 'abc' })
+
+    const single = decryptBody(fetchMock.mock.calls[0][1] as RequestInit)
+    expect(single.entryId).toBe('9')
+    expect(single.parentId).toBe('7')
+    expect(single).not.toHaveProperty('more')
+    const invalid = decryptBody(fetchMock.mock.calls[1][1] as RequestInit)
+    expect(invalid.more).toBe('ENTRY_ID is null')
+    expect(invalid).not.toHaveProperty('entryId')
+  })
+
   it('时间范围与条件表达式合并到旧端点 more', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ code: '0', msg: null, count: 0, data: [] }))
     const { dataApi } = await import('./index')
@@ -582,12 +610,12 @@ describe('数据详情 / 统计 / 后续 / 删除 API 旧平台 HTTP 契约（E 
     expect(new URL(url, 'http://x').searchParams.get('more')).toBe("ENTRY_ID in (11,12,13) AND PARENT_ID in (7) AND (K1 = 'a' OR K2 = 'b')")
   })
 
-  it('exportUrl：数据 ID 填了但没有合法数字时写 1 = 0，不能退化成导出整表', async () => {
+  it('exportUrl：数据 ID 填了但没有合法数字时写 ENTRY_ID is null，不能退化成导出整表', async () => {
     const { dataApi } = await import('./index')
 
     const url = dataApi.exportUrl({ tableId: '1042', dataId: 'abc' })
 
-    expect(new URL(url, 'http://x').searchParams.get('more')).toBe('1 = 0')
+    expect(new URL(url, 'http://x').searchParams.get('more')).toBe('ENTRY_ID is null')
   })
 
   it('exportUrl：没有任何条件时不带 more', async () => {
