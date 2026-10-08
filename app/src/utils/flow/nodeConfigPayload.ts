@@ -17,6 +17,7 @@ import {
   isArticleTagNode,
   isAudioTextNode,
   isOcrNode,
+  isPdfNode,
   isRuleNode,
   isTranslateNode,
   type NodeConfig,
@@ -279,6 +280,26 @@ function ocrStructuredFor(cfg: NodeConfig): string | undefined {
 }
 
 /**
+ * PDF 抓取编排配置（2026-10-08 需求）：点底部「保存」时把「设置业务规则」的描述与模型选择落成
+ * cs_config.core_param 的 `{"describe":"...","providerCode":"...","model":"..."}`。
+ * 取的是编排 Tab 当前值（存在 cfg.execCfg，PDF 走 execCfg 而非 ruleCfg）；`providerCode` / `model`
+ * 两个键名与摘要 / 打标签节点同一口径（后端按这两个键读 core_param）。
+ * 三项全空（Tab 没打开过 / 模型列表没拉到）返回 undefined，沿用「有值才覆盖」不抹后端原值。
+ */
+function pdfStructuredFor(cfg: NodeConfig): string | undefined {
+  if (!isPdfNode(cfg)) return undefined
+  const describe = (cfg.execCfg?.describe ?? '').trim()
+  const providerCode = (cfg.execCfg?.modelProviderCode ?? '').trim()
+  const model = (cfg.execCfg?.modelCode ?? '').trim()
+  if (!describe && !providerCode && !model) return undefined
+  return JSON.stringify({
+    ...(describe ? { describe } : {}),
+    ...(providerCode ? { providerCode } : {}),
+    ...(model ? { model } : {}),
+  })
+}
+
+/**
  * OCR 保存时的 `isMulti`（2026-09-30，用户拍板）：勾选=1（列表类）、不勾=0（详情类）。
  * OCR 没有 collectCfg，通用 `resolveMultiMode` 对它恒 undefined，会让 `isMulti=null` →
  * 后端 nextStep「没有详情配置」→ 发后续报「OCR抓取 处理失败：没有详情配置」。这里恒给 0/1
@@ -320,8 +341,8 @@ export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown
     codeRule: isStructuredInCoreParam(cfg) ? undefined : source.structuredConfig,
     contentRule: source.contentRules,
     // 打标签 / 摘要节点把模型选择写核心参数（modelCodeRuleFor），翻译助手写语言/引擎、
-    // 音频节点写转写参数（各自 structuredFor），都没写时回写节点回读到的原值。
-    coreParam: modelCodeRuleFor(cfg) ?? translateStructuredFor(cfg) ?? audioStructuredFor(cfg) ?? ocrStructuredFor(cfg) ?? cfg.coreParam,
+    // 音频节点写转写参数、PDF 节点写描述+模型（各自 structuredFor），都没写时回写节点回读到的原值。
+    coreParam: modelCodeRuleFor(cfg) ?? translateStructuredFor(cfg) ?? audioStructuredFor(cfg) ?? ocrStructuredFor(cfg) ?? pdfStructuredFor(cfg) ?? cfg.coreParam,
     // 拼接后的系统提示词（2026-09-18）：落 cs_config.prompt；见 promptForConfig 的节点类型口径。
     prompt: promptForConfig(cfg),
   }
