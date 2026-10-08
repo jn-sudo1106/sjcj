@@ -254,9 +254,9 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     expect(titleRow.find('button').text()).toBe('脚本编辑')
   })
 
-  // 2026-09-22：OCR 编排 Tab 曾整页空白；2026-09-30 恢复「是否保存为文件」勾选框（唯一区块），
-  // 其余编排内容（识别试跑、脚本工作区、描述、切换已有配置）仍不出现。
-  describe('OCR 抓取节点编排配置（只剩「是否保存为文件」勾选框）', () => {
+  // 2026-09-22：OCR 编排 Tab 曾整页空白；2026-09-30 恢复「是否保存为文件」勾选框，
+  // 2026-10-08 同区块加「指定输出文件名」，其余编排内容（识别试跑、脚本工作区、描述、切换已有配置）仍不出现。
+  describe('OCR 抓取节点编排配置（只剩「是否保存为文件」+「指定输出文件名」）', () => {
     it('渲染勾选框，不渲染标题行/识别试跑/描述框/切换已有配置/脚本工作区', async () => {
       mockAssets()
       setActivePinia(createPinia())
@@ -279,6 +279,10 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
       const checkbox = wrapper.find('[data-testid="ocr-save-as-file"]')
       expect(checkbox.exists()).toBe(true)
       expect((checkbox.element as HTMLInputElement).checked).toBe(false)
+      // 「指定输出文件名」常驻显示，不随勾选状态隐藏，默认空
+      const nameInput = wrapper.find('[data-testid="ocr-output-file-name"]')
+      expect(nameInput.exists()).toBe(true)
+      expect((nameInput.element as HTMLInputElement).value).toBe('')
       wrapper.unmount()
     })
 
@@ -313,6 +317,45 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
 
       const checkbox = wrapper.find('[data-testid="ocr-save-as-file"]')
       expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+      wrapper.unmount()
+    })
+
+    it('填文件名（去首尾空格）写入 outputFileName；清空则不写这个键', async () => {
+      mockAssets()
+      setActivePinia(createPinia())
+      const flow = useFlowStore()
+      flow.configs['ocr-1'] = cloneConfig(NODE_CONFIGS['ocr'])
+      flow.select('ocr-1')
+      flow.setActiveTab('orchestration')
+      const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+      await flushPromises()
+
+      const nameInput = wrapper.find('[data-testid="ocr-output-file-name"]')
+      await nameInput.setValue('  公告明细.pdf  ')
+      await nameInput.trigger('change')
+      expect(flow.configs['ocr-1'].structuredConfig).toBe('{"saveAsFile":false,"outputFileName":"公告明细.pdf"}')
+      expect((nameInput.element as HTMLInputElement).value).toBe('公告明细.pdf')
+
+      await nameInput.setValue('')
+      await nameInput.trigger('change')
+      expect(flow.configs['ocr-1'].structuredConfig).toBe('{"saveAsFile":false}')
+      wrapper.unmount()
+    })
+
+    it('回读 + 勾选：文件名保留，勾选改动不会把它抹掉', async () => {
+      mockAssets()
+      setActivePinia(createPinia())
+      const flow = useFlowStore()
+      flow.configs['ocr-1'] = cloneConfig(NODE_CONFIGS['ocr'])
+      flow.configs['ocr-1'].structuredConfig = '{"saveAsFile":false,"outputFileName":"report.pdf"}'
+      flow.select('ocr-1')
+      flow.setActiveTab('orchestration')
+      const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+      await flushPromises()
+
+      expect((wrapper.find('[data-testid="ocr-output-file-name"]').element as HTMLInputElement).value).toBe('report.pdf')
+      await wrapper.find('[data-testid="ocr-save-as-file"]').setValue(true)
+      expect(flow.configs['ocr-1'].structuredConfig).toBe('{"saveAsFile":true,"outputFileName":"report.pdf"}')
       wrapper.unmount()
     })
   })

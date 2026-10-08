@@ -90,10 +90,11 @@ const isDataValidation = computed(() => (cfg.value ? isDataValidationNode(cfg.va
 const isScriptless = computed(() => isScriptlessNode(cfg.value))
 
 /**
- * OCR 抓取节点编排配置（2026-09-30 恢复「是否保存为文件」勾选框）：
- * 只这一个字段，其余编排区块仍不出现在 OCR 上（2026-09-22 口径不变）。
- * 勾选落 structuredConfig 的 `{"saveAsFile":bool}`，由 nodeConfigPayload 写 cs_config.core_param
- * 且把 isMulti 反推成 1/0（发后续 nextStep「详情配置」按 isMulti 判定，缺则报「没有详情配置」）。
+ * OCR 抓取节点编排配置（2026-09-30 恢复「是否保存为文件」勾选框，2026-10-08 加「指定输出文件名」）：
+ * 只这两个字段，其余编排区块仍不出现在 OCR 上（2026-09-22 口径不变）。
+ * 落 structuredConfig 的 `{"saveAsFile":bool,"outputFileName"?:string}`，由 nodeConfigPayload 写
+ * cs_config.core_param 且按 saveAsFile 把 isMulti 反推成 1/0（发后续 nextStep「详情配置」按 isMulti
+ * 判定，缺则报「没有详情配置」）。
  */
 const isOcr = computed(() => isOcrNode(cfg.value))
 
@@ -140,37 +141,60 @@ watch(
   { immediate: true },
 )
 
-// ---- OCR 抓取「是否保存为文件」（2026-09-30 用户拍板 isMulti + core_param）----
-// 勾选写 structuredConfig = `{"saveAsFile":bool}`；buildConfigPayload 侧同步落
-// cs_config.core_param 与 isMulti（勾选 1 / 不勾 0），发后续就能识别详情/列表配置。
+// ---- OCR 抓取编排配置：「是否保存为文件」+「指定输出文件名」----
+// 两个字段合成同一份 structuredConfig：`{"saveAsFile":bool}`，文件名非空时才追加 outputFileName 键
+// （空值不写键，payload 与 2026-09-30 上线时逐字节一致，存量配置回读也不会多出空字段）。
+// buildConfigPayload 侧原样透传进 cs_config.core_param，并只按 saveAsFile 派生 isMulti（勾选 1 / 不勾 0），
+// 发后续 nextStep 才能识别详情/列表配置。
 // 回读走 useNodeEditorContext 的 cfg.structuredConfig：从 stored 还原、手改优先，同 audioCfg 口径。
-const ocrSaveAsFile = ref(false)
-const ocrSaveAsFileTouched = ref(false)
+interface OcrOrchestrationConfig {
+  saveAsFile: boolean
+  outputFileName: string
+}
+const OCR_ORCHESTRATION_DEFAULTS: OcrOrchestrationConfig = { saveAsFile: false, outputFileName: '' }
+const ocrCfg = ref<OcrOrchestrationConfig>({ ...OCR_ORCHESTRATION_DEFAULTS })
+const ocrTouched = ref(false)
 
-function ocrSaveAsFileFromStored(stored: unknown): boolean {
-  if (typeof stored !== 'string') return false
+function ocrConfigFromStored(stored: unknown): OcrOrchestrationConfig {
+  if (typeof stored !== 'string') return { ...OCR_ORCHESTRATION_DEFAULTS }
   const text = stored.trim()
-  if (!text.startsWith('{')) return false
+  if (!text.startsWith('{')) return { ...OCR_ORCHESTRATION_DEFAULTS }
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>
-    return parsed?.saveAsFile === true
+    return {
+      saveAsFile: parsed?.saveAsFile === true,
+      outputFileName: typeof parsed?.outputFileName === 'string' ? parsed.outputFileName.trim() : '',
+    }
   } catch {
-    return false
+    return { ...OCR_ORCHESTRATION_DEFAULTS }
   }
 }
-function writeOcrSaveAsFile(v: boolean) {
+function serializeOcrConfig(cfg: OcrOrchestrationConfig): string {
+  return JSON.stringify(cfg.outputFileName
+    ? { saveAsFile: cfg.saveAsFile, outputFileName: cfg.outputFileName }
+    : { saveAsFile: cfg.saveAsFile })
+}
+function writeOcrConfig() {
   if (!isOcr.value) return
-  ocrSaveAsFileTouched.value = true
-  setNodeStructuredConfig(JSON.stringify({ saveAsFile: v }))
+  ocrCfg.value.outputFileName = ocrCfg.value.outputFileName.trim()
+  ocrTouched.value = true
+  setNodeStructuredConfig(serializeOcrConfig(ocrCfg.value))
+}
+function onOcrSaveAsFileChange(checked: boolean) {
+  ocrCfg.value.saveAsFile = checked
+  writeOcrConfig()
 }
 
 watch(
   () => [id.value, cfg.value?.structuredConfig ?? ''] as const,
   ([nid], prev) => {
-    if (prev === undefined || nid !== prev[0]) ocrSaveAsFileTouched.value = false
-    if (ocrSaveAsFileTouched.value || !isOcr.value) return
-    const restored = ocrSaveAsFileFromStored(cfg.value?.structuredConfig)
-    if (restored !== ocrSaveAsFile.value) ocrSaveAsFile.value = restored
+    if (prev === undefined || nid !== prev[0]) ocrTouched.value = false
+    if (ocrTouched.value || !isOcr.value) return
+    const restored = ocrConfigFromStored(cfg.value?.structuredConfig)
+    if (restored.saveAsFile !== ocrCfg.value.saveAsFile
+      || restored.outputFileName !== ocrCfg.value.outputFileName) {
+      ocrCfg.value = restored
+    }
   },
   { immediate: true },
 )
@@ -1627,25 +1651,36 @@ function onTestScript() {
     </el-select>
   </div>
   <!-- 文章生成摘要没有「抓取配置」这个概念，标题行整块不出现（0921 口径：只留模型与系统提示词）。
-       OCR 抓取节点只显「是否保存为文件」勾选框（2026-09-30 恢复），其余编排区块仍不出现。 -->
+       OCR 抓取节点只显「是否保存为文件」+「指定输出文件名」（2026-10-08 恢复/新增），其余编排区块仍不出现。 -->
   <div v-if="!isOcr && !isAudioText && !isVideoAudio && !isTranslate && !isArticleSummary && !isArticleTag" class="ni-section-title ni-section-title-row">
     <span>{{ isRule ? '设置业务规则' : '抓取配置' }}</span>
     <span v-if="!isScriptless" class="ni-section-actions">
       <button class="rc-btn" type="button" @click="workbenchOpen = true">脚本编辑</button>
     </span>
   </div>
-  <!-- OCR 抓取「是否保存为文件」（2026-09-30）：勾选=列表类（isMulti=1），不勾=详情类（isMulti=0）；
-       同步把 {"saveAsFile":bool} 写 cs_config.core_param。发后续 nextStep 靠 isMulti 判定详情配置。 -->
+  <!-- OCR 抓取编排配置：勾选=列表类（isMulti=1），不勾=详情类（isMulti=0）；文件名非空才写 outputFileName。
+       两者合成 {"saveAsFile":bool,"outputFileName"?:string} 写 cs_config.core_param。发后续 nextStep 靠 isMulti 判定详情配置。 -->
   <div v-if="isOcr" class="rc-field ocr-save-as-file-field" data-testid="ocr-save-as-file-field">
     <label class="ocr-save-as-file-item">
       <input
         type="checkbox"
         class="ocr-save-as-file-input"
         data-testid="ocr-save-as-file"
-        :checked="ocrSaveAsFile"
-        @change="writeOcrSaveAsFile(($event.target as HTMLInputElement).checked)"
+        :checked="ocrCfg.saveAsFile"
+        @change="onOcrSaveAsFileChange(($event.target as HTMLInputElement).checked)"
       />
       <span>是否保存为文件</span>
+    </label>
+    <label class="ocr-output-file-name-item">
+      <span>指定输出文件名</span>
+      <input
+        v-model="ocrCfg.outputFileName"
+        type="text"
+        class="rc-input"
+        placeholder="留空由系统命名"
+        data-testid="ocr-output-file-name"
+        @change="writeOcrConfig"
+      />
     </label>
   </div>
   <!-- 音频提取文字（0923 增强）：供应商（本地离线 / AssemblyAI / WAND）+ 语言 +
@@ -2289,10 +2324,13 @@ function onTestScript() {
 .audio-config-item { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 6px; min-width: 0; color: var(--rc-muted); font-size: 11px; }
 .audio-config-item > span { white-space: nowrap; }
 .audio-config-item .rc-select, .audio-config-item .rc-input { min-width: 0; padding: 5px 9px; }
-/* ---- OCR 抓取「是否保存为文件」（编排配置，2026-09-30）---- */
-.ocr-save-as-file-field { padding: 8px 10px; border: 1px solid var(--rc-border-soft); border-radius: 6px; background: var(--rc-bg-soft, rgba(0,0,0,.02)); }
+/* ---- OCR 抓取编排配置：「是否保存为文件」+「指定输出文件名」（2026-10-08）---- */
+.ocr-save-as-file-field { display: grid; gap: 8px; padding: 8px 10px; border: 1px solid var(--rc-border-soft); border-radius: 6px; background: var(--rc-bg-soft, rgba(0,0,0,.02)); }
 .ocr-save-as-file-item { display: inline-flex; align-items: center; gap: 6px; color: var(--rc-text-2); font-size: 12px; cursor: pointer; }
 .ocr-save-as-file-input { width: 14px; height: 14px; margin: 0; accent-color: var(--el-color-primary, #409eff); cursor: pointer; }
+.ocr-output-file-name-item { display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: center; gap: 6px; min-width: 0; margin-bottom: 0; color: var(--rc-muted); font-size: 11px; }
+.ocr-output-file-name-item > span { white-space: nowrap; }
+.ocr-output-file-name-item .rc-input { min-width: 0; padding: 5px 9px; }
 /* ---- 翻译助手 ---- */
 .translate-rows { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 10px; }
 .translate-row { display: flex; align-items: center; gap: 8px; }
