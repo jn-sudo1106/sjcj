@@ -35,16 +35,24 @@ const emit = defineEmits<{
 }
 
 .lg-captcha-img {
+  /* 验证码区高度；各断点只改这个变量 */
+  --captcha-h: 66px;
   position: relative;
   z-index: 2;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   min-width: 0;
+  height: calc(var(--captcha-h) + 2px);
   margin-left: 38px;
   padding: 0;
   border: 1px solid #d7dee9;
   border-right: 0;
   border-radius: 7px 0 0 7px;
   overflow: hidden;
-  background: #f8fafc;
+  /* 浅灰底：验证码图自带的灰白渐变底与它衔接，图上下留出的空白不显得是一块白框 */
+  background: #e5e7eb;
   cursor: pointer;
 }
 
@@ -53,10 +61,15 @@ const emit = defineEmits<{
 }
 
 .lg-captcha-img img {
+  /* 原图 200×50，四周有 1~2px 绿色细边。元素尺寸跟着图走（宽占满、按比例定高，太高时按高度收），
+     元素边缘就是图的边缘，clip-path 按元素高度的 4%（≈原图 2px）裁掉上下绿边，框宽窄都成立。
+     仍保证数字完整：cover 会放大后上下裁掉数字（a8fb55e 修的就是这个）。 */
   display: block;
   width: 100%;
-  height: 66px;
+  height: auto;
+  max-height: 100%;
   object-fit: contain;
+  clip-path: inset(4% 0);
 }
 
 .lg-captcha-empty {
@@ -96,8 +109,8 @@ const emit = defineEmits<{
     margin-left: clamp(16px, 2vw, 24px);
   }
 
-  .lg-captcha-img img {
-    height: clamp(54px, 4.7vw, 60px);
+  .lg-captcha-img {
+    --captcha-h: clamp(54px, 4.7vw, 60px);
   }
 
   .lg-captcha-refresh {
@@ -127,8 +140,8 @@ const emit = defineEmits<{
     margin-left: 8px;
   }
 
-  .lg-captcha-img img {
-    height: 56px;
+  .lg-captcha-img {
+    --captcha-h: 56px;
   }
 }
 
@@ -141,8 +154,8 @@ const emit = defineEmits<{
     margin-left: 20px;
   }
 
-  .lg-captcha-img img {
-    height: 56px;
+  .lg-captcha-img {
+    --captcha-h: 56px;
   }
 
   .lg-captcha-refresh {
