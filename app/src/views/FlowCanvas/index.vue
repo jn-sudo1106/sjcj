@@ -296,6 +296,7 @@ function onSplitStart(e: MouseEvent) {
 }
 
 async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
+  const runtimeView = !!import.meta.env.VITE_FLOW_PROXY_TARGET && normalizeSourceView(route.query.view) !== 'flow'
   // 不再读 flowApi.flowLoad 的本地草稿：flow/save 没有真实后端对应物（旧平台流程存在
   // item/next 子步骤里，没有"流程定义"这个接口），画布保存过一次后本地草稿会一直挡住
   // 真实拓扑，源改了/后端数据变了也看不出来。节点链始终来自真实的 sourceSteps。
@@ -330,7 +331,7 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   // 新接口未部署或暂时不可用时退回旧 cs_source.FLOW_ID，保证已有源仍可打开。
   let bindings = [] as Awaited<ReturnType<typeof workflowBindingApi.list>>
   try {
-    bindings = await workflowBindingApi.list(sourceId, { legacySource: source })
+    if (!runtimeView) bindings = await workflowBindingApi.list(sourceId, { legacySource: source })
   } catch {
     bindings = []
   }
@@ -353,7 +354,7 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   let steps: Step[]
   try {
     steps = flowId
-      ? await flowCenterApi.steps(flowId, { withConfigDetails: false })
+      ? await flowCenterApi.steps(flowId, { withConfigDetails: false, backendScope: runtimeView ? 'default' : 'flow' })
       : sourceSteps ?? []
   } catch (error) {
     const detail = (error as Error)?.message ?? '网络异常'
@@ -385,7 +386,7 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   // 0915-02：源态下「全部」页签同样常驻——0915-03 的钻取闭环要靠它回到网站数据视图
   if (ownerSiteId) void ensureSiteTabNamed(ownerSiteId)
   else void resolveOwnerSite(source.sourceId)
-  void backfillStepDetails(sourceId, steps ?? [])
+  void backfillStepDetails(sourceId, steps ?? [], runtimeView ? 'default' : 'flow')
   void backfillSourceSchedule(sourceId)
 }
 
@@ -468,11 +469,12 @@ async function backfillSourceSchedule(sourceId: string) {
   }
 }
 
-async function backfillStepDetails(sourceId: string, steps: Step[]) {
+async function backfillStepDetails(sourceId: string, steps: Step[], backendScope: 'default' | 'flow') {
+  const requestedFlowId = flow.sourceCtx?.flowId
   if (!steps.length) return
   try {
-    const enriched = await sourceApi.stepConfigDetails(steps)
-    if (flow.sourceCtx?.sourceId !== sourceId) return
+    const enriched = await sourceApi.stepConfigDetails(steps, backendScope)
+    if (flow.sourceCtx?.sourceId !== sourceId || flow.sourceCtx?.flowId !== requestedFlowId) return
     const rebuilt = flow.applyStepDetails(enriched)
     // 登录语义改变了模板路由、且被重建的正好是当前选中节点时，右侧面板要跟着换一份配置
     if (rebuilt.includes(flow.selectedId)) flow.select(flow.selectedId)
@@ -705,10 +707,11 @@ onMounted(async () => {
 })
 // sourceId / siteId 互斥；flowId / flowMode 负责同一个源内的流程切换。
 watch(
-  () => [route.query.sourceId, route.query.siteId, route.query.flowId, route.query.flowMode] as const,
-  async ([sid, stid, fid, mode], prev) => {
+  () => [route.query.sourceId, route.query.siteId, route.query.flowId, route.query.flowMode, route.query.view] as const,
+  async ([sid, stid, fid, mode, view], prev) => {
     if (isGate.value) return
-    if (prev && sid === prev[0] && stid === prev[1] && fid === prev[2] && mode === prev[3]) return
+    const changedBackend = !!import.meta.env.VITE_FLOW_PROXY_TARGET && prev && (normalizeSourceView(view) === 'flow') !== (normalizeSourceView(prev[4]) === 'flow')
+    if (prev && sid === prev[0] && stid === prev[1] && fid === prev[2] && mode === prev[3] && !changedBackend) return
     if (prev && sid === prev[0] && fid !== prev[2]) rememberCurrentFlowInspector()
     await enterFromRoute()
   },

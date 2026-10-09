@@ -12,6 +12,7 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { flowCenterApi, sourceApi, type FlowRecord, type SourceCategory } from '@/api'
+const localFlowTarget = import.meta.env.VITE_FLOW_PROXY_TARGET
 import { CopyDocument, Delete, Edit, Link, Lock, Star, StarFilled, Unlock } from '@element-plus/icons-vue'
 import { useUiStore } from '@/stores/ui'
 import { useLaunchJobStore } from '@/stores/launchJob'
@@ -842,6 +843,7 @@ async function confirmApply() {
          同一套 rc-btn，且同样是「填条件 → 点查询」而不是回车隐式触发。回车仍然可用，
          但不再是唯一入口——之前只写在 placeholder 里，用户看不见。 -->
     <div class="fc-toolbar">
+      <el-tag v-if="localFlowTarget" size="small" type="info" :title="localFlowTarget">流程：本地</el-tag>
       <input
         v-model="query"
         class="fc-input fc-input-wide"

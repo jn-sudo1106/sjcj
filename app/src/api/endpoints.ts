@@ -342,6 +342,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 删了（见 client.ts 同一次改动）。changeFlowEnable 2026-09-29 F6 按 flowPaged/saveFlow 的
   // 样子加回来了（流程中心行内启停），见下面登记行。
   { path: 'flow/flowPaged', desc: '流程分页 + 多条件检索（不含 flowConf，含计算列 sourceCnt；templateFlag=0/1 服务端过滤模板，2026-09-04 实测生效）', live: true },
+  { path: 'flow/flowSources', desc: '本地流程反查关联源（仅启用流程分流时调用）', live: true },
   { path: 'flow/flowDetail', desc: '流程详情（含 flowConf 大字段与 sourceCnt）', live: true },
   { path: 'flow/saveFlow', desc: '新增 / 修改流程（不带 flowId = 新增）；update 分支不校验 state=D，前端保存后回查详情兜底（0929 F8）', danger: true, live: true },
   { path: 'flow/deleteFlow', desc: '批量删除流程（逻辑删除 is_delete=-1 + state=D；有源挂载即拒绝，前端先换绑/解绑再删，0929 F1）', danger: true, live: true },

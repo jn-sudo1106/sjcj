@@ -37,6 +37,6 @@ export default defineConfig({
     // 同理关掉「逐端点上线」逃逸（endpoints.ts 的 live 标记，见 client.ts）：那是给真实浏览器/生产用的机制，
     // 测试永远要纯 mock、可预期、不发真实请求；专门测这套机制本身的用例用
     // vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '') 显式重新打开。
-    env: { VITE_API_MODE: 'mock', VITE_API_DISABLE_LIVE_ENDPOINTS: '1' },
+    env: { VITE_API_MODE: 'mock', VITE_API_DISABLE_LIVE_ENDPOINTS: '1', VITE_FLOW_PROXY_TARGET: '' },
   },
 })

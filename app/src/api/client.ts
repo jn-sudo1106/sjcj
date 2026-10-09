@@ -1,5 +1,6 @@
 import { mockRegistry } from './mock'
 import { ENDPOINT_PATHS, DANGER_ENDPOINTS, LIVE_ENDPOINTS } from './endpoints'
+import { flowRequestPath, type BackendScope } from './flowBackend'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readStoredToken, triggerSessionExpired } from './auth'
 import { PRODUCTION_BACKEND_HOSTS } from '@/constants/backend'
 
@@ -11,6 +12,8 @@ type AdapterMode = 'mock' | 'http'
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE'
 
 export interface RequestOptions {
+  /** Shared step/config reads retain the backend of the requesting workflow. */
+  backendScope?: BackendScope
   mode?: AdapterMode
   method?: HttpMethod
   /**
@@ -393,7 +396,13 @@ export async function request<T>(
     const paramsIn = options.paramsIn ?? (method === 'GET' ? 'query' : 'body')
     const httpParams = options.httpParams ?? params
     const httpEndpoint = options.httpEndpoint ?? endpoint
-    if (isDanger(endpoint) && isProductionBackend() && !isProductionWriteAllowed(httpEndpoint)) {
+    const originalPath = httpEndpoint.startsWith('/') ? httpEndpoint : BASE_URL + httpEndpoint
+    const resolvedPath = flowRequestPath(originalPath, httpEndpoint, import.meta.env.VITE_FLOW_PROXY_TARGET, window.location.hash, options.backendScope)
+    const destination = resolvedPath !== originalPath
+      ? import.meta.env.VITE_FLOW_PROXY_TARGET
+      : (/^https?:\/\//.test(originalPath) ? originalPath : currentBackendTarget())
+    const productionDestination = PRODUCTION_BACKEND_HOSTS.some((host) => destination.includes(host))
+    if (isDanger(endpoint) && productionDestination && !isProductionWriteAllowed(httpEndpoint)) {
       throw new ProductionWriteBlockedError(httpEndpoint)
     }
     const headers: Record<string, string> = {}
@@ -401,7 +410,6 @@ export async function request<T>(
     if (token) headers[ACCESS_TOKEN_HEADER] = token
     // 以 `/` 开头的 httpEndpoint 视为站点根相对路径（如 /vrule/...），不再拼 BASE_URL（/api/v1/）。
     // 规则编排 Sprint 4 直连旧 vrule 网关时用这个口径；采集中心同域端点仍走相对 path。
-    const resolvedPath = httpEndpoint.startsWith('/') ? httpEndpoint : BASE_URL + httpEndpoint
     const url = paramsIn === 'query' ? appendQuery(resolvedPath, httpParams) : resolvedPath
     const requestUrl = options.query ? appendQuery(url, options.query) : url
     const controller = new AbortController()

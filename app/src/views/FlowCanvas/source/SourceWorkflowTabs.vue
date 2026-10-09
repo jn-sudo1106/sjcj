@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { flowCenterApi, workflowBindingApi, type FlowRecord, type WorkflowBinding } from '@/api'
+const localFlowTarget = import.meta.env.VITE_FLOW_PROXY_TARGET
 import { useFlowStore } from '@/stores/flow'
 import { copyWholeFlow } from '@/utils/flow/copiedConfigs'
 import { reportDetachResult } from '@/utils/flow/applyTemplateToSource'
@@ -225,6 +226,7 @@ onMounted(async () => {
 
 <template>
   <div class="swt" data-testid="source-workflow-tabs">
+    <span v-if="localFlowTarget" class="swt-compat" :title="localFlowTarget">流程：本地</span>
     <div class="swt-scroll" role="tablist" aria-label="当前源的流程">
       <button
         v-for="row in rows"

@@ -72,10 +72,10 @@ export function triggerSessionExpired() {
   unauthorizedHandler?.()
 }
 
-// S1（计划 §12.2）：会话失效后端以 302 重定向到 /apiapi/logout.htm（路径拼接缺陷，实测事实见 §1.5.5），
-// fetch 默认跟随重定向，res.redirected + res.url 是唯一可靠痕迹，不依赖响应体（该端点常返回空/500）。
+// S1：线上旧网关会跳到 logout.htm，本地 bee-config 的 Shiro 跳到 loginProxy.htm。
+// fetch 默认跟随重定向，用最终地址识别会话失效，避免把登录页面的 500 当作业务接口错误。
 export function isSessionExpiredRedirect(res: Response): boolean {
-  return res.redirected && res.url.includes('logout.htm')
+  return res.redirected && (res.url.includes('logout.htm') || res.url.includes('loginProxy.htm'))
 }
 
 // vue-ls 值格式 {value, expire}；优先读取旧项目实际落盘键，并兼容本次迁移早期使用过的无前缀键
