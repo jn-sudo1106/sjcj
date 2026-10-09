@@ -3,12 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
-import { ElMessage } from 'element-plus'
-import { CopyDocument, Switch } from '@element-plus/icons-vue'
-import { copyFlowToSource, reloadSourceIntoCanvas, reportDetachResult } from '@/utils/flow/applyTemplateToSource'
-import ReplaceFlowDialog from './ReplaceFlowDialog.vue'
-import { confirmCopyFlow } from '@/utils/flow/confirmCopyFlow'
-import { flowCenterApi, workflowBindingApi, type FlowRecord } from '@/api'
+import { flowCenterApi } from '@/api'
 import { normalizeSourceView, sourceViewFromHash, type SourceWorkspaceView } from '@/utils/url/workspaceRoute'
 import { toExternalHref } from '@/utils/url/externalUrl'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
@@ -40,11 +35,6 @@ watch(() => route.query.view, (next) => {
 }, { immediate: true })
 onMounted(() => window.addEventListener('hashchange', syncView))
 onBeforeUnmount(() => window.removeEventListener('hashchange', syncView))
-
-// 多流程接口（workflow/*）在当前后端上线前，流程的更换 / 复制仍用顶栏这两个原有操作；
-// 上线后改由流程标签栏负责，两套不同时出现（2026-10-08 合并 leo 分支时保留）。
-// 「套用流程模板」1008-08 起整个去掉（会上定的）：新建流程只留「空白 / 从现有流程复制」。
-const legacyFlowOps = !workflowBindingApi.available()
 
 const statusMeta = computed(() => {
   const s = src.value
@@ -88,12 +78,9 @@ const owningFlowName = ref('')
  * 否则断网时整屏的源都写着「流程已删除」，比不标更糟。
  */
 const owningFlowMissing = ref(false)
-/** 所属流程被多少个源共用（复制当前流程的确认框里提示影响面）；查不到为 undefined */
-const owningFlowSourceCnt = ref<number | undefined>()
 watch(() => src.value?.flowId, async (fid) => {
   owningFlowName.value = ''
   owningFlowMissing.value = false
-  owningFlowSourceCnt.value = undefined
   if (!fid) return
   const want = String(fid)
   try {
@@ -101,7 +88,6 @@ watch(() => src.value?.flowId, async (fid) => {
     if (String(src.value?.flowId ?? '') !== want) return
     owningFlowName.value = rec?.name ?? ''
     owningFlowMissing.value = rec === null
-    owningFlowSourceCnt.value = rec?.sourceCnt
   } catch { /* 保留 ID 展示，不标记已删除 */ }
 }, { immediate: true })
 const owningFlowLabel = computed(() => {
@@ -181,104 +167,6 @@ function switchFlowMode(mode: 'canvas' | 'list') {
 // 四处宿主组件里各自转发一遍事件）。
 function srcSnatch() {
   ui.fireAction('发起抓取')
-}
-
-const switchingFlow = ref(false)
-/** 更换 / 复制流程时的逐条进度文案（复制配置 i/N），显示在图标按钮旁边 */
-const switchingLabel = ref('')
-
-/**
- * 更换流程（0930）：候选是全部流程（可按源查），
- * 且语义是**换**不是**追加**——把选中流程整条复制一份（节点配置各自独立）作为本源的新流程并换绑。
- * 原流程不动，共用原流程的其他源不受影响（用户 0930 拍板：复制新流程并换绑）。
- */
-const replaceOpen = ref(false)
-async function onReplaceFlow(picked: FlowRecord) {
-  const source = src.value
-  if (!source?.sourceId) return
-  const newName = `${source.name || source.sourceId}-流程`
-  await copyFlowIntoSource(picked, {
-    title: '更换流程',
-    confirmText: '复制并更换',
-    lines: [
-      `将把流程「${picked.name}」（#${picked.id}）整条复制一份，作为本源的新流程「${newName}」。`,
-      source.flowId
-        ? `本源改挂到新流程；原流程 #${source.flowId} 不动，其他使用它的源不受影响。`
-        : '本源还没有流程，新流程会直接关联到本源。',
-    ],
-    done: (newId) => `已复制流程「${picked.name}」为新流程 #${newId} 并关联到本源`,
-    fail: '更换流程失败',
-  })
-}
-
-/**
- * 复制当前流程（0930）：把本源当前所属流程复制一份作为本源独有的流程并换绑——0929 F2 场景二
- * 「想改但不想影响其它使用者 → 显式复制一个流程」。与「更换流程」同一个动作，来源固定为当前流程。
- */
-async function onCopyCurrentFlow() {
-  const source = src.value
-  const fid = source?.flowId ? String(source.flowId) : ''
-  if (!source?.sourceId || !fid || owningFlowMissing.value) return
-  const name = owningFlowName.value || `#${fid}`
-  const newName = `${source.name || source.sourceId}-流程`
-  const others = owningFlowSourceCnt.value != null ? owningFlowSourceCnt.value - 1 : undefined
-  await copyFlowIntoSource({ id: fid, name }, {
-    title: '复制当前流程',
-    confirmText: '复制',
-    lines: [
-      `将把当前流程「${name}」（#${fid}）复制一份，作为本源独有的新流程「${newName}」，本源改挂到新流程。`,
-      others == null
-        ? '原流程不动。'
-        : others > 0
-          ? `原流程不动，另外 ${others} 个使用原流程的源仍挂在原流程上。`
-          : '当前流程只有本源在用，直接修改也不会影响别的源；复制后原流程会变成没有源使用。',
-    ],
-    done: (newId) => `已复制当前流程为新流程 #${newId}，本源已改挂到新流程`,
-    fail: '复制当前流程失败',
-  })
-}
-
-/**
- * 更换流程 / 复制当前流程共用：确认（含「新增一套配置 / 复用原配置」二选一，0930）
- * → 复制并换绑（copyFlowToSource）→ 从后端重载画布
- */
-async function copyFlowIntoSource(
-  from: { id: string; name: string },
-  text: { title: string; confirmText: string; lines: string[]; done: (newId: string) => string; fail: string },
-) {
-  const source = src.value
-  if (!source?.sourceId || switchingFlow.value) return
-  const sourceId = source.sourceId
-  const mode = await confirmCopyFlow({
-    title: text.title,
-    lines: [
-      text.lines.join(''),
-      flow.dirty ? '当前画布有未保存改动，完成后会从服务端重新加载，未保存的改动将丢弃。' : '',
-      '节点配置：',
-    ],
-    confirmText: text.confirmText,
-  })
-  if (!mode) return
-  const reuseConfigs = mode === 'reuse'
-  replaceOpen.value = false
-  switchingFlow.value = true
-  switchingLabel.value = ''
-  try {
-    const copied = await copyFlowToSource(from.id, sourceId, source.name, {
-      sourceFlowRef: `流程「${from.name}」`,
-      onProgress: (done, total) => { switchingLabel.value = `（正在复制配置 ${done}/${total}）` },
-      reuseConfigs,
-    })
-    const reloaded = await reloadSourceIntoCanvas(sourceId)
-    ElMessage.success(text.done(copied.flowId) + (reuseConfigs ? '（节点复用原配置）' : ''))
-    reportDetachResult(copied.detach, '原流程')
-    if (!reloaded) ElMessage.warning('流程已复制并换绑，但画布重新加载失败，请刷新页面查看')
-  } catch (e) {
-    ElMessage.error(`${text.fail}：${(e as Error)?.message ?? String(e)}`)
-  } finally {
-    switchingFlow.value = false
-    switchingLabel.value = ''
-  }
 }
 
 
@@ -367,31 +255,6 @@ async function copyFlowIntoSource(
         </div>
       </div>
       <div v-if="view === 'flow' && flowMode === 'canvas'" class="ch-actions">
-        <template v-if="legacyFlowOps">
-          <!-- 0930 用户要求改成图标：文案收进 tooltip / aria-label；进度文案显示在图标旁（原来在已去掉的套用模板搜索框里） -->
-          <span v-if="switchingFlow" class="ch-switching" data-testid="flow-switching">{{ switchingLabel || '处理中…' }}</span>
-          <el-tooltip content="更换流程：从全部流程里选一条复制给本源（原流程不动）" placement="bottom" :show-after="120">
-            <button
-              class="ch-icon-btn"
-              type="button"
-              data-testid="replace-flow-open"
-              aria-label="更换流程"
-              :disabled="switchingFlow"
-              @click="replaceOpen = true"
-            ><el-icon :size="14"><Switch /></el-icon></button>
-          </el-tooltip>
-          <el-tooltip v-if="src.flowId && !owningFlowMissing" content="复制当前流程：复制一份作为本源独有的流程，之后修改不影响其他源" placement="bottom" :show-after="120">
-            <button
-              class="ch-icon-btn"
-              type="button"
-              data-testid="copy-current-flow"
-              aria-label="复制当前流程"
-              :disabled="switchingFlow"
-              @click="onCopyCurrentFlow"
-            ><el-icon :size="14"><CopyDocument /></el-icon></button>
-          </el-tooltip>
-          <ReplaceFlowDialog v-if="replaceOpen" v-model="replaceOpen" :current-flow-id="src.flowId" @pick="onReplaceFlow" />
-        </template>
         <!-- 0828 W9-2/D06：步骤接口已通，拓扑/进入条件防抖自动保存；不再放手动保存按钮。 -->
         <span class="ch-save-status" data-testid="flow-save-status">
           <span v-if="saveStatus === 'pending'" class="ch-save-pending">请先补全节点配置</span>
@@ -464,12 +327,6 @@ async function copyFlowIntoSource(
 .ch-flow-link:disabled .ch-flow-name { text-decoration: none; }
 .ch-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
 .ch-actions .rc-btn { height: 30px; padding: 0 11px; font-size: 12px; }
-/* 与全站工具栏图标按钮同一套（采集资产 .ca-refresh / 任务视图 .tv-icon-btn / 表选择 .sts-refresh）：
-   白底 + rc-border 细边 + 6px 圆角 + 灰图标，悬停只变描边与图标色；高度 30 与左边搜索框对齐 */
-.ch-icon-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; width: 30px; height: 30px; padding: 0; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-muted); cursor: pointer; transition: border-color .12s, color .12s; }
-.ch-icon-btn:hover { border-color: #bfdbfe; color: var(--rc-primary); }
-.ch-icon-btn:disabled { opacity: .45; cursor: not-allowed; }
-.ch-switching { color: var(--rc-faint); font-size: 12px; white-space: nowrap; }
 .ch-branch-note { order: 20; display: flex; align-items: center; gap: 6px; width: 100%; margin-top: 6px; padding: 6px 9px; border: 1px solid #fde68a; border-radius: 6px; background: #fffbeb; color: #92400e; font-size: 11.5px; }
 .ch-save-status { color: var(--rc-faint); font-size: 12px; min-height: 18px; min-width: 4em; }
 .ch-save-pending { color: var(--rc-warn); }

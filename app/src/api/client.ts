@@ -113,13 +113,8 @@ export function isProductionCreateEnabled(): boolean {
 const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'site/add',
   'site/createSite',
-  'workflow/bindSource',
-  'workflow/setPrimary',
-  'workflow/unbindSource',
-  'workflow/restoreInherited',
-  'workflow/createForSource',
-  'workflow/ensureDraft',
-  'workflow/publish',
+  // 画布流程标签栏：给源关联 / 设默认 / 解除流程，都是这一条（整体替换绑定列表）
+  'source-group/bindSourceFlows',
   'snatch/snatchSave',
   'source/bindSite',
   '/vrule/api/custom-compose/save',

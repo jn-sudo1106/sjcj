@@ -13,9 +13,9 @@ import type {
   TaskInstQuery,
   Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, NodeType, NodeTypeInput, EntryType, Param, ParamInput, ParamKind, CredentialRef, SourceJob, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, CopySourceInput, SourceCloneRequest, SourceCloneResult,
-  FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
+  FlowDefinition, FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
   SourceCategory,
-  WorkflowBinding, WorkflowBindingRole,
+  SourceFlowBind, SourceFlowsView, WorkflowBinding,
 } from './types'
 import type { FlowDef, FlowRecommendation } from '@/views/FlowCanvas/canvas/flowModel'
 import {
@@ -3186,138 +3186,147 @@ function isFlowNotFound(e: unknown): boolean {
   return code === '-1' && message.includes('未找到相关流程')
 }
 
-function workflowBindingFromApi(value: unknown): WorkflowBinding {
-  const row = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
-  const versionNo = Number(row.versionNo)
+/** source-group/sourceFlows 返回的原始行 → 前端口径（ID 一律字符串，isDefault 1/0 → 布尔） */
+function sourceFlowsViewFromApi(value: unknown): SourceFlowsView {
+  const view = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  const text = (v: unknown) => (v == null || v === '' ? undefined : String(v))
+  const bindings = (Array.isArray(view.bindings) ? view.bindings : []).map((item): SourceFlowBind => {
+    const row = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>
+    return {
+      id: String(row.id ?? ''),
+      sourceId: text(row.sourceId),
+      sourceGroupId: text(row.sourceGroupId),
+      flowId: String(row.flowId ?? ''),
+      isDefault: row.isDefault === true || row.isDefault === 1 || row.isDefault === '1',
+      state: row.state === 'DISABLED' ? 'DISABLED' : 'ACTIVE',
+      revision: Number(row.revision) || 0,
+      updatedAt: text(row.updateDt ?? row.updatedAt),
+    }
+  })
   return {
-    id: String(row.id ?? ''),
-    bindType: row.bindType === 'SOURCE_GROUP' ? 'SOURCE_GROUP' : 'SOURCE',
-    bindId: String(row.bindId ?? ''),
-    workflowId: String(row.workflowId ?? ''),
-    workflowVersionId: row.workflowVersionId == null || row.workflowVersionId === '' ? undefined : String(row.workflowVersionId),
-    workflowCode: String(row.workflowCode ?? ''),
-    workflowName: String(row.workflowName ?? `流程 #${row.workflowId ?? ''}`),
-    description: row.description == null ? undefined : String(row.description),
-    versionNo: Number.isFinite(versionNo) && versionNo > 0 ? versionNo : undefined,
-    publishedVersionId: row.publishedVersionId == null || row.publishedVersionId === '' ? undefined : String(row.publishedVersionId),
-    publishedVersionNo: Number(row.publishedVersionNo) > 0 ? Number(row.publishedVersionNo) : undefined,
-    publishedFlowId: row.publishedFlowId == null || row.publishedFlowId === '' ? undefined : String(row.publishedFlowId),
-    draftVersionId: row.draftVersionId == null || row.draftVersionId === '' ? undefined : String(row.draftVersionId),
-    draftVersionNo: Number(row.draftVersionNo) > 0 ? Number(row.draftVersionNo) : undefined,
-    draftFlowId: row.draftFlowId == null || row.draftFlowId === '' ? undefined : String(row.draftFlowId),
-    versionStatus: row.versionStatus === 'DRAFT' || row.versionStatus === 'ARCHIVED' ? row.versionStatus : 'PUBLISHED',
-    workflowStatus: row.workflowStatus === 'DISABLED' ? 'DISABLED' : 'ACTIVE',
-    versionManaged: true,
-    followsCurrentVersion: row.followsCurrentVersion !== false,
-    role: (['MAIN', 'BACKFILL', 'AUX'].includes(String(row.role)) ? String(row.role) : 'AUX') as WorkflowBindingRole,
-    primary: row.primary === true || row.primary === 1 || row.primary === '1',
-    priority: Number(row.priority) || 0,
-    status: row.status === 'DISABLED' ? 'DISABLED' : 'ACTIVE',
-    inherited: row.inherited === true || row.inherited === 1 || row.inherited === '1',
-    updatedAt: row.updatedAt == null ? undefined : String(row.updatedAt),
+    sourceId: text(view.sourceId),
+    sourceGroupId: text(view.sourceGroupId),
+    flowIds: (Array.isArray(view.flowIds) ? view.flowIds : []).map(String),
+    defaultFlowId: text(view.defaultFlowId),
+    bindings,
   }
 }
 
-/** 源多流程绑定。固定端点避免把动态 ID 拼进契约表，也便于生产写保护逐项放行。 */
+const GROUP_FLOW_LOCKED = '来源使用组统一流程，请先退出来源组再设置独立流程'
+
 /**
- * workflow/* 的请求入口。未标 live 时线上构建会落到 mock：读接口拿到空值、写接口拿到假的「成功」，
- * 都比直接失败更糟。这里统一报错，读接口由 list 的兜底回退到旧 FLOW_ID（兼容模式）。
+ * 源的多流程绑定（画布流程标签栏 / 流程列表用）。底层是来源组接口文档里的 `source-group/*`
+ * （bee-config SourceGroupController，2026-10-08 上线 217）：一个源可关联多条流程，有一条默认流程；
+ * 入组的源统一使用来源组的流程，不能单独改绑。
+ *
+ * 保存只有一个端点 `bindSourceFlows`——**整体替换**绑定列表并指定默认，带并发快照。所以每次写都先读一遍
+ * 最新绑定（sourceFlows），在它的基础上增 / 改 / 删，再连同读到的快照一起提交；别人刚改过会被后端拒绝
+ * （「来源流程关联已变化，请重新查询」），界面把后端原因直接展示。
+ *
+ * 没有版本 / 草稿 / 发布：后端还在评估（JSON 快照方案），行上 `versionManaged` 恒为 false，界面据此不显示版本相关入口。
  */
-function workflowRequest<T>(endpoint: string, params: Record<string, unknown>, options: RequestOptions): Promise<T> {
-  // 本地开发配了流程专用后端（VITE_FLOW_PROXY_TARGET）时直接走它：强制 http，由 client 的 flowRequestPath 转到 /api/local-flow
-  if (hasLocalFlowBackend()) return request<T>(endpoint, params, { ...options, mode: 'http' })
-  if (usesMockAdapter(endpoint, options)) return Promise.reject(new Error('多流程接口尚未在当前后端上线'))
-  return request<T>(endpoint, params, options)
-}
-
-function hasLocalFlowBackend(): boolean {
-  return !!(import.meta.env as Record<string, string | undefined>).VITE_FLOW_PROXY_TARGET
-}
-
 export const workflowBindingApi = {
-  /** 多流程接口是否可用：endpoints.ts 标了 live，或本地开发配了流程专用后端（VITE_FLOW_PROXY_TARGET）；不可用时界面不提供新建 / 复制 / 绑定 / 发布 */
-  available: (): boolean => hasLocalFlowBackend() || !usesMockAdapter('workflow/sourceBindings', { httpEndpoint: 'workflow/sourceBindings' }),
-  list: async (
-    sourceId: string,
-    options: {
-      /** 新多流程接口尚未部署时，用旧 cs_source.FLOW_ID 生成只读主流程行。 */
-      legacySource?: Pick<Source, 'sourceId' | 'flowId' | 'primaryFlowId' | 'updatedAt'>
-      onCompatibility?: () => void
-    } = {},
-  ): Promise<WorkflowBinding[]> => {
-    try {
-      // 本地演示源里保留了字母 ID；Spring 接口收 Long，发过去只会得到 400。
-      if (!/^\d+$/.test(sourceId)) throw new Error('当前源使用本地演示 ID')
-      const result = await workflowRequest<unknown>('workflow/sourceBindings', { sourceId }, {
-        method: 'GET', httpEndpoint: 'workflow/sourceBindings', httpParams: { sourceId },
-      })
-      return (Array.isArray(result) ? result : []).map(workflowBindingFromApi)
-    } catch (error) {
-      const source = options.legacySource
-      if (!source || String(source.sourceId) !== sourceId) throw error
-      options.onCompatibility?.()
-      const workflowId = String(source.primaryFlowId || source.flowId || '').trim()
-      if (!workflowId || workflowId === '0' || workflowId === '-1') return []
-      return [{
-        id: `legacy:${sourceId}:${workflowId}`,
-        bindType: 'SOURCE',
-        bindId: sourceId,
-        workflowId,
-        workflowCode: `LEGACY-${workflowId}`,
-        workflowName: `当前主流程 #${workflowId}`,
-        versionNo: 1,
-        publishedVersionNo: 1,
-        publishedFlowId: workflowId,
+  /** 流程版本（草稿 / 发布）接口是否可用。后端没有，恒为 false；流程中心据此不走版本流程。 */
+  available: (): boolean => false,
+  /** 读来源的流程绑定原始视图：生效列表、默认流程、是否入组、并发快照 */
+  view: async (sourceId: string): Promise<SourceFlowsView> => {
+    const result = await request<unknown>('source-group/sourceFlows', { sourceId }, {
+      method: 'GET', httpEndpoint: 'source-group/sourceFlows', httpParams: { sourceId },
+    })
+    return sourceFlowsViewFromApi(result)
+  },
+  list: async (sourceId: string): Promise<WorkflowBinding[]> => {
+    // 本地演示源里保留了字母 ID；Spring 接口收 Long，发过去只会得到 400。
+    if (!/^\d+$/.test(sourceId)) return []
+    const view = await workflowBindingApi.view(sourceId)
+    const active = view.bindings.filter((binding) => binding.state === 'ACTIVE')
+    // 流程名：绑定行里没有，逐条取详情（一个源关联的流程不多）；取不到就显示 ID
+    const names = new Map<string, string>()
+    await Promise.all(active.map(async (binding) => {
+      const flow = await flowCenterApi.detail(binding.flowId).catch(() => null)
+      if (flow?.name) names.set(binding.flowId, flow.name)
+    }))
+    const inherited = !!view.sourceGroupId
+    return active
+      .slice()
+      .sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
+      .map((binding, index): WorkflowBinding => ({
+        id: binding.id,
+        bindType: inherited ? 'SOURCE_GROUP' : 'SOURCE',
+        bindId: inherited ? String(view.sourceGroupId) : sourceId,
+        workflowId: binding.flowId,
+        workflowCode: `FLOW-${binding.flowId}`,
+        workflowName: names.get(binding.flowId) ?? `流程 #${binding.flowId}`,
+        publishedFlowId: binding.flowId,
         versionStatus: 'PUBLISHED',
         workflowStatus: 'ACTIVE',
         versionManaged: false,
         followsCurrentVersion: true,
-        role: 'MAIN',
-        primary: true,
-        priority: 0,
+        role: binding.isDefault ? 'MAIN' : 'AUX',
+        primary: binding.isDefault,
+        priority: index,
         status: 'ACTIVE',
-        inherited: false,
-        updatedAt: source.updatedAt,
-      }]
-    }
+        inherited,
+        updatedAt: binding.updatedAt,
+      }))
   },
-  bind: async (input: { sourceId: string; workflowId: string; workflowVersionId?: string; role?: WorkflowBindingRole; primary?: boolean }) =>
-    workflowRequest<unknown>('workflow/bindSource', input, { method: 'POST', httpEndpoint: 'workflow/bindSource', httpParams: input }),
+  /** 整体保存：读最新快照 → 交给 change 算出新的 { flowIds, defaultFlowId } → 连快照一起提交 */
+  save: async (
+    sourceId: string,
+    change: (view: SourceFlowsView) => { flowIds: string[]; defaultFlowId: string | null },
+  ): Promise<void> => {
+    const view = await workflowBindingApi.view(sourceId)
+    if (view.sourceGroupId) throw new Error(GROUP_FLOW_LOCKED)
+    const next = change(view)
+    const body = {
+      sourceId,
+      expectedFlowIds: view.flowIds,
+      // 停用后也要提交读到的原值；没有默认就是 null
+      expectedDefaultFlowId: view.defaultFlowId ?? null,
+      flowIds: next.flowIds,
+      defaultFlowId: next.defaultFlowId,
+    }
+    await request<unknown>('source-group/bindSourceFlows', body, {
+      method: 'POST', httpEndpoint: 'source-group/bindSourceFlows', httpParams: body,
+    })
+  },
+  /** 关联一条已有流程；源上还没有默认流程、或明确要求 primary 时，把它设为默认 */
+  bind: async (input: { sourceId: string; workflowId: string; primary?: boolean }) =>
+    workflowBindingApi.save(input.sourceId, (view) => ({
+      flowIds: view.flowIds.includes(input.workflowId) ? view.flowIds : [...view.flowIds, input.workflowId],
+      defaultFlowId: input.primary || !view.defaultFlowId ? input.workflowId : view.defaultFlowId,
+    })),
   setPrimary: async (sourceId: string, workflowId: string) =>
-    workflowRequest<unknown>('workflow/setPrimary', { sourceId, workflowId }, { method: 'POST', httpEndpoint: 'workflow/setPrimary', httpParams: { sourceId, workflowId } }),
+    workflowBindingApi.save(sourceId, (view) => {
+      if (!view.flowIds.includes(workflowId)) throw new Error('这条流程当前没有关联到本源，请刷新后重试')
+      return { flowIds: view.flowIds, defaultFlowId: workflowId }
+    }),
   unbind: async (sourceId: string, workflowId: string) =>
-    workflowRequest<unknown>('workflow/unbindSource', { sourceId, workflowId }, { method: 'POST', httpEndpoint: 'workflow/unbindSource', httpParams: { sourceId, workflowId } }),
-  restoreInherited: async (sourceId: string): Promise<WorkflowBinding[]> => {
-    const result = await workflowRequest<unknown>('workflow/restoreInherited', { sourceId }, { method: 'POST', httpEndpoint: 'workflow/restoreInherited', httpParams: { sourceId } })
-    return (Array.isArray(result) ? result : []).map(workflowBindingFromApi)
-  },
-  createForSource: async (input: { sourceId: string; name: string; role?: WorkflowBindingRole; primary?: boolean }): Promise<WorkflowBinding> => {
+    workflowBindingApi.save(sourceId, (view) => {
+      const rest = view.flowIds.filter((id) => id !== workflowId)
+      // 默认标记只能切换，不能直接删：还有别的流程时，要先把默认切走（与后端对「取消默认关联」的口径一致）
+      if (view.defaultFlowId === workflowId && rest.length) throw new Error('这是默认流程，请先把其他流程设为默认，再解除这一条')
+      return { flowIds: rest, defaultFlowId: rest.length ? (view.defaultFlowId ?? null) : null }
+    }),
+  /** 新建一条空白流程并关联到源：两步（先建流程、再关联），第二步失败时说明流程已建出来，别留下谁也不知道的孤儿 */
+  createForSource: async (input: { sourceId: string; name: string; definition: FlowDefinition; primary?: boolean }): Promise<WorkflowBinding> => {
+    const created = await flowCenterApi.save({ name: input.name, definition: input.definition })
     try {
-      const result = await workflowRequest<unknown>('workflow/createForSource', input, { method: 'POST', httpEndpoint: 'workflow/createForSource', httpParams: input })
-      return workflowBindingFromApi(result)
+      await workflowBindingApi.bind({ sourceId: input.sourceId, workflowId: created.id, primary: input.primary })
     } catch (error) {
-      const failure = error instanceof ApiError
-        ? error.cause as { status?: number; gatewayDetail?: string } | undefined
-        : undefined
-      if ((failure?.status === 404 || failure?.status === 500) && !failure.gatewayDetail) {
-        throw new Error(`当前后台的流程创建接口不可用（HTTP ${failure.status} workflow/createForSource），请检查流程管理接口的部署及数据库迁移。`, { cause: error })
-      }
-      throw error
+      throw new Error(`已新建流程 #${created.id}，但关联到本源失败：${(error as Error)?.message ?? String(error)}。可在流程中心找到它手动关联`, { cause: error })
     }
+    const rows = await workflowBindingApi.list(input.sourceId)
+    const hit = rows.find((row) => row.workflowId === created.id)
+    if (!hit) throw new Error(`已新建流程 #${created.id} 并关联，但刷新绑定列表时没找到它，请刷新页面`)
+    return hit
   },
-  ensureDraft: async (workflowId: string): Promise<WorkflowBinding> => {
-    const input = { workflowId }
-    const result = await workflowRequest<unknown>('workflow/ensureDraft', input, {
-      method: 'POST', httpEndpoint: 'workflow/ensureDraft', httpParams: input,
-    })
-    return workflowBindingFromApi(result)
+  /** 版本（草稿 / 发布）接口后端还没有；只为保持流程中心抽屉的调用形状，`available()` 为 false 时不会走到这里 */
+  ensureDraft: async (_workflowId: string): Promise<WorkflowBinding> => {
+    throw new Error('流程版本（草稿 / 发布）接口尚未上线')
   },
-  publish: async (workflowId: string): Promise<WorkflowBinding> => {
-    const input = { workflowId }
-    const result = await workflowRequest<unknown>('workflow/publish', input, {
-      method: 'POST', httpEndpoint: 'workflow/publish', httpParams: input,
-    })
-    return workflowBindingFromApi(result)
+  publish: async (_workflowId: string): Promise<WorkflowBinding> => {
+    throw new Error('流程版本（草稿 / 发布）接口尚未上线')
   },
 }
 

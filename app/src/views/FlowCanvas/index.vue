@@ -327,11 +327,11 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   // 查询（svg=true 自带真实根节点行 / 「流程入口」行，lastStep 已改写为根 ID），展示与
   // 流程管理画布一致；未绑流程的源维持源视角查询（源虚拟根）。源视角那份并行结果仅作兜底。
   // 0927 P2-4：口径收敛到 stepPersist.validFlowIdOf（ActiveFlow 判定四处共用）。
-  // 新模型允许一个源关联多条流程。路由 flowId 是当前查看/编辑目标；primaryFlowId 才是运行入口。
-  // 新接口未部署或暂时不可用时退回旧 cs_source.FLOW_ID，保证已有源仍可打开。
+  // 新模型允许一个源关联多条流程（source-group 接口）。路由 flowId 是当前查看/编辑目标；primaryFlowId 才是运行入口。
+  // 绑定列表读失败时不挡住画布：退回源上的默认流程 ID（Source.flowId 即后端的 defaultFlowId），流程标签栏自己会报错。
   let bindings = [] as Awaited<ReturnType<typeof workflowBindingApi.list>>
   try {
-    if (!runtimeView) bindings = await workflowBindingApi.list(sourceId, { legacySource: source })
+    if (!runtimeView) bindings = await workflowBindingApi.list(sourceId)
   } catch {
     bindings = []
   }
@@ -369,8 +369,9 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
     primaryFlowId,
     activeWorkflowId: selectedBinding?.workflowId,
     primaryWorkflowId,
-    workflowVersionStatus: viewingDraft ? 'DRAFT' : selectedBinding?.versionStatus,
-    workflowVersionNo: viewingDraft ? selectedBinding?.draftVersionNo : selectedBinding?.publishedVersionNo,
+    // 没有版本接口时（versionManaged=false）不带版本信息：否则头部会出现一个没有依据的「已发布」标签
+    workflowVersionStatus: selectedBinding?.versionManaged ? (viewingDraft ? 'DRAFT' : selectedBinding.versionStatus) : undefined,
+    workflowVersionNo: selectedBinding?.versionManaged ? (viewingDraft ? selectedBinding.draftVersionNo : selectedBinding.publishedVersionNo) : undefined,
     workflowVersionManaged: selectedBinding?.versionManaged,
     publishedFlowId: selectedBinding?.publishedFlowId,
     draftFlowId: selectedBinding?.draftFlowId,

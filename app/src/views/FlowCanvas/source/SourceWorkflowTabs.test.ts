@@ -55,8 +55,6 @@ async function mountTabs(stubs: Record<string, object> = {}) {
 beforeEach(() => {
   vi.restoreAllMocks()
   vi.mocked(copyWholeFlow).mockReset()
-  // 本文件测的是多流程接口上线后的标签栏；未上线（只读）见文件末尾
-  vi.spyOn(workflowBindingApi, 'available').mockReturnValue(true)
 })
 
 describe('SourceWorkflowTabs', () => {
@@ -88,12 +86,11 @@ describe('SourceWorkflowTabs', () => {
     expect(router.currentRoute.value.query.flowId).toBe('12')
   })
 
-  it('兼容模式下新增按钮仍然可以点击', async () => {
-    vi.spyOn(workflowBindingApi, 'list').mockImplementation(async (_sourceId, options) => {
-      options?.onCompatibility?.()
-      return [MAIN]
-    })
+  it('新增按钮可点击，菜单有「新建空白流程」和「从现有流程或模板新建」；没有任何兼容模式提示', async () => {
+    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([MAIN])
     const { wrapper } = await mountTabs()
+    expect(wrapper.find('.swt-compat').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('兼容模式')
 
     const add = wrapper.get('[data-testid="workflow-add"]')
     expect(add.attributes('disabled')).toBeUndefined()
@@ -113,7 +110,7 @@ describe('SourceWorkflowTabs', () => {
     await flushPromises()
 
     expect(workflowBindingApi.createForSource).toHaveBeenCalledWith({
-      sourceId: '100', name: '补数据流程', role: 'AUX', primary: false,
+      sourceId: '100', name: '补数据流程', definition: expect.objectContaining({ main: expect.any(Array) }), primary: false,
     })
     expect(router.currentRoute.value.query.flowId).toBe('12')
   })
@@ -157,13 +154,14 @@ describe('SourceWorkflowTabs', () => {
     await flushPromises()
 
     expect(copyWholeFlow).toHaveBeenCalledWith('20', '现有流程副本', expect.objectContaining({ sourceFlowRef: expect.any(String) }))
-    expect(workflowBindingApi.bind).toHaveBeenCalledWith(expect.objectContaining({ sourceId: '100', workflowId: '22', role: 'AUX' }))
+    expect(workflowBindingApi.bind).toHaveBeenCalledWith({ sourceId: '100', workflowId: '22', primary: false })
     expect(router.currentRoute.value.query.flowId).toBe('22')
   })
 
   it('已发布版本先创建隔离草稿，再切换到草稿工作副本', async () => {
-    const draft = { ...MAIN, draftVersionId: 'v2', draftVersionNo: 2, draftFlowId: '21', versionStatus: 'DRAFT' as const }
-    vi.spyOn(workflowBindingApi, 'list').mockResolvedValueOnce([MAIN]).mockResolvedValueOnce([draft])
+    const managed = { ...MAIN, versionManaged: true }
+    const draft = { ...managed, draftVersionId: 'v2', draftVersionNo: 2, draftFlowId: '21', versionStatus: 'DRAFT' as const }
+    vi.spyOn(workflowBindingApi, 'list').mockResolvedValueOnce([{ ...managed, draftFlowId: undefined }]).mockResolvedValueOnce([draft])
     vi.spyOn(workflowBindingApi, 'ensureDraft').mockResolvedValue(draft)
     const { wrapper, router } = await mountTabs()
 
@@ -176,8 +174,8 @@ describe('SourceWorkflowTabs', () => {
   })
 
   it('发布草稿后切换到新的发布 flowId', async () => {
-    const draft = { ...MAIN, draftVersionId: 'v2', draftVersionNo: 2, draftFlowId: '21', versionStatus: 'DRAFT' as const }
-    const published = { ...MAIN, publishedVersionId: 'v2', publishedVersionNo: 2, publishedFlowId: '21' }
+    const draft = { ...MAIN, versionManaged: true, draftVersionId: 'v2', draftVersionNo: 2, draftFlowId: '21', versionStatus: 'DRAFT' as const }
+    const published = { ...MAIN, versionManaged: true, publishedVersionId: 'v2', publishedVersionNo: 2, publishedFlowId: '21' }
     vi.spyOn(workflowBindingApi, 'list').mockResolvedValueOnce([draft]).mockResolvedValueOnce([published])
     vi.spyOn(workflowBindingApi, 'publish').mockResolvedValue(published)
     vi.mocked(ElMessageBox.confirm).mockResolvedValue('confirm' as never)
@@ -193,20 +191,17 @@ describe('SourceWorkflowTabs', () => {
   })
 })
 
-// 2026-10-08：217 上还没有 workflow/* 接口。未上线时标签栏只读——新增、复制、草稿、发布都不提供，
-// 尤其「从现有流程新建」会先用旧接口复制出流程、再绑定失败，留下没有源使用的孤儿流程。
-describe('SourceWorkflowTabs · 多流程接口未上线', () => {
-  it('只显示当前主流程，不提供新增、复制、编辑新版本、发布', async () => {
-    vi.spyOn(workflowBindingApi, 'available').mockReturnValue(false)
-    vi.spyOn(workflowBindingApi, 'list').mockImplementation(async (_sourceId, options) => {
-      options?.onCompatibility?.()
-      return [MAIN]
-    })
+// 来源组接口文档：入组的源统一使用组的流程，不能单独新建 / 关联（后端会拒绝），只读并说明原因。
+describe('SourceWorkflowTabs · 入组的源', () => {
+  it('只显示来源组的统一流程，不提供新增、编辑新版本、发布；有说明标签，没有兼容模式', async () => {
+    vi.spyOn(workflowBindingApi, 'list').mockResolvedValue([{ ...MAIN, inherited: true, bindType: 'SOURCE_GROUP', bindId: '3' }])
     const { wrapper } = await mountTabs()
     expect(wrapper.findAll('.swt-tab')).toHaveLength(1)
     expect(wrapper.find('[data-testid="workflow-add"]').exists()).toBe(false)
     expect(wrapper.find('.swt-version-actions').exists()).toBe(false)
-    expect(wrapper.get('.swt-compat').attributes('title')).toContain('多流程接口尚未上线')
+    expect(wrapper.get('[data-testid="workflow-group-locked"]').text()).toBe('来源组统一流程')
+    expect(wrapper.get('[data-testid="workflow-group-locked"]').attributes('title')).toContain('退出来源组')
+    expect(wrapper.text()).not.toContain('兼容模式')
     expect(copyWholeFlow).not.toHaveBeenCalled()
   })
 })

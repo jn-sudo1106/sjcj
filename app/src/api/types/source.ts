@@ -186,6 +186,30 @@ export interface WorkflowBinding {
   updatedAt?: string
 }
 
+/** 来源 / 来源组的一条流程绑定原始行（source-group/sourceFlows 的 bindings，含停用行）。 */
+export interface SourceFlowBind {
+  id: string
+  sourceId?: string
+  /** 有值表示这条是来源组的统一绑定（入组的源读到的是组的行） */
+  sourceGroupId?: string
+  flowId: string
+  isDefault: boolean
+  state: 'ACTIVE' | 'DISABLED'
+  revision: number
+  updatedAt?: string
+}
+
+/** source-group/sourceFlows 的返回：生效列表、默认流程和原始绑定行（保存时据此做并发快照）。 */
+export interface SourceFlowsView {
+  sourceId?: string
+  /** 按 sourceId 查时，源已入组则非空——此时 flowIds 是组的统一流程，源不能单独改 */
+  sourceGroupId?: string
+  /** 生效（启用中）的流程 ID */
+  flowIds: string[]
+  defaultFlowId?: string
+  bindings: SourceFlowBind[]
+}
+
 /** 同站源下拉选项（source/sourceSame，旧口径「[id]名称」，非完整 Source） */
 export interface SourceOption {
   sourceId: string
