@@ -978,12 +978,20 @@ export function sourceFromLegacy(input: unknown): Source {
   const rawSiteId = record.siteId
   const siteId = rawSiteId == null || rawSiteId === 0 || rawSiteId === '0' ? undefined : String(rawSiteId)
 
+  // 1008-01：217 起 sourceDetail / sourcePaged / site/sources 不再返回 flowId，改成 defaultFlowId（当前生效的
+  // 默认流程，组内源取来源组的）和 sourceGroupId，后端也不再读旧 FLOW_ID 列。响应里有 defaultFlowId 这个键
+  // （哪怕是 null = 没有可用默认流程）就以它为准，不退回旧 flowId 的陈旧值；没有这个键才是老后端，照旧读 flowId。
+  const defaultFlowId = record.defaultFlowId == null ? undefined : String(record.defaultFlowId)
+  const effectiveFlowId = 'defaultFlowId' in record ? defaultFlowId : (record.flowId == null ? undefined : String(record.flowId))
+
   return {
     sourceId: String(record.sourceId ?? ''),
     name: String(record.sourceName ?? ''),
     url: record.sourceUrl == null ? '' : String(record.sourceUrl),
     configId: record.configId == null ? '' : String(record.configId),
-    flowId: record.flowId == null ? undefined : String(record.flowId),
+    flowId: effectiveFlowId,
+    defaultFlowId,
+    sourceGroupId: record.sourceGroupId == null ? undefined : String(record.sourceGroupId),
     // 0927 G2：ROOT 权威方案的只读反查字段（源所属流程 ROOT 步骤/首任务配置）。后端源列表与
     // 详情已返回（bee-info SourceNextController / SourceController）；前端当前只透传不做展示决策，
     // 做「所属流程 / ROOT 配置」列时直接读这两个字段。

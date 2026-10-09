@@ -34,8 +34,15 @@ export interface Source {
   configId: string
   /** 该源关联的流程（旧 `cs_source.FLOW_ID`）。**执行时后端按 FLOW_ID 反查配置后执行**
    *  （0903 H1 答复），所以这个字段决定这个源实际跑哪一套配置。
-   *  2026-09-04 实测：`sourcePaged` 与 `sourceDetail` 都已返回（sourceDetail 是后端本次新加的）。 */
+   *  2026-09-04 实测：`sourcePaged` 与 `sourceDetail` 都已返回（sourceDetail 是后端本次新加的）。
+   *  1008-01：217 起后端改返回 `defaultFlowId`，适配器 `sourceFromLegacy` 把它映射进这里（老后端仍读 flowId），
+   *  所以界面继续读 `flowId` 即可，不用关心后端用的是哪个字段名。 */
   flowId?: string
+  /** 后端当前生效的默认流程（只读，217 起返回；组内源取来源组的默认流程）。展示 / 判断「有没有流程」读 `flowId`；
+   *  这个字段原样保留，给来源组、多流程相关功能（1008-02 起）直接用。 */
+  defaultFlowId?: string
+  /** 所属来源组 ID（只读）；未入组为 undefined。入组的源统一使用组的流程，不能单独改绑。 */
+  sourceGroupId?: string
   /** 当前源的主流程。多流程页面中 flowId 表示正在查看/编辑的流程，primaryFlowId 仍指向实际执行入口。 */
   primaryFlowId?: string
   /** 多流程模型中的稳定流程 ID；flowId 是当前查看的发布副本或草稿工作副本 ID。 */

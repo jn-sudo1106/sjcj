@@ -13,6 +13,8 @@ import {
   stepToSaveItemConfigPayload,
   stepToStepModifyPayload,
   sourceFromLegacy,
+  sourcePageFromLegacy,
+  sourceToLegacyParams,
   flowFromLegacy,
   flowToLegacy,
   entryTypeGroupFromLegacy,
@@ -908,6 +910,51 @@ describe('旧平台源列表标记字段', () => {
     expect(sourceFromLegacy({
       sourceId: 1, sourceName: 'a', sourceUrl: 'u', configId: 2, entryTypeId: 3,
     }).rootConfigId).toBeUndefined()
+  })
+})
+
+// 1008-01：217 的 sourceDetail / sourcePaged / site/sources 不再返回 flowId，改成 defaultFlowId（字符串，
+// 组内源取来源组的默认流程）并带 sourceGroupId。前端 Source.flowId 要继续有值，画布才显示「当前流程」。
+describe('源的流程字段兼容 defaultFlowId（1008-01）', () => {
+  const base = { sourceId: 430024667, sourceName: '江苏金租', sourceUrl: 'u', configId: 2, entryTypeId: 3 }
+
+  it('217 新形状：只有 defaultFlowId，flowId 取它；defaultFlowId / sourceGroupId 原样保留为字符串', () => {
+    const source = sourceFromLegacy({ ...base, defaultFlowId: '14010130', sourceGroupId: null })
+    expect(source.flowId).toBe('14010130')
+    expect(source.defaultFlowId).toBe('14010130')
+    expect(source.sourceGroupId).toBeUndefined()
+    expect(sourceFromLegacy({ ...base, defaultFlowId: '21000006', sourceGroupId: 3 })).toMatchObject({
+      flowId: '21000006', defaultFlowId: '21000006', sourceGroupId: '3',
+    })
+  })
+
+  it('老形状：只有 flowId，照旧；两个字段都没有时都是 undefined', () => {
+    const old = sourceFromLegacy({ ...base, flowId: 1400935 })
+    expect(old.flowId).toBe('1400935')
+    expect(old.defaultFlowId).toBeUndefined()
+    const none = sourceFromLegacy(base)
+    expect(none.flowId).toBeUndefined()
+    expect(none.defaultFlowId).toBeUndefined()
+  })
+
+  it('响应带了 defaultFlowId 键就以它为准：它是 null（无可用默认流程）时不能退回旧 flowId 列的陈旧值', () => {
+    const source = sourceFromLegacy({ ...base, flowId: 99, defaultFlowId: null })
+    expect(source.flowId).toBeUndefined()
+    expect(source.defaultFlowId).toBeUndefined()
+    // 两个都有且不同：生效的是 defaultFlowId
+    expect(sourceFromLegacy({ ...base, flowId: 99, defaultFlowId: '14010130' }).flowId).toBe('14010130')
+  })
+
+  it('源列表分页也走同一个映射', () => {
+    const page = sourcePageFromLegacy({ total: 1, list: [{ ...base, defaultFlowId: '14010130' }] })
+    expect(page.list[0]).toMatchObject({ flowId: '14010130', defaultFlowId: '14010130' })
+  })
+
+  it('保存源不会把 flowId 发回后端（入组的源带 flowId 会被后端拒绝）', () => {
+    const params = sourceToLegacyParams(sourceFromLegacy({ ...base, defaultFlowId: '14010130', sourceGroupId: 3 }))
+    expect(params).not.toHaveProperty('flowId')
+    expect(params).not.toHaveProperty('defaultFlowId')
+    expect(params).not.toHaveProperty('sourceGroupId')
   })
 })
 
