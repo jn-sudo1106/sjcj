@@ -136,6 +136,10 @@ const TEMPLATE_CONFIG_TYPE: Record<string, number> = {
   check: 300,
   mail: 400,
   ocr: 150,
+  // PDF 抓取（2026-10-08，用户拍板方案一）：没有这条时只能从 snatchType 的 `[130]` 反解——
+  // 节点经「复制配置 / 更换」带进一个 90 的抓取类型后，保存就把 configType 写成 90，
+  // 下次加载 isPdfNode 认不出、PDF 那套规则式 Tab 直接消失（实测配置 1401119）。模板信号优先。
+  pdf: 130,
 }
 
 export function configTypeFrom(cfg: NodeConfig): number | undefined {

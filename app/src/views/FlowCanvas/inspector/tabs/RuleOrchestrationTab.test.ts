@@ -64,8 +64,20 @@ const MONITOR_PROMPT_TEMPLATE = {
   category: 'rule',
   systemPrompt: 'source_id={{source_id}}; source_cron={{source_cron}}; source_table={{source_table}}; 入参={{input_pair}}; 出参={{output_pair}}',
 }
+// PDF 抓取（prompt_id=6 的裁剪版）：模板正文里的 model / describe 是裸词说明，只有花括号变量该被替换
+const PDF_PROMPT_TEMPLATE = {
+  promptId: 6,
+  nodeType: 'pdf_snatch',
+  nodeTypeName: 'PDF抓取',
+  category: 'rule',
+  systemPrompt: 'providerCode为{{provider_code}}，model为{{model}}，describe为{{describe}}；出参={{output_pair}}',
+}
+// 默认不给 PDF 返回模板行：既有 PDF 用例断言的是节点上预置的提示词正文，不能被自动拼接结果顶掉。
+// 只有用例显式要验证占位符替换时才打开（mockAssets 每次重置）。
+let pdfPromptTemplateEnabled = false
 
 function mockAssets(inputTableName = INPUT_TABLE.name, tableId = INPUT_TABLE.tableId, tableName = INPUT_TABLE.tableName) {
+  pdfPromptTemplateEnabled = false
   const table = { ...INPUT_TABLE, tableId, tableName, name: inputTableName }
   vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [table] })
   // 真实后端的表列表不带字段定义，选中表后另拉一次详情（entryApi.entryDetail）才有 fields——
@@ -103,6 +115,13 @@ function mockAssets(inputTableName = INPUT_TABLE.name, tableId = INPUT_TABLE.tab
       }
       if (parsed.searchParams.get('category') === 'rule' && parsed.searchParams.get('node_type_name') === '数据监控') {
         return new Response(JSON.stringify([MONITOR_PROMPT_TEMPLATE]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      // PDF 抓取的取模板不带 category（promptListCategoryForNode 返回 ''），只按 node_type_name 命中
+      if (pdfPromptTemplateEnabled && parsed.searchParams.get('node_type_name') === 'PDF抓取') {
+        return new Response(JSON.stringify([PDF_PROMPT_TEMPLATE]), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         })
@@ -2838,8 +2857,9 @@ describe('RuleOrchestrationTab · 抓取配置 XML 轻解析接入（S3-4）', (
 // 1005 方案 §5.4：PDF 抓取节点的样本槽位收 PDF，「解析内容」只展示、不回写；
 // 与「生成脚本」的附件口径是**分开**（§10.1）——PDF 节点的生成脚本请求不许带附件。
 describe('RuleOrchestrationTab · PDF 抓取样本与解析内容（1005）', () => {
-  function mountOnPdfNode() {
+  function mountOnPdfNode(withPromptTemplate = false) {
     mockAssets()
+    pdfPromptTemplateEnabled = withPromptTemplate
     setActivePinia(createPinia())
     const flow = useFlowStore()
     flow.configs['pdf-1'] = cloneConfig(NODE_CONFIGS['pdf-collect'])
@@ -2894,6 +2914,46 @@ describe('RuleOrchestrationTab · PDF 抓取样本与解析内容（1005）', ()
     const labels = actionRow.findAll('button').map((b) => b.text())
     expect(labels).toEqual(['上传 PDF', '解析内容', '生成脚本', '测试脚本'])
     wrapper.unmount()
+  })
+
+  it('进 Tab 就把供应商/模型/描述拼进系统提示词（{{provider_code}} / {{model}} / {{describe}}）', async () => {
+    const { flow } = mountOnPdfNode(true)
+    await flushPromises()
+
+    expect(flow.configs['pdf-1'].execCfg?.systemPrompt).toBe(
+      'providerCode为DeepSeek，model为deepseek-chat，describe为从 PDF 抽取合同金额与签署日期；出参=商品名称:sku_name',
+    )
+  })
+
+  it('换模型供应商/模型下拉后，系统提示词里的两个变量跟着重拼', async () => {
+    const { flow, wrapper } = mountOnPdfNode(true)
+    await flushPromises()
+
+    const providerSelect = wrapper.findAllComponents({ name: 'ElSelect' })
+      .find((c) => c.attributes('data-testid') === 'main-model-provider')
+    if (!providerSelect) throw new Error('找不到 main-model-provider 下拉')
+    providerSelect.vm.$emit('change', 'OpenAI')
+    await flushPromises()
+    await flushPromises()
+
+    // OpenAI 只有一个候选，loadModels 会自动落到它，供应商/模型两个变量都要跟着换
+    expect(flow.configs['pdf-1'].execCfg?.systemPrompt).toBe(
+      'providerCode为OpenAI，model为gpt-4o-mini，describe为从 PDF 抽取合同金额与签署日期；出参=商品名称:sku_name',
+    )
+  })
+
+  it('改「设置业务规则」描述后，{{describe}} 跟着重拼（防抖 400ms）', async () => {
+    const { flow } = mountOnPdfNode(true)
+    await flushPromises()
+
+    flow.patchExecConfig('pdf-1', { describe: '只抽金额' })
+    await new Promise((resolve) => { window.setTimeout(resolve, 450) })
+    await flushPromises()
+    await flushPromises()
+
+    expect(flow.configs['pdf-1'].execCfg?.systemPrompt).toBe(
+      'providerCode为DeepSeek，model为deepseek-chat，describe为只抽金额；出参=商品名称:sku_name',
+    )
   })
 
   it('未选 PDF 时「解析内容」禁用；选好后调用 documentExtract 带上文件、提示词与出参', async () => {
