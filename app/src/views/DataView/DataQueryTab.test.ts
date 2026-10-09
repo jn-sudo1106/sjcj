@@ -404,46 +404,108 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(page.classes()).not.toContain('is-fullscreen')
   })
 
-  it('按步骤查看：用源的流程节点代替数据表下拉，选节点切到它的输出表；没选源时置灰', async () => {
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({
-      sourceId: '600519', name: '贵州茅台', url: 'https://example.com', configId: 'c1', mainTable: 't1', owner: 'ops', state: 'C',
+  describe('按步骤查看（对齐源数据视图的「按步骤查看」）', () => {
+    const SOURCE = { sourceId: '600519', name: '贵州茅台', url: 'https://example.com', configId: 'c1', mainTable: 't1', owner: 'ops', state: 'C' }
+    /** 列表抓取 → t1（没有输入）；评论解析 t1 → t2（输入 ≠ 输出，可切换） */
+    function mockFlow() {
+      vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
+      vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+        { stepId: 's1', sourceId: '600519', name: '列表抓取', outputTable: 't1', enabled: true },
+        { stepId: 's2', sourceId: '600519', name: '评论解析', inputTable: 't1', outputTable: 't2', enabled: true },
+      ])
+    }
+    const toStep = async () => {
+      await wrapper.findAll('.browse-mode-toggle button')[1]!.trigger('click')
+      await waitForLoad()
+    }
+    const picker = () => wrapper.get('[data-testid="rail-node-select"]')
+    const pick = async (value: string) => {
+      await picker().setValue(value)
+      await waitForLoad()
+    }
+    const scopeText = () => wrapper.get('[data-testid="data-step-scope"]').text().replace(/\s+/g, '')
+
+    it('没选源：不出节点下拉，数据表下拉也换掉，提示先选源，不请求步骤', async () => {
+      mockFlow()
+      const auth = useAuthStore()
+      auth.roles = ['admin']
+      await mountPage()
+      await waitForLoad()
+      await toStep()
+
+      expect(wrapper.find('[data-testid="data-step-need-source"]').text()).toBe('先选择源')
+      expect(wrapper.find('[data-testid="rail-node-select"]').exists()).toBe(false)
+      expect(tableSelectOf()).toBeUndefined()
+      expect(sourceApi.sourceSteps).not.toHaveBeenCalled()
     })
-    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
-      { stepId: 's1', sourceId: '600519', name: '列表抓取', outputTable: 't1', enabled: true },
-      { stepId: 's2', sourceId: '600519', name: '评论解析', inputTable: 't1', outputTable: 't2', enabled: true },
-    ])
-    const auth = useAuthStore()
-    auth.roles = ['admin']
-    await mountPage()
-    await waitForLoad()
 
-    // 没选源：切到按步骤后下拉置灰，数据表下拉消失
-    await wrapper.findAll('.browse-mode-toggle button')[1]!.trigger('click')
-    await waitForLoad()
-    const stepSelect = () => wrapper.findAllComponents({ name: 'ElSelect' }).find((s) => s.attributes('data-testid') === 'data-step-select')!
-    expect(stepSelect().props('disabled')).toBe(true)
-    expect(stepSelect().props('placeholder')).toBe('先选择源')
-    expect(tableSelectOf()).toBeUndefined()
-    expect(sourceApi.sourceSteps).not.toHaveBeenCalled()
+    it('选了源：RailNodePicker 列出节点，当前表对应的节点已选中；只有输出表时只显示「输出」', async () => {
+      mockFlow()
+      const auth = useAuthStore()
+      auth.roles = ['admin']
+      await mountPage({ sourceId: '600519' })
+      await waitForLoad()
+      await toStep()
 
-    // 选了源：列出节点，当前表对应的节点高亮；选另一个节点就切表
-    wrapper.unmount()
-    await mountPage({ sourceId: '600519' })
-    await waitForLoad()
-    await wrapper.findAll('.browse-mode-toggle button')[1]!.trigger('click')
-    await waitForLoad()
-    expect(sourceApi.sourceSteps).toHaveBeenCalledWith('600519')
-    expect(stepSelect().props('disabled')).toBe(false)
-    expect(stepSelect().props('modelValue')).toBe('s1')
+      expect(sourceApi.sourceSteps).toHaveBeenCalledWith('600519')
+      expect(picker().findAll('option').map((o) => o.text())).toEqual(['列表抓取', '评论解析'])
+      expect((picker().element as HTMLSelectElement).value).toBe('s1')
+      expect(scopeText()).toBe('输出t1')
+      expect(wrapper.find('[data-testid="data-scope-input"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="data-rail-toggle"]').exists()).toBe(true)
+    })
 
-    await stepSelect().vm.$emit('change', 's2')
-    await waitForLoad()
-    expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t2')
+    it('选节点切到它的输出表；输入 / 输出不同时可切换，再切回；源不被清掉', async () => {
+      mockFlow()
+      // 新表的源清单里没有当前源（大表清单取数有上限）：按表看会清源，按步骤看必须保留
+      vi.spyOn(dataApi, 'distinctSource').mockImplementation(async (query) => (query.tableId === 't2' ? ['other-src'] : ['600519']))
+      const auth = useAuthStore()
+      auth.roles = ['admin']
+      await mountPage({ sourceId: '600519' })
+      await waitForLoad()
+      await toStep()
 
-    // 切回按表：数据表下拉回来
-    await wrapper.findAll('.browse-mode-toggle button')[0]!.trigger('click')
-    await flushPromises()
-    expect(tableSelectOf()).toBeDefined()
+      await pick('s2')
+      expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t2')
+      expect(scopeText()).toBe('输入t1·输出t2')
+      expect(wrapper.get('[data-testid="data-scope-output"]').classes()).toContain('active')
+      expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 't2', sourceId: '600519' }))
+
+      await wrapper.get('[data-testid="data-scope-input"]').trigger('click')
+      await waitForLoad()
+      expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t1')
+      expect(wrapper.get('[data-testid="data-scope-input"]').classes()).toContain('active')
+      expect((picker().element as HTMLSelectElement).value).toBe('s2')
+
+      await wrapper.get('[data-testid="data-scope-output"]').trigger('click')
+      await waitForLoad()
+      expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t2')
+      expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 't2', sourceId: '600519' }))
+    })
+
+    it('输入表等于输出表合并成「输入·输出」；流程图按钮打开「展示处理步骤」抽屉；切回按表后数据表下拉回来', async () => {
+      vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
+      vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+        { stepId: 's1', sourceId: '600519', name: '同表处理', inputTable: 't1', outputTable: 't1', enabled: true },
+      ])
+      const auth = useAuthStore()
+      auth.roles = ['admin']
+      await mountPage({ sourceId: '600519' })
+      await waitForLoad()
+      await toStep()
+
+      expect(wrapper.find('[data-testid="data-scope-merged"]').text().replace(/\s+/g, '')).toBe('输入·输出t1')
+      expect(wrapper.find('[data-testid="data-scope-input"]').exists()).toBe(false)
+
+      await wrapper.get('[data-testid="data-rail-toggle"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.findComponent({ name: 'StepDrawer' }).props('modelValue')).toBe(true)
+
+      await wrapper.findAll('.browse-mode-toggle button')[0]!.trigger('click')
+      await flushPromises()
+      expect(tableSelectOf()).toBeDefined()
+      expect(wrapper.find('[data-testid="rail-node-select"]').exists()).toBe(false)
+    })
   })
 
   it('删除数据：按时间删除和表操作按旧系统分组，表操作只保留三项', async () => {

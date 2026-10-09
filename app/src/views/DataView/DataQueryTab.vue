@@ -24,7 +24,8 @@ import AddDataMenu from '@/components/ResultToolbar/AddDataMenu.vue'
 import ExportMenu from '@/components/ResultToolbar/ExportMenu.vue'
 import FullscreenToggle from '@/components/ResultToolbar/FullscreenToggle.vue'
 import BrowseModeToggle, { type BrowseMode } from '@/components/ResultToolbar/BrowseModeToggle.vue'
-import { buildHorizontalLayout, buildSourceSeed, nodeOutputTable } from '@/views/FlowCanvas/canvas/flowModel'
+import RailNodePicker from '@/views/FlowCanvas/result/components/RailNodePicker.vue'
+import { buildHorizontalLayout, buildSourceSeed, effectiveInputTable, isDecision, isParallel, nodeOutputTable } from '@/views/FlowCanvas/canvas/flowModel'
 import { downloadCsv } from '@/utils/format/csvExport'
 import { resultRowsCsv } from '@/views/FlowCanvas/result/exportRows'
 import { backTraceSources } from '@/utils/data/backTraceSources'
@@ -164,7 +165,10 @@ async function loadSources() {
     const ids = [...new Set(await dataApi.distinctSource({ tableId: selectedTable, size: 20000 }))]
     if (requestId !== sourceScopeRequest || selectedTable !== tableId.value) return
     tableSourceIds.value = ids
-    const clearedSource = !!sourceId.value && !ids.includes(sourceId.value)
+    // 按步骤看时源就是上下文（节点是它的流程节点，输出表一定有它的数据），不能因为它不在这张表的源清单里
+    // （清单取数上限 2 万，大表里本来就列不全）就被清掉，否则一切表，步骤列表跟着消失
+    const keepSource = browseMode.value === 'step' && !!sourceId.value
+    const clearedSource = !keepSource && !!sourceId.value && !ids.includes(sourceId.value)
     if (clearedSource) {
       sourceId.value = ''
       await loadGroup()
@@ -173,6 +177,8 @@ async function loadSources() {
     const previewIds = ids.slice(0, SOURCE_PREVIEW_SIZE)
     if (sourceId.value && ids.includes(sourceId.value) && !previewIds.includes(sourceId.value)) {
       previewIds[previewIds.length - 1] = sourceId.value
+    } else if (keepSource && !ids.includes(sourceId.value)) {
+      previewIds.push(sourceId.value)
     }
     sourceOptions.value = await sourceOptionsForIds(previewIds)
     if (requestId === sourceScopeRequest && sourceSearchKeyword.value.trim()) {
@@ -619,19 +625,23 @@ async function onStepSelectTable(outputTable: string) {
   await onTableChange()
 }
 
-// ---- 查看方式：按数据表 / 按步骤（1008-07，与源数据视图同一个切换）----
-// 按步骤：选了源之后，用该源流程里的节点代替「数据表」下拉；选节点 = 切到该节点的输出表。
-// 没选源时没有流程可看，下拉置灰提示先选源。步骤列表的来源与「展示处理步骤」抽屉一致。
-interface StepOption { nodeId: string; title: string; outputTable: string }
+// ---- 查看方式：按数据表 / 按步骤（1008-07，对齐源数据视图 ResultView 的「按步骤查看」）----
+// 按步骤：选了源之后，用该源流程里的节点代替「数据表」下拉（RailNodePicker，与源 / 文件 / 任务视图同款）；
+// 选节点 = 看这个节点的数据。节点输入表与输出表不同时，旁边的「输入 / 输出」可以切换看哪一张，
+// 相同时合并成「输入·输出」（ResultView 的 M3-0C 定案）。决策 / 分头这类不产生数据的节点、
+// 以及没有输入输出表的节点，不进候选。没选源时没有流程可看，提示先选源。
+// 流程图开合按钮打开「展示处理步骤」抽屉（那边点节点会切到它的输出表）。
+interface StepNode { id: string; title: string; inputTable: string; outputTable: string }
 const browseMode = ref<BrowseMode>('table')
-const stepOptions = ref<StepOption[]>([])
+const stepNodes = ref<StepNode[]>([])
 const stepNodeId = ref('')
+const stepScope = ref<'output' | 'input'>('output')
 const stepLoading = ref(false)
 let stepLoadSeq = 0
-async function loadStepOptions() {
+async function loadStepNodes() {
   const sid = sourceId.value
   const seq = ++stepLoadSeq
-  stepOptions.value = []
+  stepNodes.value = []
   stepNodeId.value = ''
   if (browseMode.value !== 'step' || !sid) {
     stepLoading.value = false
@@ -643,29 +653,60 @@ async function loadStepOptions() {
     if (seq !== stepLoadSeq || !detail) return
     const seed = buildSourceSeed(detail, steps ?? [])
     const layout = buildHorizontalLayout(seed.main, seed.branches, seed.configs, seed.branchGroups, { includeTerminals: false })
-    stepOptions.value = layout.nodes.map((node) => {
+    stepNodes.value = layout.nodes.flatMap((node) => {
       const cfg = seed.configs[node.id]
-      return { nodeId: node.id, title: cfg?.title || node.id, outputTable: cfg ? nodeOutputTable(cfg) : '' }
+      if (!cfg || isDecision(cfg) || isParallel(cfg)) return []
+      const outputTable = nodeOutputTable(cfg)
+      const inputTable = effectiveInputTable(seed.main, seed.branches, seed.configs, node.id, seed.branchGroups)
+      return outputTable || inputTable ? [{ id: node.id, title: cfg.title || node.id, inputTable, outputTable }] : []
     })
+    syncStepFromTable()
   } catch (error) {
     if (seq === stepLoadSeq) ElMessage.warning(`步骤加载失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
     if (seq === stepLoadSeq) stepLoading.value = false
   }
 }
-watch([browseMode, sourceId], () => void loadStepOptions())
-/** 下拉当前显示哪个节点：优先用户点的那个，表被别处切走后退回第一个输出表与当前表相同的节点 */
-const stepSelectValue = computed(() => {
-  const isCurrent = (outputTable: string) => !!outputTable && (outputTable === tableId.value || outputTable === tableMeta.value?.tableName)
-  const picked = stepOptions.value.find((o) => o.nodeId === stepNodeId.value)
-  if (picked && isCurrent(picked.outputTable)) return picked.nodeId
-  return stepOptions.value.find((o) => isCurrent(o.outputTable))?.nodeId ?? ''
-})
-async function onStepPicked(nodeId: string) {
-  const option = stepOptions.value.find((o) => o.nodeId === nodeId)
-  if (!option) return
+watch([browseMode, sourceId], () => void loadStepNodes())
+const stepNode = computed(() => stepNodes.value.find((n) => n.id === stepNodeId.value))
+const stepSameTable = computed(() => !!stepNode.value && !!stepNode.value.inputTable && stepNode.value.inputTable === stepNode.value.outputTable)
+const stepScopeSwitchable = computed(() => !!stepNode.value && !!stepNode.value.inputTable && !!stepNode.value.outputTable && !stepSameTable.value)
+const stepNodeOptions = computed(() => stepNodes.value.map((n) => ({ id: n.id, title: n.title })))
+function stepTableOf(node: StepNode, scope: 'output' | 'input') {
+  return scope === 'output' ? node.outputTable : node.inputTable
+}
+/** 表在别处被切走（下拉、抽屉、深链）后，让节点 / 范围跟上：当前选择仍对得上就不动，否则找第一个输出表（再找输入表）等于当前表的节点 */
+function syncStepFromTable() {
+  if (browseMode.value !== 'step') return
+  const table = tableId.value
+  const meta = tableMeta.value?.tableName
+  const is = (t: string) => !!t && (t === table || t === meta)
+  const cur = stepNode.value
+  if (cur && is(stepTableOf(cur, stepScope.value))) return
+  const byOutput = stepNodes.value.find((n) => is(n.outputTable))
+  if (byOutput) { stepNodeId.value = byOutput.id; stepScope.value = 'output'; return }
+  const byInput = stepNodes.value.find((n) => is(n.inputTable))
+  if (byInput) { stepNodeId.value = byInput.id; stepScope.value = 'input'; return }
+  stepNodeId.value = ''
+}
+watch([tableId, () => tableMeta.value?.tableName], syncStepFromTable)
+async function onStepNodePicked(nodeId: string) {
+  const node = stepNodes.value.find((n) => n.id === nodeId)
+  if (!node) return
   stepNodeId.value = nodeId
-  await onStepSelectTable(option.outputTable)
+  stepScope.value = node.outputTable ? 'output' : 'input'
+  await onStepSelectTable(stepTableOf(node, stepScope.value))
+}
+async function onStepScope(scope: 'output' | 'input') {
+  const node = stepNode.value
+  if (!node || stepScope.value === scope) return
+  stepScope.value = scope
+  await onStepSelectTable(stepTableOf(node, scope))
+}
+/** 流程图开合：打开「展示处理步骤」抽屉；收起由抽屉自己关闭 */
+function onStepRailToggle(open: boolean) {
+  if (open) openStepDrawer()
+  else stepOpen.value = false
 }
 
 // ---- 全屏（1008-07，与源数据视图同口径）：同一份 DOM 直接铺满视口，Esc 退出 ----
@@ -959,24 +1000,33 @@ onUnmounted(() => {
       <button class="rc-btn dv-help-btn" type="button" title="源详情" @click="openSourceDetail">
         <el-icon><QuestionFilled /></el-icon>
       </button>
-      <!-- 按步骤：节点下拉依赖源，所以排在源后面；选节点切到它的输出表 -->
-      <el-select
-        v-if="browseMode === 'step'"
-        data-testid="data-step-select"
-        :model-value="stepSelectValue"
-        :loading="stepLoading"
-        :disabled="!sourceId"
-        :placeholder="sourceId ? '选择步骤' : '先选择源'"
-        style="width: 160px"
-        @change="onStepPicked"
-      >
-        <el-option v-for="o in stepOptions" :key="o.nodeId" :value="o.nodeId" :label="o.title" :disabled="!o.outputTable">
-          <span>{{ o.title }}</span><span class="dv-step-table">{{ o.outputTable || '无输出表' }}</span>
-        </el-option>
-      </el-select>
-      <button v-if="browseMode === 'step'" class="rc-btn dv-help-btn" type="button" title="表结构详情" @click="openTableDetail">
-        <el-icon><QuestionFilled /></el-icon>
-      </button>
+      <!-- 按步骤：节点依赖源，所以排在源后面；选节点看它的数据，输入 / 输出表不同时可切换 -->
+      <template v-if="browseMode === 'step'">
+        <RailNodePicker
+          v-if="sourceId"
+          :open="stepOpen"
+          :model-value="stepNodeId"
+          :nodes="stepNodeOptions"
+          :disabled="stepLoading || !stepNodes.length"
+          toggle-testid="data-rail-toggle"
+          @update:model-value="onStepNodePicked"
+          @update:open="onStepRailToggle"
+        />
+        <span v-else class="dv-step-hint" data-testid="data-step-need-source">先选择源</span>
+        <span v-if="stepNode" class="dv-step-scope" data-testid="data-step-scope">
+          <span v-if="stepSameTable" class="dv-scope-piece" data-testid="data-scope-merged"><span class="k">输入·输出</span><span class="v">{{ stepNode.inputTable }}</span></span>
+          <template v-else>
+            <button v-if="stepScopeSwitchable" type="button" class="dv-scope-piece is-btn" :class="{ active: stepScope === 'input' }" data-testid="data-scope-input" @click="onStepScope('input')"><span class="k">输入</span><span class="v">{{ stepNode.inputTable }}</span></button>
+            <span v-else-if="stepNode.inputTable" class="dv-scope-piece"><span class="k">输入</span><span class="v">{{ stepNode.inputTable }}</span></span>
+            <span v-if="stepNode.inputTable && stepNode.outputTable" class="dv-scope-sep">·</span>
+            <button v-if="stepScopeSwitchable" type="button" class="dv-scope-piece is-btn" :class="{ active: stepScope === 'output' }" data-testid="data-scope-output" @click="onStepScope('output')"><span class="k">输出</span><span class="v">{{ stepNode.outputTable }}</span></button>
+            <span v-else-if="stepNode.outputTable" class="dv-scope-piece"><span class="k">输出</span><span class="v">{{ stepNode.outputTable }}</span></span>
+          </template>
+        </span>
+        <button class="rc-btn dv-help-btn" type="button" title="表结构详情" @click="openTableDetail">
+          <el-icon><QuestionFilled /></el-icon>
+        </button>
+      </template>
       </template>
       <template #quick>
         <el-dropdown trigger="click" @command="onCommonQuerySelect">
@@ -1355,13 +1405,17 @@ onUnmounted(() => {
   border: 0;
   border-radius: 0;
 }
-.dv-step-table {
-  float: right;
-  margin-left: 12px;
-  color: var(--rc-faint);
-  font-family: var(--rc-mono, monospace);
-  font-size: 11px;
-}
+/* 按步骤的输入 / 输出范围：样式与源数据视图摘要行里的同名小段一致（那边是 ResultView 的 scoped 样式） */
+.dv-step-hint { flex: none; color: var(--rc-faint); font-size: 12px; white-space: nowrap; }
+.dv-step-scope { display: inline-flex; flex: none; align-items: center; gap: 6px; }
+.dv-scope-piece { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--rc-text-2); white-space: nowrap; }
+.dv-scope-piece .k { font-size: 11px; color: var(--rc-faint); }
+.dv-scope-piece .v { font-family: var(--rc-mono, monospace); font-size: 11.5px; }
+.dv-scope-sep { color: #cbd5e1; }
+button.dv-scope-piece.is-btn { border: 0; background: transparent; font: inherit; padding: 2px 6px; border-radius: 6px; cursor: pointer; opacity: .55; }
+button.dv-scope-piece.is-btn:hover { opacity: .85; background: var(--rc-border-soft); }
+button.dv-scope-piece.is-btn.active { opacity: 1; background: var(--rc-primary-bg); }
+button.dv-scope-piece.is-btn.active .k, button.dv-scope-piece.is-btn.active .v { color: var(--rc-primary-ink); }
 .rc-icon-btn {
   display: inline-flex;
   align-items: center;
