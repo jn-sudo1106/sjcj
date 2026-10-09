@@ -293,3 +293,53 @@ describe('DataQueryPanel · 文件路径格', () => {
     expect(wrapper.find('[data-testid="data-cell-file"]').exists()).toBe(false)
   })
 })
+
+// 1008-07：单行模式（oneRow）。数据中心把筛选与操作并成一行，其他复用方仍是默认布局，不受影响。
+describe('DataQueryPanel · 单行模式（1008-07）', () => {
+  const slots = {
+    context: '<span data-testid="ctx">表与源</span>',
+    quick: '<span data-testid="quick">快捷</span>',
+    actions: '<button data-testid="act">操作</button>',
+    toolbar: '<div data-testid="below">批量条</div>',
+  }
+  const mountWith = (props: Record<string, unknown>) => mount(DataQueryPanel, {
+    global: { plugins: [ElementPlus] },
+    props: { tableId: 't1', columns: COLUMNS, showState: true, ...props },
+    slots,
+  })
+  const childOrder = (wrapper: ReturnType<typeof mountWith>) =>
+    Array.from(wrapper.get('[data-testid="data-query-primary"]').element.children).map((el) => el.className.toString())
+
+  it('默认布局不变：表 / 源在最前，列选择器在下方工具行，操作插槽不渲染', () => {
+    const wrapper = mountWith({})
+    const row = wrapper.get('[data-testid="data-query-primary"]')
+    expect(row.classes()).not.toContain('is-one-row')
+    expect(childOrder(wrapper)[0]).toContain('dqp-context')
+    expect(row.find('[data-testid="act"]').exists()).toBe(false)
+    expect(row.find('[data-testid="column-picker-btn"]').exists()).toBe(false)
+    expect(wrapper.get('.dqp-table-tools').find('[data-testid="column-picker-btn"]').exists()).toBe(true)
+    expect(wrapper.get('.dqp-table-tools').find('[data-testid="below"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('单行：表 / 源排在状态之后，查询 / 清空 / 高级筛选成一组，操作插槽和列选择器并入同一行', () => {
+    const wrapper = mountWith({ oneRow: true })
+    const row = wrapper.get('[data-testid="data-query-primary"]')
+    expect(row.classes()).toContain('is-one-row')
+    const order = childOrder(wrapper)
+    const at = (name: string) => order.findIndex((c) => c.includes(name))
+    expect(at('dqp-state')).toBeGreaterThanOrEqual(0)
+    expect(at('dqp-context')).toBeGreaterThan(at('dqp-state'))
+    expect(at('dqp-time-range')).toBeGreaterThan(at('dqp-context'))
+    expect(at('dqp-query-actions')).toBeGreaterThan(at('dqp-time-range'))
+    const group = wrapper.get('.dqp-query-actions')
+    expect(group.findAll('button').map((b) => b.text().replace(/\s+/g, ''))).toEqual(['查询', '清空', '高级筛选⌄'])
+    expect(row.find('[data-testid="act"]').exists()).toBe(true)
+    expect(row.find('[data-testid="quick"]').exists()).toBe(true)
+    expect(row.find('[data-testid="column-picker-btn"]').exists()).toBe(true)
+    // 列选择器只出现一次；整行内容（批量条）仍在下方 toolbar 插槽
+    expect(wrapper.findAll('[data-testid="column-picker-btn"]')).toHaveLength(1)
+    expect(wrapper.get('.dqp-table-tools').find('[data-testid="below"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+})
