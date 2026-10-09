@@ -520,7 +520,11 @@ export function dataRowFromLegacy(input: unknown): DataRow {
   const systemKeys = new Set([
     'ENTRY_ID', 'SOURCE_ID', 'CONFIG_ID', 'ENTRY_TYPE_ID', 'DETAIL_ID', 'PARENT_ID', 'CATEGORY_ID',
     'STATE', 'NEXT_FLAG', 'CREATE_DT', 'UPDATE_DT', 'K0', 'SEQ', 'TIMES', 'FILE_ID',
+    'SOURCE_NAME', 'ENTRY_TYPE_NAME', 'VER', 'FLAG1',
     'TASK_ID', 'RUN_ID',
+    // entryDetail 返回 camelCase 键（旧平台详情顶部字段），同样移出 values
+    'entryId', 'sourceId', 'configId', 'detailId', 'parentId', 'categoryId', 'state', 'nextFlag',
+    'createDt', 'updateDt', 'k0', 'seq', 'times', 'fileId', 'sourceName', 'entryTypeId', 'entryTypeName', 'ver', 'flag1',
   ])
   const values = Object.fromEntries(Object.entries(record).filter(([key]) => !systemKeys.has(key)))
   const titleValue = record.TITLE ?? record.title ?? record.NAME ?? record.name
@@ -547,6 +551,12 @@ export function dataRowFromLegacy(input: unknown): DataRow {
     seq: str(record.SEQ),
     times: str(record.TIMES),
     fileId: str(record.FILE_ID),
+    // 详情顶部字段（旧平台 ENTRY_DETAIL.base；camelCase 优先，大写兜底，兼容两种契约）
+    sourceName: str(record.sourceName ?? record.SOURCE_NAME),
+    entryTypeId: str(record.entryTypeId ?? record.ENTRY_TYPE_ID),
+    entryTypeName: str(record.entryTypeName ?? record.ENTRY_TYPE_NAME),
+    ver: str(record.ver ?? record.VER),
+    flag1: str(record.flag1 ?? record.FLAG1),
     values,
     // 以下为 mock 遗留字段，随 DataView UI 重做一并移除（与该重做同批次，避免 UI 编译中断）
     title: String(titleValue ?? record.ENTRY_ID ?? ''),

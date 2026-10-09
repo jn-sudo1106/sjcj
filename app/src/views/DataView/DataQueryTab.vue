@@ -27,6 +27,7 @@ import BrowseModeToggle, { type BrowseMode } from '@/components/ResultToolbar/Br
 import RailNodePicker from '@/views/FlowCanvas/result/components/RailNodePicker.vue'
 import { buildHorizontalLayout, buildSourceSeed, effectiveInputTable, isDecision, isParallel, nodeOutputTable } from '@/views/FlowCanvas/canvas/flowModel'
 import { downloadCsv } from '@/utils/format/csvExport'
+import { exportTableFields } from '@/utils/format/exportFields'
 import { resultRowsCsv } from '@/views/FlowCanvas/result/exportRows'
 import { backTraceSources } from '@/utils/data/backTraceSources'
 import { unsupportedNextStepBatchFilters } from './batchGuards'
@@ -570,6 +571,19 @@ function copyDetailJson() {
     payload[key] = item.value
   }
   void copyToClipboard(JSON.stringify(payload, null, 2), '全部字段 JSON')
+}
+
+/** 点一行打开的详情抽屉里也能导出字段定义（与「表结构详情」共用同一份逻辑） */
+function onExportDetailFields() {
+  if (!tableMeta.value) {
+    ElMessage.error('请先选择数据表')
+    return
+  }
+  try {
+    exportTableFields(tableMeta.value)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '导出字段失败')
+  }
 }
 
 function onShowApi() {
@@ -1258,6 +1272,15 @@ onUnmounted(() => {
             </svg>
             复制全部 JSON
           </button>
+          <button class="rc-btn sm" type="button" data-testid="detail-export-fields" @click="onExportDetailFields">
+            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+              <path
+                d="M8 1.5v9M4.5 8 8 11.5 11.5 8M2.5 12.5v1h11v-1"
+                fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"
+              />
+            </svg>
+            导出字段
+          </button>
         </div>
         <dl class="rc-kv">
           <dt class="dv-detail-dt">
@@ -1298,10 +1321,126 @@ onUnmounted(() => {
             </button>
           </dt>
           <dd>{{ detail.data.row.sourceId || '—' }}</dd>
+          <dt class="dv-detail-dt">
+            <span>源名称</span>
+            <button
+              v-if="detail.data.row.sourceName"
+              type="button"
+              class="dv-copy-btn"
+              title="复制 源名称"
+              data-testid="detail-copy-source-name"
+              @click="copyText(detail.data.row.sourceName, '源名称')"
+            >
+              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                <path
+                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
+                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+          </dt>
+          <dd>{{ detail.data.row.sourceName || '—' }}</dd>
+          <dt class="dv-detail-dt">
+            <span>文件ID</span>
+            <button
+              v-if="detail.data.row.fileId"
+              type="button"
+              class="dv-copy-btn"
+              title="复制 文件ID"
+              data-testid="detail-copy-file-id"
+              @click="copyText(detail.data.row.fileId, '文件ID')"
+            >
+              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                <path
+                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
+                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+          </dt>
+          <dd>{{ detail.data.row.fileId || '—' }}</dd>
+          <dt class="dv-detail-dt">
+            <span>类型ID</span>
+            <button
+              v-if="detail.data.row.entryTypeId"
+              type="button"
+              class="dv-copy-btn"
+              title="复制 类型ID"
+              data-testid="detail-copy-type-id"
+              @click="copyText(detail.data.row.entryTypeId, '类型ID')"
+            >
+              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                <path
+                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
+                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+          </dt>
+          <dd>{{ detail.data.row.entryTypeId || '—' }}</dd>
+          <dt class="dv-detail-dt">
+            <span>类型名</span>
+            <button
+              v-if="detail.data.row.entryTypeName"
+              type="button"
+              class="dv-copy-btn"
+              title="复制 类型名"
+              data-testid="detail-copy-type-name"
+              @click="copyText(detail.data.row.entryTypeName, '类型名')"
+            >
+              <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                <path
+                  d="M5.5 2.5h6a1 1 0 0 1 1 1v6M3.5 5.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-6a1 1 0 0 1 1-1Z"
+                  fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+          </dt>
+          <dd>{{ detail.data.row.entryTypeName || '—' }}</dd>
+          <dt>父ID</dt>
+          <dd>
+            <a
+              v-if="detail.data.row.categoryId && detail.data.row.parentId && detail.data.row.parentId !== '0'"
+              class="dv-a"
+              data-testid="detail-open-parent"
+              @click="openParentDetail(detail.data.row)"
+            >{{ detail.data.row.parentId }}</a>
+            <span v-else>{{ detail.data.row.parentId || '—' }}</span>
+          </dd>
+          <dt>任务ID</dt>
+          <dd>
+            <a
+              v-if="detail.data.row.detailId"
+              class="dv-a"
+              data-testid="detail-open-task"
+              @click="openTaskInstByDetail(detail.data.row)"
+            >{{ detail.data.row.detailId }}</a>
+            <span v-else>—</span>
+          </dd>
           <dt>创建时间</dt>
           <dd>{{ detail.data.row.createDt || '—' }}</dd>
           <dt>更新时间</dt>
           <dd>{{ detail.data.row.updateDt || '—' }}</dd>
+          <dt>版本</dt>
+          <dd>{{ detail.data.row.ver || '—' }}</dd>
+          <dt>总次数</dt>
+          <dd>{{ detail.data.row.times || '—' }}</dd>
+          <dt>序号</dt>
+          <dd>{{ detail.data.row.seq || '—' }}</dd>
+          <dt>抓取日期</dt>
+          <dd>{{ detail.data.row.flag1 || '—' }}</dd>
+          <dt>原始</dt>
+          <dd>
+            <a
+              v-if="detail.data.row.k0"
+              class="dv-a"
+              data-testid="detail-open-raw"
+              @click="openRawJson(detail.data.row)"
+            >查看</a>
+            <span v-else>—</span>
+          </dd>
+          <dt>子数据量</dt>
+          <dd>{{ detail.data.subsCnt ?? '—' }}</dd>
           <template v-for="item in detail.data.showItems" :key="item.itemId ?? item.columnName">
             <dt class="dv-detail-dt">
               <span>{{ item.itemName || item.columnName }}</span>
@@ -1538,6 +1677,7 @@ button.dv-scope-piece.is-btn.active .k, button.dv-scope-piece.is-btn.active .v {
   margin-bottom: 12px;
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
 }
 .dv-detail-toolbar .rc-btn {
   display: inline-flex;

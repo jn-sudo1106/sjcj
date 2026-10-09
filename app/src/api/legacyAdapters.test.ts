@@ -587,15 +587,30 @@ describe('数据详情 / 统计行适配（E 包 T1c）', () => {
   it('entryDetailFromLegacy：showItems/subs 从行字段中摘出，不落进 row.values', () => {
     const detail = entryDetailFromLegacy({
       ENTRY_ID: '88231', SOURCE_ID: '161725', K1: '正文',
+      sourceName: '新浪财经', entryTypeId: '1042', entryTypeName: '公告正文', ver: '3', flag1: '2026-10-08',
       showItems: [{ itemId: '1', columnName: 'K1', itemName: '正文', value: '正文' }],
       subs: [{ ENTRY_ID: '88232', SOURCE_ID: '161725' }],
     })
     expect(detail.row).toMatchObject({ dataId: '88231', sourceId: '161725' })
     expect(detail.row.values).toEqual({ K1: '正文' })
+    // 详情顶部字段（旧平台 ENTRY_DETAIL.base）：camelCase 直读，不落进 values
+    expect(detail.row).toMatchObject({ sourceName: '新浪财经', entryTypeId: '1042', entryTypeName: '公告正文', ver: '3', flag1: '2026-10-08' })
     expect(detail.showItems).toEqual([{ itemId: '1', columnName: 'K1', itemName: '正文', value: '正文' }])
     // 0904：subs 现在是 EntrySubRow（row + showItems + tableId/tableName），
     // 不再是裸 DataRow——子行自带 24 个字段，摊平成 DataRow 会把它们全丢掉
     expect(detail.subs).toEqual([expect.objectContaining({ row: expect.objectContaining({ dataId: '88232' }) })])
+  })
+
+  it('dataRowFromLegacy：详情顶部字段也认大写键（SOURCE_NAME/ENTRY_TYPE_ID 等），并移出 values', () => {
+    const row = dataRowFromLegacy({
+      ENTRY_ID: '1', SOURCE_ID: '2',
+      SOURCE_NAME: 'twitter1', ENTRY_TYPE_ID: '6200029', ENTRY_TYPE_NAME: '推特抓取', VER: '2', FLAG1: '2026-10-07',
+      K1: '内容',
+    })
+    expect(row).toMatchObject({
+      sourceName: 'twitter1', entryTypeId: '6200029', entryTypeName: '推特抓取', ver: '2', flag1: '2026-10-07',
+    })
+    expect(row.values).toEqual({ K1: '内容' })
   })
 
   it('entryDetailFromLegacy：subs 缺失时为 undefined，不是空数组', () => {

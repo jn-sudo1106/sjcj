@@ -102,6 +102,16 @@ export interface DataRow {
   seq?: string // SEQ
   times?: string // TIMES
   fileId?: string // FILE_ID
+  /** SOURCE_NAME：源名称（entryDetail 返回；列表行通常没有，详情抽屉展示） */
+  sourceName?: string
+  /** ENTRY_TYPE_ID：表 ID（entryDetail 返回；旧平台详情顶部「类型ID」） */
+  entryTypeId?: string
+  /** ENTRY_TYPE_NAME：表名（entryDetail 返回；旧平台详情顶部「类型名」） */
+  entryTypeName?: string
+  /** VER：版本（entryDetail 返回；旧平台详情顶部「版本」） */
+  ver?: string
+  /** FLAG1：抓取日期（entryDetail 返回；旧平台详情顶部「抓取日期」） */
+  flag1?: string
   values?: Record<string, unknown> // 动态列值（键 = 大写物理列名 K1/K2...）
 
   /** @deprecated mock 时代概念，无旧平台契约来源；随 DataView UI 重做一并移除（UI 仍在读，先留存避免编译中断） */
