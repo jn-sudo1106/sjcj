@@ -15,6 +15,35 @@ const visible = computed({
   get: () => props.modelValue,
   set: (value) => emit('update:modelValue', value),
 })
+
+// ---- 抽屉宽度（2026-10-10：字段定义列多且长，支持拖左边缘拉宽；拖过就记住） ----
+// 用 el-drawer 原生 resizable（官方 useResizable，rtl 下把手在左边缘），
+// 松手时 resize-end 事件回传最终宽度，这里负责持久化 + 下次打开沿用。
+const DRAWER_WIDTH_KEY = 'rc.dataview.entryEditor.drawerWidth'
+const DRAWER_WIDTH_DEFAULT = 760
+const DRAWER_WIDTH_MIN = 560
+function readDrawerWidth(): number {
+  try {
+    const value = Number(window.localStorage.getItem(DRAWER_WIDTH_KEY))
+    return Number.isFinite(value) && value >= DRAWER_WIDTH_MIN ? value : DRAWER_WIDTH_DEFAULT
+  } catch {
+    return DRAWER_WIDTH_DEFAULT
+  }
+}
+const drawerWidth = ref(readDrawerWidth())
+const drawerSize = computed(() => `${drawerWidth.value}px`)
+function writeDrawerWidth(width: number): void {
+  try {
+    window.localStorage.setItem(DRAWER_WIDTH_KEY, String(Math.round(width)))
+  } catch {
+    /* 存不下就算了，下次退回默认宽度 */
+  }
+}
+/** 官方 resizable 拖拽松手：size 是最终像素宽，写入本地偏好供下次打开沿用 */
+function onResizeEnd(_evt: MouseEvent, size: number) {
+  drawerWidth.value = Math.max(DRAWER_WIDTH_MIN, Math.round(size))
+  writeDrawerWidth(drawerWidth.value)
+}
 const form = reactive<EntryType>({ tableId: '', tableName: '', name: '', remark: '', fields: [] })
 const isEdit = computed(() => !!props.entry?.tableId)
 const advancedOpen = ref(false)
@@ -192,7 +221,7 @@ async function submit() {
 </script>
 
 <template>
-  <el-drawer v-model="visible" title="数据表编辑" size="760px" append-to-body>
+  <el-drawer v-model="visible" title="数据表编辑" :size="drawerSize" resizable append-to-body @resize-end="onResizeEnd">
     <div class="ete-grid">
       <div v-if="isEdit" class="rc-field"><label>表ID</label><input class="rc-input" :value="form.tableId" disabled /></div>
       <div class="rc-field"><label>名称</label><input v-model="form.name" class="rc-input" @input="onNameInput" /></div>
