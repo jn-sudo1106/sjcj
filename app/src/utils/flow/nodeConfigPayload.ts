@@ -145,6 +145,9 @@ const TEMPLATE_CONFIG_TYPE: Record<string, number> = {
 export function configTypeFrom(cfg: NodeConfig): number | undefined {
   const byTemplate = cfg.template ? TEMPLATE_CONFIG_TYPE[cfg.template] : undefined
   if (byTemplate) return byTemplate
+  // 后端已是 130 的节点（后台直接改的类型、或经「更换」带进来的）没有 template，
+  // 内存里的 snatchType 还是 `[90]`——不在这里拦，保存就把 130 写回 90（实测配置 1401083）。
+  if (cfg.configType === '130') return 130
   if (cfg.ruleCfg) return 600
   const code = cfg.collectCfg?.snatchType?.match(/^\[(\d+)\]/)?.[1]
   return code ? Number(code) : undefined

@@ -613,4 +613,12 @@ describe('coreParam（PDF 抓取：保存时把业务规则描述与模型选择
     cfg.collectCfg!.snatchType = '[90] - 网页抓取'
     expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(130)
   })
+
+  it('没有 template、后端 configType 已是 130 的节点保存时仍落 130（snatchType 是 90 也不回写）', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['web-detail'])
+    cfg.template = undefined
+    cfg.configType = '130'
+    cfg.collectCfg!.snatchType = '[90] - 网页抓取'
+    expect(buildConfigPayload(cfg, { configType: 130 }).configType).toBe(130)
+  })
 })
