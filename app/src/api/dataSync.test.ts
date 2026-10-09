@@ -23,6 +23,18 @@ describe('旧数据同步契约', () => {
     expect(JSON.parse(fetchSpy.mock.calls[2]?.[1].body)).toEqual({ taskSchemeDTOList: [{ taskId: 4, clientId: 7 }], startId: 1, endId: 8 })
   })
 
+  it('非分页列表带 count:null 时仍返回数组（同步服务真实响应形状）', async () => {
+    const list = [{ entryTypeId: 900, tableName: 'sense_data.TB_CNEWS', typeName: '新闻' }]
+    const fetchSpy = vi.fn().mockImplementation(async () => response(list, null as unknown as number))
+    vi.stubGlobal('fetch', fetchSpy)
+    expect(await syncApi.tables(405)).toEqual(list)
+    expect(await syncApi.customers()).toEqual(list)
+    expect(await syncApi.customerDatabases(405, 0)).toEqual(list)
+    expect(await syncApi.tableColumns(900)).toEqual(list)
+    fetchSpy.mockImplementation(async () => response(null, null as unknown as number))
+    expect(await syncApi.taskChoices({ name: '同步' })).toEqual([])
+  })
+
   it('启停使用旧 PUT query 契约', async () => {
     const fetchSpy = vi.fn().mockResolvedValue(response(null))
     vi.stubGlobal('fetch', fetchSpy)

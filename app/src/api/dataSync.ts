@@ -13,6 +13,11 @@ function call<T>(path: string, method: Method, params?: Record<string, unknown>,
   })
 }
 
+// 同步服务的非分页列表也带 count:null，公共请求层会把数组包成 { list, total }，这里拆回数组。
+function callList<T>(path: string, params?: Record<string, unknown>) {
+  return call<T[] | SyncPage<T>>(path, 'GET', params).then((res) => (Array.isArray(res) ? res : res?.list ?? []))
+}
+
 export interface SyncPage<T> { list: T[]; total: number }
 export interface SyncCustomer { id: Id; customerName: string }
 export interface SyncClient {
@@ -53,15 +58,15 @@ export interface SyncStatistic {
 }
 
 export const syncApi = {
-  customers: () => call<SyncCustomer[]>('/customer/all', 'GET'),
+  customers: () => callList<SyncCustomer>('/customer/all'),
   clients: (params: Record<string, unknown>) => call<SyncPage<SyncClient>>('/customer/client/page', 'POST', params),
   databases: (params: Record<string, unknown>) => call<SyncPage<SyncDatabase>>('/customer/database/page', 'POST', params),
   customerDatabases: (customerId: Id, type: 0 | 1) =>
-    call<SyncDatabase[]>('/customer/database/list', 'GET', { customerId, type }),
+    callList<SyncDatabase>('/customer/database/list', { customerId, type }),
   setClientSwitch: (id: Id, column: 'timingSync' | 'fileSync' | 'realtimeSync', enabled: boolean) =>
     call<unknown>('/customer/client/switch', 'PUT', { id, column, switchValue: enabled ? 'on' : 'off' }),
-  tables: (groupId: Id, name = '') => call<SyncTable[]>('/database/entry-list', 'GET', { groupId, name }),
-  tableColumns: (tableId: Id) => call<SyncTableColumn[]>('/database/table-info', 'GET', { tableId }),
+  tables: (groupId: Id, name = '') => callList<SyncTable>('/database/entry-list', { groupId, name }),
+  tableColumns: (tableId: Id) => callList<SyncTableColumn>('/database/table-info', { tableId }),
   tasks: (params: Record<string, unknown>) => call<SyncPage<SyncTask>>('/task-overview/page', 'POST', params),
   saveTask: (params: Record<string, unknown>) => call<unknown>('/task-overview/info', 'POST', params),
   taskDetail: (id: Id) => call<SyncTaskConfig>('/task-config/detail', 'GET', { id }),
@@ -76,7 +81,7 @@ export const syncApi = {
     call<unknown>('/task-overview', 'DELETE', { taskId, clientId, tableName, tableOperation }),
   logs: (params: Record<string, unknown>) => call<SyncPage<SyncLog>>('/task-log/log-page', 'POST', params),
   statistics: (params: Record<string, unknown>) => call<SyncPage<SyncStatistic>>('/task-log/statistic-page', 'POST', params),
-  taskChoices: (params: Record<string, unknown>) => call<SyncTask[]>('/task-overview/list', 'GET', params),
+  taskChoices: (params: Record<string, unknown>) => callList<SyncTask>('/task-overview/list', params),
 }
 
 export function mapSyncColumns(columns: SyncTableColumn[]): SyncColumnMap[] {
