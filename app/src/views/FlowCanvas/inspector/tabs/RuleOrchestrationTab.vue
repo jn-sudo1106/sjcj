@@ -533,6 +533,7 @@ function formatFileSize(size: number): string {
 
 onBeforeUnmount(() => {
   releaseVideoAudioUrl()
+  window.clearTimeout(promptDescribeTimer)
   translateAbort.value?.abort()
   // 切节点时本组件重建（样本文件与解析结果随实例清零），但挂着的 SSE 流不会自己断：
   // 不在这里 abort，上一节点还在流式返回的内容会继续 patch 到此刻选中的另一个节点上。
@@ -890,6 +891,33 @@ watch(
 const sourceCron = computed(() => nodeScheduleCron(cfg.value, sourceSchedule.value))
 
 let promptRefreshSeq = 0
+
+/**
+ * 描述文本框 → 提示词 `{{describe}}` 的同步源。
+ *
+ * 只对 PDF抓取 生效，且必须防抖：这个值是编排 Tab watcher 的依赖，直连文本框的话
+ * 用户每敲一个字都要重新拉一次提示词模板（模板正文有几 KB），防抖到停手后再拼。
+ * 首帧不发第二次请求——seed 为 null 时直接落值，不排定时器。
+ */
+const promptDescribeSeed = ref<string | null>(null)
+let promptDescribeTimer: number | undefined
+watch(
+  () => [id.value, isPdf.value ? orchCfg.value.describe ?? '' : ''] as const,
+  ([nodeId, value], previous) => {
+    window.clearTimeout(promptDescribeTimer)
+    // 换节点 / 首次进 Tab：直接落值，走的是主 watcher 那一次取模板，不额外排定时器
+    if (previous === undefined || previous[0] !== nodeId || promptDescribeSeed.value === null) {
+      promptDescribeSeed.value = value
+      return
+    }
+    if (promptDescribeSeed.value === value) return
+    promptDescribeTimer = window.setTimeout(() => {
+      promptDescribeSeed.value = value
+    }, 400)
+  },
+  { immediate: true },
+)
+
 watch(
   () => [
     id.value,
@@ -904,6 +932,9 @@ watch(
     promptListCategory.value,
     orchCfg.value.inputFields?.join(',') ?? '',
     orchCfg.value.outputFields?.join(',') ?? '',
+    orchCfg.value.modelProviderCode ?? '',
+    orchCfg.value.modelCode ?? '',
+    promptDescribeSeed.value ?? '',
     inputFieldOptions.value.map((field) => `${field.itemCode}:${field.itemName}`).join(','),
     outputFieldOptions.value.map((field) => `${field.itemCode}:${field.itemName}`).join(','),
   ] as const,
@@ -932,6 +963,9 @@ watch(
         outputFields: orchCfg.value.outputFields ?? [],
         inputFieldOptions: inputFieldOptions.value,
         outputFieldOptions: outputFieldOptions.value.length ? outputFieldOptions.value : inputFieldOptions.value,
+        providerCode: orchCfg.value.modelProviderCode ?? '',
+        model: orchCfg.value.modelCode ?? '',
+        describe: promptDescribeSeed.value ?? '',
       })
       // 文章生成摘要节点：模板取不到的信号要留给界面（不能靠"提示词非空"判断能不能跑）
       if (isArticleSummary.value) articlePromptMissing.value = !applied

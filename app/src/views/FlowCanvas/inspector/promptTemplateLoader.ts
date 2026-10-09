@@ -13,6 +13,9 @@ export interface PromptTemplateLoadContext {
   outputFields: string[]
   inputFieldOptions: RuleFieldOption[]
   outputFieldOptions: RuleFieldOption[]
+  providerCode?: string
+  model?: string
+  describe?: string
 }
 
 export async function loadPromptTemplateForNode(context: PromptTemplateLoadContext): Promise<string | null> {
@@ -28,5 +31,8 @@ export async function loadPromptTemplateForNode(context: PromptTemplateLoadConte
     outputFields: context.outputFields,
     inputFieldOptions: context.inputFieldOptions,
     outputFieldOptions: context.outputFieldOptions,
+    providerCode: context.providerCode,
+    model: context.model,
+    describe: context.describe,
   })
 }
