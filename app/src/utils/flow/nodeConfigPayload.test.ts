@@ -606,4 +606,11 @@ describe('coreParam（PDF 抓取：保存时把业务规则描述与模型选择
     cfg.execCfg = { ...makeDefaultExecConfig(), describe: '描述', modelProviderCode: 'qwen', modelCode: 'qwen-max' }
     expect(buildConfigPayload(cfg).coreParam).toBeUndefined()
   })
+
+  it('PDF 节点的 snatchType 是 90 时仍落 130（模板信号优先于展示串）', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['pdf-collect'])
+    cfg.template = 'pdf'
+    cfg.collectCfg!.snatchType = '[90] - 网页抓取'
+    expect(buildConfigPayload(cfg, { configType: 90 }).configType).toBe(130)
+  })
 })
