@@ -6,6 +6,7 @@
 import { computed, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { canAccess } from '@/composables/usePermission'
+import { runnerManagementAvailable } from '@/constants/deployGates'
 import NodeTypeTab from './NodeTypeTab.vue'
 import CategoryTab from './CategoryTab.vue'
 import RunnerManagementTab from './RunnerManagementTab.vue'
@@ -13,17 +14,18 @@ import CodeManagementTab from './CodeManagementTab.vue'
 import CodeRepositoryTab from './CodeRepositoryTab.vue'
 import DirectoryLayoutTab from './DirectoryLayoutTab.vue'
 
-const ALL_TABS: { key: string; label: string; permission: string; comp: Component }[] = [
+// runner：依赖 Runner 管理服务的 tab，部署环境还没有这个服务，先隐藏（见 runnerManagementAvailable）
+const ALL_TABS: { key: string; label: string; permission: string; comp: Component; runner?: true }[] = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', comp: NodeTypeTab },
   { key: 'category', label: '分类目录', permission: 'settings:category', comp: CategoryTab },
-  { key: 'runners', label: 'Runner 实例', permission: 'settings:runners', comp: RunnerManagementTab },
-  { key: 'assignments', label: '队列分配', permission: 'settings:assignments', comp: RunnerManagementTab },
-  { key: 'site-code', label: '节点代码', permission: 'settings:releases', comp: CodeManagementTab },
-  { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', comp: CodeRepositoryTab },
-  { key: 'directory-layout', label: '下发目录', permission: 'settings:releases', comp: DirectoryLayoutTab },
-  { key: 'releases', label: '发布版本', permission: 'settings:releases', comp: RunnerManagementTab },
+  { key: 'runners', label: 'Runner 实例', permission: 'settings:runners', comp: RunnerManagementTab, runner: true },
+  { key: 'assignments', label: '队列分配', permission: 'settings:assignments', comp: RunnerManagementTab, runner: true },
+  { key: 'site-code', label: '节点代码', permission: 'settings:releases', comp: CodeManagementTab, runner: true },
+  { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', comp: CodeRepositoryTab, runner: true },
+  { key: 'directory-layout', label: '下发目录', permission: 'settings:releases', comp: DirectoryLayoutTab, runner: true },
+  { key: 'releases', label: '发布版本', permission: 'settings:releases', comp: RunnerManagementTab, runner: true },
 ]
-const tabs = computed(() => ALL_TABS.filter((t) => canAccess(t.permission)))
+const tabs = computed(() => ALL_TABS.filter((t) => canAccess(t.permission) && (!t.runner || runnerManagementAvailable())))
 
 const route = useRoute()
 const router = useRouter()

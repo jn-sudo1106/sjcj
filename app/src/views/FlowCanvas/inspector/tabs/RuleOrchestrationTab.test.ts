@@ -2650,6 +2650,17 @@ describe('RuleOrchestrationTab · 非规则节点抓取配置（S3-3）', () => 
     expect(dialog.props('queueName')).toBe('news_list')
   })
 
+  it('部署构建没有站点脚本生成服务：不显示「AI 生成 Python 脚本」', async () => {
+    vi.stubEnv('DEV', false)
+    try {
+      const { wrapper } = mountOnCollectorNode()
+      await flushPromises()
+      expect(wrapper.find('[data-testid="open-site-script-generator"]').exists()).toBe(false)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('任务队列未填写时沿用任务配置显示的默认队列', async () => {
     const { flow, wrapper } = mountOnCollectorNode()
     useSourceStore().sourceCfg = { sourceId: 's-1', name: '测试源', url: 'https://www.realcan.cn/list', configId: 'c-1', mainTable: '', owner: '', state: 'C' }

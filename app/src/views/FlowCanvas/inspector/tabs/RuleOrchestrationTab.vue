@@ -47,6 +47,7 @@ import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import { useFlowStore } from '@/stores/flow'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import SiteScriptGeneratorDialog from '../SiteScriptGeneratorDialog.vue'
+import { siteScriptAiAvailable } from '@/constants/deployGates'
 import AlertConfigPanel from '../AlertConfigPanel.vue'
 
 // 编辑对象来自节点编辑上下文（0917）：画布右侧配置区 = 全局 flow store，
@@ -1339,6 +1340,8 @@ async function onGenerateScript(
 
 const workbenchOpen = ref(false)
 const siteScriptOpen = ref(false)
+// 部署环境还没有站点脚本生成服务，入口先隐藏（见 siteScriptAiAvailable）
+const siteScriptAvailable = siteScriptAiAvailable()
 // AI 抓列表使用当前源实际入口；configUrl 是可被多个源复用的配置 URL，可能不是本源列表页。
 const siteScriptUrl = computed(() => {
   const source = useFlowStore().sourceCfg ?? useFlowStore().sourceCtx
@@ -2094,7 +2097,7 @@ function onTestScript() {
       <template v-else>{{ generateLabel }}</template>
     </button>
     <button
-      v-if="!isRule && cfg?.collectCfg && !isScriptless"
+      v-if="!isRule && cfg?.collectCfg && !isScriptless && siteScriptAvailable"
       class="rc-btn"
       type="button"
       data-testid="open-site-script-generator"
