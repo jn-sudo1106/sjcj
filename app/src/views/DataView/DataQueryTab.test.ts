@@ -311,6 +311,22 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(body.text()).not.toContain('重新处理后续步骤')
   })
 
+  // 2026-10-09：数据同步服务在 133，只有连 133 的环境（2807）才显示「同步到其他环境」；
+  // 连 217（2806）时带过去的表在同步服务的库里可能不存在，同名表搬的也是 133 的数据
+  it('「同步到其他环境」只在连同步服务所在环境（133）时显示', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    await mountPage()
+    await waitForLoad()
+    expect(wrapper.find('[data-testid="data-sync"]').exists()).toBe(false)
+    wrapper.unmount()
+
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://115.227.21.133:9999')
+    await mountPage()
+    await waitForLoad()
+    expect(wrapper.find('[data-testid="data-sync"]').exists()).toBe(true)
+    vi.unstubAllEnvs()
+  })
+
   it('取数 API 与清除父表标识都在更多（0930-14D）', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']

@@ -27,6 +27,8 @@ import { extFromFieldHint, extFromName, ossPathWithExt } from '@/utils/ossFile'
 import { isOssFilePath } from '@/views/FlowCanvas/result/rowDetailFields'
 import FilePreview from '@/views/FlowCanvas/result/components/FilePreview.vue'
 import DataFetchApiDialog from '@/components/data/DataFetchApiDialog.vue'
+import { currentBackendHost } from '@/api/client'
+import { SYNC_PLATFORM_BACKEND_HOST } from '@/constants/backend'
 
 // 单表数据查看迁移方案（E 包）+ 数据表页_UI重写设计_2026-07-30：
 // 本文件覆盖数据范围/快捷查询/结果工具条/批量条/动态列表格/分页/数据详情抽屉/手动添加/手动修改/统计/
@@ -265,6 +267,8 @@ function buildQuery(): RowQuery {
 }
 
 const router = useRouter()
+// 「同步到其他环境」只在和同步服务同库的环境出现：别的环境带过去的表名，在同步服务的库里可能不存在，同名表搬的也是同步服务那边的数据
+const syncSameBackend = currentBackendHost() === SYNC_PLATFORM_BACKEND_HOST
 const selectedRowKeys = ref<string[]>([])
 
 async function onTableChange() {
@@ -907,7 +911,7 @@ onUnmounted(() => { if (sourceSearchTimer) clearTimeout(sourceSearchTimer) })
             :disabled="!tableId"
             @click="onExport"
           >导出 Excel</button>
-          <button v-if="tableMeta?.tableName" class="rc-btn" type="button" data-testid="data-sync" @click="router.push({ path: '/sync/create', query: { tableName: tableMeta.tableName } })">同步到其他环境</button>
+          <button v-if="syncSameBackend && tableMeta?.tableName" class="rc-btn" type="button" data-testid="data-sync" @click="router.push({ path: '/sync/create', query: { tableName: tableMeta.tableName } })">同步到其他环境</button>
           <el-dropdown v-if="canWrite && isTestTable" trigger="click">
             <button class="rc-btn" data-testid="data-delete" type="button">删除数据<el-icon class="et-caret"><ArrowDown /></el-icon></button>
             <template #dropdown>
