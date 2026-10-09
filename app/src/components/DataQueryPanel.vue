@@ -85,15 +85,19 @@ const props = withDefaults(
      * 操作按钮走 #actions 插槽；#toolbar 只留给批量条、SQL 提示这类整行内容。默认关，其他复用方不受影响。
      */
     oneRow?: boolean
+    /** 行可点击（调用方监听 row-click 开详情等）：鼠标移上去显示手型 */
+    rowClickable?: boolean
   }>(),
   {
     defaultSortField: '',
     defaultSortOrder: '',
     oneRow: false,
+    rowClickable: false,
   },
 )
 const emit = defineEmits<{
-  'row-click': [row: DataRow]
+  /** 第二个参数是原始点击事件：调用方据此判断点的是不是单元格里自带动作的元素（链接、按钮、勾选框…） */
+  'row-click': [row: DataRow, event: Event]
   'update:selectedKeys': [string[]]
   'query-change': [DataQueryFilter]
   loaded: [{ rows: DataRow[]; total: number }]
@@ -301,8 +305,8 @@ function onFileCell(column: DataQueryColumn, value: unknown) {
   emit('file-click', String(value), { prop: column.hintProp ?? column.prop, columnName: column.prop, desc: column.label })
 }
 
-function onRowClick(row: DataRow) {
-  emit('row-click', row)
+function onRowClick(row: DataRow, _column: unknown, event: Event) {
+  emit('row-click', row, event)
 }
 </script>
 
@@ -400,7 +404,7 @@ function onRowClick(row: DataRow) {
       >列 {{ colVisibleCount }}/{{ columns.length }}</button>
     </div>
 
-    <div v-loading="loading" class="rc-table-scroll dqp-table">
+    <div v-loading="loading" class="rc-table-scroll dqp-table" :class="{ 'is-row-clickable': rowClickable }">
       <el-table
         :data="rows"
         :default-sort="defaultTableSort"
@@ -508,9 +512,9 @@ function onRowClick(row: DataRow) {
 .dqp-primary-row.is-one-row .dqp-query-actions .rc-btn:not(.primary) { border-color: transparent; background: transparent; color: var(--rc-text-2); }
 .dqp-primary-row.is-one-row .dqp-query-actions .rc-btn:not(.primary):hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 /* 13.6 寸（约 1090px 可用）下尽量让「筛选 + 查询」一屏装下，右边的操作按钮靠横向滚动 */
-.dqp-primary-row.is-one-row :deep(.dqp-data-id) { width: 104px !important; }
+.dqp-primary-row.is-one-row :deep(.dqp-data-id) { width: 132px !important; }
 .dqp-primary-row.is-one-row :deep(.dqp-parent-id) { width: 80px !important; }
-.dqp-primary-row.is-one-row :deep(.dqp-state) { width: 116px !important; }
+.dqp-primary-row.is-one-row :deep(.dqp-state) { width: 136px !important; }
 .dqp-primary-row.is-one-row :deep(.dqp-time-range) { width: 232px !important; min-width: 232px; }
 .dqp-table-tools { display: flex; align-items: center; gap: 8px; }
 .dqp-table-tools-main { flex: 1; min-width: 0; }
@@ -523,6 +527,7 @@ function onRowClick(row: DataRow) {
 .dqp-table :deep(.el-table td.el-table__cell), .dqp-table :deep(.el-table th.el-table__cell) { padding: 8px 0; font-size: 12px; }
 .dqp-table :deep(.el-table td.el-table__cell) { color: #334155; }
 .dqp-table :deep(.el-table__body tr:hover > td) { background: #f8fbff; }
+.dqp-table.is-row-clickable :deep(.el-table__body tr) { cursor: pointer; }
 .dqp-a { color: var(--rc-primary-ink); cursor: pointer; }
 .dqp-a:hover { text-decoration: underline; }
 /* 文件路径格：同 DataGrid 的路径格，按钮外观像链接，文字过长省略（悬停 title 看全路径） */

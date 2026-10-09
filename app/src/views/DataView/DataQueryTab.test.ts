@@ -633,7 +633,7 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(wrapper.text()).not.toContain('已选择')
   })
 
-  it('数据详情抽屉：点击 ENTRY_ID 调 dataApi.rowDetail 并展示 showItems', async () => {
+  it('数据详情抽屉：点一行调 dataApi.rowDetail 并展示 showItems', async () => {
     vi.spyOn(dataApi, 'rowDetail').mockResolvedValue({
       row: ROW,
       showItems: [{ itemId: '1', columnName: 'K1', itemName: '标题', value: '关于利润分配的公告' }],
@@ -643,11 +643,39 @@ describe('数据中心 · 数据查询 tab', () => {
     await mountPage()
     await waitForLoad()
 
-    await wrapper.find('a.dv-a').trigger('click') // ENTRY_ID 链接
+    await wrapper.find('.el-table__body tr').trigger('click')
     await flushPromises()
 
     expect(dataApi.rowDetail).toHaveBeenCalledWith('t1', '88231')
     expect(wrapper.text()).toContain('标题')
+  })
+
+  it('点一行开详情：点的是行里自带动作的链接 / 选中了文字时不叠开详情；整张表显示手型', async () => {
+    const detailSpy = vi.spyOn(dataApi, 'rowDetail').mockResolvedValue({ row: ROW, showItems: [] })
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    expect(wrapper.get('.dqp-table').classes()).toContain('is-row-clickable')
+    // ENTRY_ID 不再是链接，只剩源 / 任务这类各有动作的链接
+    expect(wrapper.findAll('a.dv-a').some((a) => a.text() === '88231')).toBe(false)
+
+    // 点源链接：只开源详情，不开行详情
+    await wrapper.findAll('a.dv-a').find((a) => a.text() === '600519')!.trigger('click')
+    await flushPromises()
+    expect(detailSpy).not.toHaveBeenCalled()
+
+    // 选中了文字（准备复制）：点行不开详情
+    const selection = vi.spyOn(window, 'getSelection').mockReturnValue({ toString: () => '选中的文字' } as Selection)
+    await wrapper.find('.el-table__body tr').trigger('click')
+    await flushPromises()
+    expect(detailSpy).not.toHaveBeenCalled()
+    selection.mockRestore()
+
+    await wrapper.find('.el-table__body tr').trigger('click')
+    await flushPromises()
+    expect(detailSpy).toHaveBeenCalledTimes(1)
   })
 
   // 2026-09-28：数据中心也能预览 OSS 文件路径（TB_KAIPANLA 详情json 这类 .json），与源数据视图同一个预览器
@@ -674,7 +702,7 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(preview().props('path')).toBe('/xtdb/kaipan/2026-09-28/386.json')
     expect(preview().props('ext')).toBe('json')
 
-    await wrapper.find('a.dv-a').trigger('click')
+    await wrapper.find('.el-table__body tr').trigger('click')
     await flushPromises()
     const detailFile = wrapper.find('[data-testid="detail-file"]')
     expect(detailFile.exists()).toBe(true)
@@ -760,7 +788,7 @@ describe('数据中心 · 数据查询 tab', () => {
     await mountPage()
     await waitForLoad()
 
-    // read 角色下操作列（详情列 ENTRY_ID 仍是唯一 dv-a，任务列不受 canWrite 限制，可查看）
+    // read 角色下没有操作列，任务列不受 canWrite 限制，可查看
     const taskLink = wrapper.findAll('a.dv-a').find((a) => a.text() === 'd-99')
     await taskLink!.trigger('click')
     await flushPromises()

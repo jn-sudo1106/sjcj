@@ -854,6 +854,14 @@ async function openDetailFor(forTableId: string, forDataId: string) {
   }
 }
 function openDetail(row: DataRow) { void openDetailFor(tableId.value, row.dataId) }
+// 点一行打开详情（原来要点 ENTRY_ID 那个链接）。点的是单元格里自带动作的东西（源 / 任务 / 父 ID 链接、
+// 按钮、勾选框、下拉、文件路径）时让它自己处理，不叠开详情；选中文字准备复制时也不开
+function onRowClickDetail(row: DataRow, event: Event) {
+  const target = event.target as HTMLElement | null
+  if (target?.closest('a, button, input, label, .el-checkbox, .el-dropdown, .el-button, [role="button"]')) return
+  if (window.getSelection()?.toString()) return
+  openDetail(row)
+}
 function openParentDetail(row: DataRow) {
   if (row.categoryId && row.parentId && row.parentId !== '0') void openDetailFor(row.categoryId, row.parentId)
 }
@@ -960,6 +968,7 @@ onUnmounted(() => {
       :columns="panelColumns"
       show-state
       one-row
+      row-clickable
       :selectable="canWrite"
       default-sort-field="updateDt"
       default-sort-order="descend"
@@ -967,6 +976,7 @@ onUnmounted(() => {
       @query-change="onPanelQueryChange"
       @loaded="onPanelLoaded"
       @file-click="onCellFile"
+      @row-click="onRowClickDetail"
     >
       <template #context>
       <BrowseModeToggle v-model="browseMode" />
@@ -1142,7 +1152,7 @@ onUnmounted(() => {
 
       <template #columns-before>
         <el-table-column prop="dataId" label="ENTRY_ID" width="105" fixed="left" sortable="custom">
-          <template #default="{ row }"><a class="dv-a" @click="openDetail(row)">{{ row.dataId }}</a></template>
+          <template #default="{ row }">{{ row.dataId }}</template>
         </el-table-column>
         <el-table-column prop="sourceId" label="源" width="100" sortable="custom">
           <template #default="{ row }">
