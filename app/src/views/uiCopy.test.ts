@@ -401,12 +401,17 @@ describe('最新方案 UI 入口收口', () => {
     expect(sourceBasicForm).not.toContain('使用已有配置')
   })
 
-  // 2026-10-08：套用模板 / 更换 / 复制流程只在多流程接口未上线时出现（上线后由流程标签栏负责），不能无条件渲染
-  it('源流程头展示当前流程；套用模板、更换、复制流程只在多流程接口未上线时出现', () => {
+  // 2026-10-08：更换 / 复制流程只在多流程接口未上线时出现（上线后由流程标签栏负责），不能无条件渲染；
+  // 1008-08：「套用流程模板」整个去掉，顶栏不再有搜索模板的下拉。
+  it('源流程头展示当前流程；更换、复制流程只在多流程接口未上线时出现，没有套用流程模板', () => {
     expect(canvasHeader).toContain('当前流程：')
     expect(canvasHeader).toContain('const legacyFlowOps = !workflowBindingApi.available()')
-    expect(canvasHeader).toMatch(/<template v-if="legacyFlowOps">\s*<div class="ch-flow-picker">/)
-    expect(canvasHeader).toContain('if (legacyFlowOps) void loadTemplates()')
+    expect(canvasHeader).toMatch(/<template v-if="legacyFlowOps">\s*(<!--[\s\S]*?-->\s*)?<span v-if="switchingFlow"/)
+    expect(canvasHeader).toContain('data-testid="replace-flow-open"')
+    expect(canvasHeader).toContain('data-testid="copy-current-flow"')
+    expect(canvasHeader).not.toContain('ch-flow-picker')
+    expect(canvasHeader).not.toContain('搜索并套用流程模板')
+    expect(canvasHeader).not.toContain('applyTemplateToSource(')
     expect(canvasHeader).not.toContain('负责人 ${s.owner}')
   })
 

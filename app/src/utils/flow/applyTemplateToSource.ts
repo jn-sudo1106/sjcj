@@ -1,4 +1,7 @@
-// 把流程模板套到一个源上：**两个入口共用的唯一实现**（2026-09-22 抽出）。
+// 流程复制 / 重载的共用实现（2026-09-22 抽出）。
+// 1008-08：「套用流程模板」整个功能去掉了（会上定的），`applyTemplateToSource()` 随之删除；
+// 下面的历史说明里提到它的地方保留，只作来龙去脉。
+//
 //
 // 抽它的起因是用户报「切换流程模板之后，所属流程应该也一并改掉吧」。查下去发现的不是
 // 「flowId 忘了改」，而是**顶部下拉那条路整个不落库**：它走 `flow.applyTemplate`，
@@ -19,22 +22,6 @@ import { validFlowIdOf } from '@/utils/flow/stepPersist'
 import { detachCopiedConfigs, type CopiedFlow, type DetachResult } from '@/utils/flow/copiedConfigs'
 import { ElMessage } from 'element-plus'
 
-export interface TemplateApplied {
-  /** 套用后本源所属的流程 ID */
-  flowId: string
-  /** 后端回执原文（「复制成功，共复制 N 个步骤」之类），用来直接给用户看 */
-  message: string
-  /** true = 本源原来没有流程，这次新建了一条并绑上——只有这种情况所属流程会变 */
-  createdFlow: boolean
-  /** 配置去共享结果：复制进来的步骤是否已换绑独立配置（false 分支读取步骤失败时为 undefined） */
-  detach?: DetachResult
-}
-
-export interface ApplyTemplateOptions {
-  /** 配置去共享的逐条进度（大流程很慢，调用方应展示进度） */
-  onProgress?: (done: number, total: number) => void
-}
-
 /** 配置去共享结果的用户提示（0929）：全部独立 / 部分失败仍共享，必须明示。 */
 export function reportDetachResult(detach: DetachResult | undefined, sourceLabel = '模板') {
   if (!detach) return
@@ -49,53 +36,8 @@ export function reportDetachResult(detach: DetachResult | undefined, sourceLabel
   }
 }
 
-export async function applyTemplateToSource(
-  templateFlowId: string,
-  sourceId: string,
-  knownFlowId?: string,
-  sourceName?: string,
-  opts: ApplyTemplateOptions = {},
-): Promise<TemplateApplied> {
-  // 列表接口不保证带 flowId，sourceDetail 一定带；查不到就按"没有流程"走新建那一路
-  let targetFlowId = knownFlowId
-  if (!targetFlowId) targetFlowId = (await sourceApi.sourceDetail(sourceId).catch(() => null))?.flowId
-
-  if (targetFlowId) {
-    // 追加场景：先尽力记下目标流程现有步骤，复制后只对**新进来**的步骤做配置去共享——
-    // 绝不动目标流程原有步骤的配置（它们不来自模板）。快照失败**不影响复制主体**，
-    // 只是不再自动去共享（below）。
-    const before = await flowCenterApi.steps(targetFlowId, { withConfigDetails: false }).catch(() => null)
-    const ack = await flowCenterApi.copyTemplateSteps(templateFlowId, targetFlowId)
-    if (!ack || !ack.ok) throw new Error(ack?.message || '复制模板步骤失败')
-    let detach: DetachResult | undefined
-    if (before) {
-      const after = (await flowCenterApi.steps(targetFlowId, { withConfigDetails: true }).catch(() => null)) ?? []
-      const onlyStepIds = new Set(
-        after.filter((s) => !before.some((b) => b.stepId === s.stepId)).map((s) => s.stepId),
-      )
-      if (onlyStepIds.size) {
-        detach = await detachCopiedConfigs(targetFlowId, {
-          onlyStepIds,
-          sourceFlowRef: `模板流程 #${templateFlowId}`,
-          onProgress: opts.onProgress,
-        })
-      }
-    } else {
-      // 复制前快照读不到：无法区分新旧步骤，宁可不自动换绑（避免动原有步骤），由前端提示手工核对。
-      detach = { ok: false, message: '复制前未能读取目标流程步骤，新增节点配置未自动独立，请核对', copied: 0, remainShared: 0 }
-    }
-    return { flowId: targetFlowId, message: ack.message ?? '', createdFlow: false, detach }
-  }
-
-  const copied = await copyFlowToSource(templateFlowId, sourceId, sourceName, {
-    sourceFlowRef: `模板流程 #${templateFlowId}`,
-    onProgress: opts.onProgress,
-  })
-  return { ...copied, createdFlow: true }
-}
-
 /**
- * 把一条流程整条复制给源并换绑（画布「更换流程」「复制当前流程」、套用模板在源无流程时共用）。
+ * 把一条流程整条复制给源并换绑（画布「更换流程」「复制当前流程」共用）。
  * 新流程名「源名-流程」；原流程不动，其他使用原流程的源不受影响。
  * `reuseConfigs`（0930）：用户选了「复用原配置」，只复制步骤不做配置去共享。
  */

@@ -208,9 +208,10 @@ describe('ConfigTab · 网页登录节点专属字段（S4-1）', () => {
   })
 })
 
-// S4-1：定时策略已从首采集节点解绑，节点配置中的独立折叠区对登录和列表节点都存在。
+// S4-1 曾让定时策略在登录和列表节点都显示；1008-08 起只在首节点显示（定时按源存，不在节点上，
+// 每个节点挂一份只会让人以为各节点各有定时）。首节点 = 主链上第一个真正抓取数据的节点，登录节点不算。
 describe('ConfigTab · 节点级定时策略', () => {
-  it('登录→列表抓取：定时策略独立展示在两个节点的节点配置中', async () => {
+  it('登录→列表抓取：定时策略只在列表抓取（首个真正抓取数据的节点）上显示，登录节点不显示', async () => {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
@@ -228,7 +229,52 @@ describe('ConfigTab · 节点级定时策略', () => {
     flow.setActiveTab('config')
     const loginWrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
     await flushPromises()
-    expect(loginWrapper.find('.ni-schedule').exists()).toBe(true)
+    expect(loginWrapper.find('.ni-schedule').exists()).toBe(false)
+  })
+
+  it('采集 → 规则：规则节点（非首节点）不显示定时策略，首节点显示', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['web-1'] = cloneConfig(NODE_CONFIGS['web-list'])
+    flow.configs['rule-1'] = cloneConfig(NODE_CONFIGS['rule'])
+    flow.main = ['start', 'web-1', 'rule-1', 'end']
+
+    flow.select('rule-1')
+    flow.setActiveTab('config')
+    const ruleWrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(ruleWrapper.find('.ni-schedule').exists()).toBe(false)
+    expect(ruleWrapper.text()).not.toContain('定时策略')
+    ruleWrapper.unmount()
+
+    flow.select('web-1')
+    const webWrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(webWrapper.find('.ni-schedule').exists()).toBe(true)
+    webWrapper.unmount()
+  })
+
+  it('流程不以采集节点开头（规则开头）：退回主链第一个节点显示，后面的节点不显示', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.configs['rule-a'] = cloneConfig(NODE_CONFIGS['rule'])
+    flow.configs['rule-b'] = cloneConfig(NODE_CONFIGS['rule'])
+    flow.main = ['start', 'rule-a', 'rule-b', 'end']
+
+    flow.select('rule-a')
+    flow.setActiveTab('config')
+    const first = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(first.find('.ni-schedule').exists()).toBe(true)
+    first.unmount()
+
+    flow.select('rule-b')
+    const second = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(second.find('.ni-schedule').exists()).toBe(false)
+    second.unmount()
   })
 })
 
@@ -314,6 +360,7 @@ describe('ConfigTab · 翻译助手（与规则处理同表单）', () => {
     setActivePinia(createPinia())
     const flow = useFlowStore()
     flow.configs['translate-1'] = cloneConfig(NODE_CONFIGS['translate'])
+    flow.main = ['start', 'translate-1', 'end'] // 定时策略只在首节点显示（1008-08）
     flow.select('translate-1')
     flow.setActiveTab('config')
     const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
@@ -343,6 +390,7 @@ describe('ConfigTab · 文章打标签（与规则处理同表单）', () => {
     setActivePinia(createPinia())
     const flow = useFlowStore()
     flow.configs['tag-1'] = cloneConfig(NODE_CONFIGS['article-tag'])
+    flow.main = ['start', 'tag-1', 'end'] // 定时策略只在首节点显示（1008-08）
     flow.select('tag-1')
     flow.setActiveTab('config')
     const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
@@ -376,6 +424,7 @@ describe('ConfigTab · 摘要/音视频处理节点（与规则处理同表单�
     setActivePinia(createPinia())
     const flow = useFlowStore()
     flow.configs['proc-1'] = cloneConfig(NODE_CONFIGS[seedKey])
+    flow.main = ['start', 'proc-1', 'end'] // 定时策略只在首节点显示（1008-08）
     flow.select('proc-1')
     flow.setActiveTab('config')
     const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
@@ -398,6 +447,7 @@ describe('ConfigTab · 定时启停（2026-09-22）', () => {
   function mountWithJob(jobId: string) {
     mockAssets()
     const { flow, wrapper } = mountOnRuleNode()
+    flow.main = ['start', 'rule-1', 'end'] // 定时策略只在首节点显示（1008-08）
     flow.setSourceJob({
       jobId, jobName: 'j', sourceId: 's-1', schedule: '0 0 0 * * ?',
       runCount: 0, successCount: 0, disabled: false,

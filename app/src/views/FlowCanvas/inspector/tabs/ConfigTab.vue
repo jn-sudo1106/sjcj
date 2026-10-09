@@ -198,6 +198,15 @@ function isRealCollectorNode(nodeId: string): boolean {
 }
 const isFirstCollectorNode = computed(() => isRealCollectorNode(id.value) && flow.main.find(isRealCollectorNode) === id.value)
 
+// 定时策略只在首节点显示（1008-08，会上定的）。定时是按**源**存的（job 表一个源一条 cron），不在节点上，
+// 以前每个节点的配置页都挂一份，改哪个节点改的都是同一条，看着像各节点各有定时。
+// 首节点 = 主链上第一个真正抓取数据的节点（跳过登录节点，同上面 isRealCollectorNode）；
+// 整条链都没有这样的节点（规则 / PDF 开头）时，退回主链上第一个节点。
+const showSchedule = computed(() => {
+  const firstCollector = flow.main.find(isRealCollectorNode)
+  return firstCollector ? firstCollector === id.value : flow.isFirstMainNodeId(id.value)
+})
+
 // 参数源：仅首节点 + 源是参数源（source.kind === 'param'）时展示只读摘要
 const isParamSource = computed(() => flow.sourceCfg?.kind === 'param')
 const showParamSourceEditor = computed(() => isFirstCollectorNode.value && isParamSource.value)
@@ -336,7 +345,7 @@ watch(
     </div>
     <!-- 定时策略：采集节点挪到「运行设置」上方（见下）；非采集节点没有运行设置，仍留在这里 -->
     <!-- 有定时就默认展开（2026-09-18 用户提）：收着的话根本不知道这个源还有定时在跑 -->
-    <details v-if="!cc || isPdf" class="ni-schedule" :open="!!flow.sourceJob">
+    <details v-if="(!cc || isPdf) && showSchedule" class="ni-schedule" :open="!!flow.sourceJob">
       <summary>定时策略</summary>
       <TaskScheduleSettings
         :model-value="scheduleSettings"
@@ -469,7 +478,7 @@ watch(
         </div>
         <EditParamSourceDialog v-model="editParamSourceVisible" />
       </template>
-      <details class="ni-schedule" :open="!!flow.sourceJob">
+      <details v-if="showSchedule" class="ni-schedule" :open="!!flow.sourceJob">
         <summary>定时策略</summary>
         <TaskScheduleSettings
           :model-value="scheduleSettings"

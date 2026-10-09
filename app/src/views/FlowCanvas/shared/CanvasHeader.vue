@@ -3,9 +3,9 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, CopyDocument, Search, Switch } from '@element-plus/icons-vue'
-import { applyTemplateToSource, copyFlowToSource, reloadSourceIntoCanvas, reportDetachResult } from '@/utils/flow/applyTemplateToSource'
+import { ElMessage } from 'element-plus'
+import { CopyDocument, Switch } from '@element-plus/icons-vue'
+import { copyFlowToSource, reloadSourceIntoCanvas, reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import ReplaceFlowDialog from './ReplaceFlowDialog.vue'
 import { confirmCopyFlow } from '@/utils/flow/confirmCopyFlow'
 import { flowCenterApi, workflowBindingApi, type FlowRecord } from '@/api'
@@ -41,70 +41,10 @@ watch(() => route.query.view, (next) => {
 onMounted(() => window.addEventListener('hashchange', syncView))
 onBeforeUnmount(() => window.removeEventListener('hashchange', syncView))
 
-// 多流程接口（workflow/*）在当前后端上线前，流程的套用模板 / 更换 / 复制仍用顶栏这三个原有操作；
+// 多流程接口（workflow/*）在当前后端上线前，流程的更换 / 复制仍用顶栏这两个原有操作；
 // 上线后改由流程标签栏负责，两套不同时出现（2026-10-08 合并 leo 分支时保留）。
+// 「套用流程模板」1008-08 起整个去掉（会上定的）：新建流程只留「空白 / 从现有流程复制」。
 const legacyFlowOps = !workflowBindingApi.available()
-
-const templates = ref<FlowRecord[]>([])
-const flowKeyword = ref('')
-const flowPickerOpen = ref(false)
-/**
- * 候选**只列已标记为模板的流程**（0903 Y8-24，2026-09-05 落地）。
- *
- * 这个下拉叫「切换流程模板」，之前却把 740 条流程全列出来——用户当场提出
- * 「这里的切换流程模板要展示为模板类型的流程，非模板类型不展示」。
- *
- * 原来做不了是因为 `FlowRecord` 上没有模板标记、后端也没答复能不能按它过滤（0903 H7）。
- * **两个前提都已解除**：H7 答复标记是 `templateFlag`(0/1) 且 `flowPaged` 支持服务端过滤，
- * `FlowRecord.isTemplate` 也已接上（acb2c4e）。这里改走 `flowCenterApi.templates()`
- * （后端专给的 `flowTemplateList`，不分页）。
- *
- * **仍然不做前端筛**：那条老口径没变——存量 740 条分页之后前端只能筛当前页，跨页是错的。
- */
-async function loadTemplates() {
-  templates.value = await flowCenterApi.templates()
-}
-onMounted(() => { if (legacyFlowOps) void loadTemplates() })
-
-const visibleTemplates = computed(() => {
-  const keyword = flowKeyword.value.trim().toLowerCase()
-  const matched = keyword
-    ? templates.value.filter((template) => template.name.toLowerCase().includes(keyword) || template.id.toLowerCase().includes(keyword))
-    : templates.value
-  return matched.slice(0, 10)
-})
-function openFlowPicker() {
-  flowPickerOpen.value = true
-}
-function closeFlowPicker() {
-  window.setTimeout(() => { flowPickerOpen.value = false }, 150)
-}
-function pickFlow(templateId: string) {
-  flowKeyword.value = ''
-  flowPickerOpen.value = false
-  void onSwitchFlow(templateId)
-}
-function manageFlows() {
-  flowKeyword.value = ''
-  flowPickerOpen.value = false
-  void onSwitchFlow('__manage_flows__')
-}
-
-// 顶部下拉 = **切换流程模板**（0903 H02）。
-//
-// 语义是「选一个模板 → 把模板里的那套配置复制出一套新的给当前源」，不是"让本源引用这个流程"。
-// 0903 会上原话：「这里面东西应该选流程模板，然后你再切换……不是切换那个源里面那种」。
-// 一度打算把这个下拉整个删掉（0903 设计方案初稿），后被推翻——要删的是"在已存在的源里换一个
-// 流程引用"这个动作，不是这个入口本身。
-const appliedTemplateLabel = computed(() => {
-  const templateId = src.value?.templateId
-  if (!templateId) return '套用流程模板'
-  const template = templates.value.find((item) => item.id === templateId)
-  if (!template) return '套用流程模板'
-  // 真实 cs_flow 没有版本号（见 FlowRecord.version 注释），拿不到就只显示流程名，不要 `vundefined`
-  const version = src.value?.templateVersion ?? template.version
-  return version == null ? template.name : `${template.name} · v${version}`
-})
 
 const statusMeta = computed(() => {
   const s = src.value
@@ -243,82 +183,12 @@ function srcSnatch() {
   ui.fireAction('发起抓取')
 }
 
-/**
- * 下拉的 tooltip 要把它和左边那个「所属流程」区分开（2026-09-22）。
- * 两块挨着放，一个是「套一份模板的步骤到本源」、一个是「本源挂在哪条流程下」，
- * 用户很自然会以为在这里选一下所属流程就跟着变——所以直接写出来。
- */
-const flowPickerTitle = computed(() => `${appliedTemplateLabel.value}（把模板的步骤复制一套到本源；不改「所属流程」）`)
-
 const switchingFlow = ref(false)
-/** 套用中的逐条进度文案（复制配置 i/N），显示在搜索框 placeholder 上 */
+/** 更换 / 复制流程时的逐条进度文案（复制配置 i/N），显示在图标按钮旁边 */
 const switchingLabel = ref('')
-async function onSwitchFlow(command: string) {
-  if (!command) return
-  if (command === '__manage_flows__') {
-    // 与「所属流程」同一条离开路径，同样要能回来（0917-09）
-    void router.push({ path: '/flows', query: flowCenterQuery() })
-    return
-  }
-  const template = templates.value.find((item) => item.id === command)
-  const source = src.value
-  if (!template || !source?.sourceId || switchingFlow.value) return
-  const sourceId = source.sourceId
-  const nodeCount = flow.main.filter((id: string) => flow.configs[id]).length
-  // 确认弹窗**恒弹**（0903 Y0-3）：这一步会为本源新建一整套配置，任何情况下都该让人先看一眼。
-  //
-  // 文案 2026-09-22 重写。原来写的是「当前 N 个节点会被替换」＋按钮「复制并替换」——
-  // 那是前端本地替换时代的话。现在走后端 copyTemplateSteps，它**只追加不删除**，
-  // 现有节点一个不少。承诺替换却做成追加，比不说更糟。
-  // 2026-09-29（F2）：后端复制**只搬步骤行**、CONFIG_ID 沿用模板（共享），前端在复制完成后
-  // 立即逐步骤复制配置并换绑（detachCopiedConfigs），兑现「复制出的改动不影响模板」。
-  try {
-    await ElMessageBox.confirm(
-      [
-        `将复制模板「${template.name}」的步骤到本源的流程。`,
-        nodeCount
-          ? `当前 ${nodeCount} 个节点会保留，模板的步骤追加在后面——这一步不删任何现有节点。`
-          : '',
-        source.flowId
-          ? '本源已有流程，步骤复制进这条流程里，所属流程不变。'
-          : '本源还没有流程，会按模板新建一条并关联到本源。',
-        '复制完成后会自动为新增节点复制一份独立配置，之后修改本源流程的节点**不会影响模板及其它源**。',
-        flow.dirty ? '当前画布有未保存改动，套用后会从服务端重新加载，未保存的改动将丢弃。' : '',
-      ].filter(Boolean).join(''),
-      '套用流程模板',
-      { type: 'warning', confirmButtonText: '复制并追加', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
-  switchingFlow.value = true
-  switchingLabel.value = ''
-  try {
-    const applied = await applyTemplateToSource(
-      template.id,
-      sourceId,
-      source.flowId,
-      source.name,
-      { onProgress: (done, total) => { switchingLabel.value = `（正在复制配置 ${done}/${total}）` } },
-    )
-    // 后端已经把步骤建好了，画布必须重新按后端拓扑加载——本地拼的 id 是草稿 id，
-    // 自动保存会把同一批步骤再建一遍。
-    const reloaded = await reloadSourceIntoCanvas(sourceId)
-    ElMessage.success(applied.createdFlow
-      ? `已按模板「${template.name}」新建流程 #${applied.flowId} 并关联到本源`
-      : (applied.message || `已把模板「${template.name}」的步骤复制到本源的流程`))
-    reportDetachResult(applied.detach)
-    if (!reloaded) ElMessage.warning('步骤已复制，但画布重新加载失败，请刷新页面查看')
-  } catch (e) {
-    ElMessage.error(`套用模板失败：${(e as Error)?.message ?? String(e)}`)
-  } finally {
-    switchingFlow.value = false
-    switchingLabel.value = ''
-  }
-}
 
 /**
- * 更换流程（0930）：与「套用流程模板」同一套复制能力，但候选是全部流程（可按源查），
+ * 更换流程（0930）：候选是全部流程（可按源查），
  * 且语义是**换**不是**追加**——把选中流程整条复制一份（节点配置各自独立）作为本源的新流程并换绑。
  * 原流程不动，共用原流程的其他源不受影响（用户 0930 拍板：复制新流程并换绑）。
  */
@@ -498,47 +368,8 @@ async function copyFlowIntoSource(
       </div>
       <div v-if="view === 'flow' && flowMode === 'canvas'" class="ch-actions">
         <template v-if="legacyFlowOps">
-          <div class="ch-flow-picker">
-            <div class="ch-flow-searchbox" :class="{ open: flowPickerOpen }">
-              <el-icon class="ch-flow-search-icon"><Search /></el-icon>
-              <input
-                v-model="flowKeyword"
-                class="ch-flow-search"
-                data-testid="flow-switch-search"
-                :placeholder="switchingFlow ? (switchingLabel || '套用中…') : appliedTemplateLabel"
-                :title="flowPickerTitle"
-                aria-label="搜索并套用流程模板"
-                :disabled="switchingFlow"
-                @focus="openFlowPicker"
-                @mousedown="openFlowPicker"
-                @blur="closeFlowPicker"
-              />
-              <el-icon class="ch-flow-chevron"><ArrowDown /></el-icon>
-            </div>
-            <div v-if="flowPickerOpen" class="ch-flow-options" data-testid="flow-switch-options">
-              <!-- 区分两种空：一个模板都没有 vs 搜索没搜到。前者要告诉用户去哪儿标记，
-                   后者只是关键词不匹配——都说「没有匹配的流程模板」会让人以为是搜错了。 -->
-              <div v-if="!templates.length" class="ch-flow-empty" data-testid="flow-picker-empty">
-                还没有流程被标记为模板。可在流程中心对任一流程点「标记为模板」。
-              </div>
-              <div v-else-if="!visibleTemplates.length" class="ch-flow-empty">没有匹配的流程模板</div>
-              <button
-                v-for="template in visibleTemplates"
-                :key="template.id"
-                type="button"
-                class="ch-flow-option"
-                :class="{ active: template.id === src.templateId }"
-                data-testid="flow-switch-option"
-                @mousedown.prevent="pickFlow(template.id)"
-              >
-                <span class="ch-flow-option-name">{{ template.name }}</span>
-                <span v-if="template.version != null" class="ch-flow-option-version">v{{ template.version }}</span>
-              </button>
-              <div v-if="!flowKeyword.trim() && templates.length > 10" class="ch-flow-limit">默认展示前 10 个，输入名称或 ID 搜索</div>
-              <button type="button" class="ch-flow-manage" @mousedown.prevent="manageFlows">管理流程…</button>
-            </div>
-          </div>
-          <!-- 0930 用户要求改成图标：文案收进 tooltip / aria-label；进度照旧显示在左边搜索框的 placeholder -->
+          <!-- 0930 用户要求改成图标：文案收进 tooltip / aria-label；进度文案显示在图标旁（原来在已去掉的套用模板搜索框里） -->
+          <span v-if="switchingFlow" class="ch-switching" data-testid="flow-switching">{{ switchingLabel || '处理中…' }}</span>
           <el-tooltip content="更换流程：从全部流程里选一条复制给本源（原流程不动）" placement="bottom" :show-after="120">
             <button
               class="ch-icon-btn"
@@ -633,28 +464,12 @@ async function copyFlowIntoSource(
 .ch-flow-link:disabled .ch-flow-name { text-decoration: none; }
 .ch-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
 .ch-actions .rc-btn { height: 30px; padding: 0 11px; font-size: 12px; }
-.ch-flow-picker { position: relative; width: 184px; margin-right: 4px; }
 /* 与全站工具栏图标按钮同一套（采集资产 .ca-refresh / 任务视图 .tv-icon-btn / 表选择 .sts-refresh）：
    白底 + rc-border 细边 + 6px 圆角 + 灰图标，悬停只变描边与图标色；高度 30 与左边搜索框对齐 */
 .ch-icon-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; width: 30px; height: 30px; padding: 0; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-muted); cursor: pointer; transition: border-color .12s, color .12s; }
 .ch-icon-btn:hover { border-color: #bfdbfe; color: var(--rc-primary); }
 .ch-icon-btn:disabled { opacity: .45; cursor: not-allowed; }
-.ch-flow-searchbox { display: flex; align-items: center; gap: 6px; box-sizing: border-box; height: 30px; padding: 0 8px; border: 1px solid #dbe3ee; border-radius: 7px; background: #f8fafc; color: var(--rc-faint); transition: border-color .15s, box-shadow .15s, background .15s; }
-.ch-flow-searchbox:focus-within { border-color: #60a5fa; background: #fff; box-shadow: 0 0 0 3px #dbeafe; }
-.ch-flow-search-icon, .ch-flow-chevron { flex: none; font-size: 13px; }
-.ch-flow-search { min-width: 0; flex: 1; height: 28px; padding: 0; border: 0; background: transparent; color: var(--rc-text); font-size: 12px; outline: none; text-overflow: ellipsis; }
-.ch-flow-search::placeholder { color: var(--rc-muted); opacity: 1; }
-.ch-flow-chevron { transition: transform .15s; }
-.ch-flow-searchbox.open .ch-flow-chevron { transform: rotate(180deg); }
-.ch-flow-options { position: absolute; z-index: 12; top: 34px; right: 0; width: 300px; overflow: hidden; border: 1px solid #dbe3ee; border-radius: 8px; background: #fff; box-shadow: 0 14px 32px -12px rgba(15, 23, 42, 0.28); }
-.ch-flow-option { display: flex; align-items: center; gap: 8px; width: 100%; height: 34px; padding: 0 10px; border: 0; border-bottom: 1px solid var(--rc-border-soft); background: #fff; color: var(--rc-text-2); font-size: 12px; text-align: left; cursor: pointer; }
-.ch-flow-option:hover, .ch-flow-option.active { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
-.ch-flow-option-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.ch-flow-option-version { flex: none; color: var(--rc-faint); font-family: var(--rc-mono, monospace); font-size: 10px; }
-.ch-flow-empty, .ch-flow-limit { padding: 9px 10px; color: var(--rc-faint); font-size: 11px; text-align: center; }
-.ch-flow-limit { border-bottom: 1px solid var(--rc-border-soft); }
-.ch-flow-manage { width: 100%; height: 32px; padding: 0 10px; border: 0; background: #fff; color: var(--rc-primary); font-size: 12px; text-align: left; cursor: pointer; }
-.ch-flow-manage:hover { background: var(--rc-primary-bg); }
+.ch-switching { color: var(--rc-faint); font-size: 12px; white-space: nowrap; }
 .ch-branch-note { order: 20; display: flex; align-items: center; gap: 6px; width: 100%; margin-top: 6px; padding: 6px 9px; border: 1px solid #fde68a; border-radius: 6px; background: #fffbeb; color: #92400e; font-size: 11.5px; }
 .ch-save-status { color: var(--rc-faint); font-size: 12px; min-height: 18px; min-width: 4em; }
 .ch-save-pending { color: var(--rc-warn); }

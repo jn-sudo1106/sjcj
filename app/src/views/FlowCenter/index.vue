@@ -381,7 +381,7 @@ async function toggleFlowEnable(t: FlowRecord, disable: boolean) {
   try {
     await ElMessageBox.confirm(
       disable
-        ? `将禁用流程「${t.name}」（#${t.id}）。禁用后该流程不能再被选为套用/更换目标，已关联的源不受影响（执行行为以后端口径为准）。`
+        ? `将禁用流程「${t.name}」（#${t.id}）。禁用后该流程不能再被选为更换目标，已关联的源不受影响（执行行为以后端口径为准）。`
         : `将启用流程「${t.name}」（#${t.id}）。`,
       `${action}流程`,
       { confirmButtonText: '确定', cancelButtonText: '取消' },

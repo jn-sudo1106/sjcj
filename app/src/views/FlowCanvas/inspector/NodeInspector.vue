@@ -46,6 +46,18 @@ const TOP_TABS = computed(() => nodeInspectorTabs(cfg.value, { includeAi: !props
 watch(() => props.hideAi, (hideAi) => {
   if (hideAi && flow.activeTab === 'ai') flow.setActiveTab('config')
 }, { immediate: true })
+// 没有选中节点时自动选第一个（1008-08，会上要求取消「未选择」状态）：流程里只要有真实节点，
+// 检查器就不该停在「未选择节点」——新建、重载、切换、选中的节点被删后都走这一条兜底。
+// 「未选择节点」空态只留给一个节点都没有的流程。
+watch(
+  [() => flow.selectedId, () => flow.main, () => Object.keys(flow.configs).length],
+  () => {
+    if (flow.selectedId && flow.configs[flow.selectedId]) return
+    const first = flow.main.find((id) => id !== 'start' && id !== 'end' && flow.configs[id])
+    if (first) flow.select(first)
+  },
+  { immediate: true, deep: true },
+)
 // 旧会话若停在已移除的 params Tab，直接迁到任务配置（挂载即生效）。
 watch(() => flow.activeTab, (active) => {
   if (active !== 'params') return

@@ -701,3 +701,61 @@ describe('NodeInspector 定时保存后回查真 jobId（2026-09-22）', () => {
     expect(flow.sourceJob?.jobId).toBe('')
   })
 })
+
+// 1008-08（二段 §十五）：新建 / 打开流程后默认选中第一个节点，取消「未选择」状态；
+// 「未选择节点」空态只留给一个节点都没有的流程。
+describe('NodeInspector 没有选中节点时自动选第一个（1008-08）', () => {
+  function setup(nodeIds: string[], selected: string) {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    for (const id of nodeIds) flow.configs[id] = cloneConfig(NODE_CONFIGS['rule'])
+    flow.main = ['start', ...nodeIds, 'end']
+    flow.selectedId = selected
+    return flow
+  }
+
+  it('流程里有节点、没有选中：挂载就选第一个真实节点，不显示「未选择节点」', async () => {
+    const flow = setup(['rule-a', 'rule-b'], '')
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+    expect(flow.selectedId).toBe('rule-a')
+    expect(wrapper.text()).not.toContain('未选择节点')
+  })
+
+  it('选中的节点已不存在（旧快照 / 被删）：同样回到第一个节点', async () => {
+    const flow = setup(['rule-a', 'rule-b'], 'ghost')
+    mount(NodeInspector)
+    await flushPromises()
+    expect(flow.selectedId).toBe('rule-a')
+  })
+
+  it('已选中有效节点：不动它', async () => {
+    const flow = setup(['rule-a', 'rule-b'], 'rule-b')
+    mount(NodeInspector)
+    await flushPromises()
+    expect(flow.selectedId).toBe('rule-b')
+  })
+
+  it('挂载之后才加载出节点（新建流程后步骤陆续回来）：也会自动选中', async () => {
+    const flow = setup([], '')
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+    expect(flow.selectedId).toBe('')
+    expect(wrapper.text()).toContain('未选择节点')
+
+    flow.configs['root-1'] = cloneConfig(NODE_CONFIGS['rule'])
+    flow.main = ['start', 'root-1', 'end']
+    await flushPromises()
+    expect(flow.selectedId).toBe('root-1')
+    expect(wrapper.text()).not.toContain('未选择节点')
+  })
+
+  it('一个节点都没有的流程：保留「未选择节点」空态', async () => {
+    const flow = setup([], '')
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+    expect(flow.selectedId).toBe('')
+    expect(wrapper.text()).toContain('未选择节点')
+  })
+})
