@@ -500,7 +500,13 @@ function onRowClick(row: DataRow) {
 .dqp-primary-row.is-one-row::-webkit-scrollbar-thumb { border-radius: 999px; background: #cbd5e1; }
 .dqp-primary-row.is-one-row > * { flex-shrink: 0; }
 .dqp-primary-row.is-one-row > .dqp-spacer { flex-shrink: 1; }
-.dqp-primary-row.is-one-row > .dqp-query-actions { display: inline-flex; align-items: center; gap: 8px; position: sticky; right: 0; z-index: 2; padding-left: 14px; background: linear-gradient(90deg, #fff0, #fff 12px); }
+.dqp-primary-row.is-one-row > .dqp-query-actions { display: inline-flex; align-items: center; gap: 4px; position: sticky; right: 0; z-index: 2; margin-left: 4px; padding-left: 12px; background: #fff; border-left: 1px solid var(--rc-border-soft); }
+/* 全局主按钮带向下发散的蓝色阴影和上浮动效，被横向滚动容器裁掉后是一块脏边：单行模式下压平。
+   清空 / 高级筛选降为轻量的次要按钮，让「查询」一个按钮说话。 */
+.dqp-primary-row.is-one-row .dqp-query-actions .rc-btn.primary { min-width: 58px; box-shadow: none; transform: none; }
+.dqp-primary-row.is-one-row .dqp-query-actions .rc-btn.primary:hover { box-shadow: none; transform: none; background: var(--rc-primary-ink, #1d4ed8); border-color: var(--rc-primary-ink, #1d4ed8); color: #fff; }
+.dqp-primary-row.is-one-row .dqp-query-actions .rc-btn:not(.primary) { border-color: transparent; background: transparent; color: var(--rc-text-2); }
+.dqp-primary-row.is-one-row .dqp-query-actions .rc-btn:not(.primary):hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 /* 13.6 寸（约 1090px 可用）下尽量让「筛选 + 查询」一屏装下，右边的操作按钮靠横向滚动 */
 .dqp-primary-row.is-one-row :deep(.dqp-data-id) { width: 104px !important; }
 .dqp-primary-row.is-one-row :deep(.dqp-parent-id) { width: 80px !important; }
