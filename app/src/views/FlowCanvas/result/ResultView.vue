@@ -4,7 +4,7 @@ import { rememberSqlCondition } from '@/utils/sqlConditionHistory'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElIcon, ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowUp, Connection, Grid } from '@element-plus/icons-vue'
+import { ArrowUp } from '@element-plus/icons-vue'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -21,6 +21,10 @@ import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
 import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
 import CanvasHeader from '@/views/FlowCanvas/shared/CanvasHeader.vue'
 import DataGrid from './DataGrid.vue'
+import AddDataMenu from '@/components/ResultToolbar/AddDataMenu.vue'
+import ExportMenu from '@/components/ResultToolbar/ExportMenu.vue'
+import FullscreenToggle from '@/components/ResultToolbar/FullscreenToggle.vue'
+import BrowseModeToggle from '@/components/ResultToolbar/BrowseModeToggle.vue'
 import FilePreview from './components/FilePreview.vue'
 import { extFromFieldHint, extFromName, ossPathWithExt } from '@/utils/ossFile'
 import ProcessNodeRail from './ProcessNodeRail.vue'
@@ -1668,10 +1672,8 @@ async function onTestScript() {
       <!-- 全屏时源信息头被藏起来了，这里把源名补回来，否则看不出在看哪个源的数据。 -->
       <span v-if="fullscreen" class="rv-fs-source" :title="source?.name || sourceId">{{ source?.name || sourceId }}</span>
       <!-- 流程轨道展开时收起按钮合并在轨道区右上角；轨道收起时在主干行左端保留展开按钮。 -->
-      <div class="rv-browse-mode" role="group" aria-label="数据查看方式">
-        <button type="button" title="按数据表查看" aria-label="按数据表查看" :aria-pressed="browseMode === 'table'" @click="switchBrowseMode('table')"><el-icon><Grid /></el-icon></button>
-        <button type="button" title="按步骤查看" aria-label="按步骤查看" :aria-pressed="browseMode === 'step'" @click="switchBrowseMode('step')"><el-icon><Connection /></el-icon></button>
-      </div>
+      <!-- 1008-07：切换按钮抽成共用组件（数据中心同款）；rv-browse-mode 只留作定位钩子，样式在组件里 -->
+      <BrowseModeToggle class="rv-browse-mode" :model-value="browseMode" @update:model-value="switchBrowseMode" />
       <select v-if="browseMode === 'table' && outputTables.length" class="rv-table-picker" aria-label="数据表" data-testid="data-table-select" :title="tableNames[tableChoice] || tableChoice" :value="tableChoice" @change="selectTable(($event.target as HTMLSelectElement).value)">
         <option v-for="table in outputTables" :key="table.id" :value="table.id">{{ tableNames[table.id] || table.id }}</option>
       </select>
@@ -1758,15 +1760,7 @@ async function onTestScript() {
         <span class="rv-actions">
           <button class="rc-btn primary" type="button" :disabled="loading" @click="runQuery">{{ loading ? '查询中…' : '查询' }}</button>
           <button class="rc-btn" type="button" @click="clearFilters">清空</button>
-          <el-dropdown trigger="click">
-            <button class="rc-btn" type="button" data-testid="data-add">新增 ▾</button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item data-testid="data-add-manual" @click="openManualAdd">手工录入</el-dropdown-item>
-                <el-dropdown-item data-testid="data-add-import" @click="openDataImport">Excel 导入</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          <AddDataMenu compact @manual="openManualAdd" @import="openDataImport" />
           <button
             class="rc-btn tiny"
             type="button"
@@ -1774,16 +1768,15 @@ async function onTestScript() {
             title="按当前筛选条件统计"
             @click="summaryOpen = true"
           >统计</button>
-          <el-dropdown trigger="click">
-            <button class="rc-btn" type="button" data-testid="data-export">导出 ▾</button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item data-testid="data-export-page" :disabled="pageExportBlocked" title="导出已查询的当前页全部字段" @click="exportCurrentPage">导出当前页 CSV</el-dropdown-item>
-                <el-dropdown-item data-testid="data-export-excel" :disabled="!!excelExportReason" :title="excelExportReason || '导出当前表中属于当前源的数据，保留状态筛选，不限当前页'" @click="exportSourceExcel">导出当前源 Excel</el-dropdown-item>
-                <el-dropdown-item data-testid="data-export-api" :disabled="!selectedTable" @click="apiOpen = true">取数 API</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          <ExportMenu
+            compact
+            :page-disabled="pageExportBlocked"
+            :excel-reason="excelExportReason"
+            :api-disabled="!selectedTable"
+            @export-page="exportCurrentPage"
+            @export-excel="exportSourceExcel"
+            @show-api="apiOpen = true"
+          />
 
         </span>
         <!-- 数据操作组：发后续任务与发全部合并为组合操作按钮 -->
@@ -1865,13 +1858,7 @@ async function onTestScript() {
           </el-dropdown>
         </span>
         <div class="rv-view-tools">
-          <button
-            class="rc-btn tiny"
-            type="button"
-            data-testid="data-fullscreen-toggle"
-            :title="fullscreen ? '退出全屏（Esc）' : '全屏查看数据'"
-            @click="fullscreen = !fullscreen"
-          >{{ fullscreen ? '⤡ 退出全屏' : '⤢ 全屏' }}</button>
+          <FullscreenToggle v-model="fullscreen" />
           <div ref="gridToolsTarget" class="rv-grid-tools" />
         </div>
       </template>
@@ -2174,11 +2161,7 @@ async function onTestScript() {
 .rv-view-tools { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .rv-grid-tools { display: flex; align-items: center; }
 
-.rv-browse-mode { display: inline-flex; flex: none; gap: 2px; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); padding: 2px; }
-.rv-browse-mode button, .rv-table-picker { height: 28px; border: 0; background: var(--rc-surface); color: var(--rc-text-2); font-size: 12px; cursor: pointer; }
-.rv-browse-mode button { display: inline-flex; align-items: center; justify-content: center; width: 28px; padding: 0; border-radius: 4px; font-size: 14px; }
-.rv-browse-mode button:hover { background: #f1f5f9; color: var(--rc-primary-ink); }
-.rv-browse-mode button[aria-pressed="true"] { background: var(--rc-primary-bg); color: var(--rc-primary); }
+.rv-table-picker { height: 28px; border: 0; background: var(--rc-surface); color: var(--rc-text-2); font-size: 12px; cursor: pointer; }
 .rv-table-picker { width: 160px; min-width: 160px; max-width: 160px; padding: 0 24px 0 8px; border: 1px solid var(--rc-border); border-radius: var(--rc-radius-sm); text-overflow: ellipsis; }
 
 .ctx-summary .rv-sql { flex: 1 1 380px; min-width: 260px; width: auto; }

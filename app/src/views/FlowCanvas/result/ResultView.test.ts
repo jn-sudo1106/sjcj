@@ -66,7 +66,7 @@ const FilePreviewStub = { name: 'FilePreview', props: ['path', 'name', 'ext'], t
 const ElDropdownStub = { name: 'ElDropdown', template: '<div><slot /><slot name="dropdown" /></div>' }
 const ElDropdownMenuStub = { name: 'ElDropdownMenu', template: '<div><slot /></div>' }
 const ElDropdownItemStub = { name: 'ElDropdownItem', props: ['disabled', 'divided'], template: '<div class="el-dropdown-item" :disabled="disabled ? \'\' : undefined"><slot /></div>' }
-const STUBS = { ElDropdown: ElDropdownStub, ElDropdownMenu: ElDropdownMenuStub, ElDropdownItem: ElDropdownItemStub, SqlConditionEditor: false, CanvasHeader: true, ElDrawer: ElDrawerStub, ElDialog: ElDialogStub, ElPagination: true, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, FilePreview: FilePreviewStub, SummaryDrawer: true, RailNodePicker: false }
+const STUBS = { ElDropdown: ElDropdownStub, ElDropdownMenu: ElDropdownMenuStub, ElDropdownItem: ElDropdownItemStub, SqlConditionEditor: false, CanvasHeader: true, ElDrawer: ElDrawerStub, ElDialog: ElDialogStub, ElPagination: true, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, FilePreview: FilePreviewStub, SummaryDrawer: true, RailNodePicker: false, AddDataMenu: false, ExportMenu: false, FullscreenToggle: false, BrowseModeToggle: false }
 
 function mountResultView() {
   return shallowMount(ResultView, {

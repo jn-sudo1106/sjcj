@@ -20,6 +20,14 @@ import SourceDetailDrawer from './SourceDetailDrawer.vue'
 import MoreTablesDialog from './MoreTablesDialog.vue'
 import MoreSourcesDialog from './MoreSourcesDialog.vue'
 import DataImportDialog from './DataImportDialog.vue'
+import AddDataMenu from '@/components/ResultToolbar/AddDataMenu.vue'
+import ExportMenu from '@/components/ResultToolbar/ExportMenu.vue'
+import FullscreenToggle from '@/components/ResultToolbar/FullscreenToggle.vue'
+import BrowseModeToggle, { type BrowseMode } from '@/components/ResultToolbar/BrowseModeToggle.vue'
+import RailNodePicker from '@/views/FlowCanvas/result/components/RailNodePicker.vue'
+import { buildHorizontalLayout, buildSourceSeed, effectiveInputTable, isDecision, isParallel, nodeOutputTable } from '@/views/FlowCanvas/canvas/flowModel'
+import { downloadCsv } from '@/utils/format/csvExport'
+import { resultRowsCsv } from '@/views/FlowCanvas/result/exportRows'
 import { backTraceSources } from '@/utils/data/backTraceSources'
 import { unsupportedNextStepBatchFilters } from './batchGuards'
 import { copyToClipboard } from '@/utils/clipboard'
@@ -157,7 +165,10 @@ async function loadSources() {
     const ids = [...new Set(await dataApi.distinctSource({ tableId: selectedTable, size: 20000 }))]
     if (requestId !== sourceScopeRequest || selectedTable !== tableId.value) return
     tableSourceIds.value = ids
-    const clearedSource = !!sourceId.value && !ids.includes(sourceId.value)
+    // 按步骤看时源就是上下文（节点是它的流程节点，输出表一定有它的数据），不能因为它不在这张表的源清单里
+    // （清单取数上限 2 万，大表里本来就列不全）就被清掉，否则一切表，步骤列表跟着消失
+    const keepSource = browseMode.value === 'step' && !!sourceId.value
+    const clearedSource = !keepSource && !!sourceId.value && !ids.includes(sourceId.value)
     if (clearedSource) {
       sourceId.value = ''
       await loadGroup()
@@ -166,6 +177,8 @@ async function loadSources() {
     const previewIds = ids.slice(0, SOURCE_PREVIEW_SIZE)
     if (sourceId.value && ids.includes(sourceId.value) && !previewIds.includes(sourceId.value)) {
       previewIds[previewIds.length - 1] = sourceId.value
+    } else if (keepSource && !ids.includes(sourceId.value)) {
+      previewIds.push(sourceId.value)
     }
     sourceOptions.value = await sourceOptionsForIds(previewIds)
     if (requestId === sourceScopeRequest && sourceSearchKeyword.value.trim()) {
@@ -312,6 +325,17 @@ const sqlPreview = computed(() => {
 // ---- 导出 EXCEL（方案 §1.1，URL 直开，不走 axios） ----
 function onExport() {
   window.open(dataApi.exportUrl(buildQuery()), '_blank')
+}
+// 「导出 ▾」里的当前页 CSV（1008-07，与源数据视图同一份 resultRowsCsv）：导出表格里这一页已查出的全部字段
+const pageExportDisabled = computed(() => !tableId.value || !panelRows.value.length)
+function onExportPage() {
+  if (pageExportDisabled.value) return
+  try {
+    const name = `${tableMeta.value?.tableName || tableId.value}_第${panelFilter.value.page}页`.replace(/[\\/:*?"<>|]/g, '_')
+    downloadCsv(`${name}.csv`, resultRowsCsv(panelRows.value, tableMeta.value))
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '导出失败')
+  }
 }
 
 // ---- 危险操作确认（对照 EntryTab.vue 的 confirmDanger 本地封装） ----
@@ -591,13 +615,104 @@ function openStepDrawer() {
 }
 async function onStepSelectTable(outputTable: string) {
   const all = [...group.value.list1, ...group.value.list2, ...group.value.list3]
-  const match = all.find((t) => t.tableName === outputTable)
+  // 节点的输出表是表 ID（如 6200029），旧写法只按物理表名比，按 ID 给的节点永远「未找到匹配的表」
+  const match = all.find((t) => t.tableId === outputTable || t.tableName === outputTable)
   if (!match) {
     ElMessage.warning(`未找到匹配的表:${outputTable}`)
     return
   }
   tableId.value = match.tableId
   await onTableChange()
+}
+
+// ---- 查看方式：按数据表 / 按步骤（1008-07，对齐源数据视图 ResultView 的「按步骤查看」）----
+// 按步骤：选了源之后，用该源流程里的节点代替「数据表」下拉（RailNodePicker，与源 / 文件 / 任务视图同款）；
+// 选节点 = 看这个节点的数据。节点输入表与输出表不同时，旁边的「输入 / 输出」可以切换看哪一张，
+// 相同时合并成「输入·输出」（ResultView 的 M3-0C 定案）。决策 / 分头这类不产生数据的节点、
+// 以及没有输入输出表的节点，不进候选。没选源时没有流程可看，提示先选源。
+// 流程图开合按钮打开「展示处理步骤」抽屉（那边点节点会切到它的输出表）。
+interface StepNode { id: string; title: string; inputTable: string; outputTable: string }
+const browseMode = ref<BrowseMode>('table')
+const stepNodes = ref<StepNode[]>([])
+const stepNodeId = ref('')
+const stepScope = ref<'output' | 'input'>('output')
+const stepLoading = ref(false)
+let stepLoadSeq = 0
+async function loadStepNodes() {
+  const sid = sourceId.value
+  const seq = ++stepLoadSeq
+  stepNodes.value = []
+  stepNodeId.value = ''
+  if (browseMode.value !== 'step' || !sid) {
+    stepLoading.value = false
+    return
+  }
+  stepLoading.value = true
+  try {
+    const [detail, steps] = await Promise.all([sourceApi.sourceDetail(sid), sourceApi.sourceSteps(sid)])
+    if (seq !== stepLoadSeq || !detail) return
+    const seed = buildSourceSeed(detail, steps ?? [])
+    const layout = buildHorizontalLayout(seed.main, seed.branches, seed.configs, seed.branchGroups, { includeTerminals: false })
+    stepNodes.value = layout.nodes.flatMap((node) => {
+      const cfg = seed.configs[node.id]
+      if (!cfg || isDecision(cfg) || isParallel(cfg)) return []
+      const outputTable = nodeOutputTable(cfg)
+      const inputTable = effectiveInputTable(seed.main, seed.branches, seed.configs, node.id, seed.branchGroups)
+      return outputTable || inputTable ? [{ id: node.id, title: cfg.title || node.id, inputTable, outputTable }] : []
+    })
+    syncStepFromTable()
+  } catch (error) {
+    if (seq === stepLoadSeq) ElMessage.warning(`步骤加载失败：${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    if (seq === stepLoadSeq) stepLoading.value = false
+  }
+}
+watch([browseMode, sourceId], () => void loadStepNodes())
+const stepNode = computed(() => stepNodes.value.find((n) => n.id === stepNodeId.value))
+const stepSameTable = computed(() => !!stepNode.value && !!stepNode.value.inputTable && stepNode.value.inputTable === stepNode.value.outputTable)
+const stepScopeSwitchable = computed(() => !!stepNode.value && !!stepNode.value.inputTable && !!stepNode.value.outputTable && !stepSameTable.value)
+const stepNodeOptions = computed(() => stepNodes.value.map((n) => ({ id: n.id, title: n.title })))
+function stepTableOf(node: StepNode, scope: 'output' | 'input') {
+  return scope === 'output' ? node.outputTable : node.inputTable
+}
+/** 表在别处被切走（下拉、抽屉、深链）后，让节点 / 范围跟上：当前选择仍对得上就不动，否则找第一个输出表（再找输入表）等于当前表的节点 */
+function syncStepFromTable() {
+  if (browseMode.value !== 'step') return
+  const table = tableId.value
+  const meta = tableMeta.value?.tableName
+  const is = (t: string) => !!t && (t === table || t === meta)
+  const cur = stepNode.value
+  if (cur && is(stepTableOf(cur, stepScope.value))) return
+  const byOutput = stepNodes.value.find((n) => is(n.outputTable))
+  if (byOutput) { stepNodeId.value = byOutput.id; stepScope.value = 'output'; return }
+  const byInput = stepNodes.value.find((n) => is(n.inputTable))
+  if (byInput) { stepNodeId.value = byInput.id; stepScope.value = 'input'; return }
+  stepNodeId.value = ''
+}
+watch([tableId, () => tableMeta.value?.tableName], syncStepFromTable)
+async function onStepNodePicked(nodeId: string) {
+  const node = stepNodes.value.find((n) => n.id === nodeId)
+  if (!node) return
+  stepNodeId.value = nodeId
+  stepScope.value = node.outputTable ? 'output' : 'input'
+  await onStepSelectTable(stepTableOf(node, stepScope.value))
+}
+async function onStepScope(scope: 'output' | 'input') {
+  const node = stepNode.value
+  if (!node || stepScope.value === scope) return
+  stepScope.value = scope
+  await onStepSelectTable(stepTableOf(node, scope))
+}
+/** 流程图开合：打开「展示处理步骤」抽屉；收起由抽屉自己关闭 */
+function onStepRailToggle(open: boolean) {
+  if (open) openStepDrawer()
+  else stepOpen.value = false
+}
+
+// ---- 全屏（1008-07，与源数据视图同口径）：同一份 DOM 直接铺满视口，Esc 退出 ----
+const fullscreen = ref(false)
+function onFullscreenKey(e: KeyboardEvent) {
+  if (e.key === 'Escape' && fullscreen.value) fullscreen.value = false
 }
 
 // ---- 任务实例弹窗（方案 §1.6-5；DETAIL_ID 列点入口 / 行内「查后续任务实例」入口） ----
@@ -739,6 +854,14 @@ async function openDetailFor(forTableId: string, forDataId: string) {
   }
 }
 function openDetail(row: DataRow) { void openDetailFor(tableId.value, row.dataId) }
+// 点一行打开详情（原来要点 ENTRY_ID 那个链接）。点的是单元格里自带动作的东西（源 / 任务 / 父 ID 链接、
+// 按钮、勾选框、下拉、文件路径）时让它自己处理，不叠开详情；选中文字准备复制时也不开
+function onRowClickDetail(row: DataRow, event: Event) {
+  const target = event.target as HTMLElement | null
+  if (target?.closest('a, button, input, label, .el-checkbox, .el-dropdown, .el-button, [role="button"]')) return
+  if (window.getSelection()?.toString()) return
+  openDetail(row)
+}
 function openParentDetail(row: DataRow) {
   if (row.categoryId && row.parentId && row.parentId !== '0') void openDetailFor(row.categoryId, row.parentId)
 }
@@ -826,12 +949,16 @@ onMounted(async () => {
   await loadTableMeta()
   await loadSources()
   panelRef.value?.search()
+  window.addEventListener('keydown', onFullscreenKey)
 })
-onUnmounted(() => { if (sourceSearchTimer) clearTimeout(sourceSearchTimer) })
+onUnmounted(() => {
+  if (sourceSearchTimer) clearTimeout(sourceSearchTimer)
+  window.removeEventListener('keydown', onFullscreenKey)
+})
 </script>
 
 <template>
-  <div class="rc-card dv-page">
+  <div class="rc-card dv-page" :class="{ 'is-fullscreen': fullscreen }">
     <!-- 表与源作为查询上下文放在筛选主行，减少割裂的独立工具栏。 -->
     <!-- 查询条件与结果表格：基础条件常显，高级条件默认收起，见 DataQueryPanel.vue -->
     <DataQueryPanel
@@ -840,6 +967,8 @@ onUnmounted(() => { if (sourceSearchTimer) clearTimeout(sourceSearchTimer) })
       :source-id="sourceId"
       :columns="panelColumns"
       show-state
+      one-row
+      row-clickable
       :selectable="canWrite"
       default-sort-field="updateDt"
       default-sort-order="descend"
@@ -847,9 +976,11 @@ onUnmounted(() => { if (sourceSearchTimer) clearTimeout(sourceSearchTimer) })
       @query-change="onPanelQueryChange"
       @loaded="onPanelLoaded"
       @file-click="onCellFile"
+      @row-click="onRowClickDetail"
     >
       <template #context>
-      <el-select ref="tableSelectRef" v-model="tableId" filterable placeholder="选择数据表" style="width: 220px" @change="onTableChange">
+      <BrowseModeToggle v-model="browseMode" />
+      <el-select v-if="browseMode === 'table'" ref="tableSelectRef" v-model="tableId" filterable placeholder="选择数据表" style="width: 160px" @change="onTableChange">
         <el-option-group label="main">
           <el-option v-for="t in group.list1" :key="t.tableId" :value="t.tableId" :label="`${t.name || t.tableName}`" />
         </el-option-group>
@@ -865,10 +996,10 @@ onUnmounted(() => { if (sourceSearchTimer) clearTimeout(sourceSearchTimer) })
           </span>
         </template>
       </el-select>
-      <button class="rc-btn dv-help-btn" type="button" title="表结构详情" @click="openTableDetail">
+      <button v-if="browseMode === 'table'" class="rc-btn dv-help-btn" type="button" title="表结构详情" @click="openTableDetail">
         <el-icon><QuestionFilled /></el-icon>
       </button>
-      <el-select ref="sourceSelectRef" v-model="sourceId" filterable remote clearable :remote-method="onSourceSearch" :loading="sourceLoading" placeholder="选择源（ID或名称）" style="width: 200px" @change="onSourceChange">
+      <el-select ref="sourceSelectRef" v-model="sourceId" filterable remote clearable :remote-method="onSourceSearch" :loading="sourceLoading" placeholder="选择源（ID或名称）" style="width: 150px" @change="onSourceChange">
         <el-option v-for="s in sourceOptions" :key="s.sourceId" :value="s.sourceId" :label="`${s.sourceId} ${s.name}`" />
         <template #footer>
           <span class="dv-link" @click.stop="openMoreSources">
@@ -879,6 +1010,33 @@ onUnmounted(() => { if (sourceSearchTimer) clearTimeout(sourceSearchTimer) })
       <button class="rc-btn dv-help-btn" type="button" title="源详情" @click="openSourceDetail">
         <el-icon><QuestionFilled /></el-icon>
       </button>
+      <!-- 按步骤：节点依赖源，所以排在源后面；选节点看它的数据，输入 / 输出表不同时可切换 -->
+      <template v-if="browseMode === 'step'">
+        <RailNodePicker
+          v-if="sourceId"
+          :open="stepOpen"
+          :model-value="stepNodeId"
+          :nodes="stepNodeOptions"
+          :disabled="stepLoading || !stepNodes.length"
+          toggle-testid="data-rail-toggle"
+          @update:model-value="onStepNodePicked"
+          @update:open="onStepRailToggle"
+        />
+        <span v-else class="dv-step-hint" data-testid="data-step-need-source">先选择源</span>
+        <span v-if="stepNode" class="dv-step-scope" data-testid="data-step-scope">
+          <span v-if="stepSameTable" class="dv-scope-piece" data-testid="data-scope-merged"><span class="k">输入·输出</span><span class="v">{{ stepNode.inputTable }}</span></span>
+          <template v-else>
+            <button v-if="stepScopeSwitchable" type="button" class="dv-scope-piece is-btn" :class="{ active: stepScope === 'input' }" data-testid="data-scope-input" @click="onStepScope('input')"><span class="k">输入</span><span class="v">{{ stepNode.inputTable }}</span></button>
+            <span v-else-if="stepNode.inputTable" class="dv-scope-piece"><span class="k">输入</span><span class="v">{{ stepNode.inputTable }}</span></span>
+            <span v-if="stepNode.inputTable && stepNode.outputTable" class="dv-scope-sep">·</span>
+            <button v-if="stepScopeSwitchable" type="button" class="dv-scope-piece is-btn" :class="{ active: stepScope === 'output' }" data-testid="data-scope-output" @click="onStepScope('output')"><span class="k">输出</span><span class="v">{{ stepNode.outputTable }}</span></button>
+            <span v-else-if="stepNode.outputTable" class="dv-scope-piece"><span class="k">输出</span><span class="v">{{ stepNode.outputTable }}</span></span>
+          </template>
+        </span>
+        <button class="rc-btn dv-help-btn" type="button" title="表结构详情" @click="openTableDetail">
+          <el-icon><QuestionFilled /></el-icon>
+        </button>
+      </template>
       </template>
       <template #quick>
         <el-dropdown trigger="click" @command="onCommonQuerySelect">
@@ -892,67 +1050,67 @@ onUnmounted(() => { if (sourceSearchTimer) clearTimeout(sourceSearchTimer) })
           </template>
         </el-dropdown>
       </template>
+      <!-- 操作按钮并入筛选行（1008-07，一行放不下横向滚动）。顺序与源数据视图一致：刷新、新增 ▾、导出、删除、更多、全屏。 -->
+      <template #actions>
+        <button class="rc-icon-btn" data-testid="data-refresh" type="button" title="刷新" aria-label="刷新" @click="panelRef?.refresh()">
+          <el-icon><Refresh /></el-icon>
+        </button>
+        <AddDataMenu v-if="canWrite" @manual="openAdd" @import="openImport" />
+        <!-- 0930-14D：导出 Excel 从「导出 ▾」下拉里提到一级（会上「入口不好找」），点了直接按当前条件下载；
+             「导出 ▾」里放当前页 CSV 和取数 API（1008-07：取数 API 从「更多」挪到这里） -->
+        <button
+          class="rc-btn"
+          data-testid="data-export"
+          type="button"
+          title="按当前查询条件导出全部命中的数据（不是当前页），直接下载 Excel"
+          :disabled="!tableId"
+          @click="onExport"
+        >导出 Excel</button>
+        <ExportMenu :show-excel="false" :page-disabled="pageExportDisabled" :api-disabled="!tableId" trigger-testid="data-export-menu" @export-page="onExportPage" @show-api="onShowApi" />
+        <button v-if="syncSameBackend && tableMeta?.tableName" class="rc-btn" type="button" data-testid="data-sync" @click="router.push({ path: '/sync/create', query: { tableName: tableMeta.tableName } })">同步到其他环境</button>
+        <el-dropdown v-if="canWrite && isTestTable" trigger="click">
+          <button class="rc-btn" data-testid="data-delete" type="button">删除数据<el-icon class="et-caret"><ArrowDown /></el-icon></button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item :disabled="!selectedRowKeys.length" @click="onDeleteSelected">删除选中的数据</el-dropdown-item>
+              <el-dropdown-item divided disabled>按时间删除…</el-dropdown-item>
+              <el-dropdown-item @click="onDeleteByRange(0, 'source')">删除该源-当日数据</el-dropdown-item>
+              <el-dropdown-item @click="onDeleteByRange(1, 'source')">删除该源-所有数据</el-dropdown-item>
+              <el-dropdown-item @click="onDeleteByIds">填入 IDs-删除</el-dropdown-item>
+              <el-dropdown-item divided disabled>表操作</el-dropdown-item>
+              <el-dropdown-item @click="onMarkFormal">设为正式表</el-dropdown-item>
+              <el-dropdown-item @click="onDeleteByRange(0, 'all')">清空表数据【当日】</el-dropdown-item>
+              <el-dropdown-item @click="onDeleteByRange(1, 'all')">清空表数据【全量】</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <!-- 0904 I02：反查源从「更多」下拉里放出来（原话「我到时候把放出来」）。
+             它是数据视图通往源视图的唯一通路，藏在二级菜单里没人找得到。 -->
+        <button
+          class="rc-btn"
+          type="button"
+          data-testid="data-back-trace"
+          :disabled="backTracing || !tableId"
+          title="按当前查询条件找出这些数据来自哪些源，并直接在源视图中打开"
+          @click="onDistinctSource"
+        >{{ backTracing ? '反查中…' : '按条件查源 →' }}</button>
+        <el-dropdown trigger="click">
+          <button class="rc-btn" data-testid="data-more" type="button">更多<el-icon class="et-caret"><ArrowDown /></el-icon></button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item @click="onMoreCommand('summary')">查看统计</el-dropdown-item>
+              <el-dropdown-item @click="onMoreCommand('sql')">{{ showSql ? '隐藏查询条件/SQL' : '查看查询条件/SQL' }}</el-dropdown-item>
+              <el-dropdown-item @click="onMoreCommand('steps')">展示处理步骤</el-dropdown-item>
+              <el-dropdown-item v-if="canWrite" divided :disabled="!sourceId || !selectedRowKeys.length" @click="onClearParent">
+                清除父表后续标识
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <FullscreenToggle v-model="fullscreen" />
+      </template>
       <template #toolbar>
-        <!-- 结果工具条：按新增 / 导出 / 查看 / 删除与危险操作收敛，不保留泛化“工具”或重复“数据维护”。 -->
-        <div class="dv-result-toolbar" data-testid="data-result-toolbar">
-          <span class="dv-spacer" />
-          <button class="rc-icon-btn" data-testid="data-refresh" type="button" title="刷新" aria-label="刷新" @click="panelRef?.refresh()">
-            <el-icon><Refresh /></el-icon>
-          </button>
-          <button v-if="canWrite" class="rc-btn" data-testid="data-add" type="button" @click="openAdd">新增数据</button>
-          <button v-if="canWrite" class="rc-btn" data-testid="data-import" type="button" @click="openImport">导入数据</button>
-          <!-- 0930-14D：导出 Excel 从「导出 ▾」下拉里提到一级（会上「入口不好找」），点了直接按当前条件下载；
-               原来同在下拉里的「取数 API」挪进「更多」 -->
-          <button
-            class="rc-btn"
-            data-testid="data-export"
-            type="button"
-            title="按当前查询条件导出全部命中的数据（不是当前页），直接下载 Excel"
-            :disabled="!tableId"
-            @click="onExport"
-          >导出 Excel</button>
-          <button v-if="syncSameBackend && tableMeta?.tableName" class="rc-btn" type="button" data-testid="data-sync" @click="router.push({ path: '/sync/create', query: { tableName: tableMeta.tableName } })">同步到其他环境</button>
-          <el-dropdown v-if="canWrite && isTestTable" trigger="click">
-            <button class="rc-btn" data-testid="data-delete" type="button">删除数据<el-icon class="et-caret"><ArrowDown /></el-icon></button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item :disabled="!selectedRowKeys.length" @click="onDeleteSelected">删除选中的数据</el-dropdown-item>
-                <el-dropdown-item divided disabled>按时间删除…</el-dropdown-item>
-                <el-dropdown-item @click="onDeleteByRange(0, 'source')">删除该源-当日数据</el-dropdown-item>
-                <el-dropdown-item @click="onDeleteByRange(1, 'source')">删除该源-所有数据</el-dropdown-item>
-                <el-dropdown-item @click="onDeleteByIds">填入 IDs-删除</el-dropdown-item>
-                <el-dropdown-item divided disabled>表操作</el-dropdown-item>
-                <el-dropdown-item @click="onMarkFormal">设为正式表</el-dropdown-item>
-                <el-dropdown-item @click="onDeleteByRange(0, 'all')">清空表数据【当日】</el-dropdown-item>
-                <el-dropdown-item @click="onDeleteByRange(1, 'all')">清空表数据【全量】</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-          <!-- 0904 I02：反查源从「更多」下拉里放出来（原话「我到时候把放出来」）。
-               它是数据视图通往源视图的唯一通路，藏在二级菜单里没人找得到。 -->
-          <button
-            class="rc-btn"
-            type="button"
-            data-testid="data-back-trace"
-            :disabled="backTracing || !tableId"
-            title="按当前查询条件找出这些数据来自哪些源，并直接在源视图中打开"
-            @click="onDistinctSource"
-          >{{ backTracing ? '反查中…' : '按条件查源 →' }}</button>
-          <el-dropdown trigger="click">
-            <button class="rc-btn" data-testid="data-more" type="button">更多<el-icon class="et-caret"><ArrowDown /></el-icon></button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item @click="onMoreCommand('summary')">查看统计</el-dropdown-item>
-                <el-dropdown-item @click="onMoreCommand('sql')">{{ showSql ? '隐藏查询条件/SQL' : '查看查询条件/SQL' }}</el-dropdown-item>
-                <el-dropdown-item @click="onMoreCommand('steps')">展示处理步骤</el-dropdown-item>
-                <el-dropdown-item @click="onShowApi">取数 API</el-dropdown-item>
-                <el-dropdown-item v-if="canWrite" divided :disabled="!sourceId || !selectedRowKeys.length" @click="onClearParent">
-                  清除父表后续标识
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-        </div>
+        <!-- 整行内容（SQL 提示 / 批量条 / 发大量后续面板）；按钮在上面的 #actions 里，已并入筛选行 -->
         <div v-if="showSql" class="dv-sql-tip">{{ sqlPreview }}</div>
         <!-- 选中批量条 -->
         <div v-if="canWrite && selectedRowKeys.length" class="dv-batch">
@@ -994,7 +1152,7 @@ onUnmounted(() => { if (sourceSearchTimer) clearTimeout(sourceSearchTimer) })
 
       <template #columns-before>
         <el-table-column prop="dataId" label="ENTRY_ID" width="105" fixed="left" sortable="custom">
-          <template #default="{ row }"><a class="dv-a" @click="openDetail(row)">{{ row.dataId }}</a></template>
+          <template #default="{ row }">{{ row.dataId }}</template>
         </el-table-column>
         <el-table-column prop="sourceId" label="源" width="100" sortable="custom">
           <template #default="{ row }">
@@ -1248,16 +1406,26 @@ onUnmounted(() => { if (sourceSearchTimer) clearTimeout(sourceSearchTimer) })
   min-height: 0;
   flex-direction: column;
 }
-.dv-result-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 44px;
-  padding: 4px 16px;
-  border-top: 1px solid var(--rc-border-soft);
-  border-bottom: 1px solid var(--rc-border-soft);
-  background: #fff;
+/* 全屏（1008-07）：同一份 DOM 铺满视口，不复制模板也不套弹层；z-index 与源数据视图的全屏同值（60） */
+.dv-page.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  height: 100vh;
+  border: 0;
+  border-radius: 0;
 }
+/* 按步骤的输入 / 输出范围：样式与源数据视图摘要行里的同名小段一致（那边是 ResultView 的 scoped 样式） */
+.dv-step-hint { flex: none; color: var(--rc-faint); font-size: 12px; white-space: nowrap; }
+.dv-step-scope { display: inline-flex; flex: none; align-items: center; gap: 6px; }
+.dv-scope-piece { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--rc-text-2); white-space: nowrap; }
+.dv-scope-piece .k { font-size: 11px; color: var(--rc-faint); }
+.dv-scope-piece .v { font-family: var(--rc-mono, monospace); font-size: 11.5px; }
+.dv-scope-sep { color: #cbd5e1; }
+button.dv-scope-piece.is-btn { border: 0; background: transparent; font: inherit; padding: 2px 6px; border-radius: 6px; cursor: pointer; opacity: .55; }
+button.dv-scope-piece.is-btn:hover { opacity: .85; background: var(--rc-border-soft); }
+button.dv-scope-piece.is-btn.active { opacity: 1; background: var(--rc-primary-bg); }
+button.dv-scope-piece.is-btn.active .k, button.dv-scope-piece.is-btn.active .v { color: var(--rc-primary-ink); }
 .rc-icon-btn {
   display: inline-flex;
   align-items: center;

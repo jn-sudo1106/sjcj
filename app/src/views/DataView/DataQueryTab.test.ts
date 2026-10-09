@@ -10,6 +10,13 @@ import { useAuthStore } from '../../stores/auth'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
 import type { UserInfo } from '@/api/auth'
 import { dataApi, sourceApi, entryApi, type DataTableMeta, type DataRow, type EntryTypeGroup } from '../../api'
+import { downloadCsv } from '@/utils/format/csvExport'
+
+// 当前页 CSV 导出会触发浏览器下载，jsdom 里换成桩，只断言传给它的文件名和内容
+vi.mock('@/utils/format/csvExport', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/utils/format/csvExport')>()),
+  downloadCsv: vi.fn(),
+}))
 
 // 数据表页_UI重写设计_2026-07-30：检索区/工具条/批量条/动态列表格/数据详情抽屉
 describe('数据中心 · 数据查询 tab', () => {
@@ -77,10 +84,18 @@ describe('数据中心 · 数据查询 tab', () => {
     await flushPromises()
   }
 
-  async function openResultMenu(testId: 'data-delete' | 'data-more') {
+  async function openResultMenu(testId: 'data-delete' | 'data-more' | 'data-add' | 'data-export-menu') {
     await wrapper.get(`[data-testid="${testId}"]`).trigger('click')
     await flushPromises()
     return new DOMWrapper(document.body)
+  }
+  /** 单行模式下状态筛选在前、表选择在后，不能再按 ElSelect 的下标取 */
+  function tableSelectOf() {
+    return wrapper.findAllComponents({ name: 'ElSelect' }).find((s) => s.props('placeholder') === '选择数据表')!
+  }
+  async function clickMenuItem(body: DOMWrapper<HTMLElement>, label: string) {
+    await body.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === label)!.trigger('click')
+    await flushPromises()
   }
 
   it('初次加载：entryTypesGroup/tableMeta/rowQueryPaged 依次调用，默认选中 list1 第一个表', async () => {
@@ -121,7 +136,7 @@ describe('数据中心 · 数据查询 tab', () => {
     await mountPage({ sourceId: '600519' })
     await waitForLoad()
 
-    const tableSelect = wrapper.findAllComponents({ name: 'ElSelect' })[0]
+    const tableSelect = tableSelectOf()
     await tableSelect.vm.$emit('update:modelValue', 't2')
     await tableSelect.vm.$emit('change', 't2')
     await waitForLoad()
@@ -279,20 +294,218 @@ describe('数据中心 · 数据查询 tab', () => {
     await waitForLoad()
 
     expect(wrapper.find('[data-testid="data-delete"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="data-import"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="data-add"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="data-danger"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="data-tools"]').exists()).toBe(false)
 
     expect(wrapper.get('[data-testid="data-export"]').text()).toBe('导出 Excel')
-    const moreMenu = await openResultMenu('data-more')
-    expect(moreMenu.text()).toContain('取数 API')
+    // 1008-07：取数 API 从「更多」挪进「导出 ▾」，和当前页 CSV 一起
+    const exportMenu = await openResultMenu('data-export-menu')
+    expect(exportMenu.text()).toContain('导出当前页 CSV')
+    expect(exportMenu.text()).toContain('取数 API')
+    expect(exportMenu.text()).not.toContain('导出当前源 Excel')
+    document.body.innerHTML = ''
 
     wrapper.unmount()
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({ ...META, state: 'AC' })
     await mountPage()
     await waitForLoad()
     expect(wrapper.find('[data-testid="data-delete"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="data-import"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="data-add"]').exists()).toBe(true)
+  })
+
+  it('1008-07 单行工具条：筛选与操作按钮同在一行，表 / 源排在状态筛选之后，不再有第二行工具条', async () => {
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    const row = wrapper.get('[data-testid="data-query-primary"]')
+    expect(row.classes()).toContain('is-one-row')
+    for (const id of ['data-refresh', 'data-add', 'data-export', 'data-export-menu', 'data-more', 'data-fullscreen-toggle', 'column-picker-btn']) {
+      expect(row.find(`[data-testid="${id}"]`).exists(), id).toBe(true)
+    }
+    expect(wrapper.find('[data-testid="data-result-toolbar"]').exists()).toBe(false)
+    const order = Array.from(row.element.children).map((el) => el.className.toString())
+    const stateAt = order.findIndex((c) => c.includes('dqp-state'))
+    const contextAt = order.findIndex((c) => c.includes('dqp-context'))
+    const queryAt = order.findIndex((c) => c.includes('dqp-query-actions'))
+    expect(stateAt).toBeGreaterThanOrEqual(0)
+    expect(contextAt).toBeGreaterThan(stateAt)
+    expect(queryAt).toBeGreaterThan(contextAt)
+    // 表选择在查询范围内：切到按步骤之前先有「按表 / 按步骤」切换
+    expect(wrapper.findAll('.browse-mode-toggle button')).toHaveLength(2)
+  })
+
+  it('新增 ▾：手工录入打开新增抽屉，Excel 导入打开导入弹窗；非管理员没有新增入口', async () => {
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    let body = await openResultMenu('data-add')
+    expect(body.text()).toContain('手工录入')
+    expect(body.text()).toContain('Excel 导入')
+    await clickMenuItem(body, 'Excel 导入')
+    expect(wrapper.findComponent(DataImportDialog).props('modelValue')).toBe(true)
+    document.body.innerHTML = ''
+
+    wrapper.unmount()
+    auth.roles = ['read']
+    await mountPage()
+    await waitForLoad()
+    expect(wrapper.find('[data-testid="data-add"]').exists()).toBe(false)
+  })
+
+  it('导出 ▾ → 导出当前页 CSV：按已查出的当前页生成文件，没有结果时置灰', async () => {
+    const csvSpy = vi.mocked(downloadCsv)
+    csvSpy.mockClear()
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    const body = await openResultMenu('data-export-menu')
+    await clickMenuItem(body, '导出当前页 CSV')
+    expect(csvSpy).toHaveBeenCalledTimes(1)
+    const [filename, csv] = csvSpy.mock.calls[0]!
+    expect(filename).toBe('sense_data.TB_STOCK_NOTICE_第1页.csv')
+    expect(csv).toContain('88231')
+    expect(csv).toContain('关于利润分配的公告')
+    document.body.innerHTML = ''
+
+    // 没有查出数据时这一项置灰
+    wrapper.unmount()
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [] })
+    await mountPage()
+    await waitForLoad()
+    const emptyBody = await openResultMenu('data-export-menu')
+    const pageItem = emptyBody.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '导出当前页 CSV')!
+    expect(pageItem.classes()).toContain('is-disabled')
+    document.body.innerHTML = ''
+  })
+
+  it('全屏：点按钮铺满视口，再点或按 Esc 退出', async () => {
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    const page = wrapper.get('.dv-page')
+    expect(page.classes()).not.toContain('is-fullscreen')
+    await wrapper.get('[data-testid="data-fullscreen-toggle"]').trigger('click')
+    expect(page.classes()).toContain('is-fullscreen')
+    expect(wrapper.get('[data-testid="data-fullscreen-toggle"]').text()).toBe('⤡ 退出全屏')
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+    expect(page.classes()).not.toContain('is-fullscreen')
+    await wrapper.get('[data-testid="data-fullscreen-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="data-fullscreen-toggle"]').trigger('click')
+    expect(page.classes()).not.toContain('is-fullscreen')
+  })
+
+  describe('按步骤查看（对齐源数据视图的「按步骤查看」）', () => {
+    const SOURCE = { sourceId: '600519', name: '贵州茅台', url: 'https://example.com', configId: 'c1', mainTable: 't1', owner: 'ops', state: 'C' }
+    /** 列表抓取 → t1（没有输入）；评论解析 t1 → t2（输入 ≠ 输出，可切换） */
+    function mockFlow() {
+      vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
+      vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+        { stepId: 's1', sourceId: '600519', name: '列表抓取', outputTable: 't1', enabled: true },
+        { stepId: 's2', sourceId: '600519', name: '评论解析', inputTable: 't1', outputTable: 't2', enabled: true },
+      ])
+    }
+    const toStep = async () => {
+      await wrapper.findAll('.browse-mode-toggle button')[1]!.trigger('click')
+      await waitForLoad()
+    }
+    const picker = () => wrapper.get('[data-testid="rail-node-select"]')
+    const pick = async (value: string) => {
+      await picker().setValue(value)
+      await waitForLoad()
+    }
+    const scopeText = () => wrapper.get('[data-testid="data-step-scope"]').text().replace(/\s+/g, '')
+
+    it('没选源：不出节点下拉，数据表下拉也换掉，提示先选源，不请求步骤', async () => {
+      mockFlow()
+      const auth = useAuthStore()
+      auth.roles = ['admin']
+      await mountPage()
+      await waitForLoad()
+      await toStep()
+
+      expect(wrapper.find('[data-testid="data-step-need-source"]').text()).toBe('先选择源')
+      expect(wrapper.find('[data-testid="rail-node-select"]').exists()).toBe(false)
+      expect(tableSelectOf()).toBeUndefined()
+      expect(sourceApi.sourceSteps).not.toHaveBeenCalled()
+    })
+
+    it('选了源：RailNodePicker 列出节点，当前表对应的节点已选中；只有输出表时只显示「输出」', async () => {
+      mockFlow()
+      const auth = useAuthStore()
+      auth.roles = ['admin']
+      await mountPage({ sourceId: '600519' })
+      await waitForLoad()
+      await toStep()
+
+      expect(sourceApi.sourceSteps).toHaveBeenCalledWith('600519')
+      expect(picker().findAll('option').map((o) => o.text())).toEqual(['列表抓取', '评论解析'])
+      expect((picker().element as HTMLSelectElement).value).toBe('s1')
+      expect(scopeText()).toBe('输出t1')
+      expect(wrapper.find('[data-testid="data-scope-input"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="data-rail-toggle"]').exists()).toBe(true)
+    })
+
+    it('选节点切到它的输出表；输入 / 输出不同时可切换，再切回；源不被清掉', async () => {
+      mockFlow()
+      // 新表的源清单里没有当前源（大表清单取数有上限）：按表看会清源，按步骤看必须保留
+      vi.spyOn(dataApi, 'distinctSource').mockImplementation(async (query) => (query.tableId === 't2' ? ['other-src'] : ['600519']))
+      const auth = useAuthStore()
+      auth.roles = ['admin']
+      await mountPage({ sourceId: '600519' })
+      await waitForLoad()
+      await toStep()
+
+      await pick('s2')
+      expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t2')
+      expect(scopeText()).toBe('输入t1·输出t2')
+      expect(wrapper.get('[data-testid="data-scope-output"]').classes()).toContain('active')
+      expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 't2', sourceId: '600519' }))
+
+      await wrapper.get('[data-testid="data-scope-input"]').trigger('click')
+      await waitForLoad()
+      expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t1')
+      expect(wrapper.get('[data-testid="data-scope-input"]').classes()).toContain('active')
+      expect((picker().element as HTMLSelectElement).value).toBe('s2')
+
+      await wrapper.get('[data-testid="data-scope-output"]').trigger('click')
+      await waitForLoad()
+      expect(dataApi.tableMeta).toHaveBeenLastCalledWith('t2')
+      expect(dataApi.rowQueryPaged).toHaveBeenLastCalledWith(expect.objectContaining({ tableId: 't2', sourceId: '600519' }))
+    })
+
+    it('输入表等于输出表合并成「输入·输出」；流程图按钮打开「展示处理步骤」抽屉；切回按表后数据表下拉回来', async () => {
+      vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue(SOURCE)
+      vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+        { stepId: 's1', sourceId: '600519', name: '同表处理', inputTable: 't1', outputTable: 't1', enabled: true },
+      ])
+      const auth = useAuthStore()
+      auth.roles = ['admin']
+      await mountPage({ sourceId: '600519' })
+      await waitForLoad()
+      await toStep()
+
+      expect(wrapper.find('[data-testid="data-scope-merged"]').text().replace(/\s+/g, '')).toBe('输入·输出t1')
+      expect(wrapper.find('[data-testid="data-scope-input"]').exists()).toBe(false)
+
+      await wrapper.get('[data-testid="data-rail-toggle"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.findComponent({ name: 'StepDrawer' }).props('modelValue')).toBe(true)
+
+      await wrapper.findAll('.browse-mode-toggle button')[0]!.trigger('click')
+      await flushPromises()
+      expect(tableSelectOf()).toBeDefined()
+      expect(wrapper.find('[data-testid="rail-node-select"]').exists()).toBe(false)
+    })
   })
 
   it('删除数据：按时间删除和表操作按旧系统分组，表操作只保留三项', async () => {
@@ -327,13 +540,13 @@ describe('数据中心 · 数据查询 tab', () => {
     vi.unstubAllEnvs()
   })
 
-  it('取数 API 与清除父表标识都在更多（0930-14D）', async () => {
+  it('取数 API 在「导出 ▾」、清除父表标识在更多（0930-14D；1008-07 取数 API 挪到导出）', async () => {
     const auth = useAuthStore()
     auth.roles = ['admin']
     await mountPage({ sourceId: '600519' })
     await waitForLoad()
 
-    const apiMenu = await openResultMenu('data-more')
+    const apiMenu = await openResultMenu('data-export-menu')
     const apiItem = apiMenu.findAll('li, .el-dropdown-menu__item').find((el) => el.text() === '取数 API')!
     await apiItem.trigger('click')
     await flushPromises()
@@ -368,10 +581,11 @@ describe('数据中心 · 数据查询 tab', () => {
     await mountPage({ sourceId: '600519' })
     await waitForLoad()
 
-    await wrapper.get('[data-testid="data-import"]').trigger('click')
-    await flushPromises()
+    const body = await openResultMenu('data-add')
+    await clickMenuItem(body, 'Excel 导入')
 
     expect(wrapper.findComponent(DataImportDialog).props('modelValue')).toBe(true)
+    document.body.innerHTML = ''
   })
 
   it('结果表展示 STATE 状态列', async () => {
@@ -419,7 +633,7 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(wrapper.text()).not.toContain('已选择')
   })
 
-  it('数据详情抽屉：点击 ENTRY_ID 调 dataApi.rowDetail 并展示 showItems', async () => {
+  it('数据详情抽屉：点一行调 dataApi.rowDetail 并展示 showItems', async () => {
     vi.spyOn(dataApi, 'rowDetail').mockResolvedValue({
       row: ROW,
       showItems: [{ itemId: '1', columnName: 'K1', itemName: '标题', value: '关于利润分配的公告' }],
@@ -429,11 +643,39 @@ describe('数据中心 · 数据查询 tab', () => {
     await mountPage()
     await waitForLoad()
 
-    await wrapper.find('a.dv-a').trigger('click') // ENTRY_ID 链接
+    await wrapper.find('.el-table__body tr').trigger('click')
     await flushPromises()
 
     expect(dataApi.rowDetail).toHaveBeenCalledWith('t1', '88231')
     expect(wrapper.text()).toContain('标题')
+  })
+
+  it('点一行开详情：点的是行里自带动作的链接 / 选中了文字时不叠开详情；整张表显示手型', async () => {
+    const detailSpy = vi.spyOn(dataApi, 'rowDetail').mockResolvedValue({ row: ROW, showItems: [] })
+    const auth = useAuthStore()
+    auth.roles = ['admin']
+    await mountPage()
+    await waitForLoad()
+
+    expect(wrapper.get('.dqp-table').classes()).toContain('is-row-clickable')
+    // ENTRY_ID 不再是链接，只剩源 / 任务这类各有动作的链接
+    expect(wrapper.findAll('a.dv-a').some((a) => a.text() === '88231')).toBe(false)
+
+    // 点源链接：只开源详情，不开行详情
+    await wrapper.findAll('a.dv-a').find((a) => a.text() === '600519')!.trigger('click')
+    await flushPromises()
+    expect(detailSpy).not.toHaveBeenCalled()
+
+    // 选中了文字（准备复制）：点行不开详情
+    const selection = vi.spyOn(window, 'getSelection').mockReturnValue({ toString: () => '选中的文字' } as Selection)
+    await wrapper.find('.el-table__body tr').trigger('click')
+    await flushPromises()
+    expect(detailSpy).not.toHaveBeenCalled()
+    selection.mockRestore()
+
+    await wrapper.find('.el-table__body tr').trigger('click')
+    await flushPromises()
+    expect(detailSpy).toHaveBeenCalledTimes(1)
   })
 
   // 2026-09-28：数据中心也能预览 OSS 文件路径（TB_KAIPANLA 详情json 这类 .json），与源数据视图同一个预览器
@@ -460,7 +702,7 @@ describe('数据中心 · 数据查询 tab', () => {
     expect(preview().props('path')).toBe('/xtdb/kaipan/2026-09-28/386.json')
     expect(preview().props('ext')).toBe('json')
 
-    await wrapper.find('a.dv-a').trigger('click')
+    await wrapper.find('.el-table__body tr').trigger('click')
     await flushPromises()
     const detailFile = wrapper.find('[data-testid="detail-file"]')
     expect(detailFile.exists()).toBe(true)
@@ -479,8 +721,9 @@ describe('数据中心 · 数据查询 tab', () => {
     await mountPage()
     await waitForLoad()
 
-    await wrapper.get('[data-testid="data-add"]').trigger('click')
-    await flushPromises()
+    const addMenu = await openResultMenu('data-add')
+    await clickMenuItem(addMenu, '手工录入')
+    document.body.innerHTML = ''
 
     await formInput('SOURCE_ID').setValue('600519')
     await formInput('标题(K1)').setValue('测试标题')
@@ -545,7 +788,7 @@ describe('数据中心 · 数据查询 tab', () => {
     await mountPage()
     await waitForLoad()
 
-    // read 角色下操作列（详情列 ENTRY_ID 仍是唯一 dv-a，任务列不受 canWrite 限制，可查看）
+    // read 角色下没有操作列，任务列不受 canWrite 限制，可查看
     const taskLink = wrapper.findAll('a.dv-a').find((a) => a.text() === 'd-99')
     await taskLink!.trigger('click')
     await flushPromises()
