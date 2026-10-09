@@ -127,15 +127,16 @@ const emit = defineEmits<{
     grid-template-columns: minmax(0, 1fr) min(var(--captcha-col), 45%) 44px;
   }
 
-  .lg-captcha-row :deep(.el-input__wrapper) {
-    padding-inline: 14px;
+  /* 多带一层 .el-input：LoginForm 的 .lg-card :deep(.el-input__*) 同优先级、后加载，不提高优先级这几条不生效 */
+  .lg-captcha-row :deep(.el-input .el-input__wrapper) {
+    padding-inline: 10px;
   }
 
-  .lg-captcha-row :deep(.el-input__prefix) {
+  .lg-captcha-row :deep(.el-input .el-input__prefix) {
     margin-right: 8px;
   }
 
-  .lg-captcha-row :deep(.el-input__inner) {
+  .lg-captcha-row :deep(.el-input .el-input__inner) {
     font-size: 15px;
   }
 
