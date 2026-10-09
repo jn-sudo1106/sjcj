@@ -26,7 +26,7 @@ import type {
   RuleOrchestration,
 } from './flowModel'
 import { cloneConfig, normalizeNodeConfigs, backfillOutputTables } from './flowModel.layout'
-import { isAudioTextNode, isOcrNode, isRuleLikeNode, isTranslateNode } from './flowModel'
+import { isAudioTextNode, isOcrNode, isPdfNode, isRuleLikeNode, isTranslateNode } from './flowModel'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
 
 // ---------- 采集能力 ----------
@@ -1151,12 +1151,15 @@ function applyRuleStepTables(cfg: NodeConfig, step: Step) {
   // 几类共用同一套落库口径（入参/出参写步骤 context/outContext，见 stepPersist），
   // 回读时同样要把步骤里的 inputTable/outputTable 填回各自的编排对象——
   // 只回填 ruleCfg 的话，这几类节点的「表配置」刷新后输入表/输出表就是空的（用户 2026-09-18 反馈）。
+  // PDF 抓取（2026-10-10）：表配置同样落 execCfg，但 isPdfNode 不进 isRuleLikeNode（那会改落库
+  // 契约的 nodeType），这里要单独把它纳入，否则 PDF 节点的表配置保存成功、刷新后回读为空（用户反馈）。
   const inputId = step.inputTable && step.inputTable !== '-' ? step.inputTable : ''
   const outputId = step.outputTable || ''
-  const target = cfg.ruleCfg ?? (isRuleLikeNode(cfg) ? cfg.execCfg : undefined)
+  const ruleStyled = isRuleLikeNode(cfg) || isPdfNode(cfg)
+  const target = cfg.ruleCfg ?? (ruleStyled ? cfg.execCfg : undefined)
   if (!target) {
     // 回读节点没有 execCfg（种子不带），步骤里有表信息时先建一份默认的再填
-    if (!isRuleLikeNode(cfg) || (!inputId && !outputId)) return
+    if (!ruleStyled || (!inputId && !outputId)) return
     cfg.execCfg = { ...makeDefaultExecConfig() }
     applyRuleStepTables(cfg, step)
     return
@@ -1183,6 +1186,9 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
       ? { mode: 'expr', logic: 'AND', items: [], expr: step.condition }
       : undefined
     applyStepTaskFields(cfg, step)
+    // PDF 抓取（2026-10-10）：PDF 节点有 collectCfg、走采集类分支，但它的表配置落 execCfg，
+    // 上面的 applyRuleStepTables 只在非采集分支被调用——这里补一次，否则刷新后表配置回读为空。
+    if (isPdfNode(cfg)) applyRuleStepTables(cfg, step)
     // 旧 isMulti 三态：**它就是「列表页 / 详情页」的判据**（2026-09-05 实测定案）。
     //
     // 这里原来写着「不要拿它去改 isDetail/webKind——网页类型已改为『节点类别』，旧平台与之

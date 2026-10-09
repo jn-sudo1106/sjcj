@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildHorizontalLayout, buildSourceSeed, effectiveInputTable, isArticleSummaryNode, isAudioTextNode, isOcrNode, isTranslateNode, isVideoAudioNode } from '@/views/FlowCanvas/canvas/flowModel'
+import { buildHorizontalLayout, buildSourceSeed, effectiveInputTable, isArticleSummaryNode, isAudioTextNode, isOcrNode, isPdfNode, isTranslateNode, isVideoAudioNode } from '@/views/FlowCanvas/canvas/flowModel'
 // 0926 REVIEW F-R14：布局断言引用 impl 导出的同一组常量（flowModel.layout.ts），
 // 实现调整时断言自动跟随，不再硬编码镜像的魔法数字。
 import { LAYOUT_FORK_GAP_X, LAYOUT_NODE_H, LAYOUT_NODE_W, LAYOUT_ROW_GAP } from '@/views/FlowCanvas/canvas/flowModel.layout'
@@ -433,6 +433,32 @@ describe('buildSourceSeed · 不按节点名称猜类型', () => {
     ])
     expect(isVideoAudioNode(seed.configs['1']!)).toBe(true)
     expect(isAudioTextNode(seed.configs['1']!)).toBe(false)
+  })
+})
+
+// 2026-10-10 bug：PDF 抓取节点表配置保存成功、刷新后回读为空。
+// PDF 的表配置落 execCfg（与翻译/打标签同一存储位），但 applyRuleStepTables 回填时
+// 只认 isRuleLikeNode（PDF 为保落库契约不进它）——修复前 execCfg.inputTableId 一直空。
+describe('buildSourceSeed · PDF 抓取节点表配置回读（1010）', () => {
+  const pdfStep = (stepId: string, name: string, inputTable: string, outputTable: string): Step =>
+    ({ stepId, sourceId: SOURCE.sourceId, name, dependsOn: ['0'], configType: '130', inputTable, outputTable, enabled: true }) as Step
+
+  it('configType=130 的 PDF 节点：步骤里的 inputTable/outputTable 回填到 execCfg', () => {
+    const seed = buildSourceSeed(SOURCE, [pdfStep('1', 'PDF抓取', '6200037', '6200038')])
+    const cfg = seed.configs['1']!
+    expect(isPdfNode(cfg)).toBe(true)
+    expect(cfg.execCfg?.inputTableId).toBe('6200037')
+    expect(cfg.execCfg?.outputTableId).toBe('6200038')
+  })
+
+  it('没有 inputTable（- 哨兵）的 PDF 节点不回填 inputTableId，保留 undefined', () => {
+    const seed = buildSourceSeed(SOURCE, [
+      { ...pdfStep('1', 'PDF抓取', '6200037', '6200038'), inputTable: '-' } as Step,
+    ])
+    const cfg = seed.configs['1']!
+    expect(isPdfNode(cfg)).toBe(true)
+    expect(cfg.execCfg?.inputTableId).toBeUndefined()
+    expect(cfg.execCfg?.outputTableId).toBe('6200038')
   })
 })
 
