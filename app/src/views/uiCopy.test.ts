@@ -268,7 +268,9 @@ describe('最新方案 UI 入口收口', () => {
     expect(canvasHeader).not.toContain('@click="openEdit"')
     expect(canvasHeader).not.toContain('同步到源')
     expect(canvasHeader).toContain('class="ch-flow-mode-actions"')
-    expect(canvasHeader).toContain('v-if="view === \'flow\' && flowMode === \'canvas\'" class="ch-actions"')
+    // 2026-10-10：保存状态挪进「发起抓取」那一组，标题下不再单独占一行 ch-actions（流程页面太小）
+    expect(canvasHeader).not.toContain('class="ch-actions"')
+    expect(canvasHeader).toContain('<span v-if="flowMode === \'canvas\'" class="ch-save-status" data-testid="flow-save-status">')
     expect(canvasHeader).not.toContain('class="ch-canvas-actions"')
     expect(canvasHeader).not.toContain('<Teleport')
     expect(flowBoard).toContain("import FlowXmlDialog from './FlowXmlDialog.vue'")
