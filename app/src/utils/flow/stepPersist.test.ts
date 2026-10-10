@@ -5,6 +5,7 @@ import {
   applyStepSourceDefault,
   assertStepsPersistable,
   condExprOf,
+  extraParentsOf,
   hasRealBranches,
   isFileLikeNode,
   outputTableMissing,
@@ -310,6 +311,35 @@ describe('hasRealBranches（0903 YB-A）', () => {
   it('没有 dependsOn / 空快照都不算分支', () => {
     expect(hasRealBranches({ a: step('a'), b: step('b') })).toBe(false)
     expect(hasRealBranches({})).toBe(false)
+  })
+
+  // 1008-BR-01：旧平台能勾选多个上级（lastStep="A,B"）。画布只按第一个上级挂，重算 lastStep
+  // 会写回成单值、丢掉另一个上级。A、B 各只有这一个下游时，按「同一前置多个后继」判不出来。
+  it('一个步骤有多个上级（汇合）也算分支，冻结重算', () => {
+    expect(hasRealBranches({
+      a: step('a', ['0']),
+      b: step('b', ['0']),
+      c: step('c', ['a', 'b']),
+    })).toBe(true)
+  })
+
+  it("上级里含根哨兵 '0' 也算多个上级；重复的同一上级不算", () => {
+    expect(hasRealBranches({ a: step('a', ['0']), c: step('c', ['0', 'a']) })).toBe(true)
+    expect(hasRealBranches({ a: step('a', ['0']), c: step('c', ['a', 'a']) })).toBe(false)
+  })
+})
+
+describe('extraParentsOf（1008-BR-01）', () => {
+  const step = (stepId: string, dependsOn?: string[]): Step =>
+    ({ stepId, sourceId: '430016824', name: stepId, dependsOn, enabled: true }) as Step
+
+  it('画布按第一个上级挂，返回其余上级（去重、去自身、去空）', () => {
+    expect(extraParentsOf(step('c', ['a', 'b', 'b', '', 'c', 'd']))).toEqual(['b', 'd'])
+  })
+
+  it('只有一个上级 / 没有快照时返回空', () => {
+    expect(extraParentsOf(step('c', ['a']))).toEqual([])
+    expect(extraParentsOf(undefined)).toEqual([])
   })
 })
 

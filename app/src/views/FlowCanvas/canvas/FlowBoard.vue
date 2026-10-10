@@ -14,7 +14,7 @@ import { useStepWrite } from './useStepWrite'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
 import { entryApi, flowApi, flowCenterApi, type FlowRecord } from '@/api'
-import { isWritableStepId, relinkCandidates, validFlowIdOf } from '@/utils/flow/stepPersist'
+import { extraParentsOf, isWritableStepId, relinkCandidates, validFlowIdOf } from '@/utils/flow/stepPersist'
 import { copyToClipboard } from '@/utils/clipboard'
 import CanvasHeader from '../shared/CanvasHeader.vue'
 import SourceWorkflowTabs from '../source/SourceWorkflowTabs.vue'
@@ -432,6 +432,16 @@ function nodeCondText(cfg: NodeConfig): string {
   return group && conditionGroupIsSet(group) ? conditionGroupLabel(group) : ''
 }
 
+// 1008-BR-01：多上级（旧平台 lastStep="A,B"）只按第一个上级连线，其余上级在卡片上标出来
+function extraParentsTitle(id: string): string {
+  const snapshot = sourceStore.stepSnapshots[id]
+  const extra = extraParentsOf(snapshot)
+  if (!extra.length) return ''
+  const name = (pid: string) => (pid === '0' ? '流程入口' : `#${pid}${flow.configs[pid]?.title ? ` ${flow.configs[pid].title}` : ''}`)
+  const drawn = snapshot?.dependsOn?.find((pid) => pid && pid !== id) ?? ''
+  return `该步骤有多个上级：画布连线的是 ${name(drawn)}，另有 ${extra.map(name).join('、')}。为了不丢上级，此流程不自动重算挂接关系。`
+}
+
 function openRelinkDialog(nodeId: string) {
   // 关联会重载画布（本地拼树会丢掉未保存的草稿），脏画布先拦下
   if (flow.dirty) {
@@ -735,6 +745,7 @@ watch(
             <div v-if="tableChip(n.cfg, n.id)" class="rc-node-table" :class="{ unset: tableChip(n.cfg, n.id)!.unset }" :title="tableChip(n.cfg, n.id)!.title">⊞ {{ tableChip(n.cfg, n.id)!.label }}</div>
             <div class="rc-node-foot">
               <span v-if="nodeCondText(n.cfg)" :data-testid="`node-cond-${n.id}`" class="rc-node-cond" :title="nodeCondText(n.cfg)">条件</span>
+              <span v-if="extraParentsTitle(n.id)" :data-testid="`node-extra-parents-${n.id}`" class="rc-node-cond" :title="extraParentsTitle(n.id)">另有上级</span>
               <span class="rc-chip" :class="footClass(n.cfg)" :title="footFor(n.cfg).hint">{{ footFor(n.cfg).left }}</span>
               <span>{{ footFor(n.cfg).right }}</span>
             </div>

@@ -202,7 +202,10 @@ export function assertStepsPersistable(
 export function hasRealBranches(snapshots: Record<string, Step | undefined>): boolean {
   const childrenOf = new Map<string, number>()
   for (const step of Object.values(snapshots)) {
-    for (const parent of step?.dependsOn ?? []) {
+    // 1008-BR-01：多个上级（旧平台勾选多步「添加步骤」写成 lastStep="A,B"）同样冻结。画布只按
+    // 第一个上级挂，重算会写回单值、丢掉其余上级；A、B 各只有这一个下游时下面的计数判不出来。
+    if (step && extraParentsOf(step).length) return true
+    for (const parent of new Set(step?.dependsOn ?? [])) {
       if (!parent || parent === '0') continue
       const next = (childrenOf.get(parent) ?? 0) + 1
       if (next > 1) return true
@@ -210,6 +213,16 @@ export function hasRealBranches(snapshots: Record<string, Step | undefined>): bo
     }
   }
   return false
+}
+
+/**
+ * 步骤除画布连线那个上级之外的其余上级（1008-BR-01）。画布按 `dependsOn` 第一个上级挂
+ * （`buildSourceSeed` 的 `realParentOf`），其余的不画线，在节点卡片上用「另有上级」标出来。
+ * 去重、去空、去自身；根哨兵 `'0'` 照常算一个上级。
+ */
+export function extraParentsOf(step: Step | undefined): string[] {
+  const parents = [...new Set((step?.dependsOn ?? []).filter((id) => id && id !== step?.stepId))]
+  return parents.slice(1)
 }
 
 /**
