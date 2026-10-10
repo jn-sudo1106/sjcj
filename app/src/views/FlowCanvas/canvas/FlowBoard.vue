@@ -7,7 +7,8 @@ let flowBoardSeq = 0
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { useFlowStore } from '@/stores/flow'
+import { useFlowStore, type EdgeSlot } from '@/stores/flow'
+import { tableForDownstream } from '@/utils/flow/tableSync'
 import { useSourceStore } from '@/stores/source'
 import { useDuplicateNode } from './useDuplicateNode'
 import { useStepWrite } from './useStepWrite'
@@ -126,8 +127,14 @@ const menu = reactive<{ show: boolean; x: number; y: number; nodeId: string | nu
   show: false, x: 0, y: 0, nodeId: null, afterId: 'start',
 })
 // 0707 优化·Phase6·补：addPop 扩展 branch 模式（ownerId/branchId），供 fan-out 分支列「+」复用同一浮层。
-const addPop = reactive<{ show: boolean; x: number; y: number; afterId: string; branch: { ownerId: string; branchId: string } | null }>({
-  show: false, x: 0, y: 0, afterId: 'start', branch: null,
+// 1008-BR-04：再加 edge（分支区域线上「+」→ insertOnEdge）与 siblingOf（节点左右「+」→ addSibling）。
+const addPop = reactive<{
+  show: boolean; x: number; y: number; afterId: string
+  branch: { ownerId: string; branchId: string } | null
+  edge: { parentId: string; childIds: string[] } | null
+  siblingOf: string | null
+}>({
+  show: false, x: 0, y: 0, afterId: 'start', branch: null, edge: null, siblingOf: null,
 })
 const nodePalette = reactive({ show: false, x: 0, y: 0 })
 
@@ -491,25 +498,74 @@ function runNode(id: string) {
 }
 
 // ---- 添加节点浮层（0707 优化·Phase1，参照 Dify：锚定弹层 + 搜索 + 分组，点选即插） ----
-function openAddPopover(x: number, y: number, afterId: string) {
+function showAddPopover(x: number, y: number, target: Partial<Pick<typeof addPop, 'afterId' | 'branch' | 'edge' | 'siblingOf'>>) {
   addPop.show = true
   addPop.x = x
   addPop.y = y
-  addPop.afterId = afterId
-  addPop.branch = null
+  addPop.afterId = target.afterId ?? 'start'
+  addPop.branch = target.branch ?? null
+  addPop.edge = target.edge ?? null
+  addPop.siblingOf = target.siblingOf ?? null
+}
+function openAddPopover(x: number, y: number, afterId: string) {
+  showAddPopover(x, y, { afterId })
 }
 // 0707 优化·Phase6·补：fan-out 分支列「+」——挂进分支 chain 末尾，而非主链
 function openBranchAddPopover(x: number, y: number, ownerId: string, branchId: string) {
-  addPop.show = true
-  addPop.x = x
-  addPop.y = y
-  addPop.branch = { ownerId, branchId }
+  showAddPopover(x, y, { branch: { ownerId, branchId } })
+}
+// 1008-BR-04：分支区域线上「+」——分叉前（接管全部分支）/ 分支链头上方 / 链内两节点之间
+function openEdgeAddPopover(x: number, y: number, slot: EdgeSlot) {
+  showAddPopover(x, y, { edge: { parentId: slot.parentId, childIds: slot.childIds } })
+}
+
+// ---- 节点左右「+」（1008-BR-04）：给节点加一个兄弟节点 = 在它的上级处分叉，新节点排同级最右 ----
+// 旧平台语义（SourceStepCard openCreatePanel）：新步骤上级 = 该节点的上级；上级没有输出表不能加后续。
+/** 根位节点（没有上级）不能加兄弟；已发布只读版本不显示 */
+function canAddSibling(id: string): boolean {
+  return !isPublishedView.value && !!flow.canvasParentMap.get(id)
+}
+/** 上级没有可给下游的表时不能加（提示沿用旧平台原文） */
+function siblingBlockedReason(id: string): string {
+  const parent = flow.canvasParentMap.get(id)
+  const parentCfg = parent ? flow.configs[parent] : undefined
+  return parentCfg && tableForDownstream(parentCfg) ? '' : '所选步骤输出表为空，无法增加后续步骤'
+}
+function openSiblingAddPopover(x: number, y: number, id: string) {
+  const reason = siblingBlockedReason(id)
+  if (reason) {
+    ElMessage.warning(reason)
+    return
+  }
+  showAddPopover(x, y, { siblingOf: id })
+}
+// 左右「+」只在悬停 / 选中的节点上出现：卡片和按钮之间有缝，离开时延迟收起，鼠标挪到按钮上不会消失
+const hoverNodeId = ref('')
+let hoverLeaveTimer: ReturnType<typeof setTimeout> | undefined
+function onNodeHover(id: string) {
+  clearTimeout(hoverLeaveTimer)
+  hoverNodeId.value = id
+}
+function onNodeLeave() {
+  clearTimeout(hoverLeaveTimer)
+  hoverLeaveTimer = setTimeout(() => { hoverNodeId.value = '' }, 150)
+}
+function sideAddVisible(id: string): boolean {
+  return (hoverNodeId.value === id || flow.selectedId === id) && canAddSibling(id)
+}
+/** 链尾节点自己就是嵌套分叉点时，列底的「追加」入口不显示：它下面的分支各有自己的「+」 */
+function isForkOwner(id: string): boolean {
+  let n = 0
+  for (const parent of flow.canvasParentMap.values()) if (parent === id && ++n > 1) return true
+  return false
 }
 function closeAddPopover() {
   addPop.show = false
 }
 function onPickNode(template: string) {
-  if (addPop.branch) flow.addNodeToBranch(addPop.branch.ownerId, addPop.branch.branchId, template)
+  if (addPop.siblingOf) flow.addSibling(addPop.siblingOf, template)
+  else if (addPop.edge) flow.insertOnEdge(addPop.edge.parentId, addPop.edge.childIds, template)
+  else if (addPop.branch) flow.addNodeToBranch(addPop.branch.ownerId, addPop.branch.branchId, template)
   else flow.insertAfter(addPop.afterId, template)
   closeAddPopover()
 }
@@ -663,13 +719,50 @@ watch(
               :title="branchColText(br)"
               :style="{ left: br.colX + 'px', top: (br.labelTop ?? (br.top - 16)) + 'px' }"
             >{{ branchColText(br) }}</div>
-            <!-- 0707 优化·Phase6·补：分支内添加节点入口——挂到 chain 末尾（不支持中间插入，与 moveInBranch 按钮化范围一致） -->
+            <!-- 0707 优化·Phase6·补：分支内添加节点入口——挂到 chain 末尾。链中间的插入见下方 edgeSlots（1008-BR-04）；
+                 链尾节点是嵌套分叉点时不显示（它下面的分支各有自己的「+」） -->
             <button
+              v-if="!isPublishedView && !(br.chain.length && isForkOwner(br.chain[br.chain.length - 1]))"
               class="rc-branch-add-slot"
               type="button"
               :style="{ left: (br.colX - 12) + 'px', top: (br.top + br.height + 6) + 'px' }"
               :title="`在「${br.label}」分支内添加节点`"
               @click.stop="openBranchAddPopover($event.clientX, $event.clientY, String(ownerId), br.id)"
+            >＋</button>
+          </template>
+        </template>
+
+        <!-- 分支区域线上「+」（1008-BR-04）：分叉前 / 分支链头上方 / 链内两节点之间 -->
+        <template v-if="!isPublishedView">
+          <button
+            v-for="s in flow.layout.edgeSlots"
+            :key="s.key"
+            class="rc-edge-slot"
+            type="button"
+            :data-testid="`edge-slot-${s.key}`"
+            :style="{ left: s.cx + 'px', top: s.top + 'px' }"
+            :title="s.key.startsWith('trunk:') ? '在分叉之前插入节点（新节点接管全部分支）' : '在这条线上插入节点'"
+            aria-label="插入节点"
+            @click.stop="openEdgeAddPopover($event.clientX, $event.clientY, s)"
+          >＋</button>
+        </template>
+
+        <!-- 节点左右「+」（1008-BR-04）：新建分支。离卡片 16px，落在分支列间 32px 的空隙里 -->
+        <template v-for="n in flow.layout.nodes" :key="'side-' + n.id">
+          <template v-if="sideAddVisible(n.id)">
+            <button
+              v-for="side in ['left', 'right'] as const"
+              :key="side"
+              class="rc-side-add"
+              :class="{ blocked: !!siblingBlockedReason(n.id) }"
+              type="button"
+              :data-testid="`side-add-${side}-${n.id}`"
+              :style="{ left: (side === 'left' ? n.pos.left - 16 : n.pos.left + 210 + 16) + 'px', top: (n.pos.top + n.pos.height / 2) + 'px' }"
+              :title="siblingBlockedReason(n.id) || '新建分支：加一个与它并列的节点（同一个上级），排在最右'"
+              aria-label="新建分支"
+              @mouseenter="onNodeHover(n.id)"
+              @mouseleave="onNodeLeave"
+              @click.stop="openSiblingAddPopover($event.clientX, $event.clientY, n.id)"
             >＋</button>
           </template>
         </template>
@@ -685,6 +778,8 @@ watch(
           @dragstart.stop="onNodeDragStart($event, n.id)"
           @click.stop="onNodeClick(n.id)"
           @contextmenu="onNodeMenu($event, n.id)"
+          @mouseenter="onNodeHover(n.id)"
+          @mouseleave="onNodeLeave"
         >
           <!-- 删除按钮（0828 D05）：会上明确「那个节点上面要搞个叉」——删节点不该非得回右侧面板或右键菜单。
                hover 才显形，避免每个节点常驻一个叉；右键菜单里的「删除节点」保留，同一个 store 动作。 -->
@@ -842,6 +937,11 @@ watch(
 .rc-fanout-col-tag { position: absolute; transform: translateX(-50%); max-width: 200px; box-sizing: border-box; text-align: center; font-size: 10px; font-weight: 500; color: #475569; pointer-events: none; z-index: 22; line-height: 1.45; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-branch-add-slot { position: absolute; z-index: 20; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border: 1px dashed #fbbf24; background: #fffbeb; color: #b45309; border-radius: 999px; font-size: 15px; line-height: 1; opacity: 0.75; cursor: pointer; transition: opacity 0.12s, transform 0.12s; }
 .rc-branch-add-slot:hover { opacity: 1; transform: scale(1.08); background: #fef3c7; }
+/* 1008-BR-04：分支区域线上「+」与节点左右「+」——小圆钮，中心对准 (left, top) */
+.rc-edge-slot, .rc-side-add { position: absolute; z-index: 24; width: 20px; height: 20px; transform: translate(-50%, -50%); display: flex; align-items: center; justify-content: center; padding: 0; border: 1px solid #bfdbfe; background: #fff; color: var(--rc-primary); border-radius: 999px; font-size: 13px; line-height: 1; opacity: 0.7; cursor: pointer; box-shadow: 0 4px 10px -8px rgba(37, 99, 235, 0.8); transition: opacity 0.12s, transform 0.12s, border-color 0.12s, background 0.12s; }
+.rc-edge-slot:hover, .rc-side-add:hover { opacity: 1; border-color: var(--rc-primary); background: var(--rc-primary-bg); transform: translate(-50%, -50%) scale(1.1); }
+.rc-side-add { width: 22px; height: 22px; opacity: 0.9; }
+.rc-side-add.blocked { color: var(--rc-faint); border-color: var(--rc-border); cursor: not-allowed; }
 
 .rc-term { position: absolute; width: 150px; height: 36px; border: 1px solid var(--rc-border); border-radius: 18px; background: #fff; color: var(--rc-text-2); display: flex; align-items: center; justify-content: center; font-weight: 600; box-shadow: 0 2px 8px -5px rgba(15, 23, 42, 0.2); }
 

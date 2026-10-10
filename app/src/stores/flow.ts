@@ -76,6 +76,12 @@ export interface PlacedPos { top: number; left: number; height: number }
 export interface PlacedNode { id: string; cfg: NodeConfig; pos: PlacedPos; branch: boolean; side?: 'left' | 'right'; orphan?: boolean }
 export interface PlacedTerm { id: string; label: string; pos: PlacedPos }
 export interface DropSlot { afterId: string; top: number }
+/**
+ * 分支区域的线上「+」（1008-BR-04）：在 parentId → childIds 这段线上插入新节点（insertOnEdge）。
+ * 三种：分叉点正下方（childIds = 全部分支链头，即在分叉之前插入）、分支链头上方（只接管这一支）、
+ * 分支链内两节点之间。主链上的插入仍走 slots（afterId）。cx = 按钮中心横坐标，top = 中心纵坐标。
+ */
+export interface EdgeSlot { key: string; cx: number; top: number; parentId: string; childIds: string[] }
 /** 分叉点的 fan-out 分支连线（0707 优化·Phase6）：owner 底边 → 每列首节点 + 列内节点连线。
  *  branchLabel 仅首段（owner → 列首节点）携带。条件属于列首节点自己，画布从节点读（branchColText）。 */
 export interface FanOutEdge { d: string; branchLabel?: string }
@@ -233,6 +239,7 @@ export const useFlowStore = defineStore('flow', () => {
     const fanOutPos: Record<string, PlacedPos> = {}
     const fanOutColMeta: Record<string, FanOutColMeta> = {}
     const fanOutEdges: FanOutEdge[] = []
+    const edgeSlots: EdgeSlot[] = []
 
     // 分支列横向间隙（0925 排版）：原来 16px，相邻两列卡片几乎贴在一起、同一行里挤成一片；
     // 放宽到 28px 后列与列之间留出可辨的留白（列底纹也才有呼吸空间）。
@@ -292,7 +299,10 @@ export const useFlowStore = defineStore('flow', () => {
       b.chain.forEach((nid, i) => {
         const h = nodeHeight(nid)
         fanOutPos[nid] = { top: cy, left: colCx - NODE_W / 2, height: h }
-        if (prev) fanOutEdges.push({ d: `M${prev.cx} ${prev.y} L${colCx} ${cy}` })
+        if (prev) {
+          fanOutEdges.push({ d: `M${prev.cx} ${prev.y} L${colCx} ${cy}` })
+          edgeSlots.push({ key: `in:${b.chain[i - 1]}`, cx: colCx, top: (prev.y + cy) / 2, parentId: b.chain[i - 1], childIds: [nid] })
+        }
         const bottom = cy + h
         deepest = { cx: colCx, y: bottom }
         prev = { cx: colCx, y: bottom }
@@ -318,6 +328,11 @@ export const useFlowStore = defineStore('flow', () => {
     /** 摆放一个分支组（owner 底边 ownerBottom 下方 FORK_GAP 起）；返回子树最深点 */
     const placeGroup = (g: FlowBranchGroup, ownerCx: number, ownerBottom: number, contRef: ContRef): Pt => {
       const widths = g.branches.map(measureBranchW)
+      // 分叉之前插入（接管全部分支）：「+」压在分叉点卡片下边沿；分支标签在它下方、母线上方（labelTop）
+      edgeSlots.push({
+        key: `trunk:${g.ownerId}`, cx: ownerCx, top: ownerBottom,
+        parentId: g.ownerId, childIds: g.branches.map((b) => b.chain[0]).filter(Boolean),
+      })
       const groupW = widths.reduce((a, b) => a + b, 0) + Math.max(0, widths.length - 1) * colGap
       const top = ownerBottom + FORK_GAP
       let x = ownerCx - groupW / 2
@@ -332,6 +347,13 @@ export const useFlowStore = defineStore('flow', () => {
 
         // fan-out 连线：owner 底边 → 列首节点（空列直连列顶）；列内连线由 placeChain 产生
         const headPos = b.chain.length ? fanOutPos[b.chain[0]] : undefined
+        // 分支链头上方：只插进这一支（分叉母线在 ownerBottom + FORK_GAP / 2）
+        if (headPos) {
+          edgeSlots.push({
+            key: `head:${g.ownerId}:${b.chain[0]}`, cx: colCx, top: (ownerBottom + FORK_GAP / 2 + headPos.top) / 2,
+            parentId: g.ownerId, childIds: [b.chain[0]],
+          })
+        }
         // 0925：直角折线（转弯在分叉带中间，同组各列共用一条水平母线）
         if (headPos) {
           fanOutEdges.push({
@@ -351,9 +373,10 @@ export const useFlowStore = defineStore('flow', () => {
           top,
           height: Math.max(0, deepest.y - top),
           chain: b.chain,
-          labelTop: ownerBottom + 4,
+          labelTop: ownerBottom + 14,
         })
-        // 列标签的 y：放在分叉母线之上、owner 底边下方（不压住连线 / 节点）。
+        // 列标签的 y：放在分叉母线之上、owner 底边下方（不压住连线 / 节点）。1008-BR-04 起从 +4 下移到 +14，
+        // 给压在 owner 下边沿的「分叉前插入」按钮（半径 10）让位；标签高约 15px，仍在母线（+32）之上。
       // 0926：列标签改为只展示进入条件的纯文本，不再配套底纹框（底纹渲染已移除）。
       })
       // 底纹按各列自身深度收边（0925 美化：曾试过同组对齐底边，短列会留一大片空底纹，
@@ -432,10 +455,9 @@ export const useFlowStore = defineStore('flow', () => {
       if (!mainPos[a] || !mainPos[b]) continue
       const aBottom = mainPos[a].top + mainPos[a].height
       const bTop = mainPos[b].top
-      if (fanOutColMeta[a]) {
-        slots.push({ afterId: a, top: bTop - GAP / 2 })
-        continue
-      }
+      // 1008-BR-04：分叉点下方插入 = 在分叉之前插入、接管全部分支，入口改由 edgeSlots 的 trunk「+」承担
+      // （压在分叉点卡片下边沿）；原来这里的「+」放在所有分支下方「完成」之前，看着像在末尾追加
+      if (fanOutColMeta[a]) continue
       slots.push({ afterId: a, top: (aBottom + bTop) / 2 })
       mainEdges.push({
         fromId: a,
@@ -474,6 +496,7 @@ export const useFlowStore = defineStore('flow', () => {
       fanOutEdges,
       fanOutColMeta,
       slots,
+      edgeSlots,
       totalHeight,
       /** 画布内容宽度（0925）：随最宽分支组自适应，FlowBoard 用它设容器/SVG 宽度（≥640） */
       width,
@@ -669,6 +692,9 @@ export const useFlowStore = defineStore('flow', () => {
     else order.push(id)
     rebuildTopology(parentOf, order)
   }
+
+  /** 画布上每个节点的上级（1008-BR-04：左右「+」按它判断能否加兄弟、上级有没有输出表） */
+  const canvasParentMap = computed(() => canvasParents().parentOf)
 
   /** 节点在画布上的上级（主链首节点 / 根位节点为 undefined） */
   function parentOfNode(id: string): string | undefined {
@@ -1329,6 +1355,7 @@ export const useFlowStore = defineStore('flow', () => {
     // 编辑动作
     insertAfter,
     insertOnEdge,
+    canvasParentMap,
     addSibling,
     parentOfNode,
     childrenOfNode,
