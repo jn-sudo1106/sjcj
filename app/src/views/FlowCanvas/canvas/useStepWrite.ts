@@ -7,9 +7,11 @@
 // 新建步骤响应不回 itemConfig，要再查 nextConfigPaged 用差集定位，并 enable?state=0
 // （新建默认停用）。虚拟起点 itemConfig=0 和本地草稿 id 不写。
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { entryApi, flowCenterApi, idFromApiResult, itemApi, sourceApi, type Ack, type Step } from '@/api'
+import { entryApi, flowCenterApi, idFromApiResult, itemApi, sourceApi, versionArgs, type Ack, type Step } from '@/api'
+import { stepToStepModifyPayload } from '@/api/legacyAdapters'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
+import { useFlowVersionStore } from '@/stores/flowVersion'
 import {
   applyStepSourceDefault,
   assertStepsPersistable,
@@ -117,6 +119,8 @@ async function ruleColumnMaps(cfg: {
 export function useStepWrite() {
   const flow = useFlowStore()
   const sourceStore = useSourceStore()
+  // 2026-10-10 流程版本：217 起发布版只读，改步骤一律写进草稿（首次写入自动建草稿），见 stores/flowVersion.ts
+  const version = useFlowVersionStore()
 
   function sourceIdOf(): string {
     return flow.sourceCfg?.sourceId || flow.sourceCtx?.sourceId || ''
@@ -173,9 +177,14 @@ export function useStepWrite() {
     const carryOutEntry = outputTable != null && String(outputTable).trim() !== ''
     // 首节点所属流程：快照回读的 flowId 优先（svg 按流程查询时根行自带），拿不到再用画布口径
     // 参数按需拼装：outEntry 只在有值时作为第 4 参传入，避免拖一个 undefined 尾参
-    const rootArgs: [string, string, string?] = [nodeId, configId, validFlowIdOf(snapshot?.flowId) || flowIdOf()]
-    if (carryOutEntry) rootArgs.push(outputTable as string)
-    const ack = await itemApi.rootConfigUpdate(...rootArgs)
+    const rootFlowId = validFlowIdOf(snapshot?.flowId) || flowIdOf()
+    const ack = await version.withDraft(rootFlowId, (ref) => {
+      // 参数按需拼装：outEntry 只在有值（或后面还要接版本信息）时才占位，避免拖 undefined 尾参
+      const args: Parameters<typeof itemApi.rootConfigUpdate> = [nodeId, configId, rootFlowId]
+      if (carryOutEntry || ref) args.push(carryOutEntry ? outputTable : undefined)
+      if (ref) args.push(ref)
+      return itemApi.rootConfigUpdate(...args)
+    })
     assertOk(ack, '修改流程入口配置失败')
     // 快照同步为画布值（输出表空也同步成 null）：差异已被本次提交消费，避免下一轮自动保存
     // 因同一差异重复调用；空输出表后端不落库的差异留给下次加载消解。
@@ -200,7 +209,10 @@ export function useStepWrite() {
       lastStepIds: lastStepFromCanvas ? lastStepIdsFromCanvas(flow.main, nodeId, flow.branchGroups) : undefined,
       ...(isRuleLikeNode(cfg) || isPdfNode(cfg) ? await ruleColumnMaps(cfg) : {}),
     })
-    const ack = await itemApi.stepModify(step)
+    // 2026-10-10：提交内容与快照完全一致就不写。自动保存每轮都会走到所有已有步骤，原来无改动也整包
+    // 回写；流程进版本模式后，这种空写会在**只是打开流程**时就自动建出草稿（217 实测 21000003）。
+    if (JSON.stringify(stepToStepModifyPayload(step)) === JSON.stringify(stepToStepModifyPayload(snapshot))) return
+    const ack = await version.withDraft(flowIdOf(), (ref) => itemApi.stepModify(step, ...versionArgs(ref)))
     assertOk(ack, '修改步骤失败')
     sourceStore.rememberSteps([step], 'merge')
   }
@@ -248,7 +260,7 @@ export function useStepWrite() {
       ...Object.keys(sourceStore.stepSnapshots),
       ...flow.main.filter(isWritableStepId),
     ])
-    const ack = await itemApi.saveItemConfig(step)
+    const ack = await version.withDraft(fid, (ref) => itemApi.saveItemConfig(step, ...versionArgs(ref)))
     assertOk(ack, '新增步骤失败')
 
     /**
@@ -274,7 +286,9 @@ export function useStepWrite() {
     // （老后端 / 未绑流程的源）维持按源查。
     const refreshSteps = async (): Promise<Step[]> => {
       if (flowId && /^\d+$/.test(flowId)) {
-        return flowCenterApi.steps(flowId, { withConfigDetails: false })
+        // 流程版本：新步骤建在草稿里，按草稿版本回读才找得到
+        const versionId = version.viewVersionId
+        return flowCenterApi.steps(flowId, { withConfigDetails: false, ...(versionId ? { versionId } : {}) })
       }
       return sourceApi.sourceSteps(sid, { withConfigDetails: false })
     }
@@ -297,7 +311,8 @@ export function useStepWrite() {
     }
     sourceStore.rememberSteps([created], 'merge')
     try {
-      const enableAck = await itemApi.enable(created.stepId, '0')
+      const createdId = created.stepId
+      const enableAck = await version.withDraft(fid, (ref) => itemApi.enable(createdId, '0', ...versionArgs(ref)))
       assertOk(enableAck, '启用新步骤失败')
       sourceStore.rememberSteps([{ ...created, enabled: true }], 'merge')
     } catch (e) {
@@ -465,7 +480,7 @@ export function useStepWrite() {
     }
     try {
       if (isWritableStepId(nodeId)) {
-        const ack = await itemApi.deleteStep(nodeId)
+        const ack = await version.withDraft(flowIdOf(), (ref) => itemApi.deleteStep(nodeId, ...versionArgs(ref)))
         assertOk(ack, '删除步骤失败')
         sourceStore.forgetStep(nodeId)
       }
@@ -512,7 +527,7 @@ export function useStepWrite() {
     })
     step.contextMap = snapshot.contextMap
     step.outColumns = snapshot.outColumns
-    const ack = await itemApi.stepModify(step)
+    const ack = await version.withDraft(flowIdOf(), (ref) => itemApi.stepModify(step, ...versionArgs(ref)))
     assertOk(ack, '修改步骤归属失败')
     sourceStore.rememberSteps([step], 'merge')
   }

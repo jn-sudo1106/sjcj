@@ -5,7 +5,7 @@ import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FlowDetailDrawer from './FlowDetailDrawer.vue'
-import { flowCenterApi, workflowBindingApi, type FlowDefinition, type FlowRecord, type Step, type WorkflowBinding } from '@/api'
+import { flowCenterApi, flowVersionApi, workflowBindingApi, type FlowDefinition, type FlowRecord, type Step, type WorkflowBinding } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { resetFlowAutosaveForTests } from '@/views/FlowCanvas/canvas/useFlowAutosave'
@@ -37,6 +37,8 @@ const FLOW = {
 } as unknown as FlowRecord
 
 beforeEach(() => {
+  // 流程版本（2026-10-10）：按未启用处理；mock 模式固定 120ms 延迟会让 flushPromises 等不到抽屉加载完
+  vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: false, curVer: null, nextVer: null, publishId: null, draftId: null, versions: [] })
   vi.spyOn(workflowBindingApi, 'ensureDraft').mockImplementation(async (workflowId): Promise<WorkflowBinding> => ({
     id: `binding-${workflowId}`, bindType: 'SOURCE', bindId: '', workflowId,
     workflowCode: `LEGACY-${workflowId}`, workflowName: '新闻采集', publishedVersionNo: 1,

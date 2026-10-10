@@ -244,6 +244,13 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'item/next/stepModify', desc: '修改子步骤（节点名 / 进入条件 / lastStep；JSON body）', danger: true, live: true },
   { path: 'item/next/enable', desc: '启停子步骤（GET ?id=&state=；0 启用 / 1 停用）', danger: true, live: true },
   { path: 'item/next/delete', desc: '删除子步骤（GET ?id=itemConfig）', danger: true, live: true },
+  // 2026-10-10 流程版本（217 旧平台 src/api/flow.js 同款）：v1 已发布只读，改步骤先建草稿；
+  // 草稿里 saveItemConfig / stepModify / delete / enable 额外带 flowId + versionId + ver（乐观锁，版本行计数）
+  { path: 'flow/version/overview', desc: '流程版本概览（enabled / publishId / draftId / versions[versionId, flowVer, ver, state W/C, isLock, baseId]）', impl: true, live: true },
+  { path: 'flow/version/nodes', desc: '某个版本的步骤（GET flowId + versionId；草稿里步骤 itemConfig 与发布版相同）', impl: true, live: true },
+  { path: 'flow/version/draft', desc: '从当前发布版建草稿（body flowId / versionId / ver / expectedPublishId，回 data.versionId）', danger: true, live: true },
+  { path: 'flow/version/publish', desc: '发布草稿（新任务用新版本，已启动任务用原版本）', danger: true, live: true },
+  { path: 'flow/version/abandon', desc: '放弃草稿（不占发布版本号）', danger: true, live: true },
 
   /* ── job 抓取/定时任务（目标 7 / 收录 7） ── */
   // 2026-09-18 接上：源的**定时任务**就存在这儿（旧平台「定时列表」页同款接口）。

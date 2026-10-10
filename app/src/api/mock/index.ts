@@ -88,6 +88,9 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'source/stats': mockSourceStats,
   'item/next/nextConfigPaged': mockSourceSteps,
   'item/next/configs/same': mockSameConfigs,
+  // 2026-10-10 流程版本：演示 / 测试环境按「未启用版本」处理，写步骤照旧不带版本信息
+  'flow/version/overview': () => ({ enabled: false, curVer: null, nextVer: null, publishId: null, draftId: null, versions: [] }),
+  'flow/version/nodes': () => [],
   'source/changeSourceEnable': mockChangeSourceEnable,
   'source/changeToSuccess': mockChangeToSuccess,
   'source/copySource': mockAck,

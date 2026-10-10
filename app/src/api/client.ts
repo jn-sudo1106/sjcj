@@ -268,6 +268,16 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
    */
   'sourceType/add',
   'sourceType/update',
+  /**
+   * 2026-10-10 放开（流程版本）：217 后端 10-10 13:10 起全部流程进版本模式，v1 已发布只读，
+   * 不先建草稿任何步骤都改不了（画布删除节点报「请先进入流程草稿编辑并重新加载版本信息」）。
+   * draft 建草稿副本（纯新增，不动发布版）；publish 让新任务改用草稿（旧任务继续用原版本）；
+   * abandon 放弃草稿（逻辑删除，不占版本号）。对齐 217 旧平台 FlowNodeDrawer 的同名按钮，
+   * publish / abandon 在 UI 侧都有二次确认。
+   */
+  'flow/version/draft',
+  'flow/version/publish',
+  'flow/version/abandon',
 ])
 
 function isProductionWriteAllowed(httpEndpoint: string): boolean {

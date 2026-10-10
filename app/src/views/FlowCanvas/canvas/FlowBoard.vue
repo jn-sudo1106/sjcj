@@ -21,6 +21,7 @@ import CanvasHeader from '../shared/CanvasHeader.vue'
 import SourceWorkflowTabs from '../source/SourceWorkflowTabs.vue'
 import AddNodePopover from './AddNodePopover.vue'
 import FlowXmlDialog from './FlowXmlDialog.vue'
+import FlowVersionBar from './FlowVersionBar.vue'
 import { flowToXml } from '@/utils/flow/flowXml'
 import { reloadFlowIntoCanvas, reloadSourceIntoCanvas, reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import { detachConfigsInPlace } from '@/utils/flow/copiedConfigs'
@@ -637,6 +638,8 @@ watch(
     <div v-if="isPublishedView" class="rc-version-readonly" data-testid="published-version-readonly">
       已发布 v{{ flow.sourceCtx?.workflowVersionNo ?? '—' }} 为只读版本；点击上方“编辑新版本”后再修改节点。
     </div>
+    <!-- 流程版本（2026-10-10，217 后端）：发布版只读，修改自动进草稿；发布 / 放弃在这里 -->
+    <FlowVersionBar />
     <div class="rc-canvas-body" :class="{ 'is-version-readonly': isPublishedView }">
     <button
       class="rc-node-library-toggle"

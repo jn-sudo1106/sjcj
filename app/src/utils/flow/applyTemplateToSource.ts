@@ -19,6 +19,7 @@
 //   - 「追加不是替换」不变：copyTemplateSteps 只往目标流程里加步骤，不删现有的。
 import { configApi, flowCenterApi, sourceApi, type Source } from '@/api'
 import { validFlowIdOf } from '@/utils/flow/stepPersist'
+import { useFlowVersionStore } from '@/stores/flowVersion'
 import { detachCopiedConfigs, type CopiedFlow, type DetachResult } from '@/utils/flow/copiedConfigs'
 import { ElMessage } from 'element-plus'
 
@@ -76,8 +77,12 @@ export async function reloadSourceIntoCanvas(sourceId: string): Promise<boolean>
   // 同形状（孤儿「关联」修复与流程模板套用都走这里；否则源视角查询缺根行，重载会把挂根步骤误判成孤儿）。
   // 0927 P2-4：口径收敛到 stepPersist.validFlowIdOf（四处共用）。
   const flowId = validFlowIdOf(detail.flowId)
+  // 流程版本（2026-10-10）：重载发生在编辑场景（关联 / 套模板 / 发布、放弃草稿后），有草稿读草稿
+  const flowVersion = useFlowVersionStore()
+  if (flowId) await flowVersion.load(flowId)
+  const versionId = flowId ? flowVersion.viewVersionId : null
   const steps = flowId
-    ? await flowCenterApi.steps(flowId, { withConfigDetails: false })
+    ? await flowCenterApi.steps(flowId, { withConfigDetails: false, ...(versionId ? { versionId } : {}) })
     : (await sourceApi.sourceSteps(sourceId, { withConfigDetails: false })) ?? []
   const { useFlowStore } = await import('@/stores/flow')
   useFlowStore().loadFromSource(detail, steps, null)
@@ -94,9 +99,12 @@ export async function reloadSourceIntoCanvas(sourceId: string): Promise<boolean>
  * 画布形状与刚进抽屉时一致（孤儿标记按响应重新推导，本次修好的自然消失）。
  */
 export async function reloadFlowIntoCanvas(flowId: string): Promise<boolean> {
+  const flowVersion = useFlowVersionStore()
+  await flowVersion.load(flowId)
+  const versionId = flowVersion.viewVersionId
   const [config, steps] = await Promise.all([
     configApi.configDetail(flowId).catch(() => null),
-    flowCenterApi.steps(flowId, { withConfigDetails: false }).catch(() => []),
+    flowCenterApi.steps(flowId, { withConfigDetails: false, ...(versionId ? { versionId } : {}) }).catch(() => []),
   ])
   if (!steps?.length) return false
   const { rootStepForSource } = await import('@/views/FlowCanvas/canvas/flowModel')

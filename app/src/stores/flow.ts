@@ -690,9 +690,10 @@ export const useFlowStore = defineStore('flow', () => {
     parentOf.set(id, parentId)
     for (const c of childIds) parentOf.set(c, id)
     if (childIds.length) pendingRelinks.value = [...new Set([...pendingRelinks.value, ...childIds])]
-    // 接管子节点时新节点就在原位置，排在第一个子节点处（入口上方插入时它要当第一个根）；
-    // 只追加时排在最后 = 同级最右
-    const firstChild = childIds.length ? order.indexOf(childIds[0]) : -1
+    // 新节点一律排在同级最后 = 最右：后端按步骤 ID 升序返回同级，新建的 ID 最大，刷新后本来就在最右
+    //（217 实测：在 41809→41827 线上插入的 41829 刷新后排在 41828 右边，原来插在原位会刷新跳位）。
+    // 唯一例外是插到最前面（没有上级、接管原首节点）：它要当第一个根，排在原首节点之前
+    const firstChild = parentId === undefined && childIds.length ? order.indexOf(childIds[0]) : -1
     if (firstChild >= 0) order.splice(firstChild, 0, id)
     else order.push(id)
     rebuildTopology(parentOf, order)

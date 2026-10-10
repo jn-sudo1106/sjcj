@@ -9,6 +9,7 @@ import { MAX_WORKSPACE_TABS, useWorkspaceStore, type WorkspaceTabRef } from '../
 import { flowCenterApi, siteApi, sourceApi, workflowBindingApi, type Source, type Step } from '../../api'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 import { useRuntimeStore } from '../../stores/runtime'
+import { useFlowVersionStore } from '../../stores/flowVersion'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
 import LoginConfigSelectDialog from '@/views/FlowCanvas/launch/LoginConfigSelectDialog.vue'
 import NodeInspector from '@/views/FlowCanvas/inspector/NodeInspector.vue'
@@ -353,8 +354,14 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
     : (selectedBinding?.draftFlowId ?? selectedBinding?.publishedFlowId ?? selectedBinding?.workflowId ?? primaryFlowId)
   let steps: Step[]
   try {
+    // 2026-10-10 流程版本：流程视图（编辑）有草稿时读草稿的步骤——改动都写在草稿里，读发布版会对不上；
+    // 数据 / 任务等视图反映正式运行，照旧读发布版
+    const flowVersion = useFlowVersionStore()
+    const editingView = normalizeSourceView(route.query.view) === 'flow'
+    if (editingView) await flowVersion.load(flowId ?? '')
+    const versionId = editingView ? flowVersion.viewVersionId : null
     steps = flowId
-      ? await flowCenterApi.steps(flowId, { withConfigDetails: false, backendScope: runtimeView ? 'default' : 'flow' })
+      ? await flowCenterApi.steps(flowId, { withConfigDetails: false, backendScope: runtimeView ? 'default' : 'flow', ...(versionId ? { versionId } : {}) })
       : sourceSteps ?? []
   } catch (error) {
     const detail = (error as Error)?.message ?? '网络异常'

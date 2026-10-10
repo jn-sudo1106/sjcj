@@ -3775,16 +3775,103 @@ export const flowCenterApi = {
    * 对比：不带 svg 的查询（老参数分支）行数更多——那是 MAIN_CONFIG/SOURCE_ID 过滤口径的旧视图，
    * 不是「多了孤儿」，孤儿判定在 buildSourceSeed 按 lastStep 语义做（0925）。
    */
-  steps: async (flowId: string, options: { withConfigDetails?: boolean; backendScope?: RequestOptions['backendScope'] } = {}): Promise<Step[]> => {
-    const result = await request<unknown>('item/next/nextConfigPaged', { flowId }, {
-      method: 'GET',
-      httpEndpoint: 'item/next/nextConfigPaged',
-      httpParams: { flowId, page: 1, limit: 10000, svg: true },
-      backendScope: options.backendScope ?? 'flow',
-    })
+  steps: async (flowId: string, options: { withConfigDetails?: boolean; backendScope?: RequestOptions['backendScope']; versionId?: string | null } = {}): Promise<Step[]> => {
+    // 2026-10-10 流程版本：传 versionId 读该版本的步骤（画布编辑草稿时）；草稿里步骤 itemConfig 与发布版相同，
+    // 返回结构同 svg 视图（根行 isRoot=1、子步骤 lastStep 已改写成根 ID）。不传 = 原来的流程步骤（运行中的发布版）。
+    const result = options.versionId
+      ? await request<unknown>('flow/version/nodes', { flowId, versionId: options.versionId }, {
+        method: 'GET',
+        httpEndpoint: 'flow/version/nodes',
+        httpParams: { flowId, versionId: options.versionId },
+        backendScope: options.backendScope ?? 'flow',
+      })
+      : await request<unknown>('item/next/nextConfigPaged', { flowId }, {
+        method: 'GET',
+        httpEndpoint: 'item/next/nextConfigPaged',
+        httpParams: { flowId, page: 1, limit: 10000, svg: true },
+        backendScope: options.backendScope ?? 'flow',
+      })
     const steps = sourceStepsFromLegacy(result, '')
     // 只要表 ID 的调用方（siteUsedTables）跳过逐配置补查，与 sourceApi.sourceSteps 同一个开关
     return options.withConfigDetails === false ? steps : attachStepConfigDetails(steps, options.backendScope ?? 'flow')
+  },
+}
+
+/**
+ * 流程版本的写入引用（2026-10-10）：217 后端起全部流程进版本模式，v1 已发布只读；
+ * 改步骤必须写在草稿里，增 / 改 / 删 / 启停都额外带 flowId + versionId + ver（217 旧平台
+ * src/api/source-step.js editRefs 同款）。ver 是**版本行**的乐观锁计数：每写一次 +1，响应不回新值，
+ * 要重读 overview；拿旧 ver 写会被拒「内容已变更，请重新加载」。不传 = 未启用版本的流程，照旧写。
+ */
+export interface FlowVersionRef { flowId: string; versionId: string; ver: number }
+
+/** 调用写接口时的尾参：没有版本信息就不传，调用形状与版本对接前一致 */
+export function versionArgs(ref: FlowVersionRef | null | undefined): [] | [FlowVersionRef] {
+  return ref ? [ref] : []
+}
+
+function versionRefParams(ref?: FlowVersionRef | null): Record<string, unknown> {
+  return ref ? { flowId: Number(ref.flowId), versionId: ref.versionId, ver: ref.ver } : {}
+}
+
+export interface FlowVersionRow {
+  versionId: string
+  flowVer: number
+  ver: number
+  /** W 草稿 / C 已发布（含历史发布） */
+  state: string
+  isLock: number
+  /** 0 正常；-1 已放弃 / 归档 */
+  isDelete: number
+  baseId: string | null
+}
+
+export interface FlowVersionOverview {
+  enabled: boolean
+  curVer: number | null
+  nextVer: number | null
+  publishId: string | null
+  draftId: string | null
+  versions: FlowVersionRow[]
+}
+
+/** 流程版本（2026-10-10，217 旧平台 FlowNodeDrawer 同一套接口）。 */
+export const flowVersionApi = {
+  overview: async (flowId: string): Promise<FlowVersionOverview> => {
+    const raw = await request<Record<string, unknown> | null>('flow/version/overview', { flowId }, {
+      method: 'GET',
+      httpEndpoint: 'flow/version/overview',
+      httpParams: { flowId },
+    })
+    const str = (v: unknown) => (v == null || v === '' ? null : String(v))
+    const num = (v: unknown) => (v == null || v === '' ? null : Number(v))
+    const rows = Array.isArray(raw?.versions) ? raw!.versions as Record<string, unknown>[] : []
+    return {
+      enabled: !!raw?.enabled,
+      curVer: num(raw?.curVer),
+      nextVer: num(raw?.nextVer),
+      publishId: str(raw?.publishId),
+      draftId: str(raw?.draftId),
+      versions: rows.map((v) => ({
+        versionId: String(v.versionId),
+        flowVer: Number(v.flowVer),
+        ver: Number(v.ver),
+        state: String(v.state ?? ''),
+        isLock: Number(v.isLock ?? 0),
+        isDelete: Number(v.isDelete ?? 0),
+        baseId: str(v.baseId),
+      })),
+    }
+  },
+  /** 动作：draft（从发布版建草稿，回 versionId）/ publish / abandon。body 同旧平台 versionAction。 */
+  action: async (action: 'draft' | 'publish' | 'abandon', body: { flowId: string; versionId: string; ver: number; expectedPublishId: string | null }) => {
+    const raw = await request<Record<string, unknown> | Ack>(`flow/version/${action}`, body, {
+      method: 'POST',
+      httpEndpoint: `flow/version/${action}`,
+      httpParams: { ...body, flowId: Number(body.flowId) },
+    })
+    const versionId = raw && typeof raw === 'object' && 'versionId' in raw ? String((raw as Record<string, unknown>).versionId) : null
+    return { versionId }
   },
 }
 
@@ -3793,7 +3880,7 @@ export const itemApi = {
   /** 新建步骤。旧平台真实调用是 `axios({method:'post', params})`——POST 但走 query string，
    *  不是 JSON body，所以这里显式 `paramsIn: 'query'`。响应 data 为 null，不回新 itemConfig，
    *  调用方要再查 nextConfigPaged 用差集定位。新建默认停用，随后 enable(id, '0')。 */
-  saveItemConfig: (step: Step) => invalidateSiteUsedTables(request<Ack>('item/next/saveItemConfig', stepToSaveItemConfigPayload(step), {
+  saveItemConfig: (step: Step, ref?: FlowVersionRef | null) => invalidateSiteUsedTables(request<Ack>('item/next/saveItemConfig', { ...stepToSaveItemConfigPayload(step), ...versionRefParams(ref) }, {
     method: 'POST',
     httpEndpoint: 'item/next/saveItemConfig',
     paramsIn: 'query',
@@ -3801,7 +3888,7 @@ export const itemApi = {
   /** 修改步骤。旧平台真实调用是 `axios({method:'post', data})`，JSON body。字段契约
    *  2026-08-26 用测试源 430016398（itemConfig 40600）原样提交实测确认。
    *  必须带齐快照字段（url / itemId / lastStep / mainConfig），只改 name/cond 也会整包提交。 */
-  stepModify: (step: Step) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', stepToStepModifyPayload(step), {
+  stepModify: (step: Step, ref?: FlowVersionRef | null) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', { ...stepToStepModifyPayload(step), ...versionRefParams(ref) }, {
     method: 'POST',
     httpEndpoint: 'item/next/stepModify',
   })),
@@ -3815,28 +3902,29 @@ export const itemApi = {
    *  flowId 拿不到有效值（空 / '0' / 非数字）时不带该键，交后端按库中值处理。
    *  0929：可选 `outEntry`（入口行输出表，数字表 ID 串）——不在 validateRootUpdate 拒绝清单里，
    *  有非空值才携带；空/缺失时省略，selective update 保持库中值（不能拿 null 去"清空"输出表）。 */
-  rootConfigUpdate: (stepId: string, configId: string, flowId?: string, outEntry?: string | null) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', {
+  rootConfigUpdate: (stepId: string, configId: string, flowId?: string, outEntry?: string | null, ref?: FlowVersionRef | null) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', {
     itemConfig: Number(stepId),
     ...(flowId && /^\d+$/.test(flowId) && flowId !== '0' ? { flowId: Number(flowId) } : {}),
     isRoot: 1,
     configId: Number(configId),
     ...(outEntry != null && String(outEntry).trim() !== '' ? { outEntry: Number(outEntry) } : {}),
+    ...versionRefParams(ref),
   }, {
     method: 'POST',
     httpEndpoint: 'item/next/stepModify',
   })),
   /** 启停步骤。GET `id` + `state`。state：`'0'` 启用 / `'1'` 停用，与 isDelete 同口径。
    *  后端操作日志文案可能写反，以 isDelete / enabled 为准。 */
-  enable: (stepId: string, state: string) => request<Ack>('item/next/enable', { id: stepId, state }, {
+  enable: (stepId: string, state: string, ref?: FlowVersionRef | null) => request<Ack>('item/next/enable', { id: stepId, state }, {
     method: 'GET',
     httpEndpoint: 'item/next/enable',
-    httpParams: { id: stepId, state },
+    httpParams: { id: stepId, state, ...versionRefParams(ref) },
   }),
   /** 删除步骤。GET `id` = itemConfig。虚拟起点 0 和本地草稿 id 不要调。 */
-  deleteStep: (stepId: string) => invalidateSiteUsedTables(request<Ack>('item/next/delete', { id: stepId }, {
+  deleteStep: (stepId: string, ref?: FlowVersionRef | null) => invalidateSiteUsedTables(request<Ack>('item/next/delete', { id: stepId }, {
     method: 'GET',
     httpEndpoint: 'item/next/delete',
-    httpParams: { id: stepId },
+    httpParams: { id: stepId, ...versionRefParams(ref) },
   })),
 }
 

@@ -13,6 +13,7 @@ import {
 } from '@/api'
 import { useFlowStore, stripLoginSecrets } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
+import { useFlowVersionStore } from '@/stores/flowVersion'
 import { useUiStore } from '@/stores/ui'
 import { rootStepForSource } from '@/views/FlowCanvas/canvas/flowModel'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
@@ -32,6 +33,13 @@ const emit = defineEmits<{
 const canvas = useFlowStore()
 const sourceStore = useSourceStore()
 const ui = useUiStore()
+const flowVersion = useFlowVersionStore()
+/** 读步骤时的尾参：版本 store 当前就是这个流程、且有草稿时才带 versionId（防止拿别的流程的草稿 ID）；
+ *  没有草稿不传，调用形状与版本对接前一致 */
+function draftVersionArgs(id: string): [] | [{ versionId: string }] {
+  const versionId = flowVersion.flowId === id ? flowVersion.viewVersionId : null
+  return versionId ? [{ versionId }] : []
+}
 const autosave = useFlowAutosave()
 const name = ref('')
 const saving = ref(false)
@@ -198,7 +206,7 @@ async function deriveFromFlowConfig(flow: FlowRecord, prefetchedSteps?: Step[]):
           : await configApi.configDetail(flow.id).catch(() => null),
         prefetchedSteps,
       ]
-    : await Promise.all([configApi.configDetail(flow.id), flowCenterApi.steps(flow.id)])
+    : await Promise.all([configApi.configDetail(flow.id), flowCenterApi.steps(flow.id, ...draftVersionArgs(flow.id))])
   const stubSource: Source = {
     sourceId: '',
     name: config?.name || flow.name,
@@ -282,7 +290,9 @@ async function openFlowInWorkspace(flow: FlowRecord) {
     // 0927：一次取回**带 configType 的完整步骤**（withConfigDetails 默认 true）——它既是
     // 快照（改名/孤儿「关联」整包回写），也是工作区画布的内容源（配合下方"有步骤行就按
     // 步骤还原"），configType 让摘要/翻译/打标签等节点一回读就是对的模板，不用再补查。
-    const steps = await flowCenterApi.steps(editFlowId)
+    // 流程版本（2026-10-10）：217 起发布版只读，有草稿时工作区画布显示草稿
+    await flowVersion.load(editFlowId)
+    const steps = await flowCenterApi.steps(editFlowId, ...draftVersionArgs(editFlowId))
       .catch((reason) => {
         console.warn('[flow-drawer] 步骤快照加载失败：改名/孤儿关联将缺少快照', reason)
         stepsLoadFailed.value = true

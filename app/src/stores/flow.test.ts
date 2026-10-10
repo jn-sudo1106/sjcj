@@ -2131,6 +2131,12 @@ describe('拓扑编辑：新建分支 / 线上插入 / 分叉前插入（1008-BR
     expect(chains(f, '1')).toEqual([['2'], [n, '3', '4']])
   })
 
+  it('insertOnEdge 插在最左那一支：这一支挪到最右，与刷新后后端按步骤 ID 升序的顺序一致（217 实测）', () => {
+    const f = load([mk('1', ['0']), mk('2', ['1']), mk('3', ['1'])])
+    const n = f.insertOnEdge('1', ['2'], 'web')
+    expect(chains(f, '1')).toEqual([['3'], [n, '2']])
+  })
+
   it('insertAfter(分叉点)：新节点接管全部子节点 = 在分叉之前插入', () => {
     const f = load([mk('1', ['0']), mk('2', ['1']), mk('3', ['1'])])
     const n = f.insertAfter('1', 'web')
