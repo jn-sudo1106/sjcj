@@ -22,6 +22,7 @@ import SourceWorkflowTabs from '../source/SourceWorkflowTabs.vue'
 import AddNodePopover from './AddNodePopover.vue'
 import FlowXmlDialog from './FlowXmlDialog.vue'
 import FlowVersionBar from './FlowVersionBar.vue'
+import { canvasFlowIdOf, useFlowVersionStore } from '@/stores/flowVersion'
 import { flowToXml } from '@/utils/flow/flowXml'
 import { reloadFlowIntoCanvas, reloadSourceIntoCanvas, reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import { detachConfigsInPlace } from '@/utils/flow/copiedConfigs'
@@ -59,8 +60,12 @@ const xmlOpen = ref(false)
 const xml = computed(() => (xmlOpen.value ? flowToXml(flow.serialize()) : ''))
 const canExportXml = computed(() => !flow.dirty && flow.validateFlow().length === 0)
 const recommending = ref(false)
-const isPublishedView = computed(() => flow.sourceCtx?.workflowVersionManaged !== false
+// 2026-10-10：217 流程版本——发布版 / 锁定草稿同样只读（画布不能操作，「+」不显示），点版本条「编辑草稿」后放开
+const flowVersion = useFlowVersionStore()
+const isLeoPublishedView = computed(() => flow.sourceCtx?.workflowVersionManaged !== false
   && flow.sourceCtx?.workflowVersionStatus === 'PUBLISHED')
+const isPublishedView = computed(() => isLeoPublishedView.value
+  || (flowVersion.readonly && flowVersion.flowId === canvasFlowIdOf(flow)))
 
 // 编排对象切换器已升级为页面级源侧栏（0710 会议 B1），组件与接线整体迁至 index.vue
 
@@ -635,7 +640,7 @@ watch(
 
     <!-- 画布主体单独做定位容器（0928）：节点库按钮原来相对整块 .rc-canvas 用写死的 top:108px
          躲开头部，头部一多出分支提示条就压到提示文字上；改成相对画布区域定位，头部多高都不影响。 -->
-    <div v-if="isPublishedView" class="rc-version-readonly" data-testid="published-version-readonly">
+    <div v-if="isLeoPublishedView" class="rc-version-readonly" data-testid="published-version-readonly">
       已发布 v{{ flow.sourceCtx?.workflowVersionNo ?? '—' }} 为只读版本；点击上方“编辑新版本”后再修改节点。
     </div>
     <!-- 流程版本（2026-10-10，217 后端）：发布版只读，修改自动进草稿；发布 / 放弃在这里 -->

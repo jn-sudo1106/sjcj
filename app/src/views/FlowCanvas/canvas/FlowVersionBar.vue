@@ -1,12 +1,11 @@
 <script setup lang="ts">
-// 流程版本条（2026-10-10）：217 起全部流程进版本模式，v1 已发布只读。画布上的修改首次写入时自动生成
-// 草稿（stores/flowVersion.ts），这里常驻说明「改的是草稿、发布后正式运行才用」，并提供发布 / 放弃。
-// 对齐 217 旧平台 FlowNodeDrawer 的同名按钮与确认文案；锁定 / 手工运行 / 切换版本 / 归档本期不做。
+// 流程版本条（2026-10-10）：217 起全部流程进版本模式，v1 已发布只读。与旧平台 FlowNodeDrawer 一致：
+// 发布版只读，点「编辑草稿」生成草稿 Vn+1 才能改，改完「发布」变成发布 Vn+1；也可「放弃草稿」。
+// 同名按钮与确认文案对齐旧平台；锁定 / 手工运行 / 切换版本 / 归档本期不做。
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
-import { useFlowVersionStore } from '@/stores/flowVersion'
-import { validFlowIdOf } from '@/utils/flow/stepPersist'
+import { canvasFlowIdOf, useFlowVersionStore } from '@/stores/flowVersion'
 import { reloadFlowIntoCanvas, reloadSourceIntoCanvas } from '@/utils/flow/applyTemplateToSource'
 import { useFlowAutosave } from './useFlowAutosave'
 
@@ -15,10 +14,7 @@ const version = useFlowVersionStore()
 const { flush, status } = useFlowAutosave()
 const busy = ref(false)
 
-/** 画布当前流程（与 useStepWrite.flowIdOf 同口径） */
-const canvasFlowId = computed(() => (flow.flowIdMode
-  ? validFlowIdOf(flow.flowId)
-  : validFlowIdOf(flow.sourceCfg?.flowId) || validFlowIdOf(flow.sourceCtx?.flowId)))
+const canvasFlowId = computed(() => canvasFlowIdOf(flow))
 const visible = computed(() => version.enabled && !!canvasFlowId.value && version.flowId === canvasFlowId.value)
 
 async function reloadCanvas() {
@@ -35,6 +31,21 @@ async function settle(): Promise<boolean> {
     return false
   }
   return true
+}
+
+/** 编辑草稿：从当前发布版生成草稿 Vn+1，重载画布（读草稿步骤）后开放编辑 */
+async function onCreateDraft() {
+  if (busy.value) return
+  busy.value = true
+  try {
+    await version.createDraft()
+    ElMessage.success(`已生成草稿 V${version.draft?.flowVer ?? '—'}，可以开始修改`)
+    await reloadCanvas()
+  } catch (e) {
+    ElMessage.error(`生成草稿失败：${(e as Error)?.message ?? String(e)}`)
+  } finally {
+    busy.value = false
+  }
 }
 
 async function onPublish() {
@@ -92,7 +103,9 @@ async function onAbandon() {
   <div v-if="visible" class="fvb" :class="{ draft: !!version.draft }" data-testid="flow-version-bar">
     <template v-if="version.draft">
       <span class="fvb-tag draft" data-testid="flow-version-draft">草稿 V{{ version.draft.flowVer }} · 未发布</span>
-      <span class="fvb-text">修改只保存在草稿里，发布后新任务才会使用；当前运行的是 V{{ version.overview?.curVer ?? '—' }}。</span>
+      <span v-if="version.draft.isLock === 1" class="fvb-tag locked" data-testid="flow-version-locked">已锁定</span>
+      <span v-if="version.draft.isLock === 1" class="fvb-text">草稿已锁定，节点只能查看；请到旧平台解锁后再修改。</span>
+      <span v-else class="fvb-text">修改只保存在草稿里，发布后新任务才会使用；当前运行的是 V{{ version.overview?.curVer ?? '—' }}。</span>
       <span class="fvb-actions">
         <button class="rc-btn tiny" type="button" :disabled="busy" data-testid="flow-version-abandon" @click="onAbandon">放弃草稿</button>
         <button class="rc-btn tiny primary" type="button" :disabled="busy" data-testid="flow-version-publish" @click="onPublish">发布 V{{ version.draft.flowVer }}</button>
@@ -100,7 +113,10 @@ async function onAbandon() {
     </template>
     <template v-else>
       <span class="fvb-tag" data-testid="flow-version-published">当前发布 V{{ version.overview?.curVer ?? '—' }}</span>
-      <span class="fvb-text">发布版本只读；在画布上修改会自动生成草稿，发布后新任务才会使用。</span>
+      <span class="fvb-text">发布版本只读，节点只能查看；点「编辑草稿」生成草稿 V{{ version.overview?.nextVer ?? '—' }} 后再修改，发布后新任务才会使用。</span>
+      <span class="fvb-actions">
+        <button class="rc-btn tiny primary" type="button" :disabled="busy" data-testid="flow-version-edit-draft" @click="onCreateDraft">编辑草稿</button>
+      </span>
     </template>
   </div>
 </template>
@@ -110,6 +126,7 @@ async function onAbandon() {
 .fvb.draft { border-color: #fed7aa; background: #fff7ed; color: #9a3412; }
 .fvb-tag { flex: none; padding: 1px 8px; border-radius: 999px; background: var(--rc-ok-bg); color: var(--rc-ok); font-weight: 600; }
 .fvb-tag.draft { background: #ffedd5; color: #c2410c; }
+.fvb-tag.locked { background: #fee2e2; color: #b91c1c; }
 .fvb-text { flex: 1; min-width: 200px; }
 .fvb-actions { display: flex; gap: 6px; margin-left: auto; }
 </style>

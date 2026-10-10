@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   configApi,
@@ -13,7 +13,7 @@ import {
 } from '@/api'
 import { useFlowStore, stripLoginSecrets } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
-import { useFlowVersionStore } from '@/stores/flowVersion'
+import { canvasFlowIdOf, useFlowVersionStore } from '@/stores/flowVersion'
 import { useUiStore } from '@/stores/ui'
 import { rootStepForSource } from '@/views/FlowCanvas/canvas/flowModel'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
@@ -34,6 +34,8 @@ const canvas = useFlowStore()
 const sourceStore = useSourceStore()
 const ui = useUiStore()
 const flowVersion = useFlowVersionStore()
+// 2026-10-10：217 流程版本——发布版 / 锁定草稿只读，右侧节点设置也不能改（画布由 FlowBoard 自己置灰）
+const inspectorReadonly = computed(() => flowVersion.readonly && flowVersion.flowId === canvasFlowIdOf(canvas))
 /** 读步骤时的尾参：版本 store 当前就是这个流程、且有草稿时才带 versionId（防止拿别的流程的草稿 ID）；
  *  没有草稿不传，调用形状与版本对接前一致 */
 function draftVersionArgs(id: string): [] | [{ versionId: string }] {
@@ -565,7 +567,7 @@ async function publishVersion() {
         title="点击展开节点配置"
         @click="ui.toggleInspectorCollapsed()"
       >« 节点配置</button>
-      <section v-else class="fd-inspector" aria-label="节点设置">
+      <section v-else class="fd-inspector" :class="{ 'version-readonly': inspectorReadonly }" aria-label="节点设置">
         <NodeInspector hide-ai />
       </section>
     </div>
@@ -618,6 +620,7 @@ async function publishVersion() {
 .fd-close:hover { color: var(--rc-text); }
 .fd-derived { padding: 8px 16px; border-bottom: 1px solid #fde68a; background: #fffbeb; color: #92400e; font-size: 12px; line-height: 1.5; }
 .fd-loading { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--rc-faint); font-size: 12px; background: #f4f7fb; }
+.fd-inspector.version-readonly { pointer-events: none; opacity: .78; }
 .fd-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(340px, 42%) minmax(420px, 1fr); gap: 10px; padding: 10px; background: #f4f7fb; }
 .fd-workspace.expanded { grid-template-columns: 36px minmax(0, 1fr); }
 .fd-workspace.insp-collapsed { grid-template-columns: minmax(0, 1fr) 36px; }

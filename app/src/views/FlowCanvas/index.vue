@@ -9,7 +9,7 @@ import { MAX_WORKSPACE_TABS, useWorkspaceStore, type WorkspaceTabRef } from '../
 import { flowCenterApi, siteApi, sourceApi, workflowBindingApi, type Source, type Step } from '../../api'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 import { useRuntimeStore } from '../../stores/runtime'
-import { useFlowVersionStore } from '../../stores/flowVersion'
+import { canvasFlowIdOf, useFlowVersionStore } from '../../stores/flowVersion'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
 import LoginConfigSelectDialog from '@/views/FlowCanvas/launch/LoginConfigSelectDialog.vue'
 import NodeInspector from '@/views/FlowCanvas/inspector/NodeInspector.vue'
@@ -101,8 +101,11 @@ watch(
 
 // 网站详情页（0714 会议 Task 3）：siteId 且无 sourceId，只读聚合数据/文件/任务视图，没有流程视图
 const isSiteDetail = computed(() => !!route.query.siteId && !route.query.sourceId)
-const isPublishedFlowView = computed(() => flow.sourceCtx?.workflowVersionManaged !== false
+// 2026-10-10：217 流程版本——发布版 / 锁定草稿时右侧检查器同样只读（与画布 FlowBoard.isPublishedView 同口径）
+const flowVersionStore = useFlowVersionStore()
+const isPublishedFlowView = computed(() => (flow.sourceCtx?.workflowVersionManaged !== false
   && flow.sourceCtx?.workflowVersionStatus === 'PUBLISHED')
+  || (flowVersionStore.readonly && flowVersionStore.flowId === canvasFlowIdOf(flow)))
 // 源加载中的占位（2026-08-28 修）：三个结果视图原来都拿 `!!flow.sourceCtx` 当门槛，
 // 而从网站详情页切源、或深链/刷新进 view=data 时 sourceCtx 是空的，条件不成立就掉进
 // v-else 的流程画布——URL 明明是 view=data，中间却要闪 240ms 流程视图（逐帧实测）。
