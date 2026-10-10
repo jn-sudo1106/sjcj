@@ -291,6 +291,54 @@ describe('TableTab · 去重列（0828 D11）', () => {
 })
 
 // 数据监控节点（2026-09-01）：monitor 复用 rule 种子，表配置只负责输入表/入参字段绑定。
+describe('TableTab · 输出字段选择 = 旧平台出参列 OutContext（1010 恢复）', () => {
+  const OUT_TABLE: EntryType = {
+    tableId: '2103330', tableName: 'sense_data.TB_NEWS', name: '资讯列表',
+    fields: [
+      { prop: 'title', desc: '标题', type: 'string', required: false, columnName: 'K1' },
+      { prop: 'url', desc: '链接', type: 'string', required: false, columnName: 'K2' },
+      { prop: 'body', desc: '正文', type: 'text', required: false, columnName: 'K3' },
+    ],
+  }
+
+  async function mountCollector(outColumns?: string[]) {
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 1, list: [OUT_TABLE] })
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue(OUT_TABLE)
+    vi.spyOn(paramApi, 'paramPaged').mockResolvedValue({ total: 0, list: [] })
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.collectCfg!.outputTable = '2103330'
+    if (outColumns) cfg.taskCfg = { ...(cfg.taskCfg ?? { queue: '', urlRule: '' }), outColumns }
+    flow.configs['web-1'] = cfg
+    flow.select('web-1')
+    flow.setActiveTab('table')
+    const wrapper = mount(NodeInspector, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    return { flow, wrapper }
+  }
+  const checked = (wrapper: Awaited<ReturnType<typeof mountCollector>>['wrapper']) =>
+    wrapper.findAll('[data-testid="output-fields-list"] .rc-tag.on').map((t) => t.text().split(' ')[0])
+
+  it('出参列为空 = 默认全部字段', async () => {
+    const { wrapper } = await mountCollector()
+    expect(checked(wrapper)).toEqual(['title', 'url', 'body'])
+  })
+
+  it('后端存的列名 K1/K3 回显成对应字段', async () => {
+    const { wrapper } = await mountCollector(['K1', 'K3'])
+    expect(checked(wrapper)).toEqual(['title', 'body'])
+  })
+
+  it('取消勾选后按列名写回 taskCfg.outColumns（落步骤 outContext）', async () => {
+    const { flow, wrapper } = await mountCollector()
+    await wrapper.findAll('[data-testid="output-fields-list"] .rc-tag')[1].trigger('click')
+    expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual(['K1', 'K3'])
+    await wrapper.get('[data-testid="select-all-fields"]').trigger('click')
+    expect(flow.configs['web-1'].taskCfg?.outColumns).toEqual(['K1', 'K2', 'K3'])
+  })
+})
+
 describe('TableTab · 数据监控节点（不落表/不出参）', () => {
   function mountOnMonitorNode() {
     setActivePinia(createPinia())

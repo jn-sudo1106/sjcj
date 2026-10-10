@@ -203,6 +203,23 @@ function srcSnatch() {
         <button class="ch-seg" :class="{ on: flowMode === 'list' }" type="button" @click="switchFlowMode('list')">流程列表</button>
       </div>
       <div class="ch-flow-mode-actions" aria-label="源运行操作">
+        <!-- 0828 W9-2/D06：步骤接口已通，拓扑/进入条件防抖自动保存；不再放手动保存按钮。
+             2026-10-10：从标题行下单独那一行（ch-actions，没状态时也占约 38px 高的空行）挪到这里，
+             用户反馈「流程页面太小」。 -->
+        <span v-if="flowMode === 'canvas'" class="ch-save-status" data-testid="flow-save-status">
+          <span v-if="saveStatus === 'pending'" class="ch-save-pending">请先补全节点配置</span>
+          <template v-else-if="saveStatus === 'saving'">保存中…</template>
+          <template v-else-if="saveStatus === 'saved'">已保存 {{ savedClock }}</template>
+          <!-- title 带上真实报错（0903）：原来失败只显示这六个字，排查时连是哪一步抛的都不知道 -->
+          <button
+            v-else-if="saveStatus === 'error'"
+            class="ch-save-retry"
+            type="button"
+            data-testid="flow-save-retry"
+            :title="saveError ? `保存失败：${saveError}（点击重试）` : '点击重试'"
+            @click="void retryFlowSave()"
+          >保存失败，点击重试</button>
+        </span>
         <button class="rc-btn primary" type="button" :disabled="!canStartPublishedFlow" :title="!isPrimaryFlow ? '辅助/补数据流程不能从正常抓取入口启动' : src?.workflowVersionStatus === 'DRAFT' ? '草稿发布后才能作为新的运行版本发起抓取' : ''" @click="srcSnatch">发起抓取</button>
       </div>
     </div>
@@ -254,32 +271,16 @@ function srcSnatch() {
           </template>
         </div>
       </div>
-      <div v-if="view === 'flow' && flowMode === 'canvas'" class="ch-actions">
-        <!-- 0828 W9-2/D06：步骤接口已通，拓扑/进入条件防抖自动保存；不再放手动保存按钮。 -->
-        <span class="ch-save-status" data-testid="flow-save-status">
-          <span v-if="saveStatus === 'pending'" class="ch-save-pending">请先补全节点配置</span>
-          <template v-else-if="saveStatus === 'saving'">保存中…</template>
-          <template v-else-if="saveStatus === 'saved'">已保存 {{ savedClock }}</template>
-          <!-- title 带上真实报错（0903）：原来失败只显示这六个字，排查时连是哪一步抛的都不知道 -->
-          <button
-            v-else-if="saveStatus === 'error'"
-            class="ch-save-retry"
-            type="button"
-            data-testid="flow-save-retry"
-            :title="saveError ? `保存失败：${saveError}（点击重试）` : '点击重试'"
-            @click="void retryFlowSave()"
-          >保存失败，点击重试</button>
-        </span>
-      </div>
       <!-- 「停用」0828 D24 移除：源启停统一在源视图的行操作里做，画布头只留运行入口。
            这里不做成禁用或隐藏——按钮整个删掉，避免同一能力两个入口。 -->
       <!-- 分支流程的提示（0903 YB-A/YB-3，YB-B 后改文案；0928 再改）：画布已经能还原分支结构，
            但自动保存对分支流程冻结已有步骤的 lastStep 回写（见 useStepWrite）——主链节点拖了
            画布会变、刷新就回去；分支里的节点本来就拖不动。新增节点（lastStep 按画布算）、
-           改名、进入条件、配置照常保存，这里一并说清，免得用户以为分支流程整个是只读的。 -->
+           改名、进入条件、配置照常保存，这里一并说清，免得用户以为分支流程整个是只读的。
+           1008-BR-05：节点两侧「+」新建分支、连线上「+」插入（下游改挂到新节点）都会保存，文案随之改。 -->
       <div v-if="view === 'flow' && flowMode === 'canvas' && flow.hasBranchedSteps" class="ch-branch-note" data-testid="flow-branch-flattened">
         <span aria-hidden="true">⚠</span>
-        该流程含分支：已有节点的挂接关系不能在画布上调整（拖动不会保存）。可以在分支中新增节点，节点名称、进入条件、配置照常保存。
+        该流程含分支：拖动节点不会保存。可以用节点两侧的「+」新建分支，或用连线上的「+」插入节点；节点名称、进入条件、配置照常保存。
       </div>
     </template>
   </div>
@@ -290,7 +291,7 @@ function srcSnatch() {
 .ch-switcher { display: inline-flex; padding: 2px; background: #f1f5f9; border: 1px solid var(--rc-border); border-radius: 7px; }
 .ch-flow-mode-row { order: 10; flex: 0 0 100%; display: flex; align-items: center; padding-top: 8px; border-top: 1px solid var(--rc-border-soft); }
 .ch-flow-mode { margin-left: 0; }
-.ch-flow-mode-actions { display: flex; align-items: center; margin-left: auto; }
+.ch-flow-mode-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 .ch-flow-mode-actions .rc-btn { height: 30px; padding: 0 11px; font-size: 12px; }
 .ch-seg { height: 26px; padding: 0 12px; border: 0; background: transparent; color: var(--rc-text-2); font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 5px; }
 .ch-seg.on { background: var(--rc-primary); color: #fff; }
@@ -325,8 +326,6 @@ function srcSnatch() {
 /* 流程已删除：跳过去只会搜出空列表，不给点 */
 .ch-flow-link:disabled { color: var(--rc-faint); cursor: not-allowed; }
 .ch-flow-link:disabled .ch-flow-name { text-decoration: none; }
-.ch-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
-.ch-actions .rc-btn { height: 30px; padding: 0 11px; font-size: 12px; }
 .ch-branch-note { order: 20; display: flex; align-items: center; gap: 6px; width: 100%; margin-top: 6px; padding: 6px 9px; border: 1px solid #fde68a; border-radius: 6px; background: #fffbeb; color: #92400e; font-size: 11.5px; }
 .ch-save-status { color: var(--rc-faint); font-size: 12px; min-height: 18px; min-width: 4em; }
 .ch-save-pending { color: var(--rc-warn); }

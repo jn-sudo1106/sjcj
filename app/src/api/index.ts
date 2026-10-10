@@ -10,12 +10,13 @@ import type {
   CodeExecuteRequest,
   Dataset, Measure, DataTableMeta, DataRow, RowQuery, EntryTypeGroup, EntryDetail, SummaryRow, RunRow, RunNode, NodeRunStat, QueueStat, HealthCard, MqQueue, SyncRow, AlarmRow,
   SourceCheck, SourceCheckLog, SourceCheckQuery, SourceCheckLogQuery,
-  TaskInstQuery, SiteTableOption, SiteTablesResult,
+  TaskInstQuery,
   Config, ConfigActionLog, ConfigParamBinding, SourceTypeDict, NodeType, NodeTypeInput, EntryType, Param, ParamInput, ParamKind, CredentialRef, SourceJob, SourceLog, TaskInst, SourceTaskQuery, WorkbenchSummary,
   OverviewSummary, TrendPoint, FileResourceRecord, FileResourceQuery, CopySourceInput, SourceCloneRequest, SourceCloneResult,
-  FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
+  FlowDefinition, FlowRecord, FlowSaveInput, LegacyLoginSubmission, LegacySnatchSaveRequest, LegacySnatchSaveResult,
   SourceCategory,
-  WorkflowBinding, WorkflowBindingRole,
+  SourceFlowBind, SourceFlowsView, WorkflowBinding,
+  SourceGroup, SourceGroupState, MembershipRangeResult,
 } from './types'
 import type { FlowDef, FlowRecommendation } from '@/views/FlowCanvas/canvas/flowModel'
 import {
@@ -69,7 +70,7 @@ import {
   assertLegacySnatchSaveLogin,
   legacySnatchSavePayloadFromFlow,
 } from './legacyAdapters'
-import type { DataProcessGeneratePayload } from '@/utils/flow/dataProcess'
+import type { DataProcessGeneratePayload, DocumentExtractPayload } from '@/utils/flow/dataProcess'
 export type { ModelProviderOption, ModelOption } from './types'
 import { encryptLegacyPayload } from './legacyCrypto'
 export { fetchModelProviders, fetchDefaultModels } from './model'
@@ -454,11 +455,49 @@ function nodeTypeBody(input: NodeTypeInput): Record<string, unknown> {
   return body
 }
 
+/**
+ * 页面筛选条件 → 后端 SourceCond 参数（不含分页 / 排序）。`sourcePaged` 与
+ * `source-group/changeMembersByRange` 共用，保证「按范围调整」改到的就是列表里看到的源
+ * （页面叫 `sourceIds`，后端读 `ids`，各自拼会丢条件）。
+ */
+function sourceCondParams(p?: PageQuery) {
+  return {
+    ids: Array.isArray(p?.sourceIds) ? p.sourceIds.join(',') : (p?.sourceIds ?? p?.ids),
+    // 只发复数 siteIds：source-api.md §1.1 明确后端不读单数 siteId（传 -1 查未关联源也走复数）
+    siteIds: p?.siteIds,
+    sourceId: p?.sourceId,
+    name: p?.name ?? p?.keyword,
+    sourceUrl: p?.sourceUrl,
+    entryTypeId: p?.entryTypeId,
+    configId: p?.configId,
+    // 按流程反查源（流程中心「使用源数」下钻）。2026-09-02 生产实测确认后端认这个条件：
+    // 无条件 16929 条 → flowId=1400330 得 46 条（与该流程的 sourceCnt 一致）→ 传不存在的
+    // flowId 得 0 条。**不是静默忽略**，可以放心当过滤条件用。
+    // （注意 apis/source-site-api.md 里列的 sourceCond 参数表没写 flowId，那份文档比 flow 功能早。）
+    flowId: p?.flowId,
+    // 1008-03 来源组：按组筛源（2026-10-09 实测 sourceGroupId=3 得 255 条）。只接受正数。
+    sourceGroupId: p?.sourceGroupId,
+    // 1008-04 默认流程：sourcePaged 认这个条件（2026-10-09 实测只匹配默认流程）
+    defaultFlowId: p?.defaultFlowId,
+    count: p?.count,
+    dataDate: p?.dataDate,
+    enable: p?.enable,
+    state: p?.state === 'all' ? undefined : p?.state,
+    categorys: p?.categorys ?? p?.category,
+    cron: p?.cron,
+    topic: p?.topic,
+    // 0831 F04 备注检索。**后端支持**——生产源列表页（118.25.96.217:9999/source/source-list）
+    // 的筛选区就有「备注」。本地这份旧代码快照（2606-rule 分支）比线上旧，queryParam 里还没有，
+    // 别再照它下"后端不支持"的结论。字段名取旧列表列 `SourceList.vue:369` 的 prop。
+    // 旁边那个「责任人」（author）线上也有，但 0831 明确暂不做，别顺手加。
+    remark: p?.remark,
+    flag: p?.flag,
+  }
+}
+
 // 类型化接口：每个方法一一对应一个真实 /v1 端点。后续按 142 个端点逐域补全。
 export const sourceApi = {
   sourcePaged: async (p?: PageQuery) => {
-    const ids = Array.isArray(p?.sourceIds) ? p.sourceIds.join(',') : (p?.sourceIds ?? p?.ids)
-    const state = p?.state === 'all' ? undefined : p?.state
     const result = await request<unknown>('source/sourcePaged', p, {
       method: 'POST',
       httpEndpoint: import.meta.env.VITE_FLOW_PROXY_TARGET && p?.flowId ? 'flow/flowSources' : 'source/sourcePaged',
@@ -467,36 +506,11 @@ export const sourceApi = {
         pageSize: p?.size ?? 20,
         page: p?.page ?? 1,
         limit: p?.size ?? 20,
-        ids,
-        // 只发复数 siteIds：source-api.md §1.1 明确后端不读单数 siteId（传 -1 查未关联源也走复数）
-        siteIds: p?.siteIds,
-        sourceId: p?.sourceId,
-        name: p?.name ?? p?.keyword,
-        sourceUrl: p?.sourceUrl,
-        entryTypeId: p?.entryTypeId,
-        configId: p?.configId,
-        // 按流程反查源（流程中心「使用源数」下钻）。2026-09-02 生产实测确认后端认这个条件：
-        // 无条件 16929 条 → flowId=1400330 得 46 条（与该流程的 sourceCnt 一致）→ 传不存在的
-        // flowId 得 0 条。**不是静默忽略**，可以放心当过滤条件用。
-        // （注意 apis/source-site-api.md 里列的 sourceCond 参数表没写 flowId，那份文档比 flow 功能早。）
-        flowId: p?.flowId,
-        count: p?.count,
-        dataDate: p?.dataDate,
-        enable: p?.enable,
-        state,
-        categorys: p?.categorys ?? p?.category,
-        cron: p?.cron,
-        topic: p?.topic,
+        ...sourceCondParams(p),
         notify: p?.notify ?? '',
         groupBy: p?.groupBy,
         sorted: p?.sorted ?? -1,
         tags: p?.tags ?? [],
-        // 0831 F04 备注检索。**后端支持**——生产源列表页（118.25.96.217:9999/source/source-list）
-        // 的筛选区就有「备注」。本地这份旧代码快照（2606-rule 分支）比线上旧，queryParam 里还没有，
-        // 别再照它下"后端不支持"的结论。字段名取旧列表列 `SourceList.vue:369` 的 prop。
-        // 旁边那个「责任人」（author）线上也有，但 0831 明确暂不做，别顺手加。
-        remark: p?.remark,
-        flag: p?.flag,
         field: p?.field,
         type: p?.type,
       },
@@ -759,6 +773,8 @@ export const sourceApi = {
         skip: payload.skip,
         ...(payload.include.length ? { include: payload.include.join(',') } : {}),
         ...(payload.queue ? { queue: payload.queue } : {}),
+        // 1008-04「指定流程运行一次」：用这条流程跑这一次，不影响定时与默认流程（旧平台 source.js 同口径）
+        ...(payload.flowId ? { flowId: payload.flowId } : {}),
       },
     }),
   /** 将已创建的真实源关联到网站；真实端点，调用方需在同一环境完成受控写入。 */
@@ -868,6 +884,9 @@ export const sourceApi = {
     const result = await request<unknown>('source/sourceTaskPaged', q, {
       method: 'GET',
       httpEndpoint: 'task/topTaskPaged',
+      // 2026-10-10：只按创建时间查（任务中心「今天」）217 上要 16～25 秒，默认 20 秒会被中断成
+      // 「signal is aborted without reason」。疑似 CREATE_DT 没走索引，已提后端（1010-任务中心查询慢_后端需求）。
+      timeoutMs: 60_000,
       httpParams: {
         page: q.page ?? 1,
         limit: q.size ?? 20,
@@ -1087,8 +1106,6 @@ export async function expandCategoryIds(ids: string[]): Promise<string[]> {
   return [...collected]
 }
 
-const siteTablesCache = new Map<string, Promise<SiteTablesResult>>()
-
 // 同一 siteId 的 site/sources 在建站画布里会被侧栏、数据视图、选表器等前后脚各拉一遍。
 // 共享进行中的请求，并短暂缓存（10s）覆盖「侧栏刚拉完，切到数据视图又拉」这种紧邻场景；
 // 写后要读新数据的调用方传 { force: true } 绕过。
@@ -1108,51 +1125,17 @@ async function requestSiteSources(siteId: string, limit: number, timeoutMs?: num
   return list.map(siteSourceFromLegacy)
 }
 
-// 网站表选择的表目录（0812 计划 M2-1 起；2026-09-20 重写）。
+// 全库表目录 `config/queryEntryTypesGroup`（entryTypesGroup）的两条实测口径（2026-09-20）。
+// 原写在已删除的 loadSiteTables 上；0924-12 起网站选表下拉改用下面的 siteUsedTables。
 //
-// **一个请求就够了，不要再把源 ID 拼进 URL。**
-//
-// 2026-09-20 实测坐实：`config/queryEntryTypesGroup` 的 `sourceId` 只决定**怎么分组**
-// （哪张进 list1/list2，其余全进 list3），对 **list1+list2+list3 的并集毫无影响**——
-// 带任意源、带两个源、带别的网站的源、什么都不传，并集恒等于同一批全量表（实测 83 张）：
-//
-//     sourceId=430022383   → 1 / 2 / 80，并集 83
-//     sourceId=430002788   → 1 / 2 / 80，并集 83（还是另一个网站的源）
-//     不传                  → 0 / 0 / 83，并集 83
-//     三者并集两两相等       → true
-//
-// 而下面的合并只做 tableId 去重、根本不看分组。也就是说旧实现里那 19+ 个分片请求
-// （每个 52KB、URL 几千字符）**从第二个开始就 100% 是白跑的**，连带为了凑源 ID 而拉的
-// `siteSourcePreview(120)` 和 `siteSources(5439 条，4s+)` 也都是白拉的。
-//
-// 这不只是浪费。那 6 路并发正好占满浏览器对单域名的 6 个连接，把同期的
-// `entry/queryEntryType`（表结构）和 `data/rowQueryPaged`（逐源查数据）挤在队列里，
-// 而 client.ts 的 20s 超时是**从入队开始算**的——请求还没发出去就被判超时 abort。
-// 生产实测的两个症状都是这么来的：「表结构暂不可用，已根据当前数据生成列」、
-// 「N 个源本次查询失败：signal is aborted without reason」（那两个源单独查只要 164ms，
-// 数据才 29 条，一点都不慢，纯粹是没抢到连接）。
-//
-// ⚠️ 如果哪天后端真的按 sourceId 过滤了表目录（现在没有），这里要改回按源查——
-// 判断方法就是上面那组对照：不传 sourceId 的并集若小于带 sourceId 的并集，就说明变了。
-//
-// `siteId` 现在只当缓存键用，后端并不按网站过滤表目录。
-async function loadSiteTables(
-  siteId: string,
-  onProgress?: (tables: SiteTableOption[]) => void,
-): Promise<SiteTablesResult> {
-  void siteId
-  const group = await dataApi.entryTypesGroup()
-  const tableMap = new Map<string, SiteTableOption>()
-  for (const entry of [...group.list1, ...group.list2, ...group.list3]) {
-    if (!tableMap.has(entry.tableId)) {
-      tableMap.set(entry.tableId, { tableId: entry.tableId, tableName: entry.tableName, name: entry.name })
-    }
-  }
-  const tables = [...tableMap.values()]
-  // 一发就是全量，没有"渐进补齐"这回事了；仍然回调一次，免得调用方等不到首批。
-  onProgress?.(tables)
-  return { tables }
-}
+// 1. **不按源 / 网站过滤**：`sourceId` 只决定分组（哪张进 list1/list2，其余进 list3），
+//    list1+list2+list3 的并集恒为全库表（实测带任意源、别站的源、不传，并集都是 83 张）。
+//    所以要"本站的表"只能从源的主表 + 流程节点的输入 / 输出表聚合，不能靠这个接口。
+//    ⚠️ 判断后端是否改了：不传 sourceId 的并集若小于带 sourceId 的并集，就说明开始按源过滤了。
+// 2. **并发别占满连接**：浏览器对单域名只有 6 个连接，client.ts 的 20s 超时从**入队**算起。
+//    当年按源分 6 路并发查目录，把同期的 entry/queryEntryType（表结构）、data/rowQueryPaged
+//    挤到超时——「表结构暂不可用，已根据当前数据生成列」「N 个源本次查询失败：signal is aborted」
+//    都是这么来的。批量请求要自己限并发（见 FLOW_STEPS_CONCURRENCY）。
 
 /**
  * 网站用到的表（0924-09）。聚合规则见 utils/site/usedTables.ts。
@@ -1161,7 +1144,7 @@ async function loadSiteTables(
  * 1. `siteSources`（已有 10s 缓存，数据视图本来就要拉）→ 按 flowId 去重；
  * 2. 每批 4 个调 `flowCenterApi.steps(flowId, { withConfigDetails: false })`。
  *    **并发上限不能省**：client.ts 的超时从入队算，6 路占满连接会把同期的数据查询挤到超时
- *    （loadSiteTables 注释里 0920 的教训）；单个流程失败不阻断，记进 failedFlowIds；
+ *    （见上方 entryTypesGroup 口径第 2 条）；单个流程失败不阻断，记进 failedFlowIds；
  * 3. `entryTypesGroup`（全库表目录）补表名。
  * 按 siteId 缓存，失败不缓存。失效两道：
  * - 节点写接口（itemApi 的 saveItemConfig / stepModify / deleteStep，会写 entryTypeId / outEntry）成功后整体清空；
@@ -1462,24 +1445,6 @@ export const siteApi = {
   refreshSiteSources: (siteId: string) => {
     siteSourcesCache.delete(siteId)
   },
-  // 网站范围表聚合（M2-1）：同一 siteId 的并发/重复调用共享同一个进行中的请求；
-  // 只有触发首次请求的调用方能实时收到 onProgress，后到的调用方直接等最终结果。
-  siteTables: (siteId: string, options: { onProgress?: (tables: SiteTableOption[]) => void; force?: boolean } = {}) => {
-    if (options.force) siteTablesCache.delete(siteId)
-    let cached = siteTablesCache.get(siteId)
-    if (!cached) {
-      cached = loadSiteTables(siteId, options.onProgress)
-      siteTablesCache.set(siteId, cached)
-      cached.catch(() => siteTablesCache.delete(siteId)) // 失败态不缓存，允许下次重试
-    } else if (options.onProgress) {
-      const notify = options.onProgress
-      cached.then((result) => notify(result.tables)).catch(() => {})
-    }
-    return cached
-  },
-  refreshSiteTables: (siteId: string) => {
-    siteTablesCache.delete(siteId)
-  },
   // 新增源默认从空白流程开始；inherit=true 仅保留给旧数据迁移兼容场景。
   sourceAdd: (siteId: string, source: Source, inherit = false) =>
     assetMockRequest<{ ok: boolean; message?: string; sourceId?: string }>('site/addSource', { siteId, source, inherit }),
@@ -1760,6 +1725,264 @@ async function fetchDataProcessGenerate(
   }
 }
 
+/**
+ * PDF 抓取节点「解析内容」（1005 方案 §5.2、§11）：样本 PDF + 当前节点提示词 → 后端抽正文喂模型 → 流式回抽取结果。
+ *
+ * 与 fetchDataProcessGenerate 刻意不同，四条都不能"顺手对齐"：
+ * 1. 端点 `/api/answer/document-extract`，附件白名单只有 pdf（data-process 仍只吃 xls/xlsx）；
+ * 2. done 事件不解析 scriptPath、不做「已保存到 /code01/….py」的正则兜底——这条链路不产脚本；
+ * 3. 返回 `DocumentExtractResult`（content/charCount/truncated/chunkCount/…），不是 RuleOrchestrationGenerateResult；
+ * 4. 对数据库和文件服务**零副作用**，调用方只把 content 显示出来。
+ *
+ * 分块（§11）：正文长到一次调用装不下时后端会分块抽取再合并，期间多两类事件——
+ * `chunk`（分块进度，合并轮 index 回到 1 表示结果要重新开始铺）和 `error`
+ * （流已经开了，状态码改不了，失败只能带内回）。空闲超时按事件重置，不再按总时长掐。
+ */
+export interface DocumentExtractOptions {
+  file: File
+  signal?: AbortSignal
+  onThinking?: (delta: string) => void
+  onContent?: (delta: string) => void
+  onChunk?: (progress: DocumentExtractChunkProgress) => void
+  onDone?: (payload: {
+    message?: string
+    charCount?: number
+    truncated?: boolean
+    chunkCount?: number
+    sourceCharCount?: number
+    mergeRounds?: number
+  }) => void
+}
+
+/** 后端 `event: chunk` 的载荷；phase=merge 且 index=1 时调用方应清空已铺的分段结果。 */
+export interface DocumentExtractChunkProgress {
+  phase: 'map' | 'merge'
+  index: number
+  total: number
+  pages?: string
+  charCount: number
+  last: boolean
+}
+
+export interface DocumentExtractResult {
+  content: string
+  charCount: number
+  truncated: boolean
+  chunkCount: number
+  sourceCharCount: number
+  mergeRounds: number
+}
+
+/** 空闲超时：分块链路靠每块的 chunk 事件保活，只要还在出事件就不掐。 */
+const DOCUMENT_EXTRACT_IDLE_TIMEOUT_MS = 300_000
+
+function parseChunkProgress(raw: string): DocumentExtractChunkProgress | null {
+  let record: Record<string, unknown>
+  try {
+    record = JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    return null
+  }
+  if (record.phase !== 'map' && record.phase !== 'merge') return null
+  const index = Number(record.index) || 0
+  const total = Number(record.total) || 0
+  if (index < 1 || total < 1) return null
+  return {
+    phase: record.phase,
+    index,
+    total,
+    pages: typeof record.pages === 'string' && record.pages ? record.pages : undefined,
+    charCount: Number(record.charCount) || 0,
+    last: record.last === true || record.last === 'true',
+  }
+}
+
+async function fetchDocumentExtract(
+  payload: DocumentExtractPayload,
+  options: DocumentExtractOptions,
+): Promise<DocumentExtractResult> {
+  const endpoint = 'rule/documentExtract'
+  try {
+    if (usesMockAdapter(endpoint)) {
+      const result = await request<unknown>(endpoint, { ...payload, fileName: options.file.name }, { mode: 'mock' })
+      const record = (result ?? {}) as Record<string, unknown>
+      const content = String(record.content ?? '')
+      if (!content.trim()) throw new Error('解析未返回内容')
+      const truncated = record.truncated === true
+      const charCount = Number(record.charCount ?? 0) || content.length
+      const chunkCount = Number(record.chunkCount ?? 0) || 1
+      const done = {
+        message: String(record.message ?? '解析完成'),
+        charCount,
+        truncated,
+        chunkCount,
+        sourceCharCount: Number(record.sourceCharCount ?? 0) || 0,
+        mergeRounds: Number(record.mergeRounds ?? 0) || 0,
+      }
+      options.onContent?.(content)
+      options.onDone?.(done)
+      return { ...done, content }
+    }
+    const headers: Record<string, string> = { Accept: 'text/event-stream' }
+    const token = readStoredToken()
+    if (token) headers[ACCESS_TOKEN_HEADER] = token
+    const controller = new AbortController()
+    const onExternalAbort = () => controller.abort()
+    if (options.signal) {
+      if (options.signal.aborted) controller.abort()
+      else options.signal.addEventListener('abort', onExternalAbort, { once: true })
+    }
+    let timeout = window.setTimeout(() => controller.abort(), DOCUMENT_EXTRACT_IDLE_TIMEOUT_MS)
+    const resetIdleTimeout = () => {
+      window.clearTimeout(timeout)
+      timeout = window.setTimeout(() => controller.abort(), DOCUMENT_EXTRACT_IDLE_TIMEOUT_MS)
+    }
+    try {
+      const formData = new FormData()
+      formData.append('request', new Blob([JSON.stringify(payload)], { type: 'application/json' }))
+      formData.append('file', options.file)
+      // 不手写 Content-Type：boundary 必须由浏览器补，后端按 @RequestPart 绑定 request/file
+      const res = await fetch('/api/answer/document-extract', {
+        method: 'POST',
+        credentials: 'include',
+        headers,
+        body: formData,
+        signal: controller.signal,
+      })
+      if (isSessionExpiredRedirect(res)) {
+        triggerSessionExpired()
+        throw new Error('登录失效,请重新登录')
+      }
+      if (!res.ok) {
+        let detail = ''
+        try {
+          const raw = await res.text()
+          try {
+            const parsed = JSON.parse(raw) as Record<string, unknown>
+            detail = String(parsed.error ?? parsed.message ?? parsed.msg ?? '')
+          } catch {
+            detail = raw.trim()
+          }
+        } catch { /* ignore */ }
+        if (!detail && res.status === 413) detail = '文件或请求体超过大小限制，请压缩或更换文件'
+        throw new Error(detail ? `请求失败 ${res.status}: ${detail.slice(0, 200)}` : `请求失败 ${res.status}`)
+      }
+      let text = ''
+      // 后端 Spring SSE writer 输出 `data:<正文>`，没有规范里的可选空格，首空格可能属于正文
+      const parser = createSseEventParser({ preserveDataLeadingSpace: true })
+      let structured = false
+      let content = ''
+      let doneMessage = ''
+      let doneCharCount = 0
+      let doneTruncated = false
+      let doneChunkCount = 0
+      let doneSourceCharCount = 0
+      let doneMergeRounds = 0
+      let doneSeen = false
+      let streamError = ''
+      const emitEvent = (event: { event: string; data: string }) => {
+        structured = true
+        if (doneSeen) return
+        if (event.event === 'thinking') {
+          options.onThinking?.(event.data)
+          return
+        }
+        if (event.event === 'content' || event.event === 'message') {
+          if (!event.data) return
+          content += event.data
+          options.onContent?.(event.data)
+          return
+        }
+        if (event.event === 'chunk') {
+          const progress = parseChunkProgress(event.data)
+          if (progress) {
+            // 合并轮次从第一段起就是新的正文，之前累积的分块结果不再展示
+            if (progress.phase === 'merge' && progress.index === 1) content = ''
+            options.onChunk?.(progress)
+          }
+          return
+        }
+        // SSE 已经发出，HTTP 状态早就是 200，中途失败只能靠 in-band 的 error 事件
+        if (event.event === 'error') {
+          streamError = event.data.trim()
+          return
+        }
+        if (event.event === 'done') {
+          doneSeen = true
+          const trimmed = event.data.trim()
+          if (!trimmed) return
+          try {
+            const parsed = JSON.parse(trimmed) as Record<string, unknown>
+            if (parsed.message != null) doneMessage = String(parsed.message)
+            if (parsed.charCount != null) doneCharCount = Number(parsed.charCount) || 0
+            if (parsed.truncated != null) doneTruncated = parsed.truncated === true || parsed.truncated === 'true'
+            if (parsed.chunkCount != null) doneChunkCount = Number(parsed.chunkCount) || 0
+            if (parsed.sourceCharCount != null) doneSourceCharCount = Number(parsed.sourceCharCount) || 0
+            if (parsed.mergeRounds != null) doneMergeRounds = Number(parsed.mergeRounds) || 0
+          } catch {
+            doneMessage = trimmed
+          }
+          return
+        }
+        // 陌生事件名不能拼进正文，只忽略
+      }
+      if (res.body && typeof res.body.getReader === 'function') {
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          const delta = decoder.decode(value, { stream: true })
+          if (delta) {
+            text += delta
+            resetIdleTimeout()
+            for (const event of parser.push(delta)) emitEvent(event)
+          }
+        }
+        const tail = decoder.decode()
+        if (tail) {
+          text += tail
+          for (const event of parser.push(tail)) emitEvent(event)
+        }
+      } else {
+        text = await res.text()
+        for (const event of parser.push(text)) emitEvent(event)
+      }
+      for (const event of parser.finish()) emitEvent(event)
+      // 后端退化成纯文本时，整段正文就是抽取结果（不做脚本那套解析）
+      if (!structured && text) {
+        content += text
+        options.onContent?.(text)
+      }
+      if (streamError) throw new Error(streamError)
+      if (!content.trim()) throw new Error('解析未返回内容')
+      const charCount = doneCharCount || content.length
+      const result: DocumentExtractResult = {
+        content,
+        charCount,
+        truncated: doneTruncated,
+        chunkCount: doneChunkCount || 1,
+        sourceCharCount: doneSourceCharCount,
+        mergeRounds: doneMergeRounds,
+      }
+      options.onDone?.({
+        message: doneMessage || '解析完成',
+        charCount,
+        truncated: result.truncated,
+        chunkCount: result.chunkCount,
+        sourceCharCount: result.sourceCharCount,
+        mergeRounds: result.mergeRounds,
+      })
+      return result
+    } finally {
+      window.clearTimeout(timeout)
+      options.signal?.removeEventListener('abort', onExternalAbort)
+    }
+  } catch (e) {
+    throw e instanceof ApiError ? e : new ApiError(endpoint, e)
+  }
+}
+
 // 规则资产（M3）
 // ck_source 监控源配置（2026-09-05，vanv-data-engine SourceController）：
 // 数据监控节点保存时同步落库。list 按 sourceId 查存在性（SOURCE_ID 不唯一，可能多行）；
@@ -1934,6 +2157,7 @@ export const ruleApi = {
     }
   },
   dataProcessGenerate: fetchDataProcessGenerate,
+  documentExtract: fetchDocumentExtract,
   // req → 旧体 { rule_id, params, timeout }；响应 result 数组 → outputs（0801 §4.4）
   orchestrationTest: async (req: RuleOrchestrationTestRequest) => {
     const endpoint = 'rule/orchestrationTest'
@@ -2024,6 +2248,41 @@ function buildLegacyMore(q: RowQuery) {
   return parts.join(' AND ') || undefined
 }
 
+/**
+ * 导出用的 more（0930-14A）：导出必须和页面查出来的是同一批数据。
+ *
+ * 查询时数据 ID / 父 ID 走单独参数（entryId / parentId），导出接口认不认没验证过；
+ * 后端认 more 是实测过的（2026-10-03，217：同一源 76 行，带 `ENTRY_ID = 991919` 只导出 1 行），
+ * 所以统一折成 `ENTRY_ID in (...)` / `PARENT_ID in (...)` 写进 more。
+ * ID 只留纯数字（拼进 SQL 片段）；填了内容但一个合法 ID 都没有时写 `ENTRY_ID is null`——
+ * 页面上这时查不到数据，导出也不能因为条件被丢掉而变成整表。
+ */
+function buildExportMore(q: RowQuery) {
+  return joinMore([idInClause('ENTRY_ID', q.dataId), idInClause('PARENT_ID', q.parentId)], buildLegacyMore(q))
+}
+
+/**
+ * 数据 ID / 父 ID 输入框的内容折成 SQL 片段：空 → undefined；填了但一个合法 ID 都没有 → `ENTRY_ID is null`（主键不为空，恒查不到）。
+ * 不能写 `1 = 0`：查询和导出接口都报「传到的条件含有非法注入风险」（2026-10-08 217 实测）；
+ * 也不用 `PARENT_ID in (0)` / `is null`——根数据的父 ID 就是 0 或空。
+ */
+function idInClause(column: string, raw?: string): string | undefined {
+  if (!raw?.trim()) return undefined
+  const ids = raw.split(/[\s,，]+/).filter((id) => /^\d+$/.test(id))
+  return ids.length ? `${column} in (${ids.join(',')})` : 'ENTRY_ID is null'
+}
+
+function isSingleId(raw?: string) {
+  return !!raw && /^\s*\d+\s*$/.test(raw)
+}
+
+/** ID 片段与 SQL / 时间范围合成 more；后者可能含 OR，有 ID 片段时加括号隔开 */
+function joinMore(idParts: Array<string | undefined>, more?: string) {
+  const parts = idParts.filter((part): part is string => !!part)
+  if (more) parts.push(parts.length ? `(${more})` : more)
+  return parts.join(' AND ') || undefined
+}
+
 const SORT_FIELD_MAP: Record<string, string> = {
   updateDt: 'UPDATE_DT',
   createDt: 'CREATE_DT',
@@ -2041,13 +2300,17 @@ function resolveSortField(field?: string): string | undefined {
 function buildLegacyRowQuery(q: RowQuery) {
   const mappedField = resolveSortField(q.sortField)
   const isTimeField = mappedField === 'UPDATE_DT' || mappedField === 'CREATE_DT'
+  // 后端 entryId / parentId 是单个 Long：填多个 ID（或非数字）原样发过去整个查询 500（2026-10-08 217 实测）。
+  // 单个 ID 照旧走参数；其余折成 `ENTRY_ID in (...)` 并进 more，与导出（buildExportMore）同一口径。
+  const singleDataId = isSingleId(q.dataId)
+  const singleParentId = isSingleId(q.parentId)
   return {
     page: q.page ?? 1,
     limit: q.size ?? 20,
     entryType: numericId(q.tableId),
     sourceId: q.sourceId,
-    entryId: q.dataId,
-    parentId: q.parentId,
+    entryId: singleDataId ? q.dataId!.trim() : undefined,
+    parentId: singleParentId ? q.parentId!.trim() : undefined,
     // 多选由调用方 join(',') 传入；旧 AES 载荷无值时不带该键（不兜底 'ALL'，见方案开放项 2）
     state: q.state || undefined,
     nextFlag: q.nextFlag,
@@ -2055,7 +2318,10 @@ function buildLegacyRowQuery(q: RowQuery) {
     // 时间范围同样合并进 more，保留旧端点和 AES 载荷契约。
     min: q.sql ? q.min || 0 : q.min,
     max: q.max,
-    more: buildLegacyMore(q),
+    more: joinMore([
+      singleDataId ? undefined : idInClause('ENTRY_ID', q.dataId),
+      singleParentId ? undefined : idInClause('PARENT_ID', q.parentId),
+    ], buildLegacyMore(q)),
     // 对照真实源码 EntryList2.vue：该页排序一律走 field/type 数值化 hack（含 ENTRY_ID 本身），
     // sorted 恒为 '0'；entry.js 里 sortField==='ENTRY_ID' 触发 sorted±1 的分支是给另一套表格组件
     // （s-table/AntD sorter）准备的，此页从不设置 sortField/sortOrder，是死分支，不迁移。
@@ -2206,7 +2472,7 @@ export const dataApi = {
   },
   dataStats: async () => {
     const tables = await dataApi.tables()
-    return { tables: tables.length, rows: tables.reduce((sum, table) => sum + table.rowCount, 0), chars: 0, review: 0 }
+    return { tables: tables.length, rows: tables.reduce((sum, table) => sum + (table.rowCount ?? 0), 0), chars: 0, review: 0 }
   },
   // 结果视图行编辑（Phase 4.4）
   rowUpdate: (tableId: string, dataId: string, values: Record<string, unknown>) =>
@@ -2361,11 +2627,15 @@ export const dataApi = {
     }),
   // 导出 Excel：旧平台只透传这 5 个查询字段；不把内部查询字段 more 误传给导出接口。
   // 纯 URL 直开，不走 request/axios，由同源 Cookie 完成鉴权。
+  // 按当前查询条件导出。旧平台 EntryList2.vue handleExport 也带 more；此前这里漏了它，
+  // 页面筛了 SQL / 时间 / 数据 ID / 父 ID，导出的仍是整表（或整源）——见 buildExportMore。
+  // nextFlag 原样透传：后端导出是否认它未验证（旧平台导出没带）。
   exportUrl: (q: RowQuery): string => {
     const built = buildLegacyRowQuery(q)
     return appendQuery(BASE_URL + 'entry/entryExportAll', {
       entryType: built.entryType, sourceId: built.sourceId, state: built.state,
-      min: q.min, max: q.max,
+      min: q.min, max: q.max, nextFlag: q.nextFlag,
+      more: buildExportMore(q),
     })
   },
 }
@@ -2935,121 +3205,341 @@ function isFlowNotFound(e: unknown): boolean {
   return code === '-1' && message.includes('未找到相关流程')
 }
 
-function workflowBindingFromApi(value: unknown): WorkflowBinding {
-  const row = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
-  const versionNo = Number(row.versionNo)
+/** source-group/sourceFlows 返回的原始行 → 前端口径（ID 一律字符串，isDefault 1/0 → 布尔） */
+function sourceFlowsViewFromApi(value: unknown): SourceFlowsView {
+  const view = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  const text = (v: unknown) => (v == null || v === '' ? undefined : String(v))
+  const bindings = (Array.isArray(view.bindings) ? view.bindings : []).map((item): SourceFlowBind => {
+    const row = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>
+    return {
+      id: String(row.id ?? ''),
+      sourceId: text(row.sourceId),
+      sourceGroupId: text(row.sourceGroupId),
+      flowId: String(row.flowId ?? ''),
+      isDefault: row.isDefault === true || row.isDefault === 1 || row.isDefault === '1',
+      state: row.state === 'DISABLED' ? 'DISABLED' : 'ACTIVE',
+      revision: Number(row.revision) || 0,
+      updatedAt: text(row.updateDt ?? row.updatedAt),
+    }
+  })
   return {
-    id: String(row.id ?? ''),
-    bindType: row.bindType === 'SOURCE_GROUP' ? 'SOURCE_GROUP' : 'SOURCE',
-    bindId: String(row.bindId ?? ''),
-    workflowId: String(row.workflowId ?? ''),
-    workflowVersionId: row.workflowVersionId == null || row.workflowVersionId === '' ? undefined : String(row.workflowVersionId),
-    workflowCode: String(row.workflowCode ?? ''),
-    workflowName: String(row.workflowName ?? `流程 #${row.workflowId ?? ''}`),
-    description: row.description == null ? undefined : String(row.description),
-    versionNo: Number.isFinite(versionNo) && versionNo > 0 ? versionNo : undefined,
-    publishedVersionId: row.publishedVersionId == null || row.publishedVersionId === '' ? undefined : String(row.publishedVersionId),
-    publishedVersionNo: Number(row.publishedVersionNo) > 0 ? Number(row.publishedVersionNo) : undefined,
-    publishedFlowId: row.publishedFlowId == null || row.publishedFlowId === '' ? undefined : String(row.publishedFlowId),
-    draftVersionId: row.draftVersionId == null || row.draftVersionId === '' ? undefined : String(row.draftVersionId),
-    draftVersionNo: Number(row.draftVersionNo) > 0 ? Number(row.draftVersionNo) : undefined,
-    draftFlowId: row.draftFlowId == null || row.draftFlowId === '' ? undefined : String(row.draftFlowId),
-    versionStatus: row.versionStatus === 'DRAFT' || row.versionStatus === 'ARCHIVED' ? row.versionStatus : 'PUBLISHED',
-    workflowStatus: row.workflowStatus === 'DISABLED' ? 'DISABLED' : 'ACTIVE',
-    versionManaged: true,
-    followsCurrentVersion: row.followsCurrentVersion !== false,
-    role: (['MAIN', 'BACKFILL', 'AUX'].includes(String(row.role)) ? String(row.role) : 'AUX') as WorkflowBindingRole,
-    primary: row.primary === true || row.primary === 1 || row.primary === '1',
-    priority: Number(row.priority) || 0,
-    status: row.status === 'DISABLED' ? 'DISABLED' : 'ACTIVE',
-    inherited: row.inherited === true || row.inherited === 1 || row.inherited === '1',
-    updatedAt: row.updatedAt == null ? undefined : String(row.updatedAt),
+    sourceId: text(view.sourceId),
+    sourceGroupId: text(view.sourceGroupId),
+    flowIds: (Array.isArray(view.flowIds) ? view.flowIds : []).map(String),
+    defaultFlowId: text(view.defaultFlowId),
+    bindings,
   }
 }
 
-/** 源多流程绑定。固定端点避免把动态 ID 拼进契约表，也便于生产写保护逐项放行。 */
-export const workflowBindingApi = {
-  list: async (
-    sourceId: string,
-    options: {
-      /** 新多流程接口尚未部署时，用旧 cs_source.FLOW_ID 生成只读主流程行。 */
-      legacySource?: Pick<Source, 'sourceId' | 'flowId' | 'primaryFlowId' | 'updatedAt'>
-      onCompatibility?: () => void
-    } = {},
-  ): Promise<WorkflowBinding[]> => {
-    try {
-      // 本地演示源里保留了字母 ID；Spring 接口收 Long，发过去只会得到 400。
-      if (!/^\d+$/.test(sourceId)) throw new Error('当前源使用本地演示 ID')
-      const result = await request<unknown>('workflow/sourceBindings', { sourceId }, {
-        method: 'GET', httpEndpoint: 'workflow/sourceBindings', httpParams: { sourceId },
+const GROUP_FLOW_LOCKED = '来源使用组统一流程，请先退出来源组再设置独立流程'
+
+/** source-group/* 返回的成员行 → 前端口径（ID 一律字符串） */
+function sourceGroupMemberFromApi(value: unknown): { sourceId: string; sourceName: string; [key: string]: unknown } {
+  const row = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  return {
+    ...row,
+    sourceId: String(row.sourceId ?? ''),
+    sourceName: row.sourceName == null ? '' : String(row.sourceName),
+  }
+}
+
+/** source-group/list 或 detail 的原始行 → SourceGroup（ID 转字符串，flowIds 归一为字符串数组） */
+function sourceGroupFromApi(value: unknown): SourceGroup {
+  const row = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  const text = (v: unknown) => (v == null || v === '' ? undefined : String(v))
+  return {
+    sourceGroupId: String(row.sourceGroupId ?? row.id ?? ''),
+    sourceGroupCode: row.sourceGroupCode == null ? '' : String(row.sourceGroupCode),
+    sourceGroupName: row.sourceGroupName == null ? '' : String(row.sourceGroupName),
+    description: text(row.description),
+    state: row.state === 'DISABLED' ? 'DISABLED' : 'ACTIVE',
+    authGroupId: row.authGroupId == null ? undefined : Number(row.authGroupId),
+    defaultFlowId: text(row.defaultFlowId),
+    flowIds: (Array.isArray(row.flowIds) ? row.flowIds : []).map(String),
+    revision: Number(row.revision) || 0,
+    updatedAt: text(row.updateDt ?? row.updatedAt),
+  }
+}
+
+/**
+ * 来源组（source-group/*，bee-config SourceGroupController，2026-10-08 上线 217）。
+ * 1008-02 API 层：来源组本身的增删改查、成员管理、组绑定流程。与 leo 的本地「我的分组」
+ * （stores/sourceGroups.ts，个人目录）是两个概念。
+ *
+ * 适配约定（1008-02）：所有 ID 转字符串；isDefault 转布尔；错误直接展示后端 msg 不再包一层；
+ * 任何写操作完成后（包括失败）重新拉 list / sourceFlows 刷新 revision（调用方做，这里只管发请求）。
+ */
+export const sourceGroupApi = {
+  /** 来源组列表（不分页） */
+  list: async (): Promise<SourceGroup[]> => {
+    const result = await request<unknown>('source-group/list', {}, {
+      method: 'GET', httpEndpoint: 'source-group/list',
+    })
+    const rows = Array.isArray(result) ? result : []
+    return rows.map(sourceGroupFromApi)
+  },
+  detail: async (sourceGroupId: string): Promise<SourceGroup | null> => {
+    const result = await request<unknown>('source-group/detail', { sourceGroupId }, {
+      method: 'GET', httpEndpoint: 'source-group/detail', httpParams: { sourceGroupId },
+    })
+    // 空载荷：normalizeHttpPayload 对 data:null 会包成 { ok: true, message }，没有来源组字段 → 视为不存在
+    if (result == null) return null
+    if (typeof result === 'object' && !('sourceGroupId' in result) && !('id' in result)) return null
+    return sourceGroupFromApi(result)
+  },
+  /** 组成员分页：没有 total，请求 limit+1 条判断是否有下一页（同旧平台） */
+  members: async (sourceGroupId: string, offset: number, limit: number): Promise<{ rows: ReturnType<typeof sourceGroupMemberFromApi>[]; hasMore: boolean }> => {
+    const result = await request<unknown>('source-group/members', { sourceGroupId }, {
+      method: 'GET', httpEndpoint: 'source-group/members', httpParams: { sourceGroupId, offset, limit: limit + 1 },
+    })
+    const rows = (Array.isArray(result) ? result : []).map(sourceGroupMemberFromApi)
+    const hasMore = rows.length > limit
+    return { rows: hasMore ? rows.slice(0, limit) : rows, hasMore }
+  },
+  /** 新建来源组（admin） */
+  add: async (input: { sourceGroupCode: string; sourceGroupName: string; description?: string }): Promise<Ack> => {
+    const result = await request<unknown>('source-group/add', input, {
+      method: 'POST', httpEndpoint: 'source-group/add', httpParams: input,
+    })
+    return ackFromApiResult(result)
+  },
+  /** 修改来源组（admin；必须带编辑前 revision） */
+  update: async (input: { sourceGroupId: string; sourceGroupCode?: string; sourceGroupName?: string; description?: string; state?: SourceGroupState; revision: number }): Promise<Ack> => {
+    const result = await request<unknown>('source-group/update', input, {
+      method: 'POST', httpEndpoint: 'source-group/update', httpParams: input,
+    })
+    return ackFromApiResult(result)
+  },
+  /** 删除来源组（admin；必须带编辑前 revision） */
+  remove: async (input: { sourceGroupId: string; revision: number }): Promise<Ack> => {
+    const result = await request<unknown>('source-group/delete', input, {
+      method: 'POST', httpEndpoint: 'source-group/delete', httpParams: input,
+    })
+    return ackFromApiResult(result)
+  },
+  /**
+   * 按源 ID 列表调整组成员（旧平台 SourceGroupModal.membership 同口径）。
+   * body 字段名是后端的 `sourceGroupId` / `expectedSourceGroupId`（不是抽象层的 target/expected）：
+   * `sourceGroupId` 为目标组，null = 退组；`expectedSourceGroupId` 为当前归属组（并发校验）。
+   * 两者为 null 时 JSON 里**必须显式写 null**（退组语义，不能丢字段）。
+   */
+  changeMembers: async (input: { sourceIds: string[]; sourceGroupId: string | null; expectedSourceGroupId: string | null }): Promise<Ack> => {
+    const body = {
+      sourceIds: input.sourceIds.map((id) => Number(id)),
+      sourceGroupId: input.sourceGroupId,
+      expectedSourceGroupId: input.expectedSourceGroupId,
+    }
+    const result = await request<unknown>('source-group/changeMembers', body, {
+      method: 'POST', httpEndpoint: 'source-group/changeMembers', httpParams: body,
+    })
+    return ackFromApiResult(result)
+  },
+  /**
+   * 按筛选范围批量调整组成员：参数全放 query；targetSourceGroupId=-1 表示退组；无范围条件必须 confirmAll=true。
+   * `filter` 是列表页的筛选条件（与 `sourcePaged` 同一份），这里按 sourcePaged 同口径转成后端参数，
+   * 只带非空的范围字段（旧平台 source-group.js 约定），不带分页 / 排序。
+   */
+  changeMembersByRange: async (input: { targetSourceGroupId: string; confirmAll?: boolean; filter: PageQuery }): Promise<MembershipRangeResult | Ack> => {
+    // appendQuery 会跳过 undefined / null / ''，但空数组会变成 `key=`，这里先去掉
+    const cond = Object.fromEntries(Object.entries({ ...sourceCondParams(input.filter), tags: input.filter.tags })
+      .filter(([, value]) => !(Array.isArray(value) && !value.filter(Boolean).length)))
+    const httpParams = {
+      ...cond,
+      targetSourceGroupId: input.targetSourceGroupId,
+      ...(input.confirmAll ? { confirmAll: true } : {}),
+    }
+    const result = await request<unknown>('source-group/changeMembersByRange', httpParams, {
+      method: 'POST', httpEndpoint: 'source-group/changeMembersByRange', paramsIn: 'query', httpParams,
+    })
+    if (result == null) return ackFromApiResult(result)
+    const row = result as Record<string, unknown>
+    return {
+      total: Number(row.total) || 0,
+      joined: Number(row.joined) || 0,
+      moved: Number(row.moved) || 0,
+      left: Number(row.left) || 0,
+      unchanged: Number(row.unchanged) || 0,
+    }
+  },
+  /** 来源组整体绑定流程（admin；带 revision 并发快照；flowIds 为完整列表，空列表 + null 清空） */
+  bindFlows: async (input: { sourceGroupId: string; revision: number; flowIds: string[]; defaultFlowId: string | null }): Promise<Ack> => {
+    const body = {
+      sourceGroupId: input.sourceGroupId,
+      revision: input.revision,
+      flowIds: input.flowIds.map((id) => Number(id)),
+      defaultFlowId: input.defaultFlowId == null ? null : Number(input.defaultFlowId),
+    }
+    const result = await request<unknown>('source-group/bindFlows', body, {
+      method: 'POST', httpEndpoint: 'source-group/bindFlows', httpParams: body,
+    })
+    return ackFromApiResult(result)
+  },
+  /** 来源（或来源组）的流程绑定行，含停用行；sourceId 有值时后端优先按单源处理 */
+  bindings: async (input: { sourceId?: string; sourceGroupId?: string }): Promise<SourceFlowBind[]> => {
+    const result = await request<unknown>('source-group/bindings', input, {
+      method: 'GET', httpEndpoint: 'source-group/bindings', httpParams: input,
+    })
+    const rows = Array.isArray(result) ? result : []
+    return rows.map((item): SourceFlowBind => {
+      const row = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>
+      const text = (v: unknown) => (v == null || v === '' ? undefined : String(v))
+      return {
+        id: String(row.id ?? ''),
+        sourceId: text(row.sourceId),
+        sourceGroupId: text(row.sourceGroupId),
+        flowId: String(row.flowId ?? ''),
+        isDefault: row.isDefault === true || row.isDefault === 1 || row.isDefault === '1',
+        state: row.state === 'DISABLED' ? 'DISABLED' : 'ACTIVE',
+        revision: Number(row.revision) || 0,
+        updatedAt: text(row.updateDt ?? row.updatedAt),
+      }
+    })
+  },
+  /** 启用 / 停用一条流程绑定（admin）；回传 id/sourceId/sourceGroupId/flowId/revision */
+  updateBindingState: async (row: SourceFlowBind, state: SourceGroupState): Promise<Ack> => {
+    const body = {
+      id: Number(row.id),
+      sourceId: row.sourceId == null ? null : Number(row.sourceId),
+      sourceGroupId: row.sourceGroupId == null ? null : Number(row.sourceGroupId),
+      flowId: Number(row.flowId),
+      revision: row.revision,
+      state,
+    }
+    const result = await request<unknown>('source-group/updateBindingState', body, {
+      method: 'POST', httpEndpoint: 'source-group/updateBindingState', httpParams: body,
+    })
+    return ackFromApiResult(result)
+  },
+  /** 来源列表当前生效流程并集（GET sourceIds 逗号串；上限 5000，超过分片） */
+  sourceFlowIds: async (sourceIds: string[]): Promise<string[]> => {
+    const ids = sourceIds.filter((id) => /^\d+$/.test(id))
+    const chunks: string[][] = []
+    for (let i = 0; i < ids.length; i += 5000) chunks.push(ids.slice(i, i + 5000))
+    const results: string[] = []
+    for (const chunk of chunks) {
+      if (!chunk.length) continue
+      const result = await request<unknown>('source-group/flowIds', {}, {
+        method: 'GET', httpEndpoint: 'source-group/flowIds', httpParams: { sourceIds: chunk.join(',') },
       })
-      return (Array.isArray(result) ? result : []).map(workflowBindingFromApi)
-    } catch (error) {
-      const source = options.legacySource
-      if (!source || String(source.sourceId) !== sourceId) throw error
-      options.onCompatibility?.()
-      const workflowId = String(source.primaryFlowId || source.flowId || '').trim()
-      if (!workflowId || workflowId === '0' || workflowId === '-1') return []
-      return [{
-        id: `legacy:${sourceId}:${workflowId}`,
-        bindType: 'SOURCE',
-        bindId: sourceId,
-        workflowId,
-        workflowCode: `LEGACY-${workflowId}`,
-        workflowName: `当前主流程 #${workflowId}`,
-        versionNo: 1,
-        publishedVersionNo: 1,
-        publishedFlowId: workflowId,
+      if (Array.isArray(result)) results.push(...result.map(String))
+    }
+    return results
+  },
+}
+
+/**
+ * 源的多流程绑定（画布流程标签栏 / 流程列表用）。底层是来源组接口文档里的 `source-group/*`
+ * （bee-config SourceGroupController，2026-10-08 上线 217）：一个源可关联多条流程，有一条默认流程；
+ * 入组的源统一使用来源组的流程，不能单独改绑。
+ *
+ * 保存只有一个端点 `bindSourceFlows`——**整体替换**绑定列表并指定默认，带并发快照。所以每次写都先读一遍
+ * 最新绑定（sourceFlows），在它的基础上增 / 改 / 删，再连同读到的快照一起提交；别人刚改过会被后端拒绝
+ * （「来源流程关联已变化，请重新查询」），界面把后端原因直接展示。
+ *
+ * 没有版本 / 草稿 / 发布：后端还在评估（JSON 快照方案），行上 `versionManaged` 恒为 false，界面据此不显示版本相关入口。
+ */
+export const workflowBindingApi = {
+  /** 流程版本（草稿 / 发布）接口是否可用。后端没有，恒为 false；流程中心据此不走版本流程。 */
+  available: (): boolean => false,
+  /** 读来源的流程绑定原始视图：生效列表、默认流程、是否入组、并发快照 */
+  view: async (sourceId: string): Promise<SourceFlowsView> => {
+    const result = await request<unknown>('source-group/sourceFlows', { sourceId }, {
+      method: 'GET', httpEndpoint: 'source-group/sourceFlows', httpParams: { sourceId },
+    })
+    return sourceFlowsViewFromApi(result)
+  },
+  list: async (sourceId: string): Promise<WorkflowBinding[]> => {
+    // 本地演示源里保留了字母 ID；Spring 接口收 Long，发过去只会得到 400。
+    if (!/^\d+$/.test(sourceId)) return []
+    const view = await workflowBindingApi.view(sourceId)
+    const active = view.bindings.filter((binding) => binding.state === 'ACTIVE')
+    // 流程名：绑定行里没有，逐条取详情（一个源关联的流程不多）；取不到就显示 ID
+    const names = new Map<string, string>()
+    await Promise.all(active.map(async (binding) => {
+      const flow = await flowCenterApi.detail(binding.flowId).catch(() => null)
+      if (flow?.name) names.set(binding.flowId, flow.name)
+    }))
+    const inherited = !!view.sourceGroupId
+    return active
+      .slice()
+      .sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
+      .map((binding, index): WorkflowBinding => ({
+        id: binding.id,
+        bindType: inherited ? 'SOURCE_GROUP' : 'SOURCE',
+        bindId: inherited ? String(view.sourceGroupId) : sourceId,
+        workflowId: binding.flowId,
+        workflowCode: `FLOW-${binding.flowId}`,
+        workflowName: names.get(binding.flowId) ?? `流程 #${binding.flowId}`,
+        publishedFlowId: binding.flowId,
         versionStatus: 'PUBLISHED',
         workflowStatus: 'ACTIVE',
         versionManaged: false,
         followsCurrentVersion: true,
-        role: 'MAIN',
-        primary: true,
-        priority: 0,
+        role: binding.isDefault ? 'MAIN' : 'AUX',
+        primary: binding.isDefault,
+        priority: index,
         status: 'ACTIVE',
-        inherited: false,
-        updatedAt: source.updatedAt,
-      }]
-    }
+        inherited,
+        updatedAt: binding.updatedAt,
+      }))
   },
-  bind: async (input: { sourceId: string; workflowId: string; workflowVersionId?: string; role?: WorkflowBindingRole; primary?: boolean }) =>
-    request<unknown>('workflow/bindSource', input, { method: 'POST', httpEndpoint: 'workflow/bindSource', httpParams: input }),
+  /** 整体保存：读最新快照 → 交给 change 算出新的 { flowIds, defaultFlowId } → 连快照一起提交 */
+  save: async (
+    sourceId: string,
+    change: (view: SourceFlowsView) => { flowIds: string[]; defaultFlowId: string | null },
+  ): Promise<void> => {
+    const view = await workflowBindingApi.view(sourceId)
+    if (view.sourceGroupId) throw new Error(GROUP_FLOW_LOCKED)
+    const next = change(view)
+    const body = {
+      sourceId,
+      expectedFlowIds: view.flowIds,
+      // 停用后也要提交读到的原值；没有默认就是 null
+      expectedDefaultFlowId: view.defaultFlowId ?? null,
+      flowIds: next.flowIds,
+      defaultFlowId: next.defaultFlowId,
+    }
+    await request<unknown>('source-group/bindSourceFlows', body, {
+      method: 'POST', httpEndpoint: 'source-group/bindSourceFlows', httpParams: body,
+    })
+  },
+  /** 关联一条已有流程；源上还没有默认流程、或明确要求 primary 时，把它设为默认 */
+  bind: async (input: { sourceId: string; workflowId: string; primary?: boolean }) =>
+    workflowBindingApi.save(input.sourceId, (view) => ({
+      flowIds: view.flowIds.includes(input.workflowId) ? view.flowIds : [...view.flowIds, input.workflowId],
+      defaultFlowId: input.primary || !view.defaultFlowId ? input.workflowId : view.defaultFlowId,
+    })),
   setPrimary: async (sourceId: string, workflowId: string) =>
-    request<unknown>('workflow/setPrimary', { sourceId, workflowId }, { method: 'POST', httpEndpoint: 'workflow/setPrimary', httpParams: { sourceId, workflowId } }),
+    workflowBindingApi.save(sourceId, (view) => {
+      if (!view.flowIds.includes(workflowId)) throw new Error('这条流程当前没有关联到本源，请刷新后重试')
+      return { flowIds: view.flowIds, defaultFlowId: workflowId }
+    }),
   unbind: async (sourceId: string, workflowId: string) =>
-    request<unknown>('workflow/unbindSource', { sourceId, workflowId }, { method: 'POST', httpEndpoint: 'workflow/unbindSource', httpParams: { sourceId, workflowId } }),
-  restoreInherited: async (sourceId: string): Promise<WorkflowBinding[]> => {
-    const result = await request<unknown>('workflow/restoreInherited', { sourceId }, { method: 'POST', httpEndpoint: 'workflow/restoreInherited', httpParams: { sourceId } })
-    return (Array.isArray(result) ? result : []).map(workflowBindingFromApi)
-  },
-  createForSource: async (input: { sourceId: string; name: string; role?: WorkflowBindingRole; primary?: boolean }): Promise<WorkflowBinding> => {
+    workflowBindingApi.save(sourceId, (view) => {
+      const rest = view.flowIds.filter((id) => id !== workflowId)
+      // 默认标记只能切换，不能直接删：还有别的流程时，要先把默认切走（与后端对「取消默认关联」的口径一致）
+      if (view.defaultFlowId === workflowId && rest.length) throw new Error('这是默认流程，请先把其他流程设为默认，再解除这一条')
+      return { flowIds: rest, defaultFlowId: rest.length ? (view.defaultFlowId ?? null) : null }
+    }),
+  /** 新建一条空白流程并关联到源：两步（先建流程、再关联），第二步失败时说明流程已建出来，别留下谁也不知道的孤儿 */
+  createForSource: async (input: { sourceId: string; name: string; definition: FlowDefinition; primary?: boolean }): Promise<WorkflowBinding> => {
+    const created = await flowCenterApi.save({ name: input.name, definition: input.definition })
     try {
-      const result = await request<unknown>('workflow/createForSource', input, { method: 'POST', httpEndpoint: 'workflow/createForSource', httpParams: input })
-      return workflowBindingFromApi(result)
+      await workflowBindingApi.bind({ sourceId: input.sourceId, workflowId: created.id, primary: input.primary })
     } catch (error) {
-      const failure = error instanceof ApiError
-        ? error.cause as { status?: number; gatewayDetail?: string } | undefined
-        : undefined
-      if ((failure?.status === 404 || failure?.status === 500) && !failure.gatewayDetail) {
-        throw new Error(`当前后台的流程创建接口不可用（HTTP ${failure.status} workflow/createForSource），请检查流程管理接口的部署及数据库迁移。`, { cause: error })
-      }
-      throw error
+      throw new Error(`已新建流程 #${created.id}，但关联到本源失败：${(error as Error)?.message ?? String(error)}。可在流程中心找到它手动关联`, { cause: error })
     }
+    const rows = await workflowBindingApi.list(input.sourceId)
+    const hit = rows.find((row) => row.workflowId === created.id)
+    if (!hit) throw new Error(`已新建流程 #${created.id} 并关联，但刷新绑定列表时没找到它，请刷新页面`)
+    return hit
   },
-  ensureDraft: async (workflowId: string): Promise<WorkflowBinding> => {
-    const input = { workflowId }
-    const result = await request<unknown>('workflow/ensureDraft', input, {
-      method: 'POST', httpEndpoint: 'workflow/ensureDraft', httpParams: input,
-    })
-    return workflowBindingFromApi(result)
+  /** 版本（草稿 / 发布）接口后端还没有；只为保持流程中心抽屉的调用形状，`available()` 为 false 时不会走到这里 */
+  ensureDraft: async (_workflowId: string): Promise<WorkflowBinding> => {
+    throw new Error('流程版本（草稿 / 发布）接口尚未上线')
   },
-  publish: async (workflowId: string): Promise<WorkflowBinding> => {
-    const input = { workflowId }
-    const result = await request<unknown>('workflow/publish', input, {
-      method: 'POST', httpEndpoint: 'workflow/publish', httpParams: input,
-    })
-    return workflowBindingFromApi(result)
+  publish: async (_workflowId: string): Promise<WorkflowBinding> => {
+    throw new Error('流程版本（草稿 / 发布）接口尚未上线')
   },
 }
 
@@ -3250,14 +3740,20 @@ export const flowCenterApi = {
    * 把一批源绑到流程；`flowId` 传空表示解绑（后端约定 0 / 负数 / 不传 = 解绑）。
    * sourceIds 走 **body**，不是 query——旧平台的 changeFlow（query 版）在批量上千时会撞
    * Nginx/Tomcat 请求行上限触发 414/400，已被后端标废弃。单次上限 5000 条。
+   * `currentFlowId`（1008-02）：多流程场景按关联替换 / 解绑时，指定从哪条流程上移走这批源
+   * （不传 = 沿用旧的单流程口径，改 cs_source.FLOW_ID）。
    */
-  bindSources: async (sourceIds: string[], flowId?: string): Promise<Ack> => {
+  bindSources: async (sourceIds: string[], flowId?: string, currentFlowId?: string): Promise<Ack> => {
     if (!sourceIds.length) return { ok: false, message: '请先选择要关联的源' }
     if (sourceIds.length > 5000) return { ok: false, message: `单次最多关联 5000 个源，当前 ${sourceIds.length} 个` }
-    const result = await request<unknown>('flow/changeFlowBatch', { sourceIds, flowId }, {
+    const result = await request<unknown>('flow/changeFlowBatch', { sourceIds, flowId, currentFlowId }, {
       method: 'POST',
       httpEndpoint: 'flow/changeFlowBatch',
-      httpParams: { sourceIds: sourceIds.map(Number), flowId: flowId ? Number(flowId) : 0 },
+      httpParams: {
+        sourceIds: sourceIds.map(Number),
+        flowId: flowId ? Number(flowId) : 0,
+        ...(currentFlowId ? { currentFlowId: Number(currentFlowId) } : {}),
+      },
     })
     return ackFromApiResult(result)
   },
@@ -3279,16 +3775,103 @@ export const flowCenterApi = {
    * 对比：不带 svg 的查询（老参数分支）行数更多——那是 MAIN_CONFIG/SOURCE_ID 过滤口径的旧视图，
    * 不是「多了孤儿」，孤儿判定在 buildSourceSeed 按 lastStep 语义做（0925）。
    */
-  steps: async (flowId: string, options: { withConfigDetails?: boolean; backendScope?: RequestOptions['backendScope'] } = {}): Promise<Step[]> => {
-    const result = await request<unknown>('item/next/nextConfigPaged', { flowId }, {
-      method: 'GET',
-      httpEndpoint: 'item/next/nextConfigPaged',
-      httpParams: { flowId, page: 1, limit: 10000, svg: true },
-      backendScope: options.backendScope ?? 'flow',
-    })
+  steps: async (flowId: string, options: { withConfigDetails?: boolean; backendScope?: RequestOptions['backendScope']; versionId?: string | null } = {}): Promise<Step[]> => {
+    // 2026-10-10 流程版本：传 versionId 读该版本的步骤（画布编辑草稿时）；草稿里步骤 itemConfig 与发布版相同，
+    // 返回结构同 svg 视图（根行 isRoot=1、子步骤 lastStep 已改写成根 ID）。不传 = 原来的流程步骤（运行中的发布版）。
+    const result = options.versionId
+      ? await request<unknown>('flow/version/nodes', { flowId, versionId: options.versionId }, {
+        method: 'GET',
+        httpEndpoint: 'flow/version/nodes',
+        httpParams: { flowId, versionId: options.versionId },
+        backendScope: options.backendScope ?? 'flow',
+      })
+      : await request<unknown>('item/next/nextConfigPaged', { flowId }, {
+        method: 'GET',
+        httpEndpoint: 'item/next/nextConfigPaged',
+        httpParams: { flowId, page: 1, limit: 10000, svg: true },
+        backendScope: options.backendScope ?? 'flow',
+      })
     const steps = sourceStepsFromLegacy(result, '')
     // 只要表 ID 的调用方（siteUsedTables）跳过逐配置补查，与 sourceApi.sourceSteps 同一个开关
     return options.withConfigDetails === false ? steps : attachStepConfigDetails(steps, options.backendScope ?? 'flow')
+  },
+}
+
+/**
+ * 流程版本的写入引用（2026-10-10）：217 后端起全部流程进版本模式，v1 已发布只读；
+ * 改步骤必须写在草稿里，增 / 改 / 删 / 启停都额外带 flowId + versionId + ver（217 旧平台
+ * src/api/source-step.js editRefs 同款）。ver 是**版本行**的乐观锁计数：每写一次 +1，响应不回新值，
+ * 要重读 overview；拿旧 ver 写会被拒「内容已变更，请重新加载」。不传 = 未启用版本的流程，照旧写。
+ */
+export interface FlowVersionRef { flowId: string; versionId: string; ver: number }
+
+/** 调用写接口时的尾参：没有版本信息就不传，调用形状与版本对接前一致 */
+export function versionArgs(ref: FlowVersionRef | null | undefined): [] | [FlowVersionRef] {
+  return ref ? [ref] : []
+}
+
+function versionRefParams(ref?: FlowVersionRef | null): Record<string, unknown> {
+  return ref ? { flowId: Number(ref.flowId), versionId: ref.versionId, ver: ref.ver } : {}
+}
+
+export interface FlowVersionRow {
+  versionId: string
+  flowVer: number
+  ver: number
+  /** W 草稿 / C 已发布（含历史发布） */
+  state: string
+  isLock: number
+  /** 0 正常；-1 已放弃 / 归档 */
+  isDelete: number
+  baseId: string | null
+}
+
+export interface FlowVersionOverview {
+  enabled: boolean
+  curVer: number | null
+  nextVer: number | null
+  publishId: string | null
+  draftId: string | null
+  versions: FlowVersionRow[]
+}
+
+/** 流程版本（2026-10-10，217 旧平台 FlowNodeDrawer 同一套接口）。 */
+export const flowVersionApi = {
+  overview: async (flowId: string): Promise<FlowVersionOverview> => {
+    const raw = await request<Record<string, unknown> | null>('flow/version/overview', { flowId }, {
+      method: 'GET',
+      httpEndpoint: 'flow/version/overview',
+      httpParams: { flowId },
+    })
+    const str = (v: unknown) => (v == null || v === '' ? null : String(v))
+    const num = (v: unknown) => (v == null || v === '' ? null : Number(v))
+    const rows = Array.isArray(raw?.versions) ? raw!.versions as Record<string, unknown>[] : []
+    return {
+      enabled: !!raw?.enabled,
+      curVer: num(raw?.curVer),
+      nextVer: num(raw?.nextVer),
+      publishId: str(raw?.publishId),
+      draftId: str(raw?.draftId),
+      versions: rows.map((v) => ({
+        versionId: String(v.versionId),
+        flowVer: Number(v.flowVer),
+        ver: Number(v.ver),
+        state: String(v.state ?? ''),
+        isLock: Number(v.isLock ?? 0),
+        isDelete: Number(v.isDelete ?? 0),
+        baseId: str(v.baseId),
+      })),
+    }
+  },
+  /** 动作：draft（从发布版建草稿，回 versionId）/ publish / abandon。body 同旧平台 versionAction。 */
+  action: async (action: 'draft' | 'publish' | 'abandon', body: { flowId: string; versionId: string; ver: number; expectedPublishId: string | null }) => {
+    const raw = await request<Record<string, unknown> | Ack>(`flow/version/${action}`, body, {
+      method: 'POST',
+      httpEndpoint: `flow/version/${action}`,
+      httpParams: { ...body, flowId: Number(body.flowId) },
+    })
+    const versionId = raw && typeof raw === 'object' && 'versionId' in raw ? String((raw as Record<string, unknown>).versionId) : null
+    return { versionId }
   },
 }
 
@@ -3297,7 +3880,7 @@ export const itemApi = {
   /** 新建步骤。旧平台真实调用是 `axios({method:'post', params})`——POST 但走 query string，
    *  不是 JSON body，所以这里显式 `paramsIn: 'query'`。响应 data 为 null，不回新 itemConfig，
    *  调用方要再查 nextConfigPaged 用差集定位。新建默认停用，随后 enable(id, '0')。 */
-  saveItemConfig: (step: Step) => invalidateSiteUsedTables(request<Ack>('item/next/saveItemConfig', stepToSaveItemConfigPayload(step), {
+  saveItemConfig: (step: Step, ref?: FlowVersionRef | null) => invalidateSiteUsedTables(request<Ack>('item/next/saveItemConfig', { ...stepToSaveItemConfigPayload(step), ...versionRefParams(ref) }, {
     method: 'POST',
     httpEndpoint: 'item/next/saveItemConfig',
     paramsIn: 'query',
@@ -3305,7 +3888,7 @@ export const itemApi = {
   /** 修改步骤。旧平台真实调用是 `axios({method:'post', data})`，JSON body。字段契约
    *  2026-08-26 用测试源 430016398（itemConfig 40600）原样提交实测确认。
    *  必须带齐快照字段（url / itemId / lastStep / mainConfig），只改 name/cond 也会整包提交。 */
-  stepModify: (step: Step) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', stepToStepModifyPayload(step), {
+  stepModify: (step: Step, ref?: FlowVersionRef | null) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', { ...stepToStepModifyPayload(step), ...versionRefParams(ref) }, {
     method: 'POST',
     httpEndpoint: 'item/next/stepModify',
   })),
@@ -3319,28 +3902,29 @@ export const itemApi = {
    *  flowId 拿不到有效值（空 / '0' / 非数字）时不带该键，交后端按库中值处理。
    *  0929：可选 `outEntry`（入口行输出表，数字表 ID 串）——不在 validateRootUpdate 拒绝清单里，
    *  有非空值才携带；空/缺失时省略，selective update 保持库中值（不能拿 null 去"清空"输出表）。 */
-  rootConfigUpdate: (stepId: string, configId: string, flowId?: string, outEntry?: string | null) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', {
+  rootConfigUpdate: (stepId: string, configId: string, flowId?: string, outEntry?: string | null, ref?: FlowVersionRef | null) => invalidateSiteUsedTables(request<Ack>('item/next/stepModify', {
     itemConfig: Number(stepId),
     ...(flowId && /^\d+$/.test(flowId) && flowId !== '0' ? { flowId: Number(flowId) } : {}),
     isRoot: 1,
     configId: Number(configId),
     ...(outEntry != null && String(outEntry).trim() !== '' ? { outEntry: Number(outEntry) } : {}),
+    ...versionRefParams(ref),
   }, {
     method: 'POST',
     httpEndpoint: 'item/next/stepModify',
   })),
   /** 启停步骤。GET `id` + `state`。state：`'0'` 启用 / `'1'` 停用，与 isDelete 同口径。
    *  后端操作日志文案可能写反，以 isDelete / enabled 为准。 */
-  enable: (stepId: string, state: string) => request<Ack>('item/next/enable', { id: stepId, state }, {
+  enable: (stepId: string, state: string, ref?: FlowVersionRef | null) => request<Ack>('item/next/enable', { id: stepId, state }, {
     method: 'GET',
     httpEndpoint: 'item/next/enable',
-    httpParams: { id: stepId, state },
+    httpParams: { id: stepId, state, ...versionRefParams(ref) },
   }),
   /** 删除步骤。GET `id` = itemConfig。虚拟起点 0 和本地草稿 id 不要调。 */
-  deleteStep: (stepId: string) => invalidateSiteUsedTables(request<Ack>('item/next/delete', { id: stepId }, {
+  deleteStep: (stepId: string, ref?: FlowVersionRef | null) => invalidateSiteUsedTables(request<Ack>('item/next/delete', { id: stepId }, {
     method: 'GET',
     httpEndpoint: 'item/next/delete',
-    httpParams: { id: stepId },
+    httpParams: { id: stepId, ...versionRefParams(ref) },
   })),
 }
 

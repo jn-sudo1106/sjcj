@@ -2,11 +2,12 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { flowCenterApi, workflowBindingApi, type FlowRecord, type WorkflowBinding } from '@/api'
+import { workflowBindingApi, type FlowRecord, type WorkflowBinding } from '@/api'
 const localFlowTarget = import.meta.env.VITE_FLOW_PROXY_TARGET
 import { useFlowStore } from '@/stores/flow'
 import { copyWholeFlow } from '@/utils/flow/copiedConfigs'
 import { reportDetachResult } from '@/utils/flow/applyTemplateToSource'
+import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
 import ReplaceFlowDialog from '../shared/ReplaceFlowDialog.vue'
 
 const props = defineProps<{ sourceId: string }>()
@@ -19,8 +20,10 @@ const loading = ref(false)
 const adding = ref(false)
 const addMenuOpen = ref(false)
 const copyOpen = ref(false)
-const compatibilityMode = ref(false)
 const versionBusy = ref(false)
+// 入组的源统一使用来源组的流程，不能单独改绑（后端会拒绝）：不提供新建 / 关联，只能看，要改先退出来源组
+const inherited = computed(() => rows.value.some(row => row.inherited))
+const writable = computed(() => !inherited.value)
 
 const activeFlowId = computed(() => String(route.query.flowId || flow.sourceCtx?.flowId || ''))
 const activeWorkflowId = computed(() => {
@@ -33,13 +36,8 @@ const activeRow = computed(() => rows.value.find(row => row.workflowId === activ
 
 async function load() {
   loading.value = true
-  compatibilityMode.value = false
   try {
-    const legacySource = flow.sourceCtx?.sourceId === props.sourceId ? flow.sourceCtx : undefined
-    rows.value = await workflowBindingApi.list(props.sourceId, {
-      legacySource,
-      onCompatibility: () => { compatibilityMode.value = true },
-    })
+    rows.value = await workflowBindingApi.list(props.sourceId)
   } catch (error) {
     ElMessage.error(`流程页签加载失败：${(error as Error)?.message ?? String(error)}`)
   } finally {
@@ -63,9 +61,9 @@ async function openFlow(workflowId: string) {
   })
 }
 
-async function finishCreate(binding: WorkflowBinding) {
+async function finishCreate(workflowId: string) {
   await load()
-  await openFlow(binding.workflowId)
+  await openFlow(workflowId)
 }
 
 function versionLabel(row: WorkflowBinding): string {
@@ -133,11 +131,11 @@ async function createBlank() {
     const created = await workflowBindingApi.createForSource({
       sourceId: props.sourceId,
       name: result.value.trim(),
-      role: rows.value.length ? 'AUX' : 'MAIN',
+      definition: makeBlankTemplateDefinition(),
       primary: rows.value.length === 0,
     })
     ElMessage.success(`流程「${created.workflowName}」已创建`)
-    await finishCreate(created)
+    await finishCreate(created.workflowId)
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
     ElMessage.error(`新建流程失败：${(error as Error)?.message ?? String(error)}`)
@@ -173,35 +171,14 @@ async function copyExisting(sourceFlow: FlowRecord) {
       await workflowBindingApi.bind({
         sourceId: props.sourceId,
         workflowId: copied.flowId,
-        role: rows.value.length ? 'AUX' : 'MAIN',
         primary: rows.value.length === 0,
       })
     } catch (error) {
       throw new Error(`已生成流程 #${copied.flowId}，但关联当前源失败：${(error as Error)?.message ?? String(error)}`)
     }
     reportDetachResult(copied.detach, `原流程「${sourceFlow.name}」`)
-    const detail = await flowCenterApi.detail(copied.flowId).catch(() => null)
-    const binding: WorkflowBinding = {
-      id: `new:${props.sourceId}:${copied.flowId}`,
-      bindType: 'SOURCE',
-      bindId: props.sourceId,
-      workflowId: copied.flowId,
-      workflowCode: `FLOW-${copied.flowId}`,
-      workflowName: detail?.name ?? result.value.trim(),
-      publishedVersionNo: 1,
-      publishedFlowId: copied.flowId,
-      role: rows.value.length ? 'AUX' : 'MAIN',
-      primary: rows.value.length === 0,
-      priority: 0,
-      status: 'ACTIVE',
-      versionStatus: 'PUBLISHED',
-      workflowStatus: 'ACTIVE',
-      versionManaged: true,
-      inherited: false,
-      followsCurrentVersion: true,
-    }
     ElMessage.success(`已从「${sourceFlow.name}」创建新流程`)
-    await finishCreate(binding)
+    await finishCreate(copied.flowId)
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
     ElMessage.error(`复制流程失败：${(error as Error)?.message ?? String(error)}`)
@@ -239,7 +216,7 @@ onMounted(async () => {
       >
         <span class="swt-name">{{ row.workflowName }}</span>
         <span class="swt-id">#{{ row.workflowId }}</span>
-        <span class="swt-version" :class="{ draft: !!row.draftVersionNo }">{{ versionLabel(row) }}</span>
+        <span v-if="row.versionManaged" class="swt-version" :class="{ draft: !!row.draftVersionNo }">{{ versionLabel(row) }}</span>
         <span v-if="row.primary" class="swt-primary">主</span>
         <span v-else-if="row.role === 'BACKFILL'" class="swt-role">补</span>
       </button>
@@ -247,24 +224,24 @@ onMounted(async () => {
       <span v-else-if="!loading && !rows.length" class="swt-empty">暂无流程</span>
     </div>
 
-    <div v-if="activeRow" class="swt-version-actions">
+    <div v-if="activeRow?.versionManaged === true && writable" class="swt-version-actions">
       <button
         v-if="!activeRow.draftVersionId"
         class="swt-version-btn"
         type="button"
-        :disabled="versionBusy || compatibilityMode"
+        :disabled="versionBusy"
         @click="createDraft(activeRow)"
       >编辑新版本</button>
       <button
         v-else
         class="swt-version-btn publish"
         type="button"
-        :disabled="versionBusy || compatibilityMode"
+        :disabled="versionBusy"
         @click="publishDraft(activeRow)"
       >发布 v{{ activeRow.draftVersionNo }}</button>
     </div>
 
-    <div class="swt-add-wrap">
+    <div v-if="writable" class="swt-add-wrap">
       <button
         class="swt-add"
         type="button"
@@ -280,7 +257,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <span v-if="compatibilityMode" class="swt-compat" title="当前列表来自旧主流程字段；新增时会尝试调用多流程接口。">兼容模式</span>
+    <span v-if="inherited" class="swt-locked" data-testid="workflow-group-locked" title="该源已加入来源组，统一使用来源组的流程，不能单独新建或关联；需要单独配置请先退出来源组。">来源组统一流程</span>
     <ReplaceFlowDialog
       v-if="copyOpen"
       v-model="copyOpen"
@@ -316,4 +293,5 @@ onMounted(async () => {
 .swt-add-menu button { display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 5px; background: transparent; color: var(--rc-text-2); text-align: left; cursor: pointer; }
 .swt-add-menu button:hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .swt-compat { align-self: center; margin-left: 7px; color: #92400e; font-size: 10px; white-space: nowrap; }
+.swt-locked { align-self: center; margin-left: 7px; padding: 2px 7px; border-radius: 10px; background: #ede9fe; color: #6d28d9; font-size: 10px; white-space: nowrap; cursor: help; }
 </style>

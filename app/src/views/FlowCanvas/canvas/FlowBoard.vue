@@ -7,19 +7,22 @@ let flowBoardSeq = 0
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { useFlowStore } from '@/stores/flow'
+import { useFlowStore, type EdgeSlot } from '@/stores/flow'
+import { tableForDownstream } from '@/utils/flow/tableSync'
 import { useSourceStore } from '@/stores/source'
 import { useDuplicateNode } from './useDuplicateNode'
 import { useStepWrite } from './useStepWrite'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useUiStore } from '@/stores/ui'
 import { entryApi, flowApi, flowCenterApi, type FlowRecord } from '@/api'
-import { isWritableStepId, relinkCandidates, validFlowIdOf } from '@/utils/flow/stepPersist'
+import { extraParentsOf, isWritableStepId, relinkCandidates, validFlowIdOf } from '@/utils/flow/stepPersist'
 import { copyToClipboard } from '@/utils/clipboard'
 import CanvasHeader from '../shared/CanvasHeader.vue'
 import SourceWorkflowTabs from '../source/SourceWorkflowTabs.vue'
 import AddNodePopover from './AddNodePopover.vue'
 import FlowXmlDialog from './FlowXmlDialog.vue'
+import FlowVersionBar from './FlowVersionBar.vue'
+import { canvasFlowIdOf, useFlowVersionStore } from '@/stores/flowVersion'
 import { flowToXml } from '@/utils/flow/flowXml'
 import { reloadFlowIntoCanvas, reloadSourceIntoCanvas, reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import { detachConfigsInPlace } from '@/utils/flow/copiedConfigs'
@@ -27,8 +30,6 @@ import {
   effectiveOutputTable,
   isDataNode,
   isRuleNode,
-  isDecision,
-  isParallel,
   nodeClassFor,
   nodeEntryCondition,
   nodeOutputTable,
@@ -59,8 +60,12 @@ const xmlOpen = ref(false)
 const xml = computed(() => (xmlOpen.value ? flowToXml(flow.serialize()) : ''))
 const canExportXml = computed(() => !flow.dirty && flow.validateFlow().length === 0)
 const recommending = ref(false)
-const isPublishedView = computed(() => flow.sourceCtx?.workflowVersionManaged !== false
+// 2026-10-10：217 流程版本——发布版 / 锁定草稿同样只读（画布不能操作，「+」不显示），点版本条「编辑草稿」后放开
+const flowVersion = useFlowVersionStore()
+const isLeoPublishedView = computed(() => flow.sourceCtx?.workflowVersionManaged !== false
   && flow.sourceCtx?.workflowVersionStatus === 'PUBLISHED')
+const isPublishedView = computed(() => isLeoPublishedView.value
+  || (flowVersion.readonly && flowVersion.flowId === canvasFlowIdOf(flow)))
 
 // 编排对象切换器已升级为页面级源侧栏（0710 会议 B1），组件与接线整体迁至 index.vue
 
@@ -127,10 +132,15 @@ async function recommendTemplateFlow() {
 const menu = reactive<{ show: boolean; x: number; y: number; nodeId: string | null; afterId: string }>({
   show: false, x: 0, y: 0, nodeId: null, afterId: 'start',
 })
-// 0707 优化·Phase6·补：addPop 扩展 branch 模式（ownerId/branchId），供 fan-out 分支列「+」复用同一浮层，
-// hideLogicGroup 防止分支内嵌套开新的决策/分头（chain 不支持嵌套分支）。
-const addPop = reactive<{ show: boolean; x: number; y: number; afterId: string; branch: { ownerId: string; branchId: string } | null }>({
-  show: false, x: 0, y: 0, afterId: 'start', branch: null,
+// 0707 优化·Phase6·补：addPop 扩展 branch 模式（ownerId/branchId），供 fan-out 分支列「+」复用同一浮层。
+// 1008-BR-04：再加 edge（分支区域线上「+」→ insertOnEdge）与 siblingOf（节点左右「+」→ addSibling）。
+const addPop = reactive<{
+  show: boolean; x: number; y: number; afterId: string
+  branch: { ownerId: string; branchId: string } | null
+  edge: { parentId: string; childIds: string[] } | null
+  siblingOf: string | null
+}>({
+  show: false, x: 0, y: 0, afterId: 'start', branch: null, edge: null, siblingOf: null,
 })
 const nodePalette = reactive({ show: false, x: 0, y: 0 })
 
@@ -165,8 +175,7 @@ function edgeTableTag(fromId: string, toId: string): string {
   if (!out && !inp) return ''
   return `${out ? edgeTableLabel(out) : '?'} → ${inp ? edgeTableLabel(inp) : '?'}`
 }
-// 0707 优化·Phase6：节点级「进入条件」已退役（统一收进决策节点的 FlowBranchGroup 分支条件）；连线条件标签退役，仅保留表血缘标签。
-// 原 edgeConditionTag() 函数删除；分支条件摘要标签将在 6.4 阶段重做为分支连线标签。
+// 连线上只保留表血缘标签；分支的进入条件显示在分支列标签上（branchColText，取列首节点自己的进入条件）。
 function nodeClasses(id: string, cfg: NodeConfig) {
   return [
     nodeClassFor(cfg),
@@ -324,6 +333,7 @@ function nearestAfterId(clientY: number): string {
 }
 function onDrop(ev: DragEvent) {
   ev.preventDefault()
+  if (isPublishedView.value) return
   const afterId = nearestAfterId(ev.clientY)
   const nodeId = ev.dataTransfer?.getData('node-id')
   if (nodeId) {
@@ -361,10 +371,13 @@ function onNodeMenu(ev: MouseEvent, id: string) {
   ev.preventDefault()
   ev.stopPropagation()
   flow.select(id)
+  // 只读（发布版 / 锁定草稿）：右键菜单全是改动操作（插入 / 复制 / 移动 / 启停 / 删除），不弹
+  if (isPublishedView.value) return
   openMenu(ev.clientX, ev.clientY, id)
 }
 function onPaneMenu(ev: MouseEvent) {
   ev.preventDefault()
+  if (isPublishedView.value) return
   openMenu(ev.clientX, ev.clientY, null, nearestAfterId(ev.clientY))
 }
 function openMenu(x: number, y: number, nodeId: string | null, afterId?: string) {
@@ -417,19 +430,29 @@ const relinkTargets = computed(() => {
  * 分支列标签（0926 视觉调整）：不再画橙色底纹框/胶囊底色，只展示**该分支各步骤的进入条件**——
  *  1. 列首节点自己的进入条件（历史流程的条件在目标步骤 entryCondition 上，不在分支对象上；
  *     0925 前画布从不展示这批条件，用户反馈「应该只要展示各个步骤进入的条件」）；
- *  2. 分支条件（决策/分头节点的 FlowBranch.condition，用户点分支时在编辑器里配的）；
- *  3. 都没有才回退分支名（否则一列条件缺失时整列没有标识）。
+ *  2. 没有才回退分支名（= 列首节点名；否则一列条件缺失时整列没有标识）。
+ *  （1008-BR-06 前还有决策 / 分头节点的分支条件 FlowBranch.condition，已随节点一起去掉。）
  */
-function branchColText(br: { label: string; condLabel: string; chain: string[] }): string {
+function branchColText(br: { label: string; chain: string[] }): string {
   const head = br.chain[0]
   const headCond = head ? conditionGroupLabel(nodeEntryCondition(flow.configs[head])) : ''
-  return headCond || br.condLabel || br.label
+  return headCond || br.label
 }
 
 /** 0926 反馈「步骤的进入条件没在流程图上展示」：普通节点卡片的进入条件文案；未设条件返回空串（不占行） */
 function nodeCondText(cfg: NodeConfig): string {
   const group = nodeEntryCondition(cfg)
   return group && conditionGroupIsSet(group) ? conditionGroupLabel(group) : ''
+}
+
+// 1008-BR-01：多上级（旧平台 lastStep="A,B"）只按第一个上级连线，其余上级在卡片上标出来
+function extraParentsTitle(id: string): string {
+  const snapshot = sourceStore.stepSnapshots[id]
+  const extra = extraParentsOf(snapshot)
+  if (!extra.length) return ''
+  const name = (pid: string) => (pid === '0' ? '流程入口' : `#${pid}${flow.configs[pid]?.title ? ` ${flow.configs[pid].title}` : ''}`)
+  const drawn = snapshot?.dependsOn?.find((pid) => pid && pid !== id) ?? ''
+  return `该步骤有多个上级：画布连线的是 ${name(drawn)}，另有 ${extra.map(name).join('、')}。为了不丢上级，此流程不自动重算挂接关系。`
 }
 
 function openRelinkDialog(nodeId: string) {
@@ -485,25 +508,74 @@ function runNode(id: string) {
 }
 
 // ---- 添加节点浮层（0707 优化·Phase1，参照 Dify：锚定弹层 + 搜索 + 分组，点选即插） ----
-function openAddPopover(x: number, y: number, afterId: string) {
+function showAddPopover(x: number, y: number, target: Partial<Pick<typeof addPop, 'afterId' | 'branch' | 'edge' | 'siblingOf'>>) {
   addPop.show = true
   addPop.x = x
   addPop.y = y
-  addPop.afterId = afterId
-  addPop.branch = null
+  addPop.afterId = target.afterId ?? 'start'
+  addPop.branch = target.branch ?? null
+  addPop.edge = target.edge ?? null
+  addPop.siblingOf = target.siblingOf ?? null
+}
+function openAddPopover(x: number, y: number, afterId: string) {
+  showAddPopover(x, y, { afterId })
 }
 // 0707 优化·Phase6·补：fan-out 分支列「+」——挂进分支 chain 末尾，而非主链
 function openBranchAddPopover(x: number, y: number, ownerId: string, branchId: string) {
-  addPop.show = true
-  addPop.x = x
-  addPop.y = y
-  addPop.branch = { ownerId, branchId }
+  showAddPopover(x, y, { branch: { ownerId, branchId } })
+}
+// 1008-BR-04：分支区域线上「+」——分叉前（接管全部分支）/ 分支链头上方 / 链内两节点之间
+function openEdgeAddPopover(x: number, y: number, slot: EdgeSlot) {
+  showAddPopover(x, y, { edge: { parentId: slot.parentId, childIds: slot.childIds } })
+}
+
+// ---- 节点左右「+」（1008-BR-04）：给节点加一个兄弟节点 = 在它的上级处分叉，新节点排同级最右 ----
+// 旧平台语义（SourceStepCard openCreatePanel）：新步骤上级 = 该节点的上级；上级没有输出表不能加后续。
+/** 根位节点（没有上级）不能加兄弟；已发布只读版本不显示 */
+function canAddSibling(id: string): boolean {
+  return !isPublishedView.value && !!flow.canvasParentMap.get(id)
+}
+/** 上级没有可给下游的表时不能加（提示沿用旧平台原文） */
+function siblingBlockedReason(id: string): string {
+  const parent = flow.canvasParentMap.get(id)
+  const parentCfg = parent ? flow.configs[parent] : undefined
+  return parentCfg && tableForDownstream(parentCfg) ? '' : '所选步骤输出表为空，无法增加后续步骤'
+}
+function openSiblingAddPopover(x: number, y: number, id: string) {
+  const reason = siblingBlockedReason(id)
+  if (reason) {
+    ElMessage.warning(reason)
+    return
+  }
+  showAddPopover(x, y, { siblingOf: id })
+}
+// 左右「+」只在悬停 / 选中的节点上出现：卡片和按钮之间有缝，离开时延迟收起，鼠标挪到按钮上不会消失
+const hoverNodeId = ref('')
+let hoverLeaveTimer: ReturnType<typeof setTimeout> | undefined
+function onNodeHover(id: string) {
+  clearTimeout(hoverLeaveTimer)
+  hoverNodeId.value = id
+}
+function onNodeLeave() {
+  clearTimeout(hoverLeaveTimer)
+  hoverLeaveTimer = setTimeout(() => { hoverNodeId.value = '' }, 150)
+}
+function sideAddVisible(id: string): boolean {
+  return (hoverNodeId.value === id || flow.selectedId === id) && canAddSibling(id)
+}
+/** 链尾节点自己就是嵌套分叉点时，列底的「追加」入口不显示：它下面的分支各有自己的「+」 */
+function isForkOwner(id: string): boolean {
+  let n = 0
+  for (const parent of flow.canvasParentMap.values()) if (parent === id && ++n > 1) return true
+  return false
 }
 function closeAddPopover() {
   addPop.show = false
 }
 function onPickNode(template: string) {
-  if (addPop.branch) flow.addNodeToBranch(addPop.branch.ownerId, addPop.branch.branchId, template)
+  if (addPop.siblingOf) flow.addSibling(addPop.siblingOf, template)
+  else if (addPop.edge) flow.insertOnEdge(addPop.edge.parentId, addPop.edge.childIds, template)
+  else if (addPop.branch) flow.addNodeToBranch(addPop.branch.ownerId, addPop.branch.branchId, template)
   else flow.insertAfter(addPop.afterId, template)
   closeAddPopover()
 }
@@ -572,11 +644,14 @@ watch(
 
     <!-- 画布主体单独做定位容器（0928）：节点库按钮原来相对整块 .rc-canvas 用写死的 top:108px
          躲开头部，头部一多出分支提示条就压到提示文字上；改成相对画布区域定位，头部多高都不影响。 -->
-    <div v-if="isPublishedView" class="rc-version-readonly" data-testid="published-version-readonly">
+    <div v-if="isLeoPublishedView" class="rc-version-readonly" data-testid="published-version-readonly">
       已发布 v{{ flow.sourceCtx?.workflowVersionNo ?? '—' }} 为只读版本；点击上方“编辑新版本”后再修改节点。
     </div>
+    <!-- 流程版本（2026-10-10，217 后端）：发布版只读，修改自动进草稿；发布 / 放弃在这里 -->
+    <FlowVersionBar />
     <div class="rc-canvas-body" :class="{ 'is-version-readonly': isPublishedView }">
     <button
+      v-if="!isPublishedView"
       class="rc-node-library-toggle"
       type="button"
       :title="nodePalette.show ? '收起节点库' : '打开节点库'"
@@ -605,7 +680,7 @@ watch(
           </defs>
           <path v-for="(e, i) in flow.layout.mainEdges" :key="'m' + i" class="rc-edge" :class="{ rule: e.rule }" :d="e.d" :marker-end="e.rule ? `url(#${markerPrefix}-rule)` : `url(#${markerPrefix})`" />
           <path v-for="(e, i) in flow.layout.branchEdges" :key="'b' + i" class="rc-edge" :d="e.d" :marker-end="`url(#${markerPrefix})`" />
-          <!-- 0707 优化·Phase6：决策/分头节点的 fan-out 分支连线（0925 改实线：虚线+无箭头是"看不出流向"的主因） -->
+          <!-- 0707 优化·Phase6：分叉点的 fan-out 分支连线（0925 改实线：虚线+无箭头是"看不出流向"的主因） -->
           <path v-for="(e, i) in flow.layout.fanOutEdges" :key="'f' + i" class="rc-edge fan-out" :d="e.d" :marker-end="`url(#${markerPrefix}-fan)`" />
         </svg>
 
@@ -628,7 +703,7 @@ watch(
 
         <!-- 插入点 -->
         <button
-          v-for="(s, i) in flow.layout.slots"
+          v-for="(s, i) in isPublishedView ? [] : flow.layout.slots"
           :key="'s' + i"
           class="rc-drop-slot"
           type="button"
@@ -648,7 +723,7 @@ watch(
         >{{ edgeTableTag(e.fromId, e.toId) }}</div>
         </template>
 
-        <!-- 0707 优化·Phase6：决策/分头节点的 fan-out 分支列标签（0926 起只展示该分支/首步骤的进入条件，无底色无边框） -->
+        <!-- 0707 优化·Phase6：分叉点的 fan-out 分支列标签（0926 起只展示该分支/首步骤的进入条件，无底色无边框） -->
         <template v-for="(col, ownerId) in flow.layout.fanOutColMeta" :key="'col-' + ownerId">
           <template v-for="br in col.branches" :key="'coltag-' + br.id">
             <div
@@ -657,13 +732,50 @@ watch(
               :title="branchColText(br)"
               :style="{ left: br.colX + 'px', top: (br.labelTop ?? (br.top - 16)) + 'px' }"
             >{{ branchColText(br) }}</div>
-            <!-- 0707 优化·Phase6·补：分支内添加节点入口——挂到 chain 末尾（不支持中间插入，与 moveInBranch 按钮化范围一致） -->
+            <!-- 0707 优化·Phase6·补：分支内添加节点入口——挂到 chain 末尾。链中间的插入见下方 edgeSlots（1008-BR-04）；
+                 链尾节点是嵌套分叉点时不显示（它下面的分支各有自己的「+」） -->
             <button
+              v-if="!isPublishedView && !(br.chain.length && isForkOwner(br.chain[br.chain.length - 1]))"
               class="rc-branch-add-slot"
               type="button"
               :style="{ left: (br.colX - 12) + 'px', top: (br.top + br.height + 6) + 'px' }"
               :title="`在「${br.label}」分支内添加节点`"
               @click.stop="openBranchAddPopover($event.clientX, $event.clientY, String(ownerId), br.id)"
+            >＋</button>
+          </template>
+        </template>
+
+        <!-- 分支区域线上「+」（1008-BR-04）：分叉前 / 分支链头上方 / 链内两节点之间 -->
+        <template v-if="!isPublishedView">
+          <button
+            v-for="s in flow.layout.edgeSlots"
+            :key="s.key"
+            class="rc-edge-slot"
+            type="button"
+            :data-testid="`edge-slot-${s.key}`"
+            :style="{ left: s.cx + 'px', top: s.top + 'px' }"
+            :title="s.key.startsWith('trunk:') ? '在分叉之前插入节点（新节点接管全部分支）' : '在这条线上插入节点'"
+            aria-label="插入节点"
+            @click.stop="openEdgeAddPopover($event.clientX, $event.clientY, s)"
+          >＋</button>
+        </template>
+
+        <!-- 节点左右「+」（1008-BR-04）：新建分支。离卡片 16px，落在分支列间 32px 的空隙里 -->
+        <template v-for="n in flow.layout.nodes" :key="'side-' + n.id">
+          <template v-if="sideAddVisible(n.id)">
+            <button
+              v-for="side in ['left', 'right'] as const"
+              :key="side"
+              class="rc-side-add"
+              :class="{ blocked: !!siblingBlockedReason(n.id) }"
+              type="button"
+              :data-testid="`side-add-${side}-${n.id}`"
+              :style="{ left: (side === 'left' ? n.pos.left - 16 : n.pos.left + 210 + 16) + 'px', top: (n.pos.top + n.pos.height / 2) + 'px' }"
+              :title="siblingBlockedReason(n.id) || '新建分支：加一个与它并列的节点（同一个上级），排在最右'"
+              aria-label="新建分支"
+              @mouseenter="onNodeHover(n.id)"
+              @mouseleave="onNodeLeave"
+              @click.stop="openSiblingAddPopover($event.clientX, $event.clientY, n.id)"
             >＋</button>
           </template>
         </template>
@@ -675,14 +787,17 @@ watch(
           class="rc-flow-node"
           :class="nodeClasses(n.id, n.cfg)"
           :style="{ left: n.pos.left + 'px', top: n.pos.top + 'px' }"
-          draggable="true"
+          :draggable="!isPublishedView"
           @dragstart.stop="onNodeDragStart($event, n.id)"
           @click.stop="onNodeClick(n.id)"
           @contextmenu="onNodeMenu($event, n.id)"
+          @mouseenter="onNodeHover(n.id)"
+          @mouseleave="onNodeLeave"
         >
           <!-- 删除按钮（0828 D05）：会上明确「那个节点上面要搞个叉」——删节点不该非得回右侧面板或右键菜单。
                hover 才显形，避免每个节点常驻一个叉；右键菜单里的「删除节点」保留，同一个 store 动作。 -->
           <button
+            v-if="!isPublishedView"
             class="rc-node-del"
             type="button"
             title="删除节点"
@@ -698,7 +813,7 @@ watch(
             <div class="rc-node-meta-end">
               <span v-if="runtime.nodeStates[n.id]" class="rc-run-badge" :class="runtime.nodeStates[n.id]">{{ runText(n.id) }}</span>
               <button
-                v-if="n.orphan"
+                v-if="n.orphan && !isPublishedView"
                 class="rc-node-orphan"
                 type="button"
                 title="孤儿步骤：没有可解析的前置步骤（lastStep 缺失或指向集合外）。点击选择它要挂到的节点。"
@@ -719,26 +834,15 @@ watch(
           </div>
           <div class="rc-node-title">{{ n.cfg.title }}</div>
 
-          <template v-if="isDecision(n.cfg)">
-            <div class="rc-node-brief">条件：<b>{{ n.cfg.base[1]?.[1] || '抓取成功且字段完整' }}</b></div>
-            <div class="rc-node-paths"><span class="rc-node-path">通过路径</span><span class="rc-node-path">失败/复核路径</span></div>
-            <div class="rc-node-foot"><span class="rc-chip warn">静态保留</span><span>待执行器</span></div>
-          </template>
-          <template v-else-if="isParallel(n.cfg)">
-            <div class="rc-node-brief"><b>{{ n.cfg.base[1]?.[1] || '路径 A' }}</b> / <b>{{ n.cfg.base[2]?.[1] || '路径 B' }}</b></div>
-            <div class="rc-node-paths"><span class="rc-node-path">路径 A</span><span class="rc-node-path">路径 B</span><span class="rc-node-path">汇合</span></div>
-            <div class="rc-node-foot"><span class="rc-chip">静态保留</span><span>{{ n.cfg.base[3]?.[1] || '待编排' }}</span></div>
-          </template>
-          <template v-else>
-            <!-- 0926 反馈→拍板：卡片只标「条件」tag（提示该节点有条件进入），不再展示 cond 具体文案——
-                 具体内容在连线/分支列标签上展示；条件与「运行」状态同行；悬停仍可看全文 -->
-            <div v-if="tableChip(n.cfg, n.id)" class="rc-node-table" :class="{ unset: tableChip(n.cfg, n.id)!.unset }" :title="tableChip(n.cfg, n.id)!.title">⊞ {{ tableChip(n.cfg, n.id)!.label }}</div>
-            <div class="rc-node-foot">
-              <span v-if="nodeCondText(n.cfg)" :data-testid="`node-cond-${n.id}`" class="rc-node-cond" :title="nodeCondText(n.cfg)">条件</span>
-              <span class="rc-chip" :class="footClass(n.cfg)" :title="footFor(n.cfg).hint">{{ footFor(n.cfg).left }}</span>
-              <span>{{ footFor(n.cfg).right }}</span>
-            </div>
-          </template>
+          <!-- 0926 反馈→拍板：卡片只标「条件」tag（提示该节点有条件进入），不再展示 cond 具体文案——
+               具体内容在连线/分支列标签上展示；条件与「运行」状态同行；悬停仍可看全文 -->
+          <div v-if="tableChip(n.cfg, n.id)" class="rc-node-table" :class="{ unset: tableChip(n.cfg, n.id)!.unset }" :title="tableChip(n.cfg, n.id)!.title">⊞ {{ tableChip(n.cfg, n.id)!.label }}</div>
+          <div class="rc-node-foot">
+            <span v-if="nodeCondText(n.cfg)" :data-testid="`node-cond-${n.id}`" class="rc-node-cond" :title="nodeCondText(n.cfg)">条件</span>
+            <span v-if="extraParentsTitle(n.id)" :data-testid="`node-extra-parents-${n.id}`" class="rc-node-cond" :title="extraParentsTitle(n.id)">另有上级</span>
+            <span class="rc-chip" :class="footClass(n.cfg)" :title="footFor(n.cfg).hint">{{ footFor(n.cfg).left }}</span>
+            <span>{{ footFor(n.cfg).right }}</span>
+          </div>
         </div>
       </div>
     </div>
@@ -765,12 +869,11 @@ watch(
       </template>
     </div>
 
-    <!-- 添加节点浮层（0707 优化·Phase1，参照 Dify：锚定弹层 + 搜索 + 分组，点选即插，含「逻辑」分组承接决策/分头） -->
+    <!-- 添加节点浮层（0707 优化·Phase1，参照 Dify：锚定弹层 + 搜索 + 分组，点选即插） -->
     <AddNodePopover
       v-if="addPop.show"
       :x="addPop.x"
       :y="addPop.y"
-      :hide-logic-group="!!addPop.branch"
       @pick="onPickNode"
       @close="closeAddPopover"
     />
@@ -823,7 +926,9 @@ watch(
 
 <style scoped>
 .rc-version-readonly { padding: 6px 12px; border-bottom: 1px solid #bfdbfe; background: #eff6ff; color: #1e40af; font-size: 11px; }
-.rc-canvas-body.is-version-readonly { pointer-events: none; background: #f8fafc; }
+/* 只读（发布版 / 锁定草稿）：不再整块 pointer-events: none——那会连滚动条、滚轮、点节点查看都禁掉
+   （2026-10-10 用户反馈「发布状态下拉框都无法拖动」）。改动入口（+ / 删除 / 拖拽 / 右键 / 节点库）在模板里逐个关掉 */
+.rc-canvas-body.is-version-readonly { background: #f8fafc; }
 .rc-canvas-body.is-version-readonly :deep(.rc-flow-node) { opacity: .9; }
 .rc-canvas { position: relative; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; height: 100%; display: flex; flex-direction: column; }
 .rc-canvas-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; flex-wrap: wrap; }
@@ -848,6 +953,11 @@ watch(
 .rc-fanout-col-tag { position: absolute; transform: translateX(-50%); max-width: 200px; box-sizing: border-box; text-align: center; font-size: 10px; font-weight: 500; color: #475569; pointer-events: none; z-index: 22; line-height: 1.45; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-branch-add-slot { position: absolute; z-index: 20; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border: 1px dashed #fbbf24; background: #fffbeb; color: #b45309; border-radius: 999px; font-size: 15px; line-height: 1; opacity: 0.75; cursor: pointer; transition: opacity 0.12s, transform 0.12s; }
 .rc-branch-add-slot:hover { opacity: 1; transform: scale(1.08); background: #fef3c7; }
+/* 1008-BR-04：分支区域线上「+」与节点左右「+」——小圆钮，中心对准 (left, top) */
+.rc-edge-slot, .rc-side-add { position: absolute; z-index: 24; width: 20px; height: 20px; transform: translate(-50%, -50%); display: flex; align-items: center; justify-content: center; padding: 0; border: 1px solid #bfdbfe; background: #fff; color: var(--rc-primary); border-radius: 999px; font-size: 13px; line-height: 1; opacity: 0.7; cursor: pointer; box-shadow: 0 4px 10px -8px rgba(37, 99, 235, 0.8); transition: opacity 0.12s, transform 0.12s, border-color 0.12s, background 0.12s; }
+.rc-edge-slot:hover, .rc-side-add:hover { opacity: 1; border-color: var(--rc-primary); background: var(--rc-primary-bg); transform: translate(-50%, -50%) scale(1.1); }
+.rc-side-add { width: 22px; height: 22px; opacity: 0.9; }
+.rc-side-add.blocked { color: var(--rc-faint); border-color: var(--rc-border); cursor: not-allowed; }
 
 .rc-term { position: absolute; width: 150px; height: 36px; border: 1px solid var(--rc-border); border-radius: 18px; background: #fff; color: var(--rc-text-2); display: flex; align-items: center; justify-content: center; font-weight: 600; box-shadow: 0 2px 8px -5px rgba(15, 23, 42, 0.2); }
 
@@ -866,11 +976,10 @@ watch(
 
 .rc-edge-table-tag { position: absolute; transform: translate(-50%, 0); font-size: 9px; color: var(--rc-faint); font-family: var(--rc-mono, monospace); white-space: nowrap; pointer-events: none; z-index: 21; }
 
-/* 0925 美化：卡片高度**必须等于布局常量**（NODE_H=108 / LOGIC_H=140 / TERM_H=36）——此前只有
+/* 0925 美化：卡片高度**必须等于布局常量**（NODE_H=108 / TERM_H=36）——此前只有
    min-height:74px，卡片实际比布局矮，连线端点落在卡片下方一段空白处，整棵树看着"散"。
    现在固定高度 + flex 竖向排布（脚注沉底）+ 溢出裁剪，连线和卡片严丝合缝。 */
 .rc-flow-node { position: absolute; display: flex; flex-direction: column; box-sizing: border-box; width: 210px; height: 108px; padding: 10px 12px; border: 1px solid var(--rc-border); border-radius: 10px; background: #fff; box-shadow: 0 4px 14px -10px rgba(15, 23, 42, 0.35); overflow: hidden; cursor: pointer; transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s; }
-.rc-flow-node.logic-node, .rc-flow-node.parallel-node { height: 140px; }
 .rc-node-del { position: absolute; top: 4px; right: 4px; z-index: 3; width: 18px; height: 18px; line-height: 1; border: 0; border-radius: 4px; background: transparent; color: var(--rc-faint); font-size: 11px; cursor: pointer; opacity: 0; transition: opacity .12s; }
 .rc-flow-node:hover .rc-node-del { opacity: 1; }
 .rc-node-del:hover { background: var(--rc-error-bg, #fef2f2); color: #b91c1c; }
@@ -884,8 +993,6 @@ watch(
 .rc-flow-node.rule-node { border-color: #bfdbfe; background: #fbfdff; }
 .rc-flow-node.check-node { border-color: #fed7aa; background: #fffaf0; }
 .rc-flow-node.mail-node { border-color: #d9f99d; background: #fcfff7; }
-.rc-flow-node.logic-node { border-color: #fde68a; background: #fffbeb; }
-.rc-flow-node.parallel-node { border-color: #cbd5e1; background: #f8fafc; }
 .rc-flow-node.planned { border-style: dashed; opacity: 0.72; }
 .rc-flow-node.disabled-node { opacity: 0.48; filter: saturate(0.72); }
 
@@ -911,15 +1018,9 @@ watch(
 .rc-node-foot > span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-node-table.unset { color: var(--rc-warn, #d98b25); }
 .rc-node-table { margin-top: 6px; font-size: 10px; color: var(--rc-faint); font-family: var(--rc-mono, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rc-node-brief { margin-top: 8px; color: var(--rc-muted); font-size: 10px; line-height: 1.45; }
-.rc-node-brief b { color: #334155; font-weight: 700; }
 /* 0926 反馈→拍板：卡片上的「条件」tag（琥珀色小胶囊，与分支列条件标签同色系），
    与「运行」状态 chip 同处 foot 行，有进入条件即显示 */
 .rc-node-cond { display: inline-block; padding: 1px 6px; border-radius: 5px; background: #fef3c7; color: #b45309; font-size: 10px; line-height: 16px; white-space: nowrap; flex: none; }
-.rc-node-paths { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
-.rc-node-path { flex: 1; min-width: 74px; padding: 3px 5px; border-radius: 5px; border: 1px solid var(--rc-border); background: #fff; color: var(--rc-muted); font-size: 9px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.logic-node .rc-node-path { border-color: #fde68a; background: #fff7ed; color: #92400e; }
-.parallel-node .rc-node-path { border-color: #cbd5e1; background: #fff; color: var(--rc-text-2); }
 .rc-chip { padding: 1px 6px; border-radius: 5px; background: #f1f5f9; color: var(--rc-muted); }
 .rc-chip.ok { background: var(--rc-ok-bg); color: var(--rc-ok); }
 .rc-chip.warn { background: var(--rc-warn-bg); color: var(--rc-warn); }

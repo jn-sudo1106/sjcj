@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, onActivated, onDeactivated, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
@@ -103,6 +103,11 @@ function daysAgo(n: number): Date {
   const d = new Date()
   d.setDate(d.getDate() - n)
   return d
+}
+/** 本地日期 YYYY-MM-DD（与日期组件 value-format 一致；不用 toISOString，那是 UTC，凌晨会差一天） */
+function todayText(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 const DATE_SHORTCUTS = [
   { text: '今天', value: () => [daysAgo(0), daysAgo(0)] },
@@ -392,11 +397,29 @@ function resendTask(task: TaskInst) {
 function stopPoll() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = undefined }
 }
-watch(autoRefresh, (on) => {
+function startPoll() {
   stopPoll()
-  if (on) pollTimer = setInterval(() => void loadTasks({ silent: true }), REFRESH_MS)
-})
+  if (autoRefresh.value) pollTimer = setInterval(() => void loadTasks({ silent: true }), REFRESH_MS)
+}
+watch(autoRefresh, startPoll)
 onUnmounted(stopPoll)
+// 任务中心被 KeepAlive 缓存（AppShell include TaskCenter）：离开时停轮询，回来时按开关恢复，结果不重查
+onDeactivated(stopPoll)
+onActivated(startPoll)
+
+/**
+ * 加载等待提示（2026-10-10）：任务中心只按创建时间查时，topTaskPaged 在 217 上一次要十几秒
+ * （实测今天全天 16.6s、近 1 小时 10.7s，时间窗缩小也快不了，疑似 CREATE_DT 没走索引，已提后端）。
+ * 超过 2 秒才出提示，带源 / 状态等条件的查询通常不到 1 秒，看不到它。
+ */
+const loadingSeconds = ref(0)
+let loadingTicker: ReturnType<typeof setInterval> | undefined
+watch(loading, (on) => {
+  if (loadingTicker) { clearInterval(loadingTicker); loadingTicker = undefined }
+  loadingSeconds.value = 0
+  if (on && props.global) loadingTicker = setInterval(() => { loadingSeconds.value += 1 }, 1000)
+})
+onUnmounted(() => { if (loadingTicker) clearInterval(loadingTicker) })
 
 let taskRequest = 0
 async function loadGlobalSourceNames(tasks: TaskInst[]) {
@@ -413,6 +436,15 @@ async function loadGlobalSourceNames(tasks: TaskInst[]) {
     // 源名查询失败仍显示源 ID，不影响任务列表。
   }
 }
+/**
+ * 任务中心（global）一个条件都没有：topTaskPaged 不带过滤参数时后端直接回空（topTaskPaged-api.md §三-2，
+ * 防全表扫描），发了也白发。这时不发请求，空态提示去选条件，而不是说「没有匹配的任务记录」。
+ * 源态 / 网站态天然带 sourceId / siteId，不受影响。
+ */
+const globalNoCondition = computed(() => !!props.global
+  && !filters.sourceId && !filters.nodeId && !filters.state && !filters.queue?.trim()
+  && !filters.taskId && !filters.parentId && !filters.taskUrl && !filters.startTime && !filters.endTime)
+
 async function loadTasks(opts: { silent?: boolean } = {}) {
   const requestId = ++taskRequest
   const query = {
@@ -433,7 +465,7 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
     page: page.value,
     size: size.value,
   }
-  if ((!props.global && !query.siteId) || siteWideBlocked.value) {
+  if ((!props.global && !query.siteId) || siteWideBlocked.value || globalNoCondition.value) {
     rows.value = []
     total.value = 0
     return
@@ -450,9 +482,14 @@ async function loadTasks(opts: { silent?: boolean } = {}) {
     if (!opts.silent) {
       rows.value = []
       total.value = 0
-      // 后端参数校验失败会带原因（如时间范围不合法），给出来比笼统一句好排查
-      const reason = error instanceof Error && error.message ? `：${error.message}` : ''
-      ElMessage.warning(`加载任务记录失败${reason}`)
+      // 超时（请求被中断）单独说人话：只按创建时间查时后端很慢，加条件能快很多
+      if (error instanceof Error && /abort/i.test(error.message)) {
+        ElMessage.warning('查询超时：后端 60 秒内没有返回。只按创建时间查询较慢，请加上源、状态等条件后重试')
+      } else {
+        // 后端参数校验失败会带原因（如时间范围不合法），给出来比笼统一句好排查
+        const reason = error instanceof Error && error.message ? `：${error.message}` : ''
+        ElMessage.warning(`加载任务记录失败${reason}`)
+      }
     }
     // 静默轮询失败不清空列表、不打扰，下个周期再试
   } finally {
@@ -464,14 +501,16 @@ watch([siteId, sourceId], async () => {
   page.value = 1
   filters.sourceId = props.siteWide || props.global ? '' : sourceId.value
   filters.nodeId = ''
-  filters.state = props.global ? String(Array.isArray(route.query.state) ? route.query.state[0] ?? '' : route.query.state ?? '') : ''
+  // 任务中心默认「今天 + 异常」（2026-10-10 用户定）：只按今天查要十几秒，加上异常 0.2 秒；地址栏带了 state 以它为准
+  filters.state = props.global ? String(Array.isArray(route.query.state) ? route.query.state[0] ?? '' : route.query.state ?? 'E') : ''
   filters.queue = ''
   filters.taskId = ''
   filters.parentId = ''
   filters.taskUrl = ''
-  filters.startTime = ''
-  filters.endTime = ''
-  Object.assign(form, { nodeId: '', state: filters.state, queue: '', startTime: '', endTime: '' })
+  // 任务中心默认只看今天创建的（2026-10-10 用户定）：不带条件后端回空；清空后不再补，改为提示选条件
+  filters.startTime = props.global ? todayText() : ''
+  filters.endTime = filters.startTime
+  Object.assign(form, { nodeId: '', state: filters.state, queue: '', startTime: filters.startTime, endTime: filters.endTime })
   searchText.value = ''
   await loadSiteSources()
 }, { immediate: true })
@@ -710,6 +749,7 @@ const nextStepHints = computed(() => {
           </span>
         </div>
         <p v-if="filtersDirty && !loading" class="tv-dirty" role="status" data-testid="task-filters-dirty">查询条件已修改，点「查询」执行</p>
+        <p v-if="loading && loadingSeconds >= 2" class="tv-slow" role="status" data-testid="task-slow-hint">查询中，已等待 {{ loadingSeconds }} 秒。只按创建时间查询时后端较慢，加上源、状态等条件会快很多。</p>
 
         <table class="rc-data-table tv-table" data-testid="source-task-table" v-loading="loading">
           <colgroup>
@@ -818,7 +858,7 @@ const nextStepHints = computed(() => {
                 <button v-if="canWrite" class="tv-resend" type="button" data-testid="task-resend" @click="resendTask(task)">重发</button>
               </td>
             </tr>
-            <tr v-if="!rows.length && !loading"><td :colspan="showSourceColumn ? 11 : 10" class="tv-empty-row">没有匹配的任务记录</td></tr>
+            <tr v-if="!rows.length && !loading"><td :colspan="showSourceColumn ? 11 : 10" class="tv-empty-row" data-testid="task-empty">{{ globalNoCondition ? '请至少选择源、节点、状态、队列、创建时间，或输入任务 ID / 数据 ID / 任务 URL 后查询' : '没有匹配的任务记录' }}</td></tr>
           </tbody>
         </table>
         <!-- 分页与数据中心统一（DataQueryPanel 的 .dqp-pager 同款 el-pagination） -->
@@ -874,6 +914,7 @@ const nextStepHints = computed(() => {
 .tv-filters { flex-wrap: wrap; row-gap: 6px; }
 .tv-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
 .tv-dirty { margin: -4px 0 10px; color: var(--rc-warning, #b45309); font-size: 12px; }
+.tv-slow { margin: -4px 0 10px; color: var(--rc-muted); font-size: 12px; }
 .tv-table { width: 100%; }
 .tv-id, .tv-time { color: var(--rc-faint); font-family: var(--rc-mono, monospace); font-size: 11px; }
 .tv-pager { justify-content: flex-end; gap: 12px; padding: 10px 16px; margin-top: 0; margin-bottom: 0; border-top: 1px solid var(--rc-border-soft); }

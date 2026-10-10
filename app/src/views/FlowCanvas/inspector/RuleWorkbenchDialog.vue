@@ -151,6 +151,9 @@ async function loadPromptTemplate() {
       outputFields: props.outputFields,
       inputFieldOptions: props.inputFieldOptions,
       outputFieldOptions: props.outputFieldOptions.length ? props.outputFieldOptions : props.inputFieldOptions,
+      providerCode: modelProviderDraft.value,
+      model: modelDraft.value,
+      describe: props.describe,
     })
     if (seq !== promptRequestSeq) return
     if (!applied) {
@@ -181,8 +184,9 @@ watch(() => props.open, (v) => {
     syncLocalDrafts()
     promptVisible.value = !props.hidePromptByDefault
     if (!props.promptPreviewOnly) {
-      void loadProviderModelOptions()
-      void loadPromptTemplate()
+      // 先解析供应商/模型（props 没带模型时 loadModels 会自动落到第一个），再拼模板：
+      // 并行的话 `{{model}}` 会按空值替换一次，展示/保存的提示词就少一个模型名。
+      void loadProviderModelOptions().then(() => loadPromptTemplate())
     }
   }
 })
@@ -215,6 +219,12 @@ async function onProviderChange(value: string) {
   modelProviderDraft.value = value
   await loadModels(value, modelDraft.value)
   if (!modelDraft.value) modelDraft.value = firstModelCode()
+  // 供应商/模型换档后 `{{provider_code}}`、`{{model}}` 要立刻跟着重拼（用户 2026-10-09 要求）
+  await loadPromptTemplate()
+}
+
+async function onModelChange() {
+  await loadPromptTemplate()
 }
 
 function onScriptInput(e: Event) {
@@ -377,6 +387,7 @@ watch(
             :disabled="!modelProviderDraft || !providerOptions.length"
             :teleported="false"
             placeholder="模型"
+            @change="onModelChange"
           >
             <el-option v-for="item in modelOptions" :key="item.modelCode" :label="item.modelName" :value="item.modelCode" />
           </el-select>

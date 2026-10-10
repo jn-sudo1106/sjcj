@@ -372,6 +372,221 @@ describe('规则编排 API · vrule HTTP 契约（0801 §8）', () => {
     })
   })
 
+  // 1005：PDF 抓取「解析内容」。multipart 口径与 data-process 一致，但返回值只有正文与元信息
+  // ——done 里那句"已保存到 xxx.py"不能像生成脚本那样被正则提成 scriptPath（方案 §5.2）。
+  it('documentExtract：发送 request JSON Blob 与 PDF file，不手写 multipart Content-Type，done 不解析脚本路径', async () => {
+    const streamText = [
+      'event: thinking',
+      'data:先读文档结构',
+      '',
+      'event: content',
+      'data:甲方：某某公司',
+      '',
+      'event: content',
+      'data:金额：12 万元',
+      '',
+      'event: done',
+      'data:# 当前文件已保存到/code01/202609/generated.py',
+    ].join('\n')
+    const encoder = new TextEncoder()
+    let read = false
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (read) return { done: true, value: undefined }
+            read = true
+            return { done: false, value: encoder.encode(streamText) }
+          },
+        }),
+      },
+    } as unknown as Response)
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    const { ruleApi } = await import('./index')
+    const file = new File(['%PDF-1.7'], 'report.pdf', { type: 'application/pdf' })
+    const thinking: string[] = []
+    const content: string[] = []
+    let donePayload: Record<string, unknown> | undefined
+
+    const result = await ruleApi.documentExtract({
+      description: '抽取合同双方与金额',
+      systemPrompt: '只输出字段与值',
+      configId: 184,
+      providerCode: 'OpenAI',
+      model: 'gpt-5',
+      outputFields: '甲方:party_a,金额:amount',
+      outputFormat: 'text',
+    }, {
+      file,
+      onThinking: (delta) => thinking.push(delta),
+      onContent: (delta) => content.push(delta),
+      onDone: (payload) => { donePayload = payload as Record<string, unknown> },
+    })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/answer/document-extract')
+    expect((init.headers as Record<string, string>)['Content-Type']).toBeUndefined()
+    expect(init.body).toBeInstanceOf(FormData)
+    const form = init.body as FormData
+    const requestPart = form.get('request')
+    expect(requestPart).toBeInstanceOf(Blob)
+    expect((requestPart as Blob).type).toBe('application/json')
+    await expect((requestPart as Blob).text()).resolves.toContain('"configId":184')
+    expect(form.get('file')).toBe(file)
+    expect(thinking).toEqual(['先读文档结构'])
+    expect(content).toEqual(['甲方：某某公司', '金额：12 万元'])
+    expect(result).toEqual({ content: '甲方：某某公司金额：12 万元', charCount: 15, truncated: false, chunkCount: 1, sourceCharCount: 0, mergeRounds: 0 })
+    expect(result).not.toHaveProperty('scriptPath')
+    expect(donePayload).toMatchObject({ message: '# 当前文件已保存到/code01/202609/generated.py' })
+  })
+
+  it('documentExtract：done 的 JSON 元信息带回 charCount 与 truncated', async () => {
+    const streamText = [
+      'event: content',
+      'data:正文',
+      '',
+      'event: done',
+      'data:{"message":"解析完成","charCount":2,"truncated":true}',
+    ].join('\n')
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => streamText,
+    } as unknown as Response)
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    const { ruleApi } = await import('./index')
+
+    const result = await ruleApi.documentExtract({
+      description: '抽取合同双方与金额',
+      systemPrompt: '只输出字段与值',
+      configId: 184,
+      providerCode: 'OpenAI',
+      model: 'gpt-5',
+      outputFields: '',
+      outputFormat: 'text',
+    }, { file: new File(['%PDF-1.7'], 'report.pdf', { type: 'application/pdf' }) })
+
+    expect(result).toEqual({ content: '正文', charCount: 2, truncated: true, chunkCount: 1, sourceCharCount: 0, mergeRounds: 0 })
+  })
+
+  // 1005 §11：分块抽取的 map/merge 事件。合并轮第一段是新的正文，之前铺开的分段结果必须丢掉；
+  // 陌生的事件名不能拼进正文，中途失败靠 in-band 的 error 事件（HTTP 状态早就是 200）。
+  it('documentExtract：chunk 事件驱动进度与合并重铺，error 事件让整次解析失败且不返回半截正文', async () => {
+    const streamText = [
+      'event: chunk',
+      'data:{"phase":"map","index":1,"total":2,"pages":"第 1-2 页","charCount":12000,"last":false}',
+      '',
+      'event: content',
+      'data:第一段结果',
+      '',
+      'event: chunk',
+      'data:{"phase":"map","index":2,"total":2,"pages":"第 3 页","charCount":640,"last":false}',
+      '',
+      'event: content',
+      'data:第二段结果',
+      '',
+      'event: metric',
+      'data:{"ignored":true}',
+      '',
+      'event: chunk',
+      'data:{"phase":"merge","index":1,"total":1,"pages":null,"charCount":1300,"last":true}',
+      '',
+      'event: content',
+      'data:合并后的完整结果',
+      '',
+      'event: done',
+      'data:{"message":"解析完成","charCount":9,"truncated":false,"chunkCount":2,"sourceCharCount":23456,"mergeRounds":1}',
+    ].join('\n')
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => streamText,
+    } as unknown as Response)
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    const { ruleApi } = await import('./index')
+
+    const progress: Array<Record<string, unknown>> = []
+    const result = await ruleApi.documentExtract({
+      description: '抽取合同双方与金额',
+      systemPrompt: '只输出字段与值',
+      configId: 184,
+      providerCode: 'OpenAI',
+      model: 'gpt-5',
+      outputFields: '',
+      outputFormat: 'text',
+    }, {
+      file: new File(['%PDF-1.7'], 'report.pdf', { type: 'application/pdf' }),
+      onChunk: (payload) => progress.push(payload as unknown as Record<string, unknown>),
+    })
+
+    expect(progress.map((p) => `${p.phase} ${p.index}/${p.total}`)).toEqual(['map 1/2', 'map 2/2', 'merge 1/1'])
+    expect(progress[0]?.pages).toBe('第 1-2 页')
+    expect(progress[2]?.pages).toBeUndefined()
+    expect(result).toEqual({
+      content: '合并后的完整结果',
+      charCount: 9,
+      truncated: false,
+      chunkCount: 2,
+      sourceCharCount: 23456,
+      mergeRounds: 1,
+    })
+
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => [
+        'event: chunk',
+        'data:{"phase":"map","index":1,"total":2,"pages":"第 1 页","charCount":12000,"last":false}',
+        '',
+        'event: content',
+        'data:第一段结果',
+        '',
+        'event: error',
+        'data:第 2/2 块抽取失败：模型超时',
+      ].join('\n'),
+    } as unknown as Response)
+    await expect(ruleApi.documentExtract({
+      description: '抽取合同双方与金额',
+      systemPrompt: '只输出字段与值',
+      configId: 184,
+      providerCode: 'OpenAI',
+      model: 'gpt-5',
+      outputFields: '',
+      outputFormat: 'text',
+    }, { file: new File(['%PDF-1.7'], 'report.pdf', { type: 'application/pdf' }) }))
+      .rejects.toThrow('第 2/2 块抽取失败：模型超时')
+  })
+
+  it('documentExtract：HTTP 400 优先展示后端 error 字段', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => JSON.stringify({ error: '仅支持 .xls 或 .xlsx 文件' }),
+    } as unknown as Response)
+    vi.stubEnv('VITE_API_DISABLE_LIVE_ENDPOINTS', '')
+    vi.stubEnv('VITE_API_MODE', 'http')
+    vi.resetModules()
+    const { ruleApi } = await import('./index')
+
+    await expect(ruleApi.documentExtract({
+      description: '抽取合同双方与金额',
+      systemPrompt: '只输出字段与值',
+      configId: 184,
+      providerCode: 'OpenAI',
+      model: 'gpt-5',
+      outputFields: '',
+      outputFormat: 'text',
+    }, { file: new File(['x'], 'sheet.xlsx') })).rejects.toThrow('仅支持 .xls 或 .xlsx 文件')
+  })
+
   it('dataProcessGenerate：收到 done 后忽略后续 content 事件', async () => {
     const streamText = [
       'event: content',

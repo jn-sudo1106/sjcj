@@ -38,7 +38,8 @@ export interface DataTableMeta {
   tableName: string
   /** 旧表详情的业务名称；tableName 是物理表名，两者不能混用。 */
   name?: string
-  rowCount: number
+  /** 后端 dataCnt；表详情接口不返回时为 undefined，不能当 0 展示（0930-04） */
+  rowCount?: number
   /** C 测试表 / AC 正式表——删除数据入口仅测试表显示（方案 §1.4-4） */
   state?: string
   /** 去重列（逗号分隔的 columnName），手动修改弹窗副标题展示（方案 §1.6-2） */
@@ -83,20 +84,6 @@ export interface EntryTypeGroup {
   list3: EntryType[]
 }
 
-/**
- * 网站范围表选项（0812 计划 M2-1）：旧平台返回可选表目录，网站内是否有数据
- * 在选表后通过真实数据查询判断；不能把表目录重复按源计数。
- */
-export interface SiteTableOption {
-  tableId: string
-  tableName: string
-  name?: string
-}
-
-export interface SiteTablesResult {
-  tables: SiteTableOption[]
-}
-
 export interface DataRow {
   dataId: string // ENTRY_ID
   sourceId: string // SOURCE_ID
@@ -115,6 +102,16 @@ export interface DataRow {
   seq?: string // SEQ
   times?: string // TIMES
   fileId?: string // FILE_ID
+  /** SOURCE_NAME：源名称（entryDetail 返回；列表行通常没有，详情抽屉展示） */
+  sourceName?: string
+  /** ENTRY_TYPE_ID：表 ID（entryDetail 返回；旧平台详情顶部「类型ID」） */
+  entryTypeId?: string
+  /** ENTRY_TYPE_NAME：表名（entryDetail 返回；旧平台详情顶部「类型名」） */
+  entryTypeName?: string
+  /** VER：版本（entryDetail 返回；旧平台详情顶部「版本」） */
+  ver?: string
+  /** FLAG1：抓取日期（entryDetail 返回；旧平台详情顶部「抓取日期」） */
+  flag1?: string
   values?: Record<string, unknown> // 动态列值（键 = 大写物理列名 K1/K2...）
 
   /** @deprecated mock 时代概念，无旧平台契约来源；随 DataView UI 重做一并移除（UI 仍在读，先留存避免编译中断） */

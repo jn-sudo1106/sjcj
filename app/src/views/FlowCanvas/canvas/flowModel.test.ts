@@ -30,13 +30,6 @@ describe('isFirstRunnableNode（0812 计划 M2-10）', () => {
     expect(isFirstRunnableNode(main, configs, 'n2')).toBe(true)
   })
 
-  it('跳过决策/分头节点：结构节点不可能是首节点', () => {
-    const main = ['start', 'n1', 'n2', 'end']
-    const configs = { n1: cfg({ kind: 'decision' }), n2: cfg() }
-    expect(isFirstRunnableNode(main, configs, 'n1')).toBe(false)
-    expect(isFirstRunnableNode(main, configs, 'n2')).toBe(true)
-  })
-
   it('主链没有真实节点时，任何 id 都不是首节点', () => {
     expect(isFirstRunnableNode(['start', 'end'], {}, 'start')).toBe(false)
     expect(firstRunnableNodeId(['start', 'end'], {})).toBe('')
@@ -66,21 +59,14 @@ describe('hasDirectSuccessor（0824：末节点无发后续）', () => {
     expect(hasDirectSuccessor(main, planned, 'n1')).toBe(true)
   })
 
-  it('跳过中间的决策/分头，看到更后面的真实节点', () => {
-    const main = ['start', 'n1', 'dec', 'n2', 'end']
-    const configs = { n1: cfg(), dec: cfg({ kind: 'decision' }), n2: cfg() }
-    expect(hasDirectSuccessor(main, configs, 'n1')).toBe(true)
-    expect(hasDirectSuccessor(main, configs, 'n2')).toBe(false)
-  })
-
   it('主链只有一个真实节点时没有后继', () => {
     const main = ['start', 'n1', 'end']
     expect(hasDirectSuccessor(main, { n1: cfg() }, 'n1')).toBe(false)
   })
 
-  it('决策节点挂了可跑的分支 chain：上游和 owner 都有后继；分支叶子无汇合则没有', () => {
+  it('分叉点挂了可跑的分支 chain：上游和 owner 都有后继；分支叶子无汇合则没有', () => {
     const main = ['start', 'n1', 'dec', 'end']
-    const configs = { n1: cfg(), dec: cfg({ kind: 'decision' }), b1: cfg({ title: '分支处理' }) }
+    const configs = { n1: cfg(), dec: cfg(), b1: cfg({ title: '分支处理' }) }
     const groups: FlowBranchGroup[] = [{ ownerId: 'dec', branches: [{ id: 'br1', label: 'IF', chain: ['b1'] }] }]
     expect(hasDirectSuccessor(main, configs, 'n1', groups)).toBe(true)
     expect(hasDirectSuccessor(main, configs, 'dec', groups)).toBe(true)
@@ -89,7 +75,7 @@ describe('hasDirectSuccessor（0824：末节点无发后续）', () => {
 
   it('分支 chain 内后一个节点、以及汇合点（owner 后的主链节点）都算后继', () => {
     const main = ['start', 'dec', 'join', 'end']
-    const configs = { dec: cfg({ kind: 'decision' }), a: cfg(), b: cfg(), join: cfg() }
+    const configs = { dec: cfg(), a: cfg(), b: cfg(), join: cfg() }
     const groups: FlowBranchGroup[] = [{ ownerId: 'dec', branches: [{ id: 'br1', label: 'IF', chain: ['a', 'b'] }] }]
     expect(hasDirectSuccessor(main, configs, 'a', groups)).toBe(true)
     expect(hasDirectSuccessor(main, configs, 'b', groups)).toBe(true)

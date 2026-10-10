@@ -13,6 +13,8 @@ import {
   stepToSaveItemConfigPayload,
   stepToStepModifyPayload,
   sourceFromLegacy,
+  sourcePageFromLegacy,
+  sourceToLegacyParams,
   flowFromLegacy,
   flowToLegacy,
   entryTypeGroupFromLegacy,
@@ -574,21 +576,41 @@ describe('选表分组与动态表结构适配（E 包 T1b）', () => {
       expect.objectContaining({ prop: 'raw', columnName: 'K9', required: false, width: 80 }),
     ])
   })
+
+  it('dataTableFromLegacy：后端没给 dataCnt 时 rowCount 为 undefined，不兜成 0（0930-04 表结构抽屉显示「—」）', () => {
+    const table = dataTableFromLegacy({ entryTypeId: '6200029', tableName: 'sense_data.TB_GZHWZ', items: [] })
+    expect(table.rowCount).toBeUndefined()
+  })
 })
 
 describe('数据详情 / 统计行适配（E 包 T1c）', () => {
   it('entryDetailFromLegacy：showItems/subs 从行字段中摘出，不落进 row.values', () => {
     const detail = entryDetailFromLegacy({
       ENTRY_ID: '88231', SOURCE_ID: '161725', K1: '正文',
+      sourceName: '新浪财经', entryTypeId: '1042', entryTypeName: '公告正文', ver: '3', flag1: '2026-10-08',
       showItems: [{ itemId: '1', columnName: 'K1', itemName: '正文', value: '正文' }],
       subs: [{ ENTRY_ID: '88232', SOURCE_ID: '161725' }],
     })
     expect(detail.row).toMatchObject({ dataId: '88231', sourceId: '161725' })
     expect(detail.row.values).toEqual({ K1: '正文' })
+    // 详情顶部字段（旧平台 ENTRY_DETAIL.base）：camelCase 直读，不落进 values
+    expect(detail.row).toMatchObject({ sourceName: '新浪财经', entryTypeId: '1042', entryTypeName: '公告正文', ver: '3', flag1: '2026-10-08' })
     expect(detail.showItems).toEqual([{ itemId: '1', columnName: 'K1', itemName: '正文', value: '正文' }])
     // 0904：subs 现在是 EntrySubRow（row + showItems + tableId/tableName），
     // 不再是裸 DataRow——子行自带 24 个字段，摊平成 DataRow 会把它们全丢掉
     expect(detail.subs).toEqual([expect.objectContaining({ row: expect.objectContaining({ dataId: '88232' }) })])
+  })
+
+  it('dataRowFromLegacy：详情顶部字段也认大写键（SOURCE_NAME/ENTRY_TYPE_ID 等），并移出 values', () => {
+    const row = dataRowFromLegacy({
+      ENTRY_ID: '1', SOURCE_ID: '2',
+      SOURCE_NAME: 'twitter1', ENTRY_TYPE_ID: '6200029', ENTRY_TYPE_NAME: '推特抓取', VER: '2', FLAG1: '2026-10-07',
+      K1: '内容',
+    })
+    expect(row).toMatchObject({
+      sourceName: 'twitter1', entryTypeId: '6200029', entryTypeName: '推特抓取', ver: '2', flag1: '2026-10-07',
+    })
+    expect(row.values).toEqual({ K1: '内容' })
   })
 
   it('entryDetailFromLegacy：subs 缺失时为 undefined，不是空数组', () => {
@@ -903,6 +925,51 @@ describe('旧平台源列表标记字段', () => {
     expect(sourceFromLegacy({
       sourceId: 1, sourceName: 'a', sourceUrl: 'u', configId: 2, entryTypeId: 3,
     }).rootConfigId).toBeUndefined()
+  })
+})
+
+// 1008-01：217 的 sourceDetail / sourcePaged / site/sources 不再返回 flowId，改成 defaultFlowId（字符串，
+// 组内源取来源组的默认流程）并带 sourceGroupId。前端 Source.flowId 要继续有值，画布才显示「当前流程」。
+describe('源的流程字段兼容 defaultFlowId（1008-01）', () => {
+  const base = { sourceId: 430024667, sourceName: '江苏金租', sourceUrl: 'u', configId: 2, entryTypeId: 3 }
+
+  it('217 新形状：只有 defaultFlowId，flowId 取它；defaultFlowId / sourceGroupId 原样保留为字符串', () => {
+    const source = sourceFromLegacy({ ...base, defaultFlowId: '14010130', sourceGroupId: null })
+    expect(source.flowId).toBe('14010130')
+    expect(source.defaultFlowId).toBe('14010130')
+    expect(source.sourceGroupId).toBeUndefined()
+    expect(sourceFromLegacy({ ...base, defaultFlowId: '21000006', sourceGroupId: 3 })).toMatchObject({
+      flowId: '21000006', defaultFlowId: '21000006', sourceGroupId: '3',
+    })
+  })
+
+  it('老形状：只有 flowId，照旧；两个字段都没有时都是 undefined', () => {
+    const old = sourceFromLegacy({ ...base, flowId: 1400935 })
+    expect(old.flowId).toBe('1400935')
+    expect(old.defaultFlowId).toBeUndefined()
+    const none = sourceFromLegacy(base)
+    expect(none.flowId).toBeUndefined()
+    expect(none.defaultFlowId).toBeUndefined()
+  })
+
+  it('响应带了 defaultFlowId 键就以它为准：它是 null（无可用默认流程）时不能退回旧 flowId 列的陈旧值', () => {
+    const source = sourceFromLegacy({ ...base, flowId: 99, defaultFlowId: null })
+    expect(source.flowId).toBeUndefined()
+    expect(source.defaultFlowId).toBeUndefined()
+    // 两个都有且不同：生效的是 defaultFlowId
+    expect(sourceFromLegacy({ ...base, flowId: 99, defaultFlowId: '14010130' }).flowId).toBe('14010130')
+  })
+
+  it('源列表分页也走同一个映射', () => {
+    const page = sourcePageFromLegacy({ total: 1, list: [{ ...base, defaultFlowId: '14010130' }] })
+    expect(page.list[0]).toMatchObject({ flowId: '14010130', defaultFlowId: '14010130' })
+  })
+
+  it('保存源不会把 flowId 发回后端（入组的源带 flowId 会被后端拒绝）', () => {
+    const params = sourceToLegacyParams(sourceFromLegacy({ ...base, defaultFlowId: '14010130', sourceGroupId: 3 }))
+    expect(params).not.toHaveProperty('flowId')
+    expect(params).not.toHaveProperty('defaultFlowId')
+    expect(params).not.toHaveProperty('sourceGroupId')
   })
 })
 

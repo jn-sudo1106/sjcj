@@ -34,8 +34,15 @@ export interface Source {
   configId: string
   /** 该源关联的流程（旧 `cs_source.FLOW_ID`）。**执行时后端按 FLOW_ID 反查配置后执行**
    *  （0903 H1 答复），所以这个字段决定这个源实际跑哪一套配置。
-   *  2026-09-04 实测：`sourcePaged` 与 `sourceDetail` 都已返回（sourceDetail 是后端本次新加的）。 */
+   *  2026-09-04 实测：`sourcePaged` 与 `sourceDetail` 都已返回（sourceDetail 是后端本次新加的）。
+   *  1008-01：217 起后端改返回 `defaultFlowId`，适配器 `sourceFromLegacy` 把它映射进这里（老后端仍读 flowId），
+   *  所以界面继续读 `flowId` 即可，不用关心后端用的是哪个字段名。 */
   flowId?: string
+  /** 后端当前生效的默认流程（只读，217 起返回；组内源取来源组的默认流程）。展示 / 判断「有没有流程」读 `flowId`；
+   *  这个字段原样保留，给来源组、多流程相关功能（1008-02 起）直接用。 */
+  defaultFlowId?: string
+  /** 所属来源组 ID（只读）；未入组为 undefined。入组的源统一使用组的流程，不能单独改绑。 */
+  sourceGroupId?: string
   /** 当前源的主流程。多流程页面中 flowId 表示正在查看/编辑的流程，primaryFlowId 仍指向实际执行入口。 */
   primaryFlowId?: string
   /** 多流程模型中的稳定流程 ID；flowId 是当前查看的发布副本或草稿工作副本 ID。 */
@@ -177,6 +184,58 @@ export interface WorkflowBinding {
   status: 'ACTIVE' | 'DISABLED'
   inherited: boolean
   updatedAt?: string
+}
+
+/** 来源组状态（source-group/*，bee-config SourceGroupController） */
+export type SourceGroupState = 'ACTIVE' | 'DISABLED'
+
+/** 后端「来源组」：配置相同的源归一组，组绑定流程，成员继承（与 leo 的本地分组 sourceGroups.ts 是两个概念）。 */
+export interface SourceGroup {
+  sourceGroupId: string
+  sourceGroupCode: string
+  sourceGroupName: string
+  description?: string
+  state: SourceGroupState
+  authGroupId?: number
+  /** 当前可用默认；组停用时为空 */
+  defaultFlowId?: string
+  /** 启用中的绑定流程 */
+  flowIds: string[]
+  revision: number
+  updatedAt?: string
+}
+
+/** 按筛选范围批量调整来源组成员的结果（source-group/changeMembersByRange）。 */
+export interface MembershipRangeResult {
+  total: number
+  joined: number
+  moved: number
+  left: number
+  unchanged: number
+}
+
+/** 来源 / 来源组的一条流程绑定原始行（source-group/sourceFlows 的 bindings，含停用行）。 */
+export interface SourceFlowBind {
+  id: string
+  sourceId?: string
+  /** 有值表示这条是来源组的统一绑定（入组的源读到的是组的行） */
+  sourceGroupId?: string
+  flowId: string
+  isDefault: boolean
+  state: SourceGroupState
+  revision: number
+  updatedAt?: string
+}
+
+/** source-group/sourceFlows 的返回：生效列表、默认流程和原始绑定行（保存时据此做并发快照）。 */
+export interface SourceFlowsView {
+  sourceId?: string
+  /** 按 sourceId 查时，源已入组则非空——此时 flowIds 是组的统一流程，源不能单独改 */
+  sourceGroupId?: string
+  /** 生效（启用中）的流程 ID */
+  flowIds: string[]
+  defaultFlowId?: string
+  bindings: SourceFlowBind[]
 }
 
 /** 同站源下拉选项（source/sourceSame，旧口径「[id]名称」，非完整 Source） */
@@ -721,4 +780,6 @@ export interface SendSnatchWithParamPayload {
   include: string[]
   skip: number
   queue?: string
+  /** 指定用哪条流程跑这一次（1008-04「指定流程运行一次」，旧平台 source.js 同口径，放 query） */
+  flowId?: string
 }

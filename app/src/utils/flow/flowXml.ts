@@ -200,7 +200,6 @@ export function flowToXml(def: FlowDef): string {
       lines.push(line(2, `<branchGroup${attrs({ ownerId: group.ownerId })}>`))
       for (const branch of group.branches) {
         lines.push(line(3, `<branch${attrs({ id: branch.id, label: branch.label })}>`))
-        lines.push(...conditionXml(branch.condition, 4))
         lines.push(...branch.chain.map((nodeId) => line(4, `<nodeRef${attrs({ id: nodeId })} />`)))
         lines.push(line(3, '</branch>'))
       }

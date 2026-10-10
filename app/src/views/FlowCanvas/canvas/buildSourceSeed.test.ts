@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildHorizontalLayout, buildSourceSeed, effectiveInputTable, isArticleSummaryNode, isAudioTextNode, isOcrNode, isTranslateNode, isVideoAudioNode } from '@/views/FlowCanvas/canvas/flowModel'
+import { buildHorizontalLayout, buildSourceSeed, effectiveInputTable, isArticleSummaryNode, isAudioTextNode, isOcrNode, isPdfNode, isTranslateNode, isVideoAudioNode } from '@/views/FlowCanvas/canvas/flowModel'
 // 0926 REVIEW F-R14：布局断言引用 impl 导出的同一组常量（flowModel.layout.ts），
 // 实现调整时断言自动跟随，不再硬编码镜像的魔法数字。
 import { LAYOUT_FORK_GAP_X, LAYOUT_NODE_H, LAYOUT_NODE_W, LAYOUT_ROW_GAP } from '@/views/FlowCanvas/canvas/flowModel.layout'
@@ -44,7 +44,7 @@ describe('buildSourceSeed · 分支拓扑还原（0903 YB-B）', () => {
     ]
     const seed = buildSourceSeed(SOURCE, withCond)
 
-    expect(seed.branchGroups[0].branches.every((b) => b.condition === undefined)).toBe(true)
+    expect(seed.branchGroups[0].branches.every((b) => !('condition' in b))).toBe(true)
     expect(seed.configs['40620'].collectCfg?.entryCondition?.expr).toBe('K24=="正文抓取失败"')
   })
 
@@ -313,7 +313,25 @@ describe('buildHorizontalLayout · 分支连线（0903 YB-7）', () => {
     }
   })
 
-  it('0925 嵌套分叉：effectiveInputTable 递归向上（嵌套链内无表 → 父链 → 主链）', () => {
+  it('嵌套分叉：链头输入表 = 分叉点的输出表（旧平台：新步骤输入表 = 上级输出表，1008-BR-06）', () => {
+    const seed = buildSourceSeed(SOURCE, [
+      { ...step('1', 'A', ['0']), outputTable: 'TB_UP' },
+      { ...step('2', 'B', ['1']), outputTable: 'TB_B' },
+      { ...step('3', 'C', ['2']), outputTable: 'TB_C' },
+      step('4', 'D', ['2']),
+      step('5', 'E', ['3']),
+      step('6', 'F', ['3']),
+    ])
+    for (const id of ['3', '5']) {
+      const collect = seed.configs[id].collectCfg
+      if (collect) collect.inputTable = ''
+    }
+    // 5 是嵌套组（owner=3）的链头 → 3 的输出表；3 是顶层组（owner=2）的链头 → 2 的输出表
+    expect(effectiveInputTable(seed.main, seed.branches, seed.configs, '5', seed.branchGroups)).toBe('TB_C')
+    expect(effectiveInputTable(seed.main, seed.branches, seed.configs, '3', seed.branchGroups)).toBe('TB_B')
+  })
+
+  it('0925 嵌套分叉：分叉点都没有输出表时递归向上（嵌套链 → 父链 → 主链）', () => {
     const seed = buildSourceSeed(SOURCE, [
       { ...step('1', 'A', ['0']), outputTable: 'TB_UP' },
       step('2', 'B', ['1']),
@@ -322,13 +340,16 @@ describe('buildHorizontalLayout · 分支连线（0903 YB-7）', () => {
       step('5', 'E', ['3']),
       step('6', 'F', ['3']),
     ])
-    // 摘掉 2/3/5 自己的入表（置空串 = 无显式表，nodeInputTable 按 || 判空）：
-    // 5 在嵌套组里（链内无表）→ 上溯 3（仍无表）→ 2（仍无表）→ 主链 1
+    // 摘掉 2/3/5 自己的入表和 2/3 的出表（置空串 = 无显式表）：5 → 3 → 2 → 主链 1
     for (const id of ['2', '3', '5']) {
       const collect = seed.configs[id].collectCfg
       if (collect) collect.inputTable = ''
     }
-    // 1 的输出表 TB_UP 是唯一可继承来源（4/6 的输出表也是默认 900，但不在 5 的祖先链上）
+    for (const id of ['2', '3']) {
+      const collect = seed.configs[id].collectCfg
+      if (collect) collect.outputTable = ''
+      seed.configs[id].outputTable = ''
+    }
     expect(effectiveInputTable(seed.main, seed.branches, seed.configs, '5', seed.branchGroups)).toBe('TB_UP')
     expect(effectiveInputTable(seed.main, seed.branches, seed.configs, '3', seed.branchGroups)).toBe('TB_UP')
   })
@@ -433,6 +454,32 @@ describe('buildSourceSeed · 不按节点名称猜类型', () => {
     ])
     expect(isVideoAudioNode(seed.configs['1']!)).toBe(true)
     expect(isAudioTextNode(seed.configs['1']!)).toBe(false)
+  })
+})
+
+// 2026-10-10 bug：PDF 抓取节点表配置保存成功、刷新后回读为空。
+// PDF 的表配置落 execCfg（与翻译/打标签同一存储位），但 applyRuleStepTables 回填时
+// 只认 isRuleLikeNode（PDF 为保落库契约不进它）——修复前 execCfg.inputTableId 一直空。
+describe('buildSourceSeed · PDF 抓取节点表配置回读（1010）', () => {
+  const pdfStep = (stepId: string, name: string, inputTable: string, outputTable: string): Step =>
+    ({ stepId, sourceId: SOURCE.sourceId, name, dependsOn: ['0'], configType: '130', inputTable, outputTable, enabled: true }) as Step
+
+  it('configType=130 的 PDF 节点：步骤里的 inputTable/outputTable 回填到 execCfg', () => {
+    const seed = buildSourceSeed(SOURCE, [pdfStep('1', 'PDF抓取', '6200037', '6200038')])
+    const cfg = seed.configs['1']!
+    expect(isPdfNode(cfg)).toBe(true)
+    expect(cfg.execCfg?.inputTableId).toBe('6200037')
+    expect(cfg.execCfg?.outputTableId).toBe('6200038')
+  })
+
+  it('没有 inputTable（- 哨兵）的 PDF 节点不回填 inputTableId，保留 undefined', () => {
+    const seed = buildSourceSeed(SOURCE, [
+      { ...pdfStep('1', 'PDF抓取', '6200037', '6200038'), inputTable: '-' } as Step,
+    ])
+    const cfg = seed.configs['1']!
+    expect(isPdfNode(cfg)).toBe(true)
+    expect(cfg.execCfg?.inputTableId).toBeUndefined()
+    expect(cfg.execCfg?.outputTableId).toBe('6200038')
   })
 })
 

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-// 流程节点轨道收起后的节点选择（0930-02）：下拉直接换节点，旁边一个流程图图标按钮开合流程图（图标同侧栏「流程中心」）。
+// 流程节点轨道收起后的节点选择（0930-02）：下拉直接换节点，旁边一个流程图图标按钮开合流程图。
 // 不用 ⌄ 箭头：紧挨着下拉框自带的 ⌄，两个箭头并排像是重复控件（2026-09-30 用户反馈）。
+// 图标用 Share（节点连线图）而不是 Connection：源数据视图「按步骤查看」用的是 Connection，并排像重复按钮（2026-10-08 用户反馈）。
 // 源数据 / 文件 / 任务视图、网站数据视图共用，四处长得一样。
 // 此前收起态只有一个「展开流程 · 节点名」长按钮：节点名一长按钮就拉得很长，而且换节点必须先展开流程图。
 import { computed } from 'vue'
-import { Connection } from '@element-plus/icons-vue'
+import { Share } from '@element-plus/icons-vue'
 
 const props = withDefaults(defineProps<{
   nodes: { id: string; title: string }[]
@@ -44,7 +45,7 @@ const currentTitle = computed(() => props.nodes.find((n) => n.id === props.model
       :aria-label="open ? '收起流程图' : '展开流程图'"
       :aria-pressed="open"
       @click="emit('update:open', !open)"
-    ><el-icon :size="15"><Connection /></el-icon></button>
+    ><el-icon :size="15"><Share /></el-icon></button>
   </span>
 </template>
 

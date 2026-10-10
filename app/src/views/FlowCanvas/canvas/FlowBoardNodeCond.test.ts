@@ -67,16 +67,4 @@ describe('FlowBoard · 步骤进入条件的卡片 tag 展示', () => {
     expect(condTagOf(wrapper, targetId).text()).toBe('条件')
     expect(condTagOf(wrapper, targetId).attributes('title')).toBe('K6=="nil"')
   })
-
-  it('决策节点不重复展示：已有「条件:」行（base 决策条件）', async () => {
-    const { flow, wrapper } = await mountBoard()
-    const targetId = flow.main.find((id) => id !== 'start' && id !== 'end')!
-    const cfg = flow.configs[targetId]
-    // 把普通节点改成决策节点：即使设了进入条件，决策卡片也只走自己的「条件:」行
-    cfg.kind = 'decision'
-    cfg.base = [['kind', '决策'], ['条件', '抓取成功且字段完整']]
-    cfg.collectCfg!.entryCondition = { logic: 'AND', items: [{ field: 'K6', op: 'eq', value: '达标' }] }
-    await wrapper.vm.$nextTick()
-    expect(wrapper.find(`[data-testid="node-cond-${targetId}"]`).exists()).toBe(false)
-  })
 })

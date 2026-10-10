@@ -14,9 +14,10 @@
 // `config/copyAll` 复制一份独立配置并换绑（步骤行 CONFIG_ID → 新配置），之后各改各的。
 // 换绑失败仍共享的步骤登记到 localStorage：用户在复制品里编辑该配置前必须知情确认
 // （确认 = 该修改会影响模板/原流程，责任移交用户）。
-import { configApi, flowCenterApi, itemApi } from '@/api'
+import { configApi, flowCenterApi, itemApi, versionArgs } from '@/api'
 import type { Step } from '@/api/types/source'
 import { validFlowIdOf } from '@/utils/flow/stepPersist'
+import { useFlowVersionStore } from '@/stores/flowVersion'
 
 // ---------------------------------------------------------------- 残留登记
 
@@ -170,9 +171,11 @@ export async function detachCopiedConfigs(
       newConfigId = cloned.configId
       clonedBySource.set(sourceConfigId, newConfigId)
     }
-    const ack = step.isRoot
-      ? await itemApi.rootConfigUpdate(step.stepId, newConfigId, flowId).catch(() => null)
-      : await itemApi.stepModify({ ...step, configId: newConfigId }).catch(() => null)
+    // 流程版本（2026-10-10）：目标流程的发布版只读，换配置写进它的草稿（首次自动建）
+    const configId = newConfigId
+    const ack = await useFlowVersionStore().withDraft(flowId, (ref) => step.isRoot
+      ? (ref ? itemApi.rootConfigUpdate(step.stepId, configId, flowId, undefined, ref) : itemApi.rootConfigUpdate(step.stepId, configId, flowId))
+      : itemApi.stepModify({ ...step, configId }, ...versionArgs(ref))).catch(() => null)
     if (!ack || (typeof ack === 'object' && 'ok' in ack && !(ack as { ok?: boolean }).ok)) {
       remainShared++
       registerDetachFailure(sourceConfigId, targetFlowId, sourceFlowRef)

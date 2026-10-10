@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
 // 流程中心（0828 W6）。核心口径 §2.11：**节点就是配置**——
 // 配置只作为搜索的输入，结果永远是流程列表；不出现「配置列表」这一屏。
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FlowCenter from './index.vue'
-import { configApi, flowCenterApi, sourceApi, workflowBindingApi, type FlowRecord, type SourceCategory } from '@/api'
+import { configApi, flowCenterApi, flowVersionApi, sourceApi, workflowBindingApi, type FlowRecord, type SourceCategory } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 
@@ -446,7 +446,7 @@ describe('流程中心 · 操作列', () => {
     expect(remove).toHaveBeenCalledWith(['flow-10086'])
   })
 
-  it('有源流程：「仅解绑并删除」不带目标流程，随后删除（F1 解绑路径）', async () => {
+  it('有源流程：「仅解绑并删除」不带目标流程但带 currentFlowId（1008-06：只断本条关联），随后删除（F1 解绑路径）', async () => {
     const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 1 }])
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: '11', name: '源甲' }] } as never)
@@ -459,7 +459,7 @@ describe('流程中心 · 操作列', () => {
     await w.get('[data-testid="rebind-unbind-delete"]').trigger('click')
     await flushPromises()
 
-    expect(bind).toHaveBeenCalledWith(['11'], undefined)
+    expect(bind).toHaveBeenCalledWith(['11'], undefined, 'flow-10086')
     expect(remove).toHaveBeenCalledWith(['flow-10086'])
   })
 
@@ -573,6 +573,10 @@ describe('流程中心 · 操作列', () => {
 })
 
 describe('流程中心 · 可编辑工作区', () => {
+  // 流程版本（2026-10-10）：按未启用处理；不桩的话走 mock 120ms 延迟，抽屉停在加载态
+  beforeEach(() => {
+    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: false, curVer: null, nextVer: null, publishId: null, draftId: null, versions: [] })
+  })
   // 0902 联调修：列表走 flowPaged，不返回 flowConf，行上的 definition 恒为空流程。
   // 工作区必须自己去 flowDetail 取完整定义，否则点开任何已有流程都是空画布，
   // 一保存还会把真实 flowConf 覆盖成空。这两条用例的 detail 桩就是在锁这件事。

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises } from '@vue/test-utils'
 import { ElMessage } from 'element-plus'
-import { itemApi, sourceApi } from '@/api'
+import { flowVersionApi, itemApi, sourceApi } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { FLOW_AUTOSAVE_MS, FLOW_AUTOSAVE_RETRY_BASE_MS, resetFlowAutosaveForTests, useFlowAutosave } from './useFlowAutosave'
 import type { Step } from '@/api'
@@ -44,6 +44,8 @@ function loadTestSource() {
 describe('useFlowAutosave', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    // 流程版本（2026-10-10）：按未启用处理，写步骤不带版本信息
+    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: false, curVer: null, nextVer: null, publishId: null, draftId: null, versions: [] })
     resetFlowAutosaveForTests()
     // element-plus mock 里的 vi.fn() 跨用例累计调用记录（restoreAllMocks 只还原 spyOn），
     // 失败 toast 次数断言需要一个干净的计数起点。
@@ -176,6 +178,8 @@ describe('useFlowAutosave', () => {
     ])
     const { bind, unbind, status } = useFlowAutosave()
     bind()
+    // 2026-10-10 起已有步骤无改动不回写——给 40600 一处真实改动，验证「其余节点照常保存」
+    flow.setTitle('40600', '1400917-详情（改）')
     flow.insertAfter('40600', 'web')
     const localId = flow.selectedId
     await flushPromises()
@@ -193,9 +197,8 @@ describe('useFlowAutosave', () => {
     await flushPromises()
     await vi.advanceTimersByTimeAsync(FLOW_AUTOSAVE_MS)
     expect(create).toHaveBeenCalledTimes(1)
-    // 本轮 flush：40600 回写 1 次 + 新建的 40601 与 40600 都在更新循环里各写 1 次
-    //（上一轮已写 40600 一次，共 3 次）
-    expect(modify).toHaveBeenCalledTimes(3)
+    // 2026-10-10：40600 上一轮已写过、本轮没再改 → 不重复回写（版本模式下空写会凭空建草稿）
+    expect(modify.mock.calls.filter((c) => c[0].stepId === '40600')).toHaveLength(1)
     expect(status.value).toBe('saved')
     expect(flow.flowDirty).toBe(false)
     unbind()

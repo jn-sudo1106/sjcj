@@ -26,8 +26,9 @@ import type {
   RuleOrchestration,
 } from './flowModel'
 import { cloneConfig, normalizeNodeConfigs, backfillOutputTables } from './flowModel.layout'
-import { isAudioTextNode, isOcrNode, isRuleLikeNode, isTranslateNode } from './flowModel'
+import { isAudioTextNode, isOcrNode, isPdfNode, isRuleLikeNode, isTranslateNode } from './flowModel'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
+import { topologyFromParents } from './flowTopology'
 
 // ---------- 采集能力 ----------
 /** 采集节点能力字典：固定产物类型节点的表/队列不可编辑，UI 与 store 双重防线都据此判断（0711 T5） */
@@ -502,7 +503,7 @@ const NODE_CONFIG_SEEDS = {
       outputTable: '', inputTable: '', inputParams: [],
       isDetail: false,
     },
-    taskCfg: { queue: 'pdf.collect', urlRule: '' },
+    taskCfg: { queue: 'dev_web_snatch_pdf', urlRule: '' },
   },
   'mail-collect': {
     title: 'Mail抓取', sub: '[160] Mail抓取 · 邮件正文与附件', status: '待配置', planned: false, collect: true,
@@ -671,22 +672,6 @@ const NODE_CONFIG_SEEDS = {
     params: [['severity', 'enum', 'warn/high'], ['dedupe_window', 'number', '30m']],
     output: [['alert_id', 'string', '告警 ID'], ['status', 'enum', 'open/closed'], ['audit_link', 'url', '审计链接']],
   },
-  decision: {
-    title: '决策分支', sub: '逻辑控制 · 条件路径', status: '静态保留 · 待执行器', planned: false, kind: 'decision',
-    base: [['分支名称', '按条件分流'], ['条件 1', '抓取成功且字段完整'], ['条件 2', '失败或待复核'], ['默认路径', '人工复核']],
-    fields: [['节点来源', '研究工作台保留能力'], ['适配状态', '采集链路静态可配置'], ['上线依赖', '编排执行器支持条件路由'], ['失败策略', '保留运行记录']],
-    inmap: [['status', '← 上游节点.status', '运行状态'], ['quality_score', '← 校验.quality_score', '质量分']],
-    params: [['if', 'expr', 'status = "C" AND quality_score >= 0.95'], ['else', 'expr', '进入复核或告警']],
-    output: [['true_path', 'path', '继续落表或指标'], ['false_path', 'path', '回补 / 告警 / 人工复核'], ['decision_trace', 'json', '判断依据']],
-  },
-  parallel: {
-    title: '分头处理', sub: '逻辑控制 · 多路径并行', status: '静态保留 · 待编排', planned: false, kind: 'parallel',
-    base: [['并行名称', '抓取后分头处理'], ['路径 A', '结构化清洗'], ['路径 B', '规则命中'], ['汇合点', '质量校验']],
-    fields: [['节点来源', '研究工作台保留能力'], ['适配状态', '采集链路静态可配置'], ['上线依赖', '编排执行器支持 fan-out/fan-in'], ['并发上限', '待后端确认']],
-    inmap: [['rows', '← 上游节点.output', '待处理数据'], ['run_id', '← 当前运行', '运行标识']],
-    params: [['branches', 'list', 'clean,rule,notify'], ['join_policy', 'enum', '全部成功 / 任一失败告警']],
-    output: [['branch_results', 'json', '各路径结果'], ['join_status', 'enum', 'C/E/L'], ['parallel_trace', 'json', '分头处理日志']],
-  },
   // 0714 会议：节点面板精简，用一个通用「数据处理」节点顶替原「解析结构化/数据清洗/数据校验」三组
   // （file-parse/ocr/ai-extract/field-map/clean/dedupe/check 定义本身保留不删，历史节点仍可正常打开/编辑，
   // 只是新增节点入口收敛到这一个）。形态参照 custom：通用/灵活配置，不绑定固定语义。
@@ -716,7 +701,7 @@ export const TEMPLATE_TO_NODE: Record<string, string> = {
   web: 'web-list', app: 'app-collect', file: 'web-detail', python: 'web-list', parse: 'file-parse', ocr: 'ocr',
   ai: 'ai-extract', map: 'field-map', clean: 'clean', dedupe: 'dedupe', check: 'check', process: 'process',
   rule: 'rule', 'rule-trace': 'rule', monitor: 'rule', 'data-validation': 'rule', metric: 'metric', mail: 'mail',
-  alert: 'alert', decision: 'decision', parallel: 'parallel', custom: 'custom',
+  alert: 'alert', custom: 'custom',
   // 0711 R7/R8：两个独立的固定产物类型采集节点
   'browser-html': 'browser-html-collect', 'wechat-html': 'wechat-html-collect',
   // S4-1：网页登录，独立节点类型（方案 §6.1）
@@ -887,12 +872,14 @@ export const TEMPLATE_TO_SNATCH: Record<string, string> = {
 }
 
 /**
- * 规则处理 / 媒体 / 文本 / OCR 等处理类节点默认任务队列（2026-09-23 用户拍板；2026-09-24 规则处理补默认队列）。
+ * 规则处理 / 媒体 / 文本 / OCR / PDF 抓取等节点默认任务队列（2026-09-23 用户拍板；2026-09-24 规则处理补默认队列；
+ * 2026-10-08 PDF 抓取补 dev_web_snatch_pdf）。
  * 在节点新增（insertAfter / addNodeToBranch）与任务配置时赋默认队列名。
  */
 export const DEFAULT_TASK_QUEUES: Record<string, string> = {
   rule: 'dev_web_rulehandle',
   ocr: 'dev_web_snatch_ocr',
+  pdf: 'dev_web_snatch_pdf',
   translate: 'dev_web_translate',
   'article-summary': 'dev_web_llm_generate',
   'article-tag': 'dev_web_llm_generate',
@@ -940,13 +927,6 @@ export const LIB_GROUPS: LibGroup[] = [
       { template: 'article-summary', code: '720', name: '文章生成摘要', desc: '长文压缩为摘要与关键词', pill: 'p1' as Pill },
       { template: 'article-tag', code: '730', name: '文章打标签', desc: '舆情多维标注：主题 / 情感 / 风险 / 意图等', pill: 'p1' as Pill },
       { template: 'translate', code: '800', name: '翻译助手', desc: '把文本/文件内容翻译成目标语言', pill: 'p1' as Pill },
-    ]
-  },
-  {
-    // 0707 优化·Phase1：决策/分头处理从右键菜单单独入口收进添加节点浮层的「逻辑」分组（参照 Dify）
-    title: '逻辑', items: [
-      { template: 'decision', code: 'IF', badge: '310', name: '决策分支', desc: '按条件路由到下一个节点，命中一条走一条', pill: 'p1' as Pill },
-      { template: 'parallel', code: 'PAR', badge: '315', name: '分头处理', desc: '多条路径无条件并行执行', pill: 'p1' as Pill },
     ]
   },
   {
@@ -1149,12 +1129,15 @@ function applyRuleStepTables(cfg: NodeConfig, step: Step) {
   // 几类共用同一套落库口径（入参/出参写步骤 context/outContext，见 stepPersist），
   // 回读时同样要把步骤里的 inputTable/outputTable 填回各自的编排对象——
   // 只回填 ruleCfg 的话，这几类节点的「表配置」刷新后输入表/输出表就是空的（用户 2026-09-18 反馈）。
+  // PDF 抓取（2026-10-10）：表配置同样落 execCfg，但 isPdfNode 不进 isRuleLikeNode（那会改落库
+  // 契约的 nodeType），这里要单独把它纳入，否则 PDF 节点的表配置保存成功、刷新后回读为空（用户反馈）。
   const inputId = step.inputTable && step.inputTable !== '-' ? step.inputTable : ''
   const outputId = step.outputTable || ''
-  const target = cfg.ruleCfg ?? (isRuleLikeNode(cfg) ? cfg.execCfg : undefined)
+  const ruleStyled = isRuleLikeNode(cfg) || isPdfNode(cfg)
+  const target = cfg.ruleCfg ?? (ruleStyled ? cfg.execCfg : undefined)
   if (!target) {
     // 回读节点没有 execCfg（种子不带），步骤里有表信息时先建一份默认的再填
-    if (!isRuleLikeNode(cfg) || (!inputId && !outputId)) return
+    if (!ruleStyled || (!inputId && !outputId)) return
     cfg.execCfg = { ...makeDefaultExecConfig() }
     applyRuleStepTables(cfg, step)
     return
@@ -1181,6 +1164,9 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
       ? { mode: 'expr', logic: 'AND', items: [], expr: step.condition }
       : undefined
     applyStepTaskFields(cfg, step)
+    // PDF 抓取（2026-10-10）：PDF 节点有 collectCfg、走采集类分支，但它的表配置落 execCfg，
+    // 上面的 applyRuleStepTables 只在非采集分支被调用——这里补一次，否则刷新后表配置回读为空。
+    if (isPdfNode(cfg)) applyRuleStepTables(cfg, step)
     // 旧 isMulti 三态：**它就是「列表页 / 详情页」的判据**（2026-09-05 实测定案）。
     //
     // 这里原来写着「不要拿它去改 isDetail/webKind——网页类型已改为『节点类别』，旧平台与之
@@ -1226,9 +1212,10 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
     // 翻译助手 / 音频提取文字的结构化配置已挪到 core_param（见 nodeConfigPayload
     // isStructuredInCoreParam），回读先取 core_param、取不到回落 code_rule 兼容存量，与
     // applyConfigToNode 同口径。
-    // OCR 抓取（2026-09-30，用户拍板 isMulti+core_param 双写）：编排 Tab「是否保存为文件」
-    // 落 core_param 的 `{"saveAsFile":bool}`；回读优先 core_param→code_rule，两者都没有时
-    // 按 isMulti（0/1）反推勾选态，兼容本功能上线前的存量配置。isMulti=2（更新父表）不属
+    // OCR 抓取（2026-09-30，用户拍板 isMulti+core_param 双写）：编排 Tab「是否保存为文件 / 指定输出
+    // 文件名」整段落 core_param 的 `{"saveAsFile":bool,"outputFileName"?:string}`；回读优先 core_param→
+    // code_rule，两者都没有时按 isMulti（0/1）反推勾选态（存量配置没有文件名，只补 saveAsFile 这一个键），
+    // 兼容本功能上线前的存量配置。isMulti=2（更新父表）不属
     // OCR 态，走通用 code_rule 分支。
     if (isTranslateNode(cfg) || isAudioTextNode(cfg)) {
       const migrated = step.coreParam || step.codeRule
@@ -1371,14 +1358,15 @@ export function applyStepDetails(
  *
  * **分叉点用的是那个普通采集节点本身当 `ownerId`，不合成决策节点。** 理由：
  *   - 机制本来就不要求 owner 是结构节点（`buildHorizontalLayout` 只做 `hbranchGroupByOwner[id]`
- *     查表、`branchGroupEntryIds` 只按 ownerId 找，都不检查 `isDecision`）；
+ *     查表、`branchGroupEntryIds` 只按 ownerId 找，都不检查节点类型）；
  *   - 合成节点会引入一个旧平台不存在、也没有 `itemConfig` 可落库的虚拟节点，还会在数据视图
  *     的节点轨道上多出一个点不出数据的节点；
  *   - 条件的归属不一样：我们的决策节点条件属于**分支**（`branch.condition`），旧平台条件属于
  *     **目标步骤自己**（`entryCondition`，只有一个前驱时同样存在）。硬套等于把语义搬家，
  *     两处都有值之后改一处必须同步另一处。旧平台也没有 ELSE 概念。
+ *   （1008-BR-06：决策 / 分头节点已整体去掉，新建分支也按这套旧平台语义。）
  *
- * 后续（0925 完整还原）：**嵌套分叉不再拍平**——`branchTreeOf` 把链内再分叉编成
+ * 后续（0925 完整还原）：**嵌套分叉不再拍平**——`branchTreeOf`（flowTopology.ts）把链内再分叉编成
  * subGroups 递归承接，`buildHorizontalLayout`、画布纵向布局、写回（lastStepIdsFromCanvas）
  * 三条链路统一递归处理。写回冻结（hasRealBranches）仍保留，兜底成环/指向集合外的
  * 畸形数据不改坏（理由见 stepPersist.ts）。
@@ -1401,46 +1389,6 @@ function realParentOf(step: Step, known: Set<string>): string | undefined {
   )
 }
 
-/** 从某个步骤起递归编成分支链（0925 完整还原）：沿单后继串 chain，遇到分叉（≥2 后继）
- *  把整棵子树交给嵌套 subGroups——旧平台每步只有一个 lastStep，树在任意深度都可能分叉。
- *  chain 到此为止：分叉点以下的一切都归子分组，主链/父链不再延续（模型无汇合概念）。 */
-function branchTreeOf(
-  startId: string,
-  childrenOf: Map<string, string[]>,
-  placed: Set<string>,
-  configs: Record<string, NodeConfig>,
-): { chain: string[]; subGroups: import('./flowModel').FlowBranchGroup[] } {
-  const chain: string[] = []
-  const subGroups: import('./flowModel').FlowBranchGroup[] = []
-  let cur: string | undefined = startId
-  while (cur && !placed.has(cur)) {
-    placed.add(cur)
-    chain.push(cur)
-    const kids: string[] = childrenOf.get(cur) ?? []
-    if (kids.length > 1) {
-      subGroups.push({
-        ownerId: cur,
-        branches: kids.map((kid: string, i: number) => {
-          const seed = branchTreeOf(kid, childrenOf, placed, configs)
-          return {
-            id: `${cur}-b${i + 1}`,
-            // 分支名取目标步骤名：旧平台没有分支标签这个东西，拿目标节点名当标签最接近事实
-            label: configs[kid]?.title || `分支 ${i + 1}`,
-            // condition 刻意**不填**：条件属于目标步骤自己（configs[kid] 上的 entryCondition），
-            // 复制一份到分支上就有了两个真值来源，改一处必须同步另一处。连线上的条件文案由
-            // 渲染侧从目标节点读，不在这里搬家。
-            chain: seed.chain,
-            ...(seed.subGroups.length ? { subGroups: seed.subGroups } : {}),
-          }
-        }),
-      })
-      break
-    }
-    cur = kids[0]
-  }
-  return { chain, subGroups }
-}
-
 export function buildSourceSeed(source: Source, steps: Step[]): {
   main: string[]
   branches: import('./flowModel').BranchSeed[]
@@ -1456,13 +1404,8 @@ export function buildSourceSeed(source: Source, steps: Step[]): {
   sourceSteps.forEach((step, i) => { configs[step.stepId] = buildNodeForStep(source, step, i) })
 
   const known = new Set(sourceSteps.map((step) => step.stepId))
-  const childrenOf = new Map<string, string[]>()
-  const roots: string[] = []
-  for (const step of sourceSteps) {
-    const parent = realParentOf(step, known)
-    if (parent) childrenOf.set(parent, [...(childrenOf.get(parent) ?? []), step.stepId])
-    else roots.push(step.stepId)
-  }
+  const parentOf = new Map(sourceSteps.map((step) => [step.stepId, realParentOf(step, known)] as const))
+  const roots = sourceSteps.filter((step) => !parentOf.get(step.stepId)).map((step) => step.stepId)
 
   // 孤儿判定（0925）：只有响应**带着 lastStep 语义**时才标记——mock/演示源的行没有
   // lastStep 字段，它们只是"没有归位的根位步骤"，不做孤儿标记（避免演示画布满屏孤儿）。
@@ -1485,77 +1428,14 @@ export function buildSourceSeed(source: Source, steps: Step[]): {
     }
   }
 
-  const main: string[] = ['start']
-  const branchGroups: import('./flowModel').FlowBranchGroup[] = []
-  const placed = new Set<string>()
-  // 主链：从第一个根节点沿**单后继**一路走，遇到分叉就停——旧平台的步骤没有汇合点概念
-  // （每个步骤只有一个 lastStep），分叉之下的一切都归各自的分支链。
-  let cursor: string | undefined = roots[0]
-  while (cursor && !placed.has(cursor)) {
-    placed.add(cursor)
-    main.push(cursor)
-    const owner: string = cursor
-    const kids: string[] = childrenOf.get(owner) ?? []
-    if (kids.length <= 1) {
-      cursor = kids[0]
-      continue
-    }
-    branchGroups.push({
-      ownerId: owner,
-      branches: kids.map((kid: string, i: number) => {
-        const seed = branchTreeOf(kid, childrenOf, placed, configs)
-        return {
-          id: `${owner}-b${i + 1}`,
-          // 分支名取目标步骤名：旧平台没有分支标签这个东西，拿目标节点名当标签最接近事实
-          label: configs[kid]?.title || `分支 ${i + 1}`,
-          // condition 刻意**不填**：条件属于目标步骤自己（configs[kid] 上的 entryCondition），
-          // 复制一份到分支上就有了两个真值来源，改一处必须同步另一处。连线上的条件文案由
-          // 渲染侧从目标节点读，不在这里搬家。
-          chain: seed.chain,
-          ...(seed.subGroups.length ? { subGroups: seed.subGroups } : {}),
-        }
-      }),
-    })
-    cursor = undefined
-  }
-  // 多根兜底（0925）：roots[0] 之外仍有「挂根」步骤（响应里没有 itemConfig=0 那行时
-  // lastStep='0' 会落到这里；lastStep 指向集合外的孤儿；重复的 isRoot 起点）——它们不是
-  // 主链的尾巴，按「挂在根上」的语义都应是入口根节点的直接子步骤，并到入口根下方作为
-  // 附加分支链（子树随 chainFrom 一起归位）。此前它们被平铺进 main，接口顺序即展示
-  // 顺序，分支结构全丢（2026-09-25 用户实测源 430024432）。
-  // 只对**带显式 lastStep/根标记**的步骤做这个解释：mock/演示源的行没有 lastStep，
-  // 保持现状平铺，不给它编造拓扑。
-  if (roots.length > 1) {
-    const marked = new Set(
-      sourceSteps.filter((s) => s.dependsOn !== undefined || s.isRoot).map((s) => s.stepId),
-    )
-    const extra = roots.slice(1).filter((id) => !placed.has(id) && marked.has(id))
-    if (extra.length) {
-      const entry = roots[0]
-      const existing = branchGroups.find((g) => g.ownerId === entry)
-      const branches = existing?.branches ?? []
-      for (const root of extra) {
-        const seed = branchTreeOf(root, childrenOf, placed, configs)
-        branches.push({
-          id: `${entry}-b${branches.length + 1}`,
-          label: configs[root]?.title || `分支 ${branches.length + 1}`,
-          chain: seed.chain,
-          ...(seed.subGroups.length ? { subGroups: seed.subGroups } : {}),
-        })
-      }
-      if (existing) existing.branches = branches
-      else branchGroups.push({ ownerId: entry, branches })
-    }
-  }
-  // 兜底：`dependsOn` 指向集合外步骤的孤儿、以及成环时走不到的节点，一个都不能丢——
-  // 画得不准可以接受，节点凭空消失不行。
-  for (const step of sourceSteps) {
-    if (!placed.has(step.stepId)) {
-      placed.add(step.stepId)
-      main.push(step.stepId)
-    }
-  }
-  main.push('end')
+  // 拓扑（主链 + 分支组 + 多根兜底）见 flowTopology.ts（1008-BR-02 抽出，画布编辑共用）。
+  // 多根兜底只对**带显式 lastStep/根标记**的步骤做：mock/演示源的行没有 lastStep，平铺不编造拓扑。
+  const { main, branchGroups } = topologyFromParents({
+    order: sourceSteps.map((step) => step.stepId),
+    parentOf,
+    anchored: new Set(sourceSteps.filter((s) => s.dependsOn !== undefined || s.isRoot).map((s) => s.stepId)),
+    labelOf: (id) => configs[id]?.title,
+  })
   // 节点链严格来自 item/next 的真实子步骤，不按源名称猜测补节点：
   // 这里曾按 /规则/ 匹配源名插入一个「规则处理」节点（演示期遗留），会让存量源的画布
   // 与旧平台拓扑不一致，且该虚构节点会混入流程保存结果。2026-08-26 移除。
@@ -1649,8 +1529,6 @@ function buildFlow(name: string, steps: StepSpec[], sourcePatch?: Partial<Source
   steps.forEach((s) => {
     const srcKey = TEMPLATE_TO_NODE[s.template] || 'web-list'
     const cfg = cloneConfig(NODE_CONFIGS[srcKey])
-    if (s.template === 'decision') cfg.kind = 'decision'
-    if (s.template === 'parallel') cfg.kind = 'parallel'
     cfg.title = s.name || TEMPLATE_TO_NAME[s.template] || cfg.title
     if (cfg.collectCfg) {
       cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[s.template] ?? cfg.collectCfg.snatchType

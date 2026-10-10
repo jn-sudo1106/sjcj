@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
 
 const mockSteps = vi.fn()
 const mockCopyAndLocate = vi.fn()
@@ -14,6 +15,9 @@ vi.mock('@/api', () => ({
     stepModify: (...args: unknown[]) => mockStepModify(...args),
     rootConfigUpdate: (...args: unknown[]) => mockRootConfigUpdate(...args),
   },
+  // 流程版本（2026-10-10）：按未启用处理，换绑照旧不带版本信息
+  flowVersionApi: { overview: async () => ({ enabled: false, versions: [] }), action: vi.fn() },
+  versionArgs: (ref: unknown) => (ref ? [ref] : []),
 }))
 
 vi.mock('element-plus', async () => {
@@ -44,6 +48,7 @@ const step = (over: Partial<Step>): Step => ({
 })
 
 beforeEach(() => {
+  setActivePinia(createPinia())
   localStorage.clear()
   vi.clearAllMocks()
   mockSteps.mockReset()

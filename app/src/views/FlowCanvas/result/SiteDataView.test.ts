@@ -33,6 +33,7 @@ const stubs = {
   ElDrawer: true,
   ElDialog: { name: 'ElDialog', props: ['modelValue'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' },
   SummaryDrawer: true,
+  TableDetailDialog: { name: 'TableDetailDialog', props: ['modelValue', 'tableMeta'], template: '<div />' },
   // 「按条件查源」旁边的 ⋯ 下拉（0909）：默认桩不渲染插槽，菜单项断言不到
   ElDropdown: { name: 'ElDropdown', template: '<div><slot /><slot name="dropdown" /></div>' },
   ElDropdownMenu: { name: 'ElDropdownMenu', template: '<div><slot /></div>' },
@@ -125,6 +126,48 @@ describe('SiteDataView · 全部源（表筛选）', () => {
     expect(new Set(rowQueryPaged.mock.calls.map((call) => call[0].sourceId))).toEqual(new Set(['a', 'b']))
     expect(distinctSource).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('已加载 2 条')
+  })
+
+  // 导出接口不认 siteId / siteIds（2026-10-03 实测）：「全部源」时导出会是整张表、连别的网站一起
+  it('0930-14B：全部源时「导出 Excel」置灰并说明原因；选了具体源后按当前条件导出', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
+    await router.push('/canvas?siteId=site-a&view=data')
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockImplementation(async ({ sourceId }) => ({ total: 0, list: [row(String(sourceId), '1')] }))
+    mockFlowFixture('391007768')
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    setActivePinia(createPinia())
+    const wrapper = mount(SiteDataView, { props: { siteId: 'site-a' }, global: { plugins: [router], stubs } })
+    await pickTable(wrapper)
+
+    const btn = () => wrapper.get('[data-testid="site-data-export-btn"]')
+    expect(btn().attributes('disabled')).toBeDefined()
+    expect(btn().attributes('title')).toBe('按网站导出暂不支持，请先在左侧选一个源')
+
+    await pickSource(wrapper, '391007768')
+    expect(btn().attributes('disabled')).toBeUndefined()
+    await btn().trigger('click')
+    const url = String(open.mock.calls[0]?.[0])
+    expect(url).toContain('/entry/entryExportAll?')
+    expect(new URL(url, 'http://x').searchParams.get('sourceId')).toBe('391007768')
+    expect(open.mock.calls[0]?.[1]).toBe('_blank')
+  })
+
+  it('0930-04：选表后点表名打开当前表的字段结构抽屉', async () => {
+    vi.spyOn(siteApi, 'siteSources').mockResolvedValue([source('a')])
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ total: 0, list: [row('a', '10')] })
+
+    const wrapper = mountView()
+    await pickTable(wrapper)
+
+    const name = wrapper.get('[data-testid="site-data-table-struct-btn"]')
+    expect(name.text()).toBe('T1')
+    await name.trigger('click')
+    const drawer = wrapper.findComponent({ name: 'TableDetailDialog' })
+    expect(drawer.props('modelValue')).toBe(true)
+    expect(drawer.props('tableMeta')).toEqual(meta)
   })
 
   it('带条件时用 summaryEntryData 在本网站源里精确收窄，把候选压到真正命中的那些', async () => {

@@ -6,6 +6,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import ResultView from './ResultView.vue'
 import { readSqlConditions } from '@/utils/sqlConditionHistory'
 import ProcessNodeRail from './ProcessNodeRail.vue'
+import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
 import SnatchLauncher from '@/views/FlowCanvas/source/SnatchLauncher.vue'
 import { dataApi, isProductionBackend, ruleApi, siteApi, sourceApi, type DataRow, type DataTableMeta, type Source, type Step } from '@/api'
 import { useFlowStore } from '@/stores/flow'
@@ -65,7 +66,7 @@ const FilePreviewStub = { name: 'FilePreview', props: ['path', 'name', 'ext'], t
 const ElDropdownStub = { name: 'ElDropdown', template: '<div><slot /><slot name="dropdown" /></div>' }
 const ElDropdownMenuStub = { name: 'ElDropdownMenu', template: '<div><slot /></div>' }
 const ElDropdownItemStub = { name: 'ElDropdownItem', props: ['disabled', 'divided'], template: '<div class="el-dropdown-item" :disabled="disabled ? \'\' : undefined"><slot /></div>' }
-const STUBS = { ElDropdown: ElDropdownStub, ElDropdownMenu: ElDropdownMenuStub, ElDropdownItem: ElDropdownItemStub, SqlConditionEditor: false, CanvasHeader: true, ElDrawer: ElDrawerStub, ElDialog: ElDialogStub, ElPagination: true, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, FilePreview: FilePreviewStub, SummaryDrawer: true, RailNodePicker: false }
+const STUBS = { ElDropdown: ElDropdownStub, ElDropdownMenu: ElDropdownMenuStub, ElDropdownItem: ElDropdownItemStub, SqlConditionEditor: false, CanvasHeader: true, ElDrawer: ElDrawerStub, ElDialog: ElDialogStub, ElPagination: true, DataGrid: DataGridStub, TaskInstDialog: TaskInstDialogStub, RowDetailFields: RowDetailFieldsStub, FilePreview: FilePreviewStub, SummaryDrawer: true, RailNodePicker: false, AddDataMenu: false, ExportMenu: false, FullscreenToggle: false, BrowseModeToggle: false }
 
 function mountResultView() {
   return shallowMount(ResultView, {
@@ -429,6 +430,65 @@ describe('ResultView', () => {
     expect(wrapper.text()).toContain('真实数据接口暂不可用，已切换到本地演示数据')
     expect(wrapper.text()).toContain('1 行')
   })
+
+  it('0930-14B：「导出 Excel」按当前源和查询条件导出（与统计同一套条件）', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+    const exportUrl = vi.spyOn(dataApi, 'exportUrl')
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+
+    const wrapper = mountResultView()
+    await flushPromises()
+    await typeSql(wrapper, "K1 = 'a'")
+    await flushPromises()
+    // 条件改了还没查询：导出会和表格对不上，先置灰
+    expect(wrapper.get('[data-testid="data-export-excel"]').attributes('title')).toBe('查询条件已修改，先点「查询」再导出')
+    await wrapper.get('[data-testid="data-export-excel"]').trigger('click')
+    expect(open).not.toHaveBeenCalled()
+    await wrapper.findAll('.rv-actions button').find((b) => b.text() === '查询')!.trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="data-export-excel"]').trigger('click')
+    expect(exportUrl).toHaveBeenCalledWith(expect.objectContaining({ sourceId: current.sourceId, sql: "K1 = 'a'" }))
+    const url = String(open.mock.calls[0]?.[0])
+    expect(new URL(url, 'http://x').searchParams.get('more')).toBe("K1 = 'a'")
+    expect(open.mock.calls[0]?.[1]).toBe('_blank')
+  })
+
+  it('0930-04：点表名打开当前表的字段结构抽屉', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+    vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
+
+    const wrapper = mountResultView()
+    await flushPromises()
+
+    const name = wrapper.get('[data-testid="data-table-struct-btn"]')
+    expect(name.text()).toBe('评论')
+    await name.trigger('click')
+    const drawer = wrapper.findComponent(TableDetailDialog)
+    expect(drawer.props('modelValue')).toBe(true)
+    expect(drawer.props('tableMeta')).toEqual(meta)
+  })
+
+  it('0930-04：表结构接口失败、列是按数据现拼的时，表名不可点', async () => {
+    setActivePinia(createPinia())
+    const current = mockSourceDetail({ sourceId: '391007768' })!
+    useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
+    vi.spyOn(dataApi, 'tableMeta').mockRejectedValue(new Error('业务类型不存在'))
+    vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
+
+    const wrapper = mountResultView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="data-table-struct-btn"]').exists()).toBe(false)
+    expect(wrapper.find('.rv-tablename').exists()).toBe(true)
+  })
 })
 
 // 节点选择统一走流程图（0819 N1-1 删掉了与之重复的下拉）。shallowMount 下 ProcessNodeRail
@@ -558,12 +618,15 @@ describe('ResultView · 查询条件的执行时机（0819 N3 前置修复）', 
 describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9）', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('决策节点也在候选列表里，选中后展示只读空态，不提供筛选和数据表格', async () => {
+  it('没有表的节点也在候选列表里，选中后展示只读空态，不提供筛选和数据表格', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
     flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
-    const decId = flow.insertAfter('391007768-s2', 'decision')!
+    // 插在最前面的通知类节点：不产数据行，也没有上游可继承输入表（1008-BR-06 前这里用的是决策节点）
+    const decId = flow.insertAfter('start', 'mail')!
+    flow.configs[decId].inputTable = ''
+    flow.configs[decId].outputTable = ''
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
@@ -576,7 +639,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
 
     await selectNode(wrapper, decId)
 
-    // 结构节点没有表可看：整块表头/表格区都不渲染，只留空态文案说明为什么不能手动执行。
+    // 没有表可看：整块表头/表格区都不渲染，只留空态文案说明为什么不能手动执行。
     // （原本这里还有一条 .pill 徽标不存在的断言，2026-08-19 徽标整体删除后它恒为真、
     //  失去意义，已移除。）
     expect(wrapper.find('[data-testid="data-node-empty"]').exists()).toBe(true)
@@ -599,7 +662,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
 
     expect(wrapper.find('[data-testid="data-scope-output"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="data-scope-input"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续')
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
     expect(wrapper.find('[data-testid="data-exec-all-btn"]').exists()).toBe(true)
   })
@@ -651,7 +714,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
 
     // 输出 tab：本节点产出数据，发给后续节点，默认允许勾选并显示发后续任务按钮
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
-    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续')
 
     await inputBtn.trigger('click')
     await flushPromises()
@@ -797,10 +860,9 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
     flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
-    const decId = flow.insertAfter('391007768-s2', 'decision')!
-    const bg = flow.branchGroups.find((g) => g.ownerId === decId)!
-    flow.setBranchCondition(decId, bg.branches[0].id, { logic: 'AND', items: [{ field: 'amount', op: 'gt', value: '0' }] })
-    const childId = flow.addNodeToBranch(decId, bg.branches[0].id, 'web')!
+    // 1008-BR-06：分支由普通节点分叉，条件写在分支节点自己的进入条件上
+    const childId = flow.addSibling('391007768-s2', 'web')!
+    flow.configs[childId].collectCfg!.entryCondition = { logic: 'AND', items: [{ field: 'amount', op: 'gt', value: '0' }] }
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
@@ -1104,7 +1166,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     await flushPromises()
     await selectNode(wrapper, 'first')
 
-    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续')
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
     expect(wrapper.find('[data-testid="data-exec-all-btn"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('已选 0 条')
@@ -1172,7 +1234,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
 
     // 输出 tab：本节点产物发给后续 mid 节点，默认可勾选且按钮是发后续任务
     expect(wrapper.findComponent({ name: 'DataGrid' }).props('selectable')).toBe(true)
-    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续')
     expect(wrapper.find('[data-testid="data-exec-all-btn"]').exists()).toBe(true)
 
     await wrapper.get('[data-testid="data-scope-input"]').trigger('click')
@@ -1215,7 +1277,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
 
     const btnAfter = wrapper.get('[data-testid="data-exec-btn"]')
     expect((btnAfter.element as HTMLButtonElement).disabled).toBe(false)
-    expect(btnAfter.text()).toBe('发后续任务')
+    expect(btnAfter.text()).toBe('发后续')
     expect(wrapper.text()).toContain('已选 2 条')
 
     await btnAfter.trigger('click')
@@ -1346,7 +1408,7 @@ describe('ResultView · 节点手动执行（0812 计划 M2.2：M2-10～M2-14）
     await selectNode(wrapper, 'first')
 
     // 两档都在，且「发全部」是并排按钮而不是藏在下拉里（只剩一项还做成下拉是坏交互）
-    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续任务')
+    expect(wrapper.get('[data-testid="data-exec-btn"]').text()).toBe('发后续')
     expect(wrapper.get('[data-testid="data-exec-all-btn"]').text()).toBe('发全部（命中 0 条）')
 
     // 删掉的三个入口一个都不能回来
@@ -2560,7 +2622,8 @@ describe('数据表与步骤查看方式', () => {
 
 describe('源数据导出入口', () => {
   afterEach(() => vi.restoreAllMocks())
-  it('Excel 导出限定当前源和表，有 SQL 条件时阻止扩大范围', async () => {
+  // 2026-10-08 217 实测 entryExportAll 按 more 过滤，SQL / 数据 ID / 父 ID 条件随导出生效，不再整体禁用 Excel
+  it('Excel 导出限定当前源和表；SQL 条件随 more 生效，改了未查询时先置灰', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     useFlowStore().loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
@@ -2576,8 +2639,13 @@ describe('源数据导出入口', () => {
     await wrapper.get('[data-testid="data-cond-sql"]').setValue('K1 = 1')
     await wrapper.get('[data-testid="data-export-excel"]').trigger('click')
     expect(open).toHaveBeenCalledTimes(1)
-    expect(wrapper.get('[data-testid="data-export-excel"]').attributes('title')).toContain('不支持')
+    expect(wrapper.get('[data-testid="data-export-excel"]').attributes('title')).toBe('查询条件已修改，先点「查询」再导出')
     expect(wrapper.get('[data-testid="data-export-page"]').attributes('disabled')).toBeDefined()
+    await wrapper.findAll('.rv-actions button').find((b) => b.text() === '查询')!.trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="data-export-excel"]').trigger('click')
+    expect(open).toHaveBeenCalledTimes(2)
+    expect(exportUrl).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: current.sourceId, sql: 'K1 = 1' }))
     wrapper.unmount()
   })
 })

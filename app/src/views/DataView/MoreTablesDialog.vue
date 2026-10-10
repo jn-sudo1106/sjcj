@@ -101,7 +101,7 @@ async function openDetail(row: EntryType) {
     detailTable.value = {
       tableId: entry.tableId,
       tableName: entry.tableName,
-      rowCount: entry.rowCount ?? 0,
+      rowCount: entry.rowCount,
       state: entry.state,
       keyField: entry.keyField,
       fields: entry.fields,

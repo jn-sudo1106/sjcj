@@ -9,6 +9,7 @@ import { MAX_WORKSPACE_TABS, useWorkspaceStore, type WorkspaceTabRef } from '../
 import { flowCenterApi, siteApi, sourceApi, workflowBindingApi, type Source, type Step } from '../../api'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 import { useRuntimeStore } from '../../stores/runtime'
+import { useFlowVersionStore } from '../../stores/flowVersion'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
 import LoginConfigSelectDialog from '@/views/FlowCanvas/launch/LoginConfigSelectDialog.vue'
 import NodeInspector from '@/views/FlowCanvas/inspector/NodeInspector.vue'
@@ -88,7 +89,7 @@ watch(
     if (!id || Date.now() > pendingUntil.value) return
     if (!flow.configs[id] || flow.selectedId === id) return
     flow.selectedId = id
-    // tab 未必适用于该节点（决策/分头节点只有「分支配置」一个页签），落不到就退到该节点
+    // tab 未必适用于该节点（不同类型节点的页签不同），落不到就退到该节点
     // 的第一个页签——保持上一次的 activeTab 会让 inspector 停在一个对当前节点不存在的
     // 页签上，看起来像空白。
     const tabs = nodeInspectorTabs(flow.configs[id])
@@ -327,11 +328,11 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   // 查询（svg=true 自带真实根节点行 / 「流程入口」行，lastStep 已改写为根 ID），展示与
   // 流程管理画布一致；未绑流程的源维持源视角查询（源虚拟根）。源视角那份并行结果仅作兜底。
   // 0927 P2-4：口径收敛到 stepPersist.validFlowIdOf（ActiveFlow 判定四处共用）。
-  // 新模型允许一个源关联多条流程。路由 flowId 是当前查看/编辑目标；primaryFlowId 才是运行入口。
-  // 新接口未部署或暂时不可用时退回旧 cs_source.FLOW_ID，保证已有源仍可打开。
+  // 新模型允许一个源关联多条流程（source-group 接口）。路由 flowId 是当前查看/编辑目标；primaryFlowId 才是运行入口。
+  // 绑定列表读失败时不挡住画布：退回源上的默认流程 ID（Source.flowId 即后端的 defaultFlowId），流程标签栏自己会报错。
   let bindings = [] as Awaited<ReturnType<typeof workflowBindingApi.list>>
   try {
-    if (!runtimeView) bindings = await workflowBindingApi.list(sourceId, { legacySource: source })
+    if (!runtimeView) bindings = await workflowBindingApi.list(sourceId)
   } catch {
     bindings = []
   }
@@ -353,8 +354,14 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
     : (selectedBinding?.draftFlowId ?? selectedBinding?.publishedFlowId ?? selectedBinding?.workflowId ?? primaryFlowId)
   let steps: Step[]
   try {
+    // 2026-10-10 流程版本：流程视图（编辑）有草稿时读草稿的步骤——改动都写在草稿里，读发布版会对不上；
+    // 数据 / 任务等视图反映正式运行，照旧读发布版
+    const flowVersion = useFlowVersionStore()
+    const editingView = normalizeSourceView(route.query.view) === 'flow'
+    if (editingView) await flowVersion.load(flowId ?? '')
+    const versionId = editingView ? flowVersion.viewVersionId : null
     steps = flowId
-      ? await flowCenterApi.steps(flowId, { withConfigDetails: false, backendScope: runtimeView ? 'default' : 'flow' })
+      ? await flowCenterApi.steps(flowId, { withConfigDetails: false, backendScope: runtimeView ? 'default' : 'flow', ...(versionId ? { versionId } : {}) })
       : sourceSteps ?? []
   } catch (error) {
     const detail = (error as Error)?.message ?? '网络异常'
@@ -369,8 +376,9 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
     primaryFlowId,
     activeWorkflowId: selectedBinding?.workflowId,
     primaryWorkflowId,
-    workflowVersionStatus: viewingDraft ? 'DRAFT' : selectedBinding?.versionStatus,
-    workflowVersionNo: viewingDraft ? selectedBinding?.draftVersionNo : selectedBinding?.publishedVersionNo,
+    // 没有版本接口时（versionManaged=false）不带版本信息：否则头部会出现一个没有依据的「已发布」标签
+    workflowVersionStatus: selectedBinding?.versionManaged ? (viewingDraft ? 'DRAFT' : selectedBinding.versionStatus) : undefined,
+    workflowVersionNo: selectedBinding?.versionManaged ? (viewingDraft ? selectedBinding.draftVersionNo : selectedBinding.publishedVersionNo) : undefined,
     workflowVersionManaged: selectedBinding?.versionManaged,
     publishedFlowId: selectedBinding?.publishedFlowId,
     draftFlowId: selectedBinding?.draftFlowId,
@@ -846,7 +854,7 @@ onUnmounted(() => {
   align-items: stretch;
 }
 .rc-flow-shell.source-mode { grid-template-columns: minmax(480px, 1fr) 6px var(--insp-w, 480px); }
-.rc-flow-shell.version-readonly > :last-child { pointer-events: none; opacity: .78; }
+/* 只读不再整块禁用右侧检查器（会连滚动都禁掉）：NodeInspector 自己判断只读、只禁改动 */
 /* 展开态：画布收起为窄条（与左侧源侧栏收起态一致），配置区占满剩余空间 */
 .rc-flow-shell.expanded,
 .rc-flow-shell.source-mode.expanded { grid-template-columns: 36px 6px minmax(0, 1fr); }

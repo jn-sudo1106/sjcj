@@ -48,7 +48,8 @@ import type { RuleOrchestration, Site, Source } from '@/api'
 export type { RuleOrchestration, Site, Source } from '@/api'
 
 // ---------- 基础类型 ----------
-export type NodeKind = 'node' | 'decision' | 'parallel'
+// 1008-BR-06：决策 / 分头结构节点已去掉，分支按旧平台语义由普通节点的上级（lastStep）表达
+export type NodeKind = 'node'
 export type TripleField = 'inmap' | 'params' | 'output'
 type LegacyTriple = [string, string, string]
 
@@ -380,23 +381,15 @@ export interface BranchSeed {
   edgeTo: string
 }
 
-/** 决策/分头节点的分支段（0707 优化·Phase6）：
- *  - 决策：数据行按 IF→ELIF→…→ELSE 顺序匹配，命中哪条走哪条子链（单路，A3）；
- *  - 分头：全部分支无条件并行走（多路）；
- *  - 汇合：分支段统一在主链 owner 的下一个节点收拢；不需要汇合的流程把决策放主链末端即可（汇合点 = 完成端），模型不用分叉出第二种形态（Q1）；
- *  - chain 内不允许再开新的 FlowBranchGroup（不支持嵌套分支），AddNodePopover 在「分支内添加」场景隐藏「逻辑」分组防误入。
- *
- *  唯一例外（0925 完整还原）：**历史流程还原（buildSourceSeed）产出的分支组允许 subGroups 嵌套**——
- *  旧平台每步只有一个 lastStep，树在任意深度都可能分叉，实拍源 430024432 就有链内再分叉。
- *  嵌套组只承接还原拓扑，不参与 AddNodePopover 的「逻辑」分组入口。
+/** 分叉点以下的一条分支（旧平台语义，1008-BR-06）：每个节点一个上级，几个节点上级相同就是分叉；
+ *  各后继按自己的进入条件独立判断（可同时命中，无 ELSE），分叉以下不再汇合。
+ *  链里再遇分叉以 subGroups 嵌套承接（0925 完整还原，实拍源 430024432）。拓扑由 flowTopology.ts 推导。
  */
 export interface FlowBranch {
   id: string
-  /** 分支名（用户可编辑；如 "IF 命中"、"ELIF-n"、"ELSE 兜底"、"路径A"） */
+  /** 分支名：取链头节点名（旧平台没有分支标签）。条件不在分支上，属于链头节点自己的进入条件。 */
   label: string
-  /** 决策：按序匹配首个命中即走；undefined = ELSE 默认分支（必为最后一条）。分头节点忽略。 */
-  condition?: ConditionGroup
-  /** 分支内节点 id 序列；可为空（=直接到汇合点）。chain 内节点仍归 configs 所有，不重复存配置。 */
+  /** 分支内节点 id 序列。chain 内节点仍归 configs 所有，不重复存配置。 */
   chain: string[]
   /** 链内再分叉（0925 还原拓扑专用）：chain 走到某节点时该节点是另一个分支组的 owner。
    *  旧平台模型下 chain 遇分叉即止（每步只有一个 lastStep，分叉点以下全部进分支），
@@ -408,13 +401,11 @@ export interface FlowBranchGroup {
   /**
    * 分叉点节点 id；同一 FlowDef 内唯一。
    *
-   * 通常是决策/分头节点，但**不限于**：0903 YB-B 还原历史流程的分支拓扑时，owner 就是那个
-   * 有多个后继的**普通采集节点**本身（不合成决策节点——旧平台没有这个概念，条件也挂在
-   * 目标步骤自己的 entryCondition 上而不是分支上）。`buildHorizontalLayout` 与
-   * `branchGroupEntryIds` 都只按 id 查表，不检查 isDecision。
+   * 就是那个有多个后继的普通节点本身（0903 YB-B；1008-BR-06 起决策 / 分头节点已去掉）：
+   * 旧平台没有结构节点，条件挂在各后继自己的 entryCondition 上而不是分支上。
    */
   ownerId: string
-  /** 决策 ≥2（含 ELSE，ELSE.condition 为 undefined）；分头 ≥2（condition 忽略） */
+  /** ≥2 条，按同级展示顺序（还原时 = 接口顺序，即步骤 ID 升序） */
   branches: FlowBranch[]
 }
 
@@ -429,7 +420,7 @@ export interface FlowDef {
   updatedAt: string
   /** 源级配置（0706 优化·源/节点配置分层）：未绑定源的草稿流程（空白/预置意图）为 undefined */
   source?: Source
-  /** 决策/分头节点的分支段（散开→汇合，0707 优化·Phase6）；未配置 = 未声明分支 */
+  /** 分叉点以下的分支（由各节点上级推导，见 flowTopology.ts）；无分叉 = 空 */
   branchGroups?: FlowBranchGroup[]
   /** 孤儿步骤标识（0925）：解析不出真实前置的步骤 id（无 lastStep / lastStep 指向集合外 /
    *  '0' 哨兵但无 '0' 行）。仅由步骤还原（buildSourceSeed）产出，随流程加载进画布；
@@ -447,10 +438,6 @@ export interface FlowDef {
 // ---------- 辅助函数（移植自原型） ----------
 export function compactSub(sub: string): string {
   return String(sub || '').replace(/^\[[^\]]+\]\s*/, '')
-}
-
-export function isDecision(cfg: NodeConfig): boolean {
-  return cfg.kind === 'decision' || /决策|条件路径/.test(cfg.title + cfg.sub)
 }
 
 /** 节点输出表统一读取口径（优化 0701 问题二）：采集类取 collectCfg.outputTable，其余取 outputTable */
@@ -532,9 +519,8 @@ export function conditionGroupIsSet(group: ConditionGroup | undefined): boolean 
   return group.mode === 'expr' ? !!group.expr?.trim() : group.items.length > 0
 }
 
-/** 数据类节点 = "每个节点都落库"口径的适用范围；逻辑控制（决策/分头）与通知类（邮件/告警）、指标引用不产数据行，不要求输出表 */
+/** 数据类节点 = "每个节点都落库"口径的适用范围；通知类（邮件/告警）、指标引用不产数据行，不要求输出表 */
 export function isDataNode(cfg: NodeConfig): boolean {
-  if (isDecision(cfg) || isParallel(cfg)) return false
   return !/邮件|告警|指标/.test(cfg.title + cfg.sub)
 }
 
@@ -546,18 +532,6 @@ export function pickFinalMainNodeId(
   nodes: { id: string; cfg: NodeConfig; branch?: boolean }[],
 ): string {
   return [...nodes].reverse().find((n) => !n.branch && nodeOutputTable(n.cfg))?.id ?? ''
-}
-
-export function isParallel(cfg: NodeConfig): boolean {
-  return cfg.kind === 'parallel' || /分头|多路径并行/.test(cfg.title + cfg.sub)
-}
-
-/** 决策/分头节点判定（0707 优化·Phase6）：复用 isDecision/isParallel 口径，给 NodeInspector 顶层 Tab 分流
- *  与 BranchEditor 渲染入口共用，避免两处各写文案正则导致口径漂移（此前 NodeInspector 把「分头」当决策识别，且漏「多路径并行」）。 */
-export function decisionOrParallelKind(cfg: NodeConfig): 'decision' | 'parallel' | undefined {
-  if (isDecision(cfg)) return 'decision'
-  if (isParallel(cfg)) return 'parallel'
-  return undefined
 }
 
 /**
@@ -712,19 +686,15 @@ export function isScriptlessNode(cfg?: NodeConfig): boolean {
   return SCRIPTLESS_TYPE_CODES.some((code) => sub.includes(`[${code}]`))
 }
 
-/**
- * nextStep 目标 / 流程入口口径的真实节点：跳过 start/end 占位、停用、规划中、决策/分头。
- * 决策/分头不是发后续的落点，后继判定要看穿它们找到下一个真实节点（0824）。
- */
+/** nextStep 目标 / 流程入口口径的真实节点：跳过 start/end 占位、停用、规划中。 */
 function isRunnableFlowNode(id: string, configs: Record<string, NodeConfig>): boolean {
   if (id === 'start' || id === 'end') return false
   const cfg = configs[id]
   if (!cfg || cfg.disabled || cfg.planned) return false
-  if (isDecision(cfg) || isParallel(cfg)) return false
   return true
 }
 
-/** 分支组里每条 chain 的首个真实节点。决策/分头的后继是"每条分支各一个"，不是一个。 */
+/** 分支组里每条 chain 的首个真实节点。分叉点的后继是"每条分支各一个"，不是一个。 */
 function branchGroupEntryIds(
   ownerId: string,
   branchGroups: FlowBranchGroup[],
@@ -803,7 +773,7 @@ export function allBranchChainNodes(groups: FlowBranchGroup[] | undefined): stri
   return out
 }
 
-/** 从 fromId 之后的主链往后看：真实节点，或看穿决策/分头落到其分支 chain。 */
+/** 从 fromId 之后的主链往后看：真实节点，或落到分叉点的各分支 chain。 */
 function laterRunnableIdsOnMain(
   main: string[],
   configs: Record<string, NodeConfig>,
@@ -823,10 +793,10 @@ function laterRunnableIdsOnMain(
 
 /**
  * 首个可执行节点判定（0812 计划 M2-10，方案 §6.7-A）：不能把所有"没有输入表"的节点都当成
- * 首节点——按主链顺序找第一个跳过 start/end 占位、未停用、非规划中、非决策/分头的真实节点。
+ * 首节点——按主链顺序找第一个跳过 start/end 占位、未停用、非规划中的真实节点。
  * 只在主链上找：分支内节点天然有 owner 节点作为上游依赖，不可能是流程的入口。
  */
-/** 主链上第一个可跑节点。数据视图默认落点（0831 F09），不要拿 layout.nodes[0] 代替——那会把停用/规划中/决策节点算进去。 */
+/** 主链上第一个可跑节点。数据视图默认落点（0831 F09），不要拿 layout.nodes[0] 代替——那会把停用/规划中节点算进去。 */
 export function firstRunnableNodeId(main: string[], configs: Record<string, NodeConfig>): string {
   return main.find((nid) => isRunnableFlowNode(nid, configs)) ?? ''
 }
@@ -837,7 +807,7 @@ export function isFirstRunnableNode(main: string[], configs: Record<string, Node
 
 /**
  * 是否有直接后继（0824：末节点无发后续）。末节点 = 已保存源流程里没有可发后续的下游，
- * 不是 main 数组里的最后一个 id（起止占位、停用/规划中、决策/分头都要跳过）。
+ * 不是 main 数组里的最后一个 id（起止占位、停用/规划中都要跳过）。
  *
  * 主链：后面还有真实节点，或后续结构节点挂了可跑的分支 chain，或自身就是带 chain 的 owner。
  * 分支 chain 内：同链后续真实节点，或汇合点 = owner 之后的下一个主链真实节点；
@@ -857,7 +827,7 @@ export function hasDirectSuccessor(
  * 光知道"有没有后继"不够，得知道是谁）。判定口径与 `hasDirectSuccessor` 完全一致
  * ——后者现在就是本函数的 `.length > 0`，两者不会各自漂移。
  *
- * 决策/分头下游返回**每条分支的首个真实节点**（多个），调用方按需取并集。
+ * 分叉点下游返回**每条分支的首个真实节点**（多个），调用方按需取并集。
  */
 /**
  * 紧跟在 `id` 之后的节点，**不过滤停用**。

@@ -17,6 +17,7 @@ import {
   isArticleTagNode,
   isAudioTextNode,
   isOcrNode,
+  isPdfNode,
   isRuleNode,
   isTranslateNode,
   type NodeConfig,
@@ -35,7 +36,7 @@ function dedupToLegacy(mode?: 'source' | 'table'): string {
  * 与音频提取文字（供应商/区间/输出格式）。这类节点从 core_param 读写，回读时兼容旧存量 code_rule。
  */
 function isStructuredInCoreParam(cfg: NodeConfig): boolean {
-  // OCR 抓取（2026-09-30）：「是否保存为文件」的 {"saveAsFile":bool} 也落 core_param，不占 code_rule。
+  // OCR 抓取（2026-09-30）：编排 Tab 的 `{"saveAsFile":bool,"outputFileName"?:string}` 也落 core_param，不占 code_rule。
   return isTranslateNode(cfg) || isAudioTextNode(cfg) || isOcrNode(cfg)
 }
 
@@ -70,8 +71,8 @@ export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
   const target = cfg.collectCfg ?? cfg
   // 翻译助手 / 音频提取文字节点的结构化配置存在 core_param（2026-09-21 / 2026-09-23 从
   // code_rule 挪过去），旧存量配置仍躺在 code_rule——回读先取 core_param，取不到回落 code_rule 兼容。
-  // OCR 抓取（2026-09-30 用户拍板）：编排 Tab「是否保存为文件」落 core_param 的
-  // `{"saveAsFile":bool}`；对旧存量（core_param/code_rule 都没有）按 isMulti 反推勾选态，
+  // OCR 抓取（2026-09-30 用户拍板）：编排 Tab 的「是否保存为文件 / 指定输出文件名」落 core_param 的
+  // `{"saveAsFile":bool,"outputFileName"?:string}`；对旧存量（core_param/code_rule 都没有）按 isMulti 反推勾选态，
   // 保证 Tab 的勾选跟后端 isMulti 对齐——发后续时 ocrMultiModeFor 也从同一份 structuredConfig
   // 得到同一 isMulti，不会因为回读丢字段把 1 打回 0。
   if (isStructuredInCoreParam(cfg)) {
@@ -135,11 +136,18 @@ const TEMPLATE_CONFIG_TYPE: Record<string, number> = {
   check: 300,
   mail: 400,
   ocr: 150,
+  // PDF 抓取（2026-10-08，用户拍板方案一）：没有这条时只能从 snatchType 的 `[130]` 反解——
+  // 节点经「复制配置 / 更换」带进一个 90 的抓取类型后，保存就把 configType 写成 90，
+  // 下次加载 isPdfNode 认不出、PDF 那套规则式 Tab 直接消失（实测配置 1401119）。模板信号优先。
+  pdf: 130,
 }
 
 export function configTypeFrom(cfg: NodeConfig): number | undefined {
   const byTemplate = cfg.template ? TEMPLATE_CONFIG_TYPE[cfg.template] : undefined
   if (byTemplate) return byTemplate
+  // 后端已是 130 的节点（后台直接改的类型、或经「更换」带进来的）没有 template，
+  // 内存里的 snatchType 还是 `[90]`——不在这里拦，保存就把 130 写回 90（实测配置 1401083）。
+  if (cfg.configType === '130') return 130
   if (cfg.ruleCfg) return 600
   const code = cfg.collectCfg?.snatchType?.match(/^\[(\d+)\]/)?.[1]
   return code ? Number(code) : undefined
@@ -268,12 +276,34 @@ function audioStructuredFor(cfg: NodeConfig): string | undefined {
 }
 
 /**
- * OCR 抓取「是否保存为文件」（2026-09-30）的结构化配置：落 cs_config.core_param 的
- * `{"saveAsFile":bool}`（编排 Tab 勾选写进 cfg.structuredConfig，OCR 无 collectCfg → 落 NodeConfig 顶层）。
+ * OCR 抓取编排配置（2026-09-30「是否保存为文件」，2026-10-08 加「指定输出文件名」）：
+ * 落 cs_config.core_param 的 `{"saveAsFile":bool,"outputFileName"?:string}`（编排 Tab 写进
+ * cfg.structuredConfig，OCR 无 collectCfg → 落 NodeConfig 顶层）。整段原样透传，新增键不用改这里；
+ * isMulti 只由 saveAsFile 派生（见 ocrMultiModeFor），文件名不参与。
  */
 function ocrStructuredFor(cfg: NodeConfig): string | undefined {
   if (!isOcrNode(cfg)) return undefined
   return cfg.structuredConfig
+}
+
+/**
+ * PDF 抓取编排配置（2026-10-08 需求）：点底部「保存」时把「设置业务规则」的描述与模型选择落成
+ * cs_config.core_param 的 `{"describe":"...","providerCode":"...","model":"..."}`。
+ * 取的是编排 Tab 当前值（存在 cfg.execCfg，PDF 走 execCfg 而非 ruleCfg）；`providerCode` / `model`
+ * 两个键名与摘要 / 打标签节点同一口径（后端按这两个键读 core_param）。
+ * 三项全空（Tab 没打开过 / 模型列表没拉到）返回 undefined，沿用「有值才覆盖」不抹后端原值。
+ */
+function pdfStructuredFor(cfg: NodeConfig): string | undefined {
+  if (!isPdfNode(cfg)) return undefined
+  const describe = (cfg.execCfg?.describe ?? '').trim()
+  const providerCode = (cfg.execCfg?.modelProviderCode ?? '').trim()
+  const model = (cfg.execCfg?.modelCode ?? '').trim()
+  if (!describe && !providerCode && !model) return undefined
+  return JSON.stringify({
+    ...(describe ? { describe } : {}),
+    ...(providerCode ? { providerCode } : {}),
+    ...(model ? { model } : {}),
+  })
 }
 
 /**
@@ -318,8 +348,8 @@ export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown
     codeRule: isStructuredInCoreParam(cfg) ? undefined : source.structuredConfig,
     contentRule: source.contentRules,
     // 打标签 / 摘要节点把模型选择写核心参数（modelCodeRuleFor），翻译助手写语言/引擎、
-    // 音频节点写转写参数（各自 structuredFor），都没写时回写节点回读到的原值。
-    coreParam: modelCodeRuleFor(cfg) ?? translateStructuredFor(cfg) ?? audioStructuredFor(cfg) ?? ocrStructuredFor(cfg) ?? cfg.coreParam,
+    // 音频节点写转写参数、PDF 节点写描述+模型（各自 structuredFor），都没写时回写节点回读到的原值。
+    coreParam: modelCodeRuleFor(cfg) ?? translateStructuredFor(cfg) ?? audioStructuredFor(cfg) ?? ocrStructuredFor(cfg) ?? pdfStructuredFor(cfg) ?? cfg.coreParam,
     // 拼接后的系统提示词（2026-09-18）：落 cs_config.prompt；见 promptForConfig 的节点类型口径。
     prompt: promptForConfig(cfg),
   }

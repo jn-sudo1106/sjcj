@@ -128,11 +128,55 @@ describe('useStepWrite.persistFlowSteps', () => {
     await persistFlowSteps()
 
     const written = Object.fromEntries(modify.mock.calls.map(([step]) => [step.stepId, step.dependsOn]))
-    // 关键：40620 仍然挂在 40597 下，没有被改写成 40598
-    expect(written['40620']).toEqual(['40597'])
+    // 关键：40620 仍然挂在 40597 下，没有被改写成 40598——它没改动，2026-10-10 起干脆不回写
+    expect(written['40620']).toBeUndefined()
     expect(written['40598']).toEqual(['40597'])
     // 与拓扑无关的字段照常保存
     expect(modify.mock.calls.find(([s]) => s.stepId === '40598')![0].condition).toBe('K6==nil')
+  })
+
+  // 1008-BR-05：有分支的流程里在线上插入节点，下游节点要改挂到新节点——显式拓扑操作，不受冻结限制；
+  // 但新节点落库（拿到真实 ID）前不写，免得按跳过草稿算出旧上级。
+  it('分支流程线上插入：新节点落库前下游不动；落库后下游 lastStep 改成新节点，其他分支不动', async () => {
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    const source = useSourceStore()
+    const mk = (stepId: string, dependsOn: string[]): Step => ({
+      ...SNAPSHOT, stepId, name: `节点${stepId}`, dependsOn,
+    })
+    const steps = [mk('40597', ['0']), mk('40598', ['40597']), mk('40620', ['40597'])]
+    flow.loadFromSource(
+      { sourceId: '430016824', name: '明阳科技', url: 'http://x', configId: '1400935', mainTable: '6200026', owner: 'a', state: 'C' } as never,
+      steps,
+    )
+    source.rememberSteps(steps, 'replace')
+    const localId = flow.insertOnEdge('40597', ['40620'], 'web')
+    expect(flow.pendingRelinks).toEqual(['40620'])
+
+    const modify = vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
+    const { persistFlowSteps } = useStepWrite()
+    // 第一轮：新节点还没绑配置（草稿），40620 不改挂、待改挂保留
+    await persistFlowSteps()
+    let written = Object.fromEntries(modify.mock.calls.map(([step]) => [step.stepId, step.dependsOn]))
+    expect(written['40620']).toBeUndefined() // 新上级还是草稿：不改挂，也不空写
+    expect(flow.pendingRelinks).toEqual(['40620'])
+
+    // 第二轮：新节点绑配置 + 输出表 → 建步骤拿到 40700 → 40620 改挂到 40700
+    flow.configs[localId].configId = '1400999'
+    flow.configs[localId].collectCfg!.outputTable = '6200026'
+    vi.spyOn(itemApi, 'saveItemConfig').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(itemApi, 'enable').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(sourceApi, 'sourceSteps').mockResolvedValue([
+      ...steps,
+      { ...mk('40700', ['40597']), name: flow.configs[localId].title, configId: '1400999' },
+    ])
+    modify.mockClear()
+    await persistFlowSteps()
+    written = Object.fromEntries(modify.mock.calls.map(([step]) => [step.stepId, step.dependsOn]))
+    expect(itemApi.saveItemConfig).toHaveBeenCalledTimes(1)
+    expect(written['40620']).toEqual(['40700'])
+    expect(written['40598']).toBeUndefined() // 其他分支没动，不回写
+    expect(flow.pendingRelinks).toEqual([])
   })
 
   it('没有分支的直链流程仍然按画布重算 lastStep（止血只作用于分支流程）', async () => {
@@ -571,6 +615,8 @@ describe('useStepWrite.persistFlowSteps', () => {
     source.rememberSteps([virtualRoot, child], 'replace')
     // 模拟右侧把虚拟根的配置改了——G1 只认真实物化根，虚拟根不得 rootConfigUpdate
     if (flow.configs['0']) flow.configs['0'].configId = '1400999'
+    // 2026-10-10 起无改动不回写——给 child 一处真实改动，才看得出「只有 child 走普通回写」
+    flow.setTitle('40597', '详情（改）')
 
     const rootUpdate = vi.spyOn(itemApi, 'rootConfigUpdate').mockResolvedValue({ ok: true, message: 'ok' })
     const modify = vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
@@ -742,6 +788,7 @@ describe('useStepWrite.persistFlowSteps', () => {
     setActivePinia(createPinia())
     const { flow } = loadTestSource()
     const draftId = flow.insertAfter('40600', 'web')!
+    flow.setTitle('40600', '1400917-详情（改）') // 2026-10-10 起无改动不回写，给已有步骤一处真实改动
     const modify = vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
     const create = vi.spyOn(itemApi, 'saveItemConfig').mockResolvedValue({ ok: true, message: 'ok' })
 
@@ -764,6 +811,7 @@ describe('useStepWrite.persistFlowSteps', () => {
       [origin, SNAPSHOT],
     )
     source.rememberSteps([origin, SNAPSHOT], 'replace')
+    flow.setTitle('40600', '1400917-详情（改）') // 2026-10-10 起无改动不回写，给已有步骤一处真实改动
     const create = vi.spyOn(itemApi, 'saveItemConfig')
     const modify = vi.spyOn(itemApi, 'stepModify').mockResolvedValue({ ok: true, message: 'ok' })
 

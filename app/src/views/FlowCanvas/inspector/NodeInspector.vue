@@ -10,7 +10,8 @@ import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import { useUiStore } from '@/stores/ui'
-import { decisionOrParallelKind, isDataValidationNode, isMonitorNode, isRuleNode, nodeTypeLabel, NODE_CONFIGS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { canvasFlowIdOf, useFlowVersionStore } from '@/stores/flowVersion'
+import { isDataValidationNode, isMonitorNode, isRuleNode, nodeTypeLabel, NODE_CONFIGS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { isFileLikeNode, outputTableMissing } from '@/utils/flow/stepPersist'
 import { inputTableMismatch } from '@/utils/flow/tableSync'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
@@ -31,6 +32,12 @@ import RuleOrchestrationTab from './tabs/RuleOrchestrationTab.vue'
 
 const props = withDefaults(defineProps<{ hideAi?: boolean }>(), { hideAi: false })
 const flow = useFlowStore()
+// 只读（2026-10-10）：217 流程版本的发布版 / 锁定草稿，以及 leo 版本状态里的已发布版。只读也要能滚动、
+// 切页签、展开收起查看——原来外层整块 pointer-events: none，连滚动条都拖不动（用户反馈）。
+// 现在只让内容区本身不接收鼠标（滚轮落到外层滚动容器照常滚），启停 / 更换配置 / 保存单独禁用。
+const flowVersion = useFlowVersionStore()
+const readonly = computed(() => (flow.sourceCtx?.workflowVersionManaged !== false && flow.sourceCtx?.workflowVersionStatus === 'PUBLISHED')
+  || (flowVersion.readonly && flowVersion.flowId === canvasFlowIdOf(flow)))
 const sourceStore = useSourceStore()
 const ui = useUiStore()
 const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
@@ -40,27 +47,41 @@ const tab = computed<string>(() => flow.activeTab)
 const statusText = computed(() => (cfg.value?.disabled ? '已停止' : (cfg.value?.status ?? '')))
 const statusClass = computed(() => (cfg.value?.disabled || cfg.value?.planned ? 'warn' : 'ok'))
 
-// 顶层 Tab：参数字段已并入任务配置；决策/分头仍只显示分支配置。
-// 决策/分头节点不产表也不需要编排/任务/AI，只显示「分支配置」一个 Tab 承载 BranchEditor。
+// 顶层 Tab：参数字段已并入任务配置。
 const TOP_TABS = computed(() => nodeInspectorTabs(cfg.value, { includeAi: !props.hideAi }))
 watch(() => props.hideAi, (hideAi) => {
   if (hideAi && flow.activeTab === 'ai') flow.setActiveTab('config')
 }, { immediate: true })
-watch([TOP_TABS, () => flow.activeTab], () => {
-  const current = TOP_TABS.value.find((t) => t[0] === flow.activeTab)
-  if (current && !current[2]) return
-  // 旧会话若停在已移除的 params Tab，直接迁到任务配置。
-  const fallback = (flow.activeTab === 'params'
-    ? TOP_TABS.value.find((t) => t[0] === 'task' && !t[2])
-    : undefined) ?? TOP_TABS.value.find((t) => !t[2])
+// 没有选中节点时自动选第一个（1008-08，会上要求取消「未选择」状态）：流程里只要有真实节点，
+// 检查器就不该停在「未选择节点」——新建、重载、切换、选中的节点被删后都走这一条兜底。
+// 「未选择节点」空态只留给一个节点都没有的流程。
+watch(
+  [() => flow.selectedId, () => flow.main, () => Object.keys(flow.configs).length],
+  () => {
+    if (flow.selectedId && flow.configs[flow.selectedId]) return
+    const first = flow.main.find((id) => id !== 'start' && id !== 'end' && flow.configs[id])
+    if (first) flow.select(first)
+  },
+  { immediate: true, deep: true },
+)
+// 旧会话若停在已移除的 params Tab，直接迁到任务配置（挂载即生效）。
+watch(() => flow.activeTab, (active) => {
+  if (active !== 'params') return
+  const fallback = TOP_TABS.value.find((t) => t[0] === 'task' && !t[2]) ?? TOP_TABS.value.find((t) => !t[2])
   if (fallback) flow.setActiveTab(fallback[0])
 }, { immediate: true })
+// 切换节点时，当前 Tab 在新节点上不存在或被禁用才回落到第一个可用 Tab。
+// 不在挂载 / Tab 列表变化时立即回落：编排配置的门禁会随表配置编辑反复开关，立即回落会把人从正在看的页上踢走。
+watch(() => flow.selectedId, () => {
+  const current = TOP_TABS.value.find((t) => t[0] === flow.activeTab)
+  if (current && !current[2]) return
+  const fallback = TOP_TABS.value.find((t) => !t[2])
+  if (fallback) flow.setActiveTab(fallback[0])
+})
 
 // 配置绑定条（0824-00 §6.1）：一个 FlowNode 必须且只能引用一个 Config。
 // 本期只落骨架——configId 来自迁移回填（flowModel.ts NodeConfig.configId），
 // 配置名称/使用节点数/状态要等 config/configDetail 与使用范围接口（0824-07 §5），拿不到就不渲染，不填占位 0。
-// 决策/分头节点只有「分支配置」，不参与配置绑定。
-const isBranchNode = computed(() => !!cfg.value && decisionOrParallelKind(cfg.value) !== undefined)
 // 0927 H1：当前节点输出表未就绪（非文件节点：显式输出表 / 默认=输入表 / 快照输出表都没有）。
 // 自动保存会跳过该节点并置头部 pending「请先补全节点配置」；这里常驻提示引导去「表配置」。
 // 0927（H1 修订）：数据监控节点「不落表/不出参」——它的表在编排配置 tab 的监控方法里绑，
@@ -115,7 +136,7 @@ const nodeConfigDirty = computed(() => flow.dirtyConfigNodes.includes(id.value))
 // 配置名称跟节点名走（新增/复制时已写上），不再在节点配置 Tab 里填；保存时若仍为空就用节点名补上。
 // 配置身份（新建 / 已有）由上面的配置绑定条表达，这里只说"有没有未提交的修改"，不重复也不夸大落库状态。
 const canSaveNodeConfig = computed(() => nodeConfigDirty.value || !configId.value)
-const footNote = computed(() => (nodeConfigDirty.value ? '节点配置有未保存修改' : '无未保存修改'))
+const footNote = computed(() => (readonly.value ? '发布版本只读，点画布上方「编辑草稿」后可修改' : nodeConfigDirty.value ? '节点配置有未保存修改' : '无未保存修改'))
 // ---- 配置联调（config_api.md）----
 // 保存配置 → config/modify/updateConfig（带 configId = 更新）。
 //
@@ -370,7 +391,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="rc-inspector">
+  <div class="rc-inspector" :class="{ 'is-readonly': readonly }" :data-readonly="readonly ? 'true' : undefined">
     <template v-if="cfg">
       <div class="rc-insp-head">
         <div>
@@ -394,7 +415,7 @@ onMounted(async () => {
             @click="ui.toggleInspectorCollapsed()"
           >» 收起</button>
           <!-- 节点启停开关（0710 会议 D5）：停用=数据流经此节点时跳过不处理；逐节点验证通过后全开再定时跑 -->
-          <label class="ni-enable-switch" :title="cfg.disabled ? '节点已停用：数据在此节点不处理，点击启用' : '节点运行中：点击停用（数据将跳过此节点）'">
+          <label class="ni-enable-switch" :class="{ 'ni-readonly': readonly }" :title="cfg.disabled ? '节点已停用：数据在此节点不处理，点击启用' : '节点运行中：点击停用（数据将跳过此节点）'">
             <input type="checkbox" :checked="!cfg.disabled" @change="flow.setNodeDisabled(id, !($event.target as HTMLInputElement).checked)" />
             <span>{{ cfg.disabled ? '已停用' : '启用中' }}</span>
           </label>
@@ -404,7 +425,7 @@ onMounted(async () => {
 
       <!-- 配置条（0824-00 §6.1 + 0828 §2.1-2b）：保持原来的静态展示，旁边加一个轻量「更换」入口。
            表单里不再另起一行「本节点使用配置」——那是同一份信息显示两遍。 -->
-      <div v-if="!isBranchNode" class="rc-config-bar">
+      <div class="rc-config-bar" :class="{ 'ni-readonly': readonly }">
         <span class="cb-label">当前配置</span>
         <span v-if="cfg?.configName" class="cb-name" :title="cfg.configName">{{ cfg.configName }}</span>
         <span v-if="configId" class="cb-id" :title="`配置 ID ${configId}`">#{{ configId }}</span>
@@ -456,15 +477,18 @@ onMounted(async () => {
 
       <!-- 节点配置脏状态条（0824-00 §5.4）：右侧只保留保存动作 -->
       <!-- AI 对话不产生配置改动，不挂保存条 -->
-      <div v-if="!isBranchNode && tab !== 'ai'" class="rc-insp-foot">
+      <div v-if="tab !== 'ai'" class="rc-insp-foot">
         <span class="foot-note">
-          <i v-if="nodeConfigDirty" class="foot-dot" />{{ footNote }}
+          <i v-if="nodeConfigDirty && !readonly" class="foot-dot" />{{ footNote }}
         </span>
         <!-- 使用范围提示（0828 §6.2）：不拦截、不弹框，只让用户在按下去之前知道这份配置是共用的 -->
-        <span v-if="usageNote" class="foot-usage" data-testid="config-usage-note">{{ usageNote }}</span>
+        <span v-if="usageNote && !readonly" class="foot-usage" data-testid="config-usage-note">{{ usageNote }}</span>
+        <!-- 只读（发布版 / 锁定草稿）不放保存按钮：禁用态的主按钮看着仍像能点（用户 10-10 反馈） -->
         <button
+          v-if="!readonly"
           class="rc-btn primary"
           type="button"
+          data-testid="node-config-save"
           :disabled="!canSaveNodeConfig || saving"
           :title="configId ? (nodeConfigDirty ? undefined : '当前没有需要保存的修改') : '保存后会新建一份配置并绑定到本节点'"
           @click="onSaveNodeConfig"
@@ -497,6 +521,9 @@ onMounted(async () => {
 .rc-insp-expand { border: 1px solid #d5e2f2; background: #fff; color: var(--rc-text-2); border-radius: 6px; font-size: 11px; padding: 3px 8px; cursor: pointer; white-space: nowrap; }
 .rc-insp-expand:hover { border-color: #bfdbfe; background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
 .rc-inspector-body { padding: 12px; overflow: auto; flex: 1 1 auto; min-height: 0; }
+/* 只读：内容区不接收鼠标（不能改），滚动容器本身照常——滚轮 / 滚动条都落到 .rc-inspector-body 上 */
+.rc-inspector.is-readonly .rc-inspector-body > * { pointer-events: none; }
+.rc-inspector.is-readonly .ni-readonly { pointer-events: none; opacity: .6; }
 
 /* 顶层 Tab：参数字段并入任务配置后，不再显示独立参数页签。 */
 .rc-top-tabs { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--rc-border); border-radius: 9px; background: #f1f5f9; margin-bottom: 12px; }

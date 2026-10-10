@@ -5,7 +5,7 @@ import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import FlowDetailDrawer from './FlowDetailDrawer.vue'
-import { flowCenterApi, workflowBindingApi, type FlowDefinition, type FlowRecord, type Step, type WorkflowBinding } from '@/api'
+import { flowCenterApi, flowVersionApi, workflowBindingApi, type FlowDefinition, type FlowRecord, type Step, type WorkflowBinding } from '@/api'
 import { useFlowStore } from '@/stores/flow'
 import { useUiStore } from '@/stores/ui'
 import { resetFlowAutosaveForTests } from '@/views/FlowCanvas/canvas/useFlowAutosave'
@@ -37,6 +37,8 @@ const FLOW = {
 } as unknown as FlowRecord
 
 beforeEach(() => {
+  // 流程版本（2026-10-10）：按未启用处理；mock 模式固定 120ms 延迟会让 flushPromises 等不到抽屉加载完
+  vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: false, curVer: null, nextVer: null, publishId: null, draftId: null, versions: [] })
   vi.spyOn(workflowBindingApi, 'ensureDraft').mockImplementation(async (workflowId): Promise<WorkflowBinding> => ({
     id: `binding-${workflowId}`, bindType: 'SOURCE', bindId: '', workflowId,
     workflowCode: `LEGACY-${workflowId}`, workflowName: '新闻采集', publishedVersionNo: 1,
@@ -89,6 +91,7 @@ describe('流程详情抽屉 · 快照失败警示（0927 P1-5）', () => {
 
 describe('流程详情抽屉 · 属性编辑（Y9）', () => {
   it('已发布流程只编辑草稿，确认发布后才切换到新的发布 flowId', async () => {
+    vi.spyOn(workflowBindingApi, 'available').mockReturnValue(true)
     vi.mocked(workflowBindingApi.ensureDraft).mockResolvedValue({
       id: 'binding-9', bindType: 'SOURCE', bindId: '', workflowId: 'workflow-9',
       workflowCode: 'WF-9', workflowName: FLOW.name, publishedVersionNo: 1,
@@ -116,6 +119,27 @@ describe('流程详情抽屉 · 属性编辑（Y9）', () => {
     expect(publish).toHaveBeenCalledWith('workflow-9')
     expect(w.emitted('saved')?.[0]?.[0]).toEqual(expect.objectContaining({ id: 'draft-flow-2', version: 2 }))
     expect(w.emitted('close')).toBeTruthy()
+  })
+
+  // 2026-10-08：217 上没有 workflow/* 时，打开流程第一步的 ensureDraft 必然失败、抽屉报错关闭——流程中心一个都打不开。
+  // 未上线时退回合并前的行为：直接编辑原流程，保存即生效。
+  it('多流程接口未上线：直接打开原流程，不取草稿；只有「保存流程」，保存后通知列表', async () => {
+    vi.spyOn(workflowBindingApi, 'available').mockReturnValue(false)
+    const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue({ ...FLOW, version: 2 })
+    const w = mountDrawer()
+    await flushPromises()
+
+    expect(workflowBindingApi.ensureDraft).not.toHaveBeenCalled()
+    expect(flowCenterApi.steps).toHaveBeenCalledWith('flow-1')
+    expect(w.emitted('close')).toBeFalsy()
+    expect(w.find('[data-testid="flow-publish"]').exists()).toBe(false)
+    expect(w.find('[data-testid="flow-drawer-version-status"]').exists()).toBe(false)
+    expect(w.get('[data-testid="flow-save"]').text()).toBe('保存流程')
+
+    await w.get('[data-testid="flow-save"]').trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ id: 'flow-1' }))
+    expect(w.emitted('saved')?.[0]?.[0]).toEqual(expect.objectContaining({ id: 'flow-1', version: 2 }))
   })
 
   it('回填流程现值，改完随保存一起提交，标签按统一口径归一', async () => {

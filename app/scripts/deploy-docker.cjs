@@ -12,6 +12,9 @@
  *
  * 日常更新 = deploy。想先在 8086 用浏览器看一眼再上线，就拆成 test → 看 8086 → release。
  *
+ * 上传的是本机工作区，不是 git 提交。deploy / test 上传前会对照 CNB master 检查（见 checkLocalCode），
+ * 不一致时终端里要确认；非交互环境直接中止，确需部署加 SJCJ_DEPLOY_FORCE=1。
+ *
  * 免密：SJCJ_SSH_KEY=~/.ssh/id_ed25519_sjcj 代替 SJCJ_SSH_PASSWORD（deploy / test / release / status 可用，cutover / rollback 要 sudo 仍需密码）。
  *
  * 连 133 环境的另一套（测试 8087、正式 807 / 公网 2807）：前面加 SJCJ_TARGET=133，只支持 deploy / test / release / status。
@@ -30,6 +33,8 @@
  */
 const fs = require('node:fs')
 const path = require('node:path')
+const readline = require('node:readline')
+const { execFileSync } = require('node:child_process')
 const { Client } = require('ssh2')
 
 const action = process.argv[2] || 'test'
@@ -224,9 +229,8 @@ async function syncFiles(conn) {
 
   const appLocalDir = path.join(rootDir, 'app')
   const count = await sftpUploadDir(sftp, appLocalDir, `${cfg.remoteDir}/app`)
-  const serviceCount = await sftpUploadDir(sftp, path.join(rootDir, 'site-script-service'), `${cfg.remoteDir}/site-script-service`)
   console.log('\n')
-  ok(`文件同步完成，已传输 ${count + serviceCount} 个文件`)
+  ok(`文件同步完成，已传输 ${count} 个文件`)
 }
 
 /**
@@ -387,6 +391,76 @@ async function doRollback(conn) {
   ok('已回滚到 WAN 直接监听 806')
 }
 
+/**
+ * 部署前检查本地代码（2026-10-09 用户定）。
+ *
+ * test / deploy 上传的是**本机这个目录的工作区**（syncFiles：app/ 整个目录 + 根目录几个部署文件），
+ * 不是 git 里的提交，更不是 CNB 上的 master。三人分仓以后（姜楠本地枢纽、zhonghe 推 CNB、leo 推内网），
+ * 「本地是什么就部署什么」很容易把旧代码或半成品发出去，所以上传前对照 CNB 的 master 检查：
+ * 不在 master、有未提交改动、比 CNB 落后、有没推送的提交——有任何一条就停下来列给人看。
+ * 终端里跑：确认后继续；非交互（如 Claude 代跑）：直接中止，确需部署时加 SJCJ_DEPLOY_FORCE=1。
+ * release / cutover / rollback / status 不上传代码，不检查。
+ */
+const DEPLOY_PATHS = ['app', 'Dockerfile', 'nginx.conf', 'docker-compose.yml', '.dockerignore']
+
+function git(args, opts = {}) {
+  return execFileSync('git', args, { cwd: path.resolve(__dirname, '../..'), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts }).trim()
+}
+
+function ask(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  return new Promise(resolve => rl.question(question, answer => { rl.close(); resolve(answer.trim()) }))
+}
+
+async function checkLocalCode() {
+  info('检查本地代码（部署上传的是本机工作区）...')
+  const problems = []
+  try {
+    git(['fetch', '--quiet', 'origin', 'master'], { timeout: 30000 })
+  } catch (e) {
+    problems.push(`拉取 CNB（origin）失败，无法确认本地是否落后：${String(e.stderr || e.message).trim().split('\n')[0]}`)
+  }
+
+  const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'])
+  if (branch !== 'master') problems.push(`当前分支是 ${branch}，不是 master`)
+
+  const dirty = git(['status', '--porcelain', '--', ...DEPLOY_PATHS])
+  if (dirty) {
+    const lines = dirty.split('\n')
+    problems.push(`有 ${lines.length} 个未提交 / 未加入 git 的文件会被一起部署：\n${lines.slice(0, 10).map(l => `      ${l}`).join('\n')}${lines.length > 10 ? `\n      …另有 ${lines.length - 10} 个` : ''}`)
+  }
+
+  let behind = []
+  let ahead = []
+  try {
+    behind = git(['log', '--oneline', 'HEAD..origin/master']).split('\n').filter(Boolean)
+    ahead = git(['log', '--oneline', 'origin/master..HEAD']).split('\n').filter(Boolean)
+  } catch {
+    // 没有 origin/master（fetch 也失败了）时上面已经记过一条，这里不重复
+  }
+  const list = commits => commits.slice(0, 5).map(c => `      ${c}`).join('\n') + (commits.length > 5 ? `\n      …另有 ${commits.length - 5} 个` : '')
+  if (behind.length) problems.push(`比 CNB master 落后 ${behind.length} 个提交，这些不会被部署（先 git pull）：\n${list(behind)}`)
+  if (ahead.length) problems.push(`有 ${ahead.length} 个提交还没推到 CNB，会被部署上去：\n${list(ahead)}`)
+
+  const head = git(['log', '-1', '--format=%h %s'])
+  if (!problems.length) {
+    ok(`本地代码与 CNB master 一致：${head}`)
+    return
+  }
+
+  console.log(`\n⚠ 本次将部署 ${branch} @ ${head}，但有以下情况：`)
+  problems.forEach((p, i) => console.log(`  ${i + 1}. ${p}`))
+  console.log('')
+  if (process.env.SJCJ_DEPLOY_FORCE === '1') {
+    warn('已设置 SJCJ_DEPLOY_FORCE=1，忽略以上情况继续部署')
+    return
+  }
+  if (!process.stdin.isTTY) die('非交互环境下不自动继续。确认要按当前本地代码部署，请加 SJCJ_DEPLOY_FORCE=1 重跑')
+  const answer = await ask('仍按当前本地代码部署？输入 y 继续，其它任意键取消：')
+  if (answer.toLowerCase() !== 'y') die('已取消部署')
+  warn('已确认，按当前本地代码继续部署')
+}
+
 async function main() {
   const needsSudo = ['cutover', 'rollback'].includes(action)
   if (!cfg.password && (needsSudo || !cfg.keyPath)) {
@@ -398,6 +472,7 @@ async function main() {
     die(`${action} 会动 WAN 与 806，只对 prod 开放；SJCJ_TARGET=${targetName} 只支持 deploy / test / release / status`)
   }
   info(`部署目标：${targetName}（后端 ${cfg.backend}，端口 ${cfg.prodPort} / 公网 ${cfg.publicPort}，容器 ${IMAGE}）`)
+  if (['deploy', 'test'].includes(action)) await checkLocalCode()
   info(`连接远程服务器 ${cfg.host}:${cfg.port}...`)
   const conn = await getSshClient()
   ok('SSH 连接建立成功')

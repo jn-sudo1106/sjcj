@@ -237,10 +237,42 @@ const DEFAULT_PRESET_TABLES = [
 ]
 const { availablePresets } = usePresetTables(DEFAULT_PRESET_TABLES)
 
-// 输出字段勾选相关的 outputTableFields/savedOutFields/selectedFieldProps/toggleOutputField/
-// selectAllFields/clearAllFields 随「输出字段选择」区块一并撤掉（原因见下方模板处注释）。
-// flow.setOutFields 这个 store action 因此暂时没有调用方了，但没有删——outFields 还在
-// NodeConfig 类型里仍保留这些字段；真实节点配置写入通路打通后再整体恢复。
+// 输出字段选择（2026-10-10 恢复）：就是旧平台步骤编辑里的「出参列 (OutContext)」，
+// 落 taskCfg.outColumns → 步骤 outContext，与「任务配置 → 出参列」是同一份数据。
+// 口径跟旧平台：空 = 默认全部字段。后端存物理列名（K1…），这里按字段展示：
+// 读时列名 / 字段名都认，写时换回列名（表里没有列名才写字段名）。
+watch(nodeTableId, (tid) => ensureTableFields(tid), { immediate: true })
+const outputTableFields = computed(() => nodeTableId.value
+  ? fieldOptionsFromTableOrOutput(nodeTableId.value, tables.value, cfg.value?.output)
+  : [])
+const selectedOutputFieldProps = computed<string[]>(() => {
+  const all = outputTableFields.value.map((f) => f.prop)
+  const saved = cfg.value?.taskCfg?.outColumns ?? []
+  if (!saved.length) return all
+  const propByToken = new Map<string, string>()
+  for (const f of outputTableFields.value) {
+    propByToken.set(f.prop, f.prop)
+    if (f.columnName) propByToken.set(f.columnName, f.prop)
+  }
+  return [...new Set(saved.map((token) => propByToken.get(token)).filter((p): p is string => !!p))]
+})
+function isOutputFieldSelected(prop: string): boolean {
+  return selectedOutputFieldProps.value.includes(prop)
+}
+function writeOutputFields(props: string[]) {
+  const columnByProp = new Map(outputTableFields.value.map((f) => [f.prop, f.columnName || f.prop]))
+  flow.patchTaskConfig(id.value, { outColumns: props.map((p) => columnByProp.get(p) ?? p) })
+}
+function toggleOutputField(prop: string) {
+  const current = new Set(selectedOutputFieldProps.value)
+  if (current.has(prop)) current.delete(prop)
+  else current.add(prop)
+  // 保持表字段顺序，跟旧平台按列顺序拼 outContext 一致
+  writeOutputFields(outputTableFields.value.map((f) => f.prop).filter((p) => current.has(p)))
+}
+function selectAllOutputFields() {
+  writeOutputFields(outputTableFields.value.map((f) => f.prop))
+}
 
 function selectPresetTable(tableId: string) {
   if (nodeCapability.value?.outputMode === 'fixed') return
@@ -392,6 +424,29 @@ async function onTableSaved(tableId: string) {
         </button>
       </div>
     </div>
+    <!-- 输出字段选择（2026-10-10 恢复）= 旧平台「出参列 (OutContext)」，空即默认全部，落步骤 outContext。
+         没有「清空」：按旧平台口径空就是全部，清空等于全选。 -->
+    <div v-if="outputTableFields.length" class="rc-field">
+      <div class="rc-field-header">
+        <label>输出字段选择（已选中 {{ selectedOutputFieldProps.length }} / {{ outputTableFields.length }} 个字段，不选默认全部字段）</label>
+        <div class="rc-field-actions">
+          <button type="button" class="rc-text-btn" data-testid="select-all-fields" @click="selectAllOutputFields">全选</button>
+        </div>
+      </div>
+      <div class="rc-tag-row" data-testid="output-fields-list">
+        <span
+          v-for="f in outputTableFields"
+          :key="f.prop"
+          class="rc-tag"
+          :class="{ on: isOutputFieldSelected(f.prop) }"
+          @click="toggleOutputField(f.prop)"
+        >
+          <input type="checkbox" :checked="isOutputFieldSelected(f.prop)" class="rc-tag-check" @click.stop="toggleOutputField(f.prop)" />
+          <span class="rc-tag-text">{{ f.prop }} {{ f.desc ? `· ${f.desc}` : '' }}</span>
+        </span>
+      </div>
+      <div class="rc-help">即旧平台的「出参列 (OutContext)」：勾选的字段传给后续步骤；不选默认全部字段。</div>
+    </div>
     <div class="rc-field">
       <label>去重方式</label>
       <div class="rc-segment" data-testid="table-dedup-segment">
@@ -412,11 +467,6 @@ async function onTableSaved(tableId: string) {
           : (nodeTableId ? '当前输出表没有字段勾选「去重」，到「查看/编辑表」的字段表里勾选。' : '先选择输出表。') }}
       </div>
     </div>
-    <!-- 「输出字段选择」（outFields）2026-08-26 撤掉：这个勾选没有任何后端通路——不在 item/next
-         步骤写入 payload 里（stepToStepModifyPayload 无此 key），目前只会写进本地流程草稿。
-         也就是说勾与不勾对真实抓取零影响，展示出来只会让人以为配置生效了。等节点配置的
-         写入通路真的打通再恢复。
-         注意：规则节点那套入参/出参字段绑定不受影响，生成脚本时走 data-process，是真生效的。 -->
     <!-- 结构化配置 + 正文规则（0804 S3-1）：不透明文本，具体 schema 由执行端解释。
          **名称保持「结构化配置」**（2026-08-28 确认）：旧平台 column.config.js 里 codeRule 的 title 就是它，
          0824-00 §6.3 计划改成「入库配置」的方向是反的——字段展示名跟旧平台走，改了反而对不上。 -->

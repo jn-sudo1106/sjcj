@@ -110,8 +110,8 @@ describe('节点表联动（0928）', () => {
     }, ['start', 'A', 'end'], [{
       ownerId: 'A',
       branches: [
-        { id: 'A-b1', label: 'B', condition: undefined as never, chain: ['B'] },
-        { id: 'A-b2', label: 'C', condition: undefined as never, chain: ['C'] },
+        { id: 'A-b1', label: 'B', chain: ['B'] },
+        { id: 'A-b2', label: 'C', chain: ['C'] },
       ],
     }])
     flow.patchCollect('A', { outputTable: 'T8' })

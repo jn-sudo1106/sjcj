@@ -6,7 +6,7 @@ import ElementPlus from 'element-plus'
 import GroupSourcePicker from './GroupSourcePicker.vue'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
 import { useAuthStore } from '@/stores/auth'
-import { sourceApi, type Source } from '@/api'
+import { sourceApi, sourceGroupApi, type Source } from '@/api'
 import type { UserInfo } from '@/api/auth'
 
 beforeEach(() => {
@@ -38,6 +38,35 @@ it('跨页选择保留，刷新沿用当前页和筛选，保存只改分组关�
   const save = [...document.querySelectorAll('button')].find(button => button.textContent?.trim() === '加入分组')!
   save.click(); await flushPromises()
   expect(groups.groups[0]?.sourceIds).toEqual(['10', '20'])
+  expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual([false])
+  wrapper.unmount()
+})
+
+it('backend 模式：保存调 changeMembers 加入来源组，选中的源分属不同组时分批提交', async () => {
+  vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async () => ({
+    total: 3,
+    list: [
+      { sourceId: '10', name: '独立源', sourceGroupId: undefined } as Source,
+      { sourceId: '20', name: '组3源', sourceGroupId: '3' } as Source,
+      { sourceId: '30', name: '组1源', sourceGroupId: '1' } as Source,
+    ],
+  }))
+  const changeMembers = vi.spyOn(sourceGroupApi, 'changeMembers').mockResolvedValue({ ok: true, message: '操作成功' })
+  const wrapper = mount(GroupSourcePicker, { props: { modelValue: false, groupId: '9', backendMode: true }, global: { plugins: [ElementPlus] }, attachTo: document.body })
+  await wrapper.setProps({ modelValue: true }); await flushPromises()
+  // 勾选全部 3 个源
+  document.querySelectorAll('tbody input[type=checkbox]').forEach((c) => (c as HTMLInputElement).click())
+  await flushPromises()
+  expect(document.body.textContent).toContain('已选 3 个源')
+  const save = [...document.querySelectorAll('button')].find(button => button.textContent?.trim() === '加入分组')!
+  save.click(); await flushPromises()
+  // 按 expected 分批：null（独立）、3、1
+  expect(changeMembers).toHaveBeenCalledTimes(3)
+  expect(changeMembers).toHaveBeenCalledWith({ sourceIds: ['10'], sourceGroupId: '9', expectedSourceGroupId: null })
+  expect(changeMembers).toHaveBeenCalledWith({ sourceIds: ['20'], sourceGroupId: '9', expectedSourceGroupId: '3' })
+  expect(changeMembers).toHaveBeenCalledWith({ sourceIds: ['30'], sourceGroupId: '9', expectedSourceGroupId: '1' })
+  // 成功后发 saved 事件并关闭
+  expect(wrapper.emitted('saved')).toBeTruthy()
   expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual([false])
   wrapper.unmount()
 })

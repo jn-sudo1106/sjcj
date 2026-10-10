@@ -110,7 +110,7 @@ onUnmounted(() => clearTimeout(refreshTimer))
       </el-form-item>
       <el-form-item prop="code">
         <CaptchaBox :code-url="codeUrl" @refresh="getCode">
-          <el-input v-model="form.code" placeholder="请输入验证码" :prefix-icon="CircleCheck" />
+          <el-input v-model="form.code" placeholder="验证码" :prefix-icon="CircleCheck" />
         </CaptchaBox>
       </el-form-item>
 

@@ -244,6 +244,13 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'item/next/stepModify', desc: '修改子步骤（节点名 / 进入条件 / lastStep；JSON body）', danger: true, live: true },
   { path: 'item/next/enable', desc: '启停子步骤（GET ?id=&state=；0 启用 / 1 停用）', danger: true, live: true },
   { path: 'item/next/delete', desc: '删除子步骤（GET ?id=itemConfig）', danger: true, live: true },
+  // 2026-10-10 流程版本（217 旧平台 src/api/flow.js 同款）：v1 已发布只读，改步骤先建草稿；
+  // 草稿里 saveItemConfig / stepModify / delete / enable 额外带 flowId + versionId + ver（乐观锁，版本行计数）
+  { path: 'flow/version/overview', desc: '流程版本概览（enabled / publishId / draftId / versions[versionId, flowVer, ver, state W/C, isLock, baseId]）', impl: true, live: true },
+  { path: 'flow/version/nodes', desc: '某个版本的步骤（GET flowId + versionId；草稿里步骤 itemConfig 与发布版相同）', impl: true, live: true },
+  { path: 'flow/version/draft', desc: '从当前发布版建草稿（body flowId / versionId / ver / expectedPublishId，回 data.versionId）', danger: true, live: true },
+  { path: 'flow/version/publish', desc: '发布草稿（新任务用新版本，已启动任务用原版本）', danger: true, live: true },
+  { path: 'flow/version/abandon', desc: '放弃草稿（不占发布版本号）', danger: true, live: true },
 
   /* ── job 抓取/定时任务（目标 7 / 收录 7） ── */
   // 2026-09-18 接上：源的**定时任务**就存在这儿（旧平台「定时列表」页同款接口）。
@@ -356,15 +363,23 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'flow/copyFlow', desc: '复制流程（连 cs_item_config 步骤一起复制并重映射上下游；源是模板时新流程 refFlowId 回指模板；不复制根节点，后端自动建；回执 msg=「复制成功，新流程ID:N」；0927 P2-2：data 为标量新 ID 但 client 按标量字段丢弃，新流程 ID 只从 msg 解析）', danger: true, live: true },
   { path: 'flow/copyTemplateSteps', desc: '把模板下的普通步骤复制到目标流程（自动改 FLOW_ID、重映射上下游、根节点依赖保持 0、不复制模板自身根节点）', danger: true, live: true },
   { path: 'flow/flowTemplateList', desc: '流程模板下拉候选（templateFlag=1 全量、不分页、不含 flowConf；等价于 flowPaged + onlyTemplate 但不分页）', live: true },
-  // 一个源可绑定多条流程；主流程继续同步 cs_source.FLOW_ID，兼容现有执行器。
-  { path: 'workflow/sourceBindings', desc: '查询源的有效流程（含 SourceGroup 继承）', live: true },
-  { path: 'workflow/bindSource', desc: '给源绑定已有流程', danger: true, live: true },
-  { path: 'workflow/setPrimary', desc: '设置源主流程并同步旧 FLOW_ID', danger: true, live: true },
-  { path: 'workflow/unbindSource', desc: '解除源的显式流程绑定', danger: true, live: true },
-  { path: 'workflow/restoreInherited', desc: '清除源级主流程覆盖，恢复 SourceGroup 主流程', danger: true, live: true },
-  { path: 'workflow/createForSource', desc: '为源新建空白流程并绑定', danger: true, live: true },
-  { path: 'workflow/ensureDraft', desc: '从当前发布版创建隔离的下一版草稿', danger: true, live: true },
-  { path: 'workflow/publish', desc: '发布草稿并切换后续运行入口', danger: true, live: true },
+  // 一个源可关联多条流程，有一条默认流程（来源组接口文档，bee-config SourceGroupController，2026-10-08 上线 217）。
+  // 入组的源统一使用组的流程，不能单独改绑。10-09 起画布流程标签栏接 sourceFlows/bindSourceFlows；
+  // 10-12 起来源组本身的增删改查与成员/绑定管理（1008-02/03/04）用下面这 14 条。
+  { path: 'source-group/list', desc: '来源组列表（不分页）', live: true },
+  { path: 'source-group/detail', desc: '来源组详情（含 flowIds/revision）', live: true },
+  { path: 'source-group/members', desc: '来源组成员分页（无 total，前端请求 limit+1 条判下一页）', live: true },
+  { path: 'source-group/add', desc: '新建来源组（admin）', danger: true, live: true },
+  { path: 'source-group/update', desc: '修改来源组（admin；必须带编辑前 revision）', danger: true, live: true },
+  { path: 'source-group/delete', desc: '删除来源组（admin；必须带编辑前 revision）', danger: true, live: true },
+  { path: 'source-group/changeMembers', desc: '按源 ID 列表调整组成员（target/expected 为 null 时 JSON 必须显式写 null；target=-1 退组）', danger: true, live: true },
+  { path: 'source-group/changeMembersByRange', desc: '按筛选范围批量调整组成员（参数全在 query；target=-1 退组；无范围条件必须 confirmAll=true）', danger: true, live: true },
+  { path: 'source-group/bindFlows', desc: '来源组整体绑定流程（admin；带 revision 并发快照）', danger: true, live: true },
+  { path: 'source-group/bindings', desc: '来源（或来源组）的流程绑定行（含停用行）', live: true },
+  { path: 'source-group/updateBindingState', desc: '启用/停用一条流程绑定（admin；回传 id/sourceId/sourceGroupId/flowId/revision）', danger: true, live: true },
+  { path: 'source-group/flowIds', desc: '来源列表当前生效流程并集（GET sourceIds 逗号串；上限 5000，超过分片）', live: true },
+  { path: 'source-group/sourceFlows', desc: '来源（或来源组）的流程绑定：生效列表、默认流程、原始绑定行；入组的源自动跟随其组', live: true },
+  { path: 'source-group/bindSourceFlows', desc: '来源独立流程整体保存（admin；带并发快照，入组的源会被后端拒绝）', danger: true, live: true },
   // 只登记不接：旧平台「生成配置」入口，本平台没有对应场景（Y8-16）。
   { path: 'source/genConfig', desc: '旧平台「生成配置」（SourceList.vue 的行操作）；本平台无调用方，仅登记备查' },
 
@@ -395,6 +410,11 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'rule/orchestrationDetail', desc: '规则编排详情 → /vrule/api/custom-compose/getComposeById', impl: true, live: true },
   { path: 'rule/orchestrationLoadScript', desc: '读取规则脚本正文 → /vrule/ai/dashscope/code', impl: true, live: true },
   { path: 'rule/dataProcessGenerate', desc: '规则处理生成脚本 → /api/answer/data-process', impl: true, live: true },
+  // 1005：PDF 抓取节点编排配置的「解析内容」——上传样本 PDF + 当前提示词，流式回抽取正文。
+  // 与 data-process 的关键区别是**无任何落库/落盘副作用**，且附件白名单只有 pdf（data-process 仍只吃 xls/xlsx）。
+  // 2026-10-05 后端已落地并本地联调通过（中文 PDF → PDFBox 取文 → DeepSeek 流式抽取 → done 带 charCount/truncated），
+  // 转发链见 §6.6：vite 代理与 nginx 各有独立的 /api/answer/document-extract 条目。
+  { path: 'rule/documentExtract', desc: 'PDF 样本按提示词解析 → /api/answer/document-extract', impl: true, live: true },
   { path: 'rule/executeCode', desc: '执行脚本 → /vrule/fastapi/execute/code', impl: true, live: true },
   // generate 已接真实流式（form-urlencoded）；需数字 ruleId（由 saveMeta live 提供）
   { path: 'rule/orchestrationGenerate', desc: '规则编排生成脚本 → /vrule/ai/dashscope/stream', impl: true, live: true },

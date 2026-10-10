@@ -268,7 +268,9 @@ describe('最新方案 UI 入口收口', () => {
     expect(canvasHeader).not.toContain('@click="openEdit"')
     expect(canvasHeader).not.toContain('同步到源')
     expect(canvasHeader).toContain('class="ch-flow-mode-actions"')
-    expect(canvasHeader).toContain('v-if="view === \'flow\' && flowMode === \'canvas\'" class="ch-actions"')
+    // 2026-10-10：保存状态挪进「发起抓取」那一组，标题下不再单独占一行 ch-actions（流程页面太小）
+    expect(canvasHeader).not.toContain('class="ch-actions"')
+    expect(canvasHeader).toContain('<span v-if="flowMode === \'canvas\'" class="ch-save-status" data-testid="flow-save-status">')
     expect(canvasHeader).not.toContain('class="ch-canvas-actions"')
     expect(canvasHeader).not.toContain('<Teleport')
     expect(flowBoard).toContain("import FlowXmlDialog from './FlowXmlDialog.vue'")
@@ -401,7 +403,7 @@ describe('最新方案 UI 入口收口', () => {
     expect(sourceBasicForm).not.toContain('使用已有配置')
   })
 
-  it('源流程头展示当前流程，不再提供向当前流程追加模板的入口', () => {
+  it('源流程头展示当前流程，不再提供套用模板 / 更换 / 复制流程的入口（改由流程标签栏负责）', () => {
     expect(canvasHeader).toContain('当前流程：')
     expect(canvasHeader).not.toContain('appliedTemplateLabel')
     expect(canvasHeader).not.toContain('flow-switch-search')

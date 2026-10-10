@@ -113,13 +113,17 @@ export function isProductionCreateEnabled(): boolean {
 const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'site/add',
   'site/createSite',
-  'workflow/bindSource',
-  'workflow/setPrimary',
-  'workflow/unbindSource',
-  'workflow/restoreInherited',
-  'workflow/createForSource',
-  'workflow/ensureDraft',
-  'workflow/publish',
+  // 画布流程标签栏：给源关联 / 设默认 / 解除流程，都是这一条（整体替换绑定列表）
+  'source-group/bindSourceFlows',
+  // 2026-10-10 用户拍板放开（1008-03/04）：来源组增删改、按源 ID 调整成员、组绑定流程、绑定启停。
+  // 都是 admin 才能调、带 revision 并发校验；UI 侧删组 / 移出 / 换组 / 退组都有二次确认。
+  // **不放 changeMembersByRange**：一次能改上万个源，生产上「按筛选范围调整」入口置灰。
+  'source-group/add',
+  'source-group/update',
+  'source-group/delete',
+  'source-group/changeMembers',
+  'source-group/bindFlows',
+  'source-group/updateBindingState',
   'snatch/snatchSave',
   'source/bindSite',
   '/vrule/api/custom-compose/save',
@@ -264,6 +268,16 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
    */
   'sourceType/add',
   'sourceType/update',
+  /**
+   * 2026-10-10 放开（流程版本）：217 后端 10-10 13:10 起全部流程进版本模式，v1 已发布只读，
+   * 不先建草稿任何步骤都改不了（画布删除节点报「请先进入流程草稿编辑并重新加载版本信息」）。
+   * draft 建草稿副本（纯新增，不动发布版）；publish 让新任务改用草稿（旧任务继续用原版本）；
+   * abandon 放弃草稿（逻辑删除，不占版本号）。对齐 217 旧平台 FlowNodeDrawer 的同名按钮，
+   * publish / abandon 在 UI 侧都有二次确认。
+   */
+  'flow/version/draft',
+  'flow/version/publish',
+  'flow/version/abandon',
 ])
 
 function isProductionWriteAllowed(httpEndpoint: string): boolean {
@@ -344,8 +358,10 @@ function normalizeHttpPayload(endpoint: string, payload: unknown): unknown {
   // 标量 0 当整个响应体返回，调用方按 {message} 取值时 msg 被静默丢弃，UI 只能落到兜底文案。
   // 只有 data 是对象/数组（详情、列表）时才是调用方真正要用的载荷，可以直接透传；标量场景下
   // envelope.msg 才是要展示给用户的真实文案。
+  // 1008-10 补充：同步服务 add 类接口标量 data 是新增记录 id（如 sql-execute/add → data:101），
+  // 调用方要展示「已下发，任务 #ID」，所以把 data 一并带回（nextStep2 只读 message，不受影响）。
   if (data !== undefined && data !== null && typeof data === 'object') return data
-  return { ok: true, message: String(envelope.msg || '操作成功') }
+  return { ok: true, message: String(envelope.msg || '操作成功'), data: data as never }
 }
 
 // 未实现专属 mock 的契约端点 → 通用占位，保证 142 端点全部可调用、切 http 零改动。

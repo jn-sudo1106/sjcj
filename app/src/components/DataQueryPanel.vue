@@ -79,14 +79,25 @@ const props = withDefaults(
     pageSize?: number
     defaultSortField?: string
     defaultSortOrder?: 'ascend' | 'descend' | ''
+    /**
+     * 单行模式（1008-07，数据中心用）：筛选与操作按钮合成一行，放不下横向滚动，
+     * 表 / 源挪到状态筛选之后，查询 / 清空 / 高级筛选钉在右侧，列选择器并入同一行。
+     * 操作按钮走 #actions 插槽；#toolbar 只留给批量条、SQL 提示这类整行内容。默认关，其他复用方不受影响。
+     */
+    oneRow?: boolean
+    /** 行可点击（调用方监听 row-click 开详情等）：鼠标移上去显示手型 */
+    rowClickable?: boolean
   }>(),
   {
     defaultSortField: '',
     defaultSortOrder: '',
+    oneRow: false,
+    rowClickable: false,
   },
 )
 const emit = defineEmits<{
-  'row-click': [row: DataRow]
+  /** 第二个参数是原始点击事件：调用方据此判断点的是不是单元格里自带动作的元素（链接、按钮、勾选框…） */
+  'row-click': [row: DataRow, event: Event]
   'update:selectedKeys': [string[]]
   'query-change': [DataQueryFilter]
   loaded: [{ rows: DataRow[]; total: number }]
@@ -294,15 +305,15 @@ function onFileCell(column: DataQueryColumn, value: unknown) {
   emit('file-click', String(value), { prop: column.hintProp ?? column.prop, columnName: column.prop, desc: column.label })
 }
 
-function onRowClick(row: DataRow) {
-  emit('row-click', row)
+function onRowClick(row: DataRow, _column: unknown, event: Event) {
+  emit('row-click', row, event)
 }
 </script>
 
 <template>
   <div class="dqp">
-    <div class="rc-toolbar wrap dqp-primary-row" data-testid="data-query-primary">
-      <div v-if="$slots.context" class="dqp-context"><slot name="context" /></div>
+    <div class="rc-toolbar wrap dqp-primary-row" :class="{ 'is-one-row': oneRow }" data-testid="data-query-primary">
+      <div v-if="$slots.context && !oneRow" class="dqp-context"><slot name="context" /></div>
       <el-input v-model="dataId" class="dqp-data-id" clearable placeholder="请输入数据 ID" style="width: 160px" />
       <el-input v-model="parentId" class="dqp-parent-id" clearable placeholder="父 ID" style="width: 120px" />
       <el-select
@@ -319,6 +330,8 @@ function onRowClick(row: DataRow) {
       >
         <el-option v-for="option in STATE_OPTIONS" :key="option.value" :label="option.label" :value="option.value" />
       </el-select>
+      <!-- 单行模式下表 / 源放在状态筛选之后（会上：表选项多，放最前面显示不全） -->
+      <div v-if="$slots.context && oneRow" class="dqp-context"><slot name="context" /></div>
       <el-date-picker
         v-model="timeRange"
         type="datetimerange"
@@ -329,19 +342,32 @@ function onRowClick(row: DataRow) {
         class="dqp-time-range"
         style="width: 280px"
       />
-      <button class="rc-btn primary" type="button" @click="search()">查询</button>
-      <button class="rc-btn" type="button" @click="clearFilters">清空</button>
-      <button
-        class="rc-btn dqp-advanced-toggle"
-        type="button"
-        :aria-expanded="advancedOpen"
-        aria-controls="data-query-advanced"
-        @click="advancedOpen = !advancedOpen"
-      >
-        高级筛选 <span aria-hidden="true">{{ advancedOpen ? '⌃' : '⌄' }}</span>
-      </button>
+      <span class="dqp-query-actions">
+        <button class="rc-btn primary" type="button" @click="search()">查询</button>
+        <button class="rc-btn" type="button" @click="clearFilters">清空</button>
+        <button
+          class="rc-btn dqp-advanced-toggle"
+          type="button"
+          :aria-expanded="advancedOpen"
+          aria-controls="data-query-advanced"
+          @click="advancedOpen = !advancedOpen"
+        >
+          高级筛选 <span aria-hidden="true">{{ advancedOpen ? '⌃' : '⌄' }}</span>
+        </button>
+      </span>
       <span class="dqp-spacer" />
       <span class="dqp-quick-slot"><slot name="quick" /></span>
+      <template v-if="oneRow">
+        <slot name="actions" :total="total" :rows="rows" />
+        <button
+          v-if="showColPicker"
+          class="rc-btn dqp-col-btn"
+          type="button"
+          data-testid="column-picker-btn"
+          :title="`列显示与顺序（已显 ${colVisibleCount}/${columns.length}）`"
+          @click="colPickerOpen = true"
+        >列 {{ colVisibleCount }}/{{ columns.length }}</button>
+      </template>
     </div>
 
     <div v-if="chips.length" class="rc-toolbar wrap dqp-chips-row">
@@ -369,7 +395,7 @@ function onRowClick(row: DataRow) {
     <div class="dqp-table-tools">
       <div class="dqp-table-tools-main"><slot name="toolbar" :total="total" :rows="rows" /></div>
       <button
-        v-if="showColPicker"
+        v-if="showColPicker && !oneRow"
         class="rc-btn dqp-col-btn"
         type="button"
         data-testid="column-picker-btn"
@@ -378,7 +404,7 @@ function onRowClick(row: DataRow) {
       >列 {{ colVisibleCount }}/{{ columns.length }}</button>
     </div>
 
-    <div v-loading="loading" class="rc-table-scroll dqp-table">
+    <div v-loading="loading" class="rc-table-scroll dqp-table" :class="{ 'is-row-clickable': rowClickable }">
       <el-table
         :data="rows"
         :default-sort="defaultTableSort"
@@ -469,6 +495,27 @@ function onRowClick(row: DataRow) {
 .dqp-query-row { align-items: center; gap: 8px; padding-top: 4px; padding-bottom: 8px; }
 .dqp-advanced-toggle { white-space: nowrap; }
 .dqp-spacer { flex: 1; min-width: 8px; }
+/* 默认模式下这层只是个分组，不参与布局，三个按钮仍是 .dqp-primary-row 的直接 flex 子项 */
+.dqp-query-actions { display: contents; }
+/* 单行模式（1008-07）：放不下就整行横向滚动，不换行，数据区拿到最多的纵向空间。
+   查询 / 清空 / 高级筛选 sticky 钉在右端：行放得下时在原位，放不下时始终点得到。 */
+.dqp-primary-row.is-one-row { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.dqp-primary-row.is-one-row::-webkit-scrollbar { height: 5px; }
+.dqp-primary-row.is-one-row::-webkit-scrollbar-thumb { border-radius: 999px; background: #cbd5e1; }
+.dqp-primary-row.is-one-row > * { flex-shrink: 0; }
+.dqp-primary-row.is-one-row > .dqp-spacer { flex-shrink: 1; }
+.dqp-primary-row.is-one-row > .dqp-query-actions { display: inline-flex; align-items: center; gap: 4px; position: sticky; right: 0; z-index: 2; margin-left: 4px; padding-left: 12px; background: #fff; border-left: 1px solid var(--rc-border-soft); }
+/* 全局主按钮带向下发散的蓝色阴影和上浮动效，被横向滚动容器裁掉后是一块脏边：单行模式下压平。
+   清空 / 高级筛选降为轻量的次要按钮，让「查询」一个按钮说话。 */
+.dqp-primary-row.is-one-row .dqp-query-actions .rc-btn.primary { min-width: 58px; box-shadow: none; transform: none; }
+.dqp-primary-row.is-one-row .dqp-query-actions .rc-btn.primary:hover { box-shadow: none; transform: none; background: var(--rc-primary-ink, #1d4ed8); border-color: var(--rc-primary-ink, #1d4ed8); color: #fff; }
+.dqp-primary-row.is-one-row .dqp-query-actions .rc-btn:not(.primary) { border-color: transparent; background: transparent; color: var(--rc-text-2); }
+.dqp-primary-row.is-one-row .dqp-query-actions .rc-btn:not(.primary):hover { background: var(--rc-primary-bg); color: var(--rc-primary-ink); }
+/* 13.6 寸（约 1090px 可用）下尽量让「筛选 + 查询」一屏装下，右边的操作按钮靠横向滚动 */
+.dqp-primary-row.is-one-row :deep(.dqp-data-id) { width: 132px !important; }
+.dqp-primary-row.is-one-row :deep(.dqp-parent-id) { width: 80px !important; }
+.dqp-primary-row.is-one-row :deep(.dqp-state) { width: 136px !important; }
+.dqp-primary-row.is-one-row :deep(.dqp-time-range) { width: 232px !important; min-width: 232px; }
 .dqp-table-tools { display: flex; align-items: center; gap: 8px; }
 .dqp-table-tools-main { flex: 1; min-width: 0; }
 .dqp-col-btn { flex: none; }
@@ -480,6 +527,7 @@ function onRowClick(row: DataRow) {
 .dqp-table :deep(.el-table td.el-table__cell), .dqp-table :deep(.el-table th.el-table__cell) { padding: 8px 0; font-size: 12px; }
 .dqp-table :deep(.el-table td.el-table__cell) { color: #334155; }
 .dqp-table :deep(.el-table__body tr:hover > td) { background: #f8fbff; }
+.dqp-table.is-row-clickable :deep(.el-table__body tr) { cursor: pointer; }
 .dqp-a { color: var(--rc-primary-ink); cursor: pointer; }
 .dqp-a:hover { text-decoration: underline; }
 /* 文件路径格：同 DataGrid 的路径格，按钮外观像链接，文字过长省略（悬停 title 看全路径） */

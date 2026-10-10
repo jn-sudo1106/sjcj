@@ -175,7 +175,7 @@ export function cloneConfig(cfg: NodeConfig): NodeConfig {
  * （`90` / `R` / `NODE`），没在这套系统里泡过的人根本认不出是什么。
  *
  * 判定优先级，从可靠到兜底：
- *   1. **决策 / 分头**：结构节点，跟"抓取类型"不是一个维度；
+ *   1. （原「决策 / 分头」结构节点 1008-BR-06 已去掉）
  *   2. **数据监控 / 规则处理**：靠 `template === 'monitor'`、`ruleCfg` 这类结构信号
  *      （不是标题正则——"数据监控"标题里没有"规则"二字，正则会漏）；
  *   3. **采集节点**：取 `snatchType` 的文案部分，即 `[90] - 网页抓取` → `网页抓取`。
@@ -251,9 +251,6 @@ export const TEMPLATE_TO_TYPE_NAME: Record<string, string> = {
 }
 
 export function nodeTypeLabel(cfg: NodeConfig): string {
-  if (cfg.kind === 'decision') return '决策'
-  if (cfg.kind === 'parallel') return '分头'
-
   // 1. 如果显式配置了 configType，优先按字典取真实「类型名称」
   if (cfg.configType && SOURCE_TYPE_NAME_BY_ID[String(cfg.configType)]) {
     return SOURCE_TYPE_NAME_BY_ID[String(cfg.configType)]
@@ -322,8 +319,6 @@ export function iconFor(cfg: NodeConfig): string {
   if (sub.indexOf('[BROWSER]') >= 0) return '180'
   if (sub.indexOf('[WECHAT]') >= 0) return '185'
   if (sub.indexOf('[LOGIN]') >= 0) return 'LOGIN'
-  if (cfg.kind === 'decision' || /决策|条件路径/.test(cfg.title + cfg.sub)) return 'IF'
-  if (cfg.kind === 'parallel' || /分头|多路径并行/.test(cfg.title + cfg.sub)) return 'PAR'
   // cfg.ruleCfg 是结构信号（isRuleNode 同款口径，见 flowModel.ts）：标题正则单独判会漏掉标题
   // 不含"规则"二字的规则类节点（比如"数据监控"模板——0901 新增，配置直接复用 rule 种子）。
   if (cfg.ruleCfg || /规则/.test(cfg.title)) return 'R'
@@ -337,8 +332,6 @@ export function iconFor(cfg: NodeConfig): string {
 export function nodeClassFor(cfg: NodeConfig): string {
   if (cfg.planned && /邮件|告警/.test(cfg.title)) return 'mail-node planned'
   if (cfg.planned) return 'planned'
-  if (cfg.kind === 'decision' || /决策|条件路径/.test(cfg.title + cfg.sub)) return 'logic-node'
-  if (cfg.kind === 'parallel' || /分头|多路径并行/.test(cfg.title + cfg.sub)) return 'parallel-node'
   if (cfg.ruleCfg || /规则/.test(cfg.title)) return 'rule-node'
   if (/校验/.test(cfg.title)) return 'check-node'
   if (/邮件|告警/.test(cfg.title)) return 'mail-node'
@@ -419,7 +412,7 @@ export const LAYOUT_PAD_X = 16
 export const LAYOUT_PAD_Y = 10
 
 /** 结果视图顶部节点条布局（纯函数版，从 flow store 的 horizontalLayout 计算逻辑提取）
- *  0707 优化·Phase6：扩展支持 FlowBranchGroup 决策/分头节点的分支。
+ *  0707 优化·Phase6：扩展支持 FlowBranchGroup 分叉点的分支。
  *  0928：分支改回**横版**——0925 把分支做成「每支一列、向下堆叠」，节点条变成竖向树，跟上面
  *  横向主链方向不一致。现在分叉 owner 的右侧按**行**展开各分支（上下排开、整组以 owner 中线
  *  居中），链节点在行内向右排，链内再分叉递归向右展开；主链下一个节点排在整组分支右侧之外，
@@ -645,9 +638,10 @@ function upstreamOutputTableOf(main: string[], configs: Record<string, NodeConfi
 /**
  * 节点有效输入表（0701 问题五）：显式设置优先；否则主链节点继承上一个有输出表的节点，
  * 旁路节点继承锚点节点；均无则空（即"无上游可继承"，通常只发生在主链首节点）。
- * 0707 优化·Phase6 补：决策/分头分支 chain 内节点继承同分支内前一个有输出表的节点；
- * chain 内均无则继承 owner 节点"流入"的表——owner 是决策/分头逻辑节点，本身不产表，
- * 递归取 owner 的 effectiveInputTable（= 流入 owner 的上游数据），而非 owner 自己的输出表（恒为空）。
+ * 分支 chain 内节点继承同分支内前一个有输出表的节点；chain 内均无则取分叉点（owner）的输出表——
+ * 旧平台新步骤的输入表 = 上级的输出表（SourceStepCard openCreatePanel）。owner 没有输出表时再向上
+ * 取它的 effectiveInputTable。（1008-BR-06 之前 owner 是不产表的决策 / 分头节点，这里直接取 owner
+ * 的输入表；现在 owner 是普通节点，取输入表会让链头读到分叉点**上游**的表。）
  */
 export function effectiveInputTable(
   main: string[],
@@ -685,7 +679,8 @@ export function effectiveInputTable(
       const t = configs[found.chain[i]] ? nodeOutputTable(configs[found.chain[i]]) : ''
       if (t) return t
     }
-    return effectiveInputTable(main, branches, configs, found.ownerId, branchGroups)
+    const owner = configs[found.ownerId]
+    return (owner && nodeOutputTable(owner)) || effectiveInputTable(main, branches, configs, found.ownerId, branchGroups)
   }
   return ''
 }

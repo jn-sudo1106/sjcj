@@ -55,7 +55,7 @@ export interface FlowShape {
  *
  * 走 `directSuccessorIds`（0831 X3-7 加的那个，与「下一步字段」同一套拓扑解析）——
  * 不另写一份后继判定，两套迟早漂移。分支节点会返回多张表，调用方要把它们的条数合计。
- * 没有输出表的后继（决策/分头这类结构节点）直接跳过：它们不落数据，谈不上"下级几条"。
+ * 没有输出表的后继直接跳过：它们不落数据，谈不上"下级几条"。
  */
 export function resolveChildTargets(flow: FlowShape, nodeId: string): ChildTarget[] {
   if (!nodeId) return []

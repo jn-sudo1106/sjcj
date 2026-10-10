@@ -167,4 +167,24 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
     expect(warnSpy).toHaveBeenCalledWith('出错，属性重复:dup')
     expect(saveSpy).not.toHaveBeenCalled()
   })
+
+  it('拖左边缘拉宽：resize-end 写入本地偏好，重开抽屉沿用拉宽后的宽度', async () => {
+    localStorage.removeItem('rc.dataview.entryEditor.drawerWidth')
+    await mountEditor(null)
+    const drawer = wrapper.findComponent({ name: 'ElDrawer' })
+    expect(drawer.exists()).toBe(true)
+    // 默认 760px
+    expect(drawer.props('size')).toBe('760px')
+
+    // 模拟官方 useResizable 松手：resize-end(evt, 最终宽度)
+    drawer.vm.$emit('resize-end', {} as MouseEvent, 980)
+    await flushPromises()
+    expect(localStorage.getItem('rc.dataview.entryEditor.drawerWidth')).toBe('980')
+
+    // 重开（换个实例）应从偏好读回 980
+    wrapper.unmount()
+    await mountEditor(null)
+    const drawer2 = wrapper.findComponent({ name: 'ElDrawer' })
+    expect(drawer2.props('size')).toBe('980px')
+  })
 })

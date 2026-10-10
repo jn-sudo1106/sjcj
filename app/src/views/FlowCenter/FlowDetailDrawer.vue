@@ -13,6 +13,7 @@ import {
 } from '@/api'
 import { useFlowStore, stripLoginSecrets } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
+import { useFlowVersionStore } from '@/stores/flowVersion'
 import { useUiStore } from '@/stores/ui'
 import { rootStepForSource } from '@/views/FlowCanvas/canvas/flowModel'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
@@ -32,12 +33,22 @@ const emit = defineEmits<{
 const canvas = useFlowStore()
 const sourceStore = useSourceStore()
 const ui = useUiStore()
+const flowVersion = useFlowVersionStore()
+/** 读步骤时的尾参：版本 store 当前就是这个流程、且有草稿时才带 versionId（防止拿别的流程的草稿 ID）；
+ *  没有草稿不传，调用形状与版本对接前一致 */
+function draftVersionArgs(id: string): [] | [{ versionId: string }] {
+  const versionId = flowVersion.flowId === id ? flowVersion.viewVersionId : null
+  return versionId ? [{ versionId }] : []
+}
 const autosave = useFlowAutosave()
 const name = ref('')
 const saving = ref(false)
 const publishing = ref(false)
 const workingFlow = ref<FlowRecord | null>(null)
 const versionState = ref<WorkflowBinding | null>(null)
+// 多流程接口（workflow/*）未上线时没有草稿 / 发布：直接编辑原流程，保存即生效（合并 leo 分支前的行为）。
+// 否则打开流程第一步的 ensureDraft 必然失败，抽屉报错关闭，流程中心一个流程都打不开。
+const versioned = workflowBindingApi.available()
 
 // 流程工作区自动保存（0926「基础数据写正常」）：在抽屉里新建/改名/改条件/删除节点同样落到
 // cs_item_config（步骤行），不依赖源上下文——useStepWrite 按 flow.flowIdMode 走 flowId 锚定。
@@ -195,7 +206,7 @@ async function deriveFromFlowConfig(flow: FlowRecord, prefetchedSteps?: Step[]):
           : await configApi.configDetail(flow.id).catch(() => null),
         prefetchedSteps,
       ]
-    : await Promise.all([configApi.configDetail(flow.id), flowCenterApi.steps(flow.id)])
+    : await Promise.all([configApi.configDetail(flow.id), flowCenterApi.steps(flow.id, ...draftVersionArgs(flow.id))])
   const stubSource: Source = {
     sourceId: '',
     name: config?.name || flow.name,
@@ -254,11 +265,16 @@ async function openFlowInWorkspace(flow: FlowRecord) {
     // 流程中心是编辑入口。先取得独立草稿工作副本，后续名称、属性、画布和步骤都只写草稿；
     // 当前发布版本继续供运行任务使用，直到用户显式点击“发布版本”。接口同时接受 workflow.id
     // 与旧 cs_flow.FLOW_ID，兼容流程中心仍以 FLOW_ID 打开流程的现状。
-    const state = await workflowBindingApi.ensureDraft(flow.id)
-    if (reqId !== loadSeq) return
-    const draftFlowId = state.draftFlowId
-    if (!draftFlowId) throw new Error('未取得可编辑的草稿工作副本')
-    versionState.value = state
+    let editFlowId = flow.id
+    let editVersion = flow.version
+    if (versioned) {
+      const state = await workflowBindingApi.ensureDraft(flow.id)
+      if (reqId !== loadSeq) return
+      if (!state.draftFlowId) throw new Error('未取得可编辑的草稿工作副本')
+      versionState.value = state
+      editFlowId = state.draftFlowId
+      editVersion = state.draftVersionNo
+    }
     // 0926：详情先取——取不到就整窗报错关掉，**不发起后续请求**（steps 事前拉没有意义，
     // 还会把错误路径拖慢）。详情成功后再并行不迟…… 不，**串行**：steps 必须在
     // loadIntoWorkspace（工作区渲染）之前就绪——快照供改名 / 孤儿「关联」整包回写，
@@ -267,16 +283,16 @@ async function openFlowInWorkspace(flow: FlowRecord) {
     // （改名/关联降级为缺快照提示）。
     const full = await flowCenterApi.detail(flow.id)
     if (reqId !== loadSeq) return
-    const record: FlowRecord = {
-      ...(full ?? flow),
-      id: draftFlowId,
-      version: state.draftVersionNo,
-    }
+    const record: FlowRecord = versioned
+      ? { ...(full ?? flow), id: editFlowId, version: editVersion }
+      : (full ?? flow)
     workingFlow.value = record
     // 0927：一次取回**带 configType 的完整步骤**（withConfigDetails 默认 true）——它既是
     // 快照（改名/孤儿「关联」整包回写），也是工作区画布的内容源（配合下方"有步骤行就按
     // 步骤还原"），configType 让摘要/翻译/打标签等节点一回读就是对的模板，不用再补查。
-    const steps = await flowCenterApi.steps(draftFlowId)
+    // 流程版本（2026-10-10）：217 起发布版只读，有草稿时工作区画布显示草稿
+    await flowVersion.load(editFlowId)
+    const steps = await flowCenterApi.steps(editFlowId, ...draftVersionArgs(editFlowId))
       .catch((reason) => {
         console.warn('[flow-drawer] 步骤快照加载失败：改名/孤儿关联将缺少快照', reason)
         stepsLoadFailed.value = true
@@ -366,8 +382,11 @@ async function persistFlow(showMessage = true, isTemplate?: boolean): Promise<Fl
     name.value = saved.name
     workingFlow.value = saved
     canvas.markSaved()
+    if (!versioned) emit('saved', saved)
     if (showMessage) {
-      ElMessage.success(`草稿 v${versionState.value?.draftVersionNo ?? saved.version ?? '—'} 已保存`)
+      ElMessage.success(versioned
+        ? `草稿 v${versionState.value?.draftVersionNo ?? saved.version ?? '—'} 已保存`
+        : (saved.version == null ? '流程已保存' : `流程已保存为 v${saved.version}`))
     }
     return saved
   } catch (error) {
@@ -397,6 +416,14 @@ async function toggleTemplate() {
 }
 
 async function applyToSource() {
+  if (!versioned) {
+    // 没有草稿概念：有未保存改动先存，再关联（合并前的行为）
+    const saved = canvas.dirty || name.value.trim() !== workingFlow.value?.name
+      ? await persistFlow(false)
+      : workingFlow.value
+    if (saved) emit('apply', saved)
+    return
+  }
   if (versionState.value?.draftFlowId) {
     ElMessage.warning('当前修改仍是草稿，请先发布版本后再关联到源')
     return
@@ -508,7 +535,8 @@ async function publishVersion() {
     <!-- 还原态必须说明白：画布上这些节点还没写进流程本身，是照这个流程自己的配置和步骤画的。
          不写这行的话，用户会以为流程里已经存着这份定义。 -->
     <div v-if="!loadingDetail && derivedFromConfig" class="fd-derived" data-testid="flow-derived-note">
-      该草稿尚未保存画布定义，以下节点按草稿工作副本（#{{ workingFlow?.id }}）还原，点“保存草稿”后写入草稿。
+      <template v-if="versioned">该草稿尚未保存画布定义，以下节点按草稿工作副本（#{{ workingFlow?.id }}）还原，点“保存草稿”后写入草稿。</template>
+      <template v-else>该流程尚未保存画布定义，以下节点按这个流程自己的配置（#{{ workingFlow?.id }}）还原，点「保存流程」后才会写入流程。</template>
     </div>
     <!-- 配置区的「展开 / 收起」两个按钮在 NodeInspector 里，改的是 ui 上那对全局标志。
          抽屉原来是死的两列栅格，点了没反应（0905 反馈「这里的展开收起未生效」）——
@@ -546,7 +574,8 @@ async function publishVersion() {
       <!-- 这行原来写的是「关联到源只登记归属关系，不改动源现有的配置与步骤」，与 0903 H1 的
            答复相反（「执行就按 flowID 去反选，去执行」）：绑定即生效，关联过来的源会**共用**
            这个流程的配置。说的和做的相反比不说更糟，2026-09-04 改。 -->
-      <span class="fd-foot-note">修改只保存到草稿，不影响当前运行版本；发布后，新发起的任务使用新版本，运行中的任务保持原版本。</span>
+      <span v-if="versioned" class="fd-foot-note">修改只保存到草稿，不影响当前运行版本；发布后，新发起的任务使用新版本，运行中的任务保持原版本。</span>
+      <span v-else class="fd-foot-note">节点配置在右侧直接修改；关联到源后，这些源将共用本流程的配置——此后改这里会同时影响它们。</span>
       <button
         class="fd-secondary"
         type="button"
@@ -555,8 +584,8 @@ async function publishVersion() {
         @click="toggleTemplate"
       >{{ workingFlow?.isTemplate ? '取消模板' : '标记为模板' }}</button>
       <button class="fd-secondary" type="button" :disabled="saving || publishing" data-testid="flow-apply-to-source" @click="applyToSource">关联到源</button>
-      <button class="fd-secondary" type="button" :disabled="saving || publishing || loadingDetail" data-testid="flow-save" @click="persistFlow()">{{ saving ? '保存中…' : '保存草稿' }}</button>
-      <button class="fd-primary" type="button" :disabled="saving || publishing || loadingDetail || !versionState?.draftFlowId" data-testid="flow-publish" @click="publishVersion">{{ publishing ? '发布中…' : `发布 v${versionState?.draftVersionNo ?? '—'}` }}</button>
+      <button :class="versioned ? 'fd-secondary' : 'fd-primary'" type="button" :disabled="saving || publishing || loadingDetail" data-testid="flow-save" @click="persistFlow()">{{ saving ? '保存中…' : (versioned ? '保存草稿' : '保存流程') }}</button>
+      <button v-if="versioned" class="fd-primary" type="button" :disabled="saving || publishing || loadingDetail || !versionState?.draftFlowId" data-testid="flow-publish" @click="publishVersion">{{ publishing ? '发布中…' : `发布 v${versionState?.draftVersionNo ?? '—'}` }}</button>
     </footer>
   </aside>
 </template>

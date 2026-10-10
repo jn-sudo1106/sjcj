@@ -6,7 +6,8 @@ import NodeInspector from './NodeInspector.vue'
 import EditParamSourceDialog from '@/views/FlowCanvas/source/EditParamSourceDialog.vue'
 import { useFlowStore } from '@/stores/flow'
 import { NODE_CONFIGS, cloneConfig } from '@/views/FlowCanvas/canvas/flowModel'
-import { configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
+import { configApi, entryApi, flowVersionApi, paramApi, ruleApi, sourceApi } from '@/api'
+import { useFlowVersionStore } from '@/stores/flowVersion'
 import { ElMessage } from 'element-plus'
 
 function mockAssets() {
@@ -375,20 +376,6 @@ describe('配置绑定条与节点配置脏状态条（0824-00 §5.4/§6.1）', 
     expect(bar.text()).not.toContain('新建配置')
     w.unmount()
   })
-
-  it('决策节点不参与配置绑定，不显示配置条', async () => {
-    mockAssets()
-    setActivePinia(createPinia())
-    const flow = useFlowStore()
-    flow.configs['dec-1'] = { ...cloneConfig(NODE_CONFIGS['web-list']), kind: 'decision' }
-    flow.select('dec-1')
-
-    const w = mount(NodeInspector)
-    await flushPromises()
-    expect(w.find('.rc-config-bar').exists()).toBe(false)
-    w.unmount()
-  })
-
   it('改节点配置置脏；保存配置后清脏标并把流程置脏', async () => {
     mockAssets()
     setActivePinia(createPinia())
@@ -439,19 +426,6 @@ describe('配置绑定条与节点配置脏状态条（0824-00 §5.4/§6.1）', 
     await flushPromises()
     expect(w.text()).toContain('新建配置 · 未保存')
     expect(saveOf().attributes('disabled')).toBeUndefined()
-    w.unmount()
-  })
-
-  it('决策节点不显示节点配置脏状态条', async () => {
-    mockAssets()
-    setActivePinia(createPinia())
-    const flow = useFlowStore()
-    flow.configs['dec-1'] = { ...cloneConfig(NODE_CONFIGS['web-list']), kind: 'decision' }
-    flow.select('dec-1')
-
-    const w = mount(NodeInspector)
-    await flushPromises()
-    expect(w.find('.rc-insp-foot').exists()).toBe(false)
     w.unmount()
   })
 })
@@ -699,5 +673,94 @@ describe('NodeInspector 定时保存后回查真 jobId（2026-09-22）', () => {
 
     expect(flow.sourceJob?.schedule).toBe('0 0 0 * * ?')
     expect(flow.sourceJob?.jobId).toBe('')
+  })
+})
+
+// 1008-08（二段 §十五）：新建 / 打开流程后默认选中第一个节点，取消「未选择」状态；
+// 「未选择节点」空态只留给一个节点都没有的流程。
+describe('NodeInspector 没有选中节点时自动选第一个（1008-08）', () => {
+  function setup(nodeIds: string[], selected: string) {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    for (const id of nodeIds) flow.configs[id] = cloneConfig(NODE_CONFIGS['rule'])
+    flow.main = ['start', ...nodeIds, 'end']
+    flow.selectedId = selected
+    return flow
+  }
+
+  it('流程里有节点、没有选中：挂载就选第一个真实节点，不显示「未选择节点」', async () => {
+    const flow = setup(['rule-a', 'rule-b'], '')
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+    expect(flow.selectedId).toBe('rule-a')
+    expect(wrapper.text()).not.toContain('未选择节点')
+  })
+
+  it('选中的节点已不存在（旧快照 / 被删）：同样回到第一个节点', async () => {
+    const flow = setup(['rule-a', 'rule-b'], 'ghost')
+    mount(NodeInspector)
+    await flushPromises()
+    expect(flow.selectedId).toBe('rule-a')
+  })
+
+  it('已选中有效节点：不动它', async () => {
+    const flow = setup(['rule-a', 'rule-b'], 'rule-b')
+    mount(NodeInspector)
+    await flushPromises()
+    expect(flow.selectedId).toBe('rule-b')
+  })
+
+  it('挂载之后才加载出节点（新建流程后步骤陆续回来）：也会自动选中', async () => {
+    const flow = setup([], '')
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+    expect(flow.selectedId).toBe('')
+    expect(wrapper.text()).toContain('未选择节点')
+
+    flow.configs['root-1'] = cloneConfig(NODE_CONFIGS['rule'])
+    flow.main = ['start', 'root-1', 'end']
+    await flushPromises()
+    expect(flow.selectedId).toBe('root-1')
+    expect(wrapper.text()).not.toContain('未选择节点')
+  })
+
+  it('一个节点都没有的流程：保留「未选择节点」空态', async () => {
+    const flow = setup([], '')
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+    expect(flow.selectedId).toBe('')
+    expect(wrapper.text()).toContain('未选择节点')
+  })
+})
+
+// 2026-10-10 流程版本（217）：发布版只读——节点设置能滚动、切页签查看，但不给保存入口
+describe('NodeInspector 发布版只读', () => {
+  it('发布版：不显示保存按钮和未保存红点，底部提示先「编辑草稿」；有草稿后恢复保存', async () => {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.loadFromSource(
+      { sourceId: '430024667', name: '江苏金租', url: 'http://x', configId: '1401081', mainTable: '6200036', owner: 'a', state: 'C', flowId: '14010130' } as never,
+      [{ stepId: '41797', sourceId: '430024667', name: '定期报告', dependsOn: ['0'], configId: '1401081', inputTable: '6200036', outputTable: '6200036', enabled: true } as never],
+    )
+    flow.select('41797')
+    const row = (versionId: string, state: string) => ({ versionId, flowVer: state === 'W' ? 2 : 1, ver: 1, state, isLock: 0, isDelete: 0, baseId: null })
+    const overview = vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: true, curVer: 1, nextVer: 2, publishId: '745', draftId: null, versions: [row('745', 'C')] })
+    await useFlowVersionStore().load('14010130')
+
+    const w = mount(NodeInspector)
+    await flushPromises()
+    expect(w.find('.rc-inspector').classes()).toContain('is-readonly')
+    expect(w.find('[data-testid="node-config-save"]').exists()).toBe(false)
+    expect(w.find('.foot-dot').exists()).toBe(false)
+    expect(w.text()).toContain('发布版本只读，点画布上方「编辑草稿」后可修改')
+
+    overview.mockResolvedValue({ enabled: true, curVer: 1, nextVer: 2, publishId: '745', draftId: '1043', versions: [row('1043', 'W'), row('745', 'C')] })
+    await useFlowVersionStore().refresh('14010130')
+    await flushPromises()
+    expect(w.find('.rc-inspector').classes()).not.toContain('is-readonly')
+    expect(w.find('[data-testid="node-config-save"]').exists()).toBe(true)
+    w.unmount()
   })
 })

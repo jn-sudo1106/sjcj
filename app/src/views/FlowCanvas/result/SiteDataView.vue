@@ -28,13 +28,14 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { dataApi, parseNextStepReceipt, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail, type RowQuery, type Step } from '@/api'
 import {
-  buildHorizontalLayout, buildSourceSeed, effectiveInputTable, firstRunnableNodeId, nodeOutputTable, isDecision, isParallel,
+  buildHorizontalLayout, buildSourceSeed, effectiveInputTable, firstRunnableNodeId, nodeOutputTable,
   hasDirectSuccessor, directSuccessorIds, directPredecessorIds, type NodeConfig, type BranchSeed, type FlowBranchGroup,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
 import { fetchNextStepConfig, resolveNextStepConfigFromSteps, type ResolvedNextStepConfig } from '@/utils/flow/nextStepConfig'
 import { confirmOrRun } from '@/utils/confirmDanger'
 import SummaryDrawer from '@/components/data/SummaryDrawer.vue'
+import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
 import DataGrid from './DataGrid.vue'
 import FilePreview from './components/FilePreview.vue'
 import { backTraceSources } from '@/utils/data/backTraceSources'
@@ -461,8 +462,7 @@ const inputTableId = computed(() => {
   if (!selectedNodeId.value || !flowData.value) return ''
   return effectiveInputTable(flowData.value.main, flowData.value.branches, flowData.value.configs, selectedNodeId.value, flowData.value.branchGroups)
 })
-const isStructuralNode = computed(() => !!selectedCfg.value && (isDecision(selectedCfg.value) || isParallel(selectedCfg.value)))
-const hasAnyTable = computed(() => !isStructuralNode.value && (!!outputTableId.value || !!inputTableId.value))
+const hasAnyTable = computed(() => !!outputTableId.value || !!inputTableId.value)
 // 纯查看，没有输入/输出切换：优先看输出表（节点产出的结果），没有输出表的节点看输入表。
 const nodeTableId = computed(() => outputTableId.value || inputTableId.value)
 const sameTable = computed(() => !!inputTableId.value && !!outputTableId.value && inputTableId.value === outputTableId.value)
@@ -481,7 +481,7 @@ const successorTableId = computed(() => {
 // 按「这张表是谁产出的」逐源反查就能算出来，所以 2026-09-17 放开，判定挪到发送时（resolveNextStepFor）。
 const canPickRows = computed(() => {
   if (!selectedSourceId.value) return true
-  return hasSuccessor.value && !isStructuralNode.value
+  return hasSuccessor.value
     && (sameTable.value || !inputTableId.value || !outputTableId.value)
 })
 const selectedRowIds = ref<string[]>([])
@@ -1004,6 +1004,24 @@ async function openBackTraceInSourceView() {
 }
 
 const summaryOpen = ref(false)
+/**
+ * 0930-14B：按当前查询条件导出 Excel（与统计同一套条件），直接打开下载链接，同数据中心。
+ * 只在选了具体源时可用：导出接口不认 siteId / siteIds（2026-10-03 实测），「全部源」时导出的会是
+ * 整张表、连别的网站的数据一起——按网站导出等 0930-14C（后端加参数）。
+ */
+const exportDisabledReason = computed(() => {
+  if (!effectiveTableId.value) return '请先选择一张表'
+  if (!selectedSourceId.value) return '按网站导出暂不支持，请先在左侧选一个源'
+  // 条件改了还没点「查询」：buildSummaryQuery 读的是输入框里的值，导出来会和表格对不上
+  if (filtersDirty.value) return '查询条件已修改，先点「查询」再导出'
+  return ''
+})
+function onExport() {
+  if (exportDisabledReason.value) return
+  window.open(dataApi.exportUrl(buildSummaryQuery()), '_blank')
+}
+// 0930-04：点表名查看当前表的字段结构。meta 是按数据现拼的（metaError 有值）时没有真实结构，表名不可点
+const tableStructOpen = ref(false)
 
 const detail = reactive<{ visible: boolean; index: number }>({ visible: false, index: -1 })
 const detailRow = computed(() => (detail.visible && detail.index >= 0 ? rows.value[detail.index] ?? null : null))
@@ -1244,7 +1262,15 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
         @row-action="onRowAction"
       >
         <template #head>
-          <span class="sdv2-tablename">{{ meta?.tableName || effectiveTableId }}</span>
+          <button
+            v-if="meta && !metaError"
+            type="button"
+            class="sdv2-tablename is-link"
+            data-testid="site-data-table-struct-btn"
+            title="点击查看表结构"
+            @click="tableStructOpen = true"
+          >{{ meta.tableName || effectiveTableId }}</button>
+          <span v-else class="sdv2-tablename">{{ meta?.tableName || effectiveTableId }}</span>
           <span v-if="totalHits !== null" class="sdv2-count" data-testid="site-data-total">共 {{ totalHits.toLocaleString() }} 条</span>
           <span v-else-if="totalHitsLoading" class="muted" data-testid="site-data-total-loading">总数统计中…</span>
           <span class="sdv2-count" :class="{ muted: totalHits !== null }">已加载 {{ rows.length }} 条</span>
@@ -1261,6 +1287,14 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
           >发后续任务</button>
         </template>
         <template #head-right>
+          <button
+            class="rc-btn tiny"
+            type="button"
+            data-testid="site-data-export-btn"
+            :disabled="!!exportDisabledReason"
+            :title="exportDisabledReason || '按当前查询条件导出全部命中的数据（不是当前页），直接下载 Excel'"
+            @click="onExport"
+          >导出 Excel</button>
           <button
             class="rc-btn tiny"
             type="button"
@@ -1416,6 +1450,7 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
       :can-write="false"
     />
     <SummaryDrawer v-model="summaryOpen" :table-meta="meta" :build-query="buildSummaryQuery" :hit-count="rows.length" />
+    <TableDetailDialog v-model="tableStructOpen" :table-meta="meta" />
   </main>
 
     <el-dialog
@@ -1458,6 +1493,8 @@ function onCellFile(path: string, field?: unknown, sourceUrl = '') {
 .sdv2-notice.error { border-bottom-color: #fecaca; background: #fef2f2; color: #b91c1c; }
 .sdv2-notice.warn { border-bottom-color: #fde68a; background: #fffbeb; color: #92400e; }
 .sdv2-tablename { font-family: var(--rc-mono, monospace); font-size: 12px; color: var(--rc-text-2); }
+.sdv2-tablename.is-link { padding: 0; border: 0; background: none; color: var(--rc-primary); cursor: pointer; }
+.sdv2-tablename.is-link:hover, .sdv2-tablename.is-link:focus-visible { text-decoration: underline; }
 .sdv2-count { font-size: 12px; color: var(--rc-faint); }
 .sdv2-toolbar :deep(.dcb) { flex: 1; min-width: 200px; }
 .rc-btn.tiny { height: 24px; padding: 0 10px; font-size: 11.5px; }

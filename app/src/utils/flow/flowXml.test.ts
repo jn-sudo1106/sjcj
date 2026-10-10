@@ -34,6 +34,8 @@ function flowFixture(): FlowDef {
           isDetail: false,
         },
         outputTable: 'table-1',
+        // 条件属于节点自己（进入条件），不在分支上（1008-BR-06）
+        entryCondition: { logic: 'AND', items: [{ field: 'title', op: 'contains', value: 'A&B' }] },
         taskCfg: {
           queue: 'queue-a', urlSourceField: 'url', urlRule: 'https://x/$id',
           paramValues: [{ paramId: 'p-date', fieldId: 'publish_date', valueExpr: 'format($VAL$)' }],
@@ -43,13 +45,13 @@ function flowFixture(): FlowDef {
     },
     branchGroups: [{
       ownerId: 'web-list',
-      branches: [{ id: 'branch-1', label: '条件分支 1', condition: { logic: 'AND', items: [{ field: 'title', op: 'contains', value: 'A&B' }] }, chain: [] }],
+      branches: [{ id: 'branch-1', label: '正文', chain: [] }],
     }],
   }
 }
 
 describe('flowXml', () => {
-  it('序列化节点、采集配置、表、参数、任务和条件分支，并转义 XML 特殊字符', () => {
+  it('序列化节点、采集配置、表、参数、任务、进入条件和分支，并转义 XML 特殊字符', () => {
     const xml = flowToXml(flowFixture())
 
     expect(xml).toContain('<flow id="flow-1" name="A &amp; B"')
@@ -62,7 +64,7 @@ describe('flowXml', () => {
     expect(xml).toContain('<paramValue paramId="p-date" fieldId="publish_date" valueExpr="format($VAL$)" />')
     expect(xml).toContain('<context fieldId="title" />')
     expect(xml).toContain('<outColumn fieldId="content" />')
-    expect(xml).toContain('<branch id="branch-1" label="条件分支 1">')
+    expect(xml).toContain('<branch id="branch-1" label="正文">')
     expect(xml).toContain('<condition logic="AND">')
     expect(xml).toContain('<rule field="title" op="contains" value="A&amp;B" />')
   })

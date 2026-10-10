@@ -338,7 +338,7 @@ describe('CanvasHeader · 流程视图操作', () => {
     useSourceStore().rememberSteps(branched as never, 'replace')
     await flushPromises()
     expect(wrapper.find('[data-testid="flow-branch-flattened"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('已有节点的挂接关系不能在画布上调整')
+    expect(wrapper.text()).toContain('拖动节点不会保存')
   })
 
   it('不再提供同步到源入口', async () => {
