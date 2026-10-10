@@ -430,7 +430,12 @@ export function useStepWrite() {
         }
         throw new Error(`节点「${flow.configs[id].title || id}」缺少步骤快照，请刷新源后再保存`)
       }
-      await persistExisting(id, !branched)
+      // 1008-BR-05：线上插入 / 分叉前插入接管的下游节点，是用户显式改的拓扑，不受分支流程冻结限制；
+      // 但要等它在画布上的新上级已经落库（新节点绑配置建好步骤、拿到真实 ID）才写，否则
+      // lastStepIdsFromCanvas 会跳过草稿上级、算出旧上级——白写一次，还把待改挂提前清掉。
+      const relinkReady = flow.pendingRelinks.includes(id) && isWritableStepId(flow.canvasParentMap.get(id) ?? '')
+      await persistExisting(id, !branched || relinkReady)
+      if (relinkReady) flow.clearPendingRelink(id)
       updated += 1
     }
 

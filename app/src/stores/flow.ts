@@ -191,6 +191,10 @@ export const useFlowStore = defineStore('flow', () => {
   // 孤儿步骤 id（0925）：随 load(def.orphanIds) 载入，仅用于画布标记与「关联到节点」修复，
   // 不参与序列化/保存；重新加载流程时按响应重新推导。
   const orphanIds = ref<string[]>([])
+  // 显式插入后要改挂到新节点下的下游节点 id（1008-BR-05）。有分支的流程自动保存不重算 lastStep
+  // （YB-A 冻结，防畸形拓扑被画布改坏），只有这里登记的节点按画布写；新上级落库前先挂着，
+  // 写成功后由 useStepWrite 清掉。不参与序列化，换流程 / 重新加载时清空。
+  const pendingRelinks = ref<string[]>([])
   let seq = 1
 
   // S6-3（方案 §4.4）：删节点待清理资源清单——本期只收集不真删，见 remove() 里的调用点。
@@ -685,12 +689,17 @@ export const useFlowStore = defineStore('flow', () => {
     const { parentOf, order } = canvasParents()
     parentOf.set(id, parentId)
     for (const c of childIds) parentOf.set(c, id)
+    if (childIds.length) pendingRelinks.value = [...new Set([...pendingRelinks.value, ...childIds])]
     // 接管子节点时新节点就在原位置，排在第一个子节点处（入口上方插入时它要当第一个根）；
     // 只追加时排在最后 = 同级最右
     const firstChild = childIds.length ? order.indexOf(childIds[0]) : -1
     if (firstChild >= 0) order.splice(firstChild, 0, id)
     else order.push(id)
     rebuildTopology(parentOf, order)
+  }
+
+  function clearPendingRelink(id: string) {
+    pendingRelinks.value = pendingRelinks.value.filter((x) => x !== id)
   }
 
   /** 画布上每个节点的上级（1008-BR-04：左右「+」按它判断能否加兄弟、上级有没有输出表） */
@@ -1016,6 +1025,8 @@ export const useFlowStore = defineStore('flow', () => {
       if (b.id === from) b.id = to
     }
     if (selectedId.value === from) selectedId.value = to
+    // 1008-BR-05：插在草稿节点上方时，待改挂的下游本身也是草稿，换绑后跟着换
+    if (pendingRelinks.value.includes(from)) pendingRelinks.value = pendingRelinks.value.map((x) => (x === from ? to : x))
     sourceStore.renameStepSnapshot(from, to)
     return true
   }
@@ -1034,6 +1045,7 @@ export const useFlowStore = defineStore('flow', () => {
     branches.splice(0, branches.length, ...(JSON.parse(JSON.stringify(def.branches)) as BranchSeed[]))
     main.value = [...def.main]
     orphanIds.value = [...(def.orphanIds ?? [])]
+    pendingRelinks.value = []
     sourceCfg.value = def.source ? (JSON.parse(JSON.stringify(def.source)) as Source) : null
     // 0806：历史流程的 Source/TaskConfig 定时字段仍需迁移，但不再把登录节点当作采集起点。
     const firstNodeId = main.value.find((nodeId) => {
@@ -1356,6 +1368,8 @@ export const useFlowStore = defineStore('flow', () => {
     insertAfter,
     insertOnEdge,
     canvasParentMap,
+    pendingRelinks,
+    clearPendingRelink,
     addSibling,
     parentOfNode,
     childrenOfNode,
