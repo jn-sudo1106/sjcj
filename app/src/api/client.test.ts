@@ -153,12 +153,13 @@ describe('业务 API 真实请求鉴权', () => {
     // 真实响应：{success:true, code:"0", msg:"操作成功，请等待处理，本次发送:0 条任务", data:0}
     // data:0 是"本次发送 0 条"的诊断数字，不是调用方要的载荷；旧逻辑 `data !== null` 对 0 成立，
     // 把标量 0 当整个响应体返回，msg 被静默丢弃，UI 只能落到兜底文案"操作已提交（演示）"。
+    // 1008-10：标量 data 一并带回（data 字段），供同步服务 add 类接口展示新增记录 id；nextStep2 只读 message 不受影响。
     fetchMock.mockResolvedValue(jsonResponse({ success: true, code: '0', msg: '操作成功，请等待处理，本次发送:0 条任务', data: 0 }))
     const { request } = await import('./client')
 
     const result = await request<{ message?: string }>('source/nextStep2', {}, { method: 'POST' })
 
-    expect(result).toEqual({ ok: true, message: '操作成功，请等待处理，本次发送:0 条任务' })
+    expect(result).toEqual({ ok: true, message: '操作成功，请等待处理，本次发送:0 条任务', data: 0 })
   })
 
   it('把真实后端分页响应（count 字段）转换为新平台分页结构', async () => {
@@ -461,6 +462,23 @@ describe('生产写守卫', () => {
     await request('config/modifyEntryType', { type: '1' }, { method: 'POST', httpEndpoint: 'config/modifyEntryType' })
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  // 2026-10-10 拍板：来源组写接口除「按筛选范围调整」外都放开
+  it('连生产时，来源组写接口放行，按范围调整成员仍拦截', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
+    fetchMock.mockResolvedValue(jsonResponse({ code: '0', data: null }))
+    const { request } = await import('./client')
+
+    for (const endpoint of ['add', 'update', 'delete', 'changeMembers', 'bindFlows', 'updateBindingState']) {
+      await request(`source-group/${endpoint}`, {}, { method: 'POST', httpEndpoint: `source-group/${endpoint}` })
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(6)
+
+    await expect(request('source-group/changeMembersByRange', {}, {
+      method: 'POST', httpEndpoint: 'source-group/changeMembersByRange', paramsIn: 'query',
+    })).rejects.toThrow(/禁止改删/)
+    expect(fetchMock).toHaveBeenCalledTimes(6)
   })
 
   it('连生产时，未放行的改删仍拦截', async () => {

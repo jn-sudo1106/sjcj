@@ -20,6 +20,14 @@ export type SourceFilter = {
    *  flowId=1400330 得 46 条、与该流程 sourceCnt 一致，传不存在的得 0 条，不是静默忽略。
    *  用它而不是把源 ID 拼进 sourceIds：一个流程最多见过 5439 个源，拼 URL 不现实。 */
   flowId?: string
+  /** 按来源组过滤（1008-03）。`sourcePaged` 服务端认这个条件——2026-10-09 实测
+   *  sourceGroupId=3 得 255 条（twitter1 成员）、sourceGroupId=1 得 22 条；
+   *  只接受正数，传 -1 / 0 报「sourceGroupId 必须为正数」（所以来源组筛选不提供「未归组」）。 */
+  sourceGroupId?: string
+  /** 按默认流程过滤（1008-04）。`sourcePaged` 服务端认这个条件——2026-10-09 实测
+   *  defaultFlowId=21000006 得 256 条（twitter1 的 255 个成员 + 独立源），只匹配默认流程；
+   *  flowId 匹配任一生效关联（含从组继承的），defaultFlowId 只匹配默认，两者独立可同时给。 */
+  defaultFlowId?: string
   name?: string
   /** 按源 URL 子串过滤（2026-09-17）。后端 `sourcePaged` 的 `sourceUrl`，与 `name` 是两个
    *  独立条件、同时给则取交集——实测 name=盛科 4 条、sourceUrl=centec 1 条、两者同给 1 条、
@@ -92,6 +100,8 @@ export function describeFilters(query: SourceFilter): string {
   const parts: string[] = []
   if (query.sourceIds) parts.push(`源 ID ${query.sourceIds}`)
   if (query.flowId) parts.push(`流程 #${query.flowId}`)
+  if (query.defaultFlowId) parts.push(`默认流程 #${query.defaultFlowId}`)
+  if (query.sourceGroupId) parts.push(`来源组 #${query.sourceGroupId}`)
   if (query.name) parts.push(`名称含「${query.name}」`)
   // NULL / NOT NULL 是后端认的空值标记（2026-09-29），照字面写成「URL 含「NULL」」会看不懂
   if (query.sourceUrl?.toUpperCase() === 'NULL') parts.push('URL 为空')

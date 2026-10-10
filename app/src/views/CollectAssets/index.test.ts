@@ -42,8 +42,9 @@ async function mountAssets(query: Record<string, string> = {}, preference: 'syst
 
 describe('采集资产 · tab 壳', () => {
   // 0917-17（2026-09-21）加了收藏 tab；0924-01 把排序下拉里的「最近打开」也提成 tab，
-  // 收藏 tab 改名「我的收藏」（源列表视图下列的是收藏的源）。
-  it('三个 tab：网站列表 + 我的收藏 + 最近打开', async () => {
+  // 收藏 tab 改名「我的收藏」（源列表视图下列的是收藏的源）；1008-03 加过「来源组」（我的分组后），
+  // 2026-10-13 移到系统设置，这里回到四个。
+  it('四个 tab：系统目录 + 我的分组 + 我的收藏 + 最近打开', async () => {
     const { wrapper } = await mountAssets()
     const tabs = wrapper.findAll('.ca-tab-link')
     expect(tabs.map((b) => b.text())).toEqual(['系统目录', '我的分组', '我的收藏', '最近打开'])
@@ -71,7 +72,7 @@ describe('采集资产 · tab 壳', () => {
 
   it('点「最近打开」tab 地址变成 ?tab=recent（可存书签）', async () => {
     const { wrapper, router } = await mountAssets()
-    await wrapper.findAll('.ca-tab-link')[3]!.trigger('click')
+    await wrapper.findAll('.ca-tab-link').find((b) => b.text() === '最近打开')!.trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.query).toEqual({ tab: 'recent' })
   })

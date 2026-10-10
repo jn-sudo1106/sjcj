@@ -685,7 +685,7 @@ async function confirmRebindDelete(mode: 'replace' | 'unbind') {
   const target = rebindTargets.value.find((t) => t.id === rebindDelete.targetFlowId)
   const action = mode === 'replace'
     ? `把 ${rebindDelete.sourceTotal} 个源更换到流程「${target?.name ?? '#' + rebindDelete.targetFlowId}」`
-    : `解绑全部 ${rebindDelete.sourceTotal} 个源（这些源将回到「未关联流程」状态）`
+    : `从流程「${flow.name}」解绑全部 ${rebindDelete.sourceTotal} 个源（1008-06：只断这条流程的关联，这些源关联的其它流程不受影响）`
   try {
     await ElMessageBox.confirm(
       `流程「${flow.name}」仍有 ${rebindDelete.sourceTotal} 个源挂载，删除前必须先处理这些源。\n`
@@ -702,7 +702,11 @@ async function confirmRebindDelete(mode: 'replace' | 'unbind') {
     const batches = Math.ceil(rebindDelete.sourceIds.length / BIND_BATCH_SIZE)
     for (let i = 0; i < batches; i++) {
       const chunk = rebindDelete.sourceIds.slice(i * BIND_BATCH_SIZE, (i + 1) * BIND_BATCH_SIZE)
-      const ack = await flowCenterApi.bindSources(chunk, mode === 'replace' ? rebindDelete.targetFlowId : undefined)
+      // 1008-06：解绑带 currentFlowId 只断这条流程的关联（源关联的其它流程不受影响）；
+      // 更换（replace）不传 currentFlowId——目标流程整体换绑按旧单流程口径走。
+      const ack = mode === 'unbind'
+        ? await flowCenterApi.bindSources(chunk, undefined, flow.id)
+        : await flowCenterApi.bindSources(chunk, rebindDelete.targetFlowId)
       if (!ack.ok) throw new Error(`换绑第 ${i + 1}/${batches} 批失败：${ack.message || '未知原因'}`)
     }
     rebindDelete.open = false

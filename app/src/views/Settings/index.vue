@@ -9,15 +9,18 @@ import { canAccess } from '@/composables/usePermission'
 import { runnerManagementAvailable } from '@/constants/deployGates'
 import NodeTypeTab from './NodeTypeTab.vue'
 import CategoryTab from './CategoryTab.vue'
+import SourceGroupTab from './SourceGroupTab.vue'
 import RunnerManagementTab from './RunnerManagementTab.vue'
 import CodeManagementTab from './CodeManagementTab.vue'
 import CodeRepositoryTab from './CodeRepositoryTab.vue'
 import DirectoryLayoutTab from './DirectoryLayoutTab.vue'
 
-// runner：依赖 Runner 管理服务的 tab，部署环境还没有这个服务，先隐藏（见 runnerManagementAvailable）
+// 来源组（1008-03）：从采集资产页签条移到系统设置（平台配置性质：决定组内源跑哪条流程）。
+// runner：依赖 Runner 管理服务的 tab，部署环境还没有这个服务，先隐藏（见 runnerManagementAvailable；10-10 用户再次确认隐藏）
 const ALL_TABS: { key: string; label: string; permission: string; comp: Component; runner?: true }[] = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', comp: NodeTypeTab },
   { key: 'category', label: '分类目录', permission: 'settings:category', comp: CategoryTab },
+  { key: 'source-group', label: '来源组', permission: 'settings:sourceGroup', comp: SourceGroupTab },
   { key: 'runners', label: 'Runner 实例', permission: 'settings:runners', comp: RunnerManagementTab, runner: true },
   { key: 'assignments', label: '队列分配', permission: 'settings:assignments', comp: RunnerManagementTab, runner: true },
   { key: 'site-code', label: '节点代码', permission: 'settings:releases', comp: CodeManagementTab, runner: true },

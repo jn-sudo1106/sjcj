@@ -186,6 +186,34 @@ export interface WorkflowBinding {
   updatedAt?: string
 }
 
+/** 来源组状态（source-group/*，bee-config SourceGroupController） */
+export type SourceGroupState = 'ACTIVE' | 'DISABLED'
+
+/** 后端「来源组」：配置相同的源归一组，组绑定流程，成员继承（与 leo 的本地分组 sourceGroups.ts 是两个概念）。 */
+export interface SourceGroup {
+  sourceGroupId: string
+  sourceGroupCode: string
+  sourceGroupName: string
+  description?: string
+  state: SourceGroupState
+  authGroupId?: number
+  /** 当前可用默认；组停用时为空 */
+  defaultFlowId?: string
+  /** 启用中的绑定流程 */
+  flowIds: string[]
+  revision: number
+  updatedAt?: string
+}
+
+/** 按筛选范围批量调整来源组成员的结果（source-group/changeMembersByRange）。 */
+export interface MembershipRangeResult {
+  total: number
+  joined: number
+  moved: number
+  left: number
+  unchanged: number
+}
+
 /** 来源 / 来源组的一条流程绑定原始行（source-group/sourceFlows 的 bindings，含停用行）。 */
 export interface SourceFlowBind {
   id: string
@@ -194,7 +222,7 @@ export interface SourceFlowBind {
   sourceGroupId?: string
   flowId: string
   isDefault: boolean
-  state: 'ACTIVE' | 'DISABLED'
+  state: SourceGroupState
   revision: number
   updatedAt?: string
 }
@@ -752,4 +780,6 @@ export interface SendSnatchWithParamPayload {
   include: string[]
   skip: number
   queue?: string
+  /** 指定用哪条流程跑这一次（1008-04「指定流程运行一次」，旧平台 source.js 同口径，放 query） */
+  flowId?: string
 }

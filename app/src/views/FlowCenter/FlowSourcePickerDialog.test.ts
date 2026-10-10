@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import FlowSourcePickerDialog from './FlowSourcePickerDialog.vue'
-import { flowCenterApi, sourceApi, type Source } from '@/api'
+import { flowCenterApi, sourceApi, sourceGroupApi, type Source } from '@/api'
 
 const FLOW = { id: 'flow-1', name: '新闻流程' } as never
 
@@ -28,6 +28,12 @@ function mountDlg(modelValue: string[] = []) {
   })
 }
 
+beforeEach(() => {
+  // 1008-06：组件挂载会拉来源组名映射
+  vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([
+    { sourceGroupId: '3', sourceGroupCode: 'twitter1', sourceGroupName: 'twitter1', state: 'ACTIVE', flowIds: [], revision: 1 },
+  ] as never)
+})
 afterEach(() => vi.restoreAllMocks())
 
 describe('FlowSourcePickerDialog', () => {
@@ -149,5 +155,41 @@ describe('FlowSourcePickerDialog', () => {
     expect(btn.attributes('disabled')).toBeUndefined()
     await btn.trigger('click')
     expect(w.emitted('confirm')).toHaveLength(1)
+  })
+})
+
+describe('FlowSourcePickerDialog · 1008-06 来源组', () => {
+  it('组内源禁选并标「组统一配置：组名」；点行/勾选都选不上', async () => {
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 2, list: [src('g1', { sourceGroupId: '3' }), src('free')],
+    })
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+
+    const w = mountDlg([])
+    await flushPromises()
+
+    // 组内源行标「组统一配置：twitter1」，勾选框禁用
+    expect(w.text()).toContain('组统一配置：twitter1')
+    const checks = w.findAll('[data-testid="fsp-row-check"]')
+    expect((checks[0].element as HTMLInputElement).disabled).toBe(true)
+    expect((checks[1].element as HTMLInputElement).disabled).toBe(false)
+
+    // 点组内源行选不上（emit 不变）；点自由源选上
+    await w.findAll('tbody tr')[0].trigger('click')
+    expect(w.emitted('update:modelValue')).toBeUndefined()
+    await w.findAll('tbody tr')[1].trigger('click')
+    expect(w.emitted('update:modelValue')!.at(-1)![0]).toEqual(['free'])
+  })
+
+  it('全选本页跳过组内源；全选全部也跳过并在提示里说明', async () => {
+    const paged = vi.spyOn(sourceApi, 'sourcePaged')
+      .mockResolvedValueOnce({ total: 1, list: [src('g1', { sourceGroupId: '3' }), src('free')] })
+    vi.spyOn(flowCenterApi, 'paged').mockResolvedValue({ total: 0, list: [] })
+
+    const w = mountDlg([])
+    await flushPromises()
+    await w.get('[data-testid="fsp-pick-page"]').trigger('click')
+    expect(w.emitted('update:modelValue')!.at(-1)![0]).toEqual(['free'])
+    void paged
   })
 })

@@ -446,7 +446,7 @@ describe('流程中心 · 操作列', () => {
     expect(remove).toHaveBeenCalledWith(['flow-10086'])
   })
 
-  it('有源流程：「仅解绑并删除」不带目标流程，随后删除（F1 解绑路径）', async () => {
+  it('有源流程：「仅解绑并删除」不带目标流程但带 currentFlowId（1008-06：只断本条关联），随后删除（F1 解绑路径）', async () => {
     const w = await mountCenter([{ ...FLOWS[0], sourceCnt: 1 }])
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
     vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [{ sourceId: '11', name: '源甲' }] } as never)
@@ -459,7 +459,7 @@ describe('流程中心 · 操作列', () => {
     await w.get('[data-testid="rebind-unbind-delete"]').trigger('click')
     await flushPromises()
 
-    expect(bind).toHaveBeenCalledWith(['11'], undefined)
+    expect(bind).toHaveBeenCalledWith(['11'], undefined, 'flow-10086')
     expect(remove).toHaveBeenCalledWith(['flow-10086'])
   })
 

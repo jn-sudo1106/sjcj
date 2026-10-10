@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, shallowMount, type VueWrapper } from '@vue/test-utils'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SourceOverviewView from './SourceOverviewView.vue'
-import { favoriteApi, siteApi, sourceApi, type Source } from '@/api'
+import { favoriteApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type Source } from '@/api'
 import { favoriteSourceIds } from '@/utils/sourceFavorites'
 import * as xlsxExport from '@/utils/format/xlsxExport'
 import { createPinia, setActivePinia } from 'pinia'
@@ -1177,7 +1177,7 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     expect(lastQ(page)?.sourceIds).toBeUndefined()
   })
 
-  it('同一字段只能一行：别的行占了的字段置灰；五个字段加满后没有「+」', async () => {
+  it('同一字段只能一行：别的行占了的字段置灰；六个字段加满后没有「+」', async () => {
     const { wrapper } = await mountWithSpy()
     await add(wrapper)
     const secondOptions = fields(wrapper)[1]!.findAll('option')
@@ -1186,7 +1186,9 @@ describe('源视图 · 查询多条件（2026-09-28）', () => {
     await add(wrapper)
     await add(wrapper)
     await add(wrapper)
-    expect(fields(wrapper).map((f) => (f.element as HTMLSelectElement).value)).toEqual(['sourceIds', 'name', 'sourceUrl', 'remark', 'flowId'])
+    await add(wrapper)
+    // 1008-04 加了「默认流程 ID」条件字段（defaultFlowId），字段数从 5 变 6
+    expect(fields(wrapper).map((f) => (f.element as HTMLSelectElement).value)).toEqual(['sourceIds', 'name', 'sourceUrl', 'remark', 'flowId', 'defaultFlowId'])
     expect(wrapper.find('[data-testid="source-overview-condition-add"]').exists()).toBe(false)
   })
 
@@ -1615,5 +1617,90 @@ describe('源视图 · 源收藏（0924-08）', () => {
     expect(page).not.toHaveBeenCalled()
     expect(xlsx).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalledWith('当前查询条件没有命中任何源')
+  })
+})
+
+describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
+  const GROUP_SOURCE: Source = { sourceId: '391000500', name: '组内源', sourceGroupId: '3', state: 'C', siteId: 's1', url: '', configId: '', mainTable: '', owner: '' }
+  const INDEP_SOURCE: Source = { sourceId: '430024667', name: '独立源', sourceGroupId: undefined, state: 'C', siteId: 's2', defaultFlowId: '14010130', url: '', configId: '', mainTable: '', owner: '' }
+
+  async function mountGroupOps(sourceList: Source[] = [GROUP_SOURCE, INDEP_SOURCE]) {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: sourceList.length, list: sourceList })
+    vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([
+      { sourceGroupId: '3', sourceGroupCode: 'twitter1', sourceGroupName: 'twitter1', state: 'ACTIVE', flowIds: ['21000005', '21000006'], defaultFlowId: '21000006', revision: 2 },
+      { sourceGroupId: '1', sourceGroupCode: 'test1', sourceGroupName: '测试组1', state: 'ACTIVE', flowIds: [], revision: 1 },
+    ])
+    vi.spyOn(flowCenterApi, 'list').mockResolvedValue([])
+    const wrapper = mount(SourceOverviewView, { props: { currentSiteId: '', groupOps: true }, attachTo: document.body })
+    await flushPromises()
+    page.mockClear()
+    return { wrapper, page }
+  }
+
+  it('groupOps 时显示来源组 / 默认流程 / 流程配置三列', async () => {
+    const { wrapper } = await mountGroupOps()
+    expect(wrapper.find('[data-testid="source-overview-group-link"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="source-overview-default-flow"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="source-overview-flow-config"]').exists()).toBe(true)
+    // 独立源默认流程显示 ID
+    expect(wrapper.text()).toContain('14010130')
+    // 未归组显示 —
+    const groupText = wrapper.findAll('.sov-group').map((n) => n.text())
+    expect(groupText.some((t) => t.includes('—'))).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('非 groupOps（收藏页签）不显示三列', async () => {
+    const { wrapper } = await mountGroupOps()
+    // groupOps=false 时（收藏 / 最近页签）三列隐藏
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [GROUP_SOURCE] })
+    await wrapper.setProps({ groupOps: false })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="source-overview-group-link"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="source-overview-flow-config"]').exists()).toBe(false)
+    page.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('来源组筛选：选组后查询带 sourceGroupId；不含「未归组」选项', async () => {
+    const { wrapper, page } = await mountGroupOps()
+    const groupSelect = wrapper.find('[data-testid="source-overview-group"]')
+    expect(groupSelect.exists()).toBe(true)
+    const options = groupSelect.findAll('option')
+    expect(options.map((o) => o.attributes('value'))).toEqual(['', '3', '1'])
+    await groupSelect.setValue('3')
+    await wrapper.find('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(page.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ sourceGroupId: '3' }))
+    wrapper.unmount()
+  })
+
+  it('点来源组名发 openSourceGroup 事件', async () => {
+    const { wrapper } = await mountGroupOps()
+    await wrapper.find('[data-testid="source-overview-group-link"]').trigger('click')
+    expect(wrapper.emitted('openSourceGroup')).toEqual([['3']])
+    wrapper.unmount()
+  })
+
+  it('「选中来源」下拉常驻：不勾选也可点（调整来源组按范围；另两项提示需勾选）', async () => {
+    const { wrapper } = await mountGroupOps([GROUP_SOURCE])
+    // 不勾选就有下拉
+    expect(wrapper.find('[data-testid="source-group-ops"]').exists()).toBe(true)
+    // 勾选后仍在
+    const check = wrapper.find('[data-testid="source-check-391000500"]')
+    ;(check.element as HTMLInputElement).click()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="source-group-ops"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('默认流程 ID 条件：选「默认流程 ID」填值后作为 defaultFlowId 发出', async () => {
+    const { wrapper, page } = await mountGroupOps()
+    await wrapper.get('[data-testid="source-overview-search-field"]').setValue('defaultFlowId')
+    await wrapper.get('[data-testid="source-overview-search-text"]').setValue('21000006')
+    await wrapper.get('[data-testid="source-overview-search"]').trigger('click')
+    await flushPromises()
+    expect(page.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ defaultFlowId: '21000006' }))
+    wrapper.unmount()
   })
 })

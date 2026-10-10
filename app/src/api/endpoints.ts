@@ -357,7 +357,20 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'flow/copyTemplateSteps', desc: '把模板下的普通步骤复制到目标流程（自动改 FLOW_ID、重映射上下游、根节点依赖保持 0、不复制模板自身根节点）', danger: true, live: true },
   { path: 'flow/flowTemplateList', desc: '流程模板下拉候选（templateFlag=1 全量、不分页、不含 flowConf；等价于 flowPaged + onlyTemplate 但不分页）', live: true },
   // 一个源可关联多条流程，有一条默认流程（来源组接口文档，bee-config SourceGroupController，2026-10-08 上线 217）。
-  // 入组的源统一使用组的流程，不能单独改绑。10-09 起画布流程标签栏接这两条；来源组本身的增删改后续再登记。
+  // 入组的源统一使用组的流程，不能单独改绑。10-09 起画布流程标签栏接 sourceFlows/bindSourceFlows；
+  // 10-12 起来源组本身的增删改查与成员/绑定管理（1008-02/03/04）用下面这 14 条。
+  { path: 'source-group/list', desc: '来源组列表（不分页）', live: true },
+  { path: 'source-group/detail', desc: '来源组详情（含 flowIds/revision）', live: true },
+  { path: 'source-group/members', desc: '来源组成员分页（无 total，前端请求 limit+1 条判下一页）', live: true },
+  { path: 'source-group/add', desc: '新建来源组（admin）', danger: true, live: true },
+  { path: 'source-group/update', desc: '修改来源组（admin；必须带编辑前 revision）', danger: true, live: true },
+  { path: 'source-group/delete', desc: '删除来源组（admin；必须带编辑前 revision）', danger: true, live: true },
+  { path: 'source-group/changeMembers', desc: '按源 ID 列表调整组成员（target/expected 为 null 时 JSON 必须显式写 null；target=-1 退组）', danger: true, live: true },
+  { path: 'source-group/changeMembersByRange', desc: '按筛选范围批量调整组成员（参数全在 query；target=-1 退组；无范围条件必须 confirmAll=true）', danger: true, live: true },
+  { path: 'source-group/bindFlows', desc: '来源组整体绑定流程（admin；带 revision 并发快照）', danger: true, live: true },
+  { path: 'source-group/bindings', desc: '来源（或来源组）的流程绑定行（含停用行）', live: true },
+  { path: 'source-group/updateBindingState', desc: '启用/停用一条流程绑定（admin；回传 id/sourceId/sourceGroupId/flowId/revision）', danger: true, live: true },
+  { path: 'source-group/flowIds', desc: '来源列表当前生效流程并集（GET sourceIds 逗号串；上限 5000，超过分片）', live: true },
   { path: 'source-group/sourceFlows', desc: '来源（或来源组）的流程绑定：生效列表、默认流程、原始绑定行；入组的源自动跟随其组', live: true },
   { path: 'source-group/bindSourceFlows', desc: '来源独立流程整体保存（admin；带并发快照，入组的源会被后端拒绝）', danger: true, live: true },
   // 只登记不接：旧平台「生成配置」入口，本平台没有对应场景（Y8-16）。

@@ -14,6 +14,7 @@ const directories = useSourceGroupsStore()
 //
 // 「表 ID 列表」2026-09-19 迁到数据中心（/data?tab=entry）——表结构属于"数据"那条线，
 // 这里管的是网站与源。**tab 条先保留**（虽然只剩一项）。
+// 1008-03「来源组」2026-10-13 移到系统设置（Settings）——平台配置性质，不属于日常浏览入口。
 const TABS: { key: string; label: string }[] = [
   { key: 'source', label: '系统目录' },
   { key: 'personal', label: '我的分组' },

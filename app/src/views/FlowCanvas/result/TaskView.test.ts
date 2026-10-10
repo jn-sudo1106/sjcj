@@ -480,6 +480,75 @@ describe('TaskView', () => {
     wrapper.unmount()
   })
 
+  // 2026-10-10：topTaskPaged 不带任何过滤参数时后端直接回空（topTaskPaged-api.md §三-2），任务中心一打开就是空表。
+  it('任务中心默认查「今天 + 异常」；清空后没有条件不发请求，提示先选条件', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    const d = new Date()
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    const paged = vi.spyOn(sourceApi, 'sourceTaskPaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(TaskView, {
+      props: { global: true },
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await flushPromises()
+
+    expect(paged).toHaveBeenCalledTimes(1)
+    expect(paged).toHaveBeenLastCalledWith(expect.objectContaining({ startTime: today, endTime: today, state: 'E', page: 1 }))
+    expect(wrapper.get('[data-testid="task-empty"]').text()).toBe('没有匹配的任务记录')
+
+    const clearBtn = wrapper.findAll('button').find((b) => b.text() === '清空')!
+    await clearBtn.trigger('click')
+    await flushPromises()
+    expect(paged).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="task-empty"]').text()).toContain('请至少选择')
+
+    wrapper.unmount()
+  })
+
+  it('任务中心查询超过 2 秒显示已等待秒数，返回后提示消失', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      setActivePinia(createPinia())
+      await router.push('/canvas')
+      let resolve!: (v: { total: number; list: TaskInst[] }) => void
+      vi.spyOn(sourceApi, 'sourceTaskPaged').mockImplementation(() => new Promise((r) => { resolve = r }))
+      const wrapper = shallowMount(TaskView, {
+        props: { global: true },
+        global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+      })
+      await flushPromises()
+      vi.advanceTimersByTime(1000)
+      await flushPromises()
+      expect(wrapper.find('[data-testid="task-slow-hint"]').exists()).toBe(false)
+      vi.advanceTimersByTime(2000)
+      await flushPromises()
+      expect(wrapper.get('[data-testid="task-slow-hint"]').text()).toContain('已等待 3 秒')
+      resolve({ total: 0, list: [] })
+      await flushPromises()
+      expect(wrapper.find('[data-testid="task-slow-hint"]').exists()).toBe(false)
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('查询超时（请求被中断）提示加条件，不显示「signal is aborted」原文', async () => {
+    setActivePinia(createPinia())
+    await router.push('/canvas')
+    vi.spyOn(sourceApi, 'sourceTaskPaged').mockRejectedValue(new Error('请求异常 [source/sourceTaskPaged]: signal is aborted without reason'))
+    const warn = vi.spyOn(ElMessage, 'warning')
+    const wrapper = shallowMount(TaskView, {
+      props: { global: true },
+      global: { plugins: [router], directives: { loading: {} }, stubs: { CanvasHeader: true } },
+    })
+    await flushPromises()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('查询超时'))
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('aborted'))
+    wrapper.unmount()
+  })
+
   it('查询失败时把后端给的原因带出来（如时间范围不合法）', async () => {
     setActivePinia(createPinia())
     await router.push('/canvas')

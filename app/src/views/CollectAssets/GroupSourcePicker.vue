@@ -2,10 +2,20 @@
 import { ref, watch } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { sourceApi, type Source } from '@/api'
+import { sourceApi, sourceGroupApi, type Source } from '@/api'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
-const props = defineProps<{ modelValue: boolean; groupId: string }>()
-const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
+const props = withDefaults(defineProps<{
+  modelValue: boolean
+  groupId: string
+  /** 1008-03 来源组「添加源」：true 时保存走 `source-group/changeMembers` 加入后端来源组，
+   *  而不是本机分组 store。选中的源分属不同组时分批提交（changeMembers 一次只接受一个 expected）。 */
+  backendMode?: boolean
+}>(), { backendMode: false })
+const emit = defineEmits<{
+  'update:modelValue': [value: boolean]
+  /** backendMode 保存成功后通知父级重拉（revision 会变） */
+  saved: []
+}>()
 const groups = useSourceGroupsStore()
 const field = ref<'name' | 'sourceIds'>('name')
 const keyword = ref('')
@@ -41,12 +51,38 @@ watch(() => props.modelValue, open => {
 function toggle(id: string) {
   selected.value = selected.value.includes(id) ? selected.value.filter(value => value !== id) : [...selected.value, id]
 }
-function save() {
+function selectedRows(): Source[] {
+  return rows.value.filter((r) => selected.value.includes(r.sourceId))
+}
+async function save() {
+  if (!props.backendMode) {
+    try {
+      groups.assign(selected.value, [props.groupId])
+      ElMessage.success('已加入分组，已有成员自动去重')
+      emit('update:modelValue', false)
+    } catch (e) { ElMessage.error(e instanceof Error ? e.message : '本机保存失败') }
+    return
+  }
+  // backend 模式：按源当前归属分批 changeMembers（expected 只接受一个）
+  const byGroup = new Map<string | null, string[]>()
+  for (const row of selectedRows()) {
+    const key = row.sourceGroupId || null
+    byGroup.set(key, [...(byGroup.get(key) ?? []), row.sourceId])
+  }
+  let joined = 0
   try {
-    groups.assign(selected.value, [props.groupId])
-    ElMessage.success('已加入分组，已有成员自动去重')
+    for (const [expected, sourceIds] of byGroup) {
+      await sourceGroupApi.changeMembers({ sourceIds, sourceGroupId: props.groupId, expectedSourceGroupId: expected })
+      joined += sourceIds.length
+    }
+    ElMessage.success(`已加入来源组 ${selected.value.length} 个源`)
+    emit('saved')
     emit('update:modelValue', false)
-  } catch (e) { ElMessage.error(e instanceof Error ? e.message : '本机保存失败') }
+  } catch (e) {
+    ElMessage.error(`${joined ? `已加入 ${joined} 个，其余` : ''}加入失败：${e instanceof Error ? e.message : String(e)}`)
+    // 前面几批已经生效，父级照样要重拉
+    if (joined) emit('saved')
+  }
 }
 </script>
 <template>

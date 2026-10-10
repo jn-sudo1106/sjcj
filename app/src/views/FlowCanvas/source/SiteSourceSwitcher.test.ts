@@ -46,6 +46,10 @@ function mockApis() {
   vi.spyOn(sourceApi, 'changeSite').mockResolvedValue({ ok: true, message: '已关联' })
   vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ ...templateSource })
   vi.spyOn(flowCenterApi, 'bindSources').mockResolvedValue({ ok: true, message: '已关联' })
+  vi.spyOn(flowCenterApi, 'list').mockResolvedValue([
+    { id: 'flow-100', name: '微博流程', state: 'A' },
+    { id: 'flow-200', name: '停用流程', state: 'D' },
+  ] as never)
   vi.spyOn(paramApi, 'paramPaged').mockResolvedValue({ total: 2, list: [param913, param912] })
   vi.spyOn(paramApi, 'paramDetail').mockImplementation(async (id) => ({ 913: param913, 912: param912 }[id] ?? null))
   vi.spyOn(paramApi, 'genValues').mockImplementation(async (id) => paramSample[id] ?? [])
@@ -1057,3 +1061,43 @@ describe('SiteSourceSwitcher · 数据表模式', () => {
   })
 })
 
+
+describe('SiteSourceSwitcher · 1008-06 新建绑定流程', () => {
+  it('按模板源新建 + 选择绑定流程：复制源后关联所选流程，不关联模板源的流程', async () => {
+    const wrapper = await createWrapper()
+    await wrapper.get('[title="添加源"]').trigger('click')
+    await flushPromises()
+    const inputs = wrapper.findAll('.ssw-add-input')
+    await inputs[0].setValue('带流程源')
+    await inputs[1].setValue('https://bind.example.com')
+    // 绑定流程下拉出现在默认（模板源）模式下，停用流程不在候选
+    const bindSelect = wrapper.get('[data-testid="source-bind-flow"]')
+    const options = bindSelect.findAll('option').map((o) => o.attributes('value'))
+    expect(options).toContain('flow-100')
+    expect(options).not.toContain('flow-200')
+    await bindSelect.setValue('flow-100')
+    await wrapper.get('[data-testid="add-source-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(sourceApi.copySourceAndLocate).toHaveBeenCalledWith(expect.objectContaining({ name: '带流程源', flag: 1 }))
+    expect(flowCenterApi.bindSources).toHaveBeenCalledTimes(1)
+    expect(flowCenterApi.bindSources).toHaveBeenCalledWith(['source-new'], 'flow-100')
+    expect(siteApi.sourceAdd).not.toHaveBeenCalled()
+  })
+
+  it('空白模板没有真实建源接口，不提供绑定流程，也不发绑定请求', async () => {
+    const wrapper = await createWrapper()
+    await wrapper.get('[title="添加源"]').trigger('click')
+    await flushPromises()
+    const inputs = wrapper.findAll('.ssw-add-input')
+    await inputs[0].setValue('纯空白源')
+    await wrapper.get('[data-testid="source-template-mode"]').setValue('blank')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="source-bind-flow"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="add-source-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(siteApi.sourceAdd).toHaveBeenCalled()
+    expect(flowCenterApi.bindSources).not.toHaveBeenCalled()
+  })
+})

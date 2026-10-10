@@ -3,11 +3,19 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import TaskListTab from './TaskListTab.vue'
 import LogsTab from './LogsTab.vue'
+import SqlTaskTab from './SqlTaskTab.vue'
 import ConnectionsTab from './ConnectionsTab.vue'
 
 const route = useRoute()
 const router = useRouter()
-const tabs = [{ key: 'tasks', label: '同步任务' }, { key: 'logs', label: '同步日志' }, { key: 'connections', label: '环境配置' }]
+// 1008-10：SQL 执行 / 建表 SQL 两个页签（10-13 用户定：不带「新」角标），插在同步日志与环境配置之间
+const tabs = [
+  { key: 'tasks', label: '同步任务' },
+  { key: 'logs', label: '同步日志' },
+  { key: 'sql', label: 'SQL 执行' },
+  { key: 'table', label: '建表 SQL' },
+  { key: 'connections', label: '环境配置' },
+]
 const active = computed(() => tabs.some((tab) => tab.key === route.query.tab) ? String(route.query.tab) : 'tasks')
 function select(key: string) { void router.replace({ path: '/sync', query: key === 'tasks' ? {} : { tab: key } }) }
 </script>
@@ -17,7 +25,13 @@ function select(key: string) { void router.replace({ path: '/sync', query: key =
     <div class="sync-tabs">
       <button v-for="tab in tabs" :key="tab.key" type="button" class="sync-tab" :class="{ active: active === tab.key }" @click="select(tab.key)">{{ tab.label }}</button>
     </div>
-    <div class="sync-content"><TaskListTab v-if="active === 'tasks'" /><LogsTab v-else-if="active === 'logs'" /><ConnectionsTab v-else /></div>
+    <div class="sync-content">
+      <TaskListTab v-if="active === 'tasks'" />
+      <LogsTab v-else-if="active === 'logs'" />
+      <SqlTaskTab v-else-if="active === 'sql'" page="sql" />
+      <SqlTaskTab v-else-if="active === 'table'" page="table" />
+      <ConnectionsTab v-else />
+    </div>
   </div>
 </template>
 

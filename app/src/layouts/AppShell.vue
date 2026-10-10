@@ -27,7 +27,7 @@ const auth = useAuthStore()
 
         <main class="rc-pane">
           <router-view v-slot="{ Component }">
-            <KeepAlive :key="auth.info?.id ?? 'signed-out'" include="CollectAssets"><component :is="Component" /></KeepAlive>
+            <KeepAlive :key="auth.info?.id ?? 'signed-out'" :include="['CollectAssets', 'TaskCenter']"><component :is="Component" /></KeepAlive>
           </router-view>
         </main>
       </section>

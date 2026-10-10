@@ -368,6 +368,10 @@ function openSiteFromList(siteId: string) {
   recordSiteVisit(siteId)
   void router.push({ path: '/canvas', query: { siteId, view: 'source', returnTo: route.fullPath } })
 }
+/** 点来源组名（1008-04）：跳到系统设置「来源组」tab 并选中该组（10-13 来源组移到系统设置） */
+function openSourceGroup(sourceGroupId: string) {
+  void router.push({ path: '/settings', query: { tab: 'source-group', group: sourceGroupId } })
+}
 function onToolbarRefresh() {
   if (view.value === 'table') ui.notifySourceListChanged()
   else void refreshAll()
@@ -505,9 +509,11 @@ onUnmounted(() => {
       :scope-site-ids="sourceScopeSiteIds"
       :scope-source-ids="sourceScopeSourceIds"
       :scope-empty-text="sourceScopeEmptyText"
+      :group-ops="scope === 'all'"
       @open-source="openSourceFromList"
       @open-source-data="openSourceFromList($event, 'data')"
       @open-site="openSiteFromList"
+      @open-source-group="openSourceGroup"
     >
       <template #filter-extra>
         <FilterToolbar

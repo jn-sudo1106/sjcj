@@ -4,7 +4,7 @@
 // 提交动作仍在 FlowCenter 的 confirmApply（分批 + 作业条 + 二次确认文案），这里只负责选。
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { flowCenterApi, sourceApi, type FlowRecord, type Source } from '@/api'
+import { flowCenterApi, sourceApi, sourceGroupApi, type FlowRecord, type Source } from '@/api'
 
 const props = defineProps<{
   /** 目标流程；非 null 时弹窗打开 */
@@ -27,6 +27,27 @@ const flowFilter = ref('')
 const flowOptions = ref<{ id: string; name: string }[]>([])
 const flowOptLoading = ref(false)
 const onlyUnbound = ref(false)
+
+// 1008-06：来源组名映射（组内源禁选，行内标「组统一配置：组名」）。
+// 拉一次 sourceGroupApi.list 建 id→name 索引；失败不阻塞（只显示「组统一配置」）。
+const groupNames = ref(new Map<string, string>())
+async function loadGroupNames() {
+  try {
+    const groups = await sourceGroupApi.list()
+    groupNames.value = new Map(groups.map((g) => [g.sourceGroupId, g.sourceGroupName]))
+  } catch {
+    groupNames.value = new Map()
+  }
+}
+/** 组内源：统一使用组流程，不允许单独关联本流程 */
+function inGroup(source: Source): boolean {
+  return !!source.sourceGroupId
+}
+function groupLabel(source: Source): string {
+  const id = source.sourceGroupId
+  if (!id) return ''
+  return `组统一配置：${groupNames.value.get(id) || `组 #${id}`}`
+}
 
 const rows = ref<Source[]>([])
 const total = ref(0)
@@ -54,6 +75,10 @@ function setSelected(ids: string[]) {
   emit('update:modelValue', [...new Set(ids)])
 }
 function toggle(source: Source) {
+  if (inGroup(source)) {
+    ElMessage.warning(groupLabel(source) || '该源在来源组内，流程由组统一配置，不能单独关联')
+    return
+  }
   nameCache.value.set(source.sourceId, source.name)
   const next = selectedSet.value.has(source.sourceId)
     ? props.modelValue.filter((id) => id !== source.sourceId)
@@ -61,8 +86,9 @@ function toggle(source: Source) {
   setSelected(next)
 }
 function pickPage() {
-  visibleRows.value.forEach((s) => nameCache.value.set(s.sourceId, s.name))
-  setSelected([...props.modelValue, ...visibleRows.value.map((s) => s.sourceId)])
+  const pickable = visibleRows.value.filter((s) => !inGroup(s))
+  pickable.forEach((s) => nameCache.value.set(s.sourceId, s.name))
+  setSelected([...props.modelValue, ...pickable.map((s) => s.sourceId)])
 }
 function clearSelected() {
   setSelected([])
@@ -90,12 +116,14 @@ async function pickAllMatching() {
       collected.push(...res.list)
       if (res.list.length < SELECT_ALL_PAGE) break
     }
-    const picked = onlyUnbound.value && props.flow
+    const picked = (onlyUnbound.value && props.flow
       ? collected.filter((s) => String(s.flowId ?? '') !== String(props.flow!.id))
       : collected
+    ).filter((s) => !inGroup(s)) // 1008-06：组内源不能单独关联，全选也跳过
     picked.forEach((s) => nameCache.value.set(s.sourceId, s.name))
     setSelected([...props.modelValue, ...picked.map((s) => s.sourceId)])
-    ElMessage.success(`已选中全部 ${picked.length} 个源`)
+    const skipped = collected.length - picked.length
+    ElMessage.success(`已选中全部 ${picked.length} 个源${skipped ? `（跳过 ${skipped} 个组内源）` : ''}`)
   } catch (e) {
     ElMessage.error(`全选失败：${(e as Error)?.message ?? String(e)}`)
   } finally {
@@ -179,9 +207,13 @@ async function submitByIds() {
     const found = res.list
     const missing = ids.filter((x) => !found.some((s) => s.sourceId === x))
     if (!found.length) { ElMessage.warning(`未找到匹配的源：${missing.join('、')}`); return }
-    found.forEach((s) => nameCache.value.set(s.sourceId, s.name))
-    setSelected([...props.modelValue, ...found.map((s) => s.sourceId)])
-    let msg = `已选中 ${found.length} 个源`
+    // 1008-06：组内源不能单独关联，ID 检索也跳过
+    const pickable = found.filter((s) => !inGroup(s))
+    const skipped = found.length - pickable.length
+    pickable.forEach((s) => nameCache.value.set(s.sourceId, s.name))
+    setSelected([...props.modelValue, ...pickable.map((s) => s.sourceId)])
+    let msg = `已选中 ${pickable.length} 个源`
+    if (skipped) msg += `；跳过 ${skipped} 个组内源`
     if (missing.length) msg += `；${missing.length} 个未找到：${missing.join('、')}`
     ElMessage.success(msg)
     idImport.text = ''
@@ -207,6 +239,7 @@ watch(() => props.flow?.id, (id) => {
   idImport.open = false
   idImport.text = ''
   void load()
+  void loadGroupNames()
   void searchFlows('')
 }, { immediate: true })
 </script>
@@ -299,15 +332,20 @@ watch(() => props.flow?.id, (id) => {
           <tr
             v-for="s in visibleRows"
             :key="s.sourceId"
-            :class="{ picked: selectedSet.has(s.sourceId) }"
+            :class="{ picked: selectedSet.has(s.sourceId), 'in-group': inGroup(s) }"
             @click="toggle(s)"
           >
-            <td class="fsp-check-col"><input type="checkbox" :checked="selectedSet.has(s.sourceId)" @click.stop="toggle(s)"></td>
+            <td class="fsp-check-col"><input type="checkbox" :checked="selectedSet.has(s.sourceId)" :disabled="inGroup(s)" data-testid="fsp-row-check" @click.stop="toggle(s)"></td>
             <td class="fsp-mono">{{ s.sourceId }}</td>
             <td>{{ s.name }}</td>
             <td>{{ s.siteName || s.siteId || '—' }}</td>
             <td>{{ stateText(s) }}</td>
-            <td><span class="fsp-flowtag" :class="flowTag(s).cls">{{ flowTag(s).text }}</span></td>
+            <td>
+              <template v-if="inGroup(s)">
+                <span class="fsp-flowtag group" :title="groupLabel(s)" data-testid="fsp-group-tag">{{ groupLabel(s) }}</span>
+              </template>
+              <span v-else class="fsp-flowtag" :class="flowTag(s).cls">{{ flowTag(s).text }}</span>
+            </td>
           </tr>
           <tr v-if="!visibleRows.length && !loading">
             <td colspan="6" class="fsp-empty">{{ error || (onlyUnbound ? '本页没有未关联到本流程的源' : '没有匹配的源') }}</td>
@@ -381,5 +419,9 @@ watch(() => props.flow?.id, (id) => {
 .fsp-flowtag.self { background: var(--rc-ok-bg, #ecfdf5); color: var(--rc-ok, #059669); border: 1px solid currentColor; }
 .fsp-flowtag.other { background: #fffbeb; color: #b45309; border: 1px solid #fcd34d; }
 .fsp-flowtag.none { background: #f1f5f9; color: var(--rc-faint); border: 1px solid var(--rc-border); }
+.fsp-flowtag.group { background: #eef2ff; color: #4f46e5; border: 1px solid #c7d2fe; }
+.fsp-table tbody tr.in-group { background: #f8fafc; color: var(--rc-faint); }
+.fsp-table tbody tr.in-group:hover { background: #f1f5f9; }
+.fsp-table tbody tr.in-group td.fsp-check-col input:disabled { cursor: not-allowed; }
 .fsp-pager { display: flex; justify-content: flex-end; margin-top: 8px; }
 </style>

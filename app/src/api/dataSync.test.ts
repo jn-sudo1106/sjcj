@@ -51,3 +51,36 @@ describe('旧数据同步契约', () => {
     expect(generateSyncSql('sense_data.tb_x', rows, true)).toContain("'sense_data.tb_x' as source_table")
   })
 })
+
+describe('SQL 执行 / 建表任务（1008-10，接口文档第二版）', () => {
+  it('sqlPage / tablePage：POST 到各自路径，参数带全筛选字段', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(response({ list: [{ id: 101 }], total: 1 }, 1))
+    vi.stubGlobal('fetch', fetchSpy)
+
+    await syncApi.sqlPage({ pageNo: 2, pageSize: 20, customerId: 7, clientId: 3, sourceCode: 'target', status: 0 })
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('/api/sync-platform/sql-execute/page')
+    expect(fetchSpy.mock.calls[0]?.[1].method).toBe('POST')
+    expect(JSON.parse(fetchSpy.mock.calls[0]?.[1].body)).toEqual({ pageNo: 2, pageSize: 20, customerId: 7, clientId: 3, sourceCode: 'target', status: 0 })
+
+    await syncApi.tablePage({ pageNo: 1, pageSize: 10, taskId: 5001, status: 3 })
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe('/api/sync-platform/table-definition/page')
+    expect(JSON.parse(fetchSpy.mock.calls[1]?.[1].body)).toEqual({ pageNo: 1, pageSize: 10, taskId: 5001, status: 3 })
+  })
+
+  it('sqlAdd / tableAdd：POST 新增，标量 data 是新增记录 id（带回 data 字段）', async () => {
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(response(101))
+      .mockResolvedValueOnce(response(205))
+    vi.stubGlobal('fetch', fetchSpy)
+
+    const sqlRes = await syncApi.sqlAdd({ clientId: 3, sourceCode: 'target_mysql', content: 'update t_order set status=1;' })
+    expect(sqlRes).toMatchObject({ ok: true, data: 101 })
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe('/api/sync-platform/sql-execute/add')
+    expect(JSON.parse(fetchSpy.mock.calls[0]?.[1].body)).toEqual({ clientId: 3, sourceCode: 'target_mysql', content: 'update t_order set status=1;' })
+
+    const tableRes = await syncApi.tableAdd({ clientId: 3, taskId: 5001, sourceCode: 'target_mysql', content: 'create table t_order (...);' })
+    expect(tableRes).toMatchObject({ ok: true, data: 205 })
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe('/api/sync-platform/table-definition/add')
+    expect(JSON.parse(fetchSpy.mock.calls[1]?.[1].body)).toEqual({ clientId: 3, taskId: 5001, sourceCode: 'target_mysql', content: 'create table t_order (...);' })
+  })
+})

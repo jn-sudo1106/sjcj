@@ -2,7 +2,7 @@
 // 源侧栏：页面级左侧固定栏，流程、数据、文件和任务视图共用。
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
-import { CHANGE_SITE_CHUNK, flowCenterApi, siteApi, sourceApi, type Site, type SourceCategory, type Source, type UsedTable } from '@/api'
+import { CHANGE_SITE_CHUNK, flowCenterApi, siteApi, sourceApi, type FlowRecord, type Site, type SourceCategory, type Source, type UsedTable } from '@/api'
 import SiteTablePanel from './SiteTablePanel.vue'
 import SourceParamModal from './SourceParamModal.vue'
 import { importProgressText } from './importProgress'
@@ -480,7 +480,25 @@ const addDlg = reactive({
   templateMode: 'blank' as TemplateMode,
   templateSourceId: '',
   kind: 'normal' as SourceKind,
+  /**
+   * 1008-06：按模板源新建时可改绑一条已有流程（作为默认流程）；空 = 跟随模板源的流程。
+   * 只挂在「默认 / 搜索模板源」上：那两项走真实的 source/copySource；空白模板的 site/addSource
+   * 后端没有这个接口、只在本地模拟（2026-10-10 在 217 实测：建源请求没发出，绑流程却真发了、更新 0 条）。
+   */
+  bindFlowId: '',
 })
+const bindFlowOptions = ref<FlowRecord[]>([])
+const bindFlowLoading = ref(false)
+async function loadBindFlowOptions() {
+  bindFlowLoading.value = true
+  try {
+    bindFlowOptions.value = (await flowCenterApi.list()).filter((f) => f.state !== 'D')
+  } catch {
+    bindFlowOptions.value = []
+  } finally {
+    bindFlowLoading.value = false
+  }
+}
 const templateSearch = reactive({ keyword: '', results: [] as Source[], loading: false, open: false })
 const defaultTemplate = computed(() => children.value[0] ?? null)
 const selectedTemplate = computed(() => {
@@ -520,10 +538,12 @@ function openAdd(ev: MouseEvent) {
   addDlg.kind = 'normal'
   addDlg.templateMode = defaultTemplate.value ? 'default' : 'blank'
   addDlg.templateSourceId = ''
+  addDlg.bindFlowId = ''
   templateSearch.keyword = ''
   templateSearch.results = []
   templateSearch.open = false
   resetParamSource()
+  void loadBindFlowOptions()
 }
 function closeAdd() {
   addDlg.show = false
@@ -610,6 +630,8 @@ async function copySourceIntoSite(
   target: { name: string; url: string },
   flag: 0 | 1,
   ownFlow = false,
+  /** 1008-06：指定时新源关联到这条流程，而不是模板源的流程 */
+  bindFlowId = '',
 ): Promise<string | null> {
   const what = flag === 1 ? '及配置' : '（复用原配置）'
   try {
@@ -630,7 +652,11 @@ async function copySourceIntoSite(
     if (ENABLE_SOURCE_COPY_BIND_FLOW && !fromFlowId) {
       fromFlowId = (await sourceApi.sourceDetail(from.sourceId).catch(() => null))?.flowId
     }
-    if (!ENABLE_SOURCE_COPY_BIND_FLOW) {
+    if (bindFlowId) {
+      const bound = await flowCenterApi.bindSources([copied.sourceId], bindFlowId)
+      if (bound.ok) ElMessage.success(`已复制源「${target.name}」${what}，并关联到所选流程 #${bindFlowId}`)
+      else ElMessage.warning(`源已复制并归入本网站（#${copied.sourceId}），但未能关联到流程 #${bindFlowId}（${bound.message || '原因未知'}），可在流程中心手动关联`)
+    } else if (!ENABLE_SOURCE_COPY_BIND_FLOW) {
       ElMessage.success(`已复制源「${target.name}」${what}`)
     } else if (fromFlowId && ownFlow) {
       try {
@@ -722,7 +748,7 @@ async function submitAdd() {
     return
   }
   if (selectedTemplate.value) {
-    const copiedId = await copySourceIntoSite(selectedTemplate.value, target, 1)
+    const copiedId = await copySourceIntoSite(selectedTemplate.value, target, 1, false, addDlg.bindFlowId)
     if (!copiedId) return
     addedId = copiedId
   } else {
@@ -1403,6 +1429,14 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
           <option value="search">搜索并选择全部源</option>
           <option value="blank">空白模板</option>
         </select>
+        <!-- 1008-06：按模板源新建时可改绑一条已有流程（作为默认流程）；空白模板没有真实建源接口，不提供 -->
+        <template v-if="addDlg.templateMode !== 'blank'">
+          <label class="ssw-field-label">绑定流程 <span>（可选）</span></label>
+          <select v-model="addDlg.bindFlowId" class="ssw-add-input" data-testid="source-bind-flow" :disabled="bindFlowLoading">
+            <option value="">跟随模板源的流程</option>
+            <option v-for="f in bindFlowOptions" :key="f.id" :value="f.id">{{ f.name }}（{{ f.id }}）</option>
+          </select>
+        </template>
         <div v-if="addDlg.templateMode === 'search'" class="ssw-template-combobox" @click.stop>
           <input
             v-model="templateSearch.keyword"
@@ -1434,7 +1468,9 @@ const onEnterBindSearch = withoutComposition(() => bindSearch())
           <!-- 界面上不出现旧平台的按钮名（「制作源+配置副本」）：用户看的是这个平台。
                实现上走的确实是旧平台那条 copySource?flag=1，记在 submitAdd 的注释里。 -->
           {{ selectedTemplate
-            ? `将复制「${selectedTemplate.name}」的流程（含其配置）到当前网站，并把新源关联到该流程；不复制表数据与运行记录。`
+            ? addDlg.bindFlowId
+              ? `将按「${selectedTemplate.name}」复制源（含其配置）到当前网站，新源关联所选流程（#${addDlg.bindFlowId}）作为默认流程；不复制表数据与运行记录。`
+              : `将复制「${selectedTemplate.name}」的流程（含其配置）到当前网站，并把新源关联到该流程；不复制表数据与运行记录。`
             : '仅创建名称和 URL，流程从空白画布开始。' }}
         </div>
       </template>

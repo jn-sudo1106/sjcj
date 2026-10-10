@@ -6,8 +6,8 @@ const ROOT = '/api/sync-platform'
 type Id = number | string
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE'
 
-function call<T>(path: string, method: Method, params?: Record<string, unknown>, query?: Record<string, unknown>) {
-  return request<T>(`${ROOT}${path}`, params, {
+function call<T>(path: string, method: Method, params?: Record<string, unknown> | object, query?: Record<string, unknown>) {
+  return request<T>(`${ROOT}${path}`, params as Record<string, unknown> | undefined, {
     mode: 'http', method, query,
     paramsIn: method === 'PUT' && query && !params ? 'query' : undefined,
   })
@@ -57,6 +57,32 @@ export interface SyncStatistic {
   sourceSql?: string; targetSql?: string; createTime?: string; updateTime?: string
 }
 
+// ---- SQL 执行 / 建表任务（1008-10，接口文档《SQL执行与建表任务管理接口文档》第二版）----
+/** 数据同步状态枚举：0 待执行 / 1 可执行 / 2 执行中 / 3 执行完成 / 5 执行异常 */
+export type SyncSqlStatus = 0 | 1 | 2 | 3 | 5
+/** 执行结果：'success' 或错误文本；null = 客户端还没回写 */
+export interface SyncSqlTask {
+  id: Id; clientId: Id; sourceCode: string; content: string
+  result: string | null; status: SyncSqlStatus
+  createTime?: string; updateTime?: string; remark?: string
+}
+export interface SyncTableTask extends SyncSqlTask {
+  taskId?: Id | null
+}
+export interface SyncSqlPageQuery {
+  pageNo: number; pageSize: number
+  customerId?: Id; clientId?: Id; sourceCode?: string; status?: SyncSqlStatus
+}
+export interface SyncTablePageQuery extends SyncSqlPageQuery {
+  taskId?: Id
+}
+export interface SyncSqlAddInput {
+  clientId: Id; sourceCode: string; content: string
+}
+export interface SyncTableAddInput extends SyncSqlAddInput {
+  taskId?: Id
+}
+
 export const syncApi = {
   customers: () => callList<SyncCustomer>('/customer/all'),
   clients: (params: Record<string, unknown>) => call<SyncPage<SyncClient>>('/customer/client/page', 'POST', params),
@@ -82,6 +108,12 @@ export const syncApi = {
   logs: (params: Record<string, unknown>) => call<SyncPage<SyncLog>>('/task-log/log-page', 'POST', params),
   statistics: (params: Record<string, unknown>) => call<SyncPage<SyncStatistic>>('/task-log/statistic-page', 'POST', params),
   taskChoices: (params: Record<string, unknown>) => callList<SyncTask>('/task-overview/list', params),
+  // ---- SQL 执行 / 建表任务（1008-10）----
+  // add 类响应标量 data 是新增记录 id：normalizeHttpPayload 会把它放在返回的 data 字段（见 client.ts）
+  sqlPage: (params: SyncSqlPageQuery) => call<SyncPage<SyncSqlTask>>('/sql-execute/page', 'POST', params),
+  sqlAdd: (params: SyncSqlAddInput) => call<{ ok: true; message: string; data: Id }>('/sql-execute/add', 'POST', params),
+  tablePage: (params: SyncTablePageQuery) => call<SyncPage<SyncTableTask>>('/table-definition/page', 'POST', params),
+  tableAdd: (params: SyncTableAddInput) => call<{ ok: true; message: string; data: Id }>('/table-definition/add', 'POST', params),
 }
 
 export function mapSyncColumns(columns: SyncTableColumn[]): SyncColumnMap[] {

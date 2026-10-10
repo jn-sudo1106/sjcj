@@ -169,6 +169,32 @@ describe('source-group 源多流程绑定 HTTP 契约', () => {
     await expect(workflowBindingApi.createForSource({ sourceId: '430024667', name: '新流程', definition })).rejects.toThrow(/已新建流程 #103，但关联到本源失败：.*目标流程不存在或已删除/)
   })
 
+  it('expected 快照取默认行：默认流程即使已停用也要回传 expectedDefaultFlowId（1008-02 验收）', async () => {
+    // 默认流程 100 已停用，101 启用
+    const view = {
+      sourceId: '430024667',
+      sourceGroupId: null,
+      flowIds: ['101'],
+      defaultFlowId: '100',
+      bindings: [
+        { id: '21', sourceId: '430024667', sourceGroupId: null, flowId: '100', isDefault: 1, state: 'DISABLED', revision: 2 },
+        { id: '22', sourceId: '430024667', sourceGroupId: null, flowId: '101', isDefault: 0, state: 'ACTIVE', revision: 4 },
+      ],
+    }
+    // list 的 GET sourceFlows；bind → save → view 的 GET sourceFlows；再 POST bindSourceFlows
+    fetchMock.mockResolvedValueOnce(ok(view)).mockResolvedValueOnce(ok(view)).mockResolvedValueOnce(ok(null))
+    const { workflowBindingApi } = await load()
+    // 停用行不进编辑初值（列表只有启用的 101），但保存快照必须带停用的默认行 100
+    const rows = await workflowBindingApi.list('430024667')
+    expect(rows.map((r) => r.workflowId)).toEqual(['101'])
+    await workflowBindingApi.bind({ sourceId: '430024667', workflowId: '102' })
+    const [post] = bindCalls()
+    expect(JSON.parse(String(post.init.body))).toMatchObject({
+      expectedFlowIds: ['101'],
+      expectedDefaultFlowId: '100',
+    })
+  })
+
   it('没有版本（草稿 / 发布）接口：available 为 false，ensureDraft / publish 明确报错', async () => {
     const { workflowBindingApi } = await load()
     expect(workflowBindingApi.available()).toBe(false)
