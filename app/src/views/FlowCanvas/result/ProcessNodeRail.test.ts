@@ -88,23 +88,23 @@ describe('ProcessNodeRail', () => {
           outputTable: '900',
         },
       },
-      'decision-node': {
-        ...NODE_CONFIGS['decision'],
-        title: '条件判断',
+      'rule-node': {
+        ...NODE_CONFIGS['rule'],
+        title: '规则处理',
         collectCfg: undefined,
         outputTable: '',
         inputTable: '',
       },
     }
-    const layout = buildHorizontalLayout(['start', 'collect-900', 'decision-node', 'end'], [], customConfigs, [], { includeTerminals: false })
+    const layout = buildHorizontalLayout(['start', 'collect-900', 'rule-node', 'end'], [], customConfigs, [], { includeTerminals: false })
     const wrapper = mount(ProcessNodeRail, { props: { layout } })
 
     const collectEl = wrapper.find('[data-node-id="collect-900"]')
     expect(collectEl.find('.pnr-node-icon').text()).toBe('900')
     expect(collectEl.find('.pnr-node-icon').attributes('title')).toBe('表 ID: 900')
 
-    const decisionEl = wrapper.find('[data-node-id="decision-node"]')
-    expect(decisionEl.find('.pnr-node-icon').text()).toBe('IF')
+    const ruleEl = wrapper.find('[data-node-id="rule-node"]')
+    expect(ruleEl.find('.pnr-node-icon').text()).toBe('R')
   })
 
   it('副标题与提示展示表名（支持显式传入 tableNames 并去除 sense_data. 前缀）', () => {

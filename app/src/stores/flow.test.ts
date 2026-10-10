@@ -47,10 +47,13 @@ describe('flow store 编辑动作', () => {
       { sourceId: '430016398', name: 'test1', url: 'http://x', configId: '1400917', mainTable: '6200026', owner: 'a', state: 'C' } as never,
       [],
     )
-    const ownerId = f.insertAfter(f.main[1], 'decision')!
+    // 1008-BR-06：分支由普通节点分叉，不再靠决策节点
+    const ownerId = f.insertAfter('end', 'web')
+    const first = f.insertAfter(ownerId, 'web')
+    const siblingId = f.addSibling(first, 'web')!
+    expect(f.configs[siblingId].stepSourceId).toBe('-1')
     const group = f.branchGroups.find((bg) => bg.ownerId === ownerId)!
-    const branchId = group.branches[0]!.id
-    const branchNodeId = f.addNodeToBranch(ownerId, branchId, 'web')!
+    const branchNodeId = f.addNodeToBranch(ownerId, group.branches[0]!.id, 'web')!
     expect(f.configs[branchNodeId].stepSourceId).toBe('-1')
   })
 
@@ -228,51 +231,6 @@ describe('复制节点 = 新增一套配置（0828 D02）', () => {
       expect(f.configs[id].configId).toBeUndefined()
       expect(f.configs[id].configName).toBe(f.configs[id].title)
     })
-  })
-
-  // 0926 REVIEW F3：复制带嵌套分叉的节点时，副本嵌套分叉的 owner 重新铸新，
-  // 不沿用原件链节点 id——同一链节点被原件与多份副本同时声明会让 branchGroupOf 命中歧义。
-  it('复制带嵌套分叉的节点：副本嵌套分叉 ownerId 从副本 owner 派生，原件不受影响', () => {
-    // branchGroups 是 reactive 数组：直接赋值会替换 store 闭包外的引用，必须原地 push
-    f.branchGroups.push({
-      ownerId: 'web-list',
-      branches: [{
-        id: 'web-list-b-1', label: '', chain: ['web-detail'],
-        subGroups: [{ ownerId: 'web-detail', branches: [{ id: 'web-detail-b-1', label: '', chain: ['web-rest'] }] }],
-      }],
-    })
-    const newId = f.duplicate('web-list')!
-    const copyGroup = f.branchGroups.find((g) => g.ownerId === newId)!
-    const nested = copyGroup.branches[0].subGroups![0]
-    expect(nested.ownerId).not.toBe('web-detail')
-    expect(nested.ownerId).toMatch(new RegExp(`^${newId}-nested-`))
-    // 原件嵌套分叉保持原 owner
-    expect(f.branchGroups.find((g) => g.ownerId === 'web-list')!.branches[0].subGroups![0].ownerId).toBe('web-detail')
-  })
-})
-
-describe('决策条件分支', () => {
-  let f: ReturnType<typeof useFlowStore>
-  beforeEach(() => {
-    setActivePinia(createPinia())
-    f = useFlowStore()
-    f.newFlow('blank')
-  })
-
-  it('初始化为一个条件分支，新增分支不使用 ELSE 语义', () => {
-    const owner = f.insertAfter('start', 'decision')!
-    const group = f.branchGroups.find((item) => item.ownerId === owner)!
-    expect(group.branches.map((branch) => branch.label)).toEqual(['条件分支 1'])
-    f.addBranch(owner)
-    expect(group.branches.map((branch) => branch.label)).toEqual(['条件分支 1', '条件分支 2'])
-  })
-
-  it('可删除空条件分支，但至少保留一条', () => {
-    const owner = f.insertAfter('start', 'decision')!
-    const second = f.addBranch(owner)!
-    expect(f.removeBranch(owner, second.id)).toEqual({ ok: true })
-    const only = f.branchGroups.find((item) => item.ownerId === owner)!.branches[0]
-    expect(f.removeBranch(owner, only.id).ok).toBe(false)
   })
 })
 
@@ -573,12 +531,11 @@ describe('全节点落库口径（优化 0701 问题二）', () => {
     expect(f.configs[inserted].outputTable).toBe('2101001')
   })
 
-  it('validateFlow：数据类节点缺输出表报错，通知/逻辑控制类不报', () => {
+  it('validateFlow：数据类节点缺输出表报错，通知类不报', () => {
     f.newFlow('blank')
     f.insertAfter('start', 'clean') // 无上游可继承 → 缺输出表
     const cleanId = f.selectedId
     f.insertAfter(cleanId, 'mail') // 通知类不要求输出表
-    f.insertAfter(cleanId, 'decision') // 逻辑控制不要求输出表
     const errs = f.validateFlow()
     expect(errs.filter((e) => e.includes('缺少输出表')).length).toBe(1)
     // 选上表后不再报缺表
@@ -1005,26 +962,25 @@ describe('分支段（0707 Phase6）+ 节点进入条件兼容加载', () => {
     expect(f.branchGroups).toEqual([])
   })
 
-  it('branchGroups 非空时序列化往返：每个分支的 label/condition/chain 全部保留', () => {
+  it('branchGroups 非空时序列化往返：每个分支的 label/chain 全部保留', () => {
     f.branchGroups.push({
-      ownerId: 'decision',
+      ownerId: 'web-list',
       branches: [
-        { id: 'b-if', label: 'IF 命中', condition: { logic: 'AND', items: [{ field: 'status', op: 'eq', value: 'C' }] }, chain: ['ai-extract'] },
-        { id: 'b-else', label: 'ELSE 兜底', condition: undefined, chain: [] },
+        { id: 'b-1', label: '正文', chain: ['ai-extract'] },
+        { id: 'b-2', label: '详情', chain: ['clean'] },
       ],
     })
     const def = f.serialize()
     f.newFlow('blank')
     f.load(JSON.parse(JSON.stringify(def)))
     expect(f.branchGroups).toHaveLength(1)
-    expect(f.branchGroups[0].ownerId).toBe('decision')
+    expect(f.branchGroups[0].ownerId).toBe('web-list')
     expect(f.branchGroups[0].branches).toHaveLength(2)
-    expect(f.branchGroups[0].branches[0].label).toBe('IF 命中')
+    expect(f.branchGroups[0].branches[0].label).toBe('正文')
     expect(f.branchGroups[0].branches[0].chain).toEqual(['ai-extract'])
-    expect(f.branchGroups[0].branches[1].condition).toBeUndefined()
   })
 
-  it('conditionGroupLabel 多字段 AND/OR 展示（Phase 6 重构后仅给分支条件使用）', () => {
+  it('conditionGroupLabel 多字段 AND/OR 展示', () => {
     expect(
       conditionGroupLabel({ logic: 'AND', items: [{ field: 'title', op: 'contains', value: '证券' }, { field: 'amount', op: 'gt', value: '100' }] }, (f) => `字段${f}`),
     ).toBe('字段title 包含 "证券" 且 字段amount 大于 "100"')
@@ -1045,174 +1001,43 @@ describe('分支段（0707 Phase6）+ 节点进入条件兼容加载', () => {
   })
 })
 
-describe('决策/分头分支段 store 操作（0707 Phase6·6.2）', () => {
+describe('分支段 store 操作（旧平台语义，1008-BR-06 重写）', () => {
+  const mk = (stepId: string, dependsOn: string[], outputTable = '900'): Step => ({
+    stepId, sourceId: '430016824', name: `n${stepId}`, dependsOn, inputTable: '900', outputTable, enabled: true,
+  } as Step)
   let f: ReturnType<typeof useFlowStore>
+  // 1 → {2, 3}：还原出来的真实分叉，分叉点 1 是普通节点
   beforeEach(() => {
     setActivePinia(createPinia())
     f = useFlowStore()
-    f.newFlow('blank')
+    f.loadFromSource(
+      { sourceId: '430016824', name: 't', url: 'http://x', configId: 'X', mainTable: '900', owner: 'a', state: 'C' } as never,
+      [mk('1', ['0']), mk('2', ['1']), mk('3', ['1'])],
+    )
   })
 
-  it('insertAfter(decision)：自动创建默认条件分支', () => {
-    const id = f.insertAfter('start', 'decision')
-    expect(f.configs[id].kind).toBe('decision')
-    const g = f.branchGroups.find((bg) => bg.ownerId === id)
-    expect(g).toBeDefined()
-    expect(g!.branches).toHaveLength(1)
-    expect(g!.branches[0].label).toBe('条件分支 1')
+  it('节点库没有「逻辑」分组（决策 / 分头已去掉）', () => {
+    expect(LIB_GROUPS.some((g) => g.title === '逻辑')).toBe(false)
+    expect(TEMPLATE_TO_NODE.decision).toBeUndefined()
+    expect(TEMPLATE_TO_NODE.parallel).toBeUndefined()
   })
 
-  it('insertAfter(parallel)：自动创建路径A + 路径B 两条分支', () => {
-    const id = f.insertAfter('start', 'parallel')
-    expect(f.configs[id].kind).toBe('parallel')
-    const g = f.branchGroups.find((bg) => bg.ownerId === id)
-    expect(g).toBeDefined()
-    expect(g!.branches).toHaveLength(2)
-    expect(g!.branches[0].label).toBe('路径A')
-    expect(g!.branches[1].label).toBe('路径B')
-  })
-
-  it('ensureBranchGroup：已有则不覆盖', () => {
-    const id = f.insertAfter('start', 'decision')
-    const g1 = f.ensureBranchGroup(id, 'decision')
-    expect(g1?.branches).toHaveLength(1)
-    // 再调一次，branches 数量不变
-    f.ensureBranchGroup(id, 'decision')
-    expect(f.branchGroups.find((bg) => bg.ownerId === id)?.branches).toHaveLength(1)
-  })
-
-  it('addBranch(决策)：追加独立条件分支', () => {
-    const id = f.insertAfter('start', 'decision')
-    const elif = f.addBranch(id)
-    expect(elif?.label).toBe('条件分支 2')
-    const g = f.branchGroups.find((bg) => bg.ownerId === id)!
-    expect(g.branches.map((b) => b.label)).toEqual(['条件分支 1', '条件分支 2'])
-    // 再加一条
-    const elif2 = f.addBranch(id)
-    expect(elif2?.label).toBe('条件分支 3')
-    expect(g.branches.map((b) => b.label)).toEqual(['条件分支 1', '条件分支 2', '条件分支 3'])
-  })
-
-  it('addBranch(分头节点)：拒绝', () => {
-    const id = f.insertAfter('start', 'parallel')
-    expect(f.addBranch(id)).toBeNull()
-  })
-
-  it('removeBranch(唯一条件分支)：拒绝', () => {
-    const id = f.insertAfter('start', 'decision')
-    const g = f.branchGroups.find((bg) => bg.ownerId === id)!
-    expect(f.removeBranch(id, g.branches[0].id)).toEqual({ ok: false, reason: '至少保留 1 条分支' })
-  })
-
-  it('removeBranch(只剩 2 条)：拒绝', () => {
-    const id = f.insertAfter('start', 'parallel')
-    const g = f.branchGroups.find((bg) => bg.ownerId === id)!
-    expect(f.removeBranch(id, g.branches[0].id)).toEqual({ ok: false, reason: '至少保留 2 条分支' })
-  })
-
-  it('removeBranch(chain 非空)：拒绝', () => {
-    const id = f.insertAfter('start', 'decision')
-    const child = f.insertAfter(id, 'web')
-    const g = f.branchGroups.find((bg) => bg.ownerId === id)!
-    g.branches[0].chain.push(child)
-    expect(f.removeBranch(id, g.branches[0].id)).toEqual({ ok: false, reason: '分支内还有 1 个节点，请先移除' })
-  })
-
-  it('insertInBranch：默认追加到末尾；指定 index 插入；重复挂载拒绝', () => {
-    const id = f.insertAfter('start', 'decision')
-    const n1 = f.insertAfter('start', 'web')
-    const n2 = f.insertAfter('start', 'web')
-    const g = f.branchGroups.find((bg) => bg.ownerId === id)!
-    const ifBranch = g.branches[0]
-    expect(f.insertInBranch(id, ifBranch.id, n1)).toBe(true)
-    expect(ifBranch.chain).toEqual([n1])
-    expect(f.insertInBranch(id, ifBranch.id, n2, 0)).toBe(true)
-    expect(ifBranch.chain).toEqual([n2, n1])
-    // 重复挂载
-    expect(f.insertInBranch(id, ifBranch.id, n1)).toBe(false)
-    expect(ifBranch.chain).toEqual([n2, n1])
-  })
-
-  it('moveInBranch：上下移边界', () => {
-    const id = f.insertAfter('start', 'decision')
-    const n1 = f.insertAfter('start', 'web')
-    const n2 = f.insertAfter('start', 'web')
-    const n3 = f.insertAfter('start', 'web')
-    const g = f.branchGroups.find((bg) => bg.ownerId === id)!
-    const br = g.branches[0]
-    f.insertInBranch(id, br.id, n1)
-    f.insertInBranch(id, br.id, n2)
-    f.insertInBranch(id, br.id, n3)
-    expect(br.chain).toEqual([n1, n2, n3])
-    // 中间上移
-    expect(f.moveInBranch(id, br.id, 1, 'up')).toBe(true)
-    expect(br.chain).toEqual([n2, n1, n3])
-    // 顶端上移拒绝
-    expect(f.moveInBranch(id, br.id, 0, 'up')).toBe(false)
-    // 底端下移拒绝
-    expect(f.moveInBranch(id, br.id, 2, 'down')).toBe(false)
-  })
-
-  it('moveBranch：移动分支顺序，不误动分支内 chain 节点', () => {
-    const id = f.insertAfter('start', 'decision')
-    f.addBranch(id)
-    const g = f.branchGroups.find((bg) => bg.ownerId === id)!
-    const [ifBranch, elifBranch] = g.branches
-    const n1 = f.insertAfter('start', 'web')
-    const n2 = f.insertAfter('start', 'web')
-    f.insertInBranch(id, elifBranch.id, n1)
-    f.insertInBranch(id, elifBranch.id, n2)
-
-    expect(f.moveBranch(id, elifBranch.id, 'up')).toBe(true)
-
-    expect(g.branches.map((b) => b.id)).toEqual([elifBranch.id, ifBranch.id])
-    expect(elifBranch.chain).toEqual([n1, n2])
-  })
-
-  it('setBranchCondition：每条条件分支均可设置条件', () => {
-    const id = f.insertAfter('start', 'decision')
-    f.addBranch(id)
-    const g = f.branchGroups.find((bg) => bg.ownerId === id)!
-    const secondId = g.branches[1].id
-    expect(f.setBranchCondition(id, secondId, { logic: 'AND', items: [] })).toBe(true)
-  })
-
-  it('setBranchCondition(IF)：可设；setBranchLabel：可改名', () => {
-    const id = f.insertAfter('start', 'decision')
-    const g = f.branchGroups.find((bg) => bg.ownerId === id)!
-    expect(f.setBranchCondition(id, g.branches[0].id, { logic: 'AND', items: [{ field: 'k', op: 'eq', value: 'v' }] })).toBe(true)
-    expect(g.branches[0].condition?.items[0].value).toBe('v')
-    expect(f.setBranchLabel(id, g.branches[0].id, 'IF 命中')).toBe(true)
-    expect(g.branches[0].label).toBe('IF 命中')
-  })
-
-  it('remove(决策 owner)：级联删除整组 FlowBranchGroup + chain 内节点', () => {
-    const owner = f.insertAfter('start', 'decision')
-    const child = f.insertAfter('start', 'web')
-    f.insertInBranch(owner, f.branchGroups[0].branches[0].id, child)
-    expect(f.configs[child]).toBeDefined()
-    expect(f.branchGroups).toHaveLength(1)
-    f.remove(owner)
-    // owner 整组没了
+  it('remove(分叉点)：级联删除整组 FlowBranchGroup + chain 内节点（BR-07 前的现状）', () => {
+    f.remove('1')
     expect(f.branchGroups).toHaveLength(0)
-    // child 从 configs 摘除（chain 内的节点被清理）
-    expect(f.configs[child]).toBeUndefined()
+    expect(f.configs['2']).toBeUndefined()
+    expect(f.configs['3']).toBeUndefined()
   })
 
-  it('remove(branch chain 内节点)：从 chain 摘除 + delete configs（与 main/BranchSeed 行为一致）', () => {
-    const owner = f.insertAfter('start', 'decision')
-    const child = f.insertAfter('start', 'web')
-    f.insertInBranch(owner, f.branchGroups[0].branches[0].id, child)
-    f.remove(child)
-    // 不论节点在哪（main/BranchSeed/chain），remove 都 delete configs（统一策略）
-    expect(f.configs[child]).toBeUndefined()
-    // chain 同步摘除（防止悬挂引用）
-    const g = f.branchGroups.find((bg) => bg.ownerId === owner)!
-    expect(g.branches[0].chain).not.toContain(child)
+  it('remove(branch chain 内节点)：从 chain 摘除 + delete configs', () => {
+    f.remove('3')
+    expect(f.configs['3']).toBeUndefined()
+    expect(f.branchGroups[0].branches.flatMap((b) => b.chain)).not.toContain('3')
   })
 
   // S6-3（方案 §4.4）：技术指导明确"暂时别删"——本期删节点只收集待清理资源清单，不真的调删除接口。
   it('remove(带 scriptPath/configId 的规则节点)：待清理清单记下 scriptPath + configId，节点仍正常删除', () => {
+    f.newFlow('blank')
     const id = f.insertAfter('start', 'rule')
     f.configs[id].configId = '1400998'
     f.patchRuleConfig(id, { mode: 'ref', scriptPath: '/rules/orch-173.py' })
@@ -1226,6 +1051,7 @@ describe('决策/分头分支段 store 操作（0707 Phase6·6.2）', () => {
   })
 
   it('remove(非规则节点，execCfg 带 scriptPath 且节点有 configId)：同样记待清理清单', () => {
+    f.newFlow('blank')
     const id = f.insertAfter('start', 'web')
     f.configs[id].configId = '184'
     f.patchExecConfig(id, { mode: 'ref', scriptPath: '/x/184.xml' })
@@ -1237,125 +1063,53 @@ describe('决策/分头分支段 store 操作（0707 Phase6·6.2）', () => {
   })
 
   it('remove(从没保存过配置的节点)：没有 scriptPath/configId 就不记入清单', () => {
+    f.newFlow('blank')
     const id = f.insertAfter('start', 'web')
     f.remove(id)
     expect(f.pendingCleanup).toHaveLength(0)
   })
 
-  it('validateFlow：决策节点缺条件时拦截（0707 Phase6 6.6）', () => {
-    const owner = f.insertAfter('start', 'decision')
-    const errs = f.validateFlow()
-    expect(errs).toContain(`「${f.configs[owner].title}」第 1 条分支（条件分支 1）缺少条件`)
+  it('validateFlow：chain 节点也走主链节点同套校验（新建分支的采集节点缺源 URL 则拦截）', () => {
+    f.addSibling('3', 'web')
+    expect(f.validateFlow().some((e) => e.includes('缺少源 URL'))).toBe(true)
   })
 
-  it('validateFlow：决策节点条件完整时通过（0707 Phase6 6.6）', () => {
-    const owner = f.insertAfter('start', 'decision')
-    f.setBranchCondition(owner, f.branchGroups[0].branches[0].id, { logic: 'AND', items: [{ field: 'k', op: 'eq', value: 'v' }] })
-    const errs = f.validateFlow()
-    expect(errs).not.toContain(`「${f.configs[owner].title}」第 1 条分支（条件分支 1）缺少条件`)
-  })
+  // 还原出来的都是采集节点，表在 collectCfg 上（nodeOutputTable / nodeInputTable 先读它）
+  const setTable = (id: string, key: 'inputTable' | 'outputTable', table: string) => {
+    const c = f.configs[id]
+    if (c.collectCfg) c.collectCfg[key] = table
+    else c[key] = table
+  }
 
-  it('validateFlow：表达式模式空表达式仍拦截；非空表达式通过（0707 优化·补·表达式模式）', () => {
-    const owner = f.insertAfter('start', 'decision')
-    f.setBranchCondition(owner, f.branchGroups[0].branches[0].id, { mode: 'expr', logic: 'AND', items: [], expr: '' })
-    expect(f.validateFlow()).toContain(`「${f.configs[owner].title}」第 1 条分支（条件分支 1）缺少条件`)
-
-    f.setBranchCondition(owner, f.branchGroups[0].branches[0].id, { mode: 'expr', logic: 'AND', items: [], expr: 'status = "C"' })
-    expect(f.validateFlow()).not.toContain(`「${f.configs[owner].title}」第 1 条分支（条件分支 1）缺少条件`)
-  })
-
-  it('validateFlow：chain 节点也走主链节点同套校验（缺输出表则拦截）', () => {
-    const owner = f.insertAfter('start', 'decision')
-    f.setBranchCondition(owner, f.branchGroups[0].branches[0].id, { logic: 'AND', items: [{ field: 'k', op: 'eq', value: 'v' }] })
-    // 插一个 clean 类节点到 IF 分支（clean 不产数据行 → 不要求输出表）→ 选一个数据节点
-    const child = f.insertAfter('start', 'web')
-    // web 是采集类，缺 url / outputTable 应拦截（即使挂在 chain 里）
-    f.insertInBranch(owner, f.branchGroups[0].branches[0].id, child)
-    const errs = f.validateFlow()
-    expect(errs.some((e) => e.includes('缺少源 URL'))).toBe(true)
-  })
-
-  it('addNodeToBranch：挂进 chain 末尾；输出表自动继承 owner 的有效输入表（0707 Phase6·补·6.4）', () => {
-    // owner（决策）插在 web-list 之后：owner 自己不产表，chain 首节点应递归继承到 web-list 的输出表
-    const listId = f.insertAfter('start', 'web')
-    f.setOutputTable(listId, '2101001')
-    const owner = f.insertAfter(listId, 'decision')
-    const ifBranchId = f.branchGroups[0].branches[0].id
-    const newId = f.addNodeToBranch(owner, ifBranchId, 'parse')
-    expect(newId).not.toBeNull()
-    expect(f.branchGroups[0].branches[0].chain).toEqual([newId])
-    expect(f.configs[newId!].outputTable).toBe('2101001')
-    expect(f.effectiveInputTableFor(newId!)).toBe('2101001')
-  })
-
-  it('addNodeToBranch：链内第二个节点继承链内前一个节点的输出表，而非重新回退到 owner', () => {
-    const owner = f.insertAfter('start', 'decision')
+  it('addNodeToBranch：挂进 chain 末尾；输出表继承链内前一个节点', () => {
+    setTable('2', 'outputTable', 'T2')
     const branchId = f.branchGroups[0].branches[0].id
-    const n1 = f.addNodeToBranch(owner, branchId, 'parse')!
-    f.setOutputTable(n1, 'PARSE_TB')
-    const n2 = f.addNodeToBranch(owner, branchId, 'map')!
-    expect(f.branchGroups[0].branches[0].chain).toEqual([n1, n2])
-    expect(f.effectiveInputTableFor(n2)).toBe('PARSE_TB')
+    const n = f.addNodeToBranch('1', branchId, 'parse')!
+    expect(f.branchGroups[0].branches[0].chain).toEqual(['2', n])
+    expect(f.configs[n].outputTable).toBe('T2')
   })
 
-  it('addNodeToBranch：拒绝往 chain 里塞决策/分头模板（防嵌套分支）', () => {
-    const owner = f.insertAfter('start', 'decision')
-    const branchId = f.branchGroups[0].branches[0].id
-    expect(f.addNodeToBranch(owner, branchId, 'decision')).toBeNull()
-    expect(f.addNodeToBranch(owner, branchId, 'parallel')).toBeNull()
-    expect(f.branchGroups[0].branches[0].chain).toEqual([])
+  it('分支链头没设输入表时，有效输入表 = 分叉点的输出表（旧平台：新步骤输入表 = 上级输出表）', () => {
+    setTable('1', 'outputTable', 'OWNER_OUT')
+    setTable('2', 'inputTable', '')
+    expect(f.effectiveInputTableFor('2')).toBe('OWNER_OUT')
   })
 
   it('addNodeToBranch：ownerId/branchId 不存在时拒绝', () => {
     expect(f.addNodeToBranch('ghost-owner', 'ghost-branch', 'web')).toBeNull()
   })
-})
 
-describe('fan-in 收拢线渲染（0707 Phase6·6.4 补）', () => {
-  let f: ReturnType<typeof useFlowStore>
-  beforeEach(() => {
-    setActivePinia(createPinia())
-    f = useFlowStore()
-    f.newFlow('blank')
+  it('复制分叉点：副本插在原节点下方并接管它的子节点，不再复制出共用链节点的第二组分支', () => {
+    const copy = f.duplicate('1')!
+    expect(f.main).toEqual(['start', '1', copy, 'end'])
+    expect(f.branchGroups).toHaveLength(1)
+    expect(f.branchGroups[0].ownerId).toBe(copy)
+    expect(f.branchGroups[0].branches.map((b) => b.chain)).toEqual([['2'], ['3']])
   })
 
-  it('决策分支列末节点 -> 汇合点收拢线存在；owner->汇合 的主链直线被跳过（不再穿过 fan-out）', () => {
-    const owner = f.insertAfter('start', 'decision')
-    const ifBranchId = f.branchGroups[0].branches[0].id
-    const child = f.addNodeToBranch(owner, ifBranchId, 'web')!
-    const merge = f.insertAfter(owner, 'web') // owner 的下一个主链节点 = 汇合点
-
-    const layout = f.layout
-    // owner->汇合点 主链直线被跳过（不再笔直穿过 fan-out 区域与分支列重叠）
-    expect(layout.mainEdges.every((e) => e.fromId !== owner)).toBe(true)
-
-    // fan-in 收拢线：从 IF 列末节点底部中心 -> 汇合点顶部中心（CENTER=320）
-    const childNode = layout.nodes.find((n) => n.id === child)!
-    const mergeNode = layout.nodes.find((n) => n.id === merge)!
-    const colX = layout.fanOutColMeta[owner].branches[0].colX
-    const lastBottom = childNode.pos.top + childNode.pos.height
-    const fanIn = layout.fanOutEdges.find(
-      (e) => !e.branchLabel && e.d.startsWith(`M${colX} ${lastBottom}`) && e.d.endsWith(`320 ${mergeNode.pos.top}`),
-    )
-    expect(fanIn).toBeDefined()
-  })
-
-  it('奇数列（3 分支决策）：中间列落在主链轴上，仍无主链直线穿过 fan-out', () => {
-    const owner = f.insertAfter('start', 'decision')
-    f.addBranch(owner)
-    f.addBranch(owner) // 三条条件分支（奇数）
-    expect(f.branchGroups[0].branches).toHaveLength(3)
-
-    const layout = f.layout
-    const col = layout.fanOutColMeta[owner]
-    expect(col).toBeDefined()
-    // 0925：画布宽度随最宽分支组自适应（3 列 = 210*3 + 16*2 = 662 → width 710），主链轴 = width/2；
-    // 中间列必须落在主链轴上（= 直连线的 x），跳过直线才不与之中叠
-    expect(layout.width).toBeGreaterThan(640)
-    const axis = layout.width / 2
-    expect(col.branches[1].colX).toBe(axis)
-    expect(layout.nodes.find((n) => n.id === owner)!.pos.left + 105).toBe(axis)
-    expect(layout.mainEdges.every((e) => e.fromId !== owner)).toBe(true)
+  it('复制分支里的节点：副本出现在画布上（原来只往主链里插，分支节点的副本看不到）', () => {
+    const copy = f.duplicate('3')!
+    expect(f.branchGroups[0].branches.map((b) => b.chain)).toEqual([['2'], ['3', copy]])
   })
 })
 
@@ -1413,18 +1167,17 @@ describe('源级配置分层（0706 优化·源/节点配置分层）', () => {
   })
 
   it('rebindNodeId 递归换绑嵌套 subGroups 的 owner 与 chain（0926 REVIEW F-R1）', () => {
-    f.newFlow('blank')
-    // 顶层分叉组 owner=a，分支1 链上挂 b（链内再分叉的 owner），b 的组以 subGroups 形式嵌套
-    const a = f.insertAfter('start', 'web')!
-    const b = f.insertAfter(a, 'web')!
-    f.ensureBranchGroup(a, 'decision')
-    f.ensureBranchGroup(b, 'parallel')
-    const topGroup = f.branchGroups.find((g) => g.ownerId === a)!
-    const nestedGroup = f.branchGroups.find((g) => g.ownerId === b)!
-    // 把 b 的组从顶层数组摘出，挂进顶层分支1 的 subGroups（真实还原拓扑的形状）
-    f.branchGroups.splice(f.branchGroups.indexOf(nestedGroup), 1)
-    topGroup.branches[0].subGroups = [nestedGroup]
-    topGroup.branches[0].chain = [b]
+    // 还原拓扑：a → {b, c}，b → {d, e}——b 是链内再分叉的 owner，它的组嵌在 a 组分支 1 的 subGroups 里
+    const mk = (stepId: string, dependsOn: string[]) =>
+      ({ stepId, sourceId: 's1', name: `n${stepId}`, dependsOn, inputTable: '900', outputTable: '900', enabled: true }) as never
+    f.loadFromSource(
+      { sourceId: 's1', name: 't', url: 'http://x', configId: 'X', mainTable: '900', owner: 'a', state: 'C' } as never,
+      [mk('a', ['0']), mk('b', ['a']), mk('c', ['a']), mk('d', ['b']), mk('e', ['b'])],
+    )
+    const b = 'b'
+    const topGroup = f.branchGroups.find((g) => g.ownerId === 'a')!
+    const nestedGroup = topGroup.branches[0].subGroups![0]
+    expect(nestedGroup.ownerId).toBe(b)
     // 嵌套分支列内「＋」新增节点：addNodeToBranch 按 ownerId 递归定位嵌套组
     const childId = f.addNodeToBranch(b, nestedGroup.branches[0].id, 'parse')!
     expect(nestedGroup.branches[0].chain).toContain(childId)
@@ -1644,9 +1397,10 @@ describe('节点类型补齐（2026-09-17，与后端 source_type 对齐）', ()
     ['audio-text', 'dev_web_audiototext'],
     ['video-audio', 'dev_web_videotoaudio'],
   ])('分支内新增节点 %s：默认任务队列为 %s', (template, expectedQueue) => {
-    const decId = f.insertAfter('start', 'decision')!
+    const ownerId = f.insertAfter('start', 'web')
+    f.addSibling(f.insertAfter(ownerId, 'web'), 'web')
     const branchId = f.branchGroups[0].branches[0].id
-    const id = f.addNodeToBranch(decId, branchId, template)!
+    const id = f.addNodeToBranch(ownerId, branchId, template)!
     expect(f.configs[id].taskCfg?.queue).toBe(expectedQueue)
   })
 })
@@ -2327,5 +2081,80 @@ describe('画布布局不变量（0925 视觉修复）', () => {
     const pos9 = layout.nodes.find((n) => n.id === '9')!.pos
     const deep = `M${pos9.left + 105} ${pos9.top + pos9.height}`
     expect(layout.fanOutEdges.some((e) => e.d.startsWith(deep))).toBe(true)
+  })
+})
+
+// 1008-BR-03：拓扑编辑统一「改父子关系 → topologyFromParents 重建」，与刷新还原同一套口径。
+describe('拓扑编辑：新建分支 / 线上插入 / 分叉前插入（1008-BR-03）', () => {
+  const mk = (stepId: string, dependsOn: string[]): Step => ({
+    stepId, sourceId: '430016824', name: `n${stepId}`, dependsOn, inputTable: '900', outputTable: '900', enabled: true,
+  } as Step)
+  const load = (steps: Step[]) => {
+    setActivePinia(createPinia())
+    const f = useFlowStore()
+    f.loadFromSource(
+      { sourceId: '430016824', name: 't', url: 'http://x', configId: 'X', mainTable: '900', owner: 'a', state: 'C' } as never,
+      steps,
+    )
+    return f
+  }
+  const chains = (f: ReturnType<typeof useFlowStore>, owner: string) =>
+    f.branchGroups.find((g) => g.ownerId === owner)?.branches.map((b) => b.chain)
+
+  it('addSibling：直链 1→2→3 在 2 旁加兄弟，1 处分叉，新节点排最右，2→3 原样进分支 1', () => {
+    const f = load([mk('1', ['0']), mk('2', ['1']), mk('3', ['2'])])
+    const n = f.addSibling('2', 'web')!
+    expect(f.main).toEqual(['start', '1', 'end'])
+    expect(chains(f, '1')).toEqual([['2', '3'], [n]])
+    expect(f.parentOfNode(n)).toBe('1')
+    expect(f.selectedId).toBe(n)
+  })
+
+  it('addSibling：已有分叉时再加一路，排在同级最右', () => {
+    const f = load([mk('1', ['0']), mk('2', ['1']), mk('3', ['1'])])
+    const n = f.addSibling('2', 'web')!
+    expect(chains(f, '1')).toEqual([['2'], ['3'], [n]])
+  })
+
+  it('addSibling：根位节点（没有上级）不能加兄弟', () => {
+    const f = load([mk('1', ['0']), mk('2', ['1'])])
+    expect(f.addSibling('1', 'web')).toBeNull()
+  })
+
+  it('insertOnEdge：分支段插入只接管该分支链头，其他分支不动', () => {
+    const f = load([mk('1', ['0']), mk('2', ['1']), mk('3', ['1']), mk('4', ['3'])])
+    const n = f.insertOnEdge('1', ['3'], 'web')
+    expect(f.parentOfNode(n)).toBe('1')
+    expect(f.parentOfNode('3')).toBe(n)
+    expect(f.parentOfNode('2')).toBe('1')
+    // 新节点按「同级最右」排：刷新后后端按步骤 ID 升序，新建的 ID 最大
+    expect(chains(f, '1')).toEqual([['2'], [n, '3', '4']])
+  })
+
+  it('insertAfter(分叉点)：新节点接管全部子节点 = 在分叉之前插入', () => {
+    const f = load([mk('1', ['0']), mk('2', ['1']), mk('3', ['1'])])
+    const n = f.insertAfter('1', 'web')
+    expect(f.main).toEqual(['start', '1', n, 'end'])
+    expect(chains(f, n)).toEqual([['2'], ['3']])
+  })
+
+  it('insertAfter(分支链里的节点)：插在链内，不再被追加到主链末尾', () => {
+    const f = load([mk('1', ['0']), mk('2', ['1']), mk('3', ['1']), mk('4', ['3'])])
+    const n = f.insertAfter('3', 'web')
+    expect(f.main).toEqual(['start', '1', 'end'])
+    expect(chains(f, '1')).toEqual([['2'], ['3', n, '4']])
+  })
+
+  it("insertAfter('start')：新节点当根，原首节点挂到它下面", () => {
+    const f = load([mk('1', ['0']), mk('2', ['1'])])
+    const n = f.insertAfter('start', 'web')
+    expect(f.main).toEqual(['start', n, '1', '2', 'end'])
+  })
+
+  it('childrenOfNode：按展示顺序返回直接子节点', () => {
+    const f = load([mk('1', ['0']), mk('2', ['1']), mk('3', ['1']), mk('4', ['3'])])
+    expect(f.childrenOfNode('1')).toEqual(['2', '3'])
+    expect(f.childrenOfNode('3')).toEqual(['4'])
+    expect(f.childrenOfNode('4')).toEqual([])
   })
 })

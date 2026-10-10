@@ -10,7 +10,7 @@ import { ElMessage } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import { useUiStore } from '@/stores/ui'
-import { decisionOrParallelKind, isDataValidationNode, isMonitorNode, isRuleNode, nodeTypeLabel, NODE_CONFIGS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { isDataValidationNode, isMonitorNode, isRuleNode, nodeTypeLabel, NODE_CONFIGS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { isFileLikeNode, outputTableMissing } from '@/utils/flow/stepPersist'
 import { inputTableMismatch } from '@/utils/flow/tableSync'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
@@ -40,8 +40,7 @@ const tab = computed<string>(() => flow.activeTab)
 const statusText = computed(() => (cfg.value?.disabled ? '已停止' : (cfg.value?.status ?? '')))
 const statusClass = computed(() => (cfg.value?.disabled || cfg.value?.planned ? 'warn' : 'ok'))
 
-// 顶层 Tab：参数字段已并入任务配置；决策/分头仍只显示分支配置。
-// 决策/分头节点不产表也不需要编排/任务/AI，只显示「分支配置」一个 Tab 承载 BranchEditor。
+// 顶层 Tab：参数字段已并入任务配置。
 const TOP_TABS = computed(() => nodeInspectorTabs(cfg.value, { includeAi: !props.hideAi }))
 watch(() => props.hideAi, (hideAi) => {
   if (hideAi && flow.activeTab === 'ai') flow.setActiveTab('config')
@@ -76,8 +75,6 @@ watch(() => flow.selectedId, () => {
 // 配置绑定条（0824-00 §6.1）：一个 FlowNode 必须且只能引用一个 Config。
 // 本期只落骨架——configId 来自迁移回填（flowModel.ts NodeConfig.configId），
 // 配置名称/使用节点数/状态要等 config/configDetail 与使用范围接口（0824-07 §5），拿不到就不渲染，不填占位 0。
-// 决策/分头节点只有「分支配置」，不参与配置绑定。
-const isBranchNode = computed(() => !!cfg.value && decisionOrParallelKind(cfg.value) !== undefined)
 // 0927 H1：当前节点输出表未就绪（非文件节点：显式输出表 / 默认=输入表 / 快照输出表都没有）。
 // 自动保存会跳过该节点并置头部 pending「请先补全节点配置」；这里常驻提示引导去「表配置」。
 // 0927（H1 修订）：数据监控节点「不落表/不出参」——它的表在编排配置 tab 的监控方法里绑，
@@ -421,7 +418,7 @@ onMounted(async () => {
 
       <!-- 配置条（0824-00 §6.1 + 0828 §2.1-2b）：保持原来的静态展示，旁边加一个轻量「更换」入口。
            表单里不再另起一行「本节点使用配置」——那是同一份信息显示两遍。 -->
-      <div v-if="!isBranchNode" class="rc-config-bar">
+      <div class="rc-config-bar">
         <span class="cb-label">当前配置</span>
         <span v-if="cfg?.configName" class="cb-name" :title="cfg.configName">{{ cfg.configName }}</span>
         <span v-if="configId" class="cb-id" :title="`配置 ID ${configId}`">#{{ configId }}</span>
@@ -473,7 +470,7 @@ onMounted(async () => {
 
       <!-- 节点配置脏状态条（0824-00 §5.4）：右侧只保留保存动作 -->
       <!-- AI 对话不产生配置改动，不挂保存条 -->
-      <div v-if="!isBranchNode && tab !== 'ai'" class="rc-insp-foot">
+      <div v-if="tab !== 'ai'" class="rc-insp-foot">
         <span class="foot-note">
           <i v-if="nodeConfigDirty" class="foot-dot" />{{ footNote }}
         </span>

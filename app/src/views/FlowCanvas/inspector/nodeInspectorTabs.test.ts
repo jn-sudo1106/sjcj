@@ -3,7 +3,6 @@ import type { NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
 
 const ordinaryNode = { kind: 'node' } as NodeConfig
-const decisionNode = { kind: 'decision' } as NodeConfig
 // isRuleNode 口径是"带不带 ruleCfg"（0805 修正，见 flowModel.test.ts），不是标题里含不含"规则"——
 // 未保存的规则节点也必须带一个 ruleCfg，否则它在插入瞬间就会被判定成非规则节点。
 const ruleNodeUnsaved = { title: '规则处理', kind: 'node', ruleCfg: { mode: 'new', describe: '' } } as unknown as NodeConfig
@@ -37,10 +36,6 @@ describe('nodeInspectorTabs', () => {
     expect(nodeInspectorTabs(ordinaryNode, { includeAi: false }).map(([key]) => key)).toEqual([
       'config', 'table', 'orchestration', 'task',
     ])
-  })
-
-  it('only exposes branch configuration for decision nodes', () => {
-    expect(nodeInspectorTabs(decisionNode)).toEqual([['config', '分支配置']])
   })
 
   it('rule node uses the same top-level tabs as an ordinary node', () => {

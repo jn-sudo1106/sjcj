@@ -672,22 +672,6 @@ const NODE_CONFIG_SEEDS = {
     params: [['severity', 'enum', 'warn/high'], ['dedupe_window', 'number', '30m']],
     output: [['alert_id', 'string', '告警 ID'], ['status', 'enum', 'open/closed'], ['audit_link', 'url', '审计链接']],
   },
-  decision: {
-    title: '决策分支', sub: '逻辑控制 · 条件路径', status: '静态保留 · 待执行器', planned: false, kind: 'decision',
-    base: [['分支名称', '按条件分流'], ['条件 1', '抓取成功且字段完整'], ['条件 2', '失败或待复核'], ['默认路径', '人工复核']],
-    fields: [['节点来源', '研究工作台保留能力'], ['适配状态', '采集链路静态可配置'], ['上线依赖', '编排执行器支持条件路由'], ['失败策略', '保留运行记录']],
-    inmap: [['status', '← 上游节点.status', '运行状态'], ['quality_score', '← 校验.quality_score', '质量分']],
-    params: [['if', 'expr', 'status = "C" AND quality_score >= 0.95'], ['else', 'expr', '进入复核或告警']],
-    output: [['true_path', 'path', '继续落表或指标'], ['false_path', 'path', '回补 / 告警 / 人工复核'], ['decision_trace', 'json', '判断依据']],
-  },
-  parallel: {
-    title: '分头处理', sub: '逻辑控制 · 多路径并行', status: '静态保留 · 待编排', planned: false, kind: 'parallel',
-    base: [['并行名称', '抓取后分头处理'], ['路径 A', '结构化清洗'], ['路径 B', '规则命中'], ['汇合点', '质量校验']],
-    fields: [['节点来源', '研究工作台保留能力'], ['适配状态', '采集链路静态可配置'], ['上线依赖', '编排执行器支持 fan-out/fan-in'], ['并发上限', '待后端确认']],
-    inmap: [['rows', '← 上游节点.output', '待处理数据'], ['run_id', '← 当前运行', '运行标识']],
-    params: [['branches', 'list', 'clean,rule,notify'], ['join_policy', 'enum', '全部成功 / 任一失败告警']],
-    output: [['branch_results', 'json', '各路径结果'], ['join_status', 'enum', 'C/E/L'], ['parallel_trace', 'json', '分头处理日志']],
-  },
   // 0714 会议：节点面板精简，用一个通用「数据处理」节点顶替原「解析结构化/数据清洗/数据校验」三组
   // （file-parse/ocr/ai-extract/field-map/clean/dedupe/check 定义本身保留不删，历史节点仍可正常打开/编辑，
   // 只是新增节点入口收敛到这一个）。形态参照 custom：通用/灵活配置，不绑定固定语义。
@@ -717,7 +701,7 @@ export const TEMPLATE_TO_NODE: Record<string, string> = {
   web: 'web-list', app: 'app-collect', file: 'web-detail', python: 'web-list', parse: 'file-parse', ocr: 'ocr',
   ai: 'ai-extract', map: 'field-map', clean: 'clean', dedupe: 'dedupe', check: 'check', process: 'process',
   rule: 'rule', 'rule-trace': 'rule', monitor: 'rule', 'data-validation': 'rule', metric: 'metric', mail: 'mail',
-  alert: 'alert', decision: 'decision', parallel: 'parallel', custom: 'custom',
+  alert: 'alert', custom: 'custom',
   // 0711 R7/R8：两个独立的固定产物类型采集节点
   'browser-html': 'browser-html-collect', 'wechat-html': 'wechat-html-collect',
   // S4-1：网页登录，独立节点类型（方案 §6.1）
@@ -943,13 +927,6 @@ export const LIB_GROUPS: LibGroup[] = [
       { template: 'article-summary', code: '720', name: '文章生成摘要', desc: '长文压缩为摘要与关键词', pill: 'p1' as Pill },
       { template: 'article-tag', code: '730', name: '文章打标签', desc: '舆情多维标注：主题 / 情感 / 风险 / 意图等', pill: 'p1' as Pill },
       { template: 'translate', code: '800', name: '翻译助手', desc: '把文本/文件内容翻译成目标语言', pill: 'p1' as Pill },
-    ]
-  },
-  {
-    // 0707 优化·Phase1：决策/分头处理从右键菜单单独入口收进添加节点浮层的「逻辑」分组（参照 Dify）
-    title: '逻辑', items: [
-      { template: 'decision', code: 'IF', badge: '310', name: '决策分支', desc: '按条件路由到下一个节点，命中一条走一条', pill: 'p1' as Pill },
-      { template: 'parallel', code: 'PAR', badge: '315', name: '分头处理', desc: '多条路径无条件并行执行', pill: 'p1' as Pill },
     ]
   },
   {
@@ -1381,12 +1358,13 @@ export function applyStepDetails(
  *
  * **分叉点用的是那个普通采集节点本身当 `ownerId`，不合成决策节点。** 理由：
  *   - 机制本来就不要求 owner 是结构节点（`buildHorizontalLayout` 只做 `hbranchGroupByOwner[id]`
- *     查表、`branchGroupEntryIds` 只按 ownerId 找，都不检查 `isDecision`）；
+ *     查表、`branchGroupEntryIds` 只按 ownerId 找，都不检查节点类型）；
  *   - 合成节点会引入一个旧平台不存在、也没有 `itemConfig` 可落库的虚拟节点，还会在数据视图
  *     的节点轨道上多出一个点不出数据的节点；
  *   - 条件的归属不一样：我们的决策节点条件属于**分支**（`branch.condition`），旧平台条件属于
  *     **目标步骤自己**（`entryCondition`，只有一个前驱时同样存在）。硬套等于把语义搬家，
  *     两处都有值之后改一处必须同步另一处。旧平台也没有 ELSE 概念。
+ *   （1008-BR-06：决策 / 分头节点已整体去掉，新建分支也按这套旧平台语义。）
  *
  * 后续（0925 完整还原）：**嵌套分叉不再拍平**——`branchTreeOf`（flowTopology.ts）把链内再分叉编成
  * subGroups 递归承接，`buildHorizontalLayout`、画布纵向布局、写回（lastStepIdsFromCanvas）
@@ -1551,8 +1529,6 @@ function buildFlow(name: string, steps: StepSpec[], sourcePatch?: Partial<Source
   steps.forEach((s) => {
     const srcKey = TEMPLATE_TO_NODE[s.template] || 'web-list'
     const cfg = cloneConfig(NODE_CONFIGS[srcKey])
-    if (s.template === 'decision') cfg.kind = 'decision'
-    if (s.template === 'parallel') cfg.kind = 'parallel'
     cfg.title = s.name || TEMPLATE_TO_NAME[s.template] || cfg.title
     if (cfg.collectCfg) {
       cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[s.template] ?? cfg.collectCfg.snatchType

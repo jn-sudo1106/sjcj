@@ -27,8 +27,6 @@ import {
   effectiveOutputTable,
   isDataNode,
   isRuleNode,
-  isDecision,
-  isParallel,
   nodeClassFor,
   nodeEntryCondition,
   nodeOutputTable,
@@ -127,8 +125,7 @@ async function recommendTemplateFlow() {
 const menu = reactive<{ show: boolean; x: number; y: number; nodeId: string | null; afterId: string }>({
   show: false, x: 0, y: 0, nodeId: null, afterId: 'start',
 })
-// 0707 优化·Phase6·补：addPop 扩展 branch 模式（ownerId/branchId），供 fan-out 分支列「+」复用同一浮层，
-// hideLogicGroup 防止分支内嵌套开新的决策/分头（chain 不支持嵌套分支）。
+// 0707 优化·Phase6·补：addPop 扩展 branch 模式（ownerId/branchId），供 fan-out 分支列「+」复用同一浮层。
 const addPop = reactive<{ show: boolean; x: number; y: number; afterId: string; branch: { ownerId: string; branchId: string } | null }>({
   show: false, x: 0, y: 0, afterId: 'start', branch: null,
 })
@@ -165,8 +162,7 @@ function edgeTableTag(fromId: string, toId: string): string {
   if (!out && !inp) return ''
   return `${out ? edgeTableLabel(out) : '?'} → ${inp ? edgeTableLabel(inp) : '?'}`
 }
-// 0707 优化·Phase6：节点级「进入条件」已退役（统一收进决策节点的 FlowBranchGroup 分支条件）；连线条件标签退役，仅保留表血缘标签。
-// 原 edgeConditionTag() 函数删除；分支条件摘要标签将在 6.4 阶段重做为分支连线标签。
+// 连线上只保留表血缘标签；分支的进入条件显示在分支列标签上（branchColText，取列首节点自己的进入条件）。
 function nodeClasses(id: string, cfg: NodeConfig) {
   return [
     nodeClassFor(cfg),
@@ -417,13 +413,13 @@ const relinkTargets = computed(() => {
  * 分支列标签（0926 视觉调整）：不再画橙色底纹框/胶囊底色，只展示**该分支各步骤的进入条件**——
  *  1. 列首节点自己的进入条件（历史流程的条件在目标步骤 entryCondition 上，不在分支对象上；
  *     0925 前画布从不展示这批条件，用户反馈「应该只要展示各个步骤进入的条件」）；
- *  2. 分支条件（决策/分头节点的 FlowBranch.condition，用户点分支时在编辑器里配的）；
- *  3. 都没有才回退分支名（否则一列条件缺失时整列没有标识）。
+ *  2. 没有才回退分支名（= 列首节点名；否则一列条件缺失时整列没有标识）。
+ *  （1008-BR-06 前还有决策 / 分头节点的分支条件 FlowBranch.condition，已随节点一起去掉。）
  */
-function branchColText(br: { label: string; condLabel: string; chain: string[] }): string {
+function branchColText(br: { label: string; chain: string[] }): string {
   const head = br.chain[0]
   const headCond = head ? conditionGroupLabel(nodeEntryCondition(flow.configs[head])) : ''
-  return headCond || br.condLabel || br.label
+  return headCond || br.label
 }
 
 /** 0926 反馈「步骤的进入条件没在流程图上展示」：普通节点卡片的进入条件文案；未设条件返回空串（不占行） */
@@ -615,7 +611,7 @@ watch(
           </defs>
           <path v-for="(e, i) in flow.layout.mainEdges" :key="'m' + i" class="rc-edge" :class="{ rule: e.rule }" :d="e.d" :marker-end="e.rule ? `url(#${markerPrefix}-rule)` : `url(#${markerPrefix})`" />
           <path v-for="(e, i) in flow.layout.branchEdges" :key="'b' + i" class="rc-edge" :d="e.d" :marker-end="`url(#${markerPrefix})`" />
-          <!-- 0707 优化·Phase6：决策/分头节点的 fan-out 分支连线（0925 改实线：虚线+无箭头是"看不出流向"的主因） -->
+          <!-- 0707 优化·Phase6：分叉点的 fan-out 分支连线（0925 改实线：虚线+无箭头是"看不出流向"的主因） -->
           <path v-for="(e, i) in flow.layout.fanOutEdges" :key="'f' + i" class="rc-edge fan-out" :d="e.d" :marker-end="`url(#${markerPrefix}-fan)`" />
         </svg>
 
@@ -658,7 +654,7 @@ watch(
         >{{ edgeTableTag(e.fromId, e.toId) }}</div>
         </template>
 
-        <!-- 0707 优化·Phase6：决策/分头节点的 fan-out 分支列标签（0926 起只展示该分支/首步骤的进入条件，无底色无边框） -->
+        <!-- 0707 优化·Phase6：分叉点的 fan-out 分支列标签（0926 起只展示该分支/首步骤的进入条件，无底色无边框） -->
         <template v-for="(col, ownerId) in flow.layout.fanOutColMeta" :key="'col-' + ownerId">
           <template v-for="br in col.branches" :key="'coltag-' + br.id">
             <div
@@ -729,27 +725,15 @@ watch(
           </div>
           <div class="rc-node-title">{{ n.cfg.title }}</div>
 
-          <template v-if="isDecision(n.cfg)">
-            <div class="rc-node-brief">条件：<b>{{ n.cfg.base[1]?.[1] || '抓取成功且字段完整' }}</b></div>
-            <div class="rc-node-paths"><span class="rc-node-path">通过路径</span><span class="rc-node-path">失败/复核路径</span></div>
-            <div class="rc-node-foot"><span class="rc-chip warn">静态保留</span><span>待执行器</span></div>
-          </template>
-          <template v-else-if="isParallel(n.cfg)">
-            <div class="rc-node-brief"><b>{{ n.cfg.base[1]?.[1] || '路径 A' }}</b> / <b>{{ n.cfg.base[2]?.[1] || '路径 B' }}</b></div>
-            <div class="rc-node-paths"><span class="rc-node-path">路径 A</span><span class="rc-node-path">路径 B</span><span class="rc-node-path">汇合</span></div>
-            <div class="rc-node-foot"><span class="rc-chip">静态保留</span><span>{{ n.cfg.base[3]?.[1] || '待编排' }}</span></div>
-          </template>
-          <template v-else>
-            <!-- 0926 反馈→拍板：卡片只标「条件」tag（提示该节点有条件进入），不再展示 cond 具体文案——
-                 具体内容在连线/分支列标签上展示；条件与「运行」状态同行；悬停仍可看全文 -->
-            <div v-if="tableChip(n.cfg, n.id)" class="rc-node-table" :class="{ unset: tableChip(n.cfg, n.id)!.unset }" :title="tableChip(n.cfg, n.id)!.title">⊞ {{ tableChip(n.cfg, n.id)!.label }}</div>
-            <div class="rc-node-foot">
-              <span v-if="nodeCondText(n.cfg)" :data-testid="`node-cond-${n.id}`" class="rc-node-cond" :title="nodeCondText(n.cfg)">条件</span>
-              <span v-if="extraParentsTitle(n.id)" :data-testid="`node-extra-parents-${n.id}`" class="rc-node-cond" :title="extraParentsTitle(n.id)">另有上级</span>
-              <span class="rc-chip" :class="footClass(n.cfg)" :title="footFor(n.cfg).hint">{{ footFor(n.cfg).left }}</span>
-              <span>{{ footFor(n.cfg).right }}</span>
-            </div>
-          </template>
+          <!-- 0926 反馈→拍板：卡片只标「条件」tag（提示该节点有条件进入），不再展示 cond 具体文案——
+               具体内容在连线/分支列标签上展示；条件与「运行」状态同行；悬停仍可看全文 -->
+          <div v-if="tableChip(n.cfg, n.id)" class="rc-node-table" :class="{ unset: tableChip(n.cfg, n.id)!.unset }" :title="tableChip(n.cfg, n.id)!.title">⊞ {{ tableChip(n.cfg, n.id)!.label }}</div>
+          <div class="rc-node-foot">
+            <span v-if="nodeCondText(n.cfg)" :data-testid="`node-cond-${n.id}`" class="rc-node-cond" :title="nodeCondText(n.cfg)">条件</span>
+            <span v-if="extraParentsTitle(n.id)" :data-testid="`node-extra-parents-${n.id}`" class="rc-node-cond" :title="extraParentsTitle(n.id)">另有上级</span>
+            <span class="rc-chip" :class="footClass(n.cfg)" :title="footFor(n.cfg).hint">{{ footFor(n.cfg).left }}</span>
+            <span>{{ footFor(n.cfg).right }}</span>
+          </div>
         </div>
       </div>
     </div>
@@ -776,12 +760,11 @@ watch(
       </template>
     </div>
 
-    <!-- 添加节点浮层（0707 优化·Phase1，参照 Dify：锚定弹层 + 搜索 + 分组，点选即插，含「逻辑」分组承接决策/分头） -->
+    <!-- 添加节点浮层（0707 优化·Phase1，参照 Dify：锚定弹层 + 搜索 + 分组，点选即插） -->
     <AddNodePopover
       v-if="addPop.show"
       :x="addPop.x"
       :y="addPop.y"
-      :hide-logic-group="!!addPop.branch"
       @pick="onPickNode"
       @close="closeAddPopover"
     />
@@ -877,11 +860,10 @@ watch(
 
 .rc-edge-table-tag { position: absolute; transform: translate(-50%, 0); font-size: 9px; color: var(--rc-faint); font-family: var(--rc-mono, monospace); white-space: nowrap; pointer-events: none; z-index: 21; }
 
-/* 0925 美化：卡片高度**必须等于布局常量**（NODE_H=108 / LOGIC_H=140 / TERM_H=36）——此前只有
+/* 0925 美化：卡片高度**必须等于布局常量**（NODE_H=108 / TERM_H=36）——此前只有
    min-height:74px，卡片实际比布局矮，连线端点落在卡片下方一段空白处，整棵树看着"散"。
    现在固定高度 + flex 竖向排布（脚注沉底）+ 溢出裁剪，连线和卡片严丝合缝。 */
 .rc-flow-node { position: absolute; display: flex; flex-direction: column; box-sizing: border-box; width: 210px; height: 108px; padding: 10px 12px; border: 1px solid var(--rc-border); border-radius: 10px; background: #fff; box-shadow: 0 4px 14px -10px rgba(15, 23, 42, 0.35); overflow: hidden; cursor: pointer; transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s; }
-.rc-flow-node.logic-node, .rc-flow-node.parallel-node { height: 140px; }
 .rc-node-del { position: absolute; top: 4px; right: 4px; z-index: 3; width: 18px; height: 18px; line-height: 1; border: 0; border-radius: 4px; background: transparent; color: var(--rc-faint); font-size: 11px; cursor: pointer; opacity: 0; transition: opacity .12s; }
 .rc-flow-node:hover .rc-node-del { opacity: 1; }
 .rc-node-del:hover { background: var(--rc-error-bg, #fef2f2); color: #b91c1c; }
@@ -895,8 +877,6 @@ watch(
 .rc-flow-node.rule-node { border-color: #bfdbfe; background: #fbfdff; }
 .rc-flow-node.check-node { border-color: #fed7aa; background: #fffaf0; }
 .rc-flow-node.mail-node { border-color: #d9f99d; background: #fcfff7; }
-.rc-flow-node.logic-node { border-color: #fde68a; background: #fffbeb; }
-.rc-flow-node.parallel-node { border-color: #cbd5e1; background: #f8fafc; }
 .rc-flow-node.planned { border-style: dashed; opacity: 0.72; }
 .rc-flow-node.disabled-node { opacity: 0.48; filter: saturate(0.72); }
 
@@ -922,15 +902,9 @@ watch(
 .rc-node-foot > span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-node-table.unset { color: var(--rc-warn, #d98b25); }
 .rc-node-table { margin-top: 6px; font-size: 10px; color: var(--rc-faint); font-family: var(--rc-mono, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rc-node-brief { margin-top: 8px; color: var(--rc-muted); font-size: 10px; line-height: 1.45; }
-.rc-node-brief b { color: #334155; font-weight: 700; }
 /* 0926 反馈→拍板：卡片上的「条件」tag（琥珀色小胶囊，与分支列条件标签同色系），
    与「运行」状态 chip 同处 foot 行，有进入条件即显示 */
 .rc-node-cond { display: inline-block; padding: 1px 6px; border-radius: 5px; background: #fef3c7; color: #b45309; font-size: 10px; line-height: 16px; white-space: nowrap; flex: none; }
-.rc-node-paths { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
-.rc-node-path { flex: 1; min-width: 74px; padding: 3px 5px; border-radius: 5px; border: 1px solid var(--rc-border); background: #fff; color: var(--rc-muted); font-size: 9px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.logic-node .rc-node-path { border-color: #fde68a; background: #fff7ed; color: #92400e; }
-.parallel-node .rc-node-path { border-color: #cbd5e1; background: #fff; color: var(--rc-text-2); }
 .rc-chip { padding: 1px 6px; border-radius: 5px; background: #f1f5f9; color: var(--rc-muted); }
 .rc-chip.ok { background: var(--rc-ok-bg); color: var(--rc-ok); }
 .rc-chip.warn { background: var(--rc-warn-bg); color: var(--rc-warn); }

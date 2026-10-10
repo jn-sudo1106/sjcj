@@ -1,4 +1,4 @@
-import { decisionOrParallelKind, isDataValidationNode, isRuleNode, rendersAsRuleNode, isMonitorNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { isDataValidationNode, isRuleNode, rendersAsRuleNode, isMonitorNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { validateTableBinding } from '@/utils/flow/ruleOrchestration'
 
 export type NodeInspectorTab = 'config' | 'table' | 'orchestration' | 'task' | 'ai'
@@ -8,7 +8,6 @@ export type NodeInspectorTabItem = [NodeInspectorTab, string, string?]
 /**
  * 0804 拍板（决议 D5+D8）：规则节点与采集节点收敛成同一套 Tab——表配置/编排配置对所有节点一致，
  * 「编排配置」内部按节点类型分发内容（规则处理=脚本，列表/详情=抓取配置，登录=登录配置，见 S3）。
- * 决策/分头节点不产表也不需要编排/任务，仍只有「分支配置」一个 Tab。
  *
  * 参数绑定和出参列属于任务配置，采集类节点在任务 Tab 内配置，不再单列参数 Tab。
  *
@@ -17,7 +16,6 @@ export type NodeInspectorTabItem = [NodeInspectorTab, string, string?]
  * 非规则节点暂不设门禁：抓取配置内容本身还没建（S3），提前拦反而挡住占位内容。
  */
 export function nodeInspectorTabs(cfg?: NodeConfig, options: { includeAi?: boolean } = {}): NodeInspectorTabItem[] {
-  if (cfg && decisionOrParallelKind(cfg) !== undefined) return [['config', '分支配置']]
   const isRule = !!cfg && isRuleNode(cfg)
   const ruleStyled = rendersAsRuleNode(cfg)
   const tabs: NodeInspectorTabItem[] = [

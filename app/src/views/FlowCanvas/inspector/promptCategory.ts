@@ -1,4 +1,4 @@
-import { collectorCapabilityOf, decisionOrParallelKind, isArticleSummaryNode, isArticleTagNode, isDataNode, isDataValidationNode, isMonitorNode, isPdfNode, isRuleNode, isTranslateNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
+import { collectorCapabilityOf, isArticleSummaryNode, isArticleTagNode, isDataNode, isDataValidationNode, isMonitorNode, isPdfNode, isRuleNode, isTranslateNode, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import type { PromptCategory } from '@/api'
 
 export interface PromptCategoryOption {
@@ -22,10 +22,6 @@ const COLLECTOR_OPTIONS: PromptCategoryOption[] = [
 ]
 
 const DATA_PROCESS_OPTIONS: PromptCategoryOption[] = [{ label: '数据处理', value: '数据处理' }]
-const LOGIC_OPTIONS: PromptCategoryOption[] = [
-  { label: '决策分支', value: '决策分支' },
-  { label: '分头处理', value: '分头处理' },
-]
 const RULE_OPTIONS: PromptCategoryOption[] = [{ label: '规则处理', value: '规则处理' }]
 // 数据监控节点（monitor 复用 rule 种子，isRuleNode 也为真）：单独的提示词分类，不跟「规则处理」混用
 const MONITOR_OPTIONS: PromptCategoryOption[] = [{ label: '数据监控', value: '数据监控' }]
@@ -58,7 +54,7 @@ function nodeText(cfg?: NodeConfig): string {
 }
 
 function dataProcessLike(cfg?: NodeConfig): boolean {
-  if (!cfg || collectorCapabilityOf(cfg) || isRuleNode(cfg) || (cfg && decisionOrParallelKind(cfg))) return false
+  if (!cfg || collectorCapabilityOf(cfg) || isRuleNode(cfg)) return false
   if (!isDataNode(cfg)) return false
   const text = nodeText(cfg)
   return /数据处理|解析|清洗|校验|去重|结构化|AI提取|OCR|字段映射|提取单值|提取表格/.test(text)
@@ -89,10 +85,6 @@ export function promptCategoryGroupsForNode(cfg?: NodeConfig): PromptCategoryGro
   if (isArticleSummaryNode(cfg)) return [{ label: '数据处理', options: ARTICLE_SUMMARY_OPTIONS }]
   if (isTranslateNode(cfg)) return [{ label: '数据处理', options: TRANSLATE_OPTIONS }]
   if (isArticleTagNode(cfg)) return [{ label: '数据处理', options: ARTICLE_TAG_OPTIONS }]
-  const logicKind = cfg ? decisionOrParallelKind(cfg) : undefined
-  if (logicKind) {
-    return [{ label: '逻辑', options: LOGIC_OPTIONS.filter((item) => (logicKind === 'decision' ? item.value === '决策分支' : item.value === '分头处理')) }]
-  }
   if (dataProcessLike(cfg)) return [{ label: '数据处理', options: DATA_PROCESS_OPTIONS }]
   if (metricLike(cfg)) return [{ label: '引用类', options: METRIC_OPTIONS }]
   if (notifyLike(cfg)) return [{ label: '通知类', options: NOTIFY_OPTIONS }]
@@ -104,9 +96,6 @@ export function defaultPromptCategoryForNode(cfg?: NodeConfig): PromptCategory {
   if (isPdfNode(cfg)) return 'PDF抓取'
   const cap = cfg ? collectorCapabilityOf(cfg) : undefined
   if (cap) return COLLECTOR_DEFAULTS[cap.kind] ?? '网页抓取'
-  const logicKind = cfg ? decisionOrParallelKind(cfg) : undefined
-  if (logicKind === 'decision') return '决策分支'
-  if (logicKind === 'parallel') return '分头处理'
   if (isMonitorNode(cfg)) return '数据监控'
   if (isDataValidationNode(cfg)) return '数据校验'
   if (isArticleSummaryNode(cfg)) return '文章生成摘要'
@@ -133,8 +122,6 @@ export function promptListCategoryForNode(cfg?: NodeConfig): string {
   // 翻译助手 / 文章打标签的模板行都在 category='rule' 下（与规则处理、数据监控、文章摘要同一档）
   if (isTranslateNode(cfg)) return 'rule'
   if (isArticleTagNode(cfg)) return 'rule'
-  const logicKind = cfg ? decisionOrParallelKind(cfg) : undefined
-  if (logicKind) return 'logic'
   if (dataProcessLike(cfg)) return 'data_process'
   if (metricLike(cfg)) return 'reference'
   if (notifyLike(cfg)) return 'notify'

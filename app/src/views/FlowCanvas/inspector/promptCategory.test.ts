@@ -32,9 +32,7 @@ describe('promptCategory helpers', () => {
     expect(defaultPromptCategoryForNode(cloneConfig(NODE_CONFIGS['web-list']))).toBe('网页抓取')
   })
 
-  it('逻辑、规则、引用、通知节点各自返回对应分类', () => {
-    expect(labels('decision')).toEqual(['决策分支'])
-    expect(labels('parallel')).toEqual(['分头处理'])
+  it('规则、引用、通知节点各自返回对应分类', () => {
     expect(labels('rule')).toEqual(['规则处理'])
     expect(labels('metric')).toEqual(['指标引用'])
     expect(labels('mail')).toEqual(['提取数据发邮件', '异常告警'])

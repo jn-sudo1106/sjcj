@@ -1,10 +1,10 @@
 <script setup lang="ts">
 // 添加节点浮层（0707 优化·Phase1）：参照 Dify——点「＋」原地锚定弹层，搜索 + 分组列表，点选即插入，无确认步骤。
-// 替代原居中模态弹窗；右键菜单「插入节点/决策/分头」三个入口合一为本浮层（含「逻辑」分组）。
+// 替代原居中模态弹窗；右键菜单的插入入口合一为本浮层。（「逻辑」分组的决策 / 分头已于 1008-BR-06 去掉）
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { LIB_GROUPS, type LibItem } from './flowModel'
 
-const props = defineProps<{ x: number; y: number; hideLogicGroup?: boolean; compact?: boolean }>()
+const props = defineProps<{ x: number; y: number; compact?: boolean }>()
 const emit = defineEmits<{ pick: [template: string]; close: []; dragstart: [event: DragEvent, template: string] }>()
 
 const keyword = ref('')
@@ -13,10 +13,8 @@ const popEl = ref<HTMLElement | null>(null)
 
 const filteredGroups = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
-  // 0707 优化·Phase6：分支内添加场景隐藏「逻辑」分组（防嵌套分支：chain 内不允许再开 FlowBranchGroup）
-  const groups = props.hideLogicGroup ? LIB_GROUPS.filter((g) => g.title !== '逻辑') : LIB_GROUPS
-  if (!kw) return groups
-  return groups
+  if (!kw) return LIB_GROUPS
+  return LIB_GROUPS
     .map((g) => ({ ...g, items: g.items.filter((it) => it.name.toLowerCase().includes(kw) || it.desc.toLowerCase().includes(kw)) }))
     .filter((g) => g.items.length)
 })

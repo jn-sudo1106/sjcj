@@ -7,7 +7,7 @@ import { conditionsToExpr, parseConditionExpr } from '@/utils/flow/conditionExpr
 // 进入条件行编辑组件（0701 问题十·方案B；0706 优化·主题二升级为条件组；0707 优化·补加表达式模式）：
 // 字段模式 = 多行 字段(下拉，来自输入表 schema) + 操作符 + 值，行间用 AND/OR 逻辑连接符组合；
 // 表达式模式 = 裸文本框，写原始表达式（1:1 对应 Step.condition 契约），用于跨字段比较/函数调用等结构化三元组表达不了的场景；
-// 两种模式二选一，不混用；本组件同时供节点级「进入条件」（NodeInspector）与分支条件（BranchEditor）复用。
+// 两种模式二选一，不混用；本组件供节点级「进入条件」（NodeInspector）使用（决策节点的分支条件编辑器已于 1008-BR-06 去掉）。
 const props = defineProps<{
   condition?: ConditionGroup
   fields: { prop: string; desc: string; columnName?: string }[]
@@ -165,7 +165,7 @@ const summary = computed(() => conditionGroupLabel(active.value ? currentGroup()
   <div class="cond-row">
     <!-- 整合模式（节点上的进入条件，0828 D20）：不摆勾选框，直接一个「添加条件」按钮。
          会上原话「把这个去掉，比如添加条件不就行了吗」——勾选框 + 「进入条件」标签是多余的一层。
-         分支条件（BranchEditor，非整合模式）保持原来的勾选框不动。 -->
+         非整合模式（原供决策节点的分支条件用）保留勾选框写法。 -->
     <button
       v-if="integrated && !active"
       class="cond-add cond-add-entry"

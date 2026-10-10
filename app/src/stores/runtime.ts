@@ -134,7 +134,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     return runId
   }
 
-  // 整链发起抓取：跑主链和决策/分头分支段内所有可运行节点。
+  // 整链发起抓取：跑主链和各分支链内所有可运行节点。
   function startCapture(def: FlowDef, options?: CaptureOptions): string {
     if (running.value) return ''
     const ids = def.main.filter((id) => isRunnable(def, id))

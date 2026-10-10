@@ -44,7 +44,7 @@ describe('buildSourceSeed · 分支拓扑还原（0903 YB-B）', () => {
     ]
     const seed = buildSourceSeed(SOURCE, withCond)
 
-    expect(seed.branchGroups[0].branches.every((b) => b.condition === undefined)).toBe(true)
+    expect(seed.branchGroups[0].branches.every((b) => !('condition' in b))).toBe(true)
     expect(seed.configs['40620'].collectCfg?.entryCondition?.expr).toBe('K24=="正文抓取失败"')
   })
 
@@ -313,7 +313,25 @@ describe('buildHorizontalLayout · 分支连线（0903 YB-7）', () => {
     }
   })
 
-  it('0925 嵌套分叉：effectiveInputTable 递归向上（嵌套链内无表 → 父链 → 主链）', () => {
+  it('嵌套分叉：链头输入表 = 分叉点的输出表（旧平台：新步骤输入表 = 上级输出表，1008-BR-06）', () => {
+    const seed = buildSourceSeed(SOURCE, [
+      { ...step('1', 'A', ['0']), outputTable: 'TB_UP' },
+      { ...step('2', 'B', ['1']), outputTable: 'TB_B' },
+      { ...step('3', 'C', ['2']), outputTable: 'TB_C' },
+      step('4', 'D', ['2']),
+      step('5', 'E', ['3']),
+      step('6', 'F', ['3']),
+    ])
+    for (const id of ['3', '5']) {
+      const collect = seed.configs[id].collectCfg
+      if (collect) collect.inputTable = ''
+    }
+    // 5 是嵌套组（owner=3）的链头 → 3 的输出表；3 是顶层组（owner=2）的链头 → 2 的输出表
+    expect(effectiveInputTable(seed.main, seed.branches, seed.configs, '5', seed.branchGroups)).toBe('TB_C')
+    expect(effectiveInputTable(seed.main, seed.branches, seed.configs, '3', seed.branchGroups)).toBe('TB_B')
+  })
+
+  it('0925 嵌套分叉：分叉点都没有输出表时递归向上（嵌套链 → 父链 → 主链）', () => {
     const seed = buildSourceSeed(SOURCE, [
       { ...step('1', 'A', ['0']), outputTable: 'TB_UP' },
       step('2', 'B', ['1']),
@@ -322,13 +340,16 @@ describe('buildHorizontalLayout · 分支连线（0903 YB-7）', () => {
       step('5', 'E', ['3']),
       step('6', 'F', ['3']),
     ])
-    // 摘掉 2/3/5 自己的入表（置空串 = 无显式表，nodeInputTable 按 || 判空）：
-    // 5 在嵌套组里（链内无表）→ 上溯 3（仍无表）→ 2（仍无表）→ 主链 1
+    // 摘掉 2/3/5 自己的入表和 2/3 的出表（置空串 = 无显式表）：5 → 3 → 2 → 主链 1
     for (const id of ['2', '3', '5']) {
       const collect = seed.configs[id].collectCfg
       if (collect) collect.inputTable = ''
     }
-    // 1 的输出表 TB_UP 是唯一可继承来源（4/6 的输出表也是默认 900，但不在 5 的祖先链上）
+    for (const id of ['2', '3']) {
+      const collect = seed.configs[id].collectCfg
+      if (collect) collect.outputTable = ''
+      seed.configs[id].outputTable = ''
+    }
     expect(effectiveInputTable(seed.main, seed.branches, seed.configs, '5', seed.branchGroups)).toBe('TB_UP')
     expect(effectiveInputTable(seed.main, seed.branches, seed.configs, '3', seed.branchGroups)).toBe('TB_UP')
   })

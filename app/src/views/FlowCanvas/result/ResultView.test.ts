@@ -618,12 +618,15 @@ describe('ResultView · 查询条件的执行时机（0819 N3 前置修复）', 
 describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9）', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('决策节点也在候选列表里，选中后展示只读空态，不提供筛选和数据表格', async () => {
+  it('没有表的节点也在候选列表里，选中后展示只读空态，不提供筛选和数据表格', async () => {
     setActivePinia(createPinia())
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
     flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
-    const decId = flow.insertAfter('391007768-s2', 'decision')!
+    // 插在最前面的通知类节点：不产数据行，也没有上游可继承输入表（1008-BR-06 前这里用的是决策节点）
+    const decId = flow.insertAfter('start', 'mail')!
+    flow.configs[decId].inputTable = ''
+    flow.configs[decId].outputTable = ''
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])
@@ -636,7 +639,7 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
 
     await selectNode(wrapper, decId)
 
-    // 结构节点没有表可看：整块表头/表格区都不渲染，只留空态文案说明为什么不能手动执行。
+    // 没有表可看：整块表头/表格区都不渲染，只留空态文案说明为什么不能手动执行。
     // （原本这里还有一条 .pill 徽标不存在的断言，2026-08-19 徽标整体删除后它恒为真、
     //  失去意义，已移除。）
     expect(wrapper.find('[data-testid="data-node-empty"]').exists()).toBe(true)
@@ -857,10 +860,9 @@ describe('ResultView · 节点上下文与范围切换（0812 计划 M2-6~M2-9�
     const current = mockSourceDetail({ sourceId: '391007768' })!
     const flow = useFlowStore()
     flow.loadFromSource(current, mockSourceSteps({ sourceId: current.sourceId }))
-    const decId = flow.insertAfter('391007768-s2', 'decision')!
-    const bg = flow.branchGroups.find((g) => g.ownerId === decId)!
-    flow.setBranchCondition(decId, bg.branches[0].id, { logic: 'AND', items: [{ field: 'amount', op: 'gt', value: '0' }] })
-    const childId = flow.addNodeToBranch(decId, bg.branches[0].id, 'web')!
+    // 1008-BR-06：分支由普通节点分叉，条件写在分支节点自己的进入条件上
+    const childId = flow.addSibling('391007768-s2', 'web')!
+    flow.configs[childId].collectCfg!.entryCondition = { logic: 'AND', items: [{ field: 'amount', op: 'gt', value: '0' }] }
     vi.spyOn(dataApi, 'rowQueryPaged').mockResolvedValue({ list: [], total: 0 })
     vi.spyOn(dataApi, 'tableMeta').mockResolvedValue(meta)
     vi.spyOn(siteApi, 'siteSources').mockResolvedValue([current])

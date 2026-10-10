@@ -28,7 +28,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { dataApi, parseNextStepReceipt, siteApi, sourceApi, type DataTableMeta, type DataRow, type Source, type EntryDetail, type RowQuery, type Step } from '@/api'
 import {
-  buildHorizontalLayout, buildSourceSeed, effectiveInputTable, firstRunnableNodeId, nodeOutputTable, isDecision, isParallel,
+  buildHorizontalLayout, buildSourceSeed, effectiveInputTable, firstRunnableNodeId, nodeOutputTable,
   hasDirectSuccessor, directSuccessorIds, directPredecessorIds, type NodeConfig, type BranchSeed, type FlowBranchGroup,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
@@ -462,8 +462,7 @@ const inputTableId = computed(() => {
   if (!selectedNodeId.value || !flowData.value) return ''
   return effectiveInputTable(flowData.value.main, flowData.value.branches, flowData.value.configs, selectedNodeId.value, flowData.value.branchGroups)
 })
-const isStructuralNode = computed(() => !!selectedCfg.value && (isDecision(selectedCfg.value) || isParallel(selectedCfg.value)))
-const hasAnyTable = computed(() => !isStructuralNode.value && (!!outputTableId.value || !!inputTableId.value))
+const hasAnyTable = computed(() => !!outputTableId.value || !!inputTableId.value)
 // 纯查看，没有输入/输出切换：优先看输出表（节点产出的结果），没有输出表的节点看输入表。
 const nodeTableId = computed(() => outputTableId.value || inputTableId.value)
 const sameTable = computed(() => !!inputTableId.value && !!outputTableId.value && inputTableId.value === outputTableId.value)
@@ -482,7 +481,7 @@ const successorTableId = computed(() => {
 // 按「这张表是谁产出的」逐源反查就能算出来，所以 2026-09-17 放开，判定挪到发送时（resolveNextStepFor）。
 const canPickRows = computed(() => {
   if (!selectedSourceId.value) return true
-  return hasSuccessor.value && !isStructuralNode.value
+  return hasSuccessor.value
     && (sameTable.value || !inputTableId.value || !outputTableId.value)
 })
 const selectedRowIds = ref<string[]>([])

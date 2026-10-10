@@ -25,7 +25,7 @@ import ExportMenu from '@/components/ResultToolbar/ExportMenu.vue'
 import FullscreenToggle from '@/components/ResultToolbar/FullscreenToggle.vue'
 import BrowseModeToggle, { type BrowseMode } from '@/components/ResultToolbar/BrowseModeToggle.vue'
 import RailNodePicker from '@/views/FlowCanvas/result/components/RailNodePicker.vue'
-import { buildHorizontalLayout, buildSourceSeed, effectiveInputTable, isDecision, isParallel, nodeOutputTable } from '@/views/FlowCanvas/canvas/flowModel'
+import { buildHorizontalLayout, buildSourceSeed, effectiveInputTable, nodeOutputTable } from '@/views/FlowCanvas/canvas/flowModel'
 import { downloadCsv } from '@/utils/format/csvExport'
 import { exportTableFields } from '@/utils/format/exportFields'
 import { resultRowsCsv } from '@/views/FlowCanvas/result/exportRows'
@@ -642,8 +642,8 @@ async function onStepSelectTable(outputTable: string) {
 // ---- 查看方式：按数据表 / 按步骤（1008-07，对齐源数据视图 ResultView 的「按步骤查看」）----
 // 按步骤：选了源之后，用该源流程里的节点代替「数据表」下拉（RailNodePicker，与源 / 文件 / 任务视图同款）；
 // 选节点 = 看这个节点的数据。节点输入表与输出表不同时，旁边的「输入 / 输出」可以切换看哪一张，
-// 相同时合并成「输入·输出」（ResultView 的 M3-0C 定案）。决策 / 分头这类不产生数据的节点、
-// 以及没有输入输出表的节点，不进候选。没选源时没有流程可看，提示先选源。
+// 相同时合并成「输入·输出」（ResultView 的 M3-0C 定案）。没有输入输出表的节点不进候选。
+// 没选源时没有流程可看，提示先选源。
 // 流程图开合按钮打开「展示处理步骤」抽屉（那边点节点会切到它的输出表）。
 interface StepNode { id: string; title: string; inputTable: string; outputTable: string }
 const browseMode = ref<BrowseMode>('table')
@@ -669,7 +669,7 @@ async function loadStepNodes() {
     const layout = buildHorizontalLayout(seed.main, seed.branches, seed.configs, seed.branchGroups, { includeTerminals: false })
     stepNodes.value = layout.nodes.flatMap((node) => {
       const cfg = seed.configs[node.id]
-      if (!cfg || isDecision(cfg) || isParallel(cfg)) return []
+      if (!cfg) return []
       const outputTable = nodeOutputTable(cfg)
       const inputTable = effectiveInputTable(seed.main, seed.branches, seed.configs, node.id, seed.branchGroups)
       return outputTable || inputTable ? [{ id: node.id, title: cfg.title || node.id, inputTable, outputTable }] : []

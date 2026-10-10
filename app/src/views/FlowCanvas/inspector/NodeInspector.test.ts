@@ -375,20 +375,6 @@ describe('配置绑定条与节点配置脏状态条（0824-00 §5.4/§6.1）', 
     expect(bar.text()).not.toContain('新建配置')
     w.unmount()
   })
-
-  it('决策节点不参与配置绑定，不显示配置条', async () => {
-    mockAssets()
-    setActivePinia(createPinia())
-    const flow = useFlowStore()
-    flow.configs['dec-1'] = { ...cloneConfig(NODE_CONFIGS['web-list']), kind: 'decision' }
-    flow.select('dec-1')
-
-    const w = mount(NodeInspector)
-    await flushPromises()
-    expect(w.find('.rc-config-bar').exists()).toBe(false)
-    w.unmount()
-  })
-
   it('改节点配置置脏；保存配置后清脏标并把流程置脏', async () => {
     mockAssets()
     setActivePinia(createPinia())
@@ -439,19 +425,6 @@ describe('配置绑定条与节点配置脏状态条（0824-00 §5.4/§6.1）', 
     await flushPromises()
     expect(w.text()).toContain('新建配置 · 未保存')
     expect(saveOf().attributes('disabled')).toBeUndefined()
-    w.unmount()
-  })
-
-  it('决策节点不显示节点配置脏状态条', async () => {
-    mockAssets()
-    setActivePinia(createPinia())
-    const flow = useFlowStore()
-    flow.configs['dec-1'] = { ...cloneConfig(NODE_CONFIGS['web-list']), kind: 'decision' }
-    flow.select('dec-1')
-
-    const w = mount(NodeInspector)
-    await flushPromises()
-    expect(w.find('.rc-insp-foot').exists()).toBe(false)
     w.unmount()
   })
 })

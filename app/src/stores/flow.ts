@@ -13,10 +13,6 @@ import {
   TEMPLATE_TO_SNATCH,
   DEFAULT_TASK_QUEUES,
   cloneConfig,
-  conditionGroupLabel,
-  conditionGroupIsSet,
-  isDecision,
-  isParallel,
   isDataNode,
   isRuleNode,
   isMonitorNode,
@@ -56,6 +52,7 @@ import {
 } from '@/utils/flow/flowTemplates'
 import type { FlowRecord, Source, Site, SourceJob, Step } from '../api'
 import { useSourceStore } from './source'
+import { topologyFromParents } from '@/views/FlowCanvas/canvas/flowTopology'
 import { useNodeStore } from './node'
 import { useRuntimeStore } from './runtime'
 
@@ -66,7 +63,6 @@ const NODE_W = 210
 const TERM_W = 150
 const TERM_H = 36
 const NODE_H = 108
-const LOGIC_H = 140
 const GAP = 36
 // 分叉带高度（0925 排版）：owner 底边到分支列首行顶边的距离。原来是 GAP(30)，
 // 母线只能挤在 15px 处、贴着父节点，看起来"糊在一起"；加宽后短竖线 + 母线 + 短竖线层次分明。
@@ -80,16 +76,15 @@ export interface PlacedPos { top: number; left: number; height: number }
 export interface PlacedNode { id: string; cfg: NodeConfig; pos: PlacedPos; branch: boolean; side?: 'left' | 'right'; orphan?: boolean }
 export interface PlacedTerm { id: string; label: string; pos: PlacedPos }
 export interface DropSlot { afterId: string; top: number }
-/** 决策/分头节点的 fan-out 分支连线（0707 优化·Phase6）：owner 底边 → 每列首节点 + 列内节点连线。
- *  branchLabel / condLabel 仅首段（owner → 列首节点）携带，供画布在连线起点渲染分支名/条件摘要。 */
-export interface FanOutEdge { d: string; branchLabel?: string; condLabel?: string }
+/** 分叉点的 fan-out 分支连线（0707 优化·Phase6）：owner 底边 → 每列首节点 + 列内节点连线。
+ *  branchLabel 仅首段（owner → 列首节点）携带。条件属于列首节点自己，画布从节点读（branchColText）。 */
+export interface FanOutEdge { d: string; branchLabel?: string }
 /** fan-out 列 meta：用于 FlowBoard 渲染列头/列脚标签 */
 export interface FanOutColMeta {
   ownerId: string
   branches: {
     id: string
     label: string
-    condLabel: string
     colX: number
     top: number
     height: number
@@ -185,13 +180,11 @@ export const useFlowStore = defineStore('flow', () => {
   // 默认空白画布（M5.5）：首次进入为干净的 开始 → 完成；标准链路 / 预置意图经「＋ 新建流程」载入
   const main = ref<string[]>(['start', 'end'])
   const branches = reactive<BranchSeed[]>([])
-  // 决策/分头节点的分支段（0707 优化·Phase6）：与 BranchSeed 旁路挂靠并存，不互相替代。
+  // 分叉点以下的分支（由各节点上级推导，见 flowTopology.ts）：与 BranchSeed 旁路挂靠并存，不互相替代。
   const branchGroups = reactive<FlowBranchGroup[]>([])
   // 孤儿步骤 id（0925）：随 load(def.orphanIds) 载入，仅用于画布标记与「关联到节点」修复，
   // 不参与序列化/保存；重新加载流程时按响应重新推导。
   const orphanIds = ref<string[]>([])
-  // 分支 id 自增序列（0707 Phase6）：保证同一 FlowDef 内 FlowBranch.id 不重复
-  let branchSeq = 1
   let seq = 1
 
   // S6-3（方案 §4.4）：删节点待清理资源清单——本期只收集不真删，见 remove() 里的调用点。
@@ -219,9 +212,7 @@ export const useFlowStore = defineStore('flow', () => {
     return id === 'start' || id === 'end'
   }
   function nodeHeight(id: string) {
-    if (isTerm(id)) return TERM_H
-    const cfg = configs[id]
-    return cfg && (isDecision(cfg) || isParallel(cfg)) ? LOGIC_H : NODE_H
+    return isTerm(id) ? TERM_H : NODE_H
   }
 
   // ---- 布局（统一计算，供画布渲染） ----
@@ -237,7 +228,7 @@ export const useFlowStore = defineStore('flow', () => {
   const layout = computed(() => {
     const mainPos: Record<string, PlacedPos> = {}
     const branchPos: Record<string, PlacedPos> = {}
-    // 0707 优化·Phase6：决策/分头节点的 fan-out 列布局；0925 完整还原扩展到**任意**分支组
+    // 分叉点的 fan-out 列布局（0707 Phase6 起；0925 完整还原扩展到任意分支组）
     // （还原拓扑的分叉 owner 是普通采集节点）并支持嵌套（subGroups 递归摆放、递归连线）
     const fanOutPos: Record<string, PlacedPos> = {}
     const fanOutColMeta: Record<string, FanOutColMeta> = {}
@@ -346,19 +337,16 @@ export const useFlowStore = defineStore('flow', () => {
           fanOutEdges.push({
             d: elbowVH(ownerCx, ownerBottom, colCx, headPos.top, 12, ownerBottom + FORK_GAP / 2),
             branchLabel: b.label,
-            condLabel: conditionGroupLabel(b.condition),
           })
         } else {
           fanOutEdges.push({
             d: elbowVH(ownerCx, ownerBottom, colCx, top, 12, ownerBottom + FORK_GAP / 2),
             branchLabel: b.label,
-            condLabel: conditionGroupLabel(b.condition),
           })
         }
         cols.push({
           id: b.id,
           label: b.label,
-          condLabel: conditionGroupLabel(b.condition),
           colX: colCx,
           top,
           height: Math.max(0, deepest.y - top),
@@ -509,19 +497,6 @@ export const useFlowStore = defineStore('flow', () => {
 
   const selectedNode = computed<NodeConfig | undefined>(() => configs[selectedId.value])
 
-  // 从 fromId 起沿主链向上找最近一个有输出表的节点（含 fromId 自身）
-  function upstreamOutputTable(fromId: string): string {
-    const idx = main.value.indexOf(fromId)
-    for (let i = idx; i >= 0; i--) {
-      const c = configs[main.value[i]]
-      if (c) {
-        const t = nodeOutputTable(c)
-        if (t) return t
-      }
-    }
-    return ''
-  }
-
   // 节点有效输入表 / 是否主链首节点（0701 问题五）：委托 flowModel 纯函数，供 UI 与 validateFlow 共用
   function effectiveInputTableFor(id: string): string {
     return effectiveInputTable(main.value, branches, configs, id, branchGroups)
@@ -581,11 +556,10 @@ export const useFlowStore = defineStore('flow', () => {
   }
 
   // ---- 编辑动作 ----
-  function insertAfter(prevId: string, template: string) {
+  /** 按模板新建一份节点配置（新建态：无 configId，配置名 = 节点名）。prevId / upstreamTable 只用于规则 / 数据节点默认值。 */
+  function newNodeConfig(template: string, prevId: string, upstreamTable: string): { srcKey: string; cfg: NodeConfig } {
     const srcKey = TEMPLATE_TO_NODE[template] || 'web-list'
     const cfg = cloneConfig(NODE_CONFIGS[srcKey])
-    if (template === 'decision') cfg.kind = 'decision'
-    if (template === 'parallel') cfg.kind = 'parallel'
     cfg.template = template
     const typeName = TEMPLATE_TO_NAME[template]
     if (typeName) cfg.title = typeName
@@ -594,7 +568,7 @@ export const useFlowStore = defineStore('flow', () => {
     delete cfg.configId
     cfg.configName = cfg.title
     applyStepSourceDefault(cfg)
-    if (template === 'rule' || srcKey === 'rule') applyRuleStepDefaults(cfg, prevId, upstreamOutputTable(prevId), typeName)
+    if (template === 'rule' || srcKey === 'rule') applyRuleStepDefaults(cfg, prevId, upstreamTable, typeName)
     if (cfg.collectCfg) {
       cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[template] ?? cfg.collectCfg.snatchType
       cfg.collectCfg.url = ''
@@ -603,7 +577,7 @@ export const useFlowStore = defineStore('flow', () => {
       cfg.collectCfg.inputParams = []
     }
     if (!cfg.collectCfg && isDataNode(cfg) && !cfg.outputTable) {
-      cfg.outputTable = upstreamOutputTable(prevId)
+      cfg.outputTable = upstreamTable
     }
     const defaultQueue = DEFAULT_TASK_QUEUES[template]
     if (defaultQueue) {
@@ -612,19 +586,128 @@ export const useFlowStore = defineStore('flow', () => {
         queue: defaultQueue,
       }
     }
+    return { srcKey, cfg }
+  }
+
+  // ---- 拓扑编辑（1008-BR-03）：先改父子关系，再用 topologyFromParents 重建 main + branchGroups ----
+  // 与画布还原（buildSourceSeed）同一个函数，编辑后看到的拓扑就是「保存 → 刷新」重建出来的样子。
+  // 旧平台语义：每个节点一个上级，分叉以下不汇合；新节点排在同级最后（后端按步骤 ID 升序返回，
+  // 新建的 ID 最大，刷新后本来就在最右，1008 方案 §2.2）。
+
+  /** 画布当前每个节点的上级与展示顺序：主链按前一个节点，分支链按链内前一个（链头 = 分叉点）。 */
+  function canvasParents(): { parentOf: Map<string, string | undefined>; order: string[] } {
+    const parentOf = new Map<string, string | undefined>()
+    const order: string[] = []
+    let prev: string | undefined
+    for (const id of main.value) {
+      if (isTerm(id)) continue
+      parentOf.set(id, prev)
+      order.push(id)
+      prev = id
+    }
+    const walk = (groups: FlowBranchGroup[]) => {
+      for (const g of groups) {
+        for (const b of g.branches) {
+          let p = g.ownerId
+          for (const id of b.chain) {
+            parentOf.set(id, p)
+            order.push(id)
+            p = id
+          }
+          if (b.subGroups?.length) walk(b.subGroups)
+        }
+      }
+    }
+    walk(branchGroups)
+    return { parentOf, order }
+  }
+
+  function rebuildTopology(parentOf: Map<string, string | undefined>, order: string[]) {
+    const t = topologyFromParents({ order, parentOf, anchored: new Set(order), labelOf: (id) => configs[id]?.title })
+    main.value = t.main
+    branchGroups.splice(0, branchGroups.length, ...t.branchGroups)
+  }
+
+  /** 沿上级链找最近一个有输出表的节点（含 fromId 自身）；分支链里同样适用 */
+  function upstreamOutputTableVia(parentOf: Map<string, string | undefined>, fromId: string | undefined): string {
+    const seen = new Set<string>()
+    for (let cur = fromId; cur && !seen.has(cur); cur = parentOf.get(cur)) {
+      seen.add(cur)
+      const t = configs[cur] ? nodeOutputTable(configs[cur]) : ''
+      if (t) return t
+    }
+    return ''
+  }
+
+  /**
+   * 新建节点挂到 parentId 下，并接管 childIds（这些子节点的上级改成新节点）。
+   * childIds 为空 = 只追加一个子节点；parentId 已有其他子节点时新节点就成了一条新分支。
+   */
+  function attachNewNode(template: string, parentId: string | undefined, childIds: string[]): string {
+    const { parentOf } = canvasParents()
+    const { srcKey, cfg } = newNodeConfig(template, parentId ?? 'start', upstreamOutputTableVia(parentOf, parentId))
     const id = `${srcKey}-${seq++}`
     configs[id] = cfg
-    const idx = main.value.indexOf(prevId)
-    const at = prevId === 'end' ? idx : (idx < 0 ? main.value.length - 1 : idx + 1)
-    main.value.splice(at, 0, id)
+    placeNode(id, parentId, childIds)
     // 0928 表联动：新节点输入表显式取上游有效输出表（采集节点原来不写，保存时 entryTypeId 为空）
     inheritInputTable(tableTopology(), id)
     applyParamSourceUrlToFirstCollectNode(main.value, configs, sourceCfg.value)
-    if (template === 'decision') ensureBranchGroup(id, 'decision')
-    else if (template === 'parallel') ensureBranchGroup(id, 'parallel')
     select(id)
     nodeStore.touchFlow()
     return id
+  }
+
+  /** 把已在 configs 里的节点 id 挂到 parentId 下并接管 childIds，然后重建拓扑 */
+  function placeNode(id: string, parentId: string | undefined, childIds: string[]) {
+    const { parentOf, order } = canvasParents()
+    parentOf.set(id, parentId)
+    for (const c of childIds) parentOf.set(c, id)
+    // 接管子节点时新节点就在原位置，排在第一个子节点处（入口上方插入时它要当第一个根）；
+    // 只追加时排在最后 = 同级最右
+    const firstChild = childIds.length ? order.indexOf(childIds[0]) : -1
+    if (firstChild >= 0) order.splice(firstChild, 0, id)
+    else order.push(id)
+    rebuildTopology(parentOf, order)
+  }
+
+  /** 节点在画布上的上级（主链首节点 / 根位节点为 undefined） */
+  function parentOfNode(id: string): string | undefined {
+    return canvasParents().parentOf.get(id)
+  }
+
+  /** 节点在画布上的直接子节点（按展示顺序） */
+  function childrenOfNode(id: string): string[] {
+    const { parentOf, order } = canvasParents()
+    return order.filter((c) => parentOf.get(c) === id)
+  }
+
+  /**
+   * 在 prevId 下方插入：新节点挂到 prevId 下并**接管它的全部子节点**（分叉点下方插入 = 在分叉之前插）。
+   * 'start' = 插到最前（新节点当根，原首节点挂到它下面）；'end' 或不在画布上的 id = 追加到主链末尾。
+   */
+  function insertAfter(prevId: string, template: string) {
+    const { parentOf } = canvasParents()
+    if (prevId === 'start') {
+      const first = main.value.find((id) => !isTerm(id))
+      return attachNewNode(template, undefined, first ? [first] : [])
+    }
+    if (prevId === 'end' || !parentOf.has(prevId)) {
+      const last = [...main.value].reverse().find((id) => !isTerm(id))
+      return attachNewNode(template, last, [])
+    }
+    return attachNewNode(template, prevId, childrenOfNode(prevId))
+  }
+
+  /** 在 parentId → childIds 这段线上插入（分支段只接管该分支的链头；接管全部子节点等同 insertAfter） */
+  function insertOnEdge(parentId: string, childIds: string[], template: string): string {
+    return attachNewNode(template, parentId, childIds)
+  }
+
+  /** 左右「+」：给 nodeId 加一个兄弟节点（同一个上级），排在同级最右。根位节点没有上级，不能加兄弟。 */
+  function addSibling(nodeId: string, template: string): string | null {
+    const parent = parentOfNode(nodeId)
+    if (!parent) return null
+    return attachNewNode(template, parent, [])
   }
 
   function upstreamOutputTableInBranch(ownerId: string, branch: FlowBranch): string {
@@ -639,41 +722,11 @@ export const useFlowStore = defineStore('flow', () => {
   }
 
   function addNodeToBranch(ownerId: string, branchId: string, template: string): string | null {
-    if (template === 'decision' || template === 'parallel') return null
     const g = branchGroupOf(branchGroups, ownerId)
     const branch = g?.branches.find((b) => b.id === branchId)
     if (!branch) return null
-    const srcKey = TEMPLATE_TO_NODE[template] || 'web-list'
-    const cfg = cloneConfig(NODE_CONFIGS[srcKey])
-    cfg.template = template
-    const typeName = TEMPLATE_TO_NAME[template]
-    if (typeName) cfg.title = typeName
-    // 配置名 = 节点名（0828 D08/P4）：新节点直接带上，用户不必为"起名"多点一次。
-    // 模板里可能带着上一份配置的身份，连 configId 一起清干净——新节点是新建态。
-    delete cfg.configId
-    cfg.configName = cfg.title
-    applyStepSourceDefault(cfg)
-    if (template === 'rule' || srcKey === 'rule') {
-      const prevInBranch = branch.chain.at(-1) || ownerId
-      applyRuleStepDefaults(cfg, prevInBranch, upstreamOutputTableInBranch(ownerId, branch), typeName)
-    }
-    if (cfg.collectCfg) {
-      cfg.collectCfg.snatchType = TEMPLATE_TO_SNATCH[template] ?? cfg.collectCfg.snatchType
-      cfg.collectCfg.url = ''
-      const cap = collectorCapabilityOf(cfg)
-      cfg.collectCfg.outputTable = cap?.outputMode === 'fixed' ? (cap.fixedOutputTable ?? '') : ''
-      cfg.collectCfg.inputParams = []
-    }
-    if (!cfg.collectCfg && isDataNode(cfg) && !cfg.outputTable) {
-      cfg.outputTable = upstreamOutputTableInBranch(ownerId, branch)
-    }
-    const defaultQueue = DEFAULT_TASK_QUEUES[template]
-    if (defaultQueue) {
-      cfg.taskCfg = {
-        ...(cfg.taskCfg ?? { urlRule: '' }),
-        queue: defaultQueue,
-      }
-    }
+    const prevInBranch = branch.chain.at(-1) || ownerId
+    const { srcKey, cfg } = newNodeConfig(template, prevInBranch, upstreamOutputTableInBranch(ownerId, branch))
     const id = `${srcKey}-${seq++}`
     configs[id] = cfg
     branch.chain.push(id)
@@ -720,30 +773,10 @@ export const useFlowStore = defineStore('flow', () => {
     cfg.configName = cfg.title
     const newId = `${id}-copy-${seq++}`
     configs[newId] = cfg
-    const idx = main.value.indexOf(id)
-    if (idx >= 0) main.value.splice(idx + 1, 0, newId)
-    const bg = branchGroupOf(branchGroups, id)
-    if (bg) {
-      const cloneGroup = (g: FlowBranchGroup, targetOwner: string, nested = false): FlowBranchGroup => ({
-        ownerId: targetOwner,
-        branches: g.branches.map((b) => ({
-          ...b,
-          // 分支 id 必须重新铸新，否则与原件撞 id（v-for key / 分支添加入口全乱）
-          id: nested
-            ? `${targetOwner}-b-copy-${branchSeq++}`
-            : `${targetOwner}-b-${b.id.split('-b-')[1] ?? `copy-${branchSeq++}`}`,
-          chain: [...b.chain],
-          // 0926 REVIEW F3：嵌套子组 owner 不沿用原件链节点 id——同一链节点若被原件与多份
-          // 副本的嵌套分叉同时声明（连做两次复制），branchGroupOf 命中歧义。副本的嵌套
-          // owner 从副本 owner 派生（渲染/摆放按链锚点定位，不受 ownerId 影响；lastStep
-          // 解析仍以原件分组为准——链节点 id 未复刻，原件恒先命中）。
-          ...(b.subGroups?.length
-            ? { subGroups: b.subGroups.map((sg) => cloneGroup(sg, `${targetOwner}-nested-${branchSeq++}`, true)) }
-            : {}),
-        })),
-      })
-      branchGroups.push(cloneGroup(bg, newId))
-    }
+    // 1008-BR-06：副本插在原节点下方并接管它的子节点（与 insertAfter 同口径，线性流程里就是「紧跟在原节点后」）。
+    // 原先复制分叉点会连分支组一起复制、两组共用同一批链节点（决策节点时代的写法），普通分叉点上会让同一节点出现两次。
+    // 旁路挂靠（BranchSeed）节点不在主链 / 分支里，副本同样不上画布，与原来一致。
+    if (canvasParents().parentOf.has(id)) placeNode(newId, id, childrenOfNode(id))
     select(newId)
     nodeStore.touchFlow()
     return newId
@@ -792,22 +825,6 @@ export const useFlowStore = defineStore('flow', () => {
     cfg.disabled = !cfg.disabled
     select(id)
     nodeStore.touchFlow()
-  }
-
-  function insertInBranch(ownerId: string, branchId: string, newNodeId: string, index?: number): boolean {
-    const g = branchGroupOf(branchGroups, ownerId)
-    if (!g) return false
-    const branch = g.branches.find((b) => b.id === branchId)
-    if (!branch) return false
-    if (!configs[newNodeId]) return false
-    if (branch.chain.includes(newNodeId)) return false
-    if (index === undefined || index < 0 || index > branch.chain.length) {
-      branch.chain.push(newNodeId)
-    } else {
-      branch.chain.splice(index, 0, newNodeId)
-    }
-    nodeStore.touchFlow()
-    return true
   }
 
   function removeBranchGroup(ownerId: string) {
@@ -900,116 +917,6 @@ export const useFlowStore = defineStore('flow', () => {
     nodeStore.touchFlow()
   }
 
-  // ---- 决策/分头分支段操作（0707 优化·Phase6）----
-  function ensureBranchGroup(ownerId: string, kind: 'decision' | 'parallel'): FlowBranchGroup | null {
-    const existing = branchGroups.find((bg) => bg.ownerId === ownerId)
-    if (existing) return existing
-    if (kind === 'decision') {
-      const g: FlowBranchGroup = {
-        ownerId,
-        branches: [
-          { id: `${ownerId}-b-condition-${branchSeq++}`, label: '条件分支 1', condition: undefined, chain: [] },
-        ],
-      }
-      branchGroups.push(g)
-      return g
-    }
-    if (kind === 'parallel') {
-      const g: FlowBranchGroup = {
-        ownerId,
-        branches: [
-          { id: `${ownerId}-b-a-${branchSeq++}`, label: '路径A', condition: undefined, chain: [] },
-          { id: `${ownerId}-b-b-${branchSeq++}`, label: '路径B', condition: undefined, chain: [] },
-        ],
-      }
-      branchGroups.push(g)
-      return g
-    }
-    return null
-  }
-
-  function addBranch(ownerId: string): FlowBranch | null {
-    const g = branchGroups.find((bg) => bg.ownerId === ownerId)
-    if (!g) return null
-    const cfg = configs[ownerId]
-    if (!cfg || cfg.kind !== 'decision') return null
-    const branch: FlowBranch = {
-      id: `${ownerId}-b-condition-${branchSeq++}`,
-      label: `条件分支 ${g.branches.length + 1}`,
-      condition: undefined,
-      chain: [],
-    }
-    g.branches.push(branch)
-    nodeStore.touchFlow()
-    return branch
-  }
-
-  function removeBranch(ownerId: string, branchId: string): { ok: boolean; reason?: string } {
-    const g = branchGroups.find((bg) => bg.ownerId === ownerId)
-    if (!g) return { ok: false, reason: '未找到 FlowBranchGroup' }
-    const idx = g.branches.findIndex((b) => b.id === branchId)
-    if (idx < 0) return { ok: false, reason: '未找到分支' }
-    const branch = g.branches[idx]
-    if (branch.chain.length > 0) {
-      return { ok: false, reason: `分支内还有 ${branch.chain.length} 个节点，请先移除` }
-    }
-    const minBranches = configs[ownerId]?.kind === 'parallel' ? 2 : 1
-    if (g.branches.length <= minBranches) {
-      return { ok: false, reason: `至少保留 ${minBranches} 条分支` }
-    }
-    g.branches.splice(idx, 1)
-    nodeStore.touchFlow()
-    return { ok: true }
-  }
-
-  function moveBranch(ownerId: string, branchId: string, direction: 'up' | 'down'): boolean {
-    const g = branchGroups.find((bg) => bg.ownerId === ownerId)
-    if (!g) return false
-    const index = g.branches.findIndex((b) => b.id === branchId)
-    if (index < 0) return false
-    const j = index + (direction === 'up' ? -1 : 1)
-    if (j < 0 || j >= g.branches.length) return false
-    const next = [...g.branches]
-    ;[next[index], next[j]] = [next[j], next[index]]
-    g.branches = next
-    nodeStore.touchFlow()
-    return true
-  }
-
-  function moveInBranch(ownerId: string, branchId: string, index: number, direction: 'up' | 'down'): boolean {
-    const g = branchGroups.find((bg) => bg.ownerId === ownerId)
-    if (!g) return false
-    const branch = g.branches.find((b) => b.id === branchId)
-    if (!branch) return false
-    const j = index + (direction === 'up' ? -1 : 1)
-    if (j < 0 || j >= branch.chain.length) return false
-    const next = [...branch.chain]
-    ;[next[index], next[j]] = [next[j], next[index]]
-    branch.chain = next
-    nodeStore.touchFlow()
-    return true
-  }
-
-  function setBranchLabel(ownerId: string, branchId: string, label: string): boolean {
-    const g = branchGroups.find((bg) => bg.ownerId === ownerId)
-    if (!g) return false
-    const branch = g.branches.find((b) => b.id === branchId)
-    if (!branch) return false
-    branch.label = label || branch.label
-    nodeStore.touchFlow()
-    return true
-  }
-
-  function setBranchCondition(ownerId: string, branchId: string, cond: ConditionGroup | undefined): boolean {
-    const g = branchGroups.find((bg) => bg.ownerId === ownerId)
-    const branch = g?.branches.find((b) => b.id === branchId)
-    if (!branch) return false
-    branch.condition = cond
-    nodeStore.touchFlow()
-    return true
-  }
-
-  // ---- 流程定义 序列化 / 加载 ----
   function serialize(options: { includeLoginPasswords?: boolean } = {}): FlowDef {
     const defaultQueue =
       `${sourceCfg.value?.sourceId || siteCtx.value?.siteId || sourceCtx.value?.siteId || flowId.value}_main`
@@ -1135,7 +1042,6 @@ export const useFlowStore = defineStore('flow', () => {
     branchGroups.splice(0, branchGroups.length, ...((JSON.parse(JSON.stringify(def.branchGroups ?? [])) as FlowBranchGroup[])))
 
     seq = Math.max(1, ...Object.keys(configs).map((k) => Number(/-(\d+)$/.exec(k)?.[1]) || 0)) + 1
-    branchSeq = Math.max(1, ...branchGroups.flatMap((g) => g.branches.map((b) => Number(/-(?:b-(?:condition|a|b)|elif|if|else)-(\d+)$/.exec(b.id)?.[1]) || 0))) + 1
 
     const first = main.value.find((m) => !isTerm(m))
     if (first) select(first)
@@ -1377,26 +1283,6 @@ export const useFlowStore = defineStore('flow', () => {
         if (missingValues.length) errs.push(`「${c.title}」任务参数 ${missingValues.join('、')} 缺少取值字段或值函数`)
       }
     })
-    // 决策/分头分支段校验
-    for (const bg of d.branchGroups ?? []) {
-      const ownerCfg = d.configs[bg.ownerId]
-      if (!ownerCfg) continue
-      if (ownerCfg.kind === 'decision') {
-        if (bg.branches.length < 1) {
-          errs.push(`「${ownerCfg.title}」决策至少需要 1 条条件分支`)
-        }
-        for (let i = 0; i < bg.branches.length; i++) {
-          const b = bg.branches[i]
-          if (!conditionGroupIsSet(b.condition)) {
-            errs.push(`「${ownerCfg.title}」第 ${i + 1} 条分支（${b.label}）缺少条件`)
-          }
-        }
-      } else if (ownerCfg.kind === 'parallel') {
-        if (bg.branches.length < 2) {
-          errs.push(`「${ownerCfg.title}」分头节点至少需要 2 条分支`)
-        }
-      }
-    }
     return errs
   }
 
@@ -1442,6 +1328,10 @@ export const useFlowStore = defineStore('flow', () => {
     isFirstMainNodeId,
     // 编辑动作
     insertAfter,
+    insertOnEdge,
+    addSibling,
+    parentOfNode,
+    childrenOfNode,
     addNodeToBranch,
     duplicateNode,
     duplicate,
@@ -1451,17 +1341,9 @@ export const useFlowStore = defineStore('flow', () => {
     toggleDisabled,
     remove,
     setTitle,
-    insertInBranch,
     // 分支操作
-    ensureBranchGroup,
-    addBranch,
-    removeBranch,
     removeBranchGroup,
     detachFromBranches,
-    moveBranch,
-    moveInBranch,
-    setBranchLabel,
-    setBranchCondition,
     // 序列化/加载
     serialize,
     load,

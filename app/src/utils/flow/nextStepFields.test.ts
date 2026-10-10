@@ -59,17 +59,17 @@ describe('nextStepColumns', () => {
     expect(nextStepColumns({ columns, main: ['a', 'b'], configs, nodeId: 'a' })).toEqual(['title', 'author'])
   })
 
-  it('分头节点下游取各分支首个真实节点的并集', () => {
+  it('分叉点下游取各分支首个真实节点的并集', () => {
     const configs = {
       a: node(),
-      fork: node({ kind: 'parallel' }),
+      fork: node(),
       b1: node({ taskCfg: task({ contextMap: ['K1'] }) }),
       b2: node({ taskCfg: task({ contextMap: ['K4'] }) }),
     }
     const branchGroups: FlowBranchGroup[] = [
       { ownerId: 'fork', branches: [{ label: '左', chain: ['b1'] }, { label: '右', chain: ['b2'] }] } as FlowBranchGroup,
     ]
-    expect(nextStepColumns({ columns, main: ['a', 'fork'], configs, branchGroups, nodeId: 'a' }))
+    expect(nextStepColumns({ columns, main: ['a', 'fork'], configs, branchGroups, nodeId: 'fork' }))
       .toEqual(['title', 'author'])
   })
 

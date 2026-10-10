@@ -11,7 +11,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { dataApi, isMockMode, isProductionBackend, parseNextStepReceipt, ruleApi, type DataTableMeta, type DataRow, type EntryDetail, type RowQuery, type Step } from '@/api'
 import {
   buildHorizontalLayout, nodeOutputTable, nodeEntryCondition, conditionGroupLabel, conditionGroupIsSet,
-  isDecision, isParallel, isFirstRunnableNode, hasDirectSuccessor, directPredecessorIds, directSuccessorIds, directSuccessorIdsIncludingDisabled, type NodeConfig,
+  isFirstRunnableNode, hasDirectSuccessor, directPredecessorIds, directSuccessorIds, directSuccessorIdsIncludingDisabled, type NodeConfig,
 } from '@/views/FlowCanvas/canvas/flowModel'
 import { nextStepColumns } from '@/utils/flow/nextStepFields'
 import { fetchNextStepConfig } from '@/utils/flow/nextStepConfig'
@@ -63,8 +63,8 @@ const queryNodeId = computed(() => String(route.query.nodeId ?? ''))
 const queryScriptPath = computed(() => String(route.query.scriptPath ?? '').trim())
 const queryDataId = computed(() => String(route.query.dataId ?? '').trim())
 
-// 节点候选不再要求"必须有输出表"（0812 计划 M2-6，方案 §6.3）：结构节点（决策/分头）
-// 选中后走只读上下文 + 空态分支，不强行伪装成有数据的节点；候选就是流程里的全部真实节点。
+// 节点候选不再要求"必须有输出表"（0812 计划 M2-6，方案 §6.3）：没有表的节点选中后走只读上下文 + 空态分支，
+// 不强行伪装成有数据的节点；候选就是流程里的全部真实节点。
 const processLayout = computed(() =>
   buildHorizontalLayout(flow.main, flow.branches, flow.configs, flow.branchGroups, { includeTerminals: false }),
 )
@@ -76,7 +76,6 @@ const tableChoice = ref('')
 const outputTables = computed(() => {
   const tables = new Map<string, { id: string; nodeIds: string[]; titles: string[] }>()
   for (const node of allNodes.value) {
-    if (isDecision(node.cfg) || isParallel(node.cfg)) continue
     const id = nodeOutputTable(node.cfg)
     if (!id) continue
     const item = tables.get(id) ?? { id, nodeIds: [], titles: [] }
@@ -165,15 +164,13 @@ const visibleFieldProps = computed<string[] | undefined>(() => {
 })
 const outputTableId = computed(() => (selectedCfg.value ? nodeOutputTable(selectedCfg.value) : ''))
 const inputTableId = computed(() => (selectedNodeId.value ? flow.effectiveInputTableFor(selectedNodeId.value) : ''))
-const isStructuralNode = computed(() => !!selectedCfg.value && (isDecision(selectedCfg.value) || isParallel(selectedCfg.value)))
-// 决策/分头是纯编排节点，不产生可查看的数据，也不提供手动执行——即使技术上继承了输入表也不当数据节点处理。
-const hasAnyTable = computed(() => browseMode.value === 'table' ? !!tableChoice.value : !isStructuralNode.value && (!!outputTableId.value || !!inputTableId.value))
+const hasAnyTable = computed(() => browseMode.value === 'table' ? !!tableChoice.value : (!!outputTableId.value || !!inputTableId.value))
 const bothScopesAvailable = computed(() => !!(inputTableId.value && outputTableId.value))
 // 输入表===输出表（0812 会议同时要了"展示看输出表"+"发送用输入数据"两件事，输入≠输出时
 // 这两件事天然落在两张表上、需要两个 tab；相同时落在同一张表，双 tab 就成了自我矛盾——
 // 合并成一个 tab，这张表两个身份都占，不需要切换（M3-0C，2026-08-15 定案）。
 const sameTable = computed(() => !!inputTableId.value && !!outputTableId.value && inputTableId.value === outputTableId.value)
-const scopeSwitchable = computed(() => bothScopesAvailable.value && !isStructuralNode.value && !sameTable.value)
+const scopeSwitchable = computed(() => bothScopesAvailable.value && !sameTable.value)
 function defaultScope(): 'output' | 'input' {
   return outputTableId.value ? 'output' : 'input'
 }
@@ -215,7 +212,7 @@ const disabledSuccessorTitles = computed(() => {
 
 type ExecMode = 'fetch' | 'input' | 'none' | 'upstream'
 const execMode = computed<ExecMode>(() => {
-  if (isStructuralNode.value || (!outputTableId.value && !inputTableId.value)) return 'none'
+  if (!outputTableId.value && !inputTableId.value) return 'none'
   if (hasSuccessor.value) return 'input'
   // 末节点：有唯一上游就能从上一节点重跑（0831 X7-B）。上游不唯一宁可不给入口。
   if (predecessorId.value) return 'upstream'
@@ -238,7 +235,7 @@ const execMode = computed<ExecMode>(() => {
  * 「没配后续节点」和「这里本来就没这功能」在界面上长得一模一样，而这两件事完全不同。
  *
  * ⚠️ 上面接上 `'fetch'` 之后，这段**大部分分支已经走不到了**，留着是兜底：
- * - 结构节点 / 没有任何表 → 外层 `hasAnyTable` 的空态先接管，根本到不了工具栏；
+ * - 没有任何表 → 外层 `hasAnyTable` 的空态先接管，根本到不了工具栏；
  * - 孤立首节点 → 现在是 `'fetch'`；
  * - 末节点单上游 → `'upstream'`。
  * 实际还能落到这里的只剩「末节点 + 多个上游」（上游不唯一时 predecessorId 为空），
@@ -246,7 +243,6 @@ const execMode = computed<ExecMode>(() => {
  */
 const noExecReason = computed(() => {
   if (execMode.value !== 'none') return ''
-  if (isStructuralNode.value) return '结构节点不产生数据，没有可执行的操作'
   if (!outputTableId.value && !inputTableId.value) return '当前节点没有配置输入表 / 输出表，无法执行'
   return '当前节点没有后续节点，也没有可回退的上游，无法发任务'
 })
