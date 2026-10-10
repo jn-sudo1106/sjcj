@@ -333,6 +333,7 @@ function nearestAfterId(clientY: number): string {
 }
 function onDrop(ev: DragEvent) {
   ev.preventDefault()
+  if (isPublishedView.value) return
   const afterId = nearestAfterId(ev.clientY)
   const nodeId = ev.dataTransfer?.getData('node-id')
   if (nodeId) {
@@ -370,10 +371,13 @@ function onNodeMenu(ev: MouseEvent, id: string) {
   ev.preventDefault()
   ev.stopPropagation()
   flow.select(id)
+  // 只读（发布版 / 锁定草稿）：右键菜单全是改动操作（插入 / 复制 / 移动 / 启停 / 删除），不弹
+  if (isPublishedView.value) return
   openMenu(ev.clientX, ev.clientY, id)
 }
 function onPaneMenu(ev: MouseEvent) {
   ev.preventDefault()
+  if (isPublishedView.value) return
   openMenu(ev.clientX, ev.clientY, null, nearestAfterId(ev.clientY))
 }
 function openMenu(x: number, y: number, nodeId: string | null, afterId?: string) {
@@ -647,6 +651,7 @@ watch(
     <FlowVersionBar />
     <div class="rc-canvas-body" :class="{ 'is-version-readonly': isPublishedView }">
     <button
+      v-if="!isPublishedView"
       class="rc-node-library-toggle"
       type="button"
       :title="nodePalette.show ? '收起节点库' : '打开节点库'"
@@ -698,7 +703,7 @@ watch(
 
         <!-- 插入点 -->
         <button
-          v-for="(s, i) in flow.layout.slots"
+          v-for="(s, i) in isPublishedView ? [] : flow.layout.slots"
           :key="'s' + i"
           class="rc-drop-slot"
           type="button"
@@ -782,7 +787,7 @@ watch(
           class="rc-flow-node"
           :class="nodeClasses(n.id, n.cfg)"
           :style="{ left: n.pos.left + 'px', top: n.pos.top + 'px' }"
-          draggable="true"
+          :draggable="!isPublishedView"
           @dragstart.stop="onNodeDragStart($event, n.id)"
           @click.stop="onNodeClick(n.id)"
           @contextmenu="onNodeMenu($event, n.id)"
@@ -792,6 +797,7 @@ watch(
           <!-- 删除按钮（0828 D05）：会上明确「那个节点上面要搞个叉」——删节点不该非得回右侧面板或右键菜单。
                hover 才显形，避免每个节点常驻一个叉；右键菜单里的「删除节点」保留，同一个 store 动作。 -->
           <button
+            v-if="!isPublishedView"
             class="rc-node-del"
             type="button"
             title="删除节点"
@@ -807,7 +813,7 @@ watch(
             <div class="rc-node-meta-end">
               <span v-if="runtime.nodeStates[n.id]" class="rc-run-badge" :class="runtime.nodeStates[n.id]">{{ runText(n.id) }}</span>
               <button
-                v-if="n.orphan"
+                v-if="n.orphan && !isPublishedView"
                 class="rc-node-orphan"
                 type="button"
                 title="孤儿步骤：没有可解析的前置步骤（lastStep 缺失或指向集合外）。点击选择它要挂到的节点。"
@@ -920,7 +926,9 @@ watch(
 
 <style scoped>
 .rc-version-readonly { padding: 6px 12px; border-bottom: 1px solid #bfdbfe; background: #eff6ff; color: #1e40af; font-size: 11px; }
-.rc-canvas-body.is-version-readonly { pointer-events: none; background: #f8fafc; }
+/* 只读（发布版 / 锁定草稿）：不再整块 pointer-events: none——那会连滚动条、滚轮、点节点查看都禁掉
+   （2026-10-10 用户反馈「发布状态下拉框都无法拖动」）。改动入口（+ / 删除 / 拖拽 / 右键 / 节点库）在模板里逐个关掉 */
+.rc-canvas-body.is-version-readonly { background: #f8fafc; }
 .rc-canvas-body.is-version-readonly :deep(.rc-flow-node) { opacity: .9; }
 .rc-canvas { position: relative; background: #fff; border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; height: 100%; display: flex; flex-direction: column; }
 .rc-canvas-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--rc-border-soft); background: #fff; flex-wrap: wrap; }

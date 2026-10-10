@@ -50,11 +50,18 @@ async function mountBoard() {
 describe('FlowVersionBar · 发布版只读，编辑草稿后放开', () => {
   it('发布版：画布只读、不出「+」，版本条给出「编辑草稿」', async () => {
     vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(published)
-    const { wrapper } = await mountBoard()
+    const { flow, wrapper } = await mountBoard()
     expect(wrapper.get('[data-testid="flow-version-published"]').text()).toBe('当前发布 V1')
     expect(wrapper.find('[data-testid="flow-version-edit-draft"]').exists()).toBe(true)
     expect(wrapper.find('.rc-canvas-body').classes()).toContain('is-version-readonly')
     expect(wrapper.find('.rc-edge-slot').exists()).toBe(false)
+    // 只读也要能看：不再整块禁用鼠标，只是改动入口（删除 ✕ / 插入「+」/ 节点库）不出现，点节点照常选中
+    expect(wrapper.find('[data-testid="node-delete"]').exists()).toBe(false)
+    expect(wrapper.find('.rc-drop-slot').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="node-library-toggle"]').exists()).toBe(false)
+    const node = wrapper.findAll('.rc-flow-node').find((n) => n.text().includes('#2'))!
+    await node.trigger('click')
+    expect(flow.selectedId).toBe('2')
     wrapper.unmount()
   })
 
