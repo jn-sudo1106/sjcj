@@ -3,7 +3,10 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { useDictStore } from '@/stores/dict'
-import { runnerManagementApi, type CodeRepository, type CodeRepositoryFile, type CodeRepositoryInput, type CodeRepositoryVerification } from '@/api/runnerManagement'
+import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type CodeRepositoryFile, type CodeRepositoryInput, type CodeRepositoryVerification } from '@/api/runnerManagement'
+import RepositoryDirectoriesPanel from './RepositoryDirectoriesPanel.vue'
+
+const props = defineProps<{ repositoryId?: string }>()
 
 const canWrite = computed(() => useAuthStore().role === 'admin')
 const dict = useDictStore()
@@ -23,6 +26,7 @@ const uploading = ref(false)
 const uploadError = ref('')
 const selectedRepoId = ref('')
 const filesRepo = computed(() => repos.value.find((repo) => repo.repoId === selectedRepoId.value) ?? null)
+const selectedDirectory = ref<CodeRepositoryDirectory | null>(null)
 const fileRows = ref<CodeRepositoryFile[]>([])
 const fileKeyword = ref('')
 const filePage = ref(1)
@@ -68,6 +72,7 @@ async function load() {
   for (const repoId of Object.keys(verification)) delete verification[repoId]
   try {
     repos.value = await runnerManagementApi.codeRepositories()
+    if (props.repositoryId && repos.value.some(repo => repo.repoId === props.repositoryId) && props.repositoryId !== selectedRepoId.value) await selectRepo(props.repositoryId)
     if (!visible.value.some((repo) => repo.repoId === selectedRepoId.value)) await selectRepo(visible.value[0]?.repoId ?? '')
     else if (selectedRepoId.value) await loadFiles(1)
   }
@@ -174,7 +179,7 @@ async function submitUpload() {
   try {
     const files = await Promise.all(uploadFiles.value.map(async (file) => ({ name: file.name, data: await encodeFile(file) })))
     const result = await runnerManagementApi.uploadCodeRepositoryFiles(repo.repoId, {
-      overwrite: uploadOverwrite.value, files,
+      overwrite: uploadOverwrite.value, files, ...(selectedDirectory.value ? { directoryId: selectedDirectory.value.directoryId } : {}),
     })
     uploadOpen.value = false
     uploadNotice.value = result.pushed
@@ -192,7 +197,9 @@ async function loadFiles(page = filePage.value) {
   fileLoading.value = true
   fileError.value = ''
   try {
-    const result = await runnerManagementApi.codeRepositoryFiles(repo.repoId, fileKeyword.value.trim(), page)
+    const result = await (selectedDirectory.value
+      ? runnerManagementApi.codeRepositoryFiles(repo.repoId, fileKeyword.value.trim(), page, selectedDirectory.value.directoryId)
+      : runnerManagementApi.codeRepositoryFiles(repo.repoId, fileKeyword.value.trim(), page))
     if (requestId !== fileRequestId || selectedRepoId.value !== repo.repoId) return
     fileRows.value = result.items
     fileTotal.value = result.total
@@ -205,6 +212,7 @@ async function selectRepo(repoId: string) {
   previewRequestId++
   fileRequestId++
   selectedRepoId.value = repoId
+  selectedDirectory.value = null
   fileRows.value = []
   fileKeyword.value = ''
   filePage.value = 1
@@ -220,6 +228,12 @@ async function selectRepo(repoId: string) {
 watch(filter, () => {
   if (!visible.value.some((repo) => repo.repoId === selectedRepoId.value)) void selectRepo(visible.value[0]?.repoId ?? '')
 })
+function selectDirectory(row: CodeRepositoryDirectory | null) {
+  const changed = selectedDirectory.value?.directoryId !== row?.directoryId
+  selectedDirectory.value = row
+  if (changed) { fileRequestId++; void loadFiles(1) }
+}
+watch(() => props.repositoryId, value => { if (value && repos.value.some(repo => repo.repoId === value)) { filter.value = ''; void selectRepo(value) } })
 async function previewFile(row: CodeRepositoryFile) {
   const repo = filesRepo.value
   if (!repo) return
@@ -267,7 +281,7 @@ onMounted(() => { void load() })
     <div v-if="error" class="crp-error" role="alert">代码仓库加载失败：{{ error }}</div>
     <div v-loading="loading" class="rc-table-scroll crp-scroll" data-testid="code-repo-list">
       <table class="rc-data-table crp-table">
-        <thead><tr><th>名称</th><th>配置类型</th><th>服务器路径</th><th>Git 地址</th><th>分支</th><th>代码资产数</th><th>状态</th><th>操作</th></tr></thead>
+        <thead><tr><th>名称</th><th>配置类型</th><th>服务器路径</th><th>Git 地址</th><th>分支</th><th title="已关联流程配置的代码项数量">关联代码数</th><th>状态</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-if="editingId === 'new'" data-testid="code-repo-new-row">
             <td><input v-model="form.name" class="crp-input" placeholder="仓库名称" data-testid="code-repo-name" /></td>
@@ -316,7 +330,7 @@ onMounted(() => { void load() })
       <b>仓库代码</b>
       <span>{{ filesRepo ? `当前：${filesRepo.name}` : '请从上方列表选择仓库' }}</span>
       <el-button v-if="filesRepo" :loading="fileLoading" data-testid="code-repo-files-refresh" @click="loadFiles(1)">刷新文件</el-button>
-      <el-button v-if="canWrite && filesRepo?.status === 'ACTIVE'" type="primary" size="small" data-testid="code-repo-upload-selected" @click="openUpload(filesRepo)">上传文件</el-button>
+      <el-button v-if="canWrite && filesRepo?.status === 'ACTIVE'" type="primary" size="small" :disabled="selectedDirectory?.status === 'DISABLED'" data-testid="code-repo-upload-selected" @click="openUpload(filesRepo)">上传文件</el-button>
     </div>
     <div v-if="filesRepo" class="crp-workspace" data-testid="code-repo-workspace">
       <div class="crp-repo-info">
@@ -326,12 +340,13 @@ onMounted(() => { void load() })
         <span :class="filesRepo.remoteUrl ? 'crp-on' : 'crp-off'">{{ filesRepo.remoteUrl ? `上传后自动推送到 origin/${filesRepo.branch}` : '仅保存在本地，未配置远程 Git 地址' }}</span>
         <span>上传目录：{{ filesRepo.uploadDirectory }}/</span>
       </div>
-      <p class="crp-relationship">这里展示 Git 仓库中的实际文件。标为“节点代码”的文件由流程节点生成；其版本与测试/生产采用关系在“节点代码”页管理。手工上传的仓库文件不会自动关联到节点。</p>
+      <p class="crp-relationship">在这里统一查看仓库文件。在「部署目录」保存有名称的部署配置，再到「机器配置」绑定运行目录并下发代码。</p>
       <p v-if="uploadNotice" class="crp-upload-notice" role="status">{{ uploadNotice }}</p>
       <div class="crp-file-layout">
+        <RepositoryDirectoriesPanel :repo="filesRepo" :types="types" :selected-id="selectedDirectory?.directoryId || ''" :can-write="canWrite" @select="selectDirectory" />
         <div class="crp-files">
           <div class="crp-files-toolbar">
-            <b>仓库文件</b>
+            <b>{{ selectedDirectory?.name || '仓库文件' }}</b>
             <el-input v-model="fileKeyword" clearable placeholder="按文件路径搜索" class="crp-file-search" data-testid="code-repo-files-keyword" @keyup.enter="loadFiles(1)" />
             <el-button :loading="fileLoading" data-testid="code-repo-files-search" @click="loadFiles(1)">查询</el-button>
           </div>
@@ -343,7 +358,7 @@ onMounted(() => { void load() })
                 <tr v-for="row in fileRows" :key="row.path" class="crp-file-row" :class="{ 'crp-file-selected': previewPath === row.path }" :data-testid="`code-repo-file-${row.path}`" @click="previewFile(row)">
                   <td class="crp-file-path" :title="row.path"><button type="button" class="crp-file-link" :data-testid="`code-repo-preview-${row.path}`" @click.stop="previewFile(row)">{{ row.path }}</button></td>
                   <td>{{ row.size === null ? '—' : `${row.size} B` }}</td>
-                  <td>{{ row.managed ? '节点代码' : '仓库文件' }}</td>
+                  <td>{{ row.managed ? '流程代码' : '普通文件' }}</td>
                   <td><el-button v-if="canWrite && row.canDelete" link type="danger" :loading="deletingPath === row.path" :data-testid="`code-repo-delete-${row.path}`" @click.stop="deleteFile(row)">删除</el-button><span v-else class="crp-muted">{{ row.managed ? '受保护' : '不可删除' }}</span></td>
                 </tr>
                 <tr v-if="!fileLoading && !fileRows.length"><td colspan="4">暂无匹配文件</td></tr>
@@ -357,7 +372,7 @@ onMounted(() => { void load() })
     <p v-else-if="!loading && !error" class="crp-preview-empty">{{ filter.trim() ? '没有匹配的仓库' : '暂无代码仓库，请先新建仓库。' }}</p>
     <el-dialog v-model="uploadOpen" :title="uploadRepo ? `上传文件 · ${uploadRepo.name}` : '上传文件'" width="min(540px, 94vw)" append-to-body>
       <div class="crp-upload-form">
-        <p class="crp-upload-destination">上传目录：<b data-testid="code-repo-upload-directory">{{ uploadRepo?.uploadDirectory || 'default' }}/</b></p>
+        <p class="crp-upload-destination">上传目录：<b data-testid="code-repo-upload-directory">{{ selectedDirectory?.path || uploadRepo?.uploadDirectory || 'default' }}/</b></p>
         <label>选择文件<input type="file" multiple data-testid="code-repo-upload-files" @change="selectUploadFiles" /></label>
         <span v-if="uploadFiles.length" class="crp-upload-list">已选 {{ uploadFiles.length }} 个文件：{{ uploadFiles.map((file) => file.name).join('、') }}</span>
         <label class="crp-upload-check"><input v-model="uploadOverwrite" type="checkbox" data-testid="code-repo-upload-overwrite" /> 覆盖仓库中同名文件</label>
@@ -386,10 +401,11 @@ onMounted(() => { void load() })
 .crp-repo-info { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 9px 11px; border: 1px solid var(--rc-border); border-radius: 6px; background: var(--rc-card); font-size: 12px; color: var(--rc-muted); }
 .crp-repo-info b { color: var(--rc-text); font-size: 13px; }.crp-repo-info .crp-on { font-weight: 600; }
 .crp-upload-notice { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--rc-primary-bg); color: var(--rc-primary); font-size: 12px; }
-.crp-file-layout { display: flex; flex: 1; min-height: 0; }
+.crp-file-layout { display: flex; flex: 1; min-height: 0; gap:10px; }
 .crp-files { min-width: 0; min-height: 0; width: 100%; border: 1px solid var(--rc-border); border-radius: 6px; background: var(--rc-card); }
 .crp-files { display: flex; flex-direction: column; padding: 10px; gap: 8px; }.crp-file-scroll { flex: 1; min-height: 0; overflow: auto; }
 .crp-file-search { width: min(230px, 45%); }.crp-file-link { padding: 0; border: 0; background: none; color: var(--rc-primary); font: inherit; text-align: left; cursor: pointer; }
+.crp-files-table td { padding-top:7px; padding-bottom:7px; }
 .crp-file-link:hover { text-decoration: underline; }.crp-file-row { cursor: pointer; }.crp-file-row:hover, .crp-file-selected { background: var(--rc-primary-bg); }
 .crp-preview-detail { height: 100%; overflow: auto; }.crp-preview-code { margin: 0; padding: 12px; overflow: auto; font-size: 12px; line-height: 1.6; white-space: pre; }.crp-preview-empty { margin: auto; color: var(--rc-muted); font-size: 12px; }
 .crp-relationship { margin: 0; color: var(--rc-muted); font-size: 12px; }
