@@ -479,14 +479,17 @@ onMounted(async () => {
       <!-- AI 对话不产生配置改动，不挂保存条 -->
       <div v-if="tab !== 'ai'" class="rc-insp-foot">
         <span class="foot-note">
-          <i v-if="nodeConfigDirty" class="foot-dot" />{{ footNote }}
+          <i v-if="nodeConfigDirty && !readonly" class="foot-dot" />{{ footNote }}
         </span>
         <!-- 使用范围提示（0828 §6.2）：不拦截、不弹框，只让用户在按下去之前知道这份配置是共用的 -->
-        <span v-if="usageNote" class="foot-usage" data-testid="config-usage-note">{{ usageNote }}</span>
+        <span v-if="usageNote && !readonly" class="foot-usage" data-testid="config-usage-note">{{ usageNote }}</span>
+        <!-- 只读（发布版 / 锁定草稿）不放保存按钮：禁用态的主按钮看着仍像能点（用户 10-10 反馈） -->
         <button
+          v-if="!readonly"
           class="rc-btn primary"
           type="button"
-          :disabled="readonly || !canSaveNodeConfig || saving"
+          data-testid="node-config-save"
+          :disabled="!canSaveNodeConfig || saving"
           :title="configId ? (nodeConfigDirty ? undefined : '当前没有需要保存的修改') : '保存后会新建一份配置并绑定到本节点'"
           @click="onSaveNodeConfig"
         >{{ saving ? '保存中…' : '保存' }}</button>
