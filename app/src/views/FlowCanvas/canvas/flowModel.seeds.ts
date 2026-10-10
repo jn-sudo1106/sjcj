@@ -28,6 +28,7 @@ import type {
 import { cloneConfig, normalizeNodeConfigs, backfillOutputTables } from './flowModel.layout'
 import { isAudioTextNode, isOcrNode, isPdfNode, isRuleLikeNode, isTranslateNode } from './flowModel'
 import { RULE_DATA_SOURCE } from '@/constants/rule'
+import { topologyFromParents } from './flowTopology'
 
 // ---------- 采集能力 ----------
 /** 采集节点能力字典：固定产物类型节点的表/队列不可编辑，UI 与 store 双重防线都据此判断（0711 T5） */
@@ -1387,7 +1388,7 @@ export function applyStepDetails(
  *     **目标步骤自己**（`entryCondition`，只有一个前驱时同样存在）。硬套等于把语义搬家，
  *     两处都有值之后改一处必须同步另一处。旧平台也没有 ELSE 概念。
  *
- * 后续（0925 完整还原）：**嵌套分叉不再拍平**——`branchTreeOf` 把链内再分叉编成
+ * 后续（0925 完整还原）：**嵌套分叉不再拍平**——`branchTreeOf`（flowTopology.ts）把链内再分叉编成
  * subGroups 递归承接，`buildHorizontalLayout`、画布纵向布局、写回（lastStepIdsFromCanvas）
  * 三条链路统一递归处理。写回冻结（hasRealBranches）仍保留，兜底成环/指向集合外的
  * 畸形数据不改坏（理由见 stepPersist.ts）。
@@ -1410,46 +1411,6 @@ function realParentOf(step: Step, known: Set<string>): string | undefined {
   )
 }
 
-/** 从某个步骤起递归编成分支链（0925 完整还原）：沿单后继串 chain，遇到分叉（≥2 后继）
- *  把整棵子树交给嵌套 subGroups——旧平台每步只有一个 lastStep，树在任意深度都可能分叉。
- *  chain 到此为止：分叉点以下的一切都归子分组，主链/父链不再延续（模型无汇合概念）。 */
-function branchTreeOf(
-  startId: string,
-  childrenOf: Map<string, string[]>,
-  placed: Set<string>,
-  configs: Record<string, NodeConfig>,
-): { chain: string[]; subGroups: import('./flowModel').FlowBranchGroup[] } {
-  const chain: string[] = []
-  const subGroups: import('./flowModel').FlowBranchGroup[] = []
-  let cur: string | undefined = startId
-  while (cur && !placed.has(cur)) {
-    placed.add(cur)
-    chain.push(cur)
-    const kids: string[] = childrenOf.get(cur) ?? []
-    if (kids.length > 1) {
-      subGroups.push({
-        ownerId: cur,
-        branches: kids.map((kid: string, i: number) => {
-          const seed = branchTreeOf(kid, childrenOf, placed, configs)
-          return {
-            id: `${cur}-b${i + 1}`,
-            // 分支名取目标步骤名：旧平台没有分支标签这个东西，拿目标节点名当标签最接近事实
-            label: configs[kid]?.title || `分支 ${i + 1}`,
-            // condition 刻意**不填**：条件属于目标步骤自己（configs[kid] 上的 entryCondition），
-            // 复制一份到分支上就有了两个真值来源，改一处必须同步另一处。连线上的条件文案由
-            // 渲染侧从目标节点读，不在这里搬家。
-            chain: seed.chain,
-            ...(seed.subGroups.length ? { subGroups: seed.subGroups } : {}),
-          }
-        }),
-      })
-      break
-    }
-    cur = kids[0]
-  }
-  return { chain, subGroups }
-}
-
 export function buildSourceSeed(source: Source, steps: Step[]): {
   main: string[]
   branches: import('./flowModel').BranchSeed[]
@@ -1465,13 +1426,8 @@ export function buildSourceSeed(source: Source, steps: Step[]): {
   sourceSteps.forEach((step, i) => { configs[step.stepId] = buildNodeForStep(source, step, i) })
 
   const known = new Set(sourceSteps.map((step) => step.stepId))
-  const childrenOf = new Map<string, string[]>()
-  const roots: string[] = []
-  for (const step of sourceSteps) {
-    const parent = realParentOf(step, known)
-    if (parent) childrenOf.set(parent, [...(childrenOf.get(parent) ?? []), step.stepId])
-    else roots.push(step.stepId)
-  }
+  const parentOf = new Map(sourceSteps.map((step) => [step.stepId, realParentOf(step, known)] as const))
+  const roots = sourceSteps.filter((step) => !parentOf.get(step.stepId)).map((step) => step.stepId)
 
   // 孤儿判定（0925）：只有响应**带着 lastStep 语义**时才标记——mock/演示源的行没有
   // lastStep 字段，它们只是"没有归位的根位步骤"，不做孤儿标记（避免演示画布满屏孤儿）。
@@ -1494,77 +1450,14 @@ export function buildSourceSeed(source: Source, steps: Step[]): {
     }
   }
 
-  const main: string[] = ['start']
-  const branchGroups: import('./flowModel').FlowBranchGroup[] = []
-  const placed = new Set<string>()
-  // 主链：从第一个根节点沿**单后继**一路走，遇到分叉就停——旧平台的步骤没有汇合点概念
-  // （每个步骤只有一个 lastStep），分叉之下的一切都归各自的分支链。
-  let cursor: string | undefined = roots[0]
-  while (cursor && !placed.has(cursor)) {
-    placed.add(cursor)
-    main.push(cursor)
-    const owner: string = cursor
-    const kids: string[] = childrenOf.get(owner) ?? []
-    if (kids.length <= 1) {
-      cursor = kids[0]
-      continue
-    }
-    branchGroups.push({
-      ownerId: owner,
-      branches: kids.map((kid: string, i: number) => {
-        const seed = branchTreeOf(kid, childrenOf, placed, configs)
-        return {
-          id: `${owner}-b${i + 1}`,
-          // 分支名取目标步骤名：旧平台没有分支标签这个东西，拿目标节点名当标签最接近事实
-          label: configs[kid]?.title || `分支 ${i + 1}`,
-          // condition 刻意**不填**：条件属于目标步骤自己（configs[kid] 上的 entryCondition），
-          // 复制一份到分支上就有了两个真值来源，改一处必须同步另一处。连线上的条件文案由
-          // 渲染侧从目标节点读，不在这里搬家。
-          chain: seed.chain,
-          ...(seed.subGroups.length ? { subGroups: seed.subGroups } : {}),
-        }
-      }),
-    })
-    cursor = undefined
-  }
-  // 多根兜底（0925）：roots[0] 之外仍有「挂根」步骤（响应里没有 itemConfig=0 那行时
-  // lastStep='0' 会落到这里；lastStep 指向集合外的孤儿；重复的 isRoot 起点）——它们不是
-  // 主链的尾巴，按「挂在根上」的语义都应是入口根节点的直接子步骤，并到入口根下方作为
-  // 附加分支链（子树随 chainFrom 一起归位）。此前它们被平铺进 main，接口顺序即展示
-  // 顺序，分支结构全丢（2026-09-25 用户实测源 430024432）。
-  // 只对**带显式 lastStep/根标记**的步骤做这个解释：mock/演示源的行没有 lastStep，
-  // 保持现状平铺，不给它编造拓扑。
-  if (roots.length > 1) {
-    const marked = new Set(
-      sourceSteps.filter((s) => s.dependsOn !== undefined || s.isRoot).map((s) => s.stepId),
-    )
-    const extra = roots.slice(1).filter((id) => !placed.has(id) && marked.has(id))
-    if (extra.length) {
-      const entry = roots[0]
-      const existing = branchGroups.find((g) => g.ownerId === entry)
-      const branches = existing?.branches ?? []
-      for (const root of extra) {
-        const seed = branchTreeOf(root, childrenOf, placed, configs)
-        branches.push({
-          id: `${entry}-b${branches.length + 1}`,
-          label: configs[root]?.title || `分支 ${branches.length + 1}`,
-          chain: seed.chain,
-          ...(seed.subGroups.length ? { subGroups: seed.subGroups } : {}),
-        })
-      }
-      if (existing) existing.branches = branches
-      else branchGroups.push({ ownerId: entry, branches })
-    }
-  }
-  // 兜底：`dependsOn` 指向集合外步骤的孤儿、以及成环时走不到的节点，一个都不能丢——
-  // 画得不准可以接受，节点凭空消失不行。
-  for (const step of sourceSteps) {
-    if (!placed.has(step.stepId)) {
-      placed.add(step.stepId)
-      main.push(step.stepId)
-    }
-  }
-  main.push('end')
+  // 拓扑（主链 + 分支组 + 多根兜底）见 flowTopology.ts（1008-BR-02 抽出，画布编辑共用）。
+  // 多根兜底只对**带显式 lastStep/根标记**的步骤做：mock/演示源的行没有 lastStep，平铺不编造拓扑。
+  const { main, branchGroups } = topologyFromParents({
+    order: sourceSteps.map((step) => step.stepId),
+    parentOf,
+    anchored: new Set(sourceSteps.filter((s) => s.dependsOn !== undefined || s.isRoot).map((s) => s.stepId)),
+    labelOf: (id) => configs[id]?.title,
+  })
   // 节点链严格来自 item/next 的真实子步骤，不按源名称猜测补节点：
   // 这里曾按 /规则/ 匹配源名插入一个「规则处理」节点（演示期遗留），会让存量源的画布
   // 与旧平台拓扑不一致，且该虚构节点会混入流程保存结果。2026-08-26 移除。
