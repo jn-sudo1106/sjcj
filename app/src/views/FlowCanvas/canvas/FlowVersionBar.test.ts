@@ -48,21 +48,23 @@ async function mountBoard() {
 }
 
 describe('FlowVersionBar · 发布版直接改、首次保存自动生成草稿（10-11 定）', () => {
-  it('发布版：画布可编辑、有「+」，版本条提示保存会自动生成草稿，没有「编辑草稿」按钮', async () => {
+  it('发布版：画布可编辑、有「+」，流程标签栏里一个「已发布 v1」小徽标，没有「编辑草稿」按钮', async () => {
     vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(published)
     const { wrapper } = await mountBoard()
-    expect(wrapper.get('[data-testid="flow-version-published"]').text()).toBe('当前发布 V1')
-    expect(wrapper.get('[data-testid="flow-version-bar"]').text()).toContain('保存时会自动生成草稿 V2')
+    expect(wrapper.get('[data-testid="flow-version-published"]').text()).toBe('已发布 v1')
+    // 10-11：不再单独占一行，嵌在流程标签栏（说明文字在悬停提示里）
+    expect(wrapper.find('[data-testid="source-workflow-tabs"] [data-testid="flow-version-bar"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="flow-version-edit-draft"]').exists()).toBe(false)
     expect(wrapper.find('.rc-canvas-body').classes()).not.toContain('is-version-readonly')
     expect(wrapper.find('.rc-edge-slot').exists()).toBe(true)
     wrapper.unmount()
   })
 
-  it('有草稿：版本条换成「草稿 V2 · 未发布」+ 发布 / 放弃', async () => {
+  it('有草稿：徽标换成「草稿 v2 · 未发布」+ 放弃 / 发布 v2', async () => {
     vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(drafted)
     const { wrapper } = await mountBoard()
-    expect(wrapper.get('[data-testid="flow-version-draft"]').text()).toBe('草稿 V2 · 未发布')
+    expect(wrapper.get('[data-testid="flow-version-draft"]').text()).toBe('草稿 v2 · 未发布')
+    expect(wrapper.get('[data-testid="flow-version-publish"]').text()).toBe('发布 v2')
     expect(wrapper.find('[data-testid="flow-version-publish"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="flow-version-abandon"]').exists()).toBe(true)
     wrapper.unmount()
