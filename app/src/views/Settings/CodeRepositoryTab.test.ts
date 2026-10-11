@@ -11,6 +11,7 @@ vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: {
   codeRepositories: vi.fn(), createCodeRepository: vi.fn(), updateCodeRepository: vi.fn(),
   moveCodeRepository: vi.fn(), setDefaultCodeRepository: vi.fn(), verifyCodeRepository: vi.fn(), uploadCodeRepositoryFiles: vi.fn(),
   codeRepositoryFiles: vi.fn(), codeRepositoryFileContent: vi.fn(), deleteCodeRepositoryFile: vi.fn(),
+  codeRepositoryDirectories: vi.fn(), saveCodeRepositoryDirectory: vi.fn(), removeCodeRepositoryDirectory: vi.fn(),
 } }))
 const generic: CodeRepository = {
   repoId: 'repo-default', name: '默认仓库', configType: '', configTypeName: '', uploadDirectory: 'default', path: 'E:\\ce\\site-scripts',
@@ -30,6 +31,7 @@ const stubs = {
   ElInput: { props: ['modelValue'], emits: ['update:modelValue'], template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />' },
 }
 beforeEach(() => {
+  vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockResolvedValue([])
   vi.mocked(runnerManagementApi.codeRepositories).mockResolvedValue([generic, web])
   vi.mocked(runnerManagementApi.codeRepositoryFiles).mockResolvedValue({ repoId: 'repo-default', uploadDirectory: 'default',
     total: 0, page: 1, pageSize: 50, items: [] })
@@ -42,6 +44,15 @@ async function mountTab() {
   await flushPromises()
   return wrapper
 }
+it('从运行版本跳转时直接选择指定仓库，并可再次切换目标仓库', async () => {
+  const wrapper = mount(CodeRepositoryTab, { props: { repositoryId: 'repo-web' }, global: { stubs, directives: { loading: {} } } })
+  await flushPromises()
+  expect(wrapper.get('[data-testid="code-repo-workspace"]').text()).toContain('网页抓取代码')
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenCalledWith('repo-web', '', 1)
+  await wrapper.setProps({ repositoryId: 'repo-default' }); await flushPromises()
+  expect(wrapper.get('[data-testid="code-repo-workspace"]').text()).toContain('默认仓库')
+  wrapper.unmount()
+})
 it('仓库配置列表在代码列表上方，默认选中第一条且按列表字段查询', async () => {
   const wrapper = await mountTab()
   expect(wrapper.get('[data-testid="code-repo-workspace"]').text()).toContain('默认仓库')
@@ -75,6 +86,34 @@ it('新建仓库在列表内填写，并保存配置类型', async () => {
   expect(runnerManagementApi.createCodeRepository).toHaveBeenCalledWith({
     name: '第二个网页仓库', configType: '90', configTypeName: '网页抓取', path: 'E:\\ce\\code-web-2', remoteUrl: '', branch: 'main',
   })
+})
+it('在仓库下按节点类型新建目录，选择目录浏览并上传到该目录', async () => {
+  const directory = { directoryId: 'dir-web', repoId: generic.repoId, name: '网页抓取代码', configType: '90', configTypeName: '网页抓取', path: '网页抓取', status: 'ACTIVE' as const, isDefault: false, revision: 'dir-v1', codeCount: 0 }
+  vi.mocked(runnerManagementApi.saveCodeRepositoryDirectory).mockResolvedValue(directory)
+  const wrapper = await mountTab()
+  await wrapper.get('[data-testid="repo-directory-create"]').trigger('click')
+  await wrapper.get('[data-testid="repo-directory-type"]').setValue('90')
+  expect((wrapper.get('[data-testid="repo-directory-path"]').element as HTMLInputElement).value).toBe('网页抓取')
+  vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockResolvedValue([directory])
+  await wrapper.get('[data-testid="repo-directory-save"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.saveCodeRepositoryDirectory).toHaveBeenCalledWith(generic.repoId, expect.objectContaining({ name: '网页抓取代码', configType: '90', path: '网页抓取' }), undefined)
+  expect(runnerManagementApi.codeRepositoryFiles).toHaveBeenLastCalledWith(generic.repoId, '', 1, directory.directoryId)
+  await wrapper.get('[data-testid="code-repo-upload-selected"]').trigger('click')
+  expect(wrapper.get('[data-testid="code-repo-upload-directory"]').text()).toBe('网页抓取/')
+  wrapper.unmount()
+})
+it('目录查询按节点类型过滤，停用后禁止上传，目录加载失败明确显示', async () => {
+  const base = { repoId: generic.repoId, configTypeName: '网页抓取', path: 'web', status: 'DISABLED' as const, isDefault: false, revision: 'v1' }
+  vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockResolvedValue([{ ...base, directoryId: 'web-dir', name: '网页专用', configType: '90' }, { ...base, directoryId: 'ocr-dir', name: 'OCR 专用', configType: '150', path: 'ocr' }])
+  const wrapper = await mountTab()
+  await wrapper.get('[aria-label="筛选目录节点类型"]').setValue('90')
+  expect(wrapper.text()).not.toContain('OCR 专用')
+  await wrapper.get('[data-testid="repo-directory-web-dir"] button').trigger('click'); await flushPromises()
+  expect(wrapper.get('[data-testid="code-repo-upload-selected"]').attributes('disabled')).toBeDefined()
+  vi.mocked(runnerManagementApi.codeRepositoryDirectories).mockRejectedValue(new Error('目录服务失败'))
+  await wrapper.get('[aria-label="刷新配置目录"]').trigger('click'); await flushPromises()
+  expect(wrapper.text()).toContain('目录服务失败')
+  wrapper.unmount()
 })
 it('编辑仓库按字段提交，路径单独走迁移接口', async () => {
   vi.mocked(runnerManagementApi.moveCodeRepository).mockResolvedValue(web)

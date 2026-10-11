@@ -68,6 +68,16 @@ describe('流程分流实际 HTTP 请求', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/api/local-flow/v1/flow/saveFlow')
   })
 
+  it('部署配置页面显式读取流程节点详情走本地，普通配置查询仍走原后台', async () => {
+    window.location.hash = '#/settings?tab=directory-layout'
+    const { configApi } = await import('./index')
+    await configApi.configDetail('123', { backendScope: 'flow' })
+    await configApi.configDetail('456')
+    expect(fetchMock.mock.calls.map(call => String(call[0]).split('?')[0])).toEqual([
+      '/api/local-flow/v1/config/configDetail', '/api/v1/config/configDetail',
+    ])
+  })
+
   it('其他功能仍受原生产写保护，自定义 API 地址也按实际目的地保护', async () => {
     const { request } = await import('./client')
     await expect(request('source/updateSourceSimple', { sourceId: 1 })).rejects.toThrow('生产环境写保护')

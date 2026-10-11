@@ -1,182 +1,117 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onActivated, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Refresh } from '@element-plus/icons-vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { runnerManagementApi, type SiteCodeVersion } from '@/api/runnerManagement'
 
-type CatalogRow = SiteCodeVersion & { environments: ('test' | 'prd')[] }
-const auth = useAuthStore()
-const emit = defineEmits<{ editDirectory: [codeId: string] }>()
-const canWrite = computed(() => auth.role === 'admin')
-const rows = ref<CatalogRow[]>([])
-const keyword = ref('')
-const repoFilter = ref('')
-const loading = ref(false)
-const saving = ref(false)
-const error = ref('')
-const detail = ref<(SiteCodeVersion & { code: string }) | null>(null)
-const detailOpen = ref(false)
-const publishOpen = ref(false)
-const selectedVersion = ref<CatalogRow | null>(null)
-const publishEnvironment = ref<'test' | 'prd'>('test')
-// 仓库的路径、Git 远程和配置类型分类在「系统设置 → 代码仓库」维护；这里只按代码所属仓库展示和筛选。
-const repoOptions = computed(() => [...new Map(rows.value
-  .filter((row) => row.repoId)
-  .map((row) => [row.repoId!, row.repoName || row.repoId!])).entries()])
-const filtered = computed(() => rows.value.filter((row) =>
-  (!repoFilter.value || row.repoId === repoFilter.value)
-  && [row.configId, row.queueName, row.siteHost, row.storagePath, row.deliveryPath, row.scriptDigest, row.repoName ?? '']
-    .some((value) => value.toLowerCase().includes(keyword.value.trim().toLowerCase())),
-))
-
+type Environment = 'test' | 'prd'
+type Version = SiteCodeVersion & { environments: Environment[] }
+interface RunCode { key: string; latest: Version; versions: Version[] }
+const router = useRouter(), route = useRoute()
+const canWrite = computed(() => useAuthStore().role === 'admin')
+const rows = ref<Version[]>([]), keyword = ref(typeof route.query.configId === 'string' ? route.query.configId : ''), repoFilter = ref('')
+watch(() => route.query.configId, value => { keyword.value = typeof value === 'string' ? value : '' })
+const loading = ref(false), error = ref(''), saving = ref('')
+const drafts = reactive<Record<string, string>>({}), errors = reactive<Record<string, string>>({})
+let loaded = false
+const keyOf = (row: Version) => JSON.stringify([row.codeId, row.configId, row.queueName, row.siteHost])
+const selectionKey = (row: RunCode, env: Environment) => `${row.key}:${env}`
+const groups = computed(() => {
+  const result = new Map<string, RunCode>()
+  for (const version of rows.value) {
+    const key = keyOf(version)
+    const group = result.get(key)
+    if (group) group.versions.push(version)
+    else result.set(key, { key, latest: version, versions: [version] })
+  }
+  return [...result.values()]
+})
+const repoOptions = computed(() => [...new Map(rows.value.filter(row => row.repoId).map(row => [row.repoId!, row.repoName || row.repoId!])).entries()])
+const filtered = computed(() => groups.value.filter(row => (!repoFilter.value || row.versions.some(version => version.repoId === repoFilter.value))
+  && row.versions.some(version => [version.configId, version.queueName, version.siteHost, version.storagePath, version.deliveryPath, version.repoName || ''].some(value => value.toLowerCase().includes(keyword.value.trim().toLowerCase())))))
+const adopted = (row: RunCode, env: Environment) => row.versions.find(version => version.environments.includes(env))
+const selected = (row: RunCode, env: Environment) => drafts[selectionKey(row, env)] ?? adopted(row, env)?.scriptDigest ?? ''
+const selectedVersion = (row: RunCode, env: Environment) => row.versions.find(version => version.scriptDigest === selected(row, env))
+const dirty = (row: RunCode, env: Environment) => selected(row, env) !== (adopted(row, env)?.scriptDigest || '')
+const environmentLabel = (env: Environment) => env === 'test' ? '测试' : '生产'
+function versionLabel(version: Version) {
+  const date = version.publishedAt && !Number.isNaN(Date.parse(version.publishedAt))
+    ? new Date(version.publishedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) : '已保存'
+  return `${date} · Git ${version.gitCommit.slice(0, 10)}`
+}
+function choose(row: RunCode, env: Environment, value: unknown) {
+  if (!canWrite.value || typeof value !== 'string' || saving.value) return
+  const key = selectionKey(row, env)
+  if (value === (adopted(row, env)?.scriptDigest || '')) delete drafts[key]
+  else drafts[key] = value
+  delete errors[key]
+}
 async function load() {
-  loading.value = true
-  error.value = ''
+  loading.value = true; error.value = ''
+  try { rows.value = await runnerManagementApi.siteCodeCatalog() }
+  catch (e) { error.value = e instanceof Error ? e.message : String(e) }
+  finally { loading.value = false; loaded = true }
+}
+async function apply(row: RunCode, env: Environment) {
+  const version = selectedVersion(row, env), key = selectionKey(row, env)
+  if (!canWrite.value || saving.value || !version || !dirty(row, env)) return
+  saving.value = key; delete errors[key]
   try {
-    rows.value = await runnerManagementApi.siteCodeCatalog()
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    loading.value = false
-  }
+    await runnerManagementApi.bindSiteCode({ configId: version.configId, queueName: version.queueName, environment: env, scriptDigest: version.scriptDigest })
+    rows.value = rows.value.map(item => keyOf(item) !== row.key ? item : { ...item,
+      environments: [...item.environments.filter(value => value !== env), ...(item.scriptDigest === version.scriptDigest ? [env] : [])] })
+    delete drafts[key]
+    ElMessage.success(`${environmentLabel(env)}环境已采用所选代码版本`)
+  } catch (e) { errors[key] = e instanceof Error ? e.message : String(e) }
+  finally { saving.value = '' }
 }
-
-function absoluteCodePath(repoPath: string | null | undefined, relative: string) {
-  if (!repoPath) return relative
-  const separator = repoPath.includes('\\') ? '\\' : '/'
-  return `${repoPath.replace(/[\\/]$/, '')}${separator}${relative.replaceAll('/', separator)}`
+function openRepository(row: RunCode) {
+  if (row.latest.repoId) void router.replace({ path: '/settings', query: { tab: 'code-repos', repoId: row.latest.repoId } })
 }
-
-function deliveryRoot(row: SiteCodeVersion) {
-  return (row.directoryLayout?.directoryTemplate || 'packages/{configId}').replaceAll('{configId}', row.configId).replaceAll('{queue}', row.queueName)
+function openDirectory(row: RunCode) {
+  void router.replace({ path: '/settings', query: { tab: 'directory-layout', configId: row.latest.configId } })
 }
-
-async function showDetail(row: CatalogRow) {
-  try {
-    detail.value = await runnerManagementApi.siteCodeContent(row.scriptDigest)
-    detailOpen.value = true
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
-  }
-}
-
-function openPublish(row: CatalogRow) {
-  selectedVersion.value = row
-  publishEnvironment.value = 'test'
-  publishOpen.value = true
-}
-
-async function publishConfiguration() {
-  const row = selectedVersion.value
-  if (!row) return
-  saving.value = true
-  try {
-    await runnerManagementApi.bindSiteCode({
-      configId: row.configId, queueName: row.queueName,
-      environment: publishEnvironment.value, scriptDigest: row.scriptDigest,
-    })
-    publishOpen.value = false
-    ElMessage.success(`运行配置已发布到${publishEnvironment.value === 'test' ? '测试' : '生产'}环境`)
-    await load()
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : String(e))
-  } finally {
-    saving.value = false
-  }
-}
-
 onMounted(() => { void load() })
+onActivated(() => { if (loaded && !loading.value && !Object.keys(drafts).length) void load() })
 </script>
 
 <template>
-  <div class="rc-card scm-main" data-testid="settings-site-code">
+  <div class="rc-card rcv-main" data-testid="settings-runtime-versions">
     <div class="rc-toolbar wrap">
-      <el-input v-model="keyword" clearable placeholder="ConfigId、队列、网站、文件路径或版本" style="width: 270px" />
-      <el-select v-model="repoFilter" clearable placeholder="全部仓库" style="width: 180px" data-testid="site-code-repo-filter">
-        <el-option v-for="[id, name] in repoOptions" :key="id" :label="name" :value="id" />
-      </el-select>
-      <button class="rc-btn" type="button" :disabled="loading" @click="load">刷新</button>
-      <span class="scm-note">代码版本共用；发布运行配置时再选择测试或生产。代码仓库在「代码仓库」页维护。</span>
+      <el-input v-model="keyword" clearable placeholder="配置 ID、队列、网站或代码文件" class="rcv-search" aria-label="搜索运行版本" />
+      <el-select v-model="repoFilter" clearable placeholder="全部仓库" class="rcv-repo" data-testid="runtime-code-repo-filter"><el-option v-for="[id, name] in repoOptions" :key="id" :value="id" :label="name" /></el-select>
+      <el-button :icon="Refresh" circle :disabled="loading || !!saving" aria-label="刷新运行版本" @click="load" />
+      <span class="rcv-note">选择测试、生产环境实际采用的代码；文件内容统一在代码仓库查看。</span>
     </div>
-    <div v-if="error" class="scm-error" role="alert">代码列表加载失败：{{ error }}</div>
-    <div v-loading="loading" class="rc-table-scroll scm-table">
+    <el-alert v-if="error" :title="`运行版本加载失败：${error}`" type="error" :closable="false" show-icon class="rcv-error" />
+    <div v-loading="loading" class="rc-table-scroll rcv-table">
       <table class="rc-data-table">
-        <thead><tr><th>ConfigId</th><th>仓库</th><th>队列</th><th>代码用途</th><th>文件对应关系</th><th>Git 提交</th><th>版本摘要</th><th>采用环境</th><th>操作</th></tr></thead>
+        <thead><tr><th>配置 ID / 队列</th><th>适用网站</th><th>测试环境</th><th>生产环境</th><th>操作</th></tr></thead>
         <tbody>
-          <tr v-for="row in filtered" :key="row.scriptDigest">
-            <td>{{ row.configId }}</td><td>{{ row.repoName || '—' }}</td><td>{{ row.queueName }}</td>
-            <td>{{ row.siteHost || '队列通用' }}</td>
-            <td class="scm-file-mapping" data-testid="site-code-file-mapping">
-              <div :title="row.storagePath"><span>仓库</span><code>{{ row.storagePath }}</code></div>
-              <div :title="`${deliveryRoot(row)}/${row.deliveryPath}`"><span>→ 下发</span><code>{{ deliveryRoot(row) }}/{{ row.deliveryPath }}</code></div>
+          <tr v-for="row in filtered" :key="row.key" data-testid="runtime-code-row">
+            <td class="rcv-identity"><strong>{{ row.latest.configId }}</strong><div :title="row.latest.queueName">{{ row.latest.queueName }}</div><small>{{ row.latest.repoName || '未关联仓库' }}</small></td>
+            <td class="rcv-website" :title="row.latest.siteHost">{{ row.latest.siteHost || '队列通用' }}</td>
+            <td v-for="env in (['test', 'prd'] as const)" :key="env" class="rcv-version" :data-testid="`runtime-code-${row.latest.codeId}-${env}`">
+              <el-select :model-value="selected(row, env)" :disabled="!canWrite || !!saving || loading || !!error" filterable placeholder="尚未采用，选择版本" class="rcv-select" :aria-label="`${row.latest.configId} ${environmentLabel(env)}运行版本`" @update:model-value="(value: unknown) => choose(row, env, value)">
+                <el-option v-for="version in row.versions" :key="version.scriptDigest" :value="version.scriptDigest" :label="versionLabel(version)" />
+              </el-select>
+              <div class="rcv-entry" :title="selectedVersion(row, env)?.deliveryPath">{{ selectedVersion(row, env)?.deliveryPath || '尚未配置执行入口' }}</div>
+              <div v-if="dirty(row, env)" class="rcv-version-actions"><el-tag size="small" type="warning">待应用</el-tag><el-button link type="primary" :disabled="!!saving || loading || !!error" :loading="saving === selectionKey(row, env)" :data-testid="`runtime-code-apply-${env}`" @click="apply(row, env)">应用版本</el-button><el-button link :disabled="!!saving" @click="delete drafts[selectionKey(row, env)]; delete errors[selectionKey(row, env)]">取消</el-button></div>
+              <small v-else class="rcv-current">{{ adopted(row, env) ? '当前采用' : '未采用' }}</small>
+              <p v-if="errors[selectionKey(row, env)]" class="rcv-inline-error" role="alert">{{ errors[selectionKey(row, env)] }}</p>
             </td>
-            <td :title="row.gitCommit">{{ row.gitCommit.slice(0, 12) }}</td>
-            <td :title="row.scriptDigest">{{ row.scriptDigest.slice(0, 16) }}</td>
-            <td>{{ row.environments.map((env) => env === 'test' ? '测试' : '生产').join('、') || '未采用' }}</td>
-            <td>
-              <el-button link type="primary" @click="showDetail(row)">详情</el-button>
-              <el-button link type="primary" @click="emit('editDirectory', row.codeId)">下发目录</el-button>
-              <el-button v-if="canWrite" link type="primary" :disabled="saving" @click="openPublish(row)">发布配置</el-button>
-            </td>
+            <td class="rcv-actions"><el-button link type="primary" :disabled="!row.latest.repoId" @click="openRepository(row)">查看仓库</el-button><el-button link type="primary" @click="openDirectory(row)">部署目录</el-button></td>
           </tr>
-          <tr v-if="!loading && !filtered.length"><td colspan="9">{{ error ? '服务不可用' : '暂无代码版本' }}</td></tr>
+          <tr v-if="!loading && !filtered.length"><td colspan="5">{{ error ? '服务不可用' : keyword || repoFilter ? '没有匹配的运行代码' : '暂无运行代码，请先在流程节点中生成或关联仓库代码' }}</td></tr>
         </tbody>
       </table>
     </div>
-    <el-drawer v-model="detailOpen" :title="detail ? `节点代码 · ${detail.deliveryPath}` : '节点代码'" size="min(640px, 94vw)">
-      <template v-if="detail">
-        <dl class="scm-detail">
-          <dt>ConfigId</dt><dd>{{ detail.configId }}</dd>
-          <dt>队列</dt><dd>{{ detail.queueName }}</dd>
-          <dt>代码仓库</dt><dd>{{ detail.repoName || '—' }}</dd>
-          <dt>仓库文件路径</dt><dd>{{ absoluteCodePath(detail.repoPath, detail.storagePath) }}</dd>
-          <dt>Runner 下发路径</dt><dd>{{ deliveryRoot(detail) }}/{{ detail.deliveryPath }}</dd>
-          <dt>本地版本文件</dt><dd>{{ deliveryRoot(detail) }}/version.json</dd>
-          <template v-if="detail.directoryLayout">
-            <dt>代码包映射</dt><dd><div v-for="node in detail.directoryLayout.nodes.filter(n => n.repoId)" :key="node.id">{{ node.sourcePath }} · {{ node.gitCommit?.slice(0,12) }}</div></dd>
-          </template>
-          <dt>Git 地址</dt><dd>{{ detail.gitUrl }}</dd>
-          <dt>Git 提交</dt><dd>{{ detail.gitCommit }}</dd>
-          <template v-if="detail.sourceRepoPath">
-            <dt>来源仓库文件</dt><dd>{{ detail.sourceRepoPath }}</dd>
-            <dt>来源 Git 提交</dt><dd>{{ detail.sourceGitCommit }}</dd>
-          </template>
-          <dt>摘要</dt><dd>{{ detail.scriptDigest }}</dd>
-          <dt>生成提示词</dt><dd>{{ detail.prompt || '—' }}</dd>
-          <dt>来源 URL</dt><dd>{{ detail.url || '—' }}</dd>
-        </dl>
-        <pre class="scm-code">{{ detail.code }}</pre>
-      </template>
-    </el-drawer>
-    <el-dialog v-model="publishOpen" title="发布节点代码运行配置" width="min(500px, 94vw)" append-to-body>
-      <template v-if="selectedVersion">
-        <p>节点 #{{ selectedVersion.configId }} · 队列 {{ selectedVersion.queueName }}</p>
-        <p>{{ selectedVersion.deliveryPath }} · {{ selectedVersion.scriptDigest.slice(0, 20) }}</p>
-        <el-form label-width="90px">
-          <el-form-item label="运行环境">
-            <el-select v-model="publishEnvironment" style="width: 100%" data-testid="code-publish-environment">
-              <el-option label="测试" value="test" /><el-option label="生产" value="prd" />
-            </el-select>
-          </el-form-item>
-        </el-form>
-      </template>
-      <template #footer><el-button @click="publishOpen = false">取消</el-button><el-button type="primary" :loading="saving" data-testid="code-publish-confirm" @click="publishConfiguration">发布</el-button></template>
-    </el-dialog>
+    <p class="rcv-help">应用版本会更新该环境使用此配置的队列任务。文件下发范围及目标机器在「代码下发」中设置。</p>
   </div>
 </template>
 
 <style scoped>
-.scm-main { display: flex; flex: 1; min-height: 0; flex-direction: column; }
-.scm-table { flex: 1; min-height: 0; overflow: auto; }
-.scm-table td { white-space: nowrap; }
-.scm-file-mapping { min-width: 230px; max-width: 320px; }
-.scm-file-mapping div { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
-.scm-file-mapping span { flex: 0 0 48px; color: var(--rc-muted); font-size: 11px; }
-.scm-file-mapping code { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: inherit; }
-.scm-note { margin-left: auto; color: var(--rc-muted); font-size: 12px; }
-.scm-error { margin: 0 12px 8px; padding: 10px; border-radius: 6px; background: #fef2f2; color: #b91c1c; font-size: 12px; }
-.scm-detail { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px; font-size: 12px; }
-.scm-detail dt { color: var(--rc-muted); }
-.scm-detail dd { margin: 0; overflow-wrap: anywhere; }
-.scm-code { padding: 12px; border-radius: 6px; background: #f8fafc; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.rcv-main { display:flex; flex:1; min-height:0; flex-direction:column; }.rcv-search { width:240px; }.rcv-repo { width:160px; }.rcv-note { margin-left:auto; font-size:12px; color:var(--rc-muted); }.rcv-table { flex:1; min-height:0; overflow:auto; }.rcv-error { margin:0 12px 8px; width:auto; }.rcv-table th,.rcv-table td { white-space:nowrap; }.rcv-identity { width:170px; max-width:190px; }.rcv-identity strong { font-weight:500; }.rcv-identity div,.rcv-identity small { display:block; margin-top:4px; overflow:hidden; text-overflow:ellipsis; }.rcv-identity small,.rcv-current,.rcv-entry { font-size:12px; color:var(--rc-muted); }.rcv-website { max-width:160px; overflow:hidden; text-overflow:ellipsis; }.rcv-version { min-width:230px; }.rcv-select { width:220px; }.rcv-entry { margin:5px 0; max-width:220px; overflow:hidden; text-overflow:ellipsis; }.rcv-version-actions { display:flex; gap:10px; align-items:center; }.rcv-version-actions .el-button+.el-button { margin-left:0; }.rcv-inline-error { max-width:220px; color:var(--rc-error); white-space:normal; font-size:12px; margin:6px 0 0; }.rcv-help { margin:10px 12px; font-size:12px; color:var(--rc-muted); }.rcv-actions .el-button { display:block; margin:0 0 6px; }
 </style>
