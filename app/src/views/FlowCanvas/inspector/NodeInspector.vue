@@ -32,7 +32,8 @@ import RuleOrchestrationTab from './tabs/RuleOrchestrationTab.vue'
 
 const props = withDefaults(defineProps<{ hideAi?: boolean }>(), { hideAi: false })
 const flow = useFlowStore()
-// 只读（2026-10-10）：217 流程版本的发布版 / 锁定草稿，以及 leo 版本状态里的已发布版。只读也要能滚动、
+// 只读（2026-10-10，10-11 起 217 发布版可直接改、首次保存自动生成草稿）：217 的锁定草稿，以及 leo 版本状态
+// 里的已发布版。只读也要能滚动、
 // 切页签、展开收起查看——原来外层整块 pointer-events: none，连滚动条都拖不动（用户反馈）。
 // 现在只让内容区本身不接收鼠标（滚轮落到外层滚动容器照常滚），启停 / 更换配置 / 保存单独禁用。
 const flowVersion = useFlowVersionStore()
@@ -136,7 +137,7 @@ const nodeConfigDirty = computed(() => flow.dirtyConfigNodes.includes(id.value))
 // 配置名称跟节点名走（新增/复制时已写上），不再在节点配置 Tab 里填；保存时若仍为空就用节点名补上。
 // 配置身份（新建 / 已有）由上面的配置绑定条表达，这里只说"有没有未提交的修改"，不重复也不夸大落库状态。
 const canSaveNodeConfig = computed(() => nodeConfigDirty.value || !configId.value)
-const footNote = computed(() => (readonly.value ? '发布版本只读，点画布上方「编辑草稿」后可修改' : nodeConfigDirty.value ? '节点配置有未保存修改' : '无未保存修改'))
+const footNote = computed(() => (readonly.value ? '当前版本只读（草稿已锁定或为已发布版本），不能修改' : nodeConfigDirty.value ? '节点配置有未保存修改' : '无未保存修改'))
 // ---- 配置联调（config_api.md）----
 // 保存配置 → config/modify/updateConfig（带 configId = 更新）。
 //

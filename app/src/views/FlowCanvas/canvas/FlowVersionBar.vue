@@ -1,7 +1,8 @@
 <script setup lang="ts">
-// 流程版本条（2026-10-10）：217 起全部流程进版本模式，v1 已发布只读。与旧平台 FlowNodeDrawer 一致：
-// 发布版只读，点「编辑草稿」生成草稿 Vn+1 才能改，改完「发布」变成发布 Vn+1；也可「放弃草稿」。
-// 同名按钮与确认文案对齐旧平台；锁定 / 手工运行 / 切换版本 / 归档本期不做。
+// 流程版本条（2026-10-10）：217 起全部流程进版本模式，v1 已发布（运行中的版本不能直接改）。
+// 2026-10-11 定：不用先点「编辑草稿」，在画布上直接改，第一次保存时自动生成草稿 Vn+1（stores/flowVersion.ts），
+// 一直是这个草稿直到「发布」变成发布 Vn+1，或「放弃草稿」。发布 / 放弃的确认文案对齐旧平台 FlowNodeDrawer；
+// 锁定（只读）沿用旧平台的锁，前端只展示；手工运行 / 切换版本 / 归档本期不做。
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
@@ -31,21 +32,6 @@ async function settle(): Promise<boolean> {
     return false
   }
   return true
-}
-
-/** 编辑草稿：从当前发布版生成草稿 Vn+1，重载画布（读草稿步骤）后开放编辑 */
-async function onCreateDraft() {
-  if (busy.value) return
-  busy.value = true
-  try {
-    await version.createDraft()
-    ElMessage.success(`已生成草稿 V${version.draft?.flowVer ?? '—'}，可以开始修改`)
-    await reloadCanvas()
-  } catch (e) {
-    ElMessage.error(`生成草稿失败：${(e as Error)?.message ?? String(e)}`)
-  } finally {
-    busy.value = false
-  }
 }
 
 async function onPublish() {
@@ -113,10 +99,7 @@ async function onAbandon() {
     </template>
     <template v-else>
       <span class="fvb-tag" data-testid="flow-version-published">当前发布 V{{ version.overview?.curVer ?? '—' }}</span>
-      <span class="fvb-text">发布版本只读，节点只能查看；点「编辑草稿」生成草稿 V{{ version.overview?.nextVer ?? '—' }} 后再修改，发布后新任务才会使用。</span>
-      <span class="fvb-actions">
-        <button class="rc-btn tiny primary" type="button" :disabled="busy" data-testid="flow-version-edit-draft" @click="onCreateDraft">编辑草稿</button>
-      </span>
+      <span class="fvb-text">直接修改即可，保存时会自动生成草稿 V{{ version.overview?.nextVer ?? '—' }}；发布后新任务才会使用。</span>
     </template>
   </div>
 </template>

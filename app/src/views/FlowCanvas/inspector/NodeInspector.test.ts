@@ -734,9 +734,10 @@ describe('NodeInspector 没有选中节点时自动选第一个（1008-08）', (
   })
 })
 
-// 2026-10-10 流程版本（217）：发布版只读——节点设置能滚动、切页签查看，但不给保存入口
-describe('NodeInspector 发布版只读', () => {
-  it('发布版：不显示保存按钮和未保存红点，底部提示先「编辑草稿」；有草稿后恢复保存', async () => {
+// 2026-10-10 流程版本（217）：10-11 起发布版可直接改（首次保存自动生成草稿）；锁定的草稿只读——
+// 节点设置能滚动、切页签查看，但不给保存入口
+describe('NodeInspector 版本只读', () => {
+  it('发布版可直接改：有保存按钮；草稿锁定后只读：不显示保存按钮和未保存红点', async () => {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
@@ -745,22 +746,22 @@ describe('NodeInspector 发布版只读', () => {
       [{ stepId: '41797', sourceId: '430024667', name: '定期报告', dependsOn: ['0'], configId: '1401081', inputTable: '6200036', outputTable: '6200036', enabled: true } as never],
     )
     flow.select('41797')
-    const row = (versionId: string, state: string) => ({ versionId, flowVer: state === 'W' ? 2 : 1, ver: 1, state, isLock: 0, isDelete: 0, baseId: null })
+    const row = (versionId: string, state: string, isLock = 0) => ({ versionId, flowVer: state === 'W' ? 2 : 1, ver: 1, state, isLock, isDelete: 0, baseId: null })
     const overview = vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: true, curVer: 1, nextVer: 2, publishId: '745', draftId: null, versions: [row('745', 'C')] })
     await useFlowVersionStore().load('14010130')
 
     const w = mount(NodeInspector)
     await flushPromises()
+    expect(w.find('.rc-inspector').classes()).not.toContain('is-readonly')
+    expect(w.find('[data-testid="node-config-save"]').exists()).toBe(true)
+
+    overview.mockResolvedValue({ enabled: true, curVer: 1, nextVer: 2, publishId: '745', draftId: '1043', versions: [row('1043', 'W', 1), row('745', 'C')] })
+    await useFlowVersionStore().refresh('14010130')
+    await flushPromises()
     expect(w.find('.rc-inspector').classes()).toContain('is-readonly')
     expect(w.find('[data-testid="node-config-save"]').exists()).toBe(false)
     expect(w.find('.foot-dot').exists()).toBe(false)
-    expect(w.text()).toContain('发布版本只读，点画布上方「编辑草稿」后可修改')
-
-    overview.mockResolvedValue({ enabled: true, curVer: 1, nextVer: 2, publishId: '745', draftId: '1043', versions: [row('1043', 'W'), row('745', 'C')] })
-    await useFlowVersionStore().refresh('14010130')
-    await flushPromises()
-    expect(w.find('.rc-inspector').classes()).not.toContain('is-readonly')
-    expect(w.find('[data-testid="node-config-save"]').exists()).toBe(true)
+    expect(w.text()).toContain('当前版本只读')
     w.unmount()
   })
 })
