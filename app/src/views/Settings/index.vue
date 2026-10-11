@@ -6,49 +6,45 @@
 import { computed, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { canAccess } from '@/composables/usePermission'
-import { runnerManagementAvailable } from '@/constants/deployGates'
 import NodeTypeTab from './NodeTypeTab.vue'
 import CategoryTab from './CategoryTab.vue'
-import SourceGroupTab from './SourceGroupTab.vue'
 import RunnerManagementTab from './RunnerManagementTab.vue'
-import CodeManagementTab from './CodeManagementTab.vue'
+import RunnerBindingTab from './RunnerBindingTab.vue'
 import CodeRepositoryTab from './CodeRepositoryTab.vue'
 import DirectoryLayoutTab from './DirectoryLayoutTab.vue'
 
-// 来源组（1008-03）：从采集资产页签条移到系统设置（平台配置性质：决定组内源跑哪条流程）。
-// runner：依赖 Runner 管理服务的 tab，部署环境还没有这个服务，先隐藏（见 runnerManagementAvailable；10-10 用户再次确认隐藏）
-const ALL_TABS: { key: string; label: string; permission: string; comp: Component; runner?: true }[] = [
+const ALL_TABS: { key: string; label: string; permission: string; comp: Component }[] = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', comp: NodeTypeTab },
   { key: 'category', label: '分类目录', permission: 'settings:category', comp: CategoryTab },
-  { key: 'source-group', label: '来源组', permission: 'settings:sourceGroup', comp: SourceGroupTab },
-  { key: 'runners', label: 'Runner 实例', permission: 'settings:runners', comp: RunnerManagementTab, runner: true },
-  { key: 'assignments', label: '队列分配', permission: 'settings:assignments', comp: RunnerManagementTab, runner: true },
-  { key: 'site-code', label: '节点代码', permission: 'settings:releases', comp: CodeManagementTab, runner: true },
-  { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', comp: CodeRepositoryTab, runner: true },
-  { key: 'directory-layout', label: '下发目录', permission: 'settings:releases', comp: DirectoryLayoutTab, runner: true },
-  { key: 'releases', label: '发布版本', permission: 'settings:releases', comp: RunnerManagementTab, runner: true },
+  { key: 'runners', label: '运行机器', permission: 'settings:runners', comp: RunnerManagementTab },
+  { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', comp: CodeRepositoryTab },
+  { key: 'directory-layout', label: '部署目录', permission: 'settings:releases', comp: DirectoryLayoutTab },
+  { key: 'assignments', label: '机器配置', permission: 'settings:assignments', comp: RunnerBindingTab },
+  { key: 'releases', label: 'Runner 版本', permission: 'settings:releases', comp: RunnerManagementTab },
 ]
-const tabs = computed(() => ALL_TABS.filter((t) => canAccess(t.permission) && (!t.runner || runnerManagementAvailable())))
+const tabs = computed(() => ALL_TABS.filter((t) => canAccess(t.permission)))
 
 const route = useRoute()
 const router = useRouter()
 const active = computed(() => {
   const key = String(route.query.tab ?? '')
-  return tabs.value.find((t) => t.key === key) ?? tabs.value[0]
+  return tabs.value.find((t) => t.key === (key === 'site-code' ? 'assignments' : key)) ?? tabs.value[0]
 })
 
 // 非法 / 无权限的 tab 值：把地址归一到实际显示的那个，免得书签里留着一个打不开的 tab
 watch(() => route.query.tab, (tab) => {
   if (tab != null && active.value && tab !== active.value.key && tab !== '') {
-    void router.replace({ path: '/settings', query: active.value.key === tabs.value[0]?.key ? {} : { tab: active.value.key } })
+    void router.replace({ path: '/settings', query: tab === 'site-code' && active.value.key === 'assignments'
+      ? { ...route.query, tab: 'assignments', mode: undefined }
+      : active.value.key === tabs.value[0]?.key ? {} : { tab: active.value.key } })
   }
 }, { immediate: true })
 
 function selectTab(key: string) {
   void router.replace({ path: '/settings', query: key === tabs.value[0]?.key ? {} : { tab: key } })
 }
-function editDirectory(codeId: string) {
-  void router.replace({ path: '/settings', query: { tab: 'directory-layout', codeId } })
+function editDirectory(configId: string) {
+  void router.replace({ path: '/settings', query: { tab: 'directory-layout', configId } })
 }
 </script>
 
@@ -68,7 +64,7 @@ function editDirectory(codeId: string) {
     </div>
     <div class="st-content">
       <KeepAlive>
-        <component :is="active.comp" v-if="active" :key="active.key" :section="active.key" @edit-directory="editDirectory" />
+        <component :is="active.comp" v-if="active" :key="active.key" :section="active.key" :repository-id="typeof route.query.repoId === 'string' ? route.query.repoId : ''" @edit-directory="editDirectory" />
       </KeepAlive>
     </div>
   </div>

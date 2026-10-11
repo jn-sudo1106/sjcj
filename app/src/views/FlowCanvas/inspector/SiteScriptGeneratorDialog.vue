@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { generateSiteScript } from '@/api/siteScript'
-import { runnerManagementApi, type CodeRepository, type CodeRepositoryFile, type PublishedScript, type SiteCodeVersion } from '@/api/runnerManagement'
+import { runnerManagementApi, type CodeRepository, type CodeRepositoryDirectory, type CodeRepositoryFile, type PublishedScript, type SiteCodeVersion } from '@/api/runnerManagement'
 import { copyToClipboard } from '@/utils/clipboard'
 
 const DEFAULT_PROMPT = `参考 www.realcan.cn.py 样例，为配置的列表 URL 编写完整的 Python 新闻抓取代码。
@@ -29,12 +29,16 @@ const published = ref<PublishedScript | null>(null)
 const loadedVersion = ref<SiteCodeVersion | null>(null)
 const selectedVersionDigest = ref('')
 const savedDraftKey = ref('')
-const codeType = ref<'site' | 'default'>('site')
+const fileNameMode = ref<'website' | 'queue'>('website')
+const savedFileName = ref('')
 const versions = ref<SiteCodeVersion[]>([])
 const versionsError = ref('')
 const repositories = ref<CodeRepository[]>([])
 const repositoryId = ref('')
 const repositoriesError = ref('')
+const directories = ref<CodeRepositoryDirectory[]>([]), directoryId = ref(''), directoriesLoading = ref(false), directoriesError = ref('')
+const availableDirectories = computed(() => directories.value.filter(row => row.status === 'ACTIVE' && (!row.configType || row.configType === (props.configType || ''))))
+const selectedDirectory = computed(() => availableDirectories.value.find(row => row.directoryId === directoryId.value))
 const fileChooserOpen = ref(false)
 const repositoryFiles = ref<CodeRepositoryFile[]>([])
 const repositoryFileTotal = ref(0)
@@ -48,16 +52,10 @@ const selectableFiles = computed(() => repositoryFiles.value.filter((file) => fi
 const availableRepositories = computed(() => repositories.value.filter((repo) =>
   repo.status === 'ACTIVE' && (!repo.configType || repo.configType === (props.configType || ''))))
 const selectedRepository = computed(() => availableRepositories.value.find((repo) => repo.repoId === repositoryId.value))
-const hostname = computed(() => { try { return new URL(url.value.trim()).hostname.toLowerCase() } catch { return '' } })
-const fileName = computed(() => codeType.value === 'site' ? `${hostname.value || 'site'}.py` : `${props.queueName || 'queue'}.py`)
-const deliveryPath = computed(() => codeType.value === 'site' ? `sites/${fileName.value}` : fileName.value)
-const contextVersions = computed(() => versions.value.filter((version) => !version.siteHost || version.siteHost === hostname.value))
-const storagePath = computed(() => {
-  if (published.value?.repoId === repositoryId.value && published.value.deliveryPath === deliveryPath.value && published.value.storagePath) return published.value.storagePath
-  const version = loadedVersion.value
-  if (version && (!repositoryId.value || version.repoId === repositoryId.value) && version.deliveryPath === deliveryPath.value) return version.storagePath
-  return ''
-})
+const hostname = computed(() => { try { const parsed = new URL(url.value.trim()); return ['http:', 'https:'].includes(parsed.protocol) ? parsed.hostname.toLowerCase() : '' } catch { return '' } })
+const fileName = computed(() => savedFileName.value || (fileNameMode.value === 'website' ? `${hostname.value || 'site'}.py` : `${props.queueName || 'queue'}.py`))
+const contextVersions = computed(() => versions.value)
+const storagePath = computed(() => selectedDirectory.value ? `${selectedDirectory.value.path}/${fileName.value}` : '')
 const absoluteStoragePath = computed(() => {
   const root = selectedRepository.value?.path || loadedVersion.value?.repoPath || ''
   if (!storagePath.value) return root
@@ -65,15 +63,35 @@ const absoluteStoragePath = computed(() => {
   return root ? `${root.replace(/[\\/]$/, '')}${separator}${storagePath.value.replaceAll('/', separator)}` : storagePath.value
 })
 const draftKey = computed(() => JSON.stringify({ code: code.value, prompt: prompt.value.trim(), url: url.value.trim(),
-  repositoryId: repositoryId.value, codeType: codeType.value, sourceFilePath: sourceFilePath.value, sourceGitCommit: sourceGitCommit.value }))
-const isSaved = computed(() => !!code.value && savedDraftKey.value === draftKey.value)
-const busy = computed(() => loading.value || codeLoading.value || generating.value || publishing.value)
+  repositoryId: repositoryId.value, directoryId: directoryId.value, storagePath: storagePath.value, fileNameMode: fileNameMode.value, fileName: fileName.value, sourceFilePath: sourceFilePath.value, sourceGitCommit: sourceGitCommit.value }))
+const isSaved = computed(() => {
+  const saved = published.value || loadedVersion.value
+  return !!code.value && savedDraftKey.value === draftKey.value && saved?.repoId === repositoryId.value && saved.storagePath === storagePath.value
+})
+const busy = computed(() => loading.value || codeLoading.value || generating.value || publishing.value || directoriesLoading.value)
 const message = (e: unknown) => e instanceof Error ? e.message : String(e)
 let controller: AbortController | null = null
 let openedFor = ''
 let sessionId = 0
 let versionRequestId = 0
 let fileRequestId = 0
+let directoryRequestId = 0
+let directoryLoad: Promise<void> = Promise.resolve()
+
+async function loadDirectories() {
+  const repoId = repositoryId.value, seq = ++directoryRequestId
+  directoriesLoading.value = !!repoId; directoriesError.value = ''; directories.value = []
+  if (!repoId) return
+  try {
+    const result = await runnerManagementApi.codeRepositoryDirectories(repoId)
+    if (seq !== directoryRequestId || repoId !== repositoryId.value) return
+    directories.value = result
+    const keepSavedDestination = loadedVersion.value?.repoId === repoId && (loadedVersion.value.directoryId || '') === directoryId.value
+    if (!keepSavedDestination && !availableDirectories.value.some(row => row.directoryId === directoryId.value)) directoryId.value =
+      availableDirectories.value.find(row => row.configType === props.configType && !row.isDefault)?.directoryId || availableDirectories.value[0]?.directoryId || ''
+  } catch (e) { if (seq === directoryRequestId) directoriesError.value = message(e) }
+  finally { if (seq === directoryRequestId) directoriesLoading.value = false }
+}
 
 function clearDraft() {
   versionRequestId++
@@ -87,6 +105,7 @@ function clearDraft() {
   savedDraftKey.value = ''
   sourceFilePath.value = ''
   sourceGitCommit.value = ''
+  savedFileName.value = ''
   error.value = ''
   warnings.value = []
 }
@@ -97,7 +116,7 @@ async function initialize() {
   if (openedFor !== context) {
     clearDraft()
     repositoryId.value = ''
-    codeType.value = 'site'
+    fileNameMode.value = 'website'
     prompt.value = props.initialPrompt.trim() || DEFAULT_PROMPT
   }
   openedFor = context
@@ -121,11 +140,14 @@ async function initialize() {
     repositoryId.value = ''
     repositoriesError.value = message(repoResult.reason)
   }
+  if (!directoriesLoading.value && repositoryId.value) directoryLoad = loadDirectories()
+  await directoryLoad
+  if (session !== sessionId || !open.value) return
   if (versionResult.status === 'fulfilled') {
     versions.value = versionResult.value
     if (!code.value && !candidate.value) {
       const latest = contextVersions.value.find((version) => version.siteHost === hostname.value)
-        || contextVersions.value.find((version) => !version.siteHost)
+        || contextVersions.value.find((version) => !version.siteHost) || contextVersions.value[0]
       if (latest) await loadVersion(latest)
     }
   } else {
@@ -155,14 +177,17 @@ watch(url, (next, previous) => {
     clearDraft()
   }
 })
+watch(fileNameMode, () => { savedFileName.value = '' }, { flush: 'sync' })
 watch(repositoryId, () => {
   fileRequestId++
   sourceFilePath.value = ''
   sourceGitCommit.value = ''
   repositoryFiles.value = []
+  directoryId.value = ''
+  directoryLoad = loadDirectories()
   if (fileChooserOpen.value) void loadRepositoryFiles(1)
 }, { flush: 'sync' })
-onBeforeUnmount(() => { controller?.abort(); sessionId++; versionRequestId++; fileRequestId++ })
+onBeforeUnmount(() => { controller?.abort(); sessionId++; versionRequestId++; fileRequestId++; directoryRequestId++ })
 
 async function loadVersion(version: SiteCodeVersion) {
   const requestId = ++versionRequestId
@@ -173,9 +198,13 @@ async function loadVersion(version: SiteCodeVersion) {
     const result = await runnerManagementApi.siteCodeContent(version.scriptDigest)
     if (requestId !== versionRequestId || session !== sessionId || !open.value) return
     if (availableRepositories.value.some((repo) => repo.repoId === result.repoId)) repositoryId.value = result.repoId!
+    await directoryLoad
+    if (requestId !== versionRequestId || session !== sessionId || !open.value) return
+    directoryId.value = result.directoryId || availableDirectories.value.find(row => row.isDefault)?.directoryId || availableDirectories.value[0]?.directoryId || ''
     code.value = result.code
     prompt.value = result.prompt.trim() || props.initialPrompt.trim() || DEFAULT_PROMPT
-    codeType.value = result.siteHost ? 'site' : 'default'
+    fileNameMode.value = result.deliveryPath.split('/').pop() === `${props.queueName}.py` ? 'queue' : 'website'
+    savedFileName.value = result.deliveryPath.split('/').pop() || ''
     loadedVersion.value = result
     selectedVersionDigest.value = result.scriptDigest
     published.value = null
@@ -260,14 +289,18 @@ function toggleFileChooser() {
 async function chooseRepositoryFile(file: CodeRepositoryFile) {
   const repoId = repositoryId.value
   if (!repoId) return
-  if (file.size !== null && file.size > 200_000) { repositoryFileError.value = '节点代码不能超过 200 KB'; return }
+  if (file.size !== null && file.size > 200_000) { repositoryFileError.value = '代码文件不能超过 200 KB'; return }
   const session = sessionId
   const requestId = ++fileRequestId
   repositoryFilesLoading.value = true
   try {
     const result = await runnerManagementApi.codeRepositoryFileContent(repoId, file.path)
     if (session !== sessionId || requestId !== fileRequestId || repositoryId.value !== repoId) return
+    const editingVersion = loadedVersion.value, lastPublished = published.value, previousName = savedFileName.value
     clearDraft()
+    loadedVersion.value = editingVersion
+    published.value = lastPublished
+    savedFileName.value = previousName
     code.value = result.content
     sourceFilePath.value = result.path
     sourceGitCommit.value = result.gitCommit
@@ -285,12 +318,14 @@ function editManually() {
 
 async function publish() {
   if (busy.value || showCandidate.value) return
-  if (loadedVersion.value?.directoryLayout) { error.value = '当前版本包含目录映射，请在「系统设置 → 下发目录」调整仓库关联后发布，避免覆盖公共代码配置'; return }
+  if (loadedVersion.value?.directoryLayout) { error.value = '当前版本包含目录映射，请在「系统设置 → 部署目录」调整仓库关联后发布，避免覆盖公共代码配置'; return }
   const configId = props.configId?.trim()
   if (!configId) { error.value = '请先保存节点配置，再保存代码'; return }
   if (!code.value.trim()) return
   if (!props.queueName?.trim()) { error.value = '请先在任务配置中保存队列名称'; return }
+  if (fileNameMode.value === 'website' && !hostname.value) { error.value = '按网站命名需要有效的 http(s) 列表 URL'; return }
   if (!repositoryId.value) { error.value = '请先在系统设置中配置可用的代码仓库'; return }
+  if (directoriesError.value || !selectedDirectory.value) { error.value = '请先选择可用的仓库配置目录'; return }
   publishing.value = true
   error.value = ''
   const session = sessionId
@@ -298,10 +333,11 @@ async function publish() {
   try {
     const result = await runnerManagementApi.publishScript({
       configId, fileName: fileName.value, code: code.value, prompt: prompt.value.trim(), url: url.value.trim(),
-      queueName: props.queueName.trim(), codeType: codeType.value, configType: props.configType || undefined,
+      queueName: props.queueName.trim(), fileNameMode: fileNameMode.value, configType: props.configType || undefined,
+      codeId: published.value?.codeId || loadedVersion.value?.codeId || undefined,
       repositoryId: repositoryId.value,
+      directoryId: directoryId.value || undefined,
       sourceFilePath: sourceFilePath.value || undefined, sourceGitCommit: sourceGitCommit.value || undefined,
-      siteHost: codeType.value === 'site' ? new URL(url.value.trim()).hostname.toLowerCase() : undefined,
     })
     if (session !== sessionId || !open.value) return
     published.value = result
@@ -343,7 +379,14 @@ function download() {
             <el-option v-for="repo in availableRepositories" :key="repo.repoId" :label="`${repo.name}${repo.isDefault ? '（默认）' : ''}`" :value="repo.repoId" />
           </el-select>
         </label>
-        <p class="site-script-hint">已按节点配置类型筛选可用仓库，包含通用仓库。</p>
+        <label class="site-script-field">保存目录
+          <el-select v-model="directoryId" :disabled="busy" data-testid="site-script-directory" placeholder="选择已配置的仓库目录">
+            <el-option v-if="loadedVersion?.directoryId && loadedVersion.repoId === repositoryId && !availableDirectories.some(row => row.directoryId === loadedVersion?.directoryId)" :value="loadedVersion.directoryId" label="原目录已停用或不可用，请重新选择" disabled />
+            <el-option v-for="directory in availableDirectories" :key="directory.directoryId" :value="directory.directoryId" :label="`${directory.name} · ${directory.path}/`" />
+          </el-select>
+        </label>
+        <p class="site-script-hint">目录按节点类型筛选，可在「代码仓库」管理。文件直接保存在所选目录下。</p>
+        <p v-if="directoriesError" class="site-script-error" role="alert">目录加载失败：{{ directoriesError }}</p>
         <p v-if="repositoriesError" class="site-script-error" role="alert">仓库加载失败：{{ repositoriesError }}</p>
         <label class="site-script-field">列表 URL<input v-model="url" :disabled="busy" class="site-script-input" data-testid="site-script-url" placeholder="https://www.realcan.cn/newscenter" /></label>
         <div class="site-script-prompt-field">
@@ -356,22 +399,23 @@ function download() {
         <div class="site-script-panel-head">
           <b>代码编辑</b>
           <el-select v-if="contextVersions.length" v-model="selectedVersionDigest" :disabled="busy" class="site-script-version-select" data-testid="site-code-versions" placeholder="历史版本" @change="selectVersion">
-            <el-option v-for="version in contextVersions" :key="version.scriptDigest" :value="version.scriptDigest" :label="`${version.siteHost || '队列通用'} · ${version.gitCommit.slice(0, 10)}`" />
+            <el-option v-for="version in contextVersions" :key="version.scriptDigest" :value="version.scriptDigest" :label="`${version.deliveryPath.split('/').pop()} · ${version.gitCommit.slice(0, 10)}`" />
           </el-select>
           <span v-else>Python · scrape(url)</span>
         </div>
         <div class="site-script-paths">
           <div><span>仓库文件</span><code :title="absoluteStoragePath" data-testid="site-script-storage-path">{{ storagePath ? absoluteStoragePath : `${absoluteStoragePath || '请先选择仓库'}${absoluteStoragePath ? ' / 保存后自动分配文件路径' : ''}` }}</code></div>
-          <div><span>→ 下发</span><code data-testid="site-script-delivery-path">{{ deliveryPath }}</code></div>
+          <div><span>文件名</span><code data-testid="site-script-file-name">{{ fileName }}</code></div>
           <div v-if="sourceFilePath"><span>来源文件</span><code :title="sourceFilePath" data-testid="site-script-source-file">{{ sourceFilePath }} · {{ sourceGitCommit.slice(0, 10) }}</code></div>
         </div>
         <div class="site-script-editor-toolbar">
-          <el-select v-model="codeType" :disabled="busy" class="site-script-type-select" data-testid="site-script-code-type"><el-option label="网站专用" value="site" /><el-option label="队列通用" value="default" /></el-select>
+          <span>命名方式</span><el-select v-model="fileNameMode" :disabled="busy" class="site-script-type-select" data-testid="site-script-name-mode" aria-label="文件命名方式"><el-option label="按网站命名" value="website" /><el-option label="按队列命名" value="queue" /></el-select>
           <el-button size="small" :disabled="busy || !repositoryId" data-testid="site-script-choose-repo-file" @click="toggleFileChooser">选择仓库文件</el-button>
           <span class="site-script-toolbar-spacer" />
           <el-button v-if="code" size="small" :disabled="showCandidate" @click="copyToClipboard(code, 'Python 代码')">复制</el-button>
           <el-button v-if="code" size="small" :disabled="showCandidate" data-testid="site-script-download" @click="download">下载</el-button>
         </div>
+        <p class="site-script-hint">命名方式只决定文件名，实际运行目录和入口在「部署目录」中配置。</p>
         <p v-if="versionsError" class="site-script-error" role="alert">版本列表加载失败：{{ versionsError }}</p>
         <p v-if="error" class="site-script-error" data-testid="site-script-error" role="alert">{{ error }}</p>
         <p v-for="warning in warnings" :key="warning" class="site-script-warning">{{ warning }}</p>
@@ -382,7 +426,7 @@ function download() {
         <div v-if="code" class="site-script-code-status"><span :class="{ 'site-script-saved': isSaved }">{{ isSaved ? '已保存并提交 Git' : '有修改待保存' }}</span><span v-if="published" :title="published.scriptDigest" data-testid="site-script-saved">Git {{ published.gitCommit.slice(0, 10) }} · {{ published.scriptDigest.slice(0, 20) }}</span><span v-else-if="loadedVersion" :title="loadedVersion.scriptDigest">Git {{ loadedVersion.gitCommit.slice(0, 10) }}</span></div>
       </section>
     </div>
-    <template #footer><div class="site-script-footer"><p v-if="loadedVersion?.directoryLayout">此版本包含公共代码和目录映射，请在「系统设置 → 下发目录」编辑并发布。</p><p v-else>{{ selectedRepository?.remoteUrl ? '保存后自动提交 Git 并推送到远程仓库。' : '保存后自动提交到本地 Git 仓库。' }}运行配置在「节点代码」中发布。</p><el-button :disabled="publishing" @click="open = false">关闭</el-button><el-button type="primary" :loading="publishing" :disabled="busy || !code.trim() || showCandidate || isSaved || !configId || !repositoryId || !!loadedVersion?.directoryLayout" data-testid="site-script-publish" @click="publish">保存并提交</el-button></div></template>
+    <template #footer><div class="site-script-footer"><p v-if="loadedVersion?.directoryLayout">此版本包含公共代码和目录映射，请在「系统设置 → 部署目录」编辑目录映射，再到机器配置中下发。</p><p v-else>{{ selectedRepository?.remoteUrl ? '保存后自动提交 Git 并推送到远程仓库。' : '保存后自动提交到本地 Git 仓库。' }}在「部署目录」配置代码文件，再到「机器配置」选择部署配置。</p><el-button :disabled="publishing" @click="open = false">关闭</el-button><el-button type="primary" :loading="publishing" :disabled="busy || !code.trim() || showCandidate || isSaved || !configId || !repositoryId || !!directoriesError || !selectedDirectory || !!loadedVersion?.directoryLayout" data-testid="site-script-publish" @click="publish">保存并提交</el-button></div></template>
   </el-dialog>
   <el-dialog v-model="fileChooserOpen" title="选择仓库 Python 文件" width="min(760px, 94vw)" append-to-body data-testid="site-script-file-browser">
     <div class="site-script-file-search"><input v-model="repositoryFileKeyword" class="site-script-input" placeholder="按路径搜索仓库文件" data-testid="site-script-file-keyword" @keyup.enter="loadRepositoryFiles(1)" /><el-button :loading="repositoryFilesLoading" @click="loadRepositoryFiles(1)">查询</el-button></div>

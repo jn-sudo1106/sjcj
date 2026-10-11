@@ -1,83 +1,100 @@
 // @vitest-environment jsdom
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { createMemoryHistory, createRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { runnerManagementApi } from '@/api/runnerManagement'
+import { runnerManagementApi, type SiteCodeVersion } from '@/api/runnerManagement'
 import CodeManagementTab from './CodeManagementTab.vue'
 
 vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: {
   siteCodeCatalog: vi.fn(), bindSiteCode: vi.fn(), siteCodeContent: vi.fn(),
-  siteCodeRepository: vi.fn(), updateSiteCodeRepository: vi.fn(), updateSiteCodeGit: vi.fn(),
 } }))
-afterEach(() => vi.resetAllMocks())
-
-it('发布配置时才选择运行环境，并绑定所选代码版本', async () => {
-  const row = {
-    codeId: 'code-1', configId: 'c-1', queueName: 'news_list', siteHost: 'www.realcan.cn',
-    storagePath: 'code/c-1/code-1.py', deliveryPath: 'sites/www.realcan.cn.py',
-    gitUrl: 'git/new.py', gitCommit: 'abcdef123456', scriptDigest: 'sha256:new',
-    publishedAt: '', prompt: '', url: '', environments: [] as ('test' | 'prd')[],
-  }
-  vi.mocked(runnerManagementApi.siteCodeCatalog).mockResolvedValue([row])
-  vi.mocked(runnerManagementApi.siteCodeRepository).mockResolvedValue({ path: 'E:\\ce\\site-scripts', defaultPath: 'E:\\ce\\site-scripts', remoteUrl: '', branch: 'main' })
-  vi.mocked(runnerManagementApi.bindSiteCode).mockResolvedValue({ ...row, environment: 'prd' })
-  setActivePinia(createPinia())
-  useAuthStore().roles = ['admin']
-  const wrapper = mount(CodeManagementTab, { global: { stubs: {
-    ElInput: { props: ['modelValue'], emits: ['update:modelValue'], template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />' },
-    ElButton: { template: '<button type="button"><slot /></button>' },
-    ElDrawer: { template: '<div><slot /></div>' },
-    ElDialog: { props: ['modelValue'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' },
-    ElForm: { template: '<form><slot /></form>' },
-    ElFormItem: { template: '<div><slot /></div>' },
-    ElSelect: { props: ['modelValue'], emits: ['update:modelValue'], template: '<select :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value)"><slot /></select>' },
-    ElOption: { props: ['value', 'label'], template: '<option :value="value">{{ label }}</option>' },
-  } } })
-  await flushPromises()
-  expect(wrapper.find('[data-testid="code-publish-environment"]').exists()).toBe(false)
-  await wrapper.findAll('button').find((button) => button.text() === '发布配置')!.trigger('click')
-  await wrapper.get('[data-testid="code-publish-environment"]').setValue('prd')
-  await wrapper.get('[data-testid="code-publish-confirm"]').trigger('click')
-  await flushPromises()
-  expect(runnerManagementApi.bindSiteCode).toHaveBeenCalledWith({
-    configId: 'c-1', queueName: 'news_list', environment: 'prd', scriptDigest: 'sha256:new',
-  })
+const latest: SiteCodeVersion & { environments: ('test' | 'prd')[] } = {
+  codeId: 'code-1', configId: 'c-1', queueName: 'news_list', siteHost: 'www.realcan.cn',
+  storagePath: 'sites/main.py', deliveryPath: 'sites/www.realcan.cn.py', repoId: 'repo-web', repoName: '网页代码',
+  gitUrl: '', gitCommit: 'a'.repeat(40), scriptDigest: 'sha256:new', publishedAt: '2026-10-09T06:00:00Z',
+  prompt: '', url: '', environments: [],
+}
+const old = { ...latest, scriptDigest: 'sha256:old', gitCommit: 'b'.repeat(40), publishedAt: '2026-10-08T06:00:00Z', environments: ['test' as const] }
+const stubs = {
+  ElInput: { props: ['modelValue'], emits: ['update:modelValue'], template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />' },
+  ElButton: { props: ['disabled'], template: '<button type="button" :disabled="disabled"><slot /></button>' },
+  ElSelect: { props: ['modelValue', 'disabled'], emits: ['update:modelValue'], template: '<select :value="modelValue" :disabled="disabled" @change="$emit(\'update:modelValue\', $event.target.value)"><option value="" /><slot /></select>' },
+  ElOption: { props: ['value', 'label'], template: '<option :value="value">{{ label }}</option>' },
+  ElAlert: { props: ['title'], template: '<div role="alert">{{ title }}</div>' },
+  ElTag: { template: '<span><slot /></span>' },
+}
+beforeEach(() => {
+  vi.mocked(runnerManagementApi.siteCodeCatalog).mockResolvedValue([latest, old])
+  vi.mocked(runnerManagementApi.bindSiteCode).mockResolvedValue({ ...latest, environment: 'test' })
 })
-
-it('代码列表显示所属仓库，并可按仓库筛选', async () => {
-  const base = {
-    codeId: 'code-1', configId: 'c-1', queueName: 'news_list', siteHost: 'www.realcan.cn',
-    storagePath: 'code/c-1/code-1.py', deliveryPath: 'sites/www.realcan.cn.py',
-    gitUrl: 'git/new.py', gitCommit: 'abcdef123456', scriptDigest: 'sha256:web',
-    publishedAt: '', prompt: '', url: '', environments: [] as ('test' | 'prd')[],
-    repoId: 'repo-web', repoName: '网页抓取代码', repoPath: 'E:\\ce\\code-web',
-  }
-  vi.mocked(runnerManagementApi.siteCodeCatalog).mockResolvedValue([
-    base, { ...base, configId: 'c-2', scriptDigest: 'sha256:default', repoId: 'repo-default', repoName: '默认仓库' },
-  ])
-  vi.mocked(runnerManagementApi.siteCodeContent).mockResolvedValue({ ...base, code: 'def scrape(url):\n    return []\n' })
-  setActivePinia(createPinia())
-  useAuthStore().roles = ['admin']
-  const wrapper = mount(CodeManagementTab, { global: { stubs: {
-    ElInput: { props: ['modelValue'], template: '<input :value="modelValue" />' },
-    ElButton: { template: '<button type="button"><slot /></button>' },
-    ElDrawer: { template: '<div><slot /></div>' },
-    ElDialog: { template: '<div />' },
-    ElSelect: { props: ['modelValue'], emits: ['update:modelValue'], template: '<select :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value)"><option value="" /><slot /></select>' },
-    ElOption: { props: ['value', 'label'], template: '<option :value="value">{{ label }}</option>' },
-  } } })
+afterEach(() => vi.resetAllMocks())
+async function setup(admin = true) {
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/settings', component: { template: '<div />' } }] })
+  await router.push({ path: '/settings', query: { tab: 'assignments', mode: 'versions' } }); await router.isReady()
+  const pinia = createPinia(); setActivePinia(pinia); useAuthStore().roles = admin ? ['admin'] : ['viewer']
+  const wrapper = mount(CodeManagementTab, { global: { plugins: [pinia, router], stubs, directives: { loading: {} } } })
   await flushPromises()
-  expect(runnerManagementApi.siteCodeRepository).not.toHaveBeenCalled()
-  expect(wrapper.findAll('tbody tr').map((row) => row.findAll('td')[1].text())).toEqual(['网页抓取代码', '默认仓库'])
-  const mapping = wrapper.findAll('[data-testid="site-code-file-mapping"]')[0].text()
-  expect(mapping).toContain('仓库code/c-1/code-1.py')
-  expect(mapping).toContain('→ 下发packages/c-1/sites/www.realcan.cn.py')
-  await wrapper.get('[data-testid="site-code-repo-filter"]').setValue('repo-web')
-  expect(wrapper.findAll('tbody tr').map((row) => row.findAll('td')[0].text())).toEqual(['c-1'])
-  await wrapper.findAll('button').find((button) => button.text() === '详情')!.trigger('click')
-  await flushPromises()
-  expect(wrapper.text()).toContain('E:\\ce\\code-web\\code\\c-1\\code-1.py')
-  expect(wrapper.text()).toContain('Runner 下发路径')
-  expect(wrapper.text()).toContain('packages/c-1/version.json')
+  return { wrapper, router }
+}
+it('按配置队列网站归并历史版本，分别显示测试和生产实际采用版本', async () => {
+  const { wrapper } = await setup()
+  expect(wrapper.findAll('[data-testid="runtime-code-row"]')).toHaveLength(1)
+  expect((wrapper.get('[data-testid="runtime-code-code-1-test"] select').element as HTMLSelectElement).value).toBe(old.scriptDigest)
+  expect((wrapper.get('[data-testid="runtime-code-code-1-prd"] select').element as HTMLSelectElement).value).toBe('')
+  expect(wrapper.text()).toContain('当前采用')
+  expect(wrapper.text()).not.toContain('发布配置')
+  expect(runnerManagementApi.siteCodeContent).not.toHaveBeenCalled()
+  wrapper.unmount()
+})
+it('选择版本只修改草稿，应用后更新目标环境，保留另一环境的采用关系', async () => {
+  vi.mocked(runnerManagementApi.siteCodeCatalog).mockResolvedValue([{ ...latest, environments: ['prd'] }, old])
+  const { wrapper } = await setup()
+  const test = wrapper.get('[data-testid="runtime-code-code-1-test"]')
+  await test.get('select').setValue(latest.scriptDigest)
+  expect(test.text()).toContain('待应用')
+  expect(runnerManagementApi.bindSiteCode).not.toHaveBeenCalled()
+  await test.get('[data-testid="runtime-code-apply-test"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.bindSiteCode).toHaveBeenCalledExactlyOnceWith({ configId: 'c-1', queueName: 'news_list', environment: 'test', scriptDigest: latest.scriptDigest })
+  expect(test.text()).not.toContain('待应用')
+  expect((wrapper.get('[data-testid="runtime-code-code-1-prd"] select').element as HTMLSelectElement).value).toBe(latest.scriptDigest)
+  expect(wrapper.get('[data-testid="runtime-code-code-1-prd"]').text()).toContain('当前采用')
+  wrapper.unmount()
+})
+it('应用失败保留选择和旧采用值，取消草稿恢复当前版本', async () => {
+  vi.mocked(runnerManagementApi.bindSiteCode).mockRejectedValue(new Error('运行配置已变化'))
+  const { wrapper } = await setup()
+  const test = wrapper.get('[data-testid="runtime-code-code-1-test"]')
+  await test.get('select').setValue(latest.scriptDigest)
+  await test.get('[data-testid="runtime-code-apply-test"]').trigger('click'); await flushPromises()
+  expect(test.get('[role="alert"]').text()).toContain('运行配置已变化')
+  expect((test.get('select').element as HTMLSelectElement).value).toBe(latest.scriptDigest)
+  await test.findAll('button').find(button => button.text() === '取消')!.trigger('click')
+  expect((test.get('select').element as HTMLSelectElement).value).toBe(old.scriptDigest)
+  expect(test.find('[role="alert"]').exists()).toBe(false)
+  wrapper.unmount()
+})
+it('按仓库筛选运行配置，查看代码跳转到指定仓库，部署目录保留配置 ID', async () => {
+  const second = { ...latest, codeId: 'code-2', configId: 'c-2', scriptDigest: 'sha256:second', repoId: 'repo-other', repoName: '其他仓库' }
+  vi.mocked(runnerManagementApi.siteCodeCatalog).mockResolvedValue([latest, old, second])
+  const { wrapper, router } = await setup()
+  await wrapper.get('[data-testid="runtime-code-repo-filter"]').setValue('repo-web')
+  expect(wrapper.findAll('[data-testid="runtime-code-row"]')).toHaveLength(1)
+  await wrapper.findAll('button').find(button => button.text() === '查看仓库')!.trigger('click'); await flushPromises()
+  expect(router.currentRoute.value.query).toEqual({ tab: 'code-repos', repoId: 'repo-web' })
+  await wrapper.findAll('button').find(button => button.text() === '部署目录')!.trigger('click'); await flushPromises()
+  expect(router.currentRoute.value.query).toEqual({ tab: 'directory-layout', configId: 'c-1' })
+  wrapper.unmount()
+})
+it('只读用户能看当前版本，不能选择或应用；接口失败不展示虚假配置', async () => {
+  const { wrapper } = await setup(false)
+  expect(wrapper.get('[data-testid="runtime-code-code-1-test"] select').attributes('disabled')).toBeDefined()
+  expect(wrapper.find('[data-testid="runtime-code-apply-test"]').exists()).toBe(false)
+  wrapper.unmount()
+  vi.mocked(runnerManagementApi.siteCodeCatalog).mockRejectedValue(new Error('服务不可达'))
+  const failed = await setup()
+  expect(failed.wrapper.get('[role="alert"]').text()).toContain('服务不可达')
+  expect(failed.wrapper.find('[data-testid="runtime-code-row"]').exists()).toBe(false)
+  failed.wrapper.unmount()
 })

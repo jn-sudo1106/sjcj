@@ -2767,8 +2767,8 @@ export const configApi = {
     const result = await request<Paged<unknown>>('config/configPaged', p, { method: 'GET', httpParams })
     return configPageFromLegacy(result)
   },
-  configDetail: async (configId: string) => {
-    const result = await request<unknown>('config/configDetail', { configId }, { method: 'GET' })
+  configDetail: async (configId: string, options: Pick<RequestOptions, 'backendScope'> = {}) => {
+    const result = await request<unknown>('config/configDetail', { configId }, { method: 'GET', ...options })
     return result && typeof result === 'object' && !('ok' in result) ? configFromLegacy(result) : null
   },
   /**

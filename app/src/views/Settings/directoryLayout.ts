@@ -1,4 +1,48 @@
-import type { DirectoryLayout, DirectoryMappingNode, RepositoryTree } from '@/api/runnerManagement'
+import type { DirectoryBindingType, DirectoryLayout, DirectoryMappingNode, RepositoryTree } from '@/api/runnerManagement'
+
+export type DirectoryType = 'default' | 'prd' | 'test'
+export const directoryTemplatePresets = [
+  '{configId}', '{configId}/prod', '{configId}/test', '{configId}/{queue}',
+  '{configId}/prod/{queue}', '{configId}/test/{queue}',
+  '{configId}/{queue}/prod', '{configId}/{queue}/test',
+]
+export const queueDirectoryTemplatePresets = ['{queue}', '{queue}/prod', '{queue}/test', 'prod/{queue}', 'test/{queue}']
+export const websiteDirectoryTemplatePresets = ['{website}', '{website}/prod', '{website}/test', 'prod/{website}', 'test/{website}']
+export const directoryBindingOptions = [
+  { value: 'config', label: '配置' }, { value: 'queue', label: '队列' },
+  { value: 'website', label: '网站' }, { value: 'custom', label: '自定义目录' },
+] as const
+export const isDirectoryBindingType = (value: unknown): value is DirectoryBindingType => directoryBindingOptions.some(option => option.value === value)
+export const directoryBindingLabel = (type: DirectoryBindingType) => directoryBindingOptions.find(option => option.value === type)!.label
+export const directoryOwnerQuery = (type: DirectoryBindingType, owner: string) => ({ [{ config: 'configId', queue: 'queue', website: 'website', custom: 'directory' }[type]]: owner })
+const isEnvironmentDirectory = (part: string) => ['prod', 'prd', 'test', '{environment}'].includes(part)
+export function directoryTypeOf(template: string, environment: 'prd' | 'test' = 'test'): DirectoryType {
+  const part = template.split('/').find(isEnvironmentDirectory)
+  if (part === 'prod' || part === 'prd') return 'prd'
+  if (part === 'test') return 'test'
+  return template.includes('{environment}') ? environment : 'default'
+}
+export function withDirectoryType(template: string, type: DirectoryType, bindingType: DirectoryBindingType = 'config', customRoot = 'shared'): string {
+  const rootToken = { config: '{configId}', queue: '{queue}', website: '{website}', custom: customRoot }[bindingType]
+  const parts = template.split('/').filter(Boolean)
+  const index = parts.findIndex(isEnvironmentDirectory)
+  const name = type === 'prd' ? 'prod' : type
+  if (index < 0 && template.includes('{environment}')) {
+    return type === 'default' ? template.replaceAll('{environment}', '').split('/').filter(Boolean).join('/') || rootToken : template
+  }
+  // Preserve an explicitly configured environment position. Earlier presets
+  // put it first; move those behind the owner when changing the directory type.
+  if (index >= 0) {
+    if (type === 'default' || index === 0) parts.splice(index, 1)
+    else { parts[index] = name; return parts.join('/') }
+  }
+  if (!parts.length) parts.push(rootToken)
+  if (type !== 'default') {
+    const rootIndex = parts.indexOf(rootToken)
+    parts.splice(rootIndex < 0 ? parts.length : rootIndex + 1, 0, name)
+  }
+  return parts.join('/')
+}
 
 export interface DirectoryTreeNode extends DirectoryMappingNode { children: DirectoryTreeNode[] }
 export function targetTree(nodes: DirectoryMappingNode[]): DirectoryTreeNode[] {
