@@ -13,6 +13,7 @@ import SourceOverviewView from '@/views/FlowCanvas/result/SourceOverviewView.vue
 import SiteEditorDialog from './components/SiteEditorDialog.vue'
 import { beginSitesFetch, collectAssetsCache, clearCollectAssetsCache, commitSites } from './siteListCache'
 import SaveViewDialog from './SaveViewDialog.vue'
+import AddToViewDialog from './AddToViewDialog.vue'
 import { sourceViewApi } from '@/api/sourceViews'
 import { useAuthStore } from '@/stores/auth'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
@@ -384,6 +385,15 @@ const saveViewError = ref('')
 const saveViewSummary = computed(() => (listState.value
   ? `保存的条件：${describeViewState(listState.value).join('；') || '全部源（没有条件）'}`
   : ''))
+// 勾选源后「加入视图」：加到某个手选视图
+const addToView = reactive({ open: false, ids: [] as string[] })
+function openAddToView(ids: string[]) {
+  addToView.ids = [...ids]
+  addToView.open = true
+}
+function onAddedToView(viewName: string, count: number) {
+  ElMessage.success(`已加入视图「${viewName}」（${count} 个源）`)
+}
 function openSaveView() {
   saveViewError.value = ''
   saveViewOpen.value = true
@@ -554,6 +564,9 @@ onUnmounted(() => {
       @open-source-group="openSourceGroup"
       @state-change="listState = $event"
     >
+      <template v-if="scope === 'all'" #selection-actions="{ ids }">
+        <button class="ca-save-view sm" type="button" data-testid="source-add-to-view" @click="openAddToView(ids)">加入视图</button>
+      </template>
       <template #filter-extra>
         <button
           v-if="scope === 'all'"
@@ -578,6 +591,7 @@ onUnmounted(() => {
         />
       </template>
     </SourceOverviewView>
+    <AddToViewDialog v-model="addToView.open" :source-ids="addToView.ids" @added="onAddedToView" />
     <SaveViewDialog
       v-model="saveViewOpen"
       title="另存为视图"
@@ -626,6 +640,7 @@ onUnmounted(() => {
 /* 源视图组件自带灰底内边距（在网站详情里是整块主区），放进采集资产去掉，和工具条对齐 */
 .ca-source-list { padding: 0; background: transparent; }
 .ca-save-view { height: 34px; padding: 0 12px; border: 1px solid #d5e2f2; border-radius: 8px; background: #fff; color: var(--rc-text-2); font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.ca-save-view.sm { height: 30px; padding: 0 10px; border-radius: 6px; font-size: 12px; }
 .ca-save-view:hover { border-color: var(--rc-primary); color: var(--rc-primary); }
 
 .ca-card-body { min-height: 200px; }

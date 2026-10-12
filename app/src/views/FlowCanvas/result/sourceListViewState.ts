@@ -35,6 +35,12 @@ export interface SourceListViewState {
   pageSize: number
   /** 隐藏的列（HIDEABLE_SOURCE_COLUMNS 的 key） */
   hiddenColumns: string[]
+  /**
+   * 手选的源 ID 清单（2026-10-12 用户定 C：新建视图是空的，「添加源」手动挑）。
+   * `null` / 缺省 = 条件视图（全部源按上面的条件筛，新增的源符合条件自动出现，「系统目录 → 另存为视图」存的就是这种）；
+   * 数组 = 手选清单，**条件栏在这份清单里再筛一遍**（取交集）；空数组 = 还没添加源，不发请求直接空态。
+   */
+  scopeIds?: string[] | null
 }
 
 export function blankSourceListViewState(): SourceListViewState {
@@ -50,7 +56,13 @@ export function blankSourceListViewState(): SourceListViewState {
     sortDirection: 'asc',
     pageSize: 20,
     hiddenColumns: [],
+    scopeIds: null,
   }
+}
+
+/** 新建视图的初始状态：手选清单，一个源都没有 */
+export function emptyManualViewState(): SourceListViewState {
+  return { ...blankSourceListViewState(), scopeIds: [] }
 }
 
 /** 可在「显示设置」里隐藏的列；源 ID、源名称固定显示。groupOps 只在开了来源组能力的列表里有。 */
@@ -119,6 +131,7 @@ export function sameViewState(a: SourceListViewState, b: SourceListViewState): b
     conditions: s.conditions.filter(sourceCondActive).map((c) => ({ field: c.field, op: c.op, value: c.value.trim() })),
     countMax: String(s.countMax ?? '').trim(),
     hiddenColumns: [...s.hiddenColumns].sort(),
+    scopeIds: s.scopeIds ? [...new Set(s.scopeIds)].sort() : null,
   })
   return norm(a) === norm(b)
 }
@@ -128,10 +141,11 @@ const OP_LABEL: Record<SourceCondOp, string> = { eq: '等于', like: '包含', n
 
 /** 条件摘要（视图头部的小标签）。names 用来把网站 / 来源组 ID 换成名称。 */
 export function describeViewState(state: SourceListViewState, names: { site?: (id: string) => string; group?: (id: string) => string } = {}): string[] {
-  const parts = state.conditions.filter(sourceCondActive).map((c) => {
+  const parts: string[] = state.scopeIds ? [`手选 ${state.scopeIds.length} 个源`] : []
+  parts.push(...state.conditions.filter(sourceCondActive).map((c) => {
     const label = SOURCE_COND_FIELDS.find((f) => f.value === c.field)?.label ?? c.field
     return c.op === 'notEmpty' || c.op === 'empty' ? `${label}${OP_LABEL[c.op]}` : `${label}${OP_LABEL[c.op]}「${c.value.trim()}」`
-  })
+  }))
   if (state.site) parts.push(`网站 = ${state.site === '-1' ? '未关联网站' : names.site?.(state.site) || state.site}`)
   if (state.sourceGroup) parts.push(`来源组 = ${names.group?.(state.sourceGroup) || state.sourceGroup}`)
   if (state.status !== 'all') parts.push(`状态 = ${STATUS_LABEL[state.status]}`)

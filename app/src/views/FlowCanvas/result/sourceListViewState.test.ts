@@ -1,6 +1,6 @@
 // 源列表「视图状态」（2026-10-12「我的视图」）：状态 ↔ sourcePaged 参数、比较、摘要。
 import { describe, expect, it } from 'vitest'
-import { blankSourceListViewState, describeViewState, sameViewState, viewStateFilter, type SourceListViewState } from './sourceListViewState'
+import { blankSourceListViewState, describeViewState, emptyManualViewState, sameViewState, viewStateFilter, type SourceListViewState } from './sourceListViewState'
 
 const st = (patch: Partial<SourceListViewState>): SourceListViewState => ({ ...blankSourceListViewState(), ...patch })
 
@@ -41,3 +41,21 @@ describe('describeViewState', () => {
     expect(describeViewState(st({}))).toEqual([])
   })
 })
+
+// 2026-10-12 用户定 C：手选清单
+describe('手选清单（scopeIds）', () => {
+  it('新建视图是空清单；条件视图是 null', () => {
+    expect(emptyManualViewState().scopeIds).toEqual([])
+    expect(blankSourceListViewState().scopeIds).toBeNull()
+  })
+  it('清单顺序、重复不算差异；清单变了、条件视图变手选视图算差异', () => {
+    expect(sameViewState(st({ scopeIds: ['2', '1', '1'] }), st({ scopeIds: ['1', '2'] }))).toBe(true)
+    expect(sameViewState(st({ scopeIds: ['1'] }), st({ scopeIds: ['1', '2'] }))).toBe(false)
+    expect(sameViewState(st({ scopeIds: null }), st({ scopeIds: [] }))).toBe(false)
+    expect(sameViewState(st({}), { ...st({}), scopeIds: undefined })).toBe(true)
+  })
+  it('摘要首项写手选个数', () => {
+    expect(describeViewState(st({ scopeIds: ['1', '2'], status: 'E' }))).toEqual(['手选 2 个源', '状态 = 异常'])
+  })
+})
+

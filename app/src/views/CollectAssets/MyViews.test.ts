@@ -13,19 +13,26 @@ import type { UserInfo } from '@/api/auth'
 import { sourceViewApi } from '@/api/sourceViews'
 import { useAuthStore } from '@/stores/auth'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
-import { blankSourceListViewState, type SourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
+import { blankSourceListViewState, emptyManualViewState, type SourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
 
 const received: SourceListViewState[] = []
+/** 源列表最近一次收到的 scopeSourceIds（undefined = 条件视图） */
+const scopeSeen: (string[] | undefined)[] = []
 let emitState: (s: SourceListViewState) => void = () => {}
 vi.mock('@/views/FlowCanvas/result/SourceOverviewView.vue', () => ({
   default: defineComponent({
     name: 'SourceOverviewView',
-    props: { viewState: Object, currentSiteId: String, groupOps: Boolean },
+    props: { viewState: Object, currentSiteId: String, groupOps: Boolean, scopeSourceIds: Array, scopeEmptyText: String },
     emits: ['stateChange', 'openSource', 'openSourceData', 'openSite', 'openSourceGroup'],
-    setup(props, { emit }) {
+    setup(props, { emit, slots }) {
       received.push(props.viewState as SourceListViewState)
       emitState = (s) => emit('stateChange', s)
-      return () => h('div', { 'data-testid': 'sov-stub' }, JSON.stringify((props.viewState as SourceListViewState)?.hiddenColumns ?? []))
+      scopeSeen.length = 0
+      return () => {
+        scopeSeen[0] = props.scopeSourceIds as string[] | undefined
+        // selection-actions 槽位用固定的两个选中 ID 驱动「移出视图」
+        return h('div', { 'data-testid': 'sov-stub' }, [JSON.stringify((props.viewState as SourceListViewState)?.hiddenColumns ?? []), slots['selection-actions']?.({ ids: ['10', '20'] })])
+      }
     },
     watch: { viewState(v: SourceListViewState) { received.push(v) } },
   }),
@@ -60,7 +67,7 @@ const settle = async () => { await flushPromises(); await new Promise((r) => set
 const dom = (sel: string) => document.querySelector(sel) as HTMLElement
 
 describe('我的视图', () => {
-  it('没有视图时提示新建；新建后从「全部源」开始并选中', async () => {
+  it('没有视图时提示新建；新建后是空的手选清单并选中', async () => {
     await mountPage()
     expect(wrapper.text()).toContain('还没有视图')
     await wrapper.get('[data-testid="mv-new"]').trigger('click')
@@ -71,7 +78,59 @@ describe('我的视图', () => {
     dom('[data-testid="save-view-submit"]').click()
     await settle()
     expect(wrapper.get('[data-testid="mv-name"]').text()).toBe('广发 · 失败待处理')
-    expect((await sourceViewApi.list('7'))[0].state).toEqual(blankSourceListViewState())
+    expect((await sourceViewApi.list('7'))[0].state).toEqual(emptyManualViewState())
+    expect(scopeSeen[0]).toEqual([])
+    expect(wrapper.find('[data-testid="mv-add-sources"]').exists()).toBe(true)
+  })
+
+  // 2026-10-12 用户定 C：视图可手选源，条件栏在清单内再筛
+  it('手选视图：添加源后标为未保存，保存才写进视图；已在视图里的自动去重', async () => {
+    const v = await sourceViewApi.add('7', { viewName: '广发重点', state: { ...emptyManualViewState(), scopeIds: ['10'] } })
+    await mountPage()
+    expect(scopeSeen[0]).toEqual(['10'])
+    ;(wrapper.vm as unknown as { addSources: (ids: string[]) => void }).addSources(['10', '30'])
+    await flushPromises()
+    expect(scopeSeen[0]).toEqual(['10', '30'])
+    expect(wrapper.find('[data-testid="mv-dirty"]').exists()).toBe(true)
+    expect((await sourceViewApi.list('7'))[0].state.scopeIds).toEqual(['10'])
+    await wrapper.get('[data-testid="mv-save"]').trigger('click')
+    await settle()
+    const saved = (await sourceViewApi.list('7')).find((x) => x.viewId === v.viewId)!
+    expect(saved.state.scopeIds).toEqual(['10', '30'])
+    expect(wrapper.find('[data-testid="mv-dirty"]').exists()).toBe(false)
+  })
+
+  it('手选视图：选中源后「移出视图」确认后才移出；撤销回到已保存的清单', async () => {
+    await sourceViewApi.add('7', { viewName: '广发重点', state: { ...emptyManualViewState(), scopeIds: ['10', '20', '30'] } })
+    await mountPage()
+    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never)
+    await wrapper.get('[data-testid="mv-remove-sources"]').trigger('click')
+    await settle()
+    expect(confirm).toHaveBeenCalled()
+    expect(scopeSeen[0]).toEqual(['30'])
+    expect(wrapper.find('[data-testid="mv-dirty"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="mv-revert"]').trigger('click')
+    await flushPromises()
+    expect(scopeSeen[0]).toEqual(['10', '20', '30'])
+  })
+
+  it('条件视图（系统目录另存为）：没有「添加源」「移出视图」；源数按条件查', async () => {
+    await sourceViewApi.add('7', { viewName: '异常源', state: st({ status: 'E' }) })
+    await mountPage()
+    expect(scopeSeen[0]).toBeUndefined()
+    expect(wrapper.find('[data-testid="mv-add-sources"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="mv-remove-sources"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="mv-item"]').map((i) => i.text())).toEqual(['异常源3'])
+  })
+
+  it('手选视图的源数限定在清单内：空清单不发请求显示 0，有清单带 sourceIds', async () => {
+    await sourceViewApi.add('7', { viewName: '空的', state: emptyManualViewState() })
+    await sourceViewApi.add('7', { viewName: '三个', state: { ...emptyManualViewState(), scopeIds: ['1', '2', '3'] } })
+    const paged = vi.mocked(sourceApi.sourcePaged)
+    await mountPage()
+    expect(wrapper.findAll('[data-testid="mv-item"]').map((i) => i.text())).toEqual(['空的0', '三个100'])
+    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ sourceIds: '1,2,3', size: 1 }))
+    expect(paged.mock.calls.filter(([q]) => q?.size === 1)).toHaveLength(1)
   })
 
   it('左侧列出视图和源数（按视图条件查 sourcePaged 的 total），默认进入的视图优先选中', async () => {

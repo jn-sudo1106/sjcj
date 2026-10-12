@@ -17,8 +17,10 @@ import { useAuthStore } from '@/stores/auth'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
 import { recordSiteVisit } from '@/utils/siteRecents'
 import SourceOverviewView from '@/views/FlowCanvas/result/SourceOverviewView.vue'
+import { scopedSourceIds } from '@/views/FlowCanvas/result/sourceScope'
 import {
   HIDEABLE_SOURCE_COLUMNS,
+  emptyManualViewState,
   SOURCE_SORT_FIELDS,
   blankSourceListViewState,
   describeViewState,
@@ -27,6 +29,7 @@ import {
   type SourceListViewState,
 } from '@/views/FlowCanvas/result/sourceListViewState'
 import SaveViewDialog from './SaveViewDialog.vue'
+import GroupSourcePicker from './GroupSourcePicker.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -40,9 +43,16 @@ const activeId = ref('')
 const active = computed(() => views.value.find((v) => v.viewId === activeId.value) ?? null)
 /** 套给源列表的状态（换视图 / 撤销 / 应用显示设置时换成新对象，源列表据此重查） */
 const appliedState = ref<SourceListViewState | null>(null)
-/** 源列表报上来的当前状态 */
-const liveState = ref<SourceListViewState | null>(null)
+/** 源列表报上来的当前状态（不含手选清单，清单在下面的 scopeIds 里） */
+const rawState = ref<SourceListViewState | null>(null)
+/**
+ * 手选的源 ID 清单：`null` = 条件视图（全部源按条件筛）；数组 = 手选清单（可空）。
+ * 单独存放而不放进套给源列表的状态里：添加 / 移出源只重查，不能把用户还没保存的条件改动重置掉。
+ */
+const scopeIds = ref<string[] | null>(null)
+const liveState = computed<SourceListViewState | null>(() => (rawState.value ? { ...rawState.value, scopeIds: scopeIds.value ? [...scopeIds.value] : null } : null))
 const dirty = computed(() => !!active.value && !!liveState.value && !sameViewState(liveState.value, active.value.state))
+const manual = computed(() => scopeIds.value !== null)
 const counts = ref<Record<string, number | null>>({})
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T
@@ -65,11 +75,16 @@ async function load(preferId?: string) {
   void loadCounts()
 }
 
-/** 左侧每个视图的源数：sourcePaged 按视图条件查 1 条取 total */
+/** 左侧每个视图的源数：sourcePaged 按视图条件查 1 条取 total；手选清单限定在清单内，空清单不发请求 */
 async function loadCounts() {
   await Promise.all(views.value.map(async (v) => {
     try {
-      const res = await sourceApi.sourcePaged({ ...viewStateFilter(v.state), page: 1, size: 1 })
+      const ids = v.state.scopeIds
+      if (ids && !ids.length) {
+        counts.value = { ...counts.value, [v.viewId]: 0 }
+        return
+      }
+      const res = await sourceApi.sourcePaged({ ...viewStateFilter(v.state), ...(ids ? { sourceIds: scopedSourceIds(ids, viewStateFilter(v.state).sourceIds) } : {}), page: 1, size: 1 })
       counts.value = { ...counts.value, [v.viewId]: res.total }
     } catch {
       counts.value = { ...counts.value, [v.viewId]: null }
@@ -82,7 +97,8 @@ function selectView(viewId: string, force = false) {
   activeId.value = viewId
   const view = views.value.find((v) => v.viewId === viewId)
   appliedState.value = view ? clone(view.state) : null
-  liveState.value = view ? clone(view.state) : null
+  rawState.value = view ? clone(view.state) : null
+  scopeIds.value = view?.state.scopeIds ? [...view.state.scopeIds] : null
   if (route.query.view !== (viewId || undefined)) {
     void router.replace({ path: route.path, query: { ...route.query, view: viewId || undefined } })
   }
@@ -122,7 +138,8 @@ async function save() {
 function revert() {
   if (active.value) {
     appliedState.value = clone(active.value.state)
-    liveState.value = clone(active.value.state)
+    rawState.value = clone(active.value.state)
+    scopeIds.value = active.value.state.scopeIds ? [...active.value.state.scopeIds] : null
   }
 }
 
@@ -135,7 +152,7 @@ const nameError = ref('')
 const nameTitle = computed(() => ({ new: '新建视图', saveAs: '另存为新视图', rename: '重命名视图' }[nameMode.value]))
 const nameInitial = computed(() => (nameMode.value === 'rename' ? active.value?.viewName : nameMode.value === 'saveAs' ? `${active.value?.viewName ?? ''} 副本` : ''))
 const nameSummary = computed(() => {
-  if (nameMode.value === 'new') return '新视图从「全部源」开始，创建后在右侧设好条件再点「保存」。'
+  if (nameMode.value === 'new') return '新视图是空的，创建后点「添加源」挑选；条件栏可以在这些源里再筛选。'
   if (nameMode.value === 'saveAs' && liveState.value) return `保存的条件：${describeViewState(liveState.value, names).join('；') || '全部源（没有条件）'}`
   return ''
 })
@@ -153,7 +170,8 @@ async function submitName({ name, isDefault }: { name: string; isDefault: boolea
       views.value = views.value.map((v) => (v.viewId === saved.viewId ? saved : v))
       ElMessage.success('已重命名')
     } else {
-      const state = nameMode.value === 'saveAs' && liveState.value ? clone(liveState.value) : blankSourceListViewState()
+      // 新建视图是空的手选清单（用户定 C）；另存为沿用当前的清单 / 条件
+      const state = nameMode.value === 'saveAs' && liveState.value ? clone(liveState.value) : emptyManualViewState()
       const created = await sourceViewApi.add(userId.value, { viewName: name, state, isDefault })
       if (isDefault) setDefaultEntry()
       // 另存为后原视图保持已保存的样子，未保存的修改留在新视图里
@@ -205,6 +223,27 @@ async function onMore(command: string) {
   }
 }
 
+// ---- 手选清单：添加源 / 移出视图（只改当前画面，点「保存」才写进视图） ----
+const pickerOpen = ref(false)
+function addSources(ids: string[]) {
+  if (scopeIds.value === null) return
+  const before = scopeIds.value.length
+  scopeIds.value = [...new Set([...scopeIds.value, ...ids])]
+  const added = scopeIds.value.length - before
+  ElMessage.info(added ? `已添加 ${added} 个源${ids.length > added ? `（${ids.length - added} 个已在视图里）` : ''}，点「保存」后生效` : '选中的源都已经在视图里了')
+}
+async function removeSources(ids: string[]) {
+  if (scopeIds.value === null || !ids.length) return
+  try {
+    await ElMessageBox.confirm(`把选中的 ${ids.length} 个源移出这个视图？只是不再显示在视图里，源本身不受影响。`, '移出视图', { confirmButtonText: '移出', cancelButtonText: '取消', type: 'warning' })
+  } catch {
+    return
+  }
+  const drop = new Set(ids)
+  scopeIds.value = scopeIds.value.filter((id) => !drop.has(id))
+  ElMessage.info(`已移出 ${ids.length} 个源，点「保存」后生效`)
+}
+
 // ---- 显示设置 ----
 const displayOpen = ref(false)
 const displayHidden = ref<string[]>([])
@@ -212,7 +251,7 @@ const displaySortField = ref('')
 const displaySortDir = ref<'asc' | 'desc'>('asc')
 const displayPageSize = ref(20)
 function openDisplay() {
-  const s = liveState.value ?? blankSourceListViewState()
+  const s = rawState.value ?? blankSourceListViewState()
   displayHidden.value = [...s.hiddenColumns]
   displaySortField.value = s.sortField
   displaySortDir.value = s.sortDirection
@@ -223,10 +262,10 @@ function toggleColumn(key: string, show: boolean) {
   displayHidden.value = show ? displayHidden.value.filter((k) => k !== key) : [...displayHidden.value, key]
 }
 function applyDisplay() {
-  const base = liveState.value ?? blankSourceListViewState()
+  const base = rawState.value ?? blankSourceListViewState()
   const next = { ...clone(base), hiddenColumns: [...displayHidden.value], sortField: displaySortField.value, sortDirection: displaySortDir.value, pageSize: displayPageSize.value }
   appliedState.value = next
-  liveState.value = clone(next)
+  rawState.value = clone(next)
   displayOpen.value = false
   ElMessage.info('已应用，点「保存」后才会存进视图')
 }
@@ -295,7 +334,7 @@ onMounted(() => {
           </button>
           <div v-if="!views.length" class="mv-empty">{{ loadError || '还没有视图' }}</div>
         </div>
-        <p class="mv-note">视图只有你自己能看到。它保存的是查询条件：之后新增的源只要符合条件，会自动出现在视图里。</p>
+        <p class="mv-note">视图只有你自己能看到。新建的视图是空的，点「添加源」挑选，条件栏在这些源里再筛选；在「系统目录」设好条件「另存为视图」存的是条件，之后新增的源符合条件会自动出现。</p>
         <p class="mv-note mv-local">目前暂存在本机浏览器，换电脑或清缓存会丢失；后端接口上线后会提示导入到账号。</p>
       </aside>
 
@@ -306,6 +345,7 @@ onMounted(() => {
             <span class="mv-badge">🔒 仅自己可见</span>
             <span v-if="dirty" class="mv-badge dirty" data-testid="mv-dirty">有未保存的修改</span>
             <div class="mv-actions">
+              <el-button v-if="manual" size="small" type="primary" plain data-testid="mv-add-sources" @click="pickerOpen = true">＋ 添加源</el-button>
               <el-button v-if="dirty" size="small" data-testid="mv-revert" @click="revert">撤销修改</el-button>
               <el-button size="small" type="primary" :disabled="!dirty" :loading="saving" data-testid="mv-save" @click="save">保存</el-button>
               <el-button size="small" data-testid="mv-save-as" @click="openName('saveAs')">另存为</el-button>
@@ -332,16 +372,24 @@ onMounted(() => {
             current-site-id=""
             group-ops
             :view-state="appliedState"
-            @state-change="liveState = $event"
+            :scope-source-ids="scopeIds ?? undefined"
+            scope-empty-text="这个视图里还没有源，点右上「添加源」挑选"
+            @state-change="rawState = $event"
             @open-source="openSource"
             @open-source-data="openSource($event, 'data')"
             @open-site="openSite"
             @open-source-group="openSourceGroup"
-          />
+          >
+            <template v-if="manual" #selection-actions="{ ids }">
+              <el-button size="small" data-testid="mv-remove-sources" @click="removeSources(ids)">移出视图</el-button>
+            </template>
+          </SourceOverviewView>
         </template>
         <el-empty v-else :description="views.length ? '请选择一个视图' : '还没有视图。点左侧「新建视图」，或在「系统目录」源列表设好条件后点「另存为视图」'" />
       </section>
     </div>
+
+    <GroupSourcePicker v-model="pickerOpen" group-id="" pick-mode title="选择源添加到视图" confirm-text="添加到视图" @pick="addSources" />
 
     <SaveViewDialog
       v-model="nameOpen"
