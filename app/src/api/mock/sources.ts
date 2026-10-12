@@ -200,8 +200,13 @@ function matches(s: Source, p?: Record<string, unknown>): boolean {
       if (ids.length && (!s.siteId || !ids.includes(s.siteId))) return false
     }
   }
-  const category = String(p.category ?? '')
-  if (category && !s.categoryPath?.startsWith(category)) return false
+  // 分类过滤：支持单选 `category` 与多选 `categorys`（逗号列表，命中任一前缀即通过）。
+  // 多选口径对齐旧 `SourceList2.queryParam.categorys`（分类树勾选多个分类时逗号拼接）。
+  const categoryRaw = String(p.categorys ?? p.category ?? '').trim()
+  if (categoryRaw) {
+    const cats = categoryRaw.split(/[，,]/).map((c) => c.trim()).filter(Boolean)
+    if (cats.length && !cats.some((c) => s.categoryPath?.startsWith(c))) return false
+  }
   const sourceIds = String(p.sourceIds ?? p.ids ?? '').split(/[，,\s]+/).map((id) => id.trim()).filter(Boolean)
   if (sourceIds.length && !sourceIds.includes(s.sourceId)) return false
   const name = String(p.name ?? '').trim().toLowerCase()

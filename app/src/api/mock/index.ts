@@ -48,7 +48,7 @@ import {
 import { mockDatasets, mockMeasures, mockMetricStats } from './metrics'
 import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate, mockEntryDataUpload, mockDistinctSource } from './dataview'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
-import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourcePage, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckLogs } from './monitor'
+import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourcePage, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckLogs, mockSourceCheckAdd, mockSourceCheckUpdate, mockSourceCheckDelete, mockSourceCheckChangeEnable, mockSourceCheckRunNow, mockSourceCheckCheckOne, mockSourceCheckLastRun } from './monitor'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
 import { mockFlowRecommend, mockNodeAiChat } from './flows'
@@ -242,13 +242,16 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'monitor/health': mockHealth,
   'mq/queuePaged': mockMq,
   'source/check/syncPaged': mockSync,
-  // 源监控（数据源告警，0910 迁入）
+  // 源监控（数据源告警，0910 迁入；内存表让写操作在 mock 下也能真落库）
   'source/check/paged': mockSourceCheckPaged,
   'source/check/paged-logs': mockSourceCheckLogs,
-  // 写操作只回执，不改上面那份只读样本——mock 下反复点开关不该越点越乱
-  'source/check/changeEnable': (p?: Record<string, unknown>) =>
-    ({ ok: true, demo: true, message: Number(p?.enable) === 0 ? '已启用（演示）' : '已停用（演示）' }),
-  'source/check/runNow': () => ({ ok: true, demo: true, message: '已触发校验（演示）' }),
+  'source/check/add': mockSourceCheckAdd,
+  'source/check/update': mockSourceCheckUpdate,
+  'source/check/delete': mockSourceCheckDelete,
+  'source/check/changeEnable': mockSourceCheckChangeEnable,
+  'source/check/runNow': mockSourceCheckRunNow,
+  'source/check/check-one': mockSourceCheckCheckOne,
+  'source/lastRun': mockSourceCheckLastRun,
   'monitor/alarmPaged': mockAlarms,
   'monitor/stats': mockMonitorStats,
   // ck_source 监控源配置（数据监控节点保存同步，2026-09-05）
