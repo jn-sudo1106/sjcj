@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import { DOMWrapper, flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import ElementPlus, { ElMessage } from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import EntryEditorDrawer from './EntryEditorDrawer.vue'
 import { entryApi, type EntryType } from '../../api'
 
@@ -70,7 +70,7 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
     expect(cols()).toEqual(['K1', 'K2', 'K3', 'K4', 'K5'])
 
     // 删掉中间那个新增行（K4）。已落库行也有删除按钮（禁用态），所以只在可用的里面取。
-    const enabledDels = () => body().findAll('button.danger').filter((b) => b.attributes('disabled') === undefined)
+    const enabledDels = () => body().findAll('button.danger').filter((b) => b.attributes('aria-disabled') !== 'true')
     await enabledDels()[1].trigger('click')
     await flushPromises()
     expect(cols()).toEqual(['K1', 'K2', 'K3', 'K4'])
@@ -86,7 +86,7 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
     await mountEditor(entry)
     await body().findAll('button').find((b) => b.text() === '＋ 新增字段')!.trigger('click')
     await flushPromises()
-    await body().findAll('button.danger').filter((b) => b.attributes('disabled') === undefined)[0].trigger('click')
+    await body().findAll('button.danger').filter((b) => b.attributes('aria-disabled') !== 'true')[0].trigger('click')
     await flushPromises()
     // 已落库的 K1 / K5 原样保留（K5 那个"空洞"是历史数据，不该被我们悄悄压缩）
     const cols = body().findAll('td input[disabled]').map((i) => (i.element as HTMLInputElement).value)
@@ -95,7 +95,8 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
 
   // 2026-08-28：已落库行改成**禁用态**删除按钮（原来是直接不渲染）——
   // 整列空白看不出"为什么这行不能删"，禁用 + 悬浮说明才讲得清。
-  it('已有行（itemId>0）的删除按钮禁用，新增行可删', async () => {
+  // 2026-10：禁用态用 aria-disabled + 置灰（原来纯 disabled 不触发点击，点红按钮毫无反应、没有提示）。
+  it('已有行（itemId>0）的删除按钮 aria-disabled 置灰且点击有提示，新增行可删', async () => {
     const entry: EntryType = {
       tableId: 't1', tableName: 'tb_a', fields: [
         { prop: 'a', desc: 'A', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
@@ -103,14 +104,59 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
     }
     await mountEditor(entry)
     expect(body().findAll('button.danger').length).toBe(1)
-    expect(body().find('button.danger').attributes('disabled')).toBeDefined()
+    expect(body().find('button.danger').attributes('aria-disabled')).toBe('true')
+
+    // 点击已落库行的删除：不删行，弹提示
+    const warnSpy = vi.spyOn(ElMessage, 'warning')
+    await body().find('button.danger').trigger('click')
+    await flushPromises()
+    expect(warnSpy).toHaveBeenCalledWith('该字段已落库，物理列绑着数据，不能删除')
+    expect(body().findAll('tbody tr').length).toBe(1)
 
     await body().findAll('button').find((b) => b.text() === '＋ 新增字段')!.trigger('click')
     await flushPromises()
     const dels = body().findAll('button.danger')
     expect(dels.length).toBe(2)
-    expect(dels[0].attributes('disabled')).toBeDefined()   // 已落库
-    expect(dels[1].attributes('disabled')).toBeUndefined() // 新增行
+    expect(dels[0].attributes('aria-disabled')).toBe('true')   // 已落库
+    expect(dels[1].attributes('aria-disabled')).toBe('false') // 新增行
+  })
+
+  // 2026-10：空编码且空展示名的**已落库**行是脏数据（此前缺校验被存进表定义），
+  // 允许清理：二次确认后从表定义移除（保存时 items 不再含它），不弹"不能删除"。
+  it('空编码+空展示名的已落库行：二次确认后可删除（脏数据清理）', async () => {
+    const entry: EntryType = {
+      tableId: 't1', tableName: 'tb_a', fields: [
+        { prop: 'code', desc: '编码', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
+        { prop: '', desc: '', type: 'string', required: false, dedup: false, columnName: 'K4', itemId: '9', seq: 2 },
+      ],
+    }
+    await mountEditor(entry)
+    const dels = () => body().findAll('button.danger')
+    expect(dels().length).toBe(2)
+    // 空字段行不置灰（可删），正常字段行置灰
+    expect(dels()[0].attributes('aria-disabled')).toBe('true')
+    expect(dels()[1].attributes('aria-disabled')).toBe('false')
+
+    // 点空字段行的删除：弹确认框，确认后移除
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    await dels()[1].trigger('click')
+    await flushPromises()
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(body().findAll('tbody tr').length).toBe(1) // 确认后行被移除
+    expect(body().find('tbody tr td:nth-child(2) input').element as HTMLInputElement).toBeTruthy()
+  })
+
+  it('空编码+空展示名的已落库行：取消确认则不移除', async () => {
+    const entry: EntryType = {
+      tableId: 't1', tableName: 'tb_a', fields: [
+        { prop: '', desc: '', type: 'string', required: false, dedup: false, columnName: 'K4', itemId: '9', seq: 1 },
+      ],
+    }
+    await mountEditor(entry)
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel' as never)
+    await body().find('button.danger').trigger('click')
+    await flushPromises()
+    expect(body().findAll('tbody tr').length).toBe(1) // 取消后仍在
   })
 
   it('去重勾选联动：勾选字段后只读 keyField 输入按 columnName 逗号连接实时更新', async () => {
@@ -165,6 +211,26 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
     await flushPromises()
 
     expect(warnSpy).toHaveBeenCalledWith('出错，属性重复:dup')
+    expect(saveSpy).not.toHaveBeenCalled()
+  })
+
+  // 2026-10：编码 / 展示名逐字段非空校验（对齐旧 EntryTypeEdit 的 requireRule）。
+  // 此前漏了这条，空编码字段会被存进库、落库后删不掉。
+  it('提交前校验：编码或展示名为空的字段拦截，不调用 entrySave', async () => {
+    const entry: EntryType = {
+      tableId: 't1', tableName: 'tb_a', name: '表A', fields: [
+        { prop: 'code', desc: '编码', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
+        { prop: '', desc: '', type: 'string', required: false, dedup: false, columnName: 'K4', seq: 2 },
+      ],
+    }
+    const saveSpy = vi.spyOn(entryApi, 'entrySave')
+    const warnSpy = vi.spyOn(ElMessage, 'warning')
+    await mountEditor(entry)
+
+    await body().findAll('button').find((b) => b.text() === '保存')!.trigger('click')
+    await flushPromises()
+
+    expect(warnSpy).toHaveBeenCalledWith('出错，属性不能为空')
     expect(saveSpy).not.toHaveBeenCalled()
   })
 
