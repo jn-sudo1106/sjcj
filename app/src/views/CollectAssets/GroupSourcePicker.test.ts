@@ -70,3 +70,39 @@ it('backend 模式：保存调 changeMembers 加入来源组，选中的源分�
   expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual([false])
   wrapper.unmount()
 })
+
+// 2026-10-12：表头「全选本页」——只动当前页，其它页已选的保留；部分选中显示半选
+it('表头「全选本页」：全选 / 取消只影响当前页，跨页已选保留，部分选中是半选', async () => {
+  vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async (query) => ({
+    total: 6,
+    list: query?.page === 2
+      ? [{ sourceId: '30', name: '丙' } as Source, { sourceId: '40', name: '丁' } as Source]
+      : [{ sourceId: '10', name: '甲' } as Source, { sourceId: '20', name: '乙' } as Source],
+  }))
+  const wrapper = mount(GroupSourcePicker, { props: { modelValue: false, groupId: 'x', pickMode: true }, global: { plugins: [ElementPlus] }, attachTo: document.body })
+  await wrapper.setProps({ modelValue: true }); await flushPromises()
+  const head = () => document.querySelector('[data-testid="picker-select-page"]') as HTMLElement
+  const headInput = () => head().querySelector('input') as HTMLInputElement
+  // 先勾一个：表头半选
+  ;(document.querySelector('tbody input[type=checkbox]') as HTMLInputElement).click(); await flushPromises()
+  expect(head().querySelector('.el-checkbox__input')!.classList.contains('is-indeterminate')).toBe(true)
+  // 点表头：当前页全选
+  headInput().click(); await flushPromises()
+  expect(document.body.textContent).toContain('已选 2 个源')
+  expect(head().classList.contains('is-checked')).toBe(true)
+  // 翻到第 2 页，全选本页：累计 4 个
+  const pagination = wrapper.findComponent({ name: 'ElPagination' })
+  pagination.vm.$emit('update:current-page', 2)
+  pagination.vm.$emit('current-change', 2)
+  await flushPromises()
+  expect(head().classList.contains('is-checked')).toBe(false)
+  headInput().click(); await flushPromises()
+  expect(document.body.textContent).toContain('已选 4 个源')
+  // 再点一次取消本页：只剩第 1 页的 2 个
+  headInput().click(); await flushPromises()
+  expect(document.body.textContent).toContain('已选 2 个源')
+  // 提交的是跨页累计的 ID
+  const done = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === '加入分组')
+  expect(done).toBeTruthy()
+  wrapper.unmount()
+})

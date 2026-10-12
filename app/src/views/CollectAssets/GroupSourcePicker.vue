@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { sourceApi, sourceGroupApi, type Source } from '@/api'
@@ -56,6 +56,15 @@ watch(() => props.modelValue, open => {
 function toggle(id: string) {
   selected.value = selected.value.includes(id) ? selected.value.filter(value => value !== id) : [...selected.value, id]
 }
+// 表头「全选本页」（2026-10-12）：只动当前页的行，其它页已选的保持不变（跨页保留）
+const pageAllSelected = computed(() => rows.value.length > 0 && rows.value.every((r) => selected.value.includes(r.sourceId)))
+const pageSomeSelected = computed(() => !pageAllSelected.value && rows.value.some((r) => selected.value.includes(r.sourceId)))
+function togglePage(on: boolean) {
+  const pageIds = rows.value.map((r) => r.sourceId)
+  selected.value = on
+    ? [...new Set([...selected.value, ...pageIds])]
+    : selected.value.filter((id) => !pageIds.includes(id))
+}
 function selectedRows(): Source[] {
   return rows.value.filter((r) => selected.value.includes(r.sourceId))
 }
@@ -104,7 +113,9 @@ async function save() {
     </div>
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
     <el-table v-loading="loading" :data="rows" :max-height="'calc(100vh - 340px)'" size="small" row-key="sourceId">
-      <el-table-column width="42"><template #default="{ row }"><el-checkbox :model-value="selected.includes(row.sourceId)" :aria-label="`选择 ${row.name}`" @change="toggle(row.sourceId)" /></template></el-table-column>
+      <el-table-column width="42">
+        <template #header><el-checkbox :model-value="pageAllSelected" :indeterminate="pageSomeSelected" :disabled="!rows.length" aria-label="全选本页" title="全选本页" data-testid="picker-select-page" @change="togglePage(!!$event)" /></template>
+        <template #default="{ row }"><el-checkbox :model-value="selected.includes(row.sourceId)" :aria-label="`选择 ${row.name}`" @change="toggle(row.sourceId)" /></template></el-table-column>
       <el-table-column prop="sourceId" label="源 ID" width="120" />
       <el-table-column prop="name" label="源名称" min-width="160" show-overflow-tooltip />
       <el-table-column prop="siteId" label="网站 ID" width="100" />
