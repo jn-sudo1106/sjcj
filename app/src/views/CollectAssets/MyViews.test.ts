@@ -213,7 +213,7 @@ describe('我的视图', () => {
     expect((await sourceViewApi.list('7'))[0].isDefault).toBe(true)
     expect(useSourceGroupsStore().preference).toBe('view')
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never)
-    await (wrapper.vm as unknown as { onMore: (c: string) => Promise<void> }).onMore('delete')
+    await wrapper.get('[data-testid="mv-delete"]').trigger('click')
     await settle()
     expect(await sourceViewApi.list('7')).toEqual([])
     expect(useSourceGroupsStore().preference).toBe('system')

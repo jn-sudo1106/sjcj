@@ -10,7 +10,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CopyDocument, MoreFilled, Plus, Refresh, RefreshLeft, Select, Setting } from '@element-plus/icons-vue'
+import { CopyDocument, Delete, MoreFilled, Plus, Refresh, RefreshLeft, Select, Setting } from '@element-plus/icons-vue'
 import { siteApi, sourceApi, sourceGroupApi, type Source } from '@/api'
 import { sourceViewApi, type SourceView } from '@/api/sourceViews'
 import { useAuthStore } from '@/stores/auth'
@@ -357,10 +357,10 @@ onMounted(() => {
                   <el-dropdown-menu>
                     <el-dropdown-item command="rename">重命名</el-dropdown-item>
                     <el-dropdown-item command="default" :disabled="active.isDefault && directories.preference === 'view'">设为默认进入</el-dropdown-item>
-                    <el-dropdown-item command="delete" divided><span class="mv-danger">删除视图</span></el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
+              <button class="mv-icon-btn danger" type="button" title="删除视图" aria-label="删除视图" data-testid="mv-delete" @click="onMore('delete')"><el-icon><Delete /></el-icon></button>
               <button class="mv-icon-btn" type="button" title="刷新" aria-label="刷新" @click="load(activeId)"><el-icon><Refresh /></el-icon></button>
             </div>
           </div>
@@ -462,6 +462,7 @@ onMounted(() => {
 .mv-actions { display: flex; margin-left: auto; gap: 2px; align-items: center; }
 .mv-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--rc-muted, #64748b); font-size: 16px; cursor: pointer; }
 .mv-icon-btn:hover:not(:disabled) { background: var(--rc-primary-bg, #eff6ff); color: var(--rc-primary, #2563eb); }
+.mv-icon-btn.danger:hover:not(:disabled) { background: #fef3f2; color: var(--rc-error, #d92d20); }
 .mv-icon-btn:focus-visible { outline: 2px solid var(--rc-primary, #2563eb); outline-offset: 1px; }
 .mv-icon-btn:disabled { opacity: .4; cursor: not-allowed; }
 /* 有未保存的修改时「保存」高亮成主色，提醒还没存 */
@@ -474,7 +475,6 @@ onMounted(() => {
 .mv-content :deep(.sov-filter.is-compact .sov-filter-actions) { margin-left: auto; }
 .mv-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .mv-chip { padding: 1px 8px; border-radius: 10px; background: #eef2ff; color: #3730a3; font-size: 12px; }
-.mv-danger { color: var(--el-color-danger); }
 .mv-drawer { display: flex; flex-direction: column; gap: 6px; }
 .mv-sec { font-weight: 600; margin-top: 10px; }
 .mv-hint { margin: 0; font-size: 12px; color: var(--rc-faint); }
