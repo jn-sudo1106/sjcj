@@ -10,7 +10,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Setting, MoreFilled } from '@element-plus/icons-vue'
+import { CopyDocument, MoreFilled, Plus, Refresh, RefreshLeft, Select, Setting } from '@element-plus/icons-vue'
 import { siteApi, sourceApi, sourceGroupApi, type Source } from '@/api'
 import { sourceViewApi, type SourceView } from '@/api/sourceViews'
 import { useAuthStore } from '@/stores/auth'
@@ -317,7 +317,7 @@ onMounted(() => {
       <aside class="mv-nav">
         <div class="mv-heading">
           <strong>我的视图</strong>
-          <el-button size="small" type="primary" data-testid="mv-new" @click="openName('new')">＋ 新建视图</el-button>
+          <el-button size="small" type="primary" data-testid="mv-new" @click="openName('new')">新建</el-button>
         </div>
         <div class="mv-list">
           <button
@@ -345,13 +345,14 @@ onMounted(() => {
             <span class="mv-badge">🔒 仅自己可见</span>
             <span v-if="dirty" class="mv-badge dirty" data-testid="mv-dirty">有未保存的修改</span>
             <div class="mv-actions">
-              <el-button v-if="manual" size="small" type="primary" plain data-testid="mv-add-sources" @click="pickerOpen = true">＋ 添加源</el-button>
-              <el-button v-if="dirty" size="small" data-testid="mv-revert" @click="revert">撤销修改</el-button>
-              <el-button size="small" type="primary" :disabled="!dirty" :loading="saving" data-testid="mv-save" @click="save">保存</el-button>
-              <el-button size="small" data-testid="mv-save-as" @click="openName('saveAs')">另存为</el-button>
-              <el-button size="small" :icon="Setting" title="显示设置" aria-label="显示设置" data-testid="mv-display" @click="openDisplay" />
+              <!-- 图标按钮，样式同流程中心操作列（fc-icon-btn）；名字放在 title / aria-label 里 -->
+              <button v-if="manual" class="mv-icon-btn" type="button" title="添加源" aria-label="添加源" data-testid="mv-add-sources" @click="pickerOpen = true"><el-icon><Plus /></el-icon></button>
+              <button v-if="dirty" class="mv-icon-btn" type="button" title="撤销修改" aria-label="撤销修改" data-testid="mv-revert" @click="revert"><el-icon><RefreshLeft /></el-icon></button>
+              <button class="mv-icon-btn save" :class="{ on: dirty }" type="button" :disabled="!dirty || saving" :title="dirty ? '保存' : '没有未保存的修改'" aria-label="保存" data-testid="mv-save" @click="save"><el-icon><Select /></el-icon></button>
+              <button class="mv-icon-btn" type="button" title="另存为新视图" aria-label="另存为" data-testid="mv-save-as" @click="openName('saveAs')"><el-icon><CopyDocument /></el-icon></button>
+              <button class="mv-icon-btn" type="button" title="显示设置" aria-label="显示设置" data-testid="mv-display" @click="openDisplay"><el-icon><Setting /></el-icon></button>
               <el-dropdown trigger="click" @command="onMore">
-                <el-button size="small" :icon="MoreFilled" title="更多" aria-label="更多" data-testid="mv-more" />
+                <button class="mv-icon-btn" type="button" title="更多" aria-label="更多" data-testid="mv-more"><el-icon><MoreFilled /></el-icon></button>
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item command="rename">重命名</el-dropdown-item>
@@ -360,7 +361,7 @@ onMounted(() => {
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
-              <el-button size="small" :icon="Refresh" circle title="刷新" aria-label="刷新" @click="load(activeId)" />
+              <button class="mv-icon-btn" type="button" title="刷新" aria-label="刷新" @click="load(activeId)"><el-icon><Refresh /></el-icon></button>
             </div>
           </div>
           <div class="mv-chips" data-testid="mv-chips">
@@ -458,8 +459,19 @@ onMounted(() => {
 .mv-name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mv-badge { padding: 1px 8px; border-radius: 10px; background: #f1f5f9; color: var(--rc-text-2); font-size: 12px; white-space: nowrap; }
 .mv-badge.dirty { background: #fffbeb; color: #b45309; }
-.mv-actions { display: flex; margin-left: auto; gap: 8px; align-items: center; }
-.mv-actions .el-button + .el-button { margin-left: 0; }
+.mv-actions { display: flex; margin-left: auto; gap: 2px; align-items: center; }
+.mv-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--rc-muted, #64748b); font-size: 16px; cursor: pointer; }
+.mv-icon-btn:hover:not(:disabled) { background: var(--rc-primary-bg, #eff6ff); color: var(--rc-primary, #2563eb); }
+.mv-icon-btn:focus-visible { outline: 2px solid var(--rc-primary, #2563eb); outline-offset: 1px; }
+.mv-icon-btn:disabled { opacity: .4; cursor: not-allowed; }
+/* 有未保存的修改时「保存」高亮成主色，提醒还没存 */
+.mv-icon-btn.save.on { background: var(--rc-primary, #2563eb); color: #fff; }
+.mv-icon-btn.save.on:hover:not(:disabled) { background: #1d4ed8; color: #fff; }
+/* 源列表紧凑查询栏原本是整行宽度、不换行设计的；这里右栏比系统目录窄，放不下时换行，别把控件压到重叠 */
+.mv-content :deep(.sov-filter.is-compact) { flex-wrap: wrap; row-gap: 8px; }
+.mv-content :deep(.sov-filter.is-compact label),
+.mv-content :deep(.sov-filter.is-compact .sov-field) { flex: none; }
+.mv-content :deep(.sov-filter.is-compact .sov-filter-actions) { margin-left: auto; }
 .mv-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .mv-chip { padding: 1px 8px; border-radius: 10px; background: #eef2ff; color: #3730a3; font-size: 12px; }
 .mv-danger { color: var(--el-color-danger); }

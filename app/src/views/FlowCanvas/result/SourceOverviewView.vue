@@ -1584,6 +1584,7 @@ watch(() => ui.sourceListRevision, () => {
 .sov-filter.is-compact .sov-search select.sov-op { width: 72px; }
 .sov-filter.is-compact .sov-search input { width: 200px; flex: 0 1 200px; min-width: 120px; }
 .sov-filter.is-compact [data-testid="source-overview-site"] { width: 124px; }
+.sov-filter.is-compact [data-testid="source-overview-group"] { width: 116px; }
 .sov-filter.is-compact [data-testid="source-overview-state"] { width: 100px; }
 .sov-filter.is-compact [data-testid="source-overview-tag"] { width: 104px; }
 .sov-filter.is-compact .sov-num { width: 88px; min-width: 80px; }
