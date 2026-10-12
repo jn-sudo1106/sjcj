@@ -69,6 +69,8 @@ async function mountTab(overrides?: {
   counts?: Record<string, number>
   /** 自定义 list 实现（如 mockResolvedValueOnce 分次返回） */
   list?: () => Promise<SourceGroup[]>
+  /** 源管理「我的分组」只读复用（2026-10-12） */
+  readonly?: boolean
 }) {
   if (overrides?.list) vi.spyOn(sourceGroupApi, 'list').mockImplementation(overrides.list)
   else vi.spyOn(sourceGroupApi, 'list').mockResolvedValue(overrides?.groups ?? [GROUP_3, GROUP_1])
@@ -79,7 +81,7 @@ async function mountTab(overrides?: {
   }))
   vi.spyOn(flowCenterApi, 'list').mockResolvedValue([FLOW_21000006])
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/canvas', component: { template: '<div />' } }] })
-  const wrapper = mount(SourceGroupTab, { global: { plugins: [ElementPlus, router] }, attachTo: document.body })
+  const wrapper = mount(SourceGroupTab, { props: { readonly: overrides?.readonly }, global: { plugins: [ElementPlus, router] }, attachTo: document.body })
   await settle()
   return { wrapper, router }
 }
@@ -274,5 +276,22 @@ describe('来源组页签 · 权限', () => {
     expect(wrapper.text()).toContain('当前账号仅可查看，修改需要管理员权限')
     const newBtn = [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('新建'))
     expect(newBtn?.disabled).toBe(true)
+  })
+})
+
+// 2026-10-12：源管理「我的分组」改为全平台共用、只读，复用本页 readonly
+describe('来源组页签 · 只读模式（源管理「我的分组」）', () => {
+  it('admin 也不出新建 / 添加源 / 移出 / 换组，显示只读说明；照常能选组看成员', async () => {
+    selectIds.value = ['430000001']
+    const { wrapper } = await mountTab({ readonly: true })
+    expect(wrapper.find('[data-testid="sg-new"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="sg-readonly-note"]').text()).toContain('只能查看')
+    await wrapper.findAll('.sg-item')[0]!.trigger('click')
+    await settle()
+    expect(wrapper.find('.sg-toolbar').text()).toContain('twitter1')
+    expect(wrapper.find('[data-testid="sg-add-source"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="sg-remove-members"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="sg-move-members"]').exists()).toBe(false)
+    expect(wrapper.find('.el-alert').exists()).toBe(false)
   })
 })

@@ -22,7 +22,6 @@ import {
 } from '@/utils/sourceMark'
 import SourceMarkPopover from './SourceMarkPopover.vue'
 import EditSourceMarkDialog from './EditSourceMarkDialog.vue'
-import GroupAssignmentDialog from '@/views/CollectAssets/GroupAssignmentDialog.vue'
 import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
 import SourceFlowConfigDrawer from '@/views/CollectAssets/SourceFlowConfigDrawer.vue'
 import AdjustSourceGroupDialog from '@/views/CollectAssets/AdjustSourceGroupDialog.vue'
@@ -466,7 +465,6 @@ function sourceState(source: Source) {
 // 复用已有接口，不新起批量端点：发抓取用 sendSnatchWithParam（与单源同一个，ids 传多个），
 // 启停用 changeSourceEnable 逐个调（后端没有批量启停端点，旧平台源列表页也是自己循环调的）。
 const selectedIds = ref<string[]>([])
-const groupAssignmentOpen = ref(false)
 // ---- 1008-04 来源组批量操作（勾选后「选中来源 ▾」下拉）----
 const sourceGroupOpsOpen = ref(false)
 const flowConfigOpen = ref(false)
@@ -1246,7 +1244,6 @@ watch(() => ui.sourceListRevision, () => {
       <button v-if="failedBatches.length" class="sov-btn" type="button" data-testid="source-retry-failed" @click="retryFailedBatches">重试失败批次（{{ failedBatches.reduce((n, b) => n + b.ids.length, 0) }}）</button>
       <template v-if="selectMode">
         <span class="sov-batch-count" data-testid="source-batch-count">已选 {{ selectedIds.length }}</span>
-        <button class="sov-btn" type="button" @click="groupAssignmentOpen = true">加入分组</button>
         <slot name="selection-actions" :ids="selectedIds" />
         <div ref="markAnchorRef" class="sov-mark-anchor">
           <button class="sov-btn sov-mark-btn" type="button" data-testid="batch-mark" :aria-expanded="markOpen" @click="toggleMarkPopover">添加标记</button>
@@ -1479,7 +1476,6 @@ watch(() => ui.sourceListRevision, () => {
       @confirm="confirmLaunch"
       @close="closeLaunch"
     />
-    <GroupAssignmentDialog v-if="groupAssignmentOpen" v-model="groupAssignmentOpen" :source-ids="selectedIds" />
     <SourceParamModal ref="paramModalRef" :callback="sendWithParamsCallback" />
     <!-- 1008-04 来源组批量操作弹窗 / 抽屉 -->
     <SourceFlowConfigDrawer
