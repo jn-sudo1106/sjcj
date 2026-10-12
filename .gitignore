@@ -30,5 +30,8 @@ app/pnpm-lock.yaml
 __pycache__/
 *.pyc
 backend/
+# 服务器 SSH 密码脚本与 known_hosts 缓存（含凭据，绝不入库）
+tmp/askpass-*
+tmp/known_hosts_*
 # Runner 管理服务生成的独立站点脚本 Git 仓库
 site-scripts/
