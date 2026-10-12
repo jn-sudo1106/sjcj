@@ -12,7 +12,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { CopyDocument, Delete, MoreFilled, Plus, Refresh, RefreshLeft, Select, Setting } from '@element-plus/icons-vue'
 import { siteApi, sourceApi, sourceGroupApi, type Source } from '@/api'
-import { sourceViewApi, type SourceView } from '@/api/sourceViews'
+import { sourceViewApi, sourceViewBackend, type SourceView, type SourceViewBackend } from '@/api/sourceViews'
 import { useAuthStore } from '@/stores/auth'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
 import { recordSiteVisit } from '@/utils/siteRecents'
@@ -54,6 +54,11 @@ const liveState = computed<SourceListViewState | null>(() => (rawState.value ? {
 const dirty = computed(() => !!active.value && !!liveState.value && !sameViewState(liveState.value, active.value.state))
 const manual = computed(() => scopeIds.value !== null)
 const counts = ref<Record<string, number | null>>({})
+/** 视图存哪：remote = 账号（后端接口），local = 暂存本机（接口还没上线的环境） */
+const backend = ref<SourceViewBackend | null>(null)
+/** 接口已上线、但本机还留着旧视图：提示导入 */
+const localLeft = ref(0)
+const importing = ref(false)
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 
@@ -66,6 +71,8 @@ async function load(preferId?: string) {
     loadError.value = e instanceof Error ? e.message : String(e)
     return
   }
+  backend.value = sourceViewBackend()
+  localLeft.value = backend.value === 'remote' ? sourceViewApi.localViews(userId.value).length : 0
   const wanted = preferId || String(route.query.viewId ?? '')
   const next = views.value.find((v) => v.viewId === wanted)
     ?? views.value.find((v) => v.viewId === activeId.value)
@@ -119,6 +126,21 @@ async function confirmDiscard(): Promise<boolean> {
 async function pickView(viewId: string) {
   if (viewId === activeId.value || !(await confirmDiscard())) return
   selectView(viewId)
+}
+
+async function importLocal() {
+  if (importing.value) return
+  importing.value = true
+  try {
+    const { imported, failed } = await sourceViewApi.importLocal(userId.value)
+    if (failed.length) ElMessage.warning(`已导入 ${imported} 个，${failed.length} 个没导入成功（${failed[0]}）`)
+    else ElMessage.success(`已把 ${imported} 个本机视图导入账号`)
+    await load()
+  } catch (e) {
+    ElMessage.error(`导入失败：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    importing.value = false
+  }
 }
 
 // ---- 保存 / 撤销 ----
@@ -339,7 +361,12 @@ onMounted(() => {
           <div v-if="!views.length" class="mv-empty">{{ loadError || '还没有视图' }}</div>
         </div>
         <p class="mv-note">视图只有你自己能看到。新建的视图是空的，点「添加源」挑选，条件栏在这些源里再筛选；在「系统目录」设好条件「另存为视图」存的是条件，之后新增的源符合条件会自动出现。</p>
-        <p class="mv-note mv-local">目前暂存在本机浏览器，换电脑或清缓存会丢失；后端接口上线后会提示导入到账号。</p>
+        <p v-if="backend === 'local'" class="mv-note mv-local" data-testid="mv-local-note">目前暂存在本机浏览器，换电脑或清缓存会丢失；后端接口上线后会提示导入到账号。</p>
+        <p v-else-if="backend === 'remote'" class="mv-note mv-local" data-testid="mv-remote-note">视图保存在你的账号里，换电脑、换浏览器也在。</p>
+        <div v-if="localLeft" class="mv-import" data-testid="mv-import">
+          <span>这台电脑上还有 {{ localLeft }} 个之前存在本机的视图</span>
+          <el-button size="small" type="primary" plain :loading="importing" data-testid="mv-import-btn" @click="importLocal">导入到账号</el-button>
+        </div>
       </aside>
 
       <section class="mv-content">
@@ -458,6 +485,7 @@ onMounted(() => {
 .mv-empty { color: var(--rc-faint); font-size: 12px; padding: 12px 8px; text-align: center; }
 .mv-note { font-size: 12px; color: var(--rc-muted); line-height: 1.6; margin: 8px 0 0; }
 .mv-local { color: var(--rc-faint); }
+.mv-import { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: #eff6ff; color: #1e40af; font-size: 12px; line-height: 1.5; }
 .mv-content { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .mv-toolbar { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #fff; border: 1px solid var(--rc-border-soft); border-radius: 8px; margin-bottom: 8px; font-size: 13px; flex-wrap: wrap; }
 .mv-name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -10,7 +10,7 @@ import ElementPlus, { ElMessageBox } from 'element-plus'
 import MyViews from './MyViews.vue'
 import { sourceApi, sourceGroupApi } from '@/api'
 import type { UserInfo } from '@/api/auth'
-import { sourceViewApi } from '@/api/sourceViews'
+import { localSourceViewApi, setSourceViewBackend, sourceViewApi } from '@/api/sourceViews'
 import { useAuthStore } from '@/stores/auth'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
 import { blankSourceListViewState, emptyManualViewState, type SourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
@@ -42,6 +42,7 @@ const st = (patch: Partial<SourceListViewState> = {}): SourceListViewState => ({
 let wrapper: VueWrapper
 
 beforeEach(() => {
+  setSourceViewBackend('local') // 单测不连后端：用本机实现
   localStorage.clear()
   received.length = 0
   setActivePinia(createPinia())
@@ -236,4 +237,28 @@ describe('我的视图', () => {
     expect(await sourceViewApi.list('7')).toEqual([])
     expect(useSourceGroupsStore().preference).toBe('system')
   })
+
+  // 2026-10-12 后端接口开发环境联调通过：接口在用时提示「保存在账号」；本机还留着旧视图就提示导入
+  it('暂存本机时左栏说明「暂存本机」，没有导入提示', async () => {
+    await mountPage()
+    expect(wrapper.find('[data-testid="mv-local-note"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="mv-remote-note"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="mv-import"]').exists()).toBe(false)
+  })
+
+  it('接口在用且本机还有旧视图：显示「保存在账号」和导入提示，点导入后调 importLocal 并重读', async () => {
+    await localSourceViewApi.add('7', { viewName: '之前存本机的', state: emptyManualViewState() })
+    setSourceViewBackend('remote')
+    const list = vi.spyOn(sourceViewApi, 'list').mockResolvedValue([])
+    const importLocal = vi.spyOn(sourceViewApi, 'importLocal').mockResolvedValue({ imported: 1, failed: [] })
+    await mountPage()
+    expect(wrapper.find('[data-testid="mv-remote-note"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="mv-import"]').text()).toContain('1 个')
+    list.mockClear()
+    await wrapper.get('[data-testid="mv-import-btn"]').trigger('click')
+    await settle()
+    expect(importLocal).toHaveBeenCalledWith('7')
+    expect(list).toHaveBeenCalled()
+  })
 })
+

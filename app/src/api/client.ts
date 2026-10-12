@@ -121,6 +121,11 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'source-group/add',
   'source-group/update',
   'source-group/delete',
+  // 2026-10-12 我的视图：只读写当前登录人自己的视图（后端按会话取用户），不碰源 / 流程 / 配置，不是共享数据，放开
+  'source-view/add',
+  'source-view/update',
+  'source-view/delete',
+  'source-view/sort',
   'source-group/changeMembers',
   'source-group/bindFlows',
   'source-group/updateBindingState',

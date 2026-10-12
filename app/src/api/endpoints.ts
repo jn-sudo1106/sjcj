@@ -378,6 +378,14 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source-group/bindings', desc: '来源（或来源组）的流程绑定行（含停用行）', live: true },
   { path: 'source-group/updateBindingState', desc: '启用/停用一条流程绑定（admin；回传 id/sourceId/sourceGroupId/flowId/revision）', danger: true, live: true },
   { path: 'source-group/flowIds', desc: '来源列表当前生效流程并集（GET sourceIds 逗号串；上限 5000，超过分片）', live: true },
+  // 源管理「我的视图」（2026-10-12 开发环境 124.223.180.186 联调通过，217 / 133 还没部署）。userId 取自会话，只能读写自己的视图；
+  // queryJson / displayJson 必须是 JSON 字符串；revision 从 0 起。前端按调用强制走真实（mode: 'http'）并在接口不存在时退回本机，
+  // 所以这里不标 live：标了就会在所有环境强制走真实，217 / 133 上整页报错。
+  { path: 'source-view/list', desc: '当前用户的全部视图（不分页，按 sortNo）' },
+  { path: 'source-view/add', desc: '新建视图（viewName 1–40 字同用户不重名；queryJson / displayJson 为 JSON 字符串；isDefault=1 会取消其它视图的默认）' },
+  { path: 'source-view/update', desc: '保存 / 重命名 / 设为默认（带编辑前 revision，不一致报「视图已变化」，只改传了的字段）' },
+  { path: 'source-view/delete', desc: '删除视图（软删，带 revision）' },
+  { path: 'source-view/sort', desc: '调整左侧顺序（viewIds[]）；前端暂未用' },
   { path: 'source-group/sourceFlows', desc: '来源（或来源组）的流程绑定：生效列表、默认流程、原始绑定行；入组的源自动跟随其组', live: true },
   { path: 'source-group/bindSourceFlows', desc: '来源独立流程整体保存（admin；带并发快照，入组的源会被后端拒绝）', danger: true, live: true },
   // 只登记不接：旧平台「生成配置」入口，本平台没有对应场景（Y8-16）。

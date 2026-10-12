@@ -5,13 +5,14 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import AddToViewDialog from './AddToViewDialog.vue'
-import { sourceViewApi } from '@/api/sourceViews'
+import { setSourceViewBackend, sourceViewApi } from '@/api/sourceViews'
 import { useAuthStore } from '@/stores/auth'
 import type { UserInfo } from '@/api/auth'
 import { blankSourceListViewState, emptyManualViewState } from '@/views/FlowCanvas/result/sourceListViewState'
 
 let wrapper: VueWrapper
 beforeEach(() => {
+  setSourceViewBackend('local') // 单测不连后端：用本机实现
   localStorage.clear()
   setActivePinia(createPinia())
   useAuthStore().info = { id: 7 } as UserInfo
@@ -58,7 +59,7 @@ describe('加入视图', () => {
     dom('input[data-testid="add-to-view-name"]').dispatchEvent(new Event('input'))
     dom('[data-testid="add-to-view-submit"]').click()
     await flushPromises()
-    expect(dom('[data-testid="add-to-view-error"]').textContent).toContain('已有同名视图')
+    expect(dom('[data-testid="add-to-view-error"]').textContent).toContain('视图名称已存在')
     expect(wrapper.emitted('added')).toBeUndefined()
   })
 })
