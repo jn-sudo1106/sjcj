@@ -701,6 +701,7 @@ export interface SourceCategory {
   seq?: number // 排序序号
   parentId?: string // 父级分类 ID
   path?: string // 祖先 ID 链
+  remark?: string // 备注（旧 CATEGORY 列「备注」，分类目录维护/详情用）
   children?: SourceCategory[]
 }
 

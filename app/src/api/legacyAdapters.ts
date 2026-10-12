@@ -501,6 +501,8 @@ export function entryTypeGroupFromLegacy(input: unknown): EntryTypeGroup {
   const bucket = (key: string) => (Array.isArray(record[key]) ? (record[key] as unknown[]) : [])
   return {
     main: record.main == null ? undefined : String(record.main),
+    // 源名是顶层字段（旧 CheckAdd 用它拼默认监控名「<源名>-日增量」），不能混进 list
+    sourceName: record.sourceName == null ? undefined : String(record.sourceName),
     list1: bucket('list1').map(entryTypeFromLegacy),
     list2: bucket('list2').map(entryTypeFromLegacy),
     list3: bucket('list3').map(entryTypeFromLegacy).reverse(),

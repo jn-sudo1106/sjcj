@@ -76,6 +76,10 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/check/check-one', desc: '执行一次源检查', danger: true },
   { path: 'source/check/runNow', desc: '立即运行源检查', danger: true, impl: true },
   { path: 'source/check/paged-logs', desc: '源检查历史日志', impl: true, live: true },
+  // 定时预览：旧平台 `GET /v1/source/lastRun?cron=<urlencoded>`（api/util.js checkCron），
+  // 返回该 cron 的最近若干次运行时间；CheckAdd 的「定时」弹窗「测试」按钮用它。
+  // cron 含 `*` / `?` / `/`，必须 URL 编码，否则 `?` 会被当成新参数的起始。
+  { path: 'source/lastRun', desc: '按 cron 计算最近运行时间（定时预览）', impl: true },
   // 2026-09-01 实测报错：source/tagSource 在真实后端根本不存在（GET 500）——对照旧平台
   // api/source.js 确认，打标签走的是 POST /v1/source/markBatch（markBatch(ids, flag, freq,
   // notify, tags)），tagSource 这个端点名是臆造的，从没在旧平台出现过。live 标记挪到下面

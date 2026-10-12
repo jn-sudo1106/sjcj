@@ -78,6 +78,8 @@ export interface DataTableMeta {
 export interface EntryTypeGroup {
   /** 默认选中的表 ID；未设置时旧前端回退到 list3[0] */
   main?: string
+  /** 源名（旧 /v1/config/queryEntryTypesGroup 顶层字段）。新增监控的默认监控名「源名-日增量」用它 */
+  sourceName?: string
   list1: EntryType[]
   list2: EntryType[]
   /** 旧前端对 list3 做了 reverse，此处已反转 */

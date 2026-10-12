@@ -113,6 +113,9 @@ export function mockCkSourceUpdate(params?: Record<string, unknown>): boolean {
 // ---------- 源监控（0910 迁入，第一期只读 + 开关） ----------
 // 覆盖三种要看的形态：告警中、正常、已停用。lastMsg 保留旧平台那种
 // `时间---[X]:文本` 的前缀，好验证视图有没有把重复的时间戳剥掉。
+//
+// 内存表：所有写操作都落这里，刷新 paged 能看到变更。
+let ckNextId = 100
 const CHECKS: SourceCheck[] = [
   {
     id: 'ck-1', isDelete: 0, state: 'E', name: '日增量监控',
@@ -145,6 +148,146 @@ export function mockSourceCheckPaged(params?: Record<string, unknown>): Paged<So
     && (!state || c.state === state)
     && (!name || c.name.includes(name)))
   return { total: list.length, list }
+}
+
+/** 变更启停（真实改内存表）。enable: 0=启用 → isDelete=0；1=停用 → isDelete=1 */
+export function mockSourceCheckChangeEnable(params?: Record<string, unknown>) {
+  const ids = String(params?.ids ?? '').split(',').filter(Boolean)
+  const enable = Number(params?.enable ?? 0) // 0=启用, 1=停用
+  const nextIsDelete = enable === 0 ? 0 : 1
+  let hit = 0
+  for (const id of ids) {
+    const row = CHECKS.find((c) => c.id === id)
+    if (row) { row.isDelete = nextIsDelete; hit++ }
+  }
+  return { ok: true, demo: true, message: hit > 0 ? (enable === 0 ? '已启用' : '已停用') : '未找到对应记录' }
+}
+
+export function mockSourceCheckRunNow() {
+  return { ok: true, demo: true, message: '已触发校验（演示）' }
+}
+
+export function mockSourceCheckAdd(params?: Record<string, unknown>) {
+  const id = `ck-${ckNextId++}`
+  const now = new Date()
+  const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+  const row: SourceCheck = {
+    id,
+    isDelete: 0,
+    state: 'C',
+    name: String(params?.name ?? '新建监控'),
+    lastMsg: `${fmt(now)}---正常, 数量:0`,
+    tableName: String(params?.tableName ?? ''),
+    schedule: String(params?.schedule ?? '0 0 6-22 * * ?'),
+    nextRun: '—',
+    lastRun: fmt(now),
+    sourceId: String(params?.sourceId ?? ''),
+    checkConf: String(params?.checkConf ?? '{}'),
+  }
+  CHECKS.push(row)
+  return { ok: true, id, message: '新增成功（演示）' }
+}
+
+export function mockSourceCheckUpdate(params?: Record<string, unknown>) {
+  const id = String(params?.id ?? '')
+  const row = CHECKS.find((c) => c.id === id)
+  if (!row) return { ok: false, message: '未找到要修改的记录' }
+  if (params?.name != null) row.name = String(params.name)
+  if (params?.tableName != null) row.tableName = String(params.tableName)
+  if (params?.schedule != null) row.schedule = String(params.schedule)
+  if (params?.checkConf != null) row.checkConf = String(params.checkConf)
+  if (params?.isDelete != null) row.isDelete = Number(params.isDelete)
+  return { ok: true, message: '修改成功（演示）' }
+}
+
+export function mockSourceCheckDelete(params?: Record<string, unknown>) {
+  const ids = String(params?.ids ?? '').split(',').filter(Boolean)
+  const before = CHECKS.length
+  for (const id of ids) {
+    const idx = CHECKS.findIndex((c) => c.id === id)
+    if (idx >= 0) CHECKS.splice(idx, 1)
+  }
+  const removed = before - CHECKS.length
+  return { ok: true, message: `删除 ${removed} 条成功（演示）` }
+}
+
+export function mockSourceCheckCheckOne(params?: Record<string, unknown>) {
+  // 演示模式：checkConf 是合法 JSON 就成功，否则失败
+  try {
+    JSON.parse(String(params?.checkConf ?? '{}'))
+    return { ok: true, message: '规则校验成功（演示）', data: params }
+  } catch (err) {
+    return { ok: false, message: 'checkConf 不是合法 JSON: ' + (err as Error).message }
+  }
+}
+
+/** 把 cron 字段展开成允许值集合；`*` / `?` / 空 → null（表示不限） */
+function expandCronField(expr: unknown, min: number, max: number): Set<number> | null {
+  const text = String(expr ?? '').trim()
+  if (!text || text === '*' || text === '?') return null
+  const out = new Set<number>()
+  for (const part of text.split(',')) {
+    const [rangeRaw, stepRaw] = part.split('/')
+    const step = stepRaw ? Number(stepRaw) : 1
+    if (!Number.isFinite(step) || step <= 0) return null
+    let lo = min
+    let hi = max
+    if (rangeRaw !== '*') {
+      const [a, b] = rangeRaw.split('-')
+      lo = Number(a)
+      hi = b === undefined || b === '' ? lo : Number(b)
+      if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null
+    }
+    for (let v = Math.max(lo, min); v <= Math.min(hi, max); v += step) out.add(v)
+  }
+  return out
+}
+
+/**
+ * 定时预览：旧平台 `GET /v1/source/lastRun?cron=`（api/util.js 的 checkCron）返回该 cron 的
+ * 最近若干次运行时间，旧前端直接 `this.runs = res`（裸数组，不是 {code,data} 信封）。
+ *
+ * mock 口径说明：按「分」粒度向后推演（秒字段只用来取展示值，不做秒级步进），
+ * 所以 `0/10 * * * * ?` 这种秒级间隔在 mock 里只体现为首个秒值 —— 够演示用，
+ * 真实秒级排期以联调后端为准。周的取值按 `v % 7` 归到 JS 的 0=周日..6=周六，
+ * 这样旧 UI 的「周日=0」和 Quartz 的「1=周日」两种写法都能对上。
+ */
+export function mockSourceCheckLastRun(params?: Record<string, unknown>): string[] {
+  const cron = String(params?.cron ?? '').trim()
+  const parts = cron.split(/\s+/)
+  if (parts.length < 6) return []
+  const [secRaw, minRaw, hourRaw, dayRaw, monRaw, weekRaw] = parts
+  const secSet = expandCronField(secRaw, 0, 59)
+  const minSet = expandCronField(minRaw, 0, 59)
+  const hourSet = expandCronField(hourRaw, 0, 23)
+  const daySet = expandCronField(dayRaw, 1, 31)
+  const monSet = expandCronField(monRaw, 1, 12)
+  const weekExpanded = expandCronField(weekRaw, 0, 7)
+  const weekSet = weekExpanded ? new Set([...weekExpanded].map((v) => v % 7)) : null
+  const sec = secSet ? ([...secSet].sort((a, b) => a - b)[0] ?? 0) : 0
+
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const cursor = new Date()
+  cursor.setSeconds(0, 0)
+  cursor.setMinutes(cursor.getMinutes() + 1)
+  const out: string[] = []
+  // 最多向后找 62 天，凑够 8 条就停（月度任务也能落在窗口里）
+  for (let i = 0; i < 60 * 24 * 62 && out.length < 8; i++) {
+    const ok =
+      (!minSet || minSet.has(cursor.getMinutes())) &&
+      (!hourSet || hourSet.has(cursor.getHours())) &&
+      (!daySet || daySet.has(cursor.getDate())) &&
+      (!monSet || monSet.has(cursor.getMonth() + 1)) &&
+      (!weekSet || weekSet.has(cursor.getDay()))
+    if (ok) {
+      out.push(
+        `${cursor.getFullYear()}-${pad(cursor.getMonth() + 1)}-${pad(cursor.getDate())} ` +
+          `${pad(cursor.getHours())}:${pad(cursor.getMinutes())}:${pad(sec)}`,
+      )
+    }
+    cursor.setMinutes(cursor.getMinutes() + 1)
+  }
+  return out
 }
 
 export function mockSourceCheckLogs(params?: Record<string, unknown>): Paged<SourceCheckLog> {

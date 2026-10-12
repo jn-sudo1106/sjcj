@@ -293,8 +293,25 @@ for (let langIndex = 1; langIndex <= 24; langIndex += 1) {
 
 // 演示环境无源分组数据：main（默认选中表）留空，全部表放进 list1（UI 上对应「main」分组标签），
 // list2/list3 留空（entryTypeGroupFromLegacy 按此形状消化）
-export function mockEntryTypesGroup(): { main?: string; list1: DataTableMeta[]; list2: []; list3: [] } {
-  return { list1: TABLES, list2: [], list3: [] }
+/**
+ * 按源加载实体表分组（旧 `/v1/config/queryEntryTypesGroup`）。
+ * 真实后端按 sourceId 圈定该源的实体表；mock 里表目录是全局的，所以只做两件事：
+ * 把该源 mainTable 对应的表排到最前（旧前端取「表名」下拉第一项做默认值），并带上 sourceName
+ * （新增监控的默认监控名「<源名>-日增量」要用）。sourceId 缺省/查不到时原样返回全表目录。
+ */
+export function mockEntryTypesGroup(params?: Record<string, unknown>): {
+  main?: string
+  sourceName?: string
+  list1: DataTableMeta[]
+  list2: DataTableMeta[]
+  list3: DataTableMeta[]
+} {
+  const sourceId = String(params?.sourceId ?? '').trim()
+  const src = SOURCES.find((s) => s.sourceId === sourceId)
+  const list1 = src?.mainTable
+    ? [...TABLES].sort((a, b) => Number(b.tableId === src.mainTable) - Number(a.tableId === src.mainTable))
+    : TABLES
+  return { sourceName: src?.name, list1, list2: [], list3: [] }
 }
 export function mockDataRows(params?: Record<string, unknown>): DataRow[] {
   return ROWS[String(params?.tableId ?? 't-notice')] ?? []
