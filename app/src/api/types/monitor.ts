@@ -74,6 +74,12 @@ export interface SourceCheck {
   lastRun: string
   sourceId: string
   checkConf: string // 校验详情，JSON 串
+  /** 定时任务 ID。旧平台开「历史日志」传的是 `record.jobId`（不是记录自身的 id），
+   *  后端未返回时为空 —— 此时日志按 sourceId 过滤，与旧平台行为一致。 */
+  jobId?: string
+  /** 旧平台 /v1/source/check/paged 返回里可能带的额外时间字段（编辑提交前要剔除） */
+  createDt?: string
+  updateDt?: string
 }
 
 /** 一条校验历史日志，来自 /v1/source/check/paged-logs */

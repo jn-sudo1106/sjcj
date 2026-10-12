@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search, Plus } from '@element-plus/icons-vue'
-import { type SourceCheck, type SourceCheckQuery } from '@/api'
+import { type SourceCheck } from '@/api'
 import {
   pagedSourceCheck,
   changeSourceCheckEnable,
@@ -27,13 +27,18 @@ const form = reactive({
   sourceId: props.sourceId || '',
   name: '',
 })
-const filters = reactive<SourceCheckQuery>({
+/** 已「执行」的筛选条件（点查询 / 切下拉 / 换源后同步自 form）。分页单独管，不放进来——
+ *  旧版 pagedSourceCheck 只发 sourceId/enable/state/name + page/limit，多带一个 size 就是多余参数。 */
+const filters = reactive<{
+  enable: string
+  state: string
+  sourceId: string
+  name: string
+}>({
   enable: '',
   state: '',
   sourceId: props.sourceId || '',
   name: '',
-  page: 1,
-  size: 10,
 })
 watch(
   () => props.sourceId,
@@ -54,7 +59,15 @@ const size = ref(10)
 async function load() {
   loading.value = true
   try {
-    const res = await pagedSourceCheck({ ...filters, page: page.value, limit: size.value })
+    // 入参逐字段对齐旧 api/monitor.js 的 pagedSourceCheck（page/limit，不是 pageNo/pageSize/size）
+    const res = await pagedSourceCheck({
+      sourceId: filters.sourceId,
+      enable: filters.enable,
+      state: filters.state,
+      name: filters.name,
+      page: page.value,
+      limit: size.value,
+    })
     rows.value = res.list
     total.value = res.total
   } catch (err) {
@@ -172,10 +185,14 @@ function onSizeChange(s: number) {
 onMounted(() => void load())
 
 // ---- 子组件 ref ----
+// 当前生效的源：筛选草稿优先（旧版 queryParam.sourceId 是下拉的即时值），再退回已执行的筛选 / 内嵌传入的源
+const activeSourceId = computed(() => form.sourceId || filters.sourceId || props.sourceId || '')
+
 const editDialogRef = ref<InstanceType<typeof CheckEditDialog>>()
 const logsDrawerRef = ref<InstanceType<typeof CheckLogsDrawer>>()
 function openAddDialog() {
-  if (!filters.sourceId) {
+  // 旧 MonitorList.handleAdd：未选源时 $message.error('请先选择源') 并 return
+  if (!activeSourceId.value) {
     ElMessage.error('请先选择源')
     return
   }
@@ -185,7 +202,9 @@ function openEditDialog(row: SourceCheck) {
   editDialogRef.value?.openDialog(row)
 }
 function openLogs(row: SourceCheck) {
-  logsDrawerRef.value?.show(filters.sourceId || row.sourceId, row.id, row.name)
+  // 旧 MonitorList.handleLogs：showModal(queryParam.sourceId, record.jobId)
+  // —— 传的是**任务的 jobId**（不是检查记录自身的 id），后端未给 jobId 时退化为只按 sourceId 过滤。
+  logsDrawerRef.value?.show(activeSourceId.value || row.sourceId, row.jobId, row.name)
 }
 function onEditSaved() {
   void load()
@@ -239,7 +258,8 @@ function onSourceChange() {
         <el-col :md="4" :sm="24">
           <el-form-item>
             <el-button type="primary" :icon="Search" @click="runQuery">查询</el-button>
-            <el-button type="primary" :icon="Plus" :disabled="!filters.sourceId" @click="openAddDialog">加监控</el-button>
+            <!-- 旧版不置灰，未选源时点「加监控」弹「请先选择源」（openAddDialog 内拦截） -->
+            <el-button type="primary" :icon="Plus" @click="openAddDialog">加监控</el-button>
           </el-form-item>
         </el-col>
       </el-row>
@@ -256,13 +276,15 @@ function onSourceChange() {
     </div>
 
     <!-- 表格 -->
+    <!-- 不设 default-sort：旧版列上的 sorter:true 是**服务端**排序（由后端决定整集顺序），
+         而 s-table 转发的 sortField/sortOrder 又被旧 pagedSourceCheck 丢掉了，等于后端顺序直显。
+         el-table 的 sortable/default-sort 只排当前页，会让人误以为整集已排序，反而不如照旧直显。 -->
     <el-table
       :data="rows"
       border
       stripe
       size="small"
       :row-key="(r: SourceCheck) => r.id"
-      :default-sort="{ prop: 'name', order: 'ascending' }"
       @selection-change="onSelectionChange"
     >
       <el-table-column type="selection" width="40" />
@@ -374,12 +396,8 @@ function onSourceChange() {
     </el-drawer>
 
     <!-- 子组件挂载：新增/编辑弹窗 + 校验日志抽屉 -->
-    <CheckEditDialog
-      ref="editDialogRef"
-      :source-id="filters.sourceId || props.sourceId || ''"
-      @saved="onEditSaved"
-    />
-    <CheckLogsDrawer ref="logsDrawerRef" :source-id="filters.sourceId || props.sourceId || ''" />
+    <CheckEditDialog ref="editDialogRef" :source-id="activeSourceId" @saved="onEditSaved" />
+    <CheckLogsDrawer ref="logsDrawerRef" :source-id="activeSourceId" />
   </div>
 </template>
 
