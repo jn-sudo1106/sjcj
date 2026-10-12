@@ -12,6 +12,11 @@ import FilterToolbar from './components/FilterToolbar.vue'
 import SourceOverviewView from '@/views/FlowCanvas/result/SourceOverviewView.vue'
 import SiteEditorDialog from './components/SiteEditorDialog.vue'
 import { beginSitesFetch, collectAssetsCache, clearCollectAssetsCache, commitSites } from './siteListCache'
+import SaveViewDialog from './SaveViewDialog.vue'
+import { sourceViewApi } from '@/api/sourceViews'
+import { useAuthStore } from '@/stores/auth'
+import { useSourceGroupsStore } from '@/stores/sourceGroups'
+import { describeViewState, type SourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
 
 /**
  * `scope`：由外层 tab 传进来（`CollectAssets/index.vue`，0924-01）。
@@ -369,6 +374,39 @@ function openSiteFromList(siteId: string) {
   void router.push({ path: '/canvas', query: { siteId, view: 'source', returnTo: route.fullPath } })
 }
 /** 点来源组名（1008-04）：跳到系统设置「来源组」tab 并选中该组（10-13 来源组移到系统设置） */
+// 「另存为视图」（2026-10-12「我的视图」）：把源列表当前的条件 / 排序 / 每页条数存成自己的视图，存完跳到该视图
+const auth = useAuthStore()
+const directories = useSourceGroupsStore()
+const listState = ref<SourceListViewState | null>(null)
+const saveViewOpen = ref(false)
+const saveViewBusy = ref(false)
+const saveViewError = ref('')
+const saveViewSummary = computed(() => (listState.value
+  ? `保存的条件：${describeViewState(listState.value).join('；') || '全部源（没有条件）'}`
+  : ''))
+function openSaveView() {
+  saveViewError.value = ''
+  saveViewOpen.value = true
+}
+async function submitSaveView({ name, isDefault }: { name: string; isDefault: boolean }) {
+  if (!listState.value) return
+  saveViewBusy.value = true
+  saveViewError.value = ''
+  try {
+    const userId = auth.info?.id != null ? String(auth.info.id) : ''
+    const created = await sourceViewApi.add(userId, { viewName: name, state: listState.value, isDefault })
+    if (isDefault) {
+      try { directories.setPreference('view') } catch { /* 偏好写失败不影响视图本身 */ }
+    }
+    saveViewOpen.value = false
+    ElMessage.success(`已存为视图「${created.viewName}」`)
+    void router.push({ path: '/collect', query: { tab: 'views', view: created.viewId } })
+  } catch (e) {
+    saveViewError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    saveViewBusy.value = false
+  }
+}
 function openSourceGroup(sourceGroupId: string) {
   void router.push({ path: '/settings', query: { tab: 'source-group', group: sourceGroupId } })
 }
@@ -514,8 +552,17 @@ onUnmounted(() => {
       @open-source-data="openSourceFromList($event, 'data')"
       @open-site="openSiteFromList"
       @open-source-group="openSourceGroup"
+      @state-change="listState = $event"
     >
       <template #filter-extra>
+        <button
+          v-if="scope === 'all'"
+          class="ca-save-view"
+          type="button"
+          data-testid="source-save-as-view"
+          title="把当前的筛选条件、排序存成自己的视图，在「我的视图」里一点就打开"
+          @click="openSaveView"
+        >☆ 另存为视图</button>
         <FilterToolbar
           keyword=""
           :category-filter="[]"
@@ -531,6 +578,15 @@ onUnmounted(() => {
         />
       </template>
     </SourceOverviewView>
+    <SaveViewDialog
+      v-model="saveViewOpen"
+      title="另存为视图"
+      show-default
+      :summary="saveViewSummary"
+      :busy="saveViewBusy"
+      :error="saveViewError"
+      @submit="submitSaveView"
+    />
 
     <!-- 卡片视图分页：**常驻**，与表格视图一致（2026-09-18）。
          原来带 `total > size` 的条件，每页改成 50 之后 25 个网站正好一页装下，
@@ -569,6 +625,8 @@ onUnmounted(() => {
 .ca-page.is-list { flex: 1; min-height: 0; }
 /* 源视图组件自带灰底内边距（在网站详情里是整块主区），放进采集资产去掉，和工具条对齐 */
 .ca-source-list { padding: 0; background: transparent; }
+.ca-save-view { height: 34px; padding: 0 12px; border: 1px solid #d5e2f2; border-radius: 8px; background: #fff; color: var(--rc-text-2); font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.ca-save-view:hover { border-color: var(--rc-primary); color: var(--rc-primary); }
 
 .ca-card-body { min-height: 200px; }
 

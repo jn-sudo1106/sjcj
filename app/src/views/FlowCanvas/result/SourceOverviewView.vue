@@ -13,7 +13,6 @@ import { isProductionBackend } from '@/api/client'
 import { useLaunchJobStore } from '@/stores/launchJob'
 import { useUiStore } from '@/stores/ui'
 import {
-  issueTagForWrite,
   mergeIssueTags,
   normalizeIssueTag,
   readRecentIssueTags,
@@ -27,6 +26,7 @@ import SourceFlowConfigDrawer from '@/views/CollectAssets/SourceFlowConfigDrawer
 import AdjustSourceGroupDialog from '@/views/CollectAssets/AdjustSourceGroupDialog.vue'
 import RunOnceDialog from '@/views/CollectAssets/RunOnceDialog.vue'
 import { scopedSourceIds } from './sourceScope'
+import { HIDEABLE_SOURCE_COLUMNS, viewStateFilter, type SourceListViewState } from './sourceListViewState'
 import LaunchConfirmDialog from './LaunchConfirmDialog.vue'
 import SourceParamModal from '@/views/FlowCanvas/source/SourceParamModal.vue'
 import { hasLoadParams, normalizeLoadParams } from '@/views/FlowCanvas/source/paramNormalize'
@@ -98,6 +98,12 @@ const props = defineProps<{
    * （源流程配置 / 调整来源组 / 指定流程运行一次）。
    */
   groupOps?: boolean
+  /**
+   * 「我的视图」（2026-10-12）：外部给定一套视图状态（条件 / 排序 / 每页条数 / 隐藏列），
+   * 挂载时和每次换成新对象时套用并重查。不传 = 原来的默认条件、全部列。
+   * 当前状态的变化通过 `stateChange` 往外报，父级据此判断「有未保存的修改」、做另存为。
+   */
+  viewState?: SourceListViewState
 }>()
 const emit = defineEmits<{
   openSource: [source: Source]
@@ -107,6 +113,8 @@ const emit = defineEmits<{
   openSourceData: [source: Source]
   /** 点来源组名（1008-04）：跳到「来源组」目录页签并选中该组 */
   openSourceGroup: [sourceGroupId: string]
+  /** 当前视图状态（条件、排序、每页条数、隐藏列）变化时 */
+  stateChange: [state: SourceListViewState]
 }>()
 
 // UI 状态筛选：停用是启停字段（enable=1），不是旧接口没有的 state=disabled，
@@ -346,34 +354,64 @@ let sourceRequestSeq = 0
 
 
 /** 空 / 非法 / 负数都当没填；`0` 要保留（"一条数据都没有的源"是个真条件） */
-const parsedDataCountMax = computed<number | undefined>(() => {
-  const raw = String(dataCountMax.value ?? '').trim()
-  if (!raw) return undefined
-  const n = Number(raw)
-  return Number.isFinite(n) && n >= 0 ? n : undefined
+
+/** 隐藏的列（「我的视图」显示设置）；不在视图里时恒为空 = 全部显示 */
+const hiddenColumns = ref<string[]>([])
+const showCol = (key: string) => !hiddenColumns.value.includes(key)
+/** 实际隐藏掉的列数（空态行 colspan 用）：只算当前列表本来就有的列——网站列只在不限网站时有，来源组三列只在 groupOps 时有 */
+const hiddenColumnCount = computed(() => HIDEABLE_SOURCE_COLUMNS.filter((c) => hiddenColumns.value.includes(c.key)
+  && (c.key !== 'site' || crossSite.value) && (!c.groupOps || (crossSite.value && props.groupOps))).length)
+
+/** 当前视图状态：查询条件 + 排序 + 每页条数 + 隐藏列（「我的视图」保存的就是它） */
+const currentViewState = computed<SourceListViewState>(() => ({
+  v: 1,
+  conditions: conditions.value.map((c) => ({ field: c.field, op: c.op, value: c.value })),
+  site: siteFilter.value,
+  sourceGroup: sourceGroupFilter.value,
+  status: statusFilter.value,
+  tag: tagFilter.value,
+  countMax: String(dataCountMax.value ?? ''),
+  sortField: sortField.value,
+  sortDirection: sortDirection.value,
+  pageSize: size.value,
+  hiddenColumns: [...hiddenColumns.value],
+}))
+watch(currentViewState, (state) => emit('stateChange', state), { deep: true })
+
+/** 套用一套视图状态（不发请求，调用方决定何时查） */
+function applyViewState(state: SourceListViewState) {
+  const rows = state.conditions.length ? state.conditions : [{ field: 'sourceIds' as const, op: 'eq' as const, value: '' }]
+  // 保存下来的字段是用户定过的：一律 pinned，不再按输入内容自动改字段
+  conditions.value = rows.map((c) => ({ ...newCondition(c.field, c.value), op: c.op, pinned: !!c.value.trim() }))
+  siteFilter.value = state.site
+  sourceGroupFilter.value = state.sourceGroup
+  statusFilter.value = state.status
+  tagFilter.value = state.tag
+  dataCountMax.value = state.countMax
+  sortField.value = state.sortField
+  sortDirection.value = state.sortDirection
+  size.value = state.pageSize || 20
+  hiddenColumns.value = [...state.hiddenColumns]
+  page.value = 1
+}
+if (props.viewState) applyViewState(props.viewState)
+watch(() => props.viewState, (state) => {
+  if (!state) return
+  applyViewState(state)
+  clearSelection()
+  void loadSources()
 })
 
 function currentQuery(): SourceFilter {
+  const base = viewStateFilter(currentViewState.value)
   const cond = sourceConditionParams(conditions.value)
   return {
+    ...base,
+    // 当前网站 > 网站筛选 > 页签范围；源 ID 与页签的固定源范围取交集
     siteIds: effectiveSiteIds(),
     sourceIds: scopedSourceIds(props.scopeSourceIds, cond.sourceIds),
-    flowId: cond.flowId,
     // 1008-03 来源组范围：固定按组筛（sourcePaged 服务端条件），不受用户查询条件影响
-    sourceGroupId: props.scopeSourceGroupId || sourceGroupFilter.value || undefined,
-    // 1008-04 默认流程筛选：条件行的 defaultFlowId
-    defaultFlowId: cond.defaultFlowId,
-    name: cond.name,
-    sourceUrl: cond.sourceUrl,
-    state: statusFilter.value === 'all' || statusFilter.value === 'disabled' ? undefined : statusFilter.value,
-    enable: statusFilter.value === 'disabled' ? '1' : statusFilter.value === 'all' ? undefined : '0',
-    tags: tagFilter.value ? [issueTagForWrite(tagFilter.value)].filter(Boolean) : [],
-    // 备注：后端认 remark（旧列表列同名）；非空 = `%`、为空 = `NULL` 的口径见 sourceSearchField.ts
-    remark: cond.remark,
-    count: parsedDataCountMax.value,
-    field: sortField.value || undefined,
-    sorted: sortField.value ? (sortDirection.value === 'asc' ? 1 : -1) : undefined,
-    type: sortField.value ? (sortDirection.value === 'asc' ? 'ASC' : 'DESC') : undefined,
+    sourceGroupId: props.scopeSourceGroupId || base.sourceGroupId,
   }
 }
 
@@ -1295,18 +1333,18 @@ watch(() => ui.sourceListRevision, () => {
             <th class="sov-fav-col" title="收藏"></th>
             <th><button class="sov-sort" :class="sortClass('SOURCE_ID')" type="button" data-testid="sort-source-id" :title="sortLabel('SOURCE_ID')" @click="toggleSort('SOURCE_ID')">源 ID<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th>源名称</th>
-            <th v-if="crossSite">所属网站</th>
+            <th v-if="crossSite && showCol('site')">所属网站</th>
             <!-- 1008-04 来源组三列：只在源列表视图（groupOps）出现 -->
-            <th v-if="crossSite && groupOps">来源组</th>
-            <th v-if="crossSite && groupOps">默认流程</th>
-            <th v-if="crossSite && groupOps">流程配置</th>
-            <th>URL</th><th>主表</th>
-            <th>标签</th>
-            <th><button class="sov-sort" :class="sortClass('DATA_CNT')" type="button" data-testid="sort-data-cnt" :title="sortLabel('DATA_CNT')" @click="toggleSort('DATA_CNT')">数据<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
-            <th>新入</th><th>成功</th>
-            <th><button class="sov-sort" :class="sortClass('LAST_RUN')" type="button" data-testid="sort-last-task" :title="sortLabel('LAST_RUN')" @click="toggleSort('LAST_RUN')">最近任务<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
-            <th><button class="sov-sort" :class="sortClass('LAST_SUCCESS')" type="button" data-testid="sort-last-success" :title="sortLabel('LAST_SUCCESS')" @click="toggleSort('LAST_SUCCESS')">最近成功<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
-            <th>状态</th><th>备注</th>
+            <th v-if="crossSite && groupOps && showCol('sourceGroup')">来源组</th>
+            <th v-if="crossSite && groupOps && showCol('defaultFlow')">默认流程</th>
+            <th v-if="crossSite && groupOps && showCol('flowConfig')">流程配置</th>
+            <th v-if="showCol('url')">URL</th><th v-if="showCol('mainTable')">主表</th>
+            <th v-if="showCol('tags')">标签</th>
+            <th v-if="showCol('dataCount')"><button class="sov-sort" :class="sortClass('DATA_CNT')" type="button" data-testid="sort-data-cnt" :title="sortLabel('DATA_CNT')" @click="toggleSort('DATA_CNT')">数据<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
+            <th v-if="showCol('newIn')">新入</th><th v-if="showCol('success')">成功</th>
+            <th v-if="showCol('lastTask')"><button class="sov-sort" :class="sortClass('LAST_RUN')" type="button" data-testid="sort-last-task" :title="sortLabel('LAST_RUN')" @click="toggleSort('LAST_RUN')">最近任务<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
+            <th v-if="showCol('lastSuccess')"><button class="sov-sort" :class="sortClass('LAST_SUCCESS')" type="button" data-testid="sort-last-success" :title="sortLabel('LAST_SUCCESS')" @click="toggleSort('LAST_SUCCESS')">最近成功<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
+            <th v-if="showCol('state')">状态</th><th v-if="showCol('remark')">备注</th>
           </tr>
         </thead>
         <tbody>
@@ -1339,7 +1377,7 @@ watch(() => ui.sourceListRevision, () => {
                  ID 才是唯一标识）。等宽字体保持 ID 的可读性与列表其它 ID 一致。 -->
             <td><button class="sov-link sov-id-link" type="button" data-testid="source-overview-id-link" :title="`打开源 ${source.sourceId} 的详情`" @click="emit('openSource', source)">{{ source.sourceId }}</button></td>
             <td class="sov-name" :title="source.name"><button class="sov-link sov-source-link" type="button" data-testid="source-overview-source-link" @click="emit('openSource', source)">{{ source.name }}</button></td>
-            <td v-if="crossSite" class="sov-site" :title="siteNameOf(source)">
+            <td v-if="crossSite && showCol('site')" class="sov-site" :title="siteNameOf(source)">
               <button
                 v-if="source.siteId && source.siteId !== '0'"
                 class="sov-link"
@@ -1350,7 +1388,7 @@ watch(() => ui.sourceListRevision, () => {
               <span v-else class="sov-muted">未关联</span>
             </td>
             <!-- 1008-04 来源组三列：来源组（点组名跳来源组页签）/ 默认流程（点开流程节点）/ 流程配置（组统一 / 单源，点开源流程配置抽屉） -->
-            <td v-if="crossSite && groupOps" class="sov-group" :title="sourceGroupNameOf(source)">
+            <td v-if="crossSite && groupOps && showCol('sourceGroup')" class="sov-group" :title="sourceGroupNameOf(source)">
               <button
                 v-if="source.sourceGroupId"
                 class="sov-link"
@@ -1360,7 +1398,7 @@ watch(() => ui.sourceListRevision, () => {
               >{{ sourceGroupNameOf(source) }}</button>
               <span v-else class="sov-muted">—</span>
             </td>
-            <td v-if="crossSite && groupOps" class="sov-default-flow">
+            <td v-if="crossSite && groupOps && showCol('defaultFlow')" class="sov-default-flow">
               <button
                 v-if="source.defaultFlowId"
                 class="sov-link"
@@ -1371,7 +1409,7 @@ watch(() => ui.sourceListRevision, () => {
               >{{ flowNameOf(source.defaultFlowId) }}</button>
               <span v-else class="sov-muted">—</span>
             </td>
-            <td v-if="crossSite && groupOps" class="sov-flow-config">
+            <td v-if="crossSite && groupOps && showCol('flowConfig')" class="sov-flow-config">
               <button
                 class="sov-link"
                 type="button"
@@ -1379,12 +1417,12 @@ watch(() => ui.sourceListRevision, () => {
                 @click="openFlowConfigForSource(source)"
               >{{ source.sourceGroupId ? '组统一' : '单源' }}</button>
             </td>
-            <td class="sov-url" :title="source.url">
+            <td v-if="showCol('url')" class="sov-url" :title="source.url">
               <!-- 没有 URL 就留空，不画「—」（2026-09-28 用户定，与旧平台一致） -->
               <a v-if="source.url" :href="source.url" target="_blank" rel="noopener noreferrer" @click.stop>{{ source.url }}</a>
             </td>
-            <td>{{ source.mainTable || '—' }}</td>
-            <td>
+            <td v-if="showCol('mainTable')">{{ source.mainTable || '—' }}</td>
+            <td v-if="showCol('tags')">
               <!-- 标签列与备注列都点开同一个弹窗：想删掉某一个标签只有这条路（批量条只能追加/清空） -->
               <button
                 class="sov-cell-edit"
@@ -1403,7 +1441,7 @@ watch(() => ui.sourceListRevision, () => {
             <!-- 数据量做成可点（0903 H11/Y1-15）：源视图是统计层、数据视图是明细层，
                  会上「这个 7 代表着这个圆下面有 7 条数据」——那这个数字本身就该是入口。
                  样式与数据视图里的「下级」条数保持一致（同为"点数字下钻一层"）。 -->
-            <td>
+            <td v-if="showCol('dataCount')">
               <button
                 v-if="source.dataCount"
                 class="sov-link sov-count-link"
@@ -1416,12 +1454,12 @@ watch(() => ui.sourceListRevision, () => {
             </td>
             <!-- 「新入 / 成功」对齐旧平台：显示最近入库 / 最近成功时间的相对描述（旧平台就是「N 天前」），
                  hover 看精确时间。右侧「最近任务 / 最近成功」保留绝对时间。 -->
-            <td :title="source.lastInsertAt || ''">{{ timeAgo(source.lastInsertAt) }}</td>
-            <td :title="source.lastSuccessAt || ''">{{ timeAgo(source.lastSuccessAt) }}</td>
-            <td>{{ source.lastTaskAt || '—' }}</td>
-            <td>{{ source.lastSuccessAt || '—' }}</td>
-            <td><span class="sov-state" :class="{ error: source.state === 'E' && !source.disabled, muted: source.disabled }">{{ sourceState(source) }}</span></td>
-            <td>
+            <td v-if="showCol('newIn')" :title="source.lastInsertAt || ''">{{ timeAgo(source.lastInsertAt) }}</td>
+            <td v-if="showCol('success')" :title="source.lastSuccessAt || ''">{{ timeAgo(source.lastSuccessAt) }}</td>
+            <td v-if="showCol('lastTask')">{{ source.lastTaskAt || '—' }}</td>
+            <td v-if="showCol('lastSuccess')">{{ source.lastSuccessAt || '—' }}</td>
+            <td v-if="showCol('state')"><span class="sov-state" :class="{ error: source.state === 'E' && !source.disabled, muted: source.disabled }">{{ sourceState(source) }}</span></td>
+            <td v-if="showCol('remark')">
               <button
                 class="sov-remark sov-cell-edit"
                 type="button"
@@ -1431,7 +1469,7 @@ watch(() => ui.sourceListRevision, () => {
               >{{ source.remark || '—' }}</button>
             </td>
           </tr>
-          <tr v-if="!loading && !rows.length"><td :colspan="(crossSite ? 15 : 14) + (crossSite && groupOps ? 3 : 0)" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
+          <tr v-if="!loading && !rows.length"><td :colspan="(crossSite ? 15 : 14) + (crossSite && groupOps ? 3 : 0) - hiddenColumnCount" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
         </tbody>
       </table>
     </div>
