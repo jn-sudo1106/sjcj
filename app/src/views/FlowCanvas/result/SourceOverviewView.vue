@@ -1216,7 +1216,7 @@ watch(() => ui.sourceListRevision, () => {
         </div>
       </div>
       <!-- 网站筛选：只在不限网站（采集资产源列表视图）时出现；网站详情里范围固定为当前网站 -->
-      <label v-if="crossSite"><span class="sov-label-text">网站</span>
+      <label v-if="crossSite" class="sov-fl-site"><span class="sov-label-text">网站</span>
         <select v-model="siteFilter" data-testid="source-overview-site" @change="search">
           <option value="">全部网站</option>
           <option v-if="!scopeSiteIds" :value="UNBOUND_SITE">未关联网站</option>
@@ -1224,13 +1224,13 @@ watch(() => ui.sourceListRevision, () => {
         </select>
       </label>
       <!-- 来源组筛选（1008-04）：只在源列表视图（groupOps）出现；不含「未归组」 -->
-      <label v-if="crossSite && groupOps"><span class="sov-label-text">来源组</span>
+      <label v-if="crossSite && groupOps" class="sov-fl-group"><span class="sov-label-text">来源组</span>
         <select v-model="sourceGroupFilter" data-testid="source-overview-group" @change="search">
           <option value="">全部来源组</option>
           <option v-for="g in sourceGroupOptions" :key="g.sourceGroupId" :value="g.sourceGroupId" :disabled="g.state !== 'ACTIVE'">{{ g.name }}</option>
         </select>
       </label>
-      <label><span class="sov-label-text">状态</span>
+      <label class="sov-fl-state"><span class="sov-label-text">状态</span>
         <select v-model="statusFilter" data-testid="source-overview-state" @change="search">
           <option value="all">{{ crossSite ? '全部状态' : '全部' }}</option>
           <option value="C">正常</option>
@@ -1239,7 +1239,7 @@ watch(() => ui.sourceListRevision, () => {
           <option value="disabled">已停用</option>
         </select>
       </label>
-      <label><span class="sov-label-text">标签</span>
+      <label class="sov-fl-tag"><span class="sov-label-text">标签</span>
         <!-- 跟「状态」同一套原生 select。候选来自 sourceTags + 本机最近使用；
              当前筛选项若不在候选里（查看这一批、程序刚打的）仍单独占一项，避免被下拉冲掉。 -->
         <select v-model="tagFilter" data-testid="source-overview-tag" @change="search">
@@ -1249,7 +1249,7 @@ watch(() => ui.sourceListRevision, () => {
         </select>
       </label>
       <!-- 「≤」不是「<」：后端 count 的语义含等于（2026-09-20 实测，count=5 的结果里有 47 行正好是 5） -->
-      <label><span class="sov-label-text">数据量 ≤</span>
+      <label class="sov-fl-count"><span class="sov-label-text">数据量 ≤</span>
         <input
           v-model="dataCountMax"
           type="number"
@@ -1301,6 +1301,8 @@ watch(() => ui.sourceListRevision, () => {
       </template>
       <!-- 紧凑样式下筛选栏一行放不下，针对整批结果的两个操作挪到这一行右侧 -->
       <span v-if="crossSite" class="sov-summary-ops">
+        <!-- 父级往这一行右侧塞的图标按钮（采集资产「另存为视图」）：查询栏一行已经满了，放这里不挤它 -->
+        <slot name="summary-extra" />
         <!-- 1008-04 来源组操作：不勾选也能用（调整来源组按当前筛选范围，连生产时除外；另两项需先勾选） -->
         <el-dropdown v-if="groupOps" trigger="click" data-testid="source-group-ops" @command="onGroupOpsCommand">
           <button class="sov-btn" type="button">选中来源 ▾</button>
@@ -1568,11 +1570,20 @@ watch(() => ui.sourceListRevision, () => {
 .sov-filter input.sov-num { min-width: 84px; width: 84px; }
 /* ---- 紧凑样式（采集资产源列表视图）：外观对齐同页 FilterToolbar 的网站查询工具条 ---- */
 .sov-filter.is-compact {
+  /* 一行（用户 2026-10-12 定，不要换行）。1366 宽度下可用 1110px：基准宽度合计约 1050，更窄时各控件按比例压缩，
+     但每个控件都有下限（label 的 min-width: auto 把下限传给里面的下拉 / 输入框），压到下限就不再压，不会重叠 */
   flex-wrap: nowrap; align-items: center; gap: 8px; min-height: 52px; padding: 8px 12px;
   border: 1px solid var(--rc-border); box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 .sov-filter.is-compact .sov-label-text { display: none; }
-.sov-filter.is-compact label, .sov-filter.is-compact .sov-field { display: flex; flex: 0 1 auto; min-width: 0; }
+/* 每个筛选项：label 带「基准宽度 + 压缩下限」，里面的下拉 / 输入框跟着 label 走（width: 100%）。
+   不能给下拉 / 输入框自己设固定宽度——固定宽度会把 label 的最小尺寸撑死，窄屏下压不动就重叠 */
+.sov-filter.is-compact label { display: flex; flex: 0 1 auto; min-width: 0; }
+.sov-filter.is-compact label select, .sov-filter.is-compact label input { width: 100%; }
+/* 查询那格：字段 84 + 条件 64 + 输入框下限 120 + 「+」22 + 间距 12，再留 8 的余量（1280 实测 306 时「+」会碰到右边的网站下拉） */
+.sov-filter.is-compact .sov-field { display: flex; flex: 0 1 342px; min-width: 314px; }
+/* 条件网格要跟着外框缩，否则里面的「+」会伸到右边的下拉上 */
+.sov-filter.is-compact .sov-conds { flex: 1 1 auto; min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .sov-filter.is-compact input,
 .sov-filter.is-compact select {
   height: 34px; min-width: 0; border-color: var(--rc-border); border-radius: 6px; font-size: 13px;
@@ -1580,14 +1591,16 @@ watch(() => ui.sourceListRevision, () => {
 .sov-filter.is-compact input:hover,
 .sov-filter.is-compact select:hover { border-color: #bfdbfe; }
 /* 各控件基准宽 + 压缩下限：放不下时先压搜索框，其余守住能读全的宽度 */
+.sov-filter.is-compact .sov-search { flex-wrap: nowrap; flex: 1 1 auto; }
 .sov-filter.is-compact .sov-search select { width: 84px; flex: none; }
-.sov-filter.is-compact .sov-search select.sov-op { width: 72px; }
-.sov-filter.is-compact .sov-search input { width: 200px; flex: 0 1 200px; min-width: 120px; }
-.sov-filter.is-compact [data-testid="source-overview-site"] { width: 124px; }
-.sov-filter.is-compact [data-testid="source-overview-group"] { width: 116px; }
-.sov-filter.is-compact [data-testid="source-overview-state"] { width: 100px; }
-.sov-filter.is-compact [data-testid="source-overview-tag"] { width: 104px; }
-.sov-filter.is-compact .sov-num { width: 88px; min-width: 80px; }
+.sov-filter.is-compact .sov-search select.sov-op { width: 64px; }
+.sov-filter.is-compact .sov-search input { width: 160px; flex: 1 1 160px; min-width: 120px; }
+/* 基准宽 / 下限（下限刚好读全：「全部网站」约 88px） */
+.sov-filter.is-compact .sov-fl-site { flex-basis: 108px; min-width: 88px; }
+.sov-filter.is-compact .sov-fl-group { flex-basis: 108px; min-width: 94px; }
+.sov-filter.is-compact .sov-fl-state { flex-basis: 92px; min-width: 84px; }
+.sov-filter.is-compact .sov-fl-tag { flex-basis: 96px; min-width: 84px; }
+.sov-filter.is-compact .sov-fl-count { flex-basis: 80px; min-width: 76px; }
 .sov-filter.is-compact .sov-filter-actions { flex-wrap: nowrap; flex: none; }
 .sov-summary-ops { display: inline-flex; gap: 8px; margin-left: auto; }
 .sov-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }

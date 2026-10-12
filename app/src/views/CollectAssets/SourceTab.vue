@@ -2,6 +2,7 @@
 import { computed, onActivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { DocumentAdd } from '@element-plus/icons-vue'
 import { sourceApi, siteApi, expandCategoryIds, type Site, type Source, type SourceCategory } from '@/api'
 import { useUiStore } from '@/stores/ui'
 import { favoriteSiteIds, loadFavoriteSites } from '@/utils/siteFavorites'
@@ -564,18 +565,22 @@ onUnmounted(() => {
       @open-source-group="openSourceGroup"
       @state-change="listState = $event"
     >
+      <!-- 「另存为视图」放在「共 N 个源」那一行右侧（和选中来源 / 发任务 / 导出一起）：查询栏一行已经满了，放那里会挤坏 -->
+      <template v-if="scope === 'all'" #summary-extra>
+        <button
+          class="ca-save-view-icon"
+          type="button"
+          data-testid="source-save-as-view"
+          title="另存为视图：把当前的筛选条件、排序存成自己的视图，在「我的视图」里一点就打开"
+          aria-label="另存为视图"
+          @click="openSaveView"
+        ><el-icon :size="14"><DocumentAdd /></el-icon></button>
+      </template>
       <template v-if="scope === 'all'" #selection-actions="{ ids }">
         <button class="ca-save-view sm" type="button" data-testid="source-add-to-view" @click="openAddToView(ids)">加入视图</button>
       </template>
       <template #filter-extra>
-        <button
-          v-if="scope === 'all'"
-          class="ca-save-view"
-          type="button"
-          data-testid="source-save-as-view"
-          title="把当前的筛选条件、排序存成自己的视图，在「我的视图」里一点就打开"
-          @click="openSaveView"
-        >☆ 另存为视图</button>
+
         <FilterToolbar
           keyword=""
           :category-filter="[]"
@@ -639,6 +644,8 @@ onUnmounted(() => {
 .ca-page.is-list { flex: 1; min-height: 0; }
 /* 源视图组件自带灰底内边距（在网站详情里是整块主区），放进采集资产去掉，和工具条对齐 */
 .ca-source-list { padding: 0; background: transparent; }
+.ca-save-view-icon { flex: none; width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--rc-border); border-radius: 6px; background: #fff; color: var(--rc-muted); cursor: pointer; }
+.ca-save-view-icon:hover { border-color: #bfdbfe; color: var(--rc-primary); }
 .ca-save-view { height: 34px; padding: 0 12px; border: 1px solid #d5e2f2; border-radius: 8px; background: #fff; color: var(--rc-text-2); font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .ca-save-view.sm { height: 30px; padding: 0 10px; border-radius: 6px; font-size: 12px; }
 .ca-save-view:hover { border-color: var(--rc-primary); color: var(--rc-primary); }

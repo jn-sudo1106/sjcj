@@ -472,10 +472,10 @@ onMounted(() => {
 /* 有未保存的修改时「保存」高亮成主色，提醒还没存 */
 .mv-icon-btn.save.on { background: var(--rc-primary, #2563eb); color: #fff; }
 .mv-icon-btn.save.on:hover:not(:disabled) { background: #1d4ed8; color: #fff; }
-/* 源列表紧凑查询栏原本是整行宽度、不换行设计的；这里右栏比系统目录窄，放不下时换行，别把控件压到重叠 */
+/* 我的视图右栏比系统目录窄，一行放不下查询栏：这里（只这里）允许换行，各控件守基准宽度，查询 / 清空靠右 */
 .mv-content :deep(.sov-filter.is-compact) { flex-wrap: wrap; row-gap: 8px; }
 .mv-content :deep(.sov-filter.is-compact label),
-.mv-content :deep(.sov-filter.is-compact .sov-field) { flex: none; }
+.mv-content :deep(.sov-filter.is-compact .sov-field) { flex-shrink: 0; }
 .mv-content :deep(.sov-filter.is-compact .sov-filter-actions) { margin-left: auto; }
 .mv-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .mv-chip { padding: 1px 8px; border-radius: 10px; background: #eef2ff; color: #3730a3; font-size: 12px; }
