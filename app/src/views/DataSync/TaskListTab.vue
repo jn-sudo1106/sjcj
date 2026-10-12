@@ -194,7 +194,9 @@ async function remove(row: SyncTask) {
       <el-input v-model="filter.targetTableName" placeholder="目标表名称" class="sync-filter-input" @keyup.enter="search" />
       <el-select v-model="filter.taskStatus" placeholder="全部状态" class="sync-filter-input"><el-option value="" label="全部状态" /><el-option value="0" label="已启用" /><el-option value="1" label="已暂停" /></el-select>
       <el-input v-model="filter.taskIdStr" placeholder="任务 ID，逗号分隔" class="sync-filter-input" @keyup.enter="search" />
-      <el-button type="primary" @click="search">查询</el-button><el-button @click="reset">重置</el-button>
+      <div class="sync-filter-actions">
+        <el-button type="primary" @click="search">查询</el-button><el-button @click="reset">重置</el-button>
+      </div>
     </div>
     <div class="sync-toolbar">
       <el-button type="primary" @click="router.push('/sync/create')">新建同步</el-button>
@@ -259,5 +261,5 @@ async function remove(row: SyncTask) {
 </template>
 
 <style scoped>
-.sync-panel { min-height: 0; }.sync-alert { margin-bottom: 12px; }.sync-filter, .sync-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }.sync-filter-input { width: 160px; }.sync-toolbar { padding-top: 2px; }.sync-refresh { margin-left: auto; }.sync-pagination { justify-content: flex-end; margin-top: 14px; }.sync-detail { padding-right: 10px; }.sync-dialog-grid { display: flex; flex-wrap: wrap; gap: 12px; }
+.sync-panel { min-height: 0; }.sync-alert { margin-bottom: 12px; }.sync-filter, .sync-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }.sync-filter-input { width: 160px; }.sync-toolbar { padding-top: 2px; }.sync-filter-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }.sync-refresh { margin-left: auto; }.sync-pagination { justify-content: flex-end; margin-top: 14px; }.sync-detail { padding-right: 10px; }.sync-dialog-grid { display: flex; flex-wrap: wrap; gap: 12px; }
 </style>
