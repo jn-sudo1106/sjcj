@@ -2,7 +2,7 @@ import { mockRegistry } from './mock'
 import { ENDPOINT_PATHS, DANGER_ENDPOINTS, LIVE_ENDPOINTS } from './endpoints'
 import { flowRequestPath, type BackendScope } from './flowBackend'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readStoredToken, triggerSessionExpired } from './auth'
-import { PRODUCTION_BACKEND_HOSTS } from '@/constants/backend'
+import { PRODUCTION_BACKEND_HOSTS, CREATE_ALLOWED_BACKEND_HOSTS } from '@/constants/backend'
 
 // 数据适配层：默认 mock。两种切真实后端的方式：
 // ①按端点：endpoints.ts 把某端点标 live:true 后自动切真实，其余仍走 mock —— 功能一个个上线用这个。
@@ -101,12 +101,16 @@ export function isProductionBackend(): boolean {
 }
 
 /**
- * 生产新建通道：代理已指向生产，且显式允许新建。
+ * 真实新建采集通道：代理已指向「可新建后端」（生产 217 或本地开发环境 186），且显式允许新建。
  * 日常联调保持 VITE_API_MODE=mock（已迁移 live 端点走正式接口，未迁移继续 mock），
  * 不要用 VITE_API_MODE=http 一刀切打生产。
+ * 2026-10-12：186 是开发环境（新建/改/删全放行，写保护不拦），加入可新建清单后 siteCreate
+ * 不再回 mock 假 ID（src-xxx），改走真实 site/add → snatchSave → bindSite。
  */
 export function isProductionCreateEnabled(): boolean {
-  return isProductionBackend() && import.meta.env.VITE_SITE_CREATE_TARGET === 'production'
+  const target = currentBackendTarget()
+  return CREATE_ALLOWED_BACKEND_HOSTS.some((host) => target.includes(host))
+    && import.meta.env.VITE_SITE_CREATE_TARGET === 'production'
 }
 
 // 按真实请求目的地（httpEndpoint）判断，与 usesMockAdapter 的 liveCheckKey 口径一致。

@@ -536,4 +536,20 @@ describe('生产写守卫', () => {
     const { isProductionCreateEnabled } = await import('./client')
     expect(isProductionCreateEnabled()).toBe(false)
   })
+
+  it('连本地开发环境 186 并打开新建开关时，isProductionCreateEnabled 为 true（2026-10-12：186 开发环境全放行）', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://124.223.180.186:9999')
+    vi.stubEnv('VITE_SITE_CREATE_TARGET', 'production')
+    const { isProductionCreateEnabled, isProductionBackend } = await import('./client')
+
+    expect(isProductionBackend()).toBe(false) // 186 不是生产：写保护/徽标不应生效
+    expect(isProductionCreateEnabled()).toBe(true) // 但可真实新建采集
+  })
+
+  it('连本地开发环境 186 但未打开新建开关时，isProductionCreateEnabled 为 false', async () => {
+    vi.stubEnv('VITE_API_PROXY_TARGET', 'http://124.223.180.186:9999')
+    vi.stubEnv('VITE_SITE_CREATE_TARGET', '')
+    const { isProductionCreateEnabled } = await import('./client')
+    expect(isProductionCreateEnabled()).toBe(false)
+  })
 })
