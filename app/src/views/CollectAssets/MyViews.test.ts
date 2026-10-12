@@ -239,20 +239,19 @@ describe('我的视图', () => {
   })
 
   // 2026-10-12 后端接口开发环境联调通过：接口在用时提示「保存在账号」；本机还留着旧视图就提示导入
-  it('暂存本机时左栏说明「暂存本机」，没有导入提示', async () => {
+  it('暂存本机时左栏提醒「暂存本机」，没有导入提示', async () => {
     await mountPage()
     expect(wrapper.find('[data-testid="mv-local-note"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="mv-remote-note"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="mv-import"]').exists()).toBe(false)
   })
 
-  it('接口在用且本机还有旧视图：显示「保存在账号」和导入提示，点导入后调 importLocal 并重读', async () => {
+  it('接口在用且本机还有旧视图：不再提示暂存本机，只显示导入提示，点导入后调 importLocal 并重读', async () => {
     await localSourceViewApi.add('7', { viewName: '之前存本机的', state: emptyManualViewState() })
     setSourceViewBackend('remote')
     const list = vi.spyOn(sourceViewApi, 'list').mockResolvedValue([])
     const importLocal = vi.spyOn(sourceViewApi, 'importLocal').mockResolvedValue({ imported: 1, failed: [] })
     await mountPage()
-    expect(wrapper.find('[data-testid="mv-remote-note"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="mv-local-note"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="mv-import"]').text()).toContain('1 个')
     list.mockClear()
     await wrapper.get('[data-testid="mv-import-btn"]').trigger('click')

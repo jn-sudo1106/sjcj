@@ -360,9 +360,8 @@ onMounted(() => {
           </button>
           <div v-if="!views.length" class="mv-empty">{{ loadError || '还没有视图' }}</div>
         </div>
-        <p class="mv-note">视图只有你自己能看到。新建的视图是空的，点「添加源」挑选，条件栏在这些源里再筛选；在「系统目录」设好条件「另存为视图」存的是条件，之后新增的源符合条件会自动出现。</p>
-        <p v-if="backend === 'local'" class="mv-note mv-local" data-testid="mv-local-note">目前暂存在本机浏览器，换电脑或清缓存会丢失；后端接口上线后会提示导入到账号。</p>
-        <p v-else-if="backend === 'remote'" class="mv-note mv-local" data-testid="mv-remote-note">视图保存在你的账号里，换电脑、换浏览器也在。</p>
+        <!-- 只在需要提醒时才出现：接口没上线、视图暂存本机（会丢）；或本机还留着旧视图可以导入 -->
+        <p v-if="backend === 'local'" class="mv-note mv-local" data-testid="mv-local-note">视图暂存在本机浏览器，换电脑或清缓存会丢失。</p>
         <div v-if="localLeft" class="mv-import" data-testid="mv-import">
           <span>这台电脑上还有 {{ localLeft }} 个之前存在本机的视图</span>
           <el-button size="small" type="primary" plain :loading="importing" data-testid="mv-import-btn" @click="importLocal">导入到账号</el-button>
