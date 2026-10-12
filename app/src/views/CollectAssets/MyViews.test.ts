@@ -114,6 +114,24 @@ describe('我的视图', () => {
     expect(scopeSeen[0]).toEqual(['10', '20', '30'])
   })
 
+  // 2026-10-12 用户反馈：从「我的视图」点源跳到源详情后，源详情的页签全点不了。
+  // 原因：本页被 KeepAlive 缓存，跳走后组件还活着，监听地址栏的 view 参数把源详情的 view=overview 当成视图 ID，
+  // 又把它改写成视图 ID。现在参数叫 viewId，且只在本页的地址上才改。
+  it('跳到源详情后不改写源详情地址上的 view 参数', async () => {
+    const v = await sourceViewApi.add('7', { viewName: 'A', state: { ...emptyManualViewState(), scopeIds: ['10'] } })
+    const { router } = await mountPage()
+    expect(router.currentRoute.value.query.viewId).toBe(v.viewId)
+    await router.push({ path: '/canvas', query: { sourceId: '10', view: 'overview', returnTo: '/collect?tab=views' } })
+    await flushPromises()
+    await settle()
+    expect(router.currentRoute.value.query.view).toBe('overview')
+    expect(router.currentRoute.value.query.viewId).toBeUndefined()
+    // 回到「我的视图」仍然停在原来的视图
+    await router.push({ path: '/collect', query: { tab: 'views', viewId: v.viewId } })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="mv-name"]').text()).toBe('A')
+  })
+
   it('条件视图（系统目录另存为）：没有「添加源」「移出视图」；源数按条件查', async () => {
     await sourceViewApi.add('7', { viewName: '异常源', state: st({ status: 'E' }) })
     await mountPage()

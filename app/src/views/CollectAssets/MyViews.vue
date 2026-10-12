@@ -66,7 +66,7 @@ async function load(preferId?: string) {
     loadError.value = e instanceof Error ? e.message : String(e)
     return
   }
-  const wanted = preferId || String(route.query.view ?? '')
+  const wanted = preferId || String(route.query.viewId ?? '')
   const next = views.value.find((v) => v.viewId === wanted)
     ?? views.value.find((v) => v.viewId === activeId.value)
     ?? views.value.find((v) => v.isDefault)
@@ -92,6 +92,7 @@ async function loadCounts() {
   }))
 }
 
+const onThisPage = () => route.path === '/collect' && route.query.tab === 'views'
 function selectView(viewId: string, force = false) {
   if (!force && viewId === activeId.value) return
   activeId.value = viewId
@@ -99,8 +100,10 @@ function selectView(viewId: string, force = false) {
   appliedState.value = view ? clone(view.state) : null
   rawState.value = view ? clone(view.state) : null
   scopeIds.value = view?.state.scopeIds ? [...view.state.scopeIds] : null
-  if (route.query.view !== (viewId || undefined)) {
-    void router.replace({ path: route.path, query: { ...route.query, view: viewId || undefined } })
+  // 只在「我的视图」页自己的地址上改：本页被 KeepAlive 缓存，跳到源详情（/canvas?view=overview…）后组件还活着，
+  // 不加这个判断会把源详情页的 view 参数改写成视图 ID，源详情的页签就全点不了（2026-10-12 用户反馈）
+  if (onThisPage() && route.query.viewId !== (viewId || undefined)) {
+    void router.replace({ path: route.path, query: { ...route.query, viewId: viewId || undefined } })
   }
 }
 
@@ -301,9 +304,10 @@ function openSourceGroup(sourceGroupId: string) {
 
 watch(userId, () => void load())
 // 从系统目录「另存为视图」跳过来时带着新视图 ID
-watch(() => route.query.view, (id) => {
-  if (id && id !== activeId.value && views.value.some((v) => v.viewId === id)) selectView(String(id))
-  else if (id && !views.value.some((v) => v.viewId === id)) void load(String(id))
+watch(() => route.query.viewId, (id) => {
+  if (!onThisPage() || !id) return
+  if (id !== activeId.value && views.value.some((v) => v.viewId === id)) selectView(String(id))
+  else if (!views.value.some((v) => v.viewId === id)) void load(String(id))
 })
 onMounted(() => {
   void load()

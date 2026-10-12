@@ -410,7 +410,7 @@ async function submitSaveView({ name, isDefault }: { name: string; isDefault: bo
     }
     saveViewOpen.value = false
     ElMessage.success(`已存为视图「${created.viewName}」`)
-    void router.push({ path: '/collect', query: { tab: 'views', view: created.viewId } })
+    void router.push({ path: '/collect', query: { tab: 'views', viewId: created.viewId } })
   } catch (e) {
     saveViewError.value = e instanceof Error ? e.message : String(e)
   } finally {
