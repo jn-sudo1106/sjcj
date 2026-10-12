@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, watch, type Component } from 'vue'
+import { defineComponent, h, ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import SourceTab from './SourceTab.vue'
 import ConfigTab from './ConfigTab.vue'
-import PersonalSources from './PersonalSources.vue'
+import SourceGroupTab from '@/views/Settings/SourceGroupTab.vue'
 import { ElMessage } from 'element-plus'
 import { useSourceGroupsStore, type DirectoryDefault } from '@/stores/sourceGroups'
 defineOptions({ name: 'CollectAssets' })
@@ -26,8 +26,11 @@ const TABS: { key: string; label: string }[] = [
   // 0924-01：原先挂在排序下拉里的「最近打开」提成 tab，与收藏并列。
   { key: 'recent', label: '最近打开' },
 ]
+// 2026-10-12：「我的分组」改为全平台共用、只读（leo：「分组是一个网站共同的配置」），内容就是来源组，
+// 复用系统设置的来源组页（readonly，维护仍在系统设置）。原来存在本机的个人分组（PersonalSources）不再显示。
+const SharedGroups = defineComponent({ name: 'SharedSourceGroups', setup: () => () => h(SourceGroupTab, { readonly: true }) })
 // 收藏 / 最近打开都复用 SourceTab，由 scope 锁定过滤（见下方 :scope）
-const comps: Record<string, Component> = { source: SourceTab, personal: PersonalSources, config: ConfigTab, favorite: SourceTab, recent: SourceTab }
+const comps: Record<string, Component> = { source: SourceTab, personal: SharedGroups, config: ConfigTab, favorite: SourceTab, recent: SourceTab }
 const SCOPES: Record<string, 'all' | 'favorite' | 'recent'> = { source: 'all', favorite: 'favorite', recent: 'recent' }
 const route = useRoute()
 const router = useRouter()

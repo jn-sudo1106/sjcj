@@ -27,10 +27,12 @@ import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
 import GroupSourcePicker from '@/views/CollectAssets/GroupSourcePicker.vue'
 
 const auth = useAuthStore()
+// 2026-10-12：源管理「我的分组」改为只读展示来源组（全平台共用），复用本页，readonly 时隐藏一切修改入口
+const props = defineProps<{ readonly?: boolean }>()
 const ui = useUiStore()
 const route = useRoute()
 const router = useRouter()
-const canWrite = computed(() => auth.role === 'admin')
+const canWrite = computed(() => !props.readonly && auth.role === 'admin')
 
 // ---- 左侧组列表 ----
 const groups = ref<SourceGroup[]>([])
@@ -426,7 +428,7 @@ watch(() => route.query.group, (id) => {
 <template>
   <div class="sg-tab">
     <el-alert
-      v-if="!canWrite"
+      v-if="!canWrite && !readonly"
       title="当前账号仅可查看，修改需要管理员权限"
       type="info"
       :closable="false"
@@ -436,7 +438,7 @@ watch(() => route.query.group, (id) => {
       <aside class="sg-nav">
         <div class="sg-heading">
           <strong>来源组</strong>
-          <el-button size="small" type="primary" :disabled="!canWrite" data-testid="sg-new" @click="creating = true">新建</el-button>
+          <el-button v-if="!readonly" size="small" type="primary" :disabled="!canWrite" data-testid="sg-new" @click="creating = true">新建</el-button>
         </div>
         <div class="sg-list">
           <button
@@ -452,7 +454,8 @@ watch(() => route.query.group, (id) => {
           </button>
           <div v-if="!groups.length" class="sg-empty">{{ loading ? '加载中…' : '暂无来源组' }}</div>
         </div>
-        <p class="sg-note">来源组决定组内源跑哪条流程，修改影响全部成员；只有管理员能修改。</p>
+        <p v-if="readonly" class="sg-note" data-testid="sg-readonly-note">全平台共用的分组，这里只能查看；由管理员在「系统设置 → 来源组」维护。</p>
+        <p v-else class="sg-note">来源组决定组内源跑哪条流程，修改影响全部成员；只有管理员能修改。</p>
       </aside>
       <section class="sg-content">
         <template v-if="selectedGroup">
@@ -467,6 +470,7 @@ watch(() => route.query.group, (id) => {
             </span>
             <div class="sg-actions">
               <el-button
+                v-if="!readonly"
                 size="small"
                 :disabled="!canWrite || selectedGroup.state !== 'ACTIVE'"
                 :title="selectedGroup.state !== 'ACTIVE' ? '组已停用，不能加入新成员' : ''"
@@ -487,7 +491,7 @@ watch(() => route.query.group, (id) => {
             @open-source-data="openSource($event, 'data')"
             @open-site="router.push({ path: '/canvas', query: { siteId: $event, view: 'source', returnTo: route.fullPath } })"
           >
-            <template #selection-actions="{ ids }">
+            <template v-if="!readonly" #selection-actions="{ ids }">
               <el-button size="small" data-testid="sg-remove-members" :disabled="!canWrite || !ids.length" @click="selectedIds = [...ids]; removeMembers()">移出来源组</el-button>
               <el-select
                 v-model="moveTarget"

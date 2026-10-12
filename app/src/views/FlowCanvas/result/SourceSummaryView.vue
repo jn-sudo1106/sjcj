@@ -2,18 +2,26 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import { Refresh } from '@element-plus/icons-vue'
-import { sourceApi, sourceCheckApi, type TaskInst, type SourceCheck } from '@/api'
+import { sourceApi, sourceCheckApi, sourceGroupApi, type TaskInst, type SourceCheck } from '@/api'
 import { useFlowStore } from '@/stores/flow'
-import { useSourceGroupsStore } from '@/stores/sourceGroups'
 import type { SourceWorkspaceView } from '@/utils/url/workspaceRoute'
 import CanvasHeader from '../shared/CanvasHeader.vue'
 
 const flow = useFlowStore()
-const groups = useSourceGroupsStore()
 const route = useRoute()
 const router = useRouter()
 const source = computed(() => flow.sourceCtx)
-const memberships = computed(() => groups.options.filter(g => g.sourceIds.includes(source.value?.sourceId ?? '')).map(g => g.label))
+// 2026-10-12：「我的分组」改为全平台共用的来源组（只读），这里显示源所在的来源组
+const groupName = ref('')
+watch(() => source.value?.sourceGroupId, async (id) => {
+  groupName.value = ''
+  if (!id) return
+  try {
+    groupName.value = (await sourceGroupApi.list()).find(g => g.sourceGroupId === id)?.sourceGroupName ?? `#${id}`
+  } catch {
+    groupName.value = `#${id}`
+  }
+}, { immediate: true })
 const tasks = ref<TaskInst[]>([])
 const alerts = ref<SourceCheck[]>([])
 const taskTotal = ref<number | null>(null)
@@ -82,7 +90,7 @@ onBeforeUnmount(() => { sequence += 1 })
         <dl>
           <div><dt>源名称</dt><dd>{{ source.name }}</dd></div><div><dt>源 ID</dt><dd>{{ source.sourceId }}</dd></div>
           <div><dt>所属平台</dt><dd>{{ source.siteName || source.siteId || '未关联平台' }}</dd></div>
-          <div><dt>个人分组（本机）</dt><dd>{{ memberships.join('、') || '未加入个人分组' }}<small>个人浏览分组，不代表业务配置或权限继承</small></dd></div>
+          <div><dt>我的分组</dt><dd>{{ source.sourceGroupId ? groupName || '…' : '未加入分组' }}<small>全平台共用的分组（来源组），在系统设置维护</small></dd></div>
           <div><dt>当前流程 ID</dt><dd>{{ source.flowId || '未绑定流程' }}</dd></div><div><dt>负责人</dt><dd>{{ source.owner || '—' }}</dd></div>
           <div class="wide"><dt>采集入口</dt><dd>{{ source.url || '—' }}</dd></div>
           <div><dt>最近任务</dt><dd>{{ source.lastTaskAt || '—' }}</dd></div><div><dt>最近成功</dt><dd>{{ source.lastSuccessAt || '—' }}</dd></div>
