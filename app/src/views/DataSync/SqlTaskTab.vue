@@ -28,14 +28,14 @@ const clients = ref<SyncClient[]>([])
 const customerNames = ref(new Map<string, string>())
 const filter = reactive({ customerId: admin.value ? '' : String(auth.info?.id ?? ''), clientId: '', sourceCode: '', taskId: '', status: '' })
 
+// 状态收敛为两种（10-12 实测后端 sql-execute/table-definition 全量数据只有 status=3「执行完成」，
+// status=0「待执行」为新增后未执行时定义；1 可执行 / 2 执行中 / 5 执行异常当前无数据，不展示）。
+// 兜底：万一后端仍有存量其它状态，标签按「执行完成」处理不显示错字。
 const STATUS_OPTIONS: { value: string; label: string; cls: string }[] = [
   { value: '0', label: '待执行', cls: 's0' },
-  { value: '1', label: '可执行', cls: 's1' },
-  { value: '2', label: '执行中', cls: 's2' },
   { value: '3', label: '执行完成', cls: 's3' },
-  { value: '5', label: '执行异常', cls: 's5' },
 ]
-const statusLabel = (s?: SyncSqlStatus) => STATUS_OPTIONS.find((o) => o.value === String(s))?.label ?? String(s ?? '—')
+const statusLabel = (s?: SyncSqlStatus) => STATUS_OPTIONS.find((o) => o.value === String(s))?.label ?? '执行完成'
 const statusCls = (s?: SyncSqlStatus) => STATUS_OPTIONS.find((o) => o.value === String(s))?.cls ?? 's3'
 
 async function loadClients() {
