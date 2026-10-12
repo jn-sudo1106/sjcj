@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { entryApi, type EntryType, type EntryField } from '@/api'
 import { pinyin } from 'pinyin-pro'
 import { ENTRY_PREPROCESS_PRESETS, ENTRY_CHECK_RULE_PRESETS, entryCheckRuleLabel } from '@/constants/entry'
@@ -81,6 +81,14 @@ function blankField(seq: number): FieldVM {
 function isPersisted(f: FieldVM): boolean {
   return Number(f.itemId ?? 0) > 0
 }
+/** 已落库且有编码或展示名 —— 真正"物理列绑着数据"，不可删 */
+function isLockedField(f: FieldVM): boolean {
+  return isPersisted(f) && !!(f.code.trim() || f.desc.trim())
+}
+/** 已落库但编码/展示名全空 —— 脏数据（缺校验时被存进表定义），允许清理 */
+function isDirtyField(f: FieldVM): boolean {
+  return isPersisted(f) && !f.code.trim() && !f.desc.trim()
+}
 function nextDbColumn(): string {
   const used = form.fields.map((f) => Number((f.dbColumn.match(/^K(\d+)$/) || [])[1] || 0))
   return `K${Math.max(0, ...used) + 1}`
@@ -153,9 +161,29 @@ function onCodeBlur(field: FieldVM) {
 /**
  * 删除字段。**只有新增行可删**（旧 EntryTypeEdit 的删除图标就带 `itemId <= 0` 条件）——
  * 已落库字段的物理列绑着数据，删掉定义会让已入库数据对不上列。
+ * 2026-10：已落库行点击删除时弹提示（此前静默 return，按钮又置灰但点了没反应）。
  */
 function removeField(i: number) {
-  if (isPersisted(form.fields[i])) return
+  const f = form.fields[i]
+  if (isPersisted(f)) {
+    // 例外：空编码且空展示名的已落库行是脏数据（缺校验时被存进表定义的），允许清理，
+    // 但二次确认——后端 modifyEntryType 对 items 变少是否会 DROP 物理列未经契约确认。
+    if (!f.code.trim() && !f.desc.trim()) {
+      ElMessageBox.confirm(
+        `该字段（${f.dbColumn}）编码和展示名均为空，是脏数据，将从表定义中移除。\n确认删除？`,
+        '删除脏字段',
+        { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
+      )
+        .then(() => {
+          form.fields.splice(i, 1)
+          compactNewColumnNames()
+        })
+        .catch(() => { /* 用户取消，不动 */ })
+      return
+    }
+    ElMessage.warning('该字段已落库，物理列绑着数据，不能删除')
+    return
+  }
   form.fields.splice(i, 1)
   compactNewColumnNames()
 }
@@ -181,6 +209,9 @@ function compactNewColumnNames() {
 function validate(): string {
   if (!form.tableName.trim()) return '物理表名必填'
   if (!form.fields.length) return '至少添加一个字段'
+  // 编码 / 展示名逐字段非空（对齐旧 EntryTypeEdit 的 requireRule）；2026-10 补
+  const emptyField = form.fields.find((f) => !f.code.trim() || !f.desc.trim())
+  if (emptyField) return '出错，属性不能为空'
   const codes = form.fields.map((f) => f.code.trim()).filter(Boolean)
   if (new Set(codes).size !== codes.length) return '字段编码不可重复'
   return ''
@@ -395,13 +426,17 @@ function submitImport() {
               <td><input v-model.number="f.width" type="number" class="ted-cell" /></td>
               <td class="center">
                 <!-- 已落库字段不可删（§3.1）。**用禁用态的 ✕ 而不是空白或「—」**：
-                     整列「—」看起来像功能坏了（2026-08-28 实测反馈），禁用按钮 + 悬浮说明才讲得清为什么不能删。 -->
+                     整列「—」看起来像功能坏了（2026-08-28 实测反馈），禁用按钮 + 悬浮说明才讲得清为什么不能删。
+                     2026-10 起改 aria-disabled + 点击弹提示（纯 disabled 不触发点击，点了毫无反应）。 -->
                 <button
                   class="ted-del"
                   type="button"
-                  :disabled="isPersisted(f)"
-                  :title="isPersisted(f) ? '该字段已落库，物理列绑着数据，不能删除；如需停用请改用其他方式' : '删除'"
-                  :data-testid="isPersisted(f) ? 'ted-del-locked' : 'ted-del'"
+                  :class="{ 'is-locked': isLockedField(f) }"
+                  :aria-disabled="isLockedField(f)"
+                  :title="isLockedField(f)
+                    ? '该字段已落库，物理列绑着数据，不能删除；如需停用请改用其他方式'
+                    : (isDirtyField(f) ? '该字段编码和展示名为空，是脏数据，可删除' : '删除')"
+                  :data-testid="isLockedField(f) ? 'ted-del-locked' : (isDirtyField(f) ? 'ted-del-dirty' : 'ted-del')"
                   @click="removeField(i)"
                 >✕</button>
               </td>
@@ -468,8 +503,8 @@ function submitImport() {
 .ted-cell[disabled] { background: #f8fafc; color: var(--rc-faint); }
 .ted-check { width: 16px; height: 16px; margin: 0; vertical-align: middle; accent-color: var(--rc-primary); }
 .ted-del { width: 24px; height: 24px; border: 0; background: transparent; color: var(--rc-faint); cursor: pointer; border-radius: 5px; font-size: 13px; }
-.ted-del:hover:not(:disabled) { background: #fef2f2; color: #ef4444; }
-.ted-del:disabled { color: var(--rc-border); cursor: not-allowed; }
+.ted-del:hover:not(.is-locked) { background: #fef2f2; color: #ef4444; }
+.ted-del.is-locked { color: var(--rc-border); cursor: not-allowed; }
 .ted-addrow { width: 100%; height: 36px; border: 0; border-top: 1px solid var(--rc-border-soft); background: #fbfdff; color: var(--rc-primary); font-size: 12px; cursor: pointer; }
 .ted-addrow:hover { background: var(--rc-primary-bg); }
 

@@ -6,23 +6,29 @@
 import { computed, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { canAccess } from '@/composables/usePermission'
+import { runnerManagementAvailable } from '@/constants/deployGates'
 import NodeTypeTab from './NodeTypeTab.vue'
 import CategoryTab from './CategoryTab.vue'
+import SourceGroupTab from './SourceGroupTab.vue'
 import RunnerManagementTab from './RunnerManagementTab.vue'
 import RunnerBindingTab from './RunnerBindingTab.vue'
 import CodeRepositoryTab from './CodeRepositoryTab.vue'
 import DirectoryLayoutTab from './DirectoryLayoutTab.vue'
 
-const ALL_TABS: { key: string; label: string; permission: string; comp: Component }[] = [
+// 来源组（1008-03）：从采集资产页签条移到系统设置（平台配置性质：决定组内源跑哪条流程）。
+// runner：依赖 Runner 管理服务的 tab，部署环境（2806 / 2807）网关还没有转发这个服务，先隐藏（见 runnerManagementAvailable；10-10 用户确认隐藏）。
+// 2026-10-12：这两处在内网合并 a27a2c4 时丢了（Settings/index.vue 取了内网版本），按原口径补回，页签名称沿用内网新版。
+const ALL_TABS: { key: string; label: string; permission: string; comp: Component; runner?: true }[] = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', comp: NodeTypeTab },
   { key: 'category', label: '分类目录', permission: 'settings:category', comp: CategoryTab },
-  { key: 'runners', label: '运行机器', permission: 'settings:runners', comp: RunnerManagementTab },
-  { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', comp: CodeRepositoryTab },
-  { key: 'directory-layout', label: '部署目录', permission: 'settings:releases', comp: DirectoryLayoutTab },
-  { key: 'assignments', label: '机器配置', permission: 'settings:assignments', comp: RunnerBindingTab },
-  { key: 'releases', label: 'Runner 版本', permission: 'settings:releases', comp: RunnerManagementTab },
+  { key: 'source-group', label: '来源组', permission: 'settings:sourceGroup', comp: SourceGroupTab },
+  { key: 'runners', label: '运行机器', permission: 'settings:runners', comp: RunnerManagementTab, runner: true },
+  { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', comp: CodeRepositoryTab, runner: true },
+  { key: 'directory-layout', label: '部署目录', permission: 'settings:releases', comp: DirectoryLayoutTab, runner: true },
+  { key: 'assignments', label: '机器配置', permission: 'settings:assignments', comp: RunnerBindingTab, runner: true },
+  { key: 'releases', label: 'Runner 版本', permission: 'settings:releases', comp: RunnerManagementTab, runner: true },
 ]
-const tabs = computed(() => ALL_TABS.filter((t) => canAccess(t.permission)))
+const tabs = computed(() => ALL_TABS.filter((t) => canAccess(t.permission) && (!t.runner || runnerManagementAvailable())))
 
 const route = useRoute()
 const router = useRouter()
