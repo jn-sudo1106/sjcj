@@ -11,6 +11,7 @@ import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import { useUiStore } from '@/stores/ui'
 import { canvasFlowIdOf, useFlowVersionStore } from '@/stores/flowVersion'
+import { cronSaveErrorHint, unpublishedFlowCronHint } from '@/utils/flow/cronSaveHint'
 import { isDataValidationNode, isMonitorNode, isRuleNode, nodeTypeLabel, NODE_CONFIGS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { isFileLikeNode, outputTableMissing } from '@/utils/flow/stepPersist'
 import { inputTableMismatch } from '@/utils/flow/tableSync'
@@ -238,6 +239,13 @@ async function syncSourceCron(node: NodeConfig) {
   const next = nodeScheduleCron(node, flow.sourceCfg)
   const current = flow.sourceJob?.schedule ?? ''
   if (!next || next === current) return
+  // 新建定时前先看流程有没有发布版本：后端只给已发布的流程建定时（新建出来的流程只有草稿 v1）。
+  // 已有定时（有 jobId）走 updateJob 原地改，不受影响。
+  const canvasFlow = canvasFlowIdOf(flow)
+  if (!flow.sourceJob?.jobId && canvasFlow && flowVersion.flowId === canvasFlow && flowVersion.enabled && !flowVersion.overview?.publishId) {
+    ElMessage({ type: 'warning', message: unpublishedFlowCronHint(canvasFlow, flowVersion.draft?.flowVer), duration: 8000, showClose: true })
+    return
+  }
   try {
     // 已有定时就原地改那一条（传 jobId 走 updateJob），不然 createJobs 会再建一条，
     // 两条定时同时启用、源被抓两遍。新建的默认启用——用户特地配了定时，就是要它跑。
@@ -249,7 +257,7 @@ async function syncSourceCron(node: NodeConfig) {
       configId: configId.value || flow.sourceCfg?.configId || '',
     })
     if (!ack.ok) {
-      ElMessage.warning(`定时保存失败：${ack.message || '未知原因'}`)
+      ElMessage.warning(cronSaveErrorHint(ack.message || '') ?? `定时保存失败：${ack.message || '未知原因'}`)
       return
     }
     /**
@@ -278,7 +286,8 @@ async function syncSourceCron(node: NodeConfig) {
     })
     ElMessage.success(`定时已保存：${next}`)
   } catch (e) {
-    ElMessage.error(`定时保存失败：${(e as Error)?.message ?? String(e)}`)
+    const message = (e as Error)?.message ?? String(e)
+    ElMessage({ type: 'error', message: cronSaveErrorHint(message) ?? `定时保存失败：${message}`, duration: 8000, showClose: true })
   }
 }
 
