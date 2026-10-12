@@ -1311,6 +1311,7 @@ export const siteApi = {
     }
 
     let firstSourceId: string | undefined
+    const savedSourceIds: string[] = []
     for (const source of sources) {
       let saved: LegacySnatchSaveResult
       try {
@@ -1330,6 +1331,7 @@ export const siteApi = {
         return { ok: false, siteId, message: `源「${source.name}」已提交，但未能解析 sourceId，未继续关联网站` }
       }
       firstSourceId ||= sourceId
+      savedSourceIds.push(sourceId)
       let bound: Ack
       try {
         bound = await sourceApi.bindSite(sourceId, siteId, liveWrite)
@@ -1351,6 +1353,7 @@ export const siteApi = {
       message: sources.length ? '网站、源已按顺序保存并完成关联' : '网站已创建',
       siteId,
       sourceId: firstSourceId,
+      sourceIds: savedSourceIds,
     }
   },
   /** 编辑网站基本信息。契约按旧前端 src/api/site.js:95：POST /v1/site/update，body 为 cfg_site 实体。

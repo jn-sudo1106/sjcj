@@ -21,6 +21,8 @@ const visible = computed(() => version.enabled && !!canvasFlowId.value && versio
 const tip = computed(() => {
   const cur = version.overview?.curVer ?? '—'
   const d = version.draft
+  // 新建的流程只有草稿 v1、还没有发布版（2026-10-12 实测）
+  if (d && version.overview?.curVer == null) return `草稿 v${d.flowVer}：这条流程还没有发布版本，发布后才会被任务使用。`
   if (!d) return `当前运行版本 v${cur}。直接修改即可，第一次保存时自动生成草稿 v${version.overview?.nextVer ?? '—'}，发布后新任务才会使用。`
   if (d.isLock === 1) return `草稿 v${d.flowVer} 已锁定，节点只能查看；请到旧平台解锁后再修改。当前运行的仍是 v${cur}。`
   return `修改只保存在草稿 v${d.flowVer} 里，当前运行的仍是 v${cur}；发布后新任务使用 v${d.flowVer}，已启动的任务继续用原版本。`

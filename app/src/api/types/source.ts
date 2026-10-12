@@ -385,6 +385,8 @@ export interface SiteCreateInput {
 export interface SiteCreateResult extends Ack {
   siteId?: string
   sourceId?: string
+  /** 本次保存成功的全部源 ID（按提交顺序），新建采集据此给整批源绑同一条流程 */
+  sourceIds?: string[]
 }
 
 /** 网站列表的真实统计摘要（data-view `/v1/site/summary`）。 */
