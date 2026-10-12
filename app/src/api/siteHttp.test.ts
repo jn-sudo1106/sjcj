@@ -137,7 +137,7 @@ describe('网站读取 HTTP 契约', () => {
     })
     expect(bindUrl).toContain('/api/v1/source/bindSite?sourceId=9001&siteId=11825')
     expect(bindInit.method).toBe('GET')
-    expect(result).toEqual({ ok: true, demo: false, message: '网站、源已按顺序保存并完成关联', siteId: '11825', sourceId: '9001' })
+    expect(result).toEqual({ ok: true, demo: false, message: '网站、源已按顺序保存并完成关联', siteId: '11825', sourceId: '9001', sourceIds: ['9001'] })
   })
 
   it('全局 mock 且未开生产新建时，siteCreate 走夹具不发 fetch', async () => {
