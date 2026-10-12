@@ -10,11 +10,16 @@ const props = withDefaults(defineProps<{
   /** 1008-03 来源组「添加源」：true 时保存走 `source-group/changeMembers` 加入后端来源组，
    *  而不是本机分组 store。选中的源分属不同组时分批提交（changeMembers 一次只接受一个 expected）。 */
   backendMode?: boolean
-}>(), { backendMode: false })
+  /** 「我的视图」添加源（2026-10-12）：不写任何东西，只把选中的源 ID 通过 pick 事件交给父级 */
+  pickMode?: boolean
+  title?: string
+  confirmText?: string
+}>(), { backendMode: false, pickMode: false })
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   /** backendMode 保存成功后通知父级重拉（revision 会变） */
   saved: []
+  pick: [ids: string[]]
 }>()
 const groups = useSourceGroupsStore()
 const field = ref<'name' | 'sourceIds'>('name')
@@ -55,6 +60,11 @@ function selectedRows(): Source[] {
   return rows.value.filter((r) => selected.value.includes(r.sourceId))
 }
 async function save() {
+  if (props.pickMode) {
+    emit('pick', [...selected.value])
+    emit('update:modelValue', false)
+    return
+  }
   if (!props.backendMode) {
     try {
       groups.assign(selected.value, [props.groupId])
@@ -86,7 +96,7 @@ async function save() {
 }
 </script>
 <template>
-  <el-dialog :model-value="modelValue" title="选择源加入分组" width="980px" style="max-width: calc(100vw - 32px)" append-to-body @update:model-value="emit('update:modelValue', $event)">
+  <el-dialog :model-value="modelValue" :title="title || '选择源加入分组'" width="980px" style="max-width: calc(100vw - 32px)" append-to-body @update:model-value="emit('update:modelValue', $event)">
     <div class="picker-filter">
       <el-select v-model="field" style="width: 110px" aria-label="查询字段"><el-option label="源名称" value="name" /><el-option label="源 ID" value="sourceIds" /></el-select>
       <el-input v-model="keyword" :placeholder="field === 'sourceIds' ? '多个源 ID 用逗号分隔' : '输入源名称'" clearable @keyup.enter="search" />
@@ -101,7 +111,7 @@ async function save() {
       <el-table-column prop="url" label="URL" min-width="200" show-overflow-tooltip />
     </el-table>
     <el-pagination v-model:current-page="page" v-model:page-size="size" :total="total" :page-sizes="[20, 40, 100]" layout="total, sizes, prev, pager, next" small @current-change="load" @size-change="search" />
-    <template #footer><div class="picker-footer"><span>已选 {{ selected.length }} 个源（跨页保留）</span><el-button :icon="Refresh" circle size="small" aria-label="刷新源列表" title="刷新源列表" @click="load" /><el-button @click="emit('update:modelValue', false)">取消</el-button><el-button type="primary" :disabled="!selected.length" @click="save">加入分组</el-button></div></template>
+    <template #footer><div class="picker-footer"><span>已选 {{ selected.length }} 个源（跨页保留）</span><el-button :icon="Refresh" circle size="small" aria-label="刷新源列表" title="刷新源列表" @click="load" /><el-button @click="emit('update:modelValue', false)">取消</el-button><el-button type="primary" :disabled="!selected.length" @click="save">{{ confirmText || '加入分组' }}</el-button></div></template>
   </el-dialog>
 </template>
 <style scoped>
