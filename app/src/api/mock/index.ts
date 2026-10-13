@@ -66,6 +66,7 @@ import {
   mockCommJobRun,
 } from './commJob'
 import { mockTaskListPaged } from './taskList'
+import { mockTaskStat } from './taskStat'
 import {
   mockPocDatabaseEntryList,
   mockSqlTemplatePaged,
@@ -132,6 +133,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'source/deleteSource': mockAck,
   // 采集资产 · 源（M5 补充）
   'task/taskListPaged': mockTaskListPaged,
+  'task/stat': mockTaskStat,
   'source/logPaged': mockSourceLogs,
   'task/topTaskPaged': mockSourceTasks,
   'source/sourceTaskPaged': mockSourceTaskPaged,

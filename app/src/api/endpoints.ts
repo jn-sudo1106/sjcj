@@ -314,8 +314,12 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 「逻辑名 + 真实 path」的别名（同 source/sourceTaskPaged 的写法）。
   { path: 'task/taskListPaged', desc: '任务实例分页（任务实例页） → GET /v1/task/topTaskPaged', impl: true },
 
-  /* ── task 任务实例（目标 2 / 收录 2） ── */
+  /* ── task 任务实例（目标 2 / 收录 4：topTaskPaged + taskListPaged 别名 + stat + resetTaskInsts） ── */
   { path: 'task/topTaskPaged', desc: '任务实例分页（运行记录事实源）', impl: true, live: true },
+  // 1013：任务统计页（旧 page/inst/TaskStat.vue）的统计端点。旧 api/task.js 的 taskStat → GET /v1/task/stat
+  // （?date=|startTime=&endTime=&group=source|config|both&sourceId=&configId=&state=），
+  // 响应是**行数组**（不是分页信封）：{sourceId, configId, cnt, state?}；带 state 的行说明后端支持多状态聚合。
+  { path: 'task/stat', desc: '任务统计（按来源/配置分组聚合）', impl: true, live: true },
   // 2026-08-13 测试环境实测放行：E / L 都能重跑、都变 W1、响应无逐条结果、无效 ID 静默忽略、幂等。
   // live-only（同 source/delete 等）：无专属 mock handler，靠真实后端。
   { path: 'task/resetTaskInsts', desc: '重置任务实例', danger: true, live: true },
