@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { defineComponent, h, ref, watch, type Component } from 'vue'
+import { ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import SourceTab from './SourceTab.vue'
 import ConfigTab from './ConfigTab.vue'
@@ -15,7 +15,7 @@ const directories = useSourceGroupsStore()
 //
 // 「表 ID 列表」2026-09-19 迁到数据中心（/data?tab=entry）——表结构属于"数据"那条线，
 // 这里管的是网站与源。**tab 条先保留**（虽然只剩一项）。
-// 1008-03「来源组」2026-10-13 移到系统设置（Settings）——平台配置性质，不属于日常浏览入口。
+// 1008-03「来源组」2026-10-13 曾移到系统设置，同日迁回：就是下面的「我的分组」。
 const TABS: { key: string; label: string }[] = [
   { key: 'source', label: '系统目录' },
   { key: 'personal', label: '我的分组' },
@@ -29,11 +29,11 @@ const TABS: { key: string; label: string }[] = [
   // 0924-01：原先挂在排序下拉里的「最近打开」提成 tab，与收藏并列。
   { key: 'recent', label: '最近打开' },
 ]
-// 2026-10-12：「我的分组」改为全平台共用、只读（leo：「分组是一个网站共同的配置」），内容就是来源组，
-// 复用系统设置的来源组页（readonly，维护仍在系统设置）。原来存在本机的个人分组（PersonalSources）不再显示。
-const SharedGroups = defineComponent({ name: 'SharedSourceGroups', setup: () => () => h(SourceGroupTab, { readonly: true }) })
+// 2026-10-12：「我的分组」改为全平台共用（leo：「分组是一个网站共同的配置」），内容就是来源组。
+// 10-13 leo：「管理员也是在源管理里面改」——来源组的新建 / 成员 / 流程配置都在这里，不再放系统设置（只有管理员能改，权限后面再管）。
+// 原来存在本机的个人分组（PersonalSources）不再显示。
 // 收藏 / 最近打开都复用 SourceTab，由 scope 锁定过滤（见下方 :scope）
-const comps: Record<string, Component> = { source: SourceTab, personal: SharedGroups, views: MyViews, config: ConfigTab, favorite: SourceTab, recent: SourceTab }
+const comps: Record<string, Component> = { source: SourceTab, personal: SourceGroupTab, views: MyViews, config: ConfigTab, favorite: SourceTab, recent: SourceTab }
 const SCOPES: Record<string, 'all' | 'favorite' | 'recent'> = { source: 'all', favorite: 'favorite', recent: 'recent' }
 const route = useRoute()
 const router = useRouter()

@@ -195,9 +195,25 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 还没实测核对过（旧平台契约来自 src/demoApi/EntityApi.js:323-345）。联调验证后逐条补 live。
   // 旧平台没有 poc/question-temp/copy —— 表模板不提供复制，见 api/templateConfig.ts 的 tableTemplateApi。
   { path: 'poc/question-temp/page', desc: '表模板分页 → POST /api/poc/question-temp/page（body: pageNo/pageSize/name）', impl: true, live: true },
-  { path: 'poc/question-temp', desc: '表模板新增/编辑 → POST /api/poc/question-temp（body 带 id 即更新；tableArr/sqlTempConfigIds 是 JSON 字符串）', danger: true, impl: true },
-  { path: 'poc/question-temp/status', desc: '表模板启停 → POST /api/poc/question-temp/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true },
-  { path: 'poc/database/entry-list', desc: '数据表选项（表模板「使用表范围」下拉）→ GET /api/poc/database/entry-list?name=', impl: true },
+  { path: 'poc/question-temp', desc: '表模板新增/编辑 → POST /api/poc/question-temp（body 带 id 即更新；tableArr/sqlTempConfigIds 是 JSON 字符串）', danger: true, impl: true, live: true },
+  { path: 'poc/question-temp/status', desc: '表模板启停 → POST /api/poc/question-temp/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
+  { path: 'poc/database/entry-list', desc: '数据表选项（表模板「使用表范围」下拉）→ GET /api/poc/database/entry-list?name=', impl: true, live: true },
+
+  // 自动补全配置（1013 迁入，已联调 186 POC 服务）。
+  // 与其他模块不同：新增与修改是两个端点（/poc/dic 与 /poc/dic/update），且没有 status/copy。
+  { path: 'poc/dic/page', desc: '自动补全分页 → POST /api/poc/dic/page（body: pageNo/pageSize/name，name 模糊匹配「内容」）', impl: true, live: true },
+  { path: 'poc/dic', desc: '自动补全新增 → POST /api/poc/dic（body: content/keyWords/type=1，不带 id）', danger: true, impl: true, live: true },
+  { path: 'poc/dic/update', desc: '自动补全修改 → POST /api/poc/dic/update（body 带 id）', danger: true, impl: true, live: true },
+
+  // 问句改写配置（1013 迁入）。⚠️ 未标 live：真实响应还没实测核对过
+  // （旧平台契约来自 src/demoApi/EntityApi.js:176-206、408-415；直连 186 探测返回 302，需要登录态）。
+  // 联调验证后逐条补 live。与 dic 域同款：新增/修改是两个端点；另有 status（query）
+  // 与 deleteQuestionDic（旧平台唯一的删除端点，body 发整行）。
+  { path: 'poc/question-dic/page', desc: '问句改写分页 → POST /api/poc/question-dic/page（body: pageNo/pageSize/name/stepCode/type/status）', impl: true, live: true },
+  { path: 'poc/question-dic', desc: '问句改写新增 → POST /api/poc/question-dic（body: stepCode/type/receiveRule/content/targetContent/tag，不带 id）', danger: true, impl: true, live: true },
+  { path: 'poc/question-dic/update', desc: '问句改写修改 → POST /api/poc/question-dic/update（body 带 id）', danger: true, impl: true, live: true },
+  { path: 'poc/question-dic/status', desc: '问句改写启停 → POST /api/poc/question-dic/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
+  { path: 'poc/question-dic/deleteQuestionDic', desc: '问句改写删除 → POST /api/poc/question-dic/deleteQuestionDic（旧页面发整行，后端按 id 删）', danger: true, impl: true, live: true },
 
   /* ── entry 实体数据（收录 12，见「单表数据查看迁移」方案 §1.1 的 16 个旧端点核对） ── */
   { path: 'entry/entryDataPaged', desc: '实体数据分页', live: true },
@@ -314,7 +330,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 「逻辑名 + 真实 path」的别名（同 source/sourceTaskPaged 的写法）。
   { path: 'task/taskListPaged', desc: '任务实例分页（任务实例页） → GET /v1/task/topTaskPaged', impl: true },
 
-  /* ── task 任务实例（目标 2 / 收录 4：topTaskPaged + taskListPaged 别名 + stat + resetTaskInsts） ── */
+   /* ── task 任务实例（目标 2 / 收录 5：topTaskPaged + taskListPaged 别名 + stat + resetTaskInsts） ── */
   { path: 'task/topTaskPaged', desc: '任务实例分页（运行记录事实源）', impl: true, live: true },
   // 1013：任务统计页（旧 page/inst/TaskStat.vue）的统计端点。旧 api/task.js 的 taskStat → GET /v1/task/stat
   // （?date=|startTime=&endTime=&group=source|config|both&sourceId=&configId=&state=），
@@ -324,16 +340,27 @@ export const ENDPOINTS: EndpointSpec[] = [
   // live-only（同 source/delete 等）：无专属 mock handler，靠真实后端。
   { path: 'task/resetTaskInsts', desc: '重置任务实例', danger: true, live: true },
 
-  /* ── dataset 指标数据集（目标 9 / 收录 9） ── */
-  { path: 'dataset/datasetPaged', desc: '数据集分页', impl: true },
+  /* ── dataset 指标数据集（目标 9 / 收录 10） ── */
+  // 1013 迁移「指标数据集」页（旧 page/config/DatasetList.vue）时核对的路径问题：
+  // 真实路径是 /v1/dataset/dataSetPaged（**大写 S**，旧前端 src/api/dataset.js:6 就是这么写的），
+  // 而下面第一条 dataset/datasetPaged 是本清单早期从逆向文档抄下来的**全小写逻辑名**——它能查表、
+  // 能命中 mock，但拿去当 URL 打后端会 404。所以真实分页走 dataset/dataSetPaged 这条（live 标在它上面，
+  // usesMockAdapter 按真实 httpEndpoint 查表），逻辑名那条只留给 api/index.ts 的 M4 演示服务。
+  // ⚠ 这一页的 7 个写端点（updateDataSet / copy / delete / changeEnable / genFromSource / runNow）
+  // 在旧平台本来就是全部直连后端：只放行分页、把写操作留在 mock，会让页面上的按钮看着能用、
+  // 其实后端一条都没收到。已按 mq/check、comm-job 的同款口径标 live，并在 client.ts 的
+  // PRODUCTION_CREATE_ENDPOINTS 里放行（生产写保护仍会再拦一次）。
+  // 未收录 dataset/add：旧页没有任何入口调它（「增加数据集」走的是 genFromSource），保持 danger 记录。
+  { path: 'dataset/datasetPaged', desc: '数据集分页（逻辑名，仅 mock；真实路径见 dataset/dataSetPaged）', impl: true },
+  { path: 'dataset/dataSetPaged', desc: '数据集分页 → GET /v1/dataset/dataSetPaged（真实路径）', impl: true, live: true },
   { path: 'dataset/add', desc: '新增数据集', danger: true },
-  { path: 'dataset/updateDataSet', desc: '修改数据集', danger: true },
-  { path: 'dataset/copy', desc: '复制数据集', danger: true },
-  { path: 'dataset/delete', desc: '删除数据集', danger: true },
-  { path: 'dataset/changeEnable', desc: '启停数据集', danger: true },
-  { path: 'dataset/genFromSource', desc: '由源生成数据集', danger: true },
+  { path: 'dataset/updateDataSet', desc: '修改数据集 → POST body（提交体需剔除 createDt/updateDt/lastRun/nextRun）', danger: true, impl: true, live: true },
+  { path: 'dataset/copy', desc: '复制数据集 → GET ?id=&name=&sourceId=', danger: true, impl: true, live: true },
+  { path: 'dataset/delete', desc: '删除数据集 → POST ?ids=a,b（参数在 query，不是 body）', danger: true, impl: true, live: true },
+  { path: 'dataset/changeEnable', desc: '启停数据集 → GET ?ids=a,b&enable=（同 isDelete：0=在用 / 1=停用）', danger: true, impl: true, live: true },
+  { path: 'dataset/genFromSource', desc: '由源快速生成数据集 → GET ?sourceId=&entryTypeId=', danger: true, impl: true, live: true },
   { path: 'dataset/run', desc: '运行数据集', danger: true },
-  { path: 'dataset/runNow', desc: '立即运行数据集', danger: true },
+  { path: 'dataset/runNow', desc: '立即执行指标 → GET ?ids=a,b&last= 开始 ID', danger: true, impl: true, live: true },
 
   /* ── measure 指标定义（目标 8 / 收录 8） ── */
   { path: 'measure/measurePaged', desc: '指标分页', impl: true },

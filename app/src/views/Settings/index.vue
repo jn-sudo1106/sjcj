@@ -9,7 +9,6 @@ import { canAccess } from '@/composables/usePermission'
 import { runnerManagementAvailable } from '@/constants/deployGates'
 import NodeTypeTab from './NodeTypeTab.vue'
 import CategoryTab from './CategoryTab.vue'
-import SourceGroupTab from './SourceGroupTab.vue'
 import RunnerManagementTab from './RunnerManagementTab.vue'
 import RunnerBindingTab from './RunnerBindingTab.vue'
 import CodeRepositoryTab from './CodeRepositoryTab.vue'
@@ -17,9 +16,8 @@ import DirectoryLayoutTab from './DirectoryLayoutTab.vue'
 import RuntimeLogsTab from './RuntimeLogsTab.vue'
 import ProcessorProcessesTab from './ProcessorProcessesTab.vue'
 
-// 来源组（1008-03）：从采集资产页签条移到系统设置（平台配置性质：决定组内源跑哪条流程）。
+// 来源组（1008-03）：10-13 曾放这里，同日迁回源管理「我的分组」（leo：管理员也在源管理里改）；旧链接 ?tab=source-group 跳过去。
 // runner：依赖 Runner 管理服务的 tab，部署环境（2806 / 2807）网关还没有转发这个服务，先隐藏（见 runnerManagementAvailable；10-10 用户确认隐藏）。
-// 2026-10-12：这两处在内网合并 a27a2c4 时丢了（Settings/index.vue 取了内网版本），按原口径补回，页签名称沿用内网新版。
 const ALL_TABS: { key: string; label: string; permission: string; comp: Component; runner?: true }[] = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', comp: NodeTypeTab },
   { key: 'category', label: '分类目录', permission: 'settings:category', comp: CategoryTab },
@@ -30,7 +28,6 @@ const ALL_TABS: { key: string; label: string; permission: string; comp: Componen
   { key: 'assignments', label: '机器配置', permission: 'settings:assignments', comp: RunnerBindingTab, runner: true },
   { key: 'runtime-logs', label: '运行日志', permission: 'settings:assignments', comp: RuntimeLogsTab, runner: true },
   { key: 'releases', label: 'Runner 版本', permission: 'settings:releases', comp: RunnerManagementTab, runner: true },
-  { key: 'source-group', label: '来源组', permission: 'settings:sourceGroup', comp: SourceGroupTab },
 ]
 const tabs = computed(() => ALL_TABS.filter((t) => canAccess(t.permission) && (!t.runner || runnerManagementAvailable())))
 
@@ -43,6 +40,12 @@ const active = computed(() => {
 
 // 非法 / 无权限的 tab 值：把地址归一到实际显示的那个，免得书签里留着一个打不开的 tab
 watch(() => route.query.tab, (tab) => {
+  // 已经离开本页（跳去源管理、或页面被缓存）时不再归一，否则会把别的页面的 tab 改回 /settings
+  if (route.path !== '/settings') return
+  if (tab === 'source-group') {
+    void router.replace({ path: '/collect', query: { tab: 'personal', ...(route.query.group ? { group: route.query.group } : {}) } })
+    return
+  }
   if (tab != null && active.value && tab !== active.value.key && tab !== '') {
     void router.replace({ path: '/settings', query: tab === 'site-code' && active.value.key === 'assignments'
       ? { ...route.query, tab: 'assignments', mode: undefined }

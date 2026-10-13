@@ -9,7 +9,7 @@
 //   · 表模板（question-temp）没有复制端点，且 tableArr / sqlTempConfigIds 存的是 JSON **字符串**，
 //     不是数组——编辑弹窗在两端来回 JSON.parse / JSON.stringify（旧 QuestionTempEditModal.vue）。
 import type { Paged } from '../types/common'
-import type { PocTableEntry, SqlTemplate, TableTemplate } from '../types/template'
+import type { DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate } from '../types/template'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const stamp = (d: Date) =>
@@ -262,4 +262,198 @@ export function mockPocDatabaseEntryList(params?: Record<string, unknown>): PocT
   const name = String(params?.name ?? '').trim().toUpperCase()
   if (!name) return POC_TABLE_ENTRIES.map((entry) => ({ ...entry }))
   return POC_TABLE_ENTRIES.filter((entry) => entry.tableName.toUpperCase().includes(name)).map((entry) => ({ ...entry }))
+}
+
+/* ── 自动补全配置（旧「模板配置 → 自动补全配置」，端点域 /poc/dic） ── */
+
+/**
+ * 自动补全种子数据。
+ * ⚠️ 按旧 DicConfig/DicEditor 的字段形状**构造的示例**（content/keyWords/type=1），
+ * 未取到 POC 服务真实行，联调后用真实响应校正。
+ */
+const blankDic = (over: Partial<DicTemplate>): DicTemplate => ({
+  content: '',
+  keyWords: '',
+  type: 1,
+  status: '0',
+  delFlag: '0',
+  ...over,
+})
+
+const DIC_TEMPLATES: DicTemplate[] = [
+  blankDic({
+    id: 3,
+    content: '查询某机构某日期的客户指标结果',
+    keyWords: '机构 日期 客户指标',
+    createTime: '2025-04-15 09:52:07',
+    updateTime: '2025-04-15 09:52:07',
+  }),
+  blankDic({
+    id: 2,
+    content: '同比环比类指标查询',
+    keyWords: '同比 环比',
+    createTime: '2025-01-08 15:21:40',
+    updateTime: '2025-04-11 10:50:30',
+  }),
+  blankDic({
+    id: 1,
+    content: '按日期统计指标信息',
+    keyWords: '日期 统计 指标',
+    createTime: '2024-12-20 18:03:11',
+    updateTime: '2025-03-02 09:14:55',
+  }),
+]
+
+let dicTemplateNextId = 100
+
+/** 自动补全分页：旧口径筛选参数叫 name，模糊匹配的是「内容」content */
+export function mockDicTemplatePaged(params?: Record<string, unknown>): Paged<DicTemplate> {
+  const name = String(params?.name ?? '').trim()
+  const pageNo = Math.max(1, Number(params?.pageNo ?? 1) || 1)
+  const pageSize = Math.max(1, Number(params?.pageSize ?? 20) || 20)
+  const matched = DIC_TEMPLATES.filter((row) => !name || String(row.content ?? '').includes(name))
+  return { total: matched.length, list: matched.slice((pageNo - 1) * pageSize, pageNo * pageSize) }
+}
+
+/** 新增（POST /poc/dic，不带 id）—— 旧 dicAdd */
+export function mockDicTemplateAdd(params?: Record<string, unknown>) {
+  const form = params as Partial<DicTemplate>
+  const nextId = dicTemplateNextId++
+  DIC_TEMPLATES.unshift({
+    ...blankDic({}),
+    ...form,
+    id: nextId,
+    createTime: stamp(new Date()),
+    updateTime: stamp(new Date()),
+  })
+  return { ok: true, data: nextId, message: '新增成功（演示）' }
+}
+
+/** 修改（POST /poc/dic/update，带 id）—— 旧 dicUpdate；与新增是两个端点，不要合并 */
+export function mockDicTemplateUpdate(params?: Record<string, unknown>) {
+  const form = params as Partial<DicTemplate>
+  const row = DIC_TEMPLATES.find((r) => Number(r.id) === Number(form.id))
+  if (!row) return { ok: false, message: '未找到要保存的词条' }
+  for (const [key, value] of Object.entries(form)) {
+    if (key === 'id') continue
+    ;(row as Record<string, unknown>)[key] = value
+  }
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: '修改成功（演示）' }
+}
+
+/* ── 问句改写配置（旧「模板配置 → 问句改写配置」，端点域 /poc/question-dic） ── */
+
+/**
+ * 问句改写种子数据。
+ * ⚠️ 按旧 QuestionDicList / QuestionDicEditor 的字段形状**构造的示例**（未取到 POC 服务真实行，
+ * 直连探测返回 302 需要登录态），联调后用真实响应校正。
+ * type 是**字符串** '10'/'11'/'20'（与自动补全的数字 type 不同）。
+ */
+const blankQuestionDic = (over: Partial<QuestionDic>): QuestionDic => ({
+  stepCode: 'pre-replace',
+  type: '10',
+  receiveRule: '',
+  content: '',
+  targetContent: '',
+  tag: '',
+  status: '0',
+  delFlag: '0',
+  ...over,
+})
+
+const QUESTION_DICS: QuestionDic[] = [
+  blankQuestionDic({
+    id: 12,
+    stepCode: 'pre-replace',
+    type: '10',
+    content: '上个月',
+    targetContent: '上月',
+    createTime: '2025-04-15 09:52:07',
+    updateTime: '2025-04-15 09:52:07',
+  }),
+  blankQuestionDic({
+    id: 11,
+    stepCode: 'before-llm',
+    type: '11',
+    receiveRule: "string.contains(msg,'机构')",
+    content: '各个机构',
+    targetContent: '各机构',
+    status: '1',
+    createTime: '2025-01-08 15:21:40',
+    updateTime: '2025-04-11 10:50:30',
+  }),
+  blankQuestionDic({
+    id: 10,
+    stepCode: 'after-llm',
+    type: '20',
+    content: '指标名称',
+    targetContent: 'jgmc',
+    createTime: '2024-12-20 18:03:11',
+    updateTime: '2025-03-02 09:14:55',
+  }),
+]
+
+let questionDicNextId = 100
+
+/** 问句改写分页：旧列表四个筛选项全部在 body —— name（模糊匹配「内容」）+ stepCode + type + status，空串=全部 */
+export function mockQuestionDicPaged(params?: Record<string, unknown>): Paged<QuestionDic> {
+  const name = String(params?.name ?? '').trim()
+  const stepCode = String(params?.stepCode ?? '').trim()
+  const type = String(params?.type ?? '').trim()
+  const status = String(params?.status ?? '').trim()
+  const pageNo = Math.max(1, Number(params?.pageNo ?? 1) || 1)
+  const pageSize = Math.max(1, Number(params?.pageSize ?? 20) || 20)
+  const matched = QUESTION_DICS.filter(
+    (row) =>
+      (!name || String(row.content ?? '').includes(name)) &&
+      (!stepCode || row.stepCode === stepCode) &&
+      (!type || String(row.type) === type) &&
+      (!status || String(row.status) === status),
+  )
+  return { total: matched.length, list: matched.slice((pageNo - 1) * pageSize, pageNo * pageSize) }
+}
+
+/** 新增（POST /poc/question-dic，不带 id）—— 旧 questionDicAdd */
+export function mockQuestionDicAdd(params?: Record<string, unknown>) {
+  const form = params as Partial<QuestionDic>
+  const nextId = questionDicNextId++
+  QUESTION_DICS.unshift({
+    ...blankQuestionDic({}),
+    ...form,
+    id: nextId,
+    createTime: stamp(new Date()),
+    updateTime: stamp(new Date()),
+  })
+  return { ok: true, data: nextId, message: '新增成功（演示）' }
+}
+
+/** 修改（POST /poc/question-dic/update，带 id）—— 旧 questionDicUpdate；与新增是两个端点，不要合并 */
+export function mockQuestionDicUpdate(params?: Record<string, unknown>) {
+  const form = params as Partial<QuestionDic>
+  const row = QUESTION_DICS.find((r) => Number(r.id) === Number(form.id))
+  if (!row) return { ok: false, message: '未找到要保存的改写规则' }
+  for (const [key, value] of Object.entries(form)) {
+    if (key === 'id') continue
+    ;(row as Record<string, unknown>)[key] = value
+  }
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: '修改成功（演示）' }
+}
+
+/** 启停（POST /poc/question-dic/status，参数走 query）—— 旧 questionDicDataStatus */
+export function mockQuestionDicChangeStatus(params?: Record<string, unknown>) {
+  const row = QUESTION_DICS.find((r) => Number(r.id) === Number(params?.id))
+  if (!row) return { ok: false, message: '未找到对应的改写规则' }
+  row.status = String(params?.status ?? row.status)
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: row.status === '0' ? '已启用' : '已停用' }
+}
+
+/** 删除（POST /poc/question-dic/deleteQuestionDic，旧页面发整行）—— 真从内存表移除，不是软删 */
+export function mockQuestionDicDelete(params?: Record<string, unknown>) {
+  const index = QUESTION_DICS.findIndex((r) => Number(r.id) === Number(params?.id))
+  if (index < 0) return { ok: false, message: '未找到要删除的改写规则' }
+  QUESTION_DICS.splice(index, 1)
+  return { ok: true, message: '删除成功（演示）' }
 }

@@ -68,6 +68,15 @@ import {
 import { mockTaskListPaged } from './taskList'
 import { mockTaskStat } from './taskStat'
 import {
+  mockDatasetPaged,
+  mockDatasetUpdate,
+  mockDatasetDelete,
+  mockDatasetChangeEnable,
+  mockDatasetCopy,
+  mockDatasetGenFromSource,
+  mockDatasetRunNow,
+} from './dataset'
+import {
   mockPocDatabaseEntryList,
   mockSqlTemplatePaged,
   mockSqlTemplateSave,
@@ -76,6 +85,14 @@ import {
   mockTableTemplatePaged,
   mockTableTemplateSave,
   mockTableTemplateChangeStatus,
+  mockDicTemplatePaged,
+  mockDicTemplateAdd,
+  mockDicTemplateUpdate,
+  mockQuestionDicPaged,
+  mockQuestionDicAdd,
+  mockQuestionDicUpdate,
+  mockQuestionDicChangeStatus,
+  mockQuestionDicDelete,
 } from './templateConfig'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
@@ -253,6 +270,17 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'dataset/datasetPaged': mockDatasets,
   'measure/measurePaged': mockMeasures,
   'measure/stats': mockMetricStats,
+  // 指标中心（M4）
+  // dataset/datasetPaged = 逆向清单的逻辑名，只服务 api/index.ts 的 M4 演示服务（metricApi.datasets）。
+  // 真实路径是 dataset/dataSetPaged（大写 S），1013 迁移「指标数据集」页（旧 page/config/DatasetList.vue）
+  // 时新增，7 个写端点一起接上——旧页面这些操作本来就全部直连后端。
+  'dataset/dataSetPaged': mockDatasetPaged,
+  'dataset/updateDataSet': mockDatasetUpdate,
+  'dataset/delete': mockDatasetDelete,
+  'dataset/changeEnable': mockDatasetChangeEnable,
+  'dataset/copy': mockDatasetCopy,
+  'dataset/genFromSource': mockDatasetGenFromSource,
+  'dataset/runNow': mockDatasetRunNow,
 
   // 数据查看（M4）
   'data/entryTypesGroup': mockEntryTypesGroup,
@@ -345,4 +373,16 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/question-temp/status': mockTableTemplateChangeStatus,
   // 表模板「使用表范围」下拉的数据表选项
   'poc/database/entry-list': mockPocDatabaseEntryList,
+
+  // 自动补全配置（1013 迁入）：新增与修改是两个端点（旧 dicAdd / dicUpdate），没有 status/copy。
+  'poc/dic/page': mockDicTemplatePaged,
+  'poc/dic': mockDicTemplateAdd,
+  'poc/dic/update': mockDicTemplateUpdate,
+
+  // 问句改写配置（1013 迁入）：新增/修改两个端点 + status（query）+ deleteQuestionDic（模板域唯一的删除）。
+  'poc/question-dic/page': mockQuestionDicPaged,
+  'poc/question-dic': mockQuestionDicAdd,
+  'poc/question-dic/update': mockQuestionDicUpdate,
+  'poc/question-dic/status': mockQuestionDicChangeStatus,
+  'poc/question-dic/deleteQuestionDic': mockQuestionDicDelete,
 }
