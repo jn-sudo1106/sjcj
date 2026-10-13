@@ -45,6 +45,7 @@ import { promptCategoryGroupsForNode, promptListCategoryForNode, resolvePromptCa
 import { loadPromptTemplateForNode } from '../promptTemplateLoader'
 import { useNodeInspectorAssets } from '../useNodeInspectorAssets'
 import { useFlowStore } from '@/stores/flow'
+import { refreshConfigUpdateDt } from '@/utils/flow/configVersion'
 import RuleWorkbenchDialog from '../RuleWorkbenchDialog.vue'
 import SiteScriptGeneratorDialog from '../SiteScriptGeneratorDialog.vue'
 import { siteScriptAiAvailable } from '@/constants/deployGates'
@@ -1015,13 +1016,18 @@ async function onSavePromptPreview(prompt: string) {
   if (!await assertConfigWritable(configId, useFlowStore().flowId)) return
   savingPromptPreview.value = true
   try {
-    const ack = await configApi.updateConfig({ configId, prompt })
+    // 带上加载时的 updateDt，后端并发编辑校验才起作用；节点没记录时不带，保持原行为。
+    const loadedUpdateDt = cfg.value?.configUpdateDt
+    const ack = await configApi.updateConfig({ configId, prompt, ...(loadedUpdateDt !== undefined ? { updateDt: loadedUpdateDt } : {}) })
     if (ack && 'ok' in ack && !ack.ok) {
       ElMessage.error(ack.message || '系统提示词保存失败')
       return
     }
     onPromptSaved()
     patch({ systemPrompt: prompt })
+    // 保存后版本号已变；网站汇总态的监控配置是本地种子，不在 flow store 里，要直接写回。
+    const updateDt = await refreshConfigUpdateDt(configId)
+    if (cfg.value && cfg.value.configUpdateDt !== updateDt) cfg.value.configUpdateDt = updateDt
     ElMessage.success(ack?.message || '系统提示词已保存')
   } catch (e) {
     ElMessage.error(`系统提示词保存失败：${(e as Error)?.message ?? String(e)}`)

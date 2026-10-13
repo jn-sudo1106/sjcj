@@ -1435,7 +1435,12 @@ export const useFlowStore = defineStore('flow', () => {
     setContentRules: (id: string, value: string) => nodeStore.setContentRules(id, value),
     setConfigName: (id: string, name: string) => nodeStore.setConfigName(id, name),
     setConfigUrl: (id: string, url: string) => nodeStore.setConfigUrl(id, url),
-    setConfigUpdateDt: (id: string, updateDt: string | undefined) => nodeStore.setConfigUpdateDt(id, updateDt),
+    /** 保存后按 configId 刷新全部引用该配置的节点的加载时版本号（见 utils/flow/configVersion.ts） */
+    syncConfigUpdateDt: (configId: string, updateDt: string | undefined) => {
+      for (const [nodeId, node] of Object.entries(configs)) {
+        if (node.configId === configId) nodeStore.setConfigUpdateDt(nodeId, updateDt)
+      }
+    },
     hydrateConfigUrl: (id: string, url: string) => nodeStore.hydrateConfigUrl(id, url),
     setItemId: (id: string, itemId: string) => nodeStore.setItemId(id, itemId),
     setStepSourceId: (id: string, sourceId: string) => nodeStore.setStepSourceId(id, sourceId),
