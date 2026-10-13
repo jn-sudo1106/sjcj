@@ -310,6 +310,7 @@ function onDragEnd() {
       <i
         class="rc-src-tab-x"
         aria-label="关闭页签"
+        title="关闭页签"
         :data-testid="t.kind === 'site' ? 'site-all-tab-close' : undefined"
         @click.stop="onTabClose(t)"
       >×</i>
@@ -379,7 +380,11 @@ function onDragEnd() {
 /* 「全部」排在源页签之前，字重与「网站列表」一致，和普通源页签区分开 */
 .rc-src-tab.site-tab { font-weight: 700; }
 .rc-src-tab-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rc-src-tab-x { flex: none; font-style: normal; font-size: 13px; line-height: 1; width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: var(--rc-faint); }
+/* 关闭 ×：可见圆钮 18px，但用 ::after 把可点区域撑到约 26×30（贴满页签高度），不用精确瞄准。
+   cursor 必须单独设成 pointer——页签本身 draggable 是 grab，× 继承过来鼠标放上去不像能点。
+   ::after 向左只伸 4px，不压到页签名字；向右 4px 落在页签右内边距里，不会点到相邻页签。 */
+.rc-src-tab-x { position: relative; flex: none; font-style: normal; font-size: 15px; line-height: 1; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: var(--rc-muted); cursor: pointer; }
+.rc-src-tab-x::after { content: ''; position: absolute; inset: -6px -4px; }
 .rc-src-tab-x:hover { background: var(--rc-error-bg, #fee2e2); color: var(--rc-error, #dc2626); }
 .rc-src-tabs-hint { flex: none; color: var(--rc-faint); font-size: 11px; }
 /* 满额时把计数标红：新开页签会被拒，得先关几个 */
