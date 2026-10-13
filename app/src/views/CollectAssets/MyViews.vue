@@ -545,31 +545,16 @@ onMounted(() => {
 .mv-gchip button { border: 0; background: none; color: #059669; cursor: pointer; width: 18px; height: 18px; border-radius: 50%; }
 .mv-gchip button:hover { background: #d1fae5; }
 .mv-via { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px; background: #ecfdf5; color: #047857; font-size: 11px; }
-/* 查询栏一行，查询 / 清空也不换行（用户 10-13 定）。右栏比系统目录窄，这里把查询那格再压紧：间距 6、条件 58、输入框下限 80，
-   各控件压缩下限合计约 850。按右栏自己的宽度判断（容器查询，不看视口——侧栏宽窄不定）：
-   不到 860 时各下拉再往下压（文字可能截掉一点，但不换行）；只有窄到 744 以下才换行，宁可换行也不能叠在一起 */
-.mv-content { container-type: inline-size; }
-.mv-content :deep(.sov-filter.is-compact) { gap: 6px; }
-.mv-content :deep(.sov-filter.is-compact .sov-field) { flex-basis: 320px; min-width: 262px; }
-.mv-content :deep(.sov-filter.is-compact .sov-search select.sov-op) { width: 58px; }
-.mv-content :deep(.sov-filter.is-compact .sov-search input) { min-width: 80px; }
-@container (max-width: 860px) {
-  .mv-content :deep(.sov-filter.is-compact) { gap: 4px; padding: 8px 10px; }
-  .mv-content :deep(.sov-filter.is-compact .sov-field) { min-width: 228px; }
-  .mv-content :deep(.sov-filter.is-compact .sov-search select) { width: 72px; }
-  .mv-content :deep(.sov-filter.is-compact .sov-search select.sov-op) { width: 56px; }
-  .mv-content :deep(.sov-filter.is-compact .sov-search input) { min-width: 60px; }
-  .mv-content :deep(.sov-filter.is-compact .sov-fl-site),
-  .mv-content :deep(.sov-filter.is-compact .sov-fl-group) { min-width: 72px; }
-  .mv-content :deep(.sov-filter.is-compact .sov-fl-state),
-  .mv-content :deep(.sov-filter.is-compact .sov-fl-tag) { min-width: 68px; }
-  .mv-content :deep(.sov-filter.is-compact .sov-fl-count) { min-width: 60px; }
-  .mv-content :deep(.sov-filter.is-compact .sov-filter-actions) { gap: 4px; }
+/* 查询栏两行（用户 10-13 定）：查询条件一行、查询 / 清空按钮另起一行靠右。
+   右栏比系统目录窄，条件用网格按比例分满一行（不会单个掉到下一行），按钮行固定在下面 */
+.mv-content :deep(.sov-filter.is-compact) {
+  display: grid; align-items: center; gap: 8px;
+  grid-template-columns: minmax(270px, 3fr) minmax(72px, 1.1fr) minmax(76px, 1.1fr) minmax(64px, 1fr) minmax(64px, 1fr) minmax(56px, .9fr);
 }
-@container (max-width: 744px) {
-  .mv-content :deep(.sov-filter.is-compact) { flex-wrap: wrap; row-gap: 8px; }
-  .mv-content :deep(.sov-filter.is-compact .sov-filter-actions) { margin-left: auto; }
-}
+.mv-content :deep(.sov-filter.is-compact .sov-field),
+.mv-content :deep(.sov-filter.is-compact label) { min-width: 0; }
+.mv-content :deep(.sov-filter.is-compact .sov-search input) { min-width: 0; }
+.mv-content :deep(.sov-filter.is-compact .sov-filter-actions) { grid-column: 1 / -1; justify-self: end; margin-left: 0; }
 .mv-drawer { display: flex; flex-direction: column; gap: 6px; }
 .mv-sec { font-weight: 600; margin-top: 10px; }
 .mv-hint { margin: 0; font-size: 12px; color: var(--rc-faint); }
