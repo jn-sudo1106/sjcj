@@ -380,7 +380,7 @@ onMounted(() => {
           </el-dropdown>
         </div>
         <template v-if="active">
-          <div class="mv-nav-title"><span>目录</span><span>{{ tree.dirs.length }} 个目录 · {{ counts[ROOT_ID] ?? 0 }} 个源</span></div>
+          <div class="mv-nav-title"><strong>目录</strong><small>{{ tree.dirs.length }} 个目录 · {{ counts[ROOT_ID] ?? 0 }} 个源</small></div>
           <div class="mv-tree">
             <ViewDirTree :tree="tree" :selected="selectedDir" :counts="counts" :group-name="groupName" @select="selectedDir = $event" @command="onDirCommand" />
           </div>
@@ -517,10 +517,12 @@ onMounted(() => {
 <style scoped>
 .mv-tab { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .mv-body { display: flex; gap: 12px; flex: 1; min-height: 0; }
-.mv-nav { width: 240px; flex-shrink: 0; display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--rc-border-soft); border-radius: 10px; background: #fff; }
+.mv-nav { width: 220px; flex-shrink: 0; display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--rc-border-soft); border-radius: 10px; background: #fff; }
 .mv-view-switch { display: flex; align-items: center; gap: 6px; }
 .mv-view-switch .el-select { flex: 1; min-width: 0; }
-.mv-nav-title { display: flex; justify-content: space-between; margin: 14px 0 6px; color: var(--rc-faint); font-size: 12px; }
+.mv-nav-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 14px 0 8px; padding: 0 2px; font-size: 13px; }
+.mv-nav-title small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--rc-faint); font-size: 11px; }
+.mv-view-switch :deep(.el-select__wrapper) { font-size: 13px; }
 .mv-tree { flex: 1; min-height: 0; overflow-y: auto; }
 .mv-nav-foot { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--rc-border-soft); }
 .mv-empty { color: var(--rc-faint); font-size: 12px; padding: 16px 8px; text-align: center; }
@@ -543,11 +545,12 @@ onMounted(() => {
 .mv-gchip button { border: 0; background: none; color: #059669; cursor: pointer; width: 18px; height: 18px; border-radius: 50%; }
 .mv-gchip button:hover { background: #d1fae5; }
 .mv-via { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px; background: #ecfdf5; color: #047857; font-size: 11px; }
-/* 我的视图右栏比系统目录窄，一行放不下查询栏：这里（只这里）允许换行，各控件守基准宽度，查询 / 清空靠右 */
-.mv-content :deep(.sov-filter.is-compact) { flex-wrap: wrap; row-gap: 8px; }
-.mv-content :deep(.sov-filter.is-compact label),
-.mv-content :deep(.sov-filter.is-compact .sov-field) { flex-shrink: 0; }
-.mv-content :deep(.sov-filter.is-compact .sov-filter-actions) { margin-left: auto; }
+/* 查询栏一行（13.6 寸 1470 宽实测放得下：各控件压缩下限合计约 890，可用约 960）。
+   再窄就放不下了，宁可换行也不能叠在一起：这时才允许换行，查询 / 清空靠右 */
+@media (max-width: 1400px) {
+  .mv-content :deep(.sov-filter.is-compact) { flex-wrap: wrap; row-gap: 8px; }
+  .mv-content :deep(.sov-filter.is-compact .sov-filter-actions) { margin-left: auto; }
+}
 .mv-drawer { display: flex; flex-direction: column; gap: 6px; }
 .mv-sec { font-weight: 600; margin-top: 10px; }
 .mv-hint { margin: 0; font-size: 12px; color: var(--rc-faint); }

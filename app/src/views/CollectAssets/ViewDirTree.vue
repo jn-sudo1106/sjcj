@@ -5,7 +5,7 @@
  * 悬停出「⋯」：新建子目录 / 添加源 / 重命名 / 删除（根目录只有添加源）。只负责展示和发事件，改树由父级做。
  */
 import { computed, ref } from 'vue'
-import { Folder, FolderOpened, Files, MoreFilled } from '@element-plus/icons-vue'
+import { ArrowRight, Folder, FolderOpened, Files, MoreFilled } from '@element-plus/icons-vue'
 import { ROOT_ID, childrenOf, type ViewTree } from './viewDirs'
 
 export type DirCommand = 'newChild' | 'addSources' | 'rename' | 'delete'
@@ -55,9 +55,8 @@ const groupsTip = (groups: string[]) => `绑定了来源组：${groups.map(props
       title="根目录：这个视图里的全部源；也可以直接在这里添加源、绑定来源组"
       @click="emit('select', ROOT_ID)"
     >
-      <span class="vdt-caret" />
       <el-icon class="vdt-ico"><Files /></el-icon>
-      <span class="vdt-name">全部（根目录）</span>
+      <span class="vdt-name">全部<small>（根目录）</small></span>
       <span v-if="tree.root.groups.length" class="vdt-group" :title="groupsTip(tree.root.groups)">组</span>
       <span class="vdt-count">{{ counts[ROOT_ID] ?? 0 }}</span>
       <el-dropdown trigger="click" @command="(c: DirCommand) => emit('command', c, ROOT_ID)" @click.stop>
@@ -75,12 +74,12 @@ const groupsTip = (groups: string[]) => `绑定了来源组：${groups.map(props
       :key="row.id"
       class="vdt-row"
       :class="{ on: selected === row.id }"
-      :style="{ paddingLeft: `${8 + (row.depth + 1) * 14}px` }"
+      :style="{ paddingLeft: `${4 + row.depth * 16}px` }"
       data-testid="view-dir-node"
       :data-dir="row.id"
       @click="emit('select', row.id)"
     >
-      <button v-if="row.hasKids" class="vdt-caret btn" type="button" :aria-label="collapsed.has(row.id) ? '展开' : '收起'" @click.stop="toggle(row.id)">{{ collapsed.has(row.id) ? '▸' : '▾' }}</button>
+      <button v-if="row.hasKids" class="vdt-caret btn" :class="{ open: !collapsed.has(row.id) }" type="button" :aria-label="collapsed.has(row.id) ? '展开' : '收起'" @click.stop="toggle(row.id)"><el-icon><ArrowRight /></el-icon></button>
       <span v-else class="vdt-caret" />
       <el-icon class="vdt-ico"><component :is="row.hasKids && !collapsed.has(row.id) ? FolderOpened : Folder" /></el-icon>
       <span class="vdt-name" :title="row.name">{{ row.name }}</span>
@@ -103,17 +102,22 @@ const groupsTip = (groups: string[]) => `绑定了来源组：${groups.map(props
 </template>
 
 <style scoped>
-.vdt { display: flex; flex-direction: column; gap: 1px; }
-.vdt-row { display: flex; align-items: center; gap: 4px; height: 32px; padding: 0 6px 0 8px; border-radius: 6px; cursor: pointer; color: var(--rc-text); font-size: 13px; }
+/* 行样式对齐「我的分组」的来源组列表（SourceGroupTab .sg-item）：13px、行高约 34、选中浅蓝底不加粗 */
+.vdt { display: flex; flex-direction: column; gap: 2px; }
+.vdt-row { display: flex; align-items: center; gap: 4px; height: 34px; padding: 0 4px 0 10px; border-radius: 6px; cursor: pointer; color: var(--rc-text); font-size: 13px; }
 .vdt-row:hover { background: #f1f5f9; }
-.vdt-row.on { background: var(--el-color-primary-light-9); color: var(--el-color-primary); font-weight: 600; }
-.vdt-caret { flex: none; width: 16px; text-align: center; color: var(--rc-faint); font-size: 10px; }
-.vdt-caret.btn { border: 0; background: none; padding: 0; cursor: pointer; }
-.vdt-ico { flex: none; color: #94a3b8; }
+.vdt-row.on { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
+.vdt-caret { flex: none; width: 16px; height: 16px; display: inline-grid; place-items: center; color: var(--rc-faint); font-size: 12px; }
+.vdt-caret.btn { border: 0; background: none; padding: 0; cursor: pointer; border-radius: 4px; }
+.vdt-caret.btn:hover { color: var(--rc-text); }
+.vdt-caret .el-icon { transition: transform .15s; }
+.vdt-caret.open .el-icon { transform: rotate(90deg); }
+.vdt-ico { flex: none; margin-right: 2px; color: #94a3b8; font-size: 15px; }
 .vdt-row.on .vdt-ico { color: var(--el-color-primary); }
 .vdt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vdt-group { flex: none; padding: 0 5px; border-radius: 4px; background: #ecfdf5; color: #047857; font-size: 10px; font-weight: 600; }
-.vdt-count { flex: none; color: var(--rc-faint); font-size: 11px; font-weight: 400; }
+.vdt-name small { color: var(--rc-faint); font-size: 12px; }
+.vdt-group { flex: none; padding: 0 5px; border-radius: 4px; background: #ecfdf5; color: #047857; font-size: 11px; line-height: 16px; }
+.vdt-count { flex: none; min-width: 16px; text-align: right; color: var(--rc-faint); font-size: 11px; }
 .vdt-more { visibility: hidden; flex: none; width: 22px; height: 22px; display: inline-grid; place-items: center; border: 0; border-radius: 4px; background: none; color: var(--rc-faint); cursor: pointer; }
 .vdt-row:hover .vdt-more, .vdt-row.on .vdt-more { visibility: visible; }
 .vdt-more:hover { background: #e2e8f0; color: var(--rc-text); }
