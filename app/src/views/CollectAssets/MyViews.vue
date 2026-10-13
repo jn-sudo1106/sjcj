@@ -333,7 +333,7 @@ function openSite(siteId: string) {
   void router.push({ path: '/canvas', query: { siteId, view: 'source', returnTo: route.fullPath } })
 }
 function openSourceGroup(sourceGroupId: string) {
-  void router.push({ path: '/settings', query: { tab: 'source-group', group: sourceGroupId } })
+  void router.push({ path: '/collect', query: { tab: 'personal', group: sourceGroupId } })
 }
 function refresh() {
   clearGroupMembersCache()
@@ -413,7 +413,7 @@ onMounted(() => {
           <el-alert v-if="membersError" type="error" show-icon :closable="false" class="mv-alert" :title="membersError" />
           <div v-if="container.groups.length || container.excluded.length" class="mv-groups" data-testid="mv-group-bar">
             <span v-if="container.groups.length" class="mv-groups-label">{{ selectedDir === ROOT_ID ? '根目录' : '这个目录' }}绑定的来源组：</span>
-            <span v-for="g in container.groups" :key="g" class="mv-gchip" title="组里的源会自动出现在这里；在系统设置 → 来源组 里维护成员">
+            <span v-for="g in container.groups" :key="g" class="mv-gchip" title="组里的源会自动出现在这里；在「我的分组」里维护成员">
               来源组 <b>{{ groupName(g) }}</b> · {{ (members[g] ?? []).filter((m) => !container.excluded.includes(m)).length }}/{{ (members[g] ?? []).length }} 个源
               <button type="button" title="解绑这个来源组" :aria-label="`解绑来源组 ${groupName(g)}`" data-testid="mv-unbind" @click="unbind(g)">×</button>
             </span>
