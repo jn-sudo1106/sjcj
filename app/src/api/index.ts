@@ -342,7 +342,7 @@ async function attachStepConfigDetails(steps: Step[], backendScope?: RequestOpti
   // 过一遍模型后再读 `url` 会在适配漏字段时把面板留空。
   const results = await Promise.allSettled(configIds.map((id) => configApi.configDetailRaw(id, { backendScope })))
   type StepConfigDetail = {
-    topic?: string; configName?: string; configUrl?: string; isLoginConfig?: boolean; multiMode?: number
+    topic?: string; configName?: string; configUrl?: string; configUpdateDt?: string; isLoginConfig?: boolean; multiMode?: number
     configType?: string
     bizType?: string; dedupType?: string; codeRule?: string; contentRule?: string; coreParam?: string
     runPolicy?: string
@@ -359,6 +359,7 @@ async function attachStepConfigDetails(steps: Step[], backendScope?: RequestOpti
       topic: mapped.topic || undefined,
       configName: mapped.name || undefined,
       configUrl: configUrlFromLegacy(r.value),
+      configUpdateDt: mapped.updatedAt,
       bizType: mapped.templateCode || undefined,
       dedupType: mapped.dedupType ?? undefined,
       codeRule: mapped.codeRule || undefined,
@@ -380,6 +381,7 @@ async function attachStepConfigDetails(steps: Step[], backendScope?: RequestOpti
       ...(detail.topic ? { topic: detail.topic } : {}),
       ...(detail.configName ? { configName: detail.configName } : {}),
       ...(detail.configUrl !== undefined ? { configUrl: detail.configUrl } : {}),
+      ...(detail.configUpdateDt !== undefined ? { configUpdateDt: detail.configUpdateDt } : {}),
       ...(detail.bizType ? { bizType: detail.bizType } : {}),
       ...(detail.dedupType !== undefined ? { dedupType: detail.dedupType } : {}),
       ...(detail.codeRule ? { codeRule: detail.codeRule } : {}),
@@ -2993,6 +2995,8 @@ export const entryApi = {
       entryTypeId: p.entryTypeId,
       name: p.name,
       enable: p.enable,
+      // 1013：只看收藏 ids 过滤（后端 entryTypePagedView 的 cond 参数，逗号分隔，见设计文档 §一）
+      cond: p.cond,
     }
     const result = await request<Paged<unknown>>('config/entryTypePagedView', p, { method: 'GET', httpParams })
     return entryTypePageFromLegacy(result)
@@ -4015,7 +4019,7 @@ export const categoryApi = {
  * userId 由后端从会话取，前端不传——所以换浏览器 / 换电脑同一账号看到的是同一份。
  * itemType 必须大写（后端正则 `[A-Z_]{1,32}`，小写判非法）；itemId 必须是正整数。
  */
-export type FavoriteItemType = 'SITE' | 'SOURCE' | 'CONFIG' | 'FLOW'
+export type FavoriteItemType = 'SITE' | 'SOURCE' | 'CONFIG' | 'FLOW' | 'ENTRY_TYPE'
 
 /** list 单页上限（后端校验 1~500） */
 const FAVORITE_PAGE_LIMIT = 500

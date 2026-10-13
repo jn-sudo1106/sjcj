@@ -234,6 +234,69 @@ describe('EntryEditorDrawer · 数据表编辑器', () => {
     expect(saveSpy).not.toHaveBeenCalled()
   })
 
+  // 1013：编码/展示名列头必填星号 + 提交拦截时空行输入框标红、输入即清（用户反馈「新增字段没校验、缺必填标识」）
+  it('字段表编码/展示名列头带必填星号', async () => {
+    await mountEditor(null)
+    const headRow = body().find('.ete-table thead tr')
+    const requiredStars = headRow.findAll('span.ete-required')
+    // 编码 + 展示名两列各一个必填红星
+    expect(requiredStars.length).toBe(2)
+    expect(requiredStars.every((s) => s.text() === '*')).toBe(true)
+    // 星号紧跟在「编码」「展示名」之后
+    expect(headRow.html()).toContain('编码<span')
+    expect(headRow.html()).toContain('展示名<span')
+  })
+
+  it('提交拦截时：空的编码/展示名输入框标红（is-invalid），并标 aria-invalid', async () => {
+    const entry: EntryType = {
+      tableId: 't1', tableName: 'tb_a', name: '表A', fields: [
+        { prop: 'code', desc: '编码', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
+        { prop: '', desc: '', type: 'string', required: false, dedup: false, columnName: 'K4', seq: 2 },
+      ],
+    }
+    vi.spyOn(entryApi, 'entrySave')
+    vi.spyOn(ElMessage, 'warning')
+    await mountEditor(entry)
+
+    await body().findAll('button').find((b) => b.text() === '保存')!.trigger('click')
+    await flushPromises()
+
+    // 第二行（空编码/空展示名）的两个输入框都标红；第一行（有值）不标红
+    const rows = body().findAll('.ete-table tbody tr')
+    const row2Inputs = rows[1].findAll('input.rc-input')
+    expect(row2Inputs[0].classes()).toContain('is-invalid')
+    expect(row2Inputs[0].attributes('aria-invalid')).toBe('true')
+    expect(row2Inputs[1].classes()).toContain('is-invalid')
+    expect(row2Inputs[1].attributes('aria-invalid')).toBe('true')
+    const row1Inputs = rows[0].findAll('input.rc-input')
+    expect(row1Inputs[0].classes()).not.toContain('is-invalid')
+  })
+
+  it('空行输入内容后，该输入框标红即时清除（可正常继续编辑）', async () => {
+    const entry: EntryType = {
+      tableId: 't1', tableName: 'tb_a', name: '表A', fields: [
+        { prop: 'code', desc: '编码', type: 'string', required: false, dedup: false, columnName: 'K1', itemId: '1', seq: 1 },
+        { prop: '', desc: '', type: 'string', required: false, dedup: false, columnName: 'K4', seq: 2 },
+      ],
+    }
+    vi.spyOn(entryApi, 'entrySave')
+    vi.spyOn(ElMessage, 'warning')
+    await mountEditor(entry)
+
+    await body().findAll('button').find((b) => b.text() === '保存')!.trigger('click')
+    await flushPromises()
+
+    const rows = body().findAll('.ete-table tbody tr')
+    const codeInput = rows[1].findAll('input.rc-input')[0]
+    expect(codeInput.classes()).toContain('is-invalid')
+
+    // 输入编码 → 该框标红清除，另一个（展示名）仍标红
+    await codeInput.setValue('new_code')
+    await flushPromises()
+    expect(codeInput.classes()).not.toContain('is-invalid')
+    expect(rows[1].findAll('input.rc-input')[1].classes()).toContain('is-invalid')
+  })
+
   it('拖左边缘拉宽：resize-end 写入本地偏好，重开抽屉沿用拉宽后的宽度', async () => {
     localStorage.removeItem('rc.dataview.entryEditor.drawerWidth')
     await mountEditor(null)

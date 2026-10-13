@@ -91,6 +91,19 @@ describe('节点 ↔ 配置字段映射', () => {
     expect(Object.values(payload)).not.toContain('http://finance.gog.cn/jrlc/index.shtml')
   })
 
+  it('updateDt 用节点加载时的值，不被保存时现取的 base 覆盖', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    cfg.configUpdateDt = '2026-10-13 10:00:00'
+    const payload = buildConfigPayload(cfg, { updateDt: '2026-10-13 10:31:29' })
+    expect(payload.updateDt).toBe('2026-10-13 10:00:00')
+  })
+
+  it('节点没记录加载时 updateDt 时保持 base 原值', () => {
+    const cfg = cloneConfig(NODE_CONFIGS['web-list'])
+    const payload = buildConfigPayload(cfg, { updateDt: '2026-10-13 10:31:29' })
+    expect(payload.updateDt).toBe('2026-10-13 10:31:29')
+  })
+
   it('节点没回填配置 URL 时保持后端原值', () => {
     const cfg = cloneConfig(NODE_CONFIGS['web-list'])
     expect(cfg.configUrl).toBeUndefined()
