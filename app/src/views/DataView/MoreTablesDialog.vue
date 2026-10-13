@@ -199,7 +199,6 @@ const onEnterSearch = withoutComposition(() => onSearch())
       <el-table-column prop="updatedAt" label="更新时间" width="125">
         <template #default="{ row }">{{ formatDate(row.updatedAt) }}</template>
       </el-table-column>
-      <el-table-column prop="rowCount" label="数据量" width="95" />
       <el-table-column label="操作" width="75" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click.stop="openDetail(row)">详情</el-button>
