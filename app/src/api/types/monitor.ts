@@ -164,3 +164,53 @@ export interface MqCheckQuery extends PageQuery {
   /** 服务端排序方向：'ascend' 升序 / 'descend' 降序（不排序时整个键不出现） */
   sortOrder?: string
 }
+
+/**
+ * 通用定时任务 / 自定义告警（旧 data-view `allColumns.COMM_JOB` → 旧 `page/config/CommJobList.vue`，
+ * 路由 /config/comm-job，新平台 Monitor 页的「自定义告警」tab）。
+ *
+ * ⚠️ `isDelete` 语义与 MqCheck 同向：**0 = 在用 / 1 = 停用 / 小于 0 = 历史删除的**；
+ * 页面筛选框「状态」筛的就是它。表格里「下次运行 / 上次运行」走旧 `timeago` 过滤器（相对时间）。
+ */
+export interface CommJob {
+  jobId: string
+  /** 任务类型：'sql' = 定时Job / 'sqlCheck' = SQL-告警（旧 typeFilter） */
+  jobType: string
+  /** 定时名 */
+  jobName: string
+  /** 执行信息（最近一次运行回执） */
+  lastMsg: string
+  /** SQL 定义 */
+  sqlDef: string
+  /** 告警条件 */
+  ruleDef: string
+  /** 运行参数 */
+  jobParam: string
+  /** 定时策略（cron 表达式） */
+  schedule: string
+  /** 下次运行（旧 lastDateSlot → timeago） */
+  nextRun?: string
+  /** 总运行次 */
+  runCnt?: number | string
+  /** 成功次 */
+  successCnt?: number | string
+  /** 上次运行（旧 lastDateSlot → timeago） */
+  lastRun?: string
+  /** 0 = 在用 / 1 = 停用 / < 0 = 历史删除 */
+  isDelete: number
+  /** 旧平台返回里可能带的时间字段（提交前要剔除，见 addCallback / updateCallback） */
+  createDt?: string
+  updateDt?: string
+}
+
+/** 通用任务查询入参（旧 queryParam：queue / queueId / name / enable + page / limit）。
+ *  ⚠️ 与 QueueCheck 不同的是：本页 `enable` 初值是 '0'（只看在用），不是空串。 */
+export interface CommJobQuery extends PageQuery {
+  /** 队列名（旧 queryParam.queue；后端落在 jobName 上） */
+  queue?: string
+  queueId?: string
+  /** 描述（旧 queryParam.name；注释见 api/mock/commJob.ts 的字段映射说明） */
+  name?: string
+  /** '' 全部 / '0' 在用 / '1' 停用 / '-1' 历史删除的 */
+  enable?: string
+}

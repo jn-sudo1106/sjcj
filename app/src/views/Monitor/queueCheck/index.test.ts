@@ -7,6 +7,7 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { h } from 'vue'
 import ElementPlus from 'element-plus'
 import QueueCheckPage from './index.vue'
+import { MQ_CHECK_BASE } from './columns'
 import * as queueApi from '../../../api/queueCheck'
 import { confirmDanger } from '@/utils/confirmDanger'
 import type { MqCheck } from '../../../api'
@@ -211,26 +212,32 @@ describe('队列告警 · 表格操作与接口调用（对齐旧 QueueCheck）'
     const wrapper = mountPage()
     await flushPromises()
 
+    // 只断言「哪一类列走哪种口径」，**不锁死具体像素**：列宽在迁移期会被微调
+    // （1013 就把带排序箭头的那三列从 100 调成 130 给箭头让位），锁像素只会让这条用例变成绊脚石。
+    const declared = new Map(MQ_CHECK_BASE.map((c) => [c.dataIndex, c]))
+
+    // 文本列：声明里有 minWidth（渲染时用它吃掉剩余空间；旧 width 原值留在数据里当对照）
+    for (const prop of ['queueName', 'lastMsg', 'queueDesc']) {
+      expect(declared.get(prop)!.minWidth, `${prop} 应有 minWidth`).toBeGreaterThan(0)
+    }
+
+    // 数值 / 状态 / 操作列：声明里有固定 width，且没有 minWidth（不参与自适应分配）
+    for (const prop of ['state', 'maxSize', 'minConsumer', 'minRate', 'maxRate', 'action']) {
+      expect(declared.get(prop)!.width, `${prop} 应有固定 width`).toBeGreaterThan(0)
+      expect(declared.get(prop)!.minWidth, `${prop} 不该有 minWidth`).toBeUndefined()
+    }
+
     const cols = wrapper.findAllComponents({ name: 'ElTableColumn' })
     const byProp = (prop: string) => cols.find((c) => c.props('prop') === prop)!
-    // el-table-column 的 width/minWidth 未传时默认是空串
-    const width = (prop: string) => byProp(prop).props('width')
-    const minWidth = (prop: string) => byProp(prop).props('minWidth')
-
-    // 文本列：不传 width（交给 el-table 分配剩余空间），只给 min-width
-    expect(width('queueName')).toBe('')
-    expect(minWidth('queueName')).toBe(180)
-    expect(width('lastMsg')).toBe('')
-    expect(minWidth('lastMsg')).toBe(240)
-    expect(width('queueDesc')).toBe('')
-    expect(minWidth('queueDesc')).toBe(140)
-
-    // 数值 / 状态 / 操作列：定宽，不参与自适应分配
-    for (const [prop, w] of [
-      ['state', 90], ['maxSize', 100], ['minConsumer', 100], ['minRate', 100], ['maxRate', 100], ['action', 96],
-    ] as Array<[string, number]>) {
-      expect(width(prop)).toBe(w)
-      expect(minWidth(prop)).toBe('')
+    // 渲染层：有 minWidth 的列不传 width（el-table-column 未传时默认空串）
+    for (const prop of ['queueName', 'lastMsg', 'queueDesc']) {
+      expect(byProp(prop).props('width')).toBe('')
+      expect(typeof byProp(prop).props('minWidth')).toBe('number')
+    }
+    // 渲染层：定宽列带着 width，且没有 min-width
+    for (const prop of ['state', 'maxSize', 'minConsumer', 'minRate', 'maxRate', 'action']) {
+      expect(Number(byProp(prop).props('width'))).toBe(declared.get(prop)!.width)
+      expect(byProp(prop).props('minWidth')).toBe('')
     }
 
     // 长文本列单行省略后必须能看全文 → 两列都要 show-overflow-tooltip（队列名自己用 el-tooltip 包了）

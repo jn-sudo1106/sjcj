@@ -177,6 +177,18 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'mq/check/update',
   'mq/check/delete',
   'mq/check/changeEnable',
+  // 1013：自定义告警（旧 page/config/CommJobList.vue，通用定时任务）的六个写端点。与 mq/check 同性质——
+  // 旧页面本来就是直连后端在改真实定时任务配置，且行内「运行」会真的把任务推给后端执行；
+  // 迁到新平台若只在 mock 里"成功"，页面就是在骗人。
+  // ⚠️ 破坏性：delete 是**永久删任务配置**（UI 侧已加 confirmDanger）；copy 会多出一条同配置的任务；
+  // run 是**真的触发执行**（旧版没有任何二次确认，这里保持 1:1 不确认——需要的话可以补）。
+  // 与 source/check 同理：这只是"允许发出去"，不代表已在生产验证过这套契约。
+  'comm-job/add',
+  'comm-job/update',
+  'comm-job/delete',
+  'comm-job/changeEnable',
+  'comm-job/copy',
+  'comm-job/run',
   // 2026-09-18：定时任务启停（节点配置「定时策略」右上角那个开关）。与源启停同性质：
   // 可逆、不删数据，停用只是把 isDelete 置 1，随时能再打开。
   'job/enableJob',

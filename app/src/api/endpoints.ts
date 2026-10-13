@@ -276,13 +276,18 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'job/updateJob', desc: '改已有定时的 cron（原地改，jobId 不变）', danger: true, live: true },
 
   /* ── comm-job 通用任务（目标 7 / 收录 7） ── */
-  { path: 'comm-job/paged', desc: '通用任务分页' },
-  { path: 'comm-job/add', desc: '新增通用任务', danger: true },
-  { path: 'comm-job/update', desc: '修改通用任务', danger: true },
-  { path: 'comm-job/delete', desc: '删除通用任务', danger: true },
-  { path: 'comm-job/run', desc: '运行通用任务', danger: true },
-  { path: 'comm-job/enable', desc: '启用通用任务', danger: true },
-  { path: 'comm-job/disable', desc: '停用通用任务', danger: true },
+  // 2026-10-13 按旧前端 src/api/comm-job.js 校正：
+  //   · 原登记的 comm-job/enable 与 comm-job/disable 两条是早期按后缀猜的，真实前端从未调用过；
+  //     实际只有**单条** changeEnable（GET ?ids=a,b&enable=0|1，与 source/check、mq/check 同款）。
+  //   · comm-job/copy 此前整条缺失（表格行内「复制」用的就是它：POST ?id=xx）。
+  //   · copy / run 都是 POST 但参数走 query（旧层写的是 `method:'post', params`），见 api/commJob.ts。
+  { path: 'comm-job/paged', desc: '通用任务分页（自定义告警列表）', impl: true, live: true },
+  { path: 'comm-job/add', desc: '新增通用任务', danger: true, impl: true, live: true },
+  { path: 'comm-job/update', desc: '修改通用任务', danger: true, impl: true, live: true },
+  { path: 'comm-job/delete', desc: '删除通用任务', danger: true, impl: true, live: true },
+  { path: 'comm-job/changeEnable', desc: '启停通用任务 → GET /v1/comm-job/changeEnable?ids=&enable=', danger: true, impl: true, live: true },
+  { path: 'comm-job/copy', desc: '复制通用任务 → POST /v1/comm-job/copy?id=', danger: true, impl: true, live: true },
+  { path: 'comm-job/run', desc: '运行通用任务 → POST /v1/comm-job/run?id=', danger: true, impl: true, live: true },
 
   /* ── task 任务实例（目标 2 / 收录 2） ── */
   { path: 'task/topTaskPaged', desc: '任务实例分页（运行记录事实源）', impl: true, live: true },
