@@ -1,7 +1,7 @@
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { DEFAULT_API_PROXY_TARGET } from './src/constants/backend'
+import { DEFAULT_API_PROXY_TARGET, DEFAULT_POC_PROXY_TARGET } from './src/constants/backend'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
@@ -11,8 +11,11 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const proxyTarget =
     env.VITE_API_PROXY_TARGET || env.VITE_AUTH_PROXY_TARGET || DEFAULT_API_PROXY_TARGET
+  const pocProxyTarget = env.VITE_POC_PROXY_TARGET || DEFAULT_POC_PROXY_TARGET
   // 没有 .env 时，前端 isProductionBackend 也要读到同一地址，不能只改了 proxy 而守卫仍当「未连生产」。
   if (!env.VITE_API_PROXY_TARGET) process.env.VITE_API_PROXY_TARGET = proxyTarget
+  // /api/poc 的目的地同样要透给前端：client.ts 按它判定生产写守卫（POC 服务不是 217，不该被拦）。
+  if (!env.VITE_POC_PROXY_TARGET) process.env.VITE_POC_PROXY_TARGET = pocProxyTarget
   return {
     base: env.VITE_BASE || '/',
     plugins: [vue()],
@@ -138,6 +141,14 @@ export default defineConfig(({ mode }) => {
         '/api/model': {
           target: env.VITE_DATA_PROCESS_PROXY_TARGET || 'http://127.0.0.1:8080',
           changeOrigin: true,
+        },
+        // 旧 ai-chat-view 的模板配置服务（1013 迁入 SQL 模板配置）：`/api/poc/*` 是**独立进程**，
+        // 不在 9999 业务后端上，打到通用 '/api' 会 404。前缀必须排在通用 '/api' 之前才会优先命中。
+        // 切换目标用 VITE_POC_PROXY_TARGET；生产/测试环境要由 Nginx 反代同一个 /api/poc 前缀。
+        '/api/poc': {
+          target: pocProxyTarget,
+          changeOrigin: true,
+          autoRewrite: true,
         },
         '/api': {
           target: proxyTarget,

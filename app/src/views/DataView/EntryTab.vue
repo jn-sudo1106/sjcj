@@ -75,7 +75,12 @@ function applyView() {
     const av = sortValue(a, sortKey.value)
     const bv = sortValue(b, sortKey.value)
     if (av === bv) return 0
-    return av < bv ? -dir : dir
+    // 表ID按数值比；其余字符串列（表名称/物理表名/去重字段/状态/更新时间）用 localeCompare，
+    // 中文按拼音/字典序（码点序对中文不直观，用户实测「表名称」正倒序不对）。
+    const cmp = typeof av === 'number' && typeof bv === 'number'
+      ? (av < bv ? -1 : 1)
+      : String(av).localeCompare(String(bv), 'zh-Hans-CN', { numeric: true, sensitivity: 'base' })
+    return dir * cmp
   })
   total.value = sorted.length
   const start = (page.value - 1) * size.value

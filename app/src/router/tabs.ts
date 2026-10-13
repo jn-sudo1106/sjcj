@@ -4,7 +4,7 @@ export interface TabMeta {
   path: string
   label: string
   desc: string
-  group: 'home' | 'workbench' | 'assets' | 'ops' | 'tools' | 'intelligence' | 'settings' | 'config'
+  group: 'home' | 'workbench' | 'assets' | 'ops' | 'tools' | 'intelligence' | 'template' | 'settings' | 'config'
   /** 菜单权限码（0924-02）。侧栏与路由守卫都经 canAccess() 判断；不声明 = 放行 */
   permission?: string
 }
@@ -26,6 +26,10 @@ export const TABS: TabMeta[] = [
   { key: 'tasks', path: '/tasks', label: '任务中心', desc: '全局任务查询、详情与重发', group: 'tools' },
   { key: 'sync', path: '/sync', label: '数据同步', desc: '将现有数据表同步到目标环境', group: 'tools' },
   { key: 'monitor', path: '/monitor', label: '监控中心', desc: '系统健康、MQ、同步状态、告警', group: 'tools' },
+  // 模板配置（1013）：旧 ai-chat-view「模板配置」域的落位，与运行与监控、系统设置同级。
+  // 这一组会随迁移逐个长出来（表模板 / 自动补全 / 问句改写 / 数据索引同步 / 数据字典 / 提示词 / 分词），
+  // 页面共用 components/templateConfig 的 CRUD 层，接口共用 api/templateConfig.ts 的工厂。
+  { key: 'sql-template', path: '/sql-template', label: 'SQL模板配置', desc: 'SQL 模板内容与通过/拒绝条件、select/table/where/group by 校验表达式', group: 'template', permission: 'sql-template' },
   // 系统设置（0924-02）：节点类型（旧平台「源类型」）+ 分类目录（原挂在采集资产的分类下拉底部）。
   // 这是第一个声明了 permission 的入口，给后续人员菜单权限留口子（见 composables/usePermission）。
   { key: 'settings', path: '/settings', label: '系统设置', desc: '节点类型、分类目录、运行机器、代码仓库、部署目录、机器配置、Runner 版本', group: 'settings', permission: 'settings' },

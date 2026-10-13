@@ -2,7 +2,7 @@ import { mockRegistry } from './mock'
 import { ENDPOINT_PATHS, DANGER_ENDPOINTS, LIVE_ENDPOINTS } from './endpoints'
 import { flowRequestPath, type BackendScope } from './flowBackend'
 import { ACCESS_TOKEN_HEADER, isSessionExpiredRedirect, readStoredToken, triggerSessionExpired } from './auth'
-import { PRODUCTION_BACKEND_HOSTS, CREATE_ALLOWED_BACKEND_HOSTS } from '@/constants/backend'
+import { PRODUCTION_BACKEND_HOSTS, CREATE_ALLOWED_BACKEND_HOSTS, POC_API_PREFIX, DEFAULT_POC_PROXY_TARGET } from '@/constants/backend'
 
 // 数据适配层：默认 mock。两种切真实后端的方式：
 // ①按端点：endpoints.ts 把某端点标 live:true 后自动切真实，其余仍走 mock —— 功能一个个上线用这个。
@@ -457,9 +457,16 @@ export async function request<T>(
     const httpEndpoint = options.httpEndpoint ?? endpoint
     const originalPath = httpEndpoint.startsWith('/') ? httpEndpoint : BASE_URL + httpEndpoint
     const resolvedPath = flowRequestPath(originalPath, httpEndpoint, import.meta.env.VITE_FLOW_PROXY_TARGET, window.location.hash, options.backendScope)
-    const destination = resolvedPath !== originalPath
+    // /api/poc（模板配置域）是独立进程，请求由 vite/nginx 直接送到 POC 服务，根本不经过业务后端。
+    // 目的地按它自己的代理目标算，否则日常代理指着生产 217 时，写守卫会去拦一条
+    // 压根不落在 217 上的请求——用户在页面上点「禁用」只会看到一条生产写保护报错。
+    const destination = originalPath.startsWith(`${POC_API_PREFIX}/`)
+      ? import.meta.env.VITE_POC_PROXY_TARGET || DEFAULT_POC_PROXY_TARGET
+      : resolvedPath !== originalPath
       ? import.meta.env.VITE_FLOW_PROXY_TARGET
-      : (/^https?:\/\//.test(originalPath) ? originalPath : currentBackendTarget())
+      : /^https?:\/\//.test(originalPath)
+      ? originalPath
+      : currentBackendTarget()
     const productionDestination = PRODUCTION_BACKEND_HOSTS.some((host) => destination.includes(host))
     if (isDanger(endpoint) && productionDestination && !isProductionWriteAllowed(httpEndpoint)) {
       throw new ProductionWriteBlockedError(httpEndpoint)
