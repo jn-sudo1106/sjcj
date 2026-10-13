@@ -1,18 +1,11 @@
 /**
  * 源列表「视图状态」（2026-10-12「我的视图」，方案 `设计稿/设计方案/1012-我的视图_开发设计方案_2026-10-12.md`）。
  *
- * 视图 = 用户自己保存的一套源列表查询：SourceOverviewView 的筛选条件 + 排序 + 每页条数 + 隐藏的列。
- * 存的是**条件**不是源 ID：之后新增的源只要符合条件，自动出现在视图里。
- * 后端只存取这段 JSON、不解析；`v` 是前端格式版本，以后条件栏改字段时由前端升级旧视图。
+ * SourceOverviewView 的筛选条件 + 排序 + 每页条数 + 隐藏的列。2026-10-13 目录版起「我的视图」只用其中的
+ * 显示设置（隐藏列 / 排序 / 每页条数，见 sourceViews.ts 的 ViewDisplay），条件视图、另存为视图已撤掉。
  */
 import { issueTagForWrite } from '@/utils/sourceMark'
-import {
-  SOURCE_COND_FIELDS,
-  sourceCondActive,
-  sourceConditionParams,
-  type SourceCondField,
-  type SourceCondOp,
-} from './sourceSearchField'
+import { sourceConditionParams, type SourceCondField, type SourceCondOp } from './sourceSearchField'
 import type { SourceFilter } from './useSourceLaunch'
 
 export type SourceStatusFilter = 'all' | 'C' | 'L' | 'E' | 'disabled'
@@ -35,12 +28,6 @@ export interface SourceListViewState {
   pageSize: number
   /** 隐藏的列（HIDEABLE_SOURCE_COLUMNS 的 key） */
   hiddenColumns: string[]
-  /**
-   * 手选的源 ID 清单（2026-10-12 用户定 C：新建视图是空的，「添加源」手动挑）。
-   * `null` / 缺省 = 条件视图（全部源按上面的条件筛，新增的源符合条件自动出现，「系统目录 → 另存为视图」存的就是这种）；
-   * 数组 = 手选清单，**条件栏在这份清单里再筛一遍**（取交集）；空数组 = 还没添加源，不发请求直接空态。
-   */
-  scopeIds?: string[] | null
 }
 
 export function blankSourceListViewState(): SourceListViewState {
@@ -56,13 +43,7 @@ export function blankSourceListViewState(): SourceListViewState {
     sortDirection: 'asc',
     pageSize: 20,
     hiddenColumns: [],
-    scopeIds: null,
   }
-}
-
-/** 新建视图的初始状态：手选清单，一个源都没有 */
-export function emptyManualViewState(): SourceListViewState {
-  return { ...blankSourceListViewState(), scopeIds: [] }
 }
 
 /** 可在「显示设置」里隐藏的列；源 ID、源名称固定显示。groupOps 只在开了来源组能力的列表里有。 */
@@ -122,35 +103,4 @@ export function viewStateFilter(state: SourceListViewState): SourceFilter {
     sorted: sorted ? (state.sortDirection === 'asc' ? 1 : -1) : undefined,
     type: sorted ? (state.sortDirection === 'asc' ? 'ASC' : 'DESC') : undefined,
   }
-}
-
-/** 比较两份视图状态是否等价（判断「有未保存的修改」）：空条件行不算差异 */
-export function sameViewState(a: SourceListViewState, b: SourceListViewState): boolean {
-  const norm = (s: SourceListViewState) => JSON.stringify({
-    ...s,
-    conditions: s.conditions.filter(sourceCondActive).map((c) => ({ field: c.field, op: c.op, value: c.value.trim() })),
-    countMax: String(s.countMax ?? '').trim(),
-    hiddenColumns: [...s.hiddenColumns].sort(),
-    scopeIds: s.scopeIds ? [...new Set(s.scopeIds)].sort() : null,
-  })
-  return norm(a) === norm(b)
-}
-
-const STATUS_LABEL: Record<SourceStatusFilter, string> = { all: '', C: '正常', L: '运行中', E: '异常', disabled: '已停用' }
-const OP_LABEL: Record<SourceCondOp, string> = { eq: '等于', like: '包含', notEmpty: '非空', empty: '为空' }
-
-/** 条件摘要（视图头部的小标签）。names 用来把网站 / 来源组 ID 换成名称。 */
-export function describeViewState(state: SourceListViewState, names: { site?: (id: string) => string; group?: (id: string) => string } = {}): string[] {
-  const parts: string[] = state.scopeIds ? [`手选 ${state.scopeIds.length} 个源`] : []
-  parts.push(...state.conditions.filter(sourceCondActive).map((c) => {
-    const label = SOURCE_COND_FIELDS.find((f) => f.value === c.field)?.label ?? c.field
-    return c.op === 'notEmpty' || c.op === 'empty' ? `${label}${OP_LABEL[c.op]}` : `${label}${OP_LABEL[c.op]}「${c.value.trim()}」`
-  }))
-  if (state.site) parts.push(`网站 = ${state.site === '-1' ? '未关联网站' : names.site?.(state.site) || state.site}`)
-  if (state.sourceGroup) parts.push(`来源组 = ${names.group?.(state.sourceGroup) || state.sourceGroup}`)
-  if (state.status !== 'all') parts.push(`状态 = ${STATUS_LABEL[state.status]}`)
-  if (state.tag) parts.push(`标签 = ${state.tag}`)
-  const count = parseCountMax(state.countMax)
-  if (count != null) parts.push(`数据量 ≤ ${count}`)
-  return parts
 }

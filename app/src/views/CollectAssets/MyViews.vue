@@ -1,35 +1,33 @@
 <script setup lang="ts">
 /**
- * 源管理「我的视图」（2026-10-12，原型 `设计稿/原型设计/源管理_我的视图_原型_2026-10-12.html`，
- * 方案 `设计稿/设计方案/1012-我的视图_开发设计方案_2026-10-12.md`）。
+ * 源管理「我的视图」目录版（2026-10-13，原型 `设计稿/原型设计/源管理_我的视图_目录树原型_2026-10-13.html`，
+ * 方案 `设计稿/设计方案/1013-我的视图目录版_开发设计方案_2026-10-13.md`）。
  *
- * 视图 = 用户自己保存的一套源列表查询（条件 + 排序 + 每页条数 + 隐藏列），只有自己能看到。
- * 右侧直接复用源列表 `SourceOverviewView`：`viewState` 套用视图，`stateChange` 拿到当前状态，
- * 和已保存的比较得出「有未保存的修改」。查询全走现有 sourcePaged，视图本身先存本机（sourceViewApi）。
+ * 一个视图 = 用户自建的一套目录（广发、浦发各一套），只有自己能看到。左边：视图下拉 + 目录树；
+ * 右边：选中目录（含子目录，父目录汇总）里的源，复用源列表 `SourceOverviewView`（`scopeSourceIds` 传算好的源 ID）。
+ * 目录里可以放单个源，也可以绑定来源组（组成员现拉，跟着组走）；随组带入的源可单独移出（排除，可恢复）。
+ * 每次修改立即保存（带 revision），不再有「未保存的修改」。数据模型与操作见 viewDirs.ts。
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { CopyDocument, Delete, MoreFilled, Plus, Refresh, RefreshLeft, Select, Setting } from '@element-plus/icons-vue'
-import { siteApi, sourceApi, sourceGroupApi, type Source } from '@/api'
-import { sourceViewApi, sourceViewBackend, type SourceView, type SourceViewBackend } from '@/api/sourceViews'
+import { Delete, Edit, MoreFilled, Plus, Refresh, Setting, Star } from '@element-plus/icons-vue'
+import { sourceGroupApi, type Source } from '@/api'
+import { defaultDisplay, sourceViewApi, sourceViewBackend, type SourceView, type SourceViewBackend, type ViewDisplay } from '@/api/sourceViews'
 import { useAuthStore } from '@/stores/auth'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
 import { recordSiteVisit } from '@/utils/siteRecents'
 import SourceOverviewView from '@/views/FlowCanvas/result/SourceOverviewView.vue'
-import { scopedSourceIds } from '@/views/FlowCanvas/result/sourceScope'
-import {
-  HIDEABLE_SOURCE_COLUMNS,
-  emptyManualViewState,
-  SOURCE_SORT_FIELDS,
-  blankSourceListViewState,
-  describeViewState,
-  sameViewState,
-  viewStateFilter,
-  type SourceListViewState,
-} from '@/views/FlowCanvas/result/sourceListViewState'
+import { HIDEABLE_SOURCE_COLUMNS, SOURCE_SORT_FIELDS, blankSourceListViewState, type SourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
 import SaveViewDialog from './SaveViewDialog.vue'
 import GroupSourcePicker from './GroupSourcePicker.vue'
+import ViewDirTree, { type DirCommand } from './ViewDirTree.vue'
+import { clearGroupMembersCache, loadGroupMembers } from './groupMembers'
+import {
+  ROOT_ID, addDir, addSources, bindGroup, boundGroups, containerOf, deleteDir, descendantIds, dirById, emptyTree, moveSources,
+  onlyViaGroup, pathOf, pathText, placesOf, removeSources, renameDir, resolveIds, restoreExcluded, unbindGroup,
+  type GroupMembers, type ViewTree,
+} from './viewDirs'
 
 const route = useRoute()
 const router = useRouter()
@@ -37,31 +35,68 @@ const auth = useAuthStore()
 const directories = useSourceGroupsStore()
 const userId = computed(() => (auth.info?.id != null ? String(auth.info.id) : ''))
 
+// ---- 视图 ----
 const views = ref<SourceView[]>([])
 const loadError = ref('')
 const activeId = ref('')
 const active = computed(() => views.value.find((v) => v.viewId === activeId.value) ?? null)
-/** 套给源列表的状态（换视图 / 撤销 / 应用显示设置时换成新对象，源列表据此重查） */
-const appliedState = ref<SourceListViewState | null>(null)
-/** 源列表报上来的当前状态（不含手选清单，清单在下面的 scopeIds 里） */
-const rawState = ref<SourceListViewState | null>(null)
-/**
- * 手选的源 ID 清单：`null` = 条件视图（全部源按条件筛）；数组 = 手选清单（可空）。
- * 单独存放而不放进套给源列表的状态里：添加 / 移出源只重查，不能把用户还没保存的条件改动重置掉。
- */
-const scopeIds = ref<string[] | null>(null)
-const liveState = computed<SourceListViewState | null>(() => (rawState.value ? { ...rawState.value, scopeIds: scopeIds.value ? [...scopeIds.value] : null } : null))
-const dirty = computed(() => !!active.value && !!liveState.value && !sameViewState(liveState.value, active.value.state))
-const manual = computed(() => scopeIds.value !== null)
-const counts = ref<Record<string, number | null>>({})
-/** 视图存哪：remote = 账号（后端接口），local = 暂存本机（接口还没上线的环境） */
+const tree = computed<ViewTree>(() => active.value?.tree ?? emptyTree())
+/** 选中的目录；ROOT_ID = 「全部（根目录）」 */
+const selectedDir = ref(ROOT_ID)
 const backend = ref<SourceViewBackend | null>(null)
-/** 接口已上线、但本机还留着旧视图：提示导入 */
 const localLeft = ref(0)
 const importing = ref(false)
+const saving = ref(false)
 
-const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T
+// ---- 来源组 ----
+const members = ref<GroupMembers>({})
+const membersError = ref('')
+const groupNames = ref(new Map<string, string>())
+const groupName = (id: string) => groupNames.value.get(id) ?? `#${id}`
+async function loadGroupNames() {
+  try { groupNames.value = new Map((await sourceGroupApi.list()).map((g) => [g.sourceGroupId, g.sourceGroupName])) } catch { /* 拿不到就显示 #ID */ }
+}
+async function loadMembers() {
+  membersError.value = ''
+  const ids = boundGroups(tree.value)
+  if (!ids.length) { members.value = {}; return }
+  try {
+    members.value = await loadGroupMembers(ids)
+  } catch (e) {
+    membersError.value = `来源组成员加载失败：${e instanceof Error ? e.message : String(e)}`
+  }
+}
+watch(() => boundGroups(tree.value).join(','), () => void loadMembers())
 
+// ---- 派生 ----
+const scopeIds = computed(() => resolveIds(tree.value, selectedDir.value, members.value))
+const counts = computed(() => {
+  const out: Record<string, number> = { [ROOT_ID]: resolveIds(tree.value, ROOT_ID, members.value).length }
+  for (const d of tree.value.dirs) out[d.id] = resolveIds(tree.value, d.id, members.value).length
+  return out
+})
+const container = computed(() => containerOf(tree.value, selectedDir.value) ?? tree.value.root)
+const pathLabel = computed(() => (selectedDir.value === ROOT_ID ? [] : pathOf(tree.value, selectedDir.value).map((d) => d.name)))
+const targetLabel = computed(() => (selectedDir.value === ROOT_ID ? `${active.value?.viewName ?? ''}（根目录）` : pathText(tree.value, selectedDir.value)))
+/** 移到目录的候选：除了当前目录，全部目录（按路径） */
+const moveTargets = computed(() => tree.value.dirs
+  .filter((d) => d.id !== selectedDir.value)
+  .map((d) => ({ id: d.id, label: pathText(tree.value, d.id) }))
+  .sort((a, b) => a.label.localeCompare(b.label, 'zh')))
+const placeText = (sourceId: string) => placesOf(tree.value, sourceId, members.value, groupName).join('；')
+const viaGroup = (sourceId: string) => {
+  const g = onlyViaGroup(tree.value, selectedDir.value, sourceId, members.value)
+  return g ? groupName(g) : ''
+}
+
+/** 源列表的显示设置（隐藏列 / 排序 / 每页条数）随视图保存；条件栏是临时筛选，不存 */
+const listState = computed<SourceListViewState>(() => {
+  const d = active.value?.display ?? defaultDisplay()
+  return { ...blankSourceListViewState(), hiddenColumns: d.hiddenColumns, sortField: d.sortField, sortDirection: d.sortDirection, pageSize: d.pageSize }
+})
+
+// ---- 加载 ----
+const onThisPage = () => route.path === '/collect' && route.query.tab === 'views'
 async function load(preferId?: string) {
   loadError.value = ''
   try {
@@ -79,55 +114,200 @@ async function load(preferId?: string) {
     ?? views.value.find((v) => v.isDefault)
     ?? views.value[0]
   selectView(next?.viewId ?? '', true)
-  void loadCounts()
 }
-
-/** 左侧每个视图的源数：sourcePaged 按视图条件查 1 条取 total；手选清单限定在清单内，空清单不发请求 */
-async function loadCounts() {
-  await Promise.all(views.value.map(async (v) => {
-    try {
-      const ids = v.state.scopeIds
-      if (ids && !ids.length) {
-        counts.value = { ...counts.value, [v.viewId]: 0 }
-        return
-      }
-      const res = await sourceApi.sourcePaged({ ...viewStateFilter(v.state), ...(ids ? { sourceIds: scopedSourceIds(ids, viewStateFilter(v.state).sourceIds) } : {}), page: 1, size: 1 })
-      counts.value = { ...counts.value, [v.viewId]: res.total }
-    } catch {
-      counts.value = { ...counts.value, [v.viewId]: null }
-    }
-  }))
-}
-
-const onThisPage = () => route.path === '/collect' && route.query.tab === 'views'
-function selectView(viewId: string, force = false) {
-  if (!force && viewId === activeId.value) return
+function selectView(viewId: string, keepDir = false) {
+  if (viewId !== activeId.value || !keepDir) selectedDir.value = ROOT_ID
   activeId.value = viewId
-  const view = views.value.find((v) => v.viewId === viewId)
-  appliedState.value = view ? clone(view.state) : null
-  rawState.value = view ? clone(view.state) : null
-  scopeIds.value = view?.state.scopeIds ? [...view.state.scopeIds] : null
-  // 只在「我的视图」页自己的地址上改：本页被 KeepAlive 缓存，跳到源详情（/canvas?view=overview…）后组件还活着，
-  // 不加这个判断会把源详情页的 view 参数改写成视图 ID，源详情的页签就全点不了（2026-10-12 用户反馈）
+  if (selectedDir.value !== ROOT_ID && !dirById(tree.value, selectedDir.value)) selectedDir.value = ROOT_ID
+  // 只在本页自己的地址上改（本页被 KeepAlive 缓存，跳到源详情后还活着，见 aa368d5）
   if (onThisPage() && route.query.viewId !== (viewId || undefined)) {
     void router.replace({ path: route.path, query: { ...route.query, viewId: viewId || undefined } })
   }
 }
 
-async function confirmDiscard(): Promise<boolean> {
-  if (!dirty.value) return true
+/** 保存修改后的目录树（带 revision）。视图被别处改过就重读，让用户再操作一次 */
+async function commit(next: ViewTree, done?: string, extra: { display?: ViewDisplay } = {}) {
+  const view = active.value
+  if (!view || saving.value) return false
+  saving.value = true
   try {
-    await ElMessageBox.confirm('当前视图有未保存的修改，继续会丢失这些修改。', '放弃未保存的修改？', { confirmButtonText: '放弃修改', cancelButtonText: '取消', type: 'warning' })
+    const saved = await sourceViewApi.update(userId.value, { viewId: view.viewId, revision: view.revision, tree: next, ...extra })
+    views.value = views.value.map((v) => (v.viewId === saved.viewId ? saved : v))
+    if (done) ElMessage.success(done)
     return true
-  } catch {
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    ElMessage.error(message)
+    if (/视图已变化/.test(message)) await load(view.viewId)
     return false
+  } finally {
+    saving.value = false
   }
 }
-async function pickView(viewId: string) {
-  if (viewId === activeId.value || !(await confirmDiscard())) return
-  selectView(viewId)
+/** 树的操作会校验（同名、上限等），出错直接提示，不发请求 */
+function tryTree(fn: () => ViewTree): ViewTree | null {
+  try { return fn() } catch (e) { ElMessage.warning(e instanceof Error ? e.message : String(e)); return null }
 }
 
+// ---- 视图：新建 / 重命名 / 默认 / 删除 ----
+type NameMode = 'newView' | 'renameView'
+const nameOpen = ref(false)
+const nameMode = ref<NameMode>('newView')
+const nameBusy = ref(false)
+const nameError = ref('')
+function openName(mode: NameMode) { nameMode.value = mode; nameError.value = ''; nameOpen.value = true }
+async function submitName({ name, isDefault }: { name: string; isDefault: boolean }) {
+  nameBusy.value = true
+  nameError.value = ''
+  try {
+    if (nameMode.value === 'renameView' && active.value) {
+      const saved = await sourceViewApi.update(userId.value, { viewId: active.value.viewId, revision: active.value.revision, viewName: name })
+      views.value = views.value.map((v) => (v.viewId === saved.viewId ? saved : v))
+    } else {
+      const created = await sourceViewApi.add(userId.value, { viewName: name, tree: emptyTree(), isDefault })
+      if (isDefault) setDefaultEntry()
+      await load(created.viewId)
+      ElMessage.success(`已新建视图「${created.viewName}」，先建目录或直接往根目录添加源`)
+    }
+    nameOpen.value = false
+  } catch (e) {
+    nameError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    nameBusy.value = false
+  }
+}
+function setDefaultEntry() {
+  try { directories.setPreference('view') } catch { /* 偏好写失败不影响视图本身 */ }
+}
+async function onViewCommand(command: string) {
+  const view = active.value
+  if (!view) return
+  if (command === 'rename') return openName('renameView')
+  if (command === 'default') {
+    try {
+      const saved = await sourceViewApi.update(userId.value, { viewId: view.viewId, revision: view.revision, isDefault: true })
+      setDefaultEntry()
+      await load(saved.viewId)
+      ElMessage.success('已设为默认进入：打开源管理直接进入这个视图')
+    } catch (e) {
+      ElMessage.error(e instanceof Error ? e.message : String(e))
+    }
+    return
+  }
+  if (command === 'delete') {
+    try {
+      await ElMessageBox.confirm(`删除视图「${view.viewName}」？里面的目录一起删除，源本身不受影响，删除后不能恢复。`, '删除视图', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning', confirmButtonClass: 'el-button--danger' })
+    } catch {
+      return
+    }
+    try {
+      await sourceViewApi.remove(userId.value, { viewId: view.viewId, revision: view.revision })
+      if (view.isDefault && directories.preference === 'view') directories.setPreference('system')
+      activeId.value = ''
+      await load()
+      ElMessage.success(`已删除视图「${view.viewName}」`)
+    } catch (e) {
+      ElMessage.error(`删除失败：${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+}
+
+// ---- 目录：新建 / 重命名 / 删除 ----
+async function askDirName(title: string, value = ''): Promise<string | null> {
+  try {
+    const { value: name } = await ElMessageBox.prompt('1–40 个字，同级不能重名', title, {
+      inputValue: value, confirmButtonText: '确定', cancelButtonText: '取消',
+      inputValidator: (v: string) => (!!v.trim() && v.trim().length <= 40) || '目录名称为1到40个字符',
+    })
+    return name.trim()
+  } catch {
+    return null
+  }
+}
+async function newDir(parentId: string) {
+  const parentLabel = parentId === ROOT_ID ? '' : `在「${pathText(tree.value, parentId)}」下`
+  const name = await askDirName(`${parentLabel}新建${parentId === ROOT_ID ? '目录' : '子目录'}`)
+  if (!name) return
+  let createdId = ''
+  const next = tryTree(() => { const r = addDir(tree.value, parentId, name); createdId = r.id; return r.tree })
+  if (next && await commit(next)) selectedDir.value = createdId
+}
+async function onDirCommand(command: DirCommand, id: string) {
+  if (command === 'newChild') return newDir(id)
+  if (command === 'addSources') { selectedDir.value = id; pickerOpen.value = true; return }
+  if (command === 'rename') {
+    const d = dirById(tree.value, id)
+    const name = d && await askDirName('重命名目录', d.name)
+    if (!name) return
+    const next = tryTree(() => renameDir(tree.value, id, name))
+    if (next) await commit(next)
+    return
+  }
+  if (command === 'delete') {
+    const subCount = descendantIds(tree.value, id).length - 1
+    try {
+      await ElMessageBox.confirm(`删除目录「${pathText(tree.value, id)}」${subCount ? `及 ${subCount} 个子目录` : ''}？目录里的源只是不在这个视图里了，源本身不受影响。`, '删除目录', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning', confirmButtonClass: 'el-button--danger' })
+    } catch {
+      return
+    }
+    await commit(deleteDir(tree.value, id), '已删除目录')
+  }
+}
+watch(tree, () => { if (selectedDir.value !== ROOT_ID && !dirById(tree.value, selectedDir.value)) selectedDir.value = ROOT_ID })
+
+// ---- 添加源 / 绑定来源组 ----
+const pickerOpen = ref(false)
+async function onPick(ids: string[]) {
+  const before = new Set(container.value.sources)
+  const next = tryTree(() => addSources(tree.value, selectedDir.value, ids))
+  if (next) await commit(next, `已添加 ${ids.filter((id) => !before.has(id)).length} 个源到「${targetLabel.value}」`)
+}
+async function onBindGroup(groupId: string) {
+  await commit(bindGroup(tree.value, selectedDir.value, groupId), `已绑定来源组「${groupName(groupId)}」，以后组里加减源这里跟着变`)
+}
+async function unbind(groupId: string) {
+  try {
+    await ElMessageBox.confirm(`解绑来源组「${groupName(groupId)}」？它的源会从「${targetLabel.value}」里移出（单独添加的保留），来源组本身不受影响。`, '解绑来源组', { confirmButtonText: '解绑', cancelButtonText: '取消', type: 'warning' })
+  } catch {
+    return
+  }
+  await commit(unbindGroup(tree.value, selectedDir.value, groupId, members.value), `已解绑来源组「${groupName(groupId)}」`)
+}
+async function restore() {
+  await commit(restoreExcluded(tree.value, selectedDir.value), '已恢复被排除的源')
+}
+
+// ---- 移出 / 移到目录 ----
+async function removeSelected(ids: string[]) {
+  if (!ids.length) return
+  const via = ids.filter((id) => onlyViaGroup(tree.value, selectedDir.value, id, members.value)).length
+  const where = selectedDir.value === ROOT_ID ? '这个视图' : `「${targetLabel.value}」`
+  try {
+    await ElMessageBox.confirm(`把 ${ids.length} 个源移出${where}？${via ? `其中 ${via} 个是随来源组带进来的，会在这里排除（来源组本身不变，可以恢复）。` : ''}源本身不受影响。`, '移出源', { confirmButtonText: '移出', cancelButtonText: '取消', type: 'warning' })
+  } catch {
+    return
+  }
+  await commit(removeSources(tree.value, selectedDir.value, ids, members.value), `已移出 ${ids.length} 个源`)
+}
+async function moveSelected(ids: string[], toId: string) {
+  if (!ids.length) return
+  const next = tryTree(() => moveSources(tree.value, selectedDir.value, toId, ids, members.value))
+  if (next) await commit(next, `已把 ${ids.length} 个源${selectedDir.value === ROOT_ID ? '加到' : '移到'}「${pathText(tree.value, toId)}」`)
+}
+
+// ---- 显示设置 ----
+const displayOpen = ref(false)
+const displayDraft = ref<ViewDisplay>(defaultDisplay())
+function openDisplay() { displayDraft.value = JSON.parse(JSON.stringify(active.value?.display ?? defaultDisplay())) as ViewDisplay; displayOpen.value = true }
+function toggleColumn(key: string, show: boolean) {
+  const hidden = displayDraft.value.hiddenColumns
+  displayDraft.value.hiddenColumns = show ? hidden.filter((k) => k !== key) : [...hidden, key]
+}
+async function applyDisplay() {
+  if (await commit(tree.value, '显示设置已保存', { display: displayDraft.value })) displayOpen.value = false
+}
+
+// ---- 本机视图导入账号（接口上线后） ----
 async function importLocal() {
   if (importing.value) return
   importing.value = true
@@ -143,174 +323,6 @@ async function importLocal() {
   }
 }
 
-// ---- 保存 / 撤销 ----
-const saving = ref(false)
-async function save() {
-  const view = active.value
-  if (!view || !liveState.value || saving.value) return
-  saving.value = true
-  try {
-    const saved = await sourceViewApi.update(userId.value, { viewId: view.viewId, revision: view.revision, state: clone(liveState.value) })
-    views.value = views.value.map((v) => (v.viewId === saved.viewId ? saved : v))
-    ElMessage.success(`已保存「${saved.viewName}」`)
-    void loadCounts()
-  } catch (e) {
-    ElMessage.error(`保存失败：${e instanceof Error ? e.message : String(e)}`)
-  } finally {
-    saving.value = false
-  }
-}
-function revert() {
-  if (active.value) {
-    appliedState.value = clone(active.value.state)
-    rawState.value = clone(active.value.state)
-    scopeIds.value = active.value.state.scopeIds ? [...active.value.state.scopeIds] : null
-  }
-}
-
-// ---- 命名弹窗：新建 / 另存为 / 重命名 ----
-type NameMode = 'new' | 'saveAs' | 'rename'
-const nameOpen = ref(false)
-const nameMode = ref<NameMode>('new')
-const nameBusy = ref(false)
-const nameError = ref('')
-const nameTitle = computed(() => ({ new: '新建视图', saveAs: '另存为新视图', rename: '重命名视图' }[nameMode.value]))
-const nameInitial = computed(() => (nameMode.value === 'rename' ? active.value?.viewName : nameMode.value === 'saveAs' ? `${active.value?.viewName ?? ''} 副本` : ''))
-const nameSummary = computed(() => {
-  if (nameMode.value === 'new') return '新视图是空的，创建后点「添加源」挑选；条件栏可以在这些源里再筛选。'
-  if (nameMode.value === 'saveAs' && liveState.value) return `保存的条件：${describeViewState(liveState.value, names).join('；') || '全部源（没有条件）'}`
-  return ''
-})
-function openName(mode: NameMode) {
-  nameMode.value = mode
-  nameError.value = ''
-  nameOpen.value = true
-}
-async function submitName({ name, isDefault }: { name: string; isDefault: boolean }) {
-  nameBusy.value = true
-  nameError.value = ''
-  try {
-    if (nameMode.value === 'rename' && active.value) {
-      const saved = await sourceViewApi.update(userId.value, { viewId: active.value.viewId, revision: active.value.revision, viewName: name })
-      views.value = views.value.map((v) => (v.viewId === saved.viewId ? saved : v))
-      ElMessage.success('已重命名')
-    } else {
-      // 新建视图是空的手选清单（用户定 C）；另存为沿用当前的清单 / 条件
-      const state = nameMode.value === 'saveAs' && liveState.value ? clone(liveState.value) : emptyManualViewState()
-      const created = await sourceViewApi.add(userId.value, { viewName: name, state, isDefault })
-      if (isDefault) setDefaultEntry()
-      // 另存为后原视图保持已保存的样子，未保存的修改留在新视图里
-      await load(created.viewId)
-      ElMessage.success(`已创建视图「${created.viewName}」`)
-    }
-    nameOpen.value = false
-  } catch (e) {
-    nameError.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    nameBusy.value = false
-  }
-}
-
-// ---- 更多：设为默认进入 / 删除 ----
-function setDefaultEntry() {
-  try { directories.setPreference('view') } catch { /* 偏好写失败不影响视图本身 */ }
-}
-async function onMore(command: string) {
-  const view = active.value
-  if (!view) return
-  if (command === 'rename') return openName('rename')
-  if (command === 'default') {
-    try {
-      const saved = await sourceViewApi.update(userId.value, { viewId: view.viewId, revision: view.revision, isDefault: true })
-      setDefaultEntry()
-      await load(saved.viewId)
-      ElMessage.success('已设为默认进入：打开源管理直接进入这个视图')
-    } catch (e) {
-      ElMessage.error(e instanceof Error ? e.message : String(e))
-    }
-    return
-  }
-  if (command === 'delete') {
-    try {
-      await ElMessageBox.confirm(`删除「${view.viewName}」后不能恢复。只删除这个视图，不影响里面的源。`, '删除视图？', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning', confirmButtonClass: 'el-button--danger' })
-    } catch {
-      return
-    }
-    try {
-      await sourceViewApi.remove(userId.value, { viewId: view.viewId, revision: view.revision })
-      if (view.isDefault && directories.preference === 'view') directories.setPreference('system')
-      activeId.value = ''
-      await load()
-      ElMessage.success(`已删除「${view.viewName}」`)
-    } catch (e) {
-      ElMessage.error(`删除失败：${e instanceof Error ? e.message : String(e)}`)
-    }
-  }
-}
-
-// ---- 手选清单：添加源 / 移出视图（只改当前画面，点「保存」才写进视图） ----
-const pickerOpen = ref(false)
-function addSources(ids: string[]) {
-  if (scopeIds.value === null) return
-  const before = scopeIds.value.length
-  scopeIds.value = [...new Set([...scopeIds.value, ...ids])]
-  const added = scopeIds.value.length - before
-  ElMessage.info(added ? `已添加 ${added} 个源${ids.length > added ? `（${ids.length - added} 个已在视图里）` : ''}，点「保存」后生效` : '选中的源都已经在视图里了')
-}
-async function removeSources(ids: string[]) {
-  if (scopeIds.value === null || !ids.length) return
-  try {
-    await ElMessageBox.confirm(`把选中的 ${ids.length} 个源移出这个视图？只是不再显示在视图里，源本身不受影响。`, '移出视图', { confirmButtonText: '移出', cancelButtonText: '取消', type: 'warning' })
-  } catch {
-    return
-  }
-  const drop = new Set(ids)
-  scopeIds.value = scopeIds.value.filter((id) => !drop.has(id))
-  ElMessage.info(`已移出 ${ids.length} 个源，点「保存」后生效`)
-}
-
-// ---- 显示设置 ----
-const displayOpen = ref(false)
-const displayHidden = ref<string[]>([])
-const displaySortField = ref('')
-const displaySortDir = ref<'asc' | 'desc'>('asc')
-const displayPageSize = ref(20)
-function openDisplay() {
-  const s = rawState.value ?? blankSourceListViewState()
-  displayHidden.value = [...s.hiddenColumns]
-  displaySortField.value = s.sortField
-  displaySortDir.value = s.sortDirection
-  displayPageSize.value = s.pageSize
-  displayOpen.value = true
-}
-function toggleColumn(key: string, show: boolean) {
-  displayHidden.value = show ? displayHidden.value.filter((k) => k !== key) : [...displayHidden.value, key]
-}
-function applyDisplay() {
-  const base = rawState.value ?? blankSourceListViewState()
-  const next = { ...clone(base), hiddenColumns: [...displayHidden.value], sortField: displaySortField.value, sortDirection: displaySortDir.value, pageSize: displayPageSize.value }
-  appliedState.value = next
-  rawState.value = clone(next)
-  displayOpen.value = false
-  ElMessage.info('已应用，点「保存」后才会存进视图')
-}
-
-// ---- 条件摘要用的名称 ----
-const siteNames = ref(new Map<string, string>())
-const groupNames = ref(new Map<string, string>())
-const names = { site: (id: string) => siteNames.value.get(id) ?? '', group: (id: string) => groupNames.value.get(id) ?? '' }
-const chips = computed(() => (liveState.value ? describeViewState(liveState.value, names) : []))
-async function loadNames() {
-  try { groupNames.value = new Map((await sourceGroupApi.list()).map((g) => [g.sourceGroupId, g.sourceGroupName])) } catch { /* 摘要退回显示 ID */ }
-}
-/** 网站名只在条件里用到网站时才拉（全量网站列表较大，与源列表的网站下拉同一个查询） */
-let siteNamesLoaded = false
-watch(() => liveState.value?.site, async (site) => {
-  if (!site || site === '-1' || siteNamesLoaded) return
-  siteNamesLoaded = true
-  try { siteNames.value = new Map((await siteApi.sitePaged({ page: 1, size: 2000 })).list.map((s) => [s.siteId, s.name])) } catch { siteNamesLoaded = false }
-})
-
 // ---- 打开源 / 网站 ----
 function openSource(source: Source, view: 'overview' | 'data' = 'overview') {
   if (source.siteId && source.siteId !== '0') recordSiteVisit(source.siteId)
@@ -323,17 +335,21 @@ function openSite(siteId: string) {
 function openSourceGroup(sourceGroupId: string) {
   void router.push({ path: '/settings', query: { tab: 'source-group', group: sourceGroupId } })
 }
+function refresh() {
+  clearGroupMembersCache()
+  void loadGroupNames()
+  void load(activeId.value)
+}
 
 watch(userId, () => void load())
-// 从系统目录「另存为视图」跳过来时带着新视图 ID
 watch(() => route.query.viewId, (id) => {
-  if (!onThisPage() || !id) return
-  if (id !== activeId.value && views.value.some((v) => v.viewId === id)) selectView(String(id))
-  else if (!views.value.some((v) => v.viewId === id)) void load(String(id))
+  if (!onThisPage() || !id || id === activeId.value) return
+  if (views.value.some((v) => v.viewId === id)) selectView(String(id))
+  else void load(String(id))
 })
 onMounted(() => {
   void load()
-  void loadNames()
+  void loadGroupNames()
 })
 </script>
 
@@ -341,27 +357,39 @@ onMounted(() => {
   <div class="mv-tab" data-testid="my-views">
     <div class="mv-body">
       <aside class="mv-nav">
-        <div class="mv-heading">
-          <strong>我的视图</strong>
-          <el-button size="small" type="primary" data-testid="mv-new" @click="openName('new')">新建</el-button>
-        </div>
-        <div class="mv-list">
-          <button
-            v-for="v in views"
-            :key="v.viewId"
-            type="button"
-            class="mv-item"
-            :class="{ active: v.viewId === activeId }"
-            data-testid="mv-item"
-            @click="pickView(v.viewId)"
+        <div class="mv-view-switch">
+          <el-select
+            :model-value="activeId || undefined"
+            placeholder="还没有视图"
+            :disabled="!views.length"
+            data-testid="mv-view-select"
+            @update:model-value="selectView(String($event))"
           >
-            <span :title="v.viewName">{{ v.viewName }}<i v-if="v.isDefault" class="mv-star" title="默认进入">★</i></span>
-            <small>{{ counts[v.viewId] ?? '…' }}</small>
-          </button>
-          <div v-if="!views.length" class="mv-empty">{{ loadError || '还没有视图' }}</div>
+            <el-option v-for="v in views" :key="v.viewId" :value="v.viewId" :label="`视图：${v.viewName}${v.isDefault ? ' ★' : ''}`" />
+          </el-select>
+          <button class="mv-icon-btn bordered" type="button" title="新建视图" aria-label="新建视图" data-testid="mv-new" @click="openName('newView')"><el-icon><Plus /></el-icon></button>
+          <el-dropdown v-if="active" trigger="click" @command="onViewCommand">
+            <button class="mv-icon-btn bordered" type="button" title="视图操作" aria-label="视图操作" data-testid="mv-view-more"><el-icon><MoreFilled /></el-icon></button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="rename" :icon="Edit">重命名视图</el-dropdown-item>
+                <el-dropdown-item command="default" :icon="Star" :disabled="active.isDefault && directories.preference === 'view'">设为默认进入</el-dropdown-item>
+                <el-dropdown-item command="delete" :icon="Delete" divided>删除视图</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
-        <!-- 只在需要提醒时才出现：接口没上线、视图暂存本机（会丢）；或本机还留着旧视图可以导入 -->
-        <p v-if="backend === 'local'" class="mv-note mv-local" data-testid="mv-local-note">视图暂存在本机浏览器，换电脑或清缓存会丢失。</p>
+        <template v-if="active">
+          <div class="mv-nav-title"><span>目录</span><span>{{ tree.dirs.length }} 个目录 · {{ counts[ROOT_ID] ?? 0 }} 个源</span></div>
+          <div class="mv-tree">
+            <ViewDirTree :tree="tree" :selected="selectedDir" :counts="counts" :group-name="groupName" @select="selectedDir = $event" @command="onDirCommand" />
+          </div>
+          <div class="mv-nav-foot">
+            <el-button size="small" :icon="Plus" data-testid="mv-new-dir" @click="newDir(selectedDir)">{{ selectedDir === ROOT_ID ? '目录' : '子目录' }}</el-button>
+          </div>
+        </template>
+        <div v-else class="mv-empty">{{ loadError || '还没有视图，点上面「＋」新建' }}</div>
+        <p v-if="backend === 'local'" class="mv-note" data-testid="mv-local-note">视图暂存在本机浏览器，换电脑或清缓存会丢失。</p>
         <div v-if="localLeft" class="mv-import" data-testid="mv-import">
           <span>这台电脑上还有 {{ localLeft }} 个之前存在本机的视图</span>
           <el-button size="small" type="primary" plain :loading="importing" data-testid="mv-import-btn" @click="importLocal">导入到账号</el-button>
@@ -369,65 +397,82 @@ onMounted(() => {
       </aside>
 
       <section class="mv-content">
-        <template v-if="active && appliedState">
+        <template v-if="active">
           <div class="mv-toolbar">
-            <strong class="mv-name" :title="active.viewName" data-testid="mv-name">{{ active.viewName }}</strong>
+            <span class="mv-path" data-testid="mv-path">
+              {{ active.viewName }}<template v-for="(p, i) in pathLabel" :key="i"> / <b v-if="i === pathLabel.length - 1">{{ p }}</b><template v-else>{{ p }}</template></template><template v-if="selectedDir === ROOT_ID"> / <b>全部（根目录）</b></template>
+            </span>
             <span class="mv-badge">🔒 仅自己可见</span>
-            <span v-if="dirty" class="mv-badge dirty" data-testid="mv-dirty">有未保存的修改</span>
             <div class="mv-actions">
-              <!-- 图标按钮，样式同流程中心操作列（fc-icon-btn）；名字放在 title / aria-label 里 -->
-              <button v-if="manual" class="mv-icon-btn" type="button" title="添加源" aria-label="添加源" data-testid="mv-add-sources" @click="pickerOpen = true"><el-icon><Plus /></el-icon></button>
-              <button v-if="dirty" class="mv-icon-btn" type="button" title="撤销修改" aria-label="撤销修改" data-testid="mv-revert" @click="revert"><el-icon><RefreshLeft /></el-icon></button>
-              <button class="mv-icon-btn save" :class="{ on: dirty }" type="button" :disabled="!dirty || saving" :title="dirty ? '保存' : '没有未保存的修改'" aria-label="保存" data-testid="mv-save" @click="save"><el-icon><Select /></el-icon></button>
-              <button class="mv-icon-btn" type="button" title="另存为新视图" aria-label="另存为" data-testid="mv-save-as" @click="openName('saveAs')"><el-icon><CopyDocument /></el-icon></button>
+              <button class="mv-icon-btn" type="button" title="添加源 / 绑定来源组" aria-label="添加源" data-testid="mv-add-sources" @click="pickerOpen = true"><el-icon><Plus /></el-icon></button>
               <button class="mv-icon-btn" type="button" title="显示设置" aria-label="显示设置" data-testid="mv-display" @click="openDisplay"><el-icon><Setting /></el-icon></button>
-              <el-dropdown trigger="click" @command="onMore">
-                <button class="mv-icon-btn" type="button" title="更多" aria-label="更多" data-testid="mv-more"><el-icon><MoreFilled /></el-icon></button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="rename">重命名</el-dropdown-item>
-                    <el-dropdown-item command="default" :disabled="active.isDefault && directories.preference === 'view'">设为默认进入</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-              <button class="mv-icon-btn danger" type="button" title="删除视图" aria-label="删除视图" data-testid="mv-delete" @click="onMore('delete')"><el-icon><Delete /></el-icon></button>
-              <button class="mv-icon-btn" type="button" title="刷新" aria-label="刷新" @click="load(activeId)"><el-icon><Refresh /></el-icon></button>
+              <button class="mv-icon-btn" type="button" title="刷新（重新拉来源组成员）" aria-label="刷新" @click="refresh"><el-icon><Refresh /></el-icon></button>
             </div>
           </div>
-          <div class="mv-chips" data-testid="mv-chips">
-            <span v-for="c in chips" :key="c" class="mv-chip">{{ c }}</span>
-            <span v-if="!chips.length" class="mv-chip">全部源（没有条件）</span>
+          <el-alert v-if="tree.convertedFromCondition" type="info" show-icon :closable="false" class="mv-alert" data-testid="mv-converted" title="这个视图原来是按条件筛选的，现在视图改成了目录：请新建目录或直接往根目录添加源（10-13 起不再支持条件视图）" />
+          <el-alert v-if="membersError" type="error" show-icon :closable="false" class="mv-alert" :title="membersError" />
+          <div v-if="container.groups.length || container.excluded.length" class="mv-groups" data-testid="mv-group-bar">
+            <span v-if="container.groups.length" class="mv-groups-label">{{ selectedDir === ROOT_ID ? '根目录' : '这个目录' }}绑定的来源组：</span>
+            <span v-for="g in container.groups" :key="g" class="mv-gchip" title="组里的源会自动出现在这里；在系统设置 → 来源组 里维护成员">
+              来源组 <b>{{ groupName(g) }}</b> · {{ (members[g] ?? []).filter((m) => !container.excluded.includes(m)).length }}/{{ (members[g] ?? []).length }} 个源
+              <button type="button" title="解绑这个来源组" :aria-label="`解绑来源组 ${groupName(g)}`" data-testid="mv-unbind" @click="unbind(g)">×</button>
+            </span>
+            <span v-if="container.excluded.length" class="mv-groups-label">已从来源组排除 {{ container.excluded.length }} 个源 <el-button link type="primary" size="small" data-testid="mv-restore" @click="restore">恢复</el-button></span>
           </div>
           <SourceOverviewView
-            :key="activeId"
+            :key="`${activeId}:${selectedDir}`"
             current-site-id=""
             group-ops
-            :view-state="appliedState"
-            :scope-source-ids="scopeIds ?? undefined"
-            scope-empty-text="这个视图里还没有源，点右上「添加源」挑选"
-            @state-change="rawState = $event"
+            :view-state="listState"
+            :scope-source-ids="scopeIds"
+            :scope-empty-text="selectedDir === ROOT_ID ? '这个视图里还没有源：可以直接往根目录添加源、绑定来源组，也可以先在左边建目录' : '这个目录里还没有源，点右上「＋」添加'"
+            extra-column-label="所在目录"
             @open-source="openSource"
             @open-source-data="openSource($event, 'data')"
             @open-site="openSite"
             @open-source-group="openSourceGroup"
           >
-            <template v-if="manual" #selection-actions="{ ids }">
-              <el-button size="small" data-testid="mv-remove-sources" @click="removeSources(ids)">移出视图</el-button>
+            <template #extra-cell="{ source }">
+              <span :title="placeText(source.sourceId)">{{ placeText(source.sourceId) || '—' }}</span>
+              <span v-if="viaGroup(source.sourceId)" class="mv-via" title="随来源组带进来的；移出会在这里排除，来源组本身不变">随来源组 {{ viaGroup(source.sourceId) }}</span>
+            </template>
+            <template #selection-actions="{ ids }">
+              <el-dropdown v-if="moveTargets.length" trigger="click" max-height="320px" @command="(to: string) => moveSelected(ids, to)">
+                <el-button size="small" data-testid="mv-move">{{ selectedDir === ROOT_ID ? '加到目录' : '移到目录' }} ▾</el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item v-for="t in moveTargets" :key="t.id" :command="t.id">{{ t.label }}</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+              <el-button size="small" data-testid="mv-remove-sources" @click="removeSelected(ids)">{{ selectedDir === ROOT_ID ? '从视图移出' : '移出此目录' }}</el-button>
             </template>
           </SourceOverviewView>
         </template>
-        <el-empty v-else :description="views.length ? '请选择一个视图' : '还没有视图。点左侧「新建视图」，或在「系统目录」源列表设好条件后点「另存为视图」'" />
+        <el-empty v-else description="还没有视图。点左上「＋」新建一个视图，再建目录、添加源">
+          <el-button type="primary" @click="openName('newView')">新建视图</el-button>
+        </el-empty>
       </section>
     </div>
 
-    <GroupSourcePicker v-model="pickerOpen" group-id="" pick-mode title="选择源添加到视图" confirm-text="添加到视图" @pick="addSources" />
+    <GroupSourcePicker
+      v-model="pickerOpen"
+      group-id=""
+      pick-mode
+      group-filter
+      :bound-groups="container.groups"
+      :title="`添加源到「${targetLabel}」`"
+      confirm-text="添加到目录"
+      @pick="onPick"
+      @bind-group="onBindGroup"
+    />
 
     <SaveViewDialog
       v-model="nameOpen"
-      :title="nameTitle"
-      :initial-name="nameInitial"
-      :show-default="nameMode !== 'rename'"
-      :summary="nameSummary"
+      :title="nameMode === 'newView' ? '新建视图' : '重命名视图'"
+      :initial-name="nameMode === 'renameView' ? active?.viewName : ''"
+      :show-default="nameMode === 'newView'"
+      :summary="nameMode === 'newView' ? '视图只有你自己能看到。建好后可以建多级目录，往目录里添加源或绑定来源组。' : ''"
       :busy="nameBusy"
       :error="nameError"
       @submit="submitName"
@@ -436,34 +481,34 @@ onMounted(() => {
     <el-drawer v-model="displayOpen" title="显示设置" size="360px" append-to-body data-testid="mv-display-drawer">
       <div class="mv-drawer">
         <div class="mv-sec">显示的列</div>
-        <p class="mv-hint">源 ID、源名称固定显示。</p>
+        <p class="mv-hint">源 ID、源名称、所在目录固定显示。</p>
         <el-checkbox
           v-for="c in HIDEABLE_SOURCE_COLUMNS"
           :key="c.key"
-          :model-value="!displayHidden.includes(c.key)"
+          :model-value="!displayDraft.hiddenColumns.includes(c.key)"
           :data-testid="`mv-col-${c.key}`"
           @update:model-value="toggleColumn(c.key, !!$event)"
         >{{ c.label }}</el-checkbox>
         <div class="mv-sec">默认排序</div>
         <div class="mv-sort">
-          <el-select v-model="displaySortField" size="small" placeholder="不排序" data-testid="mv-sort-field">
+          <el-select v-model="displayDraft.sortField" size="small" placeholder="不排序">
             <el-option label="不排序" value="" />
             <el-option v-for="f in SOURCE_SORT_FIELDS" :key="f.value" :label="f.label" :value="f.value" />
           </el-select>
-          <el-select v-model="displaySortDir" size="small" :disabled="!displaySortField" style="width: 90px">
+          <el-select v-model="displayDraft.sortDirection" size="small" :disabled="!displayDraft.sortField" style="width: 90px">
             <el-option label="升序" value="asc" />
             <el-option label="降序" value="desc" />
           </el-select>
         </div>
         <div class="mv-sec">每页条数</div>
-        <el-select v-model="displayPageSize" size="small" style="width: 120px" data-testid="mv-page-size">
+        <el-select v-model="displayDraft.pageSize" size="small" style="width: 120px">
           <el-option v-for="n in [10, 20, 50, 100]" :key="n" :label="`${n} 条`" :value="n" />
         </el-select>
-        <p class="mv-hint">显示设置跟着视图保存，不影响系统目录。</p>
+        <p class="mv-hint">显示设置按视图保存，不影响系统目录。</p>
       </div>
       <template #footer>
         <el-button @click="displayOpen = false">取消</el-button>
-        <el-button type="primary" data-testid="mv-display-apply" @click="applyDisplay">应用</el-button>
+        <el-button type="primary" :loading="saving" data-testid="mv-display-apply" @click="applyDisplay">保存</el-button>
       </template>
     </el-drawer>
   </div>
@@ -472,40 +517,37 @@ onMounted(() => {
 <style scoped>
 .mv-tab { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .mv-body { display: flex; gap: 12px; flex: 1; min-height: 0; }
-.mv-nav { width: 210px; flex-shrink: 0; display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--rc-border-soft); border-radius: 10px; background: #fff; }
-.mv-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
-.mv-list { flex: 1; min-height: 0; overflow-y: auto; margin-top: 12px; display: flex; flex-direction: column; gap: 2px; }
-.mv-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; width: 100%; padding: 9px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--rc-text); cursor: pointer; text-align: left; }
-.mv-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mv-item small { color: var(--rc-faint); font-size: 11px; flex-shrink: 0; }
-.mv-item:hover { background: #f1f5f9; }
-.mv-item.active { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
-.mv-star { font-style: normal; color: #f59e0b; margin-left: 4px; font-size: 12px; }
-.mv-empty { color: var(--rc-faint); font-size: 12px; padding: 12px 8px; text-align: center; }
-.mv-note { font-size: 12px; color: var(--rc-muted); line-height: 1.6; margin: 8px 0 0; }
-.mv-local { color: var(--rc-faint); }
+.mv-nav { width: 240px; flex-shrink: 0; display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--rc-border-soft); border-radius: 10px; background: #fff; }
+.mv-view-switch { display: flex; align-items: center; gap: 6px; }
+.mv-view-switch .el-select { flex: 1; min-width: 0; }
+.mv-nav-title { display: flex; justify-content: space-between; margin: 14px 0 6px; color: var(--rc-faint); font-size: 12px; }
+.mv-tree { flex: 1; min-height: 0; overflow-y: auto; }
+.mv-nav-foot { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--rc-border-soft); }
+.mv-empty { color: var(--rc-faint); font-size: 12px; padding: 16px 8px; text-align: center; }
+.mv-note { font-size: 12px; color: var(--rc-faint); line-height: 1.6; margin: 8px 0 0; }
 .mv-import { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: #eff6ff; color: #1e40af; font-size: 12px; line-height: 1.5; }
 .mv-content { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .mv-toolbar { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #fff; border: 1px solid var(--rc-border-soft); border-radius: 8px; margin-bottom: 8px; font-size: 13px; flex-wrap: wrap; }
-.mv-name { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mv-path { color: var(--rc-faint); max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mv-path b { color: var(--rc-text); font-size: 14px; }
 .mv-badge { padding: 1px 8px; border-radius: 10px; background: #f1f5f9; color: var(--rc-text-2); font-size: 12px; white-space: nowrap; }
-.mv-badge.dirty { background: #fffbeb; color: #b45309; }
 .mv-actions { display: flex; margin-left: auto; gap: 2px; align-items: center; }
-.mv-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--rc-muted, #64748b); font-size: 16px; cursor: pointer; }
+.mv-icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--rc-muted, #64748b); font-size: 16px; cursor: pointer; flex: none; }
+.mv-icon-btn.bordered { border: 1px solid var(--rc-border); background: #fff; }
 .mv-icon-btn:hover:not(:disabled) { background: var(--rc-primary-bg, #eff6ff); color: var(--rc-primary, #2563eb); }
-.mv-icon-btn.danger:hover:not(:disabled) { background: #fef3f2; color: var(--rc-error, #d92d20); }
 .mv-icon-btn:focus-visible { outline: 2px solid var(--rc-primary, #2563eb); outline-offset: 1px; }
-.mv-icon-btn:disabled { opacity: .4; cursor: not-allowed; }
-/* 有未保存的修改时「保存」高亮成主色，提醒还没存 */
-.mv-icon-btn.save.on { background: var(--rc-primary, #2563eb); color: #fff; }
-.mv-icon-btn.save.on:hover:not(:disabled) { background: #1d4ed8; color: #fff; }
+.mv-alert { margin-bottom: 8px; }
+.mv-groups { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 2px 8px; }
+.mv-groups-label { color: var(--rc-faint); font-size: 12px; }
+.mv-gchip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 10px; border-radius: 14px; background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; font-size: 12px; }
+.mv-gchip button { border: 0; background: none; color: #059669; cursor: pointer; width: 18px; height: 18px; border-radius: 50%; }
+.mv-gchip button:hover { background: #d1fae5; }
+.mv-via { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px; background: #ecfdf5; color: #047857; font-size: 11px; }
 /* 我的视图右栏比系统目录窄，一行放不下查询栏：这里（只这里）允许换行，各控件守基准宽度，查询 / 清空靠右 */
 .mv-content :deep(.sov-filter.is-compact) { flex-wrap: wrap; row-gap: 8px; }
 .mv-content :deep(.sov-filter.is-compact label),
 .mv-content :deep(.sov-filter.is-compact .sov-field) { flex-shrink: 0; }
 .mv-content :deep(.sov-filter.is-compact .sov-filter-actions) { margin-left: auto; }
-.mv-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
-.mv-chip { padding: 1px 8px; border-radius: 10px; background: #eef2ff; color: #3730a3; font-size: 12px; }
 .mv-drawer { display: flex; flex-direction: column; gap: 6px; }
 .mv-sec { font-weight: 600; margin-top: 10px; }
 .mv-hint { margin: 0; font-size: 12px; color: var(--rc-faint); }

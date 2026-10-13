@@ -13,12 +13,26 @@
  * 只在「接口不存在」这一种明确情况下退回——其它错误（超时、网关 502、业务报错）照常抛出，不会悄悄把数据写到本机造成两边不一致。
  */
 import { request } from './client'
-import { blankSourceListViewState, type SourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
+import { emptyTree, normalizeTree, treeFromLegacy, type ViewTree } from '@/views/CollectAssets/viewDirs'
 
+/** 视图的显示设置（隐藏列、默认排序、每页条数），存 displayJson */
+export interface ViewDisplay {
+  hiddenColumns: string[]
+  sortField: string
+  sortDirection: 'asc' | 'desc'
+  pageSize: number
+}
+export const defaultDisplay = (): ViewDisplay => ({ hiddenColumns: [], sortField: '', sortDirection: 'asc', pageSize: 20 })
+
+/**
+ * 2026-10-13 目录版：视图 = 根目录 + 多级目录（见 views/CollectAssets/viewDirs.ts），整棵树存 queryJson；
+ * 1012 版存的是「条件 + 手选清单」，读到时自动转换（条件视图 10-13 定不再保留）。
+ */
 export interface SourceView {
   viewId: string
   viewName: string
-  state: SourceListViewState
+  tree: ViewTree
+  display: ViewDisplay
   isDefault: boolean
   revision: number
   createdAt: string
@@ -31,15 +45,11 @@ export const SOURCE_VIEW_NAME_MAX = 40
 export type SourceViewBackend = 'remote' | 'local'
 
 // ---------------------------------------------------------------------------------------------
-// 状态 ↔ 后端的两段 JSON：queryJson（条件 + 手选清单）、displayJson（显示设置）
+// 视图 ↔ 后端的两段 JSON：queryJson（目录树）、displayJson（显示设置）
 // ---------------------------------------------------------------------------------------------
 
-export function stateToJson(state: SourceListViewState): { queryJson: string; displayJson: string } {
-  const { hiddenColumns, sortField, sortDirection, pageSize, ...query } = state
-  return {
-    queryJson: JSON.stringify(query),
-    displayJson: JSON.stringify({ hiddenColumns, sortField, sortDirection, pageSize }),
-  }
+export function viewToJson(tree: ViewTree, display: ViewDisplay): { queryJson: string; displayJson: string } {
+  return { queryJson: JSON.stringify(tree), displayJson: JSON.stringify(display) }
 }
 
 function parseObject(raw: unknown): Record<string, unknown> {
@@ -52,19 +62,31 @@ function parseObject(raw: unknown): Record<string, unknown> {
   }
 }
 
-/** 后端存的是前端写进去的 JSON；解析不了 / 缺字段时用空白状态兜底，不让一条坏数据拖垮整个列表 */
-export function stateFromJson(queryJson: unknown, displayJson: unknown): SourceListViewState {
-  const blank = blankSourceListViewState()
+/** queryJson → 目录树：v2 直接清洗；1012 的 v1（条件 + 手选清单）转换；解析不了就是空树，不让一条坏数据拖垮整个列表 */
+export function treeFromJson(queryJson: unknown): ViewTree {
   const query = parseObject(queryJson)
-  const display = parseObject(displayJson)
-  return { ...blank, ...(query as Partial<SourceListViewState>), ...(display as Partial<SourceListViewState>), v: 1 }
+  if (query.v === 2) return normalizeTree(query)
+  if (query.v === 1 || 'scopeIds' in query || 'conditions' in query) return treeFromLegacy(query)
+  return emptyTree()
+}
+export function displayFromJson(displayJson: unknown, legacyQuery?: unknown): ViewDisplay {
+  // 1012 早期的本机视图把显示设置也放在 query 里
+  const merged = { ...parseObject(legacyQuery), ...parseObject(displayJson) } as Partial<ViewDisplay>
+  const d = defaultDisplay()
+  return {
+    hiddenColumns: Array.isArray(merged.hiddenColumns) ? merged.hiddenColumns.map(String) : d.hiddenColumns,
+    sortField: typeof merged.sortField === 'string' ? merged.sortField : d.sortField,
+    sortDirection: merged.sortDirection === 'desc' ? 'desc' : 'asc',
+    pageSize: Number(merged.pageSize) > 0 ? Number(merged.pageSize) : d.pageSize,
+  }
 }
 
 function viewFromRow(row: Record<string, unknown>): SourceView {
   return {
     viewId: String(row.viewId),
     viewName: String(row.viewName ?? ''),
-    state: stateFromJson(row.queryJson, row.displayJson),
+    tree: treeFromJson(row.queryJson),
+    display: displayFromJson(row.displayJson),
     isDefault: Number(row.isDefault) === 1,
     revision: Number(row.revision ?? 0),
     createdAt: String(row.createDt ?? ''),
@@ -92,9 +114,14 @@ export const sourceViewStorageKey = (userId: string) => `ce:source-views:v1:${en
 function read(userId: string): SourceView[] {
   const raw = localStorage.getItem(sourceViewStorageKey(userId))
   if (!raw) return []
-  const data = JSON.parse(raw) as { version?: number; views?: SourceView[] }
+  const data = JSON.parse(raw) as { version?: number; views?: (SourceView & { state?: unknown })[] }
   if (data?.version !== 1 || !Array.isArray(data.views)) throw new Error('本机视图数据格式异常')
-  return data.views
+  // 1012 版本机视图存的是 state（条件 + 手选清单 + 显示设置），读到时转成目录树
+  return data.views.map(({ state, ...v }) => (v.tree ? { ...v, tree: normalizeTree(v.tree), display: v.display ?? defaultDisplay() } : {
+    ...v,
+    tree: state ? treeFromJson(JSON.stringify({ v: 1, ...(state as object) })) : emptyTree(),
+    display: displayFromJson(undefined, state ? JSON.stringify(state) : undefined),
+  }))
 }
 function write(userId: string, views: SourceView[]) {
   localStorage.setItem(sourceViewStorageKey(userId), JSON.stringify({ version: 1, views }))
@@ -116,8 +143,8 @@ function find(views: SourceView[], viewId: string, revision: number): SourceView
 const now = () => new Date().toISOString()
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 
-type AddInput = { viewName: string; state: SourceListViewState; isDefault?: boolean }
-type UpdateInput = { viewId: string; revision: number; viewName?: string; state?: SourceListViewState; isDefault?: boolean }
+type AddInput = { viewName: string; tree?: ViewTree; display?: ViewDisplay; isDefault?: boolean }
+type UpdateInput = { viewId: string; revision: number; viewName?: string; tree?: ViewTree; display?: ViewDisplay; isDefault?: boolean }
 type DeleteInput = { viewId: string; revision: number }
 
 export const localSourceViewApi = {
@@ -131,7 +158,7 @@ export const localSourceViewApi = {
     if (views.length >= SOURCE_VIEW_LIMIT) throw new Error(`每人最多 ${SOURCE_VIEW_LIMIT} 个视图，请先删除不用的视图`)
     const viewName = checkName(views, input.viewName)
     const id = `view-${Array.from(crypto.getRandomValues(new Uint32Array(2)), (n) => n.toString(16).padStart(8, '0')).join('')}`
-    const view: SourceView = { viewId: id, viewName, state: clone(input.state), isDefault: !!input.isDefault, revision: 0, createdAt: now(), updatedAt: now() }
+    const view: SourceView = { viewId: id, viewName, tree: clone(input.tree ?? emptyTree()), display: clone(input.display ?? defaultDisplay()), isDefault: !!input.isDefault, revision: 0, createdAt: now(), updatedAt: now() }
     if (view.isDefault) views.forEach((v) => { if (v.isDefault) { v.isDefault = false } })
     write(userId, [...views, view])
     return view
@@ -142,7 +169,8 @@ export const localSourceViewApi = {
     const views = read(userId)
     const view = find(views, input.viewId, input.revision)
     if (input.viewName != null) view.viewName = checkName(views, input.viewName, view.viewId)
-    if (input.state) view.state = clone(input.state)
+    if (input.tree) view.tree = clone(input.tree)
+    if (input.display) view.display = clone(input.display)
     if (input.isDefault != null) {
       if (input.isDefault) views.forEach((v) => { if (v !== view && v.isDefault) v.isDefault = false })
       view.isDefault = input.isDefault
@@ -179,7 +207,7 @@ const remoteSourceViewApi = {
     return (Array.isArray(result) ? result : []).map((row) => viewFromRow(row as Record<string, unknown>))
   },
   add: async (input: AddInput): Promise<SourceView> => {
-    const body = { viewName: input.viewName.trim(), ...stateToJson(input.state), isDefault: input.isDefault ? 1 : 0 }
+    const body = { viewName: input.viewName.trim(), ...viewToJson(input.tree ?? emptyTree(), input.display ?? defaultDisplay()), isDefault: input.isDefault ? 1 : 0 }
     return viewFromRow(await request<Record<string, unknown>>('source-view/add', body, callOptions('source-view/add', 'POST', body)))
   },
   update: async (input: UpdateInput): Promise<SourceView> => {
@@ -187,7 +215,8 @@ const remoteSourceViewApi = {
       viewId: input.viewId,
       revision: input.revision,
       ...(input.viewName != null ? { viewName: input.viewName.trim() } : {}),
-      ...(input.state ? stateToJson(input.state) : {}),
+      ...(input.tree ? { queryJson: JSON.stringify(input.tree) } : {}),
+      ...(input.display ? { displayJson: JSON.stringify(input.display) } : {}),
       ...(input.isDefault != null ? { isDefault: input.isDefault ? 1 : 0 } : {}),
     }
     return viewFromRow(await request<Record<string, unknown>>('source-view/update', body, callOptions('source-view/update', 'POST', body)))
@@ -278,7 +307,7 @@ export const sourceViewApi = {
       let name = view.viewName
       while (taken.has(name)) name = `${name}（本机）`.slice(-SOURCE_VIEW_NAME_MAX)
       try {
-        await remoteSourceViewApi.add({ viewName: name, state: view.state, isDefault: false })
+        await remoteSourceViewApi.add({ viewName: name, tree: view.tree, display: view.display, isDefault: false })
         taken.add(name)
         imported += 1
       } catch (e) {

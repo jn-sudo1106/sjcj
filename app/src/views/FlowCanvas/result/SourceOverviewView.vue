@@ -102,9 +102,13 @@ const props = defineProps<{
   /**
    * 「我的视图」（2026-10-12）：外部给定一套视图状态（条件 / 排序 / 每页条数 / 隐藏列），
    * 挂载时和每次换成新对象时套用并重查。不传 = 原来的默认条件、全部列。
-   * 当前状态的变化通过 `stateChange` 往外报，父级据此判断「有未保存的修改」、做另存为。
    */
   viewState?: SourceListViewState
+  /**
+   * 额外一列（2026-10-13「我的视图」目录版的「所在目录」）：给了表头文字就在「源名称」后面多一列，
+   * 内容由父级用 `extra-cell` 槽位按行渲染。不给 = 原样。
+   */
+  extraColumnLabel?: string
 }>()
 const emit = defineEmits<{
   openSource: [source: Source]
@@ -114,8 +118,6 @@ const emit = defineEmits<{
   openSourceData: [source: Source]
   /** 点来源组名（1008-04）：跳到「来源组」目录页签并选中该组 */
   openSourceGroup: [sourceGroupId: string]
-  /** 当前视图状态（条件、排序、每页条数、隐藏列）变化时 */
-  stateChange: [state: SourceListViewState]
 }>()
 
 // UI 状态筛选：停用是启停字段（enable=1），不是旧接口没有的 state=disabled，
@@ -379,7 +381,7 @@ const showCol = (key: string) => !hiddenColumns.value.includes(key)
 const hiddenColumnCount = computed(() => HIDEABLE_SOURCE_COLUMNS.filter((c) => hiddenColumns.value.includes(c.key)
   && (c.key !== 'site' || crossSite.value) && (!c.groupOps || (crossSite.value && props.groupOps))).length)
 
-/** 当前视图状态：查询条件 + 排序 + 每页条数 + 隐藏列（「我的视图」保存的就是它） */
+/** 当前视图状态：查询条件 + 排序 + 每页条数 + 隐藏列 */
 const currentViewState = computed<SourceListViewState>(() => ({
   v: 1,
   conditions: conditions.value.map((c) => ({ field: c.field, op: c.op, value: c.value })),
@@ -393,7 +395,6 @@ const currentViewState = computed<SourceListViewState>(() => ({
   pageSize: size.value,
   hiddenColumns: [...hiddenColumns.value],
 }))
-watch(currentViewState, (state) => emit('stateChange', state), { deep: true })
 
 /** 套用一套视图状态（不发请求，调用方决定何时查） */
 function applyViewState(state: SourceListViewState) {
@@ -1318,8 +1319,6 @@ watch(() => ui.sourceListRevision, () => {
       </template>
       <!-- 紧凑样式下筛选栏一行放不下，针对整批结果的两个操作挪到这一行右侧 -->
       <span v-if="crossSite" class="sov-summary-ops">
-        <!-- 父级往这一行右侧塞的图标按钮（采集资产「另存为视图」）：查询栏一行已经满了，放这里不挤它 -->
-        <slot name="summary-extra" />
         <!-- 1008-04 来源组操作：不勾选也能用（调整来源组按当前筛选范围，连生产时除外；另两项需先勾选） -->
         <el-dropdown v-if="groupOps" trigger="click" data-testid="source-group-ops" @command="onGroupOpsCommand">
           <button class="sov-btn" type="button">选中来源 ▾</button>
@@ -1352,6 +1351,7 @@ watch(() => ui.sourceListRevision, () => {
             <th class="sov-fav-col" title="收藏"></th>
             <th><button class="sov-sort" :class="sortClass('SOURCE_ID')" type="button" data-testid="sort-source-id" :title="sortLabel('SOURCE_ID')" @click="toggleSort('SOURCE_ID')">源 ID<span class="sov-caret"><i class="sov-caret-up" /><i class="sov-caret-down" /></span></button></th>
             <th>源名称</th>
+            <th v-if="extraColumnLabel" data-testid="source-overview-extra-head">{{ extraColumnLabel }}</th>
             <th v-if="crossSite && showCol('site')">所属网站</th>
             <!-- 1008-04 来源组三列：只在源列表视图（groupOps）出现 -->
             <th v-if="crossSite && groupOps && showCol('sourceGroup')">来源组</th>
@@ -1396,6 +1396,7 @@ watch(() => ui.sourceListRevision, () => {
                  ID 才是唯一标识）。等宽字体保持 ID 的可读性与列表其它 ID 一致。 -->
             <td><button class="sov-link sov-id-link" type="button" data-testid="source-overview-id-link" :title="`打开源 ${source.sourceId} 的详情`" @click="emit('openSource', source)">{{ source.sourceId }}</button></td>
             <td class="sov-name" :title="source.name"><button class="sov-link sov-source-link" type="button" data-testid="source-overview-source-link" @click="emit('openSource', source)">{{ source.name }}</button></td>
+            <td v-if="extraColumnLabel" class="sov-extra"><slot name="extra-cell" :source="source" /></td>
             <td v-if="crossSite && showCol('site')" class="sov-site" :title="siteNameOf(source)">
               <button
                 v-if="source.siteId && source.siteId !== '0'"
@@ -1498,7 +1499,7 @@ watch(() => ui.sourceListRevision, () => {
               >{{ source.remark || '—' }}</button>
             </td>
           </tr>
-          <tr v-if="!loading && !rows.length"><td :colspan="(crossSite ? 15 : 14) + (crossSite && groupOps ? 3 : 0) - hiddenColumnCount" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
+          <tr v-if="!loading && !rows.length"><td :colspan="(crossSite ? 15 : 14) + (crossSite && groupOps ? 3 : 0) - hiddenColumnCount + (extraColumnLabel ? 1 : 0)" class="sov-empty">{{ loadError || (scopeEmpty && scopeEmptyText) || '暂无符合条件的源' }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -1646,6 +1647,7 @@ watch(() => ui.sourceListRevision, () => {
 .sov-table th, .sov-table td { padding: 9px 10px; border-bottom: 1px solid #edf2f7; text-align: left; white-space: nowrap; color: var(--rc-text-2); }
 .sov-table th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: var(--rc-muted); font-weight: 700; }
 .sov-name { max-width: 190px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-text) !important; font-weight: 600; }
+.sov-extra { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-text-2); font-size: 12px; }
 .sov-source-link { display: block; max-width: 190px; overflow: hidden; padding: 0; text-align: left; text-overflow: ellipsis; }
 .sov-url { max-width: 220px; overflow: hidden; text-overflow: ellipsis; color: var(--rc-primary) !important; }
 .sov-url a { color: inherit; text-decoration: none; }
