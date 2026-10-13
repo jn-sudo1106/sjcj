@@ -45,6 +45,19 @@ function onResizeEnd(_evt: MouseEvent, size: number) {
   writeDrawerWidth(drawerWidth.value)
 }
 const form = reactive<EntryType>({ tableId: '', tableName: '', name: '', remark: '', fields: [] })
+/** 1013 字段必填校验：行内标红集合，存 `${index}:prop` / `${index}:desc`（提交拦截时空行输入框标红，输入即清） */
+const invalidFields = ref<Set<string>>(new Set())
+function fieldInvalidKey(index: number, key: 'prop' | 'desc'): string {
+  return `${index}:${key}`
+}
+function isFieldInvalid(index: number, key: 'prop' | 'desc'): boolean {
+  return invalidFields.value.has(fieldInvalidKey(index, key))
+}
+function clearFieldInvalid(index: number, key: 'prop' | 'desc') {
+  const next = new Set(invalidFields.value)
+  next.delete(fieldInvalidKey(index, key))
+  invalidFields.value = next
+}
 const isEdit = computed(() => !!props.entry?.tableId)
 const advancedOpen = ref(false)
 const batchDialog = reactive<{ visible: boolean; text: string }>({ visible: false, text: '' })
@@ -233,8 +246,17 @@ async function submit() {
   }
   // 编码 / 展示名逐字段非空（对齐旧 EntryTypeEdit 的 requireRule：'属性不能为空'/'描述不能为空'，
   // 提交走 aFrom.validate 拦截）。此前漏了这条，空编码字段会被存进库、落库后删不掉。
-  const emptyField = form.fields.find((f) => !f.prop.trim() || !f.desc.trim())
-  if (emptyField) {
+  const emptyFields = form.fields
+    .map((f, index) => ({ index, emptyCode: !f.prop.trim(), emptyDesc: !f.desc.trim() }))
+    .filter((e) => e.emptyCode || e.emptyDesc)
+  if (emptyFields.length) {
+    // 1013：把空的编码/展示名输入框标红，让用户一眼看到是哪一行缺了（不只弹笼统提示）
+    invalidFields.value = new Set(
+      emptyFields.flatMap((e) => [
+        ...(e.emptyCode ? [fieldInvalidKey(e.index, 'prop')] : []),
+        ...(e.emptyDesc ? [fieldInvalidKey(e.index, 'desc')] : []),
+      ]),
+    )
     ElMessage.warning('出错，属性不能为空')
     return
   }
@@ -285,12 +307,12 @@ async function submit() {
          挪到表下是为了跟画布侧的表编辑弹窗位置一致。 -->
     <div class="rc-table-scroll">
       <table class="rc-data-table ete-table">
-        <thead><tr><th style="width: 44px">序号</th><th>编码</th><th>展示名</th><th style="width: 70px">数据库列</th><th style="width: 96px">类型</th><th style="width: 110px">校验</th><th>预处理</th><th style="width: 44px">去重</th><th style="width: 44px">必填</th><th style="width: 64px">列宽</th><th style="width: 90px">操作</th></tr></thead>
+        <thead><tr><th style="width: 44px">序号</th><th>编码<span class="ete-required" aria-hidden="true">*</span></th><th>展示名<span class="ete-required" aria-hidden="true">*</span></th><th style="width: 70px">数据库列</th><th style="width: 96px">类型</th><th style="width: 110px">校验</th><th>预处理</th><th style="width: 44px">去重</th><th style="width: 44px">必填</th><th style="width: 64px">列宽</th><th style="width: 90px">操作</th></tr></thead>
         <tbody>
           <tr v-for="(field, index) in form.fields" :key="field.itemId || index">
             <td>{{ field.seq ?? index + 1 }}</td>
-            <td><input v-model="field.prop" class="rc-input" @blur="onItemCodeBlur(field)" /></td>
-            <td><input v-model="field.desc" class="rc-input" /></td>
+            <td><input v-model="field.prop" class="rc-input" :class="{ 'is-invalid': isFieldInvalid(index, 'prop') }" :aria-required="true" :aria-invalid="isFieldInvalid(index, 'prop')" placeholder="必填" @input="clearFieldInvalid(index, 'prop')" @blur="onItemCodeBlur(field)" /></td>
+            <td><input v-model="field.desc" class="rc-input" :class="{ 'is-invalid': isFieldInvalid(index, 'desc') }" :aria-required="true" :aria-invalid="isFieldInvalid(index, 'desc')" placeholder="必填" @input="clearFieldInvalid(index, 'desc')" /></td>
             <td><input class="rc-input" :value="field.columnName" disabled /></td>
             <td>
               <select v-model="field.type" class="rc-select">
@@ -377,6 +399,10 @@ async function submit() {
 .rc-field { display: block; min-width: 0; height: auto; padding: 0; border: 0; background: transparent; margin-bottom: 12px; }
 .rc-field label { display: block; margin-bottom: 4px; color: var(--rc-muted); font-size: 11px; }
 .rc-input, .rc-select { width: 100%; box-sizing: border-box; border: 1px solid #dbe3ee; border-radius: 6px; padding: 6px 8px; background: #fff; color: var(--rc-text); font-size: 12px; }
+/* 1013 字段必填：编码/展示名列头红星 + 空值输入框红框提示 */
+.ete-required { color: #f5222d; margin-left: 2px; }
+.rc-input.is-invalid { border-color: #f5222d; background: #fff7f7; }
+.rc-input.is-invalid:focus { border-color: #f5222d; box-shadow: 0 0 0 3px rgba(245, 34, 45, 0.12); }
 .ete-title { display: flex; align-items: center; justify-content: space-between; margin: 10px 0; }
 .ete-title span { display: flex; gap: 8px; }
 .ete-table { min-width: 1220px; }

@@ -20,6 +20,7 @@ import { configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
 import { provideNodeInspectorAssets } from './useNodeInspectorAssets'
 import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
 import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
+import { refreshConfigUpdateDt } from '@/utils/flow/configVersion'
 import { assertConfigWritable, detachFailureFor } from '@/utils/flow/copiedConfigs'
 import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
@@ -353,6 +354,10 @@ async function doUpdateExistingConfig(): Promise<boolean> {
       return false
     }
     flow.markNodeConfigSaved(id.value)
+    // 本次保存后 updateDt 已变，不刷新的话下一次保存会被后端当成并发冲突拒掉。
+    // 读的是自己刚写完的版本，和保存前现取 base 来冒充「加载时版本」不是一回事；
+    // 同一配置的其他节点一并刷新。
+    await refreshConfigUpdateDt(configId.value)
     ElMessage.success(ack?.message || `配置 #${configId.value} 已保存`)
     return true
   } catch (e) {

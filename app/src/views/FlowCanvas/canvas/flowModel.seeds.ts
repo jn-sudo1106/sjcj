@@ -1156,6 +1156,8 @@ function applyStepMetadata(cfg: NodeConfig, step: Step) {
   if (step.configName) cfg.configName = step.configName
   if (step.configType) cfg.configType = String(step.configType)
   if (step.configUrl !== undefined) cfg.configUrl = step.configUrl
+  // 只在还没有时记：它是「页面加载时」的版本，后续补充回填不能把它刷成更新的值，否则并发校验被绕过。
+  if (step.configUpdateDt !== undefined && cfg.configUpdateDt === undefined) cfg.configUpdateDt = step.configUpdateDt
   if (step.runPolicy !== undefined) cfg.runPolicy = step.runPolicy
   if (step.itemId !== undefined) cfg.itemId = step.itemId
   if (step.sourceId !== undefined) cfg.stepSourceId = step.sourceId

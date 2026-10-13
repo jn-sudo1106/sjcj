@@ -501,6 +501,8 @@ export interface Step {
   /** 本步骤配置自己的 URL（旧 config.configUrl），随 topic 一起由 sourceApi.sourceSteps 从 configDetail 回填。
    *  与源 URL 不是同一份，见 NodeConfig.configUrl。 */
   configUrl?: string
+  /** 配置页面加载时的 updateDt（旧 config.updateDt），保存配置时原样带回，供后端做并发编辑校验。 */
+  configUpdateDt?: string
   /** 以下四项与 configName/topic 同批，由 sourceApi.sourceSteps 从 config/configDetail 回填。
    *  它们都是节点面板要展示、保存时又要原样回写的配置正文字段；不回填的话面板显示的是节点模板
    *  默认值，而「保存配置」会拿这个默认值把后端真值覆盖掉（2026-08-28 实测：配置 1400968

@@ -49,6 +49,22 @@ import { mockDatasets, mockMeasures, mockMetricStats } from './metrics'
 import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate, mockEntryDataUpload, mockDistinctSource } from './dataview'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourcePage, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckLogs, mockSourceCheckAdd, mockSourceCheckUpdate, mockSourceCheckDelete, mockSourceCheckChangeEnable, mockSourceCheckRunNow, mockSourceCheckCheckOne, mockSourceCheckLastRun } from './monitor'
+import {
+  mockMqCheckPaged,
+  mockMqCheckAdd,
+  mockMqCheckUpdate,
+  mockMqCheckDelete,
+  mockMqCheckChangeEnable,
+} from './queueCheck'
+import {
+  mockCommJobPaged,
+  mockCommJobAdd,
+  mockCommJobUpdate,
+  mockCommJobDelete,
+  mockCommJobChangeEnable,
+  mockCommJobCopy,
+  mockCommJobRun,
+} from './commJob'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
 import { mockFlowRecommend, mockNodeAiChat } from './flows'
@@ -242,6 +258,20 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'monitor/health': mockHealth,
   'mq/queuePaged': mockMq,
   'source/check/syncPaged': mockSync,
+  // 队列告警（队列校验配置，1013 从旧平台 QueueCheck.vue 迁入；内存表让写操作在 mock 下也能真落库）
+  'mq/check/paged': mockMqCheckPaged,
+  'mq/check/add': mockMqCheckAdd,
+  'mq/check/update': mockMqCheckUpdate,
+  'mq/check/delete': mockMqCheckDelete,
+  'mq/check/changeEnable': mockMqCheckChangeEnable,
+  // 自定义告警（通用定时任务，1013 从旧平台 CommJobList.vue 迁入；内存表让写操作在 mock 下也能真落库）
+  'comm-job/paged': mockCommJobPaged,
+  'comm-job/add': mockCommJobAdd,
+  'comm-job/update': mockCommJobUpdate,
+  'comm-job/delete': mockCommJobDelete,
+  'comm-job/changeEnable': mockCommJobChangeEnable,
+  'comm-job/copy': mockCommJobCopy,
+  'comm-job/run': mockCommJobRun,
   // 源监控（数据源告警，0910 迁入；内存表让写操作在 mock 下也能真落库）
   'source/check/paged': mockSourceCheckPaged,
   'source/check/paged-logs': mockSourceCheckLogs,

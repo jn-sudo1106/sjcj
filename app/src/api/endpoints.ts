@@ -64,22 +64,27 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/changeFreqTag', desc: '频率标识', danger: true, impl: true },
   { path: 'source/markVerified', desc: '人工核验标记', danger: true, impl: true },
   { path: 'source/generateConfig', desc: '生成新配置并应用', danger: true, impl: true },
-  // 源监控（数据源告警）除已单独确认的分页查询外暂不开 live：2026-09-10 确认后端这套接口要重做，
-  // 路径与字段都会变。0916 用户提供 source/check/paged 真实调用契约（首屏 page/limit，
-  // 选源后再带 sourceId），仅先放行监控视图列表；其余写接口等接口定稿后再逐个对齐并放行。
+  // 源监控（数据源告警）。0910 从旧平台 MonitorList 迁入；2026-10-12 按「对齐旧页面全量操作」
+  // 把这套端点的写接口一并放行真实调用——旧平台这一页的行开关 / 批量启停 / 立即运行 / 删除 /
+  // 新增 / 编辑保存本来就是全部直连后端，新页面若只放行分页，用户在页面上点的这些操作只会落到
+  // mock（演示口径）：看着能点、提示"操作成功（演示）"、后端一条都没收到，正是要修的问题。
+  // 0916 用户提供 source/check/paged 真实契约（首屏 page/limit，选源后再带 sourceId）。
+  // ⚠️ 放行不等于已联调：这套接口 2026-09-10 曾被后端告知要重做，路径与字段可能再变；
+  // 生产上写类端点还会被 client.ts 的写保护白名单拦，需要真落库的联调请把目标指向非生产环境
+  // （或按需增删那份白名单），别在生产上拿真实监控配置试。
   { path: 'source/check/paged', desc: '源检查列表', impl: true, live: true },
   { path: 'source/check/syncPaged', desc: '同步状态列表', impl: true },
-  { path: 'source/check/add', desc: '新增源检查', danger: true },
-  { path: 'source/check/update', desc: '修改源检查', danger: true },
-  { path: 'source/check/delete', desc: '删除源检查', danger: true },
-  { path: 'source/check/changeEnable', desc: '启停源检查', danger: true, impl: true },
-  { path: 'source/check/check-one', desc: '执行一次源检查', danger: true },
-  { path: 'source/check/runNow', desc: '立即运行源检查', danger: true, impl: true },
-  { path: 'source/check/paged-logs', desc: '源检查历史日志', impl: true, live: true },
+  { path: 'source/check/add', desc: '新增源检查 → POST body', danger: true, impl: true, live: true },
+  { path: 'source/check/update', desc: '修改源检查 → POST body（提交体需剔除 createDt/updateDt/lastRun/nextRun）', danger: true, impl: true, live: true },
+  { path: 'source/check/delete', desc: '删除源检查 → POST ?ids=a,b（参数在 query，不是 body）', danger: true, impl: true, live: true },
+  { path: 'source/check/changeEnable', desc: '启停源检查 → GET ?ids=&enable=（0=启用/1=停用，与 isDelete 同向）', danger: true, impl: true, live: true },
+  { path: 'source/check/check-one', desc: '执行一次源检查（CheckAdd「验证」）→ POST body', danger: true, impl: true, live: true },
+  { path: 'source/check/runNow', desc: '立即运行源检查 → GET ?ids=', danger: true, impl: true, live: true },
+  { path: 'source/check/paged-logs', desc: '源检查历史日志 → GET ?sourceId=&jobId=&state=&name=&page=&limit=', impl: true, live: true },
   // 定时预览：旧平台 `GET /v1/source/lastRun?cron=<urlencoded>`（api/util.js checkCron），
-  // 返回该 cron 的最近若干次运行时间；CheckAdd 的「定时」弹窗「测试」按钮用它。
+  // 返回该 cron 的最近若干次运行时间（**裸数组**）；CheckAdd 的「定时」弹窗「测试」用它。
   // cron 含 `*` / `?` / `/`，必须 URL 编码，否则 `?` 会被当成新参数的起始。
-  { path: 'source/lastRun', desc: '按 cron 计算最近运行时间（定时预览）', impl: true },
+  { path: 'source/lastRun', desc: '按 cron 计算最近运行时间（定时预览）', impl: true, live: true },
   // 2026-09-01 实测报错：source/tagSource 在真实后端根本不存在（GET 500）——对照旧平台
   // api/source.js 确认，打标签走的是 POST /v1/source/markBatch（markBatch(ids, flag, freq,
   // notify, tags)），tagSource 这个端点名是臆造的，从没在旧平台出现过。live 标记挪到下面
@@ -271,13 +276,18 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'job/updateJob', desc: '改已有定时的 cron（原地改，jobId 不变）', danger: true, live: true },
 
   /* ── comm-job 通用任务（目标 7 / 收录 7） ── */
-  { path: 'comm-job/paged', desc: '通用任务分页' },
-  { path: 'comm-job/add', desc: '新增通用任务', danger: true },
-  { path: 'comm-job/update', desc: '修改通用任务', danger: true },
-  { path: 'comm-job/delete', desc: '删除通用任务', danger: true },
-  { path: 'comm-job/run', desc: '运行通用任务', danger: true },
-  { path: 'comm-job/enable', desc: '启用通用任务', danger: true },
-  { path: 'comm-job/disable', desc: '停用通用任务', danger: true },
+  // 2026-10-13 按旧前端 src/api/comm-job.js 校正：
+  //   · 原登记的 comm-job/enable 与 comm-job/disable 两条是早期按后缀猜的，真实前端从未调用过；
+  //     实际只有**单条** changeEnable（GET ?ids=a,b&enable=0|1，与 source/check、mq/check 同款）。
+  //   · comm-job/copy 此前整条缺失（表格行内「复制」用的就是它：POST ?id=xx）。
+  //   · copy / run 都是 POST 但参数走 query（旧层写的是 `method:'post', params`），见 api/commJob.ts。
+  { path: 'comm-job/paged', desc: '通用任务分页（自定义告警列表）', impl: true, live: true },
+  { path: 'comm-job/add', desc: '新增通用任务', danger: true, impl: true, live: true },
+  { path: 'comm-job/update', desc: '修改通用任务', danger: true, impl: true, live: true },
+  { path: 'comm-job/delete', desc: '删除通用任务', danger: true, impl: true, live: true },
+  { path: 'comm-job/changeEnable', desc: '启停通用任务 → GET /v1/comm-job/changeEnable?ids=&enable=', danger: true, impl: true, live: true },
+  { path: 'comm-job/copy', desc: '复制通用任务 → POST /v1/comm-job/copy?id=', danger: true, impl: true, live: true },
+  { path: 'comm-job/run', desc: '运行通用任务 → POST /v1/comm-job/run?id=', danger: true, impl: true, live: true },
 
   /* ── task 任务实例（目标 2 / 收录 2） ── */
   { path: 'task/topTaskPaged', desc: '任务实例分页（运行记录事实源）', impl: true, live: true },
@@ -311,11 +321,17 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'mq/queueDetail2', desc: '队列详情' },
   { path: 'mq/message', desc: '获取消息' },
   { path: 'mq/purgeQueue', desc: '清空队列', danger: true },
-  { path: 'mq/check/paged', desc: '队列检查列表' },
-  { path: 'mq/check/add', desc: '新增队列检查', danger: true },
-  { path: 'mq/check/update', desc: '修改队列检查', danger: true },
-  { path: 'mq/check/delete', desc: '删除队列检查', danger: true },
-  { path: 'mq/check/changeEnable', desc: '启停队列检查', danger: true },
+  // 队列告警（队列校验配置）。1013 从旧平台 page/config/QueueCheck.vue 迁入；这一页在旧平台
+  // 的分页 / 新增 / 编辑 / 批量启停 / 批量删除**本来就全部直连后端**，所以这 5 条一起标 live：
+  // 只放行分页、把写操作留在 mock，会让页面上的按钮看着能用、其实后端一条都没收到。
+  // 契约照旧平台 api/queue-check.js：paged 用 page/limit；delete 的 ids 在 query（POST 无 body）；
+  // changeEnable 是 GET ?ids=&enable=，且 **enable 与 isDelete 同向（0=在用 / 1=停用）**。
+  // ⚠️ 放行 ≠ 已联调，生产上写类端点仍会被 client.ts 的写保护白名单拦一次。
+  { path: 'mq/check/paged', desc: '队列校验配置列表 → GET ?queue=&queueId=&name=&enable=&page=&limit=', impl: true, live: true },
+  { path: 'mq/check/add', desc: '新增队列校验配置 → POST body', danger: true, impl: true, live: true },
+  { path: 'mq/check/update', desc: '修改队列校验配置 → POST body（提交体需剔除 createDt/updateDt/lastRun/nextRun）', danger: true, impl: true, live: true },
+  { path: 'mq/check/delete', desc: '删除队列校验配置 → POST ?ids=a,b（参数在 query，不是 body）', danger: true, impl: true, live: true },
+  { path: 'mq/check/changeEnable', desc: '启停队列校验配置 → GET ?ids=&enable=（0=启用/1=停用，与 isDelete 同向）', danger: true, impl: true, live: true },
 
   /* ── file 原始文件 / JSON（目标 3 / 收录 5） ── */
   // 2026-08-17 核实：现役 FileList2.vue 不使用 filePaged，而是 file_resource 表的通用实体表接口。

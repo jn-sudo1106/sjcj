@@ -155,6 +155,40 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   // 2026-09-01：源启停。日常已 live（httpEndpoint=source/changeEnable），漏加白名单则
   // 生产顶栏「禁止改删」会拦，源视图批量启停点了后端收不到。
   'source/changeEnable',
+  // 2026-10-12 放开：源监控（数据源告警 / sourceCheck 页）的全部写操作。旧平台 MonitorList.vue
+  // 的同一个页面本来就是行开关 / 批量启停 / 立即运行 / 删除 / 新增 / 编辑保存全部直连后端，
+  // 迁到新平台后这些端点已在 endpoints.ts 标 live；若不加进本清单，日常代理默认指向生产
+  // （118.25.96.217）时会被写保护在发请求前拦下——用户点了「删除」只看到一条写保护报错，
+  // 后端一条都没收到，跟"没执行真实接口调用"是同一个观感。
+  // ⚠️ 破坏性：delete 是**永久删监控配置**，update 会改监控规则与收件人（改完直接影响告警行为），
+  // add 会让该源多出一条定时校验。UI 侧 delete / 立即运行 / 批量操作都有二次确认。
+  // 与 source/delete 同理：这只是"允许发出去"，不代表已在生产验证过这套契约。
+  'source/check/add',
+  'source/check/update',
+  'source/check/delete',
+  'source/check/changeEnable',
+  'source/check/runNow',
+  'source/check/check-one',
+  // 1013：队列告警（旧 page/config/QueueCheck.vue）的四个写端点。与 source/check 同性质——
+  // 旧页面本来就是直连后端在改真实队列校验配置，迁到新平台若只在 mock 里"成功"，
+  // 页面就是在骗人。delete 同样是**永久删配置**，UI 侧已加二次确认（confirmDanger）。
+  // 与 source/check 同理：这只是"允许发出去"，不代表已在生产验证过这套契约。
+  'mq/check/add',
+  'mq/check/update',
+  'mq/check/delete',
+  'mq/check/changeEnable',
+  // 1013：自定义告警（旧 page/config/CommJobList.vue，通用定时任务）的六个写端点。与 mq/check 同性质——
+  // 旧页面本来就是直连后端在改真实定时任务配置，且行内「运行」会真的把任务推给后端执行；
+  // 迁到新平台若只在 mock 里"成功"，页面就是在骗人。
+  // ⚠️ 破坏性：delete 是**永久删任务配置**（UI 侧已加 confirmDanger）；copy 会多出一条同配置的任务；
+  // run 是**真的触发执行**（旧版没有任何二次确认，这里保持 1:1 不确认——需要的话可以补）。
+  // 与 source/check 同理：这只是"允许发出去"，不代表已在生产验证过这套契约。
+  'comm-job/add',
+  'comm-job/update',
+  'comm-job/delete',
+  'comm-job/changeEnable',
+  'comm-job/copy',
+  'comm-job/run',
   // 2026-09-18：定时任务启停（节点配置「定时策略」右上角那个开关）。与源启停同性质：
   // 可逆、不删数据，停用只是把 isDelete 置 1，随时能再打开。
   'job/enableJob',

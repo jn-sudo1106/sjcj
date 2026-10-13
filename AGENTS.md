@@ -153,3 +153,6 @@ Review 报告 / 优化修改文档按命名建议放 `设计稿/设计方案/`�
 > 备份 `/data/app/web.bak-20261012-165951`，新 hash `index-CdirJHxU.js`，全部资源 200。
 > **清理（2026-10-12 17:05）**：以本地 dist assets 为白名单删掉旧残留（209→79），并删旧平台遗留
 > `js/`（42M）+`css/`（1.2M）；web 目录 58M → 7.8M，页面/懒加载 chunk/API 全部验证通过。
+> **三次部署（2026-10-12 18:09，合入 CNB 后重新构建）**：`git pull` 合入 `d6da8bd 数据源告警` 功能后重新构建部署，
+> 新 hash `index-D0_TDh3V.js`（数据源告警 Monitor/sourceCheck 在 `Monitor-CmYiMxee.js`）。备份 `/data/app/web.bak-20261012-180928`。
+> 部署后再清残留（122→82），服务器 assets 与本地 dist 完全一致（82 个），页面/资源/API 全通，web 7.9M。

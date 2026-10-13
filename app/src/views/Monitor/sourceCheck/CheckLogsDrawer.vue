@@ -29,13 +29,14 @@ async function load() {
   if (!filters.sourceId) { rows.value = []; total.value = 0; return }
   loading.value = true
   try {
+    // 入参逐字段对齐旧 api/monitor.js 的 pagedCheckJobLogs（sourceId/jobId/state/name + page/limit）
     const res = await pagedCheckJobLogs({
       sourceId: filters.sourceId,
       jobId: filters.jobId,
       state: filters.state || undefined,
       name: filters.name || undefined,
       page: page.value,
-      size: size.value,
+      limit: size.value,
     })
     rows.value = res.list
     total.value = res.total
