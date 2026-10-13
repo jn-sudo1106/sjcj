@@ -414,6 +414,33 @@ describe('EntryTab · 表ID列表', () => {
     expect(rows()[2].text()).toContain('tb_a')
   })
 
+  it('1013 列头排序：中文表名称按拼音序排序（不是 Unicode 码点序）', async () => {
+    // 拼音首字母：政(zheng) > 通(tong) > 附(fu)；码点序会完全不同（附U+9644 < 政U+653F < 通U+901A）
+    const entries: EntryType[] = [
+      { tableId: '1', tableName: 'tb_a', name: '政策文件', fields: [] },
+      { tableId: '2', tableName: 'tb_b', name: '通用新闻表', fields: [] },
+      { tableId: '3', tableName: 'tb_c', name: '附神资源表', fields: [] },
+    ]
+    vi.spyOn(entryApi, 'entryPaged').mockResolvedValue({ total: 3, list: entries })
+    await mountTab()
+    await waitForLoad()
+
+    const rows = () => wrapper.findAll('tbody tr')
+    // 点「表名称」→ 升序（拼音）：附神资源表, 通用新闻表, 政策文件
+    const nameTh = wrapper.findAll('th').find((t) => t.text().includes('表名称'))!
+    await nameTh.trigger('click')
+    await flushPromises()
+    expect(rows()[0].text()).toContain('附神资源表')
+    expect(rows()[1].text()).toContain('通用新闻表')
+    expect(rows()[2].text()).toContain('政策文件')
+
+    // 再点 → 降序（拼音反序）：政策文件, 通用新闻表, 附神资源表
+    await nameTh.trigger('click')
+    await flushPromises()
+    expect(rows()[0].text()).toContain('政策文件')
+    expect(rows()[2].text()).toContain('附神资源表')
+  })
+
   it('1013 只看收藏：开启后只显示收藏的表，关闭恢复全量', async () => {
     serverFavorites.add('t2')
     const entries: EntryType[] = [
