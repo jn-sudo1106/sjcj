@@ -13,7 +13,7 @@
 
 export const ROOT_ID = 'root'
 export const VIEW_DIR_NAME_MAX = 40
-/** 每个视图单独添加的源 ID 总数上限（来源组成员不占额度）。≈ 60KB，后端 queryJson 上限需 ≥ 128KB */
+/** 每个视图单独添加的源 ID 总数上限（来源组成员不占额度）。≈ 60KB，后端 queryJson 上限 256KB（10-13 开发环境实测）*/
 export const VIEW_SOURCE_LIMIT = 5000
 
 export interface ViewContainer {
