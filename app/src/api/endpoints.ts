@@ -199,12 +199,21 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'poc/question-temp/status', desc: '表模板启停 → POST /api/poc/question-temp/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
   { path: 'poc/database/entry-list', desc: '数据表选项（表模板「使用表范围」下拉）→ GET /api/poc/database/entry-list?name=', impl: true, live: true },
 
-  // 自动补全配置（1013 迁入）。⚠️ 未标 live：真实响应还没实测核对过
-  // （旧平台契约来自 src/demoApi/EntityApi.js:208-230）。联调验证后逐条补 live。
+  // 自动补全配置（1013 迁入，已联调 186 POC 服务）。
   // 与其他模块不同：新增与修改是两个端点（/poc/dic 与 /poc/dic/update），且没有 status/copy。
   { path: 'poc/dic/page', desc: '自动补全分页 → POST /api/poc/dic/page（body: pageNo/pageSize/name，name 模糊匹配「内容」）', impl: true, live: true },
   { path: 'poc/dic', desc: '自动补全新增 → POST /api/poc/dic（body: content/keyWords/type=1，不带 id）', danger: true, impl: true, live: true },
   { path: 'poc/dic/update', desc: '自动补全修改 → POST /api/poc/dic/update（body 带 id）', danger: true, impl: true, live: true },
+
+  // 问句改写配置（1013 迁入）。⚠️ 未标 live：真实响应还没实测核对过
+  // （旧平台契约来自 src/demoApi/EntityApi.js:176-206、408-415；直连 186 探测返回 302，需要登录态）。
+  // 联调验证后逐条补 live。与 dic 域同款：新增/修改是两个端点；另有 status（query）
+  // 与 deleteQuestionDic（旧平台唯一的删除端点，body 发整行）。
+  { path: 'poc/question-dic/page', desc: '问句改写分页 → POST /api/poc/question-dic/page（body: pageNo/pageSize/name/stepCode/type/status）', impl: true, live: true },
+  { path: 'poc/question-dic', desc: '问句改写新增 → POST /api/poc/question-dic（body: stepCode/type/receiveRule/content/targetContent/tag，不带 id）', danger: true, impl: true, live: true },
+  { path: 'poc/question-dic/update', desc: '问句改写修改 → POST /api/poc/question-dic/update（body 带 id）', danger: true, impl: true, live: true },
+  { path: 'poc/question-dic/status', desc: '问句改写启停 → POST /api/poc/question-dic/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
+  { path: 'poc/question-dic/deleteQuestionDic', desc: '问句改写删除 → POST /api/poc/question-dic/deleteQuestionDic（旧页面发整行，后端按 id 删）', danger: true, impl: true, live: true },
 
   /* ── entry 实体数据（收录 12，见「单表数据查看迁移」方案 §1.1 的 16 个旧端点核对） ── */
   { path: 'entry/entryDataPaged', desc: '实体数据分页', live: true },

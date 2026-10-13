@@ -79,6 +79,11 @@ import {
   mockDicTemplatePaged,
   mockDicTemplateAdd,
   mockDicTemplateUpdate,
+  mockQuestionDicPaged,
+  mockQuestionDicAdd,
+  mockQuestionDicUpdate,
+  mockQuestionDicChangeStatus,
+  mockQuestionDicDelete,
 } from './templateConfig'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
@@ -353,4 +358,11 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/dic/page': mockDicTemplatePaged,
   'poc/dic': mockDicTemplateAdd,
   'poc/dic/update': mockDicTemplateUpdate,
+
+  // 问句改写配置（1013 迁入）：新增/修改两个端点 + status（query）+ deleteQuestionDic（模板域唯一的删除）。
+  'poc/question-dic/page': mockQuestionDicPaged,
+  'poc/question-dic': mockQuestionDicAdd,
+  'poc/question-dic/update': mockQuestionDicUpdate,
+  'poc/question-dic/status': mockQuestionDicChangeStatus,
+  'poc/question-dic/deleteQuestionDic': mockQuestionDicDelete,
 }

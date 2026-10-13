@@ -14,7 +14,7 @@
 import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
 import type { Ack, Paged } from './types/common'
-import type { DicTemplate, PocTableEntry, SqlTemplate, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow } from './types/template'
+import type { DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow } from './types/template'
 
 export interface TemplateCrudConfig {
   /** endpoints.ts 里的模块名，逻辑键 = `poc/${module}${后缀}`，如 sql-temp → poc/sql-temp/page */
@@ -89,6 +89,33 @@ export const dicTemplateApi: TemplateCrudApi<DicTemplate> = {
     form.id == null
       ? request<Ack>('poc/dic', { ...form }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/dic` })
       : request<Ack>('poc/dic/update', { ...form }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/dic/update` }),
+}
+
+/** 问句改写的接口面：通用 CRUD 面 + 删除（旧平台独有，其他模板模块没有删除端点） */
+export interface QuestionDicApi extends TemplateCrudApi<QuestionDic> {
+  /** 删除整条改写规则；旧页面把**整行**发过去（见 types/template.ts 的 QuestionDic 注释） */
+  remove(row: Partial<QuestionDic>): Promise<Ack>
+}
+
+/**
+ * 问句改写配置（旧「模板配置 → 问句改写配置」，src/demo/QuestionDicList.vue + modal/QuestionDicEditor.vue）。
+ *
+ * 同样没走 createTemplateCrudApi 工厂：新增/修改是两个端点（/poc/question-dic 与 /poc/question-dic/update），
+ * 且比工厂的四件套多一个 deleteQuestionDic（旧平台唯一的删除端点）。
+ * 启停保留：/poc/question-dic/status，参数走 query（旧 questionDicDataStatus 用 axios params）。
+ */
+export const questionDicApi: QuestionDicApi = {
+  // 分页：除 name（模糊匹配「内容」）外，旧列表还按 stepCode / type / status 筛，全部进 body
+  page: (query: TemplatePageQuery) =>
+    request<Paged<QuestionDic>>('poc/question-dic/page', { ...query }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/question-dic/page` }),
+  save: (form: Partial<QuestionDic>) =>
+    form.id == null
+      ? request<Ack>('poc/question-dic', { ...form }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/question-dic` })
+      : request<Ack>('poc/question-dic/update', { ...form }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/question-dic/update` }),
+  changeStatus: (id: number, status: string) =>
+    request<Ack>('poc/question-dic/status', { id, status }, { method: 'POST', paramsIn: 'query', httpEndpoint: `${POC_API_PREFIX}/question-dic/status` }),
+  remove: (row: Partial<QuestionDic>) =>
+    request<Ack>('poc/question-dic/deleteQuestionDic', { ...row }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/question-dic/deleteQuestionDic` }),
 }
 
 /**

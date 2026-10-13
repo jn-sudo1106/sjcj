@@ -3,7 +3,7 @@
 // 字段名、状态口径、分页参数都 1:1 沿用旧平台实体，不在本项目里改名或合并字段
 // （旧页面：src/demo/SqlTempConfig.vue + SqlTempEditModal.vue、src/demo/QuestionTempConfig.vue +
 //   QuestionTempEditModal.vue，旧接口：src/demoApi/EntityApi.js）。
-// 已迁入：sql 模板、表模板、自动补全；后续要迁的兄弟模块（问句改写 / 数据索引同步 / 数据字典 / 提示词 / 分词）
+// 已迁入：sql 模板、表模板、自动补全、问句改写；后续要迁的兄弟模块（数据索引同步 / 数据字典 / 提示词 / 分词）
 // 的类型继续往这个文件里加，接口统一走 api/templateConfig.ts 的 CRUD 工厂。
 
 import type { Ack, Paged } from './common'
@@ -78,6 +78,31 @@ export interface DicTemplate extends TemplateRow {
   keyWords?: string | null
   /** 类型：旧编辑弹窗固定提交数字 1（页面上类型选择是注释掉的），1:1 保留 */
   type?: number | string
+  delFlag?: string
+}
+
+/**
+ * 问句改写配置（旧「模板配置 → 问句改写配置」，src/demo/QuestionDicList.vue + modal/QuestionDicEditor.vue）。
+ *
+ * ⚠️ 三处旧口径（EntityApi.js:176-206、408-415）：
+ * · 新增 POST /poc/question-dic、修改 POST /poc/question-dic/update，**两个端点**（同 dic 域）；
+ * · 启停 POST /poc/question-dic/status 参数走 **query**；
+ * · 删除 POST /poc/question-dic/deleteQuestionDic，旧页面把**整行**当 body 发过去（不是只发 id）。
+ * type 在这个域是**字符串** '10'/'11'/'20'（与自动补全的 type=1 数字不同，别混用）。
+ */
+export interface QuestionDic extends TemplateRow {
+  /** 阶段：pre-replace 前置替换 / after-replace 后置替换 / before-llm 大模型调用前替换 / after-llm 大模型调用后替换 */
+  stepCode?: string | null
+  /** 类型：'10' 简单替换 / '11' 正则替换 / '20' 字段替换 */
+  type?: string | null
+  /** 接收条件（旧列表列标题就是「接收条件」） */
+  receiveRule?: string | null
+  /** 内容（被改写的原文，分页筛选参数名是 name，匹配的就是这个字段） */
+  content?: string | null
+  /** 目标内容（改写结果） */
+  targetContent?: string | null
+  /** 标签：旧编辑弹窗固定提交空串，列表列已注释掉不展示 */
+  tag?: string | null
   delFlag?: string
 }
 
