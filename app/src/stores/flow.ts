@@ -1435,6 +1435,7 @@ export const useFlowStore = defineStore('flow', () => {
     setContentRules: (id: string, value: string) => nodeStore.setContentRules(id, value),
     setConfigName: (id: string, name: string) => nodeStore.setConfigName(id, name),
     setConfigUrl: (id: string, url: string) => nodeStore.setConfigUrl(id, url),
+    setConfigUpdateDt: (id: string, updateDt: string | undefined) => nodeStore.setConfigUpdateDt(id, updateDt),
     hydrateConfigUrl: (id: string, url: string) => nodeStore.hydrateConfigUrl(id, url),
     setItemId: (id: string, itemId: string) => nodeStore.setItemId(id, itemId),
     setStepSourceId: (id: string, sourceId: string) => nodeStore.setStepSourceId(id, sourceId),

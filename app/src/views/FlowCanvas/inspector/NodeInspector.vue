@@ -353,6 +353,9 @@ async function doUpdateExistingConfig(): Promise<boolean> {
       return false
     }
     flow.markNodeConfigSaved(id.value)
+    // 本次保存后 updateDt 已变，不刷新的话下一次保存会被后端当成并发冲突拒掉。
+    // 这里读的是自己刚写完的版本，和保存前现取 base 来冒充「加载时版本」不是一回事。
+    flow.setConfigUpdateDt(id.value, (await configApi.configDetail(configId.value).catch(() => null))?.updatedAt)
     ElMessage.success(ack?.message || `配置 #${configId.value} 已保存`)
     return true
   } catch (e) {

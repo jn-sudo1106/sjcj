@@ -45,6 +45,7 @@ export function applyConfigToNode(cfg: NodeConfig, config: Config): void {
   cfg.configId = config.configId
   cfg.configName = config.name
   cfg.configUrl = config.url ?? ''
+  cfg.configUpdateDt = config.updatedAt
   cfg.runPolicy = config.runPolicy
   if (config.configType) {
     cfg.configType = String(config.configType)
@@ -362,5 +363,7 @@ export function buildConfigPayload(cfg: NodeConfig, base: Record<string, unknown
   Object.entries(edited).forEach(([key, value]) => {
     if (value !== undefined) payload[key] = value
   })
+  // 并发编辑校验：updateDt 必须是加载时的值，不能用 base（保存时现取的 configDetail）里的最新值。
+  if (cfg.configUpdateDt !== undefined) payload.updateDt = cfg.configUpdateDt
   return payload
 }

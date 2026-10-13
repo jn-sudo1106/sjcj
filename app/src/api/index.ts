@@ -342,7 +342,7 @@ async function attachStepConfigDetails(steps: Step[], backendScope?: RequestOpti
   // 过一遍模型后再读 `url` 会在适配漏字段时把面板留空。
   const results = await Promise.allSettled(configIds.map((id) => configApi.configDetailRaw(id, { backendScope })))
   type StepConfigDetail = {
-    topic?: string; configName?: string; configUrl?: string; isLoginConfig?: boolean; multiMode?: number
+    topic?: string; configName?: string; configUrl?: string; configUpdateDt?: string; isLoginConfig?: boolean; multiMode?: number
     configType?: string
     bizType?: string; dedupType?: string; codeRule?: string; contentRule?: string; coreParam?: string
     runPolicy?: string
@@ -359,6 +359,7 @@ async function attachStepConfigDetails(steps: Step[], backendScope?: RequestOpti
       topic: mapped.topic || undefined,
       configName: mapped.name || undefined,
       configUrl: configUrlFromLegacy(r.value),
+      configUpdateDt: mapped.updatedAt,
       bizType: mapped.templateCode || undefined,
       dedupType: mapped.dedupType ?? undefined,
       codeRule: mapped.codeRule || undefined,
@@ -380,6 +381,7 @@ async function attachStepConfigDetails(steps: Step[], backendScope?: RequestOpti
       ...(detail.topic ? { topic: detail.topic } : {}),
       ...(detail.configName ? { configName: detail.configName } : {}),
       ...(detail.configUrl !== undefined ? { configUrl: detail.configUrl } : {}),
+      ...(detail.configUpdateDt !== undefined ? { configUpdateDt: detail.configUpdateDt } : {}),
       ...(detail.bizType ? { bizType: detail.bizType } : {}),
       ...(detail.dedupType !== undefined ? { dedupType: detail.dedupType } : {}),
       ...(detail.codeRule ? { codeRule: detail.codeRule } : {}),
