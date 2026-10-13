@@ -676,6 +676,52 @@ describe('NodeInspector 定时保存后回查真 jobId（2026-09-22）', () => {
   })
 })
 
+// 2026-10-12 开发环境实测：新建的流程只有「草稿 v1」没有发布版，保存定时被后端拒绝
+// 「以下源无法按所选流程调度（未关联或ROOT缺失）」，用户不知道该做什么。
+describe('NodeInspector 新建流程保存定时（2026-10-12）', () => {
+  async function saveWithOverview(overview: Awaited<ReturnType<typeof flowVersionApi.overview>>, cronError?: Error) {
+    mockAssets()
+    setActivePinia(createPinia())
+    const flow = useFlowStore()
+    flow.sourceCfg = { sourceId: 's-1', name: '某源', url: 'http://x', configId: 'c-0', mainTable: 'T1', owner: 'admin', state: 'C', flowId: '21000012' } as never
+    flow.configs['web-1'] = cloneConfig(NODE_CONFIGS['web-list'])
+    flow.main = ['web-1']
+    flow.select('web-1')
+    flow.setActiveTab('config')
+    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(overview)
+    await useFlowVersionStore().load('21000012')
+    vi.spyOn(configApi, 'addConfig').mockResolvedValue({ ok: true, configId: 'c-1', message: 'ok' })
+    vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: 'c-1', name: 'cfg' } as never)
+    const saveCron = cronError
+      ? vi.spyOn(sourceApi, 'saveSourceCron').mockRejectedValue(cronError)
+      : vi.spyOn(sourceApi, 'saveSourceCron').mockResolvedValue({ ok: true, message: 'ok' })
+    vi.spyOn(sourceApi, 'sourceJobs').mockResolvedValue([])
+    const wrapper = mount(NodeInspector)
+    await flushPromises()
+    await wrapper.get('.rc-insp-foot button').trigger('click')
+    await flushPromises()
+    return { saveCron, wrapper }
+  }
+  const draftOnly = { enabled: true, curVer: null, nextVer: 1, publishId: null, draftId: '1056', versions: [{ versionId: '1056', flowVer: 1, ver: 1, state: 'W', isLock: 0, isDelete: 0, baseId: null }] }
+  const published = { enabled: true, curVer: 1, nextVer: 2, publishId: '748', draftId: null, versions: [{ versionId: '748', flowVer: 1, ver: 1, state: 'C', isLock: 0, isDelete: 0, baseId: null }] }
+
+  it('流程只有草稿、没有发布版：不发 createJobs，直接说明先发布', async () => {
+    const { saveCron } = await saveWithOverview(draftOnly)
+    expect(saveCron).not.toHaveBeenCalled()
+  })
+
+  it('流程已发布：照常发 createJobs', async () => {
+    const { saveCron } = await saveWithOverview(published)
+    expect(saveCron).toHaveBeenCalled()
+  })
+
+  it('后端回「ROOT缺失」：提示翻成人话，不是「请求异常 [source/createJobs]…」', async () => {
+    const error = vi.spyOn(ElMessage, 'error').mockImplementation(() => ({ close: () => {} }))
+    await saveWithOverview(published, new Error('请求异常 [source/createJobs]: 请求失败 500: 错误信息:运行时异常：以下源无法按所选流程调度（未关联或ROOT缺失），未创建任何调度：430024674'))
+    expect(error).not.toHaveBeenCalledWith(expect.stringContaining('请求异常'))
+  })
+})
+
 // 1008-08（二段 §十五）：新建 / 打开流程后默认选中第一个节点，取消「未选择」状态；
 // 「未选择节点」空态只留给一个节点都没有的流程。
 describe('NodeInspector 没有选中节点时自动选第一个（1008-08）', () => {
@@ -734,9 +780,10 @@ describe('NodeInspector 没有选中节点时自动选第一个（1008-08）', (
   })
 })
 
-// 2026-10-10 流程版本（217）：发布版只读——节点设置能滚动、切页签查看，但不给保存入口
-describe('NodeInspector 发布版只读', () => {
-  it('发布版：不显示保存按钮和未保存红点，底部提示先「编辑草稿」；有草稿后恢复保存', async () => {
+// 2026-10-10 流程版本（217）：10-11 起发布版可直接改（首次保存自动生成草稿）；锁定的草稿只读——
+// 节点设置能滚动、切页签查看，但不给保存入口
+describe('NodeInspector 版本只读', () => {
+  it('发布版可直接改：有保存按钮；草稿锁定后只读：不显示保存按钮和未保存红点', async () => {
     mockAssets()
     setActivePinia(createPinia())
     const flow = useFlowStore()
@@ -745,22 +792,22 @@ describe('NodeInspector 发布版只读', () => {
       [{ stepId: '41797', sourceId: '430024667', name: '定期报告', dependsOn: ['0'], configId: '1401081', inputTable: '6200036', outputTable: '6200036', enabled: true } as never],
     )
     flow.select('41797')
-    const row = (versionId: string, state: string) => ({ versionId, flowVer: state === 'W' ? 2 : 1, ver: 1, state, isLock: 0, isDelete: 0, baseId: null })
+    const row = (versionId: string, state: string, isLock = 0) => ({ versionId, flowVer: state === 'W' ? 2 : 1, ver: 1, state, isLock, isDelete: 0, baseId: null })
     const overview = vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ enabled: true, curVer: 1, nextVer: 2, publishId: '745', draftId: null, versions: [row('745', 'C')] })
     await useFlowVersionStore().load('14010130')
 
     const w = mount(NodeInspector)
     await flushPromises()
+    expect(w.find('.rc-inspector').classes()).not.toContain('is-readonly')
+    expect(w.find('[data-testid="node-config-save"]').exists()).toBe(true)
+
+    overview.mockResolvedValue({ enabled: true, curVer: 1, nextVer: 2, publishId: '745', draftId: '1043', versions: [row('1043', 'W', 1), row('745', 'C')] })
+    await useFlowVersionStore().refresh('14010130')
+    await flushPromises()
     expect(w.find('.rc-inspector').classes()).toContain('is-readonly')
     expect(w.find('[data-testid="node-config-save"]').exists()).toBe(false)
     expect(w.find('.foot-dot').exists()).toBe(false)
-    expect(w.text()).toContain('发布版本只读，点画布上方「编辑草稿」后可修改')
-
-    overview.mockResolvedValue({ enabled: true, curVer: 1, nextVer: 2, publishId: '745', draftId: '1043', versions: [row('1043', 'W'), row('745', 'C')] })
-    await useFlowVersionStore().refresh('14010130')
-    await flushPromises()
-    expect(w.find('.rc-inspector').classes()).not.toContain('is-readonly')
-    expect(w.find('[data-testid="node-config-save"]').exists()).toBe(true)
+    expect(w.text()).toContain('当前版本只读')
     w.unmount()
   })
 })

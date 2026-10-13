@@ -2,7 +2,8 @@ import { computed, onScopeDispose, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { useAuthStore } from './auth'
 
-export type DirectoryMode = 'system' | 'personal'
+// 'view'：源管理「我的视图」（2026-10-12）
+export type DirectoryMode = 'system' | 'personal' | 'view'
 export type DirectoryDefault = DirectoryMode | 'last'
 export interface SourceGroup { id: string; name: string; parentId: string; sourceIds: string[] }
 interface DirectoryState { version: 1; groups: SourceGroup[]; preference: DirectoryDefault; last: DirectoryMode }
@@ -14,8 +15,8 @@ export function parseDirectoryState(raw: string | null): DirectoryState {
   if (!raw) return emptyState()
   const value = JSON.parse(raw) as DirectoryState
   if (value.version !== 1 || !Array.isArray(value.groups)
-    || !['system', 'personal', 'last'].includes(value.preference)
-    || !['system', 'personal'].includes(value.last)) throw new Error('源分组本机数据格式异常')
+    || !['system', 'personal', 'view', 'last'].includes(value.preference)
+    || !['system', 'personal', 'view'].includes(value.last)) throw new Error('源分组本机数据格式异常')
   const ids = new Set<string>()
   for (const g of value.groups) {
     if (!g || typeof g.id !== 'string' || !g.id || ids.has(g.id) || typeof g.name !== 'string'

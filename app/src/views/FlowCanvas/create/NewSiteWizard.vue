@@ -4,7 +4,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { siteApi, type Site, type Source } from '@/api'
+import { flowCenterApi, siteApi, workflowBindingApi, type Site, type Source } from '@/api'
+import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
 import { useUiStore } from '@/stores/ui'
 import { firstSourceId } from '@/utils/url/workspaceRoute'
 import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
@@ -65,6 +66,33 @@ function onCancelGate() {
   void router.push('/collect')
 }
 
+/**
+ * 2026-10-12：217 后端按源读步骤要求源已绑流程，只建源不建流程，进画布就报「源未绑定有效流程」。
+ * 用户定：同一次新建采集的源共用一条流程（名称 = 网站名），建好后整批绑上并设为默认。
+ * 网站和源此时已经落库，这一步失败不回滚，只提示——画布里还能用流程标签栏「＋」补建。
+ * 返回失败说明，成功返回空串。
+ */
+async function createSharedFlow(name: string, sourceIds: string[]): Promise<string> {
+  if (!sourceIds.length) return ''
+  let flowId: string
+  try {
+    flowId = (await flowCenterApi.save({ name, definition: makeBlankTemplateDefinition() })).id
+  } catch (error) {
+    return `网站和源已创建，但新建流程失败：${(error as Error)?.message ?? String(error)}。可在画布流程标签栏点「＋」新建`
+  }
+  const failed: string[] = []
+  for (const sourceId of sourceIds) {
+    try {
+      await workflowBindingApi.bind({ sourceId, workflowId: flowId, primary: true })
+    } catch {
+      failed.push(sourceId)
+    }
+  }
+  return failed.length
+    ? `网站、源和流程 #${flowId} 已创建，但 ${failed.length} 个源关联流程失败（${failed.join('、')}），可在流程中心给它们关联`
+    : ''
+}
+
 async function onCreateAndEnter() {
   if (creating.value) return
   const site = gateSite.value
@@ -98,7 +126,9 @@ async function onCreateAndEnter() {
       return
     }
     const sourceId = res.sourceId || firstSourceId(sources)
-    ElMessage.success(`网站「${siteForCreate.name}」已创建（${sources.length} 个源），已进入首个源的流程视图`)
+    const flowNote = await createSharedFlow(siteForCreate.name.trim(), res.sourceIds ?? [])
+    if (flowNote) ElMessage.warning(flowNote)
+    else ElMessage.success(`网站「${siteForCreate.name}」已创建（${sources.length} 个源，共用流程「${siteForCreate.name.trim()}」），已进入首个源的流程视图`)
     await router.replace({ path: '/canvas', query: { ...(res.siteId ? { siteId: res.siteId } : {}), sourceId, view: 'flow' } })
   } catch (error) {
     ElMessage.error(`创建失败：${(error as Error).message ?? '网络异常'}，请勿重复提交；如已返回网站 ID，请先回查网站后再继续`)

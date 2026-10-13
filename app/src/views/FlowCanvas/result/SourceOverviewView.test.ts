@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, shallowMount, type VueWrapper } from '@vue/test-utils'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SourceOverviewView from './SourceOverviewView.vue'
-import { favoriteApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type Source } from '@/api'
+import { dataApi, favoriteApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type Source } from '@/api'
 import { favoriteSourceIds } from '@/utils/sourceFavorites'
 import * as xlsxExport from '@/utils/format/xlsxExport'
 import { createPinia, setActivePinia } from 'pinia'
@@ -1650,6 +1650,24 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
     wrapper.unmount()
   })
 
+  it('点主表：拉表结构并打开表详情抽屉；没有主表的源显示 —', async () => {
+    const withTable: Source = { ...INDEP_SOURCE, mainTable: '6200039' }
+    const { wrapper } = await mountGroupOps([withTable, { ...GROUP_SOURCE, mainTable: '' }])
+    const metaSpy = vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({
+      tableId: '6200039', tableName: 'sense_data.TB_TEST02', name: '测试表2', state: 'C', fields: [],
+    } as never)
+
+    const links = wrapper.findAll('[data-testid="source-overview-main-table"]')
+    expect(links).toHaveLength(1)
+    expect(links[0].text()).toBe('6200039')
+    await links[0].trigger('click')
+    await flushPromises()
+
+    expect(metaSpy).toHaveBeenCalledWith('6200039')
+    expect(document.body.textContent).toContain('sense_data.TB_TEST02')
+    wrapper.unmount()
+  })
+
   it('非 groupOps（收藏页签）不显示三列', async () => {
     const { wrapper } = await mountGroupOps()
     // groupOps=false 时（收藏 / 最近页签）三列隐藏
@@ -1704,3 +1722,52 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
     wrapper.unmount()
   })
 })
+
+// 2026-10-12「我的视图」：外部给定视图状态 → 套用并重查；当前状态往外报；隐藏列
+describe('SourceOverviewView · 视图状态', () => {
+  afterEach(() => vi.restoreAllMocks())
+  const viewState = {
+    v: 1 as const,
+    conditions: [{ field: 'name' as const, op: 'like' as const, value: '公告' }],
+    site: '', sourceGroup: '', status: 'E' as const, tag: '', countMax: '5',
+    sortField: 'DATA_CNT', sortDirection: 'desc' as const, pageSize: 50, hiddenColumns: ['url', 'tags'],
+  }
+
+  it('挂载即按视图状态查询：条件、状态、数据量、排序、每页条数都带上；隐藏的列不出', async () => {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 1, list: [source] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', viewState } })
+    await flushPromises()
+    expect(page).toHaveBeenCalledWith(expect.objectContaining({ name: '公告', state: 'E', count: 5, field: 'DATA_CNT', type: 'DESC', size: 50, page: 1 }))
+    const heads = wrapper.findAll('th').map((th) => th.text())
+    expect(heads).not.toContain('URL')
+    expect(heads).not.toContain('标签')
+    expect(heads).toContain('主表')
+    expect(wrapper.find('.sov-url').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('改条件后报出新状态；父级换成新的视图状态对象时重新套用并重查', async () => {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', viewState } })
+    await flushPromises()
+    await wrapper.get('[data-testid="source-overview-state"]').setValue('C')
+    await flushPromises()
+    const reported = wrapper.emitted('stateChange')!.at(-1)![0] as typeof viewState
+    expect(reported).toMatchObject({ status: 'C', countMax: '5', pageSize: 50, hiddenColumns: ['url', 'tags'] })
+    await wrapper.setProps({ viewState: { ...viewState, status: 'disabled', hiddenColumns: [] } })
+    await flushPromises()
+    expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ enable: '1', state: undefined }))
+    expect(wrapper.findAll('th').map((th) => th.text())).toContain('URL')
+    wrapper.unmount()
+  })
+
+  it('不传视图状态时行为不变：全部列、默认 20 条', async () => {
+    const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
+    const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '' } })
+    await flushPromises()
+    expect(page).toHaveBeenCalledWith(expect.objectContaining({ size: 20, field: undefined }))
+    expect(wrapper.findAll('th').map((th) => th.text())).toEqual(expect.arrayContaining(['URL', '主表', '标签', '状态', '备注']))
+    wrapper.unmount()
+  })
+})
+

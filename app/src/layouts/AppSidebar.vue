@@ -4,7 +4,7 @@
 // 源详情 / 新建源画布（/canvas?sourceId=X 或 /canvas?mode=new）逻辑上属于「采集资产」子页，侧栏高亮采集资产
 import { computed, type Component } from 'vue'
 import { useRouter } from 'vue-router'
-import { Box, Clock, Connection, DataAnalysis, Document, Files, Histogram, Monitor, Odometer, Setting } from '@element-plus/icons-vue'
+import { Box, Clock, Connection, DataAnalysis, Document, Files, Histogram, Monitor, Odometer, Setting, Tickets } from '@element-plus/icons-vue'
 import { TABS } from '@/router/tabs'
 import { useActiveNavKey } from '@/composables/useActiveNavKey'
 import { useUiStore } from '@/stores/ui'
@@ -24,6 +24,7 @@ const groupLabels = {
   config: '流程与规则',
   tools: '运行与监控',
   intelligence: '智能能力',
+  template: '模板配置',
   settings: '系统设置',
 } as const
 
@@ -52,6 +53,8 @@ const navIcons: Record<string, Component> = {
   tasks: Clock,
   sync: Connection,
   monitor: Monitor,
+  // 模板配置（1013 起逐个迁入）：TAB key 带连字符，对象键必须加引号，漏加不报错只出空图标
+  'sql-template': Tickets,
   settings: Setting,
 }
 </script>

@@ -271,6 +271,13 @@ export const useNodeStore = defineStore('node', () => {
     touchConfig(id)
   }
 
+  /** 保存成功后刷新配置版本号（updateDt）。这是回读，不置脏。 */
+  function setConfigUpdateDt(id: string, updateDt: string | undefined) {
+    const c = configs[id]
+    if (!c) return
+    c.configUpdateDt = updateDt
+  }
+
   /** 规则 ID / 任务 URL 来源字段（步骤 itemId）。落在步骤上，走自动保存。 */
   function setItemId(id: string, itemId: string) {
     const c = configs[id]
@@ -382,6 +389,7 @@ export const useNodeStore = defineStore('node', () => {
     setContentRules,
     setConfigName,
     setConfigUrl,
+    setConfigUpdateDt,
     hydrateConfigUrl,
     setItemId,
     setStepSourceId,

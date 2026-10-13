@@ -64,18 +64,27 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source/changeFreqTag', desc: '频率标识', danger: true, impl: true },
   { path: 'source/markVerified', desc: '人工核验标记', danger: true, impl: true },
   { path: 'source/generateConfig', desc: '生成新配置并应用', danger: true, impl: true },
-  // 源监控（数据源告警）除已单独确认的分页查询外暂不开 live：2026-09-10 确认后端这套接口要重做，
-  // 路径与字段都会变。0916 用户提供 source/check/paged 真实调用契约（首屏 page/limit，
-  // 选源后再带 sourceId），仅先放行监控视图列表；其余写接口等接口定稿后再逐个对齐并放行。
+  // 源监控（数据源告警）。0910 从旧平台 MonitorList 迁入；2026-10-12 按「对齐旧页面全量操作」
+  // 把这套端点的写接口一并放行真实调用——旧平台这一页的行开关 / 批量启停 / 立即运行 / 删除 /
+  // 新增 / 编辑保存本来就是全部直连后端，新页面若只放行分页，用户在页面上点的这些操作只会落到
+  // mock（演示口径）：看着能点、提示"操作成功（演示）"、后端一条都没收到，正是要修的问题。
+  // 0916 用户提供 source/check/paged 真实契约（首屏 page/limit，选源后再带 sourceId）。
+  // ⚠️ 放行不等于已联调：这套接口 2026-09-10 曾被后端告知要重做，路径与字段可能再变；
+  // 生产上写类端点还会被 client.ts 的写保护白名单拦，需要真落库的联调请把目标指向非生产环境
+  // （或按需增删那份白名单），别在生产上拿真实监控配置试。
   { path: 'source/check/paged', desc: '源检查列表', impl: true, live: true },
   { path: 'source/check/syncPaged', desc: '同步状态列表', impl: true },
-  { path: 'source/check/add', desc: '新增源检查', danger: true },
-  { path: 'source/check/update', desc: '修改源检查', danger: true },
-  { path: 'source/check/delete', desc: '删除源检查', danger: true },
-  { path: 'source/check/changeEnable', desc: '启停源检查', danger: true, impl: true },
-  { path: 'source/check/check-one', desc: '执行一次源检查', danger: true },
-  { path: 'source/check/runNow', desc: '立即运行源检查', danger: true, impl: true },
-  { path: 'source/check/paged-logs', desc: '源检查历史日志', impl: true, live: true },
+  { path: 'source/check/add', desc: '新增源检查 → POST body', danger: true, impl: true, live: true },
+  { path: 'source/check/update', desc: '修改源检查 → POST body（提交体需剔除 createDt/updateDt/lastRun/nextRun）', danger: true, impl: true, live: true },
+  { path: 'source/check/delete', desc: '删除源检查 → POST ?ids=a,b（参数在 query，不是 body）', danger: true, impl: true, live: true },
+  { path: 'source/check/changeEnable', desc: '启停源检查 → GET ?ids=&enable=（0=启用/1=停用，与 isDelete 同向）', danger: true, impl: true, live: true },
+  { path: 'source/check/check-one', desc: '执行一次源检查（CheckAdd「验证」）→ POST body', danger: true, impl: true, live: true },
+  { path: 'source/check/runNow', desc: '立即运行源检查 → GET ?ids=', danger: true, impl: true, live: true },
+  { path: 'source/check/paged-logs', desc: '源检查历史日志 → GET ?sourceId=&jobId=&state=&name=&page=&limit=', impl: true, live: true },
+  // 定时预览：旧平台 `GET /v1/source/lastRun?cron=<urlencoded>`（api/util.js checkCron），
+  // 返回该 cron 的最近若干次运行时间（**裸数组**）；CheckAdd 的「定时」弹窗「测试」用它。
+  // cron 含 `*` / `?` / `/`，必须 URL 编码，否则 `?` 会被当成新参数的起始。
+  { path: 'source/lastRun', desc: '按 cron 计算最近运行时间（定时预览）', impl: true, live: true },
   // 2026-09-01 实测报错：source/tagSource 在真实后端根本不存在（GET 500）——对照旧平台
   // api/source.js 确认，打标签走的是 POST /v1/source/markBatch（markBatch(ids, flag, freq,
   // notify, tags)），tagSource 这个端点名是臆造的，从没在旧平台出现过。live 标记挪到下面
@@ -152,6 +161,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/modifyEntryType', desc: '修改实体', danger: true, impl: true, live: true },
   { path: 'config/deleteEntryType', desc: '删除实体表', danger: true, impl: true, live: true },
   { path: 'config/entry-type-clear', desc: '清除实体表缓存（前端已下线，列表改刷新重查）', danger: true, impl: true, live: true },
+  // 旧 EntryDataImport.vue：前端解析 Excel 生成 items（覆盖字段定义）+ 表头之后的行作为 data，整体 POST。
   { path: 'config/entryTypeCopy', desc: '复制实体表', danger: true, impl: true, live: true },
   { path: 'config/checkTable', desc: '检查物理表结构', impl: true, live: true },
   { path: 'config/syncTable', desc: '同步物理表结构', danger: true, impl: true, live: true },
@@ -172,6 +182,14 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/logPaged', desc: '配置操作日志' },
   { path: 'config/bindParam', desc: '配置绑定参数', danger: true },
   { path: 'config/unbindParam', desc: '配置解绑参数', danger: true },
+
+  /* ── poc 模板配置（旧 ai-chat-view「模板配置」域，1013 迁入 sql 模板配置） ──
+     POC 服务是独立进程（dev 代理 /api/poc → 186:9093，见 vite.config.ts），不在 9999 业务后端上；
+     四个端点的调用形态见 api/templateConfig.ts 顶部注释。 */
+  { path: 'poc/sql-temp/page', desc: 'sql 模板分页 → POST /api/poc/sql-temp/page（body: pageNo/pageSize/name）', impl: true, live: true },
+  { path: 'poc/sql-temp', desc: 'sql 模板新增/编辑 → POST /api/poc/sql-temp（body 带 id 即更新）', danger: true, impl: true, live: true },
+  { path: 'poc/sql-temp/status', desc: 'sql 模板启停 → POST /api/poc/sql-temp/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
+  { path: 'poc/sql-temp/copy', desc: 'sql 模板复制 → POST /api/poc/sql-temp/copy?id=', danger: true, impl: true, live: true },
 
   /* ── entry 实体数据（收录 12，见「单表数据查看迁移」方案 §1.1 的 16 个旧端点核对） ── */
   { path: 'entry/entryDataPaged', desc: '实体数据分页', live: true },
@@ -267,13 +285,26 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'job/updateJob', desc: '改已有定时的 cron（原地改，jobId 不变）', danger: true, live: true },
 
   /* ── comm-job 通用任务（目标 7 / 收录 7） ── */
-  { path: 'comm-job/paged', desc: '通用任务分页' },
-  { path: 'comm-job/add', desc: '新增通用任务', danger: true },
-  { path: 'comm-job/update', desc: '修改通用任务', danger: true },
-  { path: 'comm-job/delete', desc: '删除通用任务', danger: true },
-  { path: 'comm-job/run', desc: '运行通用任务', danger: true },
-  { path: 'comm-job/enable', desc: '启用通用任务', danger: true },
-  { path: 'comm-job/disable', desc: '停用通用任务', danger: true },
+  // 2026-10-13 按旧前端 src/api/comm-job.js 校正：
+  //   · 原登记的 comm-job/enable 与 comm-job/disable 两条是早期按后缀猜的，真实前端从未调用过；
+  //     实际只有**单条** changeEnable（GET ?ids=a,b&enable=0|1，与 source/check、mq/check 同款）。
+  //   · comm-job/copy 此前整条缺失（表格行内「复制」用的就是它：POST ?id=xx）。
+  //   · copy / run 都是 POST 但参数走 query（旧层写的是 `method:'post', params`），见 api/commJob.ts。
+  { path: 'comm-job/paged', desc: '通用任务分页（自定义告警列表）', impl: true, live: true },
+  { path: 'comm-job/add', desc: '新增通用任务', danger: true, impl: true, live: true },
+  { path: 'comm-job/update', desc: '修改通用任务', danger: true, impl: true, live: true },
+  { path: 'comm-job/delete', desc: '删除通用任务', danger: true, impl: true, live: true },
+  { path: 'comm-job/changeEnable', desc: '启停通用任务 → GET /v1/comm-job/changeEnable?ids=&enable=', danger: true, impl: true, live: true },
+  { path: 'comm-job/copy', desc: '复制通用任务 → POST /v1/comm-job/copy?id=', danger: true, impl: true, live: true },
+  { path: 'comm-job/run', desc: '运行通用任务 → POST /v1/comm-job/run?id=', danger: true, impl: true, live: true },
+   /* ── task 任务实例（目标 2 / 收录 3） ── */
+  { path: 'task/topTaskPaged', desc: '任务实例分页（运行记录事实源）', impl: true, live: true },
+  // 1013：任务实例页（旧 page/inst/TaskInst.vue）专属逻辑名 —— 它要 1:1 渲染旧 column.config 的
+  // 原始字段名（actionName/nodeCode/taskTopic/updateDt），而 task/topTaskPaged 那份 mock 返回的是
+  // 平台归一化后的 TaskInst（typeName/node/topic/updatedAt），对不上。真实请求仍打
+  // httpEndpoint: 'task/topTaskPaged'（上面那条 live 端点），所以这里不标 live——它只是
+  // 「逻辑名 + 真实 path」的别名（同 source/sourceTaskPaged 的写法）。
+  { path: 'task/taskListPaged', desc: '任务实例分页（任务实例页） → GET /v1/task/topTaskPaged', impl: true },
 
   /* ── task 任务实例（目标 2 / 收录 2） ── */
   { path: 'task/topTaskPaged', desc: '任务实例分页（运行记录事实源）', impl: true, live: true },
@@ -307,11 +338,17 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'mq/queueDetail2', desc: '队列详情' },
   { path: 'mq/message', desc: '获取消息' },
   { path: 'mq/purgeQueue', desc: '清空队列', danger: true },
-  { path: 'mq/check/paged', desc: '队列检查列表' },
-  { path: 'mq/check/add', desc: '新增队列检查', danger: true },
-  { path: 'mq/check/update', desc: '修改队列检查', danger: true },
-  { path: 'mq/check/delete', desc: '删除队列检查', danger: true },
-  { path: 'mq/check/changeEnable', desc: '启停队列检查', danger: true },
+  // 队列告警（队列校验配置）。1013 从旧平台 page/config/QueueCheck.vue 迁入；这一页在旧平台
+  // 的分页 / 新增 / 编辑 / 批量启停 / 批量删除**本来就全部直连后端**，所以这 5 条一起标 live：
+  // 只放行分页、把写操作留在 mock，会让页面上的按钮看着能用、其实后端一条都没收到。
+  // 契约照旧平台 api/queue-check.js：paged 用 page/limit；delete 的 ids 在 query（POST 无 body）；
+  // changeEnable 是 GET ?ids=&enable=，且 **enable 与 isDelete 同向（0=在用 / 1=停用）**。
+  // ⚠️ 放行 ≠ 已联调，生产上写类端点仍会被 client.ts 的写保护白名单拦一次。
+  { path: 'mq/check/paged', desc: '队列校验配置列表 → GET ?queue=&queueId=&name=&enable=&page=&limit=', impl: true, live: true },
+  { path: 'mq/check/add', desc: '新增队列校验配置 → POST body', danger: true, impl: true, live: true },
+  { path: 'mq/check/update', desc: '修改队列校验配置 → POST body（提交体需剔除 createDt/updateDt/lastRun/nextRun）', danger: true, impl: true, live: true },
+  { path: 'mq/check/delete', desc: '删除队列校验配置 → POST ?ids=a,b（参数在 query，不是 body）', danger: true, impl: true, live: true },
+  { path: 'mq/check/changeEnable', desc: '启停队列校验配置 → GET ?ids=&enable=（0=启用/1=停用，与 isDelete 同向）', danger: true, impl: true, live: true },
 
   /* ── file 原始文件 / JSON（目标 3 / 收录 5） ── */
   // 2026-08-17 核实：现役 FileList2.vue 不使用 filePaged，而是 file_resource 表的通用实体表接口。
@@ -344,10 +381,13 @@ export const ENDPOINTS: EndpointSpec[] = [
 
   /* ── flow 真实流程表 cs_flow（2026-09-02 接入，路径照抄旧平台 src/api/flow.js） ── */
   // 真实后端共九条，其中 flowList / updateFlowConf 两条 2026-09-02 联调后确认代码里没有任何
-  // 调用方（flowCenterApi.list() 是拿 paged() 拼的；updateFlowConf 这种"只改 flowConf"的专用
+  // 调用方（当时 flowCenterApi.list() 是拿 paged() 拼的；updateFlowConf 这种"只改 flowConf"的专用
   // 端点从没被走过，保存永远用全量的 saveFlow）——已删除注册，生产写白名单里配套的两条也一并
   // 删了（见 client.ts 同一次改动）。changeFlowEnable 2026-09-29 F6 按 flowPaged/saveFlow 的
   // 样子加回来了（流程中心行内启停），见下面登记行。
+  // flowList 2026-10-13 加回：flowPaged 拉 500 条在 186 要 ~30s、超前端 20s 超时，下拉候选被 catch 成空
+  // （源流程配置抽屉「无数据」）；旧平台下拉本来就走 flowList，flowCenterApi.list() 改回它。
+  { path: 'flow/flowList', desc: '有效流程列表（下拉/选择器用：全量、不分页、不含 flowConf；旧平台 FlowIdSelect / SourceList / SourceGroupModal 同款；186 实测 759 条 ~0.1s）', live: true },
   { path: 'flow/flowPaged', desc: '流程分页 + 多条件检索（不含 flowConf，含计算列 sourceCnt；templateFlag=0/1 服务端过滤模板，2026-09-04 实测生效）', live: true },
   { path: 'flow/flowSources', desc: '本地流程反查关联源（仅启用流程分流时调用）', live: true },
   { path: 'flow/flowDetail', desc: '流程详情（含 flowConf 大字段与 sourceCnt）', live: true },
@@ -378,6 +418,14 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'source-group/bindings', desc: '来源（或来源组）的流程绑定行（含停用行）', live: true },
   { path: 'source-group/updateBindingState', desc: '启用/停用一条流程绑定（admin；回传 id/sourceId/sourceGroupId/flowId/revision）', danger: true, live: true },
   { path: 'source-group/flowIds', desc: '来源列表当前生效流程并集（GET sourceIds 逗号串；上限 5000，超过分片）', live: true },
+  // 源管理「我的视图」（2026-10-12 开发环境 124.223.180.186 联调通过，217 / 133 还没部署）。userId 取自会话，只能读写自己的视图；
+  // queryJson / displayJson 必须是 JSON 字符串；revision 从 0 起。前端按调用强制走真实（mode: 'http'）并在接口不存在时退回本机，
+  // 所以这里不标 live：标了就会在所有环境强制走真实，217 / 133 上整页报错。
+  { path: 'source-view/list', desc: '当前用户的全部视图（不分页，按 sortNo）' },
+  { path: 'source-view/add', desc: '新建视图（viewName 1–40 字同用户不重名；queryJson / displayJson 为 JSON 字符串；isDefault=1 会取消其它视图的默认）' },
+  { path: 'source-view/update', desc: '保存 / 重命名 / 设为默认（带编辑前 revision，不一致报「视图已变化」，只改传了的字段）' },
+  { path: 'source-view/delete', desc: '删除视图（软删，带 revision）' },
+  { path: 'source-view/sort', desc: '调整左侧顺序（viewIds[]）；前端暂未用' },
   { path: 'source-group/sourceFlows', desc: '来源（或来源组）的流程绑定：生效列表、默认流程、原始绑定行；入组的源自动跟随其组', live: true },
   { path: 'source-group/bindSourceFlows', desc: '来源独立流程整体保存（admin；带并发快照，入组的源会被后端拒绝）', danger: true, live: true },
   // 只登记不接：旧平台「生成配置」入口，本平台没有对应场景（Y8-16）。

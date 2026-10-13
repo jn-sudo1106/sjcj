@@ -1,7 +1,8 @@
 <script setup lang="ts">
-// 流程版本条（2026-10-10）：217 起全部流程进版本模式，v1 已发布只读。与旧平台 FlowNodeDrawer 一致：
-// 发布版只读，点「编辑草稿」生成草稿 Vn+1 才能改，改完「发布」变成发布 Vn+1；也可「放弃草稿」。
-// 同名按钮与确认文案对齐旧平台；锁定 / 手工运行 / 切换版本 / 归档本期不做。
+// 流程版本状态（2026-10-10；10-11 改成紧凑徽标，见模板注释）：217 起全部流程进版本模式，v1 已发布（运行中的版本不能直接改）。
+// 2026-10-11 定：不用先点「编辑草稿」，在画布上直接改，第一次保存时自动生成草稿 Vn+1（stores/flowVersion.ts），
+// 一直是这个草稿直到「发布」变成发布 Vn+1，或「放弃草稿」。发布 / 放弃的确认文案对齐旧平台 FlowNodeDrawer；
+// 锁定（只读）沿用旧平台的锁，前端只展示；手工运行 / 切换版本 / 归档本期不做。
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '@/stores/flow'
@@ -16,6 +17,16 @@ const busy = ref(false)
 
 const canvasFlowId = computed(() => canvasFlowIdOf(flow))
 const visible = computed(() => version.enabled && !!canvasFlowId.value && version.flowId === canvasFlowId.value)
+/** 悬停说明：原来常驻在版本条里的一句话，挪到这里省一整行 */
+const tip = computed(() => {
+  const cur = version.overview?.curVer ?? '—'
+  const d = version.draft
+  // 新建的流程只有草稿 v1、还没有发布版（2026-10-12 实测）
+  if (d && version.overview?.curVer == null) return `草稿 v${d.flowVer}：这条流程还没有发布版本，发布后才会被任务使用。`
+  if (!d) return `当前运行版本 v${cur}。直接修改即可，第一次保存时自动生成草稿 v${version.overview?.nextVer ?? '—'}，发布后新任务才会使用。`
+  if (d.isLock === 1) return `草稿 v${d.flowVer} 已锁定，节点只能查看；请到旧平台解锁后再修改。当前运行的仍是 v${cur}。`
+  return `修改只保存在草稿 v${d.flowVer} 里，当前运行的仍是 v${cur}；发布后新任务使用 v${d.flowVer}，已启动的任务继续用原版本。`
+})
 
 async function reloadCanvas() {
   const sourceId = flow.sourceCtx?.sourceId
@@ -33,21 +44,6 @@ async function settle(): Promise<boolean> {
   return true
 }
 
-/** 编辑草稿：从当前发布版生成草稿 Vn+1，重载画布（读草稿步骤）后开放编辑 */
-async function onCreateDraft() {
-  if (busy.value) return
-  busy.value = true
-  try {
-    await version.createDraft()
-    ElMessage.success(`已生成草稿 V${version.draft?.flowVer ?? '—'}，可以开始修改`)
-    await reloadCanvas()
-  } catch (e) {
-    ElMessage.error(`生成草稿失败：${(e as Error)?.message ?? String(e)}`)
-  } finally {
-    busy.value = false
-  }
-}
-
 async function onPublish() {
   const d = version.draft
   if (!d || busy.value || !await settle()) return
@@ -55,7 +51,7 @@ async function onPublish() {
   try {
     await ElMessageBox.confirm(
       changedBase ? '当前发布版本已与草稿基线不同，发布会覆盖当前定义。' : '发布后，新任务使用此版本，已启动任务继续使用原版本。',
-      `发布草稿 V${d.flowVer}？`,
+      `发布草稿 v${d.flowVer}？`,
       { confirmButtonText: '发布', cancelButtonText: '取消', type: 'warning' },
     )
   } catch {
@@ -64,7 +60,7 @@ async function onPublish() {
   busy.value = true
   try {
     await version.publish()
-    ElMessage.success(`已发布 V${d.flowVer}，新任务将使用该版本`)
+    ElMessage.success(`已发布 v${d.flowVer}，新任务将使用该版本`)
     await reloadCanvas()
   } catch (e) {
     ElMessage.error(`发布失败：${(e as Error)?.message ?? String(e)}`)
@@ -79,7 +75,7 @@ async function onAbandon() {
   try {
     await ElMessageBox.confirm(
       '放弃后草稿里的修改全部丢弃，画布恢复为当前发布版本；不占用发布版本号。尚未完成的草稿任务可能因版本失效而失败。',
-      `放弃草稿 V${d.flowVer}？`,
+      `放弃草稿 v${d.flowVer}？`,
       { confirmButtonText: '放弃草稿', cancelButtonText: '取消', type: 'warning' },
     )
   } catch {
@@ -100,33 +96,26 @@ async function onAbandon() {
 </script>
 
 <template>
-  <div v-if="visible" class="fvb" :class="{ draft: !!version.draft }" data-testid="flow-version-bar">
+  <!-- 紧凑版本状态（2026-10-11：不再单独占一行，嵌在源画布流程标签栏 / 流程中心抽屉标题行里；说明放悬停提示） -->
+  <span v-if="visible" class="fvs" :class="{ draft: !!version.draft }" data-testid="flow-version-bar">
+    <el-tooltip :content="tip" placement="bottom" :show-after="200">
+      <span v-if="version.draft" class="fvs-tag draft" data-testid="flow-version-draft">草稿 v{{ version.draft.flowVer }} · 未发布</span>
+      <span v-else class="fvs-tag" data-testid="flow-version-published">已发布 v{{ version.overview?.curVer ?? '—' }}</span>
+    </el-tooltip>
+    <span v-if="version.draft?.isLock === 1" class="fvs-tag locked" data-testid="flow-version-locked">已锁定</span>
     <template v-if="version.draft">
-      <span class="fvb-tag draft" data-testid="flow-version-draft">草稿 V{{ version.draft.flowVer }} · 未发布</span>
-      <span v-if="version.draft.isLock === 1" class="fvb-tag locked" data-testid="flow-version-locked">已锁定</span>
-      <span v-if="version.draft.isLock === 1" class="fvb-text">草稿已锁定，节点只能查看；请到旧平台解锁后再修改。</span>
-      <span v-else class="fvb-text">修改只保存在草稿里，发布后新任务才会使用；当前运行的是 V{{ version.overview?.curVer ?? '—' }}。</span>
-      <span class="fvb-actions">
-        <button class="rc-btn tiny" type="button" :disabled="busy" data-testid="flow-version-abandon" @click="onAbandon">放弃草稿</button>
-        <button class="rc-btn tiny primary" type="button" :disabled="busy" data-testid="flow-version-publish" @click="onPublish">发布 V{{ version.draft.flowVer }}</button>
-      </span>
+      <button class="fvs-btn" type="button" :disabled="busy" data-testid="flow-version-abandon" @click="onAbandon">放弃</button>
+      <button class="fvs-btn publish" type="button" :disabled="busy" data-testid="flow-version-publish" @click="onPublish">发布 v{{ version.draft.flowVer }}</button>
     </template>
-    <template v-else>
-      <span class="fvb-tag" data-testid="flow-version-published">当前发布 V{{ version.overview?.curVer ?? '—' }}</span>
-      <span class="fvb-text">发布版本只读，节点只能查看；点「编辑草稿」生成草稿 V{{ version.overview?.nextVer ?? '—' }} 后再修改，发布后新任务才会使用。</span>
-      <span class="fvb-actions">
-        <button class="rc-btn tiny primary" type="button" :disabled="busy" data-testid="flow-version-edit-draft" @click="onCreateDraft">编辑草稿</button>
-      </span>
-    </template>
-  </div>
+  </span>
 </template>
 
 <style scoped>
-.fvb { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 12px 0; padding: 6px 10px; border: 1px solid var(--rc-border); border-radius: 6px; background: #f8fafc; color: var(--rc-muted); font-size: 12px; }
-.fvb.draft { border-color: #fed7aa; background: #fff7ed; color: #9a3412; }
-.fvb-tag { flex: none; padding: 1px 8px; border-radius: 999px; background: var(--rc-ok-bg); color: var(--rc-ok); font-weight: 600; }
-.fvb-tag.draft { background: #ffedd5; color: #c2410c; }
-.fvb-tag.locked { background: #fee2e2; color: #b91c1c; }
-.fvb-text { flex: 1; min-width: 200px; }
-.fvb-actions { display: flex; gap: 6px; margin-left: auto; }
+.fvs { display: inline-flex; flex: none; align-items: center; gap: 5px; align-self: center; margin-left: 7px; white-space: nowrap; }
+.fvs-tag { padding: 1px 6px; border-radius: 4px; background: #e2e8f0; color: #475569; font-size: 11px; line-height: 18px; cursor: default; }
+.fvs-tag.draft { background: #fef3c7; color: #92400e; }
+.fvs-tag.locked { background: #fee2e2; color: #b91c1c; }
+.fvs-btn { height: 24px; padding: 0 8px; border: 1px solid #93c5fd; border-radius: 6px; background: #eff6ff; color: #1d4ed8; font-size: 11px; cursor: pointer; }
+.fvs-btn.publish { border-color: var(--rc-primary); background: var(--rc-primary); color: #fff; }
+.fvs-btn:disabled { opacity: .55; cursor: not-allowed; }
 </style>

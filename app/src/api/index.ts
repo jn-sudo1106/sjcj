@@ -342,7 +342,7 @@ async function attachStepConfigDetails(steps: Step[], backendScope?: RequestOpti
   // 过一遍模型后再读 `url` 会在适配漏字段时把面板留空。
   const results = await Promise.allSettled(configIds.map((id) => configApi.configDetailRaw(id, { backendScope })))
   type StepConfigDetail = {
-    topic?: string; configName?: string; configUrl?: string; isLoginConfig?: boolean; multiMode?: number
+    topic?: string; configName?: string; configUrl?: string; configUpdateDt?: string; isLoginConfig?: boolean; multiMode?: number
     configType?: string
     bizType?: string; dedupType?: string; codeRule?: string; contentRule?: string; coreParam?: string
     runPolicy?: string
@@ -359,6 +359,7 @@ async function attachStepConfigDetails(steps: Step[], backendScope?: RequestOpti
       topic: mapped.topic || undefined,
       configName: mapped.name || undefined,
       configUrl: configUrlFromLegacy(r.value),
+      configUpdateDt: mapped.updatedAt,
       bizType: mapped.templateCode || undefined,
       dedupType: mapped.dedupType ?? undefined,
       codeRule: mapped.codeRule || undefined,
@@ -380,6 +381,7 @@ async function attachStepConfigDetails(steps: Step[], backendScope?: RequestOpti
       ...(detail.topic ? { topic: detail.topic } : {}),
       ...(detail.configName ? { configName: detail.configName } : {}),
       ...(detail.configUrl !== undefined ? { configUrl: detail.configUrl } : {}),
+      ...(detail.configUpdateDt !== undefined ? { configUpdateDt: detail.configUpdateDt } : {}),
       ...(detail.bizType ? { bizType: detail.bizType } : {}),
       ...(detail.dedupType !== undefined ? { dedupType: detail.dedupType } : {}),
       ...(detail.codeRule ? { codeRule: detail.codeRule } : {}),
@@ -1311,6 +1313,7 @@ export const siteApi = {
     }
 
     let firstSourceId: string | undefined
+    const savedSourceIds: string[] = []
     for (const source of sources) {
       let saved: LegacySnatchSaveResult
       try {
@@ -1330,6 +1333,7 @@ export const siteApi = {
         return { ok: false, siteId, message: `源「${source.name}」已提交，但未能解析 sourceId，未继续关联网站` }
       }
       firstSourceId ||= sourceId
+      savedSourceIds.push(sourceId)
       let bound: Ack
       try {
         bound = await sourceApi.bindSite(sourceId, siteId, liveWrite)
@@ -1351,6 +1355,7 @@ export const siteApi = {
       message: sources.length ? '网站、源已按顺序保存并完成关联' : '网站已创建',
       siteId,
       sourceId: firstSourceId,
+      sourceIds: savedSourceIds,
     }
   },
   /** 编辑网站基本信息。契约按旧前端 src/api/site.js:95：POST /v1/site/update，body 为 cfg_site 实体。
@@ -2990,6 +2995,8 @@ export const entryApi = {
       entryTypeId: p.entryTypeId,
       name: p.name,
       enable: p.enable,
+      // 1013：只看收藏 ids 过滤（后端 entryTypePagedView 的 cond 参数，逗号分隔，见设计文档 §一）
+      cond: p.cond,
     }
     const result = await request<Paged<unknown>>('config/entryTypePagedView', p, { method: 'GET', httpParams })
     return entryTypePageFromLegacy(result)
@@ -3675,8 +3682,19 @@ export const flowCenterApi = {
     })
     return ackFromApiResult(result)
   },
-  /** 下拉/选择器用：一次取回，**最多 500 条**。要完整分页请改用 paged。 */
-  list: async (): Promise<FlowRecord[]> => (await flowCenterApi.paged({ page: 1, size: 500 })).list,
+  /**
+   * 下拉/选择器用：走旧平台同款 `flow/flowList`（有效流程全量、不分页、不含 flowConf，旧 FlowIdSelect 等下拉都用它）。
+   * 不再拿 `flowPaged` 拼：flowPaged 带 sourceCnt 计算列，186 上 500 条要 ~30s、超过前端 20s 超时，
+   * 调用方 catch 成空数组后下拉就只剩「无数据」（源流程配置抽屉实测）；flowList 759 条 ~0.1s，也没有 500 条上限。
+   * 要完整分页 / 排序 / 检索请改用 paged。
+   */
+  list: async (): Promise<FlowRecord[]> => {
+    const result = await request<unknown>('flow/flowList', {}, {
+      method: 'GET',
+      httpEndpoint: 'flow/flowList',
+    })
+    return flowPageFromLegacy(result).list
+  },
   /**
    * 流程详情。**查不到返回 `null`，不抛错**——调用方（画布头的「所属流程」）要靠这个
    * 区分"这个流程被删了"和"请求没打通"。
@@ -4012,7 +4030,7 @@ export const categoryApi = {
  * userId 由后端从会话取，前端不传——所以换浏览器 / 换电脑同一账号看到的是同一份。
  * itemType 必须大写（后端正则 `[A-Z_]{1,32}`，小写判非法）；itemId 必须是正整数。
  */
-export type FavoriteItemType = 'SITE' | 'SOURCE' | 'CONFIG' | 'FLOW'
+export type FavoriteItemType = 'SITE' | 'SOURCE' | 'CONFIG' | 'FLOW' | 'ENTRY_TYPE'
 
 /** list 单页上限（后端校验 1~500） */
 const FAVORITE_PAGE_LIMIT = 500

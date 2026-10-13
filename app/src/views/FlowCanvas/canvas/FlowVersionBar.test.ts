@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// 2026-10-10 流程版本（217）：与旧平台一致——发布版只读，点「编辑草稿」生成草稿后才能改。
+// 2026-10-10 流程版本（217）：10-11 定发布版直接改、首次保存自动生成草稿；锁定的草稿只读。
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -8,7 +8,7 @@ import ElementPlus from 'element-plus'
 import FlowBoard from './FlowBoard.vue'
 import { useFlowStore } from '@/stores/flow'
 import { useFlowVersionStore } from '@/stores/flowVersion'
-import { flowVersionApi, sourceApi, type FlowVersionOverview, type Step } from '@/api'
+import { flowVersionApi, type FlowVersionOverview, type Step } from '@/api'
 
 class ResizeObserverStub {
   observe() {}
@@ -47,38 +47,40 @@ async function mountBoard() {
   return { flow, version, wrapper }
 }
 
-describe('FlowVersionBar · 发布版只读，编辑草稿后放开', () => {
-  it('发布版：画布只读、不出「+」，版本条给出「编辑草稿」', async () => {
+describe('FlowVersionBar · 发布版直接改、首次保存自动生成草稿（10-11 定）', () => {
+  it('发布版：画布可编辑、有「+」，流程标签栏里一个「已发布 v1」小徽标，没有「编辑草稿」按钮', async () => {
     vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(published)
+    const { wrapper } = await mountBoard()
+    expect(wrapper.get('[data-testid="flow-version-published"]').text()).toBe('已发布 v1')
+    // 10-11：不再单独占一行，嵌在流程标签栏（说明文字在悬停提示里）
+    expect(wrapper.find('[data-testid="source-workflow-tabs"] [data-testid="flow-version-bar"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="flow-version-edit-draft"]').exists()).toBe(false)
+    expect(wrapper.find('.rc-canvas-body').classes()).not.toContain('is-version-readonly')
+    expect(wrapper.find('.rc-edge-slot').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('有草稿：徽标换成「草稿 v2 · 未发布」+ 放弃 / 发布 v2', async () => {
+    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(drafted)
+    const { wrapper } = await mountBoard()
+    expect(wrapper.get('[data-testid="flow-version-draft"]').text()).toBe('草稿 v2 · 未发布')
+    expect(wrapper.get('[data-testid="flow-version-publish"]').text()).toBe('发布 v2')
+    expect(wrapper.find('[data-testid="flow-version-publish"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="flow-version-abandon"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('草稿已锁定：只读但能看——不出「+」/ 删除 ✕ / 节点库，点节点照常选中', async () => {
+    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue({ ...drafted, versions: [row('1033', { flowVer: 2, state: 'W', baseId: '748', isLock: 1 }), row('748')] })
     const { flow, wrapper } = await mountBoard()
-    expect(wrapper.get('[data-testid="flow-version-published"]').text()).toBe('当前发布 V1')
-    expect(wrapper.find('[data-testid="flow-version-edit-draft"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="flow-version-locked"]').exists()).toBe(true)
     expect(wrapper.find('.rc-canvas-body').classes()).toContain('is-version-readonly')
     expect(wrapper.find('.rc-edge-slot').exists()).toBe(false)
-    // 只读也要能看：不再整块禁用鼠标，只是改动入口（删除 ✕ / 插入「+」/ 节点库）不出现，点节点照常选中
     expect(wrapper.find('[data-testid="node-delete"]').exists()).toBe(false)
-    expect(wrapper.find('.rc-drop-slot').exists()).toBe(false)
     expect(wrapper.find('[data-testid="node-library-toggle"]').exists()).toBe(false)
     const node = wrapper.findAll('.rc-flow-node').find((n) => n.text().includes('#2'))!
     await node.trigger('click')
     expect(flow.selectedId).toBe('2')
-    wrapper.unmount()
-  })
-
-  it('点「编辑草稿」：生成草稿 V2、重载画布，画布放开、版本条换成发布 / 放弃', async () => {
-    const overview = vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(published)
-    const action = vi.spyOn(flowVersionApi, 'action').mockImplementation(async () => {
-      overview.mockResolvedValue(drafted)
-      return { versionId: '1033' }
-    })
-    vi.spyOn(sourceApi, 'sourceDetail').mockResolvedValue({ sourceId: '430016824', name: 't', url: 'http://x', configId: 'X', mainTable: '900', owner: 'a', state: 'C', flowId: '21000003' } as never)
-    const { wrapper } = await mountBoard()
-    await wrapper.get('[data-testid="flow-version-edit-draft"]').trigger('click')
-    await flushPromises()
-    expect(action).toHaveBeenCalledWith('draft', { flowId: '21000003', versionId: '748', ver: 1, expectedPublishId: '748' })
-    expect(wrapper.get('[data-testid="flow-version-draft"]').text()).toBe('草稿 V2 · 未发布')
-    expect(wrapper.find('[data-testid="flow-version-publish"]').exists()).toBe(true)
-    expect(wrapper.find('.rc-canvas-body').classes()).not.toContain('is-version-readonly')
     wrapper.unmount()
   })
 })

@@ -107,6 +107,8 @@ export interface NodeConfig {
   /** 配置自己的 URL（旧平台「配置编辑」的 URL = `configUrl`）。
    *  与源 URL（`collectCfg.url` / `Source.url`）不是同一份：一份配置可被多个源复用，各源地址不同。 */
   configUrl?: string
+  /** 配置加载时的 updateDt。保存配置时带回后端做并发编辑校验，不能在点保存时现取（那样校验形同虚设）。 */
+  configUpdateDt?: string
   disabled?: boolean
   base: [string, string][]
   fields: [string, string][]

@@ -5,7 +5,7 @@
 //   ③ 删除后新增行 K 序补齐、已落库列不动。
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
-import ElementPlus, { ElMessage } from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import TableEditDialog from './TableEditDialog.vue'
 import { entryApi, type EntryType } from '@/api'
 
@@ -51,6 +51,64 @@ describe('TableEditDialog · 迁移欠账补齐', () => {
     expect(dels(w).length).toBe(0)
     await clickAdd(w)
     expect(dels(w).length).toBe(1)
+  })
+
+  // 2026-10：已落库行点击删除弹提示（此前纯 disabled 不触发点击，点了毫无反应）。
+  it('已落库字段（ted-del-locked）点击删除弹提示，不删行', async () => {
+    const w = await mountDialog()
+    await clickAdd(w)
+    const locked = w.findAll('[data-testid="ted-del-locked"]')
+    expect(locked.length).toBe(2) // TABLE 里两行都是已落库
+    const warnSpy = vi.spyOn(ElMessage, 'warning')
+    await locked[0].trigger('click')
+    await flushPromises()
+    expect(warnSpy).toHaveBeenCalledWith('该字段已落库，物理列绑着数据，不能删除')
+    expect(cols(w)).toEqual(['K1', 'K2', 'K3']) // 没删掉
+  })
+
+  // 2026-10：空编码+空展示名的已落库行是脏数据，二次确认后可删（对齐 EntryEditorDrawer）。
+  it('空编码+空展示名的已落库行（ted-del-dirty）：确认后移除，取消则保留', async () => {
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({
+      tableId: 't9', tableName: 'tb_dirty', name: '脏表', fields: [
+        { prop: 'title-K1', desc: '标题', type: 'string', required: false, columnName: 'K1', itemId: '21' },
+        { prop: '', desc: '', type: 'string', required: false, columnName: 'K4', itemId: '22' },
+      ],
+    } as EntryType)
+    const w = mount(TableEditDialog, { props: { open: true, tableId: 't9' }, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    const dirty = w.findAll('[data-testid="ted-del-dirty"]')
+    expect(dirty.length).toBe(1)
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    await dirty[0].trigger('click')
+    await flushPromises()
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(cols(w)).toEqual(['K1']) // 空字段行被移除，已落库 K1 保留
+
+    // 取消路径：再来一条空字段行，点删除后取消，仍在
+    vi.spyOn(entryApi, 'entryDetail').mockResolvedValue({
+      tableId: 't9', tableName: 'tb_dirty', name: '脏表', fields: [
+        { prop: '', desc: '', type: 'string', required: false, columnName: 'K4', itemId: '22' },
+      ],
+    } as EntryType)
+    const w2 = mount(TableEditDialog, { props: { open: true, tableId: 't9' }, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel' as never)
+    await w2.findAll('[data-testid="ted-del-dirty"]')[0].trigger('click')
+    await flushPromises()
+    expect(cols(w2)).toEqual(['K4']) // 取消后仍在
+  })
+
+  // 2026-10：编码 / 展示名逐字段非空校验（对齐旧平台 requireRule），空行拦截保存。
+  it('保存时校验：编码或展示名为空的字段拦截，不调用 entrySave', async () => {
+    const save = vi.spyOn(entryApi, 'entrySave').mockResolvedValue({ tableId: '2103330', message: 'ok' })
+    const warnSpy = vi.spyOn(ElMessage, 'warning')
+    const w = await mountDialog()
+    await clickAdd(w)
+    await clickOk(w)
+    await flushPromises()
+    expect(warnSpy).toHaveBeenCalledWith('出错，属性不能为空')
+    expect(save).not.toHaveBeenCalled()
   })
 
   it('删掉中间的新增行后 K 序补齐，已落库列原样不动', async () => {

@@ -17,8 +17,17 @@ const pageSize = ref(10)
 const active = ref<'logs' | 'stats'>('logs')
 const loading = ref(false)
 const loadError = ref('')
-const filter = reactive({ customerId: admin.value ? '' : String(auth.info?.id ?? ''), clientId: '', schemaName: '',
-  taskIdSet: [] as Array<string | number>, status: '', type: '', startTime: '', endTime: '' })
+// 默认查当天（10-12 优化）：开始 00:00:00 ~ 结束 23:59:59，与数据查看页时间范围口径一致
+function todayRange(): { startTime: string; endTime: string } {
+  const d = new Date()
+  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return { startTime: `${date} 00:00:00`, endTime: `${date} 23:59:59` }
+}
+function defaultFilter() {
+  return { customerId: admin.value ? '' : String(auth.info?.id ?? ''), clientId: '', schemaName: '',
+    taskIdSet: [] as Array<string | number>, status: '', type: '', ...todayRange() }
+}
+const filter = reactive(defaultFilter())
 const detail = ref<SyncStatistic | null>(null)
 const detailOpen = ref(false)
 
@@ -49,8 +58,7 @@ async function searchTasks(name: string) {
 }
 function search() { pageNo.value = 1; void load() }
 function reset() {
-  Object.assign(filter, { customerId: admin.value ? '' : String(auth.info?.id ?? ''), clientId: '', schemaName: '',
-    taskIdSet: [], status: '', type: '', startTime: '', endTime: '' })
+  Object.assign(filter, defaultFilter())
   search()
 }
 watch(() => filter.customerId, () => { void loadClients(); search() })
@@ -85,9 +93,11 @@ function statusLabel(row: SyncLog) {
       <el-select v-model="filter.taskIdSet" multiple filterable remote :remote-method="searchTasks" placeholder="任务名称" class="sync-input wide"><el-option v-for="item in taskChoices" :key="item.id" :value="item.id" :label="item.taskName" /></el-select>
       <el-select v-model="filter.status" placeholder="任务状态" class="sync-input"><el-option value="" label="全部状态" /><el-option value="2" label="运行中" /><el-option value="3" label="运行完成" /><el-option value="5" label="运行异常" /></el-select>
       <el-select v-model="filter.type" placeholder="任务类型" class="sync-input"><el-option value="" label="全部类型" /><el-option value="1" label="定时同步" /><el-option value="2" label="手动同步" /></el-select>
-      <el-date-picker v-model="filter.startTime" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" placeholder="开始时间" />
-      <el-date-picker v-model="filter.endTime" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" placeholder="结束时间" />
-      <el-button type="primary" @click="search">查询</el-button><el-button @click="reset">重置</el-button><el-button @click="load">刷新</el-button>
+      <el-date-picker v-model="filter.startTime" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" placeholder="开始时间" class="sync-time" />
+      <el-date-picker v-model="filter.endTime" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" placeholder="结束时间" class="sync-time" />
+      <div class="sync-filter-actions">
+        <el-button type="primary" @click="search">查询</el-button><el-button @click="reset">重置</el-button><el-button @click="load">刷新</el-button>
+      </div>
     </div>
     <el-tabs v-model="active">
       <el-tab-pane label="任务日志" name="logs" /><el-tab-pane label="统计日志" name="stats" />
@@ -118,5 +128,5 @@ function statusLabel(row: SyncLog) {
 </template>
 
 <style scoped>
-.sync-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }.sync-alert { margin-bottom: 12px; }.sync-input { width: 150px; }.sync-input.wide { width: 220px; }.sync-pagination { justify-content: flex-end; margin-top: 14px; }pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
+.sync-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }.sync-alert { margin-bottom: 12px; }.sync-input { width: 115px; }.sync-input.wide { width: 165px; }.sync-time { width: 150px; }.sync-filter-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }.sync-pagination { justify-content: flex-end; margin-top: 14px; }pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
 </style>

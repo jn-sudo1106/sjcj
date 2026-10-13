@@ -16,9 +16,11 @@ vi.mock('./SourceTab.vue', () => ({
 vi.mock('./ConfigTab.vue', () => ({
   default: { name: 'ConfigTab', template: '<div data-testid="stub-config">配置列表内容</div>' },
 }))
-vi.mock('./PersonalSources.vue', () => ({ default: { name: 'PersonalSources', template: '<div>个人分组内容</div>' } }))
+// 2026-10-12：「我的分组」改为只读展示来源组（复用系统设置的 SourceGroupTab，readonly）
+vi.mock('./MyViews.vue', () => ({ default: { name: 'MyViews', template: '<div>我的视图内容</div>' } }))
+vi.mock('@/views/Settings/SourceGroupTab.vue', () => ({ default: { name: 'SourceGroupTab', props: ['readonly'], template: '<div>来源组内容 readonly={{ readonly }}</div>' } }))
 
-async function mountAssets(query: Record<string, string> = {}, preference: 'system' | 'personal' | 'last' = 'system') {
+async function mountAssets(query: Record<string, string> = {}, preference: 'system' | 'personal' | 'view' | 'last' = 'system') {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -44,10 +46,10 @@ describe('采集资产 · tab 壳', () => {
   // 0917-17（2026-09-21）加了收藏 tab；0924-01 把排序下拉里的「最近打开」也提成 tab，
   // 收藏 tab 改名「我的收藏」（源列表视图下列的是收藏的源）；1008-03 加过「来源组」（我的分组后），
   // 2026-10-13 移到系统设置，这里回到四个。
-  it('四个 tab：系统目录 + 我的分组 + 我的收藏 + 最近打开', async () => {
+  it('五个 tab：系统目录 + 我的分组 + 我的视图 + 我的收藏 + 最近打开', async () => {
     const { wrapper } = await mountAssets()
     const tabs = wrapper.findAll('.ca-tab-link')
-    expect(tabs.map((b) => b.text())).toEqual(['系统目录', '我的分组', '我的收藏', '最近打开'])
+    expect(tabs.map((b) => b.text())).toEqual(['系统目录', '我的分组', '我的视图', '我的收藏', '最近打开'])
     expect(wrapper.find('.ca-tabs-wrap').exists()).toBe(true)
   })
 
@@ -105,7 +107,7 @@ describe('采集资产 · tab 壳', () => {
   })
   it('个人默认生效，显式系统目录链接优先，临时切换不改默认', async () => {
     const { wrapper, router } = await mountAssets({}, 'personal')
-    expect(wrapper.text()).toContain('个人分组内容')
+    expect(wrapper.text()).toContain('来源组内容 readonly=true')
     await wrapper.findAll('.ca-tab-link')[0]!.trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.query.tab).toBe('source')
@@ -116,5 +118,12 @@ describe('采集资产 · tab 壳', () => {
     const { wrapper } = await mountAssets({ category: 'macro' }, 'personal')
     expect(wrapper.find('[data-testid="stub-source"]').exists()).toBe(true)
     expect(useSourceGroupsStore().preference).toBe('personal')
+  })
+
+  // 2026-10-12「我的视图」：默认进入可以选「我的视图」
+  it('默认进入选「我的视图」时，不带 tab 打开源管理直接进我的视图', async () => {
+    const { wrapper } = await mountAssets({}, 'view')
+    expect(wrapper.text()).toContain('我的视图内容')
+    expect(wrapper.find('.ca-tab-link.active').text()).toBe('我的视图')
   })
 })

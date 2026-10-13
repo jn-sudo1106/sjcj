@@ -306,11 +306,13 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   // 首屏不等 config/configDetail 那一轮（withConfigDetails: false）：它必须等 nextConfigPaged
   // 出 configId 才能发，串在前面等于白等一个 RTT。步骤先到先画，补充字段随后回填。
   let source: Source | null
-  let sourceSteps: Step[] | null
+  let sourceSteps: { steps: Step[] } | { error: unknown }
   try {
     ;[source, sourceSteps] = await Promise.all([
       sourceApi.sourceDetail(sourceId),
-      sourceApi.sourceSteps(sourceId, { withConfigDetails: false }),
+      // 按源查的步骤只给未绑流程的源兜底，绑了流程的源用不上：它的失败先记下，真要用时再报（见下方 steps）。
+      // 2026-10-12：217 后端对未绑流程的源报「源未绑定有效流程」，对绑了只有草稿的新流程报「请先进入流程草稿编辑…」
+      sourceApi.sourceSteps(sourceId, { withConfigDetails: false }).then((steps) => ({ steps }), (error: unknown) => ({ error })),
     ])
   } catch (error) {
     // 异常不能再往外抛：调用方 enterFromRoute 的 promise 没人接，占位会永远停在「加载中」。
@@ -355,14 +357,22 @@ async function loadSourceFlow(sourceId: string, fromOutside?: boolean) {
   let steps: Step[]
   try {
     // 2026-10-10 流程版本：流程视图（编辑）有草稿时读草稿的步骤——改动都写在草稿里，读发布版会对不上；
-    // 数据 / 任务等视图反映正式运行，照旧读发布版
+    // 数据 / 任务等视图反映正式运行，照旧读发布版。
+    // 2026-10-12：新建的流程在 217 上只有草稿 v1、没有发布版，不带 versionId 读会被拒，任何视图都读草稿。
     const flowVersion = useFlowVersionStore()
     const editingView = normalizeSourceView(route.query.view) === 'flow'
-    if (editingView) await flowVersion.load(flowId ?? '')
-    const versionId = editingView ? flowVersion.viewVersionId : null
-    steps = flowId
-      ? await flowCenterApi.steps(flowId, { withConfigDetails: false, backendScope: runtimeView ? 'default' : 'flow', ...(versionId ? { versionId } : {}) })
-      : sourceSteps ?? []
+    if (flowId) await flowVersion.load(flowId)
+    const versionId = editingView || !flowVersion.published ? flowVersion.viewVersionId : null
+    if (flowId) {
+      steps = await flowCenterApi.steps(flowId, { withConfigDetails: false, backendScope: runtimeView ? 'default' : 'flow', ...(versionId ? { versionId } : {}) })
+    } else if ('steps' in sourceSteps) {
+      steps = sourceSteps.steps
+    } else if (/源未绑定有效流程/.test((sourceSteps.error as Error)?.message ?? '')) {
+      // 未绑流程（如新建采集失败没建出流程）就是没有步骤：画布照常打开，用流程标签栏「＋」新建流程
+      steps = []
+    } else {
+      throw sourceSteps.error
+    }
   } catch (error) {
     const detail = (error as Error)?.message ?? '网络异常'
     sourceLoadError.value = `流程步骤加载失败：${detail}`

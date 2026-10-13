@@ -37,6 +37,11 @@ describe('AppSidebar', () => {
     expect(groupTitles).toContain('全局数据')
     expect(groupTitles).toContain('流程与规则')
     expect(groupTitles).toContain('运行与监控')
+    // 模板配置（1013）：与运行与监控、系统设置同级的新菜单组，排在运行与监控之后、系统设置之前
+    expect(groupTitles).toContain('模板配置')
+    expect(groupTitles.indexOf('运行与监控')).toBeLessThan(groupTitles.indexOf('模板配置'))
+    expect(groupTitles.indexOf('模板配置')).toBeLessThan(groupTitles.indexOf('系统设置'))
+    expect(groupTitles.indexOf('系统设置')).toBe(groupTitles.length - 1)
   })
 
   // navIcons 是按 TAB key 索引的普通对象，漏一个不报错、只渲染成空图标方块。

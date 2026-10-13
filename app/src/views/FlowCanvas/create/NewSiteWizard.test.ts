@@ -5,7 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus from 'element-plus'
 import NewSiteWizard from './NewSiteWizard.vue'
-import { siteApi } from '@/api'
+import { flowCenterApi, siteApi, workflowBindingApi } from '@/api'
 
 describe('NewSiteWizard', () => {
   let wrapper: VueWrapper
@@ -105,6 +105,38 @@ describe('NewSiteWizard', () => {
     await flushPromises()
     expect(siteCreate).toHaveBeenCalledTimes(1)
     expect(router.currentRoute.value.query.siteId).toBe('11825')
+    expect(router.currentRoute.value.query.sourceId).toBe('9001')
+  })
+
+  // 2026-10-12：217 后端按源读步骤要求源已绑流程；用户定同一次新建的源共用一条流程（名称 = 网站名）
+  it('建完网站和源后新建一条同名流程，本批源全部绑上并设为默认', async () => {
+    vi.spyOn(siteApi, 'siteCreate').mockResolvedValue({ ok: true, siteId: '11825', sourceId: '9001', sourceIds: ['9001', '9002'] })
+    const save = vi.spyOn(flowCenterApi, 'save').mockResolvedValue({ id: '14011270', name: '向导测试站', definition: {} as never, updatedAt: '' })
+    const bind = vi.spyOn(workflowBindingApi, 'bind').mockResolvedValue(undefined as never)
+    const { wrapper, router } = await mountWizard()
+    await wrapper.get('input.rc-input').setValue('向导测试站')
+    await flushPromises()
+    await wrapper.get('.rc-btn.primary').trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(save.mock.calls[0][0].name).toBe('向导测试站')
+    expect(bind.mock.calls.map((c) => c[0])).toEqual([
+      { sourceId: '9001', workflowId: '14011270', primary: true },
+      { sourceId: '9002', workflowId: '14011270', primary: true },
+    ])
+    expect(router.currentRoute.value.query.sourceId).toBe('9001')
+  })
+
+  it('新建流程失败不挡进入画布（网站和源已落库），只提示可在画布补建', async () => {
+    vi.spyOn(siteApi, 'siteCreate').mockResolvedValue({ ok: true, siteId: '11825', sourceId: '9001', sourceIds: ['9001'] })
+    vi.spyOn(flowCenterApi, 'save').mockRejectedValue(new Error('服务器异常'))
+    const bind = vi.spyOn(workflowBindingApi, 'bind')
+    const { wrapper, router } = await mountWizard()
+    await wrapper.get('input.rc-input').setValue('向导测试站')
+    await flushPromises()
+    await wrapper.get('.rc-btn.primary').trigger('click')
+    await flushPromises()
+    expect(bind).not.toHaveBeenCalled()
     expect(router.currentRoute.value.query.sourceId).toBe('9001')
   })
 })

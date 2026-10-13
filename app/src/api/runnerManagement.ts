@@ -123,6 +123,9 @@ export interface PublishedScript {
   storagePath?: string
   deliveryPath?: string
   repoPath?: string | null
+  /** 站点代码版本 ID / 站点主机：SiteScriptGeneratorDialog 发布后续发与测试数据在用，补上类型（2026-10-12，构建被 vue-tsc 挡住） */
+  codeId?: string
+  siteHost?: string
 }
 
 export interface SiteCodeVersion extends PublishedScript {

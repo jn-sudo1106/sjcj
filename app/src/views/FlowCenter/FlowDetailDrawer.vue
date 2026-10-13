@@ -18,6 +18,7 @@ import { useUiStore } from '@/stores/ui'
 import { rootStepForSource } from '@/views/FlowCanvas/canvas/flowModel'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
 import NodeInspector from '@/views/FlowCanvas/inspector/NodeInspector.vue'
+import FlowVersionBar from '@/views/FlowCanvas/canvas/FlowVersionBar.vue'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
 
 // categories 由列表页透传（那边已经拉过一次 sourceCategories，抽屉不再重复请求）
@@ -480,6 +481,8 @@ async function publishVersion() {
           <span v-if="versionState?.publishedVersionNo" class="fd-badge ghost">
             当前发布 v{{ versionState.publishedVersionNo }}
           </span>
+          <!-- 217 流程版本（2026-10-11）：紧凑徽标 + 放弃 / 发布，与源画布流程标签栏同一组件 -->
+          <FlowVersionBar />
           <span v-if="workingFlow?.isTemplate" class="fd-badge" data-testid="flow-drawer-template-badge">模板</span>
           <span v-else-if="workingFlow?.fromTemplateId" class="fd-badge ghost">来自模板 #{{ workingFlow.fromTemplateId }}</span>
         </p>

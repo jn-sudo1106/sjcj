@@ -1787,6 +1787,22 @@ describe('双层脏状态（0824-00 §5.4）', () => {
     expect(f.configDirty).toBe(false)
     expect(f.flowDirty).toBe(true)
   })
+
+  it('syncConfigUpdateDt：按 configId 刷新全部引用该配置的节点，不碰别的配置，也不置脏', () => {
+    const ids = Object.keys(f.configs)
+    expect(ids.length).toBeGreaterThan(1)
+    f.configs[ids[0]].configId = 'C1'
+    f.configs[ids[0]].configUpdateDt = 'old'
+    f.configs[ids[1]].configId = 'C1'
+    f.configs[ids[1]].configUpdateDt = 'old'
+    const other = ids[2] ? ids[2] : undefined
+    if (other) { f.configs[other].configId = 'C2'; f.configs[other].configUpdateDt = 'keep' }
+    f.syncConfigUpdateDt('C1', 'new')
+    expect(f.configs[ids[0]].configUpdateDt).toBe('new')
+    expect(f.configs[ids[1]].configUpdateDt).toBe('new')
+    if (other) expect(f.configs[other].configUpdateDt).toBe('keep')
+    expect(f.configDirty).toBe(false)
+  })
 })
 
 describe('configDetail 异步回填（applyStepDetails）', () => {

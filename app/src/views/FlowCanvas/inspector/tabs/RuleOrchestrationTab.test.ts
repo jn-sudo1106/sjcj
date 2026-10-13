@@ -1659,6 +1659,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     const { flow, wrapper } = setupMonitorSave()
     flow.configs['monitor-1'].configId = '1400998'
     vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({})
+    vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: '1400998', updatedAt: '2026-10-13 12:00:00' } as never)
     const updateConfig = vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: 'ok' })
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([])
     const insert = vi.spyOn(ckSourceApi, 'insert').mockResolvedValue(1)
@@ -1693,6 +1694,7 @@ describe('RuleOrchestrationTab · 路径 B（设置业务规则）', () => {
     const { flow, wrapper } = setupMonitorSave()
     flow.configs['monitor-1'].configId = '1400998'
     vi.spyOn(configApi, 'configDetailRaw').mockResolvedValue({})
+    vi.spyOn(configApi, 'configDetail').mockResolvedValue({ configId: '1400998', updatedAt: '2026-10-13 12:00:00' } as never)
     vi.spyOn(configApi, 'updateConfig').mockResolvedValue({ ok: true, message: 'ok' })
     vi.spyOn(ckSourceApi, 'list').mockResolvedValue([{ id: 7, sourceId: 430016501, name: '旧名' }])
     const insertSpy = vi.spyOn(ckSourceApi, 'insert')

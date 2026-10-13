@@ -9,6 +9,7 @@ import { copyWholeFlow } from '@/utils/flow/copiedConfigs'
 import { reportDetachResult } from '@/utils/flow/applyTemplateToSource'
 import { makeBlankTemplateDefinition } from '@/utils/flow/flowTemplates'
 import ReplaceFlowDialog from '../shared/ReplaceFlowDialog.vue'
+import FlowVersionBar from '../canvas/FlowVersionBar.vue'
 
 const props = defineProps<{ sourceId: string }>()
 const route = useRoute()
@@ -240,6 +241,9 @@ onMounted(async () => {
         @click="publishDraft(activeRow)"
       >发布 v{{ activeRow.draftVersionNo }}</button>
     </div>
+
+    <!-- 217 流程版本（2026-10-11）：已发布 vN / 草稿 vN + 放弃 / 发布，紧凑徽标放在这一行，不再单独占一行 -->
+    <FlowVersionBar />
 
     <div v-if="writable" class="swt-add-wrap">
       <button

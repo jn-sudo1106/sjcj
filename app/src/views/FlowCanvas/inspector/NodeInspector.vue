@@ -11,6 +11,7 @@ import { useFlowStore } from '@/stores/flow'
 import { useSourceStore } from '@/stores/source'
 import { useUiStore } from '@/stores/ui'
 import { canvasFlowIdOf, useFlowVersionStore } from '@/stores/flowVersion'
+import { cronSaveErrorHint, unpublishedFlowCronHint } from '@/utils/flow/cronSaveHint'
 import { isDataValidationNode, isMonitorNode, isRuleNode, nodeTypeLabel, NODE_CONFIGS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { isFileLikeNode, outputTableMissing } from '@/utils/flow/stepPersist'
 import { inputTableMismatch } from '@/utils/flow/tableSync'
@@ -19,6 +20,7 @@ import { configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
 import { provideNodeInspectorAssets } from './useNodeInspectorAssets'
 import { mergeEntryTypesPreservingFields } from '@/composables/useEntryTableFieldsCache'
 import { buildConfigPayload } from '@/utils/flow/nodeConfigPayload'
+import { refreshConfigUpdateDt } from '@/utils/flow/configVersion'
 import { assertConfigWritable, detachFailureFor } from '@/utils/flow/copiedConfigs'
 import { syncMonitorCkSource } from '@/utils/flow/monitorCkSource'
 import { nodeScheduleCron } from '@/utils/flow/scheduleCron'
@@ -32,7 +34,8 @@ import RuleOrchestrationTab from './tabs/RuleOrchestrationTab.vue'
 
 const props = withDefaults(defineProps<{ hideAi?: boolean }>(), { hideAi: false })
 const flow = useFlowStore()
-// 只读（2026-10-10）：217 流程版本的发布版 / 锁定草稿，以及 leo 版本状态里的已发布版。只读也要能滚动、
+// 只读（2026-10-10，10-11 起 217 发布版可直接改、首次保存自动生成草稿）：217 的锁定草稿，以及 leo 版本状态
+// 里的已发布版。只读也要能滚动、
 // 切页签、展开收起查看——原来外层整块 pointer-events: none，连滚动条都拖不动（用户反馈）。
 // 现在只让内容区本身不接收鼠标（滚轮落到外层滚动容器照常滚），启停 / 更换配置 / 保存单独禁用。
 const flowVersion = useFlowVersionStore()
@@ -136,7 +139,7 @@ const nodeConfigDirty = computed(() => flow.dirtyConfigNodes.includes(id.value))
 // 配置名称跟节点名走（新增/复制时已写上），不再在节点配置 Tab 里填；保存时若仍为空就用节点名补上。
 // 配置身份（新建 / 已有）由上面的配置绑定条表达，这里只说"有没有未提交的修改"，不重复也不夸大落库状态。
 const canSaveNodeConfig = computed(() => nodeConfigDirty.value || !configId.value)
-const footNote = computed(() => (readonly.value ? '发布版本只读，点画布上方「编辑草稿」后可修改' : nodeConfigDirty.value ? '节点配置有未保存修改' : '无未保存修改'))
+const footNote = computed(() => (readonly.value ? '当前版本只读（草稿已锁定或为已发布版本），不能修改' : nodeConfigDirty.value ? '节点配置有未保存修改' : '无未保存修改'))
 // ---- 配置联调（config_api.md）----
 // 保存配置 → config/modify/updateConfig（带 configId = 更新）。
 //
@@ -237,6 +240,13 @@ async function syncSourceCron(node: NodeConfig) {
   const next = nodeScheduleCron(node, flow.sourceCfg)
   const current = flow.sourceJob?.schedule ?? ''
   if (!next || next === current) return
+  // 新建定时前先看流程有没有发布版本：后端只给已发布的流程建定时（新建出来的流程只有草稿 v1）。
+  // 已有定时（有 jobId）走 updateJob 原地改，不受影响。
+  const canvasFlow = canvasFlowIdOf(flow)
+  if (!flow.sourceJob?.jobId && canvasFlow && flowVersion.flowId === canvasFlow && flowVersion.enabled && !flowVersion.overview?.publishId) {
+    ElMessage({ type: 'warning', message: unpublishedFlowCronHint(canvasFlow, flowVersion.draft?.flowVer), duration: 8000, showClose: true })
+    return
+  }
   try {
     // 已有定时就原地改那一条（传 jobId 走 updateJob），不然 createJobs 会再建一条，
     // 两条定时同时启用、源被抓两遍。新建的默认启用——用户特地配了定时，就是要它跑。
@@ -248,7 +258,7 @@ async function syncSourceCron(node: NodeConfig) {
       configId: configId.value || flow.sourceCfg?.configId || '',
     })
     if (!ack.ok) {
-      ElMessage.warning(`定时保存失败：${ack.message || '未知原因'}`)
+      ElMessage.warning(cronSaveErrorHint(ack.message || '') ?? `定时保存失败：${ack.message || '未知原因'}`)
       return
     }
     /**
@@ -277,7 +287,8 @@ async function syncSourceCron(node: NodeConfig) {
     })
     ElMessage.success(`定时已保存：${next}`)
   } catch (e) {
-    ElMessage.error(`定时保存失败：${(e as Error)?.message ?? String(e)}`)
+    const message = (e as Error)?.message ?? String(e)
+    ElMessage({ type: 'error', message: cronSaveErrorHint(message) ?? `定时保存失败：${message}`, duration: 8000, showClose: true })
   }
 }
 
@@ -343,6 +354,10 @@ async function doUpdateExistingConfig(): Promise<boolean> {
       return false
     }
     flow.markNodeConfigSaved(id.value)
+    // 本次保存后 updateDt 已变，不刷新的话下一次保存会被后端当成并发冲突拒掉。
+    // 读的是自己刚写完的版本，和保存前现取 base 来冒充「加载时版本」不是一回事；
+    // 同一配置的其他节点一并刷新。
+    await refreshConfigUpdateDt(configId.value)
     ElMessage.success(ack?.message || `配置 #${configId.value} 已保存`)
     return true
   } catch (e) {

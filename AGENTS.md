@@ -93,13 +93,66 @@ Review 报告 / 优化修改文档按命名建议放 `设计稿/设计方案/`�
 - 设计方案、开发计划等文档文件名统一将日期前缀放在最前面，便于按创建/会议日期检索。
 - 命名示例：`0810-数据查看与源视图_开发计划_2026-08-11.md`。
 
-### Git 远程仓库（2026-08-31）
+### Git 远程仓库（2026-08-31，2026-10-09 改为分仓协作）
 
-外网主仓迁到 CNB，内网 GitLab 保留为备用：
+外网主仓在 CNB，内网 GitLab 由 leo 维护：
 
-- **origin fetch**：`https://cnb.cool/vanvdev/bee-soft/front-ce`（组 `vanvdev/bee-soft`，采集平台；私有仓）
-- **origin push（双写）**：同一条 `git push` 会推到 CNB 和内网 GitLab `http://47.120.11.60:50105/root/ce`
-- **ce（内网单独操作）**：`http://47.120.11.60:50105/root/ce`，需要只拉/只推内网时用
+- **origin**：`https://cnb.cool/vanvdev/bee-soft/front-ce`（组 `vanvdev/bee-soft`，采集平台；私有仓），拉和推都只走 CNB
+- **ce（内网）**：`http://47.120.11.60:50105/root/ce`，拉内网 master，推内网线（2026-10-12 起直接推内网 master，见下）
 - CNB Git 认证：用户名固定 `cnb`，密码为访问令牌；push 必须勾选「Git 客户端凭据」（`repo-code:rw`）。只读令牌不能推送。
 - **禁止**把令牌、账号密码写进 remote URL 或提交进仓库；认证走本机 credential helper / 环境变量。
-- `git pull` 只从 CNB 拉；`git push` 两边都推。某一边失败不会自动回滚另一边，需要再补推。
+
+**分仓协作（2026-10-09 起，原「一次 push 双写两边」作废）**
+
+- 分工：姜楠在本地改；leo 只改内网 master；zhonghe 只改 CNB master。本地仓库是唯一同时连着两边的地方。
+- 本地两条线：
+  - 外网线 `master`：跟 CNB master，放自己的功能和 zhonghe 的改动，`git push` 推 CNB；
+  - 内网线（分支名记在 `git config sjcj.intranetBranch`，当前 `merge/ce-leo-1008`，worktree 在 `../wt-merge-ce-leo`）：外网线全部 + leo 的代码 + 只能改在 leo 代码上的东西。
+- **2026-10-12 起内网不再经 leo 审核**：内网线直接推内网 master（`git push ce <内网线>:master`），由姜楠本地负责合并，leo 的提交也先 `git fetch ce` 合进内网线再推。
+- 每天：`git pull` → 在 master 上开发并推 CNB → 内网线 `git fetch ce && git merge ce/master && git merge master` → `git push ce <内网线>:master`（应为快进，被拒绝说明 leo 又推了新提交，先合再推）。
+- 内网线必须和 CNB 主线是**同一条提交历史**：不要 cherry-pick，不要把 leo 的页面「抄」到外网线，也不要压缩合并，否则每次合并都会重复冲突。leo 的功能要上生产时，把 `ce/master` 整个合进外网线。
+- 只改 leo 独有文件的改动（例如流程标签栏、改版后的数据视图）放内网线，进不了 CNB 主线，也就不会上生产。
+- 推送后的 hook（`.claude/hooks/check-push-sync.sh`）检查内网 master 是否已包含 CNB 最新 master，没包含会提示补推。
+
+---
+
+## 环境地址（2026-10-12 更新）
+
+采集平台 sjcj 的部署环境一览。写操作注意环境区分（危险操作仅限测试环境、且按部署手册的授权规则执行）。
+
+| 环境 | 前端访问地址 | 业务后端 | 说明 |
+|---|---|---|---|
+| 生产（217） | `http://47.120.11.60:2806/sjcj/` | `118.25.96.217:9999` | 正式平台，写保护（可新建、禁改删） |
+| 133 测试 | `http://47.120.11.60:2807/sjcj/` | `115.227.21.133:9999` | 原测试环境，可自由读写 |
+| **本地开发环境（186）** | `http://124.223.180.186:9999/user/login?redirect=%2Fsource%2Fsource-list#/collect?tab=source` | 本机 `127.0.0.1:9100`（nginx 反代） | **本地开发环境**，直连 IP:port，不走 47.120.11.60 网关 |
+
+> **本地开发环境** `124.223.180.186`（2026-10-12 用户提供，实测可达）：
+> - 完整手册：`设计稿/设计方案/1012-本地开发环境186_访问与部署手册_2026-10-12.md`（访问/部署/排障/回滚）
+> - Web：`http://124.223.180.186:9999`（nginx 监听 9999 → 反代本机 `9100` bee-config.jar；前端静态文件在服务器 `/data/app/web`，登录 `/user/login` → `/source/source-list` → hash 路由 `#/collect?tab=source`）
+> - SSH：`dev01@124.223.180.186:22`，密码在本地 `tmp/askpass-dev01.sh`（**不提交仓库**）；主机名 `VM-0-3-centos`（CentOS 7）
+> - 服务器上 `/data/app` 是完整后端开发栈：MySQL `9906`、redis `9379`、clickhouse、rabbitmq `25672`、`bee-config/drepeat/saver/process` 多组 `bee-*.jar`
+> - 本地沙箱无 PTY，SSH 用 `SSH_ASKPASS_REQUIRE=force` + askpass 脚本方式登录（详见对话记录），`known_hosts` 缓存到 `tmp/known_hosts_dev01`
+>
+> **本地 dev（5180）固定连 186**（2026-10-12）：`.claude/launch.json` 的 `sjcj-dev`（5180）已加
+> `VITE_API_PROXY_TARGET=http://124.223.180.186:9999`，作为后续主要开发环境；不要再指向 217。
+>
+> **186 部署方式（2026-10-12 只读查看，未动）**：传统脚本部署，非本项目 Docker 网关。
+> `start_all.sh` 依次起 redis → saver(9102) → drepeat(9101) → process(9529) → backend(9100) → flow(9111)，
+> `check_all.sh` 自检 10 个端口（含 nginx 9999）；前端产物放到 `/data/app/web`（nginx root）。
+> ⚠️ **已恢复（2026-10-12 16:33 起）**：此前新 bee-config.jar（16:17 替换）带 Flyway 迁移
+> `V3.2.10__ddl_cs_source_view.sql`（「我的视图」功能建表）撞了已存在的 `cs_source_view` 表
+> （Error 1050）导致 9100/9111 起不来、`/api` 502；16:33 后 9100/9111 已正常起来，
+> API 全部恢复（302/200）。迁移失败记录已由运维处理（清 history 或对齐表状态）。
+>
+> **186 前端部署（2026-10-12 已执行）**：本地 `VITE_API_PROXY_TARGET=http://124.223.180.186:9999 npm run build`
+> → rsync `app/dist/` → `/data/app/web/`（nginx root，无 `/sjcj/` 子路径，base 用默认 `/`）。
+> 部署前备份 `/data/app/web.bak-20261012-164034`。已上传 81 个文件、全部资源 200 验证通过。
+> 旧 assets 未清理（assets 目录 177 个文件，新 81 + 旧残留 96，占 58M，不影响功能可后续清）。
+> **二次部署（2026-10-12 17:00，含 siteCreate 修复）**：`CREATE_ALLOWED_BACKEND_HOSTS` 把 186 加入可新建清单，
+> 186 上「新建采集」不再走 mock 假 ID（src-xxx），改走真实 site/add→snatchSave→bindSite。
+> 备份 `/data/app/web.bak-20261012-165951`，新 hash `index-CdirJHxU.js`，全部资源 200。
+> **清理（2026-10-12 17:05）**：以本地 dist assets 为白名单删掉旧残留（209→79），并删旧平台遗留
+> `js/`（42M）+`css/`（1.2M）；web 目录 58M → 7.8M，页面/懒加载 chunk/API 全部验证通过。
+> **三次部署（2026-10-12 18:09，合入 CNB 后重新构建）**：`git pull` 合入 `d6da8bd 数据源告警` 功能后重新构建部署，
+> 新 hash `index-D0_TDh3V.js`（数据源告警 Monitor/sourceCheck 在 `Monitor-CmYiMxee.js`）。备份 `/data/app/web.bak-20261012-180928`。
+> 部署后再清残留（122→82），服务器 assets 与本地 dist 完全一致（82 个），页面/资源/API 全通，web 7.9M。

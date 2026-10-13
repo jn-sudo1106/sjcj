@@ -30,19 +30,7 @@ describe('useFlowVersionStore', () => {
     expect(action).not.toHaveBeenCalled()
   })
 
-  it('发布版只读：没有草稿时拒绝写入、不自动建草稿，提示先点「编辑草稿」', async () => {
-    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(published)
-    const action = vi.spyOn(flowVersionApi, 'action')
-    const store = useFlowVersionStore()
-    await store.load('21000003')
-    expect(store.readonly).toBe(true)
-    const fn = vi.fn()
-    await expect(store.withDraft('21000003', fn)).rejects.toThrow('请先点「编辑草稿」')
-    expect(fn).not.toHaveBeenCalled()
-    expect(action).not.toHaveBeenCalled()
-  })
-
-  it('编辑草稿：从发布版生成草稿，之后写入带草稿的 versionId / ver，写完 ver 刷新', async () => {
+  it('发布版可直接改：没有草稿时第一次写入自动从发布版生成草稿，带草稿的 versionId / ver 写（10-11 定）', async () => {
     const overview = vi.spyOn(flowVersionApi, 'overview')
       .mockResolvedValueOnce(published)
       .mockResolvedValueOnce(withDraft(1))
@@ -50,24 +38,31 @@ describe('useFlowVersionStore', () => {
     const action = vi.spyOn(flowVersionApi, 'action').mockResolvedValue({ versionId: '1033' })
     const store = useFlowVersionStore()
     await store.load('21000003')
-    await store.createDraft()
-    expect(action).toHaveBeenCalledWith('draft', { flowId: '21000003', versionId: '748', ver: 1, expectedPublishId: '748' })
     expect(store.readonly).toBe(false)
-    expect(store.viewVersionId).toBe('1033')
     const seen: Array<FlowVersionRef | null> = []
     await store.withDraft('21000003', async (ref) => { seen.push(ref) })
+    expect(action).toHaveBeenCalledWith('draft', { flowId: '21000003', versionId: '748', ver: 1, expectedPublishId: '748' })
     expect(seen).toEqual([{ flowId: '21000003', versionId: '1033', ver: 1 }])
     expect(overview).toHaveBeenCalledTimes(3)
     expect(store.draft?.ver).toBe(2)
+    expect(store.viewVersionId).toBe('1033')
   })
 
-  it('已有草稿时「编辑草稿」不重复建；锁定的草稿算只读', async () => {
-    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(withDraft(1, { isLock: 1 }))
+  it('已有草稿：继续写在这个草稿里，不重复生成', async () => {
+    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(withDraft(5))
     const action = vi.spyOn(flowVersionApi, 'action')
     const store = useFlowVersionStore()
     await store.load('21000003')
-    await store.createDraft()
+    const seen: Array<FlowVersionRef | null> = []
+    await store.withDraft('21000003', async (ref) => { seen.push(ref) })
     expect(action).not.toHaveBeenCalled()
+    expect(seen).toEqual([{ flowId: '21000003', versionId: '1033', ver: 5 }])
+  })
+
+  it('锁定的草稿算只读', async () => {
+    vi.spyOn(flowVersionApi, 'overview').mockResolvedValue(withDraft(1, { isLock: 1 }))
+    const store = useFlowVersionStore()
+    await store.load('21000003')
     expect(store.readonly).toBe(true)
   })
 

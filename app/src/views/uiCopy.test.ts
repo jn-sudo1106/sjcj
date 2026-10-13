@@ -505,9 +505,9 @@ describe('表编辑：导入字段 / 单一加属性 / 无高级 / 列宽末列'
   })
 
   it('已落库字段的删除按钮是禁用态，不是藏起来（否则看不出为什么不能删）', () => {
-    expect(dialog).toContain(':disabled="isPersisted(f)"')
+    expect(dialog).toContain(':aria-disabled="isLockedField(f)"')
     expect(dialog).not.toContain('ted-locked')
-    expect(drawer).toContain(':disabled="Number(field.itemId ?? 0) > 0"')
+    expect(drawer).toContain(':aria-disabled="isLockedField(field)"')
   })
 
   it('列宽是字段表的最后一列（操作列之前，D17）', () => {

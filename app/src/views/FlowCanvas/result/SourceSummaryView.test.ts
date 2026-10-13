@@ -31,7 +31,7 @@ describe('源概览', () => {
     expect(sourceApi.sourceTaskPaged).toHaveBeenCalledWith({ sourceId: 'a', siteId: 'platform', page: 1, size: 5 })
     expect(sourceCheckApi.paged).toHaveBeenCalledWith({ sourceId: 'a', state: 'E', page: 1, size: 5 })
     expect(wrapper.text()).toContain('平台甲')
-    expect(wrapper.text()).toContain('个人分组（本机）')
+    expect(wrapper.text()).toContain('我的分组未加入分组')
     expect(wrapper.findAll('.summary-metrics strong').map(el => el.text())).toEqual(['已启用', '0', '0', '0'])
     expect(wrapper.findAll('.summary-links button')).toHaveLength(5)
     await wrapper.findAll('.summary-links button')[1]!.trigger('click')

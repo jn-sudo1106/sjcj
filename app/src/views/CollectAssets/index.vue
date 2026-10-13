@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, watch, type Component } from 'vue'
+import { defineComponent, h, ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import SourceTab from './SourceTab.vue'
 import ConfigTab from './ConfigTab.vue'
-import PersonalSources from './PersonalSources.vue'
+import SourceGroupTab from '@/views/Settings/SourceGroupTab.vue'
+import MyViews from './MyViews.vue'
 import { ElMessage } from 'element-plus'
 import { useSourceGroupsStore, type DirectoryDefault } from '@/stores/sourceGroups'
 defineOptions({ name: 'CollectAssets' })
@@ -18,6 +19,8 @@ const directories = useSourceGroupsStore()
 const TABS: { key: string; label: string }[] = [
   { key: 'source', label: '系统目录' },
   { key: 'personal', label: '我的分组' },
+  // 2026-10-12「我的视图」：用户自己保存的源列表查询，只有自己可见（方案 1012-我的视图_开发设计方案）
+  { key: 'views', label: '我的视图' },
   // 0917-17：收藏做成一个 tab 而不是工具条上的开关（2026-09-21 用户定）——
   // 会上原话是「我放在这个地方，我关注的网站也行」（措辞后来统一成"收藏"）。
   // 做成 tab 还白得一条能存书签的地址 `/collect?tab=favorite`，刷新、发给别人都还在。
@@ -26,8 +29,11 @@ const TABS: { key: string; label: string }[] = [
   // 0924-01：原先挂在排序下拉里的「最近打开」提成 tab，与收藏并列。
   { key: 'recent', label: '最近打开' },
 ]
+// 2026-10-12：「我的分组」改为全平台共用、只读（leo：「分组是一个网站共同的配置」），内容就是来源组，
+// 复用系统设置的来源组页（readonly，维护仍在系统设置）。原来存在本机的个人分组（PersonalSources）不再显示。
+const SharedGroups = defineComponent({ name: 'SharedSourceGroups', setup: () => () => h(SourceGroupTab, { readonly: true }) })
 // 收藏 / 最近打开都复用 SourceTab，由 scope 锁定过滤（见下方 :scope）
-const comps: Record<string, Component> = { source: SourceTab, personal: PersonalSources, config: ConfigTab, favorite: SourceTab, recent: SourceTab }
+const comps: Record<string, Component> = { source: SourceTab, personal: SharedGroups, views: MyViews, config: ConfigTab, favorite: SourceTab, recent: SourceTab }
 const SCOPES: Record<string, 'all' | 'favorite' | 'recent'> = { source: 'all', favorite: 'favorite', recent: 'recent' }
 const route = useRoute()
 const router = useRouter()
@@ -55,10 +61,10 @@ watch(() => [route.query.tab, directories.account, directories.defaultMode, rout
   }
   const systemDeepLink = route.query.state != null || route.query.category != null
   active.value = tab == null
-    ? (!systemDeepLink && directories.defaultMode === 'personal' ? 'personal' : 'source')
+    ? (systemDeepLink ? 'source' : directories.defaultMode === 'personal' ? 'personal' : directories.defaultMode === 'view' ? 'views' : 'source')
     : normalizeTab(tab)
-  if (active.value === 'personal' || active.value === 'source') {
-    try { directories.remember(active.value === 'personal' ? 'personal' : 'system') }
+  if (active.value === 'personal' || active.value === 'source' || active.value === 'views') {
+    try { directories.remember(active.value === 'personal' ? 'personal' : active.value === 'views' ? 'view' : 'system') }
     catch (e) { ElMessage.error(e instanceof Error ? e.message : '无法保存目录偏好') }
   }
 }, { immediate: true })
@@ -89,7 +95,7 @@ function changePreference(event: Event) {
       </div>
       <label class="ca-default" title="默认目录偏好仅保存于当前账号、当前浏览器">默认进入（本机）
         <select :value="directories.preference" :disabled="!directories.account" aria-label="默认目录" @change="changePreference">
-          <option value="system">系统目录</option><option value="personal">我的分组</option><option value="last">上次使用的目录</option>
+          <option value="system">系统目录</option><option value="personal">我的分组</option><option value="view">我的视图</option><option value="last">上次使用的目录</option>
         </select>
       </label>
     </div>
