@@ -29,6 +29,9 @@ const routes: RouteRecordRaw[] = [
       { path: '/sync', component: () => import('../views/DataSync/index.vue') },
       { path: '/sync/create', component: () => import('../views/DataSync/TaskWizard.vue') },
       { path: '/monitor', component: () => import('../views/Monitor/index.vue') },
+      // 模板配置 → SQL模板配置（1013，旧 ai-chat-view「模板配置 / sql模板配置」）。
+      // 走 /api/poc 独立服务，接口面见 api/templateConfig.ts，dev 代理见 vite.config.ts 的 '/api/poc'。
+      { path: '/sql-template', component: () => import('../views/TemplateConfig/SqlTemplatePage.vue'), meta: { permission: 'sql-template' } },
       // 系统设置（0924-02）。meta.permission 与 TABS 里的同值，守卫经 canAccess 判断
       { path: '/settings', component: () => import('../views/Settings/index.vue'), meta: { permission: 'settings' } },
       // 兼容旧导航路径；监控中心的正式入口统一为 /monitor。
