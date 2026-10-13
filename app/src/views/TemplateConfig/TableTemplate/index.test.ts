@@ -61,7 +61,7 @@ function lastPageQuery() {
 beforeEach(() => {
   dialogOpen.mockReset()
   vi.mocked(tableTemplateApi.page).mockClear()
-  vi.mocked(tableTemplateApi.changeStatus).mockClear()
+  vi.mocked(tableTemplateApi.changeStatus!).mockClear()
 })
 
 describe('TableTemplatePage', () => {
@@ -88,7 +88,7 @@ describe('TableTemplatePage', () => {
     const wrapper = mountPage()
     await flushPromises()
 
-    vi.mocked(tableTemplateApi.changeStatus).mockRejectedValueOnce(new Error('后端拒绝'))
+    vi.mocked(tableTemplateApi.changeStatus!).mockRejectedValueOnce(new Error('后端拒绝'))
     await wrapper.findAll('.stub-switch')[0]!.trigger('click')
     await flushPromises()
     // 第一行 status '0'（启用）→ 关成禁用

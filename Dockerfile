@@ -22,6 +22,9 @@ ARG VITE_BASE=/sjcj/
 ENV VITE_BASE=${VITE_BASE}
 ARG BACKEND_TARGET
 ENV VITE_API_PROXY_TARGET=${BACKEND_TARGET}
+# 打开新建通道（siteCreate / 网站下添加源 / 批量导入）：本地靠 app/.env.local，但它被 .dockerignore 排除，
+# 不设的话部署出去的包新建全走 mock、真实网站报「网站不存在」。实际放行哪些主机看 CREATE_ALLOWED_BACKEND_HOSTS。
+ENV VITE_SITE_CREATE_TARGET=production
 
 # npm run build 在根 package.json 里定义为 "npm --prefix app run build"
 # 实际执行 vue-tsc -b && vite build，产物落在 app/dist
