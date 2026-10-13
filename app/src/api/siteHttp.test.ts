@@ -140,6 +140,55 @@ describe('网站读取 HTTP 契约', () => {
     expect(result).toEqual({ ok: true, demo: false, message: '网站、源已按顺序保存并完成关联', siteId: '11825', sourceId: '9001', sourceIds: ['9001'] })
   })
 
+  it('siteImportSources 对真实网站逐行 snatchSave → bindSite，不再查 mock 夹具', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ code: '0', data: { siteId: 126, siteName: '土地政策', categoryId: 7 } }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '源ID:9001' }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '关联成功' }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '源ID:9002' }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '关联成功' }))
+    const { siteApi } = await import('./index')
+
+    const result = await siteApi.siteImportSources('126', '国务院政策库;https://a.gov.cn/x?q=&t=1;2\n\n自然资源部')
+
+    const urls = fetchMock.mock.calls.map(([url]) => String(url))
+    expect(urls[0]).toContain('/api/v1/site/detail?siteId=126')
+    expect(urls[1]).toContain('/api/v1/snatch/snatchSave')
+    expect(JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body)))
+      .toMatchObject({ sourceName: '国务院政策库', sourceUrl: 'https://a.gov.cn/x?q=&t=1;2', categoryId: '7', newConfig: '1' })
+    expect(urls[2]).toContain('/api/v1/source/bindSite?sourceId=9001&siteId=126')
+    // 没写 URL 的行补占位（后端 sourceUrl 必填）
+    expect(JSON.parse(String((fetchMock.mock.calls[3] as [string, RequestInit])[1].body)).sourceUrl).toMatch(/^http:\/\/placeholder\.invalid\//)
+    expect(urls[4]).toContain('/api/v1/source/bindSite?sourceId=9002&siteId=126')
+    expect(result).toMatchObject({ ok: true, added: 2, skipped: 0 })
+  })
+
+  it('sourceAdd 对真实网站走 snatchSave → bindSite，返回后端源 ID', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ code: '0', data: { siteId: 126, siteName: '土地政策', categoryId: 7 } }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '源ID:9003' }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, code: '0', msg: '关联成功' }))
+    const { siteApi } = await import('./index')
+
+    const result = await siteApi.sourceAdd('126', {
+      sourceId: '126-draft', name: '单个源', url: 'https://b.gov.cn', configId: '', mainTable: '', owner: 'admin', state: 'C',
+    })
+
+    expect(JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body)))
+      .toMatchObject({ sourceName: '单个源', sourceUrl: 'https://b.gov.cn', newConfig: '1' })
+    expect(String(fetchMock.mock.calls[2][0])).toContain('/api/v1/source/bindSite?sourceId=9003&siteId=126')
+    expect(result).toEqual({ ok: true, sourceId: '9003' })
+  })
+
+  it('sourceAdd 参数源在真实后端直接拒绝，不发请求', async () => {
+    const { siteApi } = await import('./index')
+    const result = await siteApi.sourceAdd('126', {
+      sourceId: 'x', name: '参数源', url: '', configId: '', mainTable: '', owner: 'admin', state: 'C', kind: 'param',
+    })
+    expect(result.ok).toBe(false)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('全局 mock 且未开生产新建时，siteCreate 走夹具不发 fetch', async () => {
     vi.stubEnv('VITE_API_MODE', 'mock')
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://127.0.0.1:9999')
