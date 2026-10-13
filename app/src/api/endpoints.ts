@@ -191,6 +191,14 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'poc/sql-temp/status', desc: 'sql 模板启停 → POST /api/poc/sql-temp/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
   { path: 'poc/sql-temp/copy', desc: 'sql 模板复制 → POST /api/poc/sql-temp/copy?id=', danger: true, impl: true, live: true },
 
+  // 表模板配置（1013 迁入）。⚠️ 未标 live：本轮沙箱访问不到 186 POC 服务，question-temp 的真实响应
+  // 还没实测核对过（旧平台契约来自 src/demoApi/EntityApi.js:323-345）。联调验证后逐条补 live。
+  // 旧平台没有 poc/question-temp/copy —— 表模板不提供复制，见 api/templateConfig.ts 的 tableTemplateApi。
+  { path: 'poc/question-temp/page', desc: '表模板分页 → POST /api/poc/question-temp/page（body: pageNo/pageSize/name）', impl: true, live: true },
+  { path: 'poc/question-temp', desc: '表模板新增/编辑 → POST /api/poc/question-temp（body 带 id 即更新；tableArr/sqlTempConfigIds 是 JSON 字符串）', danger: true, impl: true },
+  { path: 'poc/question-temp/status', desc: '表模板启停 → POST /api/poc/question-temp/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true },
+  { path: 'poc/database/entry-list', desc: '数据表选项（表模板「使用表范围」下拉）→ GET /api/poc/database/entry-list?name=', impl: true },
+
   /* ── entry 实体数据（收录 12，见「单表数据查看迁移」方案 §1.1 的 16 个旧端点核对） ── */
   { path: 'entry/entryDataPaged', desc: '实体数据分页', live: true },
   { path: 'entry/queryEntryType', desc: '实体数据动态表结构', live: true },
@@ -306,8 +314,12 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 「逻辑名 + 真实 path」的别名（同 source/sourceTaskPaged 的写法）。
   { path: 'task/taskListPaged', desc: '任务实例分页（任务实例页） → GET /v1/task/topTaskPaged', impl: true },
 
-  /* ── task 任务实例（目标 2 / 收录 2） ── */
+  /* ── task 任务实例（目标 2 / 收录 4：topTaskPaged + taskListPaged 别名 + stat + resetTaskInsts） ── */
   { path: 'task/topTaskPaged', desc: '任务实例分页（运行记录事实源）', impl: true, live: true },
+  // 1013：任务统计页（旧 page/inst/TaskStat.vue）的统计端点。旧 api/task.js 的 taskStat → GET /v1/task/stat
+  // （?date=|startTime=&endTime=&group=source|config|both&sourceId=&configId=&state=），
+  // 响应是**行数组**（不是分页信封）：{sourceId, configId, cnt, state?}；带 state 的行说明后端支持多状态聚合。
+  { path: 'task/stat', desc: '任务统计（按来源/配置分组聚合）', impl: true, live: true },
   // 2026-08-13 测试环境实测放行：E / L 都能重跑、都变 W1、响应无逐条结果、无效 ID 静默忽略、幂等。
   // live-only（同 source/delete 等）：无专属 mock handler，靠真实后端。
   { path: 'task/resetTaskInsts', desc: '重置任务实例', danger: true, live: true },
