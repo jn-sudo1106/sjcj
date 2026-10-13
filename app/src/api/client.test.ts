@@ -315,14 +315,18 @@ describe('生产写守卫', () => {
     vi.stubEnv('VITE_API_PROXY_TARGET', 'http://118.25.96.217:9999')
     const { request, ProductionWriteBlockedError } = await import('./client')
 
-    await expect(request('dataset/delete', { id: '1' })).rejects.toThrow(/写保护|不在允许清单/)
+    // 样例端点取 config/rebuildTable（重建数据表）——破坏性最强的一类，永远不会进白名单，
+    // 适合当「被拦下的对照组」。2026-10-13 之前这里用的是 dataset/delete，指标数据集页迁入时
+    // 它按 mq/check / comm-job 的同款口径进了白名单（旧页面本来就是直连后端删数据集），
+    // 这个用例得换个仍在白名单外的端点才还有意义。
+    await expect(request('config/rebuildTable', { entryTypeId: '1' })).rejects.toThrow(/写保护|不在允许清单/)
     expect(fetchMock).not.toHaveBeenCalled()
 
     // 拦截发生在网络请求之前，抛出的错误信息里必须点名具体端点，方便排查是哪次调用被挡
     try {
-      await request('dataset/delete', { id: '1' })
+      await request('config/rebuildTable', { entryTypeId: '1' })
     } catch (e) {
-      expect((e as Error).message).toContain('dataset/delete')
+      expect((e as Error).message).toContain('config/rebuildTable')
     }
     void ProductionWriteBlockedError
   })
