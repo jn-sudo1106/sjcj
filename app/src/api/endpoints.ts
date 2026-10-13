@@ -330,7 +330,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   // 「逻辑名 + 真实 path」的别名（同 source/sourceTaskPaged 的写法）。
   { path: 'task/taskListPaged', desc: '任务实例分页（任务实例页） → GET /v1/task/topTaskPaged', impl: true },
 
-  /* ── task 任务实例（目标 2 / 收录 4：topTaskPaged + taskListPaged 别名 + stat + resetTaskInsts） ── */
+   /* ── task 任务实例（目标 2 / 收录 5：topTaskPaged + taskListPaged 别名 + stat + resetTaskInsts） ── */
   { path: 'task/topTaskPaged', desc: '任务实例分页（运行记录事实源）', impl: true, live: true },
   // 1013：任务统计页（旧 page/inst/TaskStat.vue）的统计端点。旧 api/task.js 的 taskStat → GET /v1/task/stat
   // （?date=|startTime=&endTime=&group=source|config|both&sourceId=&configId=&state=），
@@ -340,16 +340,27 @@ export const ENDPOINTS: EndpointSpec[] = [
   // live-only（同 source/delete 等）：无专属 mock handler，靠真实后端。
   { path: 'task/resetTaskInsts', desc: '重置任务实例', danger: true, live: true },
 
-  /* ── dataset 指标数据集（目标 9 / 收录 9） ── */
-  { path: 'dataset/datasetPaged', desc: '数据集分页', impl: true },
+  /* ── dataset 指标数据集（目标 9 / 收录 10） ── */
+  // 1013 迁移「指标数据集」页（旧 page/config/DatasetList.vue）时核对的路径问题：
+  // 真实路径是 /v1/dataset/dataSetPaged（**大写 S**，旧前端 src/api/dataset.js:6 就是这么写的），
+  // 而下面第一条 dataset/datasetPaged 是本清单早期从逆向文档抄下来的**全小写逻辑名**——它能查表、
+  // 能命中 mock，但拿去当 URL 打后端会 404。所以真实分页走 dataset/dataSetPaged 这条（live 标在它上面，
+  // usesMockAdapter 按真实 httpEndpoint 查表），逻辑名那条只留给 api/index.ts 的 M4 演示服务。
+  // ⚠ 这一页的 7 个写端点（updateDataSet / copy / delete / changeEnable / genFromSource / runNow）
+  // 在旧平台本来就是全部直连后端：只放行分页、把写操作留在 mock，会让页面上的按钮看着能用、
+  // 其实后端一条都没收到。已按 mq/check、comm-job 的同款口径标 live，并在 client.ts 的
+  // PRODUCTION_CREATE_ENDPOINTS 里放行（生产写保护仍会再拦一次）。
+  // 未收录 dataset/add：旧页没有任何入口调它（「增加数据集」走的是 genFromSource），保持 danger 记录。
+  { path: 'dataset/datasetPaged', desc: '数据集分页（逻辑名，仅 mock；真实路径见 dataset/dataSetPaged）', impl: true },
+  { path: 'dataset/dataSetPaged', desc: '数据集分页 → GET /v1/dataset/dataSetPaged（真实路径）', impl: true, live: true },
   { path: 'dataset/add', desc: '新增数据集', danger: true },
-  { path: 'dataset/updateDataSet', desc: '修改数据集', danger: true },
-  { path: 'dataset/copy', desc: '复制数据集', danger: true },
-  { path: 'dataset/delete', desc: '删除数据集', danger: true },
-  { path: 'dataset/changeEnable', desc: '启停数据集', danger: true },
-  { path: 'dataset/genFromSource', desc: '由源生成数据集', danger: true },
+  { path: 'dataset/updateDataSet', desc: '修改数据集 → POST body（提交体需剔除 createDt/updateDt/lastRun/nextRun）', danger: true, impl: true, live: true },
+  { path: 'dataset/copy', desc: '复制数据集 → GET ?id=&name=&sourceId=', danger: true, impl: true, live: true },
+  { path: 'dataset/delete', desc: '删除数据集 → POST ?ids=a,b（参数在 query，不是 body）', danger: true, impl: true, live: true },
+  { path: 'dataset/changeEnable', desc: '启停数据集 → GET ?ids=a,b&enable=（同 isDelete：0=在用 / 1=停用）', danger: true, impl: true, live: true },
+  { path: 'dataset/genFromSource', desc: '由源快速生成数据集 → GET ?sourceId=&entryTypeId=', danger: true, impl: true, live: true },
   { path: 'dataset/run', desc: '运行数据集', danger: true },
-  { path: 'dataset/runNow', desc: '立即运行数据集', danger: true },
+  { path: 'dataset/runNow', desc: '立即执行指标 → GET ?ids=a,b&last= 开始 ID', danger: true, impl: true, live: true },
 
   /* ── measure 指标定义（目标 8 / 收录 8） ── */
   { path: 'measure/measurePaged', desc: '指标分页', impl: true },

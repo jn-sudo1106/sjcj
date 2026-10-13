@@ -189,6 +189,19 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'comm-job/changeEnable',
   'comm-job/copy',
   'comm-job/run',
+  // 1013：指标数据集（旧 page/config/DatasetList.vue）的六个写端点。与 mq/check / comm-job 同性质——
+  // 旧页面本来就是直连后端在改真实数据集：编辑保存、批量启停、由源快速生成、制作副本、立即执行指标。
+  // 迁到新平台后这些端点已在 endpoints.ts 标 live；若不加进本清单，日常代理默认指向生产（118.25.96.217）
+  // 时会被写保护在发请求前拦下——用户点了「删除」只看到一条写保护报错，后端一条都没收到。
+  // ⚠️ 破坏性：delete 是**永久删数据集**（UI 侧已加 confirmDanger）；copy / genFromSource 会多出一条数据集；
+  // runNow 会**真的把指标推给后端执行**（旧版没有任何二次确认，这里保持 1:1 不确认——需要的话可以补）。
+  // 与 source/check 同理：这只是"允许发出去"，不代表已在生产验证过这套契约。
+  'dataset/updateDataSet',
+  'dataset/delete',
+  'dataset/changeEnable',
+  'dataset/copy',
+  'dataset/genFromSource',
+  'dataset/runNow',
   // 2026-09-18：定时任务启停（节点配置「定时策略」右上角那个开关）。与源启停同性质：
   // 可逆、不删数据，停用只是把 isDelete 置 1，随时能再打开。
   'job/enableJob',

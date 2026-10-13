@@ -68,6 +68,15 @@ import {
 import { mockTaskListPaged } from './taskList'
 import { mockTaskStat } from './taskStat'
 import {
+  mockDatasetPaged,
+  mockDatasetUpdate,
+  mockDatasetDelete,
+  mockDatasetChangeEnable,
+  mockDatasetCopy,
+  mockDatasetGenFromSource,
+  mockDatasetRunNow,
+} from './dataset'
+import {
   mockPocDatabaseEntryList,
   mockSqlTemplatePaged,
   mockSqlTemplateSave,
@@ -261,6 +270,17 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'dataset/datasetPaged': mockDatasets,
   'measure/measurePaged': mockMeasures,
   'measure/stats': mockMetricStats,
+  // 指标中心（M4）
+  // dataset/datasetPaged = 逆向清单的逻辑名，只服务 api/index.ts 的 M4 演示服务（metricApi.datasets）。
+  // 真实路径是 dataset/dataSetPaged（大写 S），1013 迁移「指标数据集」页（旧 page/config/DatasetList.vue）
+  // 时新增，7 个写端点一起接上——旧页面这些操作本来就全部直连后端。
+  'dataset/dataSetPaged': mockDatasetPaged,
+  'dataset/updateDataSet': mockDatasetUpdate,
+  'dataset/delete': mockDatasetDelete,
+  'dataset/changeEnable': mockDatasetChangeEnable,
+  'dataset/copy': mockDatasetCopy,
+  'dataset/genFromSource': mockDatasetGenFromSource,
+  'dataset/runNow': mockDatasetRunNow,
 
   // 数据查看（M4）
   'data/entryTypesGroup': mockEntryTypesGroup,
