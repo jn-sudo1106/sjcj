@@ -757,7 +757,10 @@ async function submitAdd() {
       { sourceId, ...target, configId: '', mainTable: '', owner: site.value?.owner || 'admin', state: 'C' },
       false,
     )
-    if (!res.ok) return
+    if (!res.ok) {
+      ElMessage.warning(res.message || '添加失败，请重试')
+      return
+    }
     addedId = res.sourceId || sourceId
     ElMessage.success(`已添加源「${target.name}」（空白流程，请先编排）`)
   }
@@ -1034,6 +1037,7 @@ async function submitImport() {
   ElMessage.success(res?.message || '批量导入已提交（演示）')
   closeBatch()
   await load(true)
+  ui.notifySourceListChanged()
 }
 
 // 回车触发，但跳过中文输入法上屏时的 Enter（见 utils/enterKey.ts）

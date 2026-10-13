@@ -1723,7 +1723,7 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
   })
 })
 
-// 2026-10-12「我的视图」：外部给定视图状态 → 套用并重查；当前状态往外报；隐藏列
+// 2026-10-12「我的视图」：外部给定视图状态 → 套用并重查；隐藏列
 describe('SourceOverviewView · 视图状态', () => {
   afterEach(() => vi.restoreAllMocks())
   const viewState = {
@@ -1746,14 +1746,10 @@ describe('SourceOverviewView · 视图状态', () => {
     wrapper.unmount()
   })
 
-  it('改条件后报出新状态；父级换成新的视图状态对象时重新套用并重查', async () => {
+  it('父级换成新的视图状态对象时重新套用并重查', async () => {
     const page = vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
     const wrapper = shallowMount(SourceOverviewView, { props: { currentSiteId: '', viewState } })
     await flushPromises()
-    await wrapper.get('[data-testid="source-overview-state"]').setValue('C')
-    await flushPromises()
-    const reported = wrapper.emitted('stateChange')!.at(-1)![0] as typeof viewState
-    expect(reported).toMatchObject({ status: 'C', countMax: '5', pageSize: 50, hiddenColumns: ['url', 'tags'] })
     await wrapper.setProps({ viewState: { ...viewState, status: 'disabled', hiddenColumns: [] } })
     await flushPromises()
     expect(page).toHaveBeenLastCalledWith(expect.objectContaining({ enable: '1', state: undefined }))

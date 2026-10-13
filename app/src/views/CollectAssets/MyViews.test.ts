@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-// 源管理「我的视图」（2026-10-12）：视图列表、切换、未保存提示、保存 / 另存为 / 撤销、显示设置、设为默认、删除。
-// 右侧源列表 stub 掉：记录收到的 viewState，并能模拟用户改条件（emit stateChange）。
+// 源管理「我的视图」目录版（2026-10-13）：视图下拉、目录树（多级 / 父目录汇总）、添加源 / 绑定来源组、
+// 随组带入的源排除与恢复、解绑、删除目录、旧条件视图提示、设为默认、跳到源详情不改写地址。
+// 右侧源列表 stub 掉：记下收到的源范围，并用固定的选中 ID 驱动批量操作槽位。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
@@ -8,47 +9,49 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ElementPlus, { ElMessageBox } from 'element-plus'
 import MyViews from './MyViews.vue'
+import GroupSourcePicker from './GroupSourcePicker.vue'
+import ViewDirTree from './ViewDirTree.vue'
 import { sourceApi, sourceGroupApi } from '@/api'
 import type { UserInfo } from '@/api/auth'
 import { localSourceViewApi, setSourceViewBackend, sourceViewApi } from '@/api/sourceViews'
 import { useAuthStore } from '@/stores/auth'
 import { useSourceGroupsStore } from '@/stores/sourceGroups'
-import { blankSourceListViewState, emptyManualViewState, type SourceListViewState } from '@/views/FlowCanvas/result/sourceListViewState'
+import { ROOT_ID, addDir, addSources, bindGroup, emptyTree } from './viewDirs'
 
-const received: SourceListViewState[] = []
-/** 源列表最近一次收到的 scopeSourceIds（undefined = 条件视图） */
-const scopeSeen: (string[] | undefined)[] = []
-let emitState: (s: SourceListViewState) => void = () => {}
+vi.mock('./groupMembers', () => ({
+  loadGroupMembers: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, id === 'g3' ? ['t1', 't2', 't3'] : []])),
+  clearGroupMembersCache: () => {},
+}))
+
+/** 源列表最近一次收到的范围 */
+let scopeSeen: string[] | undefined
+let selectedIds: string[] = []
 vi.mock('@/views/FlowCanvas/result/SourceOverviewView.vue', () => ({
   default: defineComponent({
     name: 'SourceOverviewView',
-    props: { viewState: Object, currentSiteId: String, groupOps: Boolean, scopeSourceIds: Array, scopeEmptyText: String },
-    emits: ['stateChange', 'openSource', 'openSourceData', 'openSite', 'openSourceGroup'],
-    setup(props, { emit, slots }) {
-      received.push(props.viewState as SourceListViewState)
-      emitState = (s) => emit('stateChange', s)
-      scopeSeen.length = 0
+    props: { viewState: Object, currentSiteId: String, groupOps: Boolean, scopeSourceIds: Array, scopeEmptyText: String, extraColumnLabel: String },
+    setup(props, { slots }) {
       return () => {
-        scopeSeen[0] = props.scopeSourceIds as string[] | undefined
-        // selection-actions 槽位用固定的两个选中 ID 驱动「移出视图」
-        return h('div', { 'data-testid': 'sov-stub' }, [JSON.stringify((props.viewState as SourceListViewState)?.hiddenColumns ?? []), slots['selection-actions']?.({ ids: ['10', '20'] })])
+        scopeSeen = props.scopeSourceIds as string[] | undefined
+        return h('div', { 'data-testid': 'sov-stub' }, [
+          ...(scopeSeen ?? []).map((id) => h('div', { 'data-testid': 'sov-row', 'data-id': id }, slots['extra-cell']?.({ source: { sourceId: id } }))),
+          slots['selection-actions']?.({ ids: selectedIds }),
+        ])
       }
     },
-    watch: { viewState(v: SourceListViewState) { received.push(v) } },
   }),
 }))
 
-const st = (patch: Partial<SourceListViewState> = {}): SourceListViewState => ({ ...blankSourceListViewState(), ...patch })
 let wrapper: VueWrapper
-
 beforeEach(() => {
   setSourceViewBackend('local') // 单测不连后端：用本机实现
   localStorage.clear()
-  received.length = 0
+  scopeSeen = undefined
+  selectedIds = []
   setActivePinia(createPinia())
   useAuthStore().info = { id: 7 } as UserInfo
-  vi.spyOn(sourceApi, 'sourcePaged').mockImplementation(async (q) => ({ total: q?.state === 'E' ? 3 : 100, list: [] }))
-  vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([])
+  vi.spyOn(sourceGroupApi, 'list').mockResolvedValue([{ sourceGroupId: 'g3', sourceGroupName: 'twitter1' }] as never)
+  vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({ total: 0, list: [] })
 })
 afterEach(() => {
   wrapper?.unmount()
@@ -56,208 +59,166 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-async function mountPage(query: Record<string, string> = {}) {
+async function mountPage() {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/collect', component: { template: '<div />' } }, { path: '/canvas', component: { template: '<div />' } }] })
-  await router.push({ path: '/collect', query: { tab: 'views', ...query } })
+  await router.push({ path: '/collect', query: { tab: 'views' } })
   await router.isReady()
   wrapper = mount(MyViews, { global: { plugins: [ElementPlus, router] }, attachTo: document.body })
-  await flushPromises()
+  await settle()
   return { router }
 }
-const settle = async () => { await flushPromises(); await new Promise((r) => setTimeout(r, 30)) }
-const dom = (sel: string) => document.querySelector(sel) as HTMLElement
+async function settle() { await flushPromises(); await new Promise((r) => setTimeout(r, 20)); await flushPromises() }
+const saved = async () => (await sourceViewApi.list('7'))[0].tree
+const dirNode = (name: string) => wrapper.findAll('[data-testid="view-dir-node"]').find((n) => n.text().includes(name))!
+const sorted = (ids?: string[]) => [...(ids ?? [])].sort()
 
-describe('我的视图', () => {
-  it('没有视图时提示新建；新建后是空的手选清单并选中', async () => {
+/** 广发：宏观 > 统计局（s1,s2）、央行（s3）；舆情（s4 + 来源组 g3 = t1,t2,t3） */
+async function seed() {
+  let t = emptyTree()
+  let r = addDir(t, ROOT_ID, '宏观'); t = r.tree; const macro = r.id
+  r = addDir(t, macro, '统计局'); t = addSources(r.tree, r.id, ['s1', 's2'])
+  r = addDir(t, macro, '央行'); t = addSources(r.tree, r.id, ['s3'])
+  r = addDir(t, ROOT_ID, '舆情'); t = bindGroup(addSources(r.tree, r.id, ['s4']), r.id, 'g3')
+  return localSourceViewApi.add('7', { viewName: '广发', tree: t })
+}
+
+describe('我的视图 · 目录版', () => {
+  it('没有视图：提示新建；新建后选中根目录', async () => {
     await mountPage()
     expect(wrapper.text()).toContain('还没有视图')
     await wrapper.get('[data-testid="mv-new"]').trigger('click')
     await settle()
-    const input = dom('input[data-testid="save-view-name"], [data-testid="save-view-name"] input') as HTMLInputElement
-    input.value = '广发 · 失败待处理'
+    const input = document.querySelector('input[data-testid="save-view-name"]') as HTMLInputElement
+    input.value = '广发'
     input.dispatchEvent(new Event('input'))
-    dom('[data-testid="save-view-submit"]').click()
+    ;(document.querySelector('[data-testid="save-view-submit"]') as HTMLElement).click()
     await settle()
-    expect(wrapper.get('[data-testid="mv-name"]').text()).toBe('广发 · 失败待处理')
-    expect((await sourceViewApi.list('7'))[0].state).toEqual(emptyManualViewState())
-    expect(scopeSeen[0]).toEqual([])
-    expect(wrapper.find('[data-testid="mv-add-sources"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="mv-path"]').text()).toContain('广发 / 全部（根目录）')
+    expect(wrapper.find('[data-testid="view-dir-root"]').exists()).toBe(true)
+    expect(scopeSeen).toEqual([])
   })
 
-  // 2026-10-12 用户定 C：视图可手选源，条件栏在清单内再筛
-  it('手选视图：添加源后标为未保存，保存才写进视图；已在视图里的自动去重', async () => {
-    const v = await sourceViewApi.add('7', { viewName: '广发重点', state: { ...emptyManualViewState(), scopeIds: ['10'] } })
+  it('父目录汇总子目录，根目录汇总整个视图（含来源组成员）；目录显示源数和「组」标记', async () => {
+    await seed()
     await mountPage()
-    expect(scopeSeen[0]).toEqual(['10'])
-    ;(wrapper.vm as unknown as { addSources: (ids: string[]) => void }).addSources(['10', '30'])
-    await flushPromises()
-    expect(scopeSeen[0]).toEqual(['10', '30'])
-    expect(wrapper.find('[data-testid="mv-dirty"]').exists()).toBe(true)
-    expect((await sourceViewApi.list('7'))[0].state.scopeIds).toEqual(['10'])
-    await wrapper.get('[data-testid="mv-save"]').trigger('click')
+    expect(sorted(scopeSeen)).toEqual(['s1', 's2', 's3', 's4', 't1', 't2', 't3'])
+    await dirNode('宏观').trigger('click')
     await settle()
-    const saved = (await sourceViewApi.list('7')).find((x) => x.viewId === v.viewId)!
-    expect(saved.state.scopeIds).toEqual(['10', '30'])
-    expect(wrapper.find('[data-testid="mv-dirty"]').exists()).toBe(false)
+    expect(sorted(scopeSeen)).toEqual(['s1', 's2', 's3'])
+    expect(wrapper.get('[data-testid="mv-path"]').text()).toContain('广发 / 宏观')
+    expect(dirNode('宏观').text()).toContain('3')
+    expect(dirNode('舆情').text()).toContain('组')
+    expect(dirNode('舆情').text()).toContain('4')
   })
 
-  it('手选视图：选中源后「移出视图」确认后才移出；撤销回到已保存的清单', async () => {
-    await sourceViewApi.add('7', { viewName: '广发重点', state: { ...emptyManualViewState(), scopeIds: ['10', '20', '30'] } })
+  it('新建子目录：建在选中目录下，建完选中它', async () => {
+    await seed()
     await mountPage()
-    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never)
+    await dirNode('宏观').trigger('click')
+    await settle()
+    vi.spyOn(ElMessageBox, 'prompt').mockResolvedValueOnce({ value: '财政部' } as never)
+    await wrapper.get('[data-testid="mv-new-dir"]').trigger('click')
+    await settle()
+    const t = await saved()
+    const fin = t.dirs.find((d) => d.name === '财政部')!
+    expect(t.dirs.find((d) => d.id === fin.parentId)!.name).toBe('宏观')
+    expect(wrapper.get('[data-testid="mv-path"]').text()).toContain('宏观 / 财政部')
+  })
+
+  it('添加源到选中目录（去重）；选来源组后绑定整个来源组', async () => {
+    await seed()
+    await mountPage()
+    await dirNode('统计局').trigger('click')
+    await settle()
+    const picker = wrapper.findComponent(GroupSourcePicker)
+    picker.vm.$emit('pick', ['s1', 's9'])
+    await settle()
+    expect((await saved()).dirs.find((d) => d.name === '统计局')!.sources).toEqual(['s1', 's2', 's9'])
+    picker.vm.$emit('bindGroup', 'g3')
+    await settle()
+    expect((await saved()).dirs.find((d) => d.name === '统计局')!.groups).toEqual(['g3'])
+    expect(wrapper.get('[data-testid="mv-group-bar"]').text()).toContain('twitter1')
+    expect(scopeSeen).toEqual(expect.arrayContaining(['t1', 't2', 't3']))
+  })
+
+  it('根目录也能直接绑定来源组', async () => {
+    await seed()
+    await mountPage()
+    wrapper.findComponent(GroupSourcePicker).vm.$emit('bindGroup', 'g3')
+    await settle()
+    expect((await saved()).root.groups).toEqual(['g3'])
+    expect(wrapper.get('[data-testid="mv-group-bar"]').text()).toContain('根目录绑定的来源组')
+  })
+
+  it('随来源组带入的源可单独移出（排除，组标签显示 2/3），可恢复；所在目录列标「随来源组」', async () => {
+    await seed()
+    await mountPage()
+    await dirNode('舆情').trigger('click')
+    await settle()
+    expect(wrapper.get('[data-testid="sov-row"][data-id="t2"]').text()).toContain('随来源组 twitter1')
+    expect(wrapper.get('[data-testid="sov-row"][data-id="s4"]').text()).not.toContain('随来源组')
+    selectedIds = ['t2']
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never)
+    await wrapper.findComponent({ name: 'SourceOverviewView' }).vm.$forceUpdate()
+    await settle()
     await wrapper.get('[data-testid="mv-remove-sources"]').trigger('click')
     await settle()
-    expect(confirm).toHaveBeenCalled()
-    expect(scopeSeen[0]).toEqual(['30'])
-    expect(wrapper.find('[data-testid="mv-dirty"]').exists()).toBe(true)
-    await wrapper.get('[data-testid="mv-revert"]').trigger('click')
-    await flushPromises()
-    expect(scopeSeen[0]).toEqual(['10', '20', '30'])
-  })
-
-  // 2026-10-12 用户反馈：从「我的视图」点源跳到源详情后，源详情的页签全点不了。
-  // 原因：本页被 KeepAlive 缓存，跳走后组件还活着，监听地址栏的 view 参数把源详情的 view=overview 当成视图 ID，
-  // 又把它改写成视图 ID。现在参数叫 viewId，且只在本页的地址上才改。
-  it('跳到源详情后不改写源详情地址上的 view 参数', async () => {
-    const v = await sourceViewApi.add('7', { viewName: 'A', state: { ...emptyManualViewState(), scopeIds: ['10'] } })
-    const { router } = await mountPage()
-    expect(router.currentRoute.value.query.viewId).toBe(v.viewId)
-    await router.push({ path: '/canvas', query: { sourceId: '10', view: 'overview', returnTo: '/collect?tab=views' } })
-    await flushPromises()
+    expect(scopeSeen).not.toContain('t2')
+    expect((await saved()).dirs.find((d) => d.name === '舆情')!.excluded).toEqual(['t2'])
+    expect(wrapper.get('[data-testid="mv-group-bar"]').text()).toContain('2/3')
+    await wrapper.get('[data-testid="mv-restore"]').trigger('click')
     await settle()
-    expect(router.currentRoute.value.query.view).toBe('overview')
-    expect(router.currentRoute.value.query.viewId).toBeUndefined()
-    // 回到「我的视图」仍然停在原来的视图
-    await router.push({ path: '/collect', query: { tab: 'views', viewId: v.viewId } })
-    await flushPromises()
-    expect(wrapper.get('[data-testid="mv-name"]').text()).toBe('A')
+    expect(scopeSeen).toContain('t2')
   })
 
-  it('条件视图（系统目录另存为）：没有「添加源」「移出视图」；源数按条件查', async () => {
-    await sourceViewApi.add('7', { viewName: '异常源', state: st({ status: 'E' }) })
+  it('解绑来源组：组的源都不在了，单独添加的保留', async () => {
+    await seed()
     await mountPage()
-    expect(scopeSeen[0]).toBeUndefined()
-    expect(wrapper.find('[data-testid="mv-add-sources"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="mv-remove-sources"]').exists()).toBe(false)
-    expect(wrapper.findAll('[data-testid="mv-item"]').map((i) => i.text())).toEqual(['异常源3'])
-  })
-
-  it('手选视图的源数限定在清单内：空清单不发请求显示 0，有清单带 sourceIds', async () => {
-    await sourceViewApi.add('7', { viewName: '空的', state: emptyManualViewState() })
-    await sourceViewApi.add('7', { viewName: '三个', state: { ...emptyManualViewState(), scopeIds: ['1', '2', '3'] } })
-    const paged = vi.mocked(sourceApi.sourcePaged)
-    await mountPage()
-    expect(wrapper.findAll('[data-testid="mv-item"]').map((i) => i.text())).toEqual(['空的0', '三个100'])
-    expect(paged).toHaveBeenCalledWith(expect.objectContaining({ sourceIds: '1,2,3', size: 1 }))
-    expect(paged.mock.calls.filter(([q]) => q?.size === 1)).toHaveLength(1)
-  })
-
-  it('左侧列出视图和源数（按视图条件查 sourcePaged 的 total），默认进入的视图优先选中', async () => {
-    await sourceViewApi.add('7', { viewName: 'A', state: st() })
-    await sourceViewApi.add('7', { viewName: '失败', state: st({ status: 'E' }), isDefault: true })
-    await mountPage()
-    const items = wrapper.findAll('[data-testid="mv-item"]').map((i) => i.text())
-    expect(items).toEqual(['A100', '失败★3'])
-    expect(wrapper.get('[data-testid="mv-name"]').text()).toBe('失败')
-    expect(received.at(-1)).toMatchObject({ status: 'E' })
-  })
-
-  it('改了条件出现「有未保存的修改」；保存后写进视图，撤销回到已保存的', async () => {
-    const v = await sourceViewApi.add('7', { viewName: 'A', state: st() })
-    await mountPage()
-    expect(wrapper.find('[data-testid="mv-dirty"]').exists()).toBe(false)
-    emitState(st({ status: 'E' }))
-    await flushPromises()
-    expect(wrapper.find('[data-testid="mv-dirty"]').exists()).toBe(true)
-    await wrapper.get('[data-testid="mv-revert"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[data-testid="mv-dirty"]').exists()).toBe(false)
-    expect(received.at(-1)).toMatchObject({ status: 'all' })
-    emitState(st({ tag: '宏观' }))
-    await flushPromises()
-    await wrapper.get('[data-testid="mv-save"]').trigger('click')
+    await dirNode('舆情').trigger('click')
     await settle()
-    const saved = (await sourceViewApi.list('7')).find((x) => x.viewId === v.viewId)!
-    expect(saved.state.tag).toBe('宏观')
-    expect(wrapper.find('[data-testid="mv-dirty"]').exists()).toBe(false)
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never)
+    await wrapper.get('[data-testid="mv-unbind"]').trigger('click')
+    await settle()
+    expect(scopeSeen).toEqual(['s4'])
   })
 
-  it('另存为：未保存的修改存进新视图，原视图不变', async () => {
-    await sourceViewApi.add('7', { viewName: 'A', state: st() })
+  it('删除目录连同子目录，回到根目录', async () => {
+    await seed()
     await mountPage()
-    emitState(st({ status: 'E' }))
-    await flushPromises()
-    await wrapper.get('[data-testid="mv-save-as"]').trigger('click')
+    await dirNode('宏观').trigger('click')
     await settle()
-    const input = dom('input[data-testid="save-view-name"], [data-testid="save-view-name"] input') as HTMLInputElement
-    expect(input.value).toBe('A 副本')
-    dom('[data-testid="save-view-submit"]').click()
+    const macroId = (await saved()).dirs.find((d) => d.name === '宏观')!.id
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never)
+    wrapper.findComponent(ViewDirTree).vm.$emit('command', 'delete', macroId)
     await settle()
-    const list = await sourceViewApi.list('7')
-    expect(list.map((x) => [x.viewName, x.state.status])).toEqual([['A', 'all'], ['A 副本', 'E']])
-    expect(wrapper.get('[data-testid="mv-name"]').text()).toBe('A 副本')
+    expect((await saved()).dirs.map((d) => d.name)).toEqual(['舆情'])
+    expect(wrapper.get('[data-testid="mv-path"]').text()).toContain('全部（根目录）')
   })
 
-  it('切换视图时有未保存的修改要确认；取消就留在原视图', async () => {
-    await sourceViewApi.add('7', { viewName: 'A', state: st() })
-    await sourceViewApi.add('7', { viewName: 'B', state: st() })
+  it('10-12 的条件视图读进来：提示改成目录视图；暂存本机时左栏提醒', async () => {
+    localStorage.setItem('ce:source-views:v1:7', JSON.stringify({ version: 1, views: [{ viewId: 'a', viewName: '旧条件', state: { v: 1, status: 'E', scopeIds: null }, isDefault: false, revision: 0, createdAt: '', updatedAt: '' }] }))
     await mountPage()
-    emitState(st({ status: 'E' }))
-    await flushPromises()
-    const confirm = vi.spyOn(ElMessageBox, 'confirm').mockRejectedValueOnce('cancel')
-    await wrapper.findAll('[data-testid="mv-item"]')[1]!.trigger('click')
-    await flushPromises()
-    expect(confirm).toHaveBeenCalled()
-    expect(wrapper.get('[data-testid="mv-name"]').text()).toBe('A')
+    expect(wrapper.find('[data-testid="mv-converted"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="mv-local-note"]').exists()).toBe(true)
   })
 
-  it('显示设置：取消勾选的列应用到列表，标为未保存', async () => {
-    await sourceViewApi.add('7', { viewName: 'A', state: st() })
+  it('设为默认进入：视图标默认，源管理默认进入改为「我的视图」', async () => {
+    await seed()
     await mountPage()
-    await wrapper.get('[data-testid="mv-display"]').trigger('click')
-    await settle()
-    ;(dom('[data-testid="mv-col-url"] input') as HTMLInputElement).click()
-    await flushPromises()
-    dom('[data-testid="mv-display-apply"]').click()
-    await settle()
-    expect(received.at(-1)!.hiddenColumns).toEqual(['url'])
-    expect(wrapper.find('[data-testid="mv-dirty"]').exists()).toBe(true)
-  })
-
-  it('设为默认进入：视图标默认，源管理默认进入改为「我的视图」；删除默认视图后回到系统目录', async () => {
-    await sourceViewApi.add('7', { viewName: 'A', state: st() })
-    await mountPage()
-    await (wrapper.vm as unknown as { onMore: (c: string) => Promise<void> }).onMore('default')
+    await (wrapper.vm as unknown as { onViewCommand: (c: string) => Promise<void> }).onViewCommand('default')
     await settle()
     expect((await sourceViewApi.list('7'))[0].isDefault).toBe(true)
     expect(useSourceGroupsStore().preference).toBe('view')
-    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValueOnce('confirm' as never)
-    await wrapper.get('[data-testid="mv-delete"]').trigger('click')
-    await settle()
-    expect(await sourceViewApi.list('7')).toEqual([])
-    expect(useSourceGroupsStore().preference).toBe('system')
   })
 
-  // 2026-10-12 后端接口开发环境联调通过：接口在用时提示「保存在账号」；本机还留着旧视图就提示导入
-  it('暂存本机时左栏提醒「暂存本机」，没有导入提示', async () => {
-    await mountPage()
-    expect(wrapper.find('[data-testid="mv-local-note"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="mv-import"]').exists()).toBe(false)
-  })
-
-  it('接口在用且本机还有旧视图：不再提示暂存本机，只显示导入提示，点导入后调 importLocal 并重读', async () => {
-    await localSourceViewApi.add('7', { viewName: '之前存本机的', state: emptyManualViewState() })
-    setSourceViewBackend('remote')
-    const list = vi.spyOn(sourceViewApi, 'list').mockResolvedValue([])
-    const importLocal = vi.spyOn(sourceViewApi, 'importLocal').mockResolvedValue({ imported: 1, failed: [] })
-    await mountPage()
-    expect(wrapper.find('[data-testid="mv-local-note"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="mv-import"]').text()).toContain('1 个')
-    list.mockClear()
-    await wrapper.get('[data-testid="mv-import-btn"]').trigger('click')
+  // aa368d5：本页被 KeepAlive 缓存，跳到源详情后不能改写源详情的地址
+  it('跳到源详情后不改写源详情地址', async () => {
+    const v = await seed()
+    const { router } = await mountPage()
+    expect(router.currentRoute.value.query.viewId).toBe(v.viewId)
+    await router.push({ path: '/canvas', query: { sourceId: '10', view: 'overview', returnTo: '/collect?tab=views' } })
     await settle()
-    expect(importLocal).toHaveBeenCalledWith('7')
-    expect(list).toHaveBeenCalled()
+    expect(router.currentRoute.value.query.view).toBe('overview')
+    expect(router.currentRoute.value.query.viewId).toBeUndefined()
   })
 })
-

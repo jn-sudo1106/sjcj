@@ -14,15 +14,39 @@ const props = withDefaults(defineProps<{
   pickMode?: boolean
   title?: string
   confirmText?: string
-}>(), { backendMode: false, pickMode: false })
+  /**
+   * 「我的视图」目录版（2026-10-13）：查询条件加「来源组」。选中某个组后列表只列组成员，
+   * 上方给出「绑定整个来源组」（emit bindGroup，组成员变了视图跟着变）；不点就是只勾几个源。
+   */
+  groupFilter?: boolean
+  /** 目标里已经绑定的来源组：选中时提示已绑定，不再给绑定按钮 */
+  boundGroups?: string[]
+}>(), { backendMode: false, pickMode: false, groupFilter: false, boundGroups: () => [] })
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   /** backendMode 保存成功后通知父级重拉（revision 会变） */
   saved: []
   pick: [ids: string[]]
+  bindGroup: [groupId: string]
 }>()
 const groups = useSourceGroupsStore()
 const field = ref<'name' | 'sourceIds'>('name')
+const groupId = ref('')
+const groupOptions = ref<{ id: string; name: string; state: string }[]>([])
+const selectedGroup = computed(() => groupOptions.value.find((g) => g.id === groupId.value))
+async function loadGroupOptions() {
+  if (!props.groupFilter || groupOptions.value.length) return
+  try {
+    groupOptions.value = (await sourceGroupApi.list()).map((g) => ({ id: g.sourceGroupId, name: g.sourceGroupName, state: g.state }))
+  } catch {
+    groupOptions.value = [] // 拉不到就只能按名称 / ID 选源
+  }
+}
+function bindSelectedGroup() {
+  if (!groupId.value) return
+  emit('bindGroup', groupId.value)
+  emit('update:modelValue', false)
+}
 const keyword = ref('')
 const page = ref(1)
 const size = ref(20)
@@ -37,7 +61,7 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const result = await sourceApi.sourcePaged({ page: page.value, size: size.value, [field.value]: keyword.value.trim() || undefined })
+    const result = await sourceApi.sourcePaged({ page: page.value, size: size.value, [field.value]: keyword.value.trim() || undefined, sourceGroupId: groupId.value || undefined })
     if (request !== sequence) return
     rows.value = result.list
     total.value = result.total
@@ -51,7 +75,7 @@ async function load() {
 function search() { page.value = 1; void load() }
 watch(() => props.modelValue, open => {
   ++sequence
-  if (open) { selected.value = []; keyword.value = ''; page.value = 1; void load() }
+  if (open) { selected.value = []; keyword.value = ''; groupId.value = ''; page.value = 1; void load(); void loadGroupOptions() }
 })
 function toggle(id: string) {
   selected.value = selected.value.includes(id) ? selected.value.filter(value => value !== id) : [...selected.value, id]
@@ -107,9 +131,19 @@ async function save() {
 <template>
   <el-dialog :model-value="modelValue" :title="title || '选择源加入分组'" width="980px" style="max-width: calc(100vw - 32px)" append-to-body @update:model-value="emit('update:modelValue', $event)">
     <div class="picker-filter">
+      <el-select v-if="groupFilter" v-model="groupId" clearable placeholder="全部来源组" style="width: 160px" aria-label="来源组" data-testid="picker-group" @change="search">
+        <el-option v-for="g in groupOptions" :key="g.id" :label="g.name" :value="g.id" :disabled="g.state !== 'ACTIVE'" />
+      </el-select>
       <el-select v-model="field" style="width: 110px" aria-label="查询字段"><el-option label="源名称" value="name" /><el-option label="源 ID" value="sourceIds" /></el-select>
       <el-input v-model="keyword" :placeholder="field === 'sourceIds' ? '多个源 ID 用逗号分隔' : '输入源名称'" clearable @keyup.enter="search" />
       <el-button type="primary" @click="search">查询</el-button>
+    </div>
+    <div v-if="groupFilter && selectedGroup" class="picker-bind" data-testid="picker-bind-bar">
+      <template v-if="boundGroups.includes(selectedGroup.id)">来源组「{{ selectedGroup.name }}」已经绑定在这里了</template>
+      <template v-else>
+        <span>来源组「{{ selectedGroup.name }}」共 {{ total }} 个源。<b>绑定整个来源组</b>：以后组里加减源，这里跟着变；或者在下面只勾需要的几个源。</span>
+        <el-button size="small" data-testid="picker-bind-group" @click="bindSelectedGroup">绑定整个来源组</el-button>
+      </template>
     </div>
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
     <el-table v-loading="loading" :data="rows" :max-height="'calc(100vh - 340px)'" size="small" row-key="sourceId">
@@ -128,6 +162,8 @@ async function save() {
 <style scoped>
 .picker-filter { display: flex; gap: 8px; margin-bottom: 12px; }
 .picker-filter .el-input { flex: 1; }
+.picker-bind { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 8px 12px; border-radius: 8px; background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; font-size: 12px; }
+.picker-bind span { flex: 1; }
 .picker-footer { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
 .picker-footer span { margin-right: auto; color: var(--rc-muted); }
 .el-pagination { margin-top: 12px; }

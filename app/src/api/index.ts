@@ -78,6 +78,7 @@ export { fetchPromptList } from './prompt'
 export type { PromptTemplateItem } from './prompt'
 export type { UsedTable } from '@/utils/site/usedTables'
 import { issueTagsForWrite, parseIssueTags } from '@/utils/sourceMark'
+import { urlOrPlaceholder } from '@/utils/source/placeholderUrl'
 import { aggregateUsedTables, countSourcesWithoutFlow, type UsedTable } from '@/utils/site/usedTables'
 
 export * from './types'
@@ -325,6 +326,22 @@ function legacySnatchSavePayloadFromSource(site: Site, source: Source): LegacySn
     entryTypeId: source.mainTable || undefined,
     params: [],
     reqLogin: '0',
+  }
+}
+
+const CREATE_DISABLED_MESSAGE = '当前环境未开启新建通道（VITE_SITE_CREATE_TARGET=production），无法新增源'
+
+/** 在已有网站下建一个空白流程的源：snatchSave → bindSite（真实写，调用方先过 isProductionCreateEnabled）。 */
+async function createSourceInSite(site: Site, source: Source): Promise<{ ok: boolean; message?: string; sourceId?: string }> {
+  const liveWrite = { mode: 'http' as const }
+  try {
+    const saved = await legacySnatchSaveRequest(legacySnatchSavePayloadFromSource(site, source), liveWrite)
+    if (!saved.ok || !saved.sourceId) return { ok: false, message: saved.message || '保存失败' }
+    const bound = await sourceApi.bindSite(saved.sourceId, site.siteId, liveWrite)
+    if (!bound.ok) return { ok: false, sourceId: saved.sourceId, message: `源 ${saved.sourceId} 已建，关联网站失败：${bound.message || '未知错误'}` }
+    return { ok: true, sourceId: saved.sourceId }
+  } catch (error) {
+    return { ok: false, message: (error as Error).message ?? '请求失败' }
   }
 }
 
@@ -1450,16 +1467,65 @@ export const siteApi = {
   refreshSiteSources: (siteId: string) => {
     siteSourcesCache.delete(siteId)
   },
-  // 新增源默认从空白流程开始；inherit=true 仅保留给旧数据迁移兼容场景。
-  sourceAdd: (siteId: string, source: Source, inherit = false) =>
-    assetMockRequest<{ ok: boolean; message?: string; sourceId?: string }>('site/addSource', { siteId, source, inherit }),
+  /**
+   * 新增源默认从空白流程开始；inherit=true 仅保留给旧数据迁移兼容场景（只在 mock 有效）。
+   * site/addSource 是自造的 mock 名；真实路径同 siteCreate：snatchSave → bindSite，开关也同 siteCreate。
+   */
+  sourceAdd: async (siteId: string, source: Source, inherit = false): Promise<{ ok: boolean; message?: string; sourceId?: string }> => {
+    if (!isProductionCreateEnabled()) {
+      if (isMockMode() && !isProductionBackend()) {
+        return assetMockRequest('site/addSource', { siteId, source, inherit })
+      }
+      return { ok: false, message: CREATE_DISABLED_MESSAGE }
+    }
+    // 参数源的 baseUrl/urlTemplate/paramRefs 在 snatchSave 里没有对应字段，硬建会丢参数
+    if (source.kind === 'param') return { ok: false, message: '参数源暂未接入真实后端，请先用普通源 + $PARAM$ 占位符' }
+    const site = await siteApi.siteDetail(siteId)
+    if (!site) return { ok: false, message: `网站「${siteId}」不存在` }
+    return createSourceInSite(site, source)
+  },
   cloneSource: (requestBody: SourceCloneRequest) =>
     // 侧栏「按模板源添加」已改走 source/copySource；本方法是自造 BFF，保留给旧测试与 mock。
     assetMockRequest<SourceCloneResult>('site/cloneSource', requestBody as unknown as Record<string, unknown>),
   sourceRemove: (siteId: string, sourceId: string) => assetMockRequest<Ack>('site/removeSource', { siteId, sourceId }),
-  // 按网站批量导入源：一行一条「名称;URL」，导入后从空白流程开始。
-  siteImportSources: (siteId: string, lines: string) =>
-    assetMockRequest<{ ok: boolean; message?: string; added?: number; skipped?: number }>('site/importSources', { siteId, lines }),
+  /**
+   * 按网站批量导入源：一行一条「名称;URL」，导入后从空白流程开始。
+   * 后端没有批量导入端点（site/importSources 是自造的 mock 名），真实路径逐行走 siteCreate 同一套
+   * snatchSave → bindSite；开关同 siteCreate。之前只接了 mock，真实网站在夹具里查不到，报「网站「126」不存在」。
+   */
+  siteImportSources: async (siteId: string, lines: string): Promise<{ ok: boolean; message?: string; added?: number; skipped?: number }> => {
+    if (!isProductionCreateEnabled()) {
+      if (isMockMode() && !isProductionBackend()) {
+        return assetMockRequest('site/importSources', { siteId, lines })
+      }
+      return { ok: false, message: CREATE_DISABLED_MESSAGE }
+    }
+    const rows = lines.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+    const site = await siteApi.siteDetail(siteId)
+    if (!site) return { ok: false, message: `网站「${siteId}」不存在` }
+    let added = 0
+    let skipped = 0
+    const failures: string[] = []
+    for (const row of rows) {
+      // 只按第一个分号切：URL 里可能自带分号
+      const sep = row.search(/[;；]/)
+      const name = (sep < 0 ? row : row.slice(0, sep)).trim()
+      const url = sep < 0 ? '' : row.slice(sep + 1).trim()
+      if (!name) {
+        skipped++
+        continue
+      }
+      const source: Source = { sourceId: '', name, url: urlOrPlaceholder(url), configId: '', mainTable: '', owner: site.owner || 'admin', state: 'C' }
+      const res = await createSourceInSite(site, source)
+      if (res.ok) added++
+      else failures.push(`${name}（${res.message}）`)
+    }
+    if (!added && !failures.length) return { ok: false, message: '没有可导入的行，请检查「名称;URL」格式' }
+    const parts = [`已导入 ${added} 条源`]
+    if (skipped) parts.push(`跳过 ${skipped} 条`)
+    if (failures.length) parts.push(`失败 ${failures.length} 条：${failures.join('；')}`)
+    return { ok: added > 0, added, skipped: skipped + failures.length, message: parts.join('，') }
+  },
   // 危险端点：把源头已保存的流程整条覆盖到同网站所选源，UI 走多选列表 + 危险确认
   siteSyncFlow: (siteId: string, fromSourceId: string, sourceIds: string[]) =>
     assetMockRequest<Ack>('site/syncFlow', { siteId, fromSourceId, sourceIds }),
