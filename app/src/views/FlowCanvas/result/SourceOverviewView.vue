@@ -8,7 +8,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Star, StarFilled } from '@element-plus/icons-vue'
-import { siteApi, sourceApi, sourceGroupApi, flowCenterApi, type FlowRecord, type Source } from '@/api'
+import { dataApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type DataTableMeta, type FlowRecord, type Source } from '@/api'
 import { isProductionBackend } from '@/api/client'
 import { useLaunchJobStore } from '@/stores/launchJob'
 import { useUiStore } from '@/stores/ui'
@@ -22,6 +22,7 @@ import {
 import SourceMarkPopover from './SourceMarkPopover.vue'
 import EditSourceMarkDialog from './EditSourceMarkDialog.vue'
 import FlowDetailDrawer from '@/views/FlowCenter/FlowDetailDrawer.vue'
+import TableDetailDialog from '@/views/DataView/TableDetailDialog.vue'
 import SourceFlowConfigDrawer from '@/views/CollectAssets/SourceFlowConfigDrawer.vue'
 import AdjustSourceGroupDialog from '@/views/CollectAssets/AdjustSourceGroupDialog.vue'
 import RunOnceDialog from '@/views/CollectAssets/RunOnceDialog.vue'
@@ -262,6 +263,22 @@ async function openFlowNode(flowId: string) {
     flowDetail.value = await flowCenterApi.detail(flowId)
   } catch (error) {
     ElMessage.error(`加载流程失败：${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+/** 点主表：拉表结构后在右侧抽屉展示（旧平台 SourceList 点主表看表信息；复用数据查询的「表结构详情」抽屉） */
+const mainTableOpen = ref(false)
+const mainTableMeta = ref<DataTableMeta | null>(null)
+async function openMainTable(tableId: string) {
+  try {
+    const meta = await dataApi.tableMeta(tableId)
+    if (!meta) {
+      ElMessage.warning(`未找到主表 ${tableId} 的结构`)
+      return
+    }
+    mainTableMeta.value = meta
+    mainTableOpen.value = true
+  } catch (error) {
+    ElMessage.error(`加载表结构失败：${error instanceof Error ? error.message : String(error)}`)
   }
 }
 /**
@@ -1423,7 +1440,17 @@ watch(() => ui.sourceListRevision, () => {
               <!-- 没有 URL 就留空，不画「—」（2026-09-28 用户定，与旧平台一致） -->
               <a v-if="source.url" :href="source.url" target="_blank" rel="noopener noreferrer" @click.stop>{{ source.url }}</a>
             </td>
-            <td v-if="showCol('mainTable')">{{ source.mainTable || '—' }}</td>
+            <td v-if="showCol('mainTable')">
+              <button
+                v-if="source.mainTable"
+                class="sov-link"
+                type="button"
+                data-testid="source-overview-main-table"
+                :title="`查看表 ${source.mainTable} 结构`"
+                @click.stop="openMainTable(source.mainTable)"
+              >{{ source.mainTable }}</button>
+              <template v-else>—</template>
+            </td>
             <td v-if="showCol('tags')">
               <!-- 标签列与备注列都点开同一个弹窗：想删掉某一个标签只有这条路（批量条只能追加/清空） -->
               <button
@@ -1543,6 +1570,7 @@ watch(() => ui.sourceListRevision, () => {
       @close="runOnceOpen = false"
     />
     <FlowDetailDrawer v-if="flowDetail" :flow="flowDetail" @close="flowDetail = null" />
+    <TableDetailDialog v-model="mainTableOpen" :table-meta="mainTableMeta" />
   </section>
 </template>
 

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, shallowMount, type VueWrapper } from '@vue/test-utils'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SourceOverviewView from './SourceOverviewView.vue'
-import { favoriteApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type Source } from '@/api'
+import { dataApi, favoriteApi, siteApi, sourceApi, sourceGroupApi, flowCenterApi, type Source } from '@/api'
 import { favoriteSourceIds } from '@/utils/sourceFavorites'
 import * as xlsxExport from '@/utils/format/xlsxExport'
 import { createPinia, setActivePinia } from 'pinia'
@@ -1647,6 +1647,24 @@ describe('SourceOverviewView · 1008-04 来源组（groupOps）', () => {
     // 未归组显示 —
     const groupText = wrapper.findAll('.sov-group').map((n) => n.text())
     expect(groupText.some((t) => t.includes('—'))).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('点主表：拉表结构并打开表详情抽屉；没有主表的源显示 —', async () => {
+    const withTable: Source = { ...INDEP_SOURCE, mainTable: '6200039' }
+    const { wrapper } = await mountGroupOps([withTable, { ...GROUP_SOURCE, mainTable: '' }])
+    const metaSpy = vi.spyOn(dataApi, 'tableMeta').mockResolvedValue({
+      tableId: '6200039', tableName: 'sense_data.TB_TEST02', name: '测试表2', state: 'C', fields: [],
+    } as never)
+
+    const links = wrapper.findAll('[data-testid="source-overview-main-table"]')
+    expect(links).toHaveLength(1)
+    expect(links[0].text()).toBe('6200039')
+    await links[0].trigger('click')
+    await flushPromises()
+
+    expect(metaSpy).toHaveBeenCalledWith('6200039')
+    expect(document.body.textContent).toContain('sense_data.TB_TEST02')
     wrapper.unmount()
   })
 
