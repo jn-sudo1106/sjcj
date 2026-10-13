@@ -66,10 +66,14 @@ import {
   mockCommJobRun,
 } from './commJob'
 import {
+  mockPocDatabaseEntryList,
   mockSqlTemplatePaged,
   mockSqlTemplateSave,
   mockSqlTemplateChangeStatus,
   mockSqlTemplateCopy,
+  mockTableTemplatePaged,
+  mockTableTemplateSave,
+  mockTableTemplateChangeStatus,
 } from './templateConfig'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
@@ -329,4 +333,12 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/sql-temp': mockSqlTemplateSave,
   'poc/sql-temp/status': mockSqlTemplateChangeStatus,
   'poc/sql-temp/copy': mockSqlTemplateCopy,
+
+  // 表模板配置（1013 迁入）：端点域是旧 question-temp，菜单标题才叫「表模板」。
+  // 没有 poc/question-temp/copy —— 旧平台不提供表模板复制（见 api/templateConfig.ts 的 tableTemplateApi）。
+  'poc/question-temp/page': mockTableTemplatePaged,
+  'poc/question-temp': mockTableTemplateSave,
+  'poc/question-temp/status': mockTableTemplateChangeStatus,
+  // 表模板「使用表范围」下拉的数据表选项
+  'poc/database/entry-list': mockPocDatabaseEntryList,
 }
