@@ -56,4 +56,23 @@ describe('Phase 3.1 画布入口退役', () => {
     const redirect = monitorAlias?.redirect as (to: { query: Record<string, unknown> }) => unknown
     expect(redirect({ query: { state: 'E' } })).toEqual({ path: '/monitor', query: { state: 'E' } })
   })
+
+  // 1013：旧 ai-chat-view「模板配置 → sql模板配置」迁到 front-ce，独立成「模板配置」组。
+  // 这一组会随迁移逐个长出来（表模板 / 自动补全 / 问句改写 / 数据索引…），所以按组做通用断言：
+  // TABS 里每个 template 入口都要有路由落点，且 meta.permission 与 TABS 的 permission 同值
+  // ——侧栏读 TABS、路由守卫读 meta，两边不同值就会出现「菜单看得见、地址进不去」。
+  it('模板配置组每个入口都有路由，且 permission 两侧同值', () => {
+    const tab = TABS.find((t) => t.key === 'sql-template')
+    expect(tab?.label).toBe('SQL模板配置')
+    expect(tab?.group).toBe('template')
+
+    const templateTabs = TABS.filter((t) => t.group === 'template')
+    expect(templateTabs.length).toBeGreaterThan(0)
+    const shell = router.options.routes.find((r) => r.path === '/')
+    for (const t of templateTabs) {
+      const route = shell?.children?.find((r) => r.path === t.path)
+      expect(route, `路由缺 ${t.path}`).toBeTruthy()
+      expect(route?.meta?.permission).toBe(t.permission)
+    }
+  })
 })

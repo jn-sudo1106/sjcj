@@ -161,6 +161,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/modifyEntryType', desc: '修改实体', danger: true, impl: true, live: true },
   { path: 'config/deleteEntryType', desc: '删除实体表', danger: true, impl: true, live: true },
   { path: 'config/entry-type-clear', desc: '清除实体表缓存（前端已下线，列表改刷新重查）', danger: true, impl: true, live: true },
+  // 旧 EntryDataImport.vue：前端解析 Excel 生成 items（覆盖字段定义）+ 表头之后的行作为 data，整体 POST。
   { path: 'config/entryTypeCopy', desc: '复制实体表', danger: true, impl: true, live: true },
   { path: 'config/checkTable', desc: '检查物理表结构', impl: true, live: true },
   { path: 'config/syncTable', desc: '同步物理表结构', danger: true, impl: true, live: true },
@@ -181,6 +182,14 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'config/logPaged', desc: '配置操作日志' },
   { path: 'config/bindParam', desc: '配置绑定参数', danger: true },
   { path: 'config/unbindParam', desc: '配置解绑参数', danger: true },
+
+  /* ── poc 模板配置（旧 ai-chat-view「模板配置」域，1013 迁入 sql 模板配置） ──
+     POC 服务是独立进程（dev 代理 /api/poc → 186:9093，见 vite.config.ts），不在 9999 业务后端上；
+     四个端点的调用形态见 api/templateConfig.ts 顶部注释。 */
+  { path: 'poc/sql-temp/page', desc: 'sql 模板分页 → POST /api/poc/sql-temp/page（body: pageNo/pageSize/name）', impl: true, live: true },
+  { path: 'poc/sql-temp', desc: 'sql 模板新增/编辑 → POST /api/poc/sql-temp（body 带 id 即更新）', danger: true, impl: true, live: true },
+  { path: 'poc/sql-temp/status', desc: 'sql 模板启停 → POST /api/poc/sql-temp/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
+  { path: 'poc/sql-temp/copy', desc: 'sql 模板复制 → POST /api/poc/sql-temp/copy?id=', danger: true, impl: true, live: true },
 
   /* ── entry 实体数据（收录 12，见「单表数据查看迁移」方案 §1.1 的 16 个旧端点核对） ── */
   { path: 'entry/entryDataPaged', desc: '实体数据分页', live: true },
@@ -288,6 +297,14 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'comm-job/changeEnable', desc: '启停通用任务 → GET /v1/comm-job/changeEnable?ids=&enable=', danger: true, impl: true, live: true },
   { path: 'comm-job/copy', desc: '复制通用任务 → POST /v1/comm-job/copy?id=', danger: true, impl: true, live: true },
   { path: 'comm-job/run', desc: '运行通用任务 → POST /v1/comm-job/run?id=', danger: true, impl: true, live: true },
+   /* ── task 任务实例（目标 2 / 收录 3） ── */
+  { path: 'task/topTaskPaged', desc: '任务实例分页（运行记录事实源）', impl: true, live: true },
+  // 1013：任务实例页（旧 page/inst/TaskInst.vue）专属逻辑名 —— 它要 1:1 渲染旧 column.config 的
+  // 原始字段名（actionName/nodeCode/taskTopic/updateDt），而 task/topTaskPaged 那份 mock 返回的是
+  // 平台归一化后的 TaskInst（typeName/node/topic/updatedAt），对不上。真实请求仍打
+  // httpEndpoint: 'task/topTaskPaged'（上面那条 live 端点），所以这里不标 live——它只是
+  // 「逻辑名 + 真实 path」的别名（同 source/sourceTaskPaged 的写法）。
+  { path: 'task/taskListPaged', desc: '任务实例分页（任务实例页） → GET /v1/task/topTaskPaged', impl: true },
 
   /* ── task 任务实例（目标 2 / 收录 2） ── */
   { path: 'task/topTaskPaged', desc: '任务实例分页（运行记录事实源）', impl: true, live: true },

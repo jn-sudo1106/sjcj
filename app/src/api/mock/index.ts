@@ -65,6 +65,13 @@ import {
   mockCommJobCopy,
   mockCommJobRun,
 } from './commJob'
+import { mockTaskListPaged } from './taskList'
+import {
+  mockSqlTemplatePaged,
+  mockSqlTemplateSave,
+  mockSqlTemplateChangeStatus,
+  mockSqlTemplateCopy,
+} from './templateConfig'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
 import { mockFlowRecommend, mockNodeAiChat } from './flows'
@@ -120,6 +127,7 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'source/sendSnatchWithParam': mockSendSnatchWithParam,
   'source/deleteSource': mockAck,
   // 采集资产 · 源（M5 补充）
+  'task/taskListPaged': mockTaskListPaged,
   'source/logPaged': mockSourceLogs,
   'task/topTaskPaged': mockSourceTasks,
   'source/sourceTaskPaged': mockSourceTaskPaged,
@@ -315,4 +323,12 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'site/syncFlow': mockSiteSyncFlow,
   'site/queueStats': mockSiteQueueStats,
   'site/queueTaskPaged': mockQueueTaskPaged,
+
+  // 模板配置（旧 ai-chat-view 的 /api/poc 域，1013 迁入 sql 模板配置）
+  // key 是 `poc/` 前缀的逻辑键：POC 服务的真实路径是站点根相对 /api/poc/…，
+  // 端点清单见 api/endpoints.ts 的 poc 段，调用侧见 api/templateConfig.ts。
+  'poc/sql-temp/page': mockSqlTemplatePaged,
+  'poc/sql-temp': mockSqlTemplateSave,
+  'poc/sql-temp/status': mockSqlTemplateChangeStatus,
+  'poc/sql-temp/copy': mockSqlTemplateCopy,
 }
