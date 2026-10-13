@@ -28,6 +28,21 @@ describe('端点契约一致性', () => {
   it('源检查日志分页已按监控日志真实契约放行 live', () => {
     expect(LIVE_ENDPOINTS.has('source/check/paged-logs')).toBe(true)
   })
+  it('源检查的写操作与定时预览一并放行 live（对齐旧 MonitorList 全量直连）', () => {
+    for (const path of [
+      'source/check/add',
+      'source/check/update',
+      'source/check/delete',
+      'source/check/changeEnable',
+      'source/check/check-one',
+      'source/check/runNow',
+      'source/lastRun',
+    ]) {
+      expect(LIVE_ENDPOINTS.has(path), `${path} 未标 live`).toBe(true)
+    }
+    // 纯只读的同步状态列表不做额外放行（列表页不用它）
+    expect(LIVE_ENDPOINTS.has('source/check/syncPaged')).toBe(false)
+  })
   it('步骤写接口已标 live，日常 mock 模式也会打真实 item/next', () => {
     expect(LIVE_ENDPOINTS.has('item/next/saveItemConfig')).toBe(true)
     expect(LIVE_ENDPOINTS.has('item/next/stepModify')).toBe(true)
