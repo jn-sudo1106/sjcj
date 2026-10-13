@@ -50,6 +50,12 @@ function matches(e: EntryType, p?: Record<string, unknown>): boolean {
   if (entryTypeId && !e.tableId.includes(entryTypeId)) return false
   const name = String(p.name ?? '').trim().toLowerCase()
   if (name && ![e.tableName, e.name ?? ''].some((f) => f.toLowerCase().includes(name))) return false
+  // 1013：只看收藏 ids 过滤（对应后端 entryTypePagedView 的 cond 参数，逗号分隔）
+  const cond = String(p.cond ?? '').trim()
+  if (cond) {
+    const ids = cond.split(',').map((s) => s.trim()).filter(Boolean)
+    if (!ids.includes(e.tableId)) return false
+  }
   return true
 }
 

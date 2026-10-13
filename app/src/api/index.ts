@@ -2995,6 +2995,8 @@ export const entryApi = {
       entryTypeId: p.entryTypeId,
       name: p.name,
       enable: p.enable,
+      // 1013：只看收藏 ids 过滤（后端 entryTypePagedView 的 cond 参数，逗号分隔，见设计文档 §一）
+      cond: p.cond,
     }
     const result = await request<Paged<unknown>>('config/entryTypePagedView', p, { method: 'GET', httpParams })
     return entryTypePageFromLegacy(result)
@@ -4017,7 +4019,7 @@ export const categoryApi = {
  * userId 由后端从会话取，前端不传——所以换浏览器 / 换电脑同一账号看到的是同一份。
  * itemType 必须大写（后端正则 `[A-Z_]{1,32}`，小写判非法）；itemId 必须是正整数。
  */
-export type FavoriteItemType = 'SITE' | 'SOURCE' | 'CONFIG' | 'FLOW'
+export type FavoriteItemType = 'SITE' | 'SOURCE' | 'CONFIG' | 'FLOW' | 'ENTRY_TYPE'
 
 /** list 单页上限（后端校验 1~500） */
 const FAVORITE_PAGE_LIMIT = 500
