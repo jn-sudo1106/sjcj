@@ -68,4 +68,45 @@ describe('SourceListDialog · 源列表选择弹窗', () => {
     expect(toggle.textContent).toContain('退出编辑')
     expect(document.body.querySelector('.sct-node-more')).not.toBeNull()
   })
+
+  it('URL 列是可点外链（对齐旧 urlSlot 的 <a target="_blank">）：点链接开新窗口，无 URL 的行显示「—」', async () => {
+    vi.spyOn(sourceApi, 'sourceCategories').mockResolvedValue([{ id: 'finance', name: '财经资讯' }])
+    vi.spyOn(sourceApi, 'sourcePaged').mockResolvedValue({
+      total: 2,
+      list: [
+        {
+          sourceId: 's1',
+          name: '源 A',
+          url: 'https://example.com/a?x=1',
+          configId: 'c1',
+          mainTable: 't1',
+          owner: 'u',
+          state: 'C',
+        },
+        { sourceId: 's2', name: '源 B', url: '', configId: 'c2', mainTable: 't2', owner: 'u', state: 'C' },
+      ],
+    })
+
+    wrapper = mount(SourceListDialog, {
+      attachTo: document.body,
+      props: { modelValue: false },
+      global: { plugins: [ElementPlus] },
+    })
+    await wrapper.setProps({ modelValue: true })
+    await flushPromises()
+
+    const link = document.body.querySelector('a.sld-url') as HTMLAnchorElement
+    expect(link).not.toBeNull()
+    expect(link.getAttribute('href')).toBe('https://example.com/a?x=1')
+    expect(link.getAttribute('target')).toBe('_blank')
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer')
+    expect(link.getAttribute('title')).toBe('https://example.com/a?x=1')
+    expect(link.textContent?.trim()).toBe('https://example.com/a?x=1')
+
+    // 空 URL 的行给占位文本，不能渲染成 href="" 的链接
+    const rows = [...document.body.querySelectorAll('.el-table__body tbody tr')]
+    expect(rows).toHaveLength(2)
+    expect(rows[1].querySelector('a')).toBeNull()
+    expect(rows[1].textContent).toContain('—')
+  })
 })

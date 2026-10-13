@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
 import { type SourceCheckLog } from '@/api'
 import { pagedCheckJobLogs } from '@/api/monitor'
 const props = defineProps<{
@@ -100,9 +99,6 @@ function stateClass(state: string) {
       <el-input v-model="nameFilter" class="cl-name" size="small" placeholder="日志名 / 内容" clearable @keyup.enter="runQuery" />
       <button class="rc-btn primary" type="button" @click="runQuery">查询</button>
       <button class="rc-btn" type="button" @click="reset">重置</button>
-      <button class="tv-icon-btn" type="button" title="按当前条件重新拉取" @click="runQuery">
-        <el-icon :size="14"><Refresh /></el-icon>
-      </button>
     </div>
 
     <el-table :data="rows" border stripe size="small" row-key="logId" class="cl-table">
