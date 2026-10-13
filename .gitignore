@@ -32,3 +32,5 @@ __pycache__/
 backend/
 # Runner 管理服务生成的独立站点脚本 Git 仓库
 site-scripts/
+# Runner 运行日志及上传分片
+runner-logs/

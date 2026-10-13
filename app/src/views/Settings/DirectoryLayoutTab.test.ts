@@ -12,7 +12,7 @@ import DeploymentNodePicker from './DeploymentNodePicker.vue'
 import DeploymentConfigurationList from './DeploymentConfigurationList.vue'
 
 vi.mock('@/api', () => ({ configApi: { configDetail: vi.fn() }, flowCenterApi: { paged: vi.fn(), steps: vi.fn() } }))
-vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { siteCodeCatalog: vi.fn(), codeRepositories: vi.fn(), deploymentConfigurations: vi.fn(), deploymentConfiguration: vi.fn(), saveDeploymentConfiguration: vi.fn(), codeRepositoryTree: vi.fn(), directoryLayout: vi.fn(), runtimeConfigurations: vi.fn() } }))
+vi.mock('@/api/runnerManagement', () => ({ runnerManagementApi: { siteCodeCatalog: vi.fn(), codeRepositories: vi.fn(), deploymentConfigurations: vi.fn(), deploymentConfiguration: vi.fn(), saveDeploymentConfiguration: vi.fn(), codeRepositoryTree: vi.fn(), codeRepositoryFileMetadata: vi.fn(), directoryLayout: vi.fn(), runtimeConfigurations: vi.fn() } }))
 const origin = { flowId: 'flow1', flowName: '新闻流程', stepId: 'step1', nodeName: '列表抓取', configId: '123' }
 const base: DeploymentConfiguration = { deploymentId: 'a'.repeat(32), name: '新闻生产配置', pathStyle: 'config', legacyType: 'config', legacyOwner: '123', codeId: 'code1', configId: '123', queueName: 'news_list', siteHost: '', revision: 'v1', directoryTemplate: '{configId}/prod', entryPoint: 'main.py', nodes: [{ id: 'main', parentId: '', name: 'main.py', kind: 'file', repoId: 'repo1', sourcePath: 'src/main.py', sourceType: 'file', gitCommit: 'a'.repeat(40) }] }
 const second = { ...base, deploymentId: 'b'.repeat(32), name: '公共模块', pathStyle: 'custom' as const, configId: '', directoryTemplate: 'shared/python', entryPoint: '' }
@@ -26,6 +26,7 @@ beforeEach(() => {
   vi.mocked(runnerManagementApi.deploymentConfigurations).mockResolvedValue([structuredClone(base), structuredClone(second)])
   vi.mocked(runnerManagementApi.deploymentConfiguration).mockImplementation(async id => structuredClone(id === second.deploymentId ? second : base))
   vi.mocked(runnerManagementApi.codeRepositoryTree).mockResolvedValue({ repoId: 'repo1', gitCommit: 'b'.repeat(40), items: [{ path: 'helpers', kind: 'directory', size: null, selectable: true }, { path: 'helpers/parser.py', kind: 'file', size: 20, selectable: true }] })
+  vi.mocked(runnerManagementApi.codeRepositoryFileMetadata).mockResolvedValue({ repoId: 'repo1', path: 'helpers/parser.py', gitCommit: 'b'.repeat(40), fileCommit: 'a'.repeat(40), createdAt: '2026-10-01T09:00:00+08:00', updatedAt: '2026-10-05T10:00:00+08:00' })
   vi.mocked(runnerManagementApi.saveDeploymentConfiguration).mockImplementation(async value => ({ ...JSON.parse(JSON.stringify(value)), deploymentId: value.deploymentId || 'c'.repeat(32), revision: 'v2' }))
 })
 afterEach(() => { vi.restoreAllMocks(); vi.resetAllMocks(); document.body.innerHTML = '' })
@@ -129,6 +130,80 @@ it('完整文件夹映射保留仓库和固定提交，使用 version.json 维�
   expect(runnerManagementApi.saveDeploymentConfiguration).toHaveBeenCalledWith(expect.objectContaining({ nodes: expect.arrayContaining([expect.objectContaining({ sourcePath: 'helpers', sourceType: 'directory', gitCommit: 'b'.repeat(40) })]) }))
   expect(wrapper.get('.dl-system-file').text()).toContain('version.json')
   expect(wrapper.find('[data-testid="layout-publish"]').exists()).toBe(false)
+  wrapper.unmount()
+})
+it('新增文件和文件夹后保留原执行入口，选择其他映射仍展示当前启动文件', async () => {
+  const wrapper = await setup()
+  expect(wrapper.get('[data-testid="layout-current-entry"]').text()).toBe('启动文件：main.py')
+  await wrapper.get('input[aria-label="查找仓库代码"]').setValue('parser'); await flushPromises()
+  await wrapper.find('.dl-source').findAll('.el-tree-node__content').find(node => node.text() === 'parser.py')!.trigger('click')
+  await wrapper.get('[data-testid="layout-add-source"]').trigger('click')
+  expect(wrapper.get('[data-testid="layout-current-entry"]').text()).toBe('启动文件：main.py')
+  await wrapper.get('[data-testid="layout-add-folder"]').trigger('click')
+  await wrapper.get('[data-testid="layout-save"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.saveDeploymentConfiguration).toHaveBeenCalledWith(expect.objectContaining({ entryPoint: 'main.py', nodes: expect.arrayContaining([
+    expect.objectContaining({ name: 'main.py' }), expect.objectContaining({ name: 'parser.py' }), expect.objectContaining({ kind: 'folder', name: '新建文件夹' }),
+  ]) }))
+  expect(wrapper.get('[data-testid="layout-current-entry"]').text()).toBe('启动文件：main.py')
+  wrapper.unmount()
+})
+it('移除其他映射保留入口，确认移除入口文件才清除启动文件', async () => {
+  vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+  const wrapper = await setup()
+  await wrapper.find('.dl-source').findAll('.el-tree-node__content').find(node => node.text() === 'helpers')!.trigger('click')
+  await wrapper.get('[data-testid="layout-add-source"]').trigger('click')
+  await wrapper.findAll('button').find(button => button.text() === '移除映射')!.trigger('click'); await flushPromises()
+  expect(wrapper.get('[data-testid="layout-current-entry"]').text()).toBe('启动文件：main.py')
+  await wrapper.find('.dl-target').findAll('.el-tree-node__content').find(node => node.text().includes('main.py'))!.trigger('click')
+  await wrapper.findAll('button').find(button => button.text() === '移除映射')!.trigger('click'); await flushPromises()
+  expect(wrapper.get('[data-testid="layout-current-entry"]').text()).toBe('启动文件：未设置')
+  await wrapper.get('[data-testid="layout-save"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.saveDeploymentConfiguration).toHaveBeenCalledWith(expect.objectContaining({ entryPoint: '', nodes: [] }))
+  wrapper.unmount()
+})
+it('点击仓库文件显示创建时间和文件版本，关联仍固定在当前仓库快照', async () => {
+  const wrapper = await setup()
+  await wrapper.get('input[aria-label="查找仓库代码"]').setValue('parser'); await flushPromises()
+  await wrapper.find('.dl-source').findAll('.el-tree-node__content').find(node => node.text() === 'parser.py')!.trigger('click'); await flushPromises()
+  expect(runnerManagementApi.codeRepositoryFileMetadata).toHaveBeenCalledWith('repo1', 'helpers/parser.py', 'b'.repeat(40))
+  expect(wrapper.get('[data-testid="layout-file-created-at"]').attributes('datetime')).toBe('2026-10-01T09:00:00+08:00')
+  expect(wrapper.get('[data-testid="layout-file-version"]').text()).toBe('a'.repeat(12))
+  expect(wrapper.get('[data-testid="layout-file-version"]').attributes('title')).toContain('a'.repeat(40))
+  await wrapper.get('[data-testid="layout-add-source"]').trigger('click')
+  await wrapper.get('[data-testid="layout-save"]').trigger('click'); await flushPromises()
+  expect(runnerManagementApi.saveDeploymentConfiguration).toHaveBeenCalledWith(expect.objectContaining({ nodes: expect.arrayContaining([expect.objectContaining({ sourcePath: 'helpers/parser.py', gitCommit: 'b'.repeat(40) })]) }))
+  wrapper.unmount()
+})
+it('切换文件忽略上一个文件迟到的版本信息，选择文件夹后不展示文件时间', async () => {
+  vi.mocked(runnerManagementApi.codeRepositoryTree).mockResolvedValue({ repoId: 'repo1', gitCommit: 'b'.repeat(40), items: [
+    { path: 'helpers', kind: 'directory', size: null, selectable: true },
+    { path: 'helpers/parser.py', kind: 'file', size: 20, selectable: true },
+    { path: 'helpers/worker.py', kind: 'file', size: 20, selectable: true },
+  ] })
+  let resolveOld!: (value: Awaited<ReturnType<typeof runnerManagementApi.codeRepositoryFileMetadata>>) => void
+  const metadata = { repoId: 'repo1', path: 'helpers/worker.py', gitCommit: 'b'.repeat(40), fileCommit: 'c'.repeat(40), createdAt: '2026-10-02T09:00:00+08:00', updatedAt: '2026-10-05T10:00:00+08:00' }
+  vi.mocked(runnerManagementApi.codeRepositoryFileMetadata).mockImplementation(async (_repo, path) => path.endsWith('parser.py') ? new Promise(resolve => { resolveOld = resolve }) : metadata)
+  const wrapper = await setup()
+  await wrapper.get('input[aria-label="查找仓库代码"]').setValue('py'); await flushPromises()
+  const node = (name: string) => wrapper.find('.dl-source').findAll('.el-tree-node__content').find(item => item.text() === name)!
+  await node('parser.py').trigger('click'); await flushPromises()
+  expect(wrapper.get('[data-testid="layout-file-metadata"]').text()).toContain('正在读取')
+  await node('worker.py').trigger('click'); await flushPromises()
+  resolveOld({ ...metadata, path: 'helpers/parser.py', fileCommit: 'a'.repeat(40) }); await flushPromises()
+  expect(wrapper.get('[data-testid="layout-file-version"]').text()).toBe('c'.repeat(12))
+  await node('helpers').trigger('click'); await flushPromises()
+  expect(wrapper.find('[data-testid="layout-file-metadata"]').exists()).toBe(false)
+  wrapper.unmount()
+})
+it('文件信息加载失败可重试，不阻止关联代码', async () => {
+  vi.mocked(runnerManagementApi.codeRepositoryFileMetadata).mockRejectedValueOnce(new Error('网络异常'))
+  const wrapper = await setup()
+  await wrapper.get('input[aria-label="查找仓库代码"]').setValue('parser'); await flushPromises()
+  await wrapper.find('.dl-source').findAll('.el-tree-node__content').find(node => node.text() === 'parser.py')!.trigger('click'); await flushPromises()
+  expect(wrapper.get('[data-testid="layout-file-metadata"]').text()).toContain('网络异常')
+  expect(wrapper.get('[data-testid="layout-add-source"]').attributes('disabled')).toBeUndefined()
+  await wrapper.get('[data-testid="layout-file-metadata-retry"]').trigger('click'); await flushPromises()
+  expect(wrapper.get('[data-testid="layout-file-version"]').text()).toBe('a'.repeat(12))
   wrapper.unmount()
 })
 it('选择目标目录显示关联位置，返回根目录后代码关联到根目录并保留入口重命名', async () => {

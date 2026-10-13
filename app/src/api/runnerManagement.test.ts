@@ -5,6 +5,42 @@ import { runnerManagementApi, type DirectoryLayout } from './runnerManagement'
 afterEach(() => vi.unstubAllGlobals())
 
 describe('Runner 管理接口', () => {
+  it('便携包下载沿用登录凭据，按 ZIP 二进制读取并携带地址和版本', async () => {
+    const blob = new Blob(['zip'])
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, status: 200,
+      headers: new Headers({ 'Content-Type': 'application/zip', 'Content-Disposition': 'attachment; filename="Runner-windows-x64-abcdef.zip"' }), blob: async () => blob })
+    vi.stubGlobal('fetch', fetchSpy)
+    const input = { server: 'http://10.0.0.8:8092', digest: 'sha256:version' }
+    const result = await runnerManagementApi.downloadRunnerPackage(input)
+    expect(fetchSpy).toHaveBeenCalledWith('/api/runner-management/runner-package', expect.objectContaining({ method: 'POST', credentials: 'include', body: JSON.stringify(input) }))
+    expect(result).toEqual({ name: 'Runner-windows-x64-abcdef.zip', blob })
+  })
+  it('包接口错误显示真实原因，不把错误 JSON 当作 ZIP 下载', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: false, status: 422, json: async () => ({ message: '此版本缺少启动入口' }) })
+    vi.stubGlobal('fetch', fetchSpy)
+    await expect(runnerManagementApi.downloadRunnerPackage({ server: 'http://host:8092', digest: 'sha256:old' })).rejects.toThrow('此版本缺少启动入口')
+  })
+  it('运行日志按绑定筛选，输出按游标增量读取，下载沿用登录请求', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) })
+    vi.stubGlobal('fetch', fetchSpy)
+    await runnerManagementApi.runtimeLogs({ runtimeId: 'binding1', keyword: '抓取', page: 2, since: '' })
+    await runnerManagementApi.runtimeLogDetail('run1')
+    await runnerManagementApi.runtimeLogEntries('stream1', 9)
+    await runnerManagementApi.downloadRuntimeLog('stream1')
+    expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([
+      '/api/runner-management/runtime-operations?runtimeId=binding1&keyword=%E6%8A%93%E5%8F%96&page=2&since=',
+      '/api/runner-management/runtime-operations/run1', '/api/runner-management/log-streams/stream1/entries?cursor=9&before=0',
+      '/api/runner-management/log-streams/stream1/download',
+    ])
+  })
+  it('文件夹上传携带上传类型、目录 ID 和各文件相对路径', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) })
+    vi.stubGlobal('fetch', fetchSpy)
+    const input = { uploadType: 'folder' as const, directoryId: 'dir1', overwrite: false,
+      files: [{ name: 'main.py', relativePath: 'worker/src/main.py', data: 'eA==' }] }
+    await runnerManagementApi.uploadCodeRepositoryFiles('repo1', input)
+    expect(fetchSpy).toHaveBeenCalledWith('/api/runner-management/settings/code-repos/repo1/files', expect.objectContaining({ method: 'POST', body: JSON.stringify(input) }))
+  })
   it('文件命名发布携带代码 ID，网站命名不预设运行网站或下发路径', async () => {
     const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) })
     vi.stubGlobal('fetch', fetchSpy)
@@ -111,6 +147,14 @@ describe('Runner 管理接口', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/api/runner-management/runners', expect.objectContaining({ credentials: 'include' }))
   })
 
+  it('文件时间和版本按选中仓库快照读取，路径正确编码', async () => {
+    const metadata = { repoId: 'repo1', path: '网页/列表.py', gitCommit: 'b'.repeat(40), fileCommit: 'a'.repeat(40), createdAt: '2026-10-01T09:00:00+08:00', updatedAt: '2026-10-05T10:00:00+08:00' }
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => metadata })
+    vi.stubGlobal('fetch', fetchSpy)
+    expect(await runnerManagementApi.codeRepositoryFileMetadata('repo1', metadata.path, metadata.gitCommit)).toEqual(metadata)
+    expect(fetchSpy).toHaveBeenCalledWith(`/api/runner-management/settings/code-repos/repo1/files/metadata?path=${encodeURIComponent(metadata.path)}&commit=${metadata.gitCommit}`, expect.objectContaining({ method: 'GET' }))
+  })
+
   it('配置目录按仓库管理，文件查询、上传和节点发布携带目录 ID', async () => {
     const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => [] })
     vi.stubGlobal('fetch', fetchSpy)
@@ -132,6 +176,21 @@ describe('Runner 管理接口', () => {
     ])
     expect(JSON.parse(fetchSpy.mock.calls[6]![1].body as string).directoryId).toBe('dir1')
   })
+  it('目录浏览携带相对目录，原路径列表参数保持兼容', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [] }) })
+    vi.stubGlobal('fetch', fetchSpy)
+    await runnerManagementApi.codeRepositoryFiles('repo1', '', 2, 'dir1', '公共/工具')
+    expect(fetchSpy).toHaveBeenLastCalledWith('/api/runner-management/settings/code-repos/repo1/files?keyword=&page=2&directoryId=dir1&view=directory&folder=' + encodeURIComponent('公共/工具'), expect.objectContaining({ method: 'GET' }))
+  })
+  it('处理进程关闭提交实例、并发序号、PID 和启动代次，不发送任意系统命令', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'pending' }) })
+    vi.stubGlobal('fetch', fetchSpy)
+    await runnerManagementApi.processorProcesses()
+    await runnerManagementApi.stopProcessorProcess({ runnerId: 'runner1', assignmentId: 'assignment1', slot: 2, pid: 4567, generation: 'version:started' })
+    expect(fetchSpy.mock.calls[0]![0]).toBe('/api/runner-management/processes')
+    expect(fetchSpy.mock.calls[1]![0]).toBe('/api/runner-management/runners/runner1/processes/stop')
+    expect(JSON.parse(fetchSpy.mock.calls[1]![1].body)).toEqual({ assignmentId: 'assignment1', slot: 2, pid: 4567, generation: 'version:started' })
+  })
 
   it('节点程序启停使用绑定 ID 和当前修订号，不删除绑定', async () => {
     const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ runtimeId: 'runtime-1' }) })
@@ -140,6 +199,13 @@ describe('Runner 管理接口', () => {
     await runnerManagementApi.stopRuntimeProgram('runtime-1', 'r2')
     expect(fetchSpy).toHaveBeenNthCalledWith(1, '/api/runner-management/runtime-configurations/runtime-1/start', expect.objectContaining({ method: 'POST', body: JSON.stringify({ revision: 'r1' }) }))
     expect(fetchSpy).toHaveBeenNthCalledWith(2, '/api/runner-management/runtime-configurations/runtime-1/stop', expect.objectContaining({ method: 'POST', body: JSON.stringify({ revision: 'r2' }) }))
+  })
+  it('机器配置保存独立的重试策略，保留次数和秒单位', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ runtimeId: 'runtime-1' }) })
+    vi.stubGlobal('fetch', fetchSpy)
+    const retryPolicy = { enabled: false, maxAttempts: 2, windowSeconds: 120, delaysSeconds: [10, 30] }
+    await runnerManagementApi.saveRuntimeConfiguration({ runtimeId: 'runtime-1', revision: 'r1', deploymentId: 'd1', layoutRevision: 'v1', runnerId: 'r1', environment: 'test', concurrency: 1, retryPolicy })
+    expect(JSON.parse(fetchSpy.mock.calls[0]![1].body as string).retryPolicy).toEqual(retryPolicy)
   })
 
   it('接口不可用时明确报错，不退回演示数据', async () => {

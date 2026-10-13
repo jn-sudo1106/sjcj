@@ -12,14 +12,18 @@ import RunnerManagementTab from './RunnerManagementTab.vue'
 import RunnerBindingTab from './RunnerBindingTab.vue'
 import CodeRepositoryTab from './CodeRepositoryTab.vue'
 import DirectoryLayoutTab from './DirectoryLayoutTab.vue'
+import RuntimeLogsTab from './RuntimeLogsTab.vue'
+import ProcessorProcessesTab from './ProcessorProcessesTab.vue'
 
 const ALL_TABS: { key: string; label: string; permission: string; comp: Component }[] = [
   { key: 'node-type', label: '节点类型', permission: 'settings:nodeType', comp: NodeTypeTab },
   { key: 'category', label: '分类目录', permission: 'settings:category', comp: CategoryTab },
   { key: 'runners', label: '运行机器', permission: 'settings:runners', comp: RunnerManagementTab },
+  { key: 'processors', label: '处理机', permission: 'settings:assignments', comp: ProcessorProcessesTab },
   { key: 'code-repos', label: '代码仓库', permission: 'settings:releases', comp: CodeRepositoryTab },
-  { key: 'directory-layout', label: '部署目录', permission: 'settings:releases', comp: DirectoryLayoutTab },
+  { key: 'directory-layout', label: '部署配置', permission: 'settings:releases', comp: DirectoryLayoutTab },
   { key: 'assignments', label: '机器配置', permission: 'settings:assignments', comp: RunnerBindingTab },
+  { key: 'runtime-logs', label: '运行日志', permission: 'settings:assignments', comp: RuntimeLogsTab },
   { key: 'releases', label: 'Runner 版本', permission: 'settings:releases', comp: RunnerManagementTab },
 ]
 const tabs = computed(() => ALL_TABS.filter((t) => canAccess(t.permission)))

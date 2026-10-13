@@ -29,7 +29,7 @@ describe('系统设置 · tab 壳', () => {
   })
   it('系统设置保留节点类型和分类目录，并增加 Runner 管理入口', async () => {
     const { wrapper } = await mountAt()
-    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '运行机器', '代码仓库', '部署目录', '机器配置', 'Runner 版本'])
+    expect(wrapper.findAll('.st-tab-link').map((b) => b.text())).toEqual(['节点类型', '分类目录', '运行机器', '处理机', '代码仓库', '部署配置', '机器配置', '运行日志', 'Runner 版本'])
     expect(wrapper.find('.st-tab-link.active').text()).toBe('节点类型')
     expect(wrapper.find('[data-testid="settings-node-type"]').exists()).toBe(true)
   })
