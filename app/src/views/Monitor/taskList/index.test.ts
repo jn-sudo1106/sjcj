@@ -27,6 +27,12 @@ vi.mock('@/utils/confirmDanger', () => ({
   confirmOrRun: vi.fn((_need: boolean, _t: string, _b: string, run: () => unknown) => run()),
 }))
 
+// 组件从 $route.query 接钻取参数（旧页走 props）；测试里没有真实 router，给个空 query 即可
+// （真实应用里 app.use(router) 会在应用级 provide routeLocationKey，任意组件都能 useRoute()）
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ query: {} }),
+}))
+
 const openConfig = vi.fn()
 
 function row(over: Partial<TaskRow> = {}): TaskRow {

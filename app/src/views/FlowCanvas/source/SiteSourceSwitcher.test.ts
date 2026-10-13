@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { useUiStore } from '@/stores/ui'
 import { ElNotification, ElMessage, ElMessageBox } from 'element-plus'
 import SiteSourceSwitcher from './SiteSourceSwitcher.vue'
 import ParamEditorDrawer from '@/components/param/ParamEditorDrawer.vue'
@@ -487,6 +488,19 @@ describe('SiteSourceSwitcher · 批量导入（新增源 tab）', () => {
     await wrapper.get('[data-testid="batch-import-submit"]').trigger('click')
 
     expect(importSources).toHaveBeenCalledWith('site-a', '测试源;https://example.com')
+  })
+
+  it('导入成功后通知主区源列表刷新（不只刷新侧栏）', async () => {
+    const wrapper = await createWrapper()
+    vi.spyOn(siteApi, 'siteImportSources').mockResolvedValue({ ok: true, message: '已导入 1 个源' })
+    const before = useUiStore().sourceListRevision
+
+    await wrapper.get('[data-testid="open-batch"]').trigger('click')
+    await wrapper.get('.ssw-import-textarea').setValue('测试源;https://example.com')
+    await wrapper.get('[data-testid="batch-import-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(useUiStore().sourceListRevision).toBe(before + 1)
   })
 
   it('点"导入已有源" tab 切换过去，再点回"新增源"，两边状态不互相污染', async () => {

@@ -32,6 +32,10 @@ const routes: RouteRecordRaw[] = [
       // 模板配置 → SQL模板配置（1013，旧 ai-chat-view「模板配置 / sql模板配置」）。
       // 走 /api/poc 独立服务，接口面见 api/templateConfig.ts，dev 代理见 vite.config.ts 的 '/api/poc'。
       { path: '/sql-template', component: () => import('../views/TemplateConfig/SqlTemplatePage.vue'), meta: { permission: 'sql-template' } },
+      // 模板配置 → 表模板配置（1013，旧 ai-chat-view「模板配置 / 表模板配置」，端点域是 question-temp）。
+      // 页面在 views/TemplateConfig/TableTemplate/ 自己实现列表与编辑弹窗（远程多选 + JSON 字符串字段，
+      // 通用 schema 层表达不了），接口仍走 api/templateConfig.ts 的工厂。
+      { path: '/table-template', component: () => import('../views/TemplateConfig/TableTemplate/index.vue'), meta: { permission: 'table-template' } },
       // 系统设置（0924-02）。meta.permission 与 TABS 里的同值，守卫经 canAccess 判断
       { path: '/settings', component: () => import('../views/Settings/index.vue'), meta: { permission: 'settings' } },
       // 兼容旧导航路径；监控中心的正式入口统一为 /monitor。

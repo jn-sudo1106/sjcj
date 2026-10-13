@@ -32,10 +32,11 @@
 //      所以 checkbox 列照常，等价于「只关 alert 条」）；`sendNext` / `configCron` / `deleteBatch` /
 //      `sendBatch` / `handleChange` / `resetSearchForm` / `handleSearch` / `handleReset` /
 //      `handleCloseCurrentTab` / `handleOpenTab`（未接线或依赖 $multiTab）。
-//   2. 旧页有 taskId / sourceId / configId / parentId / fileId 五个 props，并在 created 里从
-//      `$route.query`（siteId / taskTopic / sourceIds / taskUrl / groupId / startTime / endTime /
-//      taskId / all / parentId / configId / sourceId / fileId / state）预置筛选。本页在新平台是
-//      Monitor 的一个 tab，既没有 props 也没有这些路由参数，故不迁（与 commJob / queueCheck 一致）。
+//   2. 旧页有 taskId / sourceId / configId / parentId / fileId 五个 props，新平台是 Monitor 的一个 tab，
+//      没有这套 props（不迁）。但旧页 created 里从 `$route.query` 预置筛选的那批键**已接通**：
+//      siteId / taskTopic / sourceIds / taskUrl / groupId / startTime / endTime / taskId / all /
+//      parentId / configId / sourceId / fileId / state —— 监控中心的任务统计页「任务明细 / 错误明细」
+//      正是靠 `?tab=taskList&sourceId=&configId=&state=` 钻取过来的（旧页 $multiTab.open 的等价物）。
 //   3. 表格顶部的 alert 条（旧 options.alert 被 tableOption 关掉）不迁；勾选框列照常保留。
 //   4. 「重发」加了二次确认（confirmDanger）：task/resetTaskInsts 在契约里是 danger 端点，平台对它的
 //      约定就是「UI 侧保留二次确认」（见 client.ts 该端点的注释，画布任务视图行内「重发」同样有确认）。
@@ -44,6 +45,7 @@
 //   6. 详情抽屉标题从旧版的默认「详情」改成「任务实例 - 详情」（与 Monitor 里 commJob 的抽屉标题口径一致）。
 //   7. 「配置模板」详情不迁旧的 vkbeautify.xml 美化，`抓取配置` 等长文本按原样展示（省掉一个只为缩进 XML 的依赖）。
 import { onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, type TableInstance } from 'element-plus'
 import { Search, Refresh, Warning, Calendar } from '@element-plus/icons-vue'
 import { taskInstPaged, resendTask, type TaskRow } from '@/api/taskList'
@@ -53,6 +55,9 @@ import TaskDetailDrawer from './TaskDetailDrawer.vue'
 import ConfigTemplateDrawer from './ConfigTemplateDrawer.vue'
 
 defineOptions({ name: 'TaskList' })
+
+/** 监控中心用 `?tab=taskList&…` 切页签，钻取参数也走 query（旧页的 $multiTab.open 等价物） */
+const route = useRoute()
 
 // ---- 查询条件（草稿 → 执行 两态：文本项变化不自动查，点「查询」/ 回车才发请求）----
 const form = reactive({
@@ -231,7 +236,36 @@ function cellText(row: TaskRow, key: string): string {
   return v == null ? '' : String(v)
 }
 
-onMounted(() => void load())
+onMounted(() => {
+  applyRouteQuery()
+  void load()
+})
+
+/**
+ * 路由预置筛选（旧页 created 里那段 `if (this.$route.query.xxx)`）。
+ * 用 `replace` 导航（监控中心切页签）后组件重新挂载，所以只在 mount 时读一次即可。
+ * 文本项写进 form 并同步到 filters，保证首屏请求就带上条件（而不是先查全量再补查）。
+ */
+function applyRouteQuery() {
+  const q = route.query
+  const pick = (key: string) => {
+    const v = q[key]
+    const s = Array.isArray(v) ? String(v[0] ?? '') : String(v ?? '')
+    return s.trim()
+  }
+  const keys = [
+    'siteId', 'taskTopic', 'sourceIds', 'taskUrl', 'groupId', 'startTime', 'endTime',
+    'taskId', 'all', 'parentId', 'configId', 'sourceId', 'fileId', 'state',
+  ] as const
+  keys.forEach((key) => {
+    const v = pick(key)
+    if (!v) return
+    ;(form as Record<string, string>)[key] = v
+  })
+  // 创建时间范围：两端都带时同步到日期选择器（旧页 taskDateRange = [startTime, endTime]）
+  if (form.startTime && form.endTime) dateRange.value = [form.startTime, form.endTime]
+  Object.assign(filters, form)
+}
 </script>
 
 <template>

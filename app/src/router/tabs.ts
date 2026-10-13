@@ -27,9 +27,11 @@ export const TABS: TabMeta[] = [
   { key: 'sync', path: '/sync', label: '数据同步', desc: '将现有数据表同步到目标环境', group: 'tools' },
   { key: 'monitor', path: '/monitor', label: '监控中心', desc: '系统健康、MQ、同步状态、告警', group: 'tools' },
   // 模板配置（1013）：旧 ai-chat-view「模板配置」域的落位，与运行与监控、系统设置同级。
-  // 这一组会随迁移逐个长出来（表模板 / 自动补全 / 问句改写 / 数据索引同步 / 数据字典 / 提示词 / 分词），
-  // 页面共用 components/templateConfig 的 CRUD 层，接口共用 api/templateConfig.ts 的工厂。
+  // 这一组会随迁移逐个长出来（自动补全 / 问句改写 / 数据索引同步 / 数据字典 / 提示词 / 分词），
+  // 接口共用 api/templateConfig.ts 的 CRUD 工厂；列表页只有「简单字段」的模块才复用
+  // components/templateConfig 的 schema 层，带远程多选的（如表模板）在自己的目录里实现。
   { key: 'sql-template', path: '/sql-template', label: 'SQL模板配置', desc: 'SQL 模板内容与通过/拒绝条件、select/table/where/group by 校验表达式', group: 'template', permission: 'sql-template' },
+  { key: 'table-template', path: '/table-template', label: '表模板配置', desc: '问句样例与匹配规则、使用表范围、关联 sql 模板（旧接口域 question-temp）', group: 'template', permission: 'table-template' },
   // 系统设置（0924-02）：节点类型（旧平台「源类型」）+ 分类目录（原挂在采集资产的分类下拉底部）。
   // 这是第一个声明了 permission 的入口，给后续人员菜单权限留口子（见 composables/usePermission）。
   { key: 'settings', path: '/settings', label: '系统设置', desc: '节点类型、分类目录、运行机器、处理机、代码仓库、部署配置、机器配置、运行日志、Runner 版本', group: 'settings', permission: 'settings' },

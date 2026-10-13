@@ -14,7 +14,7 @@
 import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
 import type { Ack, Paged } from './types/common'
-import type { SqlTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow } from './types/template'
+import type { PocTableEntry, SqlTemplate, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow } from './types/template'
 
 export interface TemplateCrudConfig {
   /** endpoints.ts 里的模块名，逻辑键 = `poc/${module}${后缀}`，如 sql-temp → poc/sql-temp/page */
@@ -60,3 +60,24 @@ export function createTemplateCrudApi<T extends TemplateRow>(config: TemplateCru
 
 /** sql 模板配置（旧「模板配置 → sql模板配置」） */
 export const sqlTemplateApi = createTemplateCrudApi<SqlTemplate>({ module: 'sql-temp' })
+
+/**
+ * 表模板配置（旧「模板配置 → 表模板配置」）。
+ * module 是 question-temp：旧菜单叫「表模板」但端点与字段都是 question-* 口径，1:1 不改名
+ * （见 types/template.ts 的 TableTemplate 注释）。
+ * operations.copy=false —— 旧 EntityApi.js 里只有 sql 模板有 /poc/sql-temp/copy，表模板没有复制端点
+ * （旧列表那个「复制」链接指向一个不存在的方法，点即报错）。
+ */
+export const tableTemplateApi = createTemplateCrudApi<TableTemplate>({
+  module: 'question-temp',
+  operations: { copy: false },
+})
+
+/**
+ * 「使用表范围」下拉的数据表选项（旧 tableList → GET /poc/database/entry-list?name=）。
+ * 返回的是裸数组：真实信封 {code,data:[...]} 里没有 count，client.ts 的 normalizeHttpPayload
+ * 会把 data 数组直接透传出来（见 client.ts:393 的分页判定）。
+ */
+export function pocTableEntryList(name = ''): Promise<PocTableEntry[]> {
+  return request<PocTableEntry[]>('poc/database/entry-list', { name }, { method: 'GET', httpEndpoint: `${POC_API_PREFIX}/database/entry-list` })
+}
