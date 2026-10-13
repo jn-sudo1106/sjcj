@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
 import { type SourceCheckLog } from '@/api'
 import { pagedCheckJobLogs } from '@/api/monitor'
 const props = defineProps<{
