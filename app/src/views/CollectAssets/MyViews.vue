@@ -545,9 +545,15 @@ onMounted(() => {
 .mv-gchip button { border: 0; background: none; color: #059669; cursor: pointer; width: 18px; height: 18px; border-radius: 50%; }
 .mv-gchip button:hover { background: #d1fae5; }
 .mv-via { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px; background: #ecfdf5; color: #047857; font-size: 11px; }
-/* 查询栏一行（13.6 寸 1470 宽实测放得下：各控件压缩下限合计约 890，可用约 960）。
-   再窄就放不下了，宁可换行也不能叠在一起：这时才允许换行，查询 / 清空靠右 */
-@media (max-width: 1400px) {
+/* 查询栏一行（用户 10-13 定）。右栏比系统目录窄，这里把查询那格再压紧：间距 6、条件 58、输入框下限 80，
+   各控件压缩下限合计约 850（右栏宽度）。按右栏自己的宽度判断（容器查询，不看视口——侧栏宽窄不定），
+   比这还窄才换行，宁可换行也不能叠在一起 */
+.mv-content { container-type: inline-size; }
+.mv-content :deep(.sov-filter.is-compact) { gap: 6px; }
+.mv-content :deep(.sov-filter.is-compact .sov-field) { flex-basis: 320px; min-width: 262px; }
+.mv-content :deep(.sov-filter.is-compact .sov-search select.sov-op) { width: 58px; }
+.mv-content :deep(.sov-filter.is-compact .sov-search input) { min-width: 80px; }
+@container (max-width: 860px) {
   .mv-content :deep(.sov-filter.is-compact) { flex-wrap: wrap; row-gap: 8px; }
   .mv-content :deep(.sov-filter.is-compact .sov-filter-actions) { margin-left: auto; }
 }
