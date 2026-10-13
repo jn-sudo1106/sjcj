@@ -109,3 +109,58 @@ export interface SourceCheckLogQuery extends PageQuery {
   state?: string
   name?: string
 }
+
+// ---------- 队列告警（1013 从旧平台 page/config/QueueCheck.vue 迁入） ----------
+
+/**
+ * 一条队列校验配置，字段名对齐旧平台 `/v1/mq/check/paged` 原始返回
+ * （旧页面的列定义见 config/column.config.js · allColumns.MQ_CHECK）。
+ *
+ * ⚠️ `isDelete` 语义：**0 = 在用 / 1 = 停用 / 小于 0 = 历史删除的**。
+ * 注意它和行上的 `state`（E=出错 / C=正常）是两件事：`state` 是校验结果，
+ * `isDelete` 才是在用与否，页面筛选框「状态」筛的是后者。
+ */
+export interface MqCheck {
+  queueId: string
+  queueName: string
+  /** 校验结果：E=出错 / C=正常（旧 stateFilter 还认 L=处理中 / AC=已审核 / W=待处理） */
+  state: string
+  /** 执行结果文本 */
+  lastMsg: string
+  queueDesc: string
+  /** 队列积压超过 */
+  maxSize: number | string
+  /** 消费者数低于 */
+  minConsumer: number | string
+  /** 消费速率低于 */
+  minRate: number | string
+  /** 消费速率高于 */
+  maxRate: number | string
+  /** 自定义检测出错脚本 */
+  check: string
+  /** 告警提示 */
+  checkMsg: string
+  /** 0=在用 / 1=停用 / <0=历史删除 */
+  isDelete: number
+  /** 旧平台返回里可能带的额外时间字段（提交前要剔除，见 addCallback/updateCallback） */
+  createDt?: string
+  updateDt?: string
+  lastRun?: string
+  nextRun?: string
+}
+
+/** 队列告警查询入参。旧页面发的是 queue / queueId / name / enable + page / limit，
+ *  表头排序时再追加 sortField / sortOrder（旧 s-table 口径，order 是 antd 原生的 'ascend' / 'descend'）。 */
+export interface MqCheckQuery extends PageQuery {
+  /** 队列名（旧 queryParam.queue） */
+  queue?: string
+  queueId?: string
+  /** 描述（旧 queryParam.name） */
+  name?: string
+  /** '' 全部 / '0' 在用 / '1' 停用 / '-1' 历史删除的 */
+  enable?: string
+  /** 服务端排序字段：queueName / maxSize / minConsumer / maxRate（旧带 sorter:true 的四列） */
+  sortField?: string
+  /** 服务端排序方向：'ascend' 升序 / 'descend' 降序（不排序时整个键不出现） */
+  sortOrder?: string
+}

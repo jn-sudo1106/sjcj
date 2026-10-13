@@ -406,7 +406,7 @@ function onSourceChange() {
 .sc-shell {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  height: fit-content;
   gap: 10px;
   padding: 12px;
   background: #fff;

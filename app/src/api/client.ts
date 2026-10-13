@@ -169,6 +169,14 @@ const PRODUCTION_CREATE_ENDPOINTS = new Set([
   'source/check/changeEnable',
   'source/check/runNow',
   'source/check/check-one',
+  // 1013：队列告警（旧 page/config/QueueCheck.vue）的四个写端点。与 source/check 同性质——
+  // 旧页面本来就是直连后端在改真实队列校验配置，迁到新平台若只在 mock 里"成功"，
+  // 页面就是在骗人。delete 同样是**永久删配置**，UI 侧已加二次确认（confirmDanger）。
+  // 与 source/check 同理：这只是"允许发出去"，不代表已在生产验证过这套契约。
+  'mq/check/add',
+  'mq/check/update',
+  'mq/check/delete',
+  'mq/check/changeEnable',
   // 2026-09-18：定时任务启停（节点配置「定时策略」右上角那个开关）。与源启停同性质：
   // 可逆、不删数据，停用只是把 isDelete 置 1，随时能再打开。
   'job/enableJob',

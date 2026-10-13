@@ -316,11 +316,17 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'mq/queueDetail2', desc: '队列详情' },
   { path: 'mq/message', desc: '获取消息' },
   { path: 'mq/purgeQueue', desc: '清空队列', danger: true },
-  { path: 'mq/check/paged', desc: '队列检查列表' },
-  { path: 'mq/check/add', desc: '新增队列检查', danger: true },
-  { path: 'mq/check/update', desc: '修改队列检查', danger: true },
-  { path: 'mq/check/delete', desc: '删除队列检查', danger: true },
-  { path: 'mq/check/changeEnable', desc: '启停队列检查', danger: true },
+  // 队列告警（队列校验配置）。1013 从旧平台 page/config/QueueCheck.vue 迁入；这一页在旧平台
+  // 的分页 / 新增 / 编辑 / 批量启停 / 批量删除**本来就全部直连后端**，所以这 5 条一起标 live：
+  // 只放行分页、把写操作留在 mock，会让页面上的按钮看着能用、其实后端一条都没收到。
+  // 契约照旧平台 api/queue-check.js：paged 用 page/limit；delete 的 ids 在 query（POST 无 body）；
+  // changeEnable 是 GET ?ids=&enable=，且 **enable 与 isDelete 同向（0=在用 / 1=停用）**。
+  // ⚠️ 放行 ≠ 已联调，生产上写类端点仍会被 client.ts 的写保护白名单拦一次。
+  { path: 'mq/check/paged', desc: '队列校验配置列表 → GET ?queue=&queueId=&name=&enable=&page=&limit=', impl: true, live: true },
+  { path: 'mq/check/add', desc: '新增队列校验配置 → POST body', danger: true, impl: true, live: true },
+  { path: 'mq/check/update', desc: '修改队列校验配置 → POST body（提交体需剔除 createDt/updateDt/lastRun/nextRun）', danger: true, impl: true, live: true },
+  { path: 'mq/check/delete', desc: '删除队列校验配置 → POST ?ids=a,b（参数在 query，不是 body）', danger: true, impl: true, live: true },
+  { path: 'mq/check/changeEnable', desc: '启停队列校验配置 → GET ?ids=&enable=（0=启用/1=停用，与 isDelete 同向）', danger: true, impl: true, live: true },
 
   /* ── file 原始文件 / JSON（目标 3 / 收录 5） ── */
   // 2026-08-17 核实：现役 FileList2.vue 不使用 filePaged，而是 file_resource 表的通用实体表接口。
