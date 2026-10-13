@@ -51,6 +51,26 @@ describe('flow 流程 HTTP 契约', () => {
     expect(page.list[0].version).toBeUndefined()
   })
 
+  it('GET /v1/flow/flowList：下拉候选走全量不分页端点，不再拿 flowPaged 拼（500 条在 186 要 30s 超时）', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      success: true,
+      code: null,
+      msg: null,
+      data: [
+        { flowId: 1001, flowName: '网页抓取流程', state: 'C' },
+        { flowId: 1002, flowName: '公众号流程', state: 'C' },
+      ],
+    }))
+    const { flowCenterApi } = await import('./index')
+    const list = await flowCenterApi.list()
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(new URL(url, 'http://local.test').pathname).toBe('/api/v1/flow/flowList')
+    expect(init.method).toBe('GET')
+    expect(list.map((f) => [f.id, f.name])).toEqual([['1001', '网页抓取流程'], ['1002', '公众号流程']])
+  })
+
   it('GET /v1/flow/flowDetail：flowId 走 query，flowConf 字符串解析回 definition', async () => {
     const definition = { main: ['start', 'n1', 'end'], branches: [], configs: { n1: { title: '列表页' } }, branchGroups: [] }
     fetchMock.mockResolvedValue(jsonResponse({

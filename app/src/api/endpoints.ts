@@ -364,10 +364,13 @@ export const ENDPOINTS: EndpointSpec[] = [
 
   /* ── flow 真实流程表 cs_flow（2026-09-02 接入，路径照抄旧平台 src/api/flow.js） ── */
   // 真实后端共九条，其中 flowList / updateFlowConf 两条 2026-09-02 联调后确认代码里没有任何
-  // 调用方（flowCenterApi.list() 是拿 paged() 拼的；updateFlowConf 这种"只改 flowConf"的专用
+  // 调用方（当时 flowCenterApi.list() 是拿 paged() 拼的；updateFlowConf 这种"只改 flowConf"的专用
   // 端点从没被走过，保存永远用全量的 saveFlow）——已删除注册，生产写白名单里配套的两条也一并
   // 删了（见 client.ts 同一次改动）。changeFlowEnable 2026-09-29 F6 按 flowPaged/saveFlow 的
   // 样子加回来了（流程中心行内启停），见下面登记行。
+  // flowList 2026-10-13 加回：flowPaged 拉 500 条在 186 要 ~30s、超前端 20s 超时，下拉候选被 catch 成空
+  // （源流程配置抽屉「无数据」）；旧平台下拉本来就走 flowList，flowCenterApi.list() 改回它。
+  { path: 'flow/flowList', desc: '有效流程列表（下拉/选择器用：全量、不分页、不含 flowConf；旧平台 FlowIdSelect / SourceList / SourceGroupModal 同款；186 实测 759 条 ~0.1s）', live: true },
   { path: 'flow/flowPaged', desc: '流程分页 + 多条件检索（不含 flowConf，含计算列 sourceCnt；templateFlag=0/1 服务端过滤模板，2026-09-04 实测生效）', live: true },
   { path: 'flow/flowSources', desc: '本地流程反查关联源（仅启用流程分流时调用）', live: true },
   { path: 'flow/flowDetail', desc: '流程详情（含 flowConf 大字段与 sourceCnt）', live: true },

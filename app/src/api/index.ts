@@ -3682,8 +3682,19 @@ export const flowCenterApi = {
     })
     return ackFromApiResult(result)
   },
-  /** 下拉/选择器用：一次取回，**最多 500 条**。要完整分页请改用 paged。 */
-  list: async (): Promise<FlowRecord[]> => (await flowCenterApi.paged({ page: 1, size: 500 })).list,
+  /**
+   * 下拉/选择器用：走旧平台同款 `flow/flowList`（有效流程全量、不分页、不含 flowConf，旧 FlowIdSelect 等下拉都用它）。
+   * 不再拿 `flowPaged` 拼：flowPaged 带 sourceCnt 计算列，186 上 500 条要 ~30s、超过前端 20s 超时，
+   * 调用方 catch 成空数组后下拉就只剩「无数据」（源流程配置抽屉实测）；flowList 759 条 ~0.1s，也没有 500 条上限。
+   * 要完整分页 / 排序 / 检索请改用 paged。
+   */
+  list: async (): Promise<FlowRecord[]> => {
+    const result = await request<unknown>('flow/flowList', {}, {
+      method: 'GET',
+      httpEndpoint: 'flow/flowList',
+    })
+    return flowPageFromLegacy(result).list
+  },
   /**
    * 流程详情。**查不到返回 `null`，不抛错**——调用方（画布头的「所属流程」）要靠这个
    * 区分"这个流程被删了"和"请求没打通"。
