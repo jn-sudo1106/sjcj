@@ -3,7 +3,7 @@
 // 字段名、状态口径、分页参数都 1:1 沿用旧平台实体，不在本项目里改名或合并字段
 // （旧页面：src/demo/SqlTempConfig.vue + SqlTempEditModal.vue、src/demo/QuestionTempConfig.vue +
 //   QuestionTempEditModal.vue，旧接口：src/demoApi/EntityApi.js）。
-// 已迁入：sql 模板、表模板；后续要迁的兄弟模块（自动补全 / 问句改写 / 数据索引同步 / 数据字典 / 提示词 / 分词）
+// 已迁入：sql 模板、表模板、自动补全；后续要迁的兄弟模块（问句改写 / 数据索引同步 / 数据字典 / 提示词 / 分词）
 // 的类型继续往这个文件里加，接口统一走 api/templateConfig.ts 的 CRUD 工厂。
 
 import type { Ack, Paged } from './common'
@@ -60,6 +60,24 @@ export interface TableTemplate extends TemplateRow {
   tableArr?: string | null
   /** 关联 sql 模板 id 数组的 JSON 字符串，口径同上 */
   sqlTempConfigIds?: string | null
+  delFlag?: string
+}
+
+/**
+ * 自动补全配置（旧「模板配置 → 自动补全配置」，src/demo/DicConfig.vue + DicEditor.vue）。
+ *
+ * ⚠️ 与其他模块不同的两处旧口径（EntityApi.js:20-22）：
+ * · 新增与修改**不是**同一个端点：新增 POST /poc/dic、修改 POST /poc/dic/update；
+ * · 分页筛选参数叫 name，但模糊匹配的是「内容」content（旧 DicConfig 搜索框标题就是「内容」）。
+ * 旧后端没有 dic/status、dic/copy —— 列表不提供启停与复制（旧页启停按钮本身也是注释掉的）。
+ */
+export interface DicTemplate extends TemplateRow {
+  /** 内容（补全词条全文） */
+  content?: string | null
+  /** 简称 */
+  keyWords?: string | null
+  /** 类型：旧编辑弹窗固定提交数字 1（页面上类型选择是注释掉的），1:1 保留 */
+  type?: number | string
   delFlag?: string
 }
 

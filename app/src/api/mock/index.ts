@@ -76,6 +76,9 @@ import {
   mockTableTemplatePaged,
   mockTableTemplateSave,
   mockTableTemplateChangeStatus,
+  mockDicTemplatePaged,
+  mockDicTemplateAdd,
+  mockDicTemplateUpdate,
 } from './templateConfig'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
@@ -345,4 +348,9 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/question-temp/status': mockTableTemplateChangeStatus,
   // 表模板「使用表范围」下拉的数据表选项
   'poc/database/entry-list': mockPocDatabaseEntryList,
+
+  // 自动补全配置（1013 迁入）：新增与修改是两个端点（旧 dicAdd / dicUpdate），没有 status/copy。
+  'poc/dic/page': mockDicTemplatePaged,
+  'poc/dic': mockDicTemplateAdd,
+  'poc/dic/update': mockDicTemplateUpdate,
 }

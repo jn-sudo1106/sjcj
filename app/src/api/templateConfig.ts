@@ -14,7 +14,7 @@
 import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
 import type { Ack, Paged } from './types/common'
-import type { PocTableEntry, SqlTemplate, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow } from './types/template'
+import type { DicTemplate, PocTableEntry, SqlTemplate, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow } from './types/template'
 
 export interface TemplateCrudConfig {
   /** endpoints.ts 里的模块名，逻辑键 = `poc/${module}${后缀}`，如 sql-temp → poc/sql-temp/page */
@@ -72,6 +72,24 @@ export const tableTemplateApi = createTemplateCrudApi<TableTemplate>({
   module: 'question-temp',
   operations: { copy: false },
 })
+
+/**
+ * 自动补全配置（旧「模板配置 → 自动补全配置」，src/demo/DicConfig.vue + DicEditor.vue）。
+ *
+ * 没有走 createTemplateCrudApi 工厂：工厂的 save 是「新增与修改同一个根端点、带 id 即更新」，
+ * 而旧 dic 域是两个端点 —— 新增 POST /poc/dic（dicAdd）、修改 POST /poc/dic/update（dicUpdate），
+ * paths 覆盖表达不了「按有无 id 换路径」。旧后端也没有 dic/status、dic/copy，
+ * 所以不提供 changeStatus / copy（旧列表的启停按钮本身就是注释掉的）。
+ */
+export const dicTemplateApi: TemplateCrudApi<DicTemplate> = {
+  // 分页：筛选参数按旧口径叫 name（模糊匹配的是「内容」content，见 types/template.ts 的 DicTemplate）
+  page: (query: TemplatePageQuery) =>
+    request<Paged<DicTemplate>>('poc/dic/page', { ...query }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/dic/page` }),
+  save: (form: Partial<DicTemplate>) =>
+    form.id == null
+      ? request<Ack>('poc/dic', { ...form }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/dic` })
+      : request<Ack>('poc/dic/update', { ...form }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/dic/update` }),
+}
 
 /**
  * 「使用表范围」下拉的数据表选项（旧 tableList → GET /poc/database/entry-list?name=）。

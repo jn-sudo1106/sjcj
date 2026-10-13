@@ -32,6 +32,7 @@ export const TABS: TabMeta[] = [
   // components/templateConfig 的 schema 层，带远程多选的（如表模板）在自己的目录里实现。
   { key: 'sql-template', path: '/sql-template', label: 'SQL模板配置', desc: 'SQL 模板内容与通过/拒绝条件、select/table/where/group by 校验表达式', group: 'template', permission: 'sql-template' },
   { key: 'table-template', path: '/table-template', label: '表模板配置', desc: '问句样例与匹配规则、使用表范围、关联 sql 模板（旧接口域 question-temp）', group: 'template', permission: 'table-template' },
+  { key: 'dic-template', path: '/dic-template', label: '自动补全配置', desc: '自动补全词典的内容与简称维护、导出（旧接口域 /poc/dic）', group: 'template', permission: 'dic-template' },
   // 系统设置（0924-02）：节点类型（旧平台「源类型」）+ 分类目录（原挂在采集资产的分类下拉底部）。
   // 这是第一个声明了 permission 的入口，给后续人员菜单权限留口子（见 composables/usePermission）。
   { key: 'settings', path: '/settings', label: '系统设置', desc: '节点类型、分类目录、运行机器、代码仓库、部署目录、机器配置、Runner 版本', group: 'settings', permission: 'settings' },

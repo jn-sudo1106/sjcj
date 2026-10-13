@@ -9,7 +9,7 @@
 //   · 表模板（question-temp）没有复制端点，且 tableArr / sqlTempConfigIds 存的是 JSON **字符串**，
 //     不是数组——编辑弹窗在两端来回 JSON.parse / JSON.stringify（旧 QuestionTempEditModal.vue）。
 import type { Paged } from '../types/common'
-import type { PocTableEntry, SqlTemplate, TableTemplate } from '../types/template'
+import type { DicTemplate, PocTableEntry, SqlTemplate, TableTemplate } from '../types/template'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const stamp = (d: Date) =>
@@ -262,4 +262,82 @@ export function mockPocDatabaseEntryList(params?: Record<string, unknown>): PocT
   const name = String(params?.name ?? '').trim().toUpperCase()
   if (!name) return POC_TABLE_ENTRIES.map((entry) => ({ ...entry }))
   return POC_TABLE_ENTRIES.filter((entry) => entry.tableName.toUpperCase().includes(name)).map((entry) => ({ ...entry }))
+}
+
+/* ── 自动补全配置（旧「模板配置 → 自动补全配置」，端点域 /poc/dic） ── */
+
+/**
+ * 自动补全种子数据。
+ * ⚠️ 按旧 DicConfig/DicEditor 的字段形状**构造的示例**（content/keyWords/type=1），
+ * 未取到 POC 服务真实行，联调后用真实响应校正。
+ */
+const blankDic = (over: Partial<DicTemplate>): DicTemplate => ({
+  content: '',
+  keyWords: '',
+  type: 1,
+  status: '0',
+  delFlag: '0',
+  ...over,
+})
+
+const DIC_TEMPLATES: DicTemplate[] = [
+  blankDic({
+    id: 3,
+    content: '查询某机构某日期的客户指标结果',
+    keyWords: '机构 日期 客户指标',
+    createTime: '2025-04-15 09:52:07',
+    updateTime: '2025-04-15 09:52:07',
+  }),
+  blankDic({
+    id: 2,
+    content: '同比环比类指标查询',
+    keyWords: '同比 环比',
+    createTime: '2025-01-08 15:21:40',
+    updateTime: '2025-04-11 10:50:30',
+  }),
+  blankDic({
+    id: 1,
+    content: '按日期统计指标信息',
+    keyWords: '日期 统计 指标',
+    createTime: '2024-12-20 18:03:11',
+    updateTime: '2025-03-02 09:14:55',
+  }),
+]
+
+let dicTemplateNextId = 100
+
+/** 自动补全分页：旧口径筛选参数叫 name，模糊匹配的是「内容」content */
+export function mockDicTemplatePaged(params?: Record<string, unknown>): Paged<DicTemplate> {
+  const name = String(params?.name ?? '').trim()
+  const pageNo = Math.max(1, Number(params?.pageNo ?? 1) || 1)
+  const pageSize = Math.max(1, Number(params?.pageSize ?? 20) || 20)
+  const matched = DIC_TEMPLATES.filter((row) => !name || String(row.content ?? '').includes(name))
+  return { total: matched.length, list: matched.slice((pageNo - 1) * pageSize, pageNo * pageSize) }
+}
+
+/** 新增（POST /poc/dic，不带 id）—— 旧 dicAdd */
+export function mockDicTemplateAdd(params?: Record<string, unknown>) {
+  const form = params as Partial<DicTemplate>
+  const nextId = dicTemplateNextId++
+  DIC_TEMPLATES.unshift({
+    ...blankDic({}),
+    ...form,
+    id: nextId,
+    createTime: stamp(new Date()),
+    updateTime: stamp(new Date()),
+  })
+  return { ok: true, data: nextId, message: '新增成功（演示）' }
+}
+
+/** 修改（POST /poc/dic/update，带 id）—— 旧 dicUpdate；与新增是两个端点，不要合并 */
+export function mockDicTemplateUpdate(params?: Record<string, unknown>) {
+  const form = params as Partial<DicTemplate>
+  const row = DIC_TEMPLATES.find((r) => Number(r.id) === Number(form.id))
+  if (!row) return { ok: false, message: '未找到要保存的词条' }
+  for (const [key, value] of Object.entries(form)) {
+    if (key === 'id') continue
+    ;(row as Record<string, unknown>)[key] = value
+  }
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: '修改成功（演示）' }
 }
