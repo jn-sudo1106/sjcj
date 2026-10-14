@@ -197,6 +197,15 @@ describe('ChatFlowStepEditDialog', () => {
     expect(savedPayload().retryCount).toBe(2)
   })
 
+  it('重试次数回空串按「未填」处理：回显空、提交 undefined（不能静默存成 0）', async () => {
+    const wrapper = mountDialog()
+    callOpen(wrapper, { id: 13, stepCode: 'a', flowCode: 'b', retryCount: '' })
+    await flushPromises()
+
+    await saveClick(wrapper)
+    expect(savedPayload().retryCount).toBeUndefined()
+  })
+
   it('保存成功后关弹窗并 emit saved；失败保持打开并提示后端 msg', async () => {
     const wrapper = mountDialog()
     callOpen(wrapper)

@@ -75,7 +75,8 @@ function open(record?: ChatFlowStep | null) {
     form[key] = value == null ? '' : String(value)
   }
   const rawRetry = record?.retryCount
-  retryCount.value = rawRetry == null ? undefined : Number(rawRetry)
+  // 空串要当「未填」：Number('') 是 0，会把留空静默存成重试 0 次
+  retryCount.value = rawRetry == null || rawRetry === '' ? undefined : Number(rawRetry)
   visible.value = true
 }
 

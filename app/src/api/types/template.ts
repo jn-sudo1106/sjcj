@@ -176,7 +176,8 @@ export interface DataIndexConfig extends TemplateRow {
  * 旧后端没有 chat-flow-step/copy，也没有删除端点 —— 旧列表只有「编辑」和「启用/禁用」。
  * 分页只有「状态」一个筛选项，但旧 queryParam 里还固定带一个 `name: ''`（实体没有 name 字段，
  * 后端忽略），1:1 保留这个入参形状。
- * retryCount 是旧弹窗里唯一的 a-input-number，其余全是文本框 → 数字口径，不是字符串。
+ * retryCount 是旧弹窗里唯一的 a-input-number，其余全是文本框 → 语义是数字。但 186 实测响应里回过
+ * 数字字符串（'2'），字段没填时回空串，所以类型收 number | string | null，弹窗负责归成数字或 undefined。
  * delFlag 旧页面从头到尾没碰过（列表不显示、弹窗不提交），这里也不声明，避免臆造后端列。
  */
 export interface ChatFlowStep extends TemplateRow {
@@ -203,8 +204,8 @@ export interface ChatFlowStep extends TemplateRow {
   checkRule?: string | null
   /** 输出字段 */
   outputParams?: string | null
-  /** 重试次数 */
-  retryCount?: number | null
+  /** 重试次数：旧弹窗唯一的 a-input-number，数字口径；真实响应里回过数字字符串（'2'）和空串，空串按未填处理 */
+  retryCount?: number | string | null
   /** 下一步编码 */
   nextStepCode?: string | null
   /** 变量1（旧页面就这两个泛化预留字段，编辑弹窗原样可改） */
