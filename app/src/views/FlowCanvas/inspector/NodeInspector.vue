@@ -14,6 +14,7 @@ import { canvasFlowIdOf, useFlowVersionStore } from '@/stores/flowVersion'
 import { cronSaveErrorHint, unpublishedFlowCronHint } from '@/utils/flow/cronSaveHint'
 import { isDataValidationNode, isMonitorNode, isRuleNode, nodeTypeLabel, NODE_CONFIGS, type NodeConfig } from '@/views/FlowCanvas/canvas/flowModel'
 import { isFileLikeNode, outputTableMissing } from '@/utils/flow/stepPersist'
+import { nodeStatusOf } from '@/views/FlowCanvas/canvas/nodeStatus'
 import { inputTableMismatch } from '@/utils/flow/tableSync'
 import { nodeInspectorTabs } from './nodeInspectorTabs'
 import { configApi, entryApi, paramApi, ruleApi, sourceApi } from '@/api'
@@ -48,8 +49,10 @@ const cfg = computed<NodeConfig | undefined>(() => flow.selectedNode)
 const id = computed<string>(() => flow.selectedId)
 const tab = computed<string>(() => flow.activeTab)
 
-const statusText = computed(() => (cfg.value?.disabled ? '已停止' : (cfg.value?.status ?? '')))
-const statusClass = computed(() => (cfg.value?.disabled || cfg.value?.planned ? 'warn' : 'ok'))
+// 与画布卡片同一口径（nodeStatusOf），不直接显示种子里的占位 status
+const nodeStatus = computed(() => (cfg.value ? nodeStatusOf(cfg.value) : null))
+const statusText = computed(() => nodeStatus.value?.left ?? '')
+const statusClass = computed(() => (nodeStatus.value && ['运行', '运行中'].includes(nodeStatus.value.left) ? 'ok' : 'warn'))
 
 // 顶层 Tab：参数字段已并入任务配置。
 const TOP_TABS = computed(() => nodeInspectorTabs(cfg.value, { includeAi: !props.hideAi }))
