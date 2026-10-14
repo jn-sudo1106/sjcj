@@ -48,7 +48,18 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Refresh, Warning, QuestionFilled, CircleCloseFilled, Download, CircleClose, Grid, Histogram, Trophy } from '@element-plus/icons-vue'
+import {
+  Search,
+  Refresh,
+  Warning,
+  QuestionFilled,
+  CircleCloseFilled,
+  Download,
+  CircleClose,
+  Grid,
+  Histogram,
+  Trophy,
+} from '@element-plus/icons-vue'
 import { taskStat, type TaskStatGroup, type TaskStatRow } from '@/api/taskStat'
 import { csvCell, downloadCsv } from '@/utils/csv'
 import { HELP_TEXT, PIE_OTHER_NOTE, RATE_PRESETS, STAT_STATE_OPTIONS, emptyText, statColumns } from './columns'
@@ -248,7 +259,10 @@ function statReq(params: Record<string, string>, label: string) {
 
 type Settled = { ok: true; v: TaskStatRow[] } | { ok: false; e: unknown }
 const settle = (p: Promise<TaskStatRow[]>): Promise<Settled> =>
-  p.then((v) => ({ ok: true as const, v }), (e) => ({ ok: false as const, e }))
+  p.then(
+    (v) => ({ ok: true as const, v }),
+    (e) => ({ ok: false as const, e }),
+  )
 
 async function handleQuery() {
   const params = buildParams()
@@ -278,7 +292,9 @@ async function handleQuery() {
       reqs.push(settle(statReq({ ...params, state: 'E' }, 'state=E')))
     } else {
       // v2 或未探测：发多状态请求（未探测时兼任探测）
-      reqs.push(settle(statReq({ ...params, state: PIE_STATES.join(',') }, probing ? 'multi-state(probe)' : 'multi-state')))
+      reqs.push(
+        settle(statReq({ ...params, state: PIE_STATES.join(',') }, probing ? 'multi-state(probe)' : 'multi-state')),
+      )
     }
   }
 
@@ -674,7 +690,7 @@ onUnmounted(() => {
       <!-- 查询工具栏：旧 a-form layout="inline"；控件宽度照抄旧页 -->
       <div class="ts-toolbar">
         <div class="ts-controls">
-          <el-form :inline="true" size="small" class="ts-form">
+          <el-form :inline="true" class="ts-form">
             <el-form-item title="快捷时间">
               <el-select :model-value="timeMode" style="width: 104px" @change="(v: TimeMode) => onTimeModeChange(v)">
                 <el-option label="今天" value="today" />
@@ -688,7 +704,6 @@ onUnmounted(() => {
               <el-date-picker
                 :model-value="rangeValue ?? undefined"
                 type="datetimerange"
-                size="small"
                 style="width: 360px"
                 start-placeholder="开始"
                 end-placeholder="结束"
@@ -703,7 +718,6 @@ onUnmounted(() => {
               <el-date-picker
                 :model-value="dateValue || undefined"
                 type="date"
-                size="small"
                 style="width: 150px"
                 format="YYYY-MM-DD"
                 value-format="YYYY-MM-DD"
@@ -748,8 +762,8 @@ onUnmounted(() => {
           </el-form>
         </div>
         <div class="ts-search-actions">
-          <el-button type="primary" size="small" :icon="Search" @click="() => handleQuery()">查询</el-button>
-          <el-button size="small" :icon="Refresh" @click="handleReset">重置</el-button>
+          <el-button type="primary" :icon="Search" @click="() => handleQuery()">查询</el-button>
+          <el-button :icon="Refresh" @click="handleReset">重置</el-button>
         </div>
       </div>
 
@@ -773,7 +787,9 @@ onUnmounted(() => {
         <el-card shadow="never" class="ts-metric-card">
           <CardSkeleton :loading="loading">
             <div class="ts-metric">
-              <div class="ts-metric-icon ts-i-blue"><el-icon><Histogram /></el-icon></div>
+              <div class="ts-metric-icon ts-i-blue">
+                <el-icon><Histogram /></el-icon>
+              </div>
               <div class="ts-metric-main">
                 <div class="ts-metric-label">任务总数</div>
                 <div class="ts-metric-value">{{ totalCnt.toLocaleString() }}</div>
@@ -792,7 +808,9 @@ onUnmounted(() => {
         <el-card shadow="never" class="ts-metric-card">
           <CardSkeleton :loading="loading">
             <div class="ts-metric">
-              <div class="ts-metric-icon ts-i-red"><el-icon><CircleClose /></el-icon></div>
+              <div class="ts-metric-icon ts-i-red">
+                <el-icon><CircleClose /></el-icon>
+              </div>
               <div class="ts-metric-main">
                 <div class="ts-metric-label">ERROR 任务数</div>
                 <div class="ts-metric-value">{{ errorCnt.toLocaleString() }}</div>
@@ -836,7 +854,9 @@ onUnmounted(() => {
         <el-card shadow="never" class="ts-metric-card">
           <CardSkeleton :loading="loading">
             <div class="ts-metric">
-              <div class="ts-metric-icon ts-i-green"><el-icon><Grid /></el-icon></div>
+              <div class="ts-metric-icon ts-i-green">
+                <el-icon><Grid /></el-icon>
+              </div>
               <div class="ts-metric-main">
                 <div class="ts-metric-label">涉及分组数</div>
                 <div class="ts-metric-value">{{ rows.length }}</div>
@@ -852,7 +872,9 @@ onUnmounted(() => {
           <el-card shadow="never" class="ts-metric-card">
             <CardSkeleton :loading="loading">
               <div class="ts-metric">
-                <div class="ts-metric-icon ts-i-cyan"><el-icon><Grid /></el-icon></div>
+                <div class="ts-metric-icon ts-i-cyan">
+                  <el-icon><Grid /></el-icon>
+                </div>
                 <div class="ts-metric-main">
                   <div class="ts-metric-label">涉及分组数</div>
                   <div class="ts-metric-value">{{ rows.length }}</div>
@@ -866,7 +888,9 @@ onUnmounted(() => {
           <el-card shadow="never" class="ts-metric-card">
             <CardSkeleton :loading="loading">
               <div class="ts-metric">
-                <div class="ts-metric-icon ts-i-orange"><el-icon><Trophy /></el-icon></div>
+                <div class="ts-metric-icon ts-i-orange">
+                  <el-icon><Trophy /></el-icon>
+                </div>
                 <div class="ts-metric-main">
                   <div class="ts-metric-label">最大分组任务数</div>
                   <div class="ts-metric-value">{{ maxCnt.toLocaleString() }}</div>
@@ -881,7 +905,9 @@ onUnmounted(() => {
 
     <!-- 重点告警：错误率 ≥ 阈值分组 -->
     <div v-if="!stateFiltered && alertRows.length > 0" class="ts-danger-bar">
-      <div class="ts-danger-icon"><el-icon><Warning /></el-icon></div>
+      <div class="ts-danger-icon">
+        <el-icon><Warning /></el-icon>
+      </div>
       <div class="ts-danger-body">
         <div class="ts-danger-title">
           错误率 ≥ {{ thresholdRate }}% 分组（{{ alertRows.length }} 个）—— 失败占比高于阈值，建议优先排查
@@ -982,7 +1008,6 @@ onUnmounted(() => {
               <el-button
                 v-for="p in RATE_PRESETS"
                 :key="p"
-                size="small"
                 class="ts-preset"
                 :type="errThreshold === p ? 'primary' : 'default'"
                 @click="onRatePreset(p)"
@@ -991,7 +1016,6 @@ onUnmounted(() => {
               </el-button>
               <el-input-number
                 class="ts-rate-input"
-                size="small"
                 :model-value="errThreshold === '' ? undefined : errThreshold"
                 :min="1"
                 :max="100"
@@ -1008,7 +1032,7 @@ onUnmounted(() => {
             </span>
 
             <el-dropdown v-if="rateActive && rows.length > 0" trigger="click" class="ts-export" @command="handleExport">
-              <el-button type="primary" size="small" :icon="Download">导出Excel</el-button>
+              <el-button type="primary" :icon="Download">导出Excel</el-button>
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item command="all">导出全部（{{ rows.length }} 行）</el-dropdown-item>
@@ -1022,7 +1046,6 @@ onUnmounted(() => {
               v-else
               class="ts-export"
               type="primary"
-              size="small"
               :icon="Download"
               :disabled="rows.length === 0"
               @click="handleExport()"
@@ -1265,12 +1288,30 @@ onUnmounted(() => {
   border-radius: 8px;
   font-size: 15px;
 }
-.ts-i-blue { color: #3e79f7; background: rgba(62, 121, 247, 0.1); }
-.ts-i-red { color: #f5222d; background: rgba(245, 34, 45, 0.08); }
-.ts-i-amber { color: #faad14; background: rgba(250, 173, 20, 0.12); }
-.ts-i-green { color: #52c41a; background: rgba(82, 196, 26, 0.1); }
-.ts-i-cyan { color: #13c2c2; background: rgba(19, 194, 194, 0.1); }
-.ts-i-orange { color: #ff7800; background: rgba(255, 120, 24, 0.12); }
+.ts-i-blue {
+  color: #3e79f7;
+  background: rgba(62, 121, 247, 0.1);
+}
+.ts-i-red {
+  color: #f5222d;
+  background: rgba(245, 34, 45, 0.08);
+}
+.ts-i-amber {
+  color: #faad14;
+  background: rgba(250, 173, 20, 0.12);
+}
+.ts-i-green {
+  color: #52c41a;
+  background: rgba(82, 196, 26, 0.1);
+}
+.ts-i-cyan {
+  color: #13c2c2;
+  background: rgba(19, 194, 194, 0.1);
+}
+.ts-i-orange {
+  color: #ff7800;
+  background: rgba(255, 120, 24, 0.12);
+}
 .ts-metric-main {
   min-width: 0;
   flex: 1;
@@ -1496,9 +1537,15 @@ onUnmounted(() => {
   line-height: 20px;
   text-align: center;
 }
-.ts-rank-1 { background: #faad14; }
-.ts-rank-2 { background: #bfbfbf; }
-.ts-rank-3 { background: #cd7f32; }
+.ts-rank-1 {
+  background: #faad14;
+}
+.ts-rank-2 {
+  background: #bfbfbf;
+}
+.ts-rank-3 {
+  background: #cd7f32;
+}
 .ts-tag-source {
   background: #e6f7ff;
   border-color: #91d5ff;

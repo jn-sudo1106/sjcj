@@ -3,8 +3,8 @@
 // 字段名、状态口径、分页参数都 1:1 沿用旧平台实体，不在本项目里改名或合并字段
 // （旧页面：src/demo/SqlTempConfig.vue + SqlTempEditModal.vue、src/demo/QuestionTempConfig.vue +
 //   QuestionTempEditModal.vue，旧接口：src/demoApi/EntityApi.js）。
-// 已迁入：sql 模板、表模板、自动补全、问句改写；后续要迁的兄弟模块（数据索引同步 / 数据字典 / 提示词 / 分词）
-// 的类型继续往这个文件里加，接口统一走 api/templateConfig.ts 的 CRUD 工厂。
+// 已迁入：sql 模板、表模板、自动补全、问句改写、数据索引同步、数据字典、提示词、分词
+// （模板域最后一个子模块）；新兄弟模块的类型继续往这个文件里加，接口统一走 api/templateConfig.ts。
 
 import type { Ack, Paged } from './common'
 
@@ -104,6 +104,156 @@ export interface QuestionDic extends TemplateRow {
   /** 标签：旧编辑弹窗固定提交空串，列表列已注释掉不展示 */
   tag?: string | null
   delFlag?: string
+}
+
+/**
+ * 数据索引同步配置（旧「模板配置 → 数据索引同步」，src/demo/DataIndexSyncList.vue + modal/DataIndexSyncConfigEditor.vue）。
+ *
+ * ⚠️ 四处旧口径（EntityApi.js:29-32、152-175）：
+ * · 新增 POST /poc/data-index-sync、修改 POST /poc/data-index-sync/update，**两个端点**（同 dic / question-dic 域）；
+ * · 分页筛选参数叫 `name`，模糊匹配的却是「同步名称」comment（旧列表那一列的 dataIndex 就是 comment，
+ *   186 POC 服务实测：name=机构 命中 20/46 条，命中的全是 comment）；
+ * · 除 CRUD 外还有一条同步动作 POST /poc/data-index-sync/sync，body 是 **id 数组**（旧页面单行同步也发 [id]）；
+ * · 旧列表与旧弹窗都没有启停/删除/复制入口（弹窗 status 恒为 '0'），所以本模块不提供 changeStatus / copy。
+ * type 在这个域是**数字** 0 sql同步 / 1 消息同步 / 2 分词同步（旧新增弹窗默认 2），与问句改写的字符串 type 无关。
+ * status：TemplateRow 声明的是字符串，但 186 实测真实响应回的是**数字** 0，比较一律走 String(row.status)。
+ */
+export interface DataIndexSync extends TemplateRow {
+  /** 同步名称（列表「同步名称」列、分页 name 筛选项匹配的都是这个字段） */
+  comment?: string | null
+  /** 表/主题：sql同步放表名，消息同步放主题名 */
+  tableName?: string | null
+  /** 同步类型：0 sql同步 / 1 消息同步 / 2 分词同步 */
+  type?: number | string
+  columnName?: string | null
+  /** 同步内容：sql同步/分词同步是一段 select，消息同步是 {"type":...,"params":...} 串 */
+  syncSql?: string | null
+  beforeSql?: string | null
+  afterSql?: string | null
+  /** 别名列 / 编码列：旧后端实体里有这两列，旧页面没有入口；编辑保存时原样带回，避免被写成 null */
+  aliasColumn?: string | null
+  codeColumn?: string | null
+  /** 最近同步时间（后端在 sync 成功后回写，前端只读） */
+  lastSync?: string | null
+  delFlag?: string
+}
+
+/**
+ * 数据字典配置（旧「模板配置 → 数据字典配置」，src/demo/DataIndexList.vue + modal/DataIndexConfigEditor.vue）。
+ *
+ * ⚠️ 四处旧口径（EntityApi.js:34-38、104-150）：
+ * · 新增 POST /poc/data-index-config、修改 POST /poc/data-index-config/update，**两个端点**（同 dic / question-dic 域）；
+ * · 启停 POST /poc/data-index-config/status 参数走 **body**（旧 dataIndexConfigStatus 用的是 data，
+ *   与问句改写那个走 query 的 status 不同，别混用）；
+ * · 还有一条只读的下拉数据源 GET /poc/data-index-config/all-code，返回 {code,type} 裸数组；
+ * · 分页筛选有四个参数：`name`（旧搜索框标题是「内容」）、`code`、`type`、`status`，全部进 body。
+ * type 在这个域是**字符串**（旧列表直接展示、编码下拉把它和 code 拼在一起显示），
+ * 既不是问句改写的 '10'/'11'/'20'，也不是自动补全的数字 1。
+ */
+export interface DataIndexConfig extends TemplateRow {
+  /** 编码（字典项的键，编辑弹窗里置灰不可改） */
+  code?: string | null
+  /** 类型（与编码下拉的第二个字段同源，编辑弹窗里置灰不可改） */
+  type?: string | null
+  /** 数据内容（分页 name 筛选项匹配的就是这个字段，编辑弹窗里置灰不可改） */
+  content?: string | null
+  /** 数据别名 —— 本域唯一可编辑的字段 */
+  alias?: string | null
+  /** 数据ID（旧列表列，页面无编辑入口，更新时原样带回） */
+  contentCode?: string | null
+  delFlag?: string
+}
+
+/**
+ * 提示词配置（旧「模板配置 → 提示词配置」，src/demo/ChatFlowStepList.vue + modal/ChatFlowStepEditor.vue）。
+ *
+ * ⚠️ 两处旧口径（src/demoApi/ChatFlowStepApi.js:3-8）：
+ * · 菜单标题叫「提示词配置」，但旧路由是 /demo/chat-flow-step-list、端点域是 /poc/chat-flow-step、
+ *   字段全是流程步骤口径（stepCode / flowCode / nextStepCode）。这是旧平台自身的命名不一致
+ *   （同表模板：菜单叫表模板、端点域是 question-temp），1:1 不改名，目录与路由都用 chat-flow-step。
+ * · 新增 POST /poc/chat-flow-step、修改 POST /poc/chat-flow-step/update，**两个端点**（同 dic / question-dic 域）；
+ *   启停 POST /poc/chat-flow-step/status 参数走 **body**（旧 chatFlowStepStatus 用的是 axios data）。
+ * 旧后端没有 chat-flow-step/copy，也没有删除端点 —— 旧列表只有「编辑」和「启用/禁用」。
+ * 分页只有「状态」一个筛选项，但旧 queryParam 里还固定带一个 `name: ''`（实体没有 name 字段，
+ * 后端忽略），1:1 保留这个入参形状。
+ * retryCount 是旧弹窗里唯一的 a-input-number，其余全是文本框 → 数字口径，不是字符串。
+ * delFlag 旧页面从头到尾没碰过（列表不显示、弹窗不提交），这里也不声明，避免臆造后端列。
+ */
+export interface ChatFlowStep extends TemplateRow {
+  /** 步骤编码（流程内唯一，nextStepCode 按它跳转） */
+  stepCode?: string | null
+  /** 流程编码 */
+  flowCode?: string | null
+  stepName?: string | null
+  /** 引用字典编码 */
+  dictCodes?: string | null
+  /** 入参定义 */
+  inputParams?: string | null
+  /** 执行条件 */
+  execCond?: string | null
+  /** 步骤动作 */
+  stepAction?: string | null
+  /** 系统 prompt */
+  systemPrompt?: string | null
+  /** 模板定义（旧弹窗里唯一的文本域，提示词正文） */
+  templateDef?: string | null
+  /** 结果清洗规则 */
+  cleanRule?: string | null
+  /** 结果校验规则 */
+  checkRule?: string | null
+  /** 输出字段 */
+  outputParams?: string | null
+  /** 重试次数 */
+  retryCount?: number | null
+  /** 下一步编码 */
+  nextStepCode?: string | null
+  /** 变量1（旧页面就这两个泛化预留字段，编辑弹窗原样可改） */
+  var1?: string | null
+  var2?: string | null
+}
+
+/**
+ * 分词配置（旧「模板配置 → 分词配置」，src/demo/WordSegmentConfigList.vue + modal/WordSegmentConfigEditor.vue）。
+ *
+ * 一条 = 分词词典里的一个词条：type（词条归属类型）+ content（词条本体）+ token（分词类型），
+ * 数据索引同步里 type=2「分词同步」的 syncSql 正是 `select ... as CONTENT, 'PERSON' as TYPE, 'base' as TOKEN`，
+ * 三个列别名与本实体一一对应，同步就是把这张表灌进分词词典。
+ *
+ * ⚠️ 四处旧口径（src/demoApi/EntityApi.js:40-44、64-100）：
+ * · 新增走**批量端点** POST /poc/word-segment-config/batch，body 是 `{type,content,token}` **对象数组**；
+ *   旧单条新增端点（POST /poc/word-segment-config）只在旧弹窗的「新增」分支里用到，而旧列表根本没有
+ *   触发入口（showAdd 没绑到任何按钮，是死代码），所以本模块不迁单条新增；
+ * · 修改 POST /poc/word-segment-config/update（body 带 id）；
+ * · 启停 POST /poc/word-segment-config/status，参数走 **body**（旧 wordSegmentConfigStatus 用的是 axios data，
+ *   与 question-dic 的 query 不同，别混用）；
+ * · 分页四个筛选都在 body —— `name`（旧搜索框标题是「内容」，匹配 content）、`type`、`token`、`status`。
+ * type / token 是**字符串字面量**（186 实测真实行：ORGANIZATION / indicatorname / PERSON，token 为 base），
+ * 既不是问句改写的 '10'/'11'/'20'，也不是数据索引同步的数字 0/1/2 —— 旧页面三个字段都是自由文本输入框。
+ * 分页契约在 186 POC 服务实测（2026-10-14）：信封 {code,msg,count,data}，共 434 条，
+ * status 回的是**数字** 0（与 TemplateRow 声明的字符串不一致），比较一律走 String(row.status)。
+ * delFlag 后端没回（旧页面也没碰过），这里不声明，避免臆造字段。
+ */
+export interface WordSegmentConfig extends TemplateRow {
+  /** 类型（词条归属：PERSON / ORGANIZATION / indicatorname 这类字面量） */
+  type?: string | null
+  /** 内容（词条本体，分页 name 筛选项匹配的就是这个字段） */
+  content?: string | null
+  /** 分词类型（旧列标题就叫「分词类型」，实测值 base） */
+  token?: string | null
+}
+
+/** 批量新增的单行入参（POST /poc/word-segment-config/batch 的数组元素，旧页面只给这三段） */
+export interface WordSegmentBatchItem {
+  type: string
+  content: string
+  token: string
+}
+
+/** 数据字典「编码」下拉的选项（GET /poc/data-index-config/all-code 返回的裸数组元素） */
+export interface DataIndexCodeOption {
+  code?: string | null
+  type?: string | null
+  [key: string]: unknown
 }
 
 /** 「使用表范围」下拉选项（旧 tableList → GET /poc/database/entry-list） */

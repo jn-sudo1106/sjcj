@@ -270,15 +270,15 @@ function applyRouteQuery() {
 
 <template>
   <div class="tl-shell" v-loading="loading">
-    <div class="tl-head">
+    <!-- <div class="tl-head">
       <div class="tl-title">任务实例</div>
       <div class="tl-sub">采集任务的运行记录（事实源），支持按状态 / 源 / 时间等条件检索与重发。</div>
-    </div>
+    </div> -->
 
     <!-- 筛选表单（对齐旧 a-form layout="inline" + a-row 栅格：多数 md=3；「展示类」md=2、时间 md=7，
          一行为 8×3=24 栅格，「日期区间 + 当天按钮」不换行）。
          文本项不自动查（回车 / 点查询），**状态下拉改完立刻查**（旧 @change="handleRefresh"）。 -->
-    <el-form :inline="true" class="tl-filter-form" size="small">
+    <el-form :inline="true" class="tl-filter-form">
       <el-row :gutter="8" class="tl-filter-row">
         <el-col :md="3" :sm="24">
           <el-form-item>

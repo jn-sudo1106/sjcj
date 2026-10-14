@@ -384,7 +384,6 @@ defineExpose({ clearSelection, reloadTree })
       class="sct-search"
       placeholder="搜索分类"
       clearable
-      size="small"
       :prefix-icon="Search"
       @input="onSearchInput"
       @clear="handleClearSearch"

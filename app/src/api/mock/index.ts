@@ -45,7 +45,10 @@ import {
   mockRuleOrchestrationGenerate,
   mockRuleOrchestrationTest,
 } from './rules'
-import { mockDatasets, mockMeasures, mockMetricStats } from './metrics'
+// mockMeasures（M4 演示形状）已不再注册：1014 迁移「指标列表」页时，measure/measurePaged
+// 改成真实契约的分页端点（live），handler 换成 mock/measure.ts 的 mockMeasurePaged（旧平台字段名）。
+// metrics.ts 仍保留该导出，避免动到与它同源的 mockDatasets / mockMetricStats。
+import { mockDatasets, mockMetricStats } from './metrics'
 import { mockEntryTypesGroup, mockDataRows, mockDataStats, mockDataRowQueryPaged, mockDataTableMeta, mockDataRowUpdate, mockEntryDataUpload, mockDistinctSource } from './dataview'
 import { mockRuns, mockRunNodes, mockRunStats } from './runs'
 import { mockHealth, mockMq, mockSync, mockAlarms, mockMonitorStats, mockCkSourceList, mockCkSourcePage, mockCkSourceInsert, mockCkSourceUpdate, mockSourceCheckPaged, mockSourceCheckLogs, mockSourceCheckAdd, mockSourceCheckUpdate, mockSourceCheckDelete, mockSourceCheckChangeEnable, mockSourceCheckRunNow, mockSourceCheckCheckOne, mockSourceCheckLastRun } from './monitor'
@@ -67,6 +70,16 @@ import {
 } from './commJob'
 import { mockTaskListPaged } from './taskList'
 import { mockTaskStat } from './taskStat'
+import {
+  mockMeasurePaged,
+  mockMeasureAdd,
+  mockMeasureUpdate,
+  mockMeasureDelete,
+  mockMeasureDeletePhy,
+  mockMeasureChangeEnable,
+  mockMeasureCopy,
+  mockMeasureGenFromSource,
+} from './measure'
 import {
   mockDatasetPaged,
   mockDatasetUpdate,
@@ -93,6 +106,23 @@ import {
   mockQuestionDicUpdate,
   mockQuestionDicChangeStatus,
   mockQuestionDicDelete,
+  mockDataIndexSyncPaged,
+  mockDataIndexSyncAdd,
+  mockDataIndexSyncUpdate,
+  mockDataIndexSyncRun,
+  mockDataIndexConfigPaged,
+  mockDataIndexConfigAllCode,
+  mockDataIndexConfigAdd,
+  mockDataIndexConfigUpdate,
+  mockDataIndexConfigChangeStatus,
+  mockChatFlowStepPaged,
+  mockChatFlowStepAdd,
+  mockChatFlowStepUpdate,
+  mockChatFlowStepChangeStatus,
+  mockWordSegmentPaged,
+  mockWordSegmentUpdate,
+  mockWordSegmentChangeStatus,
+  mockWordSegmentBatchAdd,
 } from './templateConfig'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
@@ -268,7 +298,6 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
 
   // 指标中心（M4）
   'dataset/datasetPaged': mockDatasets,
-  'measure/measurePaged': mockMeasures,
   'measure/stats': mockMetricStats,
   // 指标中心（M4）
   // dataset/datasetPaged = 逆向清单的逻辑名，只服务 api/index.ts 的 M4 演示服务（metricApi.datasets）。
@@ -281,6 +310,20 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'dataset/copy': mockDatasetCopy,
   'dataset/genFromSource': mockDatasetGenFromSource,
   'dataset/runNow': mockDatasetRunNow,
+
+  // 指标定义（1014 迁移「指标列表」页，旧 page/config/MeasureList.vue）。
+  // 这一页在旧平台的分页 / 新增 / 修改 / 批量启停 / 批量删除 / 物理删除 / 复制**本来就全部直连后端**，
+  // 所以这 8 条一起标 live：只放行分页、把写操作留在 mock，会让页面上的按钮看着能用、其实后端一条都没收到。
+  // 注意 `measure/measurePaged` 这条的**逻辑名与真实路径同名**（旧 URL 就是 /v1/measure/measurePaged），
+  // 不存在 dataset 那种大小写别名问题；原来注册在这里的 mockMeasures（M4 演示形状）已随之下线。
+  'measure/measurePaged': mockMeasurePaged,
+  'measure/add': mockMeasureAdd,
+  'measure/update': mockMeasureUpdate,
+  'measure/delete': mockMeasureDelete,
+  'measure/deleteMeasurePhy': mockMeasureDeletePhy,
+  'measure/changeEnable': mockMeasureChangeEnable,
+  'measure/copy': mockMeasureCopy,
+  'measure/genMeasureFromSource': mockMeasureGenFromSource,
 
   // 数据查看（M4）
   'data/entryTypesGroup': mockEntryTypesGroup,
@@ -385,4 +428,32 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/question-dic/update': mockQuestionDicUpdate,
   'poc/question-dic/status': mockQuestionDicChangeStatus,
   'poc/question-dic/deleteQuestionDic': mockQuestionDicDelete,
+
+  // 数据索引同步（1013 迁入）：新增/修改两个端点，没有 status/copy；sync 的 body 是 id 数组。
+  'poc/data-index-sync/page': mockDataIndexSyncPaged,
+  'poc/data-index-sync': mockDataIndexSyncAdd,
+  'poc/data-index-sync/update': mockDataIndexSyncUpdate,
+  'poc/data-index-sync/sync': mockDataIndexSyncRun,
+
+  // 数据字典配置（1014 迁入）：新增/修改两个端点 + status（**body** 传参，与 question-dic 的 query 不同），没有 copy；
+  // all-code 是「编码」筛选下拉的只读数据源，返回 {code,type} 裸数组。
+  'poc/data-index-config/page': mockDataIndexConfigPaged,
+  'poc/data-index-config/all-code': mockDataIndexConfigAllCode,
+  'poc/data-index-config': mockDataIndexConfigAdd,
+  'poc/data-index-config/update': mockDataIndexConfigUpdate,
+  'poc/data-index-config/status': mockDataIndexConfigChangeStatus,
+
+  // 提示词配置（1014 迁入，旧菜单「模板配置 → 提示词配置」，端点域 /poc/chat-flow-step）：
+  // 新增/修改两个端点 + status（**body** 传参，与 question-dic 的 query 不同）；没有 copy、没有删除。
+  'poc/chat-flow-step/page': mockChatFlowStepPaged,
+  'poc/chat-flow-step': mockChatFlowStepAdd,
+  'poc/chat-flow-step/update': mockChatFlowStepUpdate,
+  'poc/chat-flow-step/status': mockChatFlowStepChangeStatus,
+
+  // 分词配置（1014 迁入，模板域最后一个子模块）：修改 + status（**body** 传参）+ batch（body 是对象数组）；
+  // 没有单条新增与 copy —— 旧列表的 showAdd 没绑任何按钮，新增一律走 batch（见 api/templateConfig.ts 的 wordSegmentApi）。
+  'poc/word-segment-config/page': mockWordSegmentPaged,
+  'poc/word-segment-config/update': mockWordSegmentUpdate,
+  'poc/word-segment-config/status': mockWordSegmentChangeStatus,
+  'poc/word-segment-config/batch': mockWordSegmentBatchAdd,
 }

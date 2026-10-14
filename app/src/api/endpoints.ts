@@ -215,6 +215,48 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'poc/question-dic/status', desc: '问句改写启停 → POST /api/poc/question-dic/status?id=&status=（0 启用 / 1 禁用）', danger: true, impl: true, live: true },
   { path: 'poc/question-dic/deleteQuestionDic', desc: '问句改写删除 → POST /api/poc/question-dic/deleteQuestionDic（旧页面发整行，后端按 id 删）', danger: true, impl: true, live: true },
 
+  // 数据索引同步配置（1013 迁入，分页已在 186 POC 服务实测：46 条、name 模糊匹配 comment、status 空串=全部）。
+  // 与 dic / question-dic 同款：新增/修改是两个端点；没有 status/copy（旧列表与旧弹窗都没有启停入口）。
+  // ⚠️ sync 是**写操作**：后端按行里的 beforeSql/syncSql/afterSql 真跑一遍索引重建，旧页面点「同步」即执行、无二次确认。
+  { path: 'poc/data-index-sync/page', desc: '数据索引同步分页 → POST /api/poc/data-index-sync/page（body: pageNo/pageSize/name/status，name 模糊匹配「同步名称」comment）', impl: true, live: true },
+  { path: 'poc/data-index-sync', desc: '数据索引同步新增 → POST /api/poc/data-index-sync（body: comment/tableName/type/columnName/syncSql/beforeSql/afterSql，不带 id）', danger: true, impl: true, live: true },
+  { path: 'poc/data-index-sync/update', desc: '数据索引同步修改 → POST /api/poc/data-index-sync/update（body 带 id）', danger: true, impl: true, live: true },
+  { path: 'poc/data-index-sync/sync', desc: '数据索引同步执行 → POST /api/poc/data-index-sync/sync（body 是 id **数组**，如 [56]）', danger: true, impl: true, live: true },
+
+  // 数据字典配置（1014 迁入）。⚠️ 未标 live：真实响应还没实测核对过
+  // （旧平台契约来自 src/demoApi/EntityApi.js:34-38、104-150；沙箱直连 186 POC 服务不通，需登录态）。
+  // 与 dic / question-dic 同款：新增/修改是两个端点；没有 copy。
+  // ⚠️ status 的参数走 **body**（旧 dataIndexConfigStatus 用的是 axios data，与 question-dic/status 的 query 不同）。
+  { path: 'poc/data-index-config/page', desc: '数据字典分页 → POST /api/poc/data-index-config/page（body: pageNo/pageSize/name/code/type/status）', impl: true, live: true },
+  { path: 'poc/data-index-config', desc: '数据字典新增 → POST /api/poc/data-index-config（body: code/type/content/alias/contentCode，不带 id）', danger: true, impl: true, live: true },
+  { path: 'poc/data-index-config/update', desc: '数据字典修改 → POST /api/poc/data-index-config/update（body 带 id，只有 alias 可改）', danger: true, impl: true, live: true },
+  { path: 'poc/data-index-config/status', desc: '数据字典启停 → POST /api/poc/data-index-config/status（body: id/status，0 启用 / 1 禁用）', danger: true, impl: true, live: true },
+  { path: 'poc/data-index-config/all-code', desc: '数据字典编码选项（「编码」筛选下拉）→ GET /api/poc/data-index-config/all-code', impl: true, live: true },
+
+  // 提示词配置（1014 迁入，旧菜单「模板配置 → 提示词配置」）。
+  // 菜单叫「提示词配置」，端点域是 chat-flow-step（旧路由 /demo/chat-flow-step-list），1:1 不改名。
+  // 契约来自 src/demoApi/ChatFlowStepApi.js:3-8；与 dic / question-dic 同款：新增/修改是两个端点；
+  // 没有 copy、也没有删除端点（旧列表只有编辑与启停）。
+  // ⚠️ status 的参数走 **body**（旧 chatFlowStepStatus 用的是 axios data，与 question-dic/status 的 query 不同）。
+  // ⚠️ live 与同域其余模块一致（都走 186 的 POC 代理），但本轮沙箱直连探测返回 302（需登录态），
+  //    真实行样本没取到，mock 种子是按旧字段形状构造的示例（见 api/mock/templateConfig.ts）——
+  //    首次联调请核对 chat-flow-step 的列名与 status 口径后再确认。
+  { path: 'poc/chat-flow-step/page', desc: '提示词配置分页 → POST /api/poc/chat-flow-step/page（body: pageNo/pageSize/name/status，name 恒为空串）', impl: true, live: true },
+  { path: 'poc/chat-flow-step', desc: '提示词配置新增 → POST /api/poc/chat-flow-step（body: stepCode/flowCode/stepName/templateDef 等 16 个表单字段，不带 id）', danger: true, impl: true, live: true },
+  { path: 'poc/chat-flow-step/update', desc: '提示词配置修改 → POST /api/poc/chat-flow-step/update（body 带 id）', danger: true, impl: true, live: true },
+  { path: 'poc/chat-flow-step/status', desc: '提示词配置启停 → POST /api/poc/chat-flow-step/status（body: id/status，0 启用 / 1 禁用）', danger: true, impl: true, live: true },
+
+  // 分词配置（1014 迁入，模板域最后一个子模块）。契约来自旧 src/demoApi/EntityApi.js:40-44、64-100。
+  // 分页已在 186 POC 服务实测（2026-10-14）：434 条，type/token 是字符串字面量（PERSON/ORGANIZATION/base…），
+  // status 回的是**数字** 0。update / status / batch 三条写端点同域同进程，未逐条实测，联调时先核对。
+  // 与 dic / question-dic 同款是新增/修改分端点的域，但本域**没有单条新增**：旧列表没有任何入口触发
+  // wordSegmentConfigAdd（见 api/templateConfig.ts 的 wordSegmentApi），新增一律走 batch。
+  // ⚠️ status 的参数走 **body**（旧 wordSegmentConfigStatus 用的是 axios data，与 question-dic/status 的 query 不同）。
+  { path: 'poc/word-segment-config/page', desc: '分词配置分页 → POST /api/poc/word-segment-config/page（body: pageNo/pageSize/name/type/token/status，name 模糊匹配「内容」content）', impl: true, live: true },
+  { path: 'poc/word-segment-config/batch', desc: '分词配置批量新增 → POST /api/poc/word-segment-config/batch（body 是 {type,content,token} **对象数组**）', danger: true, impl: true, live: true },
+  { path: 'poc/word-segment-config/update', desc: '分词配置修改 → POST /api/poc/word-segment-config/update（body 带 id，type/content/token 都可改）', danger: true, impl: true, live: true },
+  { path: 'poc/word-segment-config/status', desc: '分词配置启停 → POST /api/poc/word-segment-config/status（body: id/status，0 启用 / 1 禁用）', danger: true, impl: true, live: true },
+
   /* ── entry 实体数据（收录 12，见「单表数据查看迁移」方案 §1.1 的 16 个旧端点核对） ── */
   { path: 'entry/entryDataPaged', desc: '实体数据分页', live: true },
   { path: 'entry/queryEntryType', desc: '实体数据动态表结构', live: true },
@@ -321,7 +363,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'comm-job/changeEnable', desc: '启停通用任务 → GET /v1/comm-job/changeEnable?ids=&enable=', danger: true, impl: true, live: true },
   { path: 'comm-job/copy', desc: '复制通用任务 → POST /v1/comm-job/copy?id=', danger: true, impl: true, live: true },
   { path: 'comm-job/run', desc: '运行通用任务 → POST /v1/comm-job/run?id=', danger: true, impl: true, live: true },
-   /* ── task 任务实例（目标 2 / 收录 3） ── */
+   /* ── task 任务实例（目标 2 / 收录 5：topTaskPaged + taskListPaged 别名 + stat + resetTaskInsts） ── */
   { path: 'task/topTaskPaged', desc: '任务实例分页（运行记录事实源）', impl: true, live: true },
   // 1013：任务实例页（旧 page/inst/TaskInst.vue）专属逻辑名 —— 它要 1:1 渲染旧 column.config 的
   // 原始字段名（actionName/nodeCode/taskTopic/updateDt），而 task/topTaskPaged 那份 mock 返回的是
@@ -329,9 +371,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   // httpEndpoint: 'task/topTaskPaged'（上面那条 live 端点），所以这里不标 live——它只是
   // 「逻辑名 + 真实 path」的别名（同 source/sourceTaskPaged 的写法）。
   { path: 'task/taskListPaged', desc: '任务实例分页（任务实例页） → GET /v1/task/topTaskPaged', impl: true },
-
-   /* ── task 任务实例（目标 2 / 收录 5：topTaskPaged + taskListPaged 别名 + stat + resetTaskInsts） ── */
-   // 1013：任务统计页（旧 page/inst/TaskStat.vue）的统计端点。旧 api/task.js 的 taskStat → GET /v1/task/stat
+  // 1013：任务统计页（旧 page/inst/TaskStat.vue）的统计端点。旧 api/task.js 的 taskStat → GET /v1/task/stat
   // （?date=|startTime=&endTime=&group=source|config|both&sourceId=&configId=&state=），
   // 响应是**行数组**（不是分页信封）：{sourceId, configId, cnt, state?}；带 state 的行说明后端支持多状态聚合。
   { path: 'task/stat', desc: '任务统计（按来源/配置分组聚合）', impl: true, live: true },
@@ -362,14 +402,21 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'dataset/runNow', desc: '立即执行指标 → GET ?ids=a,b&last= 开始 ID', danger: true, impl: true, live: true },
 
   /* ── measure 指标定义（目标 8 / 收录 8） ── */
-  { path: 'measure/measurePaged', desc: '指标分页', impl: true },
-  { path: 'measure/add', desc: '新增指标', danger: true },
-  { path: 'measure/update', desc: '修改指标', danger: true },
-  { path: 'measure/copy', desc: '复制指标', danger: true },
-  { path: 'measure/delete', desc: '删除指标', danger: true },
-  { path: 'measure/changeEnable', desc: '启停指标', danger: true },
-  { path: 'measure/genMeasureFromSource', desc: '由源生成指标', danger: true },
-  { path: 'measure/deleteMeasurePhy', desc: '物理删除指标', danger: true },
+  // 1014 迁移「指标列表」页（旧 page/config/MeasureList.vue）时整体接真实后端：这一页在旧平台
+  // 分页 / 新增 / 修改 / 复制 / 批量启停 / 批量删除 / 物理删除**本来就全部直连后端**，
+  // 只放行分页会把写操作留在 mock，页面按钮看着能用、后端一条都收不到。
+  // ① 逻辑名与真实路径同名（旧 URL 就是 /v1/measure/measurePaged），不存在 dataset 那种大小写别名；
+  // ② 原注册在这条上的 mockMeasures（M4 演示形状，字段名是 name/caliber/cycle）已下线——
+  //    新 handler 是 mock/measure.ts 的 mockMeasurePaged，按旧平台字段名（measureCode/measureName/...）分页；
+  // ③ measure/stats（M4 KPI）保持 impl 未 live，它只服务 api/index.ts 里那套已无消费方的演示服务。
+  { path: 'measure/measurePaged', desc: '指标分页 → GET /v1/measure/measurePaged', impl: true, live: true },
+  { path: 'measure/add', desc: '新增指标 → POST body（提交体需剔除 updateDt）', danger: true, impl: true, live: true },
+  { path: 'measure/update', desc: '修改指标 → POST body', danger: true, impl: true, live: true },
+  { path: 'measure/copy', desc: '复制指标 → GET ?id=&name=&sourceId=', danger: true, impl: true, live: true },
+  { path: 'measure/delete', desc: '批量删除指标 → POST ?ids=a,b（参数在 query，不是 body）', danger: true, impl: true, live: true },
+  { path: 'measure/changeEnable', desc: '启停指标 → GET ?ids=a,b&enable=（同 isDelete：0=在用 / 1=停用）', danger: true, impl: true, live: true },
+  { path: 'measure/genMeasureFromSource', desc: '由源生成指标 → GET ?sourceId=&entryTypeId=（旧 MeasureList 无入口，契约先接上）', danger: true, impl: true, live: true },
+  { path: 'measure/deleteMeasurePhy', desc: '物理删除单条指标 → POST ?id=单个（无法恢复）', danger: true, impl: true, live: true },
 
   /* ── mq 消息队列（目标 9 / 收录 9） ── */
   { path: 'mq/queuePaged', desc: '队列列表', impl: true },

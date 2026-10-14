@@ -235,13 +235,13 @@ onMounted(() => void load())
 
 <template>
   <div class="qc-shell" v-loading="loading">
-    <div class="qc-head">
+    <!-- <div class="qc-head">
       <div class="qc-title">队列告警</div>
       <div class="qc-sub">按队列名、ID、描述与状态筛选队列校验配置，支持批量启停与删除。</div>
-    </div>
+    </div> -->
 
     <!-- 筛选表单（对齐旧 a-form layout="inline" + a-row 栅格；改条件不自动查，点「查询」才发请求） -->
-    <el-form :inline="true" class="qc-filter-form" size="small">
+    <el-form :inline="true" class="qc-filter-form">
       <el-row :gutter="8" class="qc-filter-row">
         <el-col :md="4" :sm="24">
           <el-form-item label="队列名">

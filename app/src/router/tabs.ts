@@ -26,15 +26,26 @@ export const TABS: TabMeta[] = [
   { key: 'tasks', path: '/tasks', label: '任务中心', desc: '全局任务查询、详情与重发', group: 'tools' },
   { key: 'sync', path: '/sync', label: '数据同步', desc: '将现有数据表同步到目标环境', group: 'tools' },
   { key: 'monitor', path: '/monitor', label: '监控中心', desc: '系统健康、MQ、同步状态、告警', group: 'tools' },
-  // 模板配置（1013）：旧 ai-chat-view「模板配置」域的落位，与运行与监控、系统设置同级。
-  // 这一组会随迁移逐个长出来（自动补全 / 问句改写 / 数据索引同步 / 数据字典 / 提示词 / 分词），
-  // 接口共用 api/templateConfig.ts 的 CRUD 工厂；列表页只有「简单字段」的模块才复用
-  // components/templateConfig 的 schema 层，带远程多选的（如表模板）在自己的目录里实现。
+  // 模板配置（1013 起逐个迁入，1014 迁完，旧 ai-chat-view「模板配置」域的落位，与运行与监控、系统设置同级）。
+  // 接口共用 api/templateConfig.ts 的 CRUD 工厂；
+  // 列表页只有「简单字段」的模块才复用 components/templateConfig 的 schema 层，
+  // 带远程多选 / 多条件查询的（如表模板、数据字典）在自己的目录里实现。
   { key: 'sql-template', path: '/sql-template', label: 'SQL模板配置', desc: 'SQL 模板内容与通过/拒绝条件、select/table/where/group by 校验表达式', group: 'template', permission: 'sql-template' },
   { key: 'table-template', path: '/table-template', label: '表模板配置', desc: '问句样例与匹配规则、使用表范围、关联 sql 模板（旧接口域 question-temp）', group: 'template', permission: 'table-template' },
   { key: 'dic-template', path: '/dic-template', label: '自动补全配置', desc: '自动补全词典的内容与简称维护、导出（旧接口域 /poc/dic）', group: 'template', permission: 'dic-template' },
   // ⚠️ question-dic（问句改写）与上面的 table-template（端点域 question-temp）是两个不同模块，名字像不是一个东西。
   { key: 'question-dic', path: '/question-dic', label: '问句改写配置', desc: '按阶段与类型（简单/正则/字段替换）维护问句改写规则，支持启停与删除（旧接口域 /poc/question-dic）', group: 'template', permission: 'question-dic' },
+  // ⚠️ 与运行与监控组的 /sync（采集数据同步到目标环境）不是一回事，这一条是旧「数据索引同步」的索引配置。
+  { key: 'data-index-sync', path: '/data-index-sync', label: '数据索引同步', desc: '维护 sql / 消息 / 分词三类索引同步配置并按行触发同步（旧接口域 /poc/data-index-sync）', group: 'template', permission: 'data-index-sync' },
+  // ⚠️ 数据字典配置在旧平台的组件名是 DataIndexList（端点域 data-index-config），与上面的数据索引同步是两个模块。
+  { key: 'data-index-config', path: '/data-index-config', label: '数据字典配置', desc: '按编码/类型/状态查询数据字典项并维护数据别名，支持导出与启停（旧接口域 /poc/data-index-config）', group: 'template', permission: 'data-index-config' },
+  // ⚠️ 提示词配置的菜单标题与端点名不一致：旧路由 /demo/chat-flow-step-list、端点域 /poc/chat-flow-step，
+  // 字段全是对话流程步骤口径（步骤编码/流程编码/下一步编码）。key 按端点域取 chat-flow-step，
+  // 与 table-template（端点域 question-temp）那种「按菜单取名」不同，是为了避开与 api/prompt.ts（流程画布的提示词）混淆。
+  { key: 'chat-flow-step', path: '/chat-flow-step', label: '提示词配置', desc: '按流程编码维护对话步骤的提示词模板、入参/出参定义与清洗校验规则，支持启停（旧接口域 /poc/chat-flow-step）', group: 'template', permission: 'chat-flow-step' },
+  // 分词配置（1014 迁入，模板域最后一个子模块）：一条 = 分词词典里的一个词条，「数据索引同步」的分词同步往里灌数据。
+  // 旧列表没有单条新增入口，新增走批量端点（一行「类型,内容,分词类型」）。
+  { key: 'word-segment-config', path: '/word-segment-config', label: '分词配置', desc: '按类型/内容/分词类型查询分词词条并维护启停，支持批量新增与导出（旧接口域 /poc/word-segment-config）', group: 'template', permission: 'word-segment-config' },
   // 系统设置（0924-02）：节点类型（旧平台「源类型」）+ 分类目录（原挂在采集资产的分类下拉底部）。
   // 这是第一个声明了 permission 的入口，给后续人员菜单权限留口子（见 composables/usePermission）。
   { key: 'settings', path: '/settings', label: '系统设置', desc: '节点类型、分类目录、运行机器、代码仓库、部署目录、机器配置、Runner 版本', group: 'settings', permission: 'settings' },
