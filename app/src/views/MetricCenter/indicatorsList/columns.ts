@@ -20,13 +20,15 @@
 // ⚠️ 列宽：旧版给每一列都写了固定 width，再加上 `:scroll="{x:1500}"`。el-table 只会把
 // 「非数字 width」的列拿去分配剩余宽度，所以这里把**文本列改走 minWidth**（限宽 + 吸收多余宽度），
 // 数值/状态/操作列保持固定 width —— 与 indicatorDataset / queueCheck 的处理同口径。
-// 长度接近旧 1500 的合计值，容器窄时照旧横向滚动。
+// 长度接近旧 1500 的合计值，容器窄时照旧横向滚动；**操作列 `fixed: 'right'`**，横向滚动时始终可见。
 import type { ColumnDef } from '../shared/types'
 
 /** 本页的列定义：在共享 `ColumnDef` 上把 `slot` 收窄成这 5 个取值。
  *  （共享层只约定 `slot?: string`，页面级语义由各页自己收窄。） */
 export interface MeasureColumn extends ColumnDef {
   slot?: 'id' | 'name' | 'json' | 'jsonDim' | 'action'
+  /** 表格列固定在右侧（照 `Monitor/taskList/columns.ts` 的 `TaskColumn` 收窄成只允许 right） */
+  fixed?: 'right'
 }
 
 /** MEASURE.base 的 13 列（表格 + 编辑 + 详情共用） */
@@ -61,6 +63,10 @@ export const MEASURE_BASE: MeasureColumn[] = [
     noEdit: true,
     noDetail: true,
     slot: 'action',
+    // 本页列总宽（≈1470）超出内容区（≈1180）会横向滚动，操作列固定在右侧才不会
+    // 「拉开滚动条才能点编辑」。旧 s-table 是 `:scroll="{x:1500}"` + 各列 width，
+    // 没有 fixed；这里跟 Monitor/taskList 的口径统一。
+    fixed: 'right',
   },
 ]
 

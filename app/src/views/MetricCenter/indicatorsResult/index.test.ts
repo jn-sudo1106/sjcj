@@ -35,7 +35,8 @@ const spies = vi.hoisted(() => ({
   openSourceDetail: vi.fn(),
   openApi: vi.fn(),
   openUpload: vi.fn(),
-  openSourceSelect: vi.fn(),
+  /** 源选择器 stub 的 reloadSid（旧 `$refs.sourceSelect.reloadSid`） */
+  reloadSid: vi.fn(),
 }))
 
 // `@/api` 是这一页唯一的请求出口（dataApi 取数 / entryApi 改表态）；
@@ -84,7 +85,15 @@ vi.mock('./EntrySourceSelect.vue', async () => ({
     name: 'EntrySourceSelect',
     props: ['modelValue', 'sid', 'detail'],
     emits: ['change', 'update:modelValue'],
-    setup() {
+    setup(_props, { expose, emit }) {
+      // 真组件 reloadSid 的行为：重拉候选 → 回填选中值 → emit('change', record)
+      // （页面 watcher 就是靠这条 change 带出重查的，见 index.vue 的 watch）
+      expose({
+        reloadSid: spies.reloadSid.mockImplementation((sid: string) => {
+          emit('update:modelValue', String(sid))
+          emit('change', { sourceId: String(sid), name: `源${sid}` })
+        }),
+      })
       return () => h('div', { class: 'stub-source-select' })
     },
   }),
@@ -327,6 +336,44 @@ describe('indicatorsResult · 首屏', () => {
     expect(cellOf(w, 1, 6).find('a').exists()).toBe(false)
   })
 
+  it('动态列只给 min-width、不给 width（否则容器有富余时表格右侧会留白）', async () => {
+    const w = mountPage()
+    await flushPromises()
+    const byProp = (prop: string) => {
+      const hit = w.findAllComponents({ name: 'ElTableColumn' }).find((c) => c.props('prop') === prop)
+      if (!hit) throw new Error(`找不到 prop=${prop} 的表格列`)
+      return hit
+    }
+    // 「发布日期-K3」= 140*0.9；「指标编码-K2」= 120*0.9
+    expect(byProp('K3').props('minWidth')).toBe(126)
+    expect(byProp('K2').props('minWidth')).toBe(108)
+    // 软定宽的属性必须留空：el-table 只把富余宽度分给「没有数字 width」的列
+    expect(byProp('K3').props('width')).toBe('')
+    expect(byProp('K2').props('width')).toBe('')
+    // 系统短列照旧定宽（模板里是静态属性，会以字符串形式落到 prop 上）
+    expect(String(byProp('STATE').props('width'))).toBe('70')
+  })
+
+  it('表里没有任何必填字段时补一个弹性占位列，表格仍然铺满容器（不留白）', async () => {
+    // 没有必填字段 → 没有动态列 → 只剩 11 个定宽系统列（合计 895px），
+    // 不补弹性列的话右侧会空出几百像素。占位列不给宽度，被 el-table 当作弹性列。
+    spies.tableMeta.mockImplementation(async () => ({
+      ...META,
+      fields: META.fields.map((f) => ({ ...f, required: false })),
+    }))
+    const w = mountPage()
+    await flushPromises()
+    const cols = w.findAllComponents({ name: 'ElTableColumn' })
+    // 勾选列 + 10 个系统列（ENTRY_ID…操作）+ 占位列
+    expect(cols).toHaveLength(12)
+    const filler = cols.filter((c) => c.props('type') === 'default' && !c.props('prop') && !c.props('label'))
+    expect(filler).toHaveLength(1)
+    // 占位列落在「原始」和「操作」之间
+    expect(w.findAll('thead th').map((th) => th.text())).toEqual([
+      '', 'ENTRY_ID', '源', '状态', '更新', '生成', '任务', '后续', '父ID', '原始', '', '操作',
+    ])
+  })
+
   it('状态列渲染 row.state（列名沿用旧模板的 prop="STATE"，行数据却是 camelCase，必须给插槽）', async () => {
     const w = mountPage()
     await flushPromises()
@@ -535,6 +582,34 @@ describe('indicatorsResult · 工具条（state=C 才出现「数据操作」）
     expect(spies.openUpload).toHaveBeenCalledWith('999', '161725', '70598')
   })
 
+  it('「导入数据」的配置ID：首行没有时退到源选择器带回的那条记录（旧 this.source.configId）', async () => {
+    // 首行 CONFIG_ID 为空 → 旧版 `configId = this.source && this.source.configId`
+    spies.rowQueryPaged.mockImplementation(async () => ({
+      total: 1,
+      list: [rowData({ configId: '' })],
+    }))
+    const w = mountPage()
+    await flushPromises()
+    // 源选择器 change 带回来的记录（含 configId）
+    w.findComponent({ name: 'EntrySourceSelect' }).vm.$emit('change', {
+      sourceId: '161725', name: '新浪财经', configId: '70598',
+    })
+    await flushPromises()
+    await iconBtn(w, '导入数据').trigger('click')
+    expect(spies.openUpload).toHaveBeenLastCalledWith('999', '161725', '70598')
+  })
+
+  it('「导入数据」的配置ID：首行与源记录都没有 → 传空串（用户在弹窗里手填）', async () => {
+    spies.rowQueryPaged.mockImplementation(async () => ({
+      total: 1,
+      list: [rowData({ configId: '' })],
+    }))
+    const w = mountPage()
+    await flushPromises()
+    await iconBtn(w, '导入数据').trigger('click')
+    expect(spies.openUpload).toHaveBeenLastCalledWith('999', '161725', '')
+  })
+
   it('「导出EXCEL」→ 用 exportUrl 拼 URL 后新窗口直开（同源 Cookie 鉴权）', async () => {
     const w = mountPage({ sourceId: '161725' })
     await flushPromises()
@@ -718,5 +793,27 @@ describe('indicatorsResult · 路由 query（旧 props / created 的等价物）
     w.findComponent({ name: 'EntrySourceSelect' }).vm.$emit('change', { sourceId: '161725', name: '新浪财经' })
     await flushPromises()
     expect(lastQuery()).toMatchObject({ page: 1 })
+  })
+
+  it('拖拽带 sourceId → 调源选择器的 reloadSid（旧 $refs.sourceSelect.reloadSid(this.sid)）', async () => {
+    const w = mountPage()
+    await flushPromises()
+    // 首屏不调：旧 `created` 只是把 sid 交给组件自己 `loadData()`，reloadSid 只在路由变化时用
+    expect(spies.reloadSid).not.toHaveBeenCalled()
+
+    const route = routeState.route as unknown as { query: Record<string, string> }
+    route.query.sourceId = '161725'
+    await flushPromises()
+    expect(spies.reloadSid).toHaveBeenCalledWith('161725')
+    // reloadSid 内部 emit change → handleSourceChange → 回第 1 页重查
+    expect(lastQuery()).toMatchObject({ sourceId: '161725', page: 1 })
+
+    // sid 被清空：旧 `reloadSid` 直接 return（连候选都不动），改由页面自己补一次重查
+    spies.rowQueryPaged.mockClear()
+    delete route.query.sourceId
+    await flushPromises()
+    expect(spies.reloadSid).toHaveBeenCalledTimes(1)
+    expect(lastQuery().sourceId).toBeUndefined()
+    w.unmount()
   })
 })

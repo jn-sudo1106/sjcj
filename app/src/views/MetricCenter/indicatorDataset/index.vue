@@ -17,19 +17,25 @@
 //         copyDataset / updateDataSet（7 条全部走真实接口，见 api/dataset.ts）
 //
 // 有意偏差（都在交付说明里单列）：
-//   1. **指标相关入口已接通**（1014 补）：增加指标 / 指标-新 / 行内「指标」三个入口，旧版分别打开
-//      旧项目的 MeasureAdd（349 行）/ MeasureAddNew（286 行）/ MeasureShow → MeasureList（585 行）。
-//      新平台没有「弹窗里嵌一个整页」这套形态，改成 `router.replace` 跳到 MetricCenter 的
-//      「指标列表」页签并带上上下文（`/metrics?tab=indicatorsList&sourceId=…&entryTypeId=…&datasetId=…&datasetName=…`），
-//      由 indicatorsList/index.vue 消费：
-//        · 增加指标 → 额外带 `add=1`（进页即打开 MeasureAddDialog）
-//        · 指标-新 → 额外带 `add=new`（进页即打开 MeasureAddNewDialog）
-//        · 行内「指标」/ 指标数标签 → 只带上下文（进页即筛出该数据集的指标）
-//      入参与旧版一一对应：旧 `handleAddMeasure/New` 传 `(record.sourceId, record, record.entryTypeId)`，
-//      即 MeasureAdd/New 会把整条数据集记录合并进提交体（datasetId / datasetName / entryTypeId…），
-//      所以 query 里把 datasetId / datasetName / entryTypeId / sourceId 四个键一并带过去，由新页重建这份 record；
-//      旧 `handleShowMeasure` 传 `(record.sourceId, record.entryTypeId, record.datasetId)`，同样落在这四个键上。
-//      「增加指标 / 指标-新」仍照旧要求**恰好选中 1 行**（旧版选了 0 行或 >1 行都给「请选择要一行操作的数据集」）。
+//   1. **指标三件套入口全部原地弹层**（1014 修正）：上一版这里是本页最大的偏差 —— 新平台当时
+//      没有「弹窗里嵌一个整页」这套形态，于是把「增加指标 / 指标-新 / 行内「指标」」三个入口都
+//      改成 `router.replace` 跳「指标列表」页签。现在按旧版形态改回**原地开弹层**，不再跳页：
+//        · 表格「指标数」标签 / 操作列「指标」 → `MeasureShowDialog`
+//          （旧 `MeasureShow`：a-modal 包住整页 MeasureList）→
+//          `showModal(record.sourceId, record.entryTypeId, record.datasetId)`
+//        · 操作条「增加指标」 → `MeasureAddDialog`（旧 `MeasureAdd` 抽屉）→
+//          `doEdit(record.sourceId, record, record.entryTypeId)`
+//        · 操作条「指标-新」 → `MeasureAddNewDialog`（旧 `MeasureAddNew` 抽屉）→ 同上
+//      后两个组件的实现在 `../indicatorsList/` 下（本页只负责接线）。关掉弹层后仍停在数据集列表上
+//      —— 这才是旧版行为。跳页签那套（`tab=indicatorsList` + `add=1|new`）随之整体删除，
+//      indicatorsList 里对应的自动开弹窗机制也一并去掉（见该文件文件头偏差第 12 条）。
+//      「增加指标 / 指标-新」照旧要求**恰好选中 1 行**（旧版选了 0 行或 >1 行都给「请选择要一行
+//      操作的数据集」，第二句尾部那个多出来的「2」是旧版原文）。入参一一对应：旧 `doEdit` 里
+//      `Object.assign(form, record)` 会把**整条数据集记录**（datasetId / datasetName / entryTypeId /
+//      measureCnt …）合进提交体，所以第二参直接传选中的那一行。
+//      旧 `addMeasureCallback` 只 `console.log`、不刷新列表 —— 照抄（新增/取消后「指标数」要等下次
+//      点「查询」才更新）；旧 `MeasureShow` 关闭时 `$emit('refresh')` 在旧 DatasetList 上也没挂监听，
+//      同样不刷新。别顺手补刷新。
 //   2. 不迁死代码：「操作日志」菜单项（`showLogModal` 里的 `$refs.logModal` 在模板里根本没注册，
 //      且传的是 `record.configId`——数据集记录上没有这个字段，双重失效）；旧 `resetSearchForm` /
 //      `handleSearch` / `handleReset` / `handleCloseCurrentTab` / `handleOpenTab` / `handleShowEntryType`
@@ -61,7 +67,7 @@
 //   9. 旧页 `filters.changeTime`（返回常量 '11' 的废 filter）与 `options.alert`（旧 s-table 的已选条数
 //      提示条，页面从没传 alert，故从未渲染）——不迁。
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElNotification, type TableInstance } from 'element-plus'
 import { ArrowDown, Plus, Scissor, Search, Setting, WarningFilled } from '@element-plus/icons-vue'
 import {
@@ -79,11 +85,16 @@ import { DATASET_BASE } from './columns'
 import DatasetEditDialog from './DatasetEditDialog.vue'
 import DatasetDetailDrawer from './DatasetDetailDrawer.vue'
 import PromptDialog from './PromptDialog.vue'
+// 指标三件套（旧 MeasureShow / MeasureAdd / MeasureAddNew）。后两个的实现在 indicatorsList 下，
+// 是「指标列表」页与数据集页共用的同一套组件（旧平台也是这么复用的：DatasetList 直接 import
+// `@/page/base/measure/MeasureAdd`）。见文件头偏差第 1 条。
+import MeasureShowDialog from './MeasureShowDialog.vue'
+import MeasureAddDialog from '../indicatorsList/MeasureAddDialog.vue'
+import MeasureAddNewDialog from '../indicatorsList/MeasureAddNewDialog.vue'
 
 defineOptions({ name: 'IndicatorDataset' })
 
 const route = useRoute()
-const router = useRouter()
 
 // ---- 查询条件（草稿 → 执行 两态：筛选项变化不自动查，点「查询」才发请求）----
 const form = reactive({
@@ -350,33 +361,24 @@ function onRowCommand(command: string, row: DatasetRow) {
   if (command === 'copy') handleCopy(row)
 }
 
-// ---- 指标入口接线（旧 MeasureAdd / MeasureAddNew / MeasureShow，见文件头偏差第 1 条）----
-/**
- * 跳到 MetricCenter 的「指标列表」页签并带上上下文。
- * 与切页签（MetricCenter/index.vue 的 selectTab）共用同一套 query 键，
- * 所以跳过去之后手动点页签也不会把上下文丢掉。
- */
-function openMeasureList(row: DatasetRow, add?: '1' | 'new') {
-  void router.replace({
-    path: '/metrics',
-    query: {
-      tab: 'indicatorsList',
-      ...(row.sourceId ? { sourceId: String(row.sourceId) } : {}),
-      ...(row.entryTypeId ? { entryTypeId: String(row.entryTypeId) } : {}),
-      ...(row.datasetId ? { datasetId: String(row.datasetId) } : {}),
-      ...(row.datasetName ? { datasetName: String(row.datasetName) } : {}),
-      ...(add ? { add } : {}),
-    },
-  })
-}
+// ---- 指标三件套接线（旧 MeasureShow / MeasureAdd / MeasureAddNew，见文件头偏差第 1 条）----
+// 三个入口全部**原地**开弹层，关掉后仍停在数据集列表上（旧版行为）。上一版这里是
+// `router.replace` 跳「指标列表」页签，已删除（连带 indicatorsList 里的 add=1|new 机制）。
+const measureShowRef = ref<InstanceType<typeof MeasureShowDialog>>()
+const addMeasureRef = ref<InstanceType<typeof MeasureAddDialog>>()
+const addMeasureNewRef = ref<InstanceType<typeof MeasureAddNewDialog>>()
 
-/** 旧 `handleAddMeasure()`：必须恰好选中 1 行，否则「请选择要一行操作的数据集」 */
+/** 旧 `handleAddMeasure()`：必须恰好选中 1 行，否则「请选择要一行操作的数据集」。
+ *  → `$refs.addMeasure.doEdit(curRecord.sourceId, curRecord, curRecord.entryTypeId)`
+ *  （第二参传**整行**：旧 doEdit 里 `Object.assign(form, record)` 会把 datasetId / datasetName /
+ *    entryTypeId / measureCnt … 一并带进提交体）。 */
 function handleAddMeasure() {
   if (selected.value.length !== 1) {
     ElMessage.error('请选择要一行操作的数据集')
     return
   }
-  openMeasureList(selectedRows.value[0], '1')
+  const record = selectedRows.value[0]
+  addMeasureRef.value?.open(record.sourceId, record, record.entryTypeId)
 }
 
 /** 旧 `handleAddMeasureNew()`：同上，文案尾部多一个「2」（旧版原文，保留） */
@@ -385,12 +387,14 @@ function handleAddMeasureNew() {
     ElMessage.error('请选择要一行操作的数据集2')
     return
   }
-  openMeasureList(selectedRows.value[0], 'new')
+  const record = selectedRows.value[0]
+  addMeasureNewRef.value?.open(record.sourceId, record, record.entryTypeId)
 }
 
-/** 旧 `handleShowMeasure(record)`：行内「指标」/ 指标数标签 → 该数据集的指标列表 */
+/** 旧 `handleShowMeasure(record)`：表格「指标数」标签 / 操作列「指标」
+ *  → `$refs.showMeasure.showModal(record.sourceId, record.entryTypeId, record.datasetId)` */
 function handleShowMeasure(row: DatasetRow) {
-  openMeasureList(row)
+  measureShowRef.value?.open(row.sourceId, row.entryTypeId, row.datasetId)
 }
 
 // ---- 表头排序（服务端）----
@@ -513,7 +517,7 @@ onMounted(() => {
            菜单里只有「删除」——「操作日志」是死代码，见文件头偏差第 2 条。 -->
       <el-dropdown class="ids-more" :disabled="!selected.length" @command="onBatchCommand">
         <el-button :icon="Setting" :disabled="!selected.length">
-          更多..
+          更多
           <el-icon class="ids-more-arrow"><ArrowDown /></el-icon>
         </el-button>
         <template #dropdown>
@@ -534,6 +538,7 @@ onMounted(() => {
       :data="rows"
       border
       size="small"
+      max-height="550"
       :row-key="(r: DatasetRow) => r.datasetId"
       @selection-change="onSelectionChange"
       @sort-change="onSortChange"
@@ -568,7 +573,7 @@ onMounted(() => {
             </el-tooltip>
           </span>
 
-          <!-- 指标数：旧 measureCntSlot —— 有值是可点的粉色标签（点开该数据集的指标列表） -->
+          <!-- 指标数：旧 measureCntSlot —— 有值是可点的粉色标签（点开该数据集的指标弹窗） -->
           <span v-else-if="col.slot === 'measureCnt'" class="ids-measure-cnt">
             <el-tag
               v-if="row.measureCnt"
@@ -584,7 +589,7 @@ onMounted(() => {
           <!-- 上次运行 / 下次运行：旧 lastDateSlot —— timeago 相对时间 -->
           <span v-else-if="col.slot === 'lastDate'">{{ timeAgo(row[col.dataIndex] as string) }}</span>
 
-          <!-- 操作：旧 actionSlot —— 指标 | 详情 | 编辑 | 更多（制作副本） -->
+          <!-- 操作：旧 actionSlot —— 指标（弹窗）| 详情 | 编辑 | 更多（制作副本） -->
           <span v-else-if="col.slot === 'action'" class="ids-actions">
             <span class="ids-op-link" @click="handleShowMeasure(row)">指标</span>
             <span class="ids-op-divider">|</span>
@@ -626,6 +631,13 @@ onMounted(() => {
     <DatasetEditDialog ref="editRef" @saved="onSaved" />
     <DatasetDetailDrawer v-model="detailVisible" :record="detailRecord" />
     <PromptDialog ref="promptRef" @confirm="onPromptConfirm" />
+
+    <!-- 指标三件套（旧 MeasureShow / MeasureAdd / MeasureAddNew）—— 见文件头偏差第 1 条。
+         三个入口都是**原地**开弹层。旧版新增 / 取消后不刷新数据集列表
+         （`addMeasureCallback` 只 `console.log`），所以这里不挂 @saved 监听。 -->
+    <MeasureShowDialog ref="measureShowRef" />
+    <MeasureAddDialog ref="addMeasureRef" />
+    <MeasureAddNewDialog ref="addMeasureNewRef" />
   </div>
 </template>
 

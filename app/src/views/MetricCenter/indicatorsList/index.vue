@@ -32,10 +32,15 @@
 //      无法「按原样迁移」，也不该凭空发明一套批量复制语义，故只去掉这一个菜单项并在此存档。
 //      另外 `MeasureList` 还 import 了 `DataSetShow`（模板里没用到）——同样是死代码。
 //      「操作日志」菜单项也去掉：`showLogModal` 读 `$refs.logModal`，模板里同样没有注册。
-//   3. props 不迁，改从 `$route.query` 取：旧版有 `modal / sourceId / datasetId / entryTypeId /
-//      read` 五个 props（由 `MeasureShow` 弹窗与 DatasetList 内嵌使用）。新平台把「指标」做成
-//      MetricCenter 的独立 tab，改成读 query 的 sourceId / entryTypeId / datasetId / configId；
-//      额外支持 `add=1|new`（由 indicatorDataset 的「增加指标 / 指标-新」跳进来时自动开弹窗）。
+//   3. props 分两态（旧版有 `modal / sourceId / datasetId / entryTypeId / read` 五个 props）：
+//      · **弹窗形态** —— 旧 `MeasureShow` 内嵌（新 `MeasureShowDialog`）传
+//        `sourceId / entryTypeId / datasetId` 三个 props，写入顺序与旧 `created` 完全一致：
+//        先读 `$route.query`，再用 props 覆盖。
+//      · **页签形态** —— MetricCenter 的独立 tab，没有 props，只读 query 的
+//        sourceId / entryTypeId / datasetId / configId。
+//      旧 `modal` prop 只控制「操作..」下拉的显隐（`v-if="!modal"`），而旧 MeasureShow 并不传它
+//      → 弹窗里同样是显示；本页两种形态恒显示，故 `modal` 不迁。旧 `read` prop 在旧 MeasureList
+//      里从未被引用过（死 prop），也不迁。
 //   4. 查询条件是**同一个对象**（旧版就是 `Object.assign(parameter, this.queryParam)`，没有
 //      draft/executed 两态），所以改输入框不会自动重查，点「查询」才发请求；「重置」按旧版
 //      只清条件、**不重查**（旧 `@click="() => queryParam = {}"`）。
@@ -46,7 +51,9 @@
 //      映射回 ascend/descend 再发。
 //   6. 列宽自适应：文本列（编码 / 名称 / 类型 / 5 个 JSON 列）走 `minWidth`，数值/状态/操作列
 //      走固定 `width`；旧版全部写死 width，容器宽时右侧会留白（el-table 的 flex 分配只对
-//      非数字 width 的列生效）。合计宽度仍贴近旧 `scroll.x: 1500`，窄容器照旧横向滚动。
+//      非数字 width 的列生效）。合计宽度仍贴近旧 `scroll.x: 1500`，窄容器照旧横向滚动；
+//      另外把**操作列 `fixed: 'right'`**（旧版没固定）——本页列总宽 1610 > 内容区 1176，
+//      要横向滚动才看得到右边，固定后「详情 / 编辑 / 更多」不用拉滚动条。
 //   7. 「启用」列直接显示 `isDelete` 原值（0/1/-1）——旧列配置没有套 enableFilter 过滤器，
 //      旧页表格里也确实显示原始值；**只有详情抽屉**才转成「是[1]/否[0]」
 //      （见 shared/ColumnDetailDrawer.vue 的 isDelete 分支）。别顺手给表格加映射。
@@ -69,14 +76,37 @@
 //      `ElNotification.*`，文案原样保留（含 `batchDelete` 确认框里那句写错的「数据集」——
 //      旧页是复制粘贴来的，改动它反而对不上号）。写操作**失败**统一走 confirmDanger 内置的
 //      错误上报口径，不再拼旧页的「xxx失败 + err」前缀（与 indicatorDataset 同一口径）。
+//   11. 左树只去掉节点前的**文件夹图标**（`.sct-node-icon`）：旧 antd `a-tree` 没开 `showIcon`，
+//      而 Monitor 迁过来的 `SourceCategoryTree` 手写了一个 Folder/FolderOpened 图标。为了不动
+//      共享组件（它还被 Monitor/sourceCheck 的「源记录」弹窗用着），改在页面作用域用
+//      `:deep(.sct-node-icon) { display: none }` 隐藏。**复选框保留**——那是组件默认
+//      `checkable: true`，旧页同样是 `:checkable="check"` + `checkedKeys`（多选），
+//      点节点名则是单选下钻，两边语义一致。
+//   12. **不再支持 `add=1|new`**（1014 删除）：那是上一版为「indicatorDataset 的
+//      「增加指标 / 指标-新」跳页签」造的自动开弹窗机制。1014 起数据集页改成**原地**打开
+//      MeasureAddDialog / MeasureAddNewDialog（与旧版 MeasureAdd / MeasureAddNew 抽屉一致），
+//      跳页签这件事整个没了 → `add` 没有任何生产者，本页随之回到「纯列表页」，
+//      旧 MeasureList 本来也没有任何新增入口（新增只从数据集页发起）。
 import { onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElNotification, type TableInstance } from 'element-plus'
 import {
-  ArrowDown, CopyDocument, Edit, Lightning, Scissor, Search, Setting, WarningFilled,
+  ArrowDown,
+  CopyDocument,
+  Edit,
+  Lightning,
+  Scissor,
+  Search,
+  Setting,
+  WarningFilled,
 } from '@element-plus/icons-vue'
 import {
-  changeMeasureEnable, copyMeasure, deleteMeasurePhy, deleteMeasures, measurePaged, updateMeasure,
+  changeMeasureEnable,
+  copyMeasure,
+  deleteMeasurePhy,
+  deleteMeasures,
+  measurePaged,
+  updateMeasure,
   type MeasureRow,
 } from '@/api/measure'
 import { confirmDanger } from '@/utils/confirmDanger'
@@ -84,13 +114,27 @@ import SourceCategoryTree from '@/views/Monitor/sourceCheck/SourceCategoryTree.v
 import ColumnEditDialog from '../shared/ColumnEditDialog.vue'
 import ColumnDetailDrawer from '../shared/ColumnDetailDrawer.vue'
 import {
-  MEASURE_BASE, MEASURE_JSON_DIM, MEASURE_JSON_VAL,
-  detailColumns, editColumns, type MeasureColumn,
+  MEASURE_BASE,
+  MEASURE_JSON_DIM,
+  MEASURE_JSON_VAL,
+  detailColumns,
+  editColumns,
+  type MeasureColumn,
 } from './columns'
-import MeasureAddDialog from './MeasureAddDialog.vue'
-import MeasureAddNewDialog from './MeasureAddNewDialog.vue'
 
 defineOptions({ name: 'IndicatorsList' })
+
+/** 旧 MeasureList 的 props（由旧 MeasureShow 弹窗 / 新 MeasureShowDialog 传入）。
+ *  只声明旧版真正用到的三个：`modal` 只管操作下拉显隐而弹窗形态下也是显示（不迁），
+ *  `read` 在旧组件里从未被引用（死 prop，不迁）——见文件头偏差第 3 条。 */
+const props = withDefaults(
+  defineProps<{
+    sourceId?: string | number | null
+    entryTypeId?: string | number | null
+    datasetId?: string | number | null
+  }>(),
+  { sourceId: null, entryTypeId: null, datasetId: null },
+)
 
 const route = useRoute()
 
@@ -241,8 +285,6 @@ const editRef = ref<InstanceType<typeof ColumnEditDialog>>()
 const detailRef = ref<InstanceType<typeof ColumnDetailDrawer>>()
 const jsonDimRef = ref<InstanceType<typeof ColumnEditDialog>>()
 const jsonValRef = ref<InstanceType<typeof ColumnEditDialog>>()
-const addRef = ref<InstanceType<typeof MeasureAddDialog>>()
-const addNewRef = ref<InstanceType<typeof MeasureAddNewDialog>>()
 
 /** 旧 handleEdit → `$refs.measureEdit.doEdit(record)` */
 function handleEdit(row: MeasureRow) {
@@ -278,10 +320,7 @@ function openJsonEdit(row: MeasureRow, col: MeasureColumn) {
   }
   const isDim = col.slot === 'jsonDim'
   const target = isDim ? jsonDimRef.value : jsonValRef.value
-  target?.open(
-    (parsed ?? {}) as Record<string, unknown>,
-    isDim ? 'json编辑-日期类' : 'json编辑-数值类',
-  )
+  target?.open((parsed ?? {}) as Record<string, unknown>, isDim ? 'json编辑-日期类' : 'json编辑-数值类')
 }
 
 /** 旧 handleCopy：$confirm → copyMeasure(record.measureId) → 清空查询条件（页面停留当前页）*/
@@ -349,70 +388,31 @@ function onSizeChange(s: number) {
   void load()
 }
 
-// ---- 路由 query（旧 props + created + watch 的等价物）----
+// ---- 路由 query + props（旧 created + watch 的等价物）----
 function pickQuery(key: string): string {
   const value = route.query[key]
   const text = Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '')
   return text.trim()
 }
 
-const routeSourceId = ref('')
-const routeEntryTypeId = ref('')
-const routeDatasetId = ref('')
-const routeDatasetName = ref('')
-
 function applyRouteQuery() {
   const sourceId = pickQuery('sourceId')
-  if (sourceId) {
-    routeSourceId.value = sourceId
-    queryParam.sourceId = sourceId
-  }
+  if (sourceId) queryParam.sourceId = sourceId
   const entryTypeId = pickQuery('entryTypeId')
-  if (entryTypeId) {
-    routeEntryTypeId.value = entryTypeId
-    queryParam.entryTypeId = entryTypeId
-  }
+  if (entryTypeId) queryParam.entryTypeId = entryTypeId
   const datasetId = pickQuery('datasetId')
-  if (datasetId) {
-    routeDatasetId.value = datasetId
-    queryParam.datasetId = datasetId
-  }
-  routeDatasetName.value = pickQuery('datasetName')
+  if (datasetId) queryParam.datasetId = datasetId
   const configId = pickQuery('configId')
   if (configId) queryParam.configId = configId
 }
 
-/** indicatorDataset 的「增加指标 / 指标-新」跳进来时带的入参：
- *  旧 DatasetList 传的是 `(record.sourceId, record, record.entryTypeId)`，
- *  record 是整条数据集（doEdit 里 `Object.assign(form, record)` 会把 datasetId /
- *  datasetName / entryTypeId … 一并带进提交体）。这里用 query 里带过来的四个键重建这份 record。 */
-function buildDatasetRecord(): Record<string, unknown> {
-  return {
-    sourceId: routeSourceId.value || undefined,
-    datasetId: routeDatasetId.value || undefined,
-    datasetName: routeDatasetName.value || undefined,
-    entryTypeId: routeEntryTypeId.value || undefined,
-  }
-}
-
-function openMeasureAdd() {
-  if (!routeSourceId.value) {
-    ElMessage.warning('请先指定源ID（从数据集页的「增加指标」进入）')
-    return
-  }
-  addRef.value?.open(routeSourceId.value, buildDatasetRecord(), routeEntryTypeId.value)
-}
-
-function openMeasureAddNew() {
-  if (!routeSourceId.value) {
-    ElMessage.warning('请先指定源ID（从数据集页的「指标-新」进入）')
-    return
-  }
-  addNewRef.value?.open(routeSourceId.value, buildDatasetRecord(), routeEntryTypeId.value)
-}
-
-function onAddSaved() {
-  handleRefresh(true)
+/** 旧 `created` 的 props 段。顺序与原版一致：**先**读 `$route.query`（上面那个函数），
+ *  **再**用 props 覆盖 —— 弹窗形态（旧 MeasureShow / 新 MeasureShowDialog）就是靠这一步
+ *  把 query 里可能残留的上下文换成「当前这一行」的。空值不覆盖（旧版判的是 truthy）。 */
+function applyProps() {
+  if (props.sourceId) queryParam.sourceId = props.sourceId
+  if (props.entryTypeId) queryParam.entryTypeId = props.entryTypeId
+  if (props.datasetId) queryParam.datasetId = props.datasetId
 }
 
 // 旧 `watch '$route.query.configId'` → 改条件并重查
@@ -424,13 +424,11 @@ watch(
   },
 )
 
-// 旧 `created` 读 `$route.query.sourceId`；这里在挂载后统一处理 query + 自动开弹窗
+// 旧 `created`（读 query + 覆盖 props）→ 挂载后统一处理，再拉第一页
 onMounted(async () => {
   applyRouteQuery()
-  const add = pickQuery('add')
+  applyProps()
   await load()
-  if (add === '1') openMeasureAdd()
-  else if (add === 'new') openMeasureAddNew()
 })
 
 const MEASURE_COLUMNS = MEASURE_BASE
@@ -447,10 +445,18 @@ const DETAIL_COLUMNS = detailColumns()
       </div>
     </div> -->
 
-    <el-row :gutter="2" class="ml-body">
-      <!-- 左侧分类树：旧 `showCategory` 恒为 true（没有开关），所以分栏恒为 4 / 20 -->
+    <!-- gutter 用 16 而不是 0/2：左树面板与右侧搜索栏之间要有明确留白，
+         否则树的右边框几乎贴在「数据集ID」标签上。16 与项目里其它左右分栏页一致
+         （Monitor/taskStat、CheckEditDialog）。 -->
+    <el-row :gutter="16" class="ml-body">
+      <!-- 左侧分类树：旧 `showCategory` 恒为 true（没有开关），所以分栏恒为 4 / 20。
+           ⚠️ 视觉面板（底色/边框/内边距）必须放在内层 .ml-tree-panel 上，不能直接写 .ml-tree-col：
+           el-row 的 gutter 会往 el-col 上注入**内联** padding-left/right，优先级高于 class，
+           写在 el-col 上既不生效、又会让面板边框越过卡片的内边距（左右不对称）。 -->
       <el-col :span="4" class="ml-tree-col">
-        <SourceCategoryTree @filter="onCategoryFilter" />
+        <div class="ml-tree-panel">
+          <SourceCategoryTree @filter="onCategoryFilter" />
+        </div>
       </el-col>
 
       <el-col :span="20">
@@ -469,7 +475,12 @@ const DETAIL_COLUMNS = detailColumns()
             </el-col>
             <el-col :md="3" :sm="24">
               <el-form-item label="指标编码">
-                <el-input v-model="queryParam.measureCode" placeholder="指标编码" clearable @keyup.enter="handleRefresh()" />
+                <el-input
+                  v-model="queryParam.measureCode"
+                  placeholder="指标编码"
+                  clearable
+                  @keyup.enter="handleRefresh()"
+                />
               </el-form-item>
             </el-col>
             <el-col :md="3" :sm="24">
@@ -497,7 +508,7 @@ const DETAIL_COLUMNS = detailColumns()
         <div class="ml-op-bar">
           <el-dropdown @command="onBatchCommand">
             <el-button :icon="Setting">
-              操作..
+              操作
               <el-icon class="ml-more-arrow"><ArrowDown /></el-icon>
             </el-button>
             <template #dropdown>
@@ -511,7 +522,9 @@ const DETAIL_COLUMNS = detailColumns()
         </div>
 
         <!-- 表格：列定义来自 allColumns.MEASURE.base（标题/顺序 1:1）。
-             表头排序：只有 ID 带 sorter → sortable="custom"，排序交给后端。 -->
+             表头排序：只有 ID 带 sorter → sortable="custom"，排序交给后端。
+             操作列来自列定义的 `fixed: 'right'`：本页列总宽超出内容区、要横向滚动，
+             固定后不用拉滚动条就能点「详情 / 编辑 / 更多」。 -->
         <el-table
           ref="tableRef"
           v-loading="loading"
@@ -531,6 +544,7 @@ const DETAIL_COLUMNS = detailColumns()
             :width="col.minWidth ? undefined : col.width"
             :min-width="col.minWidth"
             :sortable="col.sorter ? 'custom' : false"
+            :fixed="col.fixed"
           >
             <template #default="{ row }">
               <!-- ID：旧 idSlot —— 在用=纯文本；停用=红标签；历史删除=感叹号 + 标签 -->
@@ -577,7 +591,9 @@ const DETAIL_COLUMNS = detailColumns()
                 <span class="ml-op-link" @click="handleEdit(row)">编辑</span>
                 <span class="ml-op-divider">|</span>
                 <el-dropdown trigger="hover" @command="(cmd: string) => onRowCommand(cmd, row)">
-                  <span class="ml-op-link ml-op-more">更多<el-icon class="ml-more-caret"><ArrowDown /></el-icon></span>
+                  <span class="ml-op-link ml-op-more"
+                    >更多<el-icon class="ml-more-caret"><ArrowDown /></el-icon
+                  ></span>
                   <template #dropdown>
                     <el-dropdown-menu>
                       <el-dropdown-item command="copy" :icon="CopyDocument">指标副本</el-dropdown-item>
@@ -615,20 +631,11 @@ const DETAIL_COLUMNS = detailColumns()
     </el-row>
 
     <!-- 弹层（旧 refs：measureEdit / measureDetail / jsonEditDim / jsonEditVal） -->
-    <ColumnEditDialog
-      ref="editRef"
-      :cols="EDIT_COLUMNS"
-      :callback="updateCallback"
-      @refresh="handleRefresh()"
-    />
+    <ColumnEditDialog ref="editRef" :cols="EDIT_COLUMNS" :callback="updateCallback" @refresh="handleRefresh()" />
     <ColumnDetailDrawer ref="detailRef" :cols="DETAIL_COLUMNS" />
     <!-- 两个 JSON 子编辑器旧版都不传 callback（点确定不关弹窗、不提示），这里保持同一形态 -->
     <ColumnEditDialog ref="jsonDimRef" :cols="MEASURE_JSON_DIM" />
     <ColumnEditDialog ref="jsonValRef" :cols="MEASURE_JSON_VAL" />
-
-    <!-- 指标三件套里的两个新增入口（旧 MeasureAdd / MeasureAddNew，由数据集页跳转触发） -->
-    <MeasureAddDialog ref="addRef" @saved="onAddSaved" />
-    <MeasureAddNewDialog ref="addNewRef" @saved="onAddSaved" />
   </div>
 </template>
 
@@ -637,8 +644,8 @@ const DETAIL_COLUMNS = detailColumns()
   display: flex;
   flex-direction: column;
   height: fit-content;
-  gap: 10px;
-  padding: 12px;
+  gap: 12px;
+  padding: 16px;
   background: #fff;
   border: 1px solid var(--rc-border, #e2e8f0);
   border-radius: var(--rc-radius, 8px);
@@ -658,18 +665,76 @@ const DETAIL_COLUMNS = detailColumns()
   font-size: 12px;
 }
 .ml-body {
-  align-items: flex-start;
+  /* stretch：左树面板跟随右侧「搜索栏 + 表格 + 分页」的实际高度，不再靠固定 min-height 撑着 */
+  align-items: stretch;
 }
-/* 左侧分类树：旧 `.custom-tree` 是 1px 边框 + min-height 800px */
-.ml-tree-col {
-  border: 1px solid var(--rc-border, #e6e6e6);
-  border-radius: var(--rc-radius-sm, 6px);
-  min-height: 620px;
-  padding: 8px;
+/* 左侧分类树面板。
+   旧页 `.custom-tree` 是 1px 边框 + min-height 800px，机械照搬会在表格只有几行时
+   拖出一大片空白（左低右高、页面显得不齐）。这里改成：面板自身留白 + 极浅底色做「侧栏」区隔，
+   高度交给上面的 stretch，只留一个下限兜住空表的情况（筛选无结果时表格很矮）。 */
+.ml-tree-panel {
+  display: flex;
+  flex-direction: column;
   box-sizing: border-box;
+  height: 100%;
+  min-height: 420px;
+  padding: 12px 10px 10px;
+  background: var(--rc-bg, #f8fafc);
+  border: 1px solid var(--rc-border-soft, #eef2f7);
+  border-radius: var(--rc-radius, 8px);
+}
+.ml-tree-panel :deep(.sct-root) {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+/* 去掉节点前的文件夹图标（本页定制，只在这一页生效）。
+   `.sct-node-icon` 是共享组件 `SourceCategoryTree` 里 `sct-node` 的首个子项，
+   `display: none` 后名称自然顶到最左；el-tree 自己的展开箭头是另一个元素
+   （`.el-tree-node__expand-icon`，由 `expand-on-click-node` 接管），不受影响。
+   之所以走页面作用域的 `:deep()` 而不是改组件：该组件还被 `Monitor/sourceCheck`
+   的「源记录」弹窗用着，直接动它会把那一页也一起改掉。 */
+.ml-tree-panel :deep(.sct-node-icon) {
+  display: none;
+}
+/* 树内部留白：面板已有 12/10，这里只补工具条、搜索框、树之间的纵向节奏 */
+.ml-tree-panel :deep(.sct-toolbar) {
+  margin-bottom: 10px;
+  /* 窄屏（≈1280 及以下，侧栏 184px 仍在）时「退出编辑 + 新增 + 刷新」三件放不进一行，
+     默认会被压成「退出编/辑」这种断词。改成允许换行 + 按钮自身 nowrap，宁可图标掉到第二行。 */
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.ml-tree-panel :deep(.sct-toolbar-left) {
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ml-tree-panel :deep(.sct-edit-toggle) {
+  white-space: nowrap;
+}
+.ml-tree-panel :deep(.sct-search) {
+  margin-bottom: 10px;
+}
+.ml-tree-panel :deep(.sct-tree-wrap) {
+  padding-right: 4px;
+}
+.ml-tree-panel :deep(.sct-all) {
+  margin-bottom: 4px;
+}
+/* 节点行高 32 → 34、行间距 1 → 3：分类多的时候不至于挤成一片。
+   注意选择器要带上 `.sct-tree` 提高权重——组件自身的 `.sct-tree :deep(.el-tree-node__content)`
+   与页面的 `.ml-tree-panel :deep(...)` 权重相同，只靠选择器顺序定胜负并不可靠。 */
+.ml-tree-panel :deep(.sct-tree .el-tree-node__content) {
+  height: 34px;
+  margin: 3px 0;
+}
+.ml-tree-panel :deep(.sct-tree > .el-tree-node) {
+  padding-left: 2px;
 }
 .ml-filter-form {
-  margin-bottom: 0;
+  /* 表单自身的 el-form-item 已有 8px 下边距，这里再补 4px，让搜索栏与「操作..」条之间有 12px */
+  margin-bottom: 4px;
 }
 .ml-filter-row {
   width: 100%;
@@ -693,7 +758,8 @@ const DETAIL_COLUMNS = detailColumns()
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
+  /* 10：操作条与上方搜索栏、下方表格各留一口气 */
+  margin-bottom: 10px;
 }
 .ml-more-arrow {
   margin-left: 4px;
@@ -773,6 +839,6 @@ const DETAIL_COLUMNS = detailColumns()
 .ml-pager {
   display: flex;
   justify-content: flex-end;
-  padding: 8px 0 2px;
+  padding: 10px 2px 2px;
 }
 </style>
