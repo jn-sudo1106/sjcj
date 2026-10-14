@@ -10,6 +10,8 @@ import {
   isFileLikeNode,
   outputTableMissing,
   firstOutputTableMissingNodeId,
+  collectFlowIssues,
+  collectTableMismatches,
   relinkCandidates,
   ruleStepContext,
   isWritableStepId,
@@ -94,6 +96,45 @@ describe('firstOutputTableMissingNodeId（0927 H1）', () => {
     const main = ['start', '40598', 'end']
     const configs = { '40598': { title: 'b', kind: 'node', configId: '1400918' } } as unknown as Record<string, NodeConfig>
     expect(firstOutputTableMissingNodeId(main, [], configs, { '40598': snap })).toBe('40598')
+  })
+})
+
+describe('collectFlowIssues（1014 发布 / 发起抓取前统一检查）', () => {
+  it('逐个列出未保存的新节点和缺输出表的节点；根节点、文件节点、完整节点不计', () => {
+    const main = ['start', '41797', 'draft-1', '40598', 'file-1', 'end']
+    const configs = {
+      '41797': { title: '入口', kind: 'node', configId: '1401081' },
+      'draft-1': { title: '新节点', kind: 'node', configId: '' },
+      '40598': { title: '规则', kind: 'node', configId: '1400918' },
+      'file-1': { title: '下载', kind: 'node', configId: '1400920', template: 'file' },
+    } as unknown as Record<string, NodeConfig>
+    const snapshots = { '41797': { stepId: '41797', name: '入口', isRoot: true } as Step }
+    expect(collectFlowIssues(main, [], configs, snapshots).map((i) => [i.nodeId, i.reason])).toEqual([
+      ['draft-1', 'unsaved'],
+      ['40598', 'outputTableMissing'],
+    ])
+  })
+
+  it('分支链上的节点同样检查', () => {
+    const main = ['start', '40597', 'end']
+    const branchGroups = [{ ownerId: '40597', branches: [{ chain: ['40599'] }] }] as unknown as FlowBranchGroup[]
+    const configs = {
+      '40597': { title: 'a', kind: 'node', configId: '1400917', outputTable: '6200026' },
+      '40599': { title: '分支', kind: 'node', configId: '1400919' },
+    } as unknown as Record<string, NodeConfig>
+    expect(collectFlowIssues(main, branchGroups, configs).map((i) => i.nodeId)).toEqual(['40599'])
+  })
+})
+
+describe('collectTableMismatches（1014 只提示）', () => {
+  it('输入表与上游有效输出表不一致的已落库节点列出来；任一侧没表不比较', () => {
+    const main = ['start', '40597', '40598', '40599', 'end']
+    const configs = {
+      '40597': { title: 'a', kind: 'node', configId: '1', outputTable: '6200026' },
+      '40598': { title: 'b', kind: 'node', configId: '2', inputTable: '6200040', outputTable: '6200027' },
+      '40599': { title: 'c', kind: 'node', configId: '3' },
+    } as unknown as Record<string, NodeConfig>
+    expect(collectTableMismatches(main, [], configs).map((i) => [i.nodeId, i.reason])).toEqual([['40598', 'tableMismatch']])
   })
 })
 

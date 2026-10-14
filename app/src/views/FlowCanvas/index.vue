@@ -3,11 +3,11 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useFlowStore } from '../../stores/flow'
-import { useSourceStore } from '../../stores/source'
 import { useUiStore } from '../../stores/ui'
 import { MAX_WORKSPACE_TABS, useWorkspaceStore, type WorkspaceTabRef } from '../../stores/workspace'
 import { flowCenterApi, siteApi, sourceApi, workflowBindingApi, type Source, type Step } from '../../api'
 import { useFlowAutosave } from '@/views/FlowCanvas/canvas/useFlowAutosave'
+import { useFlowReadiness } from '@/views/FlowCanvas/canvas/useFlowReadiness'
 import { useRuntimeStore } from '../../stores/runtime'
 import { useFlowVersionStore } from '../../stores/flowVersion'
 import FlowBoard from '@/views/FlowCanvas/canvas/FlowBoard.vue'
@@ -26,7 +26,7 @@ import SnatchLauncher from './source/SnatchLauncher.vue'
 import { nodeInspectorTabs } from './inspector/nodeInspectorTabs'
 import SiteDetailView from './result/SiteDetailView.vue'
 import { collectorCapabilityOf, type LoginConfigRef } from '@/views/FlowCanvas/canvas/flowModel'
-import { firstOutputTableMissingNodeId, firstUnboundDraftNodeId, validFlowIdOf } from '@/utils/flow/stepPersist'
+import { firstUnboundDraftNodeId, validFlowIdOf } from '@/utils/flow/stepPersist'
 import { normalizeSourceView, normalizeSiteView, sourceViewFromHash } from '@/utils/url/workspaceRoute'
 import NewSiteWizard from './create/NewSiteWizard.vue'
 
@@ -34,10 +34,10 @@ const route = useRoute()
 const router = useRouter()
 const flow = useFlowStore()
 const autosave = useFlowAutosave()
+const { ensureFlowReady } = useFlowReadiness()
 const ui = useUiStore()
 const ws = useWorkspaceStore()
 const runtime = useRuntimeStore()
-const sourceStore = useSourceStore()
 // 三种结果视图均以当前源为粒度。
 const activeView = ref(normalizeSourceView(route.query.view))
 function syncActiveView() {
@@ -566,34 +566,7 @@ const snatchLauncher = ref<InstanceType<typeof SnatchLauncher>>()
 async function onStartCapture() {
   const s = flow.sourceCtx
   if (!s) return
-  if (flow.flowDirty || autosave.status.value === 'saving' || autosave.status.value === 'error') {
-    await autosave.flush()
-  }
-  if (autosave.status.value === 'pending') {
-    // 0927 P1-3：pending 现在是两个成因（未绑配置 / 输出表未就绪，useFlowAutosave 同口径），
-    // 这里分别定位节点并给出对应的引导文案——原来只查「未绑配置」：输出表未就绪时不选中
-    // 节点、文案还指去「保存节点配置」，方向全错。
-    const missingOutput = firstOutputTableMissingNodeId(flow.main, flow.branchGroups, flow.configs, sourceStore.stepSnapshots)
-    if (missingOutput) {
-      flow.select(missingOutput)
-      ElMessage.warning(`节点「${flow.configs[missingOutput]?.title || missingOutput}」输出表未选择，请先在右侧「表配置」补全后重试`)
-      return
-    }
-    const pendingNode = firstUnboundDraftNodeId(flow.main, flow.configs)
-    if (pendingNode) flow.select(pendingNode)
-    ElMessage.warning(`节点「${flow.configs[pendingNode || '']?.title || pendingNode || '新节点'}」尚未保存，请先在右侧保存节点配置`)
-    return
-  }
-  if (flow.flowDirty || autosave.status.value === 'error') {
-    ElMessage.warning('流程尚未保存，请点击头部「保存失败，点击重试」或稍候再发起抓取')
-    return
-  }
-  if (flow.configDirty) {
-    const pending = flow.dirtyConfigNodes[0]
-    flow.select(pending)
-    ElMessage.warning(`节点「${flow.configs[pending]?.title || pending}」的配置尚未保存，请先在右侧保存节点配置`)
-    return
-  }
+  if (!await ensureFlowReady('发起抓取')) return
   if (runtime.running || capturing.value) {
     ElMessage.warning('已有发起抓取正在进行，请稍候')
     return
