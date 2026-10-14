@@ -455,12 +455,12 @@ onMounted(() => {
 
 <template>
   <div class="ids-shell">
-    <div class="ids-head">
+    <!-- <div class="ids-head">
       <div class="ids-title">指标数据集</div>
       <div class="ids-sub">
         按 ID、源、表与状态筛选数据集；支持编辑、批量启停、制作副本、由源快速生成与立即执行指标。
       </div>
-    </div>
+    </div> -->
 
     <!-- 筛选表单（对齐旧 a-form layout="inline" + a-row 栅格；改条件不自动查，点「查询」才发请求） -->
     <el-form :inline="true" class="ids-filter-form">

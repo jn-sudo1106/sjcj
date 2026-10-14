@@ -440,12 +440,12 @@ const DETAIL_COLUMNS = detailColumns()
 
 <template>
   <div class="ml-shell">
-    <div class="ml-head">
+    <!-- <div class="ml-head">
       <div class="ml-title">指标列表</div>
       <div class="ml-sub">
         按数据集、源、指标编码与状态筛选指标定义；支持批量启停、批量删除、单条编辑 / 详情 / JSON 子编辑与指标副本。
       </div>
-    </div>
+    </div> -->
 
     <el-row :gutter="2" class="ml-body">
       <!-- 左侧分类树：旧 `showCategory` 恒为 true（没有开关），所以分栏恒为 4 / 20 -->
