@@ -378,9 +378,9 @@ function openAddToView(ids: string[]) {
 function onAddedToView(viewName: string, place: string, count: number) {
   ElMessage.success(`已加入视图「${viewName}」的「${place}」（新增 ${count} 个源）`)
 }
-/** 点来源组名（1008-04）：跳到系统设置「来源组」tab 并选中该组（10-13 来源组移到系统设置） */
+/** 点来源组名（1008-04）：跳到「我的分组」并选中该组 */
 function openSourceGroup(sourceGroupId: string) {
-  void router.push({ path: '/settings', query: { tab: 'source-group', group: sourceGroupId } })
+  void router.push({ path: '/collect', query: { tab: 'personal', group: sourceGroupId } })
 }
 function onToolbarRefresh() {
   if (view.value === 'table') ui.notifySourceListChanged()
