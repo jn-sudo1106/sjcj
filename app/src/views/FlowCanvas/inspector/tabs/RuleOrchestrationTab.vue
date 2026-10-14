@@ -554,6 +554,13 @@ const orchCfg = computed<RuleOrchestration>(() => ({
 function patch(p: Partial<RuleOrchestration>) {
   patchNode(p)
 }
+/**
+ * 打开 Tab 时的自动回填（模型默认值 / 提示词模板 / 配置详情 / 监控描述）：值写进节点，但不标「未保存」。
+ * 这些不是用户改的，只是点到编排配置就出现「节点配置有未保存修改」会让人以为动过什么（2026-10-14 反馈）。
+ */
+function patchAuto(p: Partial<RuleOrchestration>) {
+  patchNode(p, { silent: true })
+}
 
 // 文案分流：内容同构，只有措辞按节点类型切换
 const describeLabel = computed(() => (isMonitor.value ? '数据监控描述' : isDataValidation.value ? '数据校验描述' : isPdf.value ? 'PDF 抽取描述' : isRule.value ? '规则处理描述' : '抓取需求描述'))
@@ -766,10 +773,10 @@ async function loadModels(providerCode: string, preferredModelCode?: string) {
   try {
     modelOptions.value = await fetchDefaultModels(providerCode)
     const modelCode = modelOptions.value.find((item) => item.modelCode === preferredModelCode)?.modelCode || firstModelCode()
-    if (modelCode !== (orchCfg.value.modelCode || '')) patch({ modelCode })
+    if (modelCode !== (orchCfg.value.modelCode || '')) patchAuto({ modelCode })
   } catch (e) {
     modelOptions.value = []
-    patch({ modelCode: '' })
+    patchAuto({ modelCode: '' })
     modelError.value = `模型加载失败：${(e as Error)?.message ?? String(e)}`
   } finally {
     modelLoading.value = false
@@ -805,7 +812,7 @@ async function loadProviderModelOptions() {
     if (saved
       && !(orchCfg.value.modelProviderCode ?? '').trim()
       && !(orchCfg.value.modelCode ?? '').trim()) {
-      patch({ modelProviderCode: saved.providerCode, modelCode: saved.model })
+      patchAuto({ modelProviderCode: saved.providerCode, modelCode: saved.model })
     }
   }
   providerLoading.value = true
@@ -813,17 +820,17 @@ async function loadProviderModelOptions() {
   try {
     providerOptions.value = await fetchModelProviders()
     const providerCode = providerOptions.value.find((item) => item.providerCode === orchCfg.value.modelProviderCode)?.providerCode || firstProviderCode()
-    if (providerCode !== (orchCfg.value.modelProviderCode || '')) patch({ modelProviderCode: providerCode })
+    if (providerCode !== (orchCfg.value.modelProviderCode || '')) patchAuto({ modelProviderCode: providerCode })
     if (!providerCode) {
       modelOptions.value = []
-      patch({ modelCode: '' })
+      patchAuto({ modelCode: '' })
       return
     }
     await loadModels(providerCode, orchCfg.value.modelCode)
   } catch (e) {
     providerOptions.value = []
     modelOptions.value = []
-    patch({ modelProviderCode: '', modelCode: '' })
+    patchAuto({ modelProviderCode: '', modelCode: '' })
     providerError.value = `模型供应商加载失败：${(e as Error)?.message ?? String(e)}`
   } finally {
     providerLoading.value = false
@@ -861,10 +868,10 @@ watch(
         if (prefill.describe) next.describe = prefill.describe
         if (prefill.scriptPath) next.scriptPath = prefill.scriptPath
         if (prefill.script) next.script = prefill.script
-        if (Object.keys(next).length) patch(next)
+        if (Object.keys(next).length) patchAuto(next)
         if (prefill.scriptPath && !prefill.script) {
           const loadedScript = await ruleApi.fileDownloadScript(prefill.scriptPath).catch(() => '')
-          if (loadedScript.trim()) patch({ script: loadedScript })
+          if (loadedScript.trim()) patchAuto({ script: loadedScript })
         }
         configDetailPrefillToken.value = token
       } catch {
@@ -978,7 +985,7 @@ watch(
       if (refreshSeq !== promptRefreshSeq) return
       // 用户手改过就不再自动回写（改表/字段仍会重算模板，但不覆盖手改值；切节点时旗标复位）
       if (promptTouched.value) return
-      if (applied !== orchCfg.value.systemPrompt) patch({ systemPrompt: applied })
+      if (applied !== orchCfg.value.systemPrompt) patchAuto({ systemPrompt: applied })
     })()
   },
   { immediate: true },
@@ -989,7 +996,7 @@ watch(
   () => {
     if (!isMonitor.value || describeTouched.value) return
     const autoDescribe = monitorDescribeSeed.value
-    if (autoDescribe && orchCfg.value.describe !== autoDescribe) patch({ describe: autoDescribe })
+    if (autoDescribe && orchCfg.value.describe !== autoDescribe) patchAuto({ describe: autoDescribe })
   },
   { immediate: true },
 )
