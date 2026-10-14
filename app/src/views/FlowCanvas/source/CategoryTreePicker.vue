@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 分类目录树（0711 R1）：替换新建采集闸门里硬编码的分类下拉，改为可搜索 + 展开 + 勾选（单选）的目录树。
 // 数据来自 sourceApi.sourceCategories()（采集资产页左侧目录同源接口），树形结构由后端直接给出（SourceCategory.children）。
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { sourceApi, type SourceCategory } from '@/api'
 
 export interface CategorySelection {
@@ -36,6 +36,44 @@ onMounted(async () => {
   if (!props.modelValue.categoryPath && categories.value.length) {
     select(categories.value[0]) // 保留"有默认分类"的旧体验：首次进入自动选中第一个顶级分类
   }
+})
+
+// 搜索只能在已加载的节点里过滤，而子级默认要展开才懒加载——没展开过的分类（如「媒体」）搜不到。
+// 所以第一次输入关键词时把所有未加载的子级一次拉全（按层并发），加载期间显示「正在加载」而不是「无匹配」。
+// 某个节点拉失败就不记为已加载，下次输入关键词会重试。
+const loadingAll = ref(false)
+let loadAllPromise: Promise<void> | null = null
+const LOAD_ALL_CONCURRENCY = 6
+function loadAllDescendants(): Promise<void> {
+  if (loadAllPromise) return loadAllPromise
+  loadAllPromise = (async () => {
+    loadingAll.value = true
+    let failed = false
+    try {
+      const queue = [...categories.value]
+      while (queue.length) {
+        await Promise.all(queue.splice(0, LOAD_ALL_CONCURRENCY).map(async (n) => {
+          if (!loadedIds.value.has(n.id)) {
+            try {
+              const children = await sourceApi.sourceCategories(n.id)
+              if (children.length) n.children = children
+              loadedIds.value.add(n.id)
+            } catch {
+              failed = true
+            }
+          }
+          if (n.children?.length) queue.push(...n.children)
+        }))
+      }
+    } finally {
+      loadingAll.value = false
+      if (failed) loadAllPromise = null
+    }
+  })()
+  return loadAllPromise
+}
+watch(keyword, (kw) => {
+  if (kw.trim()) void loadAllDescendants()
 })
 
 function matchesKeyword(node: SourceCategory, kw: string): boolean {
@@ -126,7 +164,7 @@ function select(node: SourceCategory) {
           <span v-if="item.node.count != null" class="ctp-count">{{ item.node.count }}</span>
         </label>
       </div>
-      <div v-if="!flatNodes.length" class="ctp-empty">无匹配分类</div>
+      <div v-if="!flatNodes.length" class="ctp-empty">{{ loadingAll ? '正在加载全部分类…' : '无匹配分类' }}</div>
     </div>
     <div class="ctp-selected">
       <span class="ctp-selected-label">已选分类</span>
