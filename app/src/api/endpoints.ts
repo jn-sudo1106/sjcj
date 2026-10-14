@@ -363,7 +363,7 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'comm-job/changeEnable', desc: '启停通用任务 → GET /v1/comm-job/changeEnable?ids=&enable=', danger: true, impl: true, live: true },
   { path: 'comm-job/copy', desc: '复制通用任务 → POST /v1/comm-job/copy?id=', danger: true, impl: true, live: true },
   { path: 'comm-job/run', desc: '运行通用任务 → POST /v1/comm-job/run?id=', danger: true, impl: true, live: true },
-   /* ── task 任务实例（目标 2 / 收录 3） ── */
+   /* ── task 任务实例（目标 2 / 收录 5：topTaskPaged + taskListPaged 别名 + stat + resetTaskInsts） ── */
   { path: 'task/topTaskPaged', desc: '任务实例分页（运行记录事实源）', impl: true, live: true },
   // 1013：任务实例页（旧 page/inst/TaskInst.vue）专属逻辑名 —— 它要 1:1 渲染旧 column.config 的
   // 原始字段名（actionName/nodeCode/taskTopic/updateDt），而 task/topTaskPaged 那份 mock 返回的是
@@ -371,9 +371,6 @@ export const ENDPOINTS: EndpointSpec[] = [
   // httpEndpoint: 'task/topTaskPaged'（上面那条 live 端点），所以这里不标 live——它只是
   // 「逻辑名 + 真实 path」的别名（同 source/sourceTaskPaged 的写法）。
   { path: 'task/taskListPaged', desc: '任务实例分页（任务实例页） → GET /v1/task/topTaskPaged', impl: true },
-
-   /* ── task 任务实例（目标 2 / 收录 5：topTaskPaged + taskListPaged 别名 + stat + resetTaskInsts） ── */
-  { path: 'task/topTaskPaged', desc: '任务实例分页（运行记录事实源）', impl: true, live: true },
   // 1013：任务统计页（旧 page/inst/TaskStat.vue）的统计端点。旧 api/task.js 的 taskStat → GET /v1/task/stat
   // （?date=|startTime=&endTime=&group=source|config|both&sourceId=&configId=&state=），
   // 响应是**行数组**（不是分页信封）：{sourceId, configId, cnt, state?}；带 state 的行说明后端支持多状态聚合。
@@ -405,14 +402,21 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'dataset/runNow', desc: '立即执行指标 → GET ?ids=a,b&last= 开始 ID', danger: true, impl: true, live: true },
 
   /* ── measure 指标定义（目标 8 / 收录 8） ── */
-  { path: 'measure/measurePaged', desc: '指标分页', impl: true },
-  { path: 'measure/add', desc: '新增指标', danger: true },
-  { path: 'measure/update', desc: '修改指标', danger: true },
-  { path: 'measure/copy', desc: '复制指标', danger: true },
-  { path: 'measure/delete', desc: '删除指标', danger: true },
-  { path: 'measure/changeEnable', desc: '启停指标', danger: true },
-  { path: 'measure/genMeasureFromSource', desc: '由源生成指标', danger: true },
-  { path: 'measure/deleteMeasurePhy', desc: '物理删除指标', danger: true },
+  // 1014 迁移「指标列表」页（旧 page/config/MeasureList.vue）时整体接真实后端：这一页在旧平台
+  // 分页 / 新增 / 修改 / 复制 / 批量启停 / 批量删除 / 物理删除**本来就全部直连后端**，
+  // 只放行分页会把写操作留在 mock，页面按钮看着能用、后端一条都收不到。
+  // ① 逻辑名与真实路径同名（旧 URL 就是 /v1/measure/measurePaged），不存在 dataset 那种大小写别名；
+  // ② 原注册在这条上的 mockMeasures（M4 演示形状，字段名是 name/caliber/cycle）已下线——
+  //    新 handler 是 mock/measure.ts 的 mockMeasurePaged，按旧平台字段名（measureCode/measureName/...）分页；
+  // ③ measure/stats（M4 KPI）保持 impl 未 live，它只服务 api/index.ts 里那套已无消费方的演示服务。
+  { path: 'measure/measurePaged', desc: '指标分页 → GET /v1/measure/measurePaged', impl: true, live: true },
+  { path: 'measure/add', desc: '新增指标 → POST body（提交体需剔除 updateDt）', danger: true, impl: true, live: true },
+  { path: 'measure/update', desc: '修改指标 → POST body', danger: true, impl: true, live: true },
+  { path: 'measure/copy', desc: '复制指标 → GET ?id=&name=&sourceId=', danger: true, impl: true, live: true },
+  { path: 'measure/delete', desc: '批量删除指标 → POST ?ids=a,b（参数在 query，不是 body）', danger: true, impl: true, live: true },
+  { path: 'measure/changeEnable', desc: '启停指标 → GET ?ids=a,b&enable=（同 isDelete：0=在用 / 1=停用）', danger: true, impl: true, live: true },
+  { path: 'measure/genMeasureFromSource', desc: '由源生成指标 → GET ?sourceId=&entryTypeId=（旧 MeasureList 无入口，契约先接上）', danger: true, impl: true, live: true },
+  { path: 'measure/deleteMeasurePhy', desc: '物理删除单条指标 → POST ?id=单个（无法恢复）', danger: true, impl: true, live: true },
 
   /* ── mq 消息队列（目标 9 / 收录 9） ── */
   { path: 'mq/queuePaged', desc: '队列列表', impl: true },
