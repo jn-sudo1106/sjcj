@@ -225,7 +225,7 @@ function onSourceChange() {
     </div>
 
     <!-- 筛选表单（对齐旧项目 a-form layout="inline" + a-row 栅格） -->
-    <el-form :inline="true" class="sc-filter-form" size="small">
+    <el-form :inline="true" class="sc-filter-form">
       <el-row :gutter="8" class="sc-filter-row">
         <el-col :md="4" :sm="24" v-if="!embedded">
           <el-form-item label="在用">

@@ -245,7 +245,7 @@ onMounted(() => void load())
     </div>
 
     <!-- 筛选表单（对齐旧 a-form layout="inline" + a-row 栅格；文本项不自动查，状态项 @change 即查） -->
-    <el-form :inline="true" class="cj-filter-form" size="small">
+    <el-form :inline="true" class="cj-filter-form">
       <el-row :gutter="8" class="cj-filter-row">
         <el-col :md="4" :sm="24">
           <el-form-item label="队列名">
