@@ -9,7 +9,7 @@
 //   · 表模板（question-temp）没有复制端点，且 tableArr / sqlTempConfigIds 存的是 JSON **字符串**，
 //     不是数组——编辑弹窗在两端来回 JSON.parse / JSON.stringify（旧 QuestionTempEditModal.vue）。
 import type { Paged } from '../types/common'
-import type { DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate } from '../types/template'
+import type { DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate } from '../types/template'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const stamp = (d: Date) =>
@@ -580,5 +580,131 @@ export function mockDataIndexSyncRun(params?: Record<string, unknown>) {
   }
   if (!hit) return { ok: false, message: '未找到要同步的配置' }
   return { ok: true, data: hit, message: `已同步 ${hit} 条（演示）` }
+}
+
+/* ── 数据字典配置（旧「模板配置 → 数据字典配置」，端点域 /poc/data-index-config） ── */
+
+/**
+ * 数据字典种子数据。
+ * ⚠️ 按旧 DataIndexList / DataIndexConfigEditor 的字段形状**构造的示例**（未取到 POC 服务真实行，
+ * 沙箱直连 186 探测不通），联调后用真实响应校正。
+ * 一条字典项 = code + type + content（+ 后端侧的 contentCode），alias 是页面上唯一能改的「数据别名」；
+ * 表名与「数据索引同步」种子（ADS_HFBI_ZQFXS_JGZBMX 的 BRANCH_NAME / BRANCH_NO）对得上，便于串链路。
+ */
+const blankDataIndexConfig = (over: Partial<DataIndexConfig>): DataIndexConfig => ({
+  code: '',
+  type: '',
+  content: '',
+  alias: '',
+  contentCode: null,
+  status: '0',
+  delFlag: '0',
+  ...over,
+})
+
+const DATA_INDEX_CONFIGS: DataIndexConfig[] = [
+  blankDataIndexConfig({
+    id: 41,
+    code: 'BRANCH_NAME',
+    type: 'ORG',
+    content: '城南支行',
+    alias: '城南',
+    contentCode: '1001',
+    createTime: '2025-04-22 18:56:48',
+    updateTime: '2025-05-09 10:12:33',
+  }),
+  blankDataIndexConfig({
+    id: 42,
+    code: 'BRANCH_NAME',
+    type: 'ORG',
+    content: '高新区支行',
+    alias: '',
+    contentCode: '1002',
+    createTime: '2025-04-22 18:56:48',
+    updateTime: '2025-04-22 18:56:48',
+  }),
+  blankDataIndexConfig({
+    id: 55,
+    code: 'INDICATOR_DATE',
+    type: 'DATE',
+    content: '数据日期',
+    alias: '统计口径日期',
+    contentCode: null,
+    status: '1',
+    createTime: '2025-03-12 19:32:47',
+    updateTime: '2025-06-13 18:23:56',
+  }),
+]
+
+let dataIndexConfigNextId = 100
+
+/**
+ * 数据字典分页：旧页面四个筛选都在 body —— name（旧搜索框标题「内容」，匹配 content）、
+ * code、type、status，空串都当「全部」不加权筛。
+ */
+export function mockDataIndexConfigPaged(params?: Record<string, unknown>): Paged<DataIndexConfig> {
+  const name = String(params?.name ?? '').trim()
+  const code = String(params?.code ?? '').trim()
+  const type = String(params?.type ?? '').trim()
+  const status = String(params?.status ?? '').trim()
+  const pageNo = Math.max(1, Number(params?.pageNo ?? 1) || 1)
+  const pageSize = Math.max(1, Number(params?.pageSize ?? 20) || 20)
+  const matched = DATA_INDEX_CONFIGS.filter(
+    (row) =>
+      (!name || String(row.content ?? '').includes(name)) &&
+      (!code || String(row.code ?? '') === code) &&
+      (!type || String(row.type ?? '').includes(type)) &&
+      (!status || String(row.status ?? '') === status),
+  )
+  return { total: matched.length, list: matched.slice((pageNo - 1) * pageSize, pageNo * pageSize) }
+}
+
+/** 编码下拉数据源（GET /poc/data-index-config/all-code）—— 返回 {code,type} 裸数组，旧页面一次拉全量 */
+export function mockDataIndexConfigAllCode(): DataIndexCodeOption[] {
+  const seen = new Set<string>()
+  const options: DataIndexCodeOption[] = []
+  for (const row of DATA_INDEX_CONFIGS) {
+    const key = `${row.code ?? ''}|${row.type ?? ''}`
+    if (!row.code || seen.has(key)) continue
+    seen.add(key)
+    options.push({ code: row.code, type: row.type ?? null })
+  }
+  return options
+}
+
+/** 新增（POST /poc/data-index-config，不带 id）—— 旧 dataIndexConfigAdd */
+export function mockDataIndexConfigAdd(params?: Record<string, unknown>) {
+  const form = params as Partial<DataIndexConfig>
+  const nextId = dataIndexConfigNextId++
+  DATA_INDEX_CONFIGS.unshift({
+    ...blankDataIndexConfig({}),
+    ...form,
+    id: nextId,
+    createTime: stamp(new Date()),
+    updateTime: stamp(new Date()),
+  })
+  return { ok: true, data: nextId, message: '新增成功（演示）' }
+}
+
+/** 修改（POST /poc/data-index-config/update，带 id）—— 旧 dataIndexConfigUpdate；与新增是两个端点，不要合并 */
+export function mockDataIndexConfigUpdate(params?: Record<string, unknown>) {
+  const form = params as Partial<DataIndexConfig>
+  const row = DATA_INDEX_CONFIGS.find((r) => Number(r.id) === Number(form.id))
+  if (!row) return { ok: false, message: '未找到要保存的字典项' }
+  for (const [key, value] of Object.entries(form)) {
+    if (key === 'id') continue
+    ;(row as Record<string, unknown>)[key] = value
+  }
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: '修改成功（演示）' }
+}
+
+/** 启停（POST /poc/data-index-config/status，⚠️ 参数走 body，与 question-dic 的 query 不同）—— 旧 dataIndexConfigStatus */
+export function mockDataIndexConfigChangeStatus(params?: Record<string, unknown>) {
+  const row = DATA_INDEX_CONFIGS.find((r) => Number(r.id) === Number(params?.id))
+  if (!row) return { ok: false, message: '未找到对应的字典项' }
+  row.status = String(params?.status ?? row.status)
+  row.updateTime = stamp(new Date())
+  return { ok: true, message: row.status === '0' ? '已启用' : '已停用' }
 }
 

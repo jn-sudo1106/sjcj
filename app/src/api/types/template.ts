@@ -3,7 +3,7 @@
 // 字段名、状态口径、分页参数都 1:1 沿用旧平台实体，不在本项目里改名或合并字段
 // （旧页面：src/demo/SqlTempConfig.vue + SqlTempEditModal.vue、src/demo/QuestionTempConfig.vue +
 //   QuestionTempEditModal.vue，旧接口：src/demoApi/EntityApi.js）。
-// 已迁入：sql 模板、表模板、自动补全、问句改写、数据索引同步；后续要迁的兄弟模块（数据字典 / 提示词 / 分词）
+// 已迁入：sql 模板、表模板、自动补全、问句改写、数据索引同步、数据字典；后续要迁的兄弟模块（提示词 / 分词）
 // 的类型继续往这个文件里加，接口统一走 api/templateConfig.ts 的 CRUD 工厂。
 
 import type { Ack, Paged } from './common'
@@ -136,6 +136,39 @@ export interface DataIndexSync extends TemplateRow {
   /** 最近同步时间（后端在 sync 成功后回写，前端只读） */
   lastSync?: string | null
   delFlag?: string
+}
+
+/**
+ * 数据字典配置（旧「模板配置 → 数据字典配置」，src/demo/DataIndexList.vue + modal/DataIndexConfigEditor.vue）。
+ *
+ * ⚠️ 四处旧口径（EntityApi.js:34-38、104-150）：
+ * · 新增 POST /poc/data-index-config、修改 POST /poc/data-index-config/update，**两个端点**（同 dic / question-dic 域）；
+ * · 启停 POST /poc/data-index-config/status 参数走 **body**（旧 dataIndexConfigStatus 用的是 data，
+ *   与问句改写那个走 query 的 status 不同，别混用）；
+ * · 还有一条只读的下拉数据源 GET /poc/data-index-config/all-code，返回 {code,type} 裸数组；
+ * · 分页筛选有四个参数：`name`（旧搜索框标题是「内容」）、`code`、`type`、`status`，全部进 body。
+ * type 在这个域是**字符串**（旧列表直接展示、编码下拉把它和 code 拼在一起显示），
+ * 既不是问句改写的 '10'/'11'/'20'，也不是自动补全的数字 1。
+ */
+export interface DataIndexConfig extends TemplateRow {
+  /** 编码（字典项的键，编辑弹窗里置灰不可改） */
+  code?: string | null
+  /** 类型（与编码下拉的第二个字段同源，编辑弹窗里置灰不可改） */
+  type?: string | null
+  /** 数据内容（分页 name 筛选项匹配的就是这个字段，编辑弹窗里置灰不可改） */
+  content?: string | null
+  /** 数据别名 —— 本域唯一可编辑的字段 */
+  alias?: string | null
+  /** 数据ID（旧列表列，页面无编辑入口，更新时原样带回） */
+  contentCode?: string | null
+  delFlag?: string
+}
+
+/** 数据字典「编码」下拉的选项（GET /poc/data-index-config/all-code 返回的裸数组元素） */
+export interface DataIndexCodeOption {
+  code?: string | null
+  type?: string | null
+  [key: string]: unknown
 }
 
 /** 「使用表范围」下拉选项（旧 tableList → GET /poc/database/entry-list） */

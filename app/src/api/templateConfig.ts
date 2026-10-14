@@ -14,7 +14,7 @@
 import { request } from './client'
 import { POC_API_PREFIX } from '@/constants/backend'
 import type { Ack, Paged } from './types/common'
-import type { DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow } from './types/template'
+import type { DataIndexConfig, DataIndexCodeOption, DataIndexSync, DicTemplate, PocTableEntry, QuestionDic, SqlTemplate, TableTemplate, TemplateCrudApi, TemplateCrudPaths, TemplatePageQuery, TemplateRow } from './types/template'
 
 export interface TemplateCrudConfig {
   /** endpoints.ts 里的模块名，逻辑键 = `poc/${module}${后缀}`，如 sql-temp → poc/sql-temp/page */
@@ -141,6 +141,39 @@ export const dataIndexSyncApi: DataIndexSyncApi = {
       : request<Ack>('poc/data-index-sync/update', { ...form }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/data-index-sync/update` }),
   sync: (ids: number[]) =>
     request<Ack>('poc/data-index-sync/sync', ids as unknown as Record<string, unknown>, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/data-index-sync/sync` }),
+}
+
+/** 数据字典的接口面：分页 + 新增/编辑 + 启停 + 编码下拉（本域没有复制） */
+export interface DataIndexConfigApi {
+  page(query: TemplatePageQuery): Promise<Paged<DataIndexConfig>>
+  /** 新增（不带 id）与修改（带 id）分两个端点，按 form.id 路由 */
+  save(form: Partial<DataIndexConfig>): Promise<Ack>
+  changeStatus(id: number, status: string): Promise<Ack>
+  /** 「编码」筛选项的数据源：{code,type} 裸数组，旧页面挂载时一次拉全量 */
+  allCode(): Promise<DataIndexCodeOption[]>
+}
+
+/**
+ * 数据字典配置（旧「模板配置 → 数据字典配置」，src/demo/DataIndexList.vue + modal/DataIndexConfigEditor.vue）。
+ *
+ * 同样没走 createTemplateCrudApi 工厂：新增/修改是两个端点（/poc/data-index-config 与 /poc/data-index-config/update）；
+ * 旧后端也没有 data-index-config/copy。启停保留 /poc/data-index-config/status，
+ * ⚠️ 参数走 **body**（旧 dataIndexConfigStatus 用的是 axios 的 data，与问句改写那个走 query 的 status 不同）。
+ * 另有一条只读下拉数据源 GET /poc/data-index-config/all-code。
+ */
+export const dataIndexConfigApi: DataIndexConfigApi = {
+  // 分页：四个筛选都在 body —— name（旧搜索框「内容」）/ code / type / status
+  page: (query: TemplatePageQuery) =>
+    request<Paged<DataIndexConfig>>('poc/data-index-config/page', { ...query }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/data-index-config/page` }),
+  save: (form: Partial<DataIndexConfig>) =>
+    form.id == null
+      ? request<Ack>('poc/data-index-config', { ...form }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/data-index-config` })
+      : request<Ack>('poc/data-index-config/update', { ...form }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/data-index-config/update` }),
+  changeStatus: (id: number, status: string) =>
+    request<Ack>('poc/data-index-config/status', { id, status }, { method: 'POST', httpEndpoint: `${POC_API_PREFIX}/data-index-config/status` }),
+  // 裸数组：真实信封 {code,data:[...]} 没有 count，client.ts 的 normalizeHttpPayload 直接透传 data
+  allCode: () =>
+    request<DataIndexCodeOption[]>('poc/data-index-config/all-code', {}, { method: 'GET', httpEndpoint: `${POC_API_PREFIX}/data-index-config/all-code` }),
 }
 
 /**

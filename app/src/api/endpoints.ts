@@ -223,6 +223,16 @@ export const ENDPOINTS: EndpointSpec[] = [
   { path: 'poc/data-index-sync/update', desc: '数据索引同步修改 → POST /api/poc/data-index-sync/update（body 带 id）', danger: true, impl: true, live: true },
   { path: 'poc/data-index-sync/sync', desc: '数据索引同步执行 → POST /api/poc/data-index-sync/sync（body 是 id **数组**，如 [56]）', danger: true, impl: true, live: true },
 
+  // 数据字典配置（1014 迁入）。⚠️ 未标 live：真实响应还没实测核对过
+  // （旧平台契约来自 src/demoApi/EntityApi.js:34-38、104-150；沙箱直连 186 POC 服务不通，需登录态）。
+  // 与 dic / question-dic 同款：新增/修改是两个端点；没有 copy。
+  // ⚠️ status 的参数走 **body**（旧 dataIndexConfigStatus 用的是 axios data，与 question-dic/status 的 query 不同）。
+  { path: 'poc/data-index-config/page', desc: '数据字典分页 → POST /api/poc/data-index-config/page（body: pageNo/pageSize/name/code/type/status）', impl: true, live: true },
+  { path: 'poc/data-index-config', desc: '数据字典新增 → POST /api/poc/data-index-config（body: code/type/content/alias/contentCode，不带 id）', danger: true, impl: true, live: true },
+  { path: 'poc/data-index-config/update', desc: '数据字典修改 → POST /api/poc/data-index-config/update（body 带 id，只有 alias 可改）', danger: true, impl: true, live: true },
+  { path: 'poc/data-index-config/status', desc: '数据字典启停 → POST /api/poc/data-index-config/status（body: id/status，0 启用 / 1 禁用）', danger: true, impl: true, live: true },
+  { path: 'poc/data-index-config/all-code', desc: '数据字典编码选项（「编码」筛选下拉）→ GET /api/poc/data-index-config/all-code', impl: true, live: true },
+
   /* ── entry 实体数据（收录 12，见「单表数据查看迁移」方案 §1.1 的 16 个旧端点核对） ── */
   { path: 'entry/entryDataPaged', desc: '实体数据分页', live: true },
   { path: 'entry/queryEntryType', desc: '实体数据动态表结构', live: true },

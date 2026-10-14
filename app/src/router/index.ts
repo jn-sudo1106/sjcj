@@ -47,6 +47,11 @@ const routes: RouteRecordRaw[] = [
       // 页面在 views/TemplateConfig/DataIndexSync/ 自己实现（同步类型码值列 + 每行「同步」动作），
       // 接口见 api/templateConfig.ts 的 dataIndexSyncApi。⚠️ 与 /sync（采集数据同步到目标环境）不是一回事。
       { path: '/data-index-sync', component: () => import('../views/TemplateConfig/DataIndexSync/index.vue'), meta: { permission: 'data-index-sync' } },
+      // 模板配置 → 数据字典配置（1014，旧 ai-chat-view「模板配置 / 数据字典配置」，端点域 /poc/data-index-config，
+      // 旧页面组件名是 DataIndexList）。页面在 views/TemplateConfig/DataIndexConfig/ 自己实现
+      // （四条件查询 + 编码远程下拉 + 导出 + 启停），接口见 api/templateConfig.ts 的 dataIndexConfigApi。
+      // ⚠️ 与上面的 /data-index-sync（数据索引同步）是两个模块，名字像但不是一个东西。
+      { path: '/data-index-config', component: () => import('../views/TemplateConfig/DataIndexConfig/index.vue'), meta: { permission: 'data-index-config' } },
       // 系统设置（0924-02）。meta.permission 与 TABS 里的同值，守卫经 canAccess 判断
       { path: '/settings', component: () => import('../views/Settings/index.vue'), meta: { permission: 'settings' } },
       // 兼容旧导航路径；监控中心的正式入口统一为 /monitor。

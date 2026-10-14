@@ -97,6 +97,11 @@ import {
   mockDataIndexSyncAdd,
   mockDataIndexSyncUpdate,
   mockDataIndexSyncRun,
+  mockDataIndexConfigPaged,
+  mockDataIndexConfigAllCode,
+  mockDataIndexConfigAdd,
+  mockDataIndexConfigUpdate,
+  mockDataIndexConfigChangeStatus,
 } from './templateConfig'
 import { mockWorkbenchSummary } from './workbench'
 import { mockOverviewSummary, mockOverviewTrend } from './overview'
@@ -395,4 +400,12 @@ export const mockRegistry: Record<string, (params?: Record<string, unknown>) => 
   'poc/data-index-sync': mockDataIndexSyncAdd,
   'poc/data-index-sync/update': mockDataIndexSyncUpdate,
   'poc/data-index-sync/sync': mockDataIndexSyncRun,
+
+  // 数据字典配置（1014 迁入）：新增/修改两个端点 + status（**body** 传参，与 question-dic 的 query 不同），没有 copy；
+  // all-code 是「编码」筛选下拉的只读数据源，返回 {code,type} 裸数组。
+  'poc/data-index-config/page': mockDataIndexConfigPaged,
+  'poc/data-index-config/all-code': mockDataIndexConfigAllCode,
+  'poc/data-index-config': mockDataIndexConfigAdd,
+  'poc/data-index-config/update': mockDataIndexConfigUpdate,
+  'poc/data-index-config/status': mockDataIndexConfigChangeStatus,
 }
